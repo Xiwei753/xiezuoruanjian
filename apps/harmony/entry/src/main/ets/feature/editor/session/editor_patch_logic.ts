@@ -5,7 +5,7 @@
 //
 // 包含三块纯逻辑：
 //   1. UTF-8 byte offset ↔ UTF-16 code unit offset 严格映射（utf8ByteOffsetToUtf16）
-//   2. DisplayPatch 严格应用（applyPatchStrict）+ EditorEditResult → snapshot 增量更新（applyEditResultToSnapshot）
+//   2. patch 严格应用（applyPatchStrict）+ EditorEditResult → snapshot 增量更新（applyEditResultToSnapshot）
 //   3. 串行命令队列（SerialCommandQueue）— 保证编辑命令按 enqueue 顺序执行，
 //      前一条完成才下一条；每条出队执行时才读当前 state，避免并发命令拿到同一个 expectedRevision。
 //
@@ -16,8 +16,18 @@
 //   - applyEditResultToSnapshot 不再用"返回原 snapshot"表达失败，改成明确的 { ok, snapshot, reason } 结果。
 //   - 删除旧 deprecated applyPatch（UTF-8 byte offset 直接当 JS UTF-16 下标的错误实现）。
 
-/** DisplayPatch 形状（与 Core DTO 对齐，camelCase）。 */
-export interface DisplayPatch {
+/**
+ * Issue #826 评论 10 阻塞 4.4：这里曾声明第二份手写 `DisplayPatch`，
+ * 注释还写「与 Core DTO 对齐」，但 Core wire schema 演进后它已经不对齐，
+ * 会误导下一轮维护者以为两份表同步。
+ *
+ * 本文件是纯 TS（Node 单测环境不能直接 import `.ets` DTO），所以这里只声明
+ * **patch 应用器真正需要的最小字段视图**，不再假装复制整份 wire DTO：
+ * 应用只需要 old 坐标的替换区间 + 插入文本 + 结果选区，
+ * 不需要 `insertedByteStart` / `insertedByteEndExclusive`
+ * （那是给平台端定位 patch 在 final new 坐标里的位置用的）。
+ */
+export interface PatchApplyView {
   readonly baseRevision: number
   readonly newRevision: number
   readonly replaceByteStart: number
@@ -60,7 +70,7 @@ export interface EditorEditResult {
   readonly transactionId: number
   readonly baseRevision: number
   readonly newRevision: number
-  readonly displayPatches: DisplayPatch[]
+  readonly displayPatches: PatchApplyView[]
   readonly oldSelectionAnchor: number
   readonly oldSelectionHead: number
   readonly newSelectionAnchor: number
@@ -152,7 +162,7 @@ export function utf8ByteOffsetToUtf16(text: string, byteOffset: number): number 
 }
 
 /**
- * 严格应用单个 DisplayPatch：把 text[replaceByteStart, replaceByteEndExclusive)（UTF-8 byte offset）
+ * 严格应用单个 patch：把 text[replaceByteStart, replaceByteEndExclusive)（UTF-8 byte offset）
  * 替换为 insertedText。byte offset 先转成 UTF-16 code unit offset 再 substring。
  *
  * 成功返回 { ok: true, text }；失败（非字符边界或越界）返回 { ok: false, reason }，
@@ -160,7 +170,7 @@ export function utf8ByteOffsetToUtf16(text: string, byteOffset: number): number 
  */
 export function applyPatchStrict(
   text: string,
-  patch: DisplayPatch
+  patch: PatchApplyView
 ): { ok: true, text: string } | { ok: false, reason: string } {
   const startUtf16 = utf8ByteOffsetToUtf16(text, patch.replaceByteStart)
   if (startUtf16 < 0) {
@@ -201,7 +211,7 @@ export function applyPatchStrict(
  * 调用方（EditorSessionState/Coordinator）收到 ok=false 时必须从 Core snapshot() 重建 state，
  * 不能吞失败让 UI 停在旧文本。
  *
- * 多个 DisplayPatch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
+ * 多个 patch 按顺序应用，每个 patch 都针对当时的当前文本转换 offset。
  * compositionSession 非空时取其 generation；为空时保留原 snapshot.generation
  * （finishComposition 后 compositionSession=null，generation 不重置）。
  */
@@ -225,7 +235,7 @@ export function applyEditResultToSnapshot(
     return { ok: false, reason: `unknownOutcome:${r.outcome}` }
   }
   let newText: string = snapshot.text
-  const patches: DisplayPatch[] = r.displayPatches ?? []
+  const patches: PatchApplyView[] = r.displayPatches ?? []
   for (let i = 0; i < patches.length; i++) {
     const applied = applyPatchStrict(newText, patches[i])
     if (applied.ok === false) {

@@ -304,12 +304,21 @@ mod tests {
             base_revision: EditorRevision::new(0),
             new_revision: EditorRevision::new(1),
             replace_byte_range: Utf8ByteRange::from_ordered(2, 3),
+            inserted_byte_range: Utf8ByteRange::from_ordered(2, 3),
             inserted_text: "c".to_string(),
             resulting_selection_byte_range: Utf8ByteRange::point(3),
         };
         let json = serde_json::to_string(&patch).unwrap();
         assert!(
             json.contains("\"replaceByteRange\":"),
+            "DisplayPatch JSON should use camelCase, got: {}",
+            json
+        );
+        // Issue #826 评论 10 阻塞 4.1：新增的 inserted_byte_range 也必须进
+        // camelCase JSON —— 平台端正是靠这个字段拿 patch 在 **final new 坐标**
+        // 里的准确位置。
+        assert!(
+            json.contains("\"insertedByteRange\":"),
             "DisplayPatch JSON should use camelCase, got: {}",
             json
         );

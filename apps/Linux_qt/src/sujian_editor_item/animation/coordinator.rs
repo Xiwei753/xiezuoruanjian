@@ -164,22 +164,32 @@ impl LinuxEditorAnimationCoordinator {
                 .as_mut()
                 .expect("can_extend 为真时 active_edit_frontier 必然存在");
             match kind {
-                EditFrontierKind::Insert => frontier.extend_insert(
-                    request.target_snapshot.clone(),
-                    request.target_text.clone(),
-                    request.inserted_ranges.clone(),
-                    &request.offset_map,
-                    request.now,
-                ),
+                EditFrontierKind::Insert => {
+                    // Issue #826 评论 10 阻塞 1：`base_to_current` 必须用
+                    // 前沿自己累计的精确映射，不能每笔 `OffsetMap::build` 重新
+                    // 全文 diff（那会丢掉多 patch 中间的 unchanged island）。
+                    let base_to_current = frontier.base_to_target_map.clone();
+                    frontier.extend_insert(
+                        request.target_snapshot.clone(),
+                        request.target_text.clone(),
+                        request.inserted_ranges.clone(),
+                        &request.offset_map,
+                        &base_to_current,
+                        request.now,
+                    );
+                }
                 EditFrontierKind::Delete => {
                     // Issue #826 评论 3 问题 2：本次 old ranges 用「这一次编辑前」
                     // 的坐标，必须映射回 burst 最初 base 文本的坐标再累计。
-                    let base_to_current = OffsetMap::build(&frontier.base_text, &request.base_text);
+                    // Issue #826 评论 10 阻塞 1：用前沿累计的精确 map，不再
+                    // `OffsetMap::build(base_text, current_base_text)` 重新全文 diff。
+                    let base_to_current = frontier.base_to_target_map.clone();
                     frontier.extend_delete(
                         request.target_snapshot.clone(),
                         request.target_text.clone(),
                         request.deleted_ranges.clone(),
                         &base_to_current,
+                        &request.offset_map,
                         request.conceal_direction,
                         request.now,
                     );
@@ -188,7 +198,8 @@ impl LinuxEditorAnimationCoordinator {
                     // Issue #826 评论 8 阻塞 2：Replace 必须**双侧**累计。
                     // 之前它走 extend_delete，新插入的字根本不进 reveal mask，
                     // canonical 会把这次新字直接完整显示。
-                    let base_to_current = OffsetMap::build(&frontier.base_text, &request.base_text);
+                    // Issue #826 评论 10 阻塞 1：同 extend_delete，用累计的精确 map。
+                    let base_to_current = frontier.base_to_target_map.clone();
                     frontier.extend_replace(
                         request.target_snapshot.clone(),
                         request.target_text.clone(),
@@ -212,6 +223,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.target_snapshot.clone(),
                     request.target_text.clone(),
                     request.inserted_ranges.clone(),
+                    request.offset_map.clone(),
                     request.now,
                     duration_ms,
                 ),
@@ -221,6 +233,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.target_snapshot.clone(),
                     request.target_text.clone(),
                     request.deleted_ranges.clone(),
+                    request.offset_map.clone(),
                     request.conceal_direction,
                     request.now,
                     duration_ms,
@@ -232,6 +245,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.target_text.clone(),
                     request.deleted_ranges.clone(),
                     request.inserted_ranges.clone(),
+                    request.offset_map.clone(),
                     request.conceal_direction,
                     request.now,
                     duration_ms,
@@ -283,25 +297,34 @@ impl LinuxEditorAnimationCoordinator {
             )
             .collect();
 
+        // Issue #826 评论 10 阻塞 2：只有上一份 Reflow 的 target 文本**正好等于**
+        // 本次编辑前的 base 文本，才说明这一笔与上一笔在同一条编辑 revision 链上，
+        // 这时它需要的 `prev_target_to_new` 就是 Core 本次给的精确 `offset_map`。
+        //
+        // 反过来，之前是 `OffsetMap::build(previous.target_text(), request.target_text)`
+        // 重新全文 diff（只是最长公共前后缀），多 patch 中间的 unchanged island
+        // 直接消失 —— Reflow retarget 找不到旧 span，退化成「新进入 Reflow」分支，
+        // 从 `request.base_snapshot` 的 canonical 位置重新起步，于是中间的字
+        // 「上一轮动画半路位置 → 突然跳回 canonical → 再向新 target 动」。
+        //
+        // 两者不等时上一份 Reflow 已经不和当前编辑 revision 连续，强接没有正确
+        // 身份依据，直接从本次 base -> target 重新 build。
+        let reflow_is_continuous = self
+            .active_reflow
+            .as_ref()
+            .is_some_and(|previous| previous.target_text() == request.base_text);
+
         let mut next = match self.active_reflow.as_ref() {
-            Some(previous) if !previous.is_finished(request.now) => {
-                // 上一份 Reflow 的 new 坐标系 = 上一次 target 文本。
-                // Issue #826 评论 4 问题 1：retarget 遍历的是 request.target_snapshot，
-                // 所以这个 OffsetMap 的 new 侧必须是 **request.target_text**，
-                // 不是 request.base_text。
-                //
-                // 例子：上一帧正文 `ABCDEF`，这次在前面插入 `X` 得到 `XABCDEF`。
-                // retarget 遍历 `XABCDEF` 的 byte range，必须通过
-                // `ABCDEF -> XABCDEF` 把最新坐标映回上一帧 target；
-                // 构成 `ABCDEF -> ABCDEF` 会让插入点之后的 cluster 映错或映不到。
-                let prev_target_to_new =
-                    OffsetMap::build(previous.target_text(), &request.target_text);
+            Some(previous) if reflow_is_continuous && !previous.is_finished(request.now) => {
+                // 语义虽然不同（old_to_new 是本次 base -> target，
+                // prev_target_to_new 是上一 Reflow target -> 本次 target），
+                // 但在上面的 invariant 成立时它们就是同一份 map。
                 previous.retarget(
                     request.now,
                     &request.base_snapshot,
                     &request.offset_map,
                     &request.target_snapshot,
-                    &prev_target_to_new,
+                    &request.offset_map,
                     &excluded_old,
                     &excluded_new,
                     duration_ms,

@@ -191,6 +191,72 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
+    /// Issue #826 评论 10 阻塞 1：组合两份偏移映射 —— `A -> B` 复合 `B -> C` = `A -> C`。
+    ///
+    /// 只组合两份 map 中**真正有逻辑身份**的交集区间：
+    /// - 先在 `self`（A->B）里找到覆盖 `[a_start, a_end)` 的静态条目；
+    /// - 再用该条目的 new 区间去 `next`（B->C）里找覆盖的静态条目；
+    /// - 两者交集按 old 坐标顺序产出新的静态条目。
+    ///
+    /// 任一侧在交集上无映射（该段被编辑过）就直接丢弃 —— 这与 `OffsetMap`
+    /// 本身的语义一致：被编辑掉的字符没有"同一逻辑身份"。
+    ///
+    /// 用途：连续多笔编辑时，前沿/Reflow 必须把「burst 最初 base」到
+    /// 「当前正文」的映射一直累计下来，不能每笔都拿两份全文重新 `build`
+    /// （`build` 只是最长公共前缀+后缀，多 patch 中间的 unchanged island 会丢）。
+    #[must_use]
+    pub fn compose(&self, next: &OffsetMap) -> OffsetMap {
+        let mut composed: Vec<OffsetMapEntry> = Vec::new();
+        for left in &self.entries {
+            let left_old = left.old_byte_offset.value();
+            let left_len = left.length;
+            if left_len == 0 {
+                continue;
+            }
+            let left_new_start = left.new_byte_offset.value();
+            let left_new_end = left_new_start + left_len;
+            for right in &next.entries {
+                let right_len = right.length;
+                if right_len == 0 {
+                    continue;
+                }
+                // `self` 是 A -> B（left.old 是 A 坐标、left.new 是 B 坐标），
+                // `next` 是 B -> C（right.old 是 B 坐标、right.new 是 C 坐标）。
+                // 所以交集必须在 **B 坐标**里求。
+                let right_b_start = right.old_byte_offset.value();
+                let right_b_end = right_b_start + right_len;
+                let lo = left_new_start.max(right_b_start);
+                let hi = left_new_end.min(right_b_end);
+                if lo >= hi {
+                    continue;
+                }
+                let old_start = left_old + (lo - left_new_start);
+                let new_start = right.new_byte_offset.value() + (lo - right_b_start);
+                let kind = if old_start == new_start {
+                    OffsetMapKind::Identity
+                } else {
+                    OffsetMapKind::Shifted
+                };
+                // 与上一条相邻且 kind 相同时合并，避免条目无限增长。
+                if let Some(last) = composed.last_mut() {
+                    let last_end = last.old_byte_offset.value() + last.length;
+                    if last_end == old_start && last.kind == kind {
+                        last.length += hi - lo;
+                        continue;
+                    }
+                }
+                composed.push(OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(old_start),
+                    new_byte_offset: Utf8ByteOffset::unchecked(new_start),
+                    length: hi - lo,
+                    kind,
+                });
+            }
+        }
+        composed.sort_by_key(|entry| entry.old_byte_offset.value());
+        OffsetMap { entries: composed }
+    }
+
     /// 查找 old byte offset 在 new text 中的对应位置。
     pub fn map_old_to_new(&self, old_byte_offset: usize) -> Option<usize> {
         for entry in &self.entries {
@@ -291,4 +357,94 @@ fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> usiz
         suffix += old_char.len_utf8();
     }
     suffix
+}
+
+#[cfg(test)]
+mod compose_tests {
+    use super::{OffsetMap, OffsetMapKind};
+
+    /// Issue #826 评论 10 阻塞 1：`compose` 必须保留**多 patch 中间的
+    /// unchanged island**。
+    ///
+    /// `aXbXc -> abc`（删掉两个 X）后 `abc -> ac`（删掉 b）。
+    /// 第一步的精确 map 有 `a -> a` / `b -> b` / `c -> c` 三段；
+    /// 第二步的 map 有 `a -> a` / `c -> c` 两段。
+    /// compose 之后 `b` 已经被真正删掉，不该出现在结果里，
+    /// 但 `a` 和 `c` 必须仍然有映射。
+    #[test]
+    fn compose_keeps_unchanged_islands() {
+        // aXbXc -> abc：old_len 5，两处删除 (1,2) 与 (3,4)。
+        let first = OffsetMap::from_edits(5, &[(1, 2, 1, 1), (3, 4, 2, 2)]);
+        assert_eq!(first.map_old_to_new(0), Some(0), "第一笔的 a 必须有映射");
+        assert_eq!(
+            first.map_old_to_new(2),
+            Some(1),
+            "第一笔的 b（unchanged island）必须有映射"
+        );
+
+        // abc -> ac：old_len 3，删除 (1,2)。
+        let second = OffsetMap::from_single_edit(3, (1, 2), 0);
+        let composed = first.compose(&second);
+
+        // b 已被第二笔真正删掉，compose 后不应再有映射。
+        assert_eq!(
+            composed.map_old_to_new(2),
+            None,
+            "被第二笔删掉的 b 不能再有映射"
+        );
+        // a / c 仍然保留。`aXbXc` 里 c 在 old offset 4，两处 X 删除后
+        // `abc` 里 c 在 offset 2，再删掉 b 后 `ac` 里 c 在 offset 1。
+        assert_eq!(composed.map_old_to_new(0), Some(0), "a 必须仍然有映射");
+        assert_eq!(composed.map_old_to_new(4), Some(1), "c 必须仍然有映射");
+    }
+
+    /// `compose` 对单次编辑等价于「原 map 复合 identity」。
+    #[test]
+    fn compose_with_identity_is_identity_on_mapped_regions() {
+        // aXbXc(5) -> aXXXc(8)：old [2,3) 被替换成 3 byte。
+        let map = OffsetMap::from_single_edit(5, (2, 3), 3);
+        // identity 必须建在**中间文本**（8 byte）上，否则不是 B -> B 的恒等映射。
+        let identity = OffsetMap::from_single_edit(8, (0, 0), 0);
+        let composed = map.compose(&identity);
+        for old in 0..5usize {
+            let expected = map.map_old_to_new(old);
+            assert_eq!(
+                composed.map_old_to_new(old),
+                expected,
+                "old {old} 的映射必须与 compose 前一致"
+            );
+        }
+    }
+
+    /// 相邻且 kind 相同的条目要合并，避免条目数随 burst 长度线性膨胀。
+    #[test]
+    fn compose_merges_adjacent_same_kind_entries() {
+        let first = OffsetMap::from_single_edit(4, (2, 2), 2);
+        let second = OffsetMap::from_single_edit(6, (0, 0), 0);
+        let composed = first.compose(&second);
+        assert!(
+            composed.entries.len() <= 2,
+            "compose 结果不应爆炸，entries = {:?}",
+            composed.entries
+        );
+        for entry in &composed.entries {
+            assert!(entry.kind == OffsetMapKind::Identity || entry.kind == OffsetMapKind::Shifted);
+        }
+    }
+
+    /// `compose` 的结果必须是 old byte offset 有序的（`map_old_to_new` 依赖它）。
+    #[test]
+    fn compose_entries_are_sorted_by_old_offset() {
+        let first = OffsetMap::from_single_edit(6, (1, 2), 1);
+        let second = OffsetMap::from_single_edit(7, (3, 4), 2);
+        let composed = first.compose(&second);
+        for pair in composed.entries.windows(2) {
+            let a_end = pair[0].old_byte_offset.value() + pair[0].length;
+            assert!(
+                a_end <= pair[1].old_byte_offset.value(),
+                "entries 必须按 old offset 有序且不重叠：{:?}",
+                composed.entries
+            );
+        }
+    }
 }

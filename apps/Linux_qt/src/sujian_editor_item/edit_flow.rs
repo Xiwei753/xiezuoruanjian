@@ -282,7 +282,10 @@ impl SujianEditorItem {
         //   （后者在 Core edit 之后已经推进到 new_revision，拿它当 old_revision 是错的）。
         // - inserted_range / deleted_range 从 display_patches 提取：
         //   每个 DisplayPatch 的 replace_byte_range 是被替换（删除）的旧文本范围，
-        //   inserted_text 是新插入的文本，inserted_range = (start .. start + inserted_text.len())。
+        //   inserted_byte_range 是新插入文本在 **final new 坐标**里的准确范围。
+        //   Issue #826 评论 10 阻塞 4.5：不要再用
+        //   replace_byte_range.start + inserted_text.len() 推算 inserted 位置，
+        //   一笔 batch 里前一处变长后后一处已右移，推算会把中间正文算成 inserted。
         // - IME/Replace 多 patch 时记 ranges 数组，单 patch 时记单个 range。
         {
             let result = edit_result

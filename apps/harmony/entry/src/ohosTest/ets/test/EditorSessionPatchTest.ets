@@ -206,6 +206,7 @@ export default function editorSessionPatchTest() {
       const patch: DisplayPatch = {
         baseRevision: 1, newRevision: 2,
         replaceByteStart: 5, replaceByteEndExclusive: 5,
+        insertedByteStart: 5, insertedByteEndExclusive: 6,
         insertedText: '!', resultingSelectionStart: 6, resultingSelectionEnd: 6
       }
       const result: EditorEditResult = makeResult({
@@ -263,6 +264,7 @@ export default function editorSessionPatchTest() {
       const patch: DisplayPatch = {
         baseRevision: 5, newRevision: 6,
         replaceByteStart: 1, replaceByteEndExclusive: 3,
+        insertedByteStart: 1, insertedByteEndExclusive: 2,
         insertedText: 'X', resultingSelectionStart: 0, resultingSelectionEnd: 0
       }
       const result: EditorEditResult = makeResult({
@@ -294,6 +296,7 @@ export default function editorSessionPatchTest() {
       const patch: DisplayPatch = {
         baseRevision: 1, newRevision: 2,
         replaceByteStart: 5, replaceByteEndExclusive: 5,
+        insertedByteStart: 5, insertedByteEndExclusive: 11,
         insertedText: ' world', resultingSelectionStart: 6, resultingSelectionEnd: 11
       }
       const result: EditorEditResult = makeResult({
@@ -330,8 +333,8 @@ export default function editorSessionPatchTest() {
     it('多 patch 顺序应用', () => {
       const snap: EditorSessionSnapshot = makeSnapshot({ text: 'abc', revision: 1, cursor: 3, selectionAnchor: 3, generation: 0 })
       const state: EditorSessionState = EditorSessionState.fromCreate(42, snap)
-      const patch1: DisplayPatch = { baseRevision: 1, newRevision: 2, replaceByteStart: 3, replaceByteEndExclusive: 3, insertedText: 'def', resultingSelectionStart: 3, resultingSelectionEnd: 6 }
-      const patch2: DisplayPatch = { baseRevision: 2, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0, insertedText: 'XYZ', resultingSelectionStart: 0, resultingSelectionEnd: 3 }
+      const patch1: DisplayPatch = { baseRevision: 1, newRevision: 2, replaceByteStart: 3, replaceByteEndExclusive: 3, insertedByteStart: 3, insertedByteEndExclusive: 6, insertedText: 'def', resultingSelectionStart: 3, resultingSelectionEnd: 6 }
+      const patch2: DisplayPatch = { baseRevision: 2, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0, insertedByteStart: 0, insertedByteEndExclusive: 3, insertedText: 'XYZ', resultingSelectionStart: 0, resultingSelectionEnd: 3 }
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.Applied, baseRevision: 1, newRevision: 3,
         displayPatches: [patch1, patch2], newSelectionAnchor: 0, newSelectionHead: 3, compositionSession: null

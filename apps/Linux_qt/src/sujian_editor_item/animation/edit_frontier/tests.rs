@@ -73,6 +73,7 @@ fn frontier_sample_progresses_from_zero_to_one() {
         empty_snapshot(),
         String::from("a"),
         vec![(0, 1)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         now,
         100,
     );
@@ -89,6 +90,7 @@ fn frontier_is_finished_only_after_full_duration() {
         empty_snapshot(),
         String::from("a"),
         vec![(0, 1)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         now,
         160,
     );
@@ -111,6 +113,7 @@ fn delete_overlay_is_visible_on_the_first_frame() {
         empty_snapshot(),
         String::from("ABCEF"),
         vec![(3, 4)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Backward,
         now,
         160,
@@ -137,6 +140,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         empty_snapshot(),
         String::from("a"),
         vec![(1, 2)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         now,
         160,
     );
@@ -150,6 +154,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         String::from("ab"),
         vec![(1, 2)],
         &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         half,
     );
     assert_eq!(state.new_ranges(), vec![(1, 2)]);
@@ -163,6 +168,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         String::from("abc"),
         vec![(2, 3)],
         &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         half,
     );
     // Issue #826 评论 9 阻塞 3：相邻但来源不同的 track **不合并** ——
@@ -196,6 +202,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         empty_snapshot(),
         String::from("ABCEF"),
         vec![(3, 4)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Forward,
         now,
         160,
@@ -211,6 +218,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         String::from("ABCE"),
         vec![(3, 4)],
         &base_to_current,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Forward,
         instant_at(now, 80),
     );
@@ -237,6 +245,7 @@ fn extend_replace_accumulates_both_sides() {
         String::from("AXBCDEF"),
         vec![(3, 4)],
         vec![(1, 2)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Backward,
         now,
         160,
@@ -282,6 +291,7 @@ fn disjoint_patches_stay_separate_ranges_and_paths() {
         target,
         String::from("x"),
         vec![(0, 1), (100, 101)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         now,
         160,
     );
@@ -355,8 +365,14 @@ fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
         PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
         PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(1, 2, 40.0)]),
     ]);
-    let state =
-        EditFrontierState::begin_insert(target, String::from("a\nb"), vec![(1, 2)], now, 160);
+    let state = EditFrontierState::begin_insert(
+        target,
+        String::from("a\nb"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
 
     // progress = 0：遮罩在路径起点，第二行的 X 尚未打开，必须整块被遮。
     let start = state.sample(now);
@@ -436,8 +452,14 @@ fn newline_only_insert_produces_no_frontier_segment() {
         PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
     ]);
     // inserted range 只覆盖换行符所在字节 [1,2)，那一行没有 cluster。
-    let state =
-        EditFrontierState::begin_insert(target, String::from("a\nb"), vec![(1, 2)], now, 160);
+    let state = EditFrontierState::begin_insert(
+        target,
+        String::from("a\nb"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
     assert!(
         state
             .reveal_tracks
@@ -483,6 +505,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         base.clone(),
         String::from("ABC"),
         vec![(3, 6)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Backward,
         now,
         160,
@@ -509,6 +532,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         String::from("AB"),
         vec![(2, 3)],
         &base_to_current,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Backward,
         half,
     );
@@ -559,6 +583,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         base.clone(),
         String::from("DEF"),
         vec![(0, 3)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Forward,
         now,
         160,
@@ -576,6 +601,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         String::from(""),
         vec![(0, 3)],
         &base_to_current,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         ConcealDirection::Forward,
         half,
     );
@@ -623,6 +649,7 @@ fn extend_insert_keeps_travelled_with_its_own_track() {
         wide.clone(),
         String::new(),
         vec![(10, 12), (100, 102)],
+        OffsetMap::from_single_edit(0, (0, 0), 0),
         now,
         160,
     );
@@ -654,6 +681,7 @@ fn extend_insert_keeps_travelled_with_its_own_track() {
         String::new(),
         vec![(0, 2)],
         &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
         half,
     );
 
@@ -700,5 +728,127 @@ fn extend_insert_keeps_travelled_with_its_own_track() {
             .abs()
             < 1e-9,
         "旧 track 的 travelled 必须跟着自己走完，不因数组下标移位而回退"
+    );
+}
+
+/// Issue #826 评论 10 阻塞 1：连续 Delete 必须沿 Core 的精确字符身份映回
+/// burst base，不能每笔拿两份全文重新 `OffsetMap::build`。
+///
+/// 反例（评论原文）：
+/// ```text
+/// burst base = aXbXc
+/// 第一笔（多 patch Delete）：aXbXc -> abc
+/// 第二笔（继续 Delete b）：abc -> ac，deleted range 是当前 old 坐标 [1,2]
+/// ```
+/// 第二笔如果用 `OffsetMap::build("aXbXc", "abc")` 映回 base，只有最长公共
+/// 前缀 a + 后缀 c，中间 b 没映射 → `map_new_range_to_old(1,2)` 返回 `None`
+/// → `b` 被 filter 掉、ConcealTrack 没建出来 → `b` 视觉上直接从 canonical 消失，
+/// 没有吞字。
+///
+/// 现在前沿保存累计的 `base_to_target_map`，用 `compose` 沿 Core 的精确 map 累计。
+#[test]
+fn consecutive_delete_uses_composed_base_mapping() {
+    let now = Instant::now();
+    // base 正文 `aXbXc`，被删掉的两处 X 分别是 old [1,2) 与 old [3,4)。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![
+            cluster(0, 1, 0.0),
+            cluster(1, 2, 10.0),
+            cluster(2, 3, 20.0),
+            cluster(3, 4, 30.0),
+            cluster(4, 5, 40.0),
+        ],
+    )]);
+
+    // 第一笔：多 patch delete，两处 X。Core 的精确 map 保留 a/b/c 三个 island。
+    let first_map = OffsetMap::from_edits(5, &[(1, 2, 1, 1), (3, 4, 2, 2)]);
+    let mut state = EditFrontierState::begin_delete(
+        base.clone(),
+        String::from("aXbXc"),
+        snapshot(Vec::new()),
+        String::from("abc"),
+        vec![(1, 2), (3, 4)],
+        first_map.clone(),
+        ConcealDirection::Forward,
+        now,
+        160,
+    );
+    assert_eq!(state.old_ranges(), vec![(1, 2), (3, 4)]);
+
+    // 第二笔：删掉 `abc` 里的 b，本次 deleted range 是 `abc` 坐标 [1,2)。
+    let second_map = OffsetMap::from_single_edit(3, (1, 2), 0);
+    let base_to_current = state.base_to_target_map.clone();
+    assert_eq!(
+        base_to_current.map_new_range_to_old(1, 2),
+        Some((2, 3)),
+        "累计映射必须能把 abc 的 b 映回 aXbXc 的 b"
+    );
+
+    state.extend_delete(
+        snapshot(Vec::new()),
+        String::from("ac"),
+        vec![(1, 2)],
+        &base_to_current,
+        &second_map,
+        ConcealDirection::Forward,
+        instant_at(now, 80),
+    );
+
+    // track 的顺序是**创建顺序**而不是排序 —— 动画状态按编辑身份保存，
+    // 渲染阶段才合并几何。前两条是第一笔的两处 X，第三条是第二笔新建的 b。
+    assert_eq!(
+        state.old_ranges(),
+        vec![(1, 2), (3, 4), (2, 3)],
+        "b 必须建出 ConcealTrack（映回 base 坐标是 [2,3)），不能被 filter 掉"
+    );
+    assert_eq!(state.base_text, "aXbXc", "burst base 必须保持不变");
+    // compose 之后再问一次：base 的 b 现在已经被删掉，不该再有映射。
+    assert_eq!(
+        state.base_to_target_map.map_old_to_new(2),
+        None,
+        "compose 之后 base 的 b（已被第二笔真正删除）不应再有映射"
+    );
+}
+
+/// Issue #826 评论 10 阻塞 3：track 层归一化**只合并真正 overlap**，
+/// 相邻 range 必须保持两个 owner。
+///
+/// 危害：Undo 一个 delete-surrounding 会一次恢复光标两侧的相邻文字，
+/// 两条 final-new patch `[0,1]` / `[1,2]` 本该是两条 RevealTrack；
+/// 合成成 `[0,2]` 后，动画未结束立刻在 byte 1 继续输入时，
+/// `map_old_range_to_new(0, 2)` 跨过本次插入点返回 `None`，
+/// 整条旧 track 被丢弃，上一轮还没吐完的恢复文字瞬间回 canonical。
+#[test]
+fn adjacent_insert_ranges_stay_separate_tracks() {
+    let now = Instant::now();
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
+    )]);
+
+    let state = EditFrontierState::begin_insert(
+        target,
+        String::from("ab"),
+        // 两条相邻但不相交的 inserted range。
+        vec![(0, 1), (1, 2)],
+        OffsetMap::from_single_edit(0, (0, 0), 2),
+        now,
+        160,
+    );
+
+    assert_eq!(
+        state.new_ranges(),
+        vec![(0, 1), (1, 2)],
+        "相邻 range 必须保持两个 owner，不能合成 [0,2)"
+    );
+    assert_eq!(
+        state.reveal_tracks.len(),
+        2,
+        "相邻 patch 必须是两条独立 RevealTrack"
     );
 }

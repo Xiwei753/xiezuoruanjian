@@ -236,8 +236,13 @@ impl PreparedEditMotion {
 /// `DisplayPatch.inserted_text` 是插入的新文本。
 ///
 /// - deleted range = `replace_byte_range`（旧文本坐标系）
-/// - inserted range = `(replace_byte_range.start, replace_byte_range.start + inserted_text.len())`
-///   （新文本坐标系）
+/// - inserted range = `inserted_byte_range`（**final new 坐标系**，纯 Delete 零长）
+///
+/// Issue #826 评论 10 阻塞 4.5：旧注释写的
+/// `(replace_byte_range.start, replace_byte_range.start + inserted_text.len())`
+/// 已经**不能**用了 —— 一笔 batch 里前一处替换变长后，后一处在 new 坐标里
+/// 已经右移，推算值会把中间的正常正文当成 inserted。现在直接读 Core 的
+/// `inserted_byte_range`，平台端不再做这种累计长度差。
 ///
 /// Issue #824 评论 5971089641 第 2 节：本函数是正文动画分类的**唯一事实源**。
 /// 普通 Insert/Delete/Replace、IME commit、粘贴都从这里派生 inserted/deleted，

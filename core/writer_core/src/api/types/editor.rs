@@ -686,6 +686,10 @@ mod tests {
             new_revision: crate::editor::strong_types::EditorRevision::new(1),
             replace_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 2, 2)
                 .unwrap(),
+            // Issue #826 评论 10 阻塞 4.1：旧坐标是 [2,2)（零长插入点），
+            // 同一处插入 1 byte 后 final new 坐标是 [2,3)。
+            inserted_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new("abc", 2, 3)
+                .unwrap(),
             inserted_text: "c".to_string(),
             resulting_selection_byte_range: crate::editor::strong_types::Utf8ByteRange::try_new(
                 "abc", 3, 3,
@@ -697,6 +701,10 @@ mod tests {
         assert_eq!(dto.new_revision, 1);
         assert_eq!(dto.replace_byte_start, 2);
         assert_eq!(dto.replace_byte_end_exclusive, 2);
+        // Issue #826 评论 10 阻塞 4.1：inserted 区间必须一起转换，
+        // 否则平台端拿不到 patch 在 final new 坐标里的位置。
+        assert_eq!(dto.inserted_byte_start, 2);
+        assert_eq!(dto.inserted_byte_end_exclusive, 3);
         assert_eq!(dto.inserted_text, "c");
     }
 

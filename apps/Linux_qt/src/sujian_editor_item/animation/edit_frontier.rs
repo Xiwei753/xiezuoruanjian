@@ -286,6 +286,20 @@ pub(crate) struct EditFrontierState {
     /// `new_ranges` 用这个坐标系，所以连续吐字时必须靠它把已累计的 new ranges
     /// 映射到最新 target 坐标（`extend_insert` / `extend_replace`）。
     pub target_text: String,
+    /// Issue #826 评论 10 阻塞 1：burst 最初 base 正文 → **当前 target 正文** 的
+    /// 精确累计映射。
+    ///
+    /// 连续 Delete / Replace 必须靠它把本次 deleted ranges 映回 burst base 坐标。
+    /// 之前每笔都 `OffsetMap::build(base_text, current_base_text)` 重新全文 diff，
+    /// 但 `build` 只是最长公共前缀+后缀，多 patch 中间的 unchanged island 会丢：
+    /// 例如 `aXbXc -> abc` 再删 `b`，第二次的 `map_new_range_to_old(1,2)` 返回
+    /// `None`，`b` 明明被 Core 真正删除、Reflow 也把它当 changed 排除，却没有
+    /// ConcealTrack，视觉上直接从 canonical 消失。
+    ///
+    /// 现在 begin 时存 `request.offset_map`，每次 extend 后
+    /// `base_to_target_map.compose(&request.offset_map)` 继续累计，
+    /// 整个 burst 始终沿 Core 的精确字符身份走。
+    pub(crate) base_to_target_map: OffsetMap,
 }
 
 /// Issue #826: 前沿的一帧采样结果。
@@ -368,6 +382,8 @@ pub(crate) struct ConcealTrack {
 
 impl EditFrontierState {
     /// 本轮吞字的全部旧文字范围（burst base 坐标系）。
+    ///
+    /// 供 coordinator 把本次 deleted ranges 映回 burst base 坐标。
     pub(crate) fn old_ranges(&self) -> Vec<(usize, usize)> {
         self.conceal_tracks
             .iter()
@@ -385,10 +401,12 @@ impl EditFrontierState {
         target_snapshot: EditorLayoutSnapshot,
         target_text: String,
         new_ranges: Vec<(usize, usize)>,
+        base_to_target_map: OffsetMap,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let reveal_tracks = build_reveal_tracks(&target_snapshot, &normalize_ranges(new_ranges));
+        let reveal_tracks =
+            build_reveal_tracks(&target_snapshot, &normalize_track_ranges(new_ranges));
         Self {
             kind: EditFrontierKind::Insert,
             // 纯吐字不需要旧正文 overlay，base_snapshot 与 target 相同。
@@ -401,6 +419,7 @@ impl EditFrontierState {
             duration_ms: duration_ms.max(1),
             base_text: target_text.clone(),
             target_text,
+            base_to_target_map,
         }
     }
 
@@ -411,12 +430,16 @@ impl EditFrontierState {
         target_snapshot: EditorLayoutSnapshot,
         target_text: String,
         old_ranges: Vec<(usize, usize)>,
+        base_to_target_map: OffsetMap,
         direction: ConcealDirection,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let conceal_tracks =
-            build_conceal_tracks(&base_snapshot, &normalize_ranges(old_ranges), direction);
+        let conceal_tracks = build_conceal_tracks(
+            &base_snapshot,
+            &normalize_track_ranges(old_ranges),
+            direction,
+        );
         Self {
             kind: EditFrontierKind::Delete,
             base_snapshot,
@@ -428,6 +451,7 @@ impl EditFrontierState {
             duration_ms: duration_ms.max(1),
             base_text,
             target_text,
+            base_to_target_map,
         }
     }
 
@@ -441,13 +465,18 @@ impl EditFrontierState {
         target_text: String,
         old_ranges: Vec<(usize, usize)>,
         new_ranges: Vec<(usize, usize)>,
+        base_to_target_map: OffsetMap,
         direction: ConcealDirection,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let conceal_tracks =
-            build_conceal_tracks(&base_snapshot, &normalize_ranges(old_ranges), direction);
-        let reveal_tracks = build_reveal_tracks(&target_snapshot, &normalize_ranges(new_ranges));
+        let conceal_tracks = build_conceal_tracks(
+            &base_snapshot,
+            &normalize_track_ranges(old_ranges),
+            direction,
+        );
+        let reveal_tracks =
+            build_reveal_tracks(&target_snapshot, &normalize_track_ranges(new_ranges));
         Self {
             kind: EditFrontierKind::Replace,
             base_snapshot,
@@ -459,6 +488,7 @@ impl EditFrontierState {
             duration_ms: duration_ms.max(1),
             base_text,
             target_text,
+            base_to_target_map,
         }
     }
 
@@ -472,12 +502,14 @@ impl EditFrontierState {
     /// 本次新增的 patch 开一条 `travelled = 0` 的新 track。相邻但来源不同的 track
     /// 不合并 —— 静态 clip 层渲染时本来就会合并相邻矩形，没必要为了减少 state
     /// 数量把动画 owner 也合掉。**动画状态按编辑身份保存；渲染阶段再合并几何。**
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extend_insert(
         &mut self,
         target_snapshot: EditorLayoutSnapshot,
         target_text: String,
         inserted_ranges: Vec<(usize, usize)>,
         prev_target_to_new: &OffsetMap,
+        base_to_current: &OffsetMap,
         now: Instant,
     ) {
         let eased = ease_out_cubic(self.sample(now).progress);
@@ -495,7 +527,7 @@ impl EditFrontierState {
                 travelled: next_travelled,
             });
         }
-        for range in normalize_ranges(inserted_ranges) {
+        for range in normalize_track_ranges(inserted_ranges) {
             if next.iter().any(|track| overlaps(range, track.range)) {
                 continue;
             }
@@ -505,6 +537,7 @@ impl EditFrontierState {
                 travelled: 0.0,
             });
         }
+        self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
         self.reveal_tracks = next;
@@ -522,6 +555,7 @@ impl EditFrontierState {
         target_text: String,
         deleted_ranges: Vec<(usize, usize)>,
         base_to_current: &OffsetMap,
+        prev_target_to_new: &OffsetMap,
         direction: ConcealDirection,
         now: Instant,
     ) {
@@ -534,7 +568,8 @@ impl EditFrontierState {
                 travelled: travelled(track.travelled, track.path.total_length, eased),
             });
         }
-        let incoming = normalize_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        let incoming =
+            normalize_track_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
         for range in incoming {
             if next.iter().any(|track| overlaps(range, track.range)) {
                 continue;
@@ -549,6 +584,7 @@ impl EditFrontierState {
                 travelled: 0.0,
             });
         }
+        self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
         self.conceal_direction = direction;
@@ -584,7 +620,8 @@ impl EditFrontierState {
                 travelled: travelled(track.travelled, track.path.total_length, eased),
             })
             .collect();
-        let incoming_old = normalize_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        let incoming_old =
+            normalize_track_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
         for range in incoming_old {
             if conceal.iter().any(|track| overlaps(range, track.range)) {
                 continue;
@@ -615,7 +652,7 @@ impl EditFrontierState {
                 travelled: next_travelled,
             });
         }
-        for range in normalize_ranges(inserted_ranges) {
+        for range in normalize_track_ranges(inserted_ranges) {
             if reveal.iter().any(|track| overlaps(range, track.range)) {
                 continue;
             }
@@ -626,6 +663,7 @@ impl EditFrontierState {
             });
         }
 
+        self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
         self.conceal_direction = direction;
@@ -819,6 +857,39 @@ fn normalize_ranges(ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
             Some(last) if start <= last.1 => {
                 last.1 = last.1.max(end);
             }
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+/// Issue #826 评论 10 阻塞 3：track 层专用的 range 归一化。
+///
+/// 与 `normalize_ranges` 的区别：**只合并真正 overlap，绝不合并 adjacency**
+/// （判据是 `start < last.1` 而不是 `start <= last.1`）。
+///
+/// 评论 9 已定规则「相邻但来源不同的 track 不合并；动画状态按编辑身份保存，
+/// 渲染阶段再合并几何」。`normalize_ranges` 仍会在创建 track 之前把
+/// `[0,1]` + `[1,2]` 合成 `[0,2]`，owner 在 track 诞生前就丢了。
+///
+/// 具体危害：Undo 一个 delete-surrounding 时会一次恢复光标两侧的相邻文字，
+/// 两条 final-new patch `[0,1]` / `[1,2]` 本该是两条 RevealTrack；合成成
+/// `[0,2]` 后，动画未结束立刻在 byte 1 继续输入时，
+/// `prev_target_to_new.map_old_range_to_new(0, 2)` 跨过本次插入点返回 `None`，
+/// 整条旧 track 被丢弃，上一轮还没吐完的恢复文字瞬间回 canonical。
+///
+/// 静态裁剪层已经会做几何 interval merge，动画 state 不需要再合一次。
+fn normalize_track_ranges(ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut kept: Vec<(usize, usize)> = ranges
+        .into_iter()
+        .filter(|&(start, end)| end > start)
+        .collect();
+    kept.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(kept.len());
+    for (start, end) in kept {
+        match merged.last_mut() {
+            // 只在真正 overlap 时合并；相邻（start == last.1）保持两个 owner。
+            Some(last) if start < last.1 => last.1 = last.1.max(end),
             _ => merged.push((start, end)),
         }
     }

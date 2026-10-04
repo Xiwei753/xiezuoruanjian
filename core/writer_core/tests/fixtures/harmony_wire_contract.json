@@ -623,6 +623,14 @@
               "kind": "scalar",
               "ty": "number"
             },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
             "insertedText": {
               "kind": "scalar",
               "ty": "string"
@@ -751,6 +759,14 @@
           "kind": "object",
           "fields": {
             "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
               "kind": "scalar",
               "ty": "number"
             },
@@ -893,6 +909,14 @@
               "kind": "scalar",
               "ty": "number"
             },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
             "insertedText": {
               "kind": "scalar",
               "ty": "string"
@@ -1032,6 +1056,14 @@
               "kind": "scalar",
               "ty": "number"
             },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
+              "kind": "scalar",
+              "ty": "number"
+            },
             "insertedText": {
               "kind": "scalar",
               "ty": "string"
@@ -1160,6 +1192,14 @@
           "kind": "object",
           "fields": {
             "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
               "kind": "scalar",
               "ty": "number"
             },
@@ -1370,6 +1410,14 @@
           "kind": "object",
           "fields": {
             "baseRevision": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteEndExclusive": {
+              "kind": "scalar",
+              "ty": "number"
+            },
+            "insertedByteStart": {
               "kind": "scalar",
               "ty": "number"
             },
