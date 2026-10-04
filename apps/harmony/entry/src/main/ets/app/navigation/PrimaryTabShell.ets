@@ -287,10 +287,86 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
+  // 宽屏骨架：一级导航改到左侧，三个 NavPathStack 继续沿用原来的 owner。
+  // 这里只决定“摆在哪里”，不新增 Core 枚举，也不复制页面业务状态。
+  @Builder
+  WidePrimaryRail() {
+    Column({ space: 8 }) {
+      Text('素笺')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .width('100%')
+        .margin({ bottom: 12 })
+
+      Button('作品')
+        .width('100%')
+        .height(44)
+        .onClick(() => { this.currentTab = TAB_HOME })
+      Button('星图')
+        .width('100%')
+        .height(44)
+        .onClick(() => { this.currentTab = TAB_STARMAP })
+      Button('统计')
+        .width('100%')
+        .height(44)
+        .onClick(() => { this.currentTab = TAB_STATS })
+
+      Blank()
+    }
+    .width(168)
+    .height('100%')
+    .padding({ left: 12, right: 12, top: 16, bottom: 16 })
+  }
+
+  @Builder
+  WideCurrentNavigation() {
+    if (this.currentTab === TAB_HOME) {
+      Navigation(this.homeStack) {}
+        .navDestination(this.HomePageMap)
+        .mode(NavigationMode.Stack)
+        .hideTitleBar(true)
+        .width('100%')
+        .height('100%')
+    } else if (this.currentTab === TAB_STARMAP) {
+      Navigation(this.starMapStack) {}
+        .navDestination(this.StarMapPageMap)
+        .mode(NavigationMode.Stack)
+        .hideTitleBar(true)
+        .width('100%')
+        .height('100%')
+    } else {
+      Navigation(this.statsStack) {}
+        .navDestination(this.StatsPageMap)
+        .mode(NavigationMode.Stack)
+        .hideTitleBar(true)
+        .width('100%')
+        .height('100%')
+    }
+  }
+
+  @Builder
+  WidePrimaryShell() {
+    Row() {
+      if (this.currentShowPrimaryNav) {
+        this.WidePrimaryRail()
+      }
+      Stack() {
+        this.WideCurrentNavigation()
+      }
+      .layoutWeight(1)
+      .height('100%')
+    }
+    .width('100%')
+    .height('100%')
+  }
+
   build() {
     // Issue #768：API23+ 分流到 HdsPrimaryTabsApi23（使用 HdsTabs 悬浮页签）。
     // API < 23 保持普通 Tabs + BottomTabBarStyle 实现。
-    if (this.useHdsTabs) {
+    if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
+      // 平板/桌面宽屏先进入左侧导航骨架；具体视觉、收起态和设置浮层由后续议题填充。
+      this.WidePrimaryShell()
+    } else if (this.useHdsTabs) {
       HdsPrimaryTabsApi23({
         currentTab: $currentTab,
         homeStack: this.homeStack,
