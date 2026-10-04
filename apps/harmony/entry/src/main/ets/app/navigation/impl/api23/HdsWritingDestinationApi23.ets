@@ -14,8 +14,9 @@
 // 页头动作胶囊。
 //
 // Issue #825 复核第2项：ActionSlot[] 不再由本壳层自己解析 ScreenPolicy，
-// 改由 WritingScreen 统一解析后透传进来。同一份数组同时喂给窄屏标题栏胶囊和
-// 宽屏右侧工具区，避免宽屏关掉胶囊后工具区拿不到任何动作。
+// 改由 WritingScreen 统一解析后透传进来。
+// Issue #825 复核第1项：这组动作是 Core 七角色里的 ToolbarTrailing，窄屏宽屏都在
+// 顶部显示，右侧 ToolPane 不再重复它们，所以胶囊没有开关、恒显示。
 
 import { HdsNavDestination, HdsNavigationTitleBarOptions, hdsMaterial } from '@kit.UIDesignKit'
 import { HeaderTitleBarStack } from './HeaderTitleBarStack'
@@ -33,9 +34,6 @@ export struct HdsWritingDestinationApi23 {
   @Param scroller: Scroller = new Scroller()
   // Issue #784 评论5857397503：ScreenPolicy 解析结果由 WritingScreen 统一持有并透传。
   @Param headerActions: ActionSlot[] = []
-  // Issue #825：宽屏时动作搬进页面自己的右侧工具区，页头动作胶囊关掉，
-  // 保证同步/搜索/设置只有一个入口。
-  @Param showActionCapsule: boolean = true
 
   // stackBuilder 是 CustomBuilder，组件调用必须写在 @Builder 里。
   // 直接在箭头函数体里写 HeaderTitleBarStack({...}) 会被当普通函数调用，运行时崩：
@@ -45,8 +43,7 @@ export struct HdsWritingDestinationApi23 {
     HeaderTitleBarStack({
       title: this.title,
       headerActions: this.headerActions,
-      showBackButton: true,
-      showActionCapsule: this.showActionCapsule
+      showBackButton: true
     })
   }
 

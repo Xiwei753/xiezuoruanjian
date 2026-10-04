@@ -28,22 +28,40 @@ import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, ActionSlot, ActionRole, WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
+import {
+  ScreenRole,
+  ActionSlot,
+  ActionRole,
+  WorkspaceLayoutMode,
+  WorkbenchLayoutPlan,
+  WorkbenchRole,
+  WorkbenchVisibility
+} from '../../../corebridge/dto/PlatformDtos'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWritingDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWritingDestinationApi23'
 import { sortedHeaderTrailingActions } from '../../../app/navigation/NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
+import {
+  getWorkbenchLayoutBridge,
+  workbenchBounds,
+  isWorkbenchMode
+} from '../../../ui/adaptive/WorkbenchLayoutBridge'
+import { WritingToolRail } from './WritingToolRail'
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
 // Navigation/NavDestination 标题栏的沉浸光感材质；返回入口和标题改由
 // NavDestination 原生标题栏（hideTitleBar(false) + title）承载。
 
-// Issue #825：宽屏左右 pane 的固定宽度和贴边把手尺寸（vp）。
-const LEFT_PANE_WIDTH_VP: number = 320
-const RIGHT_PANE_WIDTH_VP: number = 300
+// Issue #825 复核第 2 项：目录栏 / 工具 pane / rail 的宽度不再在这里硬编码。
+// 三个宽度都读 Core `resolve_workbench_layout` 返回的对应角色 bounds；
+// 下面只是 plan 还没回来时的占位，plan 一到就被真实 bounds 覆盖。
+const FALLBACK_CHAPTER_NAV_WIDTH_VP: number = 320
+const FALLBACK_TOOL_PANE_WIDTH_VP: number = 240
+const FALLBACK_TOOL_RAIL_WIDTH_VP: number = 56
+// 贴边折叠把手的尺寸（vp）。把手不是 Core 角色，只是 pane 边界上的 UI 装饰。
 const PANE_HANDLE_WIDTH_VP: number = 18
 const PANE_HANDLE_HEIGHT_VP: number = 64
 
@@ -113,9 +131,15 @@ export struct WritingScreen {
   @State volumeTrees: VolumeTree[] = []
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
-  // 宽屏骨架：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态。
+  // Issue #825 复核第 2 项：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态，
+  // 只作为 WorkbenchVisibility 输入让 Core 重算七角色 bounds。
   @State leftPaneCollapsed: boolean = false
   @State rightPaneCollapsed: boolean = true
+  // Issue #825 复核第 1 项：ToolRail 当前选中的工具。Harmony 还没有真实 AI/星图
+  // 侧栏内容可接，所以默认空串——rail 只提供 ToolPane 展开/收起入口，不造假按钮。
+  @State selectedToolKey: string = ''
+  // Core 下发的七角色 bounds 计划；null 表示还没拿到（此时用 FALLBACK_* 占位）。
+  @State workbenchPlan: WorkbenchLayoutPlan | null = null
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
   // 强类型 EditorViewportState，不用裸 object（Issue #629 评论 5 第 8 节）。
   @State currentViewport: EditorViewportState | null = null
@@ -195,6 +219,8 @@ export struct WritingScreen {
       this.loadWritingContent()
       // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
       this.ensureWorkbenchProjectTree()
+      // Issue #825 复核第 2 项：进页面先要一份 Core 七角色 bounds 计划。
+      this.refreshWorkbenchPlan()
     }
 
     const self = this
@@ -235,6 +261,8 @@ export struct WritingScreen {
       // Issue #825 复核第1项：窗口从窄变宽时第一次进入 Workbench 也要补一次目录树，
       // 否则 aboutToAppear 当时是窄屏、目录树永远为空。
       self.ensureWorkbenchProjectTree()
+      // Issue #825 复核第 2 项：窗口尺寸变了就重新向 Core 要七角色 bounds。
+      self.refreshWorkbenchPlan()
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
@@ -662,6 +690,59 @@ export struct WritingScreen {
     }
   }
 
+  // Issue #825 复核第 2 项：向 Core 要一份七角色 bounds 计划。
+  // 目录栏 / 工具 pane 的展开状态只作为 WorkbenchVisibility 输入，不落 Core 持久化，
+  // 也不影响编辑会话——所以每次重算只改布局，EditorSessionCoordinator 始终是同一个。
+  private refreshWorkbenchPlan(): void {
+    const visibility: WorkbenchVisibility = {
+      chapterNavigationVisible: !this.leftPaneCollapsed,
+      toolPaneVisible: !this.rightPaneCollapsed
+    }
+    getWorkbenchLayoutBridge()
+      .resolveWorkbenchLayout(this.adaptiveState.widthVp, this.adaptiveState.heightVp, visibility)
+      .then((plan: WorkbenchLayoutPlan | null): void => {
+        if (plan !== null) {
+          this.workbenchPlan = plan
+        }
+      })
+      .catch(() => {})
+  }
+
+  // 目录栏 / 工具 pane 展开状态变化后重算 plan：Core 决定各角色最终 bounds，
+  // 平台端只按 bounds 摆控件。
+  private onPaneCollapsedChanged(): void {
+    this.refreshWorkbenchPlan()
+  }
+
+  private chapterNavigationWidthVp(): number {
+    const bounds = workbenchBounds(this.workbenchPlan, WorkbenchRole.ChapterNavigation)
+    if (bounds === null) {
+      return FALLBACK_CHAPTER_NAV_WIDTH_VP
+    }
+    return Math.max(0, bounds.rightDp - bounds.leftDp)
+  }
+
+  private toolPaneWidthVp(): number {
+    const bounds = workbenchBounds(this.workbenchPlan, WorkbenchRole.ToolPane)
+    if (bounds === null) {
+      return FALLBACK_TOOL_PANE_WIDTH_VP
+    }
+    return Math.max(0, bounds.rightDp - bounds.leftDp)
+  }
+
+  private toolRailWidthVp(): number {
+    const bounds = workbenchBounds(this.workbenchPlan, WorkbenchRole.ToolRail)
+    if (bounds === null) {
+      return FALLBACK_TOOL_RAIL_WIDTH_VP
+    }
+    return Math.max(0, bounds.rightDp - bounds.leftDp)
+  }
+
+  // Core 决定的最终产品模式；SinglePane 时页面回单栏，不摆七角色。
+  private get hasWorkbenchPlan(): boolean {
+    return isWorkbenchMode(this.workbenchPlan)
+  }
+
   // Issue #825 复核第1项：进入宽屏工作台后只加载一次目录树。
   // aboutToAppear（当时可能还是窄屏）与 adaptive observer（窗口变宽）都走这里。
   private ensureWorkbenchProjectTree(): void {
@@ -1002,18 +1083,6 @@ export struct WritingScreen {
     return $r('app.media.ic_settings')
   }
 
-  // Issue #825：ActionRole → 中文标签，用于右侧工具区条目。
-  // 与 NavigationHeaderActionMenu 的 Sync/Search/Settings 标签保持同一套文案。
-  private getHeaderActionLabel(role: ActionRole): string {
-    if (role === ActionRole.Sync) {
-      return '同步'
-    }
-    if (role === ActionRole.Search) {
-      return '搜索'
-    }
-    return '设置'
-  }
-
   async clearContent() {
     AlertDialog.show({
       title: $r('app.string.confirm_clear'),
@@ -1063,16 +1132,14 @@ export struct WritingScreen {
   // 供 HdsNavDestination 和 NavDestination 两个条件渲染分支共用。
   @Builder
   NavContent() {
-    if (this.isWideWorkbench) {
-      // Issue #629 评论14 第1项：宽屏三栏布局。
-      // 左侧：ChapterTreePane（纯目录 UI，不持有编辑会话）。
-      // 中央：当前 WritingScreen 的唯一编辑会话
-      //       （同一个 coordinator/inputAdapter/dispatcher/IME/save/close）。
-      // 右侧：真实工具区，入口来自 Core ScreenPolicy 的 HeaderTrailing actionSlots。
-      // 屏幕宽度变化只改布局（离开 Workbench 时回单栏），不换 TextEditSession owner。
+    if (this.isWideWorkbench && this.hasWorkbenchPlan) {
+      // Issue #825 复核第 1/2 项：宽屏按 Core 七角色摆，不再自己决定几栏：
+      //   ChapterNavigation | Editor | ToolPane | ToolRail（+ 顶部三段 Toolbar 由页头壳层承载）。
+      // 各角色宽度全部来自 resolve_workbench_layout 的 bounds；plan 说 SinglePane 时回单栏。
+      // 屏幕宽度变化只改布局，不换 TextEditSession owner（同一个 coordinator/dispatcher/IME/save）。
       Stack() {
         Row() {
-          // 左侧可收起目录栏；收起后整块不占宽度，只留贴边把手。
+          // ChapterNavigation：可收起目录栏。收起后整块不占宽度，只留贴边把手。
           if (!this.leftPaneCollapsed) {
             ChapterTreePane({
               volumeTrees: this.volumeTrees,
@@ -1087,21 +1154,32 @@ export struct WritingScreen {
               onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
               onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
             })
-              .width(LEFT_PANE_WIDTH_VP)
+              .width(this.chapterNavigationWidthVp())
               .height('100%')
           }
 
-          // 中央纸面限宽居中，可用空间随左右 pane 展开/收起变化，编辑会话不变。
+          // Editor：占剩余空间，纸面限宽居中；左右 pane 展开/收起只改变可用空间，
+          // 不改变编辑会话。
           Column() {
             this.EditorPane()
           }
           .layoutWeight(1)
           .height('100%')
 
-          // 右侧可收起工具区。
+          // ToolPane：可收起，承载 rail 选中的工具内容，不再重复顶部 ToolbarTrailing 动作。
           if (!this.rightPaneCollapsed) {
             this.RightToolPane()
           }
+
+          // ToolRail：最右竖向 rail，宽度由 Core 的 ToolRail bounds 决定（恒 56dp）。
+          WritingToolRail({
+            railWidthVp: this.toolRailWidthVp(),
+            selectedToolKey: this.selectedToolKey,
+            toolPaneVisible: !this.rightPaneCollapsed,
+            onSelectTool: (key: string): void => { this.onSelectTool(key) },
+            onToggleToolPane: () => { this.onToggleToolPane() }
+          })
+            .height('100%')
         }
         .width('100%')
         .height('100%')
@@ -1112,16 +1190,34 @@ export struct WritingScreen {
       .width('100%')
       .height('100%')
     } else {
-      // Issue #629 评论9 第3项：窄屏单栏布局。
+      // Issue #629 评论9 第3项：窄屏单栏布局（或 Core 判定 SinglePane）。
       this.EditorPane()
     }
+  }
+
+  // Issue #825 复核第 2 项：选中工具时同时展开 ToolPane（rail 负责“选工具 + 展开/收起”）。
+  private onSelectTool(key: string): void {
+    this.selectedToolKey = key
+    if (this.rightPaneCollapsed) {
+      this.rightPaneCollapsed = false
+      this.onPaneCollapsedChanged()
+    }
+  }
+
+  private onToggleToolPane(): void {
+    this.rightPaneCollapsed = !this.rightPaneCollapsed
+    if (this.rightPaneCollapsed) {
+      // 收起时清掉选中项，避免下次展开还挂着一个没有真实内容的工具。
+      this.selectedToolKey = ''
+    }
+    this.onPaneCollapsedChanged()
   }
 
   // Issue #825 复核第5项：把手走整屏覆盖层，按“窗口左缘 / 分隔边缘 / 窗口右缘”显式排位。
   // 之前是把窄 Stack 塞进外层 Stack 再用 offset 猜坐标，而 Stack 的 offset 是相对自身对齐点算的，
   // 收起态会落到屏幕中间。这里用一段带占位宽度的整屏 Row 从左往右排：
   // 左把手在目录栏右缘（前置占位 (目录栏宽 - 半把手)，按钮中心压在目录栏边界上），
-  // 右把手按展开态决定占位在按钮前还是按钮后，
+  // 右把手在 ToolPane 左缘（占位放在按钮之后，按钮中心压在分隔线上；收起时贴窗口右缘）。
   // 中间 layoutWeight 的 Blank 吃掉剩余空间，位置由布局算出来而不是猜出来。
   // 覆盖层自身不参与命中测试（HitTestMode.Transparent），只有两个 Button 可点，
   // 正文、目录树和工具区的触摸照常落到下层。
@@ -1130,7 +1226,7 @@ export struct WritingScreen {
     Row() {
       if (!this.leftPaneCollapsed) {
         Blank()
-          .width(LEFT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
+          .width(this.chapterNavigationWidthVp() - PANE_HANDLE_WIDTH_VP / 2)
           .hitTestBehavior(HitTestMode.None)
       }
 
@@ -1141,15 +1237,18 @@ export struct WritingScreen {
         .fontColor($r('sys.color.font_primary'))
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => { this.leftPaneCollapsed = !this.leftPaneCollapsed })
+        .onClick(() => {
+          this.leftPaneCollapsed = !this.leftPaneCollapsed
+          this.onPaneCollapsedChanged()
+        })
 
       Blank()
         .layoutWeight(1)
         .hitTestBehavior(HitTestMode.None)
 
-      // Issue #825 复核第1项：右把手的占位必须在按钮“之后”。
-      // 收起时没有占位，按钮自然贴窗口右缘；
-      // 展开时按钮后面补 (工具区宽 - 半把手)，按钮中心正好压在“正文 | 右工具区”分隔线上。
+      // 右把手占位必须在按钮“之后”：收起时没有占位，按钮自然贴窗口右缘；
+      // 展开时按钮后面补 (ToolPane 宽 - 半把手)，按钮中心正好压在“正文 | ToolPane”分隔线上。
+      // rail 恒在最右，占位不包含 rail 宽度。
       Button(this.rightPaneCollapsed ? '‹' : '›', { type: ButtonType.Normal })
         .width(PANE_HANDLE_WIDTH_VP)
         .height(PANE_HANDLE_HEIGHT_VP)
@@ -1157,11 +1256,11 @@ export struct WritingScreen {
         .fontColor($r('sys.color.font_primary'))
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
-        .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
+        .onClick(() => { this.onToggleToolPane() })
 
       if (!this.rightPaneCollapsed) {
         Blank()
-          .width(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
+          .width(this.toolPaneWidthVp() - PANE_HANDLE_WIDTH_VP / 2)
           .hitTestBehavior(HitTestMode.None)
       }
     }
@@ -1171,56 +1270,20 @@ export struct WritingScreen {
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
-  // Issue #825：右侧工具区。
-  // 入口全部来自 Core ScreenPolicy 的 HeaderTrailing actionSlots（同步/搜索/设置），
-  // 点击统一走 NavigationHeaderActionDispatcher；这里不造第二份工具状态，也不写占位假功能。
-  // 宽屏时页头不再重复画这些动作（API23+ 走 showActionCapsule=false，
-  // API<23 的自定义标题 Row 直接不渲染），所以只有一个入口。
+  // Issue #825 复核第 1 项：ToolPane 只承载 rail 选中的工具内容。
+  // 同步 / 搜索 / 设置属于 Core 七角色里的 ToolbarTrailing，仍然画在顶部工具栏，
+  // 这里不再重复，也不造第二份工具状态。
+  //
+  // 当前 Harmony 还没有真实的 AI / 星图侧栏内容可接，selectedToolKey 恒为空串，
+  // 所以这里暂时是空容器——等真实工具内容接上时按 selectedToolKey 分发即可，
+  // 不需要改 ToolPane 与 rail 的结构。
   @Builder
   RightToolPane() {
-    Column({ space: 8 }) {
-      Text('工具')
-        .fontSize(13)
-        .fontColor($r('sys.color.font_primary'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
-        .margin({ left: 12, top: 4, bottom: 4 })
-
-      ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
-        this.RightToolEntry(slot)
-      }, (slot: ActionSlot) => slot.role)
+    Column() {
     }
-    .width(RIGHT_PANE_WIDTH_VP)
+    .width(this.toolPaneWidthVp())
     .height('100%')
-    .padding({ top: 8, bottom: 8 })
     .backgroundColor($r('sys.color.background_secondary'))
-  }
-
-  @Builder
-  RightToolEntry(slot: ActionSlot) {
-    Row() {
-      Image(this.getHeaderActionIcon(slot.role))
-        .width(20)
-        .height(20)
-        .fillColor($r('sys.color.icon_primary'))
-
-      Text(this.getHeaderActionLabel(slot.role))
-        .fontSize(15)
-        .fontColor($r('sys.color.font_primary'))
-        .margin({ left: 12 })
-
-      Blank()
-    }
-    .width('100%')
-    .height(44)
-    .padding({ left: 12, right: 12 })
-    .margin({ left: 8, right: 8 })
-    .alignItems(VerticalAlign.Center)
-    .borderRadius(DesignTokens.radiusSm)
-    .backgroundColor($r('sys.color.comp_background_gray'))
-    .onClick(() => {
-      NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-    })
   }
 
   build() {
@@ -1239,9 +1302,9 @@ export struct WritingScreen {
         },
         scroller: this.editorScroller,
         // Issue #825 复核第2项：动作数组由本页面统一解析后透传，壳层不再自己解析一遍。
-        headerActions: this.headerActions,
-        // Issue #825：宽屏动作搬进右侧工具区，页头胶囊关掉，避免两个入口。
-        showActionCapsule: !this.isWideWorkbench
+        // Issue #825 复核第1项：同步 / 搜索 / 设置属于 Core 的 ToolbarTrailing 角色，
+        // 宽屏也继续显示在顶部，不再搬进右侧 ToolPane（那里只放选中工具的内容）。
+        headerActions: this.headerActions
       }) {
         this.NavContent()
       }
@@ -1269,25 +1332,23 @@ export struct WritingScreen {
             // Issue #784 评论5857856673 问题2：右侧渲染 HeaderTrailing 动作按钮。
             // 动作来源是 Core ScreenPolicy（this.headerActions），通过 sortedHeaderTrailingActions
             // 排序后 ForEach 渲染，统一调用 NavigationHeaderActionDispatcher.dispatchAction。
-            // Issue #825：宽屏时这些动作搬进右侧工具区（RightToolPane），
-            // 页头不再重复画一遍，宽屏下只有一个入口。
+            // Issue #825 复核第1项：这组动作属于 ToolbarTrailing，窄屏宽屏都在顶部，
+            // 右侧 ToolPane 不再重复它们。
             Blank()
 
-            if (!this.isWideWorkbench) {
-              ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
-                Button({ type: ButtonType.Circle, stateEffect: true }) {
-                  Image(this.getHeaderActionIcon(slot.role))
-                    .width(24)
-                    .height(24)
-                    .fillColor($r('sys.color.icon_primary'))
-                }
-                .width(40)
-                .height(40)
-                .onClick(() => {
-                  NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-                })
-              }, (slot: ActionSlot) => slot.role)
-            }
+            ForEach(sortedHeaderTrailingActions(this.headerActions), (slot: ActionSlot) => {
+              Button({ type: ButtonType.Circle, stateEffect: true }) {
+                Image(this.getHeaderActionIcon(slot.role))
+                  .width(24)
+                  .height(24)
+                  .fillColor($r('sys.color.icon_primary'))
+              }
+              .width(40)
+              .height(40)
+              .onClick(() => {
+                NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+              })
+            }, (slot: ActionSlot) => slot.role)
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 8, bottom: 8 })

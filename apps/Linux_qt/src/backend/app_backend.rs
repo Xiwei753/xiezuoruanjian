@@ -37,6 +37,7 @@ use super::json_utils::{
     serde_to_qjson_object,
 };
 use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
+use super::linux_qt_workbench_plan_dto::LinuxQtWorkbenchPlanDto;
 use crate::{starmap_bridge, writing_bridge};
 
 cpp! {{
@@ -437,6 +438,18 @@ pub struct AppBackend {
     // ── Screen Contract ──
     #[allow(dead_code)]
     resolve_screen_policy: qt_method!(fn(&self, screen_role: QString) -> QJsonObject),
+
+    // ── Workbench Layout Contract（#825：七角色 bounds 由 Core 决定） ──
+    #[allow(dead_code)]
+    resolve_workbench_layout: qt_method!(
+        fn(
+            &self,
+            width_vp: f64,
+            height_vp: f64,
+            chapter_navigation_visible: bool,
+            tool_pane_visible: bool,
+        ) -> QJsonObject
+    ),
 }
 
 impl AppBackend {
@@ -716,6 +729,46 @@ impl AppBackend {
             show_primary_navigation: policy.show_primary_navigation,
         };
 
+        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
+        qjson_object_from_json(&json)
+    }
+
+    /// Issue #825：解析宽屏工作台七角色布局（#610 契约链路的第二步）。
+    ///
+    /// QML 调用：backend.resolve_workbench_layout(width, height, chapterNavVisible, toolPaneVisible)
+    ///
+    /// Core 的 `resolve_workbench_layout` 决定：
+    /// - 最终产品模式（Workbench / SinglePane）——放不下七角色时明确退回 SinglePane；
+    /// - 七个角色的最终 bounds（ToolbarLeading / ToolbarCenter / ToolbarTrailing /
+    ///   ChapterNavigation / Editor / ToolPane / ToolRail）。
+    ///
+    /// Qt 侧只做 camelCase 直通，不再用 `SplitView.preferredWidth` 自己决定三栏宽度。
+    ///
+    /// `chapter_navigation_visible` / `tool_pane_visible` 是端侧局部 UI 状态
+    /// （左右 pane 收起与否），只作为重算 plan 的输入，不落 Core、不进同步。
+    fn resolve_workbench_layout(
+        &self,
+        width_vp: f64,
+        height_vp: f64,
+        chapter_navigation_visible: bool,
+        tool_pane_visible: bool,
+    ) -> QJsonObject {
+        use writer_core::presentation::layout::resolver::{WindowViewport, WorkbenchVisibility};
+
+        let viewport = WindowViewport {
+            width_dp: width_vp as f32,
+            height_dp: height_vp as f32,
+            // Qt 桌面端无折叠屏/系统遮挡，与 resolve_layout 保持同一口径。
+            occlusions: Vec::new(),
+        };
+        let visibility = WorkbenchVisibility {
+            chapter_navigation_visible,
+            tool_pane_visible,
+        };
+
+        let plan =
+            writer_core::presentation::layout::resolve_workbench_layout(&viewport, visibility);
+        let dto = LinuxQtWorkbenchPlanDto::from_plan(&plan);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }

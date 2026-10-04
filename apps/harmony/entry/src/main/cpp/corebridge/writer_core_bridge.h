@@ -38,6 +38,13 @@ char*  writer_core_export_diagnostics(const char* output_dir, const char* attach
 // 原始窗口尺寸与遮挡几何，pane 数/折叠/指针/键盘由 Core 自己推导。
 char*  writer_core_resolve_layout(const char* viewport_json);
 
+// ── Workbench Layout Plan（#825：七角色 bounds 直通，平台端不自己算栏宽） ──
+// writer_core_resolve_workbench_layout: Input/output are JSON strings
+// (ResultEnvelope<WorkbenchLayoutPlanDto>).
+// Input is (WindowViewportDto, WorkbenchVisibilityDto)；visibility 是端侧局部
+// UI 状态（目录栏 / 工具 pane 展开与否），只作为输入重算，不落 Core 持久化。
+char*  writer_core_resolve_workbench_layout(const char* viewport_json, const char* visibility_json);
+
 // ── Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化） ──
 // writer_core_resolve_screen_policy: Input/output are JSON strings (ResultEnvelope<ScreenPolicyDto>).
 char*  writer_core_resolve_screen_policy(const char* screen_role_json);

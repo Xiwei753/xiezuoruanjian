@@ -1,6 +1,6 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause } from './dto/EditorDtos'
-import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
+import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
@@ -15,7 +15,7 @@ import { NativeSyncBridge } from './native/NativeSyncBridge'
 import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
 import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
-import { decodeLayoutContract, decodeScreenPolicy } from './codec/CoreWireDecoders'
+import { decodeLayoutContract, decodeScreenPolicy, decodeWorkbenchLayoutPlan } from './codec/CoreWireDecoders'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
@@ -382,6 +382,19 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeResolveLayout(JSON.stringify(viewport))
       return this.core.decodeEnvelope<LayoutContract>(jsonStr, decodeLayoutContract)
+    } catch (e) {
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+    }
+  }
+
+  // ── Workbench Layout Plan（#825：七角色 bounds 由 Core 决定） ──
+
+  async resolveWorkbenchLayout(viewport: WindowViewport,
+    visibility: WorkbenchVisibility): Promise<ResultEnvelope<WorkbenchLayoutPlan>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule()
+        .nativeResolveWorkbenchLayout(JSON.stringify(viewport), JSON.stringify(visibility))
+      return this.core.decodeEnvelope<WorkbenchLayoutPlan>(jsonStr, decodeWorkbenchLayoutPlan)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
     }

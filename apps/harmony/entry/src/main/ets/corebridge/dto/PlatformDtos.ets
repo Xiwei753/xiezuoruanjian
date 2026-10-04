@@ -71,6 +71,53 @@ export interface LayoutContract {
   metrics: LayoutMetrics
 }
 
+// 工作台七角色 — Core WorkbenchRoleDto。
+// Issue #825：草图里的「顶部左/顶部中/顶部右 + 章节树 | 正文 | ToolPane | 最右 ToolRail」
+// 就是这七个角色，平台端按角色摆控件，不再自己决定几栏、各栏多宽。
+export enum WorkbenchRole {
+  ToolbarLeading = 'ToolbarLeading',
+  ToolbarCenter = 'ToolbarCenter',
+  ToolbarTrailing = 'ToolbarTrailing',
+  ChapterNavigation = 'ChapterNavigation',
+  Editor = 'Editor',
+  ToolPane = 'ToolPane',
+  ToolRail = 'ToolRail'
+}
+
+// resolve_workbench_layout 决定的最终产品模式 — Core ResolvedWorkspaceModeDto。
+export enum ResolvedWorkspaceMode {
+  Workbench = 'Workbench',
+  SinglePane = 'SinglePane'
+}
+
+// 角色 bounds — Core LayoutRectDto（dp 坐标系）。
+export interface LayoutRect {
+  leftDp: number
+  topDp: number
+  rightDp: number
+  bottomDp: number
+}
+
+// 单个角色的放置 — Core WorkbenchPlacementDto。
+export interface WorkbenchPlacement {
+  role: WorkbenchRole
+  bounds: LayoutRect
+}
+
+// 目录栏 / 工具 pane 的展开状态 — Core WorkbenchVisibilityDto。
+// 这是端侧局部 UI 状态，只作为 resolve_workbench_layout 的输入重算 bounds，
+// 不进 Core 持久化，也不进编辑会话。
+export interface WorkbenchVisibility {
+  chapterNavigationVisible: boolean
+  toolPaneVisible: boolean
+}
+
+// 工作台布局计划 — Core WorkbenchLayoutPlanDto（resolve_workbench_layout 的输出）。
+export interface WorkbenchLayoutPlan {
+  placements: WorkbenchPlacement[]
+  mode: ResolvedWorkspaceMode
+}
+
 // 布局计划 — Harmony 平台值，在 Core LayoutContractDto 之上叠加纸面宽度/内边距/网格列数。
 // 这不是 Core 契约（Core 只发 LayoutContract），平台值由 LayoutPolicyHelper 计算。
 export interface LayoutPlan {

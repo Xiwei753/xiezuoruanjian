@@ -17,7 +17,7 @@ import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSa
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
-import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics } from '../dto/PlatformDtos'
+import { LayoutContract, ScreenPolicy, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement, ScreenRole, ActionSlot, ActionRole, ActionTarget, ActionRegion, LayoutMetrics, LayoutRect, WorkbenchPlacement, WorkbenchLayoutPlan, WorkbenchRole, ResolvedWorkspaceMode } from '../dto/PlatformDtos'
 
 // ─── Decode Result ───
 
@@ -1886,6 +1886,56 @@ export function decodeLayoutContract(data: Object): DecodeResult<LayoutContract>
     metrics: metricsR.value
   }
   return ok<LayoutContract>(value)
+}
+
+// Issue #825：resolve_workbench_layout 的七角色 bounds 解码。
+// 平台端只按 role 取 bounds 摆控件，不再自己决定栏宽。
+
+function decodeLayoutRect(data: Object): DecodeResult<LayoutRect> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<LayoutRect>('LayoutRect: expected object')
+  }
+  const leftDp: number | null = reqNum(data, 'leftDp')
+  if (leftDp === null) { return err<LayoutRect>('leftDp missing') }
+  const topDp: number | null = reqNum(data, 'topDp')
+  if (topDp === null) { return err<LayoutRect>('topDp missing') }
+  const rightDp: number | null = reqNum(data, 'rightDp')
+  if (rightDp === null) { return err<LayoutRect>('rightDp missing') }
+  const bottomDp: number | null = reqNum(data, 'bottomDp')
+  if (bottomDp === null) { return err<LayoutRect>('bottomDp missing') }
+  return ok<LayoutRect>({ leftDp: leftDp, topDp: topDp, rightDp: rightDp, bottomDp: bottomDp })
+}
+
+function decodeWorkbenchPlacement(data: Object): DecodeResult<WorkbenchPlacement> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WorkbenchPlacement>('WorkbenchPlacement: expected object')
+  }
+  const role: string | null = reqStr(data, 'role')
+  if (role === null) { return err<WorkbenchPlacement>('role missing') }
+  const boundsObj: Object | null = reqObj(data, 'bounds')
+  if (boundsObj === null) { return err<WorkbenchPlacement>('bounds missing or not object') }
+  const boundsR: DecodeResult<LayoutRect> = decodeLayoutRect(boundsObj)
+  if (!boundsR.ok || boundsR.value === undefined) { return err<WorkbenchPlacement>(`bounds: ${boundsR.error}`) }
+  return ok<WorkbenchPlacement>({ role: role as WorkbenchRole, bounds: boundsR.value })
+}
+
+export function decodeWorkbenchLayoutPlan(data: Object): DecodeResult<WorkbenchLayoutPlan> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<WorkbenchLayoutPlan>('WorkbenchLayoutPlan: expected object')
+  }
+  const mode: string | null = reqStr(data, 'mode')
+  if (mode === null) { return err<WorkbenchLayoutPlan>('mode missing') }
+  const placementsArr: Array<Object> | null = reqArray(data, 'placements')
+  if (placementsArr === null) { return err<WorkbenchLayoutPlan>('placements missing or not array') }
+  const placementsR: DecodeResult<WorkbenchPlacement[]> =
+    decodeArray<WorkbenchPlacement>(placementsArr as Object, decodeWorkbenchPlacement, 'placements')
+  if (!placementsR.ok || placementsR.value === undefined) {
+    return err<WorkbenchLayoutPlan>(placementsR.error ?? 'decode failed')
+  }
+  return ok<WorkbenchLayoutPlan>({
+    placements: placementsR.value,
+    mode: mode as ResolvedWorkspaceMode
+  })
 }
 
 function decodeActionSlot(data: Object): DecodeResult<ActionSlot> {

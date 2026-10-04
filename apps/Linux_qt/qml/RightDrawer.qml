@@ -1,12 +1,14 @@
 // =============================================================================
-// RightDrawer.qml — 右侧抽屉面板
+// RightDrawer.qml — 工作台工具 pane（Core 的 ToolPane 角色）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：从右侧滑出的抽屉面板，用于展示星图预览、统计等辅助信息
+// 职责：显示最右 WritingToolRail 选中的那一个工具的真实内容
 // 约束：
-//   - 纯 UI 组件，内容通过 tab 切换
-//   - 使用 DesignTokens 统一样式
+//   - Issue #825：工具的选择/展开收起归最右竖向 rail，本组件只渲染内容；
+//     顶部横向 tab 条已删除（工具入口只有 rail 一处，避免第二套导航）。
+//   - 顶部 TopWritingToolbar 的同步 / 搜索 / 设置仍留在顶栏，不搬到这里。
+//   - 内容全部复用现有真实组件，不新造第二份工具状态。
 // =============================================================================
 
 import QtQuick
@@ -37,14 +39,16 @@ Rectangle {
     readonly property real _fontLg: dt.fontLgPt
 
     property var editorBackendRef: null
-    property var starMapController: null
     property bool isOpen: false
-    property int currentTab: 0
+    // Issue #825：当前工具 key（"" 表示 pane 收起）。
+    // 取值与 WritingToolRail 的 toolKey 完全一致：starmap / ai / stats / conflict。
+    // 由 WritingWorkspace 单向注入，本组件不自己改。
+    property string selectedTool: ""
     property bool aiCapable: false
     property bool aiEnabled: false
     // Issue #757 评论 5818193510 第 5 点：冲突侧栏支持。
     // syncBackendRef + workspaceProjectId 透传给 SyncConflictPanel。
-    // hasConflicts 控制冲突 tab 显隐；变 true 时自动切到冲突 tab。
+    // hasConflicts 控制 rail 上「冲突」入口显隐。
     property var syncBackendRef: null
     property string workspaceProjectId: ""
     property bool hasConflicts: false
@@ -52,19 +56,21 @@ Rectangle {
     // 再下发给 SyncConflictPanel，不在 RightDrawer 内部调 list_sync_conflicts。
     property var syncConflicts: []
     // Issue #762 评论 5826175490 第 4 点：外部请求的冲突路径，透传给 SyncConflictPanel。
-    // requestedConflictPath 是单向输入，RightDrawer/SyncConflictPanel 绝不在内部赋值。
+    // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
     property string requestedConflictPath: ""
-    // 冲突 tab 固定 idx=3，不偏移现有星图(0)/AI(1)/统计(2)，保持兼容。
-    readonly property int conflictTabIdx: 3
 
     signal closeRequested()
-    signal openStarMap()
-    signal openSettings()
-    // 冲突 tab 被请求时发出（hasConflicts 从 false 变 true），外部据此打开 drawer。
-    signal conflictTabRequested()
-    // Issue #770 评论 5842877986: tab 点击改发信号，由外部（WritingWorkspace）
-    // 修改 drawerTab，避免双向写 currentTab binding。
-    signal tabRequested(int tabIdx)
+    // 冲突入口被请求时发出（hasConflicts 从 false 变 true），外部据此选中冲突工具。
+    signal conflictToolRequested()
+
+    // Issue #825：工具 key → 标题 + 是否可用。
+    // 可用性与入口都由 rail 表达，这里只用于标题文字，不再自行决定显隐。
+    function toolTitle(toolKey) {
+        if (toolKey === "ai") return qsTr("AI 助手")
+        if (toolKey === "stats") return qsTr("统计")
+        if (toolKey === "conflict") return qsTr("冲突")
+        return qsTr("星图")
+    }
 
     color: "transparent"
     clip: true
@@ -92,7 +98,8 @@ Rectangle {
             anchors.fill: parent
             spacing: 0
 
-            // Tab bar
+            // Issue #825：pane 头部只留「当前工具标题 + 关闭」。
+            // 原来的横向 tab 条已删除，工具切换入口统一在最右 WritingToolRail。
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 44
@@ -104,55 +111,15 @@ Rectangle {
                     anchors.rightMargin: _sp8
                     spacing: _sp4
 
-                    Repeater {
-                        model: {
-                            var tabs = [
-                                { label: qsTr("星图"), idx: 0 }
-                            ];
-                            if (root.aiCapable && root.aiEnabled) {
-                                tabs.push({ label: qsTr("AI"), idx: 1 });
-                            }
-                            tabs.push({ label: qsTr("统计"), idx: 2 });
-                            // Issue #757 评论 5818193510 第 5 点：有未解决冲突时增加"冲突"tab。
-                            // idx=3 固定，不偏移现有 tab，保持 WritingWorkspace drawerTab 绑定兼容。
-                            if (root.hasConflicts) {
-                                tabs.push({ label: qsTr("冲突"), idx: root.conflictTabIdx });
-                            }
-                            // Settings tab removed — main entry is now in TopWritingToolbar
-                            return tabs;
-                        }
-
-                        Rectangle {
-                            width: tabLabel.implicitWidth + _sp16
-                            height: 30
-                            radius: _radiusSm
-                            color: root.currentTab === modelData.idx ?
-                                   _accentSoft :
-                                   hoverArea.containsMouse ? _card : "transparent"
-
-                            AppText {
-                                id: tabLabel
-                                dt: root.dt
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                color: root.currentTab === modelData.idx ?
-                                       _accentText :
-                                       _textSecondary
-                                font.pointSize: _fontSm
-                                font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
-                            }
-
-                            MouseArea {
-                                id: hoverArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.tabRequested(modelData.idx)
-                            }
-                        }
+                    AppText {
+                        dt: root.dt
+                        text: root.toolTitle(root.selectedTool)
+                        color: _textPrimary
+                        font.pointSize: _fontLg
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
-
-                    Item { Layout.fillWidth: true }
 
                     // Close button
                     Rectangle {
@@ -163,7 +130,7 @@ Rectangle {
                         AppText {
                             dt: root.dt
                             anchors.centerIn: parent
-                            text: "\u2715"
+                            text: "✕"
                             color: _textMuted
                             font.pointSize: _fontSm
                         }
@@ -188,9 +155,9 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Star Map tab — 施工占位
+                // 星图 — 施工占位（内容仍由现有星图工作区承载，这里只给入口）
                 Rectangle {
-                    visible: root.currentTab === 0
+                    visible: root.selectedTool === "starmap"
                     anchors.fill: parent
                     color: "transparent"
 
@@ -199,7 +166,7 @@ Rectangle {
                         spacing: _sp16
 
                         AppText {
-                            text: "\uD83C\uDF0C"
+                            text: "🗌"
                             dt: root.dt
                             font.pointSize: dt.fontEmojiSmPt
                             Layout.alignment: Qt.AlignHCenter
@@ -222,17 +189,17 @@ Rectangle {
                     }
                 }
 
-                // Stats tab
+                // 统计 — 复用现有 StatsPreviewPage
                 StatsPreviewPage {
                     dt: root.dt
                     editorBackendRef: root.editorBackendRef
-                    visible: root.currentTab === 2
+                    visible: root.selectedTool === "stats"
                     anchors.fill: parent
                 }
 
-                // AI tab (placeholder, only shown when aiCapable && aiEnabled)
+                // AI — 施工占位（只在 aiCapable && aiEnabled 时由 rail 提供入口）
                 Rectangle {
-                    visible: root.currentTab === 1 && root.aiCapable && root.aiEnabled
+                    visible: root.selectedTool === "ai" && root.aiCapable && root.aiEnabled
                     anchors.fill: parent
                     color: "transparent"
 
@@ -241,7 +208,7 @@ Rectangle {
                         spacing: _sp16
 
                         AppText {
-                            text: "\uD83E\uDD16"
+                            text: "🤖"
                             dt: root.dt
                             font.pointSize: dt.fontEmojiSmPt
                             Layout.alignment: Qt.AlignHCenter
@@ -264,11 +231,11 @@ Rectangle {
                     }
                 }
 
-                // Issue #757 评论 5818193510 第 5 点：冲突 tab — 直接复用现有 RightDrawer 做临时冲突侧栏。
+                // Issue #757 评论 5818193510 第 5 点：冲突 — 复用现有 SyncConflictPanel。
                 // SyncConflictPanel 负责调 SyncBackend 拿冲突列表/预览/解决动作，
                 // 不在 QML 维护第二份可编辑正文，不自己拼磁盘路径读 conflicts.json。
                 SyncConflictPanel {
-                    visible: root.currentTab === root.conflictTabIdx && root.hasConflicts
+                    visible: root.selectedTool === "conflict" && root.hasConflicts
                     anchors.fill: parent
                     dt: root.dt
                     syncBackendRef: root.syncBackendRef
@@ -280,21 +247,19 @@ Rectangle {
                     onCloseRequested: root.closeRequested()
                     onConflictsResolved: {
                         // 解决一个冲突后刷新列表；若全部解决，外部应把 hasConflicts 置 false。
-                        root.conflictTabRequested();
+                        root.conflictToolRequested()
                     }
                 }
             }
         }
     }
 
-    // Issue #757 评论 5818193510 第 5 点：冲突刚产生时自动切到冲突 tab。
-    // 打开 drawer 由外部（WritingWorkspace）监听 conflictTabRequested 完成，
-    // RightDrawer 不自己控制 isOpen（单向属性，由外部绑定）。
+    // Issue #757 评论 5818193510 第 5 点：冲突刚产生时请求外部选中冲突工具。
+    // 打开/切换由外部（WritingWorkspace）统一完成，RightDrawer 不自己控制 isOpen
+    // 也不自己改 selectedTool（单向属性，由外部绑定）。
     onHasConflictsChanged: {
         if (root.hasConflicts) {
-            // Issue #770 评论 5842877986: 不直接改 currentTab（双向写 binding），
-            // 只发 conflictTabRequested()，由外部（WritingWorkspace）统一改 drawerTab。
-            root.conflictTabRequested();
+            root.conflictToolRequested()
         }
     }
 }

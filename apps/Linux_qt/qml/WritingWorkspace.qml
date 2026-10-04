@@ -40,18 +40,24 @@ Rectangle {
     required property var dt
     property var editorBackendRef: null
     property var projectBackendRef: null
-    property var starMapController: null
     // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，
     // 使 logRenderColorProbe 能读取 ThemeController runtime state。
     property var themeController: null
     property var appState: ({})
     property var tree: []
     property string projectTitle: ""
-    property bool drawerOpen: false
-    // 宽屏骨架：左右面板只改变 Qt UI 布局，不进入 Core 编辑事务。
+    // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
+    // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
+    // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
+    // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
+    property string drawerTool: ""
+    readonly property bool drawerOpen: root.drawerTool !== ""
     property bool leftPaneCollapsed: false
     readonly property bool wideWorkbench: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
-    property int drawerTab: 0
+    // Issue #825：Core 工作台布局计划（appBackend.resolve_workbench_layout 直通）。
+    // 七角色 bounds 与最终模式都由 Core 决定，QML 只按 bounds 量/摆。
+    property var workbenchPlan: null
+    readonly property bool coreWorkbench: !!(workbenchPlan && workbenchPlan.mode === "Workbench")
     property bool aiCapable: false
     property bool aiEnabled: false
     // 关于 LayoutPlan 和布局策略
@@ -59,6 +65,65 @@ Rectangle {
     // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
     // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
     property var layoutPlan: null
+
+    // ── Issue #825：Core 七角色 bounds → QML 宽度 ──
+    // 只在 Workbench 模式下用 Core 的尺寸；SinglePane（Core 明确退回单栏）时
+    // 回落到旧的 SplitView 设定值，Qt 不自己再判一次宽度断点。
+    function roleBounds(role) {
+        if (!root.workbenchPlan || !root.workbenchPlan.placements) return null;
+        var list = root.workbenchPlan.placements;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].role === role) return list[i].bounds;
+        }
+        return null;
+    }
+
+    function roleWidth(role, fallback) {
+        var b = root.roleBounds(role);
+        if (!b) return fallback;
+        return Math.max(0, b.rightDp - b.leftDp);
+    }
+
+    readonly property real chapterNavWidth: root.roleWidth("ChapterNavigation", -1)
+    readonly property real editorWidth: root.roleWidth("Editor", -1)
+    readonly property real toolPaneWidth: root.roleWidth("ToolPane", -1)
+    readonly property real toolRailWidth: root.roleWidth("ToolRail", -1)
+
+    // 宽屏下 Core 已经把七角色尺寸算好：pre/min/max 三者取同一个值，
+    // 让 SplitView 只负责"可见子项参与剩余空间分配"，不再被用户拖拽改宽度。
+    // 非宽屏仍保留原来的可拖拽区间（最小 180 / 最大 420）。
+    // 三个宽度任一缺失（Core 明确退回 SinglePane 或 plan 异常）时整组回落到旧布局，
+    // 不用 0/负宽度去喂 SplitView。
+    readonly property bool coreSized: root.coreWorkbench
+                                   && root.chapterNavWidth > 0
+                                   && root.editorWidth > 0
+                                   && root.toolPaneWidth > 0
+                                   && root.toolRailWidth > 0
+    // Issue #825：最右工具 rail 与两个折叠把手只在 Core 判定 Workbench 时出现。
+    // Core 明确退回 SinglePane（窗口放不下七角色）时，Qt 不自己挤一个 rail 出来，
+    // 收起/展开工具 pane 回到正文区里那个箭头按钮。
+    readonly property bool toolRailVisible: root.coreSized
+
+    function refreshWorkbenchPlan() {
+        if (!root.wideWorkbench) {
+            root.workbenchPlan = null;
+            return;
+        }
+        if (typeof appBackend === "undefined" || !appBackend) return;
+        root.workbenchPlan = appBackend.resolve_workbench_layout(
+            root.width,
+            root.height,
+            !root.leftPaneCollapsed,
+            root.drawerOpen
+        );
+    }
+
+    onWidthChanged: refreshWorkbenchPlan()
+    onHeightChanged: refreshWorkbenchPlan()
+    onLeftPaneCollapsedChanged: refreshWorkbenchPlan()
+    onDrawerToolChanged: refreshWorkbenchPlan()
+    onWideWorkbenchChanged: refreshWorkbenchPlan()
+    Component.onCompleted: refreshWorkbenchPlan()
 
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -103,8 +168,8 @@ Rectangle {
         if (root.conflictPath) {
             root.refreshConflictList();
             if (root.hasConflicts) {
-                root.drawerOpen = true;
-                root.drawerTab = rightDrawerRect.conflictTabIdx;
+                // Issue #825：工具 rail 按工具 key 表达选中态，没有 tab 下标。
+                root.drawerTool = "conflict";
             }
         }
     }
@@ -303,7 +368,9 @@ Rectangle {
         orientation: Qt.Horizontal
 
         handle: Rectangle {
-            implicitWidth: 4
+            // Issue #825：Core 的 bounds 已经把四个角色的宽度切干净了，
+            // 宽屏下不再额外插入 SplitView 把手宽度，否则正文会比 Core 给的窄。
+            implicitWidth: root.coreSized ? 0 : 4
             color: SplitHandle.hovered || SplitHandle.pressed ? dt.primary : dt.border
             Behavior on color { ColorAnimation { duration: 120 } }
         }
@@ -312,9 +379,13 @@ Rectangle {
         Rectangle {
             id: sidebarRect
             visible: !root.leftPaneCollapsed
-            SplitView.preferredWidth: settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240
-            SplitView.minimumWidth: 180
-            SplitView.maximumWidth: 420
+            // Issue #825：宽屏下章节导航宽度直接取 Core 的 ChapterNavigation bounds；
+            // 非宽屏保留原来的「设置项 + 可拖拽区间」。
+            SplitView.preferredWidth: root.coreSized
+                                       ? root.chapterNavWidth
+                                       : (settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240)
+            SplitView.minimumWidth: root.coreSized ? root.chapterNavWidth : 180
+            SplitView.maximumWidth: root.coreSized ? root.chapterNavWidth : 420
             color: dt.sidebar
             border.color: dt.border
             border.width: 1
@@ -332,7 +403,9 @@ Rectangle {
             }
 
             onWidthChanged: {
-                if (width > 0) {
+                // Issue #825：宽屏下宽度归 Core 所有，不再回写用户设置项，
+                // 否则下一次单栏布局会被 Core 的工作台宽度污染。
+                if (width > 0 && !root.coreSized) {
                     sidebarDebounceTimer.restart();
                 }
             }
@@ -696,8 +769,10 @@ Rectangle {
         // Middle Area: Toolbar + Editor
         ColumnLayout {
             SplitView.fillWidth: true
-            SplitView.preferredWidth: 800
-            SplitView.minimumWidth: 480
+            // Issue #825：宽屏下正文宽度取 Core 的 Editor bounds；
+            // 非宽屏保留原来的「800 首选 / 480 最小」。
+            SplitView.preferredWidth: root.coreSized ? root.editorWidth : 800
+            SplitView.minimumWidth: root.coreSized ? root.editorWidth : 480
             spacing: 0
 
             // Top toolbar
@@ -1182,14 +1257,14 @@ Rectangle {
                 }
 
                 // Right drawer button (when closed).
-                // 宽屏 Workbench 由贴边悬浮把手接管收起/展开，这里不再重复画一个，
-                // 避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
+                // 宽屏 Workbench 由最右竖向 WritingToolRail + 贴边悬浮把手接管收起/展开，
+                // 这里不再重复画一个，避免同一入口出现两份。窄屏保持原来的右侧箭头按钮。
                 Rectangle {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: 36
-                    visible: !root.drawerOpen && !root.wideWorkbench
+                    visible: !root.drawerOpen && !root.toolRailVisible
                     color: "transparent"
 
                     ColumnLayout {
@@ -1214,7 +1289,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.drawerOpen = true
+                                onClicked: root.drawerTool = "starmap"
                             }
                         }
                     }
@@ -1222,18 +1297,18 @@ Rectangle {
             }
         }
 
-        // Right drawer - direct sibling in SplitView
+        // Issue #825：工具 pane（Core 的 ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
         RightDrawer {
             id: rightDrawerRect
-            SplitView.preferredWidth: 320
-            SplitView.minimumWidth: 240
-            SplitView.maximumWidth: 480
+            // 宽屏宽度取 Core 的 ToolPane bounds；非宽屏保留原来的可拖拽区间。
+            SplitView.preferredWidth: root.coreSized ? root.toolPaneWidth : 320
+            SplitView.minimumWidth: root.coreSized ? root.toolPaneWidth : 240
+            SplitView.maximumWidth: root.coreSized ? root.toolPaneWidth : 480
             visible: root.drawerOpen
             dt: root.dt
             editorBackendRef: root.editorBackendRef
-            starMapController: root.starMapController
             isOpen: root.drawerOpen
-            currentTab: root.drawerTab
+            selectedTool: root.drawerTool
             aiCapable: root.aiCapable
             aiEnabled: root.aiEnabled
             // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
@@ -1246,19 +1321,32 @@ Rectangle {
             // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
             // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
             requestedConflictPath: root.conflictPath
-            onCloseRequested: root.drawerOpen = false
-            onOpenStarMap: { root.drawerTab = 0; root.drawerOpen = true; }
-            onOpenSettings: root.openSettings()
-            onConflictTabRequested: {
-                // 冲突刚产生或解决后刷新 — 打开 drawer 并切到冲突 tab。
-                root.drawerOpen = true;
-                root.drawerTab = rightDrawerRect.conflictTabIdx;
+            onCloseRequested: root.drawerTool = ""
+            onConflictToolRequested: {
+                // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
+                root.drawerTool = "conflict";
                 root.refreshConflictList();
             }
-            // Issue #770 评论 5842877986: RightDrawer tab 点击改为发信号，
-            // 由 WritingWorkspace 修改 drawerTab，避免双向写 binding。
-            onTabRequested: function(tabIdx) {
-                root.drawerTab = tabIdx;
+        }
+
+        // Issue #825：最右竖向工具 rail（Core 的 ToolRail 角色）。
+        // 只负责「选哪个工具 + 展开/收起 ToolPane」，工具内容在右边的 ToolPane 里。
+        // 顶部工具条上的同步/搜索/设置仍然留在 TopWritingToolbar，不搬到这里。
+        WritingToolRail {
+            id: toolRailRect
+            visible: root.toolRailVisible
+            SplitView.preferredWidth: root.coreSized ? root.toolRailWidth : 56
+            SplitView.minimumWidth: root.coreSized ? root.toolRailWidth : 56
+            SplitView.maximumWidth: root.coreSized ? root.toolRailWidth : 56
+            dt: root.dt
+            aiCapable: root.aiCapable
+            aiEnabled: root.aiEnabled
+            hasConflicts: root.hasConflicts
+            selectedTool: root.drawerTool
+            onToolRequested: function(toolKey) { root.drawerTool = toolKey; }
+            onToolPaneToggled: {
+                root.drawerTool = root.drawerOpen ? "" : "starmap";
+                if (root.drawerOpen) root.requestEditorFocus();
             }
         }
     }
@@ -1315,36 +1403,33 @@ Rectangle {
         } else {
             root.syncConflicts = [];
         }
-        // Issue #757 评论 5819894306 第 3 点：最后一个冲突解决后自动退出冲突 tab。
-        // hasConflicts 为 false 且 drawer 停在冲突 tab 时，切回 tab 0 并关闭 drawer，
-        // 避免落到没有内容的 tab 状态。仍由 WritingWorkspace 统一持有 drawer 状态，
+        // Issue #757 评论 5819894306 第 3 点：最后一个冲突解决后自动退出冲突工具。
+        // hasConflicts 为 false 且工具 pane 停在「冲突」时，收起 pane，
+        // 避免落到没有内容的工具状态。仍由 WritingWorkspace 统一持有工具状态，
         // 不让 RightDrawer 自己猜外部 drawer 状态。
-        if (!root.hasConflicts && root.drawerTab === rightDrawerRect.conflictTabIdx) {
-            root.drawerTab = 0;
-            root.drawerOpen = false;
+        if (!root.hasConflicts && root.drawerTool === "conflict") {
+            root.drawerTool = "";
         }
     }
 
     function checkConflictsAfterSync() {
         // Issue #762 评论 5826175490 第 2/3 点：不再依赖 sync_operation_state 的最终 status。
         // 冲突是持久状态，和"当前有没有正在跑一轮同步"是两回事——只要本地确实有
-        // unresolved conflict 就刷新并打开冲突 tab，status 说什么不影响判断。
+        // unresolved conflict 就刷新并选中冲突工具，status 说什么不影响判断。
         root.refreshConflictList();
         if (root.hasConflicts) {
-            root.drawerOpen = true;
-            root.drawerTab = rightDrawerRect.conflictTabIdx;
+            root.drawerTool = "conflict";
         }
     }
 
     // Issue #762 评论 5826175490 第 4 点：外部（SyncPage 全局冲突入口）请求选中某条冲突。
     // 用显式方法而不是只靠 conflictPath 属性变化，保证已打开同一作品、重复请求同一路径时
-    // 也会重新刷新并切到冲突 tab。打开目标作品由 main.qml 负责，不要求同步先结束。
+    // 也会重新刷新并切到冲突工具。打开目标作品由 main.qml 负责，不要求同步先结束。
     function openConflictPath(path) {
         root.conflictPath = path || "";
         root.refreshConflictList();
         if (root.conflictPath && root.hasConflicts) {
-            root.drawerOpen = true;
-            root.drawerTab = rightDrawerRect.conflictTabIdx;
+            root.drawerTool = "conflict";
         }
     }
 
@@ -1371,7 +1456,7 @@ Rectangle {
     // 把手只改 Qt UI 布局，不进入 Core 编辑事务——编辑会话不受影响。
     Rectangle {
         id: leftPaneHandle
-        visible: root.wideWorkbench
+        visible: root.toolRailVisible
         z: 50
         width: 18
         height: 64
@@ -1411,7 +1496,7 @@ Rectangle {
 
     Rectangle {
         id: rightPaneHandle
-        visible: root.wideWorkbench
+        visible: root.toolRailVisible
         z: 50
         width: 18
         height: 64
@@ -1423,11 +1508,12 @@ Rectangle {
         Behavior on border.color { ColorAnimation { duration: dt.animFast } }
 
         // Issue #825 复核第5项：右把手贴在“正文 | 工具区”分隔边缘上（RightDrawer 展开时
-        // 用它的左边缘），只有收起时才退回窗口右缘。之前固定 anchors.right，
-        // 展开时把手会跳到窗口最右边而不是分隔线上。
+        // 用它的左边缘），只有收起时才退回 ToolRail 左边缘。
+        // 工具 pane 收起后 rail 仍然常驻（Core 的 ToolRail 恒有宽度），
+        // 所以收起态贴的是 rail 左缘，不是窗口最右缘。
         x: root.drawerOpen
            ? Math.max(0, Math.min(root.width - width - dt.sp4, rightDrawerRect.x - width / 2))
-           : root.width - width - dt.sp4
+           : Math.max(0, Math.min(root.width - width - dt.sp4, toolRailRect.x - width / 2))
         y: Math.round((root.height - height) / 2)
 
         AppText {
@@ -1445,7 +1531,7 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                root.drawerOpen = !root.drawerOpen
+                root.drawerTool = root.drawerOpen ? "" : "starmap"
                 if (!root.drawerOpen) root.requestEditorFocus()
             }
         }

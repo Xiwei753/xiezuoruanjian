@@ -190,6 +190,9 @@ export struct PrimaryTabShell {
     coordinator.unregisterTabStack(TAB_HOME, this.homeStack)
     coordinator.unregisterTabStack(TAB_STARMAP, this.starMapStack)
     coordinator.unregisterTabStack(TAB_STATS, this.statsStack)
+    // Issue #825 复核第3项：壳层销毁时如果还持有当前窗口的设置浮层，先关掉再摘 UIContext，
+    // 否则 controller 会攥着一个已经失效的 UIContext，下个窗口 open() 直接失败。
+    SettingsOverlayController.getInstance().detachUIContext(this.getUIContext())
   }
 
   // 通过 Core ScreenPolicy.showPrimaryNavigation 决定底栏显隐。

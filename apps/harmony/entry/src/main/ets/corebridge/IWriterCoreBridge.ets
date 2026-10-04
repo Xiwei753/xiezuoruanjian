@@ -1,5 +1,5 @@
 import { EditorTransactionCause } from './dto/EditorDtos'
-import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole } from './dto/PlatformDtos'
+import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
@@ -89,6 +89,9 @@ export interface IWriterCoreBridge {
 
   // Layout Contract（#610/#753：输入为平台测量到的原始窗口尺寸 + 遮挡几何）
   resolveLayout(viewport: WindowViewport): Promise<ResultEnvelope<LayoutContract>>
+  // Workbench Layout Plan（#825：七角色 bounds 由 Core 决定，visibility 是端侧局部 UI 状态）
+  resolveWorkbenchLayout(viewport: WindowViewport,
+    visibility: WorkbenchVisibility): Promise<ResultEnvelope<WorkbenchLayoutPlan>>
 
   // Screen Contract（#610：动作区域/顺序是产品语义，不随壳层变化）
   resolveScreenPolicy(screenRole: ScreenRole): Promise<ResultEnvelope<ScreenPolicy>>

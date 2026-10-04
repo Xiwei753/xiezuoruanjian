@@ -650,7 +650,6 @@ ApplicationWindow {
                 dt: designTokens
                 projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
-                starMapController: globalStarMapController
                 // Issue #709 评论 issue-body-709: 传入 themeController 使
                 // EditorController.logRenderColorProbe 能读取 runtime state。
                 themeController: themeController

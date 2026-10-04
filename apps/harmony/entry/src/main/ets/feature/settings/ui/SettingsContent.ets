@@ -18,7 +18,7 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
-import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -50,9 +50,12 @@ export struct SettingsContent {
   // Issue #825：是否由宽屏模态浮层承载（标题 + 关闭 + 搜索由本组件自己画）。
   // 窄屏路由页传 false，标题栏由 NavDestination 承载。
   @Param overlayLayout: boolean = false
-  // Issue #825 复核第3项：只有 Core 判定一级导航在 Side（>=840vp）才两列；
-  // 600–839vp 那档 Workbench 但一级导航仍是 Bottom，浮层用单列。
-  @Param twoColumn: boolean = false
+  // Issue #825 复核第3项：两列与否不作为打开时快照传进来，改成按最新 AdaptiveContext 派生。
+  // 只有 Core 判定一级导航在 Side（>=840vp）才两列；600–839vp 那档 Workbench 但一级导航
+  // 仍是 Bottom，用单列。平板旋转 / 自由窗口在两档之间移动时，浮层会跟着换布局。
+  private get twoColumn(): boolean {
+    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
+  }
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
   @Local viewModel: SettingsViewModel = new SettingsViewModel()
@@ -189,7 +192,7 @@ export struct SettingsContent {
   // Issue #825：设置内容的唯一根 Builder。
   // 窄屏由 SettingsScreen 的 NavDestination/HdsSettingsDestination 外壳调用，
   // 宽屏由 SettingsOverlayPanel 调用：overlayLayout 决定用浮层外壳（标题 + 关闭 + 搜索），
-  // twoColumn 决定分组是排两列还是单列。
+  // twoColumn（内部按 AdaptiveContext 派生）决定分组是排两列还是单列。
   @Builder
   NavContent() {
     Column() {
@@ -218,6 +221,7 @@ export struct SettingsContent {
         // 宽屏浮层：两列（>=840vp，一级导航在 Side）或单列（600–839vp，一级导航仍是 Bottom）；
         // 单列沿用折叠分组列表，和窄屏路由页同一套展开逻辑。
         // 路由页宽屏 (sizeClass 非 Compact)：#760 之前的完整设置列表布局。
+        // 列数来自最新的 Core primaryNavigationPlacement，窗口改档会即时重排。
         if (this.twoColumn) {
           this.TwoColumnSettingsLayout()
         } else if (this.overlayLayout || this.adaptiveState.sizeClass === WidthClass.Compact) {

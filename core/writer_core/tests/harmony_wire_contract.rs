@@ -603,6 +603,17 @@ fn harmony_wire_contract_matches_fixture() {
         "resolveLayout",
         &call1(layout::writer_core_resolve_layout, &viewport),
     );
+    // #825：七角色 workbench bounds 直通平台端。
+    let visibility = cstr(r#"{"chapterNavigationVisible":true,"toolPaneVisible":false}"#);
+    let _ = note(
+        &mut out,
+        "resolveWorkbenchLayout",
+        &call2(
+            layout::writer_core_resolve_workbench_layout,
+            &viewport,
+            &visibility,
+        ),
+    );
     for role in ["Home", "Writing", "ProjectWorkspace", "Settings"] {
         let role_json = format!("\"{role}\"");
         let role_c = cstr(&role_json);

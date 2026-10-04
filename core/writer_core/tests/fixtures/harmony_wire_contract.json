@@ -3146,6 +3146,48 @@
       }
     }
   },
+  "resolveWorkbenchLayout": {
+    "kind": "object",
+    "fields": {
+      "mode": {
+        "kind": "scalar",
+        "ty": "string"
+      },
+      "placements": {
+        "kind": "array",
+        "element": {
+          "kind": "object",
+          "fields": {
+            "bounds": {
+              "kind": "object",
+              "fields": {
+                "bottomDp": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "leftDp": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "rightDp": {
+                  "kind": "scalar",
+                  "ty": "number"
+                },
+                "topDp": {
+                  "kind": "scalar",
+                  "ty": "number"
+                }
+              }
+            },
+            "role": {
+              "kind": "scalar",
+              "ty": "string"
+            }
+          }
+        }
+      }
+    }
+  },
   "saveAppSyncState": {
     "kind": "scalar",
     "ty": "boolean"

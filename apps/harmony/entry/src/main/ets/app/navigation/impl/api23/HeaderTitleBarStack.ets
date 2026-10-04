@@ -33,9 +33,6 @@ export struct HeaderTitleBarStack {
   @Param headerActions: ActionSlot[] = []
   /** 标题栏是否显示返回按钮；显示时左侧要让出返回按钮的槽位 */
   @Param showBackButton: boolean = false
-  // Issue #825：页面自己把 HeaderTrailing 动作放进宽屏工具区时置 false，
-  // 避免同一个动作在页头和工具区出现两个入口。
-  @Param showActionCapsule: boolean = true
 
   build() {
     Row() {
@@ -47,9 +44,8 @@ export struct HeaderTitleBarStack {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      if (this.showActionCapsule) {
-        HeaderActionCapsule({ actionSlots: this.headerActions })
-      }
+      // Issue #825 复核第1项：HeaderTrailing 动作恒显示（属于 Core 的 ToolbarTrailing 角色）。
+      HeaderActionCapsule({ actionSlots: this.headerActions })
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)

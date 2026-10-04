@@ -25,27 +25,20 @@ import { SettingsContent } from './SettingsContent'
 export interface SettingsOverlayArgs {
   /** 关闭回调：只关对话框，不动下面的 NavPathStack */
   onRequestClose: () => void
-  /**
-   * 是否两列。
-   * Issue #825 复核第3项：Core 在 600–839vp 已经给 Workbench，但一级导航仍是 Bottom，
-   * 那一档窗口塞两列设置太窄，所以只有 primaryNavigationPlacement === Side 才两列。
-   * 这一档仍然走浮层（overlayLayout 固定 true），只是单列。
-   */
-  twoColumn: boolean
 }
 
 @ComponentV2
 struct SettingsOverlayPanel {
   /** 关闭回调：只关对话框 */
   @Param onRequestClose: () => void = () => {}
-  /** 是否两列排设置分组 */
-  @Param twoColumn: boolean = false
 
   build() {
     Column() {
+      // Issue #825 复核第3项：列数不作为打开时快照传进来。
+      // SettingsContent 已监听 AdaptiveContext，在内容组件里按最新的
+      // primaryNavigationPlacement 派生，窗口旋转/自由窗口改档时会自动单列↔双列切换。
       SettingsContent({
         overlayLayout: true,
-        twoColumn: this.twoColumn,
         onRequestClose: () => { this.onRequestClose() }
       })
     }
@@ -63,8 +56,7 @@ struct SettingsOverlayPanel {
 @Builder
 function SettingsOverlayPanelBuilder(args: SettingsOverlayArgs) {
   SettingsOverlayPanel({
-    onRequestClose: args.onRequestClose,
-    twoColumn: args.twoColumn
+    onRequestClose: args.onRequestClose
   })
 }
 
