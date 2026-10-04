@@ -1128,7 +1128,7 @@ impl LinuxEditorPipeline {
     /// Issue #826 评论 7 性能问题：准备范围收窄到**真正 active 的 line ids**，
     /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
     pub fn prepare_frontier_textures(&mut self) {
-        let mut insert_line_image = |cache: &mut TextureCache, line: &PreparedLineSnapshot| {
+        let insert_line_image = |cache: &mut TextureCache, line: &PreparedLineSnapshot| {
             let Some(image) = line.image.as_ref() else {
                 return;
             };
@@ -1758,6 +1758,7 @@ impl LinuxEditorPipeline {
                         offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
                         base_text: motion.old_text.clone(),
                         target_text: motion.new_text.clone(),
+                        conceal_direction: motion.conceal_direction(),
                         now: edit_now,
                     });
                 // 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束。

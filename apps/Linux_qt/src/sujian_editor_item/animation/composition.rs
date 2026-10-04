@@ -71,6 +71,7 @@ impl LinuxEditorAnimationCoordinator {
             offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
             base_text: motion.old_text.clone(),
             target_text: motion.new_text.clone(),
+            conceal_direction: motion.conceal_direction(),
             now,
         });
     }

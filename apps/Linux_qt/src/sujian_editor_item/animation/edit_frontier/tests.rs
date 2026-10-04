@@ -1,7 +1,8 @@
 //! Issue #826: 遮罩前沿单元测试。
 //!
 //! 覆盖：前沿采样 / extend 不产生第二个对象 / 跨 revision 范围累计 /
-//! 视觉路径（跨自动换行）/ 吐字裁剪矩形 / 吞字 overlay 首帧可见。
+//! 视觉路径（跨自动换行 + 方向）/ 多条不相邻 patch / 吐字裁剪矩形 /
+//! 吞字 overlay 首帧可见。
 
 use std::time::{Duration, Instant};
 
@@ -9,7 +10,8 @@ use writer_core::editor::OffsetMap;
 
 use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::edit_frontier::{
-    EditFrontierKind, EditFrontierState, FrontierPath, FrontierRect,
+    ConcealDirection, EditFrontierKind, EditFrontierState, FrontierPath, FrontierRect,
+    PathDirection,
 };
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
@@ -54,11 +56,26 @@ fn cluster(byte_start: usize, byte_end: usize, x: f64) -> LineClusterSnapshot {
     }
 }
 
+fn snapshot(lines: Vec<PreparedLineSnapshot>) -> EditorLayoutSnapshot {
+    EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        lines,
+        None,
+        None,
+        CaretAffinity::Downstream,
+    )
+}
+
 #[test]
 fn frontier_sample_progresses_from_zero_to_one() {
     let now = Instant::now();
-    let state =
-        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (0, 1), now, 100);
+    let state = EditFrontierState::begin_insert(
+        empty_snapshot(),
+        String::from("a"),
+        vec![(0, 1)],
+        now,
+        100,
+    );
     assert_eq!(state.sample(now).progress, 0.0);
     assert_eq!(state.sample(instant_at(now, 100)).progress, 1.0);
     let mid = state.sample(instant_at(now, 50)).progress;
@@ -68,8 +85,13 @@ fn frontier_sample_progresses_from_zero_to_one() {
 #[test]
 fn frontier_is_finished_only_after_full_duration() {
     let now = Instant::now();
-    let state =
-        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (0, 1), now, 160);
+    let state = EditFrontierState::begin_insert(
+        empty_snapshot(),
+        String::from("a"),
+        vec![(0, 1)],
+        now,
+        160,
+    );
     assert!(!state.is_finished(instant_at(now, 80)));
     assert!(state.is_finished(instant_at(now, 160)));
     assert!(state.is_finished(instant_at(now, 500)));
@@ -88,7 +110,8 @@ fn delete_overlay_is_visible_on_the_first_frame() {
         String::from("ABCDEF"),
         empty_snapshot(),
         String::from("ABCEF"),
-        (3, 4),
+        vec![(3, 4)],
+        ConcealDirection::Backward,
         now,
         160,
     );
@@ -107,16 +130,17 @@ fn delete_overlay_is_visible_on_the_first_frame() {
 }
 
 /// Issue #826 评论 3 问题 1：连续吐字必须把先前还没吐完的字一起留在遮罩范围里。
-///
-/// 之前 `extend_insert` 直接 `self.new_range = Some(new_range)`，
-/// 第二笔一到，第一笔尚未露出的范围就从遮罩里消失，canonical 会把它瞬间补全。
-/// 正确语义：把已累计范围用 OffsetMap 映到最新坐标再 union。
 #[test]
 fn extend_insert_accumulates_new_range_across_revisions() {
     let now = Instant::now();
-    let mut state =
-        EditFrontierState::begin_insert(empty_snapshot(), String::from("a"), (1, 2), now, 160);
-    assert_eq!(state.new_range, Some((1, 2)));
+    let mut state = EditFrontierState::begin_insert(
+        empty_snapshot(),
+        String::from("a"),
+        vec![(1, 2)],
+        now,
+        160,
+    );
+    assert_eq!(state.new_ranges, vec![(1, 2)]);
 
     // 第一笔：先在半程采样，再扩展。正文 "a" -> "ab"（在位置 1 插入 b）。
     let half = instant_at(now, 80);
@@ -124,11 +148,11 @@ fn extend_insert_accumulates_new_range_across_revisions() {
     state.extend_insert(
         empty_snapshot(),
         String::from("ab"),
-        (1, 2),
+        vec![(1, 2)],
         &prev_target_to_new,
         half,
     );
-    assert_eq!(state.new_range, Some((1, 2)));
+    assert_eq!(state.new_ranges, vec![(1, 2)]);
 
     // 第二笔：正文 "ab" -> "abc"（在位置 2 插入 c）。
     // 第一次的 [1,2) 映射到新坐标仍是 [1,2)，本次新增 [2,3)，
@@ -137,13 +161,13 @@ fn extend_insert_accumulates_new_range_across_revisions() {
     state.extend_insert(
         empty_snapshot(),
         String::from("abc"),
-        (2, 3),
+        vec![(2, 3)],
         &prev_target_to_new,
         half,
     );
     assert_eq!(
-        state.new_range,
-        Some((1, 3)),
+        state.new_ranges,
+        vec![(1, 3)],
         "连续吐字必须累计整轮 burst 的新字范围，否则前一个字会被瞬间补全"
     );
 }
@@ -153,7 +177,6 @@ fn extend_insert_accumulates_new_range_across_revisions() {
 /// 例子 `ABC|DEF` 连续 Delete：第一次删 D，本次 old range = [3,4)；
 /// 第二次删 E，本次 old range 仍是 [3,4)（因为 E 往前挪了一位），
 /// 但在 burst 最初的 `ABCDEF` 坐标里应该累计成 [3,5)。
-/// 靠 byte 数字碰巧一致是错的，必须用 OffsetMap 映射。
 #[test]
 fn extend_delete_maps_old_range_back_to_base_coordinates() {
     let now = Instant::now();
@@ -162,11 +185,12 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         String::from("ABCDEF"),
         empty_snapshot(),
         String::from("ABCEF"),
-        (3, 4),
+        vec![(3, 4)],
+        ConcealDirection::Forward,
         now,
         160,
     );
-    assert_eq!(state.old_range, Some((3, 4)));
+    assert_eq!(state.old_ranges, vec![(3, 4)]);
 
     // 第二次删 E：base_text = "ABCDEF"，本次编辑前正文 = "ABCEF"，
     // 本次删除区间在 "ABCEF" 坐标里是 [3,4)（删掉 E）。
@@ -175,17 +199,102 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
     state.extend_delete(
         empty_snapshot(),
         String::from("ABCE"),
-        (3, 4),
+        vec![(3, 4)],
         &base_to_current,
+        ConcealDirection::Forward,
         instant_at(now, 80),
     );
     assert_eq!(
-        state.old_range,
-        Some((3, 5)),
+        state.old_ranges,
+        vec![(3, 5)],
         "第二次删除必须映射回 base 坐标再 union，不能靠数字碰巧一致"
     );
     // base_snapshot 必须保持 burst 开始前的旧正文。
     assert_eq!(state.base_text, "ABCDEF");
+}
+
+/// Issue #826 评论 8 阻塞 2：连续 Replace 必须**双侧**累计。
+///
+/// 之前 Replace 走 `extend_delete`，只更新 old side，新插入的字根本不进 reveal
+/// mask，canonical 会把这次新字直接完整显示。
+#[test]
+fn extend_replace_accumulates_both_sides() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_replace(
+        empty_snapshot(),
+        String::from("ABCDEF"),
+        empty_snapshot(),
+        String::from("AXBCDEF"),
+        vec![(3, 4)],
+        vec![(1, 2)],
+        ConcealDirection::Backward,
+        now,
+        160,
+    );
+    assert_eq!(state.old_ranges, vec![(3, 4)]);
+    assert_eq!(state.new_ranges, vec![(1, 2)]);
+
+    let half = instant_at(now, 80);
+    let base_to_current = OffsetMap::build("ABCDEF", "AXBCDEF");
+    let prev_target_to_new = OffsetMap::build("AXBCDEF", "AXBCDEZ");
+    state.extend_replace(
+        empty_snapshot(),
+        String::from("AXBCDEZ"),
+        vec![(5, 6)],
+        vec![(6, 7)],
+        &base_to_current,
+        &prev_target_to_new,
+        ConcealDirection::Backward,
+        half,
+    );
+    assert_eq!(state.old_ranges, vec![(3, 5)], "Replace 的旧侧必须累计");
+    assert_eq!(
+        state.new_ranges,
+        vec![(1, 2), (6, 7)],
+        "Replace 的新侧也必须累计，否则新插入的字没有任何遮罩"
+    );
+}
+
+/// Issue #826 评论 8 阻塞 3：多条不相邻的 display_patch 不能被 union 成一个大 range。
+#[test]
+fn disjoint_patches_stay_separate_ranges_and_paths() {
+    let now = Instant::now();
+    // target 里放两段相距很远的字：第一行 [0,1) 和第二行 [100,101)。
+    let target = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(100, 101, 0.0)]),
+    ]);
+    let state = EditFrontierState::begin_insert(
+        target,
+        String::from("x"),
+        vec![(0, 1), (100, 101)],
+        now,
+        160,
+    );
+    assert_eq!(
+        state.new_ranges.len(),
+        2,
+        "两段不相邻的 patch 必须保持两条，不能 union"
+    );
+    assert_eq!(
+        state.reveal_paths.len(),
+        2,
+        "每条不相邻 patch 各有自己的视觉路径"
+    );
+    // progress=0：两段的新字都必须被遮住（共享同一个 progress 同时接管）。
+    let rects = state.hidden_new_text_rects(&state.sample(now));
+    assert_eq!(
+        rects.len(),
+        2,
+        "同一 progress 下两条 patch 都要被接管，实际 {} 块",
+        rects.len()
+    );
+    assert!(
+        state
+            .hidden_new_text_rects(&state.sample(instant_at(now, 160)))
+            .is_empty(),
+        "结束时两段遮罩都必须完全打开"
+    );
 }
 
 #[test]
@@ -223,30 +332,17 @@ fn degenerate_frontier_rect_is_detected() {
     .is_degenerate());
 }
 
-/// Issue #826 评论 7 阻塞 2（核心）：跨自动换行输入时，遮罩必须从下一行左侧开始打开。
-///
-/// 旧实现把前沿当成屏幕上斜穿的两点连线（`start_frontier` x=500 第一行 →
-/// `target_frontier` x=50 第二行）。当 y 刚进入第二行时 x 还有 200~300，
-/// 而新字 cluster 在 x=40~50，于是 `glyph_right <= frontier.x` 成立 →
-/// 判定新字「已在之前」→ 整块突然出现。新模型改成按视觉顺序的文本路径，
-/// 走完第一行后前沿自然从下一行 x_start 重新开始。
+/// Issue #826 评论 7 阻塞 2：跨自动换行输入时，遮罩必须从下一行左侧开始打开。
 #[test]
 fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
     let now = Instant::now();
-    // target：换行后第一行已有 ABCDE，新字 X 在第二行行首。
-    // stub_for_tests: visual_x = 首 cluster 的 x = 0，dpr = 1，
-    // 所以 doc x = cluster.x，doc y = visual_line_top。
-    let target = EditorLayoutSnapshot::new(
-        LayoutSnapshot::empty_for_tests(),
-        vec![
-            PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
-            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(1, 2, 40.0)]),
-        ],
-        None,
-        None,
-        CaretAffinity::Downstream,
-    );
-    let state = EditFrontierState::begin_insert(target, String::from("a\nb"), (1, 2), now, 160);
+    // target：换行后第一行已有 A，新字 X 在第二行行首。
+    let target = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(1, 2, 40.0)]),
+    ]);
+    let state =
+        EditFrontierState::begin_insert(target, String::from("a\nb"), vec![(1, 2)], now, 160);
 
     // progress = 0：遮罩在路径起点，第二行的 X 尚未打开，必须整块被遮。
     let start = state.sample(now);
@@ -274,56 +370,46 @@ fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
 /// Issue #826 评论 7：视觉路径按视觉顺序分段，跨行时每行各占一段。
 #[test]
 fn frontier_path_segments_follow_visual_order() {
-    let snapshot = EditorLayoutSnapshot::new(
-        LayoutSnapshot::empty_for_tests(),
-        vec![
-            // 第一行：新字在行尾很靠右的位置（doc x = 200 + visual_x 0）。
-            PreparedLineSnapshot::stub_for_tests(
-                0,
-                0.0,
-                0,
-                vec![cluster(0, 1, 0.0), cluster(1, 2, 200.0)],
-            ),
-            // 第二行：新字在行首（doc x = 0）。
-            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
-        ],
-        None,
-        None,
-        CaretAffinity::Downstream,
-    );
-    let path = FrontierPath::build(&snapshot, (1, 3));
-    assert!(!path.segments.is_empty(), "有 cluster 就必须建出路径段");
-    assert_eq!(
-        path.segments.len(),
-        2,
-        "跨两行必须两段，实际 {} 段",
-        path.segments.len()
-    );
-    // 第一段在第一行，第二段在下一行 —— 不能斜穿屏幕。
+    let snap = snapshot(vec![
+        // 第一行：新字在行尾很靠右的位置（doc x = 200 + visual_x 0）。
+        PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 200.0)],
+        ),
+        // 第二行：新字在行首（doc x = 0）。
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
+    ]);
+    let path = FrontierPath::build(&snap, (1, 3), PathDirection::Forward);
+    assert_eq!(path.segments.len(), 2, "跨两行必须两段");
     assert!((path.segments[0].y - 0.0).abs() < 1e-9);
     assert!((path.segments[1].y - 20.0).abs() < 1e-9);
     assert!(
-        path.segments[1].x_start < path.segments[0].x_start,
-        "下一行的路径必须从自己的左侧开始，而不是延续上一行的 x（实际 {} vs {}）",
-        path.segments[1].x_start,
-        path.segments[0].x_start
+        path.segments[1].x_from < path.segments[0].x_from,
+        "下一行的路径必须从自己的左侧开始，而不是延续上一行的 x"
     );
 
-    // distance=0 时 reveal 边界都在各段 x_start（什么都没打开）。
-    let b0 = path.reveal_boundaries(0.0);
-    assert_eq!(b0.len(), 2);
-    assert!((b0[0] - path.segments[0].x_start).abs() < 1e-9);
-    assert!((b0[1] - path.segments[1].x_start).abs() < 1e-9);
+    // distance=0 时 reveal 边界都在各段 x_from（什么都没打开）。
+    let b0 = path.reveal_bounds(0.0);
+    assert!((b0[0].0 - path.segments[0].x_from).abs() < 1e-9);
+    assert!((b0[1].0 - path.segments[1].x_from).abs() < 1e-9);
 
     // distance 超过第一段长度时，第一段全开、第二段还没开始。
-    let first_len = path.segments[0].x_end - path.segments[0].x_start;
-    let b1 = path.reveal_boundaries(first_len);
-    assert!((b1[0] - path.segments[0].x_end).abs() < 1e-9);
-    assert!((b1[1] - path.segments[1].x_start).abs() < 1e-9);
+    let b1 = path.reveal_bounds(path.segments[0].visual_length);
+    assert!((b1[0].0 - path.segments[0].x_to).abs() < 1e-9);
+    assert!((b1[1].0 - path.segments[1].x_from).abs() < 1e-9);
 
-    // conceal 反向：distance=0 时边界都在 x_end（旧字完整可见）。
-    let c0 = path.conceal_boundaries(0.0);
-    assert!((c0[0] - path.segments[0].x_end).abs() < 1e-9);
+    // conceal 反向（Backward）：distance=0 时保留整段旧字。
+    let back = FrontierPath::build(&snap, (1, 3), PathDirection::Backward);
+    assert_eq!(back.segments.len(), 2);
+    assert!(
+        (back.segments[0].y - 20.0).abs() < 1e-9,
+        "Backward 必须按视觉逆序，第一段是第二行"
+    );
+    let c0 = back.conceal_bounds(0.0);
+    assert!((c0[0].0 - back.segments[0].x_left).abs() < 1e-9);
+    assert!((c0[0].1 - back.segments[0].x_right).abs() < 1e-9);
 }
 
 /// Issue #826 评论 7：换行符没有 glyph，路径里不产生段（后半段交给 Reflow）。
@@ -331,24 +417,155 @@ fn frontier_path_segments_follow_visual_order() {
 fn newline_only_insert_produces_no_frontier_segment() {
     let now = Instant::now();
     // target "a\nb"：换行符本身没有 cluster，只留两行的可见字。
-    let target = EditorLayoutSnapshot::new(
-        LayoutSnapshot::empty_for_tests(),
-        vec![
-            PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
-            PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
-        ],
-        None,
-        None,
-        CaretAffinity::Downstream,
-    );
+    let target = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
+    ]);
     // inserted range 只覆盖换行符所在字节 [1,2)，那一行没有 cluster。
-    let state = EditFrontierState::begin_insert(target, String::from("a\nb"), (1, 2), now, 160);
+    let state =
+        EditFrontierState::begin_insert(target, String::from("a\nb"), vec![(1, 2)], now, 160);
     assert!(
-        state.reveal_path.segments.is_empty(),
+        state.reveal_paths.iter().all(|p| p.segments.is_empty()),
         "只有换行符被插入时不应产生 FrontierMask，改由 Reflow 承担位置变化"
     );
     assert!(
         state.hidden_new_text_rects(&state.sample(now)).is_empty(),
         "没有可见新字就不该有遮罩矩形"
     );
+}
+
+/// Issue #826 评论 8 阻塞 1：连续 Backspace 跨自动换行时，
+/// 下一行已吞掉的状态不能在 old range 扩到上一行后复活。
+///
+/// burst base 是两行 `ABC` / `DEF`，caret 在 `DEF|`。
+/// 先 Backspace 把 DEF 吞一半，随后继续删到上一行的 C。
+/// Backward 方向的路径按视觉逆序（先第二行），所以扩到上一行后新增的段
+/// 排在**尾部**，已经走过的第二行不会被重绑到 C 上。
+#[test]
+fn consecutive_backspace_does_not_revive_previously_concealed_line() {
+    let now = Instant::now();
+    // base 两行：ABC（doc x 0/10/20），DEF（doc x 0/10/20）。
+    let base = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+        ),
+        PreparedLineSnapshot::stub_for_tests(
+            1,
+            20.0,
+            0,
+            vec![cluster(3, 4, 0.0), cluster(4, 5, 10.0), cluster(5, 6, 20.0)],
+        ),
+    ]);
+    // 第一笔：只删第二行的 DEF（old range [3,6)），Backward。
+    let mut state = EditFrontierState::begin_delete(
+        base.clone(),
+        String::from("ABCDEF"),
+        base.clone(),
+        String::from("ABC"),
+        vec![(3, 6)],
+        ConcealDirection::Backward,
+        now,
+        160,
+    );
+    assert_eq!(state.conceal_paths.len(), 1);
+    assert!(
+        (state.conceal_paths[0].segments[0].y - 20.0).abs() < 1e-9,
+        "Backward 第一笔必须从第二行开始"
+    );
+
+    // 走到半程：第二行已被吞掉一半。
+    let half = instant_at(now, 80);
+    let mid = state.sample(half);
+    let before = state.old_overlay_rects(&mid);
+    assert!(
+        before.iter().any(|r| (r.y - 20.0).abs() < 1e-9),
+        "半程时第二行仍要在 overlay 列表里（正在被收）"
+    );
+
+    // 第二笔：继续删到上一行的 C（base 坐标 [2,3)），Backward 仍是视觉逆序。
+    let base_to_current = OffsetMap::build("ABCDEF", "ABC");
+    state.extend_delete(
+        base.clone(),
+        String::from("AB"),
+        vec![(2, 3)],
+        &base_to_current,
+        ConcealDirection::Backward,
+        half,
+    );
+    assert_eq!(
+        state.old_ranges,
+        vec![(2, 6)],
+        "old range 必须扩成跨两行的一段"
+    );
+    // 扩到上一行后，路径仍是「第二行 → 第一行」，新增段追加在尾部。
+    let paths = &state.conceal_paths;
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0].segments.len(), 2);
+    assert!(
+        (paths[0].segments[0].y - 20.0).abs() < 1e-9,
+        "视觉逆序：第一段仍是第二行"
+    );
+    assert!(
+        (paths[0].segments[1].y - 0.0).abs() < 1e-9,
+        "视觉逆序：第二段才是第一行（新增的 C 追加在尾部）"
+    );
+}
+
+/// Issue #826 评论 8 阻塞 1：连续 Delete 键跨自动换行时，
+/// 第一行已吞掉的状态不能在 old range 扩到下一行后复活。
+#[test]
+fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
+    let now = Instant::now();
+    let base = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+        ),
+        PreparedLineSnapshot::stub_for_tests(
+            1,
+            20.0,
+            0,
+            vec![cluster(3, 4, 0.0), cluster(4, 5, 10.0), cluster(5, 6, 20.0)],
+        ),
+    ]);
+    // caret 在第一行 `ABC|`。Delete 键向右扩，Forward = 视觉正序。
+    let mut state = EditFrontierState::begin_delete(
+        base.clone(),
+        String::from("ABCDEF"),
+        base.clone(),
+        String::from("DEF"),
+        vec![(0, 3)],
+        ConcealDirection::Forward,
+        now,
+        160,
+    );
+    assert!(
+        (state.conceal_paths[0].segments[0].y - 0.0).abs() < 1e-9,
+        "Forward 第一笔必须从第一行开始"
+    );
+
+    let half = instant_at(now, 80);
+    // 第二笔：扩到下一行（base 坐标 [3,6)）。old range 变成 [0,6)。
+    let base_to_current = OffsetMap::build("ABCDEF", "DEF");
+    state.extend_delete(
+        base.clone(),
+        String::from(""),
+        vec![(0, 3)],
+        &base_to_current,
+        ConcealDirection::Forward,
+        half,
+    );
+    assert_eq!(state.old_ranges, vec![(0, 6)]);
+    let paths = &state.conceal_paths;
+    assert_eq!(paths[0].segments.len(), 2);
+    assert!(
+        (paths[0].segments[0].y - 0.0).abs() < 1e-9,
+        "视觉正序：第一段仍是第一行，已走过的部分不会被重绑"
+    );
+    assert!((paths[0].segments[1].y - 20.0).abs() < 1e-9);
 }

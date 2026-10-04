@@ -22,7 +22,7 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animation::edit_frontier::{
-    EditFrontierKind, EditFrontierSample, EditFrontierState, FrontierGlyph,
+    ConcealDirection, EditFrontierKind, EditFrontierSample, EditFrontierState, FrontierGlyph,
 };
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
 use crate::sujian_editor_item::cursor_animation::{
@@ -58,6 +58,12 @@ pub(crate) struct EditFrontierRequest {
     /// 连续吐字时 `offset_map` 本身就是「上一次 target 文本 → 本次 target 文本」，
     /// 用它把已累计的 new range 映射到最新坐标。
     pub target_text: String,
+    /// Issue #826 评论 8 阻塞 1：本轮吞字的路径行进方向。
+    ///
+    /// Backspace 时 old range 向左扩（Backward），Delete 键时向右扩（Forward）。
+    /// 连续删除时方向必须跟着变，否则跨自动换行扩展 old range 会让已吞掉的
+    /// 那一行被重绑到别的字符上。
+    pub conceal_direction: ConcealDirection,
     /// 本帧时间。
     pub now: Instant,
 }
@@ -147,74 +153,78 @@ impl LinuxEditorAnimationCoordinator {
                 .as_mut()
                 .expect("can_extend 为真时 active_edit_frontier 必然存在");
             match kind {
-                EditFrontierKind::Insert => {
-                    let range = first_range(&request.inserted_ranges);
-                    if let Some(range) = range {
-                        frontier.extend_insert(
-                            request.target_snapshot.clone(),
-                            request.target_text.clone(),
-                            range,
-                            &request.offset_map,
-                            request.now,
-                        );
-                    }
+                EditFrontierKind::Insert => frontier.extend_insert(
+                    request.target_snapshot.clone(),
+                    request.target_text.clone(),
+                    request.inserted_ranges.clone(),
+                    &request.offset_map,
+                    request.now,
+                ),
+                EditFrontierKind::Delete => {
+                    // Issue #826 评论 3 问题 2：本次 old ranges 用「这一次编辑前」
+                    // 的坐标，必须映射回 burst 最初 base 文本的坐标再累计。
+                    let base_to_current = OffsetMap::build(&frontier.base_text, &request.base_text);
+                    frontier.extend_delete(
+                        request.target_snapshot.clone(),
+                        request.target_text.clone(),
+                        request.deleted_ranges.clone(),
+                        &base_to_current,
+                        request.conceal_direction,
+                        request.now,
+                    );
                 }
-                EditFrontierKind::Delete | EditFrontierKind::Replace => {
-                    let range = first_range(&request.deleted_ranges);
-                    if let Some(range) = range {
-                        // Issue #826 评论 3 问题 2：本次 old_range 用「这一次编辑前」
-                        // 的坐标，必须映射回 burst 最初 base 文本的坐标再累计。
-                        let base_to_current =
-                            OffsetMap::build(&frontier.base_text, &request.base_text);
-                        frontier.extend_delete(
-                            request.target_snapshot.clone(),
-                            request.target_text.clone(),
-                            range,
-                            &base_to_current,
-                            request.now,
-                        );
-                    }
+                EditFrontierKind::Replace => {
+                    // Issue #826 评论 8 阻塞 2：Replace 必须**双侧**累计。
+                    // 之前它走 extend_delete，新插入的字根本不进 reveal mask，
+                    // canonical 会把这次新字直接完整显示。
+                    let base_to_current = OffsetMap::build(&frontier.base_text, &request.base_text);
+                    frontier.extend_replace(
+                        request.target_snapshot.clone(),
+                        request.target_text.clone(),
+                        request.deleted_ranges.clone(),
+                        request.inserted_ranges.clone(),
+                        &base_to_current,
+                        &request.offset_map,
+                        request.conceal_direction,
+                        request.now,
+                    );
                 }
             }
         } else {
             self.finish_edit_frontier_to_canonical();
+            // Issue #826 评论 8 阻塞 3：不再只取 `first_range`。
+            // Core 一次编辑可能给出多条 display_patches（Undo/Redo batch、
+            // replace-all、apply 原子 batch、IME commit…），全部都要被前沿接管，
+            // 每条不相邻的 patch 各走自己的视觉路径，共享同一个 progress。
             self.active_edit_frontier = Some(match kind {
-                EditFrontierKind::Insert => {
-                    let range = first_range(&request.inserted_ranges).unwrap_or((0, 0));
-                    EditFrontierState::begin_insert(
-                        request.target_snapshot.clone(),
-                        request.target_text.clone(),
-                        range,
-                        request.now,
-                        duration_ms,
-                    )
-                }
-                EditFrontierKind::Delete => {
-                    let range = first_range(&request.deleted_ranges).unwrap_or((0, 0));
-                    EditFrontierState::begin_delete(
-                        request.base_snapshot.clone(),
-                        request.base_text.clone(),
-                        request.target_snapshot.clone(),
-                        request.target_text.clone(),
-                        range,
-                        request.now,
-                        duration_ms,
-                    )
-                }
-                EditFrontierKind::Replace => {
-                    let old_range = first_range(&request.deleted_ranges).unwrap_or((0, 0));
-                    let new_range = first_range(&request.inserted_ranges).unwrap_or((0, 0));
-                    EditFrontierState::begin_replace(
-                        request.base_snapshot.clone(),
-                        request.base_text.clone(),
-                        request.target_snapshot.clone(),
-                        request.target_text.clone(),
-                        old_range,
-                        new_range,
-                        request.now,
-                        duration_ms,
-                    )
-                }
+                EditFrontierKind::Insert => EditFrontierState::begin_insert(
+                    request.target_snapshot.clone(),
+                    request.target_text.clone(),
+                    request.inserted_ranges.clone(),
+                    request.now,
+                    duration_ms,
+                ),
+                EditFrontierKind::Delete => EditFrontierState::begin_delete(
+                    request.base_snapshot.clone(),
+                    request.base_text.clone(),
+                    request.target_snapshot.clone(),
+                    request.target_text.clone(),
+                    request.deleted_ranges.clone(),
+                    request.conceal_direction,
+                    request.now,
+                    duration_ms,
+                ),
+                EditFrontierKind::Replace => EditFrontierState::begin_replace(
+                    request.base_snapshot.clone(),
+                    request.base_text.clone(),
+                    request.target_snapshot.clone(),
+                    request.target_text.clone(),
+                    request.deleted_ranges.clone(),
+                    request.inserted_ranges.clone(),
+                    request.conceal_direction,
+                    request.now,
+                    duration_ms,
+                ),
             });
         }
 
@@ -243,17 +253,23 @@ impl LinuxEditorAnimationCoordinator {
         // 所以旧侧只用本次 `deleted_ranges`；若将来还有别的旧侧 overlay 需要排除，
         // 必须先显式 map 到 `request.base_text` 坐标再传入。
         let excluded_old: Vec<(usize, usize)> = request.deleted_ranges.clone();
-        let excluded_new: Vec<(usize, usize)> = self
+        // Issue #826 评论 8：`new_ranges` 现在是按 overlap / adjacent 归一化的
+        // 集合，全部落在最新 target 坐标系里，可以直接用来做 excludes。
+        let carried_new: Vec<(usize, usize)> = self
             .active_edit_frontier
             .as_ref()
-            .and_then(|f| f.new_range)
-            .into_iter()
-            .chain(request.inserted_ranges.iter().copied().filter(|(s, e)| {
-                self.active_edit_frontier
-                    .as_ref()
-                    .and_then(|f| f.new_range)
-                    .is_none_or(|acc| !(acc.0 <= *s && *e <= acc.1))
-            }))
+            .map(|f| f.new_ranges.clone())
+            .unwrap_or_default();
+        let excluded_new: Vec<(usize, usize)> = carried_new
+            .iter()
+            .copied()
+            .chain(
+                request
+                    .inserted_ranges
+                    .iter()
+                    .copied()
+                    .filter(|(s, e)| !carried_new.iter().any(|acc| acc.0 <= *s && *e <= acc.1)),
+            )
             .collect();
 
         let mut next = match self.active_reflow.as_ref() {
@@ -423,15 +439,15 @@ impl LinuxEditorAnimationCoordinator {
         else {
             return Vec::new();
         };
-        let Some(old_range) = frontier.old_range else {
-            return Vec::new();
-        };
-        frontier
-            .base_snapshot
-            .lines_in_byte_range(old_range.0, old_range.1)
-            .iter()
-            .map(|line| line.id)
-            .collect()
+        let mut ids: Vec<LineSnapshotId> = Vec::new();
+        for range in &frontier.old_ranges {
+            for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
+                if !ids.contains(&line.id) {
+                    ids.push(line.id);
+                }
+            }
+        }
+        ids
     }
 
     /// 当前前沿种类（光标 blink 抑制等诊断用）。
@@ -474,11 +490,8 @@ impl LinuxEditorAnimationCoordinator {
         };
         if let Some(frontier) = self.active_edit_frontier.as_ref() {
             if frontier.kind.needs_old_overlay() {
-                if let Some(old_range) = frontier.old_range {
-                    for line in frontier
-                        .base_snapshot
-                        .lines_in_byte_range(old_range.0, old_range.1)
-                    {
+                for range in &frontier.old_ranges {
+                    for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
                         push(line.id, &mut ids, &mut seen);
                     }
                 }
@@ -632,11 +645,6 @@ impl Default for LinuxEditorAnimationCoordinator {
     }
 }
 
-/// 首个非空 range。
-fn first_range(ranges: &[(usize, usize)]) -> Option<(usize, usize)> {
-    ranges.iter().copied().find(|&(start, end)| end > start)
-}
-
 /// Issue #826: 遮罩前沿的正式诊断事件。
 fn record_frontier_diagnostic(
     request: &EditFrontierRequest,
@@ -649,19 +657,27 @@ fn record_frontier_diagnostic(
     // Issue #826 评论 7：前沿不再有二维起点/目标，改为记录两条视觉路径的段数。
     fields.insert(
         "reveal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.reveal_path.segments.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.reveal_paths.len()).unwrap_or(0)),
     );
     fields.insert(
         "conceal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.conceal_path.segments.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.conceal_paths.len()).unwrap_or(0)),
     );
     fields.insert(
         "reveal_length".to_string(),
-        serde_json::json!(frontier.map(|f| f.reveal_path.total_length).unwrap_or(0.0)),
+        serde_json::json!(frontier
+            .map(|f| f.reveal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .unwrap_or(0.0)),
     );
     fields.insert(
         "conceal_length".to_string(),
-        serde_json::json!(frontier.map(|f| f.conceal_path.total_length).unwrap_or(0.0)),
+        serde_json::json!(frontier
+            .map(|f| f.conceal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .unwrap_or(0.0)),
+    );
+    fields.insert(
+        "conceal_direction".to_string(),
+        serde_json::json!(frontier.map(|f| f.conceal_direction.label()).unwrap_or("")),
     );
     fields.insert(
         "inserted_ranges".to_string(),
@@ -698,8 +714,12 @@ fn record_frontier_diagnostic(
     editor_animation_debug_log(&format!(
         "anim_frontier: kind={} reveal_len={:.1} conceal_len={:.1} inserted={:?} deleted={:?}",
         kind.label(),
-        frontier.map(|f| f.reveal_path.total_length).unwrap_or(0.0),
-        frontier.map(|f| f.conceal_path.total_length).unwrap_or(0.0),
+        frontier
+            .map(|f| f.reveal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .unwrap_or(0.0),
+        frontier
+            .map(|f| f.conceal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .unwrap_or(0.0),
         request.inserted_ranges,
         request.deleted_ranges,
     ));

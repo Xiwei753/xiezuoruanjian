@@ -11,6 +11,7 @@
 //! - `CursorRect` 是纯几何值类型，不携带 Core 语义。
 //! - `diff_plain_text` 是本地文本 diff 实现，供 composition update 路径使用。
 
+use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
 use writer_core::editor::{
     EditorChange, EditorCursor, EditorEditResult, EditorOperationKind, EditorRevision,
     EditorSelection, EditorTransactionCause, OffsetMap, Utf8ByteOffset, Utf8ByteRange,
@@ -163,6 +164,27 @@ pub(crate) struct PreparedEditMotion {
     pub new_selection: EditorSelection,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
+}
+
+impl PreparedEditMotion {
+    /// Issue #826 评论 8 阻塞 1：本轮吞字的路径行进方向。
+    ///
+    /// 不猜键盘事件，直接从 old/new caret 的移动方向推：
+    /// - Backspace 删的是 caret **左边**的文字 → 编辑后 caret 向左移
+    ///   （`new_head < old_head`）→ old range 向左扩 → `Backward`；
+    /// - Delete 键删的是 caret **右边**的文字 → 编辑后 caret 向右移
+    ///   → old range 向右扩 → `Forward`；
+    /// - 选区替换（IME commit、粘贴覆盖）caret 通常落在选区末尾，此时
+    ///   视为向右吞。
+    pub fn conceal_direction(&self) -> ConcealDirection {
+        let old_head = self.old_selection.head.index.value();
+        let new_head = self.new_selection.head.index.value();
+        if new_head < old_head {
+            ConcealDirection::Backward
+        } else {
+            ConcealDirection::Forward
+        }
+    }
 }
 
 impl PreparedEditMotion {
