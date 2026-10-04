@@ -138,9 +138,12 @@ cpp! {{
         //
         // Issue #810 评论 第11点 渲染层语义契约（本函数即该契约的实现）:
         // - 使用 canonical cluster 输出真正的吞字/吐字 clip/mask。clip 数据来自
-        //   AnimatedSlice.static_hidden_document_rects（slice 创建时直接写入 canonical
-        //   cluster 的 document rect，见 transaction_builder/slices.rs），由
-        //   render_plan_builder 收集为 AnimationClipRect 传入本函数。
+        //   唯一遮罩前沿的 hidden_canonical_rects_for（FrontierMask，只裁 inserted
+        //   cluster）与 Reflow 的 reflow_target_clip_rects（ReflowTarget，让位给正在
+        //   移动的 glyph），由 render_plan_builder 收集为 AnimationClipRect 传入本函数。
+        // - Issue #826: 传入的 clip 已带 StaticClipKind，scene_graph_renderer 会先
+        //   撤掉纹理不可用的 ReflowTarget、保留全部 FrontierMask，再做同视觉行区间
+        //   合并，最后才交给本函数算 complement。
         // - 被动画接管的区域必须**从静态正文层隐藏**，再由动画层绘制。本函数
         //   clip_count > 0 分支不创建完整正文节点，只按 complement 区间生成
         //   clip+text 节点——静态层只画 complement（未被动画接管的区域）。
@@ -416,6 +419,26 @@ pub(crate) struct VisualLineClipInfo {
     pub doc_width: f64,
 }
 
+/// Issue #826: 静态正文层裁剪矩形的两种语义。
+///
+/// 这两类 clip 都是「静态正文暂时不画这块」，但**纹理依赖完全不同**，
+/// 所以绝不能当成同一种东西一起过滤：
+///
+/// - `FrontierMask`：唯一遮罩前沿吐字遮罩。最新 canonical 正文自己画，
+///   遮罩只是把还没露出的新字裁掉。**不依赖动画层纹理**——静态层那块本来
+///   就是当前 canonical 的一行图，renderer 不该因为 texture_cache 里没有
+///   对应 id 就把它丢掉。
+/// - `ReflowTarget`：Reflow 正在移动的 glyph 在 canonical 最终位置的让位区。
+///   那一块在动画层要真的画出来，所以**必须先确认对应 target 行纹理存在**；
+///   纹理 miss 时必须撤掉这个 clip 让静态 canonical 恢复，否则留一个画不出来的空洞。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StaticClipKind {
+    /// 遮罩前沿吐字遮罩，不依赖动画纹理。
+    FrontierMask,
+    /// Reflow 接管区，依赖对应 target 行纹理。
+    ReflowTarget,
+}
+
 /// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
 ///
 /// Issue #658: 改为完整的 x/y/w/h 文档坐标矩形，
@@ -433,7 +456,98 @@ pub(crate) struct AnimationClipRect {
     /// Issue #736 评论 5786231506: 这个 clip 属于哪个 snapshot_id，
     /// 渲染前用于判断该 overlay 纹理是否真的存在。Rust 侧 ownership 元数据，
     /// 不交给 Qt 绘制接口本身（C++ 侧 rebuild_text_node_from_paragraphs 不消费此字段）。
+    ///
+    /// Issue #826: 只有 `StaticClipKind::ReflowTarget` 才真的用它做
+    /// texture availability 判定；`FrontierMask` 不看这个字段。
     pub snapshot_id: super::layout_snapshot::LineSnapshotId,
+    /// Issue #826: 这个 clip 的语义，决定 renderer 要不要对它做纹理可用性守卫。
+    pub kind: StaticClipKind,
+}
+
+impl AnimationClipRect {
+    /// Issue #826: 是否依赖动画层纹理。
+    ///
+    /// 纹理不可用时必须撤掉的只有 `ReflowTarget`；`FrontierMask` 永远保留。
+    pub(crate) fn requires_animation_texture(&self) -> bool {
+        self.kind == StaticClipKind::ReflowTarget
+    }
+}
+
+/// Issue #826 评论 6: 静态层 exclusion clip 的同视觉行区间合并。
+///
+/// 调用顺序必须是「renderer 过滤掉纹理不可用的 `ReflowTarget` → 本函数合并」，
+/// 所以放在本文件而不是 `render_plan_builder`：合并需要按 `kind` 分组，
+/// 而 kind 的取舍只有 renderer 知道。
+///
+/// 四条硬规则，任何一条破坏都会让静态正文出现空洞或误裁：
+/// 1. 只在**同一 kind** 内合并。`FrontierMask` 与 `ReflowTarget` 语义不同：
+///    前者永远必须裁（不依赖动画纹理），后者纹理 miss 时必须放行让 canonical 恢复。
+/// 2. 只在**同一视觉行**（`y` / `h` 相同）且**同一 `snapshot_id`** 的组内处理。
+///    跨 `snapshot_id` 合并会破坏纹理缺失回退：snapshot A 纹理存在、B 缺失时，
+///    合并并挂到 A 上会让 B 那块静态正文被裁掉，而 B 的动画 glyph 画不出来。
+/// 3. 只合并**相交或相邻**的区间（`next_left <= current_right + EPS`）。
+///    有 gap 就另起一条，否则中间的正常正文会被整段挖掉。
+/// 4. **每一组**都执行 sweep，不只处理第一条。
+pub(crate) fn merge_static_clip_rects(rects: Vec<AnimationClipRect>) -> Vec<AnimationClipRect> {
+    const EPS: f64 = 1e-6;
+    let mut kept: Vec<AnimationClipRect> = rects
+        .into_iter()
+        .filter(|r| r.w > 0.0 && r.h > 0.0)
+        .collect();
+    if kept.len() <= 1 {
+        return kept;
+    }
+    // `LineSnapshotId` 与 `StaticClipKind` 都没有 `Ord`，所以不排进 key；
+    // 排序只用 (y, h, x) 让同一视觉行的区间连续，然后扫连续段分组。
+    kept.sort_by(|a, b| {
+        a.y.partial_cmp(&b.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.h.partial_cmp(&b.h).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut merged: Vec<AnimationClipRect> = Vec::with_capacity(kept.len());
+    let mut slot: Option<AnimationClipRect> = None;
+    for rect in kept {
+        let Some(cur) = slot.as_ref() else {
+            slot = Some(rect);
+            continue;
+        };
+        // 换组（kind / snapshot_id / 视觉行任一不同）：先落盘，另起一条。
+        if cur.kind != rect.kind
+            || cur.snapshot_id != rect.snapshot_id
+            || cur.y != rect.y
+            || cur.h != rect.h
+        {
+            if let Some(done) = slot.take() {
+                merged.push(done);
+            }
+            slot = Some(rect);
+            continue;
+        }
+        let cur_right = cur.x + cur.w;
+        if rect.x <= cur_right + EPS {
+            let left = cur.x.min(rect.x);
+            let right = cur_right.max(rect.x + rect.w);
+            slot = Some(AnimationClipRect {
+                x: left,
+                y: cur.y,
+                w: right - left,
+                h: cur.h,
+                snapshot_id: cur.snapshot_id,
+                kind: cur.kind,
+            });
+        } else {
+            if let Some(done) = slot.take() {
+                merged.push(done);
+            }
+            slot = Some(rect);
+        }
+    }
+    if let Some(done) = slot.take() {
+        merged.push(done);
+    }
+    merged
 }
 
 /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。

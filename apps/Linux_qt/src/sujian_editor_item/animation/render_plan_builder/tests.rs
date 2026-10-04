@@ -20,6 +20,9 @@ use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
 };
+use crate::sujian_editor_item::qt_text_node::{
+    merge_static_clip_rects, AnimationClipRect, StaticClipKind,
+};
 use crate::sujian_editor_item::render_plan::{
     CursorRenderState, CursorStyle, RenderPlan, SelectionPreeditPlan, SelectionPreeditStyle,
 };
@@ -357,16 +360,38 @@ fn layout_snapshot_test_helper_is_reachable() {
 }
 
 // ── Issue #826 评论 5：merge_clip_rects 的两条回归 ──────────────────────────
+/// 构造一条静态层 exclusion clip 的测试辅助。
+fn mask_clip(x: f64, y: f64, w: f64, h: f64, id: LineSnapshotId) -> AnimationClipRect {
+    AnimationClipRect {
+        x,
+        y,
+        w,
+        h,
+        snapshot_id: id,
+        kind: StaticClipKind::FrontierMask,
+    }
+}
+
+fn reflow_clip(x: f64, y: f64, w: f64, h: f64, id: LineSnapshotId) -> AnimationClipRect {
+    AnimationClipRect {
+        x,
+        y,
+        w,
+        h,
+        snapshot_id: id,
+        kind: StaticClipKind::ReflowTarget,
+    }
+}
 
 /// 同一行的两个 clip 之间有 gap 时，绝不能合成一个大区间把中间的正常正文挖掉。
 ///
 /// 旧实现无条件做 min/max 合并，x 10..20 与 x 40..50 会变成 x 10..50。
 #[test]
-fn merge_clip_rects_keeps_gap_between_intervals() {
+fn merge_static_clip_rects_keeps_gap_between_intervals() {
     let id = LineSnapshotId::new(0, 0, 0);
-    let merged = super::merge_clip_rects(vec![
-        (10.0, 0.0, 10.0, 20.0, id),
-        (40.0, 0.0, 10.0, 20.0, id),
+    let merged = merge_static_clip_rects(vec![
+        mask_clip(10.0, 0.0, 10.0, 20.0, id),
+        mask_clip(40.0, 0.0, 10.0, 20.0, id),
     ]);
     assert_eq!(
         merged.len(),
@@ -374,7 +399,7 @@ fn merge_clip_rects_keeps_gap_between_intervals() {
         "同一行两个有 gap 的 clip 必须保持两条，实际合并成 {} 条",
         merged.len()
     );
-    let mut xs: Vec<f64> = merged.iter().map(|r| r.0).collect();
+    let mut xs: Vec<f64> = merged.iter().map(|r| r.x).collect();
     xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     assert!(
         (xs[0] - 10.0).abs() < 1e-9,
@@ -394,13 +419,13 @@ fn merge_clip_rects_keeps_gap_between_intervals() {
 /// snapshot A 纹理存在、snapshot B 纹理缺失时，B 那块静态正文会被误裁，
 /// 而 B 的动画 glyph 又画不出来，直接出现空洞。
 #[test]
-fn merge_clip_rects_never_crosses_snapshot_id() {
+fn merge_static_clip_rects_never_crosses_snapshot_id() {
     let id_a = LineSnapshotId::new(0, 0, 1);
     let id_b = LineSnapshotId::new(0, 0, 2);
     // 刻意让两条区间重叠，如果忽略 snapshot_id 就会被合成一条。
-    let merged = super::merge_clip_rects(vec![
-        (10.0, 0.0, 20.0, 20.0, id_a),
-        (15.0, 0.0, 20.0, 20.0, id_b),
+    let merged = merge_static_clip_rects(vec![
+        reflow_clip(10.0, 0.0, 20.0, 20.0, id_a),
+        reflow_clip(15.0, 0.0, 20.0, 20.0, id_b),
     ]);
     assert_eq!(
         merged.len(),
@@ -409,18 +434,48 @@ fn merge_clip_rects_never_crosses_snapshot_id() {
         merged.len()
     );
     assert!(
-        merged.iter().all(|r| r.4 == id_a || r.4 == id_b),
+        merged
+            .iter()
+            .all(|r| r.snapshot_id == id_a || r.snapshot_id == id_b),
         "合并结果必须保留各自的 snapshot_id"
+    );
+}
+
+/// Issue #826 评论 6 阻塞 1：FrontierMask 与 ReflowTarget 语义不同，不得互相合并。
+///
+/// FrontierMask 不依赖动画纹理，永远必须裁；ReflowTarget 纹理 miss 时必须放行。
+/// 两者一旦合成一块，renderer 就再也无法区分该保留哪一部分。
+#[test]
+fn merge_static_clip_rects_never_crosses_clip_kind() {
+    let id = LineSnapshotId::new(0, 0, 7);
+    let merged = merge_static_clip_rects(vec![
+        mask_clip(10.0, 0.0, 20.0, 20.0, id),
+        reflow_clip(12.0, 0.0, 20.0, 20.0, id),
+    ]);
+    assert_eq!(
+        merged.len(),
+        2,
+        "不同 kind 的 clip 不得合并，实际 {} 条",
+        merged.len()
+    );
+    assert!(
+        merged
+            .iter()
+            .any(|r| r.kind == StaticClipKind::FrontierMask)
+            && merged
+                .iter()
+                .any(|r| r.kind == StaticClipKind::ReflowTarget),
+        "两种 kind 都必须原样保留"
     );
 }
 
 /// 相交 / 相邻的同组 clip 仍然要真正合并成一条（正向断言）。
 #[test]
-fn merge_clip_rects_merges_overlapping_same_group() {
+fn merge_static_clip_rects_merges_overlapping_same_group() {
     let id = LineSnapshotId::new(0, 0, 3);
-    let merged = super::merge_clip_rects(vec![
-        (10.0, 0.0, 20.0, 20.0, id),
-        (25.0, 0.0, 10.0, 20.0, id),
+    let merged = merge_static_clip_rects(vec![
+        reflow_clip(10.0, 0.0, 20.0, 20.0, id),
+        reflow_clip(25.0, 0.0, 10.0, 20.0, id),
     ]);
     assert_eq!(
         merged.len(),
@@ -428,23 +483,23 @@ fn merge_clip_rects_merges_overlapping_same_group() {
         "相交区间必须合并成一条，实际 {} 条",
         merged.len()
     );
-    assert!((merged[0].0 - 10.0).abs() < 1e-9, "合并后起点应是 10");
+    assert!((merged[0].x - 10.0).abs() < 1e-9, "合并后起点应是 10");
     assert!(
-        (merged[0].2 - 25.0).abs() < 1e-9,
+        (merged[0].w - 25.0).abs() < 1e-9,
         "合并后宽度应到 35，实际 {}",
-        merged[0].2
+        merged[0].w
     );
 }
 
 /// 多行 clip 每行都要各自做区间合并（不能只处理第一行）。
 #[test]
-fn merge_clip_rects_processes_every_band() {
+fn merge_static_clip_rects_processes_every_band() {
     let id = LineSnapshotId::new(0, 0, 4);
-    let merged = super::merge_clip_rects(vec![
-        (10.0, 0.0, 10.0, 20.0, id),
-        (15.0, 0.0, 10.0, 20.0, id),
-        (10.0, 40.0, 10.0, 20.0, id),
-        (15.0, 40.0, 10.0, 20.0, id),
+    let merged = merge_static_clip_rects(vec![
+        mask_clip(10.0, 0.0, 10.0, 20.0, id),
+        mask_clip(15.0, 0.0, 10.0, 20.0, id),
+        mask_clip(10.0, 40.0, 10.0, 20.0, id),
+        mask_clip(15.0, 40.0, 10.0, 20.0, id),
     ]);
     assert_eq!(
         merged.len(),
@@ -452,8 +507,189 @@ fn merge_clip_rects_processes_every_band() {
         "两行各合并成一条，实际 {} 条",
         merged.len()
     );
-    let mut bands: Vec<f64> = merged.iter().map(|r| r.1).collect();
+    let mut bands: Vec<f64> = merged.iter().map(|r| r.y).collect();
     bands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     assert!((bands[0] - 0.0).abs() < 1e-9, "第一行 y 应是 0");
     assert!((bands[1] - 40.0).abs() < 1e-9, "第二行 y 应是 40");
+}
+
+/// Issue #826 评论 6 阻塞 1：纯 Insert 的 FrontierMask 不依赖动画纹理。
+///
+/// 吐字遮罩的语义是「canonical 正文自己画 + mask 只把还没露出的新字裁掉」，
+/// 动画层根本不画 inserted glyph，所以不需要任何动画纹理。RenderPlan 里
+/// 必须仍然产出这个 clip，renderer 也不会因为 texture_cache 为空而丢掉它。
+#[test]
+fn insert_frontier_mask_needs_no_animation_texture() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
+    )]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: target.clone(),
+        target_snapshot: target,
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        start_frontier: caret_rect(10.0),
+        target_frontier: caret_rect(20.0),
+        offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::from("a"),
+        target_text: String::from("ab"),
+        now,
+    });
+
+    let plan = build(&coord, now);
+    assert!(
+        plan.clip_rects
+            .iter()
+            .all(|cr| !cr.requires_animation_texture()),
+        "纯 Insert 不该产生需要动画纹理的 clip"
+    );
+    assert!(
+        !plan.clip_rects.is_empty(),
+        "纯 Insert 必须产出 FrontierMask（不依赖动画纹理）"
+    );
+    assert!(
+        plan.clip_rects
+            .iter()
+            .all(|cr| cr.kind == StaticClipKind::FrontierMask),
+        "纯 Insert 的 clip 只能是 FrontierMask"
+    );
+    assert!(
+        plan.text_animation.glyphs.is_empty(),
+        "吐字只画最新 canonical 一份，动画层不该有 glyph"
+    );
+}
+
+/// Issue #826 评论 6 阻塞 3：FrontierMask 只能覆盖 inserted cluster。
+///
+/// 旧正文 `A|B`，中间插入 X 得 `AX|B`。target 行 A(unchanged) / X(inserted) /
+/// B(unchanged + Reflow)。FrontierMask 越权裁掉 B 会和 Reflow 抢同一块区域。
+#[test]
+fn frontier_mask_covers_only_inserted_cluster() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // 一个 inserted cluster（X）+ 一个 unchanged suffix（B）在同一行、x 更大。
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![
+            cluster(0, 1, 0.0),
+            cluster(1, 2, 50.0),
+            cluster(2, 3, 100.0),
+        ],
+    )]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: target.clone(),
+        target_snapshot: target,
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        // 前沿起点在行首，progress=0 时新字还没露出，FrontierMask 必须遮住它。
+        start_frontier: caret_rect(0.0),
+        target_frontier: caret_rect(100.0),
+        offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
+        base_text: String::from("ab"),
+        target_text: String::from("axb"),
+        now,
+    });
+
+    let plan = build(&coord, now);
+    let masks: Vec<&AnimationClipRect> = plan
+        .clip_rects
+        .iter()
+        .filter(|cr| cr.kind == StaticClipKind::FrontierMask)
+        .collect();
+    assert!(
+        !masks.is_empty(),
+        "inserted cluster 必须被 FrontierMask 遮住"
+    );
+    // stub_for_tests: visual_x = 首 cluster 的 x = 0，dpr = 1，
+    // doc x = cluster.x + visual_x，所以 x 即 cluster.x。
+    // inserted cluster（byte 1..2）doc x 0..100；unchanged suffix B（byte 2..3）
+    // doc x 100..110 归 Reflow 层管，FrontierMask 不得越界盖上去。
+    for cr in &masks {
+        assert!(
+            cr.x < 100.0 && cr.x + cr.w <= 100.0,
+            "FrontierMask 只能覆盖 inserted 那个 cluster（x 0..100），不能盖到 x>=100 的 unchanged suffix，实际 x={} w={}",
+            cr.x,
+            cr.w
+        );
+    }
+    // unchanged suffix 确实需要移动时，应该由 ReflowTarget clip 接管，而不是 FrontierMask。
+    assert!(
+        plan.clip_rects
+            .iter()
+            .any(|cr| cr.kind == StaticClipKind::ReflowTarget && cr.x >= 100.0),
+        "unchanged suffix 的最终位置应由 ReflowTarget clip 让位"
+    );
+}
+
+/// Issue #826 评论 6 阻塞 2：Reflow 的 target clip 与移动中的 glyph 同时存在。
+///
+/// ReflowSpan 的 snapshot_id 指向最新 target 行；clip 让静态层在 canonical
+/// 最终位置让位，glyph 在动画层画正在移动的那一份。两者必须同帧共存。
+#[test]
+fn reflow_target_clip_and_moving_glyph_coexist() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // 段中 Enter：old "ab" 单行 → new "a\nb" 两行。换行符本身没有 glyph，
+    // 所以 inserted_ranges 只有那个换行位置；未改的 b 掉到第二行，由 Reflow 负责。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 50.0)],
+    )]);
+    let target = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(2, 3, 0.0)]),
+    ]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: base.clone(),
+        target_snapshot: target,
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        start_frontier: caret_rect(50.0),
+        target_frontier: caret_rect(50.0),
+        offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
+        base_text: String::from("ab"),
+        target_text: String::from("a\nb"),
+        now,
+    });
+
+    let plan = build(&coord, now);
+    assert!(
+        plan.clip_rects
+            .iter()
+            .any(|cr| cr.kind == StaticClipKind::ReflowTarget),
+        "Reflow 接管区必须在静态层生成 ReflowTarget clip"
+    );
+    assert!(
+        !plan.text_animation.glyphs.is_empty(),
+        "Reflow 移动中的 glyph 必须在动画层绘制"
+    );
+}
+
+/// Issue #826 评论 6 阻塞 1：只有 ReflowTarget 需要动画纹理。
+///
+/// renderer 的守卫语义：FrontierMask 纹理 miss 也必须保留，
+/// ReflowTarget 纹理 miss 才撤掉（让 canonical 同帧恢复）。
+#[test]
+fn clip_texture_requirement_depends_on_kind() {
+    assert!(
+        !mask_clip(0.0, 0.0, 10.0, 20.0, LineSnapshotId::new(0, 0, 0)).requires_animation_texture(),
+        "FrontierMask 不依赖动画纹理"
+    );
+    assert!(
+        reflow_clip(0.0, 0.0, 10.0, 20.0, LineSnapshotId::new(0, 0, 0))
+            .requires_animation_texture(),
+        "ReflowTarget 依赖动画纹理"
+    );
 }

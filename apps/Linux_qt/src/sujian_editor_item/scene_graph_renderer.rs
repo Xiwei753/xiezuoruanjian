@@ -56,10 +56,15 @@ pub(crate) fn render_frame(
     // 本帧必须强制重建 static layer。重建时使用已过滤掉 miss clip 的
     // available_clip_rects，使 canonical 正文同帧恢复。这保证原子关系：
     // overlay 能画 → static clip 生效；overlay 不能画 → 同帧 static canonical 恢复。
+    //
+    // Issue #826 评论 6 阻塞 1: 纹理守卫**只对 `ReflowTarget` 生效**。
+    // `FrontierMask` 只遮 canonical 里的 inserted 新字，动画层根本不画那一块，
+    // 所以它不需要任何动画纹理——纯 Insert 时 texture_cache 里本来就没有对应行图，
+    // 若沿用 Issue #736 的旧规则会把吐字遮罩整个过滤掉，新字直接完整出现。
     let has_unavailable_clip_texture = plan
         .clip_rects
         .iter()
-        .any(|cr| !texture_cache.contains_line(&cr.snapshot_id));
+        .any(|cr| cr.requires_animation_texture() && !texture_cache.contains_line(&cr.snapshot_id));
     let should_rebuild_static = static_text.needs_relayout || has_unavailable_clip_texture;
 
     if should_rebuild_static {
@@ -119,12 +124,19 @@ pub(crate) fn render_frame(
             // canonical 正文直接显示。不能等静态层挖完以后到了 render_text_animation_layer()
             // 才 continue。overlay 可画 -> static 被接管；overlay 不可画 -> static 同帧
             // 恢复 canonical。两边是一条原子规则。
-            let available_clip_rects: Vec<qt_text_node::AnimationClipRect> = plan
+            // Issue #826 评论 6: 纹理守卫只对 `ReflowTarget` 生效，`FrontierMask` 永远保留。
+            let surviving_clip_rects: Vec<qt_text_node::AnimationClipRect> = plan
                 .clip_rects
                 .iter()
-                .filter(|cr| texture_cache.contains_line(&cr.snapshot_id))
+                .filter(|cr| {
+                    !cr.requires_animation_texture() || texture_cache.contains_line(&cr.snapshot_id)
+                })
                 .cloned()
                 .collect();
+            // Issue #826 评论 6: 合并必须放在纹理过滤**之后**，否则 FrontierMask 与
+            // ReflowTarget 先合成一块，这里已经分不清哪部分纹理 miss 时该放行、
+            // 哪部分仍必须裁。合并只在同 kind 内做。
+            let available_clip_rects = qt_text_node::merge_static_clip_rects(surviving_clip_rects);
             let clip_rects = &available_clip_rects;
 
             // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，

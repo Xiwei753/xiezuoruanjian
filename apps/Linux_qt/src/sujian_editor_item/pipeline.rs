@@ -3,7 +3,7 @@ use super::animation::{EditFrontierRequest, LinuxEditorAnimationCoordinator};
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::EditorLayoutSnapshot;
+use super::layout_snapshot::{EditorLayoutSnapshot, PreparedLineSnapshot};
 use super::line_snapshot_builder::LineSnapshotBuilder;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::{LineSnapshotId, TextureCache};
@@ -1103,33 +1103,79 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout = layout;
     }
 
-    /// Issue #826: 为当前活跃的遮罩前沿 / Reflow 层准备旧行纹理。
+    /// Issue #826 评论 6 阻塞 2: 为当前活跃的遮罩前沿 / Reflow 层准备行纹理。
     ///
-    /// 吐字只画最新 canonical 一份（静态层自己的纹理），但吞字 / 替换的旧 overlay
-    /// 和 Reflow 的旧位置都要从旧行纹理取 glyph。前沿建立时旧行纹理可能还没进
-    /// texture_cache，这里先把 base snapshot 的行纹理补进去；仍缺的才把动画
-    /// 收成 canonical 终态，不留半开遮罩。
+    /// 三类消费方，各自从不同 snapshot 取图，**不能**再用「有没有 base snapshot」
+    /// 决定整个函数是否提前返回：
+    ///
+    /// 1. Delete / Replace 的旧正文 overlay：glyph 取自 `frontier.base_snapshot`
+    ///    的**旧**行图（`active_edit_frontier_base_snapshot()` 只在需要旧 overlay
+    ///    时才返回 Some）。
+    /// 2. Reflow 正在移动的 glyph：取自 `frontier.target_snapshot` 的**最新**行图。
+    ///    `ReflowSpan.snapshot_id` 明确是新行的 id，两边 ID 带 revision，本来就不是
+    ///    同一批；只塞旧图会让 Reflow 的 `get_line` miss、动画层直接 skip glyph，
+    ///    后半段文字瞬移到 canonical 最终位置。
+    /// 3. 纯 Insert 的 `FrontierMask`：不需要任何动画纹理，**不参与 missing 判定**。
+    ///    吐字遮罩只裁 canonical 里的新字，动画层不画那一块。
+    ///
+    /// 仍缺纹理的（只可能是上面 1 / 2 需要动画纹理的）才把动画收成 canonical 终态，
+    /// 不留半开遮罩。
     pub fn prepare_frontier_textures(&mut self) {
-        let Some(base) = self
+        let mut insert_line_image = |cache: &mut TextureCache, line: &PreparedLineSnapshot| {
+            let Some(image) = line.image.as_ref() else {
+                return;
+            };
+            if !cache.contains_line(&line.id) {
+                cache.insert_line(line.id, image.clone());
+            }
+        };
+
+        // 1. Delete / Replace 的旧正文 overlay 行纹理。
+        if let Some(base) = self
             .animation_coordinator
             .active_edit_frontier_base_snapshot()
-        else {
-            return;
-        };
-        for line in &base.line_snapshots {
-            let Some(image) = line.image.as_ref() else {
-                continue;
-            };
-            if !self.texture_cache.contains_line(&line.id) {
-                self.texture_cache.insert_line(line.id, image.clone());
+        {
+            for line in &base.line_snapshots {
+                insert_line_image(&mut self.texture_cache, line);
             }
         }
-        let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
-        let missing = active_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .count();
+
+        // 2. Reflow 正在移动的 glyph：最新 target 行的纹理。
+        let reflow_ids = self.animation_coordinator.active_reflow_snapshot_ids();
+        if !reflow_ids.is_empty() {
+            if let Some(target) = self
+                .animation_coordinator
+                .active_edit_frontier_target_snapshot()
+            {
+                for line in &target.line_snapshots {
+                    if reflow_ids.contains(&line.id) {
+                        insert_line_image(&mut self.texture_cache, line);
+                    }
+                }
+            }
+        }
+
+        // 需要动画纹理的消费方才算 missing；FrontierMask 不算。
+        let mut missing = 0usize;
+        for id in reflow_ids.iter().copied() {
+            if !self.texture_cache.contains_line(&id) {
+                missing += 1;
+            }
+        }
+        if missing == 0 {
+            if let Some(base) = self
+                .animation_coordinator
+                .active_edit_frontier_base_snapshot()
+            {
+                missing = base
+                    .line_snapshots
+                    .iter()
+                    .filter(|line| line.image.is_some())
+                    .filter(|line| !self.texture_cache.contains_line(&line.id))
+                    .count();
+            }
+        }
+
         if missing > 0 {
             super::editor_animation_debug_log(&format!(
                 "prepare_frontier_textures: {} active line textures missing, snap to canonical",

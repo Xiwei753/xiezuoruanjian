@@ -351,7 +351,16 @@ impl EditFrontierState {
 
     /// 本帧吐字要裁掉 canonical 新字的矩形。
     ///
-    /// 前沿之前的行完整显示；前沿所在行按 x 裁；还没到的行整段裁掉。
+    /// Issue #826 评论 6 阻塞 3：**只裁 inserted cluster**，不能用整行内容右边界。
+    ///
+    /// 例：旧正文 `A|B`，中间插入 X 得 `AX|B`。target 行三个 cluster：
+    /// A（unchanged）/ X（inserted）/ B（unchanged + Reflow）。`new_range` 只有 X，
+    /// 若裁到整行右边界，B 会被 FrontierMask 一起挖掉——但 B 属于 Reflow 层职责，
+    /// FrontierMask 越权会让 Reflow 的动画层和静态层互相抢同一块区域。
+    ///
+    /// 跨行仍由同一个 global frontier 决定「前 / 当前 / 后」，但几何输出只覆盖
+    /// inserted cluster 本身：换行符没有 glyph，就不产生 FrontierMask，
+    /// 后半段位置变化完全交给 Reflow。
     pub(crate) fn hidden_new_text_rects(&self, sample: &EditFrontierSample) -> Vec<FrontierRect> {
         let new_range = match sample.new_range {
             Some(range) => range,
@@ -366,33 +375,45 @@ impl EditFrontierState {
             .target_snapshot
             .lines_in_byte_range(new_range.0, new_range.1)
         {
-            let line_top = line.visual_line_top;
-            let line_bottom = line.visual_line_bottom;
             // 完全在前沿之前的行：已经完整露出，不裁。
-            if line_bottom <= frontier.top {
+            if line.visual_line_bottom <= frontier.top {
                 continue;
             }
-            let (left, right) = line_content_x_extent(line);
-            let rect = if line_top >= frontier.bottom {
-                // 还没到的行：整段裁掉。
-                FrontierRect {
-                    x: left,
-                    y: line_top,
-                    w: right - left,
-                    h: line_bottom - line_top,
+            for cluster in line.clusters_in_byte_range(new_range.0, new_range.1) {
+                // inserted 自己的文档坐标矩形，不牵连同行的 unchanged cluster。
+                let glyph = line.source_rect_to_document_rect(&cluster.source_rect);
+                let glyph_right = glyph.x + glyph.w;
+                let rect = if line.visual_line_top >= frontier.bottom {
+                    // 还没到的行：整块 cluster 都藏住。
+                    FrontierRect {
+                        x: glyph.x,
+                        y: glyph.y,
+                        w: glyph.w,
+                        h: glyph.h,
+                    }
+                } else if glyph.x >= frontier.x {
+                    // 前沿所在行，cluster 完全在前沿之后：整块藏住。
+                    FrontierRect {
+                        x: glyph.x,
+                        y: glyph.y,
+                        w: glyph.w,
+                        h: glyph.h,
+                    }
+                } else if glyph_right > frontier.x {
+                    // 前沿切在这个 cluster 中间：只藏前沿右侧那一段。
+                    FrontierRect {
+                        x: frontier.x,
+                        y: glyph.y,
+                        w: glyph_right - frontier.x,
+                        h: glyph.h,
+                    }
+                } else {
+                    // 已在前沿之前，完整露出。
+                    continue;
+                };
+                if !rect.is_degenerate() {
+                    rects.push(rect);
                 }
-            } else {
-                // 前沿所在行：从前沿 x 裁到行尾。
-                let cut = frontier.x.max(left).min(right);
-                FrontierRect {
-                    x: cut,
-                    y: line_top,
-                    w: right - cut,
-                    h: line_bottom - line_top,
-                }
-            };
-            if !rect.is_degenerate() {
-                rects.push(rect);
             }
         }
         rects

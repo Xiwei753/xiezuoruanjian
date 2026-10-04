@@ -31,6 +31,7 @@ use crate::sujian_editor_item::cursor_animation::{
 use crate::sujian_editor_item::edit_motion::{CursorRect, EditorAnimationKind};
 use crate::sujian_editor_item::editor_animation_debug_log;
 use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
+use crate::sujian_editor_item::qt_text_node::{AnimationClipRect, StaticClipKind};
 
 /// Issue #826: 一轮正文编辑的完整事实，由 `pipeline` 从 Core `display_patches`
 /// + old/new canonical layout 派生后交给协调器。
@@ -320,7 +321,7 @@ impl LinuxEditorAnimationCoordinator {
     pub(crate) fn hidden_canonical_rects_for(
         &self,
         sample: &EditFrontierSample,
-    ) -> Vec<(f64, f64, f64, f64, LineSnapshotId)> {
+    ) -> Vec<AnimationClipRect> {
         let Some(frontier) = self.active_edit_frontier.as_ref() else {
             return Vec::new();
         };
@@ -335,9 +336,47 @@ impl LinuxEditorAnimationCoordinator {
                     .find(|line| line.visual_line_top <= rect.y && rect.y < line.visual_line_bottom)
                     .map(|line| line.id)
                     .unwrap_or(LineSnapshotId::new(0, 0, 0));
-                (rect.x, rect.y, rect.w, rect.h, snapshot_id)
+                // Issue #826 评论 6：吐字遮罩只是把还没露出的 inserted glyph 从
+                // canonical 静态层暂时裁掉，动画层不画第二份正文，所以**不依赖
+                // 任何动画纹理**。renderer 不得因为 texture_cache 里没有这个
+                // snapshot_id 就把它过滤掉，否则吐字动画直接失效。
+                AnimationClipRect {
+                    x: rect.x,
+                    y: rect.y,
+                    w: rect.w,
+                    h: rect.h,
+                    snapshot_id,
+                    kind: StaticClipKind::FrontierMask,
+                }
             })
             .collect()
+    }
+
+    /// Issue #826 评论 6 阻塞 2: 当前前沿的最新 target snapshot。
+    ///
+    /// Reflow 的动画 glyph 从最新 target/new 行图取纹理（`ReflowSpan.snapshot_id`
+    /// 就是 `new_line.id`），所以纹理准备必须能拿到这一份，不能只看 base_snapshot。
+    pub(crate) fn active_edit_frontier_target_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|frontier| &frontier.target_snapshot)
+    }
+
+    /// Issue #826 评论 6 阻塞 2: 当前活跃 Reflow 真正需要动画纹理的行 id。
+    ///
+    /// 这些 id 指向最新 target/new 行，与 Delete overlay 用的 base/old 行是不同
+    /// 批次（id 带 revision）。纹理准备必须分别覆盖两批。
+    pub(crate) fn active_reflow_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let mut ids: Vec<LineSnapshotId> = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(reflow) = self.active_reflow.as_ref() {
+            for span in &reflow.spans {
+                if seen.insert(span.snapshot_id) {
+                    ids.push(span.snapshot_id);
+                }
+            }
+        }
+        ids
     }
 
     /// Issue #826: 按已采好的前沿样本算本帧要额外画的旧正文 overlay glyph。
@@ -444,11 +483,26 @@ impl LinuxEditorAnimationCoordinator {
     /// Issue #826 评论 4 问题 3：Reflow 接管期间要从静态正文层挖掉的 canonical 目标位置。
     ///
     /// 动画层画"正在移动的那一份"，静态层不能同时再画一份最终位置，否则重影。
-    pub(crate) fn reflow_target_clip_rects(&self) -> Vec<(f64, f64, f64, f64, LineSnapshotId)> {
+    /// Issue #826 评论 6 阻塞 3: Reflow 接管的 canonical 最终位置。
+    ///
+    /// 这些区域静态层要让位给动画层正在移动的那一份 glyph，所以**必须确认对应
+    /// target 行纹理存在**——renderer 只对 `ReflowTarget` 做纹理可用性守卫，
+    /// 纹理 miss 时同帧恢复 canonical，绝不影响 `FrontierMask`。
+    pub(crate) fn reflow_target_clip_rects(&self) -> Vec<AnimationClipRect> {
         self.active_reflow
             .as_ref()
             .map(ReflowState::target_clip_rects)
             .unwrap_or_default()
+            .into_iter()
+            .map(|(x, y, w, h, snapshot_id)| AnimationClipRect {
+                x,
+                y,
+                w,
+                h,
+                snapshot_id,
+                kind: StaticClipKind::ReflowTarget,
+            })
+            .collect()
     }
 
     /// 当前活跃 Reflow 在**新文本**坐标系里涉及的 byte 范围。
