@@ -102,6 +102,15 @@ interface LineDownCommand { kind: 'lineDown'; extend: boolean }
 interface LineHomeCommand { kind: 'lineHome'; extend: boolean }
 interface LineEndCommand { kind: 'lineEnd'; extend: boolean }
 
+// Issue #825 复核6第2点：撤销 / 重做也必须走这条串行边界。
+// 之前工作台工具条带的顶部撤销按钮直接调 coordinator.undo()/redo()，
+// 而物理键盘 / IME / 鼠标 / 触摸输入都在本 Dispatcher 的 SerialCommandQueue 里；
+// 输入还排在队列里时点顶部撤销，就会出现 undo 与 pending IME 命令并发，
+// 甚至 composition 还活着时先撤掉 committed text。
+// 现在 undo/redo 作为语义命令进同一个队列，和其它输入严格 FIFO。
+interface UndoCommand { kind: 'undo' }
+interface RedoCommand { kind: 'redo' }
+
 export type SemanticEditCommand =
   | InsertTextCommand
   | SetSelectionCommand
@@ -123,6 +132,8 @@ export type SemanticEditCommand =
   | LineDownCommand
   | LineHomeCommand
   | LineEndCommand
+  | UndoCommand
+  | RedoCommand
 
 interface DisplaySelectionUtf16 {
   start: number
@@ -285,7 +296,27 @@ export class EditorSemanticDispatcher {
         return this.executeLineNavigation('home', cmd.extend)
       case 'lineEnd':
         return this.executeLineNavigation('end', cmd.extend)
+      case 'undo':
+        this.navTargetX = -1
+        return this.executeFinishThenUndoRedo(true)
+      case 'redo':
+        this.navTargetX = -1
+        return this.executeFinishThenUndoRedo(false)
     }
+  }
+
+  // Issue #825 复核6第2点：undo/redo 与其它输入同队列出队（FIFO）。
+  // composition 还活着时先沿本 Dispatcher 自己的收口路径 finishActiveComposition()，
+  // 和 executeFinishThenSelectAll / executeFinishThenInsertText 完全一致，
+  // 保证撤销不会先把 committed text 撤掉、composition 却还挂在上面。
+  private async executeFinishThenUndoRedo(isUndo: boolean): Promise<ResultEnvelope<EditorEditResult>> {
+    if (this.inputAdapter.isComposing()) {
+      const finish = await this.inputAdapter.finishActiveComposition()
+      if (!finish.success) {
+        return finish
+      }
+    }
+    return isUndo ? this.coordinator.undo() : this.coordinator.redo()
   }
 
   // ── Issue #629 评论5324447292 第1项：统一 executeDisplaySelection ──

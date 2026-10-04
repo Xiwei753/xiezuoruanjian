@@ -135,11 +135,54 @@ Rectangle {
         return root.roleBounds(role) !== null
     }
 
-    // Issue #825 复核5第2项：展开工具 pane 的入口统一走这一个函数。
-    // 默认打开「统计」——rail 里只剩统计和冲突两个真内容入口，
-    // 不再写已经下线的 "starmap" key（否则标题会 fallback 成统计、内容却是空的）。
+    // Issue #825 复核6第1点：展开侧 pane 是一个「请求」，不是直接写状态。
+    // 窄窗口下 Core 按当前可见性重判最终 mode：600～695vp 里左章节栏开着时再展开
+    // 右工具 pane，最小需求 200+240+200+56 = 696vp 放不下，Core 退回 SinglePane。
+    // 如果端侧还留着「右 pane 已展开」，下一轮重算又继续喂 toolPaneVisible=true，
+    // 于是永远 SinglePane，而 rail / 折叠把手已被隐藏，用户没有入口再关回去，
+    // 只能拉大窗口解锁。
+    // 所以：先按当前组合问一次 Core；放不下就换一种组合再问一次；
+    // 第二次能 Workbench 就让另一侧让位（allowCollapseLeft 为 true 时）；
+    // 仍放不下就回滚本次展开，不留「已展开但看不见」的端侧状态。
+    // 真正因为 free region 连 Editor + ToolRail 都放不下而 SinglePane 时，
+    // 才会自然落到纯单栏，那条路径下没有展开状态需要回滚。
+    // QML 属性赋值会同步触发 onDrawerToolChanged / onLeftPaneCollapsedChanged，
+    // 所以每次赋值后 root.coreWorkbench 已经是该组合的新结论。
+    function requestToolPaneOpen(toolKey, allowCollapseLeft) {
+        root.drawerTool = toolKey || "stats";
+        if (root.coreWorkbench) return;
+        if (allowCollapseLeft === true) {
+            root.leftPaneCollapsed = true;
+            if (root.coreWorkbench) return;
+        }
+        root.drawerTool = "";
+    }
+
+    // 左目录栏的展开请求，与右侧对称：必要时先让右 pane 让位，仍放不下就回滚左栏。
+    function requestChapterNavigationOpen() {
+        root.leftPaneCollapsed = false;
+        if (root.coreWorkbench) return;
+        root.drawerTool = "";
+        if (root.coreWorkbench) return;
+        root.leftPaneCollapsed = true;
+    }
+
+    // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（refreshWorkbenchPlan 随后重算）。
+    function closeToolPane() {
+        root.drawerTool = "";
+    }
+
+    function closeChapterNavigation() {
+        root.leftPaneCollapsed = true;
+    }
+
+    // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
     function toggleToolPane() {
-        root.drawerTool = root.drawerOpen ? "" : "stats";
+        if (root.drawerOpen) {
+            root.closeToolPane();
+        } else {
+            root.requestToolPaneOpen("stats", true);
+        }
     }
 
     function refreshWorkbenchPlan() {
@@ -207,7 +250,7 @@ Rectangle {
             root.refreshConflictList();
             if (root.hasConflicts) {
                 // Issue #825：工具 rail 按工具 key 表达选中态，没有 tab 下标。
-                root.drawerTool = "conflict";
+                root.requestToolPaneOpen("conflict", false);
             }
         }
     }
@@ -1294,7 +1337,7 @@ Rectangle {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.drawerTool = "stats"
+                                    onClicked: root.requestToolPaneOpen("stats", true)
                                 }
                             }
                         }
@@ -1325,10 +1368,12 @@ Rectangle {
                 // Issue #762 评论 5826175490 第 4 点：透传请求的冲突路径给 RightDrawer。
                 // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
                 requestedConflictPath: root.conflictPath
-                onCloseRequested: root.drawerTool = ""
+                onCloseRequested: root.closeToolPane()
                 onConflictToolRequested: {
                     // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
-                    root.drawerTool = "conflict";
+                    // allowCollapseLeft=false：冲突自动弹出不该顺手收起用户的章节栏，
+                    // 放不下就直接回滚（冲突入口仍在全局同步面板里）。
+                    root.requestToolPaneOpen("conflict", false);
                     root.refreshConflictList();
                 }
             }
@@ -1348,7 +1393,7 @@ Rectangle {
                 // Issue #825 复核4 第2项：rail 内部的按钮宽度也吃 Core 的 ToolRail bounds，
                 // 不能容器用 Core 宽度、组件内部还按默认 56 画。
                 railWidth: root.coreSized ? root.toolRailWidth : 56
-                onToolRequested: function(toolKey) { root.drawerTool = toolKey; }
+                onToolRequested: function(toolKey) { root.requestToolPaneOpen(toolKey, true); }
                 onToolPaneToggled: {
                     root.toggleToolPane();
                     if (root.drawerOpen) root.requestEditorFocus();
@@ -1414,7 +1459,7 @@ Rectangle {
         // 避免落到没有内容的工具状态。仍由 WritingWorkspace 统一持有工具状态，
         // 不让 RightDrawer 自己猜外部 drawer 状态。
         if (!root.hasConflicts && root.drawerTool === "conflict") {
-            root.drawerTool = "";
+            root.closeToolPane();
         }
     }
 
@@ -1424,7 +1469,7 @@ Rectangle {
         // unresolved conflict 就刷新并选中冲突工具，status 说什么不影响判断。
         root.refreshConflictList();
         if (root.hasConflicts) {
-            root.drawerTool = "conflict";
+            root.requestToolPaneOpen("conflict", false);
         }
     }
 
@@ -1435,7 +1480,7 @@ Rectangle {
         root.conflictPath = path || "";
         root.refreshConflictList();
         if (root.conflictPath && root.hasConflicts) {
-            root.drawerTool = "conflict";
+            root.requestToolPaneOpen("conflict", false);
         }
     }
 
@@ -1493,7 +1538,11 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                root.leftPaneCollapsed = !root.leftPaneCollapsed
+                if (root.leftPaneCollapsed) {
+                    root.requestChapterNavigationOpen();
+                } else {
+                    root.closeChapterNavigation();
+                }
                 // 收起后把手贴到左边缘，留出 sp4 边距；不需要动编辑会话。
                 if (root.leftPaneCollapsed) root.requestEditorFocus()
             }

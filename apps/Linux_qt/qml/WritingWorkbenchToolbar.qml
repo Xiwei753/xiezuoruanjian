@@ -13,6 +13,10 @@
 //     保证窄窗口仍然排得下。
 //   - Issue #825 复核5：三个分组容器严格占 Core 的 bounds，段间 spacing=0，
 //     条带外层不再加 margin/padding；视觉内边距只加在各组内部。
+//   - Issue #825 复核6第3点：Qt Quick Layouts 的 Layout.*Margin 是 item **外部**
+//     margin，会放大该 item 在布局里占的有效 cell 宽度——所以角色 wrapper 上
+//     一个 Layout margin 都不能有。三个角色 wrapper 的 min/preferred/max 宽度
+//     严格等于 Core 的 bounds，视觉留白一律放在 wrapper **内部**子项的 anchors 上。
 //   - 章节树 / 工具 pane / 工具 rail 只占内容区，不穿进工具条带。
 //   - 返回 / 撤销 / 重做走真实路径（sujianEditor.undo()/redo()），不摆假按钮。
 // =============================================================================
@@ -68,77 +72,93 @@ ColumnLayout {
             // ToolbarLeading / ToolbarCenter / ToolbarTrailing bounds。
             spacing: 0
 
-            // ── ToolbarLeading：返回 + 作品名 + 撤销/重做 ──
-            RowLayout {
-                spacing: root.dt.sp4
+            // ── ToolbarLeading 角色 wrapper：宽度严格等于 Core 的 ToolbarLeading ──
+            Item {
+                id: leadingSlot
+                // Core 没给 bounds（SinglePane）时按内容自适应，不让内部内容被压扁。
+                implicitWidth: leadingInner.implicitWidth + root.dt.sp12 + root.dt.sp8
                 Layout.fillWidth: false
-                // Core 给了 ToolbarLeading bounds 就按它定量（含 min/max，
-                // 保证不会因为内容长度挤走 Center 组）。
-                Layout.preferredWidth: root.leadingWidth > 0 ? root.leadingWidth : -1
-                Layout.minimumWidth: root.leadingWidth > 0 ? root.leadingWidth : 0
-                Layout.maximumWidth: root.leadingWidth > 0 ? root.leadingWidth : Number.POSITIVE_INFINITY
-                // 视觉内边距加在组内部，不改角色几何。
-                Layout.leftMargin: root.dt.sp12
-                Layout.rightMargin: root.dt.sp8
+                Layout.preferredWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
+                Layout.minimumWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
+                Layout.maximumWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
 
-                // Issue #825 复核5第4点：标题不进 ToolbarLeading。
-                // Leading 200vp 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
-                // 返回作品列表
-                ToolbarIconButton {
-                    dt: root.dt
-                    glyph: "\u2190"
-                    onTriggered: root.backRequested()
-                }
+                RowLayout {
+                    id: leadingInner
+                    // 视觉内边距放在 wrapper 内部，不改角色几何。
+                    anchors.fill: parent
+                    anchors.leftMargin: root.dt.sp12
+                    anchors.rightMargin: root.dt.sp8
+                    spacing: root.dt.sp4
 
-                // 撤销 / 重做：走 SujianEditorItem 真实实现的 undo()/redo()，
-                // 没有可撤销的事务时 Rust 侧直接 no-op，所以按钮不必做可用态判断
-                // （端侧不再自己维护一份"能不能撤"的状态）。
-                ToolbarIconButton {
-                    dt: root.dt
-                    glyph: "\u21B6"
-                    onTriggered: root.undoRequested()
-                }
+                    // Issue #825 复核5第4点：标题不进 ToolbarLeading。
+                    // Leading 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
+                    ToolbarIconButton {
+                        dt: root.dt
+                        glyph: "\u2190"
+                        onTriggered: root.backRequested()
+                    }
 
-                ToolbarIconButton {
-                    dt: root.dt
-                    glyph: "\u21B7"
-                    onTriggered: root.redoRequested()
+                    // 撤销 / 重做：走 SujianEditorItem 真实实现的 undo()/redo()，
+                    // 没有可撤销的事务时 Rust 侧直接 no-op，所以按钮不必做可用态判断
+                    // （端侧不再自己维护一份"能不能撤"的状态）。
+                    ToolbarIconButton {
+                        dt: root.dt
+                        glyph: "\u21B6"
+                        onTriggered: root.undoRequested()
+                    }
+
+                    ToolbarIconButton {
+                        dt: root.dt
+                        glyph: "\u21B7"
+                        onTriggered: root.redoRequested()
+                    }
                 }
             }
 
-            // ── ToolbarCenter：字号 / 行距 / 段落 / 一键排版 + 保存状态 ──
-            WritingFormatGroup {
-                // Core 给了 ToolbarCenter bounds 就照搬，不再靠"填满剩余"二次猜测。
+            // ── ToolbarCenter 角色 wrapper：宽度严格等于 Core 的 ToolbarCenter ──
+            Item {
                 Layout.fillWidth: root.centerWidth <= 0
                 Layout.preferredWidth: root.centerWidth > 0 ? root.centerWidth : -1
                 Layout.minimumWidth: root.centerWidth > 0 ? root.centerWidth : 0
                 Layout.maximumWidth: root.centerWidth > 0 ? root.centerWidth : Number.POSITIVE_INFINITY
-                Layout.leftMargin: root.dt.sp8
-                Layout.rightMargin: root.dt.sp8
-                dt: root.dt
-                currentFontSize: root.currentFontSize
-                currentLineSpacing: root.currentLineSpacing
-                firstLineIndent: root.firstLineIndent
-                saveStatus: root.saveStatus
-                onFontSizeChanged: function(size) { root.fontSizeChanged(size) }
-                onLineSpacingChanged: function(spacing) { root.lineSpacingChanged(spacing) }
-                onFirstLineIndentToggled: root.firstLineIndentToggled()
-                onFormatOneClick: root.formatOneClick()
+
+                WritingFormatGroup {
+                    anchors.fill: parent
+                    anchors.leftMargin: root.dt.sp8
+                    anchors.rightMargin: root.dt.sp8
+                    dt: root.dt
+                    currentFontSize: root.currentFontSize
+                    currentLineSpacing: root.currentLineSpacing
+                    firstLineIndent: root.firstLineIndent
+                    saveStatus: root.saveStatus
+                    onFontSizeChanged: function(size) { root.fontSizeChanged(size) }
+                    onLineSpacingChanged: function(spacing) { root.lineSpacingChanged(spacing) }
+                    onFirstLineIndentToggled: root.firstLineIndentToggled()
+                    onFormatOneClick: root.formatOneClick()
+                }
             }
 
-            // ── ToolbarTrailing：同步 / 搜索 / 设置 ──
-            GlobalTopActions {
+            // ── ToolbarTrailing 角色 wrapper：宽度严格等于 Core 的 ToolbarTrailing ──
+            Item {
+                id: trailingSlot
+                implicitWidth: trailingInner.implicitWidth + root.dt.sp8 + root.dt.sp16
                 Layout.fillWidth: false
-                Layout.preferredWidth: root.trailingWidth > 0 ? root.trailingWidth : -1
-                Layout.minimumWidth: root.trailingWidth > 0 ? root.trailingWidth : 0
-                Layout.maximumWidth: root.trailingWidth > 0 ? root.trailingWidth : Number.POSITIVE_INFINITY
-                Layout.leftMargin: root.dt.sp8
-                Layout.rightMargin: root.dt.sp16
-                dt: root.dt
-                appState: root.appState
-                onRequestSync: root.requestSync()
-                onRequestSearch: root.requestSearch()
-                onOpenSettings: root.openSettings()
+                Layout.preferredWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
+                Layout.minimumWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
+                Layout.maximumWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
+
+                GlobalTopActions {
+                    id: trailingInner
+                    // ToolbarTrailing 内容贴 Core bounds 右缘，内边距只在内部。
+                    anchors.right: parent.right
+                    anchors.rightMargin: root.dt.sp16
+                    anchors.verticalCenter: parent.verticalCenter
+                    dt: root.dt
+                    appState: root.appState
+                    onRequestSync: root.requestSync()
+                    onRequestSearch: root.requestSearch()
+                    onOpenSettings: root.openSettings()
+                }
             }
         }
     }

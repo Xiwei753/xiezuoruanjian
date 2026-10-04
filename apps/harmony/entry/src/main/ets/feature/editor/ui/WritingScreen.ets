@@ -706,7 +706,7 @@ export struct WritingScreen {
   // Issue #825 复核第 2 项：向 Core 要一份七角色 bounds 计划。
   // 目录栏 / 工具 pane 的展开状态只作为 WorkbenchVisibility 输入，不落 Core 持久化，
   // 也不影响编辑会话——所以每次重算只改布局，EditorSessionCoordinator 始终是同一个。
-  private refreshWorkbenchPlan(): void {
+  private async refreshWorkbenchPlan(): Promise<void> {
     const visibility: WorkbenchVisibility = {
       chapterNavigationVisible: !this.leftPaneCollapsed,
       toolPaneVisible: !this.rightPaneCollapsed
@@ -730,6 +730,62 @@ export struct WritingScreen {
         }
       })
       .catch(() => {})
+  }
+
+  // Issue #825 复核6第1点：展开侧 pane 的请求流程。
+  // 窄窗口下 Core 按「当前可见性」重判最终 mode：600～695vp 里左章节栏开着时
+  // 再展开右工具 pane，最小需求 200+240+200+56 = 696vp 放不下，Core 会退回
+  // SinglePane。如果端侧还留着「右 pane 已展开」，下一轮重算又继续喂
+  // toolPaneVisible=true，于是永远 SinglePane，而 rail / 折叠把手已被隐藏，
+  // 用户没有入口再把它关回去——只能拉大窗口解锁。
+  // 所以这里把展开当成一次「请求」：先按当前组合问一次 Core，放不下就换一种
+  // 组合再问一次；第二次能 Workbench 就让另一侧让位，仍放不下就回滚本次展开。
+  // 真正因为 free region 连 Editor + ToolRail 都放不下而返回 SinglePane 时，
+  // 才会自然落到纯单栏（那条路径下两端侧都没有展开状态，不需要额外回滚）。
+  private async requestToolPaneOpen(toolKey: string, allowCollapseLeft: boolean): Promise<void> {
+    this.rightPaneCollapsed = false
+    this.selectedToolKey = toolKey
+    await this.refreshWorkbenchPlan()
+    if (this.hasWorkbenchPlan) {
+      return
+    }
+    if (allowCollapseLeft) {
+      this.leftPaneCollapsed = true
+      await this.refreshWorkbenchPlan()
+      if (this.hasWorkbenchPlan) {
+        return
+      }
+    }
+    // 仍然放不下：回滚本次展开，不留下「已展开但看不见」的端侧状态。
+    this.rightPaneCollapsed = true
+    this.selectedToolKey = ''
+    await this.refreshWorkbenchPlan()
+  }
+
+  // 左目录栏的展开请求，逻辑与右侧对称：必要时先让右 pane 让位，仍放不下就回滚。
+  private async requestChapterNavigationOpen(): Promise<void> {
+    this.leftPaneCollapsed = false
+    await this.refreshWorkbenchPlan()
+    if (this.hasWorkbenchPlan) {
+      return
+    }
+    this.rightPaneCollapsed = true
+    await this.refreshWorkbenchPlan()
+    if (this.hasWorkbenchPlan) {
+      return
+    }
+    this.leftPaneCollapsed = true
+    await this.refreshWorkbenchPlan()
+  }
+
+  // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（由 onPaneCollapsedChanged 重算）。
+  private closeToolPane(): void {
+    this.selectedToolKey = ''
+    this.rightPaneCollapsed = true
+  }
+
+  private closeChapterNavigation(): void {
+    this.leftPaneCollapsed = true
   }
 
   // 目录栏 / 工具 pane 展开状态变化后重算 plan：Core 决定各角色最终 bounds，
@@ -1265,12 +1321,16 @@ export struct WritingScreen {
 
   // Issue #825 复核第 3 项：撤销/重做走唯一的 EditorSessionCoordinator，
   // 与输入法快捷键、dispatcher 是同一条编辑事务路径，栈空时 coordinator 自己 no-op。
+  // Issue #825 复核6第2点：撤销 / 重做不再直接调 coordinator。
+  // 它们作为语义命令进 EditorSemanticDispatcher 的串行队列，和物理键盘 /
+  // IME / 鼠标 / 触摸输入同一条顺序边界，避免 undo 与 pending IME 命令并发，
+  // 也不在 composition 还活着时先撤 committed text。
   private applyUndo(): void {
-    this.coordinator.undo().catch(() => {})
+    this.dispatcher.dispatchFireAndForget({ kind: 'undo' })
   }
 
   private applyRedo(): void {
-    this.coordinator.redo().catch(() => {})
+    this.dispatcher.dispatchFireAndForget({ kind: 'redo' })
   }
 
   // Issue #825 复核5第4点：ToolbarCenter 的字号 / 行距是 Core 设置里的真实字段，
@@ -1307,22 +1367,23 @@ export struct WritingScreen {
     }
   }
 
-  // Issue #825 复核第 2 项：选中工具时同时展开 ToolPane（rail 负责“选工具 + 展开/收起”）。
+  // Issue #825 复核第 2 项：选中工具时同时请求展开 ToolPane
+  // （rail 负责“选工具 + 展开/收起”）。展开要走 requestToolPaneOpen，
+  // 让 Core 在放不下时决定让另一侧让位或回滚，不留死锁状态。
   private onSelectTool(key: string): void {
-    this.selectedToolKey = key
-    if (this.rightPaneCollapsed) {
-      this.rightPaneCollapsed = false
-      this.onPaneCollapsedChanged()
-    }
+    this.requestToolPaneOpen(key, true).catch(() => {
+      // 请求失败（Core 不可用）时保持当前布局，不额外弹提示。
+    })
   }
 
   private onToggleToolPane(): void {
-    this.rightPaneCollapsed = !this.rightPaneCollapsed
     if (this.rightPaneCollapsed) {
-      // 收起时清掉选中项，避免下次展开还挂着一个没有真实内容的工具。
-      this.selectedToolKey = ''
+      // Harmony 还没有真实 AI / 星图工具内容，rail 只保留展开/收起入口，
+      // 所以展开时带空的 selectedToolKey（ToolPane 内容随之留空，不造假入口）。
+      this.requestToolPaneOpen('', true).catch(() => {})
+    } else {
+      this.closeToolPane()
     }
-    this.onPaneCollapsedChanged()
   }
 
   // Issue #825 复核第5项：把手走整屏覆盖层，按“窗口左缘 / 分隔边缘 / 窗口右缘”显式排位。
@@ -1350,8 +1411,12 @@ export struct WritingScreen {
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
         .onClick(() => {
-          this.leftPaneCollapsed = !this.leftPaneCollapsed
-          this.onPaneCollapsedChanged()
+          // 展开要走 Core 判定（必要时让右侧让位 / 回滚），收起永远放得下。
+          if (this.leftPaneCollapsed) {
+            this.requestChapterNavigationOpen().catch(() => {})
+          } else {
+            this.closeChapterNavigation()
+          }
         })
 
       Blank()

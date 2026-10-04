@@ -152,7 +152,10 @@ fn issue687_p2_apply_plan_none_branch_uses_visual_position() {
 #[test]
 fn issue687_p3_qml_uses_setting_desktop_editor_width() {
     let writing_workspace = read_src("qml/WritingWorkspace.qml");
-    let top_toolbar = read_src("qml/TopWritingToolbar.qml");
+    // Issue #825：TopWritingToolbar.qml 已拆成 WritingWorkbenchToolbar.qml
+    // （Leading/Center/Trailing 三段）+ WritingFormatGroup.qml（Center 的排版内容），
+    // 原来读 TopWritingToolbar.qml 的检查改读 WritingFormatGroup.qml。
+    let format_group = read_src("qml/WritingFormatGroup.qml");
     // WritingWorkspace.qml 中不应再使用 setting_linux_qt_editor_width
     let ws_count = writing_workspace
         .matches("setting_linux_qt_editor_width")
@@ -162,11 +165,13 @@ fn issue687_p3_qml_uses_setting_desktop_editor_width() {
         "问题3修复: WritingWorkspace.qml 不应再使用 setting_linux_qt_editor_width，实际 {} 处",
         ws_count
     );
-    // TopWritingToolbar.qml 中不应再使用 setting_linux_qt_editor_width
-    let tb_count = top_toolbar.matches("setting_linux_qt_editor_width").count();
+    // WritingFormatGroup.qml 中不应再使用 setting_linux_qt_editor_width
+    let tb_count = format_group
+        .matches("setting_linux_qt_editor_width")
+        .count();
     assert_eq!(
         tb_count, 0,
-        "问题3修复: TopWritingToolbar.qml 不应再使用 setting_linux_qt_editor_width，实际 {} 处",
+        "问题3修复: WritingFormatGroup.qml 不应再使用 setting_linux_qt_editor_width，实际 {} 处",
         tb_count
     );
     // 应使用 setting_desktop_editor_width
@@ -178,10 +183,10 @@ fn issue687_p3_qml_uses_setting_desktop_editor_width() {
         "问题3修复: WritingWorkspace.qml 应至少有 3 处 setting_desktop_editor_width，实际 {} 处",
         ws_desktop
     );
-    let tb_desktop = top_toolbar.matches("setting_desktop_editor_width").count();
+    let tb_desktop = format_group.matches("setting_desktop_editor_width").count();
     assert!(
         tb_desktop >= 2,
-        "问题3修复: TopWritingToolbar.qml 应至少有 2 处 setting_desktop_editor_width，实际 {} 处",
+        "问题3修复: WritingFormatGroup.qml 应至少有 2 处 setting_desktop_editor_width，实际 {} 处",
         tb_desktop
     );
     println!("[BUGFIX_687_VERIFY] P3 QML uses setting_desktop_editor_width (FIXED)");

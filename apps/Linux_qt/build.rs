@@ -454,7 +454,11 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
-    println!("cargo:rerun-if-changed=qml/TopWritingToolbar.qml");
+    // Issue #825：TopWritingToolbar.qml 已拆成工作台工具条带三段组件。
+    println!("cargo:rerun-if-changed=qml/WritingWorkbenchToolbar.qml");
+    println!("cargo:rerun-if-changed=qml/WritingFormatGroup.qml");
+    println!("cargo:rerun-if-changed=qml/ToolbarIconButton.qml");
+    println!("cargo:rerun-if-changed=qml/WritingToolRail.qml");
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
