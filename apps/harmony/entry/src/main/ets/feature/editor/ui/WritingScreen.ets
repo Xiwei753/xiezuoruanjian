@@ -1120,7 +1120,8 @@ export struct WritingScreen {
   // Issue #825 复核第5项：把手走整屏覆盖层，按“窗口左缘 / 分隔边缘 / 窗口右缘”显式排位。
   // 之前是把窄 Stack 塞进外层 Stack 再用 offset 猜坐标，而 Stack 的 offset 是相对自身对齐点算的，
   // 收起态会落到屏幕中间。这里用一段带占位宽度的整屏 Row 从左往右排：
-  // 左把手前占 (目录栏宽 - 半把手)，右把手前占 (工具区宽 - 半把手)，
+  // 左把手在目录栏右缘（前置占位 (目录栏宽 - 半把手)，按钮中心压在目录栏边界上），
+  // 右把手按展开态决定占位在按钮前还是按钮后，
   // 中间 layoutWeight 的 Blank 吃掉剩余空间，位置由布局算出来而不是猜出来。
   // 覆盖层自身不参与命中测试（HitTestMode.Transparent），只有两个 Button 可点，
   // 正文、目录树和工具区的触摸照常落到下层。
@@ -1146,12 +1147,9 @@ export struct WritingScreen {
         .layoutWeight(1)
         .hitTestBehavior(HitTestMode.None)
 
-      if (!this.rightPaneCollapsed) {
-        Blank()
-          .width(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
-          .hitTestBehavior(HitTestMode.None)
-      }
-
+      // Issue #825 复核第1项：右把手的占位必须在按钮“之后”。
+      // 收起时没有占位，按钮自然贴窗口右缘；
+      // 展开时按钮后面补 (工具区宽 - 半把手)，按钮中心正好压在“正文 | 右工具区”分隔线上。
       Button(this.rightPaneCollapsed ? '‹' : '›', { type: ButtonType.Normal })
         .width(PANE_HANDLE_WIDTH_VP)
         .height(PANE_HANDLE_HEIGHT_VP)
@@ -1160,6 +1158,12 @@ export struct WritingScreen {
         .backgroundColor($r('sys.color.comp_background_gray'))
         .borderRadius(DesignTokens.radiusPill)
         .onClick(() => { this.rightPaneCollapsed = !this.rightPaneCollapsed })
+
+      if (!this.rightPaneCollapsed) {
+        Blank()
+          .width(RIGHT_PANE_WIDTH_VP - PANE_HANDLE_WIDTH_VP / 2)
+          .hitTestBehavior(HitTestMode.None)
+      }
     }
     .width('100%')
     .height('100%')

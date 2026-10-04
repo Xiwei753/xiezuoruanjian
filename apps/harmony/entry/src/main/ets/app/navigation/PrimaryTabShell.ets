@@ -23,7 +23,7 @@ import { WritingScreen } from '../../feature/editor/ui/WritingScreen'
 import { StarMapScreen } from '../../feature/starmap/ui/StarMapScreen'
 import { StarMapListScreen } from '../../feature/starmap/ui/StarMapListScreen'
 import { SettingsScreen } from '../../feature/settings/ui/SettingsScreen'
-import { SettingsOverlayHost } from '../../feature/settings/ui/SettingsOverlayHost'
+import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
 import { StatsScreen } from '../../feature/stats/ui/StatsScreen'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
@@ -116,6 +116,11 @@ export struct PrimaryTabShell {
 
     // Issue #768：检测 API Level，决定是否使用 HdsTabs。
     this.useHdsTabs = PlatformApiResolver.getInstance().isApiAtLeast(23)
+
+    // Issue #825 复核第2项：宽屏设置浮层改成窗口层级 custom dialog，
+    // openCustomDialog 必须在 UIContext 上调用，而页头动作可能来自任何 NavDestination，
+    // 所以这里在壳层注册一次窗口级 UIContext，不在每个页面各传一遍。
+    SettingsOverlayController.getInstance().attachUIContext(this.getUIContext())
 
     // Issue #768 评论5835171266 第1项：PrimaryTabShell 始终持有三个 NavPathStack 并注册到 coordinator，
     // 不再因 useHdsTabs 跳过——HdsPrimaryTabsApi23 不再自己创建 stack 或注册。
@@ -490,9 +495,6 @@ export struct PrimaryTabShell {
         .width('100%')
         .height('100%')
       }
-
-      // Issue #825 复核第4点：宽屏设置悬浮在当前页面之上（见 build 顶部注释）。
-      SettingsOverlayHost()
     }
     .width('100%')
     .height('100%')

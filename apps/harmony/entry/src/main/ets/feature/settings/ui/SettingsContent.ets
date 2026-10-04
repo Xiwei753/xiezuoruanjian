@@ -3,8 +3,10 @@
 // 让宽屏设置可以直接悬浮在打开前的页面之上，而不是再压一层路由页。
 // - 本组件只负责内容与折叠状态，不持有导航栈；
 // - 唯一关闭入口是 onRequestClose 回调，由外壳注入
-//   （窄屏路由外壳注入 safePopWithStack，宽屏悬浮层注入 SettingsOverlayController.close()）。
-// - twoColumn=true 时用大号悬浮层布局：顶部搜索 + 两列折叠分组。
+//   （窄屏路由外壳注入 safePopWithStack，宽屏模态浮层注入 SettingsOverlayController.close()）。
+// - twoColumn=true 时用大号浮层布局：顶部搜索 + 两列折叠分组。
+//   是否两列由 SettingsOverlayController 按 Core 的 primaryNavigationPlacement 决定，
+//   只有一级导航在 Side（>=840vp）才两列，Bottom 那档用单列。
 // 设置内容、保存逻辑、主题逻辑仍然全部走现有 SettingsViewModel 和 backend。
 
 import { promptAction } from '@kit.ArkUI'
@@ -45,7 +47,11 @@ interface SettingsSelectOption {
 export struct SettingsContent {
   // Issue #825：唯一的关闭入口回调。内容组件自己不碰导航栈。
   @Param onRequestClose: () => void = () => {}
-  // Issue #825：宽屏大号悬浮层用两列排折叠分组；窄屏路由页保持单列。
+  // Issue #825：是否由宽屏模态浮层承载（标题 + 关闭 + 搜索由本组件自己画）。
+  // 窄屏路由页传 false，标题栏由 NavDestination 承载。
+  @Param overlayLayout: boolean = false
+  // Issue #825 复核第3项：只有 Core 判定一级导航在 Side（>=840vp）才两列；
+  // 600–839vp 那档 Workbench 但一级导航仍是 Bottom，浮层用单列。
   @Param twoColumn: boolean = false
 
   // 问题9：ViewModel — 所有 Core/NAPI 调用和状态管理都在这里（@ObservedV2 + @Trace）
@@ -182,12 +188,13 @@ export struct SettingsContent {
 
   // Issue #825：设置内容的唯一根 Builder。
   // 窄屏由 SettingsScreen 的 NavDestination/HdsSettingsDestination 外壳调用，
-  // 宽屏由 SettingsOverlayHost 以 twoColumn=true 调用。
+  // 宽屏由 SettingsOverlayPanel 调用：overlayLayout 决定用浮层外壳（标题 + 关闭 + 搜索），
+  // twoColumn 决定分组是排两列还是单列。
   @Builder
   NavContent() {
     Column() {
-      // ── 顶部 Header：宽屏悬浮层有标题和搜索，窄屏路由页才有搜索框 ──
-      if (this.twoColumn) {
+      // ── 顶部 Header：宽屏浮层有标题、关闭和搜索，窄屏路由页才有搜索框 ──
+      if (this.overlayLayout) {
         this.OverlaySettingsHeader()
       } else if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
         this.WideSettingsHeader()
@@ -208,15 +215,15 @@ export struct SettingsContent {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        // 问题3：宽屏/窄屏分支
-        // 宽屏 (isTwoPane)：恢复 #760 之前的完整设置列表布局
-        // 窄屏 (!isTwoPane)：保留折叠分类布局
+        // 宽屏浮层：两列（>=840vp，一级导航在 Side）或单列（600–839vp，一级导航仍是 Bottom）；
+        // 单列沿用折叠分组列表，和窄屏路由页同一套展开逻辑。
+        // 路由页宽屏 (sizeClass 非 Compact)：#760 之前的完整设置列表布局。
         if (this.twoColumn) {
           this.TwoColumnSettingsLayout()
-        } else if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          this.WideScreenLayout()
-        } else {
+        } else if (this.overlayLayout || this.adaptiveState.sizeClass === WidthClass.Compact) {
           this.CompactScreenLayout()
+        } else {
+          this.WideScreenLayout()
         }
       }
     }

@@ -25,17 +25,21 @@ import QtQuick.Layouts
 Dialog {
     id: root
     modal: true
-    // Issue #825：宽屏 Workbench 用大号悬浮面板（顶部搜索 + 两列分组），
-    // 窄屏保持原来的 640 宽对话框。两边都是 Dialog + Overlay.overlay，
-    // 悬浮在打开设置前的那一页之上，不改成路由页。
-    readonly property bool widePanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
+    // Issue #825：设置一直是 Dialog + Overlay.overlay，悬浮在打开设置前的那一页之上，
+    // 不改成路由页。面板尺寸分两档：
+    // - widePanel（primaryNavigationPlacement === Side，>=840vp）：大号面板，顶部搜索 + 两列分组。
+    // - 其余（含 600–839vp 那档 Workbench 但一级导航仍在 Bottom）：单列分组，
+    //   宽度是「不超过 640 的窄对话框」再按窗口收窄，不再拆两列。
+    // 两档判定都直接读 Core 下发的 primaryNavigationPlacement，平台不自己猜宽度。
+    readonly property bool widePanel: layoutPlan && layoutPlan.primaryNavigationPlacement === "Side"
+    readonly property bool overlayPanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     readonly property int widePanelMaxWidth: 1120
     // Issue #825 复核第4项：Workbench 从 600vp 宽就成立，之前 Math.max(720, ...) 的下限
-    // 会让 700vp 窗口里弹出比窗口还宽的面板。下限改成窄对话框的 640 收窄档，
-    // 实际宽度一律先减掉两侧留白再夹到 [640, widePanelMaxWidth]。
+    // 会让 700vp 窗口里弹出比窗口还宽的面板。宽度一律先减掉两侧留白再夹上限。
     width: root.widePanel
            ? Math.max(400, Math.min(root.widePanelMaxWidth, (parent ? parent.width : 1120) - dt.sp64))
-           : 640
+           : Math.min(640, (parent ? parent.width : 640) - dt.sp64)
+    // 复核第3项：非 Side 档不做两列大面板，高度回到窄对话框那一套。
     height: root.widePanel
             ? Math.max(420, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
             : Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
@@ -208,7 +212,7 @@ Dialog {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        height: root.widePanel ? 72 : 64
+        height: root.overlayPanel ? 72 : 64
         color: "transparent"
         RowLayout {
             anchors.fill: parent
@@ -222,14 +226,15 @@ Dialog {
                 font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.Bold
-                Layout.fillWidth: !root.widePanel
-                Layout.leftMargin: root.widePanel ? dt.sp8 : 0
+                Layout.fillWidth: !root.overlayPanel
+                Layout.leftMargin: root.overlayPanel ? dt.sp8 : 0
             }
-            // Issue #825：宽屏顶部搜索。窄屏保持原来的窄对话框布局，不加搜索框。
+            // Issue #825：浮层（Workbench）顶部搜索。600–839vp 那档虽然不拆两列，
+            // 但仍是浮层，保留搜索。纯窄屏路由保持原来的窄对话框布局，不加搜索框。
             AppTextField {
                 id: settingsSearchField
                 dt: root.dt
-                visible: root.widePanel
+                visible: root.overlayPanel
                 Layout.fillWidth: true
                 Layout.maximumWidth: 420
                 Layout.alignment: Qt.AlignVCenter

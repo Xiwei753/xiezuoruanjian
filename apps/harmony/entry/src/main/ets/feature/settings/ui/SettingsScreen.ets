@@ -1,7 +1,7 @@
 // SettingsScreen — 设置页路由外壳（窄屏专用）。
 // Issue #825：设置内容已抽到 SettingsContent.ets。
 // - 宽屏（WorkspaceLayoutMode.Workbench）不再走这条路由：
-//   设置由 SettingsOverlayHost 以大号模态悬浮层挂在三个 tab 的 Navigation 之上，
+//   设置由 SettingsOverlayPanel 作为窗口层级 custom dialog 挂在当前页面之上，
 //   背景仍是打开设置前的页面；见 SettingsOverlayController。
 // - 窄屏继续保持原来的 Routes.Settings 路由页行为，只是内容换成 SettingsContent。
 // 内容、保存逻辑、主题逻辑都仍然在 SettingsContent / SettingsViewModel 里，这里不复制业务状态。
