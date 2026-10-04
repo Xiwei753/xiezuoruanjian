@@ -117,9 +117,20 @@ impl LinuxEditorAnimationCoordinator {
 /// 新字刚被遮罩裁掉、同时它后面被挤动的字又要把新位置让出来）。
 /// 重叠区间会让 `qt_text_node` 的 complement 计算出负宽度，所以按 y 带分组
 /// 后逐段合并 x 区间。
+/// Issue #826 评论 5: 标准区间合并。
+///
+/// 三条硬规则，任何一条破坏都会让静态正文出现空洞或误裁：
+/// 1. 只在**同一视觉行**（`y` / `h` 相同）且**同一 `snapshot_id`** 的组内处理。
+///    跨 `snapshot_id` 合并会破坏 renderer 的纹理缺失回退规则：snapshot A 纹理存在、
+///    snapshot B 纹理缺失时，合并并挂到 A 上会让 B 那块静态正文被裁掉，而 B 的动画
+///    glyph 又画不出来。
+/// 2. 只合并**相交或相邻**的区间（`next_left <= current_right + EPS`）。
+///    有 gap 就另起一条，否则中间的正常正文会被整段挖掉。
+/// 3. **每一组**都执行 sweep，不只处理第一条。
 fn merge_clip_rects(
     rects: Vec<(f64, f64, f64, f64, LineSnapshotId)>,
 ) -> Vec<(f64, f64, f64, f64, LineSnapshotId)> {
+    const EPS: f64 = 1e-6;
     let mut kept: Vec<(f64, f64, f64, f64, LineSnapshotId)> = rects
         .into_iter()
         .filter(|&(_, _, w, h, _)| w > 0.0 && h > 0.0)
@@ -127,26 +138,42 @@ fn merge_clip_rects(
     if kept.len() <= 1 {
         return kept;
     }
-    // 以第一个 rect 的 y 带为基准做合并。行高在同一 snapshot 内一致，
-    // 不同行的 rect 不会被错误合并 —— 保守起见只在 y 完全相同的组内合并。
-    let band_y = kept[0].1;
-    let band_h = kept[0].3;
-    let snapshot_id = kept[0].4;
-    let mut merged: Vec<(f64, f64, f64, f64, LineSnapshotId)> = Vec::new();
+    // 1. 按 (y, h, x) 排序：同一视觉行连续，行内 x 递增。
+    //    `LineSnapshotId` 没有 `Ord`，所以不把它排进 key；分组时改成扫「连续段」，
+    //    遇到 (snapshot_id, y, h) 任一不同就 flush 另起一条，效果等价且不会跨组合并。
+    kept.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut merged: Vec<(f64, f64, f64, f64, LineSnapshotId)> = Vec::with_capacity(kept.len());
+    let mut slot: Option<(f64, f64, f64, f64, LineSnapshotId)> = None;
     for (x, y, w, h, id) in kept {
-        if y != band_y || h != band_h {
-            merged.push((x, y, w, h, id));
+        let Some((cur_x, cur_y, cur_w, cur_h, cur_id)) = slot else {
+            slot = Some((x, y, w, h, id));
+            continue;
+        };
+        // 换组（不同 snapshot_id 或不同视觉行）：先把当前区间落盘，另起一条。
+        if cur_id != id || cur_y != y || cur_h != h {
+            merged.push((cur_x, cur_y, cur_w, cur_h, cur_id));
+            slot = Some((x, y, w, h, id));
             continue;
         }
-        match merged.iter_mut().find(|slot| slot.1 == y && slot.3 == h) {
-            Some(slot) => {
-                let right = (slot.0 + slot.2).max(x + w);
-                let left = slot.0.min(x);
-                slot.0 = left;
-                slot.2 = right - left;
-            }
-            None => merged.push((x, y, w, h, snapshot_id)),
+        let cur_right = cur_x + cur_w;
+        // 相交或相邻才合并；有 gap 就保留两条。
+        if x <= cur_right + EPS {
+            let left = cur_x.min(x);
+            let right = cur_right.max(x + w);
+            slot = Some((left, cur_y, right - left, cur_h, cur_id));
+        } else {
+            merged.push((cur_x, cur_y, cur_w, cur_h, cur_id));
+            slot = Some((x, y, w, h, id));
         }
+    }
+    if let Some(rect) = slot {
+        merged.push(rect);
     }
     merged
 }

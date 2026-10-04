@@ -16,6 +16,7 @@ use crate::sujian_editor_item::animation::coordinator::{
 };
 use crate::sujian_editor_item::edit_motion::{CursorRect, EditorAnimationKind};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
 };
@@ -353,4 +354,106 @@ fn finish_edit_frontier_snaps_to_canonical() {
 fn layout_snapshot_test_helper_is_reachable() {
     // 防止 `LayoutRevision` import 在本文件变成未使用。
     let _ = LayoutRevision::next();
+}
+
+// ── Issue #826 评论 5：merge_clip_rects 的两条回归 ──────────────────────────
+
+/// 同一行的两个 clip 之间有 gap 时，绝不能合成一个大区间把中间的正常正文挖掉。
+///
+/// 旧实现无条件做 min/max 合并，x 10..20 与 x 40..50 会变成 x 10..50。
+#[test]
+fn merge_clip_rects_keeps_gap_between_intervals() {
+    let id = LineSnapshotId::new(0, 0, 0);
+    let merged = super::merge_clip_rects(vec![
+        (10.0, 0.0, 10.0, 20.0, id),
+        (40.0, 0.0, 10.0, 20.0, id),
+    ]);
+    assert_eq!(
+        merged.len(),
+        2,
+        "同一行两个有 gap 的 clip 必须保持两条，实际合并成 {} 条",
+        merged.len()
+    );
+    let mut xs: Vec<f64> = merged.iter().map(|r| r.0).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    assert!(
+        (xs[0] - 10.0).abs() < 1e-9,
+        "第一条起点应是 10，实际 {}",
+        xs[0]
+    );
+    assert!(
+        (xs[1] - 40.0).abs() < 1e-9,
+        "第二条起点应是 40，实际 {}",
+        xs[1]
+    );
+}
+
+/// 同一 y / h 但 snapshot_id 不同的 clip 不得合并。
+///
+/// 合并并挂到某个 snapshot_id 上会破坏 renderer 的纹理缺失回退规则：
+/// snapshot A 纹理存在、snapshot B 纹理缺失时，B 那块静态正文会被误裁，
+/// 而 B 的动画 glyph 又画不出来，直接出现空洞。
+#[test]
+fn merge_clip_rects_never_crosses_snapshot_id() {
+    let id_a = LineSnapshotId::new(0, 0, 1);
+    let id_b = LineSnapshotId::new(0, 0, 2);
+    // 刻意让两条区间重叠，如果忽略 snapshot_id 就会被合成一条。
+    let merged = super::merge_clip_rects(vec![
+        (10.0, 0.0, 20.0, 20.0, id_a),
+        (15.0, 0.0, 20.0, 20.0, id_b),
+    ]);
+    assert_eq!(
+        merged.len(),
+        2,
+        "不同 snapshot_id 的 clip 不得合并，实际 {} 条",
+        merged.len()
+    );
+    assert!(
+        merged.iter().all(|r| r.4 == id_a || r.4 == id_b),
+        "合并结果必须保留各自的 snapshot_id"
+    );
+}
+
+/// 相交 / 相邻的同组 clip 仍然要真正合并成一条（正向断言）。
+#[test]
+fn merge_clip_rects_merges_overlapping_same_group() {
+    let id = LineSnapshotId::new(0, 0, 3);
+    let merged = super::merge_clip_rects(vec![
+        (10.0, 0.0, 20.0, 20.0, id),
+        (25.0, 0.0, 10.0, 20.0, id),
+    ]);
+    assert_eq!(
+        merged.len(),
+        1,
+        "相交区间必须合并成一条，实际 {} 条",
+        merged.len()
+    );
+    assert!((merged[0].0 - 10.0).abs() < 1e-9, "合并后起点应是 10");
+    assert!(
+        (merged[0].2 - 25.0).abs() < 1e-9,
+        "合并后宽度应到 35，实际 {}",
+        merged[0].2
+    );
+}
+
+/// 多行 clip 每行都要各自做区间合并（不能只处理第一行）。
+#[test]
+fn merge_clip_rects_processes_every_band() {
+    let id = LineSnapshotId::new(0, 0, 4);
+    let merged = super::merge_clip_rects(vec![
+        (10.0, 0.0, 10.0, 20.0, id),
+        (15.0, 0.0, 10.0, 20.0, id),
+        (10.0, 40.0, 10.0, 20.0, id),
+        (15.0, 40.0, 10.0, 20.0, id),
+    ]);
+    assert_eq!(
+        merged.len(),
+        2,
+        "两行各合并成一条，实际 {} 条",
+        merged.len()
+    );
+    let mut bands: Vec<f64> = merged.iter().map(|r| r.1).collect();
+    bands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    assert!((bands[0] - 0.0).abs() < 1e-9, "第一行 y 应是 0");
+    assert!((bands[1] - 40.0).abs() < 1e-9, "第二行 y 应是 40");
 }

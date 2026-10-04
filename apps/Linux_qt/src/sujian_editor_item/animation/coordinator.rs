@@ -244,18 +244,16 @@ impl LinuxEditorAnimationCoordinator {
         // 用**前沿已累计的** burst 范围（old_range / new_range），而不是单笔的
         // deleted/inserted —— 同一轮连打时，先前插入的字仍由前沿负责吐字，
         // 不能被 Reflow 抢走。
-        let excluded_old: Vec<(usize, usize)> = self
-            .active_edit_frontier
-            .as_ref()
-            .and_then(|f| f.old_range)
-            .into_iter()
-            .chain(request.deleted_ranges.iter().copied().filter(|(s, e)| {
-                self.active_edit_frontier
-                    .as_ref()
-                    .and_then(|f| f.old_range)
-                    .is_none_or(|acc| !(acc.0 <= *s && *e <= acc.1))
-            }))
-            .collect();
+        // Issue #826 评论 5: 两侧 exclusion 各自只使用自己所在 revision 的坐标。
+        //
+        // `excluded_old` 属于 `request.base_snapshot`（本次编辑前的旧正文）坐标系，
+        // 而 `active_edit_frontier.old_range` 固定在**burst 最初** base_snapshot 坐标系。
+        // 两者不能直接拿来 overlaps：`ABCDEF` 连删 D、E 时 frontier.old_range 累计成
+        // burst 初始坐标 [3,5]，但在第二次的 current old 坐标（`ABCEF`）里 [3,5] 是 E+F，
+        // 会把本该参与回流的 F 误当 changed text 排除掉、导致 F 直接瞬移。
+        // 所以旧侧只用本次 `deleted_ranges`；若将来还有别的旧侧 overlay 需要排除，
+        // 必须先显式 map 到 `request.base_text` 坐标再传入。
+        let excluded_old: Vec<(usize, usize)> = request.deleted_ranges.clone();
         let excluded_new: Vec<(usize, usize)> = self
             .active_edit_frontier
             .as_ref()
