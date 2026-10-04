@@ -143,7 +143,15 @@ pub enum EditorCommand {
 pub struct DisplayPatch {
     pub base_revision: EditorRevision,
     pub new_revision: EditorRevision,
+    /// Issue #826 评论 9 阻塞 1：被替换掉的旧文档区间（**base / old 坐标**）。
     pub replace_byte_range: Utf8ByteRange,
+    /// Issue #826 评论 9 阻塞 1：这条 patch 插入的内容在**最终 new revision** 中的
+    /// 准确 byte range；纯 Delete 时允许零长。
+    ///
+    /// 平台端**不允许**再用 `replace_byte_range.start + inserted_text.len()` 推这个
+    /// 坐标：一笔 batch 里前一处替换变长后，后一处在 new 坐标里已经右移。
+    /// Core 在生成 `TextEditDelta` 时就已经有精确的 `new_range`，直接透出。
+    pub inserted_byte_range: Utf8ByteRange,
     pub inserted_text: String,
     pub resulting_selection_byte_range: Utf8ByteRange,
 }

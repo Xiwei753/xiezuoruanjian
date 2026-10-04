@@ -388,6 +388,7 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::point(byte_offset),
+            inserted_byte_range: Utf8ByteRange::from_ordered(byte_offset, byte_offset + text.len()),
             inserted_text: text.to_string(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
@@ -485,6 +486,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            // Issue #826 评论 9 阻塞 1：纯删除的 inserted 区间是零长。
+            inserted_byte_range: Utf8ByteRange::point(byte_start),
             inserted_text: String::new(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
@@ -583,6 +586,10 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            inserted_byte_range: Utf8ByteRange::from_ordered(
+                byte_start,
+                byte_start + replacement_text.len(),
+            ),
             inserted_text: replacement_text.to_string(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
@@ -682,6 +689,7 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::point(byte_offset),
+            inserted_byte_range: Utf8ByteRange::from_ordered(byte_offset, byte_offset + text.len()),
             inserted_text: text.clone(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
@@ -861,6 +869,10 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
+            inserted_byte_range: Utf8ByteRange::from_ordered(
+                byte_start,
+                byte_start + replacement_text.len(),
+            ),
             inserted_text: replacement_text.to_string(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
@@ -1080,6 +1092,10 @@ impl EditorKernel {
                 base_revision,
                 new_revision,
                 replace_byte_range: d.old_range,
+                // Issue #826 评论 9 阻塞 1：原子 batch 里每条 patch 的 inserted 区间
+                // 必须用 Core 自己算出的 new_range；前一处替换变长后，后一处在最终
+                // new 坐标里已经右移，不能用 replace_byte_range.start 推。
+                inserted_byte_range: d.new_range,
                 inserted_text: d.inserted_text.clone(),
                 resulting_selection_byte_range: EditorEditResult::selection_byte_range(
                     new_selection,
@@ -1421,6 +1437,10 @@ impl EditorKernel {
                 base_revision,
                 new_revision,
                 replace_byte_range: d.old_range,
+                // Issue #826 评论 9 阻塞 1：原子 batch 里每条 patch 的 inserted 区间
+                // 必须用 Core 自己算出的 new_range；前一处替换变长后，后一处在最终
+                // new 坐标里已经右移，不能用 replace_byte_range.start 推。
+                inserted_byte_range: d.new_range,
                 inserted_text: d.inserted_text.clone(),
                 resulting_selection_byte_range: EditorEditResult::selection_byte_range(
                     new_selection,

@@ -1620,8 +1620,12 @@ dictionary EditorByteRangeDto {
 dictionary DisplayPatchDto {
     u64 base_revision;
     u64 new_revision;
+    // 旧正文（base revision）里被替换的区间。
     u32 replace_byte_start;
     u32 replace_byte_end_exclusive;
+    // Issue #826 评论 9 阻塞 1：本条 patch 插入内容在最终新正文里的区间（纯删除为零长）。
+    u32 inserted_byte_start;
+    u32 inserted_byte_end_exclusive;
     string inserted_text;
     u32 resulting_selection_start;
     u32 resulting_selection_end;

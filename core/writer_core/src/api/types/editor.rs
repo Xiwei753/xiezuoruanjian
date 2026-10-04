@@ -233,8 +233,14 @@ impl From<OffsetMapDto> for crate::editor::OffsetMap {
 
 /// DisplayPatch DTO — 正文增量补丁。
 ///
-/// `replace_byte_start..replace_byte_end_exclusive` 在旧正文中
+/// `replace_byte_start..replace_byte_end_exclusive` 在**旧正文**（base revision）中
 /// 表示要被替换的范围。`inserted_text` 为替换后的新文本。
+///
+/// Issue #826 评论 9 阻塞 1：`inserted_byte_start..inserted_byte_end_exclusive` 是本条
+/// patch 插入的内容在**最终新正文**（new revision）中的准确区间，纯删除时为零长。
+/// 平台端**不允许**用 `replace_byte_start + inserted_text.len()` 推这个坐标：一笔 batch
+/// 里前一处替换变长后，后一处在新正文里已经右移。
+///
 /// `resulting_selection_start..resulting_selection_end` 为替换完成后的选区（半开区间）。
 ///
 /// 平台端 DisplayTextMirror 按 DisplayPatch 增量更新 SpannableStringBuilder，
@@ -246,6 +252,9 @@ pub struct DisplayPatchDto {
     pub new_revision: u64,
     pub replace_byte_start: u32,
     pub replace_byte_end_exclusive: u32,
+    /// Issue #826 评论 9 阻塞 1：本条 patch 插入内容在最终新正文中的区间（纯删除为零长）。
+    pub inserted_byte_start: u32,
+    pub inserted_byte_end_exclusive: u32,
     pub inserted_text: String,
     pub resulting_selection_start: u32,
     pub resulting_selection_end: u32,
@@ -260,6 +269,8 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
             new_revision: p.new_revision.value(),
             replace_byte_start: p.replace_byte_range.start().value() as u32,
             replace_byte_end_exclusive: p.replace_byte_range.end().value() as u32,
+            inserted_byte_start: p.inserted_byte_range.start().value() as u32,
+            inserted_byte_end_exclusive: p.inserted_byte_range.end().value() as u32,
             inserted_text: p.inserted_text,
             resulting_selection_start: p.resulting_selection_byte_range.start().value() as u32,
             resulting_selection_end: p.resulting_selection_byte_range.end().value() as u32,

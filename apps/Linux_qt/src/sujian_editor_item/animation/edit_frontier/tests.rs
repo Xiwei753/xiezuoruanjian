@@ -140,7 +140,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         now,
         160,
     );
-    assert_eq!(state.new_ranges, vec![(1, 2)]);
+    assert_eq!(state.new_ranges(), vec![(1, 2)]);
 
     // 第一笔：先在半程采样，再扩展。正文 "a" -> "ab"（在位置 1 插入 b）。
     let half = instant_at(now, 80);
@@ -152,7 +152,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         &prev_target_to_new,
         half,
     );
-    assert_eq!(state.new_ranges, vec![(1, 2)]);
+    assert_eq!(state.new_ranges(), vec![(1, 2)]);
 
     // 第二笔：正文 "ab" -> "abc"（在位置 2 插入 c）。
     // 第一次的 [1,2) 映射到新坐标仍是 [1,2)，本次新增 [2,3)，
@@ -165,10 +165,20 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         &prev_target_to_new,
         half,
     );
+    // Issue #826 评论 9 阻塞 3：相邻但来源不同的 track **不合并** ——
+    // 动画状态按编辑身份保存，静态 clip 层渲染时本来就会合并相邻矩形。
+    // 两段 track 合起来仍然覆盖整轮 burst 的新字范围，不会漏遮。
     assert_eq!(
-        state.new_ranges,
-        vec![(1, 3)],
-        "连续吐字必须累计整轮 burst 的新字范围，否则前一个字会被瞬间补全"
+        state.new_ranges(),
+        vec![(1, 2), (2, 3)],
+        "连续吐字必须把整轮 burst 的新字都留在遮罩里；相邻 track 保持各自身份"
+    );
+    assert!(
+        state
+            .reveal_tracks
+            .iter()
+            .all(|track| track.range.1 > track.range.0),
+        "每条 track 的 range 都必须非空"
     );
 }
 
@@ -190,7 +200,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         now,
         160,
     );
-    assert_eq!(state.old_ranges, vec![(3, 4)]);
+    assert_eq!(state.old_ranges(), vec![(3, 4)]);
 
     // 第二次删 E：base_text = "ABCDEF"，本次编辑前正文 = "ABCEF"，
     // 本次删除区间在 "ABCEF" 坐标里是 [3,4)（删掉 E）。
@@ -205,9 +215,9 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         instant_at(now, 80),
     );
     assert_eq!(
-        state.old_ranges,
-        vec![(3, 5)],
-        "第二次删除必须映射回 base 坐标再 union，不能靠数字碰巧一致"
+        state.old_ranges(),
+        vec![(3, 4), (4, 5)],
+        "第二次删除必须映射回 base 坐标；相邻 track 按编辑身份分开保存"
     );
     // base_snapshot 必须保持 burst 开始前的旧正文。
     assert_eq!(state.base_text, "ABCDEF");
@@ -231,8 +241,8 @@ fn extend_replace_accumulates_both_sides() {
         now,
         160,
     );
-    assert_eq!(state.old_ranges, vec![(3, 4)]);
-    assert_eq!(state.new_ranges, vec![(1, 2)]);
+    assert_eq!(state.old_ranges(), vec![(3, 4)]);
+    assert_eq!(state.new_ranges(), vec![(1, 2)]);
 
     let half = instant_at(now, 80);
     let base_to_current = OffsetMap::build("ABCDEF", "AXBCDEF");
@@ -247,9 +257,13 @@ fn extend_replace_accumulates_both_sides() {
         ConcealDirection::Backward,
         half,
     );
-    assert_eq!(state.old_ranges, vec![(3, 5)], "Replace 的旧侧必须累计");
     assert_eq!(
-        state.new_ranges,
+        state.old_ranges(),
+        vec![(3, 4), (4, 5)],
+        "Replace 的旧侧必须累计；相邻 track 保持各自身份"
+    );
+    assert_eq!(
+        state.new_ranges(),
         vec![(1, 2), (6, 7)],
         "Replace 的新侧也必须累计，否则新插入的字没有任何遮罩"
     );
@@ -272,12 +286,12 @@ fn disjoint_patches_stay_separate_ranges_and_paths() {
         160,
     );
     assert_eq!(
-        state.new_ranges.len(),
+        state.new_ranges().len(),
         2,
         "两段不相邻的 patch 必须保持两条，不能 union"
     );
     assert_eq!(
-        state.reveal_paths.len(),
+        state.reveal_tracks.len(),
         2,
         "每条不相邻 patch 各有自己的视觉路径"
     );
@@ -425,7 +439,10 @@ fn newline_only_insert_produces_no_frontier_segment() {
     let state =
         EditFrontierState::begin_insert(target, String::from("a\nb"), vec![(1, 2)], now, 160);
     assert!(
-        state.reveal_paths.iter().all(|p| p.segments.is_empty()),
+        state
+            .reveal_tracks
+            .iter()
+            .all(|t| t.path.segments.is_empty()),
         "只有换行符被插入时不应产生 FrontierMask，改由 Reflow 承担位置变化"
     );
     assert!(
@@ -470,9 +487,9 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         now,
         160,
     );
-    assert_eq!(state.conceal_paths.len(), 1);
+    assert_eq!(state.conceal_tracks.len(), 1);
     assert!(
-        (state.conceal_paths[0].segments[0].y - 20.0).abs() < 1e-9,
+        (state.conceal_tracks[0].path.segments[0].y - 20.0).abs() < 1e-9,
         "Backward 第一笔必须从第二行开始"
     );
 
@@ -495,22 +512,24 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         ConcealDirection::Backward,
         half,
     );
+    // Issue #826 评论 9 阻塞 3：新增的 C 与已吞掉的 DEF **不相邻**（DEF 已删，
+    // C 在它左边），所以是两条独立 track。第一条 track 的路径不受影响 ——
+    // 这正是「按编辑身份保存」要保证的：扩到上一行不会重绑已走过的那条。
     assert_eq!(
-        state.old_ranges,
-        vec![(2, 6)],
-        "old range 必须扩成跨两行的一段"
+        state.old_ranges(),
+        vec![(3, 6), (2, 3)],
+        "扩到上一行是新增 track，已吞的那段保持自己的 range"
     );
-    // 扩到上一行后，路径仍是「第二行 → 第一行」，新增段追加在尾部。
-    let paths = &state.conceal_paths;
-    assert_eq!(paths.len(), 1);
-    assert_eq!(paths[0].segments.len(), 2);
+    let paths: Vec<&FrontierPath> = state.conceal_tracks.iter().map(|t| &t.path).collect();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0].segments.len(), 1);
     assert!(
         (paths[0].segments[0].y - 20.0).abs() < 1e-9,
-        "视觉逆序：第一段仍是第二行"
+        "第一段 track 仍是第二行，视觉逆序"
     );
     assert!(
-        (paths[0].segments[1].y - 0.0).abs() < 1e-9,
-        "视觉逆序：第二段才是第一行（新增的 C 追加在尾部）"
+        (paths[1].segments[0].y - 0.0).abs() < 1e-9,
+        "新增 track 是第一行"
     );
 }
 
@@ -545,7 +564,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         160,
     );
     assert!(
-        (state.conceal_paths[0].segments[0].y - 0.0).abs() < 1e-9,
+        (state.conceal_tracks[0].path.segments[0].y - 0.0).abs() < 1e-9,
         "Forward 第一笔必须从第一行开始"
     );
 
@@ -560,12 +579,126 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         ConcealDirection::Forward,
         half,
     );
-    assert_eq!(state.old_ranges, vec![(0, 6)]);
-    let paths = &state.conceal_paths;
-    assert_eq!(paths[0].segments.len(), 2);
+    // 相邻（[0,3) 与 [3,6)）但来源不同 → 两条 track；第一条完全不受影响。
+    assert_eq!(state.old_ranges(), vec![(0, 3), (3, 6)]);
+    let paths: Vec<&FrontierPath> = state.conceal_tracks.iter().map(|t| &t.path).collect();
+    assert_eq!(paths.len(), 2);
     assert!(
         (paths[0].segments[0].y - 0.0).abs() < 1e-9,
-        "视觉正序：第一段仍是第一行，已走过的部分不会被重绑"
+        "第一条 track 仍是第一行，已走过的部分不会被重绑"
     );
-    assert!((paths[0].segments[1].y - 20.0).abs() < 1e-9);
+    assert!((paths[1].segments[0].y - 20.0).abs() < 1e-9);
+}
+
+/// Issue #826 评论 9 阻塞 3：多 patch 时 `travelled` 必须按 track 自己的身份继承，
+/// 不能靠平行数组的下标。
+///
+/// 场景：先有一笔 Insert 在同一行开两个不相邻的 track `[10,12)` / `[100,102)`，
+/// 两段都走完（`travelled == total_length`）。又来一笔 Insert 在正文**最前面**：
+/// - 已有两段被 OffsetMap 映射成 `[12,14)` / `[102,104)`，`travelled` 跟着自己走，仍是走完；
+/// - 新 patch `[0,2)` 开一条**新 track**，`travelled == 0`，**不能**继承任何旧进度。
+///
+/// 旧实现按下标搬数字：`normalize_ranges` 排序后是 `[0,2)` / `[12,14)` / `[102,104)`，
+/// 新 patch 落到下标 0 → 凭空拿到 `[10,12)` 的进度；而 `[102,104)` 落到下标 2 → 旧数组
+/// 只有 2 个元素，补 0，已经吐完的字重新被遮住。
+#[test]
+fn extend_insert_keeps_travelled_with_its_own_track() {
+    let now = Instant::now();
+    // 单行，三个 cluster 分别落在 10..12 / 100..102（未改动的部分）与最前面。
+    let wide = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![
+            cluster(0, 2, 0.0),
+            cluster(2, 10, 100.0),
+            cluster(10, 12, 200.0),
+            cluster(12, 100, 300.0),
+            cluster(100, 102, 400.0),
+            cluster(102, 110, 500.0),
+        ],
+    )]);
+
+    let mut state = EditFrontierState::begin_insert(
+        wide.clone(),
+        String::new(),
+        vec![(10, 12), (100, 102)],
+        now,
+        160,
+    );
+    assert_eq!(state.reveal_tracks.len(), 2);
+    assert!(state
+        .reveal_tracks
+        .iter()
+        .all(|track| track.travelled == 0.0));
+    // 路径必须真的非空，否则下面的 travelled 断言没有意义。
+    assert!(
+        state
+            .reveal_tracks
+            .iter()
+            .all(|track| track.path.total_length > 0.0),
+        "每条 track 的视觉路径长度必须为正"
+    );
+
+    // 模拟两段都已经走完。
+    for track in &mut state.reveal_tracks {
+        track.travelled = track.path.total_length;
+    }
+
+    // 又来一笔 Insert 在正文最前面（`[0,2)`），在动画未结束的半程 extend。
+    let half = instant_at(now, 80);
+    // old 正文长 110 byte，在最前面插入 2 byte：后续 range 整体右移 2。
+    let prev_target_to_new = OffsetMap::from_single_edit(110, (0, 0), 2);
+    state.extend_insert(
+        wide.clone(),
+        String::new(),
+        vec![(0, 2)],
+        &prev_target_to_new,
+        half,
+    );
+
+    let ranges: Vec<(usize, usize)> = state.reveal_tracks.iter().map(|t| t.range).collect();
+    assert_eq!(
+        state.reveal_tracks.len(),
+        3,
+        "新增 patch 必须开一条独立 track，而不是把旧 track 拆开；实际 ranges = {ranges:?}"
+    );
+    let travelled_of = |range: (usize, usize)| -> f64 {
+        state
+            .reveal_tracks
+            .iter()
+            .find(|track| track.range == range)
+            .map(|track| track.travelled)
+            .expect("track 必须存在")
+    };
+    assert!(
+        (travelled_of((0, 2)) - 0.0).abs() < 1e-9,
+        "新 patch 必须从 0 开始，不能继承前面任何 track 的进度"
+    );
+    assert!(
+        (travelled_of((12, 14))
+            - state
+                .reveal_tracks
+                .iter()
+                .find(|track| track.range == (12, 14))
+                .expect("track 必须存在")
+                .path
+                .total_length)
+            .abs()
+            < 1e-9,
+        "旧 track 的 travelled 必须跟着自己走完，不因新 patch 插到前面而回退"
+    );
+    assert!(
+        (travelled_of((102, 104))
+            - state
+                .reveal_tracks
+                .iter()
+                .find(|track| track.range == (102, 104))
+                .expect("track 必须存在")
+                .path
+                .total_length)
+            .abs()
+            < 1e-9,
+        "旧 track 的 travelled 必须跟着自己走完，不因数组下标移位而回退"
+    );
 }

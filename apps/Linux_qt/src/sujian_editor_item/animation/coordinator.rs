@@ -139,12 +139,23 @@ impl LinuxEditorAnimationCoordinator {
         };
         let duration_ms = u64::from(self.typing_animation_duration_ms);
 
-        // 连续同方向编辑才并入：种类相同，且当前前沿还没走完（走完了就是上一笔动画
-        // 已经结束，必须开新的）。
+        // 连续同方向编辑才并入：种类相同、吞字方向相同，且当前前沿还没走完
+        // （走完了就是上一笔动画已经结束，必须开新的）。
+        //
+        // Issue #826 评论 9 阻塞 4：Delete 键（Forward）之后立刻 Backspace
+        // （Backward）方向相反，必须另开一轮。否则 `extend_delete()` 会把
+        // `conceal_direction` 改掉并重建整条路径，已吞掉的视觉状态会被换到
+        // 另一端去。
         let can_extend = self
             .active_edit_frontier
             .as_ref()
-            .map(|frontier| frontier.kind.can_extend(kind) && !frontier.is_finished(request.now))
+            .map(|frontier| {
+                let same_conceal_direction = !kind.needs_old_overlay()
+                    || frontier.conceal_direction == request.conceal_direction;
+                frontier.kind.can_extend(kind)
+                    && same_conceal_direction
+                    && !frontier.is_finished(request.now)
+            })
             .unwrap_or(false);
 
         if can_extend {
@@ -258,7 +269,7 @@ impl LinuxEditorAnimationCoordinator {
         let carried_new: Vec<(usize, usize)> = self
             .active_edit_frontier
             .as_ref()
-            .map(|f| f.new_ranges.clone())
+            .map(|f| f.new_ranges())
             .unwrap_or_default();
         let excluded_new: Vec<(usize, usize)> = carried_new
             .iter()
@@ -440,7 +451,7 @@ impl LinuxEditorAnimationCoordinator {
             return Vec::new();
         };
         let mut ids: Vec<LineSnapshotId> = Vec::new();
-        for range in &frontier.old_ranges {
+        for range in frontier.old_ranges() {
             for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
                 if !ids.contains(&line.id) {
                     ids.push(line.id);
@@ -490,7 +501,7 @@ impl LinuxEditorAnimationCoordinator {
         };
         if let Some(frontier) = self.active_edit_frontier.as_ref() {
             if frontier.kind.needs_old_overlay() {
-                for range in &frontier.old_ranges {
+                for range in frontier.old_ranges() {
                     for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
                         push(line.id, &mut ids, &mut seen);
                     }
@@ -657,22 +668,30 @@ fn record_frontier_diagnostic(
     // Issue #826 评论 7：前沿不再有二维起点/目标，改为记录两条视觉路径的段数。
     fields.insert(
         "reveal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.reveal_paths.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.reveal_tracks.len()).unwrap_or(0)),
     );
     fields.insert(
         "conceal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.conceal_paths.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.conceal_tracks.len()).unwrap_or(0)),
     );
     fields.insert(
         "reveal_length".to_string(),
         serde_json::json!(frontier
-            .map(|f| f.reveal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .map(|f| f
+                .reveal_tracks
+                .iter()
+                .map(|t| t.path.total_length)
+                .sum::<f64>())
             .unwrap_or(0.0)),
     );
     fields.insert(
         "conceal_length".to_string(),
         serde_json::json!(frontier
-            .map(|f| f.conceal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .map(|f| f
+                .conceal_tracks
+                .iter()
+                .map(|t| t.path.total_length)
+                .sum::<f64>())
             .unwrap_or(0.0)),
     );
     fields.insert(
@@ -715,10 +734,18 @@ fn record_frontier_diagnostic(
         "anim_frontier: kind={} reveal_len={:.1} conceal_len={:.1} inserted={:?} deleted={:?}",
         kind.label(),
         frontier
-            .map(|f| f.reveal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .map(|f| f
+                .reveal_tracks
+                .iter()
+                .map(|t| t.path.total_length)
+                .sum::<f64>())
             .unwrap_or(0.0),
         frontier
-            .map(|f| f.conceal_paths.iter().map(|p| p.total_length).sum::<f64>())
+            .map(|f| f
+                .conceal_tracks
+                .iter()
+                .map(|t| t.path.total_length)
+                .sum::<f64>())
             .unwrap_or(0.0),
         request.inserted_ranges,
         request.deleted_ranges,

@@ -234,6 +234,10 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
+            inserted_byte_range: Utf8ByteRange::from_ordered(
+                replace_start,
+                replace_start + committed_text.len(),
+            ),
             inserted_text: committed_text.clone(),
             resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];

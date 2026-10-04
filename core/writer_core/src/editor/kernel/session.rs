@@ -43,6 +43,7 @@ impl EditorKernel {
             base_revision,
             new_revision,
             replace_byte_range: Utf8ByteRange::from_start_len(0, old_len),
+            inserted_byte_range: Utf8ByteRange::from_start_len(0, new_text.len()),
             inserted_text: new_text,
             resulting_selection_byte_range: Utf8ByteRange::point(resolved_cursor),
         }];

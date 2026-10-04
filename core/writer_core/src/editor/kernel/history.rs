@@ -80,6 +80,7 @@ impl EditorKernel {
                 base_revision,
                 new_revision,
                 replace_byte_range: d.new_range,
+                inserted_byte_range: d.old_range,
                 inserted_text: d.deleted_text.clone(),
                 resulting_selection_byte_range: EditorEditResult::selection_byte_range(
                     new_selection,
@@ -185,6 +186,7 @@ impl EditorKernel {
                 base_revision,
                 new_revision,
                 replace_byte_range: d.old_range,
+                inserted_byte_range: d.new_range,
                 inserted_text: d.inserted_text.clone(),
                 resulting_selection_byte_range: EditorEditResult::selection_byte_range(
                     new_selection,

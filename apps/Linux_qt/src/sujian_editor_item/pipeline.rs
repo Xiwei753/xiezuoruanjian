@@ -1755,7 +1755,13 @@ impl LinuxEditorPipeline {
                         target_snapshot: new_snap.clone(),
                         deleted_ranges: motion.deleted_ranges.clone(),
                         inserted_ranges: motion.inserted_ranges.clone(),
-                        offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
+                        // Issue #826 评论 9 阻塞 2：优先用 Core 给的精确映射。
+                        // replace-all / 多 delta batch 的 OffsetMap 能保留多个 unchanged island；
+                        // `OffsetMap::build` 只是最长公共前缀 + 最长公共后缀，中间整段都算改过，
+                        // 会让 unchanged 的字进不了 Reflow、直接跳到最终位置。
+                        offset_map: motion.offset_map.clone().unwrap_or_else(|| {
+                            OffsetMap::build(&motion.old_text, &motion.new_text)
+                        }),
                         base_text: motion.old_text.clone(),
                         target_text: motion.new_text.clone(),
                         conceal_direction: motion.conceal_direction(),

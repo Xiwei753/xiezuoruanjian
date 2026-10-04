@@ -151,6 +151,15 @@ pub(crate) enum PathDirection {
     Backward,
 }
 
+impl From<ConcealDirection> for PathDirection {
+    fn from(direction: ConcealDirection) -> Self {
+        match direction {
+            ConcealDirection::Forward => PathDirection::Forward,
+            ConcealDirection::Backward => PathDirection::Backward,
+        }
+    }
+}
+
 impl FrontierPath {
     /// 从 snapshot 里 `range` 覆盖的 cluster 按行进方向构建路径。
     ///
@@ -249,21 +258,20 @@ impl FrontierPath {
 /// - `old_ranges`：旧正文坐标系里本轮被删掉的范围（burst base 坐标系）。
 /// - `new_ranges`：最新正文坐标系里本轮新增的范围（最新 target 坐标系）。
 ///   两组都按 overlap / adjacent 归一化，**不会跨 gap 合并**。
-/// - `reveal_paths` / `conceal_paths`：每个 disjoint patch 一条视觉路径，与
-///   `new_ranges` / `old_ranges` 一一对应。
-/// - `reveal_travelled` / `conceal_travelled`：与路径一一对应的「已走过距离」。
-///   连续编辑时继承上一帧的采样值，所以「已经吐出来的字」不会因为下一笔而回退。
+/// - `reveal_tracks` / `conceal_tracks`：每个 disjoint patch 一条 track，
+///   track 自己拥有 range / path / travelled（评论 9 阻塞 3）。
+///   连续编辑时按 track 身份继承上一帧的已走过距离，所以「已经吐出来的字」
+///   不会因为下一笔而回退，也不会把进度串到别的 patch 上。
 #[derive(Clone, Debug)]
 pub(crate) struct EditFrontierState {
     pub kind: EditFrontierKind,
     pub base_snapshot: EditorLayoutSnapshot,
     pub target_snapshot: EditorLayoutSnapshot,
-    pub old_ranges: Vec<(usize, usize)>,
-    pub new_ranges: Vec<(usize, usize)>,
-    pub(crate) reveal_paths: Vec<FrontierPath>,
-    pub(crate) conceal_paths: Vec<FrontierPath>,
-    pub(crate) reveal_travelled: Vec<f64>,
-    pub(crate) conceal_travelled: Vec<f64>,
+    /// 吞字 track 集合（评论 9 阻塞 3）。每个 track 自己拥有 range / path / travelled，
+    /// 动画状态按**编辑身份**保存，不靠平行数组下标对齐。
+    pub(crate) conceal_tracks: Vec<ConcealTrack>,
+    /// 吐字 track 集合（评论 9 阻塞 3）。语义同 ConcealTrack。
+    pub(crate) reveal_tracks: Vec<RevealTrack>,
     /// 吞字路径的行进方向（评论 8 阻塞 1）。
     pub(crate) conceal_direction: ConcealDirection,
     pub started_at: Instant,
@@ -330,7 +338,48 @@ fn travelled(inherited: f64, total: f64, eased: f64) -> f64 {
     inherited + (total - inherited) * eased
 }
 
+/// Issue #826 评论 9 阻塞 3：吐字 track。
+///
+/// `range` / `path` / `travelled` **由同一个 track 自己拥有**，不再拆成三个平行
+/// `Vec` 靠下标对齐。评论里的反例说明为什么必须这样做：已有两段
+/// `[10,12]` / `[100,102]` 且都走完，又来一笔插入在正文最前面，新 range `[0,2]`
+/// 归一化排序后变成 `[0,2]` / `[12,14]` / `[102,104]` —— 按下标继承会让新 patch
+/// 凭空拿到旧 patch 的进度、而已走完的最后一段反而回到 0。
+#[derive(Clone, Debug)]
+pub(crate) struct RevealTrack {
+    /// 本 track 拥有的新文字范围（最新 target 坐标系）。
+    pub(crate) range: (usize, usize),
+    /// 本 track 的视觉路径（在最新 target snapshot 上重建）。
+    pub(crate) path: FrontierPath,
+    /// 已经走过的距离，跟随本 track 自身，不经过任何排序下标。
+    pub(crate) travelled: f64,
+}
+
+/// Issue #826 评论 9 阻塞 3：吞字 track。语义同 `RevealTrack`。
+#[derive(Clone, Debug)]
+pub(crate) struct ConcealTrack {
+    /// 本 track 拥有的旧文字范围（burst base 坐标系）。
+    pub(crate) range: (usize, usize),
+    /// 本 track 的视觉路径（在 burst base snapshot 上）。
+    pub(crate) path: FrontierPath,
+    /// 已经吞掉的距离，跟随本 track 自身。
+    pub(crate) travelled: f64,
+}
+
 impl EditFrontierState {
+    /// 本轮吞字的全部旧文字范围（burst base 坐标系）。
+    pub(crate) fn old_ranges(&self) -> Vec<(usize, usize)> {
+        self.conceal_tracks
+            .iter()
+            .map(|track| track.range)
+            .collect()
+    }
+
+    /// 本轮吐字的全部新文字范围（最新 target 坐标系）。
+    pub(crate) fn new_ranges(&self) -> Vec<(usize, usize)> {
+        self.reveal_tracks.iter().map(|track| track.range).collect()
+    }
+
     /// 开始一轮吐字。
     pub(crate) fn begin_insert(
         target_snapshot: EditorLayoutSnapshot,
@@ -339,19 +388,14 @@ impl EditFrontierState {
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let new_ranges = normalize_ranges(new_ranges);
-        let reveal_paths = build_reveal_paths(&target_snapshot, &new_ranges);
+        let reveal_tracks = build_reveal_tracks(&target_snapshot, &normalize_ranges(new_ranges));
         Self {
             kind: EditFrontierKind::Insert,
             // 纯吐字不需要旧正文 overlay，base_snapshot 与 target 相同。
             base_snapshot: target_snapshot.clone(),
             target_snapshot,
-            old_ranges: Vec::new(),
-            new_ranges,
-            reveal_travelled: vec![0.0; reveal_paths.len()],
-            reveal_paths,
-            conceal_paths: Vec::new(),
-            conceal_travelled: Vec::new(),
+            conceal_tracks: Vec::new(),
+            reveal_tracks,
             conceal_direction: ConcealDirection::Forward,
             started_at,
             duration_ms: duration_ms.max(1),
@@ -371,26 +415,20 @@ impl EditFrontierState {
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let old_ranges = normalize_ranges(old_ranges);
-        let conceal_paths = build_conceal_paths(&base_snapshot, &old_ranges, direction);
-        let mut state = Self {
+        let conceal_tracks =
+            build_conceal_tracks(&base_snapshot, &normalize_ranges(old_ranges), direction);
+        Self {
             kind: EditFrontierKind::Delete,
             base_snapshot,
             target_snapshot,
-            old_ranges,
-            new_ranges: Vec::new(),
-            reveal_paths: Vec::new(),
-            conceal_paths,
-            reveal_travelled: Vec::new(),
-            conceal_travelled: Vec::new(),
+            conceal_tracks,
+            reveal_tracks: Vec::new(),
             conceal_direction: direction,
             started_at,
             duration_ms: duration_ms.max(1),
             base_text,
             target_text,
-        };
-        state.conceal_travelled = vec![0.0; state.conceal_paths.len()];
-        state
+        }
     }
 
     /// 开始一轮替换。旧 overlay 收掉 + 新字 mask 打开共用同一个时间 progress，
@@ -407,20 +445,15 @@ impl EditFrontierState {
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let old_ranges = normalize_ranges(old_ranges);
-        let new_ranges = normalize_ranges(new_ranges);
-        let conceal_paths = build_conceal_paths(&base_snapshot, &old_ranges, direction);
-        let reveal_paths = build_reveal_paths(&target_snapshot, &new_ranges);
+        let conceal_tracks =
+            build_conceal_tracks(&base_snapshot, &normalize_ranges(old_ranges), direction);
+        let reveal_tracks = build_reveal_tracks(&target_snapshot, &normalize_ranges(new_ranges));
         Self {
             kind: EditFrontierKind::Replace,
             base_snapshot,
             target_snapshot,
-            old_ranges,
-            new_ranges,
-            reveal_travelled: vec![0.0; reveal_paths.len()],
-            conceal_travelled: vec![0.0; conceal_paths.len()],
-            reveal_paths,
-            conceal_paths,
+            conceal_tracks,
+            reveal_tracks,
             conceal_direction: direction,
             started_at,
             duration_ms: duration_ms.max(1),
@@ -429,14 +462,16 @@ impl EditFrontierState {
         }
     }
 
-    /// 连续吐字并入同一个前沿：先采样当前前沿当新起点，再更新最新 target。
+    /// 连续吐字并入同一个前沿（评论 9 阻塞 3：按 track 自己的身份继承）。
     ///
-    /// Issue #826 评论 3 问题 1：已累计的遮罩范围在**上一次 target 坐标系**里，
-    /// 必须先用 `prev_target_to_new` 映射到最新坐标再合并，否则第一个字还没吐完
-    /// 就从遮罩范围里消失、被 canonical 瞬间补全。
+    /// 每条旧 track：
+    /// 1. 用 `prev_target_to_new` 映射它自己的 range；
+    /// 2. 在**最新 target snapshot** 上重建它自己的 path；
+    /// 3. `travelled` 跟着这条 track 本身走，不经过排序下标。
     ///
-    /// Issue #826 评论 8 阻塞 2/3：本次的 inserted ranges **全部**加入，
-    /// 归一化只合并 overlap / adjacent，绝不跨 gap。
+    /// 本次新增的 patch 开一条 `travelled = 0` 的新 track。相邻但来源不同的 track
+    /// 不合并 —— 静态 clip 层渲染时本来就会合并相邻矩形，没必要为了减少 state
+    /// 数量把动画 owner 也合掉。**动画状态按编辑身份保存；渲染阶段再合并几何。**
     pub(crate) fn extend_insert(
         &mut self,
         target_snapshot: EditorLayoutSnapshot,
@@ -445,22 +480,42 @@ impl EditFrontierState {
         prev_target_to_new: &OffsetMap,
         now: Instant,
     ) {
-        self.inherit_travelled(now);
-        let carried = map_ranges_forward(&self.new_ranges, prev_target_to_new);
+        let eased = ease_out_cubic(self.sample(now).progress);
+        let mut next: Vec<RevealTrack> = Vec::with_capacity(self.reveal_tracks.len() + 1);
+        for track in &self.reveal_tracks {
+            let Some(range) = prev_target_to_new.map_old_range_to_new(track.range.0, track.range.1)
+            else {
+                continue;
+            };
+            let path = FrontierPath::build(&target_snapshot, range, PathDirection::Forward);
+            let next_travelled = travelled(track.travelled, path.total_length, eased);
+            next.push(RevealTrack {
+                range,
+                path,
+                travelled: next_travelled,
+            });
+        }
+        for range in normalize_ranges(inserted_ranges) {
+            if next.iter().any(|track| overlaps(range, track.range)) {
+                continue;
+            }
+            next.push(RevealTrack {
+                range,
+                path: FrontierPath::build(&target_snapshot, range, PathDirection::Forward),
+                travelled: 0.0,
+            });
+        }
         self.target_snapshot = target_snapshot;
-        self.new_ranges = normalize_ranges(merge_all(carried, inserted_ranges));
         self.target_text = target_text;
-        self.rebase_reveal_paths();
+        self.reveal_tracks = next;
         self.started_at = now;
     }
 
-    /// 连续吞字并入同一个前沿。
+    /// 连续吞字并入同一个前沿（评论 9 阻塞 3）。
     ///
-    /// `base_snapshot` **保持不变**：overlay 必须画本轮连续删除开始前的旧文字。
-    ///
-    /// Issue #826 评论 3 问题 2：`old_ranges` 一直用 burst 最初 `base_snapshot` 的
-    /// 坐标系，而本次传入的 `old_ranges` 属于「这一次编辑前」的 snapshot。
-    /// 所以先用 `base_to_current` 把本次范围映射回 base 坐标再归一化合并。
+    /// 旧 track 本来就在 burst base 坐标系里，**range 与 path 都不需要重建**，
+    /// 只需要让 `travelled` 推进一帧。本次传入的 `deleted_ranges` 属于
+    /// 「这一次编辑前」的文本，先用 `base_to_current` 映回 base 坐标再开新 track。
     pub(crate) fn extend_delete(
         &mut self,
         target_snapshot: EditorLayoutSnapshot,
@@ -470,21 +525,42 @@ impl EditFrontierState {
         direction: ConcealDirection,
         now: Instant,
     ) {
-        self.inherit_travelled(now);
-        // 已累计的 old_ranges 本来就在 burst base 坐标系里，不需要再映射；
-        // 只有本次传入的 deleted_ranges（属于「这一次编辑前」的文本）要映回 base。
-        let mapped_incoming = map_ranges_backward(&deleted_ranges, base_to_current);
+        let eased = ease_out_cubic(self.sample(now).progress);
+        let mut next: Vec<ConcealTrack> = Vec::with_capacity(self.conceal_tracks.len() + 1);
+        for track in &self.conceal_tracks {
+            next.push(ConcealTrack {
+                range: track.range,
+                path: track.path.clone(),
+                travelled: travelled(track.travelled, track.path.total_length, eased),
+            });
+        }
+        let incoming = normalize_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        for range in incoming {
+            if next.iter().any(|track| overlaps(range, track.range)) {
+                continue;
+            }
+            next.push(ConcealTrack {
+                range,
+                path: FrontierPath::build(
+                    &self.base_snapshot,
+                    range,
+                    PathDirection::from(direction),
+                ),
+                travelled: 0.0,
+            });
+        }
         self.target_snapshot = target_snapshot;
-        self.old_ranges = normalize_ranges(merge_all(self.old_ranges.clone(), mapped_incoming));
         self.target_text = target_text;
         self.conceal_direction = direction;
-        self.rebase_conceal_paths();
+        self.conceal_tracks = next;
         self.started_at = now;
     }
 
-    /// 连续替换并入同一个前沿：old 侧与 new 侧**都**累计（评论 8 阻塞 2）。
+    /// 连续替换并入同一个前沿：old 侧与 new 侧**都**按 track 身份累计
+    /// （评论 8 阻塞 2 + 评论 9 阻塞 3）。
     ///
-    /// 同一帧只 sample 一次，两侧继承同一份已走过距离，然后只重置一次 `started_at`。
+    /// 同一帧只 sample 一次，两侧共用同一份 eased 进度，然后只重置一次 `started_at`。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extend_replace(
         &mut self,
         target_snapshot: EditorLayoutSnapshot,
@@ -496,50 +572,67 @@ impl EditFrontierState {
         direction: ConcealDirection,
         now: Instant,
     ) {
-        self.inherit_travelled(now);
-        let carried_old = self.old_ranges.clone();
-        let mapped_old_incoming = map_ranges_backward(&deleted_ranges, base_to_current);
-        let carried_new = map_ranges_forward(&self.new_ranges, prev_target_to_new);
+        let eased = ease_out_cubic(self.sample(now).progress);
+
+        // old 侧：identity 与 path 不变（burst base 坐标），只推进 travelled。
+        let mut conceal: Vec<ConcealTrack> = self
+            .conceal_tracks
+            .iter()
+            .map(|track| ConcealTrack {
+                range: track.range,
+                path: track.path.clone(),
+                travelled: travelled(track.travelled, track.path.total_length, eased),
+            })
+            .collect();
+        let incoming_old = normalize_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        for range in incoming_old {
+            if conceal.iter().any(|track| overlaps(range, track.range)) {
+                continue;
+            }
+            conceal.push(ConcealTrack {
+                range,
+                path: FrontierPath::build(
+                    &self.base_snapshot,
+                    range,
+                    PathDirection::from(direction),
+                ),
+                travelled: 0.0,
+            });
+        }
+
+        // new 侧：每条旧 track 映射自己的 range 到最新 target，再重建自己的 path。
+        let mut reveal: Vec<RevealTrack> = Vec::with_capacity(self.reveal_tracks.len() + 1);
+        for track in &self.reveal_tracks {
+            let Some(range) = prev_target_to_new.map_old_range_to_new(track.range.0, track.range.1)
+            else {
+                continue;
+            };
+            let path = FrontierPath::build(&target_snapshot, range, PathDirection::Forward);
+            let next_travelled = travelled(track.travelled, path.total_length, eased);
+            reveal.push(RevealTrack {
+                range,
+                path,
+                travelled: next_travelled,
+            });
+        }
+        for range in normalize_ranges(inserted_ranges) {
+            if reveal.iter().any(|track| overlaps(range, track.range)) {
+                continue;
+            }
+            reveal.push(RevealTrack {
+                range,
+                path: FrontierPath::build(&target_snapshot, range, PathDirection::Forward),
+                travelled: 0.0,
+            });
+        }
+
         self.target_snapshot = target_snapshot;
-        self.old_ranges = normalize_ranges(merge_all(carried_old, mapped_old_incoming));
-        // inserted_ranges 已经落在最新 target 坐标系里，直接加入即可。
-        self.new_ranges = normalize_ranges(merge_all(carried_new, inserted_ranges));
         self.target_text = target_text;
         self.conceal_direction = direction;
-        self.rebase_conceal_paths();
-        self.rebase_reveal_paths();
+        self.conceal_tracks = conceal;
+        self.reveal_tracks = reveal;
         self.started_at = now;
     }
-
-    /// 连续编辑继承上一帧的「已走过距离」。
-    ///
-    /// 路径数量可能因本次扩展而增加/减少，所以按**路径内含的 segment 区间**
-    /// 做保守继承：长度不足时补 0，超出的截断。已走过的部分不会因为
-    /// 下一笔而回退到别的字符上。
-    fn inherit_travelled(&mut self, now: Instant) {
-        let eased = ease_out_cubic(self.sample(now).progress);
-        self.reveal_travelled = advance(&self.reveal_paths, &self.reveal_travelled, eased);
-        self.conceal_travelled = advance(&self.conceal_paths, &self.conceal_travelled, eased);
-    }
-
-    fn rebase_reveal_paths(&mut self) {
-        let paths = build_reveal_paths(&self.target_snapshot, &self.new_ranges);
-        let travelled = carry_travelled(&self.reveal_travelled, &paths);
-        self.reveal_paths = paths;
-        self.reveal_travelled = travelled;
-    }
-
-    fn rebase_conceal_paths(&mut self) {
-        let paths = build_conceal_paths(
-            &self.base_snapshot,
-            &self.old_ranges,
-            self.conceal_direction,
-        );
-        let travelled = carry_travelled(&self.conceal_travelled, &paths);
-        self.conceal_paths = paths;
-        self.conceal_travelled = travelled;
-    }
-
     /// 采样当前帧前沿。
     pub(crate) fn sample(&self, now: Instant) -> EditFrontierSample {
         let elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as f64;
@@ -568,16 +661,14 @@ impl EditFrontierState {
     ///
     /// Issue #826 评论 7/8：边界来自**视觉路径**而不是一个二维 CursorRect。
     pub(crate) fn hidden_new_text_rects(&self, sample: &EditFrontierSample) -> Vec<FrontierRect> {
-        if self.new_ranges.is_empty() || !sample.masks_new_text() {
+        if self.reveal_tracks.is_empty() || !sample.masks_new_text() {
             return Vec::new();
         }
         let eased = ease_out_cubic(sample.progress);
         let mut rects = Vec::new();
-        for (path_index, (range, path)) in
-            self.new_ranges.iter().zip(&self.reveal_paths).enumerate()
-        {
-            let inherited = inherited_for(&self.reveal_travelled, path_index, path);
-            let distance = travelled(inherited, path.total_length, eased);
+        for track in &self.reveal_tracks {
+            let (range, path) = (track.range, &track.path);
+            let distance = travelled(track.travelled, path.total_length, eased);
             let bounds = path.reveal_bounds(distance);
             for line in self.target_snapshot.lines_in_byte_range(range.0, range.1) {
                 let Some(seg_index) = path.segment_index_for_line(line.id) else {
@@ -618,16 +709,14 @@ impl EditFrontierState {
 
     /// 本帧旧正文 overlay 要保留的矩形（Delete / Replace 用）。
     pub(crate) fn old_overlay_rects(&self, sample: &EditFrontierSample) -> Vec<FrontierRect> {
-        if self.old_ranges.is_empty() || !sample.needs_old_overlay() {
+        if self.conceal_tracks.is_empty() || !sample.needs_old_overlay() {
             return Vec::new();
         }
         let eased = ease_out_cubic(sample.progress);
         let mut rects = Vec::new();
-        for (path_index, (range, path)) in
-            self.old_ranges.iter().zip(&self.conceal_paths).enumerate()
-        {
-            let inherited = inherited_for(&self.conceal_travelled, path_index, path);
-            let distance = travelled(inherited, path.total_length, eased);
+        for track in &self.conceal_tracks {
+            let (range, path) = (track.range, &track.path);
+            let distance = travelled(track.travelled, path.total_length, eased);
             let bounds = path.conceal_bounds(distance);
             for line in self.base_snapshot.lines_in_byte_range(range.0, range.1) {
                 let rect = match path.segment_index_for_line(line.id) {
@@ -663,12 +752,13 @@ impl EditFrontierState {
 
     /// 本帧旧正文 overlay 要画的 cluster（含 source / dest 矩形）。
     pub(crate) fn old_overlay_glyphs(&self, sample: &EditFrontierSample) -> Vec<FrontierGlyph> {
-        if self.old_ranges.is_empty() || !sample.needs_old_overlay() {
+        if self.conceal_tracks.is_empty() || !sample.needs_old_overlay() {
             return Vec::new();
         }
         let keep = self.old_overlay_rects(sample);
         let mut glyphs = Vec::new();
-        for range in &self.old_ranges {
+        for track in &self.conceal_tracks {
+            let range = track.range;
             for line in self.base_snapshot.lines_in_byte_range(range.0, range.1) {
                 for cluster in line.clusters_in_byte_range(range.0, range.1) {
                     let source = cluster.source_rect.clone();
@@ -735,23 +825,15 @@ fn normalize_ranges(ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     merged
 }
 
-fn merge_all(
-    mut current: Vec<(usize, usize)>,
-    incoming: Vec<(usize, usize)>,
-) -> Vec<(usize, usize)> {
-    current.extend(incoming);
-    current
+/// Issue #826 评论 9 阻塞 3：两个范围是否**真正重叠**（半开区间）。
+///
+/// 只用这个判据吸收新 patch —— 相邻但不重叠的 track 不合并。静态 clip 层
+/// 渲染时本来就会合并相邻矩形，没必要为了减少 state 数量把动画 owner 也合掉。
+fn overlaps(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
 }
 
-/// 把一组 range 从「旧文本坐标」映射到「新文本坐标」。
-fn map_ranges_forward(ranges: &[(usize, usize)], old_to_new: &OffsetMap) -> Vec<(usize, usize)> {
-    ranges
-        .iter()
-        .filter_map(|&(start, end)| old_to_new.map_old_range_to_new(start, end))
-        .collect()
-}
-
-/// 把一组 range 从「新文本坐标」映射回「旧文本坐标」。
+/// 把一批 range 映射回 burst base 坐标系（`new_to_old` 的方向）。
 fn map_ranges_backward(ranges: &[(usize, usize)], new_to_old: &OffsetMap) -> Vec<(usize, usize)> {
     ranges
         .iter()
@@ -759,66 +841,71 @@ fn map_ranges_backward(ranges: &[(usize, usize)], new_to_old: &OffsetMap) -> Vec
         .collect()
 }
 
-fn build_reveal_paths(
+/// 为每个新文字范围建一条吐字 track（吐字恒为正向视觉顺序）。
+fn build_reveal_tracks(
     snapshot: &EditorLayoutSnapshot,
     ranges: &[(usize, usize)],
-) -> Vec<FrontierPath> {
+) -> Vec<RevealTrack> {
     ranges
         .iter()
-        .map(|&range| FrontierPath::build(snapshot, range, PathDirection::Forward))
+        .map(|&range| RevealTrack {
+            range,
+            path: FrontierPath::build(snapshot, range, PathDirection::Forward),
+            travelled: 0.0,
+        })
         .collect()
 }
 
-fn build_conceal_paths(
+/// 为每个旧文字范围建一条吞字 track（方向由 Backspace / Delete 键决定）。
+fn build_conceal_tracks(
     snapshot: &EditorLayoutSnapshot,
     ranges: &[(usize, usize)],
     direction: ConcealDirection,
-) -> Vec<FrontierPath> {
-    let path_direction = match direction {
-        ConcealDirection::Forward => PathDirection::Forward,
-        ConcealDirection::Backward => PathDirection::Backward,
-    };
+) -> Vec<ConcealTrack> {
     ranges
         .iter()
-        .map(|&range| FrontierPath::build(snapshot, range, path_direction))
+        .map(|&range| ConcealTrack {
+            range,
+            path: FrontierPath::build(snapshot, range, PathDirection::from(direction)),
+            travelled: 0.0,
+        })
         .collect()
 }
 
-/// Issue #826: 前沿驱动的一枚 overlay glyph。
-#[derive(Clone, Debug, PartialEq)]
+/// Issue #826: 前沿驱动的单个旧正文 glyph。
+#[derive(Clone, Debug)]
 pub(crate) struct FrontierGlyph {
-    /// 取哪张行纹理。
     pub snapshot_id: LineSnapshotId,
-    /// 行内局部物理像素坐标。
+    /// 从旧行纹理里取这块的源矩形。
     pub source_rect: SourceRect,
-    /// 文档坐标。
+    /// 画在屏幕上的目标矩形（文档坐标）。
     pub dest_rect: SourceRect,
 }
 
 impl FrontierGlyph {
-    /// overlay 完全被吞掉（宽度为 0）时不需要画。
+    /// 本帧这块是否还要画。
     pub(crate) fn is_visible(&self) -> bool {
         self.dest_rect.w > 0.0 && self.dest_rect.h > 0.0
     }
 }
 
-/// 一行在文档坐标里的内容左右边界。
+/// 一行内容在文档坐标里的左右边界（物理像素转文档坐标）。
 fn line_content_x_extent(line: &PreparedLineSnapshot) -> (f64, f64) {
-    let mut left = f64::MAX;
-    let mut right = f64::MIN;
+    let mut left = f64::INFINITY;
+    let mut right = f64::NEG_INFINITY;
     for cluster in &line.clusters {
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         left = left.min(rect.x);
         right = right.max(rect.x + rect.w);
     }
-    if left < f64::MAX && right > f64::MIN {
-        (left, right)
-    } else {
+    if left > right {
         (line.visual_x, line.visual_x)
+    } else {
+        (left, right)
     }
 }
 
-/// 把一个 dest 矩形按 keep 矩形列表水平裁剪，返回裁完后的 `(x, w)` 列表。
+/// 把一个 glyph 的目标矩形按 keep 矩形裁成若干段 x 区间（返回 `(left, width)`）。
 fn clip_dest_to_rects(dest: SourceRect, keep: &[FrontierRect]) -> Vec<(f64, f64)> {
     let mut out = Vec::new();
     for rect in keep {
@@ -833,50 +920,6 @@ fn clip_dest_to_rects(dest: SourceRect, keep: &[FrontierRect]) -> Vec<(f64, f64)
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
     out
-}
-
-/// 路径重建后按比例继承已走过距离。
-///
-/// 路径数量可能变化（新 patch 追加进来）。这里不做跨路径对齐——每条路径
-/// 独立持有自己的 travelled 索引，新路径从 0 开始动画（它本来就是这一笔
-/// 新出现的 patch），旧路径按同索引继承。评论 8 阻塞 1 要求的
-/// 「已吞状态不迁移到别的字符」由**路径方向 + 按行匹配**保证，
-/// 不靠跨路径的像素距离对齐。
-fn carry_travelled(old: &[f64], new_paths: &[FrontierPath]) -> Vec<f64> {
-    new_paths
-        .iter()
-        .enumerate()
-        .map(|(idx, path)| {
-            old.get(idx)
-                .copied()
-                .unwrap_or(0.0)
-                .clamp(0.0, path.total_length)
-        })
-        .collect()
-}
-
-/// 与 `carry_travelled` 对应的读取侧：按路径下标取已走过距离。
-fn inherited_for(travelled: &[f64], path_index: usize, path: &FrontierPath) -> f64 {
-    travelled
-        .get(path_index)
-        .copied()
-        .unwrap_or(0.0)
-        .clamp(0.0, path.total_length)
-}
-
-/// 把当前 ease 推进应用到每条路径，得到本帧继承下来的已走过距离。
-fn advance(paths: &[FrontierPath], inherited: &[f64], eased: f64) -> Vec<f64> {
-    paths
-        .iter()
-        .enumerate()
-        .map(|(idx, path)| {
-            travelled(
-                inherited.get(idx).copied().unwrap_or(0.0),
-                path.total_length,
-                eased,
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

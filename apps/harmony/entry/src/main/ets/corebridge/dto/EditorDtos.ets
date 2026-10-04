@@ -73,11 +73,19 @@ export interface OffsetMap {
 }
 
 // 显示增量补丁。replaceByteStart/replaceByteEndExclusive 是 UTF-8 byte offset。
+//
+// Issue #826 评论 9 阻塞 1：replaceByteStart/End 描述的是**旧正文**（base revision）
+// 里被替换的区间；insertedByteStart/EndExclusive 才是本条 patch 插入的内容在
+// **最终新正文**（new revision）中的准确区间，纯删除时为零长。
+// 不得用 replaceByteStart + insertedText.length 推算后者：一笔 batch 里前一处
+// 替换变长后，后一处在新正文里已经右移。
 export interface DisplayPatch {
   baseRevision: number
   newRevision: number
   replaceByteStart: number
   replaceByteEndExclusive: number
+  insertedByteStart: number
+  insertedByteEndExclusive: number
   insertedText: string
   resultingSelectionStart: number
   resultingSelectionEnd: number

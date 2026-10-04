@@ -154,6 +154,13 @@ impl EditorAnimationKind {
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedEditMotion {
     pub kind: EditorAnimationKind,
+    /// Issue #826 评论 9 阻塞 2：Core 在 `EditorEditResult` 里给出的精确映射。
+    ///
+    /// replace-all / 多 delta batch 用 `OffsetMap::from_edits(...)` 构造，
+    /// 能保留多个 unchanged island；而 `OffsetMap::build(old, new)` 只是
+    /// 最长公共前缀 + 最长公共后缀，中间整段都算「改过」。
+    /// 有值时必须优先用 Core 给的这一份。
+    pub offset_map: Option<OffsetMap>,
     pub inserted_ranges: Vec<(usize, usize)>,
     pub deleted_ranges: Vec<(usize, usize)>,
     pub inserted_range: Option<Utf8ByteRange>,
@@ -208,6 +215,7 @@ impl PreparedEditMotion {
             .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
         Self {
             kind,
+            offset_map: result.offset_map.clone(),
             inserted_ranges,
             deleted_ranges,
             inserted_range,
@@ -243,14 +251,27 @@ pub(crate) fn ranges_from_display_patches(
     let mut inserted = Vec::new();
     let mut deleted = Vec::new();
     for patch in &result.display_patches {
+        // Issue #826 评论 9 阻塞 1：两个区间都直接用 Core 的精确值。
+        //
+        // `replace_byte_range` 是**旧正文**（base revision）坐标；
+        // `inserted_byte_range` 是**最终新正文**（new revision）坐标。
+        //
+        // 绝不能写成 `replace_byte_range.start + inserted_text.len()`：
+        // 一笔 batch 里前一处替换变长后，后一处在新正文里已经右移。
+        // 反例 `aXbXc` replace-all `X -> YY`：Core 的两条 delta 是
+        // `old [1,2] -> new [1,3]` 与 `old [3,4] -> new [4,6]`；
+        // 用旧坐标推会得到 `[1,3]` / `[3,5]`，相邻归一化成 `[1,5]`，
+        // 而 `aYYbYYc` 的 `[1,5]` 是 `YYbY` —— 中间**完全没改过的 `b`**
+        // 被当成 inserted 进入 FrontierMask。
         let replace_start = patch.replace_byte_range.start().value();
         let replace_end = patch.replace_byte_range.end().value();
-        let inserted_len = patch.inserted_text.len();
         if replace_end > replace_start {
             deleted.push((replace_start, replace_end));
         }
-        if inserted_len > 0 {
-            inserted.push((replace_start, replace_start + inserted_len));
+        let inserted_start = patch.inserted_byte_range.start().value();
+        let inserted_end = patch.inserted_byte_range.end().value();
+        if inserted_end > inserted_start {
+            inserted.push((inserted_start, inserted_end));
         }
     }
     (inserted, deleted)

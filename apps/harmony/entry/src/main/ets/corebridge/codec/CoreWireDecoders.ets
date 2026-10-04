@@ -1621,6 +1621,11 @@ function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDto
   if (replaceByteStart === null) { return err('DisplayPatch.replaceByteStart missing') }
   const replaceByteEndExclusive: number | null = reqNum(data, 'replaceByteEndExclusive')
   if (replaceByteEndExclusive === null) { return err('DisplayPatch.replaceByteEndExclusive missing') }
+  // Issue #826 评论 9 阻塞 1：最终新正文里的 inserted 区间，由 Core 直接给出。
+  const insertedByteStart: number | null = reqNum(data, 'insertedByteStart')
+  if (insertedByteStart === null) { return err('DisplayPatch.insertedByteStart missing') }
+  const insertedByteEndExclusive: number | null = reqNum(data, 'insertedByteEndExclusive')
+  if (insertedByteEndExclusive === null) { return err('DisplayPatch.insertedByteEndExclusive missing') }
   const insertedText: string | null = reqStr(data, 'insertedText')
   if (insertedText === null) { return err('DisplayPatch.insertedText missing') }
   const resultingSelectionStart: number | null = reqNum(data, 'resultingSelectionStart')
@@ -1632,6 +1637,8 @@ function decodeDisplayPatch(data: Object): DecodeResult<import('../dto/EditorDto
     newRevision: newRevision,
     replaceByteStart: replaceByteStart,
     replaceByteEndExclusive: replaceByteEndExclusive,
+    insertedByteStart: insertedByteStart,
+    insertedByteEndExclusive: insertedByteEndExclusive,
     insertedText: insertedText,
     resultingSelectionStart: resultingSelectionStart,
     resultingSelectionEnd: resultingSelectionEnd
