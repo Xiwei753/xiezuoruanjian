@@ -165,8 +165,12 @@ export struct WritingScreen {
   // Issue #825 复核8第 3 点：顶栏字号 / 行距的"编辑中草稿值"。
   // 步进器的下一步必须从草稿算，而不是从"最后一次已落盘值"算——
   // 否则连点三次「+」时三次都从同一个旧值出发，pending 最后仍只 +1 步。
-  private editorFormatDraftFontSize: number = 0
-  private editorFormatDraftLineSpacing: number = 0
+  // Issue #825 复核9 第1项：草稿必须是响应式状态。
+  // WritingScreen 是 V1 @Component，只有 @State 变化才会触发 build，
+  // 普通 private 字段改了不会重建 WritingWorkbenchToolbar（它是 @ComponentV2，
+  // @Param 收不到新值），于是快速连点会一直按同一个旧值算下一步。
+  @State editorFormatDraftFontSize: number = 0
+  @State editorFormatDraftLineSpacing: number = 0
 
   // Issue #825 复核8第 3 点：订阅"刚落盘的 LocalSettings"广播。
   // 宽屏设置浮层盖在本页之上，用户在里面改完字号/主题后这里必须跟着重建排版，
@@ -837,20 +841,18 @@ export struct WritingScreen {
     }
   }
 
-  // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（由 onPaneCollapsedChanged 重算）。
+  // 关闭方向不会把窗口撑小，永远放得下：改完状态后重算一次正式 plan，
+  // 让 Editor / ToolPane / handle 的 bounds 继续跟着 Core 走，
+  // 而不是让 layoutWeight(1) 帮平台自己分剩下的宽度。
   private closeToolPane(): void {
     this.selectedToolKey = ''
     this.rightPaneCollapsed = true
+    this.refreshWorkbenchPlan().catch(() => {})
   }
 
   private closeChapterNavigation(): void {
     this.leftPaneCollapsed = true
-  }
-
-  // 目录栏 / 工具 pane 展开状态变化后重算 plan：Core 决定各角色最终 bounds，
-  // 平台端只按 bounds 摆控件。
-  private onPaneCollapsedChanged(): void {
-    this.refreshWorkbenchPlan()
+    this.refreshWorkbenchPlan().catch(() => {})
   }
 
   private chapterNavigationWidthVp(): number {
@@ -1471,10 +1473,18 @@ export struct WritingScreen {
         this.realignDraftToPersisted()
         return
       }
-      // 保存成功：把"实际落盘的那份最新设置"应用回本页（重建排版 + 主题 + 自动保存）。
-      // 用户在悬浮设置里改过的其它字段也一并带进来，不再是进页面时的旧值。
+      // Issue #825 复核9 第3项：成功后再从 Core 重新读一次，
+      // 只把这次重新 decode 出来的 persisted DTO 当成"最近一次落盘"，
+      // 不把上面那个自己改过的对象当成真相——它还和 getLocalSettings()
+      // 之前拿到的其他持有者共享同一份引用。
+      const persisted = await this.bridge.getLocalSettings()
+      if (persisted.success && persisted.data) {
+        LocalSettingsStore.getInstance().publish(persisted.data)
+        this.applyPublishedSettings(persisted.data)
+      } else {
+        this.applyPublishedSettings(latest.data)
+      }
       // 草稿不动：它本来就是这次保存的来源值，若期间又点过，队列里还有下一次。
-      this.applyPublishedSettings(latest.data)
     } catch (err) {
       this.realignDraftToPersisted()
     }

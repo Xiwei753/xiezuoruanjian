@@ -235,7 +235,16 @@ export class SettingsViewModel {
         // 宽屏下设置浮层盖在写作页上，两边各持一份 settings 会长期互不认知：
         // 用户在这里改了字号/主题，底下活着的 WritingScreen 仍按旧排版渲染。
         // 广播时机是"保存成功之后"，和 Linux 的 settingsBackend.onSettings_changed 同语义。
-        LocalSettingsStore.getInstance().publish(this.settings)
+        //
+        // Issue #825 复核9 第3项：不能把 this.settings 直接 publish 出去。
+        // 它是 SettingsContent 还在原地 edit 的对象（updateSettings 基本都是
+        // `s.editorFontSize = value; return s`），用户下一次拖 Slider 会在下一次
+        // save 成功之前就把这份"所谓最近一次落盘值"改掉。重新从 Core 读一次
+        // 拿到独立 decode 的 DTO，Store 才真的代表磁盘真相。
+        const persisted = await this.bridge.getLocalSettings()
+        if (persisted.success && persisted.data) {
+          LocalSettingsStore.getInstance().publish(persisted.data)
+        }
         const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,

@@ -10,8 +10,14 @@
 // Harmony 之前缺同样的语义，这里补上。
 //
 // 边界：这里只负责"把刚落盘的那份设置广播出去"，不持有 UI 状态、不读磁盘、
-// 不做节流。真正的落盘动作仍由各自的 owner 走 IWriterCoreBridge 完成，
-// 本 store 只在 saveLocalSettings 成功之后被 publish。
+// 不做节流。真正的落盘动作仍由各自的 owner 走 IWriterCoreBridge 完成。
+//
+// Issue #825 复核9 第3项：publish 只接受"从 Core 重新读出来的 persisted DTO"
+// ——也就是保存成功后立刻 getLocalSettings() 拿到的、独立 decode 出来的那份。
+// 不能传调用方自己正在原地 edit 的 settings 对象：SettingsContent 的
+// updateSettings 基本都是 `s.editorFontSize = value; return s`，用户下一次拖动
+// 会在下一次保存成功之前就改掉同一份引用，让这里的 latest 名不副实。
+// 这样本 store 才真的代表"最近一次落盘"，而不是某个页面仍在编辑的 draft 引用。
 
 import { LocalSettings } from '../../../corebridge/dto/SettingsDtos'
 
