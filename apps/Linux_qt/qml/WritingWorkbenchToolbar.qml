@@ -8,9 +8,11 @@
 //     ToolbarTrailing 三个 bounds 分组；
 //   - 下层是内容区，装 ChapterNavigation | Editor | ToolPane | ToolRail。
 // 约束（Issue #825）：
-//   - 条带高度和三个分组的宽度都来自 Core 的 workbench plan（TopWritingWorkspace 注入
+//   - 条带高度和三个分组的宽度都来自 Core 的 workbench plan（WritingWorkspace 注入
 //     bounds）；Core 判 SinglePane 时不给工具条 bounds，此时分组按内容自适应，
 //     保证窄窗口仍然排得下。
+//   - Issue #825 复核5：三个分组容器严格占 Core 的 bounds，段间 spacing=0，
+//     条带外层不再加 margin/padding；视觉内边距只加在各组内部。
 //   - 章节树 / 工具 pane / 工具 rail 只占内容区，不穿进工具条带。
 //   - 返回 / 撤销 / 重做走真实路径（sujianEditor.undo()/redo()），不摆假按钮。
 // =============================================================================
@@ -26,10 +28,8 @@ ColumnLayout {
     // ── Core 注入的工具条 bounds（dp）。-1 表示 Core 没给（SinglePane），按内容自适应。──
     property real toolbarHeight: -1
     property real leadingWidth: -1
+    property real centerWidth: -1
     property real trailingWidth: -1
-
-    // 章节标题（ToolbarLeading 里的作品名）
-    property string projectTitle: ""
 
     // Center 组（WritingFormatGroup）的入参
     property real currentFontSize: 16
@@ -64,9 +64,9 @@ ColumnLayout {
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: root.dt.sp16
-            anchors.rightMargin: root.dt.sp16
-            spacing: root.dt.sp8
+            // Issue #825 复核5：段间不插间距，三段容器严丝合缝占满 Core 的
+            // ToolbarLeading / ToolbarCenter / ToolbarTrailing bounds。
+            spacing: 0
 
             // ── ToolbarLeading：返回 + 作品名 + 撤销/重做 ──
             RowLayout {
@@ -77,24 +77,17 @@ ColumnLayout {
                 Layout.preferredWidth: root.leadingWidth > 0 ? root.leadingWidth : -1
                 Layout.minimumWidth: root.leadingWidth > 0 ? root.leadingWidth : 0
                 Layout.maximumWidth: root.leadingWidth > 0 ? root.leadingWidth : Number.POSITIVE_INFINITY
+                // 视觉内边距加在组内部，不改角色几何。
+                Layout.leftMargin: root.dt.sp12
+                Layout.rightMargin: root.dt.sp8
 
+                // Issue #825 复核5第4点：标题不进 ToolbarLeading。
+                // Leading 200vp 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
                 // 返回作品列表
                 ToolbarIconButton {
                     dt: root.dt
                     glyph: "\u2190"
                     onTriggered: root.backRequested()
-                }
-
-                AppText {
-                    dt: root.dt
-                    text: root.projectTitle || qsTr("作品")
-                    color: root.dt.textPrimary
-                    font.pointSize: root.dt.fontMdPt
-                    font.family: root.dt.fontFamily
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: 160
                 }
 
                 // 撤销 / 重做：走 SujianEditorItem 真实实现的 undo()/redo()，
@@ -115,8 +108,13 @@ ColumnLayout {
 
             // ── ToolbarCenter：字号 / 行距 / 段落 / 一键排版 + 保存状态 ──
             WritingFormatGroup {
-                Layout.fillWidth: true
-                Layout.minimumWidth: 0
+                // Core 给了 ToolbarCenter bounds 就照搬，不再靠"填满剩余"二次猜测。
+                Layout.fillWidth: root.centerWidth <= 0
+                Layout.preferredWidth: root.centerWidth > 0 ? root.centerWidth : -1
+                Layout.minimumWidth: root.centerWidth > 0 ? root.centerWidth : 0
+                Layout.maximumWidth: root.centerWidth > 0 ? root.centerWidth : Number.POSITIVE_INFINITY
+                Layout.leftMargin: root.dt.sp8
+                Layout.rightMargin: root.dt.sp8
                 dt: root.dt
                 currentFontSize: root.currentFontSize
                 currentLineSpacing: root.currentLineSpacing
@@ -134,6 +132,8 @@ ColumnLayout {
                 Layout.preferredWidth: root.trailingWidth > 0 ? root.trailingWidth : -1
                 Layout.minimumWidth: root.trailingWidth > 0 ? root.trailingWidth : 0
                 Layout.maximumWidth: root.trailingWidth > 0 ? root.trailingWidth : Number.POSITIVE_INFINITY
+                Layout.leftMargin: root.dt.sp8
+                Layout.rightMargin: root.dt.sp16
                 dt: root.dt
                 appState: root.appState
                 onRequestSync: root.requestSync()

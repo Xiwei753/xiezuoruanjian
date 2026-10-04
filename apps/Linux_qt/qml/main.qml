@@ -656,7 +656,6 @@ ApplicationWindow {
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId
-                projectTitle: appController.writingProjectTitle
                 layoutPlan: window.layoutPlan
                 // Issue #757 评论 5818193510 第 5 点：传入 syncBackend 给 WritingWorkspace，
                 // 用于监听同步完成信号并在冲突产生时打开临时冲突侧栏。

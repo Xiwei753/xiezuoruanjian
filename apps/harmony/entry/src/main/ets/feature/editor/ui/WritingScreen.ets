@@ -1187,13 +1187,18 @@ export struct WritingScreen {
           toolbarHeightVp: this.toolbarHeightVp(),
           leadingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarLeading),
           trailingWidthVp: this.toolbarBoundsVp(WorkbenchRole.ToolbarTrailing),
-          chapterTitle: this.chapterTitle,
           headerActions: this.headerActions,
           fontSizePt: this.settings.editorFontSize,
           lineSpacing: this.settings.editorLineSpacingMultiplier,
           onBack: () => { this.handleTitleBack() },
           onUndo: () => { this.applyUndo() },
-          onRedo: () => { this.applyRedo() }
+          onRedo: () => { this.applyRedo() },
+          onFontSizeChange: (value: number) => {
+            this.applyEditorFormat(value, this.settings.editorLineSpacingMultiplier)
+          },
+          onLineSpacingChange: (value: number) => {
+            this.applyEditorFormat(this.settings.editorFontSize, value)
+          }
         })
           .width('100%')
 
@@ -1266,6 +1271,40 @@ export struct WritingScreen {
 
   private applyRedo(): void {
     this.coordinator.redo().catch(() => {})
+  }
+
+  // Issue #825 复核5第4点：ToolbarCenter 的字号 / 行距是 Core 设置里的真实字段，
+  // 所以做成可操作控件——写回 saveLocalSettings 落盘，成功后用当前 coordinator
+  // snapshot 重建 EditorLayoutSnapshot（和 loadSettings 走同一条重建路径）。
+  // 存失败就保持当前排版，不做"看起来改了"的假更新。
+  private async applyEditorFormat(fontSizePt: number, lineSpacingMultiplier: number): Promise<void> {
+    // ArkTS 不允许对象展开（arkts-no-spread），所以就地改这两个字段再落盘，
+    // 失败时改回去——不留下"看起来改了但没存下"的中间态。
+    const previousFontSize = this.settings.editorFontSize
+    const previousLineSpacing = this.settings.editorLineSpacingMultiplier
+    this.settings.editorFontSize = fontSizePt
+    this.settings.editorLineSpacingMultiplier = lineSpacingMultiplier
+    try {
+      const saved = await this.bridge.saveLocalSettings(this.settings)
+      if (!saved.success) {
+        this.settings.editorFontSize = previousFontSize
+        this.settings.editorLineSpacingMultiplier = previousLineSpacing
+        return
+      }
+      const existingSnap = this.coordinator.getSnapshot()
+      if (existingSnap !== null) {
+        this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+          existingSnap,
+          this.settings.editorFontSize,
+          this.settings.editorLineSpacingMultiplier,
+          this.settings.autoIndentEnabled,
+          this.settings.autoIndentWidth
+        )
+      }
+    } catch (err) {
+      this.settings.editorFontSize = previousFontSize
+      this.settings.editorLineSpacingMultiplier = previousLineSpacing
+    }
   }
 
   // Issue #825 复核第 2 项：选中工具时同时展开 ToolPane（rail 负责“选工具 + 展开/收起”）。
@@ -1381,7 +1420,11 @@ export struct WritingScreen {
         // Issue #825 复核第 3 项：宽屏由 WritingWorkbenchToolbar 按 Core 的
         // Toolbar* bounds 画工具条带，HDS 标题栏（只有章节标题 + HeaderTrailing、
         // 高度也不等于 Core 的 toolbar bounds）必须让位，否则工具条带会重复一份。
-        showTitleBar: !this.isWideWorkbench
+        // Issue #825 复核5第1项：让位与否看 Core 的最终模式 resolve_workbench_layout().mode，
+        // 不能只看第一层 WorkspaceLayoutMode.Workbench —— 窗口仍是 Workbench 但用户展开
+        // 右 pane 导致最终 plan=SinglePane 时，内容区已经退回单栏，标题栏必须回来，
+        // 否则返回 / 同步 / 搜索 / 设置会一起消失。
+        showTitleBar: !this.hasWorkbenchPlan
       }) {
         this.NavContent()
       }
@@ -1391,7 +1434,8 @@ export struct WritingScreen {
           // Issue #825 复核第 3 项：宽屏这条自绘标题行让位给 WritingWorkbenchToolbar
           // （返回归 ToolbarLeading，HeaderTrailing 归 ToolbarTrailing），
           // 否则同一条带会出现两套返回与两套尾部动作。
-          if (!this.isWideWorkbench) {
+          // Issue #825 复核5第1项：同 showTitleBar，这里也必须看 Core 的最终模式。
+          if (!this.hasWorkbenchPlan) {
           // Issue #783 评论5856245403：自定义标题行 — 圆形返回按钮 + 标题。
           // 标题栏返回走 handleTitleBack（始终退出页面），
           // 系统返回手势走 onBackPressed → handleSystemBack（IME 打开时先收键盘）。

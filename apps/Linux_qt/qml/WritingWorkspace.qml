@@ -28,7 +28,7 @@
 //
 // 组成（Issue #825 按 Core 七角色组织）：
 //   WritingWorkbenchToolbar：上方一条贯通工具条带
-//     （ToolbarLeading 返回/作品名/撤销/重做 | ToolbarCenter 字号/行距/段落/排版 |
+//     （ToolbarLeading 返回/撤销/重做 | ToolbarCenter 字号/行距/段落/排版 |
 //       ToolbarTrailing 同步/搜索/设置）
 //   下方内容区 SplitView：
 //     ChapterNavigation (章节树) | Editor (SujianEditorItem) |
@@ -50,7 +50,6 @@ Rectangle {
     property var themeController: null
     property var appState: ({})
     property var tree: []
-    property string projectTitle: ""
     // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
     // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
@@ -101,7 +100,16 @@ Rectangle {
         return b ? Math.max(0, b.bottomDp - b.topDp) : -1
     }
     readonly property real toolbarLeadingWidth: root.roleWidth("ToolbarLeading", -1)
+    readonly property real toolbarCenterWidth: root.roleWidth("ToolbarCenter", -1)
     readonly property real toolbarTrailingWidth: root.roleWidth("ToolbarTrailing", -1)
+
+    // ── Issue #825 复核5第1项：最终结构只听 resolve_workbench_layout().mode ──
+    // WorkspaceLayoutMode.Workbench 只是第一层壳模式；Core 还会按当前 pane visibility
+    // 再判一次最终模式（600～695vp 时左右都展开就放不下，Core 明确回 SinglePane）。
+    // plan 一旦返回，mode=SinglePane 就只留 Editor：章节栏 / 工具 pane / 工具 rail
+    // 全部隐藏，不再退回旧的 240/480/240 三栏宽度自己硬塞。
+    readonly property bool planResolved: root.wideWorkbench && root.workbenchPlan !== null
+    readonly property bool hideContentPanes: root.planResolved && !root.coreWorkbench
 
     // 宽屏下 Core 已经把七角色尺寸算好：pre/min/max 三者取同一个值，
     // 让 SplitView 只负责"可见子项参与剩余空间分配"，不再被用户拖拽改宽度。
@@ -125,6 +133,13 @@ Rectangle {
 
     function hasContentRole(role) {
         return root.roleBounds(role) !== null
+    }
+
+    // Issue #825 复核5第2项：展开工具 pane 的入口统一走这一个函数。
+    // 默认打开「统计」——rail 里只剩统计和冲突两个真内容入口，
+    // 不再写已经下线的 "starmap" key（否则标题会 fallback 成统计、内容却是空的）。
+    function toggleToolPane() {
+        root.drawerTool = root.drawerOpen ? "" : "stats";
     }
 
     function refreshWorkbenchPlan() {
@@ -393,12 +408,13 @@ Rectangle {
         id: workbenchToolbar
         anchors.fill: parent
 
-        // Core 的 ToolbarLeading / ToolbarTrailing bounds（-1 = Core 没给，按内容自适应）
+        // Core 的 ToolbarLeading / ToolbarCenter / ToolbarTrailing bounds
+        // （-1 = Core 没给，按内容自适应）
         toolbarHeight: root.toolbarHeight
         leadingWidth: root.toolbarLeadingWidth
+        centerWidth: root.toolbarCenterWidth
         trailingWidth: root.toolbarTrailingWidth
 
-        projectTitle: root.projectTitle
         appState: root.appState
 
         // Center 组（WritingFormatGroup）入参
@@ -449,7 +465,7 @@ Rectangle {
             // Left sidebar: volume/chapter tree
             Rectangle {
                 id: sidebarRect
-                visible: !root.leftPaneCollapsed
+                visible: !root.leftPaneCollapsed && !root.hideContentPanes
                 // Issue #825：宽屏下章节导航宽度直接取 Core 的 ChapterNavigation bounds；
                 // 非宽屏保留原来的「设置项 + 可拖拽区间」。
                 SplitView.preferredWidth: root.coreSized
@@ -793,8 +809,8 @@ Rectangle {
                 SplitView.fillWidth: true
                 // Issue #825：宽屏下正文宽度取 Core 的 Editor bounds；
                 // 非宽屏保留原来的「800 首选 / 480 最小」。
-                SplitView.preferredWidth: root.coreSized ? root.editorWidth : 800
-                SplitView.minimumWidth: root.coreSized ? root.editorWidth : 480
+                SplitView.preferredWidth: (root.coreSized || root.hideContentPanes) ? root.editorWidth : 800
+                SplitView.minimumWidth: (root.coreSized || root.hideContentPanes) ? root.editorWidth : 480
                 spacing: 0
 
                 // Editor Container Area
@@ -1253,7 +1269,7 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         width: 36
-                        visible: !root.drawerOpen && !root.toolRailVisible
+                        visible: !root.drawerOpen && !root.toolRailVisible && !root.hideContentPanes
                         color: "transparent"
 
                         ColumnLayout {
@@ -1293,7 +1309,8 @@ Rectangle {
                 SplitView.preferredWidth: root.coreSized ? root.toolPaneWidth : 320
                 SplitView.minimumWidth: root.coreSized ? root.toolPaneWidth : 240
                 SplitView.maximumWidth: root.coreSized ? root.toolPaneWidth : 480
-                visible: root.drawerOpen
+                // Issue #825 复核5第1项：Core 最终判 SinglePane 时工具 pane 不存在。
+                visible: root.drawerOpen && !root.hideContentPanes
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
                 isOpen: root.drawerOpen
@@ -1333,7 +1350,7 @@ Rectangle {
                 railWidth: root.coreSized ? root.toolRailWidth : 56
                 onToolRequested: function(toolKey) { root.drawerTool = toolKey; }
                 onToolPaneToggled: {
-                    root.drawerTool = root.drawerOpen ? "" : "starmap";
+                    root.toggleToolPane();
                     if (root.drawerOpen) root.requestEditorFocus();
                 }
             }
@@ -1520,7 +1537,7 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                root.drawerTool = root.drawerOpen ? "" : "starmap"
+                root.toggleToolPane()
                 if (!root.drawerOpen) root.requestEditorFocus()
             }
         }
