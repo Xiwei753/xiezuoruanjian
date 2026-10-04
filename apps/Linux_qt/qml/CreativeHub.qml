@@ -30,6 +30,8 @@ Rectangle {
     property bool aiCapable: false
     property bool aiEnabled: false
     property var layoutPlan: null
+    // 宽屏骨架：Core 只给 Workbench 语义，具体左侧一级导航由 Qt UI 层呈现。
+    readonly property bool wideShell: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
 
     signal openProject(string projectId, string projectTitle)
     signal createProject()
@@ -43,9 +45,83 @@ Rectangle {
 
     color: dt.bg
 
-    ColumnLayout {
+    RowLayout {
         anchors.fill: parent
         spacing: 0
+
+        // 宽屏一级导航骨架。这里只负责壳层摆放，作品/星图/统计仍复用原来的 currentTab。
+        Rectangle {
+            visible: root.wideShell
+            Layout.fillHeight: true
+            Layout.preferredWidth: 176
+            color: dt.surface
+            border.color: dt.border
+            border.width: 1
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: dt.sp12
+                spacing: dt.sp8
+
+                AppText {
+                    dt: root.dt
+                    text: qsTr("素笺写作")
+                    color: dt.primary
+                    font.pointSize: dt.fontLgPt
+                    font.family: dt.fontFamily
+                    font.weight: Font.Bold
+                    Layout.fillWidth: true
+                    Layout.bottomMargin: dt.sp12
+                }
+
+                Repeater {
+                    model: [
+                        { label: qsTr("作品"), idx: 0 },
+                        { label: qsTr("星图"), idx: 1 },
+                        { label: qsTr("统计"), idx: 2 }
+                    ]
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 42
+                        radius: dt.radiusPill
+                        color: root.currentTab === modelData.idx
+                               ? dt.primaryContainer
+                               : wideNavHover.containsMouse ? dt.surfaceVariant : "transparent"
+
+                        AppText {
+                            dt: root.dt
+                            anchors.left: parent.left
+                            anchors.leftMargin: dt.sp16
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.label
+                            color: root.currentTab === modelData.idx ? dt.onPrimaryContainer : dt.textPrimary
+                            font.pointSize: dt.labelPt
+                            font.family: dt.fontFamily
+                            font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
+                        }
+
+                        MouseArea {
+                            id: wideNavHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root.appControllerRef) root.appControllerRef.hubTab = modelData.idx
+                                else root.currentTab = modelData.idx
+                            }
+                        }
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 0
 
         // Top navigation bar
         Rectangle {
@@ -61,8 +137,9 @@ Rectangle {
                 anchors.rightMargin: dt.sp32
                 spacing: dt.sp32
 
-                // Logo
+                // Logo（窄屏顶栏；宽屏标题已移到左侧导航）
                 Row {
+                    visible: !root.wideShell
                     spacing: dt.sp10
                     Layout.alignment: Qt.AlignVCenter
                     AppText {
@@ -75,8 +152,9 @@ Rectangle {
                     }
                 }
 
-                // Navigation tabs
+                // Navigation tabs（窄屏顶栏；宽屏使用左侧一级导航）
                 Row {
+                    visible: !root.wideShell
                     spacing: dt.sp4
                     Layout.alignment: Qt.AlignVCenter
 
@@ -197,6 +275,7 @@ Rectangle {
                     appState: root.appState
                 }
             }
+        }
         }
     }
 }
