@@ -141,30 +141,42 @@ Rectangle {
     // 如果端侧还留着「右 pane 已展开」，下一轮重算又继续喂 toolPaneVisible=true，
     // 于是永远 SinglePane，而 rail / 折叠把手已被隐藏，用户没有入口再关回去，
     // 只能拉大窗口解锁。
-    // 所以：先按当前组合问一次 Core；放不下就换一种组合再问一次；
-    // 第二次能 Workbench 就让另一侧让位（allowCollapseLeft 为 true 时）；
-    // 仍放不下就回滚本次展开，不留「已展开但看不见」的端侧状态。
-    // 真正因为 free region 连 Editor + ToolRail 都放不下而 SinglePane 时，
-    // 才会自然落到纯单栏，那条路径下没有展开状态需要回滚。
-    // QML 属性赋值会同步触发 onDrawerToolChanged / onLeftPaneCollapsedChanged，
-    // 所以每次赋值后 root.coreWorkbench 已经是该组合的新结论。
+    //
+    // Issue #825 复核7第 2 点：改成「先算候选，再一次性提交」。
+    // 之前是「先改 QML 属性 → 看 Core 结果 → 再回滚」，失败分支只回滚了自己那侧，
+    // 为了腾位置收掉的另一侧没有恢复——用户只想开右栏，失败后左栏反而被关掉了。
+    // 现在一个属性都不改就先把候选组合问一遍，哪一组是 Workbench 就整体提交；
+    // 两组都不行就什么都不改，不留"已展开但看不见"的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
-        root.drawerTool = toolKey || "stats";
-        if (root.coreWorkbench) return;
-        if (allowCollapseLeft === true) {
-            root.leftPaneCollapsed = true;
-            if (root.coreWorkbench) return;
+        // 候选一：保持当前左栏状态，展开右 pane。
+        var plan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, true);
+        var collapseLeft = false;
+        if (!isWorkbenchPlan(plan) && allowCollapseLeft === true) {
+            // 候选二：左栏让位，右 pane 展开。
+            plan = resolveWorkbenchCandidate(false, true);
+            collapseLeft = true;
         }
-        root.drawerTool = "";
+        if (!isWorkbenchPlan(plan)) return;
+        // 一次性提交最终组合。
+        root.leftPaneCollapsed = collapseLeft;
+        root.drawerTool = toolKey || "stats";
+        root.workbenchPlan = plan;
     }
 
-    // 左目录栏的展开请求，与右侧对称：必要时先让右 pane 让位，仍放不下就回滚左栏。
+    // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
     function requestChapterNavigationOpen() {
+        // 候选一：保持当前右 pane 状态，展开左目录栏。
+        var plan = resolveWorkbenchCandidate(true, root.drawerOpen);
+        var collapseRight = false;
+        if (!isWorkbenchPlan(plan)) {
+            // 候选二：右 pane 让位，左目录栏展开。
+            plan = resolveWorkbenchCandidate(true, false);
+            collapseRight = true;
+        }
+        if (!isWorkbenchPlan(plan)) return;
+        root.drawerTool = collapseRight ? "" : root.drawerTool;
         root.leftPaneCollapsed = false;
-        if (root.coreWorkbench) return;
-        root.drawerTool = "";
-        if (root.coreWorkbench) return;
-        root.leftPaneCollapsed = true;
+        root.workbenchPlan = plan;
     }
 
     // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（refreshWorkbenchPlan 随后重算）。
@@ -185,18 +197,32 @@ Rectangle {
         }
     }
 
+    // 状态路径：按当前可见性重算并写回 workbenchPlan（窗口尺寸 / 折叠变化时走这里）。
     function refreshWorkbenchPlan() {
         if (!root.wideWorkbench) {
             root.workbenchPlan = null;
-            return;
+            return null;
         }
-        if (typeof appBackend === "undefined" || !appBackend) return;
-        root.workbenchPlan = appBackend.resolve_workbench_layout(
+        root.workbenchPlan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, root.drawerOpen);
+        return root.workbenchPlan;
+    }
+
+    // Issue #825 复核7第 2 点：候选计算用的纯 helper。
+    // 只按给定的可见性问一次 Core，不碰任何属性、不写 workbenchPlan，
+    // 这样「算候选」和「提交状态」彻底分开，失败时另一侧的状态不会被弄丢。
+    function resolveWorkbenchCandidate(chapterVisible, toolVisible) {
+        if (!root.wideWorkbench) return null;
+        if (typeof appBackend === "undefined" || !appBackend) return null;
+        return appBackend.resolve_workbench_layout(
             root.width,
             root.height,
-            !root.leftPaneCollapsed,
-            root.drawerOpen
+            chapterVisible,
+            toolVisible
         );
+    }
+
+    function isWorkbenchPlan(plan) {
+        return !!plan && plan.mode === "Workbench";
     }
 
     onWidthChanged: refreshWorkbenchPlan()
