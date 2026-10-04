@@ -74,6 +74,7 @@ fn reflow_sample_interpolates_old_to_new_rect() {
                 h: 20.0,
             },
         }],
+        target_text: String::new(),
         started_at: now,
         duration_ms: 100,
     };
@@ -88,6 +89,7 @@ fn reflow_is_finished_after_duration() {
     let now = Instant::now();
     let state = ReflowState {
         spans: Vec::new(),
+        target_text: String::new(),
         started_at: now,
         duration_ms: 160,
     };
@@ -186,4 +188,76 @@ fn reflow_never_emits_span_inside_changed_range() {
     let offset_map = OffsetMap::from_single_edit(1, (1, 1), 1);
     let reflow = ReflowState::build(&old, &new, &offset_map, &[], &[(1, 2)], Instant::now(), 160);
     assert!(reflow.is_empty(), "changed range 内的 glyph 不得进 Reflow");
+}
+
+/// Issue #826 评论 3 问题 3：连续输入时 Reflow 不能跳位置。
+///
+/// 之前每笔编辑都重新 `ReflowState::build(...)`，上一笔还在 A -> B 半路时
+/// 新一笔会直接从 canonical 的 B 开始 B -> C，屏幕上先跳一下再动。
+/// `retarget` 必须先 `sample(now)` 拿到当前屏幕真实位置当新起点。
+#[test]
+fn retarget_continues_from_current_screen_position() {
+    let now = Instant::now();
+    // 第一次：A(x=0) -> B(x=100)，时长 100ms。
+    let old_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0)],
+    )]);
+    // stub 的 doc x = cluster.x + visual_x(= cluster.x)，所以这里用 50 得到 doc x=100。
+    let mid_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 50.0)],
+    )]);
+    let mut state = ReflowState::build(
+        &old_snapshot,
+        &mid_snapshot,
+        &OffsetMap::from_single_edit(1, (1, 1), 1),
+        &[],
+        &[(1, 2)],
+        now,
+        100,
+    );
+    assert_eq!(state.spans.len(), 1);
+    state.set_target_text(String::from("Xa"));
+
+    // 半程采样：屏幕上这个字应该在中间（不在 canonical 的 100）。
+    let half = now + Duration::from_millis(50);
+    let mid_x = state.sample(half)[0].dest_rect.x;
+    assert!(mid_x > 1.0 && mid_x < 99.0, "半程应该在中间，实际 {mid_x}");
+
+    // 第二次编辑：正文继续右移到 C(x=200)。
+    // prev_target_to_new 把上一份 Reflow 的 new 坐标（"Xa" 坐标）映到最新
+    // new 坐标（"XYa" 坐标）。
+    let next_snapshot = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 100.0)],
+    )]);
+    let prev_target_to_new = OffsetMap::build("Xa", "XYa");
+    let retargeted = state.retarget(half, &next_snapshot, &prev_target_to_new, &[(2, 3)], 100);
+
+    assert_eq!(retargeted.spans.len(), 1, "retarget 后必须保留这一段");
+    // 起点必须就是刚才屏幕上的位置，而不是 canonical 的 100。
+    assert!(
+        (retargeted.spans[0].old_rect.x - mid_x).abs() < 1e-9,
+        "retarget 起点必须是当前屏幕位置 {}，实际 {}",
+        mid_x,
+        retargeted.spans[0].old_rect.x
+    );
+    // 目标是最新的 canonical。
+    assert!(
+        (retargeted.spans[0].new_rect.x - 200.0).abs() < 1e-9,
+        "retarget 目标必须是最新 canonical 位置"
+    );
+    // retarget 后第一帧就停在屏幕位置，不会跳。
+    let first = retargeted.sample(half);
+    assert!(
+        (first[0].dest_rect.x - mid_x).abs() < 1e-9,
+        "retarget 后第一帧必须原地不动（不能跳到 canonical）"
+    );
 }

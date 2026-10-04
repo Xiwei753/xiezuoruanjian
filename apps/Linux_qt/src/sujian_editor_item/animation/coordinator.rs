@@ -51,6 +51,16 @@ pub(crate) struct EditFrontierRequest {
     pub target_frontier: CursorRect,
     /// old → new 的偏移映射（Reflow 层用）。
     pub offset_map: OffsetMap,
+    /// Issue #826 评论 3 问题 1/2：`base_snapshot` 对应的正文纯文本。
+    ///
+    /// 连续吞字时用它构造「burst 最初 base 文本 → 本次编辑前文本」的 OffsetMap，
+    /// 把每次编辑的 old range 映射回同一个基准再累计。
+    pub base_text: String,
+    /// `target_snapshot` 对应的正文纯文本。
+    ///
+    /// 连续吐字时 `offset_map` 本身就是「上一次 target 文本 → 本次 target 文本」，
+    /// 用它把已累计的 new range 映射到最新坐标。
+    pub target_text: String,
     /// 本帧时间。
     pub now: Instant,
 }
@@ -145,34 +155,27 @@ impl LinuxEditorAnimationCoordinator {
                     if let Some(range) = range {
                         frontier.extend_insert(
                             request.target_snapshot.clone(),
+                            request.target_text.clone(),
                             range,
                             request.target_frontier,
+                            &request.offset_map,
                             request.now,
                         );
                     }
                 }
-                EditFrontierKind::Delete => {
+                EditFrontierKind::Delete | EditFrontierKind::Replace => {
                     let range = first_range(&request.deleted_ranges);
                     if let Some(range) = range {
+                        // Issue #826 评论 3 问题 2：本次 old_range 用「这一次编辑前」
+                        // 的坐标，必须映射回 burst 最初 base 文本的坐标再累计。
+                        let base_to_current =
+                            OffsetMap::build(&frontier.base_text, &request.base_text);
                         frontier.extend_delete(
-                            request.base_snapshot.clone(),
                             request.target_snapshot.clone(),
+                            request.target_text.clone(),
                             range,
                             request.target_frontier,
-                            request.now,
-                        );
-                    }
-                }
-                EditFrontierKind::Replace => {
-                    // Replace 的连续扩展按 Delete 处理（旧 overlay 继续收），新字
-                    // 走下一轮。真实 IME 连续输入不会产生 Replace。
-                    let range = first_range(&request.deleted_ranges);
-                    if let Some(range) = range {
-                        frontier.extend_delete(
-                            request.base_snapshot.clone(),
-                            request.target_snapshot.clone(),
-                            range,
-                            request.target_frontier,
+                            &base_to_current,
                             request.now,
                         );
                     }
@@ -185,6 +188,7 @@ impl LinuxEditorAnimationCoordinator {
                     let range = first_range(&request.inserted_ranges).unwrap_or((0, 0));
                     EditFrontierState::begin_insert(
                         request.target_snapshot.clone(),
+                        request.target_text.clone(),
                         range,
                         request.start_frontier,
                         request.target_frontier,
@@ -196,7 +200,9 @@ impl LinuxEditorAnimationCoordinator {
                     let range = first_range(&request.deleted_ranges).unwrap_or((0, 0));
                     EditFrontierState::begin_delete(
                         request.base_snapshot.clone(),
+                        request.base_text.clone(),
                         request.target_snapshot.clone(),
+                        request.target_text.clone(),
                         range,
                         request.start_frontier,
                         request.target_frontier,
@@ -209,7 +215,9 @@ impl LinuxEditorAnimationCoordinator {
                     let new_range = first_range(&request.inserted_ranges).unwrap_or((0, 0));
                     EditFrontierState::begin_replace(
                         request.base_snapshot.clone(),
+                        request.base_text.clone(),
                         request.target_snapshot.clone(),
+                        request.target_text.clone(),
                         old_range,
                         new_range,
                         request.start_frontier,
@@ -226,23 +234,66 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     /// Issue #826: Reflow 层独立更新。没改的字移动，不参与前沿。
+    ///
+    /// 连续编辑只保留**一份** `ReflowState`：上一笔还在 A -> B 半路时来了新一笔，
+    /// 不能重新 `build` 从 canonical 的 B 开始 B -> C（那会先跳一下再动）。
+    /// 这里先 `sample(now)` 拿到当前屏幕上每个 unchanged cluster 的真实位置，
+    /// 再以它为新起点指向最新目标 —— 永远只做「当前屏幕 -> 最新目标」。
     fn begin_or_extend_reflow(&mut self, request: &EditFrontierRequest, duration_ms: u64) {
-        // Changed range 必须排除，不允许同一 glyph 同时进 Reveal/Conceal 和 Reflow：
-        // inserted 在 new 侧、deleted 在 old 侧，两侧都要排掉。
-        let reflow = ReflowState::build(
-            &request.base_snapshot,
-            &request.target_snapshot,
-            &request.offset_map,
-            &request.deleted_ranges,
-            &request.inserted_ranges,
-            request.now,
-            duration_ms,
-        );
-        if reflow.is_empty() {
-            self.active_reflow = None;
-        } else {
-            self.active_reflow = Some(reflow);
-        }
+        // Changed range 必须排除，不允许同一 glyph 同时进 Reveal/Conceal 和 Reflow。
+        // 用**前沿已累计的** burst 范围（old_range / new_range），而不是单笔的
+        // deleted/inserted —— 同一轮连打时，先前插入的字仍由前沿负责吐字，
+        // 不能被 Reflow 抢走。
+        let excluded_old: Vec<(usize, usize)> = self
+            .active_edit_frontier
+            .as_ref()
+            .and_then(|f| f.old_range)
+            .into_iter()
+            .chain(request.deleted_ranges.iter().copied().filter(|(s, e)| {
+                self.active_edit_frontier
+                    .as_ref()
+                    .and_then(|f| f.old_range)
+                    .is_none_or(|acc| !(acc.0 <= *s && *e <= acc.1))
+            }))
+            .collect();
+        let excluded_new: Vec<(usize, usize)> = self
+            .active_edit_frontier
+            .as_ref()
+            .and_then(|f| f.new_range)
+            .into_iter()
+            .chain(request.inserted_ranges.iter().copied().filter(|(s, e)| {
+                self.active_edit_frontier
+                    .as_ref()
+                    .and_then(|f| f.new_range)
+                    .is_none_or(|acc| !(acc.0 <= *s && *e <= acc.1))
+            }))
+            .collect();
+
+        let mut next = match self.active_reflow.as_ref() {
+            Some(previous) if !previous.is_finished(request.now) => {
+                // 上一份 Reflow 的 new 坐标系 = 上一次 target 文本。
+                let prev_target_to_new =
+                    OffsetMap::build(previous.target_text(), &request.base_text);
+                previous.retarget(
+                    request.now,
+                    &request.target_snapshot,
+                    &prev_target_to_new,
+                    &excluded_new,
+                    duration_ms,
+                )
+            }
+            _ => ReflowState::build(
+                &request.base_snapshot,
+                &request.target_snapshot,
+                &request.offset_map,
+                &excluded_old,
+                &excluded_new,
+                request.now,
+                duration_ms,
+            ),
+        };
+        next.set_target_text(request.target_text.clone());
+        self.active_reflow = if next.is_empty() { None } else { Some(next) };
     }
 
     /// Issue #826: 采样本帧遮罩前沿。

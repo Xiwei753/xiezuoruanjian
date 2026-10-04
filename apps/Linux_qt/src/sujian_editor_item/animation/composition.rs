@@ -71,6 +71,8 @@ impl LinuxEditorAnimationCoordinator {
             start_frontier: caret_or_zero(motion.old_cursor_rect),
             target_frontier: caret_or_zero(motion.new_cursor_rect),
             offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
+            base_text: motion.old_text.clone(),
+            target_text: motion.new_text.clone(),
             now,
         });
     }

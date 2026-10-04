@@ -137,6 +137,8 @@ fn insert_frontier_clips_new_text_without_overlay() {
         start_frontier: caret_rect(10.0),
         target_frontier: caret_rect(20.0),
         offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::new(),
+        target_text: String::new(),
         now,
     });
 
@@ -190,6 +192,8 @@ fn delete_frontier_draws_old_overlay_only() {
         start_frontier: caret_rect(10.0),
         target_frontier: caret_rect(0.0),
         offset_map: OffsetMap::from_single_edit(2, (0, 1), 0),
+        base_text: String::new(),
+        target_text: String::new(),
         now,
     });
 
@@ -231,7 +235,6 @@ fn consecutive_insert_keeps_one_frontier_object() {
     let empty = snapshot(Vec::new());
 
     for (idx, x) in [10.0f64, 20.0].into_iter().enumerate() {
-        let _ = idx;
         let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
             0,
             0.0,
@@ -247,6 +250,8 @@ fn consecutive_insert_keeps_one_frontier_object() {
             start_frontier: caret_rect(x - 10.0),
             target_frontier: caret_rect(x),
             offset_map: OffsetMap::from_single_edit(0, (0, 0), 1),
+            base_text: String::new(),
+            target_text: String::new(),
             now: now + Duration::from_millis(u64::try_from(idx).unwrap_or(0)),
         });
     }
@@ -282,6 +287,8 @@ fn finished_frontier_releases_text_animation() {
         start_frontier: caret_rect(0.0),
         target_frontier: caret_rect(10.0),
         offset_map: OffsetMap::from_single_edit(0, (0, 0), 1),
+        base_text: String::new(),
+        target_text: String::new(),
         now,
     });
     assert!(
@@ -314,6 +321,8 @@ fn finish_edit_frontier_snaps_to_canonical() {
         start_frontier: caret_rect(10.0),
         target_frontier: caret_rect(20.0),
         offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::new(),
+        target_text: String::new(),
         now,
     });
     coord.finish_edit_frontier_to_canonical();

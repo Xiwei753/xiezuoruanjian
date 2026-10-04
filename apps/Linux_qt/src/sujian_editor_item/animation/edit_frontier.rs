@@ -16,6 +16,8 @@
 
 use std::time::Instant;
 
+use writer_core::editor::OffsetMap;
+
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, PreparedLineSnapshot, SourceRect,
@@ -79,6 +81,16 @@ pub(crate) struct EditFrontierState {
     pub target_frontier: CursorRect,
     pub started_at: Instant,
     pub duration_ms: u64,
+    /// Issue #826 评论 3 问题 1/2：这一轮 burst **开始前**的正文纯文本。
+    ///
+    /// `old_range` 一直用这个坐标系，所以连续吞字时必须靠它把每次编辑的
+    /// old range 映射回同一个基准（`extend_delete`）。
+    pub base_text: String,
+    /// 上一次 `target_snapshot` 对应的正文纯文本。
+    ///
+    /// `new_range` 用这个坐标系，所以连续吐字时必须靠它把已累计的 new range
+    /// 映射到最新 target 坐标（`extend_insert`）。
+    pub target_text: String,
 }
 
 /// Issue #826: 前沿的一帧采样结果。
@@ -100,8 +112,12 @@ impl EditFrontierSample {
     }
 
     /// 采样结果里是否还需要画旧正文 overlay。
+    ///
+    /// Issue #826 评论 3 问题 4：吞字第一帧（progress=0）旧字必须**完整可见**，
+    /// 随后才被前沿逐步收掉；progress=1 才完全消失。用 `progress > 0.0` 会造成
+    /// 「第一帧不画旧字、下一帧旧字又出现」的首帧闪烁窗口。
     pub(crate) fn needs_old_overlay(self) -> bool {
-        self.progress > 0.0 && self.kind.needs_old_overlay()
+        self.progress < 1.0 && self.kind.needs_old_overlay()
     }
 }
 
@@ -144,6 +160,7 @@ impl EditFrontierState {
     /// 开始一轮吐字。
     pub(crate) fn begin_insert(
         target_snapshot: EditorLayoutSnapshot,
+        target_text: String,
         new_range: (usize, usize),
         start_frontier: CursorRect,
         target_frontier: CursorRect,
@@ -161,13 +178,19 @@ impl EditFrontierState {
             target_frontier,
             started_at,
             duration_ms: duration_ms.max(1),
+            // 纯吐字没有「删除开始前」的正文，base_text 与 target_text 同值，
+            // 只是为了让两个坐标系字段语义统一、连续吐字时不会误用 base 坐标。
+            base_text: target_text.clone(),
+            target_text,
         }
     }
 
     /// 开始一轮吞字。overlay 用删除开始前的旧正文。
     pub(crate) fn begin_delete(
         base_snapshot: EditorLayoutSnapshot,
+        base_text: String,
         target_snapshot: EditorLayoutSnapshot,
+        target_text: String,
         old_range: (usize, usize),
         start_frontier: CursorRect,
         target_frontier: CursorRect,
@@ -188,6 +211,8 @@ impl EditFrontierState {
             target_frontier,
             started_at,
             duration_ms: duration_ms.max(1),
+            base_text,
+            target_text,
         }
     }
 
@@ -214,7 +239,9 @@ impl EditFrontierState {
     /// 开始一轮替换。旧 overlay 收掉 + 新字 mask 打开共用一条前沿。
     pub(crate) fn begin_replace(
         base_snapshot: EditorLayoutSnapshot,
+        base_text: String,
         target_snapshot: EditorLayoutSnapshot,
+        target_text: String,
         old_range: (usize, usize),
         new_range: (usize, usize),
         start_frontier: CursorRect,
@@ -232,23 +259,37 @@ impl EditFrontierState {
             target_frontier,
             started_at,
             duration_ms: duration_ms.max(1),
+            base_text,
+            target_text,
         }
     }
 
     /// 连续吐字并入同一个前沿：先采样当前前沿当新起点，再更新最新 target。
     ///
     /// 不生成第二个历史动画对象，也不携带上一笔的 Reveal/Conceal。
+    ///
+    /// Issue #826 评论 3 问题 1：`new_range` 不能直接被本次的 `new_range` 覆盖。
+    /// 已累计的遮罩范围在**上一次 target 坐标系**里，必须先用
+    /// `prev_target_to_new`（上一次 target 文本 → 最新 target 文本）映射到最新
+    /// 坐标再合并，否则第一个字还没吐完就从遮罩范围里消失、被 canonical 瞬间补全。
     pub(crate) fn extend_insert(
         &mut self,
         target_snapshot: EditorLayoutSnapshot,
+        target_text: String,
         new_range: (usize, usize),
         target_frontier: CursorRect,
+        prev_target_to_new: &OffsetMap,
         now: Instant,
     ) {
         let sampled = self.sample(now);
         self.start_frontier = sampled.frontier;
         self.target_snapshot = target_snapshot;
-        self.new_range = Some(new_range);
+        self.new_range = Some(accumulate_new_range(
+            self.new_range,
+            new_range,
+            prev_target_to_new,
+        ));
+        self.target_text = target_text;
         self.target_frontier = target_frontier;
         self.started_at = now;
     }
@@ -256,19 +297,31 @@ impl EditFrontierState {
     /// 连续吞字并入同一个前沿。
     ///
     /// `base_snapshot` **保持不变**：overlay 必须画本轮连续删除开始前的旧文字，
-    /// 中途换 base 会让已经露出的旧字突然变样。`old_range` 在 base 坐标系里合并。
+    /// 中途换 base 会让已经露出的旧字突然变样。
+    ///
+    /// Issue #826 评论 3 问题 2：`old_range` 一直用 burst 最初 `base_snapshot` 的
+    /// 坐标系，而本次传入的 `old_range` 属于「这一次编辑前」的 snapshot。
+    /// 例如 `ABC|DEF` 连续 Delete：第一次删 D 得 [3,4]，第二次删 E 仍是 [3,4]，
+    /// 但在 burst 最初的 `ABCDEF` 里应累计成 [3,5]。所以先用
+    /// `base_to_current`（burst 最初 base 文本 → 本次编辑前文本）把本次范围
+    /// 映射回 base 坐标再 union，不靠 byte 数字碰巧一致。
     pub(crate) fn extend_delete(
         &mut self,
-        _base_snapshot: EditorLayoutSnapshot,
         target_snapshot: EditorLayoutSnapshot,
+        target_text: String,
         old_range: (usize, usize),
         target_frontier: CursorRect,
+        base_to_current: &OffsetMap,
         now: Instant,
     ) {
         let sampled = self.sample(now);
         self.start_frontier = sampled.frontier;
         self.target_snapshot = target_snapshot;
-        self.old_range = Some(union_range(self.old_range, old_range));
+        let mapped = base_to_current
+            .map_new_range_to_old(old_range.0, old_range.1)
+            .unwrap_or(old_range);
+        self.old_range = Some(union_range(self.old_range, mapped));
+        self.target_text = target_text;
         self.target_frontier = target_frontier;
         self.started_at = now;
     }
@@ -466,6 +519,25 @@ impl FrontierGlyph {
     /// overlay 完全被吞掉（宽度为 0）时不需要画。
     pub(crate) fn is_visible(&self) -> bool {
         self.dest_rect.w > 0.0 && self.dest_rect.h > 0.0
+    }
+}
+
+/// Issue #826 评论 3 问题 1：把上一次 target 坐标系里已累计的遮罩范围映射到最新
+/// target 坐标，再与本次新增范围求并集。
+///
+/// 映射失败（跨 OffsetMap 条目边界）时只保留本次范围：宁可少遮一点，
+/// 也不让已吐出一半的字整段凭空闪出来。
+fn accumulate_new_range(
+    accumulated: Option<(usize, usize)>,
+    new_range: (usize, usize),
+    prev_target_to_new: &OffsetMap,
+) -> (usize, usize) {
+    let Some((start, end)) = accumulated else {
+        return new_range;
+    };
+    match prev_target_to_new.map_old_range_to_new(start, end) {
+        Some(mapped) => union_range(Some(mapped), new_range),
+        None => new_range,
     }
 }
 

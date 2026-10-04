@@ -46,6 +46,11 @@ pub(crate) struct ReflowState {
     pub spans: Vec<ReflowSpan>,
     pub started_at: Instant,
     pub duration_ms: u64,
+    /// `spans[].new_range` 所属的正文纯文本（self 的 new 坐标系）。
+    ///
+    /// `retarget` 用它和「本次 target 文本」构造 OffsetMap，把已播到一半的
+    /// span 对应到最新 layout 的同一段文字。
+    pub target_text: String,
 }
 
 /// 一段未改文字在一帧里的位置。
@@ -87,7 +92,88 @@ impl ReflowState {
             spans,
             started_at,
             duration_ms: duration_ms.max(1),
+            target_text: String::new(),
         }
+    }
+
+    /// Issue #826 评论 3 问题 3：把正在播的 Reflow 重新指向最新 canonical 目标。
+    ///
+    /// 不能直接 `build` 一份新的：那样屏幕上会出现「A→B 半路 → 瞬间跳到 B →
+    /// 再 B→C」。正确做法是永远只有一份 ReflowState，只从「当前屏幕 → 最新目标」：
+    /// 1. 先 `sample(now)` 得到每段未改文字**此刻真实画在屏幕上**的 `dest_rect`；
+    /// 2. 用 `prev_target_to_new`（上一次 target 文本 → 最新 target 文本）把最新
+    ///    layout 里的 cluster 映回 self 的 new 坐标系，再按 `new_range` 找到对应 span；
+    /// 3. 新 span 的 `old_rect` 直接取刚采样的屏幕位置，`new_rect` 取最新 canonical；
+    /// 4. `started_at` 重置为 `now`。
+    ///
+    /// `screen_rect` 传 `None` 时（还没建立 span，或采样不到）该 cluster 不进 Reflow。
+    /// 匹配不上就宁可不动，也不凭空跳。
+    pub(crate) fn retarget(
+        &self,
+        now: Instant,
+        new_snapshot: &EditorLayoutSnapshot,
+        prev_target_to_new: &OffsetMap,
+        excluded_new: &[(usize, usize)],
+        duration_ms: u64,
+    ) -> Self {
+        let sampled = self.sample(now);
+        // self.spans 与 sampled 逐项对齐，按 new_range 建索引。
+        let mut spans = Vec::new();
+        for new_line in &new_snapshot.line_snapshots {
+            for cluster in &new_line.clusters {
+                let new_start = cluster.byte_start;
+                let new_end = cluster.byte_end;
+                if new_start >= new_end {
+                    continue;
+                }
+                if overlaps_any(new_start, new_end, excluded_new) {
+                    continue;
+                }
+                // 最新坐标 → self 的 new 坐标（self.target_text 坐标系）。
+                let Some(prev_range) = prev_target_to_new.map_new_range_to_old(new_start, new_end)
+                else {
+                    continue;
+                };
+                let Some(index) = self
+                    .spans
+                    .iter()
+                    .position(|span| span.new_range == prev_range)
+                else {
+                    // 这一段不是上一次 Reflow 管的（或者从没被 Reflow 管过），
+                    // 不在本次 retarget 里凭空生成。
+                    continue;
+                };
+                let Some(screen_rect) = sampled.get(index).map(|frame| frame.dest_rect.clone())
+                else {
+                    continue;
+                };
+                let new_rect = new_line.source_rect_to_document_rect(&cluster.source_rect);
+                spans.push(ReflowSpan {
+                    old_range: self.spans[index].old_range,
+                    new_range: (new_start, new_end),
+                    // 起点 = 当前屏幕上的真实位置，不再是上一笔的 canonical 起点。
+                    old_rect: screen_rect,
+                    new_rect,
+                    snapshot_id: new_line.id,
+                    source_rect: cluster.source_rect.clone(),
+                });
+            }
+        }
+        Self {
+            spans,
+            started_at: now,
+            duration_ms: duration_ms.max(1),
+            target_text: String::new(),
+        }
+    }
+
+    /// 本 state 的 new 坐标系对应的正文纯文本。
+    pub(crate) fn target_text(&self) -> &str {
+        &self.target_text
+    }
+
+    pub(crate) fn set_target_text(&mut self, text: String) {
+        self.target_text = text;
     }
 
     pub(crate) fn is_empty(&self) -> bool {

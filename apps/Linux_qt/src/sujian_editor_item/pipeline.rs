@@ -1726,6 +1726,8 @@ impl LinuxEditorPipeline {
                         start_frontier: old_caret_rect,
                         target_frontier: new_caret_rect,
                         offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
+                        base_text: motion.old_text.clone(),
+                        target_text: motion.new_text.clone(),
                         now: edit_now,
                     });
                 // 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束。
