@@ -96,6 +96,35 @@ pub fn point_to_segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by
     ((px - proj_x).powi(2) + (py - proj_y).powi(2)).sqrt()
 }
 
+fn cross(ux: f32, uy: f32, vx: f32, vy: f32) -> f32 {
+    ux * vy - uy * vx
+}
+
+/// 点是否在三角形内部（含边界）。
+///
+/// 用三条边的叉积符号一致性判断。退化三角形（三点共线，面积为 0）不覆盖任何点：
+/// 否则一个"三个顶点重合"的退化箭头会把整个平面都算成命中。
+pub fn point_in_triangle(
+    px: f32,
+    py: f32,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+    cx: f32,
+    cy: f32,
+) -> bool {
+    if cross(bx - ax, by - ay, cx - ax, cy - ay).abs() < 1e-6 {
+        return false;
+    }
+    let d1 = cross(px - ax, py - ay, bx - ax, by - ay);
+    let d2 = cross(px - bx, py - by, cx - bx, cy - by);
+    let d3 = cross(px - cx, py - cy, ax - cx, ay - cy);
+    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(has_neg && has_pos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

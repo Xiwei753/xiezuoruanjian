@@ -1880,3 +1880,52 @@ fn pinch_disables_touch_taps_at_the_handler_level() {
         "两个 delegate 的 touchGestureBlocked 必须同源绑定，实际源码不符"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 17. 箭头命中 + 鼠标入口收敛（评论 5977879544）
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 画出来的箭头三角形也是边的一部分：命中必须覆盖箭头内部与三条箭头边，
+/// 否则高倍缩放（阈值为 1 world）时会出现"点在箭头上却点不中"。
+#[test]
+fn edge_hit_testing_covers_rendered_arrow_triangle() {
+    let hittest = read_src("src/starmap_view/hittest.rs");
+    assert!(
+        hittest.contains("pub fn point_in_triangle("),
+        "命中几何必须提供三角形内部判定"
+    );
+    let edge = read_src("src/starmap_view/edge_render.rs");
+    assert!(
+        edge.contains("fn arrow_triangle_distance(")
+            && edge.contains("shaft.min(arrow_triangle_distance(x, y, r))")
+            && edge.contains("point_in_triangle(x, y, tx, ty, lx, ly, rx, ry)"),
+        "边命中必须取 箭杆 ∪ 箭头三角形 的最短距离，实际源码缺少"
+    );
+    let tests = read_src("src/starmap_view/edge_render/tests.rs");
+    assert!(
+        tests.contains("fn hit_test_edge_render_covers_arrow_triangle(")
+            && tests.contains("fn formal_edge_arrow_is_clickable_at_small_threshold("),
+        "必须有「箭头内部小 threshold 命中」的回归测试"
+    );
+}
+
+/// 鼠标入口只有既定那套：中键历史 pan 分支（观察器 / acceptedButtons / 分支 /
+/// 日志）必须彻底删除，不再维护第二个历史快捷入口。
+#[test]
+fn middle_button_pan_entry_is_removed() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        !canvas.contains("Qt.MiddleButton") && !canvas.contains("\"middle\""),
+        "中键 press 观察器 / pan 分支 / middle 日志都必须删除，实际源码仍有残留"
+    );
+    let bg = function_window(&canvas, "id: bgDragArea", 2500);
+    assert!(
+        bg.contains("acceptedButtons: Qt.LeftButton"),
+        "bgDragArea 只接受左键，实际窗口:\n{bg}"
+    );
+    assert!(
+        !bg.contains("mouse.button === Qt.MiddleButton")
+            && !bg.contains("beginPan()\n                    return"),
+        "onPressed 不得再留中键直接进入 pan 的历史分支，实际窗口:\n{bg}"
+    );
+}

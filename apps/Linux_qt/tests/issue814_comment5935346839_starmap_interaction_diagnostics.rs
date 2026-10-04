@@ -193,6 +193,8 @@ fn canvas_and_content_log_all_gesture_boundary_events() {
 /// pointer_press 必须由 passive-grab PointHandler 观察：背景 MouseArea 在按到
 /// Node/Embed 时收不到 press（对象 TapHandler 先取 exclusive grab），
 /// 而"按在对象上没反应"正是要诊断的场景。
+/// 评论 5977879544：鼠标入口只剩左/右两键（中键历史 pan 分支已删），
+/// 所以观察器也固定成 left/right/touch 三路，不再要求 middle。
 #[test]
 fn canvas_pointer_press_covers_object_presses_via_passive_handlers() {
     let src = read_src(CANVAS);
@@ -202,17 +204,20 @@ fn canvas_pointer_press_covers_object_presses_via_passive_handlers() {
     );
     for call in [
         "logPointerPress(\"left\", \"mouse\", point)",
-        "logPointerPress(\"middle\", \"mouse\", point)",
         "logPointerPress(\"right\", \"mouse\", point)",
         "logPointerPress(\"left\", \"touch\", point)",
     ] {
         assert!(src.contains(call), "pointer_press 观察器必须覆盖 {call}");
     }
     let observers = strip_line_comments(&src);
+    assert!(
+        !observers.contains("logPointerPress(\"middle\""),
+        "中键历史 pan 入口已删除，不得再保留 middle press 观察器"
+    );
     let count = observers.matches("logPointerPress(").count();
     assert!(
-        count >= 4,
-        "至少要有 4 个 press 边界观察入口（左/中/右/触屏），实际 {count}"
+        count >= 3,
+        "至少要有 3 个 press 边界观察入口（左/右/触屏），实际 {count}"
     );
 }
 

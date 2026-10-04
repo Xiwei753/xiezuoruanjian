@@ -502,3 +502,210 @@ fn prospective_preview_reports_diagnostic_for_missing_endpoint() {
     assert_eq!(err.endpoint, "to");
     assert_eq!(err.reason, EdgeAnchorDiagnosticReason::LocalNodeMissing);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 评论 5977879544: 画出来的箭头也是边 —— 命中必须覆盖箭头三角形
+// ─────────────────────────────────────────────────────────────────────
+
+/// 箭头内部、同时离箭杆 > threshold 的点，必须在很小的 threshold 下仍然命中。
+/// 只测箭杆的旧实现会漏掉这些点（"点在箭头上却点不中"）。
+#[test]
+fn hit_test_edge_render_covers_arrow_triangle() {
+    let mut r = make_render("e1", (0.0, 0.0), (100.0, 0.0));
+    // 真实箭头几何：tip=(100,0)，长 10、半角 30° → left=(90,5), right=(90,-5)
+    r.arrow_tip_x = 100.0;
+    r.arrow_tip_y = 0.0;
+    r.arrow_left_x = 90.0;
+    r.arrow_left_y = 5.0;
+    r.arrow_right_x = 90.0;
+    r.arrow_right_y = -5.0;
+    let renders = std::slice::from_ref(&r);
+
+    // (91.5,2.5)：三角形内部，且到三条箭头边和箭杆都 > 1.0 world。
+    let shaft_only = point_to_segment_distance(91.5, 2.5, 0.0, 0.0, 100.0, 0.0);
+    assert!(shaft_only > 1.0, "该点必须离箭杆 > threshold, got {}", shaft_only);
+    assert!(
+        !point_in_triangle(91.5, 2.5, 100.0, 0.0, 90.0, 5.0, 90.0, -5.0) == false,
+        "前提：该点确实在箭头三角形内部"
+    );
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(91.5, 2.5, renders, 1.0).as_deref(),
+        Some("e1"),
+        "点在箭头内部时必须命中（只测箭杆会漏）"
+    );
+
+    // (89.4,3.0)：三角形外侧，但距箭头底边 0.6 world < threshold —— 统一 slop 同样命中。
+    assert!(
+        point_to_segment_distance(89.4, 3.0, 90.0, -5.0, 90.0, 5.0) < 1.0,
+        "前提：该点离箭头底边 < threshold"
+    );
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(89.4, 3.0, renders, 1.0).as_deref(),
+        Some("e1"),
+        "箭头边附近的点必须命中"
+    );
+
+    // (50,3)：离箭杆 3 world、离箭头很远 —— 不得命中。
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(50.0, 3.0, renders, 1.0),
+        None,
+        "没有画出来的空域不能被算进命中"
+    );
+}
+
+/// 退化箭头（三个顶点重合）不能让整个平面都算命中。
+#[test]
+fn hit_test_edge_render_degenerate_arrow_does_not_cover_plane() {
+    let renders = vec![make_render("e1", (0.0, 0.0), (200.0, 0.0))];
+    // make_render 的箭头三点都等于终点 (200,0)。
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(100.0, 20.0, &renders, 10.0),
+        None,
+        "退化箭头不得覆盖平面"
+    );
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(200.0, 5.0, &renders, 10.0).as_deref(),
+        Some("e1"),
+        "终点附近仍在 threshold 内命中"
+    );
+}
+
+/// 端到端：正式边渲染出的箭头三角形同样可点（高倍缩放的 threshold=1 world）。
+#[test]
+fn formal_edge_arrow_is_clickable_at_small_threshold() {
+    let graph = StarMapGraph {
+        starmap_id: "map_1".to_string(),
+        nodes: vec![node("note_1", 0.0), node("note_2", 400.0)],
+        edges: vec![StarMapEdge {
+            id: "edge_1".to_string(),
+            from: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "note_1".to_string(),
+                },
+            },
+            to: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "note_2".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        }],
+        ..StarMapGraph::default()
+    };
+    let layout = layout_with(&[("note_1", 0.0), ("note_2", 400.0)]);
+    let batch = compute_edge_renders_from_paths(
+        &graph.edges,
+        &graph,
+        &layout,
+        &[],
+        &EdgeRenderParams::default(),
+    );
+    assert!(batch.diagnostics.is_empty(), "{:?}", batch.diagnostics);
+    assert_eq!(batch.renders.len(), 1);
+    let r = &batch.renders[0];
+    // 箭头内部一点：重心与上翼边中点的中点（严格在三角形内，且离箭杆 ≈1.25 world）。
+    let cx = (r.arrow_tip_x + r.arrow_left_x + r.arrow_right_x) / 3.0;
+    let cy = (r.arrow_tip_y + r.arrow_left_y + r.arrow_right_y) / 3.0;
+    let inside_x = (cx + (r.arrow_tip_x + r.arrow_left_x) / 2.0) / 2.0;
+    let inside_y = (cy + (r.arrow_tip_y + r.arrow_left_y) / 2.0) / 2.0;
+    assert!(
+        point_in_triangle(
+            inside_x,
+            inside_y,
+            r.arrow_tip_x,
+            r.arrow_tip_y,
+            r.arrow_left_x,
+            r.arrow_left_y,
+            r.arrow_right_x,
+            r.arrow_right_y
+        ),
+        "前提：取样点必须落在箭头三角形内部"
+    );
+    let shaft_only =
+        point_to_segment_distance(inside_x, inside_y, r.start_x, r.start_y, r.end_x, r.end_y);
+    assert!(
+        shaft_only > 1.0,
+        "前提：该点离箭杆 > 1 world（got {}）",
+        shaft_only
+    );
+    assert_eq!(
+        hit_test_edge_renders_with_threshold(inside_x, inside_y, &batch.renders, 1.0).as_deref(),
+        Some("edge_1"),
+        "正式边箭头内部在小 threshold 下也必须命中"
+    );
+}
+
+/// JSON 全链路：QML 走的正是 compute_edge_renders_json → hit_test_edge_renders_json，
+/// 箭头命中必须在 serde camelCase 边界上同样成立。
+#[test]
+fn json_bridge_hits_arrow_triangle_with_small_threshold() {
+    use crate::starmap_view::bridge::{compute_edge_renders_json, hit_test_edge_renders_json};
+
+    let graph = StarMapGraph {
+        starmap_id: "map_1".to_string(),
+        nodes: vec![node("note_1", 0.0), node("note_2", 400.0)],
+        edges: vec![StarMapEdge {
+            id: "edge_1".to_string(),
+            from: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "note_1".to_string(),
+                },
+            },
+            to: StarMapTargetPath {
+                starmap_id: "map_1".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "note_2".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        }],
+        ..StarMapGraph::default()
+    };
+    let nodes_json = r#"[
+        {"id":"note_1","x":0.0,"y":0.0,"width":150.0,"height":60.0},
+        {"id":"note_2","x":400.0,"y":0.0,"width":150.0,"height":60.0}
+    ]"#;
+    let envelope = compute_edge_renders_json(&graph, nodes_json, "[]");
+    assert!(
+        envelope.contains("\"arrowTipX\""),
+        "render JSON 必须是 camelCase: {envelope}"
+    );
+    // QML 从 envelope 里取 data 数组后原样传给命中接口。
+    let envelope_json: serde_json::Value =
+        serde_json::from_str(&envelope).expect("compute_edge_renders_json 必须是合法 JSON");
+    let renders_json = serde_json::to_string(
+        envelope_json
+            .get("data")
+            .expect("envelope 必须带 data 字段"),
+    )
+    .expect("renders 序列化");
+
+    // 箭头内部一点（离箭杆 ≈1.25 world），threshold 用放大后的 1 world。
+    let hit = hit_test_edge_renders_json(renders_json.as_str(), 394.95, 31.25, 1.0);
+    assert!(
+        hit.contains("edge_1"),
+        "JSON 全链路上箭头内部也必须可命中: {hit}"
+    );
+
+    // 同一 x、离箭杆 3 world 且离箭头 > 1 world：不得命中。
+    let miss = hit_test_edge_renders_json(renders_json.as_str(), 380.0, 33.0, 1.0);
+    assert!(
+        miss.contains("null") || !miss.contains("edge_1"),
+        "箭头覆盖之外不得命中: {miss}"
+    );
+}

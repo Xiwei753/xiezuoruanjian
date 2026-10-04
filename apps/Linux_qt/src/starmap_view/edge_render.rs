@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::hittest::point_to_segment_distance;
+use super::hittest::{point_in_triangle, point_to_segment_distance};
 use super::layout_types::{StarMapEmbedSceneRect, StarMapLayout};
 use writer_core::starmap::types::reference::StarMapTargetPath;
 use writer_core::starmap::types::StarMapGraph;
@@ -619,7 +619,7 @@ pub fn hit_test_edge_renders_with_threshold(
     let mut closest_id = None;
 
     for r in renders {
-        let dist = point_to_segment_distance(x, y, r.start_x, r.start_y, r.end_x, r.end_y);
+        let dist = distance_to_edge_render(x, y, r);
         if dist < threshold && dist < closest_dist {
             closest_dist = dist;
             closest_id = Some(r.edge_id.clone());
@@ -627,6 +627,30 @@ pub fn hit_test_edge_renders_with_threshold(
     }
 
     closest_id
+}
+
+/// 点到"画出来的边"的最短距离：箭杆 + 箭头三角形。
+///
+/// 箭头是边的一部分（QML 会 fill 出三角形），只测箭杆会在高倍缩放下出现
+/// "点在箭头上却点不中"：箭头长 10 world、半角 30°，翼尖离主线可达
+/// `10 * sin(30°) = 5 world`，远大于放大后的屏幕折算阈值。
+fn distance_to_edge_render(x: f32, y: f32, r: &EdgeRender) -> f32 {
+    let shaft = point_to_segment_distance(x, y, r.start_x, r.start_y, r.end_x, r.end_y);
+    shaft.min(arrow_triangle_distance(x, y, r))
+}
+
+/// 点到箭头三角形的距离：在三角形内部为 0，否则取到三条边的最短距离。
+fn arrow_triangle_distance(x: f32, y: f32, r: &EdgeRender) -> f32 {
+    let (tx, ty) = (r.arrow_tip_x, r.arrow_tip_y);
+    let (lx, ly) = (r.arrow_left_x, r.arrow_left_y);
+    let (rx, ry) = (r.arrow_right_x, r.arrow_right_y);
+
+    if point_in_triangle(x, y, tx, ty, lx, ly, rx, ry) {
+        return 0.0;
+    }
+    point_to_segment_distance(x, y, tx, ty, lx, ly)
+        .min(point_to_segment_distance(x, y, lx, ly, rx, ry))
+        .min(point_to_segment_distance(x, y, rx, ry, tx, ty))
 }
 
 #[cfg(test)]

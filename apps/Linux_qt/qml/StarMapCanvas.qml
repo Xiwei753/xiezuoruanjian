@@ -566,14 +566,6 @@ Item {
     }
     PointHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.MiddleButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("middle", "mouse", point)
-        }
-    }
-    PointHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
         onActiveChanged: {
             if (active)
@@ -596,11 +588,12 @@ Item {
     // 按下时先用递归命中判断：只有 node/embed 才 mouse.accepted = false
     // 让事件穿透给对应对象；childContent（无交互 delegate）与 empty/edge 一样
     // 走全局 pan，不能在小尺寸子图内部留死区。
-    // 中键直接平移。
+    // Issue #822 评论 5977879544：鼠标入口只有既定那套（左键单击选中、左键拖空白
+    // pan、左键长按节点/子星图连线、右键菜单、滚轮缩放），中键历史 pan 分支已删除。
     MouseArea {
         id: bgDragArea
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        acceptedButtons: Qt.LeftButton
         hoverEnabled: true
 
         property string pressHitKind: ""
@@ -624,41 +617,20 @@ Item {
             _touchInputActive = false
             var hit = hitTargetAtScreen(mouse.x, mouse.y)
 
-            if (mouse.button === Qt.LeftButton) {
-                // 只有真正可交互的对象（node/embed）才放弃事件，让 delegate 处理。
-                // childContent（子内容没加载 / preview / shell）没有可交互 delegate，
-                // 继续走全局 pan：小尺寸子图不能拖动就是死区，和"只有一台全局相机"冲突。
-                if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-                    mouse.accepted = false
-                    return
-                }
-                pressHitKind = "empty"
-                pressX = mouse.x
-                pressY = mouse.y
-                lastX = mouse.x
-                lastY = mouse.y
-                panStarted = false
+            // 鼠标只有一个手势入口（左键，见 acceptedButtons）：
+            // 只有真正可交互的对象（node/embed）才放弃事件，让 delegate 处理。
+            // childContent（子内容没加载 / preview / shell）没有可交互 delegate，
+            // 继续走全局 pan：小尺寸子图不能拖动就是死区，和"只有一台全局相机"冲突。
+            if (hit && (hit.kind === "node" || hit.kind === "embed")) {
+                mouse.accepted = false
                 return
             }
-
-            // 中键直接进入 pan（不依赖长按/阈值）
-            if (mouse.button === Qt.MiddleButton) {
-                if (!interaction.beginPan())
-                    return
-
-                pressHitKind = "empty"
-                panStarted = true
-                lastX = mouse.x
-                lastY = mouse.y
-                _panBeginX = panX
-                _panBeginY = panY
-                logInteraction("pan_begin", "empty", "", {
-                    "startPanX": panX,
-                    "startPanY": panY,
-                    "button": "middle",
-                    "device": "mouse"
-                })
-            }
+            pressHitKind = "empty"
+            pressX = mouse.x
+            pressY = mouse.y
+            lastX = mouse.x
+            lastY = mouse.y
+            panStarted = false
         }
 
         onPositionChanged: function(mouse) {
@@ -688,7 +660,7 @@ Item {
                 return
             }
 
-            // panStarted（中键直接 true，或左键已超阈值）：继续 pan
+            // panStarted（左键已超阈值）：继续 pan
             if (panStarted && interaction.pointerMode === "pan") {
                 var dx = mouse.x - lastX
                 var dy = mouse.y - lastY

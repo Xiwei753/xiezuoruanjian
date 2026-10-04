@@ -43,7 +43,7 @@ QtObject {
     // 交互状态机：idle / pressPending / pan / connect / move / contextPending / pinch
     //   idle           — 无活跃手势
     //   pressPending   — 已按下但还没决定是 move 还是 connect（按下仲裁中）
-    //   pan            — 背景拖动或中键拖动，平移全局相机
+    //   pan            — 左键拖动空白/低 LOD 子内容区（超拖动阈值后），平移全局相机
     //   connect        — 长按节点/Embed 后拖动，拉线预览
     //   move           — 超过拖动阈值后移动节点/Embed
     //   contextPending — 触屏长按后等待：不移动弹菜单，移动超阈值转 connect
