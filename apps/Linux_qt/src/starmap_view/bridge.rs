@@ -45,19 +45,14 @@ fn envelope_err_str(msg: &str) -> String {
     .to_json_string()
 }
 
-/// 计算边渲染几何（箭头/偏移/标签位置）。
+/// QML 传来的 scene geometry JSON → 显示层 layout + embed 包围盒。
 ///
-/// 几何算法在 Linux 平台端 `starmap_view::edge_render` 实现，Core 不预计算渲染数据。
-/// 输入 `nodes_json` 是 QML 传来的 `[{id,x,y,width,height}]`（node scene geometry），
-/// 转成显示层 layout 节点；`embeds_json` 是 QML 传来的
-/// `[{instanceId,x,y,width,height}]`（embed scene geometry），转成显示层 embed 包围盒。
-/// 边的 from/to 路径解析需要的完整 graph 结构由调用方（backend 组合边界）先从 Core
-/// 取好再传入，本函数不再读 Core。
-pub fn compute_edge_renders_json(
-    graph: &writer_core::starmap::types::StarMapGraph,
+/// `nodes_json` 是 `[{id,x,y,width,height}]`（node scene geometry）；
+/// `embeds_json` 是 `[{instanceId,x,y,width,height}]`（embed scene geometry）。
+fn parse_scene_geometry(
     nodes_json: &str,
     embeds_json: &str,
-) -> String {
+) -> Result<(StarMapLayout, Vec<StarMapEmbedSceneRect>), String> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct NodePos {
@@ -68,10 +63,8 @@ pub fn compute_edge_renders_json(
         height: f32,
     }
 
-    let nodes: Vec<NodePos> = match serde_json::from_str(nodes_json) {
-        Ok(v) => v,
-        Err(e) => return envelope_err_str(&format!("Invalid nodes JSON: {}", e)),
-    };
+    let nodes: Vec<NodePos> =
+        serde_json::from_str(nodes_json).map_err(|e| format!("Invalid nodes JSON: {}", e))?;
 
     let layout = StarMapLayout {
         kind: StarMapLayoutKind::Freeform,
@@ -94,9 +87,25 @@ pub fn compute_edge_renders_json(
             .collect(),
     };
 
-    let embed_rects: Vec<StarMapEmbedSceneRect> = match serde_json::from_str(embeds_json) {
+    let embed_rects: Vec<StarMapEmbedSceneRect> =
+        serde_json::from_str(embeds_json).map_err(|e| format!("Invalid embeds JSON: {}", e))?;
+
+    Ok((layout, embed_rects))
+}
+
+/// 计算边渲染几何（箭头/偏移/标签位置）。
+///
+/// 几何算法在 Linux 平台端 `starmap_view::edge_render` 实现，Core 不预计算渲染数据。
+/// 边的 from/to 路径解析需要的完整 graph 结构由调用方（backend 组合边界）先从 Core
+/// 取好再传入，本函数不再读 Core。
+pub fn compute_edge_renders_json(
+    graph: &writer_core::starmap::types::StarMapGraph,
+    nodes_json: &str,
+    embeds_json: &str,
+) -> String {
+    let (layout, embed_rects) = match parse_scene_geometry(nodes_json, embeds_json) {
         Ok(v) => v,
-        Err(e) => return envelope_err_str(&format!("Invalid embeds JSON: {}", e)),
+        Err(e) => return envelope_err_str(&e),
     };
 
     let batch = edge_render::compute_edge_renders_from_paths(
@@ -111,6 +120,54 @@ pub fn compute_edge_renders_json(
         log::debug!("compute_edge_renders diagnostics: {:?}", batch.diagnostics);
     }
     envelope_ok(batch.renders)
+}
+
+/// 候选边预览（拉线用）：在宿主图现有边表上临时追加一条固定 id 的候选边，
+/// 调同一个正式边 renderer，只返回候选边自己的 render。
+///
+/// 这样预览与正式边共用同一份几何真相：Node 矩形 / Embed 圆周、旧 portal 归一、
+/// LCA 后深路径投影、已有反向边时的双向偏移全部一致。
+/// `from_path_json` / `to_path_json` 是 QML prospective LCA 规划出的
+/// `StarMapTargetPath`（starmapId 必须已绑定到宿主图）。
+///
+/// 端点无法在宿主图定位（拖到空白/非法路径）返回 `success + null`，
+/// QML 退回自由预览，不算错误。
+pub fn compute_prospective_edge_render_json(
+    graph: &writer_core::starmap::types::StarMapGraph,
+    nodes_json: &str,
+    embeds_json: &str,
+    from_path_json: &str,
+    to_path_json: &str,
+) -> String {
+    let (layout, embed_rects) = match parse_scene_geometry(nodes_json, embeds_json) {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&e),
+    };
+    let from_path: writer_core::starmap::types::reference::StarMapTargetPath =
+        match serde_json::from_str(from_path_json) {
+            Ok(v) => v,
+            Err(e) => return envelope_err_str(&format!("Invalid from path JSON: {}", e)),
+        };
+    let to_path: writer_core::starmap::types::reference::StarMapTargetPath =
+        match serde_json::from_str(to_path_json) {
+            Ok(v) => v,
+            Err(e) => return envelope_err_str(&format!("Invalid to path JSON: {}", e)),
+        };
+
+    match edge_render::compute_prospective_edge_render(
+        &from_path,
+        &to_path,
+        graph,
+        &layout,
+        &embed_rects,
+        &EdgeRenderParams::default(),
+    ) {
+        Ok(render) => envelope_ok(render),
+        Err(diag) => {
+            log::debug!("compute_prospective_edge_render diagnostic: {:?}", diag);
+            envelope_ok(serde_json::Value::Null)
+        }
+    }
 }
 
 /// 对已算好的边渲染结果做命中测试。
@@ -142,4 +199,101 @@ pub fn hit_test_nodes_json(nodes_json: &str, x: f32, y: f32) -> String {
 
     let result = hittest::hit_test_nodes(x, y, &nodes);
     envelope_ok(result.map(|r| r.id))
+}
+
+#[cfg(test)]
+mod prospective_edge_render_tests {
+    use super::*;
+    use writer_core::starmap::types::reference::StarMapTargetPath;
+    use writer_core::starmap::types::{
+        StarMapEdge, StarMapEdgeKind, StarMapNode, StarMapNodeKind, StarMapPoint,
+        StarMapTargetDetail,
+    };
+
+    fn node(id: &str, x: f32) -> StarMapNode {
+        StarMapNode {
+            id: id.to_string(),
+            title: id.to_string(),
+            kind: StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: Default::default(),
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint { x, y: 0.0 },
+            style: Default::default(),
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn path(node_id: &str) -> StarMapTargetPath {
+        StarMapTargetPath {
+            starmap_id: "map_1".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: node_id.to_string(),
+            },
+        }
+    }
+
+    fn edge(id: &str, from: &str, to: &str) -> StarMapEdge {
+        StarMapEdge {
+            id: id.to_string(),
+            from: path(from),
+            to: path(to),
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// 宿主图已有 A→B；从 B 拉到 A 的候选边 JSON 入口必须返回带上
+    /// 双向偏移的 render（与正式边同源），而不是未偏移中线。
+    #[test]
+    fn prospective_edge_render_json_returns_offset_render_with_reverse_edge() {
+        let graph = writer_core::starmap::types::StarMapGraph {
+            starmap_id: "map_1".to_string(),
+            nodes: vec![node("note_a", 0.0), node("note_b", 400.0)],
+            edges: vec![edge("edge_ab", "note_a", "note_b")],
+            ..Default::default()
+        };
+        let nodes = "[{\"id\":\"note_a\",\"x\":0,\"y\":0,\"width\":150,\"height\":60},\
+                      {\"id\":\"note_b\",\"x\":400,\"y\":0,\"width\":150,\"height\":60}]";
+        let from = serde_json::to_string(&path("note_b")).unwrap();
+        let to = serde_json::to_string(&path("note_a")).unwrap();
+
+        let raw = compute_prospective_edge_render_json(&graph, nodes, "[]", &from, &to);
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["success"], true, "{raw}");
+        assert_eq!(v["data"]["hasBidirectional"], true, "{raw}");
+        let start_y = v["data"]["startY"].as_f64().unwrap();
+        let end_y = v["data"]["endY"].as_f64().unwrap();
+        assert!(
+            (start_y - 18.0).abs() < 0.01 && (end_y - 18.0).abs() < 0.01,
+            "已有反向边时候选边必须带上 12 world 垂直偏移（y=18）, got=({start_y},{end_y})"
+        );
+    }
+
+    /// 端点无法在宿主图定位：success + null（QML 退回自由预览），不是错误。
+    #[test]
+    fn prospective_edge_render_json_returns_null_for_unresolvable_endpoint() {
+        let graph = writer_core::starmap::types::StarMapGraph {
+            starmap_id: "map_1".to_string(),
+            nodes: vec![node("note_a", 0.0)],
+            edges: vec![],
+            ..Default::default()
+        };
+        let nodes = "[{\"id\":\"note_a\",\"x\":0,\"y\":0,\"width\":150,\"height\":60}]";
+        let from = serde_json::to_string(&path("note_a")).unwrap();
+        let to = serde_json::to_string(&path("note_missing")).unwrap();
+
+        let raw = compute_prospective_edge_render_json(&graph, nodes, "[]", &from, &to);
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["success"], true, "{raw}");
+        assert!(v["data"].is_null(), "{raw}");
+    }
 }

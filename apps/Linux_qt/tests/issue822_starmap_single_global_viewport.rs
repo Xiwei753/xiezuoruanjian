@@ -806,9 +806,9 @@ fn connect_end_creates_the_edge_on_the_lca_host() {
         "必须按宿主路径段找到宿主 Content，实际窗口:\n{finish}"
     );
     assert!(
-        finish.contains("plan.from.starmapId = hostStarmapId")
-            && finish.contains("plan.to.starmapId = hostStarmapId"),
-        "端点 starmapId 必须等于宿主的 finalStarmapId，实际窗口:\n{finish}"
+        finish.contains("plan = bindPlanToHost(plan, host)")
+            && finish.contains("hostStarmapId = host.finalStarmapId"),
+        "端点 starmapId 必须绑定到宿主的 finalStarmapId，实际窗口:\n{finish}"
     );
     assert!(
         finish.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),
@@ -1520,56 +1520,94 @@ fn edge_hit_threshold_is_screen_relative() {
     );
 }
 
-/// 拉线预览与正式边共用同一套可见端点：同层时是源对象边界；
-/// 悬停合法 target 时先做 prospective LCA 规划，再用宿主可见形状
-/// （深路径只投影到第一层 Embed 圆周）算预览起止点，松手不跳变。
+/// 拉线预览与正式边共用同一套几何真相：悬停合法 target 时先做 prospective LCA
+/// 规划，再把路径交给平台 edge renderer（候选边临时追加进宿主边表）；
+/// 深路径投影、双向偏移都只有 Rust 一份实现，QML 不再抄第二份。
 #[test]
-fn connect_preview_uses_host_visible_endpoints() {
+fn connect_preview_reuses_platform_edge_renderer() {
     let content = strip_line_comments(&read_src(CONTENT));
     let boundary = function_window(&content, "function boundaryPointLocal(", 1600);
     assert!(
         boundary.contains("var radius = Math.min(width, height) / 2")
             && boundary.contains("var tMin = Math.max(txMin, tyMin)")
             && boundary.contains("var t = tMin >= 0 ? tMin : tMax"),
-        "预览边界必须按矩形/圆周求交（与 Rust line_rect_entry / line_circle_entry 同语义），\
+        "自由预览的边界必须按矩形/圆周求交（与 Rust line_rect_entry / line_circle_entry 同语义），\
          实际窗口:\n{boundary}"
     );
 
-    // 宿主可见投影：segments 空 + node → 本层 Node；第一段容器段 → 本层圆，
-    // 段身份映射（含旧 portal 归一）由 Controller 统一持有。
-    let shape = function_window(&content, "function visibleEndpointShapeForHostPath(", 1400);
+    // 宿主把规划结果交给平台 edge renderer：候选边 = 现有边表 + __preview__。
+    let prospective = function_window(&content, "function prospectiveEdgeRenderForPlan(", 500);
     assert!(
-        shape.contains("graphController.uiInstanceIdOfPathSegment(segments[0])")
-            && shape.contains("graphController.getNode(path.target.nodeId)")
-            && shape.contains("var embed = graphController.getEmbed(instanceId)")
-            && shape.contains("isEmbed: true"),
-        "宿主可见端点必须按路径第一段投影，实际窗口:\n{shape}"
+        prospective.contains("graphController.computeProspectiveEdgeRender(plan.from, plan.to)"),
+        "宿主 Content 必须把 prospective LCA 的 from/to 交给平台候选边入口，实际窗口:\n{prospective}"
     );
-    let controller = strip_line_comments(&read_src(CONTROLLER));
+    let bind = function_window(&content, "function bindPlanToHost(", 500);
     assert!(
-        controller.contains("function uiInstanceIdOfPathSegment(segment)")
-            && controller.contains("\"legacy-portal:\" + segment.nodeId"),
-        "旧 portal 的 UI instanceId 映射必须由 Controller 统一持有（Content 不得自行判断）"
+        bind.contains("plan.from.starmapId = host.finalStarmapId")
+            && bind.contains("plan.to.starmapId = host.finalStarmapId"),
+        "端点路径必须先绑定到宿主图（Core 按 starmapId 区分本地/跨层），实际窗口:\n{bind}"
     );
 
-    // 悬停合法 target：prospective plan → 宿主 Content → 两端可见形状 → 贴边界。
-    let refresh = function_window(&content, "function refreshConnectPreview(", 2800);
+    // 悬停合法 target：prospective plan → 宿主 Content → 平台 renderer → 端点。
+    let refresh = function_window(&content, "function refreshConnectPreview(", 2400);
     assert!(
         refresh.contains("StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)")
             && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
-            && refresh.contains("host.visibleEndpointShapeForHostPath(plan.from)")
-            && refresh.contains("host.visibleEndpointShapeForHostPath(plan.to)"),
-        "预览必须先做 prospective LCA 规划再用宿主可见形状，实际窗口:\n{refresh}"
+            && refresh.contains("plan = bindPlanToHost(plan, host)")
+            && refresh.contains("host.prospectiveEdgeRenderForPlan(plan)"),
+        "预览必须先做 prospective LCA 规划再交给宿主平台 renderer，实际窗口:\n{refresh}"
     );
     assert!(
-        refresh.contains("ic.connectPreviewEndX = endScene.x")
+        refresh.contains("host.localToScene(preview.startX, preview.startY)")
+            && refresh.contains("host.localToScene(preview.endX, preview.endY)")
+            && refresh.contains("ic.connectPreviewEndX = endScene.x")
             && refresh.contains("ic.connectPreviewEndY = endScene.y"),
-        "悬停合法 target 时预览终点也要贴到目标的正式边界，实际窗口:\n{refresh}"
+        "预览起止点必须直接取候选边 render（宿主局部坐标）再换成 scene 坐标，\
+         实际窗口:\n{refresh}"
     );
     assert!(
         refresh.contains("ic.connectPreviewEndX = ic.connectMouseX")
             && refresh.contains("var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,"),
         "没有合法 target 时必须退回“源对象边界 → 当前鼠标”，实际窗口:\n{refresh}"
+    );
+
+    // 第二份几何真相（QML 版双向偏移 / 段身份映射）必须整体消失。
+    assert!(
+        !content.contains("visibleEndpointShapeForHostPath")
+            && !content.contains("uiInstanceIdOfPathSegment"),
+        "QML 不得再保留第二份宿主可见形状 / 段身份映射：几何真相只在 Rust"
+    );
+    for (name, src) in [("StarMapSceneContent", &content), ("StarMapGraphController", &strip_line_comments(&read_src(CONTROLLER)))] {
+        assert!(
+            !src.contains("bidirectional") && !src.contains("BIDIRECTIONAL"),
+            "{name} 不得自己实现双向边偏移——必须复用平台 edge renderer"
+        );
+    }
+
+    // 平台侧候选边入口：临时追加 __preview__ 边后只取它自己的 render。
+    let rust = read_src("src/starmap_view/edge_render.rs");
+    assert!(
+        rust.contains("pub const PROSPECTIVE_EDGE_ID: &str = \"__preview__\"")
+            && rust.contains("pub fn compute_prospective_edge_render(")
+            && rust.contains("edges.push(candidate)"),
+        "Linux edge_render 必须有候选边预览入口（临时追加候选边）"
+    );
+    let batch = function_window(&rust, "pub fn compute_prospective_edge_render(", 2200);
+    assert!(
+        batch.contains("compute_edge_renders_from_paths(&edges, graph, layout, embed_rects, params)"),
+        "候选边必须复用正式边 renderer，不能另写一套算法，实际窗口:\n{batch}"
+    );
+    let bridge = read_src("src/starmap_view/bridge.rs");
+    assert!(
+        bridge.contains("pub fn compute_prospective_edge_render_json(")
+            && bridge.contains("edge_render::compute_prospective_edge_render("),
+        "bridge 必须透出候选边预览入口"
+    );
+    let controller = strip_line_comments(&read_src(CONTROLLER));
+    assert!(
+        controller.contains("function computeProspectiveEdgeRender(fromPath, toPath)")
+            && controller.contains("starmapBackendRef.compute_prospective_edge_render("),
+        "GraphController 必须把候选边请求透传给后端"
     );
 
     let delta = slice_between(
@@ -1676,5 +1714,71 @@ fn legacy_portal_recurse_and_edge_paths_share_one_truth() {
             && planner.contains("terminalSegment: cloneSegment(last)")
             && planner.contains("segments.push(cloneSegment(itemRef.terminalSegment))"),
         "planner 必须保留 Embed-like 端点的原始 terminal segment（含旧 portal）"
+    );
+}
+// ─────────────────────────────────────────────────────────────────────────
+// 14. 双指 Pinch 纳入唯一手势状态机（pinch 优先，单指业务不得跨缩放执行）
+// ─────────────────────────────────────────────────────────────────────────
+
+/// #373 的"双指缩放优先"：pinch 一旦激活就接管整个状态机。
+/// Qt 的 passive grab 在别的 handler 拿到 exclusive grab 后仍会收到移动和
+/// release，只靠 grab 层级清不掉 pointerMode，必须显式 beginPinch/endPinch。
+#[test]
+fn pinch_takes_over_the_shared_state_machine() {
+    let controller_src = read_src(INTERACTION);
+    assert!(
+        controller_src
+            .contains("idle / pressPending / pan / connect / move / contextPending / pinch"),
+        "状态机文档必须包含 pinch 状态"
+    );
+    let controller = strip_line_comments(&controller_src);
+    let begin = function_window(&controller, "function beginPinch()", 300);
+    assert!(
+        begin.contains("reset()")
+            && begin.contains("pointerMode = \"pinch\"")
+            && begin.contains("pointerSource = \"touch\""),
+        "beginPinch 必须先清单指现场再进 pinch，实际窗口:\n{begin}"
+    );
+    let end = function_window(&controller, "function endPinch()", 220);
+    assert!(
+        end.contains("if (pointerMode === \"pinch\")") && end.contains("reset()"),
+        "endPinch 必须在 pinch 状态下整体复位，实际窗口:\n{end}"
+    );
+
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let pinch = function_window(&canvas, "id: canvasPinch", 1300);
+    assert!(
+        pinch.contains("canvasArea.resetInteraction()")
+            && pinch.contains("canvasArea.hideTouchPreview()")
+            && pinch.contains("interaction.beginPinch()"),
+        "Pinch 激活必须先清瞬时现场再进 pinch，实际窗口:\n{pinch}"
+    );
+    assert!(
+        pinch.contains("interaction.endPinch()"),
+        "Pinch 结束必须复位 pinch 状态，实际窗口:\n{pinch}"
+    );
+    let drag = slice_between(&canvas, "id: bgTouchDrag", "id: canvasPinch");
+    assert!(
+        drag.contains("if (canvasPinch.active || interaction.pointerMode === \"pinch\")")
+            && drag.contains("return"),
+        "pinch 期间单指拖动必须直接忽略（先更新 lastT 再返回），实际窗口:\n{drag}"
+    );
+
+    let content = strip_line_comments(&read_src(CONTENT));
+    let long_press = function_window(&content, "function onItemTouchLongPressed(", 800);
+    assert!(
+        long_press.contains("if (ic.pointerMode === \"pinch\")") && long_press.contains("return"),
+        "晚到的长按回调必须拒绝 pinch 状态，实际窗口:\n{long_press}"
+    );
+    let release = function_window(&content, "function releaseOwnerGesture(", 800);
+    for mode in ["\"connect\"", "\"move\"", "\"contextPending\"", "\"pressPending\""] {
+        assert!(
+            release.contains(mode),
+            "releaseOwnerGesture 必须继续处理 {mode}，实际窗口:\n{release}"
+        );
+    }
+    assert!(
+        !release.contains("\"pinch\""),
+        "releaseOwnerGesture 不得处理 pinch（缩放结束由 endPinch 复位），实际窗口:\n{release}"
     );
 }

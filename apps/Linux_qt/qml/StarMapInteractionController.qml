@@ -40,13 +40,14 @@ QtObject {
     //   Canvas 在开始交互时设置此属性，用于区分鼠标和触屏行为
     property string pointerSource: ""
 
-    // 交互状态机：idle / pressPending / pan / connect / move / contextPending
+    // 交互状态机：idle / pressPending / pan / connect / move / contextPending / pinch
     //   idle           — 无活跃手势
     //   pressPending   — 已按下但还没决定是 move 还是 connect（按下仲裁中）
     //   pan            — 背景拖动或中键拖动，平移全局相机
     //   connect        — 长按节点/Embed 后拖动，拉线预览
     //   move           — 超过拖动阈值后移动节点/Embed
     //   contextPending — 触屏长按后等待：不移动弹菜单，移动超阈值转 connect
+    //   pinch          — 双指缩放接管：单指业务状态已全部清空，缩放期间不再有业务
     property string pointerMode: "idle"
 
     // Issue #822：拖动阈值与长按阈值。
@@ -205,6 +206,22 @@ QtObject {
         return true
     }
     function endPan() { if (pointerMode === "pan") pointerMode = "idle" }
+
+    // ── pinch（双指缩放优先）──
+    // Issue #822 评论 5977278030：passive grab 在别的 handler 拿到 exclusive grab
+    // 之后仍会收到移动和 release，所以只靠 Qt 的 grab 层级清不掉我们自己的
+    // pointerMode —— 长按/连线状态会跨过缩放继续执行。
+    // 双指一旦激活就整体接管：先清单指留下的瞬时现场再进 pinch；
+    // 缩放结束后整体复位。releaseOwnerGesture() 对 pinch 不做任何事。
+    function beginPinch() {
+        reset()
+        pointerMode = "pinch"
+        pointerSource = "touch"
+    }
+    function endPinch() {
+        if (pointerMode === "pinch")
+            reset()
+    }
 
     // ── connect ──
     // connect 阶段的移动只更新全局预览线终点（scene 坐标）。

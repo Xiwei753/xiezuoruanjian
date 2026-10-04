@@ -456,6 +456,56 @@ pub fn compute_edge_renders_from_paths(
     }
 }
 
+/// 拉线候选边的固定渲染 id：只存在于预览计算里，不落库、不与其他边冲突。
+pub const PROSPECTIVE_EDGE_ID: &str = "__preview__";
+
+/// 候选边预览：把候选边临时追加到宿主图现有边表，复用正式边的全套几何
+/// （Node 矩形 / Embed 圆周、旧 portal 归一、深路径投影、双向边偏移），
+/// 只返回候选边自己的 render。
+///
+/// QML 拉线预览只需要把 prospective LCA 规划出的 from/to 路径交给这里：
+/// 预览与松手后的正式边天然同源。已有反向边时，候选边会和正式边一样
+/// 进入双向模式并带上 `bidirectional_offset`，预览不会在松手瞬间平移。
+pub fn compute_prospective_edge_render(
+    from_path: &StarMapTargetPath,
+    to_path: &StarMapTargetPath,
+    graph: &StarMapGraph,
+    layout: &StarMapLayout,
+    embed_rects: &[StarMapEmbedSceneRect],
+    params: &EdgeRenderParams,
+) -> Result<EdgeRender, EdgeAnchorDiagnostic> {
+    let candidate = writer_core::starmap::types::StarMapEdge {
+        id: PROSPECTIVE_EDGE_ID.to_string(),
+        from: from_path.clone(),
+        to: to_path.clone(),
+        kind: writer_core::starmap::types::StarMapEdgeKind::RelatedTo,
+        label: None,
+        payload: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let mut edges = graph.edges.clone();
+    edges.push(candidate);
+
+    let mut batch = compute_edge_renders_from_paths(&edges, graph, layout, embed_rects, params);
+    let index = batch
+        .renders
+        .iter()
+        .position(|r| r.edge_id == PROSPECTIVE_EDGE_ID);
+    match index {
+        Some(i) => Ok(batch.renders.remove(i)),
+        None => Err(batch
+            .diagnostics
+            .into_iter()
+            .find(|d| d.edge_id == PROSPECTIVE_EDGE_ID)
+            .unwrap_or(EdgeAnchorDiagnostic {
+                edge_id: PROSPECTIVE_EDGE_ID.to_string(),
+                endpoint: "from".to_string(),
+                reason: EdgeAnchorDiagnosticReason::LocalNodeMissing,
+            })),
+    }
+}
+
 /// 从已解析端点的边列表计算渲染几何。
 fn compute_renders_from_resolved(
     resolved_edges: &[ResolvedEdge],

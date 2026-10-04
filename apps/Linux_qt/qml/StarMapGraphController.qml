@@ -279,18 +279,10 @@ QtObject {
         }
     }
 
-    // 路径段 → 本层 UI instanceId（embedPathSegment 的逆）：旧 portal 归一身份
-    // 只在 Controller 定义一处，Content 不得自行判断。返回 "" 表示该段在当前层
-    // 没有可见对象（或段形状非法）。
-    function uiInstanceIdOfPathSegment(segment) {
-        if (!segment)
-            return ""
-        if (segment.type === "enterEmbed")
-            return segment.instanceId || ""
-        if (segment.type === "enterPortal" && segment.nodeId)
-            return "legacy-portal:" + segment.nodeId
-        return ""
-    }
+    // Issue #822 评论 5977278030：路径段 → UI instanceId 的映射不再由 QML 持有。
+    // 深路径投影（含旧 portal 归一身份）只存在于 Rust edge_render 的
+    // resolve_edge_endpoint_anchor；QML 拉线预览把路径整条交给平台 edge renderer，
+    // 不再需要、也不应该再抄一份身份映射。
 
     // Issue #822 评论 5972215936：Embed 是正圆，命中先做圆内判定：
     // 圆外哪怕还在外接矩形里，也必须继续判为空白 / 下面的对象。
@@ -668,8 +660,9 @@ QtObject {
         }
     }
 
-    function computeEdgeRenders(moveOverride) {
-        if (!ensureBackend()) return;
+    // 边端点解析用的本层 node layout（含旧 portal 归一条目）。
+    // computeEdgeRenders 与候选边预览共用同一份几何，避免两处拼装漂移。
+    function nodeLayoutEntries(moveOverride) {
         var nodePos = [];
         for (var j = 0; j < nodesModel.length; j++) {
             var n = nodesModel[j];
@@ -696,6 +689,10 @@ QtObject {
             }
             nodePos.push({ id: pn.id, x: px, y: py, width: portalEntry.width, height: portalEntry.height });
         }
+        return nodePos;
+    }
+
+    function embedLayoutEntries(moveOverride) {
         var embedPos = [];
         for (var k = 0; k < embedsModel.length; k++) {
             var em = embedsModel[k];
@@ -705,11 +702,38 @@ QtObject {
             }
             embedPos.push({ instanceId: em.instanceId, x: ex, y: ey, width: em.width, height: em.height });
         }
+        return embedPos;
+    }
+
+    function computeEdgeRenders(moveOverride) {
+        if (!ensureBackend()) return;
         if (!graphData) return;
-        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(JSON.stringify(graphData), JSON.stringify(nodePos), JSON.stringify(embedPos)), "");
+        var res = normalizeBackendResult(starmapBackendRef.compute_edge_renders(
+            JSON.stringify(graphData),
+            JSON.stringify(nodeLayoutEntries(moveOverride)),
+            JSON.stringify(embedLayoutEntries(moveOverride))), "");
         if (res.success && res.data) {
             edgeRenders = res.data;
         }
+    }
+
+    // Issue #822 评论 5977278030：候选边预览（拉线用）。
+    // 把 prospective LCA 规划出的 from/to 路径交给平台 edge renderer，
+    // 在现有边表上临时追加候选边后只取它自己的 render：
+    // Node 矩形 / Embed 圆周、旧 portal 归一、深路径投影、已有反向边时的
+    // 双向偏移全部与正式的松手结果同源，QML 不需要再抄第二份几何。
+    // 返回 null 表示端点当前无法在宿主图定位（退回自由预览）。
+    function computeProspectiveEdgeRender(fromPath, toPath) {
+        if (!graphData) return null;
+        if (!ensureBackend()) return null;
+        var res = normalizeBackendResult(starmapBackendRef.compute_prospective_edge_render(
+            JSON.stringify(graphData),
+            JSON.stringify(nodeLayoutEntries(null)),
+            JSON.stringify(embedLayoutEntries(null)),
+            JSON.stringify(fromPath),
+            JSON.stringify(toPath)), "");
+        if (res.success && res.data) return res.data;
+        return null;
     }
 
     // `threshold` 由归属层按屏幕像素折算（屏幕像素 ÷ effectiveScale），

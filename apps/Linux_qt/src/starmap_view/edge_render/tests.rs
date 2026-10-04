@@ -348,3 +348,157 @@ fn portal_endpoint_uses_normalized_circle_when_available() {
         r.end_y
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 评论 5977278030: 拉线候选边预览复用正式 edge renderer。
+//
+// 已有反向边时正式边会进入双向模式并整体垂直偏移 12 world；
+// 预览必须调用同一份 renderer（候选边临时追加进宿主图边表），
+// 而不是在 QML 里再抄一份中线/偏移，否则松手瞬间会整体平移。
+// ─────────────────────────────────────────────────────────────────────
+
+fn local_path(node_id: &str) -> StarMapTargetPath {
+    StarMapTargetPath {
+        starmap_id: "map_1".to_string(),
+        segments: vec![],
+        target: StarMapTargetDetail::Node {
+            node_id: node_id.to_string(),
+        },
+    }
+}
+
+fn local_edge(id: &str, from: &str, to: &str) -> StarMapEdge {
+    StarMapEdge {
+        id: id.to_string(),
+        from: local_path(from),
+        to: local_path(to),
+        kind: StarMapEdgeKind::RelatedTo,
+        label: None,
+        payload: None,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+/// 两个普通节点 A(0,0) / B(400,0)，layout 都是 150×60。
+fn graph_with_two_nodes(edges: Vec<StarMapEdge>) -> StarMapGraph {
+    StarMapGraph {
+        starmap_id: "map_1".to_string(),
+        nodes: vec![node("note_a", 0.0), node("note_b", 400.0)],
+        edges,
+        ..StarMapGraph::default()
+    }
+}
+
+fn assert_render_matches(actual: &EdgeRender, expected: &EdgeRender, what: &str) {
+    for (name, a, b) in [
+        ("start_x", actual.start_x, expected.start_x),
+        ("start_y", actual.start_y, expected.start_y),
+        ("end_x", actual.end_x, expected.end_x),
+        ("end_y", actual.end_y, expected.end_y),
+    ] {
+        assert!(
+            (a - b).abs() < 0.01,
+            "{what}: {name} 预览/正式必须一致, actual={a}, expected={b}"
+        );
+    }
+}
+
+/// 已有 A→B 时从 B 拉到 A：候选边预览 = 两条正式边都在时的 B→A
+/// （双向模式 + 垂直偏移），不是未偏移中线。
+#[test]
+fn prospective_preview_matches_formal_edge_when_reverse_exists() {
+    let layout = layout_with(&[("note_a", 0.0), ("note_b", 400.0)]);
+    let params = EdgeRenderParams::default();
+    let graph = graph_with_two_nodes(vec![local_edge("edge_ab", "note_a", "note_b")]);
+
+    // 正式：提交 B→A 之后两条边都在。
+    let mut formal_graph = graph.clone();
+    formal_graph.edges.push(local_edge("edge_ba", "note_b", "note_a"));
+    let batch = compute_edge_renders_from_paths(
+        &formal_graph.edges,
+        &formal_graph,
+        &layout,
+        &[],
+        &params,
+    );
+    assert!(batch.diagnostics.is_empty(), "{:?}", batch.diagnostics);
+    let formal_ba = batch
+        .renders
+        .iter()
+        .find(|r| r.edge_id == "edge_ba")
+        .expect("正式 B→A 必须渲染");
+
+    // 预览：只把候选边临时追加进现有边表。
+    let preview = compute_prospective_edge_render(
+        &local_path("note_b"),
+        &local_path("note_a"),
+        &graph,
+        &layout,
+        &[],
+        &params,
+    )
+    .expect("候选边预览必须可解析");
+
+    assert!(
+        preview.has_bidirectional,
+        "已有反向边时候选边必须进入双向模式"
+    );
+    assert_render_matches(&preview, formal_ba, "已有反向边");
+    assert!(
+        (preview.start_y - 18.0).abs() < 0.01 && (preview.end_y - 18.0).abs() < 0.01,
+        "偏移后的 B→A 应画在 y=18，实际 y=({},{})",
+        preview.start_y,
+        preview.end_y
+    );
+    assert!(
+        (preview.start_y - 30.0).abs() > 1.0,
+        "预览不得停在中线 y=30（旧实现松手会跳 12 world）"
+    );
+}
+
+/// 没有反向边时候选边预览 = 未偏移中线（不能无条件加偏移）。
+#[test]
+fn prospective_preview_stays_on_midline_without_reverse_edge() {
+    let layout = layout_with(&[("note_a", 0.0), ("note_b", 400.0)]);
+    let params = EdgeRenderParams::default();
+    let graph = graph_with_two_nodes(vec![]);
+
+    let preview = compute_prospective_edge_render(
+        &local_path("note_b"),
+        &local_path("note_a"),
+        &graph,
+        &layout,
+        &[],
+        &params,
+    )
+    .expect("候选边预览必须可解析");
+    assert!(!preview.has_bidirectional);
+    assert!(
+        (preview.start_y - 30.0).abs() < 0.01 && (preview.end_y - 30.0).abs() < 0.01,
+        "无反向边时预览应贴中线 y=30, 实际 y=({},{})",
+        preview.start_y,
+        preview.end_y
+    );
+}
+
+/// 端点无法在宿主图定位时返回诊断，不静默给出错误几何。
+#[test]
+fn prospective_preview_reports_diagnostic_for_missing_endpoint() {
+    let layout = layout_with(&[("note_a", 0.0)]);
+    let params = EdgeRenderParams::default();
+    let graph = graph_with_two_nodes(vec![]);
+
+    let err = compute_prospective_edge_render(
+        &local_path("note_a"),
+        &local_path("note_missing"),
+        &graph,
+        &layout,
+        &[],
+        &params,
+    )
+    .expect_err("缺失端点必须返回诊断");
+    assert_eq!(err.edge_id, PROSPECTIVE_EDGE_ID);
+    assert_eq!(err.endpoint, "to");
+    assert_eq!(err.reason, EdgeAnchorDiagnosticReason::LocalNodeMissing);
+}

@@ -482,6 +482,11 @@ Item {
             var dy = activeTranslation.y - lastTy
             lastTx = activeTranslation.x
             lastTy = activeTranslation.y
+            // Issue #822 评论 5977278030：双指缩放优先。pinch 期间单指拖动
+            // 不再驱动任何业务状态，也不再 pan（pinch 自己负责相机）。
+            // 先更新 lastTx/lastTy 再返回，缩放结束后不会攒出一个大 delta。
+            if (canvasPinch.active || interaction.pointerMode === "pinch")
+                return
             var mode = interaction.pointerMode
             if (mode === "connect" || mode === "contextPending" || mode === "move") {
                 // 归属层自己换算 scene→局部坐标，这里只交原始 scene 位移。
@@ -502,6 +507,11 @@ Item {
     // 不再有"捏合归某个子星图"的判断：整棵树只有一个视口。
     // 捏合比例相对手势起点，统一交给 zoomAround 做数值夹取 + 以中心缩放，
     // 不再自己维护第二套 0.35/2.5 夹取和 pan 公式。
+    //
+    // Issue #822 评论 5977278030：双指缩放优先。PinchHandler 的 grab 和我们自己的
+    // interaction.pointerMode 是两层状态，Qt 只负责前者——激活时先把单指留下的
+    // 瞬时现场（长按计时、connect 预览、move 目标）整体清掉再进 pinch，
+    // 结束时再整体复位，长按/连线绝不会跨过缩放继续执行。
     PinchHandler {
         id: canvasPinch
         acceptedDevices: PointerDevice.TouchScreen
@@ -509,8 +519,13 @@ Item {
         property real _pinchStartZoom: 1.0
         onActiveChanged: {
             if (active) {
+                canvasArea.resetInteraction()
+                canvasArea.hideTouchPreview()
+                interaction.beginPinch()
                 _pinchStartZoom = zoomLevel
                 _touchInputActive = true
+            } else {
+                interaction.endPinch()
             }
         }
         onActiveScaleChanged: {

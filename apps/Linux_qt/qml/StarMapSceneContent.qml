@@ -228,38 +228,30 @@ Item {
         return { x: cx + t * ux, y: cy + t * uy }
     }
 
-    // 宿主可见端点形状：把"相对宿主 Scene 的路径"投影成宿主本层真正看得见的
-    // 那个对象（与 Rust resolve_edge_endpoint_anchor 的可见投影语义一致）：
-    // - segments 为空 + node → 本层 Node 矩形；
-    // - 第一段 enterEmbed/enterPortal → Controller 归一的本层 Embed 正圆
-    //   （深路径只投影到第一层容器）。
-    // 段身份映射由 Controller 持有，Content 只按本层几何投影。
-    // 返回宿主局部坐标的 { x, y, width, height, isEmbed }；解析不出返回 null。
-    function visibleEndpointShapeForHostPath(path) {
-        if (!path || !path.target)
+    // 端点路径的 starmapId 必须绑定到宿主图（Core 按它区分本地/跨层）。
+    // 预览与正式边提交共用这一份绑定，两边路径完全相同。
+    function bindPlanToHost(plan, host) {
+        if (!plan || !host || host.finalStarmapId === "")
             return null
-        var segments = path.segments || []
-        if (segments.length === 0) {
-            if (path.target.type !== "node" || !path.target.nodeId)
-                return null
-            var node = graphController.getNode(path.target.nodeId)
-            if (!node)
-                return null
-            return { x: node.x, y: node.y, width: node.width, height: node.height, isEmbed: false }
-        }
-        var instanceId = graphController.uiInstanceIdOfPathSegment(segments[0])
-        if (instanceId === "")
-            return null
-        var embed = graphController.getEmbed(instanceId)
-        if (!embed)
-            return null
-        return { x: embed.x, y: embed.y, width: embed.width, height: embed.height, isEmbed: true }
+        plan.from.starmapId = host.finalStarmapId
+        plan.to.starmapId = host.finalStarmapId
+        return plan
     }
 
-    // connect 预览线与正式边共用同一套可见端点：
-    // - 鼠标悬停在合法 target 上时，先做 prospective LCA 规划，再用宿主
-    //   "看得见的那两个形状"（深路径投影到第一层 Embed 圆周）算预览起止点，
-    //   松手时正式边与预览不发生任何跳变；
+    // 候选边预览：宿主 Content 把 prospective LCA 规划结果交给平台 edge renderer。
+    // Content 只负责把规划路径交给宿主本层的 graphController；边界求交、
+    // 双向偏移、旧 portal 归一、深路径投影全部由 Rust 正式边几何出一份真相。
+    function prospectiveEdgeRenderForPlan(plan) {
+        if (!plan || !graphController)
+            return null
+        return graphController.computeProspectiveEdgeRender(plan.from, plan.to)
+    }
+
+    // connect 预览线与正式边共用同一套几何真相：
+    // - 鼠标悬停在合法 target 上时，先做 prospective LCA 规划，再把规划出的
+    //   两条路径交给宿主的平台 edge renderer（候选边临时追加进宿主边表后只取
+    //   它自己的 render）。Node 矩形 / Embed 圆周、深路径投影、已有反向边时的
+    //   双向 12 world 偏移都与松手后的正式边完全一致；
     // - 没有合法 target 时退回"源对象边界 → 当前鼠标"。
     function refreshConnectPreview() {
         var ic = interactionController
@@ -274,32 +266,20 @@ Item {
                 : null
         if (hit && (hit.kind === "node" || hit.kind === "embed")) {
             var plan = StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)
+            var host = plan && rootContent
+                    ? rootContent.findContentByPathSegments(plan.hostSegments)
+                    : null
+            plan = bindPlanToHost(plan, host)
             if (plan) {
-                var host = rootContent
-                        ? rootContent.findContentByPathSegments(plan.hostSegments)
-                        : null
-                if (host) {
-                    var fromShape = host.visibleEndpointShapeForHostPath(plan.from)
-                    var toShape = host.visibleEndpointShapeForHostPath(plan.to)
-                    if (fromShape && toShape) {
-                        var fromCenter = { x: fromShape.x + fromShape.width / 2,
-                                           y: fromShape.y + fromShape.height / 2 }
-                        var toCenter = { x: toShape.x + toShape.width / 2,
-                                         y: toShape.y + toShape.height / 2 }
-                        var startLocal = host.boundaryPointLocal(
-                            fromShape.x, fromShape.y, fromShape.width, fromShape.height,
-                            fromShape.isEmbed, toCenter.x, toCenter.y)
-                        var endLocal = host.boundaryPointLocal(
-                            toShape.x, toShape.y, toShape.width, toShape.height,
-                            toShape.isEmbed, fromCenter.x, fromCenter.y)
-                        var startScene = host.localToScene(startLocal.x, startLocal.y)
-                        var endScene = host.localToScene(endLocal.x, endLocal.y)
-                        ic.connectFromSceneX = startScene.x
-                        ic.connectFromSceneY = startScene.y
-                        ic.connectPreviewEndX = endScene.x
-                        ic.connectPreviewEndY = endScene.y
-                        return
-                    }
+                var preview = host.prospectiveEdgeRenderForPlan(plan)
+                if (preview) {
+                    var startScene = host.localToScene(preview.startX, preview.startY)
+                    var endScene = host.localToScene(preview.endX, preview.endY)
+                    ic.connectFromSceneX = startScene.x
+                    ic.connectFromSceneY = startScene.y
+                    ic.connectPreviewEndX = endScene.x
+                    ic.connectPreviewEndY = endScene.y
+                    return
                 }
             }
         }
@@ -780,6 +760,11 @@ Item {
         if (!interactionController)
             return
         var ic = interactionController
+        // Issue #822 评论 5977278030：双指缩放优先。pinch 已经接管时拒绝晚到的
+        // 长按回调，不再把状态改回 contextPending —— Qt 的 passive grab 在
+        // PinchHandler 抢到 exclusive grab 后仍会继续收到事件。
+        if (ic.pointerMode === "pinch")
+            return
         var item = kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
         if (!item)
             return
@@ -866,6 +851,8 @@ Item {
     }
 
     // 松手统一出口：click / move / connect 都从这里闭环。
+    // Issue #822 评论 5977278030：pinch（双指缩放）不属于单指业务，
+    // 这里对它什么都不做——缩放结束由 Canvas 的 endPinch() 统一复位。
     function releaseOwnerGesture() {
         if (!interactionController)
             return
@@ -900,18 +887,15 @@ Item {
                 // 边的 starmapId 必须等于宿主的 finalStarmapId，segments 只保留
                 // "从宿主往下"的部分，Core 才能从宿主图自己走完。
                 var plan = StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)
+                var host = plan && rootContent
+                        ? rootContent.findContentByPathSegments(plan.hostSegments)
+                        : null
+                plan = bindPlanToHost(plan, host)
                 if (plan) {
-                    var host = rootContent
-                            ? rootContent.findContentByPathSegments(plan.hostSegments)
-                            : null
-                    if (host && host.finalStarmapId !== "") {
-                        hostPathKey = host.scenePathKey
-                        hostStarmapId = host.finalStarmapId
-                        plan.from.starmapId = hostStarmapId
-                        plan.to.starmapId = hostStarmapId
-                        success = host.commitEdgeWithPaths(plan.from, plan.to)
-                        cancelled = !success
-                    }
+                    hostPathKey = host.scenePathKey
+                    hostStarmapId = host.finalStarmapId
+                    success = host.commitEdgeWithPaths(plan.from, plan.to)
+                    cancelled = !success
                 }
             }
         }

@@ -162,9 +162,9 @@ fn content_connect_end_uses_lca_host_and_real_return_value() {
         "connect_end 必须先规划宿主（最近公共祖先）再找到宿主 Content，实际窗口:\n{window}"
     );
     assert!(
-        window.contains("plan.from.starmapId = hostStarmapId")
-            && window.contains("plan.to.starmapId = hostStarmapId"),
-        "端点 starmapId 必须等于宿主的 finalStarmapId，实际窗口:\n{window}"
+        window.contains("plan = bindPlanToHost(plan, host)")
+            && window.contains("hostStarmapId = host.finalStarmapId"),
+        "端点 starmapId 必须绑定到宿主的 finalStarmapId，实际窗口:\n{window}"
     );
     assert!(
         window.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),

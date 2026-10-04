@@ -178,6 +178,26 @@ pub struct StarMapBackend {
     compute_edge_renders: qt_method!(
         fn(&self, graph_json: QString, nodes_json: QString, embeds_json: QString) -> QJsonObject
     ),
+    compute_prospective_edge_render_json: qt_method!(
+        fn(
+            &self,
+            graph_json: QString,
+            nodes_json: QString,
+            embeds_json: QString,
+            from_path_json: QString,
+            to_path_json: QString
+        ) -> QString
+    ),
+    compute_prospective_edge_render: qt_method!(
+        fn(
+            &self,
+            graph_json: QString,
+            nodes_json: QString,
+            embeds_json: QString,
+            from_path_json: QString,
+            to_path_json: QString
+        ) -> QJsonObject
+    ),
     hit_test_edge_renders_json:
         qt_method!(fn(&self, renders_json: QString, x: f64, y: f64, threshold: f64) -> QString),
     hit_test_edge_renders:
@@ -371,35 +391,63 @@ impl StarMapBackend {
                 QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
+    /// QML 传来的 graph DTO JSON → Core StarMapGraph（边渲染入口共用）。
+    fn core_graph_from_dto_json(
+        graph_json: &str,
+    ) -> Result<writer_core::starmap::types::StarMapGraph, String> {
+        let graph_dto: writer_core::api::types::StarMapGraphDto = serde_json::from_str(graph_json)
+            .map_err(|e| format!("Invalid graph JSON: {}", e))?;
+        <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(graph_dto)
+            .map_err(|e| e.to_string())
+    }
+
     fn compute_edge_renders_json(
         &self,
         graph_json: QString,
         nodes_json: QString,
         embeds_json: QString,
     ) -> QString {
-        let gj = graph_json.to_string();
-        let nj = nodes_json.to_string();
-        let ej = embeds_json.to_string();
-        let graph_dto: writer_core::api::types::StarMapGraphDto = match serde_json::from_str(&gj) {
-            Ok(d) => d,
-            Err(e) => {
+        let graph = match Self::core_graph_from_dto_json(&graph_json.to_string()) {
+            Ok(g) => g,
+            Err(msg) => {
                 return crate::backend::json_utils::envelope_error_json(
-                    writer_core::api::WriterError::Other(format!("Invalid graph JSON: {}", e)),
+                    writer_core::api::WriterError::Other(msg),
                 )
                 .into()
             }
         };
-        match <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(
-            graph_dto,
-        ) {
-            Ok(graph) => {
-                crate::starmap_view::bridge::compute_edge_renders_json(&graph, &nj, &ej).into()
+        crate::starmap_view::bridge::compute_edge_renders_json(
+            &graph,
+            &nodes_json.to_string(),
+            &embeds_json.to_string(),
+        )
+        .into()
+    }
+    fn compute_prospective_edge_render_json(
+        &self,
+        graph_json: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QString {
+        let graph = match Self::core_graph_from_dto_json(&graph_json.to_string()) {
+            Ok(g) => g,
+            Err(msg) => {
+                return crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(msg),
+                )
+                .into()
             }
-            Err(e) => crate::backend::json_utils::envelope_error_json(
-                writer_core::api::WriterError::Other(e.to_string()),
-            )
-            .into(),
-        }
+        };
+        crate::starmap_view::bridge::compute_prospective_edge_render_json(
+            &graph,
+            &nodes_json.to_string(),
+            &embeds_json.to_string(),
+            &from_path_json.to_string(),
+            &to_path_json.to_string(),
+        )
+        .into()
     }
     fn hit_test_edge_renders_json(
         &self,
@@ -429,6 +477,25 @@ impl StarMapBackend {
     ) -> QJsonObject {
         let raw = self
             .compute_edge_renders_json(graph_json, nodes_json, embeds_json)
+            .to_string();
+        crate::backend::json_utils::qjson_object_from_json(&raw)
+    }
+    fn compute_prospective_edge_render(
+        &self,
+        graph_json: QString,
+        nodes_json: QString,
+        embeds_json: QString,
+        from_path_json: QString,
+        to_path_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .compute_prospective_edge_render_json(
+                graph_json,
+                nodes_json,
+                embeds_json,
+                from_path_json,
+                to_path_json,
+            )
             .to_string();
         crate::backend::json_utils::qjson_object_from_json(&raw)
     }
