@@ -51,6 +51,11 @@ Item {
     // Issue #822：内联编辑状态。编辑中节点手势全部让位给文本输入。
     property bool editing: false
 
+    // Issue #822 评论 5977714294：Pinch 接管期间由归属层直接禁用触屏 TapHandler。
+    // TapHandler 是 passive grab，回调发生时 pinch 可能已结束；只有在 pinch 激活
+    // 期间把 enabled 置 false，才能让这一轮 tap 识别当场取消，单/双/长按一起失效。
+    property bool touchGestureBlocked: false
+
     // Issue #793 评论 5885482530: wobble 改纯视觉偏移，不影响命中框。
     // 用 index 错开 phase，避免所有节点同步晃
     property int wobbleIndex: 0
@@ -231,7 +236,7 @@ Item {
         id: nodeTouchTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
-        enabled: !root.editing
+        enabled: !root.editing && !root.touchGestureBlocked
 
         onSingleTapped: root.singleClicked()
         onDoubleTapped: root.doubleClicked()

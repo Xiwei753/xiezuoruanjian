@@ -1824,3 +1824,59 @@ fn node_and_embed_single_click_wire_to_selection() {
         "Embed 单击必须选中并记 selection_changed，实际片段:\n{embed_block}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 16. Pinch 期间在 enabled 层禁用触屏 TapHandler（不是回调时判断）
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 评论 5977714294：TapHandler 默认 DragThreshold + passive grab，singleTapped
+/// 在 release 时才发；"Pinch 先变 inactive → 状态机复位 → 同一个 release 再判
+/// tap" 的时序下，回调里的 guard 两个条件都已回到 false。必须在 pinch 激活期间
+/// 直接把 enabled 置 false，让这一轮 tap 识别当场取消（回调 guard 留作双保险）。
+#[test]
+fn pinch_disables_touch_taps_at_the_handler_level() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let bg = slice_between(&canvas, "id: bgTouchLeftTap", "id: backgroundRightTap");
+    assert!(
+        bg.contains("enabled: !canvasArea.pinchOwnsTouchGesture()"),
+        "背景触屏 TapHandler 必须在 pinch 期间直接禁用，实际窗口:\n{bg}"
+    );
+    assert!(
+        count_occurrences(&bg, "if (canvasArea.pinchOwnsTouchGesture())") == 2,
+        "回调里的 guard 仍要保留作双保险，实际窗口:\n{bg}"
+    );
+
+    let node = strip_line_comments(&read_src(NODE));
+    assert!(
+        node.contains("property bool touchGestureBlocked: false"),
+        "Node 必须暴露由归属层控制的 touchGestureBlocked"
+    );
+    let node_tap = function_window(&node, "id: nodeTouchTap", 400);
+    assert!(
+        node_tap.contains("enabled: !root.editing && !root.touchGestureBlocked"),
+        "Node 触屏 TapHandler 必须由 touchGestureBlocked 直接禁用，实际窗口:\n{node_tap}"
+    );
+
+    let embed = strip_line_comments(&read_src(EMBED));
+    assert!(
+        embed.contains("property bool touchGestureBlocked: false"),
+        "Embed 必须暴露由归属层控制的 touchGestureBlocked"
+    );
+    let chrome_tap = function_window(&embed, "id: chromeTouchTap", 600);
+    assert!(
+        chrome_tap.contains("enabled: !root.touchGestureBlocked"),
+        "Embed chrome 触屏 TapHandler 必须由 touchGestureBlocked 直接禁用，实际窗口:\n{chrome_tap}"
+    );
+
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert_eq!(
+        count_occurrences(&content, "content.menuHost.pinchOwnsTouchGesture()"),
+        2,
+        "Node / Embed delegate 都必须把 Pinch 接管状态接到 touchGestureBlocked"
+    );
+    assert_eq!(
+        count_occurrences(&content, "touchGestureBlocked: content.menuHost"),
+        2,
+        "两个 delegate 的 touchGestureBlocked 必须同源绑定，实际源码不符"
+    );
+}

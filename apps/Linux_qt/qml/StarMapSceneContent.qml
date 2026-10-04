@@ -1269,6 +1269,13 @@ Item {
                             ? content.selectionController.matches(content.scenePathKey, "node", nodeData.id)
                             : false
                     wobbleIndex: index
+                    // Issue #822 评论 5977714294：Pinch 接管期间由归属层直接禁用
+                    // delegate 的触屏 TapHandler（passive grab 的 tap 识别当场取消），
+                    // 不再只靠回调时判断 —— Pinch 结束后的迟到 singleTapped 挡不住。
+                    touchGestureBlocked: content.menuHost
+                            ? content.menuHost.pinchOwnsTouchGesture()
+                            : (content.interactionController
+                               && content.interactionController.pointerMode === "pinch")
 
                     onMouseInteracted: {
                         if (content.menuHost) content.menuHost.noteMouseInteracted()
@@ -1326,6 +1333,12 @@ Item {
                             ? content.selectionController.matches(content.scenePathKey, "embed", embedData.instanceId)
                             : false
                     wobbleIndex: index
+                    // Issue #822 评论 5977714294：与 Node 同一套让位规则 ——
+                    // Pinch 激活期间由归属层直接禁用 chrome 的触屏 TapHandler。
+                    touchGestureBlocked: content.menuHost
+                            ? content.menuHost.pinchOwnsTouchGesture()
+                            : (content.interactionController
+                               && content.interactionController.pointerMode === "pinch")
 
                     // Issue #822：子星图显示档位只由 ownerEffectiveScale（全局相机 ×
                     // 祖先 local fit）+ 根视口短边算出；Embed 外壳的 world 几何恒定，

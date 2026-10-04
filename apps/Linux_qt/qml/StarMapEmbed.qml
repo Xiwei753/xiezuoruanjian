@@ -58,6 +58,10 @@ Item {
     // 由归属层控制：是否正处于拖动中（拖动时停止 idle wobble）
     property bool isBeingDragged: false
 
+    // Issue #822 评论 5977714294：Pinch 接管期间由归属层直接禁用触屏 TapHandler，
+    // 让 passive grab 的 tap 识别当场取消，单击/长按都不会在缩放后迟到触发。
+    property bool touchGestureBlocked: false
+
     // Issue #814 评论 5935285879: 共享选中控制器，由归属层传入，传给子内容。
     property var selectionController: null
 
@@ -502,6 +506,7 @@ Item {
                 id: chromeTouchTap
                 acceptedDevices: PointerDevice.TouchScreen
                 acceptedButtons: Qt.LeftButton
+                enabled: !root.touchGestureBlocked
                 onPressedChanged: {
                     if (pressed) {
                         root.logEmbedInteraction("embed_chrome_press", {

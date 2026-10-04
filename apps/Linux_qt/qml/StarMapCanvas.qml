@@ -379,6 +379,11 @@ Item {
         id: bgTouchLeftTap
         acceptedDevices: PointerDevice.TouchScreen
         acceptedButtons: Qt.LeftButton
+        // Issue #822 评论 5977714294：Pinch 激活期间直接禁用，让 passive grab 的
+        // tap 识别当场取消。回调里的 guard 只是双保险 —— 只靠它挡不住
+        // "Pinch 先变 inactive → 状态机复位 → 同一个 release 再判 singleTapped"
+        // 这个时序（那时两个条件都已经回到 false）。
+        enabled: !canvasArea.pinchOwnsTouchGesture()
         onSingleTapped: function(eventPoint) {
             // pinch 接管期间拒绝迟到的单指点选。
             if (canvasArea.pinchOwnsTouchGesture())
