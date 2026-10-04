@@ -1482,10 +1482,35 @@ fn edge_hit_threshold_is_screen_relative() {
             && content.contains("_edgeHitScreenPx / scale"),
         "阈值必须除以 effectiveScale 折算到本层 world 单位"
     );
+    // 评论 5977083591 问题 2：命中范围不得小于真实可见线宽的一半，
+    // 高倍放大时不能"点在肉眼很粗的线里却点不中"。
+    assert!(
+        content.contains("readonly property real _edgeLineWorldWidth: 2")
+            && content.contains("Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)"),
+        "阈值必须同时覆盖屏幕像素下限与可见线宽下限，实际源码缺少"
+    );
     assert!(
         content.contains("graphController.hitTestEdge(p.x, p.y, _edgeHitLocalThreshold())"),
         "递归命中必须把折算后的阈值传给 hitTestEdge"
     );
+
+    // 绘制与命中同源：三处边线绘制都用同一个 world 线宽常量，不再留字面量。
+    assert_eq!(
+        count_occurrences(&content, "ctx.lineWidth = content._edgeLineWorldWidth"),
+        2,
+        "edgeCanvas / previewCanvas 都必须用 _edgeLineWorldWidth 绘制"
+    );
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        canvas.contains("ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2"),
+        "Canvas 的连线预览线也必须用同一个 world 线宽常量"
+    );
+    for (name, src) in [("StarMapSceneContent", &content), ("StarMapCanvas", &canvas)] {
+        assert!(
+            !src.contains("ctx.lineWidth = 2"),
+            "{name} 不得再保留字面量线宽（绘制与命中必须同源）"
+        );
+    }
 
     let controller = strip_line_comments(&read_src(CONTROLLER));
     assert!(
