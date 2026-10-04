@@ -1,5 +1,4 @@
-use super::animation::transaction_builder::HandoffTransactionOutcome;
-use super::animation::LinuxEditorAnimationCoordinator;
+use super::animation::{EditFrontierRequest, LinuxEditorAnimationCoordinator};
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
@@ -8,7 +7,6 @@ use super::layout_snapshot::EditorLayoutSnapshot;
 use super::line_snapshot_builder::LineSnapshotBuilder;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::{LineSnapshotId, TextureCache};
-use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use super::{editor_animation_transaction_skipped_event, AnimationSkipFields};
 use crate::editor::layout;
@@ -16,7 +14,7 @@ use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use std::time::Instant;
 use writer_core::editor::{
     DisplayPatch, EditorChange, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
-    EditorOperationKind, EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
+    EditorRevision, EditorTransactionCause, OffsetMap, Utf8ByteOffset, Utf8ByteRange,
 };
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
@@ -235,7 +233,6 @@ pub(crate) struct CompositionState {
 /// `candidate_*` 指上屏文本在 committed 文本中的位置；
 /// `committed_*` 指被替换的原 preedit 占位范围。
 pub(crate) struct CompositionCommitResult {
-    pub pending_preedit_cursor_rect: Option<CursorRect>,
     pub was_composing: bool,
     pub preedit_byte_start: usize,
     pub preedit_byte_end: usize,
@@ -244,8 +241,6 @@ pub(crate) struct CompositionCommitResult {
     pub session_replace_end: usize,
     pub candidate_byte_start: usize,
     pub candidate_byte_end: usize,
-    pub committed_replace_start: usize,
-    pub committed_replace_end: usize,
 }
 
 impl CompositionState {
@@ -281,10 +276,6 @@ impl CompositionState {
         if !self.preedit_text.is_empty() && self.pending_preedit_cursor_rect.is_none() {
             self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
         }
-    }
-
-    pub fn take_pending_preedit_cursor_rect(&mut self) -> Option<CursorRect> {
-        self.pending_preedit_cursor_rect.take()
     }
 
     pub fn clear_preedit_fields(&mut self) {
@@ -446,14 +437,13 @@ pub(crate) enum PipelineEditOutcomeKind {
 /// 内部丢失。现在每个跳过点原地返回自己的 `EditVisualSkipReason`，
 /// `record_transaction` / `apply_edit_with_visuals` 只透传不再猜。
 pub(crate) enum VisualPrepareOutcome {
-    /// 视觉事务已创建，`key` 是真正创建的事务 key。
+    /// Issue #826: 正文动画已接到唯一的遮罩前沿 / Reflow 层上。
     ///
-    /// 不再携带 `PreparedEditMotion`——所有消费者只需要 `key`，
-    /// 携带 motion 会让枚举变体大小膨胀到 248 字节（`large_enum_variant`）。
-    Created { key: VisualTransactionKey },
-    /// Core edit 已应用但视觉事务未创建，附带具体跳过原因。
+    /// 不再携带事务 key——新模型没有 prepared transaction 队列。
+    Created,
+    /// Core edit 已应用但视觉动画未启动，附带具体跳过原因。
     Skipped(super::edit_flow::EditVisualSkipReason),
-    /// 动画未请求（三个开关全关），Core edit 已应用但无视觉事务。
+    /// 动画未请求（三个开关全关），Core edit 已应用但无视觉动画。
     AnimationDisabled,
 }
 
@@ -476,12 +466,6 @@ impl LinuxEditorPipeline {
             layout_revision: LayoutRevision::initial(),
             pending_promoted_layout: None,
         }
-    }
-
-    /// Issue #738 评论 5787277777: 获取 Pipeline 当前的 layout revision，
-    /// 供 FrameContext 和 reconcile 入口作为 canonical basis revision 使用。
-    pub fn layout_revision(&self) -> LayoutRevision {
-        self.layout_revision
     }
 
     /// Issue #738 评论 5797637204: 无条件提交新 layout revision 的 setter。
@@ -524,27 +508,14 @@ impl LinuxEditorPipeline {
         new_snapshot: crate::editor::layout::CanonicalDocumentVisualSnapshot,
     ) -> LayoutRevision {
         let new_revision = self.bump_layout_revision();
-        let current_text = self.mirror.text().to_string();
         self.animation_coordinator
-            .reconcile_active_transactions_with_canonical(
-                &current_text,
-                &new_snapshot,
-                new_revision,
-                std::time::Instant::now(),
-            );
+            .finish_edit_frontier_to_canonical();
         // 把新 canonical 保存为当前 canonical。
         self.current_canonical_snapshot = Some(new_snapshot);
         // reconcile 删除 unit / 完成事务后同步收 texture cache。
         let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
         self.texture_cache.retain_active_snapshot_ids(&active_ids);
         new_revision
-    }
-
-    /// 在取消旧事务和新事务接管之间，保留仍活跃或正在交棒的纹理。
-    pub(crate) fn retain_handoff_textures(&mut self, carried_ids: &[LineSnapshotId]) {
-        let mut active_ids = self.animation_coordinator.collect_active_snapshot_ids();
-        active_ids.extend_from_slice(carried_ids);
-        self.texture_cache.retain_active_snapshot_ids(&active_ids);
     }
 
     /// Issue #738 评论 5789470425 问题1 / 评论 5792244119 问题 1: 用当前排版参数
@@ -749,16 +720,17 @@ impl LinuxEditorPipeline {
         self.text_revision
     }
 
-    pub fn visual_revision(&self) -> u64 {
-        self.visual_revision
-    }
-
     pub fn bump_visual_revision(&mut self) {
         self.visual_revision = self.visual_revision.wrapping_add(1);
     }
 
     pub fn bump_text_revision(&mut self) {
         self.text_revision = self.text_revision.wrapping_add(1);
+    }
+
+    /// 保留仍被活跃前沿 / Reflow 引用的旧行纹理。
+    pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
+        self.texture_cache.retain_active_snapshot_ids(active_ids);
     }
 
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
@@ -891,7 +863,7 @@ impl LinuxEditorPipeline {
                 );
                 self.composition.clear();
                 self.animation_coordinator
-                    .cancel_active_composition("load_text");
+                    .finish_edit_frontier_to_canonical();
                 true
             }
             Err(_) => false,
@@ -1058,20 +1030,16 @@ impl LinuxEditorPipeline {
         preedit_byte_end: usize,
     ) -> CompositionCommitResult {
         self.composition.save_pending_preedit_cursor_rect();
-        let pending_pcr = self.composition.take_pending_preedit_cursor_rect();
         let was_composing = self.composition.is_composing();
         let saved_virtual_text = self.composition.virtual_text();
         let (session_replace_start, session_replace_end) =
             self.composition.session_replace_range(fallback_cursor);
         let candidate_byte_start = session_replace_start;
         let candidate_byte_end = session_replace_start + inserted_text.len();
-        let committed_replace_start = session_replace_start;
-        let committed_replace_end = session_replace_end;
 
         self.composition.clear_preedit_fields();
 
         CompositionCommitResult {
-            pending_preedit_cursor_rect: pending_pcr,
             was_composing,
             preedit_byte_start,
             preedit_byte_end,
@@ -1080,8 +1048,6 @@ impl LinuxEditorPipeline {
             session_replace_end,
             candidate_byte_start,
             candidate_byte_end,
-            committed_replace_start,
-            committed_replace_end,
         }
     }
 
@@ -1137,68 +1103,42 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout = layout;
     }
 
-    pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
-        let tx = self
+    /// Issue #826: 为当前活跃的遮罩前沿 / Reflow 层准备旧行纹理。
+    ///
+    /// 吐字只画最新 canonical 一份（静态层自己的纹理），但吞字 / 替换的旧 overlay
+    /// 和 Reflow 的旧位置都要从旧行纹理取 glyph。前沿建立时旧行纹理可能还没进
+    /// texture_cache，这里先把 base snapshot 的行纹理补进去；仍缺的才把动画
+    /// 收成 canonical 终态，不留半开遮罩。
+    pub fn prepare_frontier_textures(&mut self) {
+        let Some(base) = self
             .animation_coordinator
-            .prepared_queue
-            .active_transactions()
+            .active_edit_frontier_base_snapshot()
+        else {
+            return;
+        };
+        for line in &base.line_snapshots {
+            let Some(image) = line.image.as_ref() else {
+                continue;
+            };
+            if !self.texture_cache.contains_line(&line.id) {
+                self.texture_cache.insert_line(line.id, image.clone());
+            }
+        }
+        let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+        let missing = active_ids
             .iter()
-            .find(|t| t.key == key)
-            .cloned();
-
-        if let Some(t) = tx {
-            let snapshot_ids = t.snapshot_ids();
-            if snapshot_ids.is_empty() {
-                self.animation_coordinator.prepared_queue.mark_prepared(key);
-                return;
-            }
-
-            let mut all_found = true;
-            for id in &snapshot_ids {
-                if !self.texture_cache.contains_line(id) {
-                    all_found = false;
-                    break;
-                }
-            }
-
-            if all_found {
-                self.animation_coordinator.prepared_queue.mark_prepared(key);
-                return;
-            }
-
-            if let Some(ref old_snap) = t.old_snapshot {
-                for line in &old_snap.line_snapshots {
-                    if let Some(ref image) = line.image {
-                        self.texture_cache.insert_line(line.id, image.clone());
-                    }
-                }
-            }
-            if let Some(ref new_snap) = t.new_snapshot {
-                for line in &new_snap.line_snapshots {
-                    if let Some(ref image) = line.image {
-                        self.texture_cache.insert_line(line.id, image.clone());
-                    }
-                }
-            }
-
-            let mut any_missing = false;
-            for id in &snapshot_ids {
-                if !self.texture_cache.contains_line(id) {
-                    any_missing = true;
-                    break;
-                }
-            }
-
-            if any_missing {
-                super::editor_animation_debug_log(&format!(
-                    "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
-                    key.transaction_id
-                ));
-                self.animation_coordinator
-                    .cancel_by_key(key, "texture_failed");
-            } else {
-                self.animation_coordinator.prepared_queue.mark_prepared(key);
-            }
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .count();
+        if missing > 0 {
+            super::editor_animation_debug_log(&format!(
+                "prepare_frontier_textures: {} active line textures missing, snap to canonical",
+                missing
+            ));
+            self.animation_coordinator
+                .finish_edit_frontier_to_canonical();
+            let remaining = self.animation_coordinator.collect_active_snapshot_ids();
+            self.texture_cache.retain_active_snapshot_ids(&remaining);
         }
     }
 
@@ -1209,7 +1149,6 @@ impl LinuxEditorPipeline {
         old: &EditorSnapshot,
         new: &EditorSnapshot,
         editor_layout: &crate::editor::layout::EditorLayout,
-        cursor_owner_epoch: u64,
     ) -> VisualPrepareOutcome {
         // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
         // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
@@ -1269,24 +1208,9 @@ impl LinuxEditorPipeline {
         // 所以：**正文吞吐协同**（Insert/Delete/Replace/IME commit）用打字动画时长
         // 作为整段协同动画的速度；纯 caret 移动（CursorOnly：鼠标点击、方向键移动、
         // 拖选）仍然属于「平滑光标」，不受影响。
-        let text_duration_ms = self.typing_animation_duration_ms;
-        let is_body_ingest_edit = result.operation_kind != EditorOperationKind::CursorOnly;
-        let caret_duration_ms = if ctx.coordinated_animation_enabled && is_body_ingest_edit {
-            self.typing_animation_duration_ms
-        } else {
-            self.cursor_animation_duration_ms
-        };
-        let mut motion = PreparedEditMotion::from_edit_result(
-            result,
-            &old.text,
-            &new.text,
-            u64::from(text_duration_ms),
-            u64::from(caret_duration_ms),
-        );
-        // Issue #819 评论 5968931455 问题 2.2: create_transaction_from_prepared_handoff
-        // 返回 HandoffTransactionOutcome，直接透传 skip reason，不再猜。
-        #[allow(unused_assignments)]
-        let mut handoff_outcome: HandoffTransactionOutcome = HandoffTransactionOutcome::Skipped(
+        let mut motion = PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
+        // Issue #826: 视觉动画只有"接上遮罩前沿 / Reflow"与"跳过"两种结果。
+        let mut visual_outcome = VisualPrepareOutcome::Skipped(
             super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
         );
         {
@@ -1523,10 +1447,7 @@ impl LinuxEditorPipeline {
                     lines: &new_doc_snapshot.visual_lines,
                 };
                 let mut new_raster_ids = diff.new_raster_line_ids.clone();
-                for (rs, re) in self
-                    .animation_coordinator
-                    .collect_active_rebind_ranges(&motion.new_text)
-                {
+                for (rs, re) in self.animation_coordinator.active_reflow_new_ranges() {
                     for (i, l) in new_doc_snapshot.visual_lines.iter().enumerate() {
                         if l.byte_start < re && l.byte_end > rs && !new_raster_ids.contains(&i) {
                             new_raster_ids.push(i);
@@ -1703,22 +1624,6 @@ impl LinuxEditorPipeline {
                 &ctx.font_family,
             ));
 
-            // Issue #722 评论 5749791161: 获取 from/to 端真实视觉行的 top/bottom。
-            // 行几何来自 VisualLine.y 和 VisualLine.y + VisualLine.height，
-            // 不是 caret 自己的 CursorRect.top/bottom（光标细矩形边界）。
-            let (old_line_top, old_line_bottom) = old_doc_snapshot
-                .visual_lines
-                .iter()
-                .find(|l| l.id == old_caret.visual_line_id)
-                .map(|l| (l.y, l.y + l.height))
-                .unwrap_or((0.0, 0.0));
-            let (new_line_top, new_line_bottom) = new_doc_snapshot
-                .visual_lines
-                .iter()
-                .find(|l| l.id == new_caret.visual_line_id)
-                .map(|l| (l.y, l.y + l.height))
-                .unwrap_or((0.0, 0.0));
-
             // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
             // 已复制进 Rust snapshot（old_doc_snapshot），fallback_old_generation 的 QTextLayout
             // 不再需要，立即释放避免生命周期泄漏。old_doc_snapshot 后续 build_old_new_from_canonical
@@ -1747,11 +1652,6 @@ impl LinuxEditorPipeline {
                 new_revision,
                 ctx.scroll_y,
                 ctx.viewport_height,
-                // Issue #736 评论 5777408243 问题1: cluster 的 document byte range
-                // 和 snapshot 的 virtual_text 必须属于同一 revision，否则
-                // animation_coordinator 取 cluster 文本会得到空串，InsertReveal 全被跳过。
-                &motion.old_text,
-                &motion.new_text,
             ) {
                 Ok(pair) => pair,
                 Err(err) => {
@@ -1792,99 +1692,53 @@ impl LinuxEditorPipeline {
                 }
             };
 
-            // Issue #738 评论 5787277777: 在 new_doc_snapshot 已完成、创建本次新事务之前，
-            // 先把所有旧活动事务从"上一份 canonical 几何"重绑到这份新 canonical，
-            // 再处理本次新事务自己的 conflict/rebase。Pipeline 的 new_revision 即将成为
-            // 新 canonical basis revision，直接传给 coordinator。
+            // Issue #826: 正文动画的唯一入口。正文已经由 Core 立即提交，
+            // 这里只把"本轮改掉了什么"交给遮罩前沿 + 独立 Reflow 层。
+            // 不再创建 prepared transaction，不再 rebase，不再 carry 历史 unit。
             //
-            // Issue #738 评论 5796693007 问题1: 正文编辑路径必须先采 rebase frame/handoff
-            // 再 retire 旧事务。prepare_rebase_handoff_for_edit 在旧事务还活着时
-            // 采样 rebase frame + caret handoff（采到的是真实当前帧，不是终态），
-            // 取消真正被覆盖的冲突事务。reconcile 之后再 create 新事务。
-            // 顺序：prepare → reconcile → create。
-            // - prepare 采到的是旧事务真实当前帧（还没被推到终态）。
-            // - reconcile retire 旧事务 + rebind Timed Reflow。rebase frame 已采好，
-            //   此时 retire 不影响已采的 frame。
-            // - create 用保存的 handoff 创建新事务。
-            // Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
-            // 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
-            // 用一个统一的 edit_now，保证 prepare 和 reconcile 用同一时刻采样。
+            // - `motion.inserted_ranges` / `deleted_ranges` 来自 Core
+            //   `display_patches`（`PreparedEditMotion::from_edit_result`），是正文动画
+            //   分类的唯一事实源。
+            // - `OffsetMap` 用来在 old/new 坐标之间映射同一段**未改**文字，供
+            //   Reflow 层做位置插值（changed range 会被 ReflowState 排除）。
             let edit_now = Instant::now();
-            let prepared_handoff = self.animation_coordinator.prepare_rebase_handoff_for_edit(
-                &motion,
-                ctx.typing_animation_enabled,
-                ctx.smooth_cursor_enabled,
-                ctx.coordinated_animation_enabled,
-                ctx.is_scrolling,
-                ctx.is_loading,
-                ctx.is_applying_format,
-                motion.old_cursor_rect.clone(),
-                motion.new_cursor_rect.clone(),
-                cursor_owner_epoch,
-                edit_now,
-            );
-            self.animation_coordinator
-                .reconcile_active_transactions_with_canonical(
-                    &motion.new_text,
-                    &new_doc_snapshot,
-                    new_revision,
-                    edit_now,
-                );
-            // Issue #738 评论 5788513592 额外要求: reconcile 删除 unit / 完成事务后同步按
-            // 剩余 active snapshot ids 收一次 texture cache，不让已经失去 owner 的纹理一直
-            // 挂到后续别的完成路径才释放。
-            // Issue #819 评论 5968240881 问题 1：retain 时把 carried_snapshot_ids 也算进
-            // active ids。carried unit 引用旧事务的 snapshot/texture，旧事务 cancel 后
-            // 纹理可能在新事务接管前被回收。把 carried_snapshot_ids 显式算进 active
-            // 集合，让纹理在新事务创建之前不被回收。新事务创建后由它自己持有这些
-            // snapshot ids（carried unit 已 units.push() 进新事务 units），下一次 retain
-            // 会按新 active ids 正常收。
-            // Issue #824 评论 5971089641：所有正文编辑（Insert/Delete/Replace）
-            // 共用同一个 `PreparedRebaseHandoff` 结构。
-            let carried_ids = match prepared_handoff.as_ref() {
-                Some(handoff) => handoff.visual_state.carried_snapshot_ids.as_slice(),
-                None => &[],
-            };
-            self.retain_handoff_textures(carried_ids);
+            let old_caret_rect = motion.old_cursor_rect.clone().unwrap_or(CursorRect {
+                x: old_caret.x,
+                top: old_caret.y,
+                bottom: old_caret.y + old_caret.h,
+                baseline_y: old_caret.baseline_y,
+            });
+            let new_caret_rect = motion.new_cursor_rect.clone().unwrap_or(CursorRect {
+                x: new_caret.x,
+                top: new_caret.y,
+                bottom: new_caret.y + new_caret.h,
+                baseline_y: new_caret.baseline_y,
+            });
 
-            let outcome = self
-                .animation_coordinator
-                .create_transaction_from_prepared_handoff(
-                    prepared_handoff,
-                    &motion,
-                    // Issue #756: 文字动画 = coordinated || typing，光标动画 = coordinated || smooth。
-                    // Issue #819: 协同模式下文字与光标共享同一份采样，InsertReveal/DeleteConceal
-                    // 的空间边界直接来自同一笔 cursor track 的当前帧。coordinated=false 时由
-                    // smooth 单独决定光标动画（"平滑光标"在正文编辑期间的光标动画）。
-                    text_animation_enabled,
-                    caret_animation_enabled,
-                    ctx.coordinated_animation_enabled,
-                    motion.old_cursor_rect.clone(),
-                    motion.new_cursor_rect.clone(),
-                    Some(old_caret.visual_line_id),
-                    Some(new_caret.visual_line_id),
-                    old_line_top,
-                    old_line_bottom,
-                    new_line_top,
-                    new_line_bottom,
-                    &old_snap,
-                    &new_snap,
-                    cursor_owner_epoch,
-                    new_revision,
+            if text_animation_enabled {
+                self.animation_coordinator
+                    .begin_or_extend_edit_frontier(EditFrontierRequest {
+                        kind: motion.kind,
+                        base_snapshot: old_snap.clone(),
+                        target_snapshot: new_snap.clone(),
+                        deleted_ranges: motion.deleted_ranges.clone(),
+                        inserted_ranges: motion.inserted_ranges.clone(),
+                        start_frontier: old_caret_rect,
+                        target_frontier: new_caret_rect,
+                        offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
+                        now: edit_now,
+                    });
+                // 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束。
+                let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
+                self.texture_cache.retain_active_snapshot_ids(&active_ids);
+                self.prepare_frontier_textures();
+                visual_outcome = VisualPrepareOutcome::Created;
+            } else {
+                self.animation_coordinator
+                    .finish_edit_frontier_to_canonical();
+                visual_outcome = VisualPrepareOutcome::Skipped(
+                    super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
                 );
-            // Issue #819 评论 5968931455 问题 2.2: 透传 HandoffTransactionOutcome，
-            // 不再保存 Option<VisualTransactionKey>。
-            handoff_outcome = outcome;
-            // Issue #738 评论 5793319451 问题1: layout_revision 必须随 canonical 推进
-            // 无条件一起提交。process_transaction 在 typing animation 关闭/正在滚动/loading/
-            // applying format/smooth cursor 不完整/mode 不创建事务等场景会返回 Skipped，
-            // 但此时 canonical 已推进到 new_revision、旧事务已 reconcile 到 new_revision。
-            // 若 layout_revision 停在旧值，basis 守卫（已改为 ==/!=）会把"事务 revision
-            // 比 Pipeline 当前 revision 更新"误当合法事务继续画。new_doc_snapshot 一旦成为
-            // 当前 canonical，layout_revision 就必须无条件一起提交。
-            self.layout_revision = new_revision;
-            if let HandoffTransactionOutcome::Created(key) = handoff_outcome {
-                self.prepare_transaction_textures(key);
             }
 
             self.previous_layout_snapshot =
@@ -1923,18 +1777,13 @@ impl LinuxEditorPipeline {
             });
 
             super::editor_animation_debug_log(&format!(
-                    "prepare_edit_motion: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
+                    "prepare_edit_motion: processed via canonical document snapshot pipeline, kind={:?}, frontier_active={}",
                     motion.kind,
-                    self.animation_coordinator.has_active_insert()
+                    self.animation_coordinator.has_active_edit_frontier()
                 ));
         }
 
-        // Issue #819 评论 5968931455 问题 2.2: 直接透传 HandoffTransactionOutcome，
-        // 不再猜 skip reason。
-        match handoff_outcome {
-            HandoffTransactionOutcome::Created(key) => VisualPrepareOutcome::Created { key },
-            HandoffTransactionOutcome::Skipped(reason) => VisualPrepareOutcome::Skipped(reason),
-        }
+        visual_outcome
     }
 }
 

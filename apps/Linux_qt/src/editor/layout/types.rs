@@ -100,6 +100,28 @@ pub struct LayoutSnapshot {
     pub layout_generation: u64,
 }
 
+#[cfg(test)]
+impl LayoutSnapshot {
+    /// Issue #826: 单元测试里构造一个不带任何行的空布局快照。
+    ///
+    /// 遮罩前沿 / Reflow 的测试只关心 cluster 几何，不需要真实排版结果。
+    pub(crate) fn empty_for_tests() -> Self {
+        Self {
+            text_revision: 0,
+            text_ptr: 0,
+            text_len: 0,
+            width: 600.0,
+            font_size: 16.0,
+            font_family: String::new(),
+            line_spacing: 0.0,
+            text_indent: 0.0,
+            padding: 0.0,
+            lines: Vec::new(),
+            layout_generation: 0,
+        }
+    }
+}
+
 /// Issue #658 评论 5622829886 问题 1: 已排好的 prepared layout 提升为 EditorLayout current。
 ///
 /// 由 record_visual_transaction 全篇排版 new text 后构造，

@@ -17,7 +17,6 @@
 //! 必须有明确的 `Created` 或 `Skipped`。
 
 use super::*;
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 /// Issue #701 评论 5699573227 第三阶段: 统一编辑操作描述。
 ///
@@ -75,14 +74,11 @@ pub(crate) enum EditOp {
 /// Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
 /// 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
 pub(crate) struct CompositionCommitParams {
-    pub pending_preedit_cursor_rect: Option<CursorRect>,
     pub preedit_byte_start: usize,
     pub preedit_byte_end: usize,
     pub saved_virtual_text: String,
     pub candidate_byte_start: usize,
     pub candidate_byte_end: usize,
-    pub committed_replace_start: usize,
-    pub committed_replace_end: usize,
     pub cancel_reason: &'static str,
     pub summary_tag: &'static str,
 }
@@ -101,8 +97,6 @@ pub(crate) enum EditVisualSkipReason {
     FormatApplyingSuppressed,
     /// `prepare_edit_motion` 内部检测到 stale canonical / canonical invariant。
     StaleCanonical,
-    /// 协同模式拿不到 cursor track。
-    CursorTrackMissing,
     /// builder 跳过了事务创建（空事务 / 无可视单元）。
     BuilderEmptyTransaction,
     /// composition commit 路径的 old/new snapshot 构造失败或不可用。
@@ -112,8 +106,10 @@ pub(crate) enum EditVisualSkipReason {
 /// Issue #819 评论 5956495850 第 1 节：视觉事务的明确结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EditVisualOutcome {
-    /// 视觉事务已创建，`key` 是真正创建的事务 key。
-    Created(VisualTransactionKey),
+    /// Issue #826: 正文动画已接到唯一的遮罩前沿 / Reflow 层上。
+    ///
+    /// 新模型没有 prepared transaction 队列，所以不再携带事务 key。
+    Created,
     /// Core edit 已应用但视觉事务未创建，附带具体跳过原因。
     Skipped(EditVisualSkipReason),
     /// 动画未请求（三个开关全关），Core edit 已应用但无视觉事务。
@@ -394,21 +390,18 @@ impl SujianEditorItem {
         // 7. 调视觉流水线，构造明确的 visual outcome
         let visual = if let Some(params) = composition {
             // composition commit 路径 — record_composition_commit_transaction
-            // 内部自己处理动画开关和跳过事件，返回 HandoffTransactionOutcome。
-            // Issue #819 评论 5968931455 问题 2.2: 直接透传 outcome，不再猜。
+            // 内部自己处理动画开关和跳过事件，返回 VisualPrepareOutcome。
+            // Issue #826: 直接透传 outcome，不再猜。
             let outcome = self.record_composition_commit_transaction(
                 &old,
                 &new,
                 edit_result.expect("edit_result is Some when applied is true"),
                 visual_cause,
-                params.pending_preedit_cursor_rect,
                 params.preedit_byte_start,
                 params.preedit_byte_end,
                 &params.saved_virtual_text,
                 params.candidate_byte_start,
                 params.candidate_byte_end,
-                params.committed_replace_start,
-                params.committed_replace_end,
                 params.cancel_reason,
                 params.summary_tag,
             );
@@ -416,12 +409,13 @@ impl SujianEditorItem {
                 EditVisualOutcome::AnimationDisabled
             } else {
                 match outcome {
-                    super::animation::transaction_builder::HandoffTransactionOutcome::Created(
-                        k,
-                    ) => EditVisualOutcome::Created(k),
-                    super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
-                        reason,
-                    ) => EditVisualOutcome::Skipped(reason),
+                    super::pipeline::VisualPrepareOutcome::Created => EditVisualOutcome::Created,
+                    super::pipeline::VisualPrepareOutcome::Skipped(reason) => {
+                        EditVisualOutcome::Skipped(reason)
+                    }
+                    super::pipeline::VisualPrepareOutcome::AnimationDisabled => {
+                        EditVisualOutcome::AnimationDisabled
+                    }
                 }
             }
         } else {
@@ -439,9 +433,7 @@ impl SujianEditorItem {
                 EditVisualOutcome::AnimationDisabled
             } else {
                 match outcome {
-                    super::pipeline::VisualPrepareOutcome::Created { key } => {
-                        EditVisualOutcome::Created(key)
-                    }
+                    super::pipeline::VisualPrepareOutcome::Created => EditVisualOutcome::Created,
                     super::pipeline::VisualPrepareOutcome::Skipped(reason) => {
                         EditVisualOutcome::Skipped(reason)
                     }

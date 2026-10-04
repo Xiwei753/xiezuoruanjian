@@ -1,7 +1,5 @@
-use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
-use super::transaction_key::VisualTransactionKey;
 use crate::editor::layout::LayoutSnapshot;
 
 #[derive(Clone, Debug)]
@@ -73,20 +71,6 @@ pub(crate) struct PreeditRange {
     pub underline: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct FrameContext {
-    pub active_transaction_keys: Vec<VisualTransactionKey>,
-    pub keys_to_complete: Vec<VisualTransactionKey>,
-    pub keys_to_cancel: Vec<VisualTransactionKey>,
-    /// Issue #738 评论 5787277777: 当前 canonical layout basis revision。
-    ///
-    /// `build_render_plan_full` 构建 glyph / clip 时只接受已经 reconcile 到这个
-    /// revision 的 unit（`tx.layout_basis_revision >= frame_context.layout_basis_revision`）。
-    /// 这个守卫放在计划层，避免以后又新增一条入口忘了先做 reconcile，旧绝对坐标
-    /// 重新混进 scene graph。
-    pub layout_basis_revision: LayoutRevision,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct CursorStyle {
     pub color: String,
@@ -130,62 +114,6 @@ pub(crate) struct CursorRenderState {
     pub opacity: f64,
 }
 
-/// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
-///
-/// 由 `build_render_plan_full` 内部用同一份 `AnimationFrameSample` 采样，
-/// 供 `update_paint_node` 推进 `cursor_ctrl` 的 visual_x/visual_y。
-/// 文字层和光标层都使用同一份 frame state，消除 GUI tick 与 Scene Graph
-/// 渲染帧之间的采样偏差。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum CursorSampleOutcome {
-    /// 无 CursorOnly 动画，或事务处于 Pending/Prepared（保持当前 visual_x/y）。
-    Idle,
-    /// 事务处于 Rendering/Paused，返回 progress（已 clamp 到 [0,1]）。
-    Running(f64),
-    /// 事务已完成或不存在，光标应落到 target。
-    Finished,
-    /// Issue #702 评论 5707770318: 正文协同光标帧。
-    ///
-    /// 有活跃正文事务时由 `compute_coordinated_cursor_position()` 计算的
-    /// 本帧光标位置。携带 `(x, y, h)` 三元组，供 `qquickitem_impl` 同步
-    /// `cursor_ctrl.visual_x/visual_y/visual_h` 到屏幕真正画出的位置。
-    ///
-    /// 关键语义：此变体**不走** `CursorAnimationState` 的独立 timeline。
-    /// `qquickitem_impl` 收到 `Coordinated` 时只同步 visual 位置，
-    /// 不启动 `started_at`，并清除残留的纯光标 animation。
-    /// 正文光标只由 `compute_coordinated_cursor_position()` 驱动。
-    Coordinated { x: f64, y: f64, h: f64 },
-}
-
-/// Issue #707 评论 5723616999: Default 实现 — Idle 是自然默认值。
-impl Default for CursorSampleOutcome {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
-
-/// Issue #819 评论 5956495850 第 2 节：`SampledCaretFrame` 的定义已收口到
-/// `animation::frame_state`，让「屏幕画的帧」和「rebase 交棒的帧」是同一份类型。
-/// 这里 re-export 保留旧引用路径（`render_plan::SampledCaretFrame`）。
-pub(crate) use super::animation::frame_state::SampledCaretFrame;
-
-/// Issue #815 评论 6042062633 修改 3: 一帧的统一协同运动结果。
-///
-/// 每帧每笔 owner 事务只采样一次 caret track，得到一份 `SampledCaretFrame`；
-/// 这同一份采样同时喂给光标层和文字吞吐层。文字层不得再推导一份 caret，
-/// 也不得自己再按 `frame_now` 算一次时间。
-///
-/// `owner_key` 标记这份采样属于哪笔事务：只有同 key 的 `CaretTrack` unit 才能消费。
-/// 其它失去 ownership 的 `CaretTrack` unit 立刻收口到终态，只允许 `Timed` Reflow
-/// 继续播完。避免 editor.anim.keep 保留旧事务时旧事务消费新事务的 caret。
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct CoordinatedMotionFrame {
-    /// Issue #727 问题5: owner tx key; only same-key CaretDriven unit consumes.
-    pub owner_key: Option<VisualTransactionKey>,
-    /// 本帧采样的 caret geometry。`None` 表示无有效 caret motion track。
-    pub caret: Option<SampledCaretFrame>,
-}
-
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
@@ -203,16 +131,15 @@ pub struct RenderPlan {
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
     pub(crate) cursor: CursorRenderState,
-    pub(crate) frame_context: FrameContext,
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
-    /// Issue #727 评论 5755858583 问题2: 动画期间静态正文层需要隐藏的裁剪矩形。
-    /// 直接存储文档坐标 x/y/w/h，由 active units 的 AnimatedSlice.static_hidden_document_rects
-    /// 收集而来。不再通过 StaticLinePatch 中间结构。
+    /// Issue #826: 吐字期间静态正文层需要隐藏的裁剪矩形。
+    ///
+    /// 直接存储文档坐标 x/y/w/h，全部来自遮罩前沿
+    /// `hidden_canonical_rects`：最新 canonical 正文里还没被前沿打开的部分。
+    /// 静态层只画 complement，因此"吐字只画一份正文"天然成立。
     pub(crate) clip_rects: Vec<AnimationClipRect>,
-    /// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
-    pub(crate) cursor_sample_outcome: CursorSampleOutcome,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
     /// 正文协同动画时,这个 rect 就是同帧文字事务算出的实际光标位置;

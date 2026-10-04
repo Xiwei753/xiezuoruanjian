@@ -637,25 +637,22 @@ impl SujianEditorItem {
     /// Tween（无 Insert 事务），tick 认为 Suppressed（常亮），render 认为 Normal
     ///（正常 blink），opacity 可能为 0 → 光标消失。
     ///
-    /// 现在统一为这一个 `&self` 方法，四处消费同一个结果：
-    /// - CursorOnly Tween active（`cursor_ctrl.animation.is_some()`）→ Suppressed
-    /// - 当前 epoch 下正文视觉事务 active（`has_active_text_transaction()`）→ Suppressed
-    /// - idle → Normal
+    /// Issue #826: 唯一的 blink 决策入口。
     ///
-    /// Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关，
-    /// 是否有吞吐字直接由"本帧有没有有效 caret motion"决定。
+    /// - 有活跃遮罩前沿 / Reflow（`has_active_text_animation(frame_now)`）→ Suppressed
+    /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
+    /// - idle → Normal
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
+        use super::animation::blink_mode_for_frontier;
         use super::cursor_animation::CursorBlinkMode;
-        let has_active_text = self
-            .pipeline
-            .animation_coordinator()
-            .has_active_text_transaction();
-        let has_cursor_only_tween = self.cursor_ctrl.animation.is_some();
-        if has_active_text || has_cursor_only_tween {
-            CursorBlinkMode::Suppressed
-        } else {
-            CursorBlinkMode::Normal
+        if self.cursor_ctrl.animation.is_some() {
+            return CursorBlinkMode::Suppressed;
         }
+        blink_mode_for_frontier(
+            self.pipeline
+                .animation_coordinator()
+                .active_edit_frontier_kind(),
+        )
     }
 
     pub(crate) fn cursor_blink_opacity(&self) -> f32 {

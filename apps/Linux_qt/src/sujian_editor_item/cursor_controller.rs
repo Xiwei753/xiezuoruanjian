@@ -74,15 +74,9 @@ pub enum CursorVisibilityState {
 /// - `current_visual_line_id`：光标所在 visual line 的 ID，用于判断是否跨行移动
 /// - `force_snap_next`：下次更新强制 Snap（跳过 Tween），用于章节加载、滚动恢复等场景
 /// - `blink_reset_requested`：编辑操作后请求重置闪烁（使光标重新可见）
-/// - `cursor_owner_epoch`：光标所有权版本号（Issue #705 评论 5717380886）。
-///   非正文事务导致的逻辑 cursor 移动（鼠标点击、方向键、Home/End、拖选等）
-///   会 bump 此 epoch；`PreparedTextVisualTransaction` 创建时记录当时的 epoch，
-///   `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
-///   是否仍等于当前 epoch。
-///   Issue #727 约束 1: epoch 不一致后，这笔事务立刻失去 caret motion ownership；
-///   InsertReveal / DeleteConceal 同时结束到 canonical 最终状态，不再继续播放。
-///   ReflowMove / ReflowCrossFade 是否继续可以单独决定。
-///   即：caret ownership 丢失 = reveal/conceal ownership 同时丢失。
+/// Issue #826: `cursor_owner_epoch` 已删除。视觉光标 Tween 现在与文字动画完全解耦，
+/// 逻辑 caret 先立即变成 Core 的 selection，视觉位置由 `CursorAnimationState` 独立追到
+/// 新的 caret rect，不再需要"哪笔事务拥有这条 caret"的判定。
 pub struct CursorController {
     pub target_x: f64,
     pub target_y: f64,
@@ -104,9 +98,6 @@ pub struct CursorController {
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
     pub blink_reset_requested: bool,
-    /// Issue #705 评论 5717380886: 光标所有权版本号。
-    /// 0 表示初始状态；任何非正文事务导致的逻辑 cursor 移动都应 bump。
-    pub cursor_owner_epoch: u64,
     /// Issue #712: 光标移动来源，决定跨行移动时走 Snap 还是 Tween。
     /// 默认 LayoutChange（安全默认值，首次出现走 Snap）。
     pub last_move_source: CursorMoveSource,
@@ -147,29 +138,11 @@ impl CursorController {
             blink_visible: true,
             blink_last_toggle: Instant::now(),
             blink_reset_requested: false,
-            cursor_owner_epoch: 0,
             last_move_source: CursorMoveSource::LayoutChange,
             // Issue #810 评论 问题2: 初始未可见，无保存的 selection head rect。
             visibility_state: CursorVisibilityState::Uninitialized,
             selection_head_rect: None,
         }
-    }
-
-    /// Issue #705 评论 5717380886: bump 光标所有权版本号。
-    ///
-    /// 由 `editing.rs::begin_manual_cursor_move()` 统一调用，标记一次"非正文事务
-    /// 导致的逻辑 cursor 移动"（鼠标点击、方向键、Home/End、拖选等）。之后
-    /// `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
-    /// 是否仍等于当前 epoch。
-    ///
-    /// Issue #727 约束 1: epoch 不一致后，这笔事务立刻失去 caret motion ownership；
-    /// InsertReveal / DeleteConceal 同时结束到 canonical 最终状态，不再继续播放。
-    /// 即：caret ownership 丢失 = reveal/conceal ownership 同时丢失。
-    ///
-    /// 使用 `wrapping_add` 避免 overflow panic（u64 在实际使用中不可能溢出，
-    /// 但遵守 AGENTS.md "不用 unwrap/expect 代替错误处理" 的安全边界）。
-    pub fn bump_cursor_owner_epoch(&mut self) {
-        self.cursor_owner_epoch = self.cursor_owner_epoch.wrapping_add(1);
     }
 
     /// Issue #810 评论 问题2: 记录选择手势结束时的 selection head visual rect。
@@ -207,9 +180,8 @@ impl CursorController {
         self.visible
     }
 
-    // 三个方法保持 pub(crate)：入参/返回的都是平台端内部光标动画状态，
-    // 消费方只有 qquickitem_impl / properties / editing / rendering，
-    // 集成测试只走 new() / bump_cursor_owner_epoch() / cursor_owner_epoch。
+    // 方法保持 pub(crate)：入参/返回的都是平台端内部光标动画状态，
+    // 消费方只有 qquickitem_impl / properties / editing / rendering。
     pub(crate) fn cursor_blink_opacity(&self, blink_mode: CursorBlinkMode) -> f64 {
         if !self.visible {
             return 0.0;

@@ -126,7 +126,6 @@ impl SujianEditorItem {
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
 
-        let vp_h = f64::from(self.current_viewport_height.max(1.0));
         // Issue #810 评论 问题2: 分离 Core selection 状态与平台 selection gesture 状态。
         //
         // 旧逻辑：`let is_selecting = self.pipeline.selection_anchor() != self.pipeline.cursor();`
@@ -143,69 +142,28 @@ impl SujianEditorItem {
         let selection_gesture_active = self.selection_gesture_active;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
-        // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
-        // 是否已经有对应的正文/预输入视觉事务。
-        // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
-        // Issue #735 评论 5773604666 问题3: epoch 不一致时 find_cursor_transaction_for_target
-        // 触发收口——CaretDriven units（InsertReveal/DeleteConceal）立即落到终态，
-        // 不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
-        // reflow track 继续。然后不返回该事务，走 CursorOnly / 纯光标 Tween。
-        // Issue #709 评论 issue-body-709: found_tx 决定走哪条时间线：
-        // - Some：正文协同光标接管（Insert/Delete），不创建独立 CursorOnly 动画
-        // - None：纯光标 Tween（鼠标点击/方向键/Home/End），CursorAnimationState 自己的 timeline
-        // Issue #738 评论 5789470425 问题1: 传当前 layout_revision，跳过 basis 不一致事务。
-        // 先取 layout_revision（不可变借用），再调 animation_coordinator_mut（可变借用），
-        // 避免 self.pipeline 同时被可变和不可变借用。
-        let current_layout_revision = self.pipeline.layout_revision();
-        let found_tx = self
-            .pipeline
-            .animation_coordinator_mut()
-            .find_cursor_transaction_for_target(
+        // Issue #826: 光标动画与正文动画完全解耦。
+        //
+        // 逻辑 caret 已经在 Core 里立即变成当前 selection；这里只把当前视觉位置
+        // 与目标 caret rect 交给 `build_cursor_plan`，让它决定 Snap 还是 Tween。
+        // 不再查"哪笔正文事务拥有这条 caret"，不再传 cursor_owner_epoch。
+        let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
+            &super::animation::CursorMoveInputs {
                 cursor_x,
                 cursor_y,
                 cursor_h,
-                self.cursor_ctrl.cursor_owner_epoch,
-                current_layout_revision,
-            );
-
-        // Issue #686 评论 5664857575 领域2：存在活动正文事务时，光标位置由最新正文事务
-        // 的同一条 Timeline 决定。纯光标移动（方向键、Home/End、鼠标点击后的平滑移动）
-        // 不再创建 CursorOnly 文字事务，由 CursorAnimationState 自己的 timeline 推进。
-
-        let (old_cursor_rect, new_cursor_rect) = match found_tx {
-            Some((_key, old_r, new_r)) => (old_r, new_r),
-            None => (None, None),
-        };
-
-        // Issue #679 评论 5657313927 (步骤 4): 调唯一的 build_cursor_plan。
-        // Issue #702 评论 5707449688 问题 2: 不再传 driver_key，纯光标 Tween 由
-        // CursorAnimationState 自己的 timeline 推进。
-        // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
-        let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
-            old_cursor_rect,
-            new_cursor_rect,
-            cursor_x,
-            cursor_y,
-            cursor_h,
-            self.current_editor_enabled,
-            has_selection,
-            vp_h,
-            self.current_is_scrolling,
-            selection_gesture_active,
-            is_preediting,
-            self.current_smooth_cursor_enabled,
-            self.current_cursor_animation_duration_ms,
-            f64::from(self.current_scroll_y),
-            self.cursor_ctrl.visible,
-            self.cursor_ctrl.blink_visible,
-            self.cursor_ctrl.visual_x,
-            self.cursor_ctrl.visual_y,
-            self.cursor_ctrl.force_snap_next,
-            self.cursor_ctrl.animation.as_ref(),
-            self.cursor_ctrl.cursor_owner_epoch,
-            self.cursor_ctrl.last_move_source,
-            layout_res.baseline_y,
-            self.pipeline.layout_revision(),
+                editor_enabled: self.current_editor_enabled,
+                has_selection,
+                is_scrolling: self.current_is_scrolling,
+                selection_gesture_active,
+                is_preediting,
+                smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+                duration_ms: u64::from(self.current_cursor_animation_duration_ms),
+                visual_x: self.cursor_ctrl.visual_x,
+                visual_y: self.cursor_ctrl.visual_y,
+                force_snap_next: self.cursor_ctrl.force_snap_next,
+                baseline_y: layout_res.baseline_y,
+            },
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。

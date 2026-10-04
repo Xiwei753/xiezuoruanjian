@@ -1,485 +1,86 @@
-//! Linux Qt 文字动画协调器 — 组合编辑（IME composition）方法。
+//! Issue #826: IME preedit 独立临时显示层。
 //!
-//! `handle_composition_update`、`prepare_composition_commit_handoff`、
-//! `handle_composition_commit_or_cancel`、`active_composition_new_snapshot`、
-//! `cancel_active_composition`。
+//! composition **update**（预输入未上屏）：只更新 preedit 临时显示，不创建
+//! InsertReveal / DeleteConceal、不进 EditFrontier、不 carry/rebase preedit glyph。
+//! 正文此时还没变，Core 提交的就是最新真实内容。
+//!
+//! composition **commit / cancel**（上屏或取消）：
+//! 1. 去掉 preedit 临时层；
+//! 2. 只读 Core `EditorEditResult.display_patches`；
+//! 3. 用 committed old canonical → committed new canonical 创建**一次** EditFrontier；
+//! 4. 纯 Insert 就是 Insert；真正同时有删除和插入才是 Replace。
 
 use std::time::Instant;
 
+use crate::sujian_editor_item::animation::coordinator::EditFrontierRequest;
+use crate::sujian_editor_item::animation::LinuxEditorAnimationCoordinator;
+use crate::sujian_editor_item::edit_motion::{CursorRect, PreparedEditMotion};
+use crate::sujian_editor_item::editor_animation_debug_log;
+use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use writer_core::editor::OffsetMap;
 
-use crate::editor::layout::compute_affected_paragraph_ranges;
-use crate::sujian_editor_item::animation::rebase::PreparedCompositionCommitHandoff;
-use crate::sujian_editor_item::animation::transaction_builder::{
-    build_prepared_transaction, emit_transaction_diagnostic, unit_kind_labels,
-    BuildTransactionOutcome, CompositionCommitCrossfadeSpec, HandoffTransactionOutcome,
-    VisualEditSpec,
-};
-use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
-use crate::sujian_editor_item::edit_motion::{diff_plain_text, CursorRect, EditorAnimationKind};
-use crate::sujian_editor_item::editor_animation_debug_log;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
-use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
-
-use super::coordinator::LinuxEditorAnimationCoordinator;
-
-/// Issue #824 评论 5971089641 第 7 节：IME commit 的正文 Reveal/Conceal 事实源。
+/// composition commit 时构造遮罩前沿所需的全部事实。
 ///
-/// 由 `record_composition_commit_transaction` 从 Core
-/// `EditorEditResult.display_patches` 派生（`ranges_from_display_patches`），
-/// 不再由 composition 按 `is_commit` / `visual_text_unchanged` 自行分类。
-/// cancel 路径没有 Core edit，传 `Default`（空），退回“preedit 被取消 = 纯 Delete”。
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CompositionCommitBodyRanges {
-    pub inserted: Vec<(usize, usize)>,
-    pub deleted: Vec<(usize, usize)>,
+/// `motion` 里的 `inserted_ranges` / `deleted_ranges` 就是 Core
+/// `display_patches` 的派生产物（`edit_motion::ranges_from_display_patches`），
+/// 正文动画分类只认这一份，不另建 composition 专属分类。
+pub(crate) struct CompositionCommitFrontierInput {
+    pub motion: PreparedEditMotion,
+    pub old_snapshot: EditorLayoutSnapshot,
+    pub new_snapshot: EditorLayoutSnapshot,
+    pub now: Instant,
 }
 
 impl LinuxEditorAnimationCoordinator {
-    pub fn handle_composition_update(
-        &mut self,
-        old_snapshot: &EditorLayoutSnapshot,
-        new_snapshot: &EditorLayoutSnapshot,
-        old_preedit_byte_start: usize,
-        old_preedit_byte_end: usize,
-        new_preedit_byte_start: usize,
-        new_preedit_byte_end: usize,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
-        old_cursor_visual_line_id: Option<usize>,
-        new_cursor_visual_line_id: Option<usize>,
-        old_cursor_line_top: f64,
-        old_cursor_line_bottom: f64,
-        new_cursor_line_top: f64,
-        new_cursor_line_bottom: f64,
-        cursor_owner_epoch: u64,
-        layout_basis_revision: LayoutRevision,
-        // Issue #756: 动画开关由调用方按同一份设置算出传入。
-        text_animation_enabled: bool,
-        caret_animation_enabled: bool,
-        coordinated_animation_enabled: bool,
-    ) -> Option<VisualTransactionKey> {
-        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-        // Issue #710 评论 5734282079: 冲突检测用 current-old 坐标系。
-        // old_preedit_byte_start/end 是 update_preedit 之前的 old virtualText 坐标，
-        // 传 &old_snapshot.virtual_text 作为 current_old_text。offset_map 仍保留用于 rebase。
-        let conflicting = self.prepared_queue.find_conflicting_transaction(
-            &old_snapshot.virtual_text,
-            old_preedit_byte_start,
-            old_preedit_byte_end,
-        );
-        // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
-        let now = Instant::now();
-        let visual_state = self.take_rebase_frames(
-            &conflicting,
-            "rebased_by_composition_update",
-            now,
-            None,
-            &old_snapshot.virtual_text,
-            cursor_owner_epoch,
-        );
-
-        let key = self.alloc_key();
-
-        // Issue #687: IME 组合更新也显式拥有 changed range。
-        // 用 diff_plain_text 找到 inserted/deleted range，显式生成 InsertReveal/DeleteConceal，
-        // reflow 只处理 unchanged material。
-        let comp_changes = diff_plain_text(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-        let mut comp_inserted_ranges: Vec<(usize, usize)> = Vec::new();
-        let mut comp_deleted_ranges: Vec<(usize, usize)> = Vec::new();
-        for change in &comp_changes {
-            match change {
-                writer_core::editor::EditorChange::Insert { index, text } => {
-                    let rs = index.value();
-                    comp_inserted_ranges.push((rs, rs + text.len()));
-                }
-                writer_core::editor::EditorChange::Delete { index, text } => {
-                    let rs = index.value();
-                    comp_deleted_ranges.push((rs, rs + text.len()));
-                }
-            }
-        }
-
-        // Issue #710 评论 5734282079: composition update 的 visual affected range。
-        // old_preedit_byte_start/end 是 old virtualText 坐标，new_preedit_byte_start/end
-        // 是 new virtualText 坐标。分别从对应 snapshot 扩段落得到 affected range。
-        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
-            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
-                &old_snapshot.virtual_text,
-                &new_snapshot.virtual_text,
-                (old_preedit_byte_start, old_preedit_byte_end),
-                (new_preedit_byte_start, new_preedit_byte_end),
-            );
-            (Some((old_s, old_e)), Some((new_s, new_e)))
-        };
-
-        // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
-        // Issue #824 评论 5971089641 第 7 节：composition update 的正文动画种类
-        // 也从 diff/patches 事实派生，不再单独分类。
-        let patch_kind = EditorAnimationKind::from_patch_facts(
-            !comp_inserted_ranges.is_empty(),
-            !comp_deleted_ranges.is_empty(),
-        );
-        let carried_rebase = visual_state.rebase_frames.len();
-        let spec = VisualEditSpec {
-            key,
-            operation_kind: TextVisualOperationKind::CompositionUpdate,
-            patch_kind,
-            old_snapshot: old_snapshot.clone(),
-            new_snapshot: new_snapshot.clone(),
-            inserted_ranges: comp_inserted_ranges,
-            deleted_ranges: comp_deleted_ranges,
-            offset_map,
-            old_cursor_rect,
-            new_cursor_rect,
-            old_cursor_visual_line_id,
-            new_cursor_visual_line_id,
-            old_cursor_line_top,
-            old_cursor_line_bottom,
-            new_cursor_line_top,
-            new_cursor_line_bottom,
-            cursor_owner_epoch,
-            layout_basis_revision,
-            visual_state,
-            visual_affected_byte_range_old,
-            visual_affected_byte_range_new,
-            text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #815 评论 5955090551: #815 之后协同吞吐字是 `VisualUnitTiming::CaretTrack`，
-            // 自己没有时长，**完全跟着 cursor track 走**。所以协同模式下决定整段协同
-            // 动画速度的就是这条 track 的时长，必须取「打字动画时长」，否则中文上屏
-            // 会被「平滑光标时长」（通常 80–120ms）拖得异常快。
-            //
-            // 非协同模式维持原样：文字走打字时长、光标走平滑光标时长，各自独立。
-            // 这不是恢复 #808 的「两条独立时间线」——那是协同模式下两条各跑各的；
-            // 这里恰恰相反，协同模式只有一条 track，时长就是协同速度本身。
-            caret_duration_ms: u64::from(if coordinated_animation_enabled {
-                self.typing_animation_duration_ms
-            } else {
-                self.cursor_animation_duration_ms
-            }),
-            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
-            text_animation_enabled,
-            caret_animation_enabled,
-            coordinated_animation_enabled,
-            composition_commit_crossfade: None,
-        };
-        // Issue #815 评论 6042062633 修改 9: IME composition update 与普通 Insert 用同一条
-        // 规则。builder 内部已经做门禁：协同模式下 InsertReveal/DeleteConceal 被标记成
-        // `VisualUnitTiming::CaretTrack`，逐帧吞吐边界与本事务的 commit caret 来自同一次
-        // cursor track 采样；拿不到 track 时 builder 自己记 `editor.anim.transaction_skipped`
-        // 并返回 None，不允许退回"IME 自己一条文字时间线、光标另走一条"。
-        // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
-        // 透传 skip reason，不再用 `?` 吞掉。
-        let prepared = match build_prepared_transaction(spec) {
-            BuildTransactionOutcome::Created(tx) => tx,
-            BuildTransactionOutcome::Skipped(_) => return None,
-        };
-
-        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
-        emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
-        editor_animation_debug_log(&format!(
-            "anim_event: key={:?} op=CompositionUpdate unit_kinds={:?} carried_rebase={}",
-            key,
-            unit_kind_labels(&prepared.units),
-            carried_rebase,
-        ));
-
-        self.prepared_queue.enqueue(prepared);
-        Some(key)
-    }
-
-    /// Issue #738 评论 5798704669 问题1: composition commit prepare 阶段——
-    /// 在旧 CompositionUpdate 仍活着时采样 rebase frames + caret handoff。
+    /// Issue #826: composition **update** —— 只更新 preedit 临时层。
     ///
-    /// 用外层传入的统一 `now` 采样，旧事务还活着，采到的是真实当前帧
-    ///（CaretDriven 还没被推到终态）。`take_rebase_frames` 自己 cancel
-    /// 被覆盖的旧 composition transaction。
+    /// 正文还没提交变更，本层不产生任何正文动画；先把上一轮正文前沿收成
+    /// canonical 终态，避免 preedit 期间挂着遮罩。
+    pub(crate) fn handle_composition_update(&mut self) {
+        self.finish_edit_frontier_to_canonical();
+        editor_animation_debug_log("composition_update: preedit 临时层更新，正文无动画");
+    }
+
+    /// Issue #826: composition **commit / cancel** —— 用 display_patches 造一次前沿。
     ///
-    /// 返回 `PreparedCompositionCommitHandoff` 供后续
-    /// `handle_composition_commit_or_cancel`
-    /// 创建新事务使用。
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn prepare_composition_commit_handoff(
+    /// 分类只看 patch 事实：纯 Insert 就是 Insert；同时有删除和插入才是 Replace。
+    pub(crate) fn handle_composition_commit_or_cancel(
         &mut self,
-        old_snapshot: &EditorLayoutSnapshot,
-        new_snapshot: &EditorLayoutSnapshot,
-        preedit_byte_start: usize,
-        preedit_byte_end: usize,
-        is_commit: bool,
-        candidate_byte_start: usize,
-        candidate_byte_end: usize,
-        committed_replace_start: usize,
-        committed_replace_end: usize,
-        cursor_owner_epoch: u64,
-        now: Instant,
-    ) -> PreparedCompositionCommitHandoff {
-        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-        // Issue #710 评论 5734282079: 不再把 committed_replace 坐标和 preedit virtualText 坐标 min/max。
-        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
-            let new_edit_range = if is_commit {
-                (candidate_byte_start, candidate_byte_end)
-            } else {
-                (committed_replace_start, committed_replace_end)
-            };
-            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
-                &old_snapshot.virtual_text,
-                &new_snapshot.virtual_text,
-                (preedit_byte_start, preedit_byte_end),
-                new_edit_range,
-            );
-            (Some((old_s, old_e)), Some((new_s, new_e)))
-        };
-        let (conflict_old_start, conflict_old_end) =
-            visual_affected_byte_range_old.unwrap_or((preedit_byte_start, preedit_byte_end));
-        let conflicting = self.prepared_queue.find_conflicting_transaction(
-            &old_snapshot.virtual_text,
-            conflict_old_start,
-            conflict_old_end,
-        );
-        let visual_state = self.take_rebase_frames(
-            &conflicting,
-            "rebased_by_composition_commit",
+        input: CompositionCommitFrontierInput,
+    ) {
+        let CompositionCommitFrontierInput {
+            motion,
+            old_snapshot,
+            new_snapshot,
             now,
-            None,
-            &old_snapshot.virtual_text,
-            cursor_owner_epoch,
-        );
-        PreparedCompositionCommitHandoff {
-            visual_state,
-            offset_map,
-            visual_affected_byte_range_old,
-            visual_affected_byte_range_new,
-        }
+        } = input;
+
+        // 1. 去掉 preedit 临时层：preedit glyph 不进前沿、不 carry/rebase。
+        //    收口后这次 commit 一定是**新**的前沿，不会继承 preedit 期间的遮罩。
+        self.finish_edit_frontier_to_canonical();
+
+        // 2 + 3 + 4. 只用 Core display_patches 派生的 inserted / deleted 事实，
+        //    用 committed old → committed new canonical 创建唯一一次前沿。
+        //    纯 Insert 就是 Insert；同时有删除和插入才是 Replace。
+        self.begin_or_extend_edit_frontier(EditFrontierRequest {
+            kind: motion.kind,
+            base_snapshot: old_snapshot,
+            target_snapshot: new_snapshot,
+            deleted_ranges: motion.deleted_ranges.clone(),
+            inserted_ranges: motion.inserted_ranges.clone(),
+            start_frontier: caret_or_zero(motion.old_cursor_rect),
+            target_frontier: caret_or_zero(motion.new_cursor_rect),
+            offset_map: OffsetMap::build(&motion.old_text, &motion.new_text),
+            now,
+        });
     }
+}
 
-    pub fn handle_composition_commit_or_cancel(
-        &mut self,
-        old_snapshot: &EditorLayoutSnapshot,
-        new_snapshot: &EditorLayoutSnapshot,
-        preedit_byte_start: usize,
-        preedit_byte_end: usize,
-        is_commit: bool,
-        visual_text_unchanged: bool,
-        // Issue #824 评论 5971089641 第 7 节：commit 路径的正文 Reveal/Conceal
-        // 只认 Core display_patches 派生的事实。cancel 路径传 `Default`。
-        body_ranges: CompositionCommitBodyRanges,
-        candidate_byte_start: usize,
-        candidate_byte_end: usize,
-        committed_replace_start: usize,
-        committed_replace_end: usize,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
-        old_cursor_visual_line_id: Option<usize>,
-        new_cursor_visual_line_id: Option<usize>,
-        old_cursor_line_top: f64,
-        old_cursor_line_bottom: f64,
-        new_cursor_line_top: f64,
-        new_cursor_line_bottom: f64,
-        cursor_owner_epoch: u64,
-        layout_basis_revision: LayoutRevision,
-        now: Instant,
-        prepared_handoff: Option<PreparedCompositionCommitHandoff>,
-        // Issue #756: 动画开关由调用方按同一份设置算出传入。
-        text_animation_enabled: bool,
-        caret_animation_enabled: bool,
-        coordinated_animation_enabled: bool,
-    ) -> HandoffTransactionOutcome {
-        // Issue #738 评论 5798704669 问题1: 若外层已调 prepare_composition_commit_handoff
-        // 采好 handoff（commit 路径），直接用；否则内部 prepare（cancel 路径 / 旧调用方）。
-        let handoff = match prepared_handoff {
-            Some(h) => h,
-            None => self.prepare_composition_commit_handoff(
-                old_snapshot,
-                new_snapshot,
-                preedit_byte_start,
-                preedit_byte_end,
-                is_commit,
-                candidate_byte_start,
-                candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
-                cursor_owner_epoch,
-                now,
-            ),
-        };
-        let PreparedCompositionCommitHandoff {
-            visual_state,
-            offset_map,
-            visual_affected_byte_range_old,
-            visual_affected_byte_range_new,
-        } = handoff;
-
-        let key = self.alloc_key();
-
-        // Issue #747 评论 5813540976: 只归一化 spec，统一由 build_prepared_transaction 构造。
-        // composition commit/cancel 的 slice 构造（DeleteConceal/InsertReveal/ReflowCrossFade/
-        // ReflowMove/reflow）全部由 build_prepared_transaction 内部统一完成。
-        //
-        // Issue #824 评论 5971089641 第 7 节：commit 的正文 Reveal/Conceal **不再由
-        // composition 自己分类**，而是直接消费 Core `display_patches` 派生的
-        // `body_ranges`（在 `record_composition_commit_transaction` 里通过
-        // `ranges_from_display_patches` 得到）：
-        // - cancel（!is_commit）：没有 Core edit，preedit 被取消 = 纯 Delete(preedit)
-        //   的 patch 事实，deleted_ranges = preedit range；
-        // - commit 且 patches 两边都有（Replace，典型 IME 候选替换 preedit）：
-        //   crossfade 形变直接使用 patch 的 deleted（preedit）→ inserted（candidate）
-        //   范围，spec 的 inserted/deleted 留空避免与 crossfade 重复生成；
-        // - commit 且只有一侧：直接走 1a 的普通 Insert/Delete 同一条 patch 路径；
-        // - commit 且 patches 为空：正文未变，无 Reveal/Conceal。
-        let body_is_replace = !body_ranges.inserted.is_empty() && !body_ranges.deleted.is_empty();
-        let (inserted_ranges, deleted_ranges, composition_commit_crossfade) = if !is_commit {
-            // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
-            // reflow 只处理 unchanged material。changed range 由显式函数拥有。
-            (vec![], vec![(preedit_byte_start, preedit_byte_end)], None)
-        } else if body_is_replace {
-            let deleted_start = body_ranges
-                .deleted
-                .first()
-                .map(|range| range.0)
-                .unwrap_or(preedit_byte_start);
-            let deleted_end = body_ranges
-                .deleted
-                .last()
-                .map(|range| range.1)
-                .unwrap_or(preedit_byte_end);
-            let inserted_start = body_ranges
-                .inserted
-                .first()
-                .map(|range| range.0)
-                .unwrap_or(candidate_byte_start);
-            let inserted_end = body_ranges
-                .inserted
-                .last()
-                .map(|range| range.1)
-                .unwrap_or(candidate_byte_end);
-            (
-                vec![],
-                vec![],
-                Some(CompositionCommitCrossfadeSpec {
-                    preedit_byte_start: deleted_start,
-                    preedit_byte_end: deleted_end,
-                    candidate_byte_start: inserted_start,
-                    candidate_byte_end: inserted_end,
-                }),
-            )
-        } else {
-            // 纯 Insert / 纯 Delete / 无变化：直接使用 patch 事实，
-            // 与普通正文编辑走同一条 patch → retarget 入口。
-            (body_ranges.inserted, body_ranges.deleted, None)
-        };
-        // Issue #824: 正文动画种类来自 patch 事实（Replace 的 crossfade 路径也一样，
-        // 它只是几何形变，不改变“两个 fact 都有”的分类）。
-        let patch_kind = EditorAnimationKind::from_patch_facts(
-            body_is_replace || !inserted_ranges.is_empty(),
-            body_is_replace || !deleted_ranges.is_empty() || !is_commit,
-        );
-        if is_commit && visual_text_unchanged && !body_is_replace && inserted_ranges.is_empty() {
-            editor_animation_debug_log(
-                "composition_commit: visual_text_unchanged 且无 patch 事实，无正文 Reveal/Conceal",
-            );
-        }
-
-        // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
-        // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
-        // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
-        // 扩段落得到。
-        let carried_rebase = visual_state.rebase_frames.len();
-        let spec = VisualEditSpec {
-            key,
-            operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
-            patch_kind,
-            old_snapshot: old_snapshot.clone(),
-            new_snapshot: new_snapshot.clone(),
-            inserted_ranges,
-            deleted_ranges,
-            offset_map,
-            old_cursor_rect,
-            new_cursor_rect,
-            old_cursor_visual_line_id,
-            new_cursor_visual_line_id,
-            old_cursor_line_top,
-            old_cursor_line_bottom,
-            new_cursor_line_top,
-            new_cursor_line_bottom,
-            cursor_owner_epoch,
-            layout_basis_revision,
-            visual_state,
-            visual_affected_byte_range_old,
-            visual_affected_byte_range_new,
-            text_duration_ms: u64::from(self.typing_animation_duration_ms),
-            // Issue #815 评论 5955090551: #815 之后协同吞吐字是 `VisualUnitTiming::CaretTrack`，
-            // 自己没有时长，**完全跟着 cursor track 走**。所以协同模式下决定整段协同
-            // 动画速度的就是这条 track 的时长，必须取「打字动画时长」，否则中文上屏
-            // 会被「平滑光标时长」（通常 80–120ms）拖得异常快。
-            //
-            // 非协同模式维持原样：文字走打字时长、光标走平滑光标时长，各自独立。
-            // 这不是恢复 #808 的「两条独立时间线」——那是协同模式下两条各跑各的；
-            // 这里恰恰相反，协同模式只有一条 track，时长就是协同速度本身。
-            caret_duration_ms: u64::from(if coordinated_animation_enabled {
-                self.typing_animation_duration_ms
-            } else {
-                self.cursor_animation_duration_ms
-            }),
-            // Issue #756: composition 路径由调用方传入动画开关，不再硬编码 true。
-            text_animation_enabled,
-            caret_animation_enabled,
-            coordinated_animation_enabled,
-            composition_commit_crossfade,
-        };
-        // Issue #815 评论 6042062633 修改 9: IME composition commit 的候选 InsertReveal、
-        // 必需的 DeleteConceal 与 commit 光标共享同一条 cursor track 的当前帧，
-        // 不再让 IME commit 留在独立文字时间线上。拿不到 track 时 builder 自己记
-        // `editor.anim.transaction_skipped` 并返回具体的跳过原因。
-        // Issue #819 评论 5968931455 问题 2.2: builder 返回 BuildTransactionOutcome，
-        // 透传 skip reason，不再用 `?` 吞掉。
-        let prepared = match build_prepared_transaction(spec) {
-            BuildTransactionOutcome::Created(tx) => tx,
-            BuildTransactionOutcome::Skipped(reason) => {
-                return HandoffTransactionOutcome::Skipped(reason)
-            }
-        };
-
-        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
-        emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
-        editor_animation_debug_log(&format!(
-            "anim_event: key={:?} op=CompositionCommitOrCancel unit_kinds={:?} carried_rebase={}",
-            key,
-            unit_kind_labels(&prepared.units),
-            carried_rebase,
-        ));
-
-        self.prepared_queue.enqueue(prepared);
-        HandoffTransactionOutcome::Created(key)
-    }
-
-    pub fn active_composition_new_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
-        self.prepared_queue
-            .active_transactions()
-            .iter()
-            .filter(|t| {
-                t.operation_kind == TextVisualOperationKind::CompositionUpdate
-                    && t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .filter_map(|t| t.new_snapshot.as_ref())
-            .next_back()
-    }
-
-    pub fn cancel_active_composition(&mut self, reason: &str) {
-        let keys: Vec<VisualTransactionKey> = self
-            .prepared_queue
-            .active_transactions()
-            .iter()
-            .filter(|t| {
-                t.operation_kind == TextVisualOperationKind::CompositionUpdate
-                    && t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .map(|t| t.key)
-            .collect();
-        for key in keys {
-            self.prepared_queue.cancel(key, reason);
-        }
-    }
+fn caret_or_zero(rect: Option<CursorRect>) -> CursorRect {
+    rect.unwrap_or(CursorRect {
+        x: 0.0,
+        top: 0.0,
+        bottom: 0.0,
+        baseline_y: 0.0,
+    })
 }

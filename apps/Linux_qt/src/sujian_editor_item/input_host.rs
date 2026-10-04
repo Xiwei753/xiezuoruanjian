@@ -1,4 +1,3 @@
-use super::animation::find_line_geometry_in_snapshot;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
 
@@ -43,17 +42,18 @@ impl SujianEditorItem {
     /// replace range（`new_with_replace_range`），对应 Qt 官方
     /// `QInputMethodEvent` 语义"先删除当前 selection，再处理 replacement"。
     /// 无选区时退化为零长度插入 `(cursor, cursor)`（`new`）。
-    fn ensure_composition_session(&mut self) {
+    ///
+    /// Issue #826: session 只维护虚拟文本投影，供 `preedit_byte_range_in_virtual_text`
+    /// 算出 preedit 在正文坐标系里的范围。preedit 是独立临时显示层，不进遮罩前沿。
+    pub(crate) fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.pipeline.cursor();
-            let text_rev = self.pipeline.text_revision();
-            let vis_rev = self.pipeline.visual_revision();
             let text = self.pipeline.committed_text().to_string();
             let session = if self.pipeline.has_selection() {
                 let (start, end) = self.pipeline.selection_range();
-                CompositionSession::new_with_replace_range(text_rev, vis_rev, text, start, end)
+                super::edit_motion::CompositionSession::new_with_replace_range(text, start, end)
             } else {
-                CompositionSession::new(text_rev, vis_rev, text, cursor)
+                super::edit_motion::CompositionSession::new(text, cursor)
             };
             self.pipeline.composition_mut().composition_session = Some(session);
         }
@@ -103,60 +103,6 @@ impl SujianEditorItem {
         };
         (rs, re, self.pipeline.committed_text().to_string())
     }
-
-    /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
-    /// 指向 preedit 文本中的光标位置（非 committed 正文坐标）。
-    fn prepare_composition_update(
-        &mut self,
-        text: String,
-        cursor: usize,
-    ) -> Option<CompositionUpdateData> {
-        self.ensure_composition_session();
-
-        let session = self
-            .pipeline
-            .composition_mut()
-            .composition_session
-            .as_mut()?;
-        let old_preedit = session.preedit_text.clone();
-        // 在 update_preedit 之前取 old virtualText 坐标系的 preedit range。
-        let (old_preedit_byte_start, old_preedit_byte_end) =
-            session.preedit_byte_range_in_virtual_text();
-        session.update_preedit(&text, cursor);
-        let generation = session.last_submitted_generation_value();
-        // 更新之后取 new virtualText 坐标系的 preedit range。
-        let (new_preedit_byte_start, new_preedit_byte_end) =
-            session.preedit_byte_range_in_virtual_text();
-        let virtual_text = session.virtual_text();
-
-        Some(CompositionUpdateData {
-            old_preedit,
-            generation,
-            old_preedit_byte_start,
-            old_preedit_byte_end,
-            new_preedit_byte_start,
-            new_preedit_byte_end,
-            virtual_text,
-        })
-    }
-}
-
-/// Composition 更新数据，传递给动画协调器。
-///
-/// 坐标空间：
-/// - `old_preedit_byte_start`/`old_preedit_byte_end`：update_preedit 之前的 old
-///   virtualText 坐标系 UTF-8 byte offset（半开区间）
-/// - `new_preedit_byte_start`/`new_preedit_byte_end`：update_preedit 之后的 new
-///   virtualText 坐标系 UTF-8 byte offset（半开区间）
-/// - `generation`：composition session 代数，用于过期检测
-struct CompositionUpdateData {
-    old_preedit: String,
-    generation: u64,
-    old_preedit_byte_start: usize,
-    old_preedit_byte_end: usize,
-    new_preedit_byte_start: usize,
-    new_preedit_byte_end: usize,
-    virtual_text: String,
 }
 
 impl EditorInputHost for SujianEditorItem {
@@ -230,191 +176,18 @@ impl EditorInputHost for SujianEditorItem {
     /// 2. 若动画开启，构建新旧快照并触发 commit/cancel 动画过渡
     /// 3. 动画完成后由协调器自动清除 preedit 状态
     fn input_clear_preedit(&mut self) {
-        if !self.pipeline.composition().preedit_text.is_empty()
-            || self.pipeline.composition().composition_session.is_some()
-        {
-            self.pipeline.composition_mut().pending_preedit_cursor_rect =
-                self.pipeline.composition().preedit_cursor_rect.clone();
-
-            // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
-            //（任意一种动画需要这笔 composition 事务时即进入）。
-            if self.current_coordinated_animation_enabled
-                || self.current_typing_animation_enabled
-                || self.current_smooth_cursor_enabled
-            {
-                let (composition_byte_start, composition_byte_end) =
-                    self.preedit_byte_range_in_virtual_text();
-                // Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range
-                // （cancel 后 new = committed text，坐标一致），不是 old preedit range。
-                // 在清 session 之前取，清完 session 就取不到了。
-                let (committed_replace_start, committed_replace_end) = self
-                    .pipeline
-                    .composition()
-                    .session_replace_range(self.pipeline.cursor());
-                // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
-                // cancel 的 session_replace_range 可以是零长度 (cursor, cursor)（无 selection 的
-                // 普通 composition ESC），零长度时 build_editor_layout_snapshot 的
-                // `if affected_start < affected_end` 为 false，不生成任何动画视觉资源。
-                // 用 compute_affected_paragraph_ranges 把 raw edit range 扩展到所在段落边界。
-                // old 文本 = session 的 virtual_text（清 session 前取），new 文本 = committed text（cancel 恢复原文）。
-                let committed_text = self.pipeline.committed_text().to_string();
-                let old_virtual_text = self
-                    .pipeline
-                    .composition()
-                    .composition_session
-                    .as_ref()
-                    .map(|s| s.virtual_text())
-                    .unwrap_or_else(|| committed_text.clone());
-                let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
-                    crate::editor::layout::compute_affected_paragraph_ranges(
-                        &old_virtual_text,
-                        &committed_text,
-                        (composition_byte_start, composition_byte_end),
-                        (committed_replace_start, committed_replace_end),
-                    );
-                let width = self.bounding_width();
-                // Issue #722 评论 5749791161 问题2+3: IME cancel 路径使用文档坐标的
-                // caret_rect_doc，不再用 viewport 坐标的 caret_rect/preedit_cursor_rect。
-                // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
-                // caret_rect_doc 取，不再统一从 current_layout_snapshot 取。
-
-                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot 现在返回 Result。
-                // old_snapshot 是 fallback（active_composition_new_snapshot 和
-                // current_layout_snapshot 都没有时才用）。Err 时记录诊断并跳过本次 cancel 动画。
-                let old_snapshot = self
-                    .pipeline
-                    .animation_coordinator()
-                    .active_composition_new_snapshot()
-                    .cloned()
-                    .or_else(|| self.pipeline.current_layout_snapshot().clone())
-                    .or_else(|| {
-                        match self.build_editor_layout_snapshot(
-                            width,
-                            false,
-                            Some((old_affected_start, old_affected_end)),
-                        ) {
-                            Ok(snap) => Some(snap),
-                            Err(err) => {
-                                crate::backend::app_backend::debug_error_static(
-                                    "input_host",
-                                    "clear_preedit_old_snapshot_invariant_failure",
-                                    &format!(
-                                        "{} — skipping cancel animation (Issue #810 评论 5933167246)",
-                                        err
-                                    ),
-                                );
-                                None
-                            }
-                        }
-                    });
-                let new_snapshot = match old_snapshot {
-                    Some(old) => match self.build_editor_layout_snapshot(
-                        width,
-                        false,
-                        Some((new_affected_start, new_affected_end)),
-                    ) {
-                        Ok(new) => Some((old, new)),
-                        Err(err) => {
-                            crate::backend::app_backend::debug_error_static(
-                                "input_host",
-                                "clear_preedit_new_snapshot_invariant_failure",
-                                &format!(
-                                    "{} — skipping cancel animation (Issue #810 评论 5933167246)",
-                                    err
-                                ),
-                            );
-                            None
-                        }
-                    },
-                    None => None,
-                };
-                let (old_snapshot, new_snapshot) = match new_snapshot {
-                    Some(pair) => pair,
-                    None => {
-                        // old/new snapshot 不可用，跳过本次 cancel 动画，
-                        // 但仍清 composition session 和更新 IME cursor（函数末尾逻辑）。
-                        self.pipeline.composition_mut().clear();
-                        self.update_ime_cursor_for_preedit();
-                        return;
-                    }
-                };
-
-                // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
-                // caret_rect_doc 取，不再统一从 current_layout_snapshot 取——cancel 恢复
-                // committed 布局后 caret 行/x/y 可能变化，old/new 必须分别反映
-                // preedit 态和 committed 态的 caret 位置。
-                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let old_cursor_visual_line_id = old_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let new_cursor_visual_line_id = new_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-
-                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
-                let (old_line_top, old_line_bottom) =
-                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
-                let (new_line_top, new_line_bottom) =
-                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
-
-                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
-                // text = coordinated || typing；caret = coordinated || smooth。
-                let coordinated_anim = self.current_coordinated_animation_enabled;
-                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
-                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-                self.pipeline
-                    .animation_coordinator_mut()
-                    .cancel_active_composition("clear_preedit");
-                let layout_basis_revision = self.pipeline.layout_revision();
-                self.pipeline
-                    .animation_coordinator_mut()
-                    .handle_composition_commit_or_cancel(
-                        &old_snapshot,
-                        &new_snapshot,
-                        composition_byte_start,
-                        composition_byte_end,
-                        false,
-                        false,
-                        // Issue #824: cancel 路径没有 Core edit，退回
-                        // “preedit 被取消 = 纯 Delete(preedit range)”。
-                        crate::sujian_editor_item::animation::composition::CompositionCommitBodyRanges::default(),
-                        composition_byte_start,
-                        composition_byte_start,
-                        committed_replace_start,
-                        committed_replace_end,
-                        old_cursor_rect,
-                        new_cursor_rect,
-                        old_cursor_visual_line_id,
-                        new_cursor_visual_line_id,
-                        old_line_top,
-                        old_line_bottom,
-                        new_line_top,
-                        new_line_bottom,
-                        self.cursor_ctrl.cursor_owner_epoch,
-                        layout_basis_revision,
-                        std::time::Instant::now(),
-                        None,
-                        text_anim,
-                        caret_anim,
-                        coordinated_anim,
-                    );
-            }
-        }
+        // Issue #826: 取消 preedit 只是撤掉临时显示层，不产生任何正文动画。
+        //
+        // 取消 composition 时 Core 没有产生 `EditorEditResult`（正文没变），
+        // 所以没有可造的遮罩前沿。这里只需要把任何正在跑的前沿收成 canonical
+        // 终态，让 canonical 正文立即接管。
+        self.pipeline
+            .animation_coordinator_mut()
+            .finish_edit_frontier_to_canonical();
         self.pipeline.composition_mut().clear();
+        self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
+        self.request_static_repaint();
     }
 
     /// Issue #704: 用户按 ESC 请求取消当前输入法组合态。
@@ -440,8 +213,12 @@ impl EditorInputHost for SujianEditorItem {
         self.pipeline.composition_mut().suppress_next_ime_commit = true;
     }
 
-    /// 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset，
-    /// 指向 preedit 文本中的光标位置。动画开启时构建新旧快照并触发 composition update 动画。
+    /// Issue #826: 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset。
+    ///
+    /// preedit 是**独立临时显示层**：只更新投影 + 刷新 preedit 显示，
+    /// 不创建任何正文动画、不进遮罩前沿、不 carry/rebase 历史 Reveal/Conceal。
+    /// 前沿必须先收成 canonical 终态——preedit 盖在静态正文上，
+    /// 不能让遮罩挂在还没写完的旧正文几何上。
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
         self.pipeline.composition_mut().preedit_old_text =
             self.pipeline.composition().preedit_text.clone();
@@ -449,186 +226,24 @@ impl EditorInputHost for SujianEditorItem {
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes.clear();
 
-        // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
-        //（任意一种动画需要这笔 composition 事务时即进入）。
-        if (self.current_coordinated_animation_enabled
-            || self.current_typing_animation_enabled
-            || self.current_smooth_cursor_enabled)
-            && !text.is_empty()
-        {
-            if let Some(data) = self.prepare_composition_update(text, cursor) {
-                let width = self.bounding_width();
-                // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
-                // old_snapshot 用 old range，new_snapshot 用 new range。
-                let old_composition_range =
-                    Some((data.old_preedit_byte_start, data.old_preedit_byte_end));
-                let new_composition_range =
-                    Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
-
-                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot /
-                // build_virtual_layout_snapshot 现在返回 Result。Err 时记录诊断并
-                // 跳过本次 preedit 动画（走静态 fallback）。
-                let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                    self.pipeline
-                        .current_layout_snapshot()
-                        .clone()
-                        .or_else(|| {
-                            match self.build_editor_layout_snapshot(
-                                width,
-                                false,
-                                old_composition_range,
-                            ) {
-                                Ok(snap) => Some(snap),
-                                Err(err) => {
-                                    crate::backend::app_backend::debug_error_static(
-                                        "input_host",
-                                        "set_preedit_old_snapshot_invariant_failure",
-                                        &format!(
-                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                            err
-                                        ),
-                                    );
-                                    None
-                                }
-                            }
-                        })
-                } else {
-                    self.pipeline
-                        .animation_coordinator()
-                        .active_composition_new_snapshot()
-                        .cloned()
-                        .or_else(|| self.pipeline.current_layout_snapshot().clone())
-                        .or_else(|| {
-                            match self.build_editor_layout_snapshot(
-                                width,
-                                false,
-                                old_composition_range,
-                            ) {
-                                Ok(snap) => Some(snap),
-                                Err(err) => {
-                                    crate::backend::app_backend::debug_error_static(
-                                        "input_host",
-                                        "set_preedit_old_snapshot_invariant_failure",
-                                        &format!(
-                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                            err
-                                        ),
-                                    );
-                                    None
-                                }
-                            }
-                        })
-                };
-                let new_snapshot = match self.build_virtual_layout_snapshot(
-                    &data.virtual_text,
-                    width,
-                    new_composition_range,
-                ) {
-                    Ok(snap) => Some(snap),
-                    Err(err) => {
-                        crate::backend::app_backend::debug_error_static(
-                            "input_host",
-                            "set_preedit_new_snapshot_invariant_failure",
-                            &format!(
-                                "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                err
-                            ),
-                        );
-                        None
-                    }
-                };
-                let (old_snapshot, new_snapshot) = match (old_snapshot, new_snapshot) {
-                    (Some(old), Some(new)) => (old, new),
-                    _ => {
-                        // old/new snapshot 不可用，走静态 fallback。
-                        self.update_preedit_visual_state();
-                        self.update_ime_cursor_for_preedit();
-                        self.request_static_repaint();
-                        return;
-                    }
-                };
-
-                // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
-                // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
-                // 同时传递真实 visual_line_id，不再传 None。
-                // Issue #722 评论 5750218208 问题2: old caret 从 old_snapshot 取，
-                // 不再从 current_layout_snapshot 取——old_snapshot 才是 preedit 态
-                // 的布局快照，current_layout_snapshot 可能已是新布局。
-                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let old_cursor_visual_line_id = old_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let new_cursor_visual_line_id = new_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-
-                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
-                let (old_line_top, old_line_bottom) =
-                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
-                let (new_line_top, new_line_bottom) =
-                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
-
-                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
-                // text = coordinated || typing；caret = coordinated || smooth。
-                let coordinated_anim = self.current_coordinated_animation_enabled;
-                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
-                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-                let layout_basis_revision = self.pipeline.layout_revision();
-                let anim_key = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .handle_composition_update(
-                        &old_snapshot,
-                        &new_snapshot,
-                        data.old_preedit_byte_start,
-                        data.old_preedit_byte_end,
-                        data.new_preedit_byte_start,
-                        data.new_preedit_byte_end,
-                        old_cursor_rect,
-                        new_cursor_rect,
-                        old_cursor_visual_line_id,
-                        new_cursor_visual_line_id,
-                        old_line_top,
-                        old_line_bottom,
-                        new_line_top,
-                        new_line_bottom,
-                        self.cursor_ctrl.cursor_owner_epoch,
-                        layout_basis_revision,
-                        text_anim,
-                        caret_anim,
-                        coordinated_anim,
-                    );
-                if anim_key.is_none() {
-                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
-                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
-                    self.update_preedit_visual_state();
-                }
-            } else {
-                self.update_preedit_visual_state();
-            }
-        } else {
-            self.update_preedit_visual_state();
+        // Issue #826: composition session 只维护虚拟文本投影，让
+        // `preedit_byte_range_in_virtual_text()` 能算出 preedit 在正文坐标系里的范围
+        // （IME commit 时要用）。preedit 本身是独立临时显示层，不参与动画。
+        self.ensure_composition_session();
+        if let Some(session) = self.pipeline.composition_mut().composition_session.as_mut() {
+            session.update_preedit(&text);
         }
 
+        self.pipeline
+            .animation_coordinator_mut()
+            .handle_composition_update();
+        self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
     }
 
-    /// 设置预输入文本（带格式属性）。与 `input_set_preedit` 逻辑相同，
-    /// 但额外保留 IME 格式属性（下划线、背景色等）供平台渲染 preedit 装饰。
+    /// Issue #826: 设置预输入文本（带格式属性）。与 `input_set_preedit` 同样只更新
+    /// 临时显示层，额外保留 IME 格式属性（下划线、背景色等）供平台渲染 preedit 装饰。
     fn input_set_preedit_with_attrs(
         &mut self,
         text: String,
@@ -641,6 +256,12 @@ impl EditorInputHost for SujianEditorItem {
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes = attributes;
 
+        // Issue #826: 同 `input_set_preedit`，同步虚拟文本投影。
+        self.ensure_composition_session();
+        if let Some(session) = self.pipeline.composition_mut().composition_session.as_mut() {
+            session.update_preedit(&text);
+        }
+
         // Issue #658: 读取 preedit_attributes 字段用于 debug 日志，
         // 确保 IME 属性（start/length/kind）被实际消费而非 dead code。
         if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
@@ -652,180 +273,10 @@ impl EditorInputHost for SujianEditorItem {
             }
         }
 
-        // Issue #756 评论 5821042551: composition 动画进入条件 = coordinated || typing || smooth
-        //（任意一种动画需要这笔 composition 事务时即进入）。
-        if (self.current_coordinated_animation_enabled
-            || self.current_typing_animation_enabled
-            || self.current_smooth_cursor_enabled)
-            && !text.is_empty()
-        {
-            if let Some(data) = self.prepare_composition_update(text, cursor) {
-                let width = self.bounding_width();
-                // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
-                // old_snapshot 用 old range，new_snapshot 用 new range。
-                let old_composition_range =
-                    Some((data.old_preedit_byte_start, data.old_preedit_byte_end));
-                let new_composition_range =
-                    Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
-
-                // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot /
-                // build_virtual_layout_snapshot 现在返回 Result。Err 时记录诊断并
-                // 跳过本次 preedit 动画（走静态 fallback）。
-                let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                    self.pipeline
-                        .current_layout_snapshot()
-                        .clone()
-                        .or_else(|| {
-                            match self.build_editor_layout_snapshot(
-                                width,
-                                false,
-                                old_composition_range,
-                            ) {
-                                Ok(snap) => Some(snap),
-                                Err(err) => {
-                                    crate::backend::app_backend::debug_error_static(
-                                        "input_host",
-                                        "set_preedit_old_snapshot_invariant_failure",
-                                        &format!(
-                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                            err
-                                        ),
-                                    );
-                                    None
-                                }
-                            }
-                        })
-                } else {
-                    self.pipeline
-                        .animation_coordinator()
-                        .active_composition_new_snapshot()
-                        .cloned()
-                        .or_else(|| self.pipeline.current_layout_snapshot().clone())
-                        .or_else(|| {
-                            match self.build_editor_layout_snapshot(
-                                width,
-                                false,
-                                old_composition_range,
-                            ) {
-                                Ok(snap) => Some(snap),
-                                Err(err) => {
-                                    crate::backend::app_backend::debug_error_static(
-                                        "input_host",
-                                        "set_preedit_old_snapshot_invariant_failure",
-                                        &format!(
-                                            "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                            err
-                                        ),
-                                    );
-                                    None
-                                }
-                            }
-                        })
-                };
-                let new_snapshot = match self.build_virtual_layout_snapshot(
-                    &data.virtual_text,
-                    width,
-                    new_composition_range,
-                ) {
-                    Ok(snap) => Some(snap),
-                    Err(err) => {
-                        crate::backend::app_backend::debug_error_static(
-                            "input_host",
-                            "set_preedit_new_snapshot_invariant_failure",
-                            &format!(
-                                "{} — skipping preedit animation (Issue #810 评论 5933167246)",
-                                err
-                            ),
-                        );
-                        None
-                    }
-                };
-                let (old_snapshot, new_snapshot) = match (old_snapshot, new_snapshot) {
-                    (Some(old), Some(new)) => (old, new),
-                    _ => {
-                        // old/new snapshot 不可用，走静态 fallback。
-                        self.update_preedit_visual_state();
-                        self.update_ime_cursor_for_preedit();
-                        self.request_static_repaint();
-                        return;
-                    }
-                };
-
-                // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
-                // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
-                // 同时传递真实 visual_line_id，不再传 None。
-                // Issue #722 评论 5750218208 问题2: old caret 从 old_snapshot 取，
-                // 不再从 current_layout_snapshot 取——old_snapshot 才是 preedit 态
-                // 的布局快照，current_layout_snapshot 可能已是新布局。
-                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let old_cursor_visual_line_id = old_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-                    x: c.x,
-                    top: c.y,
-                    bottom: c.y + c.h,
-                    baseline_y: c.baseline_y,
-                });
-                let new_cursor_visual_line_id = new_snapshot
-                    .caret_rect_doc
-                    .as_ref()
-                    .map(|c| c.visual_line_id);
-
-                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
-                let (old_line_top, old_line_bottom) =
-                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
-                let (new_line_top, new_line_bottom) =
-                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
-
-                // Issue #756 评论 5821042551: 算出 text/caret/coordinated 三个开关传入 composition 路径。
-                // text = coordinated || typing；caret = coordinated || smooth。
-                let coordinated_anim = self.current_coordinated_animation_enabled;
-                let text_anim = coordinated_anim || self.current_typing_animation_enabled;
-                let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-                let layout_basis_revision = self.pipeline.layout_revision();
-                let anim_key = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .handle_composition_update(
-                        &old_snapshot,
-                        &new_snapshot,
-                        data.old_preedit_byte_start,
-                        data.old_preedit_byte_end,
-                        data.new_preedit_byte_start,
-                        data.new_preedit_byte_end,
-                        old_cursor_rect,
-                        new_cursor_rect,
-                        old_cursor_visual_line_id,
-                        new_cursor_visual_line_id,
-                        old_line_top,
-                        old_line_bottom,
-                        new_line_top,
-                        new_line_bottom,
-                        self.cursor_ctrl.cursor_owner_epoch,
-                        layout_basis_revision,
-                        text_anim,
-                        caret_anim,
-                        coordinated_anim,
-                    );
-                if anim_key.is_none() {
-                    // Issue #756 评论 5822051193: coordinated 模式下无法建立 cursor track，
-                    // 本轮不做动画，走静态 fallback，不影响 IME 正文/候选框正常显示。
-                    self.update_preedit_visual_state();
-                }
-            } else {
-                self.update_preedit_visual_state();
-            }
-        } else {
-            self.update_preedit_visual_state();
-        }
-
+        self.pipeline
+            .animation_coordinator_mut()
+            .handle_composition_update();
+        self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
     }

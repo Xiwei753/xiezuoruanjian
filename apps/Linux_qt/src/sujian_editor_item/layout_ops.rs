@@ -81,8 +81,10 @@ impl SujianEditorItem {
     /// generation，而是构造 `PromotedLayout` 存入 `pipeline.pending_promoted_layout`，
     /// 由 `emit_content_changed` 提升为 `EditorLayout` current，避免
     /// `emit_content_changed -> ensure_layout_cached` 对同一已提交正文再次排版。
-    /// `promote=false` 时保持原逻辑（临时 generation 用完即 clear），供 preedit
-    /// virtual_text / old_snapshot fallback 等非 committed current 路径使用。
+    ///
+    /// Issue #826: `virtual_text` 快照路径（`build_virtual_layout_snapshot`）已删除。
+    /// IME preedit 现在是独立临时显示层，不再需要一套 virtualText 排版快照，
+    /// 也不再为它单独排版。
     ///
     /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
     /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
@@ -229,15 +231,14 @@ impl SujianEditorItem {
                         ids.push(i);
                     }
                 }
-                // Issue #738 评论 5798704669 问题2: 合并 active rebind ranges 对应的
-                // 新 canonical line ids。collect_active_rebind_ranges 返回 current text
-                // 中的 byte ranges（远处 Reflow 的目标行），把这些 range 对应的
-                // doc_snapshot.visual_lines 行 id 并入 line_ids，确保远处 Reflow 的
-                // 目标行在 canonical 里有 clusters。
+                // Issue #826: 合并活跃 Reflow 层对应的新 canonical line ids。
+                // `active_reflow_new_ranges` 返回 Reflow 目标行在新文本坐标系里的
+                // byte ranges，把这些 range 对应的 doc_snapshot.visual_lines 行 id
+                // 并入 line_ids，确保 Reflow 的目标行在 canonical 里有 clusters。
                 let active_rebind_ranges = self
                     .pipeline
                     .animation_coordinator()
-                    .collect_active_rebind_ranges(committed_text);
+                    .active_reflow_new_ranges();
                 for (rs, re) in &active_rebind_ranges {
                     for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
                         if l.byte_start < *re && l.byte_end > *rs && !ids.contains(&i) {
@@ -283,7 +284,6 @@ impl SujianEditorItem {
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
-                committed_text,
             ) {
                 Ok(s) => s,
                 Err(err) => {
@@ -330,176 +330,6 @@ impl SujianEditorItem {
         // build_from_canonical_document 接收 &doc_snapshot（借用），此处 doc_snapshot 仍有效。
         // Issue #810 评论 5933167246 问题3: 包成 Ok，函数改返回 Result。
         Ok((snapshot, doc_snapshot))
-    }
-
-    /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
-    /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
-    /// 与该 byte range 相交的行。virtual text 路径用临时 generation，用完即 clear。
-    ///
-    /// Issue #810 评论 5933167246 问题3: 改返回 `Result<EditorLayoutSnapshot, String>`，
-    /// `build_from_canonical_document` 返回 Err 时向上传播，不再 fallback 到空 snapshot。
-    pub(crate) fn build_virtual_layout_snapshot(
-        &mut self,
-        virtual_text: &str,
-        width: f64,
-        composition_range: Option<(usize, usize)>,
-    ) -> Result<EditorLayoutSnapshot, String> {
-        let scroll_y = f64::from(self.current_scroll_y);
-        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
-        let font_size = f64::from(self.current_font_pixel_size);
-        let font_family = &self.current_font_family.to_string();
-        let text_indent = f64::from(self.current_text_indent);
-        let line_spacing = f64::from(self.current_line_spacing);
-        let padding = f64::from(self.current_padding);
-        let dpr = {
-            let item_ptr = self.get_cpp_object();
-            if !item_ptr.is_null() {
-                crate::editor::renderer::sujian_item_dpr(item_ptr)
-            } else {
-                1.0
-            }
-        };
-        let text_color = &self.current_text_color.to_string();
-        let revision = LayoutRevision::next();
-
-        // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
-        // 而是分配独立 generation，与静态正文路径互不干扰。
-        // Issue #705: 光标位置计算已改用 prepared_frame 的 render generation;
-        // 此处的独立 generation 仅供动画/IME 视觉提取使用。
-        let generation = self.allocate_animation_layout_generation();
-
-        // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
-        // 改为按 composition_range 提取相关行的动画视觉。
-        let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
-        // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
-        let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
-            virtual_text,
-            self.pipeline.text_revision(),
-            font_size,
-            font_family,
-            line_spacing,
-            padding,
-            text_indent,
-            width,
-            dpr,
-            Some(text_color),
-            generation,
-            affected_start,
-            affected_end,
-        );
-
-        // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
-        // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
-        // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义）。
-        // Issue #658 评论 5626002895 问题 2: 不再只按 composition range filter 行，
-        // 改用 compare_old_new_visual_lines 比较 old/new lines 得到 affected line ids，
-        // 再并入 composition range 直接覆盖的行，确保 IME preedit 后 downstream reflow 行
-        // 也提取动画视觉（handle_composition_update 会遍历 composition_byte_end 之后的行
-        // 做 reflow，这些行没有动画视觉会导致 source_rect 缺失甚至 texture_failed）。
-        if affected_start < affected_end {
-            let line_ids: Vec<usize> = {
-                let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
-                let mut ids = if let Some(old_lines) = old_lines_opt {
-                    let diff = crate::editor::layout::compare_old_new_visual_lines(
-                        old_lines,
-                        &doc_snapshot.visual_lines,
-                        Some((affected_start, affected_end)),
-                        None,
-                    );
-                    let mut new_ids = diff.new_raster_line_ids;
-                    // Issue #658 评论 5626628570: 合并 reusable_move_pairs 的 new 索引，
-                    // 这些行也需要动画视觉（image/clusters）以走 reflow_move 协同动画。
-                    for &(_, new_idx) in &diff.reusable_move_pairs {
-                        if !new_ids.contains(&new_idx) {
-                            new_ids.push(new_idx);
-                        }
-                    }
-                    new_ids
-                } else {
-                    Vec::new()
-                };
-                // 并入 composition range 直接覆盖的行
-                for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
-                    if l.byte_start < affected_end
-                        && l.byte_end > affected_start
-                        && !ids.contains(&i)
-                    {
-                        ids.push(i);
-                    }
-                }
-                ids
-            };
-            if !line_ids.is_empty() {
-                // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
-                //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
-                // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
-                // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
-                // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
-                let handle = crate::editor::layout::PreparedLayoutHandle {
-                    generation,
-                    lines: &doc_snapshot.visual_lines,
-                };
-                let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
-                    &handle, &line_ids, dpr, text_color,
-                );
-                // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
-                let _ = crate::editor::layout::inject_animation_visuals_into_snapshot(
-                    &mut doc_snapshot,
-                    line_snapshots,
-                );
-            }
-        }
-
-        let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session
-        {
-            session.replace_start + session.preedit_cursor
-        } else {
-            self.pipeline.cursor()
-                + virtual_text
-                    .len()
-                    .saturating_sub(self.pipeline.committed_text().len())
-        };
-        let caret = doc_snapshot.cursor_rect(
-            cursor_byte.min(virtual_text.len()),
-            self.cursor_ctrl.affinity,
-            scroll_y,
-            viewport_h,
-        );
-        // Issue #722 评论 5749791161: 同时生成文档坐标的 caret，供 VisualTransaction / caret track 使用。
-        let caret_doc = doc_snapshot.cursor_rect_doc(
-            cursor_byte.min(virtual_text.len()),
-            self.cursor_ctrl.affinity,
-        );
-
-        // Issue #810 评论 5934060933 问题2: 不要在 generation 已分配后直接对
-        // build_from_canonical_document 用裸 `?`。Err 时 generation 还没释放，
-        // 必须由当前函数释放，避免泄漏 C++ QTextLayout generation。
-        let mut snapshot =
-            match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
-                revision,
-                &doc_snapshot,
-                scroll_y,
-                viewport_h,
-                virtual_text,
-            ) {
-                Ok(s) => s,
-                Err(err) => {
-                    crate::editor::layout::clear_layout_generation(generation);
-                    return Err(err);
-                }
-            };
-        snapshot.caret_rect = Some(caret);
-        snapshot.caret_rect_doc = Some(caret_doc);
-        snapshot.caret_affinity = self.cursor_ctrl.affinity;
-
-        // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
-        // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor
-        // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
-        // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
-        // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
-        crate::editor::layout::clear_layout_generation(generation);
-
-        Ok(snapshot)
     }
 
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {

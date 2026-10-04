@@ -1,647 +1,103 @@
-use std::time::Instant;
+//! Issue #826: 每帧渲染计划构建。
+//!
+//! 正文动画只有两层输出：
+//!
+//! - `clip_rects`：吐字遮罩前沿之后的 canonical 新字，从静态正文层裁掉。
+//! - `text_animation.glyphs`：吞字/替换的旧正文 overlay（来自 `base_snapshot`
+//!   行纹理）+ Reflow 层未改文字的移动位置（来自 `target_snapshot` 行纹理）。
+//!
+//! 光标完全独立：`CursorRenderState` 由 GUI 线程算好传进来，本模块不参与。
+//! IME preedit 由 `SelectionPreeditPlan` 独立承载，不与正文动画互相携带。
 
-use super::coordinator::{AnimationFrameSample, LinuxEditorAnimationCoordinator};
-use super::transaction_builder::emit_transaction_diagnostic;
-use crate::sujian_editor_item::animation::{TextVisualOperationKind, TextVisualTransactionState};
-use crate::sujian_editor_item::cursor_animation::{
-    CursorAnimationPlan, CursorBlinkMode, CursorTransition,
-};
-use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::editor_animation_debug_log;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use super::coordinator::LinuxEditorAnimationCoordinator;
+use crate::sujian_editor_item::qt_text_node::AnimationClipRect;
 use crate::sujian_editor_item::render_plan::{
-    CursorRenderState, RenderPlan, SelectionPreeditPlan, TextAnimationGlyphInfo, TextAnimationPlan,
+    CursorRenderState, CursorStyle, RenderPlan, SelectionPreeditPlan, SelectionPreeditStyle,
+    TextAnimationGlyphInfo, TextAnimationPlan,
 };
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 
 impl LinuxEditorAnimationCoordinator {
-    pub(crate) fn build_cursor_plan(
-        &self,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
-        cursor_x: f64,
-        cursor_y: f64,
-        cursor_h: f64,
-        editor_enabled: bool,
-        has_selection: bool,
-        viewport_height: f64,
-        is_scrolling: bool,
-        selection_gesture_active: bool,
-        is_preediting: bool,
-        smooth_cursor_enabled: bool,
-        smooth_cursor_duration_ms: u32,
-        scroll_y: f64,
-        old_visible: bool,
-        old_blink_visible: bool,
-        old_visual_x: f64,
-        old_visual_y: f64,
-        force_snap_next: bool,
-        cursor_animation: Option<&crate::sujian_editor_item::rendering::CursorAnimationState>,
-        cursor_owner_epoch: u64,
-        cursor_move_source: crate::sujian_editor_item::cursor_controller::CursorMoveSource,
-        cursor_baseline_y: f64,
-        layout_basis_revision: LayoutRevision,
-    ) -> CursorAnimationPlan {
-        // Issue #727 评论 5757225958 问题1: cursor_y 现在是文档坐标（caller 改用
-        // editor_layout_cursor_rect_doc），in_viewport 判断需要视口坐标 screen_y =
-        // cursor_y - scroll_y。cursor_ctrl.target_y/visual_y 统一保存文档坐标。
-        let screen_y = cursor_y - scroll_y;
-        let in_viewport = screen_y + cursor_h > 0.0 && screen_y < viewport_height;
-        // Issue #724 评论 5750911834 问题 2: should_be_visible 不再用 !is_scrolling
-        // 一刀切隐藏光标。滚动期间光标应保持可见（自动跟随滚动时光标在视口内
-        // 同一相对位置；用户手动滚动时光标位置不变，只要 in_viewport 就应可见）。
-        // 旧逻辑 `editor_enabled && !has_selection && in_viewport && !is_scrolling`
-        // 导致滚动期间光标被隐藏，滚动结束时光标动画偶发消失。
-        let should_be_visible = editor_enabled && !has_selection && in_viewport;
-
-        // Issue #705 评论 5717380886: 区分两种"有活动正文事务"的判断：
-        // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
-        // - `has_active_for_coordinated`：看 epoch，只有 epoch 一致的事务才驱动
-        //   coordinated caret。
-        // Issue #735 评论 5773604666 问题3: epoch 不一致时文字 units 已在
-        //   `find_cursor_transaction_for_target` / `build_text_animation_plan_with_sample`
-        //   中收口（start_fraction 设为 target_fraction，caret_motion_retired = true），
-        //   不再继续播自己的 glyph。ReflowMove/ReflowCrossFade 作为独立 passive
-        //   reflow track 继续。纯光标移动可走 Tween。
-        //   Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
-        //   的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
-        let has_active_for_coordinated = self
-            .active_text_transaction_key_with_epoch(cursor_owner_epoch, layout_basis_revision)
-            .is_some();
-        // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
-        // blink_mode 不再在 build_cursor_plan 里计算（之前的 _blink_mode 计算后未使用，
-        // 导致 GUI timer 和 render plan 两套判断分歧）。现在 blink 决策只由
-        // tick_cursor_animation 每帧从 has_active_text_transaction() + CursorOnly Tween
-        // 实时计算，build_cursor_plan 不再参与 blink 决策。
-        // has_active_for_blink 也不再在此计算，避免误导读者以为这里还在做 blink 决策。
-
-        // Issue #722 评论 5747719529 改法 1: 把滚动从光标动画判定里彻底拆出去。
-        // 删除 scroll_changed 和 old_scroll_y：真实滚动开始/结束继续由 set_is_scrolling()
-        // 控制暂停和一次 Snap；普通 contentY -> scroll_y 只是 viewport transform，
-        // 不能永久改变光标动画策略。hard_snap 只保留 force_snap_next / is_scrolling /
-        // is_selecting / !old_visible。
-        // Issue #724 评论 5750911834 问题 2: is_scrolling 不再驱动 should_be_visible
-        // 和 hard_snap，滚动的暂停和恢复由 set_is_scrolling() 单独控制。
-        // Issue #727 评论 5757225958 问题1: scroll_y 现在用于 in_viewport 判断
-        //（cursor_y 是文档坐标），不再丢弃。
-        let _ = is_scrolling;
-        // Issue #810 评论 问题2: old_visible 不再驱动 hard_snap（删除 !old_visible 条件）。
-        // 保留参数供 API 清晰和未来调试，显式消费避免 unused warning。
-        let _ = old_visible;
-
-        // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
-        // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
-        let allow_cross_line_tween = match cursor_move_source {
-            crate::sujian_editor_item::cursor_controller::CursorMoveSource::PointerClick
-            | crate::sujian_editor_item::cursor_controller::CursorMoveSource::KeyboardNavigation => {
-                smooth_cursor_enabled
-            }
-            crate::sujian_editor_item::cursor_controller::CursorMoveSource::DragSelection
-            | crate::sujian_editor_item::cursor_controller::CursorMoveSource::LayoutChange
-            | crate::sujian_editor_item::cursor_controller::CursorMoveSource::Scroll => false,
-            crate::sujian_editor_item::cursor_controller::CursorMoveSource::TextTransaction => {
-                false
-            }
-        };
-
-        // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
-        // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见都硬 Snap，
-        // 不再被协调动画覆盖为 Tween。
-        // Issue #722 评论 5747719529: 删除 scroll_changed，hard_snap 只保留
-        // force_snap_next / is_scrolling / is_selecting / !old_visible。
-        // Issue #724 评论 5750911834 问题 2: hard_snap 不再因 is_scrolling 强制 snap。
-        // 旧逻辑 `force_snap_next || is_scrolling || is_selecting || !old_visible`
-        // 导致滚动时强制 Snap，滚动结束时光标动画被 snap 到终态。
-        // 滚动的暂停和恢复由 set_is_scrolling() 单独控制，不影响 hard_snap。
-        // Issue #810 评论 问题2: 删除 !old_visible 作为通用 hard-snap 条件，
-        // is_selecting 改为 selection_gesture_active（只在手势进行中才 Snap）。
-        // 旧逻辑 `force_snap_next || is_selecting || !old_visible` 有两个问题：
-        // 1) is_selecting 用 Core has_selection（选区是否存在）代替手势状态，
-        //    导致选区存在但手势已结束（长按/拖选 release 后）仍强制 Snap，
-        //    普通光标移动无法 Tween。
-        // 2) !old_visible 把"光标从隐藏恢复"和"首次出现"都当 Snap，导致选区收起后
-        //    光标瞬移而非从 selection head 位置 Tween。
-        // 新逻辑：hard_snap 只由 force_snap_next（一次性标记）和
-        // selection_gesture_active（手势进行中）决定。选区收起后手势已结束，
-        // 走正常 Tween 判断，从 old_visual_x/old_visual_y（= selection head 位置）Tween。
-        let hard_snap = force_snap_next || selection_gesture_active;
-
-        // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
-        // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor
-        // 条件，就直接从当前 visual_x/visual_y 建自己的 Tween，由 CursorAnimationState
-        // 自己的 timeline 推进。
-        // Issue #702: 纯光标移动 Tween 的 duration_ms，供 CursorAnimationState 自己的 timeline。
-        let tween_duration_ms = u64::from(smooth_cursor_duration_ms);
-
-        let transition = if !should_be_visible || hard_snap {
-            CursorTransition::Snap
-        } else if !smooth_cursor_enabled || !allow_cross_line_tween {
-            // Issue #702 评论 5707770318: 正文事务活跃时，光标位置只由
-            // compute_coordinated_cursor_position 驱动（正文协同），不应再开
-            // CursorAnimationState 独立 timeline。返回 Snap 让 apply_plan 清除
-            // animation，不创建独立 timeline。只有没有正文事务时才走纯光标 Tween。
-            // Issue #712: !allow_cross_line_tween 替代旧的 cross_line_snap，
-            // 按 CursorMoveSource 决定跨行是否允许 Tween。
-            CursorTransition::Snap
-        } else if let Some(anim) = cursor_animation {
-            if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
-                // 不创建独立 CursorAnimationState timeline。
-                // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
-                // epoch 不一致时纯光标移动可走 Tween。
-                // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled
-                // 独立开关。是否有吞吐字直接由 has_active_for_coordinated（本帧有没有
-                // 有效 caret motion track）决定，不再受外部开关控制。
-                if has_active_for_coordinated {
-                    CursorTransition::Snap
-                } else {
-                    // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
-                    // 直接从当前 anim 的 start 位置建 Tween。
-                    // Issue #712 评论 5739517945: baseline_y 从 canonical caret geometry 获取，
-                    // 不使用 top + h * 0.8 估算。
-                    let new_baseline_y = new_cursor_rect
-                        .as_ref()
-                        .map(|r| r.baseline_y)
-                        .unwrap_or(cursor_baseline_y);
-                    let old_baseline_y = old_cursor_rect
-                        .as_ref()
-                        .map(|r| r.baseline_y)
-                        .unwrap_or(cursor_baseline_y);
-                    CursorTransition::Tween {
-                        old_rect: CursorRect {
-                            x: anim.start_x,
-                            top: anim.start_y,
-                            bottom: anim.start_y + cursor_h,
-                            baseline_y: old_baseline_y,
-                        },
-                        new_rect: CursorRect {
-                            x: cursor_x,
-                            top: cursor_y,
-                            bottom: cursor_y + cursor_h,
-                            baseline_y: new_baseline_y,
-                        },
-                        duration_ms: tween_duration_ms,
-                    }
-                }
-            } else {
-                CursorTransition::Snap
-            }
-        } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
-            // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
-            // 不创建独立 CursorAnimationState timeline。
-            // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
-            // epoch 不一致时纯光标移动可走 Tween。
-            // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
-            if has_active_for_coordinated {
-                CursorTransition::Snap
-            } else {
-                // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
-                // 直接从当前 visual_x/visual_y 建 Tween。
-                // Issue #712 评论 5739517945: baseline_y 从 canonical caret geometry 获取，
-                // 不使用 top + h * 0.8 估算。
-                let new_baseline_y = new_cursor_rect
-                    .as_ref()
-                    .map(|r| r.baseline_y)
-                    .unwrap_or(cursor_baseline_y);
-                let old_baseline_y = old_cursor_rect
-                    .as_ref()
-                    .map(|r| r.baseline_y)
-                    .unwrap_or(cursor_baseline_y);
-                CursorTransition::Tween {
-                    old_rect: CursorRect {
-                        x: old_visual_x,
-                        top: old_visual_y,
-                        bottom: old_visual_y + cursor_h,
-                        baseline_y: old_baseline_y,
-                    },
-                    new_rect: CursorRect {
-                        x: cursor_x,
-                        top: cursor_y,
-                        bottom: cursor_y + cursor_h,
-                        baseline_y: new_baseline_y,
-                    },
-                    duration_ms: tween_duration_ms,
-                }
-            }
-        } else {
-            CursorTransition::Snap
-        };
-
-        let _ = (is_preediting, old_blink_visible);
-        // Issue #702 评论 5707770318: old_cursor_rect/new_cursor_rect 的 baseline_y
-        // 已用于 Tween 构造（Issue #712），不再整体丢弃。
-        let _ = (old_cursor_rect, new_cursor_rect);
-
-        CursorAnimationPlan {
-            should_be_visible,
-            transition,
-            cursor_x,
-            cursor_y,
-            cursor_h,
-            cursor_baseline_y,
-            // Issue #810 评论 问题2: 只有因 has_selection 导致的隐藏才标记 hidden_by_selection，
-            // 让 apply_plan 保留 visual rect 供恢复 Tween。editor disabled / 不在视口的
-            // 隐藏维持原行为（visual 落到 target、Uninitialized）。
-            hidden_by_selection: has_selection && !should_be_visible,
-        }
-    }
-
-    pub(crate) fn begin_rendering_transactions(&mut self, frame_now: Instant) {
-        for tx in self.prepared_queue.active_transactions_mut() {
-            if tx.state == TextVisualTransactionState::Prepared {
-                tx.state = TextVisualTransactionState::Rendering;
-                if !tx.timeline.is_started() {
-                    // Issue #727 评论 5760431554 问题2: 传同一个 frame_now，
-                    // transaction timeline 与 unit/cursor track 共用同一帧起点。
-                    tx.timeline.mark_first_frame(frame_now);
-                }
-                // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
-                // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
-                // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
-                // Issue #819: 协同 unit 是 CaretTrack（边界来自 cursor track），非协同 unit 是 Timed（独立时间线）。
-                for unit in &mut tx.units {
-                    unit.timing.mark_started(frame_now);
-                }
-                // Issue #690 评论 5682867529: caret track 跟文字 unit 同一个 frame_now 启动，
-                // 不再在事务创建时就开始计时。这样第一帧 text unit progress = 0 且
-                // caret track progress = 0，文字和光标从同一屏幕帧起跑。
-                if let Some(track) = tx.cursor_visual_track.as_mut() {
-                    if track.started_at.is_none() {
-                        track.started_at = Some(frame_now);
-                    }
-                }
-            }
-        }
-    }
-
+    /// Issue #826: 构建本帧渲染计划。
+    ///
+    /// `frame_now` 是 Scene Graph 当前帧的统一时间点，前沿与 Reflow 都在这一个
+    /// 时间上采样，不各自 `Instant::now()`。
     pub(crate) fn build_render_plan_full(
-        &mut self,
-        mut cursor_render_state: CursorRenderState,
+        &self,
+        cursor_render_state: CursorRenderState,
         selection_preedit: SelectionPreeditPlan,
-        mut frame_context: crate::sujian_editor_item::render_plan::FrameContext,
-        cursor_style: crate::sujian_editor_item::render_plan::CursorStyle,
-        selection_preedit_style: crate::sujian_editor_item::render_plan::SelectionPreeditStyle,
-        frame_now: Instant,
-        cursor_animation: Option<&crate::sujian_editor_item::rendering::CursorAnimationState>,
-        cursor_owner_epoch: u64,
-        _current_scroll_y: f64,
+        cursor_style: CursorStyle,
+        selection_preedit_style: SelectionPreeditStyle,
+        frame_now: std::time::Instant,
     ) -> RenderPlan {
-        self.begin_rendering_transactions(frame_now);
-        let mut frame_sample = AnimationFrameSample::new(frame_now);
-        for tx in self.prepared_queue.active_transactions() {
-            if !matches!(
-                tx.state,
-                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
-            ) {
-                frame_sample.set_progress(tx.key, tx.progress(frame_now));
-            }
-        }
-        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务再采样 caret motion。
-        // Issue #815 评论 6042062633 修改 6: 本帧的 caret 采样**只在这里做一次**
-        // （build_text_animation_plan_with_sample 内部采样），下面直接复用它的返回值。
-        // 文字层与光标层拿同一份 SampledCaretFrame。
-        let (text_animation, keys_to_complete, coordinated_motion_frame) = self
-            .build_text_animation_plan_with_sample(
-                &frame_sample,
-                cursor_owner_epoch,
-                frame_context.layout_basis_revision,
-            );
-        // Issue #727 评论 5757225958 问题3: 先构建 keys_to_complete_set，
-        // 供 clip_rects 收集时跳过本帧即将完成的事务，避免"glyph 无、clip 有"
-        // 的一帧文字消失/闪烁。
-        let keys_to_complete_set: std::collections::HashSet<VisualTransactionKey> =
-            keys_to_complete.iter().copied().collect();
-        frame_context.keys_to_complete = keys_to_complete;
-        let active_keys: Vec<VisualTransactionKey> = self
-            .prepared_queue
-            .active_transactions()
-            .iter()
-            .map(|t| t.key)
+        // Issue #826: 同帧只采样一次前沿。吐字遮罩和吞字 overlay 必须看到同一个
+        // progress，否则会出现"新字已经露出来、旧字还没收掉"的重叠帧。
+        let frontier_sample = self.sample_edit_frontier(frame_now);
+
+        let clip_rects: Vec<AnimationClipRect> = frontier_sample
+            .as_ref()
+            .map(|sample| self.hidden_canonical_rects_for(sample))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&(_, _, w, h, _)| w > 0.0 && h > 0.0)
+            .map(|(x, y, w, h, snapshot_id)| AnimationClipRect {
+                x,
+                y,
+                w,
+                h,
+                snapshot_id,
+            })
             .collect();
-        frame_context.active_transaction_keys = active_keys;
 
-        // Issue #727 评论 5755858583 问题2: 只从 AnimatedSlice.static_hidden_document_rects
-        // 收集裁剪区域，不再从 tx.static_patches 收集。AnimatedSlice 成为唯一事实源。
-        // 只有 texture_prepared == true 的事务才允许静态层隐藏，
-        // 避免纹理准备完成前出现空白帧。
-        // Issue #679 评论 5657313927 (3e): 只允许 Prepared / Rendering / Paused
-        // 的事务裁剪静态正文；Pending 无论 texture_prepared 是什么都不能隐藏正文，
-        // 否则资源还没准备好就会出现空洞。
-        // Issue #727 评论 5757225958 问题3: 收集 clip_rects 时跳过本帧 keys_to_complete
-        // 里的事务。既然这一帧已经不画 overlay（build_text_animation_plan_with_sample
-        // 完成帧 continue 跳过 glyph 生成），就必须同帧释放 static ownership，让 canonical
-        // 最终正文立即显示，避免"glyph 无、clip 有"的一帧文字消失/闪烁。
-        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集文字 unit
-        // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
-        // ownership），避免空洞。
-        let mut clip_rects: Vec<crate::sujian_editor_item::qt_text_node::AnimationClipRect> =
-            Vec::new();
-        for tx in self.prepared_queue.active_transactions() {
-            // Issue #738 评论 5793319451 问题1: 守卫从 `>=` 改成 `==`。clip rects 用于
-            // 裁切 canonical 正文以露出动画 overlay，只有 basis 与当前 frame_context 完全
-            // 一致的事务的 static_hidden_document_rects 才属于当前 canonical 几何。
-            // future revision 的事务其 hidden rects 对应另一份 canonical，不能裁当前正文。
-            if tx.texture_prepared
-                && tx.state.is_clip_eligible()
-                && !keys_to_complete_set.contains(&tx.key)
-                && tx.layout_basis_revision == frame_context.layout_basis_revision
-            {
-                let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
-                for unit in &tx.units {
-                    // Issue #815 评论 6042062633 修改 6 / Issue #815 评论 5946701331 问题3:
-                    // **逐 unit** 判断，不是因为事务里"存在任意 CaretTrack unit"就把
-                    // 整笔事务的 unit 一起跳过。
-                    // - CaretTrack（协同 InsertReveal/DeleteConceal）：可见性由 caret
-                    //   采样决定，失去 ownership 后已被 retire 到终态（不再停在半路），
-                    //   此时继续隐藏 canonical 正文只会挖出空洞，所以只有 owns_caret
-                    //   时才收它自己的 static hidden rect。
-                    // - Timed（ReflowMove/ReflowCrossFade、非协同吞吐字）：不依赖 caret
-                    //   ownership，按自己的生命周期继续收 clip。
-                    //
-                    // 之前这里是 `if !owns_caret && tx.has_caret_track_units() { continue; }`，
-                    // 会把同事务的 Timed Reflow 一起跳过：Reflow overlay 继续画，
-                    // canonical 最终正文也一起画 → 重影。
-                    if unit.timing.is_caret_track() && !owns_caret {
-                        continue;
-                    }
-                    for doc_rect in &unit.slice.static_hidden_document_rects {
-                        if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
-                            clip_rects.push(
-                                crate::sujian_editor_item::qt_text_node::AnimationClipRect {
-                                    x: doc_rect.x,
-                                    y: doc_rect.y,
-                                    w: doc_rect.w,
-                                    h: doc_rect.h,
-                                    snapshot_id: unit.slice.snapshot_id,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
+        let mut glyphs: Vec<TextAnimationGlyphInfo> = Vec::new();
+
+        // 吞字 / 替换：本轮删除开始前的旧正文 overlay。
+        let overlay_glyphs = frontier_sample
+            .as_ref()
+            .map(|sample| self.old_overlay_glyphs_for(sample))
+            .unwrap_or_default();
+        for glyph in overlay_glyphs {
+            glyphs.push(TextAnimationGlyphInfo {
+                x: glyph.dest_rect.x,
+                y: glyph.dest_rect.y,
+                w: glyph.dest_rect.w,
+                h: glyph.dest_rect.h,
+                opacity: 1.0,
+                snapshot_id: glyph.snapshot_id,
+                source_rect: glyph.source_rect,
+            });
         }
 
-        // Issue #690 评论 5675007226 步骤 2: 协同光标位置从同一 frame_now 计算。
-        // 光标严格跟随文字吞吐边界：InsertReveal → 右边界，DeleteConceal → 吞字边界，
-        // Reflow/Cursor → old/new 插值。不再用单一 progress 在 old/new rect 之间线性插值。
-        //
-        // Issue #701 评论 5699573227 第三阶段 (F5): 每帧只采样一次 frame state。
-        // 文字层和光标层都使用同一份 `AnimationFrameSample`。无活跃文字事务时，
-        // CursorOnly 光标位置也从 frame_sample 采样，不再在 build_render_plan_full
-        // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
-        let mut cursor_sample_outcome =
-            crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;
-        // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
-        // 是否有吞吐字直接由 compute_coordinated_cursor_position 是否返回 Some 决定。
-        // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
-        // Issue #727 约束 1 / Issue #735 评论 5773604666 问题3: epoch 不一致时
-        // compute_coordinated_cursor_position 返回 None，事务立刻失去 caret motion
-        // ownership，文字 units 已落到 canonical final state（不再继续播放）。
-        // 改走 CursorOnly/点击位置。
-        // Issue #815 评论 6042062633 修改 3/6: 光标层消费文字层已经采好的那一份 caret 帧，
-        // 不再自己重新采样一次 track。
-        if let Some((cx, cy_doc, ch)) =
-            self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)
-        {
-            // Issue #727 评论 5755858583 问题1: cursor_render_state.y 保存文档坐标（cy_doc），
-            // 不再提前减 scroll_y 转成视口 y。cursor layer 的 QSGTransformNode 统一做
-            // translate(0, -scroll_y)，和正文/动画层一致。
-            // Issue #702 评论 5707770318: 正文协同光标位置已算出，
-            // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
-            // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
-            // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
-            // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
-            cursor_sample_outcome =
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
-                    x: cx,
-                    y: cy_doc,
-                    h: ch,
-                };
-            let suppressed = matches!(
-                self.active_operation_kind(),
-                Some(TextVisualOperationKind::Insert)
-            );
-            let blink_mode = if suppressed {
-                CursorBlinkMode::Suppressed
-            } else {
-                CursorBlinkMode::Normal
-            };
-            let opacity = if blink_mode == CursorBlinkMode::Suppressed {
-                1.0
-            } else {
-                cursor_render_state.opacity
-            };
-            cursor_render_state = CursorRenderState {
-                visible: true,
-                x: cx,
-                y: cy_doc,
-                h: ch,
-                opacity,
-            };
-        } else if let Some(anim) = cursor_animation {
-            // 无活跃文字事务但有 CursorOnly 动画：用同一份 frame_sample 采样光标位置。
-            cursor_sample_outcome = self.sample_cursor_only_position(anim, &frame_sample);
-            match cursor_sample_outcome {
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Running(p) => {
-                    let eased = crate::sujian_editor_item::rendering::ease_out_cubic(p);
-                    cursor_render_state.x = anim.start_x + (anim.target_x - anim.start_x) * eased;
-                    cursor_render_state.y = anim.start_y + (anim.target_y - anim.start_y) * eased;
-                }
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Finished => {
-                    cursor_render_state.x = anim.target_x;
-                    cursor_render_state.y = anim.target_y;
-                }
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle => {}
-                // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
-                // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
-                crate::sujian_editor_item::render_plan::CursorSampleOutcome::Coordinated {
-                    ..
-                } => {}
-            }
+        // Reflow 层：没改的字从旧位置插值到新位置。
+        for span in self.reflow_glyphs(frame_now) {
+            glyphs.push(TextAnimationGlyphInfo {
+                x: span.dest_rect.x,
+                y: span.dest_rect.y,
+                w: span.dest_rect.w,
+                h: span.dest_rect.h,
+                opacity: 1.0,
+                snapshot_id: span.snapshot_id,
+                source_rect: span.source_rect,
+            });
         }
 
-        // Issue #705: drawn_caret_rect 是本帧真正绘制出去的 caret rect。
-        // 根据 cursor_sample_outcome 和最终 cursor_render_state 算出。
-        // Coordinated → 协同位置;Running/Finished → cursor_render_state 已更新;
-        // Idle → 当前 visual 位置。
-        // Issue #727 评论 5755858583 问题1: drawn_caret_rect 保存文档坐标 y，
-        // apply_render_plan_cursor_state 在回写 visual_y 时转成视口 y。
-        let drawn_caret_rect: Option<(f64, f64, f64)> = Some((
+        let text_animation = TextAnimationPlan { glyphs };
+
+        // Issue #826: 光标与文字动画解耦，这里只是把 cursor_controller 当前的
+        // visual 位置原样带给 renderer，不再由正文事务驱动。
+        let caret = (
             cursor_render_state.x,
             cursor_render_state.y,
             cursor_render_state.h,
-        ));
-
+        );
         RenderPlan {
             text_animation,
             selection_preedit,
             cursor: cursor_render_state,
-            frame_context,
             cursor_style,
             selection_preedit_style,
             clip_rects,
-            cursor_sample_outcome,
-            drawn_caret_rect,
+            drawn_caret_rect: Some(caret),
         }
-    }
-
-    pub(crate) fn build_text_animation_plan_with_sample(
-        &mut self,
-        sample: &AnimationFrameSample,
-        cursor_owner_epoch: u64,
-        layout_basis_revision: LayoutRevision,
-    ) -> (
-        TextAnimationPlan,
-        Vec<VisualTransactionKey>,
-        crate::sujian_editor_item::render_plan::CoordinatedMotionFrame,
-    ) {
-        // Issue #738 评论 5788513592 问题1: 先按 layout basis 收口旧事务的 caret motion，
-        // 再采样 caret motion。旧 basis 事务的 caret_motion_retired 置 true 后，
-        // active_text_transaction_key_with_epoch 跳过它，sample_coordinated_motion_frame
-        // 不会给它 owner_key，旧 caret track 不会被采样喂给 cursor layer。
-        // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`。basis 不一致（无论是旧
-        // 还是 future）的事务都不应继续驱动 caret motion，统一收口 retire。
-        for tx in self.prepared_queue.active_transactions_mut() {
-            if tx.state == TextVisualTransactionState::Cancelled
-                || tx.state == TextVisualTransactionState::Completed
-            {
-                continue;
-            }
-            if tx.layout_basis_revision != layout_basis_revision && !tx.caret_motion_retired {
-                tx.retire_caret_driven_units();
-                tx.caret_motion_retired = true;
-            }
-        }
-        // 再采样 caret motion（旧 basis 事务已 retire，不会被选为 caret owner）。
-        let coordinated_motion_frame =
-            self.sample_coordinated_motion_frame(sample, cursor_owner_epoch, layout_basis_revision);
-
-        let mut glyphs = Vec::new();
-        let mut keys_to_complete = Vec::new();
-
-        for tx in self.prepared_queue.active_transactions_mut() {
-            if tx.state == TextVisualTransactionState::Cancelled
-                || tx.state == TextVisualTransactionState::Completed
-            {
-                continue;
-            }
-
-            if tx.state == TextVisualTransactionState::Pending {
-                continue;
-            }
-
-            // Issue #738: basis 与 canonical revision 不一致的 unit 不进 glyph 计划。
-            // Issue #738 评论 5793319451 问题1: 守卫从 `<` 改成 `!=`，future revision 的
-            // 事务也不属于当前 canonical，不能画 glyph（其纹理/几何对应另一份 canonical）。
-            if tx.layout_basis_revision != layout_basis_revision {
-                continue;
-            }
-
-            // Prepared→Rendering 状态切换已由 begin_rendering_transactions 完成。
-
-            // owns_caret: 本事务是否拥有本帧那一次 caret 采样。
-            let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
-
-            // Issue #815 评论 6042062633 修改 6: 本帧的 caret 采样。只有 owns_caret 的事务
-            // 才拿得到同一个 SampledCaretFrame；这个对象同时喂给本事务的 CaretTrack 吞吐字
-            // 和上层的光标层，文字层不准再自己按 frame_now 算一次时间。
-            let caret_sample = if owns_caret {
-                coordinated_motion_frame.caret
-            } else {
-                None
-            };
-
-            // Issue #815 评论 6042062633 修改 3: 本事务没有拿到本帧 caret 采样
-            // （不是 owner，或 owner track 缺失）时，把 CaretTrack 吞吐字收口到终态——
-            // 它们的逐帧边界来自那条 track，track 不再推进就不能停在半路。
-            // Timed unit（Reflow / 非协同吞吐字）不受影响。
-            // Issue #819 评论 5956495850 第 3 节: 同时清除 cursor_visual_track，
-            // 让后续 sample_transaction_visual_state 的 caret 为 None，
-            // CaretTrack unit 自然不产出 slice frame。
-            if tx.has_caret_driven_units() && caret_sample.is_none() {
-                tx.retire_caret_driven_units();
-                tx.caret_motion_retired = true;
-                tx.cursor_visual_track = None;
-            }
-            // Issue #756 评论 5821042551: 只要本事务存在需要播放的 cursor_visual_track，
-            // 事务完成就必须同时等待它结束。
-            let caret_track_done = match tx.cursor_visual_track.as_ref() {
-                Some(track) => track.progress(sample.frame_now) >= 1.0,
-                None => true,
-            };
-            // Issue #815 评论 6042062633 修改 6: 完成条件分两类。
-            // - CaretTrack unit（协同 InsertReveal/DeleteConceal）没有独立时间线，
-            //   它们随 cursor track 一起结束，不参与"每条 unit 自己 progress >= 1"的等待。
-            // - Timed unit（ReflowMove/ReflowCrossFade、非协同吞吐字）按自己的时间线播完。
-            let timed_units_done = tx
-                .units
-                .iter()
-                .filter(|u| !u.timing.is_caret_track())
-                .all(|u| u.progress(sample.frame_now) >= 1.0);
-            let all_units_done = if tx.units.is_empty() {
-                sample.progress(tx.key) >= 1.0
-            } else {
-                timed_units_done
-            };
-            let caret_track_complete =
-                tx.cursor_visual_track.is_none() || tx.caret_motion_retired || caret_track_done;
-
-            if all_units_done && caret_track_complete {
-                // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
-                emit_transaction_diagnostic(tx, "editor.anim.complete", "completed");
-                editor_animation_debug_log(&format!(
-                    "anim_complete: key={:?} op={:?} units={}",
-                    tx.key,
-                    tx.operation_kind,
-                    tx.units.len(),
-                ));
-                keys_to_complete.push(tx.key);
-                continue;
-            }
-
-            // Issue #819 评论 5967250411 问题 5: 渲染直接消费 sample_transaction_visual_state()
-            // 的结果生成 RenderPlan，不再自己逐 unit 调 compute_frame / compute_frame_by_caret_ingest。
-            // 这样"屏幕画的帧"和"rebase 交棒的帧"天然是同一份算法。
-            // - CaretTrack unit 在 caret 为 None 时不产出 slice frame（retire 时已清除
-            //   cursor_visual_track，sample_transaction_visual_state 内部 caret 为 None）。
-            // - Timed unit 按自己的时间线算 visible_fraction + compute_frame。
-            //
-            // Issue #819 评论 5967250411 问题 5: 一帧只采一次 caret。
-            // owner transaction（owns_caret=true）用 coordinated_motion_frame.caret
-            // 调 sample_transaction_visual_state_with_caret，不再让 sample_transaction_visual_state
-            // 内部第二次调 sample_caret_track_frame。非 owner 事务传 None（它们的 caret 为 None，
-            // 不会重复采样）。文字和 CoordinatedMotionFrame 消费同一个 SampledCaretFrame 对象。
-            let sampled_state = if owns_caret {
-                super::sample::sample_transaction_visual_state_with_caret(
-                    tx,
-                    sample.frame_now,
-                    caret_sample,
-                )
-            } else {
-                super::sample::sample_transaction_visual_state_with_caret(
-                    tx,
-                    sample.frame_now,
-                    None,
-                )
-            };
-            for slice in &sampled_state.slices {
-                glyphs.push(TextAnimationGlyphInfo {
-                    x: slice.dest_rect.x,
-                    y: slice.dest_rect.y,
-                    w: slice.dest_rect.w,
-                    h: slice.dest_rect.h,
-                    opacity: slice.opacity,
-                    snapshot_id: slice.snapshot_id,
-                    source_rect: slice.source_rect.clone(),
-                });
-            }
-        }
-
-        (
-            TextAnimationPlan { glyphs },
-            keys_to_complete,
-            coordinated_motion_frame,
-        )
     }
 }
 

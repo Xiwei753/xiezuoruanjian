@@ -1,6 +1,5 @@
 use super::*;
 use crate::sujian_editor_item::pipeline::VisualPrepareOutcome;
-use crate::sujian_editor_item::transaction_key::VisualTransactionKey;
 use writer_core::editor::EditorEditResult;
 
 impl SujianEditorItem {
@@ -82,14 +81,9 @@ impl SujianEditorItem {
         } else if animations_requested {
             // Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 返回
             // `VisualPrepareOutcome`，直接透传，不再重新猜 skip reason。
-            outcome = self.pipeline.prepare_edit_motion(
-                &ctx,
-                result,
-                &old,
-                &new,
-                &self.editor_layout,
-                self.cursor_ctrl.cursor_owner_epoch,
-            );
+            outcome =
+                self.pipeline
+                    .prepare_edit_motion(&ctx, result, &old, &new, &self.editor_layout);
             // Issue #815 评论 6042062633 修改 8: prepare_edit_motion 内部的每一个跳过点
             // （stale canonical / canonical invariant / caret 几何缺失 / 协同拿不到
             // cursor track / builder 空事务）都已经记过正式事件，这里不再重复报。
@@ -128,17 +122,25 @@ impl SujianEditorItem {
         outcome
     }
 
-    pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
-        self.pipeline.prepare_transaction_textures(key);
-        // 纹理准备完成后，静态层裁剪区域变化，需要重建 Scene Graph。
-        // 布局未变，不需要重新排版，只需要 scene rebuild。
+    /// Issue #826: 遮罩前沿 / Reflow 的旧行纹理准备。
+    ///
+    /// 纹理准备完成后静态层裁剪区域会变，需要重建 Scene Graph。
+    /// 布局未变，不需要重新排版，只需要 scene rebuild。
+    ///
+    /// 正文编辑路径在 `pipeline.prepare_edit_motion` 里已就地准备纹理并推进
+    /// `pending_promoted_layout`；这里供改动裁剪区域但不需要重新排版的调用方
+    /// 复用（与 pipeline 同名方法语义一致）。
+    pub(crate) fn prepare_frontier_textures(&mut self) {
+        self.pipeline.prepare_frontier_textures();
         self.request_scene_rebuild();
     }
 }
 
 /// Issue #815 评论 6042062633 修改 8: Core 编辑操作类型 -> 动画诊断里的 operation_kind 短名。
 /// Issue #819 评论 5968931455 问题 3: 改成 pub(crate) 供 edit_flow.rs 复用。
-pub(crate) fn editor_operation_kind_label(kind: writer_core::editor::EditorOperationKind) -> &'static str {
+pub(crate) fn editor_operation_kind_label(
+    kind: writer_core::editor::EditorOperationKind,
+) -> &'static str {
     match kind {
         writer_core::editor::EditorOperationKind::Insert => "Insert",
         writer_core::editor::EditorOperationKind::Delete => "Delete",

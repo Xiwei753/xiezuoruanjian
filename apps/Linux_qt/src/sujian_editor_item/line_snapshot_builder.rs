@@ -37,7 +37,6 @@ impl LineSnapshotBuilder {
         doc_snapshot: &CanonicalDocumentVisualSnapshot,
         scroll_y: f64,
         viewport_h: f64,
-        virtual_text: &str,
     ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
         let mut paragraph_id: u64 = 0;
@@ -68,14 +67,8 @@ impl LineSnapshotBuilder {
                     byte_start: line.byte_start,
                     byte_end: line.byte_end,
                     visual_x: line.x,
-                    visual_line_id: line.id,
                     visual_line_top: line.y,
                     visual_line_bottom: line.y + line.height,
-                    // Issue #724 评论 5751573705 问题1: 空行也传 cache_slot + qtextline_idx。
-                    cache_slot: line.cache_slot,
-                    qtextline_idx: line.qtextline_idx,
-                    // Issue #724 评论 5752140048 问题 4a: 段落文档 byte 起始偏移。
-                    paragraph_document_byte_start: line.para_start,
                 });
 
                 visual_line_ordinal += 1;
@@ -157,16 +150,8 @@ impl LineSnapshotBuilder {
                 byte_start: line.byte_start,
                 byte_end: line.byte_end,
                 visual_x: line.x,
-                visual_line_id: line.id,
                 visual_line_top: line.y,
                 visual_line_bottom: line.y + line.height,
-                // Issue #724 评论 5751573705 问题1: 传递 cache_slot + qtextline_idx，
-                // 供 Partial cluster 从 QTextLayout 取精确 glyph 几何。
-                cache_slot: line.cache_slot,
-                qtextline_idx: line.qtextline_idx,
-                // Issue #724 评论 5752140048 问题 4a: 段落文档 byte 起始偏移，
-                // 用于把全文 byte range 转成 paragraph-local offset。
-                paragraph_document_byte_start: line.para_start,
             });
 
             visual_line_ordinal += 1;
@@ -178,9 +163,6 @@ impl LineSnapshotBuilder {
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
-            // Issue #736 评论 5777408243 问题1: canonical snapshot 必须携带正文事实，
-            // 不再允许"有全文 byte offset 但 virtual_text 为空"的半截快照。
-            virtual_text: virtual_text.to_owned(),
         })
     }
 
@@ -195,23 +177,11 @@ impl LineSnapshotBuilder {
         new_revision: LayoutRevision,
         scroll_y: f64,
         viewport_h: f64,
-        old_text: &str,
-        new_text: &str,
     ) -> Result<(EditorLayoutSnapshot, EditorLayoutSnapshot), String> {
-        let old_layout = Self::build_from_canonical_document(
-            old_revision,
-            old_doc,
-            scroll_y,
-            viewport_h,
-            old_text,
-        )?;
-        let new_layout = Self::build_from_canonical_document(
-            new_revision,
-            new_doc,
-            scroll_y,
-            viewport_h,
-            new_text,
-        )?;
+        let old_layout =
+            Self::build_from_canonical_document(old_revision, old_doc, scroll_y, viewport_h)?;
+        let new_layout =
+            Self::build_from_canonical_document(new_revision, new_doc, scroll_y, viewport_h)?;
         Ok((old_layout, new_layout))
     }
 

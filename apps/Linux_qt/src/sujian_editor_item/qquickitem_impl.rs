@@ -3,7 +3,7 @@ use super::input_host::is_left_button_pressed;
 use super::*;
 
 use super::pointer_gesture::MoveOutcome;
-use super::render_plan::{CursorStyle, FrameContext, SelectionPreeditStyle};
+use super::render_plan::{CursorStyle, SelectionPreeditStyle};
 use super::scene_graph_renderer::StaticTextParams;
 use std::time::Instant;
 
@@ -197,11 +197,11 @@ impl QQuickItem for SujianEditorItem {
         if !editor_root.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
 
-            let has_active_txs = !self
+            // Issue #826: 前沿/Reflow 都结束后，动画层的旧行纹理和 glyph 都可以丢。
+            let has_active_txs = self
                 .pipeline
-                .animation_coordinator_mut()
-                .prepared_queue
-                .is_empty();
+                .animation_coordinator()
+                .has_active_text_animation(frame_now);
 
             if !has_active_txs {
                 self.pipeline.texture_cache_mut().clear();
@@ -233,12 +233,6 @@ impl QQuickItem for SujianEditorItem {
                 None => render_plan::SelectionPreeditPlan::default(),
             };
 
-            let frame_context = FrameContext {
-                active_transaction_keys: Vec::new(),
-                keys_to_complete: Vec::new(),
-                keys_to_cancel: Vec::new(),
-                layout_basis_revision: self.pipeline.layout_revision(),
-            };
             let cursor_style = CursorStyle {
                 color: self.current_cursor_color.to_string(),
                 width: 2.0,
@@ -257,24 +251,22 @@ impl QQuickItem for SujianEditorItem {
                 .build_render_plan_full(
                     cursor_render_state,
                     selection_preedit,
-                    frame_context,
                     cursor_style,
                     selection_preedit_style,
                     frame_now,
-                    self.cursor_ctrl.animation.as_ref(),
-                    self.cursor_ctrl.cursor_owner_epoch,
-                    scroll_y,
                 );
 
-            // Issue #736 评论 5786531280: 在 render_plan 构造之后才计算最终传给
-            // static renderer 的 frame_needs_relayout。完成帧（keys_to_complete 非空）
-            // 或 cancel 帧（keys_to_cancel 非空）必须同帧重建 static layer，按已经
-            // 去掉完成/cancel 事务 clip 的 plan.clip_rects 恢复 canonical 正文，
-            // 不等下一帧 scene_dirty。否则完成帧会出现"glyph 已没了、旧 static clip
-            // 还在"的一帧空洞。
-            let frame_needs_relayout = base_needs_relayout
-                || !render_plan.frame_context.keys_to_complete.is_empty()
-                || !render_plan.frame_context.keys_to_cancel.is_empty();
+            // Issue #826: 吐字遮罩是一个**每帧都在变**的矩形（前沿逐步打开），
+            // 静态层必须在遮罩存在的每一帧重建，否则会出现「遮罩已打开、静态层
+            // 还按上一帧的 clip 裁着」的一帧滞后。遮罩消失后的第一帧同样要重建，
+            // 让静态层恢复完整 canonical 正文。
+            //
+            // 这里记的是「本帧有没有遮罩」，而不是上一帧的遮罩矩形列表：
+            // 有遮罩 -> 重建（逐帧）；无遮罩但上一帧有 -> 重建一次收口。
+            let has_clip_this_frame = !render_plan.clip_rects.is_empty();
+            let frame_needs_relayout =
+                base_needs_relayout || has_clip_this_frame || self.last_had_clip_rects;
+            self.last_had_clip_rects = has_clip_this_frame;
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
@@ -335,58 +327,28 @@ impl QQuickItem for SujianEditorItem {
                 self.request_frame_update();
             }
 
-            for key in &render_plan.frame_context.keys_to_complete {
-                // Issue #736 评论 5786231506: 不再 remove_for_transaction，统一在
-                // transaction set 变化后用 retain_active_snapshot_ids。
-                if let Some(_ids) = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .finish_by_key(*key)
-                {
-                    // 不再在这里释放纹理，统一在下面 retain。
-                    // Issue #658 评论 5630650436: GPU texture cache 现在由 AnimationLayerNode
-                    // 自身持有，不再需要手动 release。sweep 在每帧 update_animation_layer 时运行。
-                }
-                editor_animation_debug_log(&format!(
-                    "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",
-                    key.transaction_id, key.generation
-                ));
-            }
-
-            let mut transaction_set_changed = false;
-            for key in &render_plan.frame_context.keys_to_cancel {
-                if self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .cancel_by_key(*key, "texture_failed")
-                {
-                    transaction_set_changed = true;
-                }
-            }
-
-            if !render_plan.frame_context.keys_to_complete.is_empty() || transaction_set_changed {
+            // Issue #826: 前沿/Reflow 结束帧要把动画层纹理放掉，并让静态层同帧恢复
+            // canonical 正文（无 clip）。
+            if self
+                .pipeline
+                .animation_coordinator()
+                .has_active_text_animation(frame_now)
+                != self.last_had_active_text_animation
+            {
                 self.scene_dirty = true;
-                // Issue #736 评论 5786231506: transaction set 变化后，从 coordinator 取
-                // 当前全部 active snapshot ids，只释放已经没有任何 active transaction
-                // 引用的纹理。rebase/cancel/complete 都不会误删下一笔仍在用的旧快照纹理。
-                let active_ids = self
+                self.last_had_active_text_animation = self
                     .pipeline
-                    .animation_coordinator_mut()
-                    .collect_active_snapshot_ids();
-                self.pipeline
-                    .texture_cache_mut()
-                    .retain_active_snapshot_ids(&active_ids);
+                    .animation_coordinator()
+                    .has_active_text_animation(frame_now);
             }
 
-            // Issue #701 评论 5699573227 第三阶段 (F6): 有 active transaction 或光标动画
+            // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
             if self
                 .pipeline
-                .animation_coordinator_mut()
-                .has_prepared_or_rendering()
+                .animation_coordinator()
+                .has_active_text_animation(frame_now)
                 || self.cursor_ctrl.animation.is_some()
-                || !render_plan.frame_context.keys_to_complete.is_empty()
-                || transaction_set_changed
             {
                 self.request_frame_update();
             }
@@ -456,49 +418,15 @@ impl SujianEditorItem {
     pub(crate) fn apply_render_plan_cursor_state(
         &mut self,
         render_plan: &super::render_plan::RenderPlan,
-        frame_now: std::time::Instant,
+        _frame_now: std::time::Instant,
         scroll_y: f64,
     ) {
-        use super::render_plan::CursorSampleOutcome;
-        // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
-        // 同一份 frame_sample 采样的结果推进 cursor_ctrl.visual_x/y。
-        // 文字层和光标层都使用同一份 frame state。
-        // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。CursorAnimationState
-        // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
-        // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
-        // Issue #727 评论 5755858583 问题1: Coordinated/drawn_caret_rect 的 y 是文档坐标，
-        // visual_y 现在也统一保存文档坐标（与 cursor_ctrl.target_y 一致），
-        // 不再减 scroll_y。QML/IME 边界方法在返回前减 current_scroll_y 转视口坐标。
-        match render_plan.cursor_sample_outcome {
-            CursorSampleOutcome::Running(p) => {
-                self.cursor_ctrl.update_animation_progress(p);
-            }
-            CursorSampleOutcome::Finished => {
-                self.cursor_ctrl.finish_animation_to_target();
-            }
-            // Issue #702 评论 5707770318: 正文协同光标帧。
-            // 把 cursor_ctrl.visual_x/visual_y/visual_h 同步为本帧真正画出的位置，
-            // 不启动 CursorAnimationState.started_at（不创建独立 timeline）。
-            // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
-            // Issue #727 评论 5757225958 问题1: visual_y 保存文档坐标，不再减 scroll_y。
-            CursorSampleOutcome::Coordinated { x, y, h } => {
-                self.cursor_ctrl.visual_x = x;
-                self.cursor_ctrl.visual_y = y;
-                if h > 0.0 {
-                    self.cursor_ctrl.visual_h = h;
-                }
-                self.cursor_ctrl.animation = None;
-            }
-            CursorSampleOutcome::Idle => {
-                // Issue #702: 纯光标动画首帧启动 started_at。
-                // 此分支现在只在"没有正文事务且没有 CursorOnly 动画"时到达。
-                if let Some(ref mut anim) = self.cursor_ctrl.animation {
-                    if anim.started_at.is_none() {
-                        anim.started_at = Some(frame_now);
-                    }
-                }
-            }
-        }
+        // Issue #826: 光标与文字动画完全解耦。
+        //
+        // 视觉光标 Tween 由 `cursor_ctrl` 自己的 timeline 推进（`rendering.rs`
+        // 的 `apply_plan` 负责启动），这里只把本帧真正画出的位置同步回
+        // visual_x / visual_y / visual_h，不再有 Running/Finished 两种
+        // 正文事务驱动的进度回写。
 
         // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
         // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去

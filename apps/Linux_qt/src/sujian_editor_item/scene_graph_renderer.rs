@@ -35,23 +35,22 @@ pub(crate) fn render_frame(
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
     //
-    // Issue #714 评论 5740007764: 静态层只在 needs_relayout=true 时重建一次，
-    // 不再因 clip_rects 非空而在每个动画帧重建。needs_relayout 由
-    // layout_dirty || scene_dirty 驱动，覆盖以下需要重建静态层的情形：
+    // Issue #714 评论 5740007764: 静态层在 needs_relayout=true 时重建。
+    // needs_relayout 由 layout_dirty || scene_dirty 驱动，覆盖：
     //   - 正文/layout/颜色变化（layout_dirty=true，GUI 线程 request_static_repaint）
-    //   - 活动事务集合变化（scene_dirty=true，事务开始/结束/cancel/rebase）
-    // 动画 progress 变化帧（tick 返回 false，不动 scene_dirty）只更新
-    // animation layer / caret，不重建静态 QSGTextNode，避免 100ms 动画期间
-    // 每帧销毁/重建静态节点导致闪烁（吐字刚显出的字闪、Enter 后下面文字闪）。
+    //   - 正文动画开始/结束（scene_dirty=true）
     //
-    // clip_rects 表达的裁剪区域在事务开始的那一帧（scene_dirty=true
-    // →needs_relayout=true）应用一次，动画期间保持不动；事务结束后
-    // （tick 返回 true→scene_dirty=true）再重建一次完整 canonical 正文。
+    // Issue #826: 吐字遮罩与旧模型不同——`clip_rects` 现在来自**唯一遮罩前沿**，
+    // 矩形每帧都在缩小（前沿打开）。所以遮罩存在的每一帧都必须重建静态层，
+    // 遮罩消失后的第一帧再重建一次收口。`qquickitem_impl::update_paint_node`
+    // 用 `last_had_clip_rects` 记住上一帧有没有遮罩来驱动这件事。
+    // 没有遮罩的帧（纯滚动、纯光标动画）只更新动画层/光标层，不重建静态节点。
     //
-    // Issue #709 评论 issue-body-709: 主链 AnimatedSlice.static_hidden_document_rects -> clip_rects
-    // 表达的是"静态正文不能画的区域"（被动画层接管的文档区域）。clip_count > 0 时
+    // Issue #709 评论 issue-body-709 / Issue #826: clip_rects 表达的是
+    // 「静态正文暂时不能画的区域」（还没被前沿打开的新字）。clip_count > 0 时
     // qt_text_node 不再创建完整正文节点，只按 complement 区间生成 clip+text 节点，
-    // 静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
+    // 所以最新 canonical 正文在屏幕上**只有一份**——吐字不画第二份正文，
+    // 只是把还没露出的那部分裁掉。
     //
     // Issue #736 评论 5786531280: 如果 plan.clip_rects 中存在 snapshot texture miss，
     // 本帧必须强制重建 static layer。重建时使用已过滤掉 miss clip 的

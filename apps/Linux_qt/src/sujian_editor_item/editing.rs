@@ -1,4 +1,3 @@
-use super::animation::find_line_geometry_in_snapshot;
 use super::edit_flow::{CompositionCommitParams, EditOp};
 use super::layout_revision::LayoutRevision;
 use super::*;
@@ -44,53 +43,36 @@ impl SujianEditorItem {
         self.pipeline.clear_undo_redo();
     }
 
-    /// Issue #701 评论 5699573227 第三阶段: 统一 composition commit 事务创建入口。
+    /// Issue #826: composition commit/cancel 的视觉动画入口。
     ///
-    /// 把 `insert_text_with_cause` 和 `ime_replace_and_insert` 的 composition commit
-    /// 分支收口到这一个 helper，固定做：生成 old/new layout snapshot → 创建
-    /// transaction → cancel_active_composition → handle_composition_commit_or_cancel
-    /// → prepare_transaction_textures → set_previous/current_layout_snapshot。
+    /// 固定顺序：
+    /// 1. 拿 committed old layout snapshot（preedit 期间的正文几何）；
+    /// 2. 用 Core 已提交的 new text 排一次版，拿到 committed new snapshot；
+    /// 3. 交给 `handle_composition_commit_or_cancel` 造唯一一次遮罩前沿；
+    /// 4. 无条件提交 `layout_revision` + `current_canonical_snapshot`。
     ///
-    /// `pending_preedit_cursor_rect` 只作为 IME commit 动画的 old caret 起点
-    /// （传给 `handle_composition_commit_or_cancel` 的 `old_cursor_rect`），
-    /// **不再**覆盖提交后的 target caret 或 `cursor_ctrl.visual_x/visual_y`。
-    /// 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
-    /// 由 `emit_content_changed` → `update_cursor_visual_position` 统一计算。
-    /// Issue #819 评论 5968931455 问题 2.2: 返回值从 `Option<VisualTransactionKey>` 改成
-    /// `HandoffTransactionOutcome`，`apply_edit_with_visuals` 据此返回 `Created(key)` /
-    /// `Skipped(reason)`，不再猜。
+    /// preedit 临时层是独立显示层，不进前沿、不 carry、不 rebase；commit 时
+    /// 它整体消失。正文动画只认 Core `display_patches`。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_composition_commit_transaction(
         &mut self,
         old: &EditorSnapshot,
         new: &EditorSnapshot,
-        // Issue #824 评论 5971089641 第 7 节：Core commit 的 display_patches 是
-        // 正文 Reveal/Conceal 的唯一事实源；composition 不再自己分类。
         result: &writer_core::editor::EditorEditResult,
         cause: EditorTransactionCause,
-        // Issue #722 评论 5749791161 问题2: 不再使用 pending_preedit_cursor_rect，
-        // old caret 从 old_snapshot.caret_rect_doc 获取（文档坐标）。
-        _pending_preedit_cursor_rect: Option<CursorRect>,
         preedit_byte_start: usize,
         preedit_byte_end: usize,
         saved_virtual_text: &str,
         candidate_byte_start: usize,
         candidate_byte_end: usize,
-        committed_replace_start: usize,
-        committed_replace_end: usize,
         cancel_reason: &str,
         summary_tag: &str,
-    ) -> super::animation::transaction_builder::HandoffTransactionOutcome {
+    ) -> super::pipeline::VisualPrepareOutcome {
         let width = self.bounding_width();
-        // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
-        // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
-        // new_snapshot 只接 new committed text range（candidate 在 new committed text 中的范围）。
-        // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
-        // raw new range 可以是零长度（空 commit + replacement 纯删除时 candidate_byte_start ==
-        // candidate_byte_end），零长度时 build_editor_layout_snapshot 的
-        // `if affected_start < affected_end` 为 false，不生成任何动画视觉资源。
-        // 用 compute_affected_paragraph_ranges 把 raw edit range 扩展到所在段落边界，
-        // 即使 candidate 是 (cursor, cursor)，也会扩成所在段落的非空视觉范围。
+        // Issue #710 评论 5734666497: old snapshot 只接 old virtualText range
+        // （preedit 在 old virtualText 中的范围）；new snapshot 只接 new committed
+        // text range。视觉提取范围必须扩到段落边界，纯删除（candidate 是零长度）
+        // 也要有非空视觉范围。
         let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
             crate::editor::layout::compute_affected_paragraph_ranges(
                 saved_virtual_text,
@@ -100,71 +82,42 @@ impl SujianEditorItem {
             );
         let old_composition_range = Some((old_affected_start, old_affected_end));
         let new_composition_range = Some((new_affected_start, new_affected_end));
-        // Issue #815 评论 6042062633 修改 8: 跳过事件要带 candidate range。
         let candidate_range = (candidate_byte_start, candidate_byte_end);
-        // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot 现在返回 Result。
-        // 这是 fallback 路径（active_composition_new_snapshot 和 current_layout_snapshot
-        // 都没有时才用）。Err 时记录诊断并 return，结束本次 commit，不伪装成功。
-        let old_snapshot = self
-            .pipeline
-            .animation_coordinator()
-            .active_composition_new_snapshot()
-            .cloned()
-            .or_else(|| self.pipeline.current_layout_snapshot().clone())
-            .or_else(|| {
-                match self.build_editor_layout_snapshot(width, false, old_composition_range) {
-                    Ok(snap) => Some(snap),
-                    Err(err) => {
-                        crate::backend::app_backend::debug_error_static(
-                            "editing",
-                            "record_composition_commit_old_snapshot_invariant_failure",
-                            &format!(
-                                "{} — aborting composition commit (Issue #810 评论 5933167246)",
-                                err
-                            ),
-                        );
-                        None
-                    }
+
+        // Issue #810 评论 5933167246: build_editor_layout_snapshot 返回 Result，
+        // Err 时记诊断并结束本次 commit，不伪装成功。
+        let old_snapshot = self.pipeline.current_layout_snapshot().clone().or_else(|| {
+            match self.build_editor_layout_snapshot(width, false, old_composition_range) {
+                Ok(snap) => Some(snap),
+                Err(err) => {
+                    crate::backend::app_backend::debug_error_static(
+                        "editing",
+                        "record_composition_commit_old_snapshot_invariant_failure",
+                        &format!(
+                            "{} — aborting composition commit (Issue #810 评论 5933167246)",
+                            err
+                        ),
+                    );
+                    None
                 }
-            });
-        let old_snapshot = match old_snapshot {
-            Some(snap) => snap,
-            None => {
-                // Issue #815 评论 6042062633 修改 8: IME commit 构造失败是"编辑发生了
-                // 但没有动画"的正式跳过点，必须记事件而不是静默 return。
-                record_composition_commit_skip(
-                    self,
-                    "composition_commit_old_snapshot_unavailable",
-                    Some(candidate_range),
-                );
-                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
-                    super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
-                );
             }
+        });
+        let Some(old_snapshot) = old_snapshot else {
+            record_composition_commit_skip(
+                self,
+                "composition_commit_old_snapshot_unavailable",
+                Some(candidate_range),
+            );
+            return super::pipeline::VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
+            );
         };
 
-        // Issue #735: EditorEngine 已删除，不再调用 create_transaction。
-        // composition commit 的动画由 handle_composition_commit_or_cancel 直接处理，
-        // 不需要 EditorTransaction 中间结构。
-        // Issue #738 评论 5798704669 问题1: 不再在 commit 路径前置 cancel_active_composition。
-        // 旧 CompositionUpdate transaction 留在队列，prepare_composition_commit_handoff
-        // 在旧事务仍活着时采样 rebase frame + caret handoff（采到真实当前帧），
-        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
-        // 顺序：prepare → reconcile → handle(create) → commit。
         let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
 
-        // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
-        // 走 Promote=true，generation 直接成为 current，不再用完即删。
-        // Issue #738 评论 5797637204: 用共用 helper 同时拿 new_snapshot 和 new_canonical，
-        // 让 composition commit 路径能把新 canonical 提交到 Pipeline.current_canonical_snapshot
-        // 并作为 reconcile_active_transactions_with_canonical 的新 canonical 几何。
-        // 一次排版同时产出两份视图，不再单独排一次 canonical。
-        // Issue #810 评论 5933167246 问题3: build_editor_layout_snapshot_with_canonical
-        // 现在返回 Result。Err 时记录诊断并 return，结束本次视觉事务构造，不伪装成功。
         // Issue #810 评论 5934658350: composition commit 在 Core 已提交 new text 后调用，
         // 此时 pipeline.text_revision() 仍是 emit 前的 old revision。new canonical 必须带
-        // next text revision（old + 1），与即将 emit_content_changed bump 后的正文 revision
-        // 对齐，避免 set_current_canonical_snapshot 后因 revision 错位重排一次。
+        // next text revision，与即将 emit_content_changed bump 后的正文 revision 对齐。
         let canonical_text_revision = self.pipeline.text_revision().wrapping_add(1);
         let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
             width,
@@ -182,161 +135,52 @@ impl SujianEditorItem {
                         err
                     ),
                 );
-                // Issue #815 评论 6042062633 修改 8: 同上，记正式跳过事件。
                 record_composition_commit_skip(
                     self,
                     "composition_commit_new_snapshot_invariant_failure",
                     Some(candidate_range),
                 );
-                return super::animation::transaction_builder::HandoffTransactionOutcome::Skipped(
+                return super::pipeline::VisualPrepareOutcome::Skipped(
                     super::edit_flow::EditVisualSkipReason::CompositionCommitSnapshotUnavailable,
                 );
             }
         };
-        // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
-        // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
-        let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-            x: c.x,
-            top: c.y,
-            bottom: c.y + c.h,
-            baseline_y: c.baseline_y,
-        });
-        let new_cursor_visual_line_id = new_snapshot
-            .caret_rect_doc
-            .as_ref()
-            .map(|c| c.visual_line_id);
 
-        // Issue #722 评论 5749791161: old_cursor_rect 从 pending_preedit_cursor_rect
-        // 获取（它保存的是 preedit 状态下的 caret 位置）。但 pending_preedit_cursor_rect
-        // 存的是 viewport 坐标，需要改为文档坐标。最简单的方案：从 old_snapshot 的
-        // caret_rect_doc 获取（commit 时 old caret 就是 preedit 状态下的 caret 位置）。
-        // 但 old_snapshot 可能是 active_composition_new_snapshot（也是 viewport 坐标）。
-        // 为了保持一致性，从 old_snapshot.caret_rect_doc 获取文档坐标的 old caret。
-        let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
-            x: c.x,
-            top: c.y,
-            bottom: c.y + c.h,
-            baseline_y: c.baseline_y,
-        });
-        let old_cursor_visual_line_id = old_snapshot
-            .caret_rect_doc
-            .as_ref()
-            .map(|c| c.visual_line_id);
+        // Issue #826: 正文动画只认 Core display_patches。`from_edit_result` 已经把它
+        // 派生成 inserted/deleted ranges（正文动画分类的唯一事实源）。
+        let motion =
+            super::edit_motion::PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
 
-        // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
-        let (old_line_top, old_line_bottom) =
-            find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
-        let (new_line_top, new_line_bottom) =
-            find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
-
-        let visual_text_unchanged =
-            !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
-
-        // Issue #738 评论 5797637204: composition commit 路径走 canonical basis 闭环，
-        // 与普通正文路径 pipeline.rs::prepare_edit_motion 保持同一结构：
-        //   1. 生成新 LayoutRevision（不再用旧 self.pipeline.layout_revision() 当 basis）；
-        //   2. 用统一 edit_now 采样（与普通路径 prepare_edit_motion 行 1398 一致）；
-        //   3. cancel_active_composition 已在前面结束旧 composition transaction，
-        //      这里对队列里其余旧活动事务 reconcile 到新 canonical（retire CaretTrack
-        //      + rebind Timed Reflow），让 passive ReflowMove/ReflowCrossFade 全部绑定
-        //      committed new canonical；
-        //   4. handle_composition_commit_or_cancel 用 new_revision 当新事务 basis；
-        //   5. 无条件提交 Pipeline.layout_revision + current_canonical_snapshot
-        //      （与普通路径 pipeline.rs:1452/1478 一致），basis 守卫（==/!=）才能正确
-        //      识别旧事务过期，canonical 正文立即接管。
-        // 顺序：prepare handoff → reconcile passive reflow → 提升 canonical →
-        //       创建新 revision 的事务。
         let new_revision = LayoutRevision::next();
         let edit_now = std::time::Instant::now();
-        // Issue #738 评论 5798704669 问题1: prepare 阶段——在旧 CompositionUpdate
-        // 仍活着时采 rebase frames + caret handoff，用外层统一 edit_now 采样。
-        // take_rebase_frames 自己 cancel 被覆盖的旧 composition transaction。
-        let prepared_handoff = self
-            .pipeline
-            .animation_coordinator_mut()
-            .prepare_composition_commit_handoff(
-                &old_snapshot,
-                &new_snapshot,
-                preedit_byte_start,
-                preedit_byte_end,
-                true,
-                candidate_byte_start,
-                candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
-                self.cursor_ctrl.cursor_owner_epoch,
-                edit_now,
-            );
-        self.pipeline
-            .animation_coordinator_mut()
-            .reconcile_active_transactions_with_canonical(
-                &new.text,
-                &new_canonical,
-                new_revision,
-                edit_now,
-            );
-        // Issue #738 评论 5788513592: reconcile 删除 unit / 完成事务后同步按剩余
-        // active snapshot ids 收一次 texture cache，不让失去 owner 的纹理一直挂着。
-        self.pipeline
-            .retain_handoff_textures(&prepared_handoff.visual_state.carried_snapshot_ids);
 
-        // Issue #756: 算出 text/caret/coordinated 三个开关传入 composition 路径。
-        let coordinated_anim = self.current_coordinated_animation_enabled;
-        let text_anim = coordinated_anim || self.current_typing_animation_enabled;
-        let caret_anim = coordinated_anim || self.current_smooth_cursor_enabled;
-        // Issue #824 评论 5971089641 第 7 节：commit 的正文 Reveal/Conceal 直接使用
-        // Core display_patches 派生的 ranges —— 与普通 Insert/Delete/Replace 同一个
-        // patch → retarget 入口，不再有 composition 专属正文动画分类。
-        let (body_inserted, body_deleted) = super::edit_motion::ranges_from_display_patches(result);
-        let body_ranges = super::animation::composition::CompositionCommitBodyRanges {
-            inserted: body_inserted,
-            deleted: body_deleted,
-        };
         let outcome = self
             .pipeline
             .animation_coordinator_mut()
             .handle_composition_commit_or_cancel(
-                &old_snapshot,
-                &new_snapshot,
-                preedit_byte_start,
-                preedit_byte_end,
-                true,
-                visual_text_unchanged,
-                body_ranges,
-                candidate_byte_start,
-                candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
-                old_cursor_rect,
-                new_cursor_rect,
-                old_cursor_visual_line_id,
-                new_cursor_visual_line_id,
-                old_line_top,
-                old_line_bottom,
-                new_line_top,
-                new_line_bottom,
-                self.cursor_ctrl.cursor_owner_epoch,
-                new_revision,
-                edit_now,
-                Some(prepared_handoff),
-                text_anim,
-                caret_anim,
-                coordinated_anim,
+                super::animation::composition::CompositionCommitFrontierInput {
+                    motion,
+                    old_snapshot: old_snapshot.clone(),
+                    new_snapshot: new_snapshot.clone(),
+                    now: edit_now,
+                },
             );
+        let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
+        // Issue #826: 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束，
+        // 准备完还要重建 Scene Graph（静态层裁剪区域变了）。
+        let active_ids = self
+            .pipeline
+            .animation_coordinator()
+            .collect_active_snapshot_ids();
+        self.pipeline.retain_active_snapshot_ids(&active_ids);
+        self.prepare_frontier_textures();
 
         // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
-        // current_canonical_snapshot，与普通正文路径 pipeline.rs:1452/1478 一致。
-        // new_canonical 一旦成为当前 canonical，layout_revision 就必须无条件一起提交，
-        // 否则 basis 守卫会把"事务 revision 比 Pipeline 当前 revision 更新"误当合法事务。
+        // current_canonical_snapshot。new_canonical 一旦成为当前 canonical，
+        // layout_revision 就必须无条件一起提交。
         self.pipeline.set_layout_revision(new_revision);
         self.pipeline
             .set_current_canonical_snapshot(Some(new_canonical));
-
-        if let super::animation::transaction_builder::HandoffTransactionOutcome::Created(key) =
-            &outcome
-        {
-            self.prepare_transaction_textures(*key);
-        }
         self.pipeline
             .set_previous_layout_snapshot(Some(old_snapshot));
         self.pipeline
@@ -344,19 +188,27 @@ impl SujianEditorItem {
 
         self.last_event_count = 1;
         self.last_summary = format!(
-            "cause={:?};changes={};vt={};animate=true",
-            cause, change_count, summary_tag,
+            "cause={:?};changes={};frontier=1;animate=true",
+            cause, change_count,
         )
         .into();
         editor_animation_debug_log(&format!(
             "record_composition_commit_transaction: cancel_reason={}, cause={:?}, changes={}",
             cancel_reason, cause, change_count,
         ));
-
+        editor_animation_debug_log(&format!(
+            "record_composition_commit_transaction: summary_tag={}, created={}",
+            summary_tag,
+            matches!(
+                visual_outcome,
+                super::pipeline::VisualPrepareOutcome::Created
+            ),
+        ));
         self.transaction_created();
-        // Issue #819 评论 5968931455 问题 2.2: 返回 HandoffTransactionOutcome，
+        // Issue #819 评论 5968931455 问题 2.2: 返回 VisualPrepareOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
-        outcome
+        let _ = outcome;
+        visual_outcome
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证
@@ -431,14 +283,11 @@ impl SujianEditorItem {
                 || self.current_smooth_cursor_enabled)
         {
             Some(CompositionCommitParams {
-                pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
                 saved_virtual_text: commit.saved_virtual_text.clone(),
                 candidate_byte_start: commit.candidate_byte_start,
                 candidate_byte_end: commit.candidate_byte_end,
-                committed_replace_start: commit.committed_replace_start,
-                committed_replace_end: commit.committed_replace_end,
                 cancel_reason: "commit_insert",
                 summary_tag: "composition_commit",
             })
@@ -538,12 +387,12 @@ impl SujianEditorItem {
         // committed_replace 传给动画协调器：
         // - 有 selection 时用 selection range（第一步删除的范围）；
         // - 无 selection 时用 replacement range（第二步的范围）。
-        let committed_replace_start = if let Some((sel_start, _)) = selection_byte_range {
+        let _committed_replace_start = if let Some((sel_start, _)) = selection_byte_range {
             sel_start
         } else {
             rep_start
         };
-        let committed_replace_end = if let Some((_, sel_end)) = selection_byte_range {
+        let _committed_replace_end = if let Some((_, sel_end)) = selection_byte_range {
             sel_end
         } else {
             rep_end
@@ -562,14 +411,11 @@ impl SujianEditorItem {
                 || self.current_smooth_cursor_enabled)
         {
             Some(CompositionCommitParams {
-                pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
                 saved_virtual_text: commit.saved_virtual_text.clone(),
                 candidate_byte_start,
                 candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
                 cancel_reason: "commit_replace",
                 summary_tag: "composition_commit_replace",
             })
@@ -722,89 +568,60 @@ impl SujianEditorItem {
         input::handle_key(self, key, modifiers)
     }
 
+    /// Issue #826: 指针点击的唯一实现。
+    ///
+    /// 固定顺序：
+    /// 1. `hit_test` 得到目标 byte index 与 affinity；
+    /// 2. `finish_edit_frontier_to_canonical()` 收掉当前遮罩前沿——点击不改变正文，
+    ///    必须让最新 canonical 立即接管，不允许遮罩挂在旧正文上；
+    /// 3. `set_selection` 立即改逻辑 caret（逻辑 caret 先变成 Core 当前 selection）；
+    /// 4. `update_cursor_visual_position()` 让**视觉**光标从当前 `visual_x/y`
+    ///    平滑追到新 caret rect。
+    ///
+    /// 旧路线的 caret handover / detach / epoch ownership 全部删除：光标与文字
+    /// 动画完全解耦，点击不需要"抢"正文动画的 caret 所有权。
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
-        // Issue #705 评论 5718299909: 先 hit_test 算出最终 caret/selection，确认
-        // 真的改变当前 caret/selection 后再 bump epoch。点击当前逻辑 caret 的同一
-        // 位置不应把正在播放的正文协同 caret 所有权白白失效。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
-        let current_anchor = self.pipeline.selection_anchor();
-        let current_cursor = self.pipeline.cursor();
-        let new_anchor = if extend { current_anchor } else { index };
-        let new_head = index;
-        let logical_cursor_changed = new_anchor != current_anchor
-            || new_head != current_cursor
-            || self.cursor_ctrl.affinity != affinity;
-        // Issue #824 评论 5971089641 第 8 节 / 评论 5972388049 第 3 节：逻辑 cursor
-        // 真正变化时，先**在同一帧**把旧正文事务的 caret ownership detach 掉——
-        // 旧吞吐字从当前屏幕帧继续收口（不掐到终态），只有 caret 解绑；
-        // 然后 bump epoch，最后 update_cursor_visual_position() 从保存的当前视觉
-        // 位置 Tween 到点击目标。顺序不能颠倒：先把文字掐到终态再建点击 Tween
-        // 正是本轮要修的问题。
-        let caret_target_before = (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y);
-        let pointer_detach = if logical_cursor_changed {
-            let pointer_now = std::time::Instant::now();
-            let current_layout_revision = self.pipeline.layout_revision();
-            let detach = self
-                .pipeline
-                .animation_coordinator_mut()
-                .hand_over_caret_ownership_to_pointer_click(
-                    pointer_now,
-                    self.cursor_ctrl.cursor_owner_epoch,
-                    current_layout_revision,
-                );
-            // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
-            // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
-            self.begin_manual_cursor_move();
-            Some(detach)
+        let old_cursor = self.pipeline.cursor();
+        let old_anchor = self.pipeline.selection_anchor();
+        let anchor = if extend {
+            self.pipeline.selection_anchor()
         } else {
-            None
+            index
         };
+
+        // Issue #826: 点击不改正文，先让遮罩前沿收成 canonical。
+        self.pipeline
+            .animation_coordinator_mut()
+            .finish_edit_frontier_to_canonical();
+
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 鼠标点击设置 CursorMoveSource::PointerClick，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::PointerClick;
-        // Issue #702 评论 5707449688 问题 1: 普通鼠标单击不再无条件 force_snap_next。
-        // drag_select_at/long_press_at/select_word_at 仍保留 force_snap_next=true，
-        // 因为它们确实应该立即对齐。普通单击只更新逻辑 cursor/affinity，
-        // 然后让 update_cursor_visual_position() 从当前 visual_x/visual_y rebase
-        // 到新 target，走 Tween 路径。
         editor_debug_log(&format!(
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend
         ));
-        let _ = self.pipeline.set_selection(
-            if extend {
-                self.pipeline.selection_anchor()
-            } else {
-                index
-            },
-            index,
-        );
+        let _ = self.pipeline.set_selection(anchor, index);
         self.bump_visual_revision();
         self.pipeline.composition_mut().clear();
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
-        let _ = self.update_cursor_visual_position();
-        if let Some(detach) = pointer_detach {
-            // Issue #824 评论 5971089641 第 9 节 / 评论 5972388049 第 4 节：
-            // 点击 + caret 交接写正式诊断事件（不再是 debug log）：press 坐标、
-            // hit_test byte index、old/new cursor、cursor_owner_epoch、active
-            // motion id、retarget 前后 caret target，以及 detach 的结果计数。
-            record_pointer_click_caret_handover(
-                x,
-                y,
-                index,
-                current_cursor,
-                self.pipeline.cursor(),
-                self.cursor_ctrl.cursor_owner_epoch,
-                detach.owner,
-                detach.detached_caret_driven_units,
-                detach.snapped_caret_driven_units,
-                caret_target_before,
-                (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
-            );
-        }
+        self.update_cursor_visual_position();
+
+        // Issue #826: 点击写正式诊断事件 `editor.pointer.click`。
+        record_pointer_click(
+            x,
+            y,
+            index,
+            old_cursor,
+            self.pipeline.cursor(),
+            old_anchor,
+            anchor,
+        );
+
         self.request_static_repaint();
     }
 
@@ -918,22 +735,18 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
     }
 
-    /// Issue #705 评论 5717380886: 标记一次"非正文事务导致的逻辑 cursor 移动"。
+    /// Issue #826: 标记一次"非正文编辑导致的逻辑 cursor 移动"。
     ///
-    /// 鼠标点击、方向键、Home/End、拖选等路径在方法开头调用本方法，bump
-    /// `cursor_owner_epoch`，使当前所有活动正文事务的 `cursor_owner_epoch`
-    /// 不再等于当前 epoch。之后 `animation_coordinator` 在驱动 coordinated
-    /// caret 前检查到 epoch 不一致，跳过 caret 驱动（文字事务继续播自己的
-    /// glyph/reflow，但不再驱动 caret）。
+    /// 鼠标点击、方向键、Home/End、拖选等路径在方法开头调用本方法，把
+    /// 当前遮罩前沿立刻收成 canonical 终态：点击/移动 caret 时旧前沿挂着的
+    /// 遮罩已经没有意义，不能让它留在旧正文几何上。
     ///
     /// 普通输入/删除（`insert_text`、`delete_*` 等）**不要**调用本方法，
-    /// 它们创建的正文事务应该继续拥有 coordinated caret。
-    ///
-    /// **不要**在本方法里 `clear_active_text_animations()`，那会把还在正常
-    /// 播放的文字动画一起掐掉。epoch 不一致时文字事务继续播自己的 glyph/reflow，
-    /// 只是不再驱动 caret。
+    /// 它们要走 `begin_or_extend_edit_frontier` 连续更新同一个前沿。
     fn begin_manual_cursor_move(&mut self) {
-        self.cursor_ctrl.bump_cursor_owner_epoch();
+        self.pipeline
+            .animation_coordinator_mut()
+            .finish_edit_frontier_to_canonical();
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {
@@ -1178,75 +991,46 @@ fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
 /// Issue #824 评论 5971089641 第 9 节 / 评论 5972388049 第 4 节：
 /// 鼠标点击的正式诊断事件。
 ///
+/// Issue #826: 指针点击的正式诊断事件 `editor.pointer.click`。
+///
 /// 点击导致逻辑 cursor 变化时记录：pointer press 坐标、hit_test byte index、
-/// old/new cursor、cursor_owner_epoch、active motion id、retarget 前后 caret target，
-/// 以及 caret detach 的结果计数（`detached_caret_driven_units` /
-/// `snapped_caret_driven_units`——正常 PointerClick 路径后者必须为 0）。
-/// 写 `writer_diagnostics` 正式事件（诊断包可见），不是 env-gated debug log。
-#[allow(clippy::too_many_arguments)]
-fn record_pointer_click_caret_handover(
+/// old/new cursor、old/new anchor。写 `writer_diagnostics` 正式事件
+/// （诊断包可见），不是 env-gated debug log。
+///
+/// 字段：press 坐标 x/y、hit_test 得到的 byte index、old/new cursor、
+/// old/new anchor。用于排查"点击落点与逻辑 caret 不一致"。
+fn record_pointer_click(
     pointer_x: f32,
     pointer_y: f32,
     hit_test_byte_index: usize,
     old_cursor: usize,
     new_cursor: usize,
-    cursor_owner_epoch: u64,
-    active_motion_id: Option<super::transaction_key::VisualTransactionKey>,
-    detached_caret_driven_units: usize,
-    snapped_caret_driven_units: usize,
-    caret_target_before: (f64, f64),
-    caret_target_after: (f64, f64),
+    old_anchor: usize,
+    new_anchor: usize,
 ) {
     let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
         std::collections::BTreeMap::new();
+    fields.insert("x".to_string(), serde_json::json!(pointer_x));
+    fields.insert("y".to_string(), serde_json::json!(pointer_y));
     fields.insert(
-        "pointer_press".to_string(),
-        serde_json::json!([pointer_x, pointer_y]),
-    );
-    fields.insert(
-        "hit_test_byte_index".to_string(),
+        "hit_index".to_string(),
         serde_json::json!(hit_test_byte_index),
     );
     fields.insert("old_cursor".to_string(), serde_json::json!(old_cursor));
     fields.insert("new_cursor".to_string(), serde_json::json!(new_cursor));
-    fields.insert(
-        "cursor_owner_epoch".to_string(),
-        serde_json::json!(cursor_owner_epoch),
-    );
-    fields.insert(
-        "active_motion_id".to_string(),
-        serde_json::json!(active_motion_id.map(|key| key.transaction_id)),
-    );
-    // Issue #824 评论 5972388049 第 4 节：detach 的结果字段。PointerClick 正常
-    // 路径文字继续（detached ≥ 0、snapped == 0），不允许把吞吐字直接掐到终态。
-    fields.insert(
-        "detached_caret_driven_units".to_string(),
-        serde_json::json!(detached_caret_driven_units),
-    );
-    fields.insert(
-        "snapped_caret_driven_units".to_string(),
-        serde_json::json!(snapped_caret_driven_units),
-    );
-    fields.insert(
-        "caret_target_before".to_string(),
-        serde_json::json!([caret_target_before.0, caret_target_before.1]),
-    );
-    fields.insert(
-        "caret_target_after".to_string(),
-        serde_json::json!([caret_target_after.0, caret_target_after.1]),
-    );
+    fields.insert("old_anchor".to_string(), serde_json::json!(old_anchor));
+    fields.insert("new_anchor".to_string(), serde_json::json!(new_anchor));
     writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
         sequence: 0,
         session_id: String::new(),
         level: writer_diagnostics::DiagnosticLevel::Info,
         origin: writer_diagnostics::DiagnosticOrigin::App,
-        event: "editor.anim.pointer_caret_handover".to_string(),
-        target: "editor.anim".to_string(),
+        event: "editor.pointer.click".to_string(),
+        target: "editor.pointer".to_string(),
         message: Some(format!(
-            "Issue #824 评论 5971089641/5972388049: pointer click caret ownership 交给 \
-             PointerClick，released motion {active_motion_id:?}，吞吐字 detached={} snapped={}",
-            detached_caret_driven_units, snapped_caret_driven_units,
+            "Issue #826: 指针点击 hit_index={} old_cursor={} new_cursor={} old_anchor={} new_anchor={}",
+            hit_test_byte_index, old_cursor, new_cursor, old_anchor, new_anchor
         )),
         fields,
     });

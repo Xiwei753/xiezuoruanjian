@@ -20,56 +20,42 @@ use writer_core::editor::{
 
 /// Issue #735: Linux 私有组合会话 — 替代已变为 `pub(crate)` 的 Core `CompositionSessionState`。
 ///
-/// 存储平台端动画所需的组合会话数据：replace range、base text、preedit text/cursor、generation。
+/// 存储平台端所需的组合会话数据：replace range、base text、preedit text。
+///
+/// Issue #826: preedit 是独立临时显示层。这个 session 只负责维护虚拟文本
+/// （base text 的 replace range 被 preedit 替换后的结果）和 preedit 的 byte
+/// range，不参与正文动画，也不进遮罩前沿。
 #[derive(Clone, Debug)]
 pub(crate) struct CompositionSession {
     pub replace_start: usize,
     pub replace_end_exclusive: usize,
     pub base_text: String,
     pub preedit_text: String,
-    pub preedit_cursor: usize,
-    pub generation: u64,
 }
 
 impl CompositionSession {
-    pub fn new(_text_rev: u64, _vis_rev: u64, text: String, cursor: usize) -> Self {
+    pub fn new(text: String, cursor: usize) -> Self {
         Self {
             replace_start: cursor,
             replace_end_exclusive: cursor,
             base_text: text,
             preedit_text: String::new(),
-            preedit_cursor: 0,
-            generation: 1,
         }
     }
 
-    pub fn new_with_replace_range(
-        _text_rev: u64,
-        _vis_rev: u64,
-        text: String,
-        start: usize,
-        end: usize,
-    ) -> Self {
+    pub fn new_with_replace_range(text: String, start: usize, end: usize) -> Self {
         Self {
             replace_start: start,
             replace_end_exclusive: end,
             base_text: text,
             preedit_text: String::new(),
-            preedit_cursor: 0,
-            generation: 1,
         }
     }
 
-    /// 更新 preedit 文本和光标位置。
-    pub fn update_preedit(&mut self, text: &str, cursor: usize) {
+    /// Issue #826: 更新 preedit 文本。preedit 是独立临时显示层，只改虚拟文本投影，
+    /// 不产生任何正文动画状态。
+    pub fn update_preedit(&mut self, text: &str) {
         self.preedit_text = text.to_string();
-        self.preedit_cursor = cursor;
-        self.generation = self.generation.wrapping_add(1);
-    }
-
-    /// 返回当前 generation 值。
-    pub fn last_submitted_generation_value(&self) -> u64 {
-        self.generation
     }
 
     /// 返回虚拟文本 — base text 中 [replace_start, replace_end_exclusive) 被
@@ -161,7 +147,6 @@ impl EditorAnimationKind {
 /// - `inserted_range` / `deleted_range`：首个非零范围，供只需要单段连续编辑的
 ///   调用方（段落扩展）使用
 /// - `old_text` / `new_text`：编辑前后的纯文本快照
-/// - `text_duration_ms` / `caret_duration_ms`：文字 unit 与 cursor track 的动画时长，
 ///   由 pipeline 从 Qt 设置传入（Issue #756 评论 5821042551 拆分独立 duration）
 /// - `old_selection` / `new_selection`：编辑前后的选区，从 `EditorEditResult` 直接取
 /// - `old_cursor_rect` / `new_cursor_rect`：由 pipeline 从布局快照计算后填入
@@ -174,8 +159,6 @@ pub(crate) struct PreparedEditMotion {
     pub deleted_range: Option<Utf8ByteRange>,
     pub old_text: String,
     pub new_text: String,
-    pub text_duration_ms: u64,
-    pub caret_duration_ms: u64,
     pub old_selection: EditorSelection,
     pub new_selection: EditorSelection,
     pub old_cursor_rect: Option<CursorRect>,
@@ -185,17 +168,9 @@ pub(crate) struct PreparedEditMotion {
 impl PreparedEditMotion {
     /// 从 `EditorEditResult` + old/new 文本快照构造 `PreparedEditMotion`。
     ///
-    /// `text_duration_ms` / `caret_duration_ms` 由 pipeline 传入
-    ///（Issue #756 评论 5821042551：文字与光标各自独立的时长）。
     /// `old_cursor_rect` / `new_cursor_rect` 初始为 `None`，由 pipeline 在布局
     /// 计算后直接赋值到返回的结构体字段。
-    pub fn from_edit_result(
-        result: &EditorEditResult,
-        old_text: &str,
-        new_text: &str,
-        text_duration_ms: u64,
-        caret_duration_ms: u64,
-    ) -> Self {
+    pub fn from_edit_result(result: &EditorEditResult, old_text: &str, new_text: &str) -> Self {
         let (inserted_ranges, deleted_ranges) = ranges_from_display_patches(result);
         // Issue #824 评论 5971089641 第 2 节：动画类别只认 patch 事实，
         // 不再从 operation_kind 派生（CompositionCommit 也不再有专属分类）。
@@ -217,8 +192,6 @@ impl PreparedEditMotion {
             deleted_range,
             old_text: old_text.to_string(),
             new_text: new_text.to_string(),
-            text_duration_ms,
-            caret_duration_ms,
             old_selection: result.old_selection.clone(),
             new_selection: result.new_selection.clone(),
             old_cursor_rect: None,

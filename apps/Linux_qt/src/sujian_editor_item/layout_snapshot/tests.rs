@@ -12,13 +12,6 @@ fn test_layout_revision_monotonic() {
 }
 
 #[test]
-fn test_source_rect_zero() {
-    let sr = SourceRect::zero();
-    assert_eq!(sr.x, 0.0);
-    assert_eq!(sr.w, 0.0);
-}
-
-#[test]
 fn test_shaping_identity_same() {
     let a = ShapingIdentity {
         text_content_hash: 42,
@@ -47,87 +40,39 @@ fn test_shaping_identity_different() {
     assert!(!a.is_same_shaping(&b));
 }
 
-/// Issue #724 评论 5751268664 缺口1: cluster 相对 inserted 子范围分类 + clipped source rect。
-fn make_cluster(byte_start: usize, byte_end: usize, x: f64, w: f64) -> LineClusterSnapshot {
-    LineClusterSnapshot {
-        byte_start,
-        byte_end,
-        source_rect: SourceRect {
-            x,
-            y: 0.0,
-            w,
-            h: 20.0,
-        },
-        shaping_identity: ShapingIdentity {
-            text_content_hash: 0,
-            raw_font_fingerprint: String::new(),
-            glyph_indexes_hash: 0,
-            cluster_glyph_count: 0,
-            direction_rtl: false,
-            format_fingerprint: 0,
-        },
-    }
-}
-
+/// Issue #826: `PreparedLineSnapshot::stub_for_tests` 造出的行几何自洽。
+///
+/// 前沿遮罩与 Reflow 都按 `visual_line_top/bottom` 定位行，所以 stub 的
+/// top/bottom 与 `document_origin_y` 必须一致。
 #[test]
-fn test_relate_to_inserted_range_disjoint() {
-    let c = make_cluster(0, 3, 0.0, 30.0);
-    assert!(c.relate_to_inserted_range(5, 8).is_none());
-}
-
-#[test]
-fn test_relate_to_inserted_range_inside() {
-    let c = make_cluster(5, 8, 50.0, 30.0);
-    match c.relate_to_inserted_range(0, 10) {
-        Some(ClusterInsertRelation::Inside) => {}
-        other => panic!("expected Inside, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_relate_to_inserted_range_partial_left_clip() {
-    // cluster [0, 10), inserted [5, 15) → 交集 [5, 10)，左半被裁掉
-    let c = make_cluster(0, 10, 0.0, 100.0);
-    match c.relate_to_inserted_range(5, 15) {
-        Some(ClusterInsertRelation::Partial {
-            clipped_byte_start,
-            clipped_byte_end,
-        }) => {
-            assert_eq!(clipped_byte_start, 5);
-            assert_eq!(clipped_byte_end, 10);
-        }
-        other => panic!("expected Partial, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_relate_to_inserted_range_partial_right_clip() {
-    // cluster [5, 15), inserted [0, 10) → 交集 [5, 10)，右半被裁掉
-    let c = make_cluster(5, 15, 50.0, 100.0);
-    match c.relate_to_inserted_range(0, 10) {
-        Some(ClusterInsertRelation::Partial {
-            clipped_byte_start,
-            clipped_byte_end,
-        }) => {
-            assert_eq!(clipped_byte_start, 5);
-            assert_eq!(clipped_byte_end, 10);
-        }
-        other => panic!("expected Partial, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_relate_to_inserted_range_partial_middle_clip() {
-    // cluster [0, 20), inserted [5, 15) → 交集 [5, 15)，左右各裁掉 1/4
-    let c = make_cluster(0, 20, 0.0, 100.0);
-    match c.relate_to_inserted_range(5, 15) {
-        Some(ClusterInsertRelation::Partial {
-            clipped_byte_start,
-            clipped_byte_end,
-        }) => {
-            assert_eq!(clipped_byte_start, 5);
-            assert_eq!(clipped_byte_end, 15);
-        }
-        other => panic!("expected Partial, got {:?}", other),
-    }
+fn test_stub_for_tests_geometry_is_self_consistent() {
+    let line = PreparedLineSnapshot::stub_for_tests(
+        3,
+        40.0,
+        0,
+        vec![LineClusterSnapshot {
+            byte_start: 0,
+            byte_end: 1,
+            source_rect: SourceRect {
+                x: 8.0,
+                y: 0.0,
+                w: 10.0,
+                h: 20.0,
+            },
+            shaping_identity: ShapingIdentity {
+                text_content_hash: 0,
+                raw_font_fingerprint: String::new(),
+                glyph_indexes_hash: 0,
+                cluster_glyph_count: 0,
+                direction_rtl: false,
+                format_fingerprint: 0,
+            },
+        }],
+    );
+    assert_eq!(line.byte_start, 0);
+    assert_eq!(line.byte_end, 1);
+    assert_eq!(line.visual_x, 8.0);
+    assert_eq!(line.visual_line_top, 40.0);
+    assert_eq!(line.visual_line_bottom, 60.0);
+    assert_eq!(line.document_origin_y, 40.0);
 }
