@@ -130,6 +130,17 @@ impl PreparedLineSnapshot {
             visual_line_bottom: top + 20.0,
         }
     }
+
+    /// Issue #826 评论 16：给测试行挂一张真实行图。
+    ///
+    /// `stub_for_tests` 固定写 `image: None`，纹理类测试拿不到可验证的 QImage ——
+    /// 那样只能验证「source_lines 里带了正确的 snapshot_id」，验证不了
+    /// `prepare_frontier_textures` 真的把它插进了 `TextureCache`。
+    #[cfg(test)]
+    pub(crate) fn with_test_image(mut self, image: qmetaobject::QImage) -> Self {
+        self.image = Some(image);
+        self
+    }
 }
 
 impl PreparedLineSnapshot {

@@ -1074,24 +1074,10 @@ impl EditFrontierState {
             return Vec::new();
         }
         let eased = ease_out_cubic(sample.progress);
-        let mut rects = Vec::new();
-        for track in &self.conceal_tracks {
-            let path = &track.path;
-            let distance = travelled(track.travelled, path.total_length, eased);
-            let bounds = path.conceal_bounds(distance);
-            for (segment, &(left, right)) in path.segments.iter().zip(bounds.iter()) {
-                let rect = FrontierRect {
-                    x: left.min(right),
-                    y: segment.y,
-                    w: (right - left).abs(),
-                    h: segment.h,
-                };
-                if !rect.is_degenerate() {
-                    rects.push(rect);
-                }
-            }
-        }
-        rects
+        self.conceal_tracks
+            .iter()
+            .flat_map(|track| overlay_rects_for_track(track, eased))
+            .collect()
     }
 
     /// 本帧旧正文 overlay 要画的 cluster（含 source / dest 矩形）。
@@ -1104,9 +1090,13 @@ impl EditFrontierState {
         if self.conceal_tracks.is_empty() || !sample.needs_old_overlay() {
             return Vec::new();
         }
-        let keep = self.old_overlay_rects(sample);
+        let eased = ease_out_cubic(sample.progress);
         let mut glyphs = Vec::new();
         for track in &self.conceal_tracks {
+            // Issue #826 评论 16：keep 必须是 **track-local** 的，绝不能用
+            // 所有 track 的合集 —— 那会让别的 track 把本 track 已吞掉的像素
+            // 重新裁出来（旧字视觉复活 / 回弹）。
+            let keep = overlay_rects_for_track(track, eased);
             for geometry in &track.glyphs {
                 let source = geometry.source_rect.clone();
                 let dest = geometry.dest_rect.clone();
@@ -1141,6 +1131,48 @@ impl EditFrontierState {
         }
         glyphs
     }
+}
+
+/// Issue #826 评论 16：**一条 track 自己的** overlay keep rect。
+///
+/// keep 必须 track-local。现在 `old_overlay_glyphs` 先把所有 track 的 rect 混成
+/// 一份全局 `keep`，再拿去裁每一条 track 的 glyph —— 于是上一笔已经快吞掉的字
+/// 会被下一笔的 keep rect「救」回来。
+///
+/// 真实场景（连续 Backspace + Reflow，等宽字）：
+/// ```text
+/// b: 20..30   c: 40..50
+/// 第一笔 Backspace 删 b -> ac；c 从 40..50 Reflow 向 20..30 移动
+/// 半程时 b 只该剩 20..21.25，c 已经到 22.5..32.5
+/// 立刻第二笔 Backspace 删 c -> 全局 keep 变成 [20..21.25, 22.5..32.5]
+/// 画 b 时它与 c 的 keep 也相交 -> 只剩 1.25px 的 b 突然又变回 8.75px
+/// ```
+///
+/// 原则（与评论 14/15 的 owner 模型一致）：
+/// 一条 track 的 glyph 只能由这条 track 的 path / travelled 决定是否可见，
+/// **不能被别的 track 的 path 救回来**。
+fn overlay_rects_for_track(track: &ConcealTrack, eased: f64) -> Vec<FrontierRect> {
+    let distance = travelled(track.travelled, track.path.total_length, eased);
+    let bounds = track.path.conceal_bounds(distance);
+    track
+        .path
+        .segments
+        .iter()
+        .zip(bounds.iter())
+        .filter_map(|(segment, &(left, right))| {
+            let rect = FrontierRect {
+                x: left.min(right),
+                y: segment.y,
+                w: (right - left).abs(),
+                h: segment.h,
+            };
+            if rect.is_degenerate() {
+                None
+            } else {
+                Some(rect)
+            }
+        })
+        .collect()
 }
 
 /// Issue #826 评论 8 阻塞 3：changed range 集合的归一化。

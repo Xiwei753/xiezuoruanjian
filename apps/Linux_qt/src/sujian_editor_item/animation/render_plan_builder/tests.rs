@@ -14,7 +14,9 @@ use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::coordinator::{
     EditFrontierRequest, LinuxEditorAnimationCoordinator,
 };
-use crate::sujian_editor_item::animation::edit_frontier::{ConcealDirection, EditFrontierKind};
+use crate::sujian_editor_item::animation::edit_frontier::{
+    ConcealDirection, EditFrontierKind, EditFrontierSample,
+};
 use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
@@ -1423,4 +1425,111 @@ fn same_burst_handoff_snapshot_id_is_retained_as_active_overlay_texture() {
         coord.collect_active_snapshot_ids().contains(&handoff_id),
         "handoff 的 source texture 必须进 collect_active_snapshot_ids"
     );
+}
+
+/// Issue #826 评论 16：新增的 ConcealTrack 不能让**上一笔 track 已吞掉的像素复活**。
+///
+/// 真实快速 Backspace 场景（等宽字，b = 20..30、c = 40..50）：
+/// ```text
+/// 第一笔 Backspace 删 b: abc -> ac
+///   - b  = ConcealTrack #1
+///   - c  = Reflow，从 40..50 往 b 原来的 20..30 移动
+/// 半程：b 只该剩 20..21.25，c 已经 Reflow 到 22.5..32.5
+/// 立刻第二笔 Backspace 删 c -> ConcealTrack #2，keep = 22.5..32.5
+/// ```
+///
+/// 旧实现把**所有 track** 的 keep rect 混成一份全局合集再裁每条 track 的
+/// glyph，于是画 b 时它与 c 的 keep 也相交（22.5..30），只剩 1.25px 的 b
+/// 突然又变回 8.75px —— 旧字视觉复活 / 回弹。
+///
+/// 断言：第二笔之后，b 所属那条 track 的 overlay 宽度**不得超过**第二笔之前。
+/// 按 snapshot_id 区分两条 track（b 的 source 是 burst base line、c 的是
+/// current old line），避免把两条 track 的宽度混在一起。
+#[test]
+fn new_conceal_track_cannot_revive_pixels_owned_by_previous_track() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // 评论给的几何：b = 20..30、c = 40..50（等宽字，visual_x = 首 cluster 的 x = 0，
+    // 所以 doc x 就是 cluster.x）。
+    let burst_base_id = LineSnapshotId::new(0, 0, 7);
+    let current_id = LineSnapshotId::new(0, 0, 9);
+    let abc = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        7,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0), cluster(2, 3, 40.0)],
+    )]);
+    // 删 b 之后 `ac`：a 仍在 byte 0..1，c 移到 byte 1..2，Reflow 目标是 x = 20
+    // （b 原来的位置）。cluster 的 byte range 必须与文本一致，否则 identity 映射
+    // 映不回 burst base、`can_extend` 会判断裂换 burst，测不到两条 track 并存。
+    let ac = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        9,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0)],
+    )]);
+
+    // ── 第一笔 Backspace：删 b ──
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: abc,
+        target_snapshot: ac.clone(),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (1, 2), 0),
+        base_text: String::from("abc"),
+        target_text: String::from("ac"),
+        conceal_direction: ConcealDirection::Backward,
+        now,
+    });
+
+    // 走到 80ms（eased = ease_out_cubic(0.5) = 0.875，对应评论给的数字）：
+    // - b 自己的 keep = [20, 30 - 8.75] = [20, 21.25]，宽度 1.25
+    // - c 已 Reflow 到 40 + (20-40)*0.875 = 22.5，即 glyph 22.5..32.5；
+    //   它自己的 keep = [22.5, 23.75]，与 b 的 glyph（20..30）相交 ——
+    //   全局 keep 会让 b 平白多出 22.5..23.75 这 1.25px。
+    let mid = now + Duration::from_millis(80);
+    let sample_before = coord.sample_edit_frontier(mid).expect("frontier alive");
+    let b_width_before = overlay_width_for(&coord, &sample_before, burst_base_id);
+
+    // ── 立刻第二笔 Backspace：删 c（此时 c 正在 Reflow，与 b 旧位置重叠）──
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: ac,
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(2, (1, 2), 0),
+        base_text: String::from("ac"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Backward,
+        now: mid,
+    });
+
+    let sample = coord.sample_edit_frontier(mid).expect("frontier alive");
+    let b_width_after = overlay_width_for(&coord, &sample, burst_base_id);
+
+    assert!(
+        b_width_after <= b_width_before + 1e-6,
+        "新增 c 的 ConcealTrack 不能让旧 b 的 overlay 重新变宽：\
+         before = {b_width_before}, after = {b_width_after}"
+    );
+}
+
+/// 统计属于指定 source line 的 overlay glyph 总宽度。
+///
+/// b 的 glyph source 来自 burst base line、c 的来自 current old line，
+/// 所以按 snapshot_id 过滤就能把两条 track 的宽度分开量。
+fn overlay_width_for(
+    coord: &LinuxEditorAnimationCoordinator,
+    sample: &EditFrontierSample,
+    source: LineSnapshotId,
+) -> f64 {
+    coord
+        .old_overlay_glyphs_for(sample)
+        .iter()
+        .filter(|glyph| glyph.snapshot_id == source)
+        .map(|glyph| glyph.dest_rect.w)
+        .sum()
 }

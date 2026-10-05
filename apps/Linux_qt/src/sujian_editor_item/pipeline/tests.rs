@@ -331,6 +331,16 @@ fn snapshot_for_test(
     top: f64,
     cluster_count: usize,
 ) -> crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot {
+    snapshot_for_test_with_image(line_id, top, cluster_count, None)
+}
+
+/// Issue #826 评论 16：可以带真实行图的 fixture。
+fn snapshot_for_test_with_image(
+    line_id: LineSnapshotId,
+    top: f64,
+    cluster_count: usize,
+    image: Option<qmetaobject::QImage>,
+) -> crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot {
     use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
     use crate::sujian_editor_item::layout_snapshot::{
         LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
@@ -356,14 +366,18 @@ fn snapshot_for_test(
             shaping_identity: shaping.clone(),
         })
         .collect();
+    let mut line = PreparedLineSnapshot::stub_for_tests(
+        line_id.visual_line_ordinal as usize,
+        top,
+        0,
+        clusters,
+    );
+    if let Some(image) = image {
+        line = line.with_test_image(image);
+    }
     crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot::new(
         LayoutSnapshot::empty_for_tests(),
-        vec![PreparedLineSnapshot::stub_for_tests(
-            line_id.visual_line_ordinal as usize,
-            top,
-            0,
-            clusters,
-        )],
+        vec![line],
         None,
         None,
         CaretAffinity::Downstream,
@@ -407,10 +421,22 @@ fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
     );
 
     // ── 第二笔 Backspace（同一 burst，can_extend == true）：`ab` -> `a`，删 b ──
+    //
+    // 这里 `ab` 的 current line 必须带**真实行图**：否则 source_lines 里的
+    // image 仍是 None，测试只能验证 snapshot_id 对不对，验证不了
+    // `prepare_frontier_textures` 真的把图插进了 TextureCache。
+    let mut pipeline = LinuxEditorPipeline::new();
+    let image = qmetaobject::QImage::new(
+        qmetaobject::QSize {
+            width: 2,
+            height: 1,
+        },
+        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+    );
     let mid = now + Duration::from_millis(80);
     coord.begin_or_extend_edit_frontier(EditFrontierRequest {
         kind: EditorAnimationKind::Delete,
-        base_snapshot: snapshot_for_test(current_id, 0.0, 2),
+        base_snapshot: snapshot_for_test_with_image(current_id, 0.0, 2, Some(image)),
         target_snapshot: snapshot_for_test(LineSnapshotId::new(0, 0, 11), 0.0, 1),
         deleted_ranges: vec![(1, 2)],
         inserted_ranges: Vec::new(),
@@ -432,5 +458,20 @@ fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
             .iter()
             .map(|source| source.snapshot_id)
             .collect::<Vec<_>>()
+    );
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.snapshot_id == current_id && source.image.is_some()),
+        "current line 必须真的带上行图（source_lines.image 不能是 None）"
+    );
+
+    // 关键断言：prepare_frontier_textures 之后 TextureCache 真的能拿到 line 9。
+    pipeline.animation_coordinator = coord;
+    pipeline.prepare_frontier_textures();
+    assert!(
+        pipeline.texture_cache().contains_line(&current_id),
+        "prepare_frontier_textures 必须把 current old layout 的行图插进 TextureCache，\
+         否则 renderer 的 get_line 会 miss，b 的 Conceal overlay 一像素都画不出来"
     );
 }
