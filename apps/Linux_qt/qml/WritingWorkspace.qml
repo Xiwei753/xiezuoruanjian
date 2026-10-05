@@ -347,21 +347,11 @@ Rectangle {
     // 免得「未保存」这种正常中间态被画成红色。
     readonly property bool saveStatusIsError: /失败|error|failed/i.test(editorController.saveStatus || "")
 
-    // 今天的日期（本地时区），Core 写作统计按 YYYY-MM-DD 字符串取区间。
-    function todayDateString() {
-        var now = new Date()
-        return now.getFullYear() + "-"
-            + ("0" + (now.getMonth() + 1)).slice(-2) + "-"
-            + ("0" + now.getDate()).slice(-2)
-    }
-
     // 一次性刷新状态栏的左段（速度）和中段（今日进度）。
-    // 两段用同一个「今天」区间查，保证状态栏和统计页口径一致。
     // 查询失败保持上一次的值，不清零——Core 拿不到不是"今天写了 0 字"。
     function refreshWritingStatusData() {
         var be = root.editorBackendRef
         if (!be) return
-        var today = root.todayDateString()
 
         // 左段：Core 当前写作速度。
         // 不用写作速度曲线的最后一个桶——曲线桶只生成到最后一个输入事件，
@@ -373,9 +363,12 @@ Rectangle {
             root.latestCharsPerMinute = Math.round(speed.charsPerMinute)
         }
 
-        // 中段：今日纯输入字数。get_writing_stats_summary 返回的是 Core JSON 本体
-        // （不是 ResultEnvelope），字段是 camelCase。
-        var summary = be.get_writing_stats_summary_object(today, today)
+        // 中段：今日纯输入字数。
+        // 这里不自己拼"今天是哪一天"（原 todayDateString 已删）：Core 的每日统计
+        // 按事件发生地的本地午夜分桶，端侧再拼一份本地日期，一旦时区口径和 Core
+        // 错开，凌晨就会出现"今日进度提前清零"。日历日语义只留在 Core 一处。
+        // 返回值是 Core JSON 本体（不是 ResultEnvelope），字段是 camelCase。
+        var summary = be.get_today_writing_stats_summary_object()
         if (summary && summary.totalHumanTypedChars !== undefined) {
             root.todayTypedChars = summary.totalHumanTypedChars
         }

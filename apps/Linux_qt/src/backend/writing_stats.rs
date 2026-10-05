@@ -112,6 +112,29 @@ impl AppBackend {
         }
     }
 
+    /// 「今天」的写作汇总。
+    ///
+    /// 不传日期：Core 用自己的本地日历口径决定「今天是几号」。QML 侧
+    /// `todayDateString()` 那种本地日期拼装一旦和 Core 的时区口径错开，
+    /// 凌晨就会出现「今日进度提前清零」（Issue #829）。
+    pub(crate) fn get_today_writing_stats_summary_object(&self) -> QJsonObject {
+        if let Some(core) = self.core_api() {
+            match core.get_today_writing_stats_summary_json() {
+                Ok(val) => qjson_object_from_json(&val),
+                Err(e) => {
+                    self.debug_error(
+                        "stats",
+                        "get_today_writing_stats_summary_failed",
+                        &e.to_string(),
+                    );
+                    QJsonObject::default()
+                }
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
+
     pub(crate) fn get_writing_stats_summary_object(
         &self,
         start_date: QString,

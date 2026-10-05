@@ -31,7 +31,8 @@ Rectangle {
     // 也不能读写作速度曲线的最后一个桶：曲线是历史分桶，桶只生成到最后一个
     // 输入事件，停笔后它会一直挂着停笔前的非零值。
     property int charsPerMinute: 0
-    // 进度分子：Core 写作统计里的今日纯输入字数（get_writing_stats_summary）。
+    // 进度分子：Core「今日」汇总里的纯输入字数（getTodayWritingStatsSummaryObject）。
+// 「今天是哪一天」由 Core 的本地日历口径决定，端侧不拼日期。
     property int progressCurrent: 0
     // 进度分母：手稿上的「/ 2,000」。
     // Issue #829 备注：Core 目前没有任何目标字数字段（settings 里只有

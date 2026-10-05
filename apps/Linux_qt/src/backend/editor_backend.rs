@@ -109,6 +109,10 @@ pub struct EditorBackend {
     #[allow(dead_code)]
     get_writing_stats_summary_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    /// 「今天」的写作汇总。今天是哪一天由 Core 的本地日历口径决定。
+    #[allow(dead_code)]
+    get_today_writing_stats_summary_object:
+        qt_method!(fn(&self) -> QJsonObject),
     #[allow(dead_code)]
     get_writing_stats_by_project:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
@@ -334,6 +338,13 @@ impl EditorBackend {
         self.with_app(|app| app.get_writing_stats_summary(start_date, end_date))
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
+    fn get_today_writing_stats_summary_object(&self) -> QJsonObject {
+        self.with_app(|app| app.get_today_writing_stats_summary_object())
+            .unwrap_or_else(|_| {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            })
+    }
+
     fn get_writing_stats_summary_object(
         &self,
         start_date: QString,

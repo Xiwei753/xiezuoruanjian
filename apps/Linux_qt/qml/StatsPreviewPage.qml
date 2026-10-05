@@ -47,12 +47,21 @@ Rectangle {
         try {
             editorBackendRef.flush_writing_stats()
             var t = new Date()
-            var td = t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0")
+            // Issue #829 评论10：「今天是哪一天」由 Core 的本地日历口径决定。
+            // 每日统计按事件发生地的本地午夜分桶，QML 自己拼日期一旦和 Core
+            // 的时区口径错开，凌晨就会看到「今日」提前清零。顺带把 Core 给的
+            // 区间末端日期拿回来当本周/本月的右端，QML 里就不留第二份日期规则。
+            var todayObj = editorBackendRef.get_today_writing_stats_summary_object()
+            var td = todayObj && todayObj.range && todayObj.range.endDate !== undefined
+                ? String(todayObj.range.endDate) : ""
+            if (td === "") {
+                throw new Error(qsTr("Core 未返回今日日期"))
+            }
             var ws = new Date(t); ws.setDate(t.getDate() - t.getDay())
             var wd = ws.getFullYear() + "-" + String(ws.getMonth() + 1).padStart(2, "0") + "-" + String(ws.getDate()).padStart(2, "0")
             var ms = new Date(t.getFullYear(), t.getMonth(), 1)
             var md = ms.getFullYear() + "-" + String(ms.getMonth() + 1).padStart(2, "0") + "-" + String(ms.getDate()).padStart(2, "0")
-            todayStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(td, td)) || {}
+            todayStats = todayObj
             weekStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(wd, td)) || {}
             monthStats = parseStatsJson(editorBackendRef.get_writing_stats_summary(md, td)) || {}
             projectStats = (parseStatsJson(editorBackendRef.get_writing_stats_by_project(wd, td)) || {}).projects || []
