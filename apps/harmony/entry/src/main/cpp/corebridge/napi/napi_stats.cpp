@@ -74,6 +74,23 @@ static napi_value NativeGetCurrentWritingSpeed(napi_env env, napi_callback_info 
     return ReturnJsonString(env, writer_core_get_current_writing_speed(window_seconds));
 }
 
+// Issue #829 评论5：按编辑事务上报写作统计。
+// ArkTS 传一个 JSON 字符串（EditorChangeStatsInputDto 线格式），C 层只透传，
+// cause→EventSource 的映射和计数字段全在 Core 侧决定。
+static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    char* json = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
+    bool ok = writer_core_record_editor_change_stats(json);
+    delete[] json;
+
+    napi_value result = nullptr;
+    napi_get_boolean(env, ok, &result);
+    return result;
+}
+
 static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -103,6 +120,7 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetWritingStatsSummary", nullptr, NativeGetWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeRecordEditorChangeStats", nullptr, NativeRecordEditorChangeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeProcessWritingEvent", nullptr, NativeProcessWritingEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);

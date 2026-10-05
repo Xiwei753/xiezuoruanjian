@@ -22,6 +22,29 @@ export enum EditorTransactionCause {
   Programmatic = 'Programmatic'
 }
 
+// Issue #829 评论5：按编辑事务上报写作统计的入参（Core EditorChangeStatsInputDto）。
+//
+// 平台端只透传「编辑事实」——cause 和 contentDelta 的 inserted/deleted，
+// **不要在端侧猜 source**（拼 "typing"/"pasted" 字符串）。cause→EventSource 的
+// 映射和各计数字段归 Core 统一决定，端侧猜错就会污染纯输入字数和当前写作速度。
+//
+// 与 Core 的差异：Core 的 EditorContentDeltaDto 有四个计数
+//（inserted/deleted/insertedNonWhitespace/deletedNonWhitespace），
+// 统计只需要前两个，所以这里不带 nonWhitespace 那对字段。
+export interface EditorChangeStatsInput {
+  deviceId: string
+  platform: string
+  projectId: string
+  volumeId: string
+  chapterId: string
+  cause: EditorTransactionCause
+  insertedChars: number
+  deletedChars: number
+  // 距上一次统计事件的秒数，首次事件传 0。
+  durationSeconds: number
+  sessionId: string
+}
+
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐
 // 字段名严格 camelCase（Core serde rename_all = "camelCase"）。
 // Issue #629 评论 3：create→u64 sessionId, snapshot→EditorSessionSnapshotDto,

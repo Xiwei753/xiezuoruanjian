@@ -1,4 +1,5 @@
 import { WritingStats, SpeedCurve, CurrentWritingSpeed } from '../dto/ProjectDtos'
+import { EditorChangeStatsInput } from '../dto/EditorDtos'
 import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
@@ -64,6 +65,17 @@ export class NativeStatsBridge {
       const jsonStr: string = this.core.getNativeModule().nativeGetCurrentWritingSpeed(windowSeconds)
       return this.core.decodeEnvelope<CurrentWritingSpeed>(jsonStr, decodeCurrentWritingSpeed)
     } catch (e) { return nativeError<CurrentWritingSpeed>(e) }
+  }
+
+  // Issue #829 评论5：按编辑事务上报写作统计。
+  // 入参 JSON 直接透传给 Core（cause→EventSource 的映射在 Core 侧做），
+  // 所以这里不做 ArkTS 侧的字段猜测或 source 拼接。
+  async recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = JSON.stringify(input)
+      const ok: boolean = this.core.getNativeModule().nativeRecordEditorChangeStats(jsonStr)
+      return { success: ok, data: ok, userMessage: ok ? undefined : 'record_editor_change_stats failed' }
+    } catch (e) { return nativeError<boolean>(e) }
   }
 
   async calculateWordCount(text: string): Promise<number> {

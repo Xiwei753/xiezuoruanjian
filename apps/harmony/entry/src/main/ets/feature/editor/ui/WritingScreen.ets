@@ -10,6 +10,7 @@ import { getBridge } from '../../../app/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { EditorSessionCoordinator, EditorStateUpdate } from '../session/EditorSessionCoordinator'
 import { NativeEditorSessionBridge } from '../interop/NativeEditorSessionBridge'
+import { EditorStatsQueue } from '../stats/EditorStatsQueue'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
@@ -84,6 +85,10 @@ const STATUS_CLOCK_INTERVAL_MS: number = 30000
 // 手稿的「86 字/分」是"最近一分钟的写入速度"，所以窗口取 60 秒，由 Core
 // 以「现在」为终点重算（不是取历史速度曲线的最后一桶，那样停笔后不会归零）。
 const WRITING_SPEED_WINDOW_SECONDS: number = 60
+// Issue #829 评论 #5995146525：退出前有界等待统计队列排空的上限（轮询次数 × 每次间隔）。
+// 兜底性质：编辑过程中队列基本已排空；超时就放弃等待，不因为统计而卡住退出。
+const STATS_DRAIN_MAX_TICKS: number = 20
+const STATS_DRAIN_TICK_MS: number = 25
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -141,9 +146,10 @@ export struct WritingScreen {
   @State isAutoSaving: boolean = false
   @State lastSaveFailed: boolean = false
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
-  @State sessionOldText: string = ''
-  @State sessionId: string = ''
-  @State sessionStartTime: number = 0
+  // Issue #829 评论 #5995146525：原先的 sessionOldText / sessionId / sessionStartTime
+  // 已删除。它们只服务于「保存时拿整章 old/new 文本比较」的旧统计上报；
+  // 写作统计改由 EditorStatsQueue 按编辑事务上报后，会话 id 与时长口径由队列自己持有
+  // （见 EditorStatsQueue 的 lastEventMs / sessionId）。
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
@@ -217,6 +223,11 @@ export struct WritingScreen {
   private dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(this.inputAdapter, this.selectionController, this.coordinator)
   // Share 生命周期服务（Issue #629 评论 5 第 7 节）：碰一碰/隔空传送由页面拥有生命周期。
   private shareService: HarmonyShareService = HarmonyShareService.getInstance()
+  // Issue #829 评论 #5995146525：写作统计上报队列（串行、异步、与编辑事务同源）。
+  // state listener 里 enqueueChange 只入内存队列，由队列单协程按序跨 NAPI 写 Core，
+  // 不在编辑主链上同步写盘。会话 id / 时长口径由队列自己持有。
+  private editorStatsQueue: EditorStatsQueue =
+    new EditorStatsQueue(this.bridge, this.settings.statsDeviceId || 'unknown', 'harmony')
   // Share 生命周期观察者：onForeground 重新注册，onBackground stop（成对）。
   private shareLifecycleObserver: LifecycleObserver | null = null
   // 接续进入时携带的编辑器状态（selection/cursor/viewport/contentHash），loadChapter 恢复时消费。
@@ -309,6 +320,17 @@ export struct WritingScreen {
       if (update.editResult !== null) {
         const delta = update.editResult.contentDelta
         self.wordCount = Math.max(0, self.wordCount + delta.insertedNonWhitespaceChars - delta.deletedNonWhitespaceChars)
+        // Issue #829 评论 #5995146525：正文每次真实变化就在这里产出统计事件，
+        // 不再等保存后比较整章。enqueueChange 只把事件放进内存队列并立刻返回，
+        // 不跨 NAPI、不 await，所以不会阻塞编辑主链。
+        // 平台端只透传 cause 和 contentDelta，source 分类（HumanTyped / Pasted /
+        // Deleted / Unknown）由 Core 的 record_editor_change_stats 决定。
+        // 统计用 insertedChars/deletedChars（不含 nonWhitespace 对）：
+        // Core 写作统计的字数口径是非空白字符，但事件计数与 per_* 维度用的是原始 delta。
+        self.editorStatsQueue.enqueueChange(
+          self.projectId, self.volumeId, self.chapterId,
+          update.editResult.cause, delta.insertedChars, delta.deletedChars
+        )
       }
       self.updateContinuationState()
       // 内容变化时更新碰一碰/隔空传送 payload（Issue #629 评论 5 第 7 节）。
@@ -414,6 +436,17 @@ export struct WritingScreen {
   // 失败路径（保存失败 / closeAsync 失败 / 异常）统一 unseal 后返回 false，且失败前不 detach IME
   // ——这样页面可立即继续编辑，不需要“重新 attach IME”补救。
   // 返回 boolean：保存失败或 closeAsync 失败返回 false，不 pop；正文仍在活跃编辑会话。
+  // 有界等待写作统计队列排空。队列本身是串行的，这里只轮询 pendingCount；
+  // 正常路径上队列在编辑过程中早就排空了，这里只是兜底。
+  private async drainEditorStatsQueue(): Promise<void> {
+    for (let i = 0; i < STATS_DRAIN_MAX_TICKS; i++) {
+      if (this.editorStatsQueue.pendingCount() === 0) {
+        return
+      }
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), STATS_DRAIN_TICK_MS))
+    }
+  }
+
   private async doGracefulClose(): Promise<boolean> {
     // 1. dispatcher 进入 sealed：拒绝新的普通输入命令（已排队命令仍可 drain）
     this.dispatcher.seal()
@@ -440,7 +473,12 @@ export struct WritingScreen {
         this.dispatcher.unseal()
         return false
       }
-      // 6. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
+      // 6. Issue #829 评论 #5995146525：等写作统计队列排空再离开。
+      //    编辑事务事件已经全部入队（步骤 3-4 之后不会有新的编辑命令再进来），
+      //    这里有界等待是为了别把最后几条统计丢掉；超时也照常走，
+      //    不能因为统计没写完而卡住用户退出版面。
+      await this.drainEditorStatsQueue()
+      // 7. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
       const savedText: string = afterFinish.text
       if (savedText !== this.lastSavedContent) {
         // Issue #629 评论 5308748920 问题3：用 ensureSnapshotSaved 精确保存这份 savedText，
@@ -451,17 +489,10 @@ export struct WritingScreen {
           this.dispatcher.unseal()
           return false
         }
-      } else if (this.sessionOldText !== savedText && this.chapterId) {
-        // 没有未保存变更但有统计差异时，兜底上报一次写作统计
-        const deviceId = this.settings.statsDeviceId || 'unknown'
-        const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
-        this.bridge.processWritingEvent(
-          deviceId, 'harmony', this.projectId, this.volumeId,
-          this.chapterId, this.sessionOldText, savedText, durationSeconds, this.sessionId
-        )
-        // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
-        this.sessionOldText = savedText
       }
+      // Issue #829 评论 #5995146525：这里不再有「没有未保存变更就兜底上报统计」的分支。
+      // 写作统计已改由编辑事务同源上报，不需要在退出时按整章文本差异补一笔——
+      // 那种补报既会和事务级上报重复计数，也会把连续输入误判成粘贴。
       // 7. 关闭编辑会话。Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
       // Issue #629 评论11 第3项：close 必须 success===true && data===true 才算成功。
       // 旧实现只判断 closeResult.success（FFI 返回 { success:true, data:false } 时会误当成功）。
@@ -655,9 +686,8 @@ export struct WritingScreen {
         this.lastSavedContentHash = result.data.meta.hash
         this.wordCount = result.data.meta.wordCount
         this.hasUnsavedChanges = false
-        this.sessionOldText = result.data.content
-        this.sessionId = `hm-${this.chapterId}-${Date.now()}`
-        this.sessionStartTime = Date.now()
+        // Issue #829 评论 #5995146525：不再记录 sessionOldText。打开章节时正文还没被编辑过，
+        // 没有任何编辑事务可上报，统计基线由队列从第一条真实编辑事件开始算。
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
         // Issue #653 评论 5608056955：Harmony 没有 persistent/temporary 两套宿主生命周期，
         // close 在 requestLeave 统一做，open 不再接收 isPersistent 参数。
@@ -1263,7 +1293,7 @@ export struct WritingScreen {
   // Issue #629 评论 5308748920 问题3：真实持久化函数，只接受显式 targetText。
   // 不在里面重新抓"当前正文"（避免保存期间新输入被误存）。
   // 调用方（saveChapter/ensureSnapshotSaved）负责取得稳定 snapshot 后再调用。
-  // 结算：processWritingEvent/sessionOldText/lastSavedContent 按 targetText；
+  // 结算：lastSavedContent 按 targetText；
   // 再取 latestSnapshot：this.content = latestSnapshot.text；
   // hasUnsavedChanges = latestSnapshot.text !== targetText（保存期间新输入保持 unsaved）。
   // contentHash 是这次 targetText 的回执。wordCount 是当前编辑器正文的实时字数（listener 实时更新），
@@ -1277,18 +1307,10 @@ export struct WritingScreen {
       // 只保存这份 targetText（不重新抓当前正文）
       const result = await this.bridge.saveChapter(this.chapterId, targetText)
       if (result.success && result.data) {
-        // 按 targetText 结算统计（不读可能已变化的 this.content）
-        if (this.sessionOldText !== targetText) {
-          const deviceId = this.settings.statsDeviceId || 'unknown'
-          const durationSeconds = Math.round((Date.now() - this.sessionStartTime) / 1000)
-          this.bridge.processWritingEvent(
-            deviceId, 'harmony', this.projectId, this.volumeId,
-            this.chapterId, this.sessionOldText, targetText, durationSeconds, this.sessionId
-          )
-          this.sessionOldText = targetText
-          this.sessionId = `hm-${this.chapterId}-${Date.now()}`
-          this.sessionStartTime = Date.now()
-        }
+        // Issue #829 评论 #5995146525：这里不再上报写作统计。
+        // 写作统计改由编辑事务同源上报（EditorStatsQueue，见 state listener），
+        // 保存时再拿整章 old/new 文本比较会重复计数，而且 Core 那条路径有
+        // 「净增 > 20 就当 paste」的启发式，正常连续敲 30 字会被误判成粘贴。
         this.lastSavedContent = targetText
         // Issue #629 评论 5 第 8 节：保存成功后跨设备内容身份来自 ChapterSaveReceipt.contentHash。
         this.lastSavedContentHash = result.data.contentHash

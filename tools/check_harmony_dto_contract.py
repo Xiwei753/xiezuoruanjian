@@ -110,6 +110,9 @@ INTERFACE_MAP: dict[str, tuple[str, str]] = {
     "EditorDtos.ets:EditorContentDelta": "EditorContentDeltaDto",
     "EditorDtos.ets:EditorEditResult": "EditorEditResultDto",
     "EditorDtos.ets:EditorSessionSnapshot": "EditorSessionSnapshotDto",
+    # 入参 DTO（ArkTS → Core）：登记进 INTERFACE_MAP 校验字段不漂移，
+    # 但没有 decoder —— Core 不回传它，所以不登记进 DECODER_MAP。
+    "EditorDtos.ets:EditorChangeStatsInput": "EditorChangeStatsInputDto",
 }
 
 # CoreWireDecoders 里的 decoder 函数 -> Core Rust DTO

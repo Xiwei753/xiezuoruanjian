@@ -1,4 +1,4 @@
-import { EditorTransactionCause } from './dto/EditorDtos'
+import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
@@ -87,6 +87,9 @@ export interface IWriterCoreBridge {
   getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>>
   // Issue #829：实时写作速度（最近 windowSeconds 秒），状态栏左段「字/分」走这里。
   getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>>
+  // Issue #829 评论5：按编辑事务上报写作统计。透传 cause + contentDelta，
+  // source 分类由 Core 决定，端侧不要自己拼 source 字符串。
+  recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
   calculateWordCount(text: string): Promise<number>
   processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
     chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>

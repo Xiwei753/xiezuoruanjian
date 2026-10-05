@@ -1,5 +1,5 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
-import { EditorTransactionCause } from './dto/EditorDtos'
+import { EditorTransactionCause, EditorChangeStatsInput } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
 import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
@@ -347,6 +347,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>> {
     return this.statsBridge.getCurrentWritingSpeed(windowSeconds)
+  }
+
+  async recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
+    return this.statsBridge.recordEditorChangeStats(input)
   }
 
   async calculateWordCount(text: string): Promise<number> {
