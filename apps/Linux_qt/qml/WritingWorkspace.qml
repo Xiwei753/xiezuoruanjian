@@ -235,7 +235,11 @@ Rectangle {
     onLeftPaneCollapsedChanged: refreshWorkbenchPlan()
     onDrawerToolChanged: refreshWorkbenchPlan()
     onWideWorkbenchChanged: refreshWorkbenchPlan()
-    Component.onCompleted: refreshWorkbenchPlan()
+    // Issue #828：根对象上只能有一个 Component.onCompleted。
+    // #825 新增的启动期 refreshWorkbenchPlan() 与下面原有的启动初始化块
+    // 曾写成两个并列 handler，Qt 报 Property value set multiple times，
+    // WritingWorkspace 类型随之不可用，main.qml 加载失败直接退出。
+    // 现在只保留下面那一个，refreshWorkbenchPlan() 合并进去当第一句。
 
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
@@ -382,6 +386,8 @@ Rectangle {
 
     onTreeChanged: populateTreeModel()
     Component.onCompleted: {
+        // Issue #828：启动期先算一次宽屏工作台布局，否则首帧会用上一次的 plan。
+        refreshWorkbenchPlan();
         populateTreeModel();
 
         var sel = (root.appState && root.appState.selected)
