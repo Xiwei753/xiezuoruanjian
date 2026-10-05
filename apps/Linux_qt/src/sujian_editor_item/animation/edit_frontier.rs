@@ -348,6 +348,17 @@ pub(crate) struct EditFrontierState {
     pub(crate) conceal: FrontierLayer,
     /// Issue #826 评论 17：吐字侧的当前前沿（语义同 `conceal`）。
     pub(crate) reveal: FrontierLayer,
+    /// Issue #826 评论 20：**部分露出**的那一段字，当前由这一小段 overlay
+    /// 从「上一帧屏幕位置」补间到最新 canonical 位置。
+    ///
+    /// 只有当前视觉事实不再能用 scalar distance 表达时（几何或视觉顺序变了）
+    /// 才非空；普通尾部 append 走绝对距离快路径，这里始终为空。
+    pub(crate) reveal_carried: Vec<RevealCarriedPrefix>,
+    /// Issue #826 评论 20：**已经完整露出、且已经不需要动画**的 cluster。
+    ///
+    /// 前沿不再遮罩它们（canonical 自己画），也不再把它们算进
+    /// `pending_reveal_ranges` —— 位置真的变了就交给 Reflow 从旧位置补过去。
+    pub(crate) reveal_settled: Vec<(usize, usize)>,
     /// Issue #826 评论 15/17：当前**仍可见**的旧字 glyph。
     ///
     /// 已完全吞掉的 glyph 立刻从这里移除（连同它的 `conceal_sources` 行图），
@@ -497,6 +508,74 @@ impl FrontierLayer {
         inherited + (total - inherited) * ease_out_cubic(progress)
     }
 
+    /// 按视觉顺序遍历整条前沿路径的 segment（region 顺序 + region 内段序）。
+    fn segments_in_order(&self) -> impl Iterator<Item = &FrontierSegment> {
+        self.regions
+            .iter()
+            .flat_map(|region| region.path.segments.iter())
+    }
+
+    /// 前沿走到 `distance` 时边界落在哪个视觉位置：`(x, y, h)`。
+    fn point_at(&self, distance: f64) -> Option<(f64, f64, f64)> {
+        let mut rest = distance;
+        for segment in self.segments_in_order() {
+            if rest <= segment.visual_length + 1e-9 {
+                return Some((segment.boundary_after(rest), segment.y, segment.h));
+            }
+            rest -= segment.visual_length;
+        }
+        None
+    }
+
+    /// Issue #826 评论 20：前 `distance` 像素是不是**同一批字、同一块屏幕位置**。
+    ///
+    /// 这是「绝对距离能不能直接继承」的唯一判据。评论 18 把「按百分比 rescale」
+    /// 改成「保留绝对距离」只对 `旧 path = A，新 path = A + B 且 A 完全没变` 成立；
+    /// 只要新 path 的前半段换了字、换了行或换了顺序，同一个 `8.75` 就不再代表
+    /// 「上一帧真正已经露出的那一块字」。
+    ///
+    /// 判据是「边界在这几个距离上落在同一处」：采样点取**两条**路径在前
+    /// `distance` 内的全部 segment 边界加上 `distance` 本身，然后逐点比
+    /// `(x, y, h)`。
+    ///
+    /// 不能逐 segment 比 `x_from` / `x_to` —— `FrontierPath::build` 是**每个视觉行
+    /// 一段**，所以普通尾部 append 会把同一行从 `x 0..10` 变成 `x 0..20`，
+    /// `x_to` 不同但前半段几何其实完全没变。
+    ///
+    /// 只比几何，**不比 `line_id`** —— 同一视觉行在不同 snapshot 里的
+    /// `LineSnapshotId` 本来就不同。
+    pub(crate) fn shares_geometry_prefix(&self, other: &Self, distance: f64) -> bool {
+        if distance <= 1e-9 {
+            // 前沿还在起点：继承 0 与从 0 重起等价，走快路径即可。
+            return true;
+        }
+        let mut samples: Vec<f64> = vec![distance];
+        for layer in [self, other] {
+            let mut acc = 0.0;
+            for segment in layer.segments_in_order() {
+                acc += segment.visual_length;
+                if acc >= distance - 1e-9 {
+                    break;
+                }
+                if acc > 1e-9 {
+                    samples.push(acc);
+                }
+            }
+        }
+        samples.sort_by(|a, b| a.total_cmp(b));
+        samples.dedup_by(|a, b| (*a - *b).abs() <= 1e-9);
+        samples
+            .into_iter()
+            .all(|at| match (self.point_at(at), other.point_at(at)) {
+                // 任意一条 path 走不到这个距离 -> 新 path 比旧 path 还短，
+                // 继承距离没有意义。
+                (Some((ax, ay, ah)), Some((bx, by, bh))) => {
+                    (ax - bx).abs() <= 1e-9 && (ay - by).abs() <= 1e-9 && (ah - bh).abs() <= 1e-9
+                }
+                _ => false,
+            })
+    }
+
     /// 本 region 在本帧的位置。
     fn distance_at(&self, region: &FrontierRegion, progress: f64) -> f64 {
         (self.advanced(progress) - region.distance_start).clamp(0.0, region.path.total_length)
@@ -568,6 +647,76 @@ pub(crate) struct ConcealGlyphGeometry {
     pub dest_rect: SourceRect,
 }
 
+/// Issue #826 评论 20：一次 retarget 采下的「当前屏幕上已经看见的那一段字」。
+///
+/// 这是**唯一**带字符身份的 Reveal 视觉事实：`travelled = 8.75` 只说明沿路径走了
+/// 8.75px，一旦新 path 的顺序或几何变了，这 8.75px 就不再对应同一批字。
+#[derive(Clone, Debug, PartialEq)]
+struct RevealVisibleSample {
+    /// 字符身份（当时的 target 坐标系）。
+    range: (usize, usize),
+    /// 这一帧它在屏幕上的矩形（文档坐标）。
+    rect: SourceRect,
+    /// 这一帧已经露出的宽度（`0..= rect.w`）。
+    visible_width: f64,
+}
+
+/// Issue #826 评论 20：已可见前缀的一次性补间交接。
+///
+/// 吐字 retarget 时，「上一帧真正看得见的那几个像素」必须一路拥有到最新
+/// canonical 位置：canonical layout 更新（换行、reflow、新的 patch 插到前面）
+/// 会把这段字挪走，但**已经看见的像素不能瞬移**。
+///
+/// 这**不是**历史动画单元：
+/// - 不带自己的 `started_at`，用与前沿同一个时钟；
+/// - 不排队，每次 retarget 从当前视觉事实整体重建；
+/// - 每个条目对应前沿 path 上的**一个边界 cluster**（每条 region 最多一个），
+///   所以条目数 ∝ 不相交 patch 数，不随按键次数增长。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RevealCarriedPrefix {
+    /// 字符身份（最新 target 坐标系）。
+    pub(crate) range: (usize, usize),
+    /// 上一帧它在屏幕上的矩形 —— 补间起点。
+    pub(crate) from_rect: SourceRect,
+    /// 最新 target 里同一段字的新矩形 —— 补间终点。
+    pub(crate) to_rect: SourceRect,
+    /// 上一帧已经露出的宽度。补间期间按同一进度增长到 `to_rect.w`。
+    pub(crate) visible_width: f64,
+    /// 贴图来源：最新 target 的行纹理。
+    ///
+    /// 吐字画的就是 canonical 新字，所以用新行纹理在旧位置补间是正确的
+    /// —— `ReflowSpan` 一直是这么做的（`snapshot_id`/`source_rect` 取新行）。
+    pub(crate) snapshot_id: LineSnapshotId,
+    /// 上面那张行纹理里的源矩形（覆盖整个 cluster）。
+    pub(crate) source_rect: SourceRect,
+}
+
+/// 一个 carry 条目在某一帧的实际画面。
+#[derive(Clone, Debug, PartialEq)]
+struct RevealCarriedFrame {
+    rect: SourceRect,
+    visible_width: f64,
+}
+
+impl RevealCarriedPrefix {
+    /// 按前沿的同一个 progress 采样：位置与可见宽度一起补间。
+    fn sample(&self, progress: f64) -> RevealCarriedFrame {
+        let t = ease_out_cubic(progress);
+        let lerp = |from: f64, to: f64| from + (to - from) * t;
+        let rect = SourceRect {
+            x: lerp(self.from_rect.x, self.to_rect.x),
+            y: lerp(self.from_rect.y, self.to_rect.y),
+            w: lerp(self.from_rect.w, self.to_rect.w),
+            h: lerp(self.from_rect.h, self.to_rect.h),
+        };
+        let visible_width = lerp(self.visible_width, self.to_rect.w).clamp(0.0, rect.w);
+        RevealCarriedFrame {
+            rect,
+            visible_width,
+        }
+    }
+}
+
 impl EditFrontierState {
     /// 本轮吞字的全部旧文字范围（burst base 坐标系）。
     ///
@@ -637,16 +786,31 @@ impl EditFrontierState {
                     continue;
                 };
                 for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
+                    let range = (
+                        cluster.byte_start.max(region.range.0),
+                        cluster.byte_end.min(region.range.1),
+                    );
+                    // Issue #826 评论 20：`reveal_settled` 里的字已经完整露出，
+                    // 对本次编辑是 unchanged text，必须放行给 Reflow。
+                    if self
+                        .reveal_settled
+                        .iter()
+                        .any(|&settled| overlaps(range, settled))
+                    {
+                        continue;
+                    }
                     let glyph = line.source_rect_to_document_rect(&cluster.source_rect);
                     // 只有整个 glyph 完全越过**它自己那一行**的 boundary 才算露出。
                     if glyph.x + glyph.w > boundary + 1e-9 {
-                        pending.push((
-                            cluster.byte_start.max(region.range.0),
-                            cluster.byte_end.min(region.range.1),
-                        ));
+                        pending.push(range);
                     }
                 }
             }
+        }
+        // Issue #826 评论 20：被 carry 接管的那一段字仍归 Reveal —— Reflow 绝不能
+        // 同时搬它，否则 carry overlay 与 Reflow 会各画一份。
+        for carried in &self.reveal_carried {
+            pending.push(carried.range);
         }
         normalize_ranges(pending)
     }
@@ -731,6 +895,8 @@ impl EditFrontierState {
             target_snapshot,
             conceal: FrontierLayer::default(),
             reveal,
+            reveal_carried: Vec::new(),
+            reveal_settled: Vec::new(),
             conceal_glyphs: Vec::new(),
             conceal_sources: Vec::new(),
             conceal_direction: ConcealDirection::Forward,
@@ -773,6 +939,8 @@ impl EditFrontierState {
             target_snapshot,
             conceal,
             reveal: FrontierLayer::default(),
+            reveal_carried: Vec::new(),
+            reveal_settled: Vec::new(),
             conceal_glyphs,
             conceal_sources,
             conceal_direction: direction,
@@ -814,6 +982,8 @@ impl EditFrontierState {
             target_snapshot,
             conceal,
             reveal,
+            reveal_carried: Vec::new(),
+            reveal_settled: Vec::new(),
             conceal_glyphs,
             conceal_sources,
             conceal_direction: direction,
@@ -923,6 +1093,157 @@ impl EditFrontierState {
         out
     }
 
+    /// Issue #826 评论 20：这段字已经不由前沿的遮罩 / scalar distance 负责了。
+    ///
+    /// - `reveal_settled`：已经完整露出且不需要动画 —— canonical 自己画；
+    /// - `reveal_carried`：正在用 overlay 从旧屏幕位置补间过来 —— canonical 在
+    ///   目标位置必须让位，否则要么双影要么整块消失。
+    fn reveal_mask_exempt(&self, range: (usize, usize)) -> bool {
+        self.reveal_settled
+            .iter()
+            .chain(self.reveal_carried.iter().map(|carried| &carried.range))
+            .any(|&exempt| overlaps(range, exempt))
+    }
+
+    /// Issue #826 评论 20：采「这一帧屏幕上已经看得见的吐字内容」。
+    ///
+    /// 这是 retarget 时唯一带字符身份的事实。`travelled = 8.75` 只说明沿路径走了
+    /// 8.75px；新 path 一旦换行或换顺序，这 8.75px 对应的是别的字。
+    fn sample_visible_reveal(&self, progress: f64) -> Vec<RevealVisibleSample> {
+        let mut out: Vec<RevealVisibleSample> = Vec::new();
+        for region in &self.reveal.regions {
+            let distance = self.reveal.distance_at(region, progress);
+            if distance >= region.path.total_length - 1e-9 {
+                // 这一条 region 已经全部露完，屏幕上没有它的像素了。
+                continue;
+            }
+            let bounds = region.path.reveal_bounds(distance);
+            for line in self
+                .target_snapshot
+                .lines_in_byte_range(region.range.0, region.range.1)
+            {
+                let Some(seg_index) = region.path.segment_index_for_line(line.id) else {
+                    continue;
+                };
+                let Some(&(boundary, _right)) = bounds.get(seg_index) else {
+                    continue;
+                };
+                for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
+                    let rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                    let visible = (boundary - rect.x).clamp(0.0, rect.w);
+                    if visible <= 1e-9 {
+                        continue;
+                    }
+                    out.push(RevealVisibleSample {
+                        range: (
+                            cluster.byte_start.max(region.range.0),
+                            cluster.byte_end.min(region.range.1),
+                        ),
+                        rect,
+                        visible_width: visible,
+                    });
+                }
+            }
+        }
+        // 上一笔留下的 carry 也在屏上，而且它是像素真相：同一段字如果也落在
+        // path 采样结果里（例如它还在某个 region 的 range 内），必须让 carry
+        // 覆盖掉 —— path 边界算出来的可见宽度对被 carry 接管的字没有意义。
+        for carried in &self.reveal_carried {
+            let sample = carried.sample(progress);
+            out.retain(|item| item.range != carried.range);
+            out.push(RevealVisibleSample {
+                range: carried.range,
+                rect: sample.rect,
+                visible_width: sample.visible_width,
+            });
+        }
+        out
+    }
+
+    /// Issue #826 评论 20：连续吐字 retarget 的唯一入口。
+    ///
+    /// 分两类：
+    /// - **A 几何没变、仍是 path 前缀**（普通尾部 append）—— 继续用绝对距离
+    ///   快路径，实现与观感都不变；
+    /// - **B 几何 / 视觉顺序变了** —— scalar distance 不再能表达「谁已经露出」，
+    ///   改为从 `sample_visible_reveal` 采到的当前视觉事实重建：已完整露出的退出
+    ///   前沿（交给 canonical / Reflow），已部分露出的那一小段用 overlay 从上一帧
+    ///   屏幕位置补间到最新 canonical 位置。
+    ///
+    /// 两种情况都保持「单前沿 + 一个时钟」：carry 条目数 ∝ 不相交 patch 数
+    /// （每条 region 最多一个边界 cluster），不随按键次数增长。
+    fn retarget_reveal(
+        &mut self,
+        target_snapshot: &EditorLayoutSnapshot,
+        merged: Vec<(usize, usize)>,
+        prev_target_to_new: &OffsetMap,
+        now: Instant,
+    ) {
+        let progress = self.sample(now).progress;
+        let inherited = self.reveal.inherited(progress);
+        let probe = build_reveal_layer(target_snapshot, &merged);
+        let geometry_stable = self.reveal_carried.is_empty()
+            && self.reveal_settled.is_empty()
+            && self.reveal.shares_geometry_prefix(&probe, inherited);
+        if geometry_stable {
+            // A：path 只是被延长，前半段的字和位置都没变 —— 直接继承绝对距离。
+            // 前沿仍在 `inherited` 处：上一笔还差的那点没露完，新输入的字仍然全藏。
+            let total = probe.total_length();
+            self.reveal = probe;
+            self.reveal.travelled = inherit_distance(inherited, total);
+            self.reveal_carried.clear();
+            self.reveal_settled.clear();
+            return;
+        }
+
+        // B：先把身份映到最新 target，再逐段决定「谁退出前沿 / 谁继续补间」。
+        let visible = self.sample_visible_reveal(progress);
+        let mut carried: Vec<RevealCarriedPrefix> = Vec::new();
+        let mut settled: Vec<(usize, usize)> = Vec::new();
+        for item in visible {
+            let item_rect = item.rect.clone();
+            let Some(range) = prev_target_to_new.map_old_range_to_new(item.range.0, item.range.1)
+            else {
+                // 这段字在本次事务里已经被删掉 —— 屏幕上不该再留着它的像素。
+                continue;
+            };
+            let Some((snapshot_id, dest_rect, source_rect)) =
+                find_cluster_geometry(target_snapshot, range)
+            else {
+                continue;
+            };
+            if same_rect(item_rect.clone(), dest_rect.clone())
+                && item.visible_width >= dest_rect.w - 1e-9
+            {
+                // 已经完整露出、而且没挪位置：canonical 自己画就对了，前沿不再管它。
+                // 位置真的变了的那部分（`!same_rect`）也走这里 —— Reflow 会用
+                // `request.base_snapshot` 里的旧矩形把它从旧位置补过去，正是
+                // 评论 20 要求的「已完整露出的 cluster 释放给 Reflow」。
+                settled.push(range);
+                continue;
+            }
+            // 其余（部分露出，或已露出但换了位置）都必须由 carry 接管：
+            // 「已经看见的像素必须有从旧位置到新位置的所有权」。
+            // 注意部分露出但几何没动（反例 2）也要走 carry：慢路径下
+            // `travelled` 从 0 起，若不接管，前沿会把这段字整块吞掉。
+            carried.push(RevealCarriedPrefix {
+                range,
+                from_rect: item_rect,
+                to_rect: dest_rect,
+                visible_width: item.visible_width,
+                snapshot_id,
+                source_rect,
+            });
+        }
+        settled.sort_unstable();
+        self.reveal = probe;
+        // 慢路径下前沿的职责只剩「把还没露出的新字从头打开」—— 已露出的部分
+        // 由 `reveal_settled` / `reveal_carried` 各自拥有，所以时钟必须从 0 起。
+        self.reveal.travelled = 0.0;
+        self.reveal_carried = carried;
+        self.reveal_settled = settled;
+    }
+
     /// 4. 在最新 target 上重建 path。
     pub(crate) fn extend_insert(
         &mut self,
@@ -935,16 +1256,10 @@ impl EditFrontierState {
     ) {
         let carried = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
         let merged = normalize_ranges(merge_all(carried, inserted_ranges));
-        let reveal = build_reveal_layer(&target_snapshot, &merged);
-        // 继承**本帧已经推进到的位置**（而不是上一次 extend 存下的旧值），
-        // 再按新路径总长等比缩放，保持连续推进不倒退。
-        let inherited = self.reveal.inherited(self.sample(now).progress);
-        let travelled = inherit_distance(inherited, reveal.total_length());
+        self.retarget_reveal(&target_snapshot, merged, prev_target_to_new, now);
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
-        self.reveal = reveal;
-        self.reveal.travelled = travelled;
         self.started_at = now;
     }
 
@@ -1037,11 +1352,9 @@ impl EditFrontierState {
 
         let carried_new = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
         let merged_new = normalize_ranges(merge_all(carried_new, inserted_ranges));
-        let reveal = build_reveal_layer(&target_snapshot, &merged_new);
-        let reveal_travelled = inherit_distance(
-            self.reveal.inherited(self.sample(now).progress),
-            reveal.total_length(),
-        );
+        // Issue #826 评论 20：吐字侧同样必须分「几何没变」与「几何/顺序变了」，
+        // 不能一律继承绝对距离。
+        self.retarget_reveal(&target_snapshot, merged_new, prev_target_to_new, now);
 
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
@@ -1051,12 +1364,65 @@ impl EditFrontierState {
         // Issue #826 评论 19 阻塞 1：吞字侧和 `extend_delete` 同理，prune 之后
         // distance 原点已经重新定义成「当前这一帧的屏幕状态」，必须从 0 起。
         self.conceal.travelled = 0.0;
-        self.reveal = reveal;
-        // 吐字侧相反：Reveal 没有裁掉旧几何，延长 path 可以继承绝对距离。
-        self.reveal.travelled = reveal_travelled;
         self.conceal_glyphs = glyphs;
         self.conceal_sources = sources;
         self.started_at = now;
+    }
+
+    /// Issue #826 评论 20：本帧要额外画的「已可见前缀」glyph。
+    ///
+    /// 与吞字的 `old_overlay_glyphs` 同一类东西，但只包含**吐字**那一侧
+    /// 「已经看见的那几个像素」，且不携带历史 —— 每次 retarget 整体重建。
+    pub(crate) fn reveal_carried_glyphs(&self, sample: &EditFrontierSample) -> Vec<FrontierGlyph> {
+        if self.reveal_carried.is_empty() || !sample.masks_new_text() {
+            return Vec::new();
+        }
+        let mut glyphs = Vec::new();
+        for carried in &self.reveal_carried {
+            let frame = carried.sample(sample.progress);
+            if frame.visible_width <= 1e-9 || frame.rect.h <= 0.0 {
+                continue;
+            }
+            // 源矩形按「可见宽度占整字宽的比例」裁右端，dest 则裁在当前屏幕上。
+            let scale = if frame.rect.w > 0.0 {
+                carried.source_rect.w / frame.rect.w
+            } else {
+                0.0
+            };
+            glyphs.push(FrontierGlyph {
+                snapshot_id: carried.snapshot_id,
+                source_rect: SourceRect {
+                    x: carried.source_rect.x,
+                    y: carried.source_rect.y,
+                    w: frame.visible_width * scale,
+                    h: carried.source_rect.h,
+                },
+                dest_rect: SourceRect {
+                    x: frame.rect.x,
+                    y: frame.rect.y,
+                    w: frame.visible_width,
+                    h: frame.rect.h,
+                },
+            });
+        }
+        glyphs
+    }
+
+    /// Issue #826 评论 20：carry 段落在 canonical 正文里要挖掉的目标矩形。
+    ///
+    /// carry 用的是**最新 target 的行纹理**，而 canonical 正文正在用同一张纹理
+    /// 画它，所以静态层必须在这块让位，否则同一段字画两遍。
+    pub(crate) fn reveal_carried_target_rects(
+        &self,
+        sample: &EditFrontierSample,
+    ) -> Vec<(SourceRect, LineSnapshotId)> {
+        if self.reveal_carried.is_empty() || !sample.masks_new_text() {
+            return Vec::new();
+        }
+        self.reveal_carried
+            .iter()
+            .map(|carried| (carried.to_rect.clone(), carried.snapshot_id))
+            .collect()
     }
 
     /// 采样当前帧前沿。
@@ -1113,6 +1479,16 @@ impl EditFrontierState {
                     continue;
                 };
                 for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
+                    let range = (
+                        cluster.byte_start.max(region.range.0),
+                        cluster.byte_end.min(region.range.1),
+                    );
+                    // Issue #826 评论 20：这段字已经不由前沿遮罩负责了 ——
+                    // `settled` 由 canonical 自己画，`carried` 由 overlay 从旧位置
+                    // 补间过来。继续挖遮罩会让它凭空消失。
+                    if self.reveal_mask_exempt(range) {
+                        continue;
+                    }
                     let glyph = line.source_rect_to_document_rect(&cluster.source_rect);
                     let glyph_right = glyph.x + glyph.w;
                     let rect = if glyph.x >= boundary {
@@ -1332,6 +1708,34 @@ fn build_conceal_layer(
         })
         .collect();
     FrontierLayer::from_parts(parts)
+}
+
+/// 两个文档矩形是否同一块屏幕像素（用于「这次编辑有没有挪动它」）。
+fn same_rect(a: SourceRect, b: SourceRect) -> bool {
+    (a.x - b.x).abs() <= 1e-9
+        && (a.y - b.y).abs() <= 1e-9
+        && (a.w - b.w).abs() <= 1e-9
+        && (a.h - b.h).abs() <= 1e-9
+}
+
+/// 在 snapshot 里按 byte 范围找到那一个 cluster 的
+/// `(line id, 文档坐标矩形, 贴图源矩形)`。
+///
+/// 找不到返回 `None`：调用方据此判定「这段字在新正文里已经不存在」。
+fn find_cluster_geometry(
+    snapshot: &EditorLayoutSnapshot,
+    range: (usize, usize),
+) -> Option<(LineSnapshotId, SourceRect, SourceRect)> {
+    for line in snapshot.lines_in_byte_range(range.0, range.1) {
+        for cluster in line.clusters_in_byte_range(range.0, range.1) {
+            return Some((
+                line.id,
+                line.source_rect_to_document_rect(&cluster.source_rect),
+                cluster.source_rect.clone(),
+            ));
+        }
+    }
+    None
 }
 
 /// Issue #826 评论 18 阻塞 1：把「上一帧前沿的绝对距离」继承到新路径上。

@@ -1165,3 +1165,234 @@ fn pending_reveal_ranges_use_each_visual_line_own_boundary() {
         "第 2 行第三个 cluster（4..5）必须仍 pending"
     );
 }
+
+/// Issue #826 评论 20 阻塞：上一笔还只吐了一半，下一键触发自动换行。
+///
+/// 绝对距离在这条路上根本没有意义：
+/// ```text
+/// 第一笔插 X，X 的 glyph 在 y=0、x=90..100
+/// 80ms 时 X 已露 8.75/10px，还剩 1.25px pending
+/// 马上输入 Y，Qt 重排把整个词换到下一行：X 变成 y=20、x=0..10
+/// ```
+/// 旧实现把 `travelled = 8.75` 塞进新 path，于是 X 那 8.75px 从
+/// `(y=0, x=90..98.75)` 跳到 `(y=20, x=0..8.75)`，没有任何过渡。
+///
+/// Reflow 也救不了：X 还没吐完 -> 仍在 `pending_reveal_ranges` -> 仍归 Reveal
+/// -> Reflow 明确排除 X，而 Reveal 又已经把 path 重建到新行。
+///
+/// 契约：第二笔刚进入的**同一帧**，X 那 8.75px 必须仍在 old screen position
+/// （由 carry overlay 从旧位置补间），刚输入的 Y 必须完整 hidden。
+#[test]
+fn partially_revealed_text_rewraps_without_jumping_to_new_line() {
+    let now = Instant::now();
+    // 第一笔：正文 `aX`，X 的文档矩形是 (90, 0, 10, 20)。
+    // `stub_for_tests` 用 cluster 的最小 x 当 `visual_x`，所以要用 x=0 的
+    // 正文 cluster 把 `visual_x` 钉在 0，X 的文档 x 才是 90。
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 90.0)],
+        )]),
+        String::from("aX"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
+
+    // 半程遮罩只盖住 boundary 右边那 1.25px，所以「已露出宽度」=
+    // 遮罩左边界 - glyph 左边界。
+    let half = instant_at(now, 80);
+    let mid = state.sample(half);
+    let mid_visible: f64 = state
+        .hidden_new_text_rects(&mid)
+        .iter()
+        .filter(|rect| (rect.x + rect.w - 100.0).abs() < 1e-9)
+        .map(|rect| rect.x - 90.0)
+        .sum();
+    assert!(
+        (8.75 - mid_visible).abs() < 0.2,
+        "半程时 X 应已露出约 8.75px（80ms / ease_out_cubic(0.5)），实际 {mid_visible}"
+    );
+
+    // 第二笔：输入 Y，Qt 重排把 X 挤到第二行 —— X 变成 (0, 20, 10, 20)，
+    // Y 是 (10, 20, 10, 20)。
+    let rewrapped = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            1,
+            20.0,
+            0,
+            vec![cluster(1, 2, 0.0), cluster(2, 3, 10.0)],
+        ),
+    ]);
+    let prev_target_to_new = OffsetMap::from_single_edit(2, (2, 2), 1);
+    state.extend_insert(
+        rewrapped,
+        String::from("aXY"),
+        vec![(2, 3)],
+        &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // 就在第二笔刚进入的**同一帧**采样。
+    let sample = state.sample(half);
+    let carried = state.reveal_carried_glyphs(&sample);
+    assert_eq!(
+        carried.len(),
+        1,
+        "换行后已可见的那一段必须由 carry overlay 接管，实际 carry 数 = {}",
+        carried.len()
+    );
+    let glyph = carried[0].dest_rect.clone();
+    assert!(
+        (glyph.x - 90.0).abs() < 1e-6 && (glyph.y - 0.0).abs() < 1e-6,
+        "X 已露出的那一段第一帧必须仍在 old screen position (90, 0)，实际 ({}, {})",
+        glyph.x,
+        glyph.y
+    );
+    assert!(
+        (glyph.w - 8.75).abs() < 0.2,
+        "carry 只画上一帧已经看见的宽度（约 8.75px），实际 {}",
+        glyph.w
+    );
+    assert!(
+        (glyph.x - 0.0).abs() > 1e-6 || (glyph.y - 20.0).abs() > 1e-6,
+        "绝不能第一帧就已经落在新的 (0, 20) 位置"
+    );
+
+    // canonical 那边必须给 carry 让位：X 的新位置被 clip 掉，由 overlay 画。
+    let target_rects = state.reveal_carried_target_rects(&sample);
+    assert_eq!(target_rects.len(), 1, "carry 必须登记 canonical 目标位置");
+    assert!(
+        (target_rects[0].0.x - 0.0).abs() < 1e-6 && (target_rects[0].0.y - 20.0).abs() < 1e-6,
+        "canonical 要让位的必须是 X 的新位置 (0, 20)，实际 {:?}",
+        target_rects[0].0
+    );
+
+    // 刚输入的 Y 第一帧必须完整 hidden。
+    let hidden = state.hidden_new_text_rects(&sample);
+    assert!(
+        hidden.iter().any(|rect| {
+            (rect.x - 10.0).abs() < 1e-9
+                && (rect.x + rect.w - 20.0).abs() < 1e-9
+                && (rect.y - 20.0).abs() < 1e-9
+        }),
+        "刚输入的 Y（x 10..20, y 20）必须完整 hidden，实际 hidden = {hidden:?}"
+    );
+    // carry 期间这段字仍归 Reveal：Reflow 不能同时搬它，否则两个动画抢同一块像素。
+    assert!(
+        state
+            .pending_reveal_ranges(sample.progress)
+            .iter()
+            .any(|&(s, e)| s <= 1 && 2 <= e),
+        "被 carry 接管的 X 仍必须算 pending（Reflow 不能碰）"
+    );
+}
+
+/// Issue #826 评论 20 阻塞：不换行、只是新 patch 插在旧前沿之前。
+///
+/// 这条反例直接咬住根因 —— `travelled = 8.75` 没有任何字符身份：
+/// ```text
+/// 旧 reveal path 只有 X = x 100..110，80ms 时屏幕上真正露出 X 的前 8.75px
+/// 同一 burst 又来一条新 patch Y，位置在 X 之前（new target：Y = 0..10, X = 100..110）
+/// 视觉顺序变成 Y(10px) -> X(10px)，total = 20
+/// ```
+/// 旧实现继承 `travelled = 8.75`，于是第二笔第一帧是「Y 露 8.75px、X 完全隐藏」
+/// —— 上一帧已经看见的 X 突然消失，而刚插入的 Y 一进来就露了 87.5%。
+///
+/// 契约：第一帧 X 那 8.75px 仍在，Y 完整 hidden。
+#[test]
+fn inserting_patch_before_existing_reveal_preserves_visible_owner() {
+    let now = Instant::now();
+    // 第一笔：正文 `aX`，X 的文档矩形是 (100, 0, 10, 20)。
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 100.0)],
+        )]),
+        String::from("aX"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
+
+    let half = instant_at(now, 80);
+    let mid = state.sample(half);
+    let mid_visible: f64 = state
+        .hidden_new_text_rects(&mid)
+        .iter()
+        .filter(|rect| (rect.x + rect.w - 110.0).abs() < 1e-9)
+        .map(|rect| rect.x - 100.0)
+        .sum();
+    assert!(
+        (8.75 - mid_visible).abs() < 0.2,
+        "半程时 X 应已露出约 8.75px，实际 {mid_visible}"
+    );
+
+    // 第二笔：新 patch Y 插在 X **之前** —— Y = x 0..10，X 仍在 x 100..110。
+    let reordered = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 0.0), cluster(2, 3, 100.0)],
+    )]);
+    // 在 byte 1 插入 Y -> 旧的 (1,2) 变成新的 (2,3)。
+    let prev_target_to_new = OffsetMap::from_single_edit(2, (1, 1), 1);
+    state.extend_insert(
+        reordered,
+        String::from("aYX"),
+        vec![(1, 2)],
+        &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    let sample = state.sample(half);
+    // 视觉顺序变了 -> 不能继承绝对距离。前沿时钟必须从 0 起。
+    assert_eq!(
+        state.reveal.travelled, 0.0,
+        "新 patch 插到旧前沿之前时，scalar distance 不再代表「谁已露出」，必须从 0 起"
+    );
+
+    // 上一帧已经看见的 X 那 8.75px 不能消失。
+    let carried = state.reveal_carried_glyphs(&sample);
+    assert_eq!(
+        carried.len(),
+        1,
+        "已可见的那一段 X 必须由 carry overlay 接管，实际 carry 数 = {}",
+        carried.len()
+    );
+    assert!(
+        (carried[0].dest_rect.x - 100.0).abs() < 1e-6,
+        "X 已露出的那一段必须仍在 x = 100，实际 {}",
+        carried[0].dest_rect.x
+    );
+    assert!(
+        (carried[0].dest_rect.w - 8.75).abs() < 0.2,
+        "carry 只画上一帧已经看见的宽度（约 8.75px），实际 {}",
+        carried[0].dest_rect.w
+    );
+
+    // 刚插入的 Y 不能凭空露出 8.75px —— 它第一帧必须完整 hidden。
+    let hidden = state.hidden_new_text_rects(&sample);
+    assert!(
+        hidden
+            .iter()
+            .any(|rect| { (rect.x - 0.0).abs() < 1e-9 && (rect.x + rect.w - 10.0).abs() < 1e-9 }),
+        "刚插入的 Y（x 0..10）必须完整 hidden，实际 hidden = {hidden:?}"
+    );
+    // X 已经被 carry 接管，前沿不能再遮罩它的 canonical 位置。
+    assert!(
+        !hidden.iter().any(|rect| (rect.x - 100.0).abs() < 1e-9),
+        "X 归 carry overlay 所有，前沿不得再遮罩它，实际 hidden = {hidden:?}"
+    );
+}

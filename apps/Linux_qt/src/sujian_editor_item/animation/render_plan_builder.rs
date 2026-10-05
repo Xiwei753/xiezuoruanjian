@@ -51,6 +51,13 @@ impl LinuxEditorAnimationCoordinator {
             .map(|sample| self.hidden_canonical_rects_for(sample))
             .unwrap_or_default();
         clip_rects.extend(self.reflow_target_clip_rects());
+        // Issue #826 评论 20：吐字 carry 的 canonical 目标位置同样要让位。
+        clip_rects.extend(
+            frontier_sample
+                .as_ref()
+                .map(|sample| self.reveal_carried_target_clip_rects(sample))
+                .unwrap_or_default(),
+        );
 
         let mut glyphs: Vec<TextAnimationGlyphInfo> = Vec::new();
 
@@ -60,6 +67,24 @@ impl LinuxEditorAnimationCoordinator {
             .map(|sample| self.old_overlay_glyphs_for(sample))
             .unwrap_or_default();
         for glyph in overlay_glyphs {
+            glyphs.push(TextAnimationGlyphInfo {
+                x: glyph.dest_rect.x,
+                y: glyph.dest_rect.y,
+                w: glyph.dest_rect.w,
+                h: glyph.dest_rect.h,
+                opacity: 1.0,
+                snapshot_id: glyph.snapshot_id,
+                source_rect: glyph.source_rect,
+            });
+        }
+
+        // Issue #826 评论 20：吐字「已可见前缀」——上一帧真正看见的那几个像素，
+        // 从旧屏幕位置补间到最新 canonical 位置。
+        let carried_glyphs = frontier_sample
+            .as_ref()
+            .map(|sample| self.reveal_carried_glyphs_for(sample))
+            .unwrap_or_default();
+        for glyph in carried_glyphs {
             glyphs.push(TextAnimationGlyphInfo {
                 x: glyph.dest_rect.x,
                 y: glyph.dest_rect.y,

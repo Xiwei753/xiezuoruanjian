@@ -694,6 +694,49 @@ impl LinuxEditorAnimationCoordinator {
             .collect()
     }
 
+    /// Issue #826 评论 20：吐字 carry 的 canonical 目标位置，静态层要让位。
+    ///
+    /// carry 用最新 target 的行纹理在**旧屏幕位置**画已可见前缀，canonical 在
+    /// **新位置**画同一个字 —— 两边都画就是重影，所以新位置必须挖掉。
+    ///
+    /// kind 用 `ReflowTarget` 而不是 `FrontierMask`：carry 真的需要那张纹理，
+    /// 纹理 miss 时应该恢复 canonical（字重新出现），而不是留一块空白。
+    pub(crate) fn reveal_carried_target_clip_rects(
+        &self,
+        sample: &EditFrontierSample,
+    ) -> Vec<AnimationClipRect> {
+        let Some(frontier) = self.active_edit_frontier.as_ref() else {
+            return Vec::new();
+        };
+        frontier
+            .reveal_carried_target_rects(sample)
+            .into_iter()
+            .map(|(rect, snapshot_id)| AnimationClipRect {
+                x: rect.x,
+                y: rect.y,
+                w: rect.w,
+                h: rect.h,
+                snapshot_id,
+                kind: StaticClipKind::ReflowTarget,
+            })
+            .collect()
+    }
+
+    /// Issue #826 评论 20：本帧要额外画的「已可见前缀」glyph。
+    pub(crate) fn reveal_carried_glyphs_for(
+        &self,
+        sample: &EditFrontierSample,
+    ) -> Vec<FrontierGlyph> {
+        let Some(frontier) = self.active_edit_frontier.as_ref() else {
+            return Vec::new();
+        };
+        frontier
+            .reveal_carried_glyphs(sample)
+            .into_iter()
+            .filter(FrontierGlyph::is_visible)
+            .collect()
+    }
+
     /// 当前活跃 Reflow 在**新文本**坐标系里涉及的 byte 范围。
     ///
     /// 纹理准备按这些范围决定哪些新行需要重新栅格化。
