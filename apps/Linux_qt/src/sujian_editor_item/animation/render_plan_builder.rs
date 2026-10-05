@@ -58,6 +58,8 @@ impl LinuxEditorAnimationCoordinator {
                 .map(|sample| self.reveal_carried_target_clip_rects(sample))
                 .unwrap_or_default(),
         );
+        // Issue #826 评论 24：mixed cluster 交接层的新侧目标位置同样要让位。
+        clip_rects.extend(self.shaping_transition_target_clip_rects());
 
         let mut glyphs: Vec<TextAnimationGlyphInfo> = Vec::new();
 
@@ -94,6 +96,25 @@ impl LinuxEditorAnimationCoordinator {
                 snapshot_id: glyph.snapshot_id,
                 source_rect: glyph.source_rect,
             });
+        }
+
+        // Issue #826 评论 24：不可拆 shaping cluster 的 old/new 原子交接。
+        //
+        // 两侧都整块画、带各自的 opacity：旧 cluster 淡出、新 cluster 淡入。
+        // 绝不能按 byte 比例裁 source_rect —— 混合 cluster 的新旧 source_rect
+        // 本身就是两套不同形状的资源。
+        for frame in self.shaping_transition_glyphs(frame_now) {
+            for side in [frame.old, frame.new].into_iter().flatten() {
+                glyphs.push(TextAnimationGlyphInfo {
+                    x: side.rect.x,
+                    y: side.rect.y,
+                    w: side.rect.w,
+                    h: side.rect.h,
+                    opacity: side.opacity,
+                    snapshot_id: side.snapshot_id,
+                    source_rect: side.source_rect,
+                });
+            }
         }
 
         // Reflow 层：没改的字从旧位置插值到新位置。

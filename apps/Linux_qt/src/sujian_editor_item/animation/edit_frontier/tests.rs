@@ -107,6 +107,7 @@ fn frontier_sample_progresses_from_zero_to_one() {
         String::from("a"),
         vec![(0, 1)],
         OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         now,
         100,
     );
@@ -130,6 +131,7 @@ fn frontier_is_finished_only_after_full_duration() {
         String::from("a"),
         vec![(0, 1)],
         OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         now,
         160,
     );
@@ -155,6 +157,7 @@ fn delete_overlay_is_visible_on_the_first_frame() {
         OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
         now,
         160,
     );
@@ -182,6 +185,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         String::from("a"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         now,
         160,
     );
@@ -196,6 +200,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         vec![(1, 2)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
     assert_eq!(state.new_ranges(), vec![(1, 2)]);
@@ -210,6 +215,7 @@ fn extend_insert_accumulates_new_range_across_revisions() {
         vec![(2, 3)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
     // Issue #826 评论 9 阻塞 3：相邻但来源不同的 track **不合并** ——
@@ -260,6 +266,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
         now,
         160,
     );
@@ -287,6 +294,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
         instant_at(now, 80),
     );
     assert_eq!(
@@ -327,6 +335,8 @@ fn extend_replace_accumulates_both_sides() {
         OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
+        Vec::new(),
         now,
         160,
     );
@@ -355,6 +365,8 @@ fn extend_replace_accumulates_both_sides() {
         &prev_target_to_new,
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
+        Vec::new(),
         half,
     );
     // 旧侧：本次删 E（"AXBCDEF" 的 [5,6)）映回 base 是 [4,5)，与 [3,4) 相邻
@@ -392,6 +404,7 @@ fn disjoint_patches_stay_separate_ranges_and_paths() {
         String::from("x"),
         vec![(0, 1), (100, 101)],
         OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         now,
         160,
     );
@@ -471,6 +484,7 @@ fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
         String::from("a\nb"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -559,6 +573,7 @@ fn newline_only_insert_produces_no_frontier_segment() {
         String::from("a\nb"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -611,6 +626,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
         now,
         160,
     );
@@ -640,6 +656,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
         half,
     );
     // Issue #826 评论 9 阻塞 3：新增的 C 与已吞掉的 DEF **不相邻**（DEF 已删，
@@ -692,6 +709,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
         now,
         160,
     );
@@ -718,6 +736,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
         half,
     );
     // 第二笔的 current old layout 用**新的 line id**：它代表「第一笔已经删掉第 1 行」
@@ -745,6 +764,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
         half,
     );
     // 相邻（[0,3) 与 [3,6)）→ 合并成一段（评论 17）。
@@ -777,6 +797,7 @@ fn continuous_insert_does_not_accumulate_per_keystroke_animation_units() {
         text.clone(),
         Vec::new(),
         OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         now,
         160,
     );
@@ -791,6 +812,7 @@ fn continuous_insert_does_not_accumulate_per_keystroke_animation_units() {
             vec![(prev.len(), prev.len() + 1)],
             &offset_map,
             &OffsetMap::from_single_edit(0, (0, 0), 0),
+            Vec::new(),
             instant_at(now, (i as u64) * 2),
         );
         // 每一次都必须仍是「一个前沿 + 至多一个 region」。
@@ -840,6 +862,7 @@ fn adjacent_insert_ranges_merge_into_one_region() {
         // 两条相邻但不相交的 inserted range。
         vec![(0, 1), (1, 2)],
         OffsetMap::from_single_edit(0, (0, 0), 2),
+        Vec::new(),
         now,
         160,
     );
@@ -885,6 +908,8 @@ fn replace_cannot_extend_when_deleted_text_was_created_inside_current_burst() {
         first_map,
         &[],
         ConcealDirection::Forward,
+        Vec::new(),
+        Vec::new(),
         now,
         160,
     );
@@ -951,6 +976,7 @@ fn extending_reveal_target_does_not_advance_frontier_into_new_text() {
         String::from("a"),
         vec![(0, 1)],
         OffsetMap::from_single_edit(0, (0, 0), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -981,6 +1007,7 @@ fn extending_reveal_target_does_not_advance_frontier_into_new_text() {
         vec![(1, 2)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1037,6 +1064,7 @@ fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
         OffsetMap::from_single_edit(2, (1, 2), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
         now,
         160,
     );
@@ -1073,6 +1101,7 @@ fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
+        Vec::new(),
         half,
     );
 
@@ -1141,6 +1170,7 @@ fn pending_reveal_ranges_use_each_visual_line_own_boundary() {
         String::from("a\nb"),
         vec![(0, 5)],
         OffsetMap::from_single_edit(0, (0, 0), 5),
+        Vec::new(),
         now,
         160,
     );
@@ -1199,6 +1229,7 @@ fn partially_revealed_text_rewraps_without_jumping_to_new_line() {
         String::from("aX"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -1236,6 +1267,7 @@ fn partially_revealed_text_rewraps_without_jumping_to_new_line() {
         vec![(2, 3)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1321,6 +1353,7 @@ fn inserting_patch_before_existing_reveal_preserves_visible_owner() {
         String::from("aX"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -1353,6 +1386,7 @@ fn inserting_patch_before_existing_reveal_preserves_visible_owner() {
         vec![(1, 2)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1423,6 +1457,7 @@ fn settled_reveal_does_not_get_masked_again_on_immediate_third_retarget() {
         String::from("aXY"),
         vec![(1, 2), (2, 3)],
         OffsetMap::from_single_edit(1, (1, 1), 2),
+        Vec::new(),
         now,
         160,
     );
@@ -1444,6 +1479,7 @@ fn settled_reveal_does_not_get_masked_again_on_immediate_third_retarget() {
         vec![(3, 4)],
         &OffsetMap::from_single_edit(3, (3, 3), 1),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1485,6 +1521,7 @@ fn settled_reveal_does_not_get_masked_again_on_immediate_third_retarget() {
         vec![(4, 5)],
         &OffsetMap::from_single_edit(4, (4, 4), 1),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1539,6 +1576,7 @@ fn settled_and_carried_ranges_do_not_consume_scalar_reveal_distance() {
         String::from("aXY"),
         vec![(1, 2), (2, 3)],
         OffsetMap::from_single_edit(1, (1, 1), 2),
+        Vec::new(),
         now,
         160,
     );
@@ -1559,6 +1597,7 @@ fn settled_and_carried_ranges_do_not_consume_scalar_reveal_distance() {
         vec![(3, 4)],
         &OffsetMap::from_single_edit(3, (3, 3), 1),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1610,6 +1649,7 @@ fn fully_visible_moved_clusters_are_released_to_reflow_not_carried() {
         String::from("aWXYZ"),
         vec![(1, 2), (2, 3), (3, 4), (4, 5)],
         OffsetMap::from_single_edit(1, (1, 1), 4),
+        Vec::new(),
         now,
         160,
     );
@@ -1638,6 +1678,7 @@ fn fully_visible_moved_clusters_are_released_to_reflow_not_carried() {
         vec![(5, 6)],
         &OffsetMap::from_single_edit(5, (5, 5), 1),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1688,6 +1729,7 @@ fn active_reveal_carry_keeps_burst_alive_when_scalar_path_is_empty() {
         String::from("aX"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -1713,6 +1755,7 @@ fn active_reveal_carry_keeps_burst_alive_when_scalar_path_is_empty() {
         Vec::new(),
         &OffsetMap::build("aX", "aX"),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1780,6 +1823,7 @@ fn fully_completed_scalar_region_stays_visible_when_later_region_is_still_pendin
         String::from("aAZB"),
         vec![(1, 2), (3, 4)],
         OffsetMap::from_single_edit(1, (1, 1), 3),
+        Vec::new(),
         now,
         160,
     );
@@ -1819,6 +1863,7 @@ fn fully_completed_scalar_region_stays_visible_when_later_region_is_still_pendin
         vec![(4, 5)],
         &OffsetMap::from_single_edit(4, (4, 4), 1),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 
@@ -1907,6 +1952,7 @@ fn can_extend_identity_checks_carried_reveal_ranges_when_scalar_path_is_empty() 
         String::from("aX"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -1921,6 +1967,7 @@ fn can_extend_identity_checks_carried_reveal_ranges_when_scalar_path_is_empty() 
         Vec::new(),
         &OffsetMap::build("aX", "aX"),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
     assert!(
@@ -1999,6 +2046,7 @@ fn same_geometry_prefix_with_different_character_owner_must_use_slow_retarget() 
         String::from("aX"),
         vec![(1, 2)],
         OffsetMap::from_single_edit(1, (1, 1), 1),
+        Vec::new(),
         now,
         160,
     );
@@ -2034,6 +2082,7 @@ fn same_geometry_prefix_with_different_character_owner_must_use_slow_retarget() 
         vec![(1, 2)],
         &prev_target_to_new,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
+        Vec::new(),
         half,
     );
 

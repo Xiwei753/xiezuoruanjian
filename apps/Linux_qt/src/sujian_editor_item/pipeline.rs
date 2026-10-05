@@ -1203,7 +1203,42 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 4. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
+        // 4. Issue #826 评论 24：不可拆 shaping cluster 交接层的行纹理。
+        //
+        // 旧侧行图由 `ShapingTransitionState` 自己带过来（静态层不会画旧正文），
+        // 新侧行图在最新 target 上 —— 与 Reflow / carry 同一个来源。
+        //
+        // 两张都缺都不行：新侧缺 -> 新 cluster 不淡入，静态层又被 clip 挖掉 -> 空白；
+        // 旧侧缺 -> 旧 cluster 直接消失而不是淡出。
+        for source in self
+            .animation_coordinator
+            .active_shaping_transition_source_lines()
+        {
+            let Some(image) = source.image.as_ref() else {
+                continue;
+            };
+            if !self.texture_cache.contains_line(&source.snapshot_id) {
+                self.texture_cache
+                    .insert_line(source.snapshot_id, image.clone());
+            }
+        }
+        let shaping_ids = self
+            .animation_coordinator
+            .active_shaping_transition_snapshot_ids();
+        if !shaping_ids.is_empty() {
+            if let Some(target) = self
+                .animation_coordinator
+                .active_edit_frontier_target_snapshot()
+            {
+                for line in &target.line_snapshots {
+                    if shaping_ids.contains(&line.id) {
+                        insert_line_image(&mut self.texture_cache, line);
+                    }
+                }
+            }
+        }
+
+        // 5. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
         //
         // Issue #826 评论 21：carry 单列一类诊断（`reveal_carry_missing`），
         // 不和 Reflow 混成同一个事件名 —— 两者的 owner 完全不同（一个是 scalar
@@ -1223,15 +1258,30 @@ impl LinuxEditorPipeline {
             .copied()
             .filter(|id| !self.texture_cache.contains_line(id))
             .collect();
-        if missing_reflow.is_empty() && missing_overlay.is_empty() && missing_carry.is_empty() {
+        let missing_shaping: Vec<LineSnapshotId> = shaping_ids
+            .iter()
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .collect();
+        if missing_reflow.is_empty()
+            && missing_overlay.is_empty()
+            && missing_carry.is_empty()
+            && missing_shaping.is_empty()
+        {
             return;
         }
         record_missing_layer_texture("reflow", &missing_reflow, "editor.anim.frontier");
         record_missing_layer_texture("delete_overlay", &missing_overlay, "editor.anim.frontier");
         record_missing_layer_texture("reveal_carry", &missing_carry, "editor.anim.frontier");
+        // Issue #826 评论 24：交接层单列一类诊断，owner 与前三者都不同。
+        record_missing_layer_texture(
+            "shaping_transition",
+            &missing_shaping,
+            "editor.anim.frontier",
+        );
         super::editor_animation_debug_log(&format!(
-            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} (逐层容错，不收口)",
-            missing_reflow, missing_overlay, missing_carry
+            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} shaping_missing={:?} (逐层容错，不收口)",
+            missing_reflow, missing_overlay, missing_carry, missing_shaping
         ));
     }
 

@@ -38,7 +38,7 @@ use super::reflow_motion::ReflowCurrentGeometry;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::layout_snapshot::{
-    EditorLayoutSnapshot, LineSnapshotId, SourceRect,
+    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, SourceRect,
 };
 
 /// Issue #826: 本轮正文改动的前沿种类。
@@ -231,10 +231,16 @@ impl FrontierPath {
         }
     }
 
-    /// 从 snapshot 里 `range` 覆盖的 cluster 按行进方向构建路径。
+    /// 从 snapshot 里 `range` **完整覆盖**的 cluster 按行进方向构建路径。
     ///
     /// 每个视觉行产出一个 segment；该行没有 cluster（如换行符）时**不**产出
     /// segment——换行没有可见 glyph，就不该让前沿为它花掉行程。
+    ///
+    /// Issue #826 评论 24：这里只取 `clusters_contained_in_range`，**不是** overlap。
+    /// Qt shaping 的 cluster 可能覆盖多个字符（fi 连字、e + 组合音标、emoji ZWJ），
+    /// overlap 会把整块 fused cluster 拉进一个只覆盖它一部分的逻辑 range，于是
+    /// 前沿按 byte 比例裁出一块不存在的「半个 cluster」。只覆盖一部分的 cluster
+    /// 整块归 `shaping_transition`，前沿这里看不到它。
     pub(crate) fn build(
         snapshot: &EditorLayoutSnapshot,
         range: (usize, usize),
@@ -244,7 +250,7 @@ impl FrontierPath {
         for line in snapshot.lines_in_byte_range(range.0, range.1) {
             let mut left = f64::MAX;
             let mut right = f64::MIN;
-            for cluster in line.clusters_in_byte_range(range.0, range.1) {
+            for cluster in line.clusters_contained_in_range(range.0, range.1) {
                 let rect = line.source_rect_to_document_rect(&cluster.source_rect);
                 left = left.min(rect.x);
                 right = right.max(rect.x + rect.w);
@@ -365,6 +371,16 @@ pub(crate) struct EditFrontierState {
     /// 只有当前视觉事实不再能用 scalar distance 表达时（几何或视觉顺序变了）
     /// 才非空；普通尾部 append 走绝对距离快路径，这里始终为空。
     pub(crate) reveal_carried: Vec<RevealCarriedPrefix>,
+    /// Issue #826 评论 24：**新坐标系**里整块被 `shaping_transition` 占用的
+    /// shaping cluster 范围。
+    ///
+    /// 这些 cluster 前沿绝不能碰：最新 Qt shaping 已经把多个字符合成一块，
+    /// 逻辑改动只覆盖其中一部分。前沿若按 byte 比例去裁它，同一块视觉 cluster
+    /// 就会同时被 carry 和 scalar Reveal 控制。
+    pub(crate) shaping_new_owned: Vec<(usize, usize)>,
+    /// Issue #826 评论 24：**旧坐标系**里整块被 `shaping_transition` 占用的
+    /// shaping cluster 范围（吞字侧对称约束）。
+    pub(crate) shaping_old_owned: Vec<(usize, usize)>,
     /// Issue #826 评论 20：**已经完整露出、且已经不需要动画**的 cluster。
     ///
     /// 前沿不再遮罩它们（canonical 自己画），也不再把它们算进
@@ -446,7 +462,10 @@ impl FrontierRect {
 }
 
 /// ease-out-cubic：前沿起步快、收尾慢。
-fn ease_out_cubic(t: f64) -> f64 {
+///
+/// Issue #826 评论 24：`shaping_transition` 的 cluster 交接共用同一条缓动曲线，
+/// 保持「同一个 progress 空间」而不是各层各算一份。
+pub(crate) fn ease_out_cubic(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
 }
@@ -825,11 +844,11 @@ impl EditFrontierState {
                 let Some(&(boundary, _right)) = bounds.get(seg_index) else {
                     continue;
                 };
-                for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
-                    let range = (
-                        cluster.byte_start.max(region.range.0),
-                        cluster.byte_end.min(region.range.1),
-                    );
+                for cluster in line.clusters_contained_in_range(region.range.0, region.range.1) {
+                    // Issue #826 评论 24：只有被 region 完整覆盖的 cluster 才归
+                    // scalar 前沿。只覆盖一部分的 fused cluster 整块属于
+                    // `shaping_transition`，不能按 byte 比例在这里判定露出进度。
+                    let range = (cluster.byte_start, cluster.byte_end);
                     // Issue #826 评论 21：`settled` 已完全退出 `reveal.regions`
                     // （`subtract_ranges`），所以这里遍历到的都是还需要遮罩的字。
                     // `reveal_settled` 仍保留只是作为「已释放给 canonical / Reflow」
@@ -934,10 +953,16 @@ impl EditFrontierState {
         target_text: String,
         new_ranges: Vec<(usize, usize)>,
         base_to_target_map: OffsetMap,
+        // Issue #826 评论 24：整块归 `shaping_transition` 的新坐标 cluster。
+        shaping_new_owned: Vec<(usize, usize)>,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
-        let reveal = build_reveal_layer(&target_snapshot, &normalize_ranges(new_ranges));
+        let reveal = build_reveal_layer(
+            &target_snapshot,
+            &normalize_ranges(new_ranges),
+            &shaping_new_owned,
+        );
         Self {
             kind: EditFrontierKind::Insert,
             // 纯吐字不需要旧正文 overlay，base_snapshot 与 target 相同。
@@ -947,6 +972,8 @@ impl EditFrontierState {
             reveal,
             reveal_carried: Vec::new(),
             reveal_settled: Vec::new(),
+            shaping_new_owned,
+            shaping_old_owned: Vec::new(),
             conceal_glyphs: Vec::new(),
             conceal_sources: Vec::new(),
             conceal_direction: ConcealDirection::Forward,
@@ -972,6 +999,8 @@ impl EditFrontierState {
         // 的 glyph 的屏幕几何。空 slice 就是普通 Delete。
         reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
+        // Issue #826 评论 24：整块归 `shaping_transition` 的旧坐标 cluster。
+        shaping_old_owned: Vec<(usize, usize)>,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
@@ -980,8 +1009,12 @@ impl EditFrontierState {
         // begin 时 burst base 就是 current old layout，owner 与 current 同坐标。
         let pairs: Vec<((usize, usize), (usize, usize))> =
             ranges.iter().map(|&range| (range, range)).collect();
-        let (conceal_glyphs, conceal_sources) =
-            collect_conceal_glyphs(&current_snapshot, &pairs, reflow_current);
+        let (conceal_glyphs, conceal_sources) = collect_conceal_glyphs(
+            &current_snapshot,
+            &pairs,
+            reflow_current,
+            &shaping_old_owned,
+        );
         let conceal = build_conceal_layer(direction, &conceal_glyphs);
         Self {
             kind: EditFrontierKind::Delete,
@@ -991,6 +1024,8 @@ impl EditFrontierState {
             reveal: FrontierLayer::default(),
             reveal_carried: Vec::new(),
             reveal_settled: Vec::new(),
+            shaping_new_owned: Vec::new(),
+            shaping_old_owned,
             conceal_glyphs,
             conceal_sources,
             conceal_direction: direction,
@@ -1014,6 +1049,10 @@ impl EditFrontierState {
         base_to_target_map: OffsetMap,
         reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
+        // Issue #826 评论 24：Replace 两侧各有一份「整块归 shaping_transition」的
+        // cluster 归属（旧坐标给吞字侧，新坐标给吐字侧）。
+        shaping_old_owned: Vec<(usize, usize)>,
+        shaping_new_owned: Vec<(usize, usize)>,
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
@@ -1022,10 +1061,18 @@ impl EditFrontierState {
         // begin 时 burst base 就是 current old layout，owner 与 current 同坐标。
         let pairs: Vec<((usize, usize), (usize, usize))> =
             ranges.iter().map(|&range| (range, range)).collect();
-        let (conceal_glyphs, conceal_sources) =
-            collect_conceal_glyphs(&current_snapshot, &pairs, reflow_current);
+        let (conceal_glyphs, conceal_sources) = collect_conceal_glyphs(
+            &current_snapshot,
+            &pairs,
+            reflow_current,
+            &shaping_old_owned,
+        );
         let conceal = build_conceal_layer(direction, &conceal_glyphs);
-        let reveal = build_reveal_layer(&target_snapshot, &normalize_ranges(new_ranges));
+        let reveal = build_reveal_layer(
+            &target_snapshot,
+            &normalize_ranges(new_ranges),
+            &shaping_new_owned,
+        );
         Self {
             kind: EditFrontierKind::Replace,
             base_snapshot,
@@ -1034,6 +1081,8 @@ impl EditFrontierState {
             reveal,
             reveal_carried: Vec::new(),
             reveal_settled: Vec::new(),
+            shaping_new_owned,
+            shaping_old_owned,
             conceal_glyphs,
             conceal_sources,
             conceal_direction: direction,
@@ -1199,7 +1248,7 @@ impl EditFrontierState {
                 .target_snapshot
                 .lines_in_byte_range(region.range.0, region.range.1)
             {
-                for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
+                for cluster in line.clusters_contained_in_range(region.range.0, region.range.1) {
                     let rect = line.source_rect_to_document_rect(&cluster.source_rect);
                     let visible = if region_fully_revealed {
                         rect.w
@@ -1219,10 +1268,10 @@ impl EditFrontierState {
                         continue;
                     }
                     out.push(RevealVisibleSample {
-                        range: (
-                            cluster.byte_start.max(region.range.0),
-                            cluster.byte_end.min(region.range.1),
-                        ),
+                        // Issue #826 评论 24：视觉身份必须是**完整 cluster**。
+                        // 之前按 region range 裁成子范围，等于在没有 cluster 边界
+                        // 承认这个字的情况下先给它安一个逻辑身份。
+                        range: (cluster.byte_start, cluster.byte_end),
                         rect,
                         visible_width: visible,
                     });
@@ -1272,7 +1321,7 @@ impl EditFrontierState {
     ) {
         let progress = self.sample(now).progress;
         let inherited = self.reveal.inherited(progress);
-        let probe = build_reveal_layer(target_snapshot, &merged_ranges);
+        let probe = build_reveal_layer(target_snapshot, &merged_ranges, &self.shaping_new_owned);
         // Issue #826 评论 23：只由旧 owner 构成的那条 path。fast path 必须同时
         // 满足「坐标没变」与「还是同一批字」，缺一不可：
         //
@@ -1287,8 +1336,11 @@ impl EditFrontierState {
         // 只比 probe 会让那 8.75px 从「X 已露出」变成「Y 已露出 87.5%」。
         // 这里不引入任何 Track / 历史按键状态，只是在 retarget 当下用 Core 的
         // OffsetMap 做一次身份验证。
-        let mapped_previous =
-            build_reveal_layer(target_snapshot, &normalize_ranges(mapped_previous_ranges));
+        let mapped_previous = build_reveal_layer(
+            target_snapshot,
+            &normalize_ranges(mapped_previous_ranges),
+            &self.shaping_new_owned,
+        );
         let geometry_stable = self.reveal_carried.is_empty()
             && self.reveal_settled.is_empty()
             && self.reveal.shares_geometry_prefix(&probe, inherited)
@@ -1364,7 +1416,7 @@ impl EditFrontierState {
         let owned: Vec<(usize, usize)> = carried.iter().map(|item| item.range).collect();
         let mask_ranges = subtract_ranges(&merged_ranges, &settled, &owned);
 
-        let reveal = build_reveal_layer(target_snapshot, &mask_ranges);
+        let reveal = build_reveal_layer(target_snapshot, &mask_ranges, &self.shaping_new_owned);
         // 慢路径下前沿的职责只剩「把还没露出的新字从头打开」，时钟从 0 起。
         self.reveal = reveal;
         self.reveal.travelled = 0.0;
@@ -1380,8 +1432,14 @@ impl EditFrontierState {
         inserted_ranges: Vec<(usize, usize)>,
         prev_target_to_new: &OffsetMap,
         base_to_current: &OffsetMap,
+        // Issue #826 评论 24：整块归 `shaping_transition` 的新坐标 cluster。
+        shaping_new_owned: Vec<(usize, usize)>,
         now: Instant,
     ) {
+        // Issue #826 评论 24：先把整块归过渡层的 cluster 从 owner 集合里挖掉，
+        // 再算 retarget —— 否则 mapped_previous / merged 会把这些 cluster 拉回
+        // 前沿侧，重新制造「同一块视觉 cluster 多个 owner」。
+        self.shaping_new_owned = shaping_new_owned;
         // Issue #826 评论 21：carry 已退出 scalar path（见
         // `active_reveal_owned_ranges`），身份必须显式带上，否则下一笔会丢掉它。
         let carried = map_ranges_forward(&self.active_reveal_owned_ranges(), prev_target_to_new);
@@ -1411,8 +1469,11 @@ impl EditFrontierState {
         prev_target_to_new: &OffsetMap,
         reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
+        // Issue #826 评论 24：整块归 `shaping_transition` 的旧坐标 cluster。
+        shaping_old_owned: Vec<(usize, usize)>,
         now: Instant,
     ) {
+        self.shaping_old_owned = shaping_old_owned;
         // 已累计的 old owner 本来就在 burst base 坐标；本次传入的 deleted_ranges
         // 属于「这一次编辑前」的文本，`map_ranges_backward` 把它映回 base，
         // 于是每个 fresh glyph 都带得到自己的 base owner。
@@ -1423,8 +1484,12 @@ impl EditFrontierState {
         // 再并入本笔新删的。只增不减等于把历史视觉债从「N 个 ConcealTrack」换成
         // 「1 个 region + N 批历史 glyph/QImage」，并没有真正清掉。
         let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
-        let (fresh_glyphs, fresh_sources) =
-            collect_conceal_glyphs(current_snapshot, &mapped, reflow_current);
+        let (fresh_glyphs, fresh_sources) = collect_conceal_glyphs(
+            current_snapshot,
+            &mapped,
+            reflow_current,
+            &self.shaping_old_owned,
+        );
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
         // Issue #826 评论 19 阻塞 3：region 只从**仍有可见 glyph 的 base owner**
@@ -1468,16 +1533,25 @@ impl EditFrontierState {
         prev_target_to_new: &OffsetMap,
         reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
+        // Issue #826 评论 24：Replace 两侧各有一份归属。
+        shaping_old_owned: Vec<(usize, usize)>,
+        shaping_new_owned: Vec<(usize, usize)>,
         now: Instant,
     ) {
+        self.shaping_old_owned = shaping_old_owned.clone();
+        self.shaping_new_owned = shaping_new_owned;
         let mapped = map_ranges_backward(&deleted_ranges, base_to_current)
             .unwrap_or_else(|| identity_breakdown("extend_replace", &deleted_ranges));
         // region 只从仍有可见 glyph 的 base owner 生成，历史里已经没有 glyph 的
         // owner 自然消失（不再拿 base byte range 回去猜 current snapshot 的几何）。
         // Issue #826 评论 18 阻塞 2：同 extend_delete，先 prune 再并入本笔新删的。
         let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
-        let (fresh_glyphs, fresh_sources) =
-            collect_conceal_glyphs(current_snapshot, &mapped, reflow_current);
+        let (fresh_glyphs, fresh_sources) = collect_conceal_glyphs(
+            current_snapshot,
+            &mapped,
+            reflow_current,
+            &self.shaping_old_owned,
+        );
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
         let conceal = build_conceal_layer(direction, &glyphs);
@@ -1647,11 +1721,11 @@ impl EditFrontierState {
                 let Some(&(boundary, _right)) = bounds.get(seg_index) else {
                     continue;
                 };
-                for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
-                    let range = (
-                        cluster.byte_start.max(region.range.0),
-                        cluster.byte_end.min(region.range.1),
-                    );
+                for cluster in line.clusters_contained_in_range(region.range.0, region.range.1) {
+                    // Issue #826 评论 24：只对**完整覆盖**的 cluster 产生 FrontierMask。
+                    // 只覆盖一部分的 fused cluster 整块由 `shaping_transition` 淡入，
+                    // 前沿在这里给它挖遮罩就是把它切成两半。
+                    let range = (cluster.byte_start, cluster.byte_end);
                     // Issue #826 评论 20：这段字已经不由前沿遮罩负责了 ——
                     // `settled` 由 canonical 自己画，`carried` 由 overlay 从旧位置
                     // 补间过来。继续挖遮罩会让它凭空消失。
@@ -1805,24 +1879,47 @@ impl FrontierGlyph {
 ///
 /// Reflow handoff 只覆盖其中部分 glyph 的 `dest_rect`（换成上一帧的屏幕位置），
 /// 不再产生"只有 handed_off glyph、没有其他字"的那种特殊单元。
+///
+/// `shaping_old_owned` 是整块归 `shaping_transition` 的旧坐标 cluster：它们**绝不**
+/// 进来。Qt shaping 的 cluster 可能覆盖多个字符，`overlap` 会把整块 fused cluster
+/// 塞进来而 base owner 只有一个子范围 —— 视觉上就是「删除 `i` 的吞字层实际拿整块
+/// old `fi` 在吞」，而最新 canonical 已经重新 shaping 出单独的 `f`，重影/形状跳变。
 fn collect_conceal_glyphs(
     current_snapshot: &EditorLayoutSnapshot,
     // `(current_range, base_range)` 配对：current 用于取 cluster / 算 dest，
     // base 是 region ownership。
     ranges: &[((usize, usize), (usize, usize))],
     reflow_current: &[ReflowCurrentGeometry],
+    shaping_old_owned: &[(usize, usize)],
 ) -> (Vec<ConcealGlyphGeometry>, Vec<ConcealSourceLine>) {
     let mut glyphs: Vec<ConcealGlyphGeometry> = Vec::new();
     let mut sources: Vec<ConcealSourceLine> = Vec::new();
     for &(range, base_range) in ranges {
         for line in current_snapshot.lines_in_byte_range(range.0, range.1) {
+            if line
+                .clusters_contained_in_range(range.0, range.1)
+                .iter()
+                .all(|cluster| is_shaping_owned(shaping_old_owned, cluster))
+            {
+                // 这一行在本次删除范围内的 cluster 全部归 `shaping_transition`，
+                // 它的行图也不是吞字 overlay 的 owner —— 别把它登记进 sources。
+                continue;
+            }
             if !sources.iter().any(|source| source.snapshot_id == line.id) {
                 sources.push(ConcealSourceLine {
                     snapshot_id: line.id,
                     image: line.image.clone(),
                 });
             }
-            for cluster in line.clusters_in_byte_range(range.0, range.1) {
+            for cluster in line.clusters_contained_in_range(range.0, range.1) {
+                // Issue #826 评论 24：吞字侧同样只认**完整覆盖**的 cluster。
+                // 「只 Backspace 删掉 `i`」绝不能把整块 old `fi` 当成 `i` 的 glyph
+                // 拿来吞 —— 最新 canonical 已经重新 shaping 出单独的 `f`，
+                // 两块视觉资源同时被画就是重影/形状跳变。那种 cluster 整块走
+                // `shaping_transition` 的 old->new 交接。
+                if is_shaping_owned(shaping_old_owned, cluster) {
+                    continue;
+                }
                 let canonical = line.source_rect_to_document_rect(&cluster.source_rect);
                 let glyph_range = (cluster.byte_start, cluster.byte_end);
                 let sampled = reflow_current
@@ -1936,22 +2033,31 @@ fn subtract_ranges(
     normalize_ranges(out)
 }
 
-/// 在 snapshot 里按 byte 范围找到那一个 cluster 的
-/// `(line id, 文档坐标矩形, 贴图源矩形)`。
+/// 在 snapshot 里找到**恰好等于** `range` 的那一个 cluster，
+/// 返回 `(line id, 文档坐标矩形, 贴图源矩形)`。
 ///
-/// 找不到返回 `None`：调用方据此判定「这段字在新正文里已经不存在」。
+/// 找不到返回 `None`。调用方据此判定「这段字在新正文里已经不存在，**或者**它已经
+/// 被合进了另一个更大的 shaping cluster」。
+///
+/// Issue #826 评论 24：这里必须是 exact 语义，绝不能退回 overlap。
+/// overlap 会把「最新 shaping 把 `f` 合成了 `fi`」这种情况变成「找到了，`f`
+/// 就是这块 `fi`」，于是 `carried.range = 1..2` 却拿着整块 `fi` 的纹理，
+/// 而 `2..3` 又被 `subtract_ranges` 留给 scalar Reveal —— 同一块视觉 cluster
+/// 被两个 owner 同时控制。找不到 exact 就返回 `None`，让调用方把这段字整块
+/// 交给 `shaping_transition`。
 fn find_cluster_geometry(
     snapshot: &EditorLayoutSnapshot,
     range: (usize, usize),
 ) -> Option<(LineSnapshotId, SourceRect, SourceRect)> {
     for line in snapshot.lines_in_byte_range(range.0, range.1) {
-        for cluster in line.clusters_in_byte_range(range.0, range.1) {
-            return Some((
-                line.id,
-                line.source_rect_to_document_rect(&cluster.source_rect),
-                cluster.source_rect.clone(),
-            ));
-        }
+        let Some(cluster) = line.cluster_exact_for_range(range) else {
+            continue;
+        };
+        return Some((
+            line.id,
+            line.source_rect_to_document_rect(&cluster.source_rect),
+            cluster.source_rect.clone(),
+        ));
     }
     None
 }
@@ -1995,11 +2101,27 @@ fn merge_conceal_glyphs(
 }
 
 /// Issue #826 评论 17：构建吐字层（恒为正向视觉顺序）。
+///
+/// `shaping_new_owned` 是整块归 `shaping_transition` 的 cluster 范围，在建 path
+/// **之前**先从 range 集合里挖掉（`subtract_ranges` 的语义与已完成的
+/// `settled` / `carried` 完全一致：都是「不由 scalar frontier 打开」）。
+///
+/// 为什么必须在建 path 之前挖：`FrontierPath::build` 已经只取
+/// `clusters_contained_in_range`，但**逻辑 range 仍可能完整包含**一块 mixed
+/// cluster —— ```text
+/// 第一笔 af   f = cluster 1..2，reveal region = (1,2)
+/// 第二笔 afi  Core inserted = (2,3)，但最新 shaping 只有一块 fi cluster 1..3
+///             merged = (1,2) + (2,3) -> 归一化成 (1,3)，完整包含 cluster 1..3
+/// ```
+/// 这时 `(1,3)` 会给 `fi` 建出一条 scalar Reveal 路径，而 `shaping_transition`
+/// 同时在淡入同一块 `fi` —— 同一块视觉 cluster 两个 owner，正是评论 24 的根因。
 fn build_reveal_layer(
     target_snapshot: &EditorLayoutSnapshot,
     ranges: &[(usize, usize)],
+    shaping_new_owned: &[(usize, usize)],
 ) -> FrontierLayer {
-    let parts: Vec<((usize, usize), FrontierPath)> = ranges
+    let effective = subtract_ranges(ranges, &[], shaping_new_owned);
+    let parts: Vec<((usize, usize), FrontierPath)> = effective
         .iter()
         .map(|&range| {
             (
@@ -2009,6 +2131,14 @@ fn build_reveal_layer(
         })
         .collect();
     FrontierLayer::from_parts(parts)
+}
+
+/// Issue #826 评论 24：这个 cluster 是否整块归 `shaping_transition`。
+fn is_shaping_owned(shaping_owned: &[(usize, usize)], cluster: &LineClusterSnapshot) -> bool {
+    let range = (cluster.byte_start, cluster.byte_end);
+    shaping_owned
+        .iter()
+        .any(|owned| owned.0 == range.0 && owned.1 == range.1)
 }
 
 /// Issue #826 评论 8 阻塞 3：changed range 集合的归一化。

@@ -159,7 +159,13 @@ impl PreparedLineSnapshot {
         }
     }
 
-    pub fn clusters_in_byte_range(
+    /// Issue #826 评论 24：与 `byte_start..byte_end` 有**重叠**的 cluster。
+    ///
+    /// 这只是「哪些 cluster 碰到了这段逻辑范围」的查询，**不能**直接当成
+    /// 「这些 cluster 属于这段范围」—— Qt shaping 的 cluster 本来就可能覆盖多个
+    /// 字符（fi 连字、e + 组合音标、emoji ZWJ），重叠查询会把整块 cluster 一起
+    /// 带出来。动画层要按 cluster 归属时必须用下面两个语义更明确的入口。
+    pub fn clusters_overlapping_range(
         &self,
         byte_start: usize,
         byte_end: usize,
@@ -168,6 +174,35 @@ impl PreparedLineSnapshot {
             .iter()
             .filter(|c| c.byte_end > byte_start && c.byte_start < byte_end)
             .collect()
+    }
+
+    /// Issue #826 评论 24：被 `byte_start..byte_end` **完整包含**的 cluster。
+    ///
+    /// 视觉 owner 只认这种。本轮逻辑改动如果只覆盖某个 cluster 的一部分，那一块
+    /// 是不可拆的 mixed visual cluster，必须整块交给
+    /// [`crate::sujian_editor_item::animation::shaping_transition`] 做原子视觉交接，
+    /// 绝不能按 byte 比例裁它的 `source_rect`。
+    pub fn clusters_contained_in_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Vec<&LineClusterSnapshot> {
+        self.clusters
+            .iter()
+            .filter(|c| c.byte_start >= byte_start && c.byte_end <= byte_end)
+            .collect()
+    }
+
+    /// Issue #826 评论 24：**恰好**等于 `range` 的那一个 cluster。
+    ///
+    /// 找不到就返回 `None`。调用方绝不能拿一块「看起来能用」的更大 cluster 去代表
+    /// 一个子范围 —— 那正是评论 24 的根因：`f` 已经被最新 shaping 合进 `fi`，
+    /// 却还拿整块 `fi` 当 `f` 的视觉资源，于是同一个 cluster 同时被 carry 和
+    /// scalar Reveal 控制。
+    pub fn cluster_exact_for_range(&self, range: (usize, usize)) -> Option<&LineClusterSnapshot> {
+        self.clusters
+            .iter()
+            .find(|c| (c.byte_start, c.byte_end) == range)
     }
 }
 
