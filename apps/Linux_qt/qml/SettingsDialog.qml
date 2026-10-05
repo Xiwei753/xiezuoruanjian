@@ -31,7 +31,7 @@ Dialog {
     // - 其余（含 600–839vp 那档 Workbench 但一级导航仍在 Bottom）：单列分组，
     //   宽度是「不超过 640 的窄对话框」再按窗口收窄，不再拆两列。
     // 两档判定都直接读 Core 下发的 primaryNavigationPlacement，平台不自己猜宽度。
-    readonly property bool widePanel: layoutPlan && layoutPlan.primaryNavigationPlacement === "Side"
+    readonly property bool widePanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     readonly property bool overlayPanel: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     readonly property int widePanelMaxWidth: 1120
     // Issue #825 复核第4项：Workbench 从 600vp 宽就成立，之前 Math.max(720, ...) 的下限
