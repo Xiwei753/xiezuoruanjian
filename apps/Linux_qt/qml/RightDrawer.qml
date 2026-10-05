@@ -110,6 +110,14 @@ Rectangle {
                     anchors.rightMargin: _sp8
                     spacing: _sp4
 
+                    // Issue #829：手稿在工具面板顶部画了一个 `∨` 折叠钮
+                    // （docs/ui/reference/widescreen/宽屏全打开.png 右侧面板左上角）。
+                    // 收起后工具内容去最右 WritingToolRail，rail 本身常驻。
+                    PaneFoldButton {
+                        dt: root.dt
+                        onTriggered: root.closeRequested()
+                    }
+
                     AppText {
                         dt: root.dt
                         text: root.toolTitle(root.selectedTool)

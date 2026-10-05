@@ -189,6 +189,10 @@
       "value": "章节"
     },
     {
+      "name": "chapter_outline",
+      "value": "章纲"
+    },
+    {
       "name": "select_chapter_to_write",
       "value": "从左侧选择章节开始写作"
     },

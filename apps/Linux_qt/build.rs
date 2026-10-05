@@ -459,6 +459,10 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingFormatGroup.qml");
     println!("cargo:rerun-if-changed=qml/ToolbarIconButton.qml");
     println!("cargo:rerun-if-changed=qml/WritingToolRail.qml");
+    println!("cargo:rerun-if-changed=qml/PaneFoldButton.qml");
+    // Issue #829：底部状态栏 + 左树分组头
+    println!("cargo:rerun-if-changed=qml/WritingStatusBar.qml");
+    println!("cargo:rerun-if-changed=qml/WritingTreeGroupHeader.qml");
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");

@@ -30,6 +30,8 @@ import { EditorViewportState } from '../render/EditorViewportState'
 import { EditorViewportController } from '../render/EditorViewportController'
 import { LifecycleObserver } from '../../../platform/lifecycle/HarmonyLifecycle'
 import { ChapterTreePane } from '../../project/ui/ChapterTreePane'
+import { PaneFoldButton } from './PaneFoldButton'
+import { WritingStatusBar } from './WritingStatusBar'
 import { VolumeTree } from '../../../corebridge/dto/ProjectDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import {
@@ -70,6 +72,14 @@ const FALLBACK_TOOLBAR_HEIGHT_VP: number = 64
 // 贴边折叠把手的尺寸（vp）。把手不是 Core 角色，只是 pane 边界上的 UI 装饰。
 const PANE_HANDLE_WIDTH_VP: number = 18
 const PANE_HANDLE_HEIGHT_VP: number = 64
+
+// Issue #829 手稿：底部状态栏中段「434 / 2,000」的分母。
+// Core 目前没有目标字数字段（settings 里只有 desktop_sidebar_width /
+// desktop_editor_width 这类布局项），所以这一轮按手稿取 2000 作为占位，
+// 不在端侧造一个假的 Core 字段。Core 加了目标字数设置后，这里改成读 Core。
+const WRITING_PROGRESS_TARGET_PLACEHOLDER: number = 2000
+// 时钟刷新间隔（ms）。秒级跳动对手稿里的 HH:mm 没有意义，30s 对齐即可。
+const STATUS_CLOCK_INTERVAL_MS: number = 30000
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -135,6 +145,12 @@ export struct WritingScreen {
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
   // WritingScreen 在宽屏模式下持有 ChapterTreePane，需要加载项目树。
   @State volumeTrees: VolumeTree[] = []
+  // Issue #829 手稿：章节树的作品名分组头 + 底部章纲分组头。
+  @State projectTitle: string = ''
+  @State projectGroupExpanded: boolean = true
+  @State outlineGroupExpanded: boolean = false
+  // Issue #829：底部状态栏的时钟（HH:mm），只做展示，不参与任何业务判定。
+  @State clockText: string = ''
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
   // Issue #825 复核第 2 项：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态，
@@ -222,9 +238,17 @@ export struct WritingScreen {
   // Issue #629 评论14 第2项：离开守卫唯一 token。registerLeaveGuard 返回，
   // aboutToDisappear 用此 token 注销，避免误注销其他 WritingScreen 实例的 guard。
   private leaveGuardToken: number = -1
+  // Issue #829：状态栏时钟 interval 句柄，-1 表示未启动。
+  private clockTimer: number = -1
 
   async aboutToAppear() {
     hilog.info(0x0000, 'WritingScreen', 'route name=Writing')
+    // Issue #829：底部状态栏时钟。秒级跳动对手稿里的 HH:mm 没有意义，
+    // 30s 对齐一次即可；aboutToDisappear 里成对 clearInterval。
+    this.refreshClockText()
+    this.clockTimer = setInterval(() => {
+      this.refreshClockText()
+    }, STATUS_CLOCK_INTERVAL_MS)
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     // Issue #784 评论5857397503 第4点 + Issue #825 复核第2点：ScreenPolicy 的 HeaderTrailing
@@ -551,6 +575,20 @@ export struct WritingScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // Issue #829：状态栏时钟定时器成对清理，页面离开后不留 interval。
+    if (this.clockTimer >= 0) {
+      clearInterval(this.clockTimer)
+      this.clockTimer = -1
+    }
+  }
+
+  // Issue #829：HH:mm。两位补零，手稿里就是「14:26」这种宽度。
+  // 只做展示，不参与保存 / 统计 / 同步任何判定。
+  private refreshClockText(): void {
+    const now = new Date()
+    const hour = String(now.getHours()).padStart(2, '0')
+    const minute = String(now.getMinutes()).padStart(2, '0')
+    this.clockText = `${hour}:${minute}`
   }
 
   // Issue #768 评论5838296806：先加载排版设置，再打开章节会话。
@@ -937,6 +975,8 @@ export struct WritingScreen {
       const result = await this.bridge.getProjectTree(this.projectId)
       if (result.success && result.data) {
         this.volumeTrees = result.data.volumes
+        // Issue #829 手稿：章节树最上面一组是作品名，不是笼统的"章节"。
+        this.projectTitle = result.data.project.title
         // 展开包含当前章节的卷
         for (const vt of this.volumeTrees) {
           for (const ch of vt.chapters) {
@@ -1358,8 +1398,13 @@ export struct WritingScreen {
           if (!this.leftPaneCollapsed) {
             ChapterTreePane({
               volumeTrees: this.volumeTrees,
+              projectTitle: this.projectTitle,
+              projectGroupExpanded: this.projectGroupExpanded,
+              outlineGroupExpanded: this.outlineGroupExpanded,
               expandedVolumes: this.expandedVolumes,
               selectedChapterId: this.chapterId,
+              onToggleProjectGroup: (): void => { this.projectGroupExpanded = !this.projectGroupExpanded },
+              onToggleOutlineGroup: (): void => { this.outlineGroupExpanded = !this.outlineGroupExpanded },
               onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
               onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
                 this.switchChapter(chapterId, chapterTitle, volumeId)
@@ -1376,7 +1421,43 @@ export struct WritingScreen {
           // Editor：占剩余空间，纸面限宽居中；左右 pane 展开/收起只改变可用空间，
           // 不改变编辑会话。
           Column() {
-            this.EditorPane()
+            // 正文区顶部的折叠钮：手稿里正文区自己带一个三角（展开态向下收起、
+            // 收起态向上拉开左章节树）。用 Stack 浮在正文上方，不占正文高度，
+            // 也不改 Core 给的 Editor bounds。贴边把手保留——它是收起后唯一的入口。
+            Stack({ alignContent: Alignment.Top }) {
+              this.EditorPane()
+
+              PaneFoldButton({
+                glyph: this.leftPaneCollapsed ? '⌃' : '⌄',
+                onTriggered: (): void => {
+                  if (this.leftPaneCollapsed) {
+                    this.requestChapterNavigationOpen().catch(() => {})
+                  } else {
+                    this.closeChapterNavigation()
+                  }
+                }
+              })
+                .margin({ top: 4 })
+            }
+            .width('100%')
+            .layoutWeight(1)
+
+            // Issue #829 手稿：底部状态栏只属于 Editor 这一列，
+            // 横贯「章节树右缘 ~ 工具面板左缘」，不放章节树 / 工具面板 / rail 上。
+            // 硬约束 6：这里只放字数、进度、时间、保存状态，不做导航。
+            WritingStatusBar({
+              chapterWordCount: this.wordCount,
+              // Issue #829：Core 的 Harmony FFI 目前只暴露 writer_core_get_writing_stats，
+              // 它在 Rust 侧写死「最近 30 天」汇总，端侧拿不到"当日"口径，
+              // 所以这一轮中段分子先用本章字数（Core 真值，非 UI 自算）。
+              // Core 补上按日统计 / 目标字数之后，这里换成对应真值。
+              progressCurrent: this.wordCount,
+              progressTarget: WRITING_PROGRESS_TARGET_PLACEHOLDER,
+              clockText: this.clockText,
+              saveStatus: this.getSaveStatusText(),
+              saveStatusIsError: this.lastSaveFailed
+            })
+              .width('100%')
           }
           .layoutWeight(1)
           .height('100%')
@@ -1617,10 +1698,19 @@ export struct WritingScreen {
   RightToolPane() {
     Column() {
       Row() {
+        // Issue #829 手稿：工具面板自己带一个顶部折叠钮（收起 ToolPane）。
+        // 和正文区顶部那个一样是"还开着时主动收起"的入口；
+        // 收起后靠 PaneHandleLayer 的贴边把手重新拉开。
+        PaneFoldButton({
+          glyph: '⌄',
+          onTriggered: (): void => { this.closeToolPane() }
+        })
+
         Text(this.selectedToolKey === 'ai' ? 'AI' : '星图')
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('sys.color.font_primary'))
+          .margin({ left: 8 })
 
         Blank()
       }

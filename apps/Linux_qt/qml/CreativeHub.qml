@@ -114,9 +114,9 @@ Rectangle {
                     Repeater {
                         model: [
                             { label: qsTr("作品"), idx: 0 },
-                        { label: qsTr("星图"), idx: 1 },
-                        { label: qsTr("统计"), idx: 2 }
-                    ]
+                            { label: qsTr("星图"), idx: 1 },
+                            { label: qsTr("统计"), idx: 2 }
+                        ]
 
                     Rectangle {
                         id: wideNavItem
