@@ -12,6 +12,14 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 export struct ChapterTreePane {
   // 外部传入的项目数据
   volumeTrees: VolumeTree[] = []
+  // Issue #829 手稿：章节树最上面一组是作品名，不是笼统的"章节"字样。
+  projectTitle: string = ''
+  // 作品名分组是否展开（手稿的「作品名 ∨」）
+  projectGroupExpanded: boolean = true
+  // 章纲分组是否展开（手稿底部的「章纲 ∨」；本轮只画分组头，内容后续接）
+  outlineGroupExpanded: boolean = false
+  onToggleProjectGroup: (() => void) | null = null
+  onToggleOutlineGroup: (() => void) | null = null
   // 当前展开的卷 ID 集合（由外部控制）
   expandedVolumes: Set<string> = new Set()
   // 当前选中的章节 ID（用于高亮）
@@ -47,52 +55,108 @@ export struct ChapterTreePane {
     }
   }
 
-  build() {
-    Column() {
-      // 标题栏
-      Row() {
-        Text($r('app.string.chapters'))
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .layoutWeight(1)
+  // Issue #829 手稿：分组头统一形态 —— 折叠箭头 + 标题(+ 数量) + 可选「+」。
+  // 「+」只有一种语义（新建卷），所以不外传回调，直接用 onCreateVolume。
+  @Builder
+  GroupHeader(label: string, expanded: boolean, trailing: string, showAdd: boolean, onToggle: () => void) {
+    Row() {
+      Image(expanded
+        ? $r('sys.media.ohos_ic_public_arrow_down')
+        : $r('sys.media.ohos_ic_public_arrow_right'))
+        .width(16)
+        .height(16)
+        .margin({ right: 6 })
 
+      Text(label)
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('sys.color.font_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+
+      if (trailing.length > 0) {
+        Text(trailing)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_secondary'))
+          .margin({ right: 8 })
+      }
+
+      if (showAdd) {
         Button('+')
           .fontSize(14)
-          .width(28)
-          .height(28)
+          .width(24)
+          .height(24)
+          .backgroundColor(Color.Transparent)
           .onClick(() => {
             if (this.onCreateVolume) {
               this.onCreateVolume()
             }
           })
       }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 12 })
+    }
+    .width('100%')
+    .height(36)
+    .padding({ left: 12, right: 8 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      onToggle()
+    })
+  }
+
+  build() {
+    Column() {
+      // Issue #829 手稿第一节：作品名分组（原本这里是一行"章节"标题 + 新建卷）。
+      this.GroupHeader(
+        this.projectTitle.length > 0
+          ? this.projectTitle
+          : getContext(this).resourceManager.getStringSync($r('app.string.chapters').id),
+        this.projectGroupExpanded, '', true,
+        (): void => {
+          if (this.onToggleProjectGroup) {
+            this.onToggleProjectGroup()
+          }
+        })
 
       // 目录内容
-      Scroll() {
-        Column() {
-          if (this.volumeTrees.length === 0) {
-            Column() {
-              Text($r('app.string.no_volumes_chapters'))
-                .fontSize(14)
-                .margin({ bottom: 8 })
-              Text($r('app.string.click_new_volume_to_start'))
-                .fontSize(12)
+      if (this.projectGroupExpanded) {
+        Scroll() {
+          Column() {
+            if (this.volumeTrees.length === 0) {
+              Column() {
+                Text($r('app.string.no_volumes_chapters'))
+                  .fontSize(14)
+                  .margin({ bottom: 8 })
+                Text($r('app.string.click_new_volume_to_start'))
+                  .fontSize(12)
+              }
+              .width('100%')
+              .padding(24)
+              .justifyContent(FlexAlign.Center)
+            } else {
+              ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
+                this.VolumeSection(volumeTree)
+              }, (volumeTree: VolumeTree) => volumeTree.volume.id)
             }
-            .width('100%')
-            .padding(24)
-            .justifyContent(FlexAlign.Center)
-          } else {
-            ForEach(this.volumeTrees, (volumeTree: VolumeTree) => {
-              this.VolumeSection(volumeTree)
-            }, (volumeTree: VolumeTree) => volumeTree.volume.id)
           }
+          .width('100%')
         }
-        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+      } else {
+        Blank().layoutWeight(1)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+
+      // Issue #829 手稿最后一节：章纲分组。本轮只固定分组头与折叠交互，
+      // 展开内容等章纲功能真正立项后再接（Core 已有 chapter.note 字段）。
+      this.GroupHeader(
+        getContext(this).resourceManager.getStringSync($r('app.string.chapter_outline').id),
+        this.outlineGroupExpanded, '', false,
+        (): void => {
+          if (this.onToggleOutlineGroup) {
+            this.onToggleOutlineGroup()
+          }
+        })
     }
     .width('100%')
     .height('100%')
@@ -101,28 +165,35 @@ export struct ChapterTreePane {
   @Builder
   VolumeSection(volumeTree: VolumeTree) {
     Column() {
-      // 卷头
+      // 卷头：和作品名 / 章纲同一个 GroupHeader 形态，只是「+」的语义换成新建章节。
+      // ArkUI 的 @Builder 不能给同一个 builder 传不同回调，所以这里保留一份
+      // 视觉完全一致、只把「+」接到 onCreateChapter 的实现。
       Row() {
         Image(this.expandedVolumes.has(volumeTree.volume.id)
           ? $r('sys.media.ohos_ic_public_arrow_down')
           : $r('sys.media.ohos_ic_public_arrow_right'))
           .width(16)
           .height(16)
-          .margin({ right: 8 })
+          .margin({ right: 6 })
 
         Text(volumeTree.volume.title)
-          .fontSize(15)
+          .fontSize(14)
           .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
 
         Text(`${volumeTree.chapters.length}`)
           .fontSize(11)
+          .fontColor($r('sys.color.font_secondary'))
           .margin({ right: 8 })
 
         Button('+')
-          .fontSize(12)
+          .fontSize(14)
           .width(24)
           .height(24)
+          .backgroundColor(Color.Transparent)
           .onClick(() => {
             if (this.onCreateChapter) {
               this.onCreateChapter(volumeTree.volume.id)
@@ -130,43 +201,46 @@ export struct ChapterTreePane {
           })
       }
       .width('100%')
-      .padding({ left: 16, right: 12, top: 10, bottom: 10 })
+      .height(36)
+      .padding({ left: 20, right: 8 })
+      .alignItems(VerticalAlign.Center)
       .onClick(() => {
         if (this.onToggleVolume) {
           this.onToggleVolume(volumeTree.volume.id)
         }
       })
 
-      // 章节列表
+      // 章节列表：手稿里章节行是单行「标题 … 字数」，不再上下两行堆叠。
       if (this.expandedVolumes.has(volumeTree.volume.id)) {
         if (volumeTree.chapters.length === 0) {
           Text($r('app.string.no_chapters'))
             .fontSize(12)
-            .padding({ left: 28, top: 8, bottom: 8 })
+            .padding({ left: 36, top: 8, bottom: 8 })
         } else {
           ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
             Row() {
-              Column() {
-                Text(chapter.title)
-                  .fontSize(14)
-                  .fontWeight(this.selectedChapterId === chapter.id ? FontWeight.Medium : FontWeight.Normal)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(chapter.title)
+                .fontSize(14)
+                .fontWeight(this.selectedChapterId === chapter.id ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor($r('sys.color.font_primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
 
-                Text(`${chapter.wordCount}`)
-                  .fontSize(11)
-                  .margin({ top: 2 })
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              Image($r('sys.media.ohos_ic_public_arrow_right'))
-                .width(16)
-                .height(16)
+              // 字数是 Core 的 ChapterMeta.wordCount 真值，UI 不自己数。
+              Text(`${chapter.wordCount}`)
+                .fontSize(11)
+                .fontColor($r('sys.color.font_secondary'))
                 .margin({ left: 8 })
             }
             .width('100%')
-            .padding({ left: 28, right: 12, top: 8, bottom: 8 })
+            .height(32)
+            .padding({ left: 36, right: 12 })
+            .alignItems(VerticalAlign.Center)
+            .backgroundColor(this.selectedChapterId === chapter.id
+              ? $r('sys.color.comp_background_gray')
+              : Color.Transparent)
+            .borderRadius(DesignTokens.radiusPill)
             .onClick(() => {
               if (this.onSelectChapter) {
                 this.onSelectChapter(chapter.id, chapter.title, volumeTree.volume.id)
