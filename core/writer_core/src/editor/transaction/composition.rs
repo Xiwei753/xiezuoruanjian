@@ -206,54 +206,73 @@ impl OffsetMap {
     /// （`build` 只是最长公共前缀+后缀，多 patch 中间的 unchanged island 会丢）。
     #[must_use]
     pub fn compose(&self, next: &OffsetMap) -> OffsetMap {
-        let mut composed: Vec<OffsetMapEntry> = Vec::new();
+        // 1. 只收集所有交集候选，不在遍历途中合并。
+        let mut candidates: Vec<OffsetMapEntry> = Vec::new();
         for left in &self.entries {
-            let left_old = left.old_byte_offset.value();
-            let left_len = left.length;
-            if left_len == 0 {
+            if left.length == 0 {
                 continue;
             }
+            let left_old = left.old_byte_offset.value();
             let left_new_start = left.new_byte_offset.value();
-            let left_new_end = left_new_start + left_len;
+            let left_new_end = left_new_start + left.length;
             for right in &next.entries {
-                let right_len = right.length;
-                if right_len == 0 {
+                if right.length == 0 {
                     continue;
                 }
                 // `self` 是 A -> B（left.old 是 A 坐标、left.new 是 B 坐标），
-                // `next` 是 B -> C（right.old 是 B 坐标、right.new 是 C 坐标）。
+                // `next` 是 B -> C（right.old 是 B 坐标、right.new 是 C 坐标），
                 // 所以交集必须在 **B 坐标**里求。
                 let right_b_start = right.old_byte_offset.value();
-                let right_b_end = right_b_start + right_len;
+                let right_b_end = right_b_start + right.length;
                 let lo = left_new_start.max(right_b_start);
                 let hi = left_new_end.min(right_b_end);
                 if lo >= hi {
                     continue;
                 }
-                let old_start = left_old + (lo - left_new_start);
-                let new_start = right.new_byte_offset.value() + (lo - right_b_start);
-                let kind = if old_start == new_start {
-                    OffsetMapKind::Identity
-                } else {
-                    OffsetMapKind::Shifted
-                };
-                // 与上一条相邻且 kind 相同时合并，避免条目无限增长。
-                if let Some(last) = composed.last_mut() {
-                    let last_end = last.old_byte_offset.value() + last.length;
-                    if last_end == old_start && last.kind == kind {
-                        last.length += hi - lo;
-                        continue;
-                    }
-                }
-                composed.push(OffsetMapEntry {
-                    old_byte_offset: Utf8ByteOffset::unchecked(old_start),
-                    new_byte_offset: Utf8ByteOffset::unchecked(new_start),
+                candidates.push(OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(left_old + (lo - left_new_start)),
+                    new_byte_offset: Utf8ByteOffset::unchecked(
+                        right.new_byte_offset.value() + (lo - right_b_start),
+                    ),
                     length: hi - lo,
-                    kind,
+                    kind: OffsetMapKind::Shifted,
                 });
             }
         }
-        composed.sort_by_key(|entry| entry.old_byte_offset.value());
+
+        // 2. 按 old byte offset 排序。
+        candidates.sort_by_key(|entry| entry.old_byte_offset.value());
+
+        // 3. 再合并 —— 条件是 **old 与 new 双侧都连续**。
+        //
+        // 绝不能只看「old 相邻 + kind 相同」：`OffsetMapKind::Shifted` 只说明
+        // 「不是 old == new」，**不说明两段有相同位移**。`ab -> XaYb` 的精确 map
+        // 里 `old[0,1) -> new[1,2)`（delta +1）与 `old[1,2) -> new[3,4)`（delta +2）
+        // 都是 Shifted、old 侧相邻，但 new 侧中间 [2,3) 是新插入的 Y。
+        // 按错条件合成 `old[0,2) -> new[1,3)` 会让 `b` 映到 Y 上，
+        // 直接污染 base_to_target_map，后续 Delete/Replace 会把 changed range
+        // 映回错误字符。
+        let mut composed: Vec<OffsetMapEntry> = Vec::with_capacity(candidates.len());
+        for candidate in candidates {
+            if let Some(last) = composed.last_mut() {
+                let last_old_end = last.old_byte_offset.value() + last.length;
+                let last_new_end = last.new_byte_offset.value() + last.length;
+                if last_old_end == candidate.old_byte_offset.value()
+                    && last_new_end == candidate.new_byte_offset.value()
+                {
+                    last.length += candidate.length;
+                    continue;
+                }
+            }
+            // kind 只是描述信息：位移为 0 才是 Identity。
+            let mut fresh = candidate;
+            fresh.kind = if fresh.old_byte_offset.value() == fresh.new_byte_offset.value() {
+                OffsetMapKind::Identity
+            } else {
+                OffsetMapKind::Shifted
+            };
+            composed.push(fresh);
+        }
         OffsetMap { entries: composed }
     }
 
@@ -416,20 +435,74 @@ mod compose_tests {
         }
     }
 
-    /// 相邻且 kind 相同的条目要合并，避免条目数随 burst 长度线性膨胀。
+    /// Issue #826 评论 11 阻塞 1：**只有位移相同（old/new 双侧都连续）才合并。**
+    ///
+    /// `OffsetMapKind::Shifted` 只说明「不是 old == new」，不说明两段位移相同。
+    /// `ab -> XaYb` 的精确 map 里
+    /// `old[0,1) -> new[1,2)`（delta +1）与 `old[1,2) -> new[3,4)`（delta +2）
+    /// 都是 Shifted、old 侧相邻，但 new 侧中间 [2,3) 是新插入的 Y。
+    /// 按错条件合成 `old[0,2) -> new[1,3)` 会让 `b` 映到 Y 上。
     #[test]
-    fn compose_merges_adjacent_same_kind_entries() {
-        let first = OffsetMap::from_single_edit(4, (2, 2), 2);
-        let second = OffsetMap::from_single_edit(6, (0, 0), 0);
-        let composed = first.compose(&second);
-        assert!(
-            composed.entries.len() <= 2,
-            "compose 结果不应爆炸，entries = {:?}",
+    fn compose_does_not_merge_across_new_gap() {
+        // A / B: ab
+        let identity = OffsetMap::from_single_edit(2, (0, 0), 0);
+        // B -> C: ab -> XaYb，两处插入 (0,0,0,1) 与 (1,1,2,3)。
+        let next = OffsetMap::from_edits(2, &[(0, 0, 0, 1), (1, 1, 2, 3)]);
+        let composed = identity.compose(&next);
+
+        assert_eq!(
+            composed.map_old_to_new(0),
+            Some(1),
+            "a 必须映到 new 的 a（offset 1）"
+        );
+        assert_eq!(
+            composed.map_old_to_new(1),
+            Some(3),
+            "b 必须映到 new 的 b（offset 3），不能映到 Y（offset 2）"
+        );
+        assert_eq!(
+            composed.map_new_to_old(2),
+            None,
+            "新插入的 Y 没有 old identity"
+        );
+        assert_eq!(
+            composed.map_old_range_to_new(0, 2),
+            None,
+            "a..b 中间被插入 Y，不能伪装成一个连续 new range"
+        );
+    }
+
+    /// 双侧都连续（位移相同）时才合并，避免条目数随 burst 长度线性膨胀。
+    #[test]
+    fn compose_merges_adjacent_same_delta_entries() {
+        // ab -> aXb：只在 a/b 中间插 1 byte，a 与 b 的映射都是 delta +1、
+        // new 侧连续 [0,1) 与 [2,3) 之间隔着 X，所以**不应**合并。
+        let identity = OffsetMap::from_single_edit(2, (0, 0), 0);
+        let next = OffsetMap::from_single_edit(2, (1, 1), 1);
+        let composed = identity.compose(&next);
+        assert_eq!(
+            composed.entries.len(),
+            2,
+            "new 侧隔着插入的 X，不能合并；entries = {:?}",
             composed.entries
         );
-        for entry in &composed.entries {
-            assert!(entry.kind == OffsetMapKind::Identity || entry.kind == OffsetMapKind::Shifted);
-        }
+
+        // a -> ab：只在末尾插 1 byte，a 的映射是 delta 0，条目本来就只有一条。
+        let identity2 = OffsetMap::from_single_edit(1, (0, 0), 0);
+        let next2 = OffsetMap::from_single_edit(1, (1, 1), 1);
+        assert_eq!(identity2.compose(&next2).entries.len(), 1);
+
+        // 真正的同位移连续：old[0,2) -> new[0,2)，整段一条。
+        let whole = OffsetMap::from_single_edit(4, (0, 0), 0);
+        let identity4 = OffsetMap::from_single_edit(4, (0, 0), 0);
+        let composed4 = whole.compose(&identity4);
+        assert_eq!(
+            composed4.entries.len(),
+            1,
+            "整段 identity 复合后仍是一条；entries = {:?}",
+            composed4.entries
+        );
+        assert_eq!(composed4.entries[0].kind, OffsetMapKind::Identity);
     }
 
     /// `compose` 的结果必须是 old byte offset 有序的（`map_old_to_new` 依赖它）。

@@ -756,3 +756,79 @@ fn insert_frontier_declares_no_old_overlay_textures() {
         "只应声明 old_range 覆盖的行，而不是整份 base snapshot 的所有可见行"
     );
 }
+
+/// Issue #826 评论 11 阻塞 2（要求补的第二个测试）：当前编辑改掉了上一轮
+/// 正在 Reveal 的那段文字时，coordinator 必须**开新 burst**，而不是让旧 track
+/// 静默消失。
+///
+/// 反例（评论原文的两次 Undo `c -> b -> a`）：
+/// - 第一笔 Undo `c -> b`：Replace，burst base = `c`，b 正在 Reveal。
+/// - 动画未结束第二笔 Undo `b -> a`：b 既是「上一笔刚插出来的字」（映不回
+///   burst base `c`），又是「这次要改掉的 reveal text」（映不到最新 target a）。
+///   两处映射都失败。
+/// - 旧代码：old 侧 `filter_map` 丢掉 → b 没有 ConcealTrack；new 侧
+///   `continue` 丢掉 → b 的 RevealTrack 消失。**b 直接闪没。**
+/// - 现在：`can_extend_identity` 判身份断裂 → 结束当前 burst、用本次
+///   base/target 开新 burst，b 正常进 Conceal、a 正常进 Reveal。
+#[test]
+fn replace_opens_new_burst_when_old_reveal_text_is_edited_away() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    let line = |vlid: usize, x: f64| {
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            vlid,
+            0.0,
+            0,
+            vec![cluster(0, 1, x)],
+        )])
+    };
+
+    // 第一笔 Undo：c -> b。base 里是 c，target 里是 b。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Replace,
+        base_snapshot: line(0, 0.0),
+        target_snapshot: line(1, 0.0),
+        deleted_ranges: vec![(0, 1)],
+        inserted_ranges: vec![(0, 1)],
+        offset_map: OffsetMap::from_single_edit(1, (0, 1), 1),
+        base_text: String::from("c"),
+        target_text: String::from("b"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert!(
+        coord.has_active_edit_frontier(),
+        "第一笔 Undo 后必须有前沿（b 正在 Reveal、c 正在 Conceal）"
+    );
+
+    // 第二笔 Undo：b -> a。b 是上一笔刚插出来的，映不回 burst base `c`。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Replace,
+        base_snapshot: line(1, 0.0),
+        target_snapshot: line(2, 0.0),
+        deleted_ranges: vec![(0, 1)],
+        inserted_ranges: vec![(0, 1)],
+        offset_map: OffsetMap::from_single_edit(1, (0, 1), 1),
+        base_text: String::from("b"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Forward,
+        now: now + Duration::from_millis(80),
+    });
+
+    let frontier = coord.sample_edit_frontier(now + Duration::from_millis(80));
+    assert!(
+        frontier.is_some(),
+        "身份断裂后 coordinator 必须仍然持有一个活跃前沿（开新 burst），不能把动画对象丢掉"
+    );
+    // 新 burst 的 base 必须是 b（这样 b 能正常 Conceal），而不是原来的 c。
+    let overlay = coord.old_overlay_glyphs_for(frontier.as_ref().expect("前沿存在"));
+    assert!(
+        !overlay.is_empty(),
+        "b 必须作为旧正文 overlay 画出来（正常吞字），不能闪没"
+    );
+    let clips = coord.hidden_canonical_rects_for(frontier.as_ref().expect("前沿存在"));
+    assert!(
+        !clips.is_empty(),
+        "a 必须作为新字被遮罩逐步打开（正常吐字）"
+    );
+}

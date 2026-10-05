@@ -155,6 +155,8 @@ impl LinuxEditorAnimationCoordinator {
                 frontier.kind.can_extend(kind)
                     && same_conceal_direction
                     && !frontier.is_finished(request.now)
+                    // Issue #826 评论 11 阻塞 2：身份不连续就是新的 burst 边界。
+                    && frontier.can_extend_identity(kind, &request)
             })
             .unwrap_or(false);
 
@@ -220,6 +222,7 @@ impl LinuxEditorAnimationCoordinator {
             // 每条不相邻的 patch 各走自己的视觉路径，共享同一个 progress。
             self.active_edit_frontier = Some(match kind {
                 EditFrontierKind::Insert => EditFrontierState::begin_insert(
+                    request.base_text.clone(),
                     request.target_snapshot.clone(),
                     request.target_text.clone(),
                     request.inserted_ranges.clone(),

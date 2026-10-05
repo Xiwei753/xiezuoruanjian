@@ -9,10 +9,12 @@ use std::time::{Duration, Instant};
 use writer_core::editor::OffsetMap;
 
 use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
+use crate::sujian_editor_item::animation::coordinator::EditFrontierRequest;
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, EditFrontierKind, EditFrontierState, FrontierPath, FrontierRect,
     PathDirection,
 };
+use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
 };
@@ -70,6 +72,7 @@ fn snapshot(lines: Vec<PreparedLineSnapshot>) -> EditorLayoutSnapshot {
 fn frontier_sample_progresses_from_zero_to_one() {
     let now = Instant::now();
     let state = EditFrontierState::begin_insert(
+        String::new(),
         empty_snapshot(),
         String::from("a"),
         vec![(0, 1)],
@@ -87,6 +90,7 @@ fn frontier_sample_progresses_from_zero_to_one() {
 fn frontier_is_finished_only_after_full_duration() {
     let now = Instant::now();
     let state = EditFrontierState::begin_insert(
+        String::new(),
         empty_snapshot(),
         String::from("a"),
         vec![(0, 1)],
@@ -137,6 +141,7 @@ fn delete_overlay_is_visible_on_the_first_frame() {
 fn extend_insert_accumulates_new_range_across_revisions() {
     let now = Instant::now();
     let mut state = EditFrontierState::begin_insert(
+        String::new(),
         empty_snapshot(),
         String::from("a"),
         vec![(1, 2)],
@@ -288,6 +293,7 @@ fn disjoint_patches_stay_separate_ranges_and_paths() {
         PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(100, 101, 0.0)]),
     ]);
     let state = EditFrontierState::begin_insert(
+        String::new(),
         target,
         String::from("x"),
         vec![(0, 1), (100, 101)],
@@ -366,6 +372,7 @@ fn wrap_around_insert_reveals_from_the_next_line_left_edge() {
         PreparedLineSnapshot::stub_for_tests(1, 20.0, 0, vec![cluster(1, 2, 40.0)]),
     ]);
     let state = EditFrontierState::begin_insert(
+        String::new(),
         target,
         String::from("a\nb"),
         vec![(1, 2)],
@@ -453,6 +460,7 @@ fn newline_only_insert_produces_no_frontier_segment() {
     ]);
     // inserted range 只覆盖换行符所在字节 [1,2)，那一行没有 cluster。
     let state = EditFrontierState::begin_insert(
+        String::new(),
         target,
         String::from("a\nb"),
         vec![(1, 2)],
@@ -646,6 +654,7 @@ fn extend_insert_keeps_travelled_with_its_own_track() {
     )]);
 
     let mut state = EditFrontierState::begin_insert(
+        String::new(),
         wide.clone(),
         String::new(),
         vec![(10, 12), (100, 102)],
@@ -832,6 +841,7 @@ fn adjacent_insert_ranges_stay_separate_tracks() {
     )]);
 
     let state = EditFrontierState::begin_insert(
+        String::new(),
         target,
         String::from("ab"),
         // 两条相邻但不相交的 inserted range。
@@ -850,5 +860,83 @@ fn adjacent_insert_ranges_stay_separate_tracks() {
         state.reveal_tracks.len(),
         2,
         "相邻 patch 必须是两条独立 RevealTrack"
+    );
+}
+
+/// Issue #826 评论 11 阻塞 2（要求补的第一个测试）：连续两次 Undo 时，
+/// 第二笔不能 extend 第一笔的 burst。
+///
+/// 稳定反例（评论原文）：正文历史 `a -> b -> c`，当前正文 `c`。
+/// - 第一次 Undo `c -> b`：Replace，burst base = `c`。
+/// - 动画未结束立刻第二次 Undo `b -> a`：kind 相同、cursor 通常没动、
+///   conceal direction 也相同，`can_extend` 本来是 true。
+///   但第二笔要删的 `b` 是第一次 Undo **刚插出来的字**，它在 burst base `c`
+///   里根本不存在 → `base_to_target_map.map_new_range_to_old(b_range)` 必然 None。
+///   旧代码 `filter_map` 静默丢掉 → `b` 没有 ConcealTrack；同时它还在 Reveal 的
+///   track 映射也失败 → 静默 `continue` → **`b` 直接闪没**。
+#[test]
+fn replace_cannot_extend_when_deleted_text_was_created_inside_current_burst() {
+    let now = Instant::now();
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0)],
+    )]);
+
+    // 第一笔 Undo：c -> b，burst base = c。
+    let first_map = OffsetMap::from_single_edit(1, (0, 1), 1);
+    let state = EditFrontierState::begin_replace(
+        base,
+        String::from("c"),
+        snapshot(Vec::new()),
+        String::from("b"),
+        vec![(0, 1)],
+        vec![(0, 1)],
+        first_map,
+        ConcealDirection::Forward,
+        now,
+        160,
+    );
+    // burst base 是 c，它只有 [0,1)；因此 base_to_target_map 对任何
+    // `abc`/`b` 坐标的区间都映不回 base。
+    assert_eq!(state.base_text, "c");
+
+    // 第二笔 Undo：b -> a。deleted range 是当前正文 `b` 的坐标 [0,1)。
+    let second = EditFrontierRequest {
+        kind: EditorAnimationKind::Replace,
+        base_snapshot: snapshot(Vec::new()),
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(0, 1)],
+        inserted_ranges: vec![(0, 1)],
+        offset_map: OffsetMap::from_single_edit(1, (0, 1), 1),
+        base_text: String::from("b"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Forward,
+        now: instant_at(now, 80),
+    };
+
+    // `b` 映不回 burst base `c` → 身份断裂 → 不能 extend。
+    assert!(
+        !state.can_extend_identity(EditFrontierKind::Replace, &second),
+        "本次要删的 b 是第一笔 Undo 刚插出来的，不在 burst base c 里，必须判身份断裂"
+    );
+    // 换成能映回 base 的场景（例如同一 burst 内继续删 c 本体）就应该能 extend，
+    // 证明 preflight 不是一刀切拒绝。
+    let same_burst = EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: snapshot(Vec::new()),
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::from("b"),
+        target_text: String::from("bX"),
+        conceal_direction: ConcealDirection::Forward,
+        now: instant_at(now, 80),
+    };
+    assert!(
+        state.can_extend_identity(EditFrontierKind::Insert, &same_burst),
+        "Insert 侧必须能正常 extend（没有要映回 base 的 deleted range）"
     );
 }

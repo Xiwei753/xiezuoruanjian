@@ -32,6 +32,8 @@
 
 use std::time::Instant;
 
+use super::coordinator::EditFrontierRequest;
+
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::layout_snapshot::{
@@ -391,6 +393,65 @@ impl EditFrontierState {
             .collect()
     }
 
+    /// Issue #826 评论 11 阻塞 2：编辑**身份**是否连续 —— 决定这一笔能不能并入
+    /// 当前 burst。
+    ///
+    /// 「同 kind + 同方向 + 未结束」还不够：当前这套「所有 ConcealTrack 都引用
+    /// burst base snapshot」的模型，无法表示「这一笔要删的字是本 burst 中途才
+    /// 产生的，它根本不在 burst base 里」。这时映射必然失败。
+    ///
+    /// 稳定反例：快速连续两次 Undo。正文历史 `a -> b -> c`，当前是 `c`。
+    /// - 第一次 Undo `c -> b`：Replace，burst base = `c`。
+    /// - 动画未结束立刻第二次 Undo `b -> a`：kind 相同、cursor 没动、
+    ///   conceal direction 也相同，`can_extend` 本来是 true。
+    ///   但第二笔要删的 `b` 是第一次 Undo **刚插出来的字**，它在 burst base `c`
+    ///   里不存在 → `base_to_target_map.map_new_range_to_old(b_range)` 返回
+    ///   `None`。旧代码 `filter_map` 静默丢掉 → `b` 没有 ConcealTrack；
+    ///   同时它还在 Reveal 的 track 映射也失败 → `continue` 静默丢掉 →
+    ///   **`b` 直接闪没**。这与 #826 最初要解决的「快速编辑时历史字突然消失」
+    ///   是同一类问题，只是载体从旧 transaction queue 换成了 silent map failure。
+    ///
+    /// 规则：
+    /// - **old 侧**（Delete / Replace）：本次每条非零 `deleted_ranges` 都必须能
+    ///   通过 `self.base_to_target_map.map_new_range_to_old(..)` 完整映回 burst base。
+    /// - **new 侧**（Insert / Replace）：每条仍需继承的旧 RevealTrack 都必须能
+    ///   通过 `request.offset_map.map_old_range_to_new(..)` 映到 latest target。
+    ///   当前编辑若正好把这条 reveal text 改掉，映射失败就不能静默丢 track。
+    ///
+    /// 身份不连续时这不是错误 fallback，而是**新的 burst 语义边界**：
+    /// 当前 burst 到此结束，用 `request.base_snapshot` / `request.target_snapshot`
+    /// 开一个新 burst。
+    pub(crate) fn can_extend_identity(
+        &self,
+        kind: EditFrontierKind,
+        request: &EditFrontierRequest,
+    ) -> bool {
+        if kind.needs_old_overlay() {
+            let all_mapped = request
+                .deleted_ranges
+                .iter()
+                .filter(|&&(start, end)| end > start)
+                .all(|&(start, end)| {
+                    self.base_to_target_map
+                        .map_new_range_to_old(start, end)
+                        .is_some()
+                });
+            if !all_mapped {
+                return false;
+            }
+        }
+        if kind.needs_new_mask() {
+            self.reveal_tracks.iter().all(|track| {
+                request
+                    .offset_map
+                    .map_old_range_to_new(track.range.0, track.range.1)
+                    .is_some()
+            })
+        } else {
+            true
+        }
+    }
+
     /// 本轮吐字的全部新文字范围（最新 target 坐标系）。
     pub(crate) fn new_ranges(&self) -> Vec<(usize, usize)> {
         self.reveal_tracks.iter().map(|track| track.range).collect()
@@ -398,6 +459,7 @@ impl EditFrontierState {
 
     /// 开始一轮吐字。
     pub(crate) fn begin_insert(
+        base_text: String,
         target_snapshot: EditorLayoutSnapshot,
         target_text: String,
         new_ranges: Vec<(usize, usize)>,
@@ -417,7 +479,11 @@ impl EditFrontierState {
             conceal_direction: ConcealDirection::Forward,
             started_at,
             duration_ms: duration_ms.max(1),
-            base_text: target_text.clone(),
+            // Issue #826 评论 11：纯 Insert 不画旧正文 overlay，但 `base_text` /
+            // `base_to_target_map` 必须同属 burst 开始前那一份正文。
+            // 之前这里写的是 `target_text.clone()`，而 `base_to_target_map`
+            // 是 old -> target，两者指向不同 revision，state invariant 是假的。
+            base_text,
             target_text,
             base_to_target_map,
         }
@@ -515,10 +581,15 @@ impl EditFrontierState {
         let eased = ease_out_cubic(self.sample(now).progress);
         let mut next: Vec<RevealTrack> = Vec::with_capacity(self.reveal_tracks.len() + 1);
         for track in &self.reveal_tracks {
-            let Some(range) = prev_target_to_new.map_old_range_to_new(track.range.0, track.range.1)
-            else {
-                continue;
-            };
+            // Issue #826 评论 11 阻塞 2：映射失败不再静默 `continue`。
+            // 静默丢 track 会让那些字「既没有新的 Reveal、又被 canonical 立刻画出」，
+            // 直接闪没。`can_extend_identity` 已在进 extend 前做完同样的 preflight，
+            // 所以这里失败是 invariant violation。
+            let range = prev_target_to_new
+                .map_old_range_to_new(track.range.0, track.range.1)
+                .unwrap_or_else(|| {
+                    identity_breakdown_single("extend_insert/extend_replace", track.range)
+                });
             let path = FrontierPath::build(&target_snapshot, range, PathDirection::Forward);
             let next_travelled = travelled(track.travelled, path.total_length, eased);
             next.push(RevealTrack {
@@ -568,8 +639,12 @@ impl EditFrontierState {
                 travelled: travelled(track.travelled, track.path.total_length, eased),
             });
         }
-        let incoming =
-            normalize_track_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        // `can_extend_identity` 已经做完同样的 preflight；这里失败说明
+        // coordinator 绕过了 preflight 直接 extend，是 invariant violation。
+        let incoming = normalize_track_ranges(
+            map_ranges_backward(&deleted_ranges, base_to_current)
+                .unwrap_or_else(|| identity_breakdown("extend_delete", &deleted_ranges)),
+        );
         for range in incoming {
             if next.iter().any(|track| overlaps(range, track.range)) {
                 continue;
@@ -620,8 +695,11 @@ impl EditFrontierState {
                 travelled: travelled(track.travelled, track.path.total_length, eased),
             })
             .collect();
-        let incoming_old =
-            normalize_track_ranges(map_ranges_backward(&deleted_ranges, base_to_current));
+        // 同 extend_delete：`can_extend_identity` 已 preflight，这里失败是 invariant violation。
+        let incoming_old = normalize_track_ranges(
+            map_ranges_backward(&deleted_ranges, base_to_current)
+                .unwrap_or_else(|| identity_breakdown("extend_replace", &deleted_ranges)),
+        );
         for range in incoming_old {
             if conceal.iter().any(|track| overlaps(range, track.range)) {
                 continue;
@@ -640,10 +718,15 @@ impl EditFrontierState {
         // new 侧：每条旧 track 映射自己的 range 到最新 target，再重建自己的 path。
         let mut reveal: Vec<RevealTrack> = Vec::with_capacity(self.reveal_tracks.len() + 1);
         for track in &self.reveal_tracks {
-            let Some(range) = prev_target_to_new.map_old_range_to_new(track.range.0, track.range.1)
-            else {
-                continue;
-            };
+            // Issue #826 评论 11 阻塞 2：映射失败不再静默 `continue`。
+            // 静默丢 track 会让那些字「既没有新的 Reveal、又被 canonical 立刻画出」，
+            // 直接闪没。`can_extend_identity` 已在进 extend 前做完同样的 preflight，
+            // 所以这里失败是 invariant violation。
+            let range = prev_target_to_new
+                .map_old_range_to_new(track.range.0, track.range.1)
+                .unwrap_or_else(|| {
+                    identity_breakdown_single("extend_insert/extend_replace", track.range)
+                });
             let path = FrontierPath::build(&target_snapshot, range, PathDirection::Forward);
             let next_travelled = travelled(track.travelled, path.total_length, eased);
             reveal.push(RevealTrack {
@@ -905,11 +988,59 @@ fn overlaps(a: (usize, usize), b: (usize, usize)) -> bool {
 }
 
 /// 把一批 range 映射回 burst base 坐标系（`new_to_old` 的方向）。
-fn map_ranges_backward(ranges: &[(usize, usize)], new_to_old: &OffsetMap) -> Vec<(usize, usize)> {
+///
+/// Issue #826 评论 11 阻塞 2：**不再用 `filter_map` 静默吞掉映射失败的
+/// changed range**。映射失败意味着「本次要删的字不是 burst base 里的同一逻辑
+/// 文字」，把它丢掉会让那些字既没有 ConcealTrack、又被 Reflow 当 changed 排除，
+/// 视觉上直接从 canonical 消失。
+///
+/// 这里返回 `None`，调用方**必须**把它当作「不能 extend 当前 burst」处理
+/// （`can_extend_identity` 已经在进 extend 之前做完同样的 preflight，
+/// 所以走到这里失败属于 invariant violation）。
+fn map_ranges_backward(
+    ranges: &[(usize, usize)],
+    new_to_old: &OffsetMap,
+) -> Option<Vec<(usize, usize)>> {
     ranges
         .iter()
-        .filter_map(|&(start, end)| new_to_old.map_new_range_to_old(start, end))
+        .map(|&(start, end)| new_to_old.map_new_range_to_old(start, end))
         .collect()
+}
+
+/// Issue #826 评论 11 阻塞 2：动画身份断裂的**显式兜底**。
+///
+/// 走到这里说明 coordinator 绕过了 `can_extend_identity` 的 preflight，
+/// 直接调用了 extend。按 issue 的规则，正确行为是「当前 burst 到此结束、
+/// 另开一轮」，而不是把映射失败的字静默丢掉。这里返回该 range 原样、
+/// 让调用方继续开 track，同时打一条正式诊断事件便于定位 —— 丢 track 和
+/// 保留 track 但不精确相比，前者会让字直接闪没。
+fn identity_breakdown_single(site: &str, range: (usize, usize)) -> (usize, usize) {
+    identity_breakdown(site, std::slice::from_ref(&range))
+        .first()
+        .copied()
+        .unwrap_or(range)
+}
+
+/// 记录身份断裂并原样返回 range 列表（见 `identity_breakdown_single` 的说明）。
+fn identity_breakdown(site: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+    fields.insert("site".to_string(), serde_json::json!(site));
+    fields.insert("ranges".to_string(), serde_json::json!(ranges));
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Warn,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: "editor.anim.frontier.identity_breakdown".to_string(),
+        target: "editor.anim".to_string(),
+        message: Some(format!(
+            "Issue #826 评论 11: {site} 出现动画身份断裂（映射失败），本次改动未被完整继承到当前 burst"
+        )),
+        fields,
+    });
+    ranges.to_vec()
 }
 
 /// 为每个新文字范围建一条吐字 track（吐字恒为正向视觉顺序）。
