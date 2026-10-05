@@ -53,6 +53,7 @@ Rectangle {
     // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
     // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
+    // Issue #829：手稿里的常驻入口是 starmap / ai；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
     property string drawerTool: ""
     readonly property bool drawerOpen: root.drawerTool !== ""
@@ -164,7 +165,7 @@ Rectangle {
         if (!isWorkbenchPlan(plan)) return;
         // 一次性提交最终组合。
         root.leftPaneCollapsed = targetLeftCollapsed;
-        root.drawerTool = toolKey || "stats";
+        root.drawerTool = toolKey || "starmap";
         root.workbenchPlan = plan;
     }
 
@@ -198,7 +199,7 @@ Rectangle {
         if (root.drawerOpen) {
             root.closeToolPane();
         } else {
-            root.requestToolPaneOpen("stats", true);
+            root.requestToolPaneOpen("starmap", true);
         }
     }
 
