@@ -1110,9 +1110,12 @@ impl LinuxEditorPipeline {
     /// 1. `FrontierMask`（吐字遮罩）：**不需要任何动画纹理**。它只是把还没露出的
     ///    新字从 canonical 静态层裁掉，动画层不画那一块。所以它既不进准备流程，
     ///    也不参与 missing 判定——一次 Reflow 资源问题不能杀掉本来完全独立的吐字。
-    /// 2. Delete / Replace 的旧正文 overlay：glyph 取自 `frontier.base_snapshot` 的
-    ///    **旧**行图（`active_edit_frontier_base_snapshot()` 只在需要旧 overlay 时
-    ///    才返回 Some）。
+    /// 2. Delete / Replace 的旧正文 overlay：**直接从 track 自带的 `source_lines`
+    ///    取真实 QImage**（`active_conceal_source_lines()`）。
+    ///    Issue #826 评论 14/15：`LineSnapshotId` 只是钥匙不是图，而且 glyph 的
+    ///    source 已经是「track 创建这一刻的 current old snapshot」，不再统一来自
+    ///    `frontier.base_snapshot` —— 回头猜某份 snapshot 有没有这个 id 找不到图。
+    ///    `retain` 只能「别删已存在的」，不能凭空创建。
     /// 3. Reflow 正在移动的 glyph：取自 `frontier.target_snapshot` 的**最新**行图。
     ///    `ReflowSpan.snapshot_id` 明确是新行的 id，两边 ID 带 revision，本来就不是
     ///    同一批。
