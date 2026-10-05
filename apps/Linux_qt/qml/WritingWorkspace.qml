@@ -486,6 +486,7 @@ Rectangle {
     // 把这个结构落成真实的 QML 树：SplitView 整体只占内容区，不再自己从窗口顶端开始。
     WritingWorkbenchToolbar {
         id: workbenchToolbar
+        dt: root.dt
         anchors.fill: parent
 
         // Core 的 ToolbarLeading / ToolbarCenter / ToolbarTrailing bounds

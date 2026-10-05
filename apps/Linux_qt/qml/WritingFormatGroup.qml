@@ -444,7 +444,7 @@ Rectangle {
                         radius: dt.radiusPill
                         color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
                                dt.primaryContainer :
-                               presetHover.containsMouse ? dt.surfaceVariant : "transparent"
+                               lineSpacingHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
                             dt: root.dt
@@ -459,7 +459,10 @@ Rectangle {
                         }
 
                         MouseArea {
-                            id: presetHover
+                            // Issue #830：字号预设用 presetHover，行距预设改用独立 id。
+                            // 两个 preset Repeater 的 delegate 在同一文件里，同名 id 会触发
+                            // qmllint 的 syntax.duplicate-ids 错误，挡住 required 属性门禁。
+                            id: lineSpacingHover
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor

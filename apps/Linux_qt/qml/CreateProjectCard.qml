@@ -45,6 +45,7 @@ Rectangle {
     Behavior on color { ColorAnimation { duration: dt.animFast } }
 
     AppText {
+        dt: root.dt
         anchors.centerIn: parent
         text: "+"
         color: root.hovered ? root.dt.primary : root.dt.textPrimary

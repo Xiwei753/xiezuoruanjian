@@ -8,6 +8,7 @@
 #   2. QML 中无新增硬编码阴影颜色（Qt.rgba(0,0,0,0.x) border hack）
 #   3. Android 中无新增硬编码 FAB 底部避让（layout_margin="16dp" 在 FAB 上）
 #   4. monetColor 不再扩展（不在新文件中出现）
+#   9. QML required property 全部绑定（第 9 项走 Qt 自带 qmllint，见该段注释）
 #
 # 返回值：0=通过，1=有违规
 # =============================================================================
@@ -222,44 +223,71 @@ else
     echo "   PASS"
 fi
 
-# --- Check 9: QML base components dt injection ---
-echo "9. Checking QML base components (AppText/AppButton/HubPageHeader) have dt injected..."
-DT_INJECTION_ISSUES=""
+# --- Check 9: QML required property binding (qmllint [required]) ---
+# Issue #830：旧实现按组件名白名单（AppText / AppButton / HubPageHeader）grep 调用点，
+# 再猜 5 行上下文里有没有 `dt:`。白名单漏登记一个组件（比如 WritingWorkbenchToolbar），
+# 漏传就一路进到运行时：QML 创建组件时报 "Required property dt was not initialized"，
+# 页面整片白屏（#830 的启动白屏就是这个）。
+# 现在直接用 Qt 自带的 qmllint：required 属性诊断由组件自身声明驱动，
+# 按真实调用点判定，不维护组件白名单，也不猜上下文行数。
+echo "9. Checking QML required property binding via qmllint..."
+QML_DIR="$REPO_ROOT/apps/Linux_qt/qml"
 
-# Check that AppText, AppButton, HubPageHeader instances always pass dt
-# These components previously used `required property var dt` and MUST receive dt
-for COMPONENT in AppText AppButton HubPageHeader; do
-    while IFS= read -r line; do
-        FILE=$(echo "$line" | cut -d: -f1)
-        LINENUM=$(echo "$line" | cut -d: -f2)
-        # Skip the component definition file itself
-        if [[ "$FILE" == *"/${COMPONENT}.qml" ]]; then continue; fi
-        # Skip root-element subclass files (e.g. SectionHeader.qml root is "AppText {")
-        # These files define components that inherit from COMPONENT; they don't need dt injection.
-        # Only skip when the component name starts at column 1 (no leading whitespace) —
-        # indented instances inside pages must still be checked.
-        MATCHED_LINE=$(cd "$REPO_ROOT" && sed -n "${LINENUM}p" "$FILE" 2>/dev/null || true)
-        if [[ "$MATCHED_LINE" == "${COMPONENT} {"* ]]; then
-            continue  # Root element subclass, inherits dt
+# qmllint 通常不在 PATH（Fedora 装在 /usr/lib64/qt6/bin），按候选路径找；
+# 也允许用 QMLLINT 环境变量显式指定。
+find_qmllint() {
+    local candidate
+    for candidate in \
+        "${QMLLINT:-}" \
+        qmllint \
+        qmllint-qt6 \
+        qmllint6 \
+        /usr/lib64/qt6/bin/qmllint \
+        /usr/lib/qt6/bin/qmllint \
+        /run/host/usr/lib64/qt6/bin/qmllint \
+        /run/host/usr/bin/qmllint-qt6 \
+        /app/usr/lib64/qt6/bin/qmllint; do
+        if [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
         fi
-        # Check if the line contains the component instantiation but NOT dt:
-        # Look at a wider context (5 lines) to find dt: assignment
-        START=$((LINENUM > 5 ? LINENUM - 2 : 1))
-        END=$((LINENUM + 5))
-        CONTEXT=$(cd "$REPO_ROOT" && sed -n "${START},${END}p" "$FILE" 2>/dev/null || true)
-        if echo "$CONTEXT" | grep -q "dt:"; then
-            continue  # dt is passed, OK
-        fi
-        DT_INJECTION_ISSUES="${DT_INJECTION_ISSUES}  $line (missing dt injection)"$'\n'
-    done < <(cd "$REPO_ROOT" && grep -rn "${COMPONENT}\s*{" apps/Linux_qt/qml/ 2>/dev/null | grep -v 'id:' || true)
-done
+    done
+    return 1
+}
 
-if [[ -n "$DT_INJECTION_ISSUES" ]]; then
-    echo "   FAIL: Found ${COMPONENT:-component} instances without dt injection:"
-    echo "$DT_INJECTION_ISSUES"
+QMLLINT_BIN="$(find_qmllint || true)"
+
+# 先取完整 help 再匹配：`| grep -q` 在 pipefail 下会被 SIGPIPE 打成假失败。
+QMLLINT_HELP=""
+if [[ -n "$QMLLINT_BIN" ]]; then
+    QMLLINT_HELP="$("$QMLLINT_BIN" --help 2>&1 || true)"
+fi
+
+if [[ -z "$QMLLINT_BIN" ]]; then
+    echo "   FAIL: qmllint not found — 无法验证 QML required property 是否绑定。"
+    echo "         安装 Qt6 declarative 开发工具（如 dnf install qt6-qtdeclarative-devel），"
+    echo "         或用 QMLLINT=/path/to/qmllint 指定。"
+    ERRORS=$((ERRORS + 1))
+elif ! grep -q -- '--required' <<< "$QMLLINT_HELP"; then
+    echo "   FAIL: $QMLLINT_BIN 不支持 --required（需要 Qt 6.5 及以上）。"
     ERRORS=$((ERRORS + 1))
 else
-    echo "   PASS"
+    mapfile -t QML_FILES < <(find "$QML_DIR" -type f -name '*.qml' -print | sort)
+    QMLLINT_OUT="$(mktemp)"
+    # --ignore-settings：忽略本地 .qmllint.ini，门禁结果只由命令行选项决定。
+    # --required=error：required 属性未绑定按 error 计，qmllint 返回非零。
+    if "$QMLLINT_BIN" \
+        --ignore-settings \
+        --required=error \
+        -I "$QML_DIR" \
+        "${QML_FILES[@]}" > "$QMLLINT_OUT" 2>&1; then
+        echo "   PASS (${#QML_FILES[@]} 个 QML 文件)"
+    else
+        echo "   FAIL: qmllint 报出 QML 错误："
+        grep -E '^Error' "$QMLLINT_OUT" || sed -n '1,40p' "$QMLLINT_OUT"
+        ERRORS=$((ERRORS + 1))
+    fi
+    rm -f "$QMLLINT_OUT"
 fi
 
 # --- Check 10: QML bare Text usage (should use AppText) ---
