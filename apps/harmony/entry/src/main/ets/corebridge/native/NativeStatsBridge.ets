@@ -67,13 +67,19 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<CurrentWritingSpeed>(e) }
   }
 
-  // Issue #829 评论5：按编辑事务上报写作统计。
+  // Issue #829 评论5/7：按编辑事务上报写作统计。
   // 入参 JSON 直接透传给 Core（cause→EventSource 的映射在 Core 侧做），
   // 所以这里不做 ArkTS 侧的字段猜测或 source 拼接。
+  // deviceId 也不在这里传：设备身份由 Core 自己读/建（见 record_editor_change_stats）。
+  //
+  // nativeRecordEditorChangeStats 返回的是 Promise —— 真正的切线程点在 C++ 侧
+  // （Node-API async work，execute 回调跑在线程池）。ArkTS 的 async 函数不会自己
+  // 开线程，所以这里必须 await 那个 Promise，而不是包一层 async 就当异步了。
+  // Promise reject（Core 返回 false，或 work 被中止）不能当「这条已完成」吞掉。
   async recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = JSON.stringify(input)
-      const ok: boolean = this.core.getNativeModule().nativeRecordEditorChangeStats(jsonStr)
+      const ok: boolean = await this.core.getNativeModule().nativeRecordEditorChangeStats(jsonStr)
       return { success: ok, data: ok, userMessage: ok ? undefined : 'record_editor_change_stats failed' }
     } catch (e) { return nativeError<boolean>(e) }
   }

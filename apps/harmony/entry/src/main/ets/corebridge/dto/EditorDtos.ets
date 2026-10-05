@@ -31,8 +31,12 @@ export enum EditorTransactionCause {
 // 与 Core 的差异：Core 的 EditorContentDeltaDto 有四个计数
 //（inserted/deleted/insertedNonWhitespace/deletedNonWhitespace），
 // 统计只需要前两个，所以这里不带 nonWhitespace 那对字段。
+//
+// **不带 deviceId**：设备身份是 Core 的持久化事实（device/current_device.json），
+// 由 Core 侧 ensure_device_info 读/建。页面构造这个入参时 settings 往往还没加载完
+// （loadSettings 在 aboutToAppear 之后才跑），传过去的多半是 null 或占位值；
+// 一旦被记进统计事件就再也改不回来，所有事件会堆进同一个 unknown 设备桶。
 export interface EditorChangeStatsInput {
-  deviceId: string
   platform: string
   projectId: string
   volumeId: string

@@ -85,10 +85,6 @@ const STATUS_CLOCK_INTERVAL_MS: number = 30000
 // 手稿的「86 字/分」是"最近一分钟的写入速度"，所以窗口取 60 秒，由 Core
 // 以「现在」为终点重算（不是取历史速度曲线的最后一桶，那样停笔后不会归零）。
 const WRITING_SPEED_WINDOW_SECONDS: number = 60
-// Issue #829 评论 #5995146525：退出前有界等待统计队列排空的上限（轮询次数 × 每次间隔）。
-// 兜底性质：编辑过程中队列基本已排空；超时就放弃等待，不因为统计而卡住退出。
-const STATS_DRAIN_MAX_TICKS: number = 20
-const STATS_DRAIN_TICK_MS: number = 25
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -226,8 +222,7 @@ export struct WritingScreen {
   // Issue #829 评论 #5995146525：写作统计上报队列（串行、异步、与编辑事务同源）。
   // state listener 里 enqueueChange 只入内存队列，由队列单协程按序跨 NAPI 写 Core，
   // 不在编辑主链上同步写盘。会话 id / 时长口径由队列自己持有。
-  private editorStatsQueue: EditorStatsQueue =
-    new EditorStatsQueue(this.bridge, this.settings.statsDeviceId || 'unknown', 'harmony')
+  private editorStatsQueue: EditorStatsQueue = new EditorStatsQueue(this.bridge, 'harmony')
   // Share 生命周期观察者：onForeground 重新注册，onBackground stop（成对）。
   private shareLifecycleObserver: LifecycleObserver | null = null
   // 接续进入时携带的编辑器状态（selection/cursor/viewport/contentHash），loadChapter 恢复时消费。
@@ -438,13 +433,8 @@ export struct WritingScreen {
   // 返回 boolean：保存失败或 closeAsync 失败返回 false，不 pop；正文仍在活跃编辑会话。
   // 有界等待写作统计队列排空。队列本身是串行的，这里只轮询 pendingCount；
   // 正常路径上队列在编辑过程中早就排空了，这里只是兜底。
-  private async drainEditorStatsQueue(): Promise<void> {
-    for (let i = 0; i < STATS_DRAIN_MAX_TICKS; i++) {
-      if (this.editorStatsQueue.pendingCount() === 0) {
-        return
-      }
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), STATS_DRAIN_TICK_MS))
-    }
+  private async flushEditorStatsQueue(): Promise<boolean> {
+    return this.editorStatsQueue.flush()
   }
 
   private async doGracefulClose(): Promise<boolean> {
@@ -473,11 +463,15 @@ export struct WritingScreen {
         this.dispatcher.unseal()
         return false
       }
-      // 6. Issue #829 评论 #5995146525：等写作统计队列排空再离开。
+      // 6. Issue #829 评论 #5995146525 / #5996028848：等写作统计队列真正写完再离开。
       //    编辑事务事件已经全部入队（步骤 3-4 之后不会有新的编辑命令再进来），
-      //    这里有界等待是为了别把最后几条统计丢掉；超时也照常走，
-      //    不能因为统计没写完而卡住用户退出版面。
-      await this.drainEditorStatsQueue()
+      //    flush() 等的是「队列空且没有 in-flight」，不是「等一段时间」——
+      //    轮询 pendingCount 会在最后一条正在写盘时提前判定排空。
+      //    统计没写进去不该拦住用户离开，所以失败只记日志不 return false。
+      const statsFlushed: boolean = await this.flushEditorStatsQueue()
+      if (!statsFlushed) {
+        console.warn(`[WritingScreen] 写作统计未全部落盘（丢弃 ${this.editorStatsQueue.dropped()} 条）`)
+      }
       // 7. 保存稳定 snapshot（此时不再读可能已变化的 this.content）
       const savedText: string = afterFinish.text
       if (savedText !== this.lastSavedContent) {
@@ -1334,6 +1328,10 @@ export struct WritingScreen {
         }
         this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => { this.saveMessage = '' }, 2000)
+        // Issue #829 评论 #5996028848：正文已经落盘，等编辑事务产生的统计事件也写完，
+        // 这样「磁盘上有正文」和「磁盘上有对应统计」是一致的 —— 崩溃时不会留下
+        // 有正文却缺统计的窗口。flush() 等的是真正写完，不是轮询一段时间。
+        await this.flushEditorStatsQueue()
         // 保存成功后更新接续状态（contentHash 前进，此时 hasUnsavedChanges=false 带完整 selection/cursor）。
         this.updateContinuationState()
         return true

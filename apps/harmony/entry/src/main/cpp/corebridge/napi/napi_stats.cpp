@@ -74,21 +74,112 @@ static napi_value NativeGetCurrentWritingSpeed(napi_env env, napi_callback_info 
     return ReturnJsonString(env, writer_core_get_current_writing_speed(window_seconds));
 }
 
-// Issue #829 评论5：按编辑事务上报写作统计。
+// Issue #829 评论7：按编辑事务上报写作统计。
 // ArkTS 传一个 JSON 字符串（EditorChangeStatsInputDto 线格式），C 层只透传，
 // cause→EventSource 的映射和计数字段全在 Core 侧决定。
+//
+// **必须是 Node-API async work，不能同步调 Rust。**
+// Core 这条链不轻：record_editor_change_stats → StatsApi::record_event →
+// aggregate_single_event → save_or_merge_daily_stats，每个编辑事务都要读当日统计
+// 并 write + rename。同步调就等于磁盘 I/O 落在 ArkUI 主线程上。
+// ArkTS 的 async 函数不会自己开线程，所以光在 ArkTS 侧 await 没有意义 ——
+// 真正的切线程点在这里：execute 回调跑在线程池，complete 回调只 resolve Promise。
+
+// async work 的载荷。在 handler 里分配，随 work 一起活到 complete 回调。
+struct StatsRecordWork {
+    // 事件 JSON 的堆拷贝，execute 回调在线程池里读它。
+    char* json = nullptr;
+    // create_promise 给的 deferred。complete 回调用它 resolve/reject，
+    // 放在载荷里而不是 instance data：instance data 是 env 全局的，
+    // 两条调用重叠会互相覆盖对方的 deferred，第一个 Promise 永远不落地。
+    napi_deferred deferred = nullptr;
+    // create_async_work 之后回填。设置了 complete 回调时，官方要求在 complete 里
+    // 调 napi_delete_async_work 释放 work 资源，否则每次编辑事务都漏一个。
+    napi_async_work async_work = nullptr;
+    // execute 的结果，供 complete 回调决定 resolve 还是 reject。
+    bool ok = false;
+};
+
+// Execute 回调 — 运行在线程池线程，可以安全调用 Rust（含文件 I/O）。
+// 这里不碰任何 napi_value：NAPI 的 JS 侧对象只能在主线程用。
+static void StatsRecordExecute(napi_env env, void* data) {
+    (void)env;
+    auto* work = static_cast<StatsRecordWork*>(data);
+    work->ok = writer_core_record_editor_change_stats(work->json);
+}
+
+// Complete 回调 — 回到主线程，把结果 resolve/reject 成 Promise，然后释放 work。
+static void StatsRecordComplete(napi_env env, napi_status status, void* data) {
+    auto* work = static_cast<StatsRecordWork*>(data);
+    if (status == napi_ok) {
+        if (work->ok) {
+            napi_value result = nullptr;
+            napi_get_boolean(env, true, &result);
+            napi_resolve_deferred(env, work->deferred, result);
+        } else {
+            // 失败走 reject 而不是 resolve(false)：ArkTS 侧必须能区分
+            // 「这条写成功了」和「这条没写进去」，不能把失败伪装成完成。
+            napi_value message = nullptr;
+            const char* text = "record_editor_change_stats failed";
+            napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+            napi_reject_deferred(env, work->deferred, message);
+        }
+    } else {
+        napi_value message = nullptr;
+        const char* text = "record_editor_change_stats async work aborted";
+        napi_create_string_utf8(env, text, NAPI_AUTO_LENGTH, &message);
+        napi_reject_deferred(env, work->deferred, message);
+    }
+    // 设置了 complete 回调时 work 资源由 complete 负责释放（官方要求，
+    // 否则每个编辑事务都漏一个 async work）。所有 napi 调用都已结束再删。
+    napi_delete_async_work(env, work->async_work);
+    delete[] work->json;
+    delete work;
+}
+
 static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
+    // JSON 先拷到堆上：execute 回调跑在别的线程，不能读 NAPI value。
     char* json = TakeStringArg(env, argc >= 1 ? args[0] : nullptr);
-    bool ok = writer_core_record_editor_change_stats(json);
-    delete[] json;
 
-    napi_value result = nullptr;
-    napi_get_boolean(env, ok, &result);
-    return result;
+    auto* work = new StatsRecordWork();
+    work->json = json;
+
+    napi_value promise = nullptr;
+    if (napi_create_promise(env, &work->deferred, &promise) != napi_ok) {
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_promise failed");
+        return nullptr;
+    }
+
+    napi_value resource_name = nullptr;
+    const char* name = "WriterCoreRecordEditorChangeStats";
+    napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resource_name);
+
+    napi_async_work async_work = nullptr;
+    if (napi_create_async_work(env, nullptr, resource_name, StatsRecordExecute,
+                               StatsRecordComplete, work, &async_work) != napi_ok) {
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_create_async_work failed");
+        return nullptr;
+    }
+    work->async_work = async_work;
+
+    if (napi_queue_async_work(env, async_work) != napi_ok) {
+        napi_delete_async_work(env, async_work);
+        delete[] json;
+        delete work;
+        napi_throw_error(env, nullptr, "napi_queue_async_work failed");
+        return nullptr;
+    }
+
+    // 调用方（ArkTS）拿到 Promise，await 它就是等磁盘写入真正完成。
+    return promise;
 }
 
 static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info info) {
