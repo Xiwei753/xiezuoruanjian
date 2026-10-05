@@ -113,3 +113,13 @@ export interface SpeedCurve {
   bucketMinutes: number
   buckets: SpeedCurvePoint[]
 }
+
+// CurrentWritingSpeedDto：Core「当前写作速度」——以调用时刻为终点的实时速度。
+// 和 SpeedCurve 分开：曲线是历史分桶，桶只到最后一个输入事件，拿它最后一桶
+// 当实时速度会在停笔后一直挂着非零值。停笔超过一个窗口后 charsPerMinute 回落到 0。
+export interface CurrentWritingSpeed {
+  windowSeconds: number
+  sampledAtMs: number
+  charsTyped: number
+  charsPerMinute: number
+}

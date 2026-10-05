@@ -80,10 +80,10 @@ const PANE_HANDLE_HEIGHT_VP: number = 64
 const WRITING_PROGRESS_TARGET_PLACEHOLDER: number = 2000
 // 时钟刷新间隔（ms）。秒级跳动对手稿里的 HH:mm 没有意义，30s 对齐即可。
 const STATUS_CLOCK_INTERVAL_MS: number = 30000
-// Issue #829 评论2第2项：状态栏左段「字/分」的速度曲线分桶粒度。
-// 手稿的「86 字/分」是"最近一分钟的写入速度"，所以按 1 分钟分桶，
-// 取最后一个桶的 charsPerMinute。速度由 Core 算，端侧不自己除。
-const WRITING_SPEED_CURVE_BUCKET_MINUTES: number = 1
+// Issue #829 评论3第2项：状态栏左段「字/分」的速度窗口。
+// 手稿的「86 字/分」是"最近一分钟的写入速度"，所以窗口取 60 秒，由 Core
+// 以「现在」为终点重算（不是取历史速度曲线的最后一桶，那样停笔后不会归零）。
+const WRITING_SPEED_WINDOW_SECONDS: number = 60
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -155,8 +155,8 @@ export struct WritingScreen {
   @State outlineGroupExpanded: boolean = false
   // Issue #829：底部状态栏的时钟（HH:mm），只做展示，不参与任何业务判定。
   @State clockText: string = ''
-  // Issue #829 评论2第2项：状态栏两段进度数据都来自 Core，端侧不自己算。
-  //   latestCharsPerMinute = 今日速度曲线最后一个桶的 charsPerMinute（手稿「86 字/分」）。
+  // Issue #829 评论3第2项：状态栏两段进度数据都来自 Core，端侧不自己算。
+  //   latestCharsPerMinute = Core「当前写作速度」的 charsPerMinute（手稿「86 字/分」）。
   //   todayTypedChars      = 今日纯输入字数（中段分子，和 Linux_Qt 同一份 Core 汇总语义）。
   @State latestCharsPerMinute: number = 0
   @State todayTypedChars: number = 0
@@ -618,15 +618,17 @@ export struct WritingScreen {
 
   // 两段状态都失败时保持旧值：状态栏是只读展示，查询失败不该把已有数字清零。
   private async refreshWritingStatusData(): Promise<void> {
-    const today = this.todayDateString()
-
-    const curve = await this.bridge.getWritingSpeedCurve(
-      today, today, WRITING_SPEED_CURVE_BUCKET_MINUTES)
-    if (curve.success && curve.data && curve.data.buckets.length > 0) {
-      const lastBucket = curve.data.buckets[curve.data.buckets.length - 1]
-      this.latestCharsPerMinute = Math.round(lastBucket.charsPerMinute)
+    // 左段：Core「当前写作速度」，窗口 60 秒 = 手稿「86 字/分」的「最近一分钟」。
+    // 不用写作速度曲线的最后一个桶——曲线桶只生成到最后一个输入事件，
+    // 停笔后会一直挂着停笔前的非零值。也不在这里判断桶是否过期或强制 flush
+    // 统计事件，Core 已把内存缓冲和已落盘事件当成同一份事实源。
+    const speed = await this.bridge.getCurrentWritingSpeed(WRITING_SPEED_WINDOW_SECONDS)
+    if (speed.success && speed.data) {
+      this.latestCharsPerMinute = Math.round(speed.data.charsPerMinute)
     }
 
+    // 中段：今日纯输入字数。
+    const today = this.todayDateString()
     const summary = await this.bridge.getWritingStatsSummary(today, today)
     if (summary.success && summary.data) {
       this.todayTypedChars = summary.data.totalHumanTypedChars

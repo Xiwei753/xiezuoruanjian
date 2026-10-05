@@ -1,7 +1,7 @@
 import { IWriterCoreBridge } from './IWriterCoreBridge'
 import { EditorTransactionCause } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve, CurrentWritingSpeed } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
@@ -343,6 +343,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>> {
     return this.statsBridge.getWritingSpeedCurve(startDate, endDate, bucketMinutes)
+  }
+
+  async getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>> {
+    return this.statsBridge.getCurrentWritingSpeed(windowSeconds)
   }
 
   async calculateWordCount(text: string): Promise<number> {

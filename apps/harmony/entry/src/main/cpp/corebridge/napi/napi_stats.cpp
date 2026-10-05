@@ -59,6 +59,21 @@ static napi_value NativeGetWritingSpeedCurve(napi_env env, napi_callback_info in
     return result;
 }
 
+// Issue #829：实时写作速度。windowSeconds 少传或非数值时留 0，Rust 侧会钳到
+// 至少 1 秒（0 秒窗口无意义且无法折算速度），不在 C++ 这层重复校验。
+static napi_value NativeGetCurrentWritingSpeed(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    uint32_t window_seconds = 0;
+    if (argc >= 1 && args[0] != nullptr) {
+        napi_get_value_uint32(env, args[0], &window_seconds);
+    }
+
+    return ReturnJsonString(env, writer_core_get_current_writing_speed(window_seconds));
+}
+
 static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -87,6 +102,7 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingStatsSummary", nullptr, NativeGetWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeProcessWritingEvent", nullptr, NativeProcessWritingEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);

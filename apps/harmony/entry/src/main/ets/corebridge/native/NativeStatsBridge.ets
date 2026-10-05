@@ -1,7 +1,7 @@
-import { WritingStats, SpeedCurve } from '../dto/ProjectDtos'
+import { WritingStats, SpeedCurve, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeWritingStats, decodeSpeedCurve, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
+import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
 
 interface WritingEventDto {
   deviceId: string
@@ -45,13 +45,25 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<WritingStats>(e) }
   }
 
-  // Issue #829：状态栏左段的「字/分」取最后一个桶的 charsPerMinute，速度由 Core 算。
+  // Issue #829：历史写作速度曲线（按日期区间 + 分桶粒度）。曲线只负责历史形状，
+  // 状态栏左段的实时「字/分」走 getCurrentWritingSpeed。
   async getWritingSpeedCurve(startDate: string, endDate: string,
     bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeGetWritingSpeedCurve(startDate, endDate, bucketMinutes)
       return this.core.decodeEnvelope<SpeedCurve>(jsonStr, decodeSpeedCurve)
     } catch (e) { return nativeError<SpeedCurve>(e) }
+  }
+
+  // Issue #829：状态栏左段的实时「字/分」。Core 以调用时刻为终点重算最近
+  // windowSeconds 秒的窗口速度，停笔超过一个窗口后自然回落到 0。
+  // 不读速度曲线最后一桶——曲线桶只生成到最后一个输入事件，停笔后会一直
+  // 挂着非零值。也不在这里判断桶是否过期或强制 flush 统计事件。
+  async getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeGetCurrentWritingSpeed(windowSeconds)
+      return this.core.decodeEnvelope<CurrentWritingSpeed>(jsonStr, decodeCurrentWritingSpeed)
+    } catch (e) { return nativeError<CurrentWritingSpeed>(e) }
   }
 
   async calculateWordCount(text: string): Promise<number> {

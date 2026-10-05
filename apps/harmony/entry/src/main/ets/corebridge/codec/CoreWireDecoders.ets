@@ -13,7 +13,7 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats, SpeedCurve, SpeedCurvePoint } from '../dto/ProjectDtos'
+import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -621,6 +621,26 @@ export function decodeSpeedCurve(data: Object): DecodeResult<SpeedCurve> {
     range: { startDate: startDate, endDate: endDate },
     bucketMinutes: bucketMinutes,
     buckets: buckets.value
+  })
+}
+
+export function decodeCurrentWritingSpeed(data: Object): DecodeResult<CurrentWritingSpeed> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<CurrentWritingSpeed>('CurrentWritingSpeed: expected object')
+  }
+  const windowSeconds: number | null = reqNum(data, 'windowSeconds')
+  if (windowSeconds === null) { return err<CurrentWritingSpeed>('windowSeconds missing or not number') }
+  const sampledAtMs: number | null = reqNum(data, 'sampledAtMs')
+  if (sampledAtMs === null) { return err<CurrentWritingSpeed>('sampledAtMs missing or not number') }
+  const charsTyped: number | null = reqNum(data, 'charsTyped')
+  if (charsTyped === null) { return err<CurrentWritingSpeed>('charsTyped missing or not number') }
+  const charsPerMinute: number | null = reqNum(data, 'charsPerMinute')
+  if (charsPerMinute === null) { return err<CurrentWritingSpeed>('charsPerMinute missing or not number') }
+  return ok<CurrentWritingSpeed>({
+    windowSeconds: windowSeconds,
+    sampledAtMs: sampledAtMs,
+    charsTyped: charsTyped,
+    charsPerMinute: charsPerMinute
   })
 }
 

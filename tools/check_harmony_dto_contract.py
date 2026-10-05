@@ -130,6 +130,7 @@ DECODER_MAP: dict[str, str] = {
     "decodeWritingStats": "WritingStatsSummaryDto",
     "decodeSpeedCurvePoint": "SpeedCurvePointDto",
     "decodeSpeedCurve": "SpeedCurveSummaryDto",
+    "decodeCurrentWritingSpeed": "CurrentWritingSpeedDto",
     "decodeRecentEdit": "RecentEditDto",
     "decodeAppSummary": "AppStateSummaryDto",
     "decodeStarMapNodeContent": "StarMapNodeContentDto",

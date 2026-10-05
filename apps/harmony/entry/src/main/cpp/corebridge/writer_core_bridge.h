@@ -133,6 +133,8 @@ char*  writer_core_save_app_sync_state(const char* state_json);
 char*  writer_core_get_writing_stats(void);
 char*  writer_core_get_writing_stats_summary(const char* start_date, const char* end_date);
 char*  writer_core_get_writing_speed_curve(const char* start_date, const char* end_date, uint32_t bucket_minutes);
+// 实时写作速度：与上面的历史曲线分工，速度由 Core 以「最近 window_seconds 秒」重算。
+char*  writer_core_get_current_writing_speed(uint32_t window_seconds);
 char*  writer_core_process_writing_event(const char* event_json);
 
 // ── Palette / Theme ──
