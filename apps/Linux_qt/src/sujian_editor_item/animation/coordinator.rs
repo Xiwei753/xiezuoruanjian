@@ -319,13 +319,23 @@ impl LinuxEditorAnimationCoordinator {
         // 会把本该参与回流的 F 误当 changed text 排除掉、导致 F 直接瞬移。
         // 所以旧侧只用本次 `deleted_ranges`；若将来还有别的旧侧 overlay 需要排除，
         // 必须先显式 map 到 `request.base_text` 坐标再传入。
+        // Reflow 只排除「本帧仍未吐完」的部分（评论 17）。
+        let frontier_progress = self
+            .active_edit_frontier
+            .as_ref()
+            .map(|frontier| frontier.sample(request.now).progress)
+            .unwrap_or(1.0);
         let excluded_old: Vec<(usize, usize)> = request.deleted_ranges.clone();
         // Issue #826 评论 8：`new_ranges` 现在是按 overlap / adjacent 归一化的
         // 集合，全部落在最新 target 坐标系里，可以直接用来做 excludes。
+        // Issue #826 评论 17：只用**仍未吐完**的 pending reveal region。
+        // 已经完整露出的字对本次编辑已经是 unchanged text，应该让 Reflow 正常
+        // 接管它从旧位置移到新行；之前用整轮历史插入会让上一笔已吐完的字在
+        // 下一笔触发自动换行时既不能 Reveal 也不能 Reflow，直接瞬移。
         let carried_new: Vec<(usize, usize)> = self
             .active_edit_frontier
             .as_ref()
-            .map(|f| f.new_ranges())
+            .map(|f| f.pending_reveal_ranges(frontier_progress))
             .unwrap_or_default();
         let excluded_new: Vec<(usize, usize)> = carried_new
             .iter()
@@ -512,17 +522,6 @@ impl LinuxEditorAnimationCoordinator {
         self.active_edit_frontier.is_some()
     }
 
-    /// Issue #826: 当前前沿的 base（旧正文）布局快照。
-    ///
-    /// 吞字 / 替换的旧 overlay 要从它取旧行 QImage 补进纹理缓存。
-    /// 吐字不需要旧 overlay，返回 `None`，调用方直接跳过纹理准备。
-    pub(crate) fn active_edit_frontier_base_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
-        self.active_edit_frontier
-            .as_ref()
-            .filter(|frontier| frontier.kind.needs_old_overlay())
-            .map(|frontier| &frontier.base_snapshot)
-    }
-
     /// Issue #826 评论 14 阻塞 4：当前活跃的旧正文 overlay 引用的行纹理 **id**
     /// （生命周期）。
     ///
@@ -564,6 +563,27 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     /// 当前前沿种类（光标 blink 抑制等诊断用）。
+    /// Issue #826 评论 17：测试用 —— 当前前沿的吞字 region 范围。
+    #[cfg(test)]
+    pub(crate) fn active_edit_frontier_base_ranges_for_test(&self) -> Vec<(usize, usize)> {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.old_ranges())
+            .unwrap_or_default()
+    }
+
+    /// Issue #826 评论 17：测试用 —— 当前**仍未吐完**的 reveal range。
+    #[cfg(test)]
+    pub(crate) fn active_reveal_pending_ranges_for_test(
+        &self,
+        now: std::time::Instant,
+    ) -> Vec<(usize, usize)> {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.pending_reveal_ranges(f.sample(now).progress))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn active_edit_frontier_kind(&self) -> Option<EditFrontierKind> {
         self.active_edit_frontier.as_ref().map(|f| f.kind)
     }
@@ -770,17 +790,18 @@ fn record_frontier_diagnostic(
     // Issue #826 评论 7：前沿不再有二维起点/目标，改为记录两条视觉路径的段数。
     fields.insert(
         "reveal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.reveal_tracks.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.reveal.regions.len()).unwrap_or(0)),
     );
     fields.insert(
         "conceal_segments".to_string(),
-        serde_json::json!(frontier.map(|f| f.conceal_tracks.len()).unwrap_or(0)),
+        serde_json::json!(frontier.map(|f| f.conceal.regions.len()).unwrap_or(0)),
     );
     fields.insert(
         "reveal_length".to_string(),
         serde_json::json!(frontier
             .map(|f| f
-                .reveal_tracks
+                .reveal
+                .regions
                 .iter()
                 .map(|t| t.path.total_length)
                 .sum::<f64>())
@@ -790,7 +811,8 @@ fn record_frontier_diagnostic(
         "conceal_length".to_string(),
         serde_json::json!(frontier
             .map(|f| f
-                .conceal_tracks
+                .conceal
+                .regions
                 .iter()
                 .map(|t| t.path.total_length)
                 .sum::<f64>())
@@ -837,14 +859,16 @@ fn record_frontier_diagnostic(
         kind.label(),
         frontier
             .map(|f| f
-                .reveal_tracks
+                .reveal
+                .regions
                 .iter()
                 .map(|t| t.path.total_length)
                 .sum::<f64>())
             .unwrap_or(0.0),
         frontier
             .map(|f| f
-                .conceal_tracks
+                .conceal
+                .regions
                 .iter()
                 .map(|t| t.path.total_length)
                 .sum::<f64>())
