@@ -23,6 +23,9 @@ export struct HdsAppDestinationApi23 {
   @Param isRoot: boolean = true
   // 非根页返回回调：返回 true 表示已处理，false 表示未处理（继续默认行为）
   @Param onBack: (() => boolean) | null = null
+  // 宽屏（Expanded）由 PrimaryTabShell 的 WidePrimaryShell 统一提供顶部区域，
+  // 页面再画一条 HDS 标题栏就会在内容上方留出一条整宽空白（#827 评论 1 第 6 点）。
+  @Param showTitleBar: boolean = true
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -53,7 +56,7 @@ export struct HdsAppDestinationApi23 {
     HdsNavDestination() {
       this.contentBuilder()
     }
-    .hideTitleBar(false)
+    .hideTitleBar(!this.showTitleBar)
     .hideBackButton(this.isRoot)
     .onBackPressed(() => {
       if (!this.isRoot && this.onBack) {

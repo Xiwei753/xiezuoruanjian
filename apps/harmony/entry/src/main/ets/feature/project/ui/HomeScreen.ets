@@ -5,14 +5,15 @@
 // - 顶栏同步调用 viewModel.performSync()，不跳设置页
 // - 作品菜单按 ScreenPolicy 的 Project Context actions 渲染
 // - 删除 Home 内部的 BottomTabBar（全局只有 AppNavigation 一层底栏）
-// - 宽屏布局恢复 #760 之前的实现（WritingStatsCard、RecentEditsSection、ProjectsSection、QuickActions）
-// - 窄屏布局保留当前的新作品卡布局
+// Issue #827 评论 2：宽屏布局按结构图重做，删除 #760 恢复回来的
+// WritingStatsCard / RecentEditsSection / ProjectsSection / QuickActions 四块统计树。
+// 宽屏首页只剩作品卡流：作品卡 + 「+」卡从内容区左上开始排，
+// 「+」是网格里的一张卡而不是 FAB / 按钮，永久跟在最后一张作品卡后面。
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
-import { ProjectSummary, WritingStats } from '../../../corebridge/dto/ProjectDtos'
-import { RecentEdit } from '../../../corebridge/dto/ResultEnvelope'
+import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
+import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
@@ -30,6 +31,16 @@ import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAp
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 import { handleRootBack } from '../../../app/navigation/RootBackHandler'
+import { defaultLayoutMetrics } from '../../../ui/adaptive/LayoutPolicyHelper'
+
+// Issue #827 评论 1 第 7 点：命名框 / 确认框的内容最大宽度（vp）。
+// 原来写 .width('80%')，在 1244vp 宽屏上对话框会被拉到近 1000vp 宽，
+// 一行输入框横跨整屏。改成「手机上能缩、宽屏有上限」：
+// 宽度 100% 加上限，窄屏按屏宽收缩，宽屏停在 DIALOG_CONTENT_MAX_WIDTH。
+const DIALOG_CONTENT_MAX_WIDTH: number = 420
+
+// Issue #827 评论 2：宽屏作品卡之间的间距（vp），作品卡与「+」卡共用同一份。
+const WIDE_PROJECT_CARD_GAP: number = 16
 
 @ComponentV2
 export struct HomeScreen {
@@ -108,22 +119,18 @@ export struct HomeScreen {
     this.onOpenStarMap()
   }
 
-  private navigateToRecentEdit(): void {
-    if (!this.viewModel.recentEdit) {
-      return
-    }
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
-      return
-    }
-    const edit = this.viewModel.recentEdit!
-    const writingParam: WritingRouteParams = {
-      chapterId: edit.chapterId,
-      chapterTitle: `Chapter ${edit.chapterId}`,
-      projectId: edit.projectId,
-      volumeId: edit.volumeId
-    }
-    navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+  // Issue #827 评论 1 第 3 点：删除宽屏「最近编辑」区后，navigateToRecentEdit()、
+  // deleteProjectWithConfirm()、extractWorkspaceName() 已无调用方
+  // （删除入口走 ViewModel 的 DeleteConfirmDialog，作品名直接取 ProjectSummary.title）。
+  // 按仓库规则直接删掉，不留死代码，也不留第二套入口。
+
+  // Issue #827 评论 1 第 3 点 / 评论 2：新建作品的唯一入口。
+  // 「+」卡、窄屏 FAB、空状态入口都只调它，它只打开命名框；
+  // 真正的 createProject(name) 只能从命名框的「创建」回调进入，
+  // 不允许任何地方拿默认名直接建作品。
+  private requestCreateProject(): void {
+    this.viewModel.newProjectName = ''
+    this.viewModel.showCreateDialog = true
   }
 
   // ─── Context Action 处理 ───
@@ -153,19 +160,6 @@ export struct HomeScreen {
   }
 
   // ─── 格式化工具 ───
-
-  /** 宽屏删除作品 — AlertDialog 确认后调用 ViewModel 删除（恢复 #760 之前宽屏布局） */
-  private deleteProjectWithConfirm(projectId: string): void {
-    AlertDialog.show({
-      title: $r('app.string.confirm_delete'),
-      message: $r('app.string.confirm_delete_project'),
-      primaryButton: { value: $r('app.string.cancel'), action: () => {} },
-      secondaryButton: {
-        value: $r('app.string.delete'),
-        action: () => { this.viewModel.deleteProject(projectId) }
-      }
-    })
-  }
 
   /** 检查 PrimaryAction 中是否有 CreateProject（决定 FAB 是否显示） */
   private hasCreateProjectPrimaryAction(): boolean {
@@ -227,26 +221,17 @@ export struct HomeScreen {
     }
   }
 
-  private extractWorkspaceName(path: string): string {
-    if (!path) {
-      return '我的写作空间'
-    }
-    const segments = path.replace(/\\/g, '/').split('/')
-    const last = segments[segments.length - 1]
-    return last || '我的写作空间'
-  }
-
   // ========== 构建 UI ==========
 
   @Builder
   HomeContent() {
     Stack() {
       Column() {
-        if (this.adaptiveState.sizeClass !== WidthClass.Compact) {
-          // ── 宽屏布局：恢复 #760 之前的实现 ──
-          this.TwoPaneLayout()
+        if (this.adaptiveState.sizeClass === WidthClass.Expanded) {
+          // ── 宽屏：只有作品卡流，从内容区左上开始排 ──
+          this.WideHomeLayout()
         } else {
-          // ── 窄屏布局：保留当前的新作品卡布局 ──
+          // ── 窄屏 / 中屏：作品卡列表 + 右下 FAB ──
           this.SinglePaneLayout()
         }
       }
@@ -282,7 +267,11 @@ export struct HomeScreen {
       HdsAppDestinationApi23({
         title: $r('app.string.app_title'),
         screenRole: ScreenRole.ProjectList,
-        screenTabIndex: 0
+        screenTabIndex: 0,
+        // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
+        // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
+        // 就会在内容上方留出一条整宽空白。
+        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
       }) {
         this.HomeContent()
       }
@@ -290,7 +279,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(false)
+      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))
@@ -303,66 +292,52 @@ export struct HomeScreen {
   }
 
   // ────────────────────────────────────────
-  // 宽屏布局（恢复 #760 之前的实现，数据源改为 ViewModel）
+  // 宽屏布局（Issue #827 评论 2 结构图）
   // ────────────────────────────────────────
 
+  // 作品卡宽度：Core 的 project_card_min_width_dp 是共用最小宽度，
+  // 不在平台端另写一套 180。Core 契约没解析出来时退回 LayoutPolicyHelper 的兜底值。
+  private get wideProjectCardWidth(): number {
+    const planMetrics = this.adaptiveState.layoutPlan.metrics
+    if (planMetrics.projectCardMinWidthDp > 0) {
+      return planMetrics.projectCardMinWidthDp
+    }
+    return defaultLayoutMetrics().projectCardMinWidthDp
+  }
+
+  // 书封面卡是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。
+  private get wideProjectCardHeight(): number {
+    return this.wideProjectCardWidth * (4 / 3)
+  }
+
+  // 宽屏首页：内容区只有作品卡流，从左上开始排，不居中、不锁 maxWidth。
+  // 「+」卡是网格里的一张普通卡（不是 FAB、不是按钮），永远跟在最后一张作品后面。
   @Builder
-  TwoPaneLayout() {
+  WideHomeLayout() {
     Column() {
-      // Header — 只保留右侧工作空间名 + 写作统计 + Native 状态；
-      // 应用名由 HDS 顶栏承载，宽屏同样不在页内重复画标题。
-      Row() {
-        Blank()
-
-        Column() {
-          Text(this.viewModel.appDataRoot ? this.extractWorkspaceName(this.viewModel.appDataRoot) : '我的写作空间')
-            .fontSize(15)
-
-          if (this.viewModel.writingStats) {
-            Text(`近期手写: ${this.viewModel.writingStats!.totalHumanTypedChars}`)
-              .fontSize(13)
-          }
-
-          if (this.viewModel.nativeStatus) {
-            Text(`Native: ${this.viewModel.nativeStatus}`)
-              .fontSize(10)
-          }
-        }
-        .alignItems(HorizontalAlign.End)
-      }
-      .width('100%')
-      .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 16 })
-
-      // 内容区域
       if (this.viewModel.isLoading) {
         this.LoadingView()
       } else if (this.viewModel.errorMessage) {
         this.ErrorView()
       } else {
         Scroll() {
-          Column() {
-            // Writing stats card
-            if (this.viewModel.writingStats) {
-              this.WritingStatsCard()
-            }
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(this.viewModel.projects, (project: ProjectSummary) => {
+              this.WideProjectCard(project)
+            }, (project: ProjectSummary) => project.id)
 
-            // Recent edits section
-            if (this.viewModel.recentEdit != null) {
-              this.RecentEditsSection()
-            }
-
-            // Projects section
-            this.ProjectsSection()
-
-            // Quick actions
-            this.QuickActions()
+            this.CreateProjectCard()
           }
           .width('100%')
-          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 32 })
+          .padding({
+            left: this.adaptiveState.pagePadding,
+            right: this.adaptiveState.pagePadding,
+            top: this.adaptiveState.pagePadding,
+            bottom: this.adaptiveState.pagePadding
+          })
         }
         .layoutWeight(1)
+        .width('100%')
         .scrollBar(BarState.Off)
         .align(Alignment.Top)
       }
@@ -371,270 +346,91 @@ export struct HomeScreen {
     .height('100%')
   }
 
-  // ── 写作统计卡片（宽屏布局） ──
+  // 宽屏作品卡：竖向书封面 —— 作品名 / 卷章数 / 右下总字数 / 左下最后编辑时间。
+  // 排版语义与 Linux_Qt 的 ProjectCard.qml 一致，右上折角是书封面的视觉身份。
   @Builder
-  WritingStatsCard() {
-    Row() {
+  WideProjectCard(project: ProjectSummary) {
+    Stack({ alignContent: Alignment.TopEnd }) {
       Column() {
-        Text('近期手写')
-          .fontSize(14)
-          .margin({ bottom: 8 })
+        // 作品名
+        Text(project.title)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .textAlign(TextAlign.Start)
 
-        Text(`${this.viewModel.writingStats?.totalHumanTypedChars || 0}`)
-          .fontSize(32)
-          .fontWeight(FontWeight.Bold)
+        Divider()
+          .width('100%')
+          .color($r('sys.color.comp_background_gray'))
+          .margin({ top: 12, bottom: 12 })
 
-        Text('字')
-          .fontSize(14)
+        // 卷 / 章数量
+        Text(`${project.volumeCount}卷 ${project.chapterCount}章`)
+          .fontSize(13)
+          .width('100%')
+          .textAlign(TextAlign.Start)
+
+        Blank()
+
+        // 右下：总字数
+        Text(this.formatWordCount(project.totalWordCount))
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .width('100%')
+          .textAlign(TextAlign.End)
+
+        // 左下：最后编辑时间
+        Text(this.formatTime(project.updatedAt))
+          .fontSize(12)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .margin({ top: 4 })
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
+      .width('100%')
+      .height('100%')
+      .padding(16)
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Start)
 
-      Divider()
-        .vertical(true)
-        .height(40)
-
-      Column() {
-        Text('活跃时长')
-          .fontSize(14)
-          .margin({ bottom: 8 })
-
-        Text(`${Math.floor((this.viewModel.writingStats?.totalActiveSeconds || 0) / 60)}`)
-          .fontSize(32)
-          .fontWeight(FontWeight.Bold)
-
-        Text('分钟')
-          .fontSize(14)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
-
-      Divider()
-        .vertical(true)
-        .height(40)
-
-      Column() {
-        Text('净增字数')
-          .fontSize(14)
-          .margin({ bottom: 8 })
-
-        Text(`${this.viewModel.writingStats?.totalNetDeltaChars || 0}`)
-          .fontSize(32)
-          .fontWeight(FontWeight.Bold)
-
-        Text('字')
-          .fontSize(14)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
+      // 右上折角：书封面的视觉身份，不承载任何点击
+      Row()
+        .width(18)
+        .height(18)
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .borderRadius({ topLeft: DesignTokens.radiusSm })
     }
-    .width('100%')
-    .padding({ left: 20, right: 20, top: 20, bottom: 20 })
+    .width(this.wideProjectCardWidth)
+    .height(this.wideProjectCardHeight)
     .borderRadius(DesignTokens.cardRadius)
-    .margin({ bottom: 20 })
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
     .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
-    .constraintSize({ maxWidth: 600 })
+    .onClick(() => this.navigateToWorkspace(project.id, project.title))
   }
 
-  // ── 最近编辑区（宽屏布局） ──
+  // 「+」卡：与作品卡同宽同高，卡片中央只有一个大「+」。
+  // 它是网格成员而不是工具按钮，所以跟真实作品一起排版、一起换行、一起滚动；
+  // 点击只打开命名框，输入名称后才真正创建作品。
   @Builder
-  RecentEditsSection() {
+  CreateProjectCard() {
     Column() {
-      Row() {
-        Text('最近编辑')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-
-        Blank()
-
-        Text('查看全部')
-          .fontSize(14)
-          .onClick(() => {
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      if (this.viewModel.recentEdit != null) {
-        Row() {
-          Column() {
-            Text(`Chapter ${this.viewModel.recentEdit!.chapterId}`)
-              .fontSize(16)
-              .margin({ bottom: 6 })
-
-            Row() {
-              Text(`Project ${this.viewModel.recentEdit!.projectId}`)
-                .fontSize(13)
-                .margin({ right: 16 })
-            }
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          Text(this.formatTime(this.viewModel.recentEdit!.timestamp))
-            .fontSize(13)
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-        .borderRadius(DesignTokens.radiusMd)
-        .margin({ bottom: 10 })
-        .onClick(() => this.navigateToRecentEdit())
-      }
+      Text('+')
+        .fontSize(44)
+        .fontWeight(FontWeight.Normal)
+        .fontColor($r('sys.color.icon_secondary'))
     }
-    .width('100%')
-    .margin({ bottom: 24 })
-  }
-
-  // ── 作品列表区（宽屏布局） ──
-  @Builder
-  ProjectsSection() {
-    Column() {
-      Row() {
-        Text('我的作品')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-
-        Blank()
-
-        Button($r('app.string.new_project'))
-          .fontSize(14)
-          .height(32)
-          .onClick(() => {
-            this.viewModel.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
-          })
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
-
-      ForEach(this.viewModel.projects, (project: ProjectSummary) => {
-        Row() {
-          Column() {
-            Text(project.title)
-              .fontSize(17)
-              .fontWeight(FontWeight.Medium)
-              .margin({ bottom: 6 })
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-
-          // 删除按钮（红色 ×）— 恢复 #760 之前的宽屏布局
-          Text('×')
-            .fontSize(18)
-            .width(28)
-            .height(28)
-            .textAlign(TextAlign.Center)
-            .borderRadius(DesignTokens.radiusLg)
-            .margin({ right: 12 })
-            .onClick(() => {
-              this.deleteProjectWithConfirm(project.id)
-            })
-
-          Image($r('sys.media.ohos_ic_public_arrow_right'))
-            .width(18)
-            .height(18)
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-        .borderRadius(DesignTokens.radiusMd)
-        .margin({ bottom: 10 })
-        .onClick(() => this.navigateToWorkspace(project.id, project.title))
-      }, (project: ProjectSummary) => project.id)
-    }
-    .width('100%')
-    .margin({ bottom: 24 })
-  }
-
-  // ── 快速操作区（宽屏布局） ──
-  @Builder
-  QuickActions() {
-    Column() {
-      Text('快速操作')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
-        .width('100%')
-
-      GridRow({ columns: this.adaptiveState.gridColumns, gutter: 16 }) {
-        GridCol({ span: 1 }) {
-          Column() {
-            SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(36)
-              .fontColor([$r('sys.color.icon_primary')])
-              .margin({ bottom: 10 })
-
-            Text('新章节')
-              .fontSize(14)
-          }
-          .width('100%')
-          .height(90)
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(DesignTokens.cardRadius)
-        }
-        .onClick(() => {
-          // 新章节 — 空操作（#760 之前宽屏布局原样恢复）
-        })
-
-        GridCol({ span: 1 }) {
-          Column() {
-            Image($r('app.media.ic_star'))
-              .width(36)
-              .height(36)
-              .fillColor($r('sys.color.icon_primary'))
-              .margin({ bottom: 10 })
-
-            Text('星图')
-              .fontSize(14)
-          }
-          .width('100%')
-          .height(90)
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(DesignTokens.cardRadius)
-        }
-        .onClick(() => this.navigateToStarMap())
-
-        GridCol({ span: 1 }) {
-          Column() {
-            Image($r('sys.media.ohos_ic_public_more'))
-              .width(36)
-              .height(36)
-              .fillColor($r('sys.color.icon_primary'))
-              .margin({ bottom: 10 })
-
-            Text('设置')
-              .fontSize(14)
-          }
-          .width('100%')
-          .height(90)
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(DesignTokens.cardRadius)
-        }
-        .onClick(() => {
-          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Settings)
-        })
-
-        GridCol({ span: 1 }) {
-          Column() {
-            Image($r('app.media.ic_refresh'))
-              .width(36)
-              .height(36)
-              .fillColor($r('sys.color.icon_primary'))
-              .margin({ bottom: 10 })
-
-            Text('同步')
-              .fontSize(14)
-          }
-          .width('100%')
-          .height(90)
-          .justifyContent(FlexAlign.Center)
-          .borderRadius(DesignTokens.cardRadius)
-        }
-        .onClick(() => {
-          NavigationHeaderActionDispatcher.getInstance().dispatchAction(ActionRole.Sync)
-        })
-      }
-      .width('100%')
-    }
-    .width('100%')
+    .width(this.wideProjectCardWidth)
+    .height(this.wideProjectCardHeight)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .borderRadius(DesignTokens.cardRadius)
+    .border({ width: 1, color: $r('sys.color.comp_background_gray'), style: BorderStyle.Dashed })
+    .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
+    .accessibilityText('新建作品')
+    .onClick(() => this.requestCreateProject())
   }
 
   // ────────────────────────────────────────
@@ -662,11 +458,12 @@ export struct HomeScreen {
       // ── FAB 层：新建作品浮动按钮（由 PrimaryAction(CreateProject) 是否存在决定） ──
       // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
       // 配色/材质统一到 PrimaryFab，与工作区页、星图页同源。
+      // Issue #827 评论 2：FAB 只在非宽屏出现。宽屏的「+」卡是网格成员，
+      // 两边不能同时留着两套新建入口。
       if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
         PrimaryFab({
           onTap: () => {
-            this.viewModel.showCreateDialog = true
-            this.viewModel.newProjectName = ''
+            this.requestCreateProject()
           }
         })
         .margin({
@@ -738,6 +535,9 @@ export struct HomeScreen {
   }
 
   // ── 空状态 ──
+  // Issue #827 评论 1 第 3 点：空状态也是一个新建入口，走同一个 requestCreateProject()，
+  // 不在这里直接拿默认名建作品。文案不再写死「右下角按钮」，因为宽屏根本没有 FAB，
+  // 宽屏的空状态就是那张「+」卡。
   @Builder
   EmptyState() {
     Column() {
@@ -745,7 +545,7 @@ export struct HomeScreen {
         .fontSize(18)
         .margin({ bottom: 8 })
 
-      Text('点击右下角按钮创建第一个作品')
+      Text('点击「+」创建第一个作品')
         .fontSize(14)
     }
     .width('100%')
@@ -861,13 +661,15 @@ export struct HomeScreen {
         .width('100%')
         .margin({ top: 16 })
       }
-      .width('80%')
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 24, right: 24 })
     .backgroundColor('#80000000')
     .justifyContent(FlexAlign.Center)
   }
@@ -910,13 +712,15 @@ export struct HomeScreen {
         .width('100%')
         .margin({ top: 16 })
       }
-      .width('80%')
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 24, right: 24 })
     .backgroundColor('#80000000')
     .justifyContent(FlexAlign.Center)
   }
@@ -954,13 +758,15 @@ export struct HomeScreen {
         }
         .width('100%')
       }
-      .width('80%')
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 24, right: 24 })
     .backgroundColor('#80000000')
     .justifyContent(FlexAlign.Center)
   }

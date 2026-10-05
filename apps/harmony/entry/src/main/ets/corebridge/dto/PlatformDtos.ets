@@ -127,6 +127,8 @@ export interface LayoutPlan {
   contentMaxWidthVp: number
   pagePaddingVp: number
   gridColumns: number
+  // Core LayoutMetricsDto 原样透传，作品卡宽度等共用尺寸不在平台端硬编码。
+  metrics: LayoutMetrics
 }
 
 // ========== 页面策略类型（Core presentation screen_contract，#610） ==========

@@ -13,6 +13,9 @@
 import { UIContext, ComponentContent } from '@kit.ArkUI'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
+/** Issue #827 评论 1 第 7 点：命名框内容最大宽度（vp），与 HomeScreen / WorkspaceScreen 同口径。 */
+const DIALOG_CONTENT_MAX_WIDTH: number = 420
+
 /**
  * 标题输入对话框的参数。
  * 对话框与宿主 Scene 分离，通过参数告诉对话框"这次要建什么"，
@@ -43,48 +46,58 @@ struct CreateTitleDialog {
   @State inputText: string = ''
 
   build() {
-    Column() {
-      Text(this.dialogTitle)
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .margin({ bottom: 16 })
+    // Issue #827 评论 1 第 7 点：命名框内容框「手机上能缩、宽屏有上限」。
+    // 原来 Column 根节点写 .width('80%')，在 1244vp 宽屏上命名框被拉到近 1000vp 宽，
+    // 一行输入框横跨整屏。改成 Row 铺满再放一个 100% + 上限的内容列，
+    // 窄屏按屏宽收缩、宽屏停在 DIALOG_CONTENT_MAX_WIDTH。
+    Row() {
+      Column() {
+        Text(this.dialogTitle)
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 16 })
 
-      TextInput({ text: this.inputText, placeholder: this.placeholder })
+        TextInput({ text: this.inputText, placeholder: this.placeholder })
+          .width('100%')
+          .height(40)
+          .fontSize(16)
+          .onChange((value: string) => {
+            this.inputText = value
+          })
+
+        Row() {
+          Button($r('app.string.cancel'))
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.inputText = ''
+              this.onCancel()
+            })
+
+          Blank()
+
+          Button('创建')
+            .fontSize(14)
+            .height(36)
+            .enabled(this.inputText.trim().length > 0)
+            .onClick(() => {
+              const title: string = this.inputText.trim()
+              this.inputText = ''
+              this.onConfirm(title)
+            })
+        }
         .width('100%')
-        .height(40)
-        .fontSize(16)
-        .onChange((value: string) => {
-          this.inputText = value
-        })
-
-      Row() {
-        Button($r('app.string.cancel'))
-          .fontSize(14)
-          .height(36)
-          .onClick(() => {
-            this.inputText = ''
-            this.onCancel()
-          })
-
-        Blank()
-
-        Button('创建')
-          .fontSize(14)
-          .height(36)
-          .enabled(this.inputText.trim().length > 0)
-          .onClick(() => {
-            const title: string = this.inputText.trim()
-            this.inputText = ''
-            this.onConfirm(title)
-          })
+        .margin({ top: 16 })
       }
       .width('100%')
-      .margin({ top: 16 })
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
+      .padding(20)
+      .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
     }
-    .width('80%')
-    .padding(20)
-    .borderRadius(DesignTokens.radiusLg)
-    .backgroundColor($r('sys.color.background_secondary'))
+    .width('100%')
+    .padding({ left: 24, right: 24 })
+    .justifyContent(FlexAlign.Center)
   }
 }
 

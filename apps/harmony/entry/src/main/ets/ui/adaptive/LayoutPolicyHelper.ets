@@ -13,7 +13,7 @@
  * 在 buildHarmonyLayoutPlan 中计算，不出现在 Core 契约里。
  */
 
-import { LayoutContract, LayoutPlan, WorkspaceLayoutMode } from '../../corebridge/dto/PlatformDtos'
+import { LayoutContract, LayoutMetrics, LayoutPlan, WorkspaceLayoutMode } from '../../corebridge/dto/PlatformDtos'
 
 // ========== Harmony 平台值（不在 Core） ==========
 
@@ -47,6 +47,26 @@ export function buildHarmonyLayoutPlan(contract: LayoutContract, widthVp: number
     primaryNavigationPlacement: contract.primaryNavigationPlacement,
     contentMaxWidthVp: contentMaxWidthVp,
     pagePaddingVp: pagePaddingVp,
-    gridColumns: gridColumns
+    gridColumns: gridColumns,
+    metrics: contract.metrics
+  }
+}
+
+/**
+ * Core LayoutMetricsDto 的兜底值，与 core/writer_core metrics.rs 的默认值一致。
+ * 仅用于 Core 契约尚未解析出来的时刻（例如 App 冷启动默认 state）。
+ */
+export function defaultLayoutMetrics(): LayoutMetrics {
+  return {
+    listPaneWidthDp: 280,
+    projectCardMinWidthDp: 180,
+    toolPaneWidthDp: 320,
+    toolRailWidthDp: 56,
+    editorMinWidthDp: 360,
+    toolbarHeightDp: 64,
+    toolbarLeadingWidthDp: 200,
+    toolbarTrailingWidthDp: 200,
+    listPaneMinWidthDp: 200,
+    toolPaneMinWidthDp: 200
   }
 }

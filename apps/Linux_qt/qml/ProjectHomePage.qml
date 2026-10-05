@@ -3,10 +3,22 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML 页面）
-// 职责：作品卡片列表、项目字数统计、新建/重命名/删除操作
+// 职责：作品封面卡网格、新建/重命名/删除操作
 // 约束：
 //   - 纯展示层，业务逻辑通过 signal 传递给 main.qml
 //   - 不直接操作文件系统或 Core 层
+//
+// Issue #827 评论 2：不再复用 CardCollectionPage。
+// CardCollectionPage 会自带「作品 / x 部作品 / + 新建作品」那一整套页头，
+// 而 2026-10-05 草图里作品页没有这层标题栏，也没有右上角的「+ 新建作品」按钮 ——
+// 主内容从内容区左上开始直接排作品卡。所以这里改成自己的左对齐滚动网格，
+// 不居中、不把卡拉宽填满一列。
+//
+//   [作品卡] [作品卡] [ + ]
+//   [作品卡] [ + ]
+//
+// 「+」卡是网格里的普通成员（最后一个），跟作品卡同尺寸同间距，
+// 永远跟在最后一张作品卡后面；点击只打开命名框，不直接创建作品。
 // =============================================================================
 
 import QtQuick
@@ -20,6 +32,10 @@ Rectangle {
     property var projectBackendRef: null
     property var appState: ({})
     property var tree: []
+
+    // Issue #827 评论 2：布局契约由上层注入（main.qml 的 window.layoutPlan），
+    // 作品卡宽度读 Core 的 project_card_min_width_dp，不在 QML 写死。
+    property var layoutPlan: null
 
     signal openProject(string projectId)
     signal createProject()
@@ -62,65 +78,69 @@ Rectangle {
         }
     }
 
-    function getProjectWordCount(projectId) {
-        var s = root._cachedSummaries[projectId]
-        return s ? (s.totalWordCount || 0) : 0
-    }
+    // ── 卡片尺寸：Core 的共用值，两端（作品卡 / 「+」卡）共用同一组 ──
+    readonly property int _cardWidth: root.layoutPlan && root.layoutPlan.projectCardMinWidthVp > 0
+                                     ? Math.round(root.layoutPlan.projectCardMinWidthVp)
+                                     : 180
+    // 书封面是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。
+    readonly property int _cardHeight: Math.round(_cardWidth * 4 / 3)
+    readonly property int _gridGap: dt.sp16
+    readonly property int _pagePadding: root.layoutPlan && root.layoutPlan.contentPaddingVp > 0
+                                       ? Math.round(root.layoutPlan.contentPaddingVp)
+                                       : dt.sp24
 
-    function getTodayInput(projectId) {
-        if (!editorBackendRef) return 0
-        try {
-            var today = new Date()
-            var dateStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0")
-            var summary = editorBackendRef.get_writing_stats_summary_object(dateStr, dateStr)
-            if (summary && summary.per_project && summary.per_project[projectId]) return summary.per_project[projectId].human_typed_chars || 0
-        } catch (e) {}
-        return 0
-    }
+    // 每行放几张卡：卡宽固定，剩下多少空间就放多少，不把卡拉宽填满整列。
+    readonly property int _columns: Math.max(1, Math.floor((width - _pagePadding * 2 + _gridGap) / (_cardWidth + _gridGap)))
 
-    CardCollectionPage {
+    Flickable {
+        id: flick
         anchors.fill: parent
-        dt: root.dt
-        title: qsTr("作品")
-        subtitle: projectModel.count > 0 ? qsTr("%1 部作品").arg(projectModel.count) : qsTr("开始你的创作之旅")
-        actionText: qsTr("+ 新建作品")
-        dataModel: projectModel
-        cardHeight: 184
-        minCardWidth: 280
-        emptyIcon: ""
-        emptyTitle: qsTr("暂无作品")
-        emptySubtitle: qsTr("点击「新建作品」开始创作")
-        onActionClicked: root.createProject()
+        contentWidth: width
+        // 「+」卡也是网格的一员，所以内容高度由 Flow 的 implicitHeight 一并算出。
+        contentHeight: Math.max(0, flow.implicitHeight) + _pagePadding * 2
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
-        delegate: Item {
-            id: cardWrapper
-            required property string projectId
-            required property string projectTitle
-            required property int projectWordCount
-            required property int projectTodayInput
-            required property string projectLastEdited
-            required property string projectSyncStatus
-            required property string projectAccent
+        // 左对齐、按卡宽自然换行：不居中，也不把卡拉宽填满一列。
+        Flow {
+            id: flow
+            x: root._pagePadding
+            y: root._pagePadding
+            width: root._columns * root._cardWidth + Math.max(0, root._columns - 1) * root._gridGap
+            spacing: root._gridGap
 
-            width: GridView.view.gridRoot.cardWidth
-            height: GridView.view.gridRoot.cardHeight
+            Repeater {
+                model: projectModel
 
-            ProjectCard {
-                anchors.fill: parent
-                dt: root.dt
-                projectId: cardWrapper.projectId
-                title: cardWrapper.projectTitle
-                wordCount: cardWrapper.projectWordCount
-                todayInput: cardWrapper.projectTodayInput
-                lastEdited: cardWrapper.projectLastEdited
-                syncStatus: cardWrapper.projectSyncStatus
-                accentColor: cardWrapper.projectAccent
-                onClicked: root.openProject(cardWrapper.projectId)
-                onRightClicked: {
-                    projectContextMenu.projectId = cardWrapper.projectId
-                    projectContextMenu.projectTitle = cardWrapper.projectTitle
-                    projectContextMenu.popup()
+                delegate: ProjectCard {
+                    width: root._cardWidth
+                    height: root._cardHeight
+                    dt: root.dt
+                    cardWidth: root._cardWidth
+                    cardHeight: root._cardHeight
+                    projectId: model.projectId
+                    title: model.projectTitle
+                    wordCount: model.projectWordCount
+                    volumeCount: model.projectVolumeCount
+                    chapterCount: model.projectChapterCount
+                    lastEdited: model.projectLastEdited
+                    onClicked: root.openProject(model.projectId)
+                    onRightClicked: {
+                        projectContextMenu.projectId = model.projectId
+                        projectContextMenu.projectTitle = model.projectTitle
+                        projectContextMenu.popup()
+                    }
                 }
+            }
+
+            // 「+」卡：网格最后一项。作品为空时它就是第一张卡。
+            CreateProjectCard {
+                width: root._cardWidth
+                height: root._cardHeight
+                dt: root.dt
+                cardWidth: root._cardWidth
+                cardHeight: root._cardHeight
+                onClicked: root.createProject()
             }
         }
     }
@@ -200,18 +220,18 @@ Rectangle {
         refreshSummaries()
         projectModel.clear()
         var projects = getProjects()
-        var accentColors = dt.projectAccentColors
         for (var i = 0; i < projects.length; i++) {
             var p = projects[i]
             var summary = root._cachedSummaries[p.id] || {}
+            // Issue #827 评论 2：卷数 / 章数 / 总字数 / 最后编辑时间
+            // 全部直接取 Core summary，不再跨 FFI 重算字数。
             projectModel.append({
                 projectId: p.id,
                 projectTitle: p.title || qsTr("未命名作品"),
                 projectWordCount: summary.totalWordCount || 0,
-                projectTodayInput: getTodayInput(p.id),
-                projectLastEdited: summary.updatedAt || p.updatedAt || "",
-                projectSyncStatus: summary.syncStatus || "none",
-                projectAccent: accentColors[i % accentColors.length]
+                projectVolumeCount: summary.volumeCount || 0,
+                projectChapterCount: summary.chapterCount || 0,
+                projectLastEdited: summary.updatedAt || p.updatedAt || ""
             })
         }
     }

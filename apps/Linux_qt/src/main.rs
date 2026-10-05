@@ -126,6 +126,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/main.qml" as "main.qml",
     "qml/DesignTokens.qml" as "DesignTokens.qml",
     "qml/ProjectCard.qml" as "ProjectCard.qml",
+    // Issue #827：作品网格里的「+」卡，与 ProjectCard 同尺寸同间距。
+    "qml/CreateProjectCard.qml" as "CreateProjectCard.qml",
     "qml/ProjectHomePage.qml" as "ProjectHomePage.qml",
     "qml/HubPageFrame.qml" as "HubPageFrame.qml",
     "qml/HubPageHeader.qml" as "HubPageHeader.qml",

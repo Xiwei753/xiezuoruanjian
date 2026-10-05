@@ -29,12 +29,13 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ScreenRole, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
+import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -61,6 +62,11 @@ const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
 
 // 宽屏左侧一级导航的固定宽度（vp）
 const WIDE_RAIL_WIDTH: number = 200
+
+// Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的高度与左右留白。
+// 这一行属于壳层，不属于任何页面，所以两个常量都只在这里出现一次。
+const WIDE_TOP_ACTION_BAR_HEIGHT: number = 56
+const WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL: number = 16
 
 // Issue #767：工厂函数，在字段初始化时创建已经带根路由的 NavPathStack。
 // 避免 aboutToAppear() 里 pushPath 导致 "State variable has changed during render" 错误。
@@ -99,6 +105,9 @@ export struct PrimaryTabShell {
 
   // Issue #768：API23+ 分流标志。true 时使用 HdsPrimaryTabsApi23，false 时使用普通 Tabs。
   @State useHdsTabs: boolean = false
+
+  // Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的动作槽，来源仍是 Core ScreenPolicy。
+  @State wideHeaderActions: ActionSlot[] = []
 
   // Issue #767：@Provide 活动栈，供 @Consume("navPathStack") 的页面使用。
   // 初始值引用 homeStack（默认 tab 是作品，homeStack 在此之前已声明初始化）。
@@ -160,8 +169,12 @@ export struct PrimaryTabShell {
     this.navChromeObserver = (role: ScreenRole) => {
       self.currentScreenRole = role
       self.updateShowPrimaryNav(role)
+      // Issue #827 评论 1 第 6 点：宽屏顶部固定动作条跟着当前 ScreenRole 换动作槽。
+      self.loadWideHeaderActions(role)
     }
     NavigationChromeStore.getInstance().subscribe(this.navChromeObserver!)
+    // 初始 role 也要解析一次，否则宽屏顶部动作条在首帧是空的。
+    this.loadWideHeaderActions(this.currentScreenRole)
 
     // 订阅主操作按钮的手势锁：按住 FAB 时把一级 Tabs 的横向滑动关掉。
     this.gestureLockObserver = (locked: boolean) => {
@@ -313,12 +326,48 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // Issue #825 复核第4项：一级导航放左还是放下只看 Core 下发的
-  // primary_navigation_placement。Core 在 600–839vp（Medium）宽度下给的是 Bottom，
-  // 即使 workspaceLayoutMode 已经是 Workbench；用 sizeClass 或 Workbench 判都会把
-  // 中等窗口错抬成侧边栏。
-  private get isSidePrimaryNavigation(): boolean {
-    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
+  // Issue #827 评论 1 第 1 点：宽屏（Expanded）一级导航固定在左侧，
+  // 根本不再实例化 HdsPrimaryTabsApi23。
+  // 华为平板/2in1 设计规则明确 tablet 与 2in1 形态下 Tabs 组件改用侧边导航，
+  // 之前 1244.44vp 已经进入 Expanded 却仍渲染 HDS Tabs，就是因为这里判的是
+  // Core 的 primary_navigation_placement 而不是 Harmony 自己的尺寸分级。
+  // 原 isSidePrimaryNavigation（读 Core primary_navigation_placement）已随本次改动删除，
+  // 不留第二套判定：Core 在 840–1200vp 也给 Side，但 Harmony 那一档只有 2 栏，
+  // 用 Core 的放置位置当「是否宽屏」会把中等窗口错抬成侧边栏。
+  private get isWidePrimaryNavigation(): boolean {
+    return this.adaptiveState.sizeClass === WidthClass.Expanded
+  }
+
+  // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源仍是 Core ScreenPolicy，
+  // 不在壳层硬编码三个按钮，也不新增第四套枚举。
+  private loadWideHeaderActions(role: ScreenRole): void {
+    const requested = role
+    ScreenPolicyBridge.getInstance().resolveScreenPolicy(requested).then((policy) => {
+      // 异步返回后校验 role 是否已变化，防止旧页面结果覆盖新页面状态
+      if (this.currentScreenRole !== requested || policy === null) {
+        return
+      }
+      this.wideHeaderActions = policy.actionSlots
+    }).catch((e: Error) => {
+      hilog.error(0x0000, 'PrimaryTabShell',
+        'resolveScreenPolicy failed for wide header role=%{public}s: %{public}s',
+        String(requested), e.message)
+    })
+  }
+
+  // 宽屏壳的顶部固定动作条：内容区右上角常驻同步 / 搜索 / 设置。
+  // 草图（#827 评论 2）里这一行是壳层的一部分，不属于任何页面，
+  // 所以页面在 Expanded 下同时隐藏自己的 HDS 标题栏，不在内容区画第二套标题栏。
+  @Builder
+  WideTopActionBar() {
+    Row() {
+      Blank()
+      HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+    }
+    .width('100%')
+    .height(WIDE_TOP_ACTION_BAR_HEIGHT)
+    .padding({ left: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL, right: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL })
+    .alignItems(VerticalAlign.Center)
   }
 
   // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
@@ -407,16 +456,24 @@ export struct PrimaryTabShell {
     }
   }
 
-  // 宽屏壳：一级导航在左，内容在右。写进 Writing 这类
-  // showPrimaryNavigation=false 的页面时左栏整体消失，内容占满。
+  // 宽屏壳：一级导航在左，顶部右侧固定同步/搜索/设置，内容在右下。
+  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与顶部动作条一起消失，
+  // 内容占满（写作页有自己那套七角色工作台顶栏，不该再叠一条）。
   @Builder
   WidePrimaryShell() {
     Row() {
       if (this.currentShowPrimaryNav) {
         this.WidePrimaryRail()
       }
-      Stack() {
-        this.WideCurrentNavigation()
+      Column() {
+        if (this.currentShowPrimaryNav) {
+          this.WideTopActionBar()
+        }
+        Stack() {
+          this.WideCurrentNavigation()
+        }
+        .layoutWeight(1)
+        .width('100%')
       }
       .layoutWeight(1)
       .height('100%')
@@ -432,7 +489,7 @@ export struct PrimaryTabShell {
     // 浮层背景永远是打开设置前的那一页，关闭只隐藏浮层，
     // 下面的页面和原 NavPathStack 保持原位置。
     Stack() {
-      if (this.isSidePrimaryNavigation) {
+      if (this.isWidePrimaryNavigation) {
         this.WidePrimaryShell()
       } else if (this.useHdsTabs) {
         HdsPrimaryTabsApi23({

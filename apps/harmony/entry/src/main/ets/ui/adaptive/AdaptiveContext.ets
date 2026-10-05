@@ -3,7 +3,7 @@ import display from '@ohos.display'
 import hilog from '@ohos.hilog'
 import { getBridge } from '../../app/AppContext'
 import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
-import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan } from './LayoutPolicyHelper'
+import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan, defaultLayoutMetrics } from './LayoutPolicyHelper'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 
 /**
@@ -160,6 +160,12 @@ export class AdaptiveContext {
    */
   addObserver(observer: AdaptiveObserver): void {
     this.observers.add(observer)
+    // 订阅时立即同步一次当前状态，避免订阅方停留在默认的 Compact 布局
+    try {
+      observer.onWindowSizeChange(this.getCurrentState())
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `addObserver initial notify failed: ${JSON.stringify(error)}`)
+    }
   }
 
   /**
@@ -175,12 +181,11 @@ export class AdaptiveContext {
    */
   onWindowSizeChange(callback: (state: AdaptiveState) => void): () => void {
     const observer: AdaptiveObserver = new SimpleAdaptiveObserver(callback)
-    this.observers.add(observer)
-    // 立即通知当前状态
-    callback(this.getCurrentState())
+    // addObserver 内部已立即推送一次当前状态
+    this.addObserver(observer)
     // 返回取消订阅函数
     return () => {
-      this.observers.delete(observer)
+      this.removeObserver(observer)
     }
   }
 
@@ -315,7 +320,8 @@ export class AdaptiveContext {
       primaryNavigationPlacement: PrimaryNavigationPlacement.Bottom,
       contentMaxWidthVp: 0,
       pagePaddingVp: 16,
-      gridColumns: 2
+      gridColumns: 2,
+      metrics: defaultLayoutMetrics()
     }
     return {
       widthVp: 0,

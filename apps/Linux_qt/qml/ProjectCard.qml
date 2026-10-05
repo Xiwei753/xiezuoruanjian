@@ -1,13 +1,29 @@
 // =============================================================================
-// ProjectCard.qml — 作品卡片组件
+// ProjectCard.qml — 作品卡片组件（书封面式竖卡）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：单个作品的卡片展示（标题、字数、今日输入、同步状态）
+// 职责：单个作品的封面式卡片展示（作品名 / 卷章数 / 总字数 / 最后编辑时间）
 // 约束：
 //   - 纯展示组件，数据通过 property 传入
 //   - 点击和右键菜单通过 signal 传递给 ProjectHomePage
 //   - 使用 DesignTokens 统一样式
+//
+// Issue #827 评论 2：形态从 220×180 横卡改为竖向「书封面」卡。
+// 结构对应 2026-10-05 手绘稿：
+//
+//   ┌──────────────┐
+//   │ 作品名      ◢ │   ← 右上折角是书封面的视觉身份
+//   ├──────────────┤
+//   │ 8卷 97章      │
+//   │              │
+//   │        1678字 │   ← 右下总字数
+//   │ 26/8/11 22:37│   ← 左下最后编辑时间
+//   └──────────────┘
+//
+// 宽度取 Core 的 project_card_min_width_dp（经 layoutPlan.projectCardMinWidthVp 透传，
+// 三端共用同一个值），不在 QML 里写死另一套卡片宽度。
+// 右键菜单挂整张卡，不常驻「更多」按钮。
 // =============================================================================
 
 import QtQuick
@@ -31,26 +47,30 @@ Rectangle {
     readonly property int _cardRadius: dt.cardRadius
     readonly property int _sp12: dt.sp12
     readonly property int _sp16: dt.sp16
-    readonly property int _sp20: dt.sp20
     readonly property real _subtitle: dt.subtitlePt
     readonly property real _body: dt.bodyPt
     readonly property real _caption: dt.captionPt
     readonly property string _fontFamily: dt.fontFamily
     readonly property int _animFast: dt.animFast
 
+    // Issue #827 评论 2：卷数与章数直接用 Core summary 的值，不跨 FFI 重算。
     property string projectId: ""
     property string title: ""
     property int wordCount: 0
-    property int todayInput: 0
+    property int volumeCount: 0
+    property int chapterCount: 0
     property string lastEdited: ""
-    property string syncStatus: "none"
-    property string accentColor: _primary.toString()
+
+    // 卡片宽高由 ProjectHomePage 从 Core 的 projectCardMinWidthVp 传入，
+    // 「+」卡复用同一组尺寸，不允许自己另有一套。
+    property int cardWidth: 180
+    property int cardHeight: 240
 
     signal clicked()
     signal rightClicked()
 
-    width: 220
-    height: 180
+    width: cardWidth
+    height: cardHeight
     radius: _cardRadius
     color: hovered ? _cardHover : _card
     border.color: hovered ? _primary : _border
@@ -85,36 +105,13 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: _sp20
+        anchors.margins: _sp16
         spacing: 0
 
-        // Accent dot + sync status
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-
-            Rectangle {
-                width: 8; height: 8
-                radius: 4
-                color: root.accentColor
-                opacity: 0.8
-            }
-
-            Item { Layout.fillWidth: true }
-
-            StatusPill {
-                dt: root.dt
-                status: root.syncStatus === "success" ? "success" : (root.syncStatus === "syncing" ? "warning" : (root.syncStatus === "error" ? "error" : "info"))
-                text: ""
-                visible: root.syncStatus !== "none"
-            }
-        }
-
-        // Title
+        // 作品名（封面顶部）
         AppText {
             dt: root.dt
             Layout.fillWidth: true
-            Layout.topMargin: _sp12
             text: root.title || qsTr("未命名作品")
             color: _textPrimary
             font.pointSize: _subtitle
@@ -125,62 +122,64 @@ Rectangle {
             wrapMode: Text.Wrap
         }
 
+        // 书脊横线：分隔标题与信息区
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.topMargin: _sp12
+            Layout.bottomMargin: _sp12
+            height: 1
+            color: _border
+        }
+
+        // 卷 / 章数量
+        AppText {
+            dt: root.dt
+            Layout.fillWidth: true
+            text: qsTr("%1卷 %2章").arg(root.volumeCount).arg(root.chapterCount)
+            color: _textMuted
+            font.pointSize: _body
+            font.family: _fontFamily
+        }
+
         Item { Layout.fillHeight: true }
 
-        // Stats row
-        RowLayout {
+        // 右下：总字数
+        AppText {
+            dt: root.dt
             Layout.fillWidth: true
-            spacing: _sp16
-
-            Column {
-                spacing: 2
-                AppText {
-                    dt: root.dt
-                    text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
-                    color: _textPrimary
-                    font.pointSize: _body
-                    font.family: _fontFamily
-                    font.weight: Font.Medium
-                }
-                AppText {
-                    dt: root.dt
-                    text: qsTr("总字数")
-                    color: _textMuted
-                    font.pointSize: _caption
-                    font.family: _fontFamily
-                }
-            }
-
-            Column {
-                spacing: 2
-                visible: root.todayInput > 0
-                AppText {
-                    dt: root.dt
-                    text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
-                    color: _primary
-                    font.pointSize: _body
-                    font.family: _fontFamily
-                    font.weight: Font.Medium
-                }
-                AppText {
-                    dt: root.dt
-                    text: qsTr("今日")
-                    color: _textMuted
-                    font.pointSize: _caption
-                    font.family: _fontFamily
-                }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            AppText {
-                dt: root.dt
-                text: root.lastEdited || ""
-                color: _textMuted
-                font.pointSize: _caption
-                font.family: _fontFamily
-                visible: text !== ""
-            }
+            horizontalAlignment: Text.AlignRight
+            text: root.wordCount >= 10000
+                  ? qsTr("%1万字").arg((root.wordCount / 10000).toFixed(1))
+                  : qsTr("%1字").arg(root.wordCount.toLocaleString())
+            color: _textPrimary
+            font.pointSize: _body
+            font.family: _fontFamily
+            font.weight: Font.Medium
         }
+
+        // 左下：最后编辑时间
+        AppText {
+            dt: root.dt
+            Layout.fillWidth: true
+            Layout.topMargin: 2
+            text: root.lastEdited || ""
+            color: _textMuted
+            font.pointSize: _caption
+            font.family: _fontFamily
+            visible: text !== ""
+        }
+    }
+
+    // 右上折角（书封面身份标识）。纯装饰，不吃鼠标事件：
+    // 右键菜单必须挂在整张卡上，所以折角不能阻断 MouseArea。
+    Rectangle {
+        width: 16
+        height: 16
+        anchors.top: parent.top
+        anchors.right: parent.right
+        color: root.hovered ? root._primary : root._border
+        radius: 4
+        topLeftRadius: root._cardRadius
+        opacity: 0.9
     }
 }

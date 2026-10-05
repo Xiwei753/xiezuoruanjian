@@ -19,6 +19,8 @@ export struct HdsWorkspaceDestinationApi23 {
   @Param onBack: (() => void) | null = null
   @Param onShown: (() => void) | null = null
   @Param screenRole: ScreenRole = ScreenRole.ProjectWorkspace
+  // 宽屏由内容区自绘紧凑的「返回 + 作品名」行，HDS 标题栏不再占整条顶部（#827 评论 1 第 6 点）。
+  @Param showTitleBar: boolean = true
   @Local headerActions: ActionSlot[] = []
 
   async aboutToAppear() {
@@ -45,7 +47,7 @@ export struct HdsWorkspaceDestinationApi23 {
     HdsNavDestination() {
       this.contentBuilder()
     }
-    .hideTitleBar(false)
+    .hideTitleBar(!this.showTitleBar)
     .titleBar({
       enableComponentSafeArea: true,
       // 窗口开了 setWindowLayoutFullScreen 之后，标题栏必须显式继续避让顶部状态栏，

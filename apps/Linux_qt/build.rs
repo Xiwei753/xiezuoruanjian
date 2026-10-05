@@ -469,6 +469,10 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/HubPageHeader.qml");
     println!("cargo:rerun-if-changed=qml/HubContentGrid.qml");
     println!("cargo:rerun-if-changed=qml/CardCollectionPage.qml");
+    // Issue #827：作品卡与「+」卡都是作品网格成员，一起纳入重编译列表。
+    println!("cargo:rerun-if-changed=qml/ProjectCard.qml");
+    println!("cargo:rerun-if-changed=qml/CreateProjectCard.qml");
+    println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatCard.qml");
     println!("cargo:rerun-if-changed=qml/SettingCard.qml");
     println!("cargo:rerun-if-changed=qml/ModernSwitch.qml");

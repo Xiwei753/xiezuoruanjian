@@ -67,17 +67,19 @@ Rectangle {
                 anchors.margins: dt.sp12
                 spacing: dt.sp8
 
+                // Issue #827 评论 2：左上角只显示「素笺」两个字。
+                // 草图里品牌区是内容区左上角一个小标题，不是占一整块的 logo，
+                // 所以这里去掉多余的上下留白和偏大的字号，保留原来的蓝色主色。
                 AppText {
                     dt: root.dt
-                    text: qsTr("素笺写作")
+                    text: qsTr("素笺")
                     color: dt.primary
-                    font.pointSize: dt.fontLgPt
+                    font.pointSize: dt.subtitlePt
                     font.family: dt.fontFamily
-                    font.weight: Font.Bold
+                    font.weight: Font.DemiBold
                     Layout.fillWidth: true
                     Layout.leftMargin: dt.sp8
-                    Layout.topMargin: dt.sp8
-                    Layout.bottomMargin: dt.sp8
+                    Layout.bottomMargin: dt.sp4
                 }
 
                 Rectangle {
@@ -179,7 +181,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignVCenter
                         AppText {
                             dt: root.dt
-                            text: qsTr("素笺写作")
+                            text: qsTr("素笺")
                             color: dt.primary
                             font.pointSize: dt.fontXlPt
                             font.family: dt.fontFamily
@@ -269,6 +271,9 @@ Rectangle {
                         projectBackendRef: root.projectBackendRef
                         appState: root.appState
                         tree: root.tree
+                        // Issue #827 评论 2：作品卡宽度与页面内边距由 Core 布局契约决定，
+                        // 不在 QML 里写死另一套。
+                        layoutPlan: root.layoutPlan
                         onOpenProject: function(projectId) {
                             var title = "";
                             for (var i = 0; i < root.tree.length; i++) {

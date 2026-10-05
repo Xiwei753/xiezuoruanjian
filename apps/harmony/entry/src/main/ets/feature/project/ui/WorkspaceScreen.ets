@@ -10,7 +10,7 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
-import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass, WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
@@ -22,6 +22,10 @@ const LEFT_PANEL_WIDTH: number = 320
 
 /** 分割线宽度 */
 const DIVIDER_WIDTH: number = 0.5
+
+/** Issue #827 评论 1 第 7 点：确认框内容最大宽度（vp），与 HomeScreen 同口径。
+ *  原来写 .width('80%')，宽屏上会被拉到近 1000vp 宽。 */
+const DIALOG_CONTENT_MAX_WIDTH: number = 420
 
 // Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
 // 章节正文只有 WritingScreen 一个页面级 owner。
@@ -222,17 +226,21 @@ export struct WorkspaceScreen {
     Stack() {
       Column() {
         if (this.adaptiveState.sizeClass === WidthClass.Compact) {
-          // ── 窄屏模式：本次新的卷卡可展开设计（Issue #760） ──
+          // ── 窄屏模式：卷卡可展开设计（Issue #760） ──
           this.CompactWorkspaceLayout()
-        } else if (this.adaptiveState.isTwoPane) {
-          // ── 双栏模式：左侧目录 + 右侧写作入口提示 ──
-          // Issue #760：宽屏布局保持不变，只把数据源改为 ViewModel。
+        } else if (this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) {
+          // ── 宽屏模式：左侧目录 + 右侧写作入口提示 ──
+          // Issue #827 评论 1 第 4 点：这里原来判的是 adaptiveState.isTwoPane，
+          // 而 isTwoPane 只在 ShellMode.TwoPane 时为 true。Core 在 1200–1600vp
+          // （1244.44 × 817.78 vp 就是这一档）给的是 ThreePane + Workbench，
+          // 于是越宽反而掉进 LegacySinglePaneLayout —— 单栏回退就是这么来的。
+          // 改判 Core 下发的 workspaceLayoutMode，宽屏一律走双栏工作台。
           this.TwoPaneLayout()
         } else {
-          // ── 旧单栏模式（非 Compact 且 !isTwoPane） ──
-          // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
-          // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
-          this.LegacySinglePaneLayout()
+          // ── 非 Workbench 且非 Compact：Core 没给工作台，按窄屏结构兜底 ──
+          // LegacySinglePaneLayout() 及其两个子 Builder 已随本次修复删除，
+          // 不再保留第二套单栏树。
+          this.CompactWorkspaceLayout()
         }
       }
       .width('100%')
@@ -261,7 +269,10 @@ export struct WorkspaceScreen {
         title: this.viewModel.projectName,
         onBack: () => { this.handleBack() },
         onShown: () => { NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0) },
-        screenRole: ScreenRole.ProjectWorkspace
+        screenRole: ScreenRole.ProjectWorkspace,
+        // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 提供，
+        // 工作区页再画一条 HDS 标题栏就会在双栏内容上方留出整宽空白。
+        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
       }) {
         this.NavContent()
       }
@@ -269,7 +280,7 @@ export struct WorkspaceScreen {
       NavDestination() {
         this.NavContent()
       }
-      .hideTitleBar(false)
+      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
       .title(this.viewModel.projectName)
       .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
@@ -540,195 +551,6 @@ export struct WorkspaceScreen {
     .height('100%')
   }
 
-  // ────────────────────────────────────────
-  // 旧单栏布局（LegacySinglePane — #760 前的非窄屏单栏布局）
-  // Issue #760 评论 5825156672：保留 #760 前的旧布局分流，
-  // 只把 Core/CRUD 调用换成 ViewModel，不改可见布局和交互。
-  // ────────────────────────────────────────
-
-  @Builder
-  LegacySinglePaneLayout() {
-    Column() {
-      // ── 顶栏：左 返回+作品名 / 右 卷数量+新建卷 ──
-      this.LegacySinglePaneHeader()
-
-      // ── 内容区 ──
-      if (this.viewModel.isLoadingState) {
-        Column() {
-          LoadingProgress()
-            .width(48)
-            .height(48)
-          Text($r('app.string.loading'))
-            .fontSize(14)
-            .margin({ top: 12 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.viewModel.errorMessageState) {
-        Column() {
-          Text(this.viewModel.errorMessageState)
-            .fontSize(16)
-            .margin({ bottom: 16 })
-
-          Button($r('app.string.retry'))
-            .onClick(() => this.handleRetry())
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column() {
-            if (this.viewModel.volumeTrees.length === 0) {
-              this.EmptyState()
-            } else {
-              ForEach(this.viewModel.volumeTrees, (volumeTree: VolumeTree) => {
-                this.LegacySinglePaneVolumeSection(volumeTree)
-              }, (volumeTree: VolumeTree) => volumeTree.volume.id)
-            }
-          }
-          .width('100%')
-          .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-          .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, bottom: 24 })
-        }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .alignItems(HorizontalAlign.Center)
-  }
-
-  // ── 旧顶栏：右 卷数量+新建卷 ──
-  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏顶栏交互。
-  // 旧版顶栏是：返回、作品名、卷数量、新建卷（不是同步+设置）。
-  // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
-  @Builder
-  LegacySinglePaneHeader() {
-    Row() {
-      Blank()
-
-      // 右：卷数量 + 新建卷
-      if (this.viewModel.project) {
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.volume_count_format').id).replace('%s', `${this.viewModel.volumeTrees.length}`))
-          .fontSize(12)
-          .margin({ right: 12 })
-      }
-
-      Button($r('app.string.new_volume'))
-        .fontSize(14)
-        .height(32)
-        .onClick(() => this.handleCreateVolume())
-    }
-    .width('100%')
-    .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-    .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 16, bottom: 12 })
-  }
-
-  // ── 旧单栏卷章节列表 ──
-  // Issue #760 评论 5825309208：恢复 #760 前的旧单栏卷章节列表结构。
-  // 保持原来的展开箭头 / 卷名 / 章节数 / + / × / 章节标题 / 字数 / 最后编辑时间 / × / 右箭头结构。
-  // CRUD 调用现有 ViewModel/handler，不恢复旧 Core 直连代码。
-  @Builder
-  LegacySinglePaneVolumeSection(volumeTree: VolumeTree) {
-    Column() {
-      // 卷头：展开箭头 / 卷名 / 章节数 / +（新增章节）/ ×（删除卷）
-      Row() {
-        Image(this.viewModel.isVolumeExpanded(volumeTree.volume.id)
-          ? $r('sys.media.ohos_ic_public_arrow_down')
-          : $r('sys.media.ohos_ic_public_arrow_right'))
-          .width(16)
-          .height(16)
-          .margin({ right: 8 })
-
-        Text(volumeTree.volume.title)
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .layoutWeight(1)
-
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
-          .fontSize(12)
-          .margin({ right: 8 })
-
-        Button({ type: ButtonType.Normal }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(28)
-            .fontColor([$r('sys.color.icon_primary')])
-        }
-        .width(48)
-        .height(48)
-        .backgroundColor(Color.Transparent)
-        .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
-
-        Button('×')
-          .fontSize(14)
-          .width(28)
-          .height(28)
-          .margin({ left: 4 })
-          .onClick(() => this.viewModel.startDeleteVolume(volumeTree.volume.id, true))
-      }
-      .width('100%')
-      .padding(12)
-      .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
-      .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
-
-      // 章节列表（展开后显示）
-      if (this.viewModel.isVolumeExpanded(volumeTree.volume.id)) {
-        if (volumeTree.chapters.length === 0) {
-          Column() {
-            Text($r('app.string.no_chapters'))
-              .fontSize(14)
-              .padding(16)
-          }
-          .width('100%')
-        } else {
-          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
-            Row() {
-              Column() {
-                Text(chapter.title)
-                  .fontSize(15)
-                  .margin({ bottom: 4 })
-
-                Row() {
-                  Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
-                    .fontSize(12)
-                    .margin({ right: 12 })
-
-                  Text(this.formatTime(chapter.updatedAt))
-                    .fontSize(12)
-                }
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              Button('×')
-                .fontSize(14)
-                .width(24)
-                .height(24)
-                .backgroundColor('transparent')
-                .onClick(() => this.viewModel.startDeleteChapter(chapter.id, true))
-
-              Image($r('sys.media.ohos_ic_public_arrow_right'))
-                .width(16)
-                .height(16)
-                .margin({ left: 8 })
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
-          }, (chapter: ChapterMeta) => chapter.id)
-        }
-      }
-    }
-    .width('100%')
-    .margin({ bottom: 12 })
-    .borderRadius(DesignTokens.radiusSm)
-    .clip(true)
-    .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
-  }
-
   // ── 空状态 ──
   @Builder
   EmptyState() {
@@ -942,13 +764,15 @@ export struct WorkspaceScreen {
         .width('100%')
         .margin({ top: 16 })
       }
-      .width('80%')
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 24, right: 24 })
     .backgroundColor('#80000000')
     .justifyContent(FlexAlign.Center)
   }
@@ -988,13 +812,15 @@ export struct WorkspaceScreen {
         }
         .width('100%')
       }
-      .width('80%')
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
       .padding(20)
       .borderRadius(DesignTokens.radiusLg)
       .backgroundColor($r('sys.color.background_secondary'))
     }
     .width('100%')
     .height('100%')
+    .padding({ left: 24, right: 24 })
     .backgroundColor('#80000000')
     .justifyContent(FlexAlign.Center)
   }
