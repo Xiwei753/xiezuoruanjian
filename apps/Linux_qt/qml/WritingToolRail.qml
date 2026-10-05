@@ -7,8 +7,7 @@
 // 约束（Issue #825）：
 //   - 工具内容在 WritingWorkspace 里的 RightDrawer（ToolPane），rail 不持有内容状态；
 //   - 顶部工具条带的 ToolbarTrailing 同步 / 搜索 / 设置不搬到这里；
-//   - 工具列表只列真实有内容的工具（统计常驻、冲突需要 hasConflicts），
-//     不摆"正在施工"的占位按钮；
+//   - Issue #829：手稿把最右 rail 固定为“星图 / AI”；冲突只在确有冲突时追加；
 //   - 只发信号，由 WritingWorkspace 单向写 selectedTool，避免双向写 binding。
 // =============================================================================
 
@@ -40,17 +39,16 @@ Rectangle {
 
     readonly property bool toolPaneOpen: root.selectedTool !== ""
 
-    // 工具入口：key 与 RightDrawer 的 selectedTool 取值一致。
-    // 星图 / 统计 常驻；AI 需要能力开关；冲突需要确实有未解决冲突。
-    // Issue #825 复核4 附注：rail 只列真实有内容的工具。
-    // 星图 / AI 在 ToolPane 里仍是"正在施工"占位，就不在宽屏新壳里当正式入口摆出来；
-    // 等它们接到真实内容时再加回这个列表。
+    // Issue #829：右侧工具 rail 的空间骨架按手稿固定。
+    // 星图 / AI 始终占这两个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
+    // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
     readonly property var tools: {
         var list = [
-            { key: "stats", label: qsTr("统计"), glyph: "📊" }
+            { key: "starmap", label: qsTr("星图") },
+            { key: "ai", label: qsTr("AI") }
         ]
         if (root.hasConflicts) {
-            list.push({ key: "conflict", label: qsTr("冲突"), glyph: "⚠" })
+            list.push({ key: "conflict", label: qsTr("冲突") })
         }
         return list
     }
@@ -88,8 +86,10 @@ Rectangle {
                 AppText {
                     dt: root.dt
                     anchors.centerIn: parent
-                    text: modelData.glyph
-                    font.pointSize: dt.fontEmojiSmPt
+                    text: modelData.label
+                    color: root.selectedTool === modelData.key ? dt.accentText : dt.textPrimary
+                    font.pointSize: modelData.key === "ai" ? dt.fontSmPt : dt.captionPt
+                    font.weight: root.selectedTool === modelData.key ? Font.DemiBold : Font.Normal
                 }
 
                 // 选中态左侧竖条：和 CreativeHub 左栏选中态同一套 token。

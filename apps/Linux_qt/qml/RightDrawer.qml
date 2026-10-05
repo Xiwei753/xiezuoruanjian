@@ -40,8 +40,9 @@ Rectangle {
 
     property var editorBackendRef: null
     property bool isOpen: false
-    // Issue #825：当前工具 key（"" 表示 pane 收起）。
-    // 取值与 WritingToolRail 的 toolKey 完全一致：stats / conflict。
+    // Issue #829：当前工具 key（"" 表示 pane 收起）。
+    // 手稿固定入口是 starmap / ai；conflict 只在运行时确有冲突时追加。
+    // stats 旧内容仍保留给已有调用，不再作为宽屏 rail 的常驻入口。
     // 由 WritingWorkspace 单向注入，本组件不自己改。
     property string selectedTool: ""
     // Issue #757 评论 5818193510 第 5 点：冲突侧栏支持。
@@ -64,6 +65,8 @@ Rectangle {
     // Issue #825：工具 key → 标题 + 是否可用。
     // 可用性与入口都由 rail 表达，这里只用于标题文字，不再自行决定显隐。
     function toolTitle(toolKey) {
+        if (toolKey === "starmap") return qsTr("星图")
+        if (toolKey === "ai") return qsTr("AI")
         if (toolKey === "conflict") return qsTr("冲突")
         return qsTr("统计")
     }
@@ -150,6 +153,19 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+
+                // Issue #829：手稿里的星图 / AI 内容槽。
+                // 本轮只固定 ToolPane 的区域和切换键，不在 QML 里伪造业务数据；
+                // 后续把真实星图 / AI 组件直接挂进这两个 Item 即可，不再改外层工作台骨架。
+                Item {
+                    visible: root.selectedTool === "starmap"
+                    anchors.fill: parent
+                }
+
+                Item {
+                    visible: root.selectedTool === "ai"
+                    anchors.fill: parent
+                }
 
                 // 统计 — 复用现有 StatsPreviewPage
                 StatsPreviewPage {

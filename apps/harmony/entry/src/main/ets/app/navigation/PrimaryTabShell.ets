@@ -29,7 +29,7 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ActionSlot, ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ScreenRole, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
@@ -61,11 +61,11 @@ const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
 ]
 
 // 宽屏左侧一级导航的固定宽度（vp）
-const WIDE_RAIL_WIDTH: number = 200
+const WIDE_RAIL_WIDTH: number = 160
 
 // Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的高度与左右留白。
 // 这一行属于壳层，不属于任何页面，所以两个常量都只在这里出现一次。
-const WIDE_TOP_ACTION_BAR_HEIGHT: number = 56
+const WIDE_TOP_ACTION_BAR_HEIGHT: number = 64
 const WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL: number = 16
 // Issue #827 评论 3 第 1 点：左栏「素笺」行的左右内边距。
 const WIDE_RAIL_BRAND_PADDING: number = 20
@@ -328,16 +328,12 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // Issue #827 评论 1 第 1 点：宽屏（Expanded）一级导航固定在左侧，
-  // 根本不再实例化 HdsPrimaryTabsApi23。
-  // 华为平板/2in1 设计规则明确 tablet 与 2in1 形态下 Tabs 组件改用侧边导航，
-  // 之前 1244.44vp 已经进入 Expanded 却仍渲染 HDS Tabs，就是因为这里判的是
-  // Core 的 primary_navigation_placement 而不是 Harmony 自己的尺寸分级。
-  // 原 isSidePrimaryNavigation（读 Core primary_navigation_placement）已随本次改动删除，
-  // 不留第二套判定：Core 在 840–1200vp 也给 Side，但 Harmony 那一档只有 2 栏，
-  // 用 Core 的放置位置当「是否宽屏」会把中等窗口错抬成侧边栏。
+  // Issue #829：宽屏一级导航只认 Core 的 PrimaryNavigationPlacement.Side。
+  // 只要契约说 Side，就直接走左侧 rail，绝不再实例化 HDS 底部 Tabs。
+  // 这样不会出现“页面已经是宽屏骨架，但底下还挂着一个沉浸光感底栏”的双导航。
+  // 沉浸光感不是布局理由：侧栏没有系统 HDS TabBar 光感能力时，侧栏就用普通系统 token。
   private get isWidePrimaryNavigation(): boolean {
-    return this.adaptiveState.sizeClass === WidthClass.Expanded
+    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
   }
 
   // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源仍是 Core ScreenPolicy，
