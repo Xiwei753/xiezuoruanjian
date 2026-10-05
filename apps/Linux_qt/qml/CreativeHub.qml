@@ -56,12 +56,13 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        // 宽屏一级导航（Workbench）。这里只负责壳层摆放和选中态呈现，
+        // Issue #829：宽屏一级导航只放左侧。这里就是手稿里的“作品 / 星图 / 统计”纵栏，
         // 作品/星图/统计仍复用原来的 currentTab + 三个 Loader，不另做第二套路由。
+        // 宽屏不再有任何底部导航；侧栏也不为了追求沉浸光感改回底栏。
         Rectangle {
             visible: root.wideShell
             Layout.fillHeight: true
-            Layout.preferredWidth: 200
+            Layout.preferredWidth: 160
             color: dt.surface
             border.color: dt.border
             border.width: 1
