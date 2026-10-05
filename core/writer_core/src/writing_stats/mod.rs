@@ -37,6 +37,8 @@
 
 pub mod aggregate;
 pub mod api;
+pub mod calendar;
+pub mod migration;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,16 @@ pub struct WritingInputEvent {
     pub net_delta_chars: i32,
     pub duration_seconds: u32,
     pub session_id: String,
+    /// 事件发生时的**本机本地**日历日（`YYYY-MM-DD`），每日统计按它分桶。
+    ///
+    /// 必须持久化而不是每次从 `timestamp_ms` 现算：事件的归属日是该设备
+    /// 记录事件时当地的午夜，之后 Core 可能运行在别的时区（跨时区移动、
+    /// 设备换手、系统时区被改）。现算会让历史统计在换时区后整体漂移一天。
+    ///
+    /// 老事件没有这个字段，反序列化后为空串，此时回退到按 `timestamp_ms`
+    /// 现算本机本地日——见 [`WritingInputEvent::business_date`]。
+    #[serde(default)]
+    pub local_date: String,
 }
 
 impl WritingInputEvent {
@@ -110,9 +122,10 @@ impl WritingInputEvent {
     ) -> Self {
         let net = inserted_chars as i32 + pasted_chars as i32 + ai_inserted_chars as i32
             - deleted_chars as i32;
+        let timestamp_ms = chrono::Utc::now().timestamp_millis();
         Self {
             event_id: Uuid::new_v4().to_string(),
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms,
             device_id: device_id.to_string(),
             platform,
             device_class: device_class.to_string(),
@@ -127,7 +140,26 @@ impl WritingInputEvent {
             net_delta_chars: net,
             duration_seconds,
             session_id: session_id.to_string(),
+            // 事件归属的业务日历日在**记录这一刻**就定死，见字段注释。
+            // 时间戳来自 `Utc::now()`，一定合法；这里退到 UTC 日只是为了让
+            // 类型收敛，不让一个不可能的分支把整个事件丢掉。
+            local_date: calendar::local_date_at(timestamp_ms)
+                .or_else(|_| calendar::utc_date_at(timestamp_ms))
+                .unwrap_or_default(),
         }
+    }
+
+    /// 事件归属的业务日历日（`YYYY-MM-DD`）。
+    ///
+    /// 新事件直接读持久化的 `local_date`；老事件（`serde` default 成空串）
+    /// 回退到按 `timestamp_ms` 现算本机本地日。这条回退只保证老数据可读，
+    /// 一次性重建会把结果写回，见
+    /// [`crate::writing_stats::migration::migrate_stats_to_local_calendar`]。
+    pub fn business_date(&self) -> String {
+        if !self.local_date.is_empty() {
+            return self.local_date.clone();
+        }
+        calendar::local_date_at(self.timestamp_ms).unwrap_or_default()
     }
 
     pub fn human_typed_chars(&self) -> u32 {

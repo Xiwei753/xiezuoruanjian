@@ -1183,6 +1183,12 @@ interface WriterAppService {
     [Throws=WriterError]
     SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);
 
+    // 「今天」的写作汇总。今天是哪一天由 Core 的本地日历口径决定，
+    // 平台端不传日期字符串——端侧拼的本地日期一旦和 Core 时区口径不一致，
+    // 凌晨就会出现「今日进度提前清零」。
+    [Throws=WriterError]
+    WritingStatsSummaryDto get_today_writing_stats_summary();
+
     [Throws=WriterError]
     WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);
 

@@ -274,6 +274,113 @@ impl StatsStore {
         self.app_data_root.join("app-meta/stats/daily")
     }
 
+    /// `daily/` 目录下是否已有统计文件（判断是否需要日历口径重建）。
+    pub fn daily_dir_has_stats(&self) -> Result<bool> {
+        let dir = self.daily_dir();
+        if !dir.exists() {
+            return Ok(false);
+        }
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// 列出 `events.local/` 下所有事件文件的日期部分（升序）。
+    pub fn list_event_file_dates(&self) -> Result<Vec<String>> {
+        let dir = self.events_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut dates = Vec::new();
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(date) = name.strip_suffix(".events.jsonl") else {
+                continue;
+            };
+            if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() {
+                dates.push(date.to_string());
+            }
+        }
+        dates.sort();
+        Ok(dates)
+    }
+
+    /// 列出 `daily/` 下已有统计文件的业务日历日（升序）。
+    pub fn list_daily_file_dates(&self) -> Result<Vec<String>> {
+        let dir = self.daily_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut dates = Vec::new();
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(date) = name.strip_suffix(".stats.json") else {
+                continue;
+            };
+            if NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok() {
+                dates.push(date.to_string());
+            }
+        }
+        dates.sort();
+        Ok(dates)
+    }
+
+    /// 用给定内容整体覆盖某个日期的事件文件（先写 tmp 再 rename）。
+    pub fn rewrite_events_for_date(&self, date: &str, contents: &str) -> Result<()> {
+        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
+        fs::create_dir_all(self.events_dir())?;
+        let tmp_path = file_path.with_extension("jsonl.tmp");
+        fs::write(&tmp_path, contents)?;
+        fs::rename(&tmp_path, &file_path)?;
+        Ok(())
+    }
+
+    /// 按当前（本地日历日）口径从全部 raw events 重建每日统计。
+    ///
+    /// 先删掉整个 `daily/` 再重算，不做新旧双读：daily stats 是派生数据，
+    /// 旧文件是按 UTC 口径生成的，留着只会一直错。raw events 是唯一事实源，
+    /// 它们不动。
+    pub fn rebuild_daily_stats_from_events(&self) -> Result<()> {
+        let dates = self.list_event_file_dates()?;
+
+        let daily_dir = self.daily_dir();
+        if daily_dir.exists() {
+            fs::remove_dir_all(&daily_dir)?;
+        }
+        if dates.is_empty() {
+            return Ok(());
+        }
+
+        // 必须一次性聚合全部事件再写：多个 UTC 日期文件可能映射到同一个本地日，
+        // 逐文件写会把先写好的本地日覆盖掉。
+        let mut all_events = Vec::new();
+        for date in dates {
+            all_events.append(&mut self.load_events_for_date(&date)?);
+        }
+        if all_events.is_empty() {
+            return Ok(());
+        }
+
+        for stats in self.aggregate_events(&all_events)? {
+            let file = DailyStatsFile {
+                date: stats.date.clone(),
+                devices: vec![stats],
+            };
+            self.save_daily_stats_file(&file)?;
+        }
+        Ok(())
+    }
+
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let should_flush =
@@ -353,6 +460,16 @@ impl StatsStore {
         Ok(events)
     }
 
+    /// 读取 UTC 存储分区落在 `[start_date, end_date]` ± 1 天内的事件，
+    /// 再按事件的 [`WritingInputEvent::business_date`] 过滤到真正的业务日范围。
+    ///
+    /// 事件文件按 UTC 日期分目录（见 [`StatsStore::timestamp_to_date`]），
+    /// 业务日历日按本地午夜算。查询本地日范围时，真实事件可能住在
+    /// 相邻的 UTC 日期文件里（东八区本地 10/6 00:30 的事件在 UTC 10/5
+    /// 文件）。读 ±1 天后按 `business_date` 精确过滤，避免既漏读又
+    /// 多读；`load_events_in_window` 走纯时间戳路径，不受此影响。
+    ///
+    /// 调用方传入的 `start_date`/`end_date` 视为业务日历日（本地日）。
     pub fn load_events_range(
         &self,
         start_date: &str,
@@ -363,14 +480,24 @@ impl StatsStore {
         let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
             .map_err(|e| crate::Error::Other(format!("Invalid end date: {}", e)))?;
 
+        // 业务日 [start, end] 最多跨 UTC 日期 [start-1, end+1]。
+        let utc_start = start - chrono::Duration::days(1);
+        let utc_end = end + chrono::Duration::days(1);
         let mut all_events = Vec::new();
-        let mut current = start;
-        while current <= end {
+        let mut current = utc_start;
+        while current <= utc_end {
             let date_str = current.format("%Y-%m-%d").to_string();
             let mut events = self.load_events_for_date(&date_str)?;
             all_events.append(&mut events);
             current += chrono::Duration::days(1);
         }
+
+        let start_owned = start.to_string();
+        let end_owned = end.to_string();
+        all_events.retain(|e| {
+            let d = e.business_date();
+            !d.is_empty() && d.as_str() >= start_owned.as_str() && d.as_str() <= end_owned.as_str()
+        });
 
         Ok(all_events)
     }
@@ -381,13 +508,22 @@ impl StatsStore {
     /// （3 秒）防抖缓冲，用户刚停笔时最后一段输入还留在 `event_buffer` 里，
     /// 只读磁盘会漏掉它。`flush_events` 用 `mem::take` 搬走事件，所以同一批
     /// 事件不会既在缓冲又在磁盘，这里直接拼接不会重复计数。
+    /// 读取 `[start_ms, end_ms]` 窗口内的事件，**已落盘事件与内存缓冲视为同一份事实源**。
+    ///
+    /// 实时速度必须看得到还没落盘的那几条：`record_event` 有 `FLUSH_DEBOUNCE_MS`
+    /// （3 秒）防抖缓冲，用户刚停笔时最后一段输入还留在 `event_buffer` 里，
+    /// 只读磁盘会漏掉它。`flush_events` 用 `mem::take` 搬走事件，所以同一批
+    /// 事件不会既在缓冲又在磁盘，这里直接拼接不会重复计数。
+    ///
+    /// 日期口径用业务日历日（本地午夜），不是 UTC：东八区本地 10/6 00:30
+    /// 的输入若按 UTC 日期 10/5 查窗口，会被错误排除。
     pub fn load_events_in_window(
         &self,
         start_ms: i64,
         end_ms: i64,
     ) -> Result<Vec<WritingInputEvent>> {
-        let start_date = self.timestamp_to_date(start_ms)?;
-        let end_date = self.timestamp_to_date(end_ms)?;
+        let start_date = crate::writing_stats::calendar::local_date_at(start_ms)?;
+        let end_date = crate::writing_stats::calendar::local_date_at(end_ms)?;
 
         let mut events = self.load_events_range(&start_date, &end_date)?;
         events.retain(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms);
@@ -500,12 +636,11 @@ impl StatsStore {
             return Ok(Vec::new());
         }
 
-        let mut by_date_device: HashMap<(chrono::NaiveDate, &str), Vec<&WritingInputEvent>> =
-            HashMap::new();
+        let mut by_date_device: HashMap<(String, &str), Vec<&WritingInputEvent>> = HashMap::new();
         for event in events {
-            let dt = chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
-                .ok_or_else(|| crate::Error::Other("Invalid timestamp".to_string()))?;
-            let date = dt.date_naive();
+            // 按事件自己的**本地日历日**分桶，不再拿 UTC timestamp 当「哪一天」。
+            // 详见 `calendar` 模块：东八区本地 10/6 00:30 的输入必须落进 10/6。
+            let date = event.business_date();
             let key = (date, event.device_id.as_str());
             by_date_device.entry(key).or_default().push(event);
         }
@@ -521,7 +656,7 @@ impl StatsStore {
                 .map(|e| e.device_class.clone())
                 .unwrap_or_default();
             let mut stats = DailyStats {
-                date: date.format("%Y-%m-%d").to_string(),
+                date: date.clone(),
                 device_id: device_id.to_string(),
                 platform,
                 device_class,
@@ -636,10 +771,13 @@ impl StatsStore {
         Ok(buckets)
     }
 
+    /// 事件**存储分区**用的 UTC 日期（`events.local/YYYY-MM-DD.events.jsonl`）。
+    ///
+    /// 刻意保留 UTC：改分文件规则要搬历史原始文件，收益不抵风险。
+    /// 业务日历日（每日统计分桶、「今天」查询）走
+    /// [`crate::writing_stats::calendar`]，两者分工见该模块文档。
     pub fn timestamp_to_date(&self, timestamp_ms: i64) -> Result<String> {
-        let dt = chrono::DateTime::from_timestamp_millis(timestamp_ms)
-            .ok_or_else(|| crate::Error::Other("Invalid timestamp".to_string()))?;
-        Ok(dt.format("%Y-%m-%d").to_string())
+        crate::writing_stats::calendar::utc_date_at(timestamp_ms)
     }
 
     pub fn merge_daily_stats(

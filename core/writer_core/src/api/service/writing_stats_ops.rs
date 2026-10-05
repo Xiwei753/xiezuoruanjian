@@ -21,6 +21,22 @@ impl WriterCoreApi {
             .map_err(WriterError::from)
     }
 
+    /// 「今天」的写作汇总。日历日由 Core 本地时区口径决定，平台端不传日期。
+    pub fn get_today_writing_stats_summary(
+        &self,
+    ) -> ApiResult<crate::api::types::WritingStatsSummaryDto> {
+        let value = self
+            .core_write()
+            .get_today_writing_stats_summary()
+            .map_err(Into::<WriterError>::into)?;
+        serde_json::from_value(value).map_err(Into::into)
+    }
+
+    pub fn get_today_writing_stats_summary_json(&self) -> ApiResult<String> {
+        let value = self.get_today_writing_stats_summary()?;
+        Self::json_string(&value)
+    }
+
     pub fn get_writing_stats_summary_json(
         &self,
         start_date: &str,

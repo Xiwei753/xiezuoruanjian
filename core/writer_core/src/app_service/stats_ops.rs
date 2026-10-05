@@ -5,6 +5,11 @@ use crate::api::{
 };
 
 impl super::WriterAppService {
+    /// 「今天」的写作汇总。日历日由 Core 本地时区口径决定，平台端不传日期。
+    pub fn get_today_writing_stats_summary(&self) -> Result<WritingStatsSummaryDto, WriterError> {
+        self.api.get_today_writing_stats_summary()
+    }
+
     pub fn get_writing_stats_summary(
         &self,
         start_date: String,

@@ -238,7 +238,7 @@ fn test_daily_aggregation_idempotent() {
 
     agg.aggregate_single_event(&event).unwrap();
 
-    let today = agg.store().timestamp_to_date(event.timestamp_ms).unwrap();
+    let today = event.business_date();
     let stats = agg.store().load_all_daily_stats_for_date(&today).unwrap();
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].total_human_typed_chars, 10);
@@ -338,6 +338,7 @@ fn test_speed_buckets_generation() {
             net_delta_chars: 5,
             duration_seconds: 0,
             session_id: "s1".to_string(),
+            local_date: String::new(),
         };
         api.record_event(event).unwrap();
     }
@@ -385,6 +386,7 @@ fn speed_test_event_with_source(
         net_delta_chars: inserted_chars as i32,
         duration_seconds: 0,
         session_id: "s1".to_string(),
+        local_date: String::new(),
     }
 }
 
@@ -663,6 +665,7 @@ fn test_session_gap_detection() {
         net_delta_chars: 5,
         duration_seconds: 0,
         session_id: "s1".to_string(),
+        local_date: String::new(),
     };
     store.record_event(event1).unwrap();
 
@@ -683,11 +686,12 @@ fn test_session_gap_detection() {
         net_delta_chars: 5,
         duration_seconds: 0,
         session_id: "s1".to_string(),
+        local_date: String::new(),
     };
     store.record_event(event2).unwrap();
     store.flush_events().unwrap();
 
-    let date = store.timestamp_to_date(base_ms).unwrap();
+    let date = crate::writing_stats::calendar::local_date_at(base_ms).unwrap();
     let events = store.load_events_for_date(&date).unwrap();
     let daily_stats = store.aggregate_events(&events).unwrap();
 
@@ -917,4 +921,225 @@ fn test_load_chapter_does_not_produce_input_events() {
 
     let summary_after = core.get_writing_stats_summary(&today, &today).unwrap();
     assert_eq!(summary_before, summary_after);
+}
+
+// ---------------------------------------------------------------------------
+// 业务日历日（本地午夜）口径
+// ---------------------------------------------------------------------------
+
+/// 造一条时间戳/本地日历日都由测试钉死的事件。
+///
+/// 之所以手工写 `local_date` 而不是走 `WritingInputEvent::new()`：新事件用
+/// 运行测试的机器时区填日期，那样测不出「跨 UTC 日期」这个 bug——只有把
+/// 本地日显式钉成和 UTC 日不同的那一天才能复现。
+fn event_with_pinned_dates(
+    timestamp_ms: i64,
+    local_date: &str,
+    source: EventSource,
+    chars: u32,
+) -> WritingInputEvent {
+    let mut event = WritingInputEvent::new(
+        "dev-1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
+        "vol1",
+        "chap1",
+        source,
+        chars,
+        0,
+        0,
+        0,
+        0,
+        "s1",
+    );
+    event.timestamp_ms = timestamp_ms;
+    event.local_date = local_date.to_string();
+    event
+}
+
+const TS_UTC8_LOCAL_0030: i64 = 1_791_217_800_000; // UTC 10-05 16:30 = UTC+8 本地 10-06 00:30
+const TS_UTC8_LOCAL_2330: i64 = 1_791_271_800_000; // UTC 10-06 07:30 = UTC-8 本地 10-05 23:30
+
+#[test]
+fn test_daily_bucket_uses_event_local_date_not_utc() {
+    let temp_dir = tempdir().unwrap();
+    let store = StatsStore::new(temp_dir.path());
+
+    let stats = store
+        .aggregate_events(&[event_with_pinned_dates(
+            TS_UTC8_LOCAL_0030,
+            "2026-10-06",
+            EventSource::HumanTyped,
+            30,
+        )])
+        .unwrap();
+
+    assert_eq!(stats.len(), 1);
+    assert_eq!(
+        stats[0].date, "2026-10-06",
+        "事件应进本地日 10-06，而不是 UTC 日 10-05"
+    );
+    assert_eq!(stats[0].total_human_typed_chars, 30);
+}
+
+#[test]
+fn test_daily_bucket_west_of_utc_local_date_wins() {
+    let temp_dir = tempdir().unwrap();
+    let store = StatsStore::new(temp_dir.path());
+
+    let stats = store
+        .aggregate_events(&[event_with_pinned_dates(
+            TS_UTC8_LOCAL_2330,
+            "2026-10-05",
+            EventSource::HumanTyped,
+            17,
+        )])
+        .unwrap();
+
+    assert_eq!(stats.len(), 1);
+    assert_eq!(
+        stats[0].date, "2026-10-05",
+        "西半球本地 10-05 23:30 的事件不该被推到 UTC 的 10-06"
+    );
+}
+
+#[test]
+fn test_real_time_aggregation_follows_event_local_date() {
+    let temp_dir = tempdir().unwrap();
+    let agg = StatsAggregator::new(temp_dir.path());
+    let event = event_with_pinned_dates(
+        TS_UTC8_LOCAL_0030,
+        "2026-10-06",
+        EventSource::HumanTyped,
+        42,
+    );
+
+    agg.aggregate_single_event(&event).unwrap();
+
+    let on_local_day = agg
+        .store()
+        .load_all_daily_stats_for_date("2026-10-06")
+        .unwrap();
+    assert_eq!(on_local_day.len(), 1);
+    assert_eq!(on_local_day[0].total_human_typed_chars, 42);
+
+    let on_utc_day = agg
+        .store()
+        .load_all_daily_stats_for_date("2026-10-05")
+        .unwrap();
+    assert!(
+        on_utc_day.is_empty(),
+        "UTC 日不应该出现这份统计，否则凌晨会重复计数"
+    );
+}
+
+#[test]
+fn test_summary_range_uses_business_dates() {
+    let temp_dir = tempdir().unwrap();
+    let agg = StatsAggregator::new(temp_dir.path());
+    agg.aggregate_single_event(&event_with_pinned_dates(
+        TS_UTC8_LOCAL_0030,
+        "2026-10-06",
+        EventSource::HumanTyped,
+        25,
+    ))
+    .unwrap();
+
+    let local_day = DateRange {
+        start_date: "2026-10-06".to_string(),
+        end_date: "2026-10-06".to_string(),
+    };
+    let summary = agg
+        .store()
+        .load_daily_stats_range(&local_day.start_date, &local_day.end_date);
+    let total: u64 = summary
+        .unwrap()
+        .iter()
+        .map(|s| s.total_human_typed_chars)
+        .sum();
+    assert_eq!(total, 25);
+}
+
+#[test]
+fn test_new_event_stamps_local_date_not_utc() {
+    let event = WritingInputEvent::new(
+        "dev-1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
+        "vol1",
+        "chap1",
+        EventSource::HumanTyped,
+        1,
+        0,
+        0,
+        0,
+        0,
+        "s1",
+    );
+    assert_eq!(
+        event.local_date,
+        crate::writing_stats::calendar::local_date_at(event.timestamp_ms).unwrap()
+    );
+    assert_eq!(event.business_date(), event.local_date);
+}
+
+#[test]
+fn test_old_event_without_local_date_falls_back_to_timestamp() {
+    let json = r#"{
+        "event_id": "evt-1",
+        "timestamp_ms": 1791217800000,
+        "device_id": "dev-1",
+        "platform": "desktop",
+        "project_id": "p1",
+        "volume_id": "v1",
+        "chapter_id": "c1",
+        "source": "human_typed",
+        "inserted_chars": 5,
+        "deleted_chars": 0,
+        "pasted_chars": 0,
+        "ai_inserted_chars": 0,
+        "net_delta_chars": 5,
+        "duration_seconds": 0,
+        "session_id": "s1"
+    }"#;
+    let event: WritingInputEvent = serde_json::from_str(json).unwrap();
+    assert_eq!(event.local_date, "", "老事件反序列化后应为空串");
+    assert_eq!(
+        event.business_date(),
+        crate::writing_stats::calendar::local_date_at(event.timestamp_ms).unwrap(),
+        "老事件应回退到按 timestamp 现算本机本地日"
+    );
+}
+
+#[test]
+fn test_today_summary_matches_local_calendar_day() {
+    let temp_dir = tempdir().unwrap();
+    std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+    let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+    let project = core.create_project("Test").unwrap();
+    let volume = core.create_volume(&project.id, "Vol").unwrap();
+    let chapter = core.create_chapter(&project.id, &volume.id, "Ch1").unwrap();
+
+    core.record_editor_change_stats(
+        "harmony",
+        &project.id,
+        &volume.id,
+        &chapter.id,
+        crate::editor::EditorTransactionCause::Typing,
+        18,
+        0,
+        0,
+        "s1",
+    )
+    .unwrap();
+
+    let summary = core.get_today_writing_stats_summary().unwrap();
+    assert_eq!(
+        summary["totalHumanTypedChars"], 18,
+        "今日汇总必须走 Core 本地日历口径"
+    );
+    let today = crate::writing_stats::calendar::local_today_date();
+    assert_eq!(summary["range"]["startDate"], today.as_str());
 }

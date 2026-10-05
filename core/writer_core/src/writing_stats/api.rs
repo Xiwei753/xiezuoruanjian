@@ -115,6 +115,14 @@ pub struct StatsApi {
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
+        // 每日统计第一次被使用前，先把旧的 UTC 口径 daily 文件按本地日历日
+        // 重建一次（幂等，marker 短路）。之后所有写入都走新口径。
+        if let Err(e) =
+            crate::writing_stats::migration::migrate_stats_to_local_calendar(app_data_root)
+        {
+            // 迁移失败不能挡住统计功能：老 daily 文件仍可读，只是口径可能偏旧。
+            eprintln!("[writing_stats] calendar migration skipped: {}", e);
+        }
         Self {
             aggregator: StatsAggregator::new(app_data_root),
         }
@@ -122,6 +130,21 @@ impl StatsApi {
 
     pub fn aggregator(&self) -> &StatsAggregator {
         &self.aggregator
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation)]
+    /// 「今天」的写作汇总 —— 今天是哪一天由 **Core 的本地日历口径**决定。
+    ///
+    /// 平台端不再自己拼 `YYYY-MM-DD`：`todayDateString()` 那种本地日期
+    /// 与 UTC 每日统计对不上的问题在这里单侧收口，避免第三个端再复制一次。
+    pub fn get_today_stats_summary(&self) -> Result<Value> {
+        let today = crate::writing_stats::calendar::local_today_date();
+        let range = DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        };
+        self.get_stats_summary(&range)
     }
 
     #[allow(clippy::cast_possible_truncation)]
@@ -376,7 +399,8 @@ impl StatsApi {
         self.aggregator.store().flush_events()
     }
 
+    /// 本机当前的业务日历日（本地时区，非 UTC）。
     pub fn today_date() -> String {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
+        crate::writing_stats::calendar::local_today_date()
     }
 }

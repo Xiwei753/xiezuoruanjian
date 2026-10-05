@@ -43,8 +43,16 @@ impl StatsAggregator {
     ///
     /// 读取当日统计 → 合并事件 → 写回。此 read-modify-write 非原子：
     /// 并发写入可能导致数据丢失。当前设计假设单进程写入，多进程场景需外部串行化。
+    ///
+    /// 「当日」取事件自己的本地日历日（[`WritingInputEvent::business_date`]），
+    /// 不是 UTC 日期——本地凌晨 0 点输入的字要落进本地那一天。
     pub fn aggregate_single_event(&self, event: &WritingInputEvent) -> Result<()> {
-        let date = self.store.timestamp_to_date(event.timestamp_ms)?;
+        let date = event.business_date();
+        if date.is_empty() {
+            return Err(crate::error::Error::Other(
+                "Cannot resolve business date for writing event".to_string(),
+            ));
+        }
 
         let mut stats = DailyStats {
             date: date.clone(),
@@ -197,7 +205,7 @@ mod tests {
 
         agg.aggregate_single_event(&event).unwrap();
 
-        let date = agg.store().timestamp_to_date(event.timestamp_ms).unwrap();
+        let date = event.business_date();
         let stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].total_human_typed_chars, 10);
@@ -229,7 +237,7 @@ mod tests {
 
         agg.aggregate_single_event(&event).unwrap();
 
-        let date = agg.store().timestamp_to_date(event.timestamp_ms).unwrap();
+        let date = event.business_date();
         let stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].total_human_typed_chars, 0);
@@ -275,7 +283,7 @@ mod tests {
         );
         agg.aggregate_single_event(&event2).unwrap();
 
-        let date = agg.store().timestamp_to_date(event1.timestamp_ms).unwrap();
+        let date = event1.business_date();
         let stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].total_human_typed_chars, 10);
@@ -306,7 +314,7 @@ mod tests {
 
         agg.aggregate_single_event(&event).unwrap();
 
-        let date = agg.store().timestamp_to_date(event.timestamp_ms).unwrap();
+        let date = event.business_date();
         let stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].total_human_typed_chars, 0);
@@ -336,7 +344,7 @@ mod tests {
 
         agg.aggregate_single_event(&event).unwrap();
 
-        let date = agg.store().timestamp_to_date(event.timestamp_ms).unwrap();
+        let date = event.business_date();
         let stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(stats.len(), 1);
         let proj = stats[0].per_project.get("proj-abc").unwrap();
@@ -382,7 +390,7 @@ mod tests {
         );
         agg.aggregate_single_event(&event2).unwrap();
 
-        let date = agg.store().timestamp_to_date(event1.timestamp_ms).unwrap();
+        let date = event1.business_date();
         let all_stats = agg.store().load_all_daily_stats_for_date(&date).unwrap();
         assert_eq!(all_stats.len(), 2);
 
@@ -423,12 +431,14 @@ mod tests {
             net_delta_chars: 30,
             duration_seconds: 0,
             session_id: "session-1".to_string(),
+            local_date: String::new(),
         };
 
         agg.store().record_event(event).unwrap();
         agg.store().flush_events().unwrap();
 
-        let date = agg.store().timestamp_to_date(now_ms).unwrap();
+        // 用本地日历日查询：get_speed_curve 按 business_date 过滤。
+        let date = crate::writing_stats::api::StatsApi::today_date();
         let buckets = agg.get_speed_curve(&date, &date, 1).unwrap();
         assert!(!buckets.is_empty());
         assert!(buckets.iter().any(|b| b.chars_typed > 0));

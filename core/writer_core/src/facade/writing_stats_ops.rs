@@ -273,6 +273,15 @@ impl super::WriterCore {
         self.get_stats_api().get_stats_summary(&range)
     }
 
+    /// 「今天」的写作汇总。今天是哪一天由 **Core 的本地日历口径**决定。
+    ///
+    /// 平台端展示「今日纯输入」一律走这里，不要自己拼 `YYYY-MM-DD`：
+    /// 每日统计按事件发生地的本地日历日分桶，端侧拼出来的日期一旦时区
+    /// 口径和 Core 不一致，凌晨就会出现「今日进度提前清零」。
+    pub fn get_today_writing_stats_summary(&self) -> Result<Value> {
+        self.get_stats_api().get_today_stats_summary()
+    }
+
     pub fn get_writing_stats_by_project(&self, start_date: &str, end_date: &str) -> Result<Value> {
         let range = DateRange {
             start_date: start_date.to_string(),

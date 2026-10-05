@@ -38,6 +38,25 @@ unsafe fn read_date_pair(
     Some((start.to_string(), end.to_string()))
 }
 
+/// 「今天」的写作统计汇总。
+///
+/// 「今天是哪一天」由 Core 的本地日历口径决定，平台端不传日期。
+/// 每日统计按事件发生地的本地午夜分桶，端侧自己拼 `YYYY-MM-DD` 会和 Core
+/// 的时区口径错开，凌晨就出现「今日进度提前清零」。
+///
+/// # Safety
+/// 无参数。Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_today_writing_stats_summary() -> *mut c_char {
+    match with_app_service(|svc| {
+        svc.get_today_writing_stats_summary()
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
 /// 按调用方给定的日期区间取写作统计汇总。
 ///
 /// `writer_core_get_writing_stats` 把区间写死成最近 30 天，写作页的「今日进度」拿不到
