@@ -39,3 +39,23 @@ Linux_Qt：
 - `apps/Linux_qt/qml/SettingsDialog.qml`
 
 对应 Issue：#829。
+
+## 当前骨架
+
+Issue #829 第一轮只把结构钉死：一级导航固定左侧 rail，首页/工作区同步使用宽屏骨架，设置在宽屏下使用两列悬浮布局。写作页继续复用现有七角色 Workbench（顶部三段 + 章节树 + 正文 + 工具面板 + 工具轨），后续只在这些插槽里继续对齐手稿。
+
+## 宽屏判定读哪个 Core 字段
+
+一级导航与宽屏面板（左侧 rail、两列设置浮层）一律读 Core 下发的
+`PrimaryNavigationPlacement.Side`，**不**读 `WorkspaceLayoutMode.Workbench`。
+
+反例（`600–839vp` 这一档）：Core 认为这一档已经是 Workbench，但一级导航仍给
+`Bottom`。若用 `workspaceLayoutMode` 判「是不是宽屏」，页面会先进入宽屏骨架、
+隐藏自己的标题栏，而壳层仍在底部渲染 HDS Tabs —— 于是出现「页面已经是宽屏
+骨架，底下却还挂着一个沉浸光感底栏」的双导航。沉浸光感不是布局理由。
+
+反过来 `SettingsDialog.qml` 里 `widePanel`（Side）与 `overlayPanel`（Workbench）
+是两个不同概念，不是同一件事的两种写法：`overlayPanel` 决定设置是不是悬浮层，
+`widePanel` 决定悬浮层要不要拆两列。不要因为字段名相似就合成一个判定。
+
+平台端不自己按宽度猜档位，也不为同一件事保留第二套判定。
