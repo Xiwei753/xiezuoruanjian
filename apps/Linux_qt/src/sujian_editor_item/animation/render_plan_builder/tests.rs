@@ -1436,6 +1436,11 @@ fn same_burst_handoff_snapshot_id_is_retained_as_active_overlay_texture() {
 ///
 /// 现在只有**一条** region（相邻 range 合并）+ 一个前沿时钟，`conceal_glyphs`
 /// 与 `conceal_sources` 只反映「当前还在被吞的」内容。
+///
+/// 注：这里用 5 笔而不是 100 笔 —— 每笔都让动画完整走完，验证的是
+/// 「prune 真的发生」。笔数不影响结论，region 合并的规模性由
+/// `continuous_insert_does_not_accumulate_per_keystroke_animation_units`
+/// （100 笔）覆盖。
 #[test]
 fn continuous_delete_keeps_only_currently_visible_overlay() {
     let now = Instant::now();
@@ -1466,19 +1471,25 @@ fn continuous_delete_keeps_only_currently_visible_overlay() {
         Some(EditFrontierKind::Delete)
     );
 
-    for i in 1..100usize {
+    for i in 1..5usize {
         let deleted_end = i + 1;
         coord.begin_or_extend_edit_frontier(EditFrontierRequest {
             kind: EditorAnimationKind::Delete,
             base_snapshot: base.clone(),
             target_snapshot: snapshot(Vec::new()),
-            deleted_ranges: vec![(0, deleted_end)],
+            // Backspace：每一笔都删「当前正文最前面那一个字符」。
+            // 累计范围由前沿自己通过 OffsetMap 映回 base 后维护 ——
+            // 传累计范围会让 collect_conceal_glyphs 每次把全部历史 glyph 重收一遍。
+            deleted_ranges: vec![(0, 1)],
             inserted_ranges: Vec::new(),
             offset_map: OffsetMap::from_single_edit(120 - i, (0, 1), 0),
             base_text: String::new(),
             target_text: String::new(),
             conceal_direction: ConcealDirection::Backward,
-            now: now + Duration::from_millis(i as u64),
+            // 每隔**整个动画时长**再删一次：前一个字的动画已经走完，
+            // 所以它的 glyph 必须被 prune 掉。逐毫秒连删只会让前沿几乎不动，
+            // 所有 glyph 都还「在屏上」，测不到 prune。
+            now: now + Duration::from_millis((i as u64) * 160),
         });
 
         let kinds = coord.active_edit_frontier_kind();
@@ -1492,9 +1503,9 @@ fn continuous_delete_keeps_only_currently_visible_overlay() {
     // 相邻删除必须合并成一段 —— region 数不随按键次数增长。
     let ranges = coord.active_edit_frontier_base_ranges_for_test();
     assert_eq!(
-        ranges,
-        vec![(0, 100)],
-        "连续 100 次删除必须合并成 1 个 region，而不是 100 个历史动画单元"
+        ranges.len(),
+        1,
+        "连续删除必须合并成 1 个 region，而不是每次一个历史动画单元；实际 {ranges:?}"
     );
 
     // 行图 owner 也不应等于历史 revision 数：这里只有一张 base 行图。
@@ -1503,6 +1514,22 @@ fn continuous_delete_keeps_only_currently_visible_overlay() {
         active.len() <= 1,
         "行图 owner 数量必须与按键次数无关，实际 {} 个",
         active.len()
+    );
+
+    // Issue #826 评论 18 阻塞 2：光断言 region 数不够 —— 之前那版只证明了
+    // 「region 没涨」，没证明「旧视觉资源没涨」。这里必须直接检查
+    // `conceal_glyphs` / `conceal_sources` 的长度。
+    let glyphs = coord.active_conceal_glyphs_for_test();
+    let sources = coord.active_conceal_sources_for_test();
+    assert!(
+        glyphs <= 2,
+        "已吞掉的旧 glyph 必须被 prune，conceal_glyphs 不该随删除次数增长，实际 {} 个",
+        glyphs
+    );
+    assert!(
+        sources <= 1,
+        "已完全吞掉的 glyph 对应的 QImage owner 必须当场释放，conceal_sources 实际 {} 个",
+        sources
     );
 }
 

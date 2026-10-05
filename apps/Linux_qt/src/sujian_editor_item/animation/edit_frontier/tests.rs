@@ -879,3 +879,187 @@ fn replace_cannot_extend_when_deleted_text_was_created_inside_current_burst() {
         "Insert 侧必须能正常 extend（没有要映回 base 的 deleted range）"
     );
 }
+
+/// Issue #826 评论 18 阻塞 1：path 只是**延长**时，前沿绝不能按总长比例往前推。
+///
+/// 最小反例：第一笔输入 1 个 10px 字，80ms/160ms -> 前沿在 8.75px（ease 0.875）。
+/// 立刻再 append 一个相邻 10px 字 -> new_total = 20。
+/// 单前沿的正确语义是「前沿仍在 8.75px」：第一个字还差 1.25px 吐完，
+/// 第二个刚输入的字**仍然完全藏住**。
+#[test]
+fn extending_reveal_target_does_not_advance_frontier_into_new_text() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::new(),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0)],
+        )]),
+        String::from("a"),
+        vec![(0, 1)],
+        OffsetMap::from_single_edit(0, (0, 0), 1),
+        now,
+        160,
+    );
+
+    // 半程。真实 Instant 会有调度抖动，所以不写死 8.75，而是记下 extend 之前
+    // 本帧实际推进到的位置 —— 关键断言是「extend 之后前沿不动」。
+    // 不要手动写 travelled —— `inherited()` 已经会按本帧 progress 推进，
+    // 手动写一次等于把 ease 算两遍（extend 时又会推进一次）。
+    let half = instant_at(now, 80);
+    let before = state.reveal.inherited(state.sample(half).progress);
+    assert!(before > 0.0, "半程前沿必须已经前进");
+    assert!(
+        before > 0.0 && before < 10.0,
+        "半程前沿必须在路径内，实际 {before}"
+    );
+
+    // 第二笔：再 append 一个 10px 字。
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
+    )]);
+    let prev_target_to_new = OffsetMap::from_single_edit(1, (1, 1), 1);
+    state.extend_insert(
+        target.clone(),
+        String::from("ab"),
+        vec![(1, 2)],
+        &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // 关键：前沿**原地不动**，不是 before * 20/10。
+    assert!(
+        (state.reveal.travelled - before).abs() < 1e-6,
+        "path 只是延长时前沿必须保持在 {before}，不能按比例推到 {}",
+        before * 2.0
+    );
+
+    // 从 mask 侧更硬地断言：第二个 glyph（10..20）在这一帧必须 100% 隐藏。
+    let sample = state.sample(half);
+    let hidden = state.hidden_new_text_rects(&sample);
+    let covers_new_glyph = hidden
+        .iter()
+        .any(|rect| rect.x <= 10.0 + 1e-9 && rect.x + rect.w >= 20.0 - 1e-9);
+    assert!(
+        covers_new_glyph,
+        "刚输入的第二个 glyph（10..20）必须 100% 仍被遮罩，实际 hidden = {:?}",
+        hidden
+    );
+}
+
+/// Issue #826 评论 18 阻塞 1（Delete 对应）：刚删的字不能一进来就被预吞。
+#[test]
+fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
+    let now = Instant::now();
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
+    )]);
+    let mut state = EditFrontierState::begin_delete(
+        base.clone(),
+        String::from("ab"),
+        snapshot(Vec::new()),
+        String::from("b"),
+        vec![(0, 1)],
+        OffsetMap::from_single_edit(2, (0, 1), 0),
+        &[],
+        ConcealDirection::Backward,
+        now,
+        160,
+    );
+
+    let half = instant_at(now, 80);
+    let before = state.conceal.inherited(state.sample(half).progress);
+    assert!(before > 0.0, "半程吞字前沿必须已经前进");
+    assert!(
+        before > 0.0 && before < 10.0,
+        "半程吞字前沿必须在路径内，实际 {before}"
+    );
+
+    // 第二笔：把 b 也删掉（相邻 -> 合并成一段）。
+    state.extend_delete(
+        base.clone(),
+        String::from(""),
+        vec![(1, 2)],
+        &base,
+        &OffsetMap::from_single_edit(2, (1, 2), 0),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        &[],
+        ConcealDirection::Backward,
+        half,
+    );
+
+    assert!(
+        (state.conceal.travelled - before).abs() < 1e-6,
+        "path 只是延长时吞字前沿必须保持在 {before}，不能按比例推到 {}",
+        before * 2.0
+    );
+}
+
+/// Issue #826 评论 18 阻塞 3：`pending_reveal_ranges` 必须**逐视觉行**用自己那条
+/// segment 的 reveal boundary。
+///
+/// 反例：
+/// ```text
+/// 第 1 行 changed segment: x = 80..100，长度 20
+/// 第 2 行 changed segment: x = 0..100，长度 100
+/// distance = 30
+/// ```
+/// 实际是「第 1 行 20px 全露完、第 2 行只露了 10px」。只取第一条 boundary(=100)
+/// 去判断第 2 行，会把第 2 行大量甚至全部 glyph 误判成已完全露出、从
+/// `excluded_new` 提前移除 —— 屏幕上还没吐出来的字可能被 Reflow 画出来。
+#[test]
+fn pending_reveal_ranges_use_each_visual_line_own_boundary() {
+    let now = Instant::now();
+    let target = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 80.0), cluster(1, 2, 90.0)],
+        ),
+        PreparedLineSnapshot::stub_for_tests(
+            1,
+            20.0,
+            0,
+            vec![cluster(2, 3, 0.0), cluster(3, 4, 10.0), cluster(4, 5, 20.0)],
+        ),
+    ]);
+    let mut state = EditFrontierState::begin_insert(
+        String::new(),
+        target,
+        String::new(),
+        vec![(0, 5)],
+        OffsetMap::from_single_edit(0, (0, 0), 5),
+        now,
+        160,
+    );
+
+    // 第 1 行 segment 长度 20、第 2 行 10+10+10 = 30，总计 50。
+    // distance = 30 -> 第 1 行全露完，第 2 行只露了第一个 10px。
+    state.reveal.travelled = 30.0;
+    let pending = state.pending_reveal_ranges(0.0);
+
+    // 第 1 行的 cluster（0..2）不应再 pending。
+    assert!(
+        !pending.iter().any(|&(s, e)| s < 2 && 2 <= e),
+        "第 1 行已全露完，不应再 pending；实际 pending = {pending:?}"
+    );
+    // 第 2 行只露出第一个 cluster（2..3），后面两个必须仍 pending。
+    assert!(
+        pending.iter().any(|&(s, e)| s <= 3 && 4 <= e),
+        "第 2 行第二个 cluster（3..4）必须仍 pending（它在自己那行的 boundary 之后）"
+    );
+    assert!(
+        pending.iter().any(|&(s, e)| s <= 4 && 5 <= e),
+        "第 2 行第三个 cluster（4..5）必须仍 pending"
+    );
+}

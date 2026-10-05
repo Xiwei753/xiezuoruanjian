@@ -584,6 +584,24 @@ impl LinuxEditorAnimationCoordinator {
             .unwrap_or_default()
     }
 
+    /// Issue #826 评论 18 阻塞 2：测试用 —— 当前仍持有的旧字 glyph / 行图数量。
+    #[cfg(test)]
+    pub(crate) fn active_conceal_glyphs_for_test(&self) -> usize {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.conceal_glyphs.len())
+            .unwrap_or(0)
+    }
+
+    /// Issue #826 评论 18 阻塞 2：测试用 —— 当前仍持有的行图来源数量。
+    #[cfg(test)]
+    pub(crate) fn active_conceal_sources_for_test(&self) -> usize {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.conceal_sources.len())
+            .unwrap_or(0)
+    }
+
     pub(crate) fn active_edit_frontier_kind(&self) -> Option<EditFrontierKind> {
         self.active_edit_frontier.as_ref().map(|f| f.kind)
     }

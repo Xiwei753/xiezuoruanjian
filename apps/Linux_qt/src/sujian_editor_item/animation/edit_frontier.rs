@@ -487,11 +487,6 @@ impl FrontierLayer {
         self.advanced(progress)
     }
 
-    /// 本 region 这一帧走过的距离（`self` 不需要可变）。
-    fn distance_for(&self, region: &FrontierRegion) -> f64 {
-        (self.travelled - region.distance_start).clamp(0.0, region.path.total_length)
-    }
-
     /// Issue #826 评论 17：按时间 progress 推进后的**单一**前沿位置。
     ///
     /// `travelled` 是「连续编辑继承下来的已走过距离」，本函数按本帧的
@@ -596,39 +591,44 @@ impl EditFrontierState {
             if distance >= region.path.total_length - 1e-9 {
                 continue;
             }
-            // 只把**尚未露完的后缀**留在前沿名下：按 reveal 边界切掉已露出的
-            // prefix。评论 17 的核心 —— 已经完整露出的字对本次编辑已经是
-            // unchanged text，必须让 Reflow 正常接管它从旧位置移到新行；
-            // 之前整段 region 都被排除，触发自动换行时既不能 Reveal
-            // （path 换到新行）也不能 Reflow，直接瞬移。
-            let boundary = region
-                .path
-                .reveal_bounds(distance)
-                .first()
-                .map(|(edge, _)| *edge)
-                .unwrap_or(f64::NEG_INFINITY);
-            let mut cut = region.range.0;
+            // Issue #826 评论 18 阻塞 3：**逐视觉行**用自己那条 segment 的 boundary。
+            //
+            // `reveal_bounds` 是每个 segment 各有一个 boundary，不能只取第一条。
+            // 反例：
+            // ```text
+            // 第 1 行 changed segment: x = 80..100，长度 20
+            // 第 2 行 changed segment: x = 0..100，长度 100
+            // distance = 30
+            // ```
+            // 实际是「第 1 行 20px 全露完、第 2 行只露了 10px」。只取第一条
+            // boundary(=100) 去判断第 2 行，会把第 2 行大量甚至全部 glyph 误判成
+            // 已完全露出、从 `excluded_new` 提前移除 —— 屏幕上还没吐出来的字可能被
+            // Reflow 直接画出来，穿过 Reveal mask 的 ownership。
+            let bounds = region.path.reveal_bounds(distance);
             for line in self
                 .target_snapshot
                 .lines_in_byte_range(region.range.0, region.range.1)
             {
+                let Some(seg_index) = region.path.segment_index_for_line(line.id) else {
+                    // 这一行没有可见 glyph（换行符），不参与判定。
+                    continue;
+                };
+                let Some(&(boundary, _right)) = bounds.get(seg_index) else {
+                    continue;
+                };
                 for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
                     let glyph = line.source_rect_to_document_rect(&cluster.source_rect);
-                    let fully_revealed = glyph.x + glyph.w <= boundary + 1e-9;
-                    if !fully_revealed {
-                        break;
+                    // 只有整个 glyph 完全越过**它自己那一行**的 boundary 才算露出。
+                    if glyph.x + glyph.w > boundary + 1e-9 {
+                        pending.push((
+                            cluster.byte_start.max(region.range.0),
+                            cluster.byte_end.min(region.range.1),
+                        ));
                     }
-                    cut = cut.max(cluster.byte_end);
                 }
-                if cut >= region.range.1 {
-                    break;
-                }
-            }
-            if cut < region.range.1 {
-                pending.push((cut, region.range.1));
             }
         }
-        pending
+        normalize_ranges(pending)
     }
 
     /// Issue #826 评论 11 阻塞 2：编辑**身份**是否连续 —— 决定这一笔能不能并入
@@ -807,6 +807,91 @@ impl EditFrontierState {
     /// 2. 把已累计的 reveal range 用 Core 本次 OffsetMap 映到最新 target；
     /// 3. **相邻就合并**（不再坚持 `[1,2]` / `[2,3]` 必须永远分两条），
     ///    所以连打 100 次键盘仍然只有 1 个 region；
+    /// Issue #826 评论 18 阻塞 2：把旧 overlay 收成**这一帧真正还看得见**的几何。
+    ///
+    /// 用当前 region-local keep 裁每个旧 glyph：
+    /// - 已完全吞掉的（keep 里没有它）-> 直接丢弃；
+    /// - 部分吞掉的 -> 裁成当前真正剩下的 source_rect / dest_rect；
+    /// - 仍完整可见的 -> 原样保留。
+    ///
+    /// 这样每次 extend 之后 state 只保存「这一帧屏幕上还存在的旧 overlay」，
+    /// 而不是「这轮历史上一共删过的全部内容」。
+    fn sample_visible_conceal_geometry(&self, progress: f64) -> Vec<ConcealGlyphGeometry> {
+        if self.conceal.regions.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<ConcealGlyphGeometry> = Vec::new();
+        for region in &self.conceal.regions {
+            let keep = self.region_conceal_rects(region, progress);
+            for geometry in &self.conceal_glyphs {
+                if !overlaps(geometry.range, region.range) {
+                    continue;
+                }
+                let dest = geometry.dest_rect.clone();
+                let clipped = clip_dest_to_rects(dest.clone(), &keep);
+                if clipped.is_empty() {
+                    // 已经被完全吞掉 —— 丢弃，连同它的纹理 owner。
+                    continue;
+                }
+                let source = geometry.source_rect.clone();
+                let width_ratio = if dest.w > 0.0 { source.w / dest.w } else { 0.0 };
+                for (dest_x, dest_w) in clipped {
+                    out.push(ConcealGlyphGeometry {
+                        range: geometry.range,
+                        snapshot_id: geometry.snapshot_id,
+                        source_rect: SourceRect {
+                            x: source.x + (dest_x - dest.x) * width_ratio,
+                            y: source.y,
+                            w: dest_w * width_ratio,
+                            h: source.h,
+                        },
+                        dest_rect: SourceRect {
+                            x: dest_x,
+                            y: dest.y,
+                            w: dest_w,
+                            h: dest.h,
+                        },
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Issue #826 评论 18 阻塞 2：从**下一帧仍在的 glyph** 重新收集行图来源。
+    ///
+    /// 不是「旧 sources + fresh sources」—— 已经被完全吞掉的 glyph 对应的
+    /// QImage owner 必须当场释放，不等整轮 burst 最终停键。
+    fn sources_for_glyphs(
+        &self,
+        glyphs: &[ConcealGlyphGeometry],
+        fresh: &[ConcealSourceLine],
+    ) -> Vec<ConcealSourceLine> {
+        let mut out: Vec<ConcealSourceLine> = Vec::new();
+        for glyph in glyphs {
+            if out
+                .iter()
+                .any(|source| source.snapshot_id == glyph.snapshot_id)
+            {
+                continue;
+            }
+            // 先找本笔新收进来的，再回退到上一轮仍在的。
+            if let Some(existing) = fresh
+                .iter()
+                .find(|source| source.snapshot_id == glyph.snapshot_id)
+            {
+                out.push(existing.clone());
+            } else if let Some(existing) = self
+                .conceal_sources
+                .iter()
+                .find(|source| source.snapshot_id == glyph.snapshot_id)
+            {
+                out.push(existing.clone());
+            }
+        }
+        out
+    }
+
     /// 4. 在最新 target 上重建 path。
     pub(crate) fn extend_insert(
         &mut self,
@@ -823,7 +908,7 @@ impl EditFrontierState {
         // 继承**本帧已经推进到的位置**（而不是上一次 extend 存下的旧值），
         // 再按新路径总长等比缩放，保持连续推进不倒退。
         let inherited = self.reveal.inherited(self.sample(now).progress);
-        let travelled = rescale(inherited, self.reveal.total_length(), reveal.total_length());
+        let travelled = inherit_distance(inherited, reveal.total_length());
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
@@ -867,17 +952,17 @@ impl EditFrontierState {
         // Issue #826 评论 17：只把**本次新删**的 glyph 从 current snapshot 收进来，
         // 已经收集到的旧 glyph 必须保留 —— 它们来自更早的 snapshot（那一行的字
         // 早就从正文里消失了），但仍然在被吞、仍然要画、仍然要占着纹理。
+        // Issue #826 评论 18 阻塞 2：先把旧 overlay **收成这一帧真正还看得见的**，
+        // 再并入本笔新删的。只增不减等于把历史视觉债从「N 个 ConcealTrack」换成
+        // 「1 个 region + N 批历史 glyph/QImage」，并没有真正清掉。
+        let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
         let (fresh_glyphs, fresh_sources) =
             collect_conceal_glyphs(current_snapshot, &incoming_current, reflow_current);
-        let glyphs = merge_conceal_glyphs(self.conceal_glyphs.clone(), fresh_glyphs);
-        let sources = merge_conceal_sources(self.conceal_sources.clone(), fresh_sources);
+        let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
+        let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
         let conceal = build_conceal_layer(current_snapshot, &merged, direction, &glyphs);
         let inherited = self.conceal.inherited(self.sample(now).progress);
-        let travelled = rescale(
-            inherited,
-            self.conceal.total_length(),
-            conceal.total_length(),
-        );
+        let travelled = inherit_distance(inherited, conceal.total_length());
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
@@ -914,23 +999,25 @@ impl EditFrontierState {
             old.push(*base_range);
         }
         let merged_old = normalize_ranges(merge_all(old, Vec::new()));
+        // Issue #826 评论 18 阻塞 2：同 extend_delete，先 prune 再并入新删的。
+        let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
         let (fresh_glyphs, fresh_sources) =
             collect_conceal_glyphs(current_snapshot, &incoming_current, reflow_current);
-        let glyphs = merge_conceal_glyphs(self.conceal_glyphs.clone(), fresh_glyphs);
-        let sources = merge_conceal_sources(self.conceal_sources.clone(), fresh_sources);
+        let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
+        let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
         let conceal = build_conceal_layer(current_snapshot, &merged_old, direction, &glyphs);
-        let conceal_travelled = self
-            .conceal
-            .inherited(self.sample(now).progress)
-            .min(conceal.total_length());
+        let conceal_travelled = inherit_distance(
+            self.conceal.inherited(self.sample(now).progress),
+            conceal.total_length(),
+        );
 
         let carried_new = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
         let merged_new = normalize_ranges(merge_all(carried_new, inserted_ranges));
         let reveal = build_reveal_layer(&target_snapshot, &merged_new);
-        let reveal_travelled = self
-            .reveal
-            .inherited(self.sample(now).progress)
-            .min(reveal.total_length());
+        let reveal_travelled = inherit_distance(
+            self.reveal.inherited(self.sample(now).progress),
+            reveal.total_length(),
+        );
 
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
@@ -1031,6 +1118,7 @@ impl EditFrontierState {
     ///
     /// 只用于汇总 / 展示 / 测试；真正裁 glyph 时必须用 region-local 的 keep
     /// （否则一条 region 的字会被别的 region 的 keep「救活」—— 评论 16）。
+    #[cfg(test)]
     pub(crate) fn old_overlay_rects(&self, sample: &EditFrontierSample) -> Vec<FrontierRect> {
         if self.conceal.regions.is_empty() || !sample.needs_old_overlay() {
             return Vec::new();
@@ -1200,13 +1288,23 @@ fn build_conceal_layer(
     FrontierLayer::from_parts(parts)
 }
 
-/// 把旧路径上的已走过距离按新路径总长等比缩放（保留相对进度，不倒退）。
-fn rescale(inherited: f64, old_total: f64, new_total: f64) -> f64 {
-    if old_total <= 1e-9 {
-        return 0.0;
-    }
-    let clamped = inherited.clamp(0.0, old_total);
-    clamped * (new_total / old_total)
+/// Issue #826 评论 18 阻塞 1：把「上一帧前沿的绝对距离」继承到新路径上。
+///
+/// **绝不能按新旧总长比例缩放。** 连续 append 时 path 只是**延长**：
+/// ```text
+/// 第一笔 1 个 10px 字，80ms/160ms -> 前沿在 8.75px
+/// 第二笔再 append 1 个 10px 字 -> new_total = 20
+/// ```
+/// 单前沿的正确语义是「前沿仍在 8.75px」：第一个字还差 1.25px 吐完，
+/// 第二个刚输入的字仍然完全藏住。按比例缩放会得到 8.75 * 20/10 = 17.5 ——
+/// 第二个字第一帧就已经露了 75%，「快速输入没有动画」被重新做出来。
+///
+/// 连续 Delete 同理：刚删的字不能一进来就被预吞 75%。
+///
+/// 只有路径**几何真的重排**（自动换行）时绝对距离才不再等价，那时要按
+/// 「已露出的字符身份」重建，而不是猜一个百分比。
+fn inherit_distance(inherited: f64, new_total: f64) -> f64 {
+    inherited.clamp(0.0, new_total)
 }
 
 /// Issue #826 评论 17：合并两批吞字 glyph（按 range 去重）。
@@ -1223,22 +1321,6 @@ fn merge_conceal_glyphs(
             .any(|item| item.range == glyph.range && item.snapshot_id == glyph.snapshot_id)
         {
             existing.push(glyph);
-        }
-    }
-    existing
-}
-
-/// Issue #826 评论 17：合并两批行图来源（按 `snapshot_id` 去重）。
-fn merge_conceal_sources(
-    mut existing: Vec<ConcealSourceLine>,
-    fresh: Vec<ConcealSourceLine>,
-) -> Vec<ConcealSourceLine> {
-    for source in fresh {
-        if !existing
-            .iter()
-            .any(|item| item.snapshot_id == source.snapshot_id)
-        {
-            existing.push(source);
         }
     }
     existing
