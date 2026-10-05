@@ -643,6 +643,9 @@ fn check_index_has_child(app_data_root: &Path, child_starmap_id: &str) -> Result
 }
 
 /// 从 starmaps/index.json 中移除指定的 child_starmap_id。
+///
+/// child 是嵌套入口，正常路径不会出现在 root_starmap_ids 里；这里两个集合都
+/// 清一遍，防止老数据 / 异常半状态把已清理的 child 留在 root 列表。
 fn remove_child_from_index(app_data_root: &Path, child_starmap_id: &str) -> Result<()> {
     let index_path = app_data_root.join("starmaps").join("index.json");
     if !index_path.exists() {
@@ -651,6 +654,7 @@ fn remove_child_from_index(app_data_root: &Path, child_starmap_id: &str) -> Resu
     let content = fs::read_to_string(&index_path)?;
     let mut idx: crate::starmap::StarMapIndexRecord = serde_json::from_str(&content)?;
     idx.starmap_ids.retain(|id| id != child_starmap_id);
+    idx.root_starmap_ids.retain(|id| id != child_starmap_id);
     idx.updated_at = crate::starmap::now_epoch();
     let new_content = serde_json::to_string_pretty(&idx)?;
     crate::storage::atomic_write_string(&index_path, &new_content)?;
@@ -674,10 +678,11 @@ fn ensure_child_index_membership(app_data_root: &Path, child_starmap_id: &str) -
     let index_path = app_data_root.join("starmaps").join("index.json");
     if !index_path.exists() {
         // index 不存在但 child meta 存在——崩溃窗口：save meta 后、save index 前崩溃。
-        // 创建只含该 child ID 的 index。
+        // 创建只含该 child ID 的 index。child 是嵌套入口，不写 root_starmap_ids。
         let idx = crate::starmap::StarMapIndexRecord {
             schema_version: crate::starmap::migration::NEW_INDEX_SCHEMA_VERSION,
             starmap_ids: vec![child_starmap_id.to_string()],
+            root_starmap_ids: vec![],
             main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: crate::starmap::now_epoch(),
         };

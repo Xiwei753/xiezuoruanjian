@@ -16,11 +16,11 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) {
 }
 
 // ---------------------------------------------------------------------------
-// index schema 1 -> 2
+// index schema 1 -> 3 / 2 -> 3
 // ---------------------------------------------------------------------------
 
 #[test]
-fn migrate_index_schema_1_to_2() {
+fn migrate_index_schema_1_to_3() {
     let dir = temp_root();
     let index_path = dir.path().join("starmaps").join("index.json");
 
@@ -59,16 +59,37 @@ fn migrate_index_schema_1_to_2() {
         "updatedAt": 300,
     });
     write_json(&index_path, &old_index);
+    // 旧 index 的内联 meta 只是缓存；meta 文件才是真相，真实升级时文件一定存在。
+    for (id, title) in [("sm_a", "A"), ("sm_b", "B"), ("sm_c", "C")] {
+        write_json(
+            &dir.path().join("starmaps").join(format!("{id}.meta.json")),
+            &json!({
+                "starmapId": id,
+                "title": title,
+                "description": "",
+                "projectId": "p1",
+                "accentColor": "#7B8CDE",
+                "createdAt": 100,
+                "updatedAt": 200,
+            }),
+        );
+    }
 
     migrate_index(dir.path()).unwrap();
 
     let migrated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
-    assert_eq!(migrated["schemaVersion"], json!(2));
+    assert_eq!(migrated["schemaVersion"], json!(3));
     assert_eq!(migrated["starmapIds"], json!(["sm_a", "sm_b", "sm_c"]));
+    assert_eq!(
+        migrated["rootStarmapIds"],
+        json!(["sm_a", "sm_b", "sm_c"]),
+        "没有 graph 数据时，全部 starmap 都是显式一级身份"
+    );
     assert_eq!(migrated["mainStarmapByProject"]["p1"], json!("sm_a"));
     assert_eq!(migrated["mainStarmapByProject"]["p2"], json!("sm_c"));
-    assert_eq!(migrated["updatedAt"], json!(300));
+    // 迁移是真实内容变更，updatedAt 必须推进到现在。
+    assert!(migrated["updatedAt"].as_u64().unwrap() > 0);
 }
 
 #[test]
@@ -77,8 +98,9 @@ fn migrate_index_skips_already_new_schema() {
     let index_path = dir.path().join("starmaps").join("index.json");
 
     let new_index = json!({
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "starmapIds": ["sm_x"],
+        "rootStarmapIds": ["sm_x"],
         "mainStarmapByProject": {},
         "updatedAt": 999,
     });
@@ -89,8 +111,128 @@ fn migrate_index_skips_already_new_schema() {
     let migrated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
     // 没有变化。
-    assert_eq!(migrated["schemaVersion"], json!(2));
+    assert_eq!(migrated["schemaVersion"], json!(3));
     assert_eq!(migrated["updatedAt"], json!(999));
+}
+
+/// schema 2（只有 starmap_ids）第一次升级：用 Embed 关系一次性推导 root 集合，
+/// 已嵌入的 child 不进入一级列表，迁移结果持久化。
+#[test]
+fn migrate_index_schema_2_to_3_derives_roots_from_embeds() {
+    let dir = temp_root();
+    write_v2_index(dir.path(), &["sm_host", "sm_child"]);
+
+    // 构造 host -> child 的 Embed 关系（meta + graph 对象文件）。
+    write_starmap_meta(dir.path(), "sm_host", "Host");
+    write_starmap_meta(dir.path(), "sm_child", "Child");
+    let mut store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
+    store
+        .add_embed(crate::starmap::types::StarMapEmbed {
+            instance_id: "emb_child".to_string(),
+            target_starmap_id: "sm_child".to_string(),
+            label: None,
+            position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
+            host_path: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm_host".to_string(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
+    store.flush().unwrap();
+
+    migrate_index(dir.path()).unwrap();
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path_of(dir.path())).unwrap()).unwrap();
+    assert_eq!(migrated["schemaVersion"], json!(3));
+    assert_eq!(migrated["starmapIds"], json!(["sm_host", "sm_child"]));
+    assert_eq!(
+        migrated["rootStarmapIds"],
+        json!(["sm_host"]),
+        "被 Embed 的 child 不能靠扫描关系长期过滤，但迁移当次必须得到正确的 root 集合"
+    );
+
+    // 迁移后正常运行：一级列表直接读显式 root，不再需要扫描 graph。
+    let roots = crate::starmap::list_root_starmaps(dir.path()).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].starmap_id, "sm_host");
+}
+
+/// schema 2 → 3 迁移同样识别旧版"伪子星图"（Note + portal，destinationTarget 为空）：
+/// 该目标不进入一级列表。
+#[test]
+fn migrate_index_schema_2_to_3_excludes_legacy_portal_children() {
+    let dir = temp_root();
+    write_v2_index(dir.path(), &["sm_host", "sm_legacy_child"]);
+    write_starmap_meta(dir.path(), "sm_host", "Host");
+    write_starmap_meta(dir.path(), "sm_legacy_child", "Legacy Child");
+
+    let mut store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
+    store.add_node(crate::starmap::types::StarMapNode {
+        id: "n_portal".to_string(),
+        title: "Legacy Child".to_string(),
+        kind: crate::starmap::types::StarMapNodeKind::Note,
+        payload: None,
+        tags: vec![],
+        content: Default::default(),
+        anchors: vec![],
+        portal: Some(crate::starmap::semantic::StarMapPortal {
+            destination_starmap_id: "sm_legacy_child".to_string(),
+            destination_target: None,
+        }),
+        position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
+        style: Default::default(),
+        provenance: Default::default(),
+        created_at: 0,
+        updated_at: 0,
+    });
+    store.flush().unwrap();
+
+    migrate_index(dir.path()).unwrap();
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path_of(dir.path())).unwrap()).unwrap();
+    assert_eq!(
+        migrated["rootStarmapIds"],
+        json!(["sm_host"]),
+        "legacy portal child 不进入一级列表"
+    );
+}
+
+fn index_path_of(app_data_root: &std::path::Path) -> std::path::PathBuf {
+    app_data_root.join("starmaps").join("index.json")
+}
+
+fn write_v2_index(app_data_root: &std::path::Path, starmap_ids: &[&str]) {
+    let value = json!({
+        "schemaVersion": 2,
+        "starmapIds": starmap_ids,
+        "mainStarmapByProject": {},
+        "updatedAt": 999,
+    });
+    write_json(&index_path_of(app_data_root), &value);
+}
+
+fn write_starmap_meta(app_data_root: &std::path::Path, starmap_id: &str, title: &str) {
+    let value = json!({
+        "starmapId": starmap_id,
+        "title": title,
+        "description": "",
+        "projectId": null,
+        "accentColor": "#7B8CDE",
+        "createdAt": 100,
+        "updatedAt": 200,
+    });
+    write_json(
+        &app_data_root
+            .join("starmaps")
+            .join(format!("{}.meta.json", starmap_id)),
+        &value,
+    );
 }
 
 #[test]

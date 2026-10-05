@@ -33,9 +33,20 @@
 //
 // 递归命中测试：
 //   hitTargetAtScene(sceneX, sceneY) 先查本层节点 / Embed chrome；落在 Embed
-//   内容区时递归进子 Content。返回真正命中的那一层
-//   （owner / scenePathKey / starmapId / kind / id / targetPath），
-//   连线松手、右键空白新建、选中、pointer_press 日志全部走这一个入口。
+//   内容区时递归进子 Content：
+//     - 子层已经是 interactive：继续递归，直接返回子层自己的命中（包括子层空白
+//       的 kind:"empty" 和 owner=子层）；
+//     - 子层还是 shell / preview / 未加载：整个子星图按父层 kind:"embed" 命中，
+//       右键/单击/双击都作用于这个子星图入口，不再有"命中 childContent 然后
+//       什么都不做"的死区。
+//   返回真正命中的那一层（owner / scenePathKey / starmapId / kind / id / targetPath）。
+//
+// 输入仲裁（Issue #832）：
+//   本文件不再负责原始 PointerHandler 仲裁，也不再从 delegate 往上/往下找
+//   "手势主人"。唯一输入主人是根层的 StarMapInputRouter：它按命中结果调用
+//   这里的 Router API（applyMoveDelta / applyConnectDelta / finishMove /
+//   finishConnect / finishContextPending / itemCenterScene / itemSceneRect），
+//   本层只做"这一层的数据 + 递归显示 + 自己的 GraphController 操作"。
 //
 // 约束：
 //   - 不出现 panX / panY / zoomLevel / WheelHandler / PinchHandler / 背景 pan handler
@@ -77,6 +88,11 @@ Item {
     // 渲染档位（由父 Embed 的 Deep Zoom 判定传入）：interactive / preview。
     // 根层永远是 interactive。
     property string renderDetail: "interactive"
+
+    // 本层是否有节点正在内联编辑（Issue #832：Router 在编辑期间整体让位给
+    // TextInput，不再由节点自己的 Handler enabled 决定）。键由本层 pathKey 与
+    // nodeId 拼成，通过 menuHost 汇总到根 Canvas。
+    property string inlineEditingKey: ""
 
     // 根视口可见区域（scene 坐标）：根层由 Canvas 按全局相机绑定注入；
     // 子层沿 ownerSceneContent 链读同一份，不复制。
@@ -400,15 +416,11 @@ Item {
         if (!interactionController)
             return { width: 0, height: 0 }
         var ic = interactionController
-        if (ic.pressedNodeId !== "") {
-            var node = graphController.getNode(ic.pressedNodeId)
-            if (node)
-                return { width: node.width, height: node.height }
-        } else if (ic.pressedEmbedId !== "") {
-            var embed = graphController.getEmbed(ic.pressedEmbedId)
-            if (embed)
-                return { width: embed.width, height: embed.height }
-        }
+        if (ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
+            return { width: 0, height: 0 }
+        var item = itemOf(ic.moveKind, ic.moveId)
+        if (item)
+            return { width: item.width, height: item.height }
         return { width: 0, height: 0 }
     }
 
@@ -549,12 +561,14 @@ Item {
     // ---------------------------------------------------------------------------
     // 递归命中测试：命中哪一层就返回哪一层的身份。
     // 顺序：本层节点 → 本层 Embed chrome → 子星图内容区（递归）→ 本层连线 → 本层空白。
+    // 子星图内容区不再产生 childContent：子层 interactive 就返回子层自己的命中
+    // （含子层 empty），否则整个子星图按父层 embed 命中。
     // ---------------------------------------------------------------------------
     function hitTargetAtScene(sceneX, sceneY) {
         if (finalStarmapId === "")
             return null
         // preview 档只回答"里面有什么"，不参与命中：返回 null，让父层把这个
-        // 区域当作还没进入交互的子内容区（childContent），而不是假装命中节点。
+        // 区域当作还没进入交互的子内容区（父层 embed），而不是假装命中节点。
         if (renderDetail !== "interactive")
             return null
         var p = sceneToLocal(sceneX, sceneY)
@@ -590,20 +604,21 @@ Item {
         var inside = graphController.findEmbedContentAt(p.x, p.y)
         if (inside) {
             var child = childContentOf(inside.instanceId)
-            if (child) {
+            if (child && child.renderDetail === "interactive") {
                 var deeper = child.hitTargetAtScene(sceneX, sceneY)
                 if (deeper)
                     return deeper
             }
-            // 子星图内容还没加载出来：命中点归本层的 childContent，
-            // 不能冒充 empty（empty 专指"任何一层都没命中"）。
+            // 子内容还是 shell / preview / 未加载：整个子星图就是父层自己的
+            // embed 入口，单击/双击/右键都作用于它。不再有"明明点在子星图里，
+            // 却得到 childContent 然后什么都不做"的死区。
             return {
                 owner: content,
                 scenePathKey: scenePathKey,
                 starmapId: finalStarmapId,
-                kind: "childContent",
+                kind: "embed",
                 id: inside.instanceId,
-                targetPath: null,
+                targetPath: embedPath(inside.instanceId),
                 localX: p.x,
                 localY: p.y
             }
@@ -679,192 +694,81 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // 手势仲裁：全局状态机由根 Canvas 唯一创建并逐层共享。
-    // 本层只负责"按下去的对象是不是我的"以及把位移换算成自己的局部坐标；
-    // 状态只能被共享状态机提升一次，delegate 自己不决定 move/connect。
+    // Router API：唯一输入主人 StarMapInputRouter 按 hit.owner 直接调用这里。
+    // 本层只做坐标换算、本层 GraphController 操作和边界日志；
+    // 手势状态提升与释放出口都在 Router，delegate 不再参与。
     // ---------------------------------------------------------------------------
-    function ownsPress(kind, id) {
-        if (!interactionController)
-            return false
-        var ic = interactionController
-        if (ic.pointerMode === "connect" || ic.pointerMode === "contextPending")
-            return ic.connectFromScenePathKey === scenePathKey
-                && ic.connectFromKind === kind
-                && ic.connectFromId === id
-        if (ic.pointerMode === "move")
-            return ic.moveScenePathKey === scenePathKey
-                && (kind === "node" ? ic.pressedNodeId === id : ic.pressedEmbedId === id)
-        return ic.pressScenePathKey === scenePathKey
-            && ic.pressKind === kind
-            && ic.pressId === id
+    function itemOf(kind, id) {
+        return kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
     }
 
-    // 节点/Embed chrome 上的鼠标按下：只登记归属，不立刻移动也不立刻连线。
-    function onItemPressed(kind, id, targetPath, qtSceneX, qtSceneY) {
-        if (!interactionController)
-            return
-        // Qt scene（窗口）坐标 → scene 坐标，一次 mapFromItem 到位。
-        var sp = rootContent.mapFromItem(null, qtSceneX, qtSceneY)
-        interactionController.beginPress(kind, id, targetPath, scenePathKey, sp.x, sp.y)
-    }
-
-    // delegate DragHandler 上抛的原始 Qt scene 位移。
-    // 只有按下归属在本层的对象时才消费；仲裁逻辑和触屏共用同一条路径，
-    // 保证"鼠标长按拉线"和"触屏长按拉线"不会各写一套状态提升。
-    function onItemDragDelta(kind, id, dxQtScene, dyQtScene) {
-        if (!interactionController)
-            return
-        if (!ownsPress(kind, id))
-            return
-        onSceneDragDelta(dxQtScene, dyQtScene)
-    }
-
-    function promoteToMove(kind, id) {
-        if (!interactionController)
-            return
-        var item = kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
+    // 命中对象在本层局部坐标里的中心 → scene 坐标（connect 预览起点/触屏菜单锚点）。
+    function itemCenterScene(kind, id) {
+        var item = itemOf(kind, id)
         if (!item)
-            return
-        if (!interactionController.pressPendingToMove(kind, id, scenePathKey, item.x, item.y))
-            return
-        logInteraction("move_begin", kind, id, {
-            "kind": kind, "fromX": item.x, "fromY": item.y
-        })
-        refreshEdges()
+            return null
+        return localToScene(item.x + item.width / 2, item.y + item.height / 2)
     }
 
-    // 长按计时到：由共享 InteractionController 的 Timer 触发，只有归属层提升为 connect。
-    function onPressTimeout() {
-        if (!interactionController)
-            return
-        var ic = interactionController
-        if (ic.pointerMode !== "pressPending")
-            return
-        var kind = ic.pressKind
-        var id = ic.pressId
-        if (!ownsPress(kind, id))
-            return
-        var item = kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
+    // 命中对象的可见矩形（scene 坐标）：双击 Embed "进入"时交给根 Canvas
+    // 做相机聚焦，不开新页面。
+    function itemSceneRect(kind, id) {
+        var item = itemOf(kind, id)
         if (!item)
-            return
-        var center = localToScene(item.x + item.width / 2, item.y + item.height / 2)
-        if (!ic.pressPendingToConnect(kind, id, ic.pressTargetPath, center.x, center.y))
-            return
-        logInteraction("connect_begin", kind, id, {
-            "kind": kind, "fromId": id, "fromX": center.x, "fromY": center.y
-        })
+            return null
+        var tl = localToScene(item.x, item.y)
+        var br = localToScene(item.x + item.width, item.y + item.height)
+        return { x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y }
     }
 
-    // 触屏长按：不移动弹菜单，移动超阈值转 connect（#373 触屏语义）。
-    function onItemTouchLongPressed(kind, id, targetPath) {
-        if (!interactionController)
-            return
+    // move 更新：Router 只交原始 Qt scene 位移，本层换算成局部坐标并夹回安全区。
+    function applyMoveDelta(dxQtScene, dyQtScene) {
         var ic = interactionController
-        // Issue #822 评论 5977278030：双指缩放优先。pinch 已经接管时拒绝晚到的
-        // 长按回调，不再把状态改回 contextPending —— Qt 的 passive grab 在
-        // PinchHandler 抢到 exclusive grab 后仍会继续收到事件。
-        if (ic.pointerMode === "pinch")
-            return
-        var item = kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
-        if (!item)
-            return
-        var center = localToScene(item.x + item.width / 2, item.y + item.height / 2)
-        if (!ic.beginContextPending(kind, id, targetPath, scenePathKey, center.x, center.y))
-            return
-        if (menuHost)
-            menuHost.showTouchPreview(kind, center.x, center.y)
-    }
-
-    // 本层是不是当前手势的归属层（pressPending / connect / contextPending / move）。
-    function isGestureOwner() {
-        if (!interactionController)
+        if (!ic || ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
             return false
-        var ic = interactionController
-        return ic.pressScenePathKey === scenePathKey
-                || ic.connectFromScenePathKey === scenePathKey
-                || ic.moveScenePathKey === scenePathKey
-    }
-
-    // 拖动位移：delegate 只上抛原始 activeTranslation 增量（Qt scene 坐标），
-    // 所有 Qt scene → 本层 local 的换算只在这里做一次。
-    // 手指起点可能在任意深层的节点上，归属层不一定是根层，
-    // 所以从根开始往下找到真正的归属层，返回 true 表示已消费。
-    function onSceneDragDelta(dxQtScene, dyQtScene) {
-        if (!interactionController)
-            return false
-        var ic = interactionController
-        if (ic.pointerMode !== "contextPending" && ic.pointerMode !== "connect"
-                && ic.pointerMode !== "pressPending" && ic.pointerMode !== "move")
-            return false
-        if (!isGestureOwner()) {
-            // 归属在更深的子层，转发下去。
-            for (var i = 0; i < embedRepeater.count; i++) {
-                var item = embedRepeater.itemAt(i)
-                var child = item ? item.childContent() : null
-                if (child && child.onSceneDragDelta(dxQtScene, dyQtScene))
-                    return true
-            }
-            return false
-        }
-
-        // Issue #822: 按下仲裁 —— 先超拖动阈值转 move，先到长按时间转 connect。
-        // noteDragDelta 吃原始 Qt scene 像素，阈值才是屏幕口径，不随全局缩放变形。
-        if (ic.pointerMode === "pressPending") {
-            ic.noteDragDelta(dxQtScene, dyQtScene)
-            if (ic.pressDragDistance >= ic.dragThreshold)
-                promoteToMove(ic.pressKind, ic.pressId)
-            return true
-        }
-        if (ic.pointerMode === "move") {
-            // 拖动候选位置先夹回内容安全区：显示的就是最终写 Core 的那一份，
-            // 节点/子星图不会被拖到圆外或压住父圆的标题/边框交互壳。
-            var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
-            var candidateX = ic.moveX + localDelta.x
-            var candidateY = ic.moveY + localDelta.y
-            var movingSize = movingItemSize()
-            var clamped = clampToContentSafeArea(candidateX, candidateY,
-                                                 movingSize.width, movingSize.height)
-            ic.updateMove(clamped.x, clamped.y)
-            return true
-        }
-        if (ic.pointerMode === "contextPending") {
-            // 长按后拖动：端点存 scene 坐标，必须累加 root-world 增量；
-            // 转 connect 的阈值继续吃原始屏幕像素，两个口径分开。
-            var contextDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
-            ic.connectMouseX += contextDelta.x
-            ic.connectMouseY += contextDelta.y
-            ic.noteDragDelta(dxQtScene, dyQtScene)
-            if (ic.pressDragDistance > ic.moveThreshold)
-                ic.contextPendingToConnect()
-            // 转入 connect 后预览端点立刻按"宿主可见形状"重算。
-            refreshConnectPreview()
-            return true
-        }
-        // connect：预览线终点是 scene 坐标，只能累加 root-world 增量；
-        // 直接把屏幕像素加进 scene 坐标会随全局缩放漂移。
-        var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
-        ic.updateConnect(ic.connectMouseX + connectDelta.x,
-                         ic.connectMouseY + connectDelta.y)
-        // 预览起止点与正式边共用同一套可见端点（悬停合法 target 时贴到目标边界）。
-        refreshConnectPreview()
+        var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
+        var candidateX = ic.moveX + localDelta.x
+        var candidateY = ic.moveY + localDelta.y
+        var movingSize = movingItemSize()
+        var clamped = clampToContentSafeArea(candidateX, candidateY,
+                                             movingSize.width, movingSize.height)
+        ic.updateMove(clamped.x, clamped.y)
         return true
     }
 
-    // 松手统一出口：click / move / connect 都从这里闭环。
-    // Issue #822 评论 5977278030：pinch（双指缩放）不属于单指业务，
-    // 这里对它什么都不做——缩放结束由 Canvas 的 endPinch() 统一复位。
-    function releaseOwnerGesture() {
-        if (!interactionController)
-            return
-        var mode = interactionController.pointerMode
-        if (mode === "connect") {
-            finishConnect()
-        } else if (mode === "move") {
-            finishMove()
-        } else if (mode === "contextPending") {
-            finishContextPending()
-        } else if (mode === "pressPending") {
-            interactionController.cancelPressPending()
+    // connect / contextPending 的鼠标端点：端点存 scene 坐标，只能累加
+    // root-world 增量；拖动阈值由 Router 用原始像素单独累计。
+    function applyConnectDelta(dxQtScene, dyQtScene) {
+        var ic = interactionController
+        if (!ic || ic.connectFromScenePathKey !== scenePathKey)
+            return false
+        if (ic.pointerMode !== "connect" && ic.pointerMode !== "contextPending")
+            return false
+        var delta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
+        if (ic.pointerMode === "connect") {
+            ic.updateConnect(ic.connectMouseX + delta.x, ic.connectMouseY + delta.y)
+            // 预览起止点与正式边共用同一套可见端点（悬停合法 target 时贴到目标边界）。
+            refreshConnectPreview()
+        } else {
+            // contextPending 还没进入 connect：端点先累计，转 connect 后统一重算预览。
+            ic.connectMouseX += delta.x
+            ic.connectMouseY += delta.y
+        }
+        return true
+    }
+
+    // 内联编辑状态汇总：Node delegate 的 editing 变化 → 根 Canvas 汇总键，
+    // Router 在编辑期间整体让位给 TextInput。
+    function noteInlineEditing(nodeId, editing) {
+        var key = scenePathKey + "/node_" + nodeId
+        if (editing) {
+            inlineEditingKey = key
+            if (menuHost)
+                menuHost.setInlineEditingKey(key)
+        } else if (inlineEditingKey === key) {
+            inlineEditingKey = ""
+            if (menuHost && menuHost.inlineEditingKey === key)
+                menuHost.setInlineEditingKey("")
         }
     }
 
@@ -914,20 +818,20 @@ Item {
 
     function finishMove() {
         var ic = interactionController
-        var nodeId = ic.pressedNodeId
-        var embedId = ic.pressedEmbedId
+        var kind = ic.moveKind
+        var id = ic.moveId
         var nx = ic.moveX
         var ny = ic.moveY
         var committed = false
-        if (nodeId !== "") {
-            committed = graphController.commitNodeMove(nodeId, nx, ny)
-            logInteraction("move_end", "node", nodeId, {
-                "toX": nx, "toY": ny, "commitSuccess": committed, "device": "mouse"
+        if (kind === "node" && id !== "") {
+            committed = graphController.commitNodeMove(id, nx, ny)
+            logInteraction("move_end", "node", id, {
+                "toX": nx, "toY": ny, "commitSuccess": committed
             })
-        } else if (embedId !== "") {
-            committed = graphController.commitEmbedMove(embedId, nx, ny)
-            logInteraction("move_end", "embed", embedId, {
-                "toX": nx, "toY": ny, "commitSuccess": committed, "device": "mouse"
+        } else if (kind === "embed" && id !== "") {
+            committed = graphController.commitEmbedMove(id, nx, ny)
+            logInteraction("move_end", "embed", id, {
+                "toX": nx, "toY": ny, "commitSuccess": committed
             })
         }
         ic.endMove()
@@ -940,10 +844,9 @@ Item {
         var kind = ic.connectFromKind
         var id = ic.connectFromId
         ic.endContextPending()
-        var item = kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
-        if (!item)
+        var center = itemCenterScene(kind, id)
+        if (!center)
             return
-        var center = localToScene(item.x + item.width / 2, item.y + item.height / 2)
         if (menuHost)
             menuHost.showLongPressMenu(kind, id, center.x, center.y, content)
     }
@@ -1029,18 +932,12 @@ Item {
     function clearLayerSelection() { graphController.clearSelection() }
 
     function isMovingNode(id) {
-        if (!interactionController)
-            return false
-        return interactionController.pointerMode === "move"
-                && interactionController.moveScenePathKey === scenePathKey
-                && interactionController.pressedNodeId === id
+        return interactionController
+                ? interactionController.isMovingTarget(scenePathKey, "node", id) : false
     }
     function isMovingEmbed(instanceId) {
-        if (!interactionController)
-            return false
-        return interactionController.pointerMode === "move"
-                && interactionController.moveScenePathKey === scenePathKey
-                && interactionController.pressedEmbedId === instanceId
+        return interactionController
+                ? interactionController.isMovingTarget(scenePathKey, "embed", instanceId) : false
     }
 
     // ---------------------------------------------------------------------------
@@ -1052,12 +949,8 @@ Item {
         var ic = interactionController
         if (ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
             return null
-        if (ic.pressedNodeId !== "") {
-            return { kind: "node", id: ic.pressedNodeId, x: ic.moveX, y: ic.moveY }
-        }
-        if (ic.pressedEmbedId !== "") {
-            return { kind: "embed", id: ic.pressedEmbedId, x: ic.moveX, y: ic.moveY }
-        }
+        if (ic.moveKind !== "" && ic.moveId !== "")
+            return { kind: ic.moveKind, id: ic.moveId, x: ic.moveX, y: ic.moveY }
         return null
     }
 
@@ -1084,9 +977,6 @@ Item {
         function onMoveXChanged() { if (content.currentMoveOverride()) content.refreshEdges() }
         function onMoveYChanged() { if (content.currentMoveOverride()) content.refreshEdges() }
         function onPointerModeChanged() { content.refreshAllEdges() }
-        // Issue #822: 长按计时到只由共享状态机发信号，
-        // 状态提升由"归属层"完成，避免每层都去改全局状态。
-        function onPressTimeout() { content.onPressTimeout() }
     }
 
     // Issue #814 评论 5935346839: 单层交互边界日志入口，不进连续移动热路径。
@@ -1252,12 +1142,24 @@ Item {
                 id: nodeRepeater
                 // preview 档只由 previewCanvas 画静态投影，不实例化交互 delegate。
                 model: content.renderDetail === "interactive" ? graphController.nodesModel : []
+                // 正在编辑的节点被销毁（切图 / 删节点 / 掉到 preview 档）时不会
+                // 再发 editingChanged(false)，在这里主动清掉内联编辑汇总键，
+                // 否则 Router 会永久让位、左键输入全部失灵。
+                onItemRemoved: function(index, item) {
+                    if (item && item.editing)
+                        content.noteInlineEditing(item.nodeId, false)
+                }
                 delegate: StarMapNode {
                     required property var modelData
                     required property int index
                     dt: content.dt
                     property var nodeData: modelData
-                    readonly property string nodeId: nodeData.id
+
+                    // Issue #832：节点不再持有任何业务手势，输入由唯一 Router 解释。
+                    // 这里只把身份和共享状态机交给节点，用于视觉动画查询。
+                    nodeId: nodeData.id
+                    scenePathKey: content.scenePathKey
+                    interactionController: content.interactionController
 
                     // 本层局部坐标，不再经过 worldToScreen：相机在祖先 Content 上。
                     x: content.isMovingNode(nodeData.id) ? content.interactionController.moveX : nodeData.x
@@ -1269,46 +1171,13 @@ Item {
                             ? content.selectionController.matches(content.scenePathKey, "node", nodeData.id)
                             : false
                     wobbleIndex: index
-                    // Issue #822 评论 5977714294：Pinch 接管期间由归属层直接禁用
-                    // delegate 的触屏 TapHandler（passive grab 的 tap 识别当场取消），
-                    // 不再只靠回调时判断 —— Pinch 结束后的迟到 singleTapped 挡不住。
-                    touchGestureBlocked: content.menuHost
-                            ? content.menuHost.pinchOwnsTouchGesture()
-                            : (content.interactionController
-                               && content.interactionController.pointerMode === "pinch")
-
-                    onMouseInteracted: {
-                        if (content.menuHost) content.menuHost.noteMouseInteracted()
-                    }
-
-                    // 鼠标按下只登记归属（pressPending），不决定 move 还是 connect。
-                    onItemPressed: function(qx, qy) {
-                        content.onItemPressed("node", nodeData.id, content.nodePath(nodeData.id), qx, qy)
-                    }
-
-                    // 单击选中：TapHandler 的点击语义只上抛信号，归属层负责选中和边界日志
-                    // （鼠标 / 触屏两个 TapHandler 共用，device 由 pointer_press 边界日志给出）。
-                    onSingleClicked: {
-                        content.selectNode(nodeData.id)
-                        content.logInteraction("selection_changed", "node", nodeData.id, {})
-                    }
-
-                    onTouchLongPressed: {
-                        content.onItemTouchLongPressed("node", nodeData.id, content.nodePath(nodeData.id))
-                    }
-
-                    onMoveDelta: function(dx, dy) {
-                        content.onItemDragDelta("node", nodeData.id, dx, dy)
-                    }
-
-                    onLeftReleased: content.releaseOwnerGesture()
-
-                    // Issue #822：节点自身就是编辑器，双击直接把光标放进节点框。
-                    onDoubleClicked: content.beginInlineEdit(nodeData.id)
 
                     onTitleCommitted: function(newTitle) {
                         content.commitNodeTitle(nodeData.id, newTitle)
                     }
+
+                    // 内联编辑状态汇总给根 Canvas：Router 在编辑期间整体让位给 TextInput。
+                    onEditingChanged: content.noteInlineEditing(nodeData.id, editing)
                 }
             }
 
@@ -1333,12 +1202,10 @@ Item {
                             ? content.selectionController.matches(content.scenePathKey, "embed", embedData.instanceId)
                             : false
                     wobbleIndex: index
-                    // Issue #822 评论 5977714294：与 Node 同一套让位规则 ——
-                    // Pinch 激活期间由归属层直接禁用 chrome 的触屏 TapHandler。
-                    touchGestureBlocked: content.menuHost
-                            ? content.menuHost.pinchOwnsTouchGesture()
-                            : (content.interactionController
-                               && content.interactionController.pointerMode === "pinch")
+                    // Issue #832：Embed 不再持有任何业务手势；身份与共享状态机
+                    // 只用于 pressed/move 视觉绑定。
+                    scenePathKey: content.scenePathKey
+                    interactionController: content.interactionController
 
                     // Issue #822：子星图显示档位只由 ownerEffectiveScale（全局相机 ×
                     // 祖先 local fit）+ 根视口短边算出；Embed 外壳的 world 几何恒定，
@@ -1356,36 +1223,8 @@ Item {
                     // 旧 portal 归一 → enterPortal{nodeId}。Embed 不再自己猜路径。
                     pathSegment: graphController.embedPathSegment(embedData.instanceId)
                     selectionController: content.selectionController
-                    interactionController: content.interactionController
                     rootContent: content.rootContent
                     menuHost: content.menuHost
-
-                    onMouseInteracted: {
-                        if (content.menuHost) content.menuHost.noteMouseInteracted()
-                    }
-
-                    onItemPressed: function(qx, qy) {
-                        content.onItemPressed("embed", embedData.instanceId,
-                                              content.embedPath(embedData.instanceId), qx, qy)
-                    }
-
-                    // 单击选中：Embed chrome 的 TapHandler 只上抛 clicked，
-                    // 归属层负责选中和边界日志（鼠标 / 触屏共用）。
-                    onClicked: function(instId) {
-                        content.selectEmbed(instId)
-                        content.logInteraction("selection_changed", "embed", instId, {})
-                    }
-
-                    onTouchLongPressed: {
-                        content.onItemTouchLongPressed("embed", embedData.instanceId,
-                                                       content.embedPath(embedData.instanceId))
-                    }
-
-                    onMoveDelta: function(dx, dy) {
-                        content.onItemDragDelta("embed", embedData.instanceId, dx, dy)
-                    }
-
-                    onLeftReleased: content.releaseOwnerGesture()
                 }
             }
         }

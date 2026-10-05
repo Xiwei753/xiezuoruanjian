@@ -243,11 +243,14 @@ fn apply_starmap_delete_internal(
         StarMapIndexRecord {
             schema_version: crate::starmap::migration::NEW_INDEX_SCHEMA_VERSION,
             starmap_ids: vec![],
+            root_starmap_ids: vec![],
             main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: crate::starmap::now_epoch(),
         }
     };
     idx.starmap_ids.retain(|id| id != starmap_id);
+    // 一级身份也一并移除：删除后的 id 不能继续出现在 root 列表里。
+    idx.root_starmap_ids.retain(|id| id != starmap_id);
     idx.main_starmap_by_project.retain(|_, v| v != starmap_id);
     idx.updated_at = crate::starmap::now_epoch();
     // 落盘 index。

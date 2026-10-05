@@ -111,12 +111,20 @@ fn canvas_mounts_camera_on_camera_layer_only() {
 
     // 根内容只用 anchors.fill 占满相机层，不能自己再拿 x/y 当相机平移：
     // 一个 Item 上不允许 anchors 和相机两套几何来源同时控制位置。
-    let root_block = slice_between(&src, "id: rootContent", "property var selectionController: null");
+    let root_block = slice_between(
+        &src,
+        "id: rootContent",
+        "property var selectionController: null",
+    );
     assert!(
         root_block.contains("anchors.fill: parent"),
         "根层内容必须 anchors.fill 占满相机层，实际片段:\n{root_block}"
     );
-    for forbidden in ["x: canvasArea.panX", "y: canvasArea.panY", "scale: canvasArea.zoomLevel"] {
+    for forbidden in [
+        "x: canvasArea.panX",
+        "y: canvasArea.panY",
+        "scale: canvasArea.zoomLevel",
+    ] {
         assert!(
             !root_block.contains(forbidden),
             "根层内容不得再自己持有 {forbidden}，实际片段:\n{root_block}"
@@ -208,21 +216,30 @@ fn content_delegates_use_local_coordinates() {
 
 #[test]
 fn content_begin_move_uses_model_world_coordinates() {
-    let src = strip_line_comments(&read_src(CONTENT));
+    // Issue #832：拖动阈值到点由唯一 Router 提升；起点坐标来自归属层模型，
+    // 不是 delegate 的屏幕 x/y。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let promote = function_window(&router, "function handleDragActivated(", 2000);
+    assert!(
+        promote.contains("gestureOwner.itemOf(pressHit.kind, pressHit.id)"),
+        "提升前必须从归属层模型取条目，起点用模型世界坐标，实际窗口:\n{promote}"
+    );
+    assert!(
+        promote.contains("item.x, item.y"),
+        "提升必须传模型里的 item.x/item.y 作为起点，实际窗口:\n{promote}"
+    );
+    assert!(
+        promote.contains("ic.pressPendingToMove(pressHit.scenePathKey, pressHit.kind,")
+            && promote.contains("pressHit.id, pressHit.targetPath,"),
+        "提升必须经 pressPendingToMove 仲裁并保留完整身份，实际窗口:\n{promote}"
+    );
 
-    // 按下只登记 pressPending，起点坐标来自模型而不是 delegate 的屏幕 x/y。
-    let promote = function_window(&src, "function promoteToMove(", 700);
+    // 归属层只负责把位移换算成本层局部坐标。
+    let content = strip_line_comments(&read_src(CONTENT));
+    let apply = function_window(&content, "function applyMoveDelta(", 700);
     assert!(
-        promote.contains("graphController.getNode(id)") || promote.contains("graphController.getEmbed(id)"),
-        "promoteToMove 必须从模型取条目，起点用模型世界坐标，实际窗口:\n{promote}"
-    );
-    assert!(
-        promote.contains("item.x") && promote.contains("item.y"),
-        "promoteToMove 必须传模型里的 item.x/item.y 作为起点，实际窗口:\n{promote}"
-    );
-    assert!(
-        promote.contains("interactionController.pressPendingToMove(kind, id, scenePathKey, item.x, item.y)"),
-        "提升必须经 pressPendingToMove 仲裁，不能直接从 DragHandler 进 move，实际窗口:\n{promote}"
+        apply.contains("graphController") || apply.contains("clampToContentSafeArea"),
+        "归属层必须负责 clamp 与显示位置更新，实际窗口:\n{apply}"
     );
 }
 
@@ -230,15 +247,14 @@ fn content_begin_move_uses_model_world_coordinates() {
 // 6. Node/Embed 只上抛原始 Qt scene 增量，换算只在 Content 做一次
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Node/Embed 都不再自己维护 `sceneDelta()` 矩阵：DragHandler 的
-/// `activeTranslation` 是 Qt scene 坐标增量，delegate 原样上抛，
+/// Issue #832：delegate 不再参与位移传递；唯一 Router 的 DragHandler
+/// `activeTranslation` 是 Qt scene 坐标增量，只交给状态机 + 归属层，
 /// 由 `StarMapSceneContent.qtSceneDeltaToLocal` 统一换算一次。
 /// 旧实现 delegate 先换算一次、归属层又按"原始 Qt scene delta"换算第二次，
 /// 全局 zoom=2 时拖动会只剩 1/4。
 #[test]
 fn node_does_not_self_convert_drag_delta() {
-    let src = read_src(NODE);
-    let stripped = strip_line_comments(&src);
+    let stripped = strip_line_comments(&read_src(NODE));
     assert!(
         !stripped.contains("root.parent.scale"),
         "StarMapNode 不得再用 root.parent.scale 猜缩放（会与相机双重缩放）"
@@ -248,39 +264,47 @@ fn node_does_not_self_convert_drag_delta() {
         "StarMapNode 不得再保留 canvasZoomLevel：全局缩放已由祖先 transform 承担"
     );
     assert!(
-        !stripped.contains("function sceneDelta(") && !stripped.contains("mapFromItem("),
-        "Node 不得再自己换算位移：Qt scene → 本层 local 只允许在归属层做一次"
+        !stripped.contains("DragHandler") && !stripped.contains("moveDelta"),
+        "Node 不得再自己换算/上抛位移：唯一 Router 的 DragHandler 只交原始增量"
     );
-    let drag = function_window(&stripped, "onActiveTranslationChanged:", 500);
+
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let drag = function_window(&router, "onActiveTranslationChanged:", 500);
     assert!(
         drag.contains("var dx = activeTranslation.x - lastTx")
             && drag.contains("var dy = activeTranslation.y - lastTy")
-            && drag.contains("root.moveDelta(dx, dy)"),
-        "Node 的 DragHandler 必须只上抛原始 activeTranslation 增量，实际窗口:\n{drag}"
+            && drag.contains("router.handleDragDelta(dx, dy)"),
+        "Router 的 DragHandler 必须只交原始 activeTranslation 增量，实际窗口:\n{drag}"
+    );
+    let content = strip_line_comments(&read_src(CONTENT));
+    let apply = function_window(&content, "function applyMoveDelta(", 300);
+    assert!(
+        apply.contains("qtSceneDeltaToLocal(dxQtScene, dyQtScene)"),
+        "Qt scene → 本层 local 只允许在归属层做一次，实际窗口:\n{apply}"
     );
 }
 
 #[test]
 fn embed_does_not_self_convert_drag_delta() {
-    let src = read_src(EMBED);
-    let stripped = strip_line_comments(&src);
+    let stripped = strip_line_comments(&read_src(EMBED));
     assert!(
         !stripped.contains("root.parent.scale"),
         "StarMapEmbed 不得再用 root.parent.scale 猜缩放（会与相机双重缩放）"
     );
     assert!(
-        !stripped.contains("canvasZoomLevel") && !stripped.contains("function sceneDelta("),
-        "StarMapEmbed 不得再自己维护位移换算：Qt scene → 本层 local 只允许在归属层做一次"
-    );
-    // 整颗 Embed 只有一层 chrome 输入层的一个 DragHandler，原样上抛。
-    assert_eq!(
-        count_occurrences(&stripped, "root.moveDelta(dx, dy)"),
-        1,
-        "chrome 输入层必须只上抛原始 activeTranslation 增量"
+        !stripped.contains("canvasZoomLevel") && !stripped.contains("DragHandler"),
+        "StarMapEmbed 不得再自己维护位移换算：输入只有一个主人（Router）"
     );
     assert!(
-        !stripped.contains("root.moveDelta(d.x, d.y)"),
-        "不再有经 sceneDelta 换算后再上抛的旧路径"
+        !stripped.contains("moveDelta"),
+        "Embed 不得再上抛位移：Router 直接驱动归属层"
+    );
+
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    assert_eq!(
+        count_occurrences(&router, "router.handleDragDelta(dx, dy)"),
+        1,
+        "整棵星图只允许 Router 的一个 DragHandler 交位移"
     );
 }
 
@@ -294,7 +318,8 @@ fn canvas_background_interaction_uses_screen_to_world() {
     // logPointerPress 用 screenToWorldX/Y
     let lpp = function_window(&src, "function logPointerPress(", 900);
     assert!(
-        lpp.contains("screenToWorldX(point.position.x)") && lpp.contains("screenToWorldY(point.position.y)"),
+        lpp.contains("screenToWorldX(point.position.x)")
+            && lpp.contains("screenToWorldY(point.position.y)"),
         "logPointerPress 必须用 screenToWorldX/Y，实际窗口:\n{lpp}"
     );
     // 不应再在背景交互里手写 (x - panX) / zoomLevel

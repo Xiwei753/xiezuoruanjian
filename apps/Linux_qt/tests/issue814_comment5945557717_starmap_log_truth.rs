@@ -63,26 +63,30 @@ fn content_recursive_hit_uses_find_embed_content_at() {
 }
 
 #[test]
-fn canvas_pointer_press_distinguishes_embed_chrome_and_child_content() {
+fn canvas_pointer_press_distinguishes_hit_kinds() {
     // Issue #817 评论 5949494799: 命中种类统一由递归命中入口产出
-    // （node / embed / childContent / edge / empty），logPointerPress 只透传
-    // hit.kind。Issue #822 后该入口是 Content 的 hitTargetAtScene，
-    // Canvas 的 hitTargetAtScreen 只做 screen→scene 转换后转发。
+    // （node / embed / edge / empty），logPointerPress 只透传 hit.kind。
+    // Issue #832 后子星图不再产生 childContent：shell/preview 整体按 embed 命中。
     let canvas = read_src(CANVAS);
     let screen_window = function_window(&canvas, "function hitTargetAtScreen(", 400);
     assert!(
-        screen_window.contains("rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))"),
+        screen_window
+            .contains("rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))"),
         "hitTargetAtScreen 必须转发到根 Content 的递归命中入口，实际窗口:\n{screen_window}"
     );
 
     let content = read_src(CONTENT);
-    let hit_window = function_window(&content, "function hitTargetAtScene(", 3000);
-    for kind in ["\"node\"", "\"embed\"", "\"childContent\"", "\"edge\"", "\"empty\""] {
+    let hit_window = function_window(&content, "function hitTargetAtScene(", 3600);
+    for kind in ["\"node\"", "\"embed\"", "\"edge\"", "\"empty\""] {
         assert!(
             hit_window.contains(&format!("kind: {kind}")),
             "hitTargetAtScene 必须能返回 kind: {kind}，实际窗口:\n{hit_window}"
         );
     }
+    assert!(
+        !hit_window.contains("kind: \"childContent\""),
+        "不得再返回 childContent：低 LOD 子图整体按父层 embed 命中，实际窗口:\n{hit_window}"
+    );
     assert!(
         hit_window.contains("owner: content"),
         "hitTargetAtScene 必须返回真正的命中层 owner，菜单/连线/选中都靠它定位，实际窗口:\n{hit_window}"
@@ -97,7 +101,6 @@ fn canvas_pointer_press_distinguishes_embed_chrome_and_child_content() {
         window.contains("logInteraction(\"pointer_press\", kind,"),
         "logPointerPress 必须把命中的 kind 原样写进 pointer_press 日志，实际窗口:\n{window}"
     );
-    // 不应再保留旧的单一 "embed" hitKind（应已拆成 embed / childContent）
     assert!(
         !window.contains("hitKind = \"embed\""),
         "logPointerPress 不应再使用旧的单一 \"embed\" hitKind，实际窗口:\n{window}"

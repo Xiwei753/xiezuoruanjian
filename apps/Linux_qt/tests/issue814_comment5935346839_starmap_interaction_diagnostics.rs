@@ -160,29 +160,36 @@ fn content_has_unified_log_interaction_helper() {
     );
 }
 
-/// 全局相机类事件记在根 Canvas；命中层的 move/connect 边界记在该层 Content。
+/// Issue #832：边界事件按"谁解释输入"落点——
+/// - 全局相机/press 观察记在 Canvas（Canvas.logPointerPress / context_menu_open）；
+/// - 单指手势边界（pan / selection / move_begin / connect_begin / zoom）记在唯一 Router；
+/// - 命中层的收尾（move_end / connect_end）仍记在该层 Content。
 #[test]
-fn canvas_and_content_log_all_gesture_boundary_events() {
+fn canvas_router_and_content_log_all_gesture_boundary_events() {
     let canvas = strip_line_comments(&read_src(CANVAS));
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     let content = strip_line_comments(&read_src(CONTENT));
-    for event in [
-        "pointer_press",
-        "pan_begin",
-        "pan_end",
-        "selection_changed",
-        "context_menu_open",
-    ] {
+
+    for event in ["pointer_press", "context_menu_open"] {
         assert!(
             canvas.contains(&format!("logInteraction(\"{event}\"")),
             "StarMapCanvas 必须记录 {event} 边界日志"
         );
     }
     for event in [
+        "pan_begin",
+        "pan_end",
+        "selection_changed",
         "move_begin",
-        "move_end",
         "connect_begin",
-        "connect_end",
+        "zoom_wheel",
     ] {
+        assert!(
+            router.contains(&format!("logInteraction(\"{event}\"")),
+            "StarMapInputRouter 必须记录 {event} 边界日志"
+        );
+    }
+    for event in ["move_end", "connect_end"] {
         assert!(
             content.contains(&format!("logInteraction(\"{event}\"")),
             "StarMapSceneContent 必须记录命中层的 {event} 边界日志"
@@ -190,50 +197,47 @@ fn canvas_and_content_log_all_gesture_boundary_events() {
     }
 }
 
-/// pointer_press 必须由 passive-grab PointHandler 观察：背景 MouseArea 在按到
-/// Node/Embed 时收不到 press（对象 TapHandler 先取 exclusive grab），
-/// 而"按在对象上没反应"正是要诊断的场景。
-/// 评论 5977879544：鼠标入口只剩左/右两键（中键历史 pan 分支已删），
-/// 所以观察器也固定成 left/right/touch 三路，不再要求 middle。
+/// Issue #832：pointer_press 由唯一 Router 在按下当场调用 Canvas 的统一
+/// 计算/落盘函数：左键（鼠标/触屏共用，device 由 source 给出）与右键两路。
+/// 中键历史 pan 入口已删除。
 #[test]
-fn canvas_pointer_press_covers_object_presses_via_passive_handlers() {
-    let src = read_src(CANVAS);
+fn router_pointer_press_covers_left_and_right() {
+    let canvas = read_src(CANVAS);
     assert!(
-        src.contains("function logPointerPress("),
+        canvas.contains("function logPointerPress("),
         "StarMapCanvas 必须有统一的 pointer_press 计算/落盘函数"
     );
-    for call in [
-        "logPointerPress(\"left\", \"mouse\", point)",
-        "logPointerPress(\"right\", \"mouse\", point)",
-        "logPointerPress(\"left\", \"touch\", point)",
-    ] {
-        assert!(src.contains(call), "pointer_press 观察器必须覆盖 {call}");
-    }
-    let observers = strip_line_comments(&src);
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert!(
-        !observers.contains("logPointerPress(\"middle\""),
+        router.contains("canvas.logPointerPress(\"left\", source, point)"),
+        "左键（鼠标/触屏）按下必须记 pointer_press"
+    );
+    assert!(
+        router.contains("canvas.logPointerPress(\"right\", \"mouse\", point)"),
+        "右键按下必须记 pointer_press"
+    );
+    assert!(
+        !router.contains("logPointerPress(\"middle\"") && !canvas.contains("Qt.MiddleButton"),
         "中键历史 pan 入口已删除，不得再保留 middle press 观察器"
     );
-    let count = observers.matches("logPointerPress(").count();
-    assert!(
-        count >= 3,
-        "至少要有 3 个 press 边界观察入口（左/右/触屏），实际 {count}"
-    );
+    let count = router.matches("logPointerPress(").count();
+    assert!(count >= 2, "左右两路 press 边界都要有，实际 {count}");
 }
 
 #[test]
-fn canvas_does_not_log_in_continuous_move_hot_path() {
-    let src = read_src(CANVAS);
-    // 越过阈值后的持续 pan 分支是逐帧热路径，不得落盘。
-    // 阈值之前那次 logInteraction("pan_begin") 是手势边界，只发生一次，允许存在。
-    let hot_path = slice_between(
-        &src,
-        "if (panStarted && interaction.pointerMode === \"pan\") {",
-        "onReleased:",
-    );
+fn router_does_not_log_in_continuous_move_hot_path() {
+    // 越过阈值后的持续 pan / move / connect 分支是逐帧热路径，不得落盘；
+    // pan_begin / move_begin / connect_begin 只发生一次，允许在边界处记录。
+    let src = read_src("qml/StarMapInputRouter.qml");
+    let hot_path = function_window(&src, "if (mode === \"pan\" && panActive) {", 300);
     assert!(
         !hot_path.contains("logInteraction") && !hot_path.contains("logPointerPress"),
         "持续 pan 分支不得逐帧落盘，实际窗口:\n{hot_path}"
+    );
+    let move_path = function_window(&src, "if (mode === \"move\") {", 300);
+    assert!(
+        !move_path.contains("logInteraction"),
+        "持续 move 分支不得逐帧落盘，实际窗口:\n{move_path}"
     );
 }
 
@@ -258,38 +262,46 @@ fn content_logs_resolve_success_and_failure() {
     );
 }
 
+/// Issue #832：Embed 不再观察原始输入，只记录自己的渲染分层事件
+/// （embed_child_content_activated）；输入观察事件（chrome press / routed）随
+/// Handler 一起删除。
 #[test]
-fn embed_logs_only_its_own_event_layering() {
+fn embed_logs_only_its_own_render_layering() {
     let src = read_src(EMBED);
     assert!(
         src.contains("function logEmbedInteraction(")
             && src.contains("starmapBackendRef.record_interaction(event, parentPathKey, targetStarmapId, \"embed\", instanceId"),
-        "StarMapEmbed 必须通过 record_interaction 记录自己的事件分层"
+        "StarMapEmbed 必须通过 record_interaction 记录自己的渲染分层"
     );
-    for event in [
-        "embed_chrome_press",
-        "embed_child_content_routed",
-        "embed_child_content_activated",
+    let at = src
+        .find("logEmbedInteraction(\"embed_child_content_activated\"")
+        .expect("StarMapEmbed 必须记录 embed_child_content_activated");
+    let window = function_window(
+        &src[at..],
+        "logEmbedInteraction(\"embed_child_content_activated\"",
+        400,
+    );
+    for field in [
+        "parentPathKey",
+        "childContentPathKey",
+        "instanceId",
+        "targetStarmapId",
     ] {
-        let at = src
-            .find(&format!("logEmbedInteraction(\"{event}\""))
-            .unwrap_or_else(|| panic!("StarMapEmbed 必须记录 {event}"));
-        let window = function_window(&src[at..], &format!("logEmbedInteraction(\"{event}\""), 400);
-        for field in [
-            "parentPathKey",
-            "childContentPathKey",
-            "instanceId",
-            "targetStarmapId",
-        ] {
-            assert!(
-                window.contains(field),
-                "{event} 必须带 {field}，实际窗口:\n{window}"
-            );
-        }
+        assert!(
+            window.contains(field),
+            "embed_child_content_activated 必须带 {field}，实际窗口:\n{window}"
+        );
+    }
+    let stripped = strip_line_comments(&src);
+    for removed in ["embed_chrome_press", "embed_child_content_routed"] {
+        assert!(
+            !stripped.contains(removed),
+            "Embed 不得再记录输入观察事件 {removed}：输入只有一个主人（Router）"
+        );
     }
     assert!(
         !src.contains("logEmbedInteraction(\"move_"),
-        "Embed 不记录连续 move 日志，move 边界统一由 Canvas 记"
+        "Embed 不记录连续 move 日志，move 边界统一由 Router 记"
     );
 }
 
