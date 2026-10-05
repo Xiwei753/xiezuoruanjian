@@ -465,7 +465,7 @@ export struct HomeScreen {
       Text('+')
         .fontSize(44)
         .fontWeight(FontWeight.Normal)
-        .fontColor($r('sys.color.icon_secondary'))
+        .fontColor($r('sys.color.icon_primary'))
     }
     .width(this.wideProjectCardWidth)
     .height(this.wideProjectCardHeight)
@@ -475,6 +475,10 @@ export struct HomeScreen {
     // Issue #827 评论 3 第 5 点：普通 1px 边框。草图里它和作品卡是同一种外框，
     // 区别只在中央一个大「+」，不要自行发明虚线这一种卡片视觉。
     .border({ width: 1, color: $r('sys.color.comp_background_gray') })
+    // Issue #827 评论 5：「+」卡和真实作品卡共用同一个卡片面与同一份阴影，
+    // 否则浅灰页面上它一眼就是一张空心卡。区别只应该在里面的内容。
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
     .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
     .accessibilityText('新建作品')
     .onClick(() => this.requestCreateProject())

@@ -34,8 +34,10 @@ Rectangle {
     width: cardWidth
     height: cardHeight
     radius: dt.cardRadius
-    color: "transparent"
-    // 虚线边框：这是一张还没写上名字的封面，而不是一个工具按钮。
+    // Issue #827 评论 5：和真实作品卡同面色。透明卡在浅灰页面上会退化成
+    // 「很淡的空框 + 很淡的加号」，而草图里它和作品封面是同一等级的一张卡。
+    color: hovered ? dt.cardHover : dt.card
+    // 1px 实线边框：这是一张还没写上名字的封面，而不是一个工具按钮。
     border.color: hovered ? dt.primary : dt.border
     border.width: 1
 
@@ -45,7 +47,7 @@ Rectangle {
     AppText {
         anchors.centerIn: parent
         text: "+"
-        color: root.hovered ? root.dt.primary : root.dt.textMuted
+        color: root.hovered ? root.dt.primary : root.dt.textPrimary
         font.pointSize: 44
         font.family: root.dt.fontFamily
         font.weight: Font.Normal
