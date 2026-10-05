@@ -9,6 +9,9 @@
 //   4. 丢弃按不干净记账：dropped(seq) 之后 flushThrough 越过它返回 false。
 //   5. 完成序号单调推进，失败也推进 —— 否则 flushThrough 会等一条永远等不到的 barrier。
 //      完成序号是单调的（串行 drain 保证按序处理），所以越早的 barrier 一定被更晚的覆盖。
+//   6. 反例：seq2 失败、seq5 又失败，isCleanThrough(4) 必须是 false
+//      （#5997254152 第 1 项：用「最大失败序号」判会把更早的失败洗掉）。
+//   7. 反例：seq5 丢弃、seq2 失败，isCleanThrough(2) 仍是 false（失败与丢弃同口径取最早）。
 //
 // 运行：node --experimental-strip-types editor_stats_barrier.test.mjs
 
@@ -85,6 +88,39 @@ test('完成序号单调推进，失败也推进', () => {
   // 但干净与否分开判：第 2 条失败，第 1 条仍然干净
   assert.equal(l.isCleanThrough(s1), true)
   assert.equal(l.isCleanThrough(s2), false)
+})
+
+test('反例：更晚的失败不能洗掉更早的失败（#5997254152 第 1 项）', () => {
+  const l = new StatsBarrierLedger()
+  // 依次拿到 seq=1..5
+  const seqs = []
+  for (let i = 0; i < 5; i++) {
+    seqs.push(l.nextSeq())
+  }
+  assert.deepEqual(seqs, [1, 2, 3, 4, 5])
+  // seq=2 失败；后来 seq=5 又失败
+  l.complete(seqs[1], false)
+  l.complete(seqs[4], false)
+  // 问的是「1..=4 里有没有缺失」：seq=2 缺了一条，必须 false。
+  // 若用「最大失败序号」判，lastFailedSeq=5 会因为 5 > 4 误判成 true，把 seq=2 洗掉。
+  assert.equal(l.isCleanThrough(4), false, 'seq=2 失败，最晚的失败是 seq=5，barrier=4 必须不干净')
+  // barrier=1 在两条失败之前，仍然干净
+  assert.equal(l.isCleanThrough(1), true)
+  // barrier=2 / 5 都覆盖了 seq=2 的失败
+  assert.equal(l.isCleanThrough(2), false)
+  assert.equal(l.isCleanThrough(5), false)
+})
+
+test('反例：丢弃与失败取最早的脏序号（#5997254152 第 1 项）', () => {
+  const l = new StatsBarrierLedger()
+  const s1 = l.nextSeq()
+  const s2 = l.nextSeq()
+  const s5 = l.nextSeq()
+  l.complete(s1, true)
+  l.complete(s2, false)
+  l.dropped(s5)
+  assert.equal(l.isCleanThrough(2), false, 'seq=2 失败，seq=5 丢弃，最早脏序号是 2')
+  assert.equal(l.isCleanThrough(1), true)
 })
 
 console.log('---')
