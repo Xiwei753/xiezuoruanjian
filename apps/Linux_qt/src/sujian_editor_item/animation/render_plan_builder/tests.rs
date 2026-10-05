@@ -1107,20 +1107,30 @@ fn same_burst_delete_handoff_from_reflow_uses_current_geometry() {
     let overlay = coord.old_overlay_glyphs_for(&sample);
     assert!(!overlay.is_empty(), "c 必须有 Conceal overlay");
     // overlay 里同时还有上一笔就在吞的 b，它的位置是「已被 clip 过的剩余部分」，
-    // 与本次交接无关。断言的是**存在一个** overlay glyph 落在 mid_x —— 那就是
-    // 本次从 Reflow 接管过来的 c。
-    // Issue #826 评论 17：相邻 range 合并成**一条** region、共享**同一个**前沿时钟
-    // 之后，不再有「每条 track 各自的起点」这回事 —— 可见部分是共享时钟在合并后
-    // 路径上的位置。但它必须来自**采样几何**（33.75..43.75），而不是 canonical
-    // 位置（30..40）：如果退回 canonical，overlay 会落在 30..40 内。
-    let drawn_x = overlay
+    // 与本次交接无关。断言的是 **c 自己**（旧行 id 1）落在 mid_x 上。
+    //
+    // Issue #826 评论 19：上一版这里写的是 `overlay.iter().map(x).fold(min)`，
+    // 也就是「所有 overlay glyph 里最左的那个」。那等于间接要求「retarget 之后
+    // 上一笔的字要继续被预吞」—— 正是评论 19 阻塞 1 修掉的预吞行为。现在吞字侧
+    // prune 后 `travelled` 从 0 重起，b 会完整保留在第一帧，最左的自然是 b，
+    // 用 min 去间接推断 c 就不再成立了。
+    let c_overlay: Vec<_> = overlay
         .iter()
-        .map(|glyph| glyph.dest_rect.x)
-        .fold(f64::INFINITY, f64::min);
+        .filter(|glyph| glyph.snapshot_id.visual_line_ordinal == 1)
+        .collect();
     assert!(
-        drawn_x > 30.0 + 1e-6,
-        "必须从采样到的屏幕几何（>= 33.75）开始画，不能退回 canonical 的 30；实际 {drawn_x}（mid_x = {mid_x}）"
+        !c_overlay.is_empty(),
+        "c 必须有来自本次交接的 Conceal overlay"
     );
+    // 必须来自**采样几何**（33.75..43.75），而不是 canonical 位置（30..40）：
+    // 如果退回 canonical，overlay 会落在 30..40 内。
+    for glyph in &c_overlay {
+        assert!(
+            glyph.dest_rect.x >= mid_x - 1e-6,
+            "c 必须从采样到的屏幕几何（x = {mid_x}）开始画，不能退回 canonical 的 30；实际 {:?}",
+            glyph.dest_rect
+        );
+    }
 }
 
 /// Issue #826 评论 14 阻塞 1：begin_delete 的每条 track 只能拥有**自己那条
@@ -1441,6 +1451,14 @@ fn same_burst_handoff_snapshot_id_is_retained_as_active_overlay_texture() {
 /// 「prune 真的发生」。笔数不影响结论，region 合并的规模性由
 /// `continuous_insert_does_not_accumulate_per_keystroke_animation_units`
 /// （100 笔）覆盖。
+///
+/// **这个测试不覆盖「同一活跃 burst 里的 prune」**：每笔都隔了整整一个动画时长
+/// （160ms），coordinator 的 extend 条件含 `!frontier.is_finished(request.now)`，
+/// 160ms 正好等于 duration，所以第二笔到来时上一条前沿已经 finished，走的是
+/// `finish_frontier_burst_only()` + `begin_delete()` 的**换 burst**分支，
+/// 根本没进 `extend_delete()`。它真正证明的只是「新 burst 不继承上个 burst 的
+/// 资源」。同 burst 的 prune 由
+/// `active_burst_prunes_consumed_conceal_geometry_before_retarget` 覆盖。
 #[test]
 fn continuous_delete_keeps_only_currently_visible_overlay() {
     let now = Instant::now();
@@ -1472,7 +1490,6 @@ fn continuous_delete_keeps_only_currently_visible_overlay() {
     );
 
     for i in 1..5usize {
-        let deleted_end = i + 1;
         coord.begin_or_extend_edit_frontier(EditFrontierRequest {
             kind: EditorAnimationKind::Delete,
             base_snapshot: base.clone(),
@@ -1531,6 +1548,134 @@ fn continuous_delete_keeps_only_currently_visible_overlay() {
         "已完全吞掉的 glyph 对应的 QImage owner 必须当场释放，conceal_sources 实际 {} 个",
         sources
     );
+}
+
+/// Issue #826 评论 19 阻塞 3：**同一活跃 burst 里** prune 掉的 region 必须整条消失，
+/// 不能留下一段「没有 glyph 可画、却照样吃单前沿 distance」的幽灵路径。
+///
+/// 场景（等宽 10px，正文 `abcd`，四个视觉行各一个字，x = 0 / 10 / 20 / 30）：
+/// ```text
+/// 第一笔 Core 一次给出两条不相邻 patch：删 a（[0,1)）和删 d（[3,4)）
+///   -> 两条 region，各 10px，总 20px；Forward，region 顺序 = base 坐标升序
+/// 80ms 时前沿走了 20 * 0.875 = 17.5
+///   -> region#1（a）已经 10px 全吞完 -> 它的 glyph 被 prune
+///   -> region#2（d）只剩 37.5..40 的 2.5px
+/// 就在 80ms（前沿远未 finished）来第二笔：删 b
+/// ```
+///
+/// `a` 已经完全吞掉，但它的 base owner `[0,1)` 仍在历史 range 列表里。旧实现
+/// 「按历史 range 逐个建 region，某个 range 没有 owned glyph 就回
+/// `FrontierPath::build(current_snapshot, range)`」会拿 base byte range 去
+/// **删完之后的新正文**里找几何 —— 那里 `[0,1)` 已经是活着的 `b`（x 10..20），
+/// 于是凭空造出一条 10px 的幽灵路径。
+///
+/// 肉眼表现：前沿先在「没有旧字 overlay 的位置」空跑 10px，删除中间顿一下；
+/// 而且 `b` 的 glyph 会同时落进幽灵 region 和自己的 region，被裁两次。
+#[test]
+fn active_burst_prunes_consumed_conceal_geometry_before_retarget() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    // burst base `abcd`：四个视觉行，每个一个字。
+    let base = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 1, vec![cluster(1, 2, 10.0)]),
+        PreparedLineSnapshot::stub_for_tests(2, 40.0, 2, vec![cluster(2, 3, 20.0)]),
+        PreparedLineSnapshot::stub_for_tests(3, 60.0, 3, vec![cluster(3, 4, 30.0)]),
+    ]);
+
+    // 第一笔：一次 Core batch 删掉不相邻的 a 与 d。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: base.clone(),
+        target_snapshot: snapshot(vec![
+            PreparedLineSnapshot::stub_for_tests(10, 20.0, 0, vec![cluster(0, 1, 10.0)]),
+            PreparedLineSnapshot::stub_for_tests(11, 40.0, 1, vec![cluster(1, 2, 20.0)]),
+        ]),
+        deleted_ranges: vec![(0, 1), (3, 4)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_edits(4, &[(0, 1, 0, 0), (3, 4, 2, 2)]),
+        base_text: String::from("abcd"),
+        target_text: String::from("bc"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert_eq!(
+        coord.active_edit_frontier_base_ranges_for_test(),
+        vec![(0, 1), (3, 4)],
+        "两条不相邻 patch 必须各自一条 region"
+    );
+    assert!((coord.active_conceal_total_length_for_test() - 20.0).abs() < 1e-9);
+
+    // 第二笔就在 80ms：此时 region#1（a）已经全吞完，region#2（d）只剩 2.5px，
+    // 前沿远未 finished，所以这里必须走 `extend_delete()` 而不是换 burst。
+    let now2 = now + Duration::from_millis(80);
+    let current = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(10, 20.0, 0, vec![cluster(0, 1, 10.0)]),
+        PreparedLineSnapshot::stub_for_tests(11, 40.0, 1, vec![cluster(1, 2, 20.0)]),
+    ]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: current.clone(),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            20,
+            40.0,
+            0,
+            vec![cluster(0, 1, 20.0)],
+        )]),
+        deleted_ranges: vec![(0, 1)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(2, (0, 1), 0),
+        base_text: String::from("bc"),
+        target_text: String::from("c"),
+        conceal_direction: ConcealDirection::Forward,
+        now: now2,
+    });
+
+    // 阻塞 3：已完全吞掉的 region#1（base owner `[0,1)`）必须整条消失。
+    //
+    // 注意 `(1,2)` 与 `(3,4)` 中间隔着已被删掉的 `(2,3)`（`c` 此刻还活着），
+    // 所以两者**不相邻**、不能合并；但也绝不能多出 `[0,1)` 那条幽灵 region ——
+    // 换了 burst 的话这里会是 `[(0,1)]`（本笔单独开的 Delete 前沿）。
+    assert_eq!(
+        coord.active_edit_frontier_base_ranges_for_test(),
+        vec![(1, 2), (3, 4)],
+        "没有 glyph 的历史 region 必须直接删除，不能回 current snapshot 猜出一条幽灵路径"
+    );
+    assert!(
+        (coord.active_conceal_total_length_for_test() - 12.5).abs() < 1e-9,
+        "单前沿 distance 只能由真实可见的旧 glyph 构成：b 的 10px + d 剩下的 2.5px，实际 {}",
+        coord.active_conceal_total_length_for_test()
+    );
+
+    // 阻塞 1：prune 之后 travelled 从 0 重起，所以这一帧（progress = 0）必须
+    // 完整画出「b 全部 10px + d 剩下的 2.5px」。若又 inherited 17.5，
+    // 新路径总长只有 12.5，第一帧就会整块吞光。
+    let sample = coord.sample_edit_frontier(now2).expect("前沿仍活跃");
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    let total: f64 = overlay.iter().map(|glyph| glyph.dest_rect.w).sum();
+    assert!(
+        (total - 12.5).abs() < 1e-9,
+        "第二笔第一帧必须完整显示当前屏幕上的 12.5px 旧字，实际 {total}（被预吞了）"
+    );
+    assert!(
+        overlay
+            .iter()
+            .all(|glyph| glyph.snapshot_id.visual_line_ordinal != 0),
+        "a 已经在上一帧被完全吞掉，绝不能复活"
+    );
+
+    // 阻塞 3 的资源侧：a 的行图 owner 也必须当场释放。
+    let active = coord.active_old_overlay_snapshot_ids();
+    assert_eq!(
+        active
+            .iter()
+            .map(|id| id.visual_line_ordinal)
+            .collect::<Vec<_>>(),
+        vec![3, 10],
+        "只剩 d（旧行 3）和 b（本次编辑前的行 10），a 的行 0 必须释放"
+    );
+    assert_eq!(coord.active_conceal_glyphs_for_test(), 2);
+    assert_eq!(coord.active_conceal_sources_for_test(), 2);
 }
 
 /// Issue #826 评论 17：快速输入触发 rewrap 时，**已经露出**的上一笔文字能进入 Reflow。

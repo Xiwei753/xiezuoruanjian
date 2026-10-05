@@ -602,6 +602,19 @@ impl LinuxEditorAnimationCoordinator {
             .unwrap_or(0)
     }
 
+    /// Issue #826 评论 19 阻塞 3：测试用 —— 当前吞字前沿**所有 region 的路径总长**。
+    ///
+    /// 它必须等于「这一帧屏幕上仍然可见的旧 glyph 宽度之和」。一旦某条历史 region
+    /// 没有 glyph 却还留着，它就会凭空吃掉一段单前沿 distance —— 肉眼是「前沿在
+    /// 没有旧字 overlay 的位置空跑，删除中间顿一下」，而 overlay 断言完全看不出来。
+    #[cfg(test)]
+    pub(crate) fn active_conceal_total_length_for_test(&self) -> f64 {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.conceal.regions.iter().map(|r| r.path.total_length).sum())
+            .unwrap_or(0.0)
+    }
+
     pub(crate) fn active_edit_frontier_kind(&self) -> Option<EditFrontierKind> {
         self.active_edit_frontier.as_ref().map(|f| f.kind)
     }

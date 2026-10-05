@@ -235,11 +235,24 @@ fn extend_insert_accumulates_new_range_across_revisions() {
 /// 例子 `ABC|DEF` 连续 Delete：第一次删 D，本次 old range = [3,4)；
 /// 第二次删 E，本次 old range 仍是 [3,4)（因为 E 往前挪了一位），
 /// 但在 burst 最初的 `ABCDEF` 坐标里应该累计成 [3,5)。
+///
+/// Issue #826 评论 19：两笔都必须带**真实 glyph 的快照** —— 吞字 region 只从
+/// 仍有可见 glyph 的 owner 生成（评论 19 阻塞 3），空快照根本不产生 region，
+/// 那时断言 `old_ranges()` 就没有意义了。
 #[test]
 fn extend_delete_maps_old_range_back_to_base_coordinates() {
     let now = Instant::now();
+    // burst base：`ABCDEF`（D 在 byte 3，E 在 byte 4）。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        (0..6)
+            .map(|i| cluster(i, i + 1, (i as f64) * 10.0))
+            .collect(),
+    )]);
     let mut state = EditFrontierState::begin_delete(
-        empty_snapshot(),
+        base.clone(),
         String::from("ABCDEF"),
         empty_snapshot(),
         String::from("ABCEF"),
@@ -256,11 +269,20 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
     // 本次删除区间在 "ABCEF" 坐标里是 [3,4)（删掉 E）。
     // 映回 base 坐标是 [4,5)，与第一次的 [3,4) 合并成 [3,5)。
     let base_to_current = OffsetMap::build("ABCDEF", "ABCEF");
+    // 本次编辑前的旧正文快照：新的 line id（代表又过了一个 revision）。
+    let current = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        (0..5)
+            .map(|i| cluster(i, i + 1, (i as f64) * 10.0))
+            .collect(),
+    )]);
     state.extend_delete(
         empty_snapshot(),
         String::from("ABCE"),
         vec![(3, 4)],
-        &empty_snapshot(),
+        &current,
         &base_to_current,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
@@ -280,11 +302,23 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
 ///
 /// 之前 Replace 走 `extend_delete`，只更新 old side，新插入的字根本不进 reveal
 /// mask，canonical 会把这次新字直接完整显示。
+///
+/// Issue #826 评论 19：吞字侧改用「仍有可见 glyph 的 owner」建 region，所以
+/// begin 用的旧快照、extend 用的 current 快照都必须带真实 glyph。
 #[test]
 fn extend_replace_accumulates_both_sides() {
     let now = Instant::now();
+    // burst base：`ABCDEF`。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        (0..6)
+            .map(|i| cluster(i, i + 1, (i as f64) * 10.0))
+            .collect(),
+    )]);
     let mut state = EditFrontierState::begin_replace(
-        empty_snapshot(),
+        base.clone(),
         String::from("ABCDEF"),
         empty_snapshot(),
         String::from("AXBCDEF"),
@@ -302,18 +336,29 @@ fn extend_replace_accumulates_both_sides() {
     let half = instant_at(now, 80);
     let base_to_current = OffsetMap::build("ABCDEF", "AXBCDEF");
     let prev_target_to_new = OffsetMap::build("AXBCDEF", "AXBCDEZ");
+    // 本次编辑前的旧正文：`AXBCDEF`（`AX` 插在 B 前，E 在 byte 5）。
+    let current = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        (0..7)
+            .map(|i| cluster(i, i + 1, (i as f64) * 10.0))
+            .collect(),
+    )]);
     state.extend_replace(
         empty_snapshot(),
         String::from("AXBCDEZ"),
         vec![(5, 6)],
         vec![(6, 7)],
-        &empty_snapshot(),
+        &current,
         &base_to_current,
         &prev_target_to_new,
         &[],
         ConcealDirection::Backward,
         half,
     );
+    // 旧侧：本次删 E（"AXBCDEF" 的 [5,6)）映回 base 是 [4,5)，与 [3,4) 相邻
+    // 合并成 [3,5)（评论 17）。
     assert_eq!(
         state.old_ranges(),
         vec![(3, 5)],
@@ -323,6 +368,12 @@ fn extend_replace_accumulates_both_sides() {
         state.new_ranges(),
         vec![(1, 2), (6, 7)],
         "Replace 的新侧也必须累计，否则新插入的字没有任何遮罩"
+    );
+    // Issue #826 评论 19 阻塞 1：吞字侧 prune 之后 distance 必须从 0 重起
+    // （与 `extend_delete` 同一契约）。
+    assert_eq!(
+        state.conceal.travelled, 0.0,
+        "prune 之后吞字前沿必须从 0 重起，不能继承旧 path 的已消费距离"
     );
 }
 
@@ -953,54 +1004,105 @@ fn extending_reveal_target_does_not_advance_frontier_into_new_text() {
     );
 }
 
-/// Issue #826 评论 18 阻塞 1（Delete 对应）：刚删的字不能一进来就被预吞。
+/// Issue #826 评论 19 阻塞 2：刚删的字第一帧必须完整显示。
+///
+/// Issue #826 评论 18 阻塞 1 修的是「extend 时不要按总长比例 rescale」，那个修法
+/// 对 **Reveal** 成立（Reveal 没裁掉旧几何，延长 path 可以继承绝对距离）。
+/// 但 Conceal 在评论 18 已经改成「prune 成当前可见几何」，此时新 path 的原点
+/// 天然是「distance 0 == 当前这一帧的屏幕状态」，再继承旧绝对距离就是重复消费。
+///
+/// 场景（等宽 10px）：`AB|` 连续 Backspace。
+/// - 第一笔删 B，80ms/160ms -> 旧 distance 8.75，B 屏幕真正还剩 1.25px；
+/// - 第二笔删 A。prune 后可见几何 = B 的 1.25 + fresh A 的 10 = 11.25px。
+///
+/// 正确的第二笔第一帧：完整 A（10px）+ B 剩下的 1.25px = 11.25px。
+/// 若又 inherited 8.75，第一帧就被预吞 8.75/11.25 ≈ 75%。
+///
+/// 断言**屏幕上真正画出来的 overlay**（按 source line 区分 A / B），而不是内部
+/// `travelled` 数值 —— 上一版正是断言内部数值，把 bug 固化成了测试。
 #[test]
 fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
     let now = Instant::now();
-    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
-        0,
-        0.0,
-        0,
-        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
-    )]);
+    // base：`ab`，a 在 line 7（x 0..10），b 在 line 8（x 10..20）。
+    let base = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(7, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(8, 0.0, 1, vec![cluster(1, 2, 10.0)]),
+    ]);
     let mut state = EditFrontierState::begin_delete(
         base.clone(),
         String::from("ab"),
         snapshot(Vec::new()),
-        String::from("b"),
-        vec![(0, 1)],
-        OffsetMap::from_single_edit(2, (0, 1), 0),
+        String::from("a"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(2, (1, 2), 0),
         &[],
         ConcealDirection::Backward,
         now,
         160,
     );
 
+    // 第一笔半程：b 被吞到只剩 1.25px。
     let half = instant_at(now, 80);
-    let before = state.conceal.inherited(state.sample(half).progress);
-    assert!(before > 0.0, "半程吞字前沿必须已经前进");
+    let mid_sample = state.sample(half);
+    let mid_overlay = state.old_overlay_glyphs(&mid_sample);
+    let mid_b_width: f64 = mid_overlay
+        .iter()
+        .filter(|glyph| glyph.snapshot_id.visual_line_ordinal == 8)
+        .map(|glyph| glyph.dest_rect.w)
+        .sum();
     assert!(
-        before > 0.0 && before < 10.0,
-        "半程吞字前沿必须在路径内，实际 {before}"
+        (mid_b_width - 1.25).abs() < 0.2,
+        "半程时 b 屏幕应只剩约 1.25px，实际 {mid_b_width}"
     );
 
-    // 第二笔：把 b 也删掉（相邻 -> 合并成一段）。
+    // 第二笔：把 a 也删掉（同一 burst）。
+    let after_first = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        7,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0)],
+    )]);
     state.extend_delete(
-        base.clone(),
+        after_first.clone(),
         String::from(""),
-        vec![(1, 2)],
-        &base,
-        &OffsetMap::from_single_edit(2, (1, 2), 0),
+        vec![(0, 1)],
+        &after_first,
+        // 本次编辑前的正文是 burst base 去掉 b 之后的 `a`，所以 base_to_current
+        // 就是 `"ab" -> "a"` 这条映射；用它把本次删的 `a` 映回 base 坐标 [0,1)。
+        &OffsetMap::build("ab", "a"),
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
         ConcealDirection::Backward,
         half,
     );
 
+    // extend 后 progress = 0，这一帧必须完全等于「prune 后的当前屏幕状态」。
+    let after = state.sample(half);
+    let overlay = state.old_overlay_glyphs(&after);
+    let a_width: f64 = overlay
+        .iter()
+        .filter(|glyph| glyph.snapshot_id.visual_line_ordinal == 7)
+        .map(|glyph| glyph.dest_rect.w)
+        .sum();
+    let b_width: f64 = overlay
+        .iter()
+        .filter(|glyph| glyph.snapshot_id.visual_line_ordinal == 8)
+        .map(|glyph| glyph.dest_rect.w)
+        .sum();
+    let total: f64 = overlay.iter().map(|glyph| glyph.dest_rect.w).sum();
+
     assert!(
-        (state.conceal.travelled - before).abs() < 1e-6,
-        "path 只是延长时吞字前沿必须保持在 {before}，不能按比例推到 {}",
-        before * 2.0
+        (a_width - 10.0).abs() < 1e-6,
+        "刚删的 a 第一帧必须完整显示 10px，实际 {a_width}（被预吞了）"
+    );
+    assert!(
+        (b_width - mid_b_width).abs() < 1e-6,
+        "b 必须保持上一帧剩下的宽度（{mid_b_width}px），实际 {b_width}"
+    );
+    assert!(
+        (total - (10.0 + mid_b_width)).abs() < 1e-6,
+        "第一帧 overlay 总宽必须等于当前屏幕状态（约 {}px），实际 {total}",
+        10.0 + mid_b_width
     );
 }
 
@@ -1036,7 +1138,7 @@ fn pending_reveal_ranges_use_each_visual_line_own_boundary() {
     let mut state = EditFrontierState::begin_insert(
         String::new(),
         target,
-        String::new(),
+        String::from("a\nb"),
         vec![(0, 5)],
         OffsetMap::from_single_edit(0, (0, 0), 5),
         now,

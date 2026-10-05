@@ -547,7 +547,19 @@ pub(crate) struct ConcealSourceLine {
 /// Issue #826 评论 13：一个旧字 glyph 的贴图来源 + 本轮显示位置。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ConcealGlyphGeometry {
+    /// 本 glyph 在**当前** snapshot 里的 byte 范围（取 cluster、算 dest 用）。
     pub range: (usize, usize),
+    /// 本 glyph 对应的 **burst base identity**（给 region ownership 用）。
+    ///
+    /// Issue #826 评论 19：`range` 用当前坐标，而 region 必须按编辑身份
+    /// （base 坐标）归属 —— 否则一个已经完全没有 glyph 的历史 region 只能拿
+    /// base byte range 回去 `FrontierPath::build(current_snapshot, ...)`，
+    /// 而那里已经是删完之后的新正文，同一 byte 坐标现在是**别的活着的字符**，
+    /// 会造出一段没有 glyph 可画、却照样吃单前沿 distance 的**幽灵路径**。
+    ///
+    /// fresh glyph 在 collect 时已经有 `(current_range, base_range)` 配对，
+    /// 这一层对应关系不能丢。
+    pub base_range: (usize, usize),
     /// 贴图来源行纹理。
     pub snapshot_id: LineSnapshotId,
     /// 从上面那张行纹理取这块的源矩形。
@@ -560,6 +572,14 @@ impl EditFrontierState {
     /// 本轮吞字的全部旧文字范围（burst base 坐标系）。
     ///
     /// Issue #826 评论 17：本轮仍由前沿负责的**旧文字范围**（burst base 坐标）。
+    ///
+    /// Issue #826 评论 19：语义收紧成「**当前屏幕上还有 glyph 在被吞**的 owner」。
+    /// 已经被完全吞干净的 base range 不再出现 —— 没有 glyph 的 region 只是
+    /// 一段吃 distance 却什么都画不出来的幽灵路径。
+    ///
+    /// 评论 19 之后吞字侧不再需要「历史累计范围」来重建 region（region 只由
+    /// 仍有可见 glyph 的 owner 生成），所以这个入口只剩测试在用。
+    #[cfg(test)]
     pub(crate) fn old_ranges(&self) -> Vec<(usize, usize)> {
         self.conceal
             .regions
@@ -741,9 +761,12 @@ impl EditFrontierState {
     ) -> Self {
         let current_snapshot = base_snapshot.clone();
         let ranges = normalize_ranges(old_ranges);
+        // begin 时 burst base 就是 current old layout，owner 与 current 同坐标。
+        let pairs: Vec<((usize, usize), (usize, usize))> =
+            ranges.iter().map(|&range| (range, range)).collect();
         let (conceal_glyphs, conceal_sources) =
-            collect_conceal_glyphs(&current_snapshot, &ranges, reflow_current);
-        let conceal = build_conceal_layer(&current_snapshot, &ranges, direction, &conceal_glyphs);
+            collect_conceal_glyphs(&current_snapshot, &pairs, reflow_current);
+        let conceal = build_conceal_layer(direction, &conceal_glyphs);
         Self {
             kind: EditFrontierKind::Delete,
             base_snapshot,
@@ -778,9 +801,12 @@ impl EditFrontierState {
     ) -> Self {
         let current_snapshot = base_snapshot.clone();
         let ranges = normalize_ranges(old_ranges);
+        // begin 时 burst base 就是 current old layout，owner 与 current 同坐标。
+        let pairs: Vec<((usize, usize), (usize, usize))> =
+            ranges.iter().map(|&range| (range, range)).collect();
         let (conceal_glyphs, conceal_sources) =
-            collect_conceal_glyphs(&current_snapshot, &ranges, reflow_current);
-        let conceal = build_conceal_layer(&current_snapshot, &ranges, direction, &conceal_glyphs);
+            collect_conceal_glyphs(&current_snapshot, &pairs, reflow_current);
+        let conceal = build_conceal_layer(direction, &conceal_glyphs);
         let reveal = build_reveal_layer(&target_snapshot, &normalize_ranges(new_ranges));
         Self {
             kind: EditFrontierKind::Replace,
@@ -824,7 +850,11 @@ impl EditFrontierState {
         for region in &self.conceal.regions {
             let keep = self.region_conceal_rects(region, progress);
             for geometry in &self.conceal_glyphs {
-                if !overlaps(geometry.range, region.range) {
+                // Issue #826 评论 19：归属必须按 **base identity** 判，不能拿
+                // glyph 的当前坐标 range 去和 region 的 base range 求交 ——
+                // 跨 revision 之后两者坐标系已经不同，同一个字节偏移在两边指的根本
+                // 不是同一块字。
+                if !overlaps(geometry.base_range, region.range) {
                     continue;
                 }
                 let dest = geometry.dest_rect.clone();
@@ -838,6 +868,7 @@ impl EditFrontierState {
                 for (dest_x, dest_w) in clipped {
                     out.push(ConcealGlyphGeometry {
                         range: geometry.range,
+                        base_range: geometry.base_range,
                         snapshot_id: geometry.snapshot_id,
                         source_rect: SourceRect {
                             x: source.x + (dest_x - dest.x) * width_ratio,
@@ -935,40 +966,43 @@ impl EditFrontierState {
         direction: ConcealDirection,
         now: Instant,
     ) {
+        // 已累计的 old owner 本来就在 burst base 坐标；本次传入的 deleted_ranges
+        // 属于「这一次编辑前」的文本，`map_ranges_backward` 把它映回 base，
+        // 于是每个 fresh glyph 都带得到自己的 base owner。
         let mapped = map_ranges_backward(&deleted_ranges, base_to_current)
             .unwrap_or_else(|| identity_breakdown("extend_delete", &deleted_ranges));
-        // 已累计的 old_ranges 本来就在 burst base 坐标；本次传入的 deleted_ranges
-        // 属于「这一次编辑前」的文本，先用 base_to_current 映回 base。
-        let mut ranges: Vec<(usize, usize)> = self.old_ranges();
-        let incoming: Vec<(usize, usize)> = mapped.iter().map(|(_, base)| *base).collect();
-        // glyph 几何与 Reflow handoff 都在**当前**坐标系里判定。
-        let incoming_current: Vec<(usize, usize)> =
-            mapped.iter().map(|(current, _)| *current).collect();
-        for base_range in &incoming {
-            ranges.push(*base_range);
-        }
-        // 相邻合并 —— 连续删除因此不会按按键次数累积 region。
-        let merged = normalize_ranges(merge_all(ranges, Vec::new()));
-        // Issue #826 评论 17：只把**本次新删**的 glyph 从 current snapshot 收进来，
-        // 已经收集到的旧 glyph 必须保留 —— 它们来自更早的 snapshot（那一行的字
-        // 早就从正文里消失了），但仍然在被吞、仍然要画、仍然要占着纹理。
-        // Issue #826 评论 18 阻塞 2：先把旧 overlay **收成这一帧真正还看得见的**，
+
+        // Issue #826 评论 19：先把旧 overlay **收成这一帧真正还看得见的**，
         // 再并入本笔新删的。只增不减等于把历史视觉债从「N 个 ConcealTrack」换成
         // 「1 个 region + N 批历史 glyph/QImage」，并没有真正清掉。
         let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
         let (fresh_glyphs, fresh_sources) =
-            collect_conceal_glyphs(current_snapshot, &incoming_current, reflow_current);
+            collect_conceal_glyphs(current_snapshot, &mapped, reflow_current);
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
-        let conceal = build_conceal_layer(current_snapshot, &merged, direction, &glyphs);
-        let inherited = self.conceal.inherited(self.sample(now).progress);
-        let travelled = inherit_distance(inherited, conceal.total_length());
+        // Issue #826 评论 19 阻塞 3：region 只从**仍有可见 glyph 的 base owner**
+        // 生成（并按相邻合并），已经没有 glyph 的历史 owner 直接消失 ——
+        // 绝不拿 base byte range 回 current snapshot 猜几何造幽灵路径。
+        let conceal = build_conceal_layer(direction, &glyphs);
+
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
         self.conceal_direction = direction;
         self.conceal = conceal;
-        self.conceal.travelled = travelled;
+        // Issue #826 评论 19 阻塞 1：prune 之后新几何的原点已经重新定义成
+        // 「distance 0 == 当前这一帧的屏幕状态」，所以**必须从 0 起**。
+        //
+        // 再把旧 path 上已经走过的绝对距离塞进来就是重复消费：
+        // ```text
+        // AB| 连续 Backspace，等宽 10px，80ms/160ms -> 旧 distance 8.75
+        // B 屏幕真正还剩 1.25px
+        // 第二笔删 A：prune 后可见几何 = B 的 1.25 + fresh A 的 10 = 11.25px
+        // 若再 inherited 8.75 -> 第二笔第一帧就被预吞 8.75/11.25 ≈ 75%
+        // ```
+        // 这与 Reveal 不同：Reveal 没有裁掉旧几何，延长 path 可以继承绝对距离；
+        // Conceal 已经把已吞像素彻底裁掉，消费过的距离不在新 path 里了。
+        self.conceal.travelled = 0.0;
         self.conceal_glyphs = glyphs;
         self.conceal_sources = sources;
         self.started_at = now;
@@ -991,25 +1025,15 @@ impl EditFrontierState {
     ) {
         let mapped = map_ranges_backward(&deleted_ranges, base_to_current)
             .unwrap_or_else(|| identity_breakdown("extend_replace", &deleted_ranges));
-        let mut old: Vec<(usize, usize)> = self.old_ranges();
-        let incoming: Vec<(usize, usize)> = mapped.iter().map(|(_, base)| *base).collect();
-        let incoming_current: Vec<(usize, usize)> =
-            mapped.iter().map(|(current, _)| *current).collect();
-        for base_range in &incoming {
-            old.push(*base_range);
-        }
-        let merged_old = normalize_ranges(merge_all(old, Vec::new()));
-        // Issue #826 评论 18 阻塞 2：同 extend_delete，先 prune 再并入新删的。
+        // region 只从仍有可见 glyph 的 base owner 生成，历史里已经没有 glyph 的
+        // owner 自然消失（不再拿 base byte range 回去猜 current snapshot 的几何）。
+        // Issue #826 评论 18 阻塞 2：同 extend_delete，先 prune 再并入本笔新删的。
         let visible = self.sample_visible_conceal_geometry(self.sample(now).progress);
         let (fresh_glyphs, fresh_sources) =
-            collect_conceal_glyphs(current_snapshot, &incoming_current, reflow_current);
+            collect_conceal_glyphs(current_snapshot, &mapped, reflow_current);
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
-        let conceal = build_conceal_layer(current_snapshot, &merged_old, direction, &glyphs);
-        let conceal_travelled = inherit_distance(
-            self.conceal.inherited(self.sample(now).progress),
-            conceal.total_length(),
-        );
+        let conceal = build_conceal_layer(direction, &glyphs);
 
         let carried_new = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
         let merged_new = normalize_ranges(merge_all(carried_new, inserted_ranges));
@@ -1024,8 +1048,11 @@ impl EditFrontierState {
         self.target_text = target_text;
         self.conceal_direction = direction;
         self.conceal = conceal;
-        self.conceal.travelled = conceal_travelled;
+        // Issue #826 评论 19 阻塞 1：吞字侧和 `extend_delete` 同理，prune 之后
+        // distance 原点已经重新定义成「当前这一帧的屏幕状态」，必须从 0 起。
+        self.conceal.travelled = 0.0;
         self.reveal = reveal;
+        // 吐字侧相反：Reveal 没有裁掉旧几何，延长 path 可以继承绝对距离。
         self.reveal.travelled = reveal_travelled;
         self.conceal_glyphs = glyphs;
         self.conceal_sources = sources;
@@ -1167,7 +1194,10 @@ impl EditFrontierState {
         for region in &self.conceal.regions {
             let keep = self.region_conceal_rects(region, sample.progress);
             for geometry in &self.conceal_glyphs {
-                if !overlaps(geometry.range, region.range) {
+                // Issue #826 评论 19：region 是按 glyph 的 **base identity** 建的，
+                // 所以归属判定也必须用 `base_range`；用当前坐标的 `range` 去和
+                // region 的 base range 求交会在跨 revision 的连续编辑里漏掉 glyph。
+                if !overlaps(geometry.base_range, region.range) {
                     continue;
                 }
                 let source = geometry.source_rect.clone();
@@ -1229,12 +1259,14 @@ impl FrontierGlyph {
 /// 不再产生"只有 handed_off glyph、没有其他字"的那种特殊单元。
 fn collect_conceal_glyphs(
     current_snapshot: &EditorLayoutSnapshot,
-    ranges: &[(usize, usize)],
+    // `(current_range, base_range)` 配对：current 用于取 cluster / 算 dest，
+    // base 是 region ownership。
+    ranges: &[((usize, usize), (usize, usize))],
     reflow_current: &[ReflowCurrentGeometry],
 ) -> (Vec<ConcealGlyphGeometry>, Vec<ConcealSourceLine>) {
     let mut glyphs: Vec<ConcealGlyphGeometry> = Vec::new();
     let mut sources: Vec<ConcealSourceLine> = Vec::new();
-    for &range in ranges {
+    for &(range, base_range) in ranges {
         for line in current_snapshot.lines_in_byte_range(range.0, range.1) {
             if !sources.iter().any(|source| source.snapshot_id == line.id) {
                 sources.push(ConcealSourceLine {
@@ -1251,6 +1283,7 @@ fn collect_conceal_glyphs(
                     .map(|item| item.dest_rect.clone());
                 glyphs.push(ConcealGlyphGeometry {
                     range: glyph_range,
+                    base_range,
                     snapshot_id: line.id,
                     source_rect: cluster.source_rect.clone(),
                     dest_rect: sampled.unwrap_or(canonical),
@@ -1261,28 +1294,41 @@ fn collect_conceal_glyphs(
     (glyphs, sources)
 }
 
-/// Issue #826 评论 17：由当前 range + 当前 glyph 几何构建吞字层。
+/// Issue #826 评论 19：region **只从仍有可见 glyph 的 owner 生成**。
+///
+/// 之前是「按历史 range 列表逐个建 region，某个 range 没有 owned glyph 就回
+/// `FrontierPath::build(current_snapshot, range)`」—— 那段 fallback 会用
+/// **burst base 的 byte range** 去已经删完的正文里找几何，同一坐标现在是别的
+/// 活着的字符，于是造出一段没有 glyph 可画、却照样吃单前沿 distance 的幽灵路径。
+/// 肉眼表现是「前沿在一个没有旧字 overlay 的位置空跑，删除中间顿一下」。
+///
+/// 单前沿状态定义是「只保留当前屏幕还存在的视觉状态」，所以没有任何剩余 glyph
+/// 的 owner 直接不生成 region。
+///
+/// owner 仍然按 overlap / adjacency 归一化（[`normalize_ranges`]）—— 相邻的
+/// deleted range 必须合并成同一个 region，否则连打 N 次键盘就会攒出 N 条 region，
+/// 议题正文明确禁止那种「按按键次数累积动画单元」。
 fn build_conceal_layer(
-    current_snapshot: &EditorLayoutSnapshot,
-    ranges: &[(usize, usize)],
     direction: ConcealDirection,
     glyphs: &[ConcealGlyphGeometry],
 ) -> FrontierLayer {
     let path_direction = PathDirection::from(direction);
-    let parts: Vec<((usize, usize), FrontierPath)> = ranges
-        .iter()
-        .map(|&range| {
+    let owners = normalize_ranges(glyphs.iter().map(|glyph| glyph.base_range).collect());
+    let parts: Vec<((usize, usize), FrontierPath)> = owners
+        .into_iter()
+        .filter_map(|owner| {
             let owned: Vec<ConcealGlyphGeometry> = glyphs
                 .iter()
-                .filter(|glyph| overlaps(glyph.range, range))
+                .filter(|glyph| overlaps(glyph.base_range, owner))
                 .cloned()
                 .collect();
-            let path = if owned.is_empty() {
-                FrontierPath::build(current_snapshot, range, path_direction)
-            } else {
-                FrontierPath::from_glyph_geometry(&owned, path_direction)
-            };
-            (range, path)
+            let path = FrontierPath::from_glyph_geometry(&owned, path_direction);
+            // 归一化后的一组 owner 里如果一个 glyph 都不剩（本轮之前就已经被
+            // 吞干净），就不要为它留一条空 region。
+            if path.total_length <= 0.0 {
+                return None;
+            }
+            Some((owner, path))
         })
         .collect();
     FrontierLayer::from_parts(parts)
