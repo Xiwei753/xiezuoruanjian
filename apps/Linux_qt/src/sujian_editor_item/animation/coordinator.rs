@@ -211,6 +211,7 @@ impl LinuxEditorAnimationCoordinator {
                         request.target_snapshot.clone(),
                         request.target_text.clone(),
                         request.deleted_ranges.clone(),
+                        &request.base_snapshot,
                         &base_to_current,
                         &request.offset_map,
                         &reflow_current,
@@ -229,6 +230,7 @@ impl LinuxEditorAnimationCoordinator {
                         request.target_text.clone(),
                         request.deleted_ranges.clone(),
                         request.inserted_ranges.clone(),
+                        &request.base_snapshot,
                         &base_to_current,
                         &request.offset_map,
                         &reflow_current,
@@ -533,15 +535,7 @@ impl LinuxEditorAnimationCoordinator {
         else {
             return Vec::new();
         };
-        let mut ids: Vec<LineSnapshotId> = Vec::new();
-        for range in frontier.old_ranges() {
-            for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
-                if !ids.contains(&line.id) {
-                    ids.push(line.id);
-                }
-            }
-        }
-        ids
+        frontier.active_conceal_snapshot_ids()
     }
 
     /// 当前前沿种类（光标 blink 抑制等诊断用）。
@@ -584,10 +578,10 @@ impl LinuxEditorAnimationCoordinator {
         };
         if let Some(frontier) = self.active_edit_frontier.as_ref() {
             if frontier.kind.needs_old_overlay() {
-                for range in frontier.old_ranges() {
-                    for line in frontier.base_snapshot.lines_in_byte_range(range.0, range.1) {
-                        push(line.id, &mut ids, &mut seen);
-                    }
+                // Issue #826 评论 14 阻塞 4：从 track 自己的 glyphs 收，
+                // 同 burst handoff 的 source texture 不在 burst base 里。
+                for id in frontier.active_conceal_snapshot_ids() {
+                    push(id, &mut ids, &mut seen);
                 }
             }
         }

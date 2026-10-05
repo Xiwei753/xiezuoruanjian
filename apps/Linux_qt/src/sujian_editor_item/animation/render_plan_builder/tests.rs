@@ -1120,3 +1120,307 @@ fn same_burst_delete_handoff_from_reflow_uses_current_geometry() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Issue #826 评论 14 阻塞 1：begin_delete 的每条 track 只能拥有**自己那条
+/// deleted range** 覆盖的 Reflow glyph。
+///
+/// 当前有 B / C / D 三个字都在 Reflow，这一笔只删 C —— 新 Delete track
+/// 不能把 B/C/D 全塞进自己的 `glyphs` 和 path，否则 B / D 明明没删却被
+/// overlay 再画一份（双影），更糟时它们会跟着 C 的 conceal 前沿一起消失。
+/// 本次有多个 disjoint deleted_ranges 时，每条 track 也要各自只拿自己那份
+/// —— 不能在 coordinator 先 filter 一次（那样两条 track 会各自拿到 A+B）。
+#[test]
+fn begin_delete_handoff_only_owns_glyphs_inside_each_deleted_range() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // `BCD` 三行，B / C / D 各自在不同 y：0 / 20 / 40。
+    let base = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(1, 20.0, 1, vec![cluster(1, 2, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(2, 40.0, 2, vec![cluster(2, 3, 0.0)]),
+    ]);
+
+    // 只删 C（base 坐标 [2,3)）。B / D 不在 deleted_ranges 里。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: base.clone(),
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(2, 3)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (2, 3), 0),
+        base_text: String::from("BCD"),
+        target_text: String::from("BD"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    let sample = coord.sample_edit_frontier(now).expect("frontier alive");
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    assert_eq!(
+        overlay.len(),
+        1,
+        "只有被删的 C 能有 overlay，B / D 不得被塞进来；实际 y = {:?}",
+        overlay
+            .iter()
+            .map(|glyph| glyph.dest_rect.y)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        (overlay[0].dest_rect.y - 40.0).abs() < 1e-6,
+        "被删的 C 在第三行（y=40），实际 y = {}",
+        overlay[0].dest_rect.y
+    );
+}
+
+/// Issue #826 评论 14 阻塞 2：一个 deleted range 里**一部分在 Reflow、
+/// 一部分没在 Reflow** 时，没在 Reflow 的字不能丢。
+///
+/// 一次删两个字 `BC`：B 上一帧正在 Reflow，C 本来就在稳定位置。
+/// 之前的双轨逻辑（`glyphs.is_empty()` 就回 snapshot、非空就只用 handed_off）
+/// 会让整条 track 只剩 B，C 第一帧直接消失、没有吞字。
+#[test]
+fn mixed_reflow_and_static_deleted_range_keeps_all_deleted_glyphs() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // `AXBC`：B 在移动中（doc x 40），C 稳定（doc x 60）。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![
+            cluster(0, 1, 0.0),
+            cluster(1, 2, 20.0),
+            cluster(2, 3, 40.0),
+            cluster(3, 4, 60.0),
+        ],
+    )]);
+    // 输入 X 让 B 右移：old B 在 x=20，target B 在 x=40。
+    let after_x = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![
+            cluster(0, 1, 0.0),
+            cluster(1, 2, 20.0),
+            cluster(2, 3, 40.0),
+            cluster(3, 4, 60.0),
+            cluster(4, 5, 80.0),
+        ],
+    )]);
+
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: base.clone(),
+        target_snapshot: after_x.clone(),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(2, 2)],
+        offset_map: OffsetMap::from_single_edit(3, (2, 2), 1),
+        base_text: String::from("ABC"),
+        target_text: String::from("AXBC"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    let mid = now + Duration::from_millis(80);
+    // B 的 Reflow span 一定存在（它确实移动了）。
+    assert!(!coord.reflow_glyphs(mid).is_empty(), "B 必须在 Reflow 里");
+
+    // 一次删掉 BC：B（正在 Reflow）+ C（稳定）。
+    let mut request = EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: after_x.clone(),
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(2, 4)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(4, (2, 4), 0),
+        base_text: String::from("AXBC"),
+        target_text: String::from("AX"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    };
+    coord.begin_or_extend_edit_frontier(request);
+
+    let sample = coord.sample_edit_frontier(mid).expect("frontier alive");
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    assert_eq!(
+        overlay.len(),
+        2,
+        "被删的 B 和 C 都必须有 overlay（一个 Reflow、一个静态），实际 {} 个",
+        overlay.len()
+    );
+}
+
+/// Issue #826 评论 14 阻塞 3：handoff（以及所有）吞字 track 的 overlay 必须
+/// **真的逐步收缩**，不能 progress 0~0.9 一直完整、progress=1 突然消失。
+///
+/// 之前 `old_overlay_rects()` 拿 base_snapshot 的 line id 去
+/// `path.segment_index_for_line` 反查，而 handoff 建的 path 的 `line_id` 是
+/// 占位值，真实 id 几乎不可能匹配 —— 每次都落进「整行保留」分支。
+#[test]
+fn handed_off_conceal_progress_actually_shrinks_before_terminal_frame() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0)],
+    )]);
+    let after_x = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0), cluster(2, 3, 40.0)],
+    )]);
+
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: base,
+        target_snapshot: after_x.clone(),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 1)],
+        offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
+        base_text: String::from("AB"),
+        target_text: String::from("AXB"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert!(!coord.reflow_glyphs(now).is_empty(), "B must be reflowing");
+
+    let mid = now + Duration::from_millis(80);
+    let mut request = EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: after_x,
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(2, 3)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (2, 3), 0),
+        base_text: String::from("AXB"),
+        target_text: String::from("AX"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    };
+    coord.begin_or_extend_edit_frontier(request);
+
+    let width_at = |offset_ms: u64| -> f64 {
+        let at = mid + Duration::from_millis(offset_ms);
+        let sample = coord.sample_edit_frontier(at).expect("frontier alive");
+        coord
+            .old_overlay_glyphs_for(&sample)
+            .iter()
+            .map(|glyph| glyph.dest_rect.w)
+            .sum::<f64>()
+    };
+
+    let full = width_at(0);
+    let half = width_at(60);
+    let late = width_at(140);
+    assert!(full > 0.0, "第一帧必须有完整 overlay 宽度");
+    assert!(
+        half < full,
+        "半程 overlay 必须已经在收缩：full = {full}, half = {half}"
+    );
+    assert!(
+        late < half,
+        "接近结束前 overlay 必须继续收缩：half = {half}, late = {late}"
+    );
+}
+
+/// Issue #826 评论 14 阻塞 4：同 burst handoff 的 source texture 必须留在
+/// active 集合里，否则 `retain_active_snapshot_ids` 会先把它删掉。
+///
+/// `base_snapshot` 是 burst 第一笔之前的快照（`abc`，line id 7），而 handoff
+/// glyph 的贴图来自「上一轮 Reflow target」快照（`ac`，line id 9），两者不同。
+/// 之前 active ids 只含 burst base 的 id，于是
+/// `texture_cache.retain_active_snapshot_ids()`（实现就是 `line_store.retain`）
+/// 先删掉 handoff 那张图；新 Reflow 因该 glyph 已 changed 不再声明它，old
+/// overlay 纹理准备也只看 burst base 补不回来 —— renderer 找不到
+/// `ConcealGlyphGeometry.snapshot_id`，这个 glyph 直接 skip，真机画不出来。
+///
+/// 用 Delete -> Delete 保证 `can_extend == true`（同 burst），否则 Insert -> Delete
+/// 会换新 burst，base_snapshot 恰好等于 current snapshot，就测不到这个差异。
+#[test]
+fn same_burst_handoff_snapshot_id_is_retained_as_active_overlay_texture() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // burst base = `abc`（line id 7）。删中间的 b 得 `ac`：c 走 Reflow。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        7,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0), cluster(2, 3, 60.0)],
+    )]);
+    // 第一次 Delete 之后的新正文 = `ac`（line id 9），c 在 doc x = 30。
+    let after_b = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        9,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 30.0)],
+    )]);
+
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: base,
+        target_snapshot: after_b.clone(),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (1, 2), 0),
+        base_text: String::from("abc"),
+        target_text: String::from("ac"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert!(!coord.reflow_glyphs(now).is_empty(), "c must be reflowing");
+
+    // 同一 burst 继续 Delete 删掉 c：c 从 Reflow 切到 Conceal，贴图来自
+    // `after_b`（line id 9），而 burst base 是 `abc`（line id 7）。
+    let mid = now + Duration::from_millis(80);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: after_b,
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(2, (1, 2), 0),
+        base_text: String::from("ac"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    });
+
+    let sample = coord.sample_edit_frontier(mid).expect("frontier alive");
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    assert!(!overlay.is_empty(), "handoff glyph 必须有 overlay");
+
+    // handoff glyph 的贴图必须来自 current snapshot（id 9），不是 burst base（id 7）。
+    let handoff_id = LineSnapshotId::new(0, 0, 9);
+    let base_id = LineSnapshotId::new(0, 0, 7);
+    assert!(
+        overlay.iter().any(|glyph| glyph.snapshot_id == handoff_id),
+        "handoff glyph 的 snapshot_id 应来自 current old layout（line 9），实际 {:?}",
+        overlay
+            .iter()
+            .map(|glyph| glyph.snapshot_id)
+            .collect::<Vec<_>>()
+    );
+
+    // active overlay ids 必须包含它 —— 否则 retain 会先把纹理清掉。
+    let active = coord.active_old_overlay_snapshot_ids();
+    assert!(
+        active.contains(&handoff_id),
+        "handoff 的 source texture 必须进 active overlay ids：active = {active:?}"
+    );
+    assert!(
+        !active.contains(&base_id) || active.len() > 1,
+        "burst base 的 line id 不该是唯一的 active overlay texture"
+    );
+    // 也必须出现在 retain 真正依据的总集合里。
+    assert!(
+        coord.collect_active_snapshot_ids().contains(&handoff_id),
+        "handoff 的 source texture 必须进 collect_active_snapshot_ids"
+    );
+}

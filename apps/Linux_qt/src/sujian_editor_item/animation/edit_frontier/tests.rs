@@ -224,6 +224,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         empty_snapshot(),
         String::from("ABCE"),
         vec![(3, 4)],
+        &empty_snapshot(),
         &base_to_current,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
@@ -270,6 +271,7 @@ fn extend_replace_accumulates_both_sides() {
         String::from("AXBCDEZ"),
         vec![(5, 6)],
         vec![(6, 7)],
+        &empty_snapshot(),
         &base_to_current,
         &prev_target_to_new,
         &[],
@@ -545,6 +547,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         base.clone(),
         String::from("AB"),
         vec![(2, 3)],
+        &base.clone(),
         &base_to_current,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
@@ -612,10 +615,21 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
     let half = instant_at(now, 80);
     // 第二笔：扩到下一行（base 坐标 [3,6)）。old range 变成 [0,6)。
     let base_to_current = OffsetMap::build("ABCDEF", "DEF");
+    // 第二笔的 current snapshot = 第一笔之后的正文 `DEF`（在第二行，y=20）。
+    // Issue #826 评论 14：吞字 track 的**视觉事实与贴图来源**取本笔删除前的
+    // current old layout，identity 才映回 burst base —— 所以这里传 `DEF`
+    // 所在的那一行，而不是 burst base 的两行。
+    let current_def = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        2,
+        20.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+    )]);
     state.extend_delete(
-        base.clone(),
+        current_def.clone(),
         String::from(""),
         vec![(0, 3)],
+        &current_def,
         &base_to_current,
         &OffsetMap::from_single_edit(0, (0, 0), 0),
         &[],
@@ -810,6 +824,7 @@ fn consecutive_delete_uses_composed_base_mapping() {
         snapshot(Vec::new()),
         String::from("ac"),
         vec![(1, 2)],
+        &base.clone(),
         &base_to_current,
         &second_map,
         &[],
