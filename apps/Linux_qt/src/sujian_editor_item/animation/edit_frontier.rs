@@ -707,6 +707,12 @@ pub(crate) struct RevealVisibleSample {
     pub rect: SourceRect,
     /// 这一帧已经露出的宽度（`0..= rect.w`）。
     pub visible_width: f64,
+    /// 这块 cluster **整字**的 canonical 文档宽度。
+    ///
+    /// Issue #826 评论 26 阻塞 2：`source_rect` 必须按整字的屏幕宽度裁。
+    /// carry 正在补间时 `rect.w` 每帧都在变，拿它当分母会让 UV 比率随
+    /// progress 漂移。
+    pub full_width: f64,
 }
 
 /// Issue #826 评论 20：已可见前缀的一次性补间交接。
@@ -1278,6 +1284,8 @@ impl EditFrontierState {
                         range: (cluster.byte_start, cluster.byte_end),
                         snapshot_id: line.id,
                         source_rect: cluster.source_rect.clone(),
+                        // `rect` 之后才 move，`full_width` 必须先取。
+                        full_width: rect.w,
                         rect,
                         visible_width: visible,
                     });
@@ -1294,6 +1302,9 @@ impl EditFrontierState {
                 range: carried.range,
                 snapshot_id: carried.snapshot_id,
                 source_rect: carried.source_rect.clone(),
+                // carry 的 `sample.rect` 正在从 from_rect 补间到 to_rect；
+                // 整字宽必须用终点 `to_rect.w`，否则 UV 比率随 progress 漂。
+                full_width: carried.to_rect.w,
                 rect: sample.rect,
                 visible_width: sample.visible_width,
             });

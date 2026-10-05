@@ -16,8 +16,10 @@
 
 use std::time::{Duration, Instant};
 
-use writer_core::editor::OffsetMap;
+use writer_core::editor::{OffsetMap, OffsetMapEntry, OffsetMapKind, Utf8ByteOffset};
 
+use super::{collect_components, test_helpers, ClusterIndex, CurrentVisualCluster};
+use super::{visible_source_slice, ShapingTransitionState};
 use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::coordinator::EditFrontierRequest;
 use crate::sujian_editor_item::animation::coordinator::LinuxEditorAnimationCoordinator;
@@ -858,7 +860,11 @@ fn one_visual_cluster_has_exactly_one_animation_owner() {
     if let Some(shaping) = coord.active_shaping_transition.as_ref() {
         for group in &shaping.groups {
             for atom in group.old_atoms.iter().chain(group.new_atoms.iter()) {
-                record("shaping_transition", atom.snapshot_id, atom.handoff_key);
+                // 评论 26 阻塞 3：一个 atom 可能有多段 survivor，每段都是一个
+                // 独立的视觉身份，都必须确认没有第二个 owner。
+                for key in &atom.handoff_keys {
+                    record("shaping_transition", atom.snapshot_id, *key);
+                }
             }
         }
     }
@@ -932,4 +938,467 @@ fn resolve_cluster_keys(
         }
     }
     out
+}
+
+// ── 评论 26 阻塞 1：new 侧的终点必须是它自己的 canonical rect ────────────────
+
+/// 阻塞 1：old cluster 在 x=10、new cluster 在 x=40 时，new 侧绝不能朝 x=10 跑。
+///
+/// 旧实现两侧共用一个 `toward`，new 侧被塞的是 old 区域包围盒：
+///
+/// - t=0：new 在 start_rect（x=40），opacity=0；
+/// - t→1：越来越不透明，却越来越往 x=10 跑；
+/// - 最后一帧几乎全不透明地待在 x=10；
+/// - 下一帧 `is_finished()` 清层，静态 canonical 立刻跳回 x=40。
+///
+/// 肉眼就是动画末尾再跳一次。
+#[test]
+fn shaping_new_side_ends_at_canonical_rect_before_transition_finishes() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord.set_typing_animation_duration_ms(DURATION_MS as u32);
+
+    // `ab`：a 0..1 @x0、b 1..2 @x10。
+    let before = snapshot(vec![line(vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)])]);
+    // `abX`：b 的 range 没变、也没被 inserted overlap，但 shaping identity 变了，
+    // 而且整块挪到了 x=40 —— 这正是「old x=10 / new x=40」的稳定反例。
+    let after = snapshot(vec![line(vec![
+        cluster(0, 1, 0.0),
+        LineClusterSnapshot {
+            shaping_identity: shaping_with(2),
+            ..cluster_sized(1, 2, 40.0, 10.0)
+        },
+        cluster_sized(2, 3, 50.0, 10.0),
+    ])]);
+    coord.begin_or_extend_edit_frontier(insert_request(
+        before.clone(),
+        after.clone(),
+        "ab",
+        "abX",
+        vec![(2, 3)],
+        OffsetMap::from_single_edit(2, (2, 2), 1),
+        now,
+    ));
+
+    let canonical_x = after.line_snapshots[0].clusters[1].source_rect.x;
+    assert!(
+        (canonical_x - 40.0).abs() < 1e-9,
+        "前提：new cluster 的 canonical x 必须是 40，实际 {canonical_x}"
+    );
+
+    // 中段：new 侧必须已经待在自己的 canonical 位置，而不是朝 old 的 x=10 走。
+    let mid = coord.shaping_transition_glyphs(instant_at(now, HALF_MS));
+    assert_eq!(mid.len(), 1, "identity 变化必须进入交接层");
+    assert_eq!(mid[0].new.len(), 1);
+    let mid_x = mid[0].new[0].rect.x;
+    assert!(
+        (mid_x - 40.0).abs() < 1.0,
+        "80ms 时 new 侧必须已经在 canonical x=40 附近，实际 {mid_x}：\
+         朝 old 区域补间会让它越淡越往 x=10 跑"
+    );
+
+    // 临近结束：new 侧几乎全不透明，位置仍然必须是 canonical。
+    let last = coord.shaping_transition_glyphs(instant_at(now, DURATION_MS - 1));
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].new.len(), 1);
+    let last_x = last[0].new[0].rect.x;
+    let last_opacity = last[0].new[0].opacity;
+    assert!(
+        last_opacity > 0.9,
+        "159ms 时 new 侧应当接近全不透明，实际 {last_opacity}"
+    );
+    assert!(
+        (last_x - canonical_x).abs() < 1.0,
+        "清层前最后一帧的 new 侧位置 {last_x} 必须等于 canonical {canonical_x}，\
+         否则清层那一帧静态层会肉眼跳一次"
+    );
+    assert!(
+        (last_x - 10.0).abs() > 10.0,
+        "new 侧绝不能待在 old 的 x=10 附近，实际 {last_x}"
+    );
+
+    // 清层后静态 canonical 就在 x=40 —— 与最后一帧连续。
+    let end = coord.shaping_transition_glyphs(instant_at(now, DURATION_MS + 1));
+    for frame in &end {
+        for side in &frame.new {
+            assert!(
+                (side.rect.x - canonical_x).abs() < 1.0,
+                "清层前后 new 侧位置必须连续：{} vs canonical {}",
+                side.rect.x,
+                canonical_x
+            );
+        }
+    }
+}
+
+// ── 评论 26 阻塞 2：source_rect 永远是 exact slice，不二次裁 ──────────────────
+
+/// 阻塞 2：Conceal → Shaping 的 handoff 不得二次裁剪 UV。
+///
+/// 数字按评论原文：整块 source 100px、dest full 10px、当前只剩 2.5px
+/// → exact slice = `100 * (2.5/10) = 25`。handoff 后 old side 的 source
+/// 宽度必须仍是 **25**，再乘一次 `2.5/10` 得到的 6.25 就是二次裁剪。
+#[test]
+fn conceal_to_shaping_handoff_does_not_crop_source_twice() {
+    // producer 侧的唯一算法：整块 source + 整字宽 + 已露宽度 → 精确 slice。
+    let full = SourceRect {
+        x: 3.0,
+        y: 0.0,
+        w: 100.0,
+        h: 20.0,
+    };
+    let slice = visible_source_slice(&full, 10.0, 2.5);
+    assert!(
+        (slice.w - 25.0).abs() < 1e-9,
+        "exact slice 必须是 25，实际 {}",
+        slice.w
+    );
+
+    let now = Instant::now();
+    let base = af_snapshot();
+    let target = afi_ligated_snapshot();
+    let handoff = CurrentVisualCluster {
+        logical_range: (1, 2),
+        snapshot_id: base.line_snapshots[0].id,
+        source_rect: slice,
+        dest_rect: SourceRect {
+            x: 10.0,
+            y: 0.0,
+            w: 10.0,
+            h: 20.0,
+        },
+        opacity: 1.0,
+        visible_clip: 2.5,
+    };
+
+    let state = ShapingTransitionState::build_or_retarget(
+        None,
+        &[handoff],
+        &base,
+        &target,
+        &[],
+        &[(2, 3)],
+        &OffsetMap::from_single_edit(2, (2, 2), 1),
+        now,
+        DURATION_MS,
+        String::from("afi"),
+    );
+    assert!(!state.is_empty(), "`f` 必须进入交接层");
+
+    for probe_ms in [0u64, 40, 80, 120] {
+        let frames = state.sample(instant_at(now, probe_ms));
+        let old = &frames[0].old;
+        assert_eq!(old.len(), 1, "old 侧只有 f 这一块");
+        assert!(
+            (old[0].source_rect.w - 25.0).abs() < 1e-9,
+            "{probe_ms}ms 时 old 侧 source 宽度必须仍是 25（exact slice），实际 {}：\
+             再乘 visible/rect.w 就是二次裁剪",
+            old[0].source_rect.w
+        );
+        assert!(
+            (old[0].rect.w - 2.5).abs() < 1e-9,
+            "{probe_ms}ms 时 old 侧可见宽度仍是 2.5px，实际 {}",
+            old[0].rect.w
+        );
+    }
+}
+
+/// 阻塞 2 的加长版：连续 retarget 两次，old 侧 UV 不能指数缩小。
+///
+/// 旧实现每接手一次就再乘一次 `visible / rect.w`，25 → 6.25 → 1.5625。
+#[test]
+fn repeated_shaping_retarget_does_not_shrink_old_uv_each_time() {
+    let now = Instant::now();
+
+    let full = SourceRect {
+        x: 0.0,
+        y: 0.0,
+        w: 100.0,
+        h: 20.0,
+    };
+    let slice = visible_source_slice(&full, 10.0, 2.5);
+    assert!((slice.w - 25.0).abs() < 1e-9);
+
+    let base = af_snapshot();
+    let target = afi_ligated_snapshot();
+    let handoff = CurrentVisualCluster {
+        logical_range: (1, 2),
+        snapshot_id: base.line_snapshots[0].id,
+        source_rect: slice,
+        dest_rect: SourceRect {
+            x: 10.0,
+            y: 0.0,
+            w: 10.0,
+            h: 20.0,
+        },
+        opacity: 1.0,
+        visible_clip: 2.5,
+    };
+
+    // 第 1 笔：`af -> afi`。
+    let mut state = ShapingTransitionState::build_or_retarget(
+        None,
+        &[handoff],
+        &base,
+        &target,
+        &[],
+        &[(2, 3)],
+        &OffsetMap::from_single_edit(2, (2, 2), 1),
+        now,
+        DURATION_MS,
+        String::from("afi"),
+    );
+    let old_source_of = |state: &ShapingTransitionState, cluster: (usize, usize)| -> Option<f64> {
+        state
+            .groups
+            .iter()
+            .flat_map(|group| &group.old_atoms)
+            .find(|atom| atom.cluster == cluster)
+            .map(|atom| atom.source_rect.w)
+    };
+    assert_eq!(
+        old_source_of(&state, (1, 2)),
+        Some(25.0),
+        "第 1 笔之后 old `f` 的 source 仍是 25"
+    );
+
+    // 第 2、3 笔：各自只让那块 `fi` / `fij` 再变一次 shaping，
+    // `f` 这一层必须一路 retarget 下来，source 不能被再裁。
+    for round in 0..2u32 {
+        let at = instant_at(now, 40);
+        let visuals = state.current_visuals(at);
+        let (old_snapshot, new_snapshot, target_text, inserted, map) = if round == 0 {
+            (
+                afi_ligated_snapshot(),
+                afij_ligated_snapshot(),
+                "afij",
+                vec![(3, 4)],
+                OffsetMap::from_single_edit(3, (3, 3), 1),
+            )
+        } else {
+            (
+                afij_ligated_snapshot(),
+                snapshot(vec![line(vec![
+                    cluster(0, 1, 0.0),
+                    cluster_sized(1, 4, 10.0, 17.0),
+                    cluster_sized(4, 5, 27.0, 9.0),
+                ])]),
+                "afijk",
+                vec![(4, 5)],
+                OffsetMap::from_single_edit(4, (4, 4), 1),
+            )
+        };
+        state = ShapingTransitionState::build_or_retarget(
+            Some(&state),
+            &visuals,
+            &old_snapshot,
+            &new_snapshot,
+            &[],
+            &inserted,
+            &map,
+            at,
+            DURATION_MS,
+            String::from(target_text),
+        );
+        assert_eq!(
+            old_source_of(&state, (1, 2)),
+            Some(25.0),
+            "第 {} 次 retarget 之后 old `f` 的 source 必须仍是 25，实际 {:?}：\
+             每接手一次就再裁一次会让 UV 指数缩小",
+            round + 2,
+            old_source_of(&state, (1, 2))
+        );
+    }
+}
+
+// ── 评论 26 阻塞 3：1:N group 的下一笔必须能局部接管 ─────────────────────────
+
+/// 阻塞 3：第一笔 `0..4 -> A + B` 跑到一半，第二笔只改 B。
+///
+/// 旧实现 `any absorbed => skip whole group`，于是：
+///
+/// - A 的上一帧半透明状态直接丢掉，canonical A 瞬间全亮；
+/// - old O 也一起消失；
+/// - 只有 B 被新 group 接住。
+///
+/// 现在必须按 atom 粒度拆：A 继续淡、old O 继续淡、只有 B 转入新 component。
+#[test]
+fn editing_one_child_of_one_to_many_transition_keeps_other_child_and_old_fade() {
+    let now = Instant::now();
+    let at = instant_at(now, HALF_MS / 2);
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord.set_typing_animation_duration_ms(DURATION_MS as u32);
+
+    // 第 1 笔：old O = 0..4（40px 一块） -> new A = 0..1（10px）+ B = 1..3（30px）。
+    let first_old = snapshot(vec![line(vec![cluster_sized(0, 4, 0.0, 40.0)])]);
+    let first_new = snapshot(vec![line(vec![
+        cluster_sized(0, 1, 0.0, 10.0),
+        cluster_sized(1, 3, 10.0, 30.0),
+    ])]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: first_old,
+        base_text: String::from("abcd"),
+        target_snapshot: first_new.clone(),
+        target_text: String::from("acd"),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(4, (1, 2), 0),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    let before = coord.shaping_transition_glyphs(at);
+    assert_eq!(before.len(), 1, "第一笔只有一个 1:2 group");
+    assert_eq!(before[0].old.len(), 1, "old O 在淡出");
+    assert_eq!(before[0].new.len(), 2, "A 与 B 都在淡入");
+    let a_before = before[0]
+        .new
+        .iter()
+        .find(|side| (side.rect.w - 10.0).abs() < 1e-6)
+        .expect("A 是那块 10px 的 new side")
+        .clone();
+
+    // 第 2 笔：只在 B 的中间插一个字，B 变成 mixed component `B -> C`。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: first_new,
+        base_text: String::from("acd"),
+        target_snapshot: snapshot(vec![line(vec![
+            cluster_sized(0, 1, 0.0, 10.0),
+            cluster_sized(1, 2, 10.0, 10.0),
+            cluster_sized(2, 4, 20.0, 20.0),
+        ])]),
+        target_text: String::from("acZd"),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(2, 3)],
+        offset_map: OffsetMap::from_single_edit(3, (2, 2), 1),
+        conceal_direction: ConcealDirection::Forward,
+        now: at,
+    });
+
+    let shaping = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("第二笔仍然有不可拆 cluster，交接层不能被清掉");
+    assert_eq!(
+        shaping.groups.len(),
+        2,
+        "被接管的 B 必须单独成组，A + old O 作为另一组继续淡"
+    );
+
+    let taken = shaping
+        .groups
+        .iter()
+        .find(|group| group.new_atoms.iter().any(|atom| atom.cluster == (1, 2)))
+        .expect("新 component 必须接住 B 的后代");
+    assert_eq!(
+        taken
+            .old_atoms
+            .iter()
+            .map(|atom| atom.cluster)
+            .collect::<Vec<_>>(),
+        vec![(1, 3)],
+        "只有 B 转入新 component"
+    );
+
+    let rest = shaping
+        .groups
+        .iter()
+        .find(|group| group.new_atoms.iter().any(|atom| atom.cluster == (0, 1)))
+        .expect("没被碰的兄弟 A 绝不能整组被跳过");
+    assert!(
+        rest.old_atoms.iter().any(|atom| atom.cluster == (0, 4)),
+        "old O 仍在淡出，不能因为同组里 B 被接管就一起删掉"
+    );
+
+    // A 的像素事实必须连续：opacity / 位置 / 宽度都不能断。
+    let after = coord.shaping_transition_glyphs(at);
+    let rest_frame = after
+        .iter()
+        .find(|frame| {
+            frame
+                .old
+                .iter()
+                .any(|side| (side.rect.w - 40.0).abs() < 1e-6)
+                && frame.new.len() == 1
+        })
+        .expect("rest group 这一帧必须同时画 old O 与 new A");
+    let a_after = &rest_frame.new[0];
+    assert!(
+        (a_after.opacity - a_before.opacity).abs() < 1e-6,
+        "A 的 opacity 断裂：{} -> {}",
+        a_before.opacity,
+        a_after.opacity
+    );
+    assert!(
+        (a_after.rect.x - a_before.rect.x).abs() < 1e-6,
+        "A 的位置断裂：{} -> {}",
+        a_before.rect.x,
+        a_after.rect.x
+    );
+    assert!(
+        (a_after.rect.w - a_before.rect.w).abs() < 1e-6,
+        "A 的宽度断裂：{} -> {}",
+        a_before.rect.w,
+        a_after.rect.w
+    );
+    assert!(
+        a_after.opacity > 0.0 && a_after.opacity < 1.0,
+        "A 仍在半透明淡入中，实际 {}",
+        a_after.opacity
+    );
+    let old_o = rest_frame
+        .old
+        .iter()
+        .find(|side| (side.rect.w - 40.0).abs() < 1e-6)
+        .expect("old O 这一帧仍在画");
+    assert!(
+        old_o.opacity > 0.0,
+        "old O 必须仍在淡出，实际 opacity = {}",
+        old_o.opacity
+    );
+}
+
+// ── 评论 26 阻塞 4：collect_components 不逐 byte 扫 ──────────────────────────
+
+/// 结构回归：`OffsetMapEntry.length = 1_000_000`、snapshot 只有 3 个 cluster。
+///
+/// 逐 byte 实现会跑 100 万次；interval sweep 的探测量必须跟 cluster 数
+/// 同量级。**不用 wall-clock** —— 计时在慢机器上会假绿。
+#[test]
+fn collect_components_probes_scale_with_cluster_count_not_text_length() {
+    let make = || {
+        snapshot(vec![line(vec![
+            cluster(0, 1, 0.0),
+            cluster(1, 2, 10.0),
+            cluster(2, 3, 20.0),
+        ])])
+    };
+    let old = make();
+    let new = make();
+    let map = OffsetMap {
+        entries: vec![OffsetMapEntry {
+            old_byte_offset: Utf8ByteOffset::unchecked(0),
+            new_byte_offset: Utf8ByteOffset::unchecked(0),
+            length: 1_000_000,
+            kind: OffsetMapKind::Identity,
+        }],
+    };
+
+    let old_side = ClusterIndex::build(&old);
+    let new_side = ClusterIndex::build(&new);
+    // 先把此前累计的探测量清掉，只测这一次调用。
+    let _ = test_helpers::take_component_probe_count();
+    let (components, pairs) = collect_components(&old_side, &new_side, &map);
+    let probes = test_helpers::take_component_probe_count();
+
+    assert_eq!(components.len(), 3, "3 个 cluster 应当连成 3 个分量");
+    assert_eq!(pairs.len(), 3, "每个 old 各自配一个 new");
+    assert!(
+        probes <= 16,
+        "探测量必须跟 cluster 数（3）同量级，实际 {probes}：\
+         entry.length 是 1_000_000，逐 byte 扫会跑满一百万次"
+    );
+    assert!(probes >= 1, "总得真的做过区间探针");
 }

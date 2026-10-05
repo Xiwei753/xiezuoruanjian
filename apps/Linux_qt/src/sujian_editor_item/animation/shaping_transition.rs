@@ -61,11 +61,33 @@
 //! 架构归属：`EditFrontier` 管 changed logical fact + mask timing；`Reflow` 管
 //! same-shaping unchanged move；本层只管当前不可拆 cluster 的 old/new 视觉交接。
 //! 三者都只保存「当前屏幕事实」。
+//!
+//! ## 评论 26 补上的三条不变量
+//!
+//! ### 1. new 侧的终点必须是它自己的 canonical rect
+//!
+//! 旧实现 old / new 两侧共用一个 `toward`：old 侧朝新区域走（合理，它最后
+//! opacity = 0），new 侧也被塞了 old 区域包围盒。于是 new 侧「越淡越不透明，
+//! 越往 old 位置跑」，`is_finished()` 清层后静态 canonical 再跳回 `atom.rect`
+//! —— 动画末尾肉眼可见地再跳一次。现在两侧的终点分开定义。
+//!
+//! ### 2. `CurrentVisualCluster.source_rect` 永远表示「这一帧实际可见的精确 slice」
+//!
+//! 吐字侧是整块 + visible_clip、吞字侧是已裁 slice、本层交接是 `sample()` 裁过的
+//! 片段 —— 三种语义混在一起，接手方一旦再乘一次 `visible / rect.w` 就是二次裁剪
+//! （10px cluster 剩 2.5px 时取原图 6.25% 的 UV 拉伸到 2.5px）。现在 producer
+//! 一律交出 exact slice，`sample()` 两侧都**不再裁 source**。
+//!
+//! ### 3. group 是原子粒度，不是整组粒度
+//!
+//! 1:N 的 group 里第二笔只改其中一个 child 时，旧实现 `any absorbed => skip
+//! whole group`，被接管的 child 之外，兄弟 new atom 与仍在淡出的 old atom 一起
+//! 凭空消失。现在按 atom 拆成「本笔接管的」与「继续淡的」两份。
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use writer_core::editor::OffsetMap;
+use writer_core::editor::{OffsetMap, OffsetMapEntry};
 
 use crate::sujian_editor_item::animation::edit_frontier::{ease_out_cubic, ConcealSourceLine};
 use crate::sujian_editor_item::layout_snapshot::{
@@ -88,7 +110,12 @@ pub(crate) struct CurrentVisualCluster {
     pub logical_range: (usize, usize),
     /// 贴图来源行纹理。
     pub snapshot_id: LineSnapshotId,
-    /// 那张行纹理里的源矩形（覆盖整个 cluster）。
+    /// 那张行纹理里的源矩形 —— **这一帧实际可见的精确 slice**。
+    ///
+    /// Issue #826 评论 26 阻塞 2：语义必须唯一。接手方（[`VisualClusterAtom`]）
+    /// 拿到它就直接用，绝不能再按 `visible / rect.w` 裁一次，否则 10px 的 cluster
+    /// 只剩 2.5px 时会取到原图 6.25% 的 UV 再拉伸。
+    /// 用 [`visible_source_slice`] 从整块 source + 整字宽 + 已露宽度算出来。
     pub source_rect: SourceRect,
     /// 这一帧它在屏幕上的矩形（文档坐标）。
     pub dest_rect: SourceRect,
@@ -99,6 +126,27 @@ pub(crate) struct CurrentVisualCluster {
     /// 吐字只露了 8.75px 就必须是 8.75 —— 新 owner 第一帧若按整字宽起步，
     /// 屏幕会「先补满再淡变」。
     pub visible_clip: f64,
+}
+
+/// 从整块 cluster 的 source 与「这一帧可见宽度」算出精确 slice。
+///
+/// Issue #826 评论 26 阻塞 2：[`CurrentVisualCluster::source_rect`] 的唯一算法。
+///
+/// `full_dest_width` 是这块 cluster **整字**的文档宽度 —— carry 正在补间时也
+/// 必须用 canonical 的 `to_rect.w`，不能用当前帧那个还在变的矩形宽，否则 UV
+/// 比率会随 progress 漂移。`visible` 是这一帧已经露出的宽度。
+pub(crate) fn visible_source_slice(
+    full: &SourceRect,
+    full_dest_width: f64,
+    visible: f64,
+) -> SourceRect {
+    let ratio = (visible / full_dest_width.max(EPS)).clamp(0.0, 1.0);
+    SourceRect {
+        x: full.x,
+        y: full.y,
+        w: full.w * ratio,
+        h: full.h,
+    }
 }
 
 /// Issue #826 评论 25：一个不可拆视觉 cluster 的一侧原子。
@@ -112,7 +160,12 @@ pub(crate) struct VisualClusterAtom {
     /// 这个 cluster 的完整边界（它所属 snapshot 的坐标系）。
     pub cluster: (usize, usize),
     /// 交给**下一笔**做 handoff 对齐用的字符身份（坐标在当前 state 的 target 系）。
-    pub handoff_key: (usize, usize),
+    ///
+    /// Issue #826 评论 26 阻塞 3：1:N 的 old atom 可能有多段 survivor ——
+    /// 旧 cluster `0..4` 删掉中间 `1..2` 后剩 `0..1` 与 `2..4` 两段，它们可能
+    /// 分别 shaping 成两块 new cluster。只存第一段时，下一笔改后面那一段会让
+    /// 这份 old atom 在 `current_visuals` 里找不到归属而凭空消失。
+    pub handoff_keys: Vec<(usize, usize)>,
     /// 贴图来源行纹理。
     pub snapshot_id: LineSnapshotId,
     /// 那张行纹理里的源矩形（覆盖整个 cluster，绝不按 byte 比例裁）。
@@ -125,6 +178,18 @@ pub(crate) struct VisualClusterAtom {
     pub start_opacity: f64,
     /// 当前帧可见宽度。old 侧保持不变（本来就在淡出），new 侧增长到 `rect.w`。
     pub start_visible_width: f64,
+}
+
+impl VisualClusterAtom {
+    /// 这个原子是否拥有某段 target 坐标身份。
+    pub(crate) fn claims(&self, range: (usize, usize)) -> bool {
+        self.handoff_keys.iter().any(|&key| key == range)
+    }
+
+    /// 首选 handoff 身份（拿不到多段时用它）。
+    pub(crate) fn primary_handoff_key(&self) -> (usize, usize) {
+        self.handoff_keys.first().copied().unwrap_or(self.cluster)
+    }
 }
 
 /// Issue #826 评论 25：一次不可拆 shaping 区域的当前态 old/new 视觉集合。
@@ -237,23 +302,21 @@ impl ShapingTransitionState {
         }
 
         // 上一份里没被本笔接管的 group：映射到最新 target 后继续淡。
+        //
+        // Issue #826 评论 26 阻塞 3：不能 `any absorbed => skip whole group`。
+        // 1:N 的 group 里第二笔只改其中一个 child 时，整组被跳过 —— 那个 child
+        // 被新 group 接住，但没被碰的兄弟 atom 与仍在淡出的 old atom 一起消失。
         if let Some(previous) = previous {
             for group in &previous.groups {
-                if group.new_atoms.iter().any(|atom| {
-                    absorbed
-                        .iter()
-                        .any(|range| ranges_overlap(atom.cluster, *range))
-                }) {
-                    continue;
-                }
-                if let Some(retargeted) = retarget_group(
+                if let Some(rest) = split_previous_group_by_absorbed(
                     group,
+                    &absorbed,
                     new_snapshot,
                     old_to_new,
                     current_visuals,
                     &mut consumed,
                 ) {
-                    groups.push(retargeted);
+                    groups.push(rest);
                 }
             }
         }
@@ -355,10 +418,13 @@ impl ShapingTransitionState {
             .map(|group| {
                 // 1:1 时这就是 old_rect / new_rect；1:N、N:1 时是整组包围盒，
                 // 视觉上就是「一块 cluster 淡出成另一组 cluster」。
+                //
+                // Issue #826 评论 26 阻塞 1：**只有 old 侧**朝对侧走。new 侧的
+                // 终点必须是它自己的 `atom.rect`，否则它越淡越不透明却越往
+                // old 位置跑，`is_finished()` 清层后 canonical 再跳回去。
                 let new_region = union_rect(group.new_atoms.iter().map(|atom| &atom.rect));
-                let old_region = union_rect(group.old_atoms.iter().map(|atom| &atom.rect));
-                let old = sample_side(&group.old_atoms, t, new_region.as_ref(), false);
-                let new = sample_side(&group.new_atoms, t, old_region.as_ref(), true);
+                let old = sample_old_side(&group.old_atoms, t, new_region.as_ref());
+                let new = sample_new_side(&group.new_atoms, t);
                 ShapingTransitionFrame { old, new }
             })
             .collect()
@@ -456,65 +522,79 @@ impl ShapingTransitionState {
     }
 }
 
-/// 采样一侧。`toward` 是这一侧要补间到的区域（1:1 时是对侧那一块，1:N / N:1
-/// 时是整组包围盒），`is_new_side` 区分淡入 / 淡出。
+/// 采样 old 侧：从这一帧的真实位置与真实可见宽度出发，朝 `exit_target`
+/// 退出，不透明度 `-> 0`。
 ///
-/// **宽度不参与补间**：
+/// `exit_target` 是 1:1 时的新那一块、1:N / N:1 时是整组包围盒。朝对侧走是
+/// 有意的：它最后 opacity = 0，终点在哪都看不见。
 ///
-/// - old 侧保持这一帧真实的可见宽度（它本来就在淡出，不需要再长）；
-/// - new 侧始终是自己的整字宽 —— 它是一套**完全不同的字形资源**，按比例
-///   裁会出现半个连字。
+/// **宽度与源矩形都不参与补间**：
 ///
-/// 只补间位置，让「正在消失的那一份」从它当前所在的位置起步。
-fn sample_side(
+/// - 宽度保持 `start_visible_width` —— 它本来就在淡出，不需要再长；
+/// - `atom.source_rect` 已经是这一帧实际可见的 exact slice（见
+///   [`CurrentVisualCluster::source_rect`]），再乘 `visible / rect.w`
+///   就是二次裁剪。
+fn sample_old_side(
     atoms: &[VisualClusterAtom],
     t: f64,
-    toward: Option<&SourceRect>,
-    is_new_side: bool,
+    exit_target: Option<&SourceRect>,
 ) -> Vec<ShapingTransitionSide> {
     atoms
         .iter()
         .map(|atom| {
-            // 1:1 时 toward 就是对侧那一块；1:N / N:1 时是整组包围盒。
-            let to_rect = match toward {
-                Some(region) => region.clone(),
-                None => atom.rect.clone(),
-            };
-            let lerp = |from: f64, to: f64| from + (to - from) * t;
-            let visible = if is_new_side {
-                atom.rect.w
-            } else {
-                atom.start_visible_width.min(atom.rect.w)
-            };
-            let opacity_target = if is_new_side { 1.0 } else { 0.0 };
-            let opacity =
-                (atom.start_opacity + (opacity_target - atom.start_opacity) * t).clamp(0.0, 1.0);
+            let to_rect = exit_target.cloned().unwrap_or_else(|| atom.rect.clone());
+            let visible = atom.start_visible_width.min(atom.rect.w).max(0.0);
             ShapingTransitionSide {
                 snapshot_id: atom.snapshot_id,
-                // 源矩形按可见比例裁。**这是裁「同一块 cluster 里已露出的那一段」，
-                // 不是按 byte 比例裁** —— old / new 两侧的 source_rect 本来就是
-                // 两套不同形状的资源，任何按字节的裁法都会画错字形。
-                source_rect: SourceRect {
-                    x: atom.source_rect.x,
-                    y: atom.source_rect.y,
-                    w: atom.source_rect.w * (visible / atom.rect.w.max(EPS)).clamp(0.0, 1.0),
-                    h: atom.source_rect.h,
-                },
+                source_rect: atom.source_rect.clone(),
                 rect: SourceRect {
-                    x: lerp(atom.start_rect.x, to_rect.x),
-                    y: lerp(atom.start_rect.y, to_rect.y),
+                    x: lerp(atom.start_rect.x, to_rect.x, t),
+                    y: lerp(atom.start_rect.y, to_rect.y, t),
                     w: visible,
-                    h: lerp(atom.start_rect.h, to_rect.h),
+                    h: lerp(atom.start_rect.h, to_rect.h, t),
                 },
-                opacity,
+                opacity: (atom.start_opacity * (1.0 - t)).clamp(0.0, 1.0),
             }
         })
         .collect()
 }
 
+/// 采样 new 侧：从这一帧的真实位置出发，朝**自己的 canonical rect**
+/// （`atom.rect`）淡入，不透明度 `-> 1`。
+///
+/// Issue #826 评论 26 阻塞 1：终点必须是 `atom.rect`。旧实现 old / new
+/// 两侧共用同一个 `toward`，new 侧被塞的是 old 区域包围盒，于是 old
+/// cluster 在 x=10、new cluster 在 x=40 时，new 侧会在 160ms 里一路朝
+/// x=10 跑，最后一帧几乎全不透明地待在 old 位置；下一帧
+/// `is_finished()` 清层，静态 canonical 立刻跳回 x=40。肉眼就是动画
+/// 末尾再跳一次。
+///
+/// **宽度与源矩形同样不补间**：new 侧是一套**完全不同的字形资源**，
+/// 保持自己整字宽 + 完整 source，按比例裁会出现半个连字。
+fn sample_new_side(atoms: &[VisualClusterAtom], t: f64) -> Vec<ShapingTransitionSide> {
+    atoms
+        .iter()
+        .map(|atom| ShapingTransitionSide {
+            snapshot_id: atom.snapshot_id,
+            source_rect: atom.source_rect.clone(),
+            rect: SourceRect {
+                x: lerp(atom.start_rect.x, atom.rect.x, t),
+                y: lerp(atom.start_rect.y, atom.rect.y, t),
+                w: atom.rect.w,
+                h: lerp(atom.start_rect.h, atom.rect.h, t),
+            },
+            opacity: (atom.start_opacity + (1.0 - atom.start_opacity) * t).clamp(0.0, 1.0),
+        })
+        .collect()
+}
+
+fn lerp(from: f64, to: f64, t: f64) -> f64 {
+    from + (to - from) * t
+}
+
 fn visual_from(atom: &VisualClusterAtom, side: &ShapingTransitionSide) -> CurrentVisualCluster {
     CurrentVisualCluster {
-        logical_range: atom.handoff_key,
+        logical_range: atom.primary_handoff_key(),
         snapshot_id: side.snapshot_id,
         source_rect: side.source_rect.clone(),
         dest_rect: side.rect.clone(),
@@ -549,22 +629,17 @@ fn build_group(
         let (line, cluster) = old_side.cluster(*node);
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        let handoff = take_handoff(
-            current_visuals,
-            consumed,
-            cluster_range,
-            Some(cluster_range),
-        );
+        let handoff = take_handoff_for_keys(current_visuals, consumed, &[cluster_range]);
         // 这一块 old cluster 在最新正文里还剩下哪几段（target 坐标系）——
         // 下一笔要靠它对齐，因为那时 base 坐标系已经变成这份 target。
-        let key = untouched_parts(cluster_range, deleted_ranges)
-            .into_iter()
-            .filter_map(|(start, end)| old_to_new.map_old_range_to_new(start, end))
-            .next()
-            .unwrap_or(cluster_range);
+        //
+        // Issue #826 评论 26 阻塞 3：**全部** survivor 都要存，不能 `.next()`
+        // 只取第一段。`0..4` 删掉 `1..2` 后剩 `0..1` 与 `2..4`，下一笔只改
+        // 后一段时，old atom 必须还能在 current_visuals 里找到自己。
+        let keys = handoff_keys_in_target(cluster_range, deleted_ranges, old_to_new);
         old_atoms.push(atom_from_cluster(
             cluster_range,
-            key,
+            keys,
             line,
             cluster,
             rect,
@@ -577,13 +652,20 @@ fn build_group(
     // 仍然在屏幕上 —— 它们必须作为额外 old 原子继续淡出，不能凭空消失。
     // 典型场景 `af -> afi -> afij`：屏幕上是 `f`(opacity 0.2) + `fi`(opacity 0.8)，
     // 新的交接组 old 侧是 `fi`，那份 `f` 就是这里补进来的。
-    let old_region: Vec<(usize, usize)> = old_atoms.iter().map(|atom| atom.cluster).collect();
+    //
+    // Issue #826 评论 26 阻塞 3：claim 范围除了 `cluster` 还要包含全部
+    // `handoff_keys` —— 多段 survivor 里任何一段被本组认领，那份视觉事实
+    // 都归这一组，不能被别处再抢一次。
+    let claimed: Vec<(usize, usize)> = old_atoms
+        .iter()
+        .flat_map(|atom| std::iter::once(atom.cluster).chain(atom.handoff_keys.iter().copied()))
+        .collect();
     for index in 0..current_visuals.len() {
         if consumed.contains(&index) {
             continue;
         }
         let visual = &current_visuals[index];
-        if !old_region
+        if !claimed
             .iter()
             .any(|region| containment_overlap(visual.logical_range, *region))
         {
@@ -592,7 +674,7 @@ fn build_group(
         consumed.insert(index);
         old_atoms.push(VisualClusterAtom {
             cluster: visual.logical_range,
-            handoff_key: visual.logical_range,
+            handoff_keys: vec![visual.logical_range],
             snapshot_id: visual.snapshot_id,
             source_rect: visual.source_rect.clone(),
             rect: visual.dest_rect.clone(),
@@ -612,18 +694,20 @@ fn build_group(
     // 整字宽）并淡入 —— 它不能去抢 old 侧或上一份 leftover 的像素。只有当
     // 它与屏幕上某个视觉原子**字节完全一致**时，才说明这块字没变、只是换了
     // 一次 shaping，此时从当前像素接手才正确。
+    //
+    // Issue #826 评论 26 阻塞 3：身份键用 **target 坐标系**的
+    // `cluster_range`。`handoff_keys` 是交给**下一笔**对齐用的，而下一笔的
+    // `base_snapshot` 正好是这份 target；`map_new_range_to_old` 给出的是
+    // base 系，只有本笔没有位移时才碰巧相等。
     let mut new_atoms = Vec::new();
     for node in &component.new_nodes {
         let (line, cluster) = new_side.cluster(*node);
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        // new 侧的 handoff 键在 base 坐标系：把 target 坐标的 cluster 映回去。
-        // 映不回说明它完全由本次插入构成，旧正文里没有对应身份，不能接手。
-        let key = old_to_new.map_new_range_to_old(cluster_range.0, cluster_range.1);
-        let handoff = key.and_then(|key| take_exact_handoff(current_visuals, consumed, key));
+        let handoff = take_exact_handoff(current_visuals, consumed, cluster_range);
         new_atoms.push(atom_from_cluster(
             cluster_range,
-            key.unwrap_or(cluster_range),
+            vec![cluster_range],
             line,
             cluster,
             rect,
@@ -637,16 +721,86 @@ fn build_group(
     })
 }
 
-/// 把上一份 group 映射到最新 target 后继续淡。
-fn retarget_group(
+/// 一块 old cluster 在 target 坐标系里还剩哪几段身份。
+///
+/// 先按 `deleted_ranges` 求 untouched 片段，再逐段映射到 target；一段都映不
+/// 出去时退回 `cluster_range` 本身，保证 handoff 至少有一个可匹配的键。
+fn handoff_keys_in_target(
+    cluster_range: (usize, usize),
+    deleted_ranges: &[(usize, usize)],
+    old_to_new: &OffsetMap,
+) -> Vec<(usize, usize)> {
+    let keys: Vec<(usize, usize)> = untouched_parts(cluster_range, deleted_ranges)
+        .into_iter()
+        .filter_map(|(start, end)| old_to_new.map_old_range_to_new(start, end))
+        .collect();
+    if keys.is_empty() {
+        vec![cluster_range]
+    } else {
+        keys
+    }
+}
+
+/// 把上一份 group 按「本笔接管了哪些 child」拆开。
+///
+/// Issue #826 评论 26 阻塞 3：不能 `any absorbed => skip whole group`。
+/// 1:N 的 group 里第二笔只改其中一个 child 时，整组被跳过 —— 那个 child 被新
+/// group 接住，但没被碰的兄弟 new atom 与仍在淡出的 old atom 一起凭空消失。
+///
+/// 拆法：新 group 只消费被接管的 child 对应的视觉事实；剩下的 new atom 连同
+/// 全部仍可见的 old atom 继续挂在 state 里淡。
+fn split_previous_group_by_absorbed(
     group: &ShapingTransitionGroup,
+    absorbed: &[(usize, usize)],
     new_snapshot: &EditorLayoutSnapshot,
     prev_target_to_new: &OffsetMap,
     current_visuals: &[CurrentVisualCluster],
     consumed: &mut HashSet<usize>,
 ) -> Option<ShapingTransitionGroup> {
+    let kept_new: Vec<&VisualClusterAtom> = group
+        .new_atoms
+        .iter()
+        .filter(|atom| {
+            !absorbed
+                .iter()
+                .any(|range| ranges_overlap(atom.cluster, *range))
+        })
+        .collect();
+    // 顺序必须与 `current_visuals()` 的产出顺序一致：它先列 old 原子再列 new
+    // 原子。1:N 拆分时 old 与它的第一个 survivor、以及首块 new atom 可能共用
+    // 同一个字节身份（old `0..4` 的 survivor `0..1` 与 new `0..1`），先处理
+    // old 才能让双方各自认领**自己**那份像素，反过来会互相换手、opacity 跳变。
+    let old_atoms = retain_visible_old_atoms(group, current_visuals, consumed);
+    // `retarget_new_atoms` 只碰 kept 的那些 new atom，被本笔接管的 child 对应的
+    // current_visuals 因此原样留给新 group。
+    let new_atoms = retarget_new_atoms(
+        &kept_new,
+        new_snapshot,
+        prev_target_to_new,
+        current_visuals,
+        consumed,
+    )
+    .unwrap_or_default();
+    if new_atoms.is_empty() && old_atoms.is_empty() {
+        return None;
+    }
+    Some(ShapingTransitionGroup {
+        old_atoms,
+        new_atoms,
+    })
+}
+
+/// 把一份 previous group 里**没被本笔接管**的 new atom 重新映到最新
+/// target，继续淡出。
+fn retarget_new_atoms(
+    kept_new: &[&VisualClusterAtom],
+    new_snapshot: &EditorLayoutSnapshot,
+    prev_target_to_new: &OffsetMap,
+    current_visuals: &[CurrentVisualCluster],
+    consumed: &mut HashSet<usize>,
+) -> Option<Vec<VisualClusterAtom>> {
     let mut new_atoms = Vec::new();
-    for atom in &group.new_atoms {
+    for atom in kept_new {
         let Some((start, end)) =
             prev_target_to_new.map_old_range_to_new(atom.cluster.0, atom.cluster.1)
         else {
@@ -659,10 +813,10 @@ fn retarget_group(
         };
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        let handoff = take_exact_handoff(current_visuals, consumed, atom.handoff_key);
+        let handoff = take_exact_handoff(current_visuals, consumed, atom.primary_handoff_key());
         new_atoms.push(atom_from_cluster(
             cluster_range,
-            cluster_range,
+            vec![cluster_range],
             line,
             cluster,
             rect,
@@ -671,18 +825,31 @@ fn retarget_group(
         ));
     }
     if new_atoms.is_empty() {
-        return None;
+        None
+    } else {
+        Some(new_atoms)
     }
+}
 
-    // 旧侧只能保留**这一帧还看得见**的那些原子。
-    //
-    // `current_visuals` 是上一份交接层在 `now` 时刻的真实采样，并过滤掉了
-    // 不透明度 / 可见宽度归零的原子。所以「没有 handoff」只有一个含义：
-    // 它已经淡出，屏幕上不再有它的像素。此时若退回 `atom.start_opacity`
-    // （new group 恒为 1.0），`started_at` 重置会让它闪回全不透明。
+/// 保留上一份里仍可见的 old atom（各自独立匹配 handoff）。
+///
+/// 旧侧只能保留**这一帧还看得见**的那些原子。`current_visuals` 是上一份交接层
+/// 在 `now` 时刻的真实采样，并过滤掉了不透明度 / 可见宽度归零的原子。所以
+/// 「没有 handoff」只有一个含义：它已经淡出，屏幕上不再有它的像素。此时若退回
+/// `atom.start_opacity`（new group 恒为 1.0），`started_at` 重置会让它闪回
+/// 全不透明。
+fn retain_visible_old_atoms(
+    group: &ShapingTransitionGroup,
+    current_visuals: &[CurrentVisualCluster],
+    consumed: &mut HashSet<usize>,
+) -> Vec<VisualClusterAtom> {
     let mut old_atoms = Vec::new();
     for atom in &group.old_atoms {
-        let Some(handoff) = take_handoff(current_visuals, consumed, atom.handoff_key, None) else {
+        // 评论 26 阻塞 3：按**全部** `handoff_keys` 匹配。1:N 的 old atom
+        // 可能有多段 survivor，只取第一段时，下一笔只改后面那一段会让这份
+        // old atom 在 `current_visuals` 里找不到归属而消失。
+        let Some(handoff) = take_handoff_for_keys(current_visuals, consumed, &atom.handoff_keys)
+        else {
             continue;
         };
         if handoff.opacity <= EPS {
@@ -692,7 +859,7 @@ fn retarget_group(
         // 行纹理里，必须继续用它，否则旧侧会突然换一张图。
         old_atoms.push(VisualClusterAtom {
             cluster: atom.cluster,
-            handoff_key: atom.handoff_key,
+            handoff_keys: atom.handoff_keys.clone(),
             snapshot_id: handoff.snapshot_id,
             source_rect: handoff.source_rect,
             rect: atom.rect.clone(),
@@ -701,48 +868,53 @@ fn retarget_group(
             start_visible_width: handoff.visible_clip,
         });
     }
-
-    if old_atoms.is_empty() && new_atoms.iter().all(|atom| atom.start_opacity >= 1.0 - EPS) {
-        return None;
-    }
-    Some(ShapingTransitionGroup {
-        old_atoms,
-        new_atoms,
-    })
+    old_atoms
 }
 
 #[allow(clippy::too_many_arguments)]
 fn atom_from_cluster(
     cluster: (usize, usize),
-    handoff_key: (usize, usize),
+    handoff_keys: Vec<(usize, usize)>,
     line: &PreparedLineSnapshot,
     cluster_snapshot: &LineClusterSnapshot,
     rect: SourceRect,
     handoff: Option<CurrentVisualCluster>,
     is_new_side: bool,
 ) -> VisualClusterAtom {
-    let (start_rect, start_opacity, start_visible, texture) = match handoff {
-        Some(handoff) => (
-            handoff.dest_rect.clone(),
-            handoff.opacity,
-            handoff.visible_clip,
-            // new 侧**必须**用它自己的新资源：handoff 的 `source_rect` 是上一份
-            // 字形的裁剪片段，拿来画新 cluster 就是半个连字。old 侧相反 ——
-            // handoff 可能来自更早的 revision，那时这张行图才是唯一来源。
-            (!is_new_side).then(|| (handoff.snapshot_id, handoff.source_rect.clone())),
+    let (start_rect, start_opacity, start_visible, snapshot_id, source_rect) = match &handoff {
+        // old 侧：handoff 就是这一帧实际可见的 exact slice（见
+        // [`CurrentVisualCluster::source_rect`]），直接沿用，**不再裁一次**。
+        // handoff 可能来自更早的 revision，那时这张行图才是唯一来源。
+        //
+        // new 侧：handoff 的 `source_rect` 是上一份字形的裁剪片段，拿来画
+        // 新 cluster 就是半个连字 —— 必须用它自己的完整新资源。
+        //
+        // 评论 26 阻塞 2：这里不再有 `visible / rect.w` 的第二次裁剪。
+        Some(h) if !is_new_side => (
+            h.dest_rect.clone(),
+            h.opacity,
+            h.visible_clip,
+            h.snapshot_id,
+            h.source_rect.clone(),
+        ),
+        Some(h) => (
+            h.dest_rect.clone(),
+            h.opacity,
+            h.visible_clip,
+            line.id,
+            cluster_snapshot.source_rect.clone(),
         ),
         None => (
             rect.clone(),
             if is_new_side { 0.0 } else { 1.0 },
             rect.w,
-            None,
+            line.id,
+            cluster_snapshot.source_rect.clone(),
         ),
     };
-    let (snapshot_id, source_rect) =
-        texture.unwrap_or_else(|| (line.id, cluster_snapshot.source_rect.clone()));
     VisualClusterAtom {
         cluster,
-        handoff_key,
+        handoff_keys,
         snapshot_id,
         source_rect,
         rect,
@@ -754,39 +926,45 @@ fn atom_from_cluster(
 
 /// 找一条可用的 handoff 并标记消费。
 ///
-/// 优先精确匹配（视觉身份完全一致）；否则接受「一方完整包含另一方」的匹配，
-/// 这样 `af -> afi` 里那份还在淡出的 `f` 能被新 group 接管。
-fn take_handoff(
+/// 优先精确匹配（视觉身份完全一致），再以「一方完整包含另一方」作为兜底。
+/// 旧实现只在 old 侧用这个入口，但 old 侧也可能只剩一段 survivor（多段中的
+/// 一段），必须能被全部键找到。
+fn take_handoff_for_keys(
     current_visuals: &[CurrentVisualCluster],
     consumed: &mut HashSet<usize>,
-    key: (usize, usize),
-    exact: Option<(usize, usize)>,
+    keys: &[(usize, usize)],
 ) -> Option<CurrentVisualCluster> {
-    let mut fallback: Option<usize> = None;
+    // 第一遍：精确匹配。
     for (index, visual) in current_visuals.iter().enumerate() {
         if consumed.contains(&index) {
             continue;
         }
-        if let Some(exact) = exact {
-            if visual.logical_range == exact {
-                consumed.insert(index);
-                return Some(visual.clone());
-            }
-        }
-        if visual.logical_range == key || containment_overlap(visual.logical_range, key) {
-            fallback.get_or_insert(index);
+        if keys.iter().any(|&key| visual.logical_range == key) {
+            consumed.insert(index);
+            return Some(visual.clone());
         }
     }
-    let index = fallback?;
-    consumed.insert(index);
-    Some(current_visuals[index].clone())
+    // 第二遍：包含重叠兜底（宽 cluster 命中窄段 survivor）。
+    for (index, visual) in current_visuals.iter().enumerate() {
+        if consumed.contains(&index) {
+            continue;
+        }
+        if keys
+            .iter()
+            .any(|&key| containment_overlap(visual.logical_range, key))
+        {
+            consumed.insert(index);
+            return Some(visual.clone());
+        }
+    }
+    None
 }
 
 /// 取一条**字节身份完全一致**的 handoff 并标记消费。
 ///
-/// 与 [`take_handoff`] 的区别是不接受「一方包含另一方」的宽松匹配。宽松匹配
-/// 只能用于 old 侧（那块 cluster 确实就是屏幕上的那一块），new 侧一旦用宽松
-/// 匹配就会抢走别人的像素：它必须从 canonical 起步再淡入。
+/// 与 [`take_handoff_for_keys`] 的区别是不接受「一方包含另一方」的宽松匹配。
+/// 宽松匹配只能用于 old 侧（那块 cluster 确实就是屏幕上的那一块），new 侧一旦
+/// 用宽松匹配就会抢走别人的像素：它必须从 canonical 起步再淡入。
 fn take_exact_handoff(
     current_visuals: &[CurrentVisualCluster],
     consumed: &mut HashSet<usize>,
@@ -852,19 +1030,24 @@ impl<'a> ClusterIndex<'a> {
         (entry.cluster.byte_start, entry.cluster.byte_end)
     }
 
-    /// 包含 `byte` 的 cluster 节点。cluster 互不重叠且按 byte_start 有序。
-    fn node_at_byte(&self, byte: usize) -> Option<usize> {
-        let position = self.sorted.partition_point(|&(start, _)| start <= byte);
-        if position == 0 {
-            return None;
+    /// 与 `[lo, hi)` 相交的 cluster 节点（按字节序）。
+    ///
+    /// Issue #826 评论 26 阻塞 4：替代逐 byte 的 `node_at_byte`。
+    /// cluster 互不重叠且按 byte_start 有序，二分找到第一个 `start < hi` 的
+    /// 位置，再回退扫描直到 `start >= hi`。
+    fn nodes_overlapping_interval(&self, lo: usize, hi: usize) -> Vec<usize> {
+        if lo >= hi {
+            return Vec::new();
         }
-        let node = self.sorted[position - 1].1;
-        let (start, end) = self.cluster_range(node);
-        if start <= byte && byte < end {
-            Some(node)
-        } else {
-            None
-        }
+        let first = self.sorted.partition_point(|&(start, _)| start < hi);
+        self.sorted[..first]
+            .iter()
+            .map(|&(_, node)| node)
+            .filter(|&node| {
+                let (start, end) = self.cluster_range(node);
+                lo < end && start < hi
+            })
+            .collect()
     }
 }
 
@@ -943,38 +1126,65 @@ impl Component {
     }
 }
 
-/// 用 `OffsetMap` 里那些**没被改动**的字节身份，把 old / new cluster 连成连通分量。
+/// 用 `OffsetMap` 里那些**没被改动**的字节身份，把 old / new cluster
+/// 连成连通分量。
 ///
-/// 每个 entry 是一段没被改动的静态文本，逐字节把「含这个字节的 old cluster」与
-/// 「含映射后字节的 new cluster」union 起来 —— 同一段文字因此必然落在同一分量里。
-/// 顺带记下这些「共享身份」的 old/new 配对，`needs_transition` 用它比对
-/// `shaping_identity`。
+/// Issue #826 评论 26 阻塞 4：**不逐 UTF-8 byte 扫**。
+///
+/// 每个 mapping entry 是一段没被改动的静态文本，`length` 是 UTF-8 bytes；
+/// `from_single_edit()` 会生成覆盖整章的 prefix + suffix，逐 byte 扫会把输入
+/// 热路径做成 O(正文长度)，而且每个 byte 还做两次二分。
+///
+/// 现在按 interval sweep：entries 按 `old_byte_offset` 排序，对每个 old cluster
+/// 二分找到第一个可能相交的 entry，求 unchanged 交集 `[lo, hi)`，用 entry 的
+/// 固定 delta 映成 new `[lo+delta, hi+delta)`，与这个 mapped interval 相交的
+/// new cluster 做 union 并记下身份配对。复杂度跟「本次 snapshot 的 cluster 数
+/// + map entry 数 + 实际 overlap 数」走。
 fn collect_components(
     old_side: &ClusterIndex<'_>,
     new_side: &ClusterIndex<'_>,
     old_to_new: &OffsetMap,
 ) -> (Vec<Component>, Vec<(usize, usize)>) {
-    let total = old_side.entries.len() + new_side.entries.len();
+    let old_len = old_side.entries.len();
+    let total = old_len + new_side.entries.len();
     let mut parent: Vec<usize> = (0..total).collect();
     let mut identity_pairs: HashSet<(usize, usize)> = HashSet::new();
 
-    for entry in &old_to_new.entries {
-        for offset in 0..entry.length {
-            let Some(old_node) = old_side.node_at_byte(entry.old_byte_offset.value() + offset)
-            else {
+    let mut entries: Vec<&OffsetMapEntry> = old_to_new.entries.iter().collect();
+    entries.sort_by_key(|entry| entry.old_byte_offset.value());
+
+    let mut probes: usize = 0;
+    for old_node in 0..old_len {
+        let (start, end) = old_side.cluster_range(old_node);
+        // entries 按 old_byte_offset 排序；第一个 `old_end > start` 的才可能相交。
+        let first =
+            entries.partition_point(|entry| entry.old_byte_offset.value() + entry.length <= start);
+        for entry in &entries[first..] {
+            let entry_start = entry.old_byte_offset.value();
+            if entry_start >= end {
+                break;
+            }
+            probes += 1;
+            let entry_end = entry_start + entry.length;
+            let lo = start.max(entry_start);
+            let hi = end.min(entry_end);
+            if lo >= hi {
                 continue;
-            };
-            let new_byte = entry.new_byte_offset.value() + offset;
-            let Some(new_node) = new_side.node_at_byte(new_byte) else {
-                continue;
-            };
-            // union-find 用「old 侧下标 + old 侧长度」作为 new 侧下标；
-            // `identity_pairs` 与 `Component` 一律用**各自侧的局部下标**，
-            // 否则 `needs_transition` 里的 `contains` 永远不成立。
-            union(&mut parent, old_node, new_node + old_side.entries.len());
-            identity_pairs.insert((old_node, new_node));
+            }
+            let delta = entry.new_byte_offset.value() as isize - entry_start as isize;
+            let new_lo = (lo as isize + delta) as usize;
+            let new_hi = (hi as isize + delta) as usize;
+            for new_node in new_side.nodes_overlapping_interval(new_lo, new_hi) {
+                // union-find 用「old 侧下标 + old 侧长度」作为 new 侧下标；
+                // `identity_pairs` 与 `Component` 一律用**各自侧的局部下标**，
+                // 否则 `needs_transition` 里的 `contains` 永远不成立。
+                union(&mut parent, old_node, new_node + old_len);
+                identity_pairs.insert((old_node, new_node));
+            }
         }
     }
+    #[cfg(test)]
+    test_helpers::note_component_probes(probes);
 
     let mut buckets: HashMap<usize, Component> = HashMap::new();
     for node in 0..total {
@@ -983,10 +1193,10 @@ fn collect_components(
             old_nodes: Vec::new(),
             new_nodes: Vec::new(),
         });
-        if node < old_side.entries.len() {
+        if node < old_len {
             bucket.old_nodes.push(node);
         } else {
-            bucket.new_nodes.push(node - old_side.entries.len());
+            bucket.new_nodes.push(node - old_len);
         }
     }
     let mut components: Vec<Component> = buckets
@@ -1097,6 +1307,29 @@ fn union_rect<'a>(rects: impl Iterator<Item = &'a SourceRect>) -> Option<SourceR
         });
     }
     acc
+}
+
+/// Issue #826 评论 26 阻塞 4 的结构回归计数器。
+///
+/// 只在测试里编译。`collect_components` 每次调用把本线程累计的区间探测次数
+/// 累加进来，测试用 [`take_component_probe_count`] 取走并清零 —— 断言它与
+/// snapshot 的 cluster 数同量级，而不是跑满 `OffsetMapEntry.length`。
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use std::cell::Cell;
+
+    thread_local! {
+        static COMPONENT_PROBE_COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn note_component_probes(count: usize) {
+        COMPONENT_PROBE_COUNT.with(|cell| cell.set(cell.get() + count));
+    }
+
+    /// 取走并清零自上次调用以来的区间探测量。
+    pub(crate) fn take_component_probe_count() -> usize {
+        COMPONENT_PROBE_COUNT.with(|cell| cell.replace(0))
+    }
 }
 
 #[cfg(test)]

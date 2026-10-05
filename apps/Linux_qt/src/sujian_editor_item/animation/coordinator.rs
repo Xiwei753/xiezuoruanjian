@@ -28,7 +28,7 @@ use crate::sujian_editor_item::animation::edit_frontier::{
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
 use crate::sujian_editor_item::animation::shaping_transition::{
-    CurrentVisualCluster, ShapingTransitionFrame, ShapingTransitionState,
+    visible_source_slice, CurrentVisualCluster, ShapingTransitionFrame, ShapingTransitionState,
 };
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
@@ -385,7 +385,12 @@ impl LinuxEditorAnimationCoordinator {
                 out.push(CurrentVisualCluster {
                     logical_range: reveal.range,
                     snapshot_id: reveal.snapshot_id,
-                    source_rect: reveal.source_rect,
+                    // Issue #826 评论 26 阻塞 2：语义统一成 exact slice。
+                    source_rect: visible_source_slice(
+                        &reveal.source_rect,
+                        reveal.rect.w,
+                        reveal.visible_width,
+                    ),
                     dest_rect: reveal.rect,
                     // 吐字遮罩只裁可见宽度，屏幕上的实际不透明度仍是 1。
                     opacity: 1.0,
