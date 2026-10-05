@@ -4,12 +4,12 @@
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：正文列底部一条只读状态带，三段布局
-//   左：当前章节字数   中：写作进度   右：时间 + 保存状态
+//   左：写作速度「86 字/分」   中：写作进度   右：时间 + 保存状态
 //
 // 手稿基准（docs/ui/reference/widescreen/宽屏全打开.png、左右缩回.png）：
 //   底部一行横贯「章节树右缘 ~ 工具面板左缘」，也就是只属于 Editor 这一列——
 //   章节树、右侧工具面板、最右工具 rail 都不参与这条带子。
-//   硬约束 6：这一行只放字数 / 进度 / 时间 / 保存状态，不承担任何页面导航。
+//   硬约束 6：这一行只放状态信息（速度 / 进度 / 时间 / 保存状态），不承担任何页面导航。
 //
 // 边界：本组件是纯展示件，不查后端、不持有业务状态。
 // 所有数值由 WritingWorkspace 注入（那边才是持有 Core 数据的地方），
@@ -25,8 +25,10 @@ Rectangle {
     required property var dt
 
     // ── 注入的状态数据（全部由 WritingWorkspace 提供）──
-    // 当前章节字数：Core 的 calculate_word_count 语义（非空白字符）。
-    property int chapterWordCount: 0
+    // 左段：Core 写作速度曲线最后一个桶的 charsPerMinute（分钟级速度）。
+    // 手稿的「86 字/分」是"最近一分钟写了多少字"，不是本章字数；
+    // 也不用"字数 / 时长"自己除——Core 的会话/空闲口径才作数。
+    property int charsPerMinute: 0
     // 进度分子：Core 写作统计里的今日纯输入字数（get_writing_stats_summary）。
     property int progressCurrent: 0
     // 进度分母：手稿上的「/ 2,000」。
@@ -64,10 +66,10 @@ Rectangle {
         anchors.rightMargin: root.dt.sp16
         spacing: root.dt.sp12
 
-        // ── 左：当前章节字数 ──
+        // ── 左：写作速度 ──
         AppText {
             dt: root.dt
-            text: root.chapterWordCount + " " + qsTr("字")
+            text: root.charsPerMinute + " " + qsTr("字/分")
             color: root.dt.textSecondary
             font.pointSize: root.dt.captionPt
             font.family: root.dt.fontFamily

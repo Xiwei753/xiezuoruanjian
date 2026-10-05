@@ -311,15 +311,18 @@ Rectangle {
         return editorController.flushActiveEditorBeforeSync();
     }
 
-    // ── Issue #829：写作页底部状态栏的数据（纯 UI 侧派生，不进 Core）──
-    // 左段：当前章节字数。Core 的 calculate_word_count 结果由 EditorController
-    // 通过 editorBackendRef.word_count 落在这里，状态栏不自己再扫一遍正文。
-    readonly property int chapterWordCount: root.editorBackendRef
-        ? root.editorBackendRef.word_count
-        : 0
-    // 中段：今日纯输入字数（Core 写作统计 summary 的 total_human_typed_chars）。
-    // 每次保存 / 切章后重拉一次，不做逐键刷新——统计是按 Core 的 writing event
-    // 落盘的，编辑器每敲一个字去查一次只会拿到同一个值。
+    // Issue #829：手稿「86 字/分」是最近一分钟的写入速度，按 1 分钟分桶查
+    // Core 的速度曲线并取最后一个桶。速度由 Core 算，端侧不自己拿"字数 / 时长"除。
+    readonly property int statusSpeedBucketMinutes: 1
+
+    // ── Issue #829：写作页底部状态栏的数据 ──
+    // 全部取自 Core 的写作统计，不在端侧自己算，也不用章节字数顶替：
+    //   左段 = 速度曲线最后一个桶的 charsPerMinute（手稿「86 字/分」是
+    //           "最近一分钟写了多少字"，不是本章累计字数）；
+    //   中段 = 今日纯输入字数 summary.total_human_typed_chars。
+    // 统计按 Core 的 writing event 落盘，所以只在打开 / 切章 / 定时器到点时重拉，
+    // 不做逐键刷新——每敲一个字去查一次只会拿到同一个值。
+    readonly property int latestCharsPerMinute: 0
     property int todayTypedChars: 0
     // 右段：HH:mm。定时器只做格式化，不碰任何业务状态。
     property string clockText: ""
@@ -327,7 +330,10 @@ Rectangle {
         interval: 30000
         repeat: true
         running: true
-        onTriggered: root.updateClockText()
+        onTriggered: {
+            root.updateClockText()
+            root.refreshWritingStatusData()
+        }
     }
 
     function updateClockText() {
@@ -342,27 +348,42 @@ Rectangle {
     // 免得「未保存」这种正常中间态被画成红色。
     readonly property bool saveStatusIsError: /失败|error|failed/i.test(editorController.saveStatus || "")
 
-    // 今日纯输入字数。Core 拿不到就保持 0，不显示半截数据。
-    function refreshTodayTypedChars() {
-        var be = root.editorBackendRef
-        if (!be) {
-            root.todayTypedChars = 0
-            return
-        }
+    // 今天的日期（本地时区），Core 写作统计按 YYYY-MM-DD 字符串取区间。
+    function todayDateString() {
         var now = new Date()
-        var td = now.getFullYear() + "-"
+        return now.getFullYear() + "-"
             + ("0" + (now.getMonth() + 1)).slice(-2) + "-"
             + ("0" + now.getDate()).slice(-2)
+    }
+
+    // 一次性刷新状态栏的左段（速度）和中段（今日进度）。
+    // 两段用同一个「今天」区间查，保证状态栏和统计页口径一致。
+    // 查询失败保持上一次的值，不清零——Core 拿不到不是"今天写了 0 字"。
+    function refreshWritingStatusData() {
+        var be = root.editorBackendRef
+        if (!be) return
+        var today = root.todayDateString()
+
+        var curve
+        try {
+            curve = JSON.parse(be.get_writing_speed_curve(today, today, root.statusSpeedBucketMinutes))
+        } catch (e) {
+            curve = null
+        }
+        if (curve && curve.success && curve.data && curve.data.buckets
+            && curve.data.buckets.length > 0) {
+            var last = curve.data.buckets[curve.data.buckets.length - 1]
+            root.latestCharsPerMinute = Math.round(last.chars_per_minute || 0)
+        }
+
         var summary
         try {
-            summary = JSON.parse(be.get_writing_stats_summary(td, td))
+            summary = JSON.parse(be.get_writing_stats_summary(today, today))
         } catch (e) {
             summary = null
         }
         if (summary && summary.success && summary.data) {
             root.todayTypedChars = summary.data.total_human_typed_chars || 0
-        } else {
-            root.todayTypedChars = 0
         }
     }
 
@@ -463,6 +484,8 @@ Rectangle {
 
         // Issue #829：启动时先起状态栏的时钟。
         root.updateClockText()
+        // Issue #829：状态栏左段（写作速度）也来自 Core 统计，起步就拉一次。
+        root.refreshWritingStatusData()
 
         var sel = (root.appState && root.appState.selected)
                 ? root.appState.selected : null
@@ -483,8 +506,8 @@ Rectangle {
         root.requestEditorFocus()
         // Issue #762 评论 5826175490 第 3 点：打开作品时立即刷新冲突，不等同步结束
         root.refreshConflictList()
-        // Issue #829：打开作品后拉一次今日统计，供底部状态栏中段显示。
-        root.refreshTodayTypedChars()
+        // Issue #829：打开作品后拉一次今日统计，供底部状态栏显示。
+        root.refreshWritingStatusData()
     }
 
     function openChapter(pId, vId, cId, cTitle) {
@@ -519,7 +542,7 @@ Rectangle {
             root.requestEditorFocus();
             // Issue #829：切章后重拉今日统计（统计按 writing event 落盘，
             // 切章是天然的刷新点，不必逐键去查）。
-            root.refreshTodayTypedChars();
+            root.refreshWritingStatusData();
         }
     }
 
@@ -1525,7 +1548,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: implicitHeight
                     dt: root.dt
-                    chapterWordCount: root.chapterWordCount
+                    charsPerMinute: root.latestCharsPerMinute
                     progressCurrent: root.todayTypedChars
                     clockText: root.clockText
                     saveStatus: editorController.saveStatus
