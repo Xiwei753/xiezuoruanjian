@@ -39,9 +39,25 @@ use crate::app_service::WriterAppService;
 ///
 /// ## 线程安全
 ///
-/// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
-/// 非递归锁：不得在 `with_app_service` 闭包中再次调用 `with_app_service`。
-static APP_SERVICE: OnceLock<Mutex<Arc<WriterAppService>>> = OnceLock::new();
+/// 只用 `OnceLock` 保证只初始化一次，**不再用一把全局 `Mutex` 把所有 FFI 串行化**
+/// （Issue #829 评论 #5996577737 第 1 项）。
+///
+/// 之前这里是 `OnceLock<Mutex<Arc<WriterAppService>>>`，`with_app_service` 要先拿锁
+/// 再执行整个业务闭包、闭包返回后才释放。于是任何一次耗时调用都会把所有其他 FFI
+/// 调用一起堵住：写作统计上报已经放进 Node-API async work 的线程池，但那条链最终
+/// 还是 `with_app_service()`，于是 `record_event -> aggregate_single_event ->
+/// read/write/rename` 全程持着这把外层锁；而编辑热路径
+/// （`writer_core_editor_session_insert/delete/commit_text`）仍是 ArkUI 线程上的同步
+/// NAPI，下一次按键就会在这把锁上排队 —— 磁盘 I/O 只是从主线程挪到了线程池，
+/// 并没有真正离开输入链路。
+///
+/// 并发安全由内部锁负责，职责分层如下：
+/// - `WriterAppService` 自身：`session_registry: Mutex<_>`、`network_state: Mutex<_>`
+/// - `WriterCoreApi` 内部：`RwLock<WriterCore>`（写操作走写锁）
+///
+/// 即业务并发控制下沉到真正共享的那份状态上，全局 holder 只负责「初始化一次 +
+/// 共享所有权」。
+static APP_SERVICE: OnceLock<Arc<WriterAppService>> = OnceLock::new();
 
 /// 全局最近一次错误信息，供 `writer_core_get_last_error` 读取。
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
@@ -55,26 +71,29 @@ fn set_last_error(msg: &str) {
     }
 }
 
-/// 获取全局 `WriterAppService` 单例的互斥锁并执行闭包。
+/// 在全局 `WriterAppService` 单例上执行闭包。
 ///
 /// ## 线程安全
 ///
-/// `APP_SERVICE` 是全局 `OnceLock<Mutex<WriterAppService>>`。同一时刻只有一个线程可以访问。
-/// 调用方不得在闭包中再次调用 `with_app_service`（非递归锁，会死锁）。
+/// `APP_SERVICE` 是全局 `OnceLock<Arc<WriterAppService>>`，**这里不加全局锁**
+/// （Issue #829 评论 #5996577737 第 1 项）：并发由 `WriterAppService` 内部
+/// （`session_registry` / `network_state` 的 `Mutex`）与 `WriterCoreApi` 的
+/// `RwLock<WriterCore>` 负责，闭包只拿不可变引用，可以多线程并发跑。
+///
+/// 代价：闭包里如果自己再取一个内部 `Mutex` 锁并阻塞很久（比如同步做磁盘 I/O），
+/// 那些要拿同一把锁的调用方会被拖住。所以耗时操作应该放线程池的 async work 里
+/// （NAPI 侧已经这样做了），不要在持有内部锁时做慢 I/O。
 ///
 /// ## 所有权
 ///
-/// 闭包只获得 `&WriterAppService` 不可变引用。所有修改操作通过内部可变性
-/// （`session_registry` 内部的 `Mutex` 等）实现，不违反只读约束。
+/// 闭包只获得 `&WriterAppService` 不可变引用。所有修改操作通过内部可变性实现，
+/// 不违反只读约束。
 pub(crate) fn with_app_service<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&WriterAppService) -> Result<R, String>,
 {
-    let guard = APP_SERVICE
-        .get()
-        .and_then(|m| m.lock().ok())
-        .ok_or("app service not initialized")?;
-    f(&guard)
+    let service = APP_SERVICE.get().ok_or("app service not initialized")?;
+    f(service.as_ref())
 }
 
 /// load-then-patch：把入参里出现的顶层键覆盖到当前 DTO 上，再反序列化回同一个
@@ -190,14 +209,13 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
                 return -4;
             }
         };
-    APP_SERVICE.get_or_init(|| Mutex::new(app_service));
+    APP_SERVICE.get_or_init(|| app_service);
     0
 }
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
-/// Thread-safe: acquires the global Mutex; must not be called from a thread
-/// already holding the Mutex (non-recursive lock, will deadlock).
+/// Thread-safe: only touches the dedicated `LAST_ERROR` mutex.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_last_error() -> *mut c_char {
     let msg = LAST_ERROR
@@ -221,9 +239,9 @@ pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
 
 /// # Safety
 /// `text` must be a valid null-terminated UTF-8 C string.
-/// Thread-safe: acquires the global Mutex; must not be called from a thread
-/// already holding the Mutex (non-recursive lock, will deadlock).
-/// Returns word count on success, -2 on invalid UTF-8, -3 on mutex error.
+/// Thread-safe: reads the shared `WriterAppService`; no global lock is taken.
+/// Returns word count on success, -2 on invalid UTF-8, -3 when the service is
+/// not initialized.
 #[no_mangle]
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
@@ -257,8 +275,7 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
 }
 
 /// # Safety
-/// Thread-safe: acquires the global Mutex; must not be called from a thread
-/// already holding the Mutex (non-recursive lock, will deadlock).
+/// Thread-safe: reads the shared `WriterAppService`; no global lock is taken.
 /// Returns 1 if AI is available, 0 if unavailable or on error.
 #[no_mangle]
 // TODO(#597): 既有代码可读性技术债，待后续重构拆分
@@ -276,4 +293,97 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
 )]
 pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
     with_app_service(|svc| Ok(svc.ai_available() as i32)).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tempfile::{tempdir, TempDir};
+
+    /// 临时目录要活到进程结束：全局 Core 仍引用它，提前删会让后续 FFI 测试读到空目录。
+    static TEST_TEMP_DIR: OnceLock<Mutex<Option<TempDir>>> = OnceLock::new();
+
+    fn ensure_core_init() {
+        TEST_TEMP_DIR.get_or_init(|| Mutex::new(None));
+        if APP_SERVICE.get().is_some() {
+            return;
+        }
+        let dir = tempdir().expect("无法创建临时目录");
+        let path = CString::new(dir.path().to_str().unwrap()).unwrap();
+        // SAFETY: path 是有效的 NUL-terminated UTF-8 C string。
+        let rc = unsafe { writer_core_init(path.as_ptr()) };
+        assert_eq!(rc, 0, "writer_core_init 失败");
+        if let Ok(mut slot) = TEST_TEMP_DIR.get().unwrap().lock() {
+            *slot = Some(dir);
+        }
+    }
+
+    /// Issue #829 评论 #5996577737 第 1 项的回归测试。
+    ///
+    /// 之前 `APP_SERVICE` 是 `OnceLock<Mutex<Arc<WriterAppService>>>`，`with_app_service`
+    /// 要先拿全局锁再执行整个业务闭包。于是写作统计上报那条慢链（`record_event` 要读
+    /// 当日统计 + write + rename）会一路持锁，把 ArkUI 线程上的编辑热路径
+    /// （`writer_core_editor_session_insert` 等同步 NAPI）一起堵住 —— 磁盘 I/O 只是从
+    /// 主线程挪到了线程池，并没有真正离开输入链路。
+    ///
+    /// 这里钉住「一个慢闭包不阻塞另一个闭包」：慢的那个在闭包里 sleep（模拟慢 I/O），
+    /// 快的那个必须能在它没结束前就返回。若哪天又加回全局锁，这个测试会超时失败。
+    #[test]
+    fn slow_call_does_not_block_other_app_service_calls() {
+        ensure_core_init();
+        let (tx_slow_done, rx_slow_done) = mpsc::channel::<()>();
+        let (tx_fast_done, rx_fast_done) = mpsc::channel::<bool>();
+
+        let slow = std::thread::spawn(move || {
+            with_app_service(|_| {
+                std::thread::sleep(Duration::from_millis(400));
+                Ok::<_, String>(())
+            })
+            .expect("慢闭包本身应成功");
+            tx_slow_done.send(()).expect("通知慢闭包结束");
+        });
+
+        let fast = std::thread::spawn(move || {
+            let v =
+                with_app_service(|svc| Ok::<_, String>(svc.ai_available())).expect("快闭包应成功");
+            tx_fast_done.send(v).expect("通知快闭包结束");
+        });
+
+        // 快的那次必须在慢的还在 sleep 时就返回。
+        rx_fast_done.recv_timeout(Duration::from_millis(200)).unwrap_or_else(|_| {
+            panic!(
+                "快闭包被慢闭包阻塞：说明 with_app_service 又变回了全局串行（Issue #829 评论 #5996577737 第 1 项）"
+            )
+        });
+
+        // 慢闭包最终也会正常结束（没有死锁）。
+        rx_slow_done
+            .recv_timeout(Duration::from_secs(5))
+            .expect("慢闭包应完成，不应死锁");
+        fast.join().expect("快线程应正常结束");
+        slow.join().expect("慢线程应正常结束");
+    }
+
+    /// 去掉全局 Mutex 后，多个 FFI 调用能并发跑进同一个 `WriterAppService`，
+    /// 并发安全由内部锁（`session_registry` / `RwLock<WriterCore>`）保证。
+    /// 这个测试确认并发调用不会 panic（不会撞上 Mutex 中毒 / 内部状态撕裂）。
+    #[test]
+    fn concurrent_app_service_calls_do_not_poison() {
+        ensure_core_init();
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..8 {
+                        let _ = with_app_service(|svc| Ok::<_, String>(svc.ai_available()))
+                            .expect("并发调用不应报错");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("并发线程应正常结束，不应 panic");
+        }
+    }
 }

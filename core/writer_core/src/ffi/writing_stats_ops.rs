@@ -51,7 +51,8 @@ pub unsafe extern "C" fn writer_core_get_writing_stats_summary(
     start_date: *const c_char,
     end_date: *const c_char,
 ) -> *mut c_char {
-    let (start, end) = match read_date_pair(start_date, end_date) {
+    // SAFETY: 上面的 # Safety 前置条件由 C 调用方保证（合法 NUL 结尾 UTF-8 字符串）。
+    let (start, end) = match unsafe { read_date_pair(start_date, end_date) } {
         Some(pair) => pair,
         None => {
             return err_json(
@@ -82,7 +83,8 @@ pub unsafe extern "C" fn writer_core_get_writing_speed_curve(
     end_date: *const c_char,
     bucket_minutes: u32,
 ) -> *mut c_char {
-    let (start, end) = match read_date_pair(start_date, end_date) {
+    // SAFETY: 上面的 # Safety 前置条件由 C 调用方保证（合法 NUL 结尾 UTF-8 字符串）。
+    let (start, end) = match unsafe { read_date_pair(start_date, end_date) } {
         Some(pair) => pair,
         None => {
             return err_json(

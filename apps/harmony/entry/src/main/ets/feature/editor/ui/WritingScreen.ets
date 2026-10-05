@@ -431,10 +431,11 @@ export struct WritingScreen {
   // 失败路径（保存失败 / closeAsync 失败 / 异常）统一 unseal 后返回 false，且失败前不 detach IME
   // ——这样页面可立即继续编辑，不需要“重新 attach IME”补救。
   // 返回 boolean：保存失败或 closeAsync 失败返回 false，不 pop；正文仍在活跃编辑会话。
-  // 有界等待写作统计队列排空。队列本身是串行的，这里只轮询 pendingCount；
-  // 正常路径上队列在编辑过程中早就排空了，这里只是兜底。
-  private async flushEditorStatsQueue(): Promise<boolean> {
-    return this.editorStatsQueue.flush()
+  // 等写作统计队列写完 barrier 及之前入队的那些事件（Issue #829 评论 #5996577737 第 2 项）。
+  // 传 barrier 而不是「等到队列全空」：保存期间用户还能继续输入，新事件不断入队，
+  // 全空在持续输入时理论上永远等不到，activeSave 会一直挂着把后面的保存全堵住。
+  private async flushEditorStatsQueue(barrier: number): Promise<boolean> {
+    return this.editorStatsQueue.flushThrough(barrier)
   }
 
   private async doGracefulClose(): Promise<boolean> {
@@ -463,12 +464,13 @@ export struct WritingScreen {
         this.dispatcher.unseal()
         return false
       }
-      // 6. Issue #829 评论 #5995146525 / #5996028848：等写作统计队列真正写完再离开。
-      //    编辑事务事件已经全部入队（步骤 3-4 之后不会有新的编辑命令再进来），
-      //    flush() 等的是「队列空且没有 in-flight」，不是「等一段时间」——
-      //    轮询 pendingCount 会在最后一条正在写盘时提前判定排空。
+      // 6. Issue #829 评论 #5995146525 / #5996028848 / #5996577737：等写作统计真正写完再离开。
+      //    dispatcher 已 seal、coordinator 已 whenIdle，所以此刻之后不会再有编辑事务入队，
+      //    取当前最后一个 seq 当 barrier 即可覆盖「本次会话的全部编辑」。
+      //    这里等的是真正的写完（drainPromise + 完成序号），不是轮询 pendingCount。
       //    统计没写进去不该拦住用户离开，所以失败只记日志不 return false。
-      const statsFlushed: boolean = await this.flushEditorStatsQueue()
+      const statsBarrier: number = this.editorStatsQueue.currentSeq()
+      const statsFlushed: boolean = await this.flushEditorStatsQueue(statsBarrier)
       if (!statsFlushed) {
         console.warn(`[WritingScreen] 写作统计未全部落盘（丢弃 ${this.editorStatsQueue.dropped()} 条）`)
       }
@@ -1296,6 +1298,10 @@ export struct WritingScreen {
     this.isSaving = true
     this.isAutoSaving = isAutoSave
     this.saveMessage = ''
+    // Issue #829 评论 #5996577737 第 2 项：在这份正文定型之前记下统计 barrier。
+    // targetText 是上面拿到的稳定快照，它包含的编辑事务都已经入队；
+    // 保存期间的新输入 seq 更大，与这次保存无关，不该拖住这次保存。
+    const statsBarrier: number = this.editorStatsQueue.currentSeq()
 
     try {
       // 只保存这份 targetText（不重新抓当前正文）
@@ -1328,10 +1334,14 @@ export struct WritingScreen {
         }
         this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => { this.saveMessage = '' }, 2000)
-        // Issue #829 评论 #5996028848：正文已经落盘，等编辑事务产生的统计事件也写完，
+        // Issue #829 评论 #5996028848：正文已经落盘，等这份正文对应的统计事件也写完，
         // 这样「磁盘上有正文」和「磁盘上有对应统计」是一致的 —— 崩溃时不会留下
-        // 有正文却缺统计的窗口。flush() 等的是真正写完，不是轮询一段时间。
-        await this.flushEditorStatsQueue()
+        // 有正文却缺统计的窗口。
+        // 评论 #5996577737 第 2 项：只等到 statsBarrier，不等之后的新输入。
+        const statsFlushed: boolean = await this.flushEditorStatsQueue(statsBarrier)
+        if (!statsFlushed) {
+          console.warn(`[WritingScreen] 本次保存对应的写作统计未全部落盘（丢弃 ${this.editorStatsQueue.dropped()} 条）`)
+        }
         // 保存成功后更新接续状态（contentHash 前进，此时 hasUnsavedChanges=false 带完整 selection/cursor）。
         this.updateContinuationState()
         return true
