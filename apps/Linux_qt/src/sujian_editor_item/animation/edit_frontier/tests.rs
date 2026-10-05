@@ -1396,3 +1396,349 @@ fn inserting_patch_before_existing_reveal_preserves_visible_owner() {
         "X 归 carry overlay 所有，前沿不得再遮罩它，实际 hidden = {hidden:?}"
     );
 }
+
+/// Issue #826 评论 21 BLOCKER 2：已完整露出的字不能被下一笔又遮回去。
+///
+/// 慢路径 retarget 之后 `reveal.travelled` 从 0 起。如果「已经完整露出、已经
+/// 交还给 canonical 的字」还留在 `reveal.regions` 里，第三笔快速输入到来时
+/// path 还没走到它 —— `visible_width = 0`，它既不进可见采样，也没有别的入口，
+/// 于是下一轮重建时它又被 `FrontierMask` 从头遮回去。视觉债回生。
+///
+/// 三笔：
+/// 1. `a` + `XY`（x 10..30）→ 80ms 时 X 全露、Y 露 7.5px；
+/// 2. 输入 Z 触发 rewrap → X 挪到 y=20、Y 挪到 y=20、Z 新增在 y=20；
+///    慢路径把 X 判为 settled（彻底退出 reveal.regions）、Y 判为 carried；
+/// 3. 立刻再输入 W —— X 绝不能重新进 mask。
+#[test]
+fn settled_reveal_does_not_get_masked_again_on_immediate_third_retarget() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+        )]),
+        String::from("aXY"),
+        vec![(1, 2), (2, 3)],
+        OffsetMap::from_single_edit(1, (1, 1), 2),
+        now,
+        160,
+    );
+
+    // 第二笔：插入 Z，同时 Qt 重排把 XY 挪到第二行。
+    let half = instant_at(now, 80);
+    let after_second = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            2,
+            20.0,
+            0,
+            vec![cluster(1, 2, 0.0), cluster(2, 3, 10.0), cluster(3, 4, 20.0)],
+        ),
+    ]);
+    state.extend_insert(
+        after_second.clone(),
+        String::from("aXYZ"),
+        vec![(3, 4)],
+        &OffsetMap::from_single_edit(3, (3, 3), 1),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // 机制断言：已完整露出的 X 必须**彻底退出** scalar reveal path，
+    // 否则它会重新吃 distance 并在第三笔被遮回去。
+    assert_eq!(
+        state.new_ranges(),
+        vec![(3, 4)],
+        "settled 的 X 与 carried 的 Y 都必须退出 reveal.regions，只剩真正还要遮罩的 Z"
+    );
+    assert_eq!(state.reveal_settled, vec![(1, 2)]);
+    assert_eq!(
+        state
+            .reveal_carried
+            .iter()
+            .map(|carried| carried.range)
+            .collect::<Vec<_>>(),
+        vec![(2, 3)]
+    );
+
+    // 第三笔：紧接同一个时刻再输入 W。
+    let after_third = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            2,
+            20.0,
+            0,
+            vec![
+                cluster(1, 2, 0.0),
+                cluster(2, 3, 10.0),
+                cluster(3, 4, 20.0),
+                cluster(4, 5, 30.0),
+            ],
+        ),
+    ]);
+    state.extend_insert(
+        after_third,
+        String::from("aXYZW"),
+        vec![(4, 5)],
+        &OffsetMap::from_single_edit(4, (4, 4), 1),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // 第三笔之后，scalar path 里不允许再出现 X（byte 1..2）或 Y（byte 2..3）。
+    assert!(
+        state
+            .reveal
+            .regions
+            .iter()
+            .all(|region| region.range.0 >= 3),
+        "X / Y 已退出前沿，第三笔的 scalar path 只能覆盖真正还要打开的 Z/W，实际 {:?}",
+        state
+            .reveal
+            .regions
+            .iter()
+            .map(|region| region.range)
+            .collect::<Vec<_>>()
+    );
+
+    // 屏幕上真正画的遮罩里也不能有 X 的新位置（y=20, x 0..10）与 Y 的新位置
+    // （y=20, x 10..20）—— 上一帧它们已经完整可见，不能被 FrontierMask 挖回去。
+    let hidden = state.hidden_new_text_rects(&state.sample(half));
+    for (x, label) in [(0.0, "X"), (10.0, "Y")] {
+        assert!(
+            !hidden
+                .iter()
+                .any(|rect| (rect.y - 20.0).abs() < 1e-9 && (rect.x - x).abs() < 1e-9),
+            "{label} 已经在屏幕上完整可见，第三笔不得用 FrontierMask 把它遮回去（x={x}），实际 hidden = {hidden:?}"
+        );
+    }
+}
+
+/// Issue #826 评论 21 BLOCKER 3：settled / carried 不能继续吃 scalar path 的 distance。
+///
+/// `hidden_new_text_rects` 虽然跳过它们，但 `FrontierLayer::advanced()` 仍按
+/// `total_length()` 推进。若 settled + carried 还留在 path 里，前沿要先空跑过
+/// 它们的长度，新输入的字在 160ms 动画的前三四十毫秒里完全不动 —— 与评论 19
+/// 删掉 Conceal 幽灵 path 是同一类问题，只是这次出现在 Reveal。
+///
+/// 同一构造下 scalar path 只能等于「还需要 FrontierMask 从 0 打开」的内容。
+#[test]
+fn settled_and_carried_ranges_do_not_consume_scalar_reveal_distance() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+        )]),
+        String::from("aXY"),
+        vec![(1, 2), (2, 3)],
+        OffsetMap::from_single_edit(1, (1, 1), 2),
+        now,
+        160,
+    );
+
+    let half = instant_at(now, 80);
+    let after_second = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            2,
+            20.0,
+            0,
+            vec![cluster(1, 2, 0.0), cluster(2, 3, 10.0), cluster(3, 4, 20.0)],
+        ),
+    ]);
+    state.extend_insert(
+        after_second,
+        String::from("aXYZ"),
+        vec![(3, 4)],
+        &OffsetMap::from_single_edit(3, (3, 3), 1),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // 只有 Z（10px）真正需要前沿打开。X 10px 已交还 canonical、Y 10px 由 carry
+    // 自己补间，两者都不该出现在 scalar path 的长度里。
+    assert!(
+        (state.reveal.total_length() - 10.0).abs() < 1e-9,
+        "scalar reveal path 只能覆盖还需要 FrontierMask 打开的 Z（10px），实际 {}px（若含 X+Y 应是 30px）",
+        state.reveal.total_length()
+    );
+
+    // 并且前沿必须真的从那段内容的最左端开始 —— 不是先空跑一段再开始。
+    let mid = state.sample(half);
+    let hidden = state.hidden_new_text_rects(&mid);
+    assert!(
+        hidden
+            .iter()
+            .any(|rect| (rect.y - 20.0).abs() < 1e-9 && (rect.x - 20.0).abs() < 1e-9),
+        "刚插入的 Z 第一帧必须完整 hidden（y=20, x 20..30），实际 hidden = {hidden:?}"
+    );
+}
+
+/// Issue #826 评论 21 结构偏差：**完整露出**的字进 settled，**部分露出**的才 carry。
+///
+/// 一次 rewrap 会把这一轮已经吐完的所有旧插入字全部挪位置。如果判据里带上
+/// 「位置有没有变」，就会给每一个已完整露出的字都造一个 `RevealCarriedPrefix` ——
+/// 一次 rewrap 50 个字就长出 50 个 carry，状态量又跟「历史已露出的字数」一起
+/// 膨胀，也就真的不满足「每条 region 最多一个边界 cluster carry」。
+///
+/// 完整露出的字位置真变了就交给 Reflow（`request.base_snapshot` 里就是它当前的
+/// 屏幕位置），只有前沿边界上那一个部分露出的 cluster 需要 carry。
+#[test]
+fn fully_visible_moved_clusters_are_released_to_reflow_not_carried() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![
+                cluster(0, 1, 0.0),
+                cluster(1, 2, 10.0),
+                cluster(2, 3, 20.0),
+                cluster(3, 4, 30.0),
+                cluster(4, 5, 40.0),
+            ],
+        )]),
+        String::from("aWXYZ"),
+        vec![(1, 2), (2, 3), (3, 4), (4, 5)],
+        OffsetMap::from_single_edit(1, (1, 1), 4),
+        now,
+        160,
+    );
+
+    // 80ms/160ms -> advance 35px，boundary 45：W/X/Y 全露，Z 只露 5px。
+    let half = instant_at(now, 80);
+    // 第二笔：插入 W2 并触发 rewrap —— W/X/Y/Z 全部挪到第二行且 x 前移。
+    let after_second = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            2,
+            20.0,
+            0,
+            vec![
+                cluster(1, 2, 0.0),
+                cluster(2, 3, 10.0),
+                cluster(3, 4, 20.0),
+                cluster(4, 5, 30.0),
+                cluster(5, 6, 40.0),
+            ],
+        ),
+    ]);
+    state.extend_insert(
+        after_second,
+        String::from("aXYZW2"),
+        vec![(5, 6)],
+        &OffsetMap::from_single_edit(5, (5, 5), 1),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    assert_eq!(
+        state.reveal_settled,
+        vec![(1, 2), (2, 3), (3, 4)],
+        "W/X/Y 虽然被 rewrap 挪了位置，但已完整露出 —— 应释放给 Reflow，而不是 carry"
+    );
+    assert_eq!(
+        state.reveal_carried.len(),
+        1,
+        "只有前沿边界上那个部分露出的 cluster 能 carry，实际 carry 了 {} 个（范围 {:?}）",
+        state.reveal_carried.len(),
+        state
+            .reveal_carried
+            .iter()
+            .map(|carried| carried.range)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(state.reveal_carried[0].range, (4, 5));
+    assert_eq!(state.new_ranges(), vec![(5, 6)]);
+    assert!(
+        (state.reveal.total_length() - 10.0).abs() < 1e-9,
+        "scalar path 只剩新插入的 W2，实际 {}px",
+        state.reveal.total_length()
+    );
+}
+
+/// Issue #826 评论 21：`reveal.regions` 整条为空但 carry 还在补间时，
+/// 前沿**不能**被判为已结束。
+///
+/// settled / carried 退出 scalar path 之后，可能出现 `reveal.regions` 为空
+/// 而 `reveal_carried` 非空的状态。此时 `reveal.is_advanced_done()` 恒为 true。
+/// 若 `is_finished` 只看它，`coordinator::tick` 会在 carry 走完之前把整轮
+/// 前沿丢掉 —— carry overlay 中途消失、X 从半吐直接变成完整（评论 20 修掉的
+/// 瞬移在真实渲染链里复活）。
+#[test]
+fn active_reveal_carry_keeps_burst_alive_when_scalar_path_is_empty() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 90.0)],
+        )]),
+        String::from("aX"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
+
+    // 80ms：X 露 8.75px / 10px，仍在吐。
+    let half = instant_at(now, 80);
+    assert!(
+        (state.reveal.advanced(state.sample(half).progress) - 8.75).abs() < 1e-6,
+        "半程时前沿应推进到 8.75px，实际 {}",
+        state.reveal.advanced(state.sample(half).progress)
+    );
+
+    // 触发行内重排：X 挪到 (0, 20)。本笔没有新插入文字，所以重排之后
+    // 「还需要 FrontierMask 打开」的内容为空 —— scalar path 整条为空，
+    // 唯一还归 Reveal 的就是那条 carry。
+    let rewrapped = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(2, 20.0, 0, vec![cluster(1, 2, 0.0)]),
+    ]);
+    state.extend_insert(
+        rewrapped,
+        String::from("aX"),
+        Vec::new(),
+        &OffsetMap::build("aX", "aX"),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    assert!(
+        state.reveal.regions.is_empty(),
+        "本笔没有新字要遮罩，scalar path 应为空，实际 {:?}",
+        state
+            .reveal
+            .regions
+            .iter()
+            .map(|region| region.range)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        state.reveal_carried.len(),
+        1,
+        "X 半吐且被挪走，必须由 carry 接管"
+    );
+
+    assert!(
+        !state.is_finished(half),
+        "carry 还在补间时整轮前沿不能结束（scalar path 已空，reveal.is_advanced_done 恒为 true）"
+    );
+    // 注意 retarget 把 `started_at` 重置成了 `half`，所以「走完」是 half + duration。
+    assert!(
+        state.is_finished(instant_at(half, 160)),
+        "动画走完后 carry 交回 canonical，整轮才结束"
+    );
+}

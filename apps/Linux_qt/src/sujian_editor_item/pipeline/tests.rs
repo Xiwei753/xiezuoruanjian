@@ -475,3 +475,178 @@ fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
          否则 renderer 的 get_line 会 miss，b 的 Conceal overlay 一像素都画不出来"
     );
 }
+
+/// Issue #826 评论 21 BLOCKER 1：carry 的贴图必须进纹理生命周期与准备链。
+///
+/// carry glyph 用的是**最新 target 行**的纹理，而那几行此时只有动画层在引用
+/// —— 静态正文层还没有栅格化到它们。如果 carry 的 snapshot_id 不进
+/// `collect_active_snapshot_ids`，`retain_active_snapshot_ids` 之后纹理可能被回收，
+/// `prepare_frontier_textures` 也不会补插。renderer 里
+/// `texture_cache.get_line(&glyph.snapshot_id)` 返回 None 就 `continue` 跳过 glyph，
+/// 同时 carry 的 canonical clip 因为 `ReflowTarget` 的纹理守卫也被过滤掉 ——
+/// 结果是「carry 不画 + canonical 不挖」，评论 20 修的旧行半个 X 直接整块跳到新行。
+#[test]
+fn reveal_carry_target_texture_is_retained_and_prepared() {
+    use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
+    use crate::sujian_editor_item::animation::coordinator::{
+        EditFrontierRequest, LinuxEditorAnimationCoordinator,
+    };
+    use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
+    use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
+    use crate::sujian_editor_item::layout_snapshot::{
+        EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity,
+        SourceRect,
+    };
+    use crate::sujian_editor_item::qt_text_node::StaticClipKind;
+    use std::time::{Duration, Instant};
+
+    // carry 那一行的 id —— 断言全部围绕它。
+    let carry_line_id = LineSnapshotId::new(0, 0, 42);
+
+    let cluster = |start: usize, end: usize, x: f64| LineClusterSnapshot {
+        byte_start: start,
+        byte_end: end,
+        source_rect: SourceRect {
+            x,
+            y: 0.0,
+            w: 10.0,
+            h: 20.0,
+        },
+        shaping_identity: ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: String::from("test-font"),
+            glyph_indexes_hash: 1,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 1,
+        },
+    };
+    let two_lines = |top_line: PreparedLineSnapshot, second: PreparedLineSnapshot| {
+        EditorLayoutSnapshot::new(
+            LayoutSnapshot::empty_for_tests(),
+            vec![top_line, second],
+            None,
+            None,
+            CaretAffinity::Downstream,
+        )
+    };
+
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // ── 第一笔：输入 X，正文 `a` -> `aX`，X 的文档矩形是 (90, 0, 10, 20) ──
+    // 同一行里放一个 x=0 的 cluster 把 `visual_x` 钉在 0（`stub_for_tests`
+    // 用 cluster 最小 source x 当 visual_x），X 的文档 x 才是 90。
+    let first_target = EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 90.0)],
+        )],
+        None,
+        None,
+        CaretAffinity::Downstream,
+    );
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: snapshot_for_test(LineSnapshotId::new(0, 0, 0), 0.0, 1),
+        target_snapshot: first_target.clone(),
+        inserted_ranges: vec![(1, 2)],
+        deleted_ranges: Vec::new(),
+        offset_map: writer_core::editor::OffsetMap::from_single_edit(1, (1, 1), 1),
+        base_text: String::from("a"),
+        target_text: String::from("aX"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    // ── 第二笔：输入 Y，Qt 重排把 X 挪到第二行 → X 进入 reveal_carried ──
+    // carry 的 snapshot_id 取自**这次 target_snapshot**，所以真实 QImage 必须挂
+    // 在 X 所在的那一行上，`prepare_frontier_textures` 才插得进来。
+    let image = qmetaobject::QImage::new(
+        qmetaobject::QSize {
+            width: 2,
+            height: 1,
+        },
+        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+    );
+    let second_target = two_lines(
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            carry_line_id.visual_line_ordinal as usize,
+            20.0,
+            1,
+            vec![cluster(1, 2, 0.0), cluster(2, 3, 10.0)],
+        )
+        .with_test_image(image),
+    );
+    let mid = now + Duration::from_millis(80);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: first_target,
+        target_snapshot: second_target,
+        inserted_ranges: vec![(2, 3)],
+        deleted_ranges: Vec::new(),
+        offset_map: writer_core::editor::OffsetMap::from_single_edit(2, (2, 2), 1),
+        base_text: String::from("aX"),
+        target_text: String::from("aXY"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    });
+
+    let carry_ids = coord.active_reveal_carried_snapshot_ids();
+    assert!(
+        carry_ids.contains(&carry_line_id),
+        "X 此刻应处于 reveal carry（半吐后被 rewrap 挪走），实际 carry ids = {carry_ids:?}"
+    );
+    assert!(
+        coord.collect_active_snapshot_ids().contains(&carry_line_id),
+        "carry 的 snapshot_id 必须进 collect_active_snapshot_ids，否则 retain 会把它回收"
+    );
+
+    // ── 走真实管线：retain 之后再 prepare ──
+    let mut pipeline = LinuxEditorPipeline::new();
+    pipeline.animation_coordinator = coord;
+    let active = pipeline.animation_coordinator.collect_active_snapshot_ids();
+    pipeline
+        .texture_cache_mut()
+        .retain_active_snapshot_ids(&active);
+    pipeline.prepare_frontier_textures();
+
+    assert!(
+        pipeline.texture_cache().contains_line(&carry_line_id),
+        "prepare_frontier_textures 必须把 carry 目标行的行图插进 TextureCache，\
+         否则 renderer 的 get_line miss，carry glyph 一像素都画不出来"
+    );
+
+    // carry 的 canonical clip 必须能活过 renderer 的纹理守卫。
+    let sample = pipeline
+        .animation_coordinator
+        .sample_edit_frontier(mid)
+        .expect("carry 在跑时前沿必须还是活跃的");
+    let clips = pipeline
+        .animation_coordinator
+        .reveal_carried_target_clip_rects(&sample);
+    assert!(
+        !clips.is_empty(),
+        "carry 的 canonical 目标位置必须产出 clip，否则静态层会同时画一份（重影）"
+    );
+    for clip in &clips {
+        assert_eq!(
+            clip.kind,
+            StaticClipKind::ReflowTarget,
+            "carry overlay 真的要用那张纹理，必须用 ReflowTarget：只有它带纹理守卫，\
+             纹理 miss 时会恢复 canonical；FrontierMask 会留下永久空洞"
+        );
+        assert!(
+            clip.requires_animation_texture(),
+            "ReflowTarget 必须参与纹理可用性过滤"
+        );
+        assert!(
+            pipeline.texture_cache().contains_line(&clip.snapshot_id),
+            "纹理已就绪，renderer 就不会把这个 clip 过滤掉"
+        );
+    }
+}

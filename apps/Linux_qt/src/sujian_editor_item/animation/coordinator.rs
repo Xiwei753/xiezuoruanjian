@@ -666,7 +666,34 @@ impl LinuxEditorAnimationCoordinator {
                 push(span.snapshot_id, &mut ids, &mut seen);
             }
         }
+        // Issue #826 评论 21 阻塞 1：吐字 carry 的目标行纹理也要保活。
+        //
+        // 纯 Insert rewrap 场景（X 半吐 -> 输入 Y）里 `Conceal ids = []`、Reflow 也
+        // 没有 X 的 span（X 未吐完，仍被 pending Reveal 排除出 Reflow），所以这
+        // 个 id 在这里之前根本没人登记。retain 之后纹理可能已被回收，
+        // `prepare_frontier_textures` 也不会插回去 —— renderer 里 carry glyph 被
+        // 直接跳过，而它的 `ReflowTarget` clip 又因纹理 miss 被过滤，
+        // 「旧行半个 X -> 新行完整 X」的瞬移就在真实渲染链里复活了。
+        //
+        // 不加 `needs_old_overlay()` 判断：纯 Insert 也需要它。
+        if let Some(frontier) = self.active_edit_frontier.as_ref() {
+            for id in frontier.active_reveal_carried_snapshot_ids() {
+                push(id, &mut ids, &mut seen);
+            }
+        }
         ids
+    }
+
+    /// Issue #826 评论 21 阻塞 1：吐字 carry 真正引用的最新 target 行纹理 id。
+    ///
+    /// 生命周期（`collect_active_snapshot_ids`）负责别删；资源由 pipeline 的
+    /// `prepare_frontier_textures` 从 `active_edit_frontier_target_snapshot()` 里
+    /// 缺失时重新插入。两件事分开，不能靠其中一件顺带完成另一件。
+    pub(crate) fn active_reveal_carried_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        self.active_edit_frontier
+            .as_ref()
+            .map(|f| f.active_reveal_carried_snapshot_ids())
+            .unwrap_or_default()
     }
 
     /// Issue #826 评论 4 问题 3：Reflow 接管期间要从静态正文层挖掉的 canonical 目标位置。

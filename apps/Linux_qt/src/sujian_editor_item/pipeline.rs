@@ -1180,7 +1180,34 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 3. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
+        // 3. Issue #826 评论 21 阻塞 1：吐字 carry 的目标行纹理。
+        //
+        // carry 用最新 target 的行纹理在**旧屏幕位置**画已可见前缀。纯 Insert
+        // rewrap 场景里没有 Conceal overlay、Reflow 也不含这段字（未吐完被排除），
+        // 所以只有这里会准备这张图。缺了它：renderer 跳过 carry glyph，而 carry
+        // 的 `ReflowTarget` clip 又因纹理 miss 被过滤 ->「旧行半个 X」直接变成
+        // 「新行完整 X」，评论 20 修掉的瞬移在真实渲染链里复活。
+        let carry_ids = self
+            .animation_coordinator
+            .active_reveal_carried_snapshot_ids();
+        if !carry_ids.is_empty() {
+            if let Some(target) = self
+                .animation_coordinator
+                .active_edit_frontier_target_snapshot()
+            {
+                for line in &target.line_snapshots {
+                    if carry_ids.contains(&line.id) {
+                        insert_line_image(&mut self.texture_cache, line);
+                    }
+                }
+            }
+        }
+
+        // 4. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
+        //
+        // Issue #826 评论 21：carry 单列一类诊断（`reveal_carry_missing`），
+        // 不和 Reflow 混成同一个事件名 —— 两者的 owner 完全不同（一个是 scalar
+        // Reflow span，一个是吐字 carry），排查时必须能分开看。
         let missing_reflow: Vec<LineSnapshotId> = reflow_ids
             .iter()
             .copied()
@@ -1191,14 +1218,20 @@ impl LinuxEditorPipeline {
             .copied()
             .filter(|id| !self.texture_cache.contains_line(id))
             .collect();
-        if missing_reflow.is_empty() && missing_overlay.is_empty() {
+        let missing_carry: Vec<LineSnapshotId> = carry_ids
+            .iter()
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .collect();
+        if missing_reflow.is_empty() && missing_overlay.is_empty() && missing_carry.is_empty() {
             return;
         }
         record_missing_layer_texture("reflow", &missing_reflow, "editor.anim.frontier");
         record_missing_layer_texture("delete_overlay", &missing_overlay, "editor.anim.frontier");
+        record_missing_layer_texture("reveal_carry", &missing_carry, "editor.anim.frontier");
         super::editor_animation_debug_log(&format!(
-            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} (逐层容错，不收口)",
-            missing_reflow, missing_overlay
+            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} (逐层容错，不收口)",
+            missing_reflow, missing_overlay, missing_carry
         ));
     }
 

@@ -746,6 +746,21 @@ impl EditFrontierState {
             .collect()
     }
 
+    /// Issue #826 评论 21 阻塞 3：吐字侧仍归 Reveal 拥有的全部 range。
+    ///
+    /// **不能只读 `new_ranges()`**：评论 21 之后 `reveal.regions` 只包含
+    /// 「还需要 FrontierMask 从 0 打开」的 range，而 `reveal_carried` 已经退出
+    /// scalar path。下一笔 retarget 要靠这些 range 的身份把 carry 里的字映到
+    /// 最新 target，所以必须显式合并，不能靠 regions 顺带带上。
+    pub(crate) fn active_reveal_owned_ranges(&self) -> Vec<(usize, usize)> {
+        normalize_ranges(
+            self.new_ranges()
+                .into_iter()
+                .chain(self.reveal_carried.iter().map(|carried| carried.range))
+                .collect(),
+        )
+    }
+
     /// Issue #826 评论 17：**仍未吐完**的新文字范围。
     ///
     /// Reflow 的 `excluded_new` 必须用这个而不是整个 `new_ranges()`：已经完整
@@ -790,8 +805,10 @@ impl EditFrontierState {
                         cluster.byte_start.max(region.range.0),
                         cluster.byte_end.min(region.range.1),
                     );
-                    // Issue #826 评论 20：`reveal_settled` 里的字已经完整露出，
-                    // 对本次编辑是 unchanged text，必须放行给 Reflow。
+                    // Issue #826 评论 21：`settled` 已完全退出 `reveal.regions`
+                    // （`subtract_ranges`），所以这里遍历到的都是还需要遮罩的字。
+                    // `reveal_settled` 仍保留只是作为「已释放给 canonical / Reflow」
+                    // 的显式记录，判定保持幂等。
                     if self
                         .reveal_settled
                         .iter()
@@ -1093,11 +1110,27 @@ impl EditFrontierState {
         out
     }
 
-    /// Issue #826 评论 20：这段字已经不由前沿的遮罩 / scalar distance 负责了。
+    /// Issue #826 评论 21 结构偏差修复：**完整露出**的 cluster 按「是否完整露出」判定，
+    /// 不再看位置有没有变。
     ///
-    /// - `reveal_settled`：已经完整露出且不需要动画 —— canonical 自己画；
-    /// - `reveal_carried`：正在用 overlay 从旧屏幕位置补间过来 —— canonical 在
-    ///   目标位置必须让位，否则要么双影要么整块消失。
+    /// 之前写成 `same_rect && 完整露出 -> settled，否则 carry`，于是「完整露出 +
+    /// 位置变了」也长出一个 `RevealCarriedPrefix`。一次 rewrap 把 50 个已完整露出的
+    /// 旧插入字挪位置就会长出 50 个 carry，状态量又跟历史已露字符数一起膨胀 ——
+    /// 直接违反「每条 region 最多一个边界 cluster carry」。
+    ///
+    /// 现在按可见宽度分：完整露出的退出前沿（位置没变由 canonical 画，位置变了由
+    /// Reflow 用 `request.base_snapshot` 的旧矩形从旧位置补过去），只有真正**部分**
+    /// 露出的边界 cluster 才 carry。
+    fn reveal_fully_revealed(visible_width: f64, rect: &SourceRect) -> bool {
+        visible_width >= rect.w - 1e-9
+    }
+
+    /// Issue #826 评论 21 阻塞 2/3：这段字已经不由前沿的遮罩负责了。
+    ///
+    /// `settled`（已完整露出，位置变了交给 Reflow）与 `carried`（正在用 overlay
+    /// 从旧位置补间）都已从 `reveal.regions` 里挖掉，canonical 目标位置必须让位：
+    /// - `settled`：canonical 自己画（若位置变了由 Reflow 搬），**不能挖**；
+    /// - `carried`：overlay 在画，canonical 挖掉。
     fn reveal_mask_exempt(&self, range: (usize, usize)) -> bool {
         self.reveal_settled
             .iter()
@@ -1212,19 +1245,16 @@ impl EditFrontierState {
             else {
                 continue;
             };
-            if same_rect(item_rect.clone(), dest_rect.clone())
-                && item.visible_width >= dest_rect.w - 1e-9
-            {
-                // 已经完整露出、而且没挪位置：canonical 自己画就对了，前沿不再管它。
-                // 位置真的变了的那部分（`!same_rect`）也走这里 —— Reflow 会用
-                // `request.base_snapshot` 里的旧矩形把它从旧位置补过去，正是
-                // 评论 20 要求的「已完整露出的 cluster 释放给 Reflow」。
+            if Self::reveal_fully_revealed(item.visible_width, &item_rect) {
+                // 完整露出：位置没变由 canonical 画，位置变了由 Reflow 用
+                // `request.base_snapshot` 的旧矩形从旧位置补过去
+                //（评论 20 要求的「已完整露出的 cluster 释放给 Reflow」）。
                 settled.push(range);
                 continue;
             }
-            // 其余（部分露出，或已露出但换了位置）都必须由 carry 接管：
-            // 「已经看见的像素必须有从旧位置到新位置的所有权」。
-            // 注意部分露出但几何没动（反例 2）也要走 carry：慢路径下
+            // 只有真正**部分露出的边界 cluster** 才 carry：「已经看见的像素必须
+            // 有从旧位置到新位置的所有权」。
+            // 注意部分露出但几何没动（评论 20 反例 2）也要走 carry：慢路径下
             // `travelled` 从 0 起，若不接管，前沿会把这段字整块吞掉。
             carried.push(RevealCarriedPrefix {
                 range,
@@ -1236,9 +1266,30 @@ impl EditFrontierState {
             });
         }
         settled.sort_unstable();
-        self.reveal = probe;
-        // 慢路径下前沿的职责只剩「把还没露出的新字从头打开」—— 已露出的部分
-        // 由 `reveal_settled` / `reveal_carried` 各自拥有，所以时钟必须从 0 起。
+
+        // Issue #826 评论 21 阻塞 3：settled 与 carried 都必须**退出 scalar
+        // path**，不只是被 mask 豁免。
+        //
+        // 豁免只挡住了 `hidden_new_text_rects`，`advanced()` / `distance_at()`
+        // 仍然把它们的 path 长度算进去，于是它们在 scalar frontier 上白占一段
+        // 行程：
+        // ```text
+        // slow retarget 后 X 已 settled(10px)、Y 是刚输入真正要吐的(10px)
+        // probe total = 20px，travelled 从 0 起
+        // 前 10px 全是 settled X -> Y 在前沿走过 10px 之前一直 100% hidden
+        // ease-out-cubic 要 advanced/total > 0.5 才开始碰到 Y
+        // => 160ms 动画开头三十多毫秒「已输入 Y 但吐字完全没开始」
+        // ```
+        // 与评论 19 删掉 Conceal 幽灵 path 是同一类问题，只是这次在 Reveal。
+        //
+        // 所以 scalar path 只保留「还需要 FrontierMask 从 0 打开」的 range；
+        // 身份保留在 `reveal_carried` 里（`active_reveal_owned_ranges` 显式合并）。
+        let owned: Vec<(usize, usize)> = carried.iter().map(|item| item.range).collect();
+        let mask_ranges = subtract_ranges(merged, &settled, &owned);
+
+        let reveal = build_reveal_layer(target_snapshot, &mask_ranges);
+        // 慢路径下前沿的职责只剩「把还没露出的新字从头打开」，时钟从 0 起。
+        self.reveal = reveal;
         self.reveal.travelled = 0.0;
         self.reveal_carried = carried;
         self.reveal_settled = settled;
@@ -1254,7 +1305,9 @@ impl EditFrontierState {
         base_to_current: &OffsetMap,
         now: Instant,
     ) {
-        let carried = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
+        // Issue #826 评论 21：carry 已退出 scalar path（见
+        // `active_reveal_owned_ranges`），身份必须显式带上，否则下一笔会丢掉它。
+        let carried = map_ranges_forward(&self.active_reveal_owned_ranges(), prev_target_to_new);
         let merged = normalize_ranges(merge_all(carried, inserted_ranges));
         self.retarget_reveal(&target_snapshot, merged, prev_target_to_new, now);
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
@@ -1350,7 +1403,9 @@ impl EditFrontierState {
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
         let conceal = build_conceal_layer(direction, &glyphs);
 
-        let carried_new = map_ranges_forward(&self.new_ranges(), prev_target_to_new);
+        // Issue #826 评论 21：同 `extend_insert`，carry 的身份要显式带上。
+        let carried_new =
+            map_ranges_forward(&self.active_reveal_owned_ranges(), prev_target_to_new);
         let merged_new = normalize_ranges(merge_all(carried_new, inserted_ranges));
         // Issue #826 评论 20：吐字侧同样必须分「几何没变」与「几何/顺序变了」，
         // 不能一律继承绝对距离。
@@ -1425,6 +1480,24 @@ impl EditFrontierState {
             .collect()
     }
 
+    /// Issue #826 评论 21：carry 真正引用的行纹理 id（供 TextureCache 生命周期）。
+    ///
+    /// carry 用最新 target 的行纹理在**旧屏幕位置**画已可见前缀。纯 Insert 场景下
+    /// `Conceal ids = []`、Reflow 也没有这个字的 span（X 未吐完 → 仍被 pending
+    /// Reveal 排除出 Reflow），如果不把它登记成 active，retain 之后纹理可能已被
+    /// 回收、prepare 也不会插回去 —— renderer 里 `get_line` 返回 None 直接跳过
+    /// carry glyph，而它的 `ReflowTarget` clip 又因纹理 miss 被过滤，
+    /// 结果就是「旧行半个 X」直接变成「新行完整 X」，评论 20 要修的瞬移复活。
+    pub(crate) fn active_reveal_carried_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let mut ids: Vec<LineSnapshotId> = Vec::new();
+        for carried in &self.reveal_carried {
+            if !ids.contains(&carried.snapshot_id) {
+                ids.push(carried.snapshot_id);
+            }
+        }
+        ids
+    }
+
     /// 采样当前帧前沿。
     pub(crate) fn sample(&self, now: Instant) -> EditFrontierSample {
         let elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as f64;
@@ -1443,8 +1516,17 @@ impl EditFrontierState {
     /// 前沿是否已经走完（可以收掉本轮遮罩/overlay）。
     pub(crate) fn is_finished(&self, now: Instant) -> bool {
         let progress = self.sample(now).progress;
-        if self.kind.needs_new_mask() && !self.reveal.is_advanced_done(progress) {
-            return false;
+        if self.kind.needs_new_mask() {
+            if !self.reveal.is_advanced_done(progress) {
+                return false;
+            }
+            // Issue #826 评论 21：`settled` / `carried` 退出 scalar path 之后，
+            // `reveal.regions` 可能**整条为空**而 carry 还在补间。此时
+            // `reveal.is_advanced_done()` 恒为 true，绝不能据此立刻结束整轮 ——
+            // 否则 carry 的 overlay 会中途消失、X 从半吐跳成完整（瞬移复活）。
+            if !self.reveal_carried.is_empty() && progress < 1.0 {
+                return false;
+            }
         }
         if self.kind.needs_old_overlay() && !self.conceal.is_advanced_done(progress) {
             return false;
@@ -1486,6 +1568,9 @@ impl EditFrontierState {
                     // Issue #826 评论 20：这段字已经不由前沿遮罩负责了 ——
                     // `settled` 由 canonical 自己画，`carried` 由 overlay 从旧位置
                     // 补间过来。继续挖遮罩会让它凭空消失。
+                    // Issue #826 评论 21：`settled` 与 `carried` 都已从
+                    // `reveal.regions` 里挖掉（`subtract_ranges`），这里能遍历到的
+                    // 一定还需要 FrontierMask。判定保留为幂等的第二道防线。
                     if self.reveal_mask_exempt(range) {
                         continue;
                     }
@@ -1710,12 +1795,58 @@ fn build_conceal_layer(
     FrontierLayer::from_parts(parts)
 }
 
-/// 两个文档矩形是否同一块屏幕像素（用于「这次编辑有没有挪动它」）。
-fn same_rect(a: SourceRect, b: SourceRect) -> bool {
-    (a.x - b.x).abs() <= 1e-9
-        && (a.y - b.y).abs() <= 1e-9
-        && (a.w - b.w).abs() <= 1e-9
-        && (a.h - b.h).abs() <= 1e-9
+/// Issue #826 评论 21 阻塞 3：从 merged range 里**挖掉**不再由 scalar frontier
+/// 负责的段。
+///
+/// `reveal.regions` 只能包含「还需要 `FrontierMask` 从 0 打开」的 range：
+/// - `settled` 已完整露出，位置没变由 canonical 画、位置变了由 Reflow 补；
+/// - `carried` 由 overlay 用自己的 progress 补间。
+///
+/// 两者若仍留在 `regions` 里，就会白占 scalar frontier 的行程
+/// （见 `retarget_reveal` 里那段 20px / 10px 的例子）。
+///
+/// `probe` 参数不需要 —— 只做减法，结果仍交给 `build_reveal_layer` 在最新
+/// target 上按真实几何建 path。
+fn subtract_ranges(
+    merged: Vec<(usize, usize)>,
+    settled: &[(usize, usize)],
+    carried: &[(usize, usize)],
+) -> Vec<(usize, usize)> {
+    // 用 byte 粒度切：range 可能覆盖多行多 cluster，只按两端切会丢掉中间还需要
+    // 的部分。这里逐字节判定「这段还要不要由 scalar frontier 打开」，再把连续
+    // 的「还要」片段合并回去。
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for range in normalize_ranges(merged) {
+        let mut start: Option<usize> = None;
+        for byte in range.0..range.1 {
+            let owned = settled
+                .iter()
+                .chain(carried.iter())
+                .any(|exempt| overlaps((byte, byte + 1), *exempt));
+            match (owned, start) {
+                // 只有在真的走过至少一个「还要 mask」的字节之后才开段，
+                // 否则会产出 (begin, begin) 这种空 range，被 `normalize_ranges`
+                // 丢掉 —— 那样紧邻的下一笔新字就会整段失去遮罩。
+                (false, None) => start = Some(byte),
+                (false, Some(begin)) => {
+                    if begin < byte {
+                        out.push((begin, byte));
+                    }
+                }
+                (true, Some(begin)) => {
+                    out.push((begin, byte));
+                    start = None;
+                }
+                (true, None) => {}
+            }
+        }
+        if let Some(begin) = start {
+            if begin < range.1 {
+                out.push((begin, range.1));
+            }
+        }
+    }
+    normalize_ranges(out)
 }
 
 /// 在 snapshot 里按 byte 范围找到那一个 cluster 的
