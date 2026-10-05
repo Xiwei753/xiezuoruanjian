@@ -42,6 +42,12 @@ const DIALOG_CONTENT_MAX_WIDTH: number = 420
 // Issue #827 评论 2：宽屏作品卡之间的间距（vp），作品卡与「+」卡共用同一份。
 const WIDE_PROJECT_CARD_GAP: number = 16
 
+// Issue #827 评论 4 第 3 点：草图里作品卡顶部标题区本身是一块小标题栏，
+// 最右端收成一个三角折角，所以标题区高度和折角边长都固定。
+// 标题区底线只画到折角之前，正文从标题区下面开始。
+const WIDE_PROJECT_CARD_HEADER_HEIGHT: number = 40
+const WIDE_PROJECT_CARD_FOLD_SIZE: number = 16
+
 @ComponentV2
 export struct HomeScreen {
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab，不再 push 进 homeStack。
@@ -372,25 +378,33 @@ export struct HomeScreen {
   WideProjectCard(project: ProjectSummary) {
     Stack({ alignContent: Alignment.TopEnd }) {
       Column() {
-        // 作品名
-        Text(project.title)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .textAlign(TextAlign.Start)
+        // 封面标题区：固定高度的小标题栏，正文从它下面开始。
+        Column() {
+          Text(project.title)
+            .fontSize(17)
+            .fontWeight(FontWeight.Medium)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+            .textAlign(TextAlign.Start)
+        }
+        .width('100%')
+        .height(WIDE_PROJECT_CARD_HEADER_HEIGHT)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Start)
 
+        // 标题区底线：右端留出折角宽度，画成草图里到折角断开的那一条。
         Divider()
           .width('100%')
           .color($r('sys.color.comp_background_gray'))
-          .margin({ top: 12, bottom: 12 })
+          .margin({ right: WIDE_PROJECT_CARD_FOLD_SIZE })
 
         // 卷 / 章数量
         Text(`${project.volumeCount}卷 ${project.chapterCount}章`)
           .fontSize(13)
           .width('100%')
           .textAlign(TextAlign.Start)
+          .margin({ top: 12 })
 
         Blank()
 
@@ -411,16 +425,18 @@ export struct HomeScreen {
       }
       .width('100%')
       .height('100%')
-      .padding(16)
+      .padding({ left: 16, right: 16, bottom: 16 })
       .alignItems(HorizontalAlign.Start)
       .justifyContent(FlexAlign.Start)
 
-      // 右上折角：书封面的视觉身份，不承载任何点击
-      Row()
-        .width(18)
-        .height(18)
-        .backgroundColor($r('sys.color.comp_background_gray'))
-        .borderRadius({ topLeft: DesignTokens.radiusSm })
+      // Issue #827 评论 4 第 3 点：右上角是真正的三角折角，属于标题区本身的一部分，
+      // 不是整张卡下方挂一个圆角小方块。用 ArkUI 自带的 Polygon 画直角三角，
+      // 不为一个折角上 Canvas 或自己写像素绘制。
+      Polygon()
+        .width(WIDE_PROJECT_CARD_FOLD_SIZE)
+        .height(WIDE_PROJECT_CARD_FOLD_SIZE)
+        .points([[0, 0], [WIDE_PROJECT_CARD_FOLD_SIZE, 0], [WIDE_PROJECT_CARD_FOLD_SIZE, WIDE_PROJECT_CARD_FOLD_SIZE]])
+        .fill($r('sys.color.comp_background_gray'))
     }
     .width(this.wideProjectCardWidth)
     .height(this.wideProjectCardHeight)

@@ -12,9 +12,9 @@
 // Issue #827 评论 2：形态从 220×180 横卡改为竖向「书封面」卡。
 // 结构对应 2026-10-05 手绘稿：
 //
-//   ┌──────────────┐
-//   │ 作品名      ◢ │   ← 右上折角是书封面的视觉身份
-//   ├──────────────┤
+//   ┌──────────────◢  ← 标题区是一块小标题栏，最右端收成三角折角
+//   │ 作品名        │     标题区底线只画到折角之前
+//   ├──────────────┘
 //   │ 8卷 97章      │
 //   │              │
 //   │        1678字 │   ← 右下总字数
@@ -31,6 +31,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 
 Rectangle {
     id: root
@@ -67,6 +68,12 @@ Rectangle {
     // 「+」卡复用同一组尺寸，不允许自己另有一套。
     property int cardWidth: 180
     property int cardHeight: 240
+
+    // Issue #827 评论 4 第 3 点：草图里标题区本身是一块小标题栏，
+    // 最右端收成一个真正的三角折角，所以标题区高度固定、折角尺寸固定，
+    // 标题区的底线只画到折角之前。
+    readonly property int _foldSize: 16
+    readonly property int _headerHeight: 40
 
     signal clicked()
     signal rightClicked()
@@ -107,36 +114,51 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: _sp16
         spacing: 0
 
-        // 作品名（封面顶部）
+        // 封面标题区：一块固定高度的小标题栏，底部画底线，正文从它下面开始。
+        // 底线宽度要比整卡窄出折角宽度，才能画成草图里
+        // 「标题 ──────┤」 到折角断开的那一条。
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: root._headerHeight
+
+            AppText {
+                anchors.left: parent.left
+                anchors.leftMargin: _sp16
+                anchors.right: cardFold.left
+                anchors.rightMargin: dt.sp4
+                anchors.verticalCenter: parent.verticalCenter
+                dt: root.dt
+                text: root.title || qsTr("未命名作品")
+                color: _textPrimary
+                font.pointSize: _subtitle
+                font.family: _fontFamily
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+                maximumLineCount: 2
+                wrapMode: Text.Wrap
+            }
+
+            // 标题区底线：只画到折角之前（父项宽 - 折角宽 - 左内边距）。
+            Rectangle {
+                anchors.left: parent.left
+                anchors.leftMargin: _sp16
+                anchors.right: cardFold.left
+                anchors.rightMargin: dt.sp4
+                anchors.bottom: parent.bottom
+                height: 1
+                color: _border
+            }
+        }
+
+        // 卷 / 章数量（从标题区下面开始）
         AppText {
             dt: root.dt
             Layout.fillWidth: true
-            text: root.title || qsTr("未命名作品")
-            color: _textPrimary
-            font.pointSize: _subtitle
-            font.family: _fontFamily
-            font.weight: Font.DemiBold
-            elide: Text.ElideRight
-            maximumLineCount: 2
-            wrapMode: Text.Wrap
-        }
-
-        // 书脊横线：分隔标题与信息区
-        Rectangle {
-            Layout.fillWidth: true
+            Layout.leftMargin: _sp16
+            Layout.rightMargin: _sp16
             Layout.topMargin: _sp12
-            Layout.bottomMargin: _sp12
-            height: 1
-            color: _border
-        }
-
-        // 卷 / 章数量
-        AppText {
-            dt: root.dt
-            Layout.fillWidth: true
             text: qsTr("%1卷 %2章").arg(root.volumeCount).arg(root.chapterCount)
             color: _textMuted
             font.pointSize: _body
@@ -149,6 +171,9 @@ Rectangle {
         AppText {
             dt: root.dt
             Layout.fillWidth: true
+            Layout.leftMargin: _sp16
+            Layout.rightMargin: _sp16
+            Layout.bottomMargin: _sp12
             horizontalAlignment: Text.AlignRight
             text: root.wordCount >= 10000
                   ? qsTr("%1万字").arg((root.wordCount / 10000).toFixed(1))
@@ -163,6 +188,9 @@ Rectangle {
         AppText {
             dt: root.dt
             Layout.fillWidth: true
+            Layout.leftMargin: _sp16
+            Layout.rightMargin: _sp16
+            Layout.bottomMargin: _sp16
             Layout.topMargin: 2
             text: root.lastEdited || ""
             color: _textMuted
@@ -172,16 +200,26 @@ Rectangle {
         }
     }
 
-    // 右上折角（书封面身份标识）。纯装饰，不吃鼠标事件：
-    // 右键菜单必须挂在整张卡上，所以折角不能阻断 MouseArea。
-    Rectangle {
-        width: 16
-        height: 16
+    // Issue #827 评论 4 第 3 点：草图右上角是一个真正的三角折角，
+    // 属于标题区本身的一部分，不是整张卡下方再挂一个圆角小方块。
+    // 用 QtQuick.Shapes 画直角三角（仓库 StarMapEmbed.qml 已用同一套 API）。
+    // Shape 默认不接收鼠标事件，右键菜单仍由整卡的 MouseArea 处理。
+    Shape {
+        id: cardFold
+        width: root._foldSize
+        height: root._foldSize
         anchors.top: parent.top
         anchors.right: parent.right
-        color: root.hovered ? root._primary : root._border
-        radius: 4
-        topLeftRadius: root._cardRadius
-        opacity: 0.9
+        z: 1
+
+        ShapePath {
+            strokeWidth: 0
+            fillColor: root.hovered ? root._primary : root._border
+            startX: 0
+            startY: 0
+            PathLine { x: root._foldSize; y: 0 }
+            PathLine { x: root._foldSize; y: root._foldSize }
+            PathLine { x: 0; y: 0 }
+        }
     }
 }

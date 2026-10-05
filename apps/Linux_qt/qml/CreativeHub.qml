@@ -74,9 +74,13 @@ Rectangle {
                 anchors.fill: parent
                 spacing: 0
 
+                // Issue #827 评论 4 第 1 点：Rectangle 默认 color 是 white，
+                // 不显式写 color 的话深色模式下这块 64 高品牌行会盖一块纯白。
+                // 右侧顶栏用的是 dt.surface，这里必须同色。
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: root.topBarHeight
+                    color: dt.surface
 
                     AppText {
                         anchors.left: parent.left
@@ -179,105 +183,112 @@ Rectangle {
             spacing: 0
 
             // Top navigation bar
-            // Issue #827 评论 3 第 1 点：高度与左栏「素笺」行共用 root.topBarHeight，
-            // 底部画 1px 分隔线与左栏那条贯通到最右。
-            Rectangle {
+            // Issue #827 评论 3 第 1 点：高度与左栏「素笺」行共用 root.topBarHeight。
+            // Issue #827 评论 4 第 2 点：divider 不能再画在 64 高 Rectangle 内部
+            // （那样落在 y=63..64，而左栏是 64+1=64..65，两条线差 1px 错格）。
+            // 改成和左栏完全同构的「64 高面 + 1px divider 兄弟项」，
+            // 横线才真正从最左贯通到最右。
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: root.topBarHeight
-                color: dt.surface
+                spacing: 0
 
                 Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 1
-                    color: dt.border
-                }
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: root.topBarHeight
+                    color: dt.surface
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: dt.sp32
-                    anchors.rightMargin: dt.sp32
-                    spacing: dt.sp32
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: dt.sp32
+                        anchors.rightMargin: dt.sp32
+                        spacing: dt.sp32
 
-                    // Logo（窄屏顶栏；宽屏标题已移到左侧导航）
-                    Row {
-                        visible: !root.wideShell
-                        spacing: dt.sp10
-                        Layout.alignment: Qt.AlignVCenter
-                        AppText {
-                            dt: root.dt
-                            text: qsTr("素笺")
-                            color: dt.primary
-                            font.pointSize: dt.fontXlPt
-                            font.family: dt.fontFamily
-                            font.weight: Font.Bold
+                        // Logo（窄屏顶栏；宽屏标题已移到左侧导航）
+                        Row {
+                            visible: !root.wideShell
+                            spacing: dt.sp10
+                            Layout.alignment: Qt.AlignVCenter
+                            AppText {
+                                dt: root.dt
+                                text: qsTr("素笺")
+                                color: dt.primary
+                                font.pointSize: dt.fontXlPt
+                                font.family: dt.fontFamily
+                                font.weight: Font.Bold
+                            }
                         }
-                    }
 
-                    // Navigation tabs（窄屏顶栏；宽屏使用左侧一级导航）
-                    Row {
-                        visible: !root.wideShell
-                        spacing: dt.sp4
-                        Layout.alignment: Qt.AlignVCenter
+                        // Navigation tabs（窄屏顶栏；宽屏使用左侧一级导航）
+                        Row {
+                            visible: !root.wideShell
+                            spacing: dt.sp4
+                            Layout.alignment: Qt.AlignVCenter
 
-                        Repeater {
-                            model: [
-                                { label: qsTr("作品"), idx: 0 },
-                                { label: qsTr("星图"), idx: 1 },
-                                { label: qsTr("统计"), idx: 2 }
-                            ]
+                            Repeater {
+                                model: [
+                                    { label: qsTr("作品"), idx: 0 },
+                                    { label: qsTr("星图"), idx: 1 },
+                                    { label: qsTr("统计"), idx: 2 }
+                                ]
 
-                            Rectangle {
-                                width: navLabel.implicitWidth + dt.sp20
-                                height: 36
-                                radius: dt.radiusPill
-                                color: root.currentTab === modelData.idx ?
-                                       dt.primaryContainer :
-                                       navHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                                AppText {
-                                    id: navLabel
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: modelData.label
+                                Rectangle {
+                                    width: navLabel.implicitWidth + dt.sp20
+                                    height: 36
+                                    radius: dt.radiusPill
                                     color: root.currentTab === modelData.idx ?
-                                           dt.onPrimaryContainer :
-                                           dt.onSurfaceVariant
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                    font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
-                                }
+                                           dt.primaryContainer :
+                                           navHover.containsMouse ? dt.surfaceVariant : "transparent"
 
-                                MouseArea {
-                                    id: navHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
-                                    // currentTab 由绑定跟随，Loader 重建后不丢。
-                                    onClicked: {
-                                        if (root.appControllerRef) {
-                                            root.appControllerRef.hubTab = modelData.idx
-                                        } else {
-                                            root.currentTab = modelData.idx
+                                    AppText {
+                                        id: navLabel
+                                        dt: root.dt
+                                        anchors.centerIn: parent
+                                        text: modelData.label
+                                        color: root.currentTab === modelData.idx ?
+                                               dt.onPrimaryContainer :
+                                               dt.onSurfaceVariant
+                                        font.pointSize: dt.labelPt
+                                        font.family: dt.fontFamily
+                                        font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
+                                    }
+
+                                    MouseArea {
+                                        id: navHover
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        // Issue #796 评论 5886483653: 点击改 appControllerRef.hubTab，
+                                        // currentTab 由绑定跟随，Loader 重建后不丢。
+                                        onClicked: {
+                                            if (root.appControllerRef) {
+                                                root.appControllerRef.hubTab = modelData.idx
+                                            } else {
+                                                root.currentTab = modelData.idx
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    Item { Layout.fillWidth: true }
+                        Item { Layout.fillWidth: true }
 
-                    // Right actions — 收口到 GlobalTopActions（同步 / 搜索 / 设置）
-                    GlobalTopActions {
-                        dt: root.dt
-                        appState: root.appState
-                        onRequestSync: root.requestSync()
-                        onRequestSearch: root.requestSearch()
-                        onOpenSettings: root.openSettings()
+                        // Right actions — 收口到 GlobalTopActions（同步 / 搜索 / 设置）
+                        GlobalTopActions {
+                            dt: root.dt
+                            appState: root.appState
+                            onRequestSync: root.requestSync()
+                            onRequestSearch: root.requestSearch()
+                            onOpenSettings: root.openSettings()
+                        }
                     }
+                }
+
+                // 1px divider 作为 64 高顶栏的兄弟项，和左栏那条严格同一 y。
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: dt.border
                 }
             }
 
