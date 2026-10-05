@@ -1742,3 +1742,217 @@ fn active_reveal_carry_keeps_burst_alive_when_scalar_path_is_empty() {
         "动画走完后 carry 交回 canonical，整轮才结束"
     );
 }
+
+/// Issue #826 评论 22 BLOCKER：单前沿已经越过整条 A region、但后面 B region
+/// 还没走完时，A **必须**继续被采成「当前屏幕事实」。
+///
+/// 稳定反例（一轮两条不相邻 Insert patch，#826 从评论 8 起就要求支持 Core 多
+/// DisplayPatch）：A = 10px、B = 10px 共用单前沿总长 20px，前沿走到 15px 时
+/// 屏幕真实状态是「A 完整显示、B 只显示一半」，整轮仍未 finished。
+///
+/// 旧代码在 `sample_visible_reveal` 里对「走完的 region」直接 `continue`
+/// （那句注释「屏幕上没有它的像素了」对吞字成立、对吐字是反的），于是采不到
+/// A 已全露这个事实：A 既不进 `settled` 也不进 `carried`，却因为仍在
+/// `reveal.regions` 里而留在 `merged` -> `mask_ranges`，配合 `travelled = 0.0`
+/// 让第二笔第一帧把 A 完整遮回去。
+///
+/// 而且 `begin_or_extend_reflow` 是在 retarget 之后才算 pending，A 重新进入
+/// scalar region 就又出现在 `pending_reveal_ranges()` 里，Reflow 也不接它 ——
+/// `canonical 被重新 mask + 没有 carry + 被排除出 Reflow => A 真消失`。
+#[test]
+fn fully_completed_scalar_region_stays_visible_when_later_region_is_still_pending() {
+    let now = Instant::now();
+    // `a` + A(1,2) + gap(2,3) + B(3,4)。A 与 B 之间夹着一个 unchanged 的 gap，
+    // 所以 `normalize_ranges` 不会把它们并成一段，正好两条 region。
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![
+                cluster(0, 1, 0.0),
+                cluster(1, 2, 10.0),
+                cluster(2, 3, 20.0),
+                cluster(3, 4, 30.0),
+            ],
+        )]),
+        String::from("aAZB"),
+        vec![(1, 2), (3, 4)],
+        OffsetMap::from_single_edit(1, (1, 1), 3),
+        now,
+        160,
+    );
+    assert_eq!(
+        state.reveal.regions.len(),
+        2,
+        "两条不相邻 patch 必须各有一条 region"
+    );
+
+    // 把单前沿直接摆到 15px：A(0..10) 走完、B(10..20) 只走 5px。
+    let half = instant_at(now, 80);
+    state.reveal.travelled = 15.0;
+    state.started_at = half;
+    assert!(
+        !state.is_finished(half),
+        "B 还没走完，整轮必须仍在进行中 —— 这正是 A '已完整显示但仍属 scalar region' 的场景"
+    );
+
+    // 第二笔：在文末插入 Y，同时 Qt 重排把整段挪到第二行（几何变化 -> 慢路径）。
+    let after_second = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(
+            2,
+            20.0,
+            0,
+            vec![
+                cluster(1, 2, 0.0),
+                cluster(2, 3, 10.0),
+                cluster(3, 4, 20.0),
+                cluster(4, 5, 30.0),
+            ],
+        ),
+    ]);
+    state.extend_insert(
+        after_second.clone(),
+        String::from("aAZBY"),
+        vec![(4, 5)],
+        &OffsetMap::from_single_edit(4, (4, 4), 1),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    // A 已经完整露出 —— 它必须被采到并判为 settled，然后从 scalar path 扣掉。
+    assert_eq!(
+        state.reveal_settled,
+        vec![(1, 2)],
+        "A 早已在屏幕上完整显示，必须进 settled（位置变了则由 Reflow 从旧位置补过去）"
+    );
+    assert_eq!(
+        state.new_ranges(),
+        vec![(4, 5)],
+        "A(settled) 与 B(carried) 都必须退出 scalar path，只剩真正还要遮罩的 Y"
+    );
+    // B 只露了一半且被挪走 -> carry 接管，从旧屏幕位置 (30,0) 补间到 (20,20)。
+    assert_eq!(state.reveal_carried.len(), 1);
+    assert_eq!(state.reveal_carried[0].range, (3, 4));
+    let carried = &state.reveal_carried[0];
+    assert!(
+        (carried.from_rect.x - 30.0).abs() < 1e-9 && (carried.from_rect.y - 0.0).abs() < 1e-9,
+        "carry 必须从 B 上一帧的屏幕位置 (30, 0) 出发，实际 ({}, {})",
+        carried.from_rect.x,
+        carried.from_rect.y
+    );
+    assert!(
+        (carried.to_rect.x - 20.0).abs() < 1e-9 && (carried.to_rect.y - 20.0).abs() < 1e-9,
+        "carry 终点是 B 在最新 target 的位置 (20, 20)，实际 ({}, {})",
+        carried.to_rect.x,
+        carried.to_rect.y
+    );
+    assert!(
+        (carried.visible_width - 5.0).abs() < 1e-9,
+        "B 上一帧只露了 5px，实际 {}",
+        carried.visible_width
+    );
+
+    // 机制断言：屏幕上真正画的遮罩里不能有 A 的新位置 (y=20, x 0..10)；
+    // 新插入的 Y (y=20, x 30..40) 必须完整 hidden。
+    let sample = state.sample(half);
+    let hidden = state.hidden_new_text_rects(&sample);
+    assert!(
+        !hidden
+            .iter()
+            .any(|rect| (rect.y - 20.0).abs() < 1e-9 && (rect.x - 0.0).abs() < 1e-9),
+        "A 在上一帧已经完整显示，第二笔不得用 FrontierMask 把它遮回去，实际 hidden = {hidden:?}"
+    );
+    assert!(
+        hidden.iter().any(|rect| {
+            (rect.y - 20.0).abs() < 1e-9
+                && (rect.x - 30.0).abs() < 1e-9
+                && (rect.w - 10.0).abs() < 1e-9
+        }),
+        "新插入的 Y 第一帧必须完整 hidden，实际 hidden = {hidden:?}"
+    );
+
+    // Reflow 必须能接 A：A 不该再出现在 pending reveal 里。
+    let pending = state.pending_reveal_ranges(sample.progress);
+    assert!(
+        !pending
+            .iter()
+            .any(|&(start, end)| start < 2 && 2 <= end),
+        "A 已完整露出，不能再被算成 pending（否则 Reflow 也接不了它，它就真消失了），实际 pending = {pending:?}"
+    );
+}
+
+/// Issue #826 评论 22 同类漏改：identity preflight 必须和 retarget 用**同一份**
+/// owner 集合。
+///
+/// `can_extend_identity` 之前只看 `reveal.regions`，而 `extend_insert` /
+/// `extend_replace` 用的是 `active_reveal_owned_ranges()`（scalar regions +
+/// carry ranges）。评论 21 之后 carry 已退出 `reveal.regions`，于是出现
+/// 「scalar path 已空 + carry 非空」的状态：预检检查的是**空集合**，必然 true；
+/// 而真正 retarget 里的 `map_ranges_forward` 是 filter_map —— 某个 carry identity
+/// 在本次 OffsetMap 里映不出来时，它会被**静默丢掉**，屏幕上那部分已可见像素凭空消失。
+#[test]
+fn can_extend_identity_checks_carried_reveal_ranges_when_scalar_path_is_empty() {
+    let now = Instant::now();
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 90.0)],
+        )]),
+        String::from("aX"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
+    let half = instant_at(now, 80);
+    let rewrapped = snapshot(vec![
+        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
+        PreparedLineSnapshot::stub_for_tests(2, 20.0, 0, vec![cluster(1, 2, 0.0)]),
+    ]);
+    state.extend_insert(
+        rewrapped.clone(),
+        String::from("aX"),
+        Vec::new(),
+        &OffsetMap::build("aX", "aX"),
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+    assert!(
+        state.reveal.regions.is_empty() && state.reveal_carried.len() == 1,
+        "前提：scalar path 为空，唯一还归 Reveal 的是那条 carry"
+    );
+    assert_eq!(state.active_reveal_owned_ranges(), vec![(1, 2)]);
+
+    let make_request = |offset_map: OffsetMap| EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: snapshot(Vec::new()),
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: Vec::new(),
+        offset_map,
+        base_text: String::from("aX"),
+        target_text: String::from("aX"),
+        conceal_direction: ConcealDirection::Forward,
+        now: half,
+    };
+
+    // carry 的 range (1,2) 正好是本次编辑区间 -> OffsetMap 对它没有映射。
+    let unmapable = make_request(OffsetMap::from_single_edit(2, (1, 2), 0));
+    assert!(
+        !state.can_extend_identity(EditFrontierKind::Insert, &unmapable),
+        "carry 的 range 在本次 OffsetMap 里映不出来，必须换 burst；否则 retarget 会静默丢掉它"
+    );
+
+    // 反过来，能完整映射时仍然允许 extend（别把这条路径判死）。
+    let mappable = make_request(OffsetMap::from_single_edit(2, (2, 2), 1));
+    assert!(
+        state.can_extend_identity(EditFrontierKind::Insert, &mappable),
+        "carry 的 range 能完整映射时应当继续并入当前 burst"
+    );
+}

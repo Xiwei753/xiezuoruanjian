@@ -862,10 +862,18 @@ impl EditFrontierState {
             }
         }
         if kind.needs_new_mask() {
-            self.reveal.regions.iter().all(|region| {
+            // Issue #826 评论 22 同类漏改：这里必须和 retarget 用**同一份** owner
+            // 集合，即 `active_reveal_owned_ranges()` = scalar regions + carry ranges。
+            //
+            // 之前只看 `reveal.regions`，于是「scalar path 已空 + carry 非空」时
+            // 这里检查的是空集合、必然 true；而 `extend_insert` / `extend_replace`
+            // 里的 `map_ranges_forward(...)` 是 filter_map —— 某个 carry identity
+            // 在本次 OffsetMap 里映不出来时，预检不会换 burst，真正 retarget 时它
+            // 被**静默丢掉**，屏幕上那部分已可见像素凭空消失。
+            self.active_reveal_owned_ranges().iter().all(|&range| {
                 request
                     .offset_map
-                    .map_old_range_to_new(region.range.0, region.range.1)
+                    .map_old_range_to_new(range.0, range.1)
                     .is_some()
             })
         } else {
@@ -1146,24 +1154,42 @@ impl EditFrontierState {
         let mut out: Vec<RevealVisibleSample> = Vec::new();
         for region in &self.reveal.regions {
             let distance = self.reveal.distance_at(region, progress);
-            if distance >= region.path.total_length - 1e-9 {
-                // 这一条 region 已经全部露完，屏幕上没有它的像素了。
-                continue;
-            }
-            let bounds = region.path.reveal_bounds(distance);
+            // Issue #826 评论 22 阻塞：这条 region 「完全走完」不代表屏幕上没有它的
+            // 像素 —— 吐字走完意味着这段 canonical 新字已经 **100% 完整显示**。
+            //
+            // 吞字那边「走完 => 旧 overlay 没有像素」成立，吐字这边照抄就成了反的：
+            // 单前沿走过整条 A region、但后面还有 B region 没走完时，A 早就在屏幕上
+            // 完整显示了。此时若把它 `continue` 掉，retarget 就采不到「A 已经全露」
+            // 这个当前屏幕事实，A 既不进 `settled` 也不进 `carried`，却因为仍在
+            // `reveal.regions` 里而留在 `merged` -> `mask_ranges`，配合
+            // `travelled = 0.0` 让第二笔第一帧把 A 完整遮回去 —— 已经出现过的字
+            // 突然消失并重新吐一遍。
+            //
+            // 稳定反例（一轮两条不相邻 Insert patch，#826 评论 8 起就要求支持多
+            // DisplayPatch）：A = 10px、B = 10px 共用单前沿总长 20px，前沿走到 15px
+            // 时 A 完整显示、B 只显示一半，整轮仍未 finished。
+            let region_fully_revealed = distance >= region.path.total_length - 1e-9;
+            let bounds = (!region_fully_revealed).then(|| region.path.reveal_bounds(distance));
             for line in self
                 .target_snapshot
                 .lines_in_byte_range(region.range.0, region.range.1)
             {
-                let Some(seg_index) = region.path.segment_index_for_line(line.id) else {
-                    continue;
-                };
-                let Some(&(boundary, _right)) = bounds.get(seg_index) else {
-                    continue;
-                };
                 for cluster in line.clusters_in_byte_range(region.range.0, region.range.1) {
                     let rect = line.source_rect_to_document_rect(&cluster.source_rect);
-                    let visible = (boundary - rect.x).clamp(0.0, rect.w);
+                    let visible = if region_fully_revealed {
+                        rect.w
+                    } else {
+                        // 未走完：仍按逐视觉行自己的 boundary 算已露出宽度。
+                        let Some(seg_index) = region.path.segment_index_for_line(line.id) else {
+                            continue;
+                        };
+                        let Some(&(boundary, _right)) =
+                            bounds.as_ref().and_then(|bounds| bounds.get(seg_index))
+                        else {
+                            continue;
+                        };
+                        (boundary - rect.x).clamp(0.0, rect.w)
+                    };
                     if visible <= 1e-9 {
                         continue;
                     }
