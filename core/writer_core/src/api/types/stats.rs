@@ -98,6 +98,27 @@ pub struct SpeedCurveSummaryDto {
     pub buckets: Vec<SpeedCurvePointDto>,
 }
 
+/// 「当前写作速度」——以调用时刻为终点的实时速度。
+///
+/// 和 [`SpeedCurveSummaryDto`] 分开：速度曲线是历史分桶，拿它的最后一个桶
+/// 当实时速度会在用户停笔后一直挂着停笔前的非零值（桶只生成到最后一个事件，
+/// 不补当前这一分钟的 0 桶）。本 DTO 由 Core 以「最近 N 秒」为窗口重算，
+/// 停笔超过一个窗口后自然回落到 0。
+///
+/// 字段与 `writing_stats::store::CurrentWritingSpeed` 一一对应。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentWritingSpeedDto {
+    /// 窗口长度（秒）。`charsPerMinute` 按这个窗口折算。
+    pub window_seconds: u32,
+    /// 采样时刻（Unix 毫秒）。
+    pub sampled_at_ms: i64,
+    /// 窗口内累计的纯输入字符数。
+    pub chars_typed: u32,
+    /// 窗口内纯输入速度（字符/分钟）。
+    pub chars_per_minute: f32,
+}
+
 /// 平台端上报一次写作事件的入参 DTO。
 ///
 /// `writer_core_process_writing_event` 直接反序列化本类型，不再手写字段表，

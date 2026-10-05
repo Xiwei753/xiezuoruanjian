@@ -9,7 +9,7 @@
 //! - 事件按时间戳确定所属日期，按来源（人工/粘贴/删除/AI）分别累加字符数。
 
 use crate::error::Result;
-use crate::writing_stats::store::{DailyStats, SpeedBucket, StatsStore};
+use crate::writing_stats::store::{CurrentWritingSpeed, DailyStats, SpeedBucket, StatsStore};
 use crate::writing_stats::WritingInputEvent;
 use std::path::Path;
 
@@ -57,6 +57,36 @@ impl StatsAggregator {
 
         self.store.save_or_merge_daily_stats(&stats)?;
         Ok(())
+    }
+
+    /// 「当前写作速度」：以此刻为终点、回看 `window_seconds` 秒的纯输入速度。
+    ///
+    /// ## 为什么不能拿速度曲线最后一桶顶替
+    ///
+    /// [`Self::get_speed_curve`] 是**历史曲线**：桶只从第一个事件生成到最后一个事件
+    /// （`bucket_start <= last_ms`），既不会补「当前这一分钟」的 0 桶，
+    /// 窗口之外的空闲时间也不在计算范围内。所以用户停笔之后，
+    /// 最后一个桶仍然是停笔前那个非零值——用它当实时速度会一直挂着。
+    ///
+    /// 真实速度必须以**现在**为终点重新算一遍：停笔超过一个窗口后自然回落到 0。
+    /// 窗口内事件来自 [`StatsStore::load_events_in_window`]，已落盘事件和内存缓冲
+    /// 是同一份事实源，所以刚停笔时不会因为 3 秒防抖缓冲而漏掉最后一段输入。
+    pub fn get_current_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        // 0 秒窗口没有意义，钳到 1 秒而不是让除法炸掉。
+        let window_seconds = window_seconds.max(1);
+        let start_ms = now_ms - i64::from(window_seconds) * 1_000;
+
+        let events = self.store.load_events_in_window(start_ms, now_ms)?;
+        let chars_typed: u32 = events.iter().map(|e| e.inserted_chars).sum();
+        let minutes = f64::from(window_seconds) / 60.0;
+
+        Ok(CurrentWritingSpeed {
+            window_seconds,
+            sampled_at_ms: now_ms,
+            chars_typed,
+            chars_per_minute: f64::from(chars_typed) / minutes,
+        })
     }
 
     /// 计算写作速度曲线。

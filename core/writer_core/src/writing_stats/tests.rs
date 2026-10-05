@@ -359,6 +359,115 @@ fn test_speed_buckets_generation() {
         .any(|b| b["charsTyped"].as_u64().unwrap() > 0));
 }
 
+fn speed_test_event(timestamp_ms: i64, inserted_chars: u32) -> WritingInputEvent {
+    WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms,
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::HumanTyped,
+        inserted_chars,
+        deleted_chars: 0,
+        pasted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: inserted_chars as i32,
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+    }
+}
+
+// 「当前写作速度」必须看得到还在内存缓冲里、尚未落盘的事件：
+// record_event 有 3 秒防抖缓冲，用户刚停笔时最后一段输入只存在于 event_buffer。
+#[test]
+fn test_current_speed_reads_unflushed_buffer() {
+    let temp_dir = tempdir().unwrap();
+    // 走 StatsApi 记录事件：它内部的 aggregator 才是 app_service 真正用的那个
+    // store（app_service/stats_ops.rs → self.api.get_current_writing_speed）。
+    // 另起一个 StatsStore 会得到独立的 event_buffer，测不到同一条路径。
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for i in 0..5 {
+        api.record_event(speed_test_event(now_ms - 2_000 + i * 100, 10))
+            .unwrap();
+    }
+
+    // 还没手动 flush：速度必须已经把缓冲里的 50 字算进去。
+    let speed = api.aggregator().get_current_speed(60).unwrap();
+    assert_eq!(speed.window_seconds, 60);
+    assert_eq!(speed.chars_typed, 50);
+    assert!((speed.chars_per_minute - 50.0).abs() < 0.001);
+
+    // 落盘之后再查一次，数值不能变——已落盘事件和内存缓冲是同一份事实源，
+    // 拼接不能重复计数。
+    api.aggregator().store().flush_events().unwrap();
+    let after_flush = api.aggregator().get_current_speed(60).unwrap();
+    assert_eq!(after_flush.chars_typed, 50);
+}
+
+// 停笔后实时速度必须回落到 0：速度曲线最后一桶会一直挂着非零值，
+// 这正是把「当前速度」收回 Core 重算的原因。
+#[test]
+fn test_current_speed_falls_to_zero_after_stopping() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // 5 分钟前的一笔输入，早就落盘，不在最近 60 秒窗口内。
+    let old_ms = chrono::Utc::now().timestamp_millis() - 5 * 60 * 1000;
+    api.record_event(speed_test_event(old_ms, 500)).unwrap();
+    api.aggregator().store().flush_events().unwrap();
+
+    let speed = api.aggregator().get_current_speed(60).unwrap();
+    assert_eq!(speed.chars_typed, 0);
+    assert_eq!(speed.chars_per_minute, 0.0);
+
+    // 历史曲线里那 500 字还在——曲线和实时速度职责不同，不互相污染。
+    let today = StatsApi::today_date();
+    let curve = api.aggregator().get_speed_curve(&today, &today, 1).unwrap();
+    assert!(curve.iter().any(|b| b.chars_typed == 500));
+}
+
+// 0 秒窗口没有意义且无法折算速度，Core 钳到 1 秒而不是让除法炸掉。
+#[test]
+fn test_current_speed_clamps_zero_window() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let speed = api.aggregator().get_current_speed(0).unwrap();
+    assert_eq!(speed.window_seconds, 1);
+    assert_eq!(speed.chars_typed, 0);
+    assert!(speed.chars_per_minute.is_finite());
+}
+
+// 窗口外的输入不计入当前速度，但落在窗口边界内的一定计入。
+#[test]
+fn test_current_speed_window_boundaries() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    // 窗口内：30 秒前
+    api.record_event(speed_test_event(now_ms - 30_000, 7))
+        .unwrap();
+    // 窗口外：2 分钟前
+    api.record_event(speed_test_event(now_ms - 120_000, 999))
+        .unwrap();
+    api.aggregator().store().flush_events().unwrap();
+
+    assert_eq!(
+        api.aggregator().get_current_speed(60).unwrap().chars_typed,
+        7
+    );
+    assert_eq!(
+        api.aggregator().get_current_speed(180).unwrap().chars_typed,
+        7 + 999
+    );
+}
+
 #[test]
 fn test_per_project_tracking() {
     let temp_dir = tempdir().unwrap();

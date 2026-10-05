@@ -62,6 +62,31 @@ impl WriterCoreApi {
         Self::json_string(&value)
     }
 
+    /// 「当前写作速度」：以调用时刻为终点，回看 `window_seconds` 秒的纯输入速度。
+    ///
+    /// 停笔超过一个窗口后 `chars_per_minute` 自然回落到 0，所以平台端
+    /// 直接展示这个值即可，不需要各自判断历史桶是否过期。
+    pub fn get_current_writing_speed(
+        &self,
+        window_seconds: u32,
+    ) -> ApiResult<crate::api::types::CurrentWritingSpeedDto> {
+        let speed = self
+            .core_write()
+            .get_current_writing_speed(window_seconds)
+            .map_err(Into::<WriterError>::into)?;
+        Ok(crate::api::types::CurrentWritingSpeedDto {
+            window_seconds: speed.window_seconds,
+            sampled_at_ms: speed.sampled_at_ms,
+            chars_typed: speed.chars_typed,
+            chars_per_minute: speed.chars_per_minute as f32,
+        })
+    }
+
+    pub fn get_current_writing_speed_json(&self, window_seconds: u32) -> ApiResult<String> {
+        let value = self.get_current_writing_speed(window_seconds)?;
+        Self::json_string(&value)
+    }
+
     pub fn calculate_word_count(&self, text: &str) -> u32 {
         self.core_write().calculate_word_count(text)
     }

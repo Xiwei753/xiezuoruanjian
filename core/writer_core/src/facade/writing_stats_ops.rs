@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::writing_stats::store::CurrentWritingSpeed;
 use crate::writing_stats::{DateRange, EventSource, WritingInputEvent};
 
 use serde_json::Value;
@@ -184,5 +185,16 @@ impl super::WriterCore {
             end_date: end_date.to_string(),
         };
         self.get_stats_api().get_speed_curve(&range, bucket_minutes)
+    }
+
+    /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
+    ///
+    /// 与 [`Self::get_writing_speed_curve`] 分工明确：速度曲线是历史分桶，
+    /// 这里是以「现在」为终点重算的窗口速度，停笔超过一个窗口后回落到 0。
+    /// 平台端展示实时速度一律走这里，不要拿曲线最后一桶顶替。
+    pub fn get_current_writing_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
+        self.get_stats_api()
+            .aggregator()
+            .get_current_speed(window_seconds)
     }
 }

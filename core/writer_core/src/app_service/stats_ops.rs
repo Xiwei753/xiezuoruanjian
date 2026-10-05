@@ -1,6 +1,6 @@
 use crate::api::{
-    ChapterStatsSummaryDto, DeviceInfoDto, DeviceStatsSummaryDto, ProjectStatsSummaryDto,
-    SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
+    ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
+    ProjectStatsSummaryDto, SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -46,6 +46,16 @@ impl super::WriterAppService {
     ) -> Result<SpeedCurveSummaryDto, WriterError> {
         self.api
             .get_writing_speed_curve(&start_date, &end_date, bucket_minutes)
+    }
+
+    /// 实时写作速度（最近 `window_seconds` 秒）。见
+    /// [`WriterCore::get_current_writing_speed`](crate::facade::WriterCore::get_current_writing_speed)：
+    /// 停笔超过一个窗口后自然回落到 0，不拿速度曲线最后一桶顶替。
+    pub fn get_current_writing_speed(
+        &self,
+        window_seconds: u32,
+    ) -> Result<CurrentWritingSpeedDto, WriterError> {
+        self.api.get_current_writing_speed(window_seconds)
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {

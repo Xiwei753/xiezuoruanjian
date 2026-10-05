@@ -94,6 +94,28 @@ pub unsafe extern "C" fn writer_core_get_writing_speed_curve(
     }
 }
 
+/// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
+///
+/// 和上面两个导出分工明确：
+/// - 速度曲线是**历史**分桶，桶只从第一个事件生成到最后一个事件，不补「当前这一分钟」的
+///   0 桶。所以用户停笔之后，曲线最后一桶仍然是停笔前的非零值。
+/// - 本函数以「现在」为终点重算最近 `window_seconds` 秒的窗口速度，停笔超过一个窗口后
+///   自然回落到 0。写作页状态栏左段的「当前字/分」只能走这里。
+///
+/// 端侧不要各自判断历史桶是否过期，也不要为了刷新这个值去强制 flush 统计事件：
+/// 查询时 Core 已把内存缓冲和已落盘事件当作同一份事实源。
+///
+/// # Safety
+/// `window_seconds` 会被 Core 内部钳到至少 1 秒（0 秒窗口无意义且无法折算速度）。
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_get_current_writing_speed(window_seconds: u32) -> *mut c_char {
+    match with_app_service(|svc| svc.get_current_writing_speed_json(window_seconds)) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("UNKNOWN_ERROR", &e),
+    }
+}
+
 /// # Safety
 /// `event_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.

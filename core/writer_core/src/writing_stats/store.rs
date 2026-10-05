@@ -240,6 +240,23 @@ pub struct SpeedBucket {
     pub chars_per_minute: f64,
 }
 
+/// 「当前写作速度」：最近 `window_seconds` 秒窗口内的纯输入速度。
+///
+/// 与 [`SpeedBucket`] 的区别见
+/// [`WritingStatsAggregator::get_current_speed`](crate::writing_stats::WritingStatsAggregator::get_current_speed)：
+/// 桶是历史曲线，实时速度不能拿它的最后一个桶顶替。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CurrentWritingSpeed {
+    /// 窗口长度（秒）。速度按这个窗口折算成「每分钟字数」。
+    pub window_seconds: u32,
+    /// 采样时刻（Unix 毫秒）。
+    pub sampled_at_ms: i64,
+    /// 窗口内累计的纯输入字符数。
+    pub chars_typed: u32,
+    /// 窗口内纯输入速度（字符/分钟）。
+    pub chars_per_minute: f64,
+}
+
 impl StatsStore {
     pub fn new(app_data_root: &Path) -> Self {
         Self {
@@ -356,6 +373,36 @@ impl StatsStore {
         }
 
         Ok(all_events)
+    }
+
+    /// 读取 `[start_ms, end_ms)` 窗口内的事件，**已落盘事件与内存缓冲视为同一份事实源**。
+    ///
+    /// 实时速度必须看得到还没落盘的那几条：`record_event` 有 `FLUSH_DEBOUNCE_MS`
+    /// （3 秒）防抖缓冲，用户刚停笔时最后一段输入还留在 `event_buffer` 里，
+    /// 只读磁盘会漏掉它。`flush_events` 用 `mem::take` 搬走事件，所以同一批
+    /// 事件不会既在缓冲又在磁盘，这里直接拼接不会重复计数。
+    pub fn load_events_in_window(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<WritingInputEvent>> {
+        let start_date = self.timestamp_to_date(start_ms)?;
+        let end_date = self.timestamp_to_date(end_ms)?;
+
+        let mut events = self.load_events_range(&start_date, &end_date)?;
+        events.retain(|e| e.timestamp_ms >= start_ms && e.timestamp_ms < end_ms);
+
+        // Mutex 已中毒时降级为「只用已落盘事件」：统计少算不该让编辑器崩。
+        if let Ok(buffer) = self.event_buffer.lock() {
+            for event in buffer.iter() {
+                if event.timestamp_ms >= start_ms && event.timestamp_ms < end_ms {
+                    events.push(event.clone());
+                }
+            }
+        }
+
+        events.sort_by_key(|e| e.timestamp_ms);
+        Ok(events)
     }
 
     /// 保存每日统计文件。

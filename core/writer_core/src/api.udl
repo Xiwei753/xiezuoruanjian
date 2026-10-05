@@ -621,6 +621,16 @@ dictionary SpeedCurveSummaryDto {
     sequence<SpeedCurvePointDto> buckets;
 };
 
+// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
+// 和 SpeedCurveSummaryDto 分开：曲线是历史分桶，桶只到最后一个事件，
+// 拿它最后一桶当实时速度会在停笔后一直挂着非零值。
+dictionary CurrentWritingSpeedDto {
+    u32 window_seconds;
+    i64 sampled_at_ms;
+    u32 chars_typed;
+    float chars_per_minute;
+};
+
 // ============================================================
 // StarMap types
 // ============================================================
@@ -1187,6 +1197,10 @@ interface WriterAppService {
 
     [Throws=WriterError]
     SpeedCurveSummaryDto get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
+
+    // 实时写作速度（最近 window_seconds 秒）。停笔超过一个窗口后自然回落到 0。
+    [Throws=WriterError]
+    CurrentWritingSpeedDto get_current_writing_speed(u32 window_seconds);
 
     u32 calculate_word_count(string text);
 
