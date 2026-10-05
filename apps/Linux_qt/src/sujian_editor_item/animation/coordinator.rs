@@ -128,7 +128,9 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// - 能并入当前连续编辑（同种类 + 未结束）→ 先采样当前前沿当新起点，只更新
     ///   最新 target，**不生成第二个历史动画对象**。
-    /// - 否则先 `finish_edit_frontier_to_canonical()` 收掉当前，再开新的。
+    /// - 否则先 `finish_frontier_burst_only()` 结束当前 Frontier burst 再开新的。
+    ///   **不动 Reflow** —— 见 Issue #826 评论 12：Reflow 是否连续由
+    ///   `previous.target_text == request.base_text` 独立判定。
     pub(crate) fn begin_or_extend_edit_frontier(&mut self, request: EditFrontierRequest) {
         let kind = match request.kind {
             EditorAnimationKind::Insert => EditFrontierKind::Insert,
@@ -215,7 +217,18 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
         } else {
-            self.finish_edit_frontier_to_canonical();
+            // Issue #826 评论 12：Frontier 换 burst 时**只结束 Frontier**，
+            // 不能顺手把独立的 Reflow 也清掉。
+            //
+            // Frontier 的 burst 边界（kind / direction / identity）与 Reflow 的
+            // 连续性是两件独立的事。反例 `A|B` 输入 X 得 `AX|B`：
+            // X 走 Insert Frontier、B 走 Reflow 往右移动；动画跑到一半立刻
+            // Backspace 删掉 X —— Frontier 因 kind 不同换 burst 完全正常，
+            // 但此时 `previous.target_text == request.base_text == "AXB"`，
+            // Reflow 的 revision 链**仍然连续**，应该「从当前屏幕半路位置
+            // retarget 到最新位置」。全局 finish 会先 `active_reflow = None`，
+            // 导致 B 从屏幕半路**瞬移**回 `AXB` 的 canonical 位置再往回走。
+            self.finish_frontier_burst_only();
             // Issue #826 评论 8 阻塞 3：不再只取 `first_range`。
             // Core 一次编辑可能给出多条 display_patches（Undo/Redo batch、
             // replace-all、apply 原子 batch、IME commit…），全部都要被前沿接管，
@@ -440,12 +453,33 @@ impl LinuxEditorAnimationCoordinator {
             .unwrap_or_default()
     }
 
-    /// Issue #826: 把当前前沿立刻收成 canonical 终态。
+    /// Issue #826: 把**全部**正文视觉层立刻收成 canonical 终态。
     ///
-    /// 指针点击 / 选区变化 / 滚动等场景必须先收口，不能让遮罩挂在旧正文上。
+    /// 指针点击 / 手动 selection-caret 跳转 / composition 切 preedit /
+    /// suppress_all / 加载 / 失焦等场景必须先收口，不能让遮罩挂在旧正文上。
+    /// 这些是真正要「正文所有视觉层一起结束」。
+    ///
+    /// **不要**用它表达「正文又来一笔编辑，只是 Frontier 换 burst」——
+    /// 那是 [`Self::finish_frontier_burst_only`] 的语义，两者不能混用。
     pub(crate) fn finish_edit_frontier_to_canonical(&mut self) {
         self.active_edit_frontier = None;
         self.active_reflow = None;
+    }
+
+    /// Issue #826 评论 12：**只**结束当前 Frontier burst，保留 Reflow。
+    ///
+    /// Frontier 与 Reflow 是 #826 拆开的两个独立视觉层，各自的连续性判据不同：
+    /// - Frontier：由 kind / conceal direction / 编辑身份连续性决定；
+    /// - Reflow：由 `previous.target_text == request.base_text`（revision 链）
+    ///   决定。
+    ///
+    /// 正文又来一笔编辑、只是 Frontier 需要换 burst 时，Reflow 的 revision 链
+    /// 可能仍然连续（Insert -> Delete、Forward Delete -> Backspace、
+    /// identity 断裂、Replace -> 其它 kind 都会遇到），此时必须让 Reflow 继续
+    /// 「当前屏幕位置 -> 最新 target」，不能把它清掉重建成
+    /// 「canonical 位置 -> 最新 target」（那会造成肉眼可见的瞬移）。
+    pub(crate) fn finish_frontier_burst_only(&mut self) {
+        self.active_edit_frontier = None;
     }
 
     pub(crate) fn has_active_edit_frontier(&self) -> bool {

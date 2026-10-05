@@ -14,7 +14,7 @@ use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::coordinator::{
     EditFrontierRequest, LinuxEditorAnimationCoordinator,
 };
-use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
+use crate::sujian_editor_item::animation::edit_frontier::{ConcealDirection, EditFrontierKind};
 use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
@@ -830,5 +830,118 @@ fn replace_opens_new_burst_when_old_reveal_text_is_edited_away() {
     assert!(
         !clips.is_empty(),
         "a 必须作为新字被遮罩逐步打开（正常吐字）"
+    );
+}
+
+/// Issue #826 评论 12：Frontier 换 burst 时**不能**把独立的 Reflow 一起清掉。
+///
+/// 评论原文的反例：旧正文 `A|B` 输入 X 得 `AX|B` ——
+/// - X 走 Insert Frontier；
+/// - B 走 Reflow，正在从旧位置往右移动。
+///
+/// 动画跑到一半立刻 Backspace 删掉 X，Frontier 因 kind 不同（Insert -> Delete）
+/// 换 burst 完全正常。但此时 `previous.target_text == request.base_text ==
+/// "AXB"`，**Reflow 的 revision 链仍然连续**，应该「B 当前屏幕半路位置 →
+/// retarget → 删掉 X 后的最新位置」。
+///
+/// 旧代码在 Frontier 开新 burst 的分支调全局 `finish_edit_frontier_to_canonical()`，
+/// 它会先 `active_reflow = None`，导致 B 从屏幕半路**瞬移**回 `AXB` 的
+/// canonical 位置，再从那里往回走 —— 肉眼可见的瞬移。
+///
+/// 断言：新一轮 Reflow 的起点 x **等于**上一轮 80ms 时 B 的屏幕 `dest_rect.x`，
+/// **不等于** `AXB` 的 canonical B.x。
+#[test]
+fn reflow_survives_frontier_burst_boundary_and_retargets_from_current_screen_position() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // 旧正文 `A|B`：`B` 在 doc x = 20。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0)],
+    )]);
+    // 输入 X 后 `AX|B`：`B` 右移到 doc x = 60（Reflow 的 canonical 目标）。
+    let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 30.0), cluster(2, 3, 60.0)],
+    )]);
+
+    // 第一笔：Insert X。B 进入 Reflow，20 -> 60。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: base,
+        target_snapshot: target.clone(),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
+        base_text: String::from("AB"),
+        target_text: String::from("AXB"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert!(
+        !coord.reflow_glyphs(now).is_empty(),
+        "输入 X 之后 B 必须已经在 Reflow 里"
+    );
+
+    // 动画跑到 80ms，记下 B 当前的屏幕位置。
+    let mid = now + Duration::from_millis(80);
+    let mid_x = coord
+        .reflow_glyphs(mid)
+        .first()
+        .expect("B 的 Reflow span 必须在跑")
+        .dest_rect
+        .x;
+
+    // 第二笔：Backspace 删掉 X，回到 `A|B`。Frontier kind 从 Insert 变 Delete，
+    // 必然换 burst；但 `previous.target_text("AXB") == request.base_text("AXB")`，
+    // Reflow 的 revision 链连续。
+    let restored = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        2,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0)],
+    )]);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: target,
+        target_snapshot: restored.clone(),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (1, 2), 0),
+        base_text: String::from("AXB"),
+        target_text: String::from("AB"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    });
+
+    // Frontier 确实换了新 burst（kind 变成 Delete）。
+    assert_eq!(
+        coord.active_edit_frontier_kind(),
+        Some(EditFrontierKind::Delete),
+        "Frontier 必须已经换成 Delete 的新 burst"
+    );
+
+    let after = coord.reflow_glyphs(mid);
+    assert!(
+        !after.is_empty(),
+        "Frontier 换 burst 不得清掉 revision 链仍连续的 Reflow"
+    );
+    let start_x = after
+        .first()
+        .expect("B 的 Reflow span 必须还在")
+        .dest_rect
+        .x;
+    assert!(
+        (start_x - mid_x).abs() < 1e-6,
+        "新一轮 Reflow 必须从上一帧的屏幕位置继续（mid_x = {mid_x}），实际 start_x = {start_x}"
+    );
+    assert!(
+        (start_x - 60.0).abs() > 1e-6,
+        "不能退回 AXB 的 canonical B.x = 60（那就是瞬移），实际 start_x = {start_x}"
     );
 }
