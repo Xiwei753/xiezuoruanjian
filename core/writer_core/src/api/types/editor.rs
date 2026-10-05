@@ -49,6 +49,31 @@ impl From<EditorTransactionCauseDto> for crate::editor::EditorTransactionCause {
 }
 
 #[allow(clippy::cast_possible_truncation)]
+/// 平台端按编辑事务上报写作统计的入参。
+///
+/// 平台端只透传「编辑事实」：编辑 cause 和 contentDelta 的 inserted/deleted，
+/// **不自己猜 source**。`cause → EventSource` 和各计数字段怎么分配由 Core 决定
+/// （见 `WriterCore::record_editor_change_stats`）。
+///
+/// 只带 inserted/deleted，不带 pasted：Paste 的字数由 Core 从 `cause` 推出该记
+/// `pasted` 还是 `inserted`，平台端不需要（也不该）自己判断。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorChangeStatsInputDto {
+    pub device_id: String,
+    pub platform: String,
+    pub project_id: String,
+    pub volume_id: String,
+    pub chapter_id: String,
+    /// 编辑事务 cause。线格式是变体名本身（该枚举没开 `rename_all`，是 PascalCase）。
+    pub cause: EditorTransactionCauseDto,
+    pub inserted_chars: u32,
+    pub deleted_chars: u32,
+    /// 距上一次统计事件的秒数。首次事件传 0。
+    pub duration_seconds: u32,
+    pub session_id: String,
+}
+
 impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {
     fn from(c: crate::editor::EditorTransactionCause) -> Self {
         match c {

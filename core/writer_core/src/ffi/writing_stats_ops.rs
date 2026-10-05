@@ -125,6 +125,32 @@ pub unsafe extern "C" fn writer_core_get_current_writing_speed(window_seconds: u
     }
 }
 
+/// 按编辑事务上报写作统计。
+///
+/// 与 [`writer_core_process_writing_event`] 分工明确：后者拿两份整章文本做 diff，
+/// 套「净增 > 20 就当 paste」的启发式，正常连续敲 30 个字在保存时就会被误判成
+/// 粘贴，纯输入统计偏低、实时速度长期显示 0。Harmony 应该在编辑事务发生时就调
+/// 本函数，把编辑事实（cause + contentDelta）原样送进来，
+/// `cause → EventSource` 和各计数字段的映射由 Core 决定，端侧不猜 source。
+///
+/// # Safety
+/// `event_json` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串，内容为
+/// [`crate::api::EditorChangeStatsInputDto`] 的 JSON。返回 false 表示解析或落盘失败。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *const c_char) -> bool {
+    let json_str = match c_str_to_rust(event_json) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    with_app_service(|svc| {
+        let input: crate::api::EditorChangeStatsInputDto =
+            serde_json::from_str(&json_str).map_err(|e| format!("invalid stats input: {}", e))?;
+        svc.record_editor_change_stats(input)
+            .map_err(|e| format!("{}", e))
+    })
+    .is_ok()
+}
+
 /// # Safety
 /// `event_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.

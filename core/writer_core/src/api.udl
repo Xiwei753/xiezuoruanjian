@@ -1210,6 +1210,11 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, i32 duration_seconds, string session_id);
 
+    // 按编辑事务上报写作统计（Harmony 走这条）。平台端透传编辑 cause 和
+    // contentDelta，source 分类由 Core 决定，端侧不要自己拼 source 字符串。
+    [Throws=WriterError]
+    void record_editor_change_stats(EditorChangeStatsInputDto input);
+
     [Throws=WriterError]
     boolean flush_writing_stats();
 
@@ -1594,6 +1599,24 @@ enum EditorTransactionCauseDto {
     "Load",
     "Format",
     "Programmatic",
+};
+
+// 平台端按编辑事务上报写作统计的入参。
+// 平台端只透传「编辑事实」：编辑 cause 和 contentDelta 的 inserted/deleted，
+// 不自己猜 source —— cause 到 EventSource 和各计数字段的映射由 Core 决定。
+// 只带 inserted/deleted 不带 pasted：Paste 记哪个字段由 Core 从 cause 推出。
+dictionary EditorChangeStatsInputDto {
+    string device_id;
+    string platform;
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    EditorTransactionCauseDto cause;
+    u32 inserted_chars;
+    u32 deleted_chars;
+    // 距上一次统计事件的秒数，首次事件传 0。
+    u32 duration_seconds;
+    string session_id;
 };
 
 // ── Editor V2 Kernel DTOs ──

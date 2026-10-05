@@ -1,6 +1,7 @@
 use crate::api::{
     ChapterStatsSummaryDto, CurrentWritingSpeedDto, DeviceInfoDto, DeviceStatsSummaryDto,
-    ProjectStatsSummaryDto, SpeedCurveSummaryDto, WriterError, WritingStatsSummaryDto,
+    EditorChangeStatsInputDto, ProjectStatsSummaryDto, SpeedCurveSummaryDto, WriterError,
+    WritingStatsSummaryDto,
 };
 
 impl super::WriterAppService {
@@ -56,6 +57,16 @@ impl super::WriterAppService {
         window_seconds: u32,
     ) -> Result<CurrentWritingSpeedDto, WriterError> {
         self.api.get_current_writing_speed(window_seconds)
+    }
+
+    /// 按编辑事务上报写作统计。平台端只透传编辑事实（cause + contentDelta），
+    /// source 分类由 Core 从 cause 推导。见
+    /// [`WriterCore::record_editor_change_stats`](crate::facade::WriterCore::record_editor_change_stats)。
+    pub fn record_editor_change_stats(
+        &self,
+        input: EditorChangeStatsInputDto,
+    ) -> Result<(), WriterError> {
+        self.api.record_editor_change_stats(input)
     }
 
     pub fn calculate_word_count(&self, text: String) -> u32 {

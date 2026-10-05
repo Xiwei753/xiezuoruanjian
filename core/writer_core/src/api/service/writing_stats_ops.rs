@@ -1,6 +1,27 @@
 use super::*;
 
 impl WriterCoreApi {
+    /// 按编辑事务上报写作统计。平台端透传编辑事实，source 分类由 Core 决定。
+    pub fn record_editor_change_stats(
+        &self,
+        input: crate::api::EditorChangeStatsInputDto,
+    ) -> ApiResult<()> {
+        self.core_write()
+            .record_editor_change_stats(
+                &input.device_id,
+                &input.platform,
+                &input.project_id,
+                &input.volume_id,
+                &input.chapter_id,
+                input.cause.into(),
+                input.inserted_chars,
+                input.deleted_chars,
+                input.duration_seconds,
+                &input.session_id,
+            )
+            .map_err(WriterError::from)
+    }
+
     pub fn get_writing_stats_summary_json(
         &self,
         start_date: &str,

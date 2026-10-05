@@ -375,7 +375,7 @@ impl StatsStore {
         Ok(all_events)
     }
 
-    /// 读取 `[start_ms, end_ms)` 窗口内的事件，**已落盘事件与内存缓冲视为同一份事实源**。
+    /// 读取 `[start_ms, end_ms]` 窗口内的事件，**已落盘事件与内存缓冲视为同一份事实源**。
     ///
     /// 实时速度必须看得到还没落盘的那几条：`record_event` 有 `FLUSH_DEBOUNCE_MS`
     /// （3 秒）防抖缓冲，用户刚停笔时最后一段输入还留在 `event_buffer` 里，
@@ -390,12 +390,12 @@ impl StatsStore {
         let end_date = self.timestamp_to_date(end_ms)?;
 
         let mut events = self.load_events_range(&start_date, &end_date)?;
-        events.retain(|e| e.timestamp_ms >= start_ms && e.timestamp_ms < end_ms);
+        events.retain(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms);
 
         // Mutex 已中毒时降级为「只用已落盘事件」：统计少算不该让编辑器崩。
         if let Ok(buffer) = self.event_buffer.lock() {
             for event in buffer.iter() {
-                if event.timestamp_ms >= start_ms && event.timestamp_ms < end_ms {
+                if event.timestamp_ms >= start_ms && event.timestamp_ms <= end_ms {
                     events.push(event.clone());
                 }
             }

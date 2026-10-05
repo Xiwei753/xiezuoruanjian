@@ -123,7 +123,150 @@ impl Drop for WriterCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::EditorTransactionCause;
+    use crate::writing_stats::EventSource;
     use tempfile::tempdir;
+
+    fn record_edit(core: &WriterCore, cause: EditorTransactionCause, inserted: u32, deleted: u32) {
+        core.record_editor_change_stats(
+            "dev-1",
+            "harmony",
+            "proj1",
+            "vol1",
+            "chap1",
+            cause,
+            inserted,
+            deleted,
+            0,
+            "session-1",
+        )
+        .unwrap();
+    }
+
+    // Issue #829 评论5：编辑事务上报后，「当前写作速度」立刻能看到这段输入，
+    // 不依赖保存。连续 Typing 30 字（分三次编辑事务）且期间不保存，
+    // 当前速度必须已经是 30 字/分。
+    #[test]
+    fn test_editor_change_stats_visible_to_current_speed_before_save() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        for _ in 0..3 {
+            record_edit(&core, EditorTransactionCause::Typing, 10, 0);
+        }
+
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(speed.chars_typed, 30);
+        assert!((speed.chars_per_minute - 30.0).abs() < 0.001);
+    }
+
+    // Issue #829 评论5：保存本身不能再产生第二份统计。
+    // 新链路的统计完全来自编辑事务，保存只是把正文落盘，
+    // 所以「上报完 30 字 → 再走一次保存路径 → 当前速度仍是 30 字」。
+    // 旧链路（保存时按整章 old/new 比较，净增 > 20 当 paste）会在这里翻倍，
+    // 这条测试就是钉住「保存不再新增统计」。
+    #[test]
+    fn test_save_does_not_add_second_stats_record() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        for _ in 0..3 {
+            record_edit(&core, EditorTransactionCause::Typing, 10, 0);
+        }
+        let after_edits = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(after_edits.chars_typed, 30);
+
+        // 模拟自动保存：只写正文，不调任何统计入口。
+        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
+        let project = core.create_project("P").unwrap();
+        let volume = core.create_volume(&project.id, "V").unwrap();
+        let chapter = core.create_chapter(&project.id, &volume.id, "C").unwrap();
+        core.write_chapter(&project.id, &volume.id, &chapter.id, &"字".repeat(30))
+            .unwrap();
+
+        let after_save = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(
+            after_save.chars_typed, 30,
+            "保存不应新增统计事件（否则和编辑事务上报重复计数）"
+        );
+    }
+
+    // Issue #829 评论5：Paste 30 字仍然不计 HumanTyped——
+    // 粘贴进来的字不算「当前字/分」，也不该进今日纯输入。
+    #[test]
+    fn test_editor_change_stats_paste_not_counted_as_typing() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        record_edit(&core, EditorTransactionCause::Paste, 30, 0);
+
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(speed.chars_typed, 0, "粘贴不应计入人工输入速度");
+        assert_eq!(speed.chars_per_minute, 0.0);
+    }
+
+    // Issue #829 评论5：Undo / Redo / Programmatic 等 cause 带 inserted 也不该
+    // 算成人工输入——这些是程序改的正文，不是人在敲。
+    #[test]
+    fn test_editor_change_stats_undo_redo_not_counted_as_typing() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        for cause in [
+            EditorTransactionCause::Undo,
+            EditorTransactionCause::Redo,
+            EditorTransactionCause::Programmatic,
+            EditorTransactionCause::Load,
+            EditorTransactionCause::Format,
+        ] {
+            record_edit(&core, cause, 10, 0);
+        }
+
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(
+            speed.chars_typed, 0,
+            "Undo/Redo/Programmatic 不应计入人工输入速度"
+        );
+    }
+
+    // Issue #829 评论5：纯光标移动（inserted/deleted 都是 0）不落事件。
+    #[test]
+    fn test_editor_change_stats_ignores_empty_delta() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        record_edit(&core, EditorTransactionCause::Typing, 0, 0);
+
+        // 空事件直接返回，既不落盘也不影响计数。
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(speed.chars_typed, 0);
+    }
+
+    // IME 输入在 Core 里是独立 cause，必须和普通 Typing 一样算人工输入。
+    #[test]
+    fn test_editor_change_stats_ime_counts_as_typing() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        record_edit(&core, EditorTransactionCause::ImeComposition, 12, 0);
+        record_edit(&core, EditorTransactionCause::TypingCommit, 8, 0);
+
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(speed.chars_typed, 20);
+    }
+
+    // Delete 走的是 deleted 字段，不该被当成插入计入「当前字/分」。
+    #[test]
+    fn test_editor_change_stats_delete_counts_as_deleted() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        record_edit(&core, EditorTransactionCause::Typing, 20, 0);
+        record_edit(&core, EditorTransactionCause::Delete, 0, 5);
+
+        let speed = core.get_current_writing_speed(60).unwrap();
+        assert_eq!(speed.chars_typed, 20, "删除不计入人工输入速度");
+    }
 
     #[test]
     fn test_facade_basic_flow() {
