@@ -302,4 +302,21 @@ impl AppBackend {
             QJsonObject::default()
         }
     }
+
+    /// 实时写作速度（最近 `window_seconds` 秒）。
+    ///
+    /// 和 `get_writing_speed_curve` 分工明确：速度曲线是历史分桶，桶只生成到
+    /// 最后一个事件，拿它最后一桶当实时速度会在停笔后一直挂着非零值。Core 以
+    /// 「现在」为终点重算窗口速度，停笔超过一个窗口后自然回落到 0，端侧不需要
+    /// 自己判断历史桶是否过期，也不需要为刷新它强制 flush 统计事件。
+    pub(crate) fn get_current_writing_speed(&self, window_seconds: u32) -> QJsonObject {
+        if let Some(core) = self.core_api() {
+            match core.get_current_writing_speed_json(window_seconds) {
+                Ok(val) => qjson_object_from_json(&val),
+                Err(_) => QJsonObject::default(),
+            }
+        } else {
+            QJsonObject::default()
+        }
+    }
 }

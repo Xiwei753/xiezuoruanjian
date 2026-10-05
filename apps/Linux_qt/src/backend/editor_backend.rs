@@ -135,6 +135,9 @@ pub struct EditorBackend {
     get_writing_speed_curve_object: qt_method!(
         fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject
     ),
+    /// 实时写作速度（最近 N 秒）。状态栏左段「N 字/分」走这里，不读速度曲线。
+    #[allow(dead_code)]
+    get_current_writing_speed: qt_method!(fn(&self, window_seconds: u32) -> QJsonObject),
     #[allow(dead_code)]
     flush_writing_stats: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -404,6 +407,12 @@ impl EditorBackend {
         .unwrap_or_else(|_| {
             qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
         })
+    }
+    fn get_current_writing_speed(&self, window_seconds: u32) -> QJsonObject {
+        self.with_app(|app| app.get_current_writing_speed(window_seconds))
+            .unwrap_or_else(|_| {
+                qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
+            })
     }
     fn flush_writing_stats(&self) {
         if self.with_app(|app| app.flush_writing_stats()).is_err() {

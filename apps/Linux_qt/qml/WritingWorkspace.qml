@@ -311,18 +311,17 @@ Rectangle {
         return editorController.flushActiveEditorBeforeSync();
     }
 
-    // Issue #829：手稿「86 字/分」是最近一分钟的写入速度，按 1 分钟分桶查
-    // Core 的速度曲线并取最后一个桶。速度由 Core 算，端侧不自己拿"字数 / 时长"除。
-    readonly property int statusSpeedBucketMinutes: 1
+    // Issue #829：手稿「86 字/分」是"最近一分钟写了多少字"。
+    // 用 Core 的「当前写作速度」查询（window_seconds=60），窗口长度就是 60 秒。
+    readonly property int statusSpeedWindowSeconds: 60
 
     // ── Issue #829：写作页底部状态栏的数据 ──
     // 全部取自 Core 的写作统计，不在端侧自己算，也不用章节字数顶替：
-    //   左段 = 速度曲线最后一个桶的 charsPerMinute（手稿「86 字/分」是
-    //           "最近一分钟写了多少字"，不是本章累计字数）；
-    //   中段 = 今日纯输入字数 summary.total_human_typed_chars。
+    //   左段 = Core 当前写作速度的 charsPerMinute（手稿「86 字/分」）；
+    //   中段 = 今日纯输入字数 summary.totalHumanTypedChars。
     // 统计按 Core 的 writing event 落盘，所以只在打开 / 切章 / 定时器到点时重拉，
     // 不做逐键刷新——每敲一个字去查一次只会拿到同一个值。
-    readonly property int latestCharsPerMinute: 0
+    property int latestCharsPerMinute: 0
     property int todayTypedChars: 0
     // 右段：HH:mm。定时器只做格式化，不碰任何业务状态。
     property string clockText: ""
@@ -364,26 +363,21 @@ Rectangle {
         if (!be) return
         var today = root.todayDateString()
 
-        var curve
-        try {
-            curve = JSON.parse(be.get_writing_speed_curve(today, today, root.statusSpeedBucketMinutes))
-        } catch (e) {
-            curve = null
-        }
-        if (curve && curve.success && curve.data && curve.data.buckets
-            && curve.data.buckets.length > 0) {
-            var last = curve.data.buckets[curve.data.buckets.length - 1]
-            root.latestCharsPerMinute = Math.round(last.chars_per_minute || 0)
+        // 左段：Core 当前写作速度。
+        // 不用写作速度曲线的最后一个桶——曲线桶只生成到最后一个输入事件，
+        // 停笔后它会一直挂着停笔前的非零值。也别在这里判断桶是否过期或强制
+        // flush 统计事件，Core 已经把内存缓冲和已落盘事件当成同一份事实源。
+        // 失败保持上一次的值，不清零：Core 拿不到不等于"这一刻没写字"。
+        var speed = be.get_current_writing_speed(root.statusSpeedWindowSeconds)
+        if (speed && speed.charsPerMinute !== undefined) {
+            root.latestCharsPerMinute = Math.round(speed.charsPerMinute)
         }
 
-        var summary
-        try {
-            summary = JSON.parse(be.get_writing_stats_summary(today, today))
-        } catch (e) {
-            summary = null
-        }
-        if (summary && summary.success && summary.data) {
-            root.todayTypedChars = summary.data.total_human_typed_chars || 0
+        // 中段：今日纯输入字数。get_writing_stats_summary 返回的是 Core JSON 本体
+        // （不是 ResultEnvelope），字段是 camelCase。
+        var summary = be.get_writing_stats_summary_object(today, today)
+        if (summary && summary.totalHumanTypedChars !== undefined) {
+            root.todayTypedChars = summary.totalHumanTypedChars
         }
     }
 

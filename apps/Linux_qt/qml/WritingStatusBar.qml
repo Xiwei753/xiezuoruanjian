@@ -25,9 +25,11 @@ Rectangle {
     required property var dt
 
     // ── 注入的状态数据（全部由 WritingWorkspace 提供）──
-    // 左段：Core 写作速度曲线最后一个桶的 charsPerMinute（分钟级速度）。
+    // 左段：Core「当前写作速度」的 charsPerMinute（最近 N 秒窗口折算成字/分）。
     // 手稿的「86 字/分」是"最近一分钟写了多少字"，不是本章字数；
     // 也不用"字数 / 时长"自己除——Core 的会话/空闲口径才作数。
+    // 也不能读写作速度曲线的最后一个桶：曲线是历史分桶，桶只生成到最后一个
+    // 输入事件，停笔后它会一直挂着停笔前的非零值。
     property int charsPerMinute: 0
     // 进度分子：Core 写作统计里的今日纯输入字数（get_writing_stats_summary）。
     property int progressCurrent: 0
