@@ -28,7 +28,7 @@ use crate::sujian_editor_item::animation::edit_frontier::{
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
 use crate::sujian_editor_item::animation::shaping_transition::{
-    ShapingTransitionFrame, ShapingTransitionState,
+    CurrentVisualCluster, ShapingTransitionFrame, ShapingTransitionState,
 };
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
@@ -178,13 +178,29 @@ impl LinuxEditorAnimationCoordinator {
         // （Backward）方向相反，必须另开一轮。否则 `extend_delete()` 会把
         // `conceal_direction` 改掉并重建整条路径，已吞掉的视觉状态会被换到
         // 另一端去。
-        // Issue #826 评论 24：先派生「视觉 affected cluster」层。
+        // Issue #826 评论 24/25：先派生「视觉 affected cluster」层。
         //
         // Core 的 inserted/deleted range 是逻辑字符事实，可以按字符切；Qt 的
-        // shaping cluster 不能切。改动只覆盖 cluster 一部分时，整块 cluster 退出
-        // EditFrontier（Reveal carry / scalar / Conceal 全部不许碰），作为一对
-        // old/new cluster 进入这一层。
-        let shaping = ShapingTransitionState::build(
+        // shaping cluster 不能切。改动只覆盖 cluster 一部分（或边界 / shaping
+        // 变了）时，整块 cluster 退出 EditFrontier（Reveal carry / scalar /
+        // Conceal 全部不许碰），作为一组 old/new atom 进入这一层。
+        //
+        // **必须先采当前屏幕事实再改任何状态**：本层的第一帧要接着上一帧
+        // 真正画出来的像素，而不是回到 canonical 起步。评论 25 的反例：
+        // `af` 80ms 时 `f` 只露了 8.75px，若本层拿 base_snapshot 里的完整 `f`
+        // 当 old 侧，第二笔同一帧就会「8.75px 突然补满 10px，再开始 f -> fi」。
+        let current_visuals = self.collect_current_visuals(request.now);
+        // Issue #826 评论 25 阻塞 2：revision 链连续（上一份的 target 正好是
+        // 本次的 base）才能 retarget。上一笔还在淡出的 f/fi 遇到下一笔**无关**
+        // 编辑时不能被清掉 —— 那样会「播到一半突然跳终态」。
+        let previous_shaping = self
+            .active_shaping_transition
+            .as_ref()
+            .filter(|previous| previous.target_text() == request.base_text)
+            .cloned();
+        let shaping = ShapingTransitionState::build_or_retarget(
+            previous_shaping.as_ref(),
+            &current_visuals,
             &request.base_snapshot,
             &request.target_snapshot,
             &request.deleted_ranges,
@@ -192,9 +208,10 @@ impl LinuxEditorAnimationCoordinator {
             &request.offset_map,
             request.now,
             duration_ms,
+            request.target_text.clone(),
         );
-        let shaping_new_owned = shaping.owned_new_clusters.clone();
-        let shaping_old_owned = shaping.owned_old_clusters.clone();
+        let shaping_new_owned = shaping.owned_new_clusters();
+        let shaping_old_owned = shaping.owned_old_clusters();
 
         let can_extend = self
             .active_edit_frontier
@@ -331,23 +348,12 @@ impl LinuxEditorAnimationCoordinator {
             });
         }
 
-        // Issue #826 评论 24：把这一笔的 mixed cluster 交接层挂上。
+        // Issue #826 评论 24/25：把这一笔的交接层挂上。
         //
-        // 与 Frontier burst 的连续性无关：只要本笔有 mixed cluster 就必须有这一层，
+        // 与 Frontier burst 的连续性无关：只要有不可拆 cluster 就必须有这一层，
         // 否则那块视觉 cluster 会被前沿/reflow 同时碰。空的时候直接清掉，避免留一个
         // 什么都不画的「运行中动画」让渲染链一直请求下一帧。
-        match self.active_shaping_transition.as_ref() {
-            Some(previous) if !shaping.is_empty() => {
-                let mut shaping = shaping;
-                // 同一批 mixed cluster 的连续编辑（`af` -> `afi` -> `afij`…）沿用同一次
-                // 交接的进度，不能每笔都闪回全不透明。
-                shaping.carry_over_progress_from(previous);
-                self.active_shaping_transition = Some(shaping);
-            }
-            _ => {
-                self.active_shaping_transition = (!shaping.is_empty()).then_some(shaping);
-            }
-        }
+        self.active_shaping_transition = (!shaping.is_empty()).then_some(shaping);
 
         self.begin_or_extend_reflow(&request, duration_ms);
         record_frontier_diagnostic(
@@ -356,6 +362,71 @@ impl LinuxEditorAnimationCoordinator {
             self.active_edit_frontier.as_ref(),
             self.active_shaping_transition.as_ref(),
         );
+    }
+
+    /// Issue #826 评论 25：**这一帧**屏幕上真实存在的全部视觉原子。
+    ///
+    /// 这是「owner 换手」的唯一交接凭据。任一视觉 owner 换成另一个 owner 时，
+    /// 新 owner 的第一帧必须等于旧 owner 上一帧真正画出来的像素，不能回
+    /// canonical 再起步 —— 这是 #826 从 Reflow→Conceal、Reveal rewrap 到
+    /// Reveal→ShapingTransition 一路贯穿的那条原则。
+    ///
+    /// 它**不是**历史动画状态：没有 `started_at`、没有 remaining duration、
+    /// 没有 historical stage、没有第二个动画对象，就是一帧采样。
+    pub(crate) fn collect_current_visuals(&self, frame_now: Instant) -> Vec<CurrentVisualCluster> {
+        let mut out: Vec<CurrentVisualCluster> = Vec::new();
+
+        // 1. 吐字侧：scalar reveal 正在打开的 cluster + carry 那一小段可见前缀。
+        if let (Some(frontier), Some(sample)) = (
+            self.active_edit_frontier.as_ref(),
+            self.sample_edit_frontier(frame_now),
+        ) {
+            for reveal in frontier.current_reveal_visuals(sample.progress) {
+                out.push(CurrentVisualCluster {
+                    logical_range: reveal.range,
+                    snapshot_id: reveal.snapshot_id,
+                    source_rect: reveal.source_rect,
+                    dest_rect: reveal.rect,
+                    // 吐字遮罩只裁可见宽度，屏幕上的实际不透明度仍是 1。
+                    opacity: 1.0,
+                    visible_clip: reveal.visible_width,
+                });
+            }
+            // 2. 吞字侧：还没被遮罩收掉的旧 glyph。
+            for glyph in frontier.old_overlay_glyphs(&sample) {
+                if !glyph.is_visible() {
+                    continue;
+                }
+                out.push(CurrentVisualCluster {
+                    logical_range: glyph.range,
+                    snapshot_id: glyph.snapshot_id,
+                    source_rect: glyph.source_rect,
+                    dest_rect: glyph.dest_rect.clone(),
+                    opacity: 1.0,
+                    visible_clip: glyph.dest_rect.w,
+                });
+            }
+        }
+
+        // 3. Reflow 层：正在移动的字，这一帧的真实位置。
+        if let Some(reflow) = self.active_reflow.as_ref() {
+            for current in reflow.current_geometry(frame_now) {
+                out.push(CurrentVisualCluster {
+                    logical_range: current.current_range,
+                    snapshot_id: current.snapshot_id,
+                    source_rect: current.source_rect,
+                    dest_rect: current.dest_rect.clone(),
+                    opacity: 1.0,
+                    visible_clip: current.dest_rect.w,
+                });
+            }
+        }
+
+        // 4. 交接层自己：正在淡出 / 淡入的两侧。
+        if let Some(shaping) = self.active_shaping_transition.as_ref() {
+            out.extend(shaping.current_visuals(frame_now));
+        }
+        out
     }
 
     /// Issue #826: Reflow 层独立更新。没改的字移动，不参与前沿。
@@ -393,12 +464,15 @@ impl LinuxEditorAnimationCoordinator {
         // changed range 脱钩，Reflow 就会把一块正被交接层淡出的 cluster 再插值
         // 一次。这里显式并进去，让「每块视觉 cluster 每帧一个 owner」是**写出来的
         // 约束**，不是推出来的。
-        let shaping = self.active_shaping_transition.as_ref();
-        let shaping_old_owned: Vec<(usize, usize)> = shaping
-            .map(|s| s.owned_old_clusters.clone())
+        let shaping_old_owned: Vec<(usize, usize)> = self
+            .active_shaping_transition
+            .as_ref()
+            .map(|shaping| shaping.owned_old_clusters())
             .unwrap_or_default();
-        let shaping_new_owned: Vec<(usize, usize)> = shaping
-            .map(|s| s.owned_new_clusters.clone())
+        let shaping_new_owned: Vec<(usize, usize)> = self
+            .active_shaping_transition
+            .as_ref()
+            .map(|shaping| shaping.owned_new_clusters())
             .unwrap_or_default();
         let excluded_old: Vec<(usize, usize)> = request
             .deleted_ranges
@@ -1110,15 +1184,15 @@ fn record_frontier_diagnostic(
     // 碰到了 Qt 合成 cluster，动画走的是交接层而不是普通 Reveal/Conceal。
     fields.insert(
         "shaping_transition_spans".to_string(),
-        serde_json::json!(shaping.map(|s| s.spans.len()).unwrap_or(0)),
+        serde_json::json!(shaping.map(|s| s.groups.len()).unwrap_or(0)),
     );
     fields.insert(
         "shaping_old_owned".to_string(),
-        serde_json::json!(shaping.map(|s| &s.owned_old_clusters).unwrap_or(&vec![])),
+        serde_json::json!(shaping.map(|s| s.owned_old_clusters()).unwrap_or_default()),
     );
     fields.insert(
         "shaping_new_owned".to_string(),
-        serde_json::json!(shaping.map(|s| &s.owned_new_clusters).unwrap_or(&vec![])),
+        serde_json::json!(shaping.map(|s| s.owned_new_clusters()).unwrap_or_default()),
     );
     writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),

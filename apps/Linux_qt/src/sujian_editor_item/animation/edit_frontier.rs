@@ -696,13 +696,17 @@ pub(crate) struct ConcealGlyphGeometry {
 /// 这是**唯一**带字符身份的 Reveal 视觉事实：`travelled = 8.75` 只说明沿路径走了
 /// 8.75px，一旦新 path 的顺序或几何变了，这 8.75px 就不再对应同一批字。
 #[derive(Clone, Debug, PartialEq)]
-struct RevealVisibleSample {
+pub(crate) struct RevealVisibleSample {
     /// 字符身份（当时的 target 坐标系）。
-    range: (usize, usize),
+    pub range: (usize, usize),
+    /// 贴图来源：最新 target 的行纹理。
+    pub snapshot_id: LineSnapshotId,
+    /// 那张行纹理里的源矩形（覆盖整个 cluster）。
+    pub source_rect: SourceRect,
     /// 这一帧它在屏幕上的矩形（文档坐标）。
-    rect: SourceRect,
+    pub rect: SourceRect,
     /// 这一帧已经露出的宽度（`0..= rect.w`）。
-    visible_width: f64,
+    pub visible_width: f64,
 }
 
 /// Issue #826 评论 20：已可见前缀的一次性补间交接。
@@ -1272,6 +1276,8 @@ impl EditFrontierState {
                         // 之前按 region range 裁成子范围，等于在没有 cluster 边界
                         // 承认这个字的情况下先给它安一个逻辑身份。
                         range: (cluster.byte_start, cluster.byte_end),
+                        snapshot_id: line.id,
+                        source_rect: cluster.source_rect.clone(),
                         rect,
                         visible_width: visible,
                     });
@@ -1286,11 +1292,22 @@ impl EditFrontierState {
             out.retain(|item| item.range != carried.range);
             out.push(RevealVisibleSample {
                 range: carried.range,
+                snapshot_id: carried.snapshot_id,
+                source_rect: carried.source_rect.clone(),
                 rect: sample.rect,
                 visible_width: sample.visible_width,
             });
         }
         out
+    }
+
+    /// Issue #826 评论 25：吐字侧这一帧真实可见的视觉原子。
+    ///
+    /// 给 owner 换手用：Reveal 把某块 cluster 的所有权交给
+    /// `ShapingTransition` 时，新 owner 的第一帧必须等于这一帧真正画出来的
+    /// 那几个像素，而不是回到 canonical 起步。
+    pub(crate) fn current_reveal_visuals(&self, progress: f64) -> Vec<RevealVisibleSample> {
+        self.sample_visible_reveal(progress)
     }
 
     /// Issue #826 评论 20：连续吐字 retarget 的唯一入口。
@@ -1606,6 +1623,7 @@ impl EditFrontierState {
                 0.0
             };
             glyphs.push(FrontierGlyph {
+                range: carried.range,
                 snapshot_id: carried.snapshot_id,
                 source_rect: SourceRect {
                     x: carried.source_rect.x,
@@ -1836,6 +1854,7 @@ impl EditFrontierState {
                     let src_x = source.x + source.w * ratio;
                     let src_w = (dest_w / dest.w.max(f64::MIN_POSITIVE)) * source.w;
                     glyphs.push(FrontierGlyph {
+                        range: geometry.range,
                         snapshot_id: geometry.snapshot_id,
                         source_rect: SourceRect {
                             x: src_x,
@@ -1858,9 +1877,13 @@ impl EditFrontierState {
 }
 
 /// Issue #826: 前沿驱动的单个旧正文 glyph。
-/// Issue #826: 前沿驱动的单个旧正文 glyph。
 #[derive(Clone, Debug)]
 pub(crate) struct FrontierGlyph {
+    /// Issue #826 评论 25：这块字在**当前** target 坐标系里的视觉身份。
+    ///
+    /// owner 换手时要靠它对齐：吞字把某块 cluster 交给别的层时，新 owner 必须
+    /// 知道这块像素对应哪一段字符。
+    pub range: (usize, usize),
     pub snapshot_id: LineSnapshotId,
     /// 从旧行纹理里取这块的源矩形。
     pub source_rect: SourceRect,

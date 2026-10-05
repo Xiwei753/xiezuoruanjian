@@ -34,5 +34,6 @@ pub(crate) use edit_frontier::{
 pub(crate) use reflow_motion::{ReflowSpan, ReflowSpanFrame, ReflowState};
 #[allow(unused_imports)]
 pub(crate) use shaping_transition::{
-    ShapingTransitionFrame, ShapingTransitionSide, ShapingTransitionSpan, ShapingTransitionState,
+    CurrentVisualCluster, ShapingTransitionFrame, ShapingTransitionGroup, ShapingTransitionSide,
+    ShapingTransitionState, VisualClusterAtom,
 };

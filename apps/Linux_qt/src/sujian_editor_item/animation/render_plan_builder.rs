@@ -104,7 +104,10 @@ impl LinuxEditorAnimationCoordinator {
         // 绝不能按 byte 比例裁 source_rect —— 混合 cluster 的新旧 source_rect
         // 本身就是两套不同形状的资源。
         for frame in self.shaping_transition_glyphs(frame_now) {
-            for side in [frame.old, frame.new].into_iter().flatten() {
+            for side in frame.old.into_iter().chain(frame.new) {
+                if side.opacity <= 1e-6 || side.rect.w <= 1e-6 {
+                    continue;
+                }
                 glyphs.push(TextAnimationGlyphInfo {
                     x: side.rect.x,
                     y: side.rect.y,
