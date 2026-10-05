@@ -129,7 +129,6 @@ mod tests {
 
     fn record_edit(core: &WriterCore, cause: EditorTransactionCause, inserted: u32, deleted: u32) {
         core.record_editor_change_stats(
-            "dev-1",
             "harmony",
             "proj1",
             "vol1",
@@ -158,6 +157,46 @@ mod tests {
         let speed = core.get_current_writing_speed(60).unwrap();
         assert_eq!(speed.chars_typed, 30);
         assert!((speed.chars_per_minute - 30.0).abs() < 0.001);
+    }
+
+    // Issue #829 评论7：设备身份由 Core 自己读/建，平台端不传 device_id。
+    // 旧版队列在构造时 settings 还没加载完，拿到的是 'unknown' 占位值且
+    // readonly 锁死，于是所有 Harmony 统计都进了同一个 unknown 设备桶。
+    // 现在这条测试钉住：Core 侧 ensure 出来的 device_id 非空且持久化，
+    // 且统计事件真的带上了它（不是 unknown / 空串）。
+    #[test]
+    fn test_editor_change_stats_uses_core_owned_device_id() {
+        let temp_dir = tempdir().unwrap();
+        let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
+
+        record_edit(&core, EditorTransactionCause::Typing, 10, 0);
+
+        let info = core.load_device_info().unwrap();
+        assert!(
+            !info.device_id.is_empty() && info.device_id != "unknown",
+            "device_id 必须是 Core 读/建出来的稳定标识，实际 {:?}",
+            info.device_id
+        );
+        assert_eq!(info.platform, "harmony");
+
+        // 落盘的统计里，事件带的 device_id 与上面一致。
+        core.get_stats_api().flush().unwrap();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let events = core
+            .get_stats_api()
+            .aggregator()
+            .store()
+            .load_events_in_window(now_ms - 60_000, now_ms)
+            .unwrap();
+        assert!(!events.is_empty(), "应至少有一条统计事件");
+        assert!(
+            events.iter().all(|e| e.device_id == info.device_id),
+            "事件 device_id 必须都是 Core 的稳定标识，实际 {:?}",
+            events
+                .iter()
+                .map(|e| e.device_id.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     // Issue #829 评论5：保存本身不能再产生第二份统计。

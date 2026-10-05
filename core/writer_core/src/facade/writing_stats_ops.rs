@@ -198,7 +198,6 @@ impl super::WriterCore {
     /// `net_delta_chars = inserted + pasted + ai_inserted - deleted` 才成立。
     pub fn record_editor_change_stats(
         &self,
-        device_id: &str,
         platform_str: &str,
         project_id: &str,
         volume_id: &str,
@@ -211,15 +210,19 @@ impl super::WriterCore {
     ) -> Result<()> {
         use crate::editor::EditorTransactionCause;
 
-        let device_class = self
-            .load_device_info()
-            .map(|info| info.device_class)
-            .unwrap_or_else(|_| {
-                writer_platform_api::PlatformKind::from_str_name(platform_str)
-                    .unwrap_or(writer_platform_api::PlatformKind::Desktop)
-                    .default_device_class()
-                    .to_string()
-            });
+        // 设备身份由 Core 读/建，不让平台端传。平台端构造这个入参时页面设置通常
+        // 还没加载完，传过来的 device_id 多半是空串或占位值；一旦记进事件就再也
+        // 改不回来（历史事件全进了同一个 unknown 桶）。
+        // ensure_device_info 只在字段为空时填充并落盘，所以这里每次调用都安全。
+        let platform = writer_platform_api::PlatformKind::from_str_name(platform_str)
+            .unwrap_or(writer_platform_api::PlatformKind::Desktop);
+        let device_info = self.ensure_device_info(
+            platform.to_str_name(),
+            platform.default_device_class(),
+            None,
+        )?;
+        let device_id = device_info.device_id.as_str();
+        let device_class = device_info.device_class.as_str();
 
         let (source, inserted, deleted, pasted) = match cause {
             EditorTransactionCause::Typing

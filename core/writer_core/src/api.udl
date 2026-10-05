@@ -1605,8 +1605,9 @@ enum EditorTransactionCauseDto {
 // 平台端只透传「编辑事实」：编辑 cause 和 contentDelta 的 inserted/deleted，
 // 不自己猜 source —— cause 到 EventSource 和各计数字段的映射由 Core 决定。
 // 只带 inserted/deleted 不带 pasted：Paste 记哪个字段由 Core 从 cause 推出。
+// 不带 device_id：设备身份是 Core 的持久化事实，由 Core 自己读/建。平台端
+// 构造这个入参时页面设置往往还没加载完，传进来的多半是空串或占位值。
 dictionary EditorChangeStatsInputDto {
-    string device_id;
     string platform;
     string project_id;
     string volume_id;

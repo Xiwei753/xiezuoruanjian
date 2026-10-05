@@ -57,10 +57,14 @@ impl From<EditorTransactionCauseDto> for crate::editor::EditorTransactionCause {
 ///
 /// 只带 inserted/deleted，不带 pasted：Paste 的字数由 Core 从 `cause` 推出该记
 /// `pasted` 还是 `inserted`，平台端不需要（也不该）自己判断。
+///
+/// **不带 device_id**：设备身份是 Core 的持久化事实，由
+/// `record_editor_change_stats` 内部 `ensure_device_info` 读/建。平台端构造这个
+/// 入参时页面设置往往还没加载完，传进来的多半是空串或占位值，
+/// 一旦被 Core 记进统计就再也改不回来（历史事件全进了 `unknown` 桶）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorChangeStatsInputDto {
-    pub device_id: String,
     pub platform: String,
     pub project_id: String,
     pub volume_id: String,

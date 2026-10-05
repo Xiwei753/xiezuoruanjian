@@ -8,7 +8,6 @@ impl WriterCoreApi {
     ) -> ApiResult<()> {
         self.core_write()
             .record_editor_change_stats(
-                &input.device_id,
                 &input.platform,
                 &input.project_id,
                 &input.volume_id,
