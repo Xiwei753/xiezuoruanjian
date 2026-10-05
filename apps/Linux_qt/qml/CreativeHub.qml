@@ -36,6 +36,10 @@ Rectangle {
     // Workbench 但仍给 Bottom，用 workspaceLayoutMode 判会把中等窗口错抬成侧栏。
     readonly property bool wideShell: layoutPlan && layoutPlan.primaryNavigationPlacement === "Side"
 
+    // Issue #827 评论 3 第 1 点：宽屏顶栏高度。左栏「素笺」行与右侧动作条
+    // 必须用同一个值，两条分隔线才能落在同一个 y 上。
+    readonly property int topBarHeight: 64
+
     signal openProject(string projectId, string projectTitle)
     signal createProject()
     signal openSettings()
@@ -62,36 +66,49 @@ Rectangle {
             border.color: dt.border
             border.width: 1
 
+            // Issue #827 评论 3 第 1 点：品牌行固定 64 高，与右侧 Top bar 同高，
+            // divider 紧随其后 —— 左上「素笺」和右上动作属于同一行高度，
+            // 横线才能像草图那样从最左贯通到最右。
+            // 外层不加 anchors.margins（左右），divider 才能铺满整个左栏宽度。
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: dt.sp12
-                spacing: dt.sp8
+                spacing: 0
 
-                // Issue #827 评论 2：左上角只显示「素笺」两个字。
-                // 草图里品牌区是内容区左上角一个小标题，不是占一整块的 logo，
-                // 所以这里去掉多余的上下留白和偏大的字号，保留原来的蓝色主色。
-                AppText {
-                    dt: root.dt
-                    text: qsTr("素笺")
-                    color: dt.primary
-                    font.pointSize: dt.subtitlePt
-                    font.family: dt.fontFamily
-                    font.weight: Font.DemiBold
+                Rectangle {
                     Layout.fillWidth: true
-                    Layout.leftMargin: dt.sp8
-                    Layout.bottomMargin: dt.sp4
+                    Layout.preferredHeight: root.topBarHeight
+
+                    AppText {
+                        anchors.left: parent.left
+                        anchors.leftMargin: dt.sp20
+                        anchors.verticalCenter: parent.verticalCenter
+                        dt: root.dt
+                        text: qsTr("素笺")
+                        color: dt.primary
+                        font.pointSize: dt.subtitlePt
+                        font.family: dt.fontFamily
+                        font.weight: Font.DemiBold
+                    }
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
                     color: dt.border
-                    Layout.bottomMargin: dt.sp8
                 }
 
-                Repeater {
-                    model: [
-                        { label: qsTr("作品"), idx: 0 },
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.leftMargin: dt.sp12
+                    Layout.rightMargin: dt.sp12
+                    Layout.topMargin: dt.sp12
+                    Layout.bottomMargin: dt.sp12
+                    spacing: dt.sp8
+
+                    Repeater {
+                        model: [
+                            { label: qsTr("作品"), idx: 0 },
                         { label: qsTr("星图"), idx: 1 },
                         { label: qsTr("统计"), idx: 2 }
                     ]
@@ -149,9 +166,10 @@ Rectangle {
                             }
                         }
                     }
-                }
+                    }
 
-                Item { Layout.fillHeight: true }
+                    Item { Layout.fillHeight: true }
+                }
             }
         }
 
@@ -161,12 +179,20 @@ Rectangle {
             spacing: 0
 
             // Top navigation bar
+            // Issue #827 评论 3 第 1 点：高度与左栏「素笺」行共用 root.topBarHeight，
+            // 底部画 1px 分隔线与左栏那条贯通到最右。
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 64
+                Layout.preferredHeight: root.topBarHeight
                 color: dt.surface
-                border.color: dt.border
-                border.width: 1
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: dt.border
+                }
 
                 RowLayout {
                     anchors.fill: parent

@@ -67,6 +67,8 @@ const WIDE_RAIL_WIDTH: number = 200
 // 这一行属于壳层，不属于任何页面，所以两个常量都只在这里出现一次。
 const WIDE_TOP_ACTION_BAR_HEIGHT: number = 56
 const WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL: number = 16
+// Issue #827 评论 3 第 1 点：左栏「素笺」行的左右内边距。
+const WIDE_RAIL_BRAND_PADDING: number = 20
 
 // Issue #767：工厂函数，在字段初始化时创建已经带根路由的 NavPathStack。
 // 避免 aboutToAppear() 里 pushPath 导致 "State variable has changed during render" 错误。
@@ -360,43 +362,66 @@ export struct PrimaryTabShell {
   // 所以页面在 Expanded 下同时隐藏自己的 HDS 标题栏，不在内容区画第二套标题栏。
   @Builder
   WideTopActionBar() {
-    Row() {
-      Blank()
-      HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+    Column() {
+      Row() {
+        Blank()
+        HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+      }
+      .width('100%')
+      .height(WIDE_TOP_ACTION_BAR_HEIGHT)
+      .padding({ left: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL, right: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL })
+      .alignItems(VerticalAlign.Center)
+
+      // Issue #827 评论 3 第 1 点：这条分隔线必须和左栏「素笺」行下方那条
+      // 落在同一个 y 上，横线才能像草图那样从最左贯通到最右。
+      // 两处都用 WIDE_TOP_ACTION_BAR_HEIGHT 定高，不能按文字自然高度排。
+      Column()
+        .width('100%')
+        .height(1)
+        .backgroundColor($r('sys.color.comp_background_gray'))
     }
     .width('100%')
-    .height(WIDE_TOP_ACTION_BAR_HEIGHT)
-    .padding({ left: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL, right: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL })
-    .alignItems(VerticalAlign.Center)
+    // 两个子节点都显式 width('100%')，这里不需要额外的对齐设置。
   }
 
   // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
   @Builder
   WidePrimaryRail() {
-    Column({ space: 4 }) {
-      Text('素笺')
-        .fontSize(20)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('sys.color.font_primary'))
-        .width('100%')
-        .textAlign(TextAlign.Start)
-        .margin({ left: 12, bottom: 8 })
+    // Issue #827 评论 3 第 1 点：第一段固定成 WIDE_TOP_ACTION_BAR_HEIGHT 高的一行，
+    // 「素笺」在这行里垂直居中，divider 紧随其后 —— 左栏与右侧动作条共用同一条基线。
+    // 外层不加左右内边距，divider 才能铺满整个左栏宽度。
+    Column() {
+      Row() {
+        Text('素笺')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+          .textAlign(TextAlign.Start)
+      }
+      .width('100%')
+      .height(WIDE_TOP_ACTION_BAR_HEIGHT)
+      .padding({ left: WIDE_RAIL_BRAND_PADDING, right: WIDE_RAIL_BRAND_PADDING })
+      .alignItems(VerticalAlign.Center)
 
       Column()
         .width('100%')
         .height(1)
         .backgroundColor($r('sys.color.comp_background_gray'))
-        .margin({ bottom: 8 })
 
-      ForEach(WIDE_RAIL_ENTRIES, (entry: WideRailEntry) => {
-        this.WideRailItem(entry)
-      }, (entry: WideRailEntry) => `${entry.index}`)
+      // 导航项区：左右内边距只作用在导航项上，不影响上面那条贯通分隔线。
+      Column({ space: 4 }) {
+        ForEach(WIDE_RAIL_ENTRIES, (entry: WideRailEntry) => {
+          this.WideRailItem(entry)
+        }, (entry: WideRailEntry) => `${entry.index}`)
 
-      Blank()
+        Blank()
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ left: 12, right: 12, top: 16, bottom: 16 })
     }
     .width(WIDE_RAIL_WIDTH)
     .height('100%')
-    .padding({ left: 12, right: 12, top: 16, bottom: 16 })
     .backgroundColor($r('sys.color.background_secondary'))
   }
 

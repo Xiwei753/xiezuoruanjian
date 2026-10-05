@@ -92,6 +92,24 @@ Rectangle {
     // 每行放几张卡：卡宽固定，剩下多少空间就放多少，不把卡拉宽填满整列。
     readonly property int _columns: Math.max(1, Math.floor((width - _pagePadding * 2 + _gridGap) / (_cardWidth + _gridGap)))
 
+    // Issue #827 评论 3 第 2 点：作品封面上的最后编辑时间用绝对时间，
+    // 形如 26/8/11 22:37。Core 下发的是 ISO 字符串，直接画出来对不上草图，
+    // 也不能用「3天前」那种相对时间 —— 封面要的是能定位到具体某天的日历时间。
+    // 与 Harmony HomeScreen.formatProjectCardTime() 同格式。
+    function formatProjectTime(iso) {
+        if (!iso) return "";
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return "";
+        var year = String(d.getFullYear()).slice(-2);
+        var month = String(d.getMonth() + 1);
+        var day = String(d.getDate());
+        var hour = String(d.getHours());
+        if (hour.length < 2) hour = "0" + hour;
+        var minute = String(d.getMinutes());
+        if (minute.length < 2) minute = "0" + minute;
+        return year + "/" + month + "/" + day + " " + hour + ":" + minute;
+    }
+
     Flickable {
         id: flick
         anchors.fill: parent
@@ -123,7 +141,7 @@ Rectangle {
                     wordCount: model.projectWordCount
                     volumeCount: model.projectVolumeCount
                     chapterCount: model.projectChapterCount
-                    lastEdited: model.projectLastEdited
+                    lastEdited: root.formatProjectTime(model.projectLastEdited)
                     onClicked: root.openProject(model.projectId)
                     onRightClicked: {
                         projectContextMenu.projectId = model.projectId

@@ -179,6 +179,26 @@ export struct HomeScreen {
     return `${wan.toFixed(1)} 万字`
   }
 
+  // Issue #827 评论 3 第 2 点：宽屏作品卡的最后编辑时间用绝对时间，
+  // 形如 26/8/11 22:37 —— 与手绘稿一致，也与 Linux_Qt ProjectCard.qml 同格式。
+  // 刻意不复用上面的相对时间 formatTime()/formatDate()：
+  // 那两个是窄屏列表用的「3分钟前 / 2天前」，作品封面要的是可定位的日历时间。
+  private formatProjectCardTime(isoString: string): string {
+    if (!isoString) {
+      return ''
+    }
+    const date = new Date(isoString)
+    if (isNaN(date.getTime())) {
+      return ''
+    }
+    const year = String(date.getFullYear()).slice(-2)
+    const month = String(date.getMonth() + 1)
+    const day = String(date.getDate())
+    const hour = String(date.getHours()).padStart(2, '0')
+    const minute = String(date.getMinutes()).padStart(2, '0')
+    return `${year}/${month}/${day} ${hour}:${minute}`
+  }
+
   private formatDate(isoString: string): string {
     if (!isoString) {
       return ''
@@ -381,8 +401,8 @@ export struct HomeScreen {
           .width('100%')
           .textAlign(TextAlign.End)
 
-        // 左下：最后编辑时间
-        Text(this.formatTime(project.updatedAt))
+        // 左下：最后编辑时间（绝对时间，与 Qt 端同格式）
+        Text(this.formatProjectCardTime(project.updatedAt))
           .fontSize(12)
           .fontColor($r('sys.color.font_secondary'))
           .width('100%')
@@ -409,6 +429,15 @@ export struct HomeScreen {
     .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
     .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
     .onClick(() => this.navigateToWorkspace(project.id, project.title))
+    // Issue #827 评论 3 第 3 点：宽屏卡不能丢掉重命名 / 删除入口，
+    // 但草图里没有常驻三点按钮，所以走系统长按菜单，与 Qt 端整卡右键菜单同语义。
+    // 普通作品卡不是星图的「长按后继续拖动拉线」场景，可以直接用 LongPress。
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.viewModel.currentMenuProjectId = project.id
+      }
+    })
+    .bindContextMenu(this.ProjectMoreMenu, ResponseType.LongPress)
   }
 
   // 「+」卡：与作品卡同宽同高，卡片中央只有一个大「+」。
@@ -427,7 +456,9 @@ export struct HomeScreen {
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .borderRadius(DesignTokens.cardRadius)
-    .border({ width: 1, color: $r('sys.color.comp_background_gray'), style: BorderStyle.Dashed })
+    // Issue #827 评论 3 第 5 点：普通 1px 边框。草图里它和作品卡是同一种外框，
+    // 区别只在中央一个大「+」，不要自行发明虚线这一种卡片视觉。
+    .border({ width: 1, color: $r('sys.color.comp_background_gray') })
     .margin({ right: WIDE_PROJECT_CARD_GAP, bottom: WIDE_PROJECT_CARD_GAP })
     .accessibilityText('新建作品')
     .onClick(() => this.requestCreateProject())

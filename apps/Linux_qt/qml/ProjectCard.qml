@@ -23,6 +23,8 @@
 //
 // 宽度取 Core 的 project_card_min_width_dp（经 layoutPlan.projectCardMinWidthVp 透传，
 // 三端共用同一个值），不在 QML 里写死另一套卡片宽度。
+// lastEdited 由 ProjectHomePage.formatProjectTime() 格式化后传入（26/8/11 22:37），
+// 卡片只负责画，不再自己解析 Core 的 ISO 字符串。
 // 右键菜单挂整张卡，不常驻「更多」按钮。
 // =============================================================================
 

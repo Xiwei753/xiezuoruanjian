@@ -53,16 +53,20 @@ export function buildHarmonyLayoutPlan(contract: LayoutContract, widthVp: number
 }
 
 /**
- * Core LayoutMetricsDto 的兜底值，与 core/writer_core metrics.rs 的默认值一致。
+ * Core LayoutMetricsDto 的兜底值，与 core/writer_core metrics.rs 的
+ * DEFAULT_* 常量逐项一致。
+ *
  * 仅用于 Core 契约尚未解析出来的时刻（例如 App 冷启动默认 state）。
+ * 任何一项漂移都会让冷启动那一帧按另一套工作台尺寸画出来，
+ * 修改本函数前先核对 metrics.rs。
  */
 export function defaultLayoutMetrics(): LayoutMetrics {
   return {
-    listPaneWidthDp: 280,
+    listPaneWidthDp: 320,
     projectCardMinWidthDp: 180,
-    toolPaneWidthDp: 320,
+    toolPaneWidthDp: 240,
     toolRailWidthDp: 56,
-    editorMinWidthDp: 360,
+    editorMinWidthDp: 240,
     toolbarHeightDp: 64,
     toolbarLeadingWidthDp: 200,
     toolbarTrailingWidthDp: 200,
