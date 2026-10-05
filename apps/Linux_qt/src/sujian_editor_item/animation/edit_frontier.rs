@@ -33,6 +33,7 @@
 use std::time::Instant;
 
 use super::coordinator::EditFrontierRequest;
+use super::reflow_motion::ReflowCurrentGeometry;
 
 use writer_core::editor::OffsetMap;
 
@@ -163,6 +164,69 @@ impl From<ConcealDirection> for PathDirection {
 }
 
 impl FrontierPath {
+    /// Issue #826 评论 13：从「上一帧 Reflow 的采样几何」构建吞字路径。
+    ///
+    /// 这些 glyph 这一帧已经在半路（屏幕位置 55），不该先瞬移回 canonical
+    /// 位置（60）再开始吞。路径直接从采样几何构建，第一帧边界就落在 55。
+    ///
+    /// 按 `dest_rect.y` 分行（同一视觉行聚成一段），段内取 min/max x；
+    /// `Backward` 时按视觉逆序。行分组用 `y` 的精确相等而不是 EPS 容差 ——
+    /// 采样几何本来就来自同一份排版，同一行的 `y` 必然相同。
+    pub(crate) fn from_glyph_geometry(
+        glyphs: &[ConcealGlyphGeometry],
+        direction: PathDirection,
+    ) -> Self {
+        let mut order: Vec<f64> = Vec::new();
+        let mut grouped: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for glyph in glyphs {
+            let dest = glyph.dest_rect.clone();
+            match order.iter().position(|&y| y == dest.y) {
+                Some(index) => {
+                    let row = grouped[index];
+                    grouped[index] = (
+                        row.0,
+                        row.1.max(dest.y + dest.h),
+                        row.2.min(dest.x),
+                        row.3.max(dest.x + dest.w),
+                    );
+                }
+                None => {
+                    order.push(dest.y);
+                    grouped.push((dest.y, dest.y + dest.h, dest.x, dest.x + dest.w));
+                }
+            }
+        }
+        let mut segments: Vec<FrontierSegment> = grouped
+            .into_iter()
+            .filter(|&(_, _, x_left, x_right)| x_right > x_left)
+            .map(|(y, bottom, x_left, x_right)| {
+                let (x_from, x_to) = match direction {
+                    PathDirection::Forward => (x_left, x_right),
+                    PathDirection::Backward => (x_right, x_left),
+                };
+                FrontierSegment {
+                    line_id: LineSnapshotId::new(0, 0, 0),
+                    y,
+                    h: bottom - y,
+                    x_left,
+                    x_right,
+                    x_from,
+                    x_to,
+                    visual_length: (x_right - x_left).max(0.0),
+                }
+            })
+            .collect();
+        if direction == PathDirection::Backward {
+            segments.reverse();
+        }
+        let total_length = segments.iter().map(|s| s.visual_length).sum();
+        Self {
+            segments,
+            total_length,
+            direction,
+        }
+    }
+
     /// 从 snapshot 里 `range` 覆盖的 cluster 按行进方向构建路径。
     ///
     /// 每个视觉行产出一个 segment；该行没有 cluster（如换行符）时**不**产出
@@ -376,10 +440,36 @@ pub(crate) struct RevealTrack {
 pub(crate) struct ConcealTrack {
     /// 本 track 拥有的旧文字范围（burst base 坐标系）。
     pub(crate) range: (usize, usize),
-    /// 本 track 的视觉路径（在 burst base snapshot 上）。
+    /// 本 track 的视觉路径。
+    ///
+    /// 普通 Delete 从 burst base snapshot 的 canonical 几何构建；
+    /// Reflow -> Delete 交接时从「上一帧 Reflow 的采样几何」构建
+    /// （见 `build_conceal_tracks` 的 `current` 参数）。
     pub(crate) path: FrontierPath,
     /// 已经吞掉的距离，跟随本 track 自身。
     pub(crate) travelled: f64,
+    /// Issue #826 评论 13：本 track 这一轮自己的旧字显示几何。
+    ///
+    /// `source_rect` 取自 burst base 的旧行纹理（贴图来源不变），
+    /// `dest_rect` 是**这一帧它实际该画在哪**。
+    ///
+    /// 没有这一份的话，overlay 绘制会退回
+    /// `line.source_rect_to_document_rect(&source)`，而 clip 前沿是按 sampled
+    /// 几何算的 —— 会出现「前沿从 55 算、glyph 仍画在 60」的错位。
+    /// ConcealTrack 必须真正拥有自己这一轮的 overlay dest geometry。
+    pub(crate) glyphs: Vec<ConcealGlyphGeometry>,
+}
+
+/// Issue #826 评论 13：一个旧字 glyph 的贴图来源 + 本轮显示位置。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConcealGlyphGeometry {
+    pub range: (usize, usize),
+    /// 贴图来源行纹理。
+    pub snapshot_id: LineSnapshotId,
+    /// 从上面那张行纹理取这块的源矩形。
+    pub source_rect: SourceRect,
+    /// 这一轮真正画在屏幕上的目标矩形（文档坐标）。
+    pub dest_rect: SourceRect,
 }
 
 impl EditFrontierState {
@@ -497,6 +587,9 @@ impl EditFrontierState {
         target_text: String,
         old_ranges: Vec<(usize, usize)>,
         base_to_target_map: OffsetMap,
+        // Issue #826 评论 13：上一帧还在 Reflow、这一笔变成 changed old text 的
+        // glyph 的屏幕几何。空 slice 就是普通 Delete（走 canonical 几何）。
+        reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
         started_at: Instant,
         duration_ms: u64,
@@ -505,6 +598,7 @@ impl EditFrontierState {
             &base_snapshot,
             &normalize_track_ranges(old_ranges),
             direction,
+            reflow_current,
         );
         Self {
             kind: EditFrontierKind::Delete,
@@ -532,6 +626,9 @@ impl EditFrontierState {
         old_ranges: Vec<(usize, usize)>,
         new_ranges: Vec<(usize, usize)>,
         base_to_target_map: OffsetMap,
+        // Issue #826 评论 13：上一帧还在 Reflow、这一笔变成 changed old text 的
+        // glyph 的屏幕几何。空 slice 就是普通 Delete（走 canonical 几何）。
+        reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
         started_at: Instant,
         duration_ms: u64,
@@ -540,6 +637,7 @@ impl EditFrontierState {
             &base_snapshot,
             &normalize_track_ranges(old_ranges),
             direction,
+            reflow_current,
         );
         let reveal_tracks =
             build_reveal_tracks(&target_snapshot, &normalize_track_ranges(new_ranges));
@@ -627,6 +725,9 @@ impl EditFrontierState {
         deleted_ranges: Vec<(usize, usize)>,
         base_to_current: &OffsetMap,
         prev_target_to_new: &OffsetMap,
+        // Issue #826 comment 13: Reflow -> Conceal current-frame geometry.
+        // Empty slice means a plain Delete (canonical geometry).
+        reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
         now: Instant,
     ) {
@@ -637,27 +738,35 @@ impl EditFrontierState {
                 range: track.range,
                 path: track.path.clone(),
                 travelled: travelled(track.travelled, track.path.total_length, eased),
+                glyphs: track.glyphs.clone(),
             });
         }
         // `can_extend_identity` 已经做完同样的 preflight；这里失败说明
         // coordinator 绕过了 preflight 直接 extend，是 invariant violation。
-        let incoming = normalize_track_ranges(
-            map_ranges_backward(&deleted_ranges, base_to_current)
-                .unwrap_or_else(|| identity_breakdown("extend_delete", &deleted_ranges)),
-        );
-        for range in incoming {
-            if next.iter().any(|track| overlaps(range, track.range)) {
+        // 保留 (current, base) 配对：几何要在当前坐标里配，range 要落在 base 坐标。
+        let incoming: Vec<((usize, usize), (usize, usize))> =
+            map_ranges_backward(&deleted_ranges, base_to_current).unwrap_or_else(|| {
+                identity_breakdown("extend_delete", &deleted_ranges)
+                    .into_iter()
+                    .map(|range| (range, range))
+                    .collect()
+            });
+        for (current_range, base_range) in incoming {
+            if next.iter().any(|track| overlaps(base_range, track.range)) {
                 continue;
             }
-            next.push(ConcealTrack {
-                range,
-                path: FrontierPath::build(
-                    &self.base_snapshot,
-                    range,
-                    PathDirection::from(direction),
-                ),
-                travelled: 0.0,
-            });
+            // 当前坐标里配好几何，再交给 base 坐标的 track。
+            let geometry: Vec<ReflowCurrentGeometry> = reflow_current
+                .iter()
+                .filter(|item| overlaps(item.current_range, current_range))
+                .cloned()
+                .collect();
+            next.push(conceal_track_for_range(
+                &self.base_snapshot,
+                base_range,
+                &geometry,
+                direction,
+            ));
         }
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
@@ -680,6 +789,9 @@ impl EditFrontierState {
         inserted_ranges: Vec<(usize, usize)>,
         base_to_current: &OffsetMap,
         prev_target_to_new: &OffsetMap,
+        // Issue #826 comment 13: Reflow -> Conceal current-frame geometry.
+        // Empty slice means a plain Delete (canonical geometry).
+        reflow_current: &[ReflowCurrentGeometry],
         direction: ConcealDirection,
         now: Instant,
     ) {
@@ -693,26 +805,35 @@ impl EditFrontierState {
                 range: track.range,
                 path: track.path.clone(),
                 travelled: travelled(track.travelled, track.path.total_length, eased),
+                glyphs: track.glyphs.clone(),
             })
             .collect();
         // 同 extend_delete：`can_extend_identity` 已 preflight，这里失败是 invariant violation。
-        let incoming_old = normalize_track_ranges(
-            map_ranges_backward(&deleted_ranges, base_to_current)
-                .unwrap_or_else(|| identity_breakdown("extend_replace", &deleted_ranges)),
-        );
-        for range in incoming_old {
-            if conceal.iter().any(|track| overlaps(range, track.range)) {
+        let incoming_old: Vec<((usize, usize), (usize, usize))> =
+            map_ranges_backward(&deleted_ranges, base_to_current).unwrap_or_else(|| {
+                identity_breakdown("extend_replace", &deleted_ranges)
+                    .into_iter()
+                    .map(|range| (range, range))
+                    .collect()
+            });
+        for (current_range, base_range) in incoming_old {
+            if conceal
+                .iter()
+                .any(|track| overlaps(base_range, track.range))
+            {
                 continue;
             }
-            conceal.push(ConcealTrack {
-                range,
-                path: FrontierPath::build(
-                    &self.base_snapshot,
-                    range,
-                    PathDirection::from(direction),
-                ),
-                travelled: 0.0,
-            });
+            let geometry: Vec<ReflowCurrentGeometry> = reflow_current
+                .iter()
+                .filter(|item| overlaps(item.current_range, current_range))
+                .cloned()
+                .collect();
+            conceal.push(conceal_track_for_range(
+                &self.base_snapshot,
+                base_range,
+                &geometry,
+                direction,
+            ));
         }
 
         // new 侧：每条旧 track 映射自己的 range 到最新 target，再重建自己的 path。
@@ -880,6 +1001,45 @@ impl EditFrontierState {
         let mut glyphs = Vec::new();
         for track in &self.conceal_tracks {
             let range = track.range;
+            // Issue #826 评论 13：Reflow -> Delete 交接的 track 自带这一轮的
+            // overlay 显示几何（dest 是上一帧屏幕位置），必须真正用它画。
+            // 只换 FrontierPath 不够 —— 那样 clip 前沿会按 sampled 几何算，
+            // 而 glyph 仍画在 canonical 位置，出现「前沿从 55 算、字画在 60」。
+            if !track.glyphs.is_empty() {
+                for geometry in &track.glyphs {
+                    let source = geometry.source_rect.clone();
+                    let dest = geometry.dest_rect.clone();
+                    let line_id = geometry.snapshot_id;
+                    for (dest_x, dest_w) in clip_dest_to_rects(dest.clone(), &keep) {
+                        if dest_w <= 0.0 {
+                            continue;
+                        }
+                        let ratio = if dest.w > 0.0 {
+                            (dest_x - dest.x) / dest.w
+                        } else {
+                            0.0
+                        };
+                        let src_x = source.x + source.w * ratio;
+                        let src_w = (dest_w / dest.w.max(f64::MIN_POSITIVE)) * source.w;
+                        glyphs.push(FrontierGlyph {
+                            snapshot_id: line_id,
+                            source_rect: SourceRect {
+                                x: src_x,
+                                y: source.y,
+                                w: src_w,
+                                h: source.h,
+                            },
+                            dest_rect: SourceRect {
+                                x: dest_x,
+                                y: dest.y,
+                                w: dest_w,
+                                h: dest.h,
+                            },
+                        });
+                    }
+                }
+                continue;
+            }
             for line in self.base_snapshot.lines_in_byte_range(range.0, range.1) {
                 for cluster in line.clusters_in_byte_range(range.0, range.1) {
                     let source = cluster.source_rect.clone();
@@ -1000,10 +1160,14 @@ fn overlaps(a: (usize, usize), b: (usize, usize)) -> bool {
 fn map_ranges_backward(
     ranges: &[(usize, usize)],
     new_to_old: &OffsetMap,
-) -> Option<Vec<(usize, usize)>> {
+) -> Option<Vec<((usize, usize), (usize, usize))>> {
     ranges
         .iter()
-        .map(|&(start, end)| new_to_old.map_new_range_to_old(start, end))
+        .map(|&(start, end)| {
+            new_to_old
+                .map_new_range_to_old(start, end)
+                .map(|base| ((start, end), base))
+        })
         .collect()
 }
 
@@ -1059,17 +1223,77 @@ fn build_reveal_tracks(
 }
 
 /// 为每个旧文字范围建一条吞字 track（方向由 Backspace / Delete 键决定）。
+/// `current` 是「上一帧还在 Reflow、这一笔变成 changed old text」的 glyph 的
+/// 屏幕几何（评论 13）。落在 `current` 里的 range 用 sampled 几何构建，
+/// 其余仍走 burst base snapshot 的 canonical 几何。
+/// Issue #826 评论 13：新建一条吞字 track。
+///
+/// 落在 `current`（上一帧 Reflow 采样几何）里的 range 用采样几何，
+/// 其余走 burst base snapshot 的 canonical 几何。
+/// `geometry` 必须**已经**按这条 track 的来源 range 筛好。
+///
+/// 关键：`range` 是 burst base 坐标，而 `ReflowCurrentGeometry.current_range`
+/// 是「上一轮 target == 本次 request.base」坐标 —— 两者坐标系不同，不能直接
+/// 拿 `range` 去和 `current_range` 求 overlap。extend 路径必须先在**当前坐标**
+/// 里配好对（`map_ranges_backward` 返回 `(current, base)` 配对就是为了这个），
+/// 再把配好的几何交给这里。
+fn conceal_track_for_range(
+    snapshot: &EditorLayoutSnapshot,
+    range: (usize, usize),
+    geometry: &[ReflowCurrentGeometry],
+    direction: ConcealDirection,
+) -> ConcealTrack {
+    build_conceal_tracks(snapshot, &[range], direction, geometry)
+        .into_iter()
+        .next()
+        .unwrap_or(ConcealTrack {
+            range,
+            path: FrontierPath::default(),
+            travelled: 0.0,
+            glyphs: Vec::new(),
+        })
+}
+
 fn build_conceal_tracks(
     snapshot: &EditorLayoutSnapshot,
     ranges: &[(usize, usize)],
     direction: ConcealDirection,
+    current: &[ReflowCurrentGeometry],
 ) -> Vec<ConcealTrack> {
     ranges
         .iter()
-        .map(|&range| ConcealTrack {
-            range,
-            path: FrontierPath::build(snapshot, range, PathDirection::from(direction)),
-            travelled: 0.0,
+        .map(|&range| {
+            // `current` 已经由调用方按本 track 的来源 range 筛好
+            // （extend 路径必须用**当前坐标**的 deleted_ranges 配对，
+            //  不能拿 burst base 坐标的 range 去比 current_range）。
+            //
+            // 贴图来源直接用 Reflow span 自己的行纹理：交接后的那个字存在于
+            // 「上一轮 target == 本次 request.base」快照里，不在 burst base
+            // snapshot 里，回后者找会拿到别的坐标系、甚至别的 revision 的图。
+            let handed_off: Vec<ConcealGlyphGeometry> = current
+                .iter()
+                .map(|item| ConcealGlyphGeometry {
+                    range: item.current_range,
+                    snapshot_id: item.snapshot_id,
+                    source_rect: item.source_rect.clone(),
+                    dest_rect: item.dest_rect.clone(),
+                })
+                .collect();
+            let path = if handed_off.is_empty() {
+                FrontierPath::build(snapshot, range, PathDirection::from(direction))
+            } else {
+                FrontierPath::from_glyph_geometry(&handed_off, PathDirection::from(direction))
+            };
+            ConcealTrack {
+                range,
+                path,
+                travelled: 0.0,
+                glyphs: if handed_off.is_empty() {
+                    Vec::new()
+                } else {
+                    handed_off
+                },
+            }
         })
         .collect()
 }

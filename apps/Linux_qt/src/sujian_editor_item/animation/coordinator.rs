@@ -24,6 +24,7 @@ use writer_core::editor::OffsetMap;
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, EditFrontierKind, EditFrontierSample, EditFrontierState, FrontierGlyph,
 };
+use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
@@ -141,6 +142,24 @@ impl LinuxEditorAnimationCoordinator {
         };
         let duration_ms = u64::from(self.typing_animation_duration_ms);
 
+        // Issue #826 评论 13 阻塞：Reflow -> Conceal 的当前帧几何交接。
+        //
+        // 一个正在 Reflow 的字，这一笔被删除时，所有权要从 Reflow 切到
+        // Conceal。此刻必须先把「它这一帧实际在哪」采下来，否则新的
+        // ConcealTrack 只能从 base_snapshot 的 canonical 几何起步，
+        // 屏幕会出现「半路位置 -> canonical 位置 -> 再开始吞」的瞬移
+        // （自动换行时可能跨整行）。
+        //
+        // 先采样再改状态：一旦进入 extend/begin，active_reflow 就被换掉了。
+        // 只在 revision 链连续（上一轮 target == 本次 base）时才有交接依据；
+        // 否则这段 Reflow 与本笔无关，不该拿它的几何。
+        let reflow_current: Vec<ReflowCurrentGeometry> = self
+            .active_reflow
+            .as_ref()
+            .filter(|reflow| reflow.target_text() == request.base_text)
+            .map(|reflow| reflow.current_geometry(request.now))
+            .unwrap_or_default();
+
         // 连续同方向编辑才并入：种类相同、吞字方向相同，且当前前沿还没走完
         // （走完了就是上一笔动画已经结束，必须开新的）。
         //
@@ -194,6 +213,7 @@ impl LinuxEditorAnimationCoordinator {
                         request.deleted_ranges.clone(),
                         &base_to_current,
                         &request.offset_map,
+                        &reflow_current,
                         request.conceal_direction,
                         request.now,
                     );
@@ -211,6 +231,7 @@ impl LinuxEditorAnimationCoordinator {
                         request.inserted_ranges.clone(),
                         &base_to_current,
                         &request.offset_map,
+                        &reflow_current,
                         request.conceal_direction,
                         request.now,
                     );
@@ -250,6 +271,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.target_text.clone(),
                     request.deleted_ranges.clone(),
                     request.offset_map.clone(),
+                    &reflow_current,
                     request.conceal_direction,
                     request.now,
                     duration_ms,
@@ -262,6 +284,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.deleted_ranges.clone(),
                     request.inserted_ranges.clone(),
                     request.offset_map.clone(),
+                    &reflow_current,
                     request.conceal_direction,
                     request.now,
                     duration_ms,

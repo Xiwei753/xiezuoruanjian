@@ -945,3 +945,178 @@ fn reflow_survives_frontier_burst_boundary_and_retargets_from_current_screen_pos
         "不能退回 AXB 的 canonical B.x = 60（那就是瞬移），实际 start_x = {start_x}"
     );
 }
+
+/// Issue #826 评论 13：正在 Reflow 的字这一笔被删除时，Conceal 必须从
+/// **当前屏幕位置**开始吞，而不是瞬移回 canonical 位置。
+///
+/// 评论原文的反例：
+/// ```text
+/// A|B  ->  输入 X  ->  AX|B
+/// B old x = 20，B target canonical x = 60，正在 Reflow 20 -> 60
+/// 80ms 时 B 当前屏幕位置 x = 55
+/// 此时按 Delete 把 B 删掉  ->  AX|
+/// ```
+///
+/// B 属于本次 `deleted_ranges`，所以最新 Reflow retarget 会正确排除它、
+/// 新 Delete Frontier 会给它建 ConcealTrack。但 ConcealTrack 如果只从
+/// `base_snapshot`（= `AXB`，B 在 x=60）取几何，屏幕上就会出现
+/// `55 -> 60 瞬移一下 -> 再开始吞字`。自动换行时这跳变可能跨整行。
+#[test]
+fn reflowing_glyph_deleted_mid_motion_conceals_from_current_screen_position() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0)],
+    )]);
+    let after_x = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 30.0), cluster(2, 3, 60.0)],
+    )]);
+
+    // 第一笔：输入 X。B 进入 Reflow，20 -> 60。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: base,
+        target_snapshot: after_x.clone(),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
+        base_text: String::from("AB"),
+        target_text: String::from("AXB"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    let mid = now + Duration::from_millis(80);
+    let mid_x = coord
+        .reflow_glyphs(mid)
+        .first()
+        .expect("B must be reflowing")
+        .dest_rect
+        .x;
+
+    // 第二笔：Delete 把 B 删掉。B 从 Reflow 所有权切到 Conceal 所有权。
+    let mut request = EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: after_x,
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(2, 3)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (2, 3), 0),
+        base_text: String::from("AXB"),
+        target_text: String::from("AX"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    };
+    coord.begin_or_extend_edit_frontier(request);
+
+    let sample = coord.sample_edit_frontier(mid).expect("frontier alive");
+
+    // 1. Reflow 不再包含 B（B 已 changed）。
+    assert!(
+        coord.reflow_glyphs(mid).is_empty(),
+        "B 已经是 changed text，必须从 Reflow 移除"
+    );
+    // 2. Delete Frontier 仍给 B 建了 overlay。
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    assert!(
+        !overlay.is_empty(),
+        "B 必须作为旧正文 overlay 画出来（正常吞字），不能闪没"
+    );
+    // 3. overlay 第一帧的 dest 必须等于上一帧 Reflow 的屏幕位置。
+    let overlay_x = overlay.first().expect("overlay glyph").dest_rect.x;
+    assert!(
+        (overlay_x - mid_x).abs() < 1e-6,
+        "Conceal 必须从 mid_x = {mid_x} 开始，实际 overlay_x = {overlay_x}"
+    );
+    // 4. 不能等于 canonical 的 60。
+    assert!(
+        (overlay_x - 60.0).abs() > 1e-6,
+        "不能退回 AXB 的 canonical B.x = 60（那就是瞬移），实际 {overlay_x}"
+    );
+}
+
+/// Issue #826 评论 13：同一条 burst 内（`can_extend == true`，不换 Frontier burst）
+/// 连续 Delete 撞上正在 Reflow 的字，同样要从当前屏幕几何接管。
+///
+/// 评论原文指出：连续 Delete 时 `can_extend == true` 不会换 burst，但
+/// `extend_delete()` 新建 B 的 ConcealTrack 时仍只从 `self.base_snapshot` 取几何，
+/// 所以即使评论 12 的 `finish_frontier_burst_only` 完全正确，这个问题依然存在。
+#[test]
+fn same_burst_delete_handoff_from_reflow_uses_current_geometry() {
+    let now = Instant::now();
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // `abc` 删掉中间的 b 得 `ac`：b 被 Conceal、c 走 Reflow（20 -> 60）。
+    let base = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        0,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 20.0), cluster(2, 3, 60.0)],
+    )]);
+    let after = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 30.0)],
+    )]);
+
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: base,
+        target_snapshot: after.clone(),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(3, (1, 2), 0),
+        base_text: String::from("abc"),
+        target_text: String::from("ac"),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+    assert!(!coord.reflow_glyphs(now).is_empty(), "c must be reflowing");
+
+    let mid = now + Duration::from_millis(80);
+    let mid_x = coord
+        .reflow_glyphs(mid)
+        .first()
+        .expect("c reflow span")
+        .dest_rect
+        .x;
+
+    // 同一 burst 内继续 Delete 删掉 c：c 从 Reflow 切到 Conceal。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: after,
+        target_snapshot: snapshot(Vec::new()),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(2, (1, 2), 0),
+        base_text: String::from("ac"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Forward,
+        now: mid,
+    });
+
+    let sample = coord.sample_edit_frontier(mid).expect("frontier alive");
+    let overlay = coord.old_overlay_glyphs_for(&sample);
+    assert!(!overlay.is_empty(), "c 必须有 Conceal overlay");
+    // overlay 里同时还有上一笔就在吞的 b，它的位置是「已被 clip 过的剩余部分」，
+    // 与本次交接无关。断言的是**存在一个** overlay glyph 落在 mid_x —— 那就是
+    // 本次从 Reflow 接管过来的 c。
+    assert!(
+        overlay
+            .iter()
+            .any(|glyph| (glyph.dest_rect.x - mid_x).abs() < 1e-6),
+        "同一 burst 内也必须从当前屏幕几何接管：mid_x = {mid_x}, overlays = {:?}",
+        overlay
+            .iter()
+            .map(|glyph| glyph.dest_rect.x)
+            .collect::<Vec<_>>()
+    );
+}

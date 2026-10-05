@@ -53,6 +53,23 @@ pub(crate) struct ReflowState {
     pub target_text: String,
 }
 
+/// Issue #826 评论 13 阻塞：Reflow -> Conceal 的当前帧几何交接。
+///
+/// 「这一帧这个字现在在哪」的一次性快照，**不是**历史动画状态
+/// （不带 started_at / remaining duration / historical stage / carried unit）。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ReflowCurrentGeometry {
+    /// 该 span 的 target 坐标系 byte 范围（上一轮 target == 本次 request.base）。
+    pub current_range: (usize, usize),
+    /// 本帧它实际在屏幕上的目标矩形（文档坐标）。
+    pub dest_rect: SourceRect,
+    /// 贴图来自哪张行纹理 —— 交接后的 overlay 直接用这张图，
+    /// 不能再回 burst base snapshot 去找（那是另一个坐标系、另一个 revision）。
+    pub snapshot_id: LineSnapshotId,
+    /// 上面那张行纹理里的源矩形。
+    pub source_rect: SourceRect,
+}
+
 /// 一段未改文字在一帧里的位置。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ReflowSpanFrame {
@@ -240,6 +257,38 @@ impl ReflowState {
     }
 
     /// 采样本帧每段未改文字的位置。
+    /// Issue #826 评论 13 阻塞：当前帧几何快照。
+    ///
+    /// 一个 glyph 从 Reflow 所有权切到 Conceal 所有权时，必须把「这一帧它实际
+    /// 在哪」传过去，否则会瞬移回 canonical 位置：
+    ///
+    /// ```text
+    /// A|B  ->  输入 X  ->  AX|B
+    /// B 正在 Reflow：20 -> 60，80ms 时屏幕位置 x = 55
+    /// 此时按 Delete 把 B 删掉
+    /// ```
+    ///
+    /// 此时最新 Reflow retarget 会正确把 B 排除（B 已 changed），新的 Delete
+    /// Frontier 给 B 建 ConcealTrack。但 ConcealTrack 如果只从 `base_snapshot`
+    /// 取几何，base 是 `AXB`、B 在 x=60，于是屏幕上出现
+    /// `55 -> 60 瞬移一下 -> 再开始吞字`。自动换行时这跳变可能跨整行。
+    ///
+    /// 这里只返回「当前屏幕位置」，**不带** started_at / remaining duration /
+    /// historical stage / carried unit / 第二个动画对象 —— 那就是旧的历史动画
+    /// 交棒，#826 已经删干净了。
+    pub(crate) fn current_geometry(&self, now: Instant) -> Vec<ReflowCurrentGeometry> {
+        self.sample(now)
+            .into_iter()
+            .zip(self.spans.iter())
+            .map(|(frame, span)| ReflowCurrentGeometry {
+                current_range: span.new_range,
+                dest_rect: frame.dest_rect,
+                snapshot_id: frame.snapshot_id,
+                source_rect: frame.source_rect.clone(),
+            })
+            .collect()
+    }
+
     pub(crate) fn sample(&self, now: Instant) -> Vec<ReflowSpanFrame> {
         let elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as f64;
         let progress = if self.duration_ms == 0 {
