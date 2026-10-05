@@ -141,9 +141,9 @@ export struct WritingScreen {
   // 只作为 WorkbenchVisibility 输入让 Core 重算七角色 bounds。
   @State leftPaneCollapsed: boolean = false
   @State rightPaneCollapsed: boolean = true
-  // Issue #825 复核第 1 项：ToolRail 当前选中的工具。Harmony 还没有真实 AI/星图
-  // 侧栏内容可接，所以默认空串——rail 只提供 ToolPane 展开/收起入口，不造假按钮。
-  @State selectedToolKey: string = ''
+  // Issue #829：手稿把最右 ToolRail 固定成“星图 / AI”。
+  // 骨架默认选中星图；ToolPane 是否展开仍由 rightPaneCollapsed 单独控制。
+  @State selectedToolKey: string = 'starmap'
   // Core 下发的七角色 bounds 计划；null 表示还没拿到（此时用 FALLBACK_* 占位）。
   @State workbenchPlan: WorkbenchLayoutPlan | null = null
   // 当前 UI 滚动位置（viewport），接续恢复时只设 UI，不写 Core。
@@ -860,7 +860,7 @@ export struct WritingScreen {
   // 让 Editor / ToolPane / handle 的 bounds 继续跟着 Core 走，
   // 而不是让 layoutWeight(1) 帮平台自己分剩下的宽度。
   private closeToolPane(): void {
-    this.selectedToolKey = ''
+    // 只收起 pane，不清空最后选中的工具；再次展开回到原来的星图 / AI。
     this.rightPaneCollapsed = true
     this.refreshWorkbenchPlan().catch(() => {})
   }
@@ -1543,9 +1543,7 @@ export struct WritingScreen {
 
   private onToggleToolPane(): void {
     if (this.rightPaneCollapsed) {
-      // Harmony 还没有真实 AI / 星图工具内容，rail 只保留展开/收起入口，
-      // 所以展开时带空的 selectedToolKey（ToolPane 内容随之留空，不造假入口）。
-      this.requestToolPaneOpen('', true).catch(() => {})
+      this.requestToolPaneOpen(this.selectedToolKey || 'starmap', true).catch(() => {})
     } else {
       this.closeToolPane()
     }
@@ -1612,16 +1610,35 @@ export struct WritingScreen {
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
-  // Issue #825 复核第 1 项：ToolPane 只承载 rail 选中的工具内容。
-  // 同步 / 搜索 / 设置属于 Core 七角色里的 ToolbarTrailing，仍然画在顶部工具栏，
-  // 这里不再重复，也不造第二份工具状态。
-  //
-  // 当前 Harmony 还没有真实的 AI / 星图侧栏内容可接，selectedToolKey 恒为空串，
-  // 所以这里暂时是空容器——等真实工具内容接上时按 selectedToolKey 分发即可，
-  // 不需要改 ToolPane 与 rail 的结构。
+  // Issue #829：ToolPane 骨架固定下来。rail 只切“星图 / AI”，这里负责承载内容。
+  // 本轮只定空间结构和标题槽，不在页面层伪造星图 / AI 业务状态；后续真实内容直接填入
+  // 下面的内容 Stack，不再改工作台列数、宽度或展开/收起逻辑。
   @Builder
   RightToolPane() {
     Column() {
+      Row() {
+        Text(this.selectedToolKey === 'ai' ? 'AI' : '星图')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+
+        Blank()
+      }
+      .width('100%')
+      .height(48)
+      .padding({ left: 16, right: 12 })
+      .alignItems(VerticalAlign.Center)
+
+      Column()
+        .width('100%')
+        .height(1)
+        .backgroundColor($r('sys.color.comp_background_gray'))
+
+      Stack() {
+        // 星图 / AI 的真实内容后续直接填到这里。
+      }
+      .width('100%')
+      .layoutWeight(1)
     }
     .width(this.toolPaneWidthVp())
     .height('100%')
