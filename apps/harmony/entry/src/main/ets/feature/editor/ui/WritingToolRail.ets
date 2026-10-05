@@ -1,51 +1,38 @@
-// Issue #825 复核第 1 项：宽屏写作区最右侧的 ToolRail（Core 七角色之一）。
+// Issue #829：宽屏写作区最右侧 ToolRail（Core 七角色之一）。
 //
-// 草图语义：顶部左 返回/撤销/重做、顶部中 字体/段落/替换、顶部右 同步/搜索/设置，
-// 内容区是「章节树 | 正文 | ToolPane | 最右 ToolRail」。同步/搜索/设置属于
-// ToolbarTrailing，仍然画在顶部工具栏，本组件不再重复它们。
+// 手稿固定为：顶部工具条 + 左章节树 + 中间正文 + 右工具面板 + 最右窄 rail。
+// rail 本身只负责“选哪个工具”和“展开/收起 ToolPane”，不承载同步 / 搜索 / 设置。
+// 手稿里最右 rail 明确是“星图 / AI”，所以骨架先固定这两个入口；
+// 真实星图 / AI 内容由 ToolPane 后续接入，不再改 rail 的空间结构。
 //
-// ToolRail 的职责只有两件事：
-//   1. 选哪个工具（切换 ToolPane 承载的内容）；
-//   2. 展开 / 收起 ToolPane。
-//
-// 当前 Harmony 还没有真实的 AI / 星图侧栏内容可接，所以工具入口表是空的——
-// 不造假按钮。工具列表非空时，选中项才会自动展开 ToolPane。
-//
-// 宽度不在这里写死：Core 的 WorkbenchRole.ToolRail bounds 说了算（ToolRail 恒为 56dp）。
+// 宽度仍由 Core 的 WorkbenchRole.ToolRail bounds 决定，不在端侧另算断点。
 
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
-// 一条 rail 入口。icon 为空表示这条入口还没有真实内容，不渲染。
 export interface ToolRailEntry {
   key: string
   label: string
-  icon: Resource
 }
 
 @ComponentV2
 export struct WritingToolRail {
-  // Core 给的 ToolRail bounds 宽度（dp）。
   @Param railWidthVp: number = 56
-  // 当前选中的工具 key；空串表示没选任何工具（ToolPane 由展开/收起入口控制）。
-  @Param selectedToolKey: string = ''
+  @Param selectedToolKey: string = 'starmap'
   @Param toolPaneVisible: boolean = false
-  // 选中工具时回调；空列表时不会被调用。
   @Param onSelectTool: (key: string) => void = () => {}
-  // 展开 / 收起 ToolPane。
   @Param onToggleToolPane: () => void = () => {}
 
-  private tools: ToolRailEntry[] = []
+  private tools: ToolRailEntry[] = [
+    { key: 'starmap', label: '星图' },
+    { key: 'ai', label: 'AI' }
+  ]
 
   @Builder
   ToolButton(entry: ToolRailEntry) {
-    Column({ space: 2 }) {
-      Image(entry.icon)
-        .width(20)
-        .height(20)
-        .fillColor($r('sys.color.icon_primary'))
-
+    Column() {
       Text(entry.label)
-        .fontSize(10)
+        .fontSize(entry.key === 'ai' ? 12 : 11)
+        .fontWeight(this.selectedToolKey === entry.key ? FontWeight.Bold : FontWeight.Normal)
         .fontColor($r('sys.color.font_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -68,19 +55,18 @@ export struct WritingToolRail {
         this.ToolButton(entry)
       }, (entry: ToolRailEntry) => entry.key)
 
-      // 工具列表为空时，rail 只保留 ToolPane 的展开/收起入口。
-      if (this.tools.length === 0) {
-        Button(this.toolPaneVisible ? '›' : '‹', { type: ButtonType.Normal })
-          .width(36)
-          .height(36)
-          .fontSize(16)
-          .fontColor($r('sys.color.font_primary'))
-          .backgroundColor($r('sys.color.comp_background_gray'))
-          .borderRadius(DesignTokens.radiusPill)
-          .onClick(() => {
-            this.onToggleToolPane()
-          })
-      }
+      Blank()
+
+      Button(this.toolPaneVisible ? '›' : '‹', { type: ButtonType.Normal })
+        .width(36)
+        .height(36)
+        .fontSize(16)
+        .fontColor($r('sys.color.font_primary'))
+        .backgroundColor($r('sys.color.comp_background_gray'))
+        .borderRadius(DesignTokens.radiusPill)
+        .onClick(() => {
+          this.onToggleToolPane()
+        })
     }
     .width(this.railWidthVp)
     .height('100%')
