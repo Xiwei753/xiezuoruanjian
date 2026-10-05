@@ -1,4 +1,4 @@
-// PrimaryTabShell — 一级底部 Tabs 壳层。
+// PrimaryTabShell — 一级导航壳层。
 // Issue #767：用真正的横向 Tabs({ barPosition: BarPosition.End }) 替代手写底栏。
 // 三个 TabContent 分别是作品（TAB_HOME=0）、星图（TAB_STARMAP=1）、统计（TAB_STATS=2）。
 // 页签使用 BottomTabBarStyle，不再自己用 Row + Column + Image + Text 画底栏。
@@ -29,7 +29,7 @@ import { NavigationTransactionCoordinator } from './NavigationTransactionCoordin
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../ui/adaptive/AdaptiveContext'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../ui/theme/DesignTokens'
-import { ActionSlot, ScreenRole, WidthClass } from '../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ScreenRole, WorkspaceLayoutMode } from '../../corebridge/dto/PlatformDtos'
 import { ScreenPolicyBridge } from '../../ui/adaptive/ScreenPolicyBridge'
 import { NavigationChromeStore } from './NavigationChromeStore'
 import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
@@ -328,7 +328,7 @@ export struct PrimaryTabShell {
     this.PageMapForStack(name, this.statsStack, TAB_STATS)
   }
 
-  // Issue #827 评论 1 第 1 点：宽屏（Expanded）一级导航固定在左侧，
+  // Issue #829：只要 Core 已进入 Workbench，就按宽屏手稿固定左侧一级导航，
   // 根本不再实例化 HdsPrimaryTabsApi23。
   // 华为平板/2in1 设计规则明确 tablet 与 2in1 形态下 Tabs 组件改用侧边导航，
   // 之前 1244.44vp 已经进入 Expanded 却仍渲染 HDS Tabs，就是因为这里判的是
@@ -337,7 +337,7 @@ export struct PrimaryTabShell {
   // 不留第二套判定：Core 在 840–1200vp 也给 Side，但 Harmony 那一档只有 2 栏，
   // 用 Core 的放置位置当「是否宽屏」会把中等窗口错抬成侧边栏。
   private get isWidePrimaryNavigation(): boolean {
-    return this.adaptiveState.sizeClass === WidthClass.Expanded
+    return this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench
   }
 
   // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源仍是 Core ScreenPolicy，
