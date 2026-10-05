@@ -244,6 +244,21 @@ Rectangle {
 
     // Project-level ID - set by main.qml, used for tree and create volume/chapter
     property string workspaceProjectId: ""
+    // Issue #829：左树顶部分组头要显示作品名。标题从注入的 tree 里找当前作品那一条，
+    // 端侧不额外查一次后端——tree 本来就是当前作品的树。
+    readonly property string workspaceProjectTitle: {
+        var all = root.tree || []
+        for (var i = 0; i < all.length; i++) {
+            if (all[i] && all[i].type === "project" && all[i].id === root.workspaceProjectId) {
+                return all[i].title || ""
+            }
+        }
+        return ""
+    }
+    // Issue #829：左树两组分组头的展开态。纯 UI 状态，不进 Core、不进同步，
+    // 也不落设置——下次进来回到手稿的默认展开形态。
+    property bool projectGroupCollapsed: false
+    property bool outlineGroupExpanded: false
     onWorkspaceProjectIdChanged: {
         // Issue #762 评论 5826175490 第 3 点：切换作品时立即刷新冲突。
         // 旧的 conflictPath 属于上一个作品，先清掉避免在新作品里误选中；
@@ -294,6 +309,61 @@ Rectangle {
     function flushActiveEditorBeforeSync() {
         if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId) return true;
         return editorController.flushActiveEditorBeforeSync();
+    }
+
+    // ── Issue #829：写作页底部状态栏的数据（纯 UI 侧派生，不进 Core）──
+    // 左段：当前章节字数。Core 的 calculate_word_count 结果由 EditorController
+    // 通过 editorBackendRef.word_count 落在这里，状态栏不自己再扫一遍正文。
+    readonly property int chapterWordCount: root.editorBackendRef
+        ? root.editorBackendRef.word_count
+        : 0
+    // 中段：今日纯输入字数（Core 写作统计 summary 的 total_human_typed_chars）。
+    // 每次保存 / 切章后重拉一次，不做逐键刷新——统计是按 Core 的 writing event
+    // 落盘的，编辑器每敲一个字去查一次只会拿到同一个值。
+    property int todayTypedChars: 0
+    // 右段：HH:mm。定时器只做格式化，不碰任何业务状态。
+    property string clockText: ""
+    Timer {
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: root.updateClockText()
+    }
+
+    function updateClockText() {
+        var now = new Date()
+        var hh = ("0" + now.getHours()).slice(-2)
+        var mm = ("0" + now.getMinutes()).slice(-2)
+        root.clockText = hh + ":" + mm
+    }
+
+    // 保存状态是不是异常态：Core 的 save_status 是自由文本，
+    // 只有明确是失败时才用 error 色，其余（已保存 / 未保存 / 保存中）走中性色，
+    // 免得「未保存」这种正常中间态被画成红色。
+    readonly property bool saveStatusIsError: /失败|error|failed/i.test(editorController.saveStatus || "")
+
+    // 今日纯输入字数。Core 拿不到就保持 0，不显示半截数据。
+    function refreshTodayTypedChars() {
+        var be = root.editorBackendRef
+        if (!be) {
+            root.todayTypedChars = 0
+            return
+        }
+        var now = new Date()
+        var td = now.getFullYear() + "-"
+            + ("0" + (now.getMonth() + 1)).slice(-2) + "-"
+            + ("0" + now.getDate()).slice(-2)
+        var summary
+        try {
+            summary = JSON.parse(be.get_writing_stats_summary(td, td))
+        } catch (e) {
+            summary = null
+        }
+        if (summary && summary.success && summary.data) {
+            root.todayTypedChars = summary.data.total_human_typed_chars || 0
+        } else {
+            root.todayTypedChars = 0
+        }
     }
 
     signal createVolumeRequested(string projectId)
@@ -391,6 +461,9 @@ Rectangle {
         refreshWorkbenchPlan();
         populateTreeModel();
 
+        // Issue #829：启动时先起状态栏的时钟。
+        root.updateClockText()
+
         var sel = (root.appState && root.appState.selected)
                 ? root.appState.selected : null
 
@@ -410,6 +483,8 @@ Rectangle {
         root.requestEditorFocus()
         // Issue #762 评论 5826175490 第 3 点：打开作品时立即刷新冲突，不等同步结束
         root.refreshConflictList()
+        // Issue #829：打开作品后拉一次今日统计，供底部状态栏中段显示。
+        root.refreshTodayTypedChars()
     }
 
     function openChapter(pId, vId, cId, cTitle) {
@@ -442,6 +517,9 @@ Rectangle {
             if (root.projectBackendRef)
                 root.projectBackendRef.select_chapter(pId, vId, cId)
             root.requestEditorFocus();
+            // Issue #829：切章后重拉今日统计（统计按 writing event 落盘，
+            // 切章是天然的刷新点，不必逐键去查）。
+            root.refreshTodayTypedChars();
         }
     }
 
@@ -583,11 +661,29 @@ Rectangle {
                     anchors.fill: parent
                     spacing: 0
 
+                    // ── Issue #829：章节树顶部分组头「作品名 ∨」──
+                    // 手稿的左树是「作品名 ∨ → 卷 ∨ → 章节列表 → 章纲 ∨」四段结构，
+                    // 作品名本身是一个可折叠分组头，不是一条普通列表项。
+                    // 折叠状态只是端侧 UI 状态，不进 Core、不进同步。
+                    WritingTreeGroupHeader {
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        title: root.workspaceProjectTitle
+                        expanded: !root.projectGroupCollapsed
+                        // 作品名是当前写作上下文，折叠它等于把整棵树收起来，
+                        // 不提供「新建」——新建入口在下面的「+ 新卷」。
+                        showAddButton: false
+                        onToggleExpanded: {
+                            root.projectGroupCollapsed = !root.projectGroupCollapsed
+                        }
+                    }
 
                     // Tree list
+                    // Issue #829：「作品名 ∨」折叠时整棵子树收起，只留顶部分组头。
                     ScrollView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            visible: !root.projectGroupCollapsed
                             clip: true
                             // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
                             Component.onCompleted: {
@@ -784,6 +880,20 @@ Rectangle {
                             }
                         }
 
+                        // ── Issue #829：章节树底部分组头「章纲 ∨」──
+                        // 手稿把它放在章节列表下面，作为左树的最后一个分组。
+                        // 这一轮只落分组头和展开/收起交互：章纲内容（Core 的
+                        // chapter.note）还没接上，展开区域留空，不摆假数据。
+                        WritingTreeGroupHeader {
+                            Layout.fillWidth: true
+                            dt: root.dt
+                            title: qsTr("章纲")
+                            expanded: root.outlineGroupExpanded
+                            onToggleExpanded: {
+                                root.outlineGroupExpanded = !root.outlineGroupExpanded
+                            }
+                        }
+
                         // Tree context menu
                         Menu {
                             id: treeContextMenu
@@ -897,9 +1007,33 @@ Rectangle {
 
                 // Editor Container Area
                 Rectangle {
+                    id: editorAreaRect
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     color: dt.bg
+
+                    // Issue #829：正文区顶部的折叠钮（手稿「宽屏全打开」/「左右缩回」
+                    // 都在正文区顶部居中画了一个三角）。它是浮层，不占 ColumnLayout 的
+                    // 行高，所以正文纸面高度不受影响；左树收起 / 展开时按钮原地切换
+                    // ⌄ / ⌃。真正的「收起后重新拉开」仍由贴边把手 leftPaneHandle 负责。
+                    PaneFoldButton {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: dt.sp4
+                        z: 30
+                        dt: root.dt
+                        visible: !root.hideContentPanes
+                        // 手稿语义：左树开着显示 ⌄（往下收），收起了显示 ⌃（往上拉）。
+                        glyph: root.leftPaneCollapsed ? "\u2303" : "\u2304"
+                        onTriggered: {
+                            if (root.leftPaneCollapsed) {
+                                root.requestChapterNavigationOpen();
+                            } else {
+                                root.closeChapterNavigation();
+                                root.requestEditorFocus();
+                            }
+                        }
+                    }
 
                     // Centered paper container
                     Item {
@@ -1381,6 +1515,21 @@ Rectangle {
                             }
                         }
                     }
+                }
+
+                // Issue #829：底部状态栏。挂在中间 Editor 这一列的末尾，
+                // 所以它只横贯「章节树右缘 ~ 工具面板左缘」，和手稿一致——
+                // 左树 / 右工具面板 / 最右 rail 都不参与这条带子。
+                // 硬约束 6：只放字数 / 进度 / 时间 / 保存状态，不放任何导航。
+                WritingStatusBar {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: implicitHeight
+                    dt: root.dt
+                    chapterWordCount: root.chapterWordCount
+                    progressCurrent: root.todayTypedChars
+                    clockText: root.clockText
+                    saveStatus: editorController.saveStatus
+                    saveStatusIsError: root.saveStatusIsError
                 }
             }
 

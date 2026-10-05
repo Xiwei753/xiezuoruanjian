@@ -173,6 +173,12 @@ qmetaobject::qrc!(qml_resources, "/" {
     // Issue #825 复核4 第1项：工作台最右竖向工具栏（Core 的 ToolRail 角色）。
     // qrc 是显式列表，漏登记开发目录里可能碰巧能找到，打包后就变成组件不存在。
     "qml/WritingToolRail.qml" as "WritingToolRail.qml",
+    "qml/PaneFoldButton.qml" as "PaneFoldButton.qml",
+    // Issue #829：底部状态栏（字数 / 进度 / 时间 / 保存状态）。
+    // 手稿里它是 Editor 这一列底部的一条信息带，不承担导航。
+    "qml/WritingStatusBar.qml" as "WritingStatusBar.qml",
+    // Issue #829：左树可折叠分组头（作品名 ∨ / 卷 ∨ / 章纲 ∨）。
+    "qml/WritingTreeGroupHeader.qml" as "WritingTreeGroupHeader.qml",
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     "qml/SyncConflictPanel.qml" as "SyncConflictPanel.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
