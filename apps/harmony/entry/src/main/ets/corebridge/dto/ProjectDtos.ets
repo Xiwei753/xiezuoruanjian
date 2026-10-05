@@ -98,3 +98,18 @@ export interface WritingStats {
   totalSessions: number
   daysCount: number
 }
+
+// SpeedCurvePointDto
+export interface SpeedCurvePoint {
+  startMs: number
+  endMs: number
+  charsTyped: number
+  charsPerMinute: number
+}
+
+// SpeedCurveSummaryDto
+export interface SpeedCurve {
+  range: DateRange
+  bucketMinutes: number
+  buckets: SpeedCurvePoint[]
+}

@@ -1,6 +1,6 @@
 import { EditorTransactionCause } from './dto/EditorDtos'
 import { WindowViewport, LayoutContract, ScreenPolicy, ScreenRole, WorkbenchVisibility, WorkbenchLayoutPlan } from './dto/PlatformDtos'
-import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats } from './dto/ProjectDtos'
+import { Project, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, ProjectStats, WritingStats, SpeedCurve } from './dto/ProjectDtos'
 import { AppSummary, ResultEnvelope, RecentEdit } from './dto/ResultEnvelope'
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from './dto/SettingsDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapPoint, StarMapTargetPath, StarMapPathSegment, StarMapResolvedPath, CreateStarmapChildEmbedResult } from './dto/StarMapDtos'
@@ -82,6 +82,9 @@ export interface IWriterCoreBridge {
 
   // Stats
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>
+  // Issue #829：带区间的汇总 / 速度曲线，供写作页状态栏读当日口径。
+  getWritingStatsSummary(startDate: string, endDate: string): Promise<ResultEnvelope<WritingStats>>
+  getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>>
   calculateWordCount(text: string): Promise<number>
   processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
     chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>

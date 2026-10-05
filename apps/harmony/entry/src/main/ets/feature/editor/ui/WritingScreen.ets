@@ -80,6 +80,10 @@ const PANE_HANDLE_HEIGHT_VP: number = 64
 const WRITING_PROGRESS_TARGET_PLACEHOLDER: number = 2000
 // 时钟刷新间隔（ms）。秒级跳动对手稿里的 HH:mm 没有意义，30s 对齐即可。
 const STATUS_CLOCK_INTERVAL_MS: number = 30000
+// Issue #829 评论2第2项：状态栏左段「字/分」的速度曲线分桶粒度。
+// 手稿的「86 字/分」是"最近一分钟的写入速度"，所以按 1 分钟分桶，
+// 取最后一个桶的 charsPerMinute。速度由 Core 算，端侧不自己除。
+const WRITING_SPEED_CURVE_BUCKET_MINUTES: number = 1
 
 // Issue #629 评论 5308748920 问题3：保存事务记录（命名 interface，避免对象字面量类型）。
 interface ActiveSaveTask {
@@ -151,6 +155,11 @@ export struct WritingScreen {
   @State outlineGroupExpanded: boolean = false
   // Issue #829：底部状态栏的时钟（HH:mm），只做展示，不参与任何业务判定。
   @State clockText: string = ''
+  // Issue #829 评论2第2项：状态栏两段进度数据都来自 Core，端侧不自己算。
+  //   latestCharsPerMinute = 今日速度曲线最后一个桶的 charsPerMinute（手稿「86 字/分」）。
+  //   todayTypedChars      = 今日纯输入字数（中段分子，和 Linux_Qt 同一份 Core 汇总语义）。
+  @State latestCharsPerMinute: number = 0
+  @State todayTypedChars: number = 0
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
   // Issue #825 复核第 2 项：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态，
@@ -248,6 +257,10 @@ export struct WritingScreen {
     this.refreshClockText()
     this.clockTimer = setInterval(() => {
       this.refreshClockText()
+      // Issue #829 评论2第2项：「字/分」是分钟级速度，必须跟着时间走，
+      // 否则用户停笔后左段还挂着停笔前的速度。挂在同一个 interval 上，
+      // 顺带让「今日进度」和时钟保持同一次刷新，不做两套节奏。
+      this.refreshWritingStatusData().catch(() => {})
     }, STATUS_CLOCK_INTERVAL_MS)
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
@@ -269,6 +282,8 @@ export struct WritingScreen {
       this.ensureWorkbenchProjectTree()
       // Issue #825 复核第 2 项：进页面先要一份 Core 七角色 bounds 计划。
       this.refreshWorkbenchPlan()
+      // Issue #829 评论2第2项：状态栏两段进度先拉一次 Core 真值。
+      this.refreshWritingStatusData()
     }
 
     const self = this
@@ -589,6 +604,33 @@ export struct WritingScreen {
     const hour = String(now.getHours()).padStart(2, '0')
     const minute = String(now.getMinutes()).padStart(2, '0')
     this.clockText = `${hour}:${minute}`
+  }
+
+  // 返回本地时区的今天日期（YYYY-MM-DD）。Core 的统计查询按日期字符串切区间，
+  // 这里必须给本地"今天"而不是 UTC 日期，否则东八区凌晨会落到昨天。
+  private todayDateString(): string {
+    const now = new Date()
+    const year = String(now.getFullYear())
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  // 两段状态都失败时保持旧值：状态栏是只读展示，查询失败不该把已有数字清零。
+  private async refreshWritingStatusData(): Promise<void> {
+    const today = this.todayDateString()
+
+    const curve = await this.bridge.getWritingSpeedCurve(
+      today, today, WRITING_SPEED_CURVE_BUCKET_MINUTES)
+    if (curve.success && curve.data && curve.data.buckets.length > 0) {
+      const lastBucket = curve.data.buckets[curve.data.buckets.length - 1]
+      this.latestCharsPerMinute = Math.round(lastBucket.charsPerMinute)
+    }
+
+    const summary = await this.bridge.getWritingStatsSummary(today, today)
+    if (summary.success && summary.data) {
+      this.todayTypedChars = summary.data.totalHumanTypedChars
+    }
   }
 
   // Issue #768 评论5838296806：先加载排版设置，再打开章节会话。
@@ -1425,7 +1467,10 @@ export struct WritingScreen {
             // 收起态向上拉开左章节树）。用 Stack 浮在正文上方，不占正文高度，
             // 也不改 Core 给的 Editor bounds。贴边把手保留——它是收起后唯一的入口。
             Stack({ alignContent: Alignment.Top }) {
-              this.EditorPane()
+              // Issue #829 评论2第1项：这里只放正文主体，不再调完整 EditorPane()。
+              // EditorPane() 自带窄屏旧底栏，宽屏再叠一条 WritingStatusBar 就是两条
+              // 状态栏、且状态有两份来源。宽屏的唯一状态栏是下面那条 WritingStatusBar。
+              this.EditorBody()
 
               PaneFoldButton({
                 glyph: this.leftPaneCollapsed ? '⌃' : '⌄',
@@ -1444,14 +1489,12 @@ export struct WritingScreen {
 
             // Issue #829 手稿：底部状态栏只属于 Editor 这一列，
             // 横贯「章节树右缘 ~ 工具面板左缘」，不放章节树 / 工具面板 / rail 上。
-            // 硬约束 6：这里只放字数、进度、时间、保存状态，不做导航。
+            // 硬约束 6：这里只放速度、进度、时间、保存状态，不做导航。
             WritingStatusBar({
-              chapterWordCount: this.wordCount,
-              // Issue #829：Core 的 Harmony FFI 目前只暴露 writer_core_get_writing_stats，
-              // 它在 Rust 侧写死「最近 30 天」汇总，端侧拿不到"当日"口径，
-              // 所以这一轮中段分子先用本章字数（Core 真值，非 UI 自算）。
-              // Core 补上按日统计 / 目标字数之后，这里换成对应真值。
-              progressCurrent: this.wordCount,
+              // 左段 = Core 速度曲线最后一个桶的 charsPerMinute（「86 字/分」）。
+              charsPerMinute: this.latestCharsPerMinute,
+              // 中段 = Core 今日纯输入 / 目标字数，分子分母都不是 UI 自算。
+              progressCurrent: this.todayTypedChars,
               progressTarget: WRITING_PROGRESS_TARGET_PLACEHOLDER,
               clockText: this.clockText,
               saveStatus: this.getSaveStatusText(),
@@ -1839,13 +1882,18 @@ export struct WritingScreen {
   // shareToSystem() 已删除，但保留 HarmonyShareService / SharePayload / buildSharePayload() /
   // startShareLifecycle() / updateSharePayload() / stopShareLifecycle()（碰一碰/隔空传送仍在用）。
   // Issue #629 评论14 第1项：编辑区域 Builder（窄屏和宽屏复用同一套编辑会话）。
+  // Issue #829 评论2第1项：正文主体和底部状态栏必须分开。
+  // 宽屏之前直接复用整个 EditorPane()，而 EditorPane() 末尾还画着窄屏那条
+  // 「字数 / 自动保存 / 保存状态」底栏，外层又追加了新的 WritingStatusBar，
+  // 于是宽屏出现两条底部状态栏。这里把正文主体抽成不含任何状态栏的 EditorBody()：
+  //   - 窄屏 EditorPane() = EditorBody() + 窄屏旧底栏（保留窄屏既有语义）；
+  //   - 宽屏              = EditorBody() + WritingStatusBar（唯一一条状态栏）。
   @Builder
-  EditorPane() {
+  EditorBody() {
     Column() {
       // Issue #783 评论5856245403：返回入口和标题由各分支的标题栏承载
-      //（API23+ HDS backIcon / API<23 自定义标题 Row），EditorPane 只负责正文和底部状态栏。
+      //（API23+ HDS backIcon / API<23 自定义标题 Row），正文主体只负责正文本身。
       // Issue #767 评论 5828146609 第 2 节：删除顶部操作栏（分享/保存按钮已删）。
-      // 字数显示合并到底部保存状态栏，正文顶部不再留一条空操作栏。
 
       if (this.isLoading) {
         Column() {
@@ -1889,9 +1937,17 @@ export struct WritingScreen {
           .layoutWeight(1)
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       }
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+  }
 
-      // Bottom toolbar — Issue #767 评论 5828146609 第 2 节：字数显示合并到底部保存状态栏。
-      Row() {
+  // 窄屏专用底栏（Issue #767 评论 5828146609 第 2 节：字数显示合并到底部保存状态栏）。
+  // Issue #829 评论2第1项：宽屏不再走这个 Builder，改用 WritingStatusBar。
+  @Builder
+  NarrowStatusBar() {
+    Row() {
         // 字数显示（从顶部操作栏合并到此）
         Text(getContext(this).resourceManager
           .getStringSync($r('app.string.word_count_format').id)
@@ -1912,9 +1968,18 @@ export struct WritingScreen {
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
       .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 10, bottom: 10 })
+  }
+
+  // 窄屏编辑区 = 正文主体 + 窄屏旧底栏。
+  // Issue #829 评论2第1项：宽屏不调这个 Builder，只调 EditorBody() + WritingStatusBar，
+  // 保证任何时候窗口里只有一条底部状态栏、也只有一份状态。
+  @Builder
+  EditorPane() {
+    Column() {
+      this.EditorBody()
+      this.NarrowStatusBar()
     }
     .width('100%')
     .height('100%')
-    .alignItems(HorizontalAlign.Center)
   }
 }

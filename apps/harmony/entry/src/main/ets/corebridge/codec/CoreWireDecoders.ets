@@ -13,7 +13,7 @@
 // 4. 嵌套对象递归 decode；数组逐元素 decode。
 
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
-import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats } from '../dto/ProjectDtos'
+import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats, SpeedCurve, SpeedCurvePoint } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
 import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
@@ -578,6 +578,50 @@ export function decodeWritingStats(data: Object): DecodeResult<WritingStats> {
     daysCount: daysCount
   }
   return ok<WritingStats>(value)
+}
+
+export function decodeSpeedCurvePoint(data: Object): DecodeResult<SpeedCurvePoint> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SpeedCurvePoint>('SpeedCurvePoint: expected object')
+  }
+  const startMs: number | null = reqNum(data, 'startMs')
+  if (startMs === null) { return err<SpeedCurvePoint>('startMs missing or not number') }
+  const endMs: number | null = reqNum(data, 'endMs')
+  if (endMs === null) { return err<SpeedCurvePoint>('endMs missing or not number') }
+  const charsTyped: number | null = reqNum(data, 'charsTyped')
+  if (charsTyped === null) { return err<SpeedCurvePoint>('charsTyped missing or not number') }
+  const charsPerMinute: number | null = reqNum(data, 'charsPerMinute')
+  if (charsPerMinute === null) { return err<SpeedCurvePoint>('charsPerMinute missing or not number') }
+  return ok<SpeedCurvePoint>({
+    startMs: startMs,
+    endMs: endMs,
+    charsTyped: charsTyped,
+    charsPerMinute: charsPerMinute
+  })
+}
+
+export function decodeSpeedCurve(data: Object): DecodeResult<SpeedCurve> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SpeedCurve>('SpeedCurve: expected object')
+  }
+  const rangeObj: Object | null = reqObj(data, 'range')
+  if (rangeObj === null) { return err<SpeedCurve>('range missing or not object') }
+  const startDate: string | null = reqStr(rangeObj, 'startDate')
+  if (startDate === null) { return err<SpeedCurve>('range.startDate missing or not string') }
+  const endDate: string | null = reqStr(rangeObj, 'endDate')
+  if (endDate === null) { return err<SpeedCurve>('range.endDate missing or not string') }
+  const bucketMinutes: number | null = reqNum(data, 'bucketMinutes')
+  if (bucketMinutes === null) { return err<SpeedCurve>('bucketMinutes missing or not number') }
+  const bucketsArr: Array<Object> | null = reqArray(data, 'buckets')
+  if (bucketsArr === null) { return err<SpeedCurve>('buckets missing or not array') }
+  const buckets: DecodeResult<SpeedCurvePoint[]> =
+    decodeArray<SpeedCurvePoint>(bucketsArr as Object, decodeSpeedCurvePoint, 'buckets')
+  if (!buckets.ok || buckets.value === undefined) { return err<SpeedCurve>(buckets.error ?? 'decode failed') }
+  return ok<SpeedCurve>({
+    range: { startDate: startDate, endDate: endDate },
+    bucketMinutes: bucketMinutes,
+    buckets: buckets.value
+  })
 }
 
 export function decodeProjectTree(data: Object): DecodeResult<ProjectTree> {
