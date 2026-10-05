@@ -360,6 +360,14 @@ fn test_speed_buckets_generation() {
 }
 
 fn speed_test_event(timestamp_ms: i64, inserted_chars: u32) -> WritingInputEvent {
+    speed_test_event_with_source(timestamp_ms, inserted_chars, EventSource::HumanTyped)
+}
+
+fn speed_test_event_with_source(
+    timestamp_ms: i64,
+    inserted_chars: u32,
+    source: EventSource,
+) -> WritingInputEvent {
     WritingInputEvent {
         event_id: uuid::Uuid::new_v4().to_string(),
         timestamp_ms,
@@ -369,7 +377,7 @@ fn speed_test_event(timestamp_ms: i64, inserted_chars: u32) -> WritingInputEvent
         project_id: "proj1".to_string(),
         volume_id: "vol1".to_string(),
         chapter_id: "chap1".to_string(),
-        source: EventSource::HumanTyped,
+        source,
         inserted_chars,
         deleted_chars: 0,
         pasted_chars: 0,
@@ -378,6 +386,45 @@ fn speed_test_event(timestamp_ms: i64, inserted_chars: u32) -> WritingInputEvent
         duration_seconds: 0,
         session_id: "s1".to_string(),
     }
+}
+
+// 当前速度只能计 HumanTyped：Undo/Redo/Programmatic/Load/Format 会带着真实
+// inserted delta 落盘、但 source 映射成 Unknown（见 facade 的
+// `record_writing_event`），一次撤销恢复一大段文字不该把「字/分」冲高。
+// 口径必须和中段 `totalHumanTypedChars` 一致。
+#[test]
+fn test_current_speed_counts_only_human_typed() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    // 人工输入 20 字
+    api.record_event(speed_test_event_with_source(
+        now_ms - 5_000,
+        20,
+        EventSource::HumanTyped,
+    ))
+    .unwrap();
+    // 撤销恢复 500 字：带真实 inserted delta，但 source 是 Unknown
+    api.record_event(speed_test_event_with_source(
+        now_ms - 4_000,
+        500,
+        EventSource::Unknown,
+    ))
+    .unwrap();
+    // 粘贴 300 字
+    api.record_event(speed_test_event_with_source(
+        now_ms - 3_000,
+        300,
+        EventSource::Pasted,
+    ))
+    .unwrap();
+    api.aggregator().store().flush_events().unwrap();
+
+    // 只计 HumanTyped 的 20 字，不是 20 + 500 + 300。
+    let speed = api.aggregator().get_current_speed(60).unwrap();
+    assert_eq!(speed.chars_typed, 20);
+    assert!((speed.chars_per_minute - 20.0).abs() < 0.001);
 }
 
 // 「当前写作速度」必须看得到还在内存缓冲里、尚未落盘的事件：

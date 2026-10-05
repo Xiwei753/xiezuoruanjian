@@ -10,7 +10,7 @@
 
 use crate::error::Result;
 use crate::writing_stats::store::{CurrentWritingSpeed, DailyStats, SpeedBucket, StatsStore};
-use crate::writing_stats::WritingInputEvent;
+use crate::writing_stats::{EventSource, WritingInputEvent};
 use std::path::Path;
 
 pub struct StatsAggregator {
@@ -78,7 +78,16 @@ impl StatsAggregator {
         let start_ms = now_ms - i64::from(window_seconds) * 1_000;
 
         let events = self.store.load_events_in_window(start_ms, now_ms)?;
-        let chars_typed: u32 = events.iter().map(|e| e.inserted_chars).sum();
+        // 只算 HumanTyped，与 `total_human_typed_chars` 同一个口径。
+        // Undo/Redo/Programmatic/Load/Format 会带着真实 inserted delta 落盘，
+        // 但 source 映射成 `Unknown`（见 facade 的 `record_writing_event`），
+        // 所以这里若把 inserted_chars 全加起来，一次撤销恢复一大段文字就会把
+        // 状态栏「字/分」瞬间冲高，还和中段今日进度对不上。
+        let chars_typed: u32 = events
+            .iter()
+            .filter(|e| e.source == EventSource::HumanTyped)
+            .map(|e| e.inserted_chars)
+            .sum();
         let minutes = f64::from(window_seconds) / 60.0;
 
         Ok(CurrentWritingSpeed {

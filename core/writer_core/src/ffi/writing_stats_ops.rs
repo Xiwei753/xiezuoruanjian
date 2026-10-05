@@ -60,7 +60,10 @@ pub unsafe extern "C" fn writer_core_get_writing_stats_summary(
             )
         }
     };
-    match with_app_service(|svc| svc.get_writing_stats_summary(start, end)) {
+    match with_app_service(|svc| {
+        svc.get_writing_stats_summary(start, end)
+            .map_err(|e| format!("{}", e))
+    }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("UNKNOWN_ERROR", &e),
     }
@@ -88,7 +91,10 @@ pub unsafe extern "C" fn writer_core_get_writing_speed_curve(
             )
         }
     };
-    match with_app_service(|svc| svc.get_writing_speed_curve(start, end, bucket_minutes)) {
+    match with_app_service(|svc| {
+        svc.get_writing_speed_curve(start, end, bucket_minutes)
+            .map_err(|e| format!("{}", e))
+    }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("UNKNOWN_ERROR", &e),
     }
@@ -110,7 +116,10 @@ pub unsafe extern "C" fn writer_core_get_writing_speed_curve(
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_current_writing_speed(window_seconds: u32) -> *mut c_char {
-    match with_app_service(|svc| svc.get_current_writing_speed_json(window_seconds)) {
+    match with_app_service(|svc| {
+        svc.get_current_writing_speed(window_seconds)
+            .map_err(|e| format!("{}", e))
+    }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("UNKNOWN_ERROR", &e),
     }
