@@ -272,7 +272,7 @@ export struct WorkspaceScreen {
         screenRole: ScreenRole.ProjectWorkspace,
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 提供，
         // 工作区页再画一条 HDS 标题栏就会在双栏内容上方留出整宽空白。
-        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
+        showTitleBar: this.adaptiveState.layoutPlan.workspaceLayoutMode !== WorkspaceLayoutMode.Workbench
       }) {
         this.NavContent()
       }
@@ -280,7 +280,7 @@ export struct WorkspaceScreen {
       NavDestination() {
         this.NavContent()
       }
-      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
+      .hideTitleBar(this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench)
       .title(this.viewModel.projectName)
       .menus(buildNavMenuItems(this.headerActions))
       .onBackPressed(() => {
