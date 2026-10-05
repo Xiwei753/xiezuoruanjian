@@ -341,6 +341,10 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.statsBridge.getWritingStatsSummary(startDate, endDate)
   }
 
+  async getTodayWritingStatsSummary(): Promise<ResultEnvelope<WritingStats>> {
+    return this.statsBridge.getTodayWritingStatsSummary()
+  }
+
   async getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>> {
     return this.statsBridge.getWritingSpeedCurve(startDate, endDate, bucketMinutes)
   }

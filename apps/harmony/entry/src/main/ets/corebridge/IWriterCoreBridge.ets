@@ -84,6 +84,8 @@ export interface IWriterCoreBridge {
   getWritingStats(): Promise<ResultEnvelope<WritingStats>>
   // Issue #829：带区间的汇总 / 速度曲线，供写作页状态栏读当日口径。
   getWritingStatsSummary(startDate: string, endDate: string): Promise<ResultEnvelope<WritingStats>>
+  // Issue #829 评论10：「今天」由 Core 本地日历口径决定，端侧不传日期字符串。
+  getTodayWritingStatsSummary(): Promise<ResultEnvelope<WritingStats>>
   getWritingSpeedCurve(startDate: string, endDate: string, bucketMinutes: number): Promise<ResultEnvelope<SpeedCurve>>
   // Issue #829：实时写作速度（最近 windowSeconds 秒），状态栏左段「字/分」走这里。
   getCurrentWritingSpeed(windowSeconds: number): Promise<ResultEnvelope<CurrentWritingSpeed>>

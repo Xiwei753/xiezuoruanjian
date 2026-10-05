@@ -633,16 +633,6 @@ export struct WritingScreen {
     this.clockText = `${hour}:${minute}`
   }
 
-  // 返回本地时区的今天日期（YYYY-MM-DD）。Core 的统计查询按日期字符串切区间，
-  // 这里必须给本地"今天"而不是 UTC 日期，否则东八区凌晨会落到昨天。
-  private todayDateString(): string {
-    const now = new Date()
-    const year = String(now.getFullYear())
-    const month = String(now.getMonth() + 1).padStart(2, '0')
-    const day = String(now.getDate()).padStart(2, '0')
-    return `${year}-${month}-${day}`
-  }
-
   // 两段状态都失败时保持旧值：状态栏是只读展示，查询失败不该把已有数字清零。
   private async refreshWritingStatusData(): Promise<void> {
     // 左段：Core「当前写作速度」，窗口 60 秒 = 手稿「86 字/分」的「最近一分钟」。
@@ -655,8 +645,11 @@ export struct WritingScreen {
     }
 
     // 中段：今日纯输入字数。
-    const today = this.todayDateString()
-    const summary = await this.bridge.getWritingStatsSummary(today, today)
+    // 这里不自己拼"今天是哪一天"（原 todayDateString 已删）：Core 的每日统计按
+    // 事件发生地的本地午夜分桶，端侧再拼一份本地日期，一旦时区口径和 Core 错开，
+    // 凌晨就会出现"今日进度提前清零"。日历日语义只留在 Core 一处，Linux_Qt 走
+    // 同一个 getTodayWritingStatsSummary，不给第三个端留复制的机会。
+    const summary = await this.bridge.getTodayWritingStatsSummary()
     if (summary.success && summary.data) {
       this.todayTypedChars = summary.data.totalHumanTypedChars
     }

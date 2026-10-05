@@ -131,6 +131,10 @@ char*  writer_core_save_app_sync_state(const char* state_json);
 
 // ── Writing Stats ──
 char*  writer_core_get_writing_stats(void);
+// 「今天」的写作汇总：无参数。「今天是哪一天」由 Core 的本地日历口径决定，
+// 平台端不传日期——每日统计按事件发生地的本地午夜分桶，端侧自己拼日期
+// 会在凌晨和 Core 错开一天。
+char*  writer_core_get_today_writing_stats_summary(void);
 char*  writer_core_get_writing_stats_summary(const char* start_date, const char* end_date);
 char*  writer_core_get_writing_speed_curve(const char* start_date, const char* end_date, uint32_t bucket_minutes);
 // 实时写作速度：与上面的历史曲线分工，速度由 Core 以「最近 window_seconds 秒」重算。

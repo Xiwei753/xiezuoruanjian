@@ -26,6 +26,14 @@ static char* TakeStringArg(napi_env env, napi_value value) {
     return buffer;
 }
 
+// 「今天」的写作汇总：无参数，「今天是哪一天」由 Core 的本地日历口径决定。
+// Issue #829 评论10：端侧不再自己拼 YYYY-MM-DD，否则和 Core 时区口径错开时
+// 凌晨会出现「今日进度提前清零」。
+static napi_value NativeGetTodayWritingStatsSummary(napi_env env, napi_callback_info info) {
+    (void)info;
+    return ReturnJsonString(env, writer_core_get_today_writing_stats_summary());
+}
+
 static napi_value NativeGetWritingStatsSummary(napi_env env, napi_callback_info info) {
     size_t argc = 2;
     napi_value args[2] = {nullptr, nullptr};
@@ -208,6 +216,7 @@ static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info inf
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
     static napi_property_descriptor desc[] = {
         {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeGetTodayWritingStatsSummary", nullptr, NativeGetTodayWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingStatsSummary", nullptr, NativeGetWritingStatsSummary, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},

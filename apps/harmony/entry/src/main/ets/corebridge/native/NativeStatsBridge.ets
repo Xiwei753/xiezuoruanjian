@@ -46,6 +46,16 @@ export class NativeStatsBridge {
     } catch (e) { return nativeError<WritingStats>(e) }
   }
 
+  // Issue #829 评论10：「今天是哪一天」由 Core 的本地日历口径决定，端侧不传日期。
+  // 每日统计按事件发生地的本地午夜分桶，端侧自己拼 YYYY-MM-DD 一旦时区口径错开，
+  // 凌晨就会出现「今日进度提前清零」。
+  async getTodayWritingStatsSummary(): Promise<ResultEnvelope<WritingStats>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeGetTodayWritingStatsSummary()
+      return this.core.decodeEnvelope<WritingStats>(jsonStr, decodeWritingStats)
+    } catch (e) { return nativeError<WritingStats>(e) }
+  }
+
   // Issue #829：历史写作速度曲线（按日期区间 + 分桶粒度）。曲线只负责历史形状，
   // 状态栏左段的实时「字/分」走 getCurrentWritingSpeed。
   async getWritingSpeedCurve(startDate: string, endDate: string,
