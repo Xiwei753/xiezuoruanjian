@@ -329,13 +329,24 @@ impl FrontierPath {
 /// - `base_snapshot`：连续 burst 开始前的旧正文。只有 Delete / Replace 的
 ///   overlay 需要它（overlay 必须画「本轮连续删除开始前真正需要显示的旧文字」）。
 /// - `target_snapshot`：当前最新正文。吐字的新字、吞字后回流的位置都取自它。
-/// - `old_ranges`：旧正文坐标系里本轮被删掉的范围（burst base 坐标系）。
-/// - `new_ranges`：最新正文坐标系里本轮新增的范围（最新 target 坐标系）。
-///   两组都按 overlap / adjacent 归一化，**不会跨 gap 合并**。
-/// - `reveal_tracks` / `conceal_tracks`：每个 disjoint patch 一条 track，
-///   track 自己拥有 range / path / travelled（评论 9 阻塞 3）。
-///   连续编辑时按 track 身份继承上一帧的已走过距离，所以「已经吐出来的字」
-///   不会因为下一笔而回退，也不会把进度串到别的 patch 上。
+/// - `old_ranges()`：旧正文坐标系里本轮仍由吞字前沿负责的范围（burst base
+///   坐标）。**只包含当前屏幕上还有 glyph 在被吞的 owner**。
+/// - `new_ranges()`：最新正文坐标系里仍由吐字 scalar 前沿负责的范围。
+///   按 overlap / adjacent 归一化，**不会跨 gap 合并**。已完整露出或已交给
+///   carry 的字不在其中 —— 见 [`Self::active_reveal_owned_ranges`]。
+///
+/// ### 吐字侧的三层 owner（评论 21 起）
+///
+/// 每一段字有且只有一个 owner，且三者必须同时从 **mask / path distance /
+/// 纹理生命周期 / 下一次 retarget identity** 四处一致：
+/// 1. `reveal`（scalar）：还要由 `FrontierMask` 从 0 打开的内容；
+/// 2. `reveal_carried`：已经**部分**露出的边界 cluster，用同一 progress 从
+///    上一帧屏幕位置补间到最新 canonical 位置；
+/// 3. `reveal_settled` + Reflow + canonical：已经完整露出的字，前沿不再遮罩，
+///    位置真的变了就由 Reflow 从旧矩形补过去。
+///
+/// 吞字侧同构：`conceal`（scalar 前沿）+ `conceal_glyphs`（仍可见的旧字
+/// overlay）。两者都只有**一个** `travelled` 时钟，不存在 per-key track。
 #[derive(Clone, Debug)]
 pub(crate) struct EditFrontierState {
     pub kind: EditFrontierKind,
@@ -527,12 +538,7 @@ impl FrontierLayer {
         None
     }
 
-    /// Issue #826 评论 20：前 `distance` 像素是不是**同一批字、同一块屏幕位置**。
-    ///
-    /// 这是「绝对距离能不能直接继承」的唯一判据。评论 18 把「按百分比 rescale」
-    /// 改成「保留绝对距离」只对 `旧 path = A，新 path = A + B 且 A 完全没变` 成立；
-    /// 只要新 path 的前半段换了字、换了行或换了顺序，同一个 `8.75` 就不再代表
-    /// 「上一帧真正已经露出的那一块字」。
+    /// Issue #826 评论 20：前 `distance` 像素是不是**同一块屏幕位置**。
     ///
     /// 判据是「边界在这几个距离上落在同一处」：采样点取**两条**路径在前
     /// `distance` 内的全部 segment 边界加上 `distance` 本身，然后逐点比
@@ -544,6 +550,25 @@ impl FrontierLayer {
     ///
     /// 只比几何，**不比 `line_id`** —— 同一视觉行在不同 snapshot 里的
     /// `LineSnapshotId` 本来就不同。
+    ///
+    /// ### 这个函数**不知道字符身份**，因此不能单独用来决定 fast path
+    ///
+    /// 评论 23：只凭它返回 true 就继承绝对距离，会把「同位置」误当成「同字符」。
+    /// 等宽排版里最自然的连续编辑恰好就会撞上：
+    /// ```text
+    /// 第一笔：aX          X range 1..2  rect x 10..20   80ms -> 已露 8.75px
+    /// 第二笔：在 X 前插 Y  Y range 1..2  rect x 10..20
+    ///                     X range 2..3  rect x 20..30
+    /// ```
+    /// 新 path 是 `x 10..30`，`point_at(8.75)` 在新旧两条 path 上都是 `18.75`，
+    /// 本函数返回 `true`；但那 8.75px 在新 path 上已经属于 **Y**，继承过去就是
+    /// 「旧字已露出的像素瞬间转移给刚输入的新字」。
+    ///
+    /// 所以 fast path 必须**同时**满足两个判据：
+    /// - [`Self::shares_geometry_prefix`] 回答「坐标没变」；
+    /// - `shares_geometry_prefix(self.reveal, &mapped_previous_layer, inherited)`
+    ///   回答「这还是同一批字」（`mapped_previous` 只含旧 owner 映到新 revision
+    ///   后的 range）。见 [`EditFrontierState::retarget_reveal`]。
     pub(crate) fn shares_geometry_prefix(&self, other: &Self, distance: f64) -> bool {
         if distance <= 1e-9 {
             // 前沿还在起点：继承 0 与从 0 重起等价，走快路径即可。
@@ -1234,16 +1259,42 @@ impl EditFrontierState {
     fn retarget_reveal(
         &mut self,
         target_snapshot: &EditorLayoutSnapshot,
-        merged: Vec<(usize, usize)>,
+        // 旧 owner 映到最新 revision 后的 range（**不含**本次新插入的）。
+        //
+        // Issue #826 评论 23：这两份 range 必须分开传。只有 `merged` 的话，
+        // 「新插入的字恰好占了旧字原来的位置」这一类情况无法与
+        // 「旧字还在原位」区分开。
+        mapped_previous_ranges: Vec<(usize, usize)>,
+        // 旧 owner + 本次新插入，归一化后的完整集合。
+        merged_ranges: Vec<(usize, usize)>,
         prev_target_to_new: &OffsetMap,
         now: Instant,
     ) {
         let progress = self.sample(now).progress;
         let inherited = self.reveal.inherited(progress);
-        let probe = build_reveal_layer(target_snapshot, &merged);
+        let probe = build_reveal_layer(target_snapshot, &merged_ranges);
+        // Issue #826 评论 23：只由旧 owner 构成的那条 path。fast path 必须同时
+        // 满足「坐标没变」与「还是同一批字」，缺一不可：
+        //
+        // ```text
+        // aX -> aYX（等宽）
+        // 旧  : X rect x 10..20，inherited 8.75
+        // 新  : Y(1..2) rect x 10..20、X(2..3) rect x 20..30
+        // merged probe : x 10..30，point_at(8.75) = 18.75  -> 几何「一样」
+        // mapped_prev  : 只含 X  x 20..30，point_at(8.75) = 28.75 -> 身份已换人
+        // ```
+        //
+        // 只比 probe 会让那 8.75px 从「X 已露出」变成「Y 已露出 87.5%」。
+        // 这里不引入任何 Track / 历史按键状态，只是在 retarget 当下用 Core 的
+        // OffsetMap 做一次身份验证。
+        let mapped_previous =
+            build_reveal_layer(target_snapshot, &normalize_ranges(mapped_previous_ranges));
         let geometry_stable = self.reveal_carried.is_empty()
             && self.reveal_settled.is_empty()
-            && self.reveal.shares_geometry_prefix(&probe, inherited);
+            && self.reveal.shares_geometry_prefix(&probe, inherited)
+            && self
+                .reveal
+                .shares_geometry_prefix(&mapped_previous, inherited);
         if geometry_stable {
             // A：path 只是被延长，前半段的字和位置都没变 —— 直接继承绝对距离。
             // 前沿仍在 `inherited` 处：上一笔还差的那点没露完，新输入的字仍然全藏。
@@ -1311,7 +1362,7 @@ impl EditFrontierState {
         // 所以 scalar path 只保留「还需要 FrontierMask 从 0 打开」的 range；
         // 身份保留在 `reveal_carried` 里（`active_reveal_owned_ranges` 显式合并）。
         let owned: Vec<(usize, usize)> = carried.iter().map(|item| item.range).collect();
-        let mask_ranges = subtract_ranges(merged, &settled, &owned);
+        let mask_ranges = subtract_ranges(&merged_ranges, &settled, &owned);
 
         let reveal = build_reveal_layer(target_snapshot, &mask_ranges);
         // 慢路径下前沿的职责只剩「把还没露出的新字从头打开」，时钟从 0 起。
@@ -1334,8 +1385,10 @@ impl EditFrontierState {
         // Issue #826 评论 21：carry 已退出 scalar path（见
         // `active_reveal_owned_ranges`），身份必须显式带上，否则下一笔会丢掉它。
         let carried = map_ranges_forward(&self.active_reveal_owned_ranges(), prev_target_to_new);
-        let merged = normalize_ranges(merge_all(carried, inserted_ranges));
-        self.retarget_reveal(&target_snapshot, merged, prev_target_to_new, now);
+        let merged = normalize_ranges(merge_all(carried.clone(), inserted_ranges));
+        // Issue #826 评论 23：`carried`（旧 owner）与 `merged`（旧 owner + 新字）
+        // 分开传，fast path 才能分辨「坐标没变」与「还是同一批字」。
+        self.retarget_reveal(&target_snapshot, carried, merged, prev_target_to_new, now);
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
         self.target_text = target_text;
@@ -1432,10 +1485,18 @@ impl EditFrontierState {
         // Issue #826 评论 21：同 `extend_insert`，carry 的身份要显式带上。
         let carried_new =
             map_ranges_forward(&self.active_reveal_owned_ranges(), prev_target_to_new);
-        let merged_new = normalize_ranges(merge_all(carried_new, inserted_ranges));
+        let merged_new = normalize_ranges(merge_all(carried_new.clone(), inserted_ranges));
         // Issue #826 评论 20：吐字侧同样必须分「几何没变」与「几何/顺序变了」，
         // 不能一律继承绝对距离。
-        self.retarget_reveal(&target_snapshot, merged_new, prev_target_to_new, now);
+        // Issue #826 评论 23：与 `extend_insert` 一样把旧 owner（`carried_new`）
+        // 与完整集合（`merged_new`）分开传。
+        self.retarget_reveal(
+            &target_snapshot,
+            carried_new,
+            merged_new,
+            prev_target_to_new,
+            now,
+        );
 
         self.base_to_target_map = base_to_current.compose(prev_target_to_new);
         self.target_snapshot = target_snapshot;
@@ -1834,7 +1895,7 @@ fn build_conceal_layer(
 /// `probe` 参数不需要 —— 只做减法，结果仍交给 `build_reveal_layer` 在最新
 /// target 上按真实几何建 path。
 fn subtract_ranges(
-    merged: Vec<(usize, usize)>,
+    merged: &[(usize, usize)],
     settled: &[(usize, usize)],
     carried: &[(usize, usize)],
 ) -> Vec<(usize, usize)> {
@@ -1842,7 +1903,7 @@ fn subtract_ranges(
     // 的部分。这里逐字节判定「这段还要不要由 scalar frontier 打开」，再把连续
     // 的「还要」片段合并回去。
     let mut out: Vec<(usize, usize)> = Vec::new();
-    for range in normalize_ranges(merged) {
+    for range in normalize_ranges(merged.to_vec()) {
         let mut start: Option<usize> = None;
         for byte in range.0..range.1 {
             let owned = settled

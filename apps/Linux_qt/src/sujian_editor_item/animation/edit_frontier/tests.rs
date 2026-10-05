@@ -1956,3 +1956,137 @@ fn can_extend_identity_checks_carried_reveal_ranges_when_scalar_path_is_empty() 
         "carry 的 range 能完整映射时应当继续并入当前 burst"
     );
 }
+
+/// Issue #826 评论 23 BLOCKER：fast path 不能把「同一个屏幕位置」当成
+/// 「同一批字符」。
+///
+/// `shares_geometry_prefix()` 只比较 `(x, y, h)`，它**不知道**某个像素原来属于
+/// 哪个 byte range。等宽 10px 下「新字恰好占了旧字原来的位置」就会漏过：
+/// ```text
+/// 第一笔：aX    X range=1..2  X rect = x 10..20   old reveal path = 10..20
+/// 80ms/160ms -> inherited = 8.75px，屏幕上真正已看见 X 的 x 10..18.75
+/// 马上在 X 前插 Y -> aYX
+/// 新排版：Y range=1..2 rect = x 10..20 ；X 映成 range=2..3 rect = x 20..30
+/// merged = Y(1..2) + mappedX(2..3) -> normalize -> 1..3
+/// 新 probe path = x 10..30
+/// 旧 path distance 8.75 -> x 18.75 ；新 probe path distance 8.75 -> 也 x 18.75
+/// => shares_geometry_prefix(probe) == true
+/// ```
+/// 于是走 fast path、`travelled = 8.75` —— 但这 8.75px 在新 path 上已经是
+/// **Y** 的 x 10..18.75。第二笔第一帧从「X 已露 8.75px、Y 不存在」变成
+/// 「Y 已露 8.75px、X 完全 hidden」：旧字已露出的像素瞬间转移给刚输入的新字。
+///
+/// 现有 `inserting_patch_before_existing_reveal_preserves_visible_owner` 故意把
+/// 旧/新几何做得差别明显（旧 X = x100..110、新 Y = x0..10），所以第一个判据就能
+/// 发现；这条反例专门咬「几何一样、身份换人」。
+///
+/// 契约：fast path 必须**同时**满足两个判据 ——
+/// 1. 完整新 path 的前 N 像素没换屏幕位置；
+/// 2. 旧 owner 单独映到新 revision 后，前 N 像素仍然是旧 owner 自己。
+#[test]
+fn same_geometry_prefix_with_different_character_owner_must_use_slow_retarget() {
+    let now = Instant::now();
+    // 第一笔：正文 `aX`，X 的文档矩形是 (10, 0, 10, 20)。
+    // 行内要有 x=0 的 cluster 把 `visual_x` 钉在 0，X 的文档 x 才是 10。
+    let mut state = EditFrontierState::begin_insert(
+        String::from("a"),
+        snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            0,
+            0.0,
+            0,
+            vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0)],
+        )]),
+        String::from("aX"),
+        vec![(1, 2)],
+        OffsetMap::from_single_edit(1, (1, 1), 1),
+        now,
+        160,
+    );
+
+    let half = instant_at(now, 80);
+    let mid = state.sample(half);
+    // `hidden_new_text_rects` 返回 boundary **右边**被遮的部分，
+    // 所以「已露出宽度」= 遮罩左边界 - glyph 左边界。
+    let mid_visible: f64 = state
+        .hidden_new_text_rects(&mid)
+        .iter()
+        .filter(|rect| (rect.x + rect.w - 20.0).abs() < 1e-9)
+        .map(|rect| rect.x - 10.0)
+        .sum();
+    assert!(
+        (8.75 - mid_visible).abs() < 0.2,
+        "半程时 X 应已露出约 8.75px，实际 {mid_visible}"
+    );
+
+    // 第二笔：在 X **之前**插入 Y。新排版 Y 占 x 10..20、X 挪到 x 20..30 ——
+    // Y 恰好占住 X 原来的屏幕位置，probe 的前 8.75px 几何与旧 path 完全一致。
+    let shifted = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![cluster(0, 1, 0.0), cluster(1, 2, 10.0), cluster(2, 3, 20.0)],
+    )]);
+    // 在 byte 1 插入 Y -> 旧的 (1,2) 变成新的 (2,3)。
+    let prev_target_to_new = OffsetMap::from_single_edit(2, (1, 1), 1);
+    state.extend_insert(
+        shifted,
+        String::from("aYX"),
+        vec![(1, 2)],
+        &prev_target_to_new,
+        &OffsetMap::from_single_edit(0, (0, 0), 0),
+        half,
+    );
+
+    let sample = state.sample(half);
+    assert_eq!(
+        state.reveal.travelled, 0.0,
+        "旧 owner 映到新 revision 后位置变了，scalar distance 已被换人，必须从 0 起"
+    );
+
+    // X 以**新**身份 (2,3) 进入 carry，补间起点仍是它上一帧的真实屏幕位置。
+    assert_eq!(state.reveal_carried.len(), 1);
+    let carried = &state.reveal_carried[0];
+    assert_eq!(
+        carried.range,
+        (2, 3),
+        "carry 记录的是 X 在最新 target 里的身份"
+    );
+    assert!(
+        (carried.from_rect.x - 10.0).abs() < 1e-6 && carried.from_rect.w > 0.0,
+        "carry 起点必须仍是 X 上一帧的 x = 10，实际 {:?}",
+        carried.from_rect
+    );
+    assert!(
+        (carried.to_rect.x - 20.0).abs() < 1e-6,
+        "carry 终点是 X 的新位置 x = 20，实际 {:?}",
+        carried.to_rect
+    );
+    assert!(
+        (8.75 - carried.visible_width).abs() < 0.2,
+        "carry 只拥有上一帧已经看见的宽度（约 8.75px），实际 {}",
+        carried.visible_width
+    );
+
+    // 第一帧 X 那 8.75px 必须仍画在旧位置。
+    let glyphs = state.reveal_carried_glyphs(&sample);
+    assert_eq!(glyphs.len(), 1);
+    assert!(
+        (glyphs[0].dest_rect.x - 10.0).abs() < 1e-6 && (glyphs[0].dest_rect.w - 8.75).abs() < 0.2,
+        "X 已露出的 8.75px 第一帧必须仍在 x = 10 宽 8.75，实际 {:?}",
+        glyphs[0].dest_rect
+    );
+
+    // 刚插入的 Y 必须完整 hidden —— 它绝不能继承 X 那 8.75px。
+    let hidden = state.hidden_new_text_rects(&sample);
+    assert!(
+        hidden
+            .iter()
+            .any(|rect| (rect.x - 10.0).abs() < 1e-9 && (rect.x + rect.w - 20.0).abs() < 1e-9),
+        "刚插入的 Y（x 10..20）必须完整 hidden，实际 hidden = {hidden:?}"
+    );
+    // X 归 carry 所有，前沿不得再遮罩它在 canonical 位置（x 20..30）。
+    assert!(
+        !hidden.iter().any(|rect| (rect.x - 20.0).abs() < 1e-9),
+        "X 已由 carry overlay 所有，前沿不得遮罩它的 canonical 位置，实际 hidden = {hidden:?}"
+    );
+}
