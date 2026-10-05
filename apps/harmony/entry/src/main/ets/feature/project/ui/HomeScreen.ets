@@ -24,7 +24,7 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
-import { ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
+import { ScreenRole, WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationHeaderActionDispatcher } from '../../../app/navigation/NavigationHeaderActionDispatcher'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsAppDestinationApi23 } from '../../../app/navigation/impl/api23/HdsAppDestinationApi23'
@@ -253,7 +253,7 @@ export struct HomeScreen {
   HomeContent() {
     Stack() {
       Column() {
-        if (this.adaptiveState.sizeClass === WidthClass.Expanded) {
+        if (this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) {
           // ── 宽屏：只有作品卡流，从内容区左上开始排 ──
           this.WideHomeLayout()
         } else {
@@ -297,7 +297,7 @@ export struct HomeScreen {
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
         // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
         // 就会在内容上方留出一条整宽空白。
-        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
+        showTitleBar: this.adaptiveState.layoutPlan.workspaceLayoutMode !== WorkspaceLayoutMode.Workbench
       }) {
         this.HomeContent()
       }
@@ -305,7 +305,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
+      .hideTitleBar(this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))
