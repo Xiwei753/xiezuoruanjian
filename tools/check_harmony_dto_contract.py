@@ -128,6 +128,8 @@ DECODER_MAP: dict[str, str] = {
     "decodeChapterSaveReceipt": "ChapterSaveReceiptDto",
     "decodeProjectTree": "ProjectWorkspaceSnapshotDto",
     "decodeWritingStats": "WritingStatsSummaryDto",
+    "decodeSpeedCurvePoint": "SpeedCurvePointDto",
+    "decodeSpeedCurve": "SpeedCurveSummaryDto",
     "decodeRecentEdit": "RecentEditDto",
     "decodeAppSummary": "AppStateSummaryDto",
     "decodeStarMapNodeContent": "StarMapNodeContentDto",

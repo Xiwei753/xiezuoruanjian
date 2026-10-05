@@ -131,6 +131,8 @@ char*  writer_core_save_app_sync_state(const char* state_json);
 
 // ── Writing Stats ──
 char*  writer_core_get_writing_stats(void);
+char*  writer_core_get_writing_stats_summary(const char* start_date, const char* end_date);
+char*  writer_core_get_writing_speed_curve(const char* start_date, const char* end_date, uint32_t bucket_minutes);
 char*  writer_core_process_writing_event(const char* event_json);
 
 // ── Palette / Theme ──
