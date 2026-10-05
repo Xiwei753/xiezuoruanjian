@@ -302,3 +302,135 @@ fn issue808_comment5918236360_whitespace_line_is_not_checked() {
     assert!(status.failed_lines.is_empty());
     assert!(!status.has_unavailable_lines);
 }
+
+/// Issue #826 评论 15：同 burst 第二笔 Delete 新建的 ConcealTrack，其
+/// current snapshot 行图必须能被 `prepare_frontier_textures` 真正准备进 TextureCache。
+///
+/// 稳定反例（无 Reflow handoff，最容易暴露）：
+/// ```text
+/// abc| -> ab（第一笔 Backspace 删 c，burst base line 7 已缓存）
+///      -> a （第二笔 Backspace 删 b，can_extend == true 同一 burst）
+/// ```
+/// 评论 14 之后，第二笔新建 `b` 的 ConcealTrack 时 glyph source 取
+/// 「本笔删除前的 current old layout」= `ab`，它的 line id 是 9。
+/// 但这里**没有 Reflow**，line 9 此前没有任何理由进过 TextureCache；
+/// `retain_active_snapshot_ids` 只能「别删已存在的」，不能凭空创建；
+/// 旧实现只回头去 burst base snapshot（line 7）里找 id 9，根本找不到 QImage。
+///
+/// 结果：coordinator 里 track / path / geometry / active id 全都有，
+/// renderer 却 `get_line` miss 直接 skip —— 第一字正常吞、第二字直接消失。
+///
+/// 修法：ConcealTrack 自己带 `source_lines`（真实 QImage），
+/// `prepare_frontier_textures` 直接用它重建，不再猜 snapshot。
+/// 单行 fixture：`cluster_count` 个 cluster，每个 1 byte、10px 宽。
+///
+/// 必须真的有 cluster —— 没有 cluster 时 `build_conceal_track` 产不出 glyphs /
+/// source_lines（那正是「这一行没有可见 glyph」的情况），测试就测不到纹理。
+fn snapshot_for_test(
+    line_id: LineSnapshotId,
+    top: f64,
+    cluster_count: usize,
+) -> crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot {
+    use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
+    use crate::sujian_editor_item::layout_snapshot::{
+        LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
+    };
+    let shaping = ShapingIdentity {
+        text_content_hash: 1,
+        raw_font_fingerprint: String::from("test-font"),
+        glyph_indexes_hash: 1,
+        cluster_glyph_count: 1,
+        direction_rtl: false,
+        format_fingerprint: 1,
+    };
+    let clusters: Vec<LineClusterSnapshot> = (0..cluster_count)
+        .map(|i| LineClusterSnapshot {
+            byte_start: i,
+            byte_end: i + 1,
+            source_rect: SourceRect {
+                x: (i as f64) * 20.0,
+                y: 0.0,
+                w: 10.0,
+                h: 20.0,
+            },
+            shaping_identity: shaping.clone(),
+        })
+        .collect();
+    crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot::new(
+        LayoutSnapshot::empty_for_tests(),
+        vec![PreparedLineSnapshot::stub_for_tests(
+            line_id.visual_line_ordinal as usize,
+            top,
+            0,
+            clusters,
+        )],
+        None,
+        None,
+        CaretAffinity::Downstream,
+    )
+}
+
+#[test]
+fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
+    use crate::sujian_editor_item::animation::coordinator::{
+        EditFrontierRequest, LinuxEditorAnimationCoordinator,
+    };
+    use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
+    use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
+    use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
+    use std::time::{Duration, Instant};
+
+    let now = Instant::now();
+    let base_id = LineSnapshotId::new(0, 0, 7);
+    let current_id = LineSnapshotId::new(0, 0, 9);
+
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+
+    // ── 第一笔 Backspace：`abc` -> `ab`，删 c ──
+    // burst base 是 `abc`（line 7）；先只把 line 7 当作已缓存。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: snapshot_for_test(base_id, 0.0, 3),
+        target_snapshot: snapshot_for_test(current_id, 0.0, 2),
+        deleted_ranges: vec![(2, 3)],
+        inserted_ranges: Vec::new(),
+        offset_map: writer_core::editor::OffsetMap::from_single_edit(3, (2, 3), 0),
+        base_text: String::from("abc"),
+        target_text: String::from("ab"),
+        conceal_direction: ConcealDirection::Backward,
+        now,
+    });
+    let active = coord.active_old_overlay_snapshot_ids();
+    assert!(
+        active.contains(&base_id),
+        "第一笔的 overlay 纹理应来自 burst base line 7"
+    );
+
+    // ── 第二笔 Backspace（同一 burst，can_extend == true）：`ab` -> `a`，删 b ──
+    let mid = now + Duration::from_millis(80);
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: snapshot_for_test(current_id, 0.0, 2),
+        target_snapshot: snapshot_for_test(LineSnapshotId::new(0, 0, 11), 0.0, 1),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: writer_core::editor::OffsetMap::from_single_edit(2, (1, 2), 0),
+        base_text: String::from("ab"),
+        target_text: String::from("a"),
+        conceal_direction: ConcealDirection::Backward,
+        now: mid,
+    });
+
+    // 第二笔的 overlay 资源必须来自 current snapshot（line 9），不是 burst base。
+    let sources = coord.active_conceal_source_lines();
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.snapshot_id == current_id),
+        "第二笔的 overlay 纹理必须来自 current old layout（line 9），实际 {:?}",
+        sources
+            .iter()
+            .map(|source| source.snapshot_id)
+            .collect::<Vec<_>>()
+    );
+}

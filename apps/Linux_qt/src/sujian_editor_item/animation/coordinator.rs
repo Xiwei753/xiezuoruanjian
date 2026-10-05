@@ -22,7 +22,8 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animation::edit_frontier::{
-    ConcealDirection, EditFrontierKind, EditFrontierSample, EditFrontierState, FrontierGlyph,
+    ConcealDirection, ConcealSourceLine, EditFrontierKind, EditFrontierSample, EditFrontierState,
+    FrontierGlyph,
 };
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
@@ -522,11 +523,21 @@ impl LinuxEditorAnimationCoordinator {
             .map(|frontier| &frontier.base_snapshot)
     }
 
-    /// 当前活跃的旧正文 overlay 引用的行纹理。
+    /// Issue #826 评论 14 阻塞 4：当前活跃的旧正文 overlay 引用的行纹理 **id**
+    /// （生命周期）。
     ///
-    /// Issue #826 评论 7 性能问题：只有 `old_range` 真正覆盖到的旧行需要纹理，
-    /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
-    /// 纯吐字（Insert）没有旧 overlay，返回空。
+    /// 直接从 `conceal_tracks[].glyphs[].snapshot_id` 收集 —— ConcealTrack 已经
+    /// 明确知道自己画什么，不再从 `old_ranges + base_snapshot` 推测。
+    ///
+    /// 这个区别在**同 burst** 时是致命的：`base_snapshot` 是 burst 第一笔之前的
+    /// 快照，而 track 的 glyph source 来自「track 创建这一刻的 current old
+    /// snapshot」，两者 line id 不同。之前只收 burst base 的 id，于是
+    /// `texture_cache.retain_active_snapshot_ids()`（实现就是 `line_store.retain`）
+    /// 会先把 overlay 那张图删掉。
+    ///
+    /// 注意这只是**生命周期**（retain 时别删）；**资源**见
+    /// [`Self::active_conceal_source_lines`] —— retain 不能凭空创建缺失的行图。
+    /// 纯吐字（Insert）没有旧 overlay，两者都返回空。
     pub(crate) fn active_old_overlay_snapshot_ids(&self) -> Vec<LineSnapshotId> {
         let Some(frontier) = self
             .active_edit_frontier
@@ -536,6 +547,20 @@ impl LinuxEditorAnimationCoordinator {
             return Vec::new();
         };
         frontier.active_conceal_snapshot_ids()
+    }
+
+    /// Issue #826 评论 15：本轮活跃吞字 overlay 的**纹理资源**。
+    ///
+    /// `LineSnapshotId` 只是钥匙，不是图 —— pipeline 据此在缺失时把行图重新插进
+    /// `TextureCache`。评论 14 之后 glyph 的 source 来自「track 创建这一刻的
+    /// current old snapshot」，不再统一来自 burst base，所以缺失时不能回头猜
+    /// 某份 snapshot 有没有这个 id。
+    pub(crate) fn active_conceal_source_lines(&self) -> Vec<ConcealSourceLine> {
+        self.active_edit_frontier
+            .as_ref()
+            .filter(|f| f.kind.needs_old_overlay())
+            .map(|f| f.active_conceal_source_lines())
+            .unwrap_or_default()
     }
 
     /// 当前前沿种类（光标 blink 抑制等诊断用）。

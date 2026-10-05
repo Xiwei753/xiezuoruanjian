@@ -1137,16 +1137,28 @@ impl LinuxEditorPipeline {
             }
         };
 
-        // 1. Delete / Replace 的旧正文 overlay：只准备 old_range 覆盖的旧行。
+        // 1. Delete / Replace 的旧正文 overlay。
+        //
+        // Issue #826 评论 15：资源**直接从 track 自己带来的 source_lines 取**，
+        // 不再回头猜某份 snapshot。
+        //
+        // 之前只按 active id 去 `frontier.base_snapshot`（burst 第一笔之前的那份）
+        // 里找图，但评论 14 之后 glyph 的 source 已经是「track 创建这一刻的
+        // current old snapshot」，两者 line id 不同 —— id 进了 active 集合，
+        // 却根本找不到对应 QImage。连续 Backspace（无 Reflow handoff）时第二笔的
+        // current line 从未因任何理由进过 cache，retain 也只能「别删」不能创建，
+        // renderer 直接 get_line miss 跳过该 glyph。
+        //
+        // 生命周期（active ids）与资源（source_lines）现在分清：
+        // retain 负责别删，这里负责缺失时重新插。
         let overlay_ids = self.animation_coordinator.active_old_overlay_snapshot_ids();
-        if let Some(base) = self
-            .animation_coordinator
-            .active_edit_frontier_base_snapshot()
-        {
-            for line in &base.line_snapshots {
-                if overlay_ids.contains(&line.id) {
-                    insert_line_image(&mut self.texture_cache, line);
-                }
+        for source in self.animation_coordinator.active_conceal_source_lines() {
+            let Some(image) = source.image.as_ref() else {
+                continue;
+            };
+            if !self.texture_cache.contains_line(&source.snapshot_id) {
+                self.texture_cache
+                    .insert_line(source.snapshot_id, image.clone());
             }
         }
 

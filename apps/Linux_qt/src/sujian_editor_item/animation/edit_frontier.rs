@@ -418,6 +418,36 @@ fn travelled(inherited: f64, total: f64, eased: f64) -> f64 {
     inherited + (total - inherited) * eased
 }
 
+// ConcealTrack / ConcealSourceLine 含 QImage，没有 Debug；这里手写一份只暴露
+// 身份与几何的 Debug，避免为了 derive Debug 把纹理字段也塞进去。
+impl std::fmt::Debug for ConcealSourceLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConcealSourceLine")
+            .field("snapshot_id", &self.snapshot_id)
+            .field("has_image", &self.image.is_some())
+            .finish()
+    }
+}
+
+/// Debug 只暴露身份与几何，不碰纹理内容。
+impl std::fmt::Debug for ConcealTrack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConcealTrack")
+            .field("range", &self.range)
+            .field("travelled", &self.travelled)
+            .field("glyph_count", &self.glyphs.len())
+            .field(
+                "source_line_ids",
+                &self
+                    .source_lines
+                    .iter()
+                    .map(|line| line.snapshot_id)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
+}
+
 /// Issue #826 评论 9 阻塞 3：吐字 track。
 ///
 /// `range` / `path` / `travelled` **由同一个 track 自己拥有**，不再拆成三个平行
@@ -436,7 +466,7 @@ pub(crate) struct RevealTrack {
 }
 
 /// Issue #826 评论 9 阻塞 3：吞字 track。语义同 `RevealTrack`。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct ConcealTrack {
     /// 本 track 拥有的旧文字范围（burst base 坐标系）。
     pub(crate) range: (usize, usize),
@@ -448,6 +478,25 @@ pub(crate) struct ConcealTrack {
     pub(crate) path: FrontierPath,
     /// 已经吞掉的距离，跟随本 track 自身。
     pub(crate) travelled: f64,
+    /// Issue #826 评论 15：本 track 真正引用的**行图来源**。
+    ///
+    /// `LineSnapshotId` 只是钥匙，不是图。评论 14 之后 glyph 的 source 来自
+    /// 「track 创建这一刻的 current old snapshot」，而 pipeline 的纹理准备仍
+    /// 只认 burst 第一笔之前的 `base_snapshot` —— 两者 id 不一样，按 id 去找
+    /// 根本找不到 QImage。`retain` 只能「别删已存在的」，不能凭空创建。
+    ///
+    /// 典型暴露场景（连续 Backspace，无 Reflow handoff）：
+    /// ```text
+    /// abc| -> ab（删 c，line 7 已缓存）-> a（删 b，current snapshot 是 ab，line 9）
+    /// ```
+    /// 第二笔的 b glyph 贴图在线纹理 9 上，而 line 9 此前没有任何理由进过
+    /// TextureCache：没有 Reflow 就不需要它。结果 coordinator 里 track / path /
+    /// geometry / active id 全都有，renderer 却 `get_line` miss 直接 skip，
+    /// **一像素都画不出来** —— 第一字正常吞、第二字直接消失。
+    ///
+    /// 范围很小：只 clone 本 track glyphs 真正引用到的那几行，不是整份 snapshot，
+    /// 也不是历史 transaction。
+    pub(crate) source_lines: Vec<ConcealSourceLine>,
     /// Issue #826 评论 13：本 track 这一轮自己的旧字显示几何。
     ///
     /// `source_rect` 取自 burst base 的旧行纹理（贴图来源不变），
@@ -458,6 +507,15 @@ pub(crate) struct ConcealTrack {
     /// 几何算的 —— 会出现「前沿从 55 算、glyph 仍画在 60」的错位。
     /// ConcealTrack 必须真正拥有自己这一轮的 overlay dest geometry。
     pub(crate) glyphs: Vec<ConcealGlyphGeometry>,
+}
+
+/// Issue #826 评论 15：一条吞字 track 真正需要的行图。
+///
+/// 手写 Debug：`QImage` 没有 Debug，且纹理内容对调试毫无价值。
+#[derive(Clone)]
+pub(crate) struct ConcealSourceLine {
+    pub snapshot_id: LineSnapshotId,
+    pub image: Option<qmetaobject::QImage>,
 }
 
 /// Issue #826 评论 13：一个旧字 glyph 的贴图来源 + 本轮显示位置。
@@ -555,6 +613,28 @@ impl EditFrontierState {
     /// old overlay 纹理准备也只看 burst base 补不回来 —— renderer 找不到
     /// `ConcealGlyphGeometry.snapshot_id`，这个 glyph 直接 skip，真机画不出来。
     /// coordinator 单测能看到 overlay geometry，不代表 Scene Graph 一定画得出来。
+    /// Issue #826 评论 15：pipeline 用来**重建**吞字 overlay 纹理的资源集合。
+    ///
+    /// 与 `active_conceal_snapshot_ids()` 分工：
+    /// - `active_conceal_snapshot_ids()` 是**生命周期**（retain 时别删）；
+    /// - 本方法是**资源**（缺失时可以重新插进 cache）。
+    ///
+    /// 按 `snapshot_id` 去重：多个 track 可能引用同一行图。
+    pub(crate) fn active_conceal_source_lines(&self) -> Vec<ConcealSourceLine> {
+        let mut lines: Vec<ConcealSourceLine> = Vec::new();
+        for track in &self.conceal_tracks {
+            for source in &track.source_lines {
+                if !lines
+                    .iter()
+                    .any(|existing| existing.snapshot_id == source.snapshot_id)
+                {
+                    lines.push(source.clone());
+                }
+            }
+        }
+        lines
+    }
+
     pub(crate) fn active_conceal_snapshot_ids(&self) -> Vec<LineSnapshotId> {
         let mut ids: Vec<LineSnapshotId> = Vec::new();
         for track in &self.conceal_tracks {
@@ -769,6 +849,7 @@ impl EditFrontierState {
                 path: track.path.clone(),
                 travelled: travelled(track.travelled, track.path.total_length, eased),
                 glyphs: track.glyphs.clone(),
+                source_lines: track.source_lines.clone(),
             });
         }
         // `can_extend_identity` 已经做完同样的 preflight；这里失败说明
@@ -836,6 +917,7 @@ impl EditFrontierState {
                 path: track.path.clone(),
                 travelled: travelled(track.travelled, track.path.total_length, eased),
                 glyphs: track.glyphs.clone(),
+                source_lines: track.source_lines.clone(),
             })
             .collect();
         // 同 extend_delete：`can_extend_identity` 已 preflight，这里失败是 invariant violation。
@@ -1242,7 +1324,14 @@ fn build_conceal_track(
     direction: ConcealDirection,
 ) -> ConcealTrack {
     let mut glyphs: Vec<ConcealGlyphGeometry> = Vec::new();
+    // 评论 15：把本 track 真正引用到的行图收进来，pipeline 据此重建纹理，
+    // 不再靠「猜某份 snapshot 里有没有这个 line id」。
+    let mut source_lines: Vec<ConcealSourceLine> = Vec::new();
     for line in current_snapshot.lines_in_byte_range(current_range.0, current_range.1) {
+        source_lines.push(ConcealSourceLine {
+            snapshot_id: line.id,
+            image: line.image.clone(),
+        });
         for cluster in line.clusters_in_byte_range(current_range.0, current_range.1) {
             let canonical = line.source_rect_to_document_rect(&cluster.source_rect);
             let glyph_range = (cluster.byte_start, cluster.byte_end);
@@ -1266,6 +1355,7 @@ fn build_conceal_track(
         path,
         travelled: 0.0,
         glyphs,
+        source_lines,
     }
 }
 
