@@ -160,7 +160,7 @@ fn content_connect_end_uses_lca_host_and_real_return_value() {
     let src = read_src(CONTENT);
     let window = function_window(&src, "function finishConnect(", 2800);
     assert!(
-        window.contains("StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)")
+        window.contains("StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)")
             && window.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
         "connect_end 必须先规划宿主（最近公共祖先）再找到宿主 Content，实际窗口:\n{window}"
     );

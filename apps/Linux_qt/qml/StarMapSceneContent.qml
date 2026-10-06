@@ -281,7 +281,7 @@ Item {
                 ? rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY)
                 : null
         if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-            var plan = StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)
+            var plan = StarMapPathPlanner.planCrossLayerRelation(ic.connectFromPath, hit.targetPath)
             var host = plan && rootContent
                     ? rootContent.findContentByPathSegments(plan.hostSegments)
                     : null
@@ -669,6 +669,23 @@ Item {
         return graphController.deleteHyperlink(hlId)
     }
 
+    // Issue #834：内部链接（StarMapLink）暴露给 Canvas 的方法。
+    // listLinksForSource 按 source path 过滤该 node/embed 已有的内部链接，
+    // 供 linkDialog 展示列表；deleteLink 透传给本层 graphController。
+    // Link 的 source 是 StarMapTargetPathDto，用 isSameTargetPath 比较路径。
+    function listLinksForSource(sourcePath) {
+        var items = graphController.listLinks()
+        var out = []
+        for (var i = 0; i < items.length; i++) {
+            if (StarMapPathPlanner.isSameTargetPath(items[i].source, sourcePath))
+                out.push(items[i])
+        }
+        return out
+    }
+    function deleteLink(linkId) {
+        return graphController.deleteLink(linkId)
+    }
+
     // ---------------------------------------------------------------------------
     // 递归命中测试：命中哪一层就返回哪一层的身份。
     // 顺序：本层节点 → 本层 Embed chrome → 子星图内容区（递归）→ 本层连线 → 本层空白。
@@ -804,6 +821,12 @@ Item {
         return graphController.createEdgeWithPaths(fromPath, toPath)
     }
 
+    // Issue #834：宿主图建内部链接入口，与 commitEdgeWithPaths 对称。
+    // Link 是内部跳转（StarMapLink），落库走 createLinkWithPaths → add_starmap_link。
+    function commitLinkWithPaths(fromPath, toPath) {
+        return graphController.createLinkWithPaths(fromPath, toPath)
+    }
+
     // ---------------------------------------------------------------------------
     // Router API：唯一输入主人 StarMapInputRouter 按 hit.owner 直接调用这里。
     // 本层只做坐标换算、本层 GraphController 操作和边界日志；
@@ -901,7 +924,7 @@ Item {
                 // 宿主 = 两端所在 Scene 的最近公共祖先（照 Harmony 的规划规则）。
                 // 边的 starmapId 必须等于宿主的 finalStarmapId，segments 只保留
                 // "从宿主往下"的部分，Core 才能从宿主图自己走完。
-                var plan = StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)
+                var plan = StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)
                 var host = plan && rootContent
                         ? rootContent.findContentByPathSegments(plan.hostSegments)
                         : null
@@ -923,6 +946,49 @@ Item {
             "cancel": cancelled
         })
         ic.endConnect()
+        if (menuHost)
+            menuHost.hideTouchPreview()
+    }
+
+    // Issue #834：linkArmed 下一次 tap 命中 node/embed → 建内部链接。
+    // 与 finishConnect 同构：linkFromPath → toHit.targetPath，LCA 规划复用
+    // planCrossLayerRelation（Edge/Link 共用），落库走 commitLinkWithPaths。
+    function finishLink(toHit) {
+        var ic = interactionController
+        var fromKind = ic.linkFromKind
+        var fromId = ic.linkFromId
+        var fromPath = ic.linkFromPath
+        var toPath = null
+        var success = false
+        var cancelled = true
+        var hostPathKey = ""
+        var hostStarmapId = ""
+        if (toHit && (toHit.kind === "node" || toHit.kind === "embed")) {
+            var sameTarget = toHit.scenePathKey === ic.linkFromScenePathKey && toHit.id === fromId
+            if (!sameTarget) {
+                toPath = toHit.targetPath
+                var plan = StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)
+                var host = plan && rootContent
+                        ? rootContent.findContentByPathSegments(plan.hostSegments)
+                        : null
+                plan = bindPlanToHost(plan, host)
+                if (plan) {
+                    hostPathKey = host.scenePathKey
+                    hostStarmapId = host.finalStarmapId
+                    success = host.commitLinkWithPaths(plan.from, plan.to)
+                    cancelled = !success
+                }
+            }
+        }
+        logInteraction("link_end", fromKind, fromId, {
+            "fromPath": JSON.stringify(fromPath),
+            "toPath": toPath ? JSON.stringify(toPath) : "",
+            "hostPathKey": hostPathKey,
+            "hostStarmapId": hostStarmapId,
+            "success": success,
+            "cancel": cancelled
+        })
+        ic.cancelArmed()
         if (menuHost)
             menuHost.hideTouchPreview()
     }

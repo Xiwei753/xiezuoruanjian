@@ -217,6 +217,14 @@ pub struct StarMapBackend {
     delete_starmap_hyperlink:
         qt_method!(fn(&mut self, starmap_id: QString, hyperlink_id: QString) -> QJsonObject),
     list_starmap_hyperlinks: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
+    add_starmap_link:
+        qt_method!(fn(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject),
+    update_starmap_link: qt_method!(
+        fn(&mut self, starmap_id: QString, link_id: QString, patch_json: QString) -> QJsonObject
+    ),
+    delete_starmap_link:
+        qt_method!(fn(&mut self, starmap_id: QString, link_id: QString) -> QJsonObject),
+    list_starmap_links: qt_method!(fn(&self, starmap_id: QString) -> QJsonObject),
     // Issue #814 评论 5935346839: QML 星图交互边界日志入口。
     // QML 在手势边界（press/release/begin/end/popup）调用此方法落盘结构化
     // 诊断事件，让诊断包能看到"鼠标到底发生了什么"。origin=User，事件名
@@ -862,6 +870,43 @@ impl StarMapBackend {
                 )
             })
     }
+    fn add_starmap_link(&mut self, starmap_id: QString, link_json: QString) -> QJsonObject {
+        self.with_app_mut(|app| app.add_starmap_link(starmap_id, link_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn update_starmap_link(
+        &mut self,
+        starmap_id: QString,
+        link_id: QString,
+        patch_json: QString,
+    ) -> QJsonObject {
+        self.with_app_mut(|app| app.update_starmap_link(starmap_id, link_id, patch_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn delete_starmap_link(&mut self, starmap_id: QString, link_id: QString) -> QJsonObject {
+        self.with_app_mut(|app| app.delete_starmap_link(starmap_id, link_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn list_starmap_links(&self, starmap_id: QString) -> QJsonObject {
+        self.with_app(|app| app.list_starmap_links(starmap_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
 
     /// Issue #814 评论 5935346839: QML 星图交互边界日志入口。
     ///
@@ -920,10 +965,11 @@ impl StarMapBackend {
 }
 
 // 原本内联在 `impl AppBackend`（定义在 app_backend.rs）里的星图领域方法，
-// 按关注点拆成三个子模块：
+// 按关注点拆成四个子模块：
 //   - documents.rs：星图本体 CRUD + 作品绑定 / 主星图
 //   - graph.rs：graph 读取、节点与边增删改、坐标布局落盘
 //   - hyperlinks.rs：超链接增删改查
+//   - links.rs：内部跳转链接增删改查
 // 本文件保留 QObject 桥接层（`StarMapBackend` 的 qt_method 实现）与共享的
 // with_app / with_app_mut / log_starmap_envelope / record_interaction 工具方法。
 // 本模块在 app_backend.rs 里是用 `#[path = "starmap_backend.rs"]` 声明的，
@@ -934,3 +980,5 @@ mod documents;
 mod graph;
 #[path = "starmap_backend/hyperlinks.rs"]
 mod hyperlinks;
+#[path = "starmap_backend/links.rs"]
+mod links;

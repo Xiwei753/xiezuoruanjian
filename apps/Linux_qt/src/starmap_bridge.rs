@@ -25,9 +25,10 @@
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapEmbedPatchInputDto, StarMapHyperlinkDto, StarMapHyperlinkPatchDto,
-    StarMapHyperlinkPatchInputDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
-    StarMapNodePatchDto, StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto,
-    StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapHyperlinkPatchInputDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapLinkPatchInputDto,
+    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
+    StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto,
+    StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -443,6 +444,71 @@ pub fn delete_starmap_hyperlink(
 
 pub fn list_starmap_hyperlinks(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.list_starmap_hyperlinks(starmap_id))
+}
+
+// -----------------------------------------------------------------------------
+// 星图内部跳转链接（link）envelope 接口
+// -----------------------------------------------------------------------------
+//
+// StarMapLink 是图内二元关系（source + target 两条 StarMapTargetPath），
+// 用于引用/跳转/打开另一个内部目标，区别于 StarMapHyperlink（source + 外部 URI）。
+// bridge 层生成 link_id（`lk_{uuid}`，与节点 `n_`/边 `e_`/embed `em_`/hyperlink `hl_` 模式一致）、
+// created_at/updated_at，调用 Core API。
+
+/// 平台端创建内部链接的 JSON 入参：只收 source/target/label，
+/// link_id/created_at/updated_at 由 bridge 层统一生成。
+///
+/// 字段命名 camelCase 与 Core DTO 序列化口径一致，避免 QML 端 snake_case 解析失败。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StarMapLinkCreateInput {
+    source: StarMapTargetPathDto,
+    target: StarMapTargetPathDto,
+    label: Option<String>,
+}
+
+pub fn add_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_json: &str) -> String {
+    let input: StarMapLinkCreateInput = match serde_json::from_str(link_json) {
+        Ok(i) => i,
+        Err(e) => return envelope_err_str(&format!("Invalid link JSON: {}", e)),
+    };
+    // link_id/created_at/updated_at 由 bridge 层生成，与 create_starmap_node 在
+    // bridge 层生成 `n_{uuid}` 的模式一致；Core 的 add_starmap_link 直接使用传入
+    // 的 link_id（重复则报 Duplicate），不会内部生成新 id。
+    let now = now_ms();
+    let link = StarMapLinkDto {
+        link_id: format!("lk_{}", uuid::Uuid::new_v4()),
+        source: input.source,
+        target: input.target,
+        label: input.label,
+        created_at: now,
+        updated_at: now,
+    };
+    envelope(api.add_starmap_link(starmap_id, link))
+}
+
+pub fn update_starmap_link(
+    api: &WriterCoreApi,
+    starmap_id: &str,
+    link_id: &str,
+    patch_json: &str,
+) -> String {
+    // 平台端用扁平的 label + clear_label 表达 Option<Option<String>>，
+    // 经 StarMapLinkPatchInputDto -> StarMapLinkPatchDto 转换后再交给 Core。
+    let input: StarMapLinkPatchInputDto = match serde_json::from_str(patch_json) {
+        Ok(i) => i,
+        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
+    };
+    let patch: StarMapLinkPatchDto = input.into();
+    envelope(api.update_starmap_link(starmap_id, link_id, patch))
+}
+
+pub fn delete_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str) -> String {
+    envelope(api.delete_starmap_link(starmap_id, link_id))
+}
+
+pub fn list_starmap_links(api: &WriterCoreApi, starmap_id: &str) -> String {
+    envelope(api.list_starmap_links(starmap_id))
 }
 
 /// 列出根星图，envelope 格式。

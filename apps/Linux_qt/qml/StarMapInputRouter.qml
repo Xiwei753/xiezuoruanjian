@@ -15,7 +15,7 @@
 //     - 左键拖空白：pan
 //     - 右键 node/embed/edge：对应菜单；右键空白：该层的新建菜单
 //     - connect 松手：再调一次根递归命中，目标只接受 node/embed，
-//       复用 StarMapPathPlanner.planCrossLayerEdge() 找 LCA 宿主并落边
+//       复用 StarMapPathPlanner.planCrossLayerRelation() 找 LCA 宿主并落边
 //
 //   触屏：
 //     - 未长按直接滑动：无论起点是不是 node/embed 都优先 pan
@@ -148,6 +148,38 @@ Item {
         if (ic.pointerMode === "pinch")
             return
         canvas.notePointerDevice(source === "touch")
+        // Issue #834：菜单发起的 armed 态优先于普通选中。
+        // linkArmed：下一次 tap 命中 node/embed 是 Link 的 target；命中自己拒绝
+        //   （取消 armed，不建自指），命中空白取消。
+        // connectArmed：同构，命中 node/embed 把 connect 鼠标更新到本次 tap 的
+        //   scene 位置再走 finishConnect（菜单发起时 connectMouse 停在 source 中心）。
+        if (ic.linkArmed) {
+            var hitL = hitAt(point.position.x, point.position.y)
+            if (hasGestureTarget(hitL)) {
+                if (hitL.scenePathKey === ic.linkFromScenePathKey && hitL.id === ic.linkFromId)
+                    ic.cancelArmed()
+                else
+                    hitL.owner.finishLink(hitL)
+            } else {
+                ic.cancelArmed()
+            }
+            return
+        }
+        if (ic.connectArmed) {
+            var hitC = hitAt(point.position.x, point.position.y)
+            if (hasGestureTarget(hitC)) {
+                if (hitC.scenePathKey === ic.connectFromScenePathKey && hitC.id === ic.connectFromId) {
+                    ic.cancelArmed()
+                } else {
+                    ic.connectMouseX = canvas.screenToWorldX(point.position.x)
+                    ic.connectMouseY = canvas.screenToWorldY(point.position.y)
+                    hitC.owner.finishConnect()
+                }
+            } else {
+                ic.cancelArmed()
+            }
+            return
+        }
         selectHit(hitAt(point.position.x, point.position.y))
     }
 
@@ -188,6 +220,9 @@ Item {
             return
         if (ic.pointerMode === "pinch")
             return
+        // Issue #834：armed 态下右键先取消 armed 再开菜单（不连环/连链接）。
+        if (ic.linkArmed || ic.connectArmed)
+            ic.cancelArmed()
         canvas.notePointerDevice(false)
         canvas.logPointerPress("right", "mouse", point)
         var hit = hitAt(point.position.x, point.position.y)
@@ -523,5 +558,30 @@ Item {
                 "screenY": point.position.y
             })
         }
+    }
+
+    // Issue #834：connectArmed（菜单"连线"发起）时没有左键按下，DragHandler 不激活，
+    // 用 HoverHandler 观察鼠标移动更新预览终点。point.position 是 vector2d，绑定到
+    // property 上，变化时刷新预览。linkArmed 不画预览（Link 不是语义边）。
+    HoverHandler {
+        id: connectArmedHover
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        enabled: router.ic && router.ic.connectArmed
+        property vector2d _hoverPos: point.position
+        on_HoverPosChanged: {
+            if (!router.ic || !router.ic.connectArmed || !router.canvas)
+                return
+            router.ic.connectMouseX = router.canvas.screenToWorldX(_hoverPos.x)
+            router.ic.connectMouseY = router.canvas.screenToWorldY(_hoverPos.y)
+            router.canvas.refreshConnectPreview()
+        }
+    }
+
+    // Issue #834：armed 态下 Escape 取消（空白取消已在 handleSingleTap 处理）。
+    // 用 Shortcut 全局拦截，不抢 TextInput 焦点；armed 时无 Popup 打开，不冲突。
+    Shortcut {
+        sequence: "Escape"
+        enabled: router.ic && (router.ic.linkArmed || router.ic.connectArmed)
+        onActivated: router.ic.cancelArmed()
     }
 }

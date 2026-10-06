@@ -36,6 +36,7 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Effects
 
 Item {
     id: root
@@ -43,11 +44,17 @@ Item {
     required property var dt
 
     readonly property color _accent: dt.accent
-    readonly property color _accentSoft: dt.accentSoft
     readonly property color _border: dt.border
     readonly property color _surfaceContainer: dt.surfaceContainer
     readonly property color _shadowLight: dt.shadowLight
     readonly property color _textPrimary: dt.textPrimary
+
+    // Issue #834：子星图像一块独立的主题表面。
+    // 浅色主题浅底 + 深色反边，深色主题深底 + 浅色反边；选中态不再染蓝。
+    readonly property color _surface: dt.surface
+    readonly property color _surfaceLow: dt.surfaceContainerLow
+    readonly property color _inverseSurface: dt.inverseSurface
+    readonly property color _inverseOnSurface: dt.inverseOnSurface
 
     // Embed 身份与数据
     property string instanceId: ""
@@ -322,9 +329,13 @@ Item {
         anchors.fill: parent
 
         radius: width / 2
-        color: root.isSelected ? root._surfaceContainer : root._accentSoft
-        border.color: root.isSelected ? root._accent : root._border
-        border.width: root.isSelected ? 2 : 1
+        antialiasing: true
+        // Issue #834：始终用主题表面色作底（surfaceContainerLow，与 card 一致），
+        // 像一张表面卡片；选中不重新染底。
+        color: root._surfaceLow
+        // 反色边框：浅色主题深边 / 深色主题浅边，高对比。选中加粗但颜色不变。
+        border.color: root._inverseSurface
+        border.width: root.isSelected ? 3 : 2
 
         // 纯视觉偏移，不影响根 Item 的 x/y 命中测试
         transform: Translate {
@@ -368,33 +379,81 @@ Item {
         // 铺满整个圆盒：圆内（chrome 之外）都属于"进入子图"的交互语义，
         // 不再用一块更小的矩形制造接不到事件的死区。
         // 子内容布局由安全区约束（见 contentUsableSideNow），不会溢出圆外。
-        // clip 保留，子星图节点不会跑出这块内容区。
+        // Issue #834：用 MultiEffect 圆形 mask 真正把子内容裁成圆形。
+        // 旧 Item.clip 只矩形裁剪，外壳圆但子内容可能在四角露成方形。
         Item {
             id: contentViewport
             anchors.fill: parent
-            clip: true
 
-            // Issue #822：懒加载子星图内容（不是子视口）。
-            // 子内容没有自己的 pan/zoom，也没有子视口手势状态。
-            // active / source 都由 root._syncChildContent() 命令式驱动：
-            // source 必须是运行时 URL，静态 sourceComponent 会把
-            // StarMapSceneContent 变成 Embed 的编译期类型依赖，从而形成环。
-            Loader {
-                id: childContentLoader
+            // 子内容先画在 contentSource 上，再被圆形 mask 裁掉圆外部分。
+            Item {
+                id: contentSource
                 anchors.fill: parent
-                // 只在该 Embed 投影矩形进入视口后才创建递归子内容。
-                // asynchronous 避免一帧里同步构造多层 QML 对象树把 GUI 线程堵死。
-                active: false
-                asynchronous: true
-                // setSource 的 initialProperties 是创建时的快照；异步加载完成时
-                // 档位可能已经变了，这里把子内容拉回当前档位。
-                onLoaded: {
-                    if (childContentLoader.item) {
-                        childContentLoader.item.renderDetail = root.childContentDetail
-                        root.syncChildUsableSide()
+
+                // Issue #822：懒加载子星图内容（不是子视口）。
+                // 子内容没有自己的 pan/zoom，也没有子视口手势状态。
+                // active / source 都由 root._syncChildContent() 命令式驱动：
+                // source 必须是运行时 URL，静态 sourceComponent 会把
+                // StarMapSceneContent 变成 Embed 的编译期类型依赖，从而形成环。
+                Loader {
+                    id: childContentLoader
+                    anchors.fill: parent
+                    // 只在该 Embed 投影矩形进入视口后才创建递归子内容。
+                    // asynchronous 避免一帧里同步构造多层 QML 对象树把 GUI 线程堵死。
+                    active: false
+                    asynchronous: true
+                    // setSource 的 initialProperties 是创建时的快照；异步加载完成时
+                    // 档位可能已经变了，这里把子内容拉回当前档位。
+                    onLoaded: {
+                        if (childContentLoader.item) {
+                            childContentLoader.item.renderDetail = root.childContentDetail
+                            root.syncChildUsableSide()
+                        }
                     }
                 }
             }
+
+            // 圆形 mask：把 contentSource 裁成和 visualEmbed 同样大的正圆。
+            MultiEffect {
+                anchors.fill: contentSource
+                source: contentSource
+                maskEnabled: true
+                maskSource: circleMask
+            }
+
+            // mask 源：不透明区域 = 圆内（保留），透明区域 = 圆外（裁掉）。
+            // visible: false，mask 源不直接显示，只供 MultiEffect 采样。
+            Item {
+                id: circleMask
+                width: visualEmbed.width
+                height: visualEmbed.height
+                visible: false
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: width / 2
+                    color: "white"
+                    antialiasing: true
+                }
+            }
+        }
+
+        // ── 选中 ring ──
+        // Issue #834：选中态不再把整个圆染蓝，只叠一圈主题强调色高亮。
+        // transparent 填充只画 border；命中由 GraphController 递归几何决定，
+        // 这层不参与 QML 事件，不会挡住子内容交互。
+        Rectangle {
+            id: selectionRing
+            anchors.centerIn: parent
+            width: parent.width
+            height: parent.height
+            radius: width / 2
+            color: "transparent"
+            border.color: root.dt.accent
+            border.width: 2
+            visible: root.isSelected
+            antialiasing: true
+            z: 10
         }
     }
 
