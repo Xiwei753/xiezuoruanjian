@@ -43,9 +43,10 @@ Dialog {
     // Issue #833：Dialog 高度不再跟 settingsScroll.contentHeight 动态绑定。
     // 高度只由窗口可用高度决定，展开内容在 ScrollView 内滚动。
     // 否则一展开分组，整个 Dialog 自己会变高并重新居中，看起来就是"界面乱动"。
-    height: root.widePanel
-            ? Math.max(420, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
-            : Math.max(480, Math.min(720, (parent ? parent.height : 800) - dt.sp64))
+    // Issue #833 复核：内容已放进 ScrollView，Dialog 不需要 480 的硬下限。
+    // 主窗口允许缩到 240 高，若仍强制 480，高度会超过 Overlay，居中后顶部跑到负坐标。
+    // 高度只夹"窗口可用高度"和"面板最大高度"，最小高度不能再反过来超过 parent。
+    height: Math.max(1, Math.min(root.widePanel ? 880 : 720, (parent ? parent.height : 800) - dt.sp32))
     parent: Overlay.overlay
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)

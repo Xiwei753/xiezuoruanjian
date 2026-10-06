@@ -10,6 +10,17 @@ impl SujianEditorItem {
         item.bounding_rect().width.max(1.0)
     }
 
+    // Issue #833 复核：和 bounding_width 对称，供"empty frame"结构化诊断
+    // 区分"Item 本身高度错"还是"viewport property 没同步"。
+    pub(crate) fn bounding_height(&self) -> f64 {
+        let obj = self.get_cpp_object();
+        if obj.is_null() {
+            return 0.0;
+        }
+        let item = self as &dyn QQuickItem;
+        item.bounding_rect().height
+    }
+
     pub(crate) fn plain_text(&self) -> QString {
         self.pipeline.committed_text().to_string().into()
     }

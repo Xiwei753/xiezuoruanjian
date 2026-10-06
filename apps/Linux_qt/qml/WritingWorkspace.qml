@@ -58,6 +58,11 @@ Rectangle {
     property string drawerTool: ""
     readonly property bool drawerOpen: root.drawerTool !== ""
     property bool leftPaneCollapsed: false
+    // Issue #833 复核：SinglePane（非 Workbench 或 Core 退回单栏）下章节导航
+    // 作为覆盖在正文上的浮层打开，不参与 RowLayout 宽度分配。
+    // Workbench 下章节导航由 leftPaneCollapsed + Core ChapterNavigation bounds 管理，
+    // 这个属性只在 SinglePane 下生效。
+    property bool singlePaneNavOpen: false
     readonly property bool wideWorkbench: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
     // Issue #825：Core 工作台布局计划（appBackend.resolve_workbench_layout 直通）。
     // 七角色 bounds 与最终模式都由 Core 决定，QML 只按 bounds 量/摆。
@@ -171,6 +176,14 @@ Rectangle {
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
     function requestChapterNavigationOpen() {
+        // Issue #833 复核：SinglePane（非 Workbench 或 Core 退回单栏）下不再调
+        // Workbench resolver（resolveWorkbenchCandidate 直接返回 null），改成打开
+        // 覆盖在正文上的章节导航浮层。这样正文顶部那个重新展开章节栏的按钮在
+        // SinglePane 下也能拉回章节导航，不再卡死。
+        if (!root.wideWorkbench || root.hideContentPanes) {
+            root.singlePaneNavOpen = true;
+            return;
+        }
         var targetDrawerTool = root.drawerTool;
         // 候选一：保持当前右 pane 状态，展开左目录栏。
         var plan = resolveWorkbenchCandidate(true, root.drawerOpen);
@@ -191,6 +204,8 @@ Rectangle {
     }
 
     function closeChapterNavigation() {
+        // Issue #833 复核：SinglePane 浮层和 Workbench leftPaneCollapsed 都要收。
+        root.singlePaneNavOpen = false;
         root.leftPaneCollapsed = true;
     }
 
@@ -387,26 +402,8 @@ Rectangle {
         });
     }
 
-    WritingTreeController {
-        id: writingTree
-        tree: root.tree
-        projectId: root.workspaceProjectId
-        onItemsChanged: root.populateTreeModel()
-    }
-
-    function populateTreeModel() {
-        treeModel.clear();
-        var items = writingTree.items || [];
-        for (var i = 0; i < items.length; i++) {
-            treeModel.append({
-                "itemId": items[i].id || "",
-                "itemType": items[i].type || "",
-                "itemTitle": items[i].title || "",
-                "itemProjectId": items[i].projectId || "",
-                "itemVolumeId": items[i].volumeId || ""
-            });
-        }
-    }
+    // Issue #833 复核：WritingTreeController / treeModel / populateTreeModel
+    // 已随 sidebarRect 内容一起搬进 WritingChapterNavigation.qml，这里不再保留。
 
     EditorController {
         id: editorController
@@ -463,11 +460,11 @@ Rectangle {
         }
     }
 
-    onTreeChanged: populateTreeModel()
+    // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
+    // treeModel 现在由 WritingChapterNavigation 内部维护。
     Component.onCompleted: {
         // Issue #828：启动期先算一次宽屏工作台布局，否则首帧会用上一次的 plan。
         refreshWorkbenchPlan();
-        populateTreeModel();
 
         // Issue #829：启动时先起状态栏的时钟。
         root.updateClockText()
@@ -629,7 +626,11 @@ Rectangle {
             spacing: 0
 
             // Left sidebar: volume/chapter tree
-            Rectangle {
+            // Issue #833 复核：章节导航内容抽成 WritingChapterNavigation 组件，
+            // Workbench 下作为 RowLayout 子项，宽度只吃 Core 的 ChapterNavigation bounds。
+            // SinglePane 下章节导航作为覆盖浮层打开（见文件末尾 singlePaneNavOverlay），
+            // 不参与 RowLayout 宽度分配。
+            WritingChapterNavigation {
                 id: sidebarRect
                 visible: !root.leftPaneCollapsed && !root.hideContentPanes
                 // Issue #833：章节导航宽度只取 Core 的 ChapterNavigation bounds，
@@ -637,348 +638,37 @@ Rectangle {
                 Layout.preferredWidth: root.chapterNavWidth
                 Layout.minimumWidth: root.chapterNavWidth
                 Layout.maximumWidth: root.chapterNavWidth
-                color: dt.sidebar
-                border.color: dt.border
-                border.width: 1
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 0
+                dt: root.dt
+                tree: root.tree
+                workspaceProjectId: root.workspaceProjectId
+                workspaceProjectTitle: root.workspaceProjectTitle
+                projectGroupCollapsed: root.projectGroupCollapsed
+                outlineGroupExpanded: root.outlineGroupExpanded
+                currentChapterId: editorController.chapterId
 
-                    // ── Issue #829：章节树顶部分组头「作品名 ∨」──
-                    // 手稿的左树是「作品名 ∨ → 卷 ∨ → 章节列表 → 章纲 ∨」四段结构，
-                    // 作品名本身是一个可折叠分组头，不是一条普通列表项。
-                    // 折叠状态只是端侧 UI 状态，不进 Core、不进同步。
-                    WritingTreeGroupHeader {
-                        Layout.fillWidth: true
-                        dt: root.dt
-                        title: root.workspaceProjectTitle
-                        expanded: !root.projectGroupCollapsed
-                        // 作品名是当前写作上下文，折叠它等于把整棵树收起来，
-                        // 不提供「新建」——新建入口在下面的「+ 新卷」。
-                        showAddButton: false
-                        onToggleExpanded: {
-                            root.projectGroupCollapsed = !root.projectGroupCollapsed
-                        }
-                    }
-
-                    // Tree list
-                    // Issue #829：「作品名 ∨」折叠时整棵子树收起，只留顶部分组头。
-                    ScrollView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            visible: !root.projectGroupCollapsed
-                            clip: true
-                            // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
-                            Component.onCompleted: {
-                                if (contentItem) contentItem.acceptedButtons = Qt.NoButton
-                            }
-
-                            ListView {
-                                id: treeListView
-                                model: ListModel { id: treeModel }
-                                delegate: Item {
-                                    width: treeListView.width
-                                    height: model.itemType === "volume" ? 36 : 32
-
-                                    Rectangle {
-                                        id: delegateBg
-                                        anchors.fill: parent
-                                        anchors.leftMargin: dt.sp8
-                                        anchors.rightMargin: dt.sp8
-                                        radius: dt.radiusPill
-                                        color: {
-                                            if (isSelected) return dt.primaryContainer;
-                                            if (delegateHover.containsMouse) return dt.surfaceVariant;
-                                            return "transparent";
-                                        }
-
-                                        property bool isSelected: model.itemId === editorController.chapterId
-
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: model.itemType === "chapter" ? dt.sp32 : dt.sp12
-                                            spacing: dt.sp6
-
-                                            Rectangle {
-                                                width: 6; height: 6
-                                                radius: model.itemType === "volume" ? 0 : 3
-                                                color: delegateBg.isSelected ? dt.selectedText : dt.textSecondary
-                                                Layout.alignment: Qt.AlignVCenter
-                                                opacity: 0.6
-                                            }
-
-                                            AppText {
-                                                dt: root.dt
-                                                text: model.itemTitle || ""
-                                                color: {
-                                                    if (delegateBg.isSelected) return dt.onPrimaryContainer;
-                                                    return dt.textPrimary;
-                                                }
-                                                font.pointSize: dt.labelPt
-                                                font.family: dt.fontFamily
-                                                font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
-                                                Layout.fillWidth: true
-                                                elide: Text.ElideRight
-                                            }
-
-                                            // "⋯" menu button — visible for both volume and chapter
-                                            Rectangle {
-                                                z: 10
-                                                width: 24; height: 24
-                                                radius: 12
-                                                color: menuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
-                                                Layout.alignment: Qt.AlignVCenter
-
-                                                AppText {
-                                                    dt: root.dt
-                                                    anchors.centerIn: parent
-                                                    text: "⋯"
-                                                    color: dt.textSecondary
-                                                    font.pointSize: dt.fontMdPt
-                                                }
-
-                                                MouseArea {
-                                                    id: menuBtnHover
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    cursorShape: Qt.PointingHandCursor
-                                                    onClicked: {
-                                                        treeContextMenu.itemType = model.itemType;
-                                                        treeContextMenu.itemId = model.itemId;
-                                                        treeContextMenu.itemTitle = model.itemTitle;
-                                                        treeContextMenu.itemProjectId = model.itemProjectId || "";
-                                                        treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                        treeContextMenu.popup(menuBtnHover, 0, menuBtnHover.height);
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: delegateHover
-                                            anchors.left: parent.left
-                                            anchors.top: parent.top
-                                            anchors.bottom: parent.bottom
-                                            anchors.right: parent.right
-                                            anchors.rightMargin: 32
-                                            hoverEnabled: true
-                                            acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: function(mouse) {
-                                                if (mouse.button === Qt.LeftButton) {
-                                                    if (model.itemType === "chapter") {
-                                                         root.openChapter(model.itemProjectId || root.workspaceProjectId, model.itemVolumeId, model.itemId, model.itemTitle);
-                                                    }
-                                                } else if (mouse.button === Qt.RightButton) {
-                                                    treeContextMenu.itemType = model.itemType;
-                                                    treeContextMenu.itemId = model.itemId;
-                                                    treeContextMenu.itemTitle = model.itemTitle;
-                                                    treeContextMenu.itemProjectId = model.itemProjectId || "";
-                                                    treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                    treeContextMenu.popup(delegateHover, mouse.x, mouse.y);
-                                                }
-                                            }
-                                        }
-
-                                        // 长按弹出菜单（触屏支持）
-                                        TapHandler {
-                                            onLongPressed: {
-                                                treeContextMenu.itemType = model.itemType;
-                                                treeContextMenu.itemId = model.itemId;
-                                                treeContextMenu.itemTitle = model.itemTitle;
-                                                treeContextMenu.itemProjectId = model.itemProjectId || "";
-                                                treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                treeContextMenu.popup(delegateBg, point.position.x, point.position.y);
-                                            }
-                                        }
-
-                                        // "+" button for volumes (create chapter)
-                                        Rectangle {
-                                            visible: model.itemType === "volume"
-                                            width: 20; height: 20
-                                            radius: 10
-                                            color: addChapterHover.containsMouse ? dt.primaryContainer : "transparent"
-                                            anchors {
-                                                right: parent.right
-                                                rightMargin: dt.sp8
-                                            }
-                                            anchors.verticalCenter: parent.verticalCenter
-
-                                            AppText {
-                                                dt: root.dt
-                                                anchors.centerIn: parent
-                                                text: "+"
-                                                color: dt.primary
-                                                font.pointSize: dt.fontSmPt
-                                                font.weight: Font.Bold
-                                            }
-
-                                            MouseArea {
-                                                id: addChapterHover
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: root.createChapterRequested(model.itemProjectId || "", model.itemId)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // "+" button for project (create volume)
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 36
-                            Layout.leftMargin: dt.sp8
-                            Layout.rightMargin: dt.sp8
-                            radius: dt.radiusPill
-                            color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
-
-                            RowLayout {
-                                anchors.centerIn: parent
-                                spacing: dt.sp4
-                                AppText {
-                                    dt: root.dt
-                                    text: "+"
-                                    color: dt.primary
-                                    font.pointSize: dt.fontMdPt
-                                    font.weight: Font.Bold
-                                }
-                                AppText {
-                                    dt: root.dt
-                                    text: qsTr("新卷")
-                                    color: dt.primary
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                }
-                            }
-
-                            MouseArea {
-                                id: addVolumeHover
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.createVolumeRequested(root.workspaceProjectId)
-                            }
-                        }
-
-                        // ── Issue #829：章节树底部分组头「章纲 ∨」──
-                        // 手稿把它放在章节列表下面，作为左树的最后一个分组。
-                        // 这一轮只落分组头和展开/收起交互：章纲内容（Core 的
-                        // chapter.note）还没接上，展开区域留空，不摆假数据。
-                        WritingTreeGroupHeader {
-                            Layout.fillWidth: true
-                            dt: root.dt
-                            title: qsTr("章纲")
-                            expanded: root.outlineGroupExpanded
-                            onToggleExpanded: {
-                                root.outlineGroupExpanded = !root.outlineGroupExpanded
-                            }
-                        }
-
-                        // Tree context menu
-                        Menu {
-                            id: treeContextMenu
-                            property string itemType: ""
-                            property string itemId: ""
-                            property string itemTitle: ""
-                            property string itemProjectId: ""
-                            property string itemVolumeId: ""
-                            background: Rectangle {
-                                color: dt.surface
-                                border.color: dt.border
-                                radius: dt.radiusMd
-                                border.width: 1
-                            }
-
-                            MenuItem {
-                                id: createVolumeMenuItem
-                                text: qsTr("新建卷")
-                                visible: treeContextMenu.itemType === "project"
-                                contentItem: AppText {
-                                    dt: root.dt
-                                    text: createVolumeMenuItem.text
-                                    color: dt.textPrimary
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: createVolumeMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                                }
-                                onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
-                            }
-                            MenuItem {
-                                id: createChapterMenuItem
-                                text: qsTr("新建章节")
-                                visible: treeContextMenu.itemType === "volume"
-                                contentItem: AppText {
-                                    dt: root.dt
-                                    text: createChapterMenuItem.text
-                                    color: dt.textPrimary
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: createChapterMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                                }
-                                onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
-                            }
-                            MenuSeparator {
-                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                            }
-                            MenuItem {
-                                id: renameMenuItem
-                                text: qsTr("重命名")
-                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                                contentItem: AppText {
-                                    dt: root.dt
-                                    text: renameMenuItem.text
-                                    color: dt.textPrimary
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: renameMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                                }
-                                onTriggered: root.renameItemRequested({
-                                    type: treeContextMenu.itemType,
-                                    id: treeContextMenu.itemId,
-                                    projectId: treeContextMenu.itemProjectId,
-                                    volumeId: treeContextMenu.itemVolumeId,
-                                    title: treeContextMenu.itemTitle
-                                })
-                            }
-                            MenuItem {
-                                id: deleteMenuItem
-                    text: qsTr("删除")
-                                visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
-                                contentItem: AppText {
-                                    dt: root.dt
-                                    text: deleteMenuItem.text
-                                    color: dt.error
-                                    font.pointSize: dt.labelPt
-                                    font.family: dt.fontFamily
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                background: Rectangle {
-                                    color: deleteMenuItem.highlighted ? dt.surfaceVariant : "transparent"
-                                }
-                                onTriggered: root.deleteItemRequested({
-                                    type: treeContextMenu.itemType,
-                                    id: treeContextMenu.itemId,
-                                    projectId: treeContextMenu.itemProjectId,
-                                    volumeId: treeContextMenu.itemVolumeId,
-                                    title: treeContextMenu.itemTitle
-                                })
-                            }
-                        }
-                    }
+                onOpenChapter: function(pId, vId, cId, cTitle) {
+                    root.openChapter(pId, vId, cId, cTitle)
                 }
+                onCreateVolumeRequested: function(pId) {
+                    root.createVolumeRequested(pId)
+                }
+                onCreateChapterRequested: function(pId, vId) {
+                    root.createChapterRequested(pId, vId)
+                }
+                onRenameItemRequested: function(itemData) {
+                    root.renameItemRequested(itemData)
+                }
+                onDeleteItemRequested: function(itemData) {
+                    root.deleteItemRequested(itemData)
+                }
+                onToggleProjectGroup: {
+                    root.projectGroupCollapsed = !root.projectGroupCollapsed
+                }
+                onToggleOutlineGroup: {
+                    root.outlineGroupExpanded = !root.outlineGroupExpanded
+                }
+            }
 
             // Middle Area: Toolbar + Editor
             ColumnLayout {
@@ -1034,16 +724,19 @@ Rectangle {
                         // 编辑器交互由 EditorController + SujianEditorItem 直接管理
                         Rectangle {
                             id: paperBg
-                            width: {
-                                // Issue #833：Editor role 宽度已由 Core layout plan 给出，
-                                // paperBg 在 Editor role 内直接跟随可用宽度；
-                                // SinglePane 只允许 contentMaxWidthVp 作为内容最大宽度，
-                                // 不再叠一份用户绝对像素宽度（setting_desktop_editor_width）。
-                                var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
-                                        ? root.layoutPlan.contentMaxWidthVp
-                                        : 820
-                                return Math.max(480, Math.min(parent.width, planW))
-                            }
+                            // Issue #833 复核：不再有 480 的平台端最小值。
+                            // Core 的 editor_min_width_dp 明确是 240，Workbench 在空间紧张时
+                            // 允许 Editor 只有 240 起步；SinglePane 的 contentMaxWidthVp
+                            // 明确是 0 表示不要额外限宽。Math.max(480) 会导致 Core 给 Editor
+                            // 240～479 时 QML 仍画 480，正文纸面溢出 Editor role。
+                            // coreSized（Workbench 且 Core 给出 Editor bounds）时直接跟随
+                            // parent.width；否则只夹 contentMaxWidthVp（>0 才生效）。
+                            width: root.coreSized
+                                   ? parent.width
+                                   : Math.min(parent.width,
+                                              (root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0)
+                                                  ? root.layoutPlan.contentMaxWidthVp
+                                                  : parent.width)
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
                             color: dt.editorBackground
@@ -1688,6 +1381,68 @@ Rectangle {
             onClicked: {
                 root.toggleToolPane()
                 if (!root.drawerOpen) root.requestEditorFocus()
+            }
+        }
+    }
+
+    // Issue #833 复核：SinglePane 章节导航浮层。
+    // SinglePane（非 Workbench 或 Core 退回单栏）下章节导航不参与 RowLayout 宽度分配，
+    // 作为覆盖在正文上的抽屉打开。点遮罩或选章后自动关闭。
+    // Workbench 下 singlePaneNavOpen 恒为 false，这整块不可见。
+    Item {
+        id: singlePaneNavOverlay
+        anchors.fill: parent
+        visible: root.singlePaneNavOpen
+        z: 60
+
+        // 半透明遮罩，点击关闭抽屉。
+        Rectangle {
+            anchors.fill: parent
+            color: "black"
+            opacity: 0.4
+            MouseArea {
+                anchors.fill: parent
+                onClicked: root.closeChapterNavigation()
+            }
+        }
+
+        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 320 的较小值，
+        // 不塞固定 240/320 平台端宽度——SinglePane 正文占满，抽屉只是临时覆盖。
+        WritingChapterNavigation {
+            id: singlePaneNavPanel
+            width: Math.min(parent.width, 320)
+            height: parent.height
+            x: 0
+            y: 0
+            dt: root.dt
+            tree: root.tree
+            workspaceProjectId: root.workspaceProjectId
+            workspaceProjectTitle: root.workspaceProjectTitle
+            projectGroupCollapsed: root.projectGroupCollapsed
+            outlineGroupExpanded: root.outlineGroupExpanded
+            currentChapterId: editorController.chapterId
+
+            onOpenChapter: function(pId, vId, cId, cTitle) {
+                root.openChapter(pId, vId, cId, cTitle)
+                root.closeChapterNavigation()
+            }
+            onCreateVolumeRequested: function(pId) {
+                root.createVolumeRequested(pId)
+            }
+            onCreateChapterRequested: function(pId, vId) {
+                root.createChapterRequested(pId, vId)
+            }
+            onRenameItemRequested: function(itemData) {
+                root.renameItemRequested(itemData)
+            }
+            onDeleteItemRequested: function(itemData) {
+                root.deleteItemRequested(itemData)
+            }
+            onToggleProjectGroup: {
+                root.projectGroupCollapsed = !root.projectGroupCollapsed
+            }
+            onToggleOutlineGroup: {
+                root.outlineGroupExpanded = !root.outlineGroupExpanded
             }
         }
     }

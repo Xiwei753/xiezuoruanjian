@@ -373,27 +373,37 @@ impl QQuickItem for SujianEditorItem {
         // 记录 text length、item width/height、viewport_height、scroll_y、
         // content_height、layout_dirty / scene_dirty。
         // 这一条是为了以后直接抓 Scene Graph 边界，不再靠肉眼猜正文到底丢在哪一层。
+        //
+        // Issue #833 复核：诊断不能进逐帧渲染热路径。正文动画期间 update_paint_node
+        // 会连续跑帧，长章节每帧扫描整篇正文（committed.chars().count()）只为一个
+        // 异常时才需要的日志，会给高刷动画增加 O(正文长度) 的额外成本。
+        // 改成：先用 O(1) 状态判断 empty-frame 条件，只有确实满足时才取 committed text；
+        // 先 is_empty()，确认非空后才 chars().count() 并写日志。正常渲染帧不扫描正文。
         {
-            let committed = self.pipeline.committed_text();
-            let text_bytes = committed.len();
-            let text_chars = committed.chars().count();
             let item_w = self.bounding_width();
             let item_vp_h = f64::from(self.current_viewport_height);
-            let item_scroll_y = f64::from(self.current_scroll_y);
-            let item_content_h = f64::from(self.current_content_height);
             let frame_empty = self.prepared_frame.is_none() || item_w <= 1.0 || item_vp_h <= 1.0;
-            if text_bytes > 0 && frame_empty {
-                editor_debug_log(&format!(
-                    "sujian_empty_frame_diag: text_bytes={}, text_chars={}, item_w={:.1}, viewport_h={:.1}, scroll_y={:.1}, content_h={:.1}, layout_dirty={}, scene_dirty={}",
-                    text_bytes,
-                    text_chars,
-                    item_w,
-                    item_vp_h,
-                    item_scroll_y,
-                    item_content_h,
-                    diag_layout_dirty,
-                    diag_scene_dirty,
-                ));
+            if frame_empty {
+                let committed = self.pipeline.committed_text();
+                if !committed.is_empty() {
+                    let text_bytes = committed.len();
+                    let text_chars = committed.chars().count();
+                    let item_h = self.bounding_height();
+                    let item_scroll_y = f64::from(self.current_scroll_y);
+                    let item_content_h = f64::from(self.current_content_height);
+                    editor_debug_log(&format!(
+                        "sujian_empty_frame_diag: text_bytes={}, text_chars={}, item_w={:.1}, item_h={:.1}, viewport_h={:.1}, scroll_y={:.1}, content_h={:.1}, layout_dirty={}, scene_dirty={}",
+                        text_bytes,
+                        text_chars,
+                        item_w,
+                        item_h,
+                        item_vp_h,
+                        item_scroll_y,
+                        item_content_h,
+                        diag_layout_dirty,
+                        diag_scene_dirty,
+                    ));
+                }
             }
         }
 

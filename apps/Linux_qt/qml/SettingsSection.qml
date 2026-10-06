@@ -39,7 +39,10 @@ Rectangle {
     // 收起时 clip 裁掉内容，整张卡只剩 header 高度。
     readonly property real _bodyHeight: root.expanded ? (rows.implicitHeight + dt.sp12) : 0
 
-    implicitHeight: header.height + root._bodyHeight + root._sectionPadding
+    // Issue #833 复核：直接用 root._headerHeight，不依赖布局完成后的 header.height。
+    // 避免外层先问 implicitHeight、内层 Layout 还没给 header 实际 height 时
+    // 产生一次无意义的尺寸回流。
+    implicitHeight: root._sectionPadding + root._headerHeight + root._bodyHeight
 
     ColumnLayout {
         id: contentCol
@@ -90,11 +93,16 @@ Rectangle {
         // ── Body：折叠容器 ──
         // height = expanded ? rows.implicitHeight : 0，clip: true。
         // rows 锚 left/right/top，高度由内容决定（implicitHeight）。
+        // Issue #833 复核：收起只做 clip + height=0 不够——里面的 TextField /
+        // ComboBox / Switch 仍然 visible/enabled，会参与键盘焦点和可访问交互，
+        // Tab 会进到肉眼看不见的控件。展开时再显示，收起的设置项才是真正收起。
         Item {
             id: body
             Layout.fillWidth: true
             Layout.preferredHeight: root._bodyHeight
             clip: true
+            visible: root.expanded
+            enabled: root.expanded
 
             ColumnLayout {
                 id: rows
