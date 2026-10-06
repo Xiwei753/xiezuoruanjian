@@ -86,7 +86,7 @@
 //!
 //! ## 评论 27 补上的两条不变量
 //!
-//! ### 1. handoff 必须先认视觉身份，再认逻辑身份
+//! ### 1. handoff 必须认视觉身份，不能只认逻辑身份
 //!
 //! 1:N 的 `old O 0..4 -> new A 0..1 + B 1..3` 进行中，old O 的
 //! `primary_handoff_key()` 就是第一个 survivor `A_range`，new A 的
@@ -97,9 +97,7 @@
 //! 下一笔改 A 时 old 侧若只按 `logical_range` 匹配，而 `current_visuals` 又是
 //! old atoms 在前，就会从「更早的 O」接手，而不是从屏幕上那份「正在淡入的 A」
 //! 接手。所以 [`CurrentVisualCluster`] / [`VisualClusterAtom`] 都多带一份
-//! [`CurrentVisualCluster::visual_cluster_range`]，与 `snapshot_id` 合成视觉身份；
-//! [`build_group`] 的 old 侧先按这笔 `base_snapshot` 里那一整块 cluster 的
-//! 视觉身份精确抓，抓不到才退回逻辑身份。
+//! [`CurrentVisualCluster::visual_cluster_range`]，与 `snapshot_id` 合成视觉身份。
 //!
 //! 逻辑身份回答「是不是同一段字」，视觉身份回答「这一笔的 base old cluster
 //! 该接哪一份当前像素」，两层不能合成一个 `(start, end)`。
@@ -111,6 +109,36 @@
 //! 「按正文 byte 数量扫」换成了「按 snapshot cluster 数平方扫」。
 //! 现在 `sorted` 同时存 `byte_start` / `byte_end`（cluster 互不重叠，两者都升序），
 //! 两端各二分一次，只遍历真正相交的那批。
+//!
+//! ## 评论 28 补上的两条不变量
+//!
+//! ### 1. 消费 `CurrentVisualCluster` 时**只认视觉身份**
+//!
+//! 评论 27 还留着「视觉身份失败就退回逻辑身份」的兜底
+//! （`take_visual_handoff(...).or_else(|| take_handoff_for_keys / take_exact_handoff)`）。
+//! 既然同一 logical range 同帧可以挂两份完全不同的资源，逻辑 range 就不再有
+//! 资格决定「拿哪份像素」。现在逻辑身份只用于 OffsetMap 身份映射、component
+//! 连通关系与 `handoff_keys`；真正消费像素时只有 [`take_visual_handoff`] 一个
+//! 入口，`take_handoff_for_keys` / `take_exact_handoff` / `containment_overlap`
+//! 已整体删除。抓不到就是「这一帧没有那份像素」：
+//! - 新 component old 侧 → base canonical；
+//! - previous old/new atom → 就此结束，不抢别人的；
+//! - new side → 自己的新 canonical resource、opacity 0。
+//!
+//! ### 2. 一份视觉像素一帧只能有一个 owner
+//!
+//! [`build_group`] 曾经在收下 component 自己的 old node 之后，再扫一遍
+//! `current_visuals`，把 `logical_range` 与 `claimed` containment 重叠的**全部**
+//! leftover 都塞进 `old_atoms`。1:N 场景里历史 old O 的 `logical_range` 正好是
+//! `A_range`，于是第二笔只改 A 时，新 component 把 old O 也吸进来；而后面
+//! [`split_previous_group_by_absorbed`] 又要求 old O 留在 previous rest group
+//! 继续和 B 一起淡 —— 同一份像素同帧属于两个 group，render 会画两遍。
+//!
+//! 正确 ownership：新 group `old = [当前 A] / new = [C]`，previous rest
+//! `old = [历史 O] / new = [未修改的 B]`，old O 只出现一次。
+//! 历史 old visual 是 previous shaping transition 的视觉债，不属于这一笔
+//! `base_snapshot` 的 A cluster，必须完全交给 [`split_previous_group_by_absorbed`] /
+//! [`retain_visible_old_atoms`] 决定继续淡出还是结束。
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -676,20 +704,21 @@ fn build_group(
 
     // ── 1. old 侧先接手：屏幕上这一帧的像素属于它 ────────────────────
     //
-    // 顺序是关键。`af -> afi` 时那 8.75px 的 `f` 就是 `fi` 这一组 old 侧
-    // 唯一的像素来源；若让 new 原子先按「一方包含另一方」抢走，old 侧就只能
-    // 退回 `base_snapshot` 里的**完整** `f`，第二笔同一帧就会「8.75px 突然
-    // 补满 10px，再开始 f -> fi」—— 评论 25 阻塞 1 描述的那个跳变。
+    // Issue #826 评论 28 阻塞：**只认视觉身份**。
+    //
+    // `request.base_snapshot` 这一块 old cluster 当前真正对应的视觉原子，
+    // 键是 `(base_line.id, base_cluster_range)`。抓不到就没有 handoff ——
+    // 直接用 base canonical。绝不能因为某个**历史** visual 的 `logical_range`
+    // 与它 overlap 就把那份像素顺手吸进来：同一个 logical range 同帧可以同时
+    // 挂着历史 old-side 与当前 new-side 两份完全不同的资源（评论 27 已证明）。
+    // 历史 old visual 归 `split_previous_group_by_absorbed()` 维护，不属于
+    // 这一笔的 component。
     let mut old_atoms = Vec::new();
     for node in &component.old_nodes {
         let (line, cluster) = old_side.cluster(*node);
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        // 评论 27 阻塞 1：这一笔 base_snapshot 里「这一整块 cluster」的视觉身份
-        // 先行。同一逻辑 range 上同时挂着历史 old-side 像素与当前 new-side
-        // 像素时，逻辑身份分不出谁是谁，按 old-在前的顺序就会抓错纹理。
-        let handoff = take_visual_handoff(current_visuals, consumed, (line.id, cluster_range))
-            .or_else(|| take_handoff_for_keys(current_visuals, consumed, &[cluster_range]));
+        let handoff = take_visual_handoff(current_visuals, consumed, (line.id, cluster_range));
         // 这一块 old cluster 在最新正文里还剩下哪几段（target 坐标系）——
         // 下一笔要靠它对齐，因为那时 base 坐标系已经变成这份 target。
         //
@@ -708,65 +737,35 @@ fn build_group(
         ));
     }
 
-    // 上一份交接层正在淡出的、已经不在这一笔 old cluster 里的视觉原子，
-    // 仍然在屏幕上 —— 它们必须作为额外 old 原子继续淡出，不能凭空消失。
-    // 典型场景 `af -> afi -> afij`：屏幕上是 `f`(opacity 0.2) + `fi`(opacity 0.8)，
-    // 新的交接组 old 侧是 `fi`，那份 `f` 就是这里补进来的。
+    // Issue #826 评论 28 阻塞：这里**曾经**有一个「扫掉所有 leftover、按
+    // logical containment 全塞进 old_atoms」的循环，它会把历史 old O 也吸进
+    // `A -> C` 这个新 component —— 而后面 `split_previous_group_by_absorbed()`
+    // 又要求 old O 继续留在 previous rest group 里淡。同一份像素同帧属于两个
+    // group，直接违反「一份视觉像素一帧只能有一个 owner」，render 还会画两遍。
     //
-    // Issue #826 评论 26 阻塞 3：claim 范围除了 `cluster` 还要包含全部
-    // `handoff_keys` —— 多段 survivor 里任何一段被本组认领，那份视觉事实
-    // 都归这一组，不能被别处再抢一次。
-    let claimed: Vec<(usize, usize)> = old_atoms
-        .iter()
-        .flat_map(|atom| std::iter::once(atom.cluster).chain(atom.handoff_keys.iter().copied()))
-        .collect();
-    for index in 0..current_visuals.len() {
-        if consumed.contains(&index) {
-            continue;
-        }
-        let visual = &current_visuals[index];
-        if !claimed
-            .iter()
-            .any(|region| containment_overlap(visual.logical_range, *region))
-        {
-            continue;
-        }
-        consumed.insert(index);
-        old_atoms.push(VisualClusterAtom {
-            cluster: visual.logical_range,
-            handoff_keys: vec![visual.logical_range],
-            // 评论 27 阻塞 1：这一份像素实际用的纹理与 cluster range。
-            visual_cluster_range: visual.visual_cluster_range,
-            snapshot_id: visual.snapshot_id,
-            source_rect: visual.source_rect.clone(),
-            rect: visual.dest_rect.clone(),
-            start_rect: visual.dest_rect.clone(),
-            start_opacity: visual.opacity,
-            start_visible_width: visual.visible_clip,
-        });
-    }
-
+    // 现在历史 old visual 完全交给 `split_previous_group_by_absorbed()` /
+    // `retain_visible_old_atoms()` 决定继续淡出还是结束。`f -> fi -> fij` 因此
+    // 是：新 group `fi -> fij`，previous rest 里旧 `f` 自己继续淡 —— 仍然都是
+    // 同一时钟下的当前态 groups，不是历史队列。
     if old_atoms.is_empty() {
         return None;
     }
 
-    // ── 2. new 侧最后接手，且**只接受精确身份**的 handoff ─────────────
+    // ── 2. new 侧最后接手，且**只认视觉身份** ────────────────────────
     //
-    // new 侧是「正在出现的那一份」，默认从 canonical 起步（不透明度 0、
-    // 整字宽）并淡入 —— 它不能去抢 old 侧或上一份 leftover 的像素。只有当
-    // 它与屏幕上某个视觉原子**字节完全一致**时，才说明这块字没变、只是换了
-    // 一次 shaping，此时从当前像素接手才正确。
-    //
-    // Issue #826 评论 26 阻塞 3：身份键用 **target 坐标系**的
-    // `cluster_range`。`handoff_keys` 是交给**下一笔**对齐用的，而下一笔的
-    // `base_snapshot` 正好是这份 target；`map_new_range_to_old` 给出的是
-    // base 系，只有本笔没有位移时才碰巧相等。
+    // Issue #826 评论 28：new 侧默认从自己的新 canonical resource、opacity 0
+    // 起步淡入；只有 `(target_line.id, target_cluster_range)` 在屏幕上真实
+    // 存在时才从当前像素接手。抓不到就退回 canonical —— 绝不按 logical range
+    // 去抢 old 侧或历史像素。
     let mut new_atoms = Vec::new();
     for node in &component.new_nodes {
         let (line, cluster) = new_side.cluster(*node);
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        let handoff = take_exact_handoff(current_visuals, consumed, cluster_range);
+        // 评论 28：new 侧同样**只认视觉身份**。抓不到就是默认路径 ——
+        // 从自己的新 canonical resource、opacity 0 起步淡入，绝不按 logical
+        // range 去抢别人的像素。
+        let handoff = take_visual_handoff(current_visuals, consumed, (line.id, cluster_range));
         new_atoms.push(atom_from_cluster(
             cluster_range,
             vec![cluster_range],
@@ -879,8 +878,7 @@ fn retarget_new_atoms(
             current_visuals,
             consumed,
             (atom.snapshot_id, atom.visual_cluster_range),
-        )
-        .or_else(|| take_exact_handoff(current_visuals, consumed, atom.primary_handoff_key()));
+        );
         new_atoms.push(atom_from_cluster(
             cluster_range,
             vec![cluster_range],
@@ -919,8 +917,9 @@ fn retain_visible_old_atoms(
             current_visuals,
             consumed,
             (atom.snapshot_id, atom.visual_cluster_range),
-        )
-        .or_else(|| take_handoff_for_keys(current_visuals, consumed, &atom.handoff_keys)) else {
+        ) else {
+            // 评论 28：这一帧已经没有那份像素 —— 不许凭 logical range 去抢
+            // 别人的。旧侧就此结束，而不是换一张别人的纹理继续淡。
             continue;
         };
         if handoff.opacity <= EPS {
@@ -1014,8 +1013,17 @@ fn atom_from_cluster(
 /// 历史 old O 与当前 new A 的 `logical_range` 可以**完全相同**（都是
 /// `A_range`），而它们的纹理 / revision / opacity / source slice 全都不同。
 ///
-/// 所以凡是要「接住某一笔 base_snapshot 里那一整块 cluster 的当前像素」的
-/// 地方，必须先用视觉身份精确抓；抓不到才允许退回逻辑身份兜底。
+/// 所以**消费 `CurrentVisualCluster` 时只认视觉身份**。
+///
+/// Issue #826 评论 28 进一步收紧：逻辑 range 仍然用于 OffsetMap 身份映射、
+/// component 连通关系、`handoff_keys`，但**不再有资格决定「拿哪份像素」**。
+/// 评论 27 已经证明同一个 logical range 同帧可以挂 old/new 两份完全不同的
+/// 资源，那就不该再保留「视觉身份失败就退回逻辑身份」的歧义入口。
+///
+/// 抓不到时的语义是唯一的：这一帧没有那份像素。
+/// - 新 component old 侧 → base canonical；
+/// - previous old/new atom → 就此结束，不抢别人的；
+/// - new side → 自己的新 canonical resource、opacity 0。
 fn take_visual_handoff(
     current_visuals: &[CurrentVisualCluster],
     consumed: &mut HashSet<usize>,
@@ -1031,67 +1039,6 @@ fn take_visual_handoff(
         })?;
     consumed.insert(index);
     Some(current_visuals[index].clone())
-}
-
-/// 找一条可用的 handoff 并标记消费。
-///
-/// 优先精确匹配（视觉身份完全一致），再以「一方完整包含另一方」作为兜底。
-/// 旧实现只在 old 侧用这个入口，但 old 侧也可能只剩一段 survivor（多段中的
-/// 一段），必须能被全部键找到。
-fn take_handoff_for_keys(
-    current_visuals: &[CurrentVisualCluster],
-    consumed: &mut HashSet<usize>,
-    keys: &[(usize, usize)],
-) -> Option<CurrentVisualCluster> {
-    // 第一遍：精确匹配。
-    for (index, visual) in current_visuals.iter().enumerate() {
-        if consumed.contains(&index) {
-            continue;
-        }
-        if keys.iter().any(|&key| visual.logical_range == key) {
-            consumed.insert(index);
-            return Some(visual.clone());
-        }
-    }
-    // 第二遍：包含重叠兜底（宽 cluster 命中窄段 survivor）。
-    for (index, visual) in current_visuals.iter().enumerate() {
-        if consumed.contains(&index) {
-            continue;
-        }
-        if keys
-            .iter()
-            .any(|&key| containment_overlap(visual.logical_range, key))
-        {
-            consumed.insert(index);
-            return Some(visual.clone());
-        }
-    }
-    None
-}
-
-/// 取一条**字节身份完全一致**的 handoff 并标记消费。
-///
-/// 与 [`take_handoff_for_keys`] 的区别是不接受「一方包含另一方」的宽松匹配。
-/// 宽松匹配只能用于 old 侧（那块 cluster 确实就是屏幕上的那一块），new 侧一旦
-/// 用宽松匹配就会抢走别人的像素：它必须从 canonical 起步再淡入。
-fn take_exact_handoff(
-    current_visuals: &[CurrentVisualCluster],
-    consumed: &mut HashSet<usize>,
-    key: (usize, usize),
-) -> Option<CurrentVisualCluster> {
-    let index = current_visuals
-        .iter()
-        .enumerate()
-        .position(|(index, visual)| !consumed.contains(&index) && visual.logical_range == key)?;
-    consumed.insert(index);
-    Some(current_visuals[index].clone())
-}
-
-/// 一方完整包含另一方的重叠。
-fn containment_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
-    let contains =
-        |outer: (usize, usize), inner: (usize, usize)| outer.0 <= inner.0 && inner.1 <= outer.1;
-    ranges_overlap(a, b) && (contains(a, b) || contains(b, a))
 }
 
 fn ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {

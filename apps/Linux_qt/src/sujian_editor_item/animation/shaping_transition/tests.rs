@@ -567,17 +567,22 @@ fn consecutive_mixed_edit_retargets_from_current_frame() {
         quarter_after,
     ));
     let after = coord.shaping_transition_glyphs(quarter_after);
-    assert_eq!(after.len(), 1);
+    // 评论 28 ownership：历史 old `f` 不再被新 component 按 logical overlap 吸
+    // 进来，而是留在 previous rest group 里继续淡 —— 所以是**两个** group：
+    // 新 group `old=[fi] / new=[fij]`，previous rest `old=[f] / new=[]`。
+    // 两层都还在画，但同一份像素只属于一个 group。
+    assert_eq!(after.len(), 2, "新 group + previous rest 各一层");
+    let after_old: Vec<&_> = after.iter().flat_map(|frame| frame.old.iter()).collect();
     // 屏幕上的两层都必须还在：f 继续淡出、fi 变成这轮的 old 侧继续淡出。
     assert_eq!(
-        after[0].old.len(),
+        after_old.len(),
         2,
         "第二笔第一帧必须同时画出 f 与 fi 两层，不能把 f 弄丢"
     );
 
     // 按宽度认出哪一层是 f（8.75px）、哪一层是 fi（16px），逐项比对连续性。
     let mut matched = 0;
-    for side in &after[0].old {
+    for side in after_old {
         let previous = before[0]
             .old
             .iter()
@@ -1464,17 +1469,25 @@ fn cluster_interval_query_visits_are_linear_not_quadratic() {
     );
 }
 
-// ── 评论 27 阻塞 1：同一 logical_range 上必须能分清 old / new 两份像素 ────────
+// ── 评论 27 阻塞 1 / 评论 28：视觉身份与 ownership ────────────────────────────
 
-/// old O 与 new A 在同一帧里共享 `logical_range = A_range`，却来自两张完全
-/// 不同的行纹理。第二笔只改 A 时，新 component 的 old 侧必须从**正在淡入的
-/// A** 接手，而不是从更早的 O。
+/// 评论 27/28 的 1:N 两笔 fixture 跑完后的产物。
+struct OneToManySecondStroke {
+    coord: LinuxEditorAnimationCoordinator,
+    /// 第 1 笔 40ms 时 new A 的不透明度（第 2 笔 old 侧必须从它接手）。
+    a_opacity: f64,
+    /// 第 1 笔 40ms 时 old O 的不透明度（**不能**被当成接手值）。
+    o_opacity: f64,
+    first_old_id: LineSnapshotId,
+    first_new_id: LineSnapshotId,
+}
+
+/// 第 1 笔 `old O 0..4 -> A 0..1 + B 1..3`，40ms 时第 2 笔只改 A。
 ///
-/// 旧实现 `take_handoff_for_keys` 第一遍按 `logical_range` 精确匹配，而
-/// `current_visuals` 是 old atoms 在前、new atoms 在后 —— 于是先抓到 O，
-/// 结果是错纹理 / 错 opacity / 错 source slice / 错位置。
-#[test]
-fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_handoff() {
+/// 这个 fixture 的关键：old O 的 `primary_handoff_key()` 恰好是 `A_range`，
+/// 所以同一帧里**历史 old O** 与**当前 new A** 的 `logical_range` 完全相同，
+/// 只有视觉身份能区分它们。
+fn one_to_many_then_edit_first_child() -> OneToManySecondStroke {
     let now = Instant::now();
     let at = instant_at(now, HALF_MS / 2);
     let mut coord = LinuxEditorAnimationCoordinator::new();
@@ -1508,7 +1521,7 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
         now,
     });
 
-    // 前提必须显式成立，否则这条测试咬不住问题：
+    // 前提必须显式成立，否则这些测试咬不住问题：
     // old O 的 primary handoff key 就是 A 的 range —— 两条 current_visual 的
     // logical_range 完全相同，只有视觉身份能区分它们。
     let first_state = coord
@@ -1538,13 +1551,13 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
 
     let before = coord.shaping_transition_glyphs(at);
     assert_eq!(before.len(), 1);
-    let a_before = before[0]
+    let a_opacity = before[0]
         .new
         .iter()
         .find(|side| (side.rect.w - 10.0).abs() < 1e-6)
         .expect("A 是那块 10px 的 new side")
-        .clone();
-    let o_before = before[0].old[0].clone();
+        .opacity;
+    let o_opacity = before[0].old[0].opacity;
 
     // 第 2 笔：只改 A —— 在 a 后插一个字，新 shaping 把 `aZ` 合成一块 0..2，
     // A 的 cluster 边界因此变了（`0..1 -> 0..2`），走 mixed/boundary 判据。
@@ -1569,6 +1582,53 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
         now: at,
     });
 
+    OneToManySecondStroke {
+        coord,
+        a_opacity,
+        o_opacity,
+        first_old_id,
+        first_new_id,
+    }
+}
+
+/// 汇总**所有** shaping group 的 atom，按 `(snapshot_id, visual_cluster_range)`
+/// 查重 —— 一份视觉像素一帧只能有一个 owner。
+///
+/// `one_visual_cluster_has_exactly_one_animation_owner` 那种「label 相同就跳过」
+/// 的判据抓不到**ShapingTransition 内部两个 group 重复拥有同一份 old O**：
+/// old/new cross-fade 正常情况下 snapshot / revision 或 visual cluster 本来就
+/// 不同，只有视觉 key 完全相同还出现两次，才是实打实的重复画。
+fn assert_no_duplicate_visual_atom(shaping: &ShapingTransitionState) {
+    let mut seen: Vec<((LineSnapshotId, (usize, usize)), String)> = Vec::new();
+    for (index, group) in shaping.groups.iter().enumerate() {
+        for (side, atoms) in [("old", &group.old_atoms), ("new", &group.new_atoms)] {
+            for atom in atoms {
+                let key = (atom.snapshot_id, atom.visual_cluster_range);
+                if let Some((_, previous)) = seen.iter().find(|(seen_key, _)| *seen_key == key) {
+                    panic!(
+                        "同一份视觉像素 (snapshot={:?}, cluster={:?}) 被两个 group 同时拥有：\
+                         {} 与 groups[{index}].{side} —— render 会把同一帧画两遍",
+                        key.0, key.1, previous
+                    );
+                }
+                seen.push((key, format!("groups[{index}].{side}")));
+            }
+        }
+    }
+}
+
+/// old O 与 new A 在同一帧里共享 `logical_range = A_range`，却来自两张完全
+/// 不同的行纹理。第二笔只改 A 时：
+///
+/// - 新 component 的 old 侧只能是**正在淡入的 A**；
+/// - 历史 old O 只能留在 previous rest group 里继续和 B 一起淡出。
+///
+/// 评论 27 修的是「old 侧抓错成 O」；评论 28 修的是「抓对了 A 之后 leftover
+/// 又把 O 也吸进来」—— 那会让 O 同帧属于两个 group，违反「一份像素一个 owner」。
+#[test]
+fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_handoff() {
+    let stroke = one_to_many_then_edit_first_child();
+    let coord = stroke.coord;
     let shaping = coord
         .active_shaping_transition
         .as_ref()
@@ -1586,19 +1646,18 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
             .iter()
             .map(|atom| atom.cluster)
             .collect::<Vec<_>>(),
-        vec![(0, 1), (0, 1)],
-        "新 component 的 old 侧 = 它自己的 old cluster A + leftover 的 old O"
+        vec![(0, 1)],
+        "评论 28：新 component 的 old 侧只能是它自己的 old cluster A，\
+         历史 old O 不许被 logical overlap 顺手吸进来"
     );
 
-    // `old_atoms[0]` 是 `build_group` 为 component 自己的 old cluster 建的
-    // 那份 handoff —— 它必须来自**正在淡入的 A**。
     let primary = &taken.old_atoms[0];
     assert_eq!(
-        primary.snapshot_id, first_new_id,
+        primary.snapshot_id, stroke.first_new_id,
         "source 必须是 previous target 的 A"
     );
     assert_ne!(
-        primary.snapshot_id, first_old_id,
+        primary.snapshot_id, stroke.first_old_id,
         "绝不能从历史 old O 的纹理接手"
     );
     assert_eq!(
@@ -1617,36 +1676,18 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
         primary.start_rect.w
     );
     assert!(
-        (primary.start_opacity - a_before.opacity).abs() < 1e-6,
+        (primary.start_opacity - stroke.a_opacity).abs() < 1e-6,
         "start_opacity 必须等于上一帧 new A 的 {}，实际 {}",
-        a_before.opacity,
+        stroke.a_opacity,
         primary.start_opacity
     );
     assert!(
-        (primary.start_opacity - o_before.opacity).abs() > 1e-6,
+        (primary.start_opacity - stroke.o_opacity).abs() > 1e-6,
         "不能等于 old O 的 opacity {}",
-        o_before.opacity
+        stroke.o_opacity
     );
 
-    // old O 仍然作为 leftover 在画，且必须保持自己的 40px 几何 ——
-    // 被塞进 A 的 canonical 宽度会让它这一帧瞬间从 40px 缩到 10px。
-    let old_o = taken
-        .old_atoms
-        .iter()
-        .find(|atom| atom.snapshot_id == first_old_id)
-        .expect("old O 仍作为 leftover 在画");
-    assert!(
-        (old_o.rect.w - 40.0).abs() < 1e-6,
-        "old O 必须保持自己的 40px 几何，实际 {}",
-        old_o.rect.w
-    );
-    assert!(
-        (old_o.source_rect.w - 40.0).abs() < 1e-6,
-        "old O 的 source 仍是它自己的 40px，实际 {}",
-        old_o.source_rect.w
-    );
-
-    // 没被碰的 B 与 old O 作为另一组继续淡。
+    // 历史 old O 由 previous group 的拆分继续维护，只在 rest 这一组里。
     let rest = shaping
         .groups
         .iter()
@@ -1658,6 +1699,77 @@ fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_hando
             .map(|atom| atom.cluster)
             .collect::<Vec<_>>(),
         vec![(0, 4)],
-        "old O 仍在另一组里淡出，不能整组被跳过"
+        "old O 只留在 previous rest 组里淡出，不能整组被跳过"
     );
+    let old_o = &rest.old_atoms[0];
+    assert_eq!(
+        old_o.snapshot_id, stroke.first_old_id,
+        "rest 的 old 侧就是历史 old O"
+    );
+    assert_eq!(
+        old_o.visual_cluster_range,
+        (0, 4),
+        "old O 的视觉身份必须是它自己那块 0..4"
+    );
+    assert!(
+        (old_o.rect.w - 40.0).abs() < 1e-6,
+        "old O 必须保持自己的 40px 几何，实际 {}",
+        old_o.rect.w
+    );
+    assert!(
+        (old_o.source_rect.w - 40.0).abs() < 1e-6,
+        "old O 的 source 仍是它自己的 40px，实际 {}",
+        old_o.source_rect.w
+    );
+
+    // old O 的 `(snapshot_id, visual_cluster_range)` 在所有 groups 里只能出现一次。
+    assert_eq!(
+        shaping
+            .groups
+            .iter()
+            .flat_map(|group| group.old_atoms.iter())
+            .filter(|atom| {
+                atom.snapshot_id == stroke.first_old_id && atom.visual_cluster_range == (0, 4)
+            })
+            .count(),
+        1,
+        "历史 old O 在所有 groups 里只能出现一次"
+    );
+    assert_no_duplicate_visual_atom(shaping);
+}
+
+/// 评论 28：同一份视觉像素一帧只能有一个 owner —— 同一个
+/// `(snapshot_id, visual_cluster_range)` 绝不能出现在两个 group 里。
+#[test]
+fn one_shaping_visual_atom_cannot_exist_in_two_groups() {
+    let stroke = one_to_many_then_edit_first_child();
+    let shaping = stroke
+        .coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("第二笔仍然有不可拆 cluster");
+
+    // 场景本身必须成立，否则这条测试退化成空转。
+    assert_eq!(
+        shaping
+            .groups
+            .iter()
+            .flat_map(|group| group.old_atoms.iter())
+            .filter(|atom| atom.snapshot_id == stroke.first_old_id)
+            .count(),
+        1,
+        "历史 old O 必须且只能属于一个 group"
+    );
+    assert_eq!(
+        shaping
+            .groups
+            .iter()
+            .flat_map(|group| group.old_atoms.iter())
+            .filter(|atom| atom.snapshot_id == stroke.first_new_id)
+            .count(),
+        1,
+        "当前 new A 必须且只能属于一个 group"
+    );
+
+    assert_no_duplicate_visual_atom(shaping);
 }
