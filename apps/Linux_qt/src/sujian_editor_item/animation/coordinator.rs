@@ -210,6 +210,9 @@ impl LinuxEditorAnimationCoordinator {
             duration_ms,
             request.target_text.clone(),
         );
+        // Issue #826 评论 29：这两个是**本次 revision 坐标系**的 ownership claims
+        // （`old` 落在 `base_snapshot`、`new` 落在 `target_snapshot`），不是渲染
+        // atoms 的 source range。下面 insert/delete/replace 全部直接用它们。
         let shaping_new_owned = shaping.owned_new_clusters();
         let shaping_old_owned = shaping.owned_old_clusters();
 
@@ -475,6 +478,13 @@ impl LinuxEditorAnimationCoordinator {
         // changed range 脱钩，Reflow 就会把一块正被交接层淡出的 cluster 再插值
         // 一次。这里显式并进去，让「每块视觉 cluster 每帧一个 owner」是**写出来的
         // 约束**，不是推出来的。
+        //
+        // Issue #826 评论 29：`excluded_old` 要求的坐标系是**本次
+        // `request.base_snapshot`**，而 `owned_old_clusters()` 返回的
+        // `old_owned_in_base` 正是为此构造的。绝不能换成去遍历
+        // `groups[*].old_atoms[*].cluster` —— 历史 old atom 的 `cluster` 停在
+        // 更早 revision 上，一个 stale `0..4` 就会把当前 base 里同坐标的新字
+        // 一起排掉，表现是当前活字瞬移。
         let shaping_old_owned: Vec<(usize, usize)> = self
             .active_shaping_transition
             .as_ref()
