@@ -38,6 +38,9 @@ QtObject {
     property string volumeId: ""
     property string chapterId: ""
     property string chapterTitle: ""
+    // Issue #835：当前章节章纲（chapter.note）。唯一事实来源是 Core，
+    // QML 只缓存最近一次加载的值供章纲面板显示，不在本地存第二份可编辑副本。
+    property string chapterNote: ""
     property string saveStatus: editorBackendRef ? editorBackendRef.save_status : ""
 
     // Internal state
@@ -352,6 +355,13 @@ QtObject {
         lastPotentialExplicitClearAtMs = 0;
         isLoadingChapter = false;
 
+        // Issue #835：同步当前章节章纲（chapter.note）。
+        // meta.note 是 Core 的 Option<String>，可能为 null，统一回退成空串。
+        // 在 loadChapterContentWithIds 成功后直接写，覆盖所有调用路径
+        // （openChapter / reloadActiveChapter / reconcileActiveChapter）。
+        var note = (result.data && result.data.meta && result.data.meta.note) ? result.data.meta.note : ""
+        controller.chapterNote = note
+
         // Return full result so caller updates chapter state from authoritative source
         return result;
     }
@@ -370,6 +380,8 @@ QtObject {
             volumeId = "";
             chapterId = "";
             chapterTitle = "";
+            // Issue #835：清空章节时同步清空章纲缓存，避免残留旧章节 note。
+            chapterNote = "";
             previousEditorText = "";
             lastSavedEditorText = "";
             explicitEmptySavePending = false;

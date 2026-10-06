@@ -40,12 +40,15 @@ Rectangle {
     readonly property bool toolPaneOpen: root.selectedTool !== ""
 
     // Issue #829：右侧工具 rail 的空间骨架按手稿固定。
-    // 星图 / AI 始终占这两个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
+    // 星图始终占这个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
     // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
+    // Issue #835 评论 6020221770: AI 暂无 Linux_Qt 真实会话面板，rail 位置保留
+    // 但 enabled:false 禁用，降 opacity，不发 toolRequested，不伪造 AI 页面。
+    // 以后真实 AI 面板接进来把 enabled 改 true 即可。
     readonly property var tools: {
         var list = [
-            { key: "starmap", label: qsTr("星图") },
-            { key: "ai", label: qsTr("AI") }
+            { key: "starmap", label: qsTr("星图"), enabled: true },
+            { key: "ai", label: qsTr("AI"), enabled: false }
         ]
         if (root.hasConflicts) {
             list.push({ key: "conflict", label: qsTr("冲突") })
@@ -90,6 +93,9 @@ Rectangle {
                     color: root.selectedTool === modelData.key ? dt.accentText : dt.textPrimary
                     font.pointSize: modelData.key === "ai" ? dt.fontSmPt : dt.captionPt
                     font.weight: root.selectedTool === modelData.key ? Font.DemiBold : Font.Normal
+                    // Issue #835 评论 6020221770: disabled 入口（如 AI）降 opacity，
+                    // 保留 rail 位置但不诱导点击。
+                    opacity: modelData.enabled !== false ? 1.0 : 0.4
                 }
 
                 // 选中态左侧竖条：和 CreativeHub 左栏选中态同一套 token。
@@ -109,6 +115,9 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
+                    // Issue #835 评论 6020221770: disabled 入口不响应点击，
+                    // 不发 toolRequested，RightDrawer 不需要造 AI 占位内容。
+                    enabled: modelData.enabled !== false
                     onClicked: root.toolRequested(modelData.key)
                 }
 

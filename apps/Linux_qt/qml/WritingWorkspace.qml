@@ -49,6 +49,12 @@ Rectangle {
     // 使 logRenderColorProbe 能读取 ThemeController runtime state。
     property var themeController: null
     property var appState: ({})
+    // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
+    // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
+    property var starmapBackendRef: null
+    // Issue #835 评论 6019713847: StarMapPage 需要真实 StarMapController 读根星图，
+    // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
+    property var starMapControllerRef: null
     property var tree: []
     // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
     // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
@@ -658,6 +664,9 @@ Rectangle {
                 Layout.preferredWidth: root.chapterNavWidth
                 Layout.minimumWidth: root.chapterNavWidth
                 Layout.maximumWidth: root.chapterNavWidth
+                // Issue #835：内容区 RowLayout cross-axis 高度填满，
+                // 不再靠子组件内容溢出父项来显示，MouseArea 命中区与视觉一致。
+                Layout.fillHeight: true
 
                 dt: root.dt
                 tree: root.tree
@@ -666,6 +675,8 @@ Rectangle {
                 projectGroupCollapsed: root.projectGroupCollapsed
                 outlineGroupExpanded: root.outlineGroupExpanded
                 currentChapterId: editorController.chapterId
+                // Issue #835：透传当前章节章纲（唯一来源 editorController.chapterNote）。
+                currentChapterNote: editorController.chapterNote
 
                 onOpenChapter: function(pId, vId, cId, cTitle) {
                     root.openChapter(pId, vId, cId, cTitle)
@@ -688,6 +699,27 @@ Rectangle {
                 onToggleOutlineGroup: {
                     root.outlineGroupExpanded = !root.outlineGroupExpanded
                 }
+                // Issue #835：章纲编辑完成交给 backend update_chapter_note，
+                // 并同步本地缓存。两处 WritingChapterNavigation 实例都接。
+                // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
+                // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
+                onChapterNoteChanged: function(note) {
+                    if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
+                        return
+
+                    var result = editorBackendRef.update_chapter_note(
+                        editorController.projectId,
+                        editorController.volumeId,
+                        editorController.chapterId,
+                        note
+                    )
+
+                    if (result && result.success) {
+                        editorController.chapterNote = note
+                    } else {
+                        sidebarRect.restoreChapterNoteFromSource()
+                    }
+                }
             }
 
             // Middle Area: Toolbar + Editor
@@ -698,6 +730,8 @@ Rectangle {
                 Layout.preferredWidth: root.editorWidth > 0 ? root.editorWidth : -1
                 Layout.minimumWidth: root.editorWidth > 0 ? root.editorWidth : 0
                 Layout.maximumWidth: root.editorWidth > 0 ? root.editorWidth : -1
+                // Issue #835：内容区 RowLayout cross-axis 高度填满。
+                Layout.fillHeight: true
                 spacing: 0
 
                 // Editor Container Area
@@ -1168,12 +1202,20 @@ Rectangle {
                 Layout.preferredWidth: root.toolPaneWidth
                 Layout.minimumWidth: root.toolPaneWidth
                 Layout.maximumWidth: root.toolPaneWidth
+                // Issue #835：内容区 RowLayout cross-axis 高度填满。
+                Layout.fillHeight: true
                 // Issue #825 复核5第1项：Core 最终判 SinglePane 时工具 pane 不存在。
                 visible: root.drawerOpen && !root.hideContentPanes
                 dt: root.dt
                 editorBackendRef: root.editorBackendRef
                 isOpen: root.drawerOpen
                 selectedTool: root.drawerTool
+                // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
+                starmapBackendRef: root.starmapBackendRef
+                // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
+                // StarMapPage 据此调 listStarmaps() 读真实根星图。
+                starMapControllerRef: root.starMapControllerRef
+                appState: root.appState
                 // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
                 syncBackendRef: root.syncBackendRef
                 workspaceProjectId: root.workspaceProjectId
@@ -1204,6 +1246,8 @@ Rectangle {
                 Layout.preferredWidth: root.toolRailWidth
                 Layout.minimumWidth: root.toolRailWidth
                 Layout.maximumWidth: root.toolRailWidth
+                // Issue #835：内容区 RowLayout cross-axis 高度填满。
+                Layout.fillHeight: true
                 dt: root.dt
                 hasConflicts: root.hasConflicts
                 selectedTool: root.drawerTool
@@ -1422,9 +1466,10 @@ Rectangle {
         z: 60
 
         // 半透明遮罩，点击关闭抽屉。
+        // 颜色取 DesignTokens 的 scrim，不再写死 "black"（ui_tokens 门禁）。
         Rectangle {
             anchors.fill: parent
-            color: "black"
+            color: dt.scrim
             opacity: 0.4
             MouseArea {
                 anchors.fill: parent
@@ -1453,6 +1498,8 @@ Rectangle {
             projectGroupCollapsed: root.projectGroupCollapsed
             outlineGroupExpanded: root.outlineGroupExpanded
             currentChapterId: editorController.chapterId
+            // Issue #835：透传当前章节章纲（与 Workbench 下 sidebarRect 一致）。
+            currentChapterNote: editorController.chapterNote
 
             onOpenChapter: function(pId, vId, cId, cTitle) {
                 root.openChapter(pId, vId, cId, cTitle)
@@ -1475,6 +1522,26 @@ Rectangle {
             }
             onToggleOutlineGroup: {
                 root.outlineGroupExpanded = !root.outlineGroupExpanded
+            }
+            // Issue #835：章纲编辑完成交给 backend（与 sidebarRect 同一处理）。
+            // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
+            // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
+            onChapterNoteChanged: function(note) {
+                if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
+                    return
+
+                var result = editorBackendRef.update_chapter_note(
+                    editorController.projectId,
+                    editorController.volumeId,
+                    editorController.chapterId,
+                    note
+                )
+
+                if (result && result.success) {
+                    editorController.chapterNote = note
+                } else {
+                    singlePaneNavPanel.restoreChapterNoteFromSource()
+                }
             }
         }
     }

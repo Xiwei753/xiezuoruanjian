@@ -39,6 +39,14 @@ Rectangle {
     readonly property real _fontLg: dt.fontLgPt
 
     property var editorBackendRef: null
+    // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
+    // 再下发给 StarMapPreviewPage，不在 RightDrawer 内部自造星图数据。
+    property var starmapBackendRef: null
+    // Issue #835 评论 6019713847: StarMapPage 通过 StarMapController 读真实根星图，
+    // 不用写死卡片的 StarMapPreviewPage 占位。starMapControllerRef 由
+    // WritingWorkspace 透传（main.qml 注入 globalStarMapController）。
+    property var starMapControllerRef: null
+    property var appState: ({})
     property bool isOpen: false
     // Issue #829：当前工具 key（"" 表示 pane 收起）。
     // 手稿固定入口是 starmap / ai；conflict 只在运行时确有冲突时追加。
@@ -57,6 +65,12 @@ Rectangle {
     // Issue #762 评论 5826175490 第 4 点：外部请求的冲突路径，透传给 SyncConflictPanel。
     // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
     property string requestedConflictPath: ""
+
+    // Issue #835 评论 6020221770: 右工具面板仍属于写作工作台，不切 route。
+    // 点根星图后内嵌真实 StarMapWorkspace，返回时退回右栏里的 StarMapPage 列表。
+    // embeddedStarmapId 非空 = 正在看某个根星图的 Canvas；空 = 看根星图列表。
+    property string embeddedStarmapId: ""
+    property string embeddedStarmapTitle: ""
 
     signal closeRequested()
     // 冲突入口被请求时发出（hasConflicts 从 false 变 true），外部据此选中冲突工具。
@@ -162,17 +176,39 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Issue #829：手稿里的星图 / AI 内容槽。
-                // 本轮只固定 ToolPane 的区域和切换键，不在 QML 里伪造业务数据；
-                // 后续把真实星图 / AI 组件直接挂进这两个 Item 即可，不再改外层工作台骨架。
-                Item {
-                    visible: root.selectedTool === "starmap"
+                // Issue #835 评论 6020221770: 星图工具区分两态，都在右栏内渲染，
+                // 不切 route、不销毁 WritingWorkspace。
+                // 未选根星图：StarMapPage 列表，通过 StarMapController.listStarmaps()
+                // 读真实根星图。点某个根星图后切到嵌入态。
+                StarMapPage {
+                    visible: root.selectedTool === "starmap" && root.embeddedStarmapId === ""
                     anchors.fill: parent
+                    dt: root.dt
+                    starMapController: root.starMapControllerRef
+                    appState: root.appState
+
+                    onOpenStarmap: function(starmapId, title) {
+                        root.embeddedStarmapId = starmapId
+                        root.embeddedStarmapTitle = title
+                    }
                 }
 
-                Item {
-                    visible: root.selectedTool === "ai"
+                // 选中根星图后：内嵌真实 StarMapWorkspace（含 StarMapCanvas），
+                // starmapBackendRef 给 Workspace/Canvas，子星图沿现有焦点链工作。
+                // 返回时清空 embeddedStarmapId 退回根星图列表，route 始终是 writing。
+                StarMapWorkspace {
+                    visible: root.selectedTool === "starmap" && root.embeddedStarmapId !== ""
                     anchors.fill: parent
+                    dt: root.dt
+                    starmapBackendRef: root.starmapBackendRef
+                    starmapId: root.embeddedStarmapId
+                    starmapTitle: root.embeddedStarmapTitle
+                    appState: root.appState
+
+                    onBackClicked: {
+                        root.embeddedStarmapId = ""
+                        root.embeddedStarmapTitle = ""
+                    }
                 }
 
                 // 统计 — 复用现有 StatsPreviewPage

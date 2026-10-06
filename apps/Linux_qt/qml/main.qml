@@ -650,6 +650,11 @@ ApplicationWindow {
                 dt: designTokens
                 projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
+                // Issue #835：透传星图后端给 WritingWorkspace，再由它透传给 RightDrawer。
+                starmapBackendRef: starmapBackend
+                // Issue #835 评论 6019713847: 透传真实 StarMapController，RightDrawer 里
+                // StarMapPage 据此调 listStarmaps() 读真实根星图，不用写死卡片占位。
+                starMapControllerRef: globalStarMapController
                 // Issue #709 评论 issue-body-709: 传入 themeController 使
                 // EditorController.logRenderColorProbe 能读取 runtime state。
                 themeController: themeController

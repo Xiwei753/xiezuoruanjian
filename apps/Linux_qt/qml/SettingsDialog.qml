@@ -272,545 +272,568 @@ Dialog {
             if (contentItem) contentItem.acceptedButtons = Qt.NoButton
         }
         contentWidth: availableWidth
-        contentHeight: settingsColumn.implicitHeight
+        contentHeight: settingsColumns.height
 
-        // Issue #833：设置内容改成单列 ColumnLayout accordion。
-        // 不再用 GridLayout columns=2 两列排设置分组，避免两列不同 implicitHeight
-        // 形成参差不齐的洞。宽屏仍可以让 Dialog 更宽，但设置分组本身保持一列。
-        // 每个 SettingsSection 根据 expandedSectionKey 设置 expanded，
-        // toggleRequested 时切换 key；点已展开项则收起。
-        ColumnLayout {
-            id: settingsColumn
+        // Issue #835 评论 6019235318: 外层用普通 Item，宽屏左右摆两列、窄屏上下接，
+        // 两组 ColumnLayout 都 visible:true，窄屏不再丢掉右半边设置。
+        // 不用 RowLayout+visible:false（窄屏会把右列三组设置删没），也不用旧
+        // GridLayout columns=2（左右卡片互相拉高）。左列：外观/编辑器和动画/AI；
+        // 右列：保存和同步/诊断与日志/关于。每个 SettingsSection 根据
+        // expandedSectionKey 设置 expanded，toggleRequested 时切换 key；点已展开项则收起。
+        Item {
+            id: settingsColumns
             width: settingsScroll.availableWidth
-            spacing: dt.cardGap
+            readonly property real gap: root.dt.cardGap
+            readonly property real columnWidth:
+                root.widePanel ? (width - gap) / 2 : width
+            height: root.widePanel
+                ? Math.max(leftSettingsColumn.implicitHeight, rightSettingsColumn.implicitHeight)
+                : leftSettingsColumn.implicitHeight + gap + rightSettingsColumn.implicitHeight
 
-            // ── 1. 外观 (appearance) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("外观")
-                visible: root.sectionVisible(qsTr("外观"))
-                expanded: root.expandedSectionKey === qsTr("外观")
-                onToggleRequested: root.toggleSection(qsTr("外观"))
-                Layout.fillWidth: true
-                SettingsRow {
+            ColumnLayout {
+                id: leftSettingsColumn
+                width: settingsColumns.columnWidth
+                x: 0
+                y: 0
+                spacing: root.dt.cardGap
+
+                // ── 1. 外观 (appearance) ──
+                SettingsSection {
                     dt: root.dt
-                    title: qsTr("主题模式")
-                    description: qsTr("切换系统、浅色或深色")
-                    ModernComboBox {
-                        id: themeCombo
-                        dt: root.dt
-                        model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
-                            // Issue #696 评论 5696993601 / #701 评论 5702214893:
-                            // 用户切换主题只走 ThemeController 这一条入口，
-                            // 不再直接写 settingsBackendRef.setting_appearance_mode。
-                            // set_appearance_mode 内部写 AppBackend、重建缓存并
-                            // 发 scheme_changed，然后沿现有保存入口落盘。
-                            themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                }
-                AppSlider {
-                    id: fontSizeSlider
+                    title: qsTr("外观")
+                    visible: root.sectionVisible(qsTr("外观"))
+                    expanded: root.expandedSectionKey === qsTr("外观")
+                    onToggleRequested: root.toggleSection(qsTr("外观"))
                     Layout.fillWidth: true
-                    dt: root.dt
-                    label: qsTr("字体大小")
-                    valueText: Math.round(value) + " px"
-                    // range from Core settings_presentation: min=12, max=72, step=1
-                    from: 12.0
-                    to: 72.0
-                    stepSize: 1.0
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_font_size = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_font_size = value; root.debouncedSave() }
-                }
-                AppSlider {
-                    id: lineSpacingSlider
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    label: qsTr("行距倍数")
-                    valueText: Number(value).toFixed(1) + "x"
-                    // range from Core settings_presentation: min=1.0, max=3.0, step=0.1
-                    from: 1.0
-                    to: 3.0
-                    stepSize: 0.1
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_line_spacing = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_line_spacing = value; root.debouncedSave() }
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("颜色来源")
-                    description: qsTr("选择素笺默认主题或已保存的设备配色")
-                    ModernComboBox {
-                        id: colorSourceCombo
+                    SettingsRow {
                         dt: root.dt
-                        model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
-                            // Issue #701 评论 5702214893: 颜色来源统一走
-                            // ThemeController，不再直接写
-                            // settingsBackendRef.setting_color_source。
-                            var source = ["built_in", "saved_palette"][index]
-                            themeControllerRef.set_color_source(source)
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                }
-                SettingsRow {
-                    dt: root.dt
-                    visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
-                    title: qsTr("内置主题")
-                    description: qsTr("选择内置主题配色方案")
-                    ModernComboBox {
-                        id: builtinThemeCombo
-                        dt: root.dt
-                        property var _themes: {
-                            if (!settingsBackendRef) return []
-                            try { return JSON.parse(settingsBackendRef.list_builtin_themes_json()) } catch(e) { return [] }
-                        }
-                        model: _themes.map(function(t) { return t.name || t.theme_id })
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
-                            var themeId = _themes[index] ? _themes[index].theme_id : ""
-                            if (themeId.length > 0) {
-                                // Issue #701 评论 5702214893: 内置主题统一走
-                                // ThemeController。set_selected_builtin_theme_id
-                                // 内部会同时把 color_source 设为 built_in。
-                                themeControllerRef.set_selected_builtin_theme_id(themeId)
+                        title: qsTr("主题模式")
+                        description: qsTr("切换系统、浅色或深色")
+                        ModernComboBox {
+                            id: themeCombo
+                            dt: root.dt
+                            model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
+                                // Issue #696 评论 5696993601 / #701 评论 5702214893:
+                                // 用户切换主题只走 ThemeController 这一条入口，
+                                // 不再直接写 settingsBackendRef.setting_appearance_mode。
+                                // set_appearance_mode 内部写 AppBackend、重建缓存并
+                                // 发 scheme_changed，然后沿现有保存入口落盘。
+                                themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
                                 root.settingsDirty = true
                                 root.saveAndNotify()
                             }
                         }
                     }
-                }
-                SettingsRow {
-                    dt: root.dt
-                    visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
-                    title: qsTr("已保存配色")
-                    description: qsTr("选择已保存的设备调色板")
-                    ModernComboBox {
-                        id: paletteRecordCombo
-                        dt: root.dt
-                        property var _records: {
-                            if (!settingsBackendRef) return []
-                            try { return JSON.parse(settingsBackendRef.list_palette_records_json()) } catch(e) { return [] }
-                        }
-                        model: _records.map(function(r) {
-                            var d = new Date(r.captured_at_ms)
-                            return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
-                        })
-                        onActivated: function(index) {
-                            if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
-                            var paletteId = _records[index] ? _records[index].palette_id : ""
-                            if (paletteId.length > 0) {
-                                // Issue #701 评论 5702214893: 已保存 palette 统一走
-                                // ThemeController。set_selected_palette_id 内部会
-                                // 同时把 color_source 设为 saved_palette。
-                                themeControllerRef.set_selected_palette_id(paletteId)
-                                root.settingsDirty = true
-                                root.saveAndNotify()
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ── 2. 编辑器和动画 (editor + animation) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("编辑器和动画")
-                visible: root.sectionVisible(qsTr("编辑器和动画"))
-                expanded: root.expandedSectionKey === qsTr("编辑器和动画")
-                onToggleRequested: root.toggleSection(qsTr("编辑器和动画"))
-                Layout.fillWidth: true
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("自动首行缩进")
-                    description: qsTr("回车时自动添加缩进")
-                    clickable: true
-                    onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
-                    ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
-                }
-                AppSlider {
-                    id: autoIndentWidth
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    label: qsTr("首行缩进宽度")
-                    valueText: Number(value).toFixed(1) + qsTr(" 字符")
-                    // range from Core settings_presentation: min=0.0, max=8.0, step=0.5
-                    from: 0.0
-                    to: 8.0
-                    stepSize: 0.5
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value; root.debouncedSave() }
-                }
-                // Issue #756 / Issue #785: 协同动画（吞字/吐字）显式模式开关。
-                // Issue #815 评论 5955090551: true 时文字与光标是**同一条** caret track，
-                // 吞吐字（CaretTrack）自己没有时长，整段协同动画速度就是这条 track 的
-                // 时长，所以由下面的「协同动画时长」统一控制（绑定打字动画时长）。
-                // false 时 typing/smooth 两个独立开关与各自时长仍然分开。
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("协同动画（吞字/吐字）")
-                    description: qsTr("文字与光标同事务协同，速度统一见下方「协同动画时长」")
-                    clickable: true
-                    onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
-                    ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
-                }
-                // Issue #815 评论 5955090551: 协同动画时长。
-                //
-                // #815 之后协同模式下 InsertReveal / DeleteConceal 是
-                // `VisualUnitTiming::CaretTrack`，自己**没有时长**，逐帧边界完全跟随
-                // 同一笔 cursor track。也就是说：协同动画速度 = 这条 track 的时长。
-                //
-                // 而这条 track 的时长在 pipeline.rs 里取的是「打字动画时长」，所以这个
-                // 滑块直接绑定 setting_typing_animation_duration_ms。绝不能绑定被隐藏的
-                // setting_smooth_cursor_duration_ms——那正是实机上「动画快得看不见」的根因。
-                //
-                // 协同关闭时不显示，此时文字与光标各自独立时长（下面的两个滑块）。
-                AppSlider {
-                    id: coordinatedAnimDuration
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    visible: coordinatedAnim.checked
-                    label: qsTr("协同动画时长")
-                    valueText: Math.round(value) + " ms"
-                    // 与打字动画时长同一个区间（Core settings_presentation: min=30, max=1000, step=10）
-                    from: 30
-                    to: 1000
-                    stepSize: 10
-                    onMoved: function() { root.setTextAnimationDuration(value) }
-                    onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
-                }
-                // Issue #808: 协同开启时整组隐藏（开关 + duration 滑块一起消失）。
-                // Issue #815 评论 5955676896: 打字动画时长与上面的协同动画时长是同一个
-                // 设置项，共用 root.textAnimationDurationValue，不各存一份。
-                SettingsRow {
-                    visible: !coordinatedAnim.checked
-                    dt: root.dt
-                    title: qsTr("打字动画")
-                    description: qsTr("输入时字符从光标处吐出")
-                    clickable: true
-                    onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
-                    ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
-                }
-                AppSlider {
-                    id: typingAnimDuration
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
-                    visible: !coordinatedAnim.checked
-                    label: qsTr("打字动画持续时间")
-                    valueText: Math.round(value) + " ms"
-                    // range from Core settings_presentation: min=30, max=1000, step=10
-                    from: 30
-                    to: 1000
-                    stepSize: 10
-                    onMoved: function() { root.setTextAnimationDuration(value) }
-                    onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
-                }
-                SettingsRow {
-                    visible: !coordinatedAnim.checked
-                    dt: root.dt
-                    title: qsTr("平滑光标")
-                    description: qsTr("光标移动更顺滑")
-                    clickable: true
-                    onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
-                    ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
-                }
-                AppSlider {
-                    id: smoothCursorDuration
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
-                    visible: !coordinatedAnim.checked
-                    label: qsTr("平滑光标持续时间")
-                    valueText: Math.round(value) + " ms"
-                    // range from Core settings_presentation: min=30, max=1000, step=10
-                    from: 30
-                    to: 1000
-                    stepSize: 10
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
-                }
-            }
-
-            // ── 3. 保存和同步 (save + sync) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("保存和同步")
-                visible: root.sectionVisible(qsTr("保存和同步"))
-                expanded: root.expandedSectionKey === qsTr("保存和同步")
-                onToggleRequested: root.toggleSection(qsTr("保存和同步"))
-                Layout.fillWidth: true
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("自动保存")
-                    description: qsTr("编辑时自动保存到本地")
-                    clickable: true
-                    onClicked: root.setSwitchValue(autoSave, "setting_auto_save_enabled", !autoSave.checked)
-                    ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoSave, "setting_auto_save_enabled", v) } }
-                }
-                // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("切换工作区")
-                    description: qsTr("切换到另一个工作区目录")
-                    clickable: true
-                    onClicked: root.switchWorkspaceRequested()
-                }
-                AppSlider {
-                    id: autoSaveDelay
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    label: qsTr("自动保存延迟")
-                    valueText: Math.round(value) + qsTr(" 秒")
-                    // range from Core settings_presentation: min=1, max=10, step=1
-                    from: 1
-                    to: 10
-                    stepSize: 1
-                    onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_save_delay_ms = value * 1000 }
-                    onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
-                }
-                SyncPage {
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    syncBackendRef: root.syncBackendRef
-                    workspaceBackendRef: root.workspaceBackendRef
-                    beforeSyncHook: function() {
-                        if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
-                        return true;
-                    }
-                    onSettingsChanged: root.settingsChanged()
-                    // Issue #762 评论 5826175490 第 4 点：转发 openConflict 信号给主窗口
-                    onOpenConflict: function(projectId, path) {
-                        root.openConflict(projectId, path)
-                    }
-                }
-            }
-
-            // ── 4. AI (ai) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("AI")
-                Layout.fillWidth: true
-                expanded: root.expandedSectionKey === qsTr("AI")
-                onToggleRequested: root.toggleSection(qsTr("AI"))
-                visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
-                         && root.sectionVisible(qsTr("AI"))
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("启用 AI 功能")
-                    description: qsTr("控制 AI 功能入口显示")
-                    clickable: true
-                    onClicked: root.setSwitchValue(aiSwitch, "ai_enabled", !aiSwitch.checked)
-                    ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { root.setSwitchValue(aiSwitch, "ai_enabled", v) } }
-                }
-            }
-
-            // ── 5. 诊断与日志 (diagnostics) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("诊断与日志")
-                visible: root.sectionVisible(qsTr("诊断与日志"))
-                expanded: root.expandedSectionKey === qsTr("诊断与日志")
-                onToggleRequested: root.toggleSection(qsTr("诊断与日志"))
-                Layout.fillWidth: true
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("启用诊断日志")
-                    description: qsTr("记录应用运行日志，用于问题排查")
-                    clickable: true
-                    onClicked: root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", !diagnosticsEnabled.checked)
-                    ModernSwitch { id: diagnosticsEnabled; dt: root.dt; onToggled: function(v) {
-                        root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", v)
-                        diagnosticsVerbose.enabled = v
-                        if (!v) {
-                            diagnosticsVerbose.checked = false
-                            root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", false)
-                        }
-                    }}
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("详细日志")
-                    description: qsTr("记录更详细的调试信息")
-                    clickable: true
-                    onClicked: root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", !diagnosticsVerbose.checked)
-                    ModernSwitch { id: diagnosticsVerbose; dt: root.dt; onToggled: function(v) { root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", v) } }
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("清空日志")
-                    description: qsTr("删除所有日志文件")
-                    clickable: true
-                    onClicked: {
-                        if (!root.settingsBackendRef) return
-                        root.settingsBackendRef.clear_logs()
-                    }
-                }
-                // 导出诊断包：独立行，明确按钮
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: dt.sp12
-                    AppText {
-                        dt: root.dt
+                    AppSlider {
+                        id: fontSizeSlider
                         Layout.fillWidth: true
-                        text: qsTr("导出诊断包")
-                        color: dt.textSecondary
-                        font.pointSize: dt.captionPt
-                        font.family: dt.fontFamily
-                    }
-                    AppButton {
-                        text: qsTr("导出")
                         dt: root.dt
-                        variant: "secondary"
-                        small: true
+                        label: qsTr("字体大小")
+                        valueText: Math.round(value) + " px"
+                        // range from Core settings_presentation: min=12, max=72, step=1
+                        from: 12.0
+                        to: 72.0
+                        stepSize: 1.0
+                        onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_font_size = value }
+                        onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_font_size = value; root.debouncedSave() }
+                    }
+                    AppSlider {
+                        id: lineSpacingSlider
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        label: qsTr("行距倍数")
+                        valueText: Number(value).toFixed(1) + "x"
+                        // range from Core settings_presentation: min=1.0, max=3.0, step=0.1
+                        from: 1.0
+                        to: 3.0
+                        stepSize: 0.1
+                        onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_line_spacing = value }
+                        onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_line_spacing = value; root.debouncedSave() }
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("颜色来源")
+                        description: qsTr("选择素笺默认主题或已保存的设备配色")
+                        ModernComboBox {
+                            id: colorSourceCombo
+                            dt: root.dt
+                            model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
+                                // Issue #701 评论 5702214893: 颜色来源统一走
+                                // ThemeController，不再直接写
+                                // settingsBackendRef.setting_color_source。
+                                var source = ["built_in", "saved_palette"][index]
+                                themeControllerRef.set_color_source(source)
+                                root.settingsDirty = true
+                                root.saveAndNotify()
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
+                        title: qsTr("内置主题")
+                        description: qsTr("选择内置主题配色方案")
+                        ModernComboBox {
+                            id: builtinThemeCombo
+                            dt: root.dt
+                            property var _themes: {
+                                if (!settingsBackendRef) return []
+                                try { return JSON.parse(settingsBackendRef.list_builtin_themes_json()) } catch(e) { return [] }
+                            }
+                            model: _themes.map(function(t) { return t.name || t.theme_id })
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
+                                var themeId = _themes[index] ? _themes[index].theme_id : ""
+                                if (themeId.length > 0) {
+                                    // Issue #701 评论 5702214893: 内置主题统一走
+                                    // ThemeController。set_selected_builtin_theme_id
+                                    // 内部会同时把 color_source 设为 built_in。
+                                    themeControllerRef.set_selected_builtin_theme_id(themeId)
+                                    root.settingsDirty = true
+                                    root.saveAndNotify()
+                                }
+                            }
+                        }
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
+                        title: qsTr("已保存配色")
+                        description: qsTr("选择已保存的设备调色板")
+                        ModernComboBox {
+                            id: paletteRecordCombo
+                            dt: root.dt
+                            property var _records: {
+                                if (!settingsBackendRef) return []
+                                try { return JSON.parse(settingsBackendRef.list_palette_records_json()) } catch(e) { return [] }
+                            }
+                            model: _records.map(function(r) {
+                                var d = new Date(r.captured_at_ms)
+                                return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
+                            })
+                            onActivated: function(index) {
+                                if (!settingsBackendRef || !themeControllerRef || root.updatingValues) return
+                                var paletteId = _records[index] ? _records[index].palette_id : ""
+                                if (paletteId.length > 0) {
+                                    // Issue #701 评论 5702214893: 已保存 palette 统一走
+                                    // ThemeController。set_selected_palette_id 内部会
+                                    // 同时把 color_source 设为 saved_palette。
+                                    themeControllerRef.set_selected_palette_id(paletteId)
+                                    root.settingsDirty = true
+                                    root.saveAndNotify()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── 2. 编辑器和动画 (editor + animation) ──
+                SettingsSection {
+                    dt: root.dt
+                    title: qsTr("编辑器和动画")
+                    visible: root.sectionVisible(qsTr("编辑器和动画"))
+                    expanded: root.expandedSectionKey === qsTr("编辑器和动画")
+                    onToggleRequested: root.toggleSection(qsTr("编辑器和动画"))
+                    Layout.fillWidth: true
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("自动首行缩进")
+                        description: qsTr("回车时自动添加缩进")
+                        clickable: true
+                        onClicked: root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", !autoIndent.checked)
+                        ModernSwitch { id: autoIndent; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoIndent, "setting_auto_indent_enabled", v) } }
+                    }
+                    AppSlider {
+                        id: autoIndentWidth
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        label: qsTr("首行缩进宽度")
+                        valueText: Number(value).toFixed(1) + qsTr(" 字符")
+                        // range from Core settings_presentation: min=0.0, max=8.0, step=0.5
+                        from: 0.0
+                        to: 8.0
+                        stepSize: 0.5
+                        onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value }
+                        onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_indent_width = value; root.debouncedSave() }
+                    }
+                    // Issue #756 / Issue #785: 协同动画（吞字/吐字）显式模式开关。
+                    // Issue #815 评论 5955090551: true 时文字与光标是**同一条** caret track，
+                    // 吞吐字（CaretTrack）自己没有时长，整段协同动画速度就是这条 track 的
+                    // 时长，所以由下面的「协同动画时长」统一控制（绑定打字动画时长）。
+                    // false 时 typing/smooth 两个独立开关与各自时长仍然分开。
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("协同动画（吞字/吐字）")
+                        description: qsTr("文字与光标同事务协同，速度统一见下方「协同动画时长」")
+                        clickable: true
+                        onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
+                        ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }
+                    }
+                    // Issue #815 评论 5955090551: 协同动画时长。
+                    //
+                    // #815 之后协同模式下 InsertReveal / DeleteConceal 是
+                    // `VisualUnitTiming::CaretTrack`，自己**没有时长**，逐帧边界完全跟随
+                    // 同一笔 cursor track。也就是说：协同动画速度 = 这条 track 的时长。
+                    //
+                    // 而这条 track 的时长在 pipeline.rs 里取的是「打字动画时长」，所以这个
+                    // 滑块直接绑定 setting_typing_animation_duration_ms。绝不能绑定被隐藏的
+                    // setting_smooth_cursor_duration_ms——那正是实机上「动画快得看不见」的根因。
+                    //
+                    // 协同关闭时不显示，此时文字与光标各自独立时长（下面的两个滑块）。
+                    AppSlider {
+                        id: coordinatedAnimDuration
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        visible: coordinatedAnim.checked
+                        label: qsTr("协同动画时长")
+                        valueText: Math.round(value) + " ms"
+                        // 与打字动画时长同一个区间（Core settings_presentation: min=30, max=1000, step=10）
+                        from: 30
+                        to: 1000
+                        stepSize: 10
+                        onMoved: function() { root.setTextAnimationDuration(value) }
+                        onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
+                    }
+                    // Issue #808: 协同开启时整组隐藏（开关 + duration 滑块一起消失）。
+                    // Issue #815 评论 5955676896: 打字动画时长与上面的协同动画时长是同一个
+                    // 设置项，共用 root.textAnimationDurationValue，不各存一份。
+                    SettingsRow {
+                        visible: !coordinatedAnim.checked
+                        dt: root.dt
+                        title: qsTr("打字动画")
+                        description: qsTr("输入时字符从光标处吐出")
+                        clickable: true
+                        onClicked: root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", !typingAnim.checked)
+                        ModernSwitch { id: typingAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(typingAnim, "setting_typing_animation_enabled", v) } }
+                    }
+                    AppSlider {
+                        id: typingAnimDuration
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
+                        visible: !coordinatedAnim.checked
+                        label: qsTr("打字动画持续时间")
+                        valueText: Math.round(value) + " ms"
+                        // range from Core settings_presentation: min=30, max=1000, step=10
+                        from: 30
+                        to: 1000
+                        stepSize: 10
+                        onMoved: function() { root.setTextAnimationDuration(value) }
+                        onCommitted: function() { root.setTextAnimationDuration(value); root.debouncedSave() }
+                    }
+                    SettingsRow {
+                        visible: !coordinatedAnim.checked
+                        dt: root.dt
+                        title: qsTr("平滑光标")
+                        description: qsTr("光标移动更顺滑")
+                        clickable: true
+                        onClicked: root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", !smoothCursor.checked)
+                        ModernSwitch { id: smoothCursor; dt: root.dt; onToggled: function(v) { root.setSwitchValue(smoothCursor, "setting_smooth_cursor_enabled", v) } }
+                    }
+                    AppSlider {
+                        id: smoothCursorDuration
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        // Issue #808: 协同开启时整组隐藏，duration 不再改名兜底。
+                        visible: !coordinatedAnim.checked
+                        label: qsTr("平滑光标持续时间")
+                        valueText: Math.round(value) + " ms"
+                        // range from Core settings_presentation: min=30, max=1000, step=10
+                        from: 30
+                        to: 1000
+                        stepSize: 10
+                        onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value }
+                        onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
+                    }
+                }
+
+                // ── 4. AI (ai) ──
+                SettingsSection {
+                    dt: root.dt
+                    title: qsTr("AI")
+                    Layout.fillWidth: true
+                    expanded: root.expandedSectionKey === qsTr("AI")
+                    onToggleRequested: root.toggleSection(qsTr("AI"))
+                    visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
+                             && root.sectionVisible(qsTr("AI"))
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("启用 AI 功能")
+                        description: qsTr("控制 AI 功能入口显示")
+                        clickable: true
+                        onClicked: root.setSwitchValue(aiSwitch, "ai_enabled", !aiSwitch.checked)
+                        ModernSwitch { id: aiSwitch; dt: root.dt; onToggled: function(v) { root.setSwitchValue(aiSwitch, "ai_enabled", v) } }
+                    }
+                }
+            }
+
+            ColumnLayout {
+                id: rightSettingsColumn
+                width: settingsColumns.columnWidth
+                x: root.widePanel ? leftSettingsColumn.width + settingsColumns.gap : 0
+                y: root.widePanel ? 0 : leftSettingsColumn.implicitHeight + settingsColumns.gap
+                visible: true
+                spacing: root.dt.cardGap
+
+                // ── 3. 保存和同步 (save + sync) ──
+                SettingsSection {
+                    dt: root.dt
+                    title: qsTr("保存和同步")
+                    visible: root.sectionVisible(qsTr("保存和同步"))
+                    expanded: root.expandedSectionKey === qsTr("保存和同步")
+                    onToggleRequested: root.toggleSection(qsTr("保存和同步"))
+                    Layout.fillWidth: true
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("自动保存")
+                        description: qsTr("编辑时自动保存到本地")
+                        clickable: true
+                        onClicked: root.setSwitchValue(autoSave, "setting_auto_save_enabled", !autoSave.checked)
+                        ModernSwitch { id: autoSave; dt: root.dt; onToggled: function(v) { root.setSwitchValue(autoSave, "setting_auto_save_enabled", v) } }
+                    }
+                    // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("切换工作区")
+                        description: qsTr("切换到另一个工作区目录")
+                        clickable: true
+                        onClicked: root.switchWorkspaceRequested()
+                    }
+                    AppSlider {
+                        id: autoSaveDelay
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        label: qsTr("自动保存延迟")
+                        valueText: Math.round(value) + qsTr(" 秒")
+                        // range from Core settings_presentation: min=1, max=10, step=1
+                        from: 1
+                        to: 10
+                        stepSize: 1
+                        onMoved: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_save_delay_ms = value * 1000 }
+                        onCommitted: function() { if (!settingsBackendRef || root.updatingValues) return; settingsBackendRef.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
+                    }
+                    SyncPage {
+                        Layout.fillWidth: true
+                        dt: root.dt
+                        syncBackendRef: root.syncBackendRef
+                        workspaceBackendRef: root.workspaceBackendRef
+                        beforeSyncHook: function() {
+                            if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
+                            return true;
+                        }
+                        onSettingsChanged: root.settingsChanged()
+                        // Issue #762 评论 5826175490 第 4 点：转发 openConflict 信号给主窗口
+                        onOpenConflict: function(projectId, path) {
+                            root.openConflict(projectId, path)
+                        }
+                    }
+                }
+
+                // ── 5. 诊断与日志 (diagnostics) ──
+                SettingsSection {
+                    dt: root.dt
+                    title: qsTr("诊断与日志")
+                    visible: root.sectionVisible(qsTr("诊断与日志"))
+                    expanded: root.expandedSectionKey === qsTr("诊断与日志")
+                    onToggleRequested: root.toggleSection(qsTr("诊断与日志"))
+                    Layout.fillWidth: true
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("启用诊断日志")
+                        description: qsTr("记录应用运行日志，用于问题排查")
+                        clickable: true
+                        onClicked: root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", !diagnosticsEnabled.checked)
+                        ModernSwitch { id: diagnosticsEnabled; dt: root.dt; onToggled: function(v) {
+                            root.setSwitchValue(diagnosticsEnabled, "setting_diagnostics_enabled", v)
+                            diagnosticsVerbose.enabled = v
+                            if (!v) {
+                                diagnosticsVerbose.checked = false
+                                root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", false)
+                            }
+                        }}
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("详细日志")
+                        description: qsTr("记录更详细的调试信息")
+                        clickable: true
+                        onClicked: root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", !diagnosticsVerbose.checked)
+                        ModernSwitch { id: diagnosticsVerbose; dt: root.dt; onToggled: function(v) { root.setSwitchValue(diagnosticsVerbose, "setting_diagnostics_verbose", v) } }
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("清空日志")
+                        description: qsTr("删除所有日志文件")
+                        clickable: true
                         onClicked: {
                             if (!root.settingsBackendRef) return
-                            var result = root.settingsBackendRef.export_diagnostics_pack()
-                            // parse JSON envelope
-                            try {
-                                var obj = JSON.parse(result)
-                                if (obj.success) {
-                                    var zipPath = obj.nativeZipPath || obj.zipPath || obj.nativePath || obj.path || ""
-                                    var exportDir = obj.nativeExportDir || obj.exportDir || ""
-                                    diagnosticsFeedback.message = qsTr("日志 zip: ") + zipPath + "\n" + qsTr("导出目录: ") + exportDir
-                                    if (obj.openedExportDir === false && obj.openExportDirError) {
-                                        diagnosticsFeedback.message += "\n" + qsTr("打开目录失败：") + obj.openExportDirError
-                                    }
-                                    diagnosticsFeedback.isError = false
-                                    // 后端已用平台文件管理器打开目录；作为兜底，QML 尝试打开导出目录 URL。
-                                    if (obj.openedExportDir === false && obj.exportDirUrl) {
-                                        Qt.openUrlExternally(obj.exportDirUrl)
-                                    }
-                                } else {
-                                    diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
-                                    diagnosticsFeedback.isError = true
-                                }
-                            } catch(e) {
-                                // 兼容旧格式：纯路径字符串
-                                if (result && result.length > 0 && !result.startsWith("error.")) {
-                                    diagnosticsFeedback.message = qsTr("已导出到: ") + result
-                                    diagnosticsFeedback.isError = false
-                                } else {
-                                    diagnosticsFeedback.message = qsTr("导出失败")
-                                    diagnosticsFeedback.isError = true
-                                }
-                            }
+                            root.settingsBackendRef.clear_logs()
                         }
                     }
-                }
-                AppText {
-                    id: diagnosticsFeedback
-                    dt: root.dt
-                    property string message: ""
-                    property bool isError: false
-                    visible: message.length > 0
-                    text: diagnosticsFeedback.message
-                    color: isError ? dt.error : dt.textSecondary
-                    font.pointSize: dt.captionPt
-                    font.family: dt.fontFamily
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("复制设备信息")
-                    description: qsTr("将设备信息复制到剪贴板")
-                    clickable: true
-                    onClicked: {
-                        if (!root.settingsBackendRef) return
-                        var info = root.settingsBackendRef.copy_device_info()
-                        if (info && info.length > 0) {
-                            var result = root.settingsBackendRef.copy_text_to_clipboard(info)
-                            // result 是 JSON envelope：success=true 表示成功
-                            try {
-                                var obj = JSON.parse(result)
-                                if (obj.success) {
-                                    deviceInfoFeedback.message = qsTr("已复制")
-                                } else {
-                                    deviceInfoFeedback.message = qsTr("复制失败：") + (obj.messageKey || obj.rawError || qsTr("未知错误"))
-                                }
-                            } catch(e) {
-                                if (result === "ok" || result.length > 0) {
-                                    deviceInfoFeedback.message = qsTr("已复制")
-                                } else {
-                                    deviceInfoFeedback.message = qsTr("复制失败")
+                    // 导出诊断包：独立行，明确按钮
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: dt.sp12
+                        AppText {
+                            dt: root.dt
+                            Layout.fillWidth: true
+                            text: qsTr("导出诊断包")
+                            color: dt.textSecondary
+                            font.pointSize: dt.captionPt
+                            font.family: dt.fontFamily
+                        }
+                        AppButton {
+                            text: qsTr("导出")
+                            dt: root.dt
+                            variant: "secondary"
+                            small: true
+                            onClicked: {
+                                if (!root.settingsBackendRef) return
+                                var result = root.settingsBackendRef.export_diagnostics_pack()
+                                // parse JSON envelope
+                                try {
+                                    var obj = JSON.parse(result)
+                                    if (obj.success) {
+                                        var zipPath = obj.nativeZipPath || obj.zipPath || obj.nativePath || obj.path || ""
+                                        var exportDir = obj.nativeExportDir || obj.exportDir || ""
+                                        diagnosticsFeedback.message = qsTr("日志 zip: ") + zipPath + "\n" + qsTr("导出目录: ") + exportDir
+                                        if (obj.openedExportDir === false && obj.openExportDirError) {
+                                            diagnosticsFeedback.message += "\n" + qsTr("打开目录失败：") + obj.openExportDirError
+                                        }
+                                        diagnosticsFeedback.isError = false
+                                        // 后端已用平台文件管理器打开目录；作为兜底，QML 尝试打开导出目录 URL。
+                                        if (obj.openedExportDir === false && obj.exportDirUrl) {
+                                            Qt.openUrlExternally(obj.exportDirUrl)
+                                        }
+                                    } else {
+                                        diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
+                                        diagnosticsFeedback.isError = true
+                                    }
+                                } catch(e) {
+                                    // 兼容旧格式：纯路径字符串
+                                    if (result && result.length > 0 && !result.startsWith("error.")) {
+                                        diagnosticsFeedback.message = qsTr("已导出到: ") + result
+                                        diagnosticsFeedback.isError = false
+                                    } else {
+                                        diagnosticsFeedback.message = qsTr("导出失败")
+                                        diagnosticsFeedback.isError = true
+                                    }
                                 }
                             }
-                        } else {
-                            deviceInfoFeedback.message = qsTr("获取设备信息失败")
                         }
                     }
                     AppText {
-                        id: deviceInfoFeedback
+                        id: diagnosticsFeedback
                         dt: root.dt
                         property string message: ""
+                        property bool isError: false
                         visible: message.length > 0
-                        text: deviceInfoFeedback.message
-                        color: dt.textSecondary
+                        text: diagnosticsFeedback.message
+                        color: isError ? dt.error : dt.textSecondary
                         font.pointSize: dt.captionPt
                         font.family: dt.fontFamily
                     }
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("打开日志目录")
-                    description: qsTr("在文件管理器中打开日志目录")
-                    clickable: true
-                    onClicked: {
-                        if (!root.settingsBackendRef) return
-                        root.settingsBackendRef.open_log_directory()
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("复制设备信息")
+                        description: qsTr("将设备信息复制到剪贴板")
+                        clickable: true
+                        onClicked: {
+                            if (!root.settingsBackendRef) return
+                            var info = root.settingsBackendRef.copy_device_info()
+                            if (info && info.length > 0) {
+                                var result = root.settingsBackendRef.copy_text_to_clipboard(info)
+                                // result 是 JSON envelope：success=true 表示成功
+                                try {
+                                    var obj = JSON.parse(result)
+                                    if (obj.success) {
+                                        deviceInfoFeedback.message = qsTr("已复制")
+                                    } else {
+                                        deviceInfoFeedback.message = qsTr("复制失败：") + (obj.messageKey || obj.rawError || qsTr("未知错误"))
+                                    }
+                                } catch(e) {
+                                    if (result === "ok" || result.length > 0) {
+                                        deviceInfoFeedback.message = qsTr("已复制")
+                                    } else {
+                                        deviceInfoFeedback.message = qsTr("复制失败")
+                                    }
+                                }
+                            } else {
+                                deviceInfoFeedback.message = qsTr("获取设备信息失败")
+                            }
+                        }
+                        AppText {
+                            id: deviceInfoFeedback
+                            dt: root.dt
+                            property string message: ""
+                            visible: message.length > 0
+                            text: deviceInfoFeedback.message
+                            color: dt.textSecondary
+                            font.pointSize: dt.captionPt
+                            font.family: dt.fontFamily
+                        }
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("打开日志目录")
+                        description: qsTr("在文件管理器中打开日志目录")
+                        clickable: true
+                        onClicked: {
+                            if (!root.settingsBackendRef) return
+                            root.settingsBackendRef.open_log_directory()
+                        }
                     }
                 }
-            }
 
-            // ── 6. 关于 (about) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("关于")
-                visible: root.sectionVisible(qsTr("关于"))
-                expanded: root.expandedSectionKey === qsTr("关于")
-                onToggleRequested: root.toggleSection(qsTr("关于"))
-                Layout.fillWidth: true
-                SettingsRow {
+                // ── 6. 关于 (about) ──
+                SettingsSection {
                     dt: root.dt
-                    title: qsTr("应用名")
-                    description: qsTr("素笺写作")
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("作者")
-                    description: "Xiwei753"
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("项目地址")
-                    description: "github.com/Xiwei753/xiezuoruanjian"
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("开源协议")
-                    description: "GPLv3"
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("版本信息")
-                    description: qsTr("Linux_qt 客户端")
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("工作区路径")
-                    description: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("动作注册表")
-                    description: qsTr("查看已注册的动作")
-                    clickable: true
-                    onClicked: { /* Navigate to ActionRegistryPage later */ }
+                    title: qsTr("关于")
+                    visible: root.sectionVisible(qsTr("关于"))
+                    expanded: root.expandedSectionKey === qsTr("关于")
+                    onToggleRequested: root.toggleSection(qsTr("关于"))
+                    Layout.fillWidth: true
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("应用名")
+                        description: qsTr("素笺写作")
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("作者")
+                        description: "Xiwei753"
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("项目地址")
+                        description: "github.com/Xiwei753/xiezuoruanjian"
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("开源协议")
+                        description: "GPLv3"
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("版本信息")
+                        description: qsTr("Linux_qt 客户端")
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("工作区路径")
+                        description: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
+                    }
+                    SettingsRow {
+                        dt: root.dt
+                        title: qsTr("动作注册表")
+                        description: qsTr("查看已注册的动作")
+                        clickable: true
+                        onClicked: { /* Navigate to ActionRegistryPage later */ }
+                    }
                 }
             }
         }

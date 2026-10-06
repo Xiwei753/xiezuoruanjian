@@ -285,4 +285,61 @@ impl AppBackend {
             bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         }
     }
+
+    /// 更新章节备注（note 字段，独立于正文）。
+    ///
+    /// 直接调用 Core 的 `update_chapter_note`，返回统一 envelope；
+    /// 不在平台端保存第二份 note，Core 是 note 的唯一事实来源。
+    pub(crate) fn update_chapter_note(
+        &mut self,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        note: QString,
+    ) -> QJsonObject {
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        let note_str = note.to_string();
+        self.debug_log(
+            "chapter",
+            "update_chapter_note_start",
+            &format!(
+                "project_id={}, volume_id={}, chapter_id={}, note_len={}",
+                p,
+                v,
+                c,
+                note_str.len()
+            ),
+        );
+
+        if let Some(api) = self.core_api() {
+            match api.update_chapter_note(&p, &v, &c, &note_str) {
+                Ok(updated) => {
+                    self.debug_log(
+                        "chapter",
+                        "update_chapter_note_success",
+                        &format!("updated={}", updated),
+                    );
+                    return bridge_success_object(
+                        serde_json::to_value(updated).unwrap_or_default(),
+                    );
+                }
+                Err(e) => {
+                    self.debug_error(
+                        "chapter",
+                        "update_chapter_note_failed",
+                        &format!("error={}", e),
+                    );
+                    return bridge_error_object(
+                        "error.io",
+                        "CORE_ERROR",
+                        &format!("更新章纲失败: {}", e),
+                    );
+                }
+            }
+        }
+
+        bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
+    }
 }
