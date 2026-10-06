@@ -39,6 +39,10 @@ Rectangle {
     readonly property real _fontLg: dt.fontLgPt
 
     property var editorBackendRef: null
+    // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
+    // 再下发给 StarMapPreviewPage，不在 RightDrawer 内部自造星图数据。
+    property var starmapBackendRef: null
+    property var appState: ({})
     property bool isOpen: false
     // Issue #829：当前工具 key（"" 表示 pane 收起）。
     // 手稿固定入口是 starmap / ai；conflict 只在运行时确有冲突时追加。
@@ -162,17 +166,30 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Issue #829：手稿里的星图 / AI 内容槽。
-                // 本轮只固定 ToolPane 的区域和切换键，不在 QML 里伪造业务数据；
-                // 后续把真实星图 / AI 组件直接挂进这两个 Item 即可，不再改外层工作台骨架。
-                Item {
+                // Issue #835：星图槽位接入真实 StarMapPreviewPage，
+                // 数据通过 starmapBackendRef / appState 透传，不在 QML 里伪造星图业务状态。
+                StarMapPreviewPage {
                     visible: root.selectedTool === "starmap"
                     anchors.fill: parent
+                    dt: root.dt
+                    starmapBackendRef: root.starmapBackendRef
+                    appState: root.appState
                 }
 
+                // Issue #835：AI 真实会话面板尚未接入，不弹完全空白的 pane。
+                // 这里放一段明确占位文字，等真实 AI 组件接入后再替换。
                 Item {
                     visible: root.selectedTool === "ai"
                     anchors.fill: parent
+
+                    AppText {
+                        dt: root.dt
+                        anchors.centerIn: parent
+                        text: qsTr("AI 功能开发中，敬请期待")
+                        color: root._textSecondary
+                        font.pointSize: root._fontLg
+                        horizontalAlignment: Text.AlignHCenter
+                    }
                 }
 
                 // 统计 — 复用现有 StatsPreviewPage

@@ -650,6 +650,8 @@ ApplicationWindow {
                 dt: designTokens
                 projectBackendRef: projectBackend
                 editorBackendRef: editorBackend
+                // Issue #835：透传星图后端给 WritingWorkspace，再由它透传给 RightDrawer。
+                starmapBackendRef: starmapBackend
                 // Issue #709 评论 issue-body-709: 传入 themeController 使
                 // EditorController.logRenderColorProbe 能读取 runtime state。
                 themeController: themeController
