@@ -588,8 +588,41 @@ Item {
         return scenePathKey + "/embed_" + instanceId
     }
 
-    // 两个 StarMapTargetPathDto 是否指向同一目标（starmapId + segments + target 全等）。
-    // segments/target 是嵌套对象，用 JSON.stringify 做结构比较，避免漏判字段顺序。
+    // 两个 StarMapTargetPathDto 是否指向同一目标（语义比较）。
+    // Core 返回的 DTO 会把未使用的 Option 字段序列化成 null（如 nodeId: null,
+    // anchorId: null, projectId: null …），而 QML 构造的比较对象只含本类型
+    // 有意义的字段。用 JSON.stringify 整对象比较会因为 null 字段不匹配而漏判，
+    // 所以按 type 分支只比对该 type 有意义的字段，null/undefined/缺失字段不影响相等。
+    function _sameSegment(a, b) {
+        if (a.type !== b.type) return false
+        if (a.type === "enterEmbed")
+            return (a.instanceId || "") === (b.instanceId || "")
+        if (a.type === "enterPortal")
+            return (a.nodeId || "") === (b.nodeId || "")
+        return false
+    }
+    function _sameTarget(a, b) {
+        if (a.type !== b.type) return false
+        switch (a.type) {
+        case "node":
+            return (a.nodeId || "") === (b.nodeId || "")
+        case "starmap":
+            return true
+        case "anchor":
+            return (a.nodeId || "") === (b.nodeId || "")
+                    && (a.anchorId || "") === (b.anchorId || "")
+        default:
+            // chapterRange / entity / externalUri 等类型：逐字段比非空值
+            return (a.nodeId || "") === (b.nodeId || "")
+                    && (a.anchorId || "") === (b.anchorId || "")
+                    && (a.projectId || "") === (b.projectId || "")
+                    && (a.volumeId || "") === (b.volumeId || "")
+                    && (a.chapterId || "") === (b.chapterId || "")
+                    && (a.entityType || "") === (b.entityType || "")
+                    && (a.entityId || "") === (b.entityId || "")
+                    && (a.uri || "") === (b.uri || "")
+        }
+    }
     function _sameSourcePath(a, b) {
         if (!a || !b) return false
         if (a.starmapId !== b.starmapId) return false
@@ -597,11 +630,9 @@ Item {
         var bSeg = b.segments || []
         if (aSeg.length !== bSeg.length) return false
         for (var i = 0; i < aSeg.length; i++) {
-            if (JSON.stringify(aSeg[i]) !== JSON.stringify(bSeg[i])) return false
+            if (!_sameSegment(aSeg[i], bSeg[i])) return false
         }
-        if (JSON.stringify(a.target || {}) !== JSON.stringify(b.target || {}))
-            return false
-        return true
+        return _sameTarget(a.target || {}, b.target || {})
     }
 
     function listHyperlinksForNode(nodeId) {

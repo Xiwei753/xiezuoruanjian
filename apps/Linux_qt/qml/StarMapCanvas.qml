@@ -159,30 +159,34 @@ Item {
     // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
     // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
     // kind/id/targetPath）。scene 矩形由 hit.owner.itemSceneRect 给出（scene/world 坐标）。
-    // Issue #832 评论 6014361379：
+    // Issue #832 评论 6014908211：
+    // - 父子校验必须在 focusOnSceneRect 之前：失败时不移动相机、不进栈。
+    // - hit.scenePathKey 是 embed 所属的 Scene；只有当它等于当前焦点
+    //   scenePathKey 时，进入的 child 才是当前焦点的直接子层。
+    // - 直接子层：push 一项，保证 stack 相邻两项永远是直接父子。
+    // - 兄弟/祖先/深层：不改变焦点和相机。深层目标（hit.scenePathKey 是
+    //   focusScenePathKey 的真后代）理论上应补齐中间父链，但中间层的
+    //   sceneRect 不可得，贸然 push 会破坏 recomputeFocusFromCoverage 的
+    //   覆盖率滞回；保持不动更安全。
     // - scenePathKey 记录进入后的 child scene path（hit.owner.enteredChildSceneKey），
     //   不是 hit.scenePathKey（那是 embed 所属父 Scene，焦点身份会慢一层）。
     // - 保存进入前的父层相机 parentCamera，pop 时恢复原视角。
-    // - 校验严格后代才能 push：点到兄弟/祖先时只聚焦相机不进栈。
     function focusEmbed(hit) {
         if (!hit || !hit.owner)
             return
         var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
         if (!rect)
             return
-        // 先保存当前父层相机，pop 时恢复到进入前的原视角。
-        var parentCamera = { zoom: zoomLevel, panX: panX, panY: panY }
-        focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
         // 真正的 child scene path：hit.scenePathKey 是 embed 所属父 Scene，
         // 进入后的 child scene 要再往下钻一层。
         var childKey = hit.owner.enteredChildSceneKey(hit.id)
-        // 校验严格后代才能 push：点到兄弟/祖先时只聚焦相机不进栈，
-        // 避免把兄弟 B 伪造成 root->A->B。focusStack 为空（root）时直接 push。
-        if (focusStack.length > 0) {
-            var topKey = focusStack[focusStack.length - 1].scenePathKey
-            if (!childKey.startsWith(topKey + "/"))
-                return
-        }
+        // 父子校验在 focusOnSceneRect 之前：只有 embed 所属 Scene 等于当前
+        // 焦点 scenePathKey 时，child 才是直接子层。否则不移动相机、不进栈。
+        if (hit.scenePathKey !== focusScenePathKey)
+            return
+        // 校验通过：保存父层相机，移动相机，推进焦点链。
+        var parentCamera = { zoom: zoomLevel, panX: panX, panY: panY }
+        focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
         var entry = {
             scenePathKey: childKey,
             starmapId: hit.starmapId,
