@@ -272,23 +272,30 @@ Dialog {
             if (contentItem) contentItem.acceptedButtons = Qt.NoButton
         }
         contentWidth: availableWidth
-        contentHeight: root.widePanel ? Math.max(leftSettingsColumn.implicitHeight, rightSettingsColumn.implicitHeight) : leftSettingsColumn.implicitHeight
+        contentHeight: settingsColumns.height
 
-        // Issue #833/#835：设置内容外层用 RowLayout，宽屏拆两列 ColumnLayout，
-        // 窄屏右列 visible:false 退化为单列。不再用 GridLayout columns=2，避免两列
-        // 不同 implicitHeight 形成参差不齐的洞。左列：外观/编辑器和动画/AI；
+        // Issue #835 评论 6019235318: 外层用普通 Item，宽屏左右摆两列、窄屏上下接，
+        // 两组 ColumnLayout 都 visible:true，窄屏不再丢掉右半边设置。
+        // 不用 RowLayout+visible:false（窄屏会把右列三组设置删没），也不用旧
+        // GridLayout columns=2（左右卡片互相拉高）。左列：外观/编辑器和动画/AI；
         // 右列：保存和同步/诊断与日志/关于。每个 SettingsSection 根据
         // expandedSectionKey 设置 expanded，toggleRequested 时切换 key；点已展开项则收起。
-        RowLayout {
-            id: settingsColumn
+        Item {
+            id: settingsColumns
             width: settingsScroll.availableWidth
-            spacing: root.widePanel ? dt.cardGap : 0
+            readonly property real gap: root.dt.cardGap
+            readonly property real columnWidth:
+                root.widePanel ? (width - gap) / 2 : width
+            height: root.widePanel
+                ? Math.max(leftSettingsColumn.implicitHeight, rightSettingsColumn.implicitHeight)
+                : leftSettingsColumn.implicitHeight + gap + rightSettingsColumn.implicitHeight
 
             ColumnLayout {
                 id: leftSettingsColumn
-                Layout.fillWidth: true
-                Layout.preferredWidth: root.widePanel ? settingsColumn.width / 2 : settingsColumn.width
-                spacing: dt.cardGap
+                width: settingsColumns.columnWidth
+                x: 0
+                y: 0
+                spacing: root.dt.cardGap
 
                 // ── 1. 外观 (appearance) ──
                 SettingsSection {
@@ -566,10 +573,11 @@ Dialog {
 
             ColumnLayout {
                 id: rightSettingsColumn
-                Layout.fillWidth: true
-                Layout.preferredWidth: root.widePanel ? settingsColumn.width / 2 : 0
-                visible: root.widePanel
-                spacing: dt.cardGap
+                width: settingsColumns.columnWidth
+                x: root.widePanel ? leftSettingsColumn.width + settingsColumns.gap : 0
+                y: root.widePanel ? 0 : leftSettingsColumn.implicitHeight + settingsColumns.gap
+                visible: true
+                spacing: root.dt.cardGap
 
                 // ── 3. 保存和同步 (save + sync) ──
                 SettingsSection {

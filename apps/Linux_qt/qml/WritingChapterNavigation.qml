@@ -71,10 +71,16 @@ Rectangle {
         return !!root.volumeExpandedMap[volumeId]
     }
 
+    // Issue #835 评论 6019235318: property var 修改 JS 对象内部成员不触发
+    // changed 信号，必须赋一个全新对象引用，onVolumeExpandedMapChanged 才会
+    // 可靠触发并重建 treeModel。见 https://doc.qt.io/qt-6.12/qml-var.html
     function toggleVolumeExpanded(volumeId) {
-        var m = root.volumeExpandedMap
-        m[volumeId] = !m[volumeId]
-        root.volumeExpandedMap = m
+        var next = {}
+        for (var key in root.volumeExpandedMap) {
+            next[key] = root.volumeExpandedMap[key]
+        }
+        next[volumeId] = !root.isVolumeExpanded(volumeId)
+        root.volumeExpandedMap = next
     }
 
     function volumesArray() {
