@@ -191,15 +191,32 @@
 //! 也不能简单不 claim：那会让 Conceal 从 `base_snapshot` 的**完整不透明** `fi`
 //! 起步，屏幕从 0.58 跳到 1.0 再开始吞，同样是跳。
 //!
-//! 所以 [`build_disappearing_group`] 只接管**恰好这一种** pure delete：old cluster
-//! 的视觉键同时满足「出现在 `previous.groups[*].new_atoms` 的视觉键集合里」与
-//! 「`current_visuals` 里有 exact visual」。它产出 `old = [从当前帧接过来的 fi] /
-//! new = []`，与普通 group 共用同一条 timeline，old 侧从上一帧真实
-//! `rect / source / opacity` 继续朝 0 淡，`old_owned_in_base` 照常 claim，
-//! Conceal 排除它是对的 —— 删除视觉现在由 shaping 层自己完成。
+//! 所以判据落在「old cluster 的视觉键同时满足『出现在
+//! `previous.groups[*].new_atoms` 的视觉键集合里』与『`current_visuals` 里有
+//! exact visual』」—— 这两条回答的都是「上一帧这块字归谁画」，不引入任何
+//! origin 枚举。
 //!
-//! 判据仍是纯视觉身份，不引入 origin 枚举；两个条件缺一不可，缺哪一条都退回
-//! 普通 Delete / Conceal。
+//! ## 评论 31：pure delete 的 owner 下一站是 Conceal，不是 shaping 淡出
+//!
+//! 评论 30 让本层自己从当前帧把被删的 `fi` 淡掉，虽然补上了「一帧消失」，
+//! 却让吞字吐字长出**两条并行时间轴**：遮罩前沿按方向 clip 一条，shaping 的
+//! `old -> opacity 0` 又一条。同一块字同时被两条曲线控制，方向、进度、收尾
+//! 都对不齐，而 #826 要求的是**单一**前沿。
+//!
+//! 所以本层的职责收窄为**只交棒、不自留**：
+//!
+//! - [`absorb_previous_new_side`] 按上面那套判据把被删的 old cluster 记进
+//!   `absorbed`，让 previous rest 不再把对应的 previous new atom 当 kept child
+//!   —— 否则那份 visual 会既归 rest 又归 Conceal；
+//! - 本层**不 claim、不建 group、不消费 current visual**。`old_owned_in_base`
+//!   里不再有被删的 `fi`，Conceal 因此必须亲自画它；
+//! - coordinator 在调 [`build_or_retarget`] 之前用**同一套判据**采
+//!   `conceal_handoffs`（上一帧真实的 snapshot / source / rect / opacity），
+//!   frontier 拿它从真实起点开始按方向缩 keep rect。`opacity` 是起点常量，
+//!   时间只由遮罩前沿的 clip 表达。
+//!
+//! 历史 old `f` residual 与其它没被碰到的 previous new child 仍留在 previous
+//! rest 组里继续淡 —— 它们没被删除，下一帧照样由本层交棒。
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -436,37 +453,28 @@ impl ShapingTransitionState {
                 continue;
             }
             if component.new_nodes.is_empty() {
-                // ── Issue #826 评论 30 阻塞 ──────────────────────────────
+                // ── Issue #826 评论 31 阻塞 ──────────────────────────────
                 //
-                // 「纯删 EditFrontier 自己就够」**只对 canonical owner 成立**。
-                // 如果这块 old cluster 上一帧还由 ShapingTransition 的 new side
-                // 在画，就没有任何层从当前画面接手：new atom 本笔直接不进新
-                // groups，而 `old_owned_in_base` 仍然 claim 它、Conceal 又因此
-                // 排除它、canonical target 里也没有它 —— 那块正在淡入的字会
-                // 一帧消失。
+                // 评论 30 先确认了：如果这块 old cluster 上一帧还由
+                // ShapingTransition 的 new side 在画，普通 Delete/Conceal 就接不住
+                // —— 新 groups 里没有它，`old_owned_in_base` 却 claim 它，
+                // Conceal 因此排除，canonical target 也没有它，一帧消失。
                 //
-                // 只有**恰好这一种** pure delete 交给本层，由 shaping 从当前帧
-                // 淡出；其余 pure delete 原样走 Delete Frontier / Conceal。
-                let Some((disappearing, claims)) = build_disappearing_group(
-                    &component.old_nodes,
-                    &old_side,
-                    current_visuals,
-                    previous,
-                    &mut consumed,
-                ) else {
-                    continue;
-                };
-                // 本笔接管了这些 old cluster：既 claim，也吸收掉上一份 new 侧
-                // 对应的 child，否则 previous rest 会把它当 kept child 再算一次。
-                for range in claims {
+                // 评论 31 推翻了「让 shaping 自己把它淡掉」的收尾：吞字吐字
+                // 的唯一交棒对象是**单一遮罩前沿**，shaping 不该再养一条并行的
+                // 时间轴。本层因此只做一件事 —— 把这些 old cluster 记进
+                // `absorbed`，让 previous rest 不再把对应的 previous new atom
+                // 当 kept child（否则那份 visual 会既归 rest 又归 Conceal）。
+                // 真正的 owner 交接由 coordinator 的 `conceal_handoffs` 完成：
+                // 它按**完全相同**的判据采下一份「上一帧真实」的
+                // snapshot/source/rect/opacity，交给 Delete/Replace frontier。
+                //
+                // 不 claim、不建 group、不消费 current visual。
+                for range in absorb_previous_new_side(&component.old_nodes, &old_side, previous) {
                     if !absorbed.contains(&range) {
                         absorbed.push(range);
                     }
-                    if !old_owned_in_base.contains(&range) {
-                        old_owned_in_base.push(range);
-                    }
                 }
-                groups.push(disappearing);
                 continue;
             }
             if !component.needs_transition(
@@ -823,36 +831,31 @@ fn visual_from(atom: &VisualClusterAtom, side: &ShapingTransitionSide) -> Curren
     }
 }
 
-/// Issue #826 评论 30：pure delete 的 old cluster 此刻正由上一份 ShapingTransition
-/// 的 **new side** 持有时，本层必须先把 owner 从当前帧接过来。
+/// Issue #826 评论 31：pure delete 的 old cluster 此刻正由上一份 ShapingTransition
+/// 的 **new side** 持有时，本层要为这笔删除**让位**，而不是接管。
 ///
-/// 判据完全是视觉身份，不引入任何 origin 枚举：
+/// 判据只有一条，完全是视觉身份，不引入任何 origin 枚举：本笔 old cluster 的
+/// 视觉键 `(base_line.id, base_cluster_range)` 必须出现在
+/// `previous.groups[*].new_atoms` 的视觉键集合里 —— 这才说明它是上一份 shaping
+/// 的 current new side，而不是某个 canonical 字或历史残影。
 ///
-/// - 本笔 old cluster 的视觉键 `(base_line.id, base_cluster_range)`；
-/// - 它必须出现在 `previous.groups[*].new_atoms` 的视觉键集合里 —— 说明它是
-///   上一份 shaping 的 current new side，而不是某个 canonical 字或历史残影；
-/// - 并且 `current_visuals` 里存在这个 exact visual，才能拿它的**上一帧真实**
-///   `rect / source / opacity` 起步。
+/// 返回这些 range，调用方只把它们推进 `absorbed`：previous rest 因此不再把
+/// 对应的 previous new atom 当 kept child，那份 visual 就干净地交给 Conceal。
 ///
-/// 成功时返回 `old = [接过来的 fi] / new = []` 的 disappearing group。它与普通
-/// group 共用同一条 ShapingTransition timeline：old 侧继续朝 0 淡，没有 new side，
-/// `sample_old_side()` 对 `new_region = None` 天然按原地淡出处理。
-///
-/// 抓不到 exact visual 就返回 `None` —— 那一帧没有那份像素，交给普通
-/// Delete / Conceal 就是对的，绝不因为「形状上是 pure delete」就无条件接管。
-fn build_disappearing_group(
+/// 本层**不 claim、不建 group、不消费 current visual**。吞字吐字的下一站只有
+/// 单一遮罩前沿，shaping 不再留一条并行的时间轴（评论 30 曾让它自己淡出，
+/// 评论 31 推翻）。coordinator 用同一套判据另采 `conceal_handoffs`。
+fn absorb_previous_new_side(
     old_nodes: &[usize],
     old_side: &ClusterIndex<'_>,
-    current_visuals: &[CurrentVisualCluster],
     previous: Option<&ShapingTransitionState>,
-    consumed: &mut HashSet<usize>,
-) -> Option<(ShapingTransitionGroup, Vec<(usize, usize)>)> {
-    let previous = previous?;
-    let mut old_atoms = Vec::new();
-    let mut claims: Vec<(usize, usize)> = Vec::new();
+) -> Vec<(usize, usize)> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    let mut absorbed: Vec<(usize, usize)> = Vec::new();
     for node in old_nodes {
         let (line, cluster) = old_side.cluster(*node);
-        let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
         let key = (line.id, cluster_range);
         let held_by_previous_new_side = previous.groups.iter().any(|group| {
@@ -862,36 +865,15 @@ fn build_disappearing_group(
                 .any(|atom| atom.snapshot_id == key.0 && atom.visual_cluster_range == key.1)
         });
         if !held_by_previous_new_side {
-            // 不是上一份 shaping 的 current new side：这块字此刻由别人负责，
-            // 本层不认领，普通 Conceal 照常吞。
+            // 不是上一份 shaping 的 current new side：没有需要让位的 previous
+            // new child，这块字本就归普通 Delete / Conceal。
             continue;
         }
-        let Some(handoff) = take_visual_handoff(current_visuals, consumed, key) else {
-            // 判据只回答「上一帧它归谁」，真正接手还得**这一帧真的在画**。
-            continue;
-        };
-        // 没有 target —— 这一块已经整块删除，因此没有 `handoff_keys`。
-        old_atoms.push(atom_from_cluster(
-            cluster_range,
-            Vec::new(),
-            line,
-            cluster,
-            rect,
-            Some(handoff),
-            false,
-        ));
-        claims.push(cluster_range);
+        if !absorbed.contains(&cluster_range) {
+            absorbed.push(cluster_range);
+        }
     }
-    if old_atoms.is_empty() {
-        return None;
-    }
-    Some((
-        ShapingTransitionGroup {
-            old_atoms,
-            new_atoms: Vec::new(),
-        },
-        claims,
-    ))
+    absorbed
 }
 
 /// 为一个新 component 造一个 group。
@@ -1510,7 +1492,7 @@ fn collect_components(
         // 根因：这里原本连纯删一起滤掉，`build_or_retarget()` 那句
         // 「pure delete EditFrontier 自己就够」的 `continue` 根本轮不到执行，
         // 于是被删的 old cluster 只能落到 `old_owned_in_base` 上却没人画它。
-        // 是否真的接管由 `build_disappearing_group()` 按视觉身份逐个判。
+        // 是否需要为它让位由 `absorb_previous_new_side()` 按视觉身份逐个判。
         .filter(|component| !component.old_nodes.is_empty())
         .collect();
     components.sort_by_key(|component| {

@@ -23,11 +23,15 @@ use super::{visible_source_slice, ShapingTransitionState};
 use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
 use crate::sujian_editor_item::animation::coordinator::EditFrontierRequest;
 use crate::sujian_editor_item::animation::coordinator::LinuxEditorAnimationCoordinator;
-use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
+use crate::sujian_editor_item::animation::edit_frontier::{ConcealDirection, FrontierGlyph};
 use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
 use crate::sujian_editor_item::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
     ShapingIdentity, SourceRect,
+};
+use crate::sujian_editor_item::render_plan::{
+    CursorRenderState, CursorStyle, SelectionPreeditPlan, SelectionPreeditStyle,
+    TextAnimationGlyphInfo,
 };
 
 const DURATION_MS: u64 = 160;
@@ -2091,9 +2095,9 @@ fn historical_old_range_does_not_exclude_unrelated_unchanged_cluster_from_reflow
     );
 }
 
-// ── 评论 30：pure delete 落在 shaping new side 上必须从当前帧接手 ────────────
+// ── 评论 31：pure delete 的 owner 下一站是单一遮罩前沿 ────────────────────────
 
-/// 评论 30 fixture：`a -> af` 再 `af -> afi`，采样时刻落在第二笔后 40ms ——
+/// 评论 31 fixture：`a -> af` 再 `af -> afi`，采样时刻落在第二笔后 40ms ——
 /// 此时 `f -> fi` 这组 ShapingTransition 正跑到中途，屏幕真实状态是
 /// 「历史 old `f` 淡出中 + current new `fi` 淡入到 0..1 之间」。
 struct ActiveFiSnapshot {
@@ -2106,7 +2110,7 @@ struct ActiveFiSnapshot {
     source_rect: SourceRect,
     /// current fi 上一帧的真实位置。
     rect: SourceRect,
-    /// current fi 上一帧的真实不透明度（必须严格落在 0..1 之外才叫「正在淡入」）。
+    /// current fi 上一帧的真实不透明度。
     opacity: f64,
 }
 
@@ -2156,8 +2160,13 @@ fn shaping_fi_running_at_40ms() -> ActiveFiSnapshot {
     }
 }
 
-/// 把整块 `fi` 从 `afi` 删到只剩 `a`。
-fn delete_all_of_fi(coord: &mut LinuxEditorAnimationCoordinator, at: Instant) {
+/// 把整块 `fi` 从 `afi` 删到只剩 `a`。方向由调用方给 —— 评论 31 要求
+/// Backward / Forward 两条方向都走同一条 handoff，而不是只认其中一条。
+fn delete_all_of_fi(
+    coord: &mut LinuxEditorAnimationCoordinator,
+    at: Instant,
+    direction: ConcealDirection,
+) {
     coord.begin_or_extend_edit_frontier(EditFrontierRequest {
         kind: EditorAnimationKind::Delete,
         base_snapshot: afi_ligated_snapshot(),
@@ -2167,198 +2176,318 @@ fn delete_all_of_fi(coord: &mut LinuxEditorAnimationCoordinator, at: Instant) {
         deleted_ranges: vec![(1, 3)],
         inserted_ranges: Vec::new(),
         offset_map: OffsetMap::from_single_edit(3, (1, 3), 0),
-        conceal_direction: ConcealDirection::Backward,
+        conceal_direction: direction,
         now: at,
     });
 }
 
-/// 评论 30 明确要求的回归测试。
+/// 取 overlay 层里那块 fi 的当前几何（已被 keep rect 裁过）。
+fn fi_overlay_glyph(coord: &LinuxEditorAnimationCoordinator, at: Instant) -> FrontierGlyph {
+    let sample = coord
+        .sample_edit_frontier(at)
+        .expect("删除前沿在采样时刻必须存在");
+    coord
+        .old_overlay_glyphs_for(&sample)
+        .into_iter()
+        .find(|glyph| glyph.range == (1, 3))
+        .expect("overlay 层里必须还有那块正在被吞的 fi")
+}
+
+/// 取 render plan `text_animation` 里落在 fi 区域的那块 glyph。
+fn fi_render_glyph(
+    coord: &LinuxEditorAnimationCoordinator,
+    frame_now: Instant,
+    fi_x: f64,
+) -> TextAnimationGlyphInfo {
+    let plan = coord.build_render_plan_full(
+        CursorRenderState {
+            visible: true,
+            x: 0.0,
+            y: 0.0,
+            h: 1.0,
+            opacity: 1.0,
+        },
+        SelectionPreeditPlan::default(),
+        CursorStyle::default(),
+        SelectionPreeditStyle::default(),
+        frame_now,
+    );
+    plan.text_animation
+        .glyphs
+        .into_iter()
+        .find(|glyph| glyph.x >= fi_x - 1e-6)
+        .expect("render plan 里必须有那块正在被吞的 fi")
+}
+
+/// 评论 31 明确要求的回归测试 ①：owner 下一站是单一 Conceal frontier。
 ///
-/// 稳定步骤与断言都按评论原文来：先跑 `f -> fi` 到 40ms 记下 current fi，
-/// 同一时刻整块删掉 `fi`，再验证 shaping 层**从当前帧**把 owner 接了过来。
+/// 同一帧断言四件事：shaping 不再持有被删的 fi、Conceal 有且只有一块 fi、
+/// 它的 snapshot/source/dest/opacity 与删除前 current fi 完全连续、
+/// `shaping_old_owned` 不再 claim `1..3`。
 ///
-/// 旧实现对 `old nonempty && new empty` 的 component 无条件 `continue`，
-/// 于是同一帧里 new atom 消失、Conceal 又被 `old_owned_in_base` 排除、
-/// canonical target 也没有它 —— `fi` 一帧消失。
+/// 评论 30 的旧行为是让 shaping 自己 `old -> opacity 0`：Conceal 里根本没有
+/// 这块 fi，`shaping_old_owned` 却 claim 它 —— 吞字吐字因此长出两条并行时间轴。
 #[test]
-fn deleting_active_shaping_new_atom_handoffs_from_current_frame() {
+fn deleting_active_shaping_new_atom_handoffs_to_conceal_frontier() {
     let fixture = shaping_fi_running_at_40ms();
     let mut coord = fixture.coord;
     let at = fixture.at;
-    delete_all_of_fi(&mut coord, at);
+    delete_all_of_fi(&mut coord, at, ConcealDirection::Backward);
 
-    // ① shaping 里必须有一个 `new_atoms.is_empty()` 的 disappearing group。
+    // ① shaping 里不再有 current fi 的 `old -> []` group。
     let shaping = coord
         .active_shaping_transition
         .as_ref()
-        .expect("被删的 fi 必须留在交接层里淡出");
-    let disappearing = shaping
-        .groups
-        .iter()
-        .find(|group| group.new_atoms.is_empty())
-        .expect("评论 30：必须存在一个没有 new side 的 disappearing group");
-    assert_eq!(disappearing.old_atoms.len(), 1, "这一组只该接住被删的 fi");
-
-    // ② 这组 old atom 的视觉身份就是上一帧的 current fi。
-    let atom = &disappearing.old_atoms[0];
-    assert_eq!(
-        atom.visual_cluster_range,
-        (1, 3),
-        "视觉身份必须是 fi 那块 cluster"
-    );
-    assert_eq!(
-        atom.snapshot_id, fixture.snapshot_id,
-        "纹理必须还是上一帧 current fi 那张"
-    );
-
-    // ③ start / source / rect / opacity 与删除前 current fi 完全连续。
+        .expect("历史 old f residual 仍留在 rest，state 不会被清掉");
     assert!(
-        (atom.start_opacity - fixture.opacity).abs() < 1e-6,
-        "start_opacity 必须等于删除前 fi 的 {}，实际 {}",
-        fixture.opacity,
-        atom.start_opacity
+        !shaping.groups.iter().any(|group| group
+            .old_atoms
+            .iter()
+            .any(|atom| atom.visual_cluster_range == (1, 3))),
+        "评论 31：shaping 不再自己把被删的 fi 淡掉，owner 已交给单一遮罩前沿"
     );
+    // 历史 old `f` 如果仍可见，可以继续留在 shaping rest。
     assert!(
-        (atom.start_rect.x - fixture.rect.x).abs() < 1e-6
-            && (atom.start_rect.w - fixture.rect.w).abs() < 1e-6,
-        "起步矩形必须是删除前 fi 的 ({}, {})，实际 ({}, {})",
-        fixture.rect.x,
-        fixture.rect.w,
-        atom.start_rect.x,
-        atom.start_rect.w
+        shaping.groups.iter().any(|group| group
+            .old_atoms
+            .iter()
+            .any(|atom| atom.visual_cluster_range == (1, 2))),
+        "历史 old f residual 应继续留在 shaping rest 组里淡出"
     );
-    assert!(
-        (atom.source_rect.x - fixture.source_rect.x).abs() < 1e-6
-            && (atom.source_rect.w - fixture.source_rect.w).abs() < 1e-6,
-        "source 必须是删除前 fi 的 ({}, {})，实际 ({}, {})",
-        fixture.source_rect.x,
-        fixture.source_rect.w,
-        atom.source_rect.x,
-        atom.source_rect.w
-    );
+    assert_no_duplicate_visual_atom(shaping);
 
-    // ④ `owned_old_clusters()` 必须仍 claim 当前 base 的 1..3 —— 删除视觉
-    //    现在由 shaping 层自己完成，Conceal 排除它是对的。
+    // ② shaping 的 base claim 不再包含被删的 fi。
     let mut owned_old = shaping.owned_old_clusters();
     owned_old.sort_unstable();
     assert!(
-        owned_old.contains(&(1, 3)),
-        "当前 base 的 fi 1..3 必须归 shaping，实际 {owned_old:?}"
+        !owned_old.contains(&(1, 3)),
+        "owner 已交出去，`old_owned_in_base` 不得再 claim fi 1..3，实际 {owned_old:?}"
     );
 
-    // ⑤ Frontier 的 conceal_glyphs 不含 fi。
     let frontier = coord.active_edit_frontier.as_ref().expect("删除后前沿仍在");
     assert!(
-        frontier
+        !frontier
             .shaping_old_owned
             .iter()
             .any(|range| *range == (1, 3)),
-        "frontier 也必须拿到这份额外的 base claim，实际 {:?}",
+        "frontier 侧同样不得再把 fi 当成 shaping 已接管，实际 {:?}",
         frontier.shaping_old_owned
     );
-    assert!(
-        !frontier
-            .conceal_glyphs
-            .iter()
-            .any(|glyph| glyph.base_range == (1, 3) || glyph.range == (1, 3)),
-        "fi 已由 shaping 自己吞掉，不能同时进普通 Conceal overlay"
-    );
 
-    // ⑥ 同一 visual key 仍然只能有一个 owner。
-    assert_no_duplicate_visual_atom(shaping);
-
-    // ⑦ 再往后 40ms 采一次：fi 必须继续淡下去，而不是直接消失。
-    let later = coord.shaping_transition_glyphs(instant_at(at, 40));
-    let later_fi = later
+    // ③ Conceal 有且只有一块 fi，且视觉事实与删除前 current fi 连续。
+    let fi_glyphs: Vec<_> = frontier
+        .conceal_glyphs
         .iter()
-        .flat_map(|frame| frame.old.iter())
-        .find(|side| (side.rect.w - 16.0).abs() < 1e-6)
-        .expect("删除 40ms 后 fi 仍在画");
-    assert!(
-        later_fi.opacity < fixture.opacity,
-        "fi 必须继续淡：{} -> {}",
-        fixture.opacity,
-        later_fi.opacity
+        .filter(|glyph| glyph.base_range == (1, 3) || glyph.range == (1, 3))
+        .collect();
+    assert_eq!(
+        fi_glyphs.len(),
+        1,
+        "Conceal 层有且只有一块 fi，实际 {}",
+        fi_glyphs.len()
+    );
+    let glyph = fi_glyphs[0];
+    assert_eq!(
+        glyph.snapshot_id, fixture.snapshot_id,
+        "glyph 必须还是上一帧 current fi 那张行纹理"
     );
     assert!(
-        later_fi.opacity > 0.0,
-        "40ms 时还没淡完，实际 {}",
-        later_fi.opacity
+        (glyph.source_rect.x - fixture.source_rect.x).abs() < 1e-6
+            && (glyph.source_rect.w - fixture.source_rect.w).abs() < 1e-6,
+        "source 必须等于删除前 current fi 的 ({}, {})，实际 ({}, {})",
+        fixture.source_rect.x,
+        fixture.source_rect.w,
+        glyph.source_rect.x,
+        glyph.source_rect.w
+    );
+    assert!(
+        (glyph.dest_rect.x - fixture.rect.x).abs() < 1e-6
+            && (glyph.dest_rect.w - fixture.rect.w).abs() < 1e-6,
+        "dest 必须等于删除前 current fi 的 ({}, {})，实际 ({}, {})",
+        fixture.rect.x,
+        fixture.rect.w,
+        glyph.dest_rect.x,
+        glyph.dest_rect.w
+    );
+    // ④ 不透明度是**起点常量**，不是从 fi 的值再淡到 0 的第二条时间轴。
+    assert!(
+        (glyph.opacity - fixture.opacity).abs() < 1e-6,
+        "glyph.opacity 必须等于删除前 current fi 的 {}，实际 {}",
+        fixture.opacity,
+        glyph.opacity
     );
 }
 
-/// 评论 30 **未覆盖的位置**：render 装配层。
+/// 评论 31 明确要求的回归测试 ②：handoff 之后的吞字必须尊重遮罩方向。
 ///
-/// 上面那条只检查 `ShapingTransitionState` 里的 groups / atoms（内部状态）。
-/// 这条咬同一笔在 `shaping_transition_glyphs()` 上真正交出去的帧：
-/// 那块 16px 必须换到 **old 侧**继续画，且 new 侧不得再长出一块从 0 淡入的
-/// 重影 —— 这正是评论 30「不能出现历史 residual + 新 Reveal 从 0 双画」在
-/// pure delete 方向的对应物。
+/// 同一个 current fi，Backspace（Backward）与 Delete（Forward）的 keep rect
+/// 必须从**相反两端**逐步缩（实测 Backward 保留左端、Forward 保留右端）。
+/// 至少在 80ms 断言两边剩余部分落在相反两端 —— 这同时证明这条特殊路径没有
+/// 退化成 opacity fade：如果方向丢了，两边会从同一起点一起淡。
 #[test]
-fn deleting_active_shaping_new_atom_is_drawn_on_the_frames_old_side() {
+fn shaping_handoff_delete_respects_conceal_direction() {
+    let back = shaping_fi_running_at_40ms();
+    let mut back_coord = back.coord;
+    delete_all_of_fi(&mut back_coord, back.at, ConcealDirection::Backward);
+
+    let fwd = shaping_fi_running_at_40ms();
+    let mut fwd_coord = fwd.coord;
+    delete_all_of_fi(&mut fwd_coord, fwd.at, ConcealDirection::Forward);
+
+    let back_glyph = fi_overlay_glyph(&back_coord, instant_at(back.at, 80));
+    let fwd_glyph = fi_overlay_glyph(&fwd_coord, instant_at(fwd.at, 80));
+
+    // 两条方向都必须是「clip 缩短」，不是整块淡掉。
+    assert!(
+        back_glyph.dest_rect.w < back.rect.w - 1.0,
+        "Backward 必须把 keep rect 缩短：{} -> {}",
+        back.rect.w,
+        back_glyph.dest_rect.w
+    );
+    assert!(
+        fwd_glyph.dest_rect.w < fwd.rect.w - 1.0,
+        "Forward 必须把 keep rect 缩短：{} -> {}",
+        fwd.rect.w,
+        fwd_glyph.dest_rect.w
+    );
+    // opacity 原样带过 —— 时间只由 clip 表达。
+    assert!(
+        (back_glyph.opacity - back.opacity).abs() < 1e-6,
+        "Backward 的 opacity 是起点常量 {}，实际 {}",
+        back.opacity,
+        back_glyph.opacity
+    );
+    assert!(
+        (fwd_glyph.opacity - fwd.opacity).abs() < 1e-6,
+        "Forward 的 opacity 是起点常量 {}，实际 {}",
+        fwd.opacity,
+        fwd_glyph.opacity
+    );
+    // 相反两端：实测 Backward 从**右端**缩（靠近删除前沿的那侧先没），
+    // Forward 从**左端**缩 —— 两条方向的剩余部分必须落在相反两端。
+    assert!(
+        (back_glyph.dest_rect.x - back.rect.x).abs() < 1e-6,
+        "Backward 保留左端，实际 left {} vs 原 left {}",
+        back_glyph.dest_rect.x,
+        back.rect.x
+    );
+    assert!(
+        (fwd_glyph.dest_rect.x + fwd_glyph.dest_rect.w - (fwd.rect.x + fwd.rect.w)).abs() < 1e-6,
+        "Forward 保留右端，实际 right {} vs 原 right {}",
+        fwd_glyph.dest_rect.x + fwd_glyph.dest_rect.w,
+        fwd.rect.x + fwd.rect.w
+    );
+    assert!(
+        fwd_glyph.dest_rect.x > back_glyph.dest_rect.x,
+        "同一帧两条方向的剩余部分必须落在相反两端：Forward left {} > Backward left {}",
+        fwd_glyph.dest_rect.x,
+        back_glyph.dest_rect.x
+    );
+}
+
+/// 评论 31 明确要求的回归测试 ③：render-plan 层的不透明度恒定。
+///
+/// `TextAnimationGlyphInfo.opacity` 必须等于 handoff 的 opacity，而且**随时间
+/// 变化的是 clip/宽度，不是把整块 glyph opacity 从 handoff 值直接淡到 0**。
+#[test]
+fn shaping_handoff_conceal_keeps_glyph_opacity_constant_in_render_plan() {
     let fixture = shaping_fi_running_at_40ms();
     let mut coord = fixture.coord;
     let at = fixture.at;
-    delete_all_of_fi(&mut coord, at);
+    delete_all_of_fi(&mut coord, at, ConcealDirection::Backward);
 
-    let frames = coord.shaping_transition_glyphs(at);
-    let crossed: Vec<_> = frames
+    let early = fi_render_glyph(&coord, instant_at(at, 80), fixture.rect.x);
+    let late = fi_render_glyph(&coord, instant_at(at, 120), fixture.rect.x);
+
+    assert!(
+        (early.opacity - fixture.opacity).abs() < 1e-6,
+        "render plan 的 opacity 必须是 handoff 的起点值 {}，实际 {}",
+        fixture.opacity,
+        early.opacity
+    );
+    assert!(
+        (late.opacity - fixture.opacity).abs() < 1e-6,
+        "随时间变化的不是 opacity：{} -> {}（两个时刻都必须是 {}）",
+        early.opacity,
+        late.opacity,
+        fixture.opacity
+    );
+    assert!(
+        late.w < early.w - 1.0,
+        "随时间变化的是 clip/宽度：{} -> {}",
+        early.w,
+        late.w
+    );
+}
+
+/// 评论 31 **未覆盖的位置**：shaping 的**帧输出层**（`shaping_transition_glyphs`）。
+///
+/// 明确要求的三条分别查 state 的 groups、Conceal glyph 列表、render plan 的
+/// overlay glyph，没有任何一条查 shaping 自己还会不会把被删的 fi 交出帧 ——
+/// 而「同一块字两条并行时间轴」最直接的证据就是 shaping 输出层还在画它。
+#[test]
+fn shaping_render_output_stops_drawing_the_deleted_cluster() {
+    let fixture = shaping_fi_running_at_40ms();
+    let mut coord = fixture.coord;
+    let at = fixture.at;
+    delete_all_of_fi(&mut coord, at, ConcealDirection::Backward);
+
+    let frames = coord.shaping_transition_glyphs(instant_at(at, 40));
+    let all: Vec<(f64, f64)> = frames
         .iter()
-        .filter(|frame| {
+        .flat_map(|frame| {
             frame
                 .old
                 .iter()
-                .any(|side| (side.rect.w - 16.0).abs() < 1e-6)
+                .map(|s| (s.rect.w, s.opacity))
+                .chain(frame.new.iter().map(|s| (s.rect.w, s.opacity)))
         })
         .collect();
-    assert_eq!(
-        crossed.len(),
-        1,
-        "删除同一帧只该有一组在画那块 fi，实际 {} 组",
-        crossed.len()
-    );
-    let frame = crossed[0];
-    let side = frame
-        .old
-        .iter()
-        .find(|side| (side.rect.w - 16.0).abs() < 1e-6)
-        .expect("fi 在 old 侧");
     assert!(
-        (side.opacity - fixture.opacity).abs() < 1e-6,
-        "render 层的 opacity 也要连续：{} -> {}",
-        fixture.opacity,
-        side.opacity
+        !all.iter().any(|(w, _)| (w - 16.0).abs() < 1e-6),
+        "shaping 帧输出层不得再画那块被删的 16px fi，实际 {all:?}"
     );
     assert!(
-        (side.rect.x - fixture.rect.x).abs() < 1e-6,
-        "render 层位置也要连续：{} -> {}",
-        fixture.rect.x,
-        side.rect.x
-    );
-    assert!(
-        frame.new.is_empty(),
-        "disappearing group 没有 new side；new 侧再长出一块 fi 就是从 0 重新淡入的重影"
+        !frames.is_empty(),
+        "历史 old f residual 仍应由 shaping 继续淡出"
     );
 }
 
-/// 评论 30 **未覆盖的位置**：同一笔里 pure-delete 接管与正常 shaping component
+/// 评论 31 **未覆盖的位置**：Conceal 的**行图来源登记**（`conceal_sources`）。
+///
+/// 明确要求的三条都只断言 glyph 的几何与 opacity，没有一条断言行图来源。
+/// handoff glyph 贴的是**上一帧那张行纹理**，不登记就没有纹理可贴 —— 几何全对
+/// 屏幕照样是一块空。
+#[test]
+fn conceal_sources_registers_the_handoff_line_image() {
+    let fixture = shaping_fi_running_at_40ms();
+    let mut coord = fixture.coord;
+    let at = fixture.at;
+    delete_all_of_fi(&mut coord, at, ConcealDirection::Backward);
+
+    assert!(
+        coord.active_conceal_glyphs_for_test() >= 1,
+        "被删的 fi 必须进 Conceal glyph 列表"
+    );
+    assert!(
+        coord.active_conceal_sources_for_test() >= 1,
+        "handoff glyph 用的那张行纹理必须登记进 conceal_sources"
+    );
+}
+
+/// 评论 31 **未覆盖的位置**：同一笔里 pure-delete 让位与正常 shaping component
 /// 并存。
 ///
-/// 评论 30 的场景只有一次 pure delete。这条在**同一笔**里同时做两件事：
-/// 整块删掉 `fi`，并让 `a` 的 shaping identity 变化（走正常
-/// `needs_transition` + `build_group`）。两者必须互不干扰：
-///
-/// - `a` 照常拿到自己的 old/new 一对；
-/// - `fi` 只被 disappearing group 接住；
-/// - 历史 old `f` 仍在 previous rest 组里；
-/// - ownership 是这三份的并集，谁都不能丢。
+/// 明确要求的三条场景里都只有一次 pure delete。这条在**同一笔**里同时做两件事：
+/// 整块删掉 `fi`，并让 `a` 的 shaping identity 变化（走正常 `needs_transition` +
+/// `build_group`）。两者必须互不干扰：`a` 照常拿到自己的 old/new 一对，fi 让位给
+/// Conceal，历史 old `f` 仍在 previous rest 组里。
 #[test]
-fn pure_delete_takeover_coexists_with_normal_shaping_component_in_one_stroke() {
+fn pure_delete_yields_to_conceal_while_normal_shaping_component_continues() {
     let fixture = shaping_fi_running_at_40ms();
     let mut coord = fixture.coord;
     let at = fixture.at;
 
-    // 同一笔里让 `a` 换一次字形形态（identity 判据），同时整块删掉 `fi`。
     // target 必须换一个 line ordinal：否则 old/new 两块 `0..1` 会共用同一个
     // 视觉身份，把「唯一 owner」判据本身搞成空转。
     coord.begin_or_extend_edit_frontier(EditFrontierRequest {
@@ -2392,11 +2521,11 @@ fn pure_delete_takeover_coexists_with_normal_shaping_component_in_one_stroke() {
     let shaping = coord
         .active_shaping_transition
         .as_ref()
-        .expect("同一笔里既有正常 shaping 又有 pure-delete 接管");
+        .expect("同一笔里既有正常 shaping 又有 pure-delete 让位");
     assert_eq!(
         shaping.groups.len(),
-        3,
-        "a<->a 的正常组 + fi 的 disappearing 组 + 历史 old f 的 rest 组"
+        2,
+        "a<->a 的正常组 + 历史 old f 的 rest 组；fi 已让位，不该再有第三组"
     );
 
     let normal = shaping
@@ -2409,38 +2538,40 @@ fn pure_delete_takeover_coexists_with_normal_shaping_component_in_one_stroke() {
     assert_eq!(normal.old_atoms[0].cluster, (0, 1));
     assert_eq!(normal.new_atoms[0].cluster, (0, 1));
 
-    let disappearing = shaping
-        .groups
-        .iter()
-        .find(|group| {
-            group.new_atoms.is_empty()
-                && group
-                    .old_atoms
-                    .iter()
-                    .any(|atom| atom.visual_cluster_range == (1, 3))
-        })
-        .expect("fi 只能被 disappearing group 接住");
-    assert_eq!(disappearing.old_atoms.len(), 1, "fi 只有一块 old cluster");
-
-    let rest = shaping
-        .groups
-        .iter()
-        .find(|group| {
-            group.new_atoms.is_empty()
-                && group
-                    .old_atoms
-                    .iter()
-                    .any(|atom| atom.visual_cluster_range == (1, 2))
-        })
-        .expect("历史 old f 必须仍留在自己的 rest 组里");
-    assert_eq!(rest.old_atoms.len(), 1, "rest 组只有历史 old f");
+    assert!(
+        !shaping.groups.iter().any(|group| group
+            .old_atoms
+            .iter()
+            .any(|atom| atom.visual_cluster_range == (1, 3))),
+        "fi 不得再进 shaping（已让位给 Conceal）"
+    );
 
     let mut owned_old = shaping.owned_old_clusters();
     owned_old.sort_unstable();
     assert_eq!(
         owned_old,
-        vec![(0, 1), (1, 3)],
-        "base 侧 claim = 改形态的 a + 被删的 fi"
+        vec![(0, 1)],
+        "base 侧 claim 只剩改形态的 a；被删的 fi 已交给 Conceal"
+    );
+
+    let frontier = coord.active_edit_frontier.as_ref().expect("删除后前沿仍在");
+    assert!(
+        frontier
+            .conceal_glyphs
+            .iter()
+            .any(|glyph| glyph.base_range == (1, 3)),
+        "被删的 fi 必须在 Conceal glyph 列表里"
+    );
+    let glyph = frontier
+        .conceal_glyphs
+        .iter()
+        .find(|glyph| glyph.base_range == (1, 3))
+        .expect("fi 的 conceal glyph");
+    assert!(
+        (glyph.opacity - fixture.opacity).abs() < 1e-6,
+        "opacity 必须是 handoff 的 {}，实际 {}",
+        fixture.opacity,
+        glyph.opacity
     );
 
     assert_no_duplicate_visual_atom(shaping);

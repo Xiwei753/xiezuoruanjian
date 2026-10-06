@@ -158,6 +158,7 @@ fn delete_overlay_is_visible_on_the_first_frame() {
         &[],
         ConcealDirection::Backward,
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -267,6 +268,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         &[],
         ConcealDirection::Forward,
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -295,6 +297,7 @@ fn extend_delete_maps_old_range_back_to_base_coordinates() {
         &[],
         ConcealDirection::Forward,
         Vec::new(),
+        &[],
         instant_at(now, 80),
     );
     assert_eq!(
@@ -337,6 +340,7 @@ fn extend_replace_accumulates_both_sides() {
         ConcealDirection::Backward,
         Vec::new(),
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -367,6 +371,7 @@ fn extend_replace_accumulates_both_sides() {
         ConcealDirection::Backward,
         Vec::new(),
         Vec::new(),
+        &[],
         half,
     );
     // 旧侧：本次删 E（"AXBCDEF" 的 [5,6)）映回 base 是 [4,5)，与 [3,4) 相邻
@@ -627,6 +632,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         &[],
         ConcealDirection::Backward,
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -657,6 +663,7 @@ fn consecutive_backspace_does_not_revive_previously_concealed_line() {
         &[],
         ConcealDirection::Backward,
         Vec::new(),
+        &[],
         half,
     );
     // Issue #826 评论 9 阻塞 3：新增的 C 与已吞掉的 DEF **不相邻**（DEF 已删，
@@ -710,6 +717,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         &[],
         ConcealDirection::Forward,
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -737,6 +745,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         &[],
         ConcealDirection::Forward,
         Vec::new(),
+        &[],
         half,
     );
     // 第二笔的 current old layout 用**新的 line id**：它代表「第一笔已经删掉第 1 行」
@@ -765,6 +774,7 @@ fn consecutive_forward_delete_does_not_revive_previously_concealed_line() {
         &[],
         ConcealDirection::Forward,
         Vec::new(),
+        &[],
         half,
     );
     // 相邻（[0,3) 与 [3,6)）→ 合并成一段（评论 17）。
@@ -910,6 +920,7 @@ fn replace_cannot_extend_when_deleted_text_was_created_inside_current_burst() {
         ConcealDirection::Forward,
         Vec::new(),
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -1065,6 +1076,7 @@ fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
         &[],
         ConcealDirection::Backward,
         Vec::new(),
+        &[],
         now,
         160,
     );
@@ -1102,6 +1114,7 @@ fn extending_conceal_target_does_not_preconsume_newly_deleted_text() {
         &[],
         ConcealDirection::Backward,
         Vec::new(),
+        &[],
         half,
     );
 

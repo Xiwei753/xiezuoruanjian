@@ -27,8 +27,8 @@ pub(crate) use coordinator::{
 };
 #[allow(unused_imports)]
 pub(crate) use edit_frontier::{
-    ConcealSourceLine, EditFrontierKind, EditFrontierSample, EditFrontierState, FrontierGlyph,
-    FrontierRect,
+    ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind, EditFrontierSample,
+    EditFrontierState, FrontierGlyph, FrontierRect,
 };
 #[allow(unused_imports)]
 pub(crate) use reflow_motion::{ReflowSpan, ReflowSpanFrame, ReflowState};

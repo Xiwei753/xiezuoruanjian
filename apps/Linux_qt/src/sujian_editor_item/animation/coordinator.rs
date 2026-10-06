@@ -22,8 +22,8 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animation::edit_frontier::{
-    ConcealDirection, ConcealSourceLine, EditFrontierKind, EditFrontierSample, EditFrontierState,
-    FrontierGlyph,
+    ConcealDirection, ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind,
+    EditFrontierSample, EditFrontierState, FrontierGlyph,
 };
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
@@ -198,6 +198,17 @@ impl LinuxEditorAnimationCoordinator {
             .as_ref()
             .filter(|previous| previous.target_text() == request.base_text)
             .cloned();
+        // Issue #826 评论 31：**先采**当前屏幕事实 —— 被删 cluster 上一帧如果
+        // 正由上一份 ShapingTransition 的 new side 在画，本笔的 owner 下一站是
+        // 单一 Conceal frontier，而它必须从上一帧真实 rect/source/opacity 起步，
+        // 不能从 canonical 的完整 1.0 起步。必须在 `build_or_retarget` 之前算，
+        // 因为那一步会改掉 `current_visuals` 的消费状态。
+        let conceal_handoffs = Self::collect_conceal_visual_handoffs(
+            &current_visuals,
+            previous_shaping.as_ref(),
+            &request.base_snapshot,
+            &request.deleted_ranges,
+        );
         let shaping = ShapingTransitionState::build_or_retarget(
             previous_shaping.as_ref(),
             &current_visuals,
@@ -267,6 +278,7 @@ impl LinuxEditorAnimationCoordinator {
                         &reflow_current,
                         request.conceal_direction,
                         shaping_old_owned,
+                        &conceal_handoffs,
                         request.now,
                     );
                 }
@@ -288,6 +300,7 @@ impl LinuxEditorAnimationCoordinator {
                         request.conceal_direction,
                         shaping_old_owned,
                         shaping_new_owned,
+                        &conceal_handoffs,
                         request.now,
                     );
                 }
@@ -330,6 +343,7 @@ impl LinuxEditorAnimationCoordinator {
                     &reflow_current,
                     request.conceal_direction,
                     shaping_old_owned,
+                    &conceal_handoffs,
                     request.now,
                     duration_ms,
                 ),
@@ -345,6 +359,7 @@ impl LinuxEditorAnimationCoordinator {
                     request.conceal_direction,
                     shaping_old_owned,
                     shaping_new_owned,
+                    &conceal_handoffs,
                     request.now,
                     duration_ms,
                 ),
@@ -376,6 +391,70 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// 它**不是**历史动画状态：没有 `started_at`、没有 remaining duration、
     /// 没有 historical stage、没有第二个动画对象，就是一帧采样。
+    /// Issue #826 评论 31：被整块删除、且上一帧正由 ShapingTransition new side
+    /// 持有的 cluster，交给 Conceal 的**当前帧视觉事实**。
+    ///
+    /// 判据必须与 `shaping_transition::build_or_retarget()` 的 pure-delete 分支
+    /// **完全一致**（同一个「视觉身份 = previous new atom 的
+    /// `(snapshot_id, visual_cluster_range)`」判据），否则 owner 会两头脱钩：
+    /// 一边以为自己在吞，另一边以为自己还在淡。
+    fn collect_conceal_visual_handoffs(
+        current_visuals: &[CurrentVisualCluster],
+        previous_shaping: Option<&ShapingTransitionState>,
+        base_snapshot: &EditorLayoutSnapshot,
+        deleted_ranges: &[(usize, usize)],
+    ) -> Vec<ConcealVisualHandoff> {
+        let Some(previous) = previous_shaping else {
+            return Vec::new();
+        };
+        let previous_new_keys: Vec<(LineSnapshotId, (usize, usize))> = previous
+            .groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .new_atoms
+                    .iter()
+                    .map(|atom| (atom.snapshot_id, atom.visual_cluster_range))
+            })
+            .collect();
+        if previous_new_keys.is_empty() {
+            return Vec::new();
+        }
+        let mut handoffs: Vec<ConcealVisualHandoff> = Vec::new();
+        for &range in deleted_ranges {
+            for line in base_snapshot.lines_in_byte_range(range.0, range.1) {
+                for cluster in line.clusters_contained_in_range(range.0, range.1) {
+                    // 吞字侧同样只认**完整覆盖**的 cluster（评论 24）。
+                    let cluster_range = (cluster.byte_start, cluster.byte_end);
+                    let key = (line.id, cluster_range);
+                    if !previous_new_keys.contains(&key) {
+                        continue;
+                    }
+                    if handoffs
+                        .iter()
+                        .any(|handoff| handoff.range == cluster_range)
+                    {
+                        continue;
+                    }
+                    // 判据只回答「上一帧它归谁」；真正接手还得**这一帧真的在画**。
+                    let Some(visual) = current_visuals.iter().find(|visual| {
+                        visual.snapshot_id == key.0 && visual.visual_cluster_range == key.1
+                    }) else {
+                        continue;
+                    };
+                    handoffs.push(ConcealVisualHandoff {
+                        range: cluster_range,
+                        snapshot_id: visual.snapshot_id,
+                        source_rect: visual.source_rect.clone(),
+                        dest_rect: visual.dest_rect.clone(),
+                        opacity: visual.opacity,
+                    });
+                }
+            }
+        }
+        handoffs
+    }
+
     pub(crate) fn collect_current_visuals(&self, frame_now: Instant) -> Vec<CurrentVisualCluster> {
         let mut out: Vec<CurrentVisualCluster> = Vec::new();
 

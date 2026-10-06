@@ -74,7 +74,12 @@ impl LinuxEditorAnimationCoordinator {
                 y: glyph.dest_rect.y,
                 w: glyph.dest_rect.w,
                 h: glyph.dest_rect.h,
-                opacity: 1.0,
+                // Issue #826 评论 31：吞字 overlay 的不透明度是**起点常量**，
+                // 时间由 clip（keep rect 的缩放）表达。被整块删除的 cluster 若
+                // 上一帧正由 ShapingTransition 淡到 0.58，这里就必须画 0.58 ——
+                // 绝不能固定 1.0 让屏幕先跳亮再开始吞，也不能随时间淡到 0
+                // 变成第二条时间轴。
+                opacity: glyph.opacity,
                 snapshot_id: glyph.snapshot_id,
                 source_rect: glyph.source_rect,
             });

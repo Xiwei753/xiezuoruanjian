@@ -689,6 +689,35 @@ pub(crate) struct ConcealGlyphGeometry {
     pub source_rect: SourceRect,
     /// 这一轮真正画在屏幕上的目标矩形（文档坐标）。
     pub dest_rect: SourceRect,
+    /// 这一块 glyph 要按什么不透明度画。
+    ///
+    /// Issue #826 评论 31：普通 canonical 删除拿到的是 `1.0`；被删 cluster 上一帧
+    /// 如果正由 ShapingTransition 的 new side 在画，就用它**上一帧真实的 opacity**
+    /// 起步 —— 否则屏幕会从 0.58 直接跳到 1.0 再开始吞。
+    ///
+    /// 吞字过程本身**不再**修改这个值：时间由遮罩前沿的 clip 表达（保持不动的
+    /// keep rect 从一端逐步缩），opacity 只是起点，不是第二条时间轴。
+    pub opacity: f64,
+}
+
+/// Issue #826 评论 31：被删 cluster 上一帧由 ShapingTransition new side 持有时，
+/// 交给单一 Conceal frontier 的**当前帧视觉事实**。
+///
+/// 与 [`CurrentVisualCluster::dest_rect`] 一样，坐标已经在当前 base/target 系里
+/// （这两份是同一份 revision）。判据只认视觉身份 —— `(snapshot_id, visual_cluster_range)`，
+/// 不引入任何 origin 枚举。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConcealVisualHandoff {
+    /// 被整块删除的那块 cluster 的 byte 范围（base 坐标 == current 坐标）。
+    pub range: (usize, usize),
+    /// 上一帧真正贴图用的行纹理。
+    pub snapshot_id: LineSnapshotId,
+    /// 那张行纹理里上一帧实际可见的精确 slice。
+    pub source_rect: SourceRect,
+    /// 上一帧它在屏幕上的矩形。
+    pub dest_rect: SourceRect,
+    /// 上一帧的不透明度 —— Conceal 起步必须是它，不能是 1.0。
+    pub opacity: f64,
 }
 
 /// Issue #826 评论 20：一次 retarget 采下的「当前屏幕上已经看见的那一段字」。
@@ -1011,6 +1040,9 @@ impl EditFrontierState {
         direction: ConcealDirection,
         // Issue #826 评论 24：整块归 `shaping_transition` 的旧坐标 cluster。
         shaping_old_owned: Vec<(usize, usize)>,
+        // Issue #826 评论 31：被删 cluster 上一帧由 shaping new side 持有时，
+        // 本层是 owner 的**下一站**，必须从当前帧真实屏幕事实起步。
+        conceal_handoffs: &[ConcealVisualHandoff],
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
@@ -1024,6 +1056,7 @@ impl EditFrontierState {
             &pairs,
             reflow_current,
             &shaping_old_owned,
+            conceal_handoffs,
         );
         let conceal = build_conceal_layer(direction, &conceal_glyphs);
         Self {
@@ -1063,6 +1096,8 @@ impl EditFrontierState {
         // cluster 归属（旧坐标给吞字侧，新坐标给吐字侧）。
         shaping_old_owned: Vec<(usize, usize)>,
         shaping_new_owned: Vec<(usize, usize)>,
+        // Issue #826 评论 31：同 `begin_delete`，被删侧可能整块接自 shaping new side。
+        conceal_handoffs: &[ConcealVisualHandoff],
         started_at: Instant,
         duration_ms: u64,
     ) -> Self {
@@ -1076,6 +1111,7 @@ impl EditFrontierState {
             &pairs,
             reflow_current,
             &shaping_old_owned,
+            conceal_handoffs,
         );
         let conceal = build_conceal_layer(direction, &conceal_glyphs);
         let reveal = build_reveal_layer(
@@ -1161,6 +1197,9 @@ impl EditFrontierState {
                             w: dest_w,
                             h: dest.h,
                         },
+                        // Issue #826 评论 31：clip 只改几何，不改不透明度 ——
+                        // 吞字的前进由 keep rect 的缩放表达，opacity 是起点常量。
+                        opacity: geometry.opacity,
                     });
                 }
             }
@@ -1499,6 +1538,9 @@ impl EditFrontierState {
         direction: ConcealDirection,
         // Issue #826 评论 24：整块归 `shaping_transition` 的旧坐标 cluster。
         shaping_old_owned: Vec<(usize, usize)>,
+        // Issue #826 评论 31：连续删除里新进来的 cluster 仍可能整块接自
+        // shaping new side —— begin/extend 两条入口都必须带这份视觉事实。
+        conceal_handoffs: &[ConcealVisualHandoff],
         now: Instant,
     ) {
         self.shaping_old_owned = shaping_old_owned;
@@ -1517,6 +1559,7 @@ impl EditFrontierState {
             &mapped,
             reflow_current,
             &self.shaping_old_owned,
+            conceal_handoffs,
         );
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
@@ -1564,6 +1607,8 @@ impl EditFrontierState {
         // Issue #826 评论 24：Replace 两侧各有一份归属。
         shaping_old_owned: Vec<(usize, usize)>,
         shaping_new_owned: Vec<(usize, usize)>,
+        // Issue #826 评论 31：同 `extend_delete`。
+        conceal_handoffs: &[ConcealVisualHandoff],
         now: Instant,
     ) {
         self.shaping_old_owned = shaping_old_owned.clone();
@@ -1579,6 +1624,7 @@ impl EditFrontierState {
             &mapped,
             reflow_current,
             &self.shaping_old_owned,
+            conceal_handoffs,
         );
         let glyphs = merge_conceal_glyphs(visible, fresh_glyphs);
         let sources = self.sources_for_glyphs(&glyphs, &fresh_sources);
@@ -1648,6 +1694,8 @@ impl EditFrontierState {
                     w: frame.visible_width,
                     h: frame.rect.h,
                 },
+                // Reveal carry 与 canonical 一样是完整不透明的一块字。
+                opacity: 1.0,
             });
         }
         glyphs
@@ -1879,6 +1927,8 @@ impl EditFrontierState {
                             w: dest_w,
                             h: dest.h,
                         },
+                        // Issue #826 评论 31：overlay 只裁几何，opacity 原样带过。
+                        opacity: geometry.opacity,
                     });
                 }
             }
@@ -1900,6 +1950,10 @@ pub(crate) struct FrontierGlyph {
     pub source_rect: SourceRect,
     /// 画在屏幕上的目标矩形（文档坐标）。
     pub dest_rect: SourceRect,
+    /// 这块 glyph 要按什么不透明度画。
+    ///
+    /// Issue #826 评论 31：见 [`ConcealGlyphGeometry::opacity`]。
+    pub opacity: f64,
 }
 
 impl FrontierGlyph {
@@ -1925,9 +1979,9 @@ fn collect_conceal_glyphs(
     ranges: &[((usize, usize), (usize, usize))],
     reflow_current: &[ReflowCurrentGeometry],
     shaping_old_owned: &[(usize, usize)],
+    handoffs: &[ConcealVisualHandoff],
 ) -> (Vec<ConcealGlyphGeometry>, Vec<ConcealSourceLine>) {
     let mut glyphs: Vec<ConcealGlyphGeometry> = Vec::new();
-    let mut sources: Vec<ConcealSourceLine> = Vec::new();
     for &(range, base_range) in ranges {
         for line in current_snapshot.lines_in_byte_range(range.0, range.1) {
             if line
@@ -1936,14 +1990,8 @@ fn collect_conceal_glyphs(
                 .all(|cluster| is_shaping_owned(shaping_old_owned, cluster))
             {
                 // 这一行在本次删除范围内的 cluster 全部归 `shaping_transition`，
-                // 它的行图也不是吞字 overlay 的 owner —— 别把它登记进 sources。
+                // 它的行图也不是吞字 overlay 的 owner —— 一行 glyph 都不会产生。
                 continue;
-            }
-            if !sources.iter().any(|source| source.snapshot_id == line.id) {
-                sources.push(ConcealSourceLine {
-                    snapshot_id: line.id,
-                    image: line.image.clone(),
-                });
             }
             for cluster in line.clusters_contained_in_range(range.0, range.1) {
                 // Issue #826 评论 24：吞字侧同样只认**完整覆盖**的 cluster。
@@ -1954,21 +2002,76 @@ fn collect_conceal_glyphs(
                 if is_shaping_owned(shaping_old_owned, cluster) {
                     continue;
                 }
-                let canonical = line.source_rect_to_document_rect(&cluster.source_rect);
                 let glyph_range = (cluster.byte_start, cluster.byte_end);
-                let sampled = reflow_current
+                // Issue #826 评论 31：被删 cluster 上一帧正由 ShapingTransition 的
+                // new side 画时，这一笔的 owner 下一站就是本层 —— 那就必须从**当前帧
+                // 真实屏幕事实**起步，而不是 canonical 的完整不透明 1.0。
+                //
+                // 只认视觉身份 + 行图可解析：解析不出来就退回 canonical，绝不把一份
+                // 贴不到图的 snapshot_id 塞进去（那会让 glyph 直接隐形）。
+                let handoff = handoffs
                     .iter()
-                    .find(|item| overlaps(item.current_range, glyph_range))
-                    .map(|item| item.dest_rect.clone());
+                    .find(|handoff| handoff.range == glyph_range)
+                    .filter(|handoff| {
+                        current_snapshot
+                            .line_snapshots
+                            .iter()
+                            .any(|line| line.id == handoff.snapshot_id)
+                    });
+                let (snapshot_id, source_rect, dest_rect, opacity) = match handoff {
+                    Some(handoff) => (
+                        handoff.snapshot_id,
+                        handoff.source_rect.clone(),
+                        handoff.dest_rect.clone(),
+                        handoff.opacity,
+                    ),
+                    None => {
+                        let canonical = line.source_rect_to_document_rect(&cluster.source_rect);
+                        let sampled = reflow_current
+                            .iter()
+                            .find(|item| overlaps(item.current_range, glyph_range))
+                            .map(|item| item.dest_rect.clone());
+                        (
+                            line.id,
+                            cluster.source_rect.clone(),
+                            sampled.unwrap_or(canonical),
+                            1.0,
+                        )
+                    }
+                };
                 glyphs.push(ConcealGlyphGeometry {
                     range: glyph_range,
                     base_range,
-                    snapshot_id: line.id,
-                    source_rect: cluster.source_rect.clone(),
-                    dest_rect: sampled.unwrap_or(canonical),
+                    snapshot_id,
+                    source_rect,
+                    dest_rect,
+                    opacity,
                 });
             }
         }
+    }
+    // 行图按**最终真正用到的** `snapshot_id` 登记：comment 31 之后普通 glyph 用
+    // base 行图，shaping handoff glyph 可能用上一份 revision 的行图，两者都可以
+    // 同时出现在同一条吞字里。
+    let mut sources: Vec<ConcealSourceLine> = Vec::new();
+    for glyph in &glyphs {
+        if sources
+            .iter()
+            .any(|source| source.snapshot_id == glyph.snapshot_id)
+        {
+            continue;
+        }
+        let Some(line) = current_snapshot
+            .line_snapshots
+            .iter()
+            .find(|line| line.id == glyph.snapshot_id)
+        else {
+            continue;
+        };
+        sources.push(ConcealSourceLine {
+            snapshot_id: line.id,
+            image: line.image.clone(),
+        });
     }
     (glyphs, sources)
 }
