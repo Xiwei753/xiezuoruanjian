@@ -40,15 +40,24 @@ Dialog {
            ? Math.max(400, Math.min(root.widePanelMaxWidth, (parent ? parent.width : 1120) - dt.sp64))
            : Math.min(640, (parent ? parent.width : 640) - dt.sp64)
     // 复核第3项：非 Side 档不做两列大面板，高度回到窄对话框那一套。
+    // Issue #833：Dialog 高度不再跟 settingsScroll.contentHeight 动态绑定。
+    // 高度只由窗口可用高度决定，展开内容在 ScrollView 内滚动。
+    // 否则一展开分组，整个 Dialog 自己会变高并重新居中，看起来就是"界面乱动"。
     height: root.widePanel
             ? Math.max(420, Math.min(880, (parent ? parent.height : 800) - dt.sp64))
-            : Math.max(480, Math.min(720, settingsScroll.contentHeight + 120))
+            : Math.max(480, Math.min(720, (parent ? parent.height : 800) - dt.sp64))
     parent: Overlay.overlay
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
     property var layoutPlan: null
     // 宽屏顶部搜索关键词。只做分组过滤，不改任何设置读取/保存路径。
     property string searchText: ""
+    // Issue #833：accordion 单一展开 key。默认只展开"外观"。
+    // 点已展开项则收起（expandedSectionKey 变成 ""）。
+    property string expandedSectionKey: qsTr("外观")
+    function toggleSection(key) {
+        root.expandedSectionKey = root.expandedSectionKey === key ? "" : key
+    }
     property var theme: null
     property var settingsBackendRef: null
     property var workspaceBackendRef: null
@@ -264,21 +273,23 @@ Dialog {
         contentWidth: availableWidth
         contentHeight: settingsColumn.implicitHeight
 
-        // Issue #825：窄屏 columns=1 等价于原来的纵向 ColumnLayout；
-        // 宽屏 Workbench 改成两列排设置分组。分组仍然各自展开在当前浮层里，
-        // 不跳路由、不重建设置内容。
-        GridLayout {
+        // Issue #833：设置内容改成单列 ColumnLayout accordion。
+        // 不再用 GridLayout columns=2 两列排设置分组，避免两列不同 implicitHeight
+        // 形成参差不齐的洞。宽屏仍可以让 Dialog 更宽，但设置分组本身保持一列。
+        // 每个 SettingsSection 根据 expandedSectionKey 设置 expanded，
+        // toggleRequested 时切换 key；点已展开项则收起。
+        ColumnLayout {
             id: settingsColumn
             width: settingsScroll.availableWidth
-            columns: root.widePanel ? 2 : 1
-            columnSpacing: dt.sp16
-            rowSpacing: dt.cardGap
+            spacing: dt.cardGap
 
             // ── 1. 外观 (appearance) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("外观")
                 visible: root.sectionVisible(qsTr("外观"))
+                expanded: root.expandedSectionKey === qsTr("外观")
+                onToggleRequested: root.toggleSection(qsTr("外观"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -411,6 +422,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("编辑器和动画")
                 visible: root.sectionVisible(qsTr("编辑器和动画"))
+                expanded: root.expandedSectionKey === qsTr("编辑器和动画")
+                onToggleRequested: root.toggleSection(qsTr("编辑器和动画"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -529,6 +542,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("保存和同步")
                 visible: root.sectionVisible(qsTr("保存和同步"))
+                expanded: root.expandedSectionKey === qsTr("保存和同步")
+                onToggleRequested: root.toggleSection(qsTr("保存和同步"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -581,6 +596,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("AI")
                 Layout.fillWidth: true
+                expanded: root.expandedSectionKey === qsTr("AI")
+                onToggleRequested: root.toggleSection(qsTr("AI"))
                 visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
                          && root.sectionVisible(qsTr("AI"))
                 SettingsRow {
@@ -598,6 +615,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("诊断与日志")
                 visible: root.sectionVisible(qsTr("诊断与日志"))
+                expanded: root.expandedSectionKey === qsTr("诊断与日志")
+                onToggleRequested: root.toggleSection(qsTr("诊断与日志"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -752,6 +771,8 @@ Dialog {
                 dt: root.dt
                 title: qsTr("关于")
                 visible: root.sectionVisible(qsTr("关于"))
+                expanded: root.expandedSectionKey === qsTr("关于")
+                onToggleRequested: root.toggleSection(qsTr("关于"))
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt

@@ -177,6 +177,10 @@ impl QQuickItem for SujianEditorItem {
         // static renderer 的 frame_needs_relayout 还需要等 render_plan 构造后
         // 加入 keys_to_complete / keys_to_cancel 条件，保证完成帧同帧回 canonical。
         let base_needs_relayout = self.layout_dirty || self.scene_dirty;
+        // Issue #833：记录重置前的 layout_dirty / scene_dirty 快照，
+        // 供"有正文但渲染帧为空"结构化诊断使用（下面会重置这两个标志）。
+        let diag_layout_dirty = self.layout_dirty;
+        let diag_scene_dirty = self.scene_dirty;
         if self.layout_dirty {
             self.layout_dirty = false;
         }
@@ -362,6 +366,35 @@ impl QQuickItem for SujianEditorItem {
                 base_needs_relayout,
                 dpr,
             ));
+        }
+
+        // Issue #833：给"有正文但渲染帧为空"加一条结构化诊断，不改变渲染逻辑。
+        // 条件：committed_text 非空，且 prepared_frame 为 None 或 item width/height <= 1。
+        // 记录 text length、item width/height、viewport_height、scroll_y、
+        // content_height、layout_dirty / scene_dirty。
+        // 这一条是为了以后直接抓 Scene Graph 边界，不再靠肉眼猜正文到底丢在哪一层。
+        {
+            let committed = self.pipeline.committed_text();
+            let text_bytes = committed.len();
+            let text_chars = committed.chars().count();
+            let item_w = self.bounding_width();
+            let item_vp_h = f64::from(self.current_viewport_height);
+            let item_scroll_y = f64::from(self.current_scroll_y);
+            let item_content_h = f64::from(self.current_content_height);
+            let frame_empty = self.prepared_frame.is_none() || item_w <= 1.0 || item_vp_h <= 1.0;
+            if text_bytes > 0 && frame_empty {
+                editor_debug_log(&format!(
+                    "sujian_empty_frame_diag: text_bytes={}, text_chars={}, item_w={:.1}, viewport_h={:.1}, scroll_y={:.1}, content_h={:.1}, layout_dirty={}, scene_dirty={}",
+                    text_bytes,
+                    text_chars,
+                    item_w,
+                    item_vp_h,
+                    item_scroll_y,
+                    item_content_h,
+                    diag_layout_dirty,
+                    diag_scene_dirty,
+                ));
+            }
         }
 
         // Issue #677 评论 5653790560: node.raw 已在函数开头被 ensure_editor_root 写回，

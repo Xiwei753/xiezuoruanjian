@@ -103,7 +103,18 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match writing_bridge::open_chapter(&core, &p, &v, &c) {
                 Ok(data) => {
-                    self.debug_log("chapter", "open_chapter_success", "len_loaded");
+                    // Issue #833：记录实际 content 字节长度/字符长度，
+                    // 不再只写 "len_loaded" 占位字符串。以后再出现"正文空白"，
+                    // 日志能立刻区分"Core 读到了正文"和"读到空串"。
+                    self.debug_log(
+                        "chapter",
+                        "open_chapter_success",
+                        &format!(
+                            "bytes={}, chars={}",
+                            data.content.len(),
+                            data.content.chars().count()
+                        ),
+                    );
 
                     return bridge_success_object(serde_json::to_value(data).unwrap_or_default());
                 }

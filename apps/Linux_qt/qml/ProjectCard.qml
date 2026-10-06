@@ -124,10 +124,13 @@ Rectangle {
             Layout.preferredHeight: root._headerHeight
 
             AppText {
+                // Issue #833：不跨层锚 cardFold（cardFold 是外层 root 的子项，
+                // 不是本 Item 的父项或兄弟项）。标题 Item 内直接 anchors.right:
+                // parent.right，rightMargin 留出折角宽 + 间距。
                 anchors.left: parent.left
                 anchors.leftMargin: _sp16
-                anchors.right: cardFold.left
-                anchors.rightMargin: dt.sp4
+                anchors.right: parent.right
+                anchors.rightMargin: root._foldSize + dt.sp4
                 anchors.verticalCenter: parent.verticalCenter
                 dt: root.dt
                 text: root.title || qsTr("未命名作品")
@@ -141,11 +144,12 @@ Rectangle {
             }
 
             // 标题区底线：只画到折角之前（父项宽 - 折角宽 - 左内边距）。
+            // Issue #833：同样按 parent.right + fold margin 收口，不跨层锚 cardFold。
             Rectangle {
                 anchors.left: parent.left
                 anchors.leftMargin: _sp16
-                anchors.right: cardFold.left
-                anchors.rightMargin: dt.sp4
+                anchors.right: parent.right
+                anchors.rightMargin: root._foldSize + dt.sp4
                 anchors.bottom: parent.bottom
                 height: 1
                 color: _border

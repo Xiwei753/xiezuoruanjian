@@ -543,62 +543,9 @@ Rectangle {
                 font.weight: Font.DemiBold
             }
 
-            // Editor width slider
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: dt.sp4
-
-                AppText {
-                    dt: root.dt
-                    text: qsTr("正文宽度")
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontSmPt
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: dt.sp8
-
-                    AppText {
-                        dt: root.dt
-                        text: "480"
-                        color: dt.textMuted
-                        font.pointSize: dt.fontXsPt
-                    }
-
-                    AppSlider {
-                        id: widthSlider
-                        Layout.fillWidth: true
-                        dt: root.dt
-                        from: 480
-                        to: 3840
-                        stepSize: 10
-                        // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                        value: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ? settingsBackend.setting_desktop_editor_width : 820
-                        onMoved: {
-                            if (settingsBackend) {
-                                settingsBackend.setting_desktop_editor_width = value;
-                                settingsBackend.debounced_save_local_settings();
-                            }
-                        }
-                    }
-
-                    AppText {
-                        dt: root.dt
-                        text: "3840"
-                        color: dt.textMuted
-                        font.pointSize: dt.fontXsPt
-                    }
-                }
-
-                AppText {
-                    dt: root.dt
-                    text: Math.round(widthSlider.value) + " px"
-                    color: dt.textSecondary
-                    font.pointSize: dt.fontSmPt
-                    Layout.alignment: Qt.AlignHCenter
-                }
-            }
+            // Issue #833：删除编辑器绝对宽度 widthSlider UI 及对
+            // setting_desktop_editor_width 的写入。正文区宽度属于布局，
+            // 不应再作为格式工具条里的用户设置去反向控制 Workbench 几何。
 
             // Divider
             Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }

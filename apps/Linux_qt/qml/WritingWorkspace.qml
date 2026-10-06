@@ -620,52 +620,26 @@ Rectangle {
         onRequestSearch: root.requestSearch()
         onOpenSettings: root.openSettings()
 
-        SplitView {
+        // Issue #833：Workbench 内容区改用 RowLayout，子项只读 workbenchPlan
+        // 的 role bounds，通过 Layout.preferredWidth / minimumWidth / maximumWidth
+        // 落尺寸。不再用 SplitView 做固定角色排版，也不再回写用户设置项宽度。
+        // 窗口尺寸 -> Core layout plan -> QML Layout，一条链到底。
+        RowLayout {
             anchors.fill: parent
-            orientation: Qt.Horizontal
-
-            handle: Rectangle {
-                // Issue #825：Core 的 bounds 已经把四个角色的宽度切干净了，
-                // 宽屏下不再额外插入 SplitView 把手宽度，否则正文会比 Core 给的窄。
-                implicitWidth: root.coreSized ? 0 : 4
-                color: SplitHandle.hovered || SplitHandle.pressed ? dt.primary : dt.border
-                Behavior on color { ColorAnimation { duration: 120 } }
-            }
+            spacing: 0
 
             // Left sidebar: volume/chapter tree
             Rectangle {
                 id: sidebarRect
                 visible: !root.leftPaneCollapsed && !root.hideContentPanes
-                // Issue #825：宽屏下章节导航宽度直接取 Core 的 ChapterNavigation bounds；
-                // 非宽屏保留原来的「设置项 + 可拖拽区间」。
-                SplitView.preferredWidth: root.coreSized
-                                           ? root.chapterNavWidth
-                                           : (settingsBackend && settingsBackend.setting_desktop_sidebar_width > 0 ? settingsBackend.setting_desktop_sidebar_width : 240)
-                SplitView.minimumWidth: root.coreSized ? root.chapterNavWidth : 180
-                SplitView.maximumWidth: root.coreSized ? root.chapterNavWidth : 420
+                // Issue #833：章节导航宽度只取 Core 的 ChapterNavigation bounds，
+                // 不再读 setting_desktop_sidebar_width，也不再回写。
+                Layout.preferredWidth: root.chapterNavWidth
+                Layout.minimumWidth: root.chapterNavWidth
+                Layout.maximumWidth: root.chapterNavWidth
                 color: dt.sidebar
                 border.color: dt.border
                 border.width: 1
-
-                Timer {
-                    id: sidebarDebounceTimer
-                    interval: 300
-                    repeat: false
-                    onTriggered: {
-                        if (settingsBackend && sidebarRect.width > 0 && Math.abs(settingsBackend.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
-                            settingsBackend.setting_desktop_sidebar_width = sidebarRect.width;
-                            settingsBackend.debounced_save_local_settings();
-                        }
-                    }
-                }
-
-                onWidthChanged: {
-                    // Issue #825：宽屏下宽度归 Core 所有，不再回写用户设置项，
-                    // 否则下一次单栏布局会被 Core 的工作台宽度污染。
-                    if (width > 0 && !root.coreSized) {
-                        sidebarDebounceTimer.restart();
-                    }
-                }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -1008,11 +982,12 @@ Rectangle {
 
             // Middle Area: Toolbar + Editor
             ColumnLayout {
-                SplitView.fillWidth: true
-                // Issue #825：宽屏下正文宽度取 Core 的 Editor bounds；
-                // 非宽屏保留原来的「800 首选 / 480 最小」。
-                SplitView.preferredWidth: (root.coreSized || root.hideContentPanes) ? root.editorWidth : 800
-                SplitView.minimumWidth: (root.coreSized || root.hideContentPanes) ? root.editorWidth : 480
+                // Issue #833：Editor 角色宽度只取 Core 的 Editor bounds。
+                // SinglePane（hideContentPanes）或非 coreSized 时 fillWidth 占满。
+                Layout.fillWidth: root.hideContentPanes || !root.coreSized
+                Layout.preferredWidth: root.editorWidth > 0 ? root.editorWidth : -1
+                Layout.minimumWidth: root.editorWidth > 0 ? root.editorWidth : 0
+                Layout.maximumWidth: root.editorWidth > 0 ? root.editorWidth : -1
                 spacing: 0
 
                 // Editor Container Area
@@ -1060,16 +1035,14 @@ Rectangle {
                         Rectangle {
                             id: paperBg
                             width: {
-                                // 用户拖拽宽度优先；未拖过才用布局策略默认宽度
+                                // Issue #833：Editor role 宽度已由 Core layout plan 给出，
+                                // paperBg 在 Editor role 内直接跟随可用宽度；
+                                // SinglePane 只允许 contentMaxWidthVp 作为内容最大宽度，
+                                // 不再叠一份用户绝对像素宽度（setting_desktop_editor_width）。
                                 var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
                                         ? root.layoutPlan.contentMaxWidthVp
                                         : 820
-                                // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                                var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
-                                        ? settingsBackend.setting_desktop_editor_width
-                                        : 0
-                                var targetW = userW > 0 ? userW : planW
-                                return Math.max(480, Math.min(parent.width, targetW))
+                                return Math.max(480, Math.min(parent.width, planW))
                             }
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -1079,83 +1052,10 @@ Rectangle {
                             border.width: 1
                         }
 
-                        // Left drag resize handle
-                        MouseArea {
-                            id: leftResizeHandle
-                            width: dt.sp8
-                            anchors.left: paperBg.left
-                            anchors.leftMargin: -(width / 2)
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            cursorShape: Qt.SizeHorCursor
-                            hoverEnabled: true
-
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: 2
-                                height: parent.height
-                                color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
-                                opacity: parent.pressed ? 0.9 : 0.4
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
-
-                            property real startX: 0
-                            property real startWidth: 0
-
-                            onPressed: function(mouse) {
-                                startX = mouse.x;
-                                startWidth = paperBg.width;
-                            }
-
-                            onPositionChanged: function(mouse) {
-                                if (pressed && settingsBackend) {
-                                    var dx = mouse.x - startX;
-                                    var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                    // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                                    settingsBackend.setting_desktop_editor_width = newWidth;
-                                    settingsBackend.debounced_save_local_settings();
-                                }
-                            }
-                        }
-
-                        // Right drag resize handle
-                        MouseArea {
-                            id: rightResizeHandle
-                            width: dt.sp8
-                            anchors.right: paperBg.right
-                            anchors.rightMargin: -(width / 2)
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            cursorShape: Qt.SizeHorCursor
-                            hoverEnabled: true
-
-                            Rectangle {
-                                anchors.centerIn: parent
-                                width: 2
-                                height: parent.height
-                                color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
-                                opacity: parent.pressed ? 0.9 : 0.4
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
-
-                            property real startX: 0
-                            property real startWidth: 0
-
-                            onPressed: function(mouse) {
-                                startX = mouse.x;
-                                startWidth = paperBg.width;
-                            }
-
-                            onPositionChanged: function(mouse) {
-                                if (pressed && settingsBackend) {
-                                    var dx = mouse.x - startX;
-                                    var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                    // Issue #687: 统一走 settingsBackend.setting_desktop_editor_width
-                                    settingsBackend.setting_desktop_editor_width = newWidth;
-                                    settingsBackend.debounced_save_local_settings();
-                                }
-                            }
-                        }
+                        // Issue #833：删除 paperBg 左右两个拖拽改宽 MouseArea。
+                        // 这两个把旧 setting_desktop_editor_width 写回去，正好会和
+                        // Core role width 打架。Editor role 宽度已由 Core 给出，
+                        // paperBg 在 Editor role 内直接跟随可用宽度。
 
                         ScrollView {
                             id: editorScroll
@@ -1305,10 +1205,11 @@ Rectangle {
                             // 打开 clip 把自身绘制和子节点限制在 bounding rect 内。
                             // 参考 https://doc.qt.io/qt-6/qquickitem.html#clip-prop
                             clip: true
-                            x: editorScroll.x
-                            y: editorScroll.y
-                            width: editorScroll.availableWidth
-                            height: editorScroll.availableHeight
+                            // Issue #833：SujianEditorItem 和 editorScroll 是兄弟项，
+                            // 直接 anchors.fill: editorScroll。不再复制 editorScroll.x/y/
+                            // availableWidth/availableHeight，避免 ScrollView 重排时出现
+                            // 一帧 x/y/availableWidth 已变、overlay 还没跟上的裁剪错位。
+                            anchors.fill: editorScroll
                             visible: true
                             focus: true
                             editor_enabled: editorController.chapterId !== ""
@@ -1546,10 +1447,10 @@ Rectangle {
             // Issue #825：工具 pane（Core 的 ToolPane 角色）—— 只显示 rail 选中的那个工具内容。
             RightDrawer {
                 id: rightDrawerRect
-                // 宽屏宽度取 Core 的 ToolPane bounds；非宽屏保留原来的可拖拽区间。
-                SplitView.preferredWidth: root.coreSized ? root.toolPaneWidth : 320
-                SplitView.minimumWidth: root.coreSized ? root.toolPaneWidth : 240
-                SplitView.maximumWidth: root.coreSized ? root.toolPaneWidth : 480
+                // Issue #833：工具 pane 宽度只取 Core 的 ToolPane bounds。
+                Layout.preferredWidth: root.toolPaneWidth
+                Layout.minimumWidth: root.toolPaneWidth
+                Layout.maximumWidth: root.toolPaneWidth
                 // Issue #825 复核5第1项：Core 最终判 SinglePane 时工具 pane 不存在。
                 visible: root.drawerOpen && !root.hideContentPanes
                 dt: root.dt
@@ -1582,9 +1483,10 @@ Rectangle {
             WritingToolRail {
                 id: toolRailRect
                 visible: root.toolRailVisible
-                SplitView.preferredWidth: root.coreSized ? root.toolRailWidth : 56
-                SplitView.minimumWidth: root.coreSized ? root.toolRailWidth : 56
-                SplitView.maximumWidth: root.coreSized ? root.toolRailWidth : 56
+                // Issue #833：工具 rail 宽度只取 Core 的 ToolRail bounds。
+                Layout.preferredWidth: root.toolRailWidth
+                Layout.minimumWidth: root.toolRailWidth
+                Layout.maximumWidth: root.toolRailWidth
                 dt: root.dt
                 hasConflicts: root.hasConflicts
                 selectedTool: root.drawerTool

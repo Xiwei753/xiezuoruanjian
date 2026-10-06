@@ -130,23 +130,39 @@ Rectangle {
             Repeater {
                 model: projectModel
 
-                delegate: ProjectCard {
+                // Issue #833：delegate 包一层 Item，声明与 ListModel role 同名的
+                // required property，再把这些属性传给 ProjectCard。
+                // Qt 6 delegate 上下文中 model 不可直接访问，运行时报
+                // 'model is not defined'。required property 让 Qt 自动从 model role
+                // 注入，不依赖隐式 model 对象。
+                delegate: Item {
                     width: root._cardWidth
                     height: root._cardHeight
-                    dt: root.dt
-                    cardWidth: root._cardWidth
-                    cardHeight: root._cardHeight
-                    projectId: model.projectId
-                    title: model.projectTitle
-                    wordCount: model.projectWordCount
-                    volumeCount: model.projectVolumeCount
-                    chapterCount: model.projectChapterCount
-                    lastEdited: root.formatProjectTime(model.projectLastEdited)
-                    onClicked: root.openProject(model.projectId)
-                    onRightClicked: {
-                        projectContextMenu.projectId = model.projectId
-                        projectContextMenu.projectTitle = model.projectTitle
-                        projectContextMenu.popup()
+
+                    required property string projectId
+                    required property string projectTitle
+                    required property string projectLastEdited
+                    required property int projectWordCount
+                    required property int projectVolumeCount
+                    required property int projectChapterCount
+
+                    ProjectCard {
+                        anchors.fill: parent
+                        dt: root.dt
+                        cardWidth: root._cardWidth
+                        cardHeight: root._cardHeight
+                        projectId: parent.projectId
+                        title: parent.projectTitle
+                        wordCount: parent.projectWordCount
+                        volumeCount: parent.projectVolumeCount
+                        chapterCount: parent.projectChapterCount
+                        lastEdited: root.formatProjectTime(parent.projectLastEdited)
+                        onClicked: root.openProject(parent.projectId)
+                        onRightClicked: {
+                            projectContextMenu.projectId = parent.projectId
+                            projectContextMenu.projectTitle = parent.projectTitle
+                            projectContextMenu.popup()
+                        }
                     }
                 }
             }
