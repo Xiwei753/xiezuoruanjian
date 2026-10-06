@@ -34,6 +34,10 @@ pub struct LinuxQtLayoutPlanDto {
     /// 作品卡宽度是 Core 的共用尺寸（Android / Harmony 都读同一个值），
     /// QML 侧不再自己写死一套卡片宽度。
     pub project_card_min_width_vp: f32,
+    /// Issue #833 第四轮复核：列表栏宽度（vp），Core `list_pane_width_dp` 直通。
+    /// SinglePane 抽屉、Workbench 章节栏都读同一份 Core 尺寸，
+    /// QML 不再自己写第二个 320（与 Android / Harmony 共用同一来源）。
+    pub list_pane_width_vp: f32,
 }
 
 impl LinuxQtLayoutPlanDto {
@@ -57,7 +61,7 @@ impl LinuxQtLayoutPlanDto {
             if contract.workspace_layout_mode == WorkspaceLayoutMode::SinglePane {
                 0.0
             } else {
-                // 桌面写作纸面限宽 — Qt 平台值（QML 在 < 480 时还会再夹紧）。
+                // 桌面写作纸面限宽 — Qt 平台值。
                 let padding = Self::content_padding_vp(contract) * 2.0;
                 (840.0f32).min(window_width_vp - padding).max(0.0)
             };
@@ -83,6 +87,8 @@ impl LinuxQtLayoutPlanDto {
             content_max_width_vp: paper_max_width_vp,
             content_padding_vp: Self::content_padding_vp(contract),
             project_card_min_width_vp: contract.metrics.project_card_min_width_dp,
+            // Issue #833 第四轮复核：列表栏宽度直通 Core，QML 不再硬编码 320。
+            list_pane_width_vp: contract.metrics.list_pane_width_dp,
         }
     }
 
@@ -126,12 +132,14 @@ mod tests {
         assert!(json.contains("\"contentPaddingVp\""));
         assert!(json.contains("\"showPrimaryNavigation\""));
         assert!(json.contains("\"projectCardMinWidthVp\""));
+        assert!(json.contains("\"listPaneWidthVp\""));
 
         assert!(!json.contains("\"shell_mode\""));
         assert!(!json.contains("\"content_max_width_vp\""));
         assert!(!json.contains("\"primary_navigation_placement\""));
         assert!(!json.contains("\"navigationPresentation\""));
         assert!(!json.contains("\"pagePaddingDp\""));
+        assert!(!json.contains("\"list_pane_width_vp\""));
     }
 
     #[test]
@@ -164,6 +172,23 @@ mod tests {
             );
             // Core 的默认值是 180dp，所有宽度下都应保持。
             assert_eq!(dto.project_card_min_width_vp, 180.0);
+        }
+    }
+
+    #[test]
+    fn test_list_pane_width_follows_core_metrics() {
+        // Issue #833 第四轮复核：列表栏宽度是 Core 的共用值，Qt 侧只做名字映射。
+        // SinglePane 抽屉、Workbench 章节栏都读同一份 Core 尺寸，
+        // QML 不能再自己保存第二个 320。
+        for width_vp in [360.0_f32, 700.0, 1000.0, 1400.0, 1920.0] {
+            let contract = contract_for(width_vp, 900.0);
+            let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp, true);
+            assert_eq!(
+                dto.list_pane_width_vp,
+                contract.metrics.list_pane_width_dp
+            );
+            // Core 的默认值是 320dp，所有宽度下都应保持。
+            assert_eq!(dto.list_pane_width_vp, 320.0);
         }
     }
 

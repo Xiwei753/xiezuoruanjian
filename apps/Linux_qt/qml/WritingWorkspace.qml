@@ -1432,11 +1432,17 @@ Rectangle {
             }
         }
 
-        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 320 的较小值，
-        // 不塞固定 240/320 平台端宽度——SinglePane 正文占满，抽屉只是临时覆盖。
+        // 左侧抽屉：复用 WritingChapterNavigation，宽度取可用宽度与 Core listPaneWidthVp 的较小值。
+        // Issue #833 第四轮复核：宽度来自 Core LayoutMetrics.list_pane_width_dp（经 DTO 透传），
+        // QML 不再自己写第二个 320——SinglePane 正文占满，抽屉只是临时覆盖。
         WritingChapterNavigation {
             id: singlePaneNavPanel
-            width: Math.min(parent.width, 320)
+            width: Math.min(
+                parent.width,
+                root.layoutPlan && root.layoutPlan.listPaneWidthVp > 0
+                    ? root.layoutPlan.listPaneWidthVp
+                    : parent.width
+            )
             height: parent.height
             x: 0
             y: 0
