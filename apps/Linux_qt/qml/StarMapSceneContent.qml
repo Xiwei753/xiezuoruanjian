@@ -560,10 +560,33 @@ Item {
 
     // ---------------------------------------------------------------------------
     // Issue #832 评论 6013799805 / #373：超链接菜单暴露给 Canvas 的方法。
-    // source path 一律用本层完整 nodePath()/embedPath()，不退化成裸 nodeId。
+    // 连线端点继续用全局 nodePath()/embedPath()（rootStarmapId + 完整 segments），
+    // 但超链接 source path 必须满足 Core validate_target_path() 的不变量
+    // path.starmap_id == host graph.starmap_id：本层 graphController.starmapId
+    // 已经是 finalStarmapId，所以超链接 source 用 finalStarmapId + 空/单段 segments
+    // 从本层 graph 起步，避免嵌套层用 rootStarmapId 被 Core 拒绝。
     // ---------------------------------------------------------------------------
-    function nodeSourcePath(nodeId) { return nodePath(nodeId) }
-    function embedSourcePath(instanceId) { return embedPath(instanceId) }
+    function nodeSourcePath(nodeId) {
+        return {
+            starmapId: finalStarmapId,
+            segments: [],
+            target: { type: "node", nodeId: nodeId }
+        }
+    }
+    function embedSourcePath(instanceId) {
+        return {
+            starmapId: finalStarmapId,
+            segments: [graphController.embedPathSegment(instanceId)],
+            target: { type: "starmap" }
+        }
+    }
+
+    // 进入该 embed 后的 child scene path key（与 StarMapEmbed.childContentPathKey
+    // 构造规则一致：parentPathKey + "/embed_" + instanceId）。供 Canvas focusEmbed
+    // 记录真正的 child scene 身份，避免拿父层 scenePathKey 当 child 身份。
+    function enteredChildSceneKey(instanceId) {
+        return scenePathKey + "/embed_" + instanceId
+    }
 
     // 两个 StarMapTargetPathDto 是否指向同一目标（starmapId + segments + target 全等）。
     // segments/target 是嵌套对象，用 JSON.stringify 做结构比较，避免漏判字段顺序。
@@ -583,7 +606,7 @@ Item {
 
     function listHyperlinksForNode(nodeId) {
         var items = graphController.listHyperlinks()
-        var want = nodePath(nodeId)
+        var want = nodeSourcePath(nodeId)
         var out = []
         for (var i = 0; i < items.length; i++) {
             if (_sameSourcePath(items[i].source, want)) out.push(items[i])
@@ -592,7 +615,7 @@ Item {
     }
     function listHyperlinksForEmbed(instanceId) {
         var items = graphController.listHyperlinks()
-        var want = embedPath(instanceId)
+        var want = embedSourcePath(instanceId)
         var out = []
         for (var i = 0; i < items.length; i++) {
             if (_sameSourcePath(items[i].source, want)) out.push(items[i])
@@ -601,10 +624,10 @@ Item {
     }
 
     function addHyperlinkForNode(nodeId, uri, label) {
-        return graphController.addHyperlink(nodePath(nodeId), uri, label)
+        return graphController.addHyperlink(nodeSourcePath(nodeId), uri, label)
     }
     function addHyperlinkForEmbed(instanceId, uri, label) {
-        return graphController.addHyperlink(embedPath(instanceId), uri, label)
+        return graphController.addHyperlink(embedSourcePath(instanceId), uri, label)
     }
 
     // 透传给本层 graphController。patch 由 Canvas 弹窗按 StarMapHyperlinkPatchInputDto 构造。

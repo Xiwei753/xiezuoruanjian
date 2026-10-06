@@ -771,7 +771,8 @@ QtObject {
     // ---------------------------------------------------------------------------
     function addHyperlink(sourcePath, targetUri, label) {
         if (!ensureBackend()) return null;
-        var body = { source: sourcePath, target_uri: targetUri, label: label || null };
+        // bridge 层 StarMapHyperlinkCreateInput（camelCase）：{source, targetUri, label?}
+        var body = { source: sourcePath, targetUri: targetUri, label: label || null };
         var res = normalizeBackendResult(
             starmapBackendRef.add_starmap_hyperlink(starmapId, JSON.stringify(body)),
             qsTr("添加超链接失败")
@@ -784,8 +785,8 @@ QtObject {
         return null;
     }
 
-    // patch 遵循 StarMapHyperlinkPatchInputDto：{label?, clear_label, target_uri?, source?}。
-    // 清空 label 由调用方传 clear_label:true（不在此处隐式构造）。
+    // patch 遵循 StarMapHyperlinkPatchInputDto（camelCase）：{label?, clearLabel, targetUri?, source?}。
+    // 清空 label 由调用方传 clearLabel:true（不在此处隐式构造）。
     function updateHyperlink(hlId, patch) {
         if (!ensureBackend()) return false;
         var res = normalizeBackendResult(

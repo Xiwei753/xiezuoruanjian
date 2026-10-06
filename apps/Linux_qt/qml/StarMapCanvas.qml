@@ -41,6 +41,14 @@ Item {
 
     // 根星图 ID。根层内容用它作为整棵递归树的 rootStarmapId。
     property string starmapId: ""
+    // Issue #832 评论 6014361379：切图时单独清焦点栈。不塞进 resetInteraction()，
+    // 因为 pinch 开始也会调 resetInteraction()，不能一捏就清视觉焦点。
+    onStarmapIdChanged: {
+        if (focusStack.length > 0) {
+            focusStack = []
+            focusChanged()
+        }
+    }
     required property var dt
 
     readonly property color _primary: dt.primary
@@ -151,19 +159,37 @@ Item {
     // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
     // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
     // kind/id/targetPath）。scene 矩形由 hit.owner.itemSceneRect 给出（scene/world 坐标）。
+    // Issue #832 评论 6014361379：
+    // - scenePathKey 记录进入后的 child scene path（hit.owner.enteredChildSceneKey），
+    //   不是 hit.scenePathKey（那是 embed 所属父 Scene，焦点身份会慢一层）。
+    // - 保存进入前的父层相机 parentCamera，pop 时恢复原视角。
+    // - 校验严格后代才能 push：点到兄弟/祖先时只聚焦相机不进栈。
     function focusEmbed(hit) {
         if (!hit || !hit.owner)
             return
         var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
         if (!rect)
             return
+        // 先保存当前父层相机，pop 时恢复到进入前的原视角。
+        var parentCamera = { zoom: zoomLevel, panX: panX, panY: panY }
         focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
+        // 真正的 child scene path：hit.scenePathKey 是 embed 所属父 Scene，
+        // 进入后的 child scene 要再往下钻一层。
+        var childKey = hit.owner.enteredChildSceneKey(hit.id)
+        // 校验严格后代才能 push：点到兄弟/祖先时只聚焦相机不进栈，
+        // 避免把兄弟 B 伪造成 root->A->B。focusStack 为空（root）时直接 push。
+        if (focusStack.length > 0) {
+            var topKey = focusStack[focusStack.length - 1].scenePathKey
+            if (!childKey.startsWith(topKey + "/"))
+                return
+        }
         var entry = {
-            scenePathKey: hit.scenePathKey,
+            scenePathKey: childKey,
             starmapId: hit.starmapId,
             embedInstanceId: hit.id,
             sceneRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-            targetPath: hit.targetPath
+            targetPath: hit.targetPath,
+            parentCamera: parentCamera
         }
         var next = focusStack.slice()
         next.push(entry)
@@ -173,27 +199,29 @@ Item {
 
     // 左上"返回父星图"：pop 最后一层。
     // - 栈空：已是 root，返回 false（Workspace 据此走 backClicked 退出星图工作区）。
-    // - pop 后仍非空：相机聚焦到新栈顶的 sceneRect。
-    // - pop 后变空：相机不动，留在 root 当前视角（用户可以继续平移/缩放看整棵树）。
+    // - pop 后：用被 pop 的 entry 里保存的 parentCamera 恢复相机，
+    //   而不是用新栈顶的 sceneRect 重新 focusOnSceneRect。这样每一级返回
+    //   真的回到父层原视角（root 时恢复 root 的 parentCamera）。
     function focusParentScene() {
         if (focusStack.length === 0)
             return false
         var next = focusStack.slice()
-        next.pop()
+        var popped = next.pop()
         focusStack = next
-        if (focusStack.length > 0) {
-            var top = focusStack[focusStack.length - 1]
-            var r = top.sceneRect
-            focusOnSceneRect(r.x, r.y, r.width, r.height)
+        if (popped.parentCamera) {
+            zoomLevel = popped.parentCamera.zoom
+            applyPan(popped.parentCamera.panX, popped.parentCamera.panY)
         }
         focusChanged()
         return true
     }
 
     // 缩放覆盖率滞回：zoomAt 末尾调用。只做 demote（pop），不主动 push
-    // （push 只由双击 focusEmbed 触发）。覆盖率 = 栈顶 embed 在屏幕上的可见面积
-    // / 视口面积；圆心必须落在窗口 20%~80% 区间。退出阈值 0.55（与 Harmony
-    // resolveFocusScenePath 同口径），进入阈值 0.70 不在这里 push。
+    // （push 只由双击 focusEmbed 触发）。覆盖率口径与 Harmony resolveFocusScenePath
+    // 一致：子星图投影直径 / 视口短边（不是裁剪交集面积 / 视口面积）。
+    // focusOnSceneRect 把子星图放到短边约 72%，旧面积比 0.72*0.72=0.5184 < 0.55
+    // 会在双击进入后下一次 zoomAt 立刻 pop；投影直径比 0.72 > 0.55 才稳定。
+    // 圆心必须落在窗口 20%~80% 区间。退出阈值 0.55，进入阈值 0.70 不在这里 push。
     // 用 while 循环：一次缩小可能让多层同时掉出窗口。
     function recomputeFocusFromCoverage() {
         if (focusStack.length === 0)
@@ -202,6 +230,7 @@ Item {
         var vpH = canvasArea.height
         if (!(vpW > 0) || !(vpH > 0))
             return
+        var vpShort = Math.min(vpW, vpH)
         var changed = false
         while (focusStack.length > 0) {
             var top = focusStack[focusStack.length - 1]
@@ -210,13 +239,8 @@ Item {
             var sy0 = worldToScreenY(r.y)
             var sx1 = worldToScreenX(r.x + r.width)
             var sy1 = worldToScreenY(r.y + r.height)
-            var ix0 = Math.max(sx0, 0)
-            var iy0 = Math.max(sy0, 0)
-            var ix1 = Math.min(sx1, vpW)
-            var iy1 = Math.min(sy1, vpH)
-            var interW = Math.max(0, ix1 - ix0)
-            var interH = Math.max(0, iy1 - iy0)
-            var coverage = (interW * interH) / (vpW * vpH)
+            var projectedDiameter = Math.min(Math.abs(sx1 - sx0), Math.abs(sy1 - sy0))
+            var coverage = projectedDiameter / vpShort
             var cx = worldToScreenX(r.x + r.width / 2)
             var cy = worldToScreenY(r.y + r.height / 2)
             var centerInWindow = cx >= 0.2 * vpW && cx <= 0.8 * vpW
@@ -1432,7 +1456,7 @@ Item {
                         : owner.listHyperlinksForEmbed(id)
             }
             existingHl = items && items.length > 0 ? items[0] : null
-            hyperlinkUriInput.text = existingHl ? (existingHl.target_uri || "") : ""
+            hyperlinkUriInput.text = existingHl ? (existingHl.targetUri || "") : ""
             hyperlinkLabelInput.text = existingHl ? (existingHl.label || "") : ""
             visible = true
             hyperlinkUriInput.forceActiveFocus()
@@ -1448,11 +1472,14 @@ Item {
                 return
             var label = hyperlinkLabelInput.text.trim()
             if (isEdit) {
-                // StarMapHyperlinkPatchInputDto: {label?, clear_label, target_uri?, source?}
-                var patch = { target_uri: uri, clear_label: label.length === 0 }
-                if (label.length > 0)
-                    patch.label = label
-                targetOwner.updateHyperlink(existingHl.hyperlink_id, patch)
+                // StarMapHyperlinkPatchInputDto（camelCase）：
+                // {label?, clearLabel, targetUri?, source?}
+                var patch = {
+                    targetUri: uri,
+                    clearLabel: label.length === 0,
+                    label: label.length > 0 ? label : null
+                }
+                targetOwner.updateHyperlink(existingHl.hyperlinkId, patch)
             } else {
                 if (targetType === "node")
                     targetOwner.addHyperlinkForNode(targetId, uri, label)
@@ -1465,7 +1492,7 @@ Item {
         function removeExisting() {
             if (!targetOwner || !existingHl)
                 return
-            targetOwner.deleteHyperlink(existingHl.hyperlink_id)
+            targetOwner.deleteHyperlink(existingHl.hyperlinkId)
             close()
         }
     }

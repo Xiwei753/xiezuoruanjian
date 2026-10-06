@@ -25,9 +25,9 @@
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapEmbedPatchInputDto, StarMapHyperlinkDto, StarMapHyperlinkPatchDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
-    StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto,
-    StarMapTargetPathDto,
+    StarMapHyperlinkPatchInputDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    StarMapNodePatchDto, StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto,
+    StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -381,22 +381,39 @@ pub fn unbind_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
 // 星图超链接（hyperlink）envelope 接口
 // -----------------------------------------------------------------------------
 
+/// 平台端创建超链接的 JSON 入参：只收 source/targetUri/label，
+/// hyperlink_id/created_at/updated_at 由 bridge 层统一生成。
+///
+/// 字段命名 camelCase 与 Core DTO 序列化口径一致，避免 QML 端 snake_case 解析失败。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StarMapHyperlinkCreateInput {
+    source: StarMapTargetPathDto,
+    target_uri: String,
+    label: Option<String>,
+}
+
 pub fn add_starmap_hyperlink(
     api: &WriterCoreApi,
     starmap_id: &str,
     hyperlink_json: &str,
 ) -> String {
-    let mut hl: StarMapHyperlinkDto = match serde_json::from_str(hyperlink_json) {
-        Ok(h) => h,
+    let input: StarMapHyperlinkCreateInput = match serde_json::from_str(hyperlink_json) {
+        Ok(i) => i,
         Err(e) => return envelope_err_str(&format!("Invalid hyperlink JSON: {}", e)),
     };
-    // hyperlink_id 由 bridge 层生成。Core 的 add_starmap_hyperlink 直接使用传入的
-    // hyperlink_id（重复则报 Duplicate），不会内部生成新 id，因此这里统一分配新 id，
-    // 与 create_starmap_node 在 bridge 层生成 `n_{uuid}` 的模式一致。
+    // hyperlink_id/created_at/updated_at 由 bridge 层生成，与 create_starmap_node 在
+    // bridge 层生成 `n_{uuid}` 的模式一致；Core 的 add_starmap_hyperlink 直接使用传入
+    // 的 hyperlink_id（重复则报 Duplicate），不会内部生成新 id。
     let now = now_ms();
-    hl.hyperlink_id = format!("hl_{}", uuid::Uuid::new_v4());
-    hl.created_at = now;
-    hl.updated_at = now;
+    let hl = StarMapHyperlinkDto {
+        hyperlink_id: format!("hl_{}", uuid::Uuid::new_v4()),
+        source: input.source,
+        target_uri: input.target_uri,
+        label: input.label,
+        created_at: now,
+        updated_at: now,
+    };
     envelope(api.add_starmap_hyperlink(starmap_id, hl))
 }
 
@@ -406,10 +423,13 @@ pub fn update_starmap_hyperlink(
     hyperlink_id: &str,
     patch_json: &str,
 ) -> String {
-    let patch: StarMapHyperlinkPatchDto = match serde_json::from_str(patch_json) {
-        Ok(p) => p,
+    // 平台端用扁平的 label + clear_label 表达 Option<Option<String>>，
+    // 经 StarMapHyperlinkPatchInputDto -> StarMapHyperlinkPatchDto 转换后再交给 Core。
+    let input: StarMapHyperlinkPatchInputDto = match serde_json::from_str(patch_json) {
+        Ok(i) => i,
         Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
     };
+    let patch: StarMapHyperlinkPatchDto = input.into();
     envelope(api.update_starmap_hyperlink(starmap_id, hyperlink_id, patch))
 }
 
