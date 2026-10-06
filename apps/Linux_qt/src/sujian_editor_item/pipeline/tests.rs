@@ -650,3 +650,435 @@ fn reveal_carry_target_texture_is_retained_and_prepared() {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Issue #826 评论 33 BLOCKER：真实 Pipeline layout revision 链
+// ═══════════════════════════════════════════════════════════════════════
+//
+// 评论 33 **明确要求**的测试（作为「已覆盖集合」）：
+//   1. `consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision`
+//   2. `pipeline_shaping_new_to_conceal_handoff_survives_real_layout_revision_chain`
+//   3. 旧 #738 source guard 改写成新 #826 Pipeline 结构守卫
+//      —— 见 `tests/issue826_comment6018039338_pipeline_revision_chain_guard.rs`
+//
+// 下面带「补充测试」标注的用例，只补上面 3 条**覆盖不到**的位置，
+// 每条注释写明对应哪个未覆盖位置，且不与要求的测试重复断言。
+
+/// 真实排版用的 `LayoutParams`（宽度/字号/行距都在正常区间，保证真的排出行）。
+fn chain_layout_params() -> crate::editor::layout::LayoutParams {
+    crate::editor::layout::LayoutParams {
+        width: 400.0,
+        font_size: 16.0,
+        font_family: String::from("sans-serif"),
+        line_spacing: 1.2,
+        text_indent: 0.0,
+        padding: 8.0,
+    }
+}
+
+fn chain_ctx(
+    typing_animation_enabled: bool,
+    smooth_cursor_enabled: bool,
+) -> VisualTransactionContext {
+    VisualTransactionContext {
+        typing_animation_enabled,
+        smooth_cursor_enabled,
+        coordinated_animation_enabled: false,
+        is_scrolling: false,
+        is_loading: false,
+        is_applying_format: false,
+        bounding_width: 400.0,
+        font_pixel_size: 16.0,
+        font_family: String::from("sans-serif"),
+        scroll_y: 0.0,
+        viewport_height: 600.0,
+        text_indent: 0.0,
+        line_spacing: 1.2,
+        padding: 8.0,
+        text_color: String::from("#000000"),
+        dpr: 1.0,
+    }
+}
+
+/// 构造「章节 load 完成、第一笔编辑还没发生」的 pipeline：
+/// 真实 QTextLayout 已排版 + `current_canonical_snapshot` 已就位（内容/revision 一致）。
+///
+/// `typing_animation_enabled=false` 时仍然打开平滑光标，使 `prepare_edit_motion`
+/// 继续走到 `LineSnapshotBuilder::build_old_new_from_canonical`（文字动画关、光标动画开）。
+fn chain_pipeline_ready(
+    typing_animation_enabled: bool,
+) -> (
+    LinuxEditorPipeline,
+    crate::editor::layout::EditorLayout,
+    VisualTransactionContext,
+) {
+    let mut pipeline = LinuxEditorPipeline::new();
+    assert!(
+        pipeline.load_text(String::from("af"), 2),
+        "测试正文必须能加载"
+    );
+    let mut layout = crate::editor::layout::EditorLayout::default();
+    layout.snapshot(
+        pipeline.committed_text(),
+        chain_layout_params(),
+        pipeline.text_revision(),
+    );
+    let ctx = chain_ctx(typing_animation_enabled, true);
+    let canonical = pipeline.build_canonical_snapshot_for_current_layout(&ctx, &layout);
+    pipeline.set_current_canonical_snapshot(Some(canonical));
+    pipeline.set_typing_animation_duration_ms(300);
+    (pipeline, layout, ctx)
+}
+
+/// 一笔**真实** Core 编辑 + **真实** `prepare_edit_motion`，
+/// 并把 pending promoted layout 提升成下一笔的 prepared handle
+/// （生产由 `editing.rs` / `layout_ops.rs` 做同一件事）。
+fn run_real_stroke<F>(
+    pipeline: &mut LinuxEditorPipeline,
+    layout: &mut crate::editor::layout::EditorLayout,
+    ctx: &VisualTransactionContext,
+    apply_edit: F,
+) -> VisualPrepareOutcome
+where
+    F: FnOnce(&mut LinuxEditorPipeline) -> PipelineEditOutcome,
+{
+    let old = pipeline.snapshot();
+    let edit_outcome = apply_edit(pipeline);
+    let result = match edit_outcome {
+        PipelineEditOutcome::Applied(result) => result,
+        PipelineEditOutcome::NotApplied { kind, .. } => {
+            panic!("Core 编辑未被应用，真实 revision 链没跑起来: {kind:?}");
+        }
+    };
+    let new = pipeline.snapshot();
+    let prepared = pipeline.prepare_edit_motion(ctx, &result, &old, &new, layout);
+    // 生产由 `emit_content_changed` 做同一件事：先 bump text_revision
+    //（使 new canonical 的 text_revision == pipeline.text_revision()），再提升 pending layout。
+    pipeline.bump_text_revision();
+    if let Some(promoted) = pipeline.take_pending_promoted_layout() {
+        let text = pipeline.committed_text().to_string();
+        layout.promote_prepared_layout(promoted, &text, pipeline.text_revision());
+    }
+    prepared
+}
+
+fn assert_prepared_created(stage: &str, prepared: &VisualPrepareOutcome) {
+    match prepared {
+        VisualPrepareOutcome::Created => {}
+        VisualPrepareOutcome::Skipped(reason) => {
+            panic!("{stage}: prepare_edit_motion 被跳过（{reason:?}），真实 revision 链没跑起来");
+        }
+        VisualPrepareOutcome::AnimationDisabled => {
+            panic!("{stage}: 动画未请求，真实 revision 链没跑起来");
+        }
+    }
+}
+
+fn first_line_of(snapshot: &EditorLayoutSnapshot) -> LineSnapshotId {
+    snapshot
+        .line_snapshots
+        .first()
+        .map(|line| line.id)
+        .expect("layout snapshot 必须至少有一行")
+}
+
+/// 评论 33 要求① revision continuity：两次真实 `prepare_edit_motion`。
+///
+/// 第一笔拿 `first.target_snapshot.revision = R1`；第二笔断言
+/// `second.base_snapshot.revision == R1`，并选同一稳定视觉行断言
+/// `second.base_line.id.layout_revision == first.target_line.id.layout_revision`。
+///
+/// 第二笔 Delete 的 Conceal overlay 行资源直接取自 `request.base_snapshot`，
+/// 所以 `active_old_overlay_snapshot_ids()` 返回的就是第二笔 base 的行身份。
+#[test]
+fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision() {
+    crate::editor::layout::run_on_qt_thread(|| {
+        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
+        let r0 = pipeline.layout_revision;
+
+        // 第一笔：`af` -> `afi`（真实 Core 编辑 + 真实 LineSnapshotBuilder）。
+        assert_prepared_created(
+            "第一笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
+            }),
+        );
+        let first_target = pipeline
+            .current_layout_snapshot()
+            .clone()
+            .expect("第一笔 target snapshot 必须安装到 current_layout_snapshot");
+        let r1 = pipeline.layout_revision;
+        assert_eq!(
+            first_target.revision, r1,
+            "第一笔 target snapshot 的 revision 必须等于刚提交的 Pipeline revision（R1）"
+        );
+        assert_ne!(r0, r1, "第一笔必须把 Pipeline revision 从 R0 推进到 R1");
+        let first_target_line = first_line_of(&first_target);
+        assert_eq!(
+            first_target_line.layout_revision, r1.0,
+            "第一笔 target 行身份必须带 R1"
+        );
+
+        // 第二笔：`afi` -> `af`（删 `fi`）。
+        assert_prepared_created(
+            "第二笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.delete_range(1, 3, EditorTransactionCause::Delete)
+            }),
+        );
+        let second_target = pipeline
+            .current_layout_snapshot()
+            .clone()
+            .expect("第二笔 target snapshot 必须安装到 current_layout_snapshot");
+        let r2 = pipeline.layout_revision;
+        assert_eq!(
+            second_target.revision, r2,
+            "第二笔 target snapshot 的 revision 必须等于刚提交的 Pipeline revision（R2）"
+        );
+        assert_ne!(r1, r2, "第二笔必须再把 Pipeline revision 推进到 R2");
+
+        // second.base_snapshot 的行身份 = 第二笔 Delete 的 base 行。
+        let base_lines = pipeline
+            .animation_coordinator()
+            .active_old_overlay_snapshot_ids();
+        assert!(
+            !base_lines.is_empty(),
+            "第二笔 Delete 必须登记 base 行（Conceal overlay 的纹理来源）"
+        );
+        for id in &base_lines {
+            assert_eq!(
+                id.layout_revision, first_target_line.layout_revision,
+                "second.base_snapshot 行的 layout_revision 必须等于 \
+                 first.target_line.id.layout_revision（R1 沿用），实际 base={:?} first_target={:?}",
+                id, first_target_line
+            );
+            assert_eq!(
+                (id.paragraph_id, id.visual_line_ordinal),
+                (
+                    first_target_line.paragraph_id,
+                    first_target_line.visual_line_ordinal
+                ),
+                "必须是同一稳定视觉行"
+            );
+        }
+    });
+}
+
+/// 评论 33 要求② 评论 31 的生产级回归：不使用 `stub_for_tests` 的 revision 0，
+/// 显式让第一笔 old R0 / target R1、第二笔 base **必须 R1** / target R2。
+///
+/// 第一笔形成 `f -> fi` shaping，40ms 后第二笔删整个 `fi`，断言：
+/// - `conceal_handoffs` 命中（Conceal 层仍然画着正在被吞的 fi）；
+/// - Conceal glyph 的 snapshot / source_rect / dest_rect 来自上一帧 fi；
+/// - opacity 保留上一帧值，不回 1.0（revision 链断掉时会退回 canonical 的 1.0）。
+#[test]
+fn pipeline_shaping_new_to_conceal_handoff_survives_real_layout_revision_chain() {
+    crate::editor::layout::run_on_qt_thread(|| {
+        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
+        let r0 = pipeline.layout_revision;
+
+        // 第一笔 old R0 / target R1：`af` -> `afi`，形成 f -> fi 的 shaping new atom。
+        assert_prepared_created(
+            "第一笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
+            }),
+        );
+        let first_target = pipeline
+            .current_layout_snapshot()
+            .clone()
+            .expect("第一笔 target snapshot 必须安装到 current_layout_snapshot");
+        let r1 = pipeline.layout_revision;
+        assert_eq!(first_target.revision, r1, "第一笔 target 必须是 R1");
+        assert_ne!(r0, r1, "第一笔 old 必须是 R0、target 必须是 R1");
+        let first_target_line = first_line_of(&first_target);
+
+        // 吞字进行到 40ms：此时上一帧 fi 的 shaping opacity 还在 (0,1)。
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        let shaping_now = std::time::Instant::now();
+        let shaping_frames = pipeline
+            .animation_coordinator()
+            .shaping_transition_glyphs(shaping_now);
+        assert!(
+            !shaping_frames.is_empty(),
+            "第一笔之后 shaping transition 必须还在跑，否则拿不到上一帧 fi"
+        );
+        let previous_fi = shaping_frames
+            .iter()
+            .flat_map(|frame| frame.new.iter())
+            .filter(|side| side.rect.w > 0.0)
+            .max_by(|a, b| a.rect.x.total_cmp(&b.rect.x))
+            .expect("第一笔后 shaping new 侧必须有 glyph");
+        let previous_opacity = previous_fi.opacity;
+        assert!(
+            previous_opacity > 0.0 && previous_opacity < 1.0,
+            "上一帧 fi 的 opacity 必须在 (0,1)，实际 {previous_opacity}"
+        );
+        let previous_rect = previous_fi.rect.clone();
+
+        // 第二笔 base 必须是 R1 / target R2：删整个 `fi` (1,3)。
+        assert_prepared_created(
+            "第二笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.delete_range(1, 3, EditorTransactionCause::Delete)
+            }),
+        );
+        let r2 = pipeline.layout_revision;
+        assert_ne!(r1, r2, "第二笔 target 必须是 R2");
+
+        let coordinator = pipeline.animation_coordinator();
+        let sample = coordinator
+            .sample_edit_frontier(std::time::Instant::now())
+            .expect("第二笔之后遮罩前沿必须活跃");
+        let glyphs = coordinator.old_overlay_glyphs_for(&sample);
+        let handed_off = glyphs
+            .iter()
+            .find(|glyph| glyph.range == (1, 3))
+            .expect("conceal_handoffs 必须命中：Conceal 层还画着正在被吞的 fi");
+        assert_eq!(
+            handed_off.snapshot_id.layout_revision, r1.0,
+            "Conceal glyph 必须来自上一帧 R1 行，实际 {:?}",
+            handed_off.snapshot_id
+        );
+
+        let previous_line = first_target
+            .line_snapshots
+            .iter()
+            .find(|line| line.id == handed_off.snapshot_id)
+            .expect("Conceal glyph 的行必须是上一帧（第一笔 target）的行");
+        let previous_cluster = previous_line
+            .cluster_exact_for_range((1, 3))
+            .expect("上一帧 target 必须有恰好 (1,3) 的 fi cluster");
+        assert!(
+            (handed_off.source_rect.x - previous_cluster.source_rect.x).abs() < 1e-6
+                && (handed_off.source_rect.w - previous_cluster.source_rect.w).abs() < 1e-6,
+            "Conceal glyph source_rect 必须来自上一帧 fi：期望 {:?}，实际 {:?}",
+            previous_cluster.source_rect,
+            handed_off.source_rect
+        );
+        assert!(
+            (handed_off.dest_rect.x - previous_rect.x).abs() < 1e-6
+                && (handed_off.dest_rect.w - previous_rect.w).abs() < 1e-6,
+            "Conceal glyph dest_rect 必须是上一帧 fi 的屏幕位置：期望 {:?}，实际 {:?}",
+            previous_rect,
+            handed_off.dest_rect
+        );
+
+        // opacity 保留上一帧值，不回 1.0。
+        assert!(
+            (handed_off.opacity - previous_opacity).abs() < 1e-3,
+            "Conceal glyph opacity 必须保留上一帧 fi 的 {previous_opacity}，实际 {}",
+            handed_off.opacity
+        );
+        assert!(
+            handed_off.opacity < 1.0 - 1e-6,
+            "revision 链断掉时这里会退回 canonical 的 1.0，实际 {}",
+            handed_off.opacity
+        );
+        assert!(
+            coordinator.active_conceal_glyphs_for_test() >= 1,
+            "第二笔必须至少持有一个 Conceal glyph"
+        );
+    });
+}
+
+/// 补充测试 —— 对应评论 33 明确要求的 3 条测试**覆盖不到**的位置：
+/// 要求①②两条运行时测试都在 `typing_animation_enabled = true` 下跑，
+/// 没覆盖评论 33 的位置约束「不依赖 text_animation_enabled —— 即使动画开关关闭，
+/// 新 canonical 仍然是新 revision」。
+///
+/// 这里文字动画关、平滑光标开：`prepare_edit_motion` 仍然排版并成功返回
+/// `build_old_new_from_canonical`，只是不创建正文动画
+///（`VisualPrepareOutcome::Created` 不成立），revision 仍必须提交。
+#[test]
+fn layout_revision_commits_even_when_text_animation_is_disabled() {
+    crate::editor::layout::run_on_qt_thread(|| {
+        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(false);
+        let r0 = pipeline.layout_revision;
+
+        let prepared = run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+            pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
+        });
+        match prepared {
+            VisualPrepareOutcome::Created => {
+                panic!("文字动画关闭时不应创建正文动画");
+            }
+            VisualPrepareOutcome::Skipped(_) | VisualPrepareOutcome::AnimationDisabled => {}
+        }
+
+        let target = pipeline
+            .current_layout_snapshot()
+            .clone()
+            .expect("文字动画关闭时仍要安装新的 target snapshot");
+        let committed = pipeline.layout_revision;
+        assert_ne!(
+            r0, committed,
+            "文字动画关闭时 layout_revision 仍必须推进（不依赖 text_animation_enabled）"
+        );
+        assert_eq!(
+            committed, target.revision,
+            "提交的 revision 必须就是这一笔 target snapshot 的 revision"
+        );
+    });
+}
+
+/// 补充测试 —— 对应评论 33 明确要求的 3 条测试**覆盖不到**的位置：
+/// 要求②只断言 Conceal **glyph** 的 snapshot / source / rect / opacity（命中路径），
+/// 没断言行图来源登记 `active_conceal_source_lines()` —— renderer 靠它把 base 行图
+/// 插进 TextureCache，行图来源身份错了会直接 miss 纹理。
+///
+/// 与要求②不重复：这里断言的是**行图来源**这一层，不是 glyph 层。
+#[test]
+fn conceal_line_image_sources_come_from_previous_target_revision_line() {
+    crate::editor::layout::run_on_qt_thread(|| {
+        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
+
+        assert_prepared_created(
+            "第一笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
+            }),
+        );
+        let first_target = pipeline
+            .current_layout_snapshot()
+            .clone()
+            .expect("第一笔 target snapshot 必须安装");
+        let r1 = pipeline.layout_revision;
+        let first_target_line = first_line_of(&first_target);
+
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        assert_prepared_created(
+            "第二笔",
+            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
+                pipeline.delete_range(1, 3, EditorTransactionCause::Delete)
+            }),
+        );
+
+        let sources = pipeline
+            .animation_coordinator()
+            .active_conceal_source_lines();
+        assert!(
+            !sources.is_empty(),
+            "第二笔 Conceal 必须登记行图来源（否则 renderer 的 TextureCache 会 miss）"
+        );
+        for source in &sources {
+            assert_eq!(
+                source.snapshot_id.layout_revision, r1.0,
+                "Conceal 行图来源必须是上一帧 R1 行，实际 {:?}",
+                source.snapshot_id
+            );
+            assert!(
+                first_target
+                    .line_snapshots
+                    .iter()
+                    .any(|line| line.id == source.snapshot_id),
+                "Conceal 行图来源必须能在上一帧 target snapshot 里找到，实际 {:?}",
+                source.snapshot_id
+            );
+            assert_eq!(
+                source.snapshot_id.layout_revision, first_target_line.layout_revision,
+                "行图来源必须与上一帧 target 的稳定视觉行同 revision"
+            );
+        }
+    });
+}

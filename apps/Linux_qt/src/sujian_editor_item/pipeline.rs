@@ -1835,6 +1835,22 @@ impl LinuxEditorPipeline {
                 }
             };
 
+            // Issue #826 评论 33 阻塞：成功返回 (old_snap, new_snap) 后**无条件**提交
+            // 新 layout revision，恢复 #738 的不变量：
+            // 「新 canonical / new layout snapshot 已经成功确定，这个 revision 就成为
+            // Pipeline 当前 revision」。LineSnapshotBuilder 用 revision 造行视觉身份
+            // （LineSnapshotId::new(revision.0, ...)），下一笔 old_revision 必须等于
+            // 上一笔 new_revision，上一笔 target 的 LineSnapshotId 才能和下一笔 base 的
+            // LineSnapshotId 连续；否则 owner handoff 的视觉键
+            // `(LineSnapshotId, visual_cluster_range)` 在生产链上必然 miss，
+            // Conceal 只能退回 canonical（opacity 1.0），评论 31 的闪变复活。
+            //
+            // 位置约束：
+            // - 只在 build_old_new_from_canonical 成功后提交（Err 分支已 return，不会走到这）；
+            // - 不依赖 text_animation_enabled —— 动画关闭时新 canonical 仍是新 revision；
+            // - 不再调 LayoutRevision::next() 造第三个 revision（直接复用已采样的 new_revision）。
+            self.layout_revision = new_revision;
+
             // Issue #826: 正文动画的唯一入口。正文已经由 Core 立即提交，
             // 这里只把"本轮改掉了什么"交给遮罩前沿 + 独立 Reflow 层。
             // 不再创建 prepared transaction，不再 rebase，不再 carry 历史 unit。
