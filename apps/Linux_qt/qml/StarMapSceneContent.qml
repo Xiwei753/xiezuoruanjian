@@ -1010,12 +1010,16 @@ Item {
                         if (oldHost === host) {
                             // 宿主不变：直接 update target
                             action = "update"
-                            success = host.updateLink(ic.linkExistingId, { target: plan.to })
+                            success = host.updateLink(ic.linkExistingId, {
+                                target: plan.to,
+                                clearLabel: false
+                            })
                             cancelled = !success
                         } else {
                             // 宿主变化：先在新宿主创建，成功后删旧的；
                             // 删旧失败则回滚新的，不留双份。
-                            var newLink = host.addLinkReturningDto(plan.from, plan.to, "")
+                            var newLink = host.addLinkReturningDto(
+                                plan.from, plan.to, ic.linkExistingLabel)
                             if (newLink) {
                                 var delOk = oldHost.deleteLink(ic.linkExistingId)
                                 if (delOk) {

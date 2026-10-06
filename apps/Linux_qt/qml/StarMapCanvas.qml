@@ -1466,7 +1466,8 @@ Item {
                                         linkDialog.sourcePath,
                                         linkDialog.sourceOwner.scenePathKey,
                                         modelData.link.linkId,
-                                        modelData.hostOwner)
+                                        modelData.hostOwner,
+                                        modelData.link.label || "")
                                 linkDialog.close()
                             }
                         }

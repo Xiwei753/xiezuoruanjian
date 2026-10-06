@@ -354,50 +354,47 @@ Item {
             visible: !root.isSelected
         }
 
-        // ── 标题文字（纯展示）──
-        // 点不点得到由递归命中测试决定（GraphController 的圆壳几何），
-        // 文字只是画在圆顶部。
-        AppText {
-            id: titleLabel
-            dt: root.dt
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            height: root._chromeHeight
-            text: root.label
-            color: root._textPrimary
-            font.pointSize: root.dt.fontSmPt
-            wrapMode: Text.NoWrap
-            elide: Text.ElideRight
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-
-        // ── contentViewport ──
-        // 铺满整个圆盒：圆内（chrome 之外）都属于"进入子图"的交互语义，
-        // 不再用一块更小的矩形制造接不到事件的死区。
-        // 子内容布局由安全区约束（见 contentUsableSideNow），不会溢出圆外。
-        // Issue #834 复核：圆形 mask 通过 contentSource.layer.effect 替换这一层
-        // 自己的输出，不会再在下面漏一份原矩形。mask 用 ShaderEffectSource
-        // （合法纹理源），不用普通不可见 Item。
+        // ── maskedContent：标题 + 子内容统一圆形 mask ──
+        // Issue #834 复核：标题、节点、子子星图都在同一个圆形 mask 内。
+        // titleLabel 横跨 200px，圆顶部可见宽度远小于此，不 mask 会在圆角外绘制。
+        // 一整个 maskedContent 只做一次 layer.effect，不嵌套两层 FBO。
         Item {
-            id: contentViewport
+            id: maskedContent
             anchors.fill: parent
+            layer.enabled: true
+            layer.effect: MultiEffect {
+                maskEnabled: true
+                maskSource: circleMaskTexture
+            }
 
-            // 子内容先画在 contentSource 上，layer.effect 把它裁成圆形。
+            // ── 标题文字（纯展示）──
+            // 点不点得到由递归命中测试决定（GraphController 的圆壳几何），
+            // 文字只是画在圆顶部。
+            AppText {
+                id: titleLabel
+                dt: root.dt
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                height: root._chromeHeight
+                text: root.label
+                color: root._textPrimary
+                font.pointSize: root.dt.fontSmPt
+                wrapMode: Text.NoWrap
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            // ── contentViewport ──
+            // 铺满整个圆盒：圆内（chrome 之外）都属于"进入子图"的交互语义，
+            // 不再用一块更小的矩形制造接不到事件的死区。
+            // 子内容布局由安全区约束（见 contentUsableSideNow），不会溢出圆外。
             Item {
-                id: contentSource
+                id: contentViewport
                 anchors.fill: parent
-                // layer.enabled 让这一层渲染到 FBO，layer.effect 替换 FBO 的输出。
-                // MultiEffect maskEnabled 用 maskSource 的 alpha 通道裁剪：
-                // 圆内不透明（保留），圆外透明（裁掉）。
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    maskEnabled: true
-                    maskSource: circleMaskTexture
-                }
 
                 // Issue #822：懒加载子星图内容（不是子视口）。
                 // 子内容没有自己的 pan/zoom，也没有子视口手势状态。
@@ -421,28 +418,28 @@ Item {
                     }
                 }
             }
+        }
 
-            // 圆形 mask 形状：不透明区域 = 圆内（保留），透明 = 圆外（裁掉）。
-            // ShaderEffectSource 把它渲染成纹理供 MultiEffect 采样；
-            // hideSource: true 隐藏原始形状，不直接显示。
-            Item {
-                id: circleMaskShape
-                width: visualEmbed.width
-                height: visualEmbed.height
+        // 圆形 mask 形状：不透明区域 = 圆内（保留），透明 = 圆外（裁掉）。
+        // ShaderEffectSource 把它渲染成纹理供 MultiEffect 采样；
+        // hideSource: true 隐藏原始形状，不直接显示。
+        Item {
+            id: circleMaskShape
+            width: visualEmbed.width
+            height: visualEmbed.height
 
-                Rectangle {
-                    anchors.fill: parent
-                    radius: width / 2
-                    color: "white"
-                    antialiasing: true
-                }
+            Rectangle {
+                anchors.fill: parent
+                radius: width / 2
+                color: "white"
+                antialiasing: true
             }
+        }
 
-            ShaderEffectSource {
-                id: circleMaskTexture
-                sourceItem: circleMaskShape
-                hideSource: true
-            }
+        ShaderEffectSource {
+            id: circleMaskTexture
+            sourceItem: circleMaskShape
+            hideSource: true
         }
 
         // ── 选中 ring ──
