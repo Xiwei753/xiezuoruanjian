@@ -90,6 +90,13 @@ Item {
         if (ic.pointerMode === "pinch")
             return
         canvas.notePointerDevice(source === "touch")
+        // Issue #834 复核：armed 态期间下一次左键只负责选 target，
+        // 不参与普通 pressPending / move / 长按连线。
+        // linkArmed 时 pointerMode 是 idle，不拦会重新进 pressPending，
+        // 长按甚至被提升成 Edge connect，两个模式会串。
+        // connectArmed 时 pointerMode 是 connect，release 会提前 endConnect。
+        if (ic.linkArmed || ic.connectArmed)
+            return
         pressScreenX = point.position.x
         pressScreenY = point.position.y
         var hit = hitAt(pressScreenX, pressScreenY)
@@ -353,6 +360,15 @@ Item {
     // ── 松手统一出口：click / move / connect / pan 都在这里闭环 ──
     function handleRelease() {
         if (!canvas || !ic) {
+            cancelLocalState()
+            return
+        }
+        // Issue #834 复核：armed 态下 release 不走普通 mode 收尾。
+        // armed 的 target 选择由 handleSingleTap 负责（TapHandler 和
+        // PointHandler 是独立 passive 观察者，同一条 pointer 流都会收到，
+        // 不能赌 signal 顺序）。release 只清 Router 自己的临时 press 状态，
+        // armed 状态留给 handleSingleTap() / Escape / 右键取消。
+        if (ic.linkArmed || ic.connectArmed) {
             cancelLocalState()
             return
         }

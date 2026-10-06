@@ -379,16 +379,25 @@ Item {
         // 铺满整个圆盒：圆内（chrome 之外）都属于"进入子图"的交互语义，
         // 不再用一块更小的矩形制造接不到事件的死区。
         // 子内容布局由安全区约束（见 contentUsableSideNow），不会溢出圆外。
-        // Issue #834：用 MultiEffect 圆形 mask 真正把子内容裁成圆形。
-        // 旧 Item.clip 只矩形裁剪，外壳圆但子内容可能在四角露成方形。
+        // Issue #834 复核：圆形 mask 通过 contentSource.layer.effect 替换这一层
+        // 自己的输出，不会再在下面漏一份原矩形。mask 用 ShaderEffectSource
+        // （合法纹理源），不用普通不可见 Item。
         Item {
             id: contentViewport
             anchors.fill: parent
 
-            // 子内容先画在 contentSource 上，再被圆形 mask 裁掉圆外部分。
+            // 子内容先画在 contentSource 上，layer.effect 把它裁成圆形。
             Item {
                 id: contentSource
                 anchors.fill: parent
+                // layer.enabled 让这一层渲染到 FBO，layer.effect 替换 FBO 的输出。
+                // MultiEffect maskEnabled 用 maskSource 的 alpha 通道裁剪：
+                // 圆内不透明（保留），圆外透明（裁掉）。
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    maskEnabled: true
+                    maskSource: circleMaskTexture
+                }
 
                 // Issue #822：懒加载子星图内容（不是子视口）。
                 // 子内容没有自己的 pan/zoom，也没有子视口手势状态。
@@ -413,21 +422,13 @@ Item {
                 }
             }
 
-            // 圆形 mask：把 contentSource 裁成和 visualEmbed 同样大的正圆。
-            MultiEffect {
-                anchors.fill: contentSource
-                source: contentSource
-                maskEnabled: true
-                maskSource: circleMask
-            }
-
-            // mask 源：不透明区域 = 圆内（保留），透明区域 = 圆外（裁掉）。
-            // visible: false，mask 源不直接显示，只供 MultiEffect 采样。
+            // 圆形 mask 形状：不透明区域 = 圆内（保留），透明 = 圆外（裁掉）。
+            // ShaderEffectSource 把它渲染成纹理供 MultiEffect 采样；
+            // hideSource: true 隐藏原始形状，不直接显示。
             Item {
-                id: circleMask
+                id: circleMaskShape
                 width: visualEmbed.width
                 height: visualEmbed.height
-                visible: false
 
                 Rectangle {
                     anchors.fill: parent
@@ -435,6 +436,12 @@ Item {
                     color: "white"
                     antialiasing: true
                 }
+            }
+
+            ShaderEffectSource {
+                id: circleMaskTexture
+                sourceItem: circleMaskShape
+                hideSource: true
             }
         }
 

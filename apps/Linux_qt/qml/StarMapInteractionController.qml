@@ -102,6 +102,10 @@ QtObject {
     property string linkFromId: ""
     property var linkFromPath: null
     property string linkFromScenePathKey: ""
+    // Issue #834 复核：重新指定已有 Link 的 target。
+    // 非空时 finishLink 走 update/migrate 而不是 create。
+    property string linkExistingId: ""
+    property var linkExistingHostOwner: null
 
     property bool connectArmed: false
 
@@ -302,12 +306,14 @@ QtObject {
     // ── Issue #834：菜单发起的 armed 态入口 ──
     // 菜单"内部链接 → 选择目标"进入 linkArmed。不画预览（Link 不是语义边），
     // pointerMode 保持 idle，下一次 tap 由 Router 路由到 finishLink。
-    function beginLinkArmed(kind, id, sourcePath, scenePathKey) {
+    function beginLinkArmed(kind, id, sourcePath, scenePathKey, existingLinkId, existingHostOwner) {
         linkArmed = true
         linkFromKind = kind
         linkFromId = id
         linkFromPath = sourcePath
         linkFromScenePathKey = scenePathKey
+        linkExistingId = existingLinkId || ""
+        linkExistingHostOwner = existingHostOwner || null
     }
 
     // 菜单"连线"进入 connectArmed。source 已知，等用户点 target。
@@ -337,6 +343,8 @@ QtObject {
         linkFromId = ""
         linkFromPath = null
         linkFromScenePathKey = ""
+        linkExistingId = ""
+        linkExistingHostOwner = null
         connectArmed = false
         if (pointerMode === "connect")
             endConnect()
@@ -426,6 +434,8 @@ QtObject {
         linkFromId = ""
         linkFromPath = null
         linkFromScenePathKey = ""
+        linkExistingId = ""
+        linkExistingHostOwner = null
         connectArmed = false
     }
 }

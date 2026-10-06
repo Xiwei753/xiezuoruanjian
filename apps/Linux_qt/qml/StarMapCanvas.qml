@@ -1394,7 +1394,10 @@ Item {
         }
 
         // target 路径摘要：node 显示 nodeId，starmap(embed) 显示"子星图"。
-        function targetSummary(link) {
+        // Issue #834 复核：linkItems 现在是 [{ link: dto, hostOwner: hostContent }]，
+        // 这里收 item，读 item.link。
+        function targetSummary(item) {
+            var link = item && item.link ? item.link : null
             if (!link || !link.target)
                 return ""
             var t = link.target.target
@@ -1443,18 +1446,51 @@ Item {
                         dt: canvasArea.dt
                         Layout.fillWidth: true
                         text: linkDialog.targetSummary(modelData)
-                                + (modelData.label ? "（" + modelData.label + "）" : "")
+                                + (modelData.link.label ? "（" + modelData.link.label + "）" : "")
                         color: _textPrimary
                         font.pointSize: dt.bodyPt
                         elide: Text.ElideRight
                     }
 
                     Button {
+                        id: linkReassignBtn
+                        text: qsTr("重新指定")
+                        onClicked: {
+                            // 重新指定这条 Link 的 target：进入 linkArmed 并记住
+                            // existingLinkId + oldHostOwner，选新 target 后 finishLink
+                            // 走 update/migrate。
+                            if (modelData.hostOwner && modelData.link.linkId) {
+                                interaction.beginLinkArmed(
+                                        linkDialog.sourceKind,
+                                        linkDialog.sourceId,
+                                        linkDialog.sourcePath,
+                                        linkDialog.sourceOwner.scenePathKey,
+                                        modelData.link.linkId,
+                                        modelData.hostOwner)
+                                linkDialog.close()
+                            }
+                        }
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: linkReassignBtn.text
+                            color: _textSecondary
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: linkReassignBtn.hovered ? _surfaceContainer : "transparent"
+                            border.color: _border
+                            radius: _radiusXs
+                        }
+                    }
+
+                    Button {
                         id: linkDelBtn
                         text: qsTr("删除")
                         onClicked: {
-                            if (linkDialog.sourceOwner && modelData.linkId) {
-                                linkDialog.sourceOwner.deleteLink(modelData.linkId)
+                            // 删除必须调这条 Link 自己的 hostOwner.deleteLink，
+                            // 不能固定 sourceOwner（跨层 Link 宿主可能不是命中层）。
+                            if (modelData.hostOwner && modelData.link.linkId) {
+                                modelData.hostOwner.deleteLink(modelData.link.linkId)
                                 linkDialog.refreshItems()
                             }
                         }

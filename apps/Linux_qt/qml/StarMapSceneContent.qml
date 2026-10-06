@@ -669,21 +669,46 @@ Item {
         return graphController.deleteHyperlink(hlId)
     }
 
-    // Issue #834：内部链接（StarMapLink）暴露给 Canvas 的方法。
-    // listLinksForSource 按 source path 过滤该 node/embed 已有的内部链接，
-    // 供 linkDialog 展示列表；deleteLink 透传给本层 graphController。
-    // Link 的 source 是 StarMapTargetPathDto，用 isSameTargetPath 比较路径。
+    // Issue #834 复核：宿主感知的 Link 列表。
+    // Link 可能存在本层，也可能存在任意祖先宿主（跨层 Link 的 LCA 宿主
+    // 是两端 Scene 的最近公共祖先，可能在 source 层之上）。
+    // 沿 ownerSceneContent 链从本层走到 root，每个候选 host 查自己的 listLinks()，
+    // 把 host-relative link.source 转回 root-absolute 再和右键的 sourcePath 比。
+    // 返回 [{ link: dto, hostOwner: hostContent }]，删除/重新指定时用 hostOwner
+    // 调对应宿主的方法，不能固定 sourceOwner。
     function listLinksForSource(sourcePath) {
-        var items = graphController.listLinks()
         var out = []
-        for (var i = 0; i < items.length; i++) {
-            if (StarMapPathPlanner.isSameTargetPath(items[i].source, sourcePath))
-                out.push(items[i])
+        var host = content
+        while (host) {
+            var items = host.listLinks ? host.listLinks() : []
+            for (var i = 0; i < items.length; i++) {
+                var absSource = {
+                    starmapId: host.rootStarmapId,
+                    segments: host.pathSegments.concat(items[i].source.segments || []),
+                    target: items[i].source.target
+                }
+                if (StarMapPathPlanner.isSameTargetPath(absSource, sourcePath))
+                    out.push({ link: items[i], hostOwner: host })
+            }
+            host = host.ownerSceneContent
         }
         return out
     }
     function deleteLink(linkId) {
         return graphController.deleteLink(linkId)
+    }
+    // Issue #834 复核：供 listLinksForSource 沿祖先链遍历时外部调本层 listLinks。
+    function listLinks() {
+        return graphController.listLinks()
+    }
+    // Issue #834 复核：重新指定 target 时 update Link 的 target。
+    function updateLink(linkId, patch) {
+        return graphController.updateLink(linkId, patch)
+    }
+    // Issue #834 复核：migrate 时需要拿到新 Link 的 id 用于回滚，
+    // 返回 DTO 而非 boolean。
+    function addLinkReturningDto(sourcePath, targetPath, label) {
+        return graphController.addLink(sourcePath, targetPath, label)
     }
 
     // ---------------------------------------------------------------------------
@@ -950,9 +975,12 @@ Item {
             menuHost.hideTouchPreview()
     }
 
-    // Issue #834：linkArmed 下一次 tap 命中 node/embed → 建内部链接。
-    // 与 finishConnect 同构：linkFromPath → toHit.targetPath，LCA 规划复用
-    // planCrossLayerRelation（Edge/Link 共用），落库走 commitLinkWithPaths。
+    // Issue #834 复核：linkArmed 下一次 tap 命中 node/embed → 建内部链接或重新指定。
+    // linkExistingId 非空时是"重新指定"：
+    //   - 新旧宿主相同：直接 updateLink 改 target
+    //   - 宿主变化：先在新宿主创建新 Link，成功后删除旧宿主旧 Link；
+    //     旧 Link 删除失败时回滚刚创建的新 Link，不留双份关系。
+    // linkExistingId 为空时是新建（原逻辑）。
     function finishLink(toHit) {
         var ic = interactionController
         var fromKind = ic.linkFromKind
@@ -963,6 +991,7 @@ Item {
         var cancelled = true
         var hostPathKey = ""
         var hostStarmapId = ""
+        var action = "create"
         if (toHit && (toHit.kind === "node" || toHit.kind === "embed")) {
             var sameTarget = toHit.scenePathKey === ic.linkFromScenePathKey && toHit.id === fromId
             if (!sameTarget) {
@@ -975,8 +1004,39 @@ Item {
                 if (plan) {
                     hostPathKey = host.scenePathKey
                     hostStarmapId = host.finalStarmapId
-                    success = host.commitLinkWithPaths(plan.from, plan.to)
-                    cancelled = !success
+                    if (ic.linkExistingId !== "" && ic.linkExistingHostOwner) {
+                        action = "migrate"
+                        var oldHost = ic.linkExistingHostOwner
+                        if (oldHost === host) {
+                            // 宿主不变：直接 update target
+                            action = "update"
+                            success = host.updateLink(ic.linkExistingId, { target: plan.to })
+                            cancelled = !success
+                        } else {
+                            // 宿主变化：先在新宿主创建，成功后删旧的；
+                            // 删旧失败则回滚新的，不留双份。
+                            var newLink = host.addLinkReturningDto(plan.from, plan.to, "")
+                            if (newLink) {
+                                var delOk = oldHost.deleteLink(ic.linkExistingId)
+                                if (delOk) {
+                                    success = true
+                                    cancelled = false
+                                } else {
+                                    // 回滚：删掉刚创建的新 Link
+                                    if (newLink.linkId)
+                                        host.deleteLink(newLink.linkId)
+                                    success = false
+                                    cancelled = true
+                                }
+                            } else {
+                                success = false
+                                cancelled = true
+                            }
+                        }
+                    } else {
+                        success = host.commitLinkWithPaths(plan.from, plan.to)
+                        cancelled = !success
+                    }
                 }
             }
         }
@@ -985,6 +1045,7 @@ Item {
             "toPath": toPath ? JSON.stringify(toPath) : "",
             "hostPathKey": hostPathKey,
             "hostStarmapId": hostStarmapId,
+            "action": action,
             "success": success,
             "cancel": cancelled
         })
