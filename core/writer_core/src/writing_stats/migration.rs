@@ -55,9 +55,12 @@ pub fn migrate_stats_to_local_calendar(app_data_root: &Path) -> Result<()> {
 
     let store = StatsStore::new(app_data_root);
 
-    // 没有任何 daily 文件时说明这个安装还没写过统计，重建是空操作。
-    // 但仍要写 marker，否则每次启动都要重扫一遍 events 目录。
-    if !store.daily_dir_has_stats()? {
+    // 空安装判断 =「daily 没有统计文件」**且**「raw events 也为空」。
+    //
+    // 只看 daily 会漏一种真实情况：raw events 已存在但 daily 恰好缺失
+    // （例如上次迁移失败、或用户手工删过 daily 目录）。此时若直接写 marker，
+    // daily 永远不会被重建，统计就此一直缺失。
+    if !store.daily_dir_has_stats()? && store.list_event_file_dates()?.is_empty() {
         write_marker(&stats_dir)?;
         return Ok(());
     }
@@ -79,13 +82,18 @@ fn write_marker(stats_dir: &Path) -> Result<()> {
 }
 
 /// 给缺 `local_date` 的老事件补本地日历日并回写 raw 文件。
+///
+/// **必须**用 `load_events_for_date_strict`：宽松 loader 会静默跳过解析不了的
+/// 行，回写时那些原始数据就被永久删掉了。任一行坏掉就带文件名+行号返回 Err，
+/// 此时一个字节都没改写，旧 `daily/` 也保留（步骤 2 还没跑）。
 fn backfill_event_local_dates(store: &StatsStore) -> Result<()> {
     for date in store.list_event_file_dates()? {
-        let events = store.load_events_for_date(&date)?;
+        let events = store.load_events_for_date_strict(&date)?;
         if events.iter().all(|e| !e.local_date.is_empty()) {
             continue;
         }
 
+        // 先在内存里拼好完整内容，全部成功才落盘，避免「写了一半失败」留下截断文件。
         let mut lines = String::new();
         for mut event in events {
             if event.local_date.is_empty() {
@@ -215,5 +223,124 @@ mod tests {
         let dir = tempdir().unwrap();
         migrate_stats_to_local_calendar(dir.path()).unwrap();
         assert!(dir.path().join("app-meta/stats").join(MARKER_NAME).exists());
+    }
+
+    /// 造一条带指定 device_id / 字数 / 时间戳的老事件（无 local_date）。
+    fn legacy_event(dir: &Path, device_id: &str, chars: u32, timestamp_ms: i64) {
+        let mut event = WritingInputEvent::new(
+            device_id,
+            Platform::Desktop,
+            "desktop",
+            "p1",
+            "v1",
+            "c1",
+            EventSource::HumanTyped,
+            chars,
+            0,
+            0,
+            0,
+            0,
+            "s1",
+        );
+        event.timestamp_ms = timestamp_ms;
+        event.local_date = String::new();
+        let store = StatsStore::new(dir);
+        store.record_event(event).unwrap();
+        store.flush_events().unwrap();
+    }
+
+    /// 汇总某天所有设备的纯输入字数。
+    fn total_chars_on(dir: &Path, date: &str) -> u64 {
+        StatsStore::new(dir)
+            .load_all_daily_stats_for_date(date)
+            .unwrap()
+            .iter()
+            .map(|s| s.total_human_typed_chars)
+            .sum()
+    }
+
+    // `aggregate_events` 按 (business_date, device_id) 分组，同一天返回多条。
+    // 重建时若自己拼 `DailyStatsFile { devices: vec![stats] }` 覆盖写，
+    // 后一个设备会把前一个设备的数据整条顶掉——同一天多设备只剩最后一个。
+    #[test]
+    fn test_migration_keeps_all_devices_of_same_day() {
+        let dir = tempdir().unwrap();
+        let ts = 1_791_217_800_000; // UTC+8 本地 2026-10-06 00:30
+        legacy_event(dir.path(), "dev-A", 10, ts);
+        legacy_event(dir.path(), "dev-B", 20, ts);
+        let local_day = crate::writing_stats::calendar::local_date_at(ts).unwrap();
+
+        // 老口径写一个只含单设备的 daily，触发重建路径。
+        write_daily(dir.path(), "2026-10-05", 30);
+
+        migrate_stats_to_local_calendar(dir.path()).unwrap();
+
+        let devices = StatsStore::new(dir.path())
+            .load_all_daily_stats_for_date(&local_day)
+            .unwrap();
+        assert_eq!(devices.len(), 2, "同一天的两个设备都必须在重建结果里");
+        assert_eq!(
+            total_chars_on(dir.path(), &local_day),
+            30,
+            "汇总必须是 10 + 20，而不是其中之一"
+        );
+    }
+
+    // 迁移回写 raw events 时若用容错 loader，解析不了的原始行会被永久删除。
+    // 严格 loader 必须在坏行上报错并中止，让旧 daily 保留。
+    #[test]
+    fn test_migration_refuses_to_delete_corrupt_raw_event() {
+        let dir = tempdir().unwrap();
+        let ts = chrono::Utc::now().timestamp_millis();
+        legacy_event(dir.path(), "dev-1", 30, ts);
+        write_daily(dir.path(), "2026-10-05", 30);
+
+        // 往 raw 文件追加一行无法反序列化的旧 schema 数据。
+        let store = StatsStore::new(dir.path());
+        let utc_date = store.timestamp_to_date(ts).unwrap();
+        let raw_path = dir.path().join("app-meta/stats/events.local");
+        let raw =
+            std::fs::read_to_string(&raw_path.join(format!("{}.events.jsonl", utc_date))).unwrap();
+        std::fs::write(
+            raw_path.join(format!("{}.events.jsonl", utc_date)),
+            format!("{}{}", raw, "{\"totally\":\"unknown-schema\"}\n"),
+        )
+        .unwrap();
+
+        let err = migrate_stats_to_local_calendar(dir.path()).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains(&utc_date) && msg.contains(":2"),
+            "错误应带文件名和行号，实际：{}",
+            msg
+        );
+
+        // 坏行必须还在 raw 文件里（一个字节都没丢）。
+        let raw_after =
+            std::fs::read_to_string(&raw_path.join(format!("{}.events.jsonl", utc_date))).unwrap();
+        assert!(raw_after.contains("totally"), "损坏的原始行不能被静默删除");
+        // 旧 daily 保留：步骤 2（删 daily）根本没跑到。
+        assert_eq!(total_chars_on(dir.path(), "2026-10-05"), 30);
+        assert!(!dir.path().join("app-meta/stats").join(MARKER_NAME).exists());
+    }
+
+    // raw events 存在但 daily 恰好缺失时，不能直接写 marker 跳过重建，
+    // 否则 daily 永远缺失、统计一直空白。
+    #[test]
+    fn test_migration_rebuilds_when_daily_missing_but_events_present() {
+        let dir = tempdir().unwrap();
+        let ts = chrono::Utc::now().timestamp_millis();
+        legacy_event(dir.path(), "dev-1", 25, ts);
+        // 故意不写 daily：模拟「有 raw、daily 缺失」。
+        assert!(!StatsStore::new(dir.path()).daily_dir_has_stats().unwrap());
+
+        migrate_stats_to_local_calendar(dir.path()).unwrap();
+
+        let today = crate::writing_stats::calendar::local_today_date();
+        assert_eq!(
+            total_chars_on(dir.path(), &today),
+            25,
+            "有 raw events 却缺 daily 时必须重建"
+        );
     }
 }

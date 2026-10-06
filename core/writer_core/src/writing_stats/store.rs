@@ -289,6 +289,44 @@ impl StatsStore {
         Ok(false)
     }
 
+    /// 严格读取某个 UTC 分区的事件文件，**任何一行解析失败都返回 Err**。
+    ///
+    /// 与 [`StatsStore::load_events_for_date`] 的区别：后者为了查询容错会
+    /// 静默跳过坏行（`if let Ok(...)`），这对「只读」是对的——统计少算
+    /// 一条历史比崩掉编辑器好。但**迁移不能用它**：迁移要把读出来的事件
+    /// 重新序列化后整文件回写，走宽松 loader 会把解析不了的原始行永久删掉。
+    ///
+    /// 严格版带文件名 + 行号报错，迁移据此中止并保留旧 `daily/`。
+    pub fn load_events_for_date_strict(&self, date: &str) -> Result<Vec<WritingInputEvent>> {
+        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
+        if !file_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file = File::open(&file_path)?;
+        let reader = BufReader::new(file);
+        let mut events = Vec::new();
+
+        for (idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let event: WritingInputEvent = serde_json::from_str(trimmed).map_err(|e| {
+                crate::Error::Other(format!(
+                    "Corrupt event at {}.events.jsonl:{}: {}",
+                    date,
+                    idx + 1,
+                    e
+                ))
+            })?;
+            events.push(event);
+        }
+
+        Ok(events)
+    }
+
     /// 列出 `events.local/` 下所有事件文件的日期部分（升序）。
     pub fn list_event_file_dates(&self) -> Result<Vec<String>> {
         let dir = self.events_dir();
@@ -371,12 +409,12 @@ impl StatsStore {
             return Ok(());
         }
 
+        // `aggregate_events` 按 `(business_date, device_id)` 分组，同一天会有多条
+        // `DailyStats`（每设备一条）。必须走 `save_or_merge_daily_stats` 合并进同一个
+        // 日期文件——自己拼 `DailyStatsFile { devices: vec![stats] }` 覆盖写会让
+        // 同一天的后一个设备把前一个设备的数据整条顶掉。
         for stats in self.aggregate_events(&all_events)? {
-            let file = DailyStatsFile {
-                date: stats.date.clone(),
-                devices: vec![stats],
-            };
-            self.save_daily_stats_file(&file)?;
+            self.save_or_merge_daily_stats(&stats)?;
         }
         Ok(())
     }
