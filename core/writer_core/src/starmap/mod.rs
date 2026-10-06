@@ -49,13 +49,20 @@ fn default_accent_color() -> String {
 
 /// 星图全局索引记录。
 ///
-/// 存储于 `app-meta/starmaps/index.json`，只保存 starmap_ids 列表和
-/// main_starmap_by_project 映射。各星图的详细元数据从独立的 meta 文件读取。
+/// 存储于 `app-meta/starmaps/index.json`，保存全部 starmap_ids、
+/// 一级（根）星图 id 列表和 main_starmap_by_project 映射。
+/// 各星图的详细元数据从独立的 meta 文件读取。
+///
+/// `root_starmap_ids` 是"星图身份"的唯一事实来源：普通新建星图同时登记进
+/// starmap_ids 与 root_starmap_ids；嵌套子星图只登记进 starmap_ids。
+/// 一级列表直接读这个集合，不再事后扫描全部 graph 的 Embed 反推根身份。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapIndexRecord {
     pub schema_version: u32,
     pub starmap_ids: Vec<String>,
+    #[serde(default)]
+    pub root_starmap_ids: Vec<String>,
     pub main_starmap_by_project: std::collections::HashMap<String, String>,
     pub updated_at: u64,
 }
@@ -109,6 +116,7 @@ fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
         return Ok(StarMapIndexRecord {
             schema_version: migration::NEW_INDEX_SCHEMA_VERSION,
             starmap_ids: vec![],
+            root_starmap_ids: vec![],
             main_starmap_by_project: std::collections::HashMap::new(),
             updated_at: now_epoch(),
         });
@@ -178,18 +186,59 @@ pub fn get_starmap(app_data_root: &Path, starmap_id: &str) -> Result<StarMapMeta
     load_starmap_meta(app_data_root, starmap_id)
 }
 
-/// 用预先生成的 starmap_id 创建星图。
+/// 用预先生成的 starmap_id 创建**一级（根）星图**。
 ///
 /// 与 `create_starmap()` 不同，此函数接受一个已经生成的 `starmap_id`，
 /// 而不是内部生成 UUID。供 journal 事务在创建文件之前就知道 child ID 的场景使用。
 ///
-/// 创建 meta 文件和 index 记录，返回 StarMapMeta。
+/// 创建 meta 文件和 index 记录：id 同时写进 `starmap_ids` 与 `root_starmap_ids`。
+/// 嵌套子星图走 `create_nested_starmap_with_id()`，不能登记成一级星图再靠
+/// Embed 关系过滤。
 pub fn create_starmap_with_id(
     app_data_root: &Path,
     starmap_id: &str,
     title: &str,
     description: &str,
     accent_color: Option<&str>,
+) -> Result<StarMapMeta> {
+    create_starmap_entry(
+        app_data_root,
+        starmap_id,
+        title,
+        description,
+        accent_color,
+        true,
+    )
+}
+
+/// 用预先生成的 starmap_id 创建**嵌套子星图**（embed 的 child entry）。
+///
+/// 只写进 `starmap_ids`，不写 `root_starmap_ids`：嵌套身份在创建入口就确定，
+/// 一级列表永远不需要事后扫描 Embed 反推。
+pub fn create_nested_starmap_with_id(
+    app_data_root: &Path,
+    starmap_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+) -> Result<StarMapMeta> {
+    create_starmap_entry(
+        app_data_root,
+        starmap_id,
+        title,
+        description,
+        accent_color,
+        false,
+    )
+}
+
+fn create_starmap_entry(
+    app_data_root: &Path,
+    starmap_id: &str,
+    title: &str,
+    description: &str,
+    accent_color: Option<&str>,
+    is_root: bool,
 ) -> Result<StarMapMeta> {
     let now = now_epoch();
     let meta = StarMapMeta {
@@ -203,7 +252,12 @@ pub fn create_starmap_with_id(
     };
     save_starmap_meta(app_data_root, &meta)?;
     let mut idx = load_index(app_data_root)?;
-    idx.starmap_ids.push(meta.starmap_id.clone());
+    if !idx.starmap_ids.iter().any(|id| id == &meta.starmap_id) {
+        idx.starmap_ids.push(meta.starmap_id.clone());
+    }
+    if is_root && !idx.root_starmap_ids.iter().any(|id| id == &meta.starmap_id) {
+        idx.root_starmap_ids.push(meta.starmap_id.clone());
+    }
     idx.updated_at = now;
     save_index(app_data_root, &idx)?;
     Ok(meta)
@@ -614,11 +668,11 @@ pub fn find_starmap_references(
     Ok(refs)
 }
 
-/// 根星图过滤纯函数：给定全部星图 meta 和对应的图数据，返回未被嵌入且非
-/// legacy child 的根星图列表。
+/// 从全部星图 meta 与图数据推导一级（根）星图集合的纯函数。
 ///
-/// 此函数不自己加载任何 `StarMapStore`，调用方负责提供与 meta 对应的 graph。
-/// 这样 facade 可以传入内存中尚未 flush 的图数据，避免从磁盘读到旧状态。
+/// **只供 index schema 迁移使用**：老 index 没有显式 `root_starmap_ids` 时，
+/// 用当时的 Embed / legacy portal 关系做一次身份迁移，结果持久化后，正常运行
+/// 不再调用这里，也不再为了列一级页扫描全部 graph。
 ///
 /// 判断依据：
 /// 1. 扫描所有星图的 `graph.embeds[].target_starmap_id`，这些目标不进入一级列表。
@@ -674,24 +728,20 @@ pub(crate) fn filter_root_starmaps(
         .collect()
 }
 
-/// 列出根星图（未被任何星图嵌入且非 legacy child 的星图）。
+/// 列出一级（根）星图。
 ///
-/// 此函数从磁盘加载星图数据。facade 层（`WriterCore::list_root_starmaps`）
-/// 使用内存中的 `starmap_stores` 以看到尚未 flush 的变更，应优先调用 facade 版本。
+/// 直接读 index 里显式持久化的 `root_starmap_ids`，再取对应 meta；
+/// 不再加载全部 `StarMapStore` 扫描 Embed 反推根身份。
 ///
-/// 加载失败时返回 Err（不静默跳过），避免漏扫某个父图而把它的子星图错误暴露到一级列表。
+/// 根/嵌套身份在创建入口写定：普通新建星图同时进 starmap_ids 与
+/// root_starmap_ids，嵌套子星图只进 starmap_ids。
 pub fn list_root_starmaps(app_data_root: &Path) -> Result<Vec<StarMapMeta>> {
-    let all_starmaps = list_starmaps(app_data_root)?;
-
-    let mut graphs = Vec::with_capacity(all_starmaps.len());
-    for sm in &all_starmaps {
-        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, &sm.starmap_id);
-        // 加载失败时返回 Err，不静默跳过：漏扫某个父图可能把它的子星图错误暴露到一级列表。
-        store.load_full()?;
-        graphs.push(store.to_starmap_graph());
+    let idx = load_index(app_data_root)?;
+    let mut metas = Vec::with_capacity(idx.root_starmap_ids.len());
+    for id in &idx.root_starmap_ids {
+        metas.push(load_starmap_meta(app_data_root, id)?);
     }
-
-    Ok(filter_root_starmaps(all_starmaps, &graphs))
+    Ok(metas)
 }
 
 #[cfg(test)]

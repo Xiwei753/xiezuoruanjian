@@ -141,6 +141,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     // 它"每个 Scene 实例自己有一套 panX/panY/zoomLevel"的定义正是要废掉的抽象。
     "qml/StarMapSceneContent.qml" as "StarMapSceneContent.qml",
     "qml/StarMapCanvas.qml" as "StarMapCanvas.qml",
+    // Issue #832: 星图唯一原始输入路由（单击/双击/右键/拖动/长按/连线/捏合/滚轮）
+    "qml/StarMapInputRouter.qml" as "StarMapInputRouter.qml",
     "qml/StarMapGraphController.qml" as "StarMapGraphController.qml",
     // Issue #798: 星图鼠标交互状态机（瞬时手势状态，不读写 Core）
     "qml/StarMapInteractionController.qml" as "StarMapInteractionController.qml",

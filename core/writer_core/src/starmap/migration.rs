@@ -5,10 +5,14 @@
 //!
 //! ## 迁移内容
 //!
-//! ### index schema 1 -> 2
+//! ### index schema 1 -> 3
 //! - 旧 `starmaps: Vec<StarMapMeta>` 提取 `starmap_ids`
 //! - 旧 `isMainForProject + projectId` 生成 `main_starmap_by_project`
-//! - 写回新 index 后版本改成 2
+//!
+//! ### index schema 2 -> 3
+//! - 老索引只有 `starmap_ids`，没有显式的 `root_starmap_ids`（一级星图身份）。
+//! - 用当前已有的 Embed / legacy portal 关系做一次迁移，推导出 root 集合并
+//!   持久化；迁移完成后，正常运行路径不再扫描 graph 反推身份。
 //!
 //! ### 星图对象存储 schema "3" -> "4"
 //! - 读取旧 `layouts/default/nodes/*.json`，按 nodeId 找到 x/y，写进对应 node JSON 的 `position`
@@ -28,10 +32,12 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-/// 旧 index schema 版本。
+/// 旧 index schema 版本（`starmaps: Vec<StarMapMeta>` 数组）。
 const OLD_INDEX_SCHEMA_VERSION: u64 = 1;
-/// 新 index schema 版本。
-pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 2;
+/// 引入显式 root_starmap_ids 之前的 index schema 版本（只有 starmap_ids + main 映射）。
+const V2_INDEX_SCHEMA_VERSION: u64 = 2;
+/// 新 index schema 版本（starmap_ids + root_starmap_ids + main 映射）。
+pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 3;
 
 /// 旧 GraphMeta schema 版本。
 const OLD_GRAPH_META_SCHEMA_VERSION: &str = "3";
@@ -47,17 +53,22 @@ pub fn migrate_starmap_data(app_data_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// index schema 1 -> 2。
+/// index 迁移入口（在 `load_index` 之前调用）。
 ///
-/// 读取 `starmaps/index.json`，如果是旧 schema 1 格式则迁移为新 schema 2。
-/// 已经是 schema 2 则跳过（`Ok(())`）。
+/// 读取 `starmaps/index.json`，把 schema 1 / schema 2 都迁移到当前 schema 3：
+/// - schema 1：旧 `starmaps` 数组 → `starmap_ids` + `main_starmap_by_project`；
+/// - schema 2：补上显式 `root_starmap_ids`（用 Embed / legacy portal 关系
+///   一次性推导）。
 ///
-/// **Fail-closed 版本策略**：未知 / 缺失 / 非法版本（既不是 1 也不是 2）
-/// 直接返回 `Err(UnsupportedVersion)`，不把未来格式当 schema 2 静默接受。
+/// 已经是 schema 3 则跳过（`Ok(())`）。
 ///
-/// 同时重写每个星图的 `starmaps/{id}.meta.json`，只保留当前唯一结构字段
-/// `starmapId / title / description / projectId / accentColor / createdAt / updatedAt`，
-/// 删除 `isMainForProject / nodeCount / edgeCount / linkedChapterCount` 等废弃字段。
+/// **Fail-closed 版本策略**：未知 / 缺失 / 非法版本（既不是 1/2/3）
+/// 直接返回 `Err(UnsupportedVersion)`，不把未来格式当当前 schema 静默接受。
+///
+/// schema 1 迁移时同时重写每个星图的 `starmaps/{id}.meta.json`，只保留当前唯一
+/// 结构字段 `starmapId / title / description / projectId / accentColor / createdAt /
+/// updatedAt`，删除 `isMainForProject / nodeCount / edgeCount / linkedChapterCount`
+/// 等废弃字段。
 pub fn migrate_index(app_data_root: &Path) -> Result<()> {
     let index_path = app_data_root.join("starmaps").join("index.json");
     if !index_path.exists() {
@@ -72,17 +83,42 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
         .unwrap_or(0);
 
     if schema_version == u64::from(NEW_INDEX_SCHEMA_VERSION) {
-        // 已经是 schema 2，无需迁移。
+        // 已经是当前 schema，无需迁移。
         return Ok(());
     }
-    if schema_version != OLD_INDEX_SCHEMA_VERSION {
-        // 未知/缺失/非法版本，fail-closed：不把未来格式当 schema 2 静默接受。
-        return Err(Error::UnsupportedVersion {
-            version: schema_version.to_string(),
-        });
-    }
 
-    // 旧格式：{ schemaVersion: 1, starmaps: [StarMapMeta], updatedAt }
+    let mut record = match schema_version {
+        OLD_INDEX_SCHEMA_VERSION => convert_legacy_index(app_data_root, &value)?,
+        V2_INDEX_SCHEMA_VERSION => {
+            // schema 2 就是当前结构去掉 root_starmap_ids，直接按结构反序列化。
+            serde_json::from_value::<super::StarMapIndexRecord>(value.clone()).map_err(|e| {
+                Error::Other(format!("index schema 2 deserialization failed: {}", e))
+            })?
+        }
+        _ => {
+            // 未知/缺失/非法版本，fail-closed：不把未来格式当当前 schema 静默接受。
+            return Err(Error::UnsupportedVersion {
+                version: schema_version.to_string(),
+            });
+        }
+    };
+
+    // schema 2 -> 3：老索引没有显式 root 身份，用当前已有的 Embed / legacy portal
+    // 关系做一次迁移，得到 root 集合并持久化。
+    record.root_starmap_ids = derive_root_starmap_ids(app_data_root, &record.starmap_ids)?;
+    record.schema_version = NEW_INDEX_SCHEMA_VERSION;
+    record.updated_at = super::now_epoch();
+
+    let new_content = serde_json::to_string_pretty(&record)?;
+    crate::storage::atomic_write_string(&index_path, &new_content)?;
+    Ok(())
+}
+
+/// schema 1（`{ schemaVersion: 1, starmaps: [StarMapMeta], updatedAt }`）→
+/// 当前结构的 index record（root_starmap_ids 留空，由调用方统一推导）。
+///
+/// 同时重写每个 meta 文件到当前结构（幂等）。
+fn convert_legacy_index(app_data_root: &Path, value: &Value) -> Result<super::StarMapIndexRecord> {
     let starmaps = value
         .get("starmaps")
         .and_then(|v| v.as_array())
@@ -118,16 +154,41 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
         .and_then(|v| v.as_u64())
         .unwrap_or_else(super::now_epoch);
 
-    let new_index = serde_json::json!({
-        "schemaVersion": NEW_INDEX_SCHEMA_VERSION,
-        "starmapIds": starmap_ids,
-        "mainStarmapByProject": main_starmap_by_project,
-        "updatedAt": updated_at,
-    });
+    Ok(super::StarMapIndexRecord {
+        schema_version: NEW_INDEX_SCHEMA_VERSION,
+        starmap_ids,
+        root_starmap_ids: Vec::new(),
+        main_starmap_by_project,
+        updated_at,
+    })
+}
 
-    let new_content = serde_json::to_string_pretty(&new_index)?;
-    crate::storage::atomic_write_string(&index_path, &new_content)?;
-    Ok(())
+/// 用当前 Embed / legacy portal 关系推导一级（根）星图 id 集合。
+///
+/// 只被 index 迁移调用：meta 缺失的半状态条目跳过（不冒充一级星图，也不在
+/// 迁移里清理 index——那属于 child-embed journal 恢复 / 删除流程）；graph 加载
+/// 失败返回 Err，不静默跳过（否则会把子星图错误暴露到一级列表）。
+fn derive_root_starmap_ids(app_data_root: &Path, starmap_ids: &[String]) -> Result<Vec<String>> {
+    let mut metas = Vec::with_capacity(starmap_ids.len());
+    let mut graphs = Vec::with_capacity(starmap_ids.len());
+    for id in starmap_ids {
+        let meta_path = app_data_root
+            .join("starmaps")
+            .join(format!("{}.meta.json", id));
+        if !meta_path.exists() {
+            continue;
+        }
+        let meta = super::load_starmap_meta(app_data_root, id)?;
+        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, id);
+        store.load_full()?;
+        graphs.push(store.to_starmap_graph());
+        metas.push(meta);
+    }
+
+    Ok(super::filter_root_starmaps(metas, &graphs)
+        .into_iter()
+        .map(|meta| meta.starmap_id)
+        .collect())
 }
 
 /// 把旧 meta JSON 重写成当前唯一结构，只保留

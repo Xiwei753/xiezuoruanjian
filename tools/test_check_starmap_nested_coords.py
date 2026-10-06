@@ -35,7 +35,7 @@ CLEAN_EMBED = """Item {
 
 CLEAN_CANVAS = """Item {
     function sceneToCanvas(sx, sy) { return canvasArea.mapFromItem(null, sx, sy) }
-    function sceneDeltaToWorld(dx, dy) { return { x: dx, y: dy } }
+    function sceneDeltaToCanvas(dx, dy) { return { x: dx, y: dy } }
     onContextMenuRequested: function(sceneX, sceneY) {
         var cp = sceneToCanvas(sceneX, sceneY)
         var wp = sceneToWorld(sceneX, sceneY)
@@ -92,14 +92,14 @@ class StarMapNestedCoordsGuardTests(unittest.TestCase):
             tmp = Path(tmp_name)
             _write_clean(tmp)
             (tmp / "StarMapCanvas.qml").write_text(
-                "Item {\n    function sceneDeltaToWorld(dx, dy) { return { x: dx, y: dy } }\n}\n",
+                "Item {\n    function sceneDeltaToCanvas(dx, dy) { return { x: dx, y: dy } }\n}\n",
                 encoding="utf-8",
             )
             results = MODULE.check(tmp)
             self.assertFalse(self._all_passed(results), msg="missing mapFromItem(null) not flagged")
 
-    def test_flags_missing_sceneDeltaToWorld_in_canvas(self) -> None:
-        """Canvas 不含 sceneDeltaToWorld 应被标记失败。"""
+    def test_flags_missing_sceneDeltaToCanvas_in_canvas(self) -> None:
+        """Canvas 不含 sceneDeltaToCanvas 应被标记失败。"""
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             _write_clean(tmp)
@@ -108,7 +108,7 @@ class StarMapNestedCoordsGuardTests(unittest.TestCase):
                 encoding="utf-8",
             )
             results = MODULE.check(tmp)
-            self.assertFalse(self._all_passed(results), msg="missing sceneDeltaToWorld not flagged")
+            self.assertFalse(self._all_passed(results), msg="missing sceneDeltaToCanvas not flagged")
 
     def test_flags_screenToWorld_of_sceneX_in_canvas(self) -> None:
         """Canvas 含 screenToWorldX(sceneX) 应被标记失败。"""
@@ -118,7 +118,7 @@ class StarMapNestedCoordsGuardTests(unittest.TestCase):
             (tmp / "StarMapCanvas.qml").write_text(
                 "Item {\n"
                 "    function sceneToCanvas(sx, sy) { return canvasArea.mapFromItem(null, sx, sy) }\n"
-                "    function sceneDeltaToWorld(dx, dy) { return { x: dx, y: dy } }\n"
+                "    function sceneDeltaToCanvas(dx, dy) { return { x: dx, y: dy } }\n"
                 "    onContextMenuRequested: function(sceneX, sceneY) {\n"
                 "        var w = screenToWorldX(sceneX)\n"
                 "    }\n"
@@ -136,7 +136,7 @@ class StarMapNestedCoordsGuardTests(unittest.TestCase):
             (tmp / "StarMapCanvas.qml").write_text(
                 "Item {\n"
                 "    function sceneToCanvas(sx, sy) { return canvasArea.mapFromItem(null, sx, sy) }\n"
-                "    function sceneDeltaToWorld(dx, dy) { return { x: dx, y: dy } }\n"
+                "    function sceneDeltaToCanvas(dx, dy) { return { x: dx, y: dy } }\n"
                 "    onContextMenuRequested: function(sceneX, sceneY) {\n"
                 "        var w = screenToWorldY(sceneY)\n"
                 "    }\n"

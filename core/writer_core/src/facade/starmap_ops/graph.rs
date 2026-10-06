@@ -621,8 +621,10 @@ impl super::super::WriterCore {
         );
         tx.prepare()?;
 
-        // Step 3: 用确定 ID 创建 child meta/index
-        let child_meta = match crate::starmap::create_starmap_with_id(
+        // Step 3: 用确定 ID 创建 child meta/index。
+        // 走 nested entry 创建路径：只登记 starmap_ids，不写 root_starmap_ids。
+        // 子星图身份在创建入口就是"嵌套"，正常一级列表不靠 Embed 关系过滤。
+        let child_meta = match crate::starmap::create_nested_starmap_with_id(
             &self.app_data_root,
             &child_starmap_id,
             title,

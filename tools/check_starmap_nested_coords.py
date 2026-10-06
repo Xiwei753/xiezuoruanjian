@@ -12,10 +12,15 @@ screenToWorld*()（实际接收 Canvas local 坐标），递归下同样偏。
 scene→本 Canvas local→world 映射；Node/Embed 只上抛 raw scene delta，
 不再自己除 zoom，并删除 canvasZoomLevel 属性。
 
+Issue #832 评论 5998365709 后续：输入收成单一 StarMapInputRouter，Node/Embed
+不再各自上抛 scene delta，scene→world 映射不再有调用方；Canvas 只保留
+sceneDeltaToCanvas 作为 Router pan 的统一 scene→canvas 入口。守卫随之从
+sceneDeltaToWorld 改为锁定 sceneDeltaToCanvas。
+
 本守卫锁定三件事，防止回归：
   1. StarMapNode.qml / StarMapEmbed.qml 不含 canvasZoomLevel（属性已删）。
   2. StarMapCanvas.qml 含 mapFromItem(null 的 scene→canvas 映射，且含
-     sceneDeltaToWorld 统一入口。
+     sceneDeltaToCanvas 统一入口。
   3. StarMapCanvas.qml 的 onContextMenuRequested 处不能出现
      screenToWorldX(sceneX) / screenToWorldY(sceneY)（菜单 scene 坐标不能
      直接喂 screenToWorld*，必须先经 sceneToCanvas/sceneToWorld 映射）。
@@ -66,18 +71,18 @@ def check(qml_dir: Path) -> list[tuple[bool, str]]:
             f"StarMapEmbed.qml 不含 canvasZoomLevel — {'不含' if not has else '发现 canvasZoomLevel'}",
         ))
 
-    # ── 检查 2: StarMapCanvas.qml 含 mapFromItem(null 且含 sceneDeltaToWorld ──
+    # ── 检查 2: StarMapCanvas.qml 含 mapFromItem(null 且含 sceneDeltaToCanvas ──
     if canvas is None:
         results.append((False, f"StarMapCanvas.qml 不存在: {canvas_path}"))
-        results.append((False, "StarMapCanvas.qml 含 mapFromItem(null + sceneDeltaToWorld — 文件缺失"))
+        results.append((False, "StarMapCanvas.qml 含 mapFromItem(null + sceneDeltaToCanvas — 文件缺失"))
         results.append((False, "StarMapCanvas.qml 不含 screenToWorldX(sceneX)/screenToWorldY(sceneY) — 文件缺失"))
     else:
         has_mapfrom = "mapFromItem(null" in canvas
-        has_helper = "sceneDeltaToWorld" in canvas
+        has_helper = "sceneDeltaToCanvas" in canvas
         results.append((
             has_mapfrom and has_helper,
-            f"StarMapCanvas.qml 含 mapFromItem(null + sceneDeltaToWorld 统一映射 — "
-            f"{'含' if has_mapfrom and has_helper else f'mapFromItem(null={has_mapfrom}, sceneDeltaToWorld={has_helper}'}",
+            f"StarMapCanvas.qml 含 mapFromItem(null + sceneDeltaToCanvas 统一映射 — "
+            f"{'含' if has_mapfrom and has_helper else f'mapFromItem(null={has_mapfrom}, sceneDeltaToCanvas={has_helper}'}",
         ))
 
         # ── 检查 3: Canvas 不含 screenToWorldX(sceneX) / screenToWorldY(sceneY) ──

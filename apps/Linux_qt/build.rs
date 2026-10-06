@@ -443,6 +443,8 @@ fn main() {
     // Issue #822: 递归内容容器，替代已删除的 StarMapScene.qml
     println!("cargo:rerun-if-changed=qml/StarMapSceneContent.qml");
     println!("cargo:rerun-if-changed=qml/StarMapCanvas.qml");
+    // Issue #832: 星图唯一原始输入路由
+    println!("cargo:rerun-if-changed=qml/StarMapInputRouter.qml");
     println!("cargo:rerun-if-changed=qml/StarMapGraphController.qml");
     // Issue #798: 星图鼠标交互状态机
     println!("cargo:rerun-if-changed=qml/StarMapInteractionController.qml");

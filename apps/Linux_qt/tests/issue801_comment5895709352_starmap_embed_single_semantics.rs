@@ -144,13 +144,18 @@ fn canvas_node_delegate_has_no_portal_special_case() {
         "StarMapCanvas 不得再按 portal.destinationStarmapId 特判下钻"
     );
 
-    // Issue #822：Node delegate 已从根 Canvas 搬到递归层 Content；
-    // 双击不再上抛 editNodeRequested 去开外部 Popup，而是直接进入节点自身的 TextInput。
-    let content = strip_line_comments(&read_src(CONTENT));
-    let double_click = function_window(&content, "onDoubleClicked: content.beginInlineEdit(", 200);
+    // Issue #822/#832：Node delegate 已从根 Canvas 搬到递归层 Content；
+    // 双击语义收进唯一 Router，直接调归属层进入节点自身的 TextInput。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let double_click = function_window(&router, "function handleDoubleTap(", 600);
     assert!(
-        double_click.contains("content.beginInlineEdit(nodeData.id)"),
-        "Node 双击必须进入本层节点的内联编辑，实际窗口:\n{double_click}"
+        double_click.contains("hit.owner.beginInlineEdit(hit.id)"),
+        "Node 双击必须进入命中层节点的内联编辑，实际窗口:\n{double_click}"
+    );
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        content.contains("function beginInlineEdit(nodeId)"),
+        "归属层必须保留内联编辑入口"
     );
     assert!(
         !content.contains("editNodeRequested"),
@@ -170,12 +175,12 @@ fn no_starmap_drill_down_entry_remains() {
             "{src_name} 不得再有下钻/回退入口，子星图是就地展开的递归内容"
         );
     }
-    // 递归命中入口能返回 Embed 内容命中，说明子星图内部直接可命中
+    // 递归命中入口能返回子星图命中：interactive 子层递归，低 LOD 整体按 embed。
     let content = strip_line_comments(&read_src(CONTENT));
-    let hit = function_window(&content, "function hitTargetAtScene(", 3000);
+    let hit = function_window(&content, "function hitTargetAtScene(", 3600);
     assert!(
-        hit.contains("\"childContent\""),
-        "递归命中必须能命中子星图内容区，实际窗口:\n{hit}"
+        hit.contains("child.hitTargetAtScene(sceneX, sceneY)") && hit.contains("kind: \"embed\""),
+        "递归命中必须命中子星图内部（interactive 递归 / 低 LOD embed 兜底），实际窗口:\n{hit}"
     );
 }
 

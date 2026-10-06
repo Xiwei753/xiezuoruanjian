@@ -75,11 +75,15 @@ Item {
                     AppButton {
                         dt: root.dt
                         variant: "text"
-                        text: qsTr("← 返回")
+                        // Issue #832 评论 6013799805 / #373：按焦点链状态分流。
+                        // focusIsRoot：退出星图工作区；否则 pop 一层返回父星图。
+                        text: canvas.focusIsRoot ? qsTr("← 返回")
+                                                 : qsTr("← 返回父星图")
                         onClicked: {
-                            // 左上返回只退出星图工作区，不返回父星图。
-                            // 递归渲染由 StarMapSceneContent 处理，没有页面栈。
-                            root.backClicked()
+                            if (canvas.focusIsRoot)
+                                root.backClicked()
+                            else
+                                canvas.focusParentScene()
                         }
                     }
 

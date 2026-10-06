@@ -74,15 +74,24 @@ fn strip_line_comments(source: &str) -> String {
 /// 禁止 `exclusiveSignals`——Node 的右键 TapHandler 等非选中 handler 不在本守卫范围。
 #[test]
 fn node_selection_tap_handlers_not_readd_single_tap_double_tap() {
-    let node = read_src(NODE);
-    for (marker, window) in [("id: nodeMouseTap", 300usize), ("id: nodeTouchTap", 250usize)] {
-        let block = function_window(&node, marker, window);
-        assert!(
-            !block.contains("TapHandler.SingleTap | TapHandler.DoubleTap"),
-            "{marker} 不得重新声明 exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap：\
-             该组合会让 singleTapped 推迟到双击时间窗之后，单击选中不再立即响应，实际窗口:\n{block}"
-        );
-    }
+    // Issue #832：Node 不再挂选中 TapHandler；单击选中由唯一 Router 的
+    // TapHandler 完成，仍必须是默认 NotExclusive（立即发 singleTapped）。
+    let node = strip_line_comments(&read_src(NODE));
+    assert!(
+        !node.contains("TapHandler"),
+        "StarMapNode 不得再挂 TapHandler：输入只有一个主人（Router）"
+    );
+
+    let router = read_src("qml/StarMapInputRouter.qml");
+    assert!(
+        !router.contains("TapHandler.SingleTap | TapHandler.DoubleTap"),
+        "Router 的选中 TapHandler 不得声明 exclusiveSignals: SingleTap | DoubleTap：\
+         该组合会让 singleTapped 推迟到双击时间窗之后，单击选中不再立即响应"
+    );
+    assert!(
+        !router.contains("exclusiveSignals:"),
+        "Router 的 TapHandler 保持默认 NotExclusive，不引入任何 exclusiveSignals"
+    );
 }
 
 /// `StarMapEmbed.qml` 负责标题/边框选中的 TapHandler 不得重新声明
@@ -99,54 +108,26 @@ fn node_selection_tap_handlers_not_readd_single_tap_double_tap() {
 /// 不做 QML 解析，只围绕真正的选中回调收窄。
 #[test]
 fn embed_chrome_selection_tap_handlers_not_readd_single_tap_double_tap() {
-    let embed = read_src(EMBED);
-    let marker = "onSingleTapped: root.clicked(root.instanceId)";
-    let mut start = 0usize;
-    let mut found = 0usize;
-
-    while let Some(rel) = embed[start..].find(marker) {
-        let pos = start + rel;
-        let before = &embed[..pos];
-
-        let handler_start = before
-            .rfind("TapHandler {")
-            .expect("选中回调前必须存在 TapHandler");
-
-        let block = &embed[handler_start..pos + marker.len()];
-
+    // Issue #832：Embed 不再挂选中 TapHandler；单击选中由唯一 Router 完成，
+    // 命中几何来自 GraphController 的圆壳命中测试，不靠 PointerHandler acceptance。
+    let embed = strip_line_comments(&read_src(EMBED));
+    for forbidden in ["TapHandler", "containmentMask", "chromeLayer"] {
         assert!(
-            !block.contains("TapHandler.SingleTap | TapHandler.DoubleTap"),
-            "负责 root.clicked(instanceId) 的选中 TapHandler 不得恢复\
-             exclusiveSignals: TapHandler.SingleTap | TapHandler.DoubleTap：\
-             恢复默认 NotExclusive 才能一次点击立即 root.clicked(instanceId)，实际块:\n{block}"
+            !embed.contains(forbidden),
+            "StarMapEmbed 不得再保留 chrome 输入层 {forbidden}：输入只有一个主人（Router）"
         );
-
-        found += 1;
-        start = pos + marker.len();
     }
 
-    // 评论 5972557963：四条矩形边框的 Handler 已删除，chrome 只剩一层输入层
-    // （圆形 acceptance），鼠标 + 触屏各一个选中回调。
+    let router = read_src("qml/StarMapInputRouter.qml");
     assert!(
-        found >= 2,
-        "chrome 输入层的鼠标/触屏选中回调必须存在（标题 + 圆周环共用同一层），\
-         实际找到 {found} 个"
+        !router.contains("TapHandler.SingleTap | TapHandler.DoubleTap")
+            && !router.contains("exclusiveSignals:"),
+        "Router 的选中 TapHandler 必须保持默认 NotExclusive，单击选中立即响应"
     );
-    let layer_start = embed.find("id: chromeLayer").expect("必须存在 chromeLayer");
-    let layer_end = embed[layer_start..]
-        .find("id: contentViewport")
-        .map(|i| layer_start + i)
-        .expect("contentViewport 必须排在 chromeLayer 之后");
-    let layer = &embed[layer_start..layer_end];
-    assert_eq!(
-        count_occurrences(layer, marker),
-        2,
-        "鼠标/触屏两个选中回调都必须挂在 chromeLayer 上（不再有四条矩形边框），\
-         实际窗口:\n{layer}"
-    );
+    let select = function_window(&router, "function selectHit(", 1000);
     assert!(
-        layer.contains("containmentMask: chromeMask"),
-        "chromeLayer 的 Handler 必须用 containmentMask 决定 acceptance，实际窗口:\n{layer}"
+        select.contains("hit.owner.selectEmbed(hit.id)"),
+        "embed 单击必须由 Router 选中，实际窗口:\n{select}"
     );
 }
 
@@ -154,50 +135,48 @@ fn embed_chrome_selection_tap_handlers_not_readd_single_tap_double_tap() {
 // 2. bgDragArea 命中 childContent 不进 pan、pan 超阈值才开始、cancel/reset 清状态
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `bgDragArea` 在按下时按递归命中固定手势归属：只有真正可交互的
-/// node/embed 才 `mouse.accepted = false` 放行给 delegate；childContent
-/// （子内容未加载 / preview / shell，没有可交互 delegate）与 empty/edge 一样
-/// 进入全局 pan，不能在小尺寸子图内部留死区。
-/// `onCanceled` 与 `resetInteraction` 都清 `pressHitKind` / `panStarted` 等本地状态，
-/// 避免脏状态继续拖动画布。
+/// Issue #832：唯一 Router 在按下时按递归命中固定手势归属：
+/// 空白/连线按下进入 pan 候选，超拖动阈值才 `beginPan()`；
+/// node/embed 按下先 pressPending，拖动阈值先到才转 move，触屏未长按滑动优先 pan；
+/// 小尺寸子图（shell/preview）整体命中成父层 embed，不留死区。
+/// Router.resetInteraction/cancelLocalState 会清本地手势现场。
 #[test]
-fn bg_drag_area_pan_gating_and_local_state_reset() {
-    let src = read_src(CANVAS);
-    let bg = function_window(&src, "id: bgDragArea", 6000);
+fn router_pan_gating_and_local_state_reset() {
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
 
-    // 只有 node/embed 放行；childContent 不得再出现在放弃条件里。
+    let press = function_window(&router, "function beginPress(", 2400);
     assert!(
-        bg.contains("hit.kind === \"node\" || hit.kind === \"embed\"")
-            && !bg.contains("hit.kind === \"childContent\""),
-        "bgDragArea 只对 node/embed 放弃事件；childContent（无交互 delegate）必须继续 pan，\
-         实际窗口:\n{bg}"
-    );
-
-    // pan 超过系统 dragThreshold 才开始：不得自写像素常量。
-    assert!(
-        bg.contains("if (!panStarted && (mouse.buttons & Qt.LeftButton))"),
-        "左键必须先卡在尚未 panStarted 的分支里等拖动阈值，实际窗口:\n{bg}"
+        press.contains("emptyPressActive = true") && press.contains("hasGestureTarget(hit)"),
+        "空白/连线按下只登记 pan 候选，node/embed 按下登记 pressPending，实际窗口:\n{press}"
     );
     assert!(
-        bg.contains("bgMouseLeftTap.dragThreshold") && bg.contains("Math.hypot"),
-        "拖动阈值必须复用 bgMouseLeftTap 的系统 dragThreshold 并按直线距离判定，实际窗口:\n{bg}"
+        press.contains("ic.beginPress(hit.kind, hit.id, hit.targetPath, hit.scenePathKey,"),
+        "node/embed 按下必须登记完整命中身份，实际窗口:\n{press}"
     );
 
-    // cancel/reset 清本地 pan 状态。
+    let activated = function_window(&router, "function handleDragActivated(", 2000);
     assert!(
-        bg.contains("onCanceled:") && bg.contains("resetMouseGesture"),
-        "onCanceled 必须调用 resetMouseGesture 清本地状态，实际窗口:\n{bg}"
+        activated.contains("if (ic.beginPan())") && activated.contains("emptyPressActive"),
+        "空白按下只有越过拖动阈值才 beginPan，实际窗口:\n{activated}"
     );
     assert!(
-        bg.contains("pressHitKind = \"\"") && bg.contains("panStarted = false"),
-        "resetMouseGesture 必须清 pressHitKind 与 panStarted，实际窗口:\n{bg}"
+        activated.contains("if (ic.pressPendingToPan())"),
+        "触屏未长按滑动必须优先 pan，实际窗口:\n{activated}"
     );
 
-    // canvasArea.resetInteraction 也清 bgDragArea 本地状态。
-    let reset = function_window(&src, "function resetInteraction() {", 600);
+    // reset 会清 Router 本地手势现场。
+    let cancel = function_window(&router, "function cancelLocalState(", 400);
     assert!(
-        reset.contains("bgDragArea.resetMouseGesture()"),
-        "resetInteraction 必须同时清 bgDragArea 本地 pan 状态，实际窗口:\n{reset}"
+        cancel.contains("emptyPressActive = false")
+            && cancel.contains("emptyLongPressArmed = false")
+            && cancel.contains("panActive = false"),
+        "cancelLocalState 必须清本地手势现场，实际窗口:\n{cancel}"
+    );
+    let canvas = read_src(CANVAS);
+    let reset = function_window(&canvas, "function resetInteraction() {", 600);
+    assert!(
+        reset.contains("inputRouter.cancelLocalState()"),
+        "resetInteraction 必须同时清 Router 本地手势现场，实际窗口:\n{reset}"
     );
 }
 
@@ -205,56 +184,39 @@ fn bg_drag_area_pan_gating_and_local_state_reset() {
 // 3. sceneWheel 只在 root 启用、bgDragArea 不自己处理 wheel
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Issue #822：整棵星图只有一个全局相机，`sceneWheel` 无条件接管滚轮并走
-/// `zoomAround` 统一缩放入口 + `blocking: true`，不再按场景身份开关、
-/// 不按 childContent 分发到"最深子 Scene"，也不用 `event.accepted` 做二次分流。
-/// `bgDragArea` 不再自己处理 wheel。
-///
-/// 不限制 `StarMapCanvas.qml` 里 WheelHandler 的总数——以后新增完全不同用途的
-/// WheelHandler 不应无条件炸掉本守卫；只检查 `sceneWheel` 自身与 `bgDragArea`。
+/// Issue #832：整棵星图只有一个全局相机，唯一 Router 的 WheelHandler 无条件
+/// 接管滚轮并走 Canvas 的 `zoomAt` 统一缩放入口 + `blocking: true`，
+/// 不再按场景身份开关、不按 childContent 分发到"最深子 Scene"，
+/// 也不用 `event.accepted` 做二次分流。Canvas 自己不再挂 WheelHandler。
 #[test]
-fn scene_wheel_only_root_and_bg_drag_area_has_no_wheel() {
-    // 注释里会提到被删掉的 `enabled: pathKey === "root"` 作为历史说明，
-    // 断言的是可执行语句，所以先剥掉整行注释。
-    let src = strip_line_comments(&read_src(CANVAS));
-    let wheel = function_window(&src, "id: sceneWheel", 1000);
+fn router_wheel_is_the_only_wheel_entry() {
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        !canvas.contains("WheelHandler"),
+        "StarMapCanvas 不得再挂 WheelHandler：滚轮统一走唯一 Router"
+    );
 
-    // Issue #822：全树只剩一个全局视口，不再有子 Scene/子 Canvas，
-    // 因此 sceneWheel 不再需要按场景身份开关——鼠标停在任何一层节点或子星图上，
-    // 滚轮都调同一个 zoomAround，只改根 zoomLevel/panX/panY。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let wheel = function_window(&router, "id: wheelHandler", 1400);
     assert!(
         !wheel.contains("enabled:"),
-        "sceneWheel 不得再按场景身份开关（只有根 Canvas 有相机），实际窗口:\n{wheel}"
+        "wheelHandler 不得再按场景身份开关（只有根 Canvas 有相机），实际窗口:\n{wheel}"
     );
     assert!(
-        wheel.contains("zoomAround("),
-        "sceneWheel 必须走根 Canvas 的 zoomAround 统一缩放入口，实际窗口:\n{wheel}"
+        wheel.contains("canvas.zoomAt("),
+        "wheelHandler 必须走根 Canvas 的 zoomAt 统一缩放入口，实际窗口:\n{wheel}"
     );
     assert!(
         wheel.contains("blocking: true"),
-        "sceneWheel 处理后必须 blocking，实际窗口:\n{wheel}"
+        "wheelHandler 处理后必须 blocking，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("childContent"),
-        "sceneWheel 不得再按 childContent 分发到最深子 Scene，实际窗口:\n{wheel}"
+        "wheelHandler 不得再按 childContent 分发到最深子 Scene，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("event.accepted"),
-        "sceneWheel 不得再用 event.accepted 做二次分流（blocking 决定阻塞语义），实际窗口:\n{wheel}"
-    );
-
-    // 用下一个 handler 作右边界，避免固定长度窗口越界吃到 sceneWheel 的 onWheel。
-    let bg = {
-        let start = src.find("id: bgDragArea").unwrap_or_else(|| panic!("missing bgDragArea"));
-        let end = src[start..]
-            .find("id: sceneWheel")
-            .map(|i| start + i)
-            .unwrap_or_else(|| panic!("missing sceneWheel after bgDragArea"));
-        &src[start..end]
-    };
-    assert!(
-        !bg.contains("onWheel"),
-        "bgDragArea 不得再自己处理 wheel（滚轮已移到 sceneWheel），实际窗口:\n{bg}"
+        "wheelHandler 不得再用 event.accepted 做二次分流（blocking 决定阻塞语义），实际窗口:\n{wheel}"
     );
 }
 
