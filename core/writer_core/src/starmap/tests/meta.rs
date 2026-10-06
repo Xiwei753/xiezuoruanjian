@@ -44,6 +44,61 @@ fn test_create_and_list_starmaps() {
     assert_eq!(all[1].accent_color, "#FF0000");
 }
 
+/// 普通新建星图 = 一级身份：id 同时进入 starmap_ids 与 root_starmap_ids，
+/// 一级列表直接读显式 root 集合。
+#[test]
+fn create_starmap_registers_explicit_root_identity() {
+    let dir = setup_temp_dir();
+    let root = create_starmap(dir.path(), "Root", "", None).unwrap();
+
+    let idx = super::super::load_index(dir.path()).unwrap();
+    assert!(idx.starmap_ids.contains(&root.starmap_id));
+    assert_eq!(idx.root_starmap_ids, vec![root.starmap_id.clone()]);
+
+    let roots = list_root_starmaps(dir.path()).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].starmap_id, root.starmap_id);
+}
+
+/// 嵌套子星图原子创建 = 只进 starmap_ids，一级列表不出现，
+/// 不依赖任何 Embed 关系事后过滤。
+#[test]
+fn create_nested_starmap_only_registers_starmap_ids() {
+    let dir = setup_temp_dir();
+    let root = create_starmap(dir.path(), "Root", "", None).unwrap();
+    let child = create_nested_starmap_with_id(dir.path(), "sm_nested", "Nested", "", None).unwrap();
+
+    let idx = super::super::load_index(dir.path()).unwrap();
+    assert!(idx.starmap_ids.contains(&child.starmap_id));
+    assert!(
+        !idx.root_starmap_ids.contains(&child.starmap_id),
+        "嵌套入口创建时就不写 root_starmap_ids"
+    );
+    assert_eq!(idx.root_starmap_ids, vec![root.starmap_id.clone()]);
+
+    let roots = list_root_starmaps(dir.path()).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].starmap_id, root.starmap_id);
+}
+
+/// 删除星图同时从两个集合移除：一级列表和总表都不会再出现该 id。
+#[test]
+fn delete_starmap_removes_root_and_master_identity() {
+    let dir = setup_temp_dir();
+    let keep = create_starmap(dir.path(), "Keep", "", None).unwrap();
+    let remove = create_starmap(dir.path(), "Remove", "", None).unwrap();
+
+    delete_starmap(dir.path(), &remove.starmap_id).unwrap();
+
+    let idx = super::super::load_index(dir.path()).unwrap();
+    assert!(!idx.starmap_ids.contains(&remove.starmap_id));
+    assert!(!idx.root_starmap_ids.contains(&remove.starmap_id));
+
+    let roots = list_root_starmaps(dir.path()).unwrap();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].starmap_id, keep.starmap_id);
+}
+
 #[test]
 fn test_bind_and_get_main_starmap() {
     let dir = setup_temp_dir();

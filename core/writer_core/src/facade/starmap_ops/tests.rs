@@ -91,6 +91,36 @@ fn resolve_starmap_path_walks_embed_segments() {
     assert_eq!(two_embeds.final_starmap_id, grandchild);
 }
 
+/// 一级列表读索引里显式 root 身份：原子创建的子星图（嵌套入口）不出现，
+/// 普通新建的一级星图出现；一级列表不需要加载图数据。
+#[test]
+fn list_root_starmaps_reads_explicit_nested_identity() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let root = create_starmap(&core, "根图");
+    let (child, _embed, _changes, tx_id) = core
+        .create_starmap_child_embed(
+            &root,
+            "嵌套子图",
+            crate::starmap::types::StarMapPoint::default(),
+        )
+        .unwrap();
+    crate::storage::journal::starmap_child_embed::ack_child_embed_history(temp.path(), &tx_id)
+        .unwrap();
+
+    let roots = core.list_root_starmaps().unwrap();
+    assert_eq!(roots.len(), 1, "一级列表只能有普通新建的根星图");
+    assert_eq!(roots[0].starmap_id, root);
+    assert!(
+        !roots.iter().any(|m| m.starmap_id == child.starmap_id),
+        "嵌套子星图身份在创建入口就是嵌套，一级列表不得出现"
+    );
+
+    let all = core.list_starmaps().unwrap();
+    assert_eq!(all.len(), 2, "总表仍包含嵌套子星图");
+}
+
 /// 路径失效（Embed 被删/不存在）时返回错误，而不是静默落回裸目标 ID。
 #[test]
 fn resolve_starmap_path_rejects_missing_embed() {

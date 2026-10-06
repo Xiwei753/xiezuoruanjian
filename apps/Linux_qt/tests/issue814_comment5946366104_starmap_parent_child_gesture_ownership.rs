@@ -44,27 +44,36 @@ fn strip_line_comments(source: &str) -> String {
 // 1. 递归命中入口把子星图内容区单独区分成 childContent，不冒充 empty
 // ─────────────────────────────────────────────────────────────────────────
 
-/// `hitTargetAtScene` 必须把"落在子星图内容区、但子层还没加载出来"单独落成
-/// `childContent`，不得冒充 `empty`——否则父层会把子星图内部的空白当成自己的
-/// 空白，清掉子层刚建立的状态。
+/// Issue #832：落在子星图内容区时不再产生 childContent。
+/// - 子层已经是 interactive：递归进子层，子层空白由子层自己的 empty 回答；
+/// - 子层还是 shell / preview / 未加载：整个子星图按父层 embed 入口命中，
+///   右键/单击/双击都作用于它，不留"什么都不做"的死区。
 #[test]
-fn recursive_hit_test_separates_child_content_from_empty() {
+fn recursive_hit_test_recurses_interactive_child_and_falls_back_to_embed() {
     let src = strip_line_comments(&read_src(CONTENT));
-    let hit = function_window(&src, "function hitTargetAtScene(", 3200);
+    let hit = function_window(&src, "function hitTargetAtScene(", 3600);
     assert!(
-        hit.contains("kind: \"childContent\""),
-        "hitTargetAtScene 必须把未加载的子星图内容区落成 childContent，实际窗口:\n{hit}"
+        !hit.contains("kind: \"childContent\""),
+        "不得再返回 childContent：低 LOD 子图整体按父层 embed 命中，实际窗口:\n{hit}"
     );
-    // empty 只能是所有层都没命中之后的结果。
+    assert!(
+        hit.contains("if (child && child.renderDetail === \"interactive\")"),
+        "只有 interactive 子层才递归进子层命中，实际窗口:\n{hit}"
+    );
+    assert!(
+        hit.contains("var deeper = child.hitTargetAtScene(sceneX, sceneY)"),
+        "interactive 子层必须递归返回真正命中的那一层，实际窗口:\n{hit}"
+    );
+    // embed 兜底必须排在 empty 之前：empty 只表示任何一层都没命中。
     let empty_at = hit
         .find("kind: \"empty\"")
         .expect("hitTargetAtScene 必须有 empty 兜底");
-    let child_at = hit
-        .find("kind: \"childContent\"")
-        .expect("hitTargetAtScene 必须有 childContent 分支");
+    let embed_at = hit
+        .find("targetPath: embedPath(inside.instanceId)")
+        .expect("hitTargetAtScene 必须有子星图 embed 兜底");
     assert!(
-        child_at < empty_at,
-        "childContent 必须排在 empty 之前判定：empty 只表示任何一层都没命中"
+        embed_at < empty_at,
+        "子星图 embed 兜底必须排在 empty 之前判定，实际窗口:\n{hit}"
     );
 }
 
@@ -72,76 +81,87 @@ fn recursive_hit_test_separates_child_content_from_empty() {
 // 2. 四个背景 tap Handler 一律走递归命中入口
 // ─────────────────────────────────────────────────────────────────────────
 
-/// 鼠标左键单击：走递归命中，`empty` 时清的是**命中层**的选区，
-/// node / embed / childContent 都不在这里吞，交给 delegate。
+/// 鼠标左键单击：唯一 Router 走递归命中后按 kind 分发；`empty` 时清的是
+/// **命中层**的选区（hit.owner），不是根层一刀切。
 #[test]
-fn bg_mouse_left_tap_uses_recursive_hit() {
-    let src = strip_line_comments(&read_src(CANVAS));
-    let window = function_window(&src, "id: bgMouseLeftTap", 1500);
-    assert!(
-        window.contains("var hit = hitTargetAtScreen("),
-        "bgMouseLeftTap 必须走递归命中入口 hitTargetAtScreen，实际窗口:\n{window}"
-    );
-    assert!(
-        window.contains("hit.kind === \"edge\"") && window.contains("hit.kind === \"empty\""),
-        "bgMouseLeftTap 只处理 edge 与 empty，其余交给 delegate，实际窗口:\n{window}"
-    );
-    assert!(
-        window.contains("hit.owner.clearLayerSelection()"),
-        "空白清选区必须清命中层自己的选区（hit.owner），不是根层一刀切，实际窗口:\n{window}"
-    );
-    assert!(
-        !window.contains("findEmbedContentAt") && !window.contains("findNodeAt"),
-        "背景 Handler 不得再自己做几何命中，实际窗口:\n{window}"
-    );
-}
-
-/// 触屏左键单击同鼠标；长按只在空白处弹背景菜单，且菜单归属层是命中层。
-#[test]
-fn bg_touch_left_tap_uses_recursive_hit() {
-    let src = strip_line_comments(&read_src(CANVAS));
-    let window = function_window(&src, "id: bgTouchLeftTap", 3000);
-    assert!(
-        window.contains("var hit = hitTargetAtScreen("),
-        "bgTouchLeftTap 必须走递归命中入口 hitTargetAtScreen，实际窗口:\n{window}"
-    );
-    assert!(
-        window.contains("hit.owner.clearLayerSelection()"),
-        "触屏空白清选区也必须清命中层自己的选区，实际窗口:\n{window}"
-    );
-    // 长按在命中对象上时不弹背景菜单。
-    assert!(
-        window.contains("if (!hit || hit.kind !== \"empty\")"),
-        "触屏长按必须先递归判命中，命中对象的长按归 delegate，实际窗口:\n{window}"
-    );
-    assert!(
-        window.contains("openBlankMenu("),
-        "触屏长按落在空白处才弹背景菜单，实际窗口:\n{window}"
-    );
-}
-
-/// 右键：递归命中后按 kind 开对应菜单，空白走 openBlankMenu。
-#[test]
-fn background_right_tap_uses_recursive_hit() {
-    let src = strip_line_comments(&read_src(CANVAS));
-    let window = function_window(&src, "id: backgroundRightTap", 2200);
-    assert!(
-        window.contains("var hit = hitTargetAtScreen("),
-        "backgroundRightTap 必须走递归命中入口 hitTargetAtScreen，实际窗口:\n{window}"
-    );
-    for kind in ["node", "embed", "edge"] {
+fn mouse_left_tap_uses_recursive_hit() {
+    let src = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let window = function_window(&src, "function selectHit(", 1000);
+    for kind in ["\"node\"", "\"embed\"", "\"edge\"", "\"empty\""] {
         assert!(
-            window.contains(&format!("hit.kind === \"{kind}\"")),
-            "backgroundRightTap 必须按命中种类开 {kind} 菜单，实际窗口:\n{window}"
+            window.contains(&format!("hit.kind === {kind}")),
+            "selectHit 必须按命中种类分发 {kind}，实际窗口:\n{window}"
         );
     }
     assert!(
-        window.contains("openBlankMenu(sx, sy, hit, px, py)"),
-        "其余情况（子星图内部空白）走空白菜单，实际窗口:\n{window}"
+        window.contains("hit.owner.clearLayerSelection()")
+            && window
+                .contains("hit.owner.logInteraction(\"selection_changed\", \"none\", \"\", {})"),
+        "空白清选区必须清命中层自己的选区并记该层日志，实际窗口:\n{window}"
     );
     assert!(
         !window.contains("findEmbedContentAt") && !window.contains("findNodeAt"),
-        "右键 Handler 不得再自己做几何命中，实际窗口:\n{window}"
+        "Router 不得自己做几何命中（统一走 hitTargetAtScreen），实际窗口:\n{window}"
+    );
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        !canvas.contains("findEmbedContentAt") && !canvas.contains("findNodeAt"),
+        "Canvas 不得再保留第二份几何命中，实际源码不符"
+    );
+}
+
+/// 触屏：单击同鼠标；长按 node/embed 进 contextPending（菜单视觉 / 转 connect），
+/// 长按空白才弹该层背景菜单。
+#[test]
+fn touch_long_press_uses_recursive_hit_and_owner_layer() {
+    let src = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let press = function_window(&src, "function beginPress(", 2400);
+    assert!(
+        press.contains("hitAt(pressScreenX, pressScreenY)")
+            && press.contains("emptyLongPressArmed = (source === \"touch\")"),
+        "触屏按下必须走递归命中，空白长按预备只对触屏武装，实际窗口:\n{press}"
+    );
+
+    let long_press = function_window(&src, "function handleLongPress(", 1800);
+    assert!(
+        long_press.contains("ic.pressPendingToContextPending(center.x, center.y)")
+            && long_press.contains("canvas.showTouchPreview(hit.kind, center.x, center.y)"),
+        "触屏长按 node/embed 必须进 contextPending 并显示菜单视觉，实际窗口:\n{long_press}"
+    );
+    assert!(
+        long_press.contains("if (h && h.kind === \"empty\")")
+            && long_press.contains("canvas.openBlankMenu("),
+        "长按空白才弹该层背景菜单（命中对象的菜单归从 contextPending 松手），实际窗口:\n{long_press}"
+    );
+}
+
+/// 右键：Router 递归命中后交给 Canvas 菜单宿主按 kind 开对应菜单，
+/// 空白走该层 openBlankMenu（子星图内部空白就在子星图里新建）。
+#[test]
+fn right_click_uses_recursive_hit_and_menu_host() {
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let click = function_window(&router, "function handleRightClick(", 700);
+    assert!(
+        click.contains("hitAt(point.position.x, point.position.y)")
+            && click.contains("canvas.openHitContextMenu(hit, point.position.x, point.position.y)"),
+        "右键必须走递归命中后交给 Canvas 菜单宿主，实际窗口:\n{click}"
+    );
+
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let dispatch = function_window(&canvas, "function openHitContextMenu(", 2400);
+    for kind in ["node", "embed", "edge"] {
+        assert!(
+            dispatch.contains(&format!("hit.kind === \"{kind}\"")),
+            "openHitContextMenu 必须按命中种类开 {kind} 菜单，实际窗口:\n{dispatch}"
+        );
+    }
+    assert!(
+        dispatch.contains("openBlankMenu(sx, sy, hit, screenX, screenY)"),
+        "其余情况（命中层空白）走该层空白菜单，实际窗口:\n{dispatch}"
+    );
+    assert!(
+        !dispatch.contains("findEmbedContentAt") && !dispatch.contains("findNodeAt"),
+        "菜单宿主不得再做几何命中，实际窗口:\n{dispatch}"
     );
 }
 

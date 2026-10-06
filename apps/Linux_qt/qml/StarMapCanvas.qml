@@ -3,12 +3,12 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：全局相机（pan/zoom）、全局输入入口、根层内容容器、右键菜单与弹窗
+// 职责：全局相机（pan/zoom）数据与纯方法、唯一命中入口、根层内容容器、
+//   菜单宿主与弹窗、connect 预览 overlay
 //
 // Issue #822：整棵星图只有一个全局视口。
-//   panX / panY / zoomLevel 只在这里存在，WheelHandler / PinchHandler /
-//   触屏 +/- 按钮也只在这里。鼠标停在任意深度的节点、子星图、孙星图上，
-//   滚轮和捏合都调同一个 zoomAround()，只改根 zoomLevel/panX/panY。
+//   panX / panY / zoomLevel 只在这里存在。鼠标停在任意深度的节点、子星图、
+//   孙星图上，滚轮和捏合都调同一个 zoomAt()，只改根 zoomLevel/panX/panY。
 //   子星图"看起来更大/更小"是 Deep Zoom 显示档位：每层内容做 local fit，
 //   ownerEffectiveScale = globalZoom × 祖先 local fit，再用投影覆盖率决定
 //   子内容是完整交互 / 轻量 preview / 只留外壳。档位绝不反写全局相机，
@@ -18,18 +18,16 @@
 //   子星图内容在 Embed 内部懒加载下一层 StarMapSceneContent。
 //   节点/连线都画在各自层的局部坐标里，相机只作用于根层 Content 这一张 Item。
 //
-//   交互状态机也只有一个：StarMapInteractionController 由本文件创建一次，
-//   整棵递归树共享。连线预览线也只有这一层 overlay 一条，不每层各画一条。
-//
-//   命中判断统一走根层内容的递归接口 hitTargetAtScene()：
-//   它先查本层节点/Embed chrome，落在子星图内容区时递归进子层，
-//   返回真正命中的那一层（owner/scenePathKey/starmapId/kind/id/targetPath）。
-//   连线松手、右键空白新建、选中、pointer_press 日志全部走这一个入口，
-//   不再只认识根层的 findNodeAt/findEmbedChromeAt。
+// Issue #832：原始输入只有一个主人 StarMapInputRouter。
+//   本文件不再挂背景 TapHandler / DragHandler / PinchHandler / WheelHandler /
+//   MouseArea，也不做手势仲裁；只保留相机数据与纯方法
+//   （screen/world 换算、panBy()、zoomAt()、focusOnSceneRect）、
+//   hitTargetAtScreen() 唯一命中入口、菜单宿主和 connect 预览 overlay。
+//   交互状态机 StarMapInteractionController 仍由本文件创建一次，整棵递归树共享；
+//   长按 Timer 与所有状态提升都在 Router。
 //
 // 约束：
 //   - 纯渲染和输入层，星图业务逻辑委托给各层 StarMapGraphController
-//   - 鼠标行为由共享 pointerMode 状态机明确驱动
 //   - 使用 Canvas 进行自定义绘制
 // =============================================================================
 
@@ -43,6 +41,14 @@ Item {
 
     // 根星图 ID。根层内容用它作为整棵递归树的 rootStarmapId。
     property string starmapId: ""
+    // Issue #832 评论 6014361379：切图时单独清焦点栈。不塞进 resetInteraction()，
+    // 因为 pinch 开始也会调 resetInteraction()，不能一捏就清视觉焦点。
+    onStarmapIdChanged: {
+        if (focusStack.length > 0) {
+            focusStack = []
+            focusChanged()
+        }
+    }
     required property var dt
 
     readonly property color _primary: dt.primary
@@ -89,6 +95,12 @@ Item {
         panY = nextY
     }
 
+    // 唯一平移入口：Router 交给 Canvas 的原始位移换算成 canvas-local 增量后
+    // 由这里落到相机上。pan 两个方向都不设边界（无限画布）。
+    function panBy(dx, dy) {
+        applyPan(panX + dx, panY + dy)
+    }
+
     // scene 坐标（整棵递归树的顶层 world 坐标）↔ 视口坐标。
     // 相机只有这一个，所以换算是全局唯一入口，不再有"每层各自的 zoomLevel"。
     function worldToScreenX(wx) { return panX + wx * zoomLevel }
@@ -96,10 +108,9 @@ Item {
     function screenToWorldX(sx) { return (sx - panX) / zoomLevel }
     function screenToWorldY(sy) { return (sy - panY) / zoomLevel }
 
-    // Issue #822: 滚轮和捏合共用同一个缩放入口，只改根 zoomLevel/panX/panY。
-    // 鼠标停在节点/子星图/孙星图上都不影响：整棵树一起缩放。
+    // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改根 zoomLevel/panX/panY。
     // 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），不再有产品缩放上限。
-    function zoomAround(screenX, screenY, nextZoom) {
+    function zoomAt(screenX, screenY, nextZoom) {
         var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))
         var oldZoom = zoomLevel
         if (target === oldZoom)
@@ -109,6 +120,144 @@ Item {
             screenX - (screenX - panX) * (zoomLevel / oldZoom),
             screenY - (screenY - panY) * (zoomLevel / oldZoom)
         )
+        // Issue #832 评论 6013799805 / #373：缩放后重算焦点链覆盖率，
+        // 栈顶 embed 缩出窗口就 demote（只 pop，不 push）。
+        recomputeFocusFromCoverage()
+    }
+
+    // 双击 Embed 的"进入"：把相机聚焦/放大到该 Embed 的 scene 矩形。
+    // 仍然是同一张全局画布，不开新页面、不切换星图身份；放大后 Deep Zoom
+    // 档位自然从 shell/preview 跨到 interactive，子内容就地展开。
+    function focusOnSceneRect(sceneX, sceneY, sceneW, sceneH) {
+        var w = Math.max(sceneW, 1)
+        var h = Math.max(sceneH, 1)
+        var next = Math.min(width / w, height / h) * 0.72
+        next = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, next))
+        zoomLevel = next
+        applyPan(width / 2 - (sceneX + sceneW / 2) * next,
+                 height / 2 - (sceneY + sceneH / 2) * next)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：纯视觉焦点链（返回父星图）
+    // ---------------------------------------------------------------------------
+    // 整棵星图仍然只有这一个全局相机；focusStack 只记录"双击进入过哪些 embed"，
+    // 给左上返回按钮和缩放覆盖率滞回用。它不切换 root starmap、不落盘、
+    // 不复制 Core 业务状态，纯粹是显示参考根。
+    //   每个元素 = { scenePathKey, starmapId, embedInstanceId,
+    //                sceneRect:{x,y,width,height}, targetPath }
+    //   focusIsRoot === focusStack.length === 0：左上返回退出星图工作区；
+    //   否则左上返回 pop 一层，相机回到新栈顶的 sceneRect（root 时不动）。
+    // ---------------------------------------------------------------------------
+    property var focusStack: []
+    readonly property bool focusIsRoot: focusStack.length === 0
+    // 栈顶的 scenePathKey（root 时为 "root"），供 Workspace/日志用。
+    readonly property string focusScenePathKey:
+        focusStack.length > 0 ? focusStack[focusStack.length - 1].scenePathKey : "root"
+    signal focusChanged()
+
+    // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
+    // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
+    // kind/id/targetPath）。scene 矩形由 hit.owner.itemSceneRect 给出（scene/world 坐标）。
+    // Issue #832 评论 6014908211：
+    // - 父子校验必须在 focusOnSceneRect 之前：失败时不移动相机、不进栈。
+    // - hit.scenePathKey 是 embed 所属的 Scene；只有当它等于当前焦点
+    //   scenePathKey 时，进入的 child 才是当前焦点的直接子层。
+    // - 直接子层：push 一项，保证 stack 相邻两项永远是直接父子。
+    // - 兄弟/祖先/深层：不改变焦点和相机。深层目标（hit.scenePathKey 是
+    //   focusScenePathKey 的真后代）理论上应补齐中间父链，但中间层的
+    //   sceneRect 不可得，贸然 push 会破坏 recomputeFocusFromCoverage 的
+    //   覆盖率滞回；保持不动更安全。
+    // - scenePathKey 记录进入后的 child scene path（hit.owner.enteredChildSceneKey），
+    //   不是 hit.scenePathKey（那是 embed 所属父 Scene，焦点身份会慢一层）。
+    // - 保存进入前的父层相机 parentCamera，pop 时恢复原视角。
+    function focusEmbed(hit) {
+        if (!hit || !hit.owner)
+            return
+        var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
+        if (!rect)
+            return
+        // 真正的 child scene path：hit.scenePathKey 是 embed 所属父 Scene，
+        // 进入后的 child scene 要再往下钻一层。
+        var childKey = hit.owner.enteredChildSceneKey(hit.id)
+        // 父子校验在 focusOnSceneRect 之前：只有 embed 所属 Scene 等于当前
+        // 焦点 scenePathKey 时，child 才是直接子层。否则不移动相机、不进栈。
+        if (hit.scenePathKey !== focusScenePathKey)
+            return
+        // 校验通过：保存父层相机，移动相机，推进焦点链。
+        var parentCamera = { zoom: zoomLevel, panX: panX, panY: panY }
+        focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
+        var entry = {
+            scenePathKey: childKey,
+            starmapId: hit.starmapId,
+            embedInstanceId: hit.id,
+            sceneRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            targetPath: hit.targetPath,
+            parentCamera: parentCamera
+        }
+        var next = focusStack.slice()
+        next.push(entry)
+        focusStack = next
+        focusChanged()
+    }
+
+    // 左上"返回父星图"：pop 最后一层。
+    // - 栈空：已是 root，返回 false（Workspace 据此走 backClicked 退出星图工作区）。
+    // - pop 后：用被 pop 的 entry 里保存的 parentCamera 恢复相机，
+    //   而不是用新栈顶的 sceneRect 重新 focusOnSceneRect。这样每一级返回
+    //   真的回到父层原视角（root 时恢复 root 的 parentCamera）。
+    function focusParentScene() {
+        if (focusStack.length === 0)
+            return false
+        var next = focusStack.slice()
+        var popped = next.pop()
+        focusStack = next
+        if (popped.parentCamera) {
+            zoomLevel = popped.parentCamera.zoom
+            applyPan(popped.parentCamera.panX, popped.parentCamera.panY)
+        }
+        focusChanged()
+        return true
+    }
+
+    // 缩放覆盖率滞回：zoomAt 末尾调用。只做 demote（pop），不主动 push
+    // （push 只由双击 focusEmbed 触发）。覆盖率口径与 Harmony resolveFocusScenePath
+    // 一致：子星图投影直径 / 视口短边（不是裁剪交集面积 / 视口面积）。
+    // focusOnSceneRect 把子星图放到短边约 72%，旧面积比 0.72*0.72=0.5184 < 0.55
+    // 会在双击进入后下一次 zoomAt 立刻 pop；投影直径比 0.72 > 0.55 才稳定。
+    // 圆心必须落在窗口 20%~80% 区间。退出阈值 0.55，进入阈值 0.70 不在这里 push。
+    // 用 while 循环：一次缩小可能让多层同时掉出窗口。
+    function recomputeFocusFromCoverage() {
+        if (focusStack.length === 0)
+            return
+        var vpW = canvasArea.width
+        var vpH = canvasArea.height
+        if (!(vpW > 0) || !(vpH > 0))
+            return
+        var vpShort = Math.min(vpW, vpH)
+        var changed = false
+        while (focusStack.length > 0) {
+            var top = focusStack[focusStack.length - 1]
+            var r = top.sceneRect
+            var sx0 = worldToScreenX(r.x)
+            var sy0 = worldToScreenY(r.y)
+            var sx1 = worldToScreenX(r.x + r.width)
+            var sy1 = worldToScreenY(r.y + r.height)
+            var projectedDiameter = Math.min(Math.abs(sx1 - sx0), Math.abs(sy1 - sy0))
+            var coverage = projectedDiameter / vpShort
+            var cx = worldToScreenX(r.x + r.width / 2)
+            var cy = worldToScreenY(r.y + r.height / 2)
+            var centerInWindow = cx >= 0.2 * vpW && cx <= 0.8 * vpW
+                    && cy >= 0.2 * vpH && cy <= 0.8 * vpH
+            if (coverage >= 0.55 && centerInWindow)
+                break
+            var next = focusStack.slice()
+            next.pop()
+            focusStack = next
+            changed = true
+        }
+        if (changed)
+            focusChanged()
     }
 
     // 当前可见区域（scene 坐标矩形），逐层传给内容做子星图懒加载判定。
@@ -128,11 +277,18 @@ Item {
     }
 
     // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
+    // Router 在每次鼠标/触屏事件开头调用 notePointerDevice 切换。
     property bool _touchInputActive: false
+    function notePointerDevice(isTouch) {
+        _touchInputActive = isTouch
+    }
 
-    // Issue #814 评论 5935346839: pan 手势起点记录，用于 pan_end 边界日志。
-    property real _panBeginX: 0
-    property real _panBeginY: 0
+    // Issue #832：内联编辑汇总键（由各层 Content 经 noteInlineEditing 汇总）。
+    // 非空时 Router 的拖动 Handler 让位给编辑中的 TextInput。
+    property string inlineEditingKey: ""
+    function setInlineEditingKey(key) {
+        inlineEditingKey = key
+    }
 
     // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
     // pathKey 显式传参：现在是全局相机，没有"哪一层是 root"的隐含身份判断。
@@ -143,24 +299,16 @@ Item {
                                               starmapId, itemKind, itemId, fj)
     }
 
-    // Issue #822 评论 5977325046：双指缩放期间，整棵树的触屏单指业务全部让位。
-    // PinchHandler 的 exclusive grab 和共享状态机的 pointerMode 是两层状态：
-    // passive grab 在缩放期间仍会把事件送到单指 TapHandler / DragHandler，
-    // 所以两边都要看，晚到的单指回调一律忽略。
-    function pinchOwnsTouchGesture() {
-        return canvasPinch.active || interaction.pointerMode === "pinch"
-    }
-
     // Issue #822: 统一命中判断入口 —— 递归命中测试，从根层内容开始往下钻。
-    // 空白点击、拖动画布、pointer_press、右键菜单全部共用。
+    // 空白点击、拖动画布、pointer_press、右键菜单全部共用（现在唯一调用方是 Router）。
     function hitTargetAtScreen(sx, sy) {
         if (!rootContent) return null
         return rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))
     }
 
     // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
-    // 统一由根节点上的 passive-grab PointHandler 观察 press：不抢事件，
-    // 命中的对象照常拿到完整交互；hitKind/hitId 在按下当场递归命中重算。
+    // Router 在按下当场调用：命中的对象照常拿到完整交互，
+    // hitKind/hitId 由递归命中当场重算。
     function logPointerPress(button, device, point) {
         var hit = hitTargetAtScreen(point.position.x, point.position.y)
         var kind = hit ? hit.kind : "empty"
@@ -182,6 +330,8 @@ Item {
     // ---------------------------------------------------------------------------
     // Issue #822：整棵递归树唯一的交互状态机，就在这里创建一次。
     // 各层 StarMapSceneContent 拿到的都是同一个实例（经 Embed 原样下传）。
+    // Issue #832：长按 Timer 与所有状态提升都在 StarMapInputRouter，
+    // 本文件只创建状态机实例。
     // ---------------------------------------------------------------------------
     StarMapInteractionController {
         id: interaction
@@ -189,21 +339,6 @@ Item {
         longPressInterval: Application.styleHints.mousePressAndHoldInterval > 0
                 ? Application.styleHints.mousePressAndHoldInterval
                 : 800
-    }
-
-    // Issue #822: 长按计时的 Timer 只能挂在 Item 下（InteractionController 是
-    // QtObject，没有默认属性），所以放在这里，由 pressTimerActive 驱动。
-    // Timer 到点只发 pressTimeout 信号；把 pressPending 提升成 move 还是 connect
-    // 由手势归属层 StarMapSceneContent 判断，状态只被提升一次。
-    Timer {
-        id: pressLongPressTimer
-        interval: interaction.longPressInterval
-        repeat: false
-        running: interaction.pressTimerActive
-        onTriggered: {
-            interaction.pressTimerActive = false
-            interaction.pressTimeout()
-        }
     }
 
     readonly property var sharedInteraction: interaction
@@ -235,13 +370,16 @@ Item {
     }
 
     // Issue #798: 公开 reset 入口，供 Workspace 切图 / 不可见时清瞬时交互状态。
+    // Issue #832: 手势现场已经全部集中在 Router + 共享状态机，这里只需复位
+    // 状态机并让整棵树的连线回到 canonical。内联编辑汇总键不在这里清：
+    // 由 Node 的 editing 变化和 delegate 销毁（Repeater.itemRemoved）负责。
     function resetInteraction() {
         // Issue #798 评论 5892406254: reset 前若正在 move，edgeRenders 已被
         // transient 坐标更新。reset 后 delegate 回 canonical，edge cache 也要
         // 一起恢复 canonical，否则节点回去了线还停在拖动位置。
         interaction.reset()
-        // Issue #817 评论 5953678540: 一起清 bgDragArea 的本地 pan 手势状态。
-        bgDragArea.resetMouseGesture()
+        if (inputRouter) inputRouter.cancelLocalState()
+        hideTouchPreview()
         if (rootContent) rootContent.refreshAllEdges()
     }
 
@@ -330,409 +468,15 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // 背景交互层：TapHandler 处理点击类，MouseArea 处理 pan 拖动，WheelHandler 缩放。
-    // 桌面指针/触屏按 acceptedDevices 拆开：
-    //   - 桌面指针（Mouse | TouchPad）：单击选中 / 拖动移动或平移 / 右键菜单
-    //   - 触屏（TouchScreen）：长按弹菜单 / 滑动平移或拉线
-    //
-    // Issue #812: 桌面指针的 acceptedDevices 必须是 Mouse | TouchPad，
-    // 不能只写 Mouse。acceptedDevices 是硬过滤，设备类型不匹配时
-    // Handler 根本不参与这个事件。
-    //
-    // Issue #806 评论 5907045450: 这些 handler 直接挂在 canvasArea 上。
-    // Qt 的事件会投递给「命中点所在最深 item」及其祖先链上的 handler，
-    // 所以挂在根上就能覆盖整棵递归树，不必每层各挂一套。
-    //
-    // Issue #822: 这些 handler 不再问"当前是哪一层 Scene"，命中交给递归接口。
+    // Issue #832：整棵星图唯一的原始输入层，透明铺在整棵可视内容之上。
+    // 所有鼠标/触摸语义（单击/双击/右键/拖动/长按/连线/捏合/滚轮）只从这里进入，
+    // 递归 Node/Embed 不再各自挂业务手势，同一个手势不会再有第二个解释者。
     // ---------------------------------------------------------------------------
-
-    // 鼠标左键单击：递归命中后选中或清选区
-    TapHandler {
-        id: bgMouseLeftTap
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.LeftButton
-        onSingleTapped: function(eventPoint) {
-            _touchInputActive = false
-            var hit = hitTargetAtScreen(eventPoint.position.x, eventPoint.position.y)
-            if (!hit)
-                return
-            var sx = screenToWorldX(eventPoint.position.x)
-            var sy = screenToWorldY(eventPoint.position.y)
-            if (hit.kind === "edge") {
-                hit.owner.selectEdge(hit.id)
-                logInteraction("selection_changed", "edge", hit.id, {
-                    "device": "mouse"
-                }, hit.scenePathKey)
-            } else if (hit.kind === "empty") {
-                // Issue #822: 空白清选区，空子星图内部也走同一条路径。
-                if (hit.owner) hit.owner.clearLayerSelection()
-                logInteraction("selection_changed", "none", "", {
-                    "device": "mouse"
-                }, hit.scenePathKey)
-            }
-            // node / embed / childContent 由各自的 delegate 处理，这里不吞。
-        }
-    }
-
-    // 触屏左键单击：同鼠标；长按在空白处打开归属层的背景菜单
-    TapHandler {
-        id: bgTouchLeftTap
-        acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        // Issue #822 评论 5977714294：Pinch 激活期间直接禁用，让 passive grab 的
-        // tap 识别当场取消。回调里的 guard 只是双保险 —— 只靠它挡不住
-        // "Pinch 先变 inactive → 状态机复位 → 同一个 release 再判 singleTapped"
-        // 这个时序（那时两个条件都已经回到 false）。
-        enabled: !canvasArea.pinchOwnsTouchGesture()
-        onSingleTapped: function(eventPoint) {
-            // pinch 接管期间拒绝迟到的单指点选。
-            if (canvasArea.pinchOwnsTouchGesture())
-                return
-            _touchInputActive = true
-            var hit = hitTargetAtScreen(eventPoint.position.x, eventPoint.position.y)
-            if (!hit)
-                return
-            var sx = screenToWorldX(eventPoint.position.x)
-            var sy = screenToWorldY(eventPoint.position.y)
-            if (hit.kind === "edge") {
-                hit.owner.selectEdge(hit.id)
-                logInteraction("selection_changed", "edge", hit.id, {
-                    "device": "touch"
-                }, hit.scenePathKey)
-            } else if (hit.kind === "empty") {
-                if (hit.owner) hit.owner.clearLayerSelection()
-                logInteraction("selection_changed", "none", "", {
-                    "device": "touch"
-                }, hit.scenePathKey)
-            }
-        }
-        // TapHandler.longPressed 信号无参数，用 point.position 拿当前点。
-        // 长按前先递归判命中：命中对象的长按归 delegate，这里不弹背景菜单。
-        onLongPressed: {
-            // pinch 接管期间拒绝迟到的空白长按菜单。
-            if (canvasArea.pinchOwnsTouchGesture())
-                return
-            _touchInputActive = true
-            var px = bgTouchLeftTap.point.position.x
-            var py = bgTouchLeftTap.point.position.y
-            var hit = hitTargetAtScreen(px, py)
-            if (!hit || hit.kind !== "empty")
-                return
-            openBlankMenu(screenToWorldX(px), screenToWorldY(py), hit, px, py)
-        }
-    }
-
-    // 右键单击：递归命中后开对应菜单。
-    // Issue #822: 空白处右键的菜单归属层就是被点中的那一层，
-    // 子星图内部空白不需要"进入"另一个页面。
-    TapHandler {
-        id: backgroundRightTap
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.RightButton
-        onSingleTapped: function(eventPoint) {
-            _touchInputActive = false
-            var px = eventPoint.position.x
-            var py = eventPoint.position.y
-            var hit = hitTargetAtScreen(px, py)
-            if (!hit)
-                return
-            var sx = screenToWorldX(px)
-            var sy = screenToWorldY(py)
-            if (hit.kind === "node") {
-                hit.owner.selectNode(hit.id)
-                menuOwnerContent = hit.owner
-                selectedNodeForMenu = hit
-                logInteraction("context_menu_open", "node", hit.id, {
-                    "menuKind": "node",
-                    "sceneX": sx,
-                    "sceneY": sy
-                }, hit.scenePathKey)
-                nodeContextMenu.popup(px, py)
-            } else if (hit.kind === "embed") {
-                hit.owner.selectEmbed(hit.id)
-                menuOwnerContent = hit.owner
-                selectedEmbedForMenu = hit
-                logInteraction("context_menu_open", "embed", hit.id, {
-                    "menuKind": "embed",
-                    "sceneX": sx,
-                    "sceneY": sy
-                }, hit.scenePathKey)
-                embedContextMenu.popup(px, py)
-            } else if (hit.kind === "edge") {
-                hit.owner.selectEdge(hit.id)
-                menuOwnerContent = hit.owner
-                selectedEdgeForMenu = hit
-                logInteraction("context_menu_open", "edge", hit.id, {
-                    "menuKind": "edge",
-                    "sceneX": sx,
-                    "sceneY": sy
-                }, hit.scenePathKey)
-                edgeContextMenu.popup(px, py)
-            } else if (hit.kind === "childContent") {
-                // preview / shell / 未加载的子星图内部当前不可编辑：
-                // 保持无业务菜单，绝不弹父层的"新建"菜单——那会在看起来点了
-                // 子星图内部的地方往父图创建东西。放大到 interactive 后，
-                // 递归命中自然会给出子层自己的 empty/node/embed。
-                return
-            } else {
-                openBlankMenu(sx, sy, hit, px, py)
-            }
-        }
-    }
-
-    // 触屏拖动：空白处滑动 = 全局画布 pan；
-    // 已经有 press 归属（connect/contextPending/move）时只更新共享状态机。
-    DragHandler {
-        id: bgTouchDrag
-        acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.LeftButton
-        target: null
-        property real lastTx: 0
-        property real lastTy: 0
-        onActiveChanged: {
-            if (active) {
-                lastTx = 0
-                lastTy = 0
-                _touchInputActive = true
-            }
-        }
-        onActiveTranslationChanged: {
-            var dx = activeTranslation.x - lastTx
-            var dy = activeTranslation.y - lastTy
-            lastTx = activeTranslation.x
-            lastTy = activeTranslation.y
-            // Issue #822 评论 5977278030 / 5977325046：双指缩放优先。pinch 期间
-            // 单指拖动不再驱动任何业务状态，也不再 pan（pinch 自己负责相机）。
-            // 先更新 lastTx/lastTy 再返回，缩放结束后不会攒出一个大 delta。
-            if (canvasArea.pinchOwnsTouchGesture())
-                return
-            var mode = interaction.pointerMode
-            if (mode === "connect" || mode === "contextPending" || mode === "move") {
-                // 归属层自己换算 scene→局部坐标，这里只交原始 scene 位移。
-                if (rootContent) rootContent.onSceneDragDelta(dx, dy)
-                return
-            }
-            if (mode === "pressPending") {
-                // 触屏按下在节点/Embed 上：位移先累计，够阈值才提升为 move。
-                if (rootContent) rootContent.onSceneDragDelta(dx, dy)
-                return
-            }
-            var cd = sceneDeltaToCanvas(dx, dy)
-            applyPan(panX + cd.x, panY + cd.y)
-        }
-    }
-
-    // Issue #822: 捏合缩放只有这一处，作用在全局相机上。
-    // 不再有"捏合归某个子星图"的判断：整棵树只有一个视口。
-    // 捏合比例相对手势起点，统一交给 zoomAround 做数值夹取 + 以中心缩放，
-    // 不再自己维护第二套 0.35/2.5 夹取和 pan 公式。
-    //
-    // Issue #822 评论 5977278030：双指缩放优先。PinchHandler 的 grab 和我们自己的
-    // interaction.pointerMode 是两层状态，Qt 只负责前者——激活时先把单指留下的
-    // 瞬时现场（长按计时、connect 预览、move 目标）整体清掉再进 pinch，
-    // 结束时再整体复位，长按/连线绝不会跨过缩放继续执行。
-    PinchHandler {
-        id: canvasPinch
-        acceptedDevices: PointerDevice.TouchScreen
-        target: null
-        property real _pinchStartZoom: 1.0
-        onActiveChanged: {
-            if (active) {
-                canvasArea.resetInteraction()
-                canvasArea.hideTouchPreview()
-                interaction.beginPinch()
-                _pinchStartZoom = zoomLevel
-                _touchInputActive = true
-            } else {
-                interaction.endPinch()
-            }
-        }
-        onActiveScaleChanged: {
-            var cx = centroid.position.x
-            var cy = centroid.position.y
-            zoomAround(cx, cy, _pinchStartZoom * activeScale)
-        }
-    }
-
-    // Issue #814 评论 5935346839: press 边界观察器。
-    // PointHandler 只取 passive grab，不参与 exclusive grab 竞争。
-    PointHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.LeftButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("left", "mouse", point)
-        }
-    }
-    PointHandler {
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        acceptedButtons: Qt.RightButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("right", "mouse", point)
-        }
-    }
-    // 触屏 press 观察器，只记 pointer_press 边界日志，不参与手势所有权。
-    // Issue #822: 不再有"哪个手指属于哪个子星图"的判断——只有一个全局视口，
-    // 触屏手势不需要按层让出。
-    PointHandler {
-        acceptedDevices: PointerDevice.TouchScreen
-        acceptedButtons: Qt.NoButton
-        onActiveChanged: {
-            if (active)
-                canvasArea.logPointerPress("left", "touch", point)
-        }
-    }
-
-    // Issue #817 评论 5949494799: 背景 pan 拖动改为 press-time 手势归属 + 拖动阈值。
-    // 按下时先用递归命中判断：只有 node/embed 才 mouse.accepted = false
-    // 让事件穿透给对应对象；childContent（无交互 delegate）与 empty/edge 一样
-    // 走全局 pan，不能在小尺寸子图内部留死区。
-    // Issue #822 评论 5977879544：鼠标入口只有既定那套（左键单击选中、左键拖空白
-    // pan、左键长按节点/子星图连线、右键菜单、滚轮缩放），中键历史 pan 分支已删除。
-    MouseArea {
-        id: bgDragArea
+    StarMapInputRouter {
+        id: inputRouter
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton
-        hoverEnabled: true
-
-        property string pressHitKind: ""
-        property real pressX: 0
-        property real pressY: 0
-        property real lastX: 0
-        property real lastY: 0
-        property bool panStarted: false
-
-        // Issue #817 评论 5953678540: 统一清理 pan 手势本地状态。
-        function resetMouseGesture() {
-            pressHitKind = ""
-            pressX = 0
-            pressY = 0
-            lastX = 0
-            lastY = 0
-            panStarted = false
-        }
-
-        onPressed: function(mouse) {
-            _touchInputActive = false
-            var hit = hitTargetAtScreen(mouse.x, mouse.y)
-
-            // 鼠标只有一个手势入口（左键，见 acceptedButtons）：
-            // 只有真正可交互的对象（node/embed）才放弃事件，让 delegate 处理。
-            // childContent（子内容没加载 / preview / shell）没有可交互 delegate，
-            // 继续走全局 pan：小尺寸子图不能拖动就是死区，和"只有一台全局相机"冲突。
-            if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-                mouse.accepted = false
-                return
-            }
-            pressHitKind = "empty"
-            pressX = mouse.x
-            pressY = mouse.y
-            lastX = mouse.x
-            lastY = mouse.y
-            panStarted = false
-        }
-
-        onPositionChanged: function(mouse) {
-            if (pressHitKind !== "empty")
-                return
-
-            // 左键且尚未 panStarted：检查是否超过拖动阈值
-            if (!panStarted && (mouse.buttons & Qt.LeftButton)) {
-                var dx0 = mouse.x - pressX
-                var dy0 = mouse.y - pressY
-                if (Math.hypot(dx0, dy0) < bgMouseLeftTap.dragThreshold)
-                    return
-
-                if (!interaction.beginPan())
-                    return
-
-                panStarted = true
-                lastX = mouse.x
-                lastY = mouse.y
-                _panBeginX = panX
-                _panBeginY = panY
-                logInteraction("pan_begin", "empty", "", {
-                    "startPanX": panX,
-                    "startPanY": panY,
-                    "device": "mouse"
-                })
-                return
-            }
-
-            // panStarted（左键已超阈值）：继续 pan
-            if (panStarted && interaction.pointerMode === "pan") {
-                var dx = mouse.x - lastX
-                var dy = mouse.y - lastY
-                applyPan(panX + dx, panY + dy)
-                lastX = mouse.x
-                lastY = mouse.y
-            }
-        }
-
-        onReleased: function(mouse) {
-            // 只在 panStarted 时结束 pan。
-            // 没有超过阈值就是普通点击，由 bgMouseLeftTap 处理选中/清选。
-            if (panStarted) {
-                interaction.endPan()
-                logInteraction("pan_end", "empty", "", {
-                    "startPanX": _panBeginX,
-                    "startPanY": _panBeginY,
-                    "endPanX": panX,
-                    "endPanY": panY,
-                    "device": "mouse"
-                })
-                panStarted = false
-            }
-            pressHitKind = ""
-        }
-
-        // 系统取消抓取时也要结束 pan 并清本地状态。
-        onCanceled: {
-            if (interaction.pointerMode === "pan")
-                interaction.endPan()
-            resetMouseGesture()
-        }
-    }
-
-    // Issue #822: 滚轮缩放只由根 Canvas 唯一处理，没有 enabled: pathKey === "root"
-    // 这种"按场景身份决定谁能缩放"的判断——已经不存在子 Canvas 了。
-    // 鼠标停在第三层子星图内部，变化的也只是根 zoomLevel/panX/panY。
-    WheelHandler {
-        id: sceneWheel
-        target: null
-        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-        blocking: true
-
-        onWheel: function(event) {
-            _touchInputActive = false
-
-            var delta = event.angleDelta.y !== 0
-                ? event.angleDelta.y / 120
-                : event.pixelDelta.y / 120.0
-
-            if (delta === 0)
-                return
-
-            var oldZoom = zoomLevel
-            // 乘法步进：每格滚轮 ×/÷ _zoomFactor，各档手感一致、不设产品上限，
-            // 只由 zoomAround 夹数值安全范围（docs/starmap_viewport.md）。
-            var newZoom = oldZoom * Math.pow(_zoomFactor, delta)
-            if (newZoom === oldZoom)
-                return
-
-            var mx = point.position.x
-            var my = point.position.y
-
-            zoomAround(mx, my, newZoom)
-
-            logInteraction("zoom_wheel", "scene", starmapId, {
-                "oldZoom": oldZoom,
-                "newZoom": zoomLevel,
-                "screenX": mx,
-                "screenY": my
-            })
-        }
+        canvas: canvasArea
+        z: 10
     }
 
     // 连线预览线：整棵星图只有这一条，在根 Canvas 的 overlay 上。
@@ -795,15 +539,15 @@ Item {
             dt: canvasArea.dt
             text: qsTr("+")
             // 缩放锚点是画布中心：按钮自己的 width/height 不是画布尺寸。
-            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
-                                  zoomLevel * _zoomFactor)
+            onClicked: zoomAt(canvasArea.width / 2, canvasArea.height / 2,
+                              zoomLevel * _zoomFactor)
         }
 
         AppButton {
             dt: canvasArea.dt
             text: qsTr("−")
-            onClicked: zoomAround(canvasArea.width / 2, canvasArea.height / 2,
-                                  zoomLevel / _zoomFactor)
+            onClicked: zoomAt(canvasArea.width / 2, canvasArea.height / 2,
+                              zoomLevel / _zoomFactor)
         }
     }
 
@@ -901,6 +645,7 @@ Item {
 
     // ---------------------------------------------------------------------------
     // 菜单入口：归属层由递归命中决定，坐标是 scene 坐标。
+    // Issue #832：Router 是唯一调用方；菜单宿主仍在本文件。
     // ---------------------------------------------------------------------------
     function openBlankMenu(sceneX, sceneY, hit, screenX, screenY) {
         menuOwnerContent = hit ? hit.owner : null
@@ -917,8 +662,44 @@ Item {
         bgContextMenu.popup(screenX, screenY)
     }
 
-    function noteMouseInteracted() {
-        _touchInputActive = false
+    // 右键命中分发：node / embed / edge 开对应菜单；空白用命中层的 owner 打开
+    // 该层的新建菜单（在子星图空白右键就在子星图里新建）。
+    function openHitContextMenu(hit, screenX, screenY) {
+        var sx = screenToWorldX(screenX)
+        var sy = screenToWorldY(screenY)
+        if (hit.kind === "node") {
+            hit.owner.selectNode(hit.id)
+            menuOwnerContent = hit.owner
+            selectedNodeForMenu = hit
+            logInteraction("context_menu_open", "node", hit.id, {
+                "menuKind": "node",
+                "sceneX": sx,
+                "sceneY": sy
+            }, hit.scenePathKey)
+            nodeContextMenu.popup(screenX, screenY)
+        } else if (hit.kind === "embed") {
+            hit.owner.selectEmbed(hit.id)
+            menuOwnerContent = hit.owner
+            selectedEmbedForMenu = hit
+            logInteraction("context_menu_open", "embed", hit.id, {
+                "menuKind": "embed",
+                "sceneX": sx,
+                "sceneY": sy
+            }, hit.scenePathKey)
+            embedContextMenu.popup(screenX, screenY)
+        } else if (hit.kind === "edge") {
+            hit.owner.selectEdge(hit.id)
+            menuOwnerContent = hit.owner
+            selectedEdgeForMenu = hit
+            logInteraction("context_menu_open", "edge", hit.id, {
+                "menuKind": "edge",
+                "sceneX": sx,
+                "sceneY": sy
+            }, hit.scenePathKey)
+            edgeContextMenu.popup(screenX, screenY)
+        } else {
+            openBlankMenu(sx, sy, hit, screenX, screenY)
+        }
     }
 
     // 触屏长按视觉层：scene 坐标 → 屏幕坐标后显示。
@@ -1049,13 +830,40 @@ Item {
                 radius: _radiusXs
             }
             onTriggered: {
-                // 菜单已确定目标，直接进 move，不经过 pressPending 仲裁。
+                // 菜单已确定目标，直接进 move，不经过 pressPending 仲裁；
+                // 完整身份（kind/id/targetPath/scenePathKey）与手势路径同源。
                 if (selectedNodeForMenu && menuOwnerContent) {
                     var item = menuOwnerContent.hitNode(selectedNodeForMenu.id)
                     if (!item)
                         return
-                    interaction.beginMove(item.id, menuOwnerContent.scenePathKey, item.x, item.y)
+                    interaction.beginMove("node", item.id,
+                                          menuOwnerContent.nodePath(item.id),
+                                          menuOwnerContent.scenePathKey,
+                                          item.x, item.y)
                 }
+            }
+        }
+
+        MenuItem {
+            id: nodeMenuItemHyperlink
+            text: qsTr("超链接")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: nodeMenuItemHyperlink.text
+                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #832 评论 6013799805 / #373：节点超链接菜单。
+                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 nodePath。
+                if (selectedNodeForMenu && menuOwnerContent)
+                    hyperlinkDialog.open("node", selectedNodeForMenu.id, menuOwnerContent)
             }
         }
 
@@ -1190,8 +998,34 @@ Item {
                     var item = menuOwnerContent.hitEmbed(selectedEmbedForMenu.instanceId)
                     if (!item)
                         return
-                    interaction.beginEmbedMove(item.instanceId, menuOwnerContent.scenePathKey, item.x, item.y)
+                    interaction.beginMove("embed", item.instanceId,
+                                          menuOwnerContent.embedPath(item.instanceId),
+                                          menuOwnerContent.scenePathKey,
+                                          item.x, item.y)
                 }
+            }
+        }
+
+        MenuItem {
+            id: embedMenuItemHyperlink
+            text: qsTr("超链接")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemHyperlink.text
+                color: embedMenuItemHyperlink.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #832 评论 6013799805 / #373：子星图入口超链接菜单。
+                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 embedPath。
+                if (selectedEmbedForMenu && menuOwnerContent)
+                    hyperlinkDialog.open("embed", selectedEmbedForMenu.instanceId, menuOwnerContent)
             }
         }
 
@@ -1457,6 +1291,212 @@ Item {
                 menuOwnerContent.createNodeWithName(name, contextMenuSceneX, contextMenuSceneY)
             else if (createMode === "starmap")
                 menuOwnerContent.createSubStarmapWithName(name, contextMenuSceneX, contextMenuSceneY)
+            close()
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：超链接弹窗（URI + 可选标题）。
+    // 打开时查现有：有则预填并提供"保存/删除"，无则空表单"添加"。
+    // source path 由 targetOwner（命中层 SceneContent）的 nodePath/embedPath 构造，
+    // 不退化成裸 nodeId。
+    // ---------------------------------------------------------------------------
+    Popup {
+        id: hyperlinkDialog
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 360
+        height: 220
+        anchors.centerIn: Overlay.overlay
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
+            color: _card
+            border.color: _border
+            border.width: 1.5
+            radius: _dialogRadius
+        }
+
+        property string targetType: ""   // "node" / "embed"
+        property string targetId: ""
+        property var targetOwner: null   // 命中层 SceneContent
+        property var existingHl: null    // 已有超链接条目（null = 新增模式）
+        readonly property bool isEdit: existingHl !== null
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 12
+
+            AppText {
+                dt: canvasArea.dt
+                text: hyperlinkDialog.isEdit ? qsTr("编辑超链接") : qsTr("添加超链接")
+                font.pointSize: dt.fontLgPt
+                font.bold: true
+                color: _textPrimary
+            }
+
+            AppText {
+                dt: canvasArea.dt
+                text: qsTr("URI")
+                color: _textSecondary
+                font.pointSize: dt.labelPt
+            }
+
+            TextField {
+                id: hyperlinkUriInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("https://...")
+                focus: hyperlinkDialog.visible
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkUriInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            AppText {
+                dt: canvasArea.dt
+                text: qsTr("标题（可选）")
+                color: _textSecondary
+                font.pointSize: dt.labelPt
+            }
+
+            TextField {
+                id: hyperlinkLabelInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("显示文字")
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 12
+
+                Button {
+                    id: hlDeleteBtn
+                    text: qsTr("删除")
+                    visible: hyperlinkDialog.isEdit
+                    onClicked: hyperlinkDialog.removeExisting()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlDeleteBtn.text
+                        color: _danger
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlDeleteBtn.hovered ? _dangerContainer : "transparent"
+                        border.color: _border
+                        radius: _radiusXs
+                    }
+                }
+
+                Button {
+                    id: hlCancelBtn
+                    text: qsTr("取消")
+                    onClicked: hyperlinkDialog.close()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlCancelBtn.text
+                        color: _textSecondary
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlCancelBtn.hovered ? _surfaceContainer : "transparent"
+                        border.color: _border
+                        radius: _radiusXs
+                    }
+                }
+
+                Button {
+                    id: hlConfirmBtn
+                    text: hyperlinkDialog.isEdit ? qsTr("保存") : qsTr("添加")
+                    onClicked: hyperlinkDialog.confirm()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlConfirmBtn.text
+                        color: _onPrimary
+                        font.bold: true
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlConfirmBtn.hovered ? _accentHover : _accent
+                        radius: _radiusXs
+                    }
+                }
+            }
+        }
+
+        function open(kind, id, owner) {
+            targetType = kind
+            targetId = id
+            targetOwner = owner
+            var items = []
+            if (owner) {
+                items = kind === "node"
+                        ? owner.listHyperlinksForNode(id)
+                        : owner.listHyperlinksForEmbed(id)
+            }
+            existingHl = items && items.length > 0 ? items[0] : null
+            hyperlinkUriInput.text = existingHl ? (existingHl.targetUri || "") : ""
+            hyperlinkLabelInput.text = existingHl ? (existingHl.label || "") : ""
+            visible = true
+            hyperlinkUriInput.forceActiveFocus()
+        }
+
+        function close() {
+            visible = false
+        }
+
+        function confirm() {
+            var uri = hyperlinkUriInput.text.trim()
+            if (uri.length === 0 || !targetOwner)
+                return
+            var label = hyperlinkLabelInput.text.trim()
+            if (isEdit) {
+                // StarMapHyperlinkPatchInputDto（camelCase）：
+                // {label?, clearLabel, targetUri?, source?}
+                var patch = {
+                    targetUri: uri,
+                    clearLabel: label.length === 0,
+                    label: label.length > 0 ? label : null
+                }
+                targetOwner.updateHyperlink(existingHl.hyperlinkId, patch)
+            } else {
+                if (targetType === "node")
+                    targetOwner.addHyperlinkForNode(targetId, uri, label)
+                else
+                    targetOwner.addHyperlinkForEmbed(targetId, uri, label)
+            }
+            close()
+        }
+
+        function removeExisting() {
+            if (!targetOwner || !existingHl)
+                return
+            targetOwner.deleteHyperlink(existingHl.hyperlinkId)
             close()
         }
     }

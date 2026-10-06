@@ -163,7 +163,11 @@ fn only_root_canvas_owns_the_camera_properties() {
     // 内容容器与 Embed 都不得自己定义相机。
     for rel in [CONTENT, EMBED] {
         let src = strip_line_comments(&read_src(rel));
-        for forbidden in ["property real panX:", "property real panY:", "property real zoomLevel:"] {
+        for forbidden in [
+            "property real panX:",
+            "property real panY:",
+            "property real zoomLevel:",
+        ] {
             assert!(
                 !src.contains(forbidden),
                 "{rel} 不得自己定义 {forbidden}：只有根 Canvas 拥有全局相机"
@@ -175,28 +179,29 @@ fn only_root_canvas_owns_the_camera_properties() {
 #[test]
 fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     let src = read_src(CANVAS);
-    let zoom = function_window(&src, "function zoomAround(", 600);
+    let zoom = function_window(&src, "function zoomAt(", 600);
     assert!(
         zoom.contains("zoomLevel = target") && zoom.contains("applyPan("),
-        "zoomAround 必须是唯一缩放入口，内部改根 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
+        "zoomAt 必须是唯一缩放入口，内部改根 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
     );
     assert!(
         zoom.contains("Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))"),
-        "zoomAround 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），实际窗口:\n{zoom}"
+        "zoomAt 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），实际窗口:\n{zoom}"
     );
 
-    // 滚轮与捏合与 +/- 按钮都必须走同一个入口。
+    // 滚轮/捏合（唯一 Router）与 +/- 按钮（Canvas）都必须走同一个入口。
+    let router = read_src("qml/StarMapInputRouter.qml");
     assert!(
-        src.contains("zoomAround(mx, my, newZoom)"),
-        "sceneWheel 必须调 zoomAround，不能自己换算 panX/panY"
+        router.contains("canvas.zoomAt(point.position.x, point.position.y, newZoom)"),
+        "Router 的滚轮必须调 Canvas 的 zoomAt，不能自己换算 panX/panY"
     );
     assert!(
-        src.contains("zoomAround(cx, cy, _pinchStartZoom * activeScale)"),
-        "canvasPinch 必须走 zoomAround 统一夹取/以中心缩放，不再自己写第二套 pan 公式"
+        router.contains("canvas.zoomAt(centroid.position.x, centroid.position.y,"),
+        "Router 的捏合必须走 zoomAt 统一夹取/以中心缩放，不再自己写第二套 pan 公式"
     );
     assert!(
-        count_occurrences(&src, "onClicked: zoomAround(") == 2,
-        "触屏 +/- 两个按钮都必须调 zoomAround，不能直接写 zoomLevel"
+        count_occurrences(&src, "onClicked: zoomAt(") == 2,
+        "触屏 +/- 两个按钮都必须调 zoomAt，不能直接写 zoomLevel"
     );
 }
 
@@ -228,9 +233,11 @@ fn camera_range_and_steps_follow_the_shared_viewport_spec() {
             "不得再保留旧的产品硬上限/加法步进：{forbidden}"
         );
     }
-    let wheel = function_window(&stripped, "onWheel: function(event)", 700);
+    // 滚轮乘法步进在唯一 Router 里；Canvas 只提供 zoomAt 纯方法。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let wheel = function_window(&router, "onWheel: function(event)", 900);
     assert!(
-        wheel.contains("oldZoom * Math.pow(_zoomFactor, delta)"),
+        wheel.contains("oldZoom * Math.pow(canvas._zoomFactor, delta)"),
         "滚轮必须乘法步进，实际窗口:\n{wheel}"
     );
     assert_eq!(
@@ -247,35 +254,38 @@ fn camera_range_and_steps_follow_the_shared_viewport_spec() {
 
 #[test]
 fn wheel_and_pinch_have_no_scene_identity_gating() {
-    let src = strip_line_comments(&read_src(CANVAS));
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let canvas = strip_line_comments(&read_src(CANVAS));
 
     // 旧实现用 pathKey === "root" 决定谁能缩放。现在只有一个视口，
     // 这类“按场景身份决定谁能操作相机”的判断必须整体消失。
-    assert!(
-        !src.contains("pathKey === \"root\""),
-        "根 Canvas 不得再用 pathKey === \"root\" 这类场景身份判断决定谁能缩放"
-    );
-    assert!(
-        !src.contains("_pinchBelongsToChild"),
-        "不得再有“捏合归某个子星图”的判断：整棵星图只有一个视口"
-    );
-    assert!(
-        !src.contains("_touchOwnerA") && !src.contains("_touchOwnerB"),
-        "不得再有按手指分别记录所属子星图的 press-time owner：触屏手势不再按层让出"
-    );
-    assert!(
-        !src.contains("childOwnerAtScreen"),
-        "childOwnerAtScreen 是“每层各自有视口”的产物，单一全局视口下必须删除"
-    );
+    for (name, src) in [("StarMapInputRouter", &router), ("StarMapCanvas", &canvas)] {
+        assert!(
+            !src.contains("pathKey === \"root\""),
+            "{name} 不得再用 pathKey === \"root\" 这类场景身份判断决定谁能缩放"
+        );
+        assert!(
+            !src.contains("_pinchBelongsToChild"),
+            "{name} 不得再有“捏合归某个子星图”的判断：整棵星图只有一个视口"
+        );
+        assert!(
+            !src.contains("_touchOwnerA") && !src.contains("_touchOwnerB"),
+            "{name} 不得再有按手指分别记录所属子星图的 press-time owner：触屏手势不再按层让出"
+        );
+        assert!(
+            !src.contains("childOwnerAtScreen"),
+            "{name} 不得再保留 childOwnerAtScreen（每层各自有视口的产物）"
+        );
+    }
 
-    let wheel = function_window(&src, "id: sceneWheel", 1200);
+    let wheel = function_window(&router, "id: wheelHandler", 1400);
     assert!(
         wheel.contains("blocking: true"),
-        "sceneWheel 仍需 blocking 决定阻塞语义，实际窗口:\n{wheel}"
+        "wheelHandler 仍需 blocking 决定阻塞语义，实际窗口:\n{wheel}"
     );
     assert!(
         !wheel.contains("enabled:"),
-        "sceneWheel 不得再有任何 enabled 门控（鼠标停在哪一层都走同一个 zoomAround），\
+        "wheelHandler 不得再有任何 enabled 门控（鼠标停在哪一层都走同一个 zoomAt），\
          实际窗口:\n{wheel}"
     );
 }
@@ -396,7 +406,11 @@ fn camera_transform_lives_on_the_camera_layer_only() {
         root_block.contains("anchors.fill: parent"),
         "根层内容必须 anchors.fill 占满相机层，实际片段:\n{root_block}"
     );
-    for forbidden in ["x: canvasArea.panX", "y: canvasArea.panY", "scale: canvasArea.zoomLevel"] {
+    for forbidden in [
+        "x: canvasArea.panX",
+        "y: canvasArea.panY",
+        "scale: canvasArea.zoomLevel",
+    ] {
         assert!(
             !root_block.contains(forbidden),
             "根层内容不得再自己持有 {forbidden}（anchors 与相机不能抢同一个 Item），\
@@ -412,7 +426,12 @@ fn embed_deep_zoom_lod_is_coverage_only_and_never_writes_back() {
 
     // 旧的反向公式必须整体消失：它在第一层之后恒为 1，也只有投影 < 140 时才
     // 反过来放大 Embed。
-    for forbidden in ["visualScale", "ancestorScale", "_minContentScreenPx", "_minVisualScale"] {
+    for forbidden in [
+        "visualScale",
+        "ancestorScale",
+        "_minContentScreenPx",
+        "_minVisualScale",
+    ] {
         assert!(
             !stripped.contains(forbidden),
             "Embed 不得再保留旧的视觉 LOD 标识 {forbidden}"
@@ -508,17 +527,22 @@ fn hit_testing_has_one_recursive_entry_returning_the_real_hit_layer() {
     }
     assert!(
         hit.contains("var deeper = child.hitTargetAtScene(sceneX, sceneY)"),
-        "落在子星图内容区时必须递归进子层内容返回真正命中的那一层，实际窗口:\n{hit}"
+        "落在 interactive 子星图内容区时必须递归进子层内容返回真正命中的那一层，实际窗口:\n{hit}"
     );
     assert!(
-        hit.contains("child: childContentOf(inside.instanceId)") || hit.contains("childContentOf(inside.instanceId)"),
-        "递归命中必须通过 childContentOf(instanceId) 拿到子层内容，实际窗口:\n{hit}"
+        hit.contains("childContentOf(inside.instanceId)")
+            && hit.contains("child && child.renderDetail === \"interactive\""),
+        "只有 interactive 子层才递归命中，实际窗口:\n{hit}"
     );
     assert!(
-        hit.contains("kind: \"childContent\""),
-        "子内容还没加载出来时必须落成 childContent，不得冒充 empty（empty 只表示任何一层都没命中）"
+        !hit.contains("kind: \"childContent\""),
+        "不得再返回 childContent：shell/preview/未加载的子星图整体按父层 embed 入口命中"
     );
-    for field in ["owner: content", "scenePathKey: scenePathKey", "starmapId: finalStarmapId"] {
+    for field in [
+        "owner: content",
+        "scenePathKey: scenePathKey",
+        "starmapId: finalStarmapId",
+    ] {
         assert!(
             hit.contains(field),
             "命中结果必须带 {field}，调用方要靠它把行为路由回归属层，实际窗口:\n{hit}"
@@ -549,12 +573,22 @@ fn canvas_routes_all_hit_consumers_through_the_recursive_entry() {
         );
     }
 
-    // 空白右键 / 右键菜单 / 拖动归属 / pointer_press 日志都走同一个入口。
+    // 唯一输入主人 Router 的每个入口都经 hitAt() 走同一个命中函数。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    assert_eq!(
+        count_occurrences(&router, "function hitAt("),
+        1,
+        "Router 必须只有一个命中转发入口 hitAt"
+    );
     assert!(
-        count_occurrences(&src, "hitTargetAtScreen(") >= 5,
-        "命中入口必须被右键菜单、背景 tap、bgDragArea、pointer_press 共用，\
-         实际 {} 处调用",
-        count_occurrences(&src, "hitTargetAtScreen(")
+        count_occurrences(&router, "hitAt(") >= 5,
+        "按下/单击/双击/右键都必须走同一个命中入口，实际 {} 处",
+        count_occurrences(&router, "hitAt(")
+    );
+    assert_eq!(
+        count_occurrences(&router, "hitTargetAtScreen("),
+        1,
+        "Router 只通过 hitAt() 一个入口调 canvas.hitTargetAtScreen"
     );
 }
 
@@ -602,7 +636,12 @@ fn interaction_controller_has_explicit_press_pending_arbitration() {
         begin_press.contains("pointerMode = \"pressPending\""),
         "按下节点/子星图 chrome 必须进入 pressPending，实际窗口:\n{begin_press}"
     );
-    for field in ["pressScenePathKey", "pressKind", "pressId", "pressTargetPath"] {
+    for field in [
+        "pressScenePathKey",
+        "pressKind",
+        "pressId",
+        "pressTargetPath",
+    ] {
         assert!(
             src.contains(&format!("property string {field}: \"\""))
                 || src.contains(&format!("property var {field}: null")),
@@ -612,7 +651,8 @@ fn interaction_controller_has_explicit_press_pending_arbitration() {
 
     // 两条互斥的提升路径，只能各有一个实现。
     assert!(
-        src.contains("function pressPendingToMove(") && src.contains("function pressPendingToConnect("),
+        src.contains("function pressPendingToMove(")
+            && src.contains("function pressPendingToConnect("),
         "必须显式区分 pressPending -> move 与 pressPending -> connect 两条提升路径"
     );
     let to_move = function_window(&src, "function pressPendingToMove(", 700);
@@ -623,13 +663,18 @@ fn interaction_controller_has_explicit_press_pending_arbitration() {
     );
     let to_connect = function_window(&src, "function pressPendingToConnect(", 700);
     assert!(
-        to_connect.contains("pointerMode !== \"pressPending\"") && to_connect.contains("return false"),
+        to_connect.contains("pointerMode !== \"pressPending\"")
+            && to_connect.contains("return false"),
         "pressPendingToConnect 必须在状态不是 pressPending 时拒绝提升，实际窗口:\n{to_connect}"
     );
 
     assert!(
-        src.contains("signal pressTimeout()"),
-        "长按到点只能由共享状态机发 pressTimeout 信号，由归属层决定提升成 connect"
+        src.contains("function isPressedTarget(") && src.contains("function isMovingTarget("),
+        "视觉查询必须由共享状态机提供 isPressedTarget/isMovingTarget：Node/Embed 不再有 Handler.pressed"
+    );
+    assert!(
+        !src.contains("signal pressTimeout()"),
+        "长按超时信号必须删除：超时由唯一 Router 的 Timer 调用提升入口"
     );
     assert!(
         !src.contains("Timer {"),
@@ -639,32 +684,41 @@ fn interaction_controller_has_explicit_press_pending_arbitration() {
 
 #[test]
 fn drag_threshold_and_long_press_are_the_only_two_ways_out_of_press_pending() {
-    let src = strip_line_comments(&read_src(CONTENT));
-    let delta = function_window(&src, "function onSceneDragDelta(", 2600);
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let activated = function_window(&router, "function handleDragActivated(", 2000);
     assert!(
-        delta.contains("ic.noteDragDelta(dxQtScene, dyQtScene)")
-            && delta.contains("if (ic.pressDragDistance >= ic.dragThreshold)")
-            && delta.contains("promoteToMove(ic.pressKind, ic.pressId)"),
-        "pressPending 下位移先累计原始 Qt scene 像素，超阈值才提升为 move，实际窗口:\n{delta}"
+        activated.contains("ic.pressPendingToMove(pressHit.scenePathKey, pressHit.kind,")
+            && activated.contains("pressHit.id, pressHit.targetPath,")
+            && activated.contains("item.x, item.y)"),
+        "拖动阈值先到必须经 pressPendingToMove 提升为 move（完整身份 + 模型起点），实际窗口:\n{activated}"
     );
     assert!(
-        !delta.contains("noteDragDelta(sceneDelta") && !delta.contains("localDeltaToScene("),
-        "noteDragDelta 不得再吃 world 单位，也不得再维护 scene 增量换算，实际窗口:\n{delta}"
-    );
-    assert!(
-        !delta.contains("beginMove("),
-        "onSceneDragDelta 不得直接 beginMove，必须经 pressPendingToMove 仲裁"
+        !activated.contains("beginMove("),
+        "handleDragActivated 不得直接 beginMove，必须经 pressPendingToMove 仲裁，实际窗口:\n{activated}"
     );
 
-    let timeout = function_window(&src, "function onPressTimeout(", 1200);
+    let timeout = function_window(&router, "function handleLongPress(", 1800);
     assert!(
-        timeout.contains("if (ic.pointerMode !== \"pressPending\")") && timeout.contains("return"),
-        "长按到点只在仍是 pressPending 时提升为 connect，实际窗口:\n{timeout}"
+        timeout.contains("if (ic.pointerMode === \"pressPending\")")
+            && timeout.contains("ic.pressPendingToConnect(hit.kind, hit.id, hit.targetPath,"),
+        "长按到点只在仍是 pressPending 时经 pressPendingToConnect 提升为 connect，实际窗口:\n{timeout}"
     );
-    assert!(
-        timeout.contains("ic.pressPendingToConnect("),
-        "长按提升必须走 pressPendingToConnect，实际窗口:\n{timeout}"
-    );
+
+    // 状态提升只允许 Router 调：递归层与 delegate 都不得出现这些入口。
+    for rel in [CONTENT, NODE, EMBED] {
+        let src = strip_line_comments(&read_src(rel));
+        for forbidden in [
+            "pressPendingToMove(",
+            "pressPendingToConnect(",
+            "contextPendingToConnect(",
+            "pressPendingToPan(",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "{rel} 不得自行提升手势状态：{forbidden} 只允许唯一 Router 调用"
+            );
+        }
+    }
 }
 
 /// 拖动阈值必须吃原始 Qt scene 像素，累计公式必须是"离按下点的直线距离"：
@@ -704,8 +758,8 @@ fn drag_accumulation_is_a_raw_scene_pixel_vector_sum() {
 
 #[test]
 fn release_has_a_single_exit_for_click_move_and_connect() {
-    let src = strip_line_comments(&read_src(CONTENT));
-    let release = function_window(&src, "function releaseOwnerGesture(", 700);
+    let src = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let release = function_window(&src, "function handleRelease(", 1100);
     for branch in [
         "if (mode === \"connect\")",
         "else if (mode === \"move\")",
@@ -714,12 +768,17 @@ fn release_has_a_single_exit_for_click_move_and_connect() {
     ] {
         assert!(
             release.contains(branch),
-            "releaseOwnerGesture 必须用一个统一出口覆盖所有状态，缺 {branch}，实际窗口:\n{release}"
+            "handleRelease 必须用一个统一出口覆盖所有状态，缺 {branch}，实际窗口:\n{release}"
         );
     }
     assert!(
-        src.contains("onLeftReleased: content.releaseOwnerGesture()"),
-        "delegate 松手必须全部走这一个出口"
+        release.contains("gestureOwner.finishConnect()")
+            && release.contains("gestureOwner.finishMove()"),
+        "结束 connect/move 必须走归属层的 finish 出口，实际窗口:\n{release}"
+    );
+    assert!(
+        src.contains("if (!active)\n                router.handleRelease()"),
+        "左键 press→release 观察必须全部走这一个出口，实际源码缺少"
     );
 }
 
@@ -749,19 +808,30 @@ fn only_root_canvas_creates_the_interaction_controller() {
 }
 
 #[test]
-fn long_press_timer_lives_in_the_canvas_item_not_in_the_qtobject() {
+fn long_press_timer_lives_in_the_router_item_not_in_the_qtobject() {
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    assert!(
+        router.contains("Timer {")
+            && router.contains("running: (router.ic && router.ic.pressTimerActive) || router.emptyLongPressArmed"),
+        "长按计时 Timer 必须挂在 Router（Item）里，由共享状态机 pressTimerActive 驱动，实际源码缺少"
+    );
+    assert!(
+        router.contains("interval: router.ic ? router.ic.longPressInterval : 800"),
+        "长按阈值必须用共享状态机的 longPressInterval"
+    );
+    assert!(
+        router.contains("onTriggered: router.handleLongPress()"),
+        "长按到点必须由唯一 Router 调状态提升，实际源码缺少"
+    );
+
     let canvas = strip_line_comments(&read_src(CANVAS));
     assert!(
-        canvas.contains("Timer {") && canvas.contains("running: interaction.pressTimerActive"),
-        "长按计时 Timer 必须挂在 Item 下（Canvas），由共享状态机的 pressTimerActive 驱动"
-    );
-    assert!(
-        canvas.contains("interval: interaction.longPressInterval"),
-        "长按阈值必须用系统的 mousePressAndHoldInterval，由 Canvas 注入共享状态机"
-    );
-    assert!(
         canvas.contains("Application.styleHints.mousePressAndHoldInterval"),
-        "长按阈值必须对齐平台系统长按时间，而不是写死常量"
+        "长按阈值必须对齐平台系统长按时间，由 Canvas 注入共享状态机"
+    );
+    assert!(
+        !canvas.contains("pressTimeout"),
+        "Canvas 不得再保留 pressTimeout 计时/信号：超时归 Router"
     );
 }
 
@@ -773,9 +843,10 @@ fn connect_preview_is_one_global_overlay_line() {
         2,
         "根 Canvas 只允许两个 Canvas：背景网格 与 全局连线预览线，不每层各画一条"
     );
-    let preview = slice_between(&src, "id: connectPreview", "onClicked: zoomAround(");
+    let preview = slice_between(&src, "id: connectPreview", "onClicked: zoomAt(");
     assert!(
-        preview.contains("ctx.translate(panX, panY)") && preview.contains("ctx.scale(zoomLevel, zoomLevel)"),
+        preview.contains("ctx.translate(panX, panY)")
+            && preview.contains("ctx.scale(zoomLevel, zoomLevel)"),
         "连线预览线必须用全局相机换算 scene 坐标，实际片段:\n{preview}"
     );
     assert!(
@@ -895,8 +966,7 @@ fn node_title_is_edited_inline_with_a_text_input() {
 
     let begin = function_window(&src, "function beginEdit(", 400);
     assert!(
-        begin.contains("editing = true")
-            && begin.contains("titleInput.forceActiveFocus()"),
+        begin.contains("editing = true") && begin.contains("titleInput.forceActiveFocus()"),
         "进入编辑必须把光标放进节点框内（forceActiveFocus），实际窗口:\n{begin}"
     );
     let commit = function_window(&src, "function commitEdit(", 700);
@@ -921,13 +991,35 @@ fn node_title_is_edited_inline_with_a_text_input() {
 
 #[test]
 fn node_gestures_are_disabled_while_editing() {
-    let src = strip_line_comments(&read_src(NODE));
-    // nodeMouseTap / nodeTouchTap / nodeDragHandler / leftPointTracker 都要让位。
-    let gates = count_occurrences(&src, "enabled: !root.editing");
+    // Issue #832：Node 自身不再挂任何业务手势，输入统一由 Router 解释；
+    // 编辑期间由 Router 的拖动 Handler 整体让位给 TextInput。
+    let node = strip_line_comments(&read_src(NODE));
+    for forbidden in ["TapHandler", "DragHandler", "PointHandler", "MouseArea"] {
+        assert!(
+            !node.contains(forbidden),
+            "StarMapNode 不得再挂业务手势 {forbidden}：输入只有一个主人（Router）"
+        );
+    }
+    assert!(
+        node.contains("enabled: root.editing"),
+        "TextInput 必须只在编辑时接管输入"
+    );
+
+    // 编辑期间所有单指业务 Handler（鼠标/触屏 tap、drag、release 观察）
+    // 必须整体禁用：disabled 的 Handler 不参与投递，TextInput 才能收到
+    // 点击/拖动去放置光标和选词。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert_eq!(
-        gates, 4,
-        "编辑中必须关闭节点的 4 个手势 Handler（鼠标 tap / 触屏 tap / drag / point），\
-         否则文本选区、光标和输入法会被节点手势抢走；实际 {gates} 处"
+        count_occurrences(&router, "enabled: !router.editingBlocks")
+            + count_occurrences(&router, "!router.pinchActive && !router.editingBlocks"),
+        4,
+        "编辑期间 Router 的 4 个单指 Handler 必须整体让位给 TextInput，实际源码不符"
+    );
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    assert!(
+        canvas.contains("property string inlineEditingKey: \"\"")
+            && canvas.contains("function setInlineEditingKey(key)"),
+        "Canvas 必须提供内联编辑汇总键，Router 据此让位"
     );
 }
 
@@ -946,7 +1038,12 @@ fn no_external_node_edit_popup_route_remains() {
     );
 
     let workspace = strip_line_comments(&read_src(WORKSPACE));
-    for forbidden in ["inspectorPopup", "ownerScene", "ownerStarmapId", "ownerPathKey"] {
+    for forbidden in [
+        "inspectorPopup",
+        "ownerScene",
+        "ownerStarmapId",
+        "ownerPathKey",
+    ] {
         assert!(
             !workspace.contains(forbidden),
             "StarMapWorkspace 不得再保留 {forbidden}：节点标题编辑已移入节点，\
@@ -1033,16 +1130,37 @@ fn child_coordinates_use_real_item_mapping_not_a_manual_matrix() {
         "Qt scene 增量必须先映射两个点再相减（mapFromItem 只能映射点），实际窗口:\n{delta}"
     );
 
-    // 按下登记也直接映射到 scene 坐标，不再 local→scene 两跳。
-    let pressed = function_window(&content, "function onItemPressed(", 300);
+    // 命中对象的中心/矩形换算也走真实 Item 映射。
+    let center = function_window(&content, "function itemCenterScene(", 300);
     assert!(
-        pressed.contains("rootContent.mapFromItem(null, qtSceneX, qtSceneY)"),
-        "onItemPressed 必须一次 mapFromItem 到 scene 坐标，实际窗口:\n{pressed}"
+        center.contains("localToScene(item.x + item.width / 2, item.y + item.height / 2)"),
+        "itemCenterScene 必须用 localToScene 换算，实际窗口:\n{center}"
+    );
+    let scene_rect = function_window(&content, "function itemSceneRect(", 400);
+    assert!(
+        scene_rect.contains("localToScene(item.x, item.y)")
+            && scene_rect.contains("localToScene(item.x + item.width, item.y + item.height)"),
+        "itemSceneRect 必须用 localToScene 两点差分，实际窗口:\n{scene_rect}"
+    );
+    let move_delta = function_window(&content, "function applyMoveDelta(", 400);
+    assert!(
+        move_delta.contains("qtSceneDeltaToLocal(dxQtScene, dyQtScene)"),
+        "applyMoveDelta 必须用 qtSceneDeltaToLocal 换算一次，实际窗口:\n{move_delta}"
+    );
+    let connect_delta = function_window(&content, "function applyConnectDelta(", 500);
+    assert!(
+        connect_delta.contains("qtSceneDeltaToRootScene(dxQtScene, dyQtScene)"),
+        "applyConnectDelta 必须用 qtSceneDeltaToRootScene 换算，实际窗口:\n{connect_delta}"
     );
 
     // Embed 创建子内容不再传手工矩阵参数，只传 owner 引用让子层现读。
     let set_source = function_window(&embed, "childContentLoader.setSource(", 1100);
-    for forbidden in ["sceneOriginX", "sceneOriginY", "sceneScale", "\"viewportRect\""] {
+    for forbidden in [
+        "sceneOriginX",
+        "sceneOriginY",
+        "sceneScale",
+        "\"viewportRect\"",
+    ] {
         assert!(
             !set_source.contains(forbidden),
             "Embed 不得再向子内容复制 {forbidden}，实际窗口:\n{set_source}"
@@ -1054,7 +1172,11 @@ fn child_coordinates_use_real_item_mapping_not_a_manual_matrix() {
     );
 
     // 换算函数里不得再手抄 contentViewport 的边框偏移常量。
-    for marker in ["function sceneToLocal(", "function localToScene(", "function qtSceneDeltaToLocal("] {
+    for marker in [
+        "function sceneToLocal(",
+        "function localToScene(",
+        "function qtSceneDeltaToLocal(",
+    ] {
         let window = function_window(&content, marker, 400);
         for forbidden in ["borderLeft", "borderTop", "titleBar", "- 24", "+ 6"] {
             assert!(
@@ -1132,7 +1254,10 @@ fn preview_detail_renders_static_projection_and_passes_hits_through() {
     );
     // preview 档不实例化节点/Embed delegate，也不再往里递归。
     assert_eq!(
-        count_occurrences(&content, "model: content.renderDetail === \"interactive\" ?"),
+        count_occurrences(
+            &content,
+            "model: content.renderDetail === \"interactive\" ?"
+        ),
         2,
         "preview 档不得实例化节点/Embed delegate"
     );
@@ -1157,27 +1282,30 @@ fn connect_endpoints_accumulate_root_world_delta_not_screen_pixels() {
          实际窗口:\n{convert}"
     );
 
-    let delta = function_window(&src, "function onSceneDragDelta(", 3200);
+    let delta = function_window(&src, "function applyConnectDelta(", 800);
     assert!(
-        delta.contains("ic.noteDragDelta(dxQtScene, dyQtScene)"),
-        "拖动阈值必须继续吃原始 Qt scene 像素，实际窗口:\n{delta}"
-    );
-    assert!(
-        delta.contains("var contextDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)")
-            && delta.contains("ic.connectMouseX += contextDelta.x")
-            && delta.contains("ic.connectMouseY += contextDelta.y"),
-        "contextPending 端点必须累加 root-world 增量，实际窗口:\n{delta}"
-    );
-    assert!(
-        delta.contains("var connectDelta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)")
-            && delta.contains("ic.updateConnect(ic.connectMouseX + connectDelta.x,")
-            && delta.contains("ic.connectMouseY + connectDelta.y)"),
-        "connect 端点必须累加 root-world 增量，实际窗口:\n{delta}"
+        delta.contains("var delta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)")
+            && delta.contains(
+                "ic.updateConnect(ic.connectMouseX + delta.x, ic.connectMouseY + delta.y)"
+            ),
+        "connect/contextPending 端点必须累加 root-world 增量，实际窗口:\n{delta}"
     );
     assert!(
         !delta.contains("ic.connectMouseX += dxQtScene")
             && !delta.contains("ic.connectMouseY += dyQtScene"),
         "不得再把屏幕像素直接加到 root-world 端点上，实际窗口:\n{delta}"
+    );
+
+    // 拖动阈值在唯一 Router 里继续吃原始 Qt scene 像素。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let drag = function_window(&router, "function handleDragDelta(", 1400);
+    assert!(
+        drag.contains("ic.noteDragDelta(dx, dy)"),
+        "拖动阈值必须继续吃原始 Qt scene 像素，实际窗口:\n{drag}"
+    );
+    assert!(
+        drag.contains("if (ic.pressDragDistance > ic.moveThreshold)"),
+        "contextPending 超过触屏阈值才转 connect，实际窗口:\n{drag}"
     );
 }
 
@@ -1205,35 +1333,29 @@ fn local_fit_offset_changes_notify_transform_changed() {
     }
 }
 
-/// Qt 的 pressPosition 是相对 Handler parent 的局部坐标，
-/// 真正相对 QQuickWindow 的是 scenePressPosition；归属层只接 scene 坐标。
-/// 局部 pressPosition 只允许喂给同一份圆壳几何（chromeRegionAt）。
+/// Issue #832：Node/Embed 不再有按下 Handler；唯一 Router 铺满 Canvas，
+/// `point.position` 就是 Canvas 局部坐标，命中与日志都从这一份坐标出发。
 #[test]
 fn press_handlers_pass_true_scene_coordinates() {
-    let node = strip_line_comments(&read_src(NODE));
-    assert!(
-        node.contains("nodeMouseTap.point.scenePressPosition.x")
-            && node.contains("nodeMouseTap.point.scenePressPosition.y"),
-        "Node 的按下归属必须用 scenePressPosition，实际源码缺少"
-    );
-    assert!(
-        !node.contains("root.itemPressed(nodeMouseTap.point.pressPosition"),
-        "Node 不得把 Handler 局部 pressPosition 当 scene 坐标传出去"
-    );
+    for rel in [NODE, EMBED, CONTENT] {
+        let src = strip_line_comments(&read_src(rel));
+        assert!(
+            !src.contains("itemPressed") && !src.contains("scenePressPosition"),
+            "{rel} 不得再保留 delegate press 通道 / scenePressPosition"
+        );
+    }
 
-    let embed = strip_line_comments(&read_src(EMBED));
-    assert_eq!(
-        count_occurrences(&embed, "root.itemPressed(point.scenePressPosition.x,"),
-        1,
-        "chrome 输入层的按下归属必须用 scenePressPosition 传给 itemPressed"
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let begin = function_window(&router, "function beginPress(", 2400);
+    assert!(
+        begin.contains("canvas.logPointerPress(\"left\", source, point)")
+            && begin.contains("hitAt(pressScreenX, pressScreenY)")
+            && begin.contains("canvas.screenToWorldX(pressScreenX)"),
+        "Router 必须用 Canvas 局部坐标命中并换算 scene 坐标，实际窗口:\n{begin}"
     );
     assert!(
-        !embed.contains("root.itemPressed(point.pressPosition"),
-        "Embed 不得把 Handler 局部 pressPosition 当 scene 坐标传给 itemPressed"
-    );
-    assert!(
-        embed.contains("chromeRegionAt(point.pressPosition.x, point.pressPosition.y)"),
-        "局部 pressPosition 只允许用于 chromeRegionAt 的圆壳几何判定"
+        !router.contains("scenePressPosition"),
+        "Router 铺满 Canvas，point.position 就是唯一需要的坐标口径"
     );
 }
 
@@ -1284,19 +1406,29 @@ fn embed_hit_testing_is_circular() {
         "圆内判定不得被短路绕过"
     );
 
-    // 输入层：整颗 Embed 只有一层 chrome，acceptance 用同一份圆壳几何。
+    // Issue #832：Embed 自身不再维护输入 acceptance。整颗 Embed 没有 PointerHandler，
+    // 命中几何只有递归命中测试一份真相（GraphController 的圆壳几何）；
+    // Embed 只保留画出来的正圆和子内容安全区。
     let embed_src = strip_line_comments(&read_src(EMBED));
+    for forbidden in [
+        "TapHandler",
+        "DragHandler",
+        "PointHandler",
+        "MouseArea",
+        "containmentMask",
+    ] {
+        assert!(
+            !embed_src.contains(forbidden),
+            "Embed 不得再挂输入层 {forbidden}：命中统一走递归命中测试"
+        );
+    }
     assert!(
-        embed_src.contains("id: chromeLayer")
-            && embed_src.contains("containmentMask: chromeMask")
-            && embed_src.contains("containsMode: Shape.FillContains"),
-        "chrome 输入必须只有一层，并用 Shape.contains（FillContains）决定 acceptance"
+        embed_src.contains("radius: width / 2"),
+        "Embed 外壳必须仍是正圆（radius = width / 2）"
     );
     assert!(
-        embed_src.contains("function isChromeLocalPoint(")
-            && embed_src.contains("_insideCircleAt(")
-            && embed_src.contains("_insideRingAt("),
-        "JS 侧 chrome 判定必须和圆壳几何共用同一组常量"
+        embed_src.contains("d * (1 / Math.SQRT2) - _chromeHeight - _borderSlop"),
+        "子内容安全区必须来自圆的内接正方形扣交互壳"
     );
     // 四条矩形边框 + 矩形 titleBar 的 Handler 路线必须整体删除。
     for forbidden in [
@@ -1356,12 +1488,12 @@ fn grid_lod_keeps_screen_spacing_bounded() {
 fn zoom_buttons_anchor_at_canvas_center() {
     let src = strip_line_comments(&read_src(CANVAS));
     assert_eq!(
-        count_occurrences(&src, "zoomAround(canvasArea.width / 2, canvasArea.height / 2,"),
+        count_occurrences(&src, "zoomAt(canvasArea.width / 2, canvasArea.height / 2,"),
         2,
         "+/- 两个按钮都必须以画布中心为锚点"
     );
     assert!(
-        !src.contains("zoomAround(width / 2, height / 2,"),
+        !src.contains("zoomAt(width / 2, height / 2,"),
         "不得再用按钮自己的宽高当缩放锚点"
     );
 }
@@ -1390,7 +1522,7 @@ fn content_safe_area_is_shared_by_fit_move_and_create() {
     );
 
     // 拖动与新建都要过 clamp。
-    let delta = function_window(&content, "function onSceneDragDelta(", 3200);
+    let delta = function_window(&content, "function applyMoveDelta(", 700);
     assert!(
         delta.contains("var clamped = clampToContentSafeArea(candidateX, candidateY,")
             && delta.contains("ic.updateMove(clamped.x, clamped.y)"),
@@ -1398,7 +1530,8 @@ fn content_safe_area_is_shared_by_fit_move_and_create() {
     );
     let create_node = function_window(&content, "function createNodeWithName(", 500);
     assert!(
-        create_node.contains("clampToContentSafeArea(spawn.x, spawn.y, _newNodeWidth, _newNodeHeight)")
+        create_node
+            .contains("clampToContentSafeArea(spawn.x, spawn.y, _newNodeWidth, _newNodeHeight)")
             && create_node.contains("graphController.createNode(name, safe.x, safe.y)"),
         "新建节点必须走同一个 clamp 再写 Core，实际窗口:\n{create_node}"
     );
@@ -1442,11 +1575,7 @@ fn edge_render_uses_real_shape_boundaries() {
             && src.contains("fn line_rect_entry("),
         "端点必须按形状（矩形 / 圆周）与连线求交"
     );
-    let render = slice_between(
-        &src,
-        "fn compute_renders_from_resolved(",
-        "fn coords_eq(",
-    );
+    let render = slice_between(&src, "fn compute_renders_from_resolved(", "fn coords_eq(");
     assert!(
         render.contains("endpoint_boundary_point(&edge.from,")
             && render.contains("endpoint_boundary_point(&edge.to,")
@@ -1505,7 +1634,10 @@ fn edge_hit_threshold_is_screen_relative() {
         canvas.contains("ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2"),
         "Canvas 的连线预览线也必须用同一个 world 线宽常量"
     );
-    for (name, src) in [("StarMapSceneContent", &content), ("StarMapCanvas", &canvas)] {
+    for (name, src) in [
+        ("StarMapSceneContent", &content),
+        ("StarMapCanvas", &canvas),
+    ] {
         assert!(
             !src.contains("ctx.lineWidth = 2"),
             "{name} 不得再保留字面量线宽（绘制与命中必须同源）"
@@ -1515,7 +1647,8 @@ fn edge_hit_threshold_is_screen_relative() {
     let controller = strip_line_comments(&read_src(CONTROLLER));
     assert!(
         controller.contains("function hitTestEdge(wx, wy, threshold)")
-            && controller.contains("hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold)"),
+            && controller
+                .contains("hit_test_edge_renders(JSON.stringify(edgeRenders), wx, wy, threshold)"),
         "GraphController 必须把 threshold 透传给后端"
     );
 }
@@ -1551,7 +1684,8 @@ fn connect_preview_reuses_platform_edge_renderer() {
     // 悬停合法 target：prospective plan → 宿主 Content → 平台 renderer → 端点。
     let refresh = function_window(&content, "function refreshConnectPreview(", 2400);
     assert!(
-        refresh.contains("StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)")
+        refresh
+            .contains("StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)")
             && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
             && refresh.contains("plan = bindPlanToHost(plan, host)")
             && refresh.contains("host.prospectiveEdgeRenderForPlan(plan)"),
@@ -1567,7 +1701,9 @@ fn connect_preview_reuses_platform_edge_renderer() {
     );
     assert!(
         refresh.contains("ic.connectPreviewEndX = ic.connectMouseX")
-            && refresh.contains("var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,"),
+            && refresh.contains(
+                "var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,"
+            ),
         "没有合法 target 时必须退回“源对象边界 → 当前鼠标”，实际窗口:\n{refresh}"
     );
 
@@ -1577,7 +1713,13 @@ fn connect_preview_reuses_platform_edge_renderer() {
             && !content.contains("uiInstanceIdOfPathSegment"),
         "QML 不得再保留第二份宿主可见形状 / 段身份映射：几何真相只在 Rust"
     );
-    for (name, src) in [("StarMapSceneContent", &content), ("StarMapGraphController", &strip_line_comments(&read_src(CONTROLLER)))] {
+    for (name, src) in [
+        ("StarMapSceneContent", &content),
+        (
+            "StarMapGraphController",
+            &strip_line_comments(&read_src(CONTROLLER)),
+        ),
+    ] {
         assert!(
             !src.contains("bidirectional") && !src.contains("BIDIRECTIONAL"),
             "{name} 不得自己实现双向边偏移——必须复用平台 edge renderer"
@@ -1594,7 +1736,9 @@ fn connect_preview_reuses_platform_edge_renderer() {
     );
     let batch = function_window(&rust, "pub fn compute_prospective_edge_render(", 2200);
     assert!(
-        batch.contains("compute_edge_renders_from_paths(&edges, graph, layout, embed_rects, params)"),
+        batch.contains(
+            "compute_edge_renders_from_paths(&edges, graph, layout, embed_rects, params)"
+        ),
         "候选边必须复用正式边 renderer，不能另写一套算法，实际窗口:\n{batch}"
     );
     let bridge = read_src("src/starmap_view/bridge.rs");
@@ -1610,15 +1754,18 @@ fn connect_preview_reuses_platform_edge_renderer() {
         "GraphController 必须把候选边请求透传给后端"
     );
 
-    let delta = slice_between(
-        &content,
-        "function onSceneDragDelta(",
-        "function releaseOwnerGesture(",
-    );
+    // Router 在进入 connect 与 connect 拖动都必须刷新预览端点；
+    // 归属层的 applyConnectDelta 也刷新一次。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert_eq!(
-        count_occurrences(&delta, "refreshConnectPreview()"),
-        2,
-        "contextPending 转 connect 与 connect 拖动都必须刷新预览端点，实际片段:\n{delta}"
+        count_occurrences(&router, "gestureOwner.refreshConnectPreview()"),
+        3,
+        "长按进入 connect / contextPending 转 connect / connect 拖动都必须刷新预览端点"
+    );
+    let content_delta = function_window(&content, "function applyConnectDelta(", 800);
+    assert!(
+        content_delta.contains("refreshConnectPreview()"),
+        "connect 拖动必须刷新预览端点，实际窗口:\n{content_delta}"
     );
 
     // 控制器持有预览端点字段；Canvas 画到它。
@@ -1630,7 +1777,8 @@ fn connect_preview_reuses_platform_edge_renderer() {
     );
     let canvas = strip_line_comments(&read_src(CANVAS));
     assert!(
-        canvas.contains("ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)"),
+        canvas
+            .contains("ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)"),
         "预览线必须画到 connectPreviewEnd，实际源码缺少"
     );
 }
@@ -1646,7 +1794,8 @@ fn edge_hit_threshold_covers_visible_line_width() {
     let threshold = function_window(&content, "function _edgeHitLocalThreshold(", 400);
     assert!(
         threshold.contains("var scale = Math.max(effectiveScale, 1e-6)")
-            && threshold.contains("return Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)"),
+            && threshold
+                .contains("return Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)"),
         "命中阈值必须同时覆盖屏幕像素下限与真实线宽，实际窗口:\n{threshold}"
     );
 
@@ -1664,27 +1813,30 @@ fn edge_hit_threshold_covers_visible_line_width() {
     );
 }
 
-/// preview / shell 子图内部不能是死区：左拖继续全局 pan，右键不弹父层新建菜单。
+/// preview / shell 子图内部不能是死区：命中直接落成父层 embed 入口，
+/// 右键开的是这个子星图自己的菜单，不会落到父层空白新建。
 #[test]
 fn low_lod_child_content_is_not_a_dead_zone() {
-    let canvas = strip_line_comments(&read_src(CANVAS));
-    let bg = function_window(&canvas, "id: bgDragArea", 6000);
+    let content = strip_line_comments(&read_src(CONTENT));
+    let hit = function_window(&content, "function hitTargetAtScene(", 3400);
     assert!(
-        bg.contains("hit.kind === \"node\" || hit.kind === \"embed\"")
-            && !bg.contains("hit.kind === \"childContent\""),
-        "bgDragArea 只对 node/embed 放弃事件，childContent 继续 pan，实际窗口:\n{bg}"
+        hit.contains("child && child.renderDetail === \"interactive\"")
+            && !hit.contains("kind: \"childContent\""),
+        "shell/preview/未加载的子星图整体按父层 embed 命中，不再有 childContent 死区，实际窗口:\n{hit}"
     );
-    let right = function_window(&canvas, "id: backgroundRightTap", 2600);
-    let child_idx = right
-        .find("hit.kind === \"childContent\"")
-        .expect("backgroundRightTap 必须有 childContent 分支");
-    let blank_idx = right
-        .find("openBlankMenu(sx, sy, hit, px, py)")
-        .expect("backgroundRightTap 必须保留空白菜单入口");
+
+    // 右键统一分发：embed 命中开 embed 菜单（低 LOD 子图也是 embed），
+    // 只有真正 empty 才走该层空白新建。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let dispatch = function_window(&canvas, "function openHitContextMenu(", 2400);
     assert!(
-        child_idx < blank_idx,
-        "childContent 分支必须排在 openBlankMenu 之前，低 LOD 内部不得弹父层菜单，\
-         实际窗口:\n{right}"
+        dispatch.contains("hit.kind === \"embed\"")
+            && dispatch.contains("embedContextMenu.popup(screenX, screenY)"),
+        "embed 命中必须开 embed 菜单，不弹父层新建，实际窗口:\n{dispatch}"
+    );
+    assert!(
+        dispatch.contains("openBlankMenu(sx, sy, hit, screenX, screenY)"),
+        "只有真正 empty 才走该层空白菜单，实际窗口:\n{dispatch}"
     );
 }
 
@@ -1745,58 +1897,64 @@ fn pinch_takes_over_the_shared_state_machine() {
         "endPinch 必须在 pinch 状态下整体复位，实际窗口:\n{end}"
     );
 
-    let canvas = strip_line_comments(&read_src(CANVAS));
-    let pinch = function_window(&canvas, "id: canvasPinch", 1300);
+    // Issue #832：PinchHandler 与单指 Handler 都在唯一 Router 里。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let pinch = function_window(&router, "id: pinchHandler", 1300);
     assert!(
-        pinch.contains("canvasArea.resetInteraction()")
-            && pinch.contains("canvasArea.hideTouchPreview()")
-            && pinch.contains("interaction.beginPinch()"),
+        pinch.contains("canvas.resetInteraction()")
+            && pinch.contains("canvas.hideTouchPreview()")
+            && pinch.contains("router.ic.beginPinch()"),
         "Pinch 激活必须先清瞬时现场再进 pinch，实际窗口:\n{pinch}"
     );
     assert!(
-        pinch.contains("interaction.endPinch()"),
+        pinch.contains("router.ic.endPinch()"),
         "Pinch 结束必须复位 pinch 状态，实际窗口:\n{pinch}"
     );
 
     // 单指业务在 pinch 期间必须整体让位：grab 与 pointerMode 两层都要看。
-    let helper = function_window(&canvas, "function pinchOwnsTouchGesture()", 200);
+    let helper = function_window(&router, "readonly property bool pinchActive:", 200);
     assert!(
-        helper.contains("canvasPinch.active || interaction.pointerMode === \"pinch\""),
+        helper.contains("pinchHandler.active") && helper.contains("ic.pointerMode === \"pinch\""),
         "必须有一个同时看 grab 与共享状态机的触屏让位判定，实际窗口:\n{helper}"
     );
-    let drag = slice_between(&canvas, "id: bgTouchDrag", "id: canvasPinch");
+    let drag = function_window(&router, "function handleDragDelta(", 500);
     assert!(
-        drag.contains("if (canvasArea.pinchOwnsTouchGesture())") && drag.contains("return"),
-        "pinch 期间单指拖动必须直接忽略（先更新 lastT 再返回），实际窗口:\n{drag}"
+        drag.contains("if (pinchActive)") && drag.contains("return"),
+        "pinch 期间单指拖动必须直接忽略，实际窗口:\n{drag}"
     );
-    let touch_tap = slice_between(&canvas, "id: bgTouchLeftTap", "id: backgroundRightTap");
+    let single = function_window(&router, "function handleSingleTap(", 400);
     assert!(
-        count_occurrences(&touch_tap, "if (canvasArea.pinchOwnsTouchGesture())") == 2,
-        "pinch 期间必须拒绝迟到的触屏点选与空白长按菜单，实际窗口:\n{touch_tap}"
+        single.contains("if (ic.pointerMode === \"pinch\")") && single.contains("return"),
+        "pinch 期间必须拒绝迟到的触屏点选，实际窗口:\n{single}"
+    );
+    let long_press = function_window(&router, "function handleLongPress(", 300);
+    assert!(
+        long_press.contains("if (pinchActive)") && long_press.contains("return"),
+        "晚到的长按必须拒绝 pinch 状态，实际窗口:\n{long_press}"
     );
 
     let content = strip_line_comments(&read_src(CONTENT));
-    let long_press = function_window(&content, "function onItemTouchLongPressed(", 800);
-    assert!(
-        long_press.contains("if (ic.pointerMode === \"pinch\")") && long_press.contains("return"),
-        "晚到的长按回调必须拒绝 pinch 状态，实际窗口:\n{long_press}"
-    );
     let begin_edit = function_window(&content, "function beginInlineEdit(", 300);
     assert!(
         begin_edit.contains("interactionController.pointerMode === \"pinch\"")
             && begin_edit.contains("return"),
         "晚到的双击进入编辑必须拒绝 pinch 状态，实际窗口:\n{begin_edit}"
     );
-    let release = function_window(&content, "function releaseOwnerGesture(", 800);
-    for mode in ["\"connect\"", "\"move\"", "\"contextPending\"", "\"pressPending\""] {
+    let release = function_window(&router, "function handleRelease(", 1100);
+    for mode in [
+        "\"connect\"",
+        "\"move\"",
+        "\"contextPending\"",
+        "\"pressPending\"",
+    ] {
         assert!(
             release.contains(mode),
-            "releaseOwnerGesture 必须继续处理 {mode}，实际窗口:\n{release}"
+            "handleRelease 必须继续处理 {mode}，实际窗口:\n{release}"
         );
     }
     assert!(
-        !release.contains("\"pinch\""),
-        "releaseOwnerGesture 不得处理 pinch（缩放结束由 endPinch 复位），实际窗口:\n{release}"
+        !release.contains("\"pinch\" === mode") && !release.contains("mode === \"pinch\""),
+        "handleRelease 不得处理 pinch（缩放结束由 endPinch 复位），实际窗口:\n{release}"
     );
 }
 
@@ -1808,21 +1966,28 @@ fn pinch_takes_over_the_shared_state_machine() {
 /// 或子星图不产生任何选中。点击语义必须回到归属层（delegate 不直接碰 controller）。
 #[test]
 fn node_and_embed_single_click_wire_to_selection() {
-    let content = strip_line_comments(&read_src(CONTENT));
-    let node_block = slice_between(&content, "delegate: StarMapNode {", "Repeater {");
+    // Issue #832：单击语义收进唯一 Router；delegate 不再上抛点击信号。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let select = function_window(&router, "function selectHit(", 1000);
     assert!(
-        node_block.contains("onSingleClicked:")
-            && node_block.contains("content.selectNode(nodeData.id)")
-            && node_block.contains("content.logInteraction(\"selection_changed\", \"node\", nodeData.id, {})"),
-        "节点单击必须选中并记 selection_changed，实际片段:\n{node_block}"
+        select.contains("hit.owner.selectNode(hit.id)")
+            && select
+                .contains("hit.owner.logInteraction(\"selection_changed\", \"node\", hit.id, {})"),
+        "node 单击必须选中并记 selection_changed，实际窗口:\n{select}"
     );
-    let embed_block = slice_between(&content, "delegate: StarMapEmbed {", "onLeftReleased:");
     assert!(
-        embed_block.contains("onClicked: function(instId)")
-            && embed_block.contains("content.selectEmbed(instId)")
-            && embed_block.contains("content.logInteraction(\"selection_changed\", \"embed\", instId, {})"),
-        "Embed 单击必须选中并记 selection_changed，实际片段:\n{embed_block}"
+        select.contains("hit.owner.selectEmbed(hit.id)")
+            && select
+                .contains("hit.owner.logInteraction(\"selection_changed\", \"embed\", hit.id, {})"),
+        "embed 单击必须选中并记 selection_changed，实际窗口:\n{select}"
     );
+    for rel in [NODE, EMBED] {
+        let src = strip_line_comments(&read_src(rel));
+        assert!(
+            !src.contains("singleClicked") && !src.contains("signal clicked"),
+            "{rel} 不得再上抛点击信号：输入只有一个主人"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1835,50 +2000,39 @@ fn node_and_embed_single_click_wire_to_selection() {
 /// 直接把 enabled 置 false，让这一轮 tap 识别当场取消（回调 guard 留作双保险）。
 #[test]
 fn pinch_disables_touch_taps_at_the_handler_level() {
-    let canvas = strip_line_comments(&read_src(CANVAS));
-    let bg = slice_between(&canvas, "id: bgTouchLeftTap", "id: backgroundRightTap");
+    // Issue #832：单指 TapHandler 只有 Router 一份，pinch 期间在 enabled 层直接禁用，
+    // 让 passive grab 的 tap 识别当场取消；回调 guard 作双保险。
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    let touch_tap = function_window(&router, "id: touchTap", 500);
     assert!(
-        bg.contains("enabled: !canvasArea.pinchOwnsTouchGesture()"),
-        "背景触屏 TapHandler 必须在 pinch 期间直接禁用，实际窗口:\n{bg}"
+        touch_tap.contains("enabled: !router.pinchActive"),
+        "Router 触屏 TapHandler 必须在 pinch 期间直接禁用，实际窗口:\n{touch_tap}"
     );
+    let helper = function_window(&router, "readonly property bool pinchActive:", 200);
     assert!(
-        count_occurrences(&bg, "if (canvasArea.pinchOwnsTouchGesture())") == 2,
-        "回调里的 guard 仍要保留作双保险，实际窗口:\n{bg}"
+        helper.contains("pinchHandler.active") && helper.contains("ic.pointerMode === \"pinch\""),
+        "pinchActive 必须同时看 grab 与共享状态机，实际窗口:\n{helper}"
+    );
+    let single = function_window(&router, "function handleSingleTap(", 400);
+    assert!(
+        single.contains("if (ic.pointerMode === \"pinch\")") && single.contains("return"),
+        "迟到的点选必须拒绝 pinch 状态，实际窗口:\n{single}"
     );
 
-    let node = strip_line_comments(&read_src(NODE));
+    let pinch = function_window(&router, "id: pinchHandler", 1200);
     assert!(
-        node.contains("property bool touchGestureBlocked: false"),
-        "Node 必须暴露由归属层控制的 touchGestureBlocked"
-    );
-    let node_tap = function_window(&node, "id: nodeTouchTap", 400);
-    assert!(
-        node_tap.contains("enabled: !root.editing && !root.touchGestureBlocked"),
-        "Node 触屏 TapHandler 必须由 touchGestureBlocked 直接禁用，实际窗口:\n{node_tap}"
+        pinch.contains("router.ic.beginPinch()") && pinch.contains("router.ic.endPinch()"),
+        "Pinch 激活/结束必须整体接管与复位单指状态，实际窗口:\n{pinch}"
     );
 
-    let embed = strip_line_comments(&read_src(EMBED));
-    assert!(
-        embed.contains("property bool touchGestureBlocked: false"),
-        "Embed 必须暴露由归属层控制的 touchGestureBlocked"
-    );
-    let chrome_tap = function_window(&embed, "id: chromeTouchTap", 600);
-    assert!(
-        chrome_tap.contains("enabled: !root.touchGestureBlocked"),
-        "Embed chrome 触屏 TapHandler 必须由 touchGestureBlocked 直接禁用，实际窗口:\n{chrome_tap}"
-    );
-
-    let content = strip_line_comments(&read_src(CONTENT));
-    assert_eq!(
-        count_occurrences(&content, "content.menuHost.pinchOwnsTouchGesture()"),
-        2,
-        "Node / Embed delegate 都必须把 Pinch 接管状态接到 touchGestureBlocked"
-    );
-    assert_eq!(
-        count_occurrences(&content, "touchGestureBlocked: content.menuHost"),
-        2,
-        "两个 delegate 的 touchGestureBlocked 必须同源绑定，实际源码不符"
-    );
+    // 递归 delegate 不再持有触屏手势，也就不需要 touchGestureBlocked。
+    for rel in [NODE, EMBED, CONTENT] {
+        let src = strip_line_comments(&read_src(rel));
+        assert!(
+            !src.contains("touchGestureBlocked"),
+            "{rel} 不得再保留 touchGestureBlocked：delegate 已没有触屏 Handler"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1913,19 +2067,19 @@ fn edge_hit_testing_covers_rendered_arrow_triangle() {
 /// 日志）必须彻底删除，不再维护第二个历史快捷入口。
 #[test]
 fn middle_button_pan_entry_is_removed() {
-    let canvas = strip_line_comments(&read_src(CANVAS));
+    let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
+    for (name, src) in [
+        ("StarMapCanvas", strip_line_comments(&read_src(CANVAS))),
+        ("StarMapInputRouter", router.clone()),
+    ] {
+        assert!(
+            !src.contains("Qt.MiddleButton") && !src.contains("\"middle\""),
+            "{name} 不得再有中键 press 观察器 / pan 分支 / middle 日志"
+        );
+    }
+    let drag = function_window(&router, "id: dragHandler", 800);
     assert!(
-        !canvas.contains("Qt.MiddleButton") && !canvas.contains("\"middle\""),
-        "中键 press 观察器 / pan 分支 / middle 日志都必须删除，实际源码仍有残留"
-    );
-    let bg = function_window(&canvas, "id: bgDragArea", 2500);
-    assert!(
-        bg.contains("acceptedButtons: Qt.LeftButton"),
-        "bgDragArea 只接受左键，实际窗口:\n{bg}"
-    );
-    assert!(
-        !bg.contains("mouse.button === Qt.MiddleButton")
-            && !bg.contains("beginPan()\n                    return"),
-        "onPressed 不得再留中键直接进入 pan 的历史分支，实际窗口:\n{bg}"
+        drag.contains("acceptedButtons: Qt.LeftButton"),
+        "Router 的拖动只接受左键，实际窗口:\n{drag}"
     );
 }

@@ -12,7 +12,7 @@
 //! 3. Portal 只有 destination 语义、Embed 只有 position、节点没有
 //!    displayPolicy/openBehavior——显示状态不再是第二份持久化真相。
 //! 4. `starmaps/{id}.meta.json` 是元数据唯一真相，`starmaps/index.json`
-//!    只有 schemaVersion/starmapIds/mainStarmapByProject/updatedAt；
+//!    只有 schemaVersion/starmapIds/rootStarmapIds/mainStarmapByProject/updatedAt；
 //!    统计字段不再持久化，`set_main_starmap_for_project` 不再遍历改写其他 meta。
 //! 5. DTO 解码 fail-closed：未知 kind、缺失/空 ID、payload JSON 解析失败都返回 Err。
 
@@ -411,11 +411,12 @@ fn meta_and_index_keep_one_truth_without_persisted_stats() {
         sorted_keys(&index),
         vec![
             "mainStarmapByProject".to_string(),
+            "rootStarmapIds".to_string(),
             "schemaVersion".to_string(),
             "starmapIds".to_string(),
             "updatedAt".to_string(),
         ],
-        "index.json 只保存 starmap_ids 与 main 映射"
+        "index.json 只保存 starmap_ids、显式 root 身份与 main 映射"
     );
 
     let meta_json = read_json(&sid_dir_meta_path(&dir, &sid));
