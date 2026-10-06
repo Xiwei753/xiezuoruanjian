@@ -1466,9 +1466,10 @@ Rectangle {
         z: 60
 
         // 半透明遮罩，点击关闭抽屉。
+        // 颜色取 DesignTokens 的 scrim，不再写死 "black"（ui_tokens 门禁）。
         Rectangle {
             anchors.fill: parent
-            color: "black"
+            color: dt.scrim
             opacity: 0.4
             MouseArea {
                 anchors.fill: parent

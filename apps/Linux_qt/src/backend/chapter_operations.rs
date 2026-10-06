@@ -321,7 +321,9 @@ impl AppBackend {
                         "update_chapter_note_success",
                         &format!("updated={}", updated),
                     );
-                    return bridge_success_object(serde_json::to_value(updated).unwrap_or_default());
+                    return bridge_success_object(
+                        serde_json::to_value(updated).unwrap_or_default(),
+                    );
                 }
                 Err(e) => {
                     self.debug_error(
