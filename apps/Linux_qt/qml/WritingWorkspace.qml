@@ -117,6 +117,20 @@ Rectangle {
     readonly property bool planResolved: root.wideWorkbench && root.workbenchPlan !== null
     readonly property bool hideContentPanes: root.planResolved && !root.coreWorkbench
 
+    // Issue #833 复核3：SinglePane 和 Workbench 是两套壳结构，状态互不污染。
+    // singlePaneMode：非 Workbench，或 Core 因空间不够退回单栏。
+    // chapterNavigationShown：当前模式下章节导航是否展开，统一读这一份，
+    // PaneFoldButton / 把手不再直接读 leftPaneCollapsed。
+    readonly property bool singlePaneMode: !root.wideWorkbench || root.hideContentPanes
+    readonly property bool chapterNavigationShown:
+        root.singlePaneMode ? root.singlePaneNavOpen : !root.leftPaneCollapsed
+    // 从 SinglePane 切回 Workbench 时清掉浮层状态，避免 overlay 继续盖在 Workbench 上。
+    onSinglePaneModeChanged: {
+        if (!root.singlePaneMode) {
+            root.singlePaneNavOpen = false;
+        }
+    }
+
     // 宽屏下 Core 已经把七角色尺寸算好：pre/min/max 三者取同一个值，
     // 让 SplitView 只负责"可见子项参与剩余空间分配"，不再被用户拖拽改宽度。
     // 非宽屏仍保留原来的可拖拽区间（最小 180 / 最大 420）。
@@ -180,7 +194,7 @@ Rectangle {
         // Workbench resolver（resolveWorkbenchCandidate 直接返回 null），改成打开
         // 覆盖在正文上的章节导航浮层。这样正文顶部那个重新展开章节栏的按钮在
         // SinglePane 下也能拉回章节导航，不再卡死。
-        if (!root.wideWorkbench || root.hideContentPanes) {
+        if (root.singlePaneMode) {
             root.singlePaneNavOpen = true;
             return;
         }
@@ -204,9 +218,13 @@ Rectangle {
     }
 
     function closeChapterNavigation() {
-        // Issue #833 复核：SinglePane 浮层和 Workbench leftPaneCollapsed 都要收。
-        root.singlePaneNavOpen = false;
-        root.leftPaneCollapsed = true;
+        // Issue #833 复核3：按 singlePaneMode 分支，SinglePane 只收浮层，
+        // Workbench 只收 leftPaneCollapsed，两套状态互不污染。
+        if (root.singlePaneMode) {
+            root.singlePaneNavOpen = false;
+        } else {
+            root.leftPaneCollapsed = true;
+        }
     }
 
     // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
@@ -632,7 +650,9 @@ Rectangle {
             // 不参与 RowLayout 宽度分配。
             WritingChapterNavigation {
                 id: sidebarRect
-                visible: !root.leftPaneCollapsed && !root.hideContentPanes
+                // Issue #833 复核3：Workbench 下才参与 RowLayout，
+                // SinglePane 下章节导航走 singlePaneNavOverlay 浮层，不占宽度。
+                visible: !root.singlePaneMode && !root.leftPaneCollapsed
                 // Issue #833：章节导航宽度只取 Core 的 ChapterNavigation bounds，
                 // 不再读 setting_desktop_sidebar_width，也不再回写。
                 Layout.preferredWidth: root.chapterNavWidth
@@ -697,15 +717,19 @@ Rectangle {
                         anchors.topMargin: dt.sp4
                         z: 30
                         dt: root.dt
-                        visible: !root.hideContentPanes
-                        // 手稿语义：左树开着显示 ⌄（往下收），收起了显示 ⌃（往上拉）。
-                        glyph: root.leftPaneCollapsed ? "\u2303" : "\u2304"
+                        // Issue #833 复核3：任何模式下都给用户入口切换章节导航，
+                        // 不再随 hideContentPanes 隐藏（wideWorkbench 但 Core 退回
+                        // SinglePane 时 hideContentPanes=true，按钮原本直接消失）。
+                        visible: true
+                        // 统一读 chapterNavigationShown：展开时显示收起箭头 ⌃，
+                        // 收起时显示展开箭头 ⌄。
+                        glyph: root.chapterNavigationShown ? "\u2303" : "\u2304"
                         onTriggered: {
-                            if (root.leftPaneCollapsed) {
-                                root.requestChapterNavigationOpen();
-                            } else {
+                            if (root.chapterNavigationShown) {
                                 root.closeChapterNavigation();
                                 root.requestEditorFocus();
+                            } else {
+                                root.requestChapterNavigationOpen();
                             }
                         }
                     }
@@ -1392,7 +1416,9 @@ Rectangle {
     Item {
         id: singlePaneNavOverlay
         anchors.fill: parent
-        visible: root.singlePaneNavOpen
+        // Issue #833 复核3：只在 SinglePane 模式且浮层打开时可见，
+        // Workbench 下恒不可见，避免两套壳互相覆盖。
+        visible: root.singlePaneMode && root.singlePaneNavOpen
         z: 60
 
         // 半透明遮罩，点击关闭抽屉。

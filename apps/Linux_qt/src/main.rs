@@ -163,6 +163,9 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/StarMapController.qml" as "StarMapController.qml",
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
+    // Issue #833 复核3：章节导航内容组件，WritingWorkspace 直接实例化，
+    // 漏登记时开发目录碰巧能找到，打包后组件不存在。
+    "qml/WritingChapterNavigation.qml" as "WritingChapterNavigation.qml",
     "qml/EditorController.qml" as "EditorController.qml",
     // Issue #825 复核4 第3项：工具条带拆成 ToolbarLeading/Center/Trailing 三组，
     // TopWritingToolbar 被 WritingWorkbenchToolbar + WritingFormatGroup 取代，

@@ -381,14 +381,21 @@ impl QQuickItem for SujianEditorItem {
         // 先 is_empty()，确认非空后才 chars().count() 并写日志。正常渲染帧不扫描正文。
         {
             let item_w = self.bounding_width();
+            let item_h = self.bounding_height();
             let item_vp_h = f64::from(self.current_viewport_height);
-            let frame_empty = self.prepared_frame.is_none() || item_w <= 1.0 || item_vp_h <= 1.0;
+            // Issue #833 复核3：item_h 也要进触发条件。QQuickItem 自身 height 掉成 0
+            // 但 viewport_height 仍保留上一帧旧值时，原条件漏判，恰好错过最想区分的
+            // 几何错位。item_w/item_h/item_vp_h 都是 O(1) 几何状态，frame_empty 成立后
+            // 才取 committed_text / chars().count()，热路径成本不变。
+            let frame_empty = self.prepared_frame.is_none()
+                || item_w <= 1.0
+                || item_h <= 1.0
+                || item_vp_h <= 1.0;
             if frame_empty {
                 let committed = self.pipeline.committed_text();
                 if !committed.is_empty() {
                     let text_bytes = committed.len();
                     let text_chars = committed.chars().count();
-                    let item_h = self.bounding_height();
                     let item_scroll_y = f64::from(self.current_scroll_y);
                     let item_content_h = f64::from(self.current_content_height);
                     editor_debug_log(&format!(

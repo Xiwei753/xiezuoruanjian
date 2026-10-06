@@ -455,6 +455,8 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/StarMapPathPlanner.js");
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
+    // Issue #833 复核3：章节导航内容组件，与 WritingWorkspace 同批重编译。
+    println!("cargo:rerun-if-changed=qml/WritingChapterNavigation.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
     // Issue #825：TopWritingToolbar.qml 已拆成工作台工具条带三段组件。
     println!("cargo:rerun-if-changed=qml/WritingWorkbenchToolbar.qml");
