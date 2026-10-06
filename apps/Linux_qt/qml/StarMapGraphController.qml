@@ -829,4 +829,84 @@ QtObject {
         }
         return [];
     }
+
+    // ---------------------------------------------------------------------------
+    // Issue #834：内部链接（StarMapLink）菜单（add/update/delete/list）。
+    // Link 是星图内部跳转（source/target 都是 StarMapTargetPathDto），区别于
+    // Hyperlink（targetUri 指向外部 URI）。后端 bridge 已注册
+    // add/update/delete/list_starmap_link（starmap_backend/links.rs），这里照
+    // addHyperlink/updateHyperlink/deleteHyperlink/listHyperlinks 做
+    // ensureBackend/normalizeBackendResult 包装。
+    // ---------------------------------------------------------------------------
+    function addLink(sourcePath, targetPath, label) {
+        if (!ensureBackend()) return null;
+        // bridge 层 StarMapLinkCreateInput（camelCase）：{source, target, label?}
+        var body = { source: sourcePath, target: targetPath, label: label || null };
+        var res = normalizeBackendResult(
+            starmapBackendRef.add_starmap_link(starmapId, JSON.stringify(body)),
+            qsTr("添加内部链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return res.data;
+        }
+        setError(backendErrorText(res, qsTr("添加内部链接失败")));
+        return null;
+    }
+
+    // patch 遵循 StarMapLinkPatchInputDto（camelCase）：{source?, target?, label?, clearLabel}。
+    // 清空 label 由调用方传 clearLabel:true（不在此处隐式构造）。
+    function updateLink(linkId, patch) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_link(starmapId, linkId, JSON.stringify(patch)),
+            qsTr("更新内部链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return true;
+        }
+        setError(backendErrorText(res, qsTr("更新内部链接失败")));
+        return false;
+    }
+
+    function deleteLink(linkId) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.delete_starmap_link(starmapId, linkId),
+            qsTr("删除内部链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return true;
+        }
+        setError(backendErrorText(res, qsTr("删除内部链接失败")));
+        return false;
+    }
+
+    // 返回 StarMapLinkDto 数组（list_starmap_links 返回
+    // StarMapLinkListWithDiagnosticsDto，取 items）。
+    function listLinks() {
+        if (!ensureBackend()) return [];
+        var res = normalizeBackendResult(
+            starmapBackendRef.list_starmap_links(starmapId),
+            qsTr("列出内部链接失败")
+        );
+        if (res.success && res.data && res.data.items) {
+            clearError();
+            return res.data.items;
+        }
+        return [];
+    }
+
+    // Issue #834：与 createEdgeWithPaths 命名对称的 Link 版本，供
+    // SceneContent.commitLinkWithPaths 调用。label 暂留空，后续可在菜单补编辑。
+    function createLinkWithPaths(fromPath, toPath) {
+        var link = addLink(fromPath, toPath, "");
+        if (link !== null) {
+            loadGraph();
+            return true;
+        }
+        return false;
+    }
 }

@@ -278,7 +278,9 @@ fn wheel_and_pinch_have_no_scene_identity_gating() {
         );
     }
 
-    let wheel = function_window(&router, "id: wheelHandler", 1400);
+    // Issue #834：窗口收到 900 字符，恰好覆盖 wheelHandler 自身（含 onWheel 体），
+    // 不溢出到本轮新增的 connectArmedHover（其 enabled 是 armed 门控，非 wheel 门控）。
+    let wheel = function_window(&router, "id: wheelHandler", 900);
     assert!(
         wheel.contains("blocking: true"),
         "wheelHandler 仍需 blocking 决定阻塞语义，实际窗口:\n{wheel}"
@@ -869,7 +871,7 @@ fn connect_end_creates_the_edge_on_the_lca_host() {
     );
     // 宿主 = 两端 Scene 的最近公共祖先；边写进宿主图，starmapId 必须是宿主的。
     assert!(
-        finish.contains("StarMapPathPlanner.planCrossLayerEdge(fromPath, toPath)"),
+        finish.contains("StarMapPathPlanner.planCrossLayerRelation(fromPath, toPath)"),
         "建边必须先做跨层宿主规划（宿主 = 最近公共祖先），实际窗口:\n{finish}"
     );
     assert!(
@@ -911,7 +913,7 @@ fn path_planner_ports_harmony_lca_rules() {
         "function commonScenePathPrefix(",
         "function resolveItemRef(",
         "function buildTargetPathForHost(",
-        "function planCrossLayerEdge(",
+        "function planCrossLayerRelation(",
         "function uiInstanceIdOfSegment(",
         "itemRef.scenePath.slice(hostSegments.length)",
         "segments.slice(0, segments.length - 1)",
@@ -1684,9 +1686,9 @@ fn connect_preview_reuses_platform_edge_renderer() {
     // 悬停合法 target：prospective plan → 宿主 Content → 平台 renderer → 端点。
     let refresh = function_window(&content, "function refreshConnectPreview(", 2400);
     assert!(
-        refresh
-            .contains("StarMapPathPlanner.planCrossLayerEdge(ic.connectFromPath, hit.targetPath)")
-            && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
+        refresh.contains(
+            "StarMapPathPlanner.planCrossLayerRelation(ic.connectFromPath, hit.targetPath)"
+        ) && refresh.contains("rootContent.findContentByPathSegments(plan.hostSegments)")
             && refresh.contains("plan = bindPlanToHost(plan, host)")
             && refresh.contains("host.prospectiveEdgeRenderForPlan(plan)"),
         "预览必须先做 prospective LCA 规划再交给宿主平台 renderer，实际窗口:\n{refresh}"

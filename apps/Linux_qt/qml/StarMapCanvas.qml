@@ -46,7 +46,7 @@ Item {
     onStarmapIdChanged: {
         if (focusStack.length > 0) {
             focusStack = []
-            focusChanged()
+            visualFocusChanged()
         }
     }
     required property var dt
@@ -154,7 +154,7 @@ Item {
     // 栈顶的 scenePathKey（root 时为 "root"），供 Workspace/日志用。
     readonly property string focusScenePathKey:
         focusStack.length > 0 ? focusStack[focusStack.length - 1].scenePathKey : "root"
-    signal focusChanged()
+    signal visualFocusChanged()
 
     // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
     // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
@@ -198,7 +198,7 @@ Item {
         var next = focusStack.slice()
         next.push(entry)
         focusStack = next
-        focusChanged()
+        visualFocusChanged()
     }
 
     // 左上"返回父星图"：pop 最后一层。
@@ -216,7 +216,7 @@ Item {
             zoomLevel = popped.parentCamera.zoom
             applyPan(popped.parentCamera.panX, popped.parentCamera.panY)
         }
-        focusChanged()
+        visualFocusChanged()
         return true
     }
 
@@ -257,7 +257,14 @@ Item {
             changed = true
         }
         if (changed)
-            focusChanged()
+            visualFocusChanged()
+    }
+
+    // Issue #834：connectArmed（菜单"连线"发起）时 Router 的 HoverHandler 调这里
+    // 刷新预览。rootContent 是 Canvas 内部 id，Router 跨组件拿不到，由这里转发。
+    function refreshConnectPreview() {
+        if (rootContent)
+            rootContent.refreshConnectPreview()
     }
 
     // 当前可见区域（scene 坐标矩形），逐层传给内容做子星图懒加载判定。
@@ -845,25 +852,53 @@ Item {
         }
 
         MenuItem {
-            id: nodeMenuItemHyperlink
-            text: qsTr("超链接")
+            id: nodeMenuItemLink
+            text: qsTr("内部链接")
             contentItem: AppText {
                 dt: canvasArea.dt
-                text: nodeMenuItemHyperlink.text
-                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
+                text: nodeMenuItemLink.text
+                color: nodeMenuItemLink.hovered ? _accent : _textPrimary
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                color: nodeMenuItemLink.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
             onTriggered: {
-                // Issue #832 评论 6013799805 / #373：节点超链接菜单。
+                // Issue #834：节点内部链接菜单（StarMapLink，内部跳转）。
                 // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 nodePath。
                 if (selectedNodeForMenu && menuOwnerContent)
-                    hyperlinkDialog.open("node", selectedNodeForMenu.id, menuOwnerContent)
+                    linkDialog.open("node", selectedNodeForMenu.id, menuOwnerContent,
+                                    menuOwnerContent.nodePath(selectedNodeForMenu.id))
+            }
+        }
+
+        MenuItem {
+            id: nodeMenuItemConnect
+            text: qsTr("连线")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: nodeMenuItemConnect.text
+                color: nodeMenuItemConnect.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: nodeMenuItemConnect.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #834：菜单发起连线。source 已知，进 connectArmed 等点 target。
+                if (selectedNodeForMenu && menuOwnerContent) {
+                    var center = menuOwnerContent.itemCenterScene("node", selectedNodeForMenu.id)
+                    if (center)
+                        interaction.beginConnectFromMenu("node", selectedNodeForMenu.id,
+                                menuOwnerContent.nodePath(selectedNodeForMenu.id),
+                                menuOwnerContent.scenePathKey, center.x, center.y)
+                }
             }
         }
 
@@ -1007,25 +1042,53 @@ Item {
         }
 
         MenuItem {
-            id: embedMenuItemHyperlink
-            text: qsTr("超链接")
+            id: embedMenuItemLink
+            text: qsTr("内部链接")
             contentItem: AppText {
                 dt: canvasArea.dt
-                text: embedMenuItemHyperlink.text
-                color: embedMenuItemHyperlink.hovered ? _accent : _textPrimary
+                text: embedMenuItemLink.text
+                color: embedMenuItemLink.hovered ? _accent : _textPrimary
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: embedMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                color: embedMenuItemLink.hovered ? _accentSoft : "transparent"
                 radius: _radiusXs
             }
             onTriggered: {
-                // Issue #832 评论 6013799805 / #373：子星图入口超链接菜单。
+                // Issue #834：子星图入口内部链接菜单（StarMapLink，内部跳转）。
                 // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 embedPath。
                 if (selectedEmbedForMenu && menuOwnerContent)
-                    hyperlinkDialog.open("embed", selectedEmbedForMenu.instanceId, menuOwnerContent)
+                    linkDialog.open("embed", selectedEmbedForMenu.instanceId, menuOwnerContent,
+                                    menuOwnerContent.embedPath(selectedEmbedForMenu.instanceId))
+            }
+        }
+
+        MenuItem {
+            id: embedMenuItemConnect
+            text: qsTr("连线")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemConnect.text
+                color: embedMenuItemConnect.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemConnect.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #834：菜单发起连线。source 已知，进 connectArmed 等点 target。
+                if (selectedEmbedForMenu && menuOwnerContent) {
+                    var center = menuOwnerContent.itemCenterScene("embed", selectedEmbedForMenu.instanceId)
+                    if (center)
+                        interaction.beginConnectFromMenu("embed", selectedEmbedForMenu.instanceId,
+                                menuOwnerContent.embedPath(selectedEmbedForMenu.instanceId),
+                                menuOwnerContent.scenePathKey, center.x, center.y)
+                }
             }
         }
 
@@ -1296,18 +1359,18 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // Issue #832 评论 6013799805 / #373：超链接弹窗（URI + 可选标题）。
-    // 打开时查现有：有则预填并提供"保存/删除"，无则空表单"添加"。
-    // source path 由 targetOwner（命中层 SceneContent）的 nodePath/embedPath 构造，
-    // 不退化成裸 nodeId。
+    // Issue #834：内部链接弹窗（StarMapLink，内部跳转）。
+    // 列出该 source 已有的内部链接，可删除；"选择目标"进入 linkArmed，
+    // 下一次点 node/embed 是 target（不填 URI，不是外部超链接）。
+    // source path 由菜单传入（命中层 SceneContent 的 nodePath/embedPath）。
     // ---------------------------------------------------------------------------
     Popup {
-        id: hyperlinkDialog
+        id: linkDialog
         modal: true
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         width: 360
-        height: 220
+        height: 320
         anchors.centerIn: Overlay.overlay
         Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
         background: Rectangle {
@@ -1317,11 +1380,31 @@ Item {
             radius: _dialogRadius
         }
 
-        property string targetType: ""   // "node" / "embed"
-        property string targetId: ""
-        property var targetOwner: null   // 命中层 SceneContent
-        property var existingHl: null    // 已有超链接条目（null = 新增模式）
-        readonly property bool isEdit: existingHl !== null
+        property string sourceKind: ""    // "node" / "embed"
+        property string sourceId: ""
+        property var sourceOwner: null    // 命中层 SceneContent
+        property var sourcePath: null     // StarMapTargetPathDto
+        property var linkItems: []        // 已有内部链接列表
+
+        function refreshItems() {
+            if (sourceOwner && sourcePath)
+                linkItems = sourceOwner.listLinksForSource(sourcePath)
+            else
+                linkItems = []
+        }
+
+        // target 路径摘要：node 显示 nodeId，starmap(embed) 显示"子星图"。
+        // Issue #834 复核：linkItems 现在是 [{ link: dto, hostOwner: hostContent }]，
+        // 这里收 item，读 item.link。
+        function targetSummary(item) {
+            var link = item && item.link ? item.link : null
+            if (!link || !link.target)
+                return ""
+            var t = link.target.target
+            if (!t)
+                return ""
+            return t.type === "node" ? (t.nodeId || "") : qsTr("子星图")
+        }
 
         ColumnLayout {
             anchors.fill: parent
@@ -1330,7 +1413,7 @@ Item {
 
             AppText {
                 dt: canvasArea.dt
-                text: hyperlinkDialog.isEdit ? qsTr("编辑超链接") : qsTr("添加超链接")
+                text: qsTr("内部链接")
                 font.pointSize: dt.fontLgPt
                 font.bold: true
                 color: _textPrimary
@@ -1338,57 +1421,93 @@ Item {
 
             AppText {
                 dt: canvasArea.dt
-                text: qsTr("URI")
+                text: linkDialog.linkItems.length > 0
+                      ? qsTr("已链接到：")
+                      : qsTr("尚无内部链接，选择目标开始建立。")
                 color: _textSecondary
                 font.pointSize: dt.labelPt
-            }
-
-            TextField {
-                id: hyperlinkUriInput
                 Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("https://...")
-                focus: hyperlinkDialog.visible
-                text: ""
-
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkUriInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
-                }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
+                wrapMode: Text.WordWrap
             }
 
-            AppText {
-                dt: canvasArea.dt
-                text: qsTr("标题（可选）")
-                color: _textSecondary
-                font.pointSize: dt.labelPt
-            }
-
-            TextField {
-                id: hyperlinkLabelInput
+            // 已有链接列表（每条：摘要 + 删除按钮）
+            ListView {
+                id: linkList
                 Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
-                font.pointSize: dt.bodyPt
-                placeholderText: qsTr("显示文字")
-                text: ""
+                Layout.fillHeight: true
+                clip: true
+                model: linkDialog.linkItems
+                spacing: 6
+                delegate: RowLayout {
+                    width: linkList.width
+                    spacing: 8
 
-                background: Rectangle {
-                    color: _surfaceContainer
-                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
-                    border.width: 1.5
-                    radius: _radiusXs
+                    AppText {
+                        dt: canvasArea.dt
+                        Layout.fillWidth: true
+                        text: linkDialog.targetSummary(modelData)
+                                + (modelData.link.label ? "（" + modelData.link.label + "）" : "")
+                        color: _textPrimary
+                        font.pointSize: dt.bodyPt
+                        elide: Text.ElideRight
+                    }
+
+                    Button {
+                        id: linkReassignBtn
+                        text: qsTr("重新指定")
+                        onClicked: {
+                            // 重新指定这条 Link 的 target：进入 linkArmed 并记住
+                            // existingLinkId + oldHostOwner，选新 target 后 finishLink
+                            // 走 update/migrate。
+                            if (modelData.hostOwner && modelData.link.linkId) {
+                                interaction.beginLinkArmed(
+                                        linkDialog.sourceKind,
+                                        linkDialog.sourceId,
+                                        linkDialog.sourcePath,
+                                        linkDialog.sourceOwner.scenePathKey,
+                                        modelData.link.linkId,
+                                        modelData.hostOwner,
+                                        modelData.link.label || "")
+                                linkDialog.close()
+                            }
+                        }
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: linkReassignBtn.text
+                            color: _textSecondary
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: linkReassignBtn.hovered ? _surfaceContainer : "transparent"
+                            border.color: _border
+                            radius: _radiusXs
+                        }
+                    }
+
+                    Button {
+                        id: linkDelBtn
+                        text: qsTr("删除")
+                        onClicked: {
+                            // 删除必须调这条 Link 自己的 hostOwner.deleteLink，
+                            // 不能固定 sourceOwner（跨层 Link 宿主可能不是命中层）。
+                            if (modelData.hostOwner && modelData.link.linkId) {
+                                modelData.hostOwner.deleteLink(modelData.link.linkId)
+                                linkDialog.refreshItems()
+                            }
+                        }
+                        contentItem: AppText {
+                            dt: canvasArea.dt
+                            text: linkDelBtn.text
+                            color: _danger
+                            font.pointSize: dt.labelPt
+                        }
+                        background: Rectangle {
+                            color: linkDelBtn.hovered ? _dangerContainer : "transparent"
+                            border.color: _border
+                            radius: _radiusXs
+                        }
+                    }
                 }
-
-                Keys.onReturnPressed: hyperlinkDialog.confirm()
-                Keys.onEscapePressed: hyperlinkDialog.close()
             }
 
             RowLayout {
@@ -1396,108 +1515,60 @@ Item {
                 spacing: 12
 
                 Button {
-                    id: hlDeleteBtn
-                    text: qsTr("删除")
-                    visible: hyperlinkDialog.isEdit
-                    onClicked: hyperlinkDialog.removeExisting()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
-                        text: hlDeleteBtn.text
-                        color: _danger
-                        font.pointSize: dt.labelPt
-                    }
-                    background: Rectangle {
-                        color: hlDeleteBtn.hovered ? _dangerContainer : "transparent"
-                        border.color: _border
-                        radius: _radiusXs
-                    }
-                }
-
-                Button {
-                    id: hlCancelBtn
+                    id: linkCancelBtn
                     text: qsTr("取消")
-                    onClicked: hyperlinkDialog.close()
+                    onClicked: linkDialog.close()
                     contentItem: AppText {
                         dt: canvasArea.dt
-                        text: hlCancelBtn.text
+                        text: linkCancelBtn.text
                         color: _textSecondary
                         font.pointSize: dt.labelPt
                     }
                     background: Rectangle {
-                        color: hlCancelBtn.hovered ? _surfaceContainer : "transparent"
+                        color: linkCancelBtn.hovered ? _surfaceContainer : "transparent"
                         border.color: _border
                         radius: _radiusXs
                     }
                 }
 
                 Button {
-                    id: hlConfirmBtn
-                    text: hyperlinkDialog.isEdit ? qsTr("保存") : qsTr("添加")
-                    onClicked: hyperlinkDialog.confirm()
+                    id: linkPickTargetBtn
+                    text: qsTr("选择目标")
+                    onClicked: {
+                        // 关闭弹窗，进入 linkArmed：下一次点 node/embed 是 target。
+                        if (linkDialog.sourceOwner && linkDialog.sourcePath) {
+                            interaction.beginLinkArmed(linkDialog.sourceKind,
+                                    linkDialog.sourceId, linkDialog.sourcePath,
+                                    linkDialog.sourceOwner.scenePathKey)
+                        }
+                        linkDialog.close()
+                    }
                     contentItem: AppText {
                         dt: canvasArea.dt
-                        text: hlConfirmBtn.text
+                        text: linkPickTargetBtn.text
                         color: _onPrimary
                         font.bold: true
                         font.pointSize: dt.labelPt
                     }
                     background: Rectangle {
-                        color: hlConfirmBtn.hovered ? _accentHover : _accent
+                        color: linkPickTargetBtn.hovered ? _accentHover : _accent
                         radius: _radiusXs
                     }
                 }
             }
         }
 
-        function open(kind, id, owner) {
-            targetType = kind
-            targetId = id
-            targetOwner = owner
-            var items = []
-            if (owner) {
-                items = kind === "node"
-                        ? owner.listHyperlinksForNode(id)
-                        : owner.listHyperlinksForEmbed(id)
-            }
-            existingHl = items && items.length > 0 ? items[0] : null
-            hyperlinkUriInput.text = existingHl ? (existingHl.targetUri || "") : ""
-            hyperlinkLabelInput.text = existingHl ? (existingHl.label || "") : ""
+        function open(kind, id, owner, sourcePath) {
+            sourceKind = kind
+            sourceId = id
+            sourceOwner = owner
+            linkDialog.sourcePath = sourcePath
+            refreshItems()
             visible = true
-            hyperlinkUriInput.forceActiveFocus()
         }
 
         function close() {
             visible = false
-        }
-
-        function confirm() {
-            var uri = hyperlinkUriInput.text.trim()
-            if (uri.length === 0 || !targetOwner)
-                return
-            var label = hyperlinkLabelInput.text.trim()
-            if (isEdit) {
-                // StarMapHyperlinkPatchInputDto（camelCase）：
-                // {label?, clearLabel, targetUri?, source?}
-                var patch = {
-                    targetUri: uri,
-                    clearLabel: label.length === 0,
-                    label: label.length > 0 ? label : null
-                }
-                targetOwner.updateHyperlink(existingHl.hyperlinkId, patch)
-            } else {
-                if (targetType === "node")
-                    targetOwner.addHyperlinkForNode(targetId, uri, label)
-                else
-                    targetOwner.addHyperlinkForEmbed(targetId, uri, label)
-            }
-            close()
-        }
-
-        function removeExisting() {
-            if (!targetOwner || !existingHl)
-                return
-            targetOwner.deleteHyperlink(existingHl.hyperlinkId)
-            close()
         }
     }
 }

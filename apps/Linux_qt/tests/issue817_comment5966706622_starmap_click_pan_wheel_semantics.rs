@@ -197,7 +197,9 @@ fn router_wheel_is_the_only_wheel_entry() {
     );
 
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
-    let wheel = function_window(&router, "id: wheelHandler", 1400);
+    // Issue #834：窗口收到 900 字符，恰好覆盖 wheelHandler 自身（含 onWheel 体），
+    // 不溢出到本轮新增的 connectArmedHover（其 enabled 是 armed 门控，非 wheel 门控）。
+    let wheel = function_window(&router, "id: wheelHandler", 900);
     assert!(
         !wheel.contains("enabled:"),
         "wheelHandler 不得再按场景身份开关（只有根 Canvas 有相机），实际窗口:\n{wheel}"

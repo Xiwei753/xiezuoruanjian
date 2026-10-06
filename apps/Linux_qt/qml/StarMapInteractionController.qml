@@ -92,6 +92,25 @@ QtObject {
     property real connectPreviewEndX: 0
     property real connectPreviewEndY: 0
 
+    // ── Issue #834：菜单发起的 armed 态 ──
+    // linkArmed：右键菜单"内部链接 → 选择目标"后进入，下一次点 node/embed 是 target。
+    //   Link 是内部跳转（StarMapLink），不是语义边，不画预览线。
+    // connectArmed：右键菜单"连线"后进入，source 已知，等用户点 target 拉线。
+    //   复用 connect 模式预览，pointerMode 设 "connect"，但不伪造 pressPending。
+    property bool linkArmed: false
+    property string linkFromKind: ""
+    property string linkFromId: ""
+    property var linkFromPath: null
+    property string linkFromScenePathKey: ""
+    // Issue #834 复核：重新指定已有 Link 的 target。
+    // 非空时 finishLink 走 update/migrate 而不是 create。
+    property string linkExistingId: ""
+    property var linkExistingHostOwner: null
+    // Issue #834 复核：跨宿主迁移时保留原有 label，不偷偷清掉。
+    property string linkExistingLabel: ""
+
+    property bool connectArmed: false
+
     // ── move 模式目标（归属层局部坐标 + 完整身份）──
     property string moveScenePathKey: ""
     property string moveKind: ""    // "node" / "embed"
@@ -251,6 +270,7 @@ QtObject {
     function endConnect() {
         pressTimerActive = false
         pointerMode = "idle"
+        connectArmed = false
         connectFromKind = ""
         connectFromId = ""
         connectFromPath = null
@@ -283,6 +303,55 @@ QtObject {
         pressDragY = 0
         pressDragDistance = 0
         return { kind: kind, id: id }
+    }
+
+    // ── Issue #834：菜单发起的 armed 态入口 ──
+    // 菜单"内部链接 → 选择目标"进入 linkArmed。不画预览（Link 不是语义边），
+    // pointerMode 保持 idle，下一次 tap 由 Router 路由到 finishLink。
+    function beginLinkArmed(kind, id, sourcePath, scenePathKey, existingLinkId, existingHostOwner, existingLabel) {
+        linkArmed = true
+        linkFromKind = kind
+        linkFromId = id
+        linkFromPath = sourcePath
+        linkFromScenePathKey = scenePathKey
+        linkExistingId = existingLinkId || ""
+        linkExistingHostOwner = existingHostOwner || null
+        linkExistingLabel = existingLabel || ""
+    }
+
+    // 菜单"连线"进入 connectArmed。source 已知，等用户点 target。
+    // 复用 connect 模式预览：pointerMode 设 "connect"，connectFrom* 落 source，
+    // 但不伪造 pressPending（菜单发起，没有真实按下流）。
+    function beginConnectFromMenu(kind, id, sourcePath, scenePathKey, sceneX, sceneY) {
+        connectArmed = true
+        pressTimerActive = false
+        pointerMode = "connect"
+        connectFromKind = kind
+        connectFromId = id
+        connectFromPath = sourcePath
+        connectFromScenePathKey = scenePathKey
+        connectFromSceneX = sceneX
+        connectFromSceneY = sceneY
+        connectMouseX = sceneX
+        connectMouseY = sceneY
+        connectPreviewEndX = sceneX
+        connectPreviewEndY = sceneY
+    }
+
+    // 取消 armed 态（点空白 / Escape / 右键再开菜单）。
+    // linkArmed 与 connectArmed 都走这里，清干净后回 idle。
+    function cancelArmed() {
+        linkArmed = false
+        linkFromKind = ""
+        linkFromId = ""
+        linkFromPath = null
+        linkFromScenePathKey = ""
+        linkExistingId = ""
+        linkExistingHostOwner = null
+        linkExistingLabel = ""
+        connectArmed = false
+        if (pointerMode === "connect")
+            endConnect()
     }
 
     // ── move ──
@@ -364,5 +433,14 @@ QtObject {
         moveTargetPath = null
         moveX = 0
         moveY = 0
+        linkArmed = false
+        linkFromKind = ""
+        linkFromId = ""
+        linkFromPath = null
+        linkFromScenePathKey = ""
+        linkExistingId = ""
+        linkExistingHostOwner = null
+        linkExistingLabel = ""
+        connectArmed = false
     }
 }

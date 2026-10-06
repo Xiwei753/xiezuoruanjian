@@ -5,7 +5,7 @@
 // Issue #822 评论 5972557963：边必须存进"两个端点所在 Scene 的最近公共祖先"，
 // 不能永远存进起点那一层。Linux 侧的 from/to 是相对根星图的绝对路径
 // （starmapId = rootStarmapId，segments 从根往下），规则与 Harmony
-// StarMapGeometry.planCrossLayerEdge / buildTargetPathForHost 完全一致：
+// StarMapGeometry.planCrossLayerRelation / buildTargetPathForHost 完全一致：
 //
 // - 父 Node → 子 Node：宿主 = 父 Scene，to = [enterEmbed(...)] + node
 // - 子 Node → 父 Node：宿主 = 父 Scene，from = [enterEmbed(...)] + node
@@ -137,7 +137,11 @@ function uiInstanceIdOfSegment(seg) {
 }
 
 /**
- * 规划一条跨层连线应该落在哪张图上。
+ * 规划一条跨层关系（Edge 或 Link）应该落在哪张图上。
+ *
+ * Edge（语义边）与 Link（内部跳转）共用这套 LCA 宿主规划，不复制第二套算法：
+ * 两者都要求关系存进"两端所在 Scene 的最近公共祖先"，只是落库时调各自的
+ * create_starmap_edge_with_paths / add_starmap_link。
  *
  * @param fromPath 起点（相对根星图的绝对路径）
  * @param toPath   终点（相对根星图的绝对路径）
@@ -145,7 +149,7 @@ function uiInstanceIdOfSegment(seg) {
  *          from/to 的 starmapId 是空串，调用方找到宿主 Content 后填
  *          host.finalStarmapId 再写 Core。
  */
-function planCrossLayerEdge(fromPath, toPath) {
+function planCrossLayerRelation(fromPath, toPath) {
     var from = resolveItemRef(fromPath)
     var to = resolveItemRef(toPath)
     if (!from || !to)
