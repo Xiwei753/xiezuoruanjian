@@ -332,9 +332,6 @@ Rectangle {
     // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
     // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
     signal projectReady()
-    // Issue #835 评论 6019713847: RightDrawer 里 StarMapPage 请求打开根星图时转发，
-    // main.qml 据此走 appController.openRootStarmap(starmapId, title)。
-    signal openStarmapWorkspace(string starmapId, string title)
 
     // Issue #762 评论 5826175490 第 4 点：当外部设置 conflictPath 时，
     // 刷新冲突列表并打开右侧抽屉到冲突 tab，把 conflictPath 透传给 RightDrawer。
@@ -1230,10 +1227,6 @@ Rectangle {
                 // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
                 requestedConflictPath: root.conflictPath
                 onCloseRequested: root.closeToolPane()
-                // Issue #835 评论 6019713847: StarMapPage 请求打开根星图，转发给 main.qml。
-                onOpenStarmapRequested: function(starmapId, title) {
-                    root.openStarmapWorkspace(starmapId, title)
-                }
                 onConflictToolRequested: {
                     // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
                     // allowCollapseLeft=false：冲突自动弹出不该顺手收起用户的章节栏，

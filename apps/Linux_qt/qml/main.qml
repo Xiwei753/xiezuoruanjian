@@ -679,12 +679,6 @@ ApplicationWindow {
                     window.openSettingsDialog();
                 }
 
-                // Issue #835 评论 6019713847: RightDrawer 里 StarMapPage 请求打开根星图，
-                // 走现成的 appController.openRootStarmap，不在 WritingWorkspace 内自造导航。
-                onOpenStarmapWorkspace: function(starmapId, title) {
-                    appController.openRootStarmap(starmapId, title);
-                }
-
                 // Issue #790 评论 5875963057: 顶栏收口后的同步/搜索入口
                 onRequestSync: {
                     if (!window.preSyncBarrier()) return;
