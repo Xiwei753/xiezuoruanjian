@@ -559,6 +559,63 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：超链接菜单暴露给 Canvas 的方法。
+    // source path 一律用本层完整 nodePath()/embedPath()，不退化成裸 nodeId。
+    // ---------------------------------------------------------------------------
+    function nodeSourcePath(nodeId) { return nodePath(nodeId) }
+    function embedSourcePath(instanceId) { return embedPath(instanceId) }
+
+    // 两个 StarMapTargetPathDto 是否指向同一目标（starmapId + segments + target 全等）。
+    // segments/target 是嵌套对象，用 JSON.stringify 做结构比较，避免漏判字段顺序。
+    function _sameSourcePath(a, b) {
+        if (!a || !b) return false
+        if (a.starmapId !== b.starmapId) return false
+        var aSeg = a.segments || []
+        var bSeg = b.segments || []
+        if (aSeg.length !== bSeg.length) return false
+        for (var i = 0; i < aSeg.length; i++) {
+            if (JSON.stringify(aSeg[i]) !== JSON.stringify(bSeg[i])) return false
+        }
+        if (JSON.stringify(a.target || {}) !== JSON.stringify(b.target || {}))
+            return false
+        return true
+    }
+
+    function listHyperlinksForNode(nodeId) {
+        var items = graphController.listHyperlinks()
+        var want = nodePath(nodeId)
+        var out = []
+        for (var i = 0; i < items.length; i++) {
+            if (_sameSourcePath(items[i].source, want)) out.push(items[i])
+        }
+        return out
+    }
+    function listHyperlinksForEmbed(instanceId) {
+        var items = graphController.listHyperlinks()
+        var want = embedPath(instanceId)
+        var out = []
+        for (var i = 0; i < items.length; i++) {
+            if (_sameSourcePath(items[i].source, want)) out.push(items[i])
+        }
+        return out
+    }
+
+    function addHyperlinkForNode(nodeId, uri, label) {
+        return graphController.addHyperlink(nodePath(nodeId), uri, label)
+    }
+    function addHyperlinkForEmbed(instanceId, uri, label) {
+        return graphController.addHyperlink(embedPath(instanceId), uri, label)
+    }
+
+    // 透传给本层 graphController。patch 由 Canvas 弹窗按 StarMapHyperlinkPatchInputDto 构造。
+    function updateHyperlink(hlId, patch) {
+        return graphController.updateHyperlink(hlId, patch)
+    }
+    function deleteHyperlink(hlId) {
+        return graphController.deleteHyperlink(hlId)
+    }
+
+    // ---------------------------------------------------------------------------
     // 递归命中测试：命中哪一层就返回哪一层的身份。
     // 顺序：本层节点 → 本层 Embed chrome → 子星图内容区（递归）→ 本层连线 → 本层空白。
     // 子星图内容区不再产生 childContent：子层 interactive 就返回子层自己的命中

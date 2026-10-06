@@ -112,6 +112,9 @@ Item {
             screenX - (screenX - panX) * (zoomLevel / oldZoom),
             screenY - (screenY - panY) * (zoomLevel / oldZoom)
         )
+        // Issue #832 评论 6013799805 / #373：缩放后重算焦点链覆盖率，
+        // 栈顶 embed 缩出窗口就 demote（只 pop，不 push）。
+        recomputeFocusFromCoverage()
     }
 
     // 双击 Embed 的"进入"：把相机聚焦/放大到该 Embed 的 scene 矩形。
@@ -125,6 +128,108 @@ Item {
         zoomLevel = next
         applyPan(width / 2 - (sceneX + sceneW / 2) * next,
                  height / 2 - (sceneY + sceneH / 2) * next)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：纯视觉焦点链（返回父星图）
+    // ---------------------------------------------------------------------------
+    // 整棵星图仍然只有这一个全局相机；focusStack 只记录"双击进入过哪些 embed"，
+    // 给左上返回按钮和缩放覆盖率滞回用。它不切换 root starmap、不落盘、
+    // 不复制 Core 业务状态，纯粹是显示参考根。
+    //   每个元素 = { scenePathKey, starmapId, embedInstanceId,
+    //                sceneRect:{x,y,width,height}, targetPath }
+    //   focusIsRoot === focusStack.length === 0：左上返回退出星图工作区；
+    //   否则左上返回 pop 一层，相机回到新栈顶的 sceneRect（root 时不动）。
+    // ---------------------------------------------------------------------------
+    property var focusStack: []
+    readonly property bool focusIsRoot: focusStack.length === 0
+    // 栈顶的 scenePathKey（root 时为 "root"），供 Workspace/日志用。
+    readonly property string focusScenePathKey:
+        focusStack.length > 0 ? focusStack[focusStack.length - 1].scenePathKey : "root"
+    signal focusChanged()
+
+    // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
+    // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
+    // kind/id/targetPath）。scene 矩形由 hit.owner.itemSceneRect 给出（scene/world 坐标）。
+    function focusEmbed(hit) {
+        if (!hit || !hit.owner)
+            return
+        var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
+        if (!rect)
+            return
+        focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
+        var entry = {
+            scenePathKey: hit.scenePathKey,
+            starmapId: hit.starmapId,
+            embedInstanceId: hit.id,
+            sceneRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            targetPath: hit.targetPath
+        }
+        var next = focusStack.slice()
+        next.push(entry)
+        focusStack = next
+        focusChanged()
+    }
+
+    // 左上"返回父星图"：pop 最后一层。
+    // - 栈空：已是 root，返回 false（Workspace 据此走 backClicked 退出星图工作区）。
+    // - pop 后仍非空：相机聚焦到新栈顶的 sceneRect。
+    // - pop 后变空：相机不动，留在 root 当前视角（用户可以继续平移/缩放看整棵树）。
+    function focusParentScene() {
+        if (focusStack.length === 0)
+            return false
+        var next = focusStack.slice()
+        next.pop()
+        focusStack = next
+        if (focusStack.length > 0) {
+            var top = focusStack[focusStack.length - 1]
+            var r = top.sceneRect
+            focusOnSceneRect(r.x, r.y, r.width, r.height)
+        }
+        focusChanged()
+        return true
+    }
+
+    // 缩放覆盖率滞回：zoomAt 末尾调用。只做 demote（pop），不主动 push
+    // （push 只由双击 focusEmbed 触发）。覆盖率 = 栈顶 embed 在屏幕上的可见面积
+    // / 视口面积；圆心必须落在窗口 20%~80% 区间。退出阈值 0.55（与 Harmony
+    // resolveFocusScenePath 同口径），进入阈值 0.70 不在这里 push。
+    // 用 while 循环：一次缩小可能让多层同时掉出窗口。
+    function recomputeFocusFromCoverage() {
+        if (focusStack.length === 0)
+            return
+        var vpW = canvasArea.width
+        var vpH = canvasArea.height
+        if (!(vpW > 0) || !(vpH > 0))
+            return
+        var changed = false
+        while (focusStack.length > 0) {
+            var top = focusStack[focusStack.length - 1]
+            var r = top.sceneRect
+            var sx0 = worldToScreenX(r.x)
+            var sy0 = worldToScreenY(r.y)
+            var sx1 = worldToScreenX(r.x + r.width)
+            var sy1 = worldToScreenY(r.y + r.height)
+            var ix0 = Math.max(sx0, 0)
+            var iy0 = Math.max(sy0, 0)
+            var ix1 = Math.min(sx1, vpW)
+            var iy1 = Math.min(sy1, vpH)
+            var interW = Math.max(0, ix1 - ix0)
+            var interH = Math.max(0, iy1 - iy0)
+            var coverage = (interW * interH) / (vpW * vpH)
+            var cx = worldToScreenX(r.x + r.width / 2)
+            var cy = worldToScreenY(r.y + r.height / 2)
+            var centerInWindow = cx >= 0.2 * vpW && cx <= 0.8 * vpW
+                    && cy >= 0.2 * vpH && cy <= 0.8 * vpH
+            if (coverage >= 0.55 && centerInWindow)
+                break
+            var next = focusStack.slice()
+            next.pop()
+            focusStack = next
+            changed = true
+        }
+        if (changed)
+            focusChanged()
     }
 
     // 当前可见区域（scene 坐标矩形），逐层传给内容做子星图懒加载判定。
@@ -712,6 +817,29 @@ Item {
         }
 
         MenuItem {
+            id: nodeMenuItemHyperlink
+            text: qsTr("超链接")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: nodeMenuItemHyperlink.text
+                color: nodeMenuItemHyperlink.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: nodeMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #832 评论 6013799805 / #373：节点超链接菜单。
+                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 nodePath。
+                if (selectedNodeForMenu && menuOwnerContent)
+                    hyperlinkDialog.open("node", selectedNodeForMenu.id, menuOwnerContent)
+            }
+        }
+
+        MenuItem {
             id: nodeMenuItemDelete
             text: qsTr("删除")
             contentItem: AppText {
@@ -847,6 +975,29 @@ Item {
                                           menuOwnerContent.scenePathKey,
                                           item.x, item.y)
                 }
+            }
+        }
+
+        MenuItem {
+            id: embedMenuItemHyperlink
+            text: qsTr("超链接")
+            contentItem: AppText {
+                dt: canvasArea.dt
+                text: embedMenuItemHyperlink.text
+                color: embedMenuItemHyperlink.hovered ? _accent : _textPrimary
+                font.pointSize: dt.labelPt
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 12
+            }
+            background: Rectangle {
+                color: embedMenuItemHyperlink.hovered ? _accentSoft : "transparent"
+                radius: _radiusXs
+            }
+            onTriggered: {
+                // Issue #832 评论 6013799805 / #373：子星图入口超链接菜单。
+                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 embedPath。
+                if (selectedEmbedForMenu && menuOwnerContent)
+                    hyperlinkDialog.open("embed", selectedEmbedForMenu.instanceId, menuOwnerContent)
             }
         }
 
@@ -1112,6 +1263,209 @@ Item {
                 menuOwnerContent.createNodeWithName(name, contextMenuSceneX, contextMenuSceneY)
             else if (createMode === "starmap")
                 menuOwnerContent.createSubStarmapWithName(name, contextMenuSceneX, contextMenuSceneY)
+            close()
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：超链接弹窗（URI + 可选标题）。
+    // 打开时查现有：有则预填并提供"保存/删除"，无则空表单"添加"。
+    // source path 由 targetOwner（命中层 SceneContent）的 nodePath/embedPath 构造，
+    // 不退化成裸 nodeId。
+    // ---------------------------------------------------------------------------
+    Popup {
+        id: hyperlinkDialog
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: 360
+        height: 220
+        anchors.centerIn: Overlay.overlay
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
+            color: _card
+            border.color: _border
+            border.width: 1.5
+            radius: _dialogRadius
+        }
+
+        property string targetType: ""   // "node" / "embed"
+        property string targetId: ""
+        property var targetOwner: null   // 命中层 SceneContent
+        property var existingHl: null    // 已有超链接条目（null = 新增模式）
+        readonly property bool isEdit: existingHl !== null
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 20
+            spacing: 12
+
+            AppText {
+                dt: canvasArea.dt
+                text: hyperlinkDialog.isEdit ? qsTr("编辑超链接") : qsTr("添加超链接")
+                font.pointSize: dt.fontLgPt
+                font.bold: true
+                color: _textPrimary
+            }
+
+            AppText {
+                dt: canvasArea.dt
+                text: qsTr("URI")
+                color: _textSecondary
+                font.pointSize: dt.labelPt
+            }
+
+            TextField {
+                id: hyperlinkUriInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("https://...")
+                focus: hyperlinkDialog.visible
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkUriInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            AppText {
+                dt: canvasArea.dt
+                text: qsTr("标题（可选）")
+                color: _textSecondary
+                font.pointSize: dt.labelPt
+            }
+
+            TextField {
+                id: hyperlinkLabelInput
+                Layout.fillWidth: true
+                height: 36
+                color: _textPrimary
+                font.pointSize: dt.bodyPt
+                placeholderText: qsTr("显示文字")
+                text: ""
+
+                background: Rectangle {
+                    color: _surfaceContainer
+                    border.color: hyperlinkLabelInput.activeFocus ? _accent : _border
+                    border.width: 1.5
+                    radius: _radiusXs
+                }
+
+                Keys.onReturnPressed: hyperlinkDialog.confirm()
+                Keys.onEscapePressed: hyperlinkDialog.close()
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 12
+
+                Button {
+                    id: hlDeleteBtn
+                    text: qsTr("删除")
+                    visible: hyperlinkDialog.isEdit
+                    onClicked: hyperlinkDialog.removeExisting()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlDeleteBtn.text
+                        color: _danger
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlDeleteBtn.hovered ? _dangerContainer : "transparent"
+                        border.color: _border
+                        radius: _radiusXs
+                    }
+                }
+
+                Button {
+                    id: hlCancelBtn
+                    text: qsTr("取消")
+                    onClicked: hyperlinkDialog.close()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlCancelBtn.text
+                        color: _textSecondary
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlCancelBtn.hovered ? _surfaceContainer : "transparent"
+                        border.color: _border
+                        radius: _radiusXs
+                    }
+                }
+
+                Button {
+                    id: hlConfirmBtn
+                    text: hyperlinkDialog.isEdit ? qsTr("保存") : qsTr("添加")
+                    onClicked: hyperlinkDialog.confirm()
+                    contentItem: AppText {
+                        dt: canvasArea.dt
+                        text: hlConfirmBtn.text
+                        color: _onPrimary
+                        font.bold: true
+                        font.pointSize: dt.labelPt
+                    }
+                    background: Rectangle {
+                        color: hlConfirmBtn.hovered ? _accentHover : _accent
+                        radius: _radiusXs
+                    }
+                }
+            }
+        }
+
+        function open(kind, id, owner) {
+            targetType = kind
+            targetId = id
+            targetOwner = owner
+            var items = []
+            if (owner) {
+                items = kind === "node"
+                        ? owner.listHyperlinksForNode(id)
+                        : owner.listHyperlinksForEmbed(id)
+            }
+            existingHl = items && items.length > 0 ? items[0] : null
+            hyperlinkUriInput.text = existingHl ? (existingHl.target_uri || "") : ""
+            hyperlinkLabelInput.text = existingHl ? (existingHl.label || "") : ""
+            visible = true
+            hyperlinkUriInput.forceActiveFocus()
+        }
+
+        function close() {
+            visible = false
+        }
+
+        function confirm() {
+            var uri = hyperlinkUriInput.text.trim()
+            if (uri.length === 0 || !targetOwner)
+                return
+            var label = hyperlinkLabelInput.text.trim()
+            if (isEdit) {
+                // StarMapHyperlinkPatchInputDto: {label?, clear_label, target_uri?, source?}
+                var patch = { target_uri: uri, clear_label: label.length === 0 }
+                if (label.length > 0)
+                    patch.label = label
+                targetOwner.updateHyperlink(existingHl.hyperlink_id, patch)
+            } else {
+                if (targetType === "node")
+                    targetOwner.addHyperlinkForNode(targetId, uri, label)
+                else
+                    targetOwner.addHyperlinkForEmbed(targetId, uri, label)
+            }
+            close()
+        }
+
+        function removeExisting() {
+            if (!targetOwner || !existingHl)
+                return
+            targetOwner.deleteHyperlink(existingHl.hyperlink_id)
             close()
         }
     }

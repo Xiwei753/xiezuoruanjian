@@ -762,4 +762,70 @@ QtObject {
     }
 
     function invalidateEdgeRenders() { edgeRenders = []; }
+
+    // ---------------------------------------------------------------------------
+    // Issue #832 评论 6013799805 / #373：超链接菜单（add/update/delete/list）
+    // 后端 API 已齐全（starmap_backend.rs 第 207-219/820-855 行），这里只做
+    // normalizeBackendResult/ensureBackend 包装。sourcePath 由调用方传入完整
+    // nodePath()/embedPath()，不退化成裸 nodeId。
+    // ---------------------------------------------------------------------------
+    function addHyperlink(sourcePath, targetUri, label) {
+        if (!ensureBackend()) return null;
+        var body = { source: sourcePath, target_uri: targetUri, label: label || null };
+        var res = normalizeBackendResult(
+            starmapBackendRef.add_starmap_hyperlink(starmapId, JSON.stringify(body)),
+            qsTr("添加超链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return res.data;
+        }
+        setError(backendErrorText(res, qsTr("添加超链接失败")));
+        return null;
+    }
+
+    // patch 遵循 StarMapHyperlinkPatchInputDto：{label?, clear_label, target_uri?, source?}。
+    // 清空 label 由调用方传 clear_label:true（不在此处隐式构造）。
+    function updateHyperlink(hlId, patch) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.update_starmap_hyperlink(starmapId, hlId, JSON.stringify(patch)),
+            qsTr("更新超链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return true;
+        }
+        setError(backendErrorText(res, qsTr("更新超链接失败")));
+        return false;
+    }
+
+    function deleteHyperlink(hlId) {
+        if (!ensureBackend()) return false;
+        var res = normalizeBackendResult(
+            starmapBackendRef.delete_starmap_hyperlink(starmapId, hlId),
+            qsTr("删除超链接失败")
+        );
+        if (res.success) {
+            clearError();
+            return true;
+        }
+        setError(backendErrorText(res, qsTr("删除超链接失败")));
+        return false;
+    }
+
+    // 返回 StarMapHyperlinkDto 数组（list_starmap_hyperlinks 返回
+    // StarMapHyperlinkListWithDiagnosticsDto，取 items）。
+    function listHyperlinks() {
+        if (!ensureBackend()) return [];
+        var res = normalizeBackendResult(
+            starmapBackendRef.list_starmap_hyperlinks(starmapId),
+            qsTr("列出超链接失败")
+        );
+        if (res.success && res.data && res.data.items) {
+            clearError();
+            return res.data.items;
+        }
+        return [];
+    }
 }

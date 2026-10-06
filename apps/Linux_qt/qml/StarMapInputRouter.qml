@@ -168,15 +168,19 @@ Item {
 
     // 双击 embed 的"进入"= 相机聚焦推进该子星图：仍然是同一张全局画布，
     // 不开新页面，也不切换当前星图身份。
+    // Issue #832 评论 6013799805 / #373：交给 Canvas.focusEmbed 同时聚焦相机
+    // 并推进焦点链，左上返回按钮据此 demote。
     function focusEmbed(hit) {
-        var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
-        if (!rect)
+        if (!hit || !hit.owner)
             return
-        canvas.focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
-        hit.owner.logInteraction("embed_focus", "embed", hit.id, {
-            "sceneX": rect.x, "sceneY": rect.y,
-            "width": rect.width, "height": rect.height
-        })
+        canvas.focusEmbed(hit)
+        var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
+        if (rect) {
+            hit.owner.logInteraction("embed_focus", "embed", hit.id, {
+                "sceneX": rect.x, "sceneY": rect.y,
+                "width": rect.width, "height": rect.height
+            })
+        }
     }
 
     function handleRightClick(point) {
