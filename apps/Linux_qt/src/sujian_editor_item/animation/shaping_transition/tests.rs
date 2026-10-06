@@ -1480,6 +1480,10 @@ struct OneToManySecondStroke {
     o_opacity: f64,
     first_old_id: LineSnapshotId,
     first_new_id: LineSnapshotId,
+    /// 第 2 笔的 target —— 评论 29 的第 3 笔拿它当 base。
+    second_target_snapshot: EditorLayoutSnapshot,
+    /// 第 2 笔的 target 正文（`aZcd`）。
+    second_target_text: String,
 }
 
 /// 第 1 笔 `old O 0..4 -> A 0..1 + B 1..3`，40ms 时第 2 笔只改 A。
@@ -1561,20 +1565,22 @@ fn one_to_many_then_edit_first_child() -> OneToManySecondStroke {
 
     // 第 2 笔：只改 A —— 在 a 后插一个字，新 shaping 把 `aZ` 合成一块 0..2，
     // A 的 cluster 边界因此变了（`0..1 -> 0..2`），走 mixed/boundary 判据。
+    let second_target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        2,
+        0.0,
+        0,
+        vec![
+            cluster_sized(0, 2, 0.0, 20.0),
+            cluster_sized(2, 4, 20.0, 20.0),
+        ],
+    )]);
+    let second_target_text = String::from("aZcd");
     coord.begin_or_extend_edit_frontier(EditFrontierRequest {
         kind: EditorAnimationKind::Insert,
         base_snapshot: first_new,
         base_text: String::from("acd"),
-        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
-            2,
-            0.0,
-            0,
-            vec![
-                cluster_sized(0, 2, 0.0, 20.0),
-                cluster_sized(2, 4, 20.0, 20.0),
-            ],
-        )]),
-        target_text: String::from("aZcd"),
+        target_snapshot: second_target.clone(),
+        target_text: second_target_text.clone(),
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
         offset_map: OffsetMap::from_single_edit(3, (1, 1), 1),
@@ -1588,6 +1594,8 @@ fn one_to_many_then_edit_first_child() -> OneToManySecondStroke {
         o_opacity,
         first_old_id,
         first_new_id,
+        second_target_snapshot: second_target,
+        second_target_text,
     }
 }
 
@@ -1772,4 +1780,313 @@ fn one_shaping_visual_atom_cannot_exist_in_two_groups() {
     );
 
     assert_no_duplicate_visual_atom(shaping);
+}
+
+// ── 评论 29：claims 是 revision ownership，不能用渲染 atom 反推 ────────────────
+
+/// 三笔稳定序列：
+///
+/// 1. `old O 0..4 -> new A 0..1 + B 1..3`；
+/// 2. 只改 A，得到 `C 0..2 + B 2..4`，历史 old O 仍在 rest 组里淡出；
+/// 3. 行尾再插一个与 shaping 无关的普通字符。
+///
+/// 第 3 笔的 `owned_old_clusters()` 必须是**当前 base 的** `C 0..2` 与
+/// `B 2..4`（上一份 transition 在当前 base 里的 new side）。旧实现遍历
+/// `old_atoms`，给出的是停在第一笔 revision 的 `A 0..1` 与历史 `O 0..4` ——
+/// 那个 stale `0..4` 会把当前 base 里同坐标、但与历史 O 毫无关系的新字
+/// 一起排掉。
+#[test]
+fn retargeted_historical_old_visual_does_not_claim_current_base_coordinates() {
+    let stroke = one_to_many_then_edit_first_child();
+    let mut coord = stroke.coord;
+    let third_at = instant_at(Instant::now(), HALF_MS);
+
+    // 第 3 笔：行尾插一个与 shaping 无关的普通字符（不动已有 cluster 边界）。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: stroke.second_target_snapshot.clone(),
+        base_text: stroke.second_target_text.clone(),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            3,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 4, 20.0, 20.0),
+                cluster_sized(4, 5, 40.0, 10.0),
+            ],
+        )]),
+        target_text: String::from("aZcdE"),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(4, 5)],
+        offset_map: OffsetMap::from_single_edit(4, (4, 4), 1),
+        conceal_direction: ConcealDirection::Forward,
+        now: third_at,
+    });
+
+    let shaping = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("第 3 笔后仍由同一份 transition retarget");
+
+    let mut owned_old = shaping.owned_old_clusters();
+    owned_old.sort_unstable();
+    assert_eq!(
+        owned_old,
+        vec![(0, 2), (2, 4)],
+        "第 3 笔的 old ownership 必须是当前 base 的 C 0..2 与 B 2..4"
+    );
+    assert!(
+        !owned_old.contains(&(0, 4)),
+        "历史 old O 的 source range 0..4 不属于当前 revision 的 ownership"
+    );
+
+    // 对照：直接遍历渲染 atoms，拿到的是停在更早 revision 的坐标。
+    let mut from_atoms: Vec<(usize, usize)> = shaping
+        .groups
+        .iter()
+        .flat_map(|group| group.old_atoms.iter())
+        .map(|atom| atom.cluster)
+        .collect();
+    from_atoms.sort_unstable();
+    assert_eq!(
+        from_atoms,
+        vec![(0, 1), (0, 4)],
+        "前提：old_atoms 的 cluster 停在第一笔 revision（A 0..1 与历史 O 0..4）"
+    );
+
+    // coordinator 层（Insert 路径）：`shaping_new_owned` 必须是本次 target 里
+    // 归 shaping 的 cluster（纯插入出来的 `(4,5)` 不算）。
+    let frontier = coord
+        .active_edit_frontier
+        .as_ref()
+        .expect("第 3 笔后前沿仍在");
+    let mut owned_new = frontier.shaping_new_owned.clone();
+    owned_new.sort_unstable();
+    assert_eq!(
+        owned_new,
+        vec![(0, 2), (2, 4)],
+        "frontier.shaping_new_owned 必须是本次 target 里归 shaping 的 C 0..2 + B 2..4"
+    );
+
+    // 第 4 笔：把刚插的 `E` 删回去 —— 仍是与 shaping 无关的普通编辑，但它走
+    // Delete 路径，`shaping_old_owned` 才会真正落到 frontier 上被消费。
+    let fourth_base = coord
+        .active_edit_frontier_target_snapshot()
+        .expect("第 3 笔后有 target snapshot")
+        .clone();
+    let fourth_base_clusters: Vec<(usize, usize)> = fourth_base.line_snapshots[0]
+        .clusters
+        .iter()
+        .map(|cluster| (cluster.byte_start, cluster.byte_end))
+        .collect();
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: fourth_base,
+        base_text: String::from("aZcdE"),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            4,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 4, 20.0, 20.0),
+            ],
+        )]),
+        target_text: String::from("aZcd"),
+        deleted_ranges: vec![(4, 5)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(5, (4, 5), 0),
+        conceal_direction: ConcealDirection::Forward,
+        now: instant_at(Instant::now(), HALF_MS),
+    });
+
+    // coordinator 层：`shaping_old_owned` 必须等于**本次 base snapshot** 的
+    // cluster 集合，绝不能出现停在更早 revision 的 range。
+    let frontier = coord
+        .active_edit_frontier
+        .as_ref()
+        .expect("第 4 笔后前沿仍在");
+    let mut base_clusters = fourth_base_clusters;
+    base_clusters.sort_unstable();
+    let mut owned = frontier.shaping_old_owned.clone();
+    owned.sort_unstable();
+    assert_eq!(
+        owned,
+        vec![(0, 2), (2, 4)],
+        "frontier.shaping_old_owned 必须是本次 base 里归 shaping 的 C 0..2 + B 2..4"
+    );
+    assert!(
+        owned.iter().all(|range| base_clusters.contains(range)),
+        "frontier.shaping_old_owned 的每一段都必须真的是本次 base snapshot 里的 \
+         cluster，实际 claims = {owned:?}，base = {base_clusters:?}"
+    );
+    assert!(
+        !owned.contains(&(0, 4)),
+        "frontier.shaping_old_owned 不得出现更早 revision 的 range"
+    );
+}
+
+/// 评论 29 的**实际后果**：stale 的历史 old range 会把当前 base 里同坐标、
+/// 但与它毫无关系的 unchanged cluster 排出 Reflow，那块字就会瞬移。
+///
+/// 序列（byte 范围 / x）：
+///
+/// 1. `O 0..4`(x0,w40) + `X 4..6`(x40,w20) -> `A 0..1`(x0) + `B 1..2`(x10) +
+///    `X' 2..4`(x40，几何没变，因此不进 Reflow)；
+/// 2. 只改 A -> `C 0..2`(x0) + `B 2..3`(x20) + `X'' 3..5`(**x50，移动了**)；
+/// 3. 行尾插一个字，同时再把 `X''` 推到 x60。
+///
+/// `X` 与历史 `O` 没有视觉关系（它是独立 component，从不进 shaping 组）。
+/// 但它在当前 base 的坐标 `3..5` 落在历史 O 的 stale `0..4` 里。
+/// 第 3 笔 `X''` 必须仍在 Reflow 中。
+#[test]
+fn historical_old_range_does_not_exclude_unrelated_unchanged_cluster_from_reflow() {
+    let t0 = Instant::now();
+    let t1 = instant_at(t0, HALF_MS / 2);
+    let t2 = instant_at(t1, HALF_MS / 2);
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord.set_typing_animation_duration_ms(DURATION_MS as u32);
+
+    // 第 1 笔：`abcdef` 删掉 `bc` -> `adef`。`X` 位置不动。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: snapshot(vec![line(vec![
+            cluster_sized(0, 4, 0.0, 40.0),
+            cluster_sized(4, 6, 40.0, 20.0),
+        ])]),
+        base_text: String::from("abcdef"),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 1, 0.0, 10.0),
+                cluster_sized(1, 2, 10.0, 10.0),
+                cluster_sized(2, 4, 40.0, 20.0),
+            ],
+        )]),
+        target_text: String::from("adef"),
+        deleted_ranges: vec![(1, 3)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(6, (1, 3), 0),
+        conceal_direction: ConcealDirection::Forward,
+        now: t0,
+    });
+    assert!(
+        coord.active_reflow_new_ranges().is_empty(),
+        "前提：X 几何没变，第 1 笔不产生 Reflow"
+    );
+
+    // 第 2 笔：只改 A —— `a` 后插 `Z`，`X'` 因此右移。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            1,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 1, 0.0, 10.0),
+                cluster_sized(1, 2, 10.0, 10.0),
+                cluster_sized(2, 4, 40.0, 20.0),
+            ],
+        )]),
+        base_text: String::from("adef"),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            2,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 3, 20.0, 10.0),
+                cluster_sized(3, 5, 50.0, 20.0),
+            ],
+        )]),
+        target_text: String::from("aZdef"),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(4, (1, 1), 1),
+        conceal_direction: ConcealDirection::Forward,
+        now: t1,
+    });
+    {
+        let shaping = coord
+            .active_shaping_transition
+            .as_ref()
+            .expect("A 的 cluster 边界变了，必须进入交接层");
+        let mut owned_old = shaping.owned_old_clusters();
+        owned_old.sort_unstable();
+        assert_eq!(
+            owned_old,
+            vec![(0, 1), (1, 2)],
+            "第 2 笔的 old ownership = 当前 base 的 A 0..1 + B 1..2"
+        );
+        let mut from_atoms: Vec<(usize, usize)> = shaping
+            .groups
+            .iter()
+            .flat_map(|group| group.old_atoms.iter())
+            .map(|atom| atom.cluster)
+            .collect();
+        from_atoms.sort_unstable();
+        assert!(
+            from_atoms.contains(&(0, 4)),
+            "前提：历史 old O 的 0..4 仍在 old_atoms 里"
+        );
+    }
+
+    // 第 3 笔：行尾插 `g`，同时把 `X''` 再推到 x60。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            2,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 3, 20.0, 10.0),
+                cluster_sized(3, 5, 50.0, 20.0),
+            ],
+        )]),
+        base_text: String::from("aZdef"),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            3,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 3, 20.0, 10.0),
+                cluster_sized(3, 5, 60.0, 20.0),
+                cluster_sized(5, 6, 80.0, 10.0),
+            ],
+        )]),
+        target_text: String::from("aZdefg"),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(5, 6)],
+        offset_map: OffsetMap::from_single_edit(5, (5, 5), 1),
+        conceal_direction: ConcealDirection::Forward,
+        now: t2,
+    });
+
+    let shaping = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("第 3 笔后仍由同一份 transition retarget");
+    let mut owned_old = shaping.owned_old_clusters();
+    owned_old.sort_unstable();
+    assert_eq!(
+        owned_old,
+        vec![(0, 2), (2, 3)],
+        "第 3 笔的 old ownership = 当前 base 的 C 0..2 + B 2..3"
+    );
+    assert!(
+        !owned_old.contains(&(0, 4)),
+        "历史 old O 的 0..4 不得进入 current-base ownership"
+    );
+
+    let reflow = coord.active_reflow_new_ranges();
+    assert!(
+        reflow.contains(&(3, 5)),
+        "与历史 old O 毫无关系的 unchanged `X'' 3..5` 必须留在 Reflow 里，\
+         实际 reflow = {reflow:?}"
+    );
 }

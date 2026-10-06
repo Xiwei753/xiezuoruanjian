@@ -139,6 +139,36 @@
 //! 历史 old visual 是 previous shaping transition 的视觉债，不属于这一笔
 //! `base_snapshot` 的 A cluster，必须完全交给 [`split_previous_group_by_absorbed`] /
 //! [`retain_visible_old_atoms`] 决定继续淡出还是结束。
+//!
+//! ## 评论 29 补上的不变量
+//!
+//! ### atom 是渲染资源，claims 是 revision ownership，两者不能互推
+//!
+//! [`VisualClusterAtom`] 同时带着 `cluster`（它真正的 source snapshot 上的完整
+//! cluster range）、`snapshot_id`、`visual_cluster_range`、`source_rect`，这些回答
+//! 「这份像素从哪里来」。第一笔时 `cluster` 与当前 `base_snapshot` 恰好同坐标，
+//! 于是 [`ShapingTransitionState::owned_old_clusters`] 顺手从渲染 atoms 收集
+//! —— 连续 retarget 之后就分叉了。
+//!
+//! 三笔反例：`O 0..4 -> A 0..1 + B 1..3`，第二笔只改 A 得到 `C 0..2 + B 2..4`，
+//! 历史 old O 仍在 previous rest group 里淡。第三笔做一次与 shaping 无关的普通
+//! Insert 时，当前 `base_snapshot` 归 shaping 的应该是 `0..2 / 2..4`；而从
+//! `old_atoms` 反推会得到 `0..1`（更早 old A）与 `0..4`（更早 old O）——两笔
+//! 以前的 source 坐标。
+//!
+//! stale `0..4` 会顺着两条链污染运行时：`begin_or_extend_reflow()` 把它并进
+//! `excluded_old`，当前 base 里同坐标的新字被禁止 Reflow，直接瞬移；同一份
+//! `shaping_old_owned` 还要传给 `extend_delete` / `begin_delete` / `extend_replace`
+//! / `begin_replace`，普通删除落进 stale range 就被误判成「已归 ShapingTransition」，
+//! 该吞的字不进 Conceal。
+//!
+//! 所以 state 显式存两组**当前 revision** 的 owner ranges：
+//! [`ShapingTransitionState::old_owned_in_base`] 与
+//! [`ShapingTransitionState::new_owned_in_target`]，在 [`build_or_retarget`] 里
+//! 从正确坐标来源填：本笔新 component 的 claims 取自两个 `ClusterIndex`；
+//! previous rest group 的 base claim 取自 **kept 的 previous new atom**
+//! （`previous.target == request.base`），new claim 取自 retarget 之后的
+//! new atom。历史 old atom 只是视觉淡出资源，**不产生任何 current-base claim**。
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -311,6 +341,23 @@ pub(crate) struct ShapingTransitionState {
     pub duration_ms: u64,
     /// 旧侧 cluster 真正引用的行图（画旧 cluster 必须有这张图）。
     pub old_sources: Vec<ConcealSourceLine>,
+    /// Issue #826 评论 29：这一笔 **`request.base_snapshot` 坐标系**里归
+    /// shaping 占用的 old cluster。
+    ///
+    /// 它和 `groups[*].old_atoms[*].cluster` **不是一回事**，两层不能混：
+    ///
+    /// - atom 的 `snapshot_id` / `visual_cluster_range` / `source_rect` 回答
+    ///   「这份像素从哪里来」——历史 old atom 的 `cluster` 因此可能停在两笔以前
+    ///   的 source 坐标（例如整块 `0..4`）；
+    /// - 这里的 claim 回答「当前 revision 里哪些 old cluster 归 shaping」——
+    ///   必须全部落在本笔 `base_snapshot` 上。
+    ///
+    /// 用前者反推后者会把陈旧坐标喂给 Reflow exclusion 和普通 Conceal
+    /// exclusion：stale `0..4` 会连带把当前 base 里同坐标的新字一起排掉。
+    pub old_owned_in_base: Vec<(usize, usize)>,
+    /// Issue #826 评论 29：这一笔 **`request.target_snapshot` 坐标系**里归
+    /// shaping 占用的 new cluster。
+    pub new_owned_in_target: Vec<(usize, usize)>,
     /// 本 state 的 target 坐标系对应的正文纯文本。
     ///
     /// `previous.target_text() == request.base_text` 表示下一笔仍在同一条编辑
@@ -347,6 +394,10 @@ impl ShapingTransitionState {
         let mut groups: Vec<ShapingTransitionGroup> = Vec::new();
         // 本笔接管掉的旧坐标 cluster —— 上一份的 new 侧若落进这里就被吸收了。
         let mut absorbed: Vec<(usize, usize)> = Vec::new();
+        // Issue #826 评论 29：**当前 revision** 的 ownership，与渲染 atoms 分开存。
+        // 全部在构建这一刻从正确坐标来源填好，之后绝不再从 `groups` 反推。
+        let mut old_owned_in_base: Vec<(usize, usize)> = Vec::new();
+        let mut new_owned_in_target: Vec<(usize, usize)> = Vec::new();
 
         for component in &components {
             if component.old_nodes.is_empty() || component.new_nodes.is_empty() {
@@ -373,10 +424,22 @@ impl ShapingTransitionState {
                 &mut consumed,
             );
             let Some(group) = group else { continue };
+            // 本笔新 component 的 claims 直接取自两个 `ClusterIndex`：
+            // old 侧天然属于 `request.base_snapshot`，new 侧天然属于
+            // `request.target_snapshot` —— 这是唯一不需要换算的坐标来源。
             for node in &component.old_nodes {
                 let range = old_side.cluster_range(*node);
                 if !absorbed.contains(&range) {
                     absorbed.push(range);
+                }
+                if !old_owned_in_base.contains(&range) {
+                    old_owned_in_base.push(range);
+                }
+            }
+            for node in &component.new_nodes {
+                let range = new_side.cluster_range(*node);
+                if !new_owned_in_target.contains(&range) {
+                    new_owned_in_target.push(range);
                 }
             }
             groups.push(group);
@@ -389,16 +452,30 @@ impl ShapingTransitionState {
         // 被新 group 接住，但没被碰的兄弟 atom 与仍在淡出的 old atom 一起消失。
         if let Some(previous) = previous {
             for group in &previous.groups {
-                if let Some(rest) = split_previous_group_by_absorbed(
+                let Some((rest, old_claims_in_base)) = split_previous_group_by_absorbed(
                     group,
                     &absorbed,
                     new_snapshot,
                     old_to_new,
                     current_visuals,
                     &mut consumed,
-                ) {
-                    groups.push(rest);
+                ) else {
+                    continue;
+                };
+                // Issue #826 评论 29：previous rest group 的 base 侧 claim 来自
+                // **previous 的 new atom**（`previous.target == request.base`），
+                // 不是它的 old atom。后者是历史淡出资源，坐标停在更早 revision。
+                for range in old_claims_in_base {
+                    if !old_owned_in_base.contains(&range) {
+                        old_owned_in_base.push(range);
+                    }
                 }
+                for atom in &rest.new_atoms {
+                    if !new_owned_in_target.contains(&atom.cluster) {
+                        new_owned_in_target.push(atom.cluster);
+                    }
+                }
+                groups.push(rest);
             }
         }
 
@@ -441,6 +518,8 @@ impl ShapingTransitionState {
             started_at: Some(now),
             duration_ms: duration_ms.max(1),
             old_sources,
+            old_owned_in_base,
+            new_owned_in_target,
             target_text,
         }
     }
@@ -544,36 +623,28 @@ impl ShapingTransitionState {
             .collect()
     }
 
-    /// 被本层整块占用的**旧坐标** cluster 范围。
+    /// 被本层整块占用的、**属于本次 `base_snapshot` 坐标系**的 old cluster。
     ///
     /// `EditFrontier` 的吞字侧必须把它们排除：普通 Conceal 绝不能声称
     /// `owner = 2..3` 却拿整块 old `fi` 的 glyph 来吞。
+    ///
+    /// Issue #826 评论 29：**不再从渲染 atoms 反推**。历史 old atom 的
+    /// `cluster` 停在它自己那份 source snapshot 上，连续 retarget 之后与当前
+    /// base 已经不是同一套坐标 —— 直接返回会让 stale `0..4` 把当前 base 里
+    /// 同坐标的新字一起排掉。这里只回填好的 `old_owned_in_base`。
     pub(crate) fn owned_old_clusters(&self) -> Vec<(usize, usize)> {
-        let mut out: Vec<(usize, usize)> = Vec::new();
-        for group in &self.groups {
-            for atom in &group.old_atoms {
-                if !out.contains(&atom.cluster) {
-                    out.push(atom.cluster);
-                }
-            }
-        }
-        out
+        self.old_owned_in_base.clone()
     }
 
-    /// 被本层整块占用的**新坐标** cluster 范围。
+    /// 被本层整块占用的、**属于本次 `target_snapshot` 坐标系**的 new cluster。
     ///
     /// `EditFrontier` 的吐字侧（scalar region、carry、settled）必须把它们排除：
     /// 否则同一块视觉 cluster 会同时被 carry 与 scalar Reveal 控制。
+    ///
+    /// Issue #826 评论 29：同 [`owned_old_clusters`]，只回 `new_owned_in_target`，
+    /// 不遍历渲染 atoms 猜坐标。
     pub(crate) fn owned_new_clusters(&self) -> Vec<(usize, usize)> {
-        let mut out: Vec<(usize, usize)> = Vec::new();
-        for group in &self.groups {
-            for atom in &group.new_atoms {
-                if !out.contains(&atom.cluster) {
-                    out.push(atom.cluster);
-                }
-            }
-        }
-        out
+        self.new_owned_in_target.clone()
     }
 
     pub(crate) fn target_text(&self) -> &str {
@@ -810,6 +881,11 @@ fn handoff_keys_in_target(
 ///
 /// 拆法：新 group 只消费被接管的 child 对应的视觉事实；剩下的 new atom 连同
 /// 全部仍可见的 old atom 继续挂在 state 里淡。
+///
+/// 返回 `(拆出来的 group, base 坐标系的 old claims)`。claims 取自 **kept 的
+/// previous new atom 的 `cluster`**：`previous.target == request.base`，所以
+/// 它们正好就是这一笔 `base_snapshot` 里的 ownership。历史 old atom 不产生
+/// claim（Issue #826 评论 29）。
 fn split_previous_group_by_absorbed(
     group: &ShapingTransitionGroup,
     absorbed: &[(usize, usize)],
@@ -817,7 +893,7 @@ fn split_previous_group_by_absorbed(
     prev_target_to_new: &OffsetMap,
     current_visuals: &[CurrentVisualCluster],
     consumed: &mut HashSet<usize>,
-) -> Option<ShapingTransitionGroup> {
+) -> Option<(ShapingTransitionGroup, Vec<(usize, usize)>)> {
     let kept_new: Vec<&VisualClusterAtom> = group
         .new_atoms
         .iter()
@@ -827,6 +903,11 @@ fn split_previous_group_by_absorbed(
                 .any(|range| ranges_overlap(atom.cluster, *range))
         })
         .collect();
+    // Issue #826 评论 29：必须在 retarget 之前留下 base 系 claims。retarget 之后
+    // 这些 atom 的 `cluster` 已经换到**最新 target** 坐标，再拿来当 base claim
+    // 就又是一次坐标系混用。
+    let old_claims_in_base: Vec<(usize, usize)> =
+        kept_new.iter().map(|atom| atom.cluster).collect();
     // 顺序必须与 `current_visuals()` 的产出顺序一致：它先列 old 原子再列 new
     // 原子。1:N 拆分时 old 与它的第一个 survivor、以及首块 new atom 可能共用
     // 同一个字节身份（old `0..4` 的 survivor `0..1` 与 new `0..1`），先处理
@@ -845,10 +926,13 @@ fn split_previous_group_by_absorbed(
     if new_atoms.is_empty() && old_atoms.is_empty() {
         return None;
     }
-    Some(ShapingTransitionGroup {
-        old_atoms,
-        new_atoms,
-    })
+    Some((
+        ShapingTransitionGroup {
+            old_atoms,
+            new_atoms,
+        },
+        old_claims_in_base,
+    ))
 }
 
 /// 把一份 previous group 里**没被本笔接管**的 new atom 重新映到最新
