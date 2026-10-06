@@ -83,6 +83,34 @@
 //! 1:N 的 group 里第二笔只改其中一个 child 时，旧实现 `any absorbed => skip
 //! whole group`，被接管的 child 之外，兄弟 new atom 与仍在淡出的 old atom 一起
 //! 凭空消失。现在按 atom 拆成「本笔接管的」与「继续淡的」两份。
+//!
+//! ## 评论 27 补上的两条不变量
+//!
+//! ### 1. handoff 必须先认视觉身份，再认逻辑身份
+//!
+//! 1:N 的 `old O 0..4 -> new A 0..1 + B 1..3` 进行中，old O 的
+//! `primary_handoff_key()` 就是第一个 survivor `A_range`，new A 的
+//! `logical_range` 也是 `A_range` —— 同一帧里两条 current_visual 的
+//! **逻辑身份完全相同，视觉资源却完全不同**（两张行纹理、两种 revision、
+//! 两个 opacity、两份 source slice、两个位置）。
+//!
+//! 下一笔改 A 时 old 侧若只按 `logical_range` 匹配，而 `current_visuals` 又是
+//! old atoms 在前，就会从「更早的 O」接手，而不是从屏幕上那份「正在淡入的 A」
+//! 接手。所以 [`CurrentVisualCluster`] / [`VisualClusterAtom`] 都多带一份
+//! [`CurrentVisualCluster::visual_cluster_range`]，与 `snapshot_id` 合成视觉身份；
+//! [`build_group`] 的 old 侧先按这笔 `base_snapshot` 里那一整块 cluster 的
+//! 视觉身份精确抓，抓不到才退回逻辑身份。
+//!
+//! 逻辑身份回答「是不是同一段字」，视觉身份回答「这一笔的 base old cluster
+//! 该接哪一份当前像素」，两层不能合成一个 `(start, end)`。
+//!
+//! ### 2. 区间查询必须是 O(log N + k)
+//!
+//! [`ClusterIndex::nodes_overlapping_interval`] 旧实现每次都从 `sorted` 的开头
+//! 重扫到上界 —— N 个 old 对 N 个 new 时总量 `1+2+…+N = O(N²)`，等于把
+//! 「按正文 byte 数量扫」换成了「按 snapshot cluster 数平方扫」。
+//! 现在 `sorted` 同时存 `byte_start` / `byte_end`（cluster 互不重叠，两者都升序），
+//! 两端各二分一次，只遍历真正相交的那批。
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -107,8 +135,27 @@ pub(crate) struct CurrentVisualCluster {
     ///
     /// 下一笔编辑的 `base_snapshot` 就是这份 target，所以这个 range 可以直接
     /// 拿去和下一笔派生出来的 atom 对齐。
+    ///
+    /// **它不能单独当 handoff 身份用** —— 见 [`CurrentVisualCluster::visual_cluster_range`]。
     pub logical_range: (usize, usize),
-    /// 贴图来源行纹理。
+    /// 视觉身份：这些像素取自哪张行纹理、那张纹理里的哪一块 cluster。
+    ///
+    /// Issue #826 评论 27 阻塞 1：`logical_range` 只回答「是不是同一段字」，
+    /// 回答不了「这一帧的像素是哪一份资源画的」。
+    ///
+    /// 1:N 的 `old O 0..4 -> new A 0..1 + B 1..3` 进行中，old O 的
+    /// `handoff_keys` 是 `[A_range, B_range]`，`visual_from()` 取 primary 就是
+    /// `A_range` —— 于是同一帧同时存在两条 `logical_range = A_range`：
+    ///
+    /// - 历史 old O 的像素（资源是 `first_old` 那张行纹理的 `0..4`）；
+    /// - 当前 new A 的像素（资源是 `first_new` 那张行纹理的 `0..1`）。
+    ///
+    /// 下一笔改 A 时，`build_group()` 的 old 侧必须先按
+    /// `(base_snapshot 的 line.id, base cluster)` 精确匹配到**后者**；历史
+    /// old-side visual 只能作为 fallback。两层身份合成一个 `(start,end)`
+    /// 就会抓错纹理 / 错 opacity / 错 source slice / 错位置。
+    pub visual_cluster_range: (usize, usize),
+    /// 贴图来源行纹理 —— 与 [`visual_cluster_range`] 一起构成视觉身份。
     pub snapshot_id: LineSnapshotId,
     /// 那张行纹理里的源矩形 —— **这一帧实际可见的精确 slice**。
     ///
@@ -166,6 +213,12 @@ pub(crate) struct VisualClusterAtom {
     /// 分别 shaping 成两块 new cluster。只存第一段时，下一笔改后面那一段会让
     /// 这份 old atom 在 `current_visuals` 里找不到归属而凭空消失。
     pub handoff_keys: Vec<(usize, usize)>,
+    /// 视觉身份：`snapshot_id` 那张行纹理里的哪一块 cluster 真正画出了这个原子。
+    ///
+    /// Issue #826 评论 27 阻塞 1：老侧接过 handoff 时，像素来自更早的
+    /// revision，`cluster`（base 坐标系）却已经不是那份纹理里的 range 了。
+    /// 两者必须分开存，[`visual_from`] 才能把「哪张纹理 + 哪块」原样交出去。
+    pub visual_cluster_range: (usize, usize),
     /// 贴图来源行纹理。
     pub snapshot_id: LineSnapshotId,
     /// 那张行纹理里的源矩形（覆盖整个 cluster，绝不按 byte 比例裁）。
@@ -595,6 +648,9 @@ fn lerp(from: f64, to: f64, t: f64) -> f64 {
 fn visual_from(atom: &VisualClusterAtom, side: &ShapingTransitionSide) -> CurrentVisualCluster {
     CurrentVisualCluster {
         logical_range: atom.primary_handoff_key(),
+        // 评论 27 阻塞 1：视觉身份必须跟着**像素实际用的那张纹理**走，
+        // 不能拿 `cluster`（base 坐标系的字符串范围）冒充。
+        visual_cluster_range: atom.visual_cluster_range,
         snapshot_id: side.snapshot_id,
         source_rect: side.source_rect.clone(),
         dest_rect: side.rect.clone(),
@@ -629,7 +685,11 @@ fn build_group(
         let (line, cluster) = old_side.cluster(*node);
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        let handoff = take_handoff_for_keys(current_visuals, consumed, &[cluster_range]);
+        // 评论 27 阻塞 1：这一笔 base_snapshot 里「这一整块 cluster」的视觉身份
+        // 先行。同一逻辑 range 上同时挂着历史 old-side 像素与当前 new-side
+        // 像素时，逻辑身份分不出谁是谁，按 old-在前的顺序就会抓错纹理。
+        let handoff = take_visual_handoff(current_visuals, consumed, (line.id, cluster_range))
+            .or_else(|| take_handoff_for_keys(current_visuals, consumed, &[cluster_range]));
         // 这一块 old cluster 在最新正文里还剩下哪几段（target 坐标系）——
         // 下一笔要靠它对齐，因为那时 base 坐标系已经变成这份 target。
         //
@@ -675,6 +735,8 @@ fn build_group(
         old_atoms.push(VisualClusterAtom {
             cluster: visual.logical_range,
             handoff_keys: vec![visual.logical_range],
+            // 评论 27 阻塞 1：这一份像素实际用的纹理与 cluster range。
+            visual_cluster_range: visual.visual_cluster_range,
             snapshot_id: visual.snapshot_id,
             source_rect: visual.source_rect.clone(),
             rect: visual.dest_rect.clone(),
@@ -813,7 +875,12 @@ fn retarget_new_atoms(
         };
         let rect = line.source_rect_to_document_rect(&cluster.source_rect);
         let cluster_range = (cluster.byte_start, cluster.byte_end);
-        let handoff = take_exact_handoff(current_visuals, consumed, atom.primary_handoff_key());
+        let handoff = take_visual_handoff(
+            current_visuals,
+            consumed,
+            (atom.snapshot_id, atom.visual_cluster_range),
+        )
+        .or_else(|| take_exact_handoff(current_visuals, consumed, atom.primary_handoff_key()));
         new_atoms.push(atom_from_cluster(
             cluster_range,
             vec![cluster_range],
@@ -848,8 +915,12 @@ fn retain_visible_old_atoms(
         // 评论 26 阻塞 3：按**全部** `handoff_keys` 匹配。1:N 的 old atom
         // 可能有多段 survivor，只取第一段时，下一笔只改后面那一段会让这份
         // old atom 在 `current_visuals` 里找不到归属而消失。
-        let Some(handoff) = take_handoff_for_keys(current_visuals, consumed, &atom.handoff_keys)
-        else {
+        let Some(handoff) = take_visual_handoff(
+            current_visuals,
+            consumed,
+            (atom.snapshot_id, atom.visual_cluster_range),
+        )
+        .or_else(|| take_handoff_for_keys(current_visuals, consumed, &atom.handoff_keys)) else {
             continue;
         };
         if handoff.opacity <= EPS {
@@ -861,6 +932,9 @@ fn retain_visible_old_atoms(
             cluster: atom.cluster,
             handoff_keys: atom.handoff_keys.clone(),
             snapshot_id: handoff.snapshot_id,
+            // 评论 27 阻塞 1：retarget 后这一层继续用**接手来的那份**视觉
+            // 身份，否则下下笔会拿 base 系的 `cluster` 去当视觉 key。
+            visual_cluster_range: handoff.visual_cluster_range,
             source_rect: handoff.source_rect,
             rect: atom.rect.clone(),
             start_rect: handoff.dest_rect,
@@ -881,40 +955,49 @@ fn atom_from_cluster(
     handoff: Option<CurrentVisualCluster>,
     is_new_side: bool,
 ) -> VisualClusterAtom {
-    let (start_rect, start_opacity, start_visible, snapshot_id, source_rect) = match &handoff {
-        // old 侧：handoff 就是这一帧实际可见的 exact slice（见
-        // [`CurrentVisualCluster::source_rect`]），直接沿用，**不再裁一次**。
-        // handoff 可能来自更早的 revision，那时这张行图才是唯一来源。
-        //
-        // new 侧：handoff 的 `source_rect` 是上一份字形的裁剪片段，拿来画
-        // 新 cluster 就是半个连字 —— 必须用它自己的完整新资源。
-        //
-        // 评论 26 阻塞 2：这里不再有 `visible / rect.w` 的第二次裁剪。
-        Some(h) if !is_new_side => (
-            h.dest_rect.clone(),
-            h.opacity,
-            h.visible_clip,
-            h.snapshot_id,
-            h.source_rect.clone(),
-        ),
-        Some(h) => (
-            h.dest_rect.clone(),
-            h.opacity,
-            h.visible_clip,
-            line.id,
-            cluster_snapshot.source_rect.clone(),
-        ),
-        None => (
-            rect.clone(),
-            if is_new_side { 0.0 } else { 1.0 },
-            rect.w,
-            line.id,
-            cluster_snapshot.source_rect.clone(),
-        ),
-    };
+    let (start_rect, start_opacity, start_visible, snapshot_id, source_rect, visual_cluster_range) =
+        match &handoff {
+            // old 侧：handoff 就是这一帧实际可见的 exact slice（见
+            // [`CurrentVisualCluster::source_rect`]），直接沿用，**不再裁一次**。
+            // handoff 可能来自更早的 revision，那时这张行图才是唯一来源。
+            //
+            // new 侧：handoff 的 `source_rect` 是上一份字形的裁剪片段，拿来画
+            // 新 cluster 就是半个连字 —— 必须用它自己的完整新资源。
+            //
+            // 评论 26 阻塞 2：这里不再有 `visible / rect.w` 的第二次裁剪。
+            //
+            // 评论 27 阻塞 1：视觉身份跟着**真正用来贴图的那张纹理**走。old 侧
+            // 接过 handoff 后像素来自更早的 revision，`cluster` 已经不是那份纹理
+            // 里的 range；两侧只有没接手 handoff 时才用自己的 `cluster`。
+            Some(h) if !is_new_side => (
+                h.dest_rect.clone(),
+                h.opacity,
+                h.visible_clip,
+                h.snapshot_id,
+                h.source_rect.clone(),
+                h.visual_cluster_range,
+            ),
+            Some(h) => (
+                h.dest_rect.clone(),
+                h.opacity,
+                h.visible_clip,
+                line.id,
+                cluster_snapshot.source_rect.clone(),
+                cluster,
+            ),
+            None => (
+                rect.clone(),
+                if is_new_side { 0.0 } else { 1.0 },
+                rect.w,
+                line.id,
+                cluster_snapshot.source_rect.clone(),
+                cluster,
+            ),
+        };
     VisualClusterAtom {
         cluster,
         handoff_keys,
+        visual_cluster_range,
         snapshot_id,
         source_rect,
         rect,
@@ -922,6 +1005,32 @@ fn atom_from_cluster(
         start_opacity,
         start_visible_width: start_visible,
     }
+}
+
+/// 只按**视觉身份**取一条 handoff：`(snapshot_id, visual_cluster_range)`。
+///
+/// Issue #826 评论 27 阻塞 1：`logical_range` 只回答「是不是同一段字」，
+/// 回答不了「这一帧的像素是哪份资源画的」。1:N 的 `old O -> A + B` 进行中，
+/// 历史 old O 与当前 new A 的 `logical_range` 可以**完全相同**（都是
+/// `A_range`），而它们的纹理 / revision / opacity / source slice 全都不同。
+///
+/// 所以凡是要「接住某一笔 base_snapshot 里那一整块 cluster 的当前像素」的
+/// 地方，必须先用视觉身份精确抓；抓不到才允许退回逻辑身份兜底。
+fn take_visual_handoff(
+    current_visuals: &[CurrentVisualCluster],
+    consumed: &mut HashSet<usize>,
+    key: (LineSnapshotId, (usize, usize)),
+) -> Option<CurrentVisualCluster> {
+    let index = current_visuals
+        .iter()
+        .enumerate()
+        .position(|(index, visual)| {
+            !consumed.contains(&index)
+                && visual.snapshot_id == key.0
+                && visual.visual_cluster_range == key.1
+        })?;
+    consumed.insert(index);
+    Some(current_visuals[index].clone())
 }
 
 /// 找一条可用的 handoff 并标记消费。
@@ -994,8 +1103,16 @@ fn ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
 /// 一个 snapshot 里所有 cluster 的扁平索引，带按 byte 二分查找。
 struct ClusterIndex<'a> {
     entries: Vec<Entry<'a>>,
-    /// `(byte_start, node)` 排序后的查找表。
-    sorted: Vec<(usize, usize)>,
+    /// `(byte_start, byte_end, node)` 排序后的查找表。
+    ///
+    /// Issue #826 评论 27 阻塞 2：**两端都要存**，而且 `byte_end` 这一维
+    /// 同样是有序的 —— cluster 互不重叠、byte offset 在整个 document 上全局
+    /// 连续，所以 `byte_start` 升序必然蕴含 `byte_end` 升序。
+    /// 这样区间查询能在 `[..first]` 这个前缀上**再二分一次**下界，
+    /// 否则每个 old cluster 都要从 new 的开头重新扫一遍，N 个 cluster 就是
+    /// `1+2+…+N = O(N²)`，只是把「按正文 byte 数量线性扫」换成了
+    /// 「按 snapshot cluster 数平方扫」。
+    sorted: Vec<(usize, usize, usize)>,
 }
 
 struct Entry<'a> {
@@ -1011,10 +1128,12 @@ impl<'a> ClusterIndex<'a> {
                 entries.push(Entry { line, cluster });
             }
         }
-        let mut sorted: Vec<(usize, usize)> = entries
+        // 两端一起存：`byte_end` 升序是 cluster 互不重叠的必然结果，查询时
+        // 要在 `[..first]` 里再二分下界（见 `nodes_overlapping_interval`）。
+        let mut sorted: Vec<(usize, usize, usize)> = entries
             .iter()
             .enumerate()
-            .map(|(index, entry)| (entry.cluster.byte_start, index))
+            .map(|(index, entry)| (entry.cluster.byte_start, entry.cluster.byte_end, index))
             .collect();
         sorted.sort_unstable();
         Self { entries, sorted }
@@ -1033,20 +1152,38 @@ impl<'a> ClusterIndex<'a> {
     /// 与 `[lo, hi)` 相交的 cluster 节点（按字节序）。
     ///
     /// Issue #826 评论 26 阻塞 4：替代逐 byte 的 `node_at_byte`。
-    /// cluster 互不重叠且按 byte_start 有序，二分找到第一个 `start < hi` 的
-    /// 位置，再回退扫描直到 `start >= hi`。
+    ///
+    /// Issue #826 评论 27 阻塞 2：**必须是 O(log N + k)**。
+    /// 上一版写成 `self.sorted[..first].filter(...)`，每个查询都从 `sorted`
+    /// 的开头重扫到 `first` —— N 个 old cluster 对 N 个 new cluster 时总扫描量
+    /// `1+2+…+N = O(N²)`。现在两端各二分一次：
+    ///
+    /// - `to` = 第一个 `start >= hi` 的位置（上界，O(log N)）；
+    /// - `from` = 第一个 `end > lo` 的位置（下界，同样 O(log N)，靠 `byte_end`
+    ///   升序这个不变量）；
+    /// - 真正遍历的只有 `sorted[from..to]`，即**实际相交的那 k 个**。
+    ///
+    /// `lo < hi` 时恒有 `from <= to`：否则存在 `i < from` 且 `i >= to`，
+    /// 即 `end_i <= lo` 且 `start_i >= hi`，而 `start_i < end_i <= lo < hi`
+    /// 与 `start_i >= hi` 矛盾。
+    ///
+    /// 被实际检查的 cluster 数记进测试计数器，用来断言这里是线性而非平方。
     fn nodes_overlapping_interval(&self, lo: usize, hi: usize) -> Vec<usize> {
         if lo >= hi {
             return Vec::new();
         }
-        let first = self.sorted.partition_point(|&(start, _)| start < hi);
-        self.sorted[..first]
+        let to = self.sorted.partition_point(|&(start, _, _)| start < hi);
+        let from = self
+            .sorted
+            .partition_point(|&(_, end, _)| end <= lo)
+            // 排序不变量只在「cluster 互不重叠」时成立；防御性夹一下，
+            // 绝不能在输入热路径上因为 `[from..to]` 反序而 panic。
+            .min(to);
+        #[cfg(test)]
+        test_helpers::note_component_cluster_visits(to - from);
+        self.sorted[from..to]
             .iter()
-            .map(|&(_, node)| node)
-            .filter(|&node| {
-                let (start, end) = self.cluster_range(node);
-                lo < end && start < hi
-            })
+            .map(|&(_, _, node)| node)
             .collect()
     }
 }
@@ -1314,6 +1451,10 @@ fn union_rect<'a>(rects: impl Iterator<Item = &'a SourceRect>) -> Option<SourceR
 /// 只在测试里编译。`collect_components` 每次调用把本线程累计的区间探测次数
 /// 累加进来，测试用 [`take_component_probe_count`] 取走并清零 —— 断言它与
 /// snapshot 的 cluster 数同量级，而不是跑满 `OffsetMapEntry.length`。
+///
+/// Issue #826 评论 27 阻塞 2：光数 mapping-entry 探针会**假绿** ——
+/// `nodes_overlapping_interval` 每次真正扫了多少 new cluster 才是成本，
+/// 那部分由 [`take_component_cluster_visit_count`] 单独计数。
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use std::cell::Cell;
@@ -1329,6 +1470,23 @@ pub(crate) mod test_helpers {
     /// 取走并清零自上次调用以来的区间探测量。
     pub(crate) fn take_component_probe_count() -> usize {
         COMPONENT_PROBE_COUNT.with(|cell| cell.replace(0))
+    }
+
+    thread_local! {
+        static COMPONENT_CLUSTER_VISIT_COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// 记一笔「实际检查了一个 cluster」。
+    ///
+    /// Issue #826 评论 27 阻塞 2：只数 mapping entry 探针会假绿 ——
+    /// `nodes_overlapping_interval` 扫了多少 **new cluster** 才是真正的成本。
+    pub(crate) fn note_component_cluster_visits(count: usize) {
+        COMPONENT_CLUSTER_VISIT_COUNT.with(|cell| cell.set(cell.get() + count));
+    }
+
+    /// 取走并清零自上次调用以来的 cluster 访问次数。
+    pub(crate) fn take_component_cluster_visit_count() -> usize {
+        COMPONENT_CLUSTER_VISIT_COUNT.with(|cell| cell.replace(0))
     }
 }
 

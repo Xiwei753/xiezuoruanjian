@@ -384,6 +384,8 @@ impl LinuxEditorAnimationCoordinator {
             for reveal in frontier.current_reveal_visuals(sample.progress) {
                 out.push(CurrentVisualCluster {
                     logical_range: reveal.range,
+                    // 前沿的像素就取自这一块 cluster，视觉身份 = 逻辑身份。
+                    visual_cluster_range: reveal.range,
                     snapshot_id: reveal.snapshot_id,
                     // Issue #826 评论 26 阻塞 2：语义统一成 exact slice。
                     source_rect: visible_source_slice(
@@ -404,6 +406,8 @@ impl LinuxEditorAnimationCoordinator {
                 }
                 out.push(CurrentVisualCluster {
                     logical_range: glyph.range,
+                    // 吞字侧画的正是这块 old cluster，视觉身份 = 逻辑身份。
+                    visual_cluster_range: glyph.range,
                     snapshot_id: glyph.snapshot_id,
                     source_rect: glyph.source_rect,
                     dest_rect: glyph.dest_rect.clone(),
@@ -418,6 +422,8 @@ impl LinuxEditorAnimationCoordinator {
             for current in reflow.current_geometry(frame_now) {
                 out.push(CurrentVisualCluster {
                     logical_range: current.current_range,
+                    // Reflow 平移的就是这一块 cluster，视觉身份 = 逻辑身份。
+                    visual_cluster_range: current.current_range,
                     snapshot_id: current.snapshot_id,
                     source_rect: current.source_rect,
                     dest_rect: current.dest_rect.clone(),

@@ -1059,6 +1059,7 @@ fn conceal_to_shaping_handoff_does_not_crop_source_twice() {
     let target = afi_ligated_snapshot();
     let handoff = CurrentVisualCluster {
         logical_range: (1, 2),
+        visual_cluster_range: (1, 2),
         snapshot_id: base.line_snapshots[0].id,
         source_rect: slice,
         dest_rect: SourceRect {
@@ -1123,6 +1124,7 @@ fn repeated_shaping_retarget_does_not_shrink_old_uv_each_time() {
     let target = afi_ligated_snapshot();
     let handoff = CurrentVisualCluster {
         logical_range: (1, 2),
+        visual_cluster_range: (1, 2),
         snapshot_id: base.line_snapshots[0].id,
         source_rect: slice,
         dest_rect: SourceRect {
@@ -1401,4 +1403,261 @@ fn collect_components_probes_scale_with_cluster_count_not_text_length() {
          entry.length 是 1_000_000，逐 byte 扫会跑满一百万次"
     );
     assert!(probes >= 1, "总得真的做过区间探针");
+}
+
+/// 评论 27 阻塞 2：区间查询必须是 O(log N + k)，不能退化成 O(N²)。
+///
+/// old / new 各 10,000 个 cluster + 一条大 identity entry。上一版
+/// `nodes_overlapping_interval` 每次都从 `sorted` 开头扫到 `first`，总访问量
+/// `1+2+…+N ≈ 5000 万`；现在两端各二分一次，真正访问的只有实际相交的那批。
+///
+/// 计的是**实际检查的 new cluster 数**（`COMPONENT_CLUSTER_VISIT_COUNT`），
+/// 不是 mapping-entry 探针 —— 只数探针会在 new 侧很大时假绿。
+/// **不用 wall-clock**：计时在慢机器上会假绿。
+#[test]
+fn cluster_interval_query_visits_are_linear_not_quadratic() {
+    const N: usize = 10_000;
+    // 每个 cluster 10 字节：互不重叠、byte offset 全局递增（`byte_end` 也随之
+    // 升序 —— 这正是区间二分下界依赖的不变量）。
+    let make = || {
+        let clusters: Vec<LineClusterSnapshot> = (0..N)
+            .map(|i| cluster(i * 10, i * 10 + 10, (i as f64) * 10.0))
+            .collect();
+        snapshot(vec![line(clusters)])
+    };
+    let old = make();
+    let new = make();
+    let map = OffsetMap {
+        entries: vec![OffsetMapEntry {
+            old_byte_offset: Utf8ByteOffset::unchecked(0),
+            new_byte_offset: Utf8ByteOffset::unchecked(0),
+            length: 10 * N,
+            kind: OffsetMapKind::Identity,
+        }],
+    };
+
+    let old_side = ClusterIndex::build(&old);
+    let new_side = ClusterIndex::build(&new);
+    // 先清零，只统计这一次调用。
+    let _ = test_helpers::take_component_cluster_visit_count();
+    let _ = test_helpers::take_component_probe_count();
+    let (components, pairs) = collect_components(&old_side, &new_side, &map);
+    let visits = test_helpers::take_component_cluster_visit_count();
+    let probes = test_helpers::take_component_probe_count();
+
+    assert_eq!(components.len(), N, "identity 应当连成 N 个 1:1 分量");
+    assert_eq!(pairs.len(), N, "每个 old 各自配一个 new");
+    assert!(
+        probes <= 4 * N,
+        "mapping entry 探针也必须是 O(N)，实际 {probes}"
+    );
+    assert!(
+        visits >= N,
+        "每个 old cluster 至少要看一个 new cluster，实际 {visits}"
+    );
+    assert!(
+        visits < 3 * N,
+        "new cluster 访问量必须是 O(N) 量级（< 3N = {}），实际 {visits}：\
+         从 sorted 开头重扫会跑成 1+2+…+N = {}",
+        3 * N,
+        N * (N + 1) / 2
+    );
+}
+
+// ── 评论 27 阻塞 1：同一 logical_range 上必须能分清 old / new 两份像素 ────────
+
+/// old O 与 new A 在同一帧里共享 `logical_range = A_range`，却来自两张完全
+/// 不同的行纹理。第二笔只改 A 时，新 component 的 old 侧必须从**正在淡入的
+/// A** 接手，而不是从更早的 O。
+///
+/// 旧实现 `take_handoff_for_keys` 第一遍按 `logical_range` 精确匹配，而
+/// `current_visuals` 是 old atoms 在前、new atoms 在后 —— 于是先抓到 O，
+/// 结果是错纹理 / 错 opacity / 错 source slice / 错位置。
+#[test]
+fn editing_first_child_of_one_to_many_transition_uses_current_new_child_as_handoff() {
+    let now = Instant::now();
+    let at = instant_at(now, HALF_MS / 2);
+    let mut coord = LinuxEditorAnimationCoordinator::new();
+    coord.set_typing_animation_duration_ms(DURATION_MS as u32);
+
+    // 第 1 笔：old O 0..4（40px 一块） -> new A 0..1（10px）+ B 1..3（30px）。
+    let first_old = snapshot(vec![line(vec![cluster_sized(0, 4, 0.0, 40.0)])]);
+    let first_old_id = first_old.line_snapshots[0].id;
+    // target 必须是一份**独立的**行纹理：`line()` 恒用 `visual_line_id = 0`，
+    // 两笔之间不换 id 的话视觉身份就只剩 `visual_cluster_range` 一半。
+    let first_new = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+        1,
+        0.0,
+        0,
+        vec![
+            cluster_sized(0, 1, 0.0, 10.0),
+            cluster_sized(1, 3, 10.0, 30.0),
+        ],
+    )]);
+    let first_new_id = first_new.line_snapshots[0].id;
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Delete,
+        base_snapshot: first_old,
+        base_text: String::from("abcd"),
+        target_snapshot: first_new.clone(),
+        target_text: String::from("acd"),
+        deleted_ranges: vec![(1, 2)],
+        inserted_ranges: Vec::new(),
+        offset_map: OffsetMap::from_single_edit(4, (1, 2), 0),
+        conceal_direction: ConcealDirection::Forward,
+        now,
+    });
+
+    // 前提必须显式成立，否则这条测试咬不住问题：
+    // old O 的 primary handoff key 就是 A 的 range —— 两条 current_visual 的
+    // logical_range 完全相同，只有视觉身份能区分它们。
+    let first_state = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("1:2 拆分必须进入交接层");
+    let first_group = &first_state.groups[0];
+    let o_atom = &first_group.old_atoms[0];
+    let a_atom = first_group
+        .new_atoms
+        .iter()
+        .find(|atom| atom.cluster == (0, 1))
+        .expect("A = 0..1 必须在 new 侧");
+    assert_eq!(
+        o_atom.primary_handoff_key(),
+        a_atom.cluster,
+        "前提：old O 与 new A 共享同一个 logical_range = (0,1)"
+    );
+    assert_ne!(
+        o_atom.snapshot_id, a_atom.snapshot_id,
+        "前提：两份像素来自完全不同的行纹理"
+    );
+    assert_ne!(
+        o_atom.visual_cluster_range, a_atom.visual_cluster_range,
+        "前提：视觉身份必须不同（(0,4) vs (0,1)）"
+    );
+
+    let before = coord.shaping_transition_glyphs(at);
+    assert_eq!(before.len(), 1);
+    let a_before = before[0]
+        .new
+        .iter()
+        .find(|side| (side.rect.w - 10.0).abs() < 1e-6)
+        .expect("A 是那块 10px 的 new side")
+        .clone();
+    let o_before = before[0].old[0].clone();
+
+    // 第 2 笔：只改 A —— 在 a 后插一个字，新 shaping 把 `aZ` 合成一块 0..2，
+    // A 的 cluster 边界因此变了（`0..1 -> 0..2`），走 mixed/boundary 判据。
+    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
+        kind: EditorAnimationKind::Insert,
+        base_snapshot: first_new,
+        base_text: String::from("acd"),
+        target_snapshot: snapshot(vec![PreparedLineSnapshot::stub_for_tests(
+            2,
+            0.0,
+            0,
+            vec![
+                cluster_sized(0, 2, 0.0, 20.0),
+                cluster_sized(2, 4, 20.0, 20.0),
+            ],
+        )]),
+        target_text: String::from("aZcd"),
+        deleted_ranges: Vec::new(),
+        inserted_ranges: vec![(1, 2)],
+        offset_map: OffsetMap::from_single_edit(3, (1, 1), 1),
+        conceal_direction: ConcealDirection::Forward,
+        now: at,
+    });
+
+    let shaping = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("第二笔仍然有不可拆 cluster");
+    assert_eq!(shaping.groups.len(), 2, "A 单独成组，old O + B 作为另一组");
+
+    let taken = shaping
+        .groups
+        .iter()
+        .find(|group| group.new_atoms.iter().any(|atom| atom.cluster == (0, 2)))
+        .expect("A 的新 component 必须存在");
+    assert_eq!(
+        taken
+            .old_atoms
+            .iter()
+            .map(|atom| atom.cluster)
+            .collect::<Vec<_>>(),
+        vec![(0, 1), (0, 1)],
+        "新 component 的 old 侧 = 它自己的 old cluster A + leftover 的 old O"
+    );
+
+    // `old_atoms[0]` 是 `build_group` 为 component 自己的 old cluster 建的
+    // 那份 handoff —— 它必须来自**正在淡入的 A**。
+    let primary = &taken.old_atoms[0];
+    assert_eq!(
+        primary.snapshot_id, first_new_id,
+        "source 必须是 previous target 的 A"
+    );
+    assert_ne!(
+        primary.snapshot_id, first_old_id,
+        "绝不能从历史 old O 的纹理接手"
+    );
+    assert_eq!(
+        primary.visual_cluster_range,
+        (0, 1),
+        "视觉身份也必须是 A 那块 cluster"
+    );
+    assert!(
+        (primary.source_rect.w - 10.0).abs() < 1e-6,
+        "source 必须是 A 的 10px 资源，实际 {}",
+        primary.source_rect.w
+    );
+    assert!(
+        (primary.start_rect.w - 10.0).abs() < 1e-6,
+        "起步矩形必须是 A 的 10px，实际 {}",
+        primary.start_rect.w
+    );
+    assert!(
+        (primary.start_opacity - a_before.opacity).abs() < 1e-6,
+        "start_opacity 必须等于上一帧 new A 的 {}，实际 {}",
+        a_before.opacity,
+        primary.start_opacity
+    );
+    assert!(
+        (primary.start_opacity - o_before.opacity).abs() > 1e-6,
+        "不能等于 old O 的 opacity {}",
+        o_before.opacity
+    );
+
+    // old O 仍然作为 leftover 在画，且必须保持自己的 40px 几何 ——
+    // 被塞进 A 的 canonical 宽度会让它这一帧瞬间从 40px 缩到 10px。
+    let old_o = taken
+        .old_atoms
+        .iter()
+        .find(|atom| atom.snapshot_id == first_old_id)
+        .expect("old O 仍作为 leftover 在画");
+    assert!(
+        (old_o.rect.w - 40.0).abs() < 1e-6,
+        "old O 必须保持自己的 40px 几何，实际 {}",
+        old_o.rect.w
+    );
+    assert!(
+        (old_o.source_rect.w - 40.0).abs() < 1e-6,
+        "old O 的 source 仍是它自己的 40px，实际 {}",
+        old_o.source_rect.w
+    );
+
+    // 没被碰的 B 与 old O 作为另一组继续淡。
+    let rest = shaping
+        .groups
+        .iter()
+        .find(|group| group.new_atoms.iter().any(|atom| atom.cluster == (2, 4)))
+        .expect("B 必须继续淡入");
+    assert_eq!(
+        rest.old_atoms
+            .iter()
+            .map(|atom| atom.cluster)
+            .collect::<Vec<_>>(),
+        vec![(0, 4)],
+        "old O 仍在另一组里淡出，不能整组被跳过"
+    );
 }
