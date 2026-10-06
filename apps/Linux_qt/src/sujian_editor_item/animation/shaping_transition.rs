@@ -601,6 +601,17 @@ impl ShapingTransitionState {
         self.groups.is_empty()
     }
 
+    /// Issue #826 评论 34：把整条 shaping 时间轴整体平移 `delta`。
+    ///
+    /// 滚动 pause / resume 用：resume 时把暂停期间的墙钟时长补回 `started_at`，
+    /// 恢复后仍从 pause 那一刻的 opacity / 位置继续，不会按墙钟淡到终态。
+    /// `started_at` 为 None（没有活动 shaping）时什么都不做。
+    pub(crate) fn shift_started_at(&mut self, delta: std::time::Duration) {
+        if let Some(started_at) = self.started_at.as_mut() {
+            *started_at += delta;
+        }
+    }
+
     pub(crate) fn is_finished(&self, now: Instant) -> bool {
         let Some(started_at) = self.started_at else {
             return true;

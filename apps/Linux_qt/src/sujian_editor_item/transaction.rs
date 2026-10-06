@@ -78,6 +78,29 @@ impl SujianEditorItem {
             outcome = VisualPrepareOutcome::Skipped(
                 super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
             );
+            // Issue #826 评论 34：这一笔 Core edit 已应用、正文真的变了，却完全
+            // 不进 prepare_edit_motion（既不 retarget 旧 Frontier/Reflow/Shaping，
+            // 也不 finish 它们）。必须在此把 pause 期间遗留的上一笔旧正文动画
+            // 连同 pause 状态一起收成最新 canonical —— 否则滚动结束 resume 后，
+            // 旧动画会拿旧正文的 mask / overlay / 行图身份在新 canonical 上播
+            // （Reveal 裁错新正文、Reflow glyph 错位重现、Shaping clip 挖掉新字）。
+            // 光标/选区-only（正文没变）不动画，保留真 pause，恢复后继续。
+            if old.text != new.text
+                && self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .finish_paused_text_animation_to_canonical()
+            {
+                // 收口后 active ids 为空 -> retain 把旧动画纹理全部释放，
+                // 让 suppressed edit 的语义与「这一笔不动画」一致。
+                let active_ids = self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .collect_active_snapshot_ids();
+                self.pipeline
+                    .texture_cache_mut()
+                    .retain_active_snapshot_ids(&active_ids);
+            }
         } else if animations_requested {
             // Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 返回
             // `VisualPrepareOutcome`，直接透传，不再重新猜 skip reason。

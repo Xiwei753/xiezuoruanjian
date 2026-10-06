@@ -21,7 +21,7 @@ use super::render_plan::{
 use super::*;
 use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// 构造默认 LayoutParams，与 SujianEditorItem::default() 的字体设置一致。
 fn default_layout_params() -> LayoutParams {
@@ -431,5 +431,401 @@ fn selection_projection_is_self_consistent_with_mirror() {
         assert_eq!(snap.text, item.pipeline.committed_text());
         assert_eq!(snap.cursor, item.pipeline.cursor());
         assert_eq!(snap.selection_anchor, item.pipeline.selection_anchor());
+    });
+}
+
+// =========================================================================
+// Issue #826 评论 34: 滚动 pause / resume 时间轴 + suppressed 正文编辑收口
+// =========================================================================
+
+/// Issue #826 评论 34 的共同前置：正文 `AB`，在 `A|B` 之间插入 `X` → `AXB`
+/// （X 走 Reveal、B 右移走 Reflow），前沿时长固定 160ms。
+///
+/// 返回前沿的 `started_at`，让测试能自己控制时间轴（pause 40ms、resume 500ms），
+/// 而不是依赖墙钟。
+fn build_160ms_reveal_and_reflow(item: &mut SujianEditorItem) -> Instant {
+    item.set_plain_text(QString::from("AB"));
+    item.current_viewport_height = 600.0;
+    item.current_typing_animation_enabled = true;
+    item.pipeline.set_typing_animation_duration_ms(160);
+    let _ = item.pipeline.set_selection(1, 1);
+    item.insert_text(QString::from("X"));
+
+    assert_eq!(
+        item.pipeline.committed_text(),
+        "AXB",
+        "前置：A|B 中间插 X 必须成功"
+    );
+    let coord = item.pipeline.animation_coordinator();
+    assert!(coord.has_active_edit_frontier(), "前置：必须建出遮罩前沿");
+    let reflow = coord
+        .active_reflow
+        .as_ref()
+        .expect("前置：B 右移必须建出 Reflow");
+    assert!(!reflow.spans.is_empty(), "前置：Reflow spans 不能为空");
+    coord
+        .active_edit_frontier
+        .as_ref()
+        .expect("前置：前沿存在")
+        .started_at
+}
+
+/// Issue #826 评论 34 要求的测试 1。
+///
+/// 步骤：①建 160ms Reveal/Reflow；②40ms 处 `pause_all`；③500ms 后
+/// `resume_all`；④同一恢复帧采样。
+/// 断言：progress 仍约等于 pause 那一刻、state 仍 active、不是直接 finished。
+/// 覆盖 Frontier + Reflow 两层（shaping 层由
+/// `scroll_pause_preserves_shaping_transition_progress_without_edit` 覆盖）。
+#[test]
+fn scroll_pause_preserves_text_animation_progress_without_edit() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let started_at = build_160ms_reveal_and_reflow(&mut item);
+
+        let t0 = started_at + Duration::from_millis(40);
+        let coord = item.pipeline.animation_coordinator_mut();
+
+        let sample0 = coord
+            .sample_edit_frontier(t0)
+            .expect("pause 前前沿必须可采样");
+        assert!(
+            sample0.progress > 0.0 && sample0.progress < 1.0,
+            "前置：40ms 处前沿必须在途中，实际 {}",
+            sample0.progress
+        );
+        assert!(
+            !coord
+                .active_edit_frontier
+                .as_ref()
+                .expect("前置：前沿存在")
+                .is_finished(t0),
+            "前置：40ms 处前沿尚未走完"
+        );
+        let reflow_frames0 = coord
+            .active_reflow
+            .as_ref()
+            .expect("前置：Reflow 存在")
+            .sample(t0);
+        assert!(
+            !reflow_frames0.is_empty(),
+            "前置：Reflow 必须有正在移动的 span"
+        );
+
+        let _freed = coord.pause_all(t0);
+        assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+
+        let t1 = t0 + Duration::from_millis(500);
+        coord.resume_all(t1);
+        assert!(!coord.is_paused(), "resume_all 之后必须脱离 paused");
+
+        // 同一恢复帧采样：elapsed 必须仍等于 pause 那一刻。
+        let sample1 = coord
+            .sample_edit_frontier(t1)
+            .expect("resume 后前沿必须仍可采样");
+        assert!(
+            (sample1.progress - sample0.progress).abs() < 1e-12,
+            "resume 后同一帧 progress 必须仍等于 pause 那一刻，实际 {} vs {}",
+            sample1.progress,
+            sample0.progress
+        );
+        assert!(
+            coord.active_edit_frontier.is_some(),
+            "resume 后前沿仍 active（不能被判 finished 清掉）"
+        );
+        assert!(
+            !coord
+                .active_edit_frontier
+                .as_ref()
+                .expect("前沿存在")
+                .is_finished(t1),
+            "resume 后前沿不得直接 finished"
+        );
+
+        let reflow = coord
+            .active_reflow
+            .as_ref()
+            .expect("resume 后 Reflow 仍 active");
+        let reflow_frames1 = reflow.sample(t1);
+        assert_eq!(
+            reflow_frames1, reflow_frames0,
+            "resume 后同一帧 Reflow 几何必须与 pause 那一刻完全一致"
+        );
+        assert!(
+            !reflow.is_finished(t1),
+            "resume 后 Reflow 不得直接判 finished"
+        );
+        println!(
+            "[BEHAVIOR_VERIFY] 评论34: pause/resume 后 progress {:.4} 保持不变",
+            sample1.progress
+        );
+    });
+}
+
+/// Issue #826 评论 34 要求的测试 2。
+///
+/// 步骤：①第一笔建立 active Frontier + Reflow；②`set_is_scrolling(true)`（pause）；
+/// ③Core 再应用一笔正文编辑，visual outcome = `ScrollingSuppressed`；
+/// ④`emit_content_changed()` 更新最新 canonical；⑤`set_is_scrolling(false)`（resume）。
+/// 断言：三层全 None、coordinator 不再 paused、render plan 里没有旧 snapshot_id
+/// 的 clip / glyph。
+#[test]
+fn suppressed_edit_while_scrolling_drops_old_text_animation_before_new_canonical() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let _started_at = build_160ms_reveal_and_reflow(&mut item);
+
+        let old_ids = item
+            .pipeline
+            .animation_coordinator()
+            .collect_active_snapshot_ids();
+        assert!(!old_ids.is_empty(), "前置：第一笔编辑必须登记出活动行 id");
+
+        // ② 滚动开始 → 时间轴 pause，状态原样保留。
+        item.set_is_scrolling(true);
+        assert!(item.is_scrolling(), "进入滚动状态");
+        assert!(
+            item.pipeline.animation_coordinator().is_paused(),
+            "滚动开始必须 pause 正文动画时间轴"
+        );
+
+        // ③ Core 编辑照常应用，但视觉侧被 suppress —— 完全不进 prepare_edit_motion。
+        let cursor = item.pipeline.cursor();
+        let before = item.pipeline.snapshot();
+        let core = item
+            .pipeline
+            .insert_text(cursor, "Y", EditorTransactionCause::Typing);
+        let pipeline::PipelineEditOutcome::Applied(result) = core else {
+            panic!("前置：Core 编辑必须应用");
+        };
+        let after = item.pipeline.snapshot();
+        let outcome = item.record_transaction(before, after, &result, false);
+        assert!(
+            matches!(
+                outcome,
+                pipeline::VisualPrepareOutcome::Skipped(
+                    edit_flow::EditVisualSkipReason::ScrollingSuppressed
+                )
+            ),
+            "滚动中的正文编辑 visual outcome 必须是 ScrollingSuppressed"
+        );
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "AXYB",
+            "Core 编辑必须已应用（正文真的变了）"
+        );
+
+        // ④ 模拟 emit_content_changed：canonical 换成最新正文。
+        item.emit_content_changed();
+
+        // ⑤ 滚动结束 resume。
+        item.set_is_scrolling(false);
+
+        let coord = item.pipeline.animation_coordinator();
+        assert!(
+            coord.active_edit_frontier.is_none(),
+            "suppressed 正文编辑后旧 Frontier 必须已收成 canonical"
+        );
+        assert!(
+            coord.active_reflow.is_none(),
+            "suppressed 正文编辑后旧 Reflow 必须已收成 canonical"
+        );
+        assert!(
+            coord.active_shaping_transition.is_none(),
+            "suppressed 正文编辑后旧 Shaping 必须已收成 canonical"
+        );
+        assert!(!coord.is_paused(), "resume 后 coordinator 不再 paused");
+
+        let plan = item
+            .pipeline
+            .animation_coordinator_mut()
+            .build_render_plan_full(
+                CursorRenderState::default(),
+                SelectionPreeditPlan::default(),
+                CursorStyle::default(),
+                SelectionPreeditStyle::default(),
+                Instant::now(),
+            );
+        for glyph in &plan.text_animation.glyphs {
+            assert!(
+                !old_ids.contains(&glyph.snapshot_id),
+                "render plan 不得再画旧 snapshot_id {} 的 glyph",
+                glyph.snapshot_id.layout_revision
+            );
+        }
+        for clip in &plan.clip_rects {
+            assert!(
+                !old_ids.contains(&clip.snapshot_id),
+                "render plan 不得再带旧 snapshot_id {} 的 clip",
+                clip.snapshot_id.layout_revision
+            );
+        }
+        println!("[BEHAVIOR_VERIFY] 评论34: suppressed 正文编辑后旧动画已让位给新 canonical");
+    });
+}
+
+/// Issue #826 评论 34 要求的测试 3。
+///
+/// 前一步（测试 2 的链路）收口后，`collect_active_snapshot_ids()` 不得再含
+/// 上一笔旧行 id；TextureCache retain 之后旧动画纹理可以被真正释放。
+#[test]
+fn suppressed_scroll_edit_releases_old_animation_textures() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let _started_at = build_160ms_reveal_and_reflow(&mut item);
+
+        // 前提非真空：先把上一笔的真实行图准备进缓存；个别行没有行图时补一张
+        // 占位图，保证「旧动画纹理」这个前提不依赖排版是否恰好栅格化了那一行。
+        item.pipeline.prepare_frontier_textures();
+        let old_ids = item
+            .pipeline
+            .animation_coordinator()
+            .collect_active_snapshot_ids();
+        assert!(!old_ids.is_empty(), "前置：必须有活动行 id");
+        for id in &old_ids {
+            if !item.pipeline.texture_cache().contains_line(id) {
+                let image = qmetaobject::QImage::new(
+                    qmetaobject::QSize {
+                        width: 4,
+                        height: 4,
+                    },
+                    qmetaobject::ImageFormat::ARGB32_Premultiplied,
+                );
+                item.pipeline.texture_cache_mut().insert_line(*id, image);
+            }
+        }
+        assert!(
+            old_ids
+                .iter()
+                .all(|id| item.pipeline.texture_cache().contains_line(id)),
+            "前置：旧行纹理必须先进缓存"
+        );
+
+        item.set_is_scrolling(true);
+
+        let cursor = item.pipeline.cursor();
+        let before = item.pipeline.snapshot();
+        let core = item
+            .pipeline
+            .insert_text(cursor, "Y", EditorTransactionCause::Typing);
+        let pipeline::PipelineEditOutcome::Applied(result) = core else {
+            panic!("前置：Core 编辑必须应用");
+        };
+        let after = item.pipeline.snapshot();
+        let outcome = item.record_transaction(before, after, &result, false);
+        assert!(
+            matches!(
+                outcome,
+                pipeline::VisualPrepareOutcome::Skipped(
+                    edit_flow::EditVisualSkipReason::ScrollingSuppressed
+                )
+            ),
+            "滚动中的正文编辑 visual outcome 必须是 ScrollingSuppressed"
+        );
+
+        item.emit_content_changed();
+        item.set_is_scrolling(false);
+
+        let active_ids = item
+            .pipeline
+            .animation_coordinator()
+            .collect_active_snapshot_ids();
+        assert!(
+            active_ids.is_empty(),
+            "收口后不得再登记任何活动行 id，实际 {:?}",
+            active_ids
+                .iter()
+                .map(|id| id.layout_revision)
+                .collect::<Vec<_>>()
+        );
+        for id in &old_ids {
+            assert!(
+                !item.pipeline.texture_cache().contains_line(id),
+                "旧动画纹理 {} 必须已可释放",
+                id.layout_revision
+            );
+        }
+        println!("[BEHAVIOR_VERIFY] 评论34: suppressed 滚动编辑释放了旧动画纹理");
+    });
+}
+
+/// Issue #826 评论 34 补充测试。
+///
+/// **未覆盖位置**：评论明确要求的测试 1 只断言 `sample_edit_frontier().progress`
+/// 与 Reflow state 的 `sample()`，没有断言**真正画出去的 render plan 输出**。
+///
+/// 断言：pause 40ms、resume 500ms 后的同一恢复帧，`build_render_plan_full`
+/// 产出的 glyph 与 clip 与 pause 那一刻完全一致。
+/// 旧实现 resume 只清 `paused_at` → elapsed 直接 540ms → reveal/reflow 都到
+/// 终态 → 输出不同 → FAIL。
+#[test]
+fn scroll_pause_keeps_render_plan_output_continuous() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let started_at = build_160ms_reveal_and_reflow(&mut item);
+
+        let t0 = started_at + Duration::from_millis(40);
+        let t1 = t0 + Duration::from_millis(500);
+        let plan_before = item
+            .pipeline
+            .animation_coordinator_mut()
+            .build_render_plan_full(
+                CursorRenderState::default(),
+                SelectionPreeditPlan::default(),
+                CursorStyle::default(),
+                SelectionPreeditStyle::default(),
+                t0,
+            );
+        let glyphs_before: Vec<(f64, f64, f64, f64, f64)> = plan_before
+            .text_animation
+            .glyphs
+            .iter()
+            .map(|g| (g.x, g.y, g.w, g.h, g.opacity))
+            .collect();
+        let clips_before: Vec<(f64, f64, f64, f64)> = plan_before
+            .clip_rects
+            .iter()
+            .map(|c| (c.x, c.y, c.w, c.h))
+            .collect();
+        assert!(
+            !glyphs_before.is_empty(),
+            "前置：40ms 处 render plan 必须有动画 glyph"
+        );
+
+        let coord = item.pipeline.animation_coordinator_mut();
+        let _freed = coord.pause_all(t0);
+        coord.resume_all(t1);
+
+        let plan_after = item
+            .pipeline
+            .animation_coordinator_mut()
+            .build_render_plan_full(
+                CursorRenderState::default(),
+                SelectionPreeditPlan::default(),
+                CursorStyle::default(),
+                SelectionPreeditStyle::default(),
+                t1,
+            );
+        let glyphs_after: Vec<(f64, f64, f64, f64, f64)> = plan_after
+            .text_animation
+            .glyphs
+            .iter()
+            .map(|g| (g.x, g.y, g.w, g.h, g.opacity))
+            .collect();
+        let clips_after: Vec<(f64, f64, f64, f64)> = plan_after
+            .clip_rects
+            .iter()
+            .map(|c| (c.x, c.y, c.w, c.h))
+            .collect();
+
+        assert_eq!(
+            glyphs_before, glyphs_after,
+            "pause/resume 后同一恢复帧的 render plan glyph 必须与 pause 那一刻一致"
+        );
+        assert_eq!(
+            clips_before, clips_after,
+            "pause/resume 后同一恢复帧的 render plan clip 必须与 pause 那一刻一致"
+        );
+        println!("[BEHAVIOR_VERIFY] 评论34: pause/resume 后 render plan 输出连续");
     });
 }

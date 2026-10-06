@@ -1736,6 +1736,16 @@ impl EditFrontierState {
         ids
     }
 
+    /// Issue #826 评论 34：把整条前沿时间轴整体平移 `delta`。
+    ///
+    /// 滚动 pause / resume 用：resume 时把暂停期间的墙钟时长补回 `started_at`，
+    /// 于是恢复后仍从 pause 那一刻的 progress 继续，而不是按墙钟直接跳到终态。
+    /// 只平移起点——不重建动画对象、不排历史队列，`duration_ms` 与所有层内
+    /// 补间状态（reveal / conceal / carried）都原样保留。
+    pub(crate) fn shift_started_at(&mut self, delta: std::time::Duration) {
+        self.started_at += delta;
+    }
+
     /// 采样当前帧前沿。
     pub(crate) fn sample(&self, now: Instant) -> EditFrontierSample {
         let elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as f64;

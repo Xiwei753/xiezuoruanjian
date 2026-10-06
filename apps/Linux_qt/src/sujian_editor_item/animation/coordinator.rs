@@ -1110,14 +1110,61 @@ impl LinuxEditorAnimationCoordinator {
         had
     }
 
-    /// 暂停正文动画（窗口失焦）。返回仍需保留的旧行纹理。
-    pub(crate) fn pause_all(&mut self) -> Vec<LineSnapshotId> {
-        self.paused_at = Some(Instant::now());
+    /// Issue #826 评论 34：暂停正文动画时间轴，返回仍需保留的旧行纹理。
+    ///
+    /// `now` 由调用方给出（生产传 `std::time::Instant::now()`，测试传可控时刻）：
+    /// 只记 pause 瞬间，各层 progress 停在这一刻；恢复时由 [`Self::resume_all`]
+    /// 把暂停时长平移回 `started_at`，所以这是**真 pause 时间轴**，不是
+    /// 「先不 tick、恢复后按墙钟直接跳终态」。
+    pub(crate) fn pause_all(&mut self, now: Instant) -> Vec<LineSnapshotId> {
+        self.paused_at = Some(now);
         self.collect_active_snapshot_ids()
     }
 
-    pub(crate) fn resume_all(&mut self) {
+    /// Issue #826 评论 34：恢复正文动画时间轴。
+    ///
+    /// 没有 pause 过（`paused_at == None`）什么都不做。
+    /// 有 pause：算 `delta = now - paused_at`，把三层 active state 的
+    /// `started_at` 整体平移 `delta` —— 40ms 处 pause、500ms 后 resume，
+    /// 恢复后仍从 40ms 继续，而不是按墙钟 540ms 被 `tick()` 判 finished。
+    /// 只平移起点，不重建动画对象、不排历史队列。
+    pub(crate) fn resume_all(&mut self, now: Instant) {
+        let Some(paused_at) = self.paused_at.take() else {
+            return;
+        };
+        let delta = now.saturating_duration_since(paused_at);
+        if delta.is_zero() {
+            return;
+        }
+        if let Some(frontier) = self.active_edit_frontier.as_mut() {
+            frontier.shift_started_at(delta);
+        }
+        if let Some(reflow) = self.active_reflow.as_mut() {
+            reflow.shift_started_at(delta);
+        }
+        if let Some(shaping) = self.active_shaping_transition.as_mut() {
+            shaping.shift_started_at(delta);
+        }
+    }
+
+    /// Issue #826 评论 34：把「滚动期间被 suppress 的正文编辑」之前的旧正文
+    /// 动画连同 pause 状态一起收成最新 canonical。
+    ///
+    /// 滚动中的正文编辑 Core edit 已应用、正文已经变了，但完全不进
+    /// `prepare_edit_motion`：既不 retarget 也不 finish。若把上一笔
+    /// Frontier/Reflow/Shaping 留到 resume，它们会拿旧正文的
+    /// mask / overlay / 行图身份在新 canonical 上播（Reveal 裁错新正文、
+    /// Reflow glyph 错位重现、Shaping clip 挖掉新字、纹理 owner 全是旧编辑链）。
+    ///
+    /// 语义与「这一笔明确不做正文动画」一致：最新 canonical 直接接管。
+    /// 返回收口前是否真的有活动正文动画（调用方据此决定要不要 retain 纹理）。
+    pub(crate) fn finish_paused_text_animation_to_canonical(&mut self) -> bool {
+        let had = self.active_edit_frontier.is_some()
+            || self.active_reflow.is_some()
+            || self.active_shaping_transition.is_some();
+        self.finish_edit_frontier_to_canonical();
         self.paused_at = None;
+        had
     }
 
     pub(crate) fn is_paused(&self) -> bool {

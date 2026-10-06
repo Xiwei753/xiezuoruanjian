@@ -2576,3 +2576,61 @@ fn pure_delete_yields_to_conceal_while_normal_shaping_component_continues() {
 
     assert_no_duplicate_visual_atom(shaping);
 }
+
+// ── 评论 34：滚动 pause / resume 是时间轴级的 ─────────────────────────────────
+
+/// Issue #826 评论 34 补充测试。
+///
+/// **未覆盖位置**：评论明确要求的测试 1
+/// `scroll_pause_preserves_text_animation_progress_without_edit` 只断言
+/// Frontier + Reflow 两层，shaping 层评论只说「用同一 shift helper」、
+/// 没有任何断言覆盖它。
+///
+/// 断言：40ms 处 `pause_all`、500ms 后 `resume_all`，同一恢复帧采到的
+/// shaping new 侧 opacity 仍等于 pause 那一刻、state 仍 active。
+/// 旧实现 resume 只清 `paused_at` 不平移 `started_at` → elapsed 直接 540ms，
+/// opacity 被 clamp 到终态、`tick()` 判 finished 把 state 清掉 → FAIL。
+#[test]
+fn scroll_pause_preserves_shaping_transition_progress_without_edit() {
+    let snap = shaping_fi_running_at_40ms();
+    let t0 = snap.at;
+    let opacity_at_pause = snap.opacity;
+    assert!(
+        opacity_at_pause > 0.0 && opacity_at_pause < 1.0,
+        "pause 前 shaping 必须在途中，实际 {}",
+        opacity_at_pause
+    );
+
+    let mut coord = snap.coord;
+    let t1 = t0 + Duration::from_millis(500);
+
+    let _freed = coord.pause_all(t0);
+    assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+
+    coord.resume_all(t1);
+    assert!(!coord.is_paused(), "resume_all 之后必须脱离 paused");
+
+    // 同一恢复帧（= pause 后 500ms）重新采样 shaping。
+    let frames = coord.shaping_transition_glyphs(t1);
+    assert!(
+        !frames.is_empty(),
+        "resume 后同一帧 shaping 仍应有画面（不能直接被判 finished 清空）"
+    );
+    let resumed = frames
+        .iter()
+        .flat_map(|frame| frame.new.iter())
+        .find(|side| (side.rect.w - 16.0).abs() < 1e-6)
+        .expect("resume 后必须还能找回那块正在淡入的 fi new side");
+    assert!(
+        (resumed.opacity - opacity_at_pause).abs() < 1e-3,
+        "resume 后同一帧 shaping opacity 必须仍等于 pause 那一刻，实际 {} vs {}",
+        resumed.opacity,
+        opacity_at_pause
+    );
+
+    coord.tick(t1);
+    assert!(
+        coord.active_shaping_transition.is_some(),
+        "平移后 shaping 尚未走完，tick 不得把它清掉"
+    );
+}

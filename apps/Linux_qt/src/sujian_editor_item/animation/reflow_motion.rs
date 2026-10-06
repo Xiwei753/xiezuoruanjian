@@ -289,6 +289,15 @@ impl ReflowState {
             .collect()
     }
 
+    /// Issue #826 评论 34：把整条 Reflow 时间轴整体平移 `delta`。
+    ///
+    /// 滚动 pause / resume 用：resume 时把暂停期间的墙钟时长补回 `started_at`，
+    /// 恢复后仍从 pause 那一刻的进度继续，不会按墙钟跳到终点。只平移起点，
+    /// 不重建 spans、不排历史队列。
+    pub(crate) fn shift_started_at(&mut self, delta: std::time::Duration) {
+        self.started_at += delta;
+    }
+
     pub(crate) fn sample(&self, now: Instant) -> Vec<ReflowSpanFrame> {
         let elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as f64;
         let progress = if self.duration_ms == 0 {

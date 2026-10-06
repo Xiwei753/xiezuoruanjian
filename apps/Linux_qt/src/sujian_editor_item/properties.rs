@@ -432,11 +432,16 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
-            // Issue #727 约束 7: pause_all 现在先完成 CaretDriven 事务（InsertReveal/
-            // DeleteConceal）到 canonical 状态，再 pause Timed 事务（Reflow）。
-            // 滚动终止 caret motion track 时，CaretDriven 事务不能只 pause——
-            // resume 时 caret track 已不存在，数据依赖链断裂。
-            let freed_snapshot_ids = self.pipeline.animation_coordinator_mut().pause_all();
+            // Issue #826 评论 34：pause 是**时间轴级**的——只记 pause 瞬间，
+            // resume 时把暂停时长平移回三层 `started_at`，所以滚动期间 progress
+            // 真正停住，恢复后仍从 pause 那一刻继续，而不是按墙钟直接跳终态。
+            // 这里同时拿回 active ids：若之后正文真的被编辑（记录在
+            // `record_transaction` 的 scrolling suppressed 分支收口），
+            // 这些旧行纹理才有机会被 retain 掉。
+            let freed_snapshot_ids = self
+                .pipeline
+                .animation_coordinator_mut()
+                .pause_all(std::time::Instant::now());
             // 完成的事务释放了 texture，需要清理对应的 texture cache。
             if !freed_snapshot_ids.is_empty() {
                 // Issue #736 评论 5786231506: 不再 clear()，改成 retain，避免清掉
@@ -460,7 +465,11 @@ impl SujianEditorItem {
             return;
         }
         if !value {
-            self.pipeline.animation_coordinator_mut().resume_all();
+            // Issue #826 评论 34：resume 把暂停时长平移回各层 started_at，
+            // 让时间轴从中断处继续（滚动期间没有编辑时才是这条路径）。
+            self.pipeline
+                .animation_coordinator_mut()
+                .resume_all(std::time::Instant::now());
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
