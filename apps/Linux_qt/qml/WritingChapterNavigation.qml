@@ -83,6 +83,13 @@ Rectangle {
         root.volumeExpandedMap = next
     }
 
+    // Issue #835 评论 6019713847: 章纲保存失败时，Core 仍是 note 唯一事实来源，
+    // 把编辑框恢复成 currentChapterNote（即 editorController.chapterNote 透传值），
+    // 不让界面显示成"已保存"。
+    function restoreChapterNoteFromSource() {
+        outlineTextArea.text = root.currentChapterNote
+    }
+
     function volumesArray() {
         var items = writingTree.items || []
         var vols = []

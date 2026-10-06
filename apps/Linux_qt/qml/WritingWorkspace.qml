@@ -52,6 +52,9 @@ Rectangle {
     // Issue #835：星图后端透传给 RightDrawer（任务 4 已为 RightDrawer 加 starmapBackendRef 属性）。
     // 由 main.qml 注入，WritingWorkspace 只做透传，不在本地伪造星图业务状态。
     property var starmapBackendRef: null
+    // Issue #835 评论 6019713847: StarMapPage 需要真实 StarMapController 读根星图，
+    // 由 main.qml 注入 globalStarMapController，透传给 RightDrawer.starMapControllerRef。
+    property var starMapControllerRef: null
     property var tree: []
     // Issue #825：左右 pane 的展开状态只是端侧 UI 状态（不进 Core、不进同步），
     // 它们作为 WorkbenchVisibility 输入重新算 Core 的七角色 plan。
@@ -329,6 +332,9 @@ Rectangle {
     // Issue #770 评论 5842877986: 作品切到位后发出，main.qml 据此消费
     // pendingConflictPath（projectId 匹配才消费），不靠猜 Loader 是否已存在。
     signal projectReady()
+    // Issue #835 评论 6019713847: RightDrawer 里 StarMapPage 请求打开根星图时转发，
+    // main.qml 据此走 appController.openRootStarmap(starmapId, title)。
+    signal openStarmapWorkspace(string starmapId, string title)
 
     // Issue #762 评论 5826175490 第 4 点：当外部设置 conflictPath 时，
     // 刷新冲突列表并打开右侧抽屉到冲突 tab，把 conflictPath 透传给 RightDrawer。
@@ -698,10 +704,23 @@ Rectangle {
                 }
                 // Issue #835：章纲编辑完成交给 backend update_chapter_note，
                 // 并同步本地缓存。两处 WritingChapterNavigation 实例都接。
+                // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
+                // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
                 onChapterNoteChanged: function(note) {
-                    if (editorController.chapterId && editorController.projectId && editorController.volumeId) {
-                        editorBackendRef.update_chapter_note(editorController.projectId, editorController.volumeId, editorController.chapterId, note)
+                    if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
+                        return
+
+                    var result = editorBackendRef.update_chapter_note(
+                        editorController.projectId,
+                        editorController.volumeId,
+                        editorController.chapterId,
+                        note
+                    )
+
+                    if (result && result.success) {
                         editorController.chapterNote = note
+                    } else {
+                        sidebarRect.restoreChapterNoteFromSource()
                     }
                 }
             }
@@ -1196,6 +1215,9 @@ Rectangle {
                 selectedTool: root.drawerTool
                 // Issue #835：透传星图后端与 appState 给 RightDrawer（任务 4 已加属性）。
                 starmapBackendRef: root.starmapBackendRef
+                // Issue #835 评论 6019713847: 透传真实 StarMapController 给 RightDrawer，
+                // StarMapPage 据此调 listStarmaps() 读真实根星图。
+                starMapControllerRef: root.starMapControllerRef
                 appState: root.appState
                 // Issue #757 评论 5818193510 第 5 点：冲突侧栏绑定。
                 syncBackendRef: root.syncBackendRef
@@ -1208,6 +1230,10 @@ Rectangle {
                 // requestedConflictPath 是单向输入，SyncConflictPanel 绝不在内部赋值。
                 requestedConflictPath: root.conflictPath
                 onCloseRequested: root.closeToolPane()
+                // Issue #835 评论 6019713847: StarMapPage 请求打开根星图，转发给 main.qml。
+                onOpenStarmapRequested: function(starmapId, title) {
+                    root.openStarmapWorkspace(starmapId, title)
+                }
                 onConflictToolRequested: {
                     // 冲突刚产生或解决后刷新 — 选中 rail 的「冲突」工具。
                     // allowCollapseLeft=false：冲突自动弹出不该顺手收起用户的章节栏，
@@ -1504,10 +1530,23 @@ Rectangle {
                 root.outlineGroupExpanded = !root.outlineGroupExpanded
             }
             // Issue #835：章纲编辑完成交给 backend（与 sidebarRect 同一处理）。
+            // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
+            // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
             onChapterNoteChanged: function(note) {
-                if (editorController.chapterId && editorController.projectId && editorController.volumeId) {
-                    editorBackendRef.update_chapter_note(editorController.projectId, editorController.volumeId, editorController.chapterId, note)
+                if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
+                    return
+
+                var result = editorBackendRef.update_chapter_note(
+                    editorController.projectId,
+                    editorController.volumeId,
+                    editorController.chapterId,
+                    note
+                )
+
+                if (result && result.success) {
                     editorController.chapterNote = note
+                } else {
+                    singlePaneNavPanel.restoreChapterNoteFromSource()
                 }
             }
         }

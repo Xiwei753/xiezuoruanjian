@@ -40,12 +40,13 @@ Rectangle {
     readonly property bool toolPaneOpen: root.selectedTool !== ""
 
     // Issue #829：右侧工具 rail 的空间骨架按手稿固定。
-    // 星图 / AI 始终占这两个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
+    // 星图始终占这个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。
     // 冲突属于运行时异常入口，只在确实存在冲突时追加到下面。
+    // Issue #835 评论 6019713847: AI 暂无 Linux_Qt 真实会话面板，先从常驻入口
+    // 去掉，避免放一个空入口；以后真实 AI 面板接进来再恢复。
     readonly property var tools: {
         var list = [
-            { key: "starmap", label: qsTr("星图") },
-            { key: "ai", label: qsTr("AI") }
+            { key: "starmap", label: qsTr("星图") }
         ]
         if (root.hasConflicts) {
             list.push({ key: "conflict", label: qsTr("冲突") })

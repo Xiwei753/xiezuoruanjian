@@ -42,6 +42,10 @@ Rectangle {
     // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
     // 再下发给 StarMapPreviewPage，不在 RightDrawer 内部自造星图数据。
     property var starmapBackendRef: null
+    // Issue #835 评论 6019713847: StarMapPage 通过 StarMapController 读真实根星图，
+    // 不用写死卡片的 StarMapPreviewPage 占位。starMapControllerRef 由
+    // WritingWorkspace 透传（main.qml 注入 globalStarMapController）。
+    property var starMapControllerRef: null
     property var appState: ({})
     property bool isOpen: false
     // Issue #829：当前工具 key（"" 表示 pane 收起）。
@@ -65,6 +69,9 @@ Rectangle {
     signal closeRequested()
     // 冲突入口被请求时发出（hasConflicts 从 false 变 true），外部据此选中冲突工具。
     signal conflictToolRequested()
+    // Issue #835 评论 6019713847: StarMapPage 请求打开某个根星图时转发给外部，
+    // 由 WritingWorkspace 再转给 main.qml 走 appController.openRootStarmap。
+    signal openStarmapRequested(string starmapId, string title)
 
     // Issue #825：工具 key → 标题 + 是否可用。
     // 可用性与入口都由 rail 表达，这里只用于标题文字，不再自行决定显隐。
@@ -166,29 +173,18 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Issue #835：星图槽位接入真实 StarMapPreviewPage，
-                // 数据通过 starmapBackendRef / appState 透传，不在 QML 里伪造星图业务状态。
-                StarMapPreviewPage {
+                // Issue #835 评论 6019713847: 星图槽位接入真实 StarMapPage，
+                // 通过 StarMapController.listStarmaps() 读真实根星图，不用写死卡片的
+                // StarMapPreviewPage 占位。openStarmap 转发给外部走 openRootStarmap。
+                StarMapPage {
                     visible: root.selectedTool === "starmap"
                     anchors.fill: parent
                     dt: root.dt
-                    starmapBackendRef: root.starmapBackendRef
+                    starMapController: root.starMapControllerRef
                     appState: root.appState
-                }
 
-                // Issue #835：AI 真实会话面板尚未接入，不弹完全空白的 pane。
-                // 这里放一段明确占位文字，等真实 AI 组件接入后再替换。
-                Item {
-                    visible: root.selectedTool === "ai"
-                    anchors.fill: parent
-
-                    AppText {
-                        dt: root.dt
-                        anchors.centerIn: parent
-                        text: qsTr("AI 功能开发中，敬请期待")
-                        color: root._textSecondary
-                        font.pointSize: root._fontLg
-                        horizontalAlignment: Text.AlignHCenter
+                    onOpenStarmap: function(starmapId, title) {
+                        root.openStarmapRequested(starmapId, title)
                     }
                 }
 
