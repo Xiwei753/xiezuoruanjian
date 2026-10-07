@@ -353,6 +353,8 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                     return {
                         "ret": {"code": 0},
                         "appInfo": {
+                            "harmonyChildType": 10000000,
+                            "kindMainTag": 15000029,
                             "deviceTypes": [
                                 {"deviceType": 4, "appAdapters": ""},
                                 {"deviceType": 5, "appAdapters": ""},
@@ -385,6 +387,8 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                     return {
                         "ret": {"code": 0},
                         "appInfo": {
+                            "harmonyChildType": 10000000,
+                            "kindMainTag": 15000029,
                             "deviceTypes": [
                                 {"deviceType": 4, "appAdapters": ""},
                                 {"deviceType": 5, "appAdapters": ""},

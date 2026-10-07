@@ -18,24 +18,16 @@ jobs:
     name: Build and publish HarmonyOS test
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      AGC_AUTH_MODE: service_account
-      AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
-      AGC_TEST_GROUP_ID: ${{ secrets.AGC_TEST_GROUP_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
       - name: Check required secrets
         id: secrets
         shell: bash
         env:
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
           AGC_SA_CREDENTIALS_B64: ${{ secrets.AGC_SA_CREDENTIALS_B64 }}
           HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
           HARMONY_SIGN_CER_B64: ${{ secrets.HARMONY_SIGN_CER_B64 }}
@@ -46,6 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           required=(
+            AGC_APP_ID
             AGC_SA_CREDENTIALS_B64
             HARMONY_SIGN_P12_B64
             HARMONY_SIGN_CER_B64
@@ -67,10 +60,7 @@ jobs:
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      - name: Run publisher helper tests
-        run: python3 tools/test_publish_harmony_test.py
-
-      - name: Prepare AGC service-account credentials
+      - name: Prepare AGC service account
         if: steps.secrets.outputs.ready == 'true'
         shell: bash
         env:
@@ -82,7 +72,6 @@ jobs:
           mkdir -p "$agc_dir"
           credentials_path="$agc_dir/service-account.json"
           printf '%s' "$AGC_SA_CREDENTIALS_B64" | base64 --decode > "$credentials_path"
-          chmod 600 "$credentials_path"
 
           python3 - "$credentials_path" <<'PY'
           import json
@@ -91,15 +80,15 @@ jobs:
 
           credential = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           required = ("key_id", "private_key", "sub_account", "token_uri")
-          valid = all(
-              isinstance(credential.get(key), str) and credential[key].strip()
-              for key in required
-          )
-          if not valid:
+          if not all(isinstance(credential.get(k), str) and credential[k].strip() for k in required):
               raise SystemExit("AGC service-account credential is incomplete")
           PY
 
-          printf 'AGC_SA_CREDENTIALS=%s\n' "$credentials_path" >> "$GITHUB_ENV"
+          {
+            echo 'AGC_SERVICE_ACCOUNT_JSON<<__AGC_JSON__'
+            cat "$credentials_path"
+            echo '__AGC_JSON__'
+          } >> "$GITHUB_ENV"
 
       - name: Prepare HarmonyOS release signing
         if: steps.secrets.outputs.ready == 'true'
@@ -119,39 +108,20 @@ jobs:
           printf '%s' "$HARMONY_SIGN_PROFILE_B64" | base64 --decode > "$sign_dir/release.p7b"
           chmod 600 "$sign_dir/release.p12" "$sign_dir/release.cer" "$sign_dir/release.p7b"
 
-          printf 'HARMONY_SIGN_P12_FILE=%s\n' "$sign_dir/release.p12" >> "$GITHUB_ENV"
-          printf 'HARMONY_SIGN_CER_FILE=%s\n' "$sign_dir/release.cer" >> "$GITHUB_ENV"
-          printf 'HARMONY_SIGN_PROFILE_FILE=%s\n' "$sign_dir/release.p7b" >> "$GITHUB_ENV"
+          echo "HARMONY_SIGN_P12_FILE=$sign_dir/release.p12" >> "$GITHUB_ENV"
+          echo "HARMONY_SIGN_CER_FILE=$sign_dir/release.cer" >> "$GITHUB_ENV"
+          echo "HARMONY_SIGN_PROFILE_FILE=$sign_dir/release.p7b" >> "$GITHUB_ENV"
 
-      - name: Install HarmonyOS CLI and AGC publisher
+      - name: Install HarmonyOS CLI
         if: steps.secrets.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
           source tools/setup_harmony_cli.sh
-
           echo "HARMONY_CLI_HOME=$HARMONY_CLI_HOME" >> "$GITHUB_ENV"
           echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME" >> "$GITHUB_ENV"
           echo "$HARMONY_CLI_HOME/tool/node/bin" >> "$GITHUB_PATH"
           echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
-
-          # Fetch the current HarmonyOS Agent Skills upstream directly.
-          # The publisher itself is a standalone Node.js script; no coding
-          # agent (OpenCode/Codex/Claude) is needed on the GitHub runner.
-          skills_root="$RUNNER_TEMP/harmonyos-agent-skills"
-          git clone --depth 1 \
-            https://gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills.git \
-            "$skills_root"
-
-          cli_js="$(find "$skills_root" \
-            -path '*/hmos-connect-api-cli-skill/scripts/connect-api-cli.js' \
-            -type f -print -quit)"
-          if [ -z "$cli_js" ]; then
-            echo "Official HarmonyOS Agent Skills checkout does not contain connect-api-cli.js" >&2
-            exit 1
-          fi
-          node "$cli_js" --version
-          echo "CONNECT_API_CLI_JS=$cli_js" >> "$GITHUB_ENV"
 
       - name: Install HarmonyOS project dependencies
         if: steps.secrets.outputs.ready == 'true'
@@ -167,11 +137,44 @@ jobs:
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
 
-      - name: Publish latest main to AGC invitation testing
+      - name: Build and sign HarmonyOS APP
         if: steps.secrets.outputs.ready == 'true'
+        id: build
         shell: bash
         env:
           HARMONY_SIGN_STORE_PASSWORD: ${{ secrets.HARMONY_SIGN_STORE_PASSWORD }}
           HARMONY_SIGN_KEY_ALIAS: ${{ secrets.HARMONY_SIGN_KEY_ALIAS }}
           HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
-        run: ./tools/publish_harmony_test.sh
+        run: |
+          set -euo pipefail
+          app_path="$(
+            python3 - <<'PY'
+          from tools.publish_harmony_test import build_release_app
+          print(build_release_app(False))
+          PY
+          )"
+          test -f "$app_path"
+          echo "app_path=$app_path" >> "$GITHUB_OUTPUT"
+          echo "Signed APP: $app_path"
+
+      - name: Deploy to AGC invitation testing
+        if: steps.secrets.outputs.ready == 'true'
+        id: agc
+        uses: Eilgnaw/deploy-to-agc-testing@e3ea3b6b1c30864f4e4f8fbeb3e6322580ee9330
+        with:
+          service-account-json: ${{ env.AGC_SERVICE_ACCOUNT_JSON }}
+          app-id: ${{ secrets.AGC_APP_ID }}
+          app-path: ${{ steps.build.outputs.app_path }}
+          language: zh-Hans
+          test-desc: 素笺自动测试版
+          release-type: "6"
+          test-type: "3"
+          generate-invite-code: "false"
+
+      - name: Print AGC result
+        if: steps.secrets.outputs.ready == 'true' && success()
+        shell: bash
+        run: |
+          echo "Version ID: ${{ steps.agc.outputs.version-id }}"
+          echo "Package ID: ${{ steps.agc.outputs.pkg-version }}"
+          echo "Group ID: ${{ steps.agc.outputs.group-id }}"
