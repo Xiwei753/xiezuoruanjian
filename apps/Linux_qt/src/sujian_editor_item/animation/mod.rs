@@ -23,13 +23,13 @@ pub(crate) mod render_plan_builder;
 /// Issue #826 评论 24：不可拆 shaping cluster 的原子视觉交接。
 pub(crate) mod shaping_transition;
 
+pub(crate) use coordinator::{
+    blink_mode_for_frontier, CursorMoveInputs, EditFrontierRequest, LinuxEditorAnimationCoordinator,
+};
 #[allow(unused_imports)]
 pub(crate) use coordinated_caret::{
     project_onto_layer, CaretMotionSegment, CoordinatedBoundary, CoordinatedCaretMotion,
     CoordinatedCaretSample,
-};
-pub(crate) use coordinator::{
-    blink_mode_for_frontier, CursorMoveInputs, EditFrontierRequest, LinuxEditorAnimationCoordinator,
 };
 #[allow(unused_imports)]
 pub(crate) use edit_frontier::{

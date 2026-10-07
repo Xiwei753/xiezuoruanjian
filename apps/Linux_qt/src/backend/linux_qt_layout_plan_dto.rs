@@ -183,7 +183,10 @@ mod tests {
         for width_vp in [360.0_f32, 700.0, 1000.0, 1400.0, 1920.0] {
             let contract = contract_for(width_vp, 900.0);
             let dto = LinuxQtLayoutPlanDto::from_contract(&contract, width_vp, true);
-            assert_eq!(dto.list_pane_width_vp, contract.metrics.list_pane_width_dp);
+            assert_eq!(
+                dto.list_pane_width_vp,
+                contract.metrics.list_pane_width_dp
+            );
             // Core 的默认值是 320dp，所有宽度下都应保持。
             assert_eq!(dto.list_pane_width_vp, 320.0);
         }

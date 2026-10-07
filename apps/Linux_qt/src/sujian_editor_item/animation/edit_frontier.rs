@@ -1799,7 +1799,8 @@ impl EditFrontierState {
         sample: &EditFrontierSample,
     ) -> f64 {
         if let Some(boundary) = sample.coordinated {
-            (boundary.reveal_distance - region.distance_start).clamp(0.0, region.path.total_length)
+            (boundary.reveal_distance - region.distance_start)
+                .clamp(0.0, region.path.total_length)
         } else {
             self.reveal.distance_at(region, sample.progress)
         }
@@ -1812,7 +1813,8 @@ impl EditFrontierState {
         sample: &EditFrontierSample,
     ) -> f64 {
         if let Some(boundary) = sample.coordinated {
-            (boundary.conceal_distance - region.distance_start).clamp(0.0, region.path.total_length)
+            (boundary.conceal_distance - region.distance_start)
+                .clamp(0.0, region.path.total_length)
         } else {
             self.conceal.distance_at(region, sample.progress)
         }
@@ -1906,7 +1908,10 @@ impl EditFrontierState {
 
     /// 一条 region 本帧的 keep rect（region-local，评论 16）。
     fn region_conceal_rects(&self, region: &FrontierRegion, progress: f64) -> Vec<FrontierRect> {
-        self.region_conceal_rects_at(region, self.conceal.distance_at(region, progress))
+        self.region_conceal_rects_at(
+            region,
+            self.conceal.distance_at(region, progress),
+        )
     }
 
     /// 按给定总距离算一条 region 的 keep rect。
@@ -1947,7 +1952,8 @@ impl EditFrontierState {
         }
         let mut glyphs = Vec::new();
         for region in &self.conceal.regions {
-            let keep = self.region_conceal_rects_at(region, self.conceal_distance(region, sample));
+            let keep =
+                self.region_conceal_rects_at(region, self.conceal_distance(region, sample));
             for geometry in &self.conceal_glyphs {
                 // Issue #826 评论 19：region 是按 glyph 的 **base identity** 建的，
                 // 所以归属判定也必须用 `base_range`；用当前坐标的 `range` 去和

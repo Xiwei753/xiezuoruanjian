@@ -426,7 +426,11 @@ fn left_tree_project_title_is_static_no_collapse() {
 
     // 作品标题必须是静态行（Rectangle + AppText），不是 WritingTreeGroupHeader
     // 查找顶部标题区域：在 ColumnLayout 里，作品标题行不应使用 WritingTreeGroupHeader
-    let top_section = slice_between(&src, "ColumnLayout {", "// Tree list");
+    let top_section = slice_between(
+        &src,
+        "ColumnLayout {",
+        "// Tree list",
+    );
     assert!(
         !top_section.contains("WritingTreeGroupHeader"),
         "Issue #836：顶部作品标题不得使用 WritingTreeGroupHeader（应为静态行），实际窗口:\n{top_section}"
@@ -437,7 +441,11 @@ fn left_tree_project_title_is_static_no_collapse() {
     );
 
     // 卷仍走 WritingTreeGroupHeader
-    let volume_header = slice_between(&src, "// ── 卷分组头 ──", "// 卷头右键菜单");
+    let volume_header = slice_between(
+        &src,
+        "// ── 卷分组头 ──",
+        "// 卷头右键菜单",
+    );
     assert!(
         volume_header.contains("WritingTreeGroupHeader"),
         "Issue #836：卷仍必须走 WritingTreeGroupHeader，实际窗口:\n{volume_header}"

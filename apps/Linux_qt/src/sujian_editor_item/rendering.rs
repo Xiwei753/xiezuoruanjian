@@ -155,7 +155,8 @@ impl SujianEditorItem {
         // 其余情况（协同关 / 纯光标移动 / Snap / 选区隐藏 / 前沿不存在…）走
         // 原来的独立 Tween，并清掉可能残留的协同 motion——任何独立的光标决策
         // 都意味着用户亲自接管了光标（见 `clear_coordinated_caret`）。
-        let should_be_visible = self.current_editor_enabled && !has_selection && !is_preediting;
+        let should_be_visible =
+            self.current_editor_enabled && !has_selection && !is_preediting;
         let hard_snap_requested = self.cursor_ctrl.force_snap_next
             || selection_gesture_active
             || self.current_is_scrolling;
@@ -165,9 +166,7 @@ impl SujianEditorItem {
             && should_be_visible
             && !hard_snap_requested;
         let result = if coordinated_follow {
-            let taken = self
-                .pipeline
-                .animation_coordinator_mut()
+            let taken = self.pipeline.animation_coordinator_mut()
                 .begin_or_retarget_coordinated_caret(
                     self.cursor_ctrl.visual_x,
                     self.cursor_ctrl.visual_y,
@@ -365,7 +364,8 @@ impl SujianEditorItem {
 
         let visibility_changed = !old_visible;
         let blink_changed = old_blink_visible != self.cursor_ctrl.blink_visible;
-        let position_changed = (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01;
+        let position_changed =
+            (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01;
         CursorUpdateResult {
             ime_needs_update: position_changed,
             needs_repaint: true,

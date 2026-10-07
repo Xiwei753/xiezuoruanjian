@@ -413,9 +413,7 @@ fn issue826_c38_projection_is_caret_driven_no_glyph_inference() {
         "Issue #826 评论 38: 投影输入必须是本帧 caret 的 (x, y)。"
     );
     assert!(
-        window.contains("segment.y")
-            && window.contains("x_from")
-            && window.contains("distance_start + prefix"),
+        window.contains("segment.y") && window.contains("x_from") && window.contains("distance_start + prefix"),
         "Issue #826 评论 38: 投影必须按 caret.y 找同行段、按 x 比例算距离。"
     );
     for forbidden in ["rightmost", "conceal_edge", "infer"] {
