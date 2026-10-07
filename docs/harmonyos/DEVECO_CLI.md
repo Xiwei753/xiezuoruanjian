@@ -282,24 +282,135 @@ devecocli ui screenshot --path ./shot.png
 
 模拟器：`devecocli emulator list|start|stop|create`（首次可能需 `devecocli emulator license`）。
 
-## 本地构建 → AGC 内测自动化（路线）
+## 本地构建 → AGC 测试版自动化（已落地）
 
-已具备的 CLI 能力：
-
-1. `devecocli build --build-mode release`
-2. 证书/Profile：`devecocli signature generate`（本机 auth）
-3. `hmos-connect-api-cli-skill`：AGC 登录、上传 APP、邀请公开测试/内部测试、assembleApp/Hap
-
-建议流水线（凭据全部走 secrets）：
+Linux 一键入口：
 
 ```bash
-devecocli auth status
-./tools/build_harmony.sh
-devecocli build --build-mode release
-# 再按 hmos-connect-api-cli-skill 的 workflows 上传与建内测
+./tools/publish_harmony_test.sh
 ```
 
-尚需确认：当前账号团队配额、release 签名 Profile 是否足够、AGC 上应用 `com.xiwei.sujian` 是否已建。这些在首次跑 connect-api 时验证，不写死进文档。
+默认发布 **邀请测试**（`testType=3`），完整链路是：
+
+```text
+tools/setup_harmony_cli.sh
+  → tools/build_harmony.sh
+  → hvigorw --mode project -p product=default -p buildMode=release assembleApp
+  → AGC auth / appId
+  → 新建测试版本（releaseType=6）
+  → 上传 .app
+  → 添加测试软件包
+  → 更新测试版本（绑定 pkgId + 测试群组）
+  → 提交测试版本审核
+```
+
+> AGC 测试分发上传的是 **`.app`**，不是 `.hap`。HAP 只用于本地 hdc 安装。
+
+### 一次性准备
+
+1. **本机 release 签名已经可用**：`apps/harmony/build-profile.json5` 的 `default`
+   signingConfig 需要填入本机发布证书 / Profile / P12 信息。仓库中的空 material
+   只是占位；密钥、证书、密码和绝对路径禁止提交。
+2. **AGC 凭据**：推荐 Service Account。凭据可以导出为环境变量，也可以放仓库根
+   `.env`（`.env*` 已被 `.gitignore` 忽略）：
+
+```dotenv
+AGC_AUTH_MODE=service_account
+AGC_SA_CREDENTIALS=/home/<user>/.config/sujian/agc_private.json
+
+# 邀请测试有多个测试群组时必须明确指定；只有一个群组时脚本会自动使用。
+AGC_TEST_GROUP_ID=<groupId>
+```
+
+也支持 API Client：
+
+```dotenv
+AGC_CLIENT_ID=<clientId>
+AGC_CLIENT_SECRET=<clientSecret>
+AGC_TEST_GROUP_ID=<groupId>
+```
+
+Service Account 私钥建议放在仓库外（例如 `~/.config/sujian/`），不要复制进工程。
+
+### connect-api-cli 来源
+
+脚本按顺序使用：
+
+1. `CONNECT_API_CLI`（显式命令）；
+2. `CONNECT_API_CLI_JS`（显式 JS 路径）；
+3. 本仓库由 DevEco skill 安装的 `hmos-connect-api-cli-skill/scripts/connect-api-cli.js`；
+4. PATH 中已有的 `connect-api-cli`；
+5. 最后才用 `npx --yes connect-api-cli@1.1.3`。
+
+可用 `CONNECT_API_CLI_NPM_VERSION` 覆盖 npm 版本。包装脚本不会只信进程退出码，
+还会校验 AGC 返回的 `ret.code` / `rtnCode`，兼容旧版 CLI 的业务失败退出码问题。
+
+### 常用用法
+
+完整构建并提交邀请测试：
+
+```bash
+./tools/publish_harmony_test.sh
+```
+
+已有 release 签名 APP，只做 AGC 流程：
+
+```bash
+./tools/publish_harmony_test.sh --app /path/to/sujian.app
+```
+
+只创建 / 上传 / 绑定，不提交审核：
+
+```bash
+./tools/publish_harmony_test.sh --no-submit
+```
+
+按群组名精确匹配：
+
+```bash
+AGC_TEST_GROUP_NAME="素笺测试组" ./tools/publish_harmony_test.sh
+```
+
+公开测试：
+
+```bash
+./tools/publish_harmony_test.sh --test-type 4
+```
+
+可选参数：
+
+- `--skip-rust`：复用已确认最新的 Harmony prebuilt，不重编 Rust FFI。
+- `--test-desc <文本>`：测试说明（最多 50 字符）；默认带当前 Git 短 SHA。
+- `--start-time-ms` / `--end-time-ms`：需要显式测试时间窗时传 Unix 毫秒时间戳。
+- `--notify`：在邀请测试信息中请求通知测试成员。
+- `--distribute-mode 1|2`：默认 `1`（测试专区），`2` 为 AppGallery。
+
+对应环境变量为 `AGC_APP_ID`、`AGC_PACKAGE_NAME`、`AGC_TEST_TYPE`、
+`AGC_TEST_DESC`、`AGC_TEST_GROUP_ID`、`AGC_TEST_GROUP_NAME`、
+`AGC_DISTRIBUTE_MODE`、`AGC_TEST_START_TIME_MS`、`AGC_TEST_END_TIME_MS`、
+`AGC_TEST_NOTIFY=1`。
+
+### 安全与失败策略
+
+- 脚本**不会**自动创建/删除证书、Profile、应用、测试群组或测试成员。
+- 邀请测试没有群组时直接停止；只有一个群组时自动使用；多个群组时不猜，
+  必须通过 `AGC_TEST_GROUP_ID` 或 `AGC_TEST_GROUP_NAME` 指定。
+- 构建前只检查 release 签名字段是否为空，不打印字段值。
+- 构建固定使用 `buildMode=release + assembleApp`；能解析 APP 内部元数据时还会
+  拒绝检测到的 debug 包。
+- 任一步拿不到 `versionId`、`objectId` 或 `pkgId` 都立即停止，不继续写 AGC。
+- 默认不会清理旧测试版本，避免在 API 状态不明确时误删。
+
+辅助逻辑测试：
+
+```bash
+python3 tools/test_publish_harmony_test.py
+```
+
+官方 Hvigor 命令行文档中，release APP 的标准命令也是
+`hvigorw --mode project -p product=default -p buildMode=release assembleApp`；
+Testing API 的更新版本接口使用 `versionId + pkgId + openTestInfo.testTaskInfo.groupInfos`
+绑定测试包和邀请测试群组。
 
 ## 故障排查
 
