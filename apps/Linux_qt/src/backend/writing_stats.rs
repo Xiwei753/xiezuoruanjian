@@ -33,11 +33,34 @@ impl AppBackend {
         }
     }
 
+    /// Issue #843 复核评论 6045207375：查询统计前先等 writer 把队列中的 Record
+    /// 全部落盘，避免读到旧数据或撞上正在追加的行。
+    ///
+    /// 写入在 worker thread，查询在 UI 线程用另一份 `WriterCoreApi`，两份 API 的
+    /// 内部锁不是同一把锁，对同一份 `events.local/*.jsonl` 没有顺序保证。barrier
+    /// 让 worker 处理到 Barrier 消息时前面所有 Record 已落盘，回 ack 后 UI 线程
+    /// 再读磁盘。
+    ///
+    /// 返回 `true` 表示 barrier 成功（或没有 writer，直接通过）；
+    /// 返回 `false` 表示 worker 已退出，调用方应走明确错误/空结果，不能拿旧磁盘
+    /// 数据冒充最新结果。
+    fn stats_barrier(&self) -> bool {
+        if let Some(ref writer) = self.stats_writer {
+            writer.barrier().is_ok()
+        } else {
+            true
+        }
+    }
+
     pub(crate) fn get_writing_stats_summary(
         &self,
         start_date: QString,
         end_date: QString,
     ) -> QString {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return "{\"error\":\"stats_writer_barrier_failed\"}".into();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -59,6 +82,10 @@ impl AppBackend {
     /// `todayDateString()` 那种本地日期拼装一旦和 Core 的时区口径错开，
     /// 凌晨就会出现「今日进度提前清零」（Issue #829）。
     pub(crate) fn get_today_writing_stats_summary_object(&self) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         if let Some(core) = self.core_api() {
             match core.get_today_writing_stats_summary_json() {
                 Ok(val) => qjson_object_from_json(&val),
@@ -81,6 +108,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -104,6 +135,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QString {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return "{\"error\":\"stats_writer_barrier_failed\"}".into();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -128,6 +163,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -145,6 +184,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QString {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return "{\"error\":\"stats_writer_barrier_failed\"}".into();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -169,6 +212,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -186,6 +233,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QString {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return "{\"error\":\"stats_writer_barrier_failed\"}".into();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -210,6 +261,10 @@ impl AppBackend {
         start_date: QString,
         end_date: QString,
     ) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -228,6 +283,10 @@ impl AppBackend {
         end_date: QString,
         bucket_minutes: u32,
     ) -> QString {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return "{\"error\":\"stats_writer_barrier_failed\"}".into();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -249,6 +308,10 @@ impl AppBackend {
         end_date: QString,
         bucket_minutes: u32,
     ) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         let sd = start_date.to_string();
         let ed = end_date.to_string();
         if let Some(core) = self.core_api() {
@@ -268,6 +331,10 @@ impl AppBackend {
     /// 「现在」为终点重算窗口速度，停笔超过一个窗口后自然回落到 0，端侧不需要
     /// 自己判断历史桶是否过期，也不需要为刷新它强制 flush 统计事件。
     pub(crate) fn get_current_writing_speed(&self, window_seconds: u32) -> QJsonObject {
+        // Issue #843 复核评论 6045207375：查询前先等 writer 把队列中的 Record 全部落盘。
+        if !self.stats_barrier() {
+            return QJsonObject::default();
+        }
         if let Some(core) = self.core_api() {
             match core.get_current_writing_speed_json(window_seconds) {
                 Ok(val) => qjson_object_from_json(&val),

@@ -393,7 +393,7 @@ Rectangle {
         // 左段：Core 当前写作速度。
         // 不用写作速度曲线的最后一个桶——曲线桶只生成到最后一个输入事件，
         // 停笔后它会一直挂着停笔前的非零值。也别在这里判断桶是否过期或强制
-        // flush 统计事件，Core 已经把内存缓冲和已落盘事件当成同一份事实源。
+        // flush 统计事件，平台 writer queue + raw JSONL 是唯一事实源。
         // 失败保持上一次的值，不清零：Core 拿不到不等于"这一刻没写字"。
         var speed = be.get_current_writing_speed(root.statusSpeedWindowSeconds)
         if (speed && speed.charsPerMinute !== undefined) {
