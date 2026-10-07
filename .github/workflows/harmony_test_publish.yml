@@ -19,9 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      AGC_AUTH_MODE: client_credentials
-      AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
-      AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+      AGC_AUTH_MODE: service_account
       AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
       AGC_TEST_GROUP_ID: ${{ secrets.AGC_TEST_GROUP_ID }}
 
@@ -38,6 +36,7 @@ jobs:
         id: secrets
         shell: bash
         env:
+          AGC_SA_CREDENTIALS_B64: ${{ secrets.AGC_SA_CREDENTIALS_B64 }}
           HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
           HARMONY_SIGN_CER_B64: ${{ secrets.HARMONY_SIGN_CER_B64 }}
           HARMONY_SIGN_PROFILE_B64: ${{ secrets.HARMONY_SIGN_PROFILE_B64 }}
@@ -47,8 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           required=(
-            AGC_CLIENT_ID
-            AGC_CLIENT_SECRET
+            AGC_SA_CREDENTIALS_B64
             HARMONY_SIGN_P12_B64
             HARMONY_SIGN_CER_B64
             HARMONY_SIGN_PROFILE_B64
@@ -71,6 +69,37 @@ jobs:
 
       - name: Run publisher helper tests
         run: python3 tools/test_publish_harmony_test.py
+
+      - name: Prepare AGC service-account credentials
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        env:
+          AGC_SA_CREDENTIALS_B64: ${{ secrets.AGC_SA_CREDENTIALS_B64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          agc_dir="$RUNNER_TEMP/sujian-agc"
+          mkdir -p "$agc_dir"
+          credentials_path="$agc_dir/service-account.json"
+          printf '%s' "$AGC_SA_CREDENTIALS_B64" | base64 --decode > "$credentials_path"
+          chmod 600 "$credentials_path"
+
+          python3 - "$credentials_path" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          credential = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          required = ("key_id", "private_key", "sub_account", "token_uri")
+          valid = all(
+              isinstance(credential.get(key), str) and credential[key].strip()
+              for key in required
+          )
+          if not valid:
+              raise SystemExit("AGC service-account credential is incomplete")
+          PY
+
+          printf 'AGC_SA_CREDENTIALS=%s\n' "$credentials_path" >> "$GITHUB_ENV"
 
       - name: Prepare HarmonyOS release signing
         if: steps.secrets.outputs.ready == 'true'
