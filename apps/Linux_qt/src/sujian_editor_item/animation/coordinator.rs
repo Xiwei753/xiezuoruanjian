@@ -26,8 +26,8 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animation::coordinated_caret::{
-    project_onto_layer, CaretMotionSegment, CoordinatedBoundary, CoordinatedCaretMotion,
-    CoordinatedCaretSample,
+    project_onto_layer, CaretMotionSegment, CaretPathSource, CaretSegmentKind, CoordinatedBoundary,
+    CoordinatedCaretMotion, CoordinatedCaretSample,
 };
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind,
@@ -684,24 +684,32 @@ impl LinuxEditorAnimationCoordinator {
         let mut sample = frontier.sample(frame_now);
         if let Some(motion) = self.active_coordinated_caret.as_ref() {
             let progress = motion.sample_progress(frame_now);
-            let (caret_x, caret_y) =
-                motion.position_at_distance(motion.distance_at_progress(progress));
-            let reveal_distance =
-                project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)
-                    .unwrap_or_else(|| frontier.reveal.advanced(progress));
-            // 评论 40 BLOCKER 2：Forward Delete 的移动边界不是 drawn caret。
-            // 逻辑 caret 删除前后同点（start==target），若拿固定 caret 反投影，
-            // 被删 glyph 的 Forward 路径会被投成 0，整个 duration 不吞、最后一下
-            // 消失（旧 #722 问题3 同一个 bug）。Forward 直接用**同一份 motion
-            // progress** 推进 conceal，drawn caret 可以原地。Backward 继续用
-            // caret 投影（光标回退多少就吞多少）。
+            let (caret_x, caret_y, frontier_distance) =
+                motion.sample_at_distance(motion.distance_at_progress(progress));
+            // 评论 41：来源侧直接用 motion 携带的**文字前沿距离**（Boundary 段
+            // 精确累加，Connector 段冻结），不再靠 caret 反投影 —— 单字软换行
+            // 前置 connector 期间不会提前吐字。另一侧（只有 Replace 会同时有两边）
+            // 仍用 caret 位置投影。
+            //
+            // 评论 40：Forward Delete 的移动边界不是 drawn caret（start==target），
+            // 直接走同一份 motion progress 时钟，caret 可以原地。
             let conceal_distance = if frontier.conceal_direction == ConcealDirection::Forward
                 && !frontier.conceal.regions.is_empty()
             {
                 frontier.conceal.advanced(progress)
+            } else if motion.source == CaretPathSource::Conceal {
+                frontier_distance
+                    .unwrap_or_else(|| frontier.conceal.advanced(progress))
             } else {
                 project_onto_layer(&frontier.conceal.regions, caret_x, caret_y)
                     .unwrap_or_else(|| frontier.conceal.advanced(progress))
+            };
+            let reveal_distance = if motion.source == CaretPathSource::Reveal {
+                frontier_distance
+                    .unwrap_or_else(|| frontier.reveal.advanced(progress))
+            } else {
+                project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)
+                    .unwrap_or_else(|| frontier.reveal.advanced(progress))
             };
             sample.coordinated = Some(CoordinatedBoundary {
                 reveal_distance,
@@ -1337,7 +1345,7 @@ impl LinuxEditorAnimationCoordinator {
                 .expect("retarget 分支必有旧 motion");
             let (current_x, current_y) =
                 old.position_at_distance(old.distance_at_progress(old.sample_progress(now)));
-            let (segments, total_length) = Self::coordinated_path_from_frontier(
+            let (segments, total_length, source) = Self::coordinated_path_from_frontier(
                 frontier,
                 current_x,
                 current_y,
@@ -1347,6 +1355,7 @@ impl LinuxEditorAnimationCoordinator {
             self.active_coordinated_caret = Some(CoordinatedCaretMotion {
                 segments,
                 total_length,
+                source,
                 started_at,
                 duration_ms,
                 target_x,
@@ -1354,11 +1363,12 @@ impl LinuxEditorAnimationCoordinator {
             });
             return true;
         }
-        let (segments, total_length) =
+        let (segments, total_length, source) =
             Self::coordinated_path_from_frontier(frontier, start_x, start_y, target_x, target_y);
         self.active_coordinated_caret = Some(CoordinatedCaretMotion {
             segments,
             total_length,
+            source,
             started_at,
             duration_ms,
             target_x,
@@ -1367,129 +1377,200 @@ impl LinuxEditorAnimationCoordinator {
         true
     }
 
-    /// Issue #826 评论 39 BLOCKER 2：按当前前沿路径构造 caret 分段轨迹。
+    /// Issue #826 评论 39/41：按当前前沿路径构造 caret 分段轨迹。
     ///
-    /// 吐字侧有可见 path 就跟着吐字侧走，纯吞字跟着吞字侧走（方向天然一致，
-    /// Backspace 的 Backward 段序直接可用）；两侧都没有可见 path（Enter /
-    /// shaping 全接管）时退成单段 caret-only（旧 caret 直达新 caret，文字侧
-    /// 只剩 Reflow/Shaping 独立跑）。
+    /// 轨迹 = 若干 [`CaretSegmentKind::Boundary`]（文字吞吐边界，几何原样取
+    /// 自 Frontier path，`y_from == y_to == 视觉行`，**绝不被钉成斜线**）
+    /// 用 [`CaretSegmentKind::Connector`]（纯光标二维移动，前沿距离冻结）连接：
+    /// - 前置 connector：旧 caret → 第一个文字段入口（单字软换行时旧 caret 在
+    ///   上一行，文字段在下一行，跨行位移全由 connector 承担）；
+    /// - 文字段之间的 connector：相邻文字段分属不同行时；
+    /// - 后置 connector：最后一个文字段出口 → canonical caret。
     ///
-    /// 首段起点钉死在 `start`（创建时是屏幕 visual，retarget 时是旧 motion
-    /// 当前位置），末段终点钉死在 `target`（最新 canonical caret）：glyph
-    /// 矩形与 caret 矩形的定位基准天然差几个像素，不对齐首尾第一帧跳、
-    /// 最后一帧还得 snap。钉死后途中仍在行段上走，首尾精确无跳变。
+    /// 吐字侧有可见 path 就跟着吐字侧，纯吞字（Backward）跟着吞字侧；两侧都无
+    /// 可见 path（Enter / shaping 全接管），或 Forward Delete（caret 原地、
+    /// conceal 走同一 progress 时钟）时退成单段 caret-only connector。
     fn coordinated_path_from_frontier(
         frontier: &EditFrontierState,
         start_x: f64,
         start_y: f64,
         target_x: f64,
         target_y: f64,
-    ) -> (Vec<CaretMotionSegment>, f64) {
-        fn segments_of(regions: &[FrontierRegion]) -> (Vec<CaretMotionSegment>, f64) {
+    ) -> (Vec<CaretMotionSegment>, f64, CaretPathSource) {
+        fn connector(
+            from_x: f64,
+            from_y: f64,
+            to_x: f64,
+            to_y: f64,
+            frozen: Option<f64>,
+        ) -> Option<CaretMotionSegment> {
+            let dx = to_x - from_x;
+            let dy = to_y - from_y;
+            let length = dx.hypot(dy);
+            if length <= 1e-9 {
+                return None;
+            }
+            Some(CaretMotionSegment {
+                kind: CaretSegmentKind::Connector,
+                x_from: from_x,
+                y_from: from_y,
+                x_to: to_x,
+                y_to: to_y,
+                h: dy.abs(),
+                visual_length: length,
+                frontier_distance_from: frozen,
+            })
+        }
+        // caret 沿某视觉行时用的是 caret 的 y（caret top），不是该行的行顶 y。
+        // 因此 Boundary 段的 caret y 取「该行对应的 caret y」：与 start 同行取
+        // start_y，与 target 同行取 target_y，中间行退用行顶 y。否则前行 y 与
+        // 行顶 y 差几个像素，会给每条文字段两端各造一个竖向 connector。
+        fn boundary_segments(
+            regions: &[FrontierRegion],
+            start_y: f64,
+            target_y: f64,
+        ) -> (Vec<CaretMotionSegment>, f64) {
             let mut segments = Vec::new();
-            let mut total = 0.0;
+            let mut cumulative = 0.0;
             for region in regions {
                 for segment in &region.path.segments {
-                    total += segment.visual_length;
+                    // 同一视觉行（start/target y 基本相等）：caret 沿该行的
+                    // caret y 水平走，文字段 y 用 start_y，避免 caret 掉到行顶
+                    // 再回来。跨行：文字段保持各自视觉行 y，由 connector 承担
+                    // 行间 caret y 变化（评论 41）。
+                    let same_row = (start_y - target_y).abs() <= 1.0;
+                    let caret_y = if same_row { start_y } else { segment.y };
                     segments.push(CaretMotionSegment {
+                        kind: CaretSegmentKind::Boundary,
                         x_from: segment.x_from,
-                        y_from: segment.y,
+                        y_from: caret_y,
                         x_to: segment.x_to,
-                        y_to: segment.y,
+                        y_to: caret_y,
                         h: segment.h,
                         visual_length: segment.visual_length,
+                        frontier_distance_from: Some(cumulative),
                     });
+                    cumulative += segment.visual_length;
                 }
             }
-            (segments, total)
+            (segments, cumulative)
         }
-        let (reveal_segments, reveal_total) = segments_of(&frontier.reveal.regions);
-        let (mut segments, _) = if reveal_total > 1e-9 {
-            (reveal_segments, reveal_total)
+        let (reveal_boundaries, reveal_total) =
+            boundary_segments(&frontier.reveal.regions, start_y, target_y);
+        let (source, mut boundaries) = if reveal_total > 1e-9 {
+            (CaretPathSource::Reveal, reveal_boundaries)
         } else {
-            let (conceal_segments, conceal_total) = segments_of(&frontier.conceal.regions);
-            if conceal_total <= 1e-9 {
-                let dx = target_x - start_x;
-                let dy = target_y - start_y;
-                let length = dx.hypot(dy).max(f64::MIN_POSITIVE);
-                return (
-                    vec![CaretMotionSegment {
-                        x_from: start_x,
-                        y_from: start_y,
-                        x_to: target_x,
-                        y_to: target_y,
-                        h: dy.abs(),
-                        visual_length: length,
-                    }],
-                    length,
-                );
+            let (conceal_boundaries, conceal_total) =
+                boundary_segments(&frontier.conceal.regions, start_y, target_y);
+            if conceal_total > 1e-9 && frontier.conceal_direction != ConcealDirection::Forward {
+                (CaretPathSource::Conceal, conceal_boundaries)
+            } else {
+                // 两侧都无可见 path，或 Forward Delete：只建 caret-only connector。
+                let (segments, total) = match connector(start_x, start_y, target_x, target_y, None)
+                {
+                    Some(c) => {
+                        let len = c.visual_length;
+                        (vec![c], len)
+                    }
+                    None => (Vec::new(), f64::MIN_POSITIVE),
+                };
+                return (segments, total, CaretPathSource::CaretOnly);
             }
-            (conceal_segments, conceal_total)
         };
-        // Issue #826 评论 40：retarget 时当前 caret 可能已经在后面某一段（跨行
-        // 切段后）。不能把整条 reveal path 从第一段开始重建再把首点钉到当前
-        // 位置 —— 那会造出 “当前行 -> 第一段行 -> 当前行” 的假连接段。先按
-        // 当前 (x,y) 找到所在段，丢掉已走过的前导段，再从该段起钉首尾。
-        let same_line: Vec<usize> = segments
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| {
-                let y_lo = s.y_from.min(s.y_to);
-                let y_hi = s.y_from.max(s.y_to) + s.h.max(0.0);
-                start_y >= y_lo - 1.0 && start_y <= y_hi + 1.0
-            })
-            .map(|(i, _)| i)
-            .collect();
+        // retarget：当前 caret 可能已经在某文字段内 / 越过前导段。找到所在段，
+        // 丢弃前导文字段；若在某段内则从该段中间起（保持该段 y 行几何不变）。
         let mut keep_from = 0usize;
-        if let Some(&last_line) = same_line.last() {
-            let mut chosen = same_line[0];
-            for &i in &same_line {
-                let s = &segments[i];
-                let x_lo = s.x_from.min(s.x_to);
-                let x_hi = s.x_from.max(s.x_to);
+        let mut trim: Option<(usize, f64)> = None;
+        for (index, b) in boundaries.iter().enumerate() {
+            let y_lo = b.y_from.min(b.y_to);
+            let y_hi = b.y_from.max(b.y_to) + b.h.max(0.0);
+            if start_y >= y_lo - 1.0 && start_y <= y_hi + 1.0 {
+                keep_from = index;
+                let x_lo = b.x_from.min(b.x_to);
+                let x_hi = b.x_from.max(b.x_to);
                 if start_x >= x_lo - 1.0 && start_x <= x_hi + 1.0 {
-                    chosen = i;
+                    let span = b.x_to - b.x_from;
+                    let frac = if span.abs() <= 1e-9 {
+                        1.0
+                    } else {
+                        ((start_x - b.x_from) / span).clamp(0.0, 1.0)
+                    };
+                    trim = Some((index, frac * b.visual_length));
                     break;
                 }
-                if start_x > x_hi {
-                    chosen = i;
+            }
+        }
+        if let Some((index, local)) = trim {
+            boundaries.drain(0..index);
+            if let Some(first) = boundaries.first_mut() {
+                let base = first.frontier_distance_from.unwrap_or(0.0) + local;
+                first.x_from = start_x;
+                first.frontier_distance_from = Some(base);
+                first.visual_length = (first.x_to - first.x_from).abs().max(f64::MIN_POSITIVE);
+            }
+        } else if keep_from > 0 {
+            boundaries.drain(0..keep_from);
+        }
+        // 组装：前置 connector → 文字段（相邻跨行插 connector）→ 后置 connector。
+        let mut out: Vec<CaretMotionSegment> = Vec::new();
+        if let Some(first) = boundaries.first() {
+            if (start_x - first.x_from).abs() > 1e-6 || (start_y - first.y_from).abs() > 1e-6 {
+                if let Some(c) = connector(
+                    start_x,
+                    start_y,
+                    first.x_from,
+                    first.y_from,
+                    first.frontier_distance_from,
+                ) {
+                    out.push(c);
                 }
             }
-            let s = &segments[last_line];
-            let x_hi = s.x_from.max(s.x_to);
-            if start_x > x_hi + 1.0 && last_line + 1 < segments.len() {
-                // 当前已越过该行最后一段，进入下一行。
-                keep_from = last_line + 1;
-            } else {
-                keep_from = chosen;
+        }
+        for (i, b) in boundaries.iter().enumerate() {
+            if i > 0 {
+                let prev = &boundaries[i - 1];
+                if (prev.x_to - b.x_from).abs() > 1e-6
+                    || (prev.y_from - b.y_from).abs() > 1e-6
+                {
+                    if let Some(c) = connector(
+                        prev.x_to,
+                        prev.y_from,
+                        b.x_from,
+                        b.y_from,
+                        b.frontier_distance_from,
+                    ) {
+                        out.push(c);
+                    }
+                }
+            }
+            out.push(b.clone());
+        }
+        if let Some(last) = boundaries.last() {
+            let lo = last.x_from.min(last.x_to);
+            let hi = last.x_from.max(last.x_to);
+            let same_row = (target_y - last.y_from).abs() <= last.h.max(1.0) + 1.0;
+            let in_span = target_x >= lo - 1.0 && target_x <= hi + 1.0;
+            if same_row && in_span {
+                // target 落在同一文字段内（insert 的 canonical caret 常落在
+                // glyph 跨度内）：直接把末段 x 收到 target，不造回退 connector。
+                if let Some(last_out) = out.last_mut() {
+                    if last_out.kind == CaretSegmentKind::Boundary {
+                        last_out.x_to = target_x;
+                        last_out.visual_length =
+                            (last_out.x_to - last_out.x_from).abs().max(f64::MIN_POSITIVE);
+                    }
+                }
+            } else if (target_x - last.x_to).abs() > 1e-6 || (target_y - last.y_from).abs() > 1e-6
+            {
+                let frozen = Some(last.frontier_distance_from.unwrap_or(0.0) + last.visual_length);
+                if let Some(c) = connector(last.x_to, last.y_from, target_x, target_y, frozen) {
+                    out.push(c);
+                }
             }
         }
-        if keep_from > 0 {
-            segments.drain(0..keep_from);
-        }
-        // 钉死首尾：x 与 y 都钉（评论 40 缺口——只钉 x 会在 retarget 到另一行
-        // 时第一帧把 y 瞬间改成 first_segment.y），并重算首末段长度
-        //（中间段原样保留行段几何）。钉死只改 caret 自己的距离系，前沿
-        // reveal/conceal 的距离系原样不动：边界由 caret 位置投影（Backward /
-        // 吐字）或 Forward 的 progress 时钟得到，与距离系无关。
-        if let Some(first) = segments.first_mut() {
-            first.x_from = start_x;
-            first.y_from = start_y;
-            first.visual_length = (first.x_to - first.x_from)
-                .hypot(first.y_to - first.y_from)
-                .max(f64::MIN_POSITIVE);
-        }
-        if let Some(last) = segments.last_mut() {
-            last.x_to = target_x;
-            last.y_to = target_y;
-            last.visual_length = (last.x_to - last.x_from)
-                .hypot(last.y_to - last.y_from)
-                .max(f64::MIN_POSITIVE);
-        }
-        let total = segments.iter().map(|s| s.visual_length).sum();
-        (segments, total)
+        let total = out.iter().map(|s| s.visual_length).sum();
+        (out, total, source)
     }
-
     /// Issue #826 评论 38/39：Scene Graph 每帧采样协同 caret 的**唯一入口**。
     ///
     /// 用 `effective_text_animation_time` 采样：滚动 pause 期间正文时间钉在
@@ -1554,22 +1635,75 @@ impl LinuxEditorAnimationCoordinator {
         Some((progress, motion.distance_at_progress(progress)))
     }
 
-    /// 测试用 —— 当前协同 motion 的分段轨迹（首尾已钉死 visual/target）。
+    /// 测试用 —— 协同 motion 的 Boundary（文字边界）段。
     ///
-    /// 返回每段 (x_from, x_to, y_from, y_to, h, visual_length)。caret 侧的段查找
-    /// 必须走它，不能走前沿 regions —— 钉死端点后两边的距离系差几个像素
-    /// （glyph/caret 几何差），混用会错段；生产边界走投影，不受此影响。
+    /// 返回每段 (x_from, x_to, y_from, y_to, h, frontier_distance_from)。
+    /// 只含代表文字吞吐边界的段，不含 caret-only connector。
     #[cfg(test)]
-    pub(crate) fn coordinated_segments_for_test(&self) -> Vec<(f64, f64, f64, f64, f64, f64)> {
+    pub(crate) fn coordinated_boundary_segments_for_test(
+        &self,
+    ) -> Vec<(f64, f64, f64, f64, f64, f64)> {
         self.active_coordinated_caret
             .as_ref()
             .map(|m| {
                 m.segments
                     .iter()
-                    .map(|s| (s.x_from, s.x_to, s.y_from, s.y_to, s.h, s.visual_length))
+                    .filter(|s| s.kind == CaretSegmentKind::Boundary)
+                    .map(|s| {
+                        (
+                            s.x_from,
+                            s.x_to,
+                            s.y_from,
+                            s.y_to,
+                            s.h,
+                            s.frontier_distance_from.unwrap_or(0.0),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// 测试用 —— 本帧 caret 所在段的 (是否 Boundary, x, y, 前沿距离)。
+    #[cfg(test)]
+    pub(crate) fn coordinated_segment_at_test(
+        &self,
+        distance: f64,
+    ) -> Option<(bool, f64, f64, f64)> {
+        let motion = self.active_coordinated_caret.as_ref()?;
+        let (x, y, frontier) = motion.sample_at_distance(distance);
+        let mut rest = distance.clamp(0.0, motion.total_length.max(0.0));
+        for segment in &motion.segments {
+            if rest <= segment.visual_length + 1e-9 {
+                return Some((
+                    segment.kind == CaretSegmentKind::Boundary,
+                    x,
+                    y,
+                    frontier.unwrap_or(0.0),
+                ));
+            }
+            rest -= segment.visual_length;
+        }
+        let last = motion.segments.last()?;
+        Some((
+            last.kind == CaretSegmentKind::Boundary,
+            x,
+            y,
+            frontier.unwrap_or(0.0),
+        ))
+    }
+
+    /// 测试用 —— 当前 motion 是否含 caret-only connector 段。
+    #[cfg(test)]
+    pub(crate) fn coordinated_has_connector_for_test(&self) -> bool {
+        self.active_coordinated_caret
+            .as_ref()
+            .map(|m| {
+                m.segments
+                    .iter()
+                    .any(|s| s.kind == CaretSegmentKind::Connector)
+            })
+            .unwrap_or(false)
     }
 
     // ── 光标（只管视觉 Tween，不决定文字显示多少） ──────────────────────────

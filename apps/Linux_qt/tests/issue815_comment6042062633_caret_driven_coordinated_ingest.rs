@@ -367,12 +367,11 @@ fn issue826_c38_frontier_sample_carries_projection() {
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let window = function_window(&src, "pub(crate) fn sample_edit_frontier", 2500);
     assert!(
-        window.contains("project_onto_layer")
-            && window.contains("position_at_distance(motion.distance_at_progress(progress))")
+        window.contains("motion.sample_at_distance(motion.distance_at_progress(progress))")
+            && window.contains("frontier_distance")
             && window.contains("CoordinatedBoundary"),
-        "Issue #826 评论 38/39: 每帧先由同一 progress 算 caret 在分段轨迹上的 \
-         位置，再把该位置投影到前沿路径（CoordinatedBoundary），遮罩与 overlay \
-         吃投影距离。"
+        "Issue #826 评论 38/39/41: 每帧先由同一 progress 算 caret 在分段轨迹上的 \
+         位置与所属文字段的前沿距离（Connector 段冻结），遮罩与 overlay 吃该距离。"
     );
     assert!(
         window.contains("frontier.reveal.advanced(progress)")
@@ -535,16 +534,20 @@ fn issue826_c39_caret_walks_piecewise_path() {
          跨行斜线会穿过行间缝隙，那里不属于任何文字行。"
     );
     let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let window = function_window(&coord_src, "fn coordinated_path_from_frontier", 4500);
+    let window = function_window(&coord_src, "fn coordinated_path_from_frontier", 6000);
     assert!(
         window.contains("reveal.regions") && window.contains("conceal.regions"),
-        "Issue #826 评论 39 BLOCKER 2: caret 路径必须取自本笔前沿分段 \
-         （吐字侧优先，纯吞字走吞字侧），与 changed visual path 同一视觉顺序。"
+        "Issue #826 评论 39/41: caret 路径必须取自本笔前沿分段 \
+         （吐字侧优先，纯吞字走吞字侧）。"
     );
     assert!(
-        window.contains("first.x_from = start_x") && window.contains("last.x_to = target_x"),
-        "Issue #826 评论 39 BLOCKER 2: 路径首段起点必须钉死屏幕 caret、\
-         末段终点钉死 canonical target（glyph/caret 几何差，不钉死两头跳变）。"
+        window.contains("CaretSegmentKind::Boundary") && window.contains("CaretSegmentKind::Connector"),
+        "Issue #826 评论 41: 轨迹必须区分「文字边界段」与「纯光标 connector」，\
+         文字段的视觉行几何不得被 start/target 钉成斜线。"
+    );
+    assert!(
+        window.contains("y_from: caret_y") && window.contains("y_to: caret_y"),
+        "Issue #826 评论 41: Boundary 段必须保持 y_from == y_to（同视觉行）。"
     );
 }
 
