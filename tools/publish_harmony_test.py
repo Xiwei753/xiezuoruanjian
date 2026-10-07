@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -145,6 +146,42 @@ def first_value(data: dict[str, Any], keys: Sequence[str]) -> str | None:
             if isinstance(value, (str, int)) and str(value):
                 return str(value)
     return None
+
+
+def find_version_package_id(data: dict[str, Any], version_id: str) -> str | None:
+    """Find the package ID already attached to one test version."""
+    for obj in iter_dicts(data):
+        value = obj.get("versionId")
+        if value is None or str(value) != version_id:
+            continue
+        package_id = first_value(
+            obj,
+            ("pkgId", "packageId", "packageID", "pkgID"),
+        )
+        if package_id:
+            return package_id
+    return None
+
+
+def normalize_test_window(
+    start_time_ms: int | None,
+    end_time_ms: int | None,
+    *,
+    now_ms: int | None = None,
+) -> tuple[int, int]:
+    """Return a valid testing window; default to now -> 30 days.
+
+    Huawei currently caps one testing period at 90 days.
+    """
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    start = start_time_ms if start_time_ms is not None else now_ms
+    end = end_time_ms if end_time_ms is not None else start + 30 * 24 * 60 * 60 * 1000
+    if end <= start:
+        raise PublishError("测试结束时间必须晚于开始时间。")
+    if end - start > 90 * 24 * 60 * 60 * 1000:
+        raise PublishError("测试周期不能超过 90 天。")
+    return start, end
 
 
 def collect_groups(data: dict[str, Any]) -> list[tuple[str, str]]:
@@ -557,9 +594,30 @@ class AgcCli:
         self.command = list(command)
 
     def raw(self, *args: str, json_result: bool = True) -> dict[str, Any] | str:
-        proc = run([*self.command, *args], capture=True)
+        eprint("+", " ".join(shlex.quote(part) for part in [*self.command, *args]))
+        proc = subprocess.run(
+            [*self.command, *args],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
         _emit_safe_stderr(proc.stderr)
         stdout = proc.stdout or ""
+        if proc.returncode != 0:
+            # connect-api-cli >=1.1.4 exits non-zero for business failures, but
+            # still writes the response JSON to stdout. Surface ret.msg/rtnDesc
+            # when available instead of collapsing everything to "node failed".
+            if stdout.strip():
+                try:
+                    data = parse_last_json(stdout)
+                    validate_business_result(data, " ".join(args[:2]))
+                except PublishError as exc:
+                    raise exc
+            raise PublishError(
+                f"命令失败（exit={proc.returncode}）：{' '.join(args[:2])}"
+            )
         if not json_result:
             return stdout
         data = parse_last_json(stdout)
@@ -887,14 +945,39 @@ def publish(args: argparse.Namespace) -> None:
         str(args.distribute_mode),
     )
     assert isinstance(package, dict)
-    pkg_id = first_value(package, ("pkgId", "packageId"))
+    pkg_id = first_value(package, ("pkgId", "packageId", "packageID", "pkgID"))
+    if not pkg_id:
+        # The current Testing API may acknowledge pkg-add with only ret.code=0.
+        # Query the just-created version to recover the attached package ID.
+        for attempt in range(3):
+            versions = cli.raw(
+                "publish",
+                "version-list",
+                "-a",
+                app_id,
+                "-p",
+                args.package_name,
+            )
+            assert isinstance(versions, dict)
+            pkg_id = find_version_package_id(versions, version_id)
+            if pkg_id:
+                break
+            if attempt < 2:
+                time.sleep(2)
+
     if pkg_id:
         eprint(f"测试软件包 ID: {pkg_id}")
     else:
         eprint(
-            "添加测试软件包成功，但 AGC 当前响应未返回 pkgId；"
-            "继续更新测试版本，不显式传 pkgId。"
+            "添加测试软件包成功，但 AGC 的 pkg-add/version-list 都未返回 pkgId；"
+            "继续依赖服务端已绑定的软件包。"
         )
+
+    start_time_ms, end_time_ms = normalize_test_window(
+        args.start_time_ms,
+        args.end_time_ms,
+    )
+    eprint(f"测试时间窗：{start_time_ms} -> {end_time_ms}")
 
     body = build_version_update_body(
         version_id=version_id,
@@ -902,8 +985,8 @@ def publish(args: argparse.Namespace) -> None:
         test_desc=args.test_desc,
         test_type=args.test_type,
         group_id=group_id,
-        start_time_ms=args.start_time_ms,
-        end_time_ms=args.end_time_ms,
+        start_time_ms=start_time_ms,
+        end_time_ms=end_time_ms,
         notify=args.notify,
     )
     with tempfile.NamedTemporaryFile(

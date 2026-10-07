@@ -80,6 +80,40 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                 "demo",
             )
 
+    def test_find_version_package_id_reads_nested_package(self) -> None:
+        data = {
+            "versions": [
+                {
+                    "versionId": "v1",
+                    "package": {"pkgId": "pkg-123"},
+                }
+            ]
+        }
+        self.assertEqual(
+            "pkg-123",
+            MODULE.find_version_package_id(data, "v1"),
+        )
+
+    def test_normalize_test_window_defaults_to_30_days(self) -> None:
+        start, end = MODULE.normalize_test_window(
+            None,
+            None,
+            now_ms=1_000_000,
+        )
+        self.assertEqual(1_000_000, start)
+        self.assertEqual(
+            1_000_000 + 30 * 24 * 60 * 60 * 1000,
+            end,
+        )
+
+    def test_normalize_test_window_rejects_over_90_days(self) -> None:
+        with self.assertRaises(MODULE.PublishError):
+            MODULE.normalize_test_window(
+                0,
+                91 * 24 * 60 * 60 * 1000,
+                now_ms=0,
+            )
+
     def test_collect_groups_deduplicates_nested_results(self) -> None:
         groups = MODULE.collect_groups(
             {
