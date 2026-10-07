@@ -15,7 +15,6 @@ on:
       - 'tools/build_harmony.sh'
       - 'tools/setup_harmony_cli.sh'
       - 'tools/publish_harmony_test.py'
-      - '.github/workflows/harmony_test_publish.yml'
   workflow_dispatch:
 
 concurrency:
