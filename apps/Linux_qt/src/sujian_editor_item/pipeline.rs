@@ -1679,22 +1679,24 @@ impl LinuxEditorPipeline {
             // Core 已立即提交最新正文。每次编辑直接用上次成功绘制的 VisualFrame
             // 重建唯一过渡，不累计中间编辑或旧动画进度。
             let edit_now = Instant::now();
+            self.animation_coordinator
+                .begin_visual_edit(VisualEditRequest {
+                    base_snapshot: old_snap.clone(),
+                    target_snapshot: new_snap.clone(),
+                    offset_map: motion
+                        .offset_map
+                        .clone()
+                        .unwrap_or_else(|| OffsetMap::build(&motion.old_text, &motion.new_text)),
+                    deleted_range_edges: motion.deleted_range_edges.clone(),
+                    animate: text_animation_enabled,
+                    now: edit_now,
+                });
             if text_animation_enabled {
-                self.animation_coordinator
-                    .begin_visual_edit(VisualEditRequest {
-                        base_snapshot: old_snap.clone(),
-                        target_snapshot: new_snap.clone(),
-                        offset_map: motion.offset_map.clone().unwrap_or_else(|| {
-                            OffsetMap::build(&motion.old_text, &motion.new_text)
-                        }),
-                        now: edit_now,
-                    });
                 let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
                 self.texture_cache.retain_active_snapshot_ids(&active_ids);
                 self.prepare_visual_edit_textures(&old_snap);
                 visual_outcome = VisualPrepareOutcome::Created;
             } else {
-                self.animation_coordinator.clear_visual_edit();
                 visual_outcome = VisualPrepareOutcome::Skipped(
                     super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
                 );
