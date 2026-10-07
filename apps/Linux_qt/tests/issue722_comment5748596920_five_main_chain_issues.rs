@@ -292,14 +292,15 @@ fn issue4_transaction_completion_uses_unit_timeline_not_caret_track() {
 #[test]
 fn issue2_coordinated_boundary_consumes_full_caret_position() {
     let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 2600);
+    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 3000);
     assert!(
-        window.contains("position_at_distance(motion.distance_at_progress(progress))"),
-        "Issue #826-40: 本帧必须先算 caret 在分段轨迹上的完整 (x, y)。"
+        window.contains("motion.sample_at_distance(motion.distance_at_progress(progress))"),
+        "Issue #826-40/41: 本帧必须先算 caret 在分段轨迹上的完整 (x, y) 与前沿距离。"
     );
     assert!(
-        window.contains("project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)"),
-        "Issue #826-40: 边界必须用 (caret_x, caret_y) 投影，只传 x 会在软换行错行。"
+        window.contains("project_onto_layer(&frontier.reveal.regions")
+            || window.contains("project_onto_layer(&frontier.conceal.regions"),
+        "Issue #826-40: 非来源侧边界必须用 (caret_x, caret_y) 投影，只传 x 会在软换行错行。"
     );
 }
 
@@ -313,17 +314,19 @@ fn issue2_coordinated_boundary_consumes_full_caret_position() {
 #[test]
 fn issue3_forward_delete_uses_motion_progress_clock_not_fixed_caret() {
     let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 2600);
+    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 3000);
     assert!(
         window.contains("ConcealDirection::Forward")
             && window.contains("frontier.conceal.advanced(progress)"),
         "Issue #826-40: Forward Delete 的 conceal 边界必须由同一份 motion progress \
          推进（frontier.conceal.advanced(progress)），不能拿固定 caret 反投影。"
     );
-    // 不得再出现「按来源侧直写 distance」这种会把 Forward 塌成 0 的写法。
+    let path_window = function_window(&coord, "fn coordinated_path_from_frontier", 6000);
     assert!(
-        !window.contains("motion.source"),
-        "Issue #826-40: 不得按路径来源侧直写 distance。"
+        path_window.contains("CaretPathSource::CaretOnly")
+            && path_window.contains("CaretSegmentKind::Connector"),
+        "Issue #826-40/41: Forward Delete 只建 caret-only connector（caret 原地），\
+         conceal 走 progress 时钟。"
     );
 }
 

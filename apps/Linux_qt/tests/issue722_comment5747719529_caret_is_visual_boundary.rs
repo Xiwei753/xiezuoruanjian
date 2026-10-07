@@ -405,16 +405,15 @@ fn coordinated_boundary_projected_from_caret_position() {
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let window = function_window(&src, "pub(crate) fn sample_edit_frontier", 2500);
     assert!(
-        window.contains("project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)"),
-        "Issue #722/I#826-39: 吐字边界必须由本帧 caret 位置投影。"
+        window.contains("motion.sample_at_distance(motion.distance_at_progress(progress))")
+            && window.contains("frontier_distance"),
+        "Issue #722/I#826-39/41: 边界必须吃本帧 caret 所属文字段的前沿距离 \
+         （Connector 段冻结），不能只共享 progress。"
     );
     assert!(
-        window.contains("project_onto_layer(&frontier.conceal.regions, caret_x, caret_y)"),
-        "Issue #722/I#826-39: 吞字边界必须由本帧 caret 位置投影。"
-    );
-    assert!(
-        !window.contains("motion.source"),
-        "Issue #722/I#826-39: 不得再按路径来源侧直写 distance。"
+        window.contains("project_onto_layer(&frontier.reveal.regions")
+            || window.contains("project_onto_layer(&frontier.conceal.regions"),
+        "Issue #722/I#826-39: 非来源侧（Replace 两边）仍由 caret 位置投影。"
     );
 }
 
