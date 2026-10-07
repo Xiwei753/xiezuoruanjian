@@ -168,6 +168,24 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
             body["openTestInfo"]["testTaskInfo"]["needNotify"],
         )
 
+    def test_version_update_body_allows_status_only_pkg_add(self) -> None:
+        body = MODULE.build_version_update_body(
+            version_id="version-1",
+            pkg_id=None,
+            test_desc="自动测试",
+            test_type=3,
+            group_id="group-1",
+            start_time_ms=None,
+            end_time_ms=None,
+            notify=False,
+        )
+        self.assertEqual("version-1", body["versionId"])
+        self.assertNotIn("pkgId", body)
+        self.assertEqual(
+            [{"groupId": "group-1"}],
+            body["openTestInfo"]["testTaskInfo"]["groupInfos"],
+        )
+
     def test_invite_update_body_requires_group(self) -> None:
         with self.assertRaises(MODULE.PublishError):
             MODULE.build_version_update_body(
