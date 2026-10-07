@@ -12,6 +12,7 @@ use super::super::layout_snapshot::{
 };
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::visual_frame::{VisualCluster, VisualFrame};
+use crate::sujian_editor_item::edit_motion::{DeleteEdge, DeletedRangeEdge};
 
 #[derive(Clone, Debug)]
 struct TargetCluster {
@@ -26,7 +27,7 @@ struct TargetCluster {
 enum MotionKind {
     Transform,
     Reveal,
-    Delete,
+    Delete(DeleteEdge),
     CrossFade,
 }
 
@@ -55,7 +56,9 @@ impl VisualEditState {
         committed_frame: Option<&VisualFrame>,
         base_snapshot: &EditorLayoutSnapshot,
         target_snapshot: EditorLayoutSnapshot,
+        frame_to_base_map: &OffsetMap,
         offset_map: &OffsetMap,
+        deleted_range_edges: &[DeletedRangeEdge],
         now: Instant,
         base_duration_ms: u64,
         previous_edit_at: Option<Instant>,
@@ -79,7 +82,9 @@ impl VisualEditState {
                 .clusters
                 .iter()
                 .enumerate()
-                .filter(|(index, source)| !source_used[*index] && source.byte_range == old_range)
+                .filter(|(index, source)| {
+                    !source_used[*index] && source.canonical_range == Some(old_range)
+                })
                 .max_by(|(_, left), (_, right)| {
                     let left_same = left.shaping_identity == target.shaping_identity;
                     let right_same = right.shaping_identity == target.shaping_identity;
@@ -111,13 +116,21 @@ impl VisualEditState {
                 .clusters
                 .iter()
                 .enumerate()
-                .filter(|(index, source)| {
-                    !source_used[*index] && ranges_overlap(source.byte_range, target.byte_range)
+                .filter_map(|(index, source)| {
+                    let canonical_range = source.canonical_range?;
+                    let projected =
+                        offset_map.map_old_range_to_new(canonical_range.0, canonical_range.1)?;
+                    (!source_used[index] && ranges_overlap(projected, target.byte_range))
+                        .then_some((index, projected))
                 })
-                .max_by(|(_, left), (_, right)| {
-                    overlap_len(left.byte_range, target.byte_range)
-                        .cmp(&overlap_len(right.byte_range, target.byte_range))
-                        .then_with(|| left.opacity.total_cmp(&right.opacity))
+                .max_by(|(left_index, left_range), (right_index, right_range)| {
+                    overlap_len(*left_range, target.byte_range)
+                        .cmp(&overlap_len(*right_range, target.byte_range))
+                        .then_with(|| {
+                            source_frame.clusters[*left_index]
+                                .opacity
+                                .total_cmp(&source_frame.clusters[*right_index].opacity)
+                        })
                 })
                 .map(|(index, _)| index);
             if let Some(source_index) = overlapping {
@@ -145,10 +158,26 @@ impl VisualEditState {
         }
         for (source_index, source) in source_frame.clusters.iter().enumerate() {
             if !source_used[source_index] {
+                let current_base_range = source
+                    .canonical_range
+                    .and_then(|range| frame_to_base_map.map_old_range_to_new(range.0, range.1));
+                let edge_from_current_edit = current_base_range.and_then(|source_range| {
+                    deleted_range_edges
+                        .iter()
+                        .find(|deleted| ranges_overlap(source_range, deleted.range))
+                        .map(|deleted| deleted.edge)
+                });
+                let fallback_edge = deleted_range_edges
+                    .first()
+                    .map(|deleted| deleted.edge)
+                    .unwrap_or(DeleteEdge::Trailing);
+                let delete_edge = edge_from_current_edit
+                    .or(source.delete_edge)
+                    .unwrap_or(fallback_edge);
                 motions.push(ClusterMotion {
                     source: Some(source.clone()),
                     target: None,
-                    kind: MotionKind::Delete,
+                    kind: MotionKind::Delete(delete_edge),
                 });
             }
         }
@@ -242,6 +271,8 @@ impl VisualEditState {
                         source.snapshot_id,
                         source.source_rect.clone(),
                         target.byte_range,
+                        Some(target.byte_range),
+                        None,
                         target.shaping_identity.clone(),
                     ));
                 }
@@ -263,10 +294,12 @@ impl VisualEditState {
                         target.snapshot_id,
                         source_rect,
                         target.byte_range,
+                        Some(target.byte_range),
+                        None,
                         target.shaping_identity.clone(),
                     ));
                 }
-                MotionKind::Delete => {
+                MotionKind::Delete(delete_edge) => {
                     let Some(source) = &motion.source else {
                         continue;
                     };
@@ -274,7 +307,7 @@ impl VisualEditState {
                     if visible <= 1e-6 || source.rect.h <= 1e-6 {
                         continue;
                     }
-                    let (rect, source_rect) = visible_slice_source(source, visible);
+                    let (rect, source_rect) = visible_slice_source(source, visible, delete_edge);
                     glyphs.push(RenderOwnershipPlan::glyph(
                         rect.x,
                         rect.y,
@@ -284,6 +317,8 @@ impl VisualEditState {
                         source.snapshot_id,
                         source_rect,
                         source.byte_range,
+                        None,
+                        Some(delete_edge),
                         source.shaping_identity.clone(),
                     ));
                 }
@@ -299,6 +334,8 @@ impl VisualEditState {
                                 source.snapshot_id,
                                 source.source_rect.clone(),
                                 source.byte_range,
+                                motion.target.as_ref().map(|target| target.byte_range),
+                                None,
                                 source.shaping_identity.clone(),
                             ));
                         }
@@ -314,6 +351,8 @@ impl VisualEditState {
                                 target.snapshot_id,
                                 target.source_rect.clone(),
                                 target.byte_range,
+                                Some(target.byte_range),
+                                None,
                                 target.shaping_identity.clone(),
                             ));
                         }
@@ -427,13 +466,25 @@ fn visible_slice(target: &TargetCluster, visible_width: f64) -> (SourceRect, Sou
     )
 }
 
-fn visible_slice_source(source: &VisualCluster, visible_width: f64) -> (SourceRect, SourceRect) {
+fn visible_slice_source(
+    source: &VisualCluster,
+    visible_width: f64,
+    delete_edge: DeleteEdge,
+) -> (SourceRect, SourceRect) {
     let width = visible_width.clamp(0.0, source.rect.w);
     let rtl = source.shaping_identity.direction_rtl;
-    let x_offset = if rtl { source.rect.w - width } else { 0.0 };
+    let retain_right_edge = match (delete_edge, rtl) {
+        (DeleteEdge::Leading, false) | (DeleteEdge::Trailing, true) => true,
+        (DeleteEdge::Leading, true) | (DeleteEdge::Trailing, false) => false,
+    };
+    let x_offset = if retain_right_edge {
+        source.rect.w - width
+    } else {
+        0.0
+    };
     let source_width =
         (source.source_rect.w * width / source.rect.w.max(1e-6)).clamp(0.0, source.source_rect.w);
-    let source_x_offset = if rtl {
+    let source_x_offset = if retain_right_edge {
         source.source_rect.w - source_width
     } else {
         0.0

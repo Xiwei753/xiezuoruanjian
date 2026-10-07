@@ -93,6 +93,21 @@ pub(crate) struct CursorRect {
     pub baseline_y: f64,
 }
 
+/// 删除动画从 caret 所在的逻辑边缘向外收缩。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeleteEdge {
+    /// 删除范围的逻辑起始边，通常对应前向 Delete。
+    Leading,
+    /// 删除范围的逻辑结束边，通常对应 Backspace。
+    Trailing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DeletedRangeEdge {
+    pub range: (usize, usize),
+    pub edge: DeleteEdge,
+}
+
 // ── EditorAnimationKind ─────────────────────────────────────────────────────
 
 /// Linux 私有动画类别 — 只从 `EditorEditResult.display_patches` 的
@@ -162,6 +177,8 @@ pub(crate) struct PreparedEditMotion {
     pub offset_map: Option<OffsetMap>,
     pub inserted_ranges: Vec<(usize, usize)>,
     pub deleted_ranges: Vec<(usize, usize)>,
+    /// 每个旧坐标删除区间对应的 caret 边缘，用于几何吞字方向。
+    pub deleted_range_edges: Vec<DeletedRangeEdge>,
     pub inserted_range: Option<Utf8ByteRange>,
     pub deleted_range: Option<Utf8ByteRange>,
     pub old_text: String,
@@ -179,6 +196,21 @@ impl PreparedEditMotion {
     /// 计算后直接赋值到返回的结构体字段。
     pub fn from_edit_result(result: &EditorEditResult, old_text: &str, new_text: &str) -> Self {
         let (inserted_ranges, deleted_ranges) = ranges_from_display_patches(result);
+        let fallback_offset_map = OffsetMap::build(old_text, new_text);
+        let offset_map = result.offset_map.as_ref().unwrap_or(&fallback_offset_map);
+        let deleted_range_edges = deleted_ranges
+            .iter()
+            .copied()
+            .map(|range| DeletedRangeEdge {
+                range,
+                edge: delete_edge_for_range(
+                    range,
+                    result.old_selection,
+                    result.new_selection,
+                    offset_map,
+                ),
+            })
+            .collect();
         // Issue #824 评论 5971089641 第 2 节：动画类别只认 patch 事实，
         // 不再从 operation_kind 派生（CompositionCommit 也不再有专属分类）。
         let kind = EditorAnimationKind::from_patch_facts(
@@ -196,6 +228,7 @@ impl PreparedEditMotion {
             offset_map: result.offset_map.clone(),
             inserted_ranges,
             deleted_ranges,
+            deleted_range_edges,
             inserted_range,
             deleted_range,
             old_text: old_text.to_string(),
@@ -205,6 +238,46 @@ impl PreparedEditMotion {
             old_cursor_rect: None,
             new_cursor_rect: None,
         }
+    }
+}
+
+fn delete_edge_for_range(
+    (start, end): (usize, usize),
+    old_selection: EditorSelection,
+    new_selection: EditorSelection,
+    offset_map: &OffsetMap,
+) -> DeleteEdge {
+    let old_head = old_selection.head.index.value();
+    if old_head == start {
+        return DeleteEdge::Leading;
+    }
+    if old_head == end {
+        return DeleteEdge::Trailing;
+    }
+
+    let old_anchor = old_selection.anchor.index.value();
+    if old_anchor == start {
+        return DeleteEdge::Leading;
+    }
+    if old_anchor == end {
+        return DeleteEdge::Trailing;
+    }
+
+    // For compound edits, use the resulting caret when it maps to an edge of this
+    // deleted range. The old selection remains authoritative for ordinary key deletes.
+    if let Some(old_position) = offset_map.map_new_to_old(new_selection.head.index.value()) {
+        if old_position <= start {
+            return DeleteEdge::Leading;
+        }
+        if old_position >= end {
+            return DeleteEdge::Trailing;
+        }
+    }
+
+    if old_head <= start || (old_head < end && old_head - start <= end - old_head) {
+        DeleteEdge::Leading
+    } else {
+        DeleteEdge::Trailing
     }
 }
 
