@@ -329,7 +329,6 @@ impl QQuickItem for SujianEditorItem {
                 .as_ref()
                 .map(|snapshot| {
                     render_plan.ownership.target_layout_revision == Some(snapshot.revision)
-                        && snapshot.text_revision == self.pipeline.text_revision()
                 })
                 .unwrap_or(false);
             if static_rebuild_ok && has_snapshot && ownership_snapshot_matches {
