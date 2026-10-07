@@ -950,14 +950,21 @@ Rectangle {
                             selected_text_color: dt.selectedTextHex
                             cursor_color: dt.primaryHex
                             smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                            // Issue #785: cursor duration 始终独立，不再因协同绑到 typing duration。
+                            // Issue #785 / Issue #826 评论 38：纯光标移动（点击/方向键）
+                            // 的 duration 始终独立，用 smooth cursor duration；
+                            // 协同模式的正文编辑 caret 不走这个时长，跟着 typing
+                            // duration 跑（与前沿同一时钟），两者不再是两条独立时间线。
                             cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                             typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                             typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
                             // Issue #756 / Issue #785: 协同动画显式模式开关。
-                            // Issue #819 评论 5967250411 问题 6：协同 = 一条 caret 运动轨迹 +
-                            // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。CaretTrack unit
-                            // 没有独立时间线，逐帧边界来自同一笔 cursor track 的当前帧。
+                            // Issue #819 评论 5967250411 问题 6 / Issue #826 评论 38：
+                            // 协同 = 一条 caret 运动轨迹 +
+                            // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。
+                            // 实现见 animation/coordinated_caret.rs：单份
+                            // CoordinatedCaretMotion（与前沿同 started_at /
+                            // typing duration），逐帧边界由本帧 caret 投影到
+                            // Frontier path 得到，不是两条独立时间线。
                             coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
                             scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                             viewport_height: sujianEditor.height

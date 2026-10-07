@@ -32,6 +32,7 @@
 
 use std::time::Instant;
 
+use super::coordinated_caret::CoordinatedBoundary;
 use super::coordinator::EditFrontierRequest;
 use super::reflow_motion::ReflowCurrentGeometry;
 
@@ -429,6 +430,11 @@ pub(crate) struct EditFrontierSample {
     pub kind: EditFrontierKind,
     /// 0.0 = 改动一点都没露出；1.0 = 改动全部露出。
     pub progress: f64,
+    /// Issue #826 评论 38：协同模式下本帧 caret 投影到路径上的吞吐距离。
+    ///
+    /// `Some` 时遮罩与 overlay 用它而不用 `advanced(progress)`；
+    /// `None`（非协同 / 投影未命中行）时走原来的 progress 时钟。
+    pub coordinated: Option<CoordinatedBoundary>,
 }
 
 impl EditFrontierSample {
@@ -624,7 +630,6 @@ impl FrontierLayer {
     fn distance_at(&self, region: &FrontierRegion, progress: f64) -> f64 {
         (self.advanced(progress) - region.distance_start).clamp(0.0, region.path.total_length)
     }
-
     /// 整层是否已经走完（按 progress 判定）。
     fn is_advanced_done(&self, progress: f64) -> bool {
         self.advanced(progress) >= self.total_length() - 1e-9
@@ -1758,6 +1763,7 @@ impl EditFrontierState {
         EditFrontierSample {
             kind: self.kind,
             progress,
+            coordinated: None,
         }
     }
 
@@ -1782,6 +1788,38 @@ impl EditFrontierState {
         true
     }
 
+    /// Issue #826 评论 38：本 region 本帧吐字侧的总距离。
+    ///
+    /// 协同 sample 带投影距离时用它（caret 投影 ⇒ 边界精确落在 caret 下）；
+    /// 否则走原来的 progress 时钟。carry / handoff 等内部采样继续用
+    /// `FrontierLayer::distance_at`，它们是 overlay 补间，不吃吞吐边界。
+    pub(crate) fn reveal_distance(
+        &self,
+        region: &FrontierRegion,
+        sample: &EditFrontierSample,
+    ) -> f64 {
+        if let Some(boundary) = sample.coordinated {
+            (boundary.reveal_distance - region.distance_start)
+                .clamp(0.0, region.path.total_length)
+        } else {
+            self.reveal.distance_at(region, sample.progress)
+        }
+    }
+
+    /// Issue #826 评论 38：吞字侧对称入口（语义同 `reveal_distance`）。
+    pub(crate) fn conceal_distance(
+        &self,
+        region: &FrontierRegion,
+        sample: &EditFrontierSample,
+    ) -> f64 {
+        if let Some(boundary) = sample.coordinated {
+            (boundary.conceal_distance - region.distance_start)
+                .clamp(0.0, region.path.total_length)
+        } else {
+            self.conceal.distance_at(region, sample.progress)
+        }
+    }
+
     /// 本帧吐字遮罩的裁剪矩形（只覆盖 inserted cluster）。
     ///
     /// Issue #826 评论 6 阻塞 3：**只裁 inserted cluster**，不能用整行内容右边界。
@@ -1795,7 +1833,7 @@ impl EditFrontierState {
         }
         let mut rects = Vec::new();
         for region in &self.reveal.regions {
-            let distance = self.reveal.distance_at(region, sample.progress);
+            let distance = self.reveal_distance(region, sample);
             let bounds = region.path.reveal_bounds(distance);
             for line in self
                 .target_snapshot
@@ -1862,13 +1900,26 @@ impl EditFrontierState {
         self.conceal
             .regions
             .iter()
-            .flat_map(|region| self.region_conceal_rects(region, sample.progress))
+            .flat_map(|region| {
+                self.region_conceal_rects_at(region, self.conceal_distance(region, sample))
+            })
             .collect()
     }
 
     /// 一条 region 本帧的 keep rect（region-local，评论 16）。
     fn region_conceal_rects(&self, region: &FrontierRegion, progress: f64) -> Vec<FrontierRect> {
-        let distance = self.conceal.distance_at(region, progress);
+        self.region_conceal_rects_at(
+            region,
+            self.conceal.distance_at(region, progress),
+        )
+    }
+
+    /// 按给定总距离算一条 region 的 keep rect。
+    ///
+    /// Issue #826 评论 38：协同 sample 的 overlay 用投影距离（见
+    /// [`Self::conceal_distance`]），progress 时钟的内部采样继续走
+    /// [`Self::region_conceal_rects`]。
+    fn region_conceal_rects_at(&self, region: &FrontierRegion, distance: f64) -> Vec<FrontierRect> {
         let bounds = region.path.conceal_bounds(distance);
         region
             .path
@@ -1901,7 +1952,8 @@ impl EditFrontierState {
         }
         let mut glyphs = Vec::new();
         for region in &self.conceal.regions {
-            let keep = self.region_conceal_rects(region, sample.progress);
+            let keep =
+                self.region_conceal_rects_at(region, self.conceal_distance(region, sample));
             for geometry in &self.conceal_glyphs {
                 // Issue #826 评论 19：region 是按 glyph 的 **base identity** 建的，
                 // 所以归属判定也必须用 `base_range`；用当前坐标的 `range` 去和
@@ -2255,7 +2307,9 @@ fn merge_conceal_glyphs(
 ///
 /// 为什么必须在建 path 之前挖：`FrontierPath::build` 已经只取
 /// `clusters_contained_in_range`，但**逻辑 range 仍可能完整包含**一块 mixed
-/// cluster —— ```text
+/// cluster —— 例子如下：
+///
+/// ```text
 /// 第一笔 af   f = cluster 1..2，reveal region = (1,2)
 /// 第二笔 afi  Core inserted = (2,3)，但最新 shaping 只有一块 fi cluster 1..3
 ///             merged = (1,2) + (2,3) -> 归一化成 (1,3)，完整包含 cluster 1..3

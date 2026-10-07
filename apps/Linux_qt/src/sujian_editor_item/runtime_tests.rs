@@ -1527,3 +1527,444 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
         println!("[BEHAVIOR_VERIFY] 评论36 补充：结束后停止 request_frame_update");
     });
 }
+
+// =========================================================================
+// Issue #826 评论 38: 协同模式 = 一条 caret 运动轨迹 + 文字以 caret 当前帧为
+// 吞吐边界 + Reflow 可独立
+// =========================================================================
+
+/// 把协同 motion 与前沿的时钟一起拨回 `elapsed_ms` 之前，让测试能确定性地
+/// 采样 40/80/120ms 的中间帧，而不是依赖墙钟 sleep。
+fn rewind_coordinated_clock_for_test(item: &mut SujianEditorItem, elapsed_ms: u64) {
+    let t0 = Instant::now();
+    let coord = item.pipeline.animation_coordinator_mut();
+    if let Some(frontier) = coord.active_edit_frontier.as_mut() {
+        frontier.started_at = t0 - Duration::from_millis(elapsed_ms);
+    }
+    if let Some(motion) = coord.active_coordinated_caret.as_mut() {
+        motion.started_at = t0 - Duration::from_millis(elapsed_ms);
+    }
+}
+
+/// 协同开 + 正文插入的前置：`A` 文末插入 `X`，前沿 160ms。
+/// 返回插入后 motion 的 (start_x, start_y, target_x, target_y, duration_ms)。
+fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, f64, f64, u64) {
+    item.current_viewport_height = 600.0;
+    item.current_coordinated_animation_enabled = true;
+    item.current_typing_animation_enabled = true;
+    item.current_smooth_cursor_enabled = true;
+    item.pipeline.set_typing_animation_duration_ms(160);
+    item.set_plain_text(QString::from("A"));
+    let _ = item.pipeline.set_selection(1, 1);
+    // 实现语义：`pipeline.set_selection` 只改 Core 真相，不搬 visual。
+    // 生产里输入前 visual 本来就停在旧 caret 上（idle），这里先 Snap 对齐，
+    // 否则 motion start 取到的是陈旧 visual，与前沿起点对不上。
+    item.snap_next_cursor_update();
+    item.insert_text(QString::from("X"));
+    assert_eq!(item.pipeline.committed_text(), "AX");
+    let coord = item.pipeline.animation_coordinator();
+    assert!(
+        coord.has_active_edit_frontier(),
+        "前置：必须建出遮罩前沿"
+    );
+    coord
+        .coordinated_caret_for_test()
+        .expect("前置：协同开时正文插入必须由单条 motion 接管")
+}
+
+/// 评论 38 要求①：`coordinated_insert_caret_and_reveal_share_one_progress`。
+///
+/// `A -> AX`（duration = 160ms）：40/80/120ms 三个中间帧，caret 的 x 必须
+/// 等于前沿当前 Reveal 边界 x（不只终点相等）。同时断：两边 progress 相等、
+/// 独立 Tween 不存在、motion 时长是 typing 时长。
+#[test]
+fn coordinated_insert_caret_and_reveal_share_one_progress() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let (start_x, _start_y, target_x, _target_y, duration_ms) =
+            build_coordinated_insert_for_test(&mut item);
+        assert_eq!(
+            duration_ms, 160,
+            "协同 motion 时长必须是 typing duration，实际 {}",
+            duration_ms
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "协同接管后不得再建独立光标 Tween"
+        );
+        assert!(
+            (target_x - start_x).abs() > 1.0,
+            "前置：插入 X 后 caret 必须水平移动，实际 {} -> {}",
+            start_x,
+            target_x
+        );
+
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let sample = coord
+                .sample_edit_frontier(now)
+                .expect("前沿必须还在");
+            let caret = coord
+                .sample_coordinated_caret(now)
+                .expect("协同 motion 必须还在");
+            assert!(
+                (caret.progress - sample.progress).abs() < 0.02,
+                "{}ms：协同 caret 进度必须等于前沿进度，实际 {} vs {}",
+                elapsed,
+                caret.progress,
+                sample.progress
+            );
+            assert!(
+                (caret.x - start_x) * (caret.x - target_x) < 0.0,
+                "{}ms：caret 必须在起点与终点之间，实际 x={}（{} -> {}）",
+                elapsed,
+                caret.x,
+                start_x,
+                target_x
+            );
+            // 生产路径断言：吐字遮罩（`hidden_new_text_rects`，吃投影距离）
+            // 的左沿必须就是 caret.x —— 单个 X cluster 只产出一块 mask。
+            assert!(
+                sample.coordinated.is_some(),
+                "{}ms：协同态 sample 必须带投影边界",
+                elapsed
+            );
+            let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
+            let masks = frontier.hidden_new_text_rects(&sample);
+            assert_eq!(
+                masks.len(),
+                1,
+                "{}ms：单个插入 cluster 应只有一块吐字遮罩，实际 {} 块",
+                elapsed,
+                masks.len()
+            );
+            assert!(
+                (masks[0].x - caret.x).abs() < 1.0,
+                "{}ms：caret.x 必须等于 Reveal 边界 x，实际 caret={} mask_x={}",
+                elapsed,
+                caret.x,
+                masks[0].x
+            );
+        }
+
+        println!("[BEHAVIOR_VERIFY] 评论38①：协同插入 caret 与 Reveal 边界共享同一 progress");
+    });
+}
+
+/// 评论 38 要求②：`coordinated_delete_caret_and_conceal_share_one_progress`。
+///
+/// Backspace 删 X（`AX -> A`）：caret 回退多少，Conceal 就吞到同一个视觉边界，
+/// 每个中间帧都一致（keep 矩形右沿 == caret.x）。
+#[test]
+fn coordinated_delete_caret_and_conceal_share_one_progress() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("AX"));
+        let _ = item.pipeline.set_selection(2, 2);
+        item.snap_next_cursor_update();
+        item.delete_backward();
+        assert_eq!(item.pipeline.committed_text(), "A");
+
+        let (start_x, _, target_x, _, duration_ms) = item
+            .pipeline
+            .animation_coordinator()
+            .coordinated_caret_for_test()
+            .expect("协同开时删除必须由单条 motion 接管");
+        assert_eq!(duration_ms, 160);
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "协同接管后不得再建独立光标 Tween"
+        );
+        assert!(
+            start_x > target_x + 1.0,
+            "前置：Backspace 后 caret 必须回退，实际 {} -> {}",
+            start_x,
+            target_x
+        );
+
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let sample = coord
+                .sample_edit_frontier(now)
+                .expect("前沿必须还在");
+            let caret = coord
+                .sample_coordinated_caret(now)
+                .expect("协同 motion 必须还在");
+            assert!(
+                (caret.progress - sample.progress).abs() < 0.02,
+                "{}ms：协同 caret 进度必须等于前沿进度",
+                elapsed
+            );
+            let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
+            let glyphs = frontier.old_overlay_glyphs(&sample);
+            assert!(!glyphs.is_empty(), "{}ms：吞字中途必须有旧字 overlay", elapsed);
+            let keep_right = glyphs
+                .iter()
+                .map(|g| g.dest_rect.x + g.dest_rect.w)
+                .fold(f64::MIN, f64::max);
+            assert!(
+                (caret.x - keep_right).abs() < 1.0,
+                "{}ms：caret.x 必须等于 Conceal 保留沿，实际 caret={} keep_right={}",
+                elapsed,
+                caret.x,
+                keep_right
+            );
+        }
+
+        println!("[BEHAVIOR_VERIFY] 评论38②：协同删除 caret 与 Conceal 边界共享同一 progress");
+    });
+}
+
+/// 评论 38 要求③：`coordinated_wrap_moves_caret_and_frontier_across_lines_together`。
+///
+/// 插入触发软换行：caret 从上一行走向下一行的过程中，前沿必须同在半途
+/// （已推进但未完成）；不允许 caret 已落下一行而前沿还在起点、或前沿已播完
+/// 而 caret 还在上一行。
+#[test]
+fn coordinated_wrap_moves_caret_and_frontier_across_lines_together() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        // 第一视觉行行尾精准定位：100 个 CJK 必定软换行，取第一行 byte_end
+        //（行满点）；在行满点前 5 个字处插入 12 个新字 —— 新字把行尾 5 字连
+        // 自己一起挤到下一行，caret 必定从第 1 行跨到第 2 行。
+        // 注意不能直接插在 byte_end：那是第 2 行行首，caret 起点就已在第 2 行。
+        item.set_plain_text(QString::from(
+            "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+        ));
+        let line1_end = {
+            let cache = item
+                .editor_layout
+                .cache()
+                .expect("前置：set_plain_text 后必须有排版缓存");
+            assert!(
+                cache.lines.len() >= 2,
+                "前置：100 个 CJK 必须软换行，实际只有 {} 行",
+                cache.lines.len()
+            );
+            cache.lines[0].byte_end
+        };
+        // 行满点前 5 个字（15 byte）处插入。
+        let insert_at = line1_end - 15;
+        let _ = item.pipeline.set_selection(insert_at, insert_at);
+        item.snap_next_cursor_update();
+        item.insert_text(QString::from("界界界界界界界界界界界界"));
+        let (start_x, start_y, target_x, target_y, _) = item
+            .pipeline
+            .animation_coordinator()
+            .coordinated_caret_for_test()
+            .expect("协同开时换行插入必须由单条 motion 接管");
+        assert!(
+            (target_y - start_y).abs() > 1.0,
+            "前置：这次插入必须跨视觉行，实际 y {} -> {}",
+            start_y,
+            target_y
+        );
+        let _ = (start_x, target_x);
+
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let sample = coord
+                .sample_edit_frontier(now)
+                .expect("前沿必须还在");
+            let caret = coord
+                .sample_coordinated_caret(now)
+                .expect("协同 motion 必须还在");
+            // caret 正在两行之间（还没落到终点行）。
+            let between_y = (caret.y - start_y) * (caret.y - target_y) < 0.0;
+            assert!(
+                between_y,
+                "{}ms：caret 必须正在跨行途中，实际 y={}（{} -> {}）",
+                elapsed,
+                caret.y,
+                start_y,
+                target_y
+            );
+            // 前沿同在半途：已推进但未播完。
+            let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
+            let advanced = frontier.reveal.advanced(sample.progress);
+            let total: f64 = frontier
+                .reveal
+                .regions
+                .iter()
+                .map(|r| r.path.total_length)
+                .sum();
+            assert!(
+                advanced > 0.0 && advanced < total,
+                "{}ms：前沿必须同在半途，实际 advanced={} total={}",
+                elapsed,
+                advanced,
+                total
+            );
+        }
+
+        println!("[BEHAVIOR_VERIFY] 评论38③：协同换行 caret 与前沿同帧跨行");
+    });
+}
+
+/// 评论 38 要求④：`coordinated_mode_ignores_smooth_cursor_duration`。
+///
+/// typing = 160ms、smooth cursor = 20ms：协同开时正文编辑的 caret 仍跑 160ms；
+/// 纯方向键移动才用 20ms。
+#[test]
+fn coordinated_mode_ignores_smooth_cursor_duration() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.current_cursor_animation_duration_ms = 20;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("A"));
+        let _ = item.pipeline.set_selection(1, 1);
+        item.snap_next_cursor_update();
+        item.insert_text(QString::from("X"));
+
+        let (_, _, _, _, duration_ms) = item
+            .pipeline
+            .animation_coordinator()
+            .coordinated_caret_for_test()
+            .expect("协同开时正文插入必须由 motion 接管");
+        assert_eq!(
+            duration_ms, 160,
+            "协同正文编辑的 caret 必须跑 typing duration（160ms），不能被 smooth duration（20ms）带偏"
+        );
+
+        // 纯方向键：独立 Tween，用 smooth duration。
+        item.move_cursor_horizontal(false, false);
+        assert!(
+            item.pipeline
+                .animation_coordinator()
+                .coordinated_caret_for_test()
+                .is_none(),
+            "独立光标移动必须取代协同 motion"
+        );
+        let anim = item
+            .cursor_ctrl
+            .animation
+            .as_ref()
+            .expect("纯方向键必须建独立 Tween");
+        assert_eq!(
+            anim.duration_ms, 20,
+            "纯光标移动用 smooth duration，实际 {}",
+            anim.duration_ms
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论38④：协同态忽略 smooth 时长，纯光标移动仍用 smooth 时长");
+    });
+}
+
+/// 评论 38 要求⑤：`coordinated_off_keeps_independent_timelines`。
+///
+/// 协同关：typing = 160ms、cursor = 80ms 时两者独立并存（前沿 160ms +
+/// 独立 Tween 80ms），证明没有把所有模式硬绑在一起。
+#[test]
+fn coordinated_off_keeps_independent_timelines() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = false;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.current_cursor_animation_duration_ms = 80;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("A"));
+        let _ = item.pipeline.set_selection(1, 1);
+        item.snap_next_cursor_update();
+        item.insert_text(QString::from("X"));
+
+        let coord = item.pipeline.animation_coordinator();
+        assert!(
+            coord.coordinated_caret_for_test().is_none(),
+            "协同关时不得建协同 motion"
+        );
+        let frontier = coord
+            .active_edit_frontier
+            .as_ref()
+            .expect("协同关时前沿仍按 typing 开关建立");
+        assert_eq!(
+            frontier.duration_ms, 160,
+            "非协同前沿用 typing duration，实际 {}",
+            frontier.duration_ms
+        );
+        let anim = item
+            .cursor_ctrl
+            .animation
+            .as_ref()
+            .expect("协同关时光标仍走独立 Tween");
+        assert_eq!(
+            anim.duration_ms, 80,
+            "非协同光标用 smooth duration，实际 {}",
+            anim.duration_ms
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论38⑤：协同关时两条独立 timeline 并存");
+    });
+}
+
+/// 评论 38 要求⑥：`rapid_typing_retargets_single_coordinated_motion`。
+///
+/// 40ms 输入第二个字：不新增第二条 caret timeline（`Option` 只有一份），
+/// 从当前视觉 caret 直接 retarget 到最新 caret。
+#[test]
+fn rapid_typing_retargets_single_coordinated_motion() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let _ = build_coordinated_insert_for_test(&mut item);
+
+        // 第一笔播到 40ms，记当前屏幕 caret。
+        rewind_coordinated_clock_for_test(&mut item, 40);
+        let now = Instant::now();
+        let mid_x = item
+            .pipeline
+            .animation_coordinator_mut()
+            .sample_coordinated_caret(now)
+            .expect("第一笔 motion 必须还在")
+            .x;
+
+        // 第二笔：同一 burst 内再输入一个字。
+        item.insert_text(QString::from("Y"));
+        assert_eq!(item.pipeline.committed_text(), "AXY");
+        assert!(
+            item.pipeline.animation_coordinator().has_active_edit_frontier(),
+            "连续输入必须保持单一前沿"
+        );
+        let (start2, _, target2, _, _) = item
+            .pipeline
+            .animation_coordinator()
+            .coordinated_caret_for_test()
+            .expect("连续输入必须保持单份协同 motion");
+        assert!(
+            (start2 - mid_x).abs() < 1.0,
+            "retarget 必须从当前屏幕 caret 继续，实际 start={} mid={}",
+            start2,
+            mid_x
+        );
+        assert!(
+            (target2 - item.cursor_ctrl.target_x).abs() < 1e-9,
+            "retarget 目标必须是最新 canonical caret"
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "连续协同输入不得孵化独立 Tween"
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论38⑥：快速输入只 retarget 单份协同 motion");
+    });
+}

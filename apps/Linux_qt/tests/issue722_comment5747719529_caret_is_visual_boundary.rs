@@ -1,13 +1,6 @@
-//! Issue #722 评论 5747719529 复现测试 — 光标不是吞字/吐字的视觉边界，
-//! 而是被文字 glyph 切片反推出来，导致协同动画闪烁、软换行光标落点错误、
-//! 滚动后光标动画失效。
+//! Issue #722 评论 5747719529 复现测试 — 光标就是吞字/吐字的视觉边界。
 //!
-//! 本测试为 WHITE_BOX 结构守卫复现：验证当前实现违反评论 5747719529 的核心
-//! 语义——"光标本身就是吞字/吐字的视觉边界"。每个子测试断言评论期望的正确
-//! 结构，当前（未修复）代码违反这些断言 → 测试 FAIL → 缺陷复现成功。
-//!
-//! ## 评论 5747719529 核心语义
-//!
+//! 评论核心语义（Issue #826 评论 38 沿用并实现）：
 //! - 吐字：光标往前走到哪里，文字就显示到哪里；已经被光标"带出来"的部分就是
 //!   已经吐出来，不能后面再自己补一个淡入进度。
 //! - 吞字：光标往回走到哪里，文字就消失到哪里；已经被光标扫过去的部分就是
@@ -16,27 +9,14 @@
 //!   扫过的部分保持最终状态，尚未扫过的部分继续跟着新的光标边界走。
 //! - 文字不能再维护一套会和 caret 分叉的"自己什么时候完全出现/完全消失"的
 //!   位置/可见度进度。真正决定当前 reveal/conceal 截止位置的是这一帧的
-//!   caret geometry。
-//! - 实现上，`InsertReveal` / `DeleteConceal` 的裁切边界应直接消费本帧
-//!   coordinated caret 的位置；caret 与文字使用同一个 `frame_now` 和同一个
-//!   from→to 几何轨迹。快速 rebase 时先采样当前 caret 边界，再把这个边界
-//!   作为下一段动画起点。不要再用 `rightmost_x.max()`、`conceal_edge.min()`
-//!   或独立 glyph progress 去反推出光标。
+//!   caret 位置投影到 Frontier path 上的距离。
 //!
-//! ## 复现的违规模式（对应 Issue 正文 + 评论 1 改法 + 评论 3 语义纠正）
+//! Issue #826 评论 38：旧 cursor_motion / animated_slice 架构已删除，上面语义
+//! 改由 `CoordinatedCaretMotion` + `project_onto_layer` + sample 携带的
+//! `CoordinatedBoundary` 实现。指向旧文件的复现测试按评论 36「清理旧守卫」
+//! 先例重写到新架构上；仍然有效的复现 A/B/F/I 原样保留。
 //!
-//! 1. `last_scroll_y` 字段只初始化为 0.0、无写回，`scroll_changed` 永真，
-//!    `hard_snap` 永真 → 滚动后光标平滑动画失效。
-//! 2. `build_cursor_plan()` 的 `hard_snap` 仍含 `scroll_changed`，滚动状态
-//!    残不干净。
-//! 3. `compute_coordinated_cursor_position()` / `sample_coordinated_cursor_rect_at()`
-//!    用 `rightmost_x.max()` / `conceal_edge.min()` 从文字 glyph 切片反推
-//!    光标位置——正是评论 3 明确禁止的反方向。
-//! 4. `cursor_x_from_canonical()` 用包含区间 `find` 取 canonical line，软换行
-//!    边界取错行 → 光标落到下一行靠右/行尾。
-//! 5. `InsertReveal` / `DeleteConceal` 的 `compute_frame` 裁切宽度由 unit 自己
-//!    的 `visible_fraction` 决定，不消费本帧 coordinated caret 的位置。
-//! 6. 文字 unit 维护独立 timeline / visible fraction，会与 caret 分叉。
+//! 行为级证明在 lib 内 `runtime_tests.rs` 的 `coordinated_*` 测试里。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -88,33 +68,6 @@ fn window_after(src: &str, anchor: &str, window_chars: usize) -> String {
     } else {
         src[pos..].to_string()
     }
-}
-
-/// 检查窗口内是否出现"caret 驱动裁切边界"的正确结构标识符。
-///
-/// 评论 5747719529 期望：先采样本帧 coordinated caret 的位置，再把该位置作为
-/// InsertReveal/DeleteConceal 的裁切边界。这里列举一组合理的命名候选，只要
-/// 窗口内出现任一即视为"已改为 caret 驱动裁切"。
-fn has_caret_driven_clip_guard(window: &str) -> bool {
-    let markers = [
-        "caret_clip_boundary",
-        "caret_boundary",
-        "caret_edge",
-        "coordinated_caret_x",
-        "caret_reveal_edge",
-        "caret_conceal_edge",
-        "clip_from_caret",
-        "reveal_boundary_from_caret",
-        "conceal_boundary_from_caret",
-        "caret_driven_clip",
-        "caret_visual_boundary",
-        "consume_caret",
-        "caret_geometry_clip",
-        "clip_width_from_caret",
-        "reveal_from_caret",
-        "conceal_from_caret",
-    ];
-    markers.iter().any(|m| window.contains(m))
 }
 
 // =========================================================================
@@ -228,136 +181,6 @@ fn repro_b_build_cursor_plan_hard_snap_includes_scroll_changed() {
 }
 
 // =========================================================================
-// 复现 C：compute_coordinated_cursor_position 用 rightmost_x.max() 反推光标
-// =========================================================================
-
-/// 复现 C：`compute_coordinated_cursor_position()`（animation_coordinator.rs:2678）
-/// 在 Insert 分支遍历 `tx.units`，对每个 `InsertReveal` unit 计算
-/// `edge_x = frame.x + frame.w`，再 `rightmost_x = Some(prev.max(edge_x))`，
-/// 最后 `match rightmost_x { Some(x) => Some((x, cursor_y, h)), ... }`。
-///
-/// 这正是评论 5747719529 明确禁止的"用 `rightmost_x.max()` 或独立 glyph progress
-/// 去反推出光标"。正确做法是先采样本帧 coordinated caret 的位置，再把该位置
-/// 作为 InsertReveal 的裁切边界。当前代码反方向 → 断言"不应有 rightmost_x.max()
-/// 反推"在当前代码上 FAIL → 复现成功。
-#[test]
-fn repro_c_compute_coordinated_cursor_uses_rightmost_x_max_to_infer_cursor() {
-    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    // compute_coordinated_cursor_position 函数体较大（Insert 分支 ~2736 行，
-    // Delete 分支 ~2776 行），需足够大窗口覆盖两个分支。
-    let window = function_window(&src, "fn compute_coordinated_cursor_position", 14000);
-    // 前提：函数确实有 Insert 分支遍历 units 算 rightmost_x
-    let has_rightmost_x = window.contains("let mut rightmost_x: Option<f64> = None;");
-    let has_max_edge = window.contains("prev.max(edge_x)");
-    let has_insert_reveal_filter = window.contains("AnimatedSliceKind::InsertReveal");
-    println!(
-        "[BUGFIX_REPRO_TRACE] C compute_coordinated: has_rightmost_x={} has_max_edge={} insert_reveal_filter={}",
-        has_rightmost_x, has_max_edge, has_insert_reveal_filter
-    );
-    // Issue #722 修复后回归守卫：rightmost_x.max() 已删除时直接通过。
-    if !(has_rightmost_x && has_max_edge && has_insert_reveal_filter) {
-        return;
-    }
-    // 复现断言：不应从 glyph 切片反推光标，应改为 caret 驱动裁切。
-    let has_caret_driven = has_caret_driven_clip_guard(&window);
-    println!(
-        "[BUGFIX_REPRO_TRACE] C compute_coordinated has_caret_driven_clip: {}",
-        has_caret_driven
-    );
-    assert!(
-        has_caret_driven,
-        "Issue #722 评论 5747719529 复现 C: compute_coordinated_cursor_position 在 Insert 分支\
-         用 rightmost_x.max() 从文字 glyph 切片反推光标位置（edge_x = frame.x + frame.w，\
-         rightmost_x = prev.max(edge_x)）。评论 5747719529 明确禁止：\"不要再用\
-         rightmost_x.max()、conceal_edge.min() 或独立 glyph progress 去反推出光标\"。\
-         正确做法：先采样本帧 coordinated caret 的位置（caret track / old-new rect 插值），\
-         再把该位置作为 InsertReveal 的裁切边界。当前反方向导致吐字时文字自己维护一套\
-         reveal 进度，光标被文字反推，快速连续输入时两者分叉 → 闪烁。"
-    );
-}
-
-// =========================================================================
-// 复现 D：compute_coordinated_cursor_position 用 conceal_edge.min() 反推光标
-// =========================================================================
-
-/// 复现 D：`compute_coordinated_cursor_position()` 在 Delete 分支遍历 `tx.units`，
-/// 对每个 `DeleteConceal` unit（conceal_to_left_edge=true）计算
-/// `edge = frame.x + frame.w`，再 `conceal_edge = Some(prev.min(edge))`，
-/// 最后 `if let Some(x) = conceal_edge { Some((x, cursor_y, h)) }`。
-///
-/// 这正是评论 5747719529 明确禁止的"用 `conceal_edge.min()` 反推光标"。当前代码
-/// → 断言"不应有 conceal_edge.min() 反推"在当前代码上 FAIL → 复现成功。
-#[test]
-fn repro_d_compute_coordinated_cursor_uses_conceal_edge_min_to_infer_cursor() {
-    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let window = function_window(&src, "fn compute_coordinated_cursor_position", 14000);
-    // 前提：函数确实有 Delete 分支遍历 units 算 conceal_edge
-    let has_conceal_edge = window.contains("let mut conceal_edge: Option<f64> = None;");
-    let has_min_edge = window.contains("prev.min(edge)");
-    let has_delete_conceal_filter = window.contains("AnimatedSliceKind::DeleteConceal");
-    println!(
-        "[BUGFIX_REPRO_TRACE] D compute_coordinated: has_conceal_edge={} has_min_edge={} delete_conceal_filter={}",
-        has_conceal_edge, has_min_edge, has_delete_conceal_filter
-    );
-    // Issue #722 修复后回归守卫：conceal_edge.min() 已删除时直接通过。
-    if !(has_conceal_edge && has_min_edge && has_delete_conceal_filter) {
-        return;
-    }
-    // 复现断言：不应从 glyph 切片反推光标，应改为 caret 驱动裁切。
-    let has_caret_driven = has_caret_driven_clip_guard(&window);
-    println!(
-        "[BUGFIX_REPRO_TRACE] D compute_coordinated has_caret_driven_clip: {}",
-        has_caret_driven
-    );
-    assert!(
-        has_caret_driven,
-        "Issue #722 评论 5747719529 复现 D: compute_coordinated_cursor_position 在 Delete 分支\
-         用 conceal_edge.min() 从文字 glyph 切片反推光标位置（edge = frame.x + frame.w，\
-         conceal_edge = prev.min(edge)）。评论 5747719529 明确禁止：\"不要再用\
-         conceal_edge.min() 或独立 glyph progress 去反推出光标\"。吞字时应由 caret\
-         往回走到哪里决定文字消失到哪里，当前反方向导致吞字时文字自己维护一套\
-         conceal 进度，光标被文字反推，快速连续删除时两者分叉 → 闪烁。"
-    );
-}
-
-// =========================================================================
-// 复现 E：caret 唯一采样入口不得用 glyph 反推光标
-// =========================================================================
-
-/// 复现 E：光标位置不允许从 glyph 切片反推。
-///
-/// Issue #722 评论 5747719529 当时锁定的是 `sample_coordinated_cursor_rect_at()`，
-/// 该入口在 Issue #815 评论 6042062633 修改 3 中被删除：现在光标只有一条采样入口
-/// `sample_caret_track_frame()`，文字吞吐层与光标层消费同一次采样。
-///
-/// 回归守卫：老入口必须已经消失；新入口只能读 cursor track，
-/// 不得出现 `rightmost_x.max()` / `conceal_edge.min()` 这类 glyph 反推。
-#[test]
-fn repro_e_no_glyph_inference_in_caret_sampling_entry() {
-    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    assert!(
-        !src.contains("fn sample_coordinated_cursor_rect_at"),
-        "Issue #815 评论 6042062633 修改 3: sample_coordinated_cursor_rect_at 必须删除，\
-         光标只能有 sample_caret_track_frame 一个采样入口，文字层与光标层共用它。"
-    );
-    let window = function_window(&src, "fn sample_caret_track_frame", 2000);
-    for pattern in ["rightmost_x", "conceal_edge", "prev.max(", "prev.min("] {
-        assert!(
-            !window.contains(pattern),
-            "Issue #722 评论 5747719529 复现 E: 唯一 caret 采样入口不得用 {} 从文字 glyph \
-             切片反推光标——光标必须由 cursor track 自己给出，文字反过来推光标就会与 caret 分叉。",
-            pattern
-        );
-    }
-    assert!(
-        window.contains("sampled_rect_at_progress")
-            && window.contains("sampled_ingest_at_progress"),
-        "Issue #815 评论 6042062633 修改 3: sample_caret_track_frame 必须同时给出 caret rect \
-         和 visual_line_id，文字吞吐层直接用 caret.x 当边界，不再自己算 0..1 进度。"
-    );
-}
-
-// =========================================================================
 // 复现 F：cursor_x_from_canonical 用包含区间 find 取 canonical line
 // =========================================================================
 
@@ -419,125 +242,6 @@ fn repro_f_cursor_x_from_canonical_uses_inclusive_find_for_soft_wrap_boundary() 
 }
 
 // =========================================================================
-// 复现 G：InsertReveal/DeleteConceal 裁切边界由 unit 自己的 visible fraction
-//         决定，不消费本帧 coordinated caret 的位置
-// =========================================================================
-
-/// 复现 G：`animated_slice.rs::compute_frame()`（第 283 行）对 InsertReveal
-/// 计算 `frame_w = to_document_rect.w * visible`，对 DeleteConceal 计算
-/// `frame_w = from_document_rect.w * visible`。裁切宽度由 `visible`（unit 自己
-/// 的 `current_visible_fraction`）决定，**不消费本帧 coordinated caret 的
-/// 位置**。
-///
-/// 评论 5747719529："InsertReveal / DeleteConceal 的裁切边界应直接消费本帧
-/// coordinated caret 的位置；caret 与文字使用同一个 frame_now 和同一个
-/// from→to 几何轨迹。"当前裁切由 unit 自己的 visible fraction 驱动，光标再
-/// 从 frame edge 反推 → 文字和光标各自一套进度 → 分叉 → 闪烁。
-#[test]
-fn repro_g_insert_reveal_delete_conceal_clip_independent_of_caret() {
-    let src = read_src("src/sujian_editor_item/animated_slice.rs");
-    let window = function_window(&src, "pub fn compute_frame", 1800);
-    // 前提：compute_frame 确实由 visible 驱动裁切
-    let insert_reveal_clip = window.contains("let frame_w = self.to_document_rect.w * visible;");
-    let delete_conceal_clip = window.contains("let frame_w = self.from_document_rect.w * visible;");
-    println!(
-        "[BUGFIX_REPRO_TRACE] G compute_frame: insert_reveal_clip={} delete_conceal_clip={}",
-        insert_reveal_clip, delete_conceal_clip
-    );
-    // Issue #722 修复后回归守卫：unit visible fraction 驱动裁切已删除时直接通过。
-    if !(insert_reveal_clip && delete_conceal_clip) {
-        return;
-    }
-    // 复现断言：裁切边界应消费 caret geometry，而非 unit 自己的 visible。
-    let has_caret_driven = has_caret_driven_clip_guard(&window);
-    println!(
-        "[BUGFIX_REPRO_TRACE] G compute_frame has_caret_driven_clip: {}",
-        has_caret_driven
-    );
-    assert!(
-        has_caret_driven,
-        "Issue #722 评论 5747719529 复现 G: animated_slice.rs::compute_frame 对 InsertReveal\
-         计算 frame_w = to_document_rect.w * visible，对 DeleteConceal 计算 frame_w = \
-         from_document_rect.w * visible。裁切宽度由 unit 自己的 current_visible_fraction\
-         决定，不消费本帧 coordinated caret 的位置。评论 5747719529 明确要求：\"InsertReveal\
-         / DeleteConceal 的裁切边界应直接消费本帧 coordinated caret 的位置；caret 与文字\
-         使用同一个 frame_now 和同一个 from→to 几何轨迹\"。当前文字自己维护一套 reveal/conceal\
-         进度，光标再从 frame edge 反推 → 文字和光标各自一套进度 → 分叉 → 快速输入/删除时闪烁。"
-    );
-}
-
-// =========================================================================
-// 复现 H：文字 unit 维护独立 timeline / visible fraction，会与 caret 分叉
-// =========================================================================
-
-/// 复现 H：文字 `PreparedVisualUnit` 拥有自己的 `started_at` / `duration_ms`，
-/// 从自己的时间线计算 per-unit progress 和 `current_visible_fraction`。
-/// 评论 5747719529："文字不能再维护一套会和 caret 分叉的'自己什么时候完全
-/// 出现/完全消失'的位置/可见度进度。真正决定当前 reveal/conceal 截止位置的
-/// 是这一帧的 caret geometry。"
-///
-/// 当前 `animation_coordinator.rs` 注释（第 2583 行）明确承认 unit"拥有自己的
-/// `started_at` / `duration_ms`，从自己的时间线计算 per-unit progress"。
-/// `animated_slice.rs` 注释（第 280 行）也承认"单元自己的时间线 +
-/// `[start_fraction, target_fraction]` 视觉窗口"。这正是评论 3 禁止的独立
-/// timeline。
-#[test]
-fn repro_h_text_unit_maintains_independent_timeline_that_forks_from_caret() {
-    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-
-    // 前提：文字 unit 确实维护独立 timeline
-    let unit_has_own_timeline = coord.contains("拥有自己的 `started_at` / `duration_ms`")
-        || coord.contains("per-unit progress");
-    let slice_has_own_timeline =
-        slice.contains("单元自己的时间线") || slice.contains("自己的时间线");
-    let has_current_visible_fraction =
-        slice.contains("current_visible_fraction") || coord.contains("current_visible_fraction");
-    println!(
-        "[BUGFIX_REPRO_TRACE] H independent_timeline: unit_has_own={} slice_has_own={} has_visible_fraction={}",
-        unit_has_own_timeline, slice_has_own_timeline, has_current_visible_fraction
-    );
-    // Issue #722 修复后回归守卫：独立 timeline 注释已删除时直接通过。
-    if !(unit_has_own_timeline || slice_has_own_timeline) {
-        return;
-    }
-
-    // 复现断言：文字 unit 的 reveal/conceal 截止位置应由本帧 caret geometry 决定，
-    // 不应维护独立 visible fraction timeline。检查是否已有"caret geometry 决定
-    // reveal/conceal 截止"的机制。
-    let caret_geometry_markers = [
-        "caret_geometry_determines_clip",
-        "reveal_until_caret",
-        "conceal_until_caret",
-        "clip_by_caret",
-        "caret_bounds_clip",
-        "caret_driven_reveal",
-        "caret_driven_conceal",
-        "no_independent_unit_timeline",
-        "clip_from_coordinated_caret",
-    ];
-    let has_caret_geometry_clip = caret_geometry_markers
-        .iter()
-        .any(|m| coord.contains(m) || slice.contains(m));
-    println!(
-        "[BUGFIX_REPRO_TRACE] H has_caret_geometry_clip: {}",
-        has_caret_geometry_clip
-    );
-    assert!(
-        has_caret_geometry_clip,
-        "Issue #722 评论 5747719529 复现 H: 文字 PreparedVisualUnit 拥有自己的 started_at /\
-         duration_ms，从自己的时间线计算 per-unit progress 和 current_visible_fraction。\
-         评论 5747719529 明确禁止：\"文字不能再维护一套会和 caret 分叉的'自己什么时候\
-         完全出现/完全消失'的位置/可见度进度。真正决定当前 reveal/conceal 截止位置的\
-         是这一帧的 caret geometry\"。当前文字 unit 自己跑独立 timeline，光标再从文字\
-         frame edge 反推（复现 C/D/E），两套进度在快速连续输入/删除时 rebase 不一致 →\
-         闪烁。修复：删除文字 unit 的独立 timeline，reveal/conceal 截止位置直接由本帧\
-         coordinated caret geometry 决定，caret 与文字共用同一个 frame_now 和同一个\
-         from→to 几何轨迹。"
-    );
-}
-
-// =========================================================================
 // 复现 I：rendering.rs 仍把 last_scroll_y 传给 build_cursor_plan（链路未拆）
 // =========================================================================
 
@@ -572,86 +276,122 @@ fn repro_i_rendering_still_passes_last_scroll_y_to_build_cursor_plan() {
 }
 
 // =========================================================================
-// 综合断言：光标不是吞字/吐字的视觉边界（评论 5747719529 核心语义违反）
+// Issue #826 评论 38：光标就是吞吐边界 —— 新架构下的肯定式守卫
 // =========================================================================
+//
+// 旧复现 C/D/E/G/H 指向已删除的 cursor_motion.rs / animated_slice.rs，
+// 按评论 36「清理旧守卫」先例重写为肯定式断言（ below 6 条）。
+// 行为级证明在 lib 内 runtime_tests.rs 的 coordinated_* 测试。
 
-/// 综合复现：评论 5747719529 的核心语义是"光标本身就是吞字/吐字的视觉边界"。
-/// 当前实现违反该语义：光标位置由文字 glyph 切片反推（rightmost_x.max() /
-/// conceal_edge.min()），文字 unit 维护独立 timeline，裁切边界不消费 caret
-/// geometry。这导致 Issue 正文描述的全部症状：
-/// - 滚动后光标动画失效（复现 A/B/I）
-/// - 快速输入/删除闪烁（复现 C/D/E/G/H）
-/// - 软换行光标落点错误（复现 F）
+/// 吐字遮罩与吞字 overlay 的边界必须来自本帧 caret 投影，而不是文字自己的
+/// visible fraction / 独立 timeline。
 #[test]
-fn caret_is_not_visual_boundary_of_insert_reveal_delete_conceal() {
-    let coord_render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let coord_cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let coord_types = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-    let layout = read_src("src/editor/layout/canonical_snapshot.rs");
-    let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
-    let rendering = read_src("src/sujian_editor_item/rendering.rs");
-
-    // 汇总所有违规模式的存在性
-    let violation_a_last_scroll_y = cursor_ctrl.contains("pub last_scroll_y: f64,")
-        && rendering.contains("self.cursor_ctrl.last_scroll_y");
-    let violation_b_scroll_changed_in_hard_snap = {
-        let w = window_after(&coord_render_plan, "let hard_snap =", 200);
-        w.contains("scroll_changed")
-    };
-    let violation_c_rightmost_x_max = coord_cursor_motion.contains("prev.max(edge_x)");
-    let violation_d_conceal_edge_min = coord_cursor_motion.contains("prev.min(edge)");
-    let violation_f_inclusive_find = layout
-        .contains(".find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end)");
-    let violation_g_unit_visible_clip =
-        slice.contains("let frame_w = self.to_document_rect.w * visible;");
-    let has_caret_geometry_clip = coord_types.contains("caret_geometry_determines_clip")
-        || coord_types.contains("clip_from_coordinated_caret");
-    let violation_h_unit_own_timeline = (coord_types.contains("per-unit progress")
-        || slice.contains("单元自己的时间线")
-        || coord_types.contains("拥有自己的 `started_at` / `duration_ms`"))
-        && !has_caret_geometry_clip;
-
-    println!(
-        "[BUGFIX_REPRO_TRACE] SUMMARY violations: A={} B={} C={} D={} F={} G={} H={}",
-        violation_a_last_scroll_y,
-        violation_b_scroll_changed_in_hard_snap,
-        violation_c_rightmost_x_max,
-        violation_d_conceal_edge_min,
-        violation_f_inclusive_find,
-        violation_g_unit_visible_clip,
-        violation_h_unit_own_timeline
-    );
-
-    let any_violation = violation_a_last_scroll_y
-        || violation_b_scroll_changed_in_hard_snap
-        || violation_c_rightmost_x_max
-        || violation_d_conceal_edge_min
-        || violation_f_inclusive_find
-        || violation_g_unit_visible_clip
-        || violation_h_unit_own_timeline;
-
+fn caret_is_visual_boundary_of_frontier_masks() {
+    let src = read_src("src/sujian_editor_item/animation/edit_frontier.rs");
+    let mask_window = function_window(&src, "fn hidden_new_text_rects", 1500);
     assert!(
-        !any_violation,
-        "Issue #722 评论 5747719529 综合复现: 光标不是吞字/吐字的视觉边界。\
-         当前实现存在以下违规模式（评论 5747719529 核心语义违反）：\n\
-         A. last_scroll_y 字段无写回 + 仍传给 build_cursor_plan = {}\n\
-         B. hard_snap 仍含 scroll_changed = {}\n\
-         C. compute_coordinated_cursor_position 用 rightmost_x.max() 反推光标 = {}\n\
-         D. compute_coordinated_cursor_position 用 conceal_edge.min() 反推光标 = {}\n\
-         F. cursor_x_from_canonical 用包含区间 find 取 canonical line = {}\n\
-         G. InsertReveal/DeleteConceal 裁切由 unit visible fraction 驱动 = {}\n\
-         H. 文字 unit 维护独立 timeline = {}\n\
-         评论 5747719529 要求：光标本身就是吞字/吐字的视觉边界；InsertReveal/DeleteConceal\
-         的裁切边界应直接消费本帧 coordinated caret 的位置；caret 与文字使用同一个\
-         frame_now 和同一个 from→to 几何轨迹；不要再用 rightmost_x.max()、\
-         conceal_edge.min() 或独立 glyph progress 去反推出光标。",
-        violation_a_last_scroll_y,
-        violation_b_scroll_changed_in_hard_snap,
-        violation_c_rightmost_x_max,
-        violation_d_conceal_edge_min,
-        violation_f_inclusive_find,
-        violation_g_unit_visible_clip,
-        violation_h_unit_own_timeline
+        mask_window.contains("reveal_distance(region, sample)"),
+        "Issue #722/I#826-38: 吐字遮罩边界必须吃协同投影距离（caret 投影），\
+         不能再由文字自己的 visible_fraction 决定。"
+    );
+    let overlay_window = function_window(&src, "fn old_overlay_glyphs", 1500);
+    assert!(
+        overlay_window.contains("conceal_distance(region, sample)"),
+        "Issue #722/I#826-38: 吞字 overlay 边界必须吃协同投影距离。"
+    );
+    let sample_window = function_window(&src, "pub(crate) struct EditFrontierSample", 1200);
+    assert!(
+        sample_window.contains("coordinated: Option<CoordinatedBoundary>"),
+        "Issue #722/I#826-38: 前沿 sample 必须携带本帧 caret 投影边界，\
+         遮罩与 overlay 同帧看到同一个边界。"
+    );
+}
+
+/// 投影只能从 caret 位置算出边界，绝不能反过来从 glyph 切片反推光标
+/// （评论 3 明确禁止的反方向）。
+#[test]
+fn no_glyph_inference_in_coordinated_projection() {
+    let src = read_src("src/sujian_editor_item/animation/coordinated_caret.rs");
+    let window = function_window(&src, "pub(crate) fn project_onto_layer", 2500);
+    assert!(
+        window.contains("x: f64,") && window.contains("y: f64,"),
+        "Issue #722/I#826-38: 投影输入必须是本帧 caret 的 (x, y)。"
+    );
+    for forbidden in ["rightmost", "conceal_edge", "rightmost_x", "clip_from_glyph"] {
+        assert!(
+            !src.contains(forbidden),
+            "Issue #722/I#826-38: 协同投影里不得出现 {} —— 那是从文字反推光标，方向反了。",
+            forbidden
+        );
+    }
+}
+
+/// 协同 caret 每帧只采样一次：motion 采样入口唯一，且渲染帧里先采协同、
+/// 协同接管的帧不再推进独立光标 timeline。
+#[test]
+fn coordinated_caret_single_sample_per_frame() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    assert!(
+        coord.contains("pub(crate) fn sample_coordinated_caret"),
+        "Issue #722/I#826-38: 协同 caret 必须有统一采样入口 sample_coordinated_caret。"
+    );
+    let paint = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    let window = function_window(&paint, "fn update_paint_node", 6000);
+    assert!(
+        window.contains("tick_coordinated_caret_with_time(frame_now)"),
+        "Issue #722/I#826-38: Scene Graph 帧必须采样协同 caret。"
+    );
+    assert!(
+        window.contains("if !coordinated_owned_this_frame"),
+        "Issue #722/I#826-38: 协同接管的帧不得再推进独立光标 timeline \
+         （同一帧 visual 只写一次，否则光标与边界分叉）。"
+    );
+}
+
+/// 快速连续输入/删除交棒时，新 motion 必须从旧 motion 当前帧继续，
+/// 不能退回逻辑旧 caret（否则上一帧光标扫过的部分会跳回去）。
+#[test]
+fn coordinated_handoff_continues_from_sampled_frame() {
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(
+        &src,
+        "pub(crate) fn begin_or_retarget_coordinated_caret",
+        4500,
+    );
+    assert!(
+        window.contains("motion.position_at(") && window.contains("sample_progress(now)"),
+        "Issue #722/I#826-38: 交棒必须先采样旧 motion 当前帧，不退回逻辑旧 caret。"
+    );
+    assert!(
+        window.contains("frontier.started_at") && window.contains("frontier.duration_ms"),
+        "Issue #722/I#826-38: 交棒后 motion 时钟必须与当前前沿一致（同一 progress）。"
+    );
+}
+
+/// 协同关时独立路径必须原样保留：前沿走 typing timeline，光标走 smooth tween。
+/// 没有把所有模式硬绑在一起。
+#[test]
+fn coordinated_off_keeps_independent_paths() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    assert!(
+        coord.contains("pub(crate) fn build_cursor_plan"),
+        "Issue #722/I#826-38: 非协同光标 Tween 的构造入口必须保留。"
+    );
+    let ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
+    assert!(
+        ctrl.contains("pub(crate) fn tick_animation"),
+        "Issue #722/I#826-38: 独立光标 timeline 的每帧推进入口必须保留。"
+    );
+    let rendering = read_src("src/sujian_editor_item/rendering.rs");
+    let window = function_window(
+        &rendering,
+        "pub(crate) fn update_cursor_visual_position",
+        6000,
+    );
+    assert!(
+        window.contains("begin_or_retarget_coordinated_caret")
+            && window.contains(".build_cursor_plan("),
+        "Issue #722/I#826-38: 光标更新必须同时保留协同接管与独立 Tween 两支 \
+         （协同关时走独立分支）。"
     );
 }

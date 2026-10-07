@@ -131,6 +131,13 @@ impl QQuickItem for SujianEditorItem {
         let frame_now = frame_start;
         self.last_frame_now = Some(frame_now);
 
+        // Issue #826 评论 38：协同 caret 先采样，再 tick 正文层。
+        // motion 到终点时这里把 visual 精确落到 target 并清掉 motion，随后的
+        // tick 才收前沿；反过来会留下一帧 0.99 的亚像素残留。协同接管本帧则
+        // 不再调独立 `tick_animation`（同一帧 visual 只写一次）。
+        // 无协同 motion 时返回 false，走原来的独立光标 timeline。
+        let coordinated_owned_this_frame = self.tick_coordinated_caret_with_time(frame_now);
+
         let animation_set_changed = self.tick_text_animations_with_time(frame_now);
         if animation_set_changed {
             self.scene_dirty = true;
@@ -141,7 +148,10 @@ impl QQuickItem for SujianEditorItem {
         // 这里用整帧唯一的 frame_now 推进一次：先 tick_animation 推 visual，
         // 后面 build_cursor_render_state_for_frame() 才读到本帧真正的位置。
         // cursor 与正文动画完全独立（不绑 EditFrontier/Reflow），但消费同一 frame_now。
-        self.cursor_ctrl.tick_animation(frame_now);
+        // （协同模式本帧已由上面的 motion 采样接管，这里跳过。）
+        if !coordinated_owned_this_frame {
+            self.cursor_ctrl.tick_animation(frame_now);
+        }
 
         // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
         // 在边沿处重置 blink 状态，避免输入/光标动画时光标消失。

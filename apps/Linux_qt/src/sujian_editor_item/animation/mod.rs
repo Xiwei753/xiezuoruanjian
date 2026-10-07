@@ -14,6 +14,7 @@
 //! 不进 EditFrontier，不 carry/rebase preedit glyph。
 
 pub(crate) mod composition;
+pub(crate) mod coordinated_caret;
 pub(crate) mod coordinator;
 pub(crate) mod edit_frontier;
 /// Issue #826 评论 2：独立的 Reflow 层——没被改、但因换行/插入/删除而移动的文字。
@@ -24,6 +25,10 @@ pub(crate) mod shaping_transition;
 
 pub(crate) use coordinator::{
     blink_mode_for_frontier, CursorMoveInputs, EditFrontierRequest, LinuxEditorAnimationCoordinator,
+};
+#[allow(unused_imports)]
+pub(crate) use coordinated_caret::{
+    project_onto_layer, CoordinatedBoundary, CoordinatedCaretMotion, CoordinatedCaretSample,
 };
 #[allow(unused_imports)]
 pub(crate) use edit_frontier::{
