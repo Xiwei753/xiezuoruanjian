@@ -850,6 +850,39 @@ def cleanup_old_test_versions(
     return removed
 
 
+def wait_for_package_compile(
+    cli: "AgcCli",
+    *,
+    app_id: str,
+    pkg_id: str,
+    attempts: int = 30,
+    delay_seconds: float = 10.0,
+) -> None:
+    """Wait until AGC finishes parsing the uploaded package."""
+    last_status = ""
+    for attempt in range(attempts):
+        data = cli.raw(
+            "publish",
+            "compile-status",
+            "-a",
+            app_id,
+            "--pkg-ids",
+            pkg_id,
+        )
+        assert isinstance(data, dict)
+        status = first_value(data, ("successStatus",))
+        if status == "0":
+            eprint(f"软件包解析完成：{pkg_id}")
+            return
+        last_status = status or "unknown"
+        eprint(f"软件包仍在解析：successStatus={last_status}")
+        if attempt < attempts - 1:
+            time.sleep(delay_seconds)
+    raise PublishError(
+        f"等待软件包解析超时：pkgId={pkg_id}，successStatus={last_status}"
+    )
+
+
 def build_version_update_body(
     *,
     version_id: str,
@@ -979,13 +1012,14 @@ def publish(args: argparse.Namespace) -> None:
             if attempt < 2:
                 time.sleep(2)
 
-    if pkg_id:
-        eprint(f"测试软件包 ID: {pkg_id}")
-    else:
-        eprint(
-            "添加测试软件包成功，但 AGC 的 pkg-add/version-list 都未返回 pkgId；"
-            "继续依赖服务端已绑定的软件包。"
+    if not pkg_id:
+        raise PublishError(
+            "添加测试软件包成功，但响应中没有 pkgId/packageId/pkgVersion，"
+            "且 version-list 也无法反查；不能提交一个没有绑定软件包的测试版本。"
         )
+
+    eprint(f"测试软件包 ID: {pkg_id}")
+    wait_for_package_compile(cli, app_id=app_id, pkg_id=pkg_id)
 
     start_time_ms, end_time_ms = normalize_test_window(
         args.start_time_ms,
