@@ -73,22 +73,22 @@ jobs:
           credentials_path="$agc_dir/service-account.json"
           printf '%s' "$AGC_SA_CREDENTIALS_B64" | base64 --decode > "$credentials_path"
 
-          python3 - "$credentials_path" <<'PY'
+          python3 - "$credentials_path" "$GITHUB_ENV" <<'PY'
           import json
           import sys
           from pathlib import Path
 
-          credential = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          credentials_path = Path(sys.argv[1])
+          github_env = Path(sys.argv[2])
+          credential = json.loads(credentials_path.read_text(encoding="utf-8"))
           required = ("key_id", "private_key", "sub_account", "token_uri")
           if not all(isinstance(credential.get(k), str) and credential[k].strip() for k in required):
               raise SystemExit("AGC service-account credential is incomplete")
-          PY
 
-          {
-            echo 'AGC_SERVICE_ACCOUNT_JSON<<__AGC_JSON__'
-            cat "$credentials_path"
-            echo '__AGC_JSON__'
-          } >> "$GITHUB_ENV"
+          compact = json.dumps(credential, ensure_ascii=False, separators=(",", ":"))
+          with github_env.open("a", encoding="utf-8") as handle:
+              handle.write(f"AGC_SERVICE_ACCOUNT_JSON={compact}\n")
+          PY
 
       - name: Prepare HarmonyOS release signing
         if: steps.secrets.outputs.ready == 'true'
