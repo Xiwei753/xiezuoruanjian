@@ -1048,16 +1048,16 @@ def device_type_ids(data: dict[str, Any]) -> set[int]:
     return result
 
 
-def sync_global_device_types(
+def sync_test_device_types(
     cli: "AgcCli",
     *,
     app_id: str,
+    version_id: str,
 ) -> None:
-    """Persist phone/tablet support in AGC basic app info before test creation.
+    """Ensure AGC test-version metadata matches module deviceTypes.
 
-    The Publishing API only accepts app-info-update for releaseType=1.
-    HarmonyOS test versions (releaseType=6) inherit this multi-device metadata
-    when they are created.
+    Sujian currently ships one HarmonyOS entry for default(phone/foldable) + tablet.
+    AGC Connect API deviceType IDs are 4=phone and 5=tablet.
     """
     current = cli.raw(
         "publish",
@@ -1065,19 +1065,34 @@ def sync_global_device_types(
         "-a",
         app_id,
         "-r",
-        "1",
+        "6",
+        "-v",
+        version_id,
     )
     assert isinstance(current, dict)
     info = app_info_dict(current)
 
     publish_country = info.get("publishCountry")
     encrypted = info.get("encrypted")
+    if not publish_country or encrypted is None:
+        fallback = cli.raw(
+            "publish",
+            "app-info",
+            "-a",
+            app_id,
+            "-r",
+            "1",
+        )
+        assert isinstance(fallback, dict)
+        fallback_info = app_info_dict(fallback)
+        publish_country = publish_country or fallback_info.get("publishCountry")
+        if encrypted is None:
+            encrypted = fallback_info.get("encrypted")
+
     if not publish_country:
-        publish_country = os.environ.get("AGC_PUBLISH_COUNTRY", "CN").strip() or "CN"
-        eprint(f"AGC 未配置发布地区，测试发布默认使用：{publish_country}")
+        raise PublishError("AGC app-info 缺少 publishCountry，无法写入设备范围。")
     if encrypted is None:
-        encrypted = 0
-        eprint("AGC 未配置 encrypted，测试发布按普通未加密 APP 使用 encrypted=0。")
+        raise PublishError("AGC app-info 缺少 encrypted，无法写入设备范围。")
 
     body = {
         "publishCountry": publish_country,
@@ -1105,7 +1120,7 @@ def sync_global_device_types(
             "--body",
             str(body_path),
             "-r",
-            "1",
+            "6",
         )
     finally:
         body_path.unlink(missing_ok=True)
@@ -1116,42 +1131,17 @@ def sync_global_device_types(
         "-a",
         app_id,
         "-r",
-        "1",
+        "6",
+        "-v",
+        version_id,
     )
     assert isinstance(verify, dict)
     actual = device_type_ids(verify)
     if not {4, 5}.issubset(actual):
         raise PublishError(
-            f"AGC 正式应用设备范围写入后读回不完整：actual={sorted(actual)}，expected=[4, 5]"
+            f"AGC 设备范围写入后读回不完整：actual={sorted(actual)}，expected=[4, 5]"
         )
-    eprint("AGC 正式应用设备范围：手机(4) + 平板(5)")
-
-
-def verify_test_device_types(
-    cli: "AgcCli",
-    *,
-    app_id: str,
-    version_id: str,
-) -> None:
-    """Confirm a newly created test version inherited multi-device metadata."""
-    current = cli.raw(
-        "publish",
-        "app-info",
-        "-a",
-        app_id,
-        "-r",
-        "6",
-        "-v",
-        version_id,
-    )
-    assert isinstance(current, dict)
-    actual = device_type_ids(current)
-    if not {4, 5}.issubset(actual):
-        raise PublishError(
-            "测试版本未继承手机/平板设备范围："
-            f"actual={sorted(actual)}，expected=[4, 5]"
-        )
-    eprint("AGC 测试版本已继承设备范围：手机(4) + 平板(5)")
+    eprint("AGC 测试设备范围：手机(4) + 平板(5)")
 
 
 def build_version_update_body(
@@ -1206,8 +1196,6 @@ def publish(args: argparse.Namespace) -> None:
         group_id = cli.resolve_group_id(app_id, args.group_id, args.group_name)
         eprint(f"测试群组 ID: {group_id}")
 
-    sync_global_device_types(cli, app_id=app_id)
-
     if not args.keep_old_versions:
         cleanup_old_test_versions(
             cli,
@@ -1232,7 +1220,7 @@ def publish(args: argparse.Namespace) -> None:
     if not version_id:
         raise PublishError("测试版本已创建，但响应里没有 versionId；停止继续写入。")
     eprint(f"测试版本 ID: {version_id}")
-    verify_test_device_types(cli, app_id=app_id, version_id=version_id)
+    sync_test_device_types(cli, app_id=app_id, version_id=version_id)
 
     uploaded = cli.raw(
         "upload",

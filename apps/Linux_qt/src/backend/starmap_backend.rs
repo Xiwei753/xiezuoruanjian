@@ -185,7 +185,7 @@ pub struct StarMapBackend {
             nodes_json: QString,
             embeds_json: QString,
             from_path_json: QString,
-            to_path_json: QString,
+            to_path_json: QString
         ) -> QString
     ),
     compute_prospective_edge_render: qt_method!(
@@ -195,7 +195,7 @@ pub struct StarMapBackend {
             nodes_json: QString,
             embeds_json: QString,
             from_path_json: QString,
-            to_path_json: QString,
+            to_path_json: QString
         ) -> QJsonObject
     ),
     hit_test_edge_renders_json:
@@ -403,8 +403,8 @@ impl StarMapBackend {
     fn core_graph_from_dto_json(
         graph_json: &str,
     ) -> Result<writer_core::starmap::types::StarMapGraph, String> {
-        let graph_dto: writer_core::api::types::StarMapGraphDto =
-            serde_json::from_str(graph_json).map_err(|e| format!("Invalid graph JSON: {}", e))?;
+        let graph_dto: writer_core::api::types::StarMapGraphDto = serde_json::from_str(graph_json)
+            .map_err(|e| format!("Invalid graph JSON: {}", e))?;
         <writer_core::starmap::types::StarMapGraph as std::convert::TryFrom<_>>::try_from(graph_dto)
             .map_err(|e| e.to_string())
     }

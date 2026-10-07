@@ -596,10 +596,9 @@ impl SujianEditorItem {
             .finish_edit_frontier_to_canonical();
 
         self.cursor_ctrl.affinity = affinity;
-        // 保留 PointerClick 来源供统一光标计划记录；点击动作仍按交互要求即时 Snap。
+        // Issue #712: 鼠标点击设置 CursorMoveSource::PointerClick，
+        // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::PointerClick;
-        // 点击是即时交互：不让平滑光标时间轴延迟视觉命中位置。
-        self.snap_cursor_for_pointer_action();
         editor_debug_log(&format!(
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend
@@ -745,7 +744,6 @@ impl SujianEditorItem {
     /// 普通输入/删除（`insert_text`、`delete_*` 等）**不要**调用本方法，
     /// 它们要走 `begin_or_extend_edit_frontier` 连续更新同一个前沿。
     fn begin_manual_cursor_move(&mut self) {
-        self.cursor_ctrl.force_snap_next = true;
         self.pipeline
             .animation_coordinator_mut()
             .finish_edit_frontier_to_canonical();

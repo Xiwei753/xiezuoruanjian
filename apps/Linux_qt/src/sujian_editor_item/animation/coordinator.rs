@@ -1,4 +1,4 @@
-//! Linux Qt 正文动画协调器 — 将当前过渡采样为单帧视觉计划。
+//! Linux Qt 正文动画协调器 — Issue #826 四层模型。
 //!
 //! 本协调器**不再**拥有 prepared transaction 队列、rebase、carried unit、ingest
 //! stage 或 caret ownership。正文动画只有两样东西：
@@ -6,9 +6,12 @@
 //! - [`EditFrontierState`]：唯一的遮罩前沿，控制「本轮改掉的字现在露出多少」。
 //! - [`ReflowState`]：独立的 Reflow 层，控制「没改的字移动到哪」。
 //!
-//! 光标只由 `cursor_animation.rs` / `cursor_controller.rs` 拥有；正文过渡不再创建
-//! coordinated caret motion。IME preedit 仍是独立临时层。每帧的 glyph 与静态层
-//! exclusions 在 `RenderPlan` 中一起生成，renderer 只执行该份 ownership 决策。
+//! 光标动画由 `cursor_animation.rs` / `cursor_controller.rs` 自己拥有；IME preedit
+//! 由 `ime_visual.rs` 自己拥有。四层互相不拥有对方状态。
+//!
+//! Issue #826 评论 38：协同模式例外 —— 同一笔正文编辑的光标与文字前沿共享
+//! [`CoordinatedCaretMotion`]（`active_coordinated_caret`），一条 caret 运动轨迹
+//! 同时驱动视觉光标位置与前沿吞吐边界。非协同模式不用它。
 //!
 //! 普通正文编辑的完整流程（见 `pipeline::prepare_edit_motion`）：
 //! 1. Core 立即提交正文（正文永远是最新真实内容）；
@@ -29,7 +32,6 @@ use crate::sujian_editor_item::animation::coordinated_caret::{
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind,
     EditFrontierSample, EditFrontierState, FrontierGlyph, FrontierRegion, FrontierSegment,
-    RevealVisibleSample,
 };
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
@@ -756,44 +758,6 @@ impl LinuxEditorAnimationCoordinator {
             .collect()
     }
 
-    /// 动画接管的完整 target cluster。insert/reveal、reflow 和 shaping 共用一种
-    /// 静态让位语义：资源准备好时动画层独占，资源缺失时 canonical 同帧恢复。
-    pub(crate) fn frontier_target_clip_rects(&self) -> Vec<AnimationClipRect> {
-        self.active_edit_frontier
-            .as_ref()
-            .map(EditFrontierState::reveal_target_clusters)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(snapshot_id, _, rect)| AnimationClipRect {
-                x: rect.x,
-                y: rect.y,
-                w: rect.w,
-                h: rect.h,
-                snapshot_id,
-                kind: StaticClipKind::AnimationOwned,
-            })
-            .collect()
-    }
-
-    /// 当前帧仍由吐字过渡接管的 glyph 切片。切片宽度、位置与静态 exclusion
-    /// 来自同一个 frontier sample，动画结束时二者一起回到 canonical。
-    pub(crate) fn reveal_visuals_for(
-        &self,
-        sample: &EditFrontierSample,
-    ) -> Vec<RevealVisibleSample> {
-        self.active_edit_frontier
-            .as_ref()
-            .map(|frontier| frontier.current_reveal_visuals(sample.progress))
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn active_reveal_snapshot_ids(&self) -> Vec<LineSnapshotId> {
-        self.active_edit_frontier
-            .as_ref()
-            .map(EditFrontierState::active_reveal_snapshot_ids)
-            .unwrap_or_default()
-    }
-
     /// Issue #826 评论 6 阻塞 2: 当前前沿的最新 target snapshot。
     ///
     /// Reflow 的动画 glyph 从最新 target/new 行图取纹理（`ReflowSpan.snapshot_id`
@@ -1031,9 +995,6 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
         if let Some(frontier) = self.active_edit_frontier.as_ref() {
-            for id in frontier.active_reveal_snapshot_ids() {
-                push(id, &mut ids, &mut seen);
-            }
             if frontier.kind.needs_old_overlay() {
                 // Issue #826 评论 14 阻塞 4：从 track 自己的 glyphs 收，
                 // 同 burst handoff 的 source texture 不在 burst base 里。
@@ -1097,7 +1058,7 @@ impl LinuxEditorAnimationCoordinator {
                 w,
                 h,
                 snapshot_id,
-                kind: StaticClipKind::AnimationOwned,
+                kind: StaticClipKind::ReflowTarget,
             })
             .collect()
     }
@@ -1125,7 +1086,7 @@ impl LinuxEditorAnimationCoordinator {
                 w: rect.w,
                 h: rect.h,
                 snapshot_id,
-                kind: StaticClipKind::AnimationOwned,
+                kind: StaticClipKind::ReflowTarget,
             })
             .collect()
     }
@@ -1174,7 +1135,7 @@ impl LinuxEditorAnimationCoordinator {
                 w: rect.w,
                 h: rect.h,
                 snapshot_id,
-                kind: StaticClipKind::AnimationOwned,
+                kind: StaticClipKind::ReflowTarget,
             })
             .collect()
     }

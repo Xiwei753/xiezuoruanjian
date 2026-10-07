@@ -131,17 +131,27 @@ impl QQuickItem for SujianEditorItem {
         let frame_now = frame_start;
         self.last_frame_now = Some(frame_now);
 
+        // Issue #826 评论 38：协同 caret 先采样，再 tick 正文层。
+        // motion 到终点时这里把 visual 精确落到 target 并清掉 motion，随后的
+        // tick 才收前沿；反过来会留下一帧 0.99 的亚像素残留。协同接管本帧则
+        // 不再调独立 `tick_animation`（同一帧 visual 只写一次）。
+        // 无协同 motion 时返回 false，走原来的独立光标 timeline。
+        let coordinated_owned_this_frame = self.tick_coordinated_caret_with_time(frame_now);
+
         let animation_set_changed = self.tick_text_animations_with_time(frame_now);
         if animation_set_changed {
             self.scene_dirty = true;
         }
 
-        // Issue #853：视觉光标的唯一 owner 是 cursor controller。
+        // Issue #826 评论 36：视觉光标 Tween 的**每帧唯一采样点**。
         // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
         // 这里用整帧唯一的 frame_now 推进一次：先 tick_animation 推 visual，
         // 后面 build_cursor_render_state_for_frame() 才读到本帧真正的位置。
-        // 正文层不创建或采样第二条 caret 动画。
-        self.cursor_ctrl.tick_animation(frame_now);
+        // cursor 与正文动画完全独立（不绑 EditFrontier/Reflow），但消费同一 frame_now。
+        // （协同模式本帧已由上面的 motion 采样接管，这里跳过。）
+        if !coordinated_owned_this_frame {
+            self.cursor_ctrl.tick_animation(frame_now);
+        }
 
         // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
         // 在边沿处重置 blink 状态，避免输入/光标动画时光标消失。
@@ -267,12 +277,16 @@ impl QQuickItem for SujianEditorItem {
                     frame_now,
                 );
 
-            // Issue #853：animation-owned cluster 的静态 exclusion 在过渡期间保持
-            // 完整不变，所以静态层只在 owner 集合开始/结束时重建。glyph 切片每帧
-            // 由动画层更新；完成帧同时移除 exclusion 并恢复 canonical 静态正文。
+            // Issue #826: 吐字遮罩是一个**每帧都在变**的矩形（前沿逐步打开），
+            // 静态层必须在遮罩存在的每一帧重建，否则会出现「遮罩已打开、静态层
+            // 还按上一帧的 clip 裁着」的一帧滞后。遮罩消失后的第一帧同样要重建，
+            // 让静态层恢复完整 canonical 正文。
+            //
+            // 这里记的是「本帧有没有遮罩」，而不是上一帧的遮罩矩形列表：
+            // 有遮罩 -> 重建（逐帧）；无遮罩但上一帧有 -> 重建一次收口。
             let has_clip_this_frame = !render_plan.clip_rects.is_empty();
-            let ownership_changed = has_clip_this_frame != self.last_had_clip_rects;
-            let frame_needs_relayout = base_needs_relayout || ownership_changed;
+            let frame_needs_relayout =
+                base_needs_relayout || has_clip_this_frame || self.last_had_clip_rects;
             self.last_had_clip_rects = has_clip_this_frame;
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
@@ -360,6 +374,10 @@ impl QQuickItem for SujianEditorItem {
                 .animation_coordinator()
                 .has_active_text_animation(frame_now)
                 || self.cursor_ctrl.animation.is_some()
+                || self
+                    .pipeline
+                    .animation_coordinator()
+                    .has_active_coordinated_caret()
             {
                 self.request_frame_update();
             }

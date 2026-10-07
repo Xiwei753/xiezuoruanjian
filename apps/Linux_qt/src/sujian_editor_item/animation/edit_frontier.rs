@@ -849,44 +849,6 @@ impl EditFrontierState {
         )
     }
 
-    /// 吐字过渡当前接管的完整 target cluster。
-    ///
-    /// 静态层在整个过渡期间让出这些 cluster；动画层用同一份 target 行图从
-    /// 零宽切片逐帧画到完整 glyph。这里不按 progress 改 exclusion，避免静态层
-    /// 和动画层在交接过程中同时绘制同一个 cluster。
-    pub(crate) fn reveal_target_clusters(
-        &self,
-    ) -> Vec<(LineSnapshotId, (usize, usize), SourceRect)> {
-        let mut clusters = Vec::new();
-        for (start, end) in self.active_reveal_owned_ranges() {
-            for line in self.target_snapshot.lines_in_byte_range(start, end) {
-                for cluster in line.clusters_contained_in_range(start, end) {
-                    let range = (cluster.byte_start, cluster.byte_end);
-                    if clusters.iter().any(|(_, existing, _)| *existing == range) {
-                        continue;
-                    }
-                    clusters.push((
-                        line.id,
-                        range,
-                        line.source_rect_to_document_rect(&cluster.source_rect),
-                    ));
-                }
-            }
-        }
-        clusters
-    }
-
-    /// 吐字动画资源保活与准备所需的最新 target 行图。
-    pub(crate) fn active_reveal_snapshot_ids(&self) -> Vec<LineSnapshotId> {
-        let mut ids = Vec::new();
-        for (snapshot_id, _, _) in self.reveal_target_clusters() {
-            if !ids.contains(&snapshot_id) {
-                ids.push(snapshot_id);
-            }
-        }
-        ids
-    }
-
     /// Issue #826 评论 17：**仍未吐完**的新文字范围。
     ///
     /// Reflow 的 `excluded_new` 必须用这个而不是整个 `new_ranges()`：已经完整
