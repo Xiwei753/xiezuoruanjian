@@ -125,6 +125,44 @@ jobs:
           echo "$HARMONY_CLI_HOME/tool/node/bin" >> "$GITHUB_PATH"
           echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
 
+      - name: Ensure AGC HarmonyOS app metadata
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        env:
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+          AGC_AUTH_MODE: service_account
+          AGC_SA_CREDENTIALS: ${{ runner.temp }}/sujian-agc/service-account.json
+        run: |
+          set -euo pipefail
+
+          skills_root="$RUNNER_TEMP/harmonyos-agent-skills"
+          rm -rf "$skills_root"
+          git clone --depth 1             https://gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills.git             "$skills_root"
+
+          cli_js="$(find "$skills_root"             -path '*/hmos-connect-api-cli-skill/scripts/connect-api-cli.js'             -type f -print -quit)"
+          if [ -z "$cli_js" ]; then
+            echo "Official HarmonyOS Agent Skills checkout does not contain connect-api-cli.js" >&2
+            exit 1
+          fi
+
+          body_path="$RUNNER_TEMP/sujian-agc/app-info.json"
+          cat > "$body_path" <<'JSON'
+          {
+            "publishCountry": "CN",
+            "encrypted": 0,
+            "harmonyChildType": 10000000,
+            "kindMainTag": 15000029,
+            "deviceTypes": [
+              {"deviceType": 4, "appAdapters": ""},
+              {"deviceType": 5, "appAdapters": ""}
+            ]
+          }
+          JSON
+
+          node "$cli_js" publish app-info-update             -a "$AGC_APP_ID"             --body "$body_path"             -r 1
+
+          echo "AGC metadata ready: CN + phone + tablet + 工具/写作"
+
       - name: Install HarmonyOS project dependencies
         if: steps.secrets.outputs.ready == 'true'
         working-directory: apps/harmony
