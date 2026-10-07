@@ -51,6 +51,24 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
             with self.assertRaises(MODULE.PublishError):
                 MODULE.resolve_direct_signing()
 
+    def test_patch_version_code_text_updates_only_version_code(self) -> None:
+        source = '{"app":{"versionCode":1000000,"versionName":"1.0.0"}}'
+        updated = MODULE.patch_version_code_text(source, 2_000_321)
+        self.assertIn('"versionCode":2000321', updated)
+        self.assertIn('"versionName":"1.0.0"', updated)
+
+    def test_resolve_ci_version_code_uses_github_run_identity(self) -> None:
+        with mock.patch.dict(
+            MODULE.os.environ,
+            {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_RUN_NUMBER": "123",
+                "GITHUB_RUN_ATTEMPT": "2",
+            },
+            clear=True,
+        ):
+            self.assertEqual(2_001_232, MODULE.resolve_ci_version_code())
+
     def test_resolve_hvigorw_uses_cli_path(self) -> None:
         with mock.patch.object(
             MODULE.shutil,
@@ -206,6 +224,20 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
             [("publish", "compile-status", "-a", "app-1", "--pkg-ids", "pkg-1")],
             calls,
         )
+
+    def test_wait_for_package_compile_fails_fast_on_status_2(self) -> None:
+        class FakeCli:
+            def raw(self, *args):
+                return {"ret": {"code": 0}, "pkgStateList": [{"successStatus": 2}]}
+
+        with self.assertRaises(MODULE.PublishError):
+            MODULE.wait_for_package_compile(
+                FakeCli(),
+                app_id="app-1",
+                pkg_id="pkg-1",
+                attempts=30,
+                delay_seconds=0,
+            )
 
     def test_invite_update_body_binds_package_and_group(self) -> None:
         body = MODULE.build_version_update_body(
