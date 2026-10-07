@@ -114,6 +114,13 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                 now_ms=0,
             )
 
+    def test_first_list_value_reads_pkg_version(self) -> None:
+        data = {"ret": {"code": 0}, "pkgVersion": ["pkg-123"]}
+        self.assertEqual(
+            "pkg-123",
+            MODULE.first_list_value(data, ("pkgVersion",)),
+        )
+
     def test_collect_groups_deduplicates_nested_results(self) -> None:
         groups = MODULE.collect_groups(
             {
