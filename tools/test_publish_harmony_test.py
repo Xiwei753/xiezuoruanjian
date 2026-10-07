@@ -69,6 +69,41 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
         ):
             self.assertEqual(2_001_232, MODULE.resolve_ci_version_code())
 
+    def test_remove_request_permission_text_removes_only_dlp_acl(self) -> None:
+        source = '''{
+          "module": {
+            "requestPermissions": [
+              {
+                "name": "ohos.permission.DETECT_GESTURE"
+              },
+              {
+                "name": "ohos.permission.DLP_GET_HIDE_STATUS",
+                "reason": "$string:perm_reason_dlp_anti_peep",
+                "usedScene": {
+                  "abilities": ["EntryAbility"],
+                  "when": "always"
+                }
+              }
+            ]
+          }
+        }'''
+        updated = MODULE.remove_request_permission_text(
+            source,
+            "ohos.permission.DLP_GET_HIDE_STATUS",
+        )
+        self.assertNotIn("DLP_GET_HIDE_STATUS", updated)
+        self.assertIn("DETECT_GESTURE", updated)
+
+    def test_ci_should_include_dlp_acl_is_explicit_opt_in(self) -> None:
+        with mock.patch.dict(
+            MODULE.os.environ,
+            {"HARMONY_RELEASE_DLP_ACL": "1"},
+            clear=True,
+        ):
+            self.assertTrue(MODULE.ci_should_include_dlp_acl())
+        with mock.patch.dict(MODULE.os.environ, {}, clear=True):
+            self.assertFalse(MODULE.ci_should_include_dlp_acl())
+
     def test_resolve_hvigorw_uses_cli_path(self) -> None:
         with mock.patch.object(
             MODULE.shutil,
@@ -229,6 +264,9 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
         class FakeCli:
             def raw(self, *args):
                 return {"ret": {"code": 0}, "pkgStateList": [{"successStatus": 2}]}
+
+            def try_raw(self, *args):
+                return False, None
 
         with self.assertRaises(MODULE.PublishError):
             MODULE.wait_for_package_compile(
