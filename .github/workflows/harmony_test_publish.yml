@@ -224,14 +224,8 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding="utf-8")
-          anchor = """  const body: UpdateTestVersionRequest = {
-            versionId: opts.versionId,
-            pkgId: opts.pkgId
-          }
-          """
-          replacement = """  const body: UpdateTestVersionRequest = {
-            versionId: opts.versionId,
-            pkgId: opts.pkgId
+          anchor = "    pkgId: opts.pkgId\n  }"
+          replacement = """    pkgId: opts.pkgId
           }
 
           // HarmonyOS test versions need explicit per-version multi-device metadata.
@@ -239,10 +233,11 @@ jobs:
           ;(body as any).deviceTypes = [
             { deviceType: 4, appAdapters: '' },
             { deviceType: 5, appAdapters: '' }
-          ]
-          """
-          if anchor not in source:
-              raise SystemExit("Pinned upstream updateTestVersion shape changed; refusing blind patch")
+          ]"""
+          if source.count(anchor) != 1:
+              raise SystemExit(
+                  f"Pinned upstream pkgId anchor count={source.count(anchor)}; refusing blind patch"
+              )
           path.write_text(source.replace(anchor, replacement, 1), encoding="utf-8")
           PY
 
