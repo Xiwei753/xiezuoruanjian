@@ -204,17 +204,52 @@ jobs:
       - name: Deploy to AGC invitation testing
         if: steps.secrets.outputs.ready == 'true'
         id: agc
-        uses: Eilgnaw/deploy-to-agc-testing@e3ea3b6b1c30864f4e4f8fbeb3e6322580ee9330
-        with:
-          service-account-json: ${{ steps.agc_credentials.outputs.json }}
-          app-id: ${{ secrets.AGC_APP_ID }}
-          app-path: ${{ steps.build.outputs.app_path }}
-          language: zh-Hans
-          test-desc: 素笺自动测试版
-          release-type: "6"
-          test-type: "3"
-          test-group-name: "Sujian CI"
-          generate-invite-code: "false"
+        shell: bash
+        env:
+          AGC_SERVICE_ACCOUNT_JSON: ${{ steps.agc_credentials.outputs.json }}
+          AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+          AGC_APP_PATH: ${{ steps.build.outputs.app_path }}
+        run: |
+          set -euo pipefail
+
+          action_dir="$RUNNER_TEMP/deploy-to-agc-testing"
+          rm -rf "$action_dir"
+          git clone --depth 1 --branch v2             https://github.com/Eilgnaw/deploy-to-agc-testing.git             "$action_dir"
+          git -C "$action_dir" rev-parse HEAD
+          test "$(git -C "$action_dir" rev-parse HEAD)" = "e3ea3b6b1c30864f4e4f8fbeb3e6322580ee9330"
+
+          python3 - "$action_dir/src/testing.ts" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding="utf-8")
+          anchor = """  const body: UpdateTestVersionRequest = {
+            versionId: opts.versionId,
+            pkgId: opts.pkgId
+          }
+          """
+          replacement = """  const body: UpdateTestVersionRequest = {
+            versionId: opts.versionId,
+            pkgId: opts.pkgId
+          }
+
+          // HarmonyOS test versions need explicit per-version multi-device metadata.
+          // Huawei's current Update Test Version API accepts deviceTypes here.
+          ;(body as any).deviceTypes = [
+            { deviceType: 4, appAdapters: '' },
+            { deviceType: 5, appAdapters: '' }
+          ]
+          """
+          if anchor not in source:
+              raise SystemExit("Pinned upstream updateTestVersion shape changed; refusing blind patch")
+          path.write_text(source.replace(anchor, replacement, 1), encoding="utf-8")
+          PY
+
+          npm --prefix "$action_dir" ci
+          npm --prefix "$action_dir" run package
+
+          env             "INPUT_SERVICE-ACCOUNT-JSON=$AGC_SERVICE_ACCOUNT_JSON"             "INPUT_APP-ID=$AGC_APP_ID"             "INPUT_APP-PATH=$AGC_APP_PATH"             "INPUT_LANGUAGE=zh-Hans"             "INPUT_TEST-DESC=素笺自动测试版"             "INPUT_RELEASE-TYPE=6"             "INPUT_TEST-TYPE=3"             "INPUT_TEST-GROUP-NAME=Sujian CI"             "INPUT_GENERATE-INVITE-CODE=false"             node "$action_dir/dist/index.js"
 
       - name: Print AGC result
         if: steps.secrets.outputs.ready == 'true' && success()
