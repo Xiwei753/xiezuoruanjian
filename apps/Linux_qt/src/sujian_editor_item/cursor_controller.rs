@@ -440,7 +440,7 @@ impl CursorController {
     ///
     /// `apply_plan()` 只负责创建 / 重基 Tween（`progress = 0`、`started_at = None`），
     /// 真正的推进在这里：Scene Graph 每帧用同一个 `frame_now` 调一次，
-    /// 不引入第二个 `Instant::now()`，也不把光标绑回 EditFrontier/Reflow。
+    /// 不引入第二个 `Instant::now()`，光标时间轴与正文过渡独立。
     ///
     /// ① 无 animation -> false；
     /// ② 首帧（`started_at == None`）-> 记起点，visual 保持 start，progress 仍 0，返回 true；
@@ -491,7 +491,7 @@ impl CursorController {
         }
     }
 
-    /// Issue #679 评论 5657313927: driver key 已不存在（Timeline 已结束/取消）时，
+    /// 动画被取消或目标需要立即落定时，
     /// 把 visual_x/y 精确落到 target_x/y 并删除 animation。
     /// 返回 true 表示发生过位置收尾，需要请求下一帧/重绘。
     pub fn finish_animation_to_target(&mut self) -> bool {

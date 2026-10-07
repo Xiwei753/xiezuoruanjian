@@ -659,29 +659,19 @@ impl SujianEditorItem {
     ///
     /// Issue #826: 唯一的 blink 决策入口。
     ///
-    /// - 有活跃遮罩前沿 / Reflow（`has_active_text_animation(frame_now)`）→ Suppressed
+    /// - 有活跃正文视觉过渡（`has_active_text_animation(frame_now)`）→ Suppressed
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
-    /// - 有协同 caret motion（`has_active_coordinated_caret()`）→ Suppressed
-    ///   （Issue #826 评论 39 BLOCKER 1：零可见 path 时前沿第一帧就没了，
-    ///   motion 还在走，blink 必须继续抑制到 motion 结束）
     /// - idle → Normal
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
-        use super::animation::blink_mode_for_frontier;
+        use super::animation::blink_mode_for_text_animation;
         use super::cursor_animation::CursorBlinkMode;
         if self.cursor_ctrl.animation.is_some() {
             return CursorBlinkMode::Suppressed;
         }
-        if self
-            .pipeline
-            .animation_coordinator()
-            .has_active_coordinated_caret()
-        {
-            return CursorBlinkMode::Suppressed;
-        }
-        blink_mode_for_frontier(
+        blink_mode_for_text_animation(
             self.pipeline
                 .animation_coordinator()
-                .active_edit_frontier_kind(),
+                .has_active_text_animation(std::time::Instant::now()),
         )
     }
 
@@ -805,9 +795,10 @@ impl SujianEditorItem {
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
-        // Issue #712: 正文事务路径设置 CursorMoveSource::TextTransaction，
-        // 由正文协同光标处理。
+        // Issue #853：正文动画不拥有光标。Core selection 已提交到最新 caret，
+        // 此帧由 cursor controller 直接落到 canonical 几何。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
+        self.cursor_ctrl.force_snap_next = true;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }

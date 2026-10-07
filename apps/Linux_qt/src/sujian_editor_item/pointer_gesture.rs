@@ -18,9 +18,9 @@
 //! 设计约束（Issue #819 评论第 6 节）：
 //! - 状态机内部维护 `pointer_drag_selecting` 和 `selection_gesture_active`
 //!   两个对外可见的布尔值，render_plan_builder / rendering 只读这两个值。
-//! - `selection_gesture_active` 覆盖整个选择手势生命周期（press 到 release），
-//!   包括长按选词；`pointer_drag_selecting` 只在真正发生拖选（move 超过阈值）
-//!   后为 true。
+//! - `selection_gesture_active` 只在真正进入拖选或长按选词后为 true；普通 press
+//!   立即执行 click，但不会把一个点击误判为选择手势。
+//! - `pointer_drag_selecting` 只在真正发生拖选（move 超过阈值）后为 true。
 //! - 长按由外部 Timer 在到点时调 `activate_long_press`，状态机不自己计时，
 //!   也不接管 pointer grab / MouseMove / Release。
 
@@ -133,12 +133,10 @@ impl PointerGestureState {
             hit_index,
             started_at: now,
         };
-        // press 即进入选择手势生命周期（selection_gesture_active = true），
-        // 让 render_plan_builder 在 press 后立即走 hard_snap，避免 press→move
-        // 之间的一帧用 has_selection 代替手势状态导致光标跳动。
-        // 但 pointer_drag_selecting 仍为 false，直到 move 超过阈值。
+        // press 只记录候选手势。click_at 已在 press 时立即执行；必须等拖动阈值
+        // 或真实长按成立后才把它标记为选择手势。
         self.pointer_drag_selecting = false;
-        self.selection_gesture_active = true;
+        self.selection_gesture_active = false;
     }
 
     /// 左键 move。超过拖动阈值后进入 DragSelecting；已在 DragSelecting /
@@ -264,11 +262,11 @@ mod tests {
     }
 
     #[test]
-    fn press_sets_selection_gesture_active_but_not_drag() {
+    fn press_is_click_candidate_until_drag_or_long_press() {
         let mut s = PointerGestureState::default();
         s.press((10.0, 20.0), 5, now());
         assert!(!s.pointer_drag_selecting());
-        assert!(s.selection_gesture_active());
+        assert!(!s.selection_gesture_active());
         assert!(!s.is_selecting());
     }
 
@@ -279,7 +277,7 @@ mod tests {
         let outcome = s.move_pos((11.0, 20.0));
         assert_eq!(outcome, MoveOutcome::StillPressed);
         assert!(!s.pointer_drag_selecting());
-        assert!(s.selection_gesture_active());
+        assert!(!s.selection_gesture_active());
     }
 
     #[test]

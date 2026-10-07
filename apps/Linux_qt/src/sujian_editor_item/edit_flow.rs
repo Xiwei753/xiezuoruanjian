@@ -10,7 +10,7 @@
 //! 4. 记录 `editor.edit.applied`
 //! 5. 保存 new snapshot
 //! 6. 动画开启时调视觉流水线
-//! 7. 明确返回 `Created(key)` / `Skipped(reason)` / `AnimationDisabled`
+//! 7. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`
 //! 8. 发 content/cursor/selection changed（由调用方决定）
 //!
 //! 硬约束：Core Applied + animations_requested 时不允许返回裸 `None`——
@@ -70,9 +70,7 @@ pub(crate) enum EditOp {
 /// 区间收进、candidate 揭示、committed replace range、pending preedit cursor rect
 /// 作为 old caret 起点等 composition 专属语义。
 ///
-/// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`）。
-/// Issue #819: 协同 InsertReveal/DeleteConceal 的空间边界直接来自同一笔 cursor track
-/// 的当前帧。非协同时才是独立文字 timeline + 独立 smooth cursor。
+/// Composition 与普通编辑最终都使用同一个 VisualEditState；preedit 自身不进入正文过渡。
 pub(crate) struct CompositionCommitParams {
     pub preedit_byte_start: usize,
     pub preedit_byte_end: usize,
@@ -106,7 +104,7 @@ pub(crate) enum EditVisualSkipReason {
 /// Issue #819 评论 5956495850 第 1 节：视觉事务的明确结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EditVisualOutcome {
-    /// Issue #826: 正文动画已接到唯一的遮罩前沿 / Reflow 层上。
+    /// 正文由单一 VisualEditState 创建了视觉过渡。
     ///
     /// 新模型没有 prepared transaction 队列，所以不再携带事务 key。
     Created,
@@ -137,7 +135,7 @@ impl SujianEditorItem {
     /// 4. 记录 `editor.edit.applied`；
     /// 5. 读取 new text/selection/caret；
     /// 6. 动画开启时调视觉流水线；
-    /// 7. 明确返回 `Created(key)` / `Skipped(reason)` / `AnimationDisabled`。
+    /// 7. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`。
     ///
     /// - `composition` 不带 composition commit 参数（`None`）时走
     ///   `record_transaction`，由 `pipeline.prepare_edit_motion` 内部

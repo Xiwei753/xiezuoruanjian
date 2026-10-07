@@ -42,7 +42,7 @@ fn test_shaping_identity_different() {
 
 /// Issue #826: `PreparedLineSnapshot::stub_for_tests` 造出的行几何自洽。
 ///
-/// 前沿遮罩与 Reflow 都按 `visual_line_top/bottom` 定位行，所以 stub 的
+/// 视觉 cluster 几何按 `visual_line_top/bottom` 定位行，所以 stub 的
 /// top/bottom 与 `document_origin_y` 必须一致。
 #[test]
 fn test_stub_for_tests_geometry_is_self_consistent() {
