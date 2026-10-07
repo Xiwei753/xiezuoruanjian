@@ -354,9 +354,11 @@ fn issue826_c38_retarget_samples_old_motion_first() {
         4500,
     );
     assert!(
-        window.contains("motion.position_at(") && window.contains("sample_progress(now)"),
-        "Issue #826 评论 38: 交棒必须先采样旧 motion 当前帧（屏幕真相），\
-         不退回调用方可能滞后一帧的 visual。"
+        window.contains("position_at_distance(")
+            && window.contains("distance_at_progress(")
+            && window.contains("sample_progress(now)"),
+        "Issue #826 评论 38/39: 交棒必须先采样旧 motion 当前帧的轨迹距离 \
+         （屏幕真相），不退回调用方可能滞后一帧的 visual。"
     );
 }
 
@@ -366,10 +368,11 @@ fn issue826_c38_frontier_sample_carries_projection() {
     let window = function_window(&src, "pub(crate) fn sample_edit_frontier", 2500);
     assert!(
         window.contains("project_onto_layer")
-            && window.contains("motion.position_at(progress)")
+            && window.contains("position_at_distance(motion.distance_at_progress(progress))")
             && window.contains("CoordinatedBoundary"),
-        "Issue #826 评论 38: 每帧前沿采样必须把本帧 caret 位置投影到路径上 \
-         （CoordinatedBoundary），遮罩与 overlay 吃投影距离。"
+        "Issue #826 评论 38/39: 每帧先由同一 progress 算 caret 在分段轨迹上的 \
+         位置，再把该位置投影到前沿路径（CoordinatedBoundary），遮罩与 overlay \
+         吃投影距离。"
     );
     assert!(
         window.contains("frontier.reveal.advanced(progress)")
@@ -488,9 +491,81 @@ fn issue826_c38_motion_lifecycle_follows_frontier() {
         "Issue #826 评论 38: 滚动 resume 必须连 motion 一起平移 started_at，\
          否则光标与吞吐边界立刻分叉。"
     );
+    // tick 不得清 motion（零可见 path 时前沿第一帧即 finished，motion 必须活到
+    // typing 结束）：见 issue826_c39_motion_outlives_empty_frontier。
+}
+
+#[test]
+fn issue826_c39_motion_outlives_empty_frontier() {
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let tick_window = function_window(&src, "pub(crate) fn tick(", 2000);
     assert!(
-        tick_window.contains("active_coordinated_caret = None"),
-        "Issue #826 评论 38: 前沿没了 motion 不得残留（孤儿 motion 会往新 canonical 上画旧 caret）。"
+        !tick_window.contains("active_coordinated_caret = None"),
+        "Issue #826 评论 39 BLOCKER 1: tick 不得因前沿没了就清 motion——\
+         零可见 path 的编辑（Enter / shaping 全接管）第一帧前沿即 finished，\
+         motion 必须活到 typing duration 结束，否则协同光标只动一帧就停。"
+    );
+    assert!(
+        tick_window.contains("active_coordinated_caret.is_some()"),
+        "Issue #826 评论 39 BLOCKER 1: motion 自己就是一层 clock，\
+         tick 续帧条件必须包含它。"
+    );
+}
+
+#[test]
+fn issue826_c39_frame_requests_continue_while_motion_alive() {
+    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    assert!(
+        src.contains("has_active_coordinated_caret()"),
+        "Issue #826 评论 39 BLOCKER 1: 尾部续帧条件必须包含协同 motion，\
+         否则 motion 活着却没有帧可跑，光标一样定住。"
+    );
+}
+
+#[test]
+fn issue826_c39_caret_walks_piecewise_path() {
+    let caret_src = read_src("src/sujian_editor_item/animation/coordinated_caret.rs");
+    assert!(
+        caret_src.contains("pub(crate) fn position_at_distance"),
+        "Issue #826 评论 39 BLOCKER 2: caret 必须沿分段轨迹按距离行走。"
+    );
+    assert!(
+        !caret_src.contains("start_x + (self.target_x - self.start_x)"),
+        "Issue #826 评论 39 BLOCKER 2: 不得对起点终点拉 x/y 斜线——\
+         跨行斜线会穿过行间缝隙，那里不属于任何文字行。"
+    );
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord_src, "fn coordinated_path_from_frontier", 4500);
+    assert!(
+        window.contains("reveal.regions") && window.contains("conceal.regions"),
+        "Issue #826 评论 39 BLOCKER 2: caret 路径必须取自本笔前沿分段 \
+         （吐字侧优先，纯吞字走吞字侧），与 changed visual path 同一视觉顺序。"
+    );
+    assert!(
+        window.contains("first.x_from = start_x") && window.contains("last.x_to = target_x"),
+        "Issue #826 评论 39 BLOCKER 2: 路径首段起点必须钉死屏幕 caret、\
+         末段终点钉死 canonical target（glyph/caret 几何差，不钉死两头跳变）。"
+    );
+}
+
+#[test]
+fn issue826_c39_projection_prefers_x_match() {
+    let src = read_src("src/sujian_editor_item/animation/coordinated_caret.rs");
+    let window = function_window(&src, "pub(crate) fn project_onto_layer", 3000);
+    assert!(
+        window.contains("nearest"),
+        "Issue #826 评论 39 BLOCKER 3: 同行多 region 时必须先收齐候选、\
+         优先选 x 真正命中的段，落空才取最近——绝不能 first-y-match 就返回。"
+    );
+}
+
+#[test]
+fn issue826_c39_blink_suppressed_while_motion_alive() {
+    let src = read_src("src/sujian_editor_item/properties.rs");
+    let window = function_window(&src, "pub(crate) fn current_cursor_blink_mode", 1500);
+    assert!(
+        window.contains("has_active_coordinated_caret()"),
+        "Issue #826 评论 39 BLOCKER 1: 零可见 path 时前沿第一帧就没了，\
+         blink 抑制必须跟着 motion 走，否则协同中途光标闪烁。"
     );
 }

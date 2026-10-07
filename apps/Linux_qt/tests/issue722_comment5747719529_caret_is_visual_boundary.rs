@@ -359,8 +359,10 @@ fn coordinated_handoff_continues_from_sampled_frame() {
         4500,
     );
     assert!(
-        window.contains("motion.position_at(") && window.contains("sample_progress(now)"),
-        "Issue #722/I#826-38: 交棒必须先采样旧 motion 当前帧，不退回逻辑旧 caret。"
+        window.contains("position_at_distance(")
+            && window.contains("distance_at_progress(")
+            && window.contains("sample_progress(now)"),
+        "Issue #722/I#826-38/39: 交棒必须先采样旧 motion 当前帧的轨迹距离，不退回逻辑旧 caret。"
     );
     assert!(
         window.contains("frontier.started_at") && window.contains("frontier.duration_ms"),
@@ -393,5 +395,55 @@ fn coordinated_off_keeps_independent_paths() {
             && window.contains(".build_cursor_plan("),
         "Issue #722/I#826-38: 光标更新必须同时保留协同接管与独立 Tween 两支 \
          （协同关时走独立分支）。"
+    );
+}
+
+/// 两侧边界都由本帧 caret 位置投影得到，不再按来源侧直写 shared distance
+///（glyph 矩形与 caret 矩形定位基准差几个像素，直写会在终点跳变）。
+#[test]
+fn coordinated_boundary_projected_from_caret_position() {
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&src, "pub(crate) fn sample_edit_frontier", 2500);
+    assert!(
+        window.contains("project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)"),
+        "Issue #722/I#826-39: 吐字边界必须由本帧 caret 位置投影。"
+    );
+    assert!(
+        window.contains("project_onto_layer(&frontier.conceal.regions, caret_x, caret_y)"),
+        "Issue #722/I#826-39: 吞字边界必须由本帧 caret 位置投影。"
+    );
+    assert!(
+        !window.contains("motion.source"),
+        "Issue #722/I#826-39: 不得再按路径来源侧直写 distance。"
+    );
+}
+
+/// 同行多 region 投影必须选 x 命中的段（多 patch / Replace / IME batch 一笔
+/// 多 island 不是理论死角）。
+#[test]
+fn coordinated_projection_prefers_x_containing_segment() {
+    let src = read_src("src/sujian_editor_item/animation/coordinated_caret.rs");
+    let window = function_window(&src, "pub(crate) fn project_onto_layer", 3000);
+    assert!(
+        window.contains("nearest"),
+        "Issue #722/I#826-39: 同行多 region 先收齐候选、优先 x 命中，\
+         绝不能 first-y-match 就返回（region B 的 caret 会投到 region A 末端）。"
+    );
+}
+
+/// 零可见 path 时 motion 比前沿活得长：tick 不得清 motion，续帧与 blink 都要
+/// 跟着 motion 走，否则 Enter 后光标只动一帧就停。
+#[test]
+fn coordinated_motion_outlives_empty_frontier() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let tick_window = function_window(&coord, "pub(crate) fn tick(", 2000);
+    assert!(
+        !tick_window.contains("active_coordinated_caret = None"),
+        "Issue #722/I#826-39: tick 不得因前沿没了就清 motion。"
+    );
+    let paint = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    assert!(
+        paint.contains("has_active_coordinated_caret()"),
+        "Issue #722/I#826-39: 尾部续帧条件必须包含协同 motion。"
     );
 }

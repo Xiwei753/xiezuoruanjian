@@ -661,11 +661,21 @@ impl SujianEditorItem {
     ///
     /// - 有活跃遮罩前沿 / Reflow（`has_active_text_animation(frame_now)`）→ Suppressed
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
+    /// - 有协同 caret motion（`has_active_coordinated_caret()`）→ Suppressed
+    ///   （Issue #826 评论 39 BLOCKER 1：零可见 path 时前沿第一帧就没了，
+    ///   motion 还在走，blink 必须继续抑制到 motion 结束）
     /// - idle → Normal
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
         use super::animation::blink_mode_for_frontier;
         use super::cursor_animation::CursorBlinkMode;
         if self.cursor_ctrl.animation.is_some() {
+            return CursorBlinkMode::Suppressed;
+        }
+        if self
+            .pipeline
+            .animation_coordinator()
+            .has_active_coordinated_caret()
+        {
             return CursorBlinkMode::Suppressed;
         }
         blink_mode_for_frontier(

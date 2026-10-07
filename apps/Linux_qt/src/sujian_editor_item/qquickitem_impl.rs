@@ -366,11 +366,18 @@ impl QQuickItem for SujianEditorItem {
 
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
+            // Issue #826 评论 39 BLOCKER 1：协同 motion 自己就是一层 clock
+            // （零可见 path 时前沿第一帧就没了，motion 还在走），必须同样续帧，
+            // 否则协同光标只动一帧就停。
             if self
                 .pipeline
                 .animation_coordinator()
                 .has_active_text_animation(frame_now)
                 || self.cursor_ctrl.animation.is_some()
+                || self
+                    .pipeline
+                    .animation_coordinator()
+                    .has_active_coordinated_caret()
             {
                 self.request_frame_update();
             }

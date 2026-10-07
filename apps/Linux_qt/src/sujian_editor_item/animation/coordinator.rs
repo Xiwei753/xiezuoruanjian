@@ -26,11 +26,12 @@ use std::time::Instant;
 use writer_core::editor::OffsetMap;
 
 use crate::sujian_editor_item::animation::coordinated_caret::{
-    project_onto_layer, CoordinatedBoundary, CoordinatedCaretMotion, CoordinatedCaretSample,
+    project_onto_layer, CaretMotionSegment, CoordinatedBoundary, CoordinatedCaretMotion,
+    CoordinatedCaretSample,
 };
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind,
-    EditFrontierSample, EditFrontierState, FrontierGlyph,
+    EditFrontierSample, EditFrontierState, FrontierGlyph, FrontierRegion,
 };
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
@@ -669,25 +670,27 @@ impl LinuxEditorAnimationCoordinator {
         self.active_reflow = if next.is_empty() { None } else { Some(next) };
     }
 
-    /// Issue #826: 采样本帧遮罩前沿。
+    /// Issue #826 评论 38/39：采样本帧遮罩前沿。
     ///
-    /// Issue #826 评论 38：协同 motion 活跃时，把本帧 caret 位置投影到前沿
-    /// 路径上（[`CoordinatedBoundary`]），遮罩与 overlay 用投影距离而不用
-    /// `advanced(progress)` —— caret 几何与 glyph 几何天然差几个像素，只共享
-    /// progress 会让「光标已到、边界还差一点」。投影命不中（跨行补间穿过行间
-    /// 缝隙）时回退到 progress 时钟。
+    /// 协同 motion 活跃时，吐字/吞字两侧的边界都由本帧 caret 位置经
+    /// [`project_onto_layer`] 投影得到（评论 38 的投影设计 + 评论 39 的
+    /// first-y-match 修正）：caret 在哪，边界就在哪，天然精确相等，不存在
+    /// glyph/caret 几何差。`CaretOnly`（Enter / shaping 全接管）时两侧 path
+    /// 本来就空，无实际消费者。投影命不中（理论上 caret y 恒在某行带内，
+    /// 只有浮点边界情形）时回退到 progress 时钟。
     pub(crate) fn sample_edit_frontier(&self, frame_now: Instant) -> Option<EditFrontierSample> {
         let frame_now = self.effective_text_animation_time(frame_now);
         let frontier = self.active_edit_frontier.as_ref()?;
         let mut sample = frontier.sample(frame_now);
         if let Some(motion) = self.active_coordinated_caret.as_ref() {
             let progress = motion.sample_progress(frame_now);
-            let (x, y) = motion.position_at(progress);
+            let (caret_x, caret_y) =
+                motion.position_at_distance(motion.distance_at_progress(progress));
             let reveal_distance =
-                project_onto_layer(&frontier.reveal.regions, x, y)
+                project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)
                     .unwrap_or_else(|| frontier.reveal.advanced(progress));
             let conceal_distance =
-                project_onto_layer(&frontier.conceal.regions, x, y)
+                project_onto_layer(&frontier.conceal.regions, caret_x, caret_y)
                     .unwrap_or_else(|| frontier.conceal.advanced(progress));
             sample.coordinated = Some(CoordinatedBoundary {
                 reveal_distance,
@@ -1262,33 +1265,38 @@ impl LinuxEditorAnimationCoordinator {
         {
             self.active_shaping_transition = None;
         }
-        // Issue #826 评论 38：motion 的存在前提是前沿还在。前沿没了 motion
-        // 必须跟没（正常路径里采样侧先按 progress 到 1 清掉，这里只是兜底，
-        // 防止直接调 tick 的测试/路径留下无前沿的孤儿 motion）。
-        if self.active_edit_frontier.is_none() {
-            self.active_coordinated_caret = None;
-        }
-        self.active_edit_frontier.is_some()
+        // Issue #826 评论 39 BLOCKER 1：motion 自己就是本笔正文协同 clock，
+        // progress==1 时由采样侧自己结束；这里**不得**因为前沿没了就无条件清
+        // motion —— 零可见 path 的编辑（Enter / shaping 全接管）第一帧前沿就
+        // finished，motion 必须继续走到 target，否则协同光标只动一帧就停。
+        // 显式收口（suppress / 点击 / 独立光标接管 / finish-to-canonical）会清它。
+        if self.active_edit_frontier.is_some()
             || self.active_reflow.is_some()
             || self.active_shaping_transition.is_some()
+            || self.active_coordinated_caret.is_some()
+        {
+            return true;
+        }
+        false
     }
 
     // ── 协同 caret（评论 38：光标与前沿共享的单条运动轨迹） ──────────────
 
-    /// Issue #826 评论 38：为本轮正文编辑创建或 retarget 协同 caret motion。
+    /// Issue #826 评论 38/39：为本轮正文编辑创建或 retarget 协同 caret motion。
     ///
     /// 调用方（`update_cursor_visual_position` 的协同分支）传入当前真实
-    /// visual 位置当 start、最新 canonical caret 当 target、`now` 当采样时刻。
+    /// visual 位置当起点参考、最新 canonical caret 当终点、`now` 当采样时刻。
     /// 这里只做三件事：
     /// 1. 没有活跃前沿 → 返回 false（调用方回退到独立光标 Tween）；
     /// 2. target 与时钟都没变 → 保持现有 motion（同一笔编辑重复调光标更新
-    ///    不重启时钟）；
+    ///    不重启时钟、不重建路径）；
     /// 3. 否则创建/retarget：`started_at` / `duration_ms` 直接取当前前沿
     ///    （连续编辑 extend 已把前沿时钟移到最新，这里跟着走，天然与前沿同
-    ///    progress）。已有 motion 时 start 取**旧 motion 在 `now` 的采样位置**
-    ///    （屏幕真相），不退回调用方可能滞后一帧的 visual —— 两帧之间没有
-    ///    Scene Graph 帧写回 visual 时，调用方的 visual 是上一帧的旧值，
-    ///    直接拿它当 start 会让光标跳回去。
+    ///    progress）；轨迹按当前前沿路径重建（评论 39 BLOCKER 2：与 changed
+    ///    visual path 同一视觉顺序，不是对起点终点拉斜线）；`travelled_base`
+    ///    取旧 motion 在 `now` 的当前距离（屏幕真相，不退回调用方可能滞后
+    ///    一帧的 visual —— 两帧之间没有 Scene Graph 帧写回 visual 时，
+    ///    调用方的 visual 是上一帧的旧值，直接拿它当 start 会让光标跳回去）。
     ///
     /// 返回 true ⟺ 协同接管成功，调用方不得再建独立 Tween。
     pub(crate) fn begin_or_retarget_coordinated_caret(
@@ -1312,34 +1320,121 @@ impl LinuxEditorAnimationCoordinator {
                 return true;
             }
             let now = self.effective_text_animation_time(now);
+            let old = self
+                .active_coordinated_caret
+                .as_ref()
+                .expect("retarget 分支必有旧 motion");
             let (current_x, current_y) =
-                motion.position_at(motion.sample_progress(now));
-            self.active_coordinated_caret = Some(CoordinatedCaretMotion {
-                start_x: current_x,
-                start_y: current_y,
+                old.position_at_distance(old.distance_at_progress(old.sample_progress(now)));
+            let (segments, total_length) = Self::coordinated_path_from_frontier(
+                frontier,
+                current_x,
+                current_y,
                 target_x,
                 target_y,
+            );
+            self.active_coordinated_caret = Some(CoordinatedCaretMotion {
+                segments,
+                total_length,
                 started_at,
                 duration_ms,
+                target_x,
+                target_y,
             });
             return true;
         }
+        let (segments, total_length) =
+            Self::coordinated_path_from_frontier(frontier, start_x, start_y, target_x, target_y);
         self.active_coordinated_caret = Some(CoordinatedCaretMotion {
-            start_x,
-            start_y,
-            target_x,
-            target_y,
+            segments,
+            total_length,
             started_at,
             duration_ms,
+            target_x,
+            target_y,
         });
         true
     }
 
-    /// Issue #826 评论 38：Scene Graph 每帧采样协同 caret 的**唯一入口**。
+    /// Issue #826 评论 39 BLOCKER 2：按当前前沿路径构造 caret 分段轨迹。
+    ///
+    /// 吐字侧有可见 path 就跟着吐字侧走，纯吞字跟着吞字侧走（方向天然一致，
+    /// Backspace 的 Backward 段序直接可用）；两侧都没有可见 path（Enter /
+    /// shaping 全接管）时退成单段 caret-only（旧 caret 直达新 caret，文字侧
+    /// 只剩 Reflow/Shaping 独立跑）。
+    ///
+    /// 首段起点钉死在 `start`（创建时是屏幕 visual，retarget 时是旧 motion
+    /// 当前位置），末段终点钉死在 `target`（最新 canonical caret）：glyph
+    /// 矩形与 caret 矩形的定位基准天然差几个像素，不对齐首尾第一帧跳、
+    /// 最后一帧还得 snap。钉死后途中仍在行段上走，首尾精确无跳变。
+    fn coordinated_path_from_frontier(
+        frontier: &EditFrontierState,
+        start_x: f64,
+        start_y: f64,
+        target_x: f64,
+        target_y: f64,
+    ) -> (Vec<CaretMotionSegment>, f64) {
+        fn segments_of(regions: &[FrontierRegion]) -> (Vec<CaretMotionSegment>, f64) {
+            let mut segments = Vec::new();
+            let mut total = 0.0;
+            for region in regions {
+                for segment in &region.path.segments {
+                    total += segment.visual_length;
+                    segments.push(CaretMotionSegment {
+                        x_from: segment.x_from,
+                        x_to: segment.x_to,
+                        y: segment.y,
+                        h: segment.h,
+                        visual_length: segment.visual_length,
+                    });
+                }
+            }
+            (segments, total)
+        }
+        let (reveal_segments, reveal_total) = segments_of(&frontier.reveal.regions);
+        let (mut segments, _) = if reveal_total > 1e-9 {
+            (reveal_segments, reveal_total)
+        } else {
+            let (conceal_segments, conceal_total) = segments_of(&frontier.conceal.regions);
+            if conceal_total <= 1e-9 {
+                let dx = target_x - start_x;
+                let dy = target_y - start_y;
+                let length = dx.hypot(dy).max(f64::MIN_POSITIVE);
+                return (
+                    vec![CaretMotionSegment {
+                        x_from: start_x,
+                        x_to: target_x,
+                        y: start_y,
+                        h: dy.abs(),
+                        visual_length: length,
+                    }],
+                    length,
+                );
+            }
+            (conceal_segments, conceal_total)
+        };
+        // 钉死首尾并重算首末段长度（中间段原样保留行段几何）。
+        // 注意：钉死只改 caret 自己的距离系（首点=屏幕 caret、末点=canonical），
+        // 前沿 reveal/conceal 的距离系原样不动 —— 两边本来就是两套几何
+        // （bearings 差），边界永远由 caret 位置投影得到，与距离系无关。
+        if let Some(first) = segments.first_mut() {
+            first.x_from = start_x;
+            first.visual_length = (first.x_to - first.x_from).abs();
+        }
+        if let Some(last) = segments.last_mut() {
+            last.x_to = target_x;
+            last.visual_length = (last.x_to - last.x_from).abs();
+        }
+        let total = segments.iter().map(|s| s.visual_length).sum();
+        (segments, total)
+    }
+
+    /// Issue #826 评论 38/39：Scene Graph 每帧采样协同 caret 的**唯一入口**。
     ///
     /// 用 `effective_text_animation_time` 采样：滚动 pause 期间正文时间钉在
     /// `paused_at`，协同光标跟着冻住（评论 35 原则同样适用于协同光标）。
-    /// progress 到 1 时把 motion 清掉并精确落 target，不留 0.99 的亚像素残留。
+    /// caret 位置沿分段轨迹由同一 distance 求出（评论 39 BLOCKER 2，不拉斜线）。
+    /// progress 到 1 时把 visual 精确落到 canonical target 并清掉 motion。
     /// 返回 None ⟺ 当前没有协同 motion（调用方走独立 `tick_animation`）。
     pub(crate) fn sample_coordinated_caret(
         &mut self,
@@ -1358,7 +1453,7 @@ impl LinuxEditorAnimationCoordinator {
                 finished: true,
             })
         } else {
-            let (x, y) = motion.position_at(progress);
+            let (x, y) = motion.position_at_distance(motion.distance_at_progress(progress));
             Some(CoordinatedCaretSample {
                 x,
                 y,
@@ -1378,18 +1473,42 @@ impl LinuxEditorAnimationCoordinator {
         self.active_coordinated_caret = None;
     }
 
-    /// 测试用 —— 当前协同 motion 的 (start, target, duration)。
+    /// 测试用 —— 当前协同 motion 的 (target_x, target_y, duration_ms, total_length)。
     #[cfg(test)]
-    pub(crate) fn coordinated_caret_for_test(&self) -> Option<(f64, f64, f64, f64, u64)> {
+    pub(crate) fn coordinated_caret_for_test(&self) -> Option<(f64, f64, u64, f64)> {
         self.active_coordinated_caret.as_ref().map(|m| {
-            (
-                m.start_x,
-                m.start_y,
-                m.target_x,
-                m.target_y,
-                m.duration_ms,
-            )
+            (m.target_x, m.target_y, m.duration_ms, m.total_length)
         })
+    }
+
+    /// 测试用 —— 当前协同 motion 按 `now` 算的 (progress, distance)。
+    #[cfg(test)]
+    pub(crate) fn coordinated_distance_for_test(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<(f64, f64)> {
+        let motion = self.active_coordinated_caret.as_ref()?;
+        let now = self.effective_text_animation_time(now);
+        let progress = motion.sample_progress(now);
+        Some((progress, motion.distance_at_progress(progress)))
+    }
+
+    /// 测试用 —— 当前协同 motion 的分段轨迹（首尾已钉死 visual/target）。
+    ///
+    /// 返回每段 (x_from, x_to, y, h, visual_length)。caret 侧的段查找必须走
+    /// 它，不能走前沿 regions —— 钉死端点后两边的距离系差几个像素
+    /// （glyph/caret 几何差），混用会错段；生产边界走投影，不受此影响。
+    #[cfg(test)]
+    pub(crate) fn coordinated_segments_for_test(&self) -> Vec<(f64, f64, f64, f64, f64)> {
+        self.active_coordinated_caret
+            .as_ref()
+            .map(|m| {
+                m.segments
+                    .iter()
+                    .map(|s| (s.x_from, s.x_to, s.y, s.h, s.visual_length))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     // ── 光标（只管视觉 Tween，不决定文字显示多少） ──────────────────────────

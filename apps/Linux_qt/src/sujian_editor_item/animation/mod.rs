@@ -28,7 +28,8 @@ pub(crate) use coordinator::{
 };
 #[allow(unused_imports)]
 pub(crate) use coordinated_caret::{
-    project_onto_layer, CoordinatedBoundary, CoordinatedCaretMotion, CoordinatedCaretSample,
+    project_onto_layer, CaretMotionSegment, CoordinatedBoundary, CoordinatedCaretMotion,
+    CoordinatedCaretSample,
 };
 #[allow(unused_imports)]
 pub(crate) use edit_frontier::{

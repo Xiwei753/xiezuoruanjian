@@ -19,9 +19,12 @@ use super::render_plan::{
     SelectionPreeditStyle,
 };
 use super::*;
-use crate::editor::layout::{run_on_qt_thread, LayoutParams};
+use crate::editor::layout::{run_on_qt_thread, CaretAffinity, LayoutParams, LayoutSnapshot};
+use crate::sujian_editor_item::animation::edit_frontier::EditFrontierState;
+use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use qmetaobject::QString;
 use std::time::{Duration, Instant};
+use writer_core::editor::OffsetMap;
 
 /// 构造默认 LayoutParams，与 SujianEditorItem::default() 的字体设置一致。
 fn default_layout_params() -> LayoutParams {
@@ -1547,8 +1550,8 @@ fn rewind_coordinated_clock_for_test(item: &mut SujianEditorItem, elapsed_ms: u6
 }
 
 /// 协同开 + 正文插入的前置：`A` 文末插入 `X`，前沿 160ms。
-/// 返回插入后 motion 的 (start_x, start_y, target_x, target_y, duration_ms)。
-fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, f64, f64, u64) {
+/// 返回（插入前 visual x， motion target x， duration_ms）。
+fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, u64) {
     item.current_viewport_height = 600.0;
     item.current_coordinated_animation_enabled = true;
     item.current_typing_animation_enabled = true;
@@ -1558,8 +1561,9 @@ fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, 
     let _ = item.pipeline.set_selection(1, 1);
     // 实现语义：`pipeline.set_selection` 只改 Core 真相，不搬 visual。
     // 生产里输入前 visual 本来就停在旧 caret 上（idle），这里先 Snap 对齐，
-    // 否则 motion start 取到的是陈旧 visual，与前沿起点对不上。
+    // 否则 motion 起点取到的是陈旧 visual，与轨迹起点对不上。
     item.snap_next_cursor_update();
+    let visual_before = item.cursor_ctrl.visual_x;
     item.insert_text(QString::from("X"));
     assert_eq!(item.pipeline.committed_text(), "AX");
     let coord = item.pipeline.animation_coordinator();
@@ -1567,9 +1571,10 @@ fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, 
         coord.has_active_edit_frontier(),
         "前置：必须建出遮罩前沿"
     );
-    coord
+    let (target_x, _, duration_ms, _) = coord
         .coordinated_caret_for_test()
-        .expect("前置：协同开时正文插入必须由单条 motion 接管")
+        .expect("前置：协同开时正文插入必须由单条 motion 接管");
+    (visual_before, target_x, duration_ms)
 }
 
 /// 评论 38 要求①：`coordinated_insert_caret_and_reveal_share_one_progress`。
@@ -1581,7 +1586,7 @@ fn build_coordinated_insert_for_test(item: &mut SujianEditorItem) -> (f64, f64, 
 fn coordinated_insert_caret_and_reveal_share_one_progress() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
-        let (start_x, _start_y, target_x, _target_y, duration_ms) =
+        let (start_x, target_x, duration_ms) =
             build_coordinated_insert_for_test(&mut item);
         assert_eq!(
             duration_ms, 160,
@@ -1669,10 +1674,11 @@ fn coordinated_delete_caret_and_conceal_share_one_progress() {
         item.set_plain_text(QString::from("AX"));
         let _ = item.pipeline.set_selection(2, 2);
         item.snap_next_cursor_update();
+        let visual_before = item.cursor_ctrl.visual_x;
         item.delete_backward();
         assert_eq!(item.pipeline.committed_text(), "A");
 
-        let (start_x, _, target_x, _, duration_ms) = item
+        let (target_x, _, duration_ms, _) = item
             .pipeline
             .animation_coordinator()
             .coordinated_caret_for_test()
@@ -1683,9 +1689,9 @@ fn coordinated_delete_caret_and_conceal_share_one_progress() {
             "协同接管后不得再建独立光标 Tween"
         );
         assert!(
-            start_x > target_x + 1.0,
+            visual_before > target_x + 1.0,
             "前置：Backspace 后 caret 必须回退，实际 {} -> {}",
-            start_x,
+            visual_before,
             target_x
         );
 
@@ -1724,13 +1730,31 @@ fn coordinated_delete_caret_and_conceal_share_one_progress() {
     });
 }
 
-/// 评论 38 要求③：`coordinated_wrap_moves_caret_and_frontier_across_lines_together`。
+/// 在 motion 分段轨迹里找包含 `distance` 的段序号。
+/// caret 侧的段查找必须走 motion 自己的分段（首尾钉死 visual/target），
+/// 不能走前沿 regions —— 钉死端点后两边的距离系差几个像素，混用会错段。
+fn caret_segment_at_distance(
+    segments: &[(f64, f64, f64, f64, f64)],
+    distance: f64,
+) -> Option<usize> {
+    let mut rest = distance;
+    for (index, segment) in segments.iter().enumerate() {
+        if rest <= segment.4 + 1e-9 {
+            return Some(index);
+        }
+        rest -= segment.4;
+    }
+    None
+}
+
+/// 评论 39 BLOCKER 2：`coordinated_wrap_caret_is_on_same_frontier_segment_each_frame`。
 ///
-/// 插入触发软换行：caret 从上一行走向下一行的过程中，前沿必须同在半途
-/// （已推进但未完成）；不允许 caret 已落下一行而前沿还在起点、或前沿已播完
-/// 而 caret 还在上一行。
+/// 插入触发软换行：40/80/120ms 每一帧，caret 必须落在某段 caret 路径上
+/// （y-band + x-span 双重命中，行间斜线直接判死），且 caret 所在段必须与
+/// Reveal 边界所在段是同一段、边界 x == caret.x。另以 5ms 步长扫过换行阈值，
+/// caret 与边界必须同一步从第 1 行切到第 2 行。
 #[test]
-fn coordinated_wrap_moves_caret_and_frontier_across_lines_together() {
+fn coordinated_wrap_caret_is_on_same_frontier_segment_each_frame() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
         item.current_viewport_height = 600.0;
@@ -1762,22 +1786,16 @@ fn coordinated_wrap_moves_caret_and_frontier_across_lines_together() {
         let _ = item.pipeline.set_selection(insert_at, insert_at);
         item.snap_next_cursor_update();
         item.insert_text(QString::from("界界界界界界界界界界界界"));
-        let (start_x, start_y, target_x, target_y, _) = item
+        let (target_x, target_y, _, _) = item
             .pipeline
             .animation_coordinator()
             .coordinated_caret_for_test()
             .expect("协同开时换行插入必须由单条 motion 接管");
-        assert!(
-            (target_y - start_y).abs() > 1.0,
-            "前置：这次插入必须跨视觉行，实际 y {} -> {}",
-            start_y,
-            target_y
-        );
-        let _ = (start_x, target_x);
+        let _ = (target_x, target_y);
 
-        for elapsed in [40u64, 80, 120] {
-            rewind_coordinated_clock_for_test(&mut item, elapsed);
-            let now = Instant::now();
+        // caret 侧走 motion 自己的分段（钉死端点），边界侧走前沿 regions
+        // （生产投影的真实输入），两边行 y 必须相同（钉死只动 x 不动行）。
+        let check_frame = |item: &mut SujianEditorItem, now: Instant, label: &str| {
             let coord = item.pipeline.animation_coordinator_mut();
             let sample = coord
                 .sample_edit_frontier(now)
@@ -1785,35 +1803,160 @@ fn coordinated_wrap_moves_caret_and_frontier_across_lines_together() {
             let caret = coord
                 .sample_coordinated_caret(now)
                 .expect("协同 motion 必须还在");
-            // caret 正在两行之间（还没落到终点行）。
-            let between_y = (caret.y - start_y) * (caret.y - target_y) < 0.0;
-            assert!(
-                between_y,
-                "{}ms：caret 必须正在跨行途中，实际 y={}（{} -> {}）",
-                elapsed,
-                caret.y,
-                start_y,
-                target_y
-            );
-            // 前沿同在半途：已推进但未播完。
+            let boundary = sample.coordinated.expect("协同态 sample 必须带边界");
             let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
-            let advanced = frontier.reveal.advanced(sample.progress);
-            let total: f64 = frontier
-                .reveal
-                .regions
-                .iter()
-                .map(|r| r.path.total_length)
-                .sum();
+            let regions = &frontier.reveal.regions;
+            assert!(!regions.is_empty(), "{}：换行插入必须有吐字路径", label);
+            let (_, caret_distance) = coord
+                .coordinated_distance_for_test(now)
+                .expect("motion 距离必须可算");
+            let motion_segments = coord.coordinated_segments_for_test();
+            assert!(!motion_segments.is_empty(), "{}：motion 必须有分段轨迹", label);
+            let caret_segment =
+                caret_segment_at_distance(&motion_segments, caret_distance).expect(
+                    "caret 距离必须落在 motion 轨迹段上",
+                );
+            let caret_seg = motion_segments[caret_segment];
+            // caret 不得处于行间斜线：y 必须在段的行带内，x 必须在段跨度内
+            //（motion 段首尾钉死 visual/target，x 精确落在段内）。
             assert!(
-                advanced > 0.0 && advanced < total,
-                "{}ms：前沿必须同在半途，实际 advanced={} total={}",
-                elapsed,
-                advanced,
-                total
+                caret.y >= caret_seg.2 && caret.y < caret_seg.2 + caret_seg.3,
+                "{}：caret.y 必须在轨迹段行带内（行间斜线直接判死），实际 y={} 段 y={} h={}",
+                label,
+                caret.y,
+                caret_seg.2,
+                caret_seg.3
             );
+            let span_lo = caret_seg.0.min(caret_seg.1);
+            let span_hi = caret_seg.0.max(caret_seg.1);
+            assert!(
+                caret.x >= span_lo - 0.5 && caret.x <= span_hi + 0.5,
+                "{}：caret.x 必须在轨迹段跨度内，实际 x={} 段 [{}, {}]",
+                label,
+                caret.x,
+                span_lo,
+                span_hi
+            );
+            // Reveal 边界（生产投影值）在前沿 regions 里找段：行必须与 caret
+            // 同行（钉死只动 x），且边界 x 必须等于 caret.x。
+            let mut boundary_flat: Option<usize> = None;
+            let mut boundary_row: Option<f64> = None;
+            let mut boundary_x: Option<f64> = None;
+            let mut flat_index = 0;
+            'outer: for region in regions.iter() {
+                let local = (boundary.reveal_distance - region.distance_start)
+                    .clamp(0.0, region.path.total_length);
+                let mut rest = local;
+                for (segment_index, segment) in region.path.segments.iter().enumerate() {
+                    if rest <= segment.visual_length + 1e-9 {
+                        let bounds = region.path.reveal_bounds(local);
+                        boundary_flat = Some(flat_index);
+                        boundary_row = Some(segment.y);
+                        boundary_x = bounds.get(segment_index).map(|b| b.0);
+                        break 'outer;
+                    }
+                    rest -= segment.visual_length;
+                    flat_index += 1;
+                }
+            }
+            // 展平序号：钉死保持段数与顺序，caret 段序号必须与边界段序号一致。
+            let mut frontier_flat_total = 0;
+            for region in regions.iter() {
+                frontier_flat_total += region.path.segments.len();
+            }
+            assert_eq!(
+                motion_segments.len(),
+                frontier_flat_total,
+                "{}：motion 段数必须与前沿段数一致（钉死不增删段）",
+                label
+            );
+            assert_eq!(
+                Some(caret_segment),
+                boundary_flat,
+                "{}：caret 与 Reveal 边界必须在同一段",
+                label
+            );
+            assert_eq!(
+                Some(caret_seg.2),
+                boundary_row,
+                "{}：caret 与 Reveal 边界必须在同一视觉行",
+                label
+            );
+            assert!(
+                (boundary_x.expect("边界 x 必须可算") - caret.x).abs() < 0.5,
+                "{}：同段下边界 x 必须等于 caret.x，实际 {} vs {}",
+                label,
+                boundary_x.expect("边界 x 必须可算"),
+                caret.x
+            );
+            // 返回 caret 所在段的行 y，供阈值扫描比较。
+            caret_seg.2
+        };
+
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            check_frame(&mut item, now, &format!("{}ms", elapsed));
         }
 
-        println!("[BEHAVIOR_VERIFY] 评论38③：协同换行 caret 与前沿同帧跨行");
+        // 阈值扫描：5ms 步长，caret 与边界必须同一步从第 1 行切到第 2 行。
+        let mut caret_switch_at: Option<u64> = None;
+        let mut boundary_switch_at: Option<u64> = None;
+        let mut first_y: Option<f64> = None;
+        for elapsed in (0..=160).step_by(5) {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let Some(sample) = coord.sample_edit_frontier(now) else {
+                continue;
+            };
+            let Some((_, distance)) = coord.coordinated_distance_for_test(now) else {
+                continue;
+            };
+            let Some(boundary) = sample.coordinated else {
+                continue;
+            };
+            let motion_segments = coord.coordinated_segments_for_test();
+            let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
+            let regions = &frontier.reveal.regions;
+            let first = *first_y.get_or_insert_with(|| motion_segments[0].2);
+            let caret_row = caret_segment_at_distance(&motion_segments, distance)
+                .map(|i| motion_segments[i].2);
+            let mut boundary_row: Option<f64> = None;
+            for region in regions.iter() {
+                let local = (boundary.reveal_distance - region.distance_start)
+                    .clamp(0.0, region.path.total_length);
+                let mut rest = local;
+                for segment in region.path.segments.iter() {
+                    if rest <= segment.visual_length + 1e-9 {
+                        boundary_row = Some(segment.y);
+                        break;
+                    }
+                    rest -= segment.visual_length;
+                }
+                if boundary_row.is_some() {
+                    break;
+                }
+            }
+            if caret_row.is_some_and(|y| (y - first).abs() > 1e-9) && caret_switch_at.is_none() {
+                caret_switch_at = Some(elapsed);
+            }
+            if boundary_row.is_some_and(|y| (y - first).abs() > 1e-9)
+                && boundary_switch_at.is_none()
+            {
+                boundary_switch_at = Some(elapsed);
+            }
+        }
+        let (Some(caret_at), Some(boundary_at)) = (caret_switch_at, boundary_switch_at) else {
+            panic!("阈值扫描必须观察到 caret 与边界都切到第 2 行");
+        };
+        assert_eq!(
+            caret_at, boundary_at,
+            "caret 与 Reveal 边界必须同一步切到下一行，实际 caret@{}ms boundary@{}ms",
+            caret_at, boundary_at
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论39②：协同换行 caret 沿轨迹走、与边界同段同帧切换");
     });
 }
 
@@ -1836,7 +1979,7 @@ fn coordinated_mode_ignores_smooth_cursor_duration() {
         item.snap_next_cursor_update();
         item.insert_text(QString::from("X"));
 
-        let (_, _, _, _, duration_ms) = item
+        let (_, _, duration_ms, _) = item
             .pipeline
             .animation_coordinator()
             .coordinated_caret_for_test()
@@ -1945,20 +2088,29 @@ fn rapid_typing_retargets_single_coordinated_motion() {
             item.pipeline.animation_coordinator().has_active_edit_frontier(),
             "连续输入必须保持单一前沿"
         );
-        let (start2, _, target2, _, _) = item
+        let (target2, _, _, _) = item
             .pipeline
             .animation_coordinator()
             .coordinated_caret_for_test()
             .expect("连续输入必须保持单份协同 motion");
         assert!(
-            (start2 - mid_x).abs() < 1.0,
-            "retarget 必须从当前屏幕 caret 继续，实际 start={} mid={}",
-            start2,
-            mid_x
-        );
-        assert!(
             (target2 - item.cursor_ctrl.target_x).abs() < 1e-9,
             "retarget 目标必须是最新 canonical caret"
+        );
+        // retarget 从当前屏幕位置继续：travelled_base 继承旧 motion 当前距离，
+        // 同一时刻采样新 motion 必须≈旧采样 mid（不对回轨迹起点、不跳）。
+        let now2 = Instant::now();
+        let cur_x = item
+            .pipeline
+            .animation_coordinator_mut()
+            .sample_coordinated_caret(now2)
+            .expect("retarget 后 motion 必须还在")
+            .x;
+        assert!(
+            (cur_x - mid_x).abs() < 1.0,
+            "retarget 必须从当前屏幕 caret 继续，实际 cur={} mid={}",
+            cur_x,
+            mid_x
         );
         assert!(
             item.cursor_ctrl.animation.is_none(),
@@ -1966,5 +2118,205 @@ fn rapid_typing_retargets_single_coordinated_motion() {
         );
 
         println!("[BEHAVIOR_VERIFY] 评论38⑥：快速输入只 retarget 单份协同 motion");
+    });
+}
+
+/// Issue #826 评论 39 BLOCKER 1：`coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty`。
+///
+/// `ABCDE|FGHIJ` 按 Enter：newline 没有 Reveal glyph（Reveal path 为空），
+/// FGHIJ 只做 Reflow 到下一行，caret 从旧行末走到下一行起点。motion 必须活到
+/// typing duration 结束（160ms 才落 target），不能在第一帧被“空 path 前沿
+/// finished”连带清掉；期间独立 Tween 始终不得出现。
+#[test]
+fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("ABCDEFGHIJ"));
+        let _ = item.pipeline.set_selection(5, 5);
+        item.snap_next_cursor_update();
+        let visual_before_y = item.cursor_ctrl.visual_y;
+        item.insert_text(QString::from("\n"));
+        assert_eq!(
+            item.pipeline.committed_text(),
+            "ABCDE\nFGHIJ",
+            "前置：Enter 必须把段落从中间劈开"
+        );
+
+        let coord = item.pipeline.animation_coordinator();
+        let frontier = coord
+            .active_edit_frontier
+            .as_ref()
+            .expect("前置：Enter 也必须建前沿（协同 clock 来源）");
+        let reveal_total: f64 = frontier
+            .reveal
+            .regions
+            .iter()
+            .map(|r| r.path.total_length)
+            .sum();
+        assert!(
+            reveal_total <= 1e-9,
+            "前置：newline 没有可见 Reveal path，实际 total={}",
+            reveal_total
+        );
+        assert!(
+            coord.active_reflow.is_some(),
+            "前置：FGHIJ 下移必须有 Reflow"
+        );
+        let (target_x, target_y, _, _) = coord
+            .coordinated_caret_for_test()
+            .expect("前置：Enter 必须建协同 motion（caret-only 段）");
+        assert!(
+            (target_y - visual_before_y).abs() > 1.0,
+            "前置：Enter 后 caret 必须换行，实际 y {} -> {}",
+            visual_before_y,
+            target_y
+        );
+        let _ = target_x;
+
+        let mut previous_gap = f64::MAX;
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            // 第一帧 tick 必然清掉空 path 前沿 —— motion 不得被连带。
+            assert!(coord.tick(now), "motion 存活时必须继续续帧");
+            assert!(
+                coord.active_edit_frontier.is_none(),
+                "{}ms：空 path 前沿第一帧即 finished",
+                elapsed
+            );
+            let caret = coord
+                .sample_coordinated_caret(now)
+                .expect("BLOCKER1：motion 不得第一帧死亡，必须活到 typing duration 结束");
+            assert!(
+                caret.progress > 0.0 && caret.progress < 1.0 && !caret.finished,
+                "{}ms：motion 必须在途中，实际 progress={}",
+                elapsed,
+                caret.progress
+            );
+            let gap = (caret.x - target_x).abs() + (caret.y - target_y).abs();
+            assert!(
+                gap < previous_gap,
+                "{}ms：caret 必须逐帧逼近 target，实际 gap={}（上一帧 {}）",
+                elapsed,
+                gap,
+                previous_gap
+            );
+            previous_gap = gap;
+        }
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "全程不得孵化独立 Tween"
+        );
+
+        // 到点结束并精确落 target。
+        rewind_coordinated_clock_for_test(&mut item, 200);
+        let now = Instant::now();
+        let end = item
+            .pipeline
+            .animation_coordinator_mut()
+            .sample_coordinated_caret(now)
+            .expect("终点采样必须还有一帧（finished 那一帧）");
+        assert!(end.finished, "200ms 必须结束");
+        assert!(
+            (end.x - target_x).abs() < 1e-9 && (end.y - target_y).abs() < 1e-9,
+            "终点必须精确落 canonical caret，实际 ({}, {}) vs ({}, {})",
+            end.x,
+            end.y,
+            target_x,
+            target_y
+        );
+        assert!(
+            !item
+                .pipeline
+                .animation_coordinator()
+                .has_active_coordinated_caret(),
+            "结束后 motion 必须清掉"
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论39①：Enter 空 Reveal 时 caret motion 活到 typing 结束");
+    });
+}
+
+/// Issue #826 评论 39 BLOCKER 1：`coordinated_shaping_only_edit_keeps_caret_until_typing_duration_finishes`。
+///
+/// synthetic：changed range 全部被 shaping-owned 挖空（scalar Reveal/Conceal
+/// path 全空，只有 motion 在跑）。断言 caret 不会第一帧死亡、按 typing
+/// duration 走完并精确落 target。
+#[test]
+fn coordinated_shaping_only_edit_keeps_caret_until_typing_duration_finishes() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let t0 = Instant::now();
+        // 空 inserted ranges ⇒ Reveal regions 为空（等价于“全被 shaping 接管挖空”）。
+        let empty_snapshot = EditorLayoutSnapshot::new(
+            LayoutSnapshot::empty_for_tests(),
+            Vec::new(),
+            None,
+            None,
+            CaretAffinity::Downstream,
+        );
+        let frontier = EditFrontierState::begin_insert(
+            String::new(),
+            empty_snapshot,
+            String::new(),
+            Vec::new(),
+            OffsetMap::from_single_edit(0, (0, 0), 0),
+            Vec::new(),
+            t0,
+            160,
+        );
+        assert!(
+            frontier.reveal.regions.is_empty(),
+            "前置：synthetic 前沿 Reveal 必须为空"
+        );
+        let coord = item.pipeline.animation_coordinator_mut();
+        coord.active_edit_frontier = Some(frontier);
+        assert!(
+            coord.begin_or_retarget_coordinated_caret(10.0, 20.0, 50.0, 40.0, t0),
+            "有前沿（即使空 path）就必须能建 motion"
+        );
+
+        // 第一帧 tick：空 path 前沿 finished 被清，motion 必须存活。
+        let t1 = t0 + Duration::from_millis(10);
+        assert!(coord.tick(t1), "motion 存活时 tick 必须返回 true（仍需续帧）");
+        assert!(
+            coord.active_edit_frontier.is_none(),
+            "空 path 前沿第一帧即 finished"
+        );
+        assert!(
+            coord.has_active_coordinated_caret(),
+            "BLOCKER1：scalar 全空时 motion 不得第一帧死亡"
+        );
+
+        let mid = coord
+            .sample_coordinated_caret(t0 + Duration::from_millis(80))
+            .expect("80ms motion 必须还在");
+        assert!(!mid.finished && mid.progress > 0.0 && mid.progress < 1.0);
+        assert!(
+            (mid.x - 10.0) * (mid.x - 50.0) < 0.0,
+            "caret 必须向 target 前进，实际 x={}",
+            mid.x
+        );
+
+        let end = coord
+            .sample_coordinated_caret(t0 + Duration::from_millis(200))
+            .expect("终点采样必须还有一帧");
+        assert!(end.finished, "200ms 必须结束");
+        assert!(
+            (end.x - 50.0).abs() < 1e-9 && (end.y - 40.0).abs() < 1e-9,
+            "终点必须精确落 target"
+        );
+        assert!(
+            !coord.has_active_coordinated_caret(),
+            "结束后 motion 必须清掉"
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论39①：shaping 全接管时 caret 按 typing duration 走完");
     });
 }
