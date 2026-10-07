@@ -4,6 +4,18 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'apps/harmony/**'
+      - 'platform/rust/harmony/**'
+      - 'core/writer_core/**'
+      - 'core/writer_platform_api/**'
+      - 'core/writer_diagnostics/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'tools/build_harmony.sh'
+      - 'tools/setup_harmony_cli.sh'
+      - 'tools/publish_harmony_test.py'
+      - '.github/workflows/harmony_test_publish.yml'
   workflow_dispatch:
 
 concurrency:
