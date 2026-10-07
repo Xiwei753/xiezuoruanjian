@@ -61,6 +61,7 @@ jobs:
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Prepare AGC service account
+        id: agc_credentials
         if: steps.secrets.outputs.ready == 'true'
         shell: bash
         env:
@@ -73,21 +74,22 @@ jobs:
           credentials_path="$agc_dir/service-account.json"
           printf '%s' "$AGC_SA_CREDENTIALS_B64" | base64 --decode > "$credentials_path"
 
-          python3 - "$credentials_path" "$GITHUB_ENV" <<'PY'
+          python3 - "$credentials_path" "$GITHUB_OUTPUT" <<'PY'
           import json
           import sys
           from pathlib import Path
 
           credentials_path = Path(sys.argv[1])
-          github_env = Path(sys.argv[2])
+          github_output = Path(sys.argv[2])
           credential = json.loads(credentials_path.read_text(encoding="utf-8"))
           required = ("key_id", "private_key", "sub_account", "token_uri")
           if not all(isinstance(credential.get(k), str) and credential[k].strip() for k in required):
               raise SystemExit("AGC service-account credential is incomplete")
 
           compact = json.dumps(credential, ensure_ascii=False, separators=(",", ":"))
-          with github_env.open("a", encoding="utf-8") as handle:
-              handle.write(f"AGC_SERVICE_ACCOUNT_JSON={compact}\n")
+          print(f"::add-mask::{compact}")
+          with github_output.open("a", encoding="utf-8") as handle:
+              handle.write(f"json={compact}\n")
           PY
 
       - name: Prepare HarmonyOS release signing
@@ -147,28 +149,33 @@ jobs:
           HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          app_path="$(
-            python3 - <<'PY'
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          from pathlib import Path
           from tools.publish_harmony_test import build_release_app
-          print(build_release_app(False))
+
+          app_path = build_release_app(False).resolve()
+          if not app_path.is_file():
+              raise SystemExit(f"Signed APP not found: {app_path}")
+
+          with Path(sys.argv[1]).open("a", encoding="utf-8") as handle:
+              handle.write(f"app_path={app_path}\n")
+          print(f"Signed APP: {app_path}")
           PY
-          )"
-          test -f "$app_path"
-          echo "app_path=$app_path" >> "$GITHUB_OUTPUT"
-          echo "Signed APP: $app_path"
 
       - name: Deploy to AGC invitation testing
         if: steps.secrets.outputs.ready == 'true'
         id: agc
         uses: Eilgnaw/deploy-to-agc-testing@e3ea3b6b1c30864f4e4f8fbeb3e6322580ee9330
         with:
-          service-account-json: ${{ env.AGC_SERVICE_ACCOUNT_JSON }}
+          service-account-json: ${{ steps.agc_credentials.outputs.json }}
           app-id: ${{ secrets.AGC_APP_ID }}
           app-path: ${{ steps.build.outputs.app_path }}
           language: zh-Hans
           test-desc: 素笺自动测试版
           release-type: "6"
           test-type: "3"
+          test-group-name: "Sujian CI"
           generate-invite-code: "false"
 
       - name: Print AGC result
