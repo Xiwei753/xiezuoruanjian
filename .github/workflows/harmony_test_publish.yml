@@ -153,15 +153,14 @@ jobs:
             "harmonyChildType": 10000000,
             "kindMainTag": 15000029,
             "deviceTypes": [
-              {"deviceType": 4, "appAdapters": ""},
-              {"deviceType": 5, "appAdapters": ""}
+              {"deviceType": 4, "appAdapters": "5"}
             ]
           }
           JSON
 
           node "$cli_js" publish app-info-update             -a "$AGC_APP_ID"             --body "$body_path"             -r 1
 
-          echo "AGC metadata ready: CN + phone + tablet + 工具/写作"
+          echo "AGC metadata ready: CN + phone(main) + tablet(adapter) + 工具/写作"
 
       - name: Install HarmonyOS project dependencies
         if: steps.secrets.outputs.ready == 'true'
@@ -231,8 +230,7 @@ jobs:
           // HarmonyOS test versions need explicit per-version multi-device metadata.
           // Huawei's current Update Test Version API accepts deviceTypes here.
           ;(body as any).deviceTypes = [
-            { deviceType: 4, appAdapters: '' },
-            { deviceType: 5, appAdapters: '' }
+            { deviceType: 4, appAdapters: '5' }
           ]"""
           if source.count(anchor) != 1:
               raise SystemExit(
