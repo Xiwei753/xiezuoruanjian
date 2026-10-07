@@ -181,10 +181,7 @@ pub fn resolve_edge_endpoint_anchor(
                     .unwrap_or(false);
                 if is_portal {
                     let ui_instance_id = format!("legacy-portal:{}", node_id);
-                    if let Some(r) = embed_rects
-                        .iter()
-                        .find(|r| r.instance_id == ui_instance_id)
-                    {
+                    if let Some(r) = embed_rects.iter().find(|r| r.instance_id == ui_instance_id) {
                         return Ok(EndpointShape {
                             x: r.x,
                             y: r.y,
@@ -260,10 +257,7 @@ pub fn resolve_edge_endpoint_anchor(
             // 旧 Portal 在 Linux UI 已经按正圆 Embed 显示：优先用归一后的圆盒几何，
             // 不能继续当普通矩形 Node 猜边界。
             let ui_instance_id = format!("legacy-portal:{}", node_id);
-            if let Some(r) = embed_rects
-                .iter()
-                .find(|r| r.instance_id == ui_instance_id)
-            {
+            if let Some(r) = embed_rects.iter().find(|r| r.instance_id == ui_instance_id) {
                 return Ok(EndpointShape {
                     x: r.x,
                     y: r.y,
@@ -519,7 +513,8 @@ fn compute_renders_from_resolved(
         .enumerate()
         .filter_map(|(i, e)| {
             resolved_edges.iter().enumerate().find_map(|(j, o)| {
-                if i != j && coords_eq(e.from.center(), o.to.center())
+                if i != j
+                    && coords_eq(e.from.center(), o.to.center())
                     && coords_eq(e.to.center(), o.from.center())
                 {
                     Some((i, j))
@@ -559,10 +554,8 @@ fn compute_renders_from_resolved(
 
         // 正式边端点 = 各自形状（Node 矩形 / Embed 圆周）与连线的真实边界交点。
         // 不再用固定内缩常量猜边界：200 正圆 Embed 上固定内缩会扎进圆里。
-        let (sx, sy) =
-            endpoint_boundary_point(&edge.from, (fx + ox, fy + oy), (dir_x, dir_y));
-        let (ex, ey) =
-            endpoint_boundary_point(&edge.to, (tx + ox, ty + oy), (-dir_x, -dir_y));
+        let (sx, sy) = endpoint_boundary_point(&edge.from, (fx + ox, fy + oy), (dir_x, dir_y));
+        let (ex, ey) = endpoint_boundary_point(&edge.to, (tx + ox, ty + oy), (-dir_x, -dir_y));
 
         // 箭头沿实际画出的线段方向（start → end）。
         let adx = ex - sx;

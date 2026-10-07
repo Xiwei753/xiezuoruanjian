@@ -150,7 +150,10 @@ impl PointerGestureState {
     pub(crate) fn move_pos(&mut self, pos: (f32, f32)) -> MoveOutcome {
         match self.phase {
             PointerGesturePhase::Pressed {
-                origin, hit_index, started_at, ..
+                origin,
+                hit_index,
+                started_at,
+                ..
             } => {
                 // 消费 started_at 做诊断（press 到 move 的时延），避免 dead_code。
                 crate::sujian_editor_item::editor_animation_debug_log(&format!(

@@ -1,10 +1,9 @@
-//! Issue #826: 每帧渲染计划构建。
+//! Issue #853: 每帧唯一视觉计划的构建入口。
 //!
 //! 正文动画只有两层输出：
 //!
-//! - `clip_rects`：吐字遮罩前沿之后的 canonical 新字，从静态正文层裁掉。
-//! - `text_animation.glyphs`：吞字/替换的旧正文 overlay（来自 `base_snapshot`
-//!   行纹理）+ Reflow 层未改文字的移动位置（来自 `target_snapshot` 行纹理）。
+//! - `clip_rects`：整段过渡期间由动画层接管的完整 target cluster。
+//! - `text_animation.glyphs`：吐字切片、吞字旧字、shaping 交接与 Reflow 位置。
 //!
 //! 光标完全独立：`CursorRenderState` 由 GUI 线程算好传进来，本模块不参与。
 //! IME preedit 由 `SelectionPreeditPlan` 独立承载，不与正文动画互相携带。
@@ -29,39 +28,43 @@ impl LinuxEditorAnimationCoordinator {
         selection_preedit_style: SelectionPreeditStyle,
         frame_now: std::time::Instant,
     ) -> RenderPlan {
-        // Issue #826: 同帧只采样一次前沿。吐字遮罩和吞字 overlay 必须看到同一个
-        // progress，否则会出现"新字已经露出来、旧字还没收掉"的重叠帧。
+        // Issue #853: 同帧只采样一次前沿。吐字 glyph、吞字 overlay 与静态层所有权
+        // 都从这份样本生成，避免同一帧使用不同 progress。
         let frontier_sample = self.sample_edit_frontier(frame_now);
 
-        // Issue #826 评论 4 问题 3：静态正文层要同时避开两处：
-        //
-        // 1. EditFrontier 的吐字遮罩 —— 本轮新增、还没露出的 canonical 新字；
-        // 2. Reflow 的 canonical 目标位置 —— 动画层正在画"正在移动的那一份"，
-        //    静态层如果同时画最终位置就会重影（段中 Enter 的 `FGHIJ` 典型）。
-        //
-        // Reflow 完成后 `active_reflow` 清掉，下一帧静态层自动恢复 canonical。
-        // Issue #826 评论 6：clip 保留 `StaticClipKind`，**这里不合并**。
-        //
-        // 合并必须放到 renderer 里、纹理可用性过滤**之后**：
-        // FrontierMask 不依赖动画纹理、必须永远保留；ReflowTarget 纹理 miss 时
-        // 必须撤掉让 canonical 恢复。先合并再过滤的话，两类 clip 混成一块后
-        // renderer 就无法判断哪部分仍必须裁、哪部分该放弃。
-        let mut clip_rects: Vec<AnimationClipRect> = frontier_sample
-            .as_ref()
-            .map(|sample| self.hidden_canonical_rects_for(sample))
-            .unwrap_or_default();
+        // 静态正文层让出动画层接管的完整 target cluster：吐字、已露前缀、Reflow
+        // 目标位置与 shaping new side。exclusion 在整个过渡期间保持完整不变。
+        // renderer 在静态层让位前检查纹理；资源缺失时 canonical 同帧恢复。
+        let mut clip_rects: Vec<AnimationClipRect> = self.frontier_target_clip_rects();
         clip_rects.extend(self.reflow_target_clip_rects());
-        // Issue #826 评论 20：吐字 carry 的 canonical 目标位置同样要让位。
-        clip_rects.extend(
-            frontier_sample
-                .as_ref()
-                .map(|sample| self.reveal_carried_target_clip_rects(sample))
-                .unwrap_or_default(),
-        );
-        // Issue #826 评论 24：mixed cluster 交接层的新侧目标位置同样要让位。
         clip_rects.extend(self.shaping_transition_target_clip_rects());
 
         let mut glyphs: Vec<TextAnimationGlyphInfo> = Vec::new();
+
+        // 吐字：动画层从 0 宽切片逐帧画到完整 target glyph。静态 exclusion 覆盖
+        // 整个 cluster，动画结束时 glyph 与 exclusion 在同一个 RenderPlan 中移除，
+        // canonical 静态文字同帧接回。
+        if let Some(sample) = frontier_sample.as_ref() {
+            for reveal in self.reveal_visuals_for(sample) {
+                if reveal.visible_width <= 1e-6 || reveal.rect.h <= 1e-6 {
+                    continue;
+                }
+                let source_rect = super::shaping_transition::visible_source_slice(
+                    &reveal.source_rect,
+                    reveal.full_width,
+                    reveal.visible_width,
+                );
+                glyphs.push(TextAnimationGlyphInfo {
+                    x: reveal.rect.x,
+                    y: reveal.rect.y,
+                    w: reveal.visible_width,
+                    h: reveal.rect.h,
+                    opacity: 1.0,
+                    snapshot_id: reveal.snapshot_id,
+                    source_rect,
+                });
+            }
+        }
 
         // 吞字 / 替换：本轮删除开始前的旧正文 overlay。
         let overlay_glyphs = frontier_sample
@@ -80,24 +83,6 @@ impl LinuxEditorAnimationCoordinator {
                 // 绝不能固定 1.0 让屏幕先跳亮再开始吞，也不能随时间淡到 0
                 // 变成第二条时间轴。
                 opacity: glyph.opacity,
-                snapshot_id: glyph.snapshot_id,
-                source_rect: glyph.source_rect,
-            });
-        }
-
-        // Issue #826 评论 20：吐字「已可见前缀」——上一帧真正看见的那几个像素，
-        // 从旧屏幕位置补间到最新 canonical 位置。
-        let carried_glyphs = frontier_sample
-            .as_ref()
-            .map(|sample| self.reveal_carried_glyphs_for(sample))
-            .unwrap_or_default();
-        for glyph in carried_glyphs {
-            glyphs.push(TextAnimationGlyphInfo {
-                x: glyph.dest_rect.x,
-                y: glyph.dest_rect.y,
-                w: glyph.dest_rect.w,
-                h: glyph.dest_rect.h,
-                opacity: 1.0,
                 snapshot_id: glyph.snapshot_id,
                 source_rect: glyph.source_rect,
             });
@@ -140,8 +125,7 @@ impl LinuxEditorAnimationCoordinator {
 
         let text_animation = TextAnimationPlan { glyphs };
 
-        // Issue #826: 光标与文字动画解耦，这里只是把 cursor_controller 当前的
-        // visual 位置原样带给 renderer，不再由正文事务驱动。
+        // 光标由 cursor controller 唯一拥有；本帧只把它的显示状态放进计划。
         let caret = (
             cursor_render_state.x,
             cursor_render_state.y,
