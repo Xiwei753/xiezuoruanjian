@@ -223,20 +223,46 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding="utf-8")
-          anchor = "    pkgId: opts.pkgId\n  }"
-          replacement = """    pkgId: opts.pkgId
+
+          device_anchor = "    pkgId: opts.pkgId\n  }"
+          device_replacement = """    pkgId: opts.pkgId
           }
 
-          // HarmonyOS test versions need explicit per-version multi-device metadata.
-          // Huawei's current Update Test Version API accepts deviceTypes here.
+          // Huawei test-version metadata is separate from app-level metadata.
           ;(body as any).deviceTypes = [
             { deviceType: 4, appAdapters: '5' }
           ]"""
-          if source.count(anchor) != 1:
+          if source.count(device_anchor) != 1:
               raise SystemExit(
-                  f"Pinned upstream pkgId anchor count={source.count(anchor)}; refusing blind patch"
+                  f"Pinned upstream pkgId anchor count={source.count(device_anchor)}; refusing blind patch"
               )
-          path.write_text(source.replace(anchor, replacement, 1), encoding="utf-8")
+          source = source.replace(device_anchor, device_replacement, 1)
+
+          language_anchor = """  if (opts.testContent) {
+            body.languages = [{
+              language: opts.agcLanguage || 'zh-CN',
+              newFeatures: opts.testContent
+            }]
+          }"""
+          language_replacement = """  // HarmonyOS multi-device test submission requires version-level language
+          // metadata. DeviceMaterial only requires deviceType; visual assets are optional.
+          ;(body as any).languages = [{
+            language: opts.agcLanguage || 'zh-CN',
+            appName: '素笺',
+            appDesc: '素笺写作是一款面向个人创作的写作应用。',
+            briefInfo: '简洁的个人写作工具',
+            newFeatures: opts.testContent || opts.testDesc || '素笺自动测试版本',
+            deviceMaterials: [
+              { deviceType: 4 },
+              { deviceType: 5 }
+            ]
+          }]"""
+          if source.count(language_anchor) != 1:
+              raise SystemExit(
+                  f"Pinned upstream languages anchor count={source.count(language_anchor)}; refusing blind patch"
+              )
+          source = source.replace(language_anchor, language_replacement, 1)
+          path.write_text(source, encoding="utf-8")
           PY
 
           npm --prefix "$action_dir" ci
