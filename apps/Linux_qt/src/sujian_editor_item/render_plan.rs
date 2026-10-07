@@ -1,7 +1,6 @@
 use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::render_ownership::RenderOwnershipPlan;
 use crate::editor::layout::LayoutSnapshot;
-use crate::sujian_editor_item::edit_motion::DeleteEdge;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
@@ -14,10 +13,6 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub source_rect: SourceRect,
     /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
     pub logical_range: (usize, usize),
-    /// 此 glyph 在当前 canonical revision 中对应的范围。纯删除旧字没有该身份。
-    pub canonical_range: Option<(usize, usize)>,
-    /// 删除 glyph 的 caret 边缘；其他动画 glyph 为 None。
-    pub delete_edge: Option<DeleteEdge>,
     pub shaping_identity: ShapingIdentity,
 }
 

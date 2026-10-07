@@ -207,8 +207,6 @@ impl RenderOwnershipPlan {
         snapshot_id: LineSnapshotId,
         source_rect: crate::sujian_editor_item::layout_snapshot::SourceRect,
         logical_range: (usize, usize),
-        canonical_range: Option<(usize, usize)>,
-        delete_edge: Option<crate::sujian_editor_item::edit_motion::DeleteEdge>,
         shaping_identity: ShapingIdentity,
     ) -> TextAnimationGlyphInfo {
         TextAnimationGlyphInfo {
@@ -220,8 +218,6 @@ impl RenderOwnershipPlan {
             snapshot_id,
             source_rect,
             logical_range,
-            canonical_range,
-            delete_edge,
             shaping_identity,
         }
     }

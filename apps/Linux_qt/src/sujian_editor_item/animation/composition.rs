@@ -58,8 +58,6 @@ impl LinuxEditorAnimationCoordinator {
                 .offset_map
                 .clone()
                 .unwrap_or_else(|| OffsetMap::build(&motion.old_text, &motion.new_text)),
-            deleted_range_edges: motion.deleted_range_edges,
-            animate: true,
             now,
         });
     }

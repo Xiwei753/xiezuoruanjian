@@ -13,24 +13,13 @@ use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
 };
 use crate::sujian_editor_item::edit_motion::CursorRect;
-use crate::sujian_editor_item::edit_motion::DeletedRangeEdge;
-use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use crate::sujian_editor_item::render_ownership::RenderOwnershipPlan;
-
-#[derive(Clone)]
-struct FrameRevisionMap {
-    from_revision: LayoutRevision,
-    to_revision: LayoutRevision,
-    offset_map: OffsetMap,
-}
 
 pub(crate) struct VisualEditRequest {
     pub base_snapshot: EditorLayoutSnapshot,
     pub target_snapshot: EditorLayoutSnapshot,
     pub offset_map: OffsetMap,
-    pub deleted_range_edges: Vec<DeletedRangeEdge>,
-    pub animate: bool,
     pub now: Instant,
 }
 
@@ -55,7 +44,6 @@ pub(crate) struct CursorMoveInputs {
 pub(crate) struct LinuxEditorAnimationCoordinator {
     visual_edit_state: Option<VisualEditState>,
     last_committed_visual_frame: Option<VisualFrame>,
-    frame_to_current_map: Option<FrameRevisionMap>,
     last_edit_at: Option<Instant>,
     typing_animation_duration_ms: u32,
     cursor_animation_duration_ms: u32,
@@ -67,7 +55,6 @@ impl LinuxEditorAnimationCoordinator {
         Self {
             visual_edit_state: None,
             last_committed_visual_frame: None,
-            frame_to_current_map: None,
             last_edit_at: None,
             typing_animation_duration_ms: 160,
             cursor_animation_duration_ms: 120,
@@ -85,59 +72,16 @@ impl LinuxEditorAnimationCoordinator {
 
     /// 新编辑直接替换当前过渡，从上一帧成功提交的视觉状态重新计算。
     pub(crate) fn begin_visual_edit(&mut self, request: VisualEditRequest) {
-        let previous_edit_at = self.last_edit_at;
-        let frame = self.last_committed_visual_frame.as_ref();
-        let frame_to_base_map = match frame {
-            Some(frame) => match (frame.canonical_revision, self.frame_to_current_map.as_ref()) {
-                (Some(anchor), Some(mapping))
-                    if mapping.from_revision == anchor
-                        && mapping.to_revision == request.base_snapshot.revision =>
-                {
-                    mapping.offset_map.clone()
-                }
-                (Some(anchor), _) if anchor == request.base_snapshot.revision => {
-                    identity_map(frame.canonical_byte_len)
-                }
-                _ => OffsetMap {
-                    entries: Vec::new(),
-                },
-            },
-            None => identity_map(snapshot_byte_len(&request.base_snapshot)),
-        };
-        let frame_to_target_map = if frame.is_some() {
-            frame_to_base_map.compose(&request.offset_map)
-        } else {
-            request.offset_map.clone()
-        };
-
-        if let Some(frame) = frame {
-            self.frame_to_current_map =
-                frame
-                    .canonical_revision
-                    .map(|from_revision| FrameRevisionMap {
-                        from_revision,
-                        to_revision: request.target_snapshot.revision,
-                        offset_map: frame_to_target_map.clone(),
-                    });
-        }
-
-        self.last_edit_at = Some(request.now);
-        if !request.animate {
-            self.visual_edit_state = None;
-            return;
-        }
-
         let state = VisualEditState::new(
-            frame,
+            self.last_committed_visual_frame.as_ref(),
             &request.base_snapshot,
             request.target_snapshot,
-            &frame_to_base_map,
-            &frame_to_target_map,
-            &request.deleted_range_edges,
+            &request.offset_map,
             request.now,
             u64::from(self.typing_animation_duration_ms),
-            previous_edit_at,
+            self.last_edit_at,
         );
+        self.last_edit_at = Some(request.now);
         self.visual_edit_state = Some(state);
     }
 
@@ -161,20 +105,11 @@ impl LinuxEditorAnimationCoordinator {
         plan: &RenderOwnershipPlan,
         resources_ready: bool,
     ) {
-        let committed_frame = if resources_ready {
+        self.last_committed_visual_frame = Some(if resources_ready {
             plan.candidate_frame.clone()
         } else {
             plan.canonical_frame.clone()
-        };
-        self.frame_to_current_map =
-            committed_frame
-                .canonical_revision
-                .map(|revision| FrameRevisionMap {
-                    from_revision: revision,
-                    to_revision: revision,
-                    offset_map: identity_map(committed_frame.canonical_byte_len),
-                });
-        self.last_committed_visual_frame = Some(committed_frame);
+        });
         if plan.handoff_pending || !resources_ready {
             self.visual_edit_state = None;
         } else if plan.terminal_frame {
@@ -296,19 +231,6 @@ impl LinuxEditorAnimationCoordinator {
             hidden_by_selection: inputs.has_selection,
         }
     }
-}
-
-fn identity_map(byte_len: usize) -> OffsetMap {
-    OffsetMap::from_single_edit(byte_len, (0, 0), 0)
-}
-
-fn snapshot_byte_len(snapshot: &EditorLayoutSnapshot) -> usize {
-    snapshot
-        .line_snapshots
-        .iter()
-        .map(|line| line.byte_end)
-        .max()
-        .unwrap_or(0)
 }
 
 impl Default for LinuxEditorAnimationCoordinator {
