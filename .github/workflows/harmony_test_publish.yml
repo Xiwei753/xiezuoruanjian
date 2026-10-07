@@ -34,7 +34,8 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Validate required secrets
+      - name: Check required secrets
+        id: secrets
         shell: bash
         env:
           HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
@@ -62,14 +63,17 @@ jobs:
             fi
           done
           if [ "${#missing[@]}" -ne 0 ]; then
-            printf 'Missing GitHub Actions secrets: %s\n' "${missing[*]}" >&2
-            exit 1
+            printf '::warning::HarmonyOS test publish skipped; missing Actions secrets: %s\n' "${missing[*]}"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Run publisher helper tests
         run: python3 tools/test_publish_harmony_test.py
 
       - name: Prepare HarmonyOS release signing
+        if: steps.secrets.outputs.ready == 'true'
         shell: bash
         env:
           HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
@@ -119,6 +123,7 @@ jobs:
           PY
 
       - name: Install HarmonyOS CLI and AGC skill
+        if: steps.secrets.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -147,6 +152,7 @@ jobs:
           echo "CONNECT_API_CLI_JS=$cli_js" >> "$GITHUB_ENV"
 
       - name: Ensure Rust toolchain
+        if: steps.secrets.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -154,5 +160,6 @@ jobs:
           rustup default stable
 
       - name: Publish latest main to AGC invitation testing
+        if: steps.secrets.outputs.ready == 'true'
         shell: bash
         run: ./tools/publish_harmony_test.sh
