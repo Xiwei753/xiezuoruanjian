@@ -572,3 +572,30 @@ fn issue826_c39_blink_suppressed_while_motion_alive() {
          blink 抑制必须跟着 motion 走，否则协同中途光标闪烁。"
     );
 }
+
+/// Issue #826 评论 42：跳行 Boundary 的 drawn caret y 必须用 Qt 真实 caret top，
+/// 不能再用 `FrontierSegment.y`（= visual_line_top）或 `same_row ? start_y : ...` 猜。
+#[test]
+fn issue826_c42_boundary_uses_qt_caret_top_not_visual_line_top() {
+    let layout = read_src("src/sujian_editor_item/layout_snapshot.rs");
+    assert!(
+        layout.contains("pub caret_top: f64") && layout.contains("pub caret_height: f64"),
+        "Issue #826 评论 42: PreparedLineSnapshot 必须携带 Qt 真实 caret top/height。"
+    );
+    let builder = read_src("src/sujian_editor_item/line_snapshot_builder.rs");
+    assert!(
+        builder.contains("cursor_rect_for_line("),
+        "Issue #826 评论 42: 构造 PreparedLineSnapshot 时必须用 cursor_rect_for_line \
+         计算真实 caret top，不能拿 line.y + 常数。"
+    );
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord, "fn boundary_segments", 2500);
+    assert!(
+        window.contains("caret_top"),
+        "Issue #826 评论 42: boundary_segments 的 drawn caret y 必须取该行 caret_top。"
+    );
+    assert!(
+        !window.contains("same_row"),
+        "Issue #826 评论 42: 不得再用 same_row ? start_y : segment.y 猜 caret y。"
+    );
+}

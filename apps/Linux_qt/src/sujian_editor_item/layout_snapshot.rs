@@ -94,6 +94,16 @@ pub(crate) struct PreparedLineSnapshot {
     /// Issue #722 评论 5750218208: 真实视觉行 bottom（= `VisualLine.y + VisualLine.height`，
     /// 文档坐标）。空行也有正确高度，不依赖 cluster。
     pub visual_line_bottom: f64,
+    /// Issue #826 评论 42: 本视觉行**真实 drawn caret** 的文档坐标 top。
+    ///
+    /// `visual_line_top` 是 `VisualLine.y`（QTextLine 行顶），但 caret 并不贴行顶：
+    /// `cursor_rect_for_line()` 里 `top = line.y + top_padding`，`top_padding =
+    /// (line.height - (ascent + descent)) / 2`，项目默认字号/行距下不为 0。
+    /// 跨行协同的 Boundary 段 y 必须用这个值，否则光标跨行会先上跳几像素、
+    /// 沿文字走、再下跳回正常高度。
+    pub caret_top: f64,
+    /// Issue #826 评论 42: 本视觉行真实 caret 高度（与 `caret_top` 同源）。
+    pub caret_height: f64,
 }
 
 impl PreparedLineSnapshot {
@@ -128,6 +138,10 @@ impl PreparedLineSnapshot {
             visual_x: if visual_x.is_finite() { visual_x } else { 0.0 },
             visual_line_top: top,
             visual_line_bottom: top + 20.0,
+            // 测试 stub 没有真实字体度量：caret_top 退化为行顶（与旧行为一致，
+            // 现有 synthetic 测试不受影响）。
+            caret_top: top,
+            caret_height: 20.0,
         }
     }
 

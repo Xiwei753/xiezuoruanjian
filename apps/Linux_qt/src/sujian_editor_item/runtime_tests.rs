@@ -2357,6 +2357,20 @@ fn first_visual_line_byte_end(item: &SujianEditorItem) -> usize {
         .byte_end
 }
 
+/// Issue #826 评论 42：某视觉行真正的 Qt caret top（`cursor_rect_for_line`）。
+///
+/// `visual_line_top` 只是 QTextLine 行顶；drawn caret 的 y 是
+/// `cursor_rect_for_line(...).0`，两者默认差 `top_padding`。
+fn expected_caret_top_for_line_top(item: &SujianEditorItem, line_top: f64) -> f64 {
+    let cache = item.editor_layout.cache().expect("必须有排版缓存");
+    let vl = cache
+        .lines
+        .iter()
+        .find(|l| (l.y - line_top).abs() <= 0.5)
+        .expect("必须能按 visual_line_top 找到对应 VisualLine");
+    crate::editor::layout::cursor_rect_for_line(vl, f64::from(cache.font_size), &cache.font_family).0
+}
+
 /// Issue #826 评论 41：`coordinated_single_glyph_soft_wrap_does_not_turn_frontier_segment_diagonal`。
 ///
 /// 真实 Qt layout：把正文设为刚好写满一行，caret 在行末，插入**一个**可见 CJK
@@ -2411,28 +2425,42 @@ fn coordinated_single_glyph_soft_wrap_does_not_turn_frontier_segment_diagonal() 
             reveal_segments.len()
         );
         let line2_y = reveal_segments[0].0;
+        let line2_caret_top = expected_caret_top_for_line_top(&item, line2_y);
         assert!(
             (line2_y - start_y).abs() > 1.0,
             "前置：插入的字必须在第二行，实际 reveal y={} start_y={}",
             line2_y,
             start_y
         );
+        assert!(
+            (line2_caret_top - line2_y).abs() > 0.1,
+            "前置：默认 font=22px / line_spacing=1.5 下 caret_top 与 visual_line_top \
+             必须不同（top_padding != 0），实际 caret_top={} line_top={}",
+            line2_caret_top,
+            line2_y
+        );
         let boundaries = coord.coordinated_boundary_segments_for_test();
         assert_eq!(boundaries.len(), 1, "文字段只有一条");
         let b = boundaries[0];
         assert!(
-            (b.2 - line2_y).abs() < 1e-6 && (b.3 - line2_y).abs() < 1e-6,
-            "唯一文字段必须保持 y_from == y_to == 第二行 y（不能是跨行斜线），\
-             实际 y_from={} y_to={}，第二行 y={}",
+            (b.2 - line2_caret_top).abs() < 1e-6 && (b.3 - line2_caret_top).abs() < 1e-6,
+            "唯一文字段必须保持 y_from == y_to == 第二行**真实 caret top**\
+             （评论 42：不能用 visual_line_top，也不能是跨行斜线），\
+             实际 y_from={} y_to={}，第二行 caret_top={} line_top={}",
             b.2,
             b.3,
+            line2_caret_top,
             line2_y
+        );
+        assert!(
+            (b.2 - line2_y).abs() > 0.1,
+            "文字段 y 不得等于 visual_line_top（评论 42 的 bug）"
         );
         assert!(
             coord.coordinated_has_connector_for_test(),
             "旧 caret 在第一行、文字段在第二行，必须由 connector 承担跨行位移"
         );
-        println!("[BEHAVIOR_VERIFY] 评论41：单字软换行不把文字段钉成斜线");
+        println!("[BEHAVIOR_VERIFY] 评论41/42：单字软换行文字段 y 用真实 caret top");
     });
 }
 
@@ -2473,6 +2501,7 @@ fn coordinated_single_glyph_wrap_reveal_waits_during_connector_then_matches_care
             .segments[0]
             .y;
         assert!((line2_y - start_y).abs() > 1.0);
+        let line2_caret_top = expected_caret_top_for_line_top(&item, line2_y);
 
         let mut saw_connector = false;
         let mut saw_boundary = false;
@@ -2505,13 +2534,14 @@ fn coordinated_single_glyph_wrap_reveal_waits_during_connector_then_matches_care
                 );
                 continue;
             }
-            // 进入第二行文字段后：caret.y == 第二行 y，边界 x == caret.x。
+            // 进入第二行文字段后：caret.y == 第二行**真实 caret top**，
+            // 边界 x == caret.x（评论 42：不再是 visual_line_top）。
             assert!(
-                (caret_y - line2_y).abs() < 1.0,
-                "{}ms：进入文字段后 caret.y 必须等于第二行 y，实际 {} vs {}",
+                (caret_y - line2_caret_top).abs() < 1e-6,
+                "{}ms：进入文字段后 caret.y 必须等于第二行真实 caret top，实际 {} vs {}",
                 elapsed,
                 caret_y,
-                line2_y
+                line2_caret_top
             );
             let frontier = coord.active_edit_frontier.as_ref().expect("前沿");
             let masks = frontier.hidden_new_text_rects(&sample);
@@ -2529,5 +2559,184 @@ fn coordinated_single_glyph_wrap_reveal_waits_during_connector_then_matches_care
         assert!(saw_connector, "必须观察到 connector 帧");
         assert!(saw_boundary, "必须观察到进入文字段后的帧");
         println!("[BEHAVIOR_VERIFY] 评论41：connector 期间不吐、进入文字段后边界==caret");
+    });
+}
+/// Issue #826 评论 42 的共同前置：真实 Qt layout 下单字软换行。
+///
+/// 返回（item, 第一行 caret top / start_y, 第二行 `visual_line_top`,
+/// 第二行真实 `caret_top`）。`capacity` 通过长串实测，正文设为刚好一行再插一个
+/// 可见 CJK → 落到第二行，Reveal 只有一条 visible segment。
+fn build_single_glyph_wrap_for_test() -> (SujianEditorItem, f64, f64, f64) {
+    let mut item = SujianEditorItem::default();
+    item.current_viewport_height = 600.0;
+    item.current_coordinated_animation_enabled = true;
+    item.current_typing_animation_enabled = true;
+    item.current_smooth_cursor_enabled = true;
+    item.pipeline.set_typing_animation_duration_ms(160);
+    item.set_plain_text(QString::from(
+        "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+    ));
+    let capacity_chars = first_visual_line_byte_end(&item) / 3;
+    assert!(capacity_chars >= 2, "前置：行容量太小 {}", capacity_chars);
+    item.set_plain_text(QString::from("界".repeat(capacity_chars)));
+    assert_eq!(
+        item.editor_layout.cache().expect("cache").lines.len(),
+        1,
+        "前置：capacity_chars 个字必须刚好一行"
+    );
+    let _ = item.pipeline.set_selection(capacity_chars * 3, capacity_chars * 3);
+    item.snap_next_cursor_update();
+    let start_y = item.cursor_ctrl.visual_y;
+    item.insert_text(QString::from("界"));
+    let line2_y = item
+        .pipeline
+        .animation_coordinator()
+        .active_edit_frontier
+        .as_ref()
+        .expect("前置：必须建前沿")
+        .reveal
+        .regions[0]
+        .path
+        .segments[0]
+        .y;
+    let line2_caret_top = expected_caret_top_for_line_top(&item, line2_y);
+    (item, start_y, line2_y, line2_caret_top)
+}
+
+/// Issue #826 评论 42：`coordinated_boundary_uses_qt_caret_top_not_visual_line_top`。
+///
+/// 跳行 Boundary 的 drawn caret y 必须是该视觉行真实的
+/// `cursor_rect_for_line(...).0`，而不是 `FrontierSegment.y`（= visual_line_top）。
+#[test]
+fn coordinated_boundary_uses_qt_caret_top_not_visual_line_top() {
+    run_on_qt_thread(|| {
+        let (item, _start_y, line2_y, line2_caret_top) = build_single_glyph_wrap_for_test();
+        assert!(
+            (line2_caret_top - line2_y).abs() > 0.1,
+            "前置：默认字体下 caret_top({}) 必须与 visual_line_top({}) 不同",
+            line2_caret_top,
+            line2_y
+        );
+        let boundaries = item
+            .pipeline
+            .animation_coordinator()
+            .coordinated_boundary_segments_for_test();
+        assert_eq!(boundaries.len(), 1, "单字软换行只有一条文字段");
+        let b = boundaries[0];
+        assert!(
+            (b.2 - line2_caret_top).abs() < 1e-6 && (b.3 - line2_caret_top).abs() < 1e-6,
+            "Boundary 的 y_from/y_to 必须是 Qt 真实 caret top={}，实际 ({}, {})",
+            line2_caret_top,
+            b.2,
+            b.3
+        );
+        assert!(
+            (b.2 - line2_y).abs() > 0.1,
+            "Boundary y 不得等于 visual_line_top={}（评论 42 的 bug）",
+            line2_y
+        );
+        println!("[BEHAVIOR_VERIFY] 评论42①：跳行 Boundary 用 Qt 真实 caret top");
+    });
+}
+
+/// Issue #826 评论 42：`coordinated_single_glyph_wrap_keeps_caret_vertically_centered_on_boundary`。
+///
+/// 单字软换行进入 Boundary 后，drawn caret.y 必须停在该视觉行真实 caret top
+/// （与 canonical 光标一致）；Reveal 边界 x 仍等于 caret.x；且看到边界后 y 不再
+/// 抖动（connector 收尾与 Boundary 首帧连续）。
+#[test]
+fn coordinated_single_glyph_wrap_keeps_caret_vertically_centered_on_boundary() {
+    run_on_qt_thread(|| {
+        let (mut item, _start_y, _line2_y, line2_caret_top) =
+            build_single_glyph_wrap_for_test();
+        let mut saw_boundary = false;
+        let mut previous_boundary_y: Option<f64> = None;
+        for elapsed in (0..=160).step_by(10) {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let Some(sample) = coord.sample_edit_frontier(now) else {
+                continue;
+            };
+            let Some((_, distance)) = coord.coordinated_distance_for_test(now) else {
+                continue;
+            };
+            let Some((is_boundary, caret_x, caret_y, _frozen)) =
+                coord.coordinated_segment_at_test(distance)
+            else {
+                continue;
+            };
+            if !is_boundary {
+                continue;
+            }
+            saw_boundary = true;
+            assert!(
+                (caret_y - line2_caret_top).abs() < 1e-6,
+                "{}ms：Boundary 期间 caret.y 必须是第二行真实 caret top {}，实际 {}",
+                elapsed,
+                line2_caret_top,
+                caret_y
+            );
+            if let Some(prev) = previous_boundary_y {
+                assert!(
+                    (caret_y - prev).abs() < 1e-6,
+                    "{}ms：进入 Boundary 后 y 不得再抖动（前后 {} vs {}）",
+                    elapsed,
+                    prev,
+                    caret_y
+                );
+            }
+            previous_boundary_y = Some(caret_y);
+            let frontier = coord.active_edit_frontier.as_ref().expect("前沿");
+            let masks = frontier.hidden_new_text_rects(&sample);
+            if let Some(mask) = masks.first() {
+                assert!(
+                    (mask.x - caret_x).abs() < 1.0,
+                    "{}ms：Boundary 内 Reveal 边界 x 必须等于 caret.x，实际 {} vs {}",
+                    elapsed,
+                    mask.x,
+                    caret_x
+                );
+            }
+        }
+        assert!(saw_boundary, "必须观察到 Boundary 帧");
+        println!("[BEHAVIOR_VERIFY] 评论42②：单字软换行 caret 垂直居中于真实 caret top");
+    });
+}
+
+/// Issue #826 评论 42：`coordinated_cross_line_boundary_does_not_add_tail_vertical_correction`。
+///
+/// target 就在最后一个 Boundary 出口时，末段 Boundary 的 y 已是 target caret top，
+/// 不应再追加「visual_line_top -> target_y」的竖向尾 connector。断言 motion 的
+/// 最后一个分段是 Boundary，且其 y_to == target_y。
+#[test]
+fn coordinated_cross_line_boundary_does_not_add_tail_vertical_correction() {
+    run_on_qt_thread(|| {
+        let (item, _start_y, _line2_y, line2_caret_top) = build_single_glyph_wrap_for_test();
+        let coord = item.pipeline.animation_coordinator();
+        let (_target_x, target_y, _duration, _total) = coord
+            .coordinated_caret_for_test()
+            .expect("协同 motion 必须存在");
+        assert!(
+            (target_y - line2_caret_top).abs() < 1e-6,
+            "前置：target_y 必须是第二行真实 caret top {}，实际 {}",
+            line2_caret_top,
+            target_y
+        );
+        let kinds = coord.coordinated_segment_kinds_for_test();
+        let (is_boundary, _y_from, y_to) = *kinds.last().expect("必须有分段");
+        assert!(
+            is_boundary,
+            "末段必须是 Boundary（不得追加只为 caret_top 校正的竖向尾 connector），\
+             实际 kinds={:?}",
+            kinds
+        );
+        assert!(
+            (y_to - target_y).abs() < 1e-6,
+            "末段 Boundary 的 y_to 必须已是 target caret top {}，实际 {}",
+            target_y,
+            y_to
+        );
+        println!("[BEHAVIOR_VERIFY] 评论42③：跨行 Boundary 不追加竖向尾校正");
     });
 }

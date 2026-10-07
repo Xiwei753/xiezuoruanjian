@@ -1421,25 +1421,30 @@ impl LinuxEditorAnimationCoordinator {
                 frontier_distance_from: frozen,
             })
         }
-        // caret 沿某视觉行时用的是 caret 的 y（caret top），不是该行的行顶 y。
-        // 因此 Boundary 段的 caret y 取「该行对应的 caret y」：与 start 同行取
-        // start_y，与 target 同行取 target_y，中间行退用行顶 y。否则前行 y 与
-        // 行顶 y 差几个像素，会给每条文字段两端各造一个竖向 connector。
+        // caret 沿某视觉行时用的是**该行真实 drawn caret top**（`cursor_rect_for_line`
+        // 的 top，= line.y + top_padding），不是 `FrontierSegment.y`（= QTextLine 行顶）。
+        // 项目默认字号/行距下 top_padding != 0；拿行顶当 caret y 会让跨行协同先上跳
+        // 几像素、沿文字走、再下跳回正常高度（评论 42 BLOCKER）。这里按行顶 y 反查
+        // `PreparedLineSnapshot.caret_top`（segment.y 就是该行的 visual_line_top）。
         fn boundary_segments(
+            frontier: &EditFrontierState,
             regions: &[FrontierRegion],
-            start_y: f64,
-            target_y: f64,
         ) -> (Vec<CaretMotionSegment>, f64) {
+            let caret_top_for = |y: f64| -> f64 {
+                frontier
+                    .target_snapshot
+                    .line_snapshots
+                    .iter()
+                    .chain(frontier.base_snapshot.line_snapshots.iter())
+                    .find(|line| (line.visual_line_top - y).abs() <= 0.5)
+                    .map(|line| line.caret_top)
+                    .unwrap_or(y)
+            };
             let mut segments = Vec::new();
             let mut cumulative = 0.0;
             for region in regions {
                 for segment in &region.path.segments {
-                    // 同一视觉行（start/target y 基本相等）：caret 沿该行的
-                    // caret y 水平走，文字段 y 用 start_y，避免 caret 掉到行顶
-                    // 再回来。跨行：文字段保持各自视觉行 y，由 connector 承担
-                    // 行间 caret y 变化（评论 41）。
-                    let same_row = (start_y - target_y).abs() <= 1.0;
-                    let caret_y = if same_row { start_y } else { segment.y };
+                    let caret_y = caret_top_for(segment.y);
                     segments.push(CaretMotionSegment {
                         kind: CaretSegmentKind::Boundary,
                         x_from: segment.x_from,
@@ -1456,12 +1461,12 @@ impl LinuxEditorAnimationCoordinator {
             (segments, cumulative)
         }
         let (reveal_boundaries, reveal_total) =
-            boundary_segments(&frontier.reveal.regions, start_y, target_y);
+            boundary_segments(frontier, &frontier.reveal.regions);
         let (source, mut boundaries) = if reveal_total > 1e-9 {
             (CaretPathSource::Reveal, reveal_boundaries)
         } else {
             let (conceal_boundaries, conceal_total) =
-                boundary_segments(&frontier.conceal.regions, start_y, target_y);
+                boundary_segments(frontier, &frontier.conceal.regions);
             if conceal_total > 1e-9 && frontier.conceal_direction != ConcealDirection::Forward {
                 (CaretPathSource::Conceal, conceal_boundaries)
             } else {
@@ -1704,6 +1709,23 @@ impl LinuxEditorAnimationCoordinator {
                     .any(|s| s.kind == CaretSegmentKind::Connector)
             })
             .unwrap_or(false)
+    }
+
+    /// 测试用 —— 全部分段的 (是否 Boundary, y_from, y_to)。
+    ///
+    /// 用于断言「末段就是 Boundary、不再追加只为 vertical correction 的尾
+    /// connector」（评论 42 回归测试 3）。
+    #[cfg(test)]
+    pub(crate) fn coordinated_segment_kinds_for_test(&self) -> Vec<(bool, f64, f64)> {
+        self.active_coordinated_caret
+            .as_ref()
+            .map(|m| {
+                m.segments
+                    .iter()
+                    .map(|s| (s.kind == CaretSegmentKind::Boundary, s.y_from, s.y_to))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     // ── 光标（只管视觉 Tween，不决定文字显示多少） ──────────────────────────

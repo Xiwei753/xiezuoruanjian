@@ -21,7 +21,9 @@ use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
     ShapingIdentity, SourceRect,
 };
-use crate::editor::layout::{CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine};
+use crate::editor::layout::{
+    cursor_rect_for_line, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine,
+};
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
@@ -58,6 +60,10 @@ impl LineSnapshotBuilder {
 
                 let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
+                // Issue #826 评论 42：真实 drawn caret top/height（不贴行顶）。
+                let (caret_top, caret_height) =
+                    cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
                     image: None,
@@ -69,6 +75,8 @@ impl LineSnapshotBuilder {
                     visual_x: line.x,
                     visual_line_top: line.y,
                     visual_line_bottom: line.y + line.height,
+                    caret_top,
+                    caret_height,
                 });
 
                 visual_line_ordinal += 1;
@@ -141,6 +149,10 @@ impl LineSnapshotBuilder {
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
+            // Issue #826 评论 42：真实 drawn caret top/height（不贴行顶）。
+            let (caret_top, caret_height) =
+                cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
             line_snapshots.push(PreparedLineSnapshot {
                 id,
                 image,
@@ -152,6 +164,8 @@ impl LineSnapshotBuilder {
                 visual_x: line.x,
                 visual_line_top: line.y,
                 visual_line_bottom: line.y + line.height,
+                caret_top,
+                caret_height,
             });
 
             visual_line_ordinal += 1;
