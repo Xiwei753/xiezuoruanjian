@@ -1090,9 +1090,12 @@ def sync_test_device_types(
             encrypted = fallback_info.get("encrypted")
 
     if not publish_country:
-        raise PublishError("AGC app-info 缺少 publishCountry，无法写入设备范围。")
+        publish_country = os.environ.get("AGC_PUBLISH_COUNTRY", "CN").strip() or "CN"
+        eprint(f"AGC 未配置发布地区，测试发布默认使用：{publish_country}")
     if encrypted is None:
-        raise PublishError("AGC app-info 缺少 encrypted，无法写入设备范围。")
+        # CI 产物是普通签名 APP，不是加密包。
+        encrypted = 0
+        eprint("AGC 未配置 encrypted，测试发布按普通未加密 APP 使用 encrypted=0。")
 
     body = {
         "publishCountry": publish_country,
