@@ -108,9 +108,6 @@ jobs:
           HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
           HARMONY_SIGN_CER_B64: ${{ secrets.HARMONY_SIGN_CER_B64 }}
           HARMONY_SIGN_PROFILE_B64: ${{ secrets.HARMONY_SIGN_PROFILE_B64 }}
-          HARMONY_SIGN_STORE_PASSWORD: ${{ secrets.HARMONY_SIGN_STORE_PASSWORD }}
-          HARMONY_SIGN_KEY_ALIAS: ${{ secrets.HARMONY_SIGN_KEY_ALIAS }}
-          HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
@@ -120,36 +117,11 @@ jobs:
           printf '%s' "$HARMONY_SIGN_P12_B64" | base64 --decode > "$sign_dir/release.p12"
           printf '%s' "$HARMONY_SIGN_CER_B64" | base64 --decode > "$sign_dir/release.cer"
           printf '%s' "$HARMONY_SIGN_PROFILE_B64" | base64 --decode > "$sign_dir/release.p7b"
+          chmod 600 "$sign_dir/release.p12" "$sign_dir/release.cer" "$sign_dir/release.p7b"
 
-          python3 - "$sign_dir" <<'PY'
-          import json
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          sign_dir = Path(sys.argv[1]).resolve()
-          profile_path = Path("apps/harmony/build-profile.json5")
-          text = profile_path.read_text(encoding="utf-8")
-
-          values = {
-              "storeFile": str(sign_dir / "release.p12"),
-              "storePassword": os.environ["HARMONY_SIGN_STORE_PASSWORD"],
-              "keyAlias": os.environ["HARMONY_SIGN_KEY_ALIAS"],
-              "keyPassword": os.environ["HARMONY_SIGN_KEY_PASSWORD"],
-              "profile": str(sign_dir / "release.p7b"),
-              "certpath": str(sign_dir / "release.cer"),
-          }
-
-          for key, value in values.items():
-              pattern = rf"(\b{re.escape(key)}\s*:\s*)(['\"])(.*?)\2"
-              replacement = rf"\1{json.dumps(value, ensure_ascii=False)}"
-              text, count = re.subn(pattern, replacement, text, count=1)
-              if count != 1:
-                  raise SystemExit(f"cannot patch signing field: {key}")
-
-          profile_path.write_text(text, encoding="utf-8")
-          PY
+          printf 'HARMONY_SIGN_P12_FILE=%s\n' "$sign_dir/release.p12" >> "$GITHUB_ENV"
+          printf 'HARMONY_SIGN_CER_FILE=%s\n' "$sign_dir/release.cer" >> "$GITHUB_ENV"
+          printf 'HARMONY_SIGN_PROFILE_FILE=%s\n' "$sign_dir/release.p7b" >> "$GITHUB_ENV"
 
       - name: Install HarmonyOS CLI and AGC publisher
         if: steps.secrets.outputs.ready == 'true'
@@ -198,4 +170,8 @@ jobs:
       - name: Publish latest main to AGC invitation testing
         if: steps.secrets.outputs.ready == 'true'
         shell: bash
+        env:
+          HARMONY_SIGN_STORE_PASSWORD: ${{ secrets.HARMONY_SIGN_STORE_PASSWORD }}
+          HARMONY_SIGN_KEY_ALIAS: ${{ secrets.HARMONY_SIGN_KEY_ALIAS }}
+          HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
         run: ./tools/publish_harmony_test.sh
