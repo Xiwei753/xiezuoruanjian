@@ -238,12 +238,15 @@ jobs:
               )
           source = source.replace(device_anchor, device_replacement, 1)
 
-          language_anchor = """  if (opts.testContent) {
-            body.languages = [{
-              language: opts.agcLanguage || 'zh-CN',
-              newFeatures: opts.testContent
-            }]
-          }"""
+          language_start_token = "  if (opts.testContent) {"
+          language_end_token = "\n\n  if (opts.groupId || opts.testDesc) {"
+          language_start = source.find(language_start_token)
+          language_end = source.find(language_end_token, language_start)
+          if language_start < 0 or language_end < 0:
+              raise SystemExit(
+                  f"Pinned upstream languages block bounds not found: start={language_start}, end={language_end}"
+              )
+
           language_replacement = """  // HarmonyOS multi-device test submission requires version-level language
           // metadata. DeviceMaterial only requires deviceType; visual assets are optional.
           ;(body as any).languages = [{
@@ -257,11 +260,7 @@ jobs:
               { deviceType: 5 }
             ]
           }]"""
-          if source.count(language_anchor) != 1:
-              raise SystemExit(
-                  f"Pinned upstream languages anchor count={source.count(language_anchor)}; refusing blind patch"
-              )
-          source = source.replace(language_anchor, language_replacement, 1)
+          source = source[:language_start] + language_replacement + source[language_end:]
           path.write_text(source, encoding="utf-8")
           PY
 
