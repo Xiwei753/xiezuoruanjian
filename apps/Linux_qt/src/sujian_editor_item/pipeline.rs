@@ -1103,30 +1103,26 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout = layout;
     }
 
-    /// Issue #826 评论 7：为当前活跃的遮罩前沿 / Reflow 层准备行纹理。
+    /// Issue #853：为当前视觉过渡准备其动画 glyph 所需的行纹理。
     ///
-    /// 三类消费方，各自从不同 snapshot 取图，且**纹理需求完全不同**：
+    /// 动画 owner 在决定静态层 exclusion 前先准备资源：
     ///
-    /// 1. `FrontierMask`（吐字遮罩）：**不需要任何动画纹理**。它只是把还没露出的
-    ///    新字从 canonical 静态层裁掉，动画层不画那一块。所以它既不进准备流程，
-    ///    也不参与 missing 判定——一次 Reflow 资源问题不能杀掉本来完全独立的吐字。
+    /// 1. Insert / Replace 的吐字 glyph：从最新 target 行图截取逐步扩展的可见切片。
     /// 2. Delete / Replace 的旧正文 overlay：**直接从 track 自带的 `source_lines`
     ///    取真实 QImage**（`active_conceal_source_lines()`）。
     ///    Issue #826 评论 14/15：`LineSnapshotId` 只是钥匙不是图，而且 glyph 的
     ///    source 已经是「track 创建这一刻的 current old snapshot」，不再统一来自
     ///    `frontier.base_snapshot` —— 回头猜某份 snapshot 有没有这个 id 找不到图。
     ///    `retain` 只能「别删已存在的」，不能凭空创建。
-    /// 3. Reflow 正在移动的 glyph：取自 `frontier.target_snapshot` 的**最新**行图。
+    /// 3. Reflow 与 shaping 正在移动的 glyph：取自 target snapshot 的**最新**行图。
     ///    `ReflowSpan.snapshot_id` 明确是新行的 id，两边 ID 带 revision，本来就不是
     ///    同一批。
     ///
     /// Issue #826 评论 7 阻塞 1：**缺纹理不再一刀切收掉整个 coordinator**。
     /// 这里只负责「把能准备的准备好 + 记正式诊断」，逐层容错由渲染层负责：
-    /// - FrontierMask：永远继续（不依赖纹理）；
-    /// - Reflow span 纹理 miss：该 span 的 ReflowTarget clip 不进静态裁剪，
-    ///   canonical 最终位置直接显示，动画层也 skip 该 glyph；
+    /// - 目标纹理 miss：对应 animation-owned exclusion 不生效，canonical 同帧恢复；
     /// - 旧 overlay 纹理 miss：该旧 glyph 不画，canonical 删除结果直接显示；
-    /// - 其余有纹理的 span / overlay 继续正常动画。
+    /// - 其余有纹理的 glyph 继续正常动画。
     ///
     /// Issue #826 评论 7 性能问题：准备范围收窄到**真正 active 的 line ids**，
     /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
@@ -1165,7 +1161,24 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 2. Reflow 正在移动的 glyph：只准备活跃 span 引用到的最新行。
+        // 2. Insert / Replace 的吐字 glyph：动画层从最新 target 行图逐帧绘制
+        // 0..完整宽度。静态层在整个过渡里排除对应 cluster，所以这些行图必须
+        // 在所有权决策前进入缓存；缺图时 renderer 会撤销 exclusion 并恢复 canonical。
+        let reveal_ids = self.animation_coordinator.active_reveal_snapshot_ids();
+        if !reveal_ids.is_empty() {
+            if let Some(target) = self
+                .animation_coordinator
+                .active_edit_frontier_target_snapshot()
+            {
+                for line in &target.line_snapshots {
+                    if reveal_ids.contains(&line.id) {
+                        insert_line_image(&mut self.texture_cache, line);
+                    }
+                }
+            }
+        }
+
+        // 3. Reflow 正在移动的 glyph：只准备活跃 span 引用到的最新行。
         let reflow_ids = self.animation_coordinator.active_reflow_snapshot_ids();
         if !reflow_ids.is_empty() {
             if let Some(target) = self
@@ -1180,12 +1193,12 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 3. Issue #826 评论 21 阻塞 1：吐字 carry 的目标行纹理。
+        // 4. 吐字 carry 的目标行纹理。
         //
         // carry 用最新 target 的行纹理在**旧屏幕位置**画已可见前缀。纯 Insert
         // rewrap 场景里没有 Conceal overlay、Reflow 也不含这段字（未吐完被排除），
-        // 所以只有这里会准备这张图。缺了它：renderer 跳过 carry glyph，而 carry
-        // 的 `ReflowTarget` clip 又因纹理 miss 被过滤 ->「旧行半个 X」直接变成
+        // 所以只有这里会准备这张图。缺了它：renderer 跳过 carry glyph，而对应
+        // AnimationOwned exclusion 又因纹理 miss 被过滤 ->「旧行半个 X」直接变成
         // 「新行完整 X」，评论 20 修掉的瞬移在真实渲染链里复活。
         let carry_ids = self
             .animation_coordinator
@@ -1203,7 +1216,7 @@ impl LinuxEditorPipeline {
             }
         }
 
-        // 4. Issue #826 评论 24：不可拆 shaping cluster 交接层的行纹理。
+        // 5. Issue #826 评论 24：不可拆 shaping cluster 交接层的行纹理。
         //
         // 旧侧行图由 `ShapingTransitionState` 自己带过来（静态层不会画旧正文），
         // 新侧行图在最新 target 上 —— 与 Reflow / carry 同一个来源。
@@ -1243,6 +1256,11 @@ impl LinuxEditorPipeline {
         // Issue #826 评论 21：carry 单列一类诊断（`reveal_carry_missing`），
         // 不和 Reflow 混成同一个事件名 —— 两者的 owner 完全不同（一个是 scalar
         // Reflow span，一个是吐字 carry），排查时必须能分开看。
+        let missing_reveal: Vec<LineSnapshotId> = reveal_ids
+            .iter()
+            .copied()
+            .filter(|id| !self.texture_cache.contains_line(id))
+            .collect();
         let missing_reflow: Vec<LineSnapshotId> = reflow_ids
             .iter()
             .copied()
@@ -1263,13 +1281,15 @@ impl LinuxEditorPipeline {
             .copied()
             .filter(|id| !self.texture_cache.contains_line(id))
             .collect();
-        if missing_reflow.is_empty()
+        if missing_reveal.is_empty()
+            && missing_reflow.is_empty()
             && missing_overlay.is_empty()
             && missing_carry.is_empty()
             && missing_shaping.is_empty()
         {
             return;
         }
+        record_missing_layer_texture("reveal", &missing_reveal, "editor.anim.frontier");
         record_missing_layer_texture("reflow", &missing_reflow, "editor.anim.frontier");
         record_missing_layer_texture("delete_overlay", &missing_overlay, "editor.anim.frontier");
         record_missing_layer_texture("reveal_carry", &missing_carry, "editor.anim.frontier");
@@ -1280,8 +1300,8 @@ impl LinuxEditorPipeline {
             "editor.anim.frontier",
         );
         super::editor_animation_debug_log(&format!(
-            "prepare_frontier_textures: reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} shaping_missing={:?} (逐层容错，不收口)",
-            missing_reflow, missing_overlay, missing_carry, missing_shaping
+            "prepare_frontier_textures: reveal_missing={:?} reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} shaping_missing={:?} (逐层容错，不收口)",
+            missing_reveal, missing_reflow, missing_overlay, missing_carry, missing_shaping
         ));
     }
 

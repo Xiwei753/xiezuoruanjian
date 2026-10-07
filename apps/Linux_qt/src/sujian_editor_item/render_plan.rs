@@ -117,6 +117,8 @@ pub(crate) struct CursorRenderState {
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
+/// Issue #853: 一个 immutable RenderPlan 汇总本帧动画 glyph、静态层让位区域、
+/// selection/preedit 和唯一 caret。renderer 不读取动画状态，也不重新决定 owner。
 pub struct RenderPlan {
     // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
     // 状态（TextAnimationPlan / CursorRenderState / FrameContext 等），
@@ -134,11 +136,10 @@ pub struct RenderPlan {
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
-    /// Issue #826: 吐字期间静态正文层需要隐藏的裁剪矩形。
+    /// Issue #853: 本帧静态正文让给动画层的完整 target cluster exclusion。
     ///
-    /// 直接存储文档坐标 x/y/w/h，全部来自遮罩前沿
-    /// `hidden_canonical_rects`：最新 canonical 正文里还没被前沿打开的部分。
-    /// 静态层只画 complement，因此"吐字只画一份正文"天然成立。
+    /// 吐字、reflow 与 shaping 在整段过渡中保持 exclusion 不变；动画 glyph 的
+    /// 可见切片逐帧变化。纹理不可用时 renderer 在静态层让位前移除对应 exclusion。
     pub(crate) clip_rects: Vec<AnimationClipRect>,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
