@@ -359,10 +359,10 @@ fn coordinated_handoff_continues_from_sampled_frame() {
         4500,
     );
     assert!(
-        window.contains("position_at_distance(")
+        window.contains("sample_at_distance(")
             && window.contains("distance_at_progress(")
             && window.contains("sample_progress(now)"),
-        "Issue #722/I#826-38/39: 交棒必须先采样旧 motion 当前帧的轨迹距离，不退回逻辑旧 caret。"
+        "Issue #722/I#826-38/39/43: 交棒必须先采样旧 motion 当前帧（含 frontier distance），不退回逻辑旧 caret。"
     );
     assert!(
         window.contains("frontier.started_at") && window.contains("frontier.duration_ms"),

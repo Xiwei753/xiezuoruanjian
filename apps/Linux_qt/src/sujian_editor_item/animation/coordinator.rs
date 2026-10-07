@@ -31,7 +31,7 @@ use crate::sujian_editor_item::animation::coordinated_caret::{
 };
 use crate::sujian_editor_item::animation::edit_frontier::{
     ConcealDirection, ConcealSourceLine, ConcealVisualHandoff, EditFrontierKind,
-    EditFrontierSample, EditFrontierState, FrontierGlyph, FrontierRegion,
+    EditFrontierSample, EditFrontierState, FrontierGlyph, FrontierRegion, FrontierSegment,
 };
 use crate::sujian_editor_item::animation::reflow_motion::ReflowCurrentGeometry;
 use crate::sujian_editor_item::animation::reflow_motion::{ReflowSpanFrame, ReflowState};
@@ -1343,8 +1343,12 @@ impl LinuxEditorAnimationCoordinator {
                 .active_coordinated_caret
                 .as_ref()
                 .expect("retarget 分支必有旧 motion");
-            let (current_x, current_y) =
-                old.position_at_distance(old.distance_at_progress(old.sample_progress(now)));
+            // Issue #826 评论 43：采旧 motion 用 `sample_at_distance`（一次拿到
+            // x/y + frontier distance），不再只取位置。新 path 的起点以 extend 后
+            // 的**新 Frontier.travelled** 为准（slow retarget 会把 path 原点重设为 0，
+            // 不要生搬旧 path 的 distance），这里只保留旧 `(x,y)` 画前置 connector。
+            let (current_x, current_y, _old_frontier) =
+                old.sample_at_distance(old.distance_at_progress(old.sample_progress(now)));
             let (segments, total_length, source) = Self::coordinated_path_from_frontier(
                 frontier,
                 current_x,
@@ -1423,28 +1427,40 @@ impl LinuxEditorAnimationCoordinator {
         }
         // caret 沿某视觉行时用的是**该行真实 drawn caret top**（`cursor_rect_for_line`
         // 的 top，= line.y + top_padding），不是 `FrontierSegment.y`（= QTextLine 行顶）。
-        // 项目默认字号/行距下 top_padding != 0；拿行顶当 caret y 会让跨行协同先上跳
-        // 几像素、沿文字走、再下跳回正常高度（评论 42 BLOCKER）。这里按行顶 y 反查
-        // `PreparedLineSnapshot.caret_top`（segment.y 就是该行的 visual_line_top）。
+        // Issue #826 评论 43：Reveal 的 segment 由 `FrontierPath::build(target,...)`
+        // 生成，`line_id` 就是 target 行 id —— 优先用它精确匹配 target 行，
+        // 不再靠 y 近似反查。Conceal 的 `from_glyph_geometry` 目前把 line_id
+        // 写成零值，暂时保留 y fallback。
         fn boundary_segments(
             frontier: &EditFrontierState,
             regions: &[FrontierRegion],
+            prefer_line_id: bool,
         ) -> (Vec<CaretMotionSegment>, f64) {
-            let caret_top_for = |y: f64| -> f64 {
+            let caret_top_for = |segment: &FrontierSegment| -> f64 {
+                if prefer_line_id {
+                    if let Some(line) = frontier
+                        .target_snapshot
+                        .line_snapshots
+                        .iter()
+                        .find(|line| line.id == segment.line_id)
+                    {
+                        return line.caret_top;
+                    }
+                }
                 frontier
                     .target_snapshot
                     .line_snapshots
                     .iter()
                     .chain(frontier.base_snapshot.line_snapshots.iter())
-                    .find(|line| (line.visual_line_top - y).abs() <= 0.5)
+                    .find(|line| (line.visual_line_top - segment.y).abs() <= 0.5)
                     .map(|line| line.caret_top)
-                    .unwrap_or(y)
+                    .unwrap_or(segment.y)
             };
             let mut segments = Vec::new();
             let mut cumulative = 0.0;
             for region in regions {
                 for segment in &region.path.segments {
-                    let caret_y = caret_top_for(segment.y);
+                    let caret_y = caret_top_for(segment);
                     segments.push(CaretMotionSegment {
                         kind: CaretSegmentKind::Boundary,
                         x_from: segment.x_from,
@@ -1461,14 +1477,22 @@ impl LinuxEditorAnimationCoordinator {
             (segments, cumulative)
         }
         let (reveal_boundaries, reveal_total) =
-            boundary_segments(frontier, &frontier.reveal.regions);
-        let (source, mut boundaries) = if reveal_total > 1e-9 {
-            (CaretPathSource::Reveal, reveal_boundaries)
+            boundary_segments(frontier, &frontier.reveal.regions, true);
+        let (source, start_frontier_distance, mut boundaries) = if reveal_total > 1e-9 {
+            (
+                CaretPathSource::Reveal,
+                frontier.reveal.travelled,
+                reveal_boundaries,
+            )
         } else {
             let (conceal_boundaries, conceal_total) =
-                boundary_segments(frontier, &frontier.conceal.regions);
+                boundary_segments(frontier, &frontier.conceal.regions, false);
             if conceal_total > 1e-9 && frontier.conceal_direction != ConcealDirection::Forward {
-                (CaretPathSource::Conceal, conceal_boundaries)
+                (
+                    CaretPathSource::Conceal,
+                    frontier.conceal.travelled,
+                    conceal_boundaries,
+                )
             } else {
                 // 两侧都无可见 path，或 Forward Delete：只建 caret-only connector。
                 let (segments, total) = match connector(start_x, start_y, target_x, target_y, None)
@@ -1482,39 +1506,42 @@ impl LinuxEditorAnimationCoordinator {
                 return (segments, total, CaretPathSource::CaretOnly);
             }
         };
-        // retarget：当前 caret 可能已经在某文字段内 / 越过前导段。找到所在段，
-        // 丢弃前导文字段；若在某段内则从该段中间起（保持该段 y 行几何不变）。
-        let mut keep_from = 0usize;
-        let mut trim: Option<(usize, f64)> = None;
+        // Issue #826 评论 43：retarget 直接按 source layer 的**当前已走距离**
+        // (`travelled`) 裁 Boundary 前缀 —— 新 Frontier 已经保存“当前前沿走到哪”
+        // （Reveal fast append 写入 inherited distance；slow retarget / 连续吞字
+        // 重置为 0），不再用 caret `(x,y)` 做 y-band/x-band 反猜（相邻两行的
+        // y-band 因 `caret_top + 整行 height` 必然重叠，会把下一行 caret 误判成
+        // 上一行）。start_x/start_y 只负责画前置 connector。
+        let mut drop = 0usize;
+        let mut trim_local: Option<f64> = None;
         for (index, b) in boundaries.iter().enumerate() {
-            let y_lo = b.y_from.min(b.y_to);
-            let y_hi = b.y_from.max(b.y_to) + b.h.max(0.0);
-            if start_y >= y_lo - 1.0 && start_y <= y_hi + 1.0 {
-                keep_from = index;
-                let x_lo = b.x_from.min(b.x_to);
-                let x_hi = b.x_from.max(b.x_to);
-                if start_x >= x_lo - 1.0 && start_x <= x_hi + 1.0 {
-                    let span = b.x_to - b.x_from;
-                    let frac = if span.abs() <= 1e-9 {
-                        1.0
-                    } else {
-                        ((start_x - b.x_from) / span).clamp(0.0, 1.0)
-                    };
-                    trim = Some((index, frac * b.visual_length));
-                    break;
-                }
+            let from = b.frontier_distance_from.unwrap_or(0.0);
+            let to = from + b.visual_length;
+            if to <= start_frontier_distance + 1e-6 {
+                drop = index + 1;
+                continue;
             }
+            if from < start_frontier_distance {
+                trim_local = Some(start_frontier_distance - from);
+                drop = index;
+            }
+            break;
         }
-        if let Some((index, local)) = trim {
-            boundaries.drain(0..index);
+        if let Some(local) = trim_local {
+            boundaries.drain(0..drop);
             if let Some(first) = boundaries.first_mut() {
-                let base = first.frontier_distance_from.unwrap_or(0.0) + local;
-                first.x_from = start_x;
-                first.frontier_distance_from = Some(base);
-                first.visual_length = (first.x_to - first.x_from).abs().max(f64::MIN_POSITIVE);
+                let span = first.x_to - first.x_from;
+                let frac = if first.visual_length <= 1e-9 {
+                    1.0
+                } else {
+                    (local / first.visual_length).clamp(0.0, 1.0)
+                };
+                first.x_from += span * frac;
+                first.visual_length =
+                    (first.x_to - first.x_from).abs().max(f64::MIN_POSITIVE);
             }
-        } else if keep_from > 0 {
-            boundaries.drain(0..keep_from);
+        } else if drop > 0 {
+            boundaries.drain(0..drop);
         }
         // 组装：前置 connector → 文字段（相邻跨行插 connector）→ 后置 connector。
         let mut out: Vec<CaretMotionSegment> = Vec::new();

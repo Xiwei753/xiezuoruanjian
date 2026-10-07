@@ -354,11 +354,11 @@ fn issue826_c38_retarget_samples_old_motion_first() {
         4500,
     );
     assert!(
-        window.contains("position_at_distance(")
+        window.contains("sample_at_distance(")
             && window.contains("distance_at_progress(")
             && window.contains("sample_progress(now)"),
-        "Issue #826 评论 38/39: 交棒必须先采样旧 motion 当前帧的轨迹距离 \
-         （屏幕真相），不退回调用方可能滞后一帧的 visual。"
+        "Issue #826 评论 38/39/43: 交棒必须先采样旧 motion 当前帧（含 frontier distance），\
+         不退回调用方可能滞后一帧的 visual。"
     );
 }
 
@@ -597,5 +597,24 @@ fn issue826_c42_boundary_uses_qt_caret_top_not_visual_line_top() {
     assert!(
         !window.contains("same_row"),
         "Issue #826 评论 42: 不得再用 same_row ? start_y : segment.y 猜 caret y。"
+    );
+}
+
+/// Issue #826 评论 43：retarget 必须按 source layer 的 `travelled` 距离裁 Boundary，
+/// 不再拿 caret (x,y) 的 y-band/x-band 反猜（相邻行 y 命中带会重叠）。
+#[test]
+fn issue826_c43_retarget_uses_frontier_travelled_not_y_band() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord, "fn coordinated_path_from_frontier", 6500);
+    assert!(
+        window.contains("frontier.reveal.travelled")
+            || window.contains("frontier.conceal.travelled")
+            || window.contains("start_frontier_distance"),
+        "Issue #826 评论 43: retarget 必须用 source layer 的 travelled/start_frontier_distance 裁 path。"
+    );
+    assert!(
+        !window.contains("y_lo")
+            && !window.contains("y_hi"),
+        "Issue #826 评论 43: 不得再用 y_lo/y_hi 命中带反猜当前 Boundary。"
     );
 }
