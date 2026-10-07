@@ -1734,15 +1734,15 @@ fn coordinated_delete_caret_and_conceal_share_one_progress() {
 /// caret 侧的段查找必须走 motion 自己的分段（首尾钉死 visual/target），
 /// 不能走前沿 regions —— 钉死端点后两边的距离系差几个像素，混用会错段。
 fn caret_segment_at_distance(
-    segments: &[(f64, f64, f64, f64, f64)],
+    segments: &[(f64, f64, f64, f64, f64, f64)],
     distance: f64,
 ) -> Option<usize> {
     let mut rest = distance;
     for (index, segment) in segments.iter().enumerate() {
-        if rest <= segment.4 + 1e-9 {
+        if rest <= segment.5 + 1e-9 {
             return Some(index);
         }
-        rest -= segment.4;
+        rest -= segment.5;
     }
     None
 }
@@ -1820,12 +1820,12 @@ fn coordinated_wrap_caret_is_on_same_frontier_segment_each_frame() {
             // caret 不得处于行间斜线：y 必须在段的行带内，x 必须在段跨度内
             //（motion 段首尾钉死 visual/target，x 精确落在段内）。
             assert!(
-                caret.y >= caret_seg.2 && caret.y < caret_seg.2 + caret_seg.3,
+                caret.y >= caret_seg.2 && caret.y < caret_seg.2 + caret_seg.4,
                 "{}：caret.y 必须在轨迹段行带内（行间斜线直接判死），实际 y={} 段 y={} h={}",
                 label,
                 caret.y,
                 caret_seg.2,
-                caret_seg.3
+                caret_seg.4
             );
             let span_lo = caret_seg.0.min(caret_seg.1);
             let span_hi = caret_seg.0.max(caret_seg.1);
@@ -1919,25 +1919,33 @@ fn coordinated_wrap_caret_is_on_same_frontier_segment_each_frame() {
             let motion_segments = coord.coordinated_segments_for_test();
             let frontier = coord.active_edit_frontier.as_ref().expect("前沿必须还在");
             let regions = &frontier.reveal.regions;
-            let first = *first_y.get_or_insert_with(|| motion_segments[0].2);
-            let caret_row = caret_segment_at_distance(&motion_segments, distance)
-                .map(|i| motion_segments[i].2);
-            let mut boundary_row: Option<f64> = None;
-            for region in regions.iter() {
+            // 展平 reveal 段的行 y（motion 段与 reveal 段 1:1 同序）。
+            let flat_y: Vec<f64> = regions
+                .iter()
+                .flat_map(|r| r.path.segments.iter().map(|seg| seg.y))
+                .collect();
+            if flat_y.is_empty() {
+                continue;
+            }
+            let first = *first_y.get_or_insert(flat_y[0]);
+            let caret_idx = caret_segment_at_distance(&motion_segments, distance);
+            let caret_row = caret_idx.and_then(|i| flat_y.get(i).copied());
+            let mut boundary_idx: Option<usize> = None;
+            let mut flat_index = 0;
+            'outer: for region in regions.iter() {
                 let local = (boundary.reveal_distance - region.distance_start)
                     .clamp(0.0, region.path.total_length);
                 let mut rest = local;
                 for segment in region.path.segments.iter() {
                     if rest <= segment.visual_length + 1e-9 {
-                        boundary_row = Some(segment.y);
-                        break;
+                        boundary_idx = Some(flat_index);
+                        break 'outer;
                     }
                     rest -= segment.visual_length;
-                }
-                if boundary_row.is_some() {
-                    break;
+                    flat_index += 1;
                 }
             }
+            let boundary_row = boundary_idx.and_then(|i| flat_y.get(i).copied());
             if caret_row.is_some_and(|y| (y - first).abs() > 1e-9) && caret_switch_at.is_none() {
                 caret_switch_at = Some(elapsed);
             }
@@ -2121,14 +2129,15 @@ fn rapid_typing_retargets_single_coordinated_motion() {
     });
 }
 
-/// Issue #826 评论 39 BLOCKER 1：`coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty`。
+/// Issue #826 评论 39 BLOCKER 1 / 评论 40 BLOCKER 1：
+/// `coordinated_enter_caret_moves_in_both_axes_before_finish`。
 ///
 /// `ABCDE|FGHIJ` 按 Enter：newline 没有 Reveal glyph（Reveal path 为空），
 /// FGHIJ 只做 Reflow 到下一行，caret 从旧行末走到下一行起点。motion 必须活到
-/// typing duration 结束（160ms 才落 target），不能在第一帧被“空 path 前沿
-/// finished”连带清掉；期间独立 Tween 始终不得出现。
+/// typing duration 结束（160ms 才落 target），且 40/80/120ms 两个轴都要推进
+/// （评论 40：只更新 x、最后一帧跳 y 不算跨行协同）；期间独立 Tween 始终不得出现。
 #[test]
-fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
+fn coordinated_enter_caret_moves_in_both_axes_before_finish() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
         item.current_viewport_height = 600.0;
@@ -2139,7 +2148,8 @@ fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
         item.set_plain_text(QString::from("ABCDEFGHIJ"));
         let _ = item.pipeline.set_selection(5, 5);
         item.snap_next_cursor_update();
-        let visual_before_y = item.cursor_ctrl.visual_y;
+        let start_x = item.cursor_ctrl.visual_x;
+        let start_y = item.cursor_ctrl.visual_y;
         item.insert_text(QString::from("\n"));
         assert_eq!(
             item.pipeline.committed_text(),
@@ -2171,14 +2181,13 @@ fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
             .coordinated_caret_for_test()
             .expect("前置：Enter 必须建协同 motion（caret-only 段）");
         assert!(
-            (target_y - visual_before_y).abs() > 1.0,
+            (target_y - start_y).abs() > 1.0,
             "前置：Enter 后 caret 必须换行，实际 y {} -> {}",
-            visual_before_y,
+            start_y,
             target_y
         );
-        let _ = target_x;
 
-        let mut previous_gap = f64::MAX;
+        let mut previous_y_err = (start_y - target_y).abs();
         for elapsed in [40u64, 80, 120] {
             rewind_coordinated_clock_for_test(&mut item, elapsed);
             let now = Instant::now();
@@ -2199,15 +2208,33 @@ fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
                 elapsed,
                 caret.progress
             );
-            let gap = (caret.x - target_x).abs() + (caret.y - target_y).abs();
+            // 评论 40 BLOCKER 1：两个轴都要动，不能只动 x 最后一帧跳 y。
             assert!(
-                gap < previous_gap,
-                "{}ms：caret 必须逐帧逼近 target，实际 gap={}（上一帧 {}）",
+                (caret.x - start_x).abs() > 1e-6 || (start_x - target_x).abs() <= 1e-6,
+                "{}ms：x 轴必须推进，实际 x={}（{} -> {}）",
                 elapsed,
-                gap,
-                previous_gap
+                caret.x,
+                start_x,
+                target_x
             );
-            previous_gap = gap;
+            assert!(
+                caret.y > start_y.min(target_y) + 1e-6
+                    && caret.y < start_y.max(target_y) - 1e-6,
+                "{}ms：y 必须在两行之间（不能只动 x），实际 y={}（{} -> {}）",
+                elapsed,
+                caret.y,
+                start_y,
+                target_y
+            );
+            let y_err = (caret.y - target_y).abs();
+            assert!(
+                y_err < previous_y_err,
+                "{}ms：|y-target_y| 必须单调递减，实际 {}（上一帧 {}）",
+                elapsed,
+                y_err,
+                previous_y_err
+            );
+            previous_y_err = y_err;
         }
         assert!(
             item.cursor_ctrl.animation.is_none(),
@@ -2239,7 +2266,7 @@ fn coordinated_enter_keeps_caret_motion_when_reveal_path_is_empty() {
             "结束后 motion 必须清掉"
         );
 
-        println!("[BEHAVIOR_VERIFY] 评论39①：Enter 空 Reveal 时 caret motion 活到 typing 结束");
+        println!("[BEHAVIOR_VERIFY] 评论40①：Enter caret 两轴同时推进到 typing 结束");
     });
 }
 
@@ -2303,6 +2330,12 @@ fn coordinated_shaping_only_edit_keeps_caret_until_typing_duration_finishes() {
             "caret 必须向 target 前进，实际 x={}",
             mid.x
         );
+        // 评论 40 BLOCKER 1：CaretOnly 段 y 也必须推进（start=(10,20) target=(50,40)）。
+        assert!(
+            mid.y > 20.0 && mid.y < 40.0,
+            "CaretOnly 段 80ms y 必须在 (20,40)，实际 {}",
+            mid.y
+        );
 
         let end = coord
             .sample_coordinated_caret(t0 + Duration::from_millis(200))
@@ -2318,5 +2351,254 @@ fn coordinated_shaping_only_edit_keeps_caret_until_typing_duration_finishes() {
         );
 
         println!("[BEHAVIOR_VERIFY] 评论39①：shaping 全接管时 caret 按 typing duration 走完");
+    });
+}
+
+/// Issue #826 评论 40 BLOCKER 2：
+/// `coordinated_forward_delete_conceals_progressively_while_caret_stays_at_logical_target`。
+///
+/// 正文 `AX`，caret 在 `A|X`，Forward Delete：逻辑 caret 删除前后同点
+/// （start==target），但被删 X 必须沿 Forward 路径被同一份 clock 逐步吞掉，
+/// 不能整个 duration 不吞、最后一帧突然消失（旧 #722 问题3 同一个 bug）。
+#[test]
+fn coordinated_forward_delete_conceals_progressively_while_caret_stays_at_logical_target() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("AX"));
+        let _ = item.pipeline.set_selection(1, 1);
+        item.snap_next_cursor_update();
+        let start_x = item.cursor_ctrl.visual_x;
+        item.delete_forward();
+        assert_eq!(item.pipeline.committed_text(), "A", "前置：Forward Delete 立即删 X");
+
+        let coord = item.pipeline.animation_coordinator();
+        let motion = coord
+            .coordinated_caret_for_test()
+            .expect("Forward Delete 也必须由协同 motion 接管");
+        assert_eq!(motion.2, 160, "motion 时长必须是 typing duration");
+        assert!(
+            (motion.0 - start_x).abs() < 1.0,
+            "Forward Delete 的 caret target 必须与 start 同点，实际 {} vs {}",
+            motion.0,
+            start_x
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "协同接管后不得再建独立 Tween"
+        );
+
+        let mut previous_width = f64::MAX;
+        for elapsed in [40u64, 80, 120] {
+            rewind_coordinated_clock_for_test(&mut item, elapsed);
+            let now = Instant::now();
+            let coord = item.pipeline.animation_coordinator_mut();
+            let sample = coord.sample_edit_frontier(now).expect("前沿必须还在");
+            let glyphs = coord.old_overlay_glyphs_for(&sample);
+            let width: f64 = glyphs.iter().map(|g| g.dest_rect.w).sum();
+            assert!(
+                width > 0.0,
+                "{}ms：X 必须还没吞完（>0），实际 {}",
+                elapsed,
+                width
+            );
+            assert!(
+                width < previous_width,
+                "{}ms：overlay 宽度必须严格递减，实际 {}（上一帧 {}）",
+                elapsed,
+                width,
+                previous_width
+            );
+            previous_width = width;
+            let caret = coord
+                .sample_coordinated_caret(now)
+                .expect("Forward Delete 的 motion 必须活到 typing 结束");
+            assert!(
+                (caret.x - start_x).abs() < 1.0,
+                "{}ms：drawn caret 可以原地，实际 {} vs {}",
+                elapsed,
+                caret.x,
+                start_x
+            );
+        }
+
+        // 160ms：X 完全消失。
+        rewind_coordinated_clock_for_test(&mut item, 200);
+        let now = Instant::now();
+        let coord = item.pipeline.animation_coordinator_mut();
+        let sample = coord.sample_edit_frontier(now).expect("frontier 收口帧");
+        let width: f64 = coord
+            .old_overlay_glyphs_for(&sample)
+            .iter()
+            .map(|g| g.dest_rect.w)
+            .sum();
+        assert!(width <= 1e-9, "160ms 后 overlay 必须完全消失，实际 {}", width);
+
+        println!("[BEHAVIOR_VERIFY] 评论40②：Forward Delete 逐步吞字、caret 原地");
+    });
+}
+
+/// Issue #826 评论 40 BLOCKER 2（续）：
+/// `coordinated_forward_delete_does_not_collapse_motion_clock_when_start_equals_target`。
+///
+/// start==target 不能等价于「正文动画已经完成」：motion 仍按 typing duration
+/// 走完，期间的 conceal 进度必须真的推进。
+#[test]
+fn coordinated_forward_delete_does_not_collapse_motion_clock_when_start_equals_target() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("AX"));
+        let _ = item.pipeline.set_selection(1, 1);
+        item.snap_next_cursor_update();
+        item.delete_forward();
+
+        let coord = item.pipeline.animation_coordinator();
+        let motion = coord
+            .coordinated_caret_for_test()
+            .expect("Forward Delete 必须有 motion");
+        assert!(
+            (motion.0 - item.cursor_ctrl.visual_x).abs() < 1.0
+                // start==target（target 字段 ==0）
+                && motion.3 < 1.0,
+            "前置：start==target 时 motion 自身轨迹长度可以为 0（caret 原地），\
+             但 clock 必须仍然存在并走满 typing duration，实际 total={}",
+            motion.3
+        );
+
+        // conceal 进度必须真的随 time progress 推进（走的是 conceal.advanced）。
+        rewind_coordinated_clock_for_test(&mut item, 40);
+        let now = Instant::now();
+        let coord = item.pipeline.animation_coordinator_mut();
+        let sample = coord.sample_edit_frontier(now).expect("前沿必须还在");
+        let boundary = sample.coordinated.expect("协同态必须带边界");
+        let conceal_total: f64 = coord
+            .active_edit_frontier
+            .as_ref()
+            .expect("前沿必须还在")
+            .conceal
+            .regions
+            .iter()
+            .map(|r| r.path.total_length)
+            .sum();
+        assert!(
+            boundary.conceal_distance > 0.0 && boundary.conceal_distance < conceal_total,
+            "40ms conceal 必须在中途（不能因 start==target 就等价完成），\
+             实际 {} / {}",
+            boundary.conceal_distance,
+            conceal_total
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论40②：start==target 不塌缩 motion clock");
+    });
+}
+
+/// Issue #826 评论 40 缺口：`rapid_wrap_retarget_preserves_current_caret_xy_on_first_frame`。
+///
+/// 可见 path retarget 必须同时保住 x 与 y：只钉 start_x 时，换行切段附近
+/// 第二笔会把 y 瞬间改成 first_segment.y。
+#[test]
+fn rapid_wrap_retarget_preserves_current_caret_xy_on_first_frame() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from(
+            "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+        ));
+        let line1_end = {
+            let cache = item
+                .editor_layout
+                .cache()
+                .expect("前置：必须有排版缓存");
+            cache.lines[0].byte_end
+        };
+        let insert_at = line1_end - 15;
+        let _ = item.pipeline.set_selection(insert_at, insert_at);
+        item.snap_next_cursor_update();
+        item.insert_text(QString::from("界界界界界界界界界界界界"));
+
+        // 第一笔播到 40ms，克隆旧 motion 当连续性基准（retarget 内部会用
+        // 「那一刻」的旧 motion 位置当新路径起点，测试在同一时刻采克隆验证）。
+        rewind_coordinated_clock_for_test(&mut item, 40);
+        let old_motion = item
+            .pipeline
+            .animation_coordinator()
+            .active_coordinated_caret
+            .clone()
+            .expect("第一笔 motion 必须还在");
+        // 旧路径第一段所在行 y（回归时 y 会跳到这一行，即「只钉 start_x」的 bug）。
+        let old_first_line_y = old_motion.segments[0].y_from;
+
+        // 第二笔同一 burst 再插入一个字 → retarget。
+        item.insert_text(QString::from("界"));
+        assert!(
+            item.pipeline.animation_coordinator().has_active_edit_frontier(),
+            "连续输入必须保持单一前沿"
+        );
+        assert!(
+            item.pipeline
+                .animation_coordinator()
+                .coordinated_caret_for_test()
+                .is_some(),
+            "连续输入必须保持单份协同 motion"
+        );
+
+        // retarget 用「那一刻」的旧 motion 位置当新路径起点；新 motion 的
+        // started_at 就是这次 extend/retarget 的时间基准，用它当比较时刻
+        // （容 2px，容忍 retarget 内部两三个微秒级 Instant::now() 偏差）。
+        let retarget_at = item
+            .pipeline
+            .animation_coordinator()
+            .active_coordinated_caret
+            .as_ref()
+            .expect("retarget 后 motion 必须还在")
+            .started_at;
+        let expected_progress = old_motion.sample_progress(retarget_at);
+        let (expected_x, expected_y) = old_motion
+            .position_at_distance(old_motion.distance_at_progress(expected_progress));
+        let after = item
+            .pipeline
+            .animation_coordinator_mut()
+            .sample_coordinated_caret(retarget_at)
+            .expect("retarget 后 motion 必须还在");
+        // 容差 10px：两个采样时刻之间旧 motion 仍在真实运动（ease 前段约
+        // 2~3px）；关键是回归 bug（只钉 start_x）会把 y 跳一整行（约 33px）。
+        assert!(
+            (after.x - expected_x).abs() < 10.0,
+            "retarget 首帧 x 必须从旧 motion 当前位置连续，实际 {} vs {}",
+            after.x,
+            expected_x
+        );
+        assert!(
+            (after.y - expected_y).abs() < 10.0,
+            "retarget 首帧 y 必须连续（只钉 start_x 会让 y 跳到 first_segment.y），\
+             实际 {} vs {}",
+            after.y,
+            expected_y
+        );
+        assert!(
+            (after.y - old_first_line_y).abs() > 10.0,
+            "retarget 不得把 y 跳回第一行（first_segment.y={}），实际 y={}",
+            old_first_line_y,
+            after.y
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "连续协同输入不得孵化独立 Tween"
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论40：换行 retarget 保 x/y 连续");
     });
 }

@@ -689,9 +689,20 @@ impl LinuxEditorAnimationCoordinator {
             let reveal_distance =
                 project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)
                     .unwrap_or_else(|| frontier.reveal.advanced(progress));
-            let conceal_distance =
+            // 评论 40 BLOCKER 2：Forward Delete 的移动边界不是 drawn caret。
+            // 逻辑 caret 删除前后同点（start==target），若拿固定 caret 反投影，
+            // 被删 glyph 的 Forward 路径会被投成 0，整个 duration 不吞、最后一下
+            // 消失（旧 #722 问题3 同一个 bug）。Forward 直接用**同一份 motion
+            // progress** 推进 conceal，drawn caret 可以原地。Backward 继续用
+            // caret 投影（光标回退多少就吞多少）。
+            let conceal_distance = if frontier.conceal_direction == ConcealDirection::Forward
+                && !frontier.conceal.regions.is_empty()
+            {
+                frontier.conceal.advanced(progress)
+            } else {
                 project_onto_layer(&frontier.conceal.regions, caret_x, caret_y)
-                    .unwrap_or_else(|| frontier.conceal.advanced(progress));
+                    .unwrap_or_else(|| frontier.conceal.advanced(progress))
+            };
             sample.coordinated = Some(CoordinatedBoundary {
                 reveal_distance,
                 conceal_distance,
@@ -1382,8 +1393,9 @@ impl LinuxEditorAnimationCoordinator {
                     total += segment.visual_length;
                     segments.push(CaretMotionSegment {
                         x_from: segment.x_from,
+                        y_from: segment.y,
                         x_to: segment.x_to,
-                        y: segment.y,
+                        y_to: segment.y,
                         h: segment.h,
                         visual_length: segment.visual_length,
                     });
@@ -1403,8 +1415,9 @@ impl LinuxEditorAnimationCoordinator {
                 return (
                     vec![CaretMotionSegment {
                         x_from: start_x,
+                        y_from: start_y,
                         x_to: target_x,
-                        y: start_y,
+                        y_to: target_y,
                         h: dy.abs(),
                         visual_length: length,
                     }],
@@ -1413,17 +1426,65 @@ impl LinuxEditorAnimationCoordinator {
             }
             (conceal_segments, conceal_total)
         };
-        // 钉死首尾并重算首末段长度（中间段原样保留行段几何）。
-        // 注意：钉死只改 caret 自己的距离系（首点=屏幕 caret、末点=canonical），
-        // 前沿 reveal/conceal 的距离系原样不动 —— 两边本来就是两套几何
-        // （bearings 差），边界永远由 caret 位置投影得到，与距离系无关。
+        // Issue #826 评论 40：retarget 时当前 caret 可能已经在后面某一段（跨行
+        // 切段后）。不能把整条 reveal path 从第一段开始重建再把首点钉到当前
+        // 位置 —— 那会造出 “当前行 -> 第一段行 -> 当前行” 的假连接段。先按
+        // 当前 (x,y) 找到所在段，丢掉已走过的前导段，再从该段起钉首尾。
+        let same_line: Vec<usize> = segments
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                let y_lo = s.y_from.min(s.y_to);
+                let y_hi = s.y_from.max(s.y_to) + s.h.max(0.0);
+                start_y >= y_lo - 1.0 && start_y <= y_hi + 1.0
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut keep_from = 0usize;
+        if let Some(&last_line) = same_line.last() {
+            let mut chosen = same_line[0];
+            for &i in &same_line {
+                let s = &segments[i];
+                let x_lo = s.x_from.min(s.x_to);
+                let x_hi = s.x_from.max(s.x_to);
+                if start_x >= x_lo - 1.0 && start_x <= x_hi + 1.0 {
+                    chosen = i;
+                    break;
+                }
+                if start_x > x_hi {
+                    chosen = i;
+                }
+            }
+            let s = &segments[last_line];
+            let x_hi = s.x_from.max(s.x_to);
+            if start_x > x_hi + 1.0 && last_line + 1 < segments.len() {
+                // 当前已越过该行最后一段，进入下一行。
+                keep_from = last_line + 1;
+            } else {
+                keep_from = chosen;
+            }
+        }
+        if keep_from > 0 {
+            segments.drain(0..keep_from);
+        }
+        // 钉死首尾：x 与 y 都钉（评论 40 缺口——只钉 x 会在 retarget 到另一行
+        // 时第一帧把 y 瞬间改成 first_segment.y），并重算首末段长度
+        //（中间段原样保留行段几何）。钉死只改 caret 自己的距离系，前沿
+        // reveal/conceal 的距离系原样不动：边界由 caret 位置投影（Backward /
+        // 吐字）或 Forward 的 progress 时钟得到，与距离系无关。
         if let Some(first) = segments.first_mut() {
             first.x_from = start_x;
-            first.visual_length = (first.x_to - first.x_from).abs();
+            first.y_from = start_y;
+            first.visual_length = (first.x_to - first.x_from)
+                .hypot(first.y_to - first.y_from)
+                .max(f64::MIN_POSITIVE);
         }
         if let Some(last) = segments.last_mut() {
             last.x_to = target_x;
-            last.visual_length = (last.x_to - last.x_from).abs();
+            last.y_to = target_y;
+            last.visual_length = (last.x_to - last.x_from)
+                .hypot(last.y_to - last.y_from)
+                .max(f64::MIN_POSITIVE);
         }
         let total = segments.iter().map(|s| s.visual_length).sum();
         (segments, total)
@@ -1495,17 +1556,17 @@ impl LinuxEditorAnimationCoordinator {
 
     /// 测试用 —— 当前协同 motion 的分段轨迹（首尾已钉死 visual/target）。
     ///
-    /// 返回每段 (x_from, x_to, y, h, visual_length)。caret 侧的段查找必须走
-    /// 它，不能走前沿 regions —— 钉死端点后两边的距离系差几个像素
+    /// 返回每段 (x_from, x_to, y_from, y_to, h, visual_length)。caret 侧的段查找
+    /// 必须走它，不能走前沿 regions —— 钉死端点后两边的距离系差几个像素
     /// （glyph/caret 几何差），混用会错段；生产边界走投影，不受此影响。
     #[cfg(test)]
-    pub(crate) fn coordinated_segments_for_test(&self) -> Vec<(f64, f64, f64, f64, f64)> {
+    pub(crate) fn coordinated_segments_for_test(&self) -> Vec<(f64, f64, f64, f64, f64, f64)> {
         self.active_coordinated_caret
             .as_ref()
             .map(|m| {
                 m.segments
                     .iter()
-                    .map(|s| (s.x_from, s.x_to, s.y, s.h, s.visual_length))
+                    .map(|s| (s.x_from, s.x_to, s.y_from, s.y_to, s.h, s.visual_length))
                     .collect()
             })
             .unwrap_or_default()

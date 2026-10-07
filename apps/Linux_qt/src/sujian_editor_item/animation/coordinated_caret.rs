@@ -43,40 +43,50 @@ use std::time::{Duration, Instant};
 
 use super::edit_frontier::{ease_out_cubic, FrontierRegion};
 
-/// Issue #826 评论 39 BLOCKER 2：caret 运动轨迹上的一段。
+/// Issue #826 评论 39 BLOCKER 2 / 评论 40 BLOCKER 1：caret 运动轨迹上的一段。
 ///
 /// 与本笔 changed visual path 同一视觉顺序：同行一段，跨行按行进方向串起来。
 /// Backward（Backspace）时段序与吞字路径一致是反向的 —— 构造时直接从 conceal
 /// 侧取段，不在这里再反转。
 ///
-/// 首段起点钉死在创建/retarget 时的屏幕 caret（`x_from = visual`），末段终点
-/// 钉死在最新 canonical caret（`x_to = target`）：glyph 矩形与 caret 矩形的
-/// 定位基准天然差几个像素（bearings），不对齐首尾的话第一帧跳、最后一帧还
-/// 得 snap 回来。钉死后途中 caret 仍在行段上走，终点精确落 canonical。
+/// 一段必须同时表达 x 与 y：正常 Frontier-derived 行段 `y_from == y_to`，
+/// 只沿行水平走，绝不拉斜线；CaretOnly（Enter / scalar 全空）段
+/// `(x_from,y_from)=真实 visual caret`、`(x_to,y_to)=canonical target`，
+/// 按真实二维走（此时本来就没有 Reveal/Conceal boundary 要跟）。
+/// 首段起点钉死创建时的屏幕 caret，末段终点钉死最新 canonical caret
+/// （glyph/caret 几何差，不钉死两头跳变）。
 #[derive(Clone, Debug)]
 pub(crate) struct CaretMotionSegment {
     /// 进入这一段时的 x（方向起点；首段恒为创建时的屏幕 caret x）。
     pub x_from: f64,
+    /// 进入这一段时的 y（方向起点；首段恒为创建时的屏幕 caret y）。
+    pub y_from: f64,
     /// 走完这一段时的 x（方向终点；末段恒为 canonical target x）。
     pub x_to: f64,
-    /// 这一段所属视觉行的文档坐标上边界。
-    pub y: f64,
-    /// 该视觉行的高度。
+    /// 走完这一段时的 y（方向终点；末段恒为 canonical target y）。
+    pub y_to: f64,
+    /// 该视觉行的高度（行带判定用；CaretOnly 段取 `|dy|`）。
     pub h: f64,
-    /// 这一段的长度（钉死后重算的 `|x_to - x_from|`，caret-only 段用欧氏距离）。
+    /// 这一段的长度（钉死后重算；行段为 `|dx|`，caret-only 段用欧氏距离）。
     pub visual_length: f64,
 }
 
 impl CaretMotionSegment {
-    /// 沿本段走过 `take` 距离后的 x。
-    fn x_after(&self, take: f64) -> f64 {
+    /// 沿本段走过 `take` 距离后的 (x, y)。
+    ///
+    /// x/y 用同一比例推进：行段退化为水平移动，CaretOnly 段为二维直线。
+    /// 采样只调它，绝不能只更新 x 把 y 写死（评论 40 BLOCKER 1）。
+    fn point_after(&self, take: f64) -> (f64, f64) {
         let take = take.clamp(0.0, self.visual_length);
-        let span = self.x_to - self.x_from;
-        if span.abs() <= f64::EPSILON || self.visual_length <= f64::EPSILON {
-            self.x_to
+        let frac = if self.visual_length <= f64::EPSILON {
+            1.0
         } else {
-            self.x_from + span * (take / self.visual_length)
-        }
+            take / self.visual_length
+        };
+        (
+            self.x_from + (self.x_to - self.x_from) * frac,
+            self.y_from + (self.y_to - self.y_from) * frac,
+        )
     }
 }
 
@@ -127,19 +137,21 @@ impl CoordinatedCaretMotion {
     /// 轨迹上走过 `distance` 后的 (x, y)。
     ///
     /// Issue #826 评论 39 BLOCKER 2：跨行时沿分段轨迹走（行内沿 x、前进到
-    /// 段末再切下一行），绝不对 (x, y) 起点终点拉斜线 —— 斜线会穿过行间
-    /// 缝隙，那里不属于任何文字行，不可能是吞吐边界。
+    /// 段末再切下一行）；评论 40 BLOCKER 1：CaretOnly 段按真实二维走。
+    /// 两种都不对起点终点拉穿过行间缝隙的斜线 —— 那里不属于任何文字行，
+    /// 不可能是吞吐边界。统一调 [`CaretMotionSegment::point_after`]，
+    /// 不要终点前把 y 写死。
     pub(crate) fn position_at_distance(&self, distance: f64) -> (f64, f64) {
         let mut rest = distance.clamp(0.0, self.total_length.max(0.0));
         let mut last = (self.target_x, self.target_y);
         for segment in &self.segments {
-            last = (segment.x_to, segment.y);
+            last = (segment.x_to, segment.y_to);
             if rest <= segment.visual_length + 1e-9 {
-                return (segment.x_after(rest), segment.y);
+                return segment.point_after(rest);
             }
             rest -= segment.visual_length;
         }
-        // 走完（浮点余量）：落在最后一段终点；调用方终点帧会精确 snap 到 target。
+        // 走完（浮点余量）：落在最后一段终点；终点已钉死 target，自然精确。
         last
     }
 
@@ -224,8 +236,9 @@ mod tests {
         CoordinatedCaretMotion {
             segments: vec![CaretMotionSegment {
                 x_from: 10.0,
+                y_from: 20.0,
                 x_to: 30.0,
-                y: 20.0,
+                y_to: 20.0,
                 h: 20.0,
                 visual_length: 20.0,
             }],
@@ -264,6 +277,57 @@ mod tests {
     }
 
     #[test]
+    fn coordinated_caret_only_segment_moves_in_both_axes() {
+        // 评论 40 BLOCKER 1：CaretOnly（start=(100,20), target=(10,50)）必须在
+        // 两个轴上都推进，不能 160ms 只动 x、最后一帧跳 y。
+        let t0 = Instant::now();
+        let motion = CoordinatedCaretMotion {
+            segments: vec![CaretMotionSegment {
+                x_from: 100.0,
+                y_from: 20.0,
+                x_to: 10.0,
+                y_to: 50.0,
+                h: 30.0,
+                visual_length: (90.0f64).hypot(30.0),
+            }],
+            total_length: (90.0f64).hypot(30.0),
+            started_at: t0,
+            duration_ms: 160,
+            target_x: 10.0,
+            target_y: 50.0,
+        };
+        let (x0, y0) = motion.position_at_distance(motion.distance_at_progress(0.0));
+        assert!((x0 - 100.0).abs() < 1e-9 && (y0 - 20.0).abs() < 1e-9);
+        for elapsed in [80u64, 160] {
+            let p = motion.sample_progress(t0 + Duration::from_millis(elapsed));
+            let (x, y) = motion.position_at_distance(motion.distance_at_progress(p));
+            if elapsed == 80 {
+                assert!(
+                    x > 10.0 && x < 100.0,
+                    "80ms x 必须在 (10,100)，实际 {}",
+                    x
+                );
+                assert!(
+                    y > 20.0 && y < 50.0,
+                    "80ms y 必须在 (20,50)（不能只动 x），实际 {}",
+                    y
+                );
+            } else {
+                assert!((x - 10.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9);
+            }
+        }
+        // y 单调逼近 target：每 40ms 采样一次，误差必须严格递减。
+        let mut prev_err = f64::MAX;
+        for elapsed in (40..=160).step_by(40) {
+            let p = motion.sample_progress(t0 + Duration::from_millis(elapsed));
+            let (_, y) = motion.position_at_distance(motion.distance_at_progress(p));
+            let err = (y - 50.0).abs();
+            assert!(err < prev_err, "{}ms y 误差必须递减，实际 {}", elapsed, err);
+            prev_err = err;
+        }
+    }
+
+    #[test]
     fn coordinated_motion_retarget_rebuilds_path_from_current_position() {
         // 40ms 处第二笔：新 motion 首段起点必须等于旧 motion 当前位置
         // （不对回逻辑旧 caret，不跳回轨迹起点），且首帧位置连续。
@@ -277,8 +341,9 @@ mod tests {
         let retargeted = CoordinatedCaretMotion {
             segments: vec![CaretMotionSegment {
                 x_from: cur_x,
+                y_from: cur_y,
                 x_to: 50.0,
-                y: cur_y,
+                y_to: 20.0,
                 h: 20.0,
                 visual_length: 50.0 - cur_x,
             }],

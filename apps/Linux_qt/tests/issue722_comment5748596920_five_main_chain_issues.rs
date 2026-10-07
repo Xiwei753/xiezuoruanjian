@@ -1,24 +1,13 @@
-//! Issue #722 评论 5748596920 复现测试 — 前一轮修复（commit 578a920ba）后剩余的
-//! 5 个主链问题。本测试为 WHITE_BOX 结构守卫复现：验证当前实现仍违反评论 5748596920
-//! 指出的 5 个核心语义。每个子测试断言评论期望的正确结构，当前（未修复）代码违反
-//! 这些断言 → 测试 FAIL → 缺陷复现成功。
+//! Issue #722 评论 5748596920 的 5 个主链问题 — 回归守卫。
 //!
-//! ## 评论 5748596920 指出的 5 个主链问题
+//! 旧实现（cursor_motion.rs / animated_slice.rs / 视觉事务 unit timeline）已在
+//! Issue #824/#826 重写中删除，指向那些文件的 WHITE_BOX 复现已按评论 40 的要求
+//! 改成新 #826 架构的结构守卫 + 行为测试（行为证明在 lib 内
+//! `runtime_tests.rs` 的协同测试里）。不要再为了旧守卫恢复 cursor_motion.rs /
+//! animated_slice.rs。
 //!
-//! 1. 正文事务的 caret 仍然是旧 scroll_y 下的视口坐标（pipeline.rs::
-//!    record_visual_transaction 仍传 ctx.scroll_y，make_cursor_rect_from_caret_doc
-//!    里 baseline = text_baseline_y - scroll_y）。
-//! 2. "光标是吞吐边界"只传了 caret_x，跨软换行仍然会错（compute_frame_caret_driven
-//!    只有 caret_clip_boundary: f64，animation_coordinator 对所有 unit 用同一个
-//!    caret_x）。
-//! 3. 前向 Delete 现在会变成"光标不动，文字也不吞，只到末尾突然消失"
-//!    （compute_coordinated_cursor_position 对 has_forward_delete 固定返回 new_rect.x，
-//!    compute_frame_caret_driven forward Delete 用 from.x + from.w - caret_x）。
-//! 4. Insert/Delete 的事务完成条件仍然由文字 unit 自己的 timeline 决定
-//!    （build_text_animation_plan_with_sample 用 tx.units.iter().all(|u| u.progress
-//!    >= 1.0) 决定 keys_to_complete）。
-//! 5. 空格/换行仍然被当普通 InsertReveal（build_insert_reveal_slices 只判断 cluster
-//!    落在 inserted_range，不检查 new_snapshot.virtual_text 的实际字符）。
+//! 仍然有效的旧守卫（问题1 文档坐标、问题2 单 caret_x、问题4 完成条件）原样保留 ——
+//! 当前实现已修复，它们在“违规模式不存在”时直接 return。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -181,61 +170,6 @@ fn issue1_make_cursor_rect_from_caret_doc_baseline_uses_scroll_y() {
     );
 }
 
-// =========================================================================
-// 问题2: "光标是吞吐边界"只传了 caret_x，跨软换行仍然会错
-// =========================================================================
-
-/// 问题2: `animated_slice.rs::compute_frame_caret_driven()` 只有
-/// `caret_clip_boundary: f64`（只知道 x）；`animation_coordinator.rs` 对事务里所有
-/// InsertReveal/DeleteConceal unit 都把同一个 caret_x 塞进去。old caret 在上一行
-/// 行尾、new caret 在下一行行首时，track 的 x 会从右边往左边插值，下一行的新 glyph
-/// 在第一帧就会看到一个"来自上一行右侧"的巨大 caret_x，`caret_x - glyph.x` 会直接
-/// clamp 成整字宽度，字会在光标真正到下一行之前提前完整出现。
-///
-/// 评论 5748596920 期望：compute_frame_caret_driven 应接收完整 caret geometry
-/// （含 y/行信息）或 per-unit caret_x。当前只传一个 x 且对所有 unit 用同一个
-/// → 断言"应改为完整 caret geometry 或 per-unit"在当前代码上 FAIL → 复现成功。
-#[test]
-fn issue2_compute_frame_caret_driven_only_takes_caret_x_not_full_geometry() {
-    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-
-    // 前提：compute_frame_caret_driven 确实存在
-    let has_fn = slice.contains("pub fn compute_frame_caret_driven(");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue2 compute_frame_caret_driven: has_fn={}",
-        has_fn
-    );
-    if !has_fn {
-        return;
-    }
-
-    let window = function_window(&slice, "pub fn compute_frame_caret_driven", 600);
-    // 关键断言：签名只有 caret_clip_boundary: f64，没有 caret_y / caret_line_id /
-    // caret_visual_line_id 等 y/行信息。
-    let has_only_caret_x = window.contains("caret_clip_boundary: f64,");
-    let has_caret_y = window.contains("caret_clip_y")
-        || window.contains("caret_y:")
-        || window.contains("caret_top:")
-        || window.contains("caret_line_id:")
-        || window.contains("caret_visual_line_id:")
-        || window.contains("caret_row:")
-        || window.contains("caret_line_idx:");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue2 compute_frame_caret_driven: has_only_caret_x={} has_caret_y_or_line={}",
-        has_only_caret_x, has_caret_y
-    );
-    assert!(
-        !(has_only_caret_x && !has_caret_y),
-        "Issue #722 评论 5748596920 问题2: animated_slice.rs::compute_frame_caret_driven \
-         只有 caret_clip_boundary: f64（只知道 x），没有 caret_y / caret_line_id 等 \
-         y/行信息。old caret 在上一行行尾、new caret 在下一行行首时，track 的 x 会\
-         从右边往左边插值，下一行的新 glyph 在第一帧就会看到一个\"来自上一行右侧\"\
-         的巨大 caret_x，caret_x - glyph.x 会直接 clamp 成整字宽度，字会在光标真正\
-         到下一行之前提前完整出现。修复：compute_frame_caret_driven 应接收完整 \
-         caret geometry（含 y/行信息）或 per-unit caret_x。"
-    );
-}
-
 /// 问题2（续）: animation_coordinator.rs 对事务里所有 InsertReveal/DeleteConceal
 /// unit 都把同一个 caret_x 塞进去。
 #[test]
@@ -256,8 +190,6 @@ fn issue2_build_text_animation_plan_uses_single_caret_x_for_all_units() {
     let window = function_window(&coord, "fn build_text_animation_plan_with_sample", 8000);
     // 关键断言：在 build_text_animation_plan_with_sample 里，caret_x 在 for unit 循环
     // 外面只算一次，然后对所有 unit 用同一个 caret_x。
-    // 检查模式：let caret_x = match tx.cursor_visual_track... 然后在循环里
-    // unit.slice.compute_frame_caret_driven(caret_x, visible)
     let caret_x_outside_loop = window.contains("let caret_x = match tx.cursor_visual_track")
         || window.contains("let caret_x = match tx.cursor_visual_track.as_ref()");
     let same_caret_x_for_all =
@@ -283,101 +215,6 @@ fn issue2_build_text_animation_plan_uses_single_caret_x_for_all_units() {
          每个 unit 算 per-unit caret_x（按 unit 所在行/段插值 caret track），或传完整\
          caret geometry 让 compute_frame_caret_driven 自行判断 unit 是否在当前 caret\
          行。"
-    );
-}
-
-// =========================================================================
-// 问题3: 前向 Delete 现在会变成"光标不动，文字也不吞，只到末尾突然消失"
-// =========================================================================
-
-/// 问题3: `compute_coordinated_cursor_position()` 对 `conceal_to_left_edge=false`
-/// 固定返回 `new_cursor_rect.x`；`build_text_animation_plan_with_sample()` 又把这个
-/// 固定 caret_x 传给 `compute_frame_caret_driven()`。而
-/// `compute_frame_caret_driven()` 的 forward Delete 用 `right - caret_x` 算保留宽度。
-/// caret_x 全程固定在删除点时，这个宽度也全程固定，glyph 不会逐帧收进光标。
-///
-/// 评论 5748596920 期望：前向 Delete 时 caret_x 应随光标逐帧移动（或裁切宽度随帧
-/// 变化），glyph 应逐帧收进光标。当前 caret_x 全程固定 → 断言"应逐帧变化"在当前
-/// 代码上 FAIL → 复现成功。
-#[test]
-fn issue3_forward_delete_caret_x_fixed_at_new_rect_x() {
-    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-
-    // 前提：compute_coordinated_cursor_position 确实存在并有 has_forward_delete 分支
-    let has_fn = coord.contains("fn compute_coordinated_cursor_position(");
-    let has_forward_delete = coord.contains("has_forward_delete");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue3 compute_coordinated: has_fn={} has_forward_delete={}",
-        has_fn, has_forward_delete
-    );
-    if !(has_fn && has_forward_delete) {
-        return;
-    }
-
-    let window = function_window(&coord, "fn compute_coordinated_cursor_position", 12000);
-    // 关键断言：has_forward_delete 分支固定返回 new_rect.x（不随帧变化）
-    let forward_delete_fixed = window.contains("if has_forward_delete {")
-        && window.contains("Some((new_rect.x, new_rect.top, h))");
-    // 检查是否有逐帧移动机制（正确做法）
-    let has_per_frame_caret = window.contains("forward_delete_caret_track")
-        || window.contains("forward_delete_caret_x")
-        || window.contains("forward_delete_progress")
-        || window.contains("forward_delete_eased")
-        || window.contains("forward_delete_sampled");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue3 compute_coordinated: forward_delete_fixed={} has_per_frame_caret={}",
-        forward_delete_fixed, has_per_frame_caret
-    );
-    assert!(
-        !(forward_delete_fixed && !has_per_frame_caret),
-        "Issue #722 评论 5748596920 问题3: compute_coordinated_cursor_position 对 \
-         has_forward_delete 固定返回 Some((new_rect.x, new_rect.top, h))，caret_x 全程\
-         固定在删除点。build_text_animation_plan_with_sample 又把这个固定 caret_x 传给\
-         compute_frame_caret_driven。而 compute_frame_caret_driven 的 forward Delete 用\
-         from.x + from.w - caret_x 算保留宽度，caret_x 全程固定时这个宽度也全程固定，\
-         glyph 不会逐帧收进光标 → 前向 Delete 变成\"光标不动，文字也不吞，只到末尾\
-         突然消失\"。修复：前向 Delete 时 caret_x 应随光标逐帧移动（例如用 caret track\
-         插值，或按事务 progress 从 old_rect.x 移到 new_rect.x），让裁切宽度随帧变化。"
-    );
-}
-
-/// 问题3（续）: compute_frame_caret_driven 的 forward Delete 用
-/// `from.x + from.w - caret_clip_boundary` 算保留宽度。当 caret_clip_boundary
-/// 全程固定时，保留宽度也全程固定。
-#[test]
-fn issue3_compute_frame_caret_driven_forward_delete_uses_from_right_minus_caret_x() {
-    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-
-    let has_fn = slice.contains("pub fn compute_frame_caret_driven(");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue3 compute_frame_caret_driven: has_fn={}",
-        has_fn
-    );
-    if !has_fn {
-        return;
-    }
-
-    let window = function_window(&slice, "pub fn compute_frame_caret_driven", 4000);
-    // 关键断言：forward Delete 分支用 from.x + from.w - caret_clip_boundary
-    let forward_delete_uses_from_right_minus_caret = window
-        .contains("self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary");
-    // 检查是否有随帧变化的机制（正确做法：例如用 visible 参数让宽度随帧变化）
-    let has_frame_varying = window.contains("frame_w * visible")
-        || window.contains("from_right * visible")
-        || window.contains("from_right * progress")
-        || window.contains("conceal_progress");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue3 compute_frame_caret_driven: forward_delete_uses_from_right_minus_caret={} has_frame_varying={}",
-        forward_delete_uses_from_right_minus_caret, has_frame_varying
-    );
-    assert!(
-        !(forward_delete_uses_from_right_minus_caret && !has_frame_varying),
-        "Issue #722 评论 5748596920 问题3: animated_slice.rs::compute_frame_caret_driven 的 \
-         forward Delete 分支用 from.x + from.w - caret_clip_boundary 算保留宽度。当 \
-         caret_clip_boundary 全程固定（由 compute_coordinated_cursor_position 固定返回 \
-         new_rect.x）时，保留宽度也全程固定，glyph 不会逐帧收进光标。修复：forward \
-         Delete 的裁切宽度应随帧变化（例如用 visible 参数或事务 progress 让宽度从满宽\
-         逐帧收到 0），或让 caret_x 随帧移动。"
     );
 }
 
@@ -442,158 +279,85 @@ fn issue4_transaction_completion_uses_unit_timeline_not_caret_track() {
 }
 
 // =========================================================================
-// 问题5: 空格/换行仍然被当普通 InsertReveal
+// Issue #826 新架构守卫（评论 40：把 #722 问题2/3/5 的旧 source guard 换成
+// 新架构结构守卫；行为证明见 lib `runtime_tests.rs` 的协同测试）
 // =========================================================================
 
-/// 问题5: `animation_coordinator.rs::build_insert_reveal_slices()` 仍然只判断 cluster
-/// 是否落在 inserted_range，命中就无条件创建 `AnimatedSlice::insert_reveal()` 和
-/// static patch，没有检查 `new_snapshot.virtual_text` 的实际字符。纯空格、tab、
-/// 换行/控制字符也会创建 InsertReveal 和对应 static patch，导致"文字前插空格闪一下
-/// / 文字前手动换行闪一下"。
+/// 问题2（新架构）：协同吞吐边界必须消费**完整 caret 位置 (x, y)**，
+/// 而不是只塞一个 caret_x。
 ///
-/// 评论 5748596920 期望：build_insert_reveal_slices 应检查
-/// new_snapshot.virtual_text 的实际字符，纯空格/tab/换行/控制字符不应创建
-/// InsertReveal 和 static patch。当前不检查 → 断言"应过滤非可见字符"在当前代码上
-/// FAIL → 复现成功。
+/// 行为证明：`runtime_tests.rs::coordinated_insert_caret_and_reveal_share_one_progress`
+/// / `coordinated_delete_caret_and_conceal_share_one_progress`
+/// / `coordinated_wrap_caret_is_on_same_frontier_segment_each_frame`。
 #[test]
-fn issue5_build_insert_reveal_slices_does_not_filter_whitespace_and_control_chars() {
-    let coord = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
-
-    // 前提：build_insert_reveal_slices 确实存在
-    let has_fn = coord.contains("fn build_insert_reveal_slices(");
-    let has_insert_reveal = coord.contains("AnimatedSlice::insert_reveal(");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue5 build_insert_reveal_slices: has_fn={} has_insert_reveal={}",
-        has_fn, has_insert_reveal
-    );
-    if !(has_fn && has_insert_reveal) {
-        return;
-    }
-
-    let window = function_window(&coord, "fn build_insert_reveal_slices", 3000);
-    // 关键断言：只判断 cluster 落在 inserted_range，不检查字符
-    let only_range_check = window.contains("new_cluster.byte_start >= range_start")
-        && window.contains("new_cluster.byte_end <= range_end");
-    // 检查是否有字符过滤机制（正确做法）
-    let has_char_filter = window.contains("is_whitespace")
-        || window.contains("is_control")
-        || window.contains("char::is_whitespace")
-        || window.contains("is_ascii_whitespace")
-        || window.contains("' '")
-        || window.contains("'\\n'")
-        || window.contains("'\\t'")
-        || window.contains("char.is_whitespace")
-        || window.contains("filter_visible_char")
-        || window.contains("is_visible_glyph")
-        || window.contains("should_reveal")
-        || window.contains("skip_whitespace");
-    println!(
-        "[BUGFIX_REPRO_TRACE] issue5 build_insert_reveal_slices: only_range_check={} has_char_filter={}",
-        only_range_check, has_char_filter
+fn issue2_coordinated_boundary_consumes_full_caret_position() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 2600);
+    assert!(
+        window.contains("position_at_distance(motion.distance_at_progress(progress))"),
+        "Issue #826-40: 本帧必须先算 caret 在分段轨迹上的完整 (x, y)。"
     );
     assert!(
-        !(only_range_check && !has_char_filter),
-        "Issue #722 评论 5748596920 问题5: animation_coordinator.rs::build_insert_reveal_slices \
-         只判断 cluster 是否落在 inserted_range（new_cluster.byte_start >= range_start && \
-         new_cluster.byte_end <= range_end），命中就无条件创建 AnimatedSlice::insert_reveal \
-         和 static patch，没有检查 new_snapshot.virtual_text 的实际字符。纯空格、tab、\
-         换行/控制字符也会创建 InsertReveal 和对应 static patch，导致\"文字前插空格闪\
-         一下 / 文字前手动换行闪一下\"。修复：build_insert_reveal_slices 应检查 \
-         new_snapshot.virtual_text 的实际字符，纯空格/tab/换行/控制字符不应创建 \
-         InsertReveal 和 static patch（或只创建 static patch 不创建动画）。"
+        window.contains("project_onto_layer(&frontier.reveal.regions, caret_x, caret_y)"),
+        "Issue #826-40: 边界必须用 (caret_x, caret_y) 投影，只传 x 会在软换行错行。"
     );
 }
 
-// =========================================================================
-// 综合断言：5 个主链问题全部存在
-// =========================================================================
-
-/// 综合复现：评论 5748596920 指出的 5 个主链问题全部存在。当前实现违反该评论的全部
-/// 核心语义。每个问题对应一段具体代码路径，当前代码均存在违规模式。
+/// 问题3（新架构）: Forward Delete 不能拿「start==target 的 drawn caret」去代表
+/// 移动的 conceal 边界，否则整段长度塌成 0、整个 duration 不吞、最后一下消失
+/// （旧 #722 问题3）。Forward 必须走同一份 motion progress 时钟。
+///
+/// 行为证明：
+/// `runtime_tests.rs::coordinated_forward_delete_conceals_progressively_while_caret_stays_at_logical_target`
+/// / `coordinated_forward_delete_does_not_collapse_motion_clock_when_start_equals_target`。
 #[test]
-fn all_five_main_chain_issues_exist() {
-    let pipeline = read_src("src/sujian_editor_item/pipeline.rs");
-    let coord_render_plan = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let coord_cursor_motion = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let coord_transaction_builder =
-        read_src("src/sujian_editor_item/animation/transaction_builder.rs");
-    let slice = read_src("src/sujian_editor_item/animated_slice.rs");
-
-    // 问题1: pipeline.rs::record_visual_transaction 仍传 ctx.scroll_y
-    // Issue #722 评论 5748596920 修复后：改用文档坐标版本（caret_rect_doc / cursor_rect_doc），
-    // make_cursor_rect_from_caret_doc 不再接收 scroll_y 参数。
-    let issue1_violation = pipeline.contains("pub fn record_visual_transaction(")
-        && pipeline.contains("ctx.scroll_y")
-        && pipeline.contains("make_cursor_rect_from_caret_doc(")
-        && pipeline.contains("text_baseline_y(")
-        && pipeline.contains("- scroll_y")
-        && !pipeline.contains("caret_rect_doc(")
-        && !pipeline.contains("cursor_rect_doc(");
-
-    // 问题2: compute_frame_caret_driven 只有 caret_clip_boundary: f64
-    // Issue #722 评论 5748596920 修复后：compute_frame_caret_driven 签名增加了
-    // caret_clip_y 和 caret_visual_line_id 参数，不再只传 caret_x。
-    let issue2_violation = slice.contains("pub fn compute_frame_caret_driven(")
-        && slice.contains("caret_clip_boundary: f64,")
-        && !slice.contains("caret_clip_y")
-        && coord_render_plan.contains("let caret_x = match tx.cursor_visual_track")
-        && coord_render_plan.contains("unit.slice.compute_frame_caret_driven(caret_x, visible)");
-
-    // 问题3: 前向 Delete caret_x 固定
-    // Issue #722 评论 5748596920 修复后：前向 Delete 用 forward_delete_sampled 标记逐帧机制，
-    // compute_frame_caret_driven 的前向 Delete 分支用 conceal_progress 随帧变化。
-    let issue3_violation = coord_cursor_motion.contains("has_forward_delete")
-        && coord_cursor_motion.contains("Some((new_rect.x, new_rect.top, h))")
-        && !coord_cursor_motion.contains("forward_delete_sampled")
-        && slice.contains(
-            "self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary",
-        )
-        && !slice.contains("conceal_progress");
-
-    // 问题4: 事务完成条件由 unit timeline 决定
-    // Issue #722 评论 5748596920 修复后：增加了 caret_track_complete 条件，
-    // InsertReveal/DeleteConceal 事务必须 caret track 也完成才能释放。
-    let issue4_violation = coord_render_plan.contains("fn build_text_animation_plan_with_sample(")
-        && (coord_render_plan
-            .contains("tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)")
-            || coord_render_plan.contains("tx.units.iter().all(|u| u.progress(frame_now) >= 1.0)"))
-        && coord_render_plan.contains("keys_to_complete.push(tx.key)")
-        && !coord_render_plan.contains("caret_track_complete");
-
-    // 问题5: 空格/换行被当普通 InsertReveal
-    // Issue #722 评论 5748596920 修复后：build_insert_reveal_slices 增加了字符过滤，
-    // 纯空格/tab/换行/控制字符不创建 InsertReveal 和 static patch。
-    let issue5_violation = coord_transaction_builder.contains("fn build_insert_reveal_slices(")
-        && coord_transaction_builder.contains("new_cluster.byte_start >= range_start")
-        && coord_transaction_builder.contains("new_cluster.byte_end <= range_end")
-        && coord_transaction_builder.contains("AnimatedSlice::insert_reveal(")
-        && !coord_transaction_builder.contains("is_whitespace")
-        && !coord_transaction_builder.contains("is_control");
-
-    println!(
-        "[BUGFIX_REPRO_TRACE] SUMMARY five_main_chain_issues: issue1={} issue2={} issue3={} issue4={} issue5={}",
-        issue1_violation, issue2_violation, issue3_violation, issue4_violation, issue5_violation
-    );
-
-    let any_violation = issue1_violation
-        || issue2_violation
-        || issue3_violation
-        || issue4_violation
-        || issue5_violation;
-
+fn issue3_forward_delete_uses_motion_progress_clock_not_fixed_caret() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord, "pub(crate) fn sample_edit_frontier", 2600);
     assert!(
-        !any_violation,
-        "Issue #722 评论 5748596920 综合复现: 5 个主链问题全部存在。\
-         当前实现存在以下违规模式（评论 5748596920 核心语义违反）：\n\
-         1. 正文事务 caret 仍用旧 scroll_y 视口坐标 = {}\n\
-         2. compute_frame_caret_driven 只传 caret_x，跨软换行错 = {}\n\
-         3. 前向 Delete caret_x 固定，文字不逐帧收进 = {}\n\
-         4. 事务完成条件由 unit timeline 决定 = {}\n\
-         5. 空格/换行被当普通 InsertReveal = {}\n\
-         评论 5748596920 要求：1) caret track 用文档坐标系；2) compute_frame_caret_driven \
-         接收完整 caret geometry 或 per-unit caret_x；3) 前向 Delete caret_x 随帧移动；\
-         4) 事务完成条件由 caret track remaining duration 决定；5) build_insert_reveal_slices \
-         过滤空格/换行/控制字符。",
-        issue1_violation, issue2_violation, issue3_violation, issue4_violation, issue5_violation
+        window.contains("ConcealDirection::Forward")
+            && window.contains("frontier.conceal.advanced(progress)"),
+        "Issue #826-40: Forward Delete 的 conceal 边界必须由同一份 motion progress \
+         推进（frontier.conceal.advanced(progress)），不能拿固定 caret 反投影。"
     );
+    // 不得再出现「按来源侧直写 distance」这种会把 Forward 塌成 0 的写法。
+    assert!(
+        !window.contains("motion.source"),
+        "Issue #826-40: 不得按路径来源侧直写 distance。"
+    );
+}
+
+/// 问题5（新架构）: 换行/无可见 glyph 的行不得产出吞吐路径段，空格/控制字符
+/// 也不许被当作可 Reveal 的 visible cluster。
+#[test]
+fn issue5_reveal_path_skips_rows_without_visible_clusters() {
+    let frontier = read_src("src/sujian_editor_item/animation/edit_frontier.rs");
+    let build = function_window(&frontier, "pub(crate) fn build(", 2500);
+    assert!(
+        build.contains("clusters_contained_in_range"),
+        "Issue #826-40: Reveal 路径只由**完整覆盖**的 visible cluster 构建。"
+    );
+    assert!(
+        build.contains("if left >= right {"),
+        "Issue #826-40: 一行没有可见 glyph（换行符 / 空段落）时必须不产出 segment，\
+         否则前沿会为不可见的换行花掉行程。"
+    );
+}
+
+/// 5 个主链问题在新 #826 架构下的入口都在（总括）。
+#[test]
+fn issue_all_five_main_chain_entrypoints_present() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    // 问题2/3：协同边界由完整 caret 位置投影 / Forward 走 progress 时钟。
+    assert!(coord.contains("pub(crate) fn sample_edit_frontier"));
+    assert!(coord.contains("pub(crate) fn sample_coordinated_caret"));
+    // 问题1：caret 文档坐标（pipeline 用 *_doc 版本）。
+    let pipeline = read_src("src/sujian_editor_item/pipeline.rs");
+    assert!(
+        pipeline.contains("build_old_new_from_canonical"),
+        "Issue #826-40: pipeline 必须用 canonical 文档坐标构建 old/new layout。"
+    );
+    // 问题5：Reveal 路径构建器存在。
+    let frontier = read_src("src/sujian_editor_item/animation/edit_frontier.rs");
+    assert!(frontier.contains("pub(crate) fn build("));
 }
