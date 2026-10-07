@@ -246,6 +246,7 @@ jobs:
           ;(body as any).deviceTypes = [
             { deviceType: 4, appAdapters: '5' }
           ]
+          ;(body as any).distCountryList = 'CN'
           ;(body as any).extInfo = {
             privacyPolicy: 'https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md',
             privacyRightsUrl: 'https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md',
