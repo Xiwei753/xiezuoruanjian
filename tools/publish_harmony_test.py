@@ -310,9 +310,15 @@ def build_release_app(skip_rust: bool) -> Path:
     check_release_signing_config()
     if not skip_rust:
         run([str(ROOT / "tools" / "build_harmony.sh")])
+    hvigorw = shutil.which("hvigorw")
+    if not hvigorw:
+        raise PublishError(
+            "找不到 HarmonyOS CLI 提供的 hvigorw。"
+            "先运行 tools/setup_harmony_cli.sh 并把 $HARMONY_CLI_HOME/bin 加入 PATH。"
+        )
     run(
         [
-            str(HARMONY_DIR / "hvigorw"),
+            hvigorw,
             "--mode",
             "project",
             "-p",
