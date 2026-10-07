@@ -1,26 +1,21 @@
-//! Issue #702 评论 5707770318 修复后结构守卫 — 确认正文协同光标与纯光标 Tween
-//! 双时间线分叉已消除。
+//! Issue #702 评论 5707770318 修复后结构守卫 — 正文协同光标与纯光标 Tween 双时间线分叉已消除。
 //!
-//! WHITE_BOX 结构守卫：验证 issue #702 评论 5707770318 描述的"双时间线分叉"
-//! 结构已被修复。这些结构的不存在即证实了缺陷已被消除（修复成功）：
+//! WHITE_BOX 结构守卫：这些结构的不存在即证实了缺陷已被消除（修复成功）。
 //!
-//! 修复点 1：`build_cursor_plan()` 对 Insert/Delete 在有活跃正文事务且
-//!   has_active_for_coordinated 时不再返回 `CursorTransition::Tween`，而是返回
-//!   `CursorTransition::Snap`（让 apply_plan 清除 animation，不创建独立 timeline）。
+//! Issue #826 评论 36 收口后本文件整体改写到新架构：
+//! 旧的 `CursorSampleOutcome`（Idle/Running/Finished/Coordinated）、
+//! `compute_coordinated_cursor_position` / `sample_caret_track_frame`、
+//! `cursor_motion.rs`、`has_active_for_coordinated` 协同光标链已**整链删除**，
+//! 正文协同光标那条 Timeline A 不复存在。现在只剩一条光标链：
 //!
-//! 修复点 2：`CursorSampleOutcome` 枚举增加了 `Coordinated { x, y, h }` 变体
-//!   ——正文协同帧不再落进 Idle。
+//! `apply_plan()` 创建/重基 Tween（progress=0、started_at=None）
+//!   → `update_paint_node` 每帧 `self.cursor_ctrl.tick_animation(frame_now);`
+//!   → `build_cursor_render_state_for_frame()` 纯读本帧 visual
+//!   → `build_render_plan_full()` 纯透传成 `drawn_caret_rect`
+//!   → `apply_render_plan_cursor_state()` 回写本帧绘制位置。
 //!
-//! 修复点 3：`qquickitem_impl.rs` 增加了 `Coordinated` 分支，同步 visual_x/y/h
-//!   但不启动 `CursorAnimationState.started_at`，并清除残留 animation。
-//!
-//! 修复点 4：`build_render_plan_full()` 中 `compute_coordinated_cursor_position`
-//!   成功时把 `cursor_sample_outcome` 设为 `Coordinated { x, y, h }`。
-//!
-//! 结果：正文事务活跃时，光标位置只由 compute_coordinated_cursor_position 驱动
-//! （正文协同），不创建 CursorAnimationState 独立 timeline；只有纯方向键/
-//! Home/End/鼠标点击这类没有正文视觉事务的移动才走 CursorAnimationState 自己
-//! 的 timeline。两条路径互斥。
+//! 推进入口全仓库只有 `CursorController::tick_animation` 一个，且不与正文动画
+//! （EditFrontier/Reflow/Shaping，由 `coordinator::tick(frame_now)` 推进）共享状态。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -39,14 +34,12 @@ fn read_src(rel: &str) -> String {
 }
 
 /// 在 `src` 中定位 `anchor`，返回 anchor 之后 `window_chars` 字符的窗口。
-/// 用于精确检查某个分支体内的代码片段。
-/// 安全处理 UTF-8 字符边界：若-如果 end 落在字符中间，回退到最近的字符边界。
+/// 安全处理 UTF-8 字符边界：若 end 落在字符中间，回退到最近的字符边界。
 fn window_after(src: &str, anchor: &str, window_chars: usize) -> String {
     let pos = src
         .find(anchor)
         .unwrap_or_else(|| panic!("anchor not found: {}", anchor));
     let end = pos + anchor.len() + window_chars;
-    // 找到 <= end 的最大字符边界
     let safe_end = (0..=end.min(src.len()))
         .rev()
         .find(|&e| src.is_char_boundary(e))
@@ -58,196 +51,219 @@ fn window_after(src: &str, anchor: &str, window_chars: usize) -> String {
     }
 }
 
+/// 取出某个方法从签名到函数体结束（首个 4 空格缩进的 `}`）之间的文本。
+fn method_body(src: &str, signature: &str) -> String {
+    let start = src
+        .find(signature)
+        .unwrap_or_else(|| panic!("method `{}` must exist", signature));
+    let rest = &src[start..];
+    let end = rest.find("\n    }\n").unwrap_or(rest.len());
+    rest[..end].to_string()
+}
+
 // =========================================================================
-// 修复点 1：build_cursor_plan 对 Insert/Delete 在有活跃正文事务且
-// has_active_for_coordinated 时返回 Snap，而不是返回 CursorTransition::Tween
+// 修复点 1：build_cursor_plan 不再按正文事务决定过渡
 // =========================================================================
 
+/// 旧断言（render_plan_builder.rs + `has_active_for_coordinated` 窗口）已失效：
+/// `build_cursor_plan` 移到了 `animation/coordinator.rs`，且协同光标开关随 #826 删除。
+/// 现在只按「是否需要移动 + 非 hard_snap + duration>0 + 同行或 smooth cursor 开」
+/// 决定 Tween，否则 Snap（Snap 会让 `apply_plan` 清掉 animation，不开新 timeline）。
 #[test]
-fn fix1_build_cursor_plan_returns_snap_for_insert_delete_with_active_transaction() {
-    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    // build_cursor_plan 必须存在
+fn fix1_build_cursor_plan_no_body_transaction_branch() {
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("pub(crate) fn build_cursor_plan"),
-        "修复点1: build_cursor_plan 必须存在"
+        "修复点1: build_cursor_plan 必须存在（已移入 animation/coordinator.rs）"
     );
-    // Issue #727 约束 6: coordinated_enabled 独立开关已删除。
-    // 判断条件改为 has_active_for_coordinated。
-    // 处 2（anim.target_x 偏移分支）：has_active_for_coordinated → Snap
-    // Issue #727: comments between anchor and Snap are ~700 chars, use 1500 to be safe
-    let ctx2 = window_after(&src, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
+    let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
     assert!(
-        ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
-        "修复点1 处2: anim.target_x 偏移分支应有 has_active_for_coordinated 返回 Snap"
+        !plan.contains("has_active_for_coordinated"),
+        "修复点1: 协同光标开关已删除，不得复活正文事务分支"
     );
-    //
-    // 处 3（old_visual_x 偏移分支）：has_active_for_coordinated → Snap
-    let ctx3 = window_after(&src, "(old_visual_x - cursor_x).abs() > 0.01", 1500);
     assert!(
-        ctx3.contains("has_active_for_coordinated") && ctx3.contains("CursorTransition::Snap"),
-        "修复点1 处3: old_visual_x 偏移分支应有 has_active_for_coordinated 返回 Snap"
+        !plan.contains("has_active_insert"),
+        "修复点1: 不得再用 has_active_insert() 决定光标过渡（旧双时间线前提）"
     );
-    println!("[BUGFIX_VERIFY] fix1: build_cursor_plan 对 Insert/Delete 在 has_active_for_coordinated 时返回 Snap（不再开独立 Tween timeline）");
+    assert!(
+        !plan.contains("has_active_text_transaction"),
+        "修复点1: 正文事务协同光标已随 #826 删除"
+    );
+    assert!(
+        plan.contains("CursorTransition::Tween") && plan.contains("CursorTransition::Snap"),
+        "修复点1: 过渡仍只有 Tween / Snap 两种"
+    );
+    assert!(
+        plan.contains("duration_ms"),
+        "修复点1: Tween 必须携带自己的 duration_ms（独立 cursor timeline）"
+    );
+    println!("[BUGFIX_VERIFY] fix1: build_cursor_plan 无正文事务分支，Tween/Snap + duration_ms");
 }
 
 // =========================================================================
-// 修复点 2：CursorSampleOutcome 枚举有 Coordinated 变体
+// 修复点 2：CursorSampleOutcome 枚举彻底删除（不复活）
 // =========================================================================
 
 #[test]
-fn fix2_cursor_sample_outcome_has_coordinated_variant() {
-    let src = read_src("src/sujian_editor_item/render_plan.rs");
-    // CursorSampleOutcome 枚举必须存在
+fn fix2_cursor_sample_outcome_is_removed() {
+    let render_plan = read_src("src/sujian_editor_item/render_plan.rs");
     assert!(
-        src.contains("enum CursorSampleOutcome"),
-        "修复点2: CursorSampleOutcome 枚举必须存在"
-    );
-    // 保留原有变体
-    assert!(
-        src.contains("Idle"),
-        "修复点2: CursorSampleOutcome 应有 Idle 变体"
+        !render_plan.contains("enum CursorSampleOutcome"),
+        "修复点2: CursorSampleOutcome 枚举已删除，不得复活"
     );
     assert!(
-        src.contains("Running(f64)"),
-        "修复点2: CursorSampleOutcome 应有 Running(f64) 变体"
+        !render_plan.contains("CursorSampleOutcome"),
+        "修复点2: render_plan.rs 不得再引用 CursorSampleOutcome"
     );
     assert!(
-        src.contains("Finished"),
-        "修复点2: CursorSampleOutcome 应有 Finished 变体"
+        !render_plan.contains("Coordinated"),
+        "修复点2: 正文协同帧变体 Coordinated 已删除"
     );
-    // 新增 Coordinated 变体 —— 正文协同帧不再落进 Idle
+
+    let render_plan_builder = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
     assert!(
-        src.contains("Coordinated"),
-        "修复点2: CursorSampleOutcome 应有 Coordinated 变体，正文协同帧不再落进 Idle"
+        !render_plan_builder.contains("cursor_sample_outcome"),
+        "修复点2: render_plan_builder 不得再维护 cursor_sample_outcome"
+    );
+
+    let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    assert!(
+        !qquick.contains("CursorSampleOutcome"),
+        "修复点2: qquickitem_impl 不得再 match CursorSampleOutcome"
     );
     assert!(
-        src.contains("Coordinated { x: f64, y: f64, h: f64 }"),
-        "修复点2: Coordinated 变体应携带 x/y/h 三元组"
+        !qquick.contains("cursor_sample_outcome"),
+        "修复点2: qquickitem_impl 不得再出现 cursor_sample_outcome"
     );
-    println!(
-        "[BUGFIX_VERIFY] fix2: CursorSampleOutcome 有 Coordinated 变体，正文协同帧不再落进 Idle"
-    );
+    println!("[BUGFIX_VERIFY] fix2: CursorSampleOutcome 全链删除，正文事务不再驱动 caret progress");
 }
 
 // =========================================================================
-// 修复点 3：qquickitem_impl.rs 有 Coordinated 分支，不启动 started_at
+// 修复点 3：started_at 只能由 tick_animation(frame_now) 初始化
 // =========================================================================
 
+/// 旧断言要求 qquickitem_impl 的 `CursorSampleOutcome::Coordinated` 分支**不**
+/// 启动 `started_at`。现在没有那条分支了：`started_at` 的唯一初始化点必须是
+/// `CursorController::tick_animation`（Issue #826 评论 36 恢复的每帧唯一采样点）。
 #[test]
-fn fix3_coordinated_branch_does_not_start_cursor_animation_state_timeline() {
-    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    // match cursor_sample_outcome 必须存在
+fn fix3_started_at_only_initialized_by_cursor_tick() {
+    let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     assert!(
-        src.contains("cursor_sample_outcome"),
-        "修复点3: qquickitem_impl 应 match cursor_sample_outcome"
-    );
-    // Coordinated 分支存在
-    let coordinated_marker = "CursorSampleOutcome::Coordinated { x, y, h } =>";
-    assert!(
-        src.contains(coordinated_marker),
-        "修复点3: qquickitem_impl 应有 CursorSampleOutcome::Coordinated 分支"
-    );
-    // Coordinated 分支内同步 visual_x/visual_y，不启动 started_at
-    let coordinated_window = window_after(&src, coordinated_marker, 400);
-    assert!(
-        coordinated_window.contains("visual_x"),
-        "修复点3: Coordinated 分支应同步 visual_x"
+        !qquick.contains("started_at = Some(frame_now)"),
+        "修复点3: qquickitem_impl 不得自己初始化 CursorAnimationState.started_at"
     );
     assert!(
-        coordinated_window.contains("visual_y"),
-        "修复点3: Coordinated 分支应同步 visual_y"
+        qquick.contains("self.cursor_ctrl.tick_animation(frame_now);"),
+        "修复点3: update_paint_node 必须每帧调一次 cursor_ctrl.tick_animation(frame_now)"
+    );
+
+    let ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
+    assert!(
+        ctrl.contains("fn tick_animation(&mut self, frame_now: Instant)"),
+        "修复点3: cursor_controller 必须有 tick_animation 推进入口"
+    );
+    let tick = window_after(
+        &ctrl,
+        "fn tick_animation(&mut self, frame_now: Instant)",
+        1200,
     );
     assert!(
-        !coordinated_window.contains("started_at = Some(frame_now)"),
-        "修复点3: Coordinated 分支不应启动 CursorAnimationState.started_at"
+        tick.contains("started_at = Some(frame_now)"),
+        "修复点3: started_at 必须在 tick_animation 体内用本帧 frame_now 初始化"
     );
     assert!(
-        coordinated_window.contains("animation = None"),
-        "修复点3: Coordinated 分支应清除残留 animation"
+        tick.contains("self.update_animation_progress(progress)"),
+        "修复点3: progress 消费收敛到 update_animation_progress 单点"
     );
-    // Idle 分支仍保留（只服务纯光标 CursorOnly 首帧启动）
-    assert!(
-        src.contains("CursorSampleOutcome::Idle =>"),
-        "修复点3: qquickitem_impl 应保留 Idle 分支（纯光标 CursorOnly 首帧启动）"
+    assert_eq!(
+        ctrl.matches("started_at = Some(frame_now)").count(),
+        1,
+        "修复点3: 全文件只允许 tick_animation 一处初始化 started_at"
     );
-    println!("[BUGFIX_VERIFY] fix3: qquickitem_impl Coordinated 分支同步 visual_x/y 不启动 started_at，并清除残留 animation");
+    println!("[BUGFIX_VERIFY] fix3: started_at 由 tick_animation(frame_now) 单点初始化");
 }
 
 // =========================================================================
-// 修复点 4：build_render_plan_full 中 compute_coordinated_cursor_position 成功时
-// cursor_sample_outcome 设为 Coordinated
+// 修复点 4：build_render_plan_full 纯透传 caret，不自己取时间/采样
 // =========================================================================
 
 #[test]
-fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
+fn fix4_build_render_plan_full_is_time_free_pure_passthrough() {
     let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    // build_render_plan_full 必须存在
     assert!(
         src.contains("pub(crate) fn build_render_plan_full"),
         "修复点4: build_render_plan_full 必须存在"
     );
-    // cursor_sample_outcome 初始化为 Idle
-    // Issue #747: 拆分后路径从 super:: 改为 crate::sujian_editor_item::
-    // Issue #756: cargo fmt 把单行拆成两行（超过 100 字符），改为分别检查两个片段。
-    let init_marker_a = "let mut cursor_sample_outcome =";
-    let init_marker_b = "crate::sujian_editor_item::render_plan::CursorSampleOutcome::Idle;";
     assert!(
-        src.contains(init_marker_a) && src.contains(init_marker_b),
-        "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"
-    );
-    // Issue #727 约束 6: compute_coordinated_cursor_position 接收 cursor_owner_epoch 参数。
-    // Issue #815 评论 6042062633 修改 6: 同时接收文字层已经采好的 CoordinatedMotionFrame，
-    // 光标层不再自己按 frame_sample 重新采样一次 track。
-    let coord_call =
-        "self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)";
-    assert!(
-        src.contains(coord_call),
-        "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)"
-    );
-    // 关键：compute_coordinated_cursor_position 成功分支（Some((cx, cy_doc, ch))）内
-    // 应把 cursor_sample_outcome 设为 Coordinated。
-    let coord_success_window = window_after(&src, "if let Some((cx, cy_doc, ch))", 1200);
-    assert!(
-        coord_success_window.contains("cursor_sample_outcome ="),
-        "修复点4: compute_coordinated_cursor_position 成功分支应修改 cursor_sample_outcome"
-    );
-    assert!(
-        coord_success_window.contains("CursorSampleOutcome::Coordinated"),
-        "修复点4: compute_coordinated_cursor_position 成功分支应把 cursor_sample_outcome 设为 Coordinated"
-    );
-    // 诊断跟踪 eprintln! 应已移除
-    assert!(
-        !coord_success_window.contains("BUGFIX_REPRO_TRACE"),
-        "修复点4: 诊断跟踪 eprintln! 应已移除"
+        !src.contains("cursor_sample_outcome"),
+        "修复点4: 不得再维护 cursor_sample_outcome"
     );
     assert!(
         !src.contains("BUGFIX_REPRO_TRACE"),
-        "修复点4: animation_coordinator.rs 不应再有 BUGFIX_REPRO_TRACE 诊断跟踪"
+        "修复点4: 诊断跟踪 eprintln! 应已移除"
     );
-    println!("[BUGFIX_VERIFY] fix4: compute_coordinated_cursor_position 成功时 cursor_sample_outcome 设为 Coordinated");
+    let body = method_body(&src, "pub(crate) fn build_render_plan_full");
+    assert!(
+        !body.contains("Instant::now()"),
+        "修复点4: build_render_plan_full 是纯读，不得自己取时钟"
+    );
+    assert!(
+        body.contains("drawn_caret_rect"),
+        "修复点4: 光标 caret 纯透传成 drawn_caret_rect（由调用方传入 render state）"
+    );
+    println!("[BUGFIX_VERIFY] fix4: build_render_plan_full 纯读透传 caret，无时间采样");
 }
 
 // =========================================================================
-// 综合断言：双时间线分叉已消除（两条路径互斥）
+// 修复点 5（评论 5708209114）：build_cursor_plan 不得来自 has_active_insert()
+// =========================================================================
+
+/// 旧断言：`has_active` 必须来自 `has_active_text_transaction()` 覆盖全部事务类型。
+/// Issue #826 之后正文协同光标整链删除，`build_cursor_plan` 里**不再有任何**正文
+/// 活跃判断 —— 旧的 insert-only 判断与它的替代品一起消失，双时间线分叉无从产生。
+#[test]
+fn fix5_build_cursor_plan_has_no_insert_only_active_check() {
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let plan = method_body(&src, "pub(crate) fn build_cursor_plan");
+    assert!(
+        !plan.contains("let has_active = self.has_active_insert();"),
+        "修复点5: build_cursor_plan 不得用 has_active_insert()（Delete 路径漏判）"
+    );
+    assert!(
+        !plan.contains("has_active_insert"),
+        "修复点5: build_cursor_plan 不得保留任何 insert-only 正文活跃判断"
+    );
+    assert!(
+        !plan.contains("has_active_text_transaction"),
+        "修复点5: 正文事务协同判断已随协同光标删除（不得留下半套）"
+    );
+    println!("[BUGFIX_VERIFY] fix5: build_cursor_plan 无正文活跃判断（旧双时间线前提已消失）");
+}
+
+// =========================================================================
+// 综合断言：双时间线分叉已消除，只剩一条光标 timeline
 // =========================================================================
 
 #[test]
 fn dual_timeline_fork_is_eliminated() {
-    let coord = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let render_plan_builder = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let render_plan = read_src("src/sujian_editor_item/render_plan.rs");
-    let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
-
-    // Timeline A：正文协同光标（compute_coordinated_cursor_position 用正文文字单元
-    // 同一帧进度算屏幕实际显示的光标位置）
+    // Timeline A（正文协同光标）：整个模块已删除。
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        coord.contains("fn compute_coordinated_cursor_position"),
-        "Timeline A: compute_coordinated_cursor_position 必须存在"
+        !motion_path.exists(),
+        "Timeline A: cursor_motion.rs 已删除，协同光标不得复活"
+    );
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    assert!(
+        !coord_src.contains("compute_coordinated_cursor_position"),
+        "Timeline A: compute_coordinated_cursor_position 已删除"
+    );
+    assert!(
+        !coord_src.contains("has_active_for_coordinated"),
+        "Timeline A: has_active_for_coordinated 已删除"
     );
 
-    // Timeline B：纯光标 Tween（apply_plan 收到 Tween 后创建 CursorAnimationState）
-    // —— 只服务没有正文视觉事务的纯光标移动
+    // Timeline B：纯光标 Tween（apply_plan 创建 CursorAnimationState 独立 timeline）
+    let cursor_ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
     assert!(
         cursor_ctrl.contains("CursorTransition::Tween"),
         "Timeline B: cursor_controller.apply_plan 应处理 Tween（纯光标移动）"
@@ -257,87 +273,29 @@ fn dual_timeline_fork_is_eliminated() {
         "Timeline B: apply_plan Tween 分支应创建 CursorAnimationState"
     );
     assert!(
-        cursor_ctrl.contains("started_at"),
-        "Timeline B: CursorAnimationState 应有 started_at 字段"
-    );
-    assert!(
-        cursor_ctrl.contains("duration_ms"),
-        "Timeline B: CursorAnimationState 应有 duration_ms 字段"
+        cursor_ctrl.contains("started_at") && cursor_ctrl.contains("duration_ms"),
+        "Timeline B: CursorAnimationState 自持 started_at / duration_ms"
     );
 
-    // 分叉消除条件 1：CursorSampleOutcome 有 Coordinated 变体
-    // → 正文协同帧不再落进 Idle → 不触发 Idle 分支启动独立 timeline
+    // 分叉消除：RenderPlan 不再有 cursor sample 状态机。
+    let render_plan = read_src("src/sujian_editor_item/render_plan.rs");
     assert!(
-        render_plan.contains("Coordinated"),
-        "分叉消除: CursorSampleOutcome 有 Coordinated 变体"
-    );
-    // 分叉消除条件 2：qquickitem_impl 有 Coordinated 分支
-    // → 正文协同帧同步 visual_x/y 但不启动 started_at
-    assert!(
-        qquick.contains("CursorSampleOutcome::Coordinated { x, y, h } =>"),
-        "分叉消除: qquickitem_impl 有 Coordinated 分支"
-    );
-    // 分叉消除条件 3：build_cursor_plan 在 has_active_for_coordinated 时返回 Snap
-    // → apply_plan 收到 Snap 执行 self.animation = None，不创建 CursorAnimationState
-    let ctx2 = window_after(
-        &render_plan_builder,
-        "(anim.target_x - cursor_x).abs() > 0.01",
-        1500,
-    );
-    assert!(
-        ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
-        "分叉消除: build_cursor_plan 在 has_active_for_coordinated 时返回 Snap"
+        !render_plan.contains("CursorSampleOutcome") && !render_plan.contains("Coordinated"),
+        "分叉消除: render_plan 无 CursorSampleOutcome / Coordinated"
     );
 
-    println!("[BUGFIX_VERIFY] dual_timeline_fork_eliminated: 正文协同光标（Coordinated 变体）与纯光标 Tween（CursorAnimationState）两条路径互斥");
-    println!("[BUGFIX_VERIFY]   正文事务活跃时: build_cursor_plan 返回 Snap → apply_plan 清除 animation → cursor_sample_outcome=Coordinated → 不启动 started_at");
-    println!("[BUGFIX_VERIFY]   无正文事务时: build_cursor_plan 返回 Tween → apply_plan 创建 CursorAnimationState → cursor_sample_outcome=Idle/Running/Finished → 纯光标 timeline");
-}
+    // 分叉消除：qquickitem_impl 每帧唯一采样点是 tick_animation(frame_now)。
+    let qquick = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    assert!(
+        qquick.contains("self.cursor_ctrl.tick_animation(frame_now);"),
+        "分叉消除: update_paint_node 每帧调用 cursor_ctrl.tick_animation(frame_now)"
+    );
+    assert!(
+        !qquick.contains("CursorSampleOutcome"),
+        "分叉消除: qquickitem_impl 无 CursorSampleOutcome 分支"
+    );
 
-// =========================================================================
-// 修复点 5（评论 5708209114）：build_cursor_plan 的正文活跃判断必须覆盖
-// Insert/Delete/CompositionUpdate/CompositionCommitOrCancel，不能来自
-// has_active_insert()（其语义只查 Insert，Delete 路径会漏判）
-// =========================================================================
-
-#[test]
-fn fix5_build_cursor_plan_active_check_covers_all_text_transactions_not_only_insert() {
-    let src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        src.contains("pub(crate) fn build_cursor_plan"),
-        "修复点5: build_cursor_plan 必须存在"
-    );
-    // 关键守卫：build_cursor_plan 函数体内 has_active 的赋值不能来自 has_active_insert()。
-    // Delete 路径上若用 has_active_insert() 判断，可能因语义只查 Insert 而返回 false，
-    // 导致 build_cursor_plan 创建纯光标 Tween（CursorAnimationState 独立 timeline），
-    // 与 compute_coordinated_cursor_position 驱动的正文协同光标形成双时间线分叉
-    // （光标先到、文字后消失）——正是 #702 原本最严重的风险点。
-    let plan_start = src
-        .find("pub(crate) fn build_cursor_plan")
-        .expect("build_cursor_plan must exist");
-    let after_plan = &src[plan_start..];
-    let plan_body_end = after_plan
-        .find("\n    pub(crate) fn ")
-        .or_else(|| after_plan.find("\n    pub fn "))
-        .unwrap_or(after_plan.len());
-    let plan_body = &after_plan[..plan_body_end];
-    assert!(
-        !plan_body.contains("let has_active = self.has_active_insert();"),
-        "修复点5: build_cursor_plan 中 has_active 不能来自 has_active_insert()。\
-         has_active_insert() 语义只查 Insert，Delete 路径会漏判导致 has_active=false，\
-         重新引入双时间线分叉（光标先到、文字后消失）。\
-         应改用 has_active_text_transaction() 或 active_text_transaction_key().is_some()。"
-    );
-    assert!(
-        plan_body.contains("has_active_text_transaction")
-            || plan_body.contains("active_text_transaction_key().is_some()"),
-        "修复点5: build_cursor_plan 中 has_active 应来自 has_active_text_transaction() \
-         或 active_text_transaction_key().is_some()，覆盖 Insert/Delete/IME 全部正文事务类型"
-    );
-    assert!(
-        coord_src.contains("fn has_active_text_transaction"),
-        "修复点5: animation coordinator 应定义 has_active_text_transaction 方法"
-    );
-    println!("[BUGFIX_VERIFY] fix5: build_cursor_plan 正文活跃判断覆盖 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel，不再来自 has_active_insert()");
+    println!("[BUGFIX_VERIFY] dual_timeline_fork_eliminated: 只剩一条光标 timeline");
+    println!("[BUGFIX_VERIFY]   正文事务不再驱动 caret progress（CursorSampleOutcome 已删）");
+    println!("[BUGFIX_VERIFY]   纯光标移动: apply_plan 建 Tween → tick_animation(frame_now) 推进 → 回写 drawn caret");
 }

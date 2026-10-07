@@ -436,6 +436,40 @@ impl CursorController {
         }
     }
 
+    /// Issue #826 评论 36：视觉光标 Tween 的**每帧唯一推进入口**。
+    ///
+    /// `apply_plan()` 只负责创建 / 重基 Tween（`progress = 0`、`started_at = None`），
+    /// 真正的推进在这里：Scene Graph 每帧用同一个 `frame_now` 调一次，
+    /// 不引入第二个 `Instant::now()`，也不把光标绑回 EditFrontier/Reflow。
+    ///
+    /// ① 无 animation -> false；
+    /// ② 首帧（`started_at == None`）-> 记起点，visual 保持 start，progress 仍 0，返回 true；
+    /// ③ 已启动 -> 按 `frame_now - started_at / duration` 算 progress，
+    ///    消费统一走 `update_animation_progress()`（生产只留这一个推进/消费入口）；
+    /// ④ 到 1.0 -> `update_animation_progress()` 内部落 target 并清 animation，返回 false；
+    /// ⑤ 未结束 -> 返回 true（调用方据此继续 `request_frame_update()`）。
+    pub(crate) fn tick_animation(&mut self, frame_now: Instant) -> bool {
+        let progress = {
+            let Some(anim) = self.animation.as_mut() else {
+                return false;
+            };
+            let Some(started_at) = anim.started_at else {
+                anim.started_at = Some(frame_now);
+                return true;
+            };
+            let duration = Duration::from_millis(anim.duration_ms);
+            if duration.is_zero() {
+                1.0
+            } else {
+                frame_now
+                    .saturating_duration_since(started_at)
+                    .as_secs_f64()
+                    / duration.as_secs_f64()
+            }
+        };
+        self.update_animation_progress(progress)
+    }
+
     pub fn update_animation_progress(&mut self, progress: f64) -> bool {
         if let Some(ref mut anim) = self.animation {
             anim.progress = progress.clamp(0.0, 1.0);

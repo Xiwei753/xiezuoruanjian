@@ -91,28 +91,46 @@ fn issue702_theme_controller_publishes_unified_theme_state_json() {
 
 #[test]
 fn issue702_text_visual_operation_kind_no_cursor_variant() {
-    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
-    assert!(src.contains("enum TextVisualOperationKind"), "枚举应存在");
+    // Issue #826: 旧 animation/transaction/ 模块（含 TextVisualOperationKind 枚举）
+    // 已整体删除，正文视觉操作不再有任何 Cursor 变体 —— 光标与正文彻底解耦。
+    let tx_dir = linux_qt_root().join("src/sujian_editor_item/animation/transaction");
     assert!(
-        src.contains("Insert") && src.contains("Delete"),
-        "应包含 Insert/Delete"
+        !tx_dir.exists(),
+        "animation/transaction 已删除，TextVisualOperationKind 不复存在"
     );
-    assert!(
-        !src.contains("Cursor,\n"),
-        "TextVisualOperationKind 不应再包含 Cursor 变体"
-    );
+    for rel in [
+        "src/sujian_editor_item/animation/coordinator.rs",
+        "src/sujian_editor_item/animation/composition.rs",
+        "src/sujian_editor_item/edit_motion.rs",
+    ] {
+        let src = read_src(rel);
+        assert!(
+            !src.contains("TextVisualOperationKind"),
+            "{}: 不得引用已删除的 TextVisualOperationKind（尤其不得有 Cursor 变体）",
+            rel
+        );
+    }
 }
 
 #[test]
 fn issue702_cursor_branch_returns_none() {
-    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
-    // Issue #824 评论 5971089641：正文动画种类只认 patch 事实，
-    // 纯光标移动（display_patches 两边都空）的分类名是 `CursorOnly`。
-    let cursor_marker = "EditorAnimationKind::CursorOnly =>";
-    let window = function_window(&src, cursor_marker, 800);
-    assert!(window.contains("return None"), "CursorOnly 分支应返回 None");
+    // Issue #826: 旧 transaction_builder.rs（`EditorAnimationKind::CursorOnly =>` 分支）
+    // 已删除；CursorOnly 不再生成任何正文事务，只能在 coordinator 里直接 return。
     assert!(
-        !window.contains("TextVisualOperationKind::Cursor"),
+        !linux_qt_root()
+            .join("src/sujian_editor_item/animation/transaction_builder.rs")
+            .exists(),
+        "transaction_builder.rs 已删除，纯光标移动不得再进正文事务链"
+    );
+    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let cursor_marker = "EditorAnimationKind::CursorOnly => return,";
+    let window = function_window(&src, cursor_marker, 400);
+    assert!(
+        window.contains("return,"),
+        "CursorOnly 分支应直接 return（不建正文前沿、不建正文事务）"
+    );
+    assert!(
+        !src.contains("TextVisualOperationKind::Cursor"),
         "Cursor 分支不应再创建 Cursor 事务"
     );
 }
@@ -148,6 +166,11 @@ fn issue702_handle_cursor_only_deleted() {
         "src/sujian_editor_item/animation/transaction/queue.rs",
     ];
     for file in &animation_files {
+        // Issue #826 评论 36: 旧 transaction/ / cursor_motion.rs / rebase.rs /
+        // transaction_builder.rs 已删除，只扫描仍然存在的文件。
+        if !linux_qt_root().join(file).exists() {
+            continue;
+        }
         let src = read_src(file);
         assert!(
             !src.contains("pub fn handle_cursor_only"),
@@ -244,49 +267,79 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
 
 #[test]
 fn issue702_delete_conceal_has_same_frame_progress() {
-    // Issue #747: AnimatedSliceKind::DeleteConceal/InsertReveal 在 transaction_builder.rs，
-    // sampled_rect 在 cursor_motion.rs
-    let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    // Issue #826: 旧 transaction_builder.rs / cursor_motion.rs / transaction/types.rs
+    // 已删除；DeleteConceal/InsertReveal 现在由 composition 层描述（不进 EditFrontier、
+    // 不 carry preedit glyph），光标层不再有 sampled_rect 插值 —— 光标是独立 timeline。
+    let root = linux_qt_root();
+    for rel in [
+        "src/sujian_editor_item/animation/transaction_builder.rs",
+        "src/sujian_editor_item/animation/cursor_motion.rs",
+        "src/sujian_editor_item/animation/transaction/types.rs",
+    ] {
+        assert!(
+            !root.join(rel).exists(),
+            "{} 已删除，旧同帧采样链不得复活",
+            rel
+        );
+    }
+    let comp = read_src("src/sujian_editor_item/animation/composition.rs");
     assert!(
-        src.contains("AnimatedSliceKind::DeleteConceal"),
-        "应存在 DeleteConceal"
+        comp.contains("DeleteConceal"),
+        "composition 层应存在 DeleteConceal"
     );
-    assert!(src.contains("InsertReveal"), "应存在 InsertReveal");
-    let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        cursor_src.contains("sample_caret_driven_clip") || cursor_src.contains("sampled_rect"),
-        "caret track 应使用 sampled_rect 插值（issue722 评论 5747719529）"
-    );
-    let tx_src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
-    assert!(
-        tx_src.contains("sampled_rect_at_progress"),
-        "caret track 应有 sampled_rect_at_progress 方法定义"
+        comp.contains("InsertReveal"),
+        "composition 层应存在 InsertReveal"
     );
 }
 
 #[test]
 fn issue702_prepared_cursor_visual_track_has_sampled_rect() {
-    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
+    // Issue #826: PreparedCursorVisualTrack（sampled_rect_at_progress）随协同光标删除。
     assert!(
-        src.contains("fn sampled_rect_at_progress"),
-        "PreparedCursorVisualTrack 应有 sampled_rect_at_progress 方法"
+        !linux_qt_root()
+            .join("src/sujian_editor_item/animation/transaction/types.rs")
+            .exists(),
+        "transaction/types.rs 已删除，PreparedCursorVisualTrack 不复存在"
+    );
+    let rendering = read_src("src/sujian_editor_item/rendering.rs");
+    assert!(
+        !rendering.contains("sampled_rect_at_progress"),
+        "光标插值不再走 sampled_rect_at_progress"
+    );
+    assert!(
+        rendering.contains("fn current_position(&self)"),
+        "光标插值唯一位置是 CursorAnimationState::current_position"
     );
 }
 
 #[test]
 fn issue702_qquickitem_impl_starts_cursor_timeline_on_idle() {
+    // Issue #826 评论 36: 旧 `CursorSampleOutcome::Idle` 首帧启动已删除；
+    // 光标 timeline 只由每帧 `tick_animation(frame_now)` 推进，started_at 的
+    // 初始化只允许发生在 cursor_controller 内。
     let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     assert!(
-        src.contains("CursorSampleOutcome::Idle"),
-        "应处理 Idle 状态"
+        !src.contains("CursorSampleOutcome"),
+        "旧 CursorSampleOutcome（正文事务驱动 caret progress）不得复活"
     );
     assert!(
-        src.contains("started_at = Some(frame_now)"),
-        "Idle 时应用 frame_now"
+        src.contains("self.cursor_ctrl.tick_animation(frame_now);"),
+        "每帧用本帧 frame_now 推进光标 timeline"
+    );
+    assert!(
+        !src.contains("started_at = Some(frame_now)"),
+        "started_at 不在 item 层初始化"
     );
     assert!(
         src.contains("cursor_ctrl.animation.is_some()"),
         "光标动画存在时应继续 request_frame_update"
+    );
+    let ctrl = read_src("src/sujian_editor_item/cursor_controller.rs");
+    assert_eq!(
+        ctrl.matches("started_at = Some(frame_now)").count(),
+        1,
+        "started_at 只在 tick_animation(frame_now) 一处初始化"
     );
 }
 

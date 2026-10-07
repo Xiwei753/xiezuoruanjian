@@ -136,6 +136,13 @@ impl QQuickItem for SujianEditorItem {
             self.scene_dirty = true;
         }
 
+        // Issue #826 评论 36：视觉光标 Tween 的**每帧唯一采样点**。
+        // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
+        // 这里用整帧唯一的 frame_now 推进一次：先 tick_animation 推 visual，
+        // 后面 build_cursor_render_state_for_frame() 才读到本帧真正的位置。
+        // cursor 与正文动画完全独立（不绑 EditFrontier/Reflow），但消费同一 frame_now。
+        self.cursor_ctrl.tick_animation(frame_now);
+
         // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
         // 在边沿处重置 blink 状态，避免输入/光标动画时光标消失。
         // 统一用 current_cursor_blink_mode() == Suppressed 作为判断，覆盖
@@ -299,10 +306,11 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline.texture_cache(),
             );
 
-            // Issue #707 评论 5725190370: cursor_sample_outcome 更新 + drawn_caret_rect
-            // 回写抽成 apply_render_plan_cursor_state，和 runtime_tests 共用同一份逻辑。
-            // 原内联逻辑（Running/Finished/Coordinated/Idle 4 分支 + Issue #705 回写）
-            // 移到方法定义处，这里只调一次方法。
+            // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
+            // apply_render_plan_cursor_state，和 runtime_tests 共用同一份逻辑。
+            // Issue #826 评论 36: 原"Running/Finished/Coordinated/Idle 4 分支"
+            // 正文事务驱动的 progress 更新已删除；推进改由帧首
+            // cursor_ctrl.tick_animation(frame_now) 做，这里只调一次回写方法。
             // 放在 render_frame 之后：render_frame 只读 &render_plan 和 &static_text
             // （持有 prepared_frame 引用），不读 cursor_ctrl；回写只改 cursor_ctrl，
             // 不影响 render_frame。原内联代码在 render_frame 之前，因 NLL 能区分
@@ -387,10 +395,8 @@ impl QQuickItem for SujianEditorItem {
             // 但 viewport_height 仍保留上一帧旧值时，原条件漏判，恰好错过最想区分的
             // 几何错位。item_w/item_h/item_vp_h 都是 O(1) 几何状态，frame_empty 成立后
             // 才取 committed_text / chars().count()，热路径成本不变。
-            let frame_empty = self.prepared_frame.is_none()
-                || item_w <= 1.0
-                || item_h <= 1.0
-                || item_vp_h <= 1.0;
+            let frame_empty =
+                self.prepared_frame.is_none() || item_w <= 1.0 || item_h <= 1.0 || item_vp_h <= 1.0;
             if frame_empty {
                 let committed = self.pipeline.committed_text();
                 if !committed.is_empty() {
@@ -459,9 +465,15 @@ impl SujianEditorItem {
     /// `cursor_ctrl`"的纯状态逻辑抽成方法，供正式渲染路径和 `runtime_tests` 共用。
     ///
     /// 包含两段逻辑：
-    /// 1. `cursor_sample_outcome` 的 4 分支 match（Running/Finished/Coordinated/Idle）
-    ///    对 `cursor_ctrl` 的更新；
-    /// 2. Issue #705: `drawn_caret_rect` 回写 `cursor_ctrl.visual_x/visual_y/visual_h`。
+    /// 1. Issue #705: `drawn_caret_rect` 回写 `cursor_ctrl.visual_x/visual_y/visual_h`
+    ///    （只回写"本帧实际绘制位置"，不负责推进 progress）；
+    /// 2. 同上回写后，下一笔 Tween 才能从"上一帧真正画出来的位置" rebase。
+    ///
+    /// Issue #826 评论 36：旧的"正文事务驱动 caret progress" 4 分支 match
+    /// （Running/Finished/Coordinated/Idle）已彻底删除，对应枚举也不复存在；
+    /// 视觉光标 Tween 的推进只由 `cursor_ctrl.tick_animation(frame_now)` 在
+    /// `update_paint_node` 每帧做一次。`apply_plan()` 只负责创建/重基 Tween，
+    /// 真正的推进不是它。
     ///
     /// 抽出后 `update_paint_node` 和测试用同一份回写代码，不再有"测试不调正式回写"
     /// 的缺口。
@@ -471,12 +483,15 @@ impl SujianEditorItem {
         _frame_now: std::time::Instant,
         scroll_y: f64,
     ) {
-        // Issue #826: 光标与文字动画完全解耦。
+        // Issue #826 评论 36: 光标与文字动画完全解耦。
         //
-        // 视觉光标 Tween 由 `cursor_ctrl` 自己的 timeline 推进（`rendering.rs`
-        // 的 `apply_plan` 负责启动），这里只把本帧真正画出的位置同步回
-        // visual_x / visual_y / visual_h，不再有 Running/Finished 两种
-        // 正文事务驱动的进度回写。
+        // 视觉光标 Tween 由 `cursor_ctrl` 自己的 timeline 推进：`rendering.rs`
+        // 的 `apply_plan` 只负责**创建/重基**（progress=0、started_at=None），
+        // 真正的推进是 `tick_animation(frame_now)` —— `update_paint_node` 在
+        // 整帧唯一的 frame_now 上每帧调一次，先推进 visual，再
+        // `build_cursor_render_state_for_frame()` 读本帧位置。这里只把本帧
+        // 真正画出的位置同步回 visual_x / visual_y / visual_h，不再有
+        // Running/Finished 两种正文事务驱动的进度回写。
 
         // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
         // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去

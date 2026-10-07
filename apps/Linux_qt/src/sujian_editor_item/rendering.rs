@@ -23,8 +23,8 @@ pub struct CursorAnimationState {
     pub target_y: f64,
     pub progress: f64,
     /// Issue #702: 纯光标移动自己的 timeline 起始时间。
-    /// `None` 表示尚未启动（第一帧），由 `sample_cursor_only_position`
-    /// 在首次采样时用 `frame_now` 初始化。
+    /// `None` 表示尚未启动（第一帧），由 `CursorController::tick_animation`
+    /// 在首次采样时用 `frame_now` 初始化（Issue #826 评论 36 的唯一推进入口）。
     pub started_at: Option<Instant>,
     /// Issue #702: 纯光标移动自己的 timeline 时长（毫秒）。
     /// 输入/删除存在正文视觉事务时，光标继续消费同一帧进度，
@@ -64,7 +64,8 @@ impl CursorAnimationState {
 
 /// Issue #701 评论 5699573227 第三阶段 (F5): ease-out-cubic 缓动函数。
 ///
-/// 供 `build_render_plan_full` 内部 `sample_cursor_only_position` 使用，
+/// 供 `CursorController::tick_animation` 推进光标 Tween 使用
+///（Issue #826 评论 36：生产只留这一个推进入口），
 /// 避免在 `animation_coordinator.rs` 内联 easing 公式（Issue #690 步骤 2 要求
 /// 协调器内不得内联各自的 easing 公式）。CursorOnly 的三次曲线保持独立，
 /// 不并入协同曲线（`AnimatedSlice::ease_out_quad`）。

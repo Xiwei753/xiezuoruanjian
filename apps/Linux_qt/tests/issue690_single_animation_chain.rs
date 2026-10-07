@@ -2,9 +2,11 @@
 //!
 //! WHITE_BOX 验证策略：通过读取源文件内容，确定性断言"两套采样 / 两套时钟 / 两套 easing"
 //! 的缺陷模式已在代码中消除，而不是靠肉眼回归。覆盖评论的五个步骤：
-//! 1. `update_paint_node()` 整帧只取一次时间，文字与光标共用 `AnimationFrameSample`；
-//! 2. 光标落在文字吞吐边界上，Reveal/Conceal/Reflow/协同光标共用同一条二次 easing；
-//! 3. 视觉单元自持生命期，交棒时带上当前可见比例与单元时间线；
+//! （Issue #826 评论 36：#826 后光标与正文动画彻底解耦，断言已同步到新架构。）
+//! 1. `update_paint_node()` 整帧只取一次时间，文字 tick 与光标 tick 共用同一个 frame_now；
+//! 2. 光标位置由独立 cursor timeline（CursorAnimationState + tick_animation）推进，
+//!    协同 easing / cursor_motion.rs 已删除；
+//! 3. 遮罩前沿三层（EditFrontier/Reflow/Shaping）各持 started_at，由 coordinator::tick 推进；
 //! 4. 空正文光标不再靠 FrameAnimation 每帧驱动，blink 切换本身请求重绘；
 //! 5. 动画诊断进正式诊断包，且不再逐帧/无条件刷 stderr。
 
@@ -75,60 +77,47 @@ fn issue690_update_paint_node_samples_clock_once_per_frame() {
 
 #[test]
 fn issue690_frame_sample_drives_text_and_cursor() {
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    // Issue #826 评论 36: 旧的 `AnimationFrameSample` + `compute_coordinated_cursor_position`
+    // 协同采样链已随「光标与正文动画彻底解耦」删除（`animation/cursor_motion.rs`
+    // 已不存在）。验证意图不变 —— 文字与光标仍然只有**一套时钟**：
+    // 同一个 `frame_now`、整帧只有一次 `Instant::now()`、RenderPlanBuilder 纯读、
+    // 光标 timeline 只有一个推进入口。
+    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    let body = method_body(&src, "fn update_paint_node(");
+    assert_eq!(
+        body.matches("Instant::now();").count(),
+        1,
+        "步骤1: update_paint_node 整帧只允许采样一次 Instant::now()"
+    );
+    let text_tick = body
+        .find("self.tick_text_animations_with_time(frame_now)")
+        .expect("步骤1: 文字动画 tick 必须吃同一个 frame_now");
+    let cursor_tick = body
+        .find("self.cursor_ctrl.tick_animation(frame_now);")
+        .expect("步骤1: 光标 cursor timeline 必须吃同一个 frame_now");
+    let state_pos = body
+        .find("self.build_cursor_render_state_for_frame()")
+        .expect("步骤1: 必须在推进之后才读本帧光标位置");
     assert!(
-        coord_src.contains("pub(crate) struct AnimationFrameSample"),
-        "步骤1: 必须存在纯数据的 AnimationFrameSample"
+        text_tick < cursor_tick && cursor_tick < state_pos,
+        "步骤1: 顺序必须是 文字 tick -> 光标 tick -> build_cursor_render_state_for_frame"
     );
     let render_src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let text_plan = method_body(&render_src, "fn build_text_animation_plan_with_sample(");
-    assert!(
-        text_plan.contains("sample: &AnimationFrameSample"),
-        "步骤1: 文字 plan 由帧采样构造，不再自己取时间"
-    );
-    assert!(
-        !text_plan.contains("Instant::now()"),
-        "步骤1: 文字 plan 构造路径内不得再次采样时间"
-    );
-    // Issue #819 评论 5956495850 第 2 节: 文字帧不再各自从
-    // unit.current_visible_fraction(sample.frame_now) 推一遍，统一收口到
-    // sample_transaction_visual_state_with_caret 一次性采样。白盒断言随之
-    // 更新到统一采样入口，设计意图不变：文字帧的可见比例仍由单元时间线 +
-    // 本帧采样点决定，只是不再在 render_plan_builder 里重复计算。
-    assert!(
-        text_plan.contains("sample_transaction_visual_state_with_caret"),
-        "步骤1: 文字帧由统一采样入口 sample_transaction_visual_state_with_caret 构造，不再各自取时间"
-    );
-    let cursor_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let cursor = method_body(&cursor_src, "fn compute_coordinated_cursor_position(");
-    assert!(
-        !cursor.contains("Instant::now()"),
-        "步骤1: 协同光标不得再独立采样时间（否则仍是两套时钟）"
-    );
-    // Issue #815 评论 6042062633 修改 3/6: 光标层消费文字层已经采好的那一份 caret 帧，
-    // 连 frame_now 都不再自己拿，直接吃 CoordinatedMotionFrame。
-    assert!(
-        cursor.contains("motion: &crate::sujian_editor_item::render_plan::CoordinatedMotionFrame"),
-        "步骤1: 协同光标接收文字层同帧采好的 CoordinatedMotionFrame，不再自己采样"
-    );
-    assert!(
-        !cursor.contains("frame_now"),
-        "步骤1: 协同光标不得再按 frame_now 重新采样 track（否则又变成两套时钟）"
-    );
     let render_plan = method_body(&render_src, "fn build_render_plan_full(");
     assert!(
-        render_plan.contains(
-            "self.compute_coordinated_cursor_position(cursor_owner_epoch, &coordinated_motion_frame)"
-        ),
-        "步骤1: 最终 CursorRenderState 在 build_render_plan_full 内由同一帧采样 + epoch 算出"
+        !render_plan.contains("Instant::now()"),
+        "步骤1: RenderPlanBuilder 仍只是纯读采样器，不得自己取时间（否则又是两套时钟）"
     );
-    // Issue #815 修改 6: 本帧只采样一次 caret track。build_render_plan_full 必须复用
-    // build_text_animation_plan_with_sample 的返回值，不得再单独采一次。
+    let ctrl_src = read_src("src/sujian_editor_item/cursor_controller.rs");
     assert!(
-        !render_plan.contains("self.sample_coordinated_motion_frame("),
-        "步骤1: build_render_plan_full 不得重复采样 caret track（文字层与光标层共用一次）"
+        ctrl_src.contains("pub(crate) fn tick_animation(&mut self, frame_now: Instant) -> bool"),
+        "步骤1: cursor timeline 必须有唯一推进入口 tick_animation(frame_now)"
     );
-    println!("[BUGFIX_690_VERIFY] 步骤1 文字与光标共用帧采样 (FIXED)");
+    assert!(
+        ctrl_src.contains("self.update_animation_progress(progress)"),
+        "步骤1: progress 消费统一走 update_animation_progress（生产只留一个推进入口）"
+    );
+    println!("[BUGFIX_690_VERIFY] 步骤1 文字与光标共用一套时钟 (#826 评论36 FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -137,47 +126,43 @@ fn issue690_frame_sample_drives_text_and_cursor() {
 
 #[test]
 fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
-    let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
-    let cursor = method_body(&src, "fn compute_coordinated_cursor_position(");
-    // Issue #722 评论 5747719529 修正：光标本身就是吞字/吐字的视觉边界。
-    // 不再从文字 glyph 切片反推光标位置（删除 frame.x + frame.w / rightmost_x.max()）。
-    //
-    // Issue #815 评论 6042062633 修改 3：插值统一收敛到 sample_caret_track_frame
-    // （PreparedCursorVisualTrack 的 sampled_rect_at_progress / progress）。
-    // 光标层与文字层消费同一次采样，光标层自己不再插值一次。
+    // Issue #826 评论 36: 旧的 cursor_motion.rs（compute_coordinated_cursor_position /
+    // sample_caret_track_frame，正文事务协同光标那条采样链）已随「光标与正文动画彻底
+    // 解耦」整文件删除，不得复活。现在光标是完全独立的 cursor timeline：位置只由
+    // CursorAnimationState 自己的 start/target 插值得出，推进入口只有 tick_animation。
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        cursor.contains("caret.x") && cursor.contains("caret.y"),
-        "步骤2: 光标位置直接取本帧采样得到的 caret 坐标，不再自己插值"
+        !motion_path.exists(),
+        "步骤2: 协调光标模块 cursor_motion.rs 已删除，不得复活正文事务协同光标采样链"
     );
-    let sample_fn = method_body(&src, "pub(crate) fn sample_caret_track_frame(");
+    let rendering_src = read_src("src/sujian_editor_item/rendering.rs");
+    let cursor = method_body(&rendering_src, "pub fn current_position(&self)");
+    // Issue #722 评论 5747719529 修正的语义在新架构下由「视觉 caret 追逻辑 caret」承担：
+    // 插值只发生在 CursorAnimationState 内部，不再从文字 glyph 切片反推光标位置。
     assert!(
-        sample_fn.contains("sampled_rect_at_progress") && sample_fn.contains("progress("),
-        "步骤2: caret 位置由 PreparedCursorVisualTrack 的 sampled_rect 插值决定"
+        cursor.contains("start_x") && cursor.contains("target_x"),
+        "步骤2: 光标位置由 CursorAnimationState 的 start/target 插值决定"
     );
     assert!(
-        sample_fn.contains("sampled_ingest_at_progress"),
-        "步骤2: 本帧 caret 的 visual_line_id 与 caret 位置来自同一次采样"
+        cursor.contains("ease_out_cubic"),
+        "步骤2: 光标插值收敛在 CursorAnimationState::current_position，不得多处重复插值"
     );
-    // Issue #815: 光标高度取自 canonical new caret rect（前向 Delete 不回抽）。
+    let ctrl_src = read_src("src/sujian_editor_item/cursor_controller.rs");
     assert!(
-        cursor.contains("new_cursor_rect"),
-        "步骤2: 光标高度取自 canonical new_cursor_rect"
+        ctrl_src.contains("fn tick_animation(&mut self, frame_now: Instant)"),
+        "步骤2: 光标位置只能由 tick_animation(frame_now) 每帧推进"
     );
     println!("[BUGFIX_690_VERIFY] 步骤2 光标跟随吞吐边界 (FIXED)");
 }
 
 #[test]
 fn issue690_single_collaborative_easing_function() {
-    let slice_src = read_src("src/sujian_editor_item/animated_slice.rs");
-    assert_eq!(
-        slice_src.matches("powi(2)").count(),
-        1,
-        "步骤2: 二次曲线只能定义一次（AnimatedSlice::ease_out_quad）"
-    );
-    let compute_frame = method_body(&slice_src, "pub fn compute_frame(");
+    // Issue #826 评论 36: 旧 animated_slice.rs（ease_out_quad 协同曲线）已删除，
+    // 协同 easing 不得复活；「一套 easing」的守卫改成对现存文件的断言。
+    let slice_path = linux_qt_root().join("src/sujian_editor_item/animated_slice.rs");
     assert!(
-        !compute_frame.contains("powi(") && !compute_frame.contains("ease_out_quad("),
-        "步骤2: compute_frame 只做线性插值，easing 不得重复施加"
+        !slice_path.exists(),
+        "步骤2: animated_slice.rs 已删除，协同二次曲线不得复活"
     );
     let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
@@ -199,66 +184,33 @@ fn issue690_single_collaborative_easing_function() {
 
 #[test]
 fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
-    let src = read_src("src/sujian_editor_item/animation/transaction/types.rs");
-    let frame_start = src
-        .find("pub(crate) struct RebaseFrame")
-        .expect("步骤3: 必须存在 RebaseFrame");
-    // Issue #690 评论 5679744253 问题 1: 截取长度加大以包含新字段 sampled_at /
-    // remaining_duration_ms（它们在结构体末尾，旧 900 字符不够）。
-    // 使用安全的字符边界截取，避免落在 UTF-8 多字节字符中间。
-    let raw_end = frame_start + 1100;
-    let safe_end = src.ceil_char_boundary(raw_end);
-    let frame_def = &src[frame_start..safe_end];
-    for field in [
-        "visible_fraction",
-        "sampled_at",
-        "remaining_duration_ms",
-        "shaping_identity",
+    // Issue #826 评论 36: 旧 animation/transaction/ 模块（RebaseFrame 交棒续播、
+    // 单元时间线 rebase_from_frame）已整目录删除，双时间线交棒不得复活。
+    // 新架构：遮罩前沿三层（EditFrontier / ReflowMotion / ShapingTransition）
+    // 各自持有 started_at，由 coordinator::tick(frame_now) 用同一帧时钟统一推进，
+    // 完成与否按自己的 is_finished(now) 判定，不共享事务级 progress。
+    let transaction_dir = linux_qt_root().join("src/sujian_editor_item/animation/transaction");
+    assert!(
+        !transaction_dir.exists(),
+        "步骤3: animation/transaction 模块已删除，RebaseFrame 双时间线交棒不得复活"
+    );
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    assert!(
+        coord_src.contains("fn tick(&mut self, frame_now: Instant)"),
+        "步骤3: 三层动画必须由 coordinator::tick(frame_now) 一个入口统一推进"
+    );
+    for rel in [
+        "src/sujian_editor_item/animation/edit_frontier.rs",
+        "src/sujian_editor_item/animation/reflow_motion.rs",
+        "src/sujian_editor_item/animation/shaping_transition.rs",
     ] {
+        let layer_src = read_src(rel);
         assert!(
-            frame_def.contains(field),
-            "步骤3: RebaseFrame 必须携带 `{}`，retarget 从当前帧重新起段",
-            field
+            layer_src.contains("fn is_finished(&self, now: Instant)"),
+            "步骤3: {} 必须按自己的 started_at(now) 判断完成，不用事务级 progress",
+            rel
         );
     }
-    let collect = method_body(&src, "pub fn collect_rebase_frames(");
-    // Issue #727: 过滤条件从 unit.progress(now) < 1.0 改为 unit.is_finished(now)
-    assert!(
-        collect.contains("unit.is_finished(now)"),
-        "步骤3: 采集按单元 is_finished 过滤已完成单元"
-    );
-    assert!(
-        collect.contains("unit.current_visible_fraction(now)"),
-        "步骤3: 可见比例按单元自己的时间线算，不用事务级 progress 一刀切"
-    );
-    // Issue #690 评论 5679744253 问题 1: retarget 时 duration 用剩余时长，不沿用旧时间线。
-    // Issue #727: started_at 重置改为 VisualUnitTiming::rebase_from_frame 内部处理。
-    // Use PreparedVisualUnit::rebase_from_frame specifically (not VisualUnitTiming::rebase_from_frame)
-    let sig = "pub fn rebase_from_frame(&mut self, frame: &RebaseFrame)";
-    let rebase_start = src
-        .find(sig)
-        .expect("步骤3: PreparedVisualUnit::rebase_from_frame 必须存在");
-    let rebase_rest = &src[rebase_start..];
-    let rebase_end = rebase_rest.find("\n    }\n").unwrap_or(rebase_rest.len());
-    let rebase = &rebase_rest[..rebase_end];
-    assert!(
-        rebase.contains("frame.remaining_duration_ms"),
-        "步骤3: retarget 时 duration 用剩余时长，不沿用旧时间线"
-    );
-    assert!(
-        rebase.contains(".rebase_from_frame") || rebase.contains("self.timing"),
-        "步骤3: retarget 时 timing 状态通过 rebase_from_frame 传递"
-    );
-    assert!(
-        src.contains("struct PreparedVisualUnit"),
-        "步骤3: 视觉单元必须拥有自己的动画生命期"
-    );
-    let wrap = method_body(&src, "pub fn wrap(");
-    // Issue #727: initial_fraction_for_kind 被 VisualUnitTiming::default_for_kind 替代
-    assert!(
-        wrap.contains("default_for_kind") || wrap.contains("initial_fraction_for_kind"),
-        "步骤3: 新单元起点比例由动画类型决定（Conceal 起手完整可见）"
-    );
     println!("[BUGFIX_690_VERIFY] 步骤3 单元生命期 + 交棒续播 (FIXED)");
 }
 
@@ -289,32 +241,37 @@ fn issue690_blink_change_requests_frame_update() {
 fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
     let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     let body = method_body(&src, "fn update_paint_node(");
-    // Issue #701 评论 5699573227 第三阶段 (F5): CursorOnly 采样统一到
-    // build_render_plan_full 内部，用同一份 AnimationFrameSample。
-    // update_paint_node 通过 cursor_sample_outcome 推进 cursor_ctrl。
+    // Issue #826 评论 36: 视觉光标改成完全独立的 cursor timeline，由
+    // update_paint_node 在整帧唯一的 frame_now 上推进一次（不走 blink Timer，
+    // 也不再是 build_render_plan_full 内部的 cursor_sample_outcome 采样）。
+    assert!(
+        body.contains("self.cursor_ctrl.tick_animation(frame_now);"),
+        "步骤2: update_paint_node 必须用 frame_now 推进 cursor timeline（唯一采样点）"
+    );
     assert!(
         body.contains("build_render_plan_full"),
-        "步骤2: update_paint_node 必须调 build_render_plan_full 统一采样"
+        "步骤2: update_paint_node 仍统一走 build_render_plan_full 产出 RenderPlan"
     );
-    assert!(
-        body.contains("cursor_ctrl.animation.as_ref()"),
-        "步骤2: cursor_animation 传给 build_render_plan_full 统一采样"
-    );
-    // Issue #707 评论 5725190370: CursorSampleOutcome 的 4 分支 match 已从
-    // update_paint_node 抽到 apply_render_plan_cursor_state 方法，供正式渲染
-    // 路径和 runtime_tests 共用同一份回写代码。源码检查测试随之更新到重构后
-    // 的方法，验证目的不变：CursorOnly 采样到 Running progress 时推进 visual_x/y。
+    // 推进只在帧首；回写方法只同步本帧实际绘制的 caret，不负责 progress。
     let apply_body = method_body(&src, "fn apply_render_plan_cursor_state(");
     assert!(
-        apply_body.contains("CursorSampleOutcome::Running"),
-        "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y (在 apply_render_plan_cursor_state 中)"
+        !apply_body.contains("CursorSampleOutcome"),
+        "步骤2: 旧的 CursorSampleOutcome（正文事务驱动 caret progress）不得复活"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     assert!(
-        coord_src.contains("sample_cursor_only_position"),
-        "步骤2: 协调器内必须有 sample_cursor_only_position 用 frame_sample 采样"
+        !apply_body.contains("update_animation_progress("),
+        "步骤2: 回写方法不得负责推进 progress（推进只在 tick_animation）"
     );
-    println!("[BUGFIX_690_VERIFY] 步骤2 CursorOnly 帧驱动 (FIXED)");
+    assert!(
+        apply_body.contains("drawn_caret_rect"),
+        "步骤2: 回写仍要把本帧实际绘制的 caret 同步回 visual_x/visual_y"
+    );
+    let ctrl_src = read_src("src/sujian_editor_item/cursor_controller.rs");
+    assert!(
+        ctrl_src.contains("fn tick_animation(&mut self, frame_now: Instant)"),
+        "步骤2: controller 必须提供 tick_animation(frame_now) 作为推进入口"
+    );
+    println!("[BUGFIX_690_VERIFY] 步骤2 CursorOnly 帧驱动 (#826 评论36 FIXED)");
 }
 
 #[test]
@@ -375,37 +332,39 @@ fn issue690_animation_lifecycle_events_go_to_diagnostics_logger() {
         mod_src.contains("writer_diagnostics::record_event"),
         "步骤5: 动画事件必须写进正式诊断包"
     );
-    // Issue #747: animation_coordinator.rs 拆分后，生命周期事件分布在各子模块。
-    // editor.anim.create → transaction_builder.rs / composition.rs
-    // editor.anim.rebase → rebase.rs
-    // editor.anim.keep   → rebase.rs
-    // editor.anim.complete → render_plan_builder.rs
-    let builder_src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
+    // Issue #747/826: 旧 transaction_builder.rs / rebase.rs（editor.anim.create /
+    // rebase / keep）随 animation/transaction 整体删除；生命周期事件收敛到遮罩前沿
+    // 三层的紧凑诊断，仍走 writer_diagnostics::record_event 正式诊断包。
+    let root = linux_qt_root();
     assert!(
-        builder_src.contains("\"editor.anim.create\""),
-        "步骤5: 缺少生命周期事件 editor.anim.create"
+        !root
+            .join("src/sujian_editor_item/animation/transaction_builder.rs")
+            .exists(),
+        "步骤5: transaction_builder.rs 已删除，生命周期事件不得回到旧事务链"
     );
     assert!(
-        builder_src.contains("fn emit_transaction_diagnostic("),
-        "步骤5: 各生命周期点共用一个紧凑事件构造器"
+        !root
+            .join("src/sujian_editor_item/animation/rebase.rs")
+            .exists(),
+        "步骤5: rebase.rs 已删除"
     );
-    let rebase_src = read_src("src/sujian_editor_item/animation/rebase.rs");
+    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
-        rebase_src.contains("\"editor.anim.rebase\""),
-        "步骤5: 缺少生命周期事件 editor.anim.rebase"
-    );
-    assert!(
-        rebase_src.contains("\"editor.anim.keep\""),
-        "步骤5: 缺少生命周期事件 editor.anim.keep"
+        coord_src.contains("record_frontier_diagnostic"),
+        "步骤5: 遮罩前沿生命周期必须走统一的紧凑事件构造器"
     );
     assert!(
-        rebase_src.contains("fn conflicting_units_are_untouched("),
-        "步骤3: 只有真正被新编辑覆盖的单元才结束/替换，未覆盖的走 keep 分支"
+        coord_src.contains("\"editor.anim.frontier\""),
+        "步骤5: 缺少生命周期事件 editor.anim.frontier"
     );
-    let render_plan_src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
+    let frontier_src = read_src("src/sujian_editor_item/animation/edit_frontier.rs");
     assert!(
-        render_plan_src.contains("\"editor.anim.complete\""),
-        "步骤5: 缺少生命周期事件 editor.anim.complete"
+        frontier_src.contains("\"editor.anim.frontier.identity_breakdown\""),
+        "步骤5: 缺少 identity_breakdown 诊断事件"
+    );
+    assert!(
+        mod_src.contains("\"editor.anim.transaction_skipped\""),
+        "步骤5: 缺少 editor.anim.transaction_skipped 事件"
     );
     println!("[BUGFIX_690_VERIFY] 步骤5 生命周期诊断事件 (FIXED)");
 }
@@ -413,7 +372,8 @@ fn issue690_animation_lifecycle_events_go_to_diagnostics_logger() {
 #[test]
 fn issue690_no_unconditional_stderr_animation_spam() {
     // 逐帧/无条件 eprintln 会淹没诊断包；只允许 env 控制的 debug log。
-    // Issue #747: animation_coordinator.rs 拆分后，检查所有 animation 子模块生产路径。
+    // Issue #826 评论 36: 旧 transaction/ / cursor_motion.rs / rebase.rs /
+    // transaction_builder.rs 已删除，改为只扫描仍然存在的动画文件，跳过已删文件。
     let animation_files = [
         "src/sujian_editor_item/animation/coordinator.rs",
         "src/sujian_editor_item/animation/composition.rs",
@@ -426,7 +386,13 @@ fn issue690_no_unconditional_stderr_animation_spam() {
         "src/sujian_editor_item/animation/transaction/rebind.rs",
         "src/sujian_editor_item/animation/transaction/queue.rs",
     ];
+    let mut checked = 0usize;
     for file in &animation_files {
+        if !linux_qt_root().join(file).exists() {
+            // 旧动画模块已被 #826 删除，没有可扫描的生产路径。
+            continue;
+        }
+        checked += 1;
         let coord = read_src(file);
         let non_test = match coord.find("\n#[cfg(test)]") {
             Some(idx) => &coord[..idx],
@@ -443,5 +409,10 @@ fn issue690_no_unconditional_stderr_animation_spam() {
             file
         );
     }
+    assert!(
+        checked >= 3,
+        "步骤5: 至少应扫描到仍存在的动画文件（实际 {} 个）",
+        checked
+    );
     println!("[BUGFIX_690_VERIFY] 步骤5 stderr 残留清理 (FIXED)");
 }
