@@ -69,7 +69,7 @@ Rectangle {
     // Workbench 下章节导航由 leftPaneCollapsed + Core ChapterNavigation bounds 管理，
     // 这个属性只在 SinglePane 下生效。
     property bool singlePaneNavOpen: false
-    readonly property bool wideWorkbench: layoutPlan && layoutPlan.workspaceLayoutMode === "Workbench"
+    readonly property bool wideWorkbench: layoutPlan === null || layoutPlan.workspaceLayoutMode === "Workbench"
     // Issue #825：Core 工作台布局计划（appBackend.resolve_workbench_layout 直通）。
     // 七角色 bounds 与最终模式都由 Core 决定，QML 只按 bounds 量/摆。
     property var workbenchPlan: null
@@ -294,10 +294,8 @@ Rectangle {
         }
         return ""
     }
-    // Issue #829：左树两组分组头的展开态。纯 UI 状态，不进 Core、不进同步，
-    // 也不落设置——下次进来回到手稿的默认展开形态。
-    property bool projectGroupCollapsed: false
-    property bool outlineGroupExpanded: false
+    // Issue #836：左树顶部作品标题改为静态行，不再有 projectGroupCollapsed /
+    // outlineGroupExpanded 两个折叠状态。卷仍走 WritingTreeGroupHeader 的展开/收起。
     onWorkspaceProjectIdChanged: {
         // Issue #762 评论 5826175490 第 3 点：切换作品时立即刷新冲突。
         // 旧的 conflictPath 属于上一个作品，先清掉避免在新作品里误选中；
@@ -672,11 +670,7 @@ Rectangle {
                 tree: root.tree
                 workspaceProjectId: root.workspaceProjectId
                 workspaceProjectTitle: root.workspaceProjectTitle
-                projectGroupCollapsed: root.projectGroupCollapsed
-                outlineGroupExpanded: root.outlineGroupExpanded
                 currentChapterId: editorController.chapterId
-                // Issue #835：透传当前章节章纲（唯一来源 editorController.chapterNote）。
-                currentChapterNote: editorController.chapterNote
 
                 onOpenChapter: function(pId, vId, cId, cTitle) {
                     root.openChapter(pId, vId, cId, cTitle)
@@ -692,33 +686,6 @@ Rectangle {
                 }
                 onDeleteItemRequested: function(itemData) {
                     root.deleteItemRequested(itemData)
-                }
-                onToggleProjectGroup: {
-                    root.projectGroupCollapsed = !root.projectGroupCollapsed
-                }
-                onToggleOutlineGroup: {
-                    root.outlineGroupExpanded = !root.outlineGroupExpanded
-                }
-                // Issue #835：章纲编辑完成交给 backend update_chapter_note，
-                // 并同步本地缓存。两处 WritingChapterNavigation 实例都接。
-                // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
-                // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
-                onChapterNoteChanged: function(note) {
-                    if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
-                        return
-
-                    var result = editorBackendRef.update_chapter_note(
-                        editorController.projectId,
-                        editorController.volumeId,
-                        editorController.chapterId,
-                        note
-                    )
-
-                    if (result && result.success) {
-                        editorController.chapterNote = note
-                    } else {
-                        sidebarRect.restoreChapterNoteFromSource()
-                    }
                 }
             }
 
@@ -1495,11 +1462,7 @@ Rectangle {
             tree: root.tree
             workspaceProjectId: root.workspaceProjectId
             workspaceProjectTitle: root.workspaceProjectTitle
-            projectGroupCollapsed: root.projectGroupCollapsed
-            outlineGroupExpanded: root.outlineGroupExpanded
             currentChapterId: editorController.chapterId
-            // Issue #835：透传当前章节章纲（与 Workbench 下 sidebarRect 一致）。
-            currentChapterNote: editorController.chapterNote
 
             onOpenChapter: function(pId, vId, cId, cTitle) {
                 root.openChapter(pId, vId, cId, cTitle)
@@ -1516,32 +1479,6 @@ Rectangle {
             }
             onDeleteItemRequested: function(itemData) {
                 root.deleteItemRequested(itemData)
-            }
-            onToggleProjectGroup: {
-                root.projectGroupCollapsed = !root.projectGroupCollapsed
-            }
-            onToggleOutlineGroup: {
-                root.outlineGroupExpanded = !root.outlineGroupExpanded
-            }
-            // Issue #835：章纲编辑完成交给 backend（与 sidebarRect 同一处理）。
-            // Issue #835 评论 6019713847: Core 是 note 唯一事实来源，保存失败时
-            // 不更新本地 chapterNote，并恢复编辑框为 Core 当前值。
-            onChapterNoteChanged: function(note) {
-                if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId)
-                    return
-
-                var result = editorBackendRef.update_chapter_note(
-                    editorController.projectId,
-                    editorController.volumeId,
-                    editorController.chapterId,
-                    note
-                )
-
-                if (result && result.success) {
-                    editorController.chapterNote = note
-                } else {
-                    singlePaneNavPanel.restoreChapterNoteFromSource()
-                }
             }
         }
     }

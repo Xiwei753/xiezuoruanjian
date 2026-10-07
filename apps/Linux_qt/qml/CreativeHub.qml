@@ -34,7 +34,7 @@ Rectangle {
     // primaryNavigationPlacement（LinuxQtLayoutPlanDto 从 Core 的
     // primary_navigation_placement 直通）。Core 在 600–839vp 宽度下已经是
     // Workbench 但仍给 Bottom，用 workspaceLayoutMode 判会把中等窗口错抬成侧栏。
-    readonly property bool wideShell: layoutPlan && layoutPlan.primaryNavigationPlacement === "Side"
+    readonly property bool wideShell: layoutPlan === null || layoutPlan.primaryNavigationPlacement === "Side"
 
     // Issue #827 评论 3 第 1 点：宽屏顶栏高度。左栏「素笺」行与右侧动作条
     // 必须用同一个值，两条分隔线才能落在同一个 y 上。

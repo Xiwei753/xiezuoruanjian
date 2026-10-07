@@ -1,5 +1,5 @@
 // =============================================================================
-// WritingChapterNavigation.qml — 章节导航（作品名 / 卷章树 / 新卷 / 章纲 / 右键菜单）
+// WritingChapterNavigation.qml — 章节导航（作品标题 / 卷章树 / 新卷 / 右键菜单）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
@@ -7,6 +7,10 @@
 //   SinglePane 两种壳模式下复用，避免两套结构各画一份。
 // 边界：纯展示 + 信号回调。展开态、当前章节、树数据都由调用方持有，
 //   组件自己不存业务状态，也不查后端。
+//
+// Issue #836：左树语义纠正。作品标题是静态行（不可折叠），卷仍走
+//   WritingTreeGroupHeader 的展开/收起。章纲（chapter.note）不再在
+//   左树里显示——它是 Core 数据字段，不是左树分组。
 //
 // Issue #833 复核：从 WritingWorkspace.qml 的 sidebarRect 抽出。
 //   - Workbench：作为 RowLayout 子项，宽度只吃 Core 的 ChapterNavigation bounds。
@@ -25,28 +29,16 @@ Rectangle {
     property var tree: []
     // 当前作品 id，用于 WritingTreeController 过滤。
     property string workspaceProjectId: ""
-    // 当前作品标题（左树顶部分组头）。
+    // 当前作品标题（左树顶部静态标题行）。
     property string workspaceProjectTitle: ""
-    // 作品名分组头是否折叠（true = 只留分组头）。
-    property bool projectGroupCollapsed: false
-    // 章纲分组头是否展开。
-    property bool outlineGroupExpanded: false
     // 当前选中章节 id（用于列表项高亮）。
     property string currentChapterId: ""
-    // Issue #835：当前章节章纲文本。由 WritingWorkspace 从 editorController.chapterNote
-    // 透传进来，组件不查后端、不存第二份。编辑后发 chapterNoteChanged 交回 backend。
-    property string currentChapterNote: ""
 
     signal openChapter(string projectId, string volumeId, string chapterId, string chapterTitle)
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
     signal renameItemRequested(var itemData)
     signal deleteItemRequested(var itemData)
-    signal toggleProjectGroup()
-    signal toggleOutlineGroup()
-    // Issue #835：章纲文本编辑完成（失焦）时发出，由 WritingWorkspace 调
-    // editorBackendRef.update_chapter_note 写回 Core。
-    signal chapterNoteChanged(string note)
 
     color: dt.sidebar
     border.color: dt.border
@@ -81,13 +73,6 @@ Rectangle {
         }
         next[volumeId] = !root.isVolumeExpanded(volumeId)
         root.volumeExpandedMap = next
-    }
-
-    // Issue #835 评论 6019713847: 章纲保存失败时，Core 仍是 note 唯一事实来源，
-    // 把编辑框恢复成 currentChapterNote（即 editorController.chapterNote 透传值），
-    // 不让界面显示成"已保存"。
-    function restoreChapterNoteFromSource() {
-        outlineTextArea.text = root.currentChapterNote
     }
 
     function volumesArray() {
@@ -151,29 +136,34 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        // ── Issue #829：章节树顶部分组头「作品名 ∨」──
-        // 手稿的左树是「作品名 ∨ → 卷 ∨ → 章节列表 → 章纲 ∨」四段结构，
-        // 作品名本身是一个可折叠分组头，不是一条普通列表项。
-        // 折叠状态只是端侧 UI 状态，不进 Core、不进同步。
-        WritingTreeGroupHeader {
+        // ── Issue #836：左树顶部静态标题行 ──
+        // 作品标题是当前写作上下文的标识，不是可折叠分组头。
+        // 整行只显示 workspaceProjectTitle，没有折叠箭头、没有点击折叠。
+        Rectangle {
             Layout.fillWidth: true
-            dt: root.dt
-            title: root.workspaceProjectTitle
-            expanded: !root.projectGroupCollapsed
-            // 作品名是当前写作上下文，折叠它等于把整棵树收起来，
-            // 不提供「新建」——新建入口在下面的「+ 新卷」。
-            showAddButton: false
-            onToggleExpanded: root.toggleProjectGroup()
+            Layout.preferredHeight: 36
+            color: "transparent"
+
+            AppText {
+                dt: root.dt
+                anchors.left: parent.left
+                anchors.leftMargin: root.dt.sp8
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.workspaceProjectTitle
+                color: root.dt.textPrimary
+                font.pointSize: root.dt.labelPt
+                font.family: root.dt.fontFamily
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
+            }
         }
 
         // Tree list
         // Issue #835：按层级渲染 —— 卷是可折叠分组头（WritingTreeGroupHeader），
         // 卷展开时紧接其章节行。取代旧 flat ListView 把 volume 当 36px 列表行的画法。
-        // 「作品名 ∨」折叠时整棵子树收起，只留顶部分组头。
         ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                visible: !root.projectGroupCollapsed
                 clip: true
                 // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
                 Component.onCompleted: {
@@ -334,13 +324,11 @@ Rectangle {
         }
 
         // "+" button for project (create volume)
-        // Issue #835：作品名折叠时整棵树收起，「+ 新卷」也一并隐藏。
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 36
             Layout.leftMargin: dt.sp8
             Layout.rightMargin: dt.sp8
-            visible: !root.projectGroupCollapsed
             radius: dt.radiusPill
             color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
 
@@ -369,67 +357,6 @@ Rectangle {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.createVolumeRequested(root.workspaceProjectId)
-            }
-        }
-
-        // ── Issue #829/#835：章节树底部分组头「章纲 ∨」──
-        // 手稿把它放在章节列表下面，作为左树的最后一个分组。
-        // 展开后显示当前章节的章纲（chapter.note）可编辑多行文本；
-        // 没选章节时显示「请选择章节」空态。章纲数据唯一来源是 Core
-        // （currentChapterNote 由 WritingWorkspace 从 editorController.chapterNote 透传），
-        // 编辑完成后发 chapterNoteChanged 交回 backend，不在 QML 存第二份。
-        WritingTreeGroupHeader {
-            Layout.fillWidth: true
-            dt: root.dt
-            title: qsTr("章纲")
-            expanded: root.outlineGroupExpanded
-            onToggleExpanded: root.toggleOutlineGroup()
-        }
-
-        // 章纲展开内容：空态 / 可编辑多行文本。
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.outlineGroupExpanded ? (root.currentChapterId ? 120 : 40) : 0
-            visible: root.outlineGroupExpanded
-            clip: true
-
-            // 没选章节：空态提示
-            AppText {
-                visible: root.currentChapterId === ""
-                anchors.centerIn: parent
-                dt: root.dt
-                text: qsTr("请选择章节")
-                color: dt.textSecondary
-                font.pointSize: dt.labelPt
-                font.family: dt.fontFamily
-            }
-
-            // 已选章节：可编辑多行文本
-            // text 不用绑定（用户输入会破坏绑定），改用 Connections 在非聚焦时
-            // 同步 currentChapterNote，避免切章后显示旧 note 或打断用户输入。
-            TextArea {
-                id: outlineTextArea
-                visible: root.currentChapterId !== ""
-                anchors.fill: parent
-                anchors.margins: root.dt.sp8
-                text: ""
-                wrapMode: TextArea.Wrap
-                color: root.dt.textPrimary
-                font.pointSize: root.dt.labelPt
-                font.family: root.dt.fontFamily
-                background: Rectangle { color: "transparent" }
-                Component.onCompleted: outlineTextArea.text = root.currentChapterNote
-                onEditingFinished: root.chapterNoteChanged(outlineTextArea.text)
-
-                Connections {
-                    target: root
-                    function onCurrentChapterNoteChanged() {
-                        if (!outlineTextArea.activeFocus) outlineTextArea.text = root.currentChapterNote
-                    }
-                    function onCurrentChapterIdChanged() {
-                        if (!outlineTextArea.activeFocus) outlineTextArea.text = root.currentChapterNote
-                    }
-                }
             }
         }
 

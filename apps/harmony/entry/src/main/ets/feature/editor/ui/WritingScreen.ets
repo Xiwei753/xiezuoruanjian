@@ -153,8 +153,6 @@ export struct WritingScreen {
   @State volumeTrees: VolumeTree[] = []
   // Issue #829 手稿：章节树的作品名分组头 + 底部章纲分组头。
   @State projectTitle: string = ''
-  @State projectGroupExpanded: boolean = true
-  @State outlineGroupExpanded: boolean = false
   // Issue #829：底部状态栏的时钟（HH:mm），只做展示，不参与任何业务判定。
   @State clockText: string = ''
   // Issue #829 评论3第2项：状态栏两段进度数据都来自 Core，端侧不自己算。
@@ -1466,12 +1464,8 @@ export struct WritingScreen {
             ChapterTreePane({
               volumeTrees: this.volumeTrees,
               projectTitle: this.projectTitle,
-              projectGroupExpanded: this.projectGroupExpanded,
-              outlineGroupExpanded: this.outlineGroupExpanded,
               expandedVolumes: this.expandedVolumes,
               selectedChapterId: this.chapterId,
-              onToggleProjectGroup: (): void => { this.projectGroupExpanded = !this.projectGroupExpanded },
-              onToggleOutlineGroup: (): void => { this.outlineGroupExpanded = !this.outlineGroupExpanded },
               onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
               onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
                 this.switchChapter(chapterId, chapterTitle, volumeId)

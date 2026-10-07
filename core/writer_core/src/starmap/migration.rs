@@ -5,14 +5,22 @@
 //!
 //! ## 迁移内容
 //!
-//! ### index schema 1 -> 3
+//! ### index schema 1 -> 4
 //! - 旧 `starmaps: Vec<StarMapMeta>` 提取 `starmap_ids`
 //! - 旧 `isMainForProject + projectId` 生成 `main_starmap_by_project`
+//! - 用 Embed / legacy portal 关系推导 `root_starmap_ids`
 //!
-//! ### index schema 2 -> 3
+//! ### index schema 2 -> 4
 //! - 老索引只有 `starmap_ids`，没有显式的 `root_starmap_ids`（一级星图身份）。
 //! - 用当前已有的 Embed / legacy portal 关系做一次迁移，推导出 root 集合并
 //!   持久化；迁移完成后，正常运行路径不再扫描 graph 反推身份。
+//!
+//! ### index schema 3 -> 4
+//! - 旧 bug：`filter_root_starmaps` 额外要求"portal 节点标题 == 目标星图标题"，
+//!   导致标题不同的 legacy 子星图被错误保留为 root。
+//! - 只做一次针对旧 bug 的修复：扫描 legacy `Note + portal(destination_target=None)`
+//!   的目标 id，从现有 `root_starmap_ids` 里移除这些 id，其余 root 身份原样保留。
+//! - 不重新按 Embed 推导，避免把"本来就是一级星图、后来又被嵌入别处"的合法身份改掉。
 //!
 //! ### 星图对象存储 schema "3" -> "4"
 //! - 读取旧 `layouts/default/nodes/*.json`，按 nodeId 找到 x/y，写进对应 node JSON 的 `position`
@@ -36,8 +44,10 @@ use crate::error::{Error, Result};
 const OLD_INDEX_SCHEMA_VERSION: u64 = 1;
 /// 引入显式 root_starmap_ids 之前的 index schema 版本（只有 starmap_ids + main 映射）。
 const V2_INDEX_SCHEMA_VERSION: u64 = 2;
-/// 新 index schema 版本（starmap_ids + root_starmap_ids + main 映射）。
-pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 3;
+/// 引入显式 root_starmap_ids 但 legacy portal 标题比较 bug 仍存在的 index schema 版本。
+const V3_INDEX_SCHEMA_VERSION: u64 = 3;
+/// 新 index schema 版本（starmap_ids + root_starmap_ids + main 映射，legacy portal 修复后）。
+pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 4;
 
 /// 旧 GraphMeta schema 版本。
 const OLD_GRAPH_META_SCHEMA_VERSION: &str = "3";
@@ -55,14 +65,17 @@ pub fn migrate_starmap_data(app_data_root: &Path) -> Result<()> {
 
 /// index 迁移入口（在 `load_index` 之前调用）。
 ///
-/// 读取 `starmaps/index.json`，把 schema 1 / schema 2 都迁移到当前 schema 3：
+/// 读取 `starmaps/index.json`，把 schema 1 / 2 / 3 都迁移到当前 schema 4：
 /// - schema 1：旧 `starmaps` 数组 → `starmap_ids` + `main_starmap_by_project`；
 /// - schema 2：补上显式 `root_starmap_ids`（用 Embed / legacy portal 关系
-///   一次性推导）。
+///   一次性推导）；
+/// - schema 3：只做一次针对旧 bug 的修复——扫描 legacy `Note + portal(destination_target=None)`
+///   的目标 id，从现有 `root_starmap_ids` 里移除这些 id，其余 root 身份原样保留。
+///   不重新按 Embed 推导，避免把"本来就是一级星图、后来又被嵌入别处"的合法身份改掉。
 ///
-/// 已经是 schema 3 则跳过（`Ok(())`）。
+/// 已经是 schema 4 则跳过（`Ok(())`）。
 ///
-/// **Fail-closed 版本策略**：未知 / 缺失 / 非法版本（既不是 1/2/3）
+/// **Fail-closed 版本策略**：未知 / 缺失 / 非法版本（既不是 1/2/3/4）
 /// 直接返回 `Err(UnsupportedVersion)`，不把未来格式当当前 schema 静默接受。
 ///
 /// schema 1 迁移时同时重写每个星图的 `starmaps/{id}.meta.json`，只保留当前唯一
@@ -95,6 +108,21 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
                 Error::Other(format!("index schema 2 deserialization failed: {}", e))
             })?
         }
+        V3_INDEX_SCHEMA_VERSION => {
+            // schema 3 → 4：不重算 root_starmap_ids，只移除 legacy portal 错收的 root。
+            // 先按结构反序列化拿到现有 root_starmap_ids。
+            let mut rec = serde_json::from_value::<super::StarMapIndexRecord>(value.clone())
+                .map_err(|e| {
+                    Error::Other(format!("index schema 3 deserialization failed: {}", e))
+                })?;
+            let legacy_child_ids = collect_legacy_portal_child_ids(app_data_root, &rec.starmap_ids)?;
+            rec.root_starmap_ids.retain(|id| !legacy_child_ids.contains(id));
+            rec.schema_version = NEW_INDEX_SCHEMA_VERSION;
+            rec.updated_at = super::now_epoch();
+            let new_content = serde_json::to_string_pretty(&rec)?;
+            crate::storage::atomic_write_string(&index_path, &new_content)?;
+            return Ok(());
+        }
         _ => {
             // 未知/缺失/非法版本，fail-closed：不把未来格式当当前 schema 静默接受。
             return Err(Error::UnsupportedVersion {
@@ -103,8 +131,8 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
         }
     };
 
-    // schema 2 -> 3：老索引没有显式 root 身份，用当前已有的 Embed / legacy portal
-    // 关系做一次迁移，得到 root 集合并持久化。
+    // schema 1/2 → 4：老索引没有显式 root 身份（或刚从 schema 1 重建），
+    // 用当前已有的 Embed / legacy portal 关系做一次迁移，得到 root 集合并持久化。
     record.root_starmap_ids = derive_root_starmap_ids(app_data_root, &record.starmap_ids)?;
     record.schema_version = NEW_INDEX_SCHEMA_VERSION;
     record.updated_at = super::now_epoch();
@@ -165,7 +193,7 @@ fn convert_legacy_index(app_data_root: &Path, value: &Value) -> Result<super::St
 
 /// 用当前 Embed / legacy portal 关系推导一级（根）星图 id 集合。
 ///
-/// 只被 index 迁移调用：meta 缺失的半状态条目跳过（不冒充一级星图，也不在
+/// 只被 index schema 迁移调用：meta 缺失的半状态条目跳过（不冒充一级星图，也不在
 /// 迁移里清理 index——那属于 child-embed journal 恢复 / 删除流程）；graph 加载
 /// 失败返回 Err，不静默跳过（否则会把子星图错误暴露到一级列表）。
 fn derive_root_starmap_ids(app_data_root: &Path, starmap_ids: &[String]) -> Result<Vec<String>> {
@@ -189,6 +217,40 @@ fn derive_root_starmap_ids(app_data_root: &Path, starmap_ids: &[String]) -> Resu
         .into_iter()
         .map(|meta| meta.starmap_id)
         .collect())
+}
+
+/// 扫描所有星图的 legacy `Note + portal(destination_target=None)` 节点，
+/// 收集这些 portal 指向的目标 starmap_id 集合。
+///
+/// 只被 schema 3 → 4 迁移调用：从现有 `root_starmap_ids` 里移除这些 id，
+/// 修复旧 bug（标题比较导致 legacy 子星图被错误保留为 root）。
+/// 其余 root 身份原样保留，不重新按 Embed 推导。
+fn collect_legacy_portal_child_ids(
+    app_data_root: &Path,
+    starmap_ids: &[String],
+) -> Result<std::collections::HashSet<String>> {
+    let mut legacy_child_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for id in starmap_ids {
+        let graph_dir = app_data_root.join("starmaps").join(id);
+        if !graph_dir.is_dir() {
+            continue;
+        }
+        let mut store = crate::starmap::store::StarMapStore::new(app_data_root, id);
+        store.load_full()?;
+        let graph = store.to_starmap_graph();
+        for node in &graph.nodes {
+            if node.kind != crate::starmap::types::StarMapNodeKind::Note {
+                continue;
+            }
+            let Some(portal) = &node.portal else {
+                continue;
+            };
+            if portal.destination_target.is_none() {
+                legacy_child_ids.insert(portal.destination_starmap_id.clone());
+            }
+        }
+    }
+    Ok(legacy_child_ids)
 }
 
 /// 把旧 meta JSON 重写成当前唯一结构，只保留

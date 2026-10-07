@@ -1,13 +1,9 @@
 // =============================================================================
-// WritingTreeGroupHeader.qml — 章节树分组头（Issue #829 手稿）
+// WritingTreeGroupHeader.qml — 卷分组头（Issue #829 手稿）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：渲染左树里的一条可折叠分组头 —— 「标题 ∨ / 标题 ∧ [+ 新章]」
-//
-// 手稿基准（docs/ui/reference/widescreen/宽屏全打开.png）：
-//   左树自上而下是「作品名 ∨」「卷名 ∨ → 章节列表」「章纲 ∨」，
-//   每一段都是带折叠箭头的分组头，不是裸列表。
+// 职责：渲染左树里卷的可折叠分组头 —— 「卷名 ∨ / 卷名 ∧ [+ 新章]」
 //
 // 边界：纯展示 + 一个 toggle 回调。展开态由调用方持有，
 // 组件自己不存状态，也不查后端、不碰章节数据。
@@ -21,11 +17,11 @@ Rectangle {
 
     required property var dt
 
-    // 分组标题（作品名 / 卷名 / 章纲）。
+    // 分组标题（卷名）。
     property string title: ""
     // 当前是否展开。false 时画 ∧，true 时画 ∨。
     property bool expanded: true
-    // 右侧是否带「+」入口（卷分组头带，作品名 / 章纲不带）。
+    // 右侧是否带「+」入口（卷分组头带）。
     property bool showAddButton: false
 
     signal toggleExpanded()

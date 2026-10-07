@@ -80,16 +80,6 @@ pub struct EditorBackend {
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
     #[allow(dead_code)]
-    update_chapter_note: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            volume_id: QString,
-            chapter_id: QString,
-            note: QString,
-        ) -> QJsonObject
-    ),
-    #[allow(dead_code)]
     report_writing_event: qt_method!(
         fn(
             &mut self,
@@ -288,19 +278,6 @@ impl EditorBackend {
             .unwrap_or_else(|_| {
                 qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
             })
-    }
-    fn update_chapter_note(
-        &mut self,
-        project_id: QString,
-        volume_id: QString,
-        chapter_id: QString,
-        note: QString,
-    ) -> QJsonObject {
-        let result = self
-            .with_app_mut(|app| app.update_chapter_note(project_id, volume_id, chapter_id, note));
-        result.unwrap_or_else(|_| {
-            qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
-        })
     }
     fn report_writing_event(
         &mut self,

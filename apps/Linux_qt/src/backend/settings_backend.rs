@@ -151,6 +151,7 @@ fn determine_export_dir(_app_data_root: &std::path::Path) -> std::path::PathBuf 
 /// - `app_settings_sanitized.json`：设置快照（存在时）
 /// - `sync_operation_state.json`：当前同步操作状态（含 target 进度，运行中才有）
 /// - `full_sync_state.json`：全量同步持久状态
+/// - `app_sync_state.json`：App target 同步状态（含 last_error）
 /// - `sync_conflicts.json`：全局冲突摘要（只含路径语义和类型，不含正文/快照）
 /// - `sync_runtime.json`：同步运行时状态（data root 脱敏，只保留 basename）
 fn build_export_attachments(
@@ -279,11 +280,19 @@ fn build_export_attachments(
     }
 
     // full_sync_state.json — 全量同步持久状态。core_api() 返回 None（无工作区）时跳过。
+    // app_sync_state.json — App target 同步状态（含 last_error），让诊断包脱敏流程统一处理。
     if let Some(api) = app.core_api() {
         if let Ok(Some(state)) = api.load_full_sync_state() {
             let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
             attachments.push(writer_diagnostics::PlatformAttachment {
                 relative_path: "full_sync_state.json".to_string(),
+                content: json.into_bytes(),
+            });
+        }
+        if let Ok(state) = api.load_app_sync_state() {
+            let json = serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".to_string());
+            attachments.push(writer_diagnostics::PlatformAttachment {
+                relative_path: "app_sync_state.json".to_string(),
                 content: json.into_bytes(),
             });
         }

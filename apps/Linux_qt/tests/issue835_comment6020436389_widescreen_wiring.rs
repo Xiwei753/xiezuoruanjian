@@ -12,10 +12,13 @@
 //!    也不打开一个空的 AI pane。
 //! 3. 内容区四角色（章节栏 / 正文列 / 右工具面板 / 最右 rail）都填满 cross-axis 高度，
 //!    命中区与视觉一致。
-//! 4. 章节树：卷展开赋全新对象触发 model 重建；章节行发 `openChapter`；章纲显示当前
-//!    章节真实 `chapter.note`，保存失败回滚编辑框而不是把本地缓存冒充成已保存。
+//! 4. 章节树：卷展开赋全新对象触发 model 重建；章节行发 `openChapter`；
+//!    作品标题为静态行（没有折叠箭头、没有 projectGroupCollapsed）；
+//!    不再有"章纲" TextArea / outlineGroupExpanded / chapterNoteChanged。
 //! 5. 宽屏设置两列、窄屏上下单列，两组列都在同一份 `settingsColumns` 里，
 //!    不再用 `visible: root.widePanel` 隐藏右列丢掉三组设置。
+//! 6. 宽屏默认布局：layoutPlan 为 null 时默认宽屏侧栏（Side），只有 Core 明确
+//!    返回 "Bottom" 才进入窄屏导航。
 //!
 //! 每条断言对应 #835 复核评论里明确要求或明确禁止的一条接线，不复制 QML 逻辑。
 
@@ -321,7 +324,7 @@ fn content_area_roles_fill_cross_axis_height() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 5. WritingChapterNavigation.qml — 卷展开 / 章节点击 / 真实章纲
+// 5. WritingChapterNavigation.qml — 卷展开 / 章节点击 / 左树语义纠正
 // ─────────────────────────────────────────────────────────────────────────
 
 /// 卷展开必须整体赋新对象，QML 才会把 property var 视为变化并重建 model。
@@ -365,170 +368,162 @@ fn chapter_rows_emit_open_chapter() {
     );
 }
 
-/// 章纲接真实 chapter.note，不再留空实现，并提供失败回滚入口。
+/// Issue #836：左树语义纠正 — 作品标题为静态行，不再有折叠分组头。
 #[test]
-fn outline_shows_real_chapter_note() {
+fn left_tree_project_title_is_static_no_collapse() {
     let src = read_src("qml/WritingChapterNavigation.qml");
-    assert!(
-        src.contains("property string currentChapterNote: \"\""),
-        "章节导航必须接收当前章节 note（唯一来源 editorController.chapterNote）"
-    );
-    assert!(
-        src.contains("signal chapterNoteChanged(string note)"),
-        "编辑完成必须把 note 交回 backend"
-    );
-    assert!(
-        src.contains("onEditingFinished: root.chapterNoteChanged(outlineTextArea.text)"),
-        "章纲编辑完成必须发 chapterNoteChanged"
-    );
-
-    let restore = slice_between(
-        &src,
-        "function restoreChapterNoteFromSource() {",
-        "function volumesArray()",
-    );
-    assert!(
-        restore.contains("outlineTextArea.text = root.currentChapterNote"),
-        "失败回滚必须把编辑框恢复成 Core 当前值，实际窗口:\n{restore}"
-    );
-
     let code = strip_line_comments(&src);
+
+    // 不得再有 projectGroupCollapsed / outlineGroupExpanded 属性
     assert!(
-        !code.contains("还没接上"),
-        "章纲不得再留\"还没接上\"的空实现"
+        !code.contains("projectGroupCollapsed"),
+        "Issue #836：不得再有 projectGroupCollapsed 属性"
     );
     assert!(
-        src.contains("qsTr(\"请选择章节\")"),
-        "未选章节时显示空态提示"
+        !code.contains("outlineGroupExpanded"),
+        "Issue #836：不得再有 outlineGroupExpanded 属性"
+    );
+
+    // 不得再有 toggleProjectGroup / toggleOutlineGroup 信号
+    assert!(
+        !code.contains("toggleProjectGroup"),
+        "Issue #836：不得再有 toggleProjectGroup 信号"
+    );
+    assert!(
+        !code.contains("toggleOutlineGroup"),
+        "Issue #836：不得再有 toggleOutlineGroup 信号"
+    );
+
+    // 不得再有 chapterNoteChanged 信号
+    assert!(
+        !code.contains("chapterNoteChanged"),
+        "Issue #836：不得再有 chapterNoteChanged 信号"
+    );
+
+    // 不得再有 currentChapterNote 属性
+    assert!(
+        !code.contains("currentChapterNote"),
+        "Issue #836：不得再有 currentChapterNote 属性"
+    );
+
+    // 不得再有 restoreChapterNoteFromSource 函数
+    assert!(
+        !code.contains("restoreChapterNoteFromSource"),
+        "Issue #836：不得再有 restoreChapterNoteFromSource 函数"
+    );
+
+    // 不得再有 "章纲" TextArea
+    assert!(
+        !code.contains("outlineTextArea"),
+        "Issue #836：不得再有章纲 TextArea"
+    );
+
+    // 不得再有 "请选择章节" 空态
+    assert!(
+        !code.contains("请选择章节"),
+        "Issue #836：不得再有章纲空态提示"
+    );
+
+    // 作品标题必须是静态行（Rectangle + AppText），不是 WritingTreeGroupHeader
+    // 查找顶部标题区域：在 ColumnLayout 里，作品标题行不应使用 WritingTreeGroupHeader
+    let top_section = slice_between(
+        &src,
+        "ColumnLayout {",
+        "// Tree list",
+    );
+    assert!(
+        !top_section.contains("WritingTreeGroupHeader"),
+        "Issue #836：顶部作品标题不得使用 WritingTreeGroupHeader（应为静态行），实际窗口:\n{top_section}"
+    );
+    assert!(
+        top_section.contains("workspaceProjectTitle"),
+        "Issue #836：顶部必须显示 workspaceProjectTitle，实际窗口:\n{top_section}"
+    );
+
+    // 卷仍走 WritingTreeGroupHeader
+    let volume_header = slice_between(
+        &src,
+        "// ── 卷分组头 ──",
+        "// 卷头右键菜单",
+    );
+    assert!(
+        volume_header.contains("WritingTreeGroupHeader"),
+        "Issue #836：卷仍必须走 WritingTreeGroupHeader，实际窗口:\n{volume_header}"
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 6. WritingWorkspace.qml / EditorController.qml / backend — note 事务
-// ─────────────────────────────────────────────────────────────────────────
-
-/// 两处章纲处理都必须看后端 envelope，失败不更新本地缓存并回滚编辑框。
+/// Issue #836：WritingWorkspace 不得再传递 projectGroupCollapsed / outlineGroupExpanded / currentChapterNote。
 #[test]
-fn chapter_note_save_failure_restores_core_value() {
+fn writing_workspace_no_group_collapse_props() {
     let src = read_src("qml/WritingWorkspace.qml");
     let code = strip_line_comments(&src);
-    assert_eq!(
-        code.matches("update_chapter_note(").count(),
-        2,
-        "Workbench 与 SinglePane 两处章纲都要写回 Core"
-    );
-    assert_eq!(
-        code.matches("if (result && result.success)").count(),
-        2,
-        "两处都必须检查后端 envelope 的 success"
-    );
-    assert_eq!(
-        code.matches("restoreChapterNoteFromSource()").count(),
-        2,
-        "两处失败路径都要恢复编辑框"
-    );
 
-    let workbench = slice_between(
-        &src,
-        "onChapterNoteChanged: function(note) {",
-        "// Middle Area: Toolbar + Editor",
+    assert!(
+        !code.contains("projectGroupCollapsed"),
+        "Issue #836：WritingWorkspace 不得再有 projectGroupCollapsed"
     );
     assert!(
-        workbench.contains("editorController.chapterNote = note"),
-        "成功路径才更新本地 chapterNote，实际窗口:\n{workbench}"
+        !code.contains("outlineGroupExpanded"),
+        "Issue #836：WritingWorkspace 不得再有 outlineGroupExpanded"
     );
     assert!(
-        workbench.contains("sidebarRect.restoreChapterNoteFromSource()"),
-        "失败路径必须回滚 Workbench 编辑框，实际窗口:\n{workbench}"
-    );
-
-    let single_pane = slice_from(&src, "id: singlePaneNavPanel");
-    assert!(
-        single_pane.contains("editorController.chapterNote = note"),
-        "SinglePane 成功路径才更新本地 chapterNote，实际窗口:\n{single_pane}"
+        !code.contains("currentChapterNote"),
+        "Issue #836：WritingWorkspace 不得再有 currentChapterNote"
     );
     assert!(
-        single_pane.contains("singlePaneNavPanel.restoreChapterNoteFromSource()"),
-        "失败路径必须回滚 SinglePane 编辑框，实际窗口:\n{single_pane}"
+        !code.contains("chapterNote"),
+        "Issue #836：WritingWorkspace 不得再有 chapterNote 相关代码"
+    );
+    assert!(
+        !code.contains("update_chapter_note"),
+        "Issue #836：WritingWorkspace 不得再调用 update_chapter_note"
+    );
+    assert!(
+        !code.contains("restoreChapterNoteFromSource"),
+        "Issue #836：WritingWorkspace 不得再调用 restoreChapterNoteFromSource"
+    );
+    assert!(
+        !code.contains("toggleProjectGroup"),
+        "Issue #836：WritingWorkspace 不得再有 toggleProjectGroup handler"
+    );
+    assert!(
+        !code.contains("toggleOutlineGroup"),
+        "Issue #836：WritingWorkspace 不得再有 toggleOutlineGroup handler"
     );
 }
 
-/// 打开章节写入真实 meta.note，清空章节同步清空缓存。
+/// Issue #836：EditorController 不得再有 chapterNote 缓存属性。
 #[test]
-fn editor_controller_tracks_chapter_note_from_core() {
+fn editor_controller_no_chapter_note() {
     let src = read_src("qml/EditorController.qml");
-    assert!(
-        src.contains("property string chapterNote: \"\""),
-        "EditorController 必须持有当前章节 note 状态"
-    );
+    let code = strip_line_comments(&src);
 
-    let load = slice_between(
-        &src,
-        "// Issue #835：同步当前章节章纲（chapter.note）。",
-        "// Return full result",
-    );
     assert!(
-        load.contains("result.data.meta.note"),
-        "note 必须来自 Core 的 meta.note，实际窗口:\n{load}"
-    );
-    assert!(
-        load.contains("controller.chapterNote = note"),
-        "打开章节成功后写入 chapterNote，实际窗口:\n{load}"
-    );
-
-    let clear = slice_between(
-        &src,
-        "function clearActiveChapter()",
-        "function reportStatsIfChanged",
-    );
-    assert!(
-        clear.contains("chapterNote = \"\""),
-        "清空章节时同步清空章纲缓存，实际窗口:\n{clear}"
+        !code.contains("chapterNote"),
+        "Issue #836：EditorController 不得再有 chapterNote 属性或赋值"
     );
 }
 
-/// Linux_Qt backend 只做 Core 的薄封装，并注册成 QML 可调用方法。
+/// Issue #836：Linux_Qt backend 不再暴露 update_chapter_note。
 #[test]
-fn linux_qt_backend_exposes_core_update_chapter_note() {
+fn linux_qt_backend_no_update_chapter_note() {
     let ops = read_src("src/backend/chapter_operations.rs");
-    let wrapper = slice_from(&ops, "pub(crate) fn update_chapter_note(");
+    let code = strip_line_comments(&ops);
     assert!(
-        wrapper.contains("api.update_chapter_note(&p, &v, &c, &note_str)"),
-        "薄封装必须直接调 Core，不在平台端存第二份 note，实际窗口:\n{wrapper}"
-    );
-    assert!(
-        wrapper.contains("bridge_success_object"),
-        "成功返回统一 envelope，实际窗口:\n{wrapper}"
-    );
-    assert!(
-        wrapper.contains("bridge_error_object"),
-        "失败也返回统一 envelope，实际窗口:\n{wrapper}"
+        !code.contains("update_chapter_note"),
+        "Issue #836：chapter_operations.rs 不得再有 update_chapter_note 方法"
     );
 
     let backend = read_src("src/backend/editor_backend.rs");
-    let declaration = slice_between(
-        &backend,
-        "update_chapter_note: qt_method!(",
-        "report_writing_event: qt_method!(",
-    );
+    let code = strip_line_comments(&backend);
     assert!(
-        declaration.contains("note: QString"),
-        "QML 方法签名必须收四个参数（project/volume/chapter/note），实际窗口:\n{declaration}"
-    );
-
-    let implementation = slice_between(
-        &backend,
-        "fn update_chapter_note(",
-        "fn report_writing_event(",
-    );
-    assert!(
-        implementation.contains("app.update_chapter_note(project_id, volume_id, chapter_id, note)"),
-        "backend 实现必须转发到 chapter_operations 的薄封装，实际窗口:\n{implementation}"
+        !code.contains("update_chapter_note"),
+        "Issue #836：editor_backend.rs 不得再有 update_chapter_note 声明或实现"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 7. SettingsDialog.qml — 宽屏两列 / 窄屏上下单列
+// 6. SettingsDialog.qml — 宽屏两列 / 窄屏上下单列
 // ─────────────────────────────────────────────────────────────────────────
 
 /// 两列都常驻：宽屏左右摆，窄屏上下接，不靠隐藏右列模拟单列。
@@ -589,5 +584,105 @@ fn settings_wide_two_columns_narrow_stacked() {
     assert!(
         src.contains("contentHeight: settingsColumns.height"),
         "ScrollView 内容高度必须跟随两列合成高度"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 7. 宽屏默认布局 — layoutPlan 为 null 时默认宽屏
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Issue #836：CreativeHub.qml 的 wideShell 在 layoutPlan 为 null 时默认 true。
+#[test]
+fn creative_hub_wide_shell_defaults_to_side_when_plan_null() {
+    let src = read_src("qml/CreativeHub.qml");
+    assert!(
+        src.contains("layoutPlan === null || layoutPlan.primaryNavigationPlacement === \"Side\""),
+        "Issue #836：CreativeHub wideShell 必须在 layoutPlan===null 时默认 Side，实际:\n{src}"
+    );
+
+    // 确保不再用旧逻辑（layoutPlan && ...）
+    let code = strip_line_comments(&src);
+    assert!(
+        !code.contains("layoutPlan && layoutPlan.primaryNavigationPlacement"),
+        "Issue #836：CreativeHub 不得再使用旧逻辑 layoutPlan && ..."
+    );
+}
+
+/// Issue #836：WritingWorkspace.qml 的 wideWorkbench 在 layoutPlan 为 null 时默认 true。
+#[test]
+fn writing_workspace_wide_workbench_defaults_when_plan_null() {
+    let src = read_src("qml/WritingWorkspace.qml");
+    assert!(
+        src.contains("layoutPlan === null || layoutPlan.workspaceLayoutMode === \"Workbench\""),
+        "Issue #836：WritingWorkspace wideWorkbench 必须在 layoutPlan===null 时默认 Workbench，实际:\n{src}"
+    );
+
+    let code = strip_line_comments(&src);
+    assert!(
+        !code.contains("layoutPlan && layoutPlan.workspaceLayoutMode"),
+        "Issue #836：WritingWorkspace 不得再使用旧逻辑 layoutPlan && ..."
+    );
+}
+
+/// Issue #836：SettingsDialog.qml 的 widePanel / overlayPanel 在 layoutPlan 为 null 时默认宽屏。
+#[test]
+fn settings_dialog_wide_defaults_when_plan_null() {
+    let src = read_src("qml/SettingsDialog.qml");
+    assert!(
+        src.contains("layoutPlan === null || layoutPlan.primaryNavigationPlacement === \"Side\""),
+        "Issue #836：SettingsDialog widePanel 必须在 layoutPlan===null 时默认 Side"
+    );
+    assert!(
+        src.contains("layoutPlan === null || layoutPlan.workspaceLayoutMode === \"Workbench\""),
+        "Issue #836：SettingsDialog overlayPanel 必须在 layoutPlan===null 时默认 Workbench"
+    );
+
+    let code = strip_line_comments(&src);
+    assert!(
+        !code.contains("layoutPlan && layoutPlan.primaryNavigationPlacement"),
+        "Issue #836：SettingsDialog 不得再使用旧逻辑 layoutPlan && ..."
+    );
+    assert!(
+        !code.contains("layoutPlan && layoutPlan.workspaceLayoutMode"),
+        "Issue #836：SettingsDialog 不得再使用旧逻辑 layoutPlan && ..."
+    );
+}
+
+/// Issue #836：只有 Core 明确返回 "Bottom" 才进入窄屏导航。
+/// 验证三处 QML 的 wideShell/wideWorkbench/widePanel 都只在 "Bottom" 时为 false。
+#[test]
+fn only_bottom_placement_enters_narrow_shell() {
+    // CreativeHub: wideShell = layoutPlan === null || placement === "Side"
+    // → 只有 placement === "Bottom" 时 wideShell 才为 false
+    let hub = read_src("qml/CreativeHub.qml");
+    let hub_line = hub
+        .lines()
+        .find(|l| l.contains("wideShell:"))
+        .expect("CreativeHub must have wideShell property");
+    assert!(
+        hub_line.contains("layoutPlan === null") && hub_line.contains("\"Side\""),
+        "CreativeHub wideShell 必须在 null 时默认宽屏，只有 Bottom 才窄屏，实际:\n{hub_line}"
+    );
+
+    // WritingWorkspace: wideWorkbench = layoutPlan === null || mode === "Workbench"
+    let ws = read_src("qml/WritingWorkspace.qml");
+    let ws_line = ws
+        .lines()
+        .find(|l| l.contains("wideWorkbench:"))
+        .expect("WritingWorkspace must have wideWorkbench property");
+    assert!(
+        ws_line.contains("layoutPlan === null") && ws_line.contains("\"Workbench\""),
+        "WritingWorkspace wideWorkbench 必须在 null 时默认宽屏，实际:\n{ws_line}"
+    );
+
+    // SettingsDialog: widePanel = layoutPlan === null || placement === "Side"
+    let sd = read_src("qml/SettingsDialog.qml");
+    let sd_line = sd
+        .lines()
+        .find(|l| l.contains("widePanel:"))
+        .expect("SettingsDialog must have widePanel property");
+    assert!(
+        sd_line.contains("layoutPlan === null") && sd_line.contains("\"Side\""),
+        "SettingsDialog widePanel 必须在 null 时默认宽屏，实际:\n{sd_line}"
     );
 }
