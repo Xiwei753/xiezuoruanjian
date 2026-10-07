@@ -148,6 +148,17 @@ def first_value(data: dict[str, Any], keys: Sequence[str]) -> str | None:
     return None
 
 
+def first_list_value(data: dict[str, Any], keys: Sequence[str]) -> str | None:
+    for obj in iter_dicts(data):
+        for key in keys:
+            value = obj.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, (str, int)) and str(item):
+                        return str(item)
+    return None
+
+
 def find_version_package_id(data: dict[str, Any], version_id: str) -> str | None:
     """Find the package ID already attached to one test version."""
     for obj in iter_dicts(data):
@@ -945,7 +956,10 @@ def publish(args: argparse.Namespace) -> None:
         str(args.distribute_mode),
     )
     assert isinstance(package, dict)
-    pkg_id = first_value(package, ("pkgId", "packageId", "packageID", "pkgID"))
+    pkg_id = (
+        first_value(package, ("pkgId", "packageId", "packageID", "pkgID"))
+        or first_list_value(package, ("pkgVersion",))
+    )
     if not pkg_id:
         # The current Testing API may acknowledge pkg-add with only ret.code=0.
         # Query the just-created version to recover the attached package ID.
