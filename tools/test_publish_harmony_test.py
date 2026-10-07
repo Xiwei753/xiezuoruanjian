@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -12,6 +13,44 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PublishHarmonyTestHelpers(unittest.TestCase):
+    def test_disable_hvigor_signing_detaches_product(self) -> None:
+        source = "signingConfigs: [{ name: 'default' }], products: [{ signingConfig: 'default' }]"
+        updated = MODULE.disable_hvigor_signing_text(source)
+        self.assertIn("signingConfig: ''", updated)
+        self.assertIn("signingConfigs:", updated)
+
+    def test_resolve_direct_signing_accepts_complete_ci_material(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            p12 = root / "release.p12"
+            cer = root / "release.cer"
+            profile = root / "release.p7b"
+            for path in (p12, cer, profile):
+                path.write_bytes(b"x")
+            env = {
+                "HARMONY_SIGN_P12_FILE": str(p12),
+                "HARMONY_SIGN_CER_FILE": str(cer),
+                "HARMONY_SIGN_PROFILE_FILE": str(profile),
+                "HARMONY_SIGN_STORE_PASSWORD": "store-secret",
+                "HARMONY_SIGN_KEY_ALIAS": "release-key",
+                "HARMONY_SIGN_KEY_PASSWORD": "key-secret",
+            }
+            with mock.patch.dict(MODULE.os.environ, env, clear=True):
+                signing = MODULE.resolve_direct_signing()
+            self.assertIsNotNone(signing)
+            assert signing is not None
+            self.assertEqual(str(p12.resolve()), signing["p12"])
+            self.assertEqual("release-key", signing["key_alias"])
+
+    def test_resolve_direct_signing_rejects_partial_ci_material(self) -> None:
+        with mock.patch.dict(
+            MODULE.os.environ,
+            {"HARMONY_SIGN_P12_FILE": "/tmp/release.p12"},
+            clear=True,
+        ):
+            with self.assertRaises(MODULE.PublishError):
+                MODULE.resolve_direct_signing()
+
     def test_resolve_hvigorw_uses_cli_path(self) -> None:
         with mock.patch.object(
             MODULE.shutil,

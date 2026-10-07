@@ -225,8 +225,8 @@ def check_release_signing_config() -> None:
     except OSError as exc:
         raise PublishError(f"无法读取 {BUILD_PROFILE}: {exc}") from exc
 
-    # Do not parse or print secrets. We only verify that the tracked empty
-    # placeholders have been replaced locally.
+    # Legacy/local mode: Hvigor signs from build-profile.json5. Passwords here
+    # must already be the encrypted values produced by DevEco/Hvigor tooling.
     required = ("storeFile", "storePassword", "keyAlias", "keyPassword", "profile", "certpath")
     empty: list[str] = []
     for key in required:
@@ -237,8 +237,50 @@ def check_release_signing_config() -> None:
         raise PublishError(
             "release 签名配置还没填好："
             + ", ".join(empty)
-            + "。先在本机生成/填入发布证书与 Profile；密钥和密码不要提交到 Git。"
+            + "。本地 Hvigor 签名需要完整 build-profile；CI 建议使用 HARMONY_SIGN_*_FILE "
+            "环境变量走 unsigned APP + hap-sign-tool 直接签名。"
         )
+
+
+DIRECT_SIGN_ENV = {
+    "p12": "HARMONY_SIGN_P12_FILE",
+    "cer": "HARMONY_SIGN_CER_FILE",
+    "profile": "HARMONY_SIGN_PROFILE_FILE",
+    "store_password": "HARMONY_SIGN_STORE_PASSWORD",
+    "key_alias": "HARMONY_SIGN_KEY_ALIAS",
+    "key_password": "HARMONY_SIGN_KEY_PASSWORD",
+}
+
+
+def resolve_direct_signing() -> dict[str, str] | None:
+    values = {key: os.environ.get(env_name, "").strip() for key, env_name in DIRECT_SIGN_ENV.items()}
+    if not any(values.values()):
+        return None
+
+    missing = [DIRECT_SIGN_ENV[key] for key, value in values.items() if not value]
+    if missing:
+        raise PublishError("CI 直接签名参数不完整：" + ", ".join(missing))
+
+    for key in ("p12", "cer", "profile"):
+        path = Path(values[key]).expanduser().resolve()
+        if not path.is_file():
+            raise PublishError(f"CI 直接签名文件不存在：{DIRECT_SIGN_ENV[key]}={path}")
+        values[key] = str(path)
+    return values
+
+
+def disable_hvigor_signing_text(text: str) -> str:
+    """Detach the product from signingConfigs so Hvigor emits an unsigned APP."""
+    pattern = r"(\bsigningConfig\s*:\s*)(['\"])(.*?)\2"
+
+    def replacement(match: re.Match[str]) -> str:
+        quote = match.group(2)
+        return f"{match.group(1)}{quote}{quote}"
+
+    updated, count = re.subn(pattern, replacement, text, count=1)
+    if count != 1:
+        raise PublishError("无法在 build-profile.json5 中定位 products[].signingConfig。")
+    return updated
 
 
 def resolve_hvigorw() -> str:
@@ -249,6 +291,54 @@ def resolve_hvigorw() -> str:
         "找不到 HarmonyOS CLI 提供的 hvigorw。"
         "先运行 tools/setup_harmony_cli.sh 并把 $HARMONY_CLI_HOME/bin 加入 PATH。"
     )
+
+
+def resolve_hap_sign_tool() -> Path:
+    candidates: list[Path] = []
+    sdk_home = os.environ.get("DEVECO_SDK_HOME")
+    if sdk_home:
+        candidates.append(
+            Path(sdk_home).expanduser()
+            / "default"
+            / "openharmony"
+            / "toolchains"
+            / "lib"
+            / "hap-sign-tool.jar"
+        )
+    cli_home = os.environ.get("HARMONY_CLI_HOME")
+    if cli_home:
+        candidates.append(
+            Path(cli_home).expanduser()
+            / "sdk"
+            / "default"
+            / "openharmony"
+            / "toolchains"
+            / "lib"
+            / "hap-sign-tool.jar"
+        )
+    for path in candidates:
+        if path.is_file():
+            return path.resolve()
+    raise PublishError("找不到 SDK 自带的 hap-sign-tool.jar，无法对 unsigned APP 直接签名。")
+
+
+def run_sensitive(
+    cmd: Sequence[str],
+    *,
+    sensitive_values: Sequence[str],
+    cwd: Path = ROOT,
+) -> None:
+    secrets = {value for value in sensitive_values if value}
+    masked = ["***" if str(part) in secrets else shlex.quote(str(part)) for part in cmd]
+    eprint("+", " ".join(masked))
+    proc = subprocess.run(
+        [str(part) for part in cmd],
+        cwd=cwd,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise PublishError(f"签名命令失败（exit={proc.returncode}）：{cmd[0]}")
 
 
 def find_latest_app() -> Path:
@@ -316,26 +406,110 @@ def verify_release_app(app_path: Path) -> None:
         eprint("警告：当前工具链的 .app 不是标准 ZIP 容器，跳过内部元数据检查。")
 
 
-def build_release_app(skip_rust: bool) -> Path:
-    check_release_signing_config()
-    if not skip_rust:
-        run([str(ROOT / "tools" / "build_harmony.sh")])
-    hvigorw = resolve_hvigorw()
-    run(
+def sign_release_app(unsigned_app: Path, signing: dict[str, str]) -> Path:
+    java = shutil.which("java")
+    if not java:
+        raise PublishError("找不到 java，无法运行 hap-sign-tool.jar。")
+    sign_tool = resolve_hap_sign_tool()
+
+    base_name = unsigned_app.stem
+    if base_name.endswith("-unsigned"):
+        base_name = base_name[: -len("-unsigned")]
+    signed_app = unsigned_app.with_name(base_name + "-ci-signed.app")
+
+    run_sensitive(
         [
-            hvigorw,
-            "--mode",
-            "project",
-            "-p",
-            "product=default",
-            "-p",
-            "buildMode=release",
-            "assembleApp",
-            "--no-daemon",
+            java,
+            "-jar",
+            str(sign_tool),
+            "sign-app",
+            "-keyAlias",
+            signing["key_alias"],
+            "-signAlg",
+            "SHA256withECDSA",
+            "-mode",
+            "localSign",
+            "-appCertFile",
+            signing["cer"],
+            "-profileFile",
+            signing["profile"],
+            "-inFile",
+            str(unsigned_app),
+            "-keystoreFile",
+            signing["p12"],
+            "-outFile",
+            str(signed_app),
+            "-keyPwd",
+            signing["key_password"],
+            "-keystorePwd",
+            signing["store_password"],
         ],
+        sensitive_values=(signing["key_password"], signing["store_password"]),
         cwd=HARMONY_DIR,
     )
-    app_path = find_latest_app()
+    if not signed_app.is_file():
+        raise PublishError("hap-sign-tool 返回成功，但没有生成 signed .app。")
+
+    with tempfile.TemporaryDirectory(prefix="sujian-harmony-verify-") as temp_dir:
+        temp = Path(temp_dir)
+        run(
+            [
+                java,
+                "-jar",
+                str(sign_tool),
+                "verify-app",
+                "-inFile",
+                str(signed_app),
+                "-outCertChain",
+                str(temp / "cert-chain.cer"),
+                "-outProfile",
+                str(temp / "profile.p7b"),
+            ],
+            cwd=HARMONY_DIR,
+        )
+    eprint(f"APP 直接签名并验签成功：{signed_app.name}")
+    return signed_app
+
+
+def build_release_app(skip_rust: bool) -> Path:
+    direct_signing = resolve_direct_signing()
+    original_profile: str | None = None
+
+    if direct_signing is None:
+        check_release_signing_config()
+    else:
+        original_profile = BUILD_PROFILE.read_text(encoding="utf-8")
+        BUILD_PROFILE.write_text(
+            disable_hvigor_signing_text(original_profile),
+            encoding="utf-8",
+        )
+        eprint("CI 直接签名模式：Hvigor 仅构建 unsigned APP，签名交给 hap-sign-tool.jar。")
+
+    try:
+        if not skip_rust:
+            run([str(ROOT / "tools" / "build_harmony.sh")])
+        hvigorw = resolve_hvigorw()
+        run(
+            [
+                hvigorw,
+                "--mode",
+                "project",
+                "-p",
+                "product=default",
+                "-p",
+                "buildMode=release",
+                "assembleApp",
+                "--no-daemon",
+            ],
+            cwd=HARMONY_DIR,
+        )
+        app_path = find_latest_app()
+    finally:
+        if original_profile is not None:
+            BUILD_PROFILE.write_text(original_profile, encoding="utf-8")
+
+    if direct_signing is not None:
+        app_path = sign_release_app(app_path, direct_signing)
     verify_release_app(app_path)
     return app_path
 
