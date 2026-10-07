@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.concurrent.atomic.AtomicLong
 import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
@@ -34,6 +33,11 @@ import uniffi.writer_core.EditorTransactionCauseDto
  * 串行调用 [StatsBridge.recordEditorChangeStats]，成功后再 markChanged()。
  * Core 的 record_editor_change_stats 内部做 cause → EventSource 映射，
  * Android 不再自己拼 source/session_id/device_id。
+ *
+ * #843 复核评论 6045538399：读取方在查 Core 前先 [awaitPendingWrites]，把 Barrier 发进同一个
+ * actor 队列 —— 输入仍完全异步，只有真的要读统计时才等前面的 Record 收口，避免查询先于
+ * 写入而把旧数据当最新结果；有 Record 写 Core 失败时 barrier 返回 false，读取方据此显示
+ * 统计读取失败，而不是拿缺数据的结果冒充完整结果。
  */
 class WritingStatsRepository(
     private val statsBridge: StatsBridge,
@@ -44,8 +48,8 @@ class WritingStatsRepository(
         data class Record(val seq: Long, val event: PendingWritingEvent) : StatsWriteCommand
 
         /**
-         * #843 三轮复核：查询 barrier — actor 处理到 Barrier 时，它前面的 Record 已全部执行完。
-         * [barrierSeq] 是入队 Barrier 时的 seqCounter 快照，actor 据此判断 1..=barrierSeq 有无脏事件。
+         * #843 复核评论 6045538399：查询 barrier — actor 处理到 Barrier 时，它前面的 Record 已全部执行完。
+         * [barrierSeq] 是入队 Barrier 时的序号快照，actor 据此判断 1..=barrierSeq 有无脏事件。
          * [ack] 完成时 true=干净 / false=有失败。
          */
         data class Barrier(val barrierSeq: Long, val ack: CompletableDeferred<Boolean>) : StatsWriteCommand
@@ -66,10 +70,20 @@ class WritingStatsRepository(
     /** 统计数据变更计数：事件成功写入即递增，供 UI 判断是否需要重新读取。 */
     val revision: StateFlow<Long> = _revision.asStateFlow()
 
-    /** #843 三轮复核：单调递增序号，在 trySend 时分配（非 actor 处理时），保证 barrier 语义。 */
-    private val seqCounter = AtomicLong(0L)
+    /**
+     * #843 复核评论 6045538399：序号分配与入队共用同一把锁。
+     *
+     * barrier 判脏问的是「1..=barrierSeq 有没有失败」。只有「seq 分配」和「入队」在同一个
+     * 临界区里完成，才能保证 seq <= barrierSeq 的 Record 一定排在 Barrier 前面被处理：
+     * 否则一条先在别处拿到 seq、晚于 Barrier 才入队的 Record 会绕过 barrier 的判脏。
+     * 临界区内只有内存操作（Channel 无界，trySend 不挂起），不引入 I/O 等待。
+     */
+    private val enqueueLock = Any()
 
-    /** #843 三轮复核：最早的失败序号（0 = 至今无失败）。只在 actor 中读写，无需同步。 */
+    /** #843 复核评论 6045538399：待写事件序号，只在 [enqueueLock] 临界区内读写。 */
+    private var seqCounter = 0L
+
+    /** #843 复核评论 6045538399：最早的失败序号（0 = 至今无失败）。只在 actor 中读写，无需同步。 */
     private var firstFailedSeq = 0L
 
     private val commands = Channel<StatsWriteCommand>(Channel.UNLIMITED)
@@ -91,7 +105,8 @@ class WritingStatsRepository(
                         if (result is BridgeResult.Success) {
                             markChanged()
                         } else {
-                            // #843 三轮复核：保留最早失败序号，barrier 据此判断 1..=barrierSeq 有无脏事件。
+                            // #843 复核评论 6045538399：保留最早失败序号，barrier 据此判断 1..=barrierSeq
+                            // 有无脏事件；只记最早一条，更晚的失败不能把更早的缺失洗掉。
                             if (firstFailedSeq == 0L) {
                                 firstFailedSeq = cmd.seq
                             }
@@ -151,34 +166,39 @@ class WritingStatsRepository(
         insertedChars: Int,
         deletedChars: Int,
     ) {
-        val seq = seqCounter.incrementAndGet()
-        commands.trySend(
-            StatsWriteCommand.Record(
-                seq,
-                PendingWritingEvent(
-                    projectId = projectId,
-                    volumeId = volumeId,
-                    chapterId = chapterId,
-                    cause = cause,
-                    insertedChars = insertedChars,
-                    deletedChars = deletedChars,
+        synchronized(enqueueLock) {
+            val seq = ++seqCounter
+            commands.trySend(
+                StatsWriteCommand.Record(
+                    seq,
+                    PendingWritingEvent(
+                        projectId = projectId,
+                        volumeId = volumeId,
+                        chapterId = chapterId,
+                        cause = cause,
+                        insertedChars = insertedChars,
+                        deletedChars = deletedChars,
+                    ),
                 ),
-            ),
-        )
+            )
+        }
     }
 
     /**
-     * #843 三轮复核：等待所有已入队的 Record 写入完成。
+     * #843 复核评论 6045538399：等待所有已入队的 Record 写入完成。
      *
      * 把 Barrier 发进同一个 Channel，actor 串行处理到 Barrier 时前面的 Record 已全部执行完。
-     * 返回 true=全部成功 / false=有失败（某条 Record 写 Core 失败）。
+     * 返回 true=全部成功 / false=有失败（某条 Record 写 Core 失败，或那条脏事件仍留在待写区间）。
      * 不另开第二个 channel，不轮询 revision；顺序由现有唯一 actor 保证。
      * 语义与 Harmony 的 `SerialStatsDrain.flushThrough(barrier)` 一致。
      */
     suspend fun awaitPendingWrites(): Boolean {
-        val barrierSeq = seqCounter.get()
         val ack = CompletableDeferred<Boolean>()
-        commands.send(StatsWriteCommand.Barrier(barrierSeq, ack))
+        // 序号快照与 Barrier 入队同处一个临界区：快照之后才分配 seq 的 Record 一定排在
+        // Barrier 后面，不会被误判成「已覆盖且干净」。
+        synchronized(enqueueLock) {
+            commands.trySend(StatsWriteCommand.Barrier(seqCounter, ack))
+        }
         return ack.await()
     }
 }

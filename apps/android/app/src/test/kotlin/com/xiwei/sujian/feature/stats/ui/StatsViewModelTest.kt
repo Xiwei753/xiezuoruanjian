@@ -132,6 +132,56 @@ class StatsViewModelTest {
         assertEquals(settled + 2L, vm.loadedRevision)
     }
 
+    /**
+     * #843 复核评论 6045538399：缓存判断必须移到 barrier 之后。
+     *
+     * 场景：统计页已经加载过，用户刚写完一条事件、Record 还在 writer 队列里时就切回统计页，
+     * 此时 revision 还是旧值 —— 先判缓存会直接命中并留下旧数字。正确顺序是先
+     * awaitPendingWrites() 再判缓存；barrier 失败（单测环境原生库未加载，Record 必写失败）
+     * 要落到明确的统计读取失败状态，不继续查旧磁盘数据，也不推进 loadedRevision。
+     */
+    @Test
+    fun `pending write is drained before cache decision and failed barrier is not a cache hit`() {
+        val repo = createRepo()
+        val vm = StatsViewModel(repo)
+
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { !vm.uiState.value.loading },
+            message = FIRST_SETTLE_MSG,
+        )
+        val settled = vm.loadedRevision
+        assertFalse(vm.uiState.value.loadFailed)
+
+        repo.recordEditorChangeStats(
+            projectId = "p",
+            volumeId = "v",
+            chapterId = "c",
+            cause = EditorTransactionCauseDto.TYPING,
+            insertedChars = 1,
+            deletedChars = 0,
+        )
+        assertEquals(
+            "Record 还在队列里时 revision 不能变（否则测不到缓存先判的窗口）",
+            settled,
+            repo.revision.value,
+        )
+
+        vm.refreshIfNeeded()
+        awaitUntil(
+            predicate = { vm.uiState.value.loadFailed },
+            message = "barrier 失败必须落到统计读取失败状态，不能命中缓存",
+        )
+        assertFalse(vm.uiState.value.loading)
+        assertNull(vm.uiState.value.summary)
+        assertTrue(vm.uiState.value.projects.isEmpty())
+        assertEquals(
+            "barrier 失败不得推进 loadedRevision（否则下次会命中缓存跳过重试）",
+            settled,
+            vm.loadedRevision,
+        )
+    }
+
     @Test
     fun `date rollover triggers requery even when revision unchanged`() {
         val repo = createRepo()

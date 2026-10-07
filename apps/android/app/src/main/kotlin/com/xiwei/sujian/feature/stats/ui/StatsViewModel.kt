@@ -22,7 +22,7 @@ data class StatsUiState(
     val summary: WritingStatsSummary? = null,
     val projects: List<ProjectWritingStatsItem> = emptyList(),
     val loading: Boolean = true,
-    /** #843 三轮复核：barrier 失败时为 true，UI 展示统计读取失败而非"暂无数据"。 */
+    /** #843 复核评论 6045538399：barrier 失败时为 true，UI 展示统计读取失败而非"暂无数据"。 */
     val loadFailed: Boolean = false,
 )
 
@@ -60,8 +60,10 @@ class StatsViewModel(
     internal var todayProvider: () -> LocalDate = { LocalDate.now() }
 
     /**
-     * #843 三轮复核：正确顺序是先 awaitPendingWrites()，barrier 成功后再读 revision + today
-     * 判断缓存；barrier 失败就展示统计读取失败状态，不继续查询旧磁盘数据，也不推进 loadedRevision。
+     * #843 复核评论 6045538399：正确顺序是先 awaitPendingWrites()，barrier 成功后再读 revision + today
+     * 判断缓存 —— 刚写完就切到统计页时，Record 可能还在 writer 队列里、revision 还是旧值，
+     * 缓存判断必须先等写入收口，否则会直接命中缓存返回旧数字。
+     * barrier 失败就展示统计读取失败状态，不继续查询旧磁盘数据，也不推进 loadedRevision。
      *
      * 成功与失败时都只把已加载状态推进到查询开始时的 [queriedRevision]/[queriedEndDate]
      * 快照：结果（哪怕是失败的空结果）只属于这个窗口。查询期间新写入的事件留待提交后的
@@ -89,7 +91,7 @@ class StatsViewModel(
             // 2. barrier 成功后读取当前 revision + today，再判断能不能复用缓存。
             val today = todayProvider()
             val currentRevision = repository.revision.value
-            if (loadedRevision == currentRevision && loadedEndDate == today && !_uiState.value.loading && !_uiState.value.loadFailed) {
+            if (canReuseLoadedStats(currentRevision, today)) {
                 queryInFlight = false
                 return@launch
             }
@@ -125,6 +127,23 @@ class StatsViewModel(
                 refreshIfNeeded()
             }
         }
+    }
+
+    /**
+     * #843 复核评论 6045538399：能否直接复用已加载数据 — revision 与查询日期都没变，
+     * 且当前展示的是一次已完成的成功加载。逐项判断而不是堆在一个条件里（detekt ComplexCondition）；
+     * 调用点必须先过 [WritingStatsRepository.awaitPendingWrites]，否则刚写完的 Record 还没落盘，
+     * revision 仍是旧值就会命中缓存。
+     */
+    private fun canReuseLoadedStats(
+        currentRevision: Long,
+        today: LocalDate,
+    ): Boolean {
+        if (loadedRevision != currentRevision) return false
+        if (loadedEndDate != today) return false
+        if (_uiState.value.loading) return false
+        if (_uiState.value.loadFailed) return false
+        return true
     }
 
     class Factory(
