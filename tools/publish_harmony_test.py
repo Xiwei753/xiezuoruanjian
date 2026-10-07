@@ -1082,6 +1082,11 @@ def sync_global_device_types(
     body = {
         "publishCountry": publish_country,
         "encrypted": encrypted,
+        # HarmonyOS application category: 工具 -> 写作.
+        # Connect API category table: harmonyChildType is the secondary category
+        # ID and kindMainTag is the tag ID.
+        "harmonyChildType": 10000000,
+        "kindMainTag": 15000029,
         "deviceTypes": [
             {"deviceType": 4, "appAdapters": ""},
             {"deviceType": 5, "appAdapters": ""},
@@ -1120,11 +1125,19 @@ def sync_global_device_types(
     )
     assert isinstance(verify, dict)
     actual = device_type_ids(verify)
+    verify_info = app_info_dict(verify)
+    child_type = verify_info.get("harmonyChildType")
+    main_tag = verify_info.get("kindMainTag")
     if not {4, 5}.issubset(actual):
         raise PublishError(
             f"AGC 正式应用设备范围写入后读回不完整：actual={sorted(actual)}，expected=[4, 5]"
         )
-    eprint("AGC 正式应用设备范围：手机(4) + 平板(5)")
+    if str(child_type) != "10000000" or str(main_tag) != "15000029":
+        raise PublishError(
+            "AGC HarmonyOS 分类写入后读回不正确："
+            f"harmonyChildType={child_type}, kindMainTag={main_tag}"
+        )
+    eprint("AGC 正式应用信息：CN + 手机(4) + 平板(5) + 工具/写作")
 
 
 def verify_test_device_types(

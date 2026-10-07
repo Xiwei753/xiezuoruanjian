@@ -309,6 +309,8 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                         "appInfo": {
                             "publishCountry": "CN",
                             "encrypted": 0,
+                            "harmonyChildType": 10000000,
+                            "kindMainTag": 15000029,
                             "deviceTypes": [
                                 {"deviceType": 4, "appAdapters": ""},
                                 {"deviceType": 5, "appAdapters": ""},
@@ -331,6 +333,8 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
         )
         self.assertEqual("CN", bodies[0]["publishCountry"])
         self.assertEqual(0, bodies[0]["encrypted"])
+        self.assertEqual(10000000, bodies[0]["harmonyChildType"])
+        self.assertEqual(15000029, bodies[0]["kindMainTag"])
         update_call = next(call for call in calls if call[:2] == ("publish", "app-info-update"))
         self.assertIn("-r", update_call)
         self.assertEqual("1", update_call[update_call.index("-r") + 1])
