@@ -3,9 +3,11 @@
 
 The script intentionally does not create/delete certificates, profiles, apps, groups,
 or testers. It reuses the repository's existing HarmonyOS release signing setup and
-an existing AGC test group, then performs the non-destructive release pipeline:
+an existing AGC test group. By default it also replaces old HarmonyOS test versions
+before publishing the newest build:
 
-  release .app -> create test version -> upload -> add package
+  release .app -> inspect old test versions -> cancel/stop/delete when allowed
+  -> create test version -> upload -> add package
   -> bind package/group -> optionally submit for review
 
 Credentials are read by connect-api-cli from the current environment or repository
@@ -164,6 +166,57 @@ def collect_groups(data: dict[str, Any]) -> list[tuple[str, str]]:
         )
         groups.append((group_id, str(name)))
     return groups
+
+
+def collect_test_versions(data: dict[str, Any]) -> list[tuple[str, str]]:
+    """Collect HarmonyOS test version IDs from publish version-list output.
+
+    AGC has changed the exact response nesting over time, so this deliberately
+    accepts several marker fields while requiring a versionId and a positive
+    indication that the entry is a test/HarmonyOS-test version.
+    """
+    seen: set[str] = set()
+    versions: list[tuple[str, str]] = []
+    for obj in iter_dicts(data):
+        version_id = obj.get("versionId")
+        if not isinstance(version_id, (str, int)) or not str(version_id):
+            continue
+
+        release_type = obj.get("releaseType")
+        test_type = obj.get("testType")
+        labels = " ".join(
+            str(obj.get(key, ""))
+            for key in (
+                "versionType",
+                "versionTypeName",
+                "releaseTypeName",
+                "testTypeName",
+                "typeName",
+            )
+        ).lower()
+        is_test = (
+            str(release_type) == "6"
+            or str(test_type) in {"3", "4"}
+            or "test" in labels
+            or "测试" in labels
+        )
+        if not is_test:
+            continue
+
+        version_id = str(version_id)
+        if version_id in seen:
+            continue
+        seen.add(version_id)
+        state = next(
+            (
+                str(obj[key])
+                for key in ("state", "status", "versionState", "reviewState")
+                if key in obj and obj[key] is not None
+            ),
+            "",
+        )
+        versions.append((version_id, state))
+    return versions
 
 
 def check_release_signing_config() -> None:
@@ -328,6 +381,29 @@ class AgcCli:
         validate_business_result(data, " ".join(args[:2]))
         return data
 
+    def try_raw(self, *args: str) -> tuple[bool, dict[str, Any] | None]:
+        """Run an AGC command whose failure is an expected state probe.
+
+        Used by old-version cleanup where "not reviewing", "not running", or
+        "not deletable" are normal outcomes. Expected failures are not retried.
+        """
+        proc = subprocess.run(
+            [*self.command, *args],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False, None
+        try:
+            data = parse_last_json(proc.stdout or "")
+            validate_business_result(data, " ".join(args[:2]))
+        except PublishError:
+            return False, None
+        return True, data
+
     def verify(self) -> None:
         proc = run([*self.command, "--version"], capture=True)
         version_output = (proc.stdout or proc.stderr or "").strip()
@@ -351,13 +427,35 @@ class AgcCli:
             "pkg-add",
             "version-update",
             "version-submit",
+            "version-stop",
+            "version-delete",
             "group-list",
         )
         missing = [name for name in required_commands if name not in test_help]
-        if probe.returncode != 0 or missing:
+
+        publish_probe = subprocess.run(
+            [*self.command, "publish", "--help"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        publish_help = (publish_probe.stdout or "") + "\n" + (publish_probe.stderr or "")
+        required_publish_commands = ("app-id", "version-list", "cancel-review")
+        missing_publish = [
+            name for name in required_publish_commands if name not in publish_help
+        ]
+        if (
+            probe.returncode != 0
+            or publish_probe.returncode != 0
+            or missing
+            or missing_publish
+        ):
+            details = [*missing, *missing_publish]
             raise PublishError(
-                "当前 connect-api-cli 不包含完整 Testing API 命令"
-                + (f"（缺少：{', '.join(missing)}）" if missing else "")
+                "当前 connect-api-cli 不包含完整测试发布/替换命令"
+                + (f"（缺少：{', '.join(details)}）" if details else "")
                 + "。优先安装官方 hmos-connect-api-cli-skill，或设置 "
                 "CONNECT_API_CLI_JS 指向该 skill 的 scripts/connect-api-cli.js。"
             )
@@ -423,6 +521,81 @@ class AgcCli:
         )
 
 
+def cleanup_old_test_versions(
+    cli: AgcCli,
+    *,
+    app_id: str,
+    package_name: str,
+) -> list[str]:
+    """Best-effort retire old HarmonyOS test versions before publishing a new one.
+
+    For each test version we first try to cancel review, then stop an effective
+    test, and finally delete it. AGC legitimately rejects operations that do not
+    match the current state, so those probe failures are ignored. A version that
+    cannot be changed at all is retained as history and the new publish attempt
+    continues; AGC itself remains the final authority on whether a new version is
+    allowed.
+    """
+    data = cli.raw(
+        "publish",
+        "version-list",
+        "-a",
+        app_id,
+        "-p",
+        package_name,
+    )
+    assert isinstance(data, dict)
+    versions = collect_test_versions(data)
+    if not versions:
+        eprint("AGC 没有旧的 HarmonyOS 测试版本需要处理。")
+        return []
+
+    removed: list[str] = []
+    for version_id, state in versions:
+        label = f"{version_id}（state={state}）" if state else version_id
+        eprint(f"处理旧测试版本：{label}")
+
+        cancelled, _ = cli.try_raw(
+            "publish",
+            "cancel-review",
+            "-a",
+            app_id,
+            "-v",
+            version_id,
+        )
+        if cancelled:
+            eprint(f"  已撤销审核：{version_id}")
+
+        stopped, _ = cli.try_raw(
+            "test",
+            "version-stop",
+            "-a",
+            app_id,
+            "-v",
+            version_id,
+        )
+        if stopped:
+            eprint(f"  已停止测试：{version_id}")
+
+        deleted, _ = cli.try_raw(
+            "test",
+            "version-delete",
+            "-a",
+            app_id,
+            "-v",
+            version_id,
+        )
+        if deleted:
+            removed.append(version_id)
+            eprint(f"  已删除旧测试版本：{version_id}")
+        elif cancelled or stopped:
+            eprint(f"  旧版本已退出活动状态，但 AGC 当前不允许删除：{version_id}")
+        else:
+            eprint(f"  旧版本当前不可撤销/停止/删除，作为历史记录保留：{version_id}")
+
+    return removed
+
+
 def build_version_update_body(
     *,
     version_id: str,
@@ -472,6 +645,13 @@ def publish(args: argparse.Namespace) -> None:
     if args.test_type == 3:
         group_id = cli.resolve_group_id(app_id, args.group_id, args.group_name)
         eprint(f"测试群组 ID: {group_id}")
+
+    if not args.keep_old_versions:
+        cleanup_old_test_versions(
+            cli,
+            app_id=app_id,
+            package_name=args.package_name,
+        )
 
     created = cli.raw(
         "test",
@@ -673,6 +853,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--skip-rust",
         action="store_true",
         help="不重编 Rust FFI；仅在 prebuilt 已确认最新时使用。",
+    )
+    parser.add_argument(
+        "--keep-old-versions",
+        action="store_true",
+        default=os.environ.get("AGC_KEEP_OLD_TEST_VERSIONS") == "1",
+        help="不自动撤销/停止/删除旧 HarmonyOS 测试版本。",
     )
     parser.add_argument(
         "--no-submit",
