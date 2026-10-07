@@ -231,21 +231,6 @@ impl SujianEditorItem {
                         ids.push(i);
                     }
                 }
-                // Issue #826: 合并活跃 Reflow 层对应的新 canonical line ids。
-                // `active_reflow_new_ranges` 返回 Reflow 目标行在新文本坐标系里的
-                // byte ranges，把这些 range 对应的 doc_snapshot.visual_lines 行 id
-                // 并入 line_ids，确保 Reflow 的目标行在 canonical 里有 clusters。
-                let active_rebind_ranges = self
-                    .pipeline
-                    .animation_coordinator()
-                    .active_reflow_new_ranges();
-                for (rs, re) in &active_rebind_ranges {
-                    for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
-                        if l.byte_start < *re && l.byte_end > *rs && !ids.contains(&i) {
-                            ids.push(i);
-                        }
-                    }
-                }
                 ids
             };
             if !line_ids.is_empty() {

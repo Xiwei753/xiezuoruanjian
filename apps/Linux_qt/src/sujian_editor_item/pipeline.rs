@@ -1,4 +1,4 @@
-use super::animation::{EditFrontierRequest, LinuxEditorAnimationCoordinator};
+use super::animation::{LinuxEditorAnimationCoordinator, VisualEditRequest};
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect, EditorAnimationKind, PreparedEditMotion};
 use super::edit_snapshot::EditorSnapshot;
@@ -368,7 +368,7 @@ pub(crate) struct LinuxEditorPipeline {
     mirror: CommittedTextMirror,
     /// IME 组合输入状态——跟踪 preedit 到 commit/cancel 的完整生命周期
     composition: CompositionState,
-    /// 动画协调器——管理视觉事务队列和 Timeline
+    /// 动画协调器——持有单一视觉过渡和最后成功绘制帧
     animation_coordinator: LinuxEditorAnimationCoordinator,
     /// 纹理缓存——行快照到 QSGTexture 的映射
     texture_cache: TextureCache,
@@ -431,13 +431,9 @@ pub(crate) enum PipelineEditOutcomeKind {
 
 /// Issue #819 评论 5968240881 问题 2：`prepare_edit_motion` 的明确结果。
 ///
-/// 替代旧的 `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>`——
-/// 后者让调用方自己猜 skip reason（scrolling -> `ScrollingSuppressed`，
-/// 其它 `None` -> `BuilderEmptyTransaction`），实际跳过原因从 `prepare_edit_motion`
-/// 内部丢失。现在每个跳过点原地返回自己的 `EditVisualSkipReason`，
-/// `record_transaction` / `apply_edit_with_visuals` 只透传不再猜。
+/// 每个跳过点原地返回自己的 `EditVisualSkipReason`，调用方只透传、不重新猜测原因。
 pub(crate) enum VisualPrepareOutcome {
-    /// Issue #826: 正文动画已接到唯一的遮罩前沿 / Reflow 层上。
+    /// Issue #853: 由单一 VisualEditState 创建了正文视觉过渡。
     ///
     /// 不再携带事务 key——新模型没有 prepared transaction 队列。
     Created,
@@ -508,8 +504,7 @@ impl LinuxEditorPipeline {
         new_snapshot: crate::editor::layout::CanonicalDocumentVisualSnapshot,
     ) -> LayoutRevision {
         let new_revision = self.bump_layout_revision();
-        self.animation_coordinator
-            .finish_edit_frontier_to_canonical();
+        self.animation_coordinator.clear_visual_edit();
         // 把新 canonical 保存为当前 canonical。
         self.current_canonical_snapshot = Some(new_snapshot);
         // reconcile 删除 unit / 完成事务后同步收 texture cache。
@@ -728,7 +723,7 @@ impl LinuxEditorPipeline {
         self.text_revision = self.text_revision.wrapping_add(1);
     }
 
-    /// 保留仍被活跃前沿 / Reflow 引用的旧行纹理。
+    /// 保留最后成功显示帧和当前视觉过渡引用的行纹理。
     pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
         self.texture_cache.retain_active_snapshot_ids(active_ids);
     }
@@ -862,8 +857,7 @@ impl LinuxEditorPipeline {
                     self.kernel.selection_anchor(),
                 );
                 self.composition.clear();
-                self.animation_coordinator
-                    .finish_edit_frontier_to_canonical();
+                self.animation_coordinator.clear_visual_edit();
                 true
             }
             Err(_) => false,
@@ -1107,202 +1101,34 @@ impl LinuxEditorPipeline {
     ///
     /// 动画 owner 在决定静态层 exclusion 前先准备资源：
     ///
-    /// 1. Insert / Replace 的吐字 glyph：从最新 target 行图截取逐步扩展的可见切片。
-    /// 2. Delete / Replace 的旧正文 overlay：**直接从 track 自带的 `source_lines`
-    ///    取真实 QImage**（`active_conceal_source_lines()`）。
-    ///    Issue #826 评论 14/15：`LineSnapshotId` 只是钥匙不是图，而且 glyph 的
-    ///    source 已经是「track 创建这一刻的 current old snapshot」，不再统一来自
-    ///    `frontier.base_snapshot` —— 回头猜某份 snapshot 有没有这个 id 找不到图。
-    ///    `retain` 只能「别删已存在的」，不能凭空创建。
-    /// 3. Reflow 与 shaping 正在移动的 glyph：取自 target snapshot 的**最新**行图。
-    ///    `ReflowSpan.snapshot_id` 明确是新行的 id，两边 ID 带 revision，本来就不是
-    ///    同一批。
+    /// 动画 glyph 可能引用当前 target 行图，也可能引用 last committed visual frame
+    /// 中的旧行图。只从 base/target 补齐可用 QImage，并保留仍被已提交帧或当前过渡
+    /// 引用的纹理。`LineSnapshotId` 只是缓存键，retain 不会凭空创建缺失纹理。
     ///
-    /// Issue #826 评论 7 阻塞 1：**缺纹理不再一刀切收掉整个 coordinator**。
-    /// 这里只负责「把能准备的准备好 + 记正式诊断」，逐层容错由渲染层负责：
-    /// - 目标纹理 miss：对应 animation-owned exclusion 不生效，canonical 同帧恢复；
-    /// - 旧 overlay 纹理 miss：该旧 glyph 不画，canonical 删除结果直接显示；
-    /// - 其余有纹理的 glyph 继续正常动画。
+    /// 只准备当前 VisualEditState 真正引用的行。若任一动画纹理缺失，renderer
+    /// 会整体回退到 canonical static ownership，不会留下静态缺口。
     ///
-    /// Issue #826 评论 7 性能问题：准备范围收窄到**真正 active 的 line ids**，
-    /// 不再把整份 base snapshot 的可见行 QImage 全部 clone 回缓存。
-    pub fn prepare_frontier_textures(&mut self) {
-        let insert_line_image = |cache: &mut TextureCache, line: &PreparedLineSnapshot| {
-            let Some(image) = line.image.as_ref() else {
-                return;
-            };
-            if !cache.contains_line(&line.id) {
-                cache.insert_line(line.id, image.clone());
-            }
-        };
-
-        // 1. Delete / Replace 的旧正文 overlay。
-        //
-        // Issue #826 评论 15：资源**直接从 track 自己带来的 source_lines 取**，
-        // 不再回头猜某份 snapshot。
-        //
-        // 之前只按 active id 去 `frontier.base_snapshot`（burst 第一笔之前的那份）
-        // 里找图，但评论 14 之后 glyph 的 source 已经是「track 创建这一刻的
-        // current old snapshot」，两者 line id 不同 —— id 进了 active 集合，
-        // 却根本找不到对应 QImage。连续 Backspace（无 Reflow handoff）时第二笔的
-        // current line 从未因任何理由进过 cache，retain 也只能「别删」不能创建，
-        // renderer 直接 get_line miss 跳过该 glyph。
-        //
-        // 生命周期（active ids）与资源（source_lines）现在分清：
-        // retain 负责别删，这里负责缺失时重新插。
-        let overlay_ids = self.animation_coordinator.active_old_overlay_snapshot_ids();
-        for source in self.animation_coordinator.active_conceal_source_lines() {
-            let Some(image) = source.image.as_ref() else {
-                continue;
-            };
-            if !self.texture_cache.contains_line(&source.snapshot_id) {
-                self.texture_cache
-                    .insert_line(source.snapshot_id, image.clone());
-            }
+    /// owner 计划要么拥有完整 animation glyph 资源，要么由 renderer 回退到
+    /// canonical 静态正文；不会先挖静态字再容忍动画缺纹理。
+    pub fn prepare_visual_edit_textures(&mut self, base_snapshot: &EditorLayoutSnapshot) {
+        let active_ids = self.animation_coordinator.active_snapshot_ids();
+        let target_snapshot = self.animation_coordinator.active_target_snapshot().cloned();
+        let mut snapshots = vec![base_snapshot];
+        if let Some(target) = target_snapshot.as_ref() {
+            snapshots.push(target);
         }
 
-        // 2. Insert / Replace 的吐字 glyph：动画层从最新 target 行图逐帧绘制
-        // 0..完整宽度。静态层在整个过渡里排除对应 cluster，所以这些行图必须
-        // 在所有权决策前进入缓存；缺图时 renderer 会撤销 exclusion 并恢复 canonical。
-        let reveal_ids = self.animation_coordinator.active_reveal_snapshot_ids();
-        if !reveal_ids.is_empty() {
-            if let Some(target) = self
-                .animation_coordinator
-                .active_edit_frontier_target_snapshot()
-            {
-                for line in &target.line_snapshots {
-                    if reveal_ids.contains(&line.id) {
-                        insert_line_image(&mut self.texture_cache, line);
-                    }
+        for snapshot in snapshots {
+            for line in &snapshot.line_snapshots {
+                if !active_ids.contains(&line.id) || self.texture_cache.contains_line(&line.id) {
+                    continue;
+                }
+                if let Some(image) = line.image.as_ref() {
+                    self.texture_cache.insert_line(line.id, image.clone());
                 }
             }
         }
-
-        // 3. Reflow 正在移动的 glyph：只准备活跃 span 引用到的最新行。
-        let reflow_ids = self.animation_coordinator.active_reflow_snapshot_ids();
-        if !reflow_ids.is_empty() {
-            if let Some(target) = self
-                .animation_coordinator
-                .active_edit_frontier_target_snapshot()
-            {
-                for line in &target.line_snapshots {
-                    if reflow_ids.contains(&line.id) {
-                        insert_line_image(&mut self.texture_cache, line);
-                    }
-                }
-            }
-        }
-
-        // 4. 吐字 carry 的目标行纹理。
-        //
-        // carry 用最新 target 的行纹理在**旧屏幕位置**画已可见前缀。纯 Insert
-        // rewrap 场景里没有 Conceal overlay、Reflow 也不含这段字（未吐完被排除），
-        // 所以只有这里会准备这张图。缺了它：renderer 跳过 carry glyph，而对应
-        // AnimationOwned exclusion 又因纹理 miss 被过滤 ->「旧行半个 X」直接变成
-        // 「新行完整 X」，评论 20 修掉的瞬移在真实渲染链里复活。
-        let carry_ids = self
-            .animation_coordinator
-            .active_reveal_carried_snapshot_ids();
-        if !carry_ids.is_empty() {
-            if let Some(target) = self
-                .animation_coordinator
-                .active_edit_frontier_target_snapshot()
-            {
-                for line in &target.line_snapshots {
-                    if carry_ids.contains(&line.id) {
-                        insert_line_image(&mut self.texture_cache, line);
-                    }
-                }
-            }
-        }
-
-        // 5. Issue #826 评论 24：不可拆 shaping cluster 交接层的行纹理。
-        //
-        // 旧侧行图由 `ShapingTransitionState` 自己带过来（静态层不会画旧正文），
-        // 新侧行图在最新 target 上 —— 与 Reflow / carry 同一个来源。
-        //
-        // 两张都缺都不行：新侧缺 -> 新 cluster 不淡入，静态层又被 clip 挖掉 -> 空白；
-        // 旧侧缺 -> 旧 cluster 直接消失而不是淡出。
-        for source in self
-            .animation_coordinator
-            .active_shaping_transition_source_lines()
-        {
-            let Some(image) = source.image.as_ref() else {
-                continue;
-            };
-            if !self.texture_cache.contains_line(&source.snapshot_id) {
-                self.texture_cache
-                    .insert_line(source.snapshot_id, image.clone());
-            }
-        }
-        let shaping_ids = self
-            .animation_coordinator
-            .active_shaping_transition_snapshot_ids();
-        if !shaping_ids.is_empty() {
-            if let Some(target) = self
-                .animation_coordinator
-                .active_edit_frontier_target_snapshot()
-            {
-                for line in &target.line_snapshots {
-                    if shaping_ids.contains(&line.id) {
-                        insert_line_image(&mut self.texture_cache, line);
-                    }
-                }
-            }
-        }
-
-        // 5. 缺失只记正式诊断，不收口整个动画。逐层容错见文档注释。
-        //
-        // Issue #826 评论 21：carry 单列一类诊断（`reveal_carry_missing`），
-        // 不和 Reflow 混成同一个事件名 —— 两者的 owner 完全不同（一个是 scalar
-        // Reflow span，一个是吐字 carry），排查时必须能分开看。
-        let missing_reveal: Vec<LineSnapshotId> = reveal_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .collect();
-        let missing_reflow: Vec<LineSnapshotId> = reflow_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .collect();
-        let missing_overlay: Vec<LineSnapshotId> = overlay_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .collect();
-        let missing_carry: Vec<LineSnapshotId> = carry_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .collect();
-        let missing_shaping: Vec<LineSnapshotId> = shaping_ids
-            .iter()
-            .copied()
-            .filter(|id| !self.texture_cache.contains_line(id))
-            .collect();
-        if missing_reveal.is_empty()
-            && missing_reflow.is_empty()
-            && missing_overlay.is_empty()
-            && missing_carry.is_empty()
-            && missing_shaping.is_empty()
-        {
-            return;
-        }
-        record_missing_layer_texture("reveal", &missing_reveal, "editor.anim.frontier");
-        record_missing_layer_texture("reflow", &missing_reflow, "editor.anim.frontier");
-        record_missing_layer_texture("delete_overlay", &missing_overlay, "editor.anim.frontier");
-        record_missing_layer_texture("reveal_carry", &missing_carry, "editor.anim.frontier");
-        // Issue #826 评论 24：交接层单列一类诊断，owner 与前三者都不同。
-        record_missing_layer_texture(
-            "shaping_transition",
-            &missing_shaping,
-            "editor.anim.frontier",
-        );
-        super::editor_animation_debug_log(&format!(
-            "prepare_frontier_textures: reveal_missing={:?} reflow_missing={:?} overlay_missing={:?} reveal_carry_missing={:?} shaping_missing={:?} (逐层容错，不收口)",
-            missing_reveal, missing_reflow, missing_overlay, missing_carry, missing_shaping
-        ));
+        self.texture_cache.retain_active_snapshot_ids(&active_ids);
     }
 
     pub fn prepare_edit_motion(
@@ -1313,10 +1139,8 @@ impl LinuxEditorPipeline {
         new: &EditorSnapshot,
         editor_layout: &crate::editor::layout::EditorLayout,
     ) -> VisualPrepareOutcome {
-        // Issue #756 / Issue #815 评论 6042062633 修改 8: 协同=一条 caret 运动轨迹 +
-        // 文字以 caret 当前帧为吞吐边界；非协同时 typing_animation_enabled 只决定文字动画，
-        // smooth_cursor_enabled 只决定光标动画；任一为 true 都要构造 motion
-        // （文字动画需要排版 old/new，光标动画需要 motion 的 caret track）。
+        // 正文由 VisualEditState 动画，光标由 CursorController 独立动画。
+        // 任一动画开关启用时仍需准备 edit 的新 layout/canonical snapshot。
         let text_animation_enabled =
             ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
         let caret_animation_enabled =
@@ -1358,21 +1182,9 @@ impl LinuxEditorPipeline {
         if !text_animation_enabled && !caret_animation_enabled {
             return VisualPrepareOutcome::AnimationDisabled;
         }
-        // Issue #756 评论 5821042551: 文字与光标各自独立的时长。
-        //
-        // Issue #815 评论 5955090551: 但那条「各自独立」只适用于**非协同**。
-        // 协同模式下 InsertReveal/DeleteConceal 是 `VisualUnitTiming::CaretTrack`
-        // —— 它们没有自己的 duration，逐帧吞吐完全跟着 `cursor_visual_track` 走。
-        // 于是真正驱动整个协同动画速度的是 track 的 duration，而它之前被无条件
-        // 设成 `cursor_animation_duration_ms`（平滑光标时长，通常 80–120ms）。
-        // 实机表现就是「吞吐动画快得看不见」，而且设置里协同时把打字时长和
-        // 光标时长都隐藏了，用户无处可调。
-        //
-        // 所以：**正文吞吐协同**（Insert/Delete/Replace/IME commit）用打字动画时长
-        // 作为整段协同动画的速度；纯 caret 移动（CursorOnly：鼠标点击、方向键移动、
-        // 拖选）仍然属于「平滑光标」，不受影响。
+        // 光标时长只交给 CursorController；正文的时长和追赶策略由 VisualEditState 决定。
         let mut motion = PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
-        // Issue #826: 视觉动画只有"接上遮罩前沿 / Reflow"与"跳过"两种结果。
+        // 本次正文编辑创建唯一视觉过渡，或记录明确的跳过原因。
         let mut visual_outcome = VisualPrepareOutcome::Skipped(
             super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
         );
@@ -1610,13 +1422,6 @@ impl LinuxEditorPipeline {
                     lines: &new_doc_snapshot.visual_lines,
                 };
                 let mut new_raster_ids = diff.new_raster_line_ids.clone();
-                for (rs, re) in self.animation_coordinator.active_reflow_new_ranges() {
-                    for (i, l) in new_doc_snapshot.visual_lines.iter().enumerate() {
-                        if l.byte_start < re && l.byte_end > rs && !new_raster_ids.contains(&i) {
-                            new_raster_ids.push(i);
-                        }
-                    }
-                }
                 // Issue #785 评论 5857451442: 显式把 inserted_range 所在 visual line 并入 new_raster_ids。
                 // diff.new_raster_line_ids 只含 diff 判定需重新栅格化的行；新插入可见字符所在行
                 // 可能被 compare_old_new_visual_lines 归为 reusable/unchanged 而不在其中，
@@ -1871,44 +1676,25 @@ impl LinuxEditorPipeline {
             // - 不再调 LayoutRevision::next() 造第三个 revision（直接复用已采样的 new_revision）。
             self.layout_revision = new_revision;
 
-            // Issue #826: 正文动画的唯一入口。正文已经由 Core 立即提交，
-            // 这里只把"本轮改掉了什么"交给遮罩前沿 + 独立 Reflow 层。
-            // 不再创建 prepared transaction，不再 rebase，不再 carry 历史 unit。
-            //
-            // - `motion.inserted_ranges` / `deleted_ranges` 来自 Core
-            //   `display_patches`（`PreparedEditMotion::from_edit_result`），是正文动画
-            //   分类的唯一事实源。
-            // - `OffsetMap` 用来在 old/new 坐标之间映射同一段**未改**文字，供
-            //   Reflow 层做位置插值（changed range 会被 ReflowState 排除）。
+            // Core 已立即提交最新正文。每次编辑直接用上次成功绘制的 VisualFrame
+            // 重建唯一过渡，不累计中间编辑或旧动画进度。
             let edit_now = Instant::now();
             if text_animation_enabled {
                 self.animation_coordinator
-                    .begin_or_extend_edit_frontier(EditFrontierRequest {
-                        kind: motion.kind,
+                    .begin_visual_edit(VisualEditRequest {
                         base_snapshot: old_snap.clone(),
                         target_snapshot: new_snap.clone(),
-                        deleted_ranges: motion.deleted_ranges.clone(),
-                        inserted_ranges: motion.inserted_ranges.clone(),
-                        // Issue #826 评论 9 阻塞 2：优先用 Core 给的精确映射。
-                        // replace-all / 多 delta batch 的 OffsetMap 能保留多个 unchanged island；
-                        // `OffsetMap::build` 只是最长公共前缀 + 最长公共后缀，中间整段都算改过，
-                        // 会让 unchanged 的字进不了 Reflow、直接跳到最终位置。
                         offset_map: motion.offset_map.clone().unwrap_or_else(|| {
                             OffsetMap::build(&motion.old_text, &motion.new_text)
                         }),
-                        base_text: motion.old_text.clone(),
-                        target_text: motion.new_text.clone(),
-                        conceal_direction: motion.conceal_direction(),
                         now: edit_now,
                     });
-                // 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束。
                 let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
                 self.texture_cache.retain_active_snapshot_ids(&active_ids);
-                self.prepare_frontier_textures();
+                self.prepare_visual_edit_textures(&old_snap);
                 visual_outcome = VisualPrepareOutcome::Created;
             } else {
-                self.animation_coordinator
-                    .finish_edit_frontier_to_canonical();
+                self.animation_coordinator.clear_visual_edit();
                 visual_outcome = VisualPrepareOutcome::Skipped(
                     super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
                 );
@@ -1950,9 +1736,9 @@ impl LinuxEditorPipeline {
             });
 
             super::editor_animation_debug_log(&format!(
-                    "prepare_edit_motion: processed via canonical document snapshot pipeline, kind={:?}, frontier_active={}",
+                    "prepare_edit_motion: canonical snapshot prepared, kind={:?}, visual_edit_active={}",
                     motion.kind,
-                    self.animation_coordinator.has_active_edit_frontier()
+                    self.animation_coordinator.has_active_visual_edit()
                 ));
         }
 
@@ -1960,10 +1746,7 @@ impl LinuxEditorPipeline {
     }
 }
 
-/// Issue #826 评论 7 阻塞 1：记录某一视觉层缺行纹理的正式诊断事件。
-///
-/// 只是**记**缺纹理，不再连带把整个 coordinator 收成 canonical 终态——三个视觉层
-/// 必须故障隔离：Reflow 的资源问题不能杀掉本来完全可工作的吐字遮罩。
+/// 记录视觉过渡依赖的行纹理缺失。
 fn record_missing_layer_texture(layer: &str, missing: &[LineSnapshotId], event: &str) {
     if missing.is_empty() {
         return;

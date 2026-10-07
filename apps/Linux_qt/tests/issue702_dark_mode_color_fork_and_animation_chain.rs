@@ -112,29 +112,6 @@ fn issue702_text_visual_operation_kind_no_cursor_variant() {
     }
 }
 
-#[test]
-fn issue702_cursor_branch_returns_none() {
-    // Issue #826: 旧 transaction_builder.rs（`EditorAnimationKind::CursorOnly =>` 分支）
-    // 已删除；CursorOnly 不再生成任何正文事务，只能在 coordinator 里直接 return。
-    assert!(
-        !linux_qt_root()
-            .join("src/sujian_editor_item/animation/transaction_builder.rs")
-            .exists(),
-        "transaction_builder.rs 已删除，纯光标移动不得再进正文事务链"
-    );
-    let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    let cursor_marker = "EditorAnimationKind::CursorOnly => return,";
-    let window = function_window(&src, cursor_marker, 400);
-    assert!(
-        window.contains("return,"),
-        "CursorOnly 分支应直接 return（不建正文前沿、不建正文事务）"
-    );
-    assert!(
-        !src.contains("TextVisualOperationKind::Cursor"),
-        "Cursor 分支不应再创建 Cursor 事务"
-    );
-}
-
 fn function_window(src: &str, fn_marker: &str, window_chars: usize) -> String {
     let pos = src
         .find(fn_marker)
@@ -224,8 +201,8 @@ fn issue702_cursor_transition_tween_has_duration_ms() {
 fn issue702_render_plan_has_clip_rects() {
     let src = read_src("src/sujian_editor_item/render_plan.rs");
     assert!(
-        src.contains("clip_rects: Vec<AnimationClipRect>"),
-        "RenderPlan 应携带 clip_rects"
+        src.contains("ownership: RenderOwnershipPlan"),
+        "RenderPlan 应只携带统一的 RenderOwnershipPlan"
     );
 }
 
@@ -244,20 +221,19 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
         !src.contains("needs_relayout || has_animation_clip"),
         "Issue #714 评论 5740007764: 不应再保留 needs_relayout || has_animation_clip 旧条件"
     );
-    // Issue #736 评论 5786531280: 静态层重建条件从单纯的 needs_relayout 改为
-    // should_rebuild_static = needs_relayout || has_unavailable_clip_texture。
-    // texture miss 时也必须同帧重建，使 canonical 正文同帧恢复。
+    // Issue #853: 资源缺失时按 canonical 静态正文恢复；静态 clip 与动画 glyph
+    // 都从同一份 ownership plan 读取。
     assert!(
         src.contains("should_rebuild_static"),
         "应使用 should_rebuild_static 作为重建条件"
     );
     assert!(
-        src.contains("has_unavailable_clip_texture"),
-        "应检查 has_unavailable_clip_texture 以保证 texture miss 同帧恢复 canonical"
+        src.contains("plan.ownership.has_animation_resources(texture_cache)"),
+        "应先确认 ownership plan 所需动画资源齐备"
     );
     assert!(
-        src.contains("plan.clip_rects"),
-        "应直接从 plan.clip_rects 读取裁剪区域"
+        src.contains("plan.ownership.clips_for_static_rebuild()"),
+        "静态 exclusions 应由统一 ownership plan 提供"
     );
 }
 
@@ -267,9 +243,8 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
 
 #[test]
 fn issue702_delete_conceal_has_same_frame_progress() {
-    // Issue #826: 旧 transaction_builder.rs / cursor_motion.rs / transaction/types.rs
-    // 已删除；DeleteConceal/InsertReveal 现在由 composition 层描述（不进 EditFrontier、
-    // 不 carry preedit glyph），光标层不再有 sampled_rect 插值 —— 光标是独立 timeline。
+    // Issue #853: 旧的 transaction_builder.rs / cursor_motion.rs / transaction/types.rs
+    // 已删除；组合输入仍以独立的 composition edit 描述交给单一正文过渡。
     let root = linux_qt_root();
     for rel in [
         "src/sujian_editor_item/animation/transaction_builder.rs",

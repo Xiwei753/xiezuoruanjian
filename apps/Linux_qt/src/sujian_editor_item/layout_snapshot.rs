@@ -110,7 +110,7 @@ impl PreparedLineSnapshot {
     /// Issue #826: 测试用最小构造器。
     ///
     /// `visual_line_top` / `visual_line_bottom` 由调用方给的 `top` + 固定行高推出，
-    /// 只用于 `EditFrontier` / `ReflowState` 的几何判断。
+    /// 供布局和 cluster 视觉几何判断使用。
     #[cfg(test)]
     pub(crate) fn stub_for_tests(
         visual_line_id: usize,
@@ -149,7 +149,7 @@ impl PreparedLineSnapshot {
     ///
     /// `stub_for_tests` 固定写 `image: None`，纹理类测试拿不到可验证的 QImage ——
     /// 那样只能验证「source_lines 里带了正确的 snapshot_id」，验证不了
-    /// `prepare_frontier_textures` 真的把它插进了 `TextureCache`。
+    /// `prepare_visual_edit_textures` 真的把它插进了 `TextureCache`。
     #[cfg(test)]
     pub(crate) fn with_test_image(mut self, image: qmetaobject::QImage) -> Self {
         self.image = Some(image);
@@ -192,10 +192,8 @@ impl PreparedLineSnapshot {
 
     /// Issue #826 评论 24：被 `byte_start..byte_end` **完整包含**的 cluster。
     ///
-    /// 视觉 owner 只认这种。本轮逻辑改动如果只覆盖某个 cluster 的一部分，那一块
-    /// 是不可拆的 mixed visual cluster，必须整块交给
-    /// [`crate::sujian_editor_item::animation::shaping_transition`] 做原子视觉交接，
-    /// 绝不能按 byte 比例裁它的 `source_rect`。
+    /// 视觉 owner 只认这种。若逻辑改动只覆盖某个 cluster 的一部分，cluster 仍是
+    /// 不可拆的绘制单元，整块由 `VisualEditState` 做视觉交接，不能按 byte 比例裁切。
     pub fn clusters_contained_in_range(
         &self,
         byte_start: usize,

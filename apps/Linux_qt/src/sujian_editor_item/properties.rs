@@ -659,19 +659,19 @@ impl SujianEditorItem {
     ///
     /// Issue #826: 唯一的 blink 决策入口。
     ///
-    /// - 有活跃遮罩前沿 / Reflow（`has_active_text_animation(frame_now)`）→ Suppressed
+    /// - 有活跃正文视觉过渡（`has_active_text_animation(frame_now)`）→ Suppressed
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
     /// - idle → Normal
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
-        use super::animation::blink_mode_for_frontier;
+        use super::animation::blink_mode_for_text_animation;
         use super::cursor_animation::CursorBlinkMode;
         if self.cursor_ctrl.animation.is_some() {
             return CursorBlinkMode::Suppressed;
         }
-        blink_mode_for_frontier(
+        blink_mode_for_text_animation(
             self.pipeline
                 .animation_coordinator()
-                .active_edit_frontier_kind(),
+                .has_active_text_animation(std::time::Instant::now()),
         )
     }
 

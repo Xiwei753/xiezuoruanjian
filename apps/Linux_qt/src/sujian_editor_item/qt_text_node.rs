@@ -416,28 +416,6 @@ pub(crate) struct VisualLineClipInfo {
     pub doc_width: f64,
 }
 
-/// 静态正文层的 clip 所有权语义。
-///
-/// 这些 clip 都是「静态正文暂时不画这块」，但纹理依赖各不相同，
-/// 所以资源过滤必须先于静态层让位：
-///
-/// - `FrontierMask`：旧 canonical 动态遮罩，不依赖动画层纹理。
-/// - `ReflowTarget`：已有 Reflow 路径的纹理依赖 exclusion。
-/// - `AnimationOwned`：统一动画 owner 使用的完整 target cluster exclusion；只有动画
-///   资源可用时静态层才让位，纹理 miss 时 canonical 同帧恢复。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StaticClipKind {
-    /// 遮罩前沿吐字遮罩，不依赖动画纹理。
-    FrontierMask,
-    /// Reflow 接管区，依赖对应 target 行纹理。
-    ReflowTarget,
-    /// 动画层接管的 canonical target cluster。
-    ///
-    /// 只有目标行纹理可用时静态层才让位；同一份纹理缺失时，动画 glyph 和
-    /// exclusion 一起失效，canonical 正文留在静态层绘制。
-    AnimationOwned,
-}
-
 /// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
 ///
 /// Issue #658: 改为完整的 x/y/w/h 文档坐标矩形，
@@ -458,35 +436,19 @@ pub(crate) struct AnimationClipRect {
     ///
     /// 纹理依赖型 exclusion 在决定静态 / 动画所有权前使用此 id 检查资源。
     pub snapshot_id: super::layout_snapshot::LineSnapshotId,
-    /// Issue #826: 这个 clip 的语义，决定 renderer 要不要对它做纹理可用性守卫。
-    pub kind: StaticClipKind,
 }
 
-impl AnimationClipRect {
-    /// 是否依赖动画层纹理；无依赖的旧 FrontierMask 永远保留。
-    pub(crate) fn requires_animation_texture(&self) -> bool {
-        matches!(
-            self.kind,
-            StaticClipKind::ReflowTarget | StaticClipKind::AnimationOwned
-        )
-    }
-}
-
-/// Issue #826 评论 6: 静态层 exclusion clip 的同视觉行区间合并。
+/// 静态层 exclusion 的同视觉行区间合并。
 ///
-/// 调用顺序必须是「renderer 过滤掉纹理不可用的动画 exclusion → 本函数合并」，
-/// 所以放在本文件而不是 `render_plan_builder`：合并需要按 `kind` 分组，
-/// 而 kind 的取舍只有 renderer 知道。
+/// 调用方先确认完整动画资源，再合并同一目标纹理上的相邻区间。
 ///
 /// 四条硬规则，任何一条破坏都会让静态正文出现空洞或误裁：
-/// 1. 只在**同一 kind** 内合并。无纹理依赖的 mask 和动画 exclusion 语义不同：
-///    前者永远保留，后者纹理 miss 时必须放行让 canonical 恢复。
-/// 2. 只在**同一视觉行**（`y` / `h` 相同）且**同一 `snapshot_id`** 的组内处理。
+/// 1. 只在**同一视觉行**（`y` / `h` 相同）且**同一 `snapshot_id`** 的组内处理。
 ///    跨 `snapshot_id` 合并会破坏纹理缺失回退：snapshot A 纹理存在、B 缺失时，
 ///    合并并挂到 A 上会让 B 那块静态正文被裁掉，而 B 的动画 glyph 画不出来。
-/// 3. 只合并**相交或相邻**的区间（`next_left <= current_right + EPS`）。
+/// 2. 只合并**相交或相邻**的区间（`next_left <= current_right + EPS`）。
 ///    有 gap 就另起一条，否则中间的正常正文会被整段挖掉。
-/// 4. **每一组**都执行 sweep，不只处理第一条。
+/// 3. **每一组**都执行 sweep，不只处理第一条。
 pub(crate) fn merge_static_clip_rects(rects: Vec<AnimationClipRect>) -> Vec<AnimationClipRect> {
     const EPS: f64 = 1e-6;
     let mut kept: Vec<AnimationClipRect> = rects
@@ -496,7 +458,6 @@ pub(crate) fn merge_static_clip_rects(rects: Vec<AnimationClipRect>) -> Vec<Anim
     if kept.len() <= 1 {
         return kept;
     }
-    // `LineSnapshotId` 与 `StaticClipKind` 都没有 `Ord`，所以不排进 key；
     // 排序只用 (y, h, x) 让同一视觉行的区间连续，然后扫连续段分组。
     kept.sort_by(|a, b| {
         a.y.partial_cmp(&b.y)
@@ -512,12 +473,8 @@ pub(crate) fn merge_static_clip_rects(rects: Vec<AnimationClipRect>) -> Vec<Anim
             slot = Some(rect);
             continue;
         };
-        // 换组（kind / snapshot_id / 视觉行任一不同）：先落盘，另起一条。
-        if cur.kind != rect.kind
-            || cur.snapshot_id != rect.snapshot_id
-            || cur.y != rect.y
-            || cur.h != rect.h
-        {
+        // 换组（snapshot_id / 视觉行任一不同）：先落盘，另起一条。
+        if cur.snapshot_id != rect.snapshot_id || cur.y != rect.y || cur.h != rect.h {
             if let Some(done) = slot.take() {
                 merged.push(done);
             }
@@ -534,7 +491,6 @@ pub(crate) fn merge_static_clip_rects(rects: Vec<AnimationClipRect>) -> Vec<Anim
                 w: right - left,
                 h: cur.h,
                 snapshot_id: cur.snapshot_id,
-                kind: cur.kind,
             });
         } else {
             if let Some(done) = slot.take() {

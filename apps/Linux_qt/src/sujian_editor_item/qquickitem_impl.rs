@@ -131,11 +131,6 @@ impl QQuickItem for SujianEditorItem {
         let frame_now = frame_start;
         self.last_frame_now = Some(frame_now);
 
-        let animation_set_changed = self.tick_text_animations_with_time(frame_now);
-        if animation_set_changed {
-            self.scene_dirty = true;
-        }
-
         // Issue #853：视觉光标的唯一 owner 是 cursor controller。
         // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
         // 这里用整帧唯一的 frame_now 推进一次：先 tick_animation 推 visual，
@@ -208,7 +203,7 @@ impl QQuickItem for SujianEditorItem {
         if !editor_root.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
 
-            // Issue #826: 前沿/Reflow 都结束后，动画层的旧行纹理和 glyph 都可以丢。
+            // 没有活动过渡时，已提交的静态正文就是唯一正文 owner，旧动画资源可以释放。
             let has_active_txs = self
                 .pipeline
                 .animation_coordinator()
@@ -255,6 +250,27 @@ impl QQuickItem for SujianEditorItem {
             let selection_preedit_style = SelectionPreeditStyle {
                 selection_color: self.current_selection_color.to_string(),
             };
+            let canonical_visual_snapshot = self.pipeline.current_layout_snapshot().clone();
+            let canonical_document_snapshot = self.pipeline.current_canonical_snapshot().cloned();
+            let prepared_frame_matches_canonical =
+                match (prepared_frame, canonical_document_snapshot.as_ref()) {
+                    (Some(frame), Some(canonical)) => {
+                        let layout = &frame.layout_snapshot;
+                        let committed_text = self.pipeline.committed_text();
+                        layout.text_revision == canonical.text_revision
+                            && layout.text_revision == self.pipeline.text_revision()
+                            && layout.text_ptr == committed_text.as_ptr() as usize
+                            && layout.text_len == committed_text.len()
+                            && (layout.width - canonical.width).abs() <= 0.01
+                            && (f64::from(layout.font_size) - canonical.font_size).abs() <= 0.01
+                            && layout.font_family == canonical.font_family
+                            && (f64::from(layout.line_spacing) - canonical.line_spacing).abs()
+                                <= 0.01
+                            && (f64::from(layout.text_indent) - canonical.text_indent).abs() <= 0.01
+                            && (f64::from(layout.padding) - canonical.padding).abs() <= 0.01
+                    }
+                    _ => false,
+                };
 
             let render_plan = self
                 .pipeline
@@ -265,23 +281,30 @@ impl QQuickItem for SujianEditorItem {
                     cursor_style,
                     selection_preedit_style,
                     frame_now,
+                    canonical_visual_snapshot.as_ref(),
                 );
 
-            // Issue #853：animation-owned cluster 的静态 exclusion 在过渡期间保持
-            // 完整不变，所以静态层只在 owner 集合开始/结束时重建。glyph 切片每帧
-            // 由动画层更新；完成帧同时移除 exclusion 并恢复 canonical 静态正文。
-            let has_clip_this_frame = !render_plan.clip_rects.is_empty();
-            let ownership_changed = has_clip_this_frame != self.last_had_clip_rects;
+            // owner revision 来自完整 cluster owner set，A→A+B 也会触发静态 rebuild。
+            // 只在 static + animation 整帧成功后提交 revision；失败时下一帧仍会重试。
+            let animation_resources_ready = render_plan
+                .ownership
+                .has_animation_resources(self.pipeline.texture_cache());
+            let ownership_changed = render_plan.ownership.ownership_revision
+                != self.last_committed_ownership_revision
+                || render_plan.ownership.handoff_pending
+                || !animation_resources_ready
+                || !prepared_frame_matches_canonical;
             let frame_needs_relayout = base_needs_relayout || ownership_changed;
-            self.last_had_clip_rects = has_clip_this_frame;
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
             // `prepared_frame = None` 时不排版，请求下一次 GUI 侧准备。
-            let has_snapshot = prepared_frame.is_some();
+            let has_snapshot = prepared_frame_matches_canonical;
             let static_text = StaticTextParams {
-                layout_snapshot: prepared_frame.map(|f| &f.layout_snapshot),
+                layout_snapshot: prepared_frame
+                    .filter(|_| prepared_frame_matches_canonical)
+                    .map(|f| &f.layout_snapshot),
                 scroll_y,
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
@@ -301,6 +324,22 @@ impl QQuickItem for SujianEditorItem {
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+
+            let ownership_snapshot_matches = canonical_visual_snapshot
+                .as_ref()
+                .map(|snapshot| {
+                    render_plan.ownership.target_layout_revision == Some(snapshot.revision)
+                        && snapshot.text_revision == self.pipeline.text_revision()
+                })
+                .unwrap_or(false);
+            if static_rebuild_ok && has_snapshot && ownership_snapshot_matches {
+                self.last_committed_ownership_revision = render_plan
+                    .ownership
+                    .committed_revision(animation_resources_ready);
+                self.pipeline
+                    .animation_coordinator_mut()
+                    .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
+            }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
             // apply_render_plan_cursor_state，和 runtime_tests 共用同一份逻辑。
@@ -335,26 +374,9 @@ impl QQuickItem for SujianEditorItem {
                 self.request_frame_update();
             }
 
-            // Issue #826: 前沿/Reflow 结束帧要把动画层纹理放掉，并让静态层同帧恢复
-            // canonical 正文（无 clip）。
-            if self
-                .pipeline
-                .animation_coordinator()
-                .has_active_text_animation(frame_now)
-                != self.last_had_active_text_animation
-            {
-                self.scene_dirty = true;
-                self.last_had_active_text_animation = self
-                    .pipeline
-                    .animation_coordinator()
-                    .has_active_text_animation(frame_now);
-            }
-
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
-            // Issue #826 评论 39 BLOCKER 1：协同 motion 自己就是一层 clock
-            // （零可见 path 时前沿第一帧就没了，motion 还在走），必须同样续帧，
-            // 否则协同光标只动一帧就停。
+            // 正文过渡与光标 tween 各自未结束时都继续请求下一帧.
             if self
                 .pipeline
                 .animation_coordinator()
@@ -426,12 +448,6 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    /// Issue #690 评论 5675007226 步骤 1: 接受统一 `frame_now`，
-    /// 替代内部各自 `Instant::now()`。
-    pub(crate) fn tick_text_animations_with_time(&mut self, frame_now: Instant) -> bool {
-        self.pipeline.animation_coordinator_mut().tick(frame_now)
-    }
-
     /// 构造和 `update_paint_node` 完全一致的 `CursorRenderState`。
     ///
     /// 从 `cursor_ctrl.visual_x/y/h/visible` 和当前 blink mode 算出 opacity。

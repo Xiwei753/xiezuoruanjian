@@ -43,16 +43,16 @@ impl SujianEditorItem {
         self.pipeline.clear_undo_redo();
     }
 
-    /// Issue #826: composition commit/cancel 的视觉动画入口。
+    /// composition commit/cancel 的视觉过渡入口。
     ///
     /// 固定顺序：
     /// 1. 拿 committed old layout snapshot（preedit 期间的正文几何）；
     /// 2. 用 Core 已提交的 new text 排一次版，拿到 committed new snapshot；
-    /// 3. 交给 `handle_composition_commit_or_cancel` 造唯一一次遮罩前沿；
+    /// 3. 交给 `handle_composition_commit_or_cancel` 从最近成功绘制帧追到新正文；
     /// 4. 无条件提交 `layout_revision` + `current_canonical_snapshot`。
     ///
-    /// preedit 临时层是独立显示层，不进前沿、不 carry、不 rebase；commit 时
-    /// 它整体消失。正文动画只认 Core `display_patches`。
+    /// preedit 临时层独立显示，不 carry/rebase 到正文；commit 时它整体消失。
+    /// 正文过渡只认 Core `display_patches`。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_composition_commit_transaction(
         &mut self,
@@ -158,7 +158,7 @@ impl SujianEditorItem {
             .pipeline
             .animation_coordinator_mut()
             .handle_composition_commit_or_cancel(
-                super::animation::composition::CompositionCommitFrontierInput {
+                super::animation::composition::CompositionVisualEditInput {
                     motion,
                     old_snapshot: old_snapshot.clone(),
                     new_snapshot: new_snapshot.clone(),
@@ -166,14 +166,13 @@ impl SujianEditorItem {
                 },
             );
         let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
-        // Issue #826: 前沿/Reflow 引用旧行纹理，纹理缓存必须至少留到它们结束，
-        // 准备完还要重建 Scene Graph（静态层裁剪区域变了）。
+        // 旧行纹理由最近成功绘制帧引用，保留到新的帧成功提交后再裁掉。
         let active_ids = self
             .pipeline
             .animation_coordinator()
             .collect_active_snapshot_ids();
         self.pipeline.retain_active_snapshot_ids(&active_ids);
-        self.prepare_frontier_textures();
+        self.prepare_visual_edit_textures(&old_snapshot);
 
         // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
         // current_canonical_snapshot。new_canonical 一旦成为当前 canonical，
@@ -188,7 +187,7 @@ impl SujianEditorItem {
 
         self.last_event_count = 1;
         self.last_summary = format!(
-            "cause={:?};changes={};frontier=1;animate=true",
+            "cause={:?};changes={};visual_edit=1;animate=true",
             cause, change_count,
         )
         .into();
@@ -572,11 +571,9 @@ impl SujianEditorItem {
     ///
     /// 固定顺序：
     /// 1. `hit_test` 得到目标 byte index 与 affinity；
-    /// 2. `finish_edit_frontier_to_canonical()` 收掉当前遮罩前沿——点击不改变正文，
-    ///    必须让最新 canonical 立即接管，不允许遮罩挂在旧正文上；
-    /// 3. `set_selection` 立即改逻辑 caret（逻辑 caret 先变成 Core 当前 selection）；
-    /// 4. `update_cursor_visual_position()` 让**视觉**光标从当前 `visual_x/y`
-    ///    平滑追到新 caret rect。
+    /// 2. `set_selection` 立即改 Core selection；
+    /// 3. `update_cursor_visual_position()` 更新唯一 CursorController。
+    /// 正文过渡独立运行，不因点击而提前结束。
     ///
     /// 旧路线的 caret handover / detach / epoch ownership 全部删除：光标与文字
     /// 动画完全解耦，点击不需要"抢"正文动画的 caret 所有权。
@@ -589,11 +586,6 @@ impl SujianEditorItem {
         } else {
             index
         };
-
-        // Issue #826: 点击不改正文，先让遮罩前沿收成 canonical。
-        self.pipeline
-            .animation_coordinator_mut()
-            .finish_edit_frontier_to_canonical();
 
         self.cursor_ctrl.affinity = affinity;
         // 保留 PointerClick 来源供统一光标计划记录；点击动作仍按交互要求即时 Snap。
@@ -736,19 +728,9 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
     }
 
-    /// Issue #826: 标记一次"非正文编辑导致的逻辑 cursor 移动"。
-    ///
-    /// 鼠标点击、方向键、Home/End、拖选等路径在方法开头调用本方法，把
-    /// 当前遮罩前沿立刻收成 canonical 终态：点击/移动 caret 时旧前沿挂着的
-    /// 遮罩已经没有意义，不能让它留在旧正文几何上。
-    ///
-    /// 普通输入/删除（`insert_text`、`delete_*` 等）**不要**调用本方法，
-    /// 它们要走 `begin_or_extend_edit_frontier` 连续更新同一个前沿。
+    /// 手动导航只更新 CursorController 的目标；当前正文过渡继续独立完成交接。
     fn begin_manual_cursor_move(&mut self) {
         self.cursor_ctrl.force_snap_next = true;
-        self.pipeline
-            .animation_coordinator_mut()
-            .finish_edit_frontier_to_canonical();
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {

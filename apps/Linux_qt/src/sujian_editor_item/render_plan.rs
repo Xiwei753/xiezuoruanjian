@@ -1,5 +1,5 @@
-use super::layout_snapshot::{LineSnapshotId, SourceRect};
-use super::qt_text_node::AnimationClipRect;
+use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
+use super::render_ownership::RenderOwnershipPlan;
 use crate::editor::layout::LayoutSnapshot;
 
 #[derive(Clone, Debug)]
@@ -11,11 +11,9 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub opacity: f64,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct TextAnimationPlan {
-    pub glyphs: Vec<TextAnimationGlyphInfo>,
+    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
+    pub logical_range: (usize, usize),
+    pub shaping_identity: ShapingIdentity,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -117,18 +115,15 @@ pub(crate) struct CursorRenderState {
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
-/// Issue #853: 一个 immutable RenderPlan 汇总本帧动画 glyph、静态层让位区域、
-/// selection/preedit 和唯一 caret。renderer 不读取动画状态，也不重新决定 owner。
+/// 一个 immutable RenderPlan 汇总本帧 owner table、selection/preedit 和唯一 caret。
+/// renderer 不读取动画状态，也不重新决定 owner。
 pub struct RenderPlan {
     // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
-    // 状态（TextAnimationPlan / CursorRenderState / FrameContext 等），
+    // 状态（RenderOwnershipPlan / CursorRenderState / FrameContext 等），
     // 集成测试只需要 drawn_caret_rect 这个 (x, y, h) 裸元组。
     //
-    // Issue #727 约束 3 要求的"本帧统一采样的协同运动帧"不再挂在 RenderPlan 上：
-    // build_render_plan_full 在入口处 sample 一次后全程用局部变量消费
-    // （caret.is_some() 门禁 + owner_key 过滤），挂到帧上后没有任何读者，
-    // 只是一份和局部变量重复的副本，所以这里不再冗余存一份。
-    pub(crate) text_animation: TextAnimationPlan,
+    // 光标采样在 CursorController 内完成，RenderPlan 只保存最终要显示的位置。
+    pub(crate) ownership: RenderOwnershipPlan,
     pub(crate) selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
@@ -136,18 +131,11 @@ pub struct RenderPlan {
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
-    /// Issue #853: 本帧静态正文让给动画层的完整 target cluster exclusion。
-    ///
-    /// 吐字、reflow 与 shaping 在整段过渡中保持 exclusion 不变；动画 glyph 的
-    /// 可见切片逐帧变化。纹理不可用时 renderer 在静态层让位前移除对应 exclusion。
-    pub(crate) clip_rects: Vec<AnimationClipRect>,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
-    /// 正文协同动画时,这个 rect 就是同帧文字事务算出的实际光标位置;
-    /// 纯光标动画时,就是该 Tween 本帧位置;Snap 时就是目标位置。
+    /// 该 rect 是 CursorController 本帧采样后的实际光标位置；Snap 时就是目标位置。
     /// `qquickitem_impl` 每帧生成 RenderPlan 后,把
     /// `cursor_ctrl.visual_x/visual_y/visual_h` 同步成此值。下一次
-    /// 输入、删除、鼠标点击创建新事务时,只允许从这个"上一帧真正
-    /// 画出来的位置" rebase。
+    /// 下一次光标目标更新时从这个"上一帧真正画出来的位置" rebase。
     pub drawn_caret_rect: Option<(f64, f64, f64)>,
 }

@@ -43,23 +43,16 @@ pub(crate) fn render_frame(
     // Issue #853：`clip_rects` 是动画层接管的完整 target cluster exclusion，
     // 在过渡期间不随 progress 改变。静态层只在所有权集合改变时重建；
     // glyph 切片由动画层逐帧更新。
-    // 没有遮罩的帧（纯滚动、纯光标动画）只更新动画层/光标层，不重建静态节点。
+    // ownership 不变的帧（纯滚动、纯光标动画、正文 progress）只更新轻量节点。
     //
     // `clip_rects` 表达静态层让给动画 owner 的目标 cluster。静态正文仍来自最新
     // canonical layout；动画层在这些位置绘制唯一的当前视觉。
     //
-    // Issue #736 评论 5786531280: 如果 plan.clip_rects 中存在 snapshot texture miss，
-    // 本帧必须强制重建 static layer。重建时使用已过滤掉 miss clip 的
-    // available_clip_rects，使 canonical 正文同帧恢复。这保证原子关系：
-    // overlay 能画 → static clip 生效；overlay 不能画 → 同帧 static canonical 恢复。
-    //
-    // Issue #853：纹理检查在静态层让位之前完成。对应 target texture 不存在时，
-    // exclusion 被撤销，canonical 同帧恢复；动画层也会跳过同一张缺失纹理。
-    let has_unavailable_clip_texture = plan
-        .clip_rects
-        .iter()
-        .any(|cr| cr.requires_animation_texture() && !texture_cache.contains_line(&cr.snapshot_id));
-    let should_rebuild_static = static_text.needs_relayout || has_unavailable_clip_texture;
+    // 先检查整份 ownership plan 的动画资源。缺一张就按 canonical 静态正文提交，
+    // 不能只过滤静态 clip、再让动画层单独跳过缺纹理的 glyph。
+    let animation_resources_ready = plan.ownership.has_animation_resources(texture_cache);
+    let should_rebuild_static =
+        static_text.needs_relayout || plan.ownership.handoff_pending || !animation_resources_ready;
 
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
@@ -111,7 +104,7 @@ pub(crate) fn render_frame(
                 });
             }
 
-            // Issue #727 评论 5755858583 问题2: 直接从 plan.clip_rects 读取裁剪区域，
+            // Issue #853: 静态 exclusion 直接来自统一 owner table。
             // 不再通过 StaticLinePatch 中间结构换算。
             // Issue #736 评论 5786231506: 静态层开始裁剪之前先检查本帧动画所需的
             // snapshot texture。缺纹理的 snapshot 对应 clip 不进入 static text clip，
@@ -119,16 +112,12 @@ pub(crate) fn render_frame(
             // 才 continue。overlay 可画 -> static 被接管；overlay 不可画 -> static 同帧
             // 恢复 canonical。两边是一条原子规则。
             // Issue #853: 只让资源已准备好的动画 owner 接管 target cluster。
-            let surviving_clip_rects: Vec<qt_text_node::AnimationClipRect> = plan
-                .clip_rects
-                .iter()
-                .filter(|cr| {
-                    !cr.requires_animation_texture() || texture_cache.contains_line(&cr.snapshot_id)
-                })
-                .cloned()
-                .collect();
-            // 合并放在资源过滤之后，同一行相邻的动画 ownership 区间才可以合并。
-            let available_clip_rects = qt_text_node::merge_static_clip_rects(surviving_clip_rects);
+            let available_clip_rects = if animation_resources_ready {
+                plan.ownership.clips_for_static_rebuild().to_vec()
+            } else {
+                Vec::new()
+            };
+            let available_clip_rects = qt_text_node::merge_static_clip_rects(available_clip_rects);
             let clip_rects = &available_clip_rects;
 
             // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
@@ -147,6 +136,9 @@ pub(crate) fn render_frame(
                 f64::from(snapshot.padding),
                 snapshot.layout_generation,
             );
+        } else {
+            // 没有与本帧一致的 prepared layout 时不能提交新的 owner 状态。
+            static_rebuild_ok = false;
         }
     } else {
         // 纯滚动帧 或 动画 progress 变化帧：只更新 QSGTransformNode 位移矩阵，
@@ -163,13 +155,22 @@ pub(crate) fn render_frame(
     // 两层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
     // Issue #715: 传 scroll_y 给动画层，让 AnimationLayerNode 设置和静态层一样的
     // translate(0, -scroll_y) 矩阵。动画 glyph 继续保留文档坐标，不在 Rust 侧逐个减 scroll_y。
-    render_text_animation_layer(
-        root_raw,
-        item_ptr,
-        plan,
-        texture_cache,
-        static_text.scroll_y,
-    );
+    // 静态 rebuild 失败时保留前一帧的 static + animation 组合，不更新一半新状态。
+    // handoff 成功后同一调用中 static 已接回 canonical，因此清空动画层。
+    if static_rebuild_ok {
+        let glyphs = if animation_resources_ready && !plan.ownership.handoff_pending {
+            plan.ownership.animated_glyphs.as_slice()
+        } else {
+            &[]
+        };
+        render_text_animation_layer(
+            root_raw,
+            item_ptr,
+            glyphs,
+            texture_cache,
+            static_text.scroll_y,
+        );
+    }
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
     // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。
@@ -192,7 +193,7 @@ pub(crate) fn render_frame(
 fn render_text_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
-    plan: &RenderPlan,
+    glyphs: &[super::render_plan::TextAnimationGlyphInfo],
     texture_cache: &TextureCache,
     scroll_y: f64,
 ) {
@@ -205,7 +206,7 @@ fn render_text_animation_layer(
     let mut source_rects: Vec<f64> = Vec::new();
     let mut snapshot_ids: Vec<u64> = Vec::new();
 
-    for glyph in &plan.text_animation.glyphs {
+    for glyph in glyphs {
         // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
         // 文字动画 frame 不进入 glyph_data。缺纹理直接 continue 跳过整个
         // glyph，不再塞 1×1 空图把"DeleteConceal 已生成但纹理没拿到"伪装成

@@ -1,14 +1,4 @@
-//! Issue #690 评论 5675007226 结构守卫 — Linux Qt 协同动画只剩一条采样链。
-//!
-//! WHITE_BOX 验证策略：通过读取源文件内容，确定性断言"两套采样 / 两套时钟 / 两套 easing"
-//! 的缺陷模式已在代码中消除，而不是靠肉眼回归。覆盖评论的五个步骤：
-//! （Issue #826 评论 36：#826 后光标与正文动画彻底解耦，断言已同步到新架构。）
-//! 1. `update_paint_node()` 整帧只取一次时间，文字 tick 与光标 tick 共用同一个 frame_now；
-//! 2. 光标位置由独立 cursor timeline（CursorAnimationState + tick_animation）推进，
-//!    协同 easing / cursor_motion.rs 已删除；
-//! 3. 遮罩前沿三层（EditFrontier/Reflow/Shaping）各持 started_at，由 coordinator::tick 推进；
-//! 4. 空正文光标不再靠 FrameAnimation 每帧驱动，blink 切换本身请求重绘；
-//! 5. 动画诊断进正式诊断包，且不再逐帧/无条件刷 stderr。
+//! Issue #690 的仍有效守卫：独立光标动画、光标闪烁、空正文布局兜底和低频 QML 定时器。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -41,84 +31,6 @@ fn method_body(src: &str, signature: &str) -> String {
 // ─────────────────────────────────────────────────────────────────────────
 // 步骤 1: 一帧只有一个采样时间点，文字与光标共用
 // ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn issue690_update_paint_node_samples_clock_once_per_frame() {
-    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    let body = method_body(&src, "fn update_paint_node(");
-    assert!(
-        body.contains("let frame_now = frame_start;"),
-        "步骤1: 本帧统一时间点必须来自函数入口的 frame_start"
-    );
-    assert_eq!(
-        body.matches("Instant::now();").count(),
-        1,
-        "步骤1: update_paint_node 整帧只允许一次时间采样，不再各自 now()。\
-         出现次数={}",
-        body.matches("Instant::now();").count()
-    );
-    assert!(
-        body.contains("tick_text_animations_with_time(frame_now)"),
-        "步骤1: GUI 侧文字动画 tick 必须吃同一个 frame_now"
-    );
-    assert!(
-        body.contains("self.last_frame_now = Some(frame_now);"),
-        "步骤1: frame_now 必须留给 CursorOnly 链复用，避免第二次采样"
-    );
-    let build_call = &src[src
-        .find("build_render_plan_full(")
-        .expect("步骤1: update_paint_node 必须调用 build_render_plan_full")..];
-    assert!(
-        build_call.contains("frame_now,"),
-        "步骤1: build_render_plan_full 必须接收本帧统一采样点"
-    );
-    println!("[BUGFIX_690_VERIFY] 步骤1 单帧单次采样 (FIXED)");
-}
-
-#[test]
-fn issue690_frame_sample_drives_text_and_cursor() {
-    // Issue #826 评论 36: 旧的 `AnimationFrameSample` + `compute_coordinated_cursor_position`
-    // 协同采样链已随「光标与正文动画彻底解耦」删除（`animation/cursor_motion.rs`
-    // 已不存在）。验证意图不变 —— 文字与光标仍然只有**一套时钟**：
-    // 同一个 `frame_now`、整帧只有一次 `Instant::now()`、RenderPlanBuilder 纯读、
-    // 光标 timeline 只有一个推进入口。
-    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    let body = method_body(&src, "fn update_paint_node(");
-    assert_eq!(
-        body.matches("Instant::now();").count(),
-        1,
-        "步骤1: update_paint_node 整帧只允许采样一次 Instant::now()"
-    );
-    let text_tick = body
-        .find("self.tick_text_animations_with_time(frame_now)")
-        .expect("步骤1: 文字动画 tick 必须吃同一个 frame_now");
-    let cursor_tick = body
-        .find("self.cursor_ctrl.tick_animation(frame_now);")
-        .expect("步骤1: 光标 cursor timeline 必须吃同一个 frame_now");
-    let state_pos = body
-        .find("self.build_cursor_render_state_for_frame()")
-        .expect("步骤1: 必须在推进之后才读本帧光标位置");
-    assert!(
-        text_tick < cursor_tick && cursor_tick < state_pos,
-        "步骤1: 顺序必须是 文字 tick -> 光标 tick -> build_cursor_render_state_for_frame"
-    );
-    let render_src = read_src("src/sujian_editor_item/animation/render_plan_builder.rs");
-    let render_plan = method_body(&render_src, "fn build_render_plan_full(");
-    assert!(
-        !render_plan.contains("Instant::now()"),
-        "步骤1: RenderPlanBuilder 仍只是纯读采样器，不得自己取时间（否则又是两套时钟）"
-    );
-    let ctrl_src = read_src("src/sujian_editor_item/cursor_controller.rs");
-    assert!(
-        ctrl_src.contains("pub(crate) fn tick_animation(&mut self, frame_now: Instant) -> bool"),
-        "步骤1: cursor timeline 必须有唯一推进入口 tick_animation(frame_now)"
-    );
-    assert!(
-        ctrl_src.contains("self.update_animation_progress(progress)"),
-        "步骤1: progress 消费统一走 update_animation_progress（生产只留一个推进入口）"
-    );
-    println!("[BUGFIX_690_VERIFY] 步骤1 文字与光标共用一套时钟 (#826 评论36 FIXED)");
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 步骤 2: 光标 = 文字吞吐边界，且只有一条协同 easing
@@ -181,38 +93,6 @@ fn issue690_single_collaborative_easing_function() {
 // ─────────────────────────────────────────────────────────────────────────
 // 步骤 3: 视觉单元自持生命期，交棒带当前可见比例
 // ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
-    // Issue #826 评论 36: 旧 animation/transaction/ 模块（RebaseFrame 交棒续播、
-    // 单元时间线 rebase_from_frame）已整目录删除，双时间线交棒不得复活。
-    // 新架构：遮罩前沿三层（EditFrontier / ReflowMotion / ShapingTransition）
-    // 各自持有 started_at，由 coordinator::tick(frame_now) 用同一帧时钟统一推进，
-    // 完成与否按自己的 is_finished(now) 判定，不共享事务级 progress。
-    let transaction_dir = linux_qt_root().join("src/sujian_editor_item/animation/transaction");
-    assert!(
-        !transaction_dir.exists(),
-        "步骤3: animation/transaction 模块已删除，RebaseFrame 双时间线交棒不得复活"
-    );
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        coord_src.contains("fn tick(&mut self, frame_now: Instant)"),
-        "步骤3: 三层动画必须由 coordinator::tick(frame_now) 一个入口统一推进"
-    );
-    for rel in [
-        "src/sujian_editor_item/animation/edit_frontier.rs",
-        "src/sujian_editor_item/animation/reflow_motion.rs",
-        "src/sujian_editor_item/animation/shaping_transition.rs",
-    ] {
-        let layer_src = read_src(rel);
-        assert!(
-            layer_src.contains("fn is_finished(&self, now: Instant)"),
-            "步骤3: {} 必须按自己的 started_at(now) 判断完成，不用事务级 progress",
-            rel
-        );
-    }
-    println!("[BUGFIX_690_VERIFY] 步骤3 单元生命期 + 交棒续播 (FIXED)");
-}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 步骤 4: 空正文光标 —— blink 自己请求重绘，QML 不再逐帧驱动
@@ -324,50 +204,6 @@ fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
 // ─────────────────────────────────────────────────────────────────────────
 // 步骤 5: 每个动画一条紧凑诊断事件进正式诊断包
 // ─────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn issue690_animation_lifecycle_events_go_to_diagnostics_logger() {
-    let mod_src = read_src("src/sujian_editor_item/mod.rs");
-    assert!(
-        mod_src.contains("writer_diagnostics::record_event"),
-        "步骤5: 动画事件必须写进正式诊断包"
-    );
-    // Issue #747/826: 旧 transaction_builder.rs / rebase.rs（editor.anim.create /
-    // rebase / keep）随 animation/transaction 整体删除；生命周期事件收敛到遮罩前沿
-    // 三层的紧凑诊断，仍走 writer_diagnostics::record_event 正式诊断包。
-    let root = linux_qt_root();
-    assert!(
-        !root
-            .join("src/sujian_editor_item/animation/transaction_builder.rs")
-            .exists(),
-        "步骤5: transaction_builder.rs 已删除，生命周期事件不得回到旧事务链"
-    );
-    assert!(
-        !root
-            .join("src/sujian_editor_item/animation/rebase.rs")
-            .exists(),
-        "步骤5: rebase.rs 已删除"
-    );
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        coord_src.contains("record_frontier_diagnostic"),
-        "步骤5: 遮罩前沿生命周期必须走统一的紧凑事件构造器"
-    );
-    assert!(
-        coord_src.contains("\"editor.anim.frontier\""),
-        "步骤5: 缺少生命周期事件 editor.anim.frontier"
-    );
-    let frontier_src = read_src("src/sujian_editor_item/animation/edit_frontier.rs");
-    assert!(
-        frontier_src.contains("\"editor.anim.frontier.identity_breakdown\""),
-        "步骤5: 缺少 identity_breakdown 诊断事件"
-    );
-    assert!(
-        mod_src.contains("\"editor.anim.transaction_skipped\""),
-        "步骤5: 缺少 editor.anim.transaction_skipped 事件"
-    );
-    println!("[BUGFIX_690_VERIFY] 步骤5 生命周期诊断事件 (FIXED)");
-}
 
 #[test]
 fn issue690_no_unconditional_stderr_animation_spam() {
