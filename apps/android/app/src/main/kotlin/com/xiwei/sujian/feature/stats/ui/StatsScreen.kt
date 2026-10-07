@@ -112,7 +112,13 @@ fun StatsScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        if (uiState.summary == null && uiState.projects.isEmpty()) {
+        if (uiState.loadFailed) {
+            item {
+                Box(modifier = Modifier.fillMaxSize().padding(dims.space32), contentAlignment = Alignment.Center) {
+                    Text(stringResource(id = R.string.stats_load_failed), style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        } else if (uiState.summary == null && uiState.projects.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxSize().padding(dims.space32), contentAlignment = Alignment.Center) {
                     Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)

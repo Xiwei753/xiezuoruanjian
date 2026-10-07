@@ -22,6 +22,8 @@ data class StatsUiState(
     val summary: WritingStatsSummary? = null,
     val projects: List<ProjectWritingStatsItem> = emptyList(),
     val loading: Boolean = true,
+    /** #843 三轮复核：barrier 失败时为 true，UI 展示统计读取失败而非"暂无数据"。 */
+    val loadFailed: Boolean = false,
 )
 
 /**
@@ -58,11 +60,12 @@ class StatsViewModel(
     internal var todayProvider: () -> LocalDate = { LocalDate.now() }
 
     /**
-     * 只在数据确实变化时重新查询：revision 与查询日期都与已加载值相同且非加载中则直接复用。
+     * #843 三轮复核：正确顺序是先 awaitPendingWrites()，barrier 成功后再读 revision + today
+     * 判断缓存；barrier 失败就展示统计读取失败状态，不继续查询旧磁盘数据，也不推进 loadedRevision。
      *
      * 成功与失败时都只把已加载状态推进到查询开始时的 [queriedRevision]/[queriedEndDate]
      * 快照：结果（哪怕是失败的空结果）只属于这个窗口。查询期间新写入的事件留待提交后的
-     * revision 校验触发立即再跑一轮，不把“可能未包含最新事件”的数据冒充最新。查询失败
+     * revision 校验触发立即再跑一轮，不把"可能未包含最新事件"的数据冒充最新。查询失败
      * （BridgeResult 非 Success / 未加载原生库 / 未预期异常）如实显示空数据，不伪装成功；
      * 失败时也推进到查询快照而非查询结束时的当前 revision — 否则查询期间的写入会让递归
      * refreshIfNeeded() 立即命中缓存跳过，漏掉重跑；推进到快照则 revision 越过快照时
@@ -70,16 +73,31 @@ class StatsViewModel(
      */
     fun refreshIfNeeded() {
         if (queryInFlight) return
-        val today = todayProvider()
-        if (loadedRevision == repository.revision.value && loadedEndDate == today && !_uiState.value.loading) {
-            return
-        }
 
         queryInFlight = true
         viewModelScope.launch {
+            // 1. 先等 barrier：确保前面所有 Record 已写入 Core。
+            val barrierOk = repository.awaitPendingWrites()
+            if (!barrierOk) {
+                // barrier 失败：有 Record 写 Core 失败，展示统计读取失败状态。
+                // 不推进 loadedRevision，下次 refreshIfNeeded() 还会重试。
+                _uiState.value = StatsUiState(null, emptyList(), loading = false, loadFailed = true)
+                queryInFlight = false
+                return@launch
+            }
+
+            // 2. barrier 成功后读取当前 revision + today，再判断能不能复用缓存。
+            val today = todayProvider()
+            val currentRevision = repository.revision.value
+            if (loadedRevision == currentRevision && loadedEndDate == today && !_uiState.value.loading && !_uiState.value.loadFailed) {
+                queryInFlight = false
+                return@launch
+            }
+
+            // 3. 需要刷新时到 Dispatchers.IO 查询 Core。
             // 查询开始时就固定保存快照：结果只属于这个窗口。
-            val queriedRevision = repository.revision.value
-            val queriedEndDate = todayProvider()
+            val queriedRevision = currentRevision
+            val queriedEndDate = today
             try {
                 val result =
                     withContext(Dispatchers.IO) {
