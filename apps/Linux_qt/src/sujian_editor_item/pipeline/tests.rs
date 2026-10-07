@@ -483,7 +483,7 @@ fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
 /// `collect_active_snapshot_ids`，`retain_active_snapshot_ids` 之后纹理可能被回收，
 /// `prepare_frontier_textures` 也不会补插。renderer 里
 /// `texture_cache.get_line(&glyph.snapshot_id)` 返回 None 就 `continue` 跳过 glyph，
-/// 同时 carry 的 canonical clip 因为 `ReflowTarget` 的纹理守卫也被过滤掉 ——
+/// 同时 carry 的 canonical exclusion 因为动画纹理守卫也被过滤掉 ——
 /// 结果是「carry 不画 + canonical 不挖」，评论 20 修的旧行半个 X 直接整块跳到新行。
 #[test]
 fn reveal_carry_target_texture_is_retained_and_prepared() {
@@ -636,13 +636,13 @@ fn reveal_carry_target_texture_is_retained_and_prepared() {
     for clip in &clips {
         assert_eq!(
             clip.kind,
-            StaticClipKind::ReflowTarget,
-            "carry overlay 真的要用那张纹理，必须用 ReflowTarget：只有它带纹理守卫，\
-             纹理 miss 时会恢复 canonical；FrontierMask 会留下永久空洞"
+            StaticClipKind::AnimationOwned,
+            "carry overlay 真的要用那张纹理，必须使用带资源守卫的动画 exclusion；\
+             纹理 miss 时会恢复 canonical"
         );
         assert!(
             clip.requires_animation_texture(),
-            "ReflowTarget 必须参与纹理可用性过滤"
+            "动画 exclusion 必须参与纹理可用性过滤"
         );
         assert!(
             pipeline.texture_cache().contains_line(&clip.snapshot_id),

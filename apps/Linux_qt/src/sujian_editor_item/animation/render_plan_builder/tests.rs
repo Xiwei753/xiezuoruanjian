@@ -1,8 +1,8 @@
-//! Issue #826: 每帧 RenderPlan 构建的单元测试。
+//! 每帧 RenderPlan 构建的单元测试。
 //!
 //! 覆盖 RenderPlan 的三层输出语义：
 //! - 无前沿时静态正文层完整显示（`clip_rects` 为空）；
-//! - 吐字前沿只通过 `clip_rects` 裁掉 canonical 里还没露出的新字，不额外画 overlay；
+//! - 吐字由动画 glyph 显示，静态层在整段过渡里让出完整 target cluster；
 //! - 吞字前沿只通过 `text_animation.glyphs` 画旧正文 overlay；
 //! - 光标完全独立，只透传 `CursorRenderState`。
 
@@ -113,7 +113,7 @@ fn drawn_caret_rect_mirrors_cursor_render_state() {
     assert!((h - 19.0).abs() < 1e-9, "h 应透传，实际 {h}");
 }
 
-/// 吐字前沿只裁静态层，不画旧正文 overlay。
+/// 吐字首帧裁出动画所有权；零宽切片尚不可见，后续帧由动画层绘制。
 #[test]
 fn insert_frontier_clips_new_text_without_overlay() {
     let now = Instant::now();
@@ -145,7 +145,7 @@ fn insert_frontier_clips_new_text_without_overlay() {
     );
     assert!(
         plan.text_animation.glyphs.is_empty(),
-        "吐字只画最新 canonical 一份，不该有 overlay glyph，实际 {} 个",
+        "吐字起始帧的零宽切片不可见，实际 {} 个",
         plan.text_animation.glyphs.len()
     );
 
@@ -500,13 +500,9 @@ fn merge_static_clip_rects_processes_every_band() {
     assert!((bands[1] - 40.0).abs() < 1e-9, "第二行 y 应是 40");
 }
 
-/// Issue #826 评论 6 阻塞 1：纯 Insert 的 FrontierMask 不依赖动画纹理。
-///
-/// 吐字遮罩的语义是「canonical 正文自己画 + mask 只把还没露出的新字裁掉」，
-/// 动画层根本不画 inserted glyph，所以不需要任何动画纹理。RenderPlan 里
-/// 必须仍然产出这个 clip，renderer 也不会因为 texture_cache 为空而丢掉它。
+/// Issue #853：纯 Insert 用动画层绘制逐步扩展的 glyph 切片。
 #[test]
-fn insert_frontier_mask_needs_no_animation_texture() {
+fn insert_reveal_uses_animation_owned_target_cluster() {
     let now = Instant::now();
     let mut coord = LinuxEditorAnimationCoordinator::new();
     let target = snapshot(vec![PreparedLineSnapshot::stub_for_tests(
@@ -530,33 +526,33 @@ fn insert_frontier_mask_needs_no_animation_texture() {
 
     let plan = build(&coord, now);
     assert!(
-        plan.clip_rects
-            .iter()
-            .all(|cr| !cr.requires_animation_texture()),
-        "纯 Insert 不该产生需要动画纹理的 clip"
-    );
-    assert!(
         !plan.clip_rects.is_empty(),
-        "纯 Insert 必须产出 FrontierMask（不依赖动画纹理）"
+        "纯 Insert 必须为动画 glyph 让出静态 target cluster"
     );
     assert!(
         plan.clip_rects
             .iter()
-            .all(|cr| cr.kind == StaticClipKind::FrontierMask),
-        "纯 Insert 的 clip 只能是 FrontierMask"
+            .all(|cr| cr.kind == StaticClipKind::AnimationOwned),
+        "纯 Insert 的 target exclusion 必须属于动画层"
+    );
+    assert!(
+        plan.clip_rects
+            .iter()
+            .all(AnimationClipRect::requires_animation_texture),
+        "静态层只有在动画 glyph 纹理可用时才让位"
     );
     assert!(
         plan.text_animation.glyphs.is_empty(),
-        "吐字只画最新 canonical 一份，动画层不该有 glyph"
+        "首帧可见宽度为零，动画层暂时没有可绘制切片"
     );
 }
 
-/// Issue #826 评论 6 阻塞 3：FrontierMask 只能覆盖 inserted cluster。
+/// Issue #853：插入与 Reflow 各自只接管自己的 target cluster。
 ///
 /// 旧正文 `A|B`，中间插入 X 得 `AX|B`。target 行 A(unchanged) / X(inserted) /
-/// B(unchanged + Reflow)。FrontierMask 越权裁掉 B 会和 Reflow 抢同一块区域。
+/// B(unchanged + Reflow)。动画 exclusion 不得把两个 owner 的范围混在一起。
 #[test]
-fn frontier_mask_covers_only_inserted_cluster() {
+fn animation_exclusions_keep_reveal_and_reflow_targets_separate() {
     let now = Instant::now();
     let mut coord = LinuxEditorAnimationCoordinator::new();
     // 一个 inserted cluster（X）+ 一个 unchanged suffix（B）在同一行、x 更大。
@@ -576,7 +572,7 @@ fn frontier_mask_covers_only_inserted_cluster() {
         target_snapshot: target,
         deleted_ranges: Vec::new(),
         inserted_ranges: vec![(1, 2)],
-        // 前沿起点在行首，progress=0 时新字还没露出，FrontierMask 必须遮住它。
+        // 前沿起点在行首，首帧新字还没露出，但完整 cluster 已由动画层接管。
         offset_map: OffsetMap::from_single_edit(2, (1, 1), 1),
         base_text: String::from("ab"),
         target_text: String::from("axb"),
@@ -585,37 +581,38 @@ fn frontier_mask_covers_only_inserted_cluster() {
     });
 
     let plan = build(&coord, now);
-    let masks: Vec<&AnimationClipRect> = plan
+    let animation_owned: Vec<&AnimationClipRect> = plan
         .clip_rects
         .iter()
-        .filter(|cr| cr.kind == StaticClipKind::FrontierMask)
+        .filter(|cr| cr.kind == StaticClipKind::AnimationOwned)
         .collect();
     assert!(
-        !masks.is_empty(),
-        "inserted cluster 必须被 FrontierMask 遮住"
+        !animation_owned.is_empty(),
+        "inserted 与 reflow target cluster 必须由动画层接管"
     );
-    // stub_for_tests: visual_x = 首 cluster 的 x = 0，dpr = 1，
-    // doc x = cluster.x + visual_x，所以 x 即 cluster.x。
-    // inserted cluster（byte 1..2）doc x 0..100；unchanged suffix B（byte 2..3）
-    // doc x 100..110 归 Reflow 层管，FrontierMask 不得越界盖上去。
-    for cr in &masks {
+    // inserted cluster（byte 1..2）与 suffix B（byte 2..3）分别有自己的
+    // target rect；插入的 exclusion 不得延伸到 suffix 的 x >= 100 区域。
+    for cr in &animation_owned {
+        if cr.x >= 100.0 {
+            continue;
+        }
         assert!(
             cr.x < 100.0 && cr.x + cr.w <= 100.0,
-            "FrontierMask 只能覆盖 inserted 那个 cluster（x 0..100），不能盖到 x>=100 的 unchanged suffix，实际 x={} w={}",
+            "插入 exclusion 不能盖到 unchanged suffix（x >= 100），实际 x={} w={}",
             cr.x,
             cr.w
         );
     }
-    // unchanged suffix 确实需要移动时，应该由 ReflowTarget clip 接管，而不是 FrontierMask。
+    // unchanged suffix 确实需要移动时，也由动画 owner 接管其最终位置。
     assert!(
         plan.clip_rects
             .iter()
-            .any(|cr| cr.kind == StaticClipKind::ReflowTarget && cr.x >= 100.0),
-        "unchanged suffix 的最终位置应由 ReflowTarget clip 让位"
+            .any(|cr| cr.kind == StaticClipKind::AnimationOwned && cr.x >= 100.0),
+        "unchanged suffix 的最终位置应由动画 exclusion 让位"
     );
 }
 
-/// Issue #826 评论 6 阻塞 2：Reflow 的 target clip 与移动中的 glyph 同时存在。
+/// Reflow 的静态 exclusion 与移动中的 glyph 同时存在。
 ///
 /// ReflowSpan 的 snapshot_id 指向最新 target 行；clip 让静态层在 canonical
 /// 最终位置让位，glyph 在动画层画正在移动的那一份。两者必须同帧共存。
@@ -652,8 +649,8 @@ fn reflow_target_clip_and_moving_glyph_coexist() {
     assert!(
         plan.clip_rects
             .iter()
-            .any(|cr| cr.kind == StaticClipKind::ReflowTarget),
-        "Reflow 接管区必须在静态层生成 ReflowTarget clip"
+            .any(|cr| cr.kind == StaticClipKind::AnimationOwned),
+        "Reflow 接管区必须在静态层生成动画 exclusion"
     );
     assert!(
         !plan.text_animation.glyphs.is_empty(),
@@ -661,10 +658,10 @@ fn reflow_target_clip_and_moving_glyph_coexist() {
     );
 }
 
-/// Issue #826 评论 6 阻塞 1：只有 ReflowTarget 需要动画纹理。
+/// 旧 mask helper 不依赖纹理；动画接管类 exclusion 依赖 target 纹理。
 ///
-/// renderer 的守卫语义：FrontierMask 纹理 miss 也必须保留，
-/// ReflowTarget 纹理 miss 才撤掉（让 canonical 同帧恢复）。
+/// renderer 的守卫语义：FrontierMask 纹理 miss 仍保留；动画 owner 的纹理 miss
+/// 会撤掉 exclusion，让 canonical 同帧恢复。
 #[test]
 fn clip_texture_requirement_depends_on_kind() {
     assert!(
@@ -676,15 +673,24 @@ fn clip_texture_requirement_depends_on_kind() {
             .requires_animation_texture(),
         "ReflowTarget 依赖动画纹理"
     );
+    assert!(
+        AnimationClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 20.0,
+            snapshot_id: LineSnapshotId::new(0, 0, 0),
+            kind: StaticClipKind::AnimationOwned,
+        }
+        .requires_animation_texture(),
+        "AnimationOwned 依赖 target glyph 纹理"
+    );
 }
 
-/// Issue #826 评论 7 阻塞 1：某个 Reflow span 的 target 纹理缺失时，
-/// 不能把整个 coordinator（连同与它完全无关的 FrontierMask）一起收掉。
+/// 某个动画 owner 的 target 纹理缺失时，只放弃对应 exclusion，不清整个 coordinator。
 ///
-/// 场景 `A|B -> AX|B`：X 的 FrontierMask 不需要任何动画纹理；
-/// 若 B 的 Reflow 行纹理暂时拿不到，只有 B 的 ReflowTarget clip 应该被放弃。
-/// 这里从 coordinator 侧验证：只有旧 overlay（Delete/Replace）才依赖 base 行，
-/// 纯 Insert 前沿不声明任何动画纹理需求，Reflow 的 id 集合独立于前沿范围。
+/// 场景 `A|B -> AX|B`：X 的 reveal 与 B 的 Reflow 分别准备 target 行图；
+/// 旧正文 overlay（Delete/Replace）仍从 base 行资源准备。
 #[test]
 fn insert_frontier_declares_no_old_overlay_textures() {
     let now = Instant::now();
