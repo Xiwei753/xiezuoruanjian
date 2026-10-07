@@ -784,7 +784,7 @@ def cleanup_old_test_versions(
 def build_version_update_body(
     *,
     version_id: str,
-    pkg_id: str,
+    pkg_id: str | None,
     test_desc: str,
     test_type: int,
     group_id: str | None,
@@ -792,7 +792,9 @@ def build_version_update_body(
     end_time_ms: int | None,
     notify: bool,
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {"versionId": version_id, "pkgId": pkg_id}
+    body: dict[str, Any] = {"versionId": version_id}
+    if pkg_id:
+        body["pkgId"] = pkg_id
     open_test: dict[str, Any] = {"testDesc": test_desc}
     if start_time_ms is not None:
         open_test["startTime"] = start_time_ms
@@ -886,9 +888,13 @@ def publish(args: argparse.Namespace) -> None:
     )
     assert isinstance(package, dict)
     pkg_id = first_value(package, ("pkgId", "packageId"))
-    if not pkg_id:
-        raise PublishError("添加测试软件包后没有拿到 pkgId；停止继续写入。")
-    eprint(f"测试软件包 ID: {pkg_id}")
+    if pkg_id:
+        eprint(f"测试软件包 ID: {pkg_id}")
+    else:
+        eprint(
+            "添加测试软件包成功，但 AGC 当前响应未返回 pkgId；"
+            "继续更新测试版本，不显式传 pkgId。"
+        )
 
     body = build_version_update_body(
         version_id=version_id,
