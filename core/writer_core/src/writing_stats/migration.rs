@@ -60,12 +60,11 @@ fn write_marker(stats_dir: &Path) -> Result<()> {
 
 /// 给缺 `local_date` 的老事件补本地日历日并回写 raw 文件。
 ///
-/// **必须**用 `load_events_for_date_strict`：宽松 loader 会静默跳过解析不了的
-/// 行，回写时那些原始数据就被永久删掉了。任一行坏掉就带文件名+行号返回 Err，
-/// 此时一个字节都没改写。
+/// `load_events_for_date` 是严格读取：任一行解析失败就带文件名+行号返回 Err，
+/// 此时一个字节都没改写。宽松跳过坏行会让回写时永久删掉解析不了的原始数据。
 fn backfill_event_local_dates(store: &StatsStore) -> Result<()> {
     for date in store.list_event_file_dates()? {
-        let events = store.load_events_for_date_strict(&date)?;
+        let events = store.load_events_for_date(&date)?;
         if events.iter().all(|e| !e.local_date.is_empty()) {
             continue;
         }
@@ -124,7 +123,7 @@ mod tests {
         // 验证 raw events 的 local_date 已补齐
         let store = StatsStore::new(dir.path());
         let utc_date = store.timestamp_to_date(ts).unwrap();
-        let events = store.load_events_for_date_strict(&utc_date).unwrap();
+        let events = store.load_events_for_date(&utc_date).unwrap();
         assert_eq!(events.len(), 1);
         assert!(
             !events[0].local_date.is_empty(),

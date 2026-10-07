@@ -383,13 +383,17 @@ impl SujianEditorItem {
         // Issue #843: 发编辑事实 signal，让 QML 直接拿到 cause + content_delta，
         // 不再在 QML 中用文本长度 diff 猜统计。纯 cursor/selection 移动（content_delta
         // 全 0）不发——避免无意义的统计事件。
+        //
+        // cause 用 visual_cause（当前真实输入语义），不用 result.cause（pipeline cause）。
+        // 粘贴时 pipeline_cause 仍是 Typing/TypingCommit，但 visual_cause 是 Paste；
+        // 透传 visual_cause 才能让 Core 把粘贴记进 Pasted 而非 HumanTyped。
         {
             let result = edit_result
                 .as_ref()
                 .expect("edit_result is Some when applied is true");
             if result.content_delta.inserted_chars > 0 || result.content_delta.deleted_chars > 0 {
                 self.editor_change_applied(
-                    QString::from(format!("{:?}", result.cause)),
+                    QString::from(format!("{:?}", visual_cause)),
                     result.content_delta.inserted_chars,
                     result.content_delta.deleted_chars,
                 );

@@ -285,7 +285,19 @@ impl EditorBackend {
             "Load" => writer_core::editor::EditorTransactionCause::Load,
             "Format" => writer_core::editor::EditorTransactionCause::Format,
             "Programmatic" => writer_core::editor::EditorTransactionCause::Programmatic,
-            _ => writer_core::editor::EditorTransactionCause::Typing,
+            // Issue #843: 未知 cause 不 fallback 到 Typing——那会把整批事件静默算成
+            // 人工输入。记录诊断后直接 return，不落统计事件。
+            unknown => {
+                crate::backend::app_backend::debug_error_static(
+                    "editor_backend",
+                    "UNKNOWN_CAUSE",
+                    &format!(
+                        "record_editor_change_stats skipped: unknown cause '{}'",
+                        unknown
+                    ),
+                );
+                return;
+            }
         };
         if self
             .with_app_mut(|app| {

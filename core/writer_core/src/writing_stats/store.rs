@@ -40,44 +40,6 @@ impl StatsStore {
         self.app_data_root.join("app-meta/stats/events.local")
     }
 
-    /// 严格读取某个 UTC 分区的事件文件，**任何一行解析失败都返回 Err**。
-    ///
-    /// 与 [`StatsStore::load_events_for_date`] 的区别：后者为了查询容错会
-    /// 静默跳过坏行（`if let Ok(...)`），这对「只读」是对的——统计少算
-    /// 一条历史比崩掉编辑器好。但**迁移不能用它**：迁移要把读出来的事件
-    /// 重新序列化后整文件回写，走宽松 loader 会把解析不了的原始行永久删掉。
-    ///
-    /// 严格版带文件名 + 行号报错，迁移据此中止并保留旧 `daily/`。
-    pub fn load_events_for_date_strict(&self, date: &str) -> Result<Vec<WritingInputEvent>> {
-        let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
-        if !file_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = File::open(&file_path)?;
-        let reader = BufReader::new(file);
-        let mut events = Vec::new();
-
-        for (idx, line) in reader.lines().enumerate() {
-            let line = line?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let event: WritingInputEvent = serde_json::from_str(trimmed).map_err(|e| {
-                crate::Error::Other(format!(
-                    "Corrupt event at {}.events.jsonl:{}: {}",
-                    date,
-                    idx + 1,
-                    e
-                ))
-            })?;
-            events.push(event);
-        }
-
-        Ok(events)
-    }
-
     /// 列出 `events.local/` 下所有事件文件的日期部分（升序）。
     pub fn list_event_file_dates(&self) -> Result<Vec<String>> {
         let dir = self.events_dir();
@@ -128,6 +90,11 @@ impl StatsStore {
         Ok(())
     }
 
+    /// 读取某个 UTC 分区的事件文件，**任何一行解析失败都返回 Err**。
+    ///
+    /// raw event 是统计的唯一事实源，宽松跳过坏行会让迁移回写时永久删掉
+    /// 解析不了的原始数据，也会让查询返回不完整结果而不报错。严格读取
+    /// 带文件名 + 行号报错，调用方可以据此中止或降级。
     pub fn load_events_for_date(&self, date: &str) -> Result<Vec<WritingInputEvent>> {
         let file_path = self.events_dir().join(format!("{}.events.jsonl", date));
         if !file_path.exists() {
@@ -138,15 +105,21 @@ impl StatsStore {
         let reader = BufReader::new(file);
         let mut events = Vec::new();
 
-        for line in reader.lines() {
+        for (idx, line) in reader.lines().enumerate() {
             let line = line?;
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            if let Ok(event) = serde_json::from_str::<WritingInputEvent>(trimmed) {
-                events.push(event);
-            }
+            let event: WritingInputEvent = serde_json::from_str(trimmed).map_err(|e| {
+                crate::Error::Other(format!(
+                    "Corrupt event at {}.events.jsonl:{}: {}",
+                    date,
+                    idx + 1,
+                    e
+                ))
+            })?;
+            events.push(event);
         }
 
         Ok(events)
@@ -283,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_events_for_date_strict_corrupt_line() {
+    fn test_load_events_for_date_corrupt_line() {
         let (store, _tmp) = create_mock_store();
         let event = create_mock_event();
         store.record_event(event).unwrap();
@@ -296,27 +269,9 @@ mod tests {
         let mut file = OpenOptions::new().append(true).open(&file_path).unwrap();
         writeln!(file, "{{\"bad\":}}").unwrap();
 
-        let result = store.load_events_for_date_strict(&date);
+        // 严格 loader 遇到坏行应返回 Err（带文件名 + 行号）
+        let result = store.load_events_for_date(&date);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_load_events_for_date_skips_bad_lines() {
-        let (store, _tmp) = create_mock_store();
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
-
-        // 往文件追加一行坏数据
-        let date = store
-            .timestamp_to_date(chrono::Utc::now().timestamp_millis())
-            .unwrap();
-        let file_path = store.events_dir().join(format!("{}.events.jsonl", date));
-        let mut file = OpenOptions::new().append(true).open(&file_path).unwrap();
-        writeln!(file, "{{\"bad\":}}").unwrap();
-
-        // 宽松 loader 应跳过坏行，返回 1 条好事件
-        let events = store.load_events_for_date(&date).unwrap();
-        assert_eq!(events.len(), 1);
     }
 
     #[test]
