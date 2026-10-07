@@ -14,6 +14,9 @@ on:
       - 'Cargo.lock'
       - 'tools/build_harmony*'
       - 'tools/setup_harmony_cli.sh'
+      - 'tools/publish_harmony_test.py'
+      - 'tools/test_publish_harmony_test.py'
+      - '.github/workflows/harmony_test_publish.yml'
       - 'tools/check_codelinter_report.py'
       - 'tools/check_harmony_share_files.py'
       - 'tools/test_check_harmony_share_files.py'
@@ -29,6 +32,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Test HarmonyOS AGC publisher helpers
+        run: python3 tools/test_publish_harmony_test.py
 
       - name: Setup HarmonyOS CLI
         run: |
