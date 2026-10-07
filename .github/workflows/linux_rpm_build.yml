@@ -56,15 +56,21 @@ jobs:
 
       - name: Verify RPM artifact
         run: |
-          compgen -G 'dist/rpm/*.rpm' > /dev/null || {
-            echo 'RPM artifact was not produced' >&2
+          mapfile -t rpms < <(
+            find dist/rpm -maxdepth 1 -type f -name 'sujian-[0-9]*.rpm' -print
+          )
+          if [ "${#rpms[@]}" -ne 1 ]; then
+            echo "Expected exactly one installable RPM, found ${#rpms[@]}" >&2
+            printf '  %s\n' "${rpms[@]:-<none>}" >&2
             exit 1
-          }
-          ls -lh dist/rpm/*.rpm
+          fi
+          echo "MAIN_RPM=${rpms[0]}" >> "$GITHUB_ENV"
+          ls -lh "${rpms[0]}"
 
       - name: Upload RPM
         uses: actions/upload-artifact@v7
         with:
           name: sujian-linux-rpm
-          path: dist/rpm/*.rpm
+          path: ${{ env.MAIN_RPM }}
           if-no-files-found: error
+          compression-level: 0
