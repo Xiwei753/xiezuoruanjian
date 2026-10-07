@@ -44,7 +44,7 @@ impl SujianEditorItem {
     /// 无选区时退化为零长度插入 `(cursor, cursor)`（`new`）。
     ///
     /// Issue #826: session 只维护虚拟文本投影，供 `preedit_byte_range_in_virtual_text`
-    /// 算出 preedit 在正文坐标系里的范围。preedit 是独立临时显示层，不进遮罩前沿。
+    /// 算出 preedit 在正文坐标系里的范围。preedit 是独立临时显示层。
     pub(crate) fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.pipeline.cursor();
@@ -171,19 +171,9 @@ impl EditorInputHost for SujianEditorItem {
         self.move_to_line_edge(end, extend);
     }
 
-    /// 清除预输入文本。设计意图：
-    /// 1. 保留 preedit 光标矩形供后续动画使用（pending_preedit_cursor_rect）
-    /// 2. 若动画开启，构建新旧快照并触发 commit/cancel 动画过渡
-    /// 3. 动画完成后由协调器自动清除 preedit 状态
+    /// 清除预输入临时层，不改变正文过渡。
     fn input_clear_preedit(&mut self) {
-        // Issue #826: 取消 preedit 只是撤掉临时显示层，不产生任何正文动画。
-        //
-        // 取消 composition 时 Core 没有产生 `EditorEditResult`（正文没变），
-        // 所以没有可造的遮罩前沿。这里只需要把任何正在跑的前沿收成 canonical
-        // 终态，让 canonical 正文立即接管。
-        self.pipeline
-            .animation_coordinator_mut()
-            .finish_edit_frontier_to_canonical();
+        // 取消 preedit 只撤掉临时显示层；正文没有 Core edit，当前过渡继续独立运行。
         self.pipeline.composition_mut().clear();
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
@@ -197,8 +187,8 @@ impl EditorInputHost for SujianEditorItem {
     /// 已有 `suppress_next_ime_commit` guard。否则 `input_clear_preedit()` →
     /// `CompositionState::clear()` 会把等待迟到 commit 的 guard 清成 false，
     /// 导致迟到 commit 不再被抑制。
-    /// 只有确实取消过真实 composition 时，才沿用 `input_clear_preedit` 的动画
-    /// 清理逻辑执行取消，并武装一次 `suppress_next_ime_commit`（用于忽略该
+    /// 只有确实取消过真实 composition 时，才沿用 `input_clear_preedit` 撤掉 preedit，
+    /// 并武装一次 `suppress_next_ime_commit`（用于忽略该
     /// composition 可能迟到的一次 commit）。
     fn input_cancel_preedit_for_escape(&mut self) {
         // Issue #704 评论 5711047799: 没有 composition 时直接 return，
@@ -206,7 +196,7 @@ impl EditorInputHost for SujianEditorItem {
         if !self.pipeline.composition().is_composing() {
             return;
         }
-        // 确实存在活跃 composition：沿用现有动画清理逻辑执行取消
+        // 确实存在活跃 composition：撤掉 preedit 临时层
         self.input_clear_preedit();
         // 取消过真实 composition 后武装一次 late-commit guard，
         // 用于忽略该 composition 可能迟到的一次 commit
@@ -216,9 +206,7 @@ impl EditorInputHost for SujianEditorItem {
     /// Issue #826: 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset。
     ///
     /// preedit 是**独立临时显示层**：只更新投影 + 刷新 preedit 显示，
-    /// 不创建任何正文动画、不进遮罩前沿、不 carry/rebase 历史 Reveal/Conceal。
-    /// 前沿必须先收成 canonical 终态——preedit 盖在静态正文上，
-    /// 不能让遮罩挂在还没写完的旧正文几何上。
+    /// 不创建正文动画，也不改变当前正文过渡。
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
         self.pipeline.composition_mut().preedit_old_text =
             self.pipeline.composition().preedit_text.clone();

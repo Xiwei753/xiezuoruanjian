@@ -88,7 +88,7 @@ fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion()
         .find(COMMIT_STMT)
         .expect("build_old_new_from_canonical 成功后必须提交 self.layout_revision = new_revision");
     let coordinator_pos = window
-        .find(".begin_or_extend_edit_frontier(EditFrontierRequest")
+        .find(".begin_visual_edit(VisualEditRequest")
         .expect("prepare_edit_motion 必须把真实 old/new snapshot 交给 coordinator");
     let canonical_pos = window
         .find("self.current_canonical_snapshot = Some(new_doc_snapshot);")

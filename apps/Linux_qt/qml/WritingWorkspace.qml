@@ -957,14 +957,9 @@ Rectangle {
                             cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                             typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                             typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
-                            // Issue #756 / Issue #785: 协同动画显式模式开关。
-                            // Issue #819 评论 5967250411 问题 6 / Issue #826 评论 38：
-                            // 协同 = 一条 caret 运动轨迹 +
-                            // 文字以该轨迹当前帧为吞吐边界 + Reflow 可独立。
-                            // 实现见 animation/coordinated_caret.rs：单份
-                            // CoordinatedCaretMotion（与前沿同 started_at /
-                            // typing duration），逐帧边界由本帧 caret 投影到
-                            // Frontier path 得到，不是两条独立时间线。
+                            // Issue #853：正文过渡从最近成功绘制的 VisualFrame
+                            // 更新到最新 canonical layout；光标由 CursorController
+                            // 独立管理。点击移动光标不会结束正在播放的正文过渡。
                             coordinated_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
                             scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                             viewport_height: sujianEditor.height

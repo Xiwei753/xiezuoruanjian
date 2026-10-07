@@ -7,14 +7,7 @@ use std::time::Instant;
 use super::cursor_controller::CursorUpdateResult;
 use super::SujianEditorItem;
 
-/// 光标动画状态 — 使用事务 Timeline 的 progress 而非独立时间源。
-///
-/// Issue #516: 光标不再维护独立 Choreographer/start_time，
-/// 而是消费与文字动画相同的 Timeline progress。
-/// Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
-/// `CursorAnimationState` 不再保存 `driver_key`。`started_at`/`duration_ms`
-/// 让 CursorAnimationState 拥有自己的 timeline，用 Scene Graph 当前帧的
-/// `frame_now` 推进 from→to 动画。
+/// 光标动画状态。CursorController 覆盖最新目标，Scene Graph 用当前帧时间独立推进。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
     pub start_x: f64,
@@ -26,9 +19,7 @@ pub struct CursorAnimationState {
     /// `None` 表示尚未启动（第一帧），由 `CursorController::tick_animation`
     /// 在首次采样时用 `frame_now` 初始化（Issue #826 评论 36 的唯一推进入口）。
     pub started_at: Option<Instant>,
-    /// Issue #702: 纯光标移动自己的 timeline 时长（毫秒）。
-    /// 输入/删除存在正文视觉事务时，光标继续消费同一帧进度，
-    /// 此字段仅用于纯方向键/Home/End 等没有正文事务的 from→to 动画。
+    /// 光标动画时长（毫秒）。
     pub duration_ms: u64,
 }
 
@@ -75,11 +66,7 @@ pub fn ease_out_cubic(t: f64) -> f64 {
 }
 
 impl SujianEditorItem {
-    // has_active_animation() removed: animation display lifecycle is now managed
-    // by ActiveVisualTransactionQueue in Scene Graph (child[1]).
-
-    // cleanup_finished_animations() removed: transaction completion is handled
-    // atomically via transactionId + generation in updatePaintNode.
+    // 正文过渡由 LinuxEditorAnimationCoordinator 提供，光标由 CursorController 推进。
 
     // Issue #658: render_to_image() / paint_onto() / ScrollBuffer deleted.
     // 静态正文不再栅格化为整块 QImage，改由 QSGTextNode（Qt 6.7+ 公开 API）渲染。
@@ -134,9 +121,6 @@ impl SujianEditorItem {
 
         // Issue #853：用户编辑只更新 canonical selection；caret 由唯一的
         // cursor controller 立即跟到最新位置。正文过渡不拥有也不 retarget caret。
-        self.pipeline
-            .animation_coordinator_mut()
-            .clear_coordinated_caret();
         let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
             &super::animation::CursorMoveInputs {
                 cursor_x,
@@ -238,8 +222,6 @@ impl SujianEditorItem {
 
         result
     }
-
-
 }
 
 // 正文始终由 canonical 文本与快照保存；动画只决定每帧由静态层或动画层显示字形。

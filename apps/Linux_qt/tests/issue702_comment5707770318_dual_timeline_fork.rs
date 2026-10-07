@@ -1,12 +1,8 @@
-//! Issue #702 评论 5707770318 修复后结构守卫 — 正文协同光标与纯光标 Tween 双时间线分叉已消除。
+//! Issue #702 评论 5707770318 仍有效的光标时间线结构守卫。
 //!
 //! WHITE_BOX 结构守卫：这些结构的不存在即证实了缺陷已被消除（修复成功）。
 //!
-//! Issue #826 评论 36 收口后本文件整体改写到新架构：
-//! 旧的 `CursorSampleOutcome`（Idle/Running/Finished/Coordinated）、
-//! `compute_coordinated_cursor_position` / `sample_caret_track_frame`、
-//! `cursor_motion.rs`、`has_active_for_coordinated` 协同光标链已**整链删除**，
-//! 正文协同光标那条 Timeline A 不复存在。现在只剩一条光标链：
+//! Issue #853 保持光标和正文动画状态独立。光标由单一 CursorController 时间线推进：
 //!
 //! `apply_plan()` 创建/重基 Tween（progress=0、started_at=None）
 //!   → `update_paint_node` 每帧 `self.cursor_ctrl.tick_animation(frame_now);`
@@ -14,8 +10,7 @@
 //!   → `build_render_plan_full()` 纯透传成 `drawn_caret_rect`
 //!   → `apply_render_plan_cursor_state()` 回写本帧绘制位置。
 //!
-//! 推进入口全仓库只有 `CursorController::tick_animation` 一个，且不与正文动画
-//! （EditFrontier/Reflow/Shaping，由 `coordinator::tick(frame_now)` 推进）共享状态。
+//! 推进入口全仓库只有 `CursorController::tick_animation` 一个。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

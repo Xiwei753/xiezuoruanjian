@@ -11,7 +11,6 @@
 //! - `CursorRect` 是纯几何值类型，不携带 Core 语义。
 //! - `diff_plain_text` 是本地文本 diff 实现，供 composition update 路径使用。
 
-use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
 use writer_core::editor::{
     EditorChange, EditorCursor, EditorEditResult, EditorOperationKind, EditorRevision,
     EditorSelection, EditorTransactionCause, OffsetMap, Utf8ByteOffset, Utf8ByteRange,
@@ -25,7 +24,7 @@ use writer_core::editor::{
 ///
 /// Issue #826: preedit 是独立临时显示层。这个 session 只负责维护虚拟文本
 /// （base text 的 replace range 被 preedit 替换后的结果）和 preedit 的 byte
-/// range，不参与正文动画，也不进遮罩前沿。
+/// range，不参与正文动画，也不进入 VisualEditState。
 #[derive(Clone, Debug)]
 pub(crate) struct CompositionSession {
     pub replace_start: usize,
@@ -174,27 +173,6 @@ pub(crate) struct PreparedEditMotion {
 }
 
 impl PreparedEditMotion {
-    /// Issue #826 评论 8 阻塞 1：本轮吞字的路径行进方向。
-    ///
-    /// 不猜键盘事件，直接从 old/new caret 的移动方向推：
-    /// - Backspace 删的是 caret **左边**的文字 → 编辑后 caret 向左移
-    ///   （`new_head < old_head`）→ old range 向左扩 → `Backward`；
-    /// - Delete 键删的是 caret **右边**的文字 → 编辑后 caret 向右移
-    ///   → old range 向右扩 → `Forward`；
-    /// - 选区替换（IME commit、粘贴覆盖）caret 通常落在选区末尾，此时
-    ///   视为向右吞。
-    pub fn conceal_direction(&self) -> ConcealDirection {
-        let old_head = self.old_selection.head.index.value();
-        let new_head = self.new_selection.head.index.value();
-        if new_head < old_head {
-            ConcealDirection::Backward
-        } else {
-            ConcealDirection::Forward
-        }
-    }
-}
-
-impl PreparedEditMotion {
     /// 从 `EditorEditResult` + old/new 文本快照构造 `PreparedEditMotion`。
     ///
     /// `old_cursor_rect` / `new_cursor_rect` 初始为 `None`，由 pipeline 在布局
@@ -267,7 +245,7 @@ pub(crate) fn ranges_from_display_patches(
         // `old [1,2] -> new [1,3]` 与 `old [3,4] -> new [4,6]`；
         // 用旧坐标推会得到 `[1,3]` / `[3,5]`，相邻归一化成 `[1,5]`，
         // 而 `aYYbYYc` 的 `[1,5]` 是 `YYbY` —— 中间**完全没改过的 `b`**
-        // 被当成 inserted 进入 FrontierMask。
+        // 该 cluster 会作为新增 target 交给 VisualEditState 吐字。
         let replace_start = patch.replace_byte_range.start().value();
         let replace_end = patch.replace_byte_range.end().value();
         if replace_end > replace_start {

@@ -43,6 +43,7 @@ pub(crate) mod pointer_gesture;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod qt_text_node;
+pub(crate) mod render_ownership;
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `RenderPlan`。
 pub mod render_plan;
 pub(crate) mod rendering;
@@ -508,14 +509,8 @@ pub struct SujianEditorItem {
     layout_dirty: bool,
     /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
     scene_dirty: bool,
-    /// Issue #826: 上一帧静态层是否带着遮罩裁剪矩形。
-    ///
-    /// 遮罩前沿打开/关闭的那一帧 clip 集合必然变化，静态层必须同帧重建，
-    /// 否则会出现"glyph 已经打开、static clip 还在"的一帧空洞。
-    last_had_clip_rects: bool,
-    /// Issue #826: 上一帧是否还有活跃正文动画（遮罩前沿 / Reflow）。
-    /// 结束那一帧要把动画层纹理放掉并让静态层恢复 canonical 正文。
-    last_had_active_text_animation: bool,
+    /// 最后一次成功提交的动画 owner 集合版本。render 失败时保留旧值，下一帧重试。
+    last_committed_ownership_revision: u64,
     /// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
     /// 包含同一次排版得到的 `LayoutSnapshot` 和从该 snapshot 派生的选区/preedit 几何。
     /// 不变性：
@@ -671,8 +666,7 @@ impl Default for SujianEditorItem {
             editor_layout: EditorLayout::default(),
             layout_dirty: true,
             scene_dirty: true,
-            last_had_clip_rects: false,
-            last_had_active_text_animation: false,
+            last_committed_ownership_revision: 0,
             prepared_frame: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             last_frame_now: None,

@@ -304,7 +304,7 @@ fn issue808_comment5918236360_whitespace_line_is_not_checked() {
 }
 
 /// Issue #826 评论 15：同 burst 第二笔 Delete 新建的 ConcealTrack，其
-/// current snapshot 行图必须能被 `prepare_frontier_textures` 真正准备进 TextureCache。
+/// current snapshot 行图必须能被 `prepare_visual_edit_textures` 真正准备进 TextureCache。
 ///
 /// 稳定反例（无 Reflow handoff，最容易暴露）：
 /// ```text
@@ -321,336 +321,11 @@ fn issue808_comment5918236360_whitespace_line_is_not_checked() {
 /// renderer 却 `get_line` miss 直接 skip —— 第一字正常吞、第二字直接消失。
 ///
 /// 修法：ConcealTrack 自己带 `source_lines`（真实 QImage），
-/// `prepare_frontier_textures` 直接用它重建，不再猜 snapshot。
+/// `prepare_visual_edit_textures` 直接用它重建，不再猜 snapshot。
 /// 单行 fixture：`cluster_count` 个 cluster，每个 1 byte、10px 宽。
 ///
 /// 必须真的有 cluster —— 没有 cluster 时 `build_conceal_track` 产不出 glyphs /
 /// source_lines（那正是「这一行没有可见 glyph」的情况），测试就测不到纹理。
-fn snapshot_for_test(
-    line_id: LineSnapshotId,
-    top: f64,
-    cluster_count: usize,
-) -> crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot {
-    snapshot_for_test_with_image(line_id, top, cluster_count, None)
-}
-
-/// Issue #826 评论 16：可以带真实行图的 fixture。
-fn snapshot_for_test_with_image(
-    line_id: LineSnapshotId,
-    top: f64,
-    cluster_count: usize,
-    image: Option<qmetaobject::QImage>,
-) -> crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot {
-    use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
-    use crate::sujian_editor_item::layout_snapshot::{
-        LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity, SourceRect,
-    };
-    let shaping = ShapingIdentity {
-        text_content_hash: 1,
-        raw_font_fingerprint: String::from("test-font"),
-        glyph_indexes_hash: 1,
-        cluster_glyph_count: 1,
-        direction_rtl: false,
-        format_fingerprint: 1,
-    };
-    let clusters: Vec<LineClusterSnapshot> = (0..cluster_count)
-        .map(|i| LineClusterSnapshot {
-            byte_start: i,
-            byte_end: i + 1,
-            source_rect: SourceRect {
-                x: (i as f64) * 20.0,
-                y: 0.0,
-                w: 10.0,
-                h: 20.0,
-            },
-            shaping_identity: shaping.clone(),
-        })
-        .collect();
-    let mut line = PreparedLineSnapshot::stub_for_tests(
-        line_id.visual_line_ordinal as usize,
-        top,
-        0,
-        clusters,
-    );
-    if let Some(image) = image {
-        line = line.with_test_image(image);
-    }
-    crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot::new(
-        LayoutSnapshot::empty_for_tests(),
-        vec![line],
-        None,
-        None,
-        CaretAffinity::Downstream,
-    )
-}
-
-#[test]
-fn same_burst_second_delete_can_prepare_current_snapshot_overlay_texture() {
-    use crate::sujian_editor_item::animation::coordinator::{
-        EditFrontierRequest, LinuxEditorAnimationCoordinator,
-    };
-    use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
-    use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
-    use crate::sujian_editor_item::layout_snapshot::LineSnapshotId;
-    use std::time::{Duration, Instant};
-
-    let now = Instant::now();
-    let base_id = LineSnapshotId::new(0, 0, 7);
-    let current_id = LineSnapshotId::new(0, 0, 9);
-
-    let mut coord = LinuxEditorAnimationCoordinator::new();
-
-    // ── 第一笔 Backspace：`abc` -> `ab`，删 c ──
-    // burst base 是 `abc`（line 7）；先只把 line 7 当作已缓存。
-    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
-        kind: EditorAnimationKind::Delete,
-        base_snapshot: snapshot_for_test(base_id, 0.0, 3),
-        target_snapshot: snapshot_for_test(current_id, 0.0, 2),
-        deleted_ranges: vec![(2, 3)],
-        inserted_ranges: Vec::new(),
-        offset_map: writer_core::editor::OffsetMap::from_single_edit(3, (2, 3), 0),
-        base_text: String::from("abc"),
-        target_text: String::from("ab"),
-        conceal_direction: ConcealDirection::Backward,
-        now,
-    });
-    let active = coord.active_old_overlay_snapshot_ids();
-    assert!(
-        active.contains(&base_id),
-        "第一笔的 overlay 纹理应来自 burst base line 7"
-    );
-
-    // ── 第二笔 Backspace（同一 burst，can_extend == true）：`ab` -> `a`，删 b ──
-    //
-    // 这里 `ab` 的 current line 必须带**真实行图**：否则 source_lines 里的
-    // image 仍是 None，测试只能验证 snapshot_id 对不对，验证不了
-    // `prepare_frontier_textures` 真的把图插进了 TextureCache。
-    let mut pipeline = LinuxEditorPipeline::new();
-    let image = qmetaobject::QImage::new(
-        qmetaobject::QSize {
-            width: 2,
-            height: 1,
-        },
-        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-    );
-    let mid = now + Duration::from_millis(80);
-    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
-        kind: EditorAnimationKind::Delete,
-        base_snapshot: snapshot_for_test_with_image(current_id, 0.0, 2, Some(image)),
-        target_snapshot: snapshot_for_test(LineSnapshotId::new(0, 0, 11), 0.0, 1),
-        deleted_ranges: vec![(1, 2)],
-        inserted_ranges: Vec::new(),
-        offset_map: writer_core::editor::OffsetMap::from_single_edit(2, (1, 2), 0),
-        base_text: String::from("ab"),
-        target_text: String::from("a"),
-        conceal_direction: ConcealDirection::Backward,
-        now: mid,
-    });
-
-    // 第二笔的 overlay 资源必须来自 current snapshot（line 9），不是 burst base。
-    let sources = coord.active_conceal_source_lines();
-    assert!(
-        sources
-            .iter()
-            .any(|source| source.snapshot_id == current_id),
-        "第二笔的 overlay 纹理必须来自 current old layout（line 9），实际 {:?}",
-        sources
-            .iter()
-            .map(|source| source.snapshot_id)
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        sources
-            .iter()
-            .any(|source| source.snapshot_id == current_id && source.image.is_some()),
-        "current line 必须真的带上行图（source_lines.image 不能是 None）"
-    );
-
-    // 关键断言：prepare_frontier_textures 之后 TextureCache 真的能拿到 line 9。
-    pipeline.animation_coordinator = coord;
-    pipeline.prepare_frontier_textures();
-    assert!(
-        pipeline.texture_cache().contains_line(&current_id),
-        "prepare_frontier_textures 必须把 current old layout 的行图插进 TextureCache，\
-         否则 renderer 的 get_line 会 miss，b 的 Conceal overlay 一像素都画不出来"
-    );
-}
-
-/// Issue #826 评论 21 BLOCKER 1：carry 的贴图必须进纹理生命周期与准备链。
-///
-/// carry glyph 用的是**最新 target 行**的纹理，而那几行此时只有动画层在引用
-/// —— 静态正文层还没有栅格化到它们。如果 carry 的 snapshot_id 不进
-/// `collect_active_snapshot_ids`，`retain_active_snapshot_ids` 之后纹理可能被回收，
-/// `prepare_frontier_textures` 也不会补插。renderer 里
-/// `texture_cache.get_line(&glyph.snapshot_id)` 返回 None 就 `continue` 跳过 glyph，
-/// 同时 carry 的 canonical exclusion 因为动画纹理守卫也被过滤掉 ——
-/// 结果是「carry 不画 + canonical 不挖」，评论 20 修的旧行半个 X 直接整块跳到新行。
-#[test]
-fn reveal_carry_target_texture_is_retained_and_prepared() {
-    use crate::editor::layout::{CaretAffinity, LayoutSnapshot};
-    use crate::sujian_editor_item::animation::coordinator::{
-        EditFrontierRequest, LinuxEditorAnimationCoordinator,
-    };
-    use crate::sujian_editor_item::animation::edit_frontier::ConcealDirection;
-    use crate::sujian_editor_item::edit_motion::EditorAnimationKind;
-    use crate::sujian_editor_item::layout_snapshot::{
-        EditorLayoutSnapshot, LineClusterSnapshot, PreparedLineSnapshot, ShapingIdentity,
-        SourceRect,
-    };
-    use crate::sujian_editor_item::qt_text_node::StaticClipKind;
-    use std::time::{Duration, Instant};
-
-    // carry 那一行的 id —— 断言全部围绕它。
-    let carry_line_id = LineSnapshotId::new(0, 0, 42);
-
-    let cluster = |start: usize, end: usize, x: f64| LineClusterSnapshot {
-        byte_start: start,
-        byte_end: end,
-        source_rect: SourceRect {
-            x,
-            y: 0.0,
-            w: 10.0,
-            h: 20.0,
-        },
-        shaping_identity: ShapingIdentity {
-            text_content_hash: 1,
-            raw_font_fingerprint: String::from("test-font"),
-            glyph_indexes_hash: 1,
-            cluster_glyph_count: 1,
-            direction_rtl: false,
-            format_fingerprint: 1,
-        },
-    };
-    let two_lines = |top_line: PreparedLineSnapshot, second: PreparedLineSnapshot| {
-        EditorLayoutSnapshot::new(
-            LayoutSnapshot::empty_for_tests(),
-            vec![top_line, second],
-            None,
-            None,
-            CaretAffinity::Downstream,
-        )
-    };
-
-    let now = Instant::now();
-    let mut coord = LinuxEditorAnimationCoordinator::new();
-
-    // ── 第一笔：输入 X，正文 `a` -> `aX`，X 的文档矩形是 (90, 0, 10, 20) ──
-    // 同一行里放一个 x=0 的 cluster 把 `visual_x` 钉在 0（`stub_for_tests`
-    // 用 cluster 最小 source x 当 visual_x），X 的文档 x 才是 90。
-    let first_target = EditorLayoutSnapshot::new(
-        LayoutSnapshot::empty_for_tests(),
-        vec![PreparedLineSnapshot::stub_for_tests(
-            1,
-            0.0,
-            0,
-            vec![cluster(0, 1, 0.0), cluster(1, 2, 90.0)],
-        )],
-        None,
-        None,
-        CaretAffinity::Downstream,
-    );
-    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
-        kind: EditorAnimationKind::Insert,
-        base_snapshot: snapshot_for_test(LineSnapshotId::new(0, 0, 0), 0.0, 1),
-        target_snapshot: first_target.clone(),
-        inserted_ranges: vec![(1, 2)],
-        deleted_ranges: Vec::new(),
-        offset_map: writer_core::editor::OffsetMap::from_single_edit(1, (1, 1), 1),
-        base_text: String::from("a"),
-        target_text: String::from("aX"),
-        conceal_direction: ConcealDirection::Forward,
-        now,
-    });
-
-    // ── 第二笔：输入 Y，Qt 重排把 X 挪到第二行 → X 进入 reveal_carried ──
-    // carry 的 snapshot_id 取自**这次 target_snapshot**，所以真实 QImage 必须挂
-    // 在 X 所在的那一行上，`prepare_frontier_textures` 才插得进来。
-    let image = qmetaobject::QImage::new(
-        qmetaobject::QSize {
-            width: 2,
-            height: 1,
-        },
-        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-    );
-    let second_target = two_lines(
-        PreparedLineSnapshot::stub_for_tests(0, 0.0, 0, vec![cluster(0, 1, 0.0)]),
-        PreparedLineSnapshot::stub_for_tests(
-            carry_line_id.visual_line_ordinal as usize,
-            20.0,
-            1,
-            vec![cluster(1, 2, 0.0), cluster(2, 3, 10.0)],
-        )
-        .with_test_image(image),
-    );
-    let mid = now + Duration::from_millis(80);
-    coord.begin_or_extend_edit_frontier(EditFrontierRequest {
-        kind: EditorAnimationKind::Insert,
-        base_snapshot: first_target,
-        target_snapshot: second_target,
-        inserted_ranges: vec![(2, 3)],
-        deleted_ranges: Vec::new(),
-        offset_map: writer_core::editor::OffsetMap::from_single_edit(2, (2, 2), 1),
-        base_text: String::from("aX"),
-        target_text: String::from("aXY"),
-        conceal_direction: ConcealDirection::Forward,
-        now: mid,
-    });
-
-    let carry_ids = coord.active_reveal_carried_snapshot_ids();
-    assert!(
-        carry_ids.contains(&carry_line_id),
-        "X 此刻应处于 reveal carry（半吐后被 rewrap 挪走），实际 carry ids = {carry_ids:?}"
-    );
-    assert!(
-        coord.collect_active_snapshot_ids().contains(&carry_line_id),
-        "carry 的 snapshot_id 必须进 collect_active_snapshot_ids，否则 retain 会把它回收"
-    );
-
-    // ── 走真实管线：retain 之后再 prepare ──
-    let mut pipeline = LinuxEditorPipeline::new();
-    pipeline.animation_coordinator = coord;
-    let active = pipeline.animation_coordinator.collect_active_snapshot_ids();
-    pipeline
-        .texture_cache_mut()
-        .retain_active_snapshot_ids(&active);
-    pipeline.prepare_frontier_textures();
-
-    assert!(
-        pipeline.texture_cache().contains_line(&carry_line_id),
-        "prepare_frontier_textures 必须把 carry 目标行的行图插进 TextureCache，\
-         否则 renderer 的 get_line miss，carry glyph 一像素都画不出来"
-    );
-
-    // carry 的 canonical clip 必须能活过 renderer 的纹理守卫。
-    let sample = pipeline
-        .animation_coordinator
-        .sample_edit_frontier(mid)
-        .expect("carry 在跑时前沿必须还是活跃的");
-    let clips = pipeline
-        .animation_coordinator
-        .reveal_carried_target_clip_rects(&sample);
-    assert!(
-        !clips.is_empty(),
-        "carry 的 canonical 目标位置必须产出 clip，否则静态层会同时画一份（重影）"
-    );
-    for clip in &clips {
-        assert_eq!(
-            clip.kind,
-            StaticClipKind::AnimationOwned,
-            "carry overlay 真的要用那张纹理，必须使用带资源守卫的动画 exclusion；\
-             纹理 miss 时会恢复 canonical"
-        );
-        assert!(
-            clip.requires_animation_texture(),
-            "动画 exclusion 必须参与纹理可用性过滤"
-        );
-        assert!(
-            pipeline.texture_cache().contains_line(&clip.snapshot_id),
-            "纹理已就绪，renderer 就不会把这个 clip 过滤掉"
-        );
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // Issue #826 评论 33 BLOCKER：真实 Pipeline layout revision 链
 // ═══════════════════════════════════════════════════════════════════════
@@ -789,7 +464,7 @@ fn first_line_of(snapshot: &EditorLayoutSnapshot) -> LineSnapshotId {
 /// `second.base_line.id.layout_revision == first.target_line.id.layout_revision`。
 ///
 /// 第二笔 Delete 的 Conceal overlay 行资源直接取自 `request.base_snapshot`，
-/// 所以 `active_old_overlay_snapshot_ids()` 返回的就是第二笔 base 的行身份。
+/// 所以 active snapshot ids 包含第二笔 base 的行身份。
 #[test]
 fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision() {
     crate::editor::layout::run_on_qt_thread(|| {
@@ -838,12 +513,15 @@ fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revisi
         assert_ne!(r1, r2, "第二笔必须再把 Pipeline revision 推进到 R2");
 
         // second.base_snapshot 的行身份 = 第二笔 Delete 的 base 行。
-        let base_lines = pipeline
+        let base_lines: Vec<_> = pipeline
             .animation_coordinator()
-            .active_old_overlay_snapshot_ids();
+            .active_snapshot_ids()
+            .into_iter()
+            .filter(|id| id.layout_revision == first_target_line.layout_revision)
+            .collect();
         assert!(
             !base_lines.is_empty(),
-            "第二笔 Delete 必须登记 base 行（Conceal overlay 的纹理来源）"
+            "第二笔 Delete 必须保留上一帧 source 行纹理"
         );
         for id in &base_lines {
             assert_eq!(
@@ -861,124 +539,6 @@ fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revisi
                 "必须是同一稳定视觉行"
             );
         }
-    });
-}
-
-/// 评论 33 要求② 评论 31 的生产级回归：不使用 `stub_for_tests` 的 revision 0，
-/// 显式让第一笔 old R0 / target R1、第二笔 base **必须 R1** / target R2。
-///
-/// 第一笔形成 `f -> fi` shaping，40ms 后第二笔删整个 `fi`，断言：
-/// - `conceal_handoffs` 命中（Conceal 层仍然画着正在被吞的 fi）；
-/// - Conceal glyph 的 snapshot / source_rect / dest_rect 来自上一帧 fi；
-/// - opacity 保留上一帧值，不回 1.0（revision 链断掉时会退回 canonical 的 1.0）。
-#[test]
-fn pipeline_shaping_new_to_conceal_handoff_survives_real_layout_revision_chain() {
-    crate::editor::layout::run_on_qt_thread(|| {
-        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
-        let r0 = pipeline.layout_revision;
-
-        // 第一笔 old R0 / target R1：`af` -> `afi`，形成 f -> fi 的 shaping new atom。
-        assert_prepared_created(
-            "第一笔",
-            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
-                pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
-            }),
-        );
-        let first_target = pipeline
-            .current_layout_snapshot()
-            .clone()
-            .expect("第一笔 target snapshot 必须安装到 current_layout_snapshot");
-        let r1 = pipeline.layout_revision;
-        assert_eq!(first_target.revision, r1, "第一笔 target 必须是 R1");
-        assert_ne!(r0, r1, "第一笔 old 必须是 R0、target 必须是 R1");
-        let first_target_line = first_line_of(&first_target);
-
-        // 吞字进行到 40ms：此时上一帧 fi 的 shaping opacity 还在 (0,1)。
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        let shaping_now = std::time::Instant::now();
-        let shaping_frames = pipeline
-            .animation_coordinator()
-            .shaping_transition_glyphs(shaping_now);
-        assert!(
-            !shaping_frames.is_empty(),
-            "第一笔之后 shaping transition 必须还在跑，否则拿不到上一帧 fi"
-        );
-        let previous_fi = shaping_frames
-            .iter()
-            .flat_map(|frame| frame.new.iter())
-            .filter(|side| side.rect.w > 0.0)
-            .max_by(|a, b| a.rect.x.total_cmp(&b.rect.x))
-            .expect("第一笔后 shaping new 侧必须有 glyph");
-        let previous_opacity = previous_fi.opacity;
-        assert!(
-            previous_opacity > 0.0 && previous_opacity < 1.0,
-            "上一帧 fi 的 opacity 必须在 (0,1)，实际 {previous_opacity}"
-        );
-        let previous_rect = previous_fi.rect.clone();
-
-        // 第二笔 base 必须是 R1 / target R2：删整个 `fi` (1,3)。
-        assert_prepared_created(
-            "第二笔",
-            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
-                pipeline.delete_range(1, 3, EditorTransactionCause::Delete)
-            }),
-        );
-        let r2 = pipeline.layout_revision;
-        assert_ne!(r1, r2, "第二笔 target 必须是 R2");
-
-        let coordinator = pipeline.animation_coordinator();
-        let sample = coordinator
-            .sample_edit_frontier(std::time::Instant::now())
-            .expect("第二笔之后遮罩前沿必须活跃");
-        let glyphs = coordinator.old_overlay_glyphs_for(&sample);
-        let handed_off = glyphs
-            .iter()
-            .find(|glyph| glyph.range == (1, 3))
-            .expect("conceal_handoffs 必须命中：Conceal 层还画着正在被吞的 fi");
-        assert_eq!(
-            handed_off.snapshot_id.layout_revision, r1.0,
-            "Conceal glyph 必须来自上一帧 R1 行，实际 {:?}",
-            handed_off.snapshot_id
-        );
-
-        let previous_line = first_target
-            .line_snapshots
-            .iter()
-            .find(|line| line.id == handed_off.snapshot_id)
-            .expect("Conceal glyph 的行必须是上一帧（第一笔 target）的行");
-        let previous_cluster = previous_line
-            .cluster_exact_for_range((1, 3))
-            .expect("上一帧 target 必须有恰好 (1,3) 的 fi cluster");
-        assert!(
-            (handed_off.source_rect.x - previous_cluster.source_rect.x).abs() < 1e-6
-                && (handed_off.source_rect.w - previous_cluster.source_rect.w).abs() < 1e-6,
-            "Conceal glyph source_rect 必须来自上一帧 fi：期望 {:?}，实际 {:?}",
-            previous_cluster.source_rect,
-            handed_off.source_rect
-        );
-        assert!(
-            (handed_off.dest_rect.x - previous_rect.x).abs() < 1e-6
-                && (handed_off.dest_rect.w - previous_rect.w).abs() < 1e-6,
-            "Conceal glyph dest_rect 必须是上一帧 fi 的屏幕位置：期望 {:?}，实际 {:?}",
-            previous_rect,
-            handed_off.dest_rect
-        );
-
-        // opacity 保留上一帧值，不回 1.0。
-        assert!(
-            (handed_off.opacity - previous_opacity).abs() < 1e-3,
-            "Conceal glyph opacity 必须保留上一帧 fi 的 {previous_opacity}，实际 {}",
-            handed_off.opacity
-        );
-        assert!(
-            handed_off.opacity < 1.0 - 1e-6,
-            "revision 链断掉时这里会退回 canonical 的 1.0，实际 {}",
-            handed_off.opacity
-        );
-        assert!(
-            coordinator.active_conceal_glyphs_for_test() >= 1,
-            "第二笔必须至少持有一个 Conceal glyph"
-        );
     });
 }
 
@@ -1019,66 +579,5 @@ fn layout_revision_commits_even_when_text_animation_is_disabled() {
             committed, target.revision,
             "提交的 revision 必须就是这一笔 target snapshot 的 revision"
         );
-    });
-}
-
-/// 补充测试 —— 对应评论 33 明确要求的 3 条测试**覆盖不到**的位置：
-/// 要求②只断言 Conceal **glyph** 的 snapshot / source / rect / opacity（命中路径），
-/// 没断言行图来源登记 `active_conceal_source_lines()` —— renderer 靠它把 base 行图
-/// 插进 TextureCache，行图来源身份错了会直接 miss 纹理。
-///
-/// 与要求②不重复：这里断言的是**行图来源**这一层，不是 glyph 层。
-#[test]
-fn conceal_line_image_sources_come_from_previous_target_revision_line() {
-    crate::editor::layout::run_on_qt_thread(|| {
-        let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
-
-        assert_prepared_created(
-            "第一笔",
-            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
-                pipeline.insert_text(2, "i", EditorTransactionCause::Typing)
-            }),
-        );
-        let first_target = pipeline
-            .current_layout_snapshot()
-            .clone()
-            .expect("第一笔 target snapshot 必须安装");
-        let r1 = pipeline.layout_revision;
-        let first_target_line = first_line_of(&first_target);
-
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        assert_prepared_created(
-            "第二笔",
-            &run_real_stroke(&mut pipeline, &mut layout, &ctx, |pipeline| {
-                pipeline.delete_range(1, 3, EditorTransactionCause::Delete)
-            }),
-        );
-
-        let sources = pipeline
-            .animation_coordinator()
-            .active_conceal_source_lines();
-        assert!(
-            !sources.is_empty(),
-            "第二笔 Conceal 必须登记行图来源（否则 renderer 的 TextureCache 会 miss）"
-        );
-        for source in &sources {
-            assert_eq!(
-                source.snapshot_id.layout_revision, r1.0,
-                "Conceal 行图来源必须是上一帧 R1 行，实际 {:?}",
-                source.snapshot_id
-            );
-            assert!(
-                first_target
-                    .line_snapshots
-                    .iter()
-                    .any(|line| line.id == source.snapshot_id),
-                "Conceal 行图来源必须能在上一帧 target snapshot 里找到，实际 {:?}",
-                source.snapshot_id
-            );
-            assert_eq!(
-                source.snapshot_id.layout_revision, first_target_line.layout_revision,
-                "行图来源必须与上一帧 target 的稳定视觉行同 revision"
-            );
-        }
     });
 }

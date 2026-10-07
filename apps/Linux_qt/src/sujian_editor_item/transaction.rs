@@ -9,10 +9,7 @@ impl SujianEditorItem {
     /// `EditorEditResult`（含 `cause`、`operation_kind`、`offset_map`、`content_delta`）
     /// 直接派生动画策略，不再经过 Core 的视觉事务工厂。
     ///
-    /// Issue #819 评论 5968240881 问题 2：返回值从
-    /// `Option<(PreparedEditMotion, Option<VisualTransactionKey>)>` 改成
-    /// `VisualPrepareOutcome`，只透传 `prepare_edit_motion` 的结果，不再重新猜。
-    /// `apply_edit_with_visuals` 直接消费 `VisualPrepareOutcome`。
+    /// 返回 `prepare_edit_motion` 的明确结果，调用方不重新猜测动画跳过原因。
     pub(crate) fn record_transaction(
         &mut self,
         old: EditorSnapshot,
@@ -78,12 +75,8 @@ impl SujianEditorItem {
             outcome = VisualPrepareOutcome::Skipped(
                 super::edit_flow::EditVisualSkipReason::ScrollingSuppressed,
             );
-            // Issue #826 评论 34：这一笔 Core edit 已应用、正文真的变了，却完全
-            // 不进 prepare_edit_motion（既不 retarget 旧 Frontier/Reflow/Shaping，
-            // 也不 finish 它们）。必须在此把 pause 期间遗留的上一笔旧正文动画
-            // 连同 pause 状态一起收成最新 canonical —— 否则滚动结束 resume 后，
-            // 旧动画会拿旧正文的 mask / overlay / 行图身份在新 canonical 上播
-            // （Reveal 裁错新正文、Reflow glyph 错位重现、Shaping clip 挖掉新字）。
+            // 正文在滚动期间不创建动画。正文真的变化时丢弃旧过渡；否则滚动结束后
+            // 旧 target 会继续在新正文上播放。光标/选区-only 保留暂停状态。
             // 光标/选区-only（正文没变）不动画，保留真 pause，恢复后继续。
             if old.text != new.text
                 && self
@@ -145,16 +138,12 @@ impl SujianEditorItem {
         outcome
     }
 
-    /// Issue #826: 遮罩前沿 / Reflow 的旧行纹理准备。
-    ///
-    /// 纹理准备完成后静态层裁剪区域会变，需要重建 Scene Graph。
-    /// 布局未变，不需要重新排版，只需要 scene rebuild。
-    ///
-    /// 正文编辑路径在 `pipeline.prepare_edit_motion` 里已就地准备纹理并推进
-    /// `pending_promoted_layout`；这里供改动裁剪区域但不需要重新排版的调用方
-    /// 复用（与 pipeline 同名方法语义一致）。
-    pub(crate) fn prepare_frontier_textures(&mut self) {
-        self.pipeline.prepare_frontier_textures();
+    /// 为当前视觉过渡准备行纹理，并请求 Scene Graph 处理 ownership 更新。
+    pub(crate) fn prepare_visual_edit_textures(
+        &mut self,
+        base_snapshot: &super::layout_snapshot::EditorLayoutSnapshot,
+    ) {
+        self.pipeline.prepare_visual_edit_textures(base_snapshot);
         self.request_scene_rebuild();
     }
 }
