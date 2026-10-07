@@ -1112,3 +1112,199 @@ fn test_current_writing_speed_type_from_projection() {
     assert_eq!(speed.window_seconds, 60);
     assert_eq!(speed.chars_typed, 10);
 }
+
+// ---------------------------------------------------------------------------
+// 问题1：替换操作的删除字数计入 totalDeletedChars
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_typing_replace_counts_deleted() {
+    // 选中5个字再输入2个字 = Typing, deleted=5, inserted=2
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let event = WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::HumanTyped,
+        inserted_chars: 2,
+        deleted_chars: 5,
+        pasted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: -3, // 2 - 5
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+        local_date: String::new(),
+    };
+    api.record_event(event).unwrap();
+
+    let today = StatsApi::today_date();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
+
+    assert_eq!(summary["totalHumanTypedChars"], 2);
+    assert_eq!(summary["totalDeletedChars"], 5);
+    assert_eq!(summary["totalNetDeltaChars"], -3);
+}
+
+#[test]
+fn test_paste_replace_counts_deleted() {
+    // 选中5个字再粘贴3个字 = Pasted, deleted=5, pasted=3
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let event = WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::Pasted,
+        inserted_chars: 0,
+        deleted_chars: 5,
+        pasted_chars: 3,
+        ai_inserted_chars: 0,
+        net_delta_chars: -2, // 3 - 5
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+        local_date: String::new(),
+    };
+    api.record_event(event).unwrap();
+
+    let today = StatsApi::today_date();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
+
+    assert_eq!(summary["totalPastedChars"], 3);
+    assert_eq!(summary["totalDeletedChars"], 5);
+    assert_eq!(summary["totalNetDeltaChars"], -2);
+}
+
+// ---------------------------------------------------------------------------
+// 问题4：bucket_minutes = 0 钳到至少 1，不死循环
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_speed_curve_zero_bucket_minutes_clamped() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let event = WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: now_ms,
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::HumanTyped,
+        inserted_chars: 5,
+        deleted_chars: 0,
+        pasted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: 5,
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+        local_date: String::new(),
+    };
+    api.record_event(event).unwrap();
+
+    let today = StatsApi::today_date();
+    // 传 0 不应死循环，应钳到 1
+    let curve = api
+        .get_speed_curve(
+            &DateRange {
+                start_date: today.clone(),
+                end_date: today,
+            },
+            0,
+        )
+        .unwrap();
+    assert_eq!(curve["bucketMinutes"], 1);
+    let buckets = curve["buckets"].as_array().unwrap();
+    assert!(!buckets.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 问题3：daysCount 从 business_date 去重
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_days_count_from_business_date() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // 两个事件同一天
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let event1 = WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: now_ms,
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::HumanTyped,
+        inserted_chars: 5,
+        deleted_chars: 0,
+        pasted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: 5,
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+        local_date: String::new(),
+    };
+    api.record_event(event1).unwrap();
+
+    let event2 = WritingInputEvent {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        timestamp_ms: now_ms + 1000,
+        device_id: "dev-1".to_string(),
+        platform: Platform::Desktop,
+        device_class: "desktop".to_string(),
+        project_id: "proj1".to_string(),
+        volume_id: "vol1".to_string(),
+        chapter_id: "chap1".to_string(),
+        source: EventSource::HumanTyped,
+        inserted_chars: 3,
+        deleted_chars: 0,
+        pasted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: 3,
+        duration_seconds: 0,
+        session_id: "s1".to_string(),
+        local_date: String::new(),
+    };
+    api.record_event(event2).unwrap();
+
+    let today = StatsApi::today_date();
+    let summary = api
+        .get_stats_summary(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
+
+    // 同一天 → daysCount = 1
+    assert_eq!(summary["daysCount"], 1);
+}

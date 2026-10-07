@@ -75,24 +75,13 @@ fun StatsScreen(modifier: Modifier = Modifier) {
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            StatItem(stringResource(id = R.string.stats_total_words_label), "${s.totalWordCount}")
-                            StatItem(stringResource(id = R.string.stats_active_days), "${s.activeDays}")
-                            StatItem(
-                                stringResource(id = R.string.stats_total_duration),
-                                formatDuration(s.totalTimeSeconds, context),
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(dims.space12))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            StatItem(stringResource(id = R.string.stats_manual_input), "${s.totalHumanTypedChars ?: 0}")
+                            StatItem(stringResource(id = R.string.stats_manual_input), "${s.totalHumanTypedChars}")
+                            StatItem(stringResource(id = R.string.stats_active_days), "${s.daysCount}")
                             StatItem(
                                 stringResource(id = R.string.stats_active_duration),
-                                formatDuration(s.totalActiveSeconds ?: 0L, context),
+                                formatDuration(s.totalActiveSeconds, context),
                             )
-                            StatItem(stringResource(id = R.string.stats_session_count), "${s.totalSessions ?: 0}")
+                            StatItem(stringResource(id = R.string.stats_session_count), "${s.totalSessions}")
                         }
                     }
                 }

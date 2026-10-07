@@ -436,6 +436,10 @@ internal fun WritingStatsSummaryDto.toModel() =
     WritingStatsSummary(
         range = range.toModel(),
         totalHumanTypedChars = totalHumanTypedChars.toLong(),
+        totalPastedChars = totalPastedChars.toLong(),
+        totalDeletedChars = totalDeletedChars.toLong(),
+        totalAiInsertedChars = totalAiInsertedChars.toLong(),
+        totalNetDeltaChars = totalNetDeltaChars,
         totalActiveSeconds = totalActiveSeconds.toLong(),
         totalSessions = totalSessions.toInt(),
         daysCount = daysCount.toInt(),

@@ -382,6 +382,22 @@ impl SujianEditorItem {
             visual_cause
         ));
 
+        // Issue #843: 发编辑事实 signal，让 QML 直接拿到 cause + content_delta，
+        // 不再在 QML 中用文本长度 diff 猜统计。纯 cursor/selection 移动（content_delta
+        // 全 0）不发——避免无意义的统计事件。
+        {
+            let result = edit_result
+                .as_ref()
+                .expect("edit_result is Some when applied is true");
+            if result.content_delta.inserted_chars > 0 || result.content_delta.deleted_chars > 0 {
+                self.editor_change_applied(
+                    QString::from(format!("{:?}", result.cause)),
+                    result.content_delta.inserted_chars,
+                    result.content_delta.deleted_chars,
+                );
+            }
+        }
+
         // 5. 保存 new snapshot
         let new = self.pipeline.snapshot();
 

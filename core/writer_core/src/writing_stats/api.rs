@@ -64,7 +64,7 @@ impl StatsApi {
             "totalNetDeltaChars": proj.summary.total_net_delta_chars,
             "totalActiveSeconds": proj.summary.total_active_seconds,
             "totalSessions": proj.summary.total_sessions,
-            "daysCount": 0, // 不再按 daily 文件计数
+            "daysCount": proj.summary.days_count,
         }))
     }
 
@@ -194,6 +194,8 @@ impl StatsApi {
     }
 
     pub fn get_speed_curve(&self, range: &DateRange, bucket_minutes: u32) -> Result<Value> {
+        // 钳到至少 1 分钟，避免 bucket_ms = 0 导致速度曲线死循环
+        let bucket_minutes = bucket_minutes.max(1);
         let events = self
             .store
             .load_events_range(&range.start_date, &range.end_date)?;

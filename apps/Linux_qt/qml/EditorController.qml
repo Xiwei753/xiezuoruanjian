@@ -130,15 +130,15 @@ QtObject {
     }
 
     // Stats + word count debounce timer — batches per-keystroke FFI calls.
-    // record_editor_change_stats records editor change stats (cause + inserted/deleted),
-    // calculate_word_count scans full text. Both are imperceptible at 300ms延迟.
+    // Issue #843: statsTimer 只负责 calculate_word_count（全文扫描）。
+    // 编辑事务统计（cause + inserted/deleted）由 editor_change_applied signal
+    // 直接从 Rust EditorEditResult 发出，不再走 300ms 文本 diff。
     property var statsTimer: Timer {
         interval: 300
         repeat: false
         onTriggered: {
             if (!controller.chapterId || !controller.editorBackendRef) return;
             var plainText = controller.getEditorPlainText();
-            controller.reportStatsIfChanged(plainText);
             controller.editorBackendRef.calculate_word_count(plainText);
         }
     }
@@ -151,6 +151,14 @@ QtObject {
         function onText_changed() {
             controller.handlePlainTextChanged("sujian_editor_text_changed");
             Qt.callLater(targetEditorItem.flush_content_height);
+        }
+        // Issue #843: 编辑事务事实从 Rust EditorEditResult 直接传来，
+        // cause + inserted/deleted 不再在 QML 中用文本长度 diff 猜。
+        function onEditor_change_applied(cause, insertedChars, deletedChars) {
+            if (!controller.chapterId || !controller.editorBackendRef) return;
+            controller.editorBackendRef.record_editor_change_stats(
+                controller.projectId, controller.volumeId, controller.chapterId,
+                cause, insertedChars, deletedChars);
         }
     }
 
@@ -377,27 +385,6 @@ QtObject {
         } finally {
             isLoadingChapter = false;
         }
-    }
-
-    function reportStatsIfChanged(currentText) {
-        if (isLoadingChapter || !chapterId || !editorBackendRef) return;
-        var newText = currentText === undefined ? getEditorPlainText() : currentText;
-        if (previousEditorText === newText) return;
-
-        // Compute inserted/deleted char counts from text diff.
-        // Cause defaults to "Typing" — QML 端无法精确区分 Typing/Paste/Delete，
-        // Core 侧会根据 cause 做映射，这里用 Typing 作为通用 cause。
-        var oldLen = previousEditorText.length;
-        var newLen = newText.length;
-        var insertedChars = newLen > oldLen ? newLen - oldLen : 0;
-        var deletedChars = oldLen > newLen ? oldLen - newLen : 0;
-
-        if (insertedChars > 0 || deletedChars > 0) {
-            editorBackendRef.record_editor_change_stats(
-                projectId, volumeId, chapterId, "Typing", insertedChars, deletedChars);
-        }
-
-        previousEditorText = newText;
     }
 
     function applyCurrentSettings() {

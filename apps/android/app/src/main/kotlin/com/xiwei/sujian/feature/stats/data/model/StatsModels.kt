@@ -2,13 +2,14 @@ package com.xiwei.sujian.feature.stats.data.model
 
 data class WritingStatsSummary(
     val range: WritingStatsRange? = null,
-    val totalWordCount: Long = 0,
-    val totalTimeSeconds: Long = 0,
-    val activeDays: Int = 0,
-    val totalHumanTypedChars: Long? = null,
-    val totalActiveSeconds: Long? = null,
-    val totalSessions: Int? = null,
-    val daysCount: Int? = null,
+    val totalHumanTypedChars: Long = 0,
+    val totalPastedChars: Long = 0,
+    val totalDeletedChars: Long = 0,
+    val totalAiInsertedChars: Long = 0,
+    val totalNetDeltaChars: Long = 0,
+    val totalActiveSeconds: Long = 0,
+    val totalSessions: Int = 0,
+    val daysCount: Int = 0,
 )
 
 typealias WritingWritingStatsSummary = WritingStatsSummary

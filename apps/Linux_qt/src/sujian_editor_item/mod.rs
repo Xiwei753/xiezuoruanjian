@@ -383,6 +383,13 @@ pub struct SujianEditorItem {
     /// property 变化。不再用 TapHandler 接管 pointer event——左键 press/release/cancel
     /// 全部由 qquickitem_impl mouse_event 单一 owner 处理。
     long_press_timer_changed: qt_signal!(),
+    /// Issue #843: 编辑事务事实 signal。
+    ///
+    /// 在 `apply_edit_with_visuals()` 成功并拿到 `EditorEditResult` 后发出。
+    /// cause 来自 Core 的 `result.cause`（变体名），inserted_chars/deleted_chars 来自
+    /// `result.content_delta`。纯 cursor/selection 移动（content_delta 全 0）不发。
+    /// QML 连接此 signal 后直接调用 `record_editor_change_stats`，不再用文本长度 diff 猜统计。
+    editor_change_applied: qt_signal!(cause: QString, inserted_chars: u32, deleted_chars: u32),
 
     #[allow(dead_code)]
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -598,6 +605,7 @@ impl Default for SujianEditorItem {
             context_menu_requested: Default::default(),
             hide_context_menu_requested: Default::default(),
             long_press_timer_changed: Default::default(),
+            editor_change_applied: Default::default(),
 
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
