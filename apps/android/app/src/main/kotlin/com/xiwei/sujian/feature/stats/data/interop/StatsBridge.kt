@@ -9,6 +9,8 @@ import com.xiwei.sujian.feature.stats.data.model.DeviceWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.ProjectWritingStatsSummary
 import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
+import uniffi.writer_core.EditorChangeStatsInputDto
+import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
  * 统计 领域 Bridge。
@@ -62,47 +64,26 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
             holder.service.getWritingSpeedCurve(startDate, endDate, bucketMinutes.toUInt()).toModel()
         }
 
-    fun recordWritingEvent(
-        deviceId: String,
+    fun recordEditorChangeStats(
         projectId: String,
         volumeId: String,
         chapterId: String,
-        source: String,
+        cause: EditorTransactionCauseDto,
         insertedChars: Int,
         deletedChars: Int,
-        pastedChars: Int,
-        aiInsertedChars: Int,
-        durationSeconds: Int,
-        sessionId: String,
     ): BridgeResult<Boolean> =
         holder.wrapResult {
-            holder.service.recordWritingEvent(
-                deviceId, projectId, volumeId, chapterId, source, insertedChars, deletedChars,
-                pastedChars, aiInsertedChars, durationSeconds, sessionId,
+            holder.service.recordEditorChangeStats(
+                EditorChangeStatsInputDto(
+                    platform = "android",
+                    projectId = projectId,
+                    volumeId = volumeId,
+                    chapterId = chapterId,
+                    cause = cause,
+                    insertedChars = insertedChars.toUInt(),
+                    deletedChars = deletedChars.toUInt(),
+                ),
             )
-        }
-
-    fun processWritingEvent(
-        deviceId: String,
-        platform: String,
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        oldText: String,
-        newText: String,
-        durationSeconds: UInt,
-        sessionId: String,
-    ): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.processWritingEvent(
-                deviceId, platform, projectId, volumeId, chapterId, oldText, newText,
-                durationSeconds, sessionId,
-            )
-        }
-
-    fun flushWritingStats(): BridgeResult<Boolean> =
-        holder.wrapResult {
-            holder.service.flushWritingStats()
         }
 
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> =

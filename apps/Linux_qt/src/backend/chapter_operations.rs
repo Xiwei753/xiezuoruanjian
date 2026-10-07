@@ -174,7 +174,6 @@ impl AppBackend {
                     self.current_save_status = "已保存".to_string();
                     // 正文保存不触发 workspace_state_changed，避免 reload_tree 刷新整棵树。
                     // 保存只改变章节内容，不改变工作区结构（项目/卷/章节增删改）。
-                    self.flush_writing_stats();
                     serde_to_qjson_object(serde_json::json!({
                         "success": true,
                         "data": serde_json::to_value(receipt).unwrap_or_default(),
@@ -285,5 +284,4 @@ impl AppBackend {
             bridge_error_object("error.core_error", "CORE_ERROR", "Core not initialized")
         }
     }
-
 }

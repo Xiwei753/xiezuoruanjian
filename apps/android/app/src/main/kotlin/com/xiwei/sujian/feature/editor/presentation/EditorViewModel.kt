@@ -23,7 +23,7 @@ package com.xiwei.sujian.feature.editor.presentation
 // !   预准备 Rust session → 一次性提交（数据 + 会话 + 导航）
 // ! 2. **自动保存**：`onContentChanged()` → `scheduleAutoSave()` → `performSave()`
 // ! 3. **设置同步**：`onSettingsChanged()` → `reloadSettings()` → 更新 `EditorSettingsState`
-// ! 4. **写作统计**：`onContentChanged()` → `reportWritingEvent()` → `ProjectRepository.processWritingEvent()`
+// ! 4. **写作统计**：`onEditorApplied()` → `recordEditorChangeStats()` → `WritingStatsRepository.recordEditorChangeStats()`
 // !
 // ! ## 线程模型
 // !
@@ -288,20 +288,7 @@ class EditorViewModel(
     /** #595 四：ActiveDocumentGate 注册句柄 — onCleared 只关闭自己的注册。 */
     internal var gateRegistration: com.xiwei.sujian.app.state.ActiveDocumentGate.Registration? = null
 
-    internal val statsDeviceId: String by lazy {
-        val prefs = application.getSharedPreferences("writer_stats", android.content.Context.MODE_PRIVATE)
-        var id = prefs.getString("device_id", null)
-        if (id == null) {
-            id = "android-${java.util.UUID.randomUUID()}"
-            prefs.edit { putString("device_id", id) }
-        }
-        id
-    }
-
-    internal var statsSessionId: String = java.util.UUID.randomUUID().toString()
-    internal var statsLastEventMs: Long = 0
-
-    // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
+    // #624 评论9：previousText 已删除 — 统计改增量 recordEditorChangeStats。
     internal var isLoadingChapter = false
 
     /**
@@ -666,12 +653,6 @@ class EditorViewModel(
         // #595 四：只关闭自己的 gate 注册 — 新实例的 flusher 不被旧实例清除。
         gateRegistration?.close()
         gateRegistration = null
-        try {
-            // #624 评论11 第3项：flush 入队同一 writer actor — 不在主线程直接刷盘；
-            // Record/Flush 顺序由进程级 Channel 决定。
-            statsRepository.flushWritingStats()
-        } catch (_: Exception) {
-        }
         try {
             recentEditsRepository.flushRecentEdits()
         } catch (_: Exception) {

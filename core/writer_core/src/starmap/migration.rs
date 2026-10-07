@@ -115,8 +115,10 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
                 .map_err(|e| {
                     Error::Other(format!("index schema 3 deserialization failed: {}", e))
                 })?;
-            let legacy_child_ids = collect_legacy_portal_child_ids(app_data_root, &rec.starmap_ids)?;
-            rec.root_starmap_ids.retain(|id| !legacy_child_ids.contains(id));
+            let legacy_child_ids =
+                collect_legacy_portal_child_ids(app_data_root, &rec.starmap_ids)?;
+            rec.root_starmap_ids
+                .retain(|id| !legacy_child_ids.contains(id));
             rec.schema_version = NEW_INDEX_SCHEMA_VERSION;
             rec.updated_at = super::now_epoch();
             let new_content = serde_json::to_string_pretty(&rec)?;

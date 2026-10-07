@@ -414,14 +414,11 @@ fn prospective_preview_matches_formal_edge_when_reverse_exists() {
 
     // 正式：提交 B→A 之后两条边都在。
     let mut formal_graph = graph.clone();
-    formal_graph.edges.push(local_edge("edge_ba", "note_b", "note_a"));
-    let batch = compute_edge_renders_from_paths(
-        &formal_graph.edges,
-        &formal_graph,
-        &layout,
-        &[],
-        &params,
-    );
+    formal_graph
+        .edges
+        .push(local_edge("edge_ba", "note_b", "note_a"));
+    let batch =
+        compute_edge_renders_from_paths(&formal_graph.edges, &formal_graph, &layout, &[], &params);
     assert!(batch.diagnostics.is_empty(), "{:?}", batch.diagnostics);
     let formal_ba = batch
         .renders
@@ -523,7 +520,11 @@ fn hit_test_edge_render_covers_arrow_triangle() {
 
     // (91.5,2.5)：三角形内部，且到三条箭头边和箭杆都 > 1.0 world。
     let shaft_only = point_to_segment_distance(91.5, 2.5, 0.0, 0.0, 100.0, 0.0);
-    assert!(shaft_only > 1.0, "该点必须离箭杆 > threshold, got {}", shaft_only);
+    assert!(
+        shaft_only > 1.0,
+        "该点必须离箭杆 > threshold, got {}",
+        shaft_only
+    );
     assert!(
         !point_in_triangle(91.5, 2.5, 100.0, 0.0, 90.0, 5.0, 90.0, -5.0) == false,
         "前提：该点确实在箭头三角形内部"

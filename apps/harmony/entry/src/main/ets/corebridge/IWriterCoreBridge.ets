@@ -93,8 +93,6 @@ export interface IWriterCoreBridge {
   // source 分类由 Core 决定，端侧不要自己拼 source 字符串。
   recordEditorChangeStats(input: EditorChangeStatsInput): Promise<ResultEnvelope<boolean>>
   calculateWordCount(text: string): Promise<number>
-  processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>>
   getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>>
 
   // Layout Contract（#610/#753：输入为平台测量到的原始窗口尺寸 + 遮挡几何）

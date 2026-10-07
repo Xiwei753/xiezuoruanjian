@@ -132,8 +132,6 @@ impl AppBackend {
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "sync".to_string();
 
-        self.flush_writing_stats();
-
         let state = writer_core::api::SyncOperationStateDto {
             operation_id: op_id.clone(),
             operation_kind: "sync".to_string(),

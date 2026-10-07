@@ -59,7 +59,12 @@ async function doSaveChapter(deps, bridge, state, targetText, isAutoSave = false
     const result = await bridge.saveChapter(state.chapterId, targetText)
     if (result.success && result.data) {
       if (state.sessionOldText !== targetText) {
-        bridge.processWritingEvent(state.sessionOldText, targetText)
+        const diff = targetText.length - state.sessionOldText.length
+        if (diff > 0) {
+          bridge.recordEditorChangeStats('Typing', diff, 0)
+        } else if (diff < 0) {
+          bridge.recordEditorChangeStats('Delete', 0, -diff)
+        }
         state.sessionOldText = targetText
       }
       state.lastSavedContent = targetText
@@ -132,14 +137,14 @@ function makeBridge(saveResult) {
   const bridge = {
     saveChapterCalls: [],
     saveChapter: async (chapterId, text) => { bridge.saveChapterCalls.push({ chapterId, text }); return saveResult },
-    processWritingEventCalls: [],
-    processWritingEvent: (oldText, newText) => { bridge.processWritingEventCalls.push({ oldText, newText }) },
+    recordEditorChangeStatsCalls: [],
+    recordEditorChangeStats: (cause, insertedChars, deletedChars) => { bridge.recordEditorChangeStatsCalls.push({ cause, insertedChars, deletedChars }) },
   }
   return bridge
 }
 
 function makeDeferredBridge() {
-  const bridge = { saveChapterCalls: [], processWritingEventCalls: [], processWritingEvent: (oldText, newText) => { bridge.processWritingEventCalls.push({ oldText, newText }) } }
+  const bridge = { saveChapterCalls: [], recordEditorChangeStatsCalls: [], recordEditorChangeStats: (cause, insertedChars, deletedChars) => { bridge.recordEditorChangeStatsCalls.push({ cause, insertedChars, deletedChars }) } }
   let resolveSave = null
   let resolveStarted = null
   const startedPromise = new Promise((resolve) => { resolveStarted = resolve })
@@ -187,8 +192,8 @@ await testAsync('保存期间继续输入: 磁盘保存 A，保存期间输入 B
   assert.equal(state.hasUnsavedChanges, true)
   assert.equal(state.content, 'AB')
   assert.deepEqual(state.sessionOldText, 'A')
-  assert.equal(bridge.processWritingEventCalls.length, 1)
-  assert.equal(bridge.processWritingEventCalls[0].newText, 'A')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 1)
+  assert.equal(bridge.recordEditorChangeStatsCalls[0].deletedChars, 10)
 })
 
 await testAsync('保存期间无新输入: 结算后 hasUnsavedChanges=false', async () => {
@@ -320,12 +325,12 @@ await testAsync('保存失败: 返回 false，lastSavedContent/hasUnsavedChanges
   assert.equal(state.hasUnsavedChanges, true)
   assert.equal(state.lastSaveFailed, true)
   assert.equal(state.isSaving, false)
-  assert.equal(bridge.processWritingEventCalls.length, 0)
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0)
 })
 
 await testAsync('保存抛异常: 返回 false，isSaving 释放', async () => {
   const deps = makeSaveDeps('B')
-  const bridge = { saveChapterCalls: [], saveChapter: async () => { throw new Error('bridge crashed') }, processWritingEventCalls: [], processWritingEvent: () => {} }
+  const bridge = { saveChapterCalls: [], saveChapter: async () => { throw new Error('bridge crashed') }, recordEditorChangeStatsCalls: [], recordEditorChangeStats: () => {} }
   const state = makeState('A')
   const targetText = await resolveTargetText(deps, state)
   const saved = await doSaveChapter(deps, bridge, state, targetText)

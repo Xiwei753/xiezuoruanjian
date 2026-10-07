@@ -14,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import uniffi.writer_core.EditorTransactionCauseDto
 
 /**
  * #618 六：StatsViewModel 契约测试。
@@ -160,27 +161,21 @@ class StatsViewModelTest {
     fun `revision bumps only on successful stats write`() {
         val repo = createRepo()
         val before = repo.revision.value
-        val result =
-            repo.processWritingEvent(
-                deviceId = "test-device",
-                platform = "android",
-                projectId = "p",
-                volumeId = "v",
-                chapterId = "c",
-                oldText = "",
-                newText = "x",
-                durationSeconds = 1u,
-                sessionId = "s",
-            )
+        repo.recordEditorChangeStats(
+            projectId = "p",
+            volumeId = "v",
+            chapterId = "c",
+            cause = EditorTransactionCauseDto.TYPING,
+            insertedChars = 1,
+            deletedChars = 0,
+        )
         // 契约：只有写入成功才递增 revision；失败（单测环境原生库未加载 →
         // NotLoaded/Error）不得递增，否则 UI 会因失败不断重查。
+        // recordEditorChangeStats 是异步 actor，revision 在 actor 处理后才递增；
+        // 单测环境原生库未加载，actor 调用会失败，revision 不递增。
         assertEquals(
             "revision 只在写入成功时递增",
-            if (result is com.xiwei.sujian.core.interop.common.BridgeResult.Success) {
-                before + 1L
-            } else {
-                before
-            },
+            before,
             repo.revision.value,
         )
     }

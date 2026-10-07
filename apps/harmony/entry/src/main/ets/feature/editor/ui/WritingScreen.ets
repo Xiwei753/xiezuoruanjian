@@ -144,8 +144,7 @@ export struct WritingScreen {
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
   // Issue #829 评论 #5995146525：原先的 sessionOldText / sessionId / sessionStartTime
   // 已删除。它们只服务于「保存时拿整章 old/new 文本比较」的旧统计上报；
-  // 写作统计改由 EditorStatsQueue 按编辑事务上报后，会话 id 与时长口径由队列自己持有
-  // （见 EditorStatsQueue 的 lastEventMs / sessionId）。
+  // 写作统计改由 EditorStatsQueue 按编辑事务上报后，会话 id 与时长口径由 Core 侧管理。
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。

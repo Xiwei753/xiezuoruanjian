@@ -88,8 +88,8 @@ static napi_value NativeGetCurrentWritingSpeed(napi_env env, napi_callback_info 
 //
 // **必须是 Node-API async work，不能同步调 Rust。**
 // Core 这条链不轻：record_editor_change_stats → StatsApi::record_event →
-// aggregate_single_event → save_or_merge_daily_stats，每个编辑事务都要读当日统计
-// 并 write + rename。同步调就等于磁盘 I/O 落在 ArkUI 主线程上。
+// aggregate_single_event，每个编辑事务都要做一次 raw event append。
+// 同步调就等于磁盘 I/O 落在 ArkUI 主线程上。
 // ArkTS 的 async 函数不会自己开线程，所以光在 ArkTS 侧 await 没有意义 ——
 // 真正的切线程点在这里：execute 回调跑在线程池，complete 回调只 resolve Promise。
 
@@ -190,27 +190,6 @@ static napi_value NativeRecordEditorChangeStats(napi_env env, napi_callback_info
     return promise;
 }
 
-static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_process_writing_event(json));
-    delete[] json;
-    return result;
-}
-
 // ── Stats property descriptors ──
 
 napi_property_descriptor* getStatsDescriptors(size_t* count) {
@@ -221,7 +200,6 @@ napi_property_descriptor* getStatsDescriptors(size_t* count) {
         {"nativeGetWritingSpeedCurve", nullptr, NativeGetWritingSpeedCurve, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetCurrentWritingSpeed", nullptr, NativeGetCurrentWritingSpeed, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeRecordEditorChangeStats", nullptr, NativeRecordEditorChangeStats, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeProcessWritingEvent", nullptr, NativeProcessWritingEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

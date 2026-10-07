@@ -137,7 +137,6 @@ ApplicationWindow {
             if (!writingWorkspaceLoader.item.flushActiveEditorBeforeSync()) return false
         }
         if (editorBackend) {
-            editorBackend.flush_writing_stats()
             editorBackend.flush_recent_edits()
         }
         if (settingsBackend) {
@@ -446,7 +445,6 @@ ApplicationWindow {
 
     onClosing: {
         if (appController.inWriting) {
-            editorBackend.flush_writing_stats();
             editorBackend.flush_recent_edits();
         }
         // 应用关闭前 flush pending settings save

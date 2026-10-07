@@ -270,20 +270,6 @@ impl WriterCoreApi {
     pub(crate) fn json_string<T: Serialize>(value: &T) -> ApiResult<String> {
         serde_json::to_string(value).map_err(Into::into)
     }
-
-    /// 校验计数器值非负并转换为 u32。
-    /// 防止跨语言 FFI 边界的负值溢出——Kotlin Int/Long 在某些场景下
-    /// 可能为负（如未初始化字段），Core 侧必须显式拒绝。
-    #[allow(clippy::cast_sign_loss)]
-    pub(crate) fn non_negative_counter(name: &str, value: i32) -> ApiResult<u32> {
-        if value < 0 {
-            return Err(WriterError::Other(format!(
-                "negative writing event counter: {}={}",
-                name, value
-            )));
-        }
-        Ok(value as u32)
-    }
 }
 
 mod action_ops;
@@ -298,65 +284,7 @@ mod writing_stats_ops;
 mod tests {
     use super::*;
     use crate::api::ChangedEntityDto;
-    use std::fs::File;
     use tempfile::tempdir;
-
-    #[test]
-    fn record_writing_event_returns_true_on_success() {
-        let temp_dir = tempdir().unwrap();
-        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-
-        let result = api
-            .record_writing_event(
-                "dev-1",
-                "proj1",
-                "vol1",
-                "chap1",
-                "human_typed",
-                10,
-                0,
-                0,
-                0,
-                0,
-                "session-1",
-            )
-            .unwrap();
-
-        assert!(result);
-    }
-
-    #[test]
-    fn process_writing_event_returns_true_on_success() {
-        let temp_dir = tempdir().unwrap();
-        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-
-        let result = api
-            .process_writing_event(
-                "dev-1",
-                "android",
-                "proj1",
-                "vol1",
-                "chap1",
-                "old",
-                "old text",
-                0,
-                "session-1",
-            )
-            .unwrap();
-
-        assert!(result);
-    }
-
-    #[test]
-    fn flush_writing_stats_returns_true_on_success() {
-        let temp_dir = tempdir().unwrap();
-        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-
-        assert!(api.flush_writing_stats().unwrap());
-    }
 
     #[test]
     fn flush_recent_edits_returns_true_on_success() {
@@ -365,87 +293,6 @@ mod tests {
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
 
         assert!(api.flush_recent_edits().unwrap());
-    }
-
-    #[test]
-    fn record_writing_event_for_platform_returns_true_on_success() {
-        let temp_dir = tempdir().unwrap();
-        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-
-        let result = api
-            .record_writing_event_for_platform(
-                "dev-1",
-                "linux",
-                "proj1",
-                "vol1",
-                "chap1",
-                "human_typed",
-                10,
-                0,
-                0,
-                0,
-                0,
-                "session-1",
-            )
-            .unwrap();
-
-        assert!(result);
-    }
-
-    #[test]
-    fn record_writing_event_rejects_negative_counter() {
-        let temp_dir = tempdir().unwrap();
-        std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
-        let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
-
-        let err = api
-            .record_writing_event(
-                "dev-1",
-                "proj1",
-                "vol1",
-                "chap1",
-                "human_typed",
-                0,
-                -1,
-                0,
-                0,
-                0,
-                "session-1",
-            )
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            WriterError::Other(message)
-                if message.contains("negative writing event counter")
-                    && message.contains("deleted_chars=-1")
-        ));
-    }
-
-    #[test]
-    fn process_writing_event_propagates_core_error() {
-        let temp_dir = tempdir().unwrap();
-        let not_a_dir = temp_dir.path().join("not_a_directory");
-        File::create(&not_a_dir).unwrap();
-        // Use the file as app_data_root - writing stats will fail because it's not a directory
-        let api = WriterCoreApi::new(&not_a_dir, temp_dir.path().join("projects"));
-
-        let err = api
-            .process_writing_event(
-                "dev-1",
-                "android",
-                "proj1",
-                "vol1",
-                "chap1",
-                "old",
-                "old text",
-                0,
-                "session-1",
-            )
-            .unwrap_err();
-
-        assert!(matches!(err, WriterError::Io(_)));
     }
 
     #[test]

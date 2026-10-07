@@ -495,7 +495,6 @@ impl AppBackend {
         // 清进度共享状态：旧同步的进度 sink 不再有意义，丢弃避免诊断导出读到过期进度。
         self.current_sync_progress = None;
 
-        self.flush_writing_stats();
         self.flush_recent_edits();
         // Clear data root state
         self.current_data_root = "".to_string();

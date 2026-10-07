@@ -80,27 +80,15 @@ pub struct EditorBackend {
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
     #[allow(dead_code)]
-    report_writing_event: qt_method!(
+    record_editor_change_stats: qt_method!(
         fn(
             &mut self,
             project_id: QString,
             volume_id: QString,
             chapter_id: QString,
-            source: QString,
+            cause: QString,
             inserted_chars: u32,
             deleted_chars: u32,
-            pasted_chars: u32,
-        )
-    ),
-    #[allow(dead_code)]
-    process_writing_event_from_text: qt_method!(
-        fn(
-            &mut self,
-            project_id: QString,
-            volume_id: QString,
-            chapter_id: QString,
-            old_text: QString,
-            new_text: QString,
         )
     ),
     #[allow(dead_code)]
@@ -141,8 +129,6 @@ pub struct EditorBackend {
     /// 实时写作速度（最近 N 秒）。状态栏左段「N 字/分」走这里，不读速度曲线。
     #[allow(dead_code)]
     get_current_writing_speed: qt_method!(fn(&self, window_seconds: u32) -> QJsonObject),
-    #[allow(dead_code)]
-    flush_writing_stats: qt_method!(fn(&self)),
     #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
     #[allow(dead_code)]
@@ -279,26 +265,37 @@ impl EditorBackend {
                 qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
             })
     }
-    fn report_writing_event(
+    fn record_editor_change_stats(
         &mut self,
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
-        source: QString,
+        cause: QString,
         inserted_chars: u32,
         deleted_chars: u32,
-        pasted_chars: u32,
     ) {
+        let parsed_cause = match cause.to_string().as_str() {
+            "Typing" => writer_core::editor::EditorTransactionCause::Typing,
+            "Delete" => writer_core::editor::EditorTransactionCause::Delete,
+            "ImeComposition" => writer_core::editor::EditorTransactionCause::ImeComposition,
+            "TypingCommit" => writer_core::editor::EditorTransactionCause::TypingCommit,
+            "Paste" => writer_core::editor::EditorTransactionCause::Paste,
+            "Undo" => writer_core::editor::EditorTransactionCause::Undo,
+            "Redo" => writer_core::editor::EditorTransactionCause::Redo,
+            "Load" => writer_core::editor::EditorTransactionCause::Load,
+            "Format" => writer_core::editor::EditorTransactionCause::Format,
+            "Programmatic" => writer_core::editor::EditorTransactionCause::Programmatic,
+            _ => writer_core::editor::EditorTransactionCause::Typing,
+        };
         if self
             .with_app_mut(|app| {
-                app.report_writing_event(
+                app.record_editor_change_stats(
                     project_id,
                     volume_id,
                     chapter_id,
-                    source,
+                    parsed_cause,
                     inserted_chars,
                     deleted_chars,
-                    pasted_chars,
                 )
             })
             .is_err()
@@ -306,30 +303,7 @@ impl EditorBackend {
             crate::backend::app_backend::debug_error_static(
                 "editor_backend",
                 "BORROW_CONFLICT",
-                "report_writing_event skipped due to borrow conflict",
-            );
-        }
-    }
-    fn process_writing_event_from_text(
-        &mut self,
-        project_id: QString,
-        volume_id: QString,
-        chapter_id: QString,
-        old_text: QString,
-        new_text: QString,
-    ) {
-        if self
-            .with_app_mut(|app| {
-                app.process_writing_event_from_text(
-                    project_id, volume_id, chapter_id, old_text, new_text,
-                )
-            })
-            .is_err()
-        {
-            crate::backend::app_backend::debug_error_static(
-                "editor_backend",
-                "BORROW_CONFLICT",
-                "process_writing_event_from_text skipped due to borrow conflict",
+                "record_editor_change_stats skipped due to borrow conflict",
             );
         }
     }
@@ -423,15 +397,6 @@ impl EditorBackend {
             .unwrap_or_else(|_| {
                 qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
             })
-    }
-    fn flush_writing_stats(&self) {
-        if self.with_app(|app| app.flush_writing_stats()).is_err() {
-            crate::backend::app_backend::debug_error_static(
-                "editor_backend",
-                "BORROW_CONFLICT",
-                "flush_writing_stats skipped due to borrow conflict",
-            );
-        }
     }
     fn flush_recent_edits(&self) {
         if self.with_app(|app| app.flush_recent_edits()).is_err() {

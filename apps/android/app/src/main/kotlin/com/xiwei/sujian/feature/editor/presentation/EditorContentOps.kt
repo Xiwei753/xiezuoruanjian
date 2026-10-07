@@ -10,8 +10,6 @@ package com.xiwei.sujian.feature.editor.presentation
 // ! 纯 selection/cursor-only（contentChanged=false）不进持久化状态机。
 
 import com.xiwei.sujian.feature.editor.session.EditorAppliedEvent
-import com.xiwei.sujian.feature.editor.session.statsCountsFor
-import com.xiwei.sujian.feature.editor.session.writingEventSourceFrom
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -55,47 +53,19 @@ fun EditorViewModel.onEditorApplied(event: EditorAppliedEvent) {
 }
 
 /**
- * #624 评论9：增量写作统计上报 — 不传前后整章 String，只用 contentDelta 增量。
- * #624 评论10 第5项：source 字符串从 event.cause 明确映射（typing/pasted/deleted/
- * undo/redo/programmatic），不再靠 source/operationKind 猜。
- * #624 评论11 第4项：各分类计数由 [statsCountsFor]（session 层 mapper）决定，
- * 不在调用参数里临时拼；Paste 不再把净增字符算两遍。
- * #624 评论11 第3项：只 enqueue 到进程级 stats writer actor，不在输入主线程
- * 同步跨 UniFFI 写盘。
+ * #843：增量写作统计上报 — 直接把 cause + insertedChars/deletedChars 交给统计 Repository，
+ * Core 的 record_editor_change_stats 内部做 cause → EventSource 映射。
+ * Android 不再自己拼 source/session_id/device_id/duration。
  */
 fun EditorViewModel.recordWritingEventIncremental(event: EditorAppliedEvent) {
     val session = currentSession ?: return
-
-    val nowMs = System.currentTimeMillis()
-    if (statsLastEventMs == 0L || (nowMs - statsLastEventMs) > 5 * 60 * 1000) {
-        statsSessionId = java.util.UUID.randomUUID().toString()
-    }
-    val durationSeconds =
-        if (statsLastEventMs > 0L) {
-            ((nowMs - statsLastEventMs) / 1000).toInt()
-        } else {
-            0
-        }
-    statsLastEventMs = nowMs
-
-    // #624 评论10 第5项：source 按 Core cause 明确分类。
-    val source = writingEventSourceFrom(event.cause)
-    // #624 评论11 第4项：各分类计数收成 mapper — 不在调用参数里临时拼。
-    val counts = statsCountsFor(event.cause, event.contentDelta)
-    val aiInsertedChars = 0
-
-    statsRepository.recordWritingEvent(
-        statsDeviceId,
+    statsRepository.recordEditorChangeStats(
         session.projectId,
         session.volumeId,
         session.chapterId,
-        source,
-        counts.insertedChars,
-        counts.deletedChars,
-        counts.pastedChars,
-        aiInsertedChars,
-        durationSeconds,
-        statsSessionId,
+        event.cause,
+        event.contentDelta.insertedChars,
+        event.contentDelta.deletedChars,
     )
 }
 

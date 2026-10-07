@@ -1,10 +1,7 @@
 // EditorStatsQueue.ets — 写作统计上报队列（Issue #829 评论 #5995146525 第 5 项起）。
 //
-// 这一层只做两件事：
-// 1. 持有统计口径 —— sessionId（距上次事件超 5 分钟换新，与 Core 的 SESSION_GAP_MS 对齐）
-//    和 durationSeconds（距上次事件的秒数，首条为 0）。这两个值属于统计口径，
-//    所以由队列持有而不是页面。
-// 2. 把编辑事实组装成强类型 EditorChangeStatsInput，交给 SerialStatsDrain 串行送出。
+// 这一层只做一件事：
+// 把编辑事实组装成强类型 EditorChangeStatsInput，交给 SerialStatsDrain 串行送出。
 //
 // 平台端只透传编辑事实（cause + contentDelta），source 分类（HumanTyped / Pasted /
 // Deleted / Unknown）由 Core 的 record_editor_change_stats 决定，这里不猜也不拼 source 字符串。
@@ -27,9 +24,6 @@ import { EditorChangeStatsInput, EditorTransactionCause } from '../../../corebri
 import { IWriterCoreBridge } from '../../../corebridge/IWriterCoreBridge'
 import { SerialStatsDrain } from './stats_drain_loop'
 
-/** 距上次事件超过 5 分钟算新会话（与 Core SESSION_GAP_MS 对齐）。 */
-const STATS_SESSION_GAP_MS: number = 5 * 60 * 1000
-
 /** 队列里一条待写事件：seq 交给调度层算好的，业务字段由本队列持有。 */
 interface QueuedEditorChange {
   seq: number
@@ -39,15 +33,11 @@ interface QueuedEditorChange {
   cause: EditorTransactionCause
   insertedChars: number
   deletedChars: number
-  durationSeconds: number
-  sessionId: string
 }
 
 export class EditorStatsQueue {
   private readonly platform: string
   private readonly drain: SerialStatsDrain<QueuedEditorChange>
-  private sessionId: string = ''
-  private lastEventMs: number = 0
 
   constructor(bridge: IWriterCoreBridge, platform: string) {
     this.platform = platform
@@ -60,9 +50,7 @@ export class EditorStatsQueue {
           chapterId: item.chapterId,
           cause: item.cause,
           insertedChars: item.insertedChars,
-          deletedChars: item.deletedChars,
-          durationSeconds: item.durationSeconds,
-          sessionId: item.sessionId
+          deletedChars: item.deletedChars
         }
         // 这里 await 的 Promise 背后是 Node-API async work：Rust 调用跑在线程池，
         // 磁盘 I/O 不在 ArkUI 主线程上。串行保证同时只有一条在飞。
@@ -85,13 +73,6 @@ export class EditorStatsQueue {
     if (chapterId.length === 0) {
       return
     }
-    const nowMs: number = Date.now()
-    // 距上次事件超过 5 分钟算新会话。
-    if (this.lastEventMs === 0 || (nowMs - this.lastEventMs) > STATS_SESSION_GAP_MS) {
-      this.sessionId = `hm-${chapterId}-${nowMs}`
-    }
-    const durationSeconds: number = this.lastEventMs > 0 ? Math.floor((nowMs - this.lastEventMs) / 1000) : 0
-    this.lastEventMs = nowMs
 
     this.drain.enqueue({
       seq: 0, // 占位：入队时由调度层从账本分配并覆盖
@@ -100,9 +81,7 @@ export class EditorStatsQueue {
       chapterId: chapterId,
       cause: cause,
       insertedChars: insertedChars,
-      deletedChars: deletedChars,
-      durationSeconds: durationSeconds,
-      sessionId: this.sessionId
+      deletedChars: deletedChars
     })
   }
 

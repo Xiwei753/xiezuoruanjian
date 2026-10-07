@@ -361,11 +361,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return this.statsBridge.calculateWordCount(text)
   }
 
-  async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>> {
-    return this.statsBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, durationSeconds, sessionId)
-  }
-
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
     return this.statsBridge.getRecentEdits()
   }

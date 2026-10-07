@@ -338,40 +338,6 @@ open class AppServiceBridge(
         bucketMinutes,
     )
 
-    fun recordWritingEvent(
-        deviceId: String,
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        source: String,
-        insertedChars: Int,
-        deletedChars: Int,
-        pastedChars: Int,
-        aiInsertedChars: Int,
-        durationSeconds: Int,
-        sessionId: String,
-    ) = statsBridge.recordWritingEvent(
-        deviceId, projectId, volumeId, chapterId, source, insertedChars, deletedChars,
-        pastedChars, aiInsertedChars, durationSeconds, sessionId,
-    )
-
-    fun processWritingEvent(
-        deviceId: String,
-        platform: String,
-        projectId: String,
-        volumeId: String,
-        chapterId: String,
-        oldText: String,
-        newText: String,
-        durationSeconds: UInt,
-        sessionId: String,
-    ) = statsBridge.processWritingEvent(
-        deviceId, platform, projectId, volumeId, chapterId, oldText, newText,
-        durationSeconds, sessionId,
-    )
-
-    fun flushWritingStats() = statsBridge.flushWritingStats()
-
     fun ensureDeviceInfo(
         platform: String,
         deviceClass: String,

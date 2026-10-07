@@ -124,20 +124,11 @@ impl Drop for WriterCore {
 mod tests {
     use super::*;
     use crate::editor::EditorTransactionCause;
-    use crate::writing_stats::EventSource;
     use tempfile::tempdir;
 
     fn record_edit(core: &WriterCore, cause: EditorTransactionCause, inserted: u32, deleted: u32) {
         core.record_editor_change_stats(
-            "harmony",
-            "proj1",
-            "vol1",
-            "chap1",
-            cause,
-            inserted,
-            deleted,
-            0,
-            "session-1",
+            "harmony", "proj1", "vol1", "chap1", cause, inserted, deleted,
         )
         .unwrap();
     }
@@ -180,11 +171,10 @@ mod tests {
         assert_eq!(info.platform, "harmony");
 
         // 落盘的统计里，事件带的 device_id 与上面一致。
-        core.get_stats_api().flush().unwrap();
+        // 事件直接落盘（无缓冲），不需要 flush。
         let now_ms = chrono::Utc::now().timestamp_millis();
         let events = core
             .get_stats_api()
-            .aggregator()
             .store()
             .load_events_in_window(now_ms - 60_000, now_ms)
             .unwrap();

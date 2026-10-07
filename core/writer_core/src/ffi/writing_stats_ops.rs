@@ -41,8 +41,6 @@ unsafe fn read_date_pair(
 /// 「今天」的写作统计汇总。
 ///
 /// 「今天是哪一天」由 Core 的本地日历口径决定，平台端不传日期。
-/// 每日统计按事件发生地的本地午夜分桶，端侧自己拼 `YYYY-MM-DD` 会和 Core
-/// 的时区口径错开，凌晨就出现「今日进度提前清零」。
 ///
 /// # Safety
 /// 无参数。Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -58,9 +56,6 @@ pub unsafe extern "C" fn writer_core_get_today_writing_stats_summary() -> *mut c
 }
 
 /// 按调用方给定的日期区间取写作统计汇总。
-///
-/// `writer_core_get_writing_stats` 把区间写死成最近 30 天，写作页的「今日进度」拿不到
-/// 当日口径；这里让平台端自己决定区间，两端读的是同一份 Core 汇总语义。
 ///
 /// # Safety
 /// `start_date` / `end_date` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
@@ -90,8 +85,6 @@ pub unsafe extern "C" fn writer_core_get_writing_stats_summary(
 }
 
 /// 按调用方给定的日期区间和分桶粒度取写作速度曲线。
-///
-/// 写作页状态栏左段的「字/分」就是最后一个桶的 `chars_per_minute`，端侧不自己算速度。
 ///
 /// # Safety
 /// `start_date` / `end_date` 必须指向合法的、以 NUL 结尾的 UTF-8 C 字符串。
@@ -123,15 +116,6 @@ pub unsafe extern "C" fn writer_core_get_writing_speed_curve(
 
 /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
 ///
-/// 和上面两个导出分工明确：
-/// - 速度曲线是**历史**分桶，桶只从第一个事件生成到最后一个事件，不补「当前这一分钟」的
-///   0 桶。所以用户停笔之后，曲线最后一桶仍然是停笔前的非零值。
-/// - 本函数以「现在」为终点重算最近 `window_seconds` 秒的窗口速度，停笔超过一个窗口后
-///   自然回落到 0。写作页状态栏左段的「当前字/分」只能走这里。
-///
-/// 端侧不要各自判断历史桶是否过期，也不要为了刷新这个值去强制 flush 统计事件：
-/// 查询时 Core 已把内存缓冲和已落盘事件当作同一份事实源。
-///
 /// # Safety
 /// `window_seconds` 会被 Core 内部钳到至少 1 秒（0 秒窗口无意义且无法折算速度）。
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -148,10 +132,7 @@ pub unsafe extern "C" fn writer_core_get_current_writing_speed(window_seconds: u
 
 /// 按编辑事务上报写作统计。
 ///
-/// 与 [`writer_core_process_writing_event`] 分工明确：后者拿两份整章文本做 diff，
-/// 套「净增 > 20 就当 paste」的启发式，正常连续敲 30 个字在保存时就会被误判成
-/// 粘贴，纯输入统计偏低、实时速度长期显示 0。Harmony 应该在编辑事务发生时就调
-/// 本函数，把编辑事实（cause + contentDelta）原样送进来，
+/// 平台端在编辑事务发生时调本函数，把编辑事实（cause + contentDelta）原样送进来，
 /// `cause → EventSource` 和各计数字段的映射由 Core 决定，端侧不猜 source。
 ///
 /// # Safety
@@ -170,42 +151,4 @@ pub unsafe extern "C" fn writer_core_record_editor_change_stats(event_json: *con
             .map_err(|e| format!("{}", e))
     })
     .is_ok()
-}
-
-/// # Safety
-/// `event_json` must be a valid null-terminated UTF-8 C string containing valid JSON.
-/// Returns a caller-owned C string. Free with `writer_core_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_process_writing_event(
-    event_json: *const c_char,
-) -> *mut c_char {
-    let json_str = match c_str_to_rust(event_json) {
-        Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid event_json: error {}", e),
-            )
-        }
-    };
-    match with_app_service(|svc| {
-        let event: crate::api::WritingEventInputDto =
-            serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        svc.process_writing_event(
-            event.device_id,
-            event.platform,
-            event.project_id,
-            event.volume_id,
-            event.chapter_id,
-            event.old_text,
-            event.new_text,
-            event.duration_seconds,
-            event.session_id,
-        )
-        .map_err(|e| format!("{}", e))?;
-        Ok(true)
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("UNKNOWN_ERROR", &e),
-    }
 }

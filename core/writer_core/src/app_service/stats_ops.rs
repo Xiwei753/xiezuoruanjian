@@ -54,9 +54,7 @@ impl super::WriterAppService {
             .get_writing_speed_curve(&start_date, &end_date, bucket_minutes)
     }
 
-    /// 实时写作速度（最近 `window_seconds` 秒）。见
-    /// [`WriterCore::get_current_writing_speed`](crate::facade::WriterCore::get_current_writing_speed)：
-    /// 停笔超过一个窗口后自然回落到 0，不拿速度曲线最后一桶顶替。
+    /// 实时写作速度（最近 `window_seconds` 秒）。
     pub fn get_current_writing_speed(
         &self,
         window_seconds: u32,
@@ -65,8 +63,7 @@ impl super::WriterAppService {
     }
 
     /// 按编辑事务上报写作统计。平台端只透传编辑事实（cause + contentDelta），
-    /// source 分类由 Core 从 cause 推导。见
-    /// [`WriterCore::record_editor_change_stats`](crate::facade::WriterCore::record_editor_change_stats)。
+    /// source 分类由 Core 从 cause 推导。
     pub fn record_editor_change_stats(
         &self,
         input: EditorChangeStatsInputDto,
@@ -76,66 +73,6 @@ impl super::WriterAppService {
 
     pub fn calculate_word_count(&self, text: String) -> u32 {
         self.api.calculate_word_count(&text)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn process_writing_event(
-        &self,
-        device_id: String,
-        platform: String,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        old_text: String,
-        new_text: String,
-        duration_seconds: u32,
-        session_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api.process_writing_event(
-            &device_id,
-            &platform,
-            &project_id,
-            &volume_id,
-            &chapter_id,
-            &old_text,
-            &new_text,
-            duration_seconds,
-            &session_id,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_writing_event(
-        &self,
-        device_id: String,
-        project_id: String,
-        volume_id: String,
-        chapter_id: String,
-        source: String,
-        inserted_chars: i32,
-        deleted_chars: i32,
-        pasted_chars: i32,
-        ai_inserted_chars: i32,
-        duration_seconds: i32,
-        session_id: String,
-    ) -> Result<bool, WriterError> {
-        self.api.record_writing_event(
-            &device_id,
-            &project_id,
-            &volume_id,
-            &chapter_id,
-            &source,
-            inserted_chars,
-            deleted_chars,
-            pasted_chars,
-            ai_inserted_chars,
-            duration_seconds,
-            &session_id,
-        )
-    }
-
-    pub fn flush_writing_stats(&self) -> Result<bool, WriterError> {
-        self.api.flush_writing_stats()
     }
 
     pub fn ensure_device_info(

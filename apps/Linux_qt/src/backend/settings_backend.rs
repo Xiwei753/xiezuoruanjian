@@ -1075,11 +1075,6 @@ impl AppBackend {
                 self.current_setting_coordinated_text_cursor_animation_enabled =
                     settings.editor_coordinated_text_cursor_animation_enabled;
                 self.current_ai_enabled = settings.ai_enabled;
-                if let Some(ref device_id) = settings.stats_device_id {
-                    if !device_id.is_empty() {
-                        self.stats_device_id = device_id.clone();
-                    }
-                }
                 self.current_setting_desktop_sidebar_width = settings.desktop_sidebar_width;
                 self.current_setting_desktop_editor_width = settings.desktop_editor_width;
                 self.current_setting_diagnostics_enabled = settings.diagnostics_enabled;

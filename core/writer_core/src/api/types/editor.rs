@@ -62,6 +62,8 @@ impl From<EditorTransactionCauseDto> for crate::editor::EditorTransactionCause {
 /// `record_editor_change_stats` 内部 `ensure_device_info` 读/建。平台端构造这个
 /// 入参时页面设置往往还没加载完，传进来的多半是空串或占位值，
 /// 一旦被 Core 记进统计就再也改不回来（历史事件全进了 `unknown` 桶）。
+///
+/// **不带 duration_seconds / session_id**：Core 从事件时间间隔自己算会话和活跃时间。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorChangeStatsInputDto {
@@ -73,9 +75,6 @@ pub struct EditorChangeStatsInputDto {
     pub cause: EditorTransactionCauseDto,
     pub inserted_chars: u32,
     pub deleted_chars: u32,
-    /// 距上一次统计事件的秒数。首次事件传 0。
-    pub duration_seconds: u32,
-    pub session_id: String,
 }
 
 impl From<crate::editor::EditorTransactionCause> for EditorTransactionCauseDto {

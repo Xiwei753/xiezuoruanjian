@@ -139,10 +139,8 @@ char*  writer_core_get_writing_stats_summary(const char* start_date, const char*
 char*  writer_core_get_writing_speed_curve(const char* start_date, const char* end_date, uint32_t bucket_minutes);
 // 实时写作速度：与上面的历史曲线分工，速度由 Core 以「最近 window_seconds 秒」重算。
 char*  writer_core_get_current_writing_speed(uint32_t window_seconds);
-char*  writer_core_process_writing_event(const char* event_json);
 // 按编辑事务上报写作统计（Harmony 走这条）。cause→source 的映射在 Core 侧做，
-// C 层只透传编辑事实；不要改用 writer_core_process_writing_event，
-// 那是「整章 old/new 文本比较 + 净增>20 当粘贴」的旧路径。
+// C 层只透传编辑事实。
 bool  writer_core_record_editor_change_stats(const char* event_json);
 
 // ── Palette / Theme ──

@@ -6,13 +6,14 @@
 // - writer_core::api::error::WriterError：核心统一业务错误。
 // - writer_core::api::types::ChapterSaveReceiptDto：章节保存结果回执 DTO。
 // - writer_core::api::WriterCoreApi：核心库主业务 API。
+// - writer_core::api::EditorChangeStatsInputDto：编辑事务统计入参 DTO。
+// - writer_core::editor::EditorTransactionCause：编辑事务原因枚举。
 //
 // 干什么的：
 // - 负责编辑器界面底层与核心写作 API 的桥接。
 // - 提供打开章节、缓存并返回 LinuxChapterOpenData 的接口。
 // - 封装章节内容安全保存语义（支持allow_empty_overwrite校验）、清空正文内容（clear_chapter_content）的核心实现。
-// - 负责将高频按键输入或粘贴动作翻译并记录为写作统计事件流（process_writing_event_from_text等）。
-// - 维护统计会话 Session 的生命周期及统计专用设备 ID 的自动生成与本地持久化。
+// - 将编辑事务的 cause 和 inserted/deleted 字数透传给 Core 统计入口（record_editor_change_stats）。
 //
 // 被什么引用：
 // - 被 apps/Linux_qt/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
@@ -61,69 +62,29 @@ pub fn open_chapter(
     }
 }
 
-pub fn report_writing_event(
+/// 按编辑事务上报写作统计。
+///
+/// 平台端只透传编辑事实（cause + inserted/deleted），不自己拼 source、device_id、session_id。
+/// `cause → EventSource` 映射和设备身份管理由 Core 内部完成。
+/// `platform` 固定为 `"linux"`。
+pub fn record_editor_change_stats(
     api: &WriterCoreApi,
     project_id: &str,
     volume_id: &str,
     chapter_id: &str,
-    source: &str,
+    cause: writer_core::editor::EditorTransactionCause,
     inserted_chars: u32,
     deleted_chars: u32,
-    pasted_chars: u32,
-    ai_inserted_chars: u32,
-    device_id: &str,
-    session_id: &str,
-) -> Result<bool, WriterError> {
-    let platform = "linux";
-    api.record_writing_event_for_platform(
-        device_id,
-        platform,
-        project_id,
-        volume_id,
-        chapter_id,
-        source,
-        inserted_chars as i32,
-        deleted_chars as i32,
-        pasted_chars as i32,
-        ai_inserted_chars as i32,
-        0, // duration_seconds: not tracked on Linux_qt, default to 0
-        session_id,
-    )
-}
-
-pub fn process_writing_event_from_text(
-    api: &WriterCoreApi,
-    project_id: &str,
-    volume_id: &str,
-    chapter_id: &str,
-    old_text: &str,
-    new_text: &str,
-    device_id: &str,
-    session_id: &str,
-) -> Result<bool, WriterError> {
-    let platform = "linux";
-    api.process_writing_event(
-        device_id, platform, project_id, volume_id, chapter_id, old_text, new_text, 0, session_id,
-    )
-}
-
-pub fn ensure_stats_session(
-    api: &WriterCoreApi,
-    device_id: &mut String,
-    session_id: &mut String,
-    last_event_ms: &mut i64,
-) {
-    if device_id.is_empty() {
-        *device_id = format!("linux-{}", uuid::Uuid::new_v4());
-        if let Ok(mut local) = api.load_local_settings() {
-            local.stats_device_id = Some(device_id.clone());
-            let _ = api.save_local_settings(local);
-        }
-    }
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    if *last_event_ms == 0 || (now_ms - *last_event_ms) > 5 * 60 * 1000 {
-        *session_id = uuid::Uuid::new_v4().to_string();
-    }
-    *last_event_ms = now_ms;
+) -> Result<(), WriterError> {
+    let input = writer_core::api::EditorChangeStatsInputDto {
+        platform: "linux".to_string(),
+        project_id: project_id.to_string(),
+        volume_id: volume_id.to_string(),
+        chapter_id: chapter_id.to_string(),
+        cause: cause.into(),
+        inserted_chars,
+        deleted_chars,
+    };
+    api.record_editor_change_stats(input)
+        .map_err(WriterError::from)
 }

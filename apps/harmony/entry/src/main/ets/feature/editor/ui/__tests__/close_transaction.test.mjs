@@ -201,19 +201,19 @@ class MockImeConnection {
   }
 }
 
-// MockBridge：记录 saveChapter / processWritingEvent 调用
+// MockBridge：记录 saveChapter / recordEditorChangeStats 调用
 class MockBridge {
   constructor() {
     this.saveChapterCalls = []
-    this.processWritingEventCalls = []
+    this.recordEditorChangeStatsCalls = []
     this.saveChapterResult = { success: true, data: { contentHash: 'h1', wordCount: 0 }, warnings: [], changedPaths: [], changedEntities: [] }
   }
   async saveChapter(chapterId, text) {
     this.saveChapterCalls.push({ chapterId, text })
     return this.saveChapterResult
   }
-  processWritingEvent(...args) {
-    this.processWritingEventCalls.push(args)
+  recordEditorChangeStats(cause, insertedChars, deletedChars) {
+    this.recordEditorChangeStatsCalls.push({ cause, insertedChars, deletedChars })
   }
 }
 
@@ -252,12 +252,12 @@ async function performGracefulClose(deps, state) {
       return false
     }
   } else if (state.sessionOldText !== savedText && state.chapterId) {
-    const deviceId = state.settings.statsDeviceId || 'unknown'
-    const durationSeconds = Math.round((Date.now() - state.sessionStartTime) / 1000)
-    bridge.processWritingEvent(
-      deviceId, 'harmony', state.projectId, state.volumeId,
-      state.chapterId, state.sessionOldText, savedText, durationSeconds, state.sessionId
-    )
+    const diff = savedText.length - state.sessionOldText.length
+    if (diff > 0) {
+      bridge.recordEditorChangeStats('Typing', diff, 0)
+    } else if (diff < 0) {
+      bridge.recordEditorChangeStats('Delete', 0, -diff)
+    }
     state.sessionOldText = savedText
   }
   // 7. close session. Issue #629 评论9 第2项：先 closeAsync，成功后才 detach IME。
@@ -326,10 +326,10 @@ await testAsync('performGracefulClose: 严格按 seal → finish → flush → w
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'coordinator 应按 whenIdle→closeAsync 顺序')
   assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'imeConnection 应只调 detach 一次')
   assert.deepEqual(saveChapterCalls, ['saveChapter'], 'saveChapter 应调一次')
-  assert.equal(bridge.processWritingEventCalls.length, 0, '走 save 分支时不应调 processWritingEvent')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0, '走 save 分支时不应调 recordEditorChangeStats')
 })
 
-await testAsync('performGracefulClose: snapshot 已保存（savedText===lastSavedContent）且有统计差异时调 processWritingEvent', async () => {
+await testAsync('performGracefulClose: snapshot 已保存（savedText===lastSavedContent）且有统计差异时调 recordEditorChangeStats', async () => {
   const dispatcher = new MockDispatcher()
   const coordinator = new MockCoordinator()
   const harmonyImeConnection = new MockImeConnection()
@@ -355,12 +355,12 @@ await testAsync('performGracefulClose: snapshot 已保存（savedText===lastSave
 
   assert.equal(closed, true)
   assert.deepEqual(saveChapterCalls, [], 'savedText===lastSavedContent 不应调 saveChapter')
-  assert.equal(bridge.processWritingEventCalls.length, 1, '应调 processWritingEvent 一次')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 1, '应调 recordEditorChangeStats 一次')
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'])
   assert.deepEqual(harmonyImeConnection.calls, ['detach'])
 })
 
-await testAsync('performGracefulClose: snapshot 已保存且无统计差异时跳过 save 和 processWritingEvent', async () => {
+await testAsync('performGracefulClose: snapshot 已保存且无统计差异时跳过 save 和 recordEditorChangeStats', async () => {
   const dispatcher = new MockDispatcher()
   const coordinator = new MockCoordinator()
   const harmonyImeConnection = new MockImeConnection()
@@ -385,7 +385,7 @@ await testAsync('performGracefulClose: snapshot 已保存且无统计差异时�
 
   assert.equal(closed, true)
   assert.deepEqual(saveChapterCalls, [])
-  assert.equal(bridge.processWritingEventCalls.length, 0)
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0)
   // 仍应 detach + closeAsync
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'])
   assert.deepEqual(harmonyImeConnection.calls, ['detach'])
@@ -407,7 +407,7 @@ await testAsync('performGracefulClose: 全局调用顺序严格有序（用一�
     closeAsync: async () => { seq.push('closeAsync'); return { success: true } },
   }
   const harmonyImeConnection = { detach: async () => { seq.push('detach'); await sleep(5) } }
-  const bridge = { processWritingEvent: () => { seq.push('processWritingEvent') } }
+  const bridge = { recordEditorChangeStats: () => { seq.push('recordEditorChangeStats') } }
   const state = {
     chapterId: 'c1',
     content: 'edited',
@@ -434,7 +434,7 @@ await testAsync('performBackgroundSave: 顺序 flush → whenIdle → save，不
     close: async () => { seq.push('close'); return { success: true } },
   }
   const harmonyImeConnection = { detach: async () => { seq.push('detach') } }
-  const bridge = { processWritingEvent: () => { seq.push('processWritingEvent') } }
+  const bridge = { recordEditorChangeStats: () => { seq.push('recordEditorChangeStats') } }
   const state = {
     hasUnsavedChanges: true,
     ensureSnapshotSaved: async (targetText, isAutoSave) => { seq.push('save') },
@@ -455,7 +455,7 @@ await testAsync('performBackgroundSave: hasUnsavedChanges=false 时只 flush + w
   const dispatcher = { flush: async () => { seq.push('flush') } }
   const coordinator = { whenIdle: async () => { seq.push('whenIdle') } }
   const harmonyImeConnection = { detach: async () => { seq.push('detach') } }
-  const bridge = { processWritingEvent: () => { seq.push('processWritingEvent') } }
+  const bridge = { recordEditorChangeStats: () => { seq.push('recordEditorChangeStats') } }
   const state = {
     hasUnsavedChanges: false,
     ensureSnapshotSaved: async (targetText, isAutoSave) => { seq.push('save') },
@@ -495,7 +495,7 @@ await testAsync('核心场景: 快速打完最后几个字立即返回，perform
     closeAsync: async () => { seq.push('closeAsync'); return { success: true } },
   }
   const harmonyImeConnection = { detach: async () => { seq.push('detach') } }
-  const bridge = { processWritingEvent: () => {} }
+  const bridge = { recordEditorChangeStats: () => {} }
   const state = {
     chapterId: 'c1',
     content: snapshotText,
@@ -774,7 +774,7 @@ await testAsync('端到端: 打字→返回，最后输入全部保存，session
 //
 // 验证：
 //   13a. 连续 performGracefulClose 两次，doGracefulClose 内部逻辑只执行一次，Promise 同一性
-//   13b. 已保存有统计差异时，performGracefulClose 两次 processWritingEvent 只调一次
+//   13b. 已保存有统计差异时，performGracefulClose 两次 recordEditorChangeStats 只调一次
 //   13c. sessionOldText 推进防御：doGracefulClose 两次（绕过幂等），第二次不再满足统计条件
 //   13d. 返回按钮 + aboutToDisappear 并发：真实关闭链只跑一次
 //   13e. 成功完成后再次调用仍返回同一 Promise（不重跑）
@@ -825,12 +825,12 @@ function createGracefulCloseScreen(deps, state) {
           return false
         }
       } else if (state.sessionOldText !== savedText && state.chapterId) {
-        const deviceId = state.settings.statsDeviceId || 'unknown'
-        const durationSeconds = Math.round((Date.now() - state.sessionStartTime) / 1000)
-        bridge.processWritingEvent(
-          deviceId, 'harmony', state.projectId, state.volumeId,
-          state.chapterId, state.sessionOldText, savedText, durationSeconds, state.sessionId
-        )
+        const diff = savedText.length - state.sessionOldText.length
+        if (diff > 0) {
+          bridge.recordEditorChangeStats('Typing', diff, 0)
+        } else if (diff < 0) {
+          bridge.recordEditorChangeStats('Delete', 0, -diff)
+        }
         // Issue #629 评论7 第5项：统计成功推进 sessionOldText，避免第二遍重复统计。
         state.sessionOldText = savedText
       }
@@ -916,7 +916,7 @@ await testAsync('幂等: 连续 performGracefulClose 两次，doGracefulClose �
   assert.deepEqual(saveChapterCalls, ['saveChapter'], 'saveChapter 只调一次')
 })
 
-await testAsync('幂等: 已保存（savedText===lastSavedContent）有统计差异，performGracefulClose 两次 processWritingEvent 只调一次', async () => {
+await testAsync('幂等: 已保存（savedText===lastSavedContent）有统计差异，performGracefulClose 两次 recordEditorChangeStats 只调一次', async () => {
   const dispatcher = new MockDispatcher()
   const coordinator = new MockCoordinator()
   const harmonyImeConnection = new MockImeConnection()
@@ -940,8 +940,8 @@ await testAsync('幂等: 已保存（savedText===lastSavedContent）有统计差
   await screen.performGracefulClose()
   await screen.performGracefulClose()
 
-  // 关键断言：processWritingEvent 只被调一次（幂等复用 Promise，第二次根本不执行 doGracefulClose）
-  assert.equal(bridge.processWritingEventCalls.length, 1, 'processWritingEvent 只调一次')
+  // 关键断言：recordEditorChangeStats 只被调一次（幂等复用 Promise，第二次根本不执行 doGracefulClose）
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 1, 'recordEditorChangeStats 只调一次')
   // sessionOldText 已推进（防御性，即使 closeTask 被重置也不会重复统计）
   assert.equal(state.sessionOldText, state.content, 'sessionOldText 已推进到 content')
   // 真实关闭链只跑一次
@@ -949,7 +949,7 @@ await testAsync('幂等: 已保存（savedText===lastSavedContent）有统计差
   assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
 })
 
-await testAsync('推进防御: doGracefulClose 两次（绕过幂等），第二次因 sessionOldText 已推进不调 processWritingEvent', async () => {
+await testAsync('推进防御: doGracefulClose 两次（绕过幂等），第二次因 sessionOldText 已推进不调 recordEditorChangeStats', async () => {
   // 此测试验证 sessionOldText 推进的防御价值：即使 closeTask 机制失效（被重置或并发窗口），
   // sessionOldText 推进后第二次也不满足统计条件，不会重复上报。
   const dispatcher = new MockDispatcher()
@@ -973,12 +973,12 @@ await testAsync('推进防御: doGracefulClose 两次（绕过幂等），第二
   const screen = createGracefulCloseScreen(deps, state)
 
   await screen.doGracefulClose()
-  assert.equal(bridge.processWritingEventCalls.length, 1, '第一次 doGracefulClose 调 processWritingEvent 一次')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 1, '第一次 doGracefulClose 调 recordEditorChangeStats 一次')
   assert.equal(state.sessionOldText, state.content, '第一次后 sessionOldText 推进到 content')
 
   await screen.doGracefulClose()
-  // 关键断言：第二次不调 processWritingEvent（sessionOldText 已推进，不再满足 !== content 条件）
-  assert.equal(bridge.processWritingEventCalls.length, 1, '第二次 doGracefulClose 不调 processWritingEvent')
+  // 关键断言：第二次不调 recordEditorChangeStats（sessionOldText 已推进，不再满足 !== content 条件）
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 1, '第二次 doGracefulClose 不调 recordEditorChangeStats')
   // 但 detach/closeAsync 仍执行（doGracefulClose 本身不幂等，幂等由 performGracefulClose 保证）
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync', 'whenIdle', 'closeAsync'], 'doGracefulClose 两次各执行一次 closeAsync')
 })
@@ -1027,7 +1027,7 @@ await testAsync('并发: 返回按钮和 aboutToDisappear 同时调 performGrace
   assert.deepEqual(coordinator.calls, ['whenIdle', 'closeAsync'], 'coordinator 只调一次')
   assert.deepEqual(harmonyImeConnection.calls, ['detach'], 'detach 只调一次')
   assert.deepEqual(saveChapterCalls, ['saveChapter'], 'saveChapter 只调一次')
-  assert.equal(bridge.processWritingEventCalls.length, 0, '走 save 分支时不调 processWritingEvent')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0, '走 save 分支时不调 recordEditorChangeStats')
 })
 
 await testAsync('幂等: 第一次完成后再调 performGracefulClose 仍返回已 resolved 的同一 Promise（不重跑）', async () => {
@@ -1101,9 +1101,9 @@ await testAsync('幂等: save 分支 saveChapter 推进 sessionOldText，doGrace
 
   const closed2 = await screen.doGracefulClose()
   assert.equal(closed2, true)
-  // 第二次：savedText === lastSavedContent 且 sessionOldText === savedText → 不调 saveChapter 也不调 processWritingEvent
+  // 第二次：savedText === lastSavedContent 且 sessionOldText === savedText → 不调 saveChapter 也不调 recordEditorChangeStats
   assert.deepEqual(saveChapterCalls, ['saveChapter'], '第二次不调 saveChapter（已保存）')
-  assert.equal(bridge.processWritingEventCalls.length, 0, '第二次不调 processWritingEvent（sessionOldText 已推进）')
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0, '第二次不调 recordEditorChangeStats（sessionOldText 已推进）')
 })
 
 // ── 14. Issue #629 评论8 第2/3项：失败路径 + seal + 最后 preedit ──
@@ -1221,7 +1221,7 @@ await testAsync('close 失败: closeAsync 返回失败 → performGracefulClose 
   assert.deepEqual(harmonyImeConnection.calls, [], 'close 失败时不 detach（不可逆清理未触）')
   assert.ok(dispatcher.calls.includes('unseal'), 'close 失败后必须 unseal')
   assert.equal(dispatcher.isSealed(), false, 'unseal 后 dispatcher 恢复接收输入')
-  assert.equal(bridge.processWritingEventCalls.length, 0)
+  assert.equal(bridge.recordEditorChangeStatsCalls.length, 0)
 })
 
 await testAsync('seal: seal 后 dispatch 拒新输入（SEALED 且不排队），finishActiveComposition 仍可入队', async () => {

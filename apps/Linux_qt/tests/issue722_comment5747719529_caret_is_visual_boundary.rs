@@ -317,7 +317,12 @@ fn no_glyph_inference_in_coordinated_projection() {
         window.contains("x: f64,") && window.contains("y: f64,"),
         "Issue #722/I#826-38: 投影输入必须是本帧 caret 的 (x, y)。"
     );
-    for forbidden in ["rightmost", "conceal_edge", "rightmost_x", "clip_from_glyph"] {
+    for forbidden in [
+        "rightmost",
+        "conceal_edge",
+        "rightmost_x",
+        "clip_from_glyph",
+    ] {
         assert!(
             !src.contains(forbidden),
             "Issue #722/I#826-38: 协同投影里不得出现 {} —— 那是从文字反推光标，方向反了。",

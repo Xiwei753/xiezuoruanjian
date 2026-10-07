@@ -1210,19 +1210,10 @@ interface WriterAppService {
 
     u32 calculate_word_count(string text);
 
-    [Throws=WriterError]
-    boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, u32 duration_seconds, string session_id);
-
-    [Throws=WriterError]
-    boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, i32 duration_seconds, string session_id);
-
     // 按编辑事务上报写作统计（Harmony 走这条）。平台端透传编辑 cause 和
     // contentDelta，source 分类由 Core 决定，端侧不要自己拼 source 字符串。
     [Throws=WriterError]
     void record_editor_change_stats(EditorChangeStatsInputDto input);
-
-    [Throws=WriterError]
-    boolean flush_writing_stats();
 
     [Throws=WriterError]
     boolean ensure_device_info(string platform, string device_class);
@@ -1613,6 +1604,7 @@ enum EditorTransactionCauseDto {
 // 只带 inserted/deleted 不带 pasted：Paste 记哪个字段由 Core 从 cause 推出。
 // 不带 device_id：设备身份是 Core 的持久化事实，由 Core 自己读/建。平台端
 // 构造这个入参时页面设置往往还没加载完，传进来的多半是空串或占位值。
+// 不带 duration_seconds / session_id：Core 从事件时间间隔自己算会话和活跃时间。
 dictionary EditorChangeStatsInputDto {
     string platform;
     string project_id;
@@ -1621,9 +1613,6 @@ dictionary EditorChangeStatsInputDto {
     EditorTransactionCauseDto cause;
     u32 inserted_chars;
     u32 deleted_chars;
-    // 距上一次统计事件的秒数，首次事件传 0。
-    u32 duration_seconds;
-    string session_id;
 };
 
 // ── Editor V2 Kernel DTOs ──

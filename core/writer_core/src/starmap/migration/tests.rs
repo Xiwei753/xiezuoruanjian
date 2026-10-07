@@ -255,20 +255,22 @@ fn migrate_index_schema_3_to_4_only_removes_legacy_portal_roots() {
         updated_at: 0,
     });
     // sm_host 同时 Embed 了 sm_embedded_child（合法一级星图被嵌入别处不应丢失 root 身份）
-    host_store.add_embed(crate::starmap::types::StarMapEmbed {
-        instance_id: "emb_child".to_string(),
-        target_starmap_id: "sm_embedded_child".to_string(),
-        label: None,
-        position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
-        host_path: crate::starmap::types::reference::StarMapTargetPath {
-            starmap_id: "sm_host".to_string(),
-            segments: vec![],
-            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
-        },
-        provenance: Default::default(),
-        created_at: 0,
-        updated_at: 0,
-    }).unwrap();
+    host_store
+        .add_embed(crate::starmap::types::StarMapEmbed {
+            instance_id: "emb_child".to_string(),
+            target_starmap_id: "sm_embedded_child".to_string(),
+            label: None,
+            position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
+            host_path: crate::starmap::types::reference::StarMapTargetPath {
+                starmap_id: "sm_host".to_string(),
+                segments: vec![],
+                target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+            },
+            provenance: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+        })
+        .unwrap();
     host_store.flush().unwrap();
 
     migrate_index(dir.path()).unwrap();

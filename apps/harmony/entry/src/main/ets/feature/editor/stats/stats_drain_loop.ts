@@ -8,8 +8,7 @@
 // 把「调度」和「发什么」分开之后，本文件零 .ets 依赖，测试直接跑真实代码，
 // 而不是跑一份和生产代码分叉的镜像实现（镜像分叉等于没测）。
 //
-// 队列本体（EditorStatsQueue.ets）只负责两件事：算 sessionId / durationSeconds
-// 这类统计口径，以及把事件组装成强类型 payload 交给这里的 send 回调。
+// 队列本体（EditorStatsQueue.ets）只负责把事件组装成强类型 payload 交给这里的 send 回调。
 //
 // 本文件承载并锁死的行为：
 // 1. 严格串行：同一时刻只有一条在飞（ensureDraining 不并发起第二轮）。

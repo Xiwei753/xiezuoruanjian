@@ -44,9 +44,6 @@ export interface EditorChangeStatsInput {
   cause: EditorTransactionCause
   insertedChars: number
   deletedChars: number
-  // 距上一次统计事件的秒数，首次事件传 0。
-  durationSeconds: number
-  sessionId: string
 }
 
 // ─── Editor Core DTOs ─── 与 Core api/types/editor.rs 真实契约对齐

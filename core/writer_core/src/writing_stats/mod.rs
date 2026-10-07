@@ -35,10 +35,10 @@
 //! - 多设备写作活动汇总
 //! - 写作习惯分析和报告生成
 
-pub mod aggregate;
 pub mod api;
 pub mod calendar;
 pub mod migration;
+pub mod projection;
 pub mod store;
 
 use serde::{Deserialize, Serialize};

@@ -15,7 +15,6 @@ import com.xiwei.sujian.feature.editor.session.TextEditorProfile
 import com.xiwei.sujian.feature.editor.session.activateAttachedForTest
 import com.xiwei.sujian.feature.editor.session.applyLocalEdit
 import com.xiwei.sujian.feature.editor.session.commitPreparedSession
-import com.xiwei.sujian.feature.editor.session.writingEventSourceFrom
 import com.xiwei.sujian.feature.project.data.ChapterRepository
 import com.xiwei.sujian.feature.project.data.ProjectRepository
 import com.xiwei.sujian.feature.project.data.RecentEditsRepository
@@ -52,12 +51,6 @@ import uniffi.writer_core.EditorTransactionCauseDto
 @Config(sdk = [34])
 class EditorContentOpsCauseTest {
     private companion object {
-        const val TYPING = "typing"
-        const val PASTED = "pasted"
-        const val DELETED = "deleted"
-        const val UNDO = "undo"
-        const val REDO = "redo"
-        const val PROGRAMMATIC = "programmatic"
         const val TARGET_ID = "chapter-body:p:v:a"
     }
 
@@ -154,7 +147,6 @@ class EditorContentOpsCauseTest {
             assertFalse("前置必须不 dirty", storeLocalDirty())
             val wordCountBefore = vm.uiState.value.wordCount
             assertNull("前置 autoSaveJob 必须为 null", vm.autoSaveJob)
-            val statsLastEventMsBefore = vm.statsLastEventMs
 
             // 会话层：cursor-only（contentChanged=false）不得置 store localDirty。
             driveSessionEdit(revision = 1L, contentChanged = false)
@@ -181,11 +173,6 @@ class EditorContentOpsCauseTest {
             assertFalse("cursor-only 不得置 dirty", storeLocalDirty())
             assertEquals("cursor-only 不得改 wordCount", wordCountBefore, vm.uiState.value.wordCount)
             assertNull("cursor-only 不得 scheduleAutoSave", vm.autoSaveJob)
-            assertEquals(
-                "cursor-only 不得记统计",
-                statsLastEventMsBefore,
-                vm.statsLastEventMs,
-            )
         }
 
     /**
@@ -221,25 +208,7 @@ class EditorContentOpsCauseTest {
                 "contentChanged 必须更新 wordCount",
                 vm.uiState.value.wordCount > wordCountBefore,
             )
-            assertTrue("contentChanged 必须记统计", vm.statsLastEventMs > 0L)
         }
-
-    // ── 5D: writingEventSourceFrom 按 cause 分类 ──
-
-    /** 统计 source 按 Core cause 明确分类，不靠 source/operationKind 猜。 */
-    @Test
-    fun writingEventSourceFrom_usesCauseNotGuess() {
-        assertEquals(TYPING, writingEventSourceFrom(EditorTransactionCauseDto.TYPING))
-        assertEquals(TYPING, writingEventSourceFrom(EditorTransactionCauseDto.TYPING_COMMIT))
-        assertEquals(TYPING, writingEventSourceFrom(EditorTransactionCauseDto.IME_COMPOSITION))
-        assertEquals(PASTED, writingEventSourceFrom(EditorTransactionCauseDto.PASTE))
-        assertEquals(DELETED, writingEventSourceFrom(EditorTransactionCauseDto.DELETE))
-        assertEquals(UNDO, writingEventSourceFrom(EditorTransactionCauseDto.UNDO))
-        assertEquals(REDO, writingEventSourceFrom(EditorTransactionCauseDto.REDO))
-        assertEquals(PROGRAMMATIC, writingEventSourceFrom(EditorTransactionCauseDto.PROGRAMMATIC))
-        assertEquals(PROGRAMMATIC, writingEventSourceFrom(EditorTransactionCauseDto.LOAD))
-        assertEquals(PROGRAMMATIC, writingEventSourceFrom(EditorTransactionCauseDto.FORMAT))
-    }
 
     // ── 5A/5C: EditorAppliedEvent 携带 cause ──
 

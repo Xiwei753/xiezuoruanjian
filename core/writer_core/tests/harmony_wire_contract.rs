@@ -579,12 +579,12 @@ fn harmony_wire_contract_matches_fixture() {
     // ── writing stats ──
     use ffi::writing_stats_ops as stats;
     let event = cstr(&format!(
-        r#"{{"deviceId":"d1","platform":"harmony","projectId":"{project_id}","volumeId":"{volume_id}","chapterId":"{chapter_id}","oldText":"","newText":"你好 world","durationSeconds":12,"sessionId":"s1"}}"#
+        r#"{{"platform":"harmony","projectId":"{project_id}","volumeId":"{volume_id}","chapterId":"{chapter_id}","cause":"Typing","insertedChars":5,"deletedChars":0}}"#
     ));
     let _ = note(
         &mut out,
-        "processWritingEvent",
-        &call1(stats::writer_core_process_writing_event, &event),
+        "recordEditorChangeStats",
+        &call1(stats::writer_core_record_editor_change_stats, &event),
     );
     let _ = note(
         &mut out,

@@ -45,7 +45,6 @@ Rectangle {
         if (!editorBackendRef) return
         statsError = ""
         try {
-            editorBackendRef.flush_writing_stats()
             var t = new Date()
             // Issue #829 评论10：「今天是哪一天」由 Core 的本地日历口径决定。
             // 每日统计按事件发生地的本地午夜分桶，QML 自己拼日期一旦和 Core

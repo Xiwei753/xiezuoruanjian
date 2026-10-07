@@ -175,12 +175,7 @@ pub fn compute_prospective_edge_render_json(
 /// 纯几何，不读 Core：`renders_json` 是上一次 `compute_edge_renders_json` 的输出。
 /// `threshold` 由调用方按屏幕像素折算（世界单位 = 屏幕像素 ÷ effectiveScale），
 /// 不再走固定 world 阈值：相机范围放开后固定阈值在屏幕上的手感会差几个数量级。
-pub fn hit_test_edge_renders_json(
-    renders_json: &str,
-    x: f32,
-    y: f32,
-    threshold: f32,
-) -> String {
+pub fn hit_test_edge_renders_json(renders_json: &str, x: f32, y: f32, threshold: f32) -> String {
     let renders: Vec<edge_render::EdgeRender> = match serde_json::from_str(renders_json) {
         Ok(v) => v,
         Err(e) => return envelope_err_str(&format!("Invalid renders JSON: {}", e)),

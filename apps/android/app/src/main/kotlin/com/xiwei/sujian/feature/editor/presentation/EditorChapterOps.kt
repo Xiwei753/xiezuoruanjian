@@ -828,7 +828,7 @@ suspend fun EditorViewModel.applyExternalContentToUi(
     // #624 评论13 第3项：同步合并正文已经是磁盘事实 — 不记录回执（旧 buildSaveToken
     // 会拼出 targetId + "此刻 currentInputLease" 的假身份）。回执跟踪器只记录真实
     // Save/Clear 操作使用的 lease.toSaveToken。
-    // #624 评论9：previousText 已删除 — 统计改增量 recordWritingEvent。
+    // #624 评论9：previousText 已删除 — 统计改增量 recordEditorChangeStats。
     // 冷路径 external-apply：用整章 text 重算 wordCount 并设入 _uiState，再 updateStats() 算 speed。
     // #624 评论13 第4项：calculateWordCount 是 suspend（Repository 自己 main-safe）。
     _uiState.value = _uiState.value.copy(wordCount = calculateWordCount(text))

@@ -4,18 +4,6 @@ import { ResultEnvelope, RecentEdit } from '../dto/ResultEnvelope'
 import { NativeCoreModule } from './NativeCoreModule'
 import { decodeWritingStats, decodeSpeedCurve, decodeCurrentWritingSpeed, decodeRecentEdit, decodeArray } from '../codec/CoreWireDecoders'
 
-interface WritingEventDto {
-  deviceId: string
-  platform: string
-  projectId: string
-  volumeId: string
-  chapterId: string
-  oldText: string
-  newText: string
-  durationSeconds: number
-  sessionId: string
-}
-
 function nativeError<T>(e: Object): ResultEnvelope<T> {
   return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
 }
@@ -99,26 +87,6 @@ export class NativeStatsBridge {
     try {
       return this.core.getNativeModule().nativeCalculateWordCount(text)
     } catch (e) { return -1 }
-  }
-
-  async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
-    chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const eventObj: WritingEventDto = {
-        deviceId: deviceId,
-        platform: platform,
-        projectId: projectId,
-        volumeId: volumeId,
-        chapterId: chapterId,
-        oldText: oldText,
-        newText: newText,
-        durationSeconds: durationSeconds,
-        sessionId: sessionId
-      }
-      const eventJson = JSON.stringify(eventObj)
-      const jsonStr: string = this.core.getNativeModule().nativeProcessWritingEvent(eventJson)
-      return this.core.parseEnvelope<boolean>(jsonStr)
-    } catch (e) { return nativeError<boolean>(e) }
   }
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {

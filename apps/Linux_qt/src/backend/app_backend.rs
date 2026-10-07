@@ -372,10 +372,6 @@ pub struct AppBackend {
     /// 因此在 reload_tree() 遍历 Core 数据时同步构建这份 serde 镜像。
     pub(crate) cached_tree_json: serde_json::Value,
 
-    stats_device_id: String,
-    stats_session_id: String,
-    stats_last_event_ms: i64,
-
     current_sync_enabled: bool,
     current_sync_backend_type: String,
     current_sync_remote_url: String,

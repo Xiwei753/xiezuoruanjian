@@ -130,7 +130,7 @@ QtObject {
     }
 
     // Stats + word count debounce timer — batches per-keystroke FFI calls.
-    // process_writing_event_from_text does text diff + stats recording (expensive),
+    // record_editor_change_stats records editor change stats (cause + inserted/deleted),
     // calculate_word_count scans full text. Both are imperceptible at 300ms延迟.
     property var statsTimer: Timer {
         interval: 300
@@ -384,7 +384,18 @@ QtObject {
         var newText = currentText === undefined ? getEditorPlainText() : currentText;
         if (previousEditorText === newText) return;
 
-        editorBackendRef.process_writing_event_from_text(projectId, volumeId, chapterId, previousEditorText, newText);
+        // Compute inserted/deleted char counts from text diff.
+        // Cause defaults to "Typing" — QML 端无法精确区分 Typing/Paste/Delete，
+        // Core 侧会根据 cause 做映射，这里用 Typing 作为通用 cause。
+        var oldLen = previousEditorText.length;
+        var newLen = newText.length;
+        var insertedChars = newLen > oldLen ? newLen - oldLen : 0;
+        var deletedChars = oldLen > newLen ? oldLen - newLen : 0;
+
+        if (insertedChars > 0 || deletedChars > 0) {
+            editorBackendRef.record_editor_change_stats(
+                projectId, volumeId, chapterId, "Typing", insertedChars, deletedChars);
+        }
 
         previousEditorText = newText;
     }

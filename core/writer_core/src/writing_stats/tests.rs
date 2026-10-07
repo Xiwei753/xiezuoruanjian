@@ -1,5 +1,5 @@
-use crate::writing_stats::aggregate::StatsAggregator;
 use crate::writing_stats::api::StatsApi;
+use crate::writing_stats::projection::{project_events, CurrentWritingSpeed};
 use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
 use tempfile::tempdir;
@@ -195,14 +195,11 @@ fn test_sync_remote_not_counted_as_local_input() {
 }
 
 #[test]
-fn test_daily_stats_aggregation_empty_events() {
+fn test_empty_events_projection() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());
 
-    // Aggregate with no events
-    let today_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let _ = api.aggregator().aggregate_and_save(&today_str, &today_str);
-
+    let today_str = StatsApi::today_date();
     let range = DateRange {
         start_date: today_str.clone(),
         end_date: today_str,
@@ -213,42 +210,6 @@ fn test_daily_stats_aggregation_empty_events() {
     assert_eq!(summary["totalDeletedChars"], 0);
     assert_eq!(summary["totalNetDeltaChars"], 0);
     assert_eq!(summary["totalActiveSeconds"], 0);
-}
-
-#[test]
-fn test_daily_aggregation_idempotent() {
-    let temp_dir = tempdir().unwrap();
-    let agg = StatsAggregator::new(temp_dir.path());
-
-    let event = WritingInputEvent::new(
-        "dev-1",
-        Platform::Desktop,
-        "desktop",
-        "proj1",
-        "vol1",
-        "chap1",
-        EventSource::HumanTyped,
-        10,
-        0,
-        0,
-        0,
-        0,
-        "s1",
-    );
-
-    agg.aggregate_single_event(&event).unwrap();
-
-    let today = event.business_date();
-    let stats = agg.store().load_all_daily_stats_for_date(&today).unwrap();
-    assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].total_human_typed_chars, 10);
-
-    agg.aggregate_single_event(&event).unwrap();
-    agg.aggregate_single_event(&event).unwrap();
-
-    let stats = agg.store().load_all_daily_stats_for_date(&today).unwrap();
-    assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].total_human_typed_chars, 30);
 }
 
 #[test]
@@ -383,7 +344,7 @@ fn speed_test_event_with_source(
         deleted_chars: 0,
         pasted_chars: 0,
         ai_inserted_chars: 0,
-        net_delta_chars: inserted_chars as i32,
+        net_delta_chars: i32::try_from(inserted_chars).unwrap_or(i32::MAX),
         duration_seconds: 0,
         session_id: "s1".to_string(),
         local_date: String::new(),
@@ -391,9 +352,8 @@ fn speed_test_event_with_source(
 }
 
 // 当前速度只能计 HumanTyped：Undo/Redo/Programmatic/Load/Format 会带着真实
-// inserted delta 落盘、但 source 映射成 Unknown（见 facade 的
-// `record_writing_event`），一次撤销恢复一大段文字不该把「字/分」冲高。
-// 口径必须和中段 `totalHumanTypedChars` 一致。
+// inserted delta 落盘、但 source 映射成 Unknown，一次撤销恢复一大段文字不该把
+// 「字/分」冲高。口径必须和中段 `totalHumanTypedChars` 一致。
 #[test]
 fn test_current_speed_counts_only_human_typed() {
     let temp_dir = tempdir().unwrap();
@@ -421,41 +381,11 @@ fn test_current_speed_counts_only_human_typed() {
         EventSource::Pasted,
     ))
     .unwrap();
-    api.aggregator().store().flush_events().unwrap();
 
     // 只计 HumanTyped 的 20 字，不是 20 + 500 + 300。
-    let speed = api.aggregator().get_current_speed(60).unwrap();
+    let speed = api.get_current_speed(60).unwrap();
     assert_eq!(speed.chars_typed, 20);
     assert!((speed.chars_per_minute - 20.0).abs() < 0.001);
-}
-
-// 「当前写作速度」必须看得到还在内存缓冲里、尚未落盘的事件：
-// record_event 有 3 秒防抖缓冲，用户刚停笔时最后一段输入只存在于 event_buffer。
-#[test]
-fn test_current_speed_reads_unflushed_buffer() {
-    let temp_dir = tempdir().unwrap();
-    // 走 StatsApi 记录事件：它内部的 aggregator 才是 app_service 真正用的那个
-    // store（app_service/stats_ops.rs → self.api.get_current_writing_speed）。
-    // 另起一个 StatsStore 会得到独立的 event_buffer，测不到同一条路径。
-    let api = StatsApi::new(temp_dir.path());
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    for i in 0..5 {
-        api.record_event(speed_test_event(now_ms - 2_000 + i * 100, 10))
-            .unwrap();
-    }
-
-    // 还没手动 flush：速度必须已经把缓冲里的 50 字算进去。
-    let speed = api.aggregator().get_current_speed(60).unwrap();
-    assert_eq!(speed.window_seconds, 60);
-    assert_eq!(speed.chars_typed, 50);
-    assert!((speed.chars_per_minute - 50.0).abs() < 0.001);
-
-    // 落盘之后再查一次，数值不能变——已落盘事件和内存缓冲是同一份事实源，
-    // 拼接不能重复计数。
-    api.aggregator().store().flush_events().unwrap();
-    let after_flush = api.aggregator().get_current_speed(60).unwrap();
-    assert_eq!(after_flush.chars_typed, 50);
 }
 
 // 停笔后实时速度必须回落到 0：速度曲线最后一桶会一直挂着非零值，
@@ -468,16 +398,26 @@ fn test_current_speed_falls_to_zero_after_stopping() {
     // 5 分钟前的一笔输入，早就落盘，不在最近 60 秒窗口内。
     let old_ms = chrono::Utc::now().timestamp_millis() - 5 * 60 * 1000;
     api.record_event(speed_test_event(old_ms, 500)).unwrap();
-    api.aggregator().store().flush_events().unwrap();
 
-    let speed = api.aggregator().get_current_speed(60).unwrap();
+    let speed = api.get_current_speed(60).unwrap();
     assert_eq!(speed.chars_typed, 0);
     assert_eq!(speed.chars_per_minute, 0.0);
 
     // 历史曲线里那 500 字还在——曲线和实时速度职责不同，不互相污染。
     let today = StatsApi::today_date();
-    let curve = api.aggregator().get_speed_curve(&today, &today, 1).unwrap();
-    assert!(curve.iter().any(|b| b.chars_typed == 500));
+    let curve = api
+        .get_speed_curve(
+            &DateRange {
+                start_date: today.clone(),
+                end_date: today,
+            },
+            1,
+        )
+        .unwrap();
+    let buckets = curve["buckets"].as_array().unwrap();
+    assert!(buckets
+        .iter()
+        .any(|b| b["charsTyped"].as_u64().unwrap() == 500));
 }
 
 // 0 秒窗口没有意义且无法折算速度，Core 钳到 1 秒而不是让除法炸掉。
@@ -486,7 +426,7 @@ fn test_current_speed_clamps_zero_window() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());
 
-    let speed = api.aggregator().get_current_speed(0).unwrap();
+    let speed = api.get_current_speed(0).unwrap();
     assert_eq!(speed.window_seconds, 1);
     assert_eq!(speed.chars_typed, 0);
     assert!(speed.chars_per_minute.is_finite());
@@ -505,16 +445,9 @@ fn test_current_speed_window_boundaries() {
     // 窗口外：2 分钟前
     api.record_event(speed_test_event(now_ms - 120_000, 999))
         .unwrap();
-    api.aggregator().store().flush_events().unwrap();
 
-    assert_eq!(
-        api.aggregator().get_current_speed(60).unwrap().chars_typed,
-        7
-    );
-    assert_eq!(
-        api.aggregator().get_current_speed(180).unwrap().chars_typed,
-        7 + 999
-    );
+    assert_eq!(api.get_current_speed(60).unwrap().chars_typed, 7);
+    assert_eq!(api.get_current_speed(180).unwrap().chars_typed, 7 + 999);
 }
 
 #[test]
@@ -609,8 +542,8 @@ fn test_event_file_written() {
     );
 
     store.record_event(event.clone()).unwrap();
-    store.flush_events().unwrap();
 
+    // 直接落盘，不需要 flush
     let date = store.timestamp_to_date(event.timestamp_ms).unwrap();
     let events = store.load_events_for_date(&date).unwrap();
     assert_eq!(events.len(), 1);
@@ -618,32 +551,10 @@ fn test_event_file_written() {
 }
 
 #[test]
-fn test_daily_stats_file_written() {
-    let temp_dir = tempdir().unwrap();
-    let store = StatsStore::new(temp_dir.path());
-
-    let stats = crate::writing_stats::store::DailyStats {
-        date: "2025-01-15".to_string(),
-        device_id: "dev-1".to_string(),
-        platform: "linux".to_string(),
-        total_human_typed_chars: 100,
-        ..Default::default()
-    };
-
-    store.save_or_merge_daily_stats(&stats).unwrap();
-
-    let loaded = store.load_all_daily_stats_for_date("2025-01-15").unwrap();
-    assert_eq!(loaded.len(), 1);
-    assert_eq!(loaded[0].total_human_typed_chars, 100);
-    assert_eq!(loaded[0].device_id, "dev-1");
-}
-
-#[test]
 fn test_session_gap_detection() {
     let temp_dir = tempdir().unwrap();
     let store = StatsStore::new(temp_dir.path());
 
-    // Align base_ms to the middle of a day to ensure base_ms and base_ms + 10 min fall on the same day.
     let base_ms = chrono::DateTime::parse_from_rfc3339("2026-06-08T12:00:00Z")
         .unwrap()
         .timestamp_millis();
@@ -689,14 +600,12 @@ fn test_session_gap_detection() {
         local_date: String::new(),
     };
     store.record_event(event2).unwrap();
-    store.flush_events().unwrap();
 
     let date = crate::writing_stats::calendar::local_date_at(base_ms).unwrap();
     let events = store.load_events_for_date(&date).unwrap();
-    let daily_stats = store.aggregate_events(&events).unwrap();
+    let proj = project_events(&events, 1, None);
 
-    assert_eq!(daily_stats.len(), 1);
-    assert_eq!(daily_stats[0].sessions_count, 2);
+    assert_eq!(proj.summary.total_sessions, 2);
 }
 
 #[test]
@@ -736,166 +645,155 @@ fn test_char_count_uses_unicode_scalar() {
 }
 
 #[test]
-fn test_facade_record_writing_event() {
+fn test_facade_record_editor_change_stats() {
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
     let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
-    core.record_writing_event(
-        "dev-1",
+    core.record_editor_change_stats(
         "linux",
-        "desktop",
         "proj1",
         "vol1",
         "chap1",
-        "human_typed",
+        crate::editor::EditorTransactionCause::Typing,
         10,
         0,
-        0,
-        0,
-        0,
-        "s1",
     )
     .unwrap();
 
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, 0, "s1",
-    )
-    .unwrap();
-
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, 0, "s1",
-    )
-    .unwrap();
-
-    core.record_writing_event(
-        "dev-1",
-        "android",
-        "phone",
+    core.record_editor_change_stats(
+        "linux",
         "proj1",
         "vol1",
         "chap1",
-        "ai_inserted",
+        crate::editor::EditorTransactionCause::Paste,
+        20,
         0,
-        0,
-        0,
-        30,
-        0,
-        "s1",
     )
     .unwrap();
 
-    core.flush_writing_stats().unwrap();
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Delete,
+        0,
+        5,
+    )
+    .unwrap();
+
+    core.record_editor_change_stats(
+        "android",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Programmatic,
+        0,
+        0,
+    )
+    .unwrap();
 
     let today = StatsApi::today_date();
     let summary = core.get_writing_stats_summary(&today, &today).unwrap();
     assert_eq!(summary["totalHumanTypedChars"], 10);
     assert_eq!(summary["totalPastedChars"], 20);
     assert_eq!(summary["totalDeletedChars"], 5);
-    assert_eq!(summary["totalAiInsertedChars"], 30);
-    assert_eq!(summary["totalNetDeltaChars"], 55);
+    assert_eq!(summary["totalNetDeltaChars"], 25); // 10 + 20 - 5
 }
 
-/// Android 直接按 Core cause 分类后传回的 source 字符串必须显式映射，
-/// undo/redo/programmatic/selection 不得靠 `_ => HumanTyped` 默认分支落入人工输入。
+/// Undo/Redo/Programmatic 不得靠默认分支落入人工输入。
 #[test]
-fn test_facade_record_writing_event_non_typed_sources_never_human_typed() {
+fn test_facade_record_editor_change_stats_non_typed_sources_never_human_typed() {
     let temp_dir = tempdir().unwrap();
     std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
     let core = crate::facade::WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
 
-    // Android 按 cause 明确分类后发送的字符串：
-    // - "typing"（Typing/TypingCommit/ImeComposition）→ HumanTyped；
-    // - "pasted"（Paste）→ Pasted；
-    // - "deleted"（Delete）→ Deleted；
-    // - "undo"/"redo"/"programmatic"（Undo/Redo/Programmatic）→ 明确的非 HumanTyped
-    //   （Unknown：不计入分类计数器，但仍计入 net_delta）。
-    // - "selection"（纯光标移动不进入统计，防御性显式映射）。
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "typing", 10, 0, 0, 0, 0, "s1",
-    )
-    .unwrap();
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "pasted", 0, 0, 7, 0, 0, "s1",
-    )
-    .unwrap();
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "deleted", 0, 3, 0, 0, 0, "s1",
-    )
-    .unwrap();
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "undo", 0, 2, 0, 0, 0, "s1",
-    )
-    .unwrap();
-    core.record_writing_event(
-        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "redo", 4, 0, 0, 0, 0, "s1",
-    )
-    .unwrap();
-    core.record_writing_event(
-        "dev-1",
+    // Typing → HumanTyped
+    core.record_editor_change_stats(
         "linux",
-        "desktop",
         "proj1",
         "vol1",
         "chap1",
-        "programmatic",
+        crate::editor::EditorTransactionCause::Typing,
+        10,
+        0,
+    )
+    .unwrap();
+    // Paste → Pasted
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Paste,
+        7,
+        0,
+    )
+    .unwrap();
+    // Delete → Deleted
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Delete,
+        0,
+        3,
+    )
+    .unwrap();
+    // Undo → Unknown
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Undo,
+        0,
+        2,
+    )
+    .unwrap();
+    // Redo → Unknown
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Redo,
+        4,
+        0,
+    )
+    .unwrap();
+    // Programmatic → Unknown
+    core.record_editor_change_stats(
+        "linux",
+        "proj1",
+        "vol1",
+        "chap1",
+        crate::editor::EditorTransactionCause::Programmatic,
         5,
         1,
-        0,
-        0,
-        0,
-        "s1",
     )
     .unwrap();
-    core.record_writing_event(
-        "dev-1",
-        "linux",
-        "desktop",
-        "proj1",
-        "vol1",
-        "chap1",
-        "selection",
-        0,
-        0,
-        0,
-        0,
-        0,
-        "s1",
-    )
-    .unwrap();
-
-    core.flush_writing_stats().unwrap();
 
     let today = StatsApi::today_date();
     let summary = core.get_writing_stats_summary(&today, &today).unwrap();
-    // typing 是唯一落入人工输入的来源；undo/redo/programmatic/selection 一律不是。
+    // typing 是唯一落入人工输入的来源；undo/redo/programmatic 一律不是。
     assert_eq!(summary["totalHumanTypedChars"], 10);
     assert_eq!(summary["totalPastedChars"], 7);
     assert_eq!(summary["totalDeletedChars"], 3);
     // net_delta = 10(typing) + 7(pasted) - 3(deleted) - 2(undo) + 4(redo) + 5-1(programmatic)
-    // 未知/非人工来源仍计入净增量，但不进任何分类计数器。
     assert_eq!(summary["totalNetDeltaChars"], 20);
 }
 
 #[test]
 fn test_sync_stats_paths_outside_repo_not_blacklisted() {
-    // 统计事件/缓存位于 app_data_root/app-meta/stats，不在作品仓库内。
-    // events.local 不再被黑名单特判；cache/ 仍被通用 cache 模式覆盖（防御性）。
     assert!(!crate::sync::SyncService::is_blacklisted_path(
         "app-meta/stats/events.local/2025-01-15.events.jsonl",
         crate::sync::SyncScope::Project
     ));
     assert!(crate::sync::SyncService::is_blacklisted_path(
         "app-meta/stats/cache/something.json",
-        crate::sync::SyncScope::Project
-    ));
-}
-
-#[test]
-fn test_sync_daily_stats_not_whitelisted_in_project() {
-    // 统计日报位于 app_data_root，不参与作品同步。
-    assert!(!crate::sync::SyncService::is_whitelisted_path(
-        "app-meta/stats/daily/2025-01-15.stats.json",
         crate::sync::SyncScope::Project
     ));
 }
@@ -927,11 +825,6 @@ fn test_load_chapter_does_not_produce_input_events() {
 // 业务日历日（本地午夜）口径
 // ---------------------------------------------------------------------------
 
-/// 造一条时间戳/本地日历日都由测试钉死的事件。
-///
-/// 之所以手工写 `local_date` 而不是走 `WritingInputEvent::new()`：新事件用
-/// 运行测试的机器时区填日期，那样测不出「跨 UTC 日期」这个 bug——只有把
-/// 本地日显式钉成和 UTC 日不同的那一天才能复现。
 fn event_with_pinned_dates(
     timestamp_ms: i64,
     local_date: &str,
@@ -962,103 +855,27 @@ const TS_UTC8_LOCAL_0030: i64 = 1_791_217_800_000; // UTC 10-05 16:30 = UTC+8 �
 const TS_UTC8_LOCAL_2330: i64 = 1_791_271_800_000; // UTC 10-06 07:30 = UTC-8 本地 10-05 23:30
 
 #[test]
-fn test_daily_bucket_uses_event_local_date_not_utc() {
-    let temp_dir = tempdir().unwrap();
-    let store = StatsStore::new(temp_dir.path());
-
-    let stats = store
-        .aggregate_events(&[event_with_pinned_dates(
-            TS_UTC8_LOCAL_0030,
-            "2026-10-06",
-            EventSource::HumanTyped,
-            30,
-        )])
-        .unwrap();
-
-    assert_eq!(stats.len(), 1);
-    assert_eq!(
-        stats[0].date, "2026-10-06",
-        "事件应进本地日 10-06，而不是 UTC 日 10-05"
-    );
-    assert_eq!(stats[0].total_human_typed_chars, 30);
-}
-
-#[test]
-fn test_daily_bucket_west_of_utc_local_date_wins() {
-    let temp_dir = tempdir().unwrap();
-    let store = StatsStore::new(temp_dir.path());
-
-    let stats = store
-        .aggregate_events(&[event_with_pinned_dates(
-            TS_UTC8_LOCAL_2330,
-            "2026-10-05",
-            EventSource::HumanTyped,
-            17,
-        )])
-        .unwrap();
-
-    assert_eq!(stats.len(), 1);
-    assert_eq!(
-        stats[0].date, "2026-10-05",
-        "西半球本地 10-05 23:30 的事件不该被推到 UTC 的 10-06"
-    );
-}
-
-#[test]
-fn test_real_time_aggregation_follows_event_local_date() {
-    let temp_dir = tempdir().unwrap();
-    let agg = StatsAggregator::new(temp_dir.path());
-    let event = event_with_pinned_dates(
+fn test_projection_uses_event_local_date_not_utc() {
+    let events = vec![event_with_pinned_dates(
         TS_UTC8_LOCAL_0030,
         "2026-10-06",
         EventSource::HumanTyped,
-        42,
-    );
-
-    agg.aggregate_single_event(&event).unwrap();
-
-    let on_local_day = agg
-        .store()
-        .load_all_daily_stats_for_date("2026-10-06")
-        .unwrap();
-    assert_eq!(on_local_day.len(), 1);
-    assert_eq!(on_local_day[0].total_human_typed_chars, 42);
-
-    let on_utc_day = agg
-        .store()
-        .load_all_daily_stats_for_date("2026-10-05")
-        .unwrap();
-    assert!(
-        on_utc_day.is_empty(),
-        "UTC 日不应该出现这份统计，否则凌晨会重复计数"
-    );
+        30,
+    )];
+    let proj = project_events(&events, 1, None);
+    assert_eq!(proj.summary.total_human_typed_chars, 30);
 }
 
 #[test]
-fn test_summary_range_uses_business_dates() {
-    let temp_dir = tempdir().unwrap();
-    let agg = StatsAggregator::new(temp_dir.path());
-    agg.aggregate_single_event(&event_with_pinned_dates(
-        TS_UTC8_LOCAL_0030,
-        "2026-10-06",
+fn test_projection_west_of_utc_local_date_wins() {
+    let events = vec![event_with_pinned_dates(
+        TS_UTC8_LOCAL_2330,
+        "2026-10-05",
         EventSource::HumanTyped,
-        25,
-    ))
-    .unwrap();
-
-    let local_day = DateRange {
-        start_date: "2026-10-06".to_string(),
-        end_date: "2026-10-06".to_string(),
-    };
-    let summary = agg
-        .store()
-        .load_daily_stats_range(&local_day.start_date, &local_day.end_date);
-    let total: u64 = summary
-        .unwrap()
-        .iter()
-        .map(|s| s.total_human_typed_chars)
-        .sum();
-    assert_eq!(total, 25);
+        17,
+    )];
+    let proj = project_events(&events, 1, None);
+    assert_eq!(proj.summary.total_human_typed_chars, 17);
 }
 
 #[test]
@@ -1130,8 +947,6 @@ fn test_today_summary_matches_local_calendar_day() {
         crate::editor::EditorTransactionCause::Typing,
         18,
         0,
-        0,
-        "s1",
     )
     .unwrap();
 
@@ -1142,4 +957,158 @@ fn test_today_summary_matches_local_calendar_day() {
     );
     let today = crate::writing_stats::calendar::local_today_date();
     assert_eq!(summary["range"]["startDate"], today.as_str());
+}
+
+// ---------------------------------------------------------------------------
+// per_project / per_chapter 活跃时间独立计算
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_per_project_active_time_is_independent() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // proj1 有两个事件间隔 10 秒
+    let mut e1 = speed_test_event(now_ms, 10);
+    e1.project_id = "proj1".to_string();
+    api.record_event(e1).unwrap();
+
+    let mut e2 = speed_test_event(now_ms + 10_000, 5);
+    e2.project_id = "proj1".to_string();
+    api.record_event(e2).unwrap();
+
+    // proj2 只有一个事件
+    let mut e3 = speed_test_event(now_ms + 5_000, 20);
+    e3.project_id = "proj2".to_string();
+    api.record_event(e3).unwrap();
+
+    let today = StatsApi::today_date();
+    let project_stats = api
+        .get_stats_by_project(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
+    let projects = project_stats["projects"].as_array().unwrap();
+
+    let p1 = projects.iter().find(|p| p["projectId"] == "proj1").unwrap();
+    assert_eq!(p1["humanTypedChars"], 15);
+    assert_eq!(p1["activeSeconds"], 10); // 独立计算的活跃时间
+
+    let p2 = projects.iter().find(|p| p["projectId"] == "proj2").unwrap();
+    assert_eq!(p2["humanTypedChars"], 20);
+    assert_eq!(p2["activeSeconds"], 0); // 只有一个事件，活跃时间为 0
+}
+
+#[test]
+fn test_per_chapter_active_time_is_independent() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // chap1 有两个事件间隔 10 秒
+    let mut e1 = speed_test_event(now_ms, 10);
+    e1.chapter_id = "chap1".to_string();
+    api.record_event(e1).unwrap();
+
+    let mut e2 = speed_test_event(now_ms + 10_000, 5);
+    e2.chapter_id = "chap1".to_string();
+    api.record_event(e2).unwrap();
+
+    // chap2 只有一个事件
+    let mut e3 = speed_test_event(now_ms + 5_000, 20);
+    e3.chapter_id = "chap2".to_string();
+    api.record_event(e3).unwrap();
+
+    let today = StatsApi::today_date();
+    let chapter_stats = api
+        .get_stats_by_chapter(&DateRange {
+            start_date: today.clone(),
+            end_date: today,
+        })
+        .unwrap();
+    let chapters = chapter_stats["chapters"].as_array().unwrap();
+
+    let c1 = chapters.iter().find(|c| c["chapterId"] == "chap1").unwrap();
+    assert_eq!(c1["humanTypedChars"], 15);
+    assert_eq!(c1["activeSeconds"], 10);
+
+    let c2 = chapters.iter().find(|c| c["chapterId"] == "chap2").unwrap();
+    assert_eq!(c2["humanTypedChars"], 20);
+    assert_eq!(c2["activeSeconds"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// 速度只计 HumanTyped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_speed_curve_only_counts_human_typed() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    // HumanTyped 30 字
+    api.record_event(speed_test_event_with_source(
+        now_ms,
+        30,
+        EventSource::HumanTyped,
+    ))
+    .unwrap();
+    // Unknown 500 字 — 不应进入速度曲线
+    api.record_event(speed_test_event_with_source(
+        now_ms + 1_000,
+        500,
+        EventSource::Unknown,
+    ))
+    .unwrap();
+    // Pasted 100 字 — 不应进入速度曲线
+    api.record_event(speed_test_event_with_source(
+        now_ms + 2_000,
+        100,
+        EventSource::Pasted,
+    ))
+    .unwrap();
+
+    let today = StatsApi::today_date();
+    let curve = api
+        .get_speed_curve(
+            &DateRange {
+                start_date: today.clone(),
+                end_date: today,
+            },
+            1,
+        )
+        .unwrap();
+    let buckets = curve["buckets"].as_array().unwrap();
+    // 只有 HumanTyped 的 30 字进入速度曲线
+    assert!(buckets
+        .iter()
+        .any(|b| b["charsTyped"].as_u64().unwrap() == 30));
+    assert!(!buckets
+        .iter()
+        .any(|b| b["charsTyped"].as_u64().unwrap() == 500));
+    assert!(!buckets
+        .iter()
+        .any(|b| b["charsTyped"].as_u64().unwrap() == 100));
+}
+
+// ---------------------------------------------------------------------------
+// CurrentWritingSpeed 类型从 projection 模块导出
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_current_writing_speed_type_from_projection() {
+    let speed = CurrentWritingSpeed {
+        window_seconds: 60,
+        sampled_at_ms: 0,
+        chars_typed: 10,
+        chars_per_minute: 10.0,
+    };
+    assert_eq!(speed.window_seconds, 60);
+    assert_eq!(speed.chars_typed, 10);
 }

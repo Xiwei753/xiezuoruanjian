@@ -1,143 +1,42 @@
 //! # 写作统计 API 模块
 //!
-//! 本模块提供了写作统计数据的查询接口，是统计功能对外暴露的主要 API 层。
-//!
-//! ## 主要功能
-//!
-//! - **统计摘要**: 获取指定时间范围内的总体统计数据
-//! - **按项目统计**: 获取按项目分组的统计数据
-//! - **按章节统计**: 获取按章节分组的统计数据
-//! - **按设备统计**: 获取按设备分组的统计数据，支持多设备对比
-//! - **速度曲线**: 获取指定时间范围内的写作速度变化曲线
-//! - **事件记录**: 记录新的写作输入事件
-//!
-//! ## 核心结构
-//!
-//! - `StatsApi`: 统计 API 入口，封装了 StatsAggregator 并提供高层查询接口
+//! 所有查询方法走同一个「load events -> project_events -> 取需要的部分」入口。
+//! 不再封装 `StatsAggregator`，直接持有 `StatsStore`。
 //!
 //! ## 返回格式
 //!
 //! 所有查询方法返回 `serde_json::Value`，便于直接序列化为 JSON 响应。
-//! 返回数据包含时间范围信息和对应的统计数据。
-//!
-//! ## 依赖关系
-//!
-//! - `crate::writing_stats::aggregate`: 统计聚合器
-//! - `crate::writing_stats::store`: 数据存储层
-//! - `serde_json`: JSON 值处理
-//!
-//! ## 使用场景
-//!
-//! - 编辑器中的字数统计显示
-//! - 写作报告生成
-//! - 数据可视化图表的数据源
-//! - 多设备写作活动对比分析
 
 use crate::error::Result;
-use crate::writing_stats::aggregate::StatsAggregator;
-use crate::writing_stats::store::aggregate_by_device_class;
+use crate::writing_stats::projection::{project_events, CurrentWritingSpeed};
+use crate::writing_stats::store::StatsStore;
 use crate::writing_stats::{DateRange, WritingInputEvent};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
-/// 按项目聚合的统计数据。
-///
-/// `net_delta_chars` = `human_typed_chars` + `pasted_chars` + `ai_inserted_chars` - `deleted_chars`，
-/// 可能为负值（删除多于新增）。`active_seconds` 为有输入事件的时间段累计，非挂机时间。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectStatsAgg {
-    project_id: String,
-    human_typed_chars: u64,
-    pasted_chars: u64,
-    deleted_chars: u64,
-    ai_inserted_chars: u64,
-    net_delta_chars: i64,
-    active_seconds: u64,
-}
-
-/// 按章节聚合的统计数据。字段语义同 `ProjectStatsAgg`。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChapterStatsAgg {
-    chapter_id: String,
-    human_typed_chars: u64,
-    pasted_chars: u64,
-    deleted_chars: u64,
-    ai_inserted_chars: u64,
-    net_delta_chars: i64,
-    active_seconds: u64,
-}
-
-/// 按设备聚合的统计数据。
-///
-/// - `device_id`：设备唯一标识（UUID，由 Core 在首次同步时生成）
-/// - `platform`：平台标识（`"android"` / `"desktop"` / `"windows"` / `"harmony"` / `"apple"`）
-/// - `device_class`：设备类型（`"phone"` / `"tablet"` / `"desktop"`）
-/// - `sessions_count`：活跃编辑会话数（有输入事件的天数）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DeviceStatsAgg {
-    device_id: String,
-    platform: String,
-    device_class: String,
-    human_typed_chars: u64,
-    pasted_chars: u64,
-    deleted_chars: u64,
-    ai_inserted_chars: u64,
-    net_delta_chars: i64,
-    active_seconds: u64,
-    sessions_count: u32,
-}
-
-/// 按设备类型聚合的统计数据 — 用于多设备对比视图。
-///
-/// `device_count` 为该类型的设备数量，其余字段为该类型所有设备的累计值。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DeviceClassAgg {
-    device_class: String,
-    device_count: u32,
-    total_human_typed_chars: u64,
-    total_net_delta_chars: i64,
-    active_seconds: u64,
-}
-
-/// 写作统计 API 入口 — 封装 StatsAggregator 并提供高层查询接口。
-///
-/// 线程安全：此结构体不是 `Sync`/`Send`，调用方需保证单线程访问
-/// （通过 `WriterAppService` 的 `Mutex` 保护）。
-/// 所有查询方法返回 `serde_json::Value`，便于直接序列化为 JSON 响应。
+/// 写作统计 API 入口 — 直接持有 `StatsStore`，所有查询走 projection。
 pub struct StatsApi {
-    aggregator: StatsAggregator,
+    store: StatsStore,
 }
 
 impl StatsApi {
     pub fn new(app_data_root: &Path) -> Self {
-        // 每日统计第一次被使用前，先把旧的 UTC 口径 daily 文件按本地日历日
-        // 重建一次（幂等，marker 短路）。之后所有写入都走新口径。
+        // 迁移：补齐旧事件的 local_date（不再重建 daily）
         if let Err(e) =
             crate::writing_stats::migration::migrate_stats_to_local_calendar(app_data_root)
         {
-            // 迁移失败不能挡住统计功能：老 daily 文件仍可读，只是口径可能偏旧。
             eprintln!("[writing_stats] calendar migration skipped: {}", e);
         }
         Self {
-            aggregator: StatsAggregator::new(app_data_root),
+            store: StatsStore::new(app_data_root),
         }
     }
 
-    pub fn aggregator(&self) -> &StatsAggregator {
-        &self.aggregator
+    pub fn store(&self) -> &StatsStore {
+        &self.store
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::cast_possible_truncation)]
     /// 「今天」的写作汇总 —— 今天是哪一天由 **Core 的本地日历口径**决定。
-    ///
-    /// 平台端不再自己拼 `YYYY-MM-DD`：`todayDateString()` 那种本地日期
-    /// 与 UTC 每日统计对不上的问题在这里单侧收口，避免第三个端再复制一次。
     pub fn get_today_stats_summary(&self) -> Result<Value> {
         let today = crate::writing_stats::calendar::local_today_date();
         let range = DateRange {
@@ -147,84 +46,48 @@ impl StatsApi {
         self.get_stats_summary(&range)
     }
 
-    #[allow(clippy::cast_possible_truncation)]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self
-            .aggregator
-            .store()
-            .load_daily_stats_range(&range.start_date, &range.end_date)?;
-
-        let mut total_human_typed: u64 = 0;
-        let mut total_pasted: u64 = 0;
-        let mut total_deleted: u64 = 0;
-        let mut total_ai_inserted: u64 = 0;
-        let mut total_net_delta: i64 = 0;
-        let mut total_active_seconds: u64 = 0;
-        let mut total_sessions: u32 = 0;
-
-        for stats in &daily_stats {
-            total_human_typed += stats.total_human_typed_chars;
-            total_pasted += stats.total_pasted_chars;
-            total_deleted += stats.total_deleted_chars;
-            total_ai_inserted += stats.total_ai_inserted_chars;
-            total_net_delta += stats.total_net_delta_chars;
-            total_active_seconds += stats.active_seconds;
-            total_sessions += stats.sessions_count;
-        }
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, 60, None);
 
         Ok(serde_json::json!({
             "range": {
                 "startDate": range.start_date,
                 "endDate": range.end_date,
             },
-            "totalHumanTypedChars": total_human_typed,
-            "totalPastedChars": total_pasted,
-            "totalDeletedChars": total_deleted,
-            "totalAiInsertedChars": total_ai_inserted,
-            "totalNetDeltaChars": total_net_delta,
-            "totalActiveSeconds": total_active_seconds,
-            "totalSessions": total_sessions,
-            "daysCount": daily_stats.len() as u32,
+            "totalHumanTypedChars": proj.summary.total_human_typed_chars,
+            "totalPastedChars": proj.summary.total_pasted_chars,
+            "totalDeletedChars": proj.summary.total_deleted_chars,
+            "totalAiInsertedChars": proj.summary.total_ai_inserted_chars,
+            "totalNetDeltaChars": proj.summary.total_net_delta_chars,
+            "totalActiveSeconds": proj.summary.total_active_seconds,
+            "totalSessions": proj.summary.total_sessions,
+            "daysCount": 0, // 不再按 daily 文件计数
         }))
     }
 
     pub fn get_stats_by_project(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self
-            .aggregator
-            .store()
-            .load_daily_stats_range(&range.start_date, &range.end_date)?;
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, 60, None);
 
-        let mut by_project: std::collections::HashMap<&str, ProjectStatsAgg> =
-            std::collections::HashMap::new();
-
-        for stats in &daily_stats {
-            for (project_id, proj_stats) in &stats.per_project {
-                let entry =
-                    by_project
-                        .entry(project_id.as_str())
-                        .or_insert_with(|| ProjectStatsAgg {
-                            project_id: project_id.clone(),
-                            human_typed_chars: 0,
-                            pasted_chars: 0,
-                            deleted_chars: 0,
-                            ai_inserted_chars: 0,
-                            net_delta_chars: 0,
-                            active_seconds: 0,
-                        });
-
-                entry.human_typed_chars += proj_stats.human_typed_chars;
-                entry.pasted_chars += proj_stats.pasted_chars;
-                entry.deleted_chars += proj_stats.deleted_chars;
-                entry.ai_inserted_chars += proj_stats.ai_inserted_chars;
-                entry.net_delta_chars += proj_stats.net_delta_chars;
-                entry.active_seconds += proj_stats.active_seconds;
-            }
-        }
-
-        let projects: Vec<Value> = by_project
-            .into_values()
-            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+        let projects: Vec<Value> = proj
+            .per_project
+            .values()
+            .map(|p| {
+                serde_json::json!({
+                    "projectId": p.project_id,
+                    "humanTypedChars": p.human_typed_chars,
+                    "pastedChars": p.pasted_chars,
+                    "deletedChars": p.deleted_chars,
+                    "aiInsertedChars": p.ai_inserted_chars,
+                    "netDeltaChars": p.net_delta_chars,
+                    "activeSeconds": p.active_seconds,
+                })
+            })
             .collect();
 
         Ok(serde_json::json!({
@@ -237,41 +100,25 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_chapter(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self
-            .aggregator
-            .store()
-            .load_daily_stats_range(&range.start_date, &range.end_date)?;
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, 60, None);
 
-        let mut by_chapter: std::collections::HashMap<&str, ChapterStatsAgg> =
-            std::collections::HashMap::new();
-
-        for stats in &daily_stats {
-            for (chapter_id, chap_stats) in &stats.per_chapter {
-                let entry =
-                    by_chapter
-                        .entry(chapter_id.as_str())
-                        .or_insert_with(|| ChapterStatsAgg {
-                            chapter_id: chapter_id.clone(),
-                            human_typed_chars: 0,
-                            pasted_chars: 0,
-                            deleted_chars: 0,
-                            ai_inserted_chars: 0,
-                            net_delta_chars: 0,
-                            active_seconds: 0,
-                        });
-
-                entry.human_typed_chars += chap_stats.human_typed_chars;
-                entry.pasted_chars += chap_stats.pasted_chars;
-                entry.deleted_chars += chap_stats.deleted_chars;
-                entry.ai_inserted_chars += chap_stats.ai_inserted_chars;
-                entry.net_delta_chars += chap_stats.net_delta_chars;
-                entry.active_seconds += chap_stats.active_seconds;
-            }
-        }
-
-        let chapters: Vec<Value> = by_chapter
-            .into_values()
-            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+        let chapters: Vec<Value> = proj
+            .per_chapter
+            .values()
+            .map(|c| {
+                serde_json::json!({
+                    "chapterId": c.chapter_id,
+                    "humanTypedChars": c.human_typed_chars,
+                    "pastedChars": c.pasted_chars,
+                    "deletedChars": c.deleted_chars,
+                    "aiInsertedChars": c.ai_inserted_chars,
+                    "netDeltaChars": c.net_delta_chars,
+                    "activeSeconds": c.active_seconds,
+                })
+            })
             .collect();
 
         Ok(serde_json::json!({
@@ -284,42 +131,28 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self
-            .aggregator
-            .store()
-            .load_daily_stats_range(&range.start_date, &range.end_date)?;
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, 60, None);
 
-        let mut by_device: std::collections::HashMap<&str, DeviceStatsAgg> =
-            std::collections::HashMap::new();
-
-        for stats in &daily_stats {
-            let entry = by_device
-                .entry(stats.device_id.as_str())
-                .or_insert_with(|| DeviceStatsAgg {
-                    device_id: stats.device_id.clone(),
-                    platform: stats.platform.clone(),
-                    device_class: stats.device_class.clone(),
-                    human_typed_chars: 0,
-                    pasted_chars: 0,
-                    deleted_chars: 0,
-                    ai_inserted_chars: 0,
-                    net_delta_chars: 0,
-                    active_seconds: 0,
-                    sessions_count: 0,
-                });
-
-            entry.human_typed_chars += stats.total_human_typed_chars;
-            entry.pasted_chars += stats.total_pasted_chars;
-            entry.deleted_chars += stats.total_deleted_chars;
-            entry.ai_inserted_chars += stats.total_ai_inserted_chars;
-            entry.net_delta_chars += stats.total_net_delta_chars;
-            entry.active_seconds += stats.active_seconds;
-            entry.sessions_count += stats.sessions_count;
-        }
-
-        let devices: Vec<Value> = by_device
-            .into_values()
-            .map(|agg| serde_json::to_value(agg).unwrap_or(Value::Null))
+        let devices: Vec<Value> = proj
+            .per_device
+            .values()
+            .map(|d| {
+                serde_json::json!({
+                    "deviceId": d.device_id,
+                    "platform": d.platform,
+                    "deviceClass": d.device_class,
+                    "humanTypedChars": d.human_typed_chars,
+                    "pastedChars": d.pasted_chars,
+                    "deletedChars": d.deleted_chars,
+                    "aiInsertedChars": d.ai_inserted_chars,
+                    "netDeltaChars": d.net_delta_chars,
+                    "activeSeconds": d.active_seconds,
+                    "sessionsCount": d.sessions_count,
+                })
+            })
             .collect();
 
         Ok(serde_json::json!({
@@ -332,24 +165,22 @@ impl StatsApi {
     }
 
     pub fn get_stats_by_device_class(&self, range: &DateRange) -> Result<Value> {
-        let daily_stats = self
-            .aggregator
-            .store()
-            .load_daily_stats_range(&range.start_date, &range.end_date)?;
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, 60, None);
 
-        let by_class = aggregate_by_device_class(&daily_stats);
-
-        let classes: Vec<Value> = by_class
-            .into_iter()
-            .map(|(device_class, summary)| {
-                let agg = DeviceClassAgg {
-                    device_class,
-                    device_count: summary.device_count,
-                    total_human_typed_chars: summary.total_human_typed_chars,
-                    total_net_delta_chars: summary.total_net_delta_chars,
-                    active_seconds: summary.active_seconds,
-                };
-                serde_json::to_value(agg).unwrap_or(Value::Null)
+        let classes: Vec<Value> = proj
+            .per_device_class
+            .values()
+            .map(|c| {
+                serde_json::json!({
+                    "deviceClass": c.device_class,
+                    "deviceCount": c.device_count,
+                    "totalHumanTypedChars": c.total_human_typed_chars,
+                    "totalNetDeltaChars": c.total_net_delta_chars,
+                    "activeSeconds": c.active_seconds,
+                })
             })
             .collect();
 
@@ -363,11 +194,13 @@ impl StatsApi {
     }
 
     pub fn get_speed_curve(&self, range: &DateRange, bucket_minutes: u32) -> Result<Value> {
-        let buckets =
-            self.aggregator
-                .get_speed_curve(&range.start_date, &range.end_date, bucket_minutes)?;
+        let events = self
+            .store
+            .load_events_range(&range.start_date, &range.end_date)?;
+        let proj = project_events(&events, bucket_minutes, None);
 
-        let bucket_json: Vec<Value> = buckets
+        let bucket_json: Vec<Value> = proj
+            .speed_curve
             .iter()
             .map(|b| {
                 serde_json::json!({
@@ -389,14 +222,26 @@ impl StatsApi {
         }))
     }
 
+    /// 记录写作事件 — 只持久化事件，不再调 aggregate_single_event。
     pub fn record_event(&self, event: WritingInputEvent) -> Result<()> {
-        self.aggregator.store().record_event(event.clone())?;
-        self.aggregator.aggregate_single_event(&event)?;
+        self.store.record_event(event)?;
         Ok(())
     }
 
-    pub fn flush(&self) -> Result<()> {
-        self.aggregator.store().flush_events()
+    /// 「当前写作速度」：以调用时刻为终点的实时纯输入速度。
+    pub fn get_current_speed(&self, window_seconds: u32) -> Result<CurrentWritingSpeed> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let window_seconds = window_seconds.max(1);
+        let start_ms = now_ms - i64::from(window_seconds) * 1_000;
+
+        let events = self.store.load_events_in_window(start_ms, now_ms)?;
+        let proj = project_events(&events, 60, Some(window_seconds));
+        Ok(proj.current_speed.unwrap_or(CurrentWritingSpeed {
+            window_seconds,
+            sampled_at_ms: now_ms,
+            chars_typed: 0,
+            chars_per_minute: 0.0,
+        }))
     }
 
     /// 本机当前的业务日历日（本地时区，非 UTC）。
