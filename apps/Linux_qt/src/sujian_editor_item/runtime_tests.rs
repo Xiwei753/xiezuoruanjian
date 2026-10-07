@@ -2991,3 +2991,179 @@ fn rapid_wrap_retarget_does_not_match_previous_line_when_caret_tops_are_one_line
         println!("[BEHAVIOR_VERIFY] 评论43①：快速换行 retarget 不回上一行");
     });
 }
+
+/// Issue #826 评论 44 BLOCKER 1：
+/// `coordinated_partial_trim_preserves_global_frontier_distance_on_first_frame`。
+///
+/// 按 `travelled` 从 Boundary 中间裁段后，段的 `frontier_distance_from` 必须同步
+/// 推进到 `start_frontier_distance`，否则第二笔首帧 `sample_at_distance(0)` 返回的
+/// 前沿距离仍是旧 from（0），Reveal mask 把已吐出的字瞬间吞回（快速同线连打回弹）。
+#[test]
+fn coordinated_partial_trim_preserves_global_frontier_distance_on_first_frame() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let t0 = Instant::now();
+        // 单行一段：cluster x=10..30（visual_length 20），frontier_distance_from=0。
+        let line = test_line(LineSnapshotId::new(0, 0, 0), 5.0, 20.0, 5.0, 0, 1, 10.0, 20.0);
+        let frontier = EditFrontierState::begin_insert(
+            String::new(),
+            two_line_snapshot(vec![line]),
+            String::from("x"),
+            vec![(0, 1)],
+            OffsetMap::from_single_edit(0, (0, 0), 0),
+            Vec::new(),
+            t0,
+            160,
+        );
+        let coord = item.pipeline.animation_coordinator_mut();
+        coord.active_edit_frontier = Some(frontier);
+        // 先建一份 motion，再把它 retarget 到 travelled=8 的当前前沿。
+        assert!(coord.begin_or_retarget_coordinated_caret(0.0, 5.0, 40.0, 5.0, t0));
+        coord.active_edit_frontier.as_mut().unwrap().reveal.travelled = 8.0;
+        assert!(coord.begin_or_retarget_coordinated_caret(
+            18.0,
+            5.0,
+            45.0,
+            5.0,
+            t0 + Duration::from_millis(10)
+        ));
+
+        let boundaries = coord.coordinated_boundary_segments_for_test();
+        assert_eq!(boundaries.len(), 1, "只有一条 Boundary");
+        let b = boundaries[0];
+        assert!(
+            b.0 > 10.0 + 0.5 && b.0 < 30.0 - 0.5,
+            "第一段 x_from 必须从原段中间裁起（10..30 内非端点），实际 {}",
+            b.0
+        );
+        assert!(
+            (b.5 - 8.0).abs() < 1e-6,
+            "裁段后 frontier_distance_from 必须是 start_frontier_distance=8，实际 {}",
+            b.5
+        );
+        let at0 = coord
+            .active_coordinated_caret
+            .as_ref()
+            .unwrap()
+            .sample_at_distance(0.0);
+        assert_eq!(
+            at0.2,
+            Some(8.0),
+            "第二笔首帧 sample_at_distance(0).frontier_distance 必须是 8，绝不能退回 0"
+        );
+        println!("[BEHAVIOR_VERIFY] 评论44①：partial trim 同步推进 frontier_distance_from");
+    });
+}
+
+/// Issue #826 评论 44 BLOCKER 2：
+/// `coordinated_target_one_line_below_is_not_same_row_even_when_delta_equals_line_height`。
+///
+/// 末段 target 的 same_row 判定不能再拿整行 height 当容差：下一行 caret_top 与末段
+/// 相差约一行高度，会被误判成同行，导致整段留在上一行、最后一帧才 Snap 跳行。
+#[test]
+fn coordinated_target_one_line_below_is_not_same_row_even_when_delta_equals_line_height() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let t0 = Instant::now();
+        // 单行 Boundary：caret_top=10，h=30（行高整块）。target_y=40 = 正好下一行。
+        let line = test_line(LineSnapshotId::new(0, 0, 0), 10.0, 30.0, 10.0, 0, 1, 10.0, 20.0);
+        let frontier = EditFrontierState::begin_insert(
+            String::new(),
+            two_line_snapshot(vec![line]),
+            String::from("x"),
+            vec![(0, 1)],
+            OffsetMap::from_single_edit(0, (0, 0), 0),
+            Vec::new(),
+            t0,
+            160,
+        );
+        let coord = item.pipeline.animation_coordinator_mut();
+        coord.active_edit_frontier = Some(frontier);
+        // target_y=40（= 末段 caret_top 10 + 行高 30），target_x 在末段 x span 内。
+        assert!(coord.begin_or_retarget_coordinated_caret(20.0, 10.0, 20.0, 40.0, t0));
+
+        let kinds = coord.coordinated_segment_kinds_for_test();
+        let (is_boundary, _y_from, y_to) = *kinds.last().expect("必须有分段");
+        assert!(
+            !is_boundary,
+            "target 在下一行时必须追加 Connector（不得把末段 Boundary 直接改写成 target_x），\
+             实际 kinds={:?}",
+            kinds
+        );
+        assert!(
+            (y_to - 40.0).abs() < 1e-6,
+            "尾 Connector 必须走到 target_y=40，实际 {}",
+            y_to
+        );
+        // progress<1 时 y 已经开始向下一行移动（不是靠终点 Snap）。
+        let m = coord.active_coordinated_caret.as_ref().unwrap();
+        let mid = m.sample_at_distance(m.total_length * 0.9);
+        assert!(
+            mid.1 > 10.5,
+            "progress<1 时 caret.y 必须已在向下一行推进（不是终点才跳），实际 {}",
+            mid.1
+        );
+        println!("[BEHAVIOR_VERIFY] 评论44②：下一行不被误判为同行，追加跨行 Connector");
+    });
+}
+
+/// Issue #826 评论 44：`rapid_same_line_typing_does_not_rehide_partially_revealed_previous_glyph`。
+///
+/// 同一行快速连打：第一字吐出一部分后立刻输入第二字，第二笔第一帧的 Reveal 边界
+/// 距离不得小于第一笔当前可见边界（不得把已吐出的部分吞回去）。
+#[test]
+fn rapid_same_line_typing_does_not_rehide_partially_revealed_previous_glyph() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.current_viewport_height = 600.0;
+        item.current_coordinated_animation_enabled = true;
+        item.current_typing_animation_enabled = true;
+        item.current_smooth_cursor_enabled = true;
+        item.pipeline.set_typing_animation_duration_ms(160);
+        item.set_plain_text(QString::from("A"));
+        let _ = item.pipeline.set_selection(1, 1);
+        item.snap_next_cursor_update();
+        item.insert_text(QString::from("X"));
+
+        // 播到 50ms，记第一笔当前可见前沿距离。
+        rewind_coordinated_clock_for_test(&mut item, 50);
+        let now_old = Instant::now();
+        let old_distance = item
+            .pipeline
+            .animation_coordinator_mut()
+            .sample_edit_frontier(now_old)
+            .expect("第一笔前沿必须还在")
+            .coordinated
+            .expect("协同必须带边界")
+            .reveal_distance;
+        assert!(old_distance > 0.0, "前置：第一笔必须已吐出一点，实际 {}", old_distance);
+
+        // 第二笔马上输入（同 burst，extend + retarget）。
+        item.insert_text(QString::from("Y"));
+        assert_eq!(item.pipeline.committed_text(), "AXY");
+        let coord = item.pipeline.animation_coordinator_mut();
+        // 在 retarget 时刻采第二笔首帧边界。
+        let retarget_at = coord
+            .active_coordinated_caret
+            .as_ref()
+            .expect("第二笔 motion 必须还在")
+            .started_at;
+        let new_distance = coord
+            .sample_edit_frontier(retarget_at)
+            .expect("前沿必须还在")
+            .coordinated
+            .expect("协同必须带边界")
+            .reveal_distance;
+        assert!(
+            new_distance >= old_distance - 1e-6,
+            "第二笔首帧 Reveal 边界不得回退：旧可见 {}，新 {}",
+            old_distance,
+            new_distance
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_none(),
+            "协同连打不得孵化独立 Tween"
+        );
+        println!("[BEHAVIOR_VERIFY] 评论44：同行快速连打不回吞已吐出的字");
+    });
+}

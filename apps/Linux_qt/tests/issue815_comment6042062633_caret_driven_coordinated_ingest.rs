@@ -618,3 +618,24 @@ fn issue826_c43_retarget_uses_frontier_travelled_not_y_band() {
         "Issue #826 评论 43: 不得再用 y_lo/y_hi 命中带反猜当前 Boundary。"
     );
 }
+
+/// Issue #826 评论 44：partial trim 必须同步推进 `frontier_distance_from`；
+/// 尾巴 same_row 不能用整行 height 当容差。
+#[test]
+fn issue826_c44_partial_trim_advances_distance_and_same_row_is_tight() {
+    let coord = read_src("src/sujian_editor_item/animation/coordinator.rs");
+    let window = function_window(&coord, "fn coordinated_path_from_frontier", 12000);
+    assert!(
+        window.contains("frontier_distance_from = Some(start_frontier_distance)"),
+        "Issue #826 评论 44 BLOCKER 1: 裁段后必须把 frontier_distance_from 推进到 \
+         start_frontier_distance，否则首帧前沿距离倒退、已吐出的字被吞回。"
+    );
+    assert!(
+        window.contains("let same_row = (target_y - last.y_from).abs() <= 1.0"),
+        "Issue #826 评论 44 BLOCKER 2: same_row 必须用小 epsilon（1.0），不能再用整行 height。"
+    );
+    assert!(
+        !window.contains("last.h.max(") && !window.contains("last.h + 1.0"),
+        "Issue #826 评论 44 BLOCKER 2: 不得再用 last.h 当同行容差（相邻行会重叠）。"
+    );
+}

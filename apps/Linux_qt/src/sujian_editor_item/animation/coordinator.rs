@@ -1452,7 +1452,16 @@ impl LinuxEditorAnimationCoordinator {
                     .line_snapshots
                     .iter()
                     .chain(frontier.base_snapshot.line_snapshots.iter())
-                    .find(|line| (line.visual_line_top - segment.y).abs() <= 0.5)
+                    // Issue #826 评论 44：conceal 段的 y 来自旧 glyph 的 dest_rect，
+                    // 不是 `visual_line_top`，精确相等命中不到；先按「落在行带内」
+                    // 定位（也覆盖 y == visual_line_top 的情形），再退回 segment.y。
+                    // 否则 conceal Boundary 会停在 glyph 坐标，与 start_y/target_y
+                    // （caret 坐标）差一个 top_padding，BLOCKER-2 的 1px 同行判定
+                    // 会把同一行误判成跨行、多补竖向尾 connector，导致快速吞字提前吞完。
+                    .find(|line| {
+                        segment.y >= line.visual_line_top - 0.5
+                            && segment.y < line.visual_line_bottom + 0.5
+                    })
                     .map(|line| line.caret_top)
                     .unwrap_or(segment.y)
             };
@@ -1539,6 +1548,12 @@ impl LinuxEditorAnimationCoordinator {
                 first.x_from += span * frac;
                 first.visual_length =
                     (first.x_to - first.x_from).abs().max(f64::MIN_POSITIVE);
+                // Issue #826 评论 44 BLOCKER 1：裁段后空间起点已经从中间开始，
+                // 段携带的**文字前沿坐标起点**必须同步推进到 `start_frontier_distance`，
+                // 否则第二笔首帧 progress=0 时 `sample_at_distance(0)` 返回的前沿距离
+                // 仍是旧 `from`（例如 0），Reveal mask 会把已经吐出的字瞬间吞回去
+                // （快速同线连打回弹/闪）。
+                first.frontier_distance_from = Some(start_frontier_distance);
             }
         } else if drop > 0 {
             boundaries.drain(0..drop);
@@ -1580,7 +1595,11 @@ impl LinuxEditorAnimationCoordinator {
         if let Some(last) = boundaries.last() {
             let lo = last.x_from.min(last.x_to);
             let hi = last.x_from.max(last.x_to);
-            let same_row = (target_y - last.y_from).abs() <= last.h.max(1.0) + 1.0;
+            // Issue #826 评论 44 BLOCKER 2：Boundary y 现在已是 Qt 精确 caret_top，
+            // “同一行”判定必须用小 epsilon，不能再用整行 height 当容差 ——
+            // 相邻两行 caret_top 差值 ≈ line.height，`last.h` 会把下一行判成同行，
+            // 于是整段动画留在上一行、最后一帧才 Snap 跳行。
+            let same_row = (target_y - last.y_from).abs() <= 1.0;
             let in_span = target_x >= lo - 1.0 && target_x <= hi + 1.0;
             if same_row && in_span {
                 // target 落在同一文字段内（insert 的 canonical caret 常落在
