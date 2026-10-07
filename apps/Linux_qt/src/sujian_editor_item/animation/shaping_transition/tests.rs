@@ -2634,3 +2634,91 @@ fn scroll_pause_preserves_shaping_transition_progress_without_edit() {
         "平移后 shaping 尚未走完，tick 不得把它清掉"
     );
 }
+
+// ── 评论 35：paused 期间重绘同样冻结 shaping 采样 ──────────────────────────
+
+/// shaping old/new 两侧几何 + opacity 的可比较投影。
+fn shaping_pause_side_tuples(
+    coord: &LinuxEditorAnimationCoordinator,
+    now: Instant,
+) -> Vec<(f64, f64, f64, f64, f64)> {
+    let mut out = Vec::new();
+    for frame in coord.shaping_transition_glyphs(now) {
+        for side in frame.old.iter().chain(frame.new.iter()) {
+            out.push((
+                side.rect.x,
+                side.rect.y,
+                side.rect.w,
+                side.rect.h,
+                side.opacity,
+            ));
+        }
+    }
+    out
+}
+
+/// Issue #826 评论 35 补充测试。
+///
+/// **未覆盖位置**：评论 35 明确要求的两条测试都在 `runtime_tests.rs` 的
+/// item 路径上跑 Frontier + Reflow（shaping 只写了「最好再带一个 fixture」），
+/// 「paused 期间**发生重绘**、且**全程不 resume**」时 shaping 层的采样冻结
+/// 没有任何断言。
+///
+/// 断言：40ms 处 `pause_all`、不 resume，在 t0+100ms / t0+500ms 各重绘采样，
+/// shaping old/new 两侧几何 + opacity 完全等于 pause 那一刻，那块正在淡入的
+/// fi new side 也仍是 40ms 的 opacity。
+/// 旧实现 `shaping_transition_glyphs(frame_now)` 直接按墙钟算 → 540ms 处
+/// opacity 被 clamp 到 1.0 → FAIL。
+#[test]
+fn scroll_pause_freezes_shaping_transition_render_sampling_before_resume() {
+    let snap = shaping_fi_running_at_40ms();
+    let t0 = snap.at;
+    let opacity_at_pause = snap.opacity;
+    assert!(
+        opacity_at_pause > 0.0 && opacity_at_pause < 1.0,
+        "pause 前 shaping 必须在途中，实际 {}",
+        opacity_at_pause
+    );
+    let mut coord = snap.coord;
+
+    let sides_at_pause = shaping_pause_side_tuples(&coord, t0);
+    assert!(
+        !sides_at_pause.is_empty(),
+        "前置：40ms 处必须有 shaping 画面"
+    );
+
+    let _freed = coord.pause_all(t0);
+    assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+
+    for (label, now) in [
+        ("t0+100ms", t0 + Duration::from_millis(100)),
+        ("t0+500ms", t0 + Duration::from_millis(500)),
+    ] {
+        let sides = shaping_pause_side_tuples(&coord, now);
+        assert_eq!(
+            sides, sides_at_pause,
+            "{label}: paused 期间重绘的 shaping old/new 采样必须冻结在 pause 那一刻"
+        );
+    }
+
+    let late = t0 + Duration::from_millis(500);
+    let late_frames = coord.shaping_transition_glyphs(late);
+    let fi_side = late_frames
+        .iter()
+        .flat_map(|frame| frame.new.iter())
+        .find(|side| (side.rect.w - 16.0).abs() < 1e-6)
+        .expect("paused 期间重绘仍必须画出那块正在淡入的 fi new side");
+    assert!(
+        (fi_side.opacity - opacity_at_pause).abs() < 1e-3,
+        "未 resume 时 fi new side opacity 必须仍是 pause 那一刻，实际 {} vs {}",
+        fi_side.opacity,
+        opacity_at_pause
+    );
+
+    // paused 期间 tick 不推进、也不清状态。
+    coord.tick(late);
+    assert!(
+        coord.active_shaping_transition.is_some(),
+        "paused 且未 resume 时 shaping state 必须仍在"
+    );
+}

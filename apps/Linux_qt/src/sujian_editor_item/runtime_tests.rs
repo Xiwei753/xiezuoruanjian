@@ -829,3 +829,286 @@ fn scroll_pause_keeps_render_plan_output_continuous() {
         println!("[BEHAVIOR_VERIFY] 评论34: pause/resume 后 render plan 输出连续");
     });
 }
+
+// ── 评论 35：paused 期间重绘必须冻结在 pause 时刻 ──────────────────────────
+
+/// Issue #826 评论 35：同一 item 上同时建出 Frontier + Reflow + Shaping 三层。
+///
+/// `afb` 在光标 2 处插 `i` -> `afib`：`i` 自己走 Reveal、`b` 右移给 Reflow、
+/// `f` 的像素身份被 `i` 改变给 Shaping transition（评论 33 已证真实排版下
+/// `af -> afi` 会产生 shaping group）。
+fn build_160ms_reveal_reflow_and_shaping(item: &mut SujianEditorItem) -> Instant {
+    item.set_plain_text(QString::from("afb"));
+    item.current_viewport_height = 600.0;
+    item.current_typing_animation_enabled = true;
+    item.pipeline.set_typing_animation_duration_ms(160);
+    let _ = item.pipeline.set_selection(2, 2);
+    item.insert_text(QString::from("i"));
+
+    assert_eq!(
+        item.pipeline.committed_text(),
+        "afib",
+        "前置：afb 中间插 i 必须成功"
+    );
+    let coord = item.pipeline.animation_coordinator();
+    assert!(coord.has_active_edit_frontier(), "前置：必须建出遮罩前沿");
+    let reflow = coord
+        .active_reflow
+        .as_ref()
+        .expect("前置：b 右移必须建出 Reflow");
+    assert!(!reflow.spans.is_empty(), "前置：Reflow spans 不能为空");
+    let shaping = coord
+        .active_shaping_transition
+        .as_ref()
+        .expect("前置：f 受 i 影响必须建出 Shaping transition");
+    assert!(!shaping.is_empty(), "前置：Shaping groups 不能为空");
+    coord
+        .active_edit_frontier
+        .as_ref()
+        .expect("前置：前沿存在")
+        .started_at
+}
+
+/// render plan 的可比较投影：glyph `(x, y, w, h, opacity)`、clip `(x, y, w, h)`。
+fn render_plan_tuples(
+    item: &mut SujianEditorItem,
+    frame_now: Instant,
+) -> (Vec<(f64, f64, f64, f64, f64)>, Vec<(f64, f64, f64, f64)>) {
+    let plan = item
+        .pipeline
+        .animation_coordinator_mut()
+        .build_render_plan_full(
+            CursorRenderState::default(),
+            SelectionPreeditPlan::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            frame_now,
+        );
+    let glyphs = plan
+        .text_animation
+        .glyphs
+        .iter()
+        .map(|g| (g.x, g.y, g.w, g.h, g.opacity))
+        .collect();
+    let clips = plan
+        .clip_rects
+        .iter()
+        .map(|c| (c.x, c.y, c.w, c.h))
+        .collect();
+    (glyphs, clips)
+}
+
+/// shaping old/new 两侧的几何 + opacity 投影（评论 35 至少断言
+/// 「Shaping old/new opacity 不变」）。
+fn shaping_side_tuples(
+    item: &SujianEditorItem,
+    frame_now: Instant,
+) -> Vec<(f64, f64, f64, f64, f64)> {
+    let mut out = Vec::new();
+    for frame in item
+        .pipeline
+        .animation_coordinator()
+        .shaping_transition_glyphs(frame_now)
+    {
+        for side in frame.old.iter().chain(frame.new.iter()) {
+            out.push((
+                side.rect.x,
+                side.rect.y,
+                side.rect.w,
+                side.rect.h,
+                side.opacity,
+            ));
+        }
+    }
+    out
+}
+
+/// Issue #826 评论 35 要求的测试 1。
+///
+/// 步骤：①建 160ms Frontier + Reflow + Shaping；②t0=40ms 先 build render plan
+/// 记 glyph + clip + opacity；③`pause_all(t0)`；④**不调用 resume**，直接在
+/// t0+100ms、t0+500ms 各 build 一次；⑤两次输出都必须与 t0 完全一致。
+///
+/// 旧实现 `build_render_plan_full(frame_now)` 直接按墙钟采样 → 540ms 已到终态
+/// → 输出不同 → FAIL。
+#[test]
+fn scroll_pause_freezes_render_plan_during_repaints_before_resume() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let started_at = build_160ms_reveal_reflow_and_shaping(&mut item);
+
+        let t0 = started_at + Duration::from_millis(40);
+        let mid = t0 + Duration::from_millis(100);
+        let late = t0 + Duration::from_millis(500);
+
+        let (glyphs0, clips0) = render_plan_tuples(&mut item, t0);
+        let shaping0 = shaping_side_tuples(&item, t0);
+        assert!(
+            !glyphs0.is_empty(),
+            "前置：40ms 处 render plan 必须有动画 glyph"
+        );
+        assert!(
+            glyphs0.iter().any(|(_, _, _, _, opacity)| *opacity < 1.0),
+            "前置：40ms 处必须是途中态而不是终态"
+        );
+        assert!(!shaping0.is_empty(), "前置：40ms 处必须有 shaping 画面");
+
+        {
+            let coord = item.pipeline.animation_coordinator_mut();
+            let _freed = coord.pause_all(t0);
+            assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+        }
+
+        for (label, frame_now) in [("t0+100ms", mid), ("t0+500ms", late)] {
+            let (glyphs, clips) = render_plan_tuples(&mut item, frame_now);
+            assert_eq!(
+                glyphs, glyphs0,
+                "{label}: paused 期间重绘的 render plan glyph 必须冻结在 pause 那一刻"
+            );
+            assert_eq!(
+                clips, clips0,
+                "{label}: paused 期间重绘的 render plan clip 必须冻结在 pause 那一刻"
+            );
+            let shaping = shaping_side_tuples(&item, frame_now);
+            assert_eq!(
+                shaping, shaping0,
+                "{label}: paused 期间重绘的 shaping old/new opacity 必须冻结在 pause 那一刻"
+            );
+        }
+
+        println!("[BEHAVIOR_VERIFY] 评论35: paused 期间重绘冻结在 pause 时刻");
+    });
+}
+
+/// Issue #826 评论 35 要求的测试 2。
+///
+/// pause 超过 duration 后直接 render（**仍未 resume**）：active states 仍在、
+/// render 仍是 pause 时刻状态，**不得因为 frame_now 已超过 duration 就显示终态**。
+#[test]
+fn paused_render_plan_does_not_finish_layers_on_wall_clock_time() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let started_at = build_160ms_reveal_reflow_and_shaping(&mut item);
+
+        let t0 = started_at + Duration::from_millis(40);
+        let (glyphs0, clips0) = render_plan_tuples(&mut item, t0);
+        let shaping0 = shaping_side_tuples(&item, t0);
+
+        {
+            let coord = item.pipeline.animation_coordinator_mut();
+            let _freed = coord.pause_all(t0);
+            assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+        }
+
+        // 墙钟远超 160ms duration，但从未 resume。
+        let wall = started_at + Duration::from_millis(400);
+        assert!(
+            (wall - started_at).as_millis() > 160,
+            "前置：墙钟必须已越过 duration"
+        );
+
+        {
+            let coord = item.pipeline.animation_coordinator();
+            assert!(
+                coord.active_edit_frontier.is_some(),
+                "越过 duration 后未 resume，active_edit_frontier 必须仍在"
+            );
+            assert!(
+                coord.active_reflow.is_some(),
+                "越过 duration 后未 resume，active_reflow 必须仍在"
+            );
+            assert!(
+                coord
+                    .active_shaping_transition
+                    .as_ref()
+                    .is_some_and(|shaping| !shaping.is_empty()),
+                "越过 duration 后未 resume，active_shaping_transition 必须仍在"
+            );
+            assert!(
+                coord.has_active_text_animation(wall),
+                "越过 duration 后未 resume，正文动画仍被视为在跑"
+            );
+            let sample = coord
+                .sample_edit_frontier(wall)
+                .expect("越过 duration 后前沿必须可采样");
+            assert!(
+                sample.progress < 1.0,
+                "未 resume 时进度不得按墙钟跑到终态，实际 {}",
+                sample.progress
+            );
+        }
+
+        let (glyphs_wall, clips_wall) = render_plan_tuples(&mut item, wall);
+        assert_eq!(
+            glyphs_wall, glyphs0,
+            "越过 duration 后仍未 resume，render plan glyph 必须停在 pause 时刻"
+        );
+        assert_eq!(
+            clips_wall, clips0,
+            "越过 duration 后仍未 resume，render plan clip 必须停在 pause 时刻"
+        );
+        let shaping_wall = shaping_side_tuples(&item, wall);
+        assert_eq!(
+            shaping_wall, shaping0,
+            "越过 duration 后仍未 resume，shaping old/new opacity 必须停在 pause 时刻"
+        );
+
+        println!("[BEHAVIOR_VERIFY] 评论35: 未 resume 不得按墙钟显示终态");
+    });
+}
+
+/// Issue #826 评论 35 补充测试。
+///
+/// **未覆盖位置**：评论要求的两条测试都只断言 `build_render_plan_full` 这一个
+/// **出口**，没有断言 coordinator 另外两个带 `frame_now` 的正文采样入口 ——
+/// `collect_current_visuals(frame_now)`（每笔编辑的 current visual handoff 采样）
+/// 和 `has_active_text_animation(frame_now)`（是否继续请求下一帧）。
+/// 这两处若仍按墙钟算，即使 render plan 冻住了，交接层与请求帧逻辑照样在
+/// paused 期间往前跑。
+///
+/// 旧实现这两处直接用 `frame_now` → 540ms 处 visuals 已变、状态被判
+/// finished → FAIL。
+#[test]
+fn paused_text_visual_entry_points_freeze_before_resume() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        let started_at = build_160ms_reveal_reflow_and_shaping(&mut item);
+
+        let t0 = started_at + Duration::from_millis(40);
+        let late = t0 + Duration::from_millis(500);
+
+        {
+            let coord = item.pipeline.animation_coordinator_mut();
+            let _freed = coord.pause_all(t0);
+            assert!(coord.is_paused(), "pause_all 之后必须处于 paused");
+        }
+
+        let coord = item.pipeline.animation_coordinator();
+        let visuals0 = coord.collect_current_visuals(t0);
+        assert!(
+            !visuals0.is_empty(),
+            "前置：40ms 处必须能采到 current visual clusters"
+        );
+        let visuals_late = coord.collect_current_visuals(late);
+        assert_eq!(
+            visuals0, visuals_late,
+            "paused 期间 collect_current_visuals 必须冻结在 pause 时刻"
+        );
+
+        let running0 = coord.has_active_text_animation(t0);
+        assert!(running0, "前置：40ms 处正文动画必须在跑");
+        let running_late = coord.has_active_text_animation(late);
+        assert_eq!(
+            running0, running_late,
+            "paused 期间 has_active_text_animation 不得因墙钟越过 duration 而翻转"
+        );
+        assert!(
+            running_late,
+            "paused 且未 resume 时正文动画必须仍被判定为在跑"
+        );
+
+        println!(
+            "[BEHAVIOR_VERIFY] 评论35: collect_current_visuals / has_active_text_animation 也冻结"
+        );
+    });
+}

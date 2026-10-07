@@ -456,6 +456,9 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     pub(crate) fn collect_current_visuals(&self, frame_now: Instant) -> Vec<CurrentVisualCluster> {
+        // Issue #826 评论 35：paused 时正文视觉时间钉在 paused_at，
+        // 无论谁触发重绘（滚动会持续 request_static_repaint）。
+        let frame_now = self.effective_text_animation_time(frame_now);
         let mut out: Vec<CurrentVisualCluster> = Vec::new();
 
         // 1. 吐字侧：scalar reveal 正在打开的 cluster + carry 那一小段可见前缀。
@@ -653,6 +656,7 @@ impl LinuxEditorAnimationCoordinator {
 
     /// Issue #826: 采样本帧遮罩前沿。
     pub(crate) fn sample_edit_frontier(&self, frame_now: Instant) -> Option<EditFrontierSample> {
+        let frame_now = self.effective_text_animation_time(frame_now);
         self.active_edit_frontier
             .as_ref()
             .map(|frontier| frontier.sample(frame_now))
@@ -738,6 +742,7 @@ impl LinuxEditorAnimationCoordinator {
 
     /// Issue #826: 本帧 Reflow 层要画的 glyph。
     pub(crate) fn reflow_glyphs(&self, frame_now: Instant) -> Vec<ReflowSpanFrame> {
+        let frame_now = self.effective_text_animation_time(frame_now);
         self.active_reflow
             .as_ref()
             .map(|reflow| reflow.sample(frame_now))
@@ -882,6 +887,7 @@ impl LinuxEditorAnimationCoordinator {
 
     /// 本帧是否还有任何正文动画在跑。
     pub(crate) fn has_active_text_animation(&self, frame_now: Instant) -> bool {
+        let frame_now = self.effective_text_animation_time(frame_now);
         let frontier_running = self
             .active_edit_frontier
             .as_ref()
@@ -1044,6 +1050,7 @@ impl LinuxEditorAnimationCoordinator {
         &self,
         frame_now: Instant,
     ) -> Vec<ShapingTransitionFrame> {
+        let frame_now = self.effective_text_animation_time(frame_now);
         self.active_shaping_transition
             .as_ref()
             .map(|shaping| shaping.sample(frame_now))
@@ -1116,6 +1123,17 @@ impl LinuxEditorAnimationCoordinator {
     /// 只记 pause 瞬间，各层 progress 停在这一刻；恢复时由 [`Self::resume_all`]
     /// 把暂停时长平移回 `started_at`，所以这是**真 pause 时间轴**，不是
     /// 「先不 tick、恢复后按墙钟直接跳终态」。
+    /// Issue #826 评论 35：正文动画的**实际**采样时刻。
+    ///
+    /// pause 只记 `paused_at` 是不够的：`set_is_scrolling(true)` 自己会
+    /// `request_static_repaint()`，滚动位置变化也会持续触发 Scene Graph 重绘，
+    /// 于是 paused 期间 `build_render_plan_full(frame_now)` 仍按墙钟算
+    /// `frame_now - started_at`，画面会先跳到终态、resume 后又回到 pause 时刻。
+    /// 原则：paused 时无论谁触发重绘，正文视觉时间永远钉在 `paused_at`。
+    pub(crate) fn effective_text_animation_time(&self, frame_now: Instant) -> Instant {
+        self.paused_at.unwrap_or(frame_now)
+    }
+
     pub(crate) fn pause_all(&mut self, now: Instant) -> Vec<LineSnapshotId> {
         self.paused_at = Some(now);
         self.collect_active_snapshot_ids()
