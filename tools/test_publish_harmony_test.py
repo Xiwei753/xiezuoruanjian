@@ -277,6 +277,57 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                 delay_seconds=0,
             )
 
+    def test_device_type_ids_reads_phone_and_tablet(self) -> None:
+        data = {
+            "appInfo": {
+                "deviceTypes": [
+                    {"deviceType": 4, "appAdapters": ""},
+                    {"deviceType": "5", "appAdapters": ""},
+                ]
+            }
+        }
+        self.assertEqual({4, 5}, MODULE.device_type_ids(data))
+
+    def test_sync_test_device_types_writes_phone_and_tablet(self) -> None:
+        calls = []
+        bodies = []
+
+        class FakeCli:
+            def raw(self, *args):
+                calls.append(args)
+                if args[:2] == ("publish", "app-info"):
+                    return {
+                        "ret": {"code": 0},
+                        "appInfo": {
+                            "publishCountry": "CN",
+                            "encrypted": 0,
+                            "deviceTypes": [
+                                {"deviceType": 4, "appAdapters": ""},
+                                {"deviceType": 5, "appAdapters": ""},
+                            ],
+                        },
+                    }
+                if args[:2] == ("publish", "app-info-update"):
+                    body_path = Path(args[args.index("--body") + 1])
+                    bodies.append(__import__("json").loads(body_path.read_text(encoding="utf-8")))
+                    return {"ret": {"code": 0}}
+                raise AssertionError(args)
+
+        MODULE.sync_test_device_types(
+            FakeCli(),
+            app_id="app-1",
+            version_id="version-1",
+        )
+        self.assertEqual(
+            [
+                {"deviceType": 4, "appAdapters": ""},
+                {"deviceType": 5, "appAdapters": ""},
+            ],
+            bodies[0]["deviceTypes"],
+        )
+        self.assertEqual("CN", bodies[0]["publishCountry"])
+        self.assertEqual(0, bodies[0]["encrypted"])
+
     def test_invite_update_body_binds_package_and_group(self) -> None:
         body = MODULE.build_version_update_body(
             version_id="version-1",
