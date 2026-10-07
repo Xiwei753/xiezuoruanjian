@@ -171,7 +171,7 @@ mapfile -t MAIN_RPMS < <(
 
 if [ "${#MAIN_RPMS[@]}" -ne 1 ]; then
     echo "错误: 期望恰好一个 sujian 主 RPM，实际找到 ${#MAIN_RPMS[@]} 个。" >&2
-    printf '  %s\n' "${MAIN_RPMS[@]:-<none>}" >&2
+    find "${RPM_TOPDIR}/RPMS" -type f -name "*.rpm" -print >&2
     exit 1
 fi
 
