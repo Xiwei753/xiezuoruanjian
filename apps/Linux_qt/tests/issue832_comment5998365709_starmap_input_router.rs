@@ -457,8 +457,8 @@ fn child_embed_creation_uses_nested_entry_and_delete_clears_both_sets() {
 fn index_migration_derives_roots_once_from_graph_relations() {
     let src = strip_line_comments(&read_src(CORE_MIGRATION));
     assert!(
-        src.contains("pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 3"),
-        "index schema 必须升级到 3（引入显式 root 集合）"
+        src.contains("pub(crate) const NEW_INDEX_SCHEMA_VERSION: u32 = 4"),
+        "index schema 必须升级到 4（在显式 root 集合之上补 legacy portal 误判修复）"
     );
     let migrate = function_window(&src, "pub fn migrate_index(", 3000);
     assert!(
