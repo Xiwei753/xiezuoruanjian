@@ -226,6 +226,18 @@ jobs:
           path = Path(sys.argv[1])
           source = path.read_text(encoding="utf-8")
 
+          import_anchor = "import * as core from '@actions/core'\n"
+          import_replacement = """import * as core from '@actions/core'
+          import * as fs from 'fs'
+          import * as nodePath from 'path'
+          import { computeFileSha256, getUploadUrl, uploadFile } from './upload'
+          """
+          if source.count(import_anchor) != 1:
+              raise SystemExit(
+                  f"Pinned upstream import anchor count={source.count(import_anchor)}; refusing blind patch"
+              )
+          source = source.replace(import_anchor, import_replacement, 1)
+
           device_anchor = "    pkgId: opts.pkgId\n  }"
           device_replacement = """    pkgId: opts.pkgId
           }
@@ -254,8 +266,26 @@ jobs:
                   f"Pinned upstream languages block bounds not found: start={language_start}, end={language_end}"
               )
 
-          language_replacement = """  // HarmonyOS multi-device test submission requires version-level language
-          // metadata. DeviceMaterial only requires deviceType; visual assets are optional.
+          language_replacement = """  // AGC validates the version icon during submit.
+          const iconPath = nodePath.resolve('apps/harmony/AppScope/resources/base/media/app_icon.png')
+          if (!fs.existsSync(iconPath)) {
+            throw new Error('HarmonyOS AGC app icon file is missing')
+          }
+          const iconStats = fs.statSync(iconPath)
+          const iconSha256 = await computeFileSha256(iconPath)
+          const iconUpload = await getUploadUrl(
+            client,
+            appId,
+            nodePath.basename(iconPath),
+            iconStats.size,
+            iconSha256,
+            6
+          )
+          await uploadFile(iconUpload.urlInfo, iconPath)
+          const iconObjectId = iconUpload.urlInfo.objectId
+          core.info('Uploaded HarmonyOS test-version app icon')
+
+          // HarmonyOS multi-device test submission requires version-level language metadata.
           ;(body as any).languages = [{
             language: opts.agcLanguage || 'zh-CN',
             appName: '素笺',
@@ -263,8 +293,8 @@ jobs:
             briefInfo: '简洁的个人写作工具',
             newFeatures: opts.testContent || opts.testDesc || '素笺自动测试版本',
             deviceMaterials: [
-              { deviceType: 4 },
-              { deviceType: 5 }
+              { deviceType: 4, appIcon: iconObjectId },
+              { deviceType: 5, appIcon: iconObjectId }
             ]
           }]"""
           source = source[:language_start] + language_replacement + source[language_end:]
