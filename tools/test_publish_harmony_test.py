@@ -187,6 +187,26 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
             calls,
         )
 
+    def test_wait_for_package_compile_stops_on_success(self) -> None:
+        calls = []
+
+        class FakeCli:
+            def raw(self, *args):
+                calls.append(args)
+                return {"ret": {"code": 0}, "pkgStateList": [{"successStatus": 0}]}
+
+        MODULE.wait_for_package_compile(
+            FakeCli(),
+            app_id="app-1",
+            pkg_id="pkg-1",
+            attempts=1,
+            delay_seconds=0,
+        )
+        self.assertEqual(
+            [("publish", "compile-status", "-a", "app-1", "--pkg-ids", "pkg-1")],
+            calls,
+        )
+
     def test_invite_update_body_binds_package_and_group(self) -> None:
         body = MODULE.build_version_update_body(
             version_id="version-1",
