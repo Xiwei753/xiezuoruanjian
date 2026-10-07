@@ -149,6 +149,8 @@ jobs:
           cat > "$body_path" <<'JSON'
           {
             "publishCountry": "CN",
+            "privacyPolicy": "https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md",
+            "privacyRightsUrl": "https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md",
             "encrypted": 0,
             "harmonyChildType": 10000000,
             "kindMainTag": 15000029,
@@ -231,7 +233,12 @@ jobs:
           // Huawei test-version metadata is separate from app-level metadata.
           ;(body as any).deviceTypes = [
             { deviceType: 4, appAdapters: '5' }
-          ]"""
+          ]
+          ;(body as any).extInfo = {
+            privacyPolicy: 'https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md',
+            privacyRightsUrl: 'https://github.com/Xiwei753/xiezuoruanjian/blob/main/PRIVACY.md',
+            encrypted: 0
+          }"""
           if source.count(device_anchor) != 1:
               raise SystemExit(
                   f"Pinned upstream pkgId anchor count={source.count(device_anchor)}; refusing blind patch"
