@@ -1022,6 +1022,128 @@ def wait_for_package_compile(
     )
 
 
+def app_info_dict(data: dict[str, Any]) -> dict[str, Any]:
+    value = data.get("appInfo")
+    if isinstance(value, dict):
+        return value
+    for obj in iter_dicts(data):
+        value = obj.get("appInfo")
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def device_type_ids(data: dict[str, Any]) -> set[int]:
+    info = app_info_dict(data)
+    result: set[int] = set()
+    values = info.get("deviceTypes")
+    if isinstance(values, list):
+        for item in values:
+            if isinstance(item, dict):
+                value = item.get("deviceType")
+                if isinstance(value, int):
+                    result.add(value)
+                elif isinstance(value, str) and value.isdigit():
+                    result.add(int(value))
+    return result
+
+
+def sync_test_device_types(
+    cli: "AgcCli",
+    *,
+    app_id: str,
+    version_id: str,
+) -> None:
+    """Ensure AGC test-version metadata matches module deviceTypes.
+
+    Sujian currently ships one HarmonyOS entry for default(phone/foldable) + tablet.
+    AGC Connect API deviceType IDs are 4=phone and 5=tablet.
+    """
+    current = cli.raw(
+        "publish",
+        "app-info",
+        "-a",
+        app_id,
+        "-r",
+        "6",
+        "-v",
+        version_id,
+    )
+    assert isinstance(current, dict)
+    info = app_info_dict(current)
+
+    publish_country = info.get("publishCountry")
+    encrypted = info.get("encrypted")
+    if not publish_country or encrypted is None:
+        fallback = cli.raw(
+            "publish",
+            "app-info",
+            "-a",
+            app_id,
+            "-r",
+            "1",
+        )
+        assert isinstance(fallback, dict)
+        fallback_info = app_info_dict(fallback)
+        publish_country = publish_country or fallback_info.get("publishCountry")
+        if encrypted is None:
+            encrypted = fallback_info.get("encrypted")
+
+    if not publish_country:
+        raise PublishError("AGC app-info 缺少 publishCountry，无法写入设备范围。")
+    if encrypted is None:
+        raise PublishError("AGC app-info 缺少 encrypted，无法写入设备范围。")
+
+    body = {
+        "publishCountry": publish_country,
+        "encrypted": encrypted,
+        "deviceTypes": [
+            {"deviceType": 4, "appAdapters": ""},
+            {"deviceType": 5, "appAdapters": ""},
+        ],
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".json",
+        prefix="sujian-agc-devices-",
+        delete=False,
+    ) as handle:
+        json.dump(body, handle, ensure_ascii=False, separators=(",", ":"))
+        body_path = Path(handle.name)
+    try:
+        cli.raw(
+            "publish",
+            "app-info-update",
+            "-a",
+            app_id,
+            "--body",
+            str(body_path),
+            "-r",
+            "6",
+        )
+    finally:
+        body_path.unlink(missing_ok=True)
+
+    verify = cli.raw(
+        "publish",
+        "app-info",
+        "-a",
+        app_id,
+        "-r",
+        "6",
+        "-v",
+        version_id,
+    )
+    assert isinstance(verify, dict)
+    actual = device_type_ids(verify)
+    if not {4, 5}.issubset(actual):
+        raise PublishError(
+            f"AGC 设备范围写入后读回不完整：actual={sorted(actual)}，expected=[4, 5]"
+        )
+    eprint("AGC 测试设备范围：手机(4) + 平板(5)")
+
+
 def build_version_update_body(
     *,
     version_id: str,
@@ -1098,6 +1220,7 @@ def publish(args: argparse.Namespace) -> None:
     if not version_id:
         raise PublishError("测试版本已创建，但响应里没有 versionId；停止继续写入。")
     eprint(f"测试版本 ID: {version_id}")
+    sync_test_device_types(cli, app_id=app_id, version_id=version_id)
 
     uploaded = cli.raw(
         "upload",
