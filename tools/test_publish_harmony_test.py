@@ -114,6 +114,13 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                 now_ms=0,
             )
 
+    def test_first_list_value_reads_pkg_version(self) -> None:
+        data = {"ret": {"code": 0}, "pkgVersion": ["pkg-123"]}
+        self.assertEqual(
+            "pkg-123",
+            MODULE.first_list_value(data, ("pkgVersion",)),
+        )
+
     def test_collect_groups_deduplicates_nested_results(self) -> None:
         groups = MODULE.collect_groups(
             {
@@ -177,6 +184,26 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
                 ("test", "version-stop", "-a", "app-1", "-v", "old-1"),
                 ("test", "version-delete", "-a", "app-1", "-v", "old-1"),
             ],
+            calls,
+        )
+
+    def test_wait_for_package_compile_stops_on_success(self) -> None:
+        calls = []
+
+        class FakeCli:
+            def raw(self, *args):
+                calls.append(args)
+                return {"ret": {"code": 0}, "pkgStateList": [{"successStatus": 0}]}
+
+        MODULE.wait_for_package_compile(
+            FakeCli(),
+            app_id="app-1",
+            pkg_id="pkg-1",
+            attempts=1,
+            delay_seconds=0,
+        )
+        self.assertEqual(
+            [("publish", "compile-status", "-a", "app-1", "--pkg-ids", "pkg-1")],
             calls,
         )
 
