@@ -297,6 +297,8 @@ tools/setup_harmony_cli.sh
   → tools/build_harmony.sh
   → hvigorw --mode project -p product=default -p buildMode=release assembleApp
   → AGC auth / appId
+  → 查询旧 HarmonyOS 测试版本
+  → 旧版审核中则撤销；已生效则停止；允许删除时删除
   → 新建测试版本（releaseType=6）
   → 上传 .app
   → 添加测试软件包
@@ -393,6 +395,9 @@ AGC_TEST_GROUP_NAME="素笺测试组" ./tools/publish_harmony_test.sh
 ### 安全与失败策略
 
 - 脚本**不会**自动创建/删除证书、Profile、应用、测试群组或测试成员。
+- 默认会替换旧的 HarmonyOS 测试版本：先尝试撤销审核，再尝试停止测试，最后尝试
+  删除；状态不允许的历史版本会保留，不会死循环重试。需要保留旧测试版本时传
+  `--keep-old-versions`，或设置 `AGC_KEEP_OLD_TEST_VERSIONS=1`。
 - 邀请测试没有群组时直接停止；只有一个群组时自动使用；多个群组时不猜，
   必须通过 `AGC_TEST_GROUP_ID` 或 `AGC_TEST_GROUP_NAME` 指定。
 - 构建前只检查 release 签名字段是否为空，不打印字段值。
@@ -400,6 +405,46 @@ AGC_TEST_GROUP_NAME="素笺测试组" ./tools/publish_harmony_test.sh
   拒绝检测到的 debug 包。
 - 任一步拿不到 `versionId`、`objectId` 或 `pkgId` 都立即停止，不继续写 AGC。
 - 默认不会清理旧测试版本，避免在 API 状态不明确时误删。
+
+### GitHub Actions：main 每次 push 自动发测试版
+
+仓库中的 `.github/workflows/harmony_test_publish.yml` 会在每次 `main` push 后运行。
+连续 push 时启用 `cancel-in-progress`，旧流水线会被取消，只保留最新提交继续发布。
+
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions → Secrets** 中添加：
+
+| Secret | 内容 |
+| --- | --- |
+| `AGC_CLIENT_ID` | AGC API Client 的 Client ID |
+| `AGC_CLIENT_SECRET` | AGC API Client 的 Client Secret |
+| `AGC_APP_ID` | 可选；不填则按 `com.xiwei.sujian` 自动查询 |
+| `AGC_TEST_GROUP_ID` | 可选；只有一个测试群组时可不填 |
+| `HARMONY_SIGN_P12_B64` | 发布 `.p12` 文件的 Base64 单行文本 |
+| `HARMONY_SIGN_CER_B64` | 发布 `.cer` 文件的 Base64 单行文本 |
+| `HARMONY_SIGN_PROFILE_B64` | 发布 `.p7b` 文件的 Base64 单行文本 |
+| `HARMONY_SIGN_STORE_PASSWORD` | P12 store password；runner 只临时写入构建配置 |
+| `HARMONY_SIGN_KEY_ALIAS` | P12 key alias |
+| `HARMONY_SIGN_KEY_PASSWORD` | P12 key password |
+
+Linux/Fedora 生成三个文件的 Base64 文本：
+
+```bash
+base64 -w0 release.p12
+base64 -w0 release.cer
+base64 -w0 release.p7b
+```
+
+workflow 只把这些 Secret 解码到 GitHub runner 的 `$RUNNER_TEMP`，并临时改写
+工作区里的 `apps/harmony/build-profile.json5`。这些修改不会 commit，也不会上传
+为 artifact；GitHub runner 结束后临时文件随 runner 销毁。
+
+> `HARMONY_SIGN_STORE_PASSWORD` / `HARMONY_SIGN_KEY_PASSWORD` 填 P12 实际密码。
+> 不要把本机 DevEco 写进 `build-profile.json5` 的加密串误当成 P12 明文密码。
+> 如果两者本来就是同一个密码，就给两个 Secret 填同一个值。
+
+AGC CLI 不靠仓库内固定旧版本。workflow 会先安装当前 DevEco CLI 的
+`hmos-connect-api-cli-skill`，发布脚本再做能力门禁，确认
+`version-list / cancel-review / version-stop / version-delete` 等命令都存在后才写 AGC。
 
 辅助逻辑测试：
 
