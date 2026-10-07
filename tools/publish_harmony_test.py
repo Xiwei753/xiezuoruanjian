@@ -33,6 +33,7 @@ from typing import Any, Iterable, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 HARMONY_DIR = ROOT / "apps" / "harmony"
 BUILD_PROFILE = HARMONY_DIR / "build-profile.json5"
+APP_SCOPE = HARMONY_DIR / "AppScope" / "app.json5"
 DEFAULT_PACKAGE_NAME = "com.xiwei.sujian"
 DEFAULT_CONNECT_API_CLI_NPM_VERSION = "1.1.3"
 
@@ -331,6 +332,39 @@ def disable_hvigor_signing_text(text: str) -> str:
     return updated
 
 
+def resolve_ci_version_code() -> int | None:
+    """Generate a monotonically increasing HarmonyOS versionCode in GitHub CI."""
+    explicit = os.environ.get("HARMONY_CI_VERSION_CODE", "").strip()
+    if explicit:
+        try:
+            code = int(explicit)
+        except ValueError as exc:
+            raise PublishError("HARMONY_CI_VERSION_CODE 必须是整数。") from exc
+    elif os.environ.get("GITHUB_ACTIONS") == "true":
+        try:
+            run_number = int(os.environ["GITHUB_RUN_NUMBER"])
+            run_attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+        except (KeyError, ValueError) as exc:
+            raise PublishError("GitHub Actions 缺少有效的 GITHUB_RUN_NUMBER。") from exc
+        # Keep well below HarmonyOS' signed 32-bit upper bound while remaining
+        # monotonic across normal workflow runs and manual reruns.
+        code = 2_000_000 + run_number * 10 + run_attempt
+    else:
+        return None
+
+    if code < 0 or code >= 2**31:
+        raise PublishError("HarmonyOS versionCode 必须是 0..2147483647。")
+    return code
+
+
+def patch_version_code_text(text: str, version_code: int) -> str:
+    pattern = r'("versionCode"\s*:\s*)\d+'
+    updated, count = re.subn(pattern, rf"\g<1>{version_code}", text, count=1)
+    if count != 1:
+        raise PublishError("无法在 AppScope/app.json5 中定位 versionCode。")
+    return updated
+
+
 def resolve_hvigorw() -> str:
     hvigorw = shutil.which("hvigorw")
     if hvigorw:
@@ -522,6 +556,16 @@ def sign_release_app(unsigned_app: Path, signing: dict[str, str]) -> Path:
 def build_release_app(skip_rust: bool) -> Path:
     direct_signing = resolve_direct_signing()
     original_profile: str | None = None
+    original_app_scope: str | None = None
+
+    ci_version_code = resolve_ci_version_code()
+    if ci_version_code is not None:
+        original_app_scope = APP_SCOPE.read_text(encoding="utf-8")
+        APP_SCOPE.write_text(
+            patch_version_code_text(original_app_scope, ci_version_code),
+            encoding="utf-8",
+        )
+        eprint(f"CI 临时 versionCode：{ci_version_code}")
 
     if direct_signing is None:
         check_release_signing_config()
@@ -555,6 +599,8 @@ def build_release_app(skip_rust: bool) -> Path:
     finally:
         if original_profile is not None:
             BUILD_PROFILE.write_text(original_profile, encoding="utf-8")
+        if original_app_scope is not None:
+            APP_SCOPE.write_text(original_app_scope, encoding="utf-8")
 
     if direct_signing is not None:
         app_path = sign_release_app(app_path, direct_signing)
@@ -874,6 +920,11 @@ def wait_for_package_compile(
         if status == "0":
             eprint(f"软件包解析完成：{pkg_id}")
             return
+        if status == "2":
+            raise PublishError(
+                f"AGC 软件包解析失败：pkgId={pkg_id}，successStatus=2。"
+                "优先检查 versionCode 是否递增、软件包使用场景与 AGC 应用配置。"
+            )
         last_status = status or "unknown"
         eprint(f"软件包仍在解析：successStatus={last_status}")
         if attempt < attempts - 1:
@@ -1150,8 +1201,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--distribute-mode",
         type=int,
         choices=(1, 2),
-        default=int(os.environ.get("AGC_DISTRIBUTE_MODE", "1")),
-        help="1=测试专区（默认），2=AppGallery。",
+        default=int(os.environ.get("AGC_DISTRIBUTE_MODE", "2")),
+        help="1=测试专区，2=AppGallery（邀请测试默认）。",
     )
     parser.add_argument(
         "--start-time-ms",
