@@ -71,7 +71,7 @@ class StatsBridge internal constructor(private val holder: WriterAppServiceHolde
         cause: EditorTransactionCauseDto,
         insertedChars: Int,
         deletedChars: Int,
-    ): BridgeResult<Boolean> =
+    ): BridgeResult<Unit> =
         holder.wrapResult {
             holder.service.recordEditorChangeStats(
                 EditorChangeStatsInputDto(
