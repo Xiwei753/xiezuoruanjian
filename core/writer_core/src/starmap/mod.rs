@@ -107,7 +107,7 @@ fn change_set_for_meta_and_index(
 }
 
 fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
-    // 在读取 index 之前先做一次旧格式迁移（schema 1 -> 2）。
+    // 在读取 index 之前先做一次旧格式迁移（schema 1/2/3 -> 4）。
     // 迁移是幂等的：已经是新格式则跳过；未知版本 fail-closed 返回 Err。
     migration::migrate_index(app_data_root)?;
 
@@ -678,17 +678,16 @@ pub fn find_starmap_references(
 /// 1. 扫描所有星图的 `graph.embeds[].target_starmap_id`，这些目标不进入一级列表。
 /// 2. 兼容旧版"伪子星图"：旧实现用 Note 节点 + portal（destination_target=null）
 ///    来模拟子星图嵌入。旧生成签名里 `portal.destination_starmap_id` 直接指向被嵌入
-///    的子星图 id，因此按 `portal.destination_starmap_id` 判断该子星图应被排除，
-///    不再按节点标题匹配（标题同名星图可能不止一个，按标题匹配会误伤）。
+///    的子星图 id，因此按 `portal.destination_starmap_id` 判断该子星图应被排除。
+///    根/子身份只看稳定 id 关系，节点改名不能把子星图"改成根图"。
 pub(crate) fn filter_root_starmaps(
     all_starmaps: Vec<StarMapMeta>,
     graphs: &[crate::starmap::types::StarMapGraph],
 ) -> Vec<StarMapMeta> {
-    // starmap_id → title：用于 legacy child 判断时校验 portal 目标确实是
-    // 旧实现的子星图（destination_target 为 null 且目标 id 在已知星图集合中）。
-    let titles_by_id: std::collections::HashMap<String, String> = all_starmaps
+    // 已知星图 id 集合：用于判断 portal 目标是否指向当前存在的星图。
+    let known_ids: std::collections::HashSet<String> = all_starmaps
         .iter()
-        .map(|sm| (sm.starmap_id.clone(), sm.title.clone()))
+        .map(|sm| sm.starmap_id.clone())
         .collect();
 
     // 收集所有应从一级列表排除的 starmap_id（embed 目标 + legacy child）。
@@ -701,8 +700,9 @@ pub(crate) fn filter_root_starmaps(
         }
 
         // Legacy child：Note + portal 非空 + destination_target 为 null
-        // + portal.destination_starmap_id 指向已知星图且其标题与节点标题一致
+        // + portal.destination_starmap_id 指向当前已知星图集合
         // → 该目标星图是旧实现的伪子星图，排除。
+        // 不比较节点标题与目标星图标题：根/子身份只看稳定 id 关系。
         for node in &graph.nodes {
             if node.kind != crate::starmap::types::StarMapNodeKind::Note {
                 continue;
@@ -711,11 +711,8 @@ pub(crate) fn filter_root_starmaps(
                 continue;
             };
             let target_id = &portal.destination_starmap_id;
-            let is_legacy_child = portal.destination_target.is_none()
-                && titles_by_id
-                    .get(target_id)
-                    .map(|title| title == &node.title)
-                    .unwrap_or(false);
+            let is_legacy_child =
+                portal.destination_target.is_none() && known_ids.contains(target_id);
             if is_legacy_child {
                 excluded.insert(target_id.clone());
             }

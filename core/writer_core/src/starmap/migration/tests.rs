@@ -16,11 +16,11 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) {
 }
 
 // ---------------------------------------------------------------------------
-// index schema 1 -> 3 / 2 -> 3
+// index schema 1 -> 4 / 2 -> 4 / 3 -> 4
 // ---------------------------------------------------------------------------
 
 #[test]
-fn migrate_index_schema_1_to_3() {
+fn migrate_index_schema_1_to_4() {
     let dir = temp_root();
     let index_path = dir.path().join("starmaps").join("index.json");
 
@@ -79,7 +79,7 @@ fn migrate_index_schema_1_to_3() {
 
     let migrated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
-    assert_eq!(migrated["schemaVersion"], json!(3));
+    assert_eq!(migrated["schemaVersion"], json!(4));
     assert_eq!(migrated["starmapIds"], json!(["sm_a", "sm_b", "sm_c"]));
     assert_eq!(
         migrated["rootStarmapIds"],
@@ -98,7 +98,7 @@ fn migrate_index_skips_already_new_schema() {
     let index_path = dir.path().join("starmaps").join("index.json");
 
     let new_index = json!({
-        "schemaVersion": 3,
+        "schemaVersion": 4,
         "starmapIds": ["sm_x"],
         "rootStarmapIds": ["sm_x"],
         "mainStarmapByProject": {},
@@ -111,14 +111,14 @@ fn migrate_index_skips_already_new_schema() {
     let migrated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
     // 没有变化。
-    assert_eq!(migrated["schemaVersion"], json!(3));
+    assert_eq!(migrated["schemaVersion"], json!(4));
     assert_eq!(migrated["updatedAt"], json!(999));
 }
 
 /// schema 2（只有 starmap_ids）第一次升级：用 Embed 关系一次性推导 root 集合，
 /// 已嵌入的 child 不进入一级列表，迁移结果持久化。
 #[test]
-fn migrate_index_schema_2_to_3_derives_roots_from_embeds() {
+fn migrate_index_schema_2_to_4_derives_roots_from_embeds() {
     let dir = temp_root();
     write_v2_index(dir.path(), &["sm_host", "sm_child"]);
 
@@ -148,7 +148,7 @@ fn migrate_index_schema_2_to_3_derives_roots_from_embeds() {
 
     let migrated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(index_path_of(dir.path())).unwrap()).unwrap();
-    assert_eq!(migrated["schemaVersion"], json!(3));
+    assert_eq!(migrated["schemaVersion"], json!(4));
     assert_eq!(migrated["starmapIds"], json!(["sm_host", "sm_child"]));
     assert_eq!(
         migrated["rootStarmapIds"],
@@ -162,19 +162,19 @@ fn migrate_index_schema_2_to_3_derives_roots_from_embeds() {
     assert_eq!(roots[0].starmap_id, "sm_host");
 }
 
-/// schema 2 → 3 迁移同样识别旧版"伪子星图"（Note + portal，destinationTarget 为空）：
-/// 该目标不进入一级列表。
+/// schema 2 → 4 迁移同样识别旧版"伪子星图"（Note + portal，destinationTarget 为空）：
+/// 该目标不进入一级列表。节点标题与子星图标题不同（对应真实旧数据）。
 #[test]
-fn migrate_index_schema_2_to_3_excludes_legacy_portal_children() {
+fn migrate_index_schema_2_to_4_excludes_legacy_portal_children() {
     let dir = temp_root();
     write_v2_index(dir.path(), &["sm_host", "sm_legacy_child"]);
     write_starmap_meta(dir.path(), "sm_host", "Host");
-    write_starmap_meta(dir.path(), "sm_legacy_child", "Legacy Child");
+    write_starmap_meta(dir.path(), "sm_legacy_child", "子星图");
 
     let mut store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
     store.add_node(crate::starmap::types::StarMapNode {
         id: "n_portal".to_string(),
-        title: "Legacy Child".to_string(),
+        title: "入口节点".to_string(),
         kind: crate::starmap::types::StarMapNodeKind::Note,
         payload: None,
         tags: vec![],
@@ -199,8 +199,126 @@ fn migrate_index_schema_2_to_3_excludes_legacy_portal_children() {
     assert_eq!(
         migrated["rootStarmapIds"],
         json!(["sm_host"]),
-        "legacy portal child 不进入一级列表"
+        "legacy portal child 不进入一级列表，即使节点标题与子星图标题不同"
     );
+}
+
+/// schema 3 → 4 迁移：只清理 legacy portal 错收的 root，不重算其他显式 root。
+///
+/// 场景：
+/// - sm_host 是一级星图（在 root_starmap_ids 中）
+/// - sm_legacy_child 是被 legacy portal 错收为 root 的子星图（在 root_starmap_ids 中，
+///   但实际有 Note + portal(destination_target=None) 指向它）
+/// - sm_explicit_root 是合法的一级星图（在 root_starmap_ids 中，没有任何 portal 指向它）
+/// - sm_embedded_child 是被 Embed 的子星图（不在 root_starmap_ids 中）
+///
+/// 迁移后：sm_host 和 sm_explicit_root 保留为 root，sm_legacy_child 被移除，
+/// sm_embedded_child 不变（本来就不在 root 里）。
+#[test]
+fn migrate_index_schema_3_to_4_only_removes_legacy_portal_roots() {
+    let dir = temp_root();
+    let index_path = index_path_of(dir.path());
+
+    // schema 3 index：root_starmap_ids 包含 sm_host、sm_legacy_child、sm_explicit_root
+    let v3_index = json!({
+        "schemaVersion": 3,
+        "starmapIds": ["sm_host", "sm_legacy_child", "sm_explicit_root", "sm_embedded_child"],
+        "rootStarmapIds": ["sm_host", "sm_legacy_child", "sm_explicit_root"],
+        "mainStarmapByProject": {},
+        "updatedAt": 999,
+    });
+    write_json(&index_path, &v3_index);
+
+    write_starmap_meta(dir.path(), "sm_host", "Host");
+    write_starmap_meta(dir.path(), "sm_legacy_child", "子星图");
+    write_starmap_meta(dir.path(), "sm_explicit_root", "Explicit Root");
+    write_starmap_meta(dir.path(), "sm_embedded_child", "Embedded Child");
+
+    // sm_host 有 legacy portal 指向 sm_legacy_child
+    let mut host_store = crate::starmap::store::StarMapStore::new(dir.path(), "sm_host");
+    host_store.add_node(crate::starmap::types::StarMapNode {
+        id: "n_portal".to_string(),
+        title: "入口节点".to_string(),
+        kind: crate::starmap::types::StarMapNodeKind::Note,
+        payload: None,
+        tags: vec![],
+        content: Default::default(),
+        anchors: vec![],
+        portal: Some(crate::starmap::semantic::StarMapPortal {
+            destination_starmap_id: "sm_legacy_child".to_string(),
+            destination_target: None,
+        }),
+        position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
+        style: Default::default(),
+        provenance: Default::default(),
+        created_at: 0,
+        updated_at: 0,
+    });
+    // sm_host 同时 Embed 了 sm_embedded_child（合法一级星图被嵌入别处不应丢失 root 身份）
+    host_store.add_embed(crate::starmap::types::StarMapEmbed {
+        instance_id: "emb_child".to_string(),
+        target_starmap_id: "sm_embedded_child".to_string(),
+        label: None,
+        position: crate::starmap::types::StarMapPoint { x: 0.0, y: 0.0 },
+        host_path: crate::starmap::types::reference::StarMapTargetPath {
+            starmap_id: "sm_host".to_string(),
+            segments: vec![],
+            target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
+        },
+        provenance: Default::default(),
+        created_at: 0,
+        updated_at: 0,
+    }).unwrap();
+    host_store.flush().unwrap();
+
+    migrate_index(dir.path()).unwrap();
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+    assert_eq!(migrated["schemaVersion"], json!(4));
+    // sm_legacy_child 被 legacy portal 指向 → 从 root 移除
+    // sm_host 和 sm_explicit_root 保留为 root
+    // sm_embedded_child 本来不在 root 里，Embed 关系不影响（schema 3→4 不重算）
+    let root_ids = migrated["rootStarmapIds"].as_array().unwrap();
+    assert!(
+        root_ids.iter().any(|v| v == &json!("sm_host")),
+        "sm_host must remain root"
+    );
+    assert!(
+        root_ids.iter().any(|v| v == &json!("sm_explicit_root")),
+        "sm_explicit_root must remain root"
+    );
+    assert!(
+        !root_ids.iter().any(|v| v == &json!("sm_legacy_child")),
+        "sm_legacy_child must be removed from root (legacy portal child)"
+    );
+    assert!(
+        !root_ids.iter().any(|v| v == &json!("sm_embedded_child")),
+        "sm_embedded_child must not appear in root (was not root before)"
+    );
+}
+
+/// schema 3 → 4 迁移幂等性：已经是 schema 4 的 index 不被重复迁移。
+#[test]
+fn migrate_index_schema_4_skips() {
+    let dir = temp_root();
+    let index_path = index_path_of(dir.path());
+
+    let v4_index = json!({
+        "schemaVersion": 4,
+        "starmapIds": ["sm_a"],
+        "rootStarmapIds": ["sm_a"],
+        "mainStarmapByProject": {},
+        "updatedAt": 999,
+    });
+    write_json(&index_path, &v4_index);
+
+    migrate_index(dir.path()).unwrap();
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+    assert_eq!(migrated["schemaVersion"], json!(4));
+    assert_eq!(migrated["updatedAt"], json!(999));
 }
 
 fn index_path_of(app_data_root: &std::path::Path) -> std::path::PathBuf {
