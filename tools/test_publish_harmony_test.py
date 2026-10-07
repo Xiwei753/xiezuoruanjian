@@ -38,6 +38,58 @@ class PublishHarmonyTestHelpers(unittest.TestCase):
         )
         self.assertEqual([("g1", "Alpha"), ("g2", "Beta")], groups)
 
+    def test_collect_test_versions_filters_commercial_and_deduplicates(self) -> None:
+        versions = MODULE.collect_test_versions(
+            {
+                "data": [
+                    {"versionId": "commercial", "releaseType": 1, "state": 2},
+                    {"versionId": "test-1", "releaseType": 6, "state": 3},
+                    {"versionId": "test-1", "releaseType": 6, "state": 3},
+                    {"versionId": "test-2", "testType": 3, "status": "review"},
+                ]
+            }
+        )
+        self.assertEqual([("test-1", "3"), ("test-2", "review")], versions)
+
+    def test_cleanup_old_versions_uses_cancel_stop_delete_sequence(self) -> None:
+        calls = []
+
+        class FakeCli:
+            def raw(self, *args):
+                calls.append(args)
+                return {
+                    "versions": [
+                        {"versionId": "old-1", "releaseType": 6, "state": "review"}
+                    ]
+                }
+
+            def try_raw(self, *args):
+                calls.append(args)
+                return True, {"ret": {"code": 0}}
+
+        removed = MODULE.cleanup_old_test_versions(
+            FakeCli(),
+            app_id="app-1",
+            package_name="com.xiwei.sujian",
+        )
+        self.assertEqual(["old-1"], removed)
+        self.assertEqual(
+            [
+                (
+                    "publish",
+                    "version-list",
+                    "-a",
+                    "app-1",
+                    "-p",
+                    "com.xiwei.sujian",
+                ),
+                ("publish", "cancel-review", "-a", "app-1", "-v", "old-1"),
+                ("test", "version-stop", "-a", "app-1", "-v", "old-1"),
+                ("test", "version-delete", "-a", "app-1", "-v", "old-1"),
+            ],
+            calls,
+        )
+
     def test_invite_update_body_binds_package_and_group(self) -> None:
         body = MODULE.build_version_update_body(
             version_id="version-1",
