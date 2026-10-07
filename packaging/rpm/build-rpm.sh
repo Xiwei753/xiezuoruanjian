@@ -152,11 +152,28 @@ rpmbuild -bb \
     "${RPM_TOPDIR}/SPECS/${NAME}.spec"
 
 # ---------------------------------------------------------------------------
-# 7. 输出产物路径并复制到 dist/rpm/
+# 7. 只把用户实际安装需要的主 RPM 复制到 dist/rpm/
 # ---------------------------------------------------------------------------
 DIST_DIR="${REPO_ROOT}/dist/rpm"
 mkdir -p "${DIST_DIR}"
+find "${DIST_DIR}" -maxdepth 1 -type f -name "*.rpm" -delete
+
 echo "==> 完成。RPM 产物位于: ${RPM_TOPDIR}/RPMS"
 find "${RPM_TOPDIR}/RPMS" -name "*.rpm" -print
-find "${RPM_TOPDIR}/RPMS" -name "*.rpm" -exec cp {} "${DIST_DIR}/" \;
-echo "==> RPM 已复制到: ${DIST_DIR}"
+
+mapfile -t MAIN_RPMS < <(
+    find "${RPM_TOPDIR}/RPMS" -type f \
+        -name "${NAME}-${VERSION}-${RELEASE}*.rpm" \
+        ! -name "*-debuginfo-*" \
+        ! -name "*-debugsource-*" \
+        -print
+)
+
+if [ "${#MAIN_RPMS[@]}" -ne 1 ]; then
+    echo "错误: 期望恰好一个 sujian 主 RPM，实际找到 ${#MAIN_RPMS[@]} 个。" >&2
+    printf '  %s\n' "${MAIN_RPMS[@]:-<none>}" >&2
+    exit 1
+fi
+
+cp "${MAIN_RPMS[0]}" "${DIST_DIR}/"
+echo "==> 主 RPM 已复制到: ${DIST_DIR}/$(basename "${MAIN_RPMS[0]}")"
