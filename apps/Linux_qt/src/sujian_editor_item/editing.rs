@@ -548,6 +548,9 @@ impl SujianEditorItem {
             let new = self.pipeline.snapshot();
             let _ = self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
+            // Issue #843: Undo 也上报编辑事实，使统计能正确回退。
+            // result.cause 是 Undo，content_delta 是真实逆向字符变化。
+            self.emit_editor_change_fact(result.cause, &result);
         }
     }
 
@@ -560,6 +563,9 @@ impl SujianEditorItem {
             let new = self.pipeline.snapshot();
             let _ = self.record_transaction(old, new, &result, true);
             self.emit_content_changed();
+            // Issue #843: Redo 也上报编辑事实，使统计能正确重放。
+            // result.cause 是 Redo，content_delta 是真实正向字符变化。
+            self.emit_editor_change_fact(result.cause, &result);
         }
     }
 

@@ -11,6 +11,8 @@ pub mod linux_qt_layout_plan_dto;
 pub mod linux_qt_workbench_plan_dto;
 pub mod linux_theme_controller;
 pub(crate) mod message_key_mapper;
+/// Issue #843：异步串行统计写入器，避免统计 I/O 阻塞 UI 线程。
+pub(crate) mod stats_writer;
 /// Issue #727 评论 5755858583 问题3: 统一深色主题链为 ResolvedThemeUiSnapshot。
 pub mod resolved_theme_snapshot;
 

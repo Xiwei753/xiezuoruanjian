@@ -124,6 +124,24 @@ pub(crate) struct EditApplyOutcome {
 }
 
 impl SujianEditorItem {
+    /// Issue #843: 发编辑事实 signal。纯 cursor/selection 移动（content_delta 全 0）不发。
+    ///
+    /// `apply_edit_with_visuals` 用 visual_cause（当前真实输入语义）调用；
+    /// `undo` / `redo` 用 `result.cause`（Undo/Redo）调用，使撤销/重做也上报统计事实。
+    pub(crate) fn emit_editor_change_fact(
+        &self,
+        cause: writer_core::editor::EditorTransactionCause,
+        result: &writer_core::editor::EditorEditResult,
+    ) {
+        if result.content_delta.inserted_chars > 0 || result.content_delta.deleted_chars > 0 {
+            self.editor_change_applied(
+                QString::from(format!("{:?}", cause)),
+                result.content_delta.inserted_chars,
+                result.content_delta.deleted_chars,
+            );
+        }
+    }
+
     /// Issue #819 评论 5956495850 第 1 节：正文修改主链唯一入口。
     ///
     /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
@@ -391,13 +409,7 @@ impl SujianEditorItem {
             let result = edit_result
                 .as_ref()
                 .expect("edit_result is Some when applied is true");
-            if result.content_delta.inserted_chars > 0 || result.content_delta.deleted_chars > 0 {
-                self.editor_change_applied(
-                    QString::from(format!("{:?}", visual_cause)),
-                    result.content_delta.inserted_chars,
-                    result.content_delta.deleted_chars,
-                );
-            }
+            self.emit_editor_change_fact(visual_cause, result);
         }
 
         // 5. 保存 new snapshot

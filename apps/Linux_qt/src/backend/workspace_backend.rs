@@ -375,7 +375,15 @@ impl AppBackend {
         // 旧同步回调捕获的是旧 generation，回调时校验不匹配会丢弃结果。
         self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
-        self.current_workspace_git_layout = Some(layout);
+        self.current_workspace_git_layout = Some(layout.clone());
+        // Issue #843: 创建异步统计写入器，避免统计 I/O 阻塞 UI 线程。
+        // worker thread 持有自己的 WriterCoreApi，串行消费编辑事实写盘。
+        // workspace 切换时旧 writer drop（worker 自然退出），新 writer 用新 root 重建。
+        self.stats_writer = Some(crate::backend::stats_writer::StatsWriterHandle::start(
+            path.to_string(),
+            projects_root_str.clone(),
+            layout,
+        ));
         self.current_save_status = "已保存".to_string();
         self.reload_tree();
 
@@ -496,6 +504,8 @@ impl AppBackend {
         self.current_sync_progress = None;
 
         self.flush_recent_edits();
+        // Issue #843: drop 旧统计写入器，worker 线程自然退出，避免旧 workspace 事件写进新 root。
+        self.stats_writer = None;
         // Clear data root state
         self.current_data_root = "".to_string();
         self.current_projects_root = "".to_string();

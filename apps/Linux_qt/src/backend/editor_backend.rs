@@ -300,7 +300,7 @@ impl EditorBackend {
             }
         };
         if self
-            .with_app_mut(|app| {
+            .with_app(|app| {
                 app.record_editor_change_stats(
                     project_id,
                     volume_id,

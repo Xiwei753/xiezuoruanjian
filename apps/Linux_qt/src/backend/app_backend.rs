@@ -334,6 +334,11 @@ pub struct AppBackend {
     /// 都重新 bootstrap（ensure .git + recover_storage_transactions）。
     /// 后台同步线程也 clone 此 layout 快照，避免每次同步都完整 bootstrap。
     current_workspace_git_layout: Option<writer_core::storage::git_repo_layout::GitRepoLayout>,
+    /// Issue #843: 进程内唯一的异步统计写入器。
+    /// UI 线程 enqueue，独立 worker thread 串行写盘，不阻塞输入热路径。
+    /// workspace 切换时旧 writer drop（worker 自然退出），新 writer 用新 root 重建。
+    /// `Option<StatsWriterHandle>` 的 `Default` 是 `None`，满足 `#[derive(Default)]`。
+    stats_writer: Option<crate::backend::stats_writer::StatsWriterHandle>,
     /// Issue #729：workspace 身份 generation。每次成功打开工作区或重置工作区时递增。
     /// 同步线程启动时捕获此值，回调时校验是否仍等于当前 generation，
     /// 不相等说明工作区已切换，旧同步结果必须丢弃，避免污染新工作区状态。

@@ -9,8 +9,11 @@ impl AppBackend {
     ///
     /// 平台端只透传编辑事实（cause + inserted/deleted），不自己拼 source、device_id、session_id。
     /// `cause → EventSource` 映射和设备身份管理由 Core 内部完成。
+    ///
+    /// Issue #843: 不再在 UI 线程同步写盘。只把命令 enqueue 到独立 worker thread，
+    /// 避免每次按键的文件系统 I/O 阻塞输入热路径。
     pub(crate) fn record_editor_change_stats(
-        &mut self,
+        &self,
         project_id: QString,
         volume_id: QString,
         chapter_id: QString,
@@ -18,22 +21,15 @@ impl AppBackend {
         inserted_chars: u32,
         deleted_chars: u32,
     ) {
-        let pid = project_id.to_string();
-        let vid = volume_id.to_string();
-        let cid = chapter_id.to_string();
-
-        if let Some(core) = self.core_api() {
-            if let Err(e) = writing_bridge::record_editor_change_stats(
-                &core,
-                &pid,
-                &vid,
-                &cid,
+        if let Some(ref writer) = self.stats_writer {
+            writer.enqueue(crate::backend::stats_writer::StatsWriteCommand {
+                project_id: project_id.to_string(),
+                volume_id: volume_id.to_string(),
+                chapter_id: chapter_id.to_string(),
                 cause,
                 inserted_chars,
                 deleted_chars,
-            ) {
-                self.debug_error("stats", "record_editor_change_stats_failed", &e.to_string());
-            }
+            });
         }
     }
 
