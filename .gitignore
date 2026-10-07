@@ -25,6 +25,7 @@ build/
 *.aab
 *.so
 *.hap
+*.app
 dist/
 compile_commands.json
 
@@ -75,6 +76,7 @@ logs/
 tmp/
 
 # Secrets / local config
+.certs/
 .github-token
 .gitee-token
 .env*
