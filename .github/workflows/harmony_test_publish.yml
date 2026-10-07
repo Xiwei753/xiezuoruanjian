@@ -151,7 +151,7 @@ jobs:
           profile_path.write_text(text, encoding="utf-8")
           PY
 
-      - name: Install HarmonyOS CLI and AGC skill
+      - name: Install HarmonyOS CLI and AGC publisher
         if: steps.secrets.outputs.ready == 'true'
         shell: bash
         run: |
@@ -163,21 +163,15 @@ jobs:
           echo "$HARMONY_CLI_HOME/tool/node/bin" >> "$GITHUB_PATH"
           echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
 
-          deveco_root="$RUNNER_TEMP/deveco-cli"
-          npm install --prefix "$deveco_root" @deveco/deveco-cli@latest
-          export DEVECO_CLI_CLT_PATH="$HARMONY_CLI_HOME"
-          "$deveco_root/node_modules/.bin/devecocli" skills add \
-            --skill hmos-connect-api-cli-skill \
-            --agent opencode \
-            --project "$GITHUB_WORKSPACE"
-
-          cli_js="$(find "$GITHUB_WORKSPACE/.opencode/skills" \
-            -path '*/hmos-connect-api-cli-skill/scripts/connect-api-cli.js' \
-            -type f -print -quit)"
-          if [ -z "$cli_js" ]; then
-            echo "hmos-connect-api-cli-skill installed but connect-api-cli.js was not found" >&2
-            exit 1
-          fi
+          # The AGC publisher is a standalone bundled Node.js script.  Do not
+          # install it through a desktop coding-agent integration: GitHub
+          # runners do not need OpenCode/Claude/Codex just to publish an app.
+          cli_js="$RUNNER_TEMP/connect-api-cli.js"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/IsKenKenYa/skills/ff4b6750dbc4b3a50d46253ca28b02398a03746b/skills/harmonyos/launch-and-distribute/hmos-connect-api-cli-skill/scripts/connect-api-cli.js" \
+            --output "$cli_js"
+          chmod 700 "$cli_js"
+          node "$cli_js" --version
           echo "CONNECT_API_CLI_JS=$cli_js" >> "$GITHUB_ENV"
 
       - name: Ensure Rust toolchain
