@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import unittest
+from unittest import mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("publish_harmony_test.py")
@@ -11,6 +12,22 @@ SPEC.loader.exec_module(MODULE)
 
 
 class PublishHarmonyTestHelpers(unittest.TestCase):
+    def test_resolve_hvigorw_uses_cli_path(self) -> None:
+        with mock.patch.object(
+            MODULE.shutil,
+            "which",
+            return_value="/home/runner/.harmony-cli/bin/hvigorw",
+        ):
+            self.assertEqual(
+                "/home/runner/.harmony-cli/bin/hvigorw",
+                MODULE.resolve_hvigorw(),
+            )
+
+    def test_resolve_hvigorw_requires_cli_path(self) -> None:
+        with mock.patch.object(MODULE.shutil, "which", return_value=None):
+            with self.assertRaises(MODULE.PublishError):
+                MODULE.resolve_hvigorw()
+
     def test_parse_last_json_prefers_outer_response(self) -> None:
         data = MODULE.parse_last_json(
             'progress\\n{"ret":{"code":0,"msg":"success"},"versionId":"v1"}\\n'
