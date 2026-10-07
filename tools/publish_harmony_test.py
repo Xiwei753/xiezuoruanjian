@@ -333,6 +333,35 @@ class AgcCli:
         version_output = (proc.stdout or proc.stderr or "").strip()
         if version_output:
             eprint(f"connect-api-cli: {version_output.splitlines()[-1]}")
+
+        # Do this capability gate before the first AGC write. The npm package and
+        # the DevEco embedded skill are released independently; an older npm build
+        # may exist but not yet contain all Testing API commands.
+        probe = subprocess.run(
+            [*self.command, "test", "--help"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        test_help = (probe.stdout or "") + "\n" + (probe.stderr or "")
+        required_commands = (
+            "version-create",
+            "pkg-add",
+            "version-update",
+            "version-submit",
+            "group-list",
+        )
+        missing = [name for name in required_commands if name not in test_help]
+        if probe.returncode != 0 or missing:
+            raise PublishError(
+                "当前 connect-api-cli 不包含完整 Testing API 命令"
+                + (f"（缺少：{', '.join(missing)}）" if missing else "")
+                + "。优先安装官方 hmos-connect-api-cli-skill，或设置 "
+                "CONNECT_API_CLI_JS 指向该 skill 的 scripts/connect-api-cli.js。"
+            )
+
         # auth status may be text rather than JSON. A missing/invalid credential must
         # fail here before any remote write.
         proc = run([*self.command, "auth", "status"], capture=True)
