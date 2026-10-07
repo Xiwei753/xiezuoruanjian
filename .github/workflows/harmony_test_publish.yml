@@ -1,0 +1,158 @@
+name: HarmonyOS Test Publish
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: harmony-test-publish
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish HarmonyOS test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AGC_AUTH_MODE: client_credentials
+      AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+      AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+      AGC_APP_ID: ${{ secrets.AGC_APP_ID }}
+      AGC_TEST_GROUP_ID: ${{ secrets.AGC_TEST_GROUP_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Validate required secrets
+        shell: bash
+        env:
+          HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
+          HARMONY_SIGN_CER_B64: ${{ secrets.HARMONY_SIGN_CER_B64 }}
+          HARMONY_SIGN_PROFILE_B64: ${{ secrets.HARMONY_SIGN_PROFILE_B64 }}
+          HARMONY_SIGN_STORE_PASSWORD: ${{ secrets.HARMONY_SIGN_STORE_PASSWORD }}
+          HARMONY_SIGN_KEY_ALIAS: ${{ secrets.HARMONY_SIGN_KEY_ALIAS }}
+          HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          required=(
+            AGC_CLIENT_ID
+            AGC_CLIENT_SECRET
+            HARMONY_SIGN_P12_B64
+            HARMONY_SIGN_CER_B64
+            HARMONY_SIGN_PROFILE_B64
+            HARMONY_SIGN_STORE_PASSWORD
+            HARMONY_SIGN_KEY_ALIAS
+            HARMONY_SIGN_KEY_PASSWORD
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Missing GitHub Actions secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Run publisher helper tests
+        run: python3 tools/test_publish_harmony_test.py
+
+      - name: Prepare HarmonyOS release signing
+        shell: bash
+        env:
+          HARMONY_SIGN_P12_B64: ${{ secrets.HARMONY_SIGN_P12_B64 }}
+          HARMONY_SIGN_CER_B64: ${{ secrets.HARMONY_SIGN_CER_B64 }}
+          HARMONY_SIGN_PROFILE_B64: ${{ secrets.HARMONY_SIGN_PROFILE_B64 }}
+          HARMONY_SIGN_STORE_PASSWORD: ${{ secrets.HARMONY_SIGN_STORE_PASSWORD }}
+          HARMONY_SIGN_KEY_ALIAS: ${{ secrets.HARMONY_SIGN_KEY_ALIAS }}
+          HARMONY_SIGN_KEY_PASSWORD: ${{ secrets.HARMONY_SIGN_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          sign_dir="$RUNNER_TEMP/sujian-harmony-signing"
+          mkdir -p "$sign_dir"
+
+          printf '%s' "$HARMONY_SIGN_P12_B64" | base64 --decode > "$sign_dir/release.p12"
+          printf '%s' "$HARMONY_SIGN_CER_B64" | base64 --decode > "$sign_dir/release.cer"
+          printf '%s' "$HARMONY_SIGN_PROFILE_B64" | base64 --decode > "$sign_dir/release.p7b"
+
+          python3 - "$sign_dir" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          sign_dir = Path(sys.argv[1]).resolve()
+          profile_path = Path("apps/harmony/build-profile.json5")
+          text = profile_path.read_text(encoding="utf-8")
+
+          values = {
+              "storeFile": str(sign_dir / "release.p12"),
+              "storePassword": os.environ["HARMONY_SIGN_STORE_PASSWORD"],
+              "keyAlias": os.environ["HARMONY_SIGN_KEY_ALIAS"],
+              "keyPassword": os.environ["HARMONY_SIGN_KEY_PASSWORD"],
+              "profile": str(sign_dir / "release.p7b"),
+              "certpath": str(sign_dir / "release.cer"),
+          }
+
+          for key, value in values.items():
+              pattern = rf"(\b{re.escape(key)}\s*:\s*)(['\"])(.*?)\2"
+              replacement = rf"\1{json.dumps(value, ensure_ascii=False)}"
+              text, count = re.subn(pattern, replacement, text, count=1)
+              if count != 1:
+                  raise SystemExit(f"cannot patch signing field: {key}")
+
+          profile_path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Install HarmonyOS CLI and AGC skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          source tools/setup_harmony_cli.sh
+
+          echo "HARMONY_CLI_HOME=$HARMONY_CLI_HOME" >> "$GITHUB_ENV"
+          echo "DEVECO_SDK_HOME=$DEVECO_SDK_HOME" >> "$GITHUB_ENV"
+          echo "$HARMONY_CLI_HOME/tool/node/bin" >> "$GITHUB_PATH"
+          echo "$HARMONY_CLI_HOME/bin" >> "$GITHUB_PATH"
+
+          deveco_root="$RUNNER_TEMP/deveco-cli"
+          npm install --prefix "$deveco_root" @deveco/deveco-cli@latest
+          export DEVECO_CLI_CLT_PATH="$HARMONY_CLI_HOME"
+          "$deveco_root/node_modules/.bin/devecocli" skills add \
+            --skill hmos-connect-api-cli-skill \
+            --agent opencode \
+            --project "$GITHUB_WORKSPACE"
+
+          cli_js="$(find "$GITHUB_WORKSPACE/.opencode/skills" \
+            -path '*/hmos-connect-api-cli-skill/scripts/connect-api-cli.js' \
+            -type f -print -quit)"
+          if [ -z "$cli_js" ]; then
+            echo "hmos-connect-api-cli-skill installed but connect-api-cli.js was not found" >&2
+            exit 1
+          fi
+          echo "CONNECT_API_CLI_JS=$cli_js" >> "$GITHUB_ENV"
+
+      - name: Ensure Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Publish latest main to AGC invitation testing
+        shell: bash
+        run: ./tools/publish_harmony_test.sh
