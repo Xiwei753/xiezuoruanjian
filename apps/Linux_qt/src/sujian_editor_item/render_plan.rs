@@ -108,13 +108,21 @@ impl Default for SelectionPreeditStyle {
 /// Issue #679 评论 5657313927: 纯显示数据 — render thread 直接画这个，
 /// 不再理解 Snap/Tween/driver/Timestamp。由 qquickitem_impl 从 cursor_ctrl
 /// 的 visual_x/y/h/visible 和 blink opacity 构造。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CursorRenderState {
     pub visible: bool,
     pub x: f64,
     pub y: f64,
     pub h: f64,
     pub opacity: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VisualCaretGeometry {
+    /// 文档坐标，与动画 glyph rect 使用同一坐标系。
+    pub x: f64,
+    pub y: f64,
+    pub h: f64,
 }
 
 #[derive(Clone, Debug, Default)]

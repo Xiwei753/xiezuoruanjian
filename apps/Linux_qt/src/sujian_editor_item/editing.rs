@@ -534,7 +534,6 @@ impl SujianEditorItem {
 
     pub(crate) fn select_all(&mut self) {
         // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
         let text_len = self.pipeline.committed_text().len();
         let _ = self.pipeline.set_selection(0, text_len);
         self.bump_visual_revision();
@@ -608,10 +607,8 @@ impl SujianEditorItem {
         };
 
         self.cursor_ctrl.affinity = affinity;
-        // 保留 PointerClick 来源供统一光标计划记录；点击动作仍按交互要求即时 Snap。
+        // PointerClick 的 Tween/Snap 由统一 Coordinator 按 smooth cursor 设置决定。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::PointerClick;
-        // 点击是即时交互：不让平滑光标时间轴延迟视觉命中位置。
-        self.snap_cursor_for_pointer_action();
         editor_debug_log(&format!(
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend
@@ -642,12 +639,8 @@ impl SujianEditorItem {
         // Issue #705 评论 5718299909: 先 hit_test，确认 head/affinity 真的改变
         // 再 bump epoch。拖到当前 cursor 同一位置不应 bump。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
-        // Issue #705 评论 5717380886: 拖选是非正文事务导致的逻辑 cursor 移动。
-        // Issue #705 评论 5718299909: 仅在 head 或 affinity 真的改变时 bump。
-        if index != self.pipeline.cursor() || self.cursor_ctrl.affinity != affinity {
-            self.begin_manual_cursor_move();
-        }
         self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #712: 拖选设置 CursorMoveSource::DragSelection，跨行走 Snap。
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
         // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
@@ -663,31 +656,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
-        // Issue #705 评论 5718299909: 先 hit_test + 预判选词结果，确认
-        // selection/affinity 真的改变再 bump epoch。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
-        // Issue #705 评论 5717380886: 长按是非正文事务导致的逻辑 cursor 移动。
-        // Issue #705 评论 5718299909: 预判最终 selection 是否改变：
-        //  - 若已有 selection：不选词，selection 不变，只有 affinity 变才算改变。
-        //  - 若无 selection：将选词，算 word bounds 与当前 (anchor, cursor) 比较。
-        let current_anchor = self.pipeline.selection_anchor();
-        let current_cursor = self.pipeline.cursor();
-        let committed_text = self.pipeline.committed_text().to_string();
-        let caret_will_change = if self.pipeline.has_selection() {
-            self.cursor_ctrl.affinity != affinity
-        } else {
-            match compute_word_bounds(&committed_text, index) {
-                Some((byte_start, byte_end)) => {
-                    byte_start != current_anchor
-                        || byte_end != current_cursor
-                        || self.cursor_ctrl.affinity != affinity
-                }
-                None => self.cursor_ctrl.affinity != affinity,
-            }
-        };
-        if caret_will_change {
-            self.begin_manual_cursor_move();
-        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 长按设置 CursorMoveSource::DragSelection，跨行走 Snap。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
@@ -707,25 +676,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
-        // Issue #705 评论 5718299909: 先 hit_test + 算 word bounds，确认
-        // selection/affinity 真的改变再 bump epoch。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
-        // Issue #705 评论 5717380886: 选词是非正文事务导致的逻辑 cursor 移动。
-        // Issue #705 评论 5718299909: 预判 word bounds 是否改变 selection 或 affinity。
-        let current_anchor = self.pipeline.selection_anchor();
-        let current_cursor = self.pipeline.cursor();
-        let committed_text = self.pipeline.committed_text().to_string();
-        let caret_will_change = match compute_word_bounds(&committed_text, index) {
-            Some((byte_start, byte_end)) => {
-                byte_start != current_anchor
-                    || byte_end != current_cursor
-                    || self.cursor_ctrl.affinity != affinity
-            }
-            None => self.cursor_ctrl.affinity != affinity,
-        };
-        if caret_will_change {
-            self.begin_manual_cursor_move();
-        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #712: 选词设置 CursorMoveSource::DragSelection，跨行走 Snap。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
@@ -739,17 +690,10 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 
-    /// Issue #705: 鼠标点击路径统一的光标 snap 辅助方法。
+    /// 拖选、长按和选词期间将光标固定在逻辑 selection head。
     ///
-    /// drag_select_at/long_press_at/select_word_at 都走此方法设置
-    /// force_snap_next,不在每个点击方法里自己单独决定光标动画模式。
-    /// 是否 Tween 由统一的光标移动规则(update_cursor_visual_position)决定。
+    /// 普通 click_at 不调用此方法；它由 Coordinator 按 smooth cursor 设置决定是否 Tween。
     fn snap_cursor_for_pointer_action(&mut self) {
-        self.cursor_ctrl.force_snap_next = true;
-    }
-
-    /// 手动导航只更新 CursorController 的目标；当前正文过渡继续独立完成交接。
-    fn begin_manual_cursor_move(&mut self) {
         self.cursor_ctrl.force_snap_next = true;
     }
 
@@ -828,9 +772,6 @@ impl SujianEditorItem {
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 next != cursor 后 bump。
         // extend 且 next == cursor 时 head/anchor 不变（no-op），不 bump。
-        if next != current_cursor {
-            self.begin_manual_cursor_move();
-        }
         // Issue #712: 方向键水平移动设置 CursorMoveSource::KeyboardNavigation，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
@@ -875,7 +816,6 @@ impl SujianEditorItem {
         }
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 target_idx != line_idx 后 bump。
-        self.begin_manual_cursor_move();
         // Issue #712: 方向键垂直移动设置 CursorMoveSource::KeyboardNavigation，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
@@ -917,9 +857,6 @@ impl SujianEditorItem {
         };
         // Issue #705 评论 5717380886: Home/End 是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在目标 index 或 affinity 与当前不同时 bump。
-        if index != self.pipeline.cursor() || self.cursor_ctrl.affinity != affinity {
-            self.begin_manual_cursor_move();
-        }
         // Issue #712: Home/End 设置 CursorMoveSource::KeyboardNavigation，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;

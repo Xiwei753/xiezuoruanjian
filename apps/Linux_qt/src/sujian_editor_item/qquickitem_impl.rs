@@ -269,6 +269,7 @@ impl QQuickItem for SujianEditorItem {
                     selection_preedit,
                     cursor_style,
                     selection_preedit_style,
+                    self.current_coordinated_animation_enabled,
                     frame_now,
                     canonical_visual_snapshot.as_ref(),
                 );

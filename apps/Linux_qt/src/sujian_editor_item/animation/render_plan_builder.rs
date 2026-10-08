@@ -4,6 +4,7 @@ use super::coordinator::LinuxEditorAnimationCoordinator;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::render_plan::{
     CursorRenderState, CursorStyle, RenderPlan, SelectionPreeditPlan, SelectionPreeditStyle,
+    VisualCaretGeometry,
 };
 
 impl LinuxEditorAnimationCoordinator {
@@ -13,6 +14,7 @@ impl LinuxEditorAnimationCoordinator {
         selection_preedit: SelectionPreeditPlan,
         cursor_style: CursorStyle,
         selection_preedit_style: SelectionPreeditStyle,
+        coordinated_animation_enabled: bool,
         frame_now: std::time::Instant,
         canonical_snapshot: Option<&EditorLayoutSnapshot>,
     ) -> RenderPlan {
@@ -21,8 +23,14 @@ impl LinuxEditorAnimationCoordinator {
             cursor_render_state.y,
             cursor_render_state.h,
         );
+        let visual_caret = (coordinated_animation_enabled && cursor_render_state.visible)
+            .then_some(VisualCaretGeometry {
+                x: cursor_render_state.x,
+                y: cursor_render_state.y,
+                h: cursor_render_state.h,
+            });
         RenderPlan {
-            ownership: self.ownership_plan(frame_now, canonical_snapshot),
+            ownership: self.ownership_plan(frame_now, canonical_snapshot, visual_caret),
             selection_preedit,
             cursor: cursor_render_state,
             cursor_style,

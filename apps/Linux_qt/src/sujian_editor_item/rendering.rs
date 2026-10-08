@@ -77,8 +77,8 @@ impl SujianEditorItem {
     /// **IMPORTANT**: This method MUST only be called from the GUI thread.
     /// It directly emits signals and calls inputMethod()->update().
     ///
-    /// 逻辑 selection 由 Core 立即更新。光标只有 cursor controller 一个视觉 owner；
-    /// 用户编辑和直接导航使用 Snap，平滑移动设置仍由同一个 controller 管理。
+    /// 逻辑 selection 由 Core 立即更新。光标只有 CursorController 一个视觉 owner；
+    /// Coordinator 按 movement source 和 smooth/coordinated 设置选择 Snap 或 Tween。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         // Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间使用屏幕锚点替代
         // current_scroll_y 算 caret viewport 坐标。QML 侧 begin_auto_follow_scroll()
