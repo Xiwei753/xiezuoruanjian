@@ -14,9 +14,12 @@
 // 6. finishMotion() 动画完成，按最新目标全文 layout 重建静态所有权。
 //
 // Issue #879 复核评论修复：
-// - 拆分身份检查：GeometryKey（fontSize, lineSpacing, contentWidth, compositionSessionId）
+// - 拆分身份检查：GeometryKey（fontSize, lineSpacing, contentWidth）
 //   和 TextRevisionKey（revision, generation, compositionGeneration）。
-//   正文版本变化不能作为取消动画理由——只有会话切换、字号/宽度变化才走静态重建。
+//   正文版本变化不能作为取消动画理由——只有字号/宽度变化才走静态重建。
+// - compositionSessionId 不作为 GeometryKey——IME 提交时由有 composition 到
+//   无 composition 会改变 sessionId，导致中文确认上屏直接静态重建，绕过吐字。
+//   会话切换应由调用方通过 EditorPresentationUpdate.sessionId 检测。
 // - 添加旧布局缓存：保存上一帧的 EditorLayoutSnapshot（含旧 text）和旧 LineLayout[]，
 //   供 Planner 计算旧字形位置。
 // - 添加 tick(now) 方法：接收当前时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
@@ -38,11 +41,15 @@ import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 /**
  * 几何身份——标识绘制环境是否改变。
  *
- * 只有这些字段变化时才说明布局重建（字号变更/宽度变化/会话切换），
+ * 只有这些字段变化时才说明布局重建（字号变更/宽度变化），
  * 运动协调器应直接显示静态画面，不启动动画。
  *
- * Issue #879 复核评论修复：正文版本（revision/generation/compositionGeneration）
- * 不属于几何身份——正常打字会改变 revision，但不应取消动画。
+ * Issue #879 第三轮复核评论修复：compositionSessionId 不属于几何身份——
+ * 它是编辑状态身份，IME 提交时由有 composition 到无 composition 会改变 sessionId，
+ * 导致中文确认上屏直接静态重建，绕过吐字动画。
+ * 会话切换的检测应由调用方通过 EditorPresentationUpdate.sessionId 处理。
+ * 正文版本（revision/generation/compositionGeneration）也不属于几何身份——
+ * 正常打字会改变 revision，但不应取消动画。
  */
 export interface GeometryKey {
   /** 字体大小（vp） */
@@ -51,8 +58,6 @@ export interface GeometryKey {
   readonly lineSpacing: number
   /** 内容宽度（vp）——由调用方传入 */
   readonly contentWidth: number
-  /** 编辑会话 ID——会话切换说明切换了章节/文档 */
-  readonly compositionSessionId: number
 }
 
 /**
@@ -118,8 +123,7 @@ export class EditorMotionCoordinator {
     this.geometryKey = {
       fontSize: 16,
       lineSpacing: 1.8,
-      contentWidth: 0,
-      compositionSessionId: 0
+      contentWidth: 0
     }
     this.textRevisionKey = {
       revision: 0,
@@ -174,11 +178,10 @@ export class EditorMotionCoordinator {
     const newGeometryKey: GeometryKey = {
       fontSize: newSnapshot.fontSize,
       lineSpacing: newSnapshot.lineSpacingMultiplier,
-      contentWidth: contentWidth,
-      compositionSessionId: newSnapshot.compositionSessionId
+      contentWidth: contentWidth
     }
 
-    // 几何身份变化（字号变更/会话切换/宽度变化）→ 直接显示静态画面
+    // 几何身份变化（字号变更/宽度变化）→ 直接显示静态画面
     if (!EditorMotionCoordinator.geometryEquals(this.geometryKey, newGeometryKey)) {
       this.geometryKey = newGeometryKey
       this.textRevisionKey = {
@@ -626,15 +629,15 @@ export class EditorMotionCoordinator {
   /**
    * 判断两个几何身份是否相等。
    *
-   * Issue #879 复核评论修复：只比较几何字段（fontSize, lineSpacing, contentWidth, compositionSessionId）。
-   * 正文版本（revision/generation/compositionGeneration）不参与比较——
+   * Issue #879 第三轮复核评论修复：只比较几何字段（fontSize, lineSpacing, contentWidth）。
+   * compositionSessionId 不参与比较——它是编辑状态身份，不是几何条件。
+   * 正文版本（revision/generation/compositionGeneration）也不参与比较——
    * 正常打字会改变 revision，但不应取消动画。
    */
   private static geometryEquals(a: GeometryKey, b: GeometryKey): boolean {
     return a.fontSize === b.fontSize &&
            a.lineSpacing === b.lineSpacing &&
-           a.contentWidth === b.contentWidth &&
-           a.compositionSessionId === b.compositionSessionId
+           a.contentWidth === b.contentWidth
   }
 
   /**
