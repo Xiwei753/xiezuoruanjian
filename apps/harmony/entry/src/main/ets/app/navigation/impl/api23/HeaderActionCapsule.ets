@@ -83,66 +83,104 @@ export struct HeaderActionCapsule {
   }
 
   build() {
-    Row() {
-      ForEach(sortedHeaderTrailingActions(this.actionSlots), (slot: ActionSlot) => {
-        Button({ type: ButtonType.Normal }) {
-          Image(this.iconOf(slot))
-            .width(24)
-            .height(24)
-            .fillColor($r('sys.color.icon_primary'))
-        }
-        .width(ACTION_BUTTON_SIZE_VP)
-        .height(ACTION_BUTTON_SIZE_VP)
-        .borderRadius(ACTION_BUTTON_SIZE_VP / 2)
-        .backgroundColor(Color.Transparent)
-        .stateEffect(false)
-        .accessibilityText(this.labelOf(slot))
-        .onClick(() => {
-          if (this.consumeClickIfDragged()) {
-            return
+    // Issue #880：systemMaterial(undefined) 在 ArkTS 中不合法，改为条件渲染两个 Row 分支。
+    // inHdsTitleBar=true（手机 HDS 原生标题栏）：沉浸式系统材质，透明背景，无描边。
+    // inHdsTitleBar=false（宽屏 WidePrimaryShell 内容流悬浮组）：真实底色 + 发丝描边，无 systemMaterial。
+    if (this.inHdsTitleBar) {
+      Row() {
+        ForEach(sortedHeaderTrailingActions(this.actionSlots), (slot: ActionSlot) => {
+          Button({ type: ButtonType.Normal }) {
+            Image(this.iconOf(slot))
+              .width(24)
+              .height(24)
+              .fillColor($r('sys.color.icon_primary'))
           }
-          NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
-        })
-      }, (slot: ActionSlot) => `${slot.region}_${slot.role}`)
-    }
-    .alignItems(VerticalAlign.Center)
-    // 按钮间距用 margin 表达：spaceBetween / justifyContent 会把三项拉开到容器两端，
-    // 那就不是「一个胶囊包住三个图标」了。
-    .padding({ left: CAPSULE_PADDING_VP, right: CAPSULE_PADDING_VP + ACTION_GAP_VP })
-    .borderRadius(ACTION_BUTTON_SIZE_VP / 2 + CAPSULE_PADDING_VP)
-    // Issue #880 复核第 4 项：同一个胶囊只换容器呈现，动作列表 / 图标 / 点击逻辑共用上面这一份 Row。
-    // inHdsTitleBar=true（手机 HDS 原生标题栏）：恢复原来的沉浸式系统材质。
-    // 透明背景 + systemMaterial，与 HDS 标题栏融为一体，不额外描边。
-    // inHdsTitleBar=false（宽屏 WidePrimaryShell 内容流悬浮组）：脱离 HDS 材质作用域，
-    // systemMaterial 在 Stack 自绘节点里不保证生效，改用真实底色 + 发丝描边保证可见。
-    .backgroundColor(this.inHdsTitleBar ? Color.Transparent : $r('sys.color.comp_background_gray'))
-    .borderWidth(this.inHdsTitleBar ? 0 : 0.5)
-    .borderColor($r('sys.color.icon_secondary'))
-    .systemMaterial(this.inHdsTitleBar
-      ? HarmonyMaterialService.getInstance().floatingMaterial()
-      : undefined)
-    // 锁一级 Tabs 的横向滑动切页，和 PrimaryFab 用同一个 store。
-    // 挂在 Row 上而不是各 Button 上：按钮之间的空隙与胶囊内边距是 Row 自己的区域，
-    // 没有按钮消费触摸，手势会直接透给 Tabs 把页面翻掉（实测空隙与右端都会翻页，
-    // 按钮上不翻）。HdsTabs 内部手势管线不受理组件级拦截，只能走 store 关 .scrollable。
-    .onTouch((event: TouchEvent) => {
-      const touch = event.touches[0]
-      if (event.type === TouchType.Down) {
-        this.dragged = false
-        this.downX = touch.x
-        this.downY = touch.y
-        PrimaryTabGestureLock.getInstance().setLocked(true)
-        event.stopPropagation()
-        return
+          .width(ACTION_BUTTON_SIZE_VP)
+          .height(ACTION_BUTTON_SIZE_VP)
+          .borderRadius(ACTION_BUTTON_SIZE_VP / 2)
+          .backgroundColor(Color.Transparent)
+          .stateEffect(false)
+          .accessibilityText(this.labelOf(slot))
+          .onClick(() => {
+            if (this.consumeClickIfDragged()) {
+              return
+            }
+            NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+          })
+        }, (slot: ActionSlot) => `${slot.region}_${slot.role}`)
       }
-      if (event.type === TouchType.Move) {
-        if (Math.abs(touch.x - this.downX) > DRAG_SLOP_VP ||
-          Math.abs(touch.y - this.downY) > DRAG_SLOP_VP) {
-          this.dragged = true
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: CAPSULE_PADDING_VP, right: CAPSULE_PADDING_VP + ACTION_GAP_VP })
+      .borderRadius(ACTION_BUTTON_SIZE_VP / 2 + CAPSULE_PADDING_VP)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(HarmonyMaterialService.getInstance().floatingMaterial())
+      .onTouch((event: TouchEvent) => {
+        const touch = event.touches[0]
+        if (event.type === TouchType.Down) {
+          this.dragged = false
+          this.downX = touch.x
+          this.downY = touch.y
+          PrimaryTabGestureLock.getInstance().setLocked(true)
+          event.stopPropagation()
+          return
         }
-        return
+        if (event.type === TouchType.Move) {
+          if (Math.abs(touch.x - this.downX) > DRAG_SLOP_VP ||
+            Math.abs(touch.y - this.downY) > DRAG_SLOP_VP) {
+            this.dragged = true
+          }
+          return
+        }
+        PrimaryTabGestureLock.getInstance().setLocked(false)
+      })
+    } else {
+      Row() {
+        ForEach(sortedHeaderTrailingActions(this.actionSlots), (slot: ActionSlot) => {
+          Button({ type: ButtonType.Normal }) {
+            Image(this.iconOf(slot))
+              .width(24)
+              .height(24)
+              .fillColor($r('sys.color.icon_primary'))
+          }
+          .width(ACTION_BUTTON_SIZE_VP)
+          .height(ACTION_BUTTON_SIZE_VP)
+          .borderRadius(ACTION_BUTTON_SIZE_VP / 2)
+          .backgroundColor(Color.Transparent)
+          .stateEffect(false)
+          .accessibilityText(this.labelOf(slot))
+          .onClick(() => {
+            if (this.consumeClickIfDragged()) {
+              return
+            }
+            NavigationHeaderActionDispatcher.getInstance().dispatchAction(slot.role)
+          })
+        }, (slot: ActionSlot) => `${slot.region}_${slot.role}`)
       }
-      PrimaryTabGestureLock.getInstance().setLocked(false)
-    })
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: CAPSULE_PADDING_VP, right: CAPSULE_PADDING_VP + ACTION_GAP_VP })
+      .borderRadius(ACTION_BUTTON_SIZE_VP / 2 + CAPSULE_PADDING_VP)
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .borderWidth(0.5)
+      .borderColor($r('sys.color.icon_secondary'))
+      .onTouch((event: TouchEvent) => {
+        const touch = event.touches[0]
+        if (event.type === TouchType.Down) {
+          this.dragged = false
+          this.downX = touch.x
+          this.downY = touch.y
+          PrimaryTabGestureLock.getInstance().setLocked(true)
+          event.stopPropagation()
+          return
+        }
+        if (event.type === TouchType.Move) {
+          if (Math.abs(touch.x - this.downX) > DRAG_SLOP_VP ||
+            Math.abs(touch.y - this.downY) > DRAG_SLOP_VP) {
+            this.dragged = true
+          }
+          return
+        }
+        PrimaryTabGestureLock.getInstance().setLocked(false)
+      })
+    }
   }
 }

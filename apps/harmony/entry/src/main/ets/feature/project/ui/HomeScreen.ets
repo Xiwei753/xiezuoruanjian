@@ -129,26 +129,26 @@ export struct HomeScreen {
   // 目录读取失败时留在作品首页（ViewModel 置错误状态，页面弹「加载目录失败 + 重试」），
   // 不跳 Workspace，也不把读取失败伪装成空作品。
   // 空作品只由「成功返回的空目录」决定：chapterId 为空即 Writing 的未选章节工作台。
+  // prepareOpenProject 返回确定值，页面只对当前请求结果做一次 pushPath。
   private async navigateToWritingFromProject(projectId: string, projectName: string): Promise<void> {
-    const ok: boolean = await this.viewModel.prepareOpenProject(projectId, projectName)
-    if (ok) {
-      this.openPendingWritingRoute()
+    const target: ProjectOpenTarget | null = await this.viewModel.prepareOpenProject(projectId, projectName)
+    if (target !== null) {
+      this.pushWritingRoute(target)
     }
   }
 
   // 重试入口：只重跑 getProjectTree(projectId)，成功后走同一段进 Writing 的逻辑。
   private async retryTreeLoad(): Promise<void> {
-    const ok: boolean = await this.viewModel.retryOpenProject()
-    if (ok) {
-      this.openPendingWritingRoute()
+    const target: ProjectOpenTarget | null = await this.viewModel.retryOpenProject()
+    if (target !== null) {
+      this.pushWritingRoute(target)
     }
   }
 
   // 目录读取成功后的统一入栈：写作页的章节切换仍由 WritingScreen 持有。
-  private openPendingWritingRoute(): void {
+  private pushWritingRoute(target: ProjectOpenTarget): void {
     const navPathStack = this.navCoordinator.getNavPathStack()
-    const target: ProjectOpenTarget | null = this.viewModel.getOpenProjectTarget()
-    if (!navPathStack || target === null) {
+    if (!navPathStack) {
       return
     }
     const writingParam: WritingRouteParams = {

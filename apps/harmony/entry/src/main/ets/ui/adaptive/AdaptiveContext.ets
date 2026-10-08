@@ -81,6 +81,10 @@ export class AdaptiveContext {
   private cachedIsDedicatedLandscapeTablet: boolean = false
   // 缓存上次的窗口状态（用于检测全屏 ↔ 分屏/自由窗口切换）
   private cachedWindowStatus: window.WindowStatusType = window.WindowStatusType.UNDEFINED
+  // 窗口状态变更串行化：Promise 链确保前一个 apply/restore 完成后才执行下一个
+  private windowStatusTask: Promise<void> = Promise.resolve()
+  // 状态序号：递增 generation，过期的请求丢弃
+  private windowStatusGeneration: number = 0
 
   private constructor() {}
 
@@ -120,8 +124,14 @@ export class AdaptiveContext {
       // 才会继续避让顶部状态栏，两者配套才有正确结果；API 23 以下走非 HDS 壳，
       // 保持改动前的默认避让行为，不引入未验证的沉浸态。
       if (PlatformApiResolver.getInstance().isApiAtLeast(23)) {
-        this.mainWindow.setWindowLayoutFullScreen(true)
-        hilog.info(DOMAIN, TAG, 'Window layout full screen enabled for bottom inset immersion')
+        if (this.cachedIsDedicatedLandscapeTablet) {
+          // 专用横屏平板：不在这里设全屏，交给 TabletWindowPolicy.applyTabletWindowPolicy
+          // （它已经有 setWindowLayoutFullScreen(true) + 隐藏系统栏 + 强制横屏）
+          hilog.info(DOMAIN, TAG, 'Dedicated landscape tablet: deferring full screen to TabletWindowPolicy')
+        } else {
+          this.mainWindow.setWindowLayoutFullScreen(true)
+          hilog.info(DOMAIN, TAG, 'Window layout full screen enabled for bottom inset immersion')
+        }
       }
 
       // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
@@ -621,17 +631,27 @@ export class AdaptiveContext {
     this.cachedWindowStatus = windowStatus
     hilog.info(DOMAIN, TAG, `WindowStatus changed: ${oldStatus} → ${windowStatus}`)
 
-    if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
-      // 真正回到独占全屏：重新套用平板窗口政策（强制横屏 + 隐藏系统栏）
-      TabletWindowPolicy.applyTabletWindowPolicy(this.mainWindow).catch((err: Error) => {
-        hilog.error(DOMAIN, TAG, `applyTabletWindowPolicy on fullscreen failed: ${JSON.stringify(err)}`)
-      })
-    } else {
-      // 分屏 / 悬浮 / 最大化：恢复默认方向与系统栏，布局按真实 windowRect 走
-      TabletWindowPolicy.restoreWindowPolicy(this.mainWindow).catch((err: Error) => {
-        hilog.error(DOMAIN, TAG, `restoreWindowPolicy on split/floating failed: ${JSON.stringify(err)}`)
-      })
-    }
+    // 递增 generation，串到 windowStatusTask 链上确保串行执行
+    this.windowStatusGeneration++
+    const currentGeneration: number = this.windowStatusGeneration
+    const mainWindow: window.Window = this.mainWindow
+
+    this.windowStatusTask = this.windowStatusTask.then(() => {
+      // 执行前检查 generation 是否仍是最新的，过期的丢弃
+      if (currentGeneration !== this.windowStatusGeneration) {
+        hilog.info(DOMAIN, TAG, `WindowStatus task generation ${currentGeneration} is stale (current: ${this.windowStatusGeneration}), skipping`)
+        return
+      }
+      if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
+        // 真正回到独占全屏：重新套用平板窗口政策（强制横屏 + 隐藏系统栏）
+        return TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
+      } else {
+        // 分屏 / 悬浮 / 最大化：恢复默认方向与系统栏，布局按真实 windowRect 走
+        return TabletWindowPolicy.restoreWindowPolicy(mainWindow)
+      }
+    }).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, `WindowStatus task failed: ${JSON.stringify(err)}`)
+    })
   }
 }
 

@@ -10,14 +10,14 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @Component
 export struct ChapterTreePane {
-  // 外部传入的项目数据
-  volumeTrees: VolumeTree[] = []
+  // 外部传入的项目数据（@Prop 保证父→子单向同步）
+  @Prop volumeTrees: VolumeTree[] = []
   // Issue #829 手稿：章节树最上面一组是作品名，不是笼统的"章节"字样。
-  projectTitle: string = ''
+  @Prop projectTitle: string = ''
   // 当前展开的卷 ID 集合（由外部控制）
-  expandedVolumes: Set<string> = new Set()
+  @Prop expandedVolumes: Set<string> = new Set()
   // 当前选中的章节 ID（用于高亮）
-  selectedChapterId: string = ''
+  @Prop selectedChapterId: string = ''
   // 展开/折叠卷
   onToggleVolume: ((volumeId: string) => void) | null = null
   // 选择章节（宽屏左侧点章节 → 安全 replace 到新 Writing route）
@@ -30,10 +30,10 @@ export struct ChapterTreePane {
   onDeleteVolume: ((volumeId: string) => void) | null = null
   // 删除章节
   onDeleteChapter: ((chapterId: string) => void) | null = null
-  // 目录树加载中（纯 UI 状态，由 WritingScreen 传入）
-  isLoading: boolean = false
-  // 目录树加载失败（纯 UI 状态，由 WritingScreen 传入；空目录与失败是两种状态）
-  loadError: boolean = false
+  // 目录树加载中（@Prop 保证父→子单向同步，由 WritingScreen @State isTreeLoading 传入）
+  @Prop isLoading: boolean = false
+  // 目录树加载失败（@Prop 保证父→子单向同步，由 WritingScreen @State projectTreeError 传入；空目录与失败是两种状态）
+  @Prop loadError: boolean = false
   // 重试加载目录树：仍调 WritingScreen 那一个加载入口，不在本组件里自己发请求
   onRetry: (() => void) | null = null
 

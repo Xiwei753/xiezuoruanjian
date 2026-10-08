@@ -59,6 +59,10 @@ export class ProjectListViewModel {
   private screenPolicy: ScreenPolicy | null = null
   // 目录读取成功后的打开目标；null 表示还没有成功读取过
   private openProjectTarget: ProjectOpenTarget | null = null
+  // 并发安全：每次选作品/取消/重试时递增，过期请求的返回值被丢弃
+  private openGeneration: number = 0
+  // 进行中的目录读取任务；同作品重复点击时复用，不同作品时废弃旧任务
+  private openProjectTask: Promise<ProjectOpenTarget | null> | null = null
 
   // ── 初始化+加载 ──
 
@@ -269,21 +273,51 @@ export class ProjectListViewModel {
   /**
    * 读取作品目录，决定要打开的章节。
    *
-   * 成功（含目录为空）返回 true：目标存在 openProjectTarget 上，
-   * chapterId 为空表示「还没有章节」，由 WritingScreen 显示未选章节空状态。
-   * 失败返回 false 并置 openProjectError，页面留在作品首页显示错误与重试，
+   * 并发安全：每次调用递增 openGeneration，只有最新 generation 的返回值才能更新状态。
+   * 同作品重复点击时复用进行中的任务，不重复发请求。
+   * 不同作品快速切换时，旧任务的返回值因 generation 不匹配而被丢弃。
+   *
+   * 成功（含目录为空）返回 ProjectOpenTarget（chapterId 为空表示「还没有章节」）。
+   * 失败返回 null 并置 openProjectError，页面留在作品首页显示错误与重试，
    * 不跳 Workspace，也不把读取失败伪装成空作品。
    */
-  async prepareOpenProject(projectId: string, projectName: string): Promise<boolean> {
+  async prepareOpenProject(projectId: string, projectName: string): Promise<ProjectOpenTarget | null> {
+    // 复用进行中的同作品请求，不重复发请求
+    if (this.openProjectTask !== null && this.openProjectId === projectId) {
+      return this.openProjectTask
+    }
+
+    this.openGeneration++
+    const myGeneration = this.openGeneration
     this.openProjectId = projectId
     this.openProjectName = projectName
     this.openProjectError = ''
     this.openProjectTarget = null
+
+    const task = this.doPrepareOpenProject(projectId, projectName, myGeneration)
+    this.openProjectTask = task
+    task.finally(() => {
+      if (this.openProjectTask === task) {
+        this.openProjectTask = null
+      }
+    })
+    return task
+  }
+
+  private async doPrepareOpenProject(
+    projectId: string,
+    projectName: string,
+    generation: number
+  ): Promise<ProjectOpenTarget | null> {
     try {
       const result = await this.bridge.getProjectTree(projectId)
+      // 过期请求：generation 不匹配说明已有更新的请求取代了本次，丢弃结果
+      if (generation !== this.openGeneration) {
+        return null
+      }
       if (!result.success || !result.data) {
         this.openProjectError = '加载作品目录失败'
-        return false
+        return null
       }
       const volumes = result.data.volumes
       // 优先上次编辑的章节（有现成记录且仍存在才用），否则第一个有效章节。
@@ -327,11 +361,14 @@ export class ProjectListViewModel {
         chapterTitle: '',
         volumeId: ''
       }
-      return true
+      return this.openProjectTarget
     } catch (err) {
       hilog.error(DOMAIN, TAG, `prepareOpenProject failed: ${err}`)
+      if (generation !== this.openGeneration) {
+        return null
+      }
       this.openProjectError = '加载作品目录失败'
-      return false
+      return null
     }
   }
 
@@ -341,15 +378,16 @@ export class ProjectListViewModel {
   }
 
   /** 重试：只重跑 getProjectTree(projectId)，成功后由页面按原逻辑进 Writing */
-  async retryOpenProject(): Promise<boolean> {
+  async retryOpenProject(): Promise<ProjectOpenTarget | null> {
     if (this.openProjectId.length === 0) {
-      return false
+      return null
     }
     return this.prepareOpenProject(this.openProjectId, this.openProjectName)
   }
 
   /** 放弃进入写作工作台，留在作品页 */
   dismissOpenProjectError(): void {
+    this.openGeneration++
     this.openProjectError = ''
     this.openProjectTarget = null
   }
