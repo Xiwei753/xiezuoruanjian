@@ -763,12 +763,9 @@ impl SujianEditorItem {
 
     pub(crate) fn clear_active_text_animations(&mut self) {
         if self.pipeline.animation_coordinator_mut().suppress_all() {
-            self.pipeline.texture_cache_mut().clear();
-            self.pipeline.set_current_layout_snapshot(None);
-            self.pipeline.set_previous_layout_snapshot(None);
-            self.pipeline.set_current_canonical_snapshot(None);
+            // 只请求 canonical ownership handoff。旧静态层、动画 glyph 和纹理
+            // 必须保留到 renderer 成功构建完整 canonical static layer 之后。
             self.request_scene_rebuild();
-            self.cursor_rect_changed();
         }
     }
 
@@ -779,8 +776,8 @@ impl SujianEditorItem {
     /// 上一章的 visual snapshot/cache/layout generation。
     ///
     /// 此方法无条件执行，确保切章后下一次真实输入从新章节的 layout/snapshot 起算：
-    /// - suppress_all()：停止所有活动动画
-    /// - 清 texture_cache：丢弃旧章行纹理
+    /// - reset_document_visual_session()：清 source frame/map/timing 并切换会话
+    /// - 保留旧 Scene Graph owner 与动画纹理，等新静态层成功提交后再释放
     /// - 清 current/previous layout snapshot：丢弃旧章排版快照
     /// - 清 current_canonical_snapshot：丢弃旧章 canonical 快照
     /// - 清 pending_promoted_layout：丢弃未消费的 promoted layout
@@ -788,8 +785,9 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
-        self.pipeline.animation_coordinator_mut().suppress_all();
-        self.pipeline.texture_cache_mut().clear();
+        self.pipeline
+            .animation_coordinator_mut()
+            .reset_document_visual_session();
         self.pipeline.set_current_layout_snapshot(None);
         self.pipeline.set_previous_layout_snapshot(None);
         self.pipeline.set_current_canonical_snapshot(None);

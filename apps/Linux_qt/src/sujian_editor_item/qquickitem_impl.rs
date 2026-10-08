@@ -203,17 +203,6 @@ impl QQuickItem for SujianEditorItem {
         if !editor_root.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
 
-            // 没有活动过渡时，已提交的静态正文就是唯一正文 owner，旧动画资源可以释放。
-            let has_active_txs = self
-                .pipeline
-                .animation_coordinator()
-                .has_active_text_animation(frame_now);
-
-            if !has_active_txs {
-                self.pipeline.texture_cache_mut().clear();
-                scene_graph::clear_animation_layer(editor_root, item_ptr);
-            }
-
             // Issue #679 评论 5657313927: 删除 render thread 的第二次 build_cursor_plan()
             // 调用。不再把 cursor_ctrl.visual_x/y 同时当"当前值"和"目标值"传进去。
             // 直接从 GUI 侧已算好的 cursor_ctrl.visual_x/y/visual_h/visible 和
@@ -331,6 +320,10 @@ impl QQuickItem for SujianEditorItem {
                     render_plan.ownership.target_layout_revision == Some(snapshot.revision)
                 })
                 .unwrap_or(false);
+            let canonical_handoff_committed = static_rebuild_ok
+                && has_snapshot
+                && ownership_snapshot_matches
+                && (render_plan.ownership.handoff_pending || !animation_resources_ready);
             if static_rebuild_ok && has_snapshot && ownership_snapshot_matches {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
@@ -338,6 +331,11 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
+                if canonical_handoff_committed {
+                    // renderer 已在同一次 update_paint_node 成功提交 canonical static
+                    // 并清理 animation layer，现在才可释放旧文档/过渡的 QImage。
+                    self.pipeline.texture_cache_mut().clear();
+                }
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -357,6 +355,7 @@ impl QQuickItem for SujianEditorItem {
             if !static_rebuild_ok && frame_needs_relayout {
                 self.layout_dirty = true;
                 self.scene_dirty = true;
+                self.request_frame_update();
                 // Issue #677 评论 5653790560: render thread 不再反向排 GUI 线程补建。
                 // snapshot/generation 生命周期在 GUI 侧一次收口：这里只保留当前静态
                 // 正文节点并记录失败（layout_dirty / scene_dirty 置位），下一帧的

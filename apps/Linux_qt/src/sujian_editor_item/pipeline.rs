@@ -1111,7 +1111,9 @@ impl LinuxEditorPipeline {
     /// owner 计划要么拥有完整 animation glyph 资源，要么由 renderer 回退到
     /// canonical 静态正文；不会先挖静态字再容忍动画缺纹理。
     pub fn prepare_visual_edit_textures(&mut self, base_snapshot: &EditorLayoutSnapshot) {
-        let active_ids = self.animation_coordinator.active_snapshot_ids();
+        // 保留本帧新 transition 与上一份已提交 owner plan 同时引用的纹理。
+        // 旧 Scene Graph animation layer 只有在新 static layer 成功提交后才会被替换。
+        let active_ids = self.animation_coordinator.collect_active_snapshot_ids();
         let target_snapshot = self.animation_coordinator.active_target_snapshot().cloned();
         let mut snapshots = vec![base_snapshot];
         if let Some(target) = target_snapshot.as_ref() {

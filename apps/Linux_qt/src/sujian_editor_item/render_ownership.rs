@@ -31,6 +31,8 @@ pub(crate) struct RenderOwnershipPlan {
     pub animated_glyphs: Vec<TextAnimationGlyphInfo>,
     /// 对 owner table 的签名；空集合为 0。
     pub ownership_revision: u64,
+    /// 文档视觉会话。跨章节的 plan/frame 不能互相作为视觉 source。
+    pub document_session: u64,
     /// 当前帧是否已到完整动画终点。
     pub terminal_frame: bool,
     /// 动画到达终点。本次 render 需先让静态层成功接管，再清空动画层。
@@ -133,6 +135,7 @@ impl RenderOwnershipPlan {
             static_exclusions,
             animated_glyphs,
             ownership_revision,
+            document_session: 0,
             terminal_frame,
             handoff_pending,
             target_layout_revision: Some(snapshot.revision),
