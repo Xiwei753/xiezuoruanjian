@@ -16,6 +16,16 @@ import { ScreenPolicy, ScreenRole, ActionSlot, ActionRegion, ActionTarget } from
 const TAG = 'ProjectListViewModel'
 const DOMAIN = 0x0000
 
+// Issue #880 复核第 1 项：宽屏点作品直进写作工作台时，目录读取成功后的打开目标。
+// chapterId 为空字符串表示「目录读取成功但作品还没有章节」，
+// 与「读取失败」是两种状态，不能混用（失败留在作品页重试）。
+export interface ProjectOpenTarget {
+  projectId: string
+  chapterId: string
+  chapterTitle: string
+  volumeId: string
+}
+
 @ObservedV2
 export class ProjectListViewModel {
   // ── 可观察状态字段（@Trace，UI 直接观察） ──
@@ -36,11 +46,19 @@ export class ProjectListViewModel {
   @Trace nativeStatus: string = ''
   @Trace appDataRoot: string = ''
   @Trace currentMenuProjectId: string = ''
+  // Issue #880 复核第 1 项：宽屏点作品直进写作工作台的目录读取状态。
+  // openProjectError 非空时页面留在作品首页显示「加载目录失败 + 重试」，
+  // 不跳 Workspace，也不把读取失败伪装成空作品。
+  @Trace openProjectId: string = ''
+  @Trace openProjectName: string = ''
+  @Trace openProjectError: string = ''
 
   // ── 非观察私有字段 ──
   private bridge: IWriterCoreBridge = getBridge()
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private screenPolicy: ScreenPolicy | null = null
+  // 目录读取成功后的打开目标；null 表示还没有成功读取过
+  private openProjectTarget: ProjectOpenTarget | null = null
 
   // ── 初始化+加载 ──
 
@@ -244,6 +262,96 @@ export class ProjectListViewModel {
 
   async retry(): Promise<void> {
     await this.loadData()
+  }
+
+  // ─── 宽屏点作品直进写作工作台（Issue #880 复核第 1 项） ───
+
+  /**
+   * 读取作品目录，决定要打开的章节。
+   *
+   * 成功（含目录为空）返回 true：目标存在 openProjectTarget 上，
+   * chapterId 为空表示「还没有章节」，由 WritingScreen 显示未选章节空状态。
+   * 失败返回 false 并置 openProjectError，页面留在作品首页显示错误与重试，
+   * 不跳 Workspace，也不把读取失败伪装成空作品。
+   */
+  async prepareOpenProject(projectId: string, projectName: string): Promise<boolean> {
+    this.openProjectId = projectId
+    this.openProjectName = projectName
+    this.openProjectError = ''
+    this.openProjectTarget = null
+    try {
+      const result = await this.bridge.getProjectTree(projectId)
+      if (!result.success || !result.data) {
+        this.openProjectError = '加载作品目录失败'
+        return false
+      }
+      const volumes = result.data.volumes
+      // 优先上次编辑的章节（有现成记录且仍存在才用），否则第一个有效章节。
+      let target: ProjectOpenTarget | null = null
+      if (this.recentEdit !== null && this.recentEdit.projectId === projectId) {
+        const recentId: string = this.recentEdit.chapterId
+        for (const volumeTree of volumes) {
+          for (const chapter of volumeTree.chapters) {
+            if (chapter.id === recentId) {
+              target = {
+                projectId: projectId,
+                chapterId: chapter.id,
+                chapterTitle: chapter.title,
+                volumeId: volumeTree.volume.id
+              }
+              break
+            }
+          }
+          if (target !== null) {
+            break
+          }
+        }
+      }
+      if (target === null) {
+        for (const volumeTree of volumes) {
+          if (volumeTree.chapters.length > 0) {
+            target = {
+              projectId: projectId,
+              chapterId: volumeTree.chapters[0].id,
+              chapterTitle: volumeTree.chapters[0].title,
+              volumeId: volumeTree.volume.id
+            }
+            break
+          }
+        }
+      }
+      // 成功但没有任何章节：仍然算成功，给一个 chapterId 为空的打开目标
+      this.openProjectTarget = target ?? {
+        projectId: projectId,
+        chapterId: '',
+        chapterTitle: '',
+        volumeId: ''
+      }
+      return true
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `prepareOpenProject failed: ${err}`)
+      this.openProjectError = '加载作品目录失败'
+      return false
+    }
+  }
+
+  /** 上次 prepareOpenProject 成功的打开目标；null 表示尚未成功读取过 */
+  getOpenProjectTarget(): ProjectOpenTarget | null {
+    return this.openProjectTarget
+  }
+
+  /** 重试：只重跑 getProjectTree(projectId)，成功后由页面按原逻辑进 Writing */
+  async retryOpenProject(): Promise<boolean> {
+    if (this.openProjectId.length === 0) {
+      return false
+    }
+    return this.prepareOpenProject(this.openProjectId, this.openProjectName)
+  }
+
+  /** 放弃进入写作工作台，留在作品页 */
+  dismissOpenProjectError(): void {
+    this.openProjectError = ''
+    this.openProjectTarget = null
   }
 
   // ─── ScreenPolicy / Context Actions ───

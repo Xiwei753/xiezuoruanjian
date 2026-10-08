@@ -79,6 +79,8 @@ export class AdaptiveContext {
   private cachedFoldPosture: FoldPosture = FoldPosture.Unknown
   // 专用横屏平板判定（只算一次设备能力）
   private cachedIsDedicatedLandscapeTablet: boolean = false
+  // 缓存上次的窗口状态（用于检测全屏 ↔ 分屏/自由窗口切换）
+  private cachedWindowStatus: window.WindowStatusType = window.WindowStatusType.UNDEFINED
 
   private constructor() {}
 
@@ -105,6 +107,8 @@ export class AdaptiveContext {
       this.readSafeAreas()
       this.readKeyboardVisible()
       this.readFoldPosture()
+      // 读取初始窗口状态
+      this.readWindowStatus()
 
       // 底部手势条（导航指示器）沉浸式适配。
       // ArkUI 默认把页面内容布局在安全区内，实机 dumpLayout 证实 Navigation / NavDestination /
@@ -145,6 +149,8 @@ export class AdaptiveContext {
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听
       this.registerFoldStatusChange()
+      // 注册窗口状态变化监听（检测全屏 ↔ 分屏/自由窗口切换）
+      this.registerWindowStatusChange()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -211,6 +217,7 @@ export class AdaptiveContext {
     this.unregisterWindowSizeChange()
     this.unregisterAvoidAreaChange()
     this.unregisterFoldStatusChange()
+    this.unregisterWindowStatusChange()
     this.observers.clear()
     this.mainWindow = null
     this.cachedSafeTopVp = 0
@@ -420,6 +427,23 @@ export class AdaptiveContext {
   }
 
   /**
+   * 读取初始窗口状态，更新 cachedWindowStatus。
+   * 用 window.Window.getWindowStatus()（API 12+），不用 WindowProperties——
+   * WindowProperties 没有窗口模式字段。
+   */
+  private readWindowStatus(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.cachedWindowStatus = this.mainWindow.getWindowStatus()
+      hilog.info(DOMAIN, TAG, `Initial windowStatus: ${this.cachedWindowStatus}`)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `readWindowStatus failed: ${JSON.stringify(err)}`)
+    }
+  }
+
+  /**
    * 外部注入折叠状态（如从 onConfigurationUpdate 回调中调用）
    */
   updateFoldPosture(posture: FoldPosture): void {
@@ -549,6 +573,64 @@ export class AdaptiveContext {
       hilog.info(DOMAIN, TAG, 'Unregistered foldStatusChange listener')
     } catch (err) {
       // 静默忽略
+    }
+  }
+
+  // ========== 窗口状态变化监听 ==========
+
+  // Issue #880 复核：窗口状态变化（全屏 ↔ 分屏 / 悬浮窗）时重算系统栏与方向政策。
+  // 只在真正回到独占全屏（WindowStatusType.FULL_SCREEN）时重新套用平板政策；
+  // 分屏 / 悬浮 / 最大化一概恢复默认，避免把全屏宽屏 UI 硬套到小块可用窗口上。
+  // 国产折叠屏 / 阔直屏不执行这套强制政策（cachedIsDedicatedLandscapeTablet 恒为 false）。
+  // 窗口尺寸本身仍由 windowSizeChange 驱动，本监听不改布局状态。
+  private registerWindowStatusChange(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.mainWindow.on('windowStatusChange', (windowStatus: window.WindowStatusType) => {
+        this.handleWindowStatusChange(windowStatus)
+      })
+      hilog.info(DOMAIN, TAG, 'Registered windowStatusChange listener')
+    } catch (err) {
+      // windowStatusChange 依赖 SystemCapability.Window.SessionManager，部分设备不可用，静默忽略
+      hilog.info(DOMAIN, TAG, `windowStatusChange not supported: ${JSON.stringify(err)}`)
+    }
+  }
+
+  private unregisterWindowStatusChange(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.mainWindow.off('windowStatusChange')
+      hilog.info(DOMAIN, TAG, 'Unregistered windowStatusChange listener')
+    } catch (err) {
+      // 静默忽略
+    }
+  }
+
+  private handleWindowStatusChange(windowStatus: window.WindowStatusType): void {
+    if (!this.mainWindow || !this.cachedIsDedicatedLandscapeTablet) {
+      return
+    }
+    if (windowStatus === this.cachedWindowStatus) {
+      return
+    }
+    const oldStatus: window.WindowStatusType = this.cachedWindowStatus
+    this.cachedWindowStatus = windowStatus
+    hilog.info(DOMAIN, TAG, `WindowStatus changed: ${oldStatus} → ${windowStatus}`)
+
+    if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
+      // 真正回到独占全屏：重新套用平板窗口政策（强制横屏 + 隐藏系统栏）
+      TabletWindowPolicy.applyTabletWindowPolicy(this.mainWindow).catch((err: Error) => {
+        hilog.error(DOMAIN, TAG, `applyTabletWindowPolicy on fullscreen failed: ${JSON.stringify(err)}`)
+      })
+    } else {
+      // 分屏 / 悬浮 / 最大化：恢复默认方向与系统栏，布局按真实 windowRect 走
+      TabletWindowPolicy.restoreWindowPolicy(this.mainWindow).catch((err: Error) => {
+        hilog.error(DOMAIN, TAG, `restoreWindowPolicy on split/floating failed: ${JSON.stringify(err)}`)
+      })
     }
   }
 }

@@ -32,6 +32,7 @@ import { ActionSlot, ActionRole } from '../../../../corebridge/dto/PlatformDtos'
 import { sortedHeaderTrailingActions } from '../../NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
 import { PrimaryTabGestureLock } from '../../PrimaryTabGestureLock'
+import { HarmonyMaterialService } from '../../../../platform/material/HarmonyMaterialService'
 
 /** 单个动作按钮的边长（vp），与设计稿 40vp 一致 */
 const ACTION_BUTTON_SIZE_VP: number = 40
@@ -46,6 +47,7 @@ const DRAG_SLOP_VP: number = 8
 export struct HeaderActionCapsule {
   /** Core ScreenPolicy 下发的页头动作 */
   @Param actionSlots: ActionSlot[] = []
+  @Param inHdsTitleBar: boolean = false
   @Local dragged: boolean = false
 
   private downX: number = 0
@@ -108,10 +110,17 @@ export struct HeaderActionCapsule {
     // 那就不是「一个胶囊包住三个图标」了。
     .padding({ left: CAPSULE_PADDING_VP, right: CAPSULE_PADDING_VP + ACTION_GAP_VP })
     .borderRadius(ACTION_BUTTON_SIZE_VP / 2 + CAPSULE_PADDING_VP)
-    // 沉浸式系统材质在 stackBuilder 自绘节点中可能脱离材质作用域（折叠屏等场景），
-    // 改用有明确轮廓的普通胶囊表面 + 发丝描边，保证视觉一致性。
-    .backgroundColor($r('sys.color.comp_background_gray'))
-    .border({ width: 0.5, color: $r('sys.color.icon_secondary') })
+    // Issue #880 复核第 4 项：同一个胶囊只换容器呈现，动作列表 / 图标 / 点击逻辑共用上面这一份 Row。
+    // inHdsTitleBar=true（手机 HDS 原生标题栏）：恢复原来的沉浸式系统材质。
+    // 透明背景 + systemMaterial，与 HDS 标题栏融为一体，不额外描边。
+    // inHdsTitleBar=false（宽屏 WidePrimaryShell 内容流悬浮组）：脱离 HDS 材质作用域，
+    // systemMaterial 在 Stack 自绘节点里不保证生效，改用真实底色 + 发丝描边保证可见。
+    .backgroundColor(this.inHdsTitleBar ? Color.Transparent : $r('sys.color.comp_background_gray'))
+    .borderWidth(this.inHdsTitleBar ? 0 : 0.5)
+    .borderColor($r('sys.color.icon_secondary'))
+    .systemMaterial(this.inHdsTitleBar
+      ? HarmonyMaterialService.getInstance().floatingMaterial()
+      : undefined)
     // 锁一级 Tabs 的横向滑动切页，和 PrimaryFab 用同一个 store。
     // 挂在 Row 上而不是各 Button 上：按钮之间的空隙与胶囊内边距是 Row 自己的区域，
     // 没有按钮消费触摸，手势会直接透给 Tabs 把页面翻掉（实测空隙与右端都会翻页，

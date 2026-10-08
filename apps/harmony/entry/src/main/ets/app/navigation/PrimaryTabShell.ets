@@ -380,6 +380,7 @@ export struct PrimaryTabShell {
     }
     .width(WIDE_RAIL_WIDTH)
     .height('100%')
+    .padding({ top: this.adaptiveState.safeTopVp })
     .backgroundColor($r('sys.color.background_secondary'))
   }
 

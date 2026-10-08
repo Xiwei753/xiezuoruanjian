@@ -114,6 +114,13 @@ export class TabletWindowPolicy {
       return
     }
 
+    // 分屏 / 悬浮 / 最大化下窗口不是独占全屏，不套用强制横屏 + 隐藏系统栏；
+    // 这些形态按系统给出的真实可用窗口布局（见 AdaptiveContext 的 windowSizeChange）。
+    if (!TabletWindowPolicy.isExclusiveFullScreenState(mainWindow)) {
+      hilog.info(DOMAIN, TAG, 'Window is not in exclusive fullscreen, skipping landscape policy')
+      return
+    }
+
     try {
       await mainWindow.setPreferredOrientation(window.Orientation.LANDSCAPE)
       hilog.info(DOMAIN, TAG, 'Set preferred orientation to LANDSCAPE')
@@ -162,6 +169,26 @@ export class TabletWindowPolicy {
       hilog.info(DOMAIN, TAG, 'Restored system bars (status and navigation)')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to restore system bars: ${JSON.stringify(err)}`)
+    }
+  }
+
+  /**
+   * 套用前判断窗口是否处于独占全屏。
+   *
+   * WindowStatusType：UNDEFINED=0, FULL_SCREEN=1, MAXIMIZE=2, MINIMIZE=3, FLOATING=4, SPLIT_SCREEN=5。
+   * 只有 FULL_SCREEN 是独占全屏；分屏 / 悬浮 / 最大化都会保留系统栏与其它窗口，
+   * 套上强制横屏 + 隐藏系统栏等于把全屏 UI 硬压到一块非全屏窗口上。
+   * UNDEFINED 是冷启动窗口状态还没就绪，按原行为继续套用；
+   * 读取失败（窗口尚未创建）同样不阻断。
+   */
+  private static isExclusiveFullScreenState(mainWindow: window.Window): boolean {
+    try {
+      const status: window.WindowStatusType = mainWindow.getWindowStatus()
+      return status === window.WindowStatusType.FULL_SCREEN ||
+        status === window.WindowStatusType.UNDEFINED
+    } catch (err) {
+      hilog.info(DOMAIN, TAG, `getWindowStatus failed, assume exclusive fullscreen: ${JSON.stringify(err)}`)
+      return true
     }
   }
 }

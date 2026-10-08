@@ -161,6 +161,8 @@ export struct WritingScreen {
   @State todayTypedChars: number = 0
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
+  // Issue #880 修复2：目录树加载失败标志，ChapterTreePane 据此显示错误提示和重试按钮。
+  @State projectTreeError: boolean = false
   // Issue #825 复核第 2 项：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态，
   // 只作为 WorkbenchVisibility 输入让 Core 重算七角色 bounds。
   @State leftPaneCollapsed: boolean = false
@@ -182,6 +184,8 @@ export struct WritingScreen {
   // Issue #825 复核第1项：窗口由窄变宽时，adaptive observer 第一次进入 Workbench
   // 也要触发一次目录树加载，不能只在 aboutToAppear 加载。
   private wideWorkbenchTreeLoaded: boolean = false
+  // Issue #880 修复2：复用进行中的加载任务，避免并发请求覆盖目录状态。
+  private projectTreeLoadTask: Promise<boolean> | null = null
   // Issue #825 复核第 4 项：resolve_workbench_layout 是异步的，用递增 generation
   // 保证只有最后一次请求能写 workbenchPlan，旧响应不能把布局改回旧尺寸。
   private workbenchPlanGeneration: number = 0
@@ -1017,13 +1021,27 @@ export struct WritingScreen {
     return isWorkbenchMode(this.workbenchPlan)
   }
 
-  // Issue #825 复核第1项：进入宽屏工作台后只加载一次目录树。
-  // aboutToAppear（当时可能还是窄屏）与 adaptive observer（窗口变宽）都走这里。
-  private ensureWorkbenchProjectTree(): void {
+  // Issue #880 复核第 2 项：宽屏工作台目录树只有这一个加载入口。
+  // aboutToAppear、AdaptiveObserver 初始通知、窗口尺寸变化、ChapterTreePane 的「重试」
+  // 全部走这里。在途请求复用同一个 Promise，避免第一个请求未结束时又发第二个、
+  // 多个返回互相覆盖目录状态。
+  private ensureWorkbenchProjectTree(): Promise<boolean> {
     if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
-      return
+      return Promise.resolve(this.wideWorkbenchTreeLoaded)
     }
-    this.loadProjectTree()
+    if (this.projectTreeLoadTask !== null) {
+      return this.projectTreeLoadTask
+    }
+    const task: Promise<boolean> = this.loadProjectTree()
+    this.projectTreeLoadTask = task
+    task.finally((): void => {
+      // 只清自己这一次的任务；清掉后下一次调用才会重新发请求。
+      // 失败时 wideWorkbenchTreeLoaded 仍为 false，所以「重试」能真正重跑。
+      if (this.projectTreeLoadTask === task) {
+        this.projectTreeLoadTask = null
+      }
+    })
+    return task
   }
 
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
@@ -1033,6 +1051,7 @@ export struct WritingScreen {
       return false
     }
     this.isTreeLoading = true
+    this.projectTreeError = false
     try {
       const result = await this.bridge.getProjectTree(this.projectId)
       if (result.success && result.data) {
@@ -1056,6 +1075,11 @@ export struct WritingScreen {
     } finally {
       this.isTreeLoading = false
     }
+    // 失败：保留明确错误状态，并撤销「已加载」标记。
+    // 不撤销的话，成功过一次之后再刷新失败（建卷/建章后的重载）时，
+    // ChapterTreePane 的「重试」会被 ensureWorkbenchProjectTree 的已加载判断挡掉，成了空按钮。
+    this.projectTreeError = true
+    this.wideWorkbenchTreeLoaded = false
     return false
   }
 
@@ -1474,6 +1498,8 @@ export struct WritingScreen {
               projectTitle: this.projectTitle,
               expandedVolumes: this.expandedVolumes,
               selectedChapterId: this.chapterId,
+              isLoading: this.isTreeLoading,
+              loadError: this.projectTreeError,
               onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
               onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
                 this.switchChapter(chapterId, chapterTitle, volumeId)
@@ -1481,7 +1507,8 @@ export struct WritingScreen {
               onCreateVolume: (): void => { this.createVolume() },
               onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
               onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-              onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+              onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) },
+              onRetry: (): void => { this.ensureWorkbenchProjectTree() }
             })
               .width(this.chapterNavigationWidthVp())
               .height('100%')

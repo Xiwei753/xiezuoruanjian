@@ -13,14 +13,13 @@
 
 import hilog from '@ohos.hilog'
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
-import { getBridge } from '../../../app/AppContext'
 import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
+import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
@@ -126,47 +125,39 @@ export struct HomeScreen {
     }
   }
 
-  // 宽屏从首页直接进入写作工作台：查询项目树，优先选择第一个有效章节。
-  // 没有章节时也直接进入 Writing 的未选章节状态，不经过中间页。
+  // 宽屏从首页直接进入写作工作台：先读目录再决定打开哪个章节。
+  // 目录读取失败时留在作品首页（ViewModel 置错误状态，页面弹「加载目录失败 + 重试」），
+  // 不跳 Workspace，也不把读取失败伪装成空作品。
+  // 空作品只由「成功返回的空目录」决定：chapterId 为空即 Writing 的未选章节工作台。
   private async navigateToWritingFromProject(projectId: string, projectName: string): Promise<void> {
+    const ok: boolean = await this.viewModel.prepareOpenProject(projectId, projectName)
+    if (ok) {
+      this.openPendingWritingRoute()
+    }
+  }
+
+  // 重试入口：只重跑 getProjectTree(projectId)，成功后走同一段进 Writing 的逻辑。
+  private async retryTreeLoad(): Promise<void> {
+    const ok: boolean = await this.viewModel.retryOpenProject()
+    if (ok) {
+      this.openPendingWritingRoute()
+    }
+  }
+
+  // 目录读取成功后的统一入栈：写作页的章节切换仍由 WritingScreen 持有。
+  private openPendingWritingRoute(): void {
     const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
+    const target: ProjectOpenTarget | null = this.viewModel.getOpenProjectTarget()
+    if (!navPathStack || target === null) {
       return
     }
-    try {
-      const bridge = getBridge()
-      const treeResult = await bridge.getProjectTree(projectId)
-      if (treeResult.success && treeResult.data) {
-        const volumes = treeResult.data.volumes
-        // 找第一个有效章节
-        let firstChapterId: string = ''
-        let firstChapterTitle: string = ''
-        let firstVolumeId: string = ''
-        for (const vt of volumes) {
-          if (vt.chapters.length > 0) {
-            firstChapterId = vt.chapters[0].id
-            firstChapterTitle = vt.chapters[0].title
-            firstVolumeId = vt.volume.id
-            break
-          }
-        }
-        const writingParam: WritingRouteParams = {
-          projectId: projectId,
-          chapterId: firstChapterId || undefined,
-          chapterTitle: firstChapterTitle || undefined,
-          volumeId: firstVolumeId || undefined
-        }
-        navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
-      } else {
-        // 项目树加载失败，进入 Workspace 页面让用户管理卷章
-        const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
-        navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
-      }
-    } catch (err) {
-      // 异常时进入 Workspace 页面，不进入 Writing 的未选章节状态
-      const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
-      navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
+    const writingParam: WritingRouteParams = {
+      projectId: target.projectId,
+      chapterId: target.chapterId.length > 0 ? target.chapterId : undefined,
+      chapterTitle: target.chapterTitle.length > 0 ? target.chapterTitle : undefined,
+      volumeId: target.volumeId.length > 0 ? target.volumeId : undefined
     }
+    navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
@@ -323,6 +314,11 @@ export struct HomeScreen {
       }
       if (this.viewModel.deleteTarget !== null) {
         this.DeleteConfirmDialog()
+      }
+
+      // ── 目录读取失败提示层（宽屏点作品后 getProjectTree 失败） ──
+      if (this.viewModel.openProjectError.length > 0) {
+        this.OpenProjectErrorDialog()
       }
     }
     .width('100%')
@@ -855,6 +851,56 @@ export struct HomeScreen {
             .height(36)
             .onClick(() => {
               this.viewModel.confirmDelete()
+            })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
+      .padding(20)
+      .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 24, right: 24 })
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
+  }
+
+  // ── 目录读取失败对话框 ──
+  // 宽屏点作品后 getProjectTree 失败：留在作品首页，给明确错误和重试；
+  // 重试只重跑目录读取，成功后按原逻辑进 Routes.Writing。
+  @Builder
+  OpenProjectErrorDialog() {
+    Column() {
+      Column() {
+        Text(this.viewModel.openProjectError)
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 8 })
+
+        if (this.viewModel.openProjectName.length > 0) {
+          Text(`作品「${this.viewModel.openProjectName}」，请重试。`)
+            .fontSize(14)
+            .margin({ bottom: 16 })
+        }
+
+        Row() {
+          Button('取消')
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.viewModel.dismissOpenProjectError()
+            })
+
+          Blank()
+
+          Button('重试')
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.retryTreeLoad()
             })
         }
         .width('100%')

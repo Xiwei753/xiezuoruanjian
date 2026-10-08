@@ -30,6 +30,12 @@ export struct ChapterTreePane {
   onDeleteVolume: ((volumeId: string) => void) | null = null
   // 删除章节
   onDeleteChapter: ((chapterId: string) => void) | null = null
+  // 目录树加载中（纯 UI 状态，由 WritingScreen 传入）
+  isLoading: boolean = false
+  // 目录树加载失败（纯 UI 状态，由 WritingScreen 传入；空目录与失败是两种状态）
+  loadError: boolean = false
+  // 重试加载目录树：仍调 WritingScreen 那一个加载入口，不在本组件里自己发请求
+  onRetry: (() => void) | null = null
 
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
@@ -84,7 +90,46 @@ export struct ChapterTreePane {
       // 目录内容
       Scroll() {
         Column() {
-          if (this.volumeTrees.length === 0) {
+          if (this.loadError) {
+            // 加载失败：显示错误提示和重试按钮
+            Column() {
+              Text('加载目录失败')
+                .fontSize(14)
+                .fontColor($r('sys.color.font_primary'))
+                .margin({ bottom: 8 })
+              Button('重试')
+                .fontSize(14)
+                .width(80)
+                .height(32)
+                .borderRadius(16)
+                .backgroundColor($r('sys.color.background_emphasize'))
+                .fontColor($r('sys.color.font_emphasize_contrary'))
+                .onClick(() => {
+                  if (this.onRetry) {
+                    this.onRetry()
+                  }
+                })
+            }
+            .width('100%')
+            .padding(24)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.isLoading && this.volumeTrees.length === 0) {
+            // 首次加载 / 失败后重试：还没有任何目录内容可显示时才用整块加载态。
+            // 建卷、建章后的目录刷新继续显示现有树，不闪一下空白再复原。
+            Column() {
+              LoadingProgress()
+                .width(32)
+                .height(32)
+              Text('加载中...')
+                .fontSize(14)
+                .margin({ top: 8 })
+                .fontColor($r('sys.color.font_secondary'))
+            }
+            .width('100%')
+            .padding(24)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.volumeTrees.length === 0) {
+            // 空目录（加载成功但无卷章）
             Column() {
               Text($r('app.string.no_volumes_chapters'))
                 .fontSize(14)
