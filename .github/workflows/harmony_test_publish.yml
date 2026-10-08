@@ -482,7 +482,7 @@ jobs:
           # of old test versions requires Huawei's documented DELETE method.
           client_path = path.with_name("agc-client.ts")
           client_source = client_path.read_text(encoding="utf-8")
-          delete_anchor = "  async put<T>(\\n"
+          delete_anchor = "  async put<T>(\n"
           delete_extension = """  async delete<T>(
             path: string,
             query?: Record<string, string>,
@@ -497,7 +497,7 @@ jobs:
             return this.rawRequest<T>('DELETE', url, undefined, headers)
           }
 
-          async put<T>(
+            async put<T>(
           """
           if client_source.count(delete_anchor) != 1:
               raise SystemExit("Pinned AGC client delete method injection anchor missing")
