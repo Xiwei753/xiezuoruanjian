@@ -49,9 +49,11 @@ impl SujianEditorItem {
         // 当前帧为吞吐边界；非协同时文字动画与光标动画互相独立。
         // 即 coordinated || typing || smooth 时才调用 prepare_edit_motion。
         let mut outcome: VisualPrepareOutcome = VisualPrepareOutcome::AnimationDisabled;
-        let animations_requested = self.current_coordinated_animation_enabled
-            || self.current_typing_animation_enabled
-            || self.current_smooth_cursor_enabled;
+        let animations_requested = super::animation::any_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
         if animations_requested && self.current_is_scrolling {
             // Issue #815 评论 6042062633 修改 8: 滚动期间抑制动画是显式规则，但这是输入
             // 路径上"编辑发生了却完全没有动画"的第一个也是最常见的入口，必须记事件。

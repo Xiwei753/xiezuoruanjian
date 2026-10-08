@@ -275,12 +275,13 @@ impl SujianEditorItem {
 
         // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
-        // Issue #756 评论 5821042551: composition commit 动画进入条件 = coordinated || typing || smooth。
+        // Issue #756: composition commit follows the shared effective animation policy.
         let composition = if commit.was_composing
-            && (self.current_coordinated_animation_enabled
-                || self.current_typing_animation_enabled
-                || self.current_smooth_cursor_enabled)
-        {
+            && super::animation::any_animation_enabled(
+                self.current_typing_animation_enabled,
+                self.current_smooth_cursor_enabled,
+                self.current_coordinated_animation_enabled,
+            ) {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -340,6 +341,7 @@ impl SujianEditorItem {
         // 由 emit_content_changed → update_cursor_visual_position 统一计算。
         // visual_x/visual_y 只是屏幕动画位置，不与 target 互相反写。
 
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
         self.emit_content_changed();
     }
 
@@ -403,12 +405,13 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
 
-        // Issue #756 评论 5821042551: composition commit 动画进入条件 = coordinated || typing || smooth。
+        // Issue #756: composition commit follows the shared effective animation policy.
         let composition = if commit.was_composing
-            && (self.current_coordinated_animation_enabled
-                || self.current_typing_animation_enabled
-                || self.current_smooth_cursor_enabled)
-        {
+            && super::animation::any_animation_enabled(
+                self.current_typing_animation_enabled,
+                self.current_smooth_cursor_enabled,
+                self.current_coordinated_animation_enabled,
+            ) {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -444,6 +447,7 @@ impl SujianEditorItem {
         // 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
         // 由 emit_content_changed → update_cursor_visual_position 统一计算。
 
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
         self.emit_content_changed();
     }
 
@@ -474,6 +478,8 @@ impl SujianEditorItem {
         };
         let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
         if outcome.applied {
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
         }
     }
@@ -501,6 +507,8 @@ impl SujianEditorItem {
         };
         let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
         if outcome.applied {
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
         }
     }
@@ -518,6 +526,8 @@ impl SujianEditorItem {
         };
         let outcome = self.apply_edit_with_visuals(op, EditorTransactionCause::Delete, None);
         if outcome.applied {
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
         }
     }
@@ -547,6 +557,8 @@ impl SujianEditorItem {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
             let _ = self.record_transaction(old, new, &result, true);
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
             // Issue #843: Undo 也上报编辑事实，使统计能正确回退。
             // result.cause 是 Undo，content_delta 是真实逆向字符变化。
@@ -562,6 +574,8 @@ impl SujianEditorItem {
             // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.pipeline.snapshot();
             let _ = self.record_transaction(old, new, &result, true);
+            self.cursor_ctrl.last_move_source =
+                cursor_controller::CursorMoveSource::TextTransaction;
             self.emit_content_changed();
             // Issue #843: Redo 也上报编辑事实，使统计能正确重放。
             // result.cause 是 Redo，content_delta 是真实正向字符变化。

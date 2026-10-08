@@ -416,9 +416,11 @@ impl SujianEditorItem {
         let new = self.pipeline.snapshot();
 
         // 6. 算 animations_requested
-        let animations_requested = self.current_coordinated_animation_enabled
-            || self.current_typing_animation_enabled
-            || self.current_smooth_cursor_enabled;
+        let animations_requested = super::animation::any_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
 
         // 7. 调视觉流水线，构造明确的 visual outcome
         let visual = if let Some(params) = composition {

@@ -132,6 +132,13 @@ impl SujianEditorItem {
                 selection_gesture_active,
                 is_preediting,
                 smooth_cursor_enabled: self.current_smooth_cursor_enabled,
+                cursor_animation_enabled: super::animation::cursor_animation_enabled(
+                    self.current_smooth_cursor_enabled,
+                    self.current_coordinated_animation_enabled,
+                ),
+                movement_source: self.cursor_ctrl.last_move_source,
+                visual_position_valid: self.cursor_ctrl.visibility_state
+                    != super::cursor_controller::CursorVisibilityState::Uninitialized,
                 duration_ms: u64::from(self.current_cursor_animation_duration_ms),
                 visual_x: self.cursor_ctrl.visual_x,
                 visual_y: self.cursor_ctrl.visual_y,

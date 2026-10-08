@@ -312,15 +312,22 @@ impl SujianEditorItem {
         if self.current_smooth_cursor_enabled == value {
             return;
         }
+        let was_enabled = super::animation::cursor_animation_enabled(
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
         self.current_smooth_cursor_enabled = value;
-        if !value {
-            // Issue #727 约束 8: 清 caret animation 时文字也同步 Snap。
-            // smooth cursor 关闭后不再创建新事务（约束 5），现有 CaretDriven 事务
-            // 依赖 caret motion track，必须同步结束到 canonical 状态。
-            self.clear_active_text_animations();
+        let is_enabled = super::animation::cursor_animation_enabled(
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        if was_enabled && !is_enabled {
+            // Independent mode: turning off smooth cursor settles only the cursor
+            // track; typing animation remains independently controlled.
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+            self.update_cursor_visual_position();
             self.request_static_repaint();
         }
         self.visual_settings_changed();
@@ -348,8 +355,16 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled == value {
             return;
         }
+        let was_enabled = super::animation::text_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_coordinated_animation_enabled,
+        );
         self.current_typing_animation_enabled = value;
-        if !value {
+        let is_enabled = super::animation::text_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        if was_enabled && !is_enabled {
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
@@ -744,13 +759,8 @@ impl SujianEditorItem {
         // Issue #701 评论 5699573227 第三阶段 (F4/F8): 不再在 emit_content_changed 中
         // 无条件清 cursor_ctrl.animation。正常输入/删除/IME commit 创建事务后，
         // emit_content_changed 和普通刷新不能再把动画清掉。
-        //
-        // force_snap_next=true 时，update_cursor_visual_position → build_cursor_plan
-        // → apply_plan 会走 CursorTransition::Snap 分支，自动清 animation 并把
-        // visual 跳到 target。属性变化路径（set_plain_text/reload/layout_property_changed
-        // /set_scroll_y 等）已各自显式 `self.cursor_ctrl.animation = None`，不依赖此处。
-        // 因此这里的清动画逻辑是多余的，且会在编辑前残留 force_snap_next=true 时
-        // 误清刚由 record_transaction/handle_composition_commit 创建的光标动画。
+        // Issue #853: movement source and force-snap intent come from each caller;
+        // this shared notification only refreshes canonical layout and cursor target.
         self.pipeline.bump_text_revision();
         // Issue #658 评论 5622829886 问题 1: 把 record_visual_transaction 产生的
         // pending promoted layout 提升为 EditorLayout current，避免后续
@@ -812,10 +822,6 @@ impl SujianEditorItem {
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
-        // Issue #853：正文动画不拥有光标。Core selection 已提交到最新 caret，
-        // 此帧由 cursor controller 直接落到 canonical 几何。
-        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
-        self.cursor_ctrl.force_snap_next = true;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
