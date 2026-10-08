@@ -63,10 +63,6 @@ const WIDE_RAIL_ENTRIES: WideRailEntry[] = [
 // 宽屏左侧一级导航的固定宽度（vp）
 const WIDE_RAIL_WIDTH: number = 160
 
-// Issue #827 评论 1 第 6 点：宽屏顶部固定动作条的高度与左右留白。
-// 这一行属于壳层，不属于任何页面，所以两个常量都只在这里出现一次。
-const WIDE_TOP_ACTION_BAR_HEIGHT: number = 64
-const WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL: number = 16
 // Issue #827 评论 3 第 1 点：左栏「素笺」行的左右内边距。
 const WIDE_RAIL_BRAND_PADDING: number = 20
 
@@ -333,7 +329,8 @@ export struct PrimaryTabShell {
   // 这样不会出现“页面已经是宽屏骨架，但底下还挂着一个沉浸光感底栏”的双导航。
   // 沉浸光感不是布局理由：侧栏没有系统 HDS TabBar 光感能力时，侧栏就用普通系统 token。
   private get isWidePrimaryNavigation(): boolean {
-    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side
+    return this.adaptiveState.layoutPlan.primaryNavigationPlacement === PrimaryNavigationPlacement.Side ||
+      (this.adaptiveState.isDedicatedLandscapeTablet && this.adaptiveState.prefersWideLayout)
   }
 
   // 宽屏顶部固定动作区（同步 / 搜索 / 设置）的动作来源仍是 Core ScreenPolicy，
@@ -353,39 +350,9 @@ export struct PrimaryTabShell {
     })
   }
 
-  // 宽屏壳的顶部固定动作条：内容区右上角常驻同步 / 搜索 / 设置。
-  // 草图（#827 评论 2）里这一行是壳层的一部分，不属于任何页面，
-  // 所以页面在 Expanded 下同时隐藏自己的 HDS 标题栏，不在内容区画第二套标题栏。
-  @Builder
-  WideTopActionBar() {
-    Column() {
-      Row() {
-        Blank()
-        HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
-      }
-      .width('100%')
-      .height(WIDE_TOP_ACTION_BAR_HEIGHT)
-      .padding({ left: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL, right: WIDE_TOP_ACTION_BAR_PADDING_HORIZONTAL })
-      .alignItems(VerticalAlign.Center)
-
-      // Issue #827 评论 3 第 1 点：这条分隔线必须和左栏「素笺」行下方那条
-      // 落在同一个 y 上，横线才能像草图那样从最左贯通到最右。
-      // 两处都用 WIDE_TOP_ACTION_BAR_HEIGHT 定高，不能按文字自然高度排。
-      Column()
-        .width('100%')
-        .height(1)
-        .backgroundColor($r('sys.color.comp_background_gray'))
-    }
-    .width('100%')
-    // 两个子节点都显式 width('100%')，这里不需要额外的对齐设置。
-  }
-
   // 宽屏：一级导航固定在左侧，作品 / 星图 / 统计纵向排列，选中态沿用现有系统 token。
   @Builder
   WidePrimaryRail() {
-    // Issue #827 评论 3 第 1 点：第一段固定成 WIDE_TOP_ACTION_BAR_HEIGHT 高的一行，
-    // 「素笺」在这行里垂直居中，divider 紧随其后 —— 左栏与右侧动作条共用同一条基线。
-    // 外层不加左右内边距，divider 才能铺满整个左栏宽度。
     Column() {
       Row() {
         Text('素笺')
@@ -395,16 +362,11 @@ export struct PrimaryTabShell {
           .textAlign(TextAlign.Start)
       }
       .width('100%')
-      .height(WIDE_TOP_ACTION_BAR_HEIGHT)
+      .height(48)
       .padding({ left: WIDE_RAIL_BRAND_PADDING, right: WIDE_RAIL_BRAND_PADDING })
       .alignItems(VerticalAlign.Center)
 
-      Column()
-        .width('100%')
-        .height(1)
-        .backgroundColor($r('sys.color.comp_background_gray'))
-
-      // 导航项区：左右内边距只作用在导航项上，不影响上面那条贯通分隔线。
+      // 导航项区：左右内边距只作用在导航项上。
       Column({ space: 4 }) {
         ForEach(WIDE_RAIL_ENTRIES, (entry: WideRailEntry) => {
           this.WideRailItem(entry)
@@ -414,10 +376,11 @@ export struct PrimaryTabShell {
       }
       .width('100%')
       .layoutWeight(1)
-      .padding({ left: 12, right: 12, top: 16, bottom: 16 })
+      .padding({ left: 12, right: 12, top: 24, bottom: 16 })
     }
     .width(WIDE_RAIL_WIDTH)
     .height('100%')
+    .padding({ top: this.adaptiveState.safeTopVp })
     .backgroundColor($r('sys.color.background_secondary'))
   }
 
@@ -477,8 +440,8 @@ export struct PrimaryTabShell {
     }
   }
 
-  // 宽屏壳：一级导航在左，顶部右侧固定同步/搜索/设置，内容在右下。
-  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与顶部动作条一起消失，
+  // 宽屏壳：一级导航在左，右上角悬浮同步/搜索/设置，内容充满可用高度。
+  // 写进 Writing 这类 showPrimaryNavigation=false 的页面时左栏与右上角操作组一起消失，
   // 内容占满（写作页有自己那套七角色工作台顶栏，不该再叠一条）。
   @Builder
   WidePrimaryShell() {
@@ -486,17 +449,18 @@ export struct PrimaryTabShell {
       if (this.currentShowPrimaryNav) {
         this.WidePrimaryRail()
       }
-      Column() {
+      Stack() {
+        this.WideCurrentNavigation()
+        // 右上角独立悬浮操作组：不铺白色背景、不占整行高度
         if (this.currentShowPrimaryNav) {
-          this.WideTopActionBar()
+          HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
+            .position({ x: '100%', y: 0 })
+            .translate({ x: '-100%', y: 0 })
+            .margin({ top: Math.max(this.adaptiveState.safeTopVp, 8), right: 16 })
         }
-        Stack() {
-          this.WideCurrentNavigation()
-        }
-        .layoutWeight(1)
-        .width('100%')
       }
       .layoutWeight(1)
+      .width('100%')
       .height('100%')
     }
     .width('100%')

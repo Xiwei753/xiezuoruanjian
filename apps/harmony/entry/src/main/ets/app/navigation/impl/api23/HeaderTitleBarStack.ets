@@ -45,7 +45,7 @@ export struct HeaderTitleBarStack {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
 
       // Issue #825 复核第1项：HeaderTrailing 动作恒显示（属于 Core 的 ToolbarTrailing 角色）。
-      HeaderActionCapsule({ actionSlots: this.headerActions })
+      HeaderActionCapsule({ actionSlots: this.headerActions, inHdsTitleBar: true })
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)

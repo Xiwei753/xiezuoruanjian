@@ -5,6 +5,7 @@ import { getBridge } from '../../app/AppContext'
 import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan, defaultLayoutMetrics } from './LayoutPolicyHelper'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
+import { TabletWindowPolicy } from '../../platform/window/TabletWindowPolicy'
 
 /**
  * 响应式布局状态 — 直接映射 Core LayoutPlan
@@ -21,6 +22,12 @@ export interface AdaptiveState {
   gridColumns: number
   // 底部安全区域高度（导航栏避让），单位 vp
   safeBottomVp: number
+  // 顶部安全区域高度（状态栏避让），单位 vp
+  safeTopVp: number
+  // 当前是否偏好宽屏布局（专用横屏平板且 Core 返回 Workbench 模式，或 sizeClass === Expanded）
+  prefersWideLayout: boolean
+  // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
+  isDedicatedLandscapeTablet: boolean
 }
 
 /**
@@ -70,6 +77,14 @@ export class AdaptiveContext {
   private cachedSafeBottomVp: number = 0
   private cachedKeyboardVisible: boolean = false
   private cachedFoldPosture: FoldPosture = FoldPosture.Unknown
+  // 专用横屏平板判定（只算一次设备能力）
+  private cachedIsDedicatedLandscapeTablet: boolean = false
+  // 缓存上次的窗口状态（用于检测全屏 ↔ 分屏/自由窗口切换）
+  private cachedWindowStatus: window.WindowStatusType = window.WindowStatusType.UNDEFINED
+  // 窗口状态变更串行化：Promise 链确保前一个 apply/restore 完成后才执行下一个
+  private windowStatusTask: Promise<void> = Promise.resolve()
+  // 状态序号：递增 generation，过期的请求丢弃
+  private windowStatusGeneration: number = 0
 
   private constructor() {}
 
@@ -89,10 +104,21 @@ export class AdaptiveContext {
       this.mainWindow = await windowStage.getMainWindow()
       hilog.info(DOMAIN, TAG, 'Got main window')
 
+      // 初始化专用横屏平板判定（只算一次设备能力）
+      this.cachedIsDedicatedLandscapeTablet = TabletWindowPolicy.isDedicatedLandscapeTablet()
+
       // 读取初始安全区域 / 键盘 / 折叠状态
       this.readSafeAreas()
       this.readKeyboardVisible()
       this.readFoldPosture()
+      // 先注册窗口状态变化监听（确保不漏事件）
+      this.registerWindowStatusChange()
+      // 再读取当前窗口状态
+      this.readWindowStatus()
+      // 将初次已知状态送入 reconcileWindowPolicy 做首次政策应用
+      if (this.cachedIsDedicatedLandscapeTablet && this.mainWindow) {
+        this.reconcileWindowPolicy(this.cachedWindowStatus)
+      }
 
       // 底部手势条（导航指示器）沉浸式适配。
       // ArkUI 默认把页面内容布局在安全区内，实机 dumpLayout 证实 Navigation / NavDestination /
@@ -104,8 +130,14 @@ export class AdaptiveContext {
       // 才会继续避让顶部状态栏，两者配套才有正确结果；API 23 以下走非 HDS 壳，
       // 保持改动前的默认避让行为，不引入未验证的沉浸态。
       if (PlatformApiResolver.getInstance().isApiAtLeast(23)) {
-        this.mainWindow.setWindowLayoutFullScreen(true)
-        hilog.info(DOMAIN, TAG, 'Window layout full screen enabled for bottom inset immersion')
+        if (this.cachedIsDedicatedLandscapeTablet) {
+          // 专用横屏平板：不在这里设全屏，交给 TabletWindowPolicy.applyTabletWindowPolicy
+          // （它已经有 setWindowLayoutFullScreen(true) + 隐藏系统栏 + 强制横屏）
+          hilog.info(DOMAIN, TAG, 'Dedicated landscape tablet: deferring full screen to TabletWindowPolicy')
+        } else {
+          this.mainWindow.setWindowLayoutFullScreen(true)
+          hilog.info(DOMAIN, TAG, 'Window layout full screen enabled for bottom inset immersion')
+        }
       }
 
       // Issue #752 评论 5808818396：先注册窗口尺寸变化监听，再读取当前 windowRect。
@@ -151,7 +183,10 @@ export class AdaptiveContext {
       contentMaxWidth: this.state.contentMaxWidth,
       pagePadding: this.state.pagePadding,
       gridColumns: this.state.gridColumns,
-      safeBottomVp: this.cachedSafeBottomVp
+      safeBottomVp: this.cachedSafeBottomVp,
+      safeTopVp: this.cachedSafeTopVp,
+      prefersWideLayout: this.state.prefersWideLayout,
+      isDedicatedLandscapeTablet: this.state.isDedicatedLandscapeTablet
     }
   }
 
@@ -196,6 +231,7 @@ export class AdaptiveContext {
     this.unregisterWindowSizeChange()
     this.unregisterAvoidAreaChange()
     this.unregisterFoldStatusChange()
+    this.unregisterWindowStatusChange()
     this.observers.clear()
     this.mainWindow = null
     this.cachedSafeTopVp = 0
@@ -268,16 +304,26 @@ export class AdaptiveContext {
       if (result.success && contract !== undefined) {
         // Harmony 平台值（纸面宽度/内边距/网格列数）在平台层叠加，不在 Core。
         const plan: LayoutPlan = buildHarmonyLayoutPlan(contract, widthVp)
+        const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
+        // prefersWideLayout: 专用横屏平板且 Core 返回 Workbench 模式（能展示完整宽屏工作台），或 sizeClass === Expanded
+        // 不能只按 600vp 判定：600-695vp 时 Core 返回 SinglePane（最小 workbench 宽度 = 696dp），
+        // 此时进入 Writing 会出现无章节树且无法新建章节的死状态。
+        // 用 Core 的 workspaceLayoutMode 判断，确保只在真正能展示工作台时才启用宽屏布局。
+        const prefersWideLayout: boolean =
+          (this.cachedIsDedicatedLandscapeTablet && contract.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) || sizeClass === WidthClass.Expanded
         this.state = {
           widthVp: Math.round(widthVp * 100) / 100,
           heightVp: Math.round(heightVp * 100) / 100,
           layoutPlan: plan,
-          sizeClass: this.harmonySizeClass(widthVp),
+          sizeClass: sizeClass,
           isTwoPane: contract.shellMode === ShellMode.TwoPane,
           contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
           pagePadding: plan.pagePaddingVp,
           gridColumns: plan.gridColumns,
-          safeBottomVp: this.cachedSafeBottomVp
+          safeBottomVp: this.cachedSafeBottomVp,
+          safeTopVp: this.cachedSafeTopVp,
+          prefersWideLayout: prefersWideLayout,
+          isDedicatedLandscapeTablet: this.cachedIsDedicatedLandscapeTablet
         }
         // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
         if (isFirstValidSize) {
@@ -332,7 +378,10 @@ export class AdaptiveContext {
       contentMaxWidth: Number.MAX_SAFE_INTEGER,
       pagePadding: 16,
       gridColumns: 2,
-      safeBottomVp: 0
+      safeBottomVp: 0,
+      safeTopVp: 0,
+      prefersWideLayout: false,
+      isDedicatedLandscapeTablet: false
     }
   }
 
@@ -389,6 +438,23 @@ export class AdaptiveContext {
     // 折叠状态由外部通过 updateFoldPosture() 注入。
     this.cachedFoldPosture = FoldPosture.Unknown
     hilog.info(DOMAIN, TAG, `FoldPosture: Unknown (deferred to external injection)`)
+  }
+
+  /**
+   * 读取初始窗口状态，更新 cachedWindowStatus。
+   * 用 window.Window.getWindowStatus()（API 12+），不用 WindowProperties——
+   * WindowProperties 没有窗口模式字段。
+   */
+  private readWindowStatus(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.cachedWindowStatus = this.mainWindow.getWindowStatus()
+      hilog.info(DOMAIN, TAG, `Initial windowStatus: ${this.cachedWindowStatus}`)
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `readWindowStatus failed: ${JSON.stringify(err)}`)
+    }
   }
 
   /**
@@ -522,6 +588,91 @@ export class AdaptiveContext {
     } catch (err) {
       // 静默忽略
     }
+  }
+
+  // ========== 窗口状态变化监听 ==========
+
+  // Issue #880 复核：窗口状态变化（全屏 ↔ 分屏 / 悬浮窗）时重算系统栏与方向政策。
+  // 只在真正回到独占全屏（WindowStatusType.FULL_SCREEN）时重新套用平板政策；
+  // 分屏 / 悬浮 / 最大化一概恢复默认，避免把全屏宽屏 UI 硬套到小块可用窗口上。
+  // 国产折叠屏 / 阔直屏不执行这套强制政策（cachedIsDedicatedLandscapeTablet 恒为 false）。
+  // 窗口尺寸本身仍由 windowSizeChange 驱动，本监听不改布局状态。
+  private registerWindowStatusChange(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.mainWindow.on('windowStatusChange', (windowStatus: window.WindowStatusType) => {
+        this.handleWindowStatusChange(windowStatus)
+      })
+      hilog.info(DOMAIN, TAG, 'Registered windowStatusChange listener')
+    } catch (err) {
+      // windowStatusChange 依赖 SystemCapability.Window.SessionManager，部分设备不可用，静默忽略
+      hilog.info(DOMAIN, TAG, `windowStatusChange not supported: ${JSON.stringify(err)}`)
+    }
+  }
+
+  private unregisterWindowStatusChange(): void {
+    if (!this.mainWindow) {
+      return
+    }
+    try {
+      this.mainWindow.off('windowStatusChange')
+      hilog.info(DOMAIN, TAG, 'Unregistered windowStatusChange listener')
+    } catch (err) {
+      // 静默忽略
+    }
+  }
+
+  /**
+   * 统一的窗口政策协调入口，供初始状态和事件回调共用。
+   *
+   * 将串行化逻辑集中在此方法中：
+   * - 更新 cachedWindowStatus
+   * - 递增 generation 并串到 windowStatusTask 链上确保串行执行
+   * - FULL_SCREEN → applyTabletWindowPolicy（强制横屏 + 隐藏系统栏）
+   * - UNDEFINED → 不执行政策，等待状态明确后再统一处理
+   * - 其他 → restoreWindowPolicy（恢复默认方向与系统栏）
+   */
+  private reconcileWindowPolicy(windowStatus: window.WindowStatusType): void {
+    if (!this.mainWindow || !this.cachedIsDedicatedLandscapeTablet) {
+      return
+    }
+    // 更新缓存状态
+    this.cachedWindowStatus = windowStatus
+
+    this.windowStatusGeneration++
+    const currentGeneration: number = this.windowStatusGeneration
+    const mainWindow: window.Window = this.mainWindow
+
+    this.windowStatusTask = this.windowStatusTask.then(() => {
+      if (currentGeneration !== this.windowStatusGeneration) {
+        hilog.info(DOMAIN, TAG, `WindowStatus task generation ${currentGeneration} is stale, skipping`)
+        return
+      }
+      if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
+        return TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
+      } else if (windowStatus === window.WindowStatusType.UNDEFINED) {
+        // UNDEFINED：冷启动窗口状态还没就绪，不凭猜测强制横屏，等待状态明确后再统一处理
+        hilog.info(DOMAIN, TAG, 'WindowStatus UNDEFINED: deferring policy until status is confirmed')
+        return
+      } else {
+        return TabletWindowPolicy.restoreWindowPolicy(mainWindow)
+      }
+    }).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, `WindowStatus task failed: ${JSON.stringify(err)}`)
+    })
+  }
+
+  private handleWindowStatusChange(windowStatus: window.WindowStatusType): void {
+    if (!this.mainWindow || !this.cachedIsDedicatedLandscapeTablet) {
+      return
+    }
+    if (windowStatus === this.cachedWindowStatus) {
+      return
+    }
+    hilog.info(DOMAIN, TAG, `WindowStatus changed: ${this.cachedWindowStatus} → ${windowStatus}`)
+    this.reconcileWindowPolicy(windowStatus)
   }
 }
 

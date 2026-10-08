@@ -288,7 +288,8 @@ export struct StarMapListScreen {
       HdsAppDestinationApi23({
         title: '星图',
         screenRole: ScreenRole.StarMap,
-        screenTabIndex: 1
+        screenTabIndex: 1,
+        showTitleBar: !this.adaptiveState.prefersWideLayout
       }) {
         this.StarMapListContent()
       }
@@ -296,7 +297,7 @@ export struct StarMapListScreen {
       NavDestination() {
         this.StarMapListContent()
       }
-      .hideTitleBar(false)
+      .hideTitleBar(this.adaptiveState.prefersWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title('星图')

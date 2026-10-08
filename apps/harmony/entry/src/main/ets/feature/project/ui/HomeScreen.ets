@@ -12,14 +12,14 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
-import { ProjectListViewModel } from '../presentation/ProjectListViewModel'
+import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ActionSlot, ActionTarget, ActionRole } from '../../../corebridge/dto/PlatformDtos'
@@ -70,6 +70,10 @@ export struct HomeScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
+  // 导航意图序号：每次点击作品或重试时递增，await 返回后只有最新序号才允许 push。
+  // 解决同作品复用 Promise 时两个等待者各执行一次 pushWritingRoute 的问题。
+  private openNavigationGeneration: number = 0
+
   async aboutToAppear() {
     hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
@@ -96,6 +100,8 @@ export struct HomeScreen {
   }
 
   aboutToDisappear() {
+    // 页面离开后使进行中的导航意图失效，防止异步目录读取回来后仍执行 pushWritingRoute。
+    this.openNavigationGeneration++
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -115,8 +121,64 @@ export struct HomeScreen {
     if (!navPathStack) {
       return
     }
-    const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
-    navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
+    if (this.adaptiveState.prefersWideLayout) {
+      // 宽屏：直接进入写作工作台
+      this.navigateToWritingFromProject(projectId, projectName)
+    } else {
+      // 窄屏：保留原有卷章管理页面
+      const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
+      navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
+    }
+  }
+
+  // 宽屏从首页直接进入写作工作台：先读目录再决定打开哪个章节。
+  // 目录读取失败时留在作品首页（ViewModel 置错误状态，页面弹「加载目录失败 + 重试」），
+  // 不跳 Workspace，也不把读取失败伪装成空作品。
+  // 空作品只由「成功返回的空目录」决定：chapterId 为空即 Writing 的未选章节工作台。
+  // prepareOpenProject 返回确定值，页面只对当前请求结果做一次 pushPath。
+  private async navigateToWritingFromProject(projectId: string, projectName: string): Promise<void> {
+    this.openNavigationGeneration++
+    const myGeneration: number = this.openNavigationGeneration
+    const target: ProjectOpenTarget | null = await this.viewModel.prepareOpenProject(projectId, projectName)
+    if (target !== null && myGeneration === this.openNavigationGeneration) {
+      this.pushWritingRoute(target)
+    }
+  }
+
+  // 重试入口：只重跑 getProjectTree(projectId)，成功后走同一段进 Writing 的逻辑。
+  private async retryTreeLoad(): Promise<void> {
+    this.openNavigationGeneration++
+    const myGeneration: number = this.openNavigationGeneration
+    const target: ProjectOpenTarget | null = await this.viewModel.retryOpenProject()
+    if (target !== null && myGeneration === this.openNavigationGeneration) {
+      this.pushWritingRoute(target)
+    }
+  }
+
+  // 目录读取成功后的统一入栈：用作品 Tab 的固定栈（getTabStack(0)）而非全局活动栈，
+  // 避免异步等待期间用户切到星图/统计 Tab 后 push 到错误的一级导航。
+  // push 前确认当前仍在作品 Tab（getNavPathStack === getTabStack(0)），不在则放弃打开。
+  // push 后立即递增 generation 消费本次意图，防止动画未完成时再次点击重复入栈。
+  private pushWritingRoute(target: ProjectOpenTarget): void {
+    const homeStack: NavPathStack | null = this.navCoordinator.getTabStack(0)
+    if (!homeStack) {
+      return
+    }
+    // 确认当前活动 Tab 仍是作品 Tab，否则放弃（不把写作页留在后台悄悄打开）
+    const activeStack: NavPathStack | null = this.navCoordinator.getNavPathStack()
+    if (activeStack !== homeStack) {
+      hilog.info(0x0000, 'HomeScreen', 'pushWritingRoute: active tab is not Home, aborting push')
+      return
+    }
+    const writingParam: WritingRouteParams = {
+      projectId: target.projectId,
+      chapterId: target.chapterId.length > 0 ? target.chapterId : undefined,
+      chapterTitle: target.chapterTitle.length > 0 ? target.chapterTitle : undefined,
+      volumeId: target.volumeId.length > 0 ? target.volumeId : undefined
+    }
+    homeStack.pushPath({ name: Routes.Writing, param: writingParam })
+    // 消费本次导航意图，防止 push 已执行但 Navigation 动画尚未切走时再次点击又入栈
+    this.openNavigationGeneration++
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
@@ -253,7 +315,7 @@ export struct HomeScreen {
   HomeContent() {
     Stack() {
       Column() {
-        if (this.adaptiveState.sizeClass === WidthClass.Expanded) {
+        if (this.adaptiveState.prefersWideLayout) {
           // ── 宽屏：只有作品卡流，从内容区左上开始排 ──
           this.WideHomeLayout()
         } else {
@@ -273,6 +335,11 @@ export struct HomeScreen {
       }
       if (this.viewModel.deleteTarget !== null) {
         this.DeleteConfirmDialog()
+      }
+
+      // ── 目录读取失败提示层（宽屏点作品后 getProjectTree 失败） ──
+      if (this.viewModel.openProjectError.length > 0) {
+        this.OpenProjectErrorDialog()
       }
     }
     .width('100%')
@@ -297,7 +364,7 @@ export struct HomeScreen {
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
         // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
         // 就会在内容上方留出一条整宽空白。
-        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
+        showTitleBar: !this.adaptiveState.prefersWideLayout
       }) {
         this.HomeContent()
       }
@@ -305,7 +372,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
+      .hideTitleBar(this.adaptiveState.prefersWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))
@@ -474,7 +541,7 @@ export struct HomeScreen {
     .borderRadius(DesignTokens.cardRadius)
     // Issue #827 评论 3 第 5 点：普通 1px 边框。草图里它和作品卡是同一种外框，
     // 区别只在中央一个大「+」，不要自行发明虚线这一种卡片视觉。
-    .border({ width: 1, color: $r('sys.color.comp_background_gray') })
+    .border({ width: 1, color: $r('sys.color.icon_secondary') })
     // Issue #827 评论 5：「+」卡和真实作品卡共用同一个卡片面与同一份阴影，
     // 否则浅灰页面上它一眼就是一张空心卡。区别只应该在里面的内容。
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
@@ -805,6 +872,57 @@ export struct HomeScreen {
             .height(36)
             .onClick(() => {
               this.viewModel.confirmDelete()
+            })
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxWidth: DIALOG_CONTENT_MAX_WIDTH })
+      .padding(20)
+      .borderRadius(DesignTokens.radiusLg)
+      .backgroundColor($r('sys.color.background_secondary'))
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 24, right: 24 })
+    .backgroundColor('#80000000')
+    .justifyContent(FlexAlign.Center)
+  }
+
+  // ── 目录读取失败对话框 ──
+  // 宽屏点作品后 getProjectTree 失败：留在作品首页，给明确错误和重试；
+  // 重试只重跑目录读取，成功后按原逻辑进 Routes.Writing。
+  @Builder
+  OpenProjectErrorDialog() {
+    Column() {
+      Column() {
+        Text(this.viewModel.openProjectError)
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .margin({ bottom: 8 })
+
+        if (this.viewModel.openProjectName.length > 0) {
+          Text(`作品「${this.viewModel.openProjectName}」，请重试。`)
+            .fontSize(14)
+            .margin({ bottom: 16 })
+        }
+
+        Row() {
+          Button('取消')
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.openNavigationGeneration++
+              this.viewModel.dismissOpenProjectError()
+            })
+
+          Blank()
+
+          Button('重试')
+            .fontSize(14)
+            .height(36)
+            .onClick(() => {
+              this.retryTreeLoad()
             })
         }
         .width('100%')

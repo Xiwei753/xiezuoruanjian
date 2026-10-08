@@ -161,6 +161,8 @@ export struct WritingScreen {
   @State todayTypedChars: number = 0
   @State expandedVolumes: Set<string> = new Set()
   @State isTreeLoading: boolean = false
+  // Issue #880 修复2：目录树加载失败标志，ChapterTreePane 据此显示错误提示和重试按钮。
+  @State projectTreeError: boolean = false
   // Issue #825 复核第 2 项：左右 pane 的展开状态只属于 ArkUI，不进入 Core 编辑状态，
   // 只作为 WorkbenchVisibility 输入让 Core 重算七角色 bounds。
   @State leftPaneCollapsed: boolean = false
@@ -182,6 +184,8 @@ export struct WritingScreen {
   // Issue #825 复核第1项：窗口由窄变宽时，adaptive observer 第一次进入 Workbench
   // 也要触发一次目录树加载，不能只在 aboutToAppear 加载。
   private wideWorkbenchTreeLoaded: boolean = false
+  // Issue #880 修复2：复用进行中的加载任务，避免并发请求覆盖目录状态。
+  private projectTreeLoadTask: Promise<boolean> | null = null
   // Issue #825 复核第 4 项：resolve_workbench_layout 是异步的，用递增 generation
   // 保证只有最后一次请求能写 workbenchPlan，旧响应不能把布局改回旧尺寸。
   private workbenchPlanGeneration: number = 0
@@ -274,19 +278,21 @@ export struct WritingScreen {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
-      this.chapterId = params.chapterId
-      this.chapterTitle = params.chapterTitle
       this.projectId = params.projectId || ''
       this.volumeId = params.volumeId || ''
-      // 暂存接续参数，loadChapter 在 coordinator.open 成功后消费以恢复编辑器状态。
+      this.chapterId = params.chapterId || ''
+      this.chapterTitle = params.chapterTitle || ''
       this.continuationParams = params
-      this.loadWritingContent()
-      // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
+      // 只要有 projectId 就加载目录树和工作台布局
       this.ensureWorkbenchProjectTree()
-      // Issue #825 复核第 2 项：进页面先要一份 Core 七角色 bounds 计划。
       this.refreshWorkbenchPlan()
-      // Issue #829 评论2第2项：状态栏两段进度先拉一次 Core 真值。
       this.refreshWritingStatusData()
+      // 有有效 chapterId 才加载正文和打开编辑会话
+      if (this.chapterId.length > 0) {
+        this.loadWritingContent()
+      } else {
+        this.isLoading = false
+      }
     }
 
     const self = this
@@ -398,6 +404,10 @@ export struct WritingScreen {
   // 返回 boolean：保存失败/close 失败都返回 false（不 detach/close/pop，未落盘正文留在活跃会话）。
   // 幂等：closeTask 复用同一 Promise；失败后重置允许重试。
   private async performGracefulClose(): Promise<boolean> {
+    // 无编辑会话（零章节工作台）：没有 session 需要 close/save/detach，直接允许离开。
+    if (this.chapterId.length === 0 && this.coordinator.getSessionId() === null) {
+      return true
+    }
     // Issue #629 评论7 第5项：已有 closeTask 时直接返回同一 Promise（幂等）。
     if (this.closeTask !== null) {
       return this.closeTask
@@ -1015,22 +1025,37 @@ export struct WritingScreen {
     return isWorkbenchMode(this.workbenchPlan)
   }
 
-  // Issue #825 复核第1项：进入宽屏工作台后只加载一次目录树。
-  // aboutToAppear（当时可能还是窄屏）与 adaptive observer（窗口变宽）都走这里。
-  private ensureWorkbenchProjectTree(): void {
+  // Issue #880 复核第 2 项：宽屏工作台目录树只有这一个加载入口。
+  // aboutToAppear、AdaptiveObserver 初始通知、窗口尺寸变化、ChapterTreePane 的「重试」
+  // 全部走这里。在途请求复用同一个 Promise，避免第一个请求未结束时又发第二个、
+  // 多个返回互相覆盖目录状态。
+  private ensureWorkbenchProjectTree(): Promise<boolean> {
     if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
-      return
+      return Promise.resolve(this.wideWorkbenchTreeLoaded)
     }
-    this.wideWorkbenchTreeLoaded = true
-    this.loadProjectTree()
+    if (this.projectTreeLoadTask !== null) {
+      return this.projectTreeLoadTask
+    }
+    const task: Promise<boolean> = this.loadProjectTree()
+    this.projectTreeLoadTask = task
+    task.finally((): void => {
+      // 只清自己这一次的任务；清掉后下一次调用才会重新发请求。
+      // 失败时 wideWorkbenchTreeLoaded 仍为 false，所以「重试」能真正重跑。
+      if (this.projectTreeLoadTask === task) {
+        this.projectTreeLoadTask = null
+      }
+    })
+    return task
   }
 
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
-  private async loadProjectTree(): Promise<void> {
+  // Issue #880 修复4b：返回 boolean，成功时才标记 wideWorkbenchTreeLoaded，失败时可重试。
+  private async loadProjectTree(): Promise<boolean> {
     if (!this.projectId || !this.isWideWorkbench) {
-      return
+      return false
     }
     this.isTreeLoading = true
+    this.projectTreeError = false
     try {
       const result = await this.bridge.getProjectTree(this.projectId)
       if (result.success && result.data) {
@@ -1046,12 +1071,20 @@ export struct WritingScreen {
             }
           }
         }
+        this.wideWorkbenchTreeLoaded = true
+        return true
       }
     } catch (err) {
       console.error('Failed to load project tree:', err)
     } finally {
       this.isTreeLoading = false
     }
+    // 失败：保留明确错误状态，并撤销「已加载」标记。
+    // 不撤销的话，成功过一次之后再刷新失败（建卷/建章后的重载）时，
+    // ChapterTreePane 的「重试」会被 ensureWorkbenchProjectTree 的已加载判断挡掉，成了空按钮。
+    this.projectTreeError = true
+    this.wideWorkbenchTreeLoaded = false
+    return false
   }
 
   // Issue #629 评论14 第1项：宽屏左侧切章节。
@@ -1103,11 +1136,15 @@ export struct WritingScreen {
   }
 
   // Issue #629 评论14 第1项：创建章节（宽屏左侧目录面板回调）。
+  // 创建成功后直接 switchChapter 打开新章节，不再只刷新目录树。
   private async createChapter(volumeId: string): Promise<void> {
     try {
       const defaultName = getContext(this).resourceManager.getStringSync($r('app.string.default_new_chapter_title').id)
       const result = await this.bridge.createChapter(volumeId, defaultName)
-      if (result.success) {
+      if (result.success && result.data) {
+        this.loadProjectTree()
+        this.switchChapter(result.data.id, result.data.title, volumeId)
+      } else {
         this.loadProjectTree()
       }
     } catch (err) {
@@ -1465,6 +1502,8 @@ export struct WritingScreen {
               projectTitle: this.projectTitle,
               expandedVolumes: this.expandedVolumes,
               selectedChapterId: this.chapterId,
+              isLoading: this.isTreeLoading,
+              loadError: this.projectTreeError,
               onToggleVolume: (volumeId: string): void => { this.toggleVolume(volumeId) },
               onSelectChapter: (chapterId: string, chapterTitle: string, volumeId: string): void => {
                 this.switchChapter(chapterId, chapterTitle, volumeId)
@@ -1472,7 +1511,8 @@ export struct WritingScreen {
               onCreateVolume: (): void => { this.createVolume() },
               onCreateChapter: (volumeId: string): void => { this.createChapter(volumeId) },
               onDeleteVolume: (volumeId: string): void => { this.deleteVolume(volumeId) },
-              onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) }
+              onDeleteChapter: (chapterId: string): void => { this.deleteChapter(chapterId) },
+              onRetry: (): void => { this.ensureWorkbenchProjectTree() }
             })
               .width(this.chapterNavigationWidthVp())
               .height('100%')
@@ -1488,7 +1528,19 @@ export struct WritingScreen {
               // Issue #829 评论2第1项：这里只放正文主体，不再调完整 EditorPane()。
               // EditorPane() 自带窄屏旧底栏，宽屏再叠一条 WritingStatusBar 就是两条
               // 状态栏、且状态有两份来源。宽屏的唯一状态栏是下面那条 WritingStatusBar。
-              this.EditorBody()
+              // 未选章节时显示空状态提示，不加载编辑器。
+              if (this.chapterId.length === 0) {
+                Column() {
+                  Text('从左侧选择或新建章节')
+                    .fontSize(16)
+                    .fontColor($r('sys.color.font_secondary'))
+                }
+                .width('100%')
+                .layoutWeight(1)
+                .justifyContent(FlexAlign.Center)
+              } else {
+                this.EditorBody()
+              }
 
               PaneFoldButton({
                 glyph: this.leftPaneCollapsed ? '⌃' : '⌄',
@@ -1991,10 +2043,23 @@ export struct WritingScreen {
   // 窄屏编辑区 = 正文主体 + 窄屏旧底栏。
   // Issue #829 评论2第1项：宽屏不调这个 Builder，只调 EditorBody() + WritingStatusBar，
   // 保证任何时候窗口里只有一条底部状态栏、也只有一份状态。
+  // Issue #880 修复1：单栏退化时也要处理无章节状态，不加载编辑器。
   @Builder
   EditorPane() {
     Column() {
-      this.EditorBody()
+      if (this.chapterId.length === 0) {
+        // 无章节时显示提示，不加载编辑器
+        Column() {
+          Text('请先选择或创建章节')
+            .fontSize(16)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        this.EditorBody()
+      }
       this.NarrowStatusBar()
     }
     .width('100%')

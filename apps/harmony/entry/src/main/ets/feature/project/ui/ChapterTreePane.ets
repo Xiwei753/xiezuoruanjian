@@ -10,14 +10,14 @@ import { DesignTokens } from '../../../ui/theme/DesignTokens'
 
 @Component
 export struct ChapterTreePane {
-  // 外部传入的项目数据
-  volumeTrees: VolumeTree[] = []
+  // 外部传入的项目数据（@Prop 保证父→子单向同步）
+  @Prop volumeTrees: VolumeTree[] = []
   // Issue #829 手稿：章节树最上面一组是作品名，不是笼统的"章节"字样。
-  projectTitle: string = ''
+  @Prop projectTitle: string = ''
   // 当前展开的卷 ID 集合（由外部控制）
-  expandedVolumes: Set<string> = new Set()
+  @Prop expandedVolumes: Set<string> = new Set()
   // 当前选中的章节 ID（用于高亮）
-  selectedChapterId: string = ''
+  @Prop selectedChapterId: string = ''
   // 展开/折叠卷
   onToggleVolume: ((volumeId: string) => void) | null = null
   // 选择章节（宽屏左侧点章节 → 安全 replace 到新 Writing route）
@@ -30,6 +30,12 @@ export struct ChapterTreePane {
   onDeleteVolume: ((volumeId: string) => void) | null = null
   // 删除章节
   onDeleteChapter: ((chapterId: string) => void) | null = null
+  // 目录树加载中（@Prop 保证父→子单向同步，由 WritingScreen @State isTreeLoading 传入）
+  @Prop isLoading: boolean = false
+  // 目录树加载失败（@Prop 保证父→子单向同步，由 WritingScreen @State projectTreeError 传入；空目录与失败是两种状态）
+  @Prop loadError: boolean = false
+  // 重试加载目录树：仍调 WritingScreen 那一个加载入口，不在本组件里自己发请求
+  onRetry: (() => void) | null = null
 
   @State themeConfig: ThemeConfig = HarmonyThemeAdapter.getInstance().getCurrentTheme()
 
@@ -65,9 +71,11 @@ export struct ChapterTreePane {
 
         Button('+')
           .fontSize(14)
-          .width(24)
-          .height(24)
-          .backgroundColor(Color.Transparent)
+          .width(28)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+          .border({ width: 1, color: $r('sys.color.icon_secondary') })
           .onClick(() => {
             if (this.onCreateVolume) {
               this.onCreateVolume()
@@ -82,7 +90,46 @@ export struct ChapterTreePane {
       // 目录内容
       Scroll() {
         Column() {
-          if (this.volumeTrees.length === 0) {
+          if (this.loadError) {
+            // 加载失败：显示错误提示和重试按钮
+            Column() {
+              Text('加载目录失败')
+                .fontSize(14)
+                .fontColor($r('sys.color.font_primary'))
+                .margin({ bottom: 8 })
+              Button('重试')
+                .fontSize(14)
+                .width(80)
+                .height(32)
+                .borderRadius(16)
+                .backgroundColor($r('sys.color.background_emphasize'))
+                .fontColor($r('sys.color.font_emphasize_contrary'))
+                .onClick(() => {
+                  if (this.onRetry) {
+                    this.onRetry()
+                  }
+                })
+            }
+            .width('100%')
+            .padding(24)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.isLoading && this.volumeTrees.length === 0) {
+            // 首次加载 / 失败后重试：还没有任何目录内容可显示时才用整块加载态。
+            // 建卷、建章后的目录刷新继续显示现有树，不闪一下空白再复原。
+            Column() {
+              LoadingProgress()
+                .width(32)
+                .height(32)
+              Text('加载中...')
+                .fontSize(14)
+                .margin({ top: 8 })
+                .fontColor($r('sys.color.font_secondary'))
+            }
+            .width('100%')
+            .padding(24)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.volumeTrees.length === 0) {
+            // 空目录（加载成功但无卷章）
             Column() {
               Text($r('app.string.no_volumes_chapters'))
                 .fontSize(14)
@@ -121,6 +168,11 @@ export struct ChapterTreePane {
           .width(16)
           .height(16)
           .margin({ right: 6 })
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Text(volumeTree.volume.title)
           .fontSize(14)
@@ -129,17 +181,29 @@ export struct ChapterTreePane {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Text(`${volumeTree.chapters.length}`)
           .fontSize(11)
           .fontColor($r('sys.color.font_secondary'))
           .margin({ right: 8 })
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Button('+')
           .fontSize(14)
-          .width(24)
-          .height(24)
-          .backgroundColor(Color.Transparent)
+          .width(28)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+          .border({ width: 1, color: $r('sys.color.icon_secondary') })
           .onClick(() => {
             if (this.onCreateChapter) {
               this.onCreateChapter(volumeTree.volume.id)
@@ -150,11 +214,6 @@ export struct ChapterTreePane {
       .height(36)
       .padding({ left: 20, right: 8 })
       .alignItems(VerticalAlign.Center)
-      .onClick(() => {
-        if (this.onToggleVolume) {
-          this.onToggleVolume(volumeTree.volume.id)
-        }
-      })
 
       // 章节列表：手稿里章节行是单行「标题 … 字数」，不再上下两行堆叠。
       if (this.expandedVolumes.has(volumeTree.volume.id)) {

@@ -43,6 +43,10 @@
 | 触摸事件拦截 | @kit.ArkUI (onTouchIntercept) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义触摸热区 | @kit.ArkUI (responseRegion) | 8 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/StarMapScene.ets |
 | 自定义对话框 | @kit.ArkUI (ComponentContent / PromptAction.openCustomDialog) | 12 | SystemCapability.ArkUI.ArkUI.Full | 无 | 否 | feature/starmap/ui/CreateTitleDialog.ets, feature/starmap/ui/StarMapScene.ets |
+| display.isFoldable | @kit.ArkUI (display) | 10 | SystemCapability.Window.SessionManager | 无 | 否 | window/TabletWindowPolicy.ets |
+| setPreferredOrientation | @kit.ArkUI (window) | 9 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
+| setWindowSystemBarEnable | @kit.ArkUI (window) | 12 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
+| getWindowStatus / windowStatusChange | @kit.ArkUI (window) | 12（getWindowStatus）/ 11（windowStatusChange） | SystemCapability.Window.SessionManager | 无 | 否 | ui/adaptive/AdaptiveContext.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -560,3 +564,45 @@ shareFiles profile 的路径配置分两层：`scopes` 控制共享文件范围�
 ### 门禁
 
 `tools/check_harmony_share_files.py`（自测 `tools/test_check_harmony_share_files.py`），在 harmony workflow 里跑。用 SDK 自带 schema 正则 + 官方路径限制同时校验：`scopes[].path` 必须匹配 `^/(?:el1|el2|el3|el4|el5)/(?:base|distributedfiles|cloud)...`，`sharingOSPath` 与 scope path 对齐，`sharingOSSubpath` 是 scope path 的子目录，`sharingOSPermission` 是 scope permission 子集。
+
+## 平板专用横屏窗口政策（TabletWindowPolicy）
+
+- Kit：`@kit.ArkUI`（`display` + `window` 模块）、`@ohos.deviceInfo`
+- 接口：
+  - `display.isFoldable(): boolean` — 判断设备是否可折叠（API10+）
+  - `display.getDefaultDisplaySync(): Display` — 同步获取默认 Display 信息（宽高、密度等）
+  - `window.Window.setPreferredOrientation(orientation: window.Orientation): Promise<void>` — 设置窗口首选方向（API9+）
+  - `window.Window.setWindowLayoutFullScreen(isFullScreen: boolean): Promise<void>` — 设置窗口是否铺满屏幕（API12+）
+  - `window.Window.setWindowSystemBarEnable(names: Array<'status' | 'navigation'>): Promise<void>` — 设置系统栏可见性（API12+）
+  - `window.Window.getWindowStatus(): window.WindowStatusType` — 读当前窗口状态（API12+）
+  - `window.Window.on('windowStatusChange', callback: Callback<window.WindowStatusType>)` / `off` — 全屏 ↔ 分屏/悬浮切换（API11+）
+  - `deviceInfo.deviceType: string` — 设备类型（phone / tablet / wearable 等）
+- 最低 API：12（`setWindowSystemBarEnable` / `setWindowLayoutFullScreen` / `getWindowStatus`）；11（`windowStatusChange`）；10（`display.isFoldable`）；9（`setPreferredOrientation`）
+- SystemCapability：
+  - `display.isFoldable` / `getWindowStatus` / `windowStatusChange`：`SystemCapability.Window.SessionManager`
+  - `setPreferredOrientation` / `setWindowSystemBarEnable` / `setWindowLayoutFullScreen`：无独立 SystemCapability（随 `@kit.ArkUI` window 模块整体可用）
+- 权限：无
+- ACL：否
+- fallback：读取设备特征失败时默认不强制（`isDedicatedLandscapeTablet()` 返回 false），不伪造状态；`windowStatusChange` 注册失败只记日志，不影响布局
+- 实现文件：`window/TabletWindowPolicy.ets`（政策本体）、`ui/adaptive/AdaptiveContext.ets`（窗口状态监听与调用）
+- 判定逻辑：
+  1. `deviceInfo.deviceType === 'tablet'` 是普通平板候选
+  2. `display.isFoldable() === false` 排除所有可折叠设备（阔折叠、普通折叠、三折叠）
+  3. `display.getDefaultDisplaySync()` 宽高比 `max(w,h)/min(w,h) >= 1.25` 区分明显宽于正方形的常规平板
+  4. 仅命中普通平板时：`setPreferredOrientation(LANDSCAPE)` + `setWindowLayoutFullScreen(true)` + `setWindowSystemBarEnable([])`
+  5. 普通手机、阔直板、阔折叠、其他折叠形态不执行强制政策
+- 设备能力只算一次并缓存；窗口尺寸变化不影响 `isDedicatedLandscapeTablet()` 判定
+- 调用时序：`EntryAbility.onWindowStageCreate` / `onWindowStageRestore` 中 `loadContent` 之前，通过 `windowStage.getMainWindowSync()` 取得主窗口调用 `applyTabletWindowPolicy(mainWindow)`
+- 窗口状态变化：`AdaptiveContext` 初始化时用 `getWindowStatus()` 记录当前状态，并监听 `windowStatusChange`。
+  只有回到独占全屏（`WindowStatusType.FULL_SCREEN = 1`）才重新 `applyTabletWindowPolicy()`；
+  进入分屏（`SPLIT_SCREEN = 5`）/ 悬浮（`FLOATING = 4`）/ 最大化（`MAXIMIZE = 2`）调用 `restoreWindowPolicy()` 恢复方向与系统栏。
+  冷启动套用前也先读一次 `getWindowStatus()`：分屏 / 悬浮 / 最大化直接跳过，不把全屏政策硬套到非全屏窗口上；
+  `UNDEFINED = 0`（窗口状态尚未就绪）与读取失败保守按全屏处理，不阻断原有启动路径。
+  `WindowStatusType` 取值：UNDEFINED=0、FULL_SCREEN=1、MAXIMIZE=2、MINIMIZE=3、FLOATING=4、SPLIT_SCREEN=5。
+  分屏 / 悬浮下的布局仍由 `windowSizeChange` 的真实 `windowRect` 驱动，不缩放、不虚构窗口尺寸。
+  非专用横屏平板（阔折叠、阔直屏、手机）不调用这两个接口。
+- 官方文档：
+  - 华为旋转说明：https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/window-rotation
+  - 官方沉浸式窗口：https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/immersive-window-feature
+  - 官方自由窗口：https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/freeform-window
+  - 官方折叠判别：https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-purax-12
