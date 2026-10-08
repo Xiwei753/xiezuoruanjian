@@ -128,10 +128,20 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题1/3/4）：前后台排版隔离。
   // displayedPresentation 是当前正在显示的，pendingPresentation 是等待后台排版的。
   private displayedPresentation: EditorPresentationUpdate | null = null
+  // Issue #879 复核评论修复（问题3）：displayed/pending 几何隔离。
+  // displayedSnapshot = 当前正在显示的快照（主 Text observer 只用这个生成渲染几何）
+  // displayedLineLayouts = 当前正在显示的行布局（previousLayout 从这个取，不被 pending 覆盖）
+  // displayedStyledString = 当前正在显示的 StyledString（applyStyledText 用这个写入主 Text）
+  private displayedSnapshot: EditorLayoutSnapshot | null = null
+  private displayedLineLayouts: LineLayout[] = []
+  private displayedStyledString: StyledString | null = null
   // Issue #879 复核评论修复（问题1）：排版请求——通过 @State + @Prop 传给 EditorPendingLayoutHost，
   // @Watch 自动触发排版。token 用于校验回调对应哪次排版请求。
   @State private pendingLayoutRequest: PendingLayoutRequest | null = null
   private pendingLayoutToken: number = 0
+  // Issue #879 复核评论修复（问题1）：token → StyledString 映射——父组件维护原始引用，
+  // EditorPendingLayoutHost 通过 resolveLayoutRequest(token) 回调获取，不走 @Prop 深拷贝。
+  private styledStringByToken: Map<number, StyledString> = new Map()
   // Issue #879 复核评论修复（问题6）：后台排版完成的行布局——作为 Coordinator 和
   // computeStaticMaskRects 的唯一相同输入，不用 renderResult.lines（可能为空）。
   private committedLineLayouts: LineLayout[] = []
@@ -141,7 +151,8 @@ export struct SujianEditor {
   private motionSourcePool: EditorMotionSourcePool = new EditorMotionSourcePool()
   // Issue #879 复核评论修复（问题4）：每个运动窗口独立的 TextController——
   // ArkUI 不允许同一 TextController 绑定多个 Text，所以每个窗口需要独立 Controller。
-  // key 是 `${runId}-${index}`，与 ForEach key 一致，确保复用时 Controller 保持稳定。
+  // key 是 clusterId（基于 sourceKind + sourceRevision + utf16Start + utf16End 构造的稳定身份），
+  // 与 ForEach key 一致，确保复用时 Controller 保持稳定，窗口增减/顺序变化不会错配。
   private motionWindowControllers: Map<string, TextController> = new Map()
   // Issue #879 本轮复核评论修复（问题4）：pending RenderPlan 身份字段。
   // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
@@ -256,6 +267,10 @@ export struct SujianEditor {
       this.newStyledString = EditorTextStyleProjector.projectToStyledString(
         this.currentSnapshot.text, config
       )
+      // Issue #879 复核评论修复（问题3）：初始化 displayed 版本——
+      // displayedSnapshot/displayedStyledString 与 currentSnapshot/newStyledString 同步。
+      this.displayedSnapshot = this.currentSnapshot
+      this.displayedStyledString = this.newStyledString
     }
     this.refreshRender()
     // Issue #879 复核评论修复（问题4）：初始化静态裁切 path 为全尺寸矩形（不裁切）。
@@ -311,6 +326,8 @@ export struct SujianEditor {
     this.stopActiveAnimation()
     // Issue #879 复核评论修复（问题3）：清空运动源池。
     this.motionSourcePool.clear()
+    // Issue #879 复核评论修复（问题1）：清空 token→StyledString 映射。
+    this.styledStringByToken.clear()
     // Issue #768 评论5837824666：兜底注销布局观察者（onDisAppear 可能未触发）。
     this.detachTextLayoutObserver()
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
@@ -343,7 +360,9 @@ export struct SujianEditor {
       .getUIInspector()
       .createComponentObserver(EDITOR_TEXT_ID)
     const callback = (): void => {
-      if (!this.textMounted || this.currentSnapshot === null) {
+      // Issue #879 复核评论修复（问题3）：主 Text observer 只用 displayed 版本——
+      // 检查 displayedSnapshot 而非 currentSnapshot（后者可能已被 pending 更新覆盖）。
+      if (!this.textMounted || this.displayedSnapshot === null) {
         return
       }
       // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
@@ -562,16 +581,20 @@ export struct SujianEditor {
   // - 同一次发布新静态可见区、运动源窗口和光标
   // - 交棒后才更新前台 Text
   private onPresentationUpdateChanged(): void {
-    // 在 refreshRender 之前缓存旧布局（此时 renderResult 还是旧布局的结果）
-    this.previousLayout = this.renderResult?.lines ?? []
-    // 保存旧 snapshot（供 updateVisualFrame 的 acceptUpdate 使用）
-    this.previousSnapshot = this.currentSnapshot
-    // 保存旧 StyledString（供运动层 MotionTextOverlayBuilder 使用）
-    this.oldStyledString = this.newStyledString
+    // Issue #879 复核评论修复（问题3）：用 displayed 版本缓存旧布局/旧 snapshot/旧 StyledString——
+    // previousLayout/previousSnapshot/oldStyledString 只在 displayed 版本切换时更新，
+    // 不被 pending 版本覆盖。
+    this.previousLayout = this.displayedLineLayouts
+    this.previousSnapshot = this.displayedSnapshot
+    this.oldStyledString = this.displayedStyledString
 
     if (this.presentationUpdate === null) {
       this.currentSnapshot = null
       this.displayedPresentation = null
+      // Issue #879 复核评论修复（问题3）：清空 displayed 版本字段。
+      this.displayedSnapshot = null
+      this.displayedLineLayouts = []
+      this.displayedStyledString = null
       // Issue #879 本轮复核评论修复（问题6）：会话失效时停止旧动画。
       // 先增 generation 使旧 animator 回调失效，再 cancel。
       this.stopActiveAnimation()
@@ -588,14 +611,17 @@ export struct SujianEditor {
       this.previousLayout = []
       // Issue #879 复核评论修复（问题3）：清空运动源池。
       this.motionSourcePool.clear()
+      // Issue #879 复核评论修复（问题4）：会话切换时清空所有窗口 Controller。
+      this.motionWindowControllers.clear()
       // Issue #879 复核评论修复（问题4）：会话失效时更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
       // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
       this.pushDiagnosticsSnapshot()
       return
     }
-    // 同步 currentSnapshot
-    this.currentSnapshot = this.presentationUpdate.layoutSnapshot
+    // Issue #879 复核评论修复（问题3）：不立即切换 currentSnapshot——
+    // 保持 currentSnapshot 指向 displayed 版本（旧内容），新内容暂存到 pending 字段。
+    // currentSnapshot 在 onPendingLayoutReady 中才更新为新版本。
 
     // Issue #879 复核评论修复（问题4）：缓存 pending 身份字段。
     // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
@@ -607,20 +633,17 @@ export struct SujianEditor {
     this.pendingLineSpacing = pendingSnap.lineSpacingMultiplier
     this.pendingContentWidth = this.contentWidth
 
-    // 构造新 StyledString
-    if (this.currentSnapshot !== null) {
-      const config: EditorStyleConfig = {
-        fontSize: this.currentSnapshot.fontSize,
-        lineSpacingMultiplier: this.currentSnapshot.lineSpacingMultiplier,
-        autoIndentEnabled: this.currentSnapshot.autoIndentEnabled,
-        autoIndentWidth: this.currentSnapshot.autoIndentWidth,
-      }
-      this.newStyledString = EditorTextStyleProjector.projectToStyledString(
-        this.currentSnapshot.text, config
-      )
-    } else {
-      this.newStyledString = null
+    // Issue #879 复核评论修复（问题3）：构造新 StyledString 用 pendingSnap（新内容），
+    // 而非 this.currentSnapshot（旧内容）。
+    const config: EditorStyleConfig = {
+      fontSize: pendingSnap.fontSize,
+      lineSpacingMultiplier: pendingSnap.lineSpacingMultiplier,
+      autoIndentEnabled: pendingSnap.autoIndentEnabled,
+      autoIndentWidth: pendingSnap.autoIndentWidth,
     }
+    this.newStyledString = EditorTextStyleProjector.projectToStyledString(
+      pendingSnap.text, config
+    )
 
     // Issue #879 复核评论修复（问题1）：不再设置 staticClipCommands='' 隐藏主 Text。
     // 主 Text 保持显示旧内容（上一帧的全部文字、裁切窗口和唯一光标），
@@ -635,13 +658,23 @@ export struct SujianEditor {
     // 后台排版完成后（onPendingLayoutReady 回调），才更新前台 Text 并构造运动计划。
     // ArkUI 中 @Component struct 的方法不能从父组件直接调用，
     // 所以通过 @State pendingLayoutRequest + @Prop + @Watch 模式触发排版。
+    // Issue #879 复核评论修复（问题1）：PendingLayoutRequest 只含基本类型——StyledString 不走 @Prop 深拷贝，
+    // 父组件维护 token→StyledString 映射，EditorPendingLayoutHost 通过 resolveLayoutRequest 回调获取引用。
     if (this.newStyledString !== null && this.contentWidth > 0) {
       this.pendingLayoutToken++
+      // 把 StyledString 存入 token 映射——EditorPendingLayoutHost 通过回调获取
+      this.styledStringByToken.set(this.pendingLayoutToken, this.newStyledString)
+      const fullTextLength = this.newStyledString.getString().length
+      // Issue #879 复核评论修复（问题3）：用 pendingSnap 的 fontSize/lineSpacing，
+      // 而非 this.currentSnapshot（旧内容）的值。
+      const fontSize = pendingSnap.fontSize
+      const lineSpacing = pendingSnap.lineSpacingMultiplier
       const request: PendingLayoutRequest = {
-        styledString: this.newStyledString,
+        token: this.pendingLayoutToken,
         contentWidth: this.contentWidth,
-        fontSize: this.currentSnapshot?.fontSize ?? 16,
-        token: this.pendingLayoutToken
+        fontSize: fontSize,
+        fullTextLength: fullTextLength,
+        styleKey: `${fontSize}-${lineSpacing}`,
       }
       this.pendingLayoutRequest = request
     }
@@ -661,17 +694,26 @@ export struct SujianEditor {
     if (token !== this.pendingLayoutToken) {
       return
     }
-    // 后台排版完成——现在可以安全地更新前台
-    // 1. 保存后台排版的行布局——作为 Coordinator 和 computeStaticMaskRects 的唯一相同输入
+    // Issue #879 复核评论修复（问题3）：后台排版结果获批后，先将 displayed 指向新版本，
+    // 然后才把新 StyledString 写入主 Text，然后才调 updateVisualFrameWithLayout。
+    // 1. 更新 displayed 版本——当前正在显示的快照/行布局/StyledString
+    this.displayedSnapshot = this.pendingPresentationUpdate?.layoutSnapshot ?? this.currentSnapshot
+    this.displayedLineLayouts = lineLayouts
+    this.displayedStyledString = this.newStyledString
+    // 2. 更新 currentSnapshot——业务状态切换到新版本
+    this.currentSnapshot = this.pendingPresentationUpdate?.layoutSnapshot ?? this.currentSnapshot
+    // 3. 保存后台排版的行布局——作为 Coordinator 和 computeStaticMaskRects 的唯一相同输入
     this.committedLineLayouts = lineLayouts
-    // 2. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
+    // 4. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
     this.refreshRender()
-    // 3. 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
+    // 5. 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
     this.updateVisualFrameWithLayout(lineLayouts)
-    // 4. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
+    // 6. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
     this.displayedPresentation = this.pendingPresentationUpdate
-    // 5. 清空 pendingPresentationUpdate——防止重复消费
+    // 7. 清空 pendingPresentationUpdate——防止重复消费
     this.pendingPresentationUpdate = null
+    // Issue #879 复核评论修复（问题1）：清理已消费的 token→StyledString 映射条目
+    this.styledStringByToken.delete(token)
   }
 
   // Issue #879 复核评论修复（问题1）：用后台排版结果更新视觉帧。
@@ -708,17 +750,29 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题3）：用 EditorMotionSourcePool 替代旧的 controller 数组。
   // 源池用 sourceRevision + stableRunId 保存 StyledString/TextController，
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
+  // Issue #879 复核评论修复（问题4）：池所有权绑定到当前显示帧实际使用的源——
+  // 不再被任何窗口引用且不属于 displayed/pending 版本的源立即标记释放并清理。
   private prepareMotionSources(): void {
     if (this.visualFrame === null || !this.visualFrame.isAnimating) {
       return
     }
-    // 标记旧源可释放（交棒完成后才真正释放）
-    this.motionSourcePool.releaseMarkedSources()
-    // 清理不再需要的旧窗口 Controller——只保留当前窗口需要的
-    const neededKeys: Set<string> = new Set()
+    // Issue #879 复核评论修复（问题4）：释放不再被任何窗口引用且不属于 displayed/pending 版本的源。
+    // 获取当前 visualFrame 的 motionGlyphWindows 中所有 runId
+    const activeRunIds: Set<string> = new Set()
     const windows = this.visualFrame.motionGlyphWindows
     for (let i = 0; i < windows.length; i++) {
-      neededKeys.add(`${windows[i].runId}-${i}`)
+      activeRunIds.add(windows[i].runId)
+    }
+    const displayedRevision = this.displayedSnapshot?.revision ?? 0
+    const pendingRevision = this.pendingRevision
+    this.motionSourcePool.releaseUnusedSources(activeRunIds, displayedRevision, pendingRevision)
+
+    // 清理不再需要的旧窗口 Controller——只保留当前窗口需要的
+    // Issue #879 复核评论修复（问题4）：controller key 改为 clusterId（稳定身份），
+    // 不再使用 `${runId}-${index}`（数组序号），避免窗口增减/顺序变化错配 controller。
+    const neededKeys: Set<string> = new Set()
+    for (let i = 0; i < windows.length; i++) {
+      neededKeys.add(windows[i].clusterId)
     }
     const keysToDelete: string[] = []
     this.motionWindowControllers.forEach((_: TextController, key: string) => {
@@ -743,7 +797,9 @@ export struct SujianEditor {
   }
 
   // 预匹配运动窗口与源——在 build() 之前调用，避免在 @Builder 中做匹配（ArkUI 限制）。
-  // ForEach key 基于 window.runId（稳定身份），而非自增事务编号。
+  // ForEach key 基于 window.clusterId（稳定身份），而非 `${runId}-${index}`（数组序号）。
+  // Issue #879 复核评论修复（问题4）：clusterId 基于 sourceKind + sourceRevision + utf16Start + utf16End
+  // 构造的稳定身份标识，窗口增减/顺序变化不会把另一个簇绑定到旧 controller。
   private buildMotionWindowSources(): MotionWindowSource[] {
     if (this.visualFrame === null || !this.visualFrame.isAnimating) {
       return []
@@ -754,8 +810,9 @@ export struct SujianEditor {
     for (let i = 0; i < windows.length; i++) {
       const source = this.motionSourcePool.getSource(windows[i].runId)
       if (source !== undefined) {
-        // 每个窗口独立的 TextController——key 与 ForEach key 一致
-        const controllerKey = `${windows[i].runId}-${i}`
+        // Issue #879 复核评论修复（问题4）：每个窗口独立的 TextController——
+        // key 使用 clusterId（稳定身份），与 ForEach key 一致，确保复用时 Controller 保持稳定。
+        const controllerKey = windows[i].clusterId
         let controller = this.motionWindowControllers.get(controllerKey)
         if (controller === undefined) {
           controller = new TextController()
@@ -907,6 +964,8 @@ export struct SujianEditor {
   // 被静态重建、无动画更新、会话切换、设置变化与页面卸载调用。
   // 关键：必须先 ++motionGeneration 再 cancel——cancel 会额外触发一次终点 onFrame，
   // 先 cancel 再 ++generation 会让旧动画终值写到新画面。
+  // Issue #879 复核评论修复（问题4）：停止动画时清理不再需要的源——
+  // 如果不再有运动窗口，标记旧源可释放（保留当前 displayed 版本的源）。
   private stopActiveAnimation(): void {
     this.motionGeneration++
     if (this.motionAnimator !== null) {
@@ -914,6 +973,23 @@ export struct SujianEditor {
       this.motionAnimator = null
     }
     this.isMotionAnimating = false
+    // Issue #879 复核评论修复（问题4）：停止动画后清理不再需要的源。
+    this.releaseSourcesAfterMotion()
+  }
+
+  // Issue #879 复核评论修复（问题4）：统一所有权交接——动画结束后释放不再需要的源。
+  // - 所有运动窗口消失后，旧源可以标记释放
+  // - 但保留当前 displayed 版本的源（因为可能下一笔编辑还需要）
+  // - pending 版本的源也保留（等待后台排版完成后消费）
+  private releaseSourcesAfterMotion(): void {
+    const displayedRevision = this.displayedSnapshot?.revision ?? 0
+    const pendingRevision = this.pendingRevision
+    // 动画结束后不再有运动窗口——activeRunIds 为空集
+    // 所有源都不在 activeRunIds 中，但保留 displayed/pending 版本的源
+    const emptyRunIds: Set<string> = new Set()
+    this.motionSourcePool.releaseUnusedSources(emptyRunIds, displayedRevision, pendingRevision)
+    // 清理不再需要的窗口 Controller
+    this.motionWindowControllers.clear()
   }
 
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 实现真正的逐帧回调。
@@ -978,8 +1054,11 @@ export struct SujianEditor {
       }
       this.isMotionAnimating = false
       this.visualFrame = this.motionCoordinator.finishMotion()
-      // Issue #879 本轮复核评论修复（问题3）：动画结束后更新裁切 path 为全尺寸矩形。
+      // Issue #879 复核评论修复（问题3）：动画结束后更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
+      // Issue #879 复核评论修复（问题4）：动画结束后所有运动窗口消失，
+      // 标记旧源可释放并真正释放（保留当前 displayed 版本的源，因为可能下一笔编辑还需要）。
+      this.releaseSourcesAfterMotion()
       this.motionAnimator = null
     }
     this.motionAnimator.play()
@@ -994,15 +1073,16 @@ export struct SujianEditor {
     if (!this.textMounted) {
       return
     }
-    if (this.currentSnapshot === null) {
+    // Issue #879 复核评论修复（问题3）：使用 displayedStyledString 而非 newStyledString——
+    // newStyledString 是 pending 版本（新内容），displayedStyledString 是当前正在显示的版本。
+    // 在 onPendingLayoutReady 中 displayedStyledString 已更新为新版本，此时写入主 Text 是正确的。
+    if (this.displayedSnapshot === null) {
       this.textController.setStyledString(new MutableStyledString(''))
-      this.newStyledString = null
       return
     }
-    // newStyledString 已在 onPresentationUpdateChanged 中构造
-    // 这里只负责把 StyledString 写入主 Text 的 TextController
-    if (this.newStyledString !== null) {
-      this.textController.setStyledString(this.newStyledString)
+    // displayedStyledString 已在 onPendingLayoutReady/aboutToAppear 中设置
+    if (this.displayedStyledString !== null) {
+      this.textController.setStyledString(this.displayedStyledString)
     }
   }
 
@@ -1017,9 +1097,12 @@ export struct SujianEditor {
   // 或初始加载（aboutToAppear）时调用——不再在 onPresentationUpdateChanged 中立即调用。
   // 主 Text 在编辑期间保持显示旧内容，直到后台排版完成后才更新。
   private refreshRender(): void {
-    if (this.currentSnapshot) {
+    // Issue #879 复核评论修复（问题3）：使用 displayedSnapshot 来生成基础渲染结果——
+    // refreshRender 在 onPendingLayoutReady 中调用（此时 displayedSnapshot 已更新为新版本），
+    // 或在初始加载（aboutToAppear）时调用（此时 displayedSnapshot 已初始化）。
+    if (this.displayedSnapshot) {
       // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
-      const result = EditorRenderBackend.render(this.currentSnapshot)
+      const result = EditorRenderBackend.render(this.displayedSnapshot)
       this.renderResult = result
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
@@ -1047,8 +1130,10 @@ export struct SujianEditor {
   // - API12-13：用 LineMetrics 获取行边界（折行/行高），用 measureText 算行内 x 坐标
   // - Fallback：LayoutManager 不可用时走旧的自计算路径
   private refreshRenderLayout(): void {
-    if (this.currentSnapshot && this.contentWidth > 0) {
-      const snap = this.currentSnapshot
+    // Issue #879 复核评论修复（问题3）：主 Text observer 只用 displayed 版本生成渲染几何——
+    // 使用 displayedSnapshot 而非 currentSnapshot（可能已被 pending 更新覆盖）。
+    if (this.displayedSnapshot && this.contentWidth > 0) {
+      const snap = this.displayedSnapshot
 
       // 优先使用系统 LayoutManager
       const layout = this.textController.getLayoutManager()
@@ -1780,8 +1865,13 @@ export struct SujianEditor {
           // EditorPendingLayoutHost 在隐藏 Text 中排版新 StyledString，布局完成后回调行布局结果，
           // 让 SujianEditor 在同一帧发布新静态可见区 + 运动源窗口 + 光标。
           // 通过 @State pendingLayoutRequest + @Prop + @Watch 模式触发排版。
+          // Issue #879 复核评论修复（问题1）：StyledString 不走 @Prop 深拷贝——
+          // 通过 resolveLayoutRequest(token) 回调从 styledStringByToken 获取原始引用。
           EditorPendingLayoutHost({
             layoutRequest: this.pendingLayoutRequest,
+            resolveLayoutRequest: (token: number): StyledString | null => {
+              return this.styledStringByToken.get(token) ?? null
+            },
             onLayoutReady: (token: number, lineLayouts: LineLayout[]): void => {
               this.onPendingLayoutReady(token, lineLayouts)
             }

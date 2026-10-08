@@ -407,7 +407,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             y: item.clipRect.y
           })
         },
-        (item: MotionWindowSource, index: number) => `${item.window.runId}-${index}`
+        (item: MotionWindowSource, index: number) => `${item.window.clusterId}`
       )
     }
     .width('100%')

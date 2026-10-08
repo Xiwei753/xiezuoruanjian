@@ -126,6 +126,33 @@ export class EditorMotionSourcePool {
   }
 
   /**
+   * 释放不再被任何窗口引用且不属于当前 displayed/pending 版本的源。
+   *
+   * Issue #879 复核评论修复（问题4）：
+   * - 遍历所有源，对于不在 activeRunIds 中且 sourceRevision 不等于
+   *   displayedRevision/pendingRevision 的源，标记 markedForRelease = true
+   * - 然后调用 releaseMarkedSources() 真正释放
+   *
+   * @param activeRunIds 当前 visualFrame 的 motionGlyphWindows 中所有 runId
+   * @param displayedRevision 当前正在显示的正文 revision
+   * @param pendingRevision 等待排版的正文 revision（可能还未消费）
+   */
+  releaseUnusedSources(
+    activeRunIds: Set<string>,
+    displayedRevision: number,
+    pendingRevision: number
+  ): void {
+    this.sources.forEach((entry: MotionSourceEntry) => {
+      if (!activeRunIds.has(entry.runId) &&
+          entry.sourceRevision !== displayedRevision &&
+          entry.sourceRevision !== pendingRevision) {
+        entry.markedForRelease = true
+      }
+    })
+    this.releaseMarkedSources()
+  }
+
+  /**
    * 获取所有活跃源（未标记释放）。
    *
    * 供 ForEach 渲染使用——只渲染活跃的源，不渲染已标记释放的源。
