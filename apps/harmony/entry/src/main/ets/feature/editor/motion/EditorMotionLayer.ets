@@ -8,16 +8,19 @@
 // 3. 同一字形在每一帧只能由静态正文或运动层绘制一次。
 // 4. 光标位置 = 裁切前沿 front。
 //
-// 各运动类型的绘制策略：
-// - 吐字（Reveal）：新字完整排版，静态目标先不画，运动层用裁切窗口限制在 [x0, front]。
-// - 吞字（Conceal）：旧字源留在动画层，可见窗口 [x0, front]，front 从 x1 退到 x0。
-// - Forward Delete：逻辑光标不移动，被删字贴向固定 caret 缩回。
-// - 纯光标移动：不建立字形裁切。
-// - 跨行：按真实视觉行拆段。
-// - 自动换行：目标静态字形让位，运动层平移。
+// Issue #879 复核评论修复：
+// - 添加 MotionTextOverlayBuilder() Builder 函数，在 ArkUI 组件树中渲染运动层
+// - 每个 MotionGlyphWindow 对应一个真实 ArkUI Text + clipShape 裁切
+// - 吐字：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+// - 吞字：旧字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+// - 非动画状态：不渲染任何内容（静态层负责）
+//
+// ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
+// 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
 
 import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
 import { CaretRect, LineLayout } from '../render/editor_render_geometry'
+import { RectShape } from '@ohos.arkui.shape'
 
 /**
  * 裁切矩形——用于 clipShape/maskShape 的矩形区域。
@@ -37,10 +40,10 @@ export interface ClipRect {
  * 运动层绘制工具。
  *
  * 提供 clipShape/maskShape 所需的裁切矩形计算、静态层可见区域计算、
- * 光标位置计算等纯函数。ArkUI 组件层调用这些函数获取裁切参数，
- * 再用 Stack + clipShape 组合实现真实像素裁切效果。
+ * 光标位置计算等纯函数，以及 MotionTextOverlayBuilder() Builder 函数
+ * 用于在 ArkUI 组件树中渲染运动层 Text + clipShape。
  *
- * 本类只做数学计算，不直接操作 ArkUI 组件——组件组装由调用方完成。
+ * 纯函数部分不直接操作 ArkUI 组件——组件组装由 Builder 函数完成。
  */
 export class EditorMotionLayer {
   /**
@@ -216,5 +219,125 @@ export class EditorMotionLayer {
       }
     }
     return result
+  }
+}
+
+// ── ArkUI Builder 函数 ──
+
+/**
+ * MotionTextOverlayBuilder 的参数类型。
+ * ArkTS 要求 @Builder 函数的参数类型必须是显式声明的 interface 或 class，
+ * 不能用对象字面量类型。
+ */
+export interface MotionTextOverlayParams {
+  /** 旧排版源纯文本（吞字时显示旧字），null 表示不需要旧字源 */
+  oldTextContent: string | null
+  /** 新排版源纯文本（吐字时显示新字），null 表示不需要新字源 */
+  newTextContent: string | null
+  /** 当前视觉帧 */
+  visualFrame: EditorVisualFrame
+  /** 裁切矩形列表（与 motionGlyphWindows 一一对应） */
+  clipRects: ClipRect[]
+  /** 字体大小（vp） */
+  fontSize: number
+  /** 行高（vp） */
+  lineHeight: number
+}
+
+/**
+ * 运动层文字遮罩 Builder。
+ *
+ * 在 ArkUI 组件树中渲染运动层——对真实 ArkUI Text 组件做 clipShape 裁切，
+ * 实现吐字/吞字的像素级遮罩效果。
+ *
+ * 调用方式：在 SujianEditor 的 build() 中，当 EditorMotionLayer.needsMotionLayer(frame) 为 true 时调用：
+ * ```
+ * if (EditorMotionLayer.needsMotionLayer(this.visualFrame)) {
+ *   MotionTextOverlayBuilder({
+ *     oldTextContent: this.previousSnapshot?.text ?? null,
+ *     newTextContent: this.currentSnapshot?.text ?? null,
+ *     visualFrame: this.visualFrame,
+ *     clipRects: EditorMotionLayer.buildAllClipRects(this.visualFrame),
+ *     fontSize: this.currentSnapshot?.fontSize ?? 16,
+ *     lineHeight: (this.currentSnapshot?.fontSize ?? 16) * (this.currentSnapshot?.lineSpacingMultiplier ?? 1.8)
+ *   })
+ * }
+ * ```
+ *
+ * 渲染策略：
+ * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+ * - 吞字（Conceal）：旧字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+ * - Forward Delete：旧字源完整排版，clipShape 限制在 [caret, front] 裁切窗口
+ * - 非动画：不渲染任何内容（静态层负责）
+ *
+ * ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
+ * 所以以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
+ *
+ * @param params.oldTextContent 旧排版源纯文本（吞字时显示旧字），null 表示不需要旧字源
+ * @param params.newTextContent 新排版源纯文本（吐字时显示新字），null 表示不需要新字源
+ * @param params.visualFrame 当前视觉帧
+ * @param params.clipRects 裁切矩形列表（与 motionGlyphWindows 一一对应）
+ * @param params.fontSize 字体大小（vp）
+ * @param params.lineHeight 行高（vp）
+ */
+@Builder
+export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
+  // 条件渲染：非动画状态或无运动字形窗口时不渲染任何内容
+  if (params.visualFrame.isAnimating && params.visualFrame.motionGlyphWindows.length > 0) {
+    // 用 Stack 层叠多个 Text 组件，每个对应一个 MotionGlyphWindow
+    Stack() {
+      // 遍历 motionGlyphWindows，为每个窗口创建一个带 clipShape 的 Text
+      ForEach(
+        params.visualFrame.motionGlyphWindows,
+        (window: MotionGlyphWindow, index: number) => {
+          // 根据 sourceKind 选择对应的文字源
+          // 吐字（Reveal）：sourceKind='new'，用 newTextContent
+          // 吞字（Conceal/ConcealForward）：sourceKind='old'，用 oldTextContent
+          // Reflow：sourceKind='new'，用 newTextContent
+          if (window.sourceKind === 'new' && params.newTextContent !== null) {
+            // 新字源：完整排版，用 Stack + offset + clipShape 限制可见区域
+            // RectShape 不支持 x/y 偏移，用 Stack 包裹 Text 并用 offset 移动 Text 使裁切窗口对齐 Stack 左上角
+            Stack() {
+              Text(params.newTextContent)
+                .fontSize(params.fontSize)
+                .lineHeight(params.lineHeight)
+                .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
+            }
+            .width(params.clipRects[index].width)
+            .height(params.clipRects[index].height)
+            .clipShape(new RectShape({
+              width: params.clipRects[index].width,
+              height: params.clipRects[index].height
+            }))
+            .position({
+              x: params.clipRects[index].x,
+              y: params.clipRects[index].y
+            })
+          } else if (window.sourceKind === 'old' && params.oldTextContent !== null) {
+            // 旧字源：完整排版，用 Stack + offset + clipShape 限制可见区域
+            Stack() {
+              Text(params.oldTextContent)
+                .fontSize(params.fontSize)
+                .lineHeight(params.lineHeight)
+                .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
+            }
+            .width(params.clipRects[index].width)
+            .height(params.clipRects[index].height)
+            .clipShape(new RectShape({
+              width: params.clipRects[index].width,
+              height: params.clipRects[index].height
+            }))
+            .position({
+              x: params.clipRects[index].x,
+              y: params.clipRects[index].y
+            })
+          }
+        },
+        (window: MotionGlyphWindow, index: number) => `${window.sourceKind}-${index}`
+      )
+    }
+    .width('100%')
+    .height('100%')
+    .alignContent(Alignment.TopStart)
   }
 }

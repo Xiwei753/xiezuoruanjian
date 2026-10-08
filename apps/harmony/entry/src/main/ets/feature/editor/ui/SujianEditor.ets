@@ -36,7 +36,7 @@
 
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { EditorRenderBackend, EditorRenderResult } from '../render/EditorRenderBackend'
-import { SelectionRect, CaretRect, CompositionUnderlineRect } from '../render/editor_render_geometry'
+import { SelectionRect, CaretRect, CompositionUnderlineRect, LineLayout } from '../render/editor_render_geometry'
 import { HarmonyImeConnection } from '../input/HarmonyImeConnection'
 import { EditorInputAdapter } from '../input/EditorInputAdapter'
 import { SelectionController } from '../selection/SelectionController'
@@ -60,6 +60,7 @@ import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
 import { EditorVisualFrame } from '../motion/EditorVisualFrame'
 import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
 import { EditorMotionCoordinator } from '../motion/EditorMotionCoordinator'
+import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams } from '../motion/EditorMotionLayer'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
 
@@ -91,6 +92,20 @@ export struct SujianEditor {
   private motionCoordinator: EditorMotionCoordinator = new EditorMotionCoordinator()
   // Issue #879：当前视觉帧——描述某一时刻的完整视觉状态（光标位置、静态/运动层字形范围）。
   @State private visualFrame: EditorVisualFrame | null = null
+  // Issue #879 复核评论修复：逐帧动画驱动状态。
+  // motionProgress 从 0 到 1 由 animateTo 驱动，@Watch 回调中调 sampleFrame 更新 visualFrame。
+  @State @Watch('onMotionProgressChanged') private motionProgress: number = 0
+  @State private isMotionAnimating: boolean = false
+  // Issue #879 复核评论修复：延迟到 layout observer 后才做运动规划。
+  // onPresentationUpdateChanged 暂存 pendingPresentationUpdate，等 layout 回调后才调 updateVisualFrame。
+  private pendingPresentationUpdate: EditorPresentationUpdate | null = null
+  // Issue #879 复核评论修复：保存旧 snapshot 供 acceptUpdate 使用。
+  private previousSnapshot: EditorLayoutSnapshot | null = null
+  // Issue #879 复核评论修复：运动层 old/new 字形源（StyledString）。
+  // oldStyledString = 编辑前的正文 StyledString（吞字时显示旧字）
+  // newStyledString = 编辑后的正文 StyledString（吐字时显示新字）
+  private oldStyledString: StyledString | null = null
+  private newStyledString: StyledString | null = null
   // IME 连接、输入/选区控制器、统一语义调度器由父组件注入；
   // SujianEditor 在获得/失去焦点时 attach/detach IME。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 inputAdapter/selectionController。
@@ -181,7 +196,11 @@ export struct SujianEditor {
       this.currentSnapshot = this.presentationUpdate.layoutSnapshot
     }
     this.refreshRender()
-    this.updateVisualFrame()
+    // Issue #879 复核评论修复：不立即调 updateVisualFrame()——Text layout 尚未完成。
+    // 暂存 pendingPresentationUpdate，等 Text.onAppear → attachTextLayoutObserver → layout 回调后才消费。
+    if (this.presentationUpdate !== null) {
+      this.pendingPresentationUpdate = this.presentationUpdate
+    }
     // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
     // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
     // Dispatcher 行导航命令出队时通过 resolver 读最新行布局计算目标。
@@ -258,8 +277,18 @@ export struct SujianEditor {
       if (!this.textMounted || this.currentSnapshot === null) {
         return
       }
+      // Issue #879 复核评论修复：保存旧布局（在 refreshRenderLayout 更新 renderResult 之前），
+      // 供 updateVisualFrame 的 acceptUpdate 使用。
+      const oldLineLayouts = this.renderResult?.lines ?? []
       // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
       this.refreshRenderLayout()
+      // Issue #879 复核评论修复：layout 完成后消费 pendingPresentationUpdate。
+      // onPresentationUpdateChanged 暂存了 pendingPresentationUpdate，等 layout 完成后才调 updateVisualFrame，
+      // 确保 acceptUpdate 拿到的是新布局完成后的 renderResult.lines，而非旧布局。
+      if (this.pendingPresentationUpdate !== null) {
+        this.updateVisualFrame(oldLineLayouts)
+        this.pendingPresentationUpdate = null
+      }
     }
     observer.on('layout', callback)
     this.textLayoutObserver = observer
@@ -462,15 +491,18 @@ export struct SujianEditor {
   // Issue #879：@Watch 回调，监听 presentationUpdate 变化。
   // 从 presentationUpdate.layoutSnapshot 同步 currentSnapshot，
   // 并通过 motionCoordinator.acceptUpdate() 更新 visualFrame。
+  // Issue #879 复核评论修复：延迟到 layout observer 后才做运动规划。
+  // - 先保存旧 snapshot 和旧 StyledString
+  // - 调 refreshRender() 下发新 StyledString
+  // - 暂存 pendingPresentationUpdate，等 layout observer 回调后才调 updateVisualFrame
   private onPresentationUpdateChanged(): void {
-    // 从 presentationUpdate 同步 currentSnapshot
+    // 保存旧 snapshot（供 updateVisualFrame 的 acceptUpdate 使用）
+    this.previousSnapshot = this.currentSnapshot
+    // 保存旧 StyledString（供运动层 MotionTextOverlayBuilder 使用）
+    this.oldStyledString = this.newStyledString
+
     if (this.presentationUpdate === null) {
       this.currentSnapshot = null
-    } else {
-      this.currentSnapshot = this.presentationUpdate.layoutSnapshot
-    }
-
-    if (this.currentSnapshot === null) {
       // Issue #768 评论5837229456：通过 applyStyledText 清空 StyledString（受 textMounted 守卫）
       this.applyStyledText()
       this.lineResolver.cancelWait()
@@ -480,34 +512,80 @@ export struct SujianEditor {
       this.caretRect = null
       this.compositionUnderlineRects = []
       this.visualFrame = null
+      this.pendingPresentationUpdate = null
       // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
       this.pushDiagnosticsSnapshot()
       return
     }
+    // 同步 currentSnapshot
+    this.currentSnapshot = this.presentationUpdate.layoutSnapshot
     // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
-    // Issue #879：通过运动协调器接收更新，生成视觉帧。
-    this.updateVisualFrame()
+    // Issue #879 复核评论修复：暂存 pendingPresentationUpdate，等 layout observer 回调后才调 updateVisualFrame。
+    // 此时不立即调用 updateVisualFrame()——Text layout 尚未完成，renderResult.lines 还是旧布局。
+    this.pendingPresentationUpdate = this.presentationUpdate
     // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
-    // 诊断方可通过 revision !== layoutRevision 判断布局是否已跟上 snapshot。
     this.pushDiagnosticsSnapshot()
   }
 
   // Issue #879：通过运动协调器接收编辑更新，计算当前视觉帧。
   // 当 presentationUpdate 包含 editResult 时，运动协调器会规划文字运动（吐字/吞字/光标移动等）；
   // 当 editResult 为 null（初始加载/布局重建）时，直接显示静态画面。
-  private updateVisualFrame(): void {
-    if (this.presentationUpdate === null || this.currentSnapshot === null) {
+  // Issue #879 复核评论修复：
+  // - 使用 acceptUpdate 新签名（oldSnapshot + oldLayout + newSnapshot + newLayout + editResult + contentWidth + policy）
+  // - 如果 isAnimating()，启动 animateTo 逐帧驱动
+  private updateVisualFrame(oldLineLayouts: LineLayout[] = []): void {
+    if (this.currentSnapshot === null || this.pendingPresentationUpdate === null) {
       this.visualFrame = null
       return
     }
     // 从 renderResult 获取行布局信息，供运动协调器计算字形位置。
-    const lineLayouts = this.renderResult?.lines ?? []
+    const newLineLayouts = this.renderResult?.lines ?? []
+    // oldSnapshot = previousSnapshot（编辑前的 snapshot）
+    const oldSnapshot = this.previousSnapshot ?? this.currentSnapshot
+    const editResult = this.pendingPresentationUpdate.editResult
     this.visualFrame = this.motionCoordinator.acceptUpdate(
-      this.presentationUpdate,
-      lineLayouts,
+      oldSnapshot,
+      oldLineLayouts,
+      this.currentSnapshot,
+      newLineLayouts,
+      editResult,
+      this.contentWidth,
       this.motionPolicy
     )
+    // Issue #879 复核评论修复：如果运动协调器正在动画，启动逐帧驱动。
+    if (this.motionCoordinator.isAnimating()) {
+      const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
+      this.startMotionAnimation(durationMs)
+    }
+  }
+
+  // Issue #879 复核评论修复：逐帧动画驱动。
+  // 用 ArkUI animateTo 驱动 motionProgress 从 0 到 1，
+  // @Watch('onMotionProgressChanged') 监听 motionProgress 变化调 sampleFrame 更新 visualFrame。
+  private startMotionAnimation(durationMs: number): void {
+    if (durationMs <= 0) {
+      // 无动画时长，直接跳到终态
+      this.visualFrame = this.motionCoordinator.finishMotion()
+      this.isMotionAnimating = false
+      return
+    }
+    this.isMotionAnimating = true
+    this.motionProgress = 0
+    animateTo({ duration: durationMs, curve: Curve.EaseOut, onFinish: (): void => {
+      this.isMotionAnimating = false
+      this.visualFrame = this.motionCoordinator.finishMotion()
+    }}, (): void => {
+      this.motionProgress = 1
+    })
+  }
+
+  // Issue #879 复核评论修复：@Watch 回调，motionProgress 变化时调 sampleFrame 更新 visualFrame。
+  private onMotionProgressChanged(): void {
+    if (!this.isMotionAnimating) {
+      return
+    }
+    this.visualFrame = this.motionCoordinator.sampleFrame(this.motionProgress)
   }
 
   // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
@@ -519,6 +597,7 @@ export struct SujianEditor {
     }
     if (this.currentSnapshot === null) {
       this.textController.setStyledString(new MutableStyledString(''))
+      this.newStyledString = null
       return
     }
     const config: EditorStyleConfig = {
@@ -528,6 +607,8 @@ export struct SujianEditor {
       autoIndentWidth: this.currentSnapshot.autoIndentWidth,
     }
     const styled = EditorTextStyleProjector.projectToStyledString(this.currentSnapshot.text, config)
+    // Issue #879 复核评论修复：保存新 StyledString 引用，供运动层 MotionTextOverlayBuilder 使用。
+    this.newStyledString = styled
     this.textController.setStyledString(styled)
   }
 
@@ -1247,7 +1328,23 @@ export struct SujianEditor {
               }
             })
 
-          // 3. composition underline（在 text 上面）
+          // 3. motion layer — Issue #879 复核评论修复：运动层（在 text 上方，用 clipShape 裁切真实 Text）。
+          // 当 visualFrame.isAnimating 且 needsMotionLayer 时，渲染运动层 Text + clipShape。
+          // 吐字：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口。
+          // 吞字：旧字源完整排版，clipShape 限制在 [x0, front] 裁切窗口。
+          if (this.visualFrame !== null && this.visualFrame.isAnimating &&
+              EditorMotionLayer.needsMotionLayer(this.visualFrame)) {
+            MotionTextOverlayBuilder({
+              oldTextContent: this.previousSnapshot?.text ?? null,
+              newTextContent: this.currentSnapshot?.text ?? null,
+              visualFrame: this.visualFrame,
+              clipRects: EditorMotionLayer.buildAllClipRects(this.visualFrame),
+              fontSize: this.currentSnapshot?.fontSize ?? 16,
+              lineHeight: (this.currentSnapshot?.fontSize ?? 16) * (this.currentSnapshot?.lineSpacingMultiplier ?? 1.8)
+            })
+          }
+
+          // 4. composition underline（在 text 上面）
           ForEach(this.compositionUnderlineRects, (rect: CompositionUnderlineRect, index: number) => {
             Rect()
               .position({ x: rect.x, y: rect.y })
@@ -1256,7 +1353,7 @@ export struct SujianEditor {
               .fill(this.compositionUnderlineColor)
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
 
-          // 4. caret（最上层）— Issue #879：单一视觉光标。
+          // 5. caret（最上层）— Issue #879：单一视觉光标。
           // 动画中：光标位置由 visualFrame 决定（画在裁切前沿 front）。
           // 非动画：光标画在静态位置（caretRect）。
           if (this.visualFrame !== null && this.visualFrame.isAnimating) {
