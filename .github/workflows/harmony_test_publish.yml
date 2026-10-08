@@ -359,41 +359,85 @@ jobs:
             olderTests.push({ id: oldVersionId, state: detail.appInfo.releaseState })
           }
 
-          // Huawei documents releaseState 4 as "in review" and 0 as
-          // "testing". Other states are left intact (history/drafts).
-          // Pre-review state 12 cannot be cancelled by the documented API.
+          // Huawei releaseType=6 statuses: 7=draft, 4=reviewing,
+          // 0=testing, 3=waiting to start, 12=pre-review.
+          // Validate all candidates before any withdrawal/deletion.
+          const recognizedStates = new Set([0, 1, 2, 3, 4, 7, 10, 11, 12, 13])
+          for (const old of olderTests) {
+            if (!recognizedStates.has(old.state)) {
+              throw new Error('Unknown AGC test releaseState=' + old.state +
+                ' for version ' + old.id + '; refusing to delete')
+            }
+          }
           if (olderTests.some(t => t.state === 12)) {
-            throw new Error('An older test is in pre-review (12); AGC does not document safe withdrawal for this state')
+            throw new Error('Older test version in pre-review (12); official cancel API does not support this state. No old version was changed.')
           }
-          for (const old of olderTests.filter(t => t.state === 4)) {
-            core.info('Cancelling review for older HarmonyOS test: ' + old.id)
-            const result = await client.put<any>(
-              '/publish/v3/version/on-shelf/cancel',
-              { versionId: old.id },
-              undefined,
-              { appId }
-            )
-            if (String(result?.ret?.code) !== '0') {
-              throw new Error('Cannot cancel old test review ' + old.id +
-                ': AGC code=' + result?.ret?.code)
+
+          for (const old of olderTests) {
+            if (old.state === 4) {
+              core.info('Withdrawing old HarmonyOS test under review: ' + old.id)
+              const cancelled = await client.put<any>(
+                '/publish/v3/version/on-shelf/cancel',
+                { versionId: old.id },
+                undefined,
+                { appId }
+              )
+              if (Number(cancelled?.ret?.code) !== 0) {
+                throw new Error('Cannot cancel old test review ' + old.id +
+                  ': AGC code=' + cancelled?.ret?.code)
+              }
+              core.info('Review withdrawn: ' + old.id)
+            } else if (old.state === 0 || old.state === 3) {
+              core.info('Stopping old active/scheduled HarmonyOS test: ' + old.id)
+              const stopped = await client.post<any>(
+                '/publish/v2/test/version/stop',
+                { versionId: old.id },
+                undefined,
+                { appId }
+              )
+              if (Number(stopped?.ret?.code) !== 0) {
+                throw new Error('Cannot stop old test ' + old.id +
+                  ': AGC code=' + stopped?.ret?.code)
+              }
+              core.info('Old test stopped: ' + old.id)
+            } else {
+              core.info('Deleting old draft/inactive test ' + old.id +
+                ' (state=' + old.state + ')')
             }
-            core.info('Cancelled old test review: ' + old.id)
-          }
-          for (const old of olderTests.filter(t => t.state === 0)) {
-            core.info('Stopping older active HarmonyOS test: ' + old.id)
-            const result = await client.post<any>(
-              '/publish/v2/test/version/stop',
-              { versionId: old.id },
-              undefined,
-              { appId }
-            )
-            if (String(result?.ret?.code) !== '0') {
-              throw new Error('Cannot stop active test ' + old.id +
-                ': AGC code=' + result?.ret?.code)
+
+            // An audit cancellation or test stop can propagate asynchronously.
+            // Delete the previous version, retrying the same ID, never the
+            // replacement. Failure stops the workflow BEFORE new submission.
+            let removed = false
+            let lastDeletionError = ''
+            for (let attempt = 1; attempt <= 6; attempt++) {
+              try {
+                const result = await client.delete<any>(
+                  '/publish/v2/test/app/version',
+                  { versionId: old.id, appId }
+                )
+                if (Number(result?.ret?.code) === 0) {
+                  removed = true
+                  break
+                }
+                lastDeletionError = 'code=' + result?.ret?.code +
+                  ' msg=' + result?.ret?.msg
+              } catch (error) {
+                lastDeletionError = String(error)
+              }
+              if (attempt < 6) {
+                core.warning('Old version ' + old.id + ' not deletable yet (' +
+                  lastDeletionError + '); retrying ' + attempt + '/6')
+                await new Promise<void>(resolve => setTimeout(resolve, 5000 * attempt))
+              }
             }
-            core.info('Stopped older active test: ' + old.id)
+            if (!removed) {
+              throw new Error('Cannot delete old HarmonyOS test ' + old.id +
+                ': ' + lastDeletionError + '. New version NOT submitted.')
+            }
+            core.info('Deleted old HarmonyOS test version: ' + old.id)
           }
-          core.info('Retired older in-review/active test versions. Submitting latest: ' + versionId)
+          core.info('Old HarmonyOS tests cleaned; submitting replacement: ' + versionId)
           const body: SubmitTestVersionRequest = { versionId }"""
           if source.count(submit_anchor) != 1:
               raise SystemExit(
@@ -434,6 +478,30 @@ jobs:
               )
           source = source.replace(submit_call_anchor, submit_call_replacement, 1)
 
+          # The pinned upstream AGC client exposes GET/POST/PUT, but deletion
+          # of old test versions requires Huawei's documented DELETE method.
+          client_path = path.with_name("agc-client.ts")
+          client_source = client_path.read_text(encoding="utf-8")
+          delete_anchor = "  async put<T>(\n"
+          delete_extension = """  async delete<T>(
+            path: string,
+            query?: Record<string, string>,
+            extraHeaders?: Record<string, string>
+          ): Promise<T> {
+            let url = `${BASE_URL}${path}`
+            if (query) {
+              const params = new URLSearchParams(query)
+              url += `?${params.toString()}`
+            }
+            const headers = { ...this.defaultHeaders(), ...extraHeaders }
+            return this.rawRequest<T>('DELETE', url, undefined, headers)
+          }
+
+            async put<T>(
+          """
+          if client_source.count(delete_anchor) != 1:
+              raise SystemExit("Pinned AGC client delete method injection anchor missing")
+          client_path.write_text(client_source.replace(delete_anchor, delete_extension, 1), encoding="utf-8")
           path.write_text(source, encoding="utf-8")
           PY
 
