@@ -156,11 +156,20 @@ export struct SujianEditor {
   // 源池用 sourceRevision + stableRunId 保存 StyledString/TextController，
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
   private motionSourcePool: EditorMotionSourcePool = new EditorMotionSourcePool()
-  // Issue #879 复核评论修复（问题4）：每个运动窗口独立的 TextController——
-  // ArkUI 不允许同一 TextController 绑定多个 Text，所以每个窗口需要独立 Controller。
-  // key 是 clusterId（基于 sourceKind + sourceRevision + utf16Start + utf16End 构造的稳定身份），
-  // 与 ForEach key 一致，确保复用时 Controller 保持稳定，窗口增减/顺序变化不会错配。
-  private motionWindowControllers: Map<string, TextController> = new Map()
+  // Issue #879 最新复核评论修复（问题3）：窗口级 ComponentObserver 管理——
+  // 每个 clusterId 对应一个独立的 ComponentObserver，监听运动窗口 Text 的 layout 事件。
+  // @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
+  // 让 SujianEditor 创建 observer，layout 回调中调用 markWindowLayoutReady + markWindowMounted。
+  // Text.onDisAppear 中通过 onWindowDisappear 回调通知 SujianEditor 清理 observer 和窗口状态。
+  private windowLayoutObservers: Map<string, inspector.ComponentObserver> = new Map()
+  private windowLayoutCallbacks: Map<string, () => void> = new Map()
+  // Issue #879 最新复核评论修复（问题3）：pending 动画时长——
+  // 窗口未 layoutReady 时暂存动画时长，等所有窗口 ready 后在 layout 回调中启动动画。
+  private pendingAnimationDurationMs: number = 0
+  // Issue #879 最新复核评论修复（问题5）：保存从 onPendingLayoutReady 回调获取的 firstCaretRect——
+  // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
+  // 传递给 Coordinator 的 acceptUpdateWithChain，空正文时优先使用而非估算。
+  private pendingFirstCaretRect: CaretRect | null = null
   // Issue #879 本轮复核评论修复（问题4）：pending RenderPlan 身份字段。
   // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
   // 需保留 per-revision 的旧布局，不要在两次更新尚未消费之间用 previousLayout 一个变量覆盖旧版来源。
@@ -333,6 +342,10 @@ export struct SujianEditor {
     this.stopActiveAnimation()
     // Issue #879 复核评论修复（问题3）：清空运动源池。
     this.motionSourcePool.clear()
+    // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
+    this.cleanupAllWindowsObservers()
+    this.pendingAnimationDurationMs = 0
+    this.pendingFirstCaretRect = null
     // Issue #879 复核评论修复（问题1）：清空 token→StyledString 映射。
     this.styledStringByToken.clear()
     // Issue #879 复核评论修复（问题3）：清空已消费的 token 集合。
@@ -624,8 +637,10 @@ export struct SujianEditor {
       this.pendingLayoutRequest = null
       // Issue #879 复核评论修复（问题3）：清空运动源池。
       this.motionSourcePool.clear()
-      // Issue #879 复核评论修复（问题4）：会话切换时清空所有窗口 Controller。
-      this.motionWindowControllers.clear()
+      // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver 和回调。
+      this.cleanupAllWindowsObservers()
+      this.pendingAnimationDurationMs = 0
+      this.pendingFirstCaretRect = null
       // Issue #879 复核评论修复（问题4）：会话失效时更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
       // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
@@ -698,12 +713,19 @@ export struct SujianEditor {
       // 至少包含 fontSize、lineSpacing、autoIndentEnabled、autoIndentWidth。
       const autoIndentEnabled = pendingSnap.autoIndentEnabled
       const autoIndentWidth = pendingSnap.autoIndentWidth
+      // Issue #879 最新复核评论修复（问题4）：计算 textHash——`length:firstCharCode:lastCharCode`。
+      // 轻量但能有效区分同长度不同内容（如"甲"→"乙"），防止旧版布局贴上新 token。
+      const fullText = this.newStyledString.getString()
+      const firstCharCode = fullText.length > 0 ? fullText.charCodeAt(0) : 0
+      const lastCharCode = fullText.length > 0 ? fullText.charCodeAt(fullText.length - 1) : 0
+      const textHash = `${fullTextLength}:${firstCharCode}:${lastCharCode}`
       const request: PendingLayoutRequest = {
         token: this.pendingLayoutToken,
         contentWidth: this.contentWidth,
         fontSize: fontSize,
         fullTextLength: fullTextLength,
         styleKey: `${fontSize}-${lineSpacing}-${autoIndentEnabled}-${autoIndentWidth}`,
+        textHash: textHash,
       }
       this.pendingLayoutRequest = request
     }
@@ -722,7 +744,9 @@ export struct SujianEditor {
   // Issue #879 最新复核评论修复（问题1）：消费整个事务链——
   // 从 pendingPresentationUpdates 数组中取出所有事务，收集所有 editResult，
   // 调用 motionCoordinator.acceptUpdateWithChain 合并事务链。
-  private onPendingLayoutReady(token: number, lineLayouts: LineLayout[]): void {
+  // Issue #879 最新复核评论修复（问题5）：增加可选 firstCaretRect 参数。
+  // 空文本时 lineLayouts 为空数组，firstCaretRect 提供光标位置（含 autoIndent/padding）。
+  private onPendingLayoutReady(token: number, lineLayouts: LineLayout[], firstCaretRect?: CaretRect): void {
     // Issue #879 复核评论修复（问题3）：要求 pendingPresentationUpdates 非空才消费。
     if (token !== this.pendingLayoutToken || this.pendingPresentationUpdates.length === 0) {
       return
@@ -732,6 +756,10 @@ export struct SujianEditor {
       return
     }
     this.consumedTokens.add(token)
+    // Issue #879 最新复核评论修复（问题5）：保存 firstCaretRect——
+    // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
+    // 传递给 Coordinator 的 acceptUpdateWithChain，空正文时优先使用而非估算。
+    this.pendingFirstCaretRect = firstCaretRect ?? null
     // Issue #879 复核评论修复（问题3）：后台排版结果获批后，先将 displayed 指向新版本，
     // 然后才把新 StyledString 写入主 Text，然后才调 updateVisualFrameWithLayout。
     // 1. 取最新版本作为 displayed 版本
@@ -774,6 +802,9 @@ export struct SujianEditor {
     }
     // Issue #879 最新复核评论修复（问题1）：调用 acceptUpdateWithChain 合并事务链。
     // 如果事务链只有一个 editResult，acceptUpdateWithChain 内部走原来的 acceptUpdate 逻辑。
+    // Issue #879 最新复核评论修复（问题5）：传入 pendingFirstCaretRect——
+    // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
+    // Coordinator 空正文时优先使用 firstCaretRect，fallback 才用估算。
     this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,
@@ -781,7 +812,8 @@ export struct SujianEditor {
       newLineLayouts,
       editResults,
       this.contentWidth,
-      this.motionPolicy
+      this.motionPolicy,
+      this.pendingFirstCaretRect
     )
     // 用 motionSourcePool 准备运动字形源
     this.prepareMotionSources()
@@ -816,22 +848,9 @@ export struct SujianEditor {
     const pendingRevision = this.pendingRevision
     this.motionSourcePool.releaseUnusedSources(activeRunIds, displayedRevision, pendingRevision)
 
-    // 清理不再需要的旧窗口 Controller——只保留当前窗口需要的
-    // Issue #879 复核评论修复（问题4）：controller key 改为 clusterId（稳定身份），
-    // 不再使用 `${runId}-${index}`（数组序号），避免窗口增减/顺序变化错配 controller。
-    const neededKeys: Set<string> = new Set()
-    for (let i = 0; i < windows.length; i++) {
-      neededKeys.add(windows[i].clusterId)
-    }
-    const keysToDelete: string[] = []
-    this.motionWindowControllers.forEach((_: TextController, key: string) => {
-      if (!neededKeys.has(key)) {
-        keysToDelete.push(key)
-      }
-    })
-    for (const key of keysToDelete) {
-      this.motionWindowControllers.delete(key)
-    }
+    // Issue #879 最新复核评论修复（问题3）：窗口级状态（TextController/mounted/layoutReady）
+    // 已移到 MotionWindowState 中管理，不再需要手动清理 motionWindowControllers。
+    // 窗口状态的创建和释放由 getOrCreateWindowState/releaseWindowState 自动管理。
 
     // 为运动窗口获取或创建源
     const oldRevision = this.previousSnapshot?.revision ?? 0
@@ -847,8 +866,14 @@ export struct SujianEditor {
 
   // 预匹配运动窗口与源——在 build() 之前调用，避免在 @Builder 中做匹配（ArkUI 限制）。
   // ForEach key 基于 window.clusterId（稳定身份），而非 `${runId}-${index}`（数组序号）。
-  // Issue #879 复核评论修复（问题4）：clusterId 基于 sourceKind + sourceRevision + utf16Start + utf16End
-  // 构造的稳定身份标识，窗口增减/顺序变化不会把另一个簇绑定到旧 controller。
+  // Issue #879 最新复核评论修复（问题3）：
+  // - 从 motionSourcePool.getOrCreateWindowState(clusterId) 读取 mounted/layoutReady/textController，
+  //   而非从 source.mounted/source.layoutReady 读取（这些字段已从 MotionSourceEntry 移除）。
+  // - 设置 onWindowLayoutReady 和 onWindowDisappear 回调：
+  //   onWindowLayoutReady(clusterId) → SujianEditor 创建 ComponentObserver 监听 layout 事件，
+  //     layout 回调中调用 markWindowLayoutReady + markWindowMounted。
+  //   onWindowDisappear(clusterId) → SujianEditor 清理 ComponentObserver 和窗口状态。
+  // - TextController 从 windowState.textController 获取（而非从 motionWindowControllers Map）。
   private buildMotionWindowSources(): MotionWindowSource[] {
     if (this.visualFrame === null || !this.visualFrame.isAnimating) {
       return []
@@ -859,33 +884,105 @@ export struct SujianEditor {
     for (let i = 0; i < windows.length; i++) {
       const source = this.motionSourcePool.getSource(windows[i].runId)
       if (source !== undefined) {
-        // Issue #879 复核评论修复（问题4）：每个窗口独立的 TextController——
-        // key 使用 clusterId（稳定身份），与 ForEach key 一致，确保复用时 Controller 保持稳定。
-        const controllerKey = windows[i].clusterId
-        let controller = this.motionWindowControllers.get(controllerKey)
-        if (controller === undefined) {
-          controller = new TextController()
-          this.motionWindowControllers.set(controllerKey, controller)
-        }
+        // Issue #879 最新复核评论修复（问题3）：从窗口级状态读取 textController/mounted/layoutReady——
+        // MotionSourceEntry 已不再保存这些字段，它们移到了 MotionWindowState（按 clusterId 管理）。
+        const clusterId = windows[i].clusterId
+        const windowState = this.motionSourcePool.getOrCreateWindowState(clusterId)
         result.push({
           window: windows[i],
           source: source,
           clipRect: clipRects[i],
-          textController: controller,
-          // Issue #879 复核评论修复（问题4）：从源池读取持久 mounted/layoutReady 状态，
-          // 而非每次构造 mounted:false。源池的 mounted/layoutReady 由 onAppear 回调
-          // 和 onLayoutReady 回调持久更新，不随 buildMotionWindowSources 重建而丢失。
-          mounted: source.mounted,
-          layoutReady: source.layoutReady,
-          onLayoutReady: (runId: string): void => {
-            // Text onAppear → setTimeout 延迟一帧后回调：标记源布局已完成 + 已挂载。
-            this.motionSourcePool.markLayoutReady(runId)
-            this.motionSourcePool.markMounted(runId)
+          textController: windowState.textController,
+          mounted: windowState.mounted,
+          layoutReady: windowState.layoutReady,
+          // Issue #879 最新复核评论修复（问题3）：
+          // onWindowLayoutReady：Text.onAppear 中调用，通知 SujianEditor 为本窗口创建 ComponentObserver。
+          // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
+          // 才调用 markWindowLayoutReady(clusterId) + markWindowMounted(clusterId)。
+          onWindowLayoutReady: (cid: string): void => {
+            this.attachWindowLayoutObserver(cid)
+          },
+          // Issue #879 最新复核评论修复（问题3）：
+          // onWindowDisappear：Text.onDisAppear 中调用，通知 SujianEditor 清理本窗口状态。
+          // 父组件调用 releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+          onWindowDisappear: (cid: string): void => {
+            this.detachWindowLayoutObserver(cid)
+            this.motionSourcePool.releaseWindowState(cid)
           }
         })
       }
     }
     return result
+  }
+
+  // Issue #879 最新复核评论修复（问题3）：为运动窗口创建 ComponentObserver 监听 layout 事件。
+  // @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调让 SujianEditor 创建。
+  // ComponentObserver 通过组件 id（`motion-window-${clusterId}`）监听 layout 事件，
+  // layout 回调中调用 markWindowLayoutReady + markWindowMounted，确认布局真正完成。
+  // 不再用 setTimeout 充当绘制完成证据——用真实 ComponentObserver('layout') 回调。
+  private attachWindowLayoutObserver(clusterId: string): void {
+    if (this.windowLayoutObservers.has(clusterId)) {
+      return
+    }
+    const componentId = `motion-window-${clusterId}`
+    const observer = this.getUIContext()
+      .getUIInspector()
+      .createComponentObserver(componentId)
+    const callback = (): void => {
+      this.motionSourcePool.markWindowLayoutReady(clusterId)
+      this.motionSourcePool.markWindowMounted(clusterId)
+      // Issue #879 最新复核评论修复（问题3）：所有窗口 ready 后启动 pending 动画。
+      // 窗口未 layoutReady 时 startMotionAnimation 暂存动画时长不启动 animator，
+      // 等所有窗口 layout 回调后再启动——旧画面在新窗口未准备好前继续保持显示。
+      if (this.pendingAnimationDurationMs > 0 && this.allMotionWindowsReady()) {
+        const durationMs = this.pendingAnimationDurationMs
+        this.pendingAnimationDurationMs = 0
+        this.startMotionAnimation(durationMs)
+      }
+    }
+    observer.on('layout', callback)
+    this.windowLayoutObservers.set(clusterId, observer)
+    this.windowLayoutCallbacks.set(clusterId, callback)
+  }
+
+  // Issue #879 最新复核评论修复（问题3）：清理运动窗口的 ComponentObserver。
+  // Text.onDisAppear 中调用——窗口已从组件树移除，observer 不再需要。
+  private detachWindowLayoutObserver(clusterId: string): void {
+    const observer = this.windowLayoutObservers.get(clusterId)
+    const callback = this.windowLayoutCallbacks.get(clusterId)
+    if (observer !== undefined && callback !== undefined) {
+      observer.off('layout', callback)
+    }
+    this.windowLayoutObservers.delete(clusterId)
+    this.windowLayoutCallbacks.delete(clusterId)
+  }
+
+  // Issue #879 最新复核评论修复（问题3）：清理所有窗口级 ComponentObserver。
+  // 会话切换、编辑器销毁时调用——释放所有 observer 和回调。
+  private cleanupAllWindowsObservers(): void {
+    this.windowLayoutObservers.forEach((observer: inspector.ComponentObserver, clusterId: string) => {
+      const callback = this.windowLayoutCallbacks.get(clusterId)
+      if (callback !== undefined) {
+        observer.off('layout', callback)
+      }
+    })
+    this.windowLayoutObservers.clear()
+    this.windowLayoutCallbacks.clear()
+  }
+
+  // Issue #879 最新复核评论修复（问题3）：检查所有运动窗口是否已 layoutReady。
+  // 启动动画前检查——未 ready 的窗口保持旧画面显示，等所有窗口 ready 后才启动动画。
+  private allMotionWindowsReady(): boolean {
+    if (this.visualFrame === null || !this.visualFrame.isAnimating) {
+      return true
+    }
+    const windows = this.visualFrame.motionGlyphWindows
+    for (let i = 0; i < windows.length; i++) {
+      if (!this.motionSourcePool.isWindowLayoutReady(windows[i].clusterId)) {
+        return false
+      }
+    }
+    return true
   }
 
   // Issue #879 本轮复核评论修复（问题4）：校验 pending RenderPlan 身份。
@@ -967,6 +1064,9 @@ export struct SujianEditor {
         editResults.push(update.editResult)
       }
     }
+    // Issue #879 最新复核评论修复（问题5）：传入 pendingFirstCaretRect——
+    // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
+    // Coordinator 空正文时优先使用 firstCaretRect，fallback 才用估算。
     this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,  // 使用缓存的旧布局
@@ -974,7 +1074,8 @@ export struct SujianEditor {
       newLineLayouts,
       editResults,
       this.contentWidth,
-      this.motionPolicy
+      this.motionPolicy,
+      this.pendingFirstCaretRect
     )
     // Issue #879 复核评论修复（问题3）：用 motionSourcePool 准备运动字形源。
     this.prepareMotionSources()
@@ -1037,6 +1138,8 @@ export struct SujianEditor {
       this.motionAnimator = null
     }
     this.isMotionAnimating = false
+    // Issue #879 最新复核评论修复（问题3）：清理 pending 动画时长。
+    this.pendingAnimationDurationMs = 0
     // Issue #879 复核评论修复（问题4）：停止动画后清理不再需要的源。
     this.releaseSourcesAfterMotion()
   }
@@ -1052,8 +1155,10 @@ export struct SujianEditor {
     // 所有源都不在 activeRunIds 中，但保留 displayed/pending 版本的源
     const emptyRunIds: Set<string> = new Set()
     this.motionSourcePool.releaseUnusedSources(emptyRunIds, displayedRevision, pendingRevision)
-    // 清理不再需要的窗口 Controller
-    this.motionWindowControllers.clear()
+    // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver——
+    // 动画结束后所有运动窗口消失，observer 不再需要。
+    this.cleanupAllWindowsObservers()
+    this.pendingAnimationDurationMs = 0
   }
 
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 实现真正的逐帧回调。
@@ -1075,6 +1180,15 @@ export struct SujianEditor {
       this.isMotionAnimating = false
       return
     }
+    // Issue #879 最新复核评论修复（问题3）：启动动画前检查所有窗口是否 layoutReady。
+    // 未 ready 的窗口保持旧画面显示——不启动 animator，暂存动画时长，
+    // 等所有窗口 layout 回调（attachWindowLayoutObserver 中的 ComponentObserver 'layout'）后再启动。
+    // 这确保运动窗口 Text 的 measure/layout 真正完成后才开始动画，避免跳帧。
+    if (!this.allMotionWindowsReady()) {
+      this.pendingAnimationDurationMs = durationMs
+      return
+    }
+    this.pendingAnimationDurationMs = 0
     // Issue #879 本轮复核评论修复（问题3）：先 ++motionGeneration 再 cancel 旧 animator。
     // 华为 AnimatorResult.cancel() 会额外触发一次终点 onFrame，
     // 先 cancel 再 ++generation 会让旧动画终值写到新画面。
@@ -1936,8 +2050,8 @@ export struct SujianEditor {
             resolveLayoutRequest: (token: number): StyledString | null => {
               return this.styledStringByToken.get(token) ?? null
             },
-            onLayoutReady: (token: number, lineLayouts: LineLayout[]): void => {
-              this.onPendingLayoutReady(token, lineLayouts)
+            onLayoutReady: (token: number, lineLayouts: LineLayout[], firstCaretRect?: CaretRect): void => {
+              this.onPendingLayoutReady(token, lineLayouts, firstCaretRect)
             }
           })
         } else {

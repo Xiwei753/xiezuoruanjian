@@ -21,6 +21,15 @@
 // - 问题4：needsStaticMask 只有确切有 motion owner（motionGlyphWindows 中至少有一个 window
 //   的 runId 非空）时才返回 true。非动画时不裁切。
 //
+// Issue #879 最新复核评论修复（问题3）：
+// - 每个新 Text 的 onAppear 完成本节点自己的绑定（setStyledString），
+//   不再检查 !item.mounted 跳过——避免同版本新窗口从源池读到 mounted=true 而漏字。
+// - 用真实 ComponentObserver('layout') 替代 setTimeout 定时器充当绘制完成证据。
+//   @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
+//   让父组件（SujianEditor）创建 observer，layout 回调中调用 markWindowLayoutReady。
+// - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
+// - 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
+//
 // ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
 // 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
 
@@ -323,29 +332,40 @@ export class EditorMotionLayer {
  * ArkTS 要求 @Builder 函数的参数类型必须是显式声明的 interface 或 class，
  * 不能用对象字面量类型。
  *
- * Issue #879 复核评论修复（问题2）：
- * - 不再接收 TextController 数组 / StyledString / runIdPrefix——改为接收 motionSources（稳定源池）。
- * - ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
- * - 同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
- * - TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
- * - Text.onAppear 中调 source.textController.setStyledString(source.styledString)——只在首次挂载时设置。
+ * Issue #879 最新复核评论修复（问题3）：
+ * - mounted/layoutReady 从窗口级状态读取（MotionWindowState），而非从源池 source 读取。
+ *   避免某一窗口先 mounted 后，后续同版本新窗口从 source 读到 mounted=true，
+ *   导致新 Text 的 onAppear 跳过 setStyledString 而空白。
+ * - onWindowLayoutReady 回调替代旧的 onLayoutReady + setTimeout：
+ *   @Builder 中不能直接创建 ComponentObserver，通过回调让父组件创建 observer，
+ *   layout 回调中调用 markWindowLayoutReady(clusterId)。
+ * - onWindowDisappear 回调：Text.onDisAppear 中通知父组件清理本窗口状态。
  */
 /** 预匹配的运动窗口+源+裁切矩形三元组——避免在 @Builder 中做匹配（ArkUI 限制） */
 export interface MotionWindowSource {
   /** 运动字形窗口 */
   window: MotionGlyphWindow
-  /** 匹配的稳定源（提供 StyledString） */
+  /** 匹配的稳定源（提供可共享的 StyledString） */
   source: MotionSourceEntry
   /** 裁切矩形 */
   clipRect: ClipRect
   /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
   textController: TextController
-  /** 是否已挂载（onAppear 已触发）——从源池读取持久状态，而非每次构造 false */
+  /** 是否已挂载（onAppear 已触发）——从窗口级状态读取，而非从源池 source 读取 */
   mounted: boolean
-  /** 布局是否已完成——从源池读取持久状态，而非每次构造 false */
+  /** 布局是否已完成——从窗口级状态读取，而非从源池 source 读取 */
   layoutReady: boolean
-  /** 布局完成回调——Text onAppear 后延迟一帧通知父组件标记 layoutReady */
-  onLayoutReady: ((runId: string) => void) | null
+  /**
+   * 窗口布局就绪回调——Text.onAppear 中调用，通知父组件为本窗口创建 ComponentObserver。
+   * 父组件创建 observer 后，在 layout 回调中调用 motionSourcePool.markWindowLayoutReady(clusterId)。
+   * 替代旧的 onLayoutReady + setTimeout——用真实 ComponentObserver('layout') 确认布局完成。
+   */
+  onWindowLayoutReady: ((clusterId: string) => void) | null
+  /**
+   * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
+   * 父组件调用 motionSourcePool.releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+   */
+  onWindowDisappear: ((clusterId: string) => void) | null
 }
 
 export interface MotionTextOverlayParams {
@@ -361,11 +381,14 @@ export interface MotionTextOverlayParams {
  * 在 ArkUI 组件树中渲染运动层——对真实 ArkUI Text 组件做 clipShape 裁切，
  * 实现吐字/吞字的像素级遮罩效果。
  *
- * Issue #879 复核评论修复（问题2）：
- * - ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
- * - 同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
- * - TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
- * - Text.onAppear 中调 source.textController.setStyledString(source.styledString)——只在首次挂载时设置。
+ * Issue #879 最新复核评论修复（问题3）：
+ * - 每个新 Text 的 onAppear 完成本节点自己的绑定（setStyledString），
+ *   不再检查 !item.mounted 跳过——避免同版本新窗口从源池读到 mounted=true 而漏字。
+ * - 用真实 ComponentObserver('layout') 替代 setTimeout 定时器充当绘制完成证据。
+ *   @Builder 中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
+ *   让父组件创建 observer，layout 回调中调用 markWindowLayoutReady。
+ * - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
+ * - 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
  *
  * 渲染策略：
  * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
@@ -389,24 +412,34 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               .width(params.textWidth)
               .textAlign(TextAlign.Start)
               .wordBreak(WordBreak.BREAK_ALL)
+              // Issue #879 最新复核评论修复（问题3）：
+              // 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
+              // ComponentObserver 通过组件 id 监听 layout 事件，确认布局真正完成。
+              .id(`motion-window-${item.window.clusterId}`)
               .offset({
                 x: -item.clipRect.x + item.window.offsetX,
                 y: -item.clipRect.y + item.window.offsetY
               })
               .onAppear(() => {
-                if (!item.mounted) {
-                  item.mounted = true
-                  item.textController.setStyledString(item.source.styledString)
+                // Issue #879 最新复核评论修复（问题3）：
+                // 每个新 Text 的 onAppear 完成本节点自己的绑定——
+                // 不再检查 !item.mounted 跳过，避免同版本新窗口从源池读到 mounted=true 而漏字。
+                // 每个 Text 都调用自己的 textController.setStyledString(source.styledString)。
+                item.textController.setStyledString(item.source.styledString)
+                // 通知父组件本窗口已挂载——父组件创建 ComponentObserver 监听 layout 事件。
+                // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
+                // 才调用 markWindowLayoutReady(clusterId)，不再用 setTimeout 充当绘制完成证据。
+                if (item.onWindowLayoutReady !== null) {
+                  item.onWindowLayoutReady(item.window.clusterId)
                 }
-                // Issue #879 复核评论修复（问题4）：延迟一帧通知父组件布局已完成。
-                // onAppear 表示 Text 组件已挂载，但布局可能尚未完成。
-                // setTimeout 延迟一帧后，Text 已完成 measure/layout，此时标记 layoutReady。
-                // 父组件在 onLayoutReady 回调中调用 motionSourcePool.markLayoutReady(runId)。
-                setTimeout(() => {
-                  if (item.onLayoutReady !== null) {
-                    item.onLayoutReady(item.window.runId)
-                  }
-                }, 0)
+              })
+              .onDisAppear(() => {
+                // Issue #879 最新复核评论修复（问题3）：
+                // Text 从组件树移除时清理本窗口状态——
+                // 父组件调用 releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+                if (item.onWindowDisappear !== null) {
+                  item.onWindowDisappear(item.window.clusterId)
+                }
               })
           }
           .width(item.clipRect.width)

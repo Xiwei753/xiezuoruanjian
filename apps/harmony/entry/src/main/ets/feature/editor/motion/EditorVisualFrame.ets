@@ -65,11 +65,16 @@ export interface GlyphRect {
 /**
  * 吐字通道——新插入的字。
  *
- * 新字源完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]。
+ * 新字源完整排版，裁切窗口从起始状态扩展到目标状态 [x0, x1]。
  * 跨行时按视觉行分别计算裁切窗口——每个 InsertRun 对应一个视觉行内的连续字片段，
  * 不拿一个 x0→x1 横向跨行。
  *
- * Issue #879 本轮复核评论修复（问题5）：多通道结构，替代旧的单一 motionKind 分支。
+ * Issue #879 最新复核评论修复（问题2）：
+ * - 新增 startClipLeft/startClipRight 字段——起始裁切窗口状态。
+ *   连续快速编辑时，起始状态来自上一帧的 MotionGlyphWindow.currentClipLeft/Right，
+ *   而非固定的 [x0, x0]（零宽度）。
+ * - Coordinator 的 sampleFrame 从 startClipLeft/Right 插值到 rect.x/rect.x+rect.width，
+ *   而非从 x0→x1。
  */
 export interface InsertRun {
   /** 字形在新正文中的 UTF-16 起始 offset */
@@ -78,19 +83,28 @@ export interface InsertRun {
   utf16End: number
   /** 字形来源：固定 'new'（吐字总是用新正文源） */
   sourceKind: 'new'
-  /** 字形在新排版中的位置（vp） */
+  /** 字形在新排版中的位置（vp）——目标状态 */
   rect: GlyphRect
+  /** 起始裁切窗口左边界（vp）——连续编辑时来自上一帧的 currentClipLeft，默认 rect.x */
+  startClipLeft: number
+  /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x（零宽度） */
+  startClipRight: number
 }
 
 /**
  * 吞字通道——被删的旧字。
  *
- * 旧字源留在动画层，裁切窗口从 [x0, x1] 缩到 [x0, x0]。
+ * 旧字源留在动画层，裁切窗口从起始状态缩到目标状态。
  * 跨行时按视觉行分别计算裁切窗口。
  *
  * Forward Delete 是 DeletedRun 的特例：逻辑光标不动，被删字贴向固定 caret 缩回。
  *
- * Issue #879 本轮复核评论修复（问题5）：多通道结构。
+ * Issue #879 最新复核评论修复（问题2）：
+ * - 新增 startClipLeft/startClipRight 字段——起始裁切窗口状态。
+ *   连续快速编辑时，起始状态来自上一帧的 MotionGlyphWindow.currentClipLeft/Right，
+ *   而非固定的 [x0, x1]（完整宽度）。
+ * - Coordinator 的 sampleFrame 从 startClipLeft/Right 插值到目标 clip 状态，
+ *   而非从 x0→x1。
  */
 export interface DeletedRun {
   /** 字形在旧正文中的 UTF-16 起始 offset */
@@ -99,10 +113,14 @@ export interface DeletedRun {
   utf16End: number
   /** 字形来源：固定 'old'（吞字总是用旧正文源） */
   sourceKind: 'old'
-  /** 字形在旧排版中的位置（vp） */
+  /** 字形在旧排版中的位置（vp）——目标状态 */
   rect: GlyphRect
   /** 是否为 Forward Delete（逻辑光标不动，被删字贴向固定 caret 缩回） */
   isForward: boolean
+  /** 起始裁切窗口左边界（vp）——连续编辑时来自上一帧的 currentClipLeft，默认 rect.x */
+  startClipLeft: number
+  /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x+rect.width */
+  startClipRight: number
 }
 
 /**
@@ -115,6 +133,13 @@ export interface DeletedRun {
  * 旧实现 Reflow 分支"直接在新位置画，不做平移动画"——
  * 输入导致后续字换行时，后续字不会从旧行移到新行。
  * 现在用 RetainedMove 记录 oldRect → newRect，做真正的平移动画。
+ *
+ * Issue #879 最新复核评论修复（问题2）：
+ * - 新增 startPositionX/startPositionY 字段——起始位置状态。
+ *   连续快速编辑时，起始状态来自上一帧的 MotionGlyphWindow.currentPositionX/Y，
+ *   而非固定的 oldRect.x/y。
+ * - Coordinator 的 sampleFrame 从 startPositionX/Y 插值到 newRect.x/y，
+ *   而非从 oldRect.x/y。
  */
 export interface RetainedMove {
   /** 字形在旧正文中的 UTF-16 起始 offset */
@@ -127,10 +152,14 @@ export interface RetainedMove {
   newUtf16End: number
   /** 字形来源：'old'（动画期间用旧字源绘制并平移到新位置） */
   sourceKind: 'old'
-  /** 旧位置矩形（vp） */
+  /** 旧位置矩形（vp）——目标动画的起始参考 */
   oldRect: GlyphRect
-  /** 新位置矩形（vp） */
+  /** 新位置矩形（vp）——目标状态 */
   newRect: GlyphRect
+  /** 起始位置 x（vp）——连续编辑时来自上一帧的 currentPositionX，默认 oldRect.x */
+  startPositionX: number
+  /** 起始位置 y（vp）——连续编辑时来自上一帧的 currentPositionY，默认 oldRect.y */
+  startPositionY: number
 }
 
 /**
@@ -154,7 +183,8 @@ export interface RetainedMove {
  * 当前帧的实际屏幕状态（clip 起点位置）而非旧版整字初态矩形作为下一动画起点。
  * - runId：与 EditorMotionSourcePool 的 runId 对应，ForEach 中保持稳定身份。
  * - sourceRevision：识别字形来自哪个版本，快速打字时新 plan 起始帧用当前帧的 revision。
- * - clusterId：以 sourceKind + sourceRevision + utf16Start + utf16End 构造，跨版本追踪同一字形。
+ * - clusterId：跨版本稳定身份——基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），
+ *   不依赖 sourceRevision，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
  * - currentClipLeft/Right：当前帧实际裁切窗口边界，作为下一动画起点而非整字初态 x0/x1。
  * - currentPositionX/Y：当前帧实际字形位置（含 offset），作为下一动画起点而非旧版整字初态位置。
  */
@@ -189,7 +219,7 @@ export interface MotionGlyphWindow {
   runId: string
   /** 字形源对应的正文 revision——连续编辑时识别字形来自哪个版本 */
   sourceRevision: number
-  /** 字形簇身份标识——跨版本追踪同一字形，以 sourceKind + sourceRevision + utf16Start + utf16End 构造 */
+  /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），不依赖 sourceRevision */
   clusterId: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
   currentClipLeft: number

@@ -38,9 +38,10 @@ import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange, I
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { LineLayout } from '../render/editor_render_geometry'
+import { LineLayout, CaretRect } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/dto/EditorDtos'
+import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
 
 /**
  * 几何身份——标识绘制环境是否改变。
@@ -110,6 +111,8 @@ export class EditorMotionCoordinator {
   private motionDurationMs: number
   /** 当前运动规划 */
   private currentPlan: EditorMotionPlan
+  /** 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入） */
+  private firstCaretRect: CaretRect | null
 
   constructor() {
     this.currentFrame = {
@@ -136,6 +139,7 @@ export class EditorMotionCoordinator {
     this.newSnapshot = null
     this.newLayout = []
     this.motionDurationMs = 0
+    this.firstCaretRect = null
     this.currentPlan = {
       insertRuns: [],
       deletedRuns: [],
@@ -150,13 +154,13 @@ export class EditorMotionCoordinator {
    * 接收编辑更新（带事务链），生成新 plan，retarget 到最新 canonical。
    *
    * Issue #879 最新复核评论修复（问题1）：连续快速输入时，多笔 editResult 形成事务链。
-   * - 如果 editResults.length === 1，走原来的 acceptUpdate 逻辑。
-   * - 如果 editResults.length > 1，合并 displayPatches 和 offsetMap，生成一个合并的 editResult，
-   *   然后走 acceptUpdate 逻辑。
-   * - 合并 displayPatches：把每个 editResult 的 displayPatches 按顺序拼接。
-   * - 合并 offsetMap：把每个 editResult 的 offsetMap 做链式映射。
-   * - 放宽 baseRevision 校验：允许 oldSnapshot.revision != editResults[0].baseRevision 时合并事务链，
-   *   只要事务链内部连续（每个 editResult 的 baseRevision 是前一个的 newRevision）。
+   * 使用 EditorMotionTransactionComposer 逐笔转换/复合 UTF-8 字符身份映射，
+   * 输出起始显示正文→最终正文的统一可见差分和保留字符映射。
+   * 不再简单拼接 displayPatches 或把最后一笔 offsetMap 当整条链的 offsetMap——
+   * 每一笔 patch 的 UTF-8 坐标系不同，简单拼接必然错位。
+   *
+   * Issue #879 最新复核评论修复（问题5）：新增 firstCaretRect 参数，
+   * 空正文时优先使用 firstCaretRect 而非估算。
    *
    * @param oldSnapshot 旧布局快照（含旧正文 text）
    * @param oldLayout 旧行布局
@@ -165,6 +169,7 @@ export class EditorMotionCoordinator {
    * @param editResults 事务链（按顺序排列的 editResult 数组）
    * @param contentWidth 内容宽度（vp）
    * @param policy 运动策略
+   * @param firstCaretRect 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入）
    * @returns 新的视觉帧（动画起始帧）
    */
   acceptUpdateWithChain(
@@ -174,72 +179,61 @@ export class EditorMotionCoordinator {
     newLayout: LineLayout[],
     editResults: EditorEditResult[],
     contentWidth: number,
-    policy: EditorMotionPolicy
+    policy: EditorMotionPolicy,
+    firstCaretRect?: CaretRect | null
   ): EditorVisualFrame {
     // 无事务链 → 走 acceptUpdate（editResult=null）
     if (editResults.length === 0) {
-      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, null, contentWidth, policy)
+      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, null, contentWidth, policy, firstCaretRect)
     }
     // 单事务 → 走 acceptUpdate（传单个 editResult）
     if (editResults.length === 1) {
-      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, editResults[0], contentWidth, policy)
+      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, editResults[0], contentWidth, policy, firstCaretRect)
     }
-    // 多事务 → 合并事务链
-    // 校验事务链内部连续性：每个 editResult 的 baseRevision 是前一个的 newRevision
-    for (let i = 1; i < editResults.length; i++) {
-      if (editResults[i].baseRevision !== editResults[i - 1].newRevision) {
-        // 链断裂 → 无法合并，走 resetToStatic
-        const newGeometryKey: GeometryKey = {
-          fontSize: newSnapshot.fontSize,
-          lineSpacing: newSnapshot.lineSpacingMultiplier,
-          contentWidth: contentWidth
-        }
-        this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
-        return this.currentFrame
+    // 多事务 → 使用 TransactionComposer 逐笔复合
+    const composed = EditorMotionTransactionComposer.compose(
+      editResults,
+      oldSnapshot.text,
+      newSnapshot.text,
+      oldSnapshot.revision,
+      newSnapshot.revision
+    )
+    // 校验失败 → 链断裂或首尾 revision 不匹配，走 resetToStatic
+    if (!composed.isValid) {
+      const newGeometryKey: GeometryKey = {
+        fontSize: newSnapshot.fontSize,
+        lineSpacing: newSnapshot.lineSpacingMultiplier,
+        contentWidth: contentWidth
       }
+      this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
+      return this.currentFrame
     }
-    // 合并 displayPatches：把所有 editResult 的 displayPatches 按顺序拼接
-    const mergedPatches: DisplayPatch[] = []
-    for (const er of editResults) {
-      for (const patch of er.displayPatches) {
-        mergedPatches.push(patch)
-      }
-    }
-    // 合并 offsetMap：把所有 editResult 的 offsetMap 做链式映射
-    // 链式映射：第一个 editResult 的 offsetMap 是 old→new1，
-    // 第二个是 new1→new2，...，最终需要 old→final 的映射。
-    // 简化处理：只使用最后一个 editResult 的 offsetMap（它描述的是 final 版本的正文映射），
-    // 因为 Planner 用 offsetMap 识别保留文字的 reflow，最终版本的新正文映射才是渲染目标。
-    // 但 baseRevision 需要修正为 oldSnapshot.revision，newRevision 修正为 newSnapshot.revision。
-    let mergedOffsetMap: OffsetMap | undefined = undefined
-    if (editResults.length > 0) {
-      const lastEr = editResults[editResults.length - 1]
-      if (lastEr.offsetMap !== undefined) {
-        mergedOffsetMap = lastEr.offsetMap
-      }
-    }
-    // 构造合并的 editResult
-    const mergedEditResult: EditorEditResult = {
-      outcome: editResults[editResults.length - 1].outcome,
-      transactionId: editResults[editResults.length - 1].transactionId,
+    // 构造复合后的 editResult——使用统一坐标系的 displayPatches 和 offsetMap
+    const lastEr = editResults[editResults.length - 1]
+    const composedEditResult: EditorEditResult = {
+      outcome: lastEr.outcome,
+      transactionId: lastEr.transactionId,
       baseRevision: oldSnapshot.revision,
       newRevision: newSnapshot.revision,
-      displayPatches: mergedPatches,
+      displayPatches: composed.displayPatches,
       oldSelectionAnchor: editResults[0].oldSelectionAnchor,
       oldSelectionHead: editResults[0].oldSelectionHead,
-      newSelectionAnchor: editResults[editResults.length - 1].newSelectionAnchor,
-      newSelectionHead: editResults[editResults.length - 1].newSelectionHead,
-      cause: editResults[editResults.length - 1].cause,
-      operationKind: editResults[editResults.length - 1].operationKind,
-      offsetMap: mergedOffsetMap,
-      contentDelta: editResults[editResults.length - 1].contentDelta
+      newSelectionAnchor: lastEr.newSelectionAnchor,
+      newSelectionHead: lastEr.newSelectionHead,
+      cause: lastEr.cause,
+      operationKind: lastEr.operationKind,
+      offsetMap: composed.offsetMap,
+      contentDelta: lastEr.contentDelta
     }
     // 走 acceptUpdate 逻辑（此时 baseRevision === oldSnapshot.revision，校验会通过）
-    return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, mergedEditResult, contentWidth, policy)
+    return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, composedEditResult, contentWidth, policy, firstCaretRect)
   }
 
   /**
    * 接收编辑更新，生成新 plan，retarget 到最新 canonical。
+   *
+   * Issue #879 最新复核评论修复（问题5）：新增 firstCaretRect 参数，
+   * 空正文时优先使用 firstCaretRect 而非估算。
    *
    * @param oldSnapshot 旧布局快照（含旧正文 text）
    * @param oldLayout 旧行布局
@@ -248,6 +242,7 @@ export class EditorMotionCoordinator {
    * @param editResult 本次编辑事务结果（null 表示非编辑触发的更新）
    * @param contentWidth 内容宽度（vp）
    * @param policy 运动策略
+   * @param firstCaretRect 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入）
    * @returns 新的视觉帧（动画起始帧）
    */
   acceptUpdate(
@@ -257,7 +252,8 @@ export class EditorMotionCoordinator {
     newLayout: LineLayout[],
     editResult: EditorEditResult | null,
     contentWidth: number,
-    policy: EditorMotionPolicy
+    policy: EditorMotionPolicy,
+    firstCaretRect?: CaretRect | null
   ): EditorVisualFrame {
     // 计算新几何身份
     const newGeometryKey: GeometryKey = {
@@ -308,6 +304,7 @@ export class EditorMotionCoordinator {
     this.newSnapshot = newSnapshot
     this.newLayout = newLayout
     this.geometryKey = newGeometryKey
+    this.firstCaretRect = firstCaretRect ?? null
     this.textRevisionKey = {
       revision: newSnapshot.revision,
       generation: newSnapshot.generation,
@@ -316,7 +313,7 @@ export class EditorMotionCoordinator {
 
     // 如果不需要动画（时长为 0），直接返回终态帧
     if (this.motionDurationMs <= 0) {
-      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
+      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, this.firstCaretRect)
       this.currentFrame.isAnimating = false
       return this.currentFrame
     }
@@ -375,19 +372,23 @@ export class EditorMotionCoordinator {
     // 同一 progress 同时采样所有通道
     const motionGlyphWindows: MotionGlyphWindow[] = []
 
-    // 1. 吐字通道：新字源完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]
-    //    front = x0 + (x1 - x0) * easing(p)
+    // 1. 吐字通道：新字源完整排版，裁切窗口从起始状态扩展到目标状态
+    //    Issue #879 最新复核评论修复（问题2）：
+    //    从 startClipLeft/Right 插值到 rect.x/rect.x+rect.width（而非从 x0→x1）。
+    //    连续快速编辑时，起始状态来自上一帧的 MotionGlyphWindow.currentClipLeft/Right。
     for (const run of plan.insertRuns) {
-      const x0 = run.rect.x
-      const x1 = run.rect.x + run.rect.width
-      const front = x0 + (x1 - x0) * p
+      const targetLeft = run.rect.x
+      const targetRight = run.rect.x + run.rect.width
+      const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
+      const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
       const newRevision = this.newSnapshot?.revision ?? 0
+      const newText = this.newSnapshot?.text ?? ''
       motionGlyphWindows.push({
         sourceKind: 'new',
         utf16Start: run.utf16Start,
         utf16End: run.utf16End,
-        clipLeft: x0,
-        clipRight: front,
+        clipLeft: currentLeft,
+        clipRight: currentRight,
         clipTop: run.rect.y,
         clipBottom: run.rect.y + run.rect.height,
         glyphX: run.rect.x,
@@ -398,31 +399,35 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        clusterId: `new-${newRevision}-${run.utf16Start}-${run.utf16End}`,
-        currentClipLeft: x0,
-        currentClipRight: front,
+        clusterId: EditorMotionCoordinator.makeClusterId('new', run.utf16Start, run.utf16End, newText),
+        currentClipLeft: currentLeft,
+        currentClipRight: currentRight,
         currentPositionX: run.rect.x,
         currentPositionY: run.rect.y
       })
     }
 
-    // 2. 吞字通道：旧字源留在动画层，裁切窗口从 [x0, x1] 缩到 [x0, x0]
-    //    front = x1 + (x0 - x1) * easing(p) — 从 x1 退到 x0
-    //    Forward Delete：逻辑光标不动，被删字贴向固定 caret 缩回
+    // 2. 吞字通道：旧字源留在动画层，裁切窗口从起始状态缩到目标状态
+    //    Issue #879 最新复核评论修复（问题2）：
+    //    从 startClipLeft/Right 插值到目标 clip 状态（而非从 x0→x1）。
+    //    Forward Delete：目标 clip 状态是 [caret, caret]（零宽度）
+    //    Backspace：目标 clip 状态是 [rect.x, rect.x]（零宽度）
     for (const run of plan.deletedRuns) {
       if (run.isForward) {
-        // Forward Delete：裁切窗口从 [caret, x1] 缩到 [caret, caret]
+        // Forward Delete：目标裁切窗口是 [caret, caret]（零宽度）
         const caretX = this.currentFrame.caretX
-        const x0 = caretX
-        const x1 = run.rect.x + run.rect.width
-        const front = x1 + (x0 - x1) * p
+        const targetLeft = caretX
+        const targetRight = caretX
+        const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
+        const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
         const oldRevision = this.oldSnapshot?.revision ?? 0
+        const oldText = this.oldSnapshot?.text ?? ''
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
           utf16End: run.utf16End,
-          clipLeft: caretX,
-          clipRight: front,
+          clipLeft: currentLeft,
+          clipRight: currentRight,
           clipTop: run.rect.y,
           clipBottom: run.rect.y + run.rect.height,
           glyphX: run.rect.x,
@@ -433,24 +438,26 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: `old-${oldRevision}-${run.utf16Start}-${run.utf16End}`,
-          currentClipLeft: caretX,
-          currentClipRight: front,
+          clusterId: EditorMotionCoordinator.makeClusterId('old', run.utf16Start, run.utf16End, oldText),
+          currentClipLeft: currentLeft,
+          currentClipRight: currentRight,
           currentPositionX: run.rect.x,
           currentPositionY: run.rect.y
         })
       } else {
-        // Backspace：裁切窗口从 [x0, x1] 缩到 [x0, x0]
-        const x0 = run.rect.x
-        const x1 = run.rect.x + run.rect.width
-        const front = x1 + (x0 - x1) * p
+        // Backspace：目标裁切窗口是 [rect.x, rect.x]（零宽度）
+        const targetLeft = run.rect.x
+        const targetRight = run.rect.x
+        const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
+        const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
         const oldRevision = this.oldSnapshot?.revision ?? 0
+        const oldText = this.oldSnapshot?.text ?? ''
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
           utf16End: run.utf16End,
-          clipLeft: x0,
-          clipRight: front,
+          clipLeft: currentLeft,
+          clipRight: currentRight,
           clipTop: run.rect.y,
           clipBottom: run.rect.y + run.rect.height,
           glyphX: run.rect.x,
@@ -461,9 +468,9 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: `old-${oldRevision}-${run.utf16Start}-${run.utf16End}`,
-          currentClipLeft: x0,
-          currentClipRight: front,
+          clusterId: EditorMotionCoordinator.makeClusterId('old', run.utf16Start, run.utf16End, oldText),
+          currentClipLeft: currentLeft,
+          currentClipRight: currentRight,
           currentPositionX: run.rect.x,
           currentPositionY: run.rect.y
         })
@@ -471,12 +478,14 @@ export class EditorMotionCoordinator {
     }
 
     // 3. 保留字移动通道：旧字源绘制后整体偏移到当前插值位置
-    //    当前位置 = oldRect + (newRect - oldRect) * easing(p)
-    //    用旧字源绘制（sourceKind='old'），offset = currentPos - oldRect
+    //    Issue #879 最新复核评论修复（问题2）：
+    //    从 startPositionX/Y 插值到 newRect.x/y（而非从 oldRect→newRect）。
+    //    连续快速编辑时，起始状态来自上一帧的 MotionGlyphWindow.currentPositionX/Y。
     for (const move of plan.retainedMoves) {
-      const currentX = move.oldRect.x + (move.newRect.x - move.oldRect.x) * p
-      const currentY = move.oldRect.y + (move.newRect.y - move.oldRect.y) * p
+      const currentX = move.startPositionX + (move.newRect.x - move.startPositionX) * p
+      const currentY = move.startPositionY + (move.newRect.y - move.startPositionY) * p
       const oldRevision = this.oldSnapshot?.revision ?? 0
+      const oldText = this.oldSnapshot?.text ?? ''
       motionGlyphWindows.push({
         sourceKind: 'old',
         utf16Start: move.oldUtf16Start,
@@ -493,11 +502,11 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        clusterId: `old-${oldRevision}-${move.oldUtf16Start}-${move.oldUtf16End}`,
+        clusterId: EditorMotionCoordinator.makeClusterId('old', move.oldUtf16Start, move.oldUtf16End, oldText),
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
-        currentPositionX: move.oldRect.x + (currentX - move.oldRect.x),
-        currentPositionY: move.oldRect.y + (currentY - move.oldRect.y)
+        currentPositionX: currentX,
+        currentPositionY: currentY
       })
     }
 
@@ -517,20 +526,26 @@ export class EditorMotionCoordinator {
       caretY = seg.startCaretY + (seg.endCaretY - seg.startCaretY) * localEased
     } else if (plan.insertRuns.length > 0) {
       // 吐字：光标画在第一个 insertRun 的裁切前沿
+      // Issue #879 最新复核评论修复（问题2）：从起始 clip 状态插值到目标，
+      // 而非从 rect.x→rect.x+rect.width。
       const first = plan.insertRuns[0]
-      caretX = first.rect.x + first.rect.width * p
+      const targetCaretX = first.rect.x + first.rect.width
+      const startCaretX = first.startClipRight
+      caretX = startCaretX + (targetCaretX - startCaretX) * p
       caretY = first.rect.y
       caretHeight = first.rect.height
     } else if (plan.deletedRuns.length > 0) {
       // 吞字：光标画在第一个 deletedRun 的裁切前沿
+      // Issue #879 最新复核评论修复（问题2）：从起始 clip 状态插值到目标，
+      // 而非从 rect.x+rect.width→rect.x。
       const first = plan.deletedRuns[0]
       if (first.isForward) {
         // Forward Delete：光标不动
         // caretX/caretY 保持 currentFrame
       } else {
-        const x0 = first.rect.x
-        const x1 = first.rect.x + first.rect.width
-        caretX = x1 + (x0 - x1) * p
+        const targetCaretX = first.rect.x
+        const startCaretX = first.startClipRight
+        caretX = startCaretX + (targetCaretX - startCaretX) * p
         caretY = first.rect.y
         caretHeight = first.rect.height
       }
@@ -597,12 +612,18 @@ export class EditorMotionCoordinator {
         }
       }
     } else if (this.newSnapshot !== null && this.newLayout.length === 0) {
-      // Issue #879 复核评论问题5：空文档时光标从新目标 snapshot 恢复，
-      // 而非沿用旧帧位置（旧帧可能指向已不存在的行）。
-      caretX = this.newSnapshot.autoIndentEnabled
-        ? this.newSnapshot.autoIndentWidth * this.newSnapshot.fontSize : 0
-      caretY = 0
-      caretHeight = this.newSnapshot.fontSize * this.newSnapshot.lineSpacingMultiplier
+      // Issue #879 最新复核评论修复（问题5）：空文档时优先使用 firstCaretRect
+      // （由调用方从 EditorPendingLayoutHost 传入），fallback 才用估算。
+      if (this.firstCaretRect !== null) {
+        caretX = this.firstCaretRect.x
+        caretY = this.firstCaretRect.y
+        caretHeight = this.firstCaretRect.height
+      } else {
+        caretX = this.newSnapshot.autoIndentEnabled
+          ? this.newSnapshot.autoIndentWidth * this.newSnapshot.fontSize : 0
+        caretY = 0
+        caretHeight = this.newSnapshot.fontSize * this.newSnapshot.lineSpacingMultiplier
+      }
     }
 
     this.currentFrame = {
@@ -660,7 +681,7 @@ export class EditorMotionCoordinator {
     this.oldLayout = newLayout
     this.newSnapshot = newSnapshot
     this.newLayout = newLayout
-    this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
+    this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, this.firstCaretRect)
     this.currentPlan = {
       insertRuns: [],
       deletedRuns: [],
@@ -697,23 +718,55 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * 生成跨版本稳定的 clusterId。
+   *
+   * Issue #879 最新复核评论修复（问题2）：
+   * clusterId 改为基于字符内容 hash——不依赖 sourceKind+sourceRevision，
+   * 确保同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文）时仍能匹配。
+   * 必须与 EditorMotionPlanner.makeClusterId 使用相同算法。
+   */
+  private static makeClusterId(
+    sourceKind: 'old' | 'new',
+    utf16Start: number,
+    utf16End: number,
+    text: string
+  ): string {
+    const content = text.substring(utf16Start, utf16End)
+    let hash = 0
+    for (let i = 0; i < content.length; i++) {
+      hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0
+    }
+    return `${sourceKind}-${utf16Start}-${utf16End}-${hash}`
+  }
+
+  /**
    * 计算静态帧（无动画）。
+   *
+   * Issue #879 最新复核评论修复（问题5）：空正文时优先使用 firstCaretRect
+   * （由调用方从 EditorPendingLayoutHost 传入），fallback 才用估算。
    */
   private static computeStaticFrame(
     snapshot: EditorLayoutSnapshot,
-    lineLayouts: LineLayout[]
+    lineLayouts: LineLayout[],
+    firstCaretRect?: CaretRect | null
   ): EditorVisualFrame {
     let caretX = 0
     let caretY = 0
     let caretHeight = 0
 
     if (lineLayouts.length === 0) {
-      // Issue #879 复核评论问题5：空文档时从 snapshot 排版参数计算首行空段落的
-      // caret 位置和高度，而非返回零高度（零高度意味着光标消失）。
-      caretX = snapshot.autoIndentEnabled
-        ? snapshot.autoIndentWidth * snapshot.fontSize : 0
-      caretY = 0
-      caretHeight = snapshot.fontSize * snapshot.lineSpacingMultiplier
+      // Issue #879 最新复核评论修复（问题5）：空文档时优先使用 firstCaretRect
+      // （由调用方从 EditorPendingLayoutHost 传入），fallback 才用估算。
+      if (firstCaretRect !== null && firstCaretRect !== undefined) {
+        caretX = firstCaretRect.x
+        caretY = firstCaretRect.y
+        caretHeight = firstCaretRect.height
+      } else {
+        caretX = snapshot.autoIndentEnabled
+          ? snapshot.autoIndentWidth * snapshot.fontSize : 0
+        caretY = 0
+        caretHeight = snapshot.fontSize * snapshot.lineSpacingMultiplier
+      }
     } else {
       const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snapshot.text, snapshot.cursorByteOffset)
       for (const line of lineLayouts) {

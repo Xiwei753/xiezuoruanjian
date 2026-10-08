@@ -299,10 +299,10 @@ export class EditorMotionPlanner {
     // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
 
-    // Issue #879 最新复核评论修复（问题1）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
+    // Issue #879 最新复核评论修复（问题2）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
     // 用于在连续快速输入时消费当前帧的实际裁切窗口和位置作为起始状态。
-    // key 是 clusterId（sourceKind + sourceRevision + utf16Start + utf16End），
-    // value 是对应的 MotionGlyphWindow（含 currentClipLeft/Right/currentPositionX/Y）。
+    // clusterId 改为跨版本稳定身份——基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），
+    // 不依赖 sourceRevision，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
     const visibleWindowMap: Map<string, MotionGlyphWindow> = new Map()
     if (lastVisibleFrame.isAnimating && lastVisibleFrame.motionGlyphWindows.length > 0) {
       for (const w of lastVisibleFrame.motionGlyphWindows) {
@@ -330,34 +330,25 @@ export class EditorMotionPlanner {
           oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
         for (const rect of oldRects) {
-          // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
-          // 如果有，用其 currentClipLeft/Right 作为起始裁切窗口（而非从 rect.x 到 rect.x + rect.width 即完整宽度）。
-          const oldRevision = oldSnapshot.revision
-          const clusterId = `old-${oldRevision}-${rect.utf16Start}-${rect.utf16End}`
+          // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
+          // 基于字符内容 hash，不依赖 sourceRevision。
+          // 同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文），
+          // 用 sourceRevision 构造 clusterId 会查不到——改为用字符内容 hash。
+          const clusterId = EditorMotionPlanner.makeClusterId('old', rect.utf16Start, rect.utf16End, oldText)
           const visibleWindow = visibleWindowMap.get(clusterId)
-          if (visibleWindow !== undefined) {
-            // 使用当前帧的实际裁切窗口作为起始状态
-            deletedRuns.push({
-              utf16Start: rect.utf16Start,
-              utf16End: rect.utf16End,
-              sourceKind: 'old',
-              rect: {
-                x: visibleWindow.currentClipLeft,
-                y: rect.rect.y,
-                width: Math.max(0, visibleWindow.currentClipRight - visibleWindow.currentClipLeft),
-                height: rect.rect.height
-              },
-              isForward: isForwardDelete
-            })
-          } else {
-            deletedRuns.push({
-              utf16Start: rect.utf16Start,
-              utf16End: rect.utf16End,
-              sourceKind: 'old',
-              rect: rect.rect,
-              isForward: isForwardDelete
-            })
-          }
+          // 目标状态：rect.rect（旧排版中的完整位置）
+          // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认完整宽度
+          const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
+          const startClipRight = visibleWindow !== undefined ? visibleWindow.currentClipRight : rect.rect.x + rect.rect.width
+          deletedRuns.push({
+            utf16Start: rect.utf16Start,
+            utf16End: rect.utf16End,
+            sourceKind: 'old',
+            rect: rect.rect,
+            isForward: isForwardDelete,
+            startClipLeft: startClipLeft,
+            startClipRight: startClipRight
+          })
         }
       }
 
@@ -368,32 +359,22 @@ export class EditorMotionPlanner {
           newText, newUtf16Start, newUtf16End, newLayout
         )
         for (const rect of newRects) {
-          // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
-          // 如果有，用其 currentClipLeft/Right 作为起始裁切窗口（而非从 rect.x 到 rect.x 即零宽度）。
-          const newRevision = newSnapshot.revision
-          const clusterId = `new-${newRevision}-${rect.utf16Start}-${rect.utf16End}`
+          // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
+          // 基于字符内容 hash，不依赖 sourceRevision。
+          const clusterId = EditorMotionPlanner.makeClusterId('new', rect.utf16Start, rect.utf16End, newText)
           const visibleWindow = visibleWindowMap.get(clusterId)
-          if (visibleWindow !== undefined) {
-            // 使用当前帧的实际裁切窗口作为起始状态
-            insertRuns.push({
-              utf16Start: rect.utf16Start,
-              utf16End: rect.utf16End,
-              sourceKind: 'new',
-              rect: {
-                x: visibleWindow.currentClipLeft,
-                y: rect.rect.y,
-                width: Math.max(0, visibleWindow.currentClipRight - visibleWindow.currentClipLeft),
-                height: rect.rect.height
-              }
-            })
-          } else {
-            insertRuns.push({
-              utf16Start: rect.utf16Start,
-              utf16End: rect.utf16End,
-              sourceKind: 'new',
-              rect: rect.rect
-            })
-          }
+          // 目标状态：rect.rect（新排版中的完整位置）
+          // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认零宽度
+          const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
+          const startClipRight = visibleWindow !== undefined ? visibleWindow.currentClipRight : rect.rect.x
+          insertRuns.push({
+            utf16Start: rect.utf16Start,
+            utf16End: rect.utf16End,
+            sourceKind: 'new',
+            rect: rect.rect,
+            startClipLeft: startClipLeft,
+            startClipRight: startClipRight
+          })
         }
       }
     }
@@ -404,30 +385,25 @@ export class EditorMotionPlanner {
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const move of moves) {
-        // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
-        // 如果有，用其 currentPositionX/Y 作为起始位置（而非从 oldRect.x/y）。
-        const oldRevision = oldSnapshot.revision
-        const clusterId = `old-${oldRevision}-${move.oldUtf16Start}-${move.oldUtf16End}`
+        // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
+        // 基于字符内容 hash，不依赖 sourceRevision。
+        const clusterId = EditorMotionPlanner.makeClusterId('old', move.oldUtf16Start, move.oldUtf16End, oldText)
         const visibleWindow = visibleWindowMap.get(clusterId)
-        if (visibleWindow !== undefined) {
-          // 使用当前帧的实际位置作为起始状态
-          retainedMoves.push({
-            oldUtf16Start: move.oldUtf16Start,
-            oldUtf16End: move.oldUtf16End,
-            newUtf16Start: move.newUtf16Start,
-            newUtf16End: move.newUtf16End,
-            sourceKind: 'old',
-            oldRect: {
-              x: visibleWindow.currentPositionX,
-              y: visibleWindow.currentPositionY,
-              width: move.oldRect.width,
-              height: move.oldRect.height
-            },
-            newRect: move.newRect
-          })
-        } else {
-          retainedMoves.push(move)
-        }
+        // 目标状态：move.newRect（新排版中的位置）
+        // 起始状态：如果有匹配的 visibleWindow，用其 currentPositionX/Y；否则默认 oldRect.x/y
+        const startPositionX = visibleWindow !== undefined ? visibleWindow.currentPositionX : move.oldRect.x
+        const startPositionY = visibleWindow !== undefined ? visibleWindow.currentPositionY : move.oldRect.y
+        retainedMoves.push({
+          oldUtf16Start: move.oldUtf16Start,
+          oldUtf16End: move.oldUtf16End,
+          newUtf16Start: move.newUtf16Start,
+          newUtf16End: move.newUtf16End,
+          sourceKind: 'old',
+          oldRect: move.oldRect,
+          newRect: move.newRect,
+          startPositionX: startPositionX,
+          startPositionY: startPositionY
+        })
       }
     }
 
@@ -482,6 +458,31 @@ export class EditorMotionPlanner {
       return MotionKind.Reflow
     }
     return MotionKind.None
+  }
+
+  /**
+   * 生成跨版本稳定的 clusterId。
+   *
+   * Issue #879 最新复核评论修复（问题2）：
+   * clusterId 改为基于字符内容 hash——不依赖 sourceKind+sourceRevision，
+   * 确保同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文）时仍能匹配。
+   *
+   * 格式：sourceKind + utf16Start + utf16End + textHash
+   * 其中 textHash 是 text.substring(utf16Start, utf16End) 的简单 hash，
+   * 用于区分相同 offset 但不同内容的字符（理论上不会发生，但作为安全保障）。
+   */
+  private static makeClusterId(
+    sourceKind: 'old' | 'new',
+    utf16Start: number,
+    utf16End: number,
+    text: string
+  ): string {
+    const content = text.substring(utf16Start, utf16End)
+    let hash = 0
+    for (let i = 0; i < content.length; i++) {
+      hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0
+    }
+    return `${sourceKind}-${utf16Start}-${utf16End}-${hash}`
   }
 
   /**
@@ -784,7 +785,9 @@ export class EditorMotionPlanner {
           newUtf16End: newSubEnd,
           sourceKind: 'old',
           oldRect: oldRect,
-          newRect: newRect
+          newRect: newRect,
+          startPositionX: oldRect.x,
+          startPositionY: oldRect.y
         })
 
         oldCharConsumed += pairLen
