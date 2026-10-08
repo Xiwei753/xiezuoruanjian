@@ -13,6 +13,7 @@ use crate::sujian_editor_item::animation::visual_frame::VisualFrame;
 use crate::sujian_editor_item::cursor_animation::{
     CursorAnimationPlan, CursorBlinkMode, CursorTransition,
 };
+use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::edit_motion::DeletedRangeEdge;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
@@ -56,6 +57,9 @@ pub(crate) struct CursorMoveInputs {
     pub selection_gesture_active: bool,
     pub is_preediting: bool,
     pub smooth_cursor_enabled: bool,
+    pub cursor_animation_enabled: bool,
+    pub movement_source: CursorMoveSource,
+    pub visual_position_valid: bool,
     pub duration_ms: u64,
     pub visual_x: f64,
     pub visual_y: f64,
@@ -387,13 +391,22 @@ impl LinuxEditorAnimationCoordinator {
             bottom: inputs.cursor_y + inputs.cursor_h,
             baseline_y: inputs.baseline_y,
         };
-        let hard_snap = inputs.force_snap_next || inputs.selection_gesture_active;
-        let allow_cross_line_tween = inputs.smooth_cursor_enabled && !inputs.is_scrolling;
+        let source_allows_tween = match inputs.movement_source {
+            CursorMoveSource::TextTransaction => inputs.cursor_animation_enabled,
+            CursorMoveSource::PointerClick | CursorMoveSource::KeyboardNavigation => {
+                inputs.smooth_cursor_enabled
+            }
+            CursorMoveSource::DragSelection
+            | CursorMoveSource::LayoutChange
+            | CursorMoveSource::Scroll => false,
+        };
+        let hard_snap = inputs.force_snap_next
+            || inputs.selection_gesture_active
+            || inputs.is_scrolling
+            || !inputs.visual_position_valid;
         let needs_tween = (old_rect.x - new_rect.x).abs() > f64::EPSILON
             || (old_rect.top - new_rect.top).abs() > f64::EPSILON;
-        let can_tween = !hard_snap
-            && needs_tween
-            && (allow_cross_line_tween || (old_rect.top - new_rect.top).abs() <= f64::EPSILON);
+        let can_tween = !hard_snap && source_allows_tween && needs_tween;
 
         let transition = if can_tween && inputs.duration_ms > 0 {
             CursorTransition::Tween {

@@ -1143,10 +1143,14 @@ impl LinuxEditorPipeline {
     ) -> VisualPrepareOutcome {
         // 正文由 VisualEditState 动画，光标由 CursorController 独立动画。
         // 任一动画开关启用时仍需准备 edit 的新 layout/canonical snapshot。
-        let text_animation_enabled =
-            ctx.coordinated_animation_enabled || ctx.typing_animation_enabled;
-        let caret_animation_enabled =
-            ctx.coordinated_animation_enabled || ctx.smooth_cursor_enabled;
+        let text_animation_enabled = super::animation::text_animation_enabled(
+            ctx.typing_animation_enabled,
+            ctx.coordinated_animation_enabled,
+        );
+        let caret_animation_enabled = super::animation::cursor_animation_enabled(
+            ctx.smooth_cursor_enabled,
+            ctx.coordinated_animation_enabled,
+        );
         // Issue #819 评论 5968931455 问题 2.1: 拆分 scrolling/loading/applying_format，
         // 各自返回对应的 skip reason，不再共用 ScrollingSuppressed。
         // 优先级：scrolling > loading > applying_format。

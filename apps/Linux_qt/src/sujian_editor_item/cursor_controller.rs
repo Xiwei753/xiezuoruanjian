@@ -33,7 +33,7 @@ const BLINK_INTERVAL_MS: u64 = 530;
 /// 改为按光标移动来源决定 Snap/Tween：
 /// - `PointerClick` / `KeyboardNavigation`：smooth cursor 开启时允许跨行 Tween
 /// - `DragSelection` / `LayoutChange` / `Scroll`：硬 Snap
-/// - `TextTransaction`：由正文协同光标处理
+/// - `TextTransaction`：正常正文提交按有效动画设置追到最新 canonical caret
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorMoveSource {
     /// 鼠标点击：smooth cursor 开启时允许跨行 Tween
@@ -208,6 +208,8 @@ impl CursorController {
         let old_y = self.target_y;
         let old_visible = self.visible;
         let old_blink_visible = self.blink_visible;
+        let old_visual_position_valid =
+            self.visibility_state != CursorVisibilityState::Uninitialized;
 
         // Issue #709 评论 issue-body-709: 明确的"刚启动或 rebase 一次光标 Tween"信号。
         // 旧实现只在 pos_changed == true 时设置 blink_visible/dirty，但新建 Tween 第一帧
@@ -325,7 +327,9 @@ impl CursorController {
 
                     if target_changed {
                         // 从当前视觉位置 rebase，不落回 old_rect。
-                        let (cur_x, cur_y) = anim.current_position();
+                        // Retarget from the position last presented by the scene graph,
+                        // never from the previous animation's stale target.
+                        let (cur_x, cur_y) = (self.visual_x, self.visual_y);
                         self.animation = Some(CursorAnimationState {
                             start_x: cur_x,
                             start_y: cur_y,
@@ -350,9 +354,8 @@ impl CursorController {
                         self.visual_baseline_y = new_rect.baseline_y;
                         self.animation = None;
                     } else {
-                        let (cur_x, cur_y) = anim.current_position();
-                        self.visual_x = cur_x;
-                        self.visual_y = cur_y;
+                        // `visual_x/y` already hold the most recently displayed frame.
+                        // Keeping them avoids advancing ahead of the scene graph here.
                         // Issue #712 评论 5739517945: 动画进行中，baseline 取目标值。
                         self.visual_baseline_y = new_rect.baseline_y;
                     }
@@ -365,7 +368,7 @@ impl CursorController {
                     let prev_vx = self.visual_x;
                     let prev_vy = self.visual_y;
                     if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
-                        let (init_x, init_y) = if old_visible {
+                        let (init_x, init_y) = if old_visual_position_valid {
                             (prev_vx, prev_vy)
                         } else {
                             // 首次出现：尚无可信 visual position，用 old_rect 初始化。
