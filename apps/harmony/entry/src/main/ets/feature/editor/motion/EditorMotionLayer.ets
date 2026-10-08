@@ -334,10 +334,14 @@ export class EditorMotionLayer {
 export interface MotionWindowSource {
   /** 运动字形窗口 */
   window: MotionGlyphWindow
-  /** 匹配的稳定源 */
+  /** 匹配的稳定源（提供 StyledString） */
   source: MotionSourceEntry
   /** 裁切矩形 */
   clipRect: ClipRect
+  /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
+  textController: TextController
+  /** 是否已挂载（onAppear 已触发） */
+  mounted: boolean
 }
 
 export interface MotionTextOverlayParams {
@@ -377,7 +381,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
         params.motionWindowSources,
         (item: MotionWindowSource, index: number) => {
           Stack() {
-            Text(undefined, { controller: item.source.textController })
+            Text(undefined, { controller: item.textController })
               .width(params.textWidth)
               .textAlign(TextAlign.Start)
               .wordBreak(WordBreak.BREAK_ALL)
@@ -386,9 +390,9 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 y: -item.clipRect.y + item.window.offsetY
               })
               .onAppear(() => {
-                if (!item.source.mounted) {
-                  item.source.mounted = true
-                  item.source.textController.setStyledString(item.source.styledString)
+                if (!item.mounted) {
+                  item.mounted = true
+                  item.textController.setStyledString(item.source.styledString)
                 }
               })
           }

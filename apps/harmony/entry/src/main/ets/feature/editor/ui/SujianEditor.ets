@@ -132,10 +132,17 @@ export struct SujianEditor {
   // @Watch 自动触发排版。token 用于校验回调对应哪次排版请求。
   @State private pendingLayoutRequest: PendingLayoutRequest | null = null
   private pendingLayoutToken: number = 0
+  // Issue #879 复核评论修复（问题6）：后台排版完成的行布局——作为 Coordinator 和
+  // computeStaticMaskRects 的唯一相同输入，不用 renderResult.lines（可能为空）。
+  private committedLineLayouts: LineLayout[] = []
   // Issue #879 复核评论修复（问题3）：运动字形源池——替代旧的 oldTextControllers/newTextControllers。
   // 源池用 sourceRevision + stableRunId 保存 StyledString/TextController，
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
   private motionSourcePool: EditorMotionSourcePool = new EditorMotionSourcePool()
+  // Issue #879 复核评论修复（问题4）：每个运动窗口独立的 TextController——
+  // ArkUI 不允许同一 TextController 绑定多个 Text，所以每个窗口需要独立 Controller。
+  // key 是 `${runId}-${index}`，与 ForEach key 一致，确保复用时 Controller 保持稳定。
+  private motionWindowControllers: Map<string, TextController> = new Map()
   // Issue #879 本轮复核评论修复（问题4）：pending RenderPlan 身份字段。
   // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
   // 需保留 per-revision 的旧布局，不要在两次更新尚未消费之间用 previousLayout 一个变量覆盖旧版来源。
@@ -339,26 +346,12 @@ export struct SujianEditor {
       if (!this.textMounted || this.currentSnapshot === null) {
         return
       }
-      // Issue #879 第三轮复核修复：不再从 renderResult 获取旧布局——
-      // 旧布局已在 onPresentationUpdateChanged 中缓存到 this.previousLayout。
-      // refreshRenderLayout 更新 renderResult 后，renderResult.lines 是新布局，
-      // 此时再读 renderResult?.lines 拿到的是新布局而非旧布局。
       // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
       this.refreshRenderLayout()
-      // Issue #879 复核评论修复：layout 完成后消费 pendingPresentationUpdate。
-      // onPresentationUpdateChanged 暂存了 pendingPresentationUpdate，等 layout 完成后才调 updateVisualFrame，
-      // 确保 acceptUpdate 拿到的是新布局完成后的 renderResult.lines，而非旧布局。
-      // Issue #879 本轮复核评论修复（问题4）：校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
-      // 新 StyledString 在隐藏排版源获得 LayoutManager 后，核实身份与 pending 一致，
-      // 然后把静态绘制可见区 + 运动源裁切 + 光标合成一个同帧发布的 RenderPlan。
-      if (this.pendingPresentationUpdate !== null) {
-        if (this.validatePendingIdentity()) {
-          // 身份匹配：同帧发布 RenderPlan
-          this.updateVisualFrame()
-          this.pendingPresentationUpdate = null
-        }
-        // 身份不匹配：保留 pending，等下一次 layout 回调（可能 contentWidth 还没更新）
-      }
+      // Issue #879 复核评论修复（问题2）：主 Text 的 observer 只更新当前已发布版本的几何、
+      // 光标和滚动，不再消费任何 pending 编辑。
+      // 删除旧的 pendingPresentationUpdate 消费通路——只让 EditorPendingLayoutHost.onLayoutReady
+      // 提交编辑版的 RenderPlan，避免两个入口争抢同一个 pending 更新。
     }
     observer.on('layout', callback)
     this.textLayoutObserver = observer
@@ -669,15 +662,15 @@ export struct SujianEditor {
       return
     }
     // 后台排版完成——现在可以安全地更新前台
-    // 1. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
+    // 1. 保存后台排版的行布局——作为 Coordinator 和 computeStaticMaskRects 的唯一相同输入
+    this.committedLineLayouts = lineLayouts
+    // 2. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
     this.refreshRender()
-    // 2. 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
-    //    注意：不用等主 Text 的 layout observer 回调——后台排版结果已经是正确的行布局
+    // 3. 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
     this.updateVisualFrameWithLayout(lineLayouts)
-    // 3. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
+    // 4. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
     this.displayedPresentation = this.pendingPresentationUpdate
-    // 4. 清空 pendingPresentationUpdate——防止主 Text 的 layout observer 回调重复消费
-    //    refreshRender 会触发主 Text 的 layout observer，但 pending 已在此处消费完毕
+    // 5. 清空 pendingPresentationUpdate——防止重复消费
     this.pendingPresentationUpdate = null
   }
 
@@ -721,6 +714,21 @@ export struct SujianEditor {
     }
     // 标记旧源可释放（交棒完成后才真正释放）
     this.motionSourcePool.releaseMarkedSources()
+    // 清理不再需要的旧窗口 Controller——只保留当前窗口需要的
+    const neededKeys: Set<string> = new Set()
+    const windows = this.visualFrame.motionGlyphWindows
+    for (let i = 0; i < windows.length; i++) {
+      neededKeys.add(`${windows[i].runId}-${i}`)
+    }
+    const keysToDelete: string[] = []
+    this.motionWindowControllers.forEach((_: TextController, key: string) => {
+      if (!neededKeys.has(key)) {
+        keysToDelete.push(key)
+      }
+    })
+    for (const key of keysToDelete) {
+      this.motionWindowControllers.delete(key)
+    }
 
     // 为运动窗口获取或创建源
     const oldRevision = this.previousSnapshot?.revision ?? 0
@@ -746,10 +754,19 @@ export struct SujianEditor {
     for (let i = 0; i < windows.length; i++) {
       const source = this.motionSourcePool.getSource(windows[i].runId)
       if (source !== undefined) {
+        // 每个窗口独立的 TextController——key 与 ForEach key 一致
+        const controllerKey = `${windows[i].runId}-${i}`
+        let controller = this.motionWindowControllers.get(controllerKey)
+        if (controller === undefined) {
+          controller = new TextController()
+          this.motionWindowControllers.set(controllerKey, controller)
+        }
         result.push({
           window: windows[i],
           source: source,
-          clipRect: clipRects[i]
+          clipRect: clipRects[i],
+          textController: controller,
+          mounted: false
         })
       }
     }
@@ -862,22 +879,22 @@ export struct SujianEditor {
   // 不再用空字符串——空字符串在内容尺寸为零时会构建宽高为 0 的矩形。
   private updateStaticClipCommands(): void {
     if (this.visualFrame === null || !this.visualFrame.isAnimating ||
-        !EditorMotionLayer.needsStaticMask(this.visualFrame) ||
-        this.renderResult === null) {
+        !EditorMotionLayer.needsStaticMask(this.visualFrame)) {
       // 非动画或无 motion owner：全尺寸矩形（不裁切）
       if (this.contentWidth > 0 && this.contentHeight > 0) {
         this.staticClipCommands =
           `M0 0 L${this.contentWidth} 0 L${this.contentWidth} ${this.contentHeight} L0 ${this.contentHeight} Z`
       } else {
-        // 内容尺寸为零时不裁切——用足够大的矩形
         this.staticClipCommands = 'M0 0 L99999 0 L99999 99999 L0 99999 Z'
       }
     } else {
       // 动画且有 motion owner：按 staticVisibleRanges 裁切
+      // Issue #879 复核评论修复（问题6）：用 committedLineLayouts（后台排版结果）而非
+      // renderResult.lines（refreshRender 后可能为空），确保静态遮罩有正确的行几何。
       this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(
         EditorMotionLayer.computeStaticMaskRects(
           this.visualFrame,
-          this.renderResult.lines,
+          this.committedLineLayouts,
           this.contentWidth,
           this.contentHeight
         )

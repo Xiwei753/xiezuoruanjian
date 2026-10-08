@@ -41,8 +41,8 @@ export interface PendingLayoutRequest {
 export struct EditorPendingLayoutHost {
   // 独立的 TextController——不与主 Text 共享
   private pendingTextController: TextController = new TextController()
-  // 排版版本号——每次 requestLayout 递增，用于校验回调对应哪次排版请求
-  private layoutToken: number = 0
+  // 当前排版的请求 token——使用父组件传入值，不自增
+  private currentRequestToken: number = 0
   // 当前排版的 StyledString
   @State private pendingStyledString: StyledString | null = null
   // 布局观察者
@@ -56,8 +56,7 @@ export struct EditorPendingLayoutHost {
   @State private contentWidth: number = 0
   // 字号（用于 measureText 计算 caretStops）
   private pendingFontSize: number = 16
-  // Issue #879 复核评论修复（问题1）：排版请求——父组件通过 @Prop 传递，
-  // @Watch 监听变化自动触发 requestLayout。
+  // 排版请求——父组件通过 @Prop 传递，@Watch 监听变化自动触发排版
   @Prop @Watch('onLayoutRequestChanged') layoutRequest: PendingLayoutRequest | null = null
 
   aboutToAppear(): void {
@@ -76,15 +75,15 @@ export struct EditorPendingLayoutHost {
       this.requestLayout(
         this.layoutRequest.styledString,
         this.layoutRequest.contentWidth,
-        this.layoutRequest.fontSize
+        this.layoutRequest.fontSize,
+        this.layoutRequest.token
       )
     }
   }
 
-  // 请求排版新版本——递增 token，设置 StyledString
-  // fontSize 用于 measureText 计算 caretStops 的行内 x 坐标
-  requestLayout(styledString: StyledString, contentWidth: number, fontSize: number): number {
-    this.layoutToken++
+  // 请求排版新版本——使用父组件传入的 token，不自增
+  requestLayout(styledString: StyledString, contentWidth: number, fontSize: number, token: number): number {
+    this.currentRequestToken = token
     this.contentWidth = contentWidth
     this.pendingFontSize = fontSize
     this.pendingStyledString = styledString
@@ -92,7 +91,7 @@ export struct EditorPendingLayoutHost {
     if (this.isMounted) {
       this.pendingTextController.setStyledString(styledString)
     }
-    return this.layoutToken
+    return token
   }
 
   private attachLayoutObserver(): void {
@@ -112,19 +111,14 @@ export struct EditorPendingLayoutHost {
         return
       }
       const lineCount = layout.getLineCount()
-      if (lineCount === 0) {
-        return
-      }
-      // 构建 LineLayout[] — 与 EditorRenderBackend.renderLayoutFromSystem 类似，
-      // 但只提取行布局信息（startUtf16, endUtf16, y, height, left, breakKind, caretStops），
-      // 不做选区/光标/composition 计算。
-      const lineLayouts = this.buildLineLayouts(layout, lineCount)
-      if (lineLayouts.length === 0) {
-        return
-      }
-      // 回调通知排版完成
+      // 空正文（lineCount === 0）也是合法的排版结果——不能当成排版失败。
+      // 回调 onLayoutReady(token, []) 表示"这版正文长度为 0，合法且已完成布局"。
+      const lineLayouts: LineLayout[] = lineCount > 0
+        ? this.buildLineLayouts(layout, lineCount)
+        : []
+      // 回调通知排版完成——无论行数是否为零都回调
       if (this.onLayoutReady !== null) {
-        this.onLayoutReady(this.layoutToken, lineLayouts)
+        this.onLayoutReady(this.currentRequestToken, lineLayouts)
       }
     }
     observer.on('layout', callback)
@@ -148,9 +142,8 @@ export struct EditorPendingLayoutHost {
   // 4. px→vp 转换
   private buildLineLayouts(layout: LayoutManager, systemLineCount: number): LineLayout[] {
     const text = this.pendingStyledString?.getString() ?? ''
-    if (text.length === 0) {
-      return []
-    }
+    // 空正文不在这里返回 []——空正文是合法排版结果，由调用方处理。
+    // 这里只在 systemLineCount > 0 时构建行布局。
 
     // Issue #776 评论5848626733 第6项：系统 LayoutManager 返回 px，需要转成 vp。
     const pxToVp = (value: number): number => this.getUIContext().px2vp(value)
