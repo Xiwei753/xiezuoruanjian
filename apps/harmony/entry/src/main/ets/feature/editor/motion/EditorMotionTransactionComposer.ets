@@ -61,6 +61,15 @@ interface Segment {
 }
 
 /**
+ * applyPatchesToSegments 的返回类型。
+ */
+interface ApplyPatchesResult {
+  success: boolean
+  segments: Segment[]
+  error: string
+}
+
+/**
  * 事务链复合器。
  *
  * 输入完整连续的每笔 base/new revision、patch、offsetMap、起始文本和最终文本，
@@ -222,7 +231,7 @@ export class EditorMotionTransactionComposer {
   private static applyPatchesToSegments(
     segments: Segment[],
     patches: DisplayPatch[]
-  ): { success: boolean, segments: Segment[], error: string } {
+  ): ApplyPatchesResult {
     // 按 replaceByteStart 排序 patches
     const sortedPatches = patches.slice().sort((a: DisplayPatch, b: DisplayPatch): number =>
       a.replaceByteStart - b.replaceByteStart
@@ -233,9 +242,9 @@ export class EditorMotionTransactionComposer {
       if (sortedPatches[i].replaceByteStart < sortedPatches[i - 1].replaceByteEndExclusive) {
         return {
           success: false,
-          segments: [],
+          segments: [] as Segment[],
           error: `patches 重叠：patch[${i}].replaceByteStart(${sortedPatches[i].replaceByteStart}) < patch[${i - 1}].replaceByteEndExclusive(${sortedPatches[i - 1].replaceByteEndExclusive})`
-        }
+        } as ApplyPatchesResult
       }
     }
 
@@ -250,9 +259,9 @@ export class EditorMotionTransactionComposer {
       if (replaceStart > replaceEnd) {
         return {
           success: false,
-          segments: [],
+          segments: [] as Segment[],
           error: `replaceByteStart(${replaceStart}) > replaceByteEndExclusive(${replaceEnd})`
-        }
+        } as ApplyPatchesResult
       }
 
       // 1. 复制 replaceStart 之前的完整 segments
@@ -345,7 +354,7 @@ export class EditorMotionTransactionComposer {
       currentBytePos = seg.currentByteEnd
     }
 
-    return { success: true, segments: resultSegments, error: '' }
+    return { success: true, segments: resultSegments, error: '' } as ApplyPatchesResult
   }
 
   /**

@@ -87,6 +87,16 @@ const EDITOR_HORIZONTAL_PADDING_VP = 20
 const EDITOR_TOP_PADDING_VP = 20
 const EDITOR_BOTTOM_PADDING_VP = 32
 
+/**
+ * Issue #879 问题4：两阶段发布——暂存显示切换数据。
+ * 运动窗口 layoutReady 之前不切换主 Text/静态遮罩，暂存切换数据。
+ */
+interface PendingDisplayData {
+  latestUpdate: EditorPresentationUpdate
+  lineLayouts: LineLayout[]
+  newStyledString: StyledString | null
+}
+
 @Component
 export struct SujianEditor {
   // Issue #879：接收 EditorPresentationUpdate（含 layoutSnapshot + editResult + sessionId），
@@ -114,7 +124,7 @@ export struct SujianEditor {
   // 静态模式（非动画）不做裁切，只有确切有 motion owner 时才在真实宽高及行布局就绪后计算遮罩。
   @State private staticClipCommands: string = 'M0 0 L99999 0 L99999 99999 L0 99999 Z'
   // Issue #879 复核评论修复：延迟到 layout observer 后才做运动规划。
-  // onPresentationUpdateChanged 暂存 pendingPresentationUpdate，等 layout 回调后才调 updateVisualFrame。
+  // onPresentationUpdateChanged 暂存 pendingPresentationUpdate，等 layout 回调后才调 onPendingLayoutReady。
   // Issue #879 最新复核评论修复（问题1）：改为数组保留连续编辑事务链——
   // 连续快速输入时，多笔 editResult 按顺序保存，onPendingLayoutReady 中合并消费，
   // 不再只保留最新一个导致中间事务被丢弃。
@@ -144,6 +154,9 @@ export struct SujianEditor {
   // @Watch 自动触发排版。token 用于校验回调对应哪次排版请求。
   @State private pendingLayoutRequest: PendingLayoutRequest | null = null
   private pendingLayoutToken: number = 0
+  // Issue #879 最新复核评论修复（问题5）：编辑器会话标识——用于区分不同编辑会话的排版请求。
+  // 每个编辑器实例分配一个唯一 sessionId，防止跨会话的排版回调误判。
+  private editorSessionId: number = Date.now()
   // Issue #879 复核评论修复（问题1）：token → StyledString 映射——父组件维护原始引用，
   // EditorPendingLayoutHost 通过 resolveLayoutRequest(token) 回调获取，不走 @Prop 深拷贝。
   private styledStringByToken: Map<number, StyledString> = new Map()
@@ -166,6 +179,10 @@ export struct SujianEditor {
   // Issue #879 最新复核评论修复（问题3）：pending 动画时长——
   // 窗口未 layoutReady 时暂存动画时长，等所有窗口 ready 后在 layout 回调中启动动画。
   private pendingAnimationDurationMs: number = 0
+  // Issue #879 本轮复核评论修复（问题4）：两阶段发布——pending 显示切换数据。
+  // 运动窗口 layoutReady 之前不切换主 Text/静态遮罩，暂存切换数据，
+  // 等窗口 ready 后在 executeDisplaySwitch 中统一执行。
+  private pendingDisplayData: PendingDisplayData | null = null
   // Issue #879 最新复核评论修复（问题5）：保存从 onPendingLayoutReady 回调获取的 firstCaretRect——
   // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
   // 传递给 Coordinator 的 acceptUpdateWithChain，空正文时优先使用而非估算。
@@ -291,7 +308,7 @@ export struct SujianEditor {
     this.refreshRender()
     // Issue #879 复核评论修复（问题4）：初始化静态裁切 path 为全尺寸矩形（不裁切）。
     this.updateStaticClipCommands()
-    // Issue #879 复核评论修复：不立即调 updateVisualFrame()——Text layout 尚未完成。
+    // Issue #879 复核评论修复：不立即调 onPendingLayoutReady——Text layout 尚未完成。
     // 暂存到 pendingPresentationUpdates，等 Text.onAppear → attachTextLayoutObserver → layout 回调后才消费。
     if (this.presentationUpdate !== null) {
       this.pendingPresentationUpdates.push(this.presentationUpdate)
@@ -641,6 +658,8 @@ export struct SujianEditor {
       this.cleanupAllWindowsObservers()
       this.pendingAnimationDurationMs = 0
       this.pendingFirstCaretRect = null
+      // Issue #879 本轮复核评论修复（问题4）：会话切换时清空 pendingDisplayData。
+      this.pendingDisplayData = null
       // Issue #879 复核评论修复（问题4）：会话失效时更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
       // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
@@ -713,19 +732,23 @@ export struct SujianEditor {
       // 至少包含 fontSize、lineSpacing、autoIndentEnabled、autoIndentWidth。
       const autoIndentEnabled = pendingSnap.autoIndentEnabled
       const autoIndentWidth = pendingSnap.autoIndentWidth
-      // Issue #879 最新复核评论修复（问题4）：计算 textHash——`length:firstCharCode:lastCharCode`。
-      // 轻量但能有效区分同长度不同内容（如"甲"→"乙"），防止旧版布局贴上新 token。
+      // Issue #879 最新复核评论修复（问题5）：用完整文本内容替代 textHash。
+      // textHash 只有 length:firstCharCode:lastCharCode，"甲中乙"和"甲文乙"相同。
+      // fullText 是完整文本内容，相同长度/首尾字符也能区分。
       const fullText = this.newStyledString.getString()
-      const firstCharCode = fullText.length > 0 ? fullText.charCodeAt(0) : 0
-      const lastCharCode = fullText.length > 0 ? fullText.charCodeAt(fullText.length - 1) : 0
-      const textHash = `${fullTextLength}:${firstCharCode}:${lastCharCode}`
+      // Issue #879 最新复核评论修复（问题5）：sessionId 用于区分不同编辑会话，
+      // revision 用于区分不同内容修订——防止跨会话/跨修订的误判。
+      const sessionId = this.editorSessionId
+      const revision = this.pendingLayoutToken
       const request: PendingLayoutRequest = {
         token: this.pendingLayoutToken,
         contentWidth: this.contentWidth,
         fontSize: fontSize,
         fullTextLength: fullTextLength,
         styleKey: `${fontSize}-${lineSpacing}-${autoIndentEnabled}-${autoIndentWidth}`,
-        textHash: textHash,
+        fullText: fullText,
+        sessionId: sessionId,
+        revision: revision,
       }
       this.pendingLayoutRequest = request
     }
@@ -738,7 +761,7 @@ export struct SujianEditor {
   // 后台排版完成后，安全地更新前台 Text 并构造运动计划。
   // - 校验 token 匹配——防止旧请求的回调覆盖新请求
   // - 把新 StyledString 写入主 Text（触发主 Text 的 layout）
-  // - 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
+  // - 用后台排版结果（lineLayouts）作为新布局，内联调 acceptUpdateWithChain
   // - 不用等主 Text 的 layout observer 回调——后台排版结果已经是正确的行布局
   //
   // Issue #879 最新复核评论修复（问题1）：消费整个事务链——
@@ -746,6 +769,20 @@ export struct SujianEditor {
   // 调用 motionCoordinator.acceptUpdateWithChain 合并事务链。
   // Issue #879 最新复核评论修复（问题5）：增加可选 firstCaretRect 参数。
   // 空文本时 lineLayouts 为空数组，firstCaretRect 提供光标位置（含 autoIndent/padding）。
+  //
+  // Issue #879 本轮复核评论修复（问题4）：两阶段发布——
+  // 运动窗口 layoutReady 之前不切换主 Text 内容和静态遮罩。
+  // 1. 先停止旧 animator（++motionGeneration + cancel），防止旧 animator 用新 plan 采样
+  // 2. 生成候选 plan（调 acceptUpdateWithChain），设置 visualFrame（让运动窗口 ForEach 创建组件）
+  // 3. 准备运动源（prepareMotionSources）
+  // 4. 保存 committedLineLayouts
+  // 5. 不更新 displayedSnapshot/displayedLineLayouts/displayedStyledString
+  // 6. 不调 refreshRender()（主 Text 保持旧内容）
+  // 7. 不调 updateStaticClipCommands()（保持全尺寸矩形，不裁切）
+  // 8. 暂存 pendingDisplayData
+  // 9. 如果有动画且窗口已 ready → 立即执行显示切换 + 启动动画
+  // 10. 如果有动画但窗口未 ready → 暂存 pendingAnimationDurationMs，等窗口 ready
+  // 11. 如果无动画 → 立即执行显示切换
   private onPendingLayoutReady(token: number, lineLayouts: LineLayout[], firstCaretRect?: CaretRect): void {
     // Issue #879 复核评论修复（问题3）：要求 pendingPresentationUpdates 非空才消费。
     if (token !== this.pendingLayoutToken || this.pendingPresentationUpdates.length === 0) {
@@ -760,39 +797,17 @@ export struct SujianEditor {
     // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
     // 传递给 Coordinator 的 acceptUpdateWithChain，空正文时优先使用而非估算。
     this.pendingFirstCaretRect = firstCaretRect ?? null
-    // Issue #879 复核评论修复（问题3）：后台排版结果获批后，先将 displayed 指向新版本，
-    // 然后才把新 StyledString 写入主 Text，然后才调 updateVisualFrameWithLayout。
-    // 1. 取最新版本作为 displayed 版本
-    const latestUpdate = this.pendingPresentationUpdates[this.pendingPresentationUpdates.length - 1]
-    this.displayedSnapshot = latestUpdate.layoutSnapshot
-    this.displayedLineLayouts = lineLayouts
-    this.displayedStyledString = this.newStyledString
-    // 2. 更新 currentSnapshot——业务状态切换到新版本
-    this.currentSnapshot = latestUpdate.layoutSnapshot
-    // 3. 保存后台排版的行布局——作为 Coordinator 和 computeStaticMaskRects 的唯一相同输入
-    this.committedLineLayouts = lineLayouts
-    // 4. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
-    this.refreshRender()
-    // 5. 收集所有 editResult 形成事务链，调 updateVisualFrameWithLayout
-    this.updateVisualFrameWithLayout(lineLayouts)
-    // 6. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
-    this.displayedPresentation = latestUpdate
-    // 7. 清空 pendingPresentationUpdates——防止重复消费
-    this.pendingPresentationUpdates = []
-    // Issue #879 复核评论修复（问题1）：清理已消费的 token→StyledString 映射条目
-    this.styledStringByToken.delete(token)
-  }
 
-  // Issue #879 复核评论修复（问题1）：用后台排版结果更新视觉帧。
-  // 类似 updateVisualFrame()，但接收外部传入的 lineLayouts（来自 EditorPendingLayoutHost），
-  // 而不是从 renderResult.lines 读取。
-  // Issue #879 最新复核评论修复（问题1）：收集所有 pendingPresentationUpdates 的 editResult，
-  // 调用 acceptUpdateWithChain 合并事务链，而非只传单个 editResult。
-  private updateVisualFrameWithLayout(newLineLayouts: LineLayout[]): void {
-    if (this.currentSnapshot === null || this.pendingPresentationUpdates.length === 0) {
-      return
-    }
-    const oldSnapshot = this.previousSnapshot ?? this.currentSnapshot
+    // Issue #879 本轮复核评论修复（问题4）：步骤1——先停止旧 animator。
+    // 在替换 plan 之前停止旧 animator，防止旧 animator 的 onFrame 闭包继续执行
+    // motionCoordinator.advance(oldProgress)，但 Coordinator.currentPlan 已被新事务替换，
+    // 造成时间错位、窗口闪动及光标乱跳。
+    this.stopAnimatorOnly()
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤2——取最新版本，生成候选 plan。
+    const latestUpdate = this.pendingPresentationUpdates[this.pendingPresentationUpdates.length - 1]
+    const oldSnapshot = this.previousSnapshot ?? this.displayedSnapshot ?? latestUpdate.layoutSnapshot
+
     // 收集所有 pendingPresentationUpdates 的 editResult 形成事务链
     const editResults: EditorEditResult[] = []
     for (const update of this.pendingPresentationUpdates) {
@@ -800,32 +815,96 @@ export struct SujianEditor {
         editResults.push(update.editResult)
       }
     }
-    // Issue #879 最新复核评论修复（问题1）：调用 acceptUpdateWithChain 合并事务链。
-    // 如果事务链只有一个 editResult，acceptUpdateWithChain 内部走原来的 acceptUpdate 逻辑。
-    // Issue #879 最新复核评论修复（问题5）：传入 pendingFirstCaretRect——
-    // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
-    // Coordinator 空正文时优先使用 firstCaretRect，fallback 才用估算。
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤3——设置 currentSnapshot 为新版本，
+    // 供 acceptUpdateWithChain 使用（Coordinator 需要新 snapshot 生成 plan）。
+    // 但不更新 displayed 版本——displayed 版本在 executeDisplaySwitch 中才更新。
+    this.currentSnapshot = latestUpdate.layoutSnapshot
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤4——保存后台排版的行布局。
+    this.committedLineLayouts = lineLayouts
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤5——生成候选 RenderPlan，设置 visualFrame。
+    // visualFrame 被设置为候选 plan 的起始帧，ForEach 会创建运动窗口组件。
+    // 这些组件会挂载、绑定 TextController、等待 layout 回调。
     this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,
       this.currentSnapshot,
-      newLineLayouts,
+      lineLayouts,
       editResults,
       this.contentWidth,
       this.motionPolicy,
       this.pendingFirstCaretRect
     )
-    // 用 motionSourcePool 准备运动字形源
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤6——准备运动源。
     this.prepareMotionSources()
-    // 更新静态裁切 path（只在有 motion owner 时才裁切）
-    this.updateStaticClipCommands()
-    // 启动动画或停止旧动画
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤7——暂存 pendingDisplayData。
+    // 不更新 displayedSnapshot/displayedLineLayouts/displayedStyledString，
+    // 不调 refreshRender()（主 Text 保持旧内容），
+    // 不调 updateStaticClipCommands()（保持全尺寸矩形，不裁切）。
+    this.pendingDisplayData = {
+      latestUpdate: latestUpdate,
+      lineLayouts: lineLayouts,
+      newStyledString: this.newStyledString,
+    } as PendingDisplayData
+
+    // Issue #879 本轮复核评论修复（问题4）：步骤8——根据动画状态决定执行路径。
     if (this.motionCoordinator.isAnimating()) {
       const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
-      this.startMotionAnimation(durationMs)
+      if (durationMs <= 0) {
+        // 动画时长为 0（动画被禁用）——直接执行显示切换并跳到终态
+        this.executeDisplaySwitch()
+        this.visualFrame = this.motionCoordinator.finishMotion()
+        this.isMotionAnimating = false
+        this.updateStaticClipCommands()
+      } else if (this.allMotionWindowsReady()) {
+        // 所有窗口已 ready——先执行显示切换，再启动动画
+        this.executeDisplaySwitch()
+        this.startMotionAnimation(durationMs)
+      } else {
+        // 窗口未 ready——暂存动画时长，等窗口 layout 回调后再执行显示切换 + 启动动画
+        this.pendingAnimationDurationMs = durationMs
+      }
     } else {
-      this.stopActiveAnimation()
+      // 无动画（静态帧）——直接执行显示切换
+      this.executeDisplaySwitch()
     }
+
+    // Issue #879 复核评论修复（问题1）：清理已消费的 token→StyledString 映射条目
+    this.styledStringByToken.delete(token)
+  }
+
+  // Issue #879 本轮复核评论修复（问题4）：两阶段发布——执行显示切换。
+  // 在运动窗口 layoutReady 之后（或无动画时），统一切换主 Text 内容、静态遮罩、
+  // displayed 版本字段和 currentSnapshot。
+  // 从 pendingDisplayData 取出暂存的数据，更新所有 displayed 版本字段，
+  // 写入新 StyledString 到主 Text，更新静态裁切 path，清空 pendingPresentationUpdates。
+  private executeDisplaySwitch(): void {
+    if (this.pendingDisplayData === null) {
+      return
+    }
+    const data = this.pendingDisplayData
+    this.pendingDisplayData = null
+
+    // 更新 displayed 版本字段
+    this.displayedSnapshot = data.latestUpdate.layoutSnapshot
+    this.displayedLineLayouts = data.lineLayouts
+    this.displayedStyledString = data.newStyledString
+    this.displayedPresentation = data.latestUpdate
+
+    // currentSnapshot 已在 onPendingLayoutReady 中更新为新版本，这里保持不变
+
+    // 写入新 StyledString 到主 Text
+    this.refreshRender()
+
+    // 更新静态裁切 path
+    this.updateStaticClipCommands()
+
+    // 清空 pendingPresentationUpdates——防止重复消费
+    this.pendingPresentationUpdates = []
   }
 
   // Issue #879 复核评论修复（问题3）：用 EditorMotionSourcePool 替代旧的 controller 数组。
@@ -934,7 +1013,11 @@ export struct SujianEditor {
       // Issue #879 最新复核评论修复（问题3）：所有窗口 ready 后启动 pending 动画。
       // 窗口未 layoutReady 时 startMotionAnimation 暂存动画时长不启动 animator，
       // 等所有窗口 layout 回调后再启动——旧画面在新窗口未准备好前继续保持显示。
+      // Issue #879 本轮复核评论修复（问题4）：所有窗口 ready → 先执行显示切换，再启动动画。
+      // 在窗口 ready 之前主 Text 保持旧内容、staticClipCommands 保持全尺寸矩形，
+      // 窗口 ready 后才统一切换主 Text、静态遮罩、运动源和 caret。
       if (this.pendingAnimationDurationMs > 0 && this.allMotionWindowsReady()) {
+        this.executeDisplaySwitch()
         const durationMs = this.pendingAnimationDurationMs
         this.pendingAnimationDurationMs = 0
         this.startMotionAnimation(durationMs)
@@ -1038,62 +1121,6 @@ export struct SujianEditor {
     return true
   }
 
-  // Issue #879：通过运动协调器接收编辑更新，计算当前视觉帧。
-  // 当 presentationUpdate 包含 editResult 时，运动协调器会规划文字运动（吐字/吞字/光标移动等）；
-  // 当 editResult 为 null（初始加载/布局重建）时，直接显示静态画面。
-  // Issue #879 复核评论修复：
-  // - 使用 acceptUpdate 新签名（oldSnapshot + oldLayout + newSnapshot + newLayout + editResult + contentWidth + policy）
-  // - 如果 isAnimating()，启动逐帧驱动
-  // Issue #879 第三轮复核修复：使用 this.previousLayout（在 onPresentationUpdateChanged 中缓存），
-  // 不再从参数接收 oldLineLayouts——旧布局在 refreshRender 之前已缓存。
-  private updateVisualFrame(): void {
-    if (this.currentSnapshot === null || this.pendingPresentationUpdates.length === 0) {
-      this.visualFrame = null
-      // Issue #879 本轮复核评论修复（问题3）：visualFrame 清空时更新裁切 path 为全尺寸矩形。
-      this.updateStaticClipCommands()
-      return
-    }
-    // 从 renderResult 获取新行布局信息，供运动协调器计算字形位置。
-    const newLineLayouts = this.renderResult?.lines ?? []
-    // oldSnapshot = previousSnapshot（编辑前的 snapshot）
-    const oldSnapshot = this.previousSnapshot ?? this.currentSnapshot
-    // 收集所有 pendingPresentationUpdates 的 editResult 形成事务链
-    const editResults: EditorEditResult[] = []
-    for (const update of this.pendingPresentationUpdates) {
-      if (update.editResult !== null) {
-        editResults.push(update.editResult)
-      }
-    }
-    // Issue #879 最新复核评论修复（问题5）：传入 pendingFirstCaretRect——
-    // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
-    // Coordinator 空正文时优先使用 firstCaretRect，fallback 才用估算。
-    this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
-      oldSnapshot,
-      this.previousLayout,  // 使用缓存的旧布局
-      this.currentSnapshot,
-      newLineLayouts,
-      editResults,
-      this.contentWidth,
-      this.motionPolicy,
-      this.pendingFirstCaretRect
-    )
-    // Issue #879 复核评论修复（问题3）：用 motionSourcePool 准备运动字形源。
-    this.prepareMotionSources()
-    // Issue #879 复核评论修复（问题4）：更新主 Text 的静态裁切 path 命令。
-    this.updateStaticClipCommands()
-    // Issue #879 复核评论修复：如果运动协调器正在动画，启动逐帧驱动。
-    if (this.motionCoordinator.isAnimating()) {
-      const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
-      this.startMotionAnimation(durationMs)
-    } else {
-      // Issue #879 本轮复核评论修复（问题6）：新状态是静态的——停止旧动画。
-      // 字号变更、会话刷新、关闭动画开关或收到 editResult=null 时，
-      // acceptUpdate 返回静态帧，但旧 animator 仍在继续每帧写入 visualFrame。
-      // 调 stopActiveAnimation 先增 generation 使旧回调失效，再 cancel。
-      this.stopActiveAnimation()
-    }
-  }
-
   // Issue #879 复核评论修复（问题4）：更新主 Text 的静态裁切 path 命令。
   // 静态模式（非动画）不做裁切——全尺寸矩形 path。
   // 只有动画中且有 motion owner 时才计算遮罩 path。
@@ -1122,6 +1149,21 @@ export struct SujianEditor {
         )
       )
     }
+  }
+
+  // Issue #879 本轮复核评论修复（问题4）：只停止 animator，不清理源/observer——
+  // 用于 onPendingLayoutReady 中在替换 plan 之前停止旧 animator，
+  // 防止旧 animator 用新 plan 采样（advance(oldProgress) 但 Coordinator.currentPlan 已是新 plan）。
+  // 与 stopActiveAnimation 的区别：不调 releaseSourcesAfterMotion（源和 observer 保留，
+  // 因为新 plan 可能还需要旧的运动窗口源）。
+  private stopAnimatorOnly(): void {
+    this.motionGeneration++
+    if (this.motionAnimator !== null) {
+      this.motionAnimator.cancel()
+      this.motionAnimator = null
+    }
+    this.isMotionAnimating = false
+    this.pendingAnimationDurationMs = 0
   }
 
   // Issue #879 本轮复核评论修复（问题6）：统一停止动画入口。

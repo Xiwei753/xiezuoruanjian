@@ -183,8 +183,8 @@ export interface RetainedMove {
  * 当前帧的实际屏幕状态（clip 起点位置）而非旧版整字初态矩形作为下一动画起点。
  * - runId：与 EditorMotionSourcePool 的 runId 对应，ForEach 中保持稳定身份。
  * - sourceRevision：识别字形来自哪个版本，快速打字时新 plan 起始帧用当前帧的 revision。
- * - clusterId：跨版本稳定身份——基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），
- *   不依赖 sourceRevision，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
+ * - clusterId：跨版本稳定身份——基于字符内容 hash（utf16Start + utf16End + textHash），
+ *   不含 sourceKind，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
  * - currentClipLeft/Right：当前帧实际裁切窗口边界，作为下一动画起点而非整字初态 x0/x1。
  * - currentPositionX/Y：当前帧实际字形位置（含 offset），作为下一动画起点而非旧版整字初态位置。
  */
@@ -219,7 +219,7 @@ export interface MotionGlyphWindow {
   runId: string
   /** 字形源对应的正文 revision——连续编辑时识别字形来自哪个版本 */
   sourceRevision: number
-  /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），不依赖 sourceRevision */
+  /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（utf16Start + utf16End + textHash），不含 sourceKind，不依赖 sourceRevision */
   clusterId: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
   currentClipLeft: number

@@ -299,10 +299,9 @@ export class EditorMotionPlanner {
     // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
 
-    // Issue #879 最新复核评论修复（问题2）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
+    // Issue #879 最新复核评论修复（问题3）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
     // 用于在连续快速输入时消费当前帧的实际裁切窗口和位置作为起始状态。
-    // clusterId 改为跨版本稳定身份——基于字符内容 hash（sourceKind + utf16Start + utf16End + textHash），
-    // 不依赖 sourceRevision，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
+    // clusterId（stableGlyphId）不含 sourceKind——同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
     const visibleWindowMap: Map<string, MotionGlyphWindow> = new Map()
     if (lastVisibleFrame.isAnimating && lastVisibleFrame.motionGlyphWindows.length > 0) {
       for (const w of lastVisibleFrame.motionGlyphWindows) {
@@ -330,12 +329,11 @@ export class EditorMotionPlanner {
           oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
         for (const rect of oldRects) {
-          // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
-          // 基于字符内容 hash，不依赖 sourceRevision。
+          // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind——
           // 同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文），
-          // 用 sourceRevision 构造 clusterId 会查不到——改为用字符内容 hash。
-          const clusterId = EditorMotionPlanner.makeClusterId('old', rect.utf16Start, rect.utf16End, oldText)
-          const visibleWindow = visibleWindowMap.get(clusterId)
+          // 用 sourceKind 构造 clusterId 会查不到——改为不含 sourceKind 的稳定身份。
+          const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(rect.utf16Start, rect.utf16End, oldText)
+          const visibleWindow = visibleWindowMap.get(stableGlyphId)
           // 目标状态：rect.rect（旧排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认完整宽度
           const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
@@ -359,10 +357,9 @@ export class EditorMotionPlanner {
           newText, newUtf16Start, newUtf16End, newLayout
         )
         for (const rect of newRects) {
-          // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
-          // 基于字符内容 hash，不依赖 sourceRevision。
-          const clusterId = EditorMotionPlanner.makeClusterId('new', rect.utf16Start, rect.utf16End, newText)
-          const visibleWindow = visibleWindowMap.get(clusterId)
+          // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind。
+          const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(rect.utf16Start, rect.utf16End, newText)
+          const visibleWindow = visibleWindowMap.get(stableGlyphId)
           // 目标状态：rect.rect（新排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认零宽度
           const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
@@ -385,10 +382,9 @@ export class EditorMotionPlanner {
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const move of moves) {
-        // Issue #879 最新复核评论修复（问题2）：clusterId 改为跨版本稳定身份——
-        // 基于字符内容 hash，不依赖 sourceRevision。
-        const clusterId = EditorMotionPlanner.makeClusterId('old', move.oldUtf16Start, move.oldUtf16End, oldText)
-        const visibleWindow = visibleWindowMap.get(clusterId)
+        // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind。
+        const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(move.oldUtf16Start, move.oldUtf16End, oldText)
+        const visibleWindow = visibleWindowMap.get(stableGlyphId)
         // 目标状态：move.newRect（新排版中的位置）
         // 起始状态：如果有匹配的 visibleWindow，用其 currentPositionX/Y；否则默认 oldRect.x/y
         const startPositionX = visibleWindow !== undefined ? visibleWindow.currentPositionX : move.oldRect.x
@@ -461,18 +457,18 @@ export class EditorMotionPlanner {
   }
 
   /**
-   * 生成跨版本稳定的 clusterId。
+   * 生成跨版本稳定的 stableGlyphId（即 clusterId 的值）。
    *
-   * Issue #879 最新复核评论修复（问题2）：
-   * clusterId 改为基于字符内容 hash——不依赖 sourceKind+sourceRevision，
-   * 确保同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文）时仍能匹配。
+   * Issue #879 最新复核评论修复（问题3）：
+   * stableGlyphId 不再包含 sourceKind——同一字符在上一笔是"new"（刚插入），
+   * 下一笔它成了"old"（旧正文）时，sourceKind 会从 new 变 old 导致不匹配。
+   * 去掉 sourceKind 后，只要字符内容和位置相同就能匹配。
    *
-   * 格式：sourceKind + utf16Start + utf16End + textHash
+   * 格式：utf16Start + utf16End + textHash
    * 其中 textHash 是 text.substring(utf16Start, utf16End) 的简单 hash，
    * 用于区分相同 offset 但不同内容的字符（理论上不会发生，但作为安全保障）。
    */
-  private static makeClusterId(
-    sourceKind: 'old' | 'new',
+  private static makeStableGlyphId(
     utf16Start: number,
     utf16End: number,
     text: string
@@ -482,7 +478,7 @@ export class EditorMotionPlanner {
     for (let i = 0; i < content.length; i++) {
       hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0
     }
-    return `${sourceKind}-${utf16Start}-${utf16End}-${hash}`
+    return `${utf16Start}-${utf16End}-${hash}`
   }
 
   /**

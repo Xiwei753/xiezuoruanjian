@@ -399,7 +399,7 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        clusterId: EditorMotionCoordinator.makeClusterId('new', run.utf16Start, run.utf16End, newText),
+        clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, newText),
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: run.rect.x,
@@ -438,7 +438,7 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: EditorMotionCoordinator.makeClusterId('old', run.utf16Start, run.utf16End, oldText),
+          clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText),
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -468,7 +468,7 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: EditorMotionCoordinator.makeClusterId('old', run.utf16Start, run.utf16End, oldText),
+          clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText),
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -502,7 +502,7 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        clusterId: EditorMotionCoordinator.makeClusterId('old', move.oldUtf16Start, move.oldUtf16End, oldText),
+        clusterId: EditorMotionCoordinator.makeStableGlyphId(move.oldUtf16Start, move.oldUtf16End, oldText),
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
         currentPositionX: currentX,
@@ -718,15 +718,14 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * 生成跨版本稳定的 clusterId。
+   * 生成跨版本稳定的 stableGlyphId（即 clusterId 的值）。
    *
-   * Issue #879 最新复核评论修复（问题2）：
-   * clusterId 改为基于字符内容 hash——不依赖 sourceKind+sourceRevision，
-   * 确保同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文）时仍能匹配。
-   * 必须与 EditorMotionPlanner.makeClusterId 使用相同算法。
+   * Issue #879 最新复核评论修复（问题3）：
+   * stableGlyphId 不再包含 sourceKind——同一字符在上一笔是"new"（刚插入），
+   * 下一笔它成了"old"（旧正文）时，sourceKind 会从 new 变 old 导致不匹配。
+   * 必须与 EditorMotionPlanner.makeStableGlyphId 使用相同算法。
    */
-  private static makeClusterId(
-    sourceKind: 'old' | 'new',
+  private static makeStableGlyphId(
     utf16Start: number,
     utf16End: number,
     text: string
@@ -736,7 +735,7 @@ export class EditorMotionCoordinator {
     for (let i = 0; i < content.length; i++) {
       hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0
     }
-    return `${sourceKind}-${utf16Start}-${utf16End}-${hash}`
+    return `${utf16Start}-${utf16End}-${hash}`
   }
 
   /**
