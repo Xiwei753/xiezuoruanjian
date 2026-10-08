@@ -310,66 +310,90 @@ jobs:
             ]
           }]"""
           source = source[:language_start] + language_replacement + source[language_end:]
-          # The new package is already uploaded, compiled and populated by this
-          # point. Only then withdraw older, still-in-review invitation tests.
+          # Only retire older versions once the replacement package has been
+          # compiled and its test metadata updated. This avoids withdrawing a
+          # working test when building or uploading the next one fails.
           submit_anchor = "  const body: SubmitTestVersionRequest = { versionId }"
-          submit_replacement = """  // Only replace HarmonyOS invitation versions that are still under review.
-          // Never stop a live test or withdraw a normal production release.
+          submit_replacement = """  // Use version-list only to discover IDs; its 'state' values are not
+          // the app-info 'releaseState' values. Read each status from app-info.
           const versionList = await client.post<any>(
             '/publish/v3/version/brief-info/list',
             {},
             { appId }
           )
           if (String(versionList?.ret?.code) !== '0') {
-            throw new Error('AGC version list failed; refusing to withdraw an unknown version')
+            throw new Error('Cannot query AGC versions; refusing to retire existing tests')
           }
-
-          const knownVersions: any[] = []
-          function walkVersions(value: any): void {
+          const olderIds = new Set<string>()
+          function collectTestVersionIds(value: any): void {
             if (Array.isArray(value)) {
-              value.forEach(walkVersions)
+              value.forEach(collectTestVersionIds)
               return
             }
             if (!value || typeof value !== 'object') return
-            if (value.versionId != null && value.state != null && value.releaseType != null) {
-              knownVersions.push(value)
+            if (value.versionId != null && String(value.releaseType) === '6' &&
+                String(value.versionId) !== versionId) {
+              olderIds.add(String(value.versionId))
             }
-            Object.values(value).forEach(walkVersions)
+            Object.values(value).forEach(collectTestVersionIds)
           }
-          walkVersions(versionList)
+          collectTestVersionIds(versionList)
 
-          if (knownVersions.length === 0) {
-            throw new Error('AGC returned no recognized version states; refusing blind review cancellation')
+          // Query and validate every candidate *before* making any destructive
+          // calls. API calls below only apply to releaseType=6 (test release).
+          const olderTests: Array<{ id: string; state: number }> = []
+          for (const oldVersionId of olderIds) {
+            const detail = await client.get<any>(
+              '/publish/v3/app-info',
+              { appId, releaseType: '6', versionId: oldVersionId }
+            )
+            if (String(detail?.ret?.code) !== '0' ||
+                !Number.isInteger(detail?.appInfo?.releaseState) ||
+                (detail.appInfo.versionId != null &&
+                  String(detail.appInfo.versionId) !== oldVersionId)) {
+              throw new Error(
+                'AGC returned an invalid test-version state for ' + oldVersionId +
+                '; refusing partial test replacement'
+              )
+            }
+            olderTests.push({ id: oldVersionId, state: detail.appInfo.releaseState })
           }
 
-          const inReview = knownVersions.filter(
-            (v) => String(v.releaseType) === '6' &&
-              String(v.state) === '4' &&
-              String(v.versionId) !== versionId
-          )
-          if (inReview.some((v) => v.testType == null)) {
-            throw new Error('AGC omitted testType for an in-review test; refusing to cancel an unknown test type')
+          // Huawei documents releaseState 4 as "in review" and 0 as
+          // "testing". Other states are left intact (history/drafts).
+          // Pre-review state 12 cannot be cancelled by the documented API.
+          if (olderTests.some(t => t.state === 12)) {
+            throw new Error('An older test is in pre-review (12); AGC does not document safe withdrawal for this state')
           }
-          const oldVersionIds = [...new Set(inReview
-            .filter((v) => String(v.testType) === '3')
-            .map((v) => String(v.versionId)))]
-          for (const oldVersionId of oldVersionIds) {
-            core.info('Withdrawing older in-review invitation test: ' + oldVersionId)
-            const cancelled = await client.put<any>(
+          for (const old of olderTests.filter(t => t.state === 4)) {
+            core.info('Cancelling review for older HarmonyOS test: ' + old.id)
+            const result = await client.put<any>(
               '/publish/v3/version/on-shelf/cancel',
-              { versionId: oldVersionId },
+              { versionId: old.id },
               undefined,
               { appId }
             )
-            if (String(cancelled?.ret?.code) !== '0') {
-              throw new Error(
-                'AGC failed to withdraw in-review test ' + oldVersionId +
-                ': code=' + cancelled?.ret?.code
-              )
+            if (String(result?.ret?.code) !== '0') {
+              throw new Error('Cannot cancel old test review ' + old.id +
+                ': AGC code=' + result?.ret?.code)
             }
-            core.info('Withdrawn in-review invitation test: ' + oldVersionId)
+            core.info('Cancelled old test review: ' + old.id)
           }
-
+          for (const old of olderTests.filter(t => t.state === 0)) {
+            core.info('Stopping older active HarmonyOS test: ' + old.id)
+            const result = await client.post<any>(
+              '/publish/v2/test/version/stop',
+              { versionId: old.id },
+              undefined,
+              { appId }
+            )
+            if (String(result?.ret?.code) !== '0') {
+              throw new Error('Cannot stop active test ' + old.id +
+                ': AGC code=' + result?.ret?.code)
+            }
+            core.info('Stopped older active test: ' + old.id)
+          }
+          core.info('Retired older in-review/active test versions. Submitting latest: ' + versionId)
           const body: SubmitTestVersionRequest = { versionId }"""
           if source.count(submit_anchor) != 1:
               raise SystemExit(
