@@ -26,6 +26,8 @@ pub(crate) struct VisualCluster {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VisualFrame {
+    /// 文档视觉会话。layout revision 可能在切章时重用，因此不能单独证明 source 有效。
+    pub document_session: u64,
     pub canonical_revision: Option<LayoutRevision>,
     pub canonical_byte_len: usize,
     pub clusters: Vec<VisualCluster>,
@@ -83,6 +85,7 @@ impl VisualFrame {
             });
         }
         Self {
+            document_session: 0,
             canonical_revision: Some(snapshot.revision),
             canonical_byte_len: canonical_byte_len(snapshot),
             clusters,
@@ -106,6 +109,7 @@ impl VisualFrame {
             }
         }
         Self {
+            document_session: 0,
             canonical_revision: Some(snapshot.revision),
             canonical_byte_len: canonical_byte_len(snapshot),
             clusters,

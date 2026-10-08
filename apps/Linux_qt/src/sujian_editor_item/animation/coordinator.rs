@@ -3,6 +3,7 @@
 //! 正文每次编辑都由一个 `VisualEditState` 直接从最近成功绘制的 `VisualFrame`
 //! 过渡到最新 canonical snapshot。光标仍由独立的 CursorController 管理。
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
@@ -16,10 +17,20 @@ use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::edit_motion::DeletedRangeEdge;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
-use crate::sujian_editor_item::render_ownership::RenderOwnershipPlan;
+use crate::sujian_editor_item::render_ownership::{
+    ClusterOwnerKey, ClusterVisualOwner, RenderOwnershipPlan,
+};
+
+struct CommittedOwnership {
+    document_session: u64,
+    ownership_revision: u64,
+    cluster_owners: HashMap<ClusterOwnerKey, ClusterVisualOwner>,
+    animation_snapshot_ids: Vec<LineSnapshotId>,
+}
 
 #[derive(Clone)]
 struct FrameRevisionMap {
+    document_session: u64,
     from_revision: LayoutRevision,
     to_revision: LayoutRevision,
     offset_map: OffsetMap,
@@ -55,7 +66,12 @@ pub(crate) struct CursorMoveInputs {
 pub(crate) struct LinuxEditorAnimationCoordinator {
     visual_edit_state: Option<VisualEditState>,
     last_committed_visual_frame: Option<VisualFrame>,
+    /// 最近真正提交到 Scene Graph 的 owner table。取消或切章进入 handoff 后，
+    /// 继续保留其动画行纹理 ID，直到静态层成功替换它。
+    last_committed_ownership: Option<CommittedOwnership>,
     frame_to_current_map: Option<FrameRevisionMap>,
+    document_session: u64,
+    handoff_pending: bool,
     last_edit_at: Option<Instant>,
     typing_animation_duration_ms: u32,
     cursor_animation_duration_ms: u32,
@@ -67,7 +83,10 @@ impl LinuxEditorAnimationCoordinator {
         Self {
             visual_edit_state: None,
             last_committed_visual_frame: None,
+            last_committed_ownership: None,
             frame_to_current_map: None,
+            document_session: 0,
+            handoff_pending: false,
             last_edit_at: None,
             typing_animation_duration_ms: 160,
             cursor_animation_duration_ms: 120,
@@ -86,11 +105,15 @@ impl LinuxEditorAnimationCoordinator {
     /// 新编辑直接替换当前过渡，从上一帧成功提交的视觉状态重新计算。
     pub(crate) fn begin_visual_edit(&mut self, request: VisualEditRequest) {
         let previous_edit_at = self.last_edit_at;
-        let frame = self.last_committed_visual_frame.as_ref();
+        let frame = self
+            .last_committed_visual_frame
+            .as_ref()
+            .filter(|frame| frame.document_session == self.document_session);
         let frame_to_base_map = match frame {
             Some(frame) => match (frame.canonical_revision, self.frame_to_current_map.as_ref()) {
                 (Some(anchor), Some(mapping))
-                    if mapping.from_revision == anchor
+                    if mapping.document_session == self.document_session
+                        && mapping.from_revision == anchor
                         && mapping.to_revision == request.base_snapshot.revision =>
                 {
                     mapping.offset_map.clone()
@@ -115,6 +138,7 @@ impl LinuxEditorAnimationCoordinator {
                 frame
                     .canonical_revision
                     .map(|from_revision| FrameRevisionMap {
+                        document_session: self.document_session,
                         from_revision,
                         to_revision: request.target_snapshot.revision,
                         offset_map: frame_to_target_map.clone(),
@@ -124,6 +148,7 @@ impl LinuxEditorAnimationCoordinator {
         self.last_edit_at = Some(request.now);
         if !request.animate {
             self.visual_edit_state = None;
+            self.handoff_pending = true;
             return;
         }
 
@@ -139,6 +164,8 @@ impl LinuxEditorAnimationCoordinator {
             previous_edit_at,
         );
         self.visual_edit_state = Some(state);
+        // 新 transition 覆盖了待收口的旧画面；它会和新的静态层一起原子提交。
+        self.handoff_pending = false;
     }
 
     pub(crate) fn ownership_plan(
@@ -146,13 +173,21 @@ impl LinuxEditorAnimationCoordinator {
         frame_now: Instant,
         canonical_snapshot: Option<&EditorLayoutSnapshot>,
     ) -> RenderOwnershipPlan {
-        if let Some(state) = self.visual_edit_state.as_ref() {
+        let mut plan = if let Some(state) = self.visual_edit_state.as_ref() {
             state.build_ownership_plan(self.effective_text_animation_time(frame_now))
         } else {
             canonical_snapshot
                 .map(RenderOwnershipPlan::canonical)
                 .unwrap_or_default()
+        };
+        plan.document_session = self.document_session;
+        if self.handoff_pending {
+            plan.handoff_pending = true;
+            plan.terminal_frame = false;
+            plan.animated_glyphs.clear();
+            plan.candidate_frame = plan.canonical_frame.clone();
         }
+        plan
     }
 
     /// 只在 static + animation 整帧提交成功后调用。
@@ -161,20 +196,78 @@ impl LinuxEditorAnimationCoordinator {
         plan: &RenderOwnershipPlan,
         resources_ready: bool,
     ) {
+        if plan.document_session != self.document_session {
+            return;
+        }
         let committed_frame = if resources_ready {
             plan.candidate_frame.clone()
         } else {
             plan.canonical_frame.clone()
         };
+        let mut committed_frame = committed_frame;
+        committed_frame.document_session = self.document_session;
         self.frame_to_current_map =
             committed_frame
                 .canonical_revision
                 .map(|revision| FrameRevisionMap {
+                    document_session: self.document_session,
                     from_revision: revision,
                     to_revision: revision,
                     offset_map: identity_map(committed_frame.canonical_byte_len),
                 });
         self.last_committed_visual_frame = Some(committed_frame);
+        let mut committed_animation_ids = Vec::new();
+        let keeps_animation = resources_ready && !plan.handoff_pending;
+        if keeps_animation {
+            for glyph in &plan.animated_glyphs {
+                if !committed_animation_ids.contains(&glyph.snapshot_id) {
+                    committed_animation_ids.push(glyph.snapshot_id);
+                }
+            }
+            for exclusion in &plan.static_exclusions {
+                if !committed_animation_ids.contains(&exclusion.snapshot_id) {
+                    committed_animation_ids.push(exclusion.snapshot_id);
+                }
+            }
+        }
+        let committed_revision = if keeps_animation {
+            plan.ownership_revision
+        } else {
+            0
+        };
+        let ownership_is_unchanged = self
+            .last_committed_ownership
+            .as_ref()
+            .map(|committed| {
+                committed.document_session == self.document_session
+                    && committed.ownership_revision == committed_revision
+                    && committed.animation_snapshot_ids == committed_animation_ids
+                    && if keeps_animation {
+                        committed.cluster_owners == plan.cluster_owners
+                    } else {
+                        committed.cluster_owners.len() == plan.cluster_owners.len()
+                            && plan.cluster_owners.keys().all(|key| {
+                                committed.cluster_owners.get(key)
+                                    == Some(&ClusterVisualOwner::Static)
+                            })
+                    }
+            })
+            .unwrap_or(false);
+        if !ownership_is_unchanged {
+            let mut committed_owners = plan.cluster_owners.clone();
+            if !keeps_animation {
+                for owner in committed_owners.values_mut() {
+                    *owner = ClusterVisualOwner::Static;
+                }
+            }
+            self.last_committed_ownership = Some(CommittedOwnership {
+                document_session: self.document_session,
+                ownership_revision: committed_revision,
+                cluster_owners: committed_owners,
+                animation_snapshot_ids: committed_animation_ids,
+            });
+        }
+        self.handoff_pending = false;
         if plan.handoff_pending || !resources_ready {
             self.visual_edit_state = None;
         } else if plan.terminal_frame {
@@ -197,10 +290,18 @@ impl LinuxEditorAnimationCoordinator {
             .unwrap_or_default()
     }
 
-    /// Keep the old call name at existing cache-retention sites; the set now comes from
-    /// the committed visual frame and the single active visual edit.
+    /// Keep the old call name at existing cache-retention sites. Preserve resources
+    /// referenced by both the latest transition and the still-visible committed plan.
     pub(crate) fn collect_active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
-        self.active_snapshot_ids()
+        let mut ids = self.active_snapshot_ids();
+        if let Some(committed) = self.last_committed_ownership.as_ref() {
+            for snapshot_id in &committed.animation_snapshot_ids {
+                if !ids.contains(snapshot_id) {
+                    ids.push(*snapshot_id);
+                }
+            }
+        }
+        ids
     }
 
     pub(crate) fn has_active_visual_edit(&self) -> bool {
@@ -212,13 +313,29 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     pub(crate) fn clear_visual_edit(&mut self) {
+        let had = self.visual_edit_state.is_some();
         self.visual_edit_state = None;
+        self.handoff_pending |= had;
     }
 
     pub(crate) fn suppress_all(&mut self) -> bool {
         let had = self.visual_edit_state.is_some();
         self.clear_visual_edit();
+        self.paused_at = None;
+        self.last_edit_at = None;
         had
+    }
+
+    /// 切换文档时结束旧视觉会话。旧 Scene Graph owner/纹理仍保留作已提交画面，
+    /// 但不再允许它成为新文档 transition 的 source。
+    pub(crate) fn reset_document_visual_session(&mut self) {
+        self.document_session = self.document_session.wrapping_add(1);
+        self.visual_edit_state = None;
+        self.last_committed_visual_frame = None;
+        self.frame_to_current_map = None;
+        self.last_edit_at = None;
+        self.paused_at = None;
+        self.handoff_pending = true;
     }
 
     pub(crate) fn pause_all(&mut self, now: Instant) -> Vec<LineSnapshotId> {
@@ -242,6 +359,8 @@ impl LinuxEditorAnimationCoordinator {
         let had = self.visual_edit_state.is_some();
         self.visual_edit_state = None;
         self.paused_at = None;
+        self.last_edit_at = None;
+        self.handoff_pending |= had;
         had
     }
 

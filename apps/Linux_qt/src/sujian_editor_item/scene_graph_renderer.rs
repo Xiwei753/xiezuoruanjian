@@ -156,7 +156,8 @@ pub(crate) fn render_frame(
     // Issue #715: 传 scroll_y 给动画层，让 AnimationLayerNode 设置和静态层一样的
     // translate(0, -scroll_y) 矩阵。动画 glyph 继续保留文档坐标，不在 Rust 侧逐个减 scroll_y。
     // 静态 rebuild 失败时保留前一帧的 static + animation 组合，不更新一半新状态。
-    // handoff 成功后同一调用中 static 已接回 canonical，因此清空动画层。
+    // 正常终点、取消和文档切换都走同一原子交接：只有静态层 rebuild 成功后，
+    // 才在本次 update_paint_node 中更新/清空动画层。失败时保留旧 static + animation。
     if static_rebuild_ok {
         let glyphs = if animation_resources_ready && !plan.ownership.handoff_pending {
             plan.ownership.animated_glyphs.as_slice()
