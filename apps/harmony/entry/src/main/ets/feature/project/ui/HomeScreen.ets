@@ -100,6 +100,8 @@ export struct HomeScreen {
   }
 
   aboutToDisappear() {
+    // 页面离开后使进行中的导航意图失效，防止异步目录读取回来后仍执行 pushWritingRoute。
+    this.openNavigationGeneration++
     if (this.themeObserver) {
       this.themeAdapter.removeObserver(this.themeObserver)
     }
@@ -153,10 +155,19 @@ export struct HomeScreen {
     }
   }
 
-  // 目录读取成功后的统一入栈：写作页的章节切换仍由 WritingScreen 持有。
+  // 目录读取成功后的统一入栈：用作品 Tab 的固定栈（getTabStack(0)）而非全局活动栈，
+  // 避免异步等待期间用户切到星图/统计 Tab 后 push 到错误的一级导航。
+  // push 前确认当前仍在作品 Tab（getNavPathStack === getTabStack(0)），不在则放弃打开。
+  // push 后立即递增 generation 消费本次意图，防止动画未完成时再次点击重复入栈。
   private pushWritingRoute(target: ProjectOpenTarget): void {
-    const navPathStack = this.navCoordinator.getNavPathStack()
-    if (!navPathStack) {
+    const homeStack: NavPathStack | null = this.navCoordinator.getTabStack(0)
+    if (!homeStack) {
+      return
+    }
+    // 确认当前活动 Tab 仍是作品 Tab，否则放弃（不把写作页留在后台悄悄打开）
+    const activeStack: NavPathStack | null = this.navCoordinator.getNavPathStack()
+    if (activeStack !== homeStack) {
+      hilog.info(0x0000, 'HomeScreen', 'pushWritingRoute: active tab is not Home, aborting push')
       return
     }
     const writingParam: WritingRouteParams = {
@@ -165,7 +176,9 @@ export struct HomeScreen {
       chapterTitle: target.chapterTitle.length > 0 ? target.chapterTitle : undefined,
       volumeId: target.volumeId.length > 0 ? target.volumeId : undefined
     }
-    navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+    homeStack.pushPath({ name: Routes.Writing, param: writingParam })
+    // 消费本次导航意图，防止 push 已执行但 Navigation 动画尚未切走时再次点击又入栈
+    this.openNavigationGeneration++
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
