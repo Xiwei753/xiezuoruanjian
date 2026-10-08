@@ -317,6 +317,10 @@ export interface MotionTextOverlayParams {
   oldTextControllers: TextController[]
   /** 新排版源 TextController 列表（吐字时显示新字），每个运动窗口一个独立 controller */
   newTextControllers: TextController[]
+  /** 旧排版源 StyledString（吞字时显示旧字）——在 Text.onAppear 时通过 controller.setStyledString 下发 */
+  oldStyledString: StyledString | null
+  /** 新排版源 StyledString（吐字时显示新字）——在 Text.onAppear 时通过 controller.setStyledString 下发 */
+  newStyledString: StyledString | null
   /** 旧排版源 TextController 列表是否已设置 StyledString */
   hasOldSource: boolean
   /** 新排版源 TextController 列表是否已设置 StyledString */
@@ -381,6 +385,13 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 .textAlign(TextAlign.Start)
                 .wordBreak(WordBreak.BREAK_ALL)
                 .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
+                .onAppear(() => {
+                  // Issue #879 复核评论修复（问题1）：API 14 及以下，controller 尚未绑定 Text 时
+                  // setStyledString 无效。在 Text.onAppear（controller 已绑定）时才调 setStyledString。
+                  if (params.newStyledString !== null) {
+                    params.newTextControllers[index].setStyledString(params.newStyledString)
+                  }
+                })
             }
             .width(params.clipRects[index].width)
             .height(params.clipRects[index].height)
@@ -408,6 +419,13 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 .offset({
                   x: -params.clipRects[index].x + window.offsetX,
                   y: -params.clipRects[index].y + window.offsetY
+                })
+                .onAppear(() => {
+                  // Issue #879 复核评论修复（问题1）：API 14 及以下，controller 尚未绑定 Text 时
+                  // setStyledString 无效。在 Text.onAppear（controller 已绑定）时才调 setStyledString。
+                  if (params.oldStyledString !== null) {
+                    params.oldTextControllers[index].setStyledString(params.oldStyledString)
+                  }
                 })
             }
             .width(params.clipRects[index].width)

@@ -626,7 +626,11 @@ export struct SujianEditor {
     }
 
     // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
-    this.refreshRender()
+    // Issue #879 复核评论修复（问题3）：有 pending 编辑更新时跳过 applyStyledText，
+    // 保持主 Text 显示旧内容直到 layout 完成 + RenderPlan 交棒。
+    // 之前 refreshRender 立即写入新正文，但 visualFrame/staticClipCommands 要到后续 layout 回调才变——
+    // 新文字先完整出现再被裁成动画起始状态再重新吐出来（闪烁）。
+    this.refreshRender(true)  // true = 跳过 applyStyledText
     // Issue #879 复核评论修复：暂存 pendingPresentationUpdate，等 layout observer 回调后才调 updateVisualFrame。
     // 此时不立即调用 updateVisualFrame()——Text layout 尚未完成，renderResult.lines 还是旧布局。
     this.pendingPresentationUpdate = this.presentationUpdate
@@ -637,9 +641,9 @@ export struct SujianEditor {
   // Issue #879 本轮复核评论修复（问题1+2）：准备运动层 old/new TextController 数组。
   // - 按本轮 visualFrame 的 motionGlyphWindows 实际数量创建 controller（不再按上一帧数量预分配）。
   // - prepareMotionSourceControllers 移到 updateVisualFrame 中调用（在新 plan 确定后才知道需要多少个 controller）。
-  // - oldTextControllers：设置旧正文 StyledString（this.oldStyledString）。
-  // - newTextControllers：设置新正文 StyledString（this.newStyledString，已在 onPresentationUpdateChanged 中构造）。
-  // 在运动开始时创建并 setStyledString 一次，不在每一帧重新创建。
+  // - oldTextControllers：只创建 controller，不调 setStyledString（API 14 及以下 controller 未绑定 Text 时 setStyledString 无效）。
+  // - newTextControllers：只创建 controller，不调 setStyledString。
+  // - StyledString 通过 MotionTextOverlayParams 传入 Builder，在 Text.onAppear 时由 controller.setStyledString 下发。
   private prepareMotionSourceControllers(): void {
     // 按本轮 visualFrame 的 motionGlyphWindows 实际数量创建 controller
     const windowCount = this.visualFrame?.motionGlyphWindows.length ?? 0
@@ -652,11 +656,12 @@ export struct SujianEditor {
       return
     }
 
-    // 旧字源：用 this.oldStyledString（上一轮的 newStyledString）
+    // 旧字源：只创建 controller，不调 setStyledString
+    // StyledString（this.oldStyledString）通过 MotionTextOverlayParams 传入 Builder，
+    // 在 Text.onAppear 时由 controller.setStyledString 下发（API 14 及以下 controller 未绑定 Text 时 setStyledString 无效）
     if (this.oldStyledString !== null) {
       for (let i = 0; i < windowCount; i++) {
         const controller: TextController = new TextController()
-        controller.setStyledString(this.oldStyledString)
         this.oldTextControllers.push(controller)
       }
       this.hasOldMotionSource = true
@@ -664,11 +669,12 @@ export struct SujianEditor {
       this.hasOldMotionSource = false
     }
 
-    // 新字源：用 this.newStyledString（已在 onPresentationUpdateChanged 中构造）
+    // 新字源：只创建 controller，不调 setStyledString
+    // StyledString（this.newStyledString）通过 MotionTextOverlayParams 传入 Builder，
+    // 在 Text.onAppear 时由 controller.setStyledString 下发（API 14 及以下 controller 未绑定 Text 时 setStyledString 无效）
     if (this.newStyledString !== null) {
       for (let i = 0; i < windowCount; i++) {
         const controller: TextController = new TextController()
-        controller.setStyledString(this.newStyledString)
         this.newTextControllers.push(controller)
       }
       this.hasNewMotionSource = true
@@ -766,6 +772,13 @@ export struct SujianEditor {
     this.prepareMotionSourceControllers()
     // Issue #879 本轮复核评论修复（问题3）：更新主 Text 的静态裁切 path 命令。
     this.updateStaticClipCommands()
+    // Issue #879 复核评论修复（问题3）：layout 完成 + RenderPlan 交棒后才把新 StyledString 写入主 Text。
+    // 之前在 onPresentationUpdateChanged 中 refreshRender 立即写入新正文，
+    // 但 visualFrame/staticClipCommands 要到后续 layout 回调才变——
+    // 新文字先完整出现再被裁成动画起始状态再重新吐出来（闪烁）。
+    // 现在 onPresentationUpdateChanged 中 refreshRender(true) 跳过 applyStyledText，
+    // 在这里（layout 完成 + RenderPlan 交棒后）才调 applyStyledText。
+    this.applyStyledText()
     // Issue #879 复核评论修复：如果运动协调器正在动画，启动逐帧驱动。
     if (this.motionCoordinator.isAnimating()) {
       const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
@@ -913,7 +926,11 @@ export struct SujianEditor {
   // refreshRenderLayout（contentWidth > 0，有真实几何）时更新（带身份）。
   // Issue #768 评论5837229456：不再在 refreshRender 里直接调 setStyledString，
   // 改为通过 applyStyledText()（受 textMounted 守卫）下发 StyledString。
-  private refreshRender(): void {
+  // Issue #879 复核评论修复（问题3）：增加 skipApplyStyledText 参数。
+  // onPresentationUpdateChanged 中有 pending 编辑更新时跳过 applyStyledText，
+  // 保持主 Text 显示旧内容直到 layout 完成 + RenderPlan 交棒（在 updateVisualFrame 中才调 applyStyledText）。
+  // 其他场景（aboutToAppear、aboutToUpdate）默认调 applyStyledText。
+  private refreshRender(skipApplyStyledText: boolean = false): void {
     if (this.currentSnapshot) {
       // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
       const result = EditorRenderBackend.render(this.currentSnapshot)
@@ -930,8 +947,11 @@ export struct SujianEditor {
       this.lineResolver.cancelWait()
       this.lineResolver.updateLayout(null)
     }
-    // 通过 applyStyledText 下发 StyledString（受 textMounted 守卫）
-    this.applyStyledText()
+    // Issue #879 复核评论修复（问题3）：有 pending 编辑更新时跳过 applyStyledText，
+    // 保持主 Text 显示旧内容直到 layout 完成 + RenderPlan 交棒。
+    if (!skipApplyStyledText) {
+      this.applyStyledText()
+    }
   }
 
   // 完整静态渲染：用 renderLayout() 计算行布局/选区/光标/composition 下划线几何。
@@ -1642,6 +1662,8 @@ export struct SujianEditor {
             MotionTextOverlayBuilder({
               oldTextControllers: this.oldTextControllers,
               newTextControllers: this.newTextControllers,
+              oldStyledString: this.oldStyledString,
+              newStyledString: this.newStyledString,
               hasOldSource: this.hasOldMotionSource,
               hasNewSource: this.hasNewMotionSource,
               visualFrame: this.visualFrame,

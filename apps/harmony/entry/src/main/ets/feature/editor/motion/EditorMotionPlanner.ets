@@ -524,6 +524,78 @@ export class EditorMotionPlanner {
   }
 
   /**
+   * 计算指定 UTF-16 子范围在给定行布局中的精确矩形。
+   *
+   * 与 computeGlyphRectsByLines 不同，本方法返回的是子范围对应的精确 rect，
+   * 不是整行片段的 rect。用于双指针配对时获取每个子片段的精确几何。
+   *
+   * caretStops 的 utf16Offset 是全局 offset，x 是绝对 x 坐标（含 line.left）。
+   */
+  private static computeGlyphRectForRange(
+    text: string,
+    utf16Start: number,
+    utf16End: number,
+    layout: LineLayout[]
+  ): GlyphRect {
+    // 找到包含 utf16Start 的行
+    let lineIndex = -1
+    for (let i = 0; i < layout.length; i++) {
+      if (utf16Start >= layout[i].startUtf16 && utf16Start < layout[i].endUtf16) {
+        lineIndex = i
+        break
+      }
+    }
+    // utf16Start 可能恰好在最后一行的末尾
+    if (lineIndex === -1 && layout.length > 0) {
+      const lastLine = layout[layout.length - 1]
+      if (utf16Start === lastLine.endUtf16) {
+        lineIndex = layout.length - 1
+      }
+    }
+    if (lineIndex === -1) {
+      return { x: 0, y: 0, width: 0, height: 0 }
+    }
+    const line = layout[lineIndex]
+
+    // 没有 caretStops——fallback 用行左边界，width 为 0
+    if (line.caretStops.length === 0) {
+      return {
+        x: line.left,
+        y: line.y,
+        width: 0,
+        height: line.height
+      }
+    }
+
+    // 在该行内，用 caretStops 计算子范围的精确 x 和 width
+    // caretStops 的 utf16Offset 是全局 offset，x 是绝对 x 坐标
+    const effectiveEnd = Math.min(utf16End, line.endUtf16)
+
+    let x = line.left
+    for (const stop of line.caretStops) {
+      if (stop.utf16Offset <= utf16Start) {
+        x = stop.x
+      }
+    }
+
+    let xEnd = x
+    for (const stop of line.caretStops) {
+      if (stop.utf16Offset <= effectiveEnd) {
+        xEnd = stop.x
+      }
+    }
+
+    const width = Math.max(0, xEnd - x)
+
+    return {
+      x: x,
+      y: line.y,
+      width: width,
+      height: line.height
+    }
+  }
+
+  /**
    * 用 offsetMap 识别保留文字的 reflow，生成 RetainedMove 列表。
    *
    * offsetMap 记录旧正文 → 新正文的字符身份映射。
@@ -573,9 +645,23 @@ export class EditorMotionPlanner {
       // 不再用 UTF-16 offset 是否改变判断视觉是否发生位移——
       // offset 未变但物理换行位置可能已变（例如前面插入了一个字导致后面文字换行位置变化）。
       // 改为比较 oldRect 与 newRect 的 (x,y) 是否真的不同。
+      // 不能仅比较第一个片段——首段没动、后段换行时会漏动画。
+      // 只有当所有片段对的位置都相同时才跳过。
       if (oldRects.length > 0 && newRects.length > 0) {
-        if (oldRects[0].rect.x === newRects[0].rect.x &&
-            oldRects[0].rect.y === newRects[0].rect.y) {
+        let hasDisplacement = false
+        const minLen = Math.min(oldRects.length, newRects.length)
+        for (let i = 0; i < minLen; i++) {
+          if (oldRects[i].rect.x !== newRects[i].rect.x ||
+              oldRects[i].rect.y !== newRects[i].rect.y) {
+            hasDisplacement = true
+            break
+          }
+        }
+        // 片段数不同也说明有位移（换行/合行）
+        if (!hasDisplacement && oldRects.length !== newRects.length) {
+          hasDisplacement = true
+        }
+        if (!hasDisplacement) {
           continue
         }
       }
@@ -600,18 +686,30 @@ export class EditorMotionPlanner {
         // 配对较小的剩余字符数，确保不遗漏任何片段
         const pairLen = Math.min(oldRemaining, newRemaining)
 
-        // 直接用完整行片段 rect，不按字符数比例拆分。
-        // 字形宽度不等（中文、拉丁字母 i/W、emoji、ZWJ 连字、组合符号），
-        // UTF-16 字符数比例不等于字形宽度比例，按比例拆分会把裁切边界切在字符笔画中间。
-        // 动画只是视觉过渡，用完整行片段 rect 不会导致字形变形。
+        // 为配对的子范围重新计算精确 rect，不用整行片段 rect。
+        // 旧版一行 5 字新版拆成 2+3 字时，双指针会产生两个 RetainedMove，
+        // 如果直接用 oldSeg.rect（5 字宽的整行 rect），二者会引用同一个宽 rect，
+        // 导致动画把同一行字复制到两个位置。改为对每个子范围取精确几何。
+        const oldSubStart = oldSeg.utf16Start + oldCharConsumed
+        const oldSubEnd = oldSeg.utf16Start + oldCharConsumed + pairLen
+        const newSubStart = newSeg.utf16Start + newCharConsumed
+        const newSubEnd = newSeg.utf16Start + newCharConsumed + pairLen
+
+        const oldRect = EditorMotionPlanner.computeGlyphRectForRange(
+          oldText, oldSubStart, oldSubEnd, oldLayout
+        )
+        const newRect = EditorMotionPlanner.computeGlyphRectForRange(
+          newText, newSubStart, newSubEnd, newLayout
+        )
+
         moves.push({
-          oldUtf16Start: oldSeg.utf16Start + oldCharConsumed,
-          oldUtf16End: oldSeg.utf16Start + oldCharConsumed + pairLen,
-          newUtf16Start: newSeg.utf16Start + newCharConsumed,
-          newUtf16End: newSeg.utf16Start + newCharConsumed + pairLen,
+          oldUtf16Start: oldSubStart,
+          oldUtf16End: oldSubEnd,
+          newUtf16Start: newSubStart,
+          newUtf16End: newSubEnd,
           sourceKind: 'old',
-          oldRect: oldSeg.rect,
-          newRect: newSeg.rect
+          oldRect: oldRect,
+          newRect: newRect
         })
 
         oldCharConsumed += pairLen
