@@ -455,7 +455,7 @@ export struct PrimaryTabShell {
           HeaderActionCapsule({ actionSlots: this.wideHeaderActions })
             .position({ x: '100%', y: 0 })
             .translate({ x: '-100%', y: 0 })
-            .margin({ top: 8, right: 16 })
+            .margin({ top: Math.max(this.adaptiveState.safeTopVp, 8), right: 16 })
         }
       }
       .layoutWeight(1)

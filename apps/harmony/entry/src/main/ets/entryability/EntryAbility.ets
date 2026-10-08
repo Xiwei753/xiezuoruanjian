@@ -142,23 +142,24 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
 
     // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
-    // getMainWindowSync() 是同步方法，确保方向和系统栏在页面加载前就设置好。
-    this.initWindowPolicy(windowStage)
-
-    // Issue #752：先 loadContent 成功再 initialize AdaptiveContext。
-    // 实机冷启动 loadContent 完成前 windowRect 可能是 0x0，提前 initialize 会把 0x0 写入布局状态导致白屏。
-    windowStage.loadContent('pages/Index', async (err, data) => {
-      if (err.code) {
-        hilog.error(0x0000, 'EntryAbility', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err))
-        return
-      }
-      hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content. Data: %{public}s', JSON.stringify(data))
-      // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
-      hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded')
-      getAdaptiveContext().initialize(windowStage)
-      // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
-      // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
-      HarmonyColorModeController.getInstance().markPageLoaded()
+    // applyTabletWindowPolicy 是异步的，必须 await 完成后再 loadContent，
+    // 否则方向和系统栏的设置可能晚于页面加载，导致首帧方向错误。
+    this.initWindowPolicy(windowStage).then(() => {
+      // Issue #752：先 loadContent 成功再 initialize AdaptiveContext。
+      // 实机冷启动 loadContent 完成前 windowRect 可能是 0x0，提前 initialize 会把 0x0 写入布局状态导致白屏。
+      windowStage.loadContent('pages/Index', async (err, data) => {
+        if (err.code) {
+          hilog.error(0x0000, 'EntryAbility', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err))
+          return
+        }
+        hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content. Data: %{public}s', JSON.stringify(data))
+        // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
+        hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded')
+        getAdaptiveContext().initialize(windowStage)
+        // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
+        // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
+        HarmonyColorModeController.getInstance().markPageLoaded()
+      })
     })
 
     this.lifecycle.notifyForeground()
@@ -172,21 +173,21 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
     // Issue #880：与 onWindowStageCreate 等价，在 loadContent 之前应用平板专用横屏窗口政策。
-    this.initWindowPolicy(windowStage)
-
-    // Issue #752：与 onWindowStageCreate 等价，先 loadContent 成功再 initialize AdaptiveContext。
-    windowStage.loadContent('pages/Index', async (err, data) => {
-      if (err.code) {
-        hilog.error(0x0000, 'EntryAbility', 'Failed to load the content on restore. Cause: %{public}s', JSON.stringify(err))
-        return
-      }
-      hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content on restore. Data: %{public}s', JSON.stringify(data))
-      // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
-      hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded on restore')
-      getAdaptiveContext().initialize(windowStage)
-      // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
-      // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
-      HarmonyColorModeController.getInstance().markPageLoaded()
+    this.initWindowPolicy(windowStage).then(() => {
+      // Issue #752：与 onWindowStageCreate 等价，先 loadContent 成功再 initialize AdaptiveContext。
+      windowStage.loadContent('pages/Index', async (err, data) => {
+        if (err.code) {
+          hilog.error(0x0000, 'EntryAbility', 'Failed to load the content on restore. Cause: %{public}s', JSON.stringify(err))
+          return
+        }
+        hilog.info(0x0000, 'EntryAbility', 'Succeeded in loading the content on restore. Data: %{public}s', JSON.stringify(data))
+        // Issue #752：loadContent 成功后才初始化 AdaptiveContext，此时窗口尺寸已就绪。
+        hilog.info(0x0000, 'EntryAbility', 'Initializing AdaptiveContext after loadContent succeeded on restore')
+        getAdaptiveContext().initialize(windowStage)
+        // Issue #767 评论 5831321551：页面 loadContent 成功后标记 pageLoaded，
+        // 此时 HarmonyColorModeController 把之前缓存的 desiredMode 真正下发给 UIAbility。
+        HarmonyColorModeController.getInstance().markPageLoaded()
+      })
     })
 
     this.lifecycle.notifyForeground()
@@ -253,11 +254,12 @@ export default class EntryAbility extends UIAbility {
 
   // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
   // 冷启动（onWindowStageCreate）和接续恢复（onWindowStageRestore）共用同一初始化路径，
-  // 避免两者表现不同。getMainWindowSync() 是同步方法，确保方向和系统栏在页面加载前设置好。
-  private initWindowPolicy(windowStage: window.WindowStage): void {
+  // 避免两者表现不同。applyTabletWindowPolicy 是异步的，必须 await 完成后再 loadContent，
+  // 否则方向和系统栏的设置可能晚于页面加载，导致首帧方向错误。
+  private async initWindowPolicy(windowStage: window.WindowStage): Promise<void> {
     try {
       const mainWindow: window.Window = windowStage.getMainWindowSync()
-      TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
+      await TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
     } catch (e) {
       hilog.error(0x0000, 'EntryAbility', 'initWindowPolicy exception: %{public}s', String(e))
     }

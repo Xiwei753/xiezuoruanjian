@@ -158,18 +158,14 @@ export struct HomeScreen {
         }
         navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
       } else {
-        // 项目树加载失败或空，仍进入写作页（未选章节状态）
-        const writingParam: WritingRouteParams = {
-          projectId: projectId
-        }
-        navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+        // 项目树加载失败，进入 Workspace 页面让用户管理卷章
+        const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
+        navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
       }
     } catch (err) {
-      // 异常时仍进入写作页（未选章节状态）
-      const writingParam: WritingRouteParams = {
-        projectId: projectId
-      }
-      navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+      // 异常时进入 Workspace 页面，不进入 Writing 的未选章节状态
+      const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
+      navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
     }
   }
 
@@ -307,7 +303,7 @@ export struct HomeScreen {
   HomeContent() {
     Stack() {
       Column() {
-        if (this.adaptiveState.sizeClass === WidthClass.Expanded) {
+        if (this.adaptiveState.prefersWideLayout) {
           // ── 宽屏：只有作品卡流，从内容区左上开始排 ──
           this.WideHomeLayout()
         } else {
@@ -351,7 +347,7 @@ export struct HomeScreen {
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
         // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
         // 就会在内容上方留出一条整宽空白。
-        showTitleBar: this.adaptiveState.sizeClass !== WidthClass.Expanded
+        showTitleBar: !this.adaptiveState.prefersWideLayout
       }) {
         this.HomeContent()
       }
@@ -359,7 +355,7 @@ export struct HomeScreen {
       NavDestination() {
         this.HomeContent()
       }
-      .hideTitleBar(this.adaptiveState.sizeClass === WidthClass.Expanded)
+      .hideTitleBar(this.adaptiveState.prefersWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title($r('app.string.app_title'))

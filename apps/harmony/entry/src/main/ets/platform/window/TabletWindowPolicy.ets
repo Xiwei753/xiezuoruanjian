@@ -108,28 +108,28 @@ export class TabletWindowPolicy {
    * 应在 EntryAbility.onWindowStageCreate / onWindowStageRestore 中
    * loadContent 之前调用。
    */
-  static applyTabletWindowPolicy(mainWindow: window.Window): void {
+  static async applyTabletWindowPolicy(mainWindow: window.Window): Promise<void> {
     if (!TabletWindowPolicy.isDedicatedLandscapeTablet()) {
       hilog.info(DOMAIN, TAG, 'Not a dedicated landscape tablet, skipping window policy')
       return
     }
 
     try {
-      mainWindow.setPreferredOrientation(window.Orientation.LANDSCAPE)
+      await mainWindow.setPreferredOrientation(window.Orientation.LANDSCAPE)
       hilog.info(DOMAIN, TAG, 'Set preferred orientation to LANDSCAPE')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to set preferred orientation: ${JSON.stringify(err)}`)
     }
 
     try {
-      mainWindow.setWindowLayoutFullScreen(true)
+      await mainWindow.setWindowLayoutFullScreen(true)
       hilog.info(DOMAIN, TAG, 'Set window layout full screen')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to set window layout full screen: ${JSON.stringify(err)}`)
     }
 
     try {
-      mainWindow.setWindowSystemBarEnable([])
+      await mainWindow.setWindowSystemBarEnable([])
       hilog.info(DOMAIN, TAG, 'Hid system bars (status bar and navigation bar)')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to hide system bars: ${JSON.stringify(err)}`)
@@ -145,20 +145,20 @@ export class TabletWindowPolicy {
    *
    * 非专用横屏平板不执行任何操作。
    */
-  static restoreWindowPolicy(mainWindow: window.Window): void {
+  static async restoreWindowPolicy(mainWindow: window.Window): Promise<void> {
     if (!TabletWindowPolicy.isDedicatedLandscapeTablet()) {
       return
     }
 
     try {
-      mainWindow.setPreferredOrientation(window.Orientation.UNSPECIFIED)
+      await mainWindow.setPreferredOrientation(window.Orientation.UNSPECIFIED)
       hilog.info(DOMAIN, TAG, 'Restored preferred orientation to UNSPECIFIED')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to restore preferred orientation: ${JSON.stringify(err)}`)
     }
 
     try {
-      mainWindow.setWindowSystemBarEnable(['status', 'navigation'])
+      await mainWindow.setWindowSystemBarEnable(['status', 'navigation'])
       hilog.info(DOMAIN, TAG, 'Restored system bars (status and navigation)')
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to restore system bars: ${JSON.stringify(err)}`)

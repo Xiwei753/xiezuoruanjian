@@ -32,7 +32,6 @@ import { ActionSlot, ActionRole } from '../../../../corebridge/dto/PlatformDtos'
 import { sortedHeaderTrailingActions } from '../../NavigationHeaderActionModel'
 import { NavigationHeaderActionDispatcher } from '../../NavigationHeaderActionDispatcher'
 import { PrimaryTabGestureLock } from '../../PrimaryTabGestureLock'
-import { HarmonyMaterialService } from '../../../../platform/material/HarmonyMaterialService'
 
 /** 单个动作按钮的边长（vp），与设计稿 40vp 一致 */
 const ACTION_BUTTON_SIZE_VP: number = 40
@@ -109,12 +108,10 @@ export struct HeaderActionCapsule {
     // 那就不是「一个胶囊包住三个图标」了。
     .padding({ left: CAPSULE_PADDING_VP, right: CAPSULE_PADDING_VP + ACTION_GAP_VP })
     .borderRadius(ACTION_BUTTON_SIZE_VP / 2 + CAPSULE_PADDING_VP)
-    // 沉浸式系统材质：官方《沉浸光感》说标题栏按钮可挂 systemMaterialEffect，
-    // 那是给 HDS 自己渲染的 menu 按钮用的；本组件是 stackBuilder 里的自绘节点，
-    // 挂通用属性 systemMaterial 能否生效要实机验证，不靠推断。
-    // 背景色 / 模糊 / 描边先摘掉：官方明确这些属性会盖在材质层之上。
-    .backgroundColor(Color.Transparent)
-    .systemMaterial(HarmonyMaterialService.getInstance().floatingMaterial())
+    // 沉浸式系统材质在 stackBuilder 自绘节点中可能脱离材质作用域（折叠屏等场景），
+    // 改用有明确轮廓的普通胶囊表面 + 发丝描边，保证视觉一致性。
+    .backgroundColor($r('sys.color.comp_background_gray'))
+    .border({ width: 0.5, color: $r('sys.color.icon_secondary') })
     // 锁一级 Tabs 的横向滑动切页，和 PrimaryFab 用同一个 store。
     // 挂在 Row 上而不是各 Button 上：按钮之间的空隙与胶囊内边距是 Row 自己的区域，
     // 没有按钮消费触摸，手势会直接透给 Tabs 把页面翻掉（实测空隙与右端都会翻页，

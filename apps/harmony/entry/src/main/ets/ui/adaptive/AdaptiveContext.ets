@@ -22,7 +22,9 @@ export interface AdaptiveState {
   gridColumns: number
   // 底部安全区域高度（导航栏避让），单位 vp
   safeBottomVp: number
-  // 当前是否偏好宽屏布局（专用横屏平板且 widthVp >= 600，或 sizeClass === Expanded）
+  // 顶部安全区域高度（状态栏避让），单位 vp
+  safeTopVp: number
+  // 当前是否偏好宽屏布局（专用横屏平板且 Core 返回 Workbench 模式，或 sizeClass === Expanded）
   prefersWideLayout: boolean
   // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
   isDedicatedLandscapeTablet: boolean
@@ -162,6 +164,7 @@ export class AdaptiveContext {
       pagePadding: this.state.pagePadding,
       gridColumns: this.state.gridColumns,
       safeBottomVp: this.cachedSafeBottomVp,
+      safeTopVp: this.cachedSafeTopVp,
       prefersWideLayout: this.state.prefersWideLayout,
       isDedicatedLandscapeTablet: this.state.isDedicatedLandscapeTablet
     }
@@ -281,9 +284,12 @@ export class AdaptiveContext {
         // Harmony 平台值（纸面宽度/内边距/网格列数）在平台层叠加，不在 Core。
         const plan: LayoutPlan = buildHarmonyLayoutPlan(contract, widthVp)
         const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
-        // prefersWideLayout: 专用横屏平板且 widthVp >= 600，或 sizeClass === Expanded
+        // prefersWideLayout: 专用横屏平板且 Core 返回 Workbench 模式（能展示完整宽屏工作台），或 sizeClass === Expanded
+        // 不能只按 600vp 判定：600-695vp 时 Core 返回 SinglePane（最小 workbench 宽度 = 696dp），
+        // 此时进入 Writing 会出现无章节树且无法新建章节的死状态。
+        // 用 Core 的 workspaceLayoutMode 判断，确保只在真正能展示工作台时才启用宽屏布局。
         const prefersWideLayout: boolean =
-          (this.cachedIsDedicatedLandscapeTablet && widthVp >= 600) || sizeClass === WidthClass.Expanded
+          (this.cachedIsDedicatedLandscapeTablet && contract.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) || sizeClass === WidthClass.Expanded
         this.state = {
           widthVp: Math.round(widthVp * 100) / 100,
           heightVp: Math.round(heightVp * 100) / 100,
@@ -294,6 +300,7 @@ export class AdaptiveContext {
           pagePadding: plan.pagePaddingVp,
           gridColumns: plan.gridColumns,
           safeBottomVp: this.cachedSafeBottomVp,
+          safeTopVp: this.cachedSafeTopVp,
           prefersWideLayout: prefersWideLayout,
           isDedicatedLandscapeTablet: this.cachedIsDedicatedLandscapeTablet
         }
@@ -351,6 +358,7 @@ export class AdaptiveContext {
       pagePadding: 16,
       gridColumns: 2,
       safeBottomVp: 0,
+      safeTopVp: 0,
       prefersWideLayout: false,
       isDedicatedLandscapeTablet: false
     }

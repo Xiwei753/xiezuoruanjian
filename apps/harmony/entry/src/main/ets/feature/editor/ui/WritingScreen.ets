@@ -1023,14 +1023,14 @@ export struct WritingScreen {
     if (!this.isWideWorkbench || this.wideWorkbenchTreeLoaded) {
       return
     }
-    this.wideWorkbenchTreeLoaded = true
     this.loadProjectTree()
   }
 
   // Issue #629 评论14 第1项：宽屏双栏模式加载项目树。
-  private async loadProjectTree(): Promise<void> {
+  // Issue #880 修复4b：返回 boolean，成功时才标记 wideWorkbenchTreeLoaded，失败时可重试。
+  private async loadProjectTree(): Promise<boolean> {
     if (!this.projectId || !this.isWideWorkbench) {
-      return
+      return false
     }
     this.isTreeLoading = true
     try {
@@ -1048,12 +1048,15 @@ export struct WritingScreen {
             }
           }
         }
+        this.wideWorkbenchTreeLoaded = true
+        return true
       }
     } catch (err) {
       console.error('Failed to load project tree:', err)
     } finally {
       this.isTreeLoading = false
     }
+    return false
   }
 
   // Issue #629 评论14 第1项：宽屏左侧切章节。
@@ -2009,10 +2012,23 @@ export struct WritingScreen {
   // 窄屏编辑区 = 正文主体 + 窄屏旧底栏。
   // Issue #829 评论2第1项：宽屏不调这个 Builder，只调 EditorBody() + WritingStatusBar，
   // 保证任何时候窗口里只有一条底部状态栏、也只有一份状态。
+  // Issue #880 修复1：单栏退化时也要处理无章节状态，不加载编辑器。
   @Builder
   EditorPane() {
     Column() {
-      this.EditorBody()
+      if (this.chapterId.length === 0) {
+        // 无章节时显示提示，不加载编辑器
+        Column() {
+          Text('请先选择或创建章节')
+            .fontSize(16)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        this.EditorBody()
+      }
       this.NarrowStatusBar()
     }
     .width('100%')
