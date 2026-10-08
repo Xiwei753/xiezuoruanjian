@@ -647,19 +647,42 @@ export class EditorMotionCoordinator {
 
   /**
    * 从可见范围列表中减去排除范围列表。
+   *
+   * Issue #879 复核评论修复（问题6）：
+   * excluded 来源（insertRuns + retainedMoves）顺序不一定按 utf16Start 升序，
+   * 逐个扫描未排序的 excluded 会导致差集结果错误（同一字形静态层和运动层重影）。
+   * 修复：先按 utf16Start 排序、合并重叠或相邻范围，再做差集。
    */
-  private static subtractRanges(
+  static subtractRanges(
     visible: StaticVisibleRange[],
     excluded: StaticVisibleRange[]
   ): StaticVisibleRange[] {
     if (excluded.length === 0) {
       return visible
     }
+    // 先按 utf16Start 排序
+    const sorted: StaticVisibleRange[] = excluded.slice().sort(
+      (a: StaticVisibleRange, b: StaticVisibleRange): number => a.utf16Start - b.utf16Start
+    )
+    // 合并重叠或相邻的范围
+    const merged: StaticVisibleRange[] = []
+    for (const exc of sorted) {
+      if (merged.length > 0) {
+        const last: StaticVisibleRange = merged[merged.length - 1]
+        if (exc.utf16Start <= last.utf16End) {
+          // 重叠或相邻——合并
+          last.utf16End = Math.max(last.utf16End, exc.utf16End)
+          continue
+        }
+      }
+      merged.push({ utf16Start: exc.utf16Start, utf16End: exc.utf16End })
+    }
+    // 用合并后的范围做差集
     const result: StaticVisibleRange[] = []
     for (const vis of visible) {
       let start = vis.utf16Start
       const end = vis.utf16End
-      for (const exc of excluded) {
+      for (const exc of merged) {
         if (exc.utf16End <= start || exc.utf16Start >= end) {
           continue
         }

@@ -25,6 +25,7 @@
 import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
 import { CaretRect, LineLayout } from '../render/editor_render_geometry'
 import { RectShape, PathShape } from '@ohos.arkui.shape'
+import { EditorMotionCoordinator } from './EditorMotionCoordinator'
 
 /**
  * 裁切矩形——用于 clipShape/maskShape 的矩形区域。
@@ -103,7 +104,7 @@ export class EditorMotionLayer {
       })
     )
 
-    return EditorMotionLayer.subtractRanges(
+    return EditorMotionCoordinator.subtractRanges(
       frame.staticVisibleRanges,
       motionRanges
     )
@@ -296,37 +297,6 @@ export class EditorMotionLayer {
   }
 
   // ── 私有方法 ──
-
-  /**
-   * 从可见范围列表中减去排除范围列表。
-   * 与 EditorMotionCoordinator.subtractRanges 逻辑一致，独立维护避免循环依赖。
-   */
-  private static subtractRanges(
-    visible: StaticVisibleRange[],
-    excluded: StaticVisibleRange[]
-  ): StaticVisibleRange[] {
-    if (excluded.length === 0) {
-      return visible
-    }
-    const result: StaticVisibleRange[] = []
-    for (const vis of visible) {
-      let start = vis.utf16Start
-      const end = vis.utf16End
-      for (const exc of excluded) {
-        if (exc.utf16End <= start || exc.utf16Start >= end) {
-          continue
-        }
-        if (exc.utf16Start > start) {
-          result.push({ utf16Start: start, utf16End: exc.utf16Start })
-        }
-        start = Math.max(start, exc.utf16End)
-      }
-      if (start < end) {
-        result.push({ utf16Start: start, utf16End: end })
-      }
-    }
-    return result
-  }
 }
 
 // ── ArkUI Builder 函数 ──
@@ -394,7 +364,10 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
           // 吐字（Reveal）：sourceKind='new'，用 newTextControllers[index]
           // 吞字（Conceal/ConcealForward）：sourceKind='old'，用 oldTextControllers[index]
           // Reflow（RetainedMove）：sourceKind='old'，用 oldTextControllers[index] + offset 平移
-          if (window.sourceKind === 'new' && params.hasNewSource) {
+          // Issue #879 本轮复核评论修复（问题1）：访问 controllers 前检查索引是否存在，
+          // 防止 controller 数量与窗口数量不匹配时访问 undefined。
+          if (window.sourceKind === 'new' && params.hasNewSource &&
+              index < params.newTextControllers.length) {
             // 新字源：完整排版，用 Stack + offset + clipShape 限制可见区域
             // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
             // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
@@ -419,7 +392,8 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               x: params.clipRects[index].x,
               y: params.clipRects[index].y
             })
-          } else if (window.sourceKind === 'old' && params.hasOldSource) {
+          } else if (window.sourceKind === 'old' && params.hasOldSource &&
+                     index < params.oldTextControllers.length) {
             // 旧字源：完整排版，用 Stack + offset + clipShape 限制可见区域
             // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
             // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。

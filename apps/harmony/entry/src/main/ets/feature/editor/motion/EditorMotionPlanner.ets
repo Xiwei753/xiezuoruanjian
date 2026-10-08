@@ -561,11 +561,6 @@ export class EditorMotionPlanner {
       const newUtf16Start = TextOffsetMapper.utf8ToUtf16(newText, entry.newByteOffset)
       const newUtf16End = TextOffsetMapper.utf8ToUtf16(newText, entry.newByteOffset + entry.length)
 
-      // 只对有实际位移的字符生成 reflow
-      if (oldUtf16Start === newUtf16Start) {
-        continue
-      }
-
       // 跨行按视觉行分别生成 RetainedMove
       // 旧字源按 oldLayout 算 oldRect，新位置按 newLayout 算 newRect
       const oldRects = EditorMotionPlanner.computeGlyphRectsByLines(
@@ -574,6 +569,16 @@ export class EditorMotionPlanner {
       const newRects = EditorMotionPlanner.computeGlyphRectsByLines(
         newText, newUtf16Start, newUtf16End, newLayout
       )
+
+      // 不再用 UTF-16 offset 是否改变判断视觉是否发生位移——
+      // offset 未变但物理换行位置可能已变（例如前面插入了一个字导致后面文字换行位置变化）。
+      // 改为比较 oldRect 与 newRect 的 (x,y) 是否真的不同。
+      if (oldRects.length > 0 && newRects.length > 0) {
+        if (oldRects[0].rect.x === newRects[0].rect.x &&
+            oldRects[0].rect.y === newRects[0].rect.y) {
+          continue
+        }
+      }
 
       // 双指针配对：按字符顺序把 old 片段和 new 片段配对。
       // oldRects 和 newRects 覆盖相同数量的 UTF-16 字符（同一 Shifted entry），
@@ -595,30 +600,18 @@ export class EditorMotionPlanner {
         // 配对较小的剩余字符数，确保不遗漏任何片段
         const pairLen = Math.min(oldRemaining, newRemaining)
 
-        // 按字符数比例计算子片段的 rect（等宽字体精确，非等宽字体近似可接受）
-        const oldRatio = oldCharConsumed / oldSegLen
-        const oldPairRatio = pairLen / oldSegLen
-        const newRatio = newCharConsumed / newSegLen
-        const newPairRatio = pairLen / newSegLen
-
+        // 直接用完整行片段 rect，不按字符数比例拆分。
+        // 字形宽度不等（中文、拉丁字母 i/W、emoji、ZWJ 连字、组合符号），
+        // UTF-16 字符数比例不等于字形宽度比例，按比例拆分会把裁切边界切在字符笔画中间。
+        // 动画只是视觉过渡，用完整行片段 rect 不会导致字形变形。
         moves.push({
           oldUtf16Start: oldSeg.utf16Start + oldCharConsumed,
           oldUtf16End: oldSeg.utf16Start + oldCharConsumed + pairLen,
           newUtf16Start: newSeg.utf16Start + newCharConsumed,
           newUtf16End: newSeg.utf16Start + newCharConsumed + pairLen,
           sourceKind: 'old',
-          oldRect: {
-            x: oldSeg.rect.x + oldRatio * oldSeg.rect.width,
-            y: oldSeg.rect.y,
-            width: oldPairRatio * oldSeg.rect.width,
-            height: oldSeg.rect.height
-          },
-          newRect: {
-            x: newSeg.rect.x + newRatio * newSeg.rect.width,
-            y: newSeg.rect.y,
-            width: newPairRatio * newSeg.rect.width,
-            height: newSeg.rect.height
-          }
+          oldRect: oldSeg.rect,
+          newRect: newSeg.rect
         })
 
         oldCharConsumed += pairLen

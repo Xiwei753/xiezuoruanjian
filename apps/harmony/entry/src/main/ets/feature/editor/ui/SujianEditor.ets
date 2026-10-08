@@ -229,6 +229,18 @@ export struct SujianEditor {
     // Issue #879：从 presentationUpdate 同步 currentSnapshot 并初始化视觉帧。
     if (this.presentationUpdate !== null) {
       this.currentSnapshot = this.presentationUpdate.layoutSnapshot
+      // Issue #879 本轮复核评论修复（问题2）：在 aboutToAppear 中也构造 newStyledString，
+      // 确保 Text.onAppear → applyStyledText 时 newStyledString 已就绪。
+      // onPresentationUpdateChanged 中也会构造，但 @Watch 回调可能在 Text.onAppear 之后才触发。
+      const config: EditorStyleConfig = {
+        fontSize: this.currentSnapshot.fontSize,
+        lineSpacingMultiplier: this.currentSnapshot.lineSpacingMultiplier,
+        autoIndentEnabled: this.currentSnapshot.autoIndentEnabled,
+        autoIndentWidth: this.currentSnapshot.autoIndentWidth,
+      }
+      this.newStyledString = EditorTextStyleProjector.projectToStyledString(
+        this.currentSnapshot.text, config
+      )
     }
     this.refreshRender()
     // Issue #879 本轮复核评论修复（问题3）：初始化静态裁切 path 为全尺寸矩形（不裁切）。
@@ -593,10 +605,25 @@ export struct SujianEditor {
     this.pendingLineSpacing = pendingSnap.lineSpacingMultiplier
     this.pendingContentWidth = this.contentWidth
 
-    // Issue #879 本轮复核评论修复（问题2）：准备运动层 TextController 数组。
-    // 为每个运动窗口创建独立的 TextController 并设置 StyledString。
-    // ArkUI 不允许同一 TextController 绑定多个 Text，所以需要数组。
-    this.prepareMotionSourceControllers()
+    // Issue #879 本轮复核评论修复（问题2）：先构造新 StyledString，再准备 controller。
+    // 之前 prepareMotionSourceControllers 在 applyStyledText 之前调用，
+    // newStyledString 还是旧版——吐字裁切的是旧字形。
+    // 现在先构造新 StyledString，确保 controller 拿到的是新版文字。
+    // 注意：prepareMotionSourceControllers 移到 updateVisualFrame 中调用
+    // （在新 plan 确定后才知道需要多少个 controller）。
+    if (this.currentSnapshot !== null) {
+      const config: EditorStyleConfig = {
+        fontSize: this.currentSnapshot.fontSize,
+        lineSpacingMultiplier: this.currentSnapshot.lineSpacingMultiplier,
+        autoIndentEnabled: this.currentSnapshot.autoIndentEnabled,
+        autoIndentWidth: this.currentSnapshot.autoIndentWidth,
+      }
+      this.newStyledString = EditorTextStyleProjector.projectToStyledString(
+        this.currentSnapshot.text, config
+      )
+    } else {
+      this.newStyledString = null
+    }
 
     // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
@@ -607,16 +634,23 @@ export struct SujianEditor {
     this.pushDiagnosticsSnapshot()
   }
 
-  // Issue #879 本轮复核评论修复（问题2）：准备运动层 old/new TextController 数组。
-  // - 为每个运动窗口创建独立的 TextController（ArkUI 不允许同一 controller 绑定多个 Text）。
+  // Issue #879 本轮复核评论修复（问题1+2）：准备运动层 old/new TextController 数组。
+  // - 按本轮 visualFrame 的 motionGlyphWindows 实际数量创建 controller（不再按上一帧数量预分配）。
+  // - prepareMotionSourceControllers 移到 updateVisualFrame 中调用（在新 plan 确定后才知道需要多少个 controller）。
   // - oldTextControllers：设置旧正文 StyledString（this.oldStyledString）。
-  // - newTextControllers：设置新正文 StyledString（this.newStyledString，在 applyStyledText 中生成）。
+  // - newTextControllers：设置新正文 StyledString（this.newStyledString，已在 onPresentationUpdateChanged 中构造）。
   // 在运动开始时创建并 setStyledString 一次，不在每一帧重新创建。
   private prepareMotionSourceControllers(): void {
-    // 根据当前 visualFrame 的 motionGlyphWindows 数量创建对应数量的 TextController
+    // 按本轮 visualFrame 的 motionGlyphWindows 实际数量创建 controller
     const windowCount = this.visualFrame?.motionGlyphWindows.length ?? 0
     this.oldTextControllers = []
     this.newTextControllers = []
+
+    if (windowCount === 0) {
+      this.hasOldMotionSource = false
+      this.hasNewMotionSource = false
+      return
+    }
 
     // 旧字源：用 this.oldStyledString（上一轮的 newStyledString）
     if (this.oldStyledString !== null) {
@@ -630,7 +664,7 @@ export struct SujianEditor {
       this.hasOldMotionSource = false
     }
 
-    // 新字源：用 this.newStyledString（在 applyStyledText 中生成）
+    // 新字源：用 this.newStyledString（已在 onPresentationUpdateChanged 中构造）
     if (this.newStyledString !== null) {
       for (let i = 0; i < windowCount; i++) {
         const controller: TextController = new TextController()
@@ -725,6 +759,11 @@ export struct SujianEditor {
       this.contentWidth,
       this.motionPolicy
     )
+    // Issue #879 本轮复核评论修复（问题1）：在新 plan 确定后准备运动层 TextController。
+    // 之前在 onPresentationUpdateChanged 中调用——此时 visualFrame 还是上一帧的，
+    // motionGlyphWindows 可能为空（上一帧是静态状态），导致创建 0 个 controller。
+    // 现在在 acceptUpdate 返回新 visualFrame 后调用，按新 plan 的实际窗口数量创建 controller。
+    this.prepareMotionSourceControllers()
     // Issue #879 本轮复核评论修复（问题3）：更新主 Text 的静态裁切 path 命令。
     this.updateStaticClipCommands()
     // Issue #879 复核评论修复：如果运动协调器正在动画，启动逐帧驱动。
@@ -849,8 +888,8 @@ export struct SujianEditor {
   // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
   // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
   // 因为 Text 组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
-  // Issue #879 本轮复核评论修复（问题2）：运动层 TextController 由 prepareMotionSourceControllers 管理。
-  // applyStyledText 只负责主 Text 的 StyledString 和保存 newStyledString 引用。
+  // Issue #879 本轮复核评论修复（问题2）：newStyledString 已在 onPresentationUpdateChanged 中构造。
+  // applyStyledText 只负责把 StyledString 写入主 Text 的 TextController，不再重新构造 newStyledString。
   private applyStyledText(): void {
     if (!this.textMounted) {
       return
@@ -860,16 +899,11 @@ export struct SujianEditor {
       this.newStyledString = null
       return
     }
-    const config: EditorStyleConfig = {
-      fontSize: this.currentSnapshot.fontSize,
-      lineSpacingMultiplier: this.currentSnapshot.lineSpacingMultiplier,
-      autoIndentEnabled: this.currentSnapshot.autoIndentEnabled,
-      autoIndentWidth: this.currentSnapshot.autoIndentWidth,
+    // newStyledString 已在 onPresentationUpdateChanged 中构造
+    // 这里只负责把 StyledString 写入主 Text 的 TextController
+    if (this.newStyledString !== null) {
+      this.textController.setStyledString(this.newStyledString)
     }
-    const styled = EditorTextStyleProjector.projectToStyledString(this.currentSnapshot.text, config)
-    // Issue #879 复核评论修复：保存新 StyledString 引用，供运动层 MotionTextOverlayBuilder 使用。
-    this.newStyledString = styled
-    this.textController.setStyledString(styled)
   }
 
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
