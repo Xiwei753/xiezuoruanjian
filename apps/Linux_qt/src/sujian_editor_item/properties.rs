@@ -59,6 +59,23 @@ impl SujianEditorItem {
         self.emit_content_changed();
     }
 
+    /// Start a new document session regardless of whether its canonical text is
+    /// equal to the currently displayed chapter. Chapter identity is tracked by
+    /// QML project/volume/chapter ids; text equality is not document identity.
+    pub(crate) fn load_document_text(&mut self, text: QString) {
+        let normalized = normalize_plain_text(&text.to_string());
+        // Reset before loading so no frame or pending transition from the previous
+        // document can become the source for this chapter's canonical layout.
+        self.reset_document_visual_state();
+        let _ = self.pipeline.load_text(normalized, 0);
+        self.pipeline.composition_mut().clear();
+        // `load_text(..., 0)` collapses the Core selection at the new document's start.
+        self.cursor_ctrl.animation = None;
+        self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
+        self.emit_content_changed();
+    }
+
     pub(crate) fn reload_plain_text(&mut self, text: QString) {
         let normalized = normalize_plain_text(&text.to_string());
         if self.pipeline.committed_text() == normalized {

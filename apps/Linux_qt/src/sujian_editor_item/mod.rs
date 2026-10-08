@@ -399,6 +399,10 @@ pub struct SujianEditorItem {
     get_plain_text: qt_method!(fn(&self) -> QString),
     #[allow(dead_code)]
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
+    /// Issue #853: QML uses this only when the document identity changes; it
+    /// always begins a fresh visual session, even when the canonical text matches.
+    #[allow(dead_code)]
+    load_document_text: qt_method!(fn(&mut self, text: QString)),
     #[allow(dead_code)]
     reload_plain_text: qt_method!(fn(&mut self, text: QString)),
     #[allow(dead_code)]
@@ -607,6 +611,7 @@ impl Default for SujianEditorItem {
 
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
+            load_document_text: Default::default(),
             reload_plain_text: Default::default(),
             clear_undo_stack: Default::default(),
             insert_text: Default::default(),

@@ -346,11 +346,15 @@ QtObject {
 
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
-        var isReload = (cId === controller.chapterId && pId === controller.projectId);
+        // Document identity is the complete project/volume/chapter tuple. A
+        // different chapter can have the same canonical text (including empty).
+        var isReload = (pId === controller.projectId
+                && vId === controller.volumeId
+                && cId === controller.chapterId);
         if (isReload) {
             targetEditorItem.reload_plain_text(content);
         } else {
-            targetEditorItem.set_plain_text(content);
+            targetEditorItem.load_document_text(content);
             targetEditorItem.clear_undo_stack();
         }
 
@@ -371,7 +375,7 @@ QtObject {
         isLoadingChapter = true;
         try {
             if (targetEditorItem) {
-                targetEditorItem.set_plain_text("");
+                targetEditorItem.load_document_text("");
                 targetEditorItem.clear_undo_stack();
             }
             projectId = "";
