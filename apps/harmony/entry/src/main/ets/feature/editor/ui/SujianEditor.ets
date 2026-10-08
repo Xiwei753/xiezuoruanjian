@@ -112,7 +112,12 @@ export struct SujianEditor {
   // Issue #879：运动协调器——接收编辑更新，生成运动规划，输出视觉帧。
   private motionCoordinator: EditorMotionCoordinator = new EditorMotionCoordinator()
   // Issue #879：当前视觉帧——描述某一时刻的完整视觉状态（光标位置、静态/运动层字形范围）。
-  @State private visualFrame: EditorVisualFrame | null = null
+  // Issue #879 复核评论修复（问题1）：拆分为 displayedVisualFrame 和 candidateVisualFrame。
+  // displayedVisualFrame 唯一负责当前可见的运动窗口、光标、静态裁切。
+  // candidateVisualFrame 只用于后台准备新 Text 源——候选窗口在同一 ForEach 中以 opacity 0 渲染，
+  // 候选源全 ready 后原子提交（displayedVisualFrame = candidateVisualFrame）。
+  @State private displayedVisualFrame: EditorVisualFrame | null = null
+  @State private candidateVisualFrame: EditorVisualFrame | null = null
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 替换 animateTo + @Watch。
   // animateTo 改的是 UI 状态目标值，@Watch 只看状态赋值，不会把渲染层每帧插值值回写。
   // AnimatorResult.onFrame(progress) 是 ArkUI 渲染层逐帧回调，每帧同步 visualFrame。
@@ -170,7 +175,7 @@ export struct SujianEditor {
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
   private motionSourcePool: EditorMotionSourcePool = new EditorMotionSourcePool()
   // Issue #879 最新复核评论修复（问题3）：窗口级 ComponentObserver 管理——
-  // 每个 clusterId 对应一个独立的 ComponentObserver，监听运动窗口 Text 的 layout 事件。
+  // 每个 renderNodeKey 对应一个独立的 ComponentObserver，监听运动窗口 Text 的 layout 事件。
   // @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
   // 让 SujianEditor 创建 observer，layout 回调中调用 markWindowLayoutReady + markWindowMounted。
   // Text.onDisAppear 中通过 onWindowDisappear 回调通知 SujianEditor 清理 observer 和窗口状态。
@@ -357,6 +362,8 @@ export struct SujianEditor {
     // Issue #879 本轮复核评论修复（问题6）：用 stopActiveAnimation 统一停止动画。
     // 先增 generation 使旧 animator 的 onFrame/onFinish 回调失效，再 cancel。
     this.stopActiveAnimation()
+    // Issue #879 复核评论修复（问题1）：清空候选帧。
+    this.candidateVisualFrame = null
     // Issue #879 复核评论修复（问题3）：清空运动源池。
     this.motionSourcePool.clear()
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
@@ -645,7 +652,8 @@ export struct SujianEditor {
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
-      this.visualFrame = null
+      this.displayedVisualFrame = null
+      this.candidateVisualFrame = null
       this.pendingPresentationUpdates = []
       this.previousLayout = []
       // Issue #879 复核评论修复（问题3）：会话切换时清空 styledStringByToken、consumedTokens、pendingLayoutRequest。
@@ -824,10 +832,11 @@ export struct SujianEditor {
     // Issue #879 本轮复核评论修复（问题4）：步骤4——保存后台排版的行布局。
     this.committedLineLayouts = lineLayouts
 
-    // Issue #879 本轮复核评论修复（问题4）：步骤5——生成候选 RenderPlan，设置 visualFrame。
-    // visualFrame 被设置为候选 plan 的起始帧，ForEach 会创建运动窗口组件。
-    // 这些组件会挂载、绑定 TextController、等待 layout 回调。
-    this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
+    // Issue #879 复核评论修复（问题1）：步骤5——生成候选 RenderPlan，设置 candidateVisualFrame。
+    // candidateVisualFrame 只用于后台准备新 Text 源——候选窗口在同一 ForEach 中以 opacity 0 渲染，
+    // 参与布局但不可见。displayedVisualFrame 保持不变，继续驱动当前可见的运动窗口、光标和静态裁切。
+    // 候选窗口 layoutReady 后原子提交（displayedVisualFrame = candidateVisualFrame）。
+    this.candidateVisualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,
       this.currentSnapshot,
@@ -851,13 +860,14 @@ export struct SujianEditor {
       newStyledString: this.newStyledString,
     } as PendingDisplayData
 
-    // Issue #879 本轮复核评论修复（问题4）：步骤8——根据动画状态决定执行路径。
+    // Issue #879 复核评论修复（问题1）：步骤8——根据动画状态决定执行路径。
     if (this.motionCoordinator.isAnimating()) {
       const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
       if (durationMs <= 0) {
         // 动画时长为 0（动画被禁用）——直接执行显示切换并跳到终态
         this.executeDisplaySwitch()
-        this.visualFrame = this.motionCoordinator.finishMotion()
+        this.displayedVisualFrame = this.motionCoordinator.finishMotion()
+        this.candidateVisualFrame = null
         this.isMotionAnimating = false
         this.updateStaticClipCommands()
       } else if (this.allMotionWindowsReady()) {
@@ -877,11 +887,15 @@ export struct SujianEditor {
     this.styledStringByToken.delete(token)
   }
 
-  // Issue #879 本轮复核评论修复（问题4）：两阶段发布——执行显示切换。
+  // Issue #879 复核评论修复（问题1/4）：两阶段发布——执行显示切换 + 原子提交候选帧。
   // 在运动窗口 layoutReady 之后（或无动画时），统一切换主 Text 内容、静态遮罩、
   // displayed 版本字段和 currentSnapshot。
   // 从 pendingDisplayData 取出暂存的数据，更新所有 displayed 版本字段，
   // 写入新 StyledString 到主 Text，更新静态裁切 path，清空 pendingPresentationUpdates。
+  // Issue #879 复核评论修复（问题1）：原子提交候选帧——
+  // displayedVisualFrame = candidateVisualFrame，candidateVisualFrame = null。
+  // 提交后 ForEach 中原候选窗口 visible 从 false 变为 true（因为现在它们属于 displayedVisualFrame），
+  // 旧 displayed 窗口被移除（renderNodeKey 不同）。
   private executeDisplaySwitch(): void {
     if (this.pendingDisplayData === null) {
       return
@@ -896,6 +910,15 @@ export struct SujianEditor {
     this.displayedPresentation = data.latestUpdate
 
     // currentSnapshot 已在 onPendingLayoutReady 中更新为新版本，这里保持不变
+
+    // Issue #879 复核评论修复（问题1）：原子提交候选帧——
+    // displayedVisualFrame 接管 candidateVisualFrame，candidateVisualFrame 清空。
+    // ForEach 中原候选窗口的 renderNodeKey 与新 displayedVisualFrame 的 renderNodeKey 相同，
+    // 不会被重建——只更新 visible 从 false 到 true、clipRect 和 position。
+    if (this.candidateVisualFrame !== null) {
+      this.displayedVisualFrame = this.candidateVisualFrame
+      this.candidateVisualFrame = null
+    }
 
     // 写入新 StyledString 到主 Text
     this.refreshRender()
@@ -912,14 +935,16 @@ export struct SujianEditor {
   // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
   // Issue #879 复核评论修复（问题4）：池所有权绑定到当前显示帧实际使用的源——
   // 不再被任何窗口引用且不属于 displayed/pending 版本的源立即标记释放并清理。
+  // Issue #879 复核评论修复（问题1）：使用 candidateVisualFrame 准备运动源——
+  // candidateVisualFrame 是后台准备的候选帧，其窗口需要创建源并参与布局。
   private prepareMotionSources(): void {
-    if (this.visualFrame === null || !this.visualFrame.isAnimating) {
+    if (this.candidateVisualFrame === null || !this.candidateVisualFrame.isAnimating) {
       return
     }
     // Issue #879 复核评论修复（问题4）：释放不再被任何窗口引用且不属于 displayed/pending 版本的源。
-    // 获取当前 visualFrame 的 motionGlyphWindows 中所有 runId
+    // 获取 candidateVisualFrame 的 motionGlyphWindows 中所有 runId
     const activeRunIds: Set<string> = new Set()
-    const windows = this.visualFrame.motionGlyphWindows
+    const windows = this.candidateVisualFrame.motionGlyphWindows
     for (let i = 0; i < windows.length; i++) {
       activeRunIds.add(windows[i].runId)
     }
@@ -944,29 +969,31 @@ export struct SujianEditor {
   }
 
   // 预匹配运动窗口与源——在 build() 之前调用，避免在 @Builder 中做匹配（ArkUI 限制）。
-  // ForEach key 基于 window.clusterId（稳定身份），而非 `${runId}-${index}`（数组序号）。
+  // ForEach key 基于 window.renderNodeKey（稳定身份），而非 `${runId}-${index}`（数组序号）。
   // Issue #879 最新复核评论修复（问题3）：
-  // - 从 motionSourcePool.getOrCreateWindowState(clusterId) 读取 mounted/layoutReady/textController，
+  // - 从 motionSourcePool.getOrCreateWindowState(renderNodeKey) 读取 mounted/layoutReady/textController，
   //   而非从 source.mounted/source.layoutReady 读取（这些字段已从 MotionSourceEntry 移除）。
   // - 设置 onWindowLayoutReady 和 onWindowDisappear 回调：
-  //   onWindowLayoutReady(clusterId) → SujianEditor 创建 ComponentObserver 监听 layout 事件，
+  //   onWindowLayoutReady(renderNodeKey) → SujianEditor 创建 ComponentObserver 监听 layout 事件，
   //     layout 回调中调用 markWindowLayoutReady + markWindowMounted。
-  //   onWindowDisappear(clusterId) → SujianEditor 清理 ComponentObserver 和窗口状态。
+  //   onWindowDisappear(renderNodeKey) → SujianEditor 清理 ComponentObserver 和窗口状态。
   // - TextController 从 windowState.textController 获取（而非从 motionWindowControllers Map）。
+  // Issue #879 复核评论修复（问题1）：buildMotionWindowSources 构建可见窗口源（visible=true），
+  // buildCandidateMotionWindowSources 构建候选窗口源（visible=false，opacity 0 参与布局）。
+  // 两者合并后传给 MotionTextOverlayBuilder 的同一 ForEach——候选窗口 ready 后原子提交时
+  // visible 从 false 变为 true，ForEach 不重建组件（key 不变），只更新 opacity。
   private buildMotionWindowSources(): MotionWindowSource[] {
-    if (this.visualFrame === null || !this.visualFrame.isAnimating) {
+    if (this.displayedVisualFrame === null || !this.displayedVisualFrame.isAnimating) {
       return []
     }
-    const clipRects = EditorMotionLayer.buildAllClipRects(this.visualFrame)
+    const clipRects = EditorMotionLayer.buildAllClipRects(this.displayedVisualFrame)
     const result: MotionWindowSource[] = []
-    const windows = this.visualFrame.motionGlyphWindows
+    const windows = this.displayedVisualFrame.motionGlyphWindows
     for (let i = 0; i < windows.length; i++) {
       const source = this.motionSourcePool.getSource(windows[i].runId)
       if (source !== undefined) {
-        // Issue #879 最新复核评论修复（问题3）：从窗口级状态读取 textController/mounted/layoutReady——
-        // MotionSourceEntry 已不再保存这些字段，它们移到了 MotionWindowState（按 clusterId 管理）。
-        const clusterId = windows[i].clusterId
-        const windowState = this.motionSourcePool.getOrCreateWindowState(clusterId)
+        const renderNodeKey = windows[i].renderNodeKey
+        const windowState = this.motionSourcePool.getOrCreateWindowState(renderNodeKey)
         result.push({
           window: windows[i],
           source: source,
@@ -974,19 +1001,13 @@ export struct SujianEditor {
           textController: windowState.textController,
           mounted: windowState.mounted,
           layoutReady: windowState.layoutReady,
-          // Issue #879 最新复核评论修复（问题3）：
-          // onWindowLayoutReady：Text.onAppear 中调用，通知 SujianEditor 为本窗口创建 ComponentObserver。
-          // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
-          // 才调用 markWindowLayoutReady(clusterId) + markWindowMounted(clusterId)。
-          onWindowLayoutReady: (cid: string): void => {
-            this.attachWindowLayoutObserver(cid)
+          visible: true,
+          onWindowLayoutReady: (rnKey: string): void => {
+            this.attachWindowLayoutObserver(rnKey)
           },
-          // Issue #879 最新复核评论修复（问题3）：
-          // onWindowDisappear：Text.onDisAppear 中调用，通知 SujianEditor 清理本窗口状态。
-          // 父组件调用 releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
-          onWindowDisappear: (cid: string): void => {
-            this.detachWindowLayoutObserver(cid)
-            this.motionSourcePool.releaseWindowState(cid)
+          onWindowDisappear: (rnKey: string): void => {
+            this.detachWindowLayoutObserver(rnKey)
+            this.motionSourcePool.releaseWindowState(rnKey)
           }
         })
       }
@@ -994,22 +1015,67 @@ export struct SujianEditor {
     return result
   }
 
-  // Issue #879 最新复核评论修复（问题3）：为运动窗口创建 ComponentObserver 监听 layout 事件。
+  // Issue #879 复核评论修复（问题1）：构建候选窗口源（visible=false，opacity 0）。
+  // 候选窗口在同一 ForEach 中渲染，参与布局但不可见。
+  // 候选窗口 layoutReady 后原子提交时 visible 变为 true。
+  private buildCandidateMotionWindowSources(): MotionWindowSource[] {
+    if (this.candidateVisualFrame === null || !this.candidateVisualFrame.isAnimating) {
+      return []
+    }
+    const clipRects = EditorMotionLayer.buildAllClipRects(this.candidateVisualFrame)
+    const result: MotionWindowSource[] = []
+    const windows = this.candidateVisualFrame.motionGlyphWindows
+    for (let i = 0; i < windows.length; i++) {
+      const source = this.motionSourcePool.getSource(windows[i].runId)
+      if (source !== undefined) {
+        const renderNodeKey = windows[i].renderNodeKey
+        const windowState = this.motionSourcePool.getOrCreateWindowState(renderNodeKey)
+        result.push({
+          window: windows[i],
+          source: source,
+          clipRect: clipRects[i],
+          textController: windowState.textController,
+          mounted: windowState.mounted,
+          layoutReady: windowState.layoutReady,
+          visible: false,
+          onWindowLayoutReady: (rnKey: string): void => {
+            this.attachWindowLayoutObserver(rnKey)
+          },
+          onWindowDisappear: (rnKey: string): void => {
+            this.detachWindowLayoutObserver(rnKey)
+            this.motionSourcePool.releaseWindowState(rnKey)
+          }
+        })
+      }
+    }
+    return result
+  }
+
+  // Issue #879 复核评论修复（问题1）：合并可见窗口源和候选窗口源。
+  // ForEach key 是 renderNodeKey，displayed 和 candidate 的 renderNodeKey 不同
+  // （sourceRevision 不同），不会冲突。候选窗口 ready 后原子提交时
+  // displayedVisualFrame = candidateVisualFrame，candidateVisualFrame = null，
+  // 旧 displayed 窗口被移除，原 candidate 窗口 visible 变为 true。
+  private buildAllMotionWindowSources(): MotionWindowSource[] {
+    return [...this.buildMotionWindowSources(), ...this.buildCandidateMotionWindowSources()]
+  }
+
+  // Issue #879 本轮复核评论修复（问题2）：为运动窗口创建 ComponentObserver 监听 layout 事件。
   // @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调让 SujianEditor 创建。
-  // ComponentObserver 通过组件 id（`motion-window-${clusterId}`）监听 layout 事件，
+  // ComponentObserver 通过组件 id（`motion-window-${renderNodeKey}`）监听 layout 事件，
   // layout 回调中调用 markWindowLayoutReady + markWindowMounted，确认布局真正完成。
-  // 不再用 setTimeout 充当绘制完成证据——用真实 ComponentObserver('layout') 回调。
-  private attachWindowLayoutObserver(clusterId: string): void {
-    if (this.windowLayoutObservers.has(clusterId)) {
+  // renderNodeKey 包含 sourceKind + sourceRevision，切源时创建新 observer 和窗口状态。
+  private attachWindowLayoutObserver(renderNodeKey: string): void {
+    if (this.windowLayoutObservers.has(renderNodeKey)) {
       return
     }
-    const componentId = `motion-window-${clusterId}`
+    const componentId = `motion-window-${renderNodeKey}`
     const observer = this.getUIContext()
       .getUIInspector()
       .createComponentObserver(componentId)
     const callback = (): void => {
-      this.motionSourcePool.markWindowLayoutReady(clusterId)
-      this.motionSourcePool.markWindowMounted(clusterId)
+      this.motionSourcePool.markWindowLayoutReady(renderNodeKey)
+      this.motionSourcePool.markWindowMounted(renderNodeKey)
       // Issue #879 最新复核评论修复（问题3）：所有窗口 ready 后启动 pending 动画。
       // 窗口未 layoutReady 时 startMotionAnimation 暂存动画时长不启动 animator，
       // 等所有窗口 layout 回调后再启动——旧画面在新窗口未准备好前继续保持显示。
@@ -1024,27 +1090,27 @@ export struct SujianEditor {
       }
     }
     observer.on('layout', callback)
-    this.windowLayoutObservers.set(clusterId, observer)
-    this.windowLayoutCallbacks.set(clusterId, callback)
+    this.windowLayoutObservers.set(renderNodeKey, observer)
+    this.windowLayoutCallbacks.set(renderNodeKey, callback)
   }
 
-  // Issue #879 最新复核评论修复（问题3）：清理运动窗口的 ComponentObserver。
+  // Issue #879 本轮复核评论修复（问题2）：清理运动窗口的 ComponentObserver。
   // Text.onDisAppear 中调用——窗口已从组件树移除，observer 不再需要。
-  private detachWindowLayoutObserver(clusterId: string): void {
-    const observer = this.windowLayoutObservers.get(clusterId)
-    const callback = this.windowLayoutCallbacks.get(clusterId)
+  private detachWindowLayoutObserver(renderNodeKey: string): void {
+    const observer = this.windowLayoutObservers.get(renderNodeKey)
+    const callback = this.windowLayoutCallbacks.get(renderNodeKey)
     if (observer !== undefined && callback !== undefined) {
       observer.off('layout', callback)
     }
-    this.windowLayoutObservers.delete(clusterId)
-    this.windowLayoutCallbacks.delete(clusterId)
+    this.windowLayoutObservers.delete(renderNodeKey)
+    this.windowLayoutCallbacks.delete(renderNodeKey)
   }
 
   // Issue #879 最新复核评论修复（问题3）：清理所有窗口级 ComponentObserver。
   // 会话切换、编辑器销毁时调用——释放所有 observer 和回调。
   private cleanupAllWindowsObservers(): void {
-    this.windowLayoutObservers.forEach((observer: inspector.ComponentObserver, clusterId: string) => {
-      const callback = this.windowLayoutCallbacks.get(clusterId)
+    this.windowLayoutObservers.forEach((observer: inspector.ComponentObserver, renderNodeKey: string) => {
+      const callback = this.windowLayoutCallbacks.get(renderNodeKey)
       if (callback !== undefined) {
         observer.off('layout', callback)
       }
@@ -1053,15 +1119,16 @@ export struct SujianEditor {
     this.windowLayoutCallbacks.clear()
   }
 
-  // Issue #879 最新复核评论修复（问题3）：检查所有运动窗口是否已 layoutReady。
+  // Issue #879 复核评论修复（问题1）：检查候选帧的运动窗口是否已 layoutReady。
   // 启动动画前检查——未 ready 的窗口保持旧画面显示，等所有窗口 ready 后才启动动画。
+  // 使用 candidateVisualFrame 而非 displayedVisualFrame——候选窗口是正在准备的新窗口。
   private allMotionWindowsReady(): boolean {
-    if (this.visualFrame === null || !this.visualFrame.isAnimating) {
+    if (this.candidateVisualFrame === null || !this.candidateVisualFrame.isAnimating) {
       return true
     }
-    const windows = this.visualFrame.motionGlyphWindows
+    const windows = this.candidateVisualFrame.motionGlyphWindows
     for (let i = 0; i < windows.length; i++) {
-      if (!this.motionSourcePool.isWindowLayoutReady(windows[i].clusterId)) {
+      if (!this.motionSourcePool.isWindowLayoutReady(windows[i].renderNodeKey)) {
         return false
       }
     }
@@ -1126,9 +1193,11 @@ export struct SujianEditor {
   // 只有动画中且有 motion owner 时才计算遮罩 path。
   // 初始挂载阶段（contentWidth/contentHeight 为 0）也不裁切——用足够大的矩形。
   // 不再用空字符串——空字符串在内容尺寸为零时会构建宽高为 0 的矩形。
+  // Issue #879 复核评论修复（问题1）：使用 displayedVisualFrame——
+  // 静态裁切只跟随当前可见帧，不跟随候选帧。
   private updateStaticClipCommands(): void {
-    if (this.visualFrame === null || !this.visualFrame.isAnimating ||
-        !EditorMotionLayer.needsStaticMask(this.visualFrame)) {
+    if (this.displayedVisualFrame === null || !this.displayedVisualFrame.isAnimating ||
+        !EditorMotionLayer.needsStaticMask(this.displayedVisualFrame)) {
       // 非动画或无 motion owner：全尺寸矩形（不裁切）
       if (this.contentWidth > 0 && this.contentHeight > 0) {
         this.staticClipCommands =
@@ -1142,7 +1211,7 @@ export struct SujianEditor {
       // renderResult.lines（refreshRender 后可能为空），确保静态遮罩有正确的行几何。
       this.staticClipCommands = EditorMotionLayer.buildStaticMaskPath(
         EditorMotionLayer.computeStaticMaskRects(
-          this.visualFrame,
+          this.displayedVisualFrame,
           this.committedLineLayouts,
           this.contentWidth,
           this.contentHeight
@@ -1218,7 +1287,8 @@ export struct SujianEditor {
   private startMotionAnimation(durationMs: number): void {
     if (durationMs <= 0) {
       // 无动画时长，直接跳到终态
-      this.visualFrame = this.motionCoordinator.finishMotion()
+      this.displayedVisualFrame = this.motionCoordinator.finishMotion()
+      this.candidateVisualFrame = null
       this.isMotionAnimating = false
       return
     }
@@ -1264,7 +1334,7 @@ export struct SujianEditor {
       if (currentGen !== this.motionGeneration) {
         return // 旧 animator 回调，忽略
       }
-      this.visualFrame = this.motionCoordinator.advance(progress)
+      this.displayedVisualFrame = this.motionCoordinator.advance(progress)
       // Issue #879 本轮复核评论修复（问题3）：每帧更新主 Text 的静态裁切 path。
       this.updateStaticClipCommands()
     }
@@ -1273,7 +1343,7 @@ export struct SujianEditor {
         return
       }
       this.isMotionAnimating = false
-      this.visualFrame = this.motionCoordinator.finishMotion()
+      this.displayedVisualFrame = this.motionCoordinator.finishMotion()
       // Issue #879 复核评论修复（问题3）：动画结束后更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
       // Issue #879 复核评论修复（问题4）：动画结束后所有运动窗口消失，
@@ -2039,16 +2109,18 @@ export struct SujianEditor {
             commands: this.staticClipCommands
           }))
 
-          // 3. motion layer — Issue #879 复核评论修复（问题3）：运动层用稳定源池。
-          // 当 visualFrame.isAnimating 且 needsMotionLayer 时，渲染运动层 Text + clipShape。
+          // 3. motion layer — Issue #879 复核评论修复（问题1）：运动层同时渲染可见窗口和候选窗口。
+          // displayedVisualFrame 的窗口 visible=true（正常显示），
+          // candidateVisualFrame 的窗口 visible=false（opacity 0，参与布局但不可见）。
+          // 候选窗口 layoutReady 后原子提交时 visible 变为 true。
           // 吐字：新字源完整排版（newStyledString），clipShape 限制在 [x0, front] 裁切窗口。
           // 吞字：旧字源完整排版（oldStyledString），clipShape 限制在 [x0, front] 裁切窗口。
-          // 源池用 sourceRevision + stableRunId 保存 StyledString/TextController，
-          // ForEach key 基于稳定 run 身份（runId），而非一次性自增事务编号。
-          if (this.visualFrame !== null && this.visualFrame.isAnimating &&
-              EditorMotionLayer.needsMotionLayer(this.visualFrame)) {
+          if ((this.displayedVisualFrame !== null && this.displayedVisualFrame.isAnimating &&
+               EditorMotionLayer.needsMotionLayer(this.displayedVisualFrame)) ||
+              (this.candidateVisualFrame !== null && this.candidateVisualFrame.isAnimating &&
+               EditorMotionLayer.needsMotionLayer(this.candidateVisualFrame))) {
             MotionTextOverlayBuilder({
-              motionWindowSources: this.buildMotionWindowSources(),
+              motionWindowSources: this.buildAllMotionWindowSources(),
               textWidth: this.contentWidth
             })
           }
@@ -2063,14 +2135,16 @@ export struct SujianEditor {
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
 
           // 5. caret（最上层）— Issue #879：单一视觉光标。
-          // 动画中：光标位置由 visualFrame 决定（画在裁切前沿 front）。
+          // 动画中：光标位置由 displayedVisualFrame 决定（画在裁切前沿 front）。
           // 非动画：光标画在静态位置（caretRect）。
-          if (this.visualFrame !== null && this.visualFrame.isAnimating) {
+          // Issue #879 复核评论修复（问题1）：使用 displayedVisualFrame 而非 candidateVisualFrame——
+          // 光标只跟随当前可见帧，不跟随候选帧。
+          if (this.displayedVisualFrame !== null && this.displayedVisualFrame.isAnimating) {
             // 动画中：光标位置由运动协调器的视觉帧决定
             Rect()
-              .position({ x: this.visualFrame.caretX, y: this.visualFrame.caretY })
+              .position({ x: this.displayedVisualFrame.caretX, y: this.displayedVisualFrame.caretY })
               .width(2)
-              .height(this.visualFrame.caretHeight)
+              .height(this.displayedVisualFrame.caretHeight)
               .fill(this.caretColor)
           } else if (this.caretRect) {
             // 非动画：光标在静态位置

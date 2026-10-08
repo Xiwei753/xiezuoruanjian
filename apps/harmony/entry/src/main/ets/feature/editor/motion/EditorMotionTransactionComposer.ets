@@ -155,6 +155,47 @@ export class EditorMotionTransactionComposer {
       const er = editResults[i]
       const patches = er.displayPatches
 
+      // Issue #879 本轮复核评论修复（问题4）：逐笔验证 patch 的 UTF-8 边界合法性。
+      // replaceByteStart/End 必须是当前版文本的合法 UTF-8 byte offset，
+      // 不能超过文本总字节长度，不能落在多字节字符的中间。
+      const currentByteLen = EditorMotionTransactionComposer.utf8ByteLengthLocal(currentText)
+      for (let p = 0; p < patches.length; p++) {
+        const patch = patches[p]
+        if (patch.replaceByteStart > currentByteLen) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) > 当前文本字节长度(${currentByteLen})`
+          }
+        }
+        if (patch.replaceByteEndExclusive > currentByteLen) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) > 当前文本字节长度(${currentByteLen})`
+          }
+        }
+        // 验证 replaceByteStart/End 是合法 UTF-8 字符边界
+        if (!EditorMotionTransactionComposer.isValidUtf8Boundary(currentText, patch.replaceByteStart)) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) 不是合法 UTF-8 字符边界`
+          }
+        }
+        if (!EditorMotionTransactionComposer.isValidUtf8Boundary(currentText, patch.replaceByteEndExclusive)) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) 不是合法 UTF-8 字符边界`
+          }
+        }
+      }
+
       // 用 applyPatchesToText 构建中间文本（用于最终验证）
       const nextText = EditorMotionTransactionComposer.applyPatchesToText(currentText, patches)
 
@@ -172,7 +213,7 @@ export class EditorMotionTransactionComposer {
       currentText = nextText
     }
 
-    // 3. 验证最终文本
+    // 3. 验证最终文本（applyPatchesToText 的结果）
     if (currentText !== newText) {
       return {
         displayPatches: [],
@@ -182,14 +223,77 @@ export class EditorMotionTransactionComposer {
       }
     }
 
+    // Issue #879 本轮复核评论修复（问题4）：验证 Segment 表重建的文本与 newText 一致。
+    // currentText 通过 applyPatchesToText 独立计算，但文字动画依赖的是 Segment 输出。
+    // 必须确保 segments 重建出的正文也相同——防止 Segment 表与 currentText 静默分歧。
+    const segmentRebuiltText = EditorMotionTransactionComposer.rebuildTextFromSegments(segments, oldText)
+    if (segmentRebuiltText !== newText) {
+      return {
+        displayPatches: [],
+        offsetMap: undefined,
+        isValid: false,
+        validationError: 'Segment 表重建文本与 newText 不一致'
+      }
+    }
+
     // 4. 生成 displayPatches
     const oldTextByteLength = EditorMotionTransactionComposer.utf8ByteLengthLocal(oldText)
     const displayPatches = EditorMotionTransactionComposer.generateDisplayPatches(
       segments, oldTextByteLength, oldRevision, newRevision
     )
 
+    // Issue #879 本轮复核评论修复（问题4）：验证 displayPatches 从 oldText 重放后 === newText。
+    // displayPatches 的 replace 范围用最初显示正文坐标，inserted 范围用最终正文坐标。
+    // 重放验证确保生成的 patches 可以从 oldText 正确重放到 finalText。
+    const replayedText = EditorMotionTransactionComposer.replayDisplayPatches(displayPatches, oldText)
+    if (replayedText !== newText) {
+      return {
+        displayPatches: [],
+        offsetMap: undefined,
+        isValid: false,
+        validationError: 'displayPatches 重放结果与 newText 不一致'
+      }
+    }
+
     // 5. 生成 offsetMap
     const offsetMap = EditorMotionTransactionComposer.generateOffsetMap(segments)
+
+    // Issue #879 本轮复核评论修复（问题4）：验证 offsetMap 条目的 UTF-8 边界和字符内容。
+    // 每个 OffsetMapEntry 的 oldByteOffset/newByteOffset 必须是合法 UTF-8 字符边界，
+    // 且 oldText[oldByteOffset, oldByteOffset+length) 的字符内容应与
+    // newText[newByteOffset, newByteOffset+length) 的字符内容一致（幸存字符不变）。
+    if (offsetMap !== undefined) {
+      for (let e = 0; e < offsetMap.entries.length; e++) {
+        const entry = offsetMap.entries[e]
+        if (!EditorMotionTransactionComposer.isValidUtf8Boundary(oldText, entry.oldByteOffset)) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `offsetMap.entries[${e}].oldByteOffset(${entry.oldByteOffset}) 不是合法 UTF-8 字符边界`
+          }
+        }
+        if (!EditorMotionTransactionComposer.isValidUtf8Boundary(newText, entry.newByteOffset)) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `offsetMap.entries[${e}].newByteOffset(${entry.newByteOffset}) 不是合法 UTF-8 字符边界`
+          }
+        }
+        // 验证幸存字符内容一致：oldText 和 newText 在对应范围内的字符应相同
+        const oldSlice = EditorMotionTransactionComposer.utf8Slice(oldText, entry.oldByteOffset, entry.length)
+        const newSlice = EditorMotionTransactionComposer.utf8Slice(newText, entry.newByteOffset, entry.length)
+        if (oldSlice !== newSlice) {
+          return {
+            displayPatches: [],
+            offsetMap: undefined,
+            isValid: false,
+            validationError: `offsetMap.entries[${e}] 幸存字符内容不一致：old="${oldSlice}" new="${newSlice}"`
+          }
+        }
+      }
+    }
 
     return {
       displayPatches: displayPatches,
@@ -597,5 +701,107 @@ export class EditorMotionTransactionComposer {
       }
     }
     return byteLength
+  }
+
+  // ── Issue #879 本轮复核评论修复（问题4）：验证辅助方法 ──
+
+  /**
+   * 验证给定的 UTF-8 byte offset 是否是 text 中的合法字符边界。
+   *
+   * 合法字符边界意味着 offset 要么等于 0（文本开头），
+   * 要么等于文本的字节长度（文本末尾），
+   * 要么恰好落在一个完整 UTF-8 字符的起始位置。
+   * 不能落在多字节字符的中间字节上。
+   */
+  private static isValidUtf8Boundary(text: string, utf8Offset: number): boolean {
+    if (utf8Offset < 0) {
+      return false
+    }
+    if (utf8Offset === 0) {
+      return true
+    }
+    let bytePos = 0
+    for (let i = 0; i < text.length; i++) {
+      if (bytePos === utf8Offset) {
+        return true
+      }
+      const codePoint = text.codePointAt(i)!
+      if (codePoint <= 0x7F) {
+        bytePos += 1
+      } else if (codePoint <= 0x7FF) {
+        bytePos += 2
+      } else if (codePoint <= 0xFFFF) {
+        bytePos += 3
+      } else {
+        bytePos += 4
+        i++ // 跳过 surrogate pair 的第二个 code unit
+      }
+    }
+    return bytePos === utf8Offset
+  }
+
+  /**
+   * 从 Segment 表重建文本。
+   *
+   * origin=0 的 segment 从 oldText 中取 originalByteStart~originalByteEnd 的字符，
+   * origin=1 的 segment 直接取 text 字段。
+   * 重建结果应与 newText 一致——如果不一致说明 Segment 表有错误。
+   */
+  private static rebuildTextFromSegments(segments: Segment[], oldText: string): string {
+    let result = ''
+    for (const seg of segments) {
+      if (seg.origin === 0) {
+        // 从 oldText 中取对应范围的字符
+        const utf16Start = EditorMotionTransactionComposer.utf8ToUtf16Local(oldText, seg.originalByteStart)
+        const utf16End = EditorMotionTransactionComposer.utf8ToUtf16Local(oldText, seg.originalByteEnd)
+        result += oldText.substring(utf16Start, utf16End)
+      } else {
+        result += seg.text
+      }
+    }
+    return result
+  }
+
+  /**
+   * 从 oldText 重放 displayPatches，验证结果是否等于 expectedText。
+   *
+   * displayPatches 的 replaceByteStart/End 是 oldText 的 UTF-8 byte offset，
+   * insertedText 是插入的文本内容。
+   * 重放方式：oldText[0, replaceStart) + insertedText + oldText[replaceEnd, end)，
+   * 多个 patch 按顺序从左到右应用。
+   */
+  private static replayDisplayPatches(patches: DisplayPatch[], oldText: string): string {
+    // 按 replaceByteStart 排序
+    const sorted = patches.slice().sort((a: DisplayPatch, b: DisplayPatch): number =>
+      a.replaceByteStart - b.replaceByteStart
+    )
+
+    let result = ''
+    let lastUtf16End = 0
+
+    for (const patch of sorted) {
+      const replaceUtf16Start = EditorMotionTransactionComposer.utf8ToUtf16Local(oldText, patch.replaceByteStart)
+      const replaceUtf16End = EditorMotionTransactionComposer.utf8ToUtf16Local(oldText, patch.replaceByteEndExclusive)
+
+      result += oldText.substring(lastUtf16End, replaceUtf16Start)
+      result += patch.insertedText
+
+      lastUtf16End = replaceUtf16End
+    }
+
+    result += oldText.substring(lastUtf16End)
+    return result
+  }
+
+  /**
+   * 从 text 的指定 UTF-8 byte offset 开始，取 length 个字节的字符内容。
+   *
+   * 用于验证 offsetMap 中幸存字符的 old/new 内容是否一致。
+   * 返回对应的 UTF-16 子串。
+   */
+  private static utf8Slice(text: string, utf8ByteStart: number, utf8ByteLength: number): string {
+    const utf16Start = EditorMotionTransactionComposer.utf8ToUtf16Local(text, utf8ByteStart)
+    const utf16End = EditorMotionTransactionComposer.utf8ToUtf16Local(text, utf8ByteStart + utf8ByteLength)
+    return text.substring(utf16Start, utf16End)
   }
 }

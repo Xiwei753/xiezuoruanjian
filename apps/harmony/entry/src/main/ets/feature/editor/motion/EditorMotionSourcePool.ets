@@ -2,7 +2,7 @@
 //
 // Issue #879 最新复核评论修复（问题3）：
 // - 源池 sourceRevision 只保存可共享的 StyledString 内容（同一 revision 的内容确实一致）。
-// - TextController + mounted + layoutReady 状态放在与真实节点 1:1 的 clusterId 窗口条目中，
+// - TextController + mounted + layoutReady 状态放在与真实节点 1:1 的 renderNodeKey 窗口条目中，
 //   不再按 old/new-revision 归并——避免某一窗口先 mounted 后，后续同版本新窗口的
 //   item.mounted 从 source 读到 true，导致新 Text 的 onAppear 跳过 setStyledString 而空白。
 // - layoutReady 由真实 ComponentObserver('layout') 回调设置，不再用 setTimeout 充当证据。
@@ -23,7 +23,7 @@
  *
  * Issue #879 最新复核评论修复（问题3）：
  * MotionSourceEntry 只保存可共享的 StyledString 内容（同一 revision 的内容确实一致）。
- * TextController/mounted/layoutReady 移到 MotionWindowState（按 clusterId 管理）。
+ * TextController/mounted/layoutReady 移到 MotionWindowState（按 renderNodeKey 管理）。
  */
 export interface MotionSourceEntry {
   /** 稳定的 run 身份标识——基于 sourceKind + revision，不随事务自增 */
@@ -42,19 +42,19 @@ export interface MotionSourceEntry {
  * 窗口级状态——与真实节点 1:1 对应。
  *
  * Issue #879 最新复核评论修复（问题3）：
- * 每个 clusterId 对应一个独立的 ArkUI Text 节点，拥有自己的 TextController、
+ * 每个 renderNodeKey 对应一个独立的 ArkUI Text 节点，拥有自己的 TextController、
  * mounted 和 layoutReady 状态。不再按 old/new-revision 归并——
  * 避免某一窗口先 mounted 后，后续同版本新窗口从 source 读到 mounted=true，
  * 导致新 Text 的 onAppear 跳过 setStyledString 而空白。
  *
- * - clusterId：以 sourceKind + sourceRevision + utf16Start + utf16End 构造的稳定身份标识
+ * - renderNodeKey：以 sourceKind + sourceRevision + clusterId 构造的渲染节点身份标识
  * - textController：每个窗口独立的 TextController（ArkUI 不允许同一 Controller 绑定多个 Text）
  * - mounted：本窗口的 Text 是否已挂载（onAppear 已触发）
  * - layoutReady：本窗口的布局是否已完成（ComponentObserver 'layout' 回调已触发）
  */
 export interface MotionWindowState {
-  /** 窗口簇身份标识——与 MotionGlyphWindow.clusterId 对应 */
-  clusterId: string
+  /** 窗口渲染节点身份标识——与 MotionGlyphWindow.renderNodeKey 对应 */
+  renderNodeKey: string
   /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
   textController: TextController
   /** 本窗口的 Text 是否已挂载（onAppear 已触发） */
@@ -71,13 +71,13 @@ export interface MotionWindowState {
  *
  * Issue #879 最新复核评论修复（问题3）：
  * - sources：按 runId（sourceKind + revision）管理可共享的 StyledString 内容
- * - windowStates：按 clusterId 管理窗口级状态（TextController/mounted/layoutReady）
+ * - windowStates：按 renderNodeKey 管理窗口级状态（TextController/mounted/layoutReady）
  * - 同一 revision 的多个窗口共享同一个 source 的 StyledString，但各自有独立的窗口状态
  *
  * 使用方式：
  * 1. 运动开始时，调用 getOrCreateSource 获取或创建 old/new 源（可共享内容）。
  * 2. 为每个运动窗口调用 getOrCreateWindowState 获取或创建窗口级状态。
- * 3. ForEach key 使用 clusterId（稳定身份），确保同一窗口的 Text 常驻不重建。
+ * 3. ForEach key 使用 renderNodeKey（稳定身份），确保同一窗口的 Text 常驻不重建。
  * 4. Text.onAppear 中调用 markWindowMounted 标记本窗口已挂载。
  * 5. ComponentObserver 'layout' 回调中调用 markWindowLayoutReady 标记本窗口布局完成。
  * 6. 交棒完成后调用 markForRelease 标记旧源可释放，releaseMarkedSources 真正释放。
@@ -86,7 +86,7 @@ export interface MotionWindowState {
 export class EditorMotionSourcePool {
   /** 可共享的源内容——按 runId（sourceKind + revision）管理 */
   private sources: Map<string, MotionSourceEntry> = new Map()
-  /** 窗口级状态——按 clusterId 管理，与真实节点 1:1 对应 */
+  /** 窗口级状态——按 renderNodeKey 管理，与真实节点 1:1 对应 */
   private windowStates: Map<string, MotionWindowState> = new Map()
 
   // ── 源内容管理 ──
@@ -214,24 +214,24 @@ export class EditorMotionSourcePool {
    * 获取或创建窗口级状态。
    *
    * Issue #879 最新复核评论修复（问题3）：
-   * 每个 clusterId 对应一个独立的 ArkUI Text 节点，拥有自己的 TextController。
+   * 每个 renderNodeKey 对应一个独立的 ArkUI Text 节点，拥有自己的 TextController。
    * 同一 revision 的多个窗口共享同一个 source 的 StyledString，但各自有独立的窗口状态。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    * @returns 匹配的现有窗口状态或新创建的窗口状态
    */
-  getOrCreateWindowState(clusterId: string): MotionWindowState {
-    const existing = this.windowStates.get(clusterId)
+  getOrCreateWindowState(renderNodeKey: string): MotionWindowState {
+    const existing = this.windowStates.get(renderNodeKey)
     if (existing !== undefined) {
       return existing
     }
     const state: MotionWindowState = {
-      clusterId,
+      renderNodeKey,
       textController: new TextController(),
       mounted: false,
       layoutReady: false
     }
-    this.windowStates.set(clusterId, state)
+    this.windowStates.set(renderNodeKey, state)
     return state
   }
 
@@ -243,10 +243,10 @@ export class EditorMotionSourcePool {
    * 避免某一窗口先 mounted 后，后续同版本新窗口从 source 读到 mounted=true，
    * 导致新 Text 的 onAppear 跳过 setStyledString 而空白。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    */
-  markWindowMounted(clusterId: string): void {
-    const state = this.windowStates.get(clusterId)
+  markWindowMounted(renderNodeKey: string): void {
+    const state = this.windowStates.get(renderNodeKey)
     if (state !== undefined) {
       state.mounted = true
     }
@@ -259,10 +259,10 @@ export class EditorMotionSourcePool {
    * 由真实 ComponentObserver('layout') 回调调用，不再用 setTimeout 充当绘制完成证据。
    * ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后才标记 ready。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    */
-  markWindowLayoutReady(clusterId: string): void {
-    const state = this.windowStates.get(clusterId)
+  markWindowLayoutReady(renderNodeKey: string): void {
+    const state = this.windowStates.get(renderNodeKey)
     if (state !== undefined) {
       state.layoutReady = true
     }
@@ -271,11 +271,11 @@ export class EditorMotionSourcePool {
   /**
    * 查询本窗口是否布局已完成。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    * @returns layoutReady 状态；窗口状态不存在时返回 false
    */
-  isWindowLayoutReady(clusterId: string): boolean {
-    const state = this.windowStates.get(clusterId)
+  isWindowLayoutReady(renderNodeKey: string): boolean {
+    const state = this.windowStates.get(renderNodeKey)
     if (state !== undefined) {
       return state.layoutReady
     }
@@ -285,11 +285,11 @@ export class EditorMotionSourcePool {
   /**
    * 查询本窗口是否已挂载。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    * @returns mounted 状态；窗口状态不存在时返回 false
    */
-  isWindowMounted(clusterId: string): boolean {
-    const state = this.windowStates.get(clusterId)
+  isWindowMounted(renderNodeKey: string): boolean {
+    const state = this.windowStates.get(renderNodeKey)
     if (state !== undefined) {
       return state.mounted
     }
@@ -303,20 +303,20 @@ export class EditorMotionSourcePool {
    * Text.onDisAppear 中调用——清理本窗口的 TextController/mounted/layoutReady 状态。
    * 对应的 Text 组件已从组件树中移除，窗口状态不再需要。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    */
-  releaseWindowState(clusterId: string): void {
-    this.windowStates.delete(clusterId)
+  releaseWindowState(renderNodeKey: string): void {
+    this.windowStates.delete(renderNodeKey)
   }
 
   /**
    * 获取特定窗口状态。
    *
-   * @param clusterId 窗口簇身份标识
+   * @param renderNodeKey 窗口渲染节点身份标识
    * @returns 匹配的窗口状态，或 undefined（不存在）
    */
-  getWindowState(clusterId: string): MotionWindowState | undefined {
-    return this.windowStates.get(clusterId)
+  getWindowState(renderNodeKey: string): MotionWindowState | undefined {
+    return this.windowStates.get(renderNodeKey)
   }
 
   // ── 清理 ──

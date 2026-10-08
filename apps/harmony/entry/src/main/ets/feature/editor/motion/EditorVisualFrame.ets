@@ -187,6 +187,13 @@ export interface RetainedMove {
  *   不含 sourceKind，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
  * - currentClipLeft/Right：当前帧实际裁切窗口边界，作为下一动画起点而非整字初态 x0/x1。
  * - currentPositionX/Y：当前帧实际字形位置（含 offset），作为下一动画起点而非旧版整字初态位置。
+ *
+ * Issue #879 本轮复核评论修复（问题2）：
+ * - 新增 renderNodeKey 字段——分离 ForEach/TextController 管理和跨版本匹配。
+ *   renderNodeKey = sourceKind + '-' + sourceRevision + '-' + clusterId，
+ *   当字形源从 new-rN 变为 old-rN 时 renderNodeKey 改变，ForEach 创建新 Text 节点而非复用旧节点。
+ *   clusterId 只用于寻找上一帧相同字形的 clip/位置——跨版本匹配。
+ *   更换内容源时对应布局 ready 失效（新 renderNodeKey → 新窗口状态 → layoutReady=false）。
  */
 export interface MotionGlyphWindow {
   /** 字形来源：'old'（旧正文）或 'new'（新正文） */
@@ -221,6 +228,17 @@ export interface MotionGlyphWindow {
   sourceRevision: number
   /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（utf16Start + utf16End + textHash），不含 sourceKind，不依赖 sourceRevision */
   clusterId: string
+  /**
+   * 渲染节点身份标识——用于 ForEach key 和 TextController/窗口状态管理。
+   *
+   * Issue #879 本轮复核评论修复（问题2）：
+   * renderNodeKey = sourceKind + '-' + sourceRevision + '-' + clusterId。
+   * 当字形源从 new-rN 变为 old-rN 时 renderNodeKey 改变——ForEach 创建新 Text 节点而非复用旧节点。
+   * 这解决了"上一帧 new 字形变成下一笔 old 字形时 ForEach 复用同一 Text 节点，
+   * 但源已从 new-rN 切换为 old-rN，onAppear 不再触发，节点仍画原先的 StyledString"的问题。
+   * clusterId 只用于跨版本匹配（visibleWindowMap 查找），不用于 ForEach key。
+   */
+  renderNodeKey: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
   currentClipLeft: number
   /** 当前帧的裁切窗口右边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x1 */

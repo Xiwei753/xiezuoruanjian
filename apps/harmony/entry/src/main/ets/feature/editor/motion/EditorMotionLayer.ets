@@ -356,16 +356,23 @@ export interface MotionWindowSource {
   /** 布局是否已完成——从窗口级状态读取，而非从源池 source 读取 */
   layoutReady: boolean
   /**
+   * 窗口是否可见——Issue #879 复核评论修复（问题1）：
+   * displayedVisualFrame 的窗口 visible=true（正常显示），
+   * candidateVisualFrame 的窗口 visible=false（opacity 0，参与布局但不可见）。
+   * 候选窗口 layoutReady 后原子提交时 visible 变为 true。
+   */
+  visible: boolean
+  /**
    * 窗口布局就绪回调——Text.onAppear 中调用，通知父组件为本窗口创建 ComponentObserver。
-   * 父组件创建 observer 后，在 layout 回调中调用 motionSourcePool.markWindowLayoutReady(clusterId)。
+   * 父组件创建 observer 后，在 layout 回调中调用 motionSourcePool.markWindowLayoutReady(renderNodeKey)。
    * 替代旧的 onLayoutReady + setTimeout——用真实 ComponentObserver('layout') 确认布局完成。
    */
-  onWindowLayoutReady: ((clusterId: string) => void) | null
+  onWindowLayoutReady: ((renderNodeKey: string) => void) | null
   /**
    * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
-   * 父组件调用 motionSourcePool.releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+   * 父组件调用 motionSourcePool.releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver。
    */
-  onWindowDisappear: ((clusterId: string) => void) | null
+  onWindowDisappear: ((renderNodeKey: string) => void) | null
 }
 
 export interface MotionTextOverlayParams {
@@ -412,10 +419,11 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               .width(params.textWidth)
               .textAlign(TextAlign.Start)
               .wordBreak(WordBreak.BREAK_ALL)
-              // Issue #879 最新复核评论修复（问题3）：
-              // 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
-              // ComponentObserver 通过组件 id 监听 layout 事件，确认布局真正完成。
-              .id(`motion-window-${item.window.clusterId}`)
+              // Issue #879 本轮复核评论修复（问题2）：
+              // 每个 Text 添加 .id() 基于 renderNodeKey（而非 clusterId），
+              // 供父组件创建 ComponentObserver。renderNodeKey 包含 sourceKind + sourceRevision，
+              // 切源时创建新节点而非复用旧节点。
+              .id(`motion-window-${item.window.renderNodeKey}`)
               .offset({
                 x: -item.clipRect.x + item.window.offsetX,
                 y: -item.clipRect.y + item.window.offsetY
@@ -429,16 +437,21 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 // 通知父组件本窗口已挂载——父组件创建 ComponentObserver 监听 layout 事件。
                 // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
                 // 才调用 markWindowLayoutReady(clusterId)，不再用 setTimeout 充当绘制完成证据。
+                // Issue #879 本轮复核评论修复（问题2）：
+                // 通知父组件本窗口已挂载——用 renderNodeKey（而非 clusterId）作为窗口身份。
+                // renderNodeKey 包含 sourceKind + sourceRevision，切源时创建新窗口状态。
                 if (item.onWindowLayoutReady !== null) {
-                  item.onWindowLayoutReady(item.window.clusterId)
+                  item.onWindowLayoutReady(item.window.renderNodeKey)
                 }
               })
               .onDisAppear(() => {
                 // Issue #879 最新复核评论修复（问题3）：
                 // Text 从组件树移除时清理本窗口状态——
                 // 父组件调用 releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+                // Issue #879 本轮复核评论修复（问题2）：
+                // Text 从组件树移除时清理本窗口状态——用 renderNodeKey 作为窗口身份。
                 if (item.onWindowDisappear !== null) {
-                  item.onWindowDisappear(item.window.clusterId)
+                  item.onWindowDisappear(item.window.renderNodeKey)
                 }
               })
           }
@@ -452,8 +465,11 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             x: item.clipRect.x,
             y: item.clipRect.y
           })
+          // Issue #879 复核评论修复（问题1）：候选窗口 opacity 0——参与布局但不可见。
+          // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。
+          .opacity(item.visible ? 1 : 0)
         },
-        (item: MotionWindowSource, index: number) => `${item.window.clusterId}`
+        (item: MotionWindowSource, index: number) => `${item.window.renderNodeKey}`
       )
     }
     .width('100%')

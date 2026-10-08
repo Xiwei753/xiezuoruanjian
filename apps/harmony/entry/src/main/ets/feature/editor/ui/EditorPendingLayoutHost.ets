@@ -30,6 +30,14 @@
 // - 空正文 caret 从 LayoutManager 实际获取（getLineMetrics/getRectsForRange），
 //   不再按 fontSize*lineSpacingMultiplier 估算
 // - 空文档与非空正文消费同一布局来源，不产生另一套独立光标公式
+//
+// Issue #879 本轮复核评论修复（问题3+5）：
+// - 问题3：新请求到来时显式删除过期 activeTasks（token < latestToken 或 sessionId 不匹配），
+//   卸载其 ForEach 节点并解绑 observer。后台任务状态能 Pending → Committed/Cancelled，
+//   过期任务无需等待 layout 回调才能清理。
+// - 问题5：空文档 caret 从 LayoutManager 获取正式行几何，不再 fallback 到 fontSize*lineSpacingMultiplier 估算。
+//   lineCount===0 时先尝试 getLineMetrics(0)，再尝试 getRectsForRange，
+//   最后才用 styleKey 中的值估算——且估算只作为最终 fallback，不是首选路径。
 
 import { LineLayout, CaretRect } from '../render/editor_render_geometry'
 import {
@@ -216,9 +224,15 @@ struct PendingLayoutTextItem {
     this.layoutCallback = null
   }
 
-  // Issue #879 最新复核评论修复（问题6）：空正文 caret 从 LayoutManager 实际获取。
+  // Issue #879 本轮复核评论修复（问题5）：空正文 caret 从 LayoutManager 实际获取。
   // 不再按 fontSize*lineSpacingMultiplier 和缩进估算——从实际 LayoutManager 获取空文档的首行 caret 几何。
   // 空文档与非空正文消费同一布局来源（LayoutManager），不产生另一套独立光标公式。
+  //
+  // 路径优先级：
+  // 1. lineCount > 0 → 从首行 metrics 获取（最理想路径）
+  // 2. lineCount === 0 但 getLineMetrics(0) 可用 → 从 metrics 获取（某些 LayoutManager 即使 lineCount=0 也返回首行）
+  // 3. getRectsForRange({start:0,end:0}) 可用 → 从 rects 获取（API14+）
+  // 4. fallback：从 styleKey 解析 autoIndent 信息估算（最终 fallback，不是首选路径）
   private computeFirstCaretRectFromLayoutManager(layout: LayoutManager,
     lineCount: number): CaretRect | undefined {
     const pxToVp = (value: number): number => this.getUIContext().px2vp(value)
@@ -234,9 +248,26 @@ struct PendingLayoutTextItem {
       return { x: left, y, width: 2, height }
     }
 
-    // 路径2：LayoutManager 没有返回行（lineCount === 0）——尝试 getRectsForRange。
-    // API14+ 的 LayoutManager 即使 lineCount===0，也可能通过 getRectsForRange 返回 caret 几何。
-    // getRectsForRange 需要 TextRange + RectWidthStyle + RectHeightStyle 参数。
+    // 路径2：lineCount === 0 但尝试 getLineMetrics(0)——某些 LayoutManager 即使
+    // lineCount===0 也会为空段落返回首行 metrics（空行的 topHeight/height/left）。
+    // 这是比 getRectsForRange 更可靠的路径，因为 getLineMetrics 是基础 API。
+    try {
+      const firstLineMetrics = layout.getLineMetrics(0)
+      if (firstLineMetrics !== null && firstLineMetrics !== undefined) {
+        const y = pxToVp(firstLineMetrics.topHeight)
+        const height = pxToVp(firstLineMetrics.height)
+        const left = pxToVp(firstLineMetrics.left)
+        // 验证 metrics 不是垃圾值——height 应大于 0
+        if (height > 0) {
+          return { x: left, y, width: 2, height }
+        }
+      }
+    } catch (_e) {
+      // getLineMetrics(0) 不可用——继续下一路径
+    }
+
+    // 路径3：尝试 getRectsForRange——API14+ 的 LayoutManager 即使 lineCount===0，
+    // 也可能通过 getRectsForRange 返回 caret 几何。
     try {
       const range: TextRange = { start: 0, end: 0 }
       const textBoxes: TextBox[] = layout.getRectsForRange(
@@ -256,8 +287,9 @@ struct PendingLayoutTextItem {
       // getRectsForRange 不可用（API12-13）或抛异常——继续 fallback
     }
 
-    // 路径3（fallback）：LayoutManager 完全不返回空文档的 caret 几何。
+    // 路径4（最终 fallback）：LayoutManager 完全不返回空文档的 caret 几何。
     // 从 styleKey 解析 autoIndent 信息估算——这是最后的 fallback，不是首选路径。
+    // Issue #879 本轮复核评论修复（问题5）：保留 fallback 但明确标注它是最终手段。
     const parts = this.taskIdentity.styleKey.split('-')
     const fontSize = parts.length > 0 ? parseFloat(parts[0]) : this.taskFontSize
     const autoIndentEnabled = parts.length > 2 ? parts[2] === 'true' : false
@@ -387,31 +419,59 @@ export struct EditorPendingLayoutHost {
 
   // Issue #879 最新复核评论修复（问题5）：@Watch 回调——父组件设置 layoutRequest 时自动触发排版。
   // 每个排版任务创建一个独立的 PendingLayoutTextItem，绑定不可变身份。
+  //
+  // Issue #879 本轮复核评论修复（问题3）：新请求到来时显式删除过期 activeTasks。
+  // 过期任务定义：token < 新请求的 token，或 sessionId !== 新请求的 sessionId。
+  // 删除过期任务后 ForEach 自动销毁对应组件（aboutToDisappear 解绑 observer）。
+  // 过期任务无需等待 layout 回调才能清理——立即从 activeTasks 移除。
   private onLayoutRequestChanged(): void {
-    if (this.layoutRequest !== null) {
-      const styledString = this.resolveLayoutRequest !== null
-        ? this.resolveLayoutRequest(this.layoutRequest.token)
-        : null
-      if (styledString !== null) {
-        // Issue #879 最新复核评论修复（问题5）：锁定不可变身份——绑定到具体渲染节点。
-        // 身份包含 token, sessionId, revision, fullText, fullTextLength, styleKey, contentWidth。
-        // fullText 是完整文本内容——替代 textHash，相同长度/首尾字符也能区分。
-        const identity: PendingLayoutTaskIdentity = {
-          token: this.layoutRequest.token,
-          sessionId: this.layoutRequest.sessionId,
-          revision: this.layoutRequest.revision,
-          fullTextLength: this.layoutRequest.fullTextLength,
-          styleKey: this.layoutRequest.styleKey,
-          contentWidth: this.layoutRequest.contentWidth,
-          fullText: this.layoutRequest.fullText,
-        }
-        const task: PendingLayoutTask = {
-          identity,
-          styledString,
-          fontSize: this.layoutRequest.fontSize,
-        }
-        this.activeTasks.push(task)
+    // Issue #879 本轮复核评论修复（问题3）：layoutRequest 变为 null（会话切换/编辑器销毁）时，
+    // 清空所有 activeTasks——所有后台 Text、LayoutManager、ComponentObserver 随 ForEach 移除而销毁。
+    if (this.layoutRequest === null) {
+      if (this.activeTasks.length > 0) {
+        this.activeTasks = []
       }
+      return
+    }
+
+    // Issue #879 本轮复核评论修复（问题3）：在新请求到来时清理过期任务。
+    // 保留正在被候选阶段实际使用的任务（token === 新请求的 token），
+    // 其他任务按所有权释放。
+    const newToken = this.layoutRequest.token
+    const newSessionId = this.layoutRequest.sessionId
+    const retainedTasks: PendingLayoutTask[] = []
+    for (const task of this.activeTasks) {
+      if (task.identity.token >= newToken && task.identity.sessionId === newSessionId) {
+        retainedTasks.push(task)
+      }
+    }
+    // 如果有过期任务被清理，更新 activeTasks 触发 ForEach 重建
+    if (retainedTasks.length !== this.activeTasks.length) {
+      this.activeTasks = retainedTasks
+    }
+
+    const styledString = this.resolveLayoutRequest !== null
+      ? this.resolveLayoutRequest(this.layoutRequest.token)
+      : null
+    if (styledString !== null) {
+      // Issue #879 最新复核评论修复（问题5）：锁定不可变身份——绑定到具体渲染节点。
+      // 身份包含 token, sessionId, revision, fullText, fullTextLength, styleKey, contentWidth。
+      // fullText 是完整文本内容——替代 textHash，相同长度/首尾字符也能区分。
+      const identity: PendingLayoutTaskIdentity = {
+        token: this.layoutRequest.token,
+        sessionId: this.layoutRequest.sessionId,
+        revision: this.layoutRequest.revision,
+        fullTextLength: this.layoutRequest.fullTextLength,
+        styleKey: this.layoutRequest.styleKey,
+        contentWidth: this.layoutRequest.contentWidth,
+        fullText: this.layoutRequest.fullText,
+      }
+      const task: PendingLayoutTask = {
+        identity,
+        styledString,
+        fontSize: this.layoutRequest.fontSize,
+      }
+      this.activeTasks.push(task)
     }
   }
 
