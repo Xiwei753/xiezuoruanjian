@@ -615,46 +615,34 @@ export class EditorMotionCoordinator {
   /**
    * 多通道静态可见区计算。
    *
-   * Issue #879 本轮复核评论修复（问题5）：
-   * 静态可见区完整扣除所有被 motion 接管的目标 glyph 身份：
-   * - insertRuns：新插入字（用新正文 utf16 offset）
-   * - retainedMoves：保留字移动（用新正文 utf16 offset——动画结束后归新位置）
-   * - deletedRuns：被删旧字（用旧正文 utf16 offset——动画期间旧字由运动层绘制）
-   *
-   * 注意：insertRuns 和 retainedMoves 用新正文 offset（静态层画新正文），
-   * deletedRuns 用旧正文 offset（静态层画旧正文时排除）。
-   * 但静态层只画一份正文（新正文），所以 deletedRuns 的旧正文 offset
-   * 在新正文中对应"被删字的位置"——这个位置在新正文中不存在，不需要排除。
-   * 实际只需排除 insertRuns + retainedMoves 的新正文 offset。
-   *
-   * 但在动画起始帧（progress=0），静态层可能还在画旧正文，
-   * 此时需要排除 deletedRuns 的旧正文 offset。
-   * 简化处理：同时排除新旧两份 offset，subtractRanges 会自动处理无交集的情况。
+   * Issue #879 复核评论修复（问题1）：
+   * 以本次 newLayout 的完整 UTF-16 区间为底计算静态字形所有权，
+   * 只扣目标新正文的 insertRuns 和 retainedMoves.newUtf16*（都是新正文 offset）。
+   * 不扣 deletedRuns 的旧正文 offset——旧 offset 在新正文中无意义，
+   * 拿旧 offset 在新正文上做减法会误删新正文的字。
+   * 每帧从同一版完整目标静态范围重新计算，不从上一帧已经裁过的范围递减。
    */
   private computeStaticRangesMultiChannel(plan: EditorMotionPlan): StaticVisibleRange[] {
-    // 收集所有需要排除的范围
-    const excluded: StaticVisibleRange[] = []
+    // 以本次 newLayout 的完整 UTF-16 区间为底，每帧重新计算
+    const fullRange: StaticVisibleRange[] = []
+    if (this.newLayout.length > 0) {
+      fullRange.push({
+        utf16Start: this.newLayout[0].startUtf16,
+        utf16End: this.newLayout[this.newLayout.length - 1].endUtf16
+      })
+    }
 
-    // insertRuns：新插入字（新正文 offset）
+    // 只扣目标新正文的 insertRuns 和 retainedMoves.newUtf16*（都是新正文 offset）
+    const excluded: StaticVisibleRange[] = []
     for (const run of plan.insertRuns) {
       excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
     }
-
-    // retainedMoves：保留字移动（新正文 offset——目标位置）
     for (const move of plan.retainedMoves) {
       excluded.push({ utf16Start: move.newUtf16Start, utf16End: move.newUtf16End })
     }
+    // 不扣 deletedRuns 的旧正文 offset——旧 offset 在新正文中无意义
 
-    // deletedRuns：被删旧字（旧正文 offset）
-    for (const run of plan.deletedRuns) {
-      excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
-    }
-
-    // 从当前 staticVisibleRanges 中排除
-    return EditorMotionCoordinator.subtractRanges(
-      this.currentFrame.staticVisibleRanges,
-      excluded
-    )
+    return EditorMotionCoordinator.subtractRanges(fullRange, excluded)
   }
 
   /**

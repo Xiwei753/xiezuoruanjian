@@ -575,18 +575,63 @@ export class EditorMotionPlanner {
         newText, newUtf16Start, newUtf16End, newLayout
       )
 
-      // 按顺序配对（假设 oldRects 和 newRects 数量相同，按字符顺序对应）
-      const pairCount = Math.min(oldRects.length, newRects.length)
-      for (let i = 0; i < pairCount; i++) {
+      // 双指针配对：按字符顺序把 old 片段和 new 片段配对。
+      // oldRects 和 newRects 覆盖相同数量的 UTF-16 字符（同一 Shifted entry），
+      // 但可能被拆成不同数量的行片段（如旧版一行、新版两行）。
+      // 用双指针确保每个字符都有对应的 old 和 new 片段，不丢弃任何片段。
+      let oldIdx = 0
+      let newIdx = 0
+      let oldCharConsumed = 0  // oldRects[oldIdx] 中已配对的字符数
+      let newCharConsumed = 0  // newRects[newIdx] 中已配对的字符数
+
+      while (oldIdx < oldRects.length && newIdx < newRects.length) {
+        const oldSeg = oldRects[oldIdx]
+        const newSeg = newRects[newIdx]
+        const oldSegLen = oldSeg.utf16End - oldSeg.utf16Start
+        const newSegLen = newSeg.utf16End - newSeg.utf16Start
+        const oldRemaining = oldSegLen - oldCharConsumed
+        const newRemaining = newSegLen - newCharConsumed
+
+        // 配对较小的剩余字符数，确保不遗漏任何片段
+        const pairLen = Math.min(oldRemaining, newRemaining)
+
+        // 按字符数比例计算子片段的 rect（等宽字体精确，非等宽字体近似可接受）
+        const oldRatio = oldCharConsumed / oldSegLen
+        const oldPairRatio = pairLen / oldSegLen
+        const newRatio = newCharConsumed / newSegLen
+        const newPairRatio = pairLen / newSegLen
+
         moves.push({
-          oldUtf16Start: oldRects[i].utf16Start,
-          oldUtf16End: oldRects[i].utf16End,
-          newUtf16Start: newRects[i].utf16Start,
-          newUtf16End: newRects[i].utf16End,
+          oldUtf16Start: oldSeg.utf16Start + oldCharConsumed,
+          oldUtf16End: oldSeg.utf16Start + oldCharConsumed + pairLen,
+          newUtf16Start: newSeg.utf16Start + newCharConsumed,
+          newUtf16End: newSeg.utf16Start + newCharConsumed + pairLen,
           sourceKind: 'old',
-          oldRect: oldRects[i].rect,
-          newRect: newRects[i].rect
+          oldRect: {
+            x: oldSeg.rect.x + oldRatio * oldSeg.rect.width,
+            y: oldSeg.rect.y,
+            width: oldPairRatio * oldSeg.rect.width,
+            height: oldSeg.rect.height
+          },
+          newRect: {
+            x: newSeg.rect.x + newRatio * newSeg.rect.width,
+            y: newSeg.rect.y,
+            width: newPairRatio * newSeg.rect.width,
+            height: newSeg.rect.height
+          }
         })
+
+        oldCharConsumed += pairLen
+        newCharConsumed += pairLen
+
+        if (oldCharConsumed >= oldSegLen) {
+          oldIdx++
+          oldCharConsumed = 0
+        }
+        if (newCharConsumed >= newSegLen) {
+          newIdx++
+          newCharConsumed = 0
+        }
       }
     }
 

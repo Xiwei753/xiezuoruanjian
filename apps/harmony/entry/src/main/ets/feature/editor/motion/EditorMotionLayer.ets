@@ -13,15 +13,11 @@
 //   从 EditorVisualFrame.staticVisibleRanges 和行布局生成静态可见裁切区域。
 //   主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape 裁切——
 //   只显示未被运动接管的范围。不再用背景色 Rect 遮罩。
-// - 问题2：MotionTextOverlayParams 改为接收 oldTextController/newTextController
-//   + oldStyledString/newStyledString（StyledString 类型）+ 布局宽度 + 排版身份，
-//   不再接收 oldTextContent/newTextContent 纯字符串。
-//   Builder 内部用 Text(undefined, {controller}) 显示真实原始排版。
-//   旧、新两份 Text 的字体、行高、wordBreak(BREAK_ALL)、首行缩进、宽度、坐标原点
-//   必须分别与对应 revision 的主布局完全一致。
-//   clipShape 作用在绘制输出上，不能因 clip 容器缩窄而改变 Text 的排版宽度
-//   （Text 的 width 设为完整排版宽度，Stack 外层做 clip）。
-//   不能在每一帧重新 setStyledString——只在运动开始时设置一次（由 SujianEditor 负责）。
+// - 问题2（本轮修复）：MotionTextOverlayParams 改为接收 oldStyledString/newStyledString
+//   （StyledString 类型），不再接收 TextController。
+//   Builder 内部为每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
+//   这样每个窗口的 Text 都是独立的，有自己的 controller 和 StyledString，不会互相干扰。
+//   SujianEditor 只负责保存 oldStyledString 和 newStyledString，传给 MotionTextOverlayBuilder。
 //
 // ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
 // 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
@@ -341,23 +337,19 @@ export class EditorMotionLayer {
  * 不能用对象字面量类型。
  *
  * Issue #879 本轮复核评论修复（问题2）：
- * - 不再接收 oldTextContent/newTextContent 纯字符串。
- * - 改为接收 oldTextController/newTextController（TextController）+
- *   oldStyledString/newStyledString（StyledString，用于判断是否需要渲染）+
- *   布局宽度 + 排版身份。
- * - Builder 内部用 Text(undefined, {controller}) 显示真实原始排版。
- * - 旧、新两份 Text 的字体、行高、wordBreak(BREAK_ALL)、首行缩进、宽度、坐标原点
- *   必须分别与对应 revision 的主布局完全一致（通过 TextController.setStyledString 设置）。
- * - 不能在每一帧重新 setStyledString——只在运动开始时设置一次（由 SujianEditor 负责）。
+ * - 不再接收 TextController——改为接收 oldStyledString/newStyledString（StyledString | null）。
+ * - Builder 内部为每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
+ * - 每个窗口的 Text 都是独立的，有自己的 controller 和 StyledString，不会互相干扰。
+ * - SujianEditor 只负责保存 oldStyledString 和 newStyledString，传给 MotionTextOverlayBuilder。
  */
 export interface MotionTextOverlayParams {
-  /** 旧排版源 TextController（吞字时显示旧字），null 表示不需要旧字源 */
-  oldTextController: TextController | null
-  /** 新排版源 TextController（吐字时显示新字），null 表示不需要新字源 */
-  newTextController: TextController | null
-  /** 旧排版源 StyledString 是否已设置（用于判断是否渲染旧字源） */
+  /** 旧排版源 TextController 列表（吞字时显示旧字），每个运动窗口一个独立 controller */
+  oldTextControllers: TextController[]
+  /** 新排版源 TextController 列表（吐字时显示新字），每个运动窗口一个独立 controller */
+  newTextControllers: TextController[]
+  /** 旧排版源 TextController 列表是否已设置 StyledString */
   hasOldSource: boolean
-  /** 新排版源 StyledString 是否已设置（用于判断是否渲染新字源） */
+  /** 新排版源 TextController 列表是否已设置 StyledString */
   hasNewSource: boolean
   /** 当前视觉帧 */
   visualFrame: EditorVisualFrame
@@ -374,12 +366,9 @@ export interface MotionTextOverlayParams {
  * 实现吐字/吞字的像素级遮罩效果。
  *
  * Issue #879 本轮复核评论修复（问题2）：
- * - 用 Text(undefined, {controller}) 显示真实原始排版（通过 TextController.setStyledString 设置内容）。
- * - 旧、新两份 Text 的字体、行高、wordBreak(BREAK_ALL)、首行缩进、宽度、坐标原点
- *   必须分别与对应 revision 的主布局完全一致。
- * - clipShape 作用在绘制输出上，不能因 clip 容器缩窄而改变 Text 的排版宽度
- *   （Text 的 width 设为完整排版宽度 textWidth，Stack 外层做 clip）。
- * - 不能在每一帧重新 setStyledString——只在运动开始时设置一次（由 SujianEditor 负责）。
+ * - 每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
+ * - 不再共享 TextController——每个窗口的 Text 都是独立的，不会互相干扰。
+ * - StyledString 通过参数传入（oldStyledString/newStyledString），由 SujianEditor 在运动开始时准备。
  *
  * 渲染策略：
  * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
@@ -402,10 +391,10 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
         params.visualFrame.motionGlyphWindows,
         (window: MotionGlyphWindow, index: number) => {
           // 根据 sourceKind 选择对应的 TextController
-          // 吐字（Reveal）：sourceKind='new'，用 newTextController
-          // 吞字（Conceal/ConcealForward）：sourceKind='old'，用 oldTextController
-          // Reflow（RetainedMove）：sourceKind='old'，用 oldTextController + offset 平移
-          if (window.sourceKind === 'new' && params.newTextController !== null && params.hasNewSource) {
+          // 吐字（Reveal）：sourceKind='new'，用 newTextControllers[index]
+          // 吞字（Conceal/ConcealForward）：sourceKind='old'，用 oldTextControllers[index]
+          // Reflow（RetainedMove）：sourceKind='old'，用 oldTextControllers[index] + offset 平移
+          if (window.sourceKind === 'new' && params.hasNewSource) {
             // 新字源：完整排版，用 Stack + offset + clipShape 限制可见区域
             // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
             // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
@@ -414,7 +403,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             // 通过 TextController.setStyledString 设置的 StyledString 包含字号/行高/首行缩进样式，
             // 不需要在 Text 属性上重复设置 fontSize/lineHeight。
             Stack() {
-              Text(undefined, { controller: params.newTextController })
+              Text(undefined, { controller: params.newTextControllers[index] })
                 .width(params.textWidth)
                 .textAlign(TextAlign.Start)
                 .wordBreak(WordBreak.BREAK_ALL)
@@ -430,7 +419,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               x: params.clipRects[index].x,
               y: params.clipRects[index].y
             })
-          } else if (window.sourceKind === 'old' && params.oldTextController !== null && params.hasOldSource) {
+          } else if (window.sourceKind === 'old' && params.hasOldSource) {
             // 旧字源：完整排版，用 Stack + offset + clipShape 限制可见区域
             // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
             // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
@@ -438,7 +427,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             // clipShape 只裁切显示区域，不影响 Text 的排版宽度。
             // RetainedMove 的平移通过 window.offsetX/offsetY 实现（叠加在 offset 上）。
             Stack() {
-              Text(undefined, { controller: params.oldTextController })
+              Text(undefined, { controller: params.oldTextControllers[index] })
                 .width(params.textWidth)
                 .textAlign(TextAlign.Start)
                 .wordBreak(WordBreak.BREAK_ALL)
