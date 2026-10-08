@@ -16,11 +16,19 @@
 // - 旧字形几何用 oldLayout 计算，新字形几何用 newLayout 计算
 // - 跨行 caret 拆段：按旧行末与新行首等实际停靠点分段，不做穿字斜线
 //
+// Issue #879 本轮复核评论修复（问题5）：
+// - EditorMotionPlan 改为多通道结构：insertRuns / deletedRuns / retainedMoves / caretPath。
+// - planFromPatches 同时收集 insertRuns（新插入字）、deletedRuns（被删旧字）、
+//   retainedMoves（offsetMap 中 Shifted 的保留字，用 oldLayout 算 oldRect、newLayout 算 newRect）。
+// - 保留 motionKind 字段表示当前帧的主要运动类型（供 needsMotionLayer 判断），
+//   但 plan 不再用单一 motionKind 决定整个事务。
+// - 跨行按视觉行分别计算裁切窗口（splitRectByLines），不拿一个 x0→x1 横向跨行。
+//
 // 不修改 Core 的编辑事实模型，只读 editResult 做规划。
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
-import { EditorEditResult, DisplayPatch, EditorOperationKind, EditorTransactionCause, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
-import { EditorVisualFrame, MotionKind, MotionSegment, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
+import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
+import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
@@ -43,52 +51,47 @@ export interface CaretPosition {
 }
 
 /**
- * 字形源——描述一个字形的排版位置和来源。
+ * 运动规划结果——多通道结构。
  *
- * - sourceKind='old'：字形来自旧正文（base revision），用于吞字动画。
- * - sourceKind='new'：字形来自新正文（new revision），用于吐字动画和 reflow。
+ * Issue #879 本轮复核评论修复（问题5）：
+ * 一次编辑事务可同时包含多个通道：
+ * - insertRuns：吐字（新插入字，裁切窗口从 [x0,x0] 扩到 [x0,x1]）。
+ * - deletedRuns：吞字（被删旧字，裁切窗口从 [x0,x1] 缩到 [x0,x0]）。
+ * - retainedMoves：保留字移动（offsetMap 中 Shifted 的保留字，oldRect → newRect 插值）。
+ * - caretPath：光标轨迹（跨行时按视觉行拆段）。
+ *
+ * Coordinator 的 sampleFrame/advance 同一 progress 同时采样所有通道，
+ * 不再用互斥的 if (motionKind === Reveal) 分支。
+ *
+ * motionKind 保留，表示当前帧的主要运动类型（供 needsMotionLayer 判断），
+ * 但不再用单一 motionKind 决定整个事务。
  */
-export interface GlyphSource {
-  /** UTF-16 起始 offset */
-  utf16Start: number
-  /** UTF-16 结束 offset（exclusive） */
-  utf16End: number
-  /** 排版位置 x（vp） */
-  x: number
-  /** 排版位置 y（vp） */
-  y: number
-  /** 字形宽度（vp） */
-  width: number
-  /** 字形高度（vp） */
-  height: number
-  /** 来源：'old' 或 'new' */
-  sourceKind: 'old' | 'new'
+export interface EditorMotionPlan {
+  /** 吐字通道：新插入字 */
+  insertRuns: InsertRun[]
+  /** 吞字通道：被删旧字 */
+  deletedRuns: DeletedRun[]
+  /** 保留字移动通道：offsetMap 中 Shifted 的保留字 */
+  retainedMoves: RetainedMove[]
+  /** 光标轨迹：跨行时按视觉行拆段 */
+  caretPath: MotionSegment[]
+  /** 动画时长（ms） */
+  durationMs: number
+  /** 主要运动类型——供 needsMotionLayer 判断，不决定整个事务 */
+  motionKind: MotionKind
 }
 
 /**
- * 运动规划结果。
- *
- * 描述一次编辑事务应该产生的文字运动：
- * - motionKind：运动类型（吐字/吞字/Forward Delete/Reflow/CaretMove/None）。
- * - segments：跨行光标移动的分段轨迹。
- * - affectedRanges：受影响的正文范围（UTF-16 offset）。
- * - oldGlyphSources：旧正文中需要运动层绘制的字形源列表。
- * - newGlyphTargets：新正文中需要运动层绘制的字形目标列表。
- * - durationMs：动画时长。
+ * 字形矩形片段——一个视觉行内的连续字片段及其几何。
+ * 用于跨行时按视觉行分别计算裁切窗口。
  */
-export interface EditorMotionPlan {
-  /** 运动类型 */
-  motionKind: MotionKind
-  /** 跨行光标移动的分段轨迹 */
-  segments: MotionSegment[]
-  /** 受影响的正文范围（UTF-16 offset 对） */
-  affectedRanges: AffectedRange[]
-  /** 旧正文字形源列表 */
-  oldGlyphSources: GlyphSource[]
-  /** 新正文字形目标列表 */
-  newGlyphTargets: GlyphSource[]
-  /** 动画时长（ms） */
-  durationMs: number
+export interface GlyphRectSegment {
+  /** 该视觉行内的 UTF-16 起始 offset */
+  utf16Start: number
+  /** 该视觉行内的 UTF-16 结束 offset（exclusive） */
+  utf16End: number
+  /** 该视觉行内的几何矩形（vp） */
+  rect: GlyphRect
 }
 
 /**
@@ -98,10 +101,9 @@ export interface EditorMotionPlan {
  * 规划文字运动方案。核心是解读 displayPatches 和 offsetMap，
  * 判断哪些文字需要吐字/吞字动画，哪些文字需要 reflow 平移。
  *
- * Issue #879 复核评论修复：
- * - 旧正文范围（replaceByteStart/End）用 oldSnapshot.text 解码
- * - 新正文范围（insertedByteStart/End）用 newSnapshot.text 解码
- * - 旧字形几何用 oldLayout 计算，新字形几何用 newLayout 计算
+ * Issue #879 本轮复核评论修复（问题5）：
+ * planFromPatches 同时收集 insertRuns / deletedRuns / retainedMoves，
+ * 不再用单一 motionKind 决定整个事务。
  */
 export class EditorMotionPlanner {
   /**
@@ -113,7 +115,7 @@ export class EditorMotionPlanner {
    * @param newLayout 新行布局（新字形的排版几何）
    * @param editResult 本次编辑事务结果
    * @param lastVisibleFrame 上一帧的视觉状态
-   * @returns 运动规划结果
+   * @returns 运动规划结果（多通道结构）
    */
   static plan(
     oldSnapshot: EditorLayoutSnapshot,
@@ -157,12 +159,12 @@ export class EditorMotionPlanner {
    */
   private static emptyPlan(): EditorMotionPlan {
     return {
-      motionKind: MotionKind.None,
-      segments: [],
-      affectedRanges: [],
-      oldGlyphSources: [],
-      newGlyphTargets: [],
-      durationMs: 0
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath: [],
+      durationMs: 0,
+      motionKind: MotionKind.None
     }
   }
 
@@ -193,11 +195,11 @@ export class EditorMotionPlanner {
     const newLineIndex = EditorMotionPlanner.findLineIndexByY(newCaret.y, newLayout)
     const isCrossLine = oldLineIndex !== newLineIndex && oldLineIndex >= 0 && newLineIndex >= 0
 
-    const segments: MotionSegment[] = []
+    const caretPath: MotionSegment[] = []
 
     if (!isCrossLine) {
       // 同行移动：单段直线
-      segments.push({
+      caretPath.push({
         startCaretX: oldCaretX,
         startCaretY: oldCaretY,
         endCaretX: newCaret.x,
@@ -205,7 +207,6 @@ export class EditorMotionPlanner {
       })
     } else {
       // 跨行移动：按实际停靠点分段
-      // 1. 先在旧行水平移动到行末（或行首，取决于方向）
       const oldLine = oldLayout[oldLineIndex]
       const newLine = newLayout[newLineIndex]
 
@@ -214,22 +215,19 @@ export class EditorMotionPlanner {
 
       if (isMoveDown) {
         // 向下移动：先在旧行水平移到行末，再垂直跳到新行，再水平移到目标
-        // 段1：旧行内水平移动到行末
-        segments.push({
+        caretPath.push({
           startCaretX: oldCaretX,
           startCaretY: oldCaretY,
           endCaretX: oldLine.left + EditorMotionPlanner.getLineEndX(oldLine, oldSnapshot.text),
           endCaretY: oldCaretY
         })
-        // 段2：垂直跳转到新行首
-        segments.push({
+        caretPath.push({
           startCaretX: oldLine.left + EditorMotionPlanner.getLineEndX(oldLine, oldSnapshot.text),
           startCaretY: oldCaretY,
           endCaretX: newLine.left,
           endCaretY: newCaret.y
         })
-        // 段3：新行内水平移动到目标
-        segments.push({
+        caretPath.push({
           startCaretX: newLine.left,
           startCaretY: newCaret.y,
           endCaretX: newCaret.x,
@@ -237,22 +235,19 @@ export class EditorMotionPlanner {
         })
       } else {
         // 向上移动：先在旧行水平移到行首，再垂直跳到新行末，再水平移到目标
-        // 段1：旧行内水平移动到行首
-        segments.push({
+        caretPath.push({
           startCaretX: oldCaretX,
           startCaretY: oldCaretY,
           endCaretX: oldLine.left,
           endCaretY: oldCaretY
         })
-        // 段2：垂直跳转到新行末
-        segments.push({
+        caretPath.push({
           startCaretX: oldLine.left,
           startCaretY: oldCaretY,
           endCaretX: newLine.left + EditorMotionPlanner.getLineEndX(newLine, newSnapshot.text),
           endCaretY: newCaret.y
         })
-        // 段3：新行内水平移动到目标
-        segments.push({
+        caretPath.push({
           startCaretX: newLine.left + EditorMotionPlanner.getLineEndX(newLine, newSnapshot.text),
           startCaretY: newCaret.y,
           endCaretX: newCaret.x,
@@ -262,17 +257,22 @@ export class EditorMotionPlanner {
     }
 
     return {
-      motionKind: MotionKind.CaretMove,
-      segments,
-      affectedRanges: [],
-      oldGlyphSources: [],
-      newGlyphTargets: [],
-      durationMs: 0 // 由 policy 决定实际时长
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath,
+      durationMs: 0, // 由 policy 决定实际时长
+      motionKind: MotionKind.CaretMove
     }
   }
 
   /**
-   * 从 displayPatches 分析正文增删，规划运动方案。
+   * 从 displayPatches 分析正文增删，规划多通道运动方案。
+   *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * - 同时收集 insertRuns（新插入字）、deletedRuns（被删旧字）、retainedMoves（Shifted 保留字）。
+   * - 跨行按视觉行分别计算裁切窗口（splitRectByLines），不拿一个 x0→x1 横向跨行。
+   * - 保留 motionKind 表示主要运动类型，但不再用单一 motionKind 决定整个事务。
    *
    * Issue #879 复核评论修复：
    * - patch.replaceByteStart/End 是旧正文 UTF-8 区间，用 oldSnapshot.text 解码
@@ -296,27 +296,13 @@ export class EditorMotionPlanner {
       return EditorMotionPlanner.emptyPlan()
     }
 
-    // 判断运动类型
+    // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
-    const isInsert: boolean = EditorMotionPlanner.isInsert(editResult)
-    const isDelete: boolean = EditorMotionPlanner.isDelete(editResult)
 
-    let motionKind: MotionKind = MotionKind.None
-    if (isForwardDelete) {
-      motionKind = MotionKind.ConcealForward
-    } else if (isInsert) {
-      motionKind = MotionKind.Reveal
-    } else if (isDelete) {
-      motionKind = MotionKind.Conceal
-    } else {
-      // Replace 或其他类型 → 按主要操作判断
-      motionKind = EditorMotionPlanner.inferMotionKind(editResult)
-    }
-
-    // 收集受影响范围和字形源/目标
-    const affectedRanges: AffectedRange[] = []
-    const oldGlyphSources: GlyphSource[] = []
-    const newGlyphTargets: GlyphSource[] = []
+    // 收集多通道
+    const insertRuns: InsertRun[] = []
+    const deletedRuns: DeletedRun[] = []
+    const retainedMoves: RetainedMove[] = []
 
     for (const patch of patches) {
       // 旧正文被替换的范围（byte offset）→ 用 oldSnapshot.text 转 UTF-16
@@ -326,46 +312,60 @@ export class EditorMotionPlanner {
       const newUtf16Start = TextOffsetMapper.utf8ToUtf16(newText, patch.insertedByteStart)
       const newUtf16End = TextOffsetMapper.utf8ToUtf16(newText, patch.insertedByteEndExclusive)
 
-      affectedRanges.push({ utf16Start: oldUtf16Start, utf16End: oldUtf16End } as AffectedRange)
-
       // 旧正文字形源（吞字/Forward Delete 时需要）——用 oldLayout 计算几何
+      // 跨行按视觉行分别生成 DeletedRun
       if (oldUtf16Start < oldUtf16End) {
-        const glyphSource = EditorMotionPlanner.computeGlyphSource(
-          oldText, oldUtf16Start, oldUtf16End, oldLayout, 'old'
+        const oldRects = EditorMotionPlanner.computeGlyphRectsByLines(
+          oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
-        if (glyphSource !== null) {
-          oldGlyphSources.push(glyphSource)
+        for (const rect of oldRects) {
+          deletedRuns.push({
+            utf16Start: rect.utf16Start,
+            utf16End: rect.utf16End,
+            sourceKind: 'old',
+            rect: rect.rect,
+            isForward: isForwardDelete
+          })
         }
       }
 
-      // 新正文字形目标（吐字/Reflow 时需要）——用 newLayout 计算几何
+      // 新正文字形目标（吐字时需要）——用 newLayout 计算几何
+      // 跨行按视觉行分别生成 InsertRun
       if (newUtf16Start < newUtf16End) {
-        const glyphTarget = EditorMotionPlanner.computeGlyphSource(
-          newText, newUtf16Start, newUtf16End, newLayout, 'new'
+        const newRects = EditorMotionPlanner.computeGlyphRectsByLines(
+          newText, newUtf16Start, newUtf16End, newLayout
         )
-        if (glyphTarget !== null) {
-          newGlyphTargets.push(glyphTarget)
+        for (const rect of newRects) {
+          insertRuns.push({
+            utf16Start: rect.utf16Start,
+            utf16End: rect.utf16End,
+            sourceKind: 'new',
+            rect: rect.rect
+          })
         }
       }
     }
 
-    // 用 offsetMap 识别保留文字的 reflow
+    // 用 offsetMap 识别保留文字的 reflow（RetainedMove）
     if (editResult.offsetMap) {
-      const reflowRanges = EditorMotionPlanner.identifyReflowRanges(
+      const moves = EditorMotionPlanner.identifyRetainedMoves(
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
-      for (const reflow of reflowRanges) {
-        newGlyphTargets.push(reflow)
+      for (const move of moves) {
+        retainedMoves.push(move)
       }
     }
 
+    // 推断主要运动类型（供 needsMotionLayer 判断）
+    const motionKind = EditorMotionPlanner.inferPrimaryMotionKind(insertRuns, deletedRuns, retainedMoves, editResult)
+
     return {
-      motionKind,
-      segments: [],
-      affectedRanges,
-      oldGlyphSources,
-      newGlyphTargets,
-      durationMs: 0 // 由 policy 决定实际时长
+      insertRuns,
+      deletedRuns,
+      retainedMoves,
+      caretPath: [],
+      durationMs: 0, // 由 policy 决定实际时长
+      motionKind
     }
   }
 
@@ -383,33 +383,28 @@ export class EditorMotionPlanner {
   }
 
   /**
-   * 判断是否为插入操作。
+   * 推断主要运动类型（供 needsMotionLayer 判断）。
+   *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * 不再用单一 motionKind 决定整个事务，但仍需一个主要类型供 needsMotionLayer 判断。
+   * 优先级：有吐字 → Reveal；有吞字 → Conceal/ConcealForward；有保留字移动 → Reflow；否则 None。
    */
-  private static isInsert(editResult: EditorEditResult): boolean {
-    return editResult.operationKind === EditorOperationKind.Insert
-  }
-
-  /**
-   * 判断是否为删除操作（Backspace）。
-   */
-  private static isDelete(editResult: EditorEditResult): boolean {
-    return editResult.operationKind === EditorOperationKind.Delete && !EditorMotionPlanner.isForwardDelete(editResult)
-  }
-
-  /**
-   * 推断运动类型（用于 Replace 等复合操作）。
-   */
-  private static inferMotionKind(editResult: EditorEditResult): MotionKind {
-    const delta = editResult.contentDelta
-    if (delta.insertedChars > 0 && delta.deletedChars === 0) {
+  private static inferPrimaryMotionKind(
+    insertRuns: InsertRun[],
+    deletedRuns: DeletedRun[],
+    retainedMoves: RetainedMove[],
+    editResult: EditorEditResult
+  ): MotionKind {
+    if (insertRuns.length > 0) {
       return MotionKind.Reveal
     }
-    if (delta.deletedChars > 0 && delta.insertedChars === 0) {
-      return MotionKind.Conceal
+    if (deletedRuns.length > 0) {
+      // 检查是否全部为 Forward Delete
+      const allForward = deletedRuns.every((r: DeletedRun): boolean => r.isForward)
+      return allForward ? MotionKind.ConcealForward : MotionKind.Conceal
     }
-    if (delta.insertedChars > 0 && delta.deletedChars > 0) {
-      // 替换：先吞后吐，按主要操作判断
-      return delta.insertedChars >= delta.deletedChars ? MotionKind.Reveal : MotionKind.Conceal
+    if (retainedMoves.length > 0) {
+      return MotionKind.Reflow
     }
     return MotionKind.None
   }
@@ -466,68 +461,93 @@ export class EditorMotionPlanner {
   }
 
   /**
-   * 计算字形源的排版位置。
+   * 按视觉行分别计算字形矩形列表。
+   *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * 跨行时按视觉行分别计算裁切窗口——每个返回项对应一个视觉行内的连续字片段，
+   * 不拿一个 x0→x1 横向跨行。
+   *
+   * @returns 每项包含 utf16Start/utf16End（该视觉行内的子区间）和 rect（该视觉行内的几何）
    */
-  private static computeGlyphSource(
+  private static computeGlyphRectsByLines(
     text: string,
     utf16Start: number,
     utf16End: number,
-    lineLayouts: LineLayout[],
-    sourceKind: 'old' | 'new'
-  ): GlyphSource | null {
+    lineLayouts: LineLayout[]
+  ): GlyphRectSegment[] {
+    const result: GlyphRectSegment[] = []
     if (utf16Start >= utf16End) {
-      return null
+      return result
     }
-    // 找到字形所在的行
+
+    // 遍历行，找到与 [utf16Start, utf16End) 有交集的行
     for (const line of lineLayouts) {
-      if (utf16Start >= line.startUtf16 && utf16Start < line.endUtf16) {
-        // 用 caretStops 找起始 x
-        let x = line.left
-        for (const stop of line.caretStops) {
-          if (stop.utf16Offset <= utf16Start) {
-            x = stop.x
-          }
-        }
-        // 找结束 x（字形宽度 = 结束 x - 起始 x）
-        let endX = x
-        for (const stop of line.caretStops) {
-          if (stop.utf16Offset <= utf16End) {
-            endX = stop.x
-          }
-        }
-        return {
-          utf16Start,
-          utf16End,
-          x,
-          y: line.y,
-          width: Math.max(0, endX - x),
-          height: line.height,
-          sourceKind
+      // 行与区间无交集
+      if (line.endUtf16 <= utf16Start || line.startUtf16 >= utf16End) {
+        continue
+      }
+      // 该行内的子区间
+      const segStart = Math.max(utf16Start, line.startUtf16)
+      const segEnd = Math.min(utf16End, line.endUtf16)
+      if (segStart >= segEnd) {
+        continue
+      }
+
+      // 用 caretStops 找起始 x 和结束 x
+      let x = line.left
+      for (const stop of line.caretStops) {
+        if (stop.utf16Offset <= segStart) {
+          x = stop.x
         }
       }
+      let endX = x
+      for (const stop of line.caretStops) {
+        if (stop.utf16Offset <= segEnd) {
+          endX = stop.x
+        }
+      }
+
+      const rect: GlyphRect = {
+        x,
+        y: line.y,
+        width: Math.max(0, endX - x),
+        height: line.height
+      }
+      const segment: GlyphRectSegment = {
+        utf16Start: segStart,
+        utf16End: segEnd,
+        rect: rect
+      }
+      result.push(segment)
     }
-    return null
+    return result
   }
 
   /**
-   * 用 offsetMap 识别保留文字的 reflow 范围。
+   * 用 offsetMap 识别保留文字的 reflow，生成 RetainedMove 列表。
    *
    * offsetMap 记录旧正文 → 新正文的字符身份映射。
    * Identity 条目表示字符位置不变（无 reflow）；
    * Shifted 条目表示字符位置发生了偏移（需要 reflow 动画）。
    *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * - 用 oldLayout 算 oldRect，用 newLayout 算 newRect，做真正的平移动画。
+   * - 旧实现"直接在新位置画，不做平移动画"——输入导致后续字换行时，
+   *   后续字不会从旧行移到新行。现在用 RetainedMove 记录 oldRect → newRect。
+   * - 跨行按视觉行分别生成 RetainedMove。
+   *
    * Issue #879 复核评论修复：
    * - 旧正文范围用 oldText 解码，旧字形几何用 oldLayout 计算
    * - 新正文范围用 newText 解码，新字形几何用 newLayout 计算
    */
-  private static identifyReflowRanges(
+  private static identifyRetainedMoves(
     offsetMap: OffsetMap,
     oldText: string,
     newText: string,
     oldLayout: LineLayout[],
     newLayout: LineLayout[]
-  ): GlyphSource[] {
-    const reflowTargets: GlyphSource[] = []
+  ): RetainedMove[] {
+    const moves: RetainedMove[] = []
     const entries: OffsetMapEntry[] = offsetMap.entries
 
     for (const entry of entries) {
@@ -541,20 +561,35 @@ export class EditorMotionPlanner {
       const newUtf16Start = TextOffsetMapper.utf8ToUtf16(newText, entry.newByteOffset)
       const newUtf16End = TextOffsetMapper.utf8ToUtf16(newText, entry.newByteOffset + entry.length)
 
-      // 只对有实际位移的字符生成 reflow 目标
+      // 只对有实际位移的字符生成 reflow
       if (oldUtf16Start === newUtf16Start) {
         continue
       }
 
-      // reflow 目标用新字形几何（newLayout），因为文字最终要在新位置显示
-      const glyphTarget = EditorMotionPlanner.computeGlyphSource(
-        newText, newUtf16Start, newUtf16End, newLayout, 'new'
+      // 跨行按视觉行分别生成 RetainedMove
+      // 旧字源按 oldLayout 算 oldRect，新位置按 newLayout 算 newRect
+      const oldRects = EditorMotionPlanner.computeGlyphRectsByLines(
+        oldText, oldUtf16Start, oldUtf16End, oldLayout
       )
-      if (glyphTarget !== null) {
-        reflowTargets.push(glyphTarget)
+      const newRects = EditorMotionPlanner.computeGlyphRectsByLines(
+        newText, newUtf16Start, newUtf16End, newLayout
+      )
+
+      // 按顺序配对（假设 oldRects 和 newRects 数量相同，按字符顺序对应）
+      const pairCount = Math.min(oldRects.length, newRects.length)
+      for (let i = 0; i < pairCount; i++) {
+        moves.push({
+          oldUtf16Start: oldRects[i].utf16Start,
+          oldUtf16End: oldRects[i].utf16End,
+          newUtf16Start: newRects[i].utf16Start,
+          newUtf16End: newRects[i].utf16End,
+          sourceKind: 'old',
+          oldRect: oldRects[i].rect,
+          newRect: newRects[i].rect
+        })
       }
     }
 
-    return reflowTargets
+    return moves
   }
 }

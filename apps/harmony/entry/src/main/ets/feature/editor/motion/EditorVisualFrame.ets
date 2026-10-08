@@ -9,6 +9,12 @@
 // motionGlyphWindows 标记运动层应画的字形窗口，
 // 两者互不重叠。
 //
+// Issue #879 本轮复核评论修复（问题5）：
+// - 新增多通道结构 InsertRun / DeletedRun / RetainedMove / GlyphRect。
+// - EditorMotionPlan 不再用单一 motionKind 决定整个事务，改为同时容纳多通道。
+// - 保留 MotionKind 枚举用于 EditorVisualFrame.motionKind（表示当前帧的主要运动类型，
+//   供 needsMotionLayer 判断），但 plan 不再用单一 motionKind 决定整个事务。
+//
 // 所有坐标单位 vp，相对组件左上角。
 // 所有文本 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
 
@@ -21,6 +27,11 @@
  * - ConcealForward：Forward Delete（逻辑光标不动，被删字贴向固定 caret 缩回）。
  * - Reflow：保留文字移动（因插入/删除导致后续文字位移）。
  * - CaretMove：纯光标移动（不涉及正文增删，只移动光标位置）。
+ *
+ * Issue #879 本轮复核评论修复（问题5）：MotionKind 仅用于 EditorVisualFrame.motionKind，
+ * 表示当前帧的主要运动类型（供 needsMotionLayer 判断）。
+ * EditorMotionPlan 不再用单一 motionKind 决定整个事务——
+ * 一次事务可同时包含吐字/吞字/保留字移动/光标移动多个通道。
  */
 export enum MotionKind {
   None = 'none',
@@ -32,6 +43,91 @@ export enum MotionKind {
 }
 
 /**
+ * 字形矩形几何（vp，相对组件左上角）。
+ */
+export interface GlyphRect {
+  /** 左边界（vp） */
+  x: number
+  /** 上边界（vp） */
+  y: number
+  /** 宽度（vp） */
+  width: number
+  /** 高度（vp） */
+  height: number
+}
+
+/**
+ * 吐字通道——新插入的字。
+ *
+ * 新字源完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]。
+ * 跨行时按视觉行分别计算裁切窗口——每个 InsertRun 对应一个视觉行内的连续字片段，
+ * 不拿一个 x0→x1 横向跨行。
+ *
+ * Issue #879 本轮复核评论修复（问题5）：多通道结构，替代旧的单一 motionKind 分支。
+ */
+export interface InsertRun {
+  /** 字形在新正文中的 UTF-16 起始 offset */
+  utf16Start: number
+  /** 字形在新正文中的 UTF-16 结束 offset（exclusive） */
+  utf16End: number
+  /** 字形来源：固定 'new'（吐字总是用新正文源） */
+  sourceKind: 'new'
+  /** 字形在新排版中的位置（vp） */
+  rect: GlyphRect
+}
+
+/**
+ * 吞字通道——被删的旧字。
+ *
+ * 旧字源留在动画层，裁切窗口从 [x0, x1] 缩到 [x0, x0]。
+ * 跨行时按视觉行分别计算裁切窗口。
+ *
+ * Forward Delete 是 DeletedRun 的特例：逻辑光标不动，被删字贴向固定 caret 缩回。
+ *
+ * Issue #879 本轮复核评论修复（问题5）：多通道结构。
+ */
+export interface DeletedRun {
+  /** 字形在旧正文中的 UTF-16 起始 offset */
+  utf16Start: number
+  /** 字形在旧正文中的 UTF-16 结束 offset（exclusive） */
+  utf16End: number
+  /** 字形来源：固定 'old'（吞字总是用旧正文源） */
+  sourceKind: 'old'
+  /** 字形在旧排版中的位置（vp） */
+  rect: GlyphRect
+  /** 是否为 Forward Delete（逻辑光标不动，被删字贴向固定 caret 缩回） */
+  isForward: boolean
+}
+
+/**
+ * 保留字移动通道——offsetMap 中 Shifted 的保留字。
+ *
+ * 旧位置 → 新位置插值平移。动画期间用旧字源绘制并平移到新位置，
+ * 动画结束后归还静态层（按新位置绘制）。
+ *
+ * Issue #879 本轮复核评论修复（问题5）：
+ * 旧实现 Reflow 分支"直接在新位置画，不做平移动画"——
+ * 输入导致后续字换行时，后续字不会从旧行移到新行。
+ * 现在用 RetainedMove 记录 oldRect → newRect，做真正的平移动画。
+ */
+export interface RetainedMove {
+  /** 字形在旧正文中的 UTF-16 起始 offset */
+  oldUtf16Start: number
+  /** 字形在旧正文中的 UTF-16 结束 offset（exclusive） */
+  oldUtf16End: number
+  /** 字形在新正文中的 UTF-16 起始 offset */
+  newUtf16Start: number
+  /** 字形在新正文中的 UTF-16 结束 offset（exclusive） */
+  newUtf16End: number
+  /** 字形来源：'old'（动画期间用旧字源绘制并平移到新位置） */
+  sourceKind: 'old'
+  /** 旧位置矩形（vp） */
+  oldRect: GlyphRect
+  /** 新位置矩形（vp） */
+  newRect: GlyphRect
+}
+
+/**
  * 运动层字形窗口。
  *
  * 描述一个正在动画中的字形（或字形组）的裁切窗口和排版位置。
@@ -39,7 +135,12 @@ export enum MotionKind {
  * - 吐字（Reveal）：sourceKind='new'，新字完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]。
  * - 吞字（Conceal）：sourceKind='old'，旧字源留在动画层，裁切窗口从 [x0, x1] 缩到 [x0, x0]。
  * - Forward Delete（ConcealForward）：sourceKind='old'，被删字贴向固定 caret 缩回。
- * - Reflow：sourceKind='new'，保留文字平移到新位置。
+ * - Reflow：sourceKind='old'，保留文字从旧位置平移到新位置（用旧字源绘制 + offset 平移）。
+ *
+ * Issue #879 本轮复核评论修复（问题5）：
+ * MotionGlyphWindow 仍保留——由 Coordinator 从多通道 plan（InsertRun/DeletedRun/RetainedMove）
+ * 采样生成，描述某一帧运动层要画的字形窗口。EditorMotionLayer 消费本结构做 clipShape 裁切。
+ * 新增 offsetX/offsetY 字段支持 RetainedMove 的平移动画（旧字源绘制后整体偏移到当前插值位置）。
  */
 export interface MotionGlyphWindow {
   /** 字形来源：'old'（旧正文）或 'new'（新正文） */
@@ -56,14 +157,18 @@ export interface MotionGlyphWindow {
   clipTop: number
   /** 裁切窗口下边界（vp） */
   clipBottom: number
-  /** 字形排版位置 x（vp） */
+  /** 字形排版位置 x（vp）——源 StyledString 排版出的原始位置 */
   glyphX: number
-  /** 字形排版位置 y（vp） */
+  /** 字形排版位置 y（vp）——源 StyledString 排版出的原始位置 */
   glyphY: number
   /** 字形宽度（vp） */
   glyphWidth: number
   /** 字形高度（vp） */
   glyphHeight: number
+  /** 绘制偏移 x（vp）——RetainedMove 平移动画时把旧字源整体偏移到当前插值位置 */
+  offsetX: number
+  /** 绘制偏移 y（vp）——RetainedMove 平移动画时把旧字源整体偏移到当前插值位置 */
+  offsetY: number
 }
 
 /**
@@ -71,6 +176,13 @@ export interface MotionGlyphWindow {
  *
  * 标记静态正文层在这一帧应该绘制的字形范围。
  * 运动层负责的字形范围不包含在内——同一字形每帧只画一次。
+ *
+ * Issue #879 本轮复核评论修复（问题1）：
+ * 静态可见区完整扣除所有被 motion 接管的目标 glyph 身份
+ * （insertRuns + retainedMoves 的新位置 + deletedRuns 的旧位置），
+ * 而不是按当前 MotionKind 临时扣一个空间矩形。
+ * 主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape/maskShape 裁切——
+ * 只显示未被运动接管的范围。
  */
 export interface StaticVisibleRange {
   /** UTF-16 起始 offset */
@@ -109,6 +221,11 @@ export interface MotionSegment {
  *
  * 渲染层（EditorMotionLayer）消费本结构，用 clipShape/maskShape
  * 对真实 ArkUI Text 绘制结果做遮罩，实现吐字吞字效果。
+ *
+ * Issue #879 本轮复核评论修复（问题1）：
+ * staticVisibleRanges 用于主 Text 的 clipShape/maskShape 裁切——
+ * 主 Text 仍完整排版，但只绘制 staticVisibleRanges 范围内的字形，
+ * 被运动接管的字形从静态绘制输出中排除（不再用背景色 Rect 遮罩）。
  */
 export interface EditorVisualFrame {
   /** 光标 x 位置（vp）——动画中等于裁切前沿 front */
@@ -123,6 +240,6 @@ export interface EditorVisualFrame {
   motionGlyphWindows: MotionGlyphWindow[]
   /** 是否正在动画中 */
   isAnimating: boolean
-  /** 运动类型 */
+  /** 运动类型——当前帧的主要运动类型，供 needsMotionLayer 判断 */
   motionKind: MotionKind
 }

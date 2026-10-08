@@ -57,11 +57,16 @@ import { inspector } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
 // Issue #879：运动层相关类型。
 import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
-import { EditorVisualFrame, MotionGlyphWindow } from '../motion/EditorVisualFrame'
+import { EditorVisualFrame } from '../motion/EditorVisualFrame'
 import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
 import { EditorMotionCoordinator } from '../motion/EditorMotionCoordinator'
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams } from '../motion/EditorMotionLayer'
-import Animator, { AnimatorResult } from '@ohos.animator'
+// Issue #879 本轮复核评论修复（问题6）：用 getUIContext().createAnimator 替代 Animator.create。
+// Animator.create 从 API18 起废弃。@kit.ArkUI 导出 AnimatorOptions 和 AnimatorResult。
+// 创建 animator 改为 this.getUIContext().createAnimator(options)。
+import { AnimatorResult, AnimatorOptions } from '@kit.ArkUI'
+// PathShape 用于主 Text 的静态可见区 clipShape 裁切（问题1）。
+import { PathShape } from '@ohos.arkui.shape'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
 
@@ -113,6 +118,23 @@ export struct SujianEditor {
   // newStyledString = 编辑后的正文 StyledString（吐字时显示新字）
   private oldStyledString: StyledString | null = null
   private newStyledString: StyledString | null = null
+  // Issue #879 本轮复核评论修复（问题2）：运动层独立的 old/new TextController。
+  // MotionTextOverlayBuilder 用 Text(undefined, {controller}) 显示真实原始排版。
+  // 只在运动开始时 setStyledString 一次，不在每一帧重新 setStyledString。
+  private oldTextController: TextController = new TextController()
+  private newTextController: TextController = new TextController()
+  // 标记运动层 old/new TextController 是否已设置 StyledString（避免空 TextController 渲染）。
+  private hasOldMotionSource: boolean = false
+  private hasNewMotionSource: boolean = false
+  // Issue #879 本轮复核评论修复（问题4）：pending RenderPlan 身份字段。
+  // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
+  // 需保留 per-revision 的旧布局，不要在两次更新尚未消费之间用 previousLayout 一个变量覆盖旧版来源。
+  private pendingRevision: number = 0
+  private pendingGeneration: number = 0
+  private pendingCompositionGeneration: number = -1
+  private pendingFontSize: number = 0
+  private pendingLineSpacing: number = 0
+  private pendingContentWidth: number = 0
   // IME 连接、输入/选区控制器、统一语义调度器由父组件注入；
   // SujianEditor 在获得/失去焦点时 attach/detach IME。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 inputAdapter/selectionController。
@@ -131,9 +153,9 @@ export struct SujianEditor {
   selectionBackgroundColor: ResourceColor = $r('sys.color.ohos_id_color_text_highlight_bg')
   compositionUnderlineColor: ResourceColor = $r('sys.color.ohos_id_color_emphasize')
   caretColor: ResourceColor = $r('sys.color.ohos_id_color_text_primary')
-  // Issue #879 第三轮复核修复：编辑区背景色——用于动画期间遮罩主 Text 中运动层负责的字形范围。
-  // 吐字时主 Text 已显示完整新正文，需用背景色 Rect 遮罩新字目标位置，防止重影。
-  editorBackgroundColor: ResourceColor = $r('sys.color.background_secondary')
+  // Issue #879 本轮复核评论修复（问题1）：删除 editorBackgroundColor——不再用背景色 Rect 遮罩。
+  // 主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape/maskShape 裁切——
+  // 只显示未被运动接管的范围。
   @State renderResult: EditorRenderResult | null = null
   // 静态渲染几何（从 renderResult 同步出来，供 build() 直接绑定）。
   @State selectionRects: SelectionRect[] = []
@@ -301,9 +323,16 @@ export struct SujianEditor {
       // Issue #879 复核评论修复：layout 完成后消费 pendingPresentationUpdate。
       // onPresentationUpdateChanged 暂存了 pendingPresentationUpdate，等 layout 完成后才调 updateVisualFrame，
       // 确保 acceptUpdate 拿到的是新布局完成后的 renderResult.lines，而非旧布局。
+      // Issue #879 本轮复核评论修复（问题4）：校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
+      // 新 StyledString 在隐藏排版源获得 LayoutManager 后，核实身份与 pending 一致，
+      // 然后把静态绘制可见区 + 运动源裁切 + 光标合成一个同帧发布的 RenderPlan。
       if (this.pendingPresentationUpdate !== null) {
-        this.updateVisualFrame()
-        this.pendingPresentationUpdate = null
+        if (this.validatePendingIdentity()) {
+          // 身份匹配：同帧发布 RenderPlan
+          this.updateVisualFrame()
+          this.pendingPresentationUpdate = null
+        }
+        // 身份不匹配：保留 pending，等下一次 layout 回调（可能 contentWidth 还没更新）
       }
     }
     observer.on('layout', callback)
@@ -514,6 +543,10 @@ export struct SujianEditor {
   // Issue #879 第三轮复核修复：在 refreshRender 之前缓存旧布局行几何，
   // 因为 refreshRender 会把 renderResult 更新为新布局（lines=[]），
   // layout observer 回调中再读 renderResult?.lines 已经是空的了。
+  // Issue #879 本轮复核评论修复（问题4）：同帧发布 RenderPlan。
+  // - 缓存 pendingPresentationUpdate + pending 身份字段（revision/generation/composition/style/width）。
+  // - layout observer 回调中校验 pending 身份匹配后才消费。
+  // - 准备运动层新字源 TextController（在运动开始时 setStyledString 一次）。
   private onPresentationUpdateChanged(): void {
     // 在 refreshRender 之前缓存旧布局（此时 renderResult 还是旧布局的结果）
     this.previousLayout = this.renderResult?.lines ?? []
@@ -541,6 +574,22 @@ export struct SujianEditor {
     }
     // 同步 currentSnapshot
     this.currentSnapshot = this.presentationUpdate.layoutSnapshot
+
+    // Issue #879 本轮复核评论修复（问题4）：缓存 pending 身份字段。
+    // layout observer 回调中校验 pending 的 revision/generation/composition/style/width 匹配后才消费。
+    const pendingSnap = this.presentationUpdate.layoutSnapshot
+    this.pendingRevision = pendingSnap.revision
+    this.pendingGeneration = pendingSnap.generation
+    this.pendingCompositionGeneration = pendingSnap.compositionGeneration
+    this.pendingFontSize = pendingSnap.fontSize
+    this.pendingLineSpacing = pendingSnap.lineSpacingMultiplier
+    this.pendingContentWidth = this.contentWidth
+
+    // Issue #879 本轮复核评论修复（问题2）：准备运动层新字源 TextController。
+    // 在运动开始时 setStyledString 一次，不在每一帧重新 setStyledString。
+    // 旧字源 TextController 在上一轮 applyStyledText 中已设置（this.oldStyledString）。
+    this.prepareMotionSourceControllers()
+
     // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
     // Issue #879 复核评论修复：暂存 pendingPresentationUpdate，等 layout observer 回调后才调 updateVisualFrame。
@@ -548,6 +597,63 @@ export struct SujianEditor {
     this.pendingPresentationUpdate = this.presentationUpdate
     // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
     this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #879 本轮复核评论修复（问题2）：准备运动层 old/new TextController。
+  // - oldTextController：设置旧正文 StyledString（this.oldStyledString）。
+  // - newTextController：设置新正文 StyledString（this.newStyledString，在 applyStyledText 中生成）。
+  // 只在运动开始时设置一次，不在每一帧重新 setStyledString。
+  private prepareMotionSourceControllers(): void {
+    // 旧字源：用 this.oldStyledString（上一轮的 newStyledString）
+    if (this.oldStyledString !== null) {
+      this.oldTextController.setStyledString(this.oldStyledString)
+      this.hasOldMotionSource = true
+    } else {
+      this.hasOldMotionSource = false
+    }
+    // 新字源：用 this.newStyledString（在 applyStyledText 中生成）
+    // applyStyledText 在 refreshRender 中调用，此时 newStyledString 已更新。
+    // 但 refreshRender 在 prepareMotionSourceControllers 之后调用，所以这里先用当前 newStyledString。
+    // refreshRender → applyStyledText 会更新 newStyledString，layout observer 回调时再用新值。
+    if (this.newStyledString !== null) {
+      this.newTextController.setStyledString(this.newStyledString)
+      this.hasNewMotionSource = true
+    } else {
+      this.hasNewMotionSource = false
+    }
+  }
+
+  // Issue #879 本轮复核评论修复（问题4）：校验 pending RenderPlan 身份。
+  // layout observer 回调中核实 sessionId/revision/generation/composition/style/width 与 pending 一致。
+  // 需保留 per-revision 的旧布局，不要在两次更新尚未消费之间用 previousLayout 一个变量覆盖旧版来源。
+  private validatePendingIdentity(): boolean {
+    if (this.currentSnapshot === null) {
+      return false
+    }
+    // 校验 revision/generation/compositionGeneration
+    if (this.currentSnapshot.revision !== this.pendingRevision) {
+      return false
+    }
+    if (this.currentSnapshot.generation !== this.pendingGeneration) {
+      return false
+    }
+    if (this.currentSnapshot.compositionGeneration !== this.pendingCompositionGeneration) {
+      return false
+    }
+    // 校验 style（fontSize/lineSpacing）
+    if (this.currentSnapshot.fontSize !== this.pendingFontSize) {
+      return false
+    }
+    if (this.currentSnapshot.lineSpacingMultiplier !== this.pendingLineSpacing) {
+      return false
+    }
+    // 校验 width（contentWidth 可能还在更新，用 renderResult 的行布局宽度校验）
+    // contentWidth 来自 Text onAreaChange，layout observer 回调时可能已更新。
+    // 如果 contentWidth 与 pending 不匹配，可能是宽度还没更新——保留 pending 等下一次回调。
+    if (this.contentWidth !== this.pendingContentWidth && this.pendingContentWidth > 0) {
+      return false
+    }
+    return true
   }
 
   // Issue #879：通过运动协调器接收编辑更新，计算当前视觉帧。
@@ -588,6 +694,14 @@ export struct SujianEditor {
   // animateTo + @Watch 只能收到 0/1 终值，无法逐帧驱动 sampleFrame。
   // AnimatorResult.onFrame(progress) 是 ArkUI 渲染层每帧回调，progress 从 0 到 1 连续变化。
   // motionGeneration 计数器防止旧 animator 的完成事件结束新动画。
+  // Issue #879 本轮复核评论修复（问题3）：
+  // - 必须先 ++motionGeneration 再 cancel 旧 animator：华为 AnimatorResult.cancel() 会额外触发
+  //   一次终点 onFrame。当前代码是先 cancel 再 ++motionGeneration，有机会把旧动画终值写到新画面。
+  //   改为先 ++motionGeneration 再 cancel，旧 animator 的 onFrame 回调因 generation 检查失效。
+  // - onFrame 改为调 advance(progress)（sampleFrame 不回写 currentFrame，advance 回写）。
+  // Issue #879 本轮复核评论修复（问题6）：
+  // - 用 getUIContext().createAnimator(options) 替代 Animator.create(options)。
+  // - AnimatorOptions 从 @kit.ArkUI 导入。
   private startMotionAnimation(durationMs: number): void {
     if (durationMs <= 0) {
       // 无动画时长，直接跳到终态
@@ -595,18 +709,22 @@ export struct SujianEditor {
       this.isMotionAnimating = false
       return
     }
-    // 取消旧 animator
+    // Issue #879 本轮复核评论修复（问题3）：先 ++motionGeneration 再 cancel 旧 animator。
+    // 华为 AnimatorResult.cancel() 会额外触发一次终点 onFrame，
+    // 先 cancel 再 ++generation 会让旧动画终值写到新画面。
+    // 先 ++generation 再 cancel，旧 animator 的 onFrame 回调因 generation 检查失效。
+    this.motionGeneration++
+    const currentGen = this.motionGeneration
+    // 取消旧 animator（cancel 触发的 onFrame 会因 currentGen !== this.motionGeneration 而失效）
     if (this.motionAnimator !== null) {
       this.motionAnimator.cancel()
       this.motionAnimator = null
     }
-    this.motionGeneration++
-    const currentGen = this.motionGeneration
     this.isMotionAnimating = true
 
-    // 创建 animator——用 Animator.create() 而非 getUIContext().createAnimator()，
-    // 后者需要 AnimatorOptions 类型，该类型在当前 SDK 版本中不可用。
-    this.motionAnimator = Animator.create({
+    // Issue #879 本轮复核评论修复（问题6）：用 getUIContext().createAnimator 替代 Animator.create。
+    // Animator.create 从 API18 起废弃，@kit.ArkUI 导出 AnimatorOptions 和 AnimatorResult。
+    const animatorOptions: AnimatorOptions = {
       duration: durationMs,
       easing: 'easeOut',
       delay: 0,
@@ -615,12 +733,16 @@ export struct SujianEditor {
       iterations: 1,
       begin: 0,
       end: 1
-    })
+    }
+    this.motionAnimator = this.getUIContext().createAnimator(animatorOptions)
+    // Issue #879 本轮复核评论修复（问题3）：onFrame 改为调 advance(progress)。
+    // sampleFrame 不回写 currentFrame，advance 调 sampleFrame 后回写 currentFrame 并返回。
+    // 确保下一次输入 acceptUpdate 用的 startFrame = currentFrame 是当前进度的真实状态。
     this.motionAnimator.onFrame = (progress: number): void => {
       if (currentGen !== this.motionGeneration) {
         return // 旧 animator 回调，忽略
       }
-      this.visualFrame = this.motionCoordinator.sampleFrame(progress)
+      this.visualFrame = this.motionCoordinator.advance(progress)
     }
     this.motionAnimator.onFinish = (): void => {
       if (currentGen !== this.motionGeneration) {
@@ -636,6 +758,8 @@ export struct SujianEditor {
   // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
   // API15 之前，在 aboutToAppear 里通过 TextController.setStyledString() 设置内容无法显示，
   // 因为 Text 组件还未创建。用 textMounted 守卫确保只在 Text.onAppear 之后才下发 StyledString。
+  // Issue #879 本轮复核评论修复（问题2）：同时更新运动层 newTextController。
+  // 只在运动开始时 setStyledString 一次，不在每一帧重新 setStyledString。
   private applyStyledText(): void {
     if (!this.textMounted) {
       return
@@ -643,6 +767,7 @@ export struct SujianEditor {
     if (this.currentSnapshot === null) {
       this.textController.setStyledString(new MutableStyledString(''))
       this.newStyledString = null
+      this.hasNewMotionSource = false
       return
     }
     const config: EditorStyleConfig = {
@@ -655,6 +780,11 @@ export struct SujianEditor {
     // Issue #879 复核评论修复：保存新 StyledString 引用，供运动层 MotionTextOverlayBuilder 使用。
     this.newStyledString = styled
     this.textController.setStyledString(styled)
+    // Issue #879 本轮复核评论修复（问题2）：同时更新运动层 newTextController。
+    // 这样 prepareMotionSourceControllers 在下一轮 onPresentationUpdateChanged 中
+    // 能把当前 newStyledString（上一轮的新内容）设为 oldTextController。
+    this.newTextController.setStyledString(styled)
+    this.hasNewMotionSource = true
   }
 
   // 基础渲染：用 render() 转 offset，不含几何（lines/rects 为空）。
@@ -1331,80 +1461,115 @@ export struct SujianEditor {
           // wordBreak(BREAK_ALL) 与 fallback 路径的逐 code point 折行一致。
           // 字号、行高、首行缩进通过 StyledString 的 TextStyle/LineHeightStyle/ParagraphStyle 下发，
           // 不再在 Text 属性上设置 fontSize。
-          Text(undefined, { controller: this.textController })
-            .id(EDITOR_TEXT_ID)
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .wordBreak(WordBreak.BREAK_ALL)
-            .onAppear(() => {
-              // Issue #768 评论5837229456：API15 之前，在 aboutToAppear 里通过
-              // TextController.setStyledString() 设置内容无法显示，因为组件还未创建。
-              // 在 Text.onAppear 后才标记挂载并下发 StyledString。
-              // Issue #768 评论5837824666：在 onAppear 中注册布局观察者，
-              // 确保后续 setStyledString 后通过 layout 回调（而非同步读取）获取 LayoutManager。
-              this.textMounted = true
-              this.attachTextLayoutObserver()
-              this.applyStyledText()
-              // 不再同步调 refreshRenderLayout() — 等 ComponentObserver 'layout' 回调触发。
-            })
-            .onDisAppear(() => {
-              // Issue #768 评论5837824666：注销布局观察者。
-              this.detachTextLayoutObserver()
-              this.textMounted = false
-            })
-            .onAreaChange((_oldArea: Area, newArea: Area): void => {
-              // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
-              // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
-              const oldContentWidth = this.contentWidth
-              this.contentWidth = Number(newArea.width)
-              this.contentHeight = Number(newArea.height)
-              // Issue #629 R9 评论5326213302 第4项：内容宽度变化时失效旧 visual caret hint。
-              // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
-              // 不给 SujianEditor 再加第二份 affinity 状态；invalidate 后 refreshRenderLayout 从 owner 重取。
-              if (this.contentWidth !== oldContentWidth && this.selectionController) {
-                this.selectionController.invalidateVisualCaret()
-              }
-              // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
-              this.refreshRenderLayout()
-              // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。
-              // register 时尺寸可能为 0，pending 保留；onAreaChange 拿到真实尺寸后才消费。
-              if (this.viewportController) {
-                this.viewportController.notifyDimensionsChanged()
-              }
-            })
-
-          // Issue #879 第三轮复核修复：遮罩层——在主 Text 上方、运动层下方，
-          // 用与编辑区背景同色的 Rect 覆盖主 Text 中运动层负责的字形范围。
-          // 吐字时主 Text 已显示完整新正文（包含新字），若不遮罩，用户在动画开始时
-          // 就能看到完整的新字，运动层的裁切窗口扩展只是叠加了相同内容，导致重影。
-          // 用背景色 Rect 遮罩后，主 Text 中新字的目标位置不可见，只有运动层的裁切窗口
-          // 逐渐揭示新字——实现真正的"从无到有"吐字效果。
-          // 吞字时主 Text 显示新正文（已删除被删字），运动层显示旧正文（包含被删字），
-          // 主 Text 在被删字位置没有内容，不需要遮罩——但统一遮罩也无副作用。
+          // Issue #879 本轮复核评论修复（问题1）：主 Text 仍完整排版，但其绘制输出按
+          // staticVisibleRanges 用 clipShape 裁切——只显示未被运动接管的范围。
+          // 不再用背景色 Rect 遮罩——被运动接管的完整 glyph cluster 从静态文字的绘制输出中排除。
+          // 非动画时不裁切（全显示）；动画时用 PathShape 按 staticVisibleRanges 裁切。
+          // clipShape 作用在绘制输出上，不改变 Text 的排版宽度。
           if (this.visualFrame !== null && this.visualFrame.isAnimating &&
-              EditorMotionLayer.needsMotionLayer(this.visualFrame)) {
-            ForEach(this.visualFrame.motionGlyphWindows, (window: MotionGlyphWindow) => {
-              Rect()
-                .position({ x: window.glyphX, y: window.glyphY })
-                .width(window.glyphWidth)
-                .height(window.glyphHeight)
-                .fill(this.editorBackgroundColor)
-            }, (window: MotionGlyphWindow, index: number) => `${window.sourceKind}-${index}`)
+              EditorMotionLayer.needsStaticMask(this.visualFrame) &&
+              this.renderResult !== null) {
+            // 动画中：主 Text 用 clipShape 按 staticVisibleRanges 裁切
+            Stack() {
+              Text(undefined, { controller: this.textController })
+                .id(EDITOR_TEXT_ID)
+                .width('100%')
+                .textAlign(TextAlign.Start)
+                .wordBreak(WordBreak.BREAK_ALL)
+                .onAppear(() => {
+                  this.textMounted = true
+                  this.attachTextLayoutObserver()
+                  this.applyStyledText()
+                })
+                .onDisAppear(() => {
+                  this.detachTextLayoutObserver()
+                  this.textMounted = false
+                })
+                .onAreaChange((_oldArea: Area, newArea: Area): void => {
+                  const oldContentWidth = this.contentWidth
+                  this.contentWidth = Number(newArea.width)
+                  this.contentHeight = Number(newArea.height)
+                  if (this.contentWidth !== oldContentWidth && this.selectionController) {
+                    this.selectionController.invalidateVisualCaret()
+                  }
+                  this.refreshRenderLayout()
+                  if (this.viewportController) {
+                    this.viewportController.notifyDimensionsChanged()
+                  }
+                })
+            }
+            .width('100%')
+            .clipShape(new PathShape({
+              commands: EditorMotionLayer.buildStaticMaskPath(
+                EditorMotionLayer.computeStaticMaskRects(
+                  this.visualFrame,
+                  this.renderResult.lines,
+                  this.contentWidth,
+                  this.contentHeight
+                )
+              )
+            }))
+          } else {
+            // 非动画：主 Text 全显示（不裁切）
+            Text(undefined, { controller: this.textController })
+              .id(EDITOR_TEXT_ID)
+              .width('100%')
+              .textAlign(TextAlign.Start)
+              .wordBreak(WordBreak.BREAK_ALL)
+              .onAppear(() => {
+                // Issue #768 评论5837229456：API15 之前，在 aboutToAppear 里通过
+                // TextController.setStyledString() 设置内容无法显示，因为组件还未创建。
+                // 在 Text.onAppear 后才标记挂载并下发 StyledString。
+                // Issue #768 评论5837824666：在 onAppear 中注册布局观察者，
+                // 确保后续 setStyledString 后通过 layout 回调（而非同步读取）获取 LayoutManager。
+                this.textMounted = true
+                this.attachTextLayoutObserver()
+                this.applyStyledText()
+                // 不再同步调 refreshRenderLayout() — 等 ComponentObserver 'layout' 回调触发。
+              })
+              .onDisAppear(() => {
+                // Issue #768 评论5837824666：注销布局观察者。
+                this.detachTextLayoutObserver()
+                this.textMounted = false
+              })
+              .onAreaChange((_oldArea: Area, newArea: Area): void => {
+                // Issue #629 评论6 Part C：Text onAreaChange 更新的是内层正文实际渲染尺寸
+                // （contentWidth/contentHeight），不是外层 Scroll 可视区域尺寸。
+                const oldContentWidth = this.contentWidth
+                this.contentWidth = Number(newArea.width)
+                this.contentHeight = Number(newArea.height)
+                // Issue #629 R9 评论5326213302 第4项：内容宽度变化时失效旧 visual caret hint。
+                // 布局宽度变化不改 Core revision，但 soft-wrap 可能重新发生，旧 affinity 可能不再有效。
+                // 不给 SujianEditor 再加第二份 affinity 状态；invalidate 后 refreshRenderLayout 从 owner 重取。
+                if (this.contentWidth !== oldContentWidth && this.selectionController) {
+                  this.selectionController.invalidateVisualCaret()
+                }
+                // 内容尺寸已知后重新计算几何（选区/光标/composition 下划线）。
+                this.refreshRenderLayout()
+                // Issue #629 评论7 第4项：内容尺寸更新后通知 controller 重试消费 pending。
+                // register 时尺寸可能为 0，pending 保留；onAreaChange 拿到真实尺寸后才消费。
+                if (this.viewportController) {
+                  this.viewportController.notifyDimensionsChanged()
+                }
+              })
           }
 
-          // 3. motion layer — Issue #879 复核评论修复：运动层（在 text 上方，用 clipShape 裁切真实 Text）。
+          // 3. motion layer — Issue #879 本轮复核评论修复（问题2）：运动层用完整 StyledString 排版源。
           // 当 visualFrame.isAnimating 且 needsMotionLayer 时，渲染运动层 Text + clipShape。
-          // 吐字：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口。
-          // 吞字：旧字源完整排版，clipShape 限制在 [x0, front] 裁切窗口。
+          // 吐字：新字源完整排版（newTextController），clipShape 限制在 [x0, front] 裁切窗口。
+          // 吞字：旧字源完整排版（oldTextController），clipShape 限制在 [x0, front] 裁切窗口。
+          // 旧、新两份 Text 的字体、行高、wordBreak(BREAK_ALL)、首行缩进、宽度、坐标原点
+          // 必须分别与对应 revision 的主布局完全一致（通过 TextController.setStyledString 设置）。
+          // 不能在每一帧重新 setStyledString——只在运动开始时设置一次。
           if (this.visualFrame !== null && this.visualFrame.isAnimating &&
               EditorMotionLayer.needsMotionLayer(this.visualFrame)) {
             MotionTextOverlayBuilder({
-              oldTextContent: this.previousSnapshot?.text ?? null,
-              newTextContent: this.currentSnapshot?.text ?? null,
+              oldTextController: this.oldTextController,
+              newTextController: this.newTextController,
+              hasOldSource: this.hasOldMotionSource,
+              hasNewSource: this.hasNewMotionSource,
               visualFrame: this.visualFrame,
               clipRects: EditorMotionLayer.buildAllClipRects(this.visualFrame),
-              fontSize: this.currentSnapshot?.fontSize ?? 16,
-              lineHeight: (this.currentSnapshot?.fontSize ?? 16) * (this.currentSnapshot?.lineSpacingMultiplier ?? 1.8),
               textWidth: this.contentWidth
             })
           }

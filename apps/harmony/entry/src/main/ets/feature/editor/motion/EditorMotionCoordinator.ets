@@ -6,11 +6,8 @@
 // 1. 接收 EditorPresentationUpdate，保存当前可见画面。
 // 2. 用 EditorMotionPlanner 生成新 plan。
 // 3. 直接 retarget——不等旧动画完成，立即切换到新 plan 的起始状态。
-// 4. tick(now) 逐帧驱动：接收时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
-// 5. sampleFrame(progress) 从 plan 和 progress 计算视觉帧：
-//    - 吐字：front = x0 + (x1-x0) * easing(p)
-//    - 吞字：front = x1 + (x0-x1) * easing(p)
-//    - 光标画在 front
+// 4. advance(progress) 逐帧驱动：接收进度，调用 sampleFrame 并回写 currentFrame。
+// 5. sampleFrame(progress) 从 plan 和 progress 计算视觉帧——同一 progress 同时采样所有通道。
 // 6. finishMotion() 动画完成，按最新目标全文 layout 重建静态所有权。
 //
 // Issue #879 复核评论修复：
@@ -22,17 +19,24 @@
 //   会话切换应由调用方通过 EditorPresentationUpdate.sessionId 检测。
 // - 添加旧布局缓存：保存上一帧的 EditorLayoutSnapshot（含旧 text）和旧 LineLayout[]，
 //   供 Planner 计算旧字形位置。
-// - 添加 tick(now) 方法：接收当前时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
-//   progress 达到 1 时在同一帧调用 finishMotion()。
 // - 修复 finishMotion：结束帧按最新目标全文 layout 重建静态所有权（所有字形归静态层），
 //   不照搬可能已排除目标文字的 staticVisibleRanges。
 // - contentWidth 由调用方传入。
 //
+// Issue #879 本轮复核评论修复：
+// - 问题3：添加 advance(progress) 方法——sampleFrame 不回写 currentFrame，
+//   advance 调 sampleFrame 后回写 currentFrame 并返回。UI 的 onFrame 改调 advance。
+//   删除 tick(now)（UI 从不调用），只保留 advance 一种推进入口。
+// - 问题5：sampleFrame/advance 改为同一 progress 同时采样所有通道
+//   （insertRuns/deletedRuns/retainedMoves/caretPath），不再用互斥的 if (motionKind === Reveal) 分支。
+//   静态可见区完整扣除所有被 motion 接管的目标 glyph 身份
+//   （insertRuns + retainedMoves 的新位置 + deletedRuns 的旧位置）。
+//
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
-import { EditorMotionPlan, EditorMotionPlanner, GlyphSource } from './EditorMotionPlanner'
+import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
@@ -82,11 +86,10 @@ export interface TextRevisionKey {
  * 保存上一帧真正已显示的状态，接收新的编辑更新后 retarget 到最新 canonical。
  * 不等旧动画完成——如果用户快速连续输入，直接切换到新 plan 的起始状态。
  *
- * Issue #879 复核评论修复：
- * - 拆分 GeometryKey / TextRevisionKey，正文版本变化不取消动画
- * - 添加旧布局缓存，供 Planner 计算旧字形位置
- * - 添加 tick(now) 逐帧驱动方法
- * - 修复 finishMotion 按最新 layout 重建静态所有权
+ * Issue #879 本轮复核评论修复：
+ * - 问题3：添加 advance(progress) 方法，sampleFrame 不回写 currentFrame，
+ *   advance 回写 currentFrame 并返回。删除 tick(now)。
+ * - 问题5：sampleFrame/advance 同一 progress 同时采样所有通道，不再用互斥分支。
  */
 export class EditorMotionCoordinator {
   /** 当前视觉帧 */
@@ -103,8 +106,6 @@ export class EditorMotionCoordinator {
   private newSnapshot: EditorLayoutSnapshot | null
   /** 新行布局——供 Planner 计算新字形几何和 finishMotion 重建 */
   private newLayout: LineLayout[]
-  /** 动画开始时间（ms，performance.now 语义） */
-  private motionStartTime: number
   /** 动画时长（ms） */
   private motionDurationMs: number
   /** 当前运动规划 */
@@ -134,27 +135,19 @@ export class EditorMotionCoordinator {
     this.oldLayout = []
     this.newSnapshot = null
     this.newLayout = []
-    this.motionStartTime = 0
     this.motionDurationMs = 0
     this.currentPlan = {
-      motionKind: MotionKind.None,
-      segments: [],
-      affectedRanges: [],
-      oldGlyphSources: [],
-      newGlyphTargets: [],
-      durationMs: 0
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath: [],
+      durationMs: 0,
+      motionKind: MotionKind.None
     }
   }
 
   /**
    * 接收编辑更新，生成新 plan，retarget 到最新 canonical。
-   *
-   * Issue #879 复核评论修复：
-   * - 先验证 editResult.baseRevision == cachedOldRevision、editResult.newRevision == newSnapshot.revision
-   * - 只有 GeometryKey 变化（会话切换/字号/宽度变化）才走静态重建
-   * - 正文版本变化不取消动画
-   * - contentWidth 由调用方传入
-   * - 入参改为 oldSnapshot + oldLayout + newSnapshot + newLayout + editResult + lastVisibleFrame
    *
    * @param oldSnapshot 旧布局快照（含旧正文 text）
    * @param oldLayout 旧行布局
@@ -183,58 +176,15 @@ export class EditorMotionCoordinator {
 
     // 几何身份变化（字号变更/宽度变化）→ 直接显示静态画面
     if (!EditorMotionCoordinator.geometryEquals(this.geometryKey, newGeometryKey)) {
-      this.geometryKey = newGeometryKey
-      this.textRevisionKey = {
-        revision: newSnapshot.revision,
-        generation: newSnapshot.generation,
-        compositionGeneration: newSnapshot.compositionGeneration
-      }
-      this.oldSnapshot = newSnapshot
-      this.oldLayout = newLayout
-      this.newSnapshot = newSnapshot
-      this.newLayout = newLayout
-      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
-      this.currentPlan = {
-        motionKind: MotionKind.None,
-        segments: [],
-        affectedRanges: [],
-        oldGlyphSources: [],
-        newGlyphTargets: [],
-        durationMs: 0
-      }
-      this.motionDurationMs = 0
-      this.currentFrame.isAnimating = false
+      this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
       return this.currentFrame
     }
 
     // 验证 editResult 的 baseRevision 和 newRevision 是否匹配
     if (editResult !== null) {
-      // editResult.baseRevision 应该等于旧 snapshot 的 revision
-      // editResult.newRevision 应该等于新 snapshot 的 revision
-      // 如果不匹配，说明布局缓存已过期，走静态重建
       if (editResult.baseRevision !== oldSnapshot.revision ||
           editResult.newRevision !== newSnapshot.revision) {
-        this.geometryKey = newGeometryKey
-        this.textRevisionKey = {
-          revision: newSnapshot.revision,
-          generation: newSnapshot.generation,
-          compositionGeneration: newSnapshot.compositionGeneration
-        }
-        this.oldSnapshot = newSnapshot
-        this.oldLayout = newLayout
-        this.newSnapshot = newSnapshot
-        this.newLayout = newLayout
-        this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
-        this.currentPlan = {
-          motionKind: MotionKind.None,
-          segments: [],
-          affectedRanges: [],
-          oldGlyphSources: [],
-          newGlyphTargets: [],
-          durationMs: 0
-        }
-        this.motionDurationMs = 0
-        this.currentFrame.isAnimating = false
+        this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
         return this.currentFrame
       }
     }
@@ -279,251 +229,201 @@ export class EditorMotionCoordinator {
       return this.currentFrame
     }
 
-    // 记录动画开始时间——由 tick(now) 驱动
-    this.motionStartTime = 0 // 将在第一次 tick 时设置
-
     // 生成动画起始帧（progress=0）并回写 currentFrame
-    this.currentFrame = this.sampleFrame(0)
+    // Issue #879 本轮复核评论修复（问题3）：用 advance 而非 sampleFrame 回写 currentFrame。
+    this.currentFrame = this.advance(0)
     return this.currentFrame
   }
 
   /**
-   * 逐帧驱动——接收当前时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
+   * 逐帧驱动——接收进度，调用 sampleFrame 并回写 currentFrame。
    *
-   * Issue #879 复核评论修复：添加 tick(now) 方法实现逐帧驱动。
-   * - 第一次调用时设置 motionStartTime = now
-   * - progress = clamp((now - motionStartTime) / motionDurationMs, 0, 1)
-   * - 调用 sampleFrame(progress) 并回写 currentFrame
-   * - progress 达到 1 时在同一帧调用 finishMotion()
-   *
-   * @param now 当前时间戳（ms，performance.now 语义）
-   * @returns 当前进度的视觉帧
-   */
-  tick(now: number): EditorVisualFrame {
-    // 如果不在动画中，直接返回当前帧
-    if (!this.currentFrame.isAnimating || this.motionDurationMs <= 0) {
-      return this.currentFrame
-    }
-
-    // 第一次调用时设置动画开始时间
-    if (this.motionStartTime === 0) {
-      this.motionStartTime = now
-    }
-
-    // 计算 progress
-    const rawProgress = (now - this.motionStartTime) / this.motionDurationMs
-    const progress = Math.max(0, Math.min(1, rawProgress))
-
-    // 调用 sampleFrame 并回写 currentFrame
-    this.currentFrame = this.sampleFrame(progress)
-
-    // progress 达到 1 时在同一帧调用 finishMotion()
-    if (progress >= 1) {
-      this.currentFrame = this.finishMotion()
-    }
-
-    return this.currentFrame
-  }
-
-  /**
-   * 从 plan 和 progress 计算视觉帧。
-   *
-   * - 吐字（Reveal）：front = x0 + (x1-x0) * easing(p)，光标画在 front
-   * - 吞字（Conceal）：front = x1 + (x0-x1) * easing(p)，光标画在 front
-   * - Forward Delete（ConcealForward）：逻辑光标不动，被删字贴向固定 caret 缩回
-   * - Reflow：保留文字从旧位置平移到新位置
-   * - CaretMove：光标从旧位置插值到新位置
+   * Issue #879 本轮复核评论修复（问题3）：
+   * - 添加 advance(progress) 方法——sampleFrame 只返回帧不回写，
+   *   advance 调 sampleFrame 后回写 this.currentFrame 并返回。
+   * - UI 的 onFrame 改调 advance(progress)，确保下一次输入 acceptUpdate 用的
+   *   startFrame = this.currentFrame 是当前进度的真实状态，而非上一笔进度 0 的起始状态。
+   * - 删除 tick(now)（UI 从不调用），只保留 advance 一种推进入口。
    *
    * @param progress 动画进度 [0, 1]
-   * @returns 当前进度的视觉帧
+   * @returns 当前进度的视觉帧（已回写 currentFrame）
+   */
+  advance(progress: number): EditorVisualFrame {
+    const frame = this.sampleFrame(progress)
+    this.currentFrame = frame
+    return frame
+  }
+
+  /**
+   * 从 plan 和 progress 计算视觉帧——同一 progress 同时采样所有通道。
+   *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * - 同一 progress 同时采样 insertRuns（吐字）、deletedRuns（吞字）、
+   *   retainedMoves（保留字移动）、caretPath（光标）。
+   * - 不再用互斥的 if (motionKind === Reveal) 分支。
+   * - 静态可见区完整扣除所有被 motion 接管的目标 glyph 身份
+   *   （insertRuns + retainedMoves 的新位置 + deletedRuns 的旧位置）。
+   *
+   * @param progress 动画进度 [0, 1]
+   * @returns 当前进度的视觉帧（不回写 currentFrame——用 advance 回写）
    */
   sampleFrame(progress: number): EditorVisualFrame {
     const plan = this.currentPlan
     const p = EditorMotionCoordinator.easing(progress)
 
-    if (plan.motionKind === MotionKind.None) {
+    // 无运动 → 返回当前帧
+    if (plan.motionKind === MotionKind.None &&
+        plan.insertRuns.length === 0 &&
+        plan.deletedRuns.length === 0 &&
+        plan.retainedMoves.length === 0 &&
+        plan.caretPath.length === 0) {
       return this.currentFrame
     }
 
-    if (plan.motionKind === MotionKind.CaretMove) {
-      // 纯光标移动：从 segments 插值
-      if (plan.segments.length > 0) {
-        // 多段轨迹：按 progress 分配到各段
-        const segCount = plan.segments.length
-        const segProgress = progress * segCount
-        const segIndex = Math.min(segCount - 1, Math.floor(segProgress))
-        const localProgress = Math.min(1, segProgress - segIndex)
-        const seg = plan.segments[segIndex]
-        const localEased = EditorMotionCoordinator.easing(localProgress)
-        const caretX = seg.startCaretX + (seg.endCaretX - seg.startCaretX) * localEased
-        const caretY = seg.startCaretY + (seg.endCaretY - seg.startCaretY) * localEased
-        return {
-          caretX,
-          caretY,
-          caretHeight: this.currentFrame.caretHeight,
-          staticVisibleRanges: this.currentFrame.staticVisibleRanges,
-          motionGlyphWindows: [],
-          isAnimating: progress < 1,
-          motionKind: MotionKind.CaretMove
-        }
-      }
-      return this.currentFrame
-    }
-
-    // 正文增删动画：计算裁切前沿 front
+    // 同一 progress 同时采样所有通道
     const motionGlyphWindows: MotionGlyphWindow[] = []
 
-    if (plan.motionKind === MotionKind.Reveal) {
-      // 吐字：新字完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]
-      // front = x0 + (x1-x0) * easing(p)
-      for (const target of plan.newGlyphTargets) {
-        if (target.sourceKind === 'new') {
-          const x0 = target.x
-          const x1 = target.x + target.width
-          const front = x0 + (x1 - x0) * p
-          motionGlyphWindows.push({
-            sourceKind: 'new',
-            utf16Start: target.utf16Start,
-            utf16End: target.utf16End,
-            clipLeft: x0,
-            clipRight: front,
-            clipTop: target.y,
-            clipBottom: target.y + target.height,
-            glyphX: target.x,
-            glyphY: target.y,
-            glyphWidth: target.width,
-            glyphHeight: target.height
-          })
-        }
-      }
-      // 光标画在 front
-      const firstTarget = plan.newGlyphTargets.find((t: GlyphSource): boolean => t.sourceKind === 'new')
-      if (firstTarget) {
-        const front = firstTarget.x + firstTarget.width * p
-        return {
-          caretX: front,
-          caretY: firstTarget.y,
-          caretHeight: firstTarget.height,
-          staticVisibleRanges: this.computeStaticRangesForReveal(plan),
-          motionGlyphWindows,
-          isAnimating: progress < 1,
-          motionKind: MotionKind.Reveal
-        }
-      }
+    // 1. 吐字通道：新字源完整排版，裁切窗口从 [x0, x0] 扩展到 [x0, x1]
+    //    front = x0 + (x1 - x0) * easing(p)
+    for (const run of plan.insertRuns) {
+      const x0 = run.rect.x
+      const x1 = run.rect.x + run.rect.width
+      const front = x0 + (x1 - x0) * p
+      motionGlyphWindows.push({
+        sourceKind: 'new',
+        utf16Start: run.utf16Start,
+        utf16End: run.utf16End,
+        clipLeft: x0,
+        clipRight: front,
+        clipTop: run.rect.y,
+        clipBottom: run.rect.y + run.rect.height,
+        glyphX: run.rect.x,
+        glyphY: run.rect.y,
+        glyphWidth: run.rect.width,
+        glyphHeight: run.rect.height,
+        offsetX: 0,
+        offsetY: 0
+      })
     }
 
-    if (plan.motionKind === MotionKind.Conceal) {
-      // 吞字：旧字源留在动画层，可见窗口 [x0, front]
-      // front = x1 + (x0-x1) * easing(p) — 从 x1 退到 x0
-      for (const source of plan.oldGlyphSources) {
-        if (source.sourceKind === 'old') {
-          const x0 = source.x
-          const x1 = source.x + source.width
-          const front = x1 + (x0 - x1) * p
-          motionGlyphWindows.push({
-            sourceKind: 'old',
-            utf16Start: source.utf16Start,
-            utf16End: source.utf16End,
-            clipLeft: x0,
-            clipRight: front,
-            clipTop: source.y,
-            clipBottom: source.y + source.height,
-            glyphX: source.x,
-            glyphY: source.y,
-            glyphWidth: source.width,
-            glyphHeight: source.height
-          })
-        }
-      }
-      // 光标画在 front
-      const firstSource = plan.oldGlyphSources.find((s: GlyphSource): boolean => s.sourceKind === 'old')
-      if (firstSource) {
-        const x0 = firstSource.x
-        const x1 = firstSource.x + firstSource.width
+    // 2. 吞字通道：旧字源留在动画层，裁切窗口从 [x0, x1] 缩到 [x0, x0]
+    //    front = x1 + (x0 - x1) * easing(p) — 从 x1 退到 x0
+    //    Forward Delete：逻辑光标不动，被删字贴向固定 caret 缩回
+    for (const run of plan.deletedRuns) {
+      if (run.isForward) {
+        // Forward Delete：裁切窗口从 [caret, x1] 缩到 [caret, caret]
+        const caretX = this.currentFrame.caretX
+        const x0 = caretX
+        const x1 = run.rect.x + run.rect.width
         const front = x1 + (x0 - x1) * p
-        return {
-          caretX: front,
-          caretY: firstSource.y,
-          caretHeight: firstSource.height,
-          staticVisibleRanges: this.computeStaticRangesForConceal(plan),
-          motionGlyphWindows,
-          isAnimating: progress < 1,
-          motionKind: MotionKind.Conceal
-        }
+        motionGlyphWindows.push({
+          sourceKind: 'old',
+          utf16Start: run.utf16Start,
+          utf16End: run.utf16End,
+          clipLeft: caretX,
+          clipRight: front,
+          clipTop: run.rect.y,
+          clipBottom: run.rect.y + run.rect.height,
+          glyphX: run.rect.x,
+          glyphY: run.rect.y,
+          glyphWidth: run.rect.width,
+          glyphHeight: run.rect.height,
+          offsetX: 0,
+          offsetY: 0
+        })
+      } else {
+        // Backspace：裁切窗口从 [x0, x1] 缩到 [x0, x0]
+        const x0 = run.rect.x
+        const x1 = run.rect.x + run.rect.width
+        const front = x1 + (x0 - x1) * p
+        motionGlyphWindows.push({
+          sourceKind: 'old',
+          utf16Start: run.utf16Start,
+          utf16End: run.utf16End,
+          clipLeft: x0,
+          clipRight: front,
+          clipTop: run.rect.y,
+          clipBottom: run.rect.y + run.rect.height,
+          glyphX: run.rect.x,
+          glyphY: run.rect.y,
+          glyphWidth: run.rect.width,
+          glyphHeight: run.rect.height,
+          offsetX: 0,
+          offsetY: 0
+        })
       }
     }
 
-    if (plan.motionKind === MotionKind.ConcealForward) {
-      // Forward Delete：逻辑光标不移动，被删字贴向固定 caret 缩回
-      // 光标位置 = 旧光标位置（不动），被删字的裁切窗口从 [caret, caret+width] 缩到 [caret, caret]
-      for (const source of plan.oldGlyphSources) {
-        if (source.sourceKind === 'old') {
-          const caretX = this.currentFrame.caretX
-          const x0 = caretX
-          const x1 = source.x + source.width
-          const front = x1 + (x0 - x1) * p
-          motionGlyphWindows.push({
-            sourceKind: 'old',
-            utf16Start: source.utf16Start,
-            utf16End: source.utf16End,
-            clipLeft: caretX,
-            clipRight: front,
-            clipTop: source.y,
-            clipBottom: source.y + source.height,
-            glyphX: source.x,
-            glyphY: source.y,
-            glyphWidth: source.width,
-            glyphHeight: source.height
-          })
-        }
-      }
-      // 光标不动
-      return {
-        caretX: this.currentFrame.caretX,
-        caretY: this.currentFrame.caretY,
-        caretHeight: this.currentFrame.caretHeight,
-        staticVisibleRanges: this.computeStaticRangesForConceal(plan),
-        motionGlyphWindows,
-        isAnimating: progress < 1,
-        motionKind: MotionKind.ConcealForward
+    // 3. 保留字移动通道：旧字源绘制后整体偏移到当前插值位置
+    //    当前位置 = oldRect + (newRect - oldRect) * easing(p)
+    //    用旧字源绘制（sourceKind='old'），offset = currentPos - oldRect
+    for (const move of plan.retainedMoves) {
+      const currentX = move.oldRect.x + (move.newRect.x - move.oldRect.x) * p
+      const currentY = move.oldRect.y + (move.newRect.y - move.oldRect.y) * p
+      motionGlyphWindows.push({
+        sourceKind: 'old',
+        utf16Start: move.oldUtf16Start,
+        utf16End: move.oldUtf16End,
+        clipLeft: currentX,
+        clipRight: currentX + move.oldRect.width,
+        clipTop: currentY,
+        clipBottom: currentY + move.oldRect.height,
+        glyphX: move.oldRect.x,
+        glyphY: move.oldRect.y,
+        glyphWidth: move.oldRect.width,
+        glyphHeight: move.oldRect.height,
+        offsetX: currentX - move.oldRect.x,
+        offsetY: currentY - move.oldRect.y
+      })
+    }
+
+    // 4. 光标位置：从 caretPath 插值
+    let caretX = this.currentFrame.caretX
+    let caretY = this.currentFrame.caretY
+    let caretHeight = this.currentFrame.caretHeight
+    if (plan.caretPath.length > 0) {
+      // 多段轨迹：按 progress 分配到各段
+      const segCount = plan.caretPath.length
+      const segProgress = progress * segCount
+      const segIndex = Math.min(segCount - 1, Math.floor(segProgress))
+      const localProgress = Math.min(1, segProgress - segIndex)
+      const seg = plan.caretPath[segIndex]
+      const localEased = EditorMotionCoordinator.easing(localProgress)
+      caretX = seg.startCaretX + (seg.endCaretX - seg.startCaretX) * localEased
+      caretY = seg.startCaretY + (seg.endCaretY - seg.startCaretY) * localEased
+    } else if (plan.insertRuns.length > 0) {
+      // 吐字：光标画在第一个 insertRun 的裁切前沿
+      const first = plan.insertRuns[0]
+      caretX = first.rect.x + first.rect.width * p
+      caretY = first.rect.y
+      caretHeight = first.rect.height
+    } else if (plan.deletedRuns.length > 0) {
+      // 吞字：光标画在第一个 deletedRun 的裁切前沿
+      const first = plan.deletedRuns[0]
+      if (first.isForward) {
+        // Forward Delete：光标不动
+        // caretX/caretY 保持 currentFrame
+      } else {
+        const x0 = first.rect.x
+        const x1 = first.rect.x + first.rect.width
+        caretX = x1 + (x0 - x1) * p
+        caretY = first.rect.y
+        caretHeight = first.rect.height
       }
     }
 
-    if (plan.motionKind === MotionKind.Reflow) {
-      // Reflow：保留文字从旧位置平移到新位置
-      for (const target of plan.newGlyphTargets) {
-        if (target.sourceKind === 'new') {
-          // 平移：从旧位置插值到新位置
-          // 旧位置需要从 plan.oldGlyphSources 或 offsetMap 推断
-          // 简化实现：直接在新位置画，不做平移动画（平移信息由 Planner 提供）
-          motionGlyphWindows.push({
-            sourceKind: 'new',
-            utf16Start: target.utf16Start,
-            utf16End: target.utf16End,
-            clipLeft: target.x,
-            clipRight: target.x + target.width,
-            clipTop: target.y,
-            clipBottom: target.y + target.height,
-            glyphX: target.x,
-            glyphY: target.y,
-            glyphWidth: target.width,
-            glyphHeight: target.height
-          })
-        }
-      }
-      return {
-        caretX: this.currentFrame.caretX,
-        caretY: this.currentFrame.caretY,
-        caretHeight: this.currentFrame.caretHeight,
-        staticVisibleRanges: this.currentFrame.staticVisibleRanges,
-        motionGlyphWindows,
-        isAnimating: progress < 1,
-        motionKind: MotionKind.Reflow
-      }
-    }
+    // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
+    const staticVisibleRanges = this.computeStaticRangesMultiChannel(plan)
 
-    // 默认：返回当前帧
-    return this.currentFrame
+    return {
+      caretX,
+      caretY,
+      caretHeight,
+      staticVisibleRanges,
+      motionGlyphWindows,
+      isAnimating: progress < 1,
+      motionKind: plan.motionKind
+    }
   }
 
   /**
@@ -584,15 +484,14 @@ export class EditorMotionCoordinator {
       motionKind: MotionKind.None
     }
     this.currentPlan = {
-      motionKind: MotionKind.None,
-      segments: [],
-      affectedRanges: [],
-      oldGlyphSources: [],
-      newGlyphTargets: [],
-      durationMs: 0
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath: [],
+      durationMs: 0,
+      motionKind: MotionKind.None
     }
     this.motionDurationMs = 0
-    this.motionStartTime = 0
     return this.currentFrame
   }
 
@@ -613,6 +512,37 @@ export class EditorMotionCoordinator {
   // ── 私有方法 ──
 
   /**
+   * 重置到静态画面（几何身份变化或 revision 不匹配时）。
+   */
+  private resetToStatic(
+    newGeometryKey: GeometryKey,
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[]
+  ): void {
+    this.geometryKey = newGeometryKey
+    this.textRevisionKey = {
+      revision: newSnapshot.revision,
+      generation: newSnapshot.generation,
+      compositionGeneration: newSnapshot.compositionGeneration
+    }
+    this.oldSnapshot = newSnapshot
+    this.oldLayout = newLayout
+    this.newSnapshot = newSnapshot
+    this.newLayout = newLayout
+    this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
+    this.currentPlan = {
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath: [],
+      durationMs: 0,
+      motionKind: MotionKind.None
+    }
+    this.motionDurationMs = 0
+    this.currentFrame.isAnimating = false
+  }
+
+  /**
    * easing 函数：三次方缓出。
    * p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
    */
@@ -628,11 +558,6 @@ export class EditorMotionCoordinator {
 
   /**
    * 判断两个几何身份是否相等。
-   *
-   * Issue #879 第三轮复核评论修复：只比较几何字段（fontSize, lineSpacing, contentWidth）。
-   * compositionSessionId 不参与比较——它是编辑状态身份，不是几何条件。
-   * 正文版本（revision/generation/compositionGeneration）也不参与比较——
-   * 正常打字会改变 revision，但不应取消动画。
    */
   private static geometryEquals(a: GeometryKey, b: GeometryKey): boolean {
     return a.fontSize === b.fontSize &&
@@ -688,48 +613,47 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * 吐字时计算静态层可见范围。
-   * 吐字期间，被吐出的新字由运动层绘制，静态层不画这些字。
+   * 多通道静态可见区计算。
+   *
+   * Issue #879 本轮复核评论修复（问题5）：
+   * 静态可见区完整扣除所有被 motion 接管的目标 glyph 身份：
+   * - insertRuns：新插入字（用新正文 utf16 offset）
+   * - retainedMoves：保留字移动（用新正文 utf16 offset——动画结束后归新位置）
+   * - deletedRuns：被删旧字（用旧正文 utf16 offset——动画期间旧字由运动层绘制）
+   *
+   * 注意：insertRuns 和 retainedMoves 用新正文 offset（静态层画新正文），
+   * deletedRuns 用旧正文 offset（静态层画旧正文时排除）。
+   * 但静态层只画一份正文（新正文），所以 deletedRuns 的旧正文 offset
+   * 在新正文中对应"被删字的位置"——这个位置在新正文中不存在，不需要排除。
+   * 实际只需排除 insertRuns + retainedMoves 的新正文 offset。
+   *
+   * 但在动画起始帧（progress=0），静态层可能还在画旧正文，
+   * 此时需要排除 deletedRuns 的旧正文 offset。
+   * 简化处理：同时排除新旧两份 offset，subtractRanges 会自动处理无交集的情况。
    */
-  private computeStaticRangesForReveal(plan: EditorMotionPlan): StaticVisibleRange[] {
-    // 简化实现：静态层画除新字目标外的所有字形
-    // 实际实现需要根据 plan.newGlyphTargets 的范围排除
-    if (plan.newGlyphTargets.length === 0) {
-      return this.currentFrame.staticVisibleRanges
-    }
-    // 排除新字目标的范围
-    const excludedRanges = plan.newGlyphTargets
-      .filter((t: GlyphSource): boolean => t.sourceKind === 'new')
-      .map((t: GlyphSource): StaticVisibleRange => ({
-        utf16Start: t.utf16Start,
-        utf16End: t.utf16End
-      }))
+  private computeStaticRangesMultiChannel(plan: EditorMotionPlan): StaticVisibleRange[] {
+    // 收集所有需要排除的范围
+    const excluded: StaticVisibleRange[] = []
 
+    // insertRuns：新插入字（新正文 offset）
+    for (const run of plan.insertRuns) {
+      excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
+    }
+
+    // retainedMoves：保留字移动（新正文 offset——目标位置）
+    for (const move of plan.retainedMoves) {
+      excluded.push({ utf16Start: move.newUtf16Start, utf16End: move.newUtf16End })
+    }
+
+    // deletedRuns：被删旧字（旧正文 offset）
+    for (const run of plan.deletedRuns) {
+      excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
+    }
+
+    // 从当前 staticVisibleRanges 中排除
     return EditorMotionCoordinator.subtractRanges(
       this.currentFrame.staticVisibleRanges,
-      excludedRanges
-    )
-  }
-
-  /**
-   * 吞字时计算静态层可见范围。
-   * 吞字期间，被吞的旧字由运动层绘制，静态层不画这些字。
-   */
-  private computeStaticRangesForConceal(plan: EditorMotionPlan): StaticVisibleRange[] {
-    if (plan.oldGlyphSources.length === 0) {
-      return this.currentFrame.staticVisibleRanges
-    }
-    // 排除旧字源的范围
-    const excludedRanges = plan.oldGlyphSources
-      .filter((s: GlyphSource): boolean => s.sourceKind === 'old')
-      .map((s: GlyphSource): StaticVisibleRange => ({
-        utf16Start: s.utf16Start,
-        utf16End: s.utf16End
-      }))
-
-    return EditorMotionCoordinator.subtractRanges(
-      this.currentFrame.staticVisibleRanges,
-      excludedRanges
+      excluded
     )
   }
 
@@ -764,4 +688,3 @@ export class EditorMotionCoordinator {
     return result
   }
 }
-
