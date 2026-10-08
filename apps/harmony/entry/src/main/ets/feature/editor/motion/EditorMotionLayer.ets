@@ -340,8 +340,12 @@ export interface MotionWindowSource {
   clipRect: ClipRect
   /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
   textController: TextController
-  /** 是否已挂载（onAppear 已触发） */
+  /** 是否已挂载（onAppear 已触发）——从源池读取持久状态，而非每次构造 false */
   mounted: boolean
+  /** 布局是否已完成——从源池读取持久状态，而非每次构造 false */
+  layoutReady: boolean
+  /** 布局完成回调——Text onAppear 后延迟一帧通知父组件标记 layoutReady */
+  onLayoutReady: ((runId: string) => void) | null
 }
 
 export interface MotionTextOverlayParams {
@@ -394,6 +398,15 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                   item.mounted = true
                   item.textController.setStyledString(item.source.styledString)
                 }
+                // Issue #879 复核评论修复（问题4）：延迟一帧通知父组件布局已完成。
+                // onAppear 表示 Text 组件已挂载，但布局可能尚未完成。
+                // setTimeout 延迟一帧后，Text 已完成 measure/layout，此时标记 layoutReady。
+                // 父组件在 onLayoutReady 回调中调用 motionSourcePool.markLayoutReady(runId)。
+                setTimeout(() => {
+                  if (item.onLayoutReady !== null) {
+                    item.onLayoutReady(item.window.runId)
+                  }
+                }, 0)
               })
           }
           .width(item.clipRect.width)

@@ -596,6 +596,13 @@ export class EditorMotionCoordinator {
           break
         }
       }
+    } else if (this.newSnapshot !== null && this.newLayout.length === 0) {
+      // Issue #879 复核评论问题5：空文档时光标从新目标 snapshot 恢复，
+      // 而非沿用旧帧位置（旧帧可能指向已不存在的行）。
+      caretX = this.newSnapshot.autoIndentEnabled
+        ? this.newSnapshot.autoIndentWidth * this.newSnapshot.fontSize : 0
+      caretY = 0
+      caretHeight = this.newSnapshot.fontSize * this.newSnapshot.lineSpacingMultiplier
     }
 
     this.currentFrame = {
@@ -696,23 +703,32 @@ export class EditorMotionCoordinator {
     snapshot: EditorLayoutSnapshot,
     lineLayouts: LineLayout[]
   ): EditorVisualFrame {
-    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snapshot.text, snapshot.cursorByteOffset)
     let caretX = 0
     let caretY = 0
     let caretHeight = 0
 
-    for (const line of lineLayouts) {
-      if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
-        let x = line.left
-        for (const stop of line.caretStops) {
-          if (stop.utf16Offset <= cursorUtf16) {
-            x = stop.x
+    if (lineLayouts.length === 0) {
+      // Issue #879 复核评论问题5：空文档时从 snapshot 排版参数计算首行空段落的
+      // caret 位置和高度，而非返回零高度（零高度意味着光标消失）。
+      caretX = snapshot.autoIndentEnabled
+        ? snapshot.autoIndentWidth * snapshot.fontSize : 0
+      caretY = 0
+      caretHeight = snapshot.fontSize * snapshot.lineSpacingMultiplier
+    } else {
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snapshot.text, snapshot.cursorByteOffset)
+      for (const line of lineLayouts) {
+        if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
+          let x = line.left
+          for (const stop of line.caretStops) {
+            if (stop.utf16Offset <= cursorUtf16) {
+              x = stop.x
+            }
           }
+          caretX = x
+          caretY = line.y
+          caretHeight = line.height
+          break
         }
-        caretX = x
-        caretY = line.y
-        caretHeight = line.height
-        break
       }
     }
 

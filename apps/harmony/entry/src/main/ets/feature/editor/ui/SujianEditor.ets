@@ -872,7 +872,16 @@ export struct SujianEditor {
           source: source,
           clipRect: clipRects[i],
           textController: controller,
-          mounted: false
+          // Issue #879 复核评论修复（问题4）：从源池读取持久 mounted/layoutReady 状态，
+          // 而非每次构造 mounted:false。源池的 mounted/layoutReady 由 onAppear 回调
+          // 和 onLayoutReady 回调持久更新，不随 buildMotionWindowSources 重建而丢失。
+          mounted: source.mounted,
+          layoutReady: source.layoutReady,
+          onLayoutReady: (runId: string): void => {
+            // Text onAppear → setTimeout 延迟一帧后回调：标记源布局已完成 + 已挂载。
+            this.motionSourcePool.markLayoutReady(runId)
+            this.motionSourcePool.markMounted(runId)
+          }
         })
       }
     }

@@ -93,6 +93,53 @@ export class EditorMotionSourcePool {
   }
 
   /**
+   * 标记源布局已完成。
+   *
+   * Issue #879 复核评论修复（问题4）：
+   * 由真实 Text 的 onAppear → setTimeout 延迟一帧回调调用，
+   * 将指定源的 layoutReady 置 true。此前 layoutReady 初始化为 false 且从未被置 true，
+   * 导致动画开始时新源还没完成文本布局，吐字看不到前段。
+   *
+   * @param runId 源的 runId
+   */
+  markLayoutReady(runId: string): void {
+    const entry = this.sources.get(runId)
+    if (entry !== undefined) {
+      entry.layoutReady = true
+    }
+  }
+
+  /**
+   * 查询源是否布局已完成。
+   *
+   * @param runId 源的 runId
+   * @returns layoutReady 状态；源不存在时返回 false
+   */
+  isLayoutReady(runId: string): boolean {
+    const entry = this.sources.get(runId)
+    if (entry !== undefined) {
+      return entry.layoutReady
+    }
+    return false
+  }
+
+  /**
+   * 标记源已挂载（onAppear 已触发）。
+   *
+   * Issue #879 复核评论修复（问题4）：
+   * buildMotionWindowSources 从 source.mounted 读取持久状态，
+   * 而非每次构造 mounted:false。此方法将池中 entry.mounted 置 true。
+   *
+   * @param runId 源的 runId
+   */
+  markMounted(runId: string): void {
+    const entry = this.sources.get(runId)
+    if (entry !== undefined) {
+      entry.mounted = true
+    }
+  }
+
+  /**
    * 标记源为可释放。
    *
    * 交棒完成后（动画结束或新源已接管）才调用此方法标记旧源。
