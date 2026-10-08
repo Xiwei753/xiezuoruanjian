@@ -56,6 +56,8 @@ import {
   isWorkbenchMode
 } from '../../../ui/adaptive/WorkbenchLayoutBridge'
 import { WritingToolRail } from './WritingToolRail'
+import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
+import { EditorMotionPolicy } from '../motion/EditorMotionPolicy'
 
 // Issue #750 评论 5805761237：移除 EditableTitleBarV2 相关 import。
 // EditableTitleBarV2 自身无 systemMaterial 配置项，塞在内容区无法获得
@@ -147,6 +149,37 @@ export struct WritingScreen {
   // 写作统计改由 EditorStatsQueue 按编辑事务上报后，会话 id 与时长口径由 Core 侧管理。
   @State adaptiveState: AdaptiveState = getAdaptiveState()
   @State editorSnapshot: EditorLayoutSnapshot | null = null
+  // Issue #879：保存 editResult 供运动层消费（构造 EditorPresentationUpdate 时需要）。
+  @State editorEditResult: EditorEditResult | null = null
+  // Issue #879：运动策略，从 LocalSettings 构造，设置变化时同步更新。
+  @State motionPolicy: EditorMotionPolicy = EditorMotionPolicy.fromSettings({
+    editorFontSize: 16,
+    editorLineSpacingMultiplier: 1.8,
+    themeMode: 'system',
+    appearanceMode: 'system',
+    colorSource: 'built_in',
+    dynamicColorEnabled: false,
+    selectedBuiltinThemeId: '',
+    selectedPaletteId: '',
+    locale: null,
+    autoSaveEnabled: true,
+    autoSaveDelayMs: 30000,
+    autoIndentEnabled: true,
+    autoIndentWidth: 2,
+    windowWidth: 0,
+    windowHeight: 0,
+    editorTypingAnimationEnabled: false,
+    editorSmoothCursorEnabled: false,
+    editorTypingAnimationDurationMs: 100,
+    editorSmoothCursorDurationMs: 80,
+    aiEnabled: false,
+    statsDeviceId: null,
+    desktopSidebarWidth: 0,
+    desktopEditorWidth: 0,
+    editorCoordinatedTextCursorAnimationEnabled: false,
+    diagnosticsEnabled: false,
+    diagnosticsVerbose: false
+  })
   // Issue #629 评论14 第1项：宽屏双栏模式下的目录数据。
   // WritingScreen 在宽屏模式下持有 ChapterTreePane，需要加载项目树。
   @State volumeTrees: VolumeTree[] = []
@@ -306,6 +339,8 @@ export struct WritingScreen {
         self.settings.autoIndentEnabled,
         self.settings.autoIndentWidth
       )
+      // Issue #879：保存 editResult 供运动层消费。
+      self.editorEditResult = update.editResult
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
@@ -1179,6 +1214,8 @@ export struct WritingScreen {
   // 否则浮层改了字号、底下写作页还按旧排版渲染。
   private applyPublishedSettings(settings: LocalSettings): void {
     this.settings = settings
+    // Issue #879：设置变化时同步更新运动策略。
+    this.motionPolicy = EditorMotionPolicy.fromSettings(settings)
     // Issue #825 复核8第 3 点：外部设置更新时，顶栏草稿回到真实值，
     // 步进器下一次点击从真实值继续算。
     //
@@ -1940,7 +1977,14 @@ export struct WritingScreen {
       } else {
         SujianEditor({
           scroller: this.editorScroller,
-          snapshot: this.editorSnapshot,
+          presentationUpdate: this.editorSnapshot !== null
+            ? new EditorPresentationUpdate(
+                this.editorSnapshot,
+                this.editorEditResult,
+                this.coordinator.getSessionId() ?? 0
+              )
+            : null,
+          motionPolicy: this.motionPolicy,
           harmonyImeConnection: this.harmonyImeConnection,
           inputAdapter: this.inputAdapter,
           selectionController: this.selectionController,

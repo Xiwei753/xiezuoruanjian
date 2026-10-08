@@ -55,6 +55,11 @@ import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolv
 import { EditorRuntimeSnapshotStore, EditorRuntimeSnapshot, CaretRectSnapshot, CurrentLineMetricsSnapshot } from '../diagnostics/EditorRuntimeSnapshotStore'
 import { inspector } from '@kit.ArkUI'
 import hilog from '@ohos.hilog'
+// Issue #879：运动层相关类型。
+import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
+import { EditorVisualFrame } from '../motion/EditorVisualFrame'
+import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
+import { EditorMotionCoordinator } from '../motion/EditorMotionCoordinator'
 // ArkUI KeyEvent / MouseEvent 是 component/common.d.ts 全局声明，不从 @kit.InputKit 导入。
 // .onKeyEvent / .onMouse 回调给的是 ArkUI 事件类型，非 InputKit 类型。
 
@@ -72,7 +77,20 @@ const EDITOR_BOTTOM_PADDING_VP = 32
 
 @Component
 export struct SujianEditor {
-  @Prop @Watch('onSnapshotChanged') snapshot: EditorLayoutSnapshot | null = null
+  // Issue #879：接收 EditorPresentationUpdate（含 layoutSnapshot + editResult + sessionId），
+  // 不再只接收 EditorLayoutSnapshot。
+  @Prop @Watch('onPresentationUpdateChanged') presentationUpdate: EditorPresentationUpdate | null = null
+  // Issue #879：运动策略，由父组件（WritingScreen）从 LocalSettings 构造后传入。
+  motionPolicy: EditorMotionPolicy = new EditorMotionPolicy(
+    100, 80, MotionMode.Independent, false, false, false, false
+  )
+  // 从 presentationUpdate.layoutSnapshot 同步出来的当前布局快照，
+  // 供所有内部方法消费（替代旧的 this.currentSnapshot）。
+  @State currentSnapshot: EditorLayoutSnapshot | null = null
+  // Issue #879：运动协调器——接收编辑更新，生成运动规划，输出视觉帧。
+  private motionCoordinator: EditorMotionCoordinator = new EditorMotionCoordinator()
+  // Issue #879：当前视觉帧——描述某一时刻的完整视觉状态（光标位置、静态/运动层字形范围）。
+  @State private visualFrame: EditorVisualFrame | null = null
   // IME 连接、输入/选区控制器、统一语义调度器由父组件注入；
   // SujianEditor 在获得/失去焦点时 attach/detach IME。
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 inputAdapter/selectionController。
@@ -158,7 +176,12 @@ export struct SujianEditor {
 
   aboutToAppear(): void {
     hilog.info(EDITOR_LOG_DOMAIN, EDITOR_LOG_TAG, 'aboutToAppear')
+    // Issue #879：从 presentationUpdate 同步 currentSnapshot 并初始化视觉帧。
+    if (this.presentationUpdate !== null) {
+      this.currentSnapshot = this.presentationUpdate.layoutSnapshot
+    }
     this.refreshRender()
+    this.updateVisualFrame()
     // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
     // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
     // Dispatcher 行导航命令出队时通过 resolver 读最新行布局计算目标。
@@ -232,7 +255,7 @@ export struct SujianEditor {
       .getUIInspector()
       .createComponentObserver(EDITOR_TEXT_ID)
     const callback = (): void => {
-      if (!this.textMounted || this.snapshot === null) {
+      if (!this.textMounted || this.currentSnapshot === null) {
         return
       }
       // 到这里 Text 已完成本轮 layout，才读取 LayoutManager。
@@ -252,11 +275,11 @@ export struct SujianEditor {
   }
 
   // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
-  // 从 this.snapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
+  // 从 this.currentSnapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
   // 不写正文内容，只写长度、offset、几何和状态。在各生命周期点调用。
   private pushDiagnosticsSnapshot(): void {
     const store = EditorRuntimeSnapshotStore.getInstance()
-    const snap = this.snapshot
+    const snap = this.currentSnapshot
 
     // 滚动偏移
     let scrollX: number = 0
@@ -436,14 +459,18 @@ export struct SujianEditor {
     return count
   }
 
-  // Issue #629 评论16 第1项：用 @Watch 监听 snapshot 变化替代 aboutToUpdate。
-  // aboutToUpdate 不是 OpenHarmony 官方生命周期回调（官方 V1 监听机制是 @Watch）。
-  // Issue #768 评论5837824666：snapshot 前进时只提交新的文字/样式（setStyledString），
-  // 不再同步调 refreshRenderLayout() — 系统布局可能还没完成，会拿到上一版 LayoutManager。
-  // 布局结果等系统 layout 完成回调（ComponentObserver 'layout'）后才更新。
-  // 这样才真正做到：StyledString N → ArkUI layout N 完成 → LayoutManager N → caret/selection N。
-  private onSnapshotChanged(): void {
-    if (this.snapshot === null) {
+  // Issue #879：@Watch 回调，监听 presentationUpdate 变化。
+  // 从 presentationUpdate.layoutSnapshot 同步 currentSnapshot，
+  // 并通过 motionCoordinator.acceptUpdate() 更新 visualFrame。
+  private onPresentationUpdateChanged(): void {
+    // 从 presentationUpdate 同步 currentSnapshot
+    if (this.presentationUpdate === null) {
+      this.currentSnapshot = null
+    } else {
+      this.currentSnapshot = this.presentationUpdate.layoutSnapshot
+    }
+
+    if (this.currentSnapshot === null) {
       // Issue #768 评论5837229456：通过 applyStyledText 清空 StyledString（受 textMounted 守卫）
       this.applyStyledText()
       this.lineResolver.cancelWait()
@@ -452,15 +479,35 @@ export struct SujianEditor {
       this.selectionRects = []
       this.caretRect = null
       this.compositionUnderlineRects = []
+      this.visualFrame = null
       // Issue #768：会话失效时推送诊断快照（hasActiveSession=false）。
       this.pushDiagnosticsSnapshot()
       return
     }
     // 只提交新的文字/样式；布局结果等系统 layout 完成回调后更新。
     this.refreshRender()
+    // Issue #879：通过运动协调器接收更新，生成视觉帧。
+    this.updateVisualFrame()
     // Issue #768 评论5837824666：推送诊断快照（布局相关字段从缓存读取）。
     // 诊断方可通过 revision !== layoutRevision 判断布局是否已跟上 snapshot。
     this.pushDiagnosticsSnapshot()
+  }
+
+  // Issue #879：通过运动协调器接收编辑更新，计算当前视觉帧。
+  // 当 presentationUpdate 包含 editResult 时，运动协调器会规划文字运动（吐字/吞字/光标移动等）；
+  // 当 editResult 为 null（初始加载/布局重建）时，直接显示静态画面。
+  private updateVisualFrame(): void {
+    if (this.presentationUpdate === null || this.currentSnapshot === null) {
+      this.visualFrame = null
+      return
+    }
+    // 从 renderResult 获取行布局信息，供运动协调器计算字形位置。
+    const lineLayouts = this.renderResult?.lines ?? []
+    this.visualFrame = this.motionCoordinator.acceptUpdate(
+      this.presentationUpdate,
+      lineLayouts,
+      this.motionPolicy
+    )
   }
 
   // Issue #768 评论5837229456：把"生成 StyledString"和"写进 TextController"分开。
@@ -470,17 +517,17 @@ export struct SujianEditor {
     if (!this.textMounted) {
       return
     }
-    if (this.snapshot === null) {
+    if (this.currentSnapshot === null) {
       this.textController.setStyledString(new MutableStyledString(''))
       return
     }
     const config: EditorStyleConfig = {
-      fontSize: this.snapshot.fontSize,
-      lineSpacingMultiplier: this.snapshot.lineSpacingMultiplier,
-      autoIndentEnabled: this.snapshot.autoIndentEnabled,
-      autoIndentWidth: this.snapshot.autoIndentWidth,
+      fontSize: this.currentSnapshot.fontSize,
+      lineSpacingMultiplier: this.currentSnapshot.lineSpacingMultiplier,
+      autoIndentEnabled: this.currentSnapshot.autoIndentEnabled,
+      autoIndentWidth: this.currentSnapshot.autoIndentWidth,
     }
-    const styled = EditorTextStyleProjector.projectToStyledString(this.snapshot.text, config)
+    const styled = EditorTextStyleProjector.projectToStyledString(this.currentSnapshot.text, config)
     this.textController.setStyledString(styled)
   }
 
@@ -492,9 +539,9 @@ export struct SujianEditor {
   // Issue #768 评论5837229456：不再在 refreshRender 里直接调 setStyledString，
   // 改为通过 applyStyledText()（受 textMounted 守卫）下发 StyledString。
   private refreshRender(): void {
-    if (this.snapshot) {
+    if (this.currentSnapshot) {
       // 仍然用 EditorRenderBackend.render() 转 offset（不含几何）
-      const result = EditorRenderBackend.render(this.snapshot)
+      const result = EditorRenderBackend.render(this.currentSnapshot)
       this.renderResult = result
       this.selectionRects = result.selectionRects
       this.caretRect = result.caretRect
@@ -523,8 +570,8 @@ export struct SujianEditor {
   // - API12-13：用 LineMetrics 获取行边界（折行/行高），用 measureText 算行内 x 坐标
   // - Fallback：LayoutManager 不可用时走旧的自计算路径
   private refreshRenderLayout(): void {
-    if (this.snapshot && this.contentWidth > 0) {
-      const snap = this.snapshot
+    if (this.currentSnapshot && this.contentWidth > 0) {
+      const snap = this.currentSnapshot
 
       // 优先使用系统 LayoutManager
       const layout = this.textController.getLayoutManager()
@@ -762,7 +809,7 @@ export struct SujianEditor {
   // 消除自算折行与系统布局的错位。Fallback 到旧的自计算路径。
   // 命中测试逻辑已下沉到 EditorRenderBackend.hitTestByLayoutManager()。
   private hitTestContent(contentX: number, contentY: number): VisualCaretPosition {
-    if (!this.snapshot || !this.renderResult || this.contentWidth <= 0) {
+    if (!this.currentSnapshot || !this.renderResult || this.contentWidth <= 0) {
       return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     }
 
@@ -782,7 +829,7 @@ export struct SujianEditor {
     }
 
     // Fallback: 旧的自计算命中测试
-    const snap = this.snapshot
+    const snap = this.currentSnapshot
     // Issue #776 评论5848626733 第6项：measureUtils.measureText 返回 px，
     // fallback 几何统一到 vp，这里包一层 px2vp。
     const measureUtils = this.getUIContext().getMeasureUtils()
@@ -800,29 +847,29 @@ export struct SujianEditor {
 
   // 当前光标 UTF-16 offset（从 snapshot.cursorByteOffset 转）。
   private currentCursorUtf16(): number {
-    if (!this.snapshot) {
+    if (!this.currentSnapshot) {
       return 0
     }
-    return TextOffsetMapper.utf8ToUtf16(this.snapshot.text, this.snapshot.cursorByteOffset)
+    return TextOffsetMapper.utf8ToUtf16(this.currentSnapshot.text, this.currentSnapshot.cursorByteOffset)
   }
 
   // 当前选区 [anchorUtf16, headUtf16]（从 snapshot 的 byte offset 转）。
   private currentSelectionUtf16(): [number, number] {
-    if (!this.snapshot) {
+    if (!this.currentSnapshot) {
       return [0, 0]
     }
-    const text = this.snapshot.text
-    const anchor = TextOffsetMapper.utf8ToUtf16(text, this.snapshot.selectionAnchor)
-    const head = TextOffsetMapper.utf8ToUtf16(text, this.snapshot.selectionHead)
+    const text = this.currentSnapshot.text
+    const anchor = TextOffsetMapper.utf8ToUtf16(text, this.currentSnapshot.selectionAnchor)
+    const head = TextOffsetMapper.utf8ToUtf16(text, this.currentSnapshot.selectionHead)
     return [anchor, head]
   }
 
   // 是否有非空选区（anchor != head）。
   private hasSelection(): boolean {
-    if (!this.snapshot) {
+    if (!this.currentSnapshot) {
       return false
     }
-    return this.snapshot.selectionAnchor !== this.snapshot.selectionHead
+    return this.currentSnapshot.selectionAnchor !== this.currentSnapshot.selectionHead
   }
 
   // Issue #767 评论 5829138873 第 1 节：focusAndAttachIme 在 requestFocus 成功后直接 attach IME。
@@ -866,7 +913,7 @@ export struct SujianEditor {
   // Issue #629 评论11 第2项：arrowUp/arrowDown/home/end 改用语义命令 lineUp/lineDown/lineHome/lineEnd，
   // 不在入队前读旧布局计算目标。出队时由 LineNavigationResolver 基于最新行布局计算。
   private dispatchKeyCommand(cmd: SemanticKeyCommand): void {
-    if (!this.dispatcher || !this.snapshot) {
+    if (!this.dispatcher || !this.currentSnapshot) {
       return
     }
     const dispatcher: EditorSemanticDispatcher = this.dispatcher
@@ -951,7 +998,7 @@ export struct SujianEditor {
   // Issue #629 R11 评论5329310563 第2项：mouse down/drag 走 dispatchSelectionAndSyncIme，
   // 成功后查询最终 selection 再通知 IME（鼠标 selection 之前完全没通知 IME）。
   private handleMouseEvent(raw: MouseEvent): void {
-    if (!this.snapshot || !this.renderResult || !this.dispatcher) {
+    if (!this.currentSnapshot || !this.renderResult || !this.dispatcher) {
       return
     }
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
@@ -1014,7 +1061,7 @@ export struct SujianEditor {
   // Issue #629 R11 评论5329310563 第2项：TouchUp/TouchMove drag 走 dispatchSelectionAndSyncIme，
   // 成功后查询最终 selection 再通知 IME，不再 fire-and-forget 后立即用原 hitPos 通知。
   private handleTouchEvent(event: TouchEvent): void {
-    if (!this.snapshot || !this.renderResult || !this.dispatcher) {
+    if (!this.currentSnapshot || !this.renderResult || !this.dispatcher) {
       return
     }
     // Issue #743 评论5792119958：空触点边界检查必须先于 touches[0] 解引用。
@@ -1143,7 +1190,7 @@ export struct SujianEditor {
         // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
         // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
         Stack() {
-        if (this.renderResult && this.snapshot) {
+        if (this.renderResult && this.currentSnapshot) {
           // 1. selection background（最底层）
           ForEach(this.selectionRects, (rect: SelectionRect, index: number) => {
             Rect()
@@ -1209,8 +1256,18 @@ export struct SujianEditor {
               .fill(this.compositionUnderlineColor)
           }, (rect: CompositionUnderlineRect, index: number) => index.toString())
 
-          // 4. static caret（最上层，不闪烁/不平滑移动）
-          if (this.caretRect) {
+          // 4. caret（最上层）— Issue #879：单一视觉光标。
+          // 动画中：光标位置由 visualFrame 决定（画在裁切前沿 front）。
+          // 非动画：光标画在静态位置（caretRect）。
+          if (this.visualFrame !== null && this.visualFrame.isAnimating) {
+            // 动画中：光标位置由运动协调器的视觉帧决定
+            Rect()
+              .position({ x: this.visualFrame.caretX, y: this.visualFrame.caretY })
+              .width(2)
+              .height(this.visualFrame.caretHeight)
+              .fill(this.caretColor)
+          } else if (this.caretRect) {
+            // 非动画：光标在静态位置
             Rect()
               .position({ x: this.caretRect.x, y: this.caretRect.y })
               .width(this.caretRect.width)
