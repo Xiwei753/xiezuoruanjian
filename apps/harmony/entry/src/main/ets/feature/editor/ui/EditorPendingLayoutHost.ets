@@ -73,6 +73,8 @@ export struct EditorPendingLayoutHost {
   @State private contentWidth: number = 0
   // 字号（用于 measureText 计算 caretStops）
   private pendingFontSize: number = 16
+  // Issue #879 复核评论修复（问题2）：样式身份键——与 currentIdentity.styleKey 对比验证
+  private pendingStyleKey: string = ''
   // 排版请求——父组件通过 @Prop 传递，@Watch 监听变化自动触发排版
   @Prop @Watch('onLayoutRequestChanged') layoutRequest: PendingLayoutRequest | null = null
 
@@ -88,6 +90,11 @@ export struct EditorPendingLayoutHost {
   // 通过 resolveLayoutRequest(token) 回调获取原始 StyledString 引用，不走 @Prop 深拷贝。
   private onLayoutRequestChanged(): void {
     if (this.layoutRequest !== null) {
+      // Issue #879 复核评论修复（问题3）：新请求到来时，如果旧 identity 的 token 与新 token 不同，
+      // 说明旧请求已被新请求取代——把旧 identity 清空，防止旧请求的回调错误使用新 identity。
+      if (this.currentIdentity !== null && this.currentIdentity.token !== this.layoutRequest.token) {
+        this.currentIdentity = null
+      }
       const styledString = this.resolveLayoutRequest !== null
         ? this.resolveLayoutRequest(this.layoutRequest.token)
         : null
@@ -103,16 +110,19 @@ export struct EditorPendingLayoutHost {
           styledString,
           this.layoutRequest.contentWidth,
           this.layoutRequest.fontSize,
-          this.layoutRequest.token
+          this.layoutRequest.token,
+          this.layoutRequest.styleKey
         )
       }
     }
   }
 
   // 请求排版新版本——使用父组件传入的 token，不自增
-  requestLayout(styledString: StyledString, contentWidth: number, fontSize: number, token: number): number {
+  requestLayout(styledString: StyledString, contentWidth: number, fontSize: number, token: number,
+    styleKey: string): number {
     this.contentWidth = contentWidth
     this.pendingFontSize = fontSize
+    this.pendingStyleKey = styleKey
     // 在 Text 挂载后通过 controller 设置 StyledString
     if (this.isMounted) {
       this.pendingTextController.setStyledString(styledString)
@@ -150,12 +160,29 @@ export struct EditorPendingLayoutHost {
         }
       }
 
+      // Issue #879 复核评论修复（问题2）：验证 styleKey 和 contentWidth 匹配。
+      // 当前组件状态（pendingStyleKey/contentWidth）与请求时锁定的身份（currentIdentity）对比——
+      // 如果不匹配，说明在请求发起后组件状态已被新请求更新，此次回调对应的是旧请求，不回调。
+      if (this.pendingStyleKey !== this.currentIdentity.styleKey) {
+        return
+      }
+      if (this.contentWidth !== this.currentIdentity.contentWidth) {
+        return
+      }
+
       // Issue #879 复核评论修复（问题2）：非空目标 lineCount===0 视为未完成不回调。
       // 对于非空目标（fullTextLength > 0），lineCount===0 只能是还没完成排版，
       // 不能回调 []——否则会把上一笔排版当成当前笔。
       // 对于明确空目标（fullTextLength === 0），才允许完成空结果回调 []。
       if (lineCount === 0 && this.currentIdentity.fullTextLength > 0) {
         // 非空目标但 lineCount===0——排版尚未完成，不回调
+        return
+      }
+
+      // Issue #879 复核评论修复（问题2）：空目标额外验证。
+      // 对于空目标（fullTextLength === 0），LayoutManager 的 lineCount 必须确实为 0，
+      // 才能回调 []——防止上一版布局临时为 0 行时被当作新空文档交棒。
+      if (this.currentIdentity.fullTextLength === 0 && lineCount !== 0) {
         return
       }
 
@@ -166,6 +193,9 @@ export struct EditorPendingLayoutHost {
       if (this.onLayoutReady !== null) {
         this.onLayoutReady(this.currentIdentity.token, lineLayouts)
       }
+      // Issue #879 复核评论修复（问题3）：完成回调后注销 currentIdentity，
+      // 防止同一 token 的重复回调——子 observer 保留 currentIdentity 会重新回调相同 token。
+      this.currentIdentity = null
     }
     observer.on('layout', callback)
     this.layoutObserver = observer

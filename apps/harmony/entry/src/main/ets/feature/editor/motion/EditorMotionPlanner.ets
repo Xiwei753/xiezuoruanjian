@@ -28,7 +28,7 @@
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
 import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
-import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, MotionGlyphWindow } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
@@ -299,6 +299,17 @@ export class EditorMotionPlanner {
     // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
 
+    // Issue #879 最新复核评论修复（问题1）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
+    // 用于在连续快速输入时消费当前帧的实际裁切窗口和位置作为起始状态。
+    // key 是 clusterId（sourceKind + sourceRevision + utf16Start + utf16End），
+    // value 是对应的 MotionGlyphWindow（含 currentClipLeft/Right/currentPositionX/Y）。
+    const visibleWindowMap: Map<string, MotionGlyphWindow> = new Map()
+    if (lastVisibleFrame.isAnimating && lastVisibleFrame.motionGlyphWindows.length > 0) {
+      for (const w of lastVisibleFrame.motionGlyphWindows) {
+        visibleWindowMap.set(w.clusterId, w)
+      }
+    }
+
     // 收集多通道
     const insertRuns: InsertRun[] = []
     const deletedRuns: DeletedRun[] = []
@@ -319,13 +330,34 @@ export class EditorMotionPlanner {
           oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
         for (const rect of oldRects) {
-          deletedRuns.push({
-            utf16Start: rect.utf16Start,
-            utf16End: rect.utf16End,
-            sourceKind: 'old',
-            rect: rect.rect,
-            isForward: isForwardDelete
-          })
+          // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
+          // 如果有，用其 currentClipLeft/Right 作为起始裁切窗口（而非从 rect.x 到 rect.x + rect.width 即完整宽度）。
+          const oldRevision = oldSnapshot.revision
+          const clusterId = `old-${oldRevision}-${rect.utf16Start}-${rect.utf16End}`
+          const visibleWindow = visibleWindowMap.get(clusterId)
+          if (visibleWindow !== undefined) {
+            // 使用当前帧的实际裁切窗口作为起始状态
+            deletedRuns.push({
+              utf16Start: rect.utf16Start,
+              utf16End: rect.utf16End,
+              sourceKind: 'old',
+              rect: {
+                x: visibleWindow.currentClipLeft,
+                y: rect.rect.y,
+                width: Math.max(0, visibleWindow.currentClipRight - visibleWindow.currentClipLeft),
+                height: rect.rect.height
+              },
+              isForward: isForwardDelete
+            })
+          } else {
+            deletedRuns.push({
+              utf16Start: rect.utf16Start,
+              utf16End: rect.utf16End,
+              sourceKind: 'old',
+              rect: rect.rect,
+              isForward: isForwardDelete
+            })
+          }
         }
       }
 
@@ -336,12 +368,32 @@ export class EditorMotionPlanner {
           newText, newUtf16Start, newUtf16End, newLayout
         )
         for (const rect of newRects) {
-          insertRuns.push({
-            utf16Start: rect.utf16Start,
-            utf16End: rect.utf16End,
-            sourceKind: 'new',
-            rect: rect.rect
-          })
+          // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
+          // 如果有，用其 currentClipLeft/Right 作为起始裁切窗口（而非从 rect.x 到 rect.x 即零宽度）。
+          const newRevision = newSnapshot.revision
+          const clusterId = `new-${newRevision}-${rect.utf16Start}-${rect.utf16End}`
+          const visibleWindow = visibleWindowMap.get(clusterId)
+          if (visibleWindow !== undefined) {
+            // 使用当前帧的实际裁切窗口作为起始状态
+            insertRuns.push({
+              utf16Start: rect.utf16Start,
+              utf16End: rect.utf16End,
+              sourceKind: 'new',
+              rect: {
+                x: visibleWindow.currentClipLeft,
+                y: rect.rect.y,
+                width: Math.max(0, visibleWindow.currentClipRight - visibleWindow.currentClipLeft),
+                height: rect.rect.height
+              }
+            })
+          } else {
+            insertRuns.push({
+              utf16Start: rect.utf16Start,
+              utf16End: rect.utf16End,
+              sourceKind: 'new',
+              rect: rect.rect
+            })
+          }
         }
       }
     }
@@ -352,7 +404,30 @@ export class EditorMotionPlanner {
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const move of moves) {
-        retainedMoves.push(move)
+        // Issue #879 最新复核评论修复（问题1）：查找是否有匹配的 MotionGlyphWindow，
+        // 如果有，用其 currentPositionX/Y 作为起始位置（而非从 oldRect.x/y）。
+        const oldRevision = oldSnapshot.revision
+        const clusterId = `old-${oldRevision}-${move.oldUtf16Start}-${move.oldUtf16End}`
+        const visibleWindow = visibleWindowMap.get(clusterId)
+        if (visibleWindow !== undefined) {
+          // 使用当前帧的实际位置作为起始状态
+          retainedMoves.push({
+            oldUtf16Start: move.oldUtf16Start,
+            oldUtf16End: move.oldUtf16End,
+            newUtf16Start: move.newUtf16Start,
+            newUtf16End: move.newUtf16End,
+            sourceKind: 'old',
+            oldRect: {
+              x: visibleWindow.currentPositionX,
+              y: visibleWindow.currentPositionY,
+              width: move.oldRect.width,
+              height: move.oldRect.height
+            },
+            newRect: move.newRect
+          })
+        } else {
+          retainedMoves.push(move)
+        }
       }
     }
 

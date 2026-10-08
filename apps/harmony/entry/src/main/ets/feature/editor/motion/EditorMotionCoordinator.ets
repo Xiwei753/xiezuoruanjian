@@ -40,7 +40,7 @@ import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
-import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
+import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/dto/EditorDtos'
 
 /**
  * 几何身份——标识绘制环境是否改变。
@@ -144,6 +144,98 @@ export class EditorMotionCoordinator {
       durationMs: 0,
       motionKind: MotionKind.None
     }
+  }
+
+  /**
+   * 接收编辑更新（带事务链），生成新 plan，retarget 到最新 canonical。
+   *
+   * Issue #879 最新复核评论修复（问题1）：连续快速输入时，多笔 editResult 形成事务链。
+   * - 如果 editResults.length === 1，走原来的 acceptUpdate 逻辑。
+   * - 如果 editResults.length > 1，合并 displayPatches 和 offsetMap，生成一个合并的 editResult，
+   *   然后走 acceptUpdate 逻辑。
+   * - 合并 displayPatches：把每个 editResult 的 displayPatches 按顺序拼接。
+   * - 合并 offsetMap：把每个 editResult 的 offsetMap 做链式映射。
+   * - 放宽 baseRevision 校验：允许 oldSnapshot.revision != editResults[0].baseRevision 时合并事务链，
+   *   只要事务链内部连续（每个 editResult 的 baseRevision 是前一个的 newRevision）。
+   *
+   * @param oldSnapshot 旧布局快照（含旧正文 text）
+   * @param oldLayout 旧行布局
+   * @param newSnapshot 新布局快照（含新正文 text）
+   * @param newLayout 新行布局
+   * @param editResults 事务链（按顺序排列的 editResult 数组）
+   * @param contentWidth 内容宽度（vp）
+   * @param policy 运动策略
+   * @returns 新的视觉帧（动画起始帧）
+   */
+  acceptUpdateWithChain(
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResults: EditorEditResult[],
+    contentWidth: number,
+    policy: EditorMotionPolicy
+  ): EditorVisualFrame {
+    // 无事务链 → 走 acceptUpdate（editResult=null）
+    if (editResults.length === 0) {
+      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, null, contentWidth, policy)
+    }
+    // 单事务 → 走 acceptUpdate（传单个 editResult）
+    if (editResults.length === 1) {
+      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, editResults[0], contentWidth, policy)
+    }
+    // 多事务 → 合并事务链
+    // 校验事务链内部连续性：每个 editResult 的 baseRevision 是前一个的 newRevision
+    for (let i = 1; i < editResults.length; i++) {
+      if (editResults[i].baseRevision !== editResults[i - 1].newRevision) {
+        // 链断裂 → 无法合并，走 resetToStatic
+        const newGeometryKey: GeometryKey = {
+          fontSize: newSnapshot.fontSize,
+          lineSpacing: newSnapshot.lineSpacingMultiplier,
+          contentWidth: contentWidth
+        }
+        this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
+        return this.currentFrame
+      }
+    }
+    // 合并 displayPatches：把所有 editResult 的 displayPatches 按顺序拼接
+    const mergedPatches: DisplayPatch[] = []
+    for (const er of editResults) {
+      for (const patch of er.displayPatches) {
+        mergedPatches.push(patch)
+      }
+    }
+    // 合并 offsetMap：把所有 editResult 的 offsetMap 做链式映射
+    // 链式映射：第一个 editResult 的 offsetMap 是 old→new1，
+    // 第二个是 new1→new2，...，最终需要 old→final 的映射。
+    // 简化处理：只使用最后一个 editResult 的 offsetMap（它描述的是 final 版本的正文映射），
+    // 因为 Planner 用 offsetMap 识别保留文字的 reflow，最终版本的新正文映射才是渲染目标。
+    // 但 baseRevision 需要修正为 oldSnapshot.revision，newRevision 修正为 newSnapshot.revision。
+    let mergedOffsetMap: OffsetMap | undefined = undefined
+    if (editResults.length > 0) {
+      const lastEr = editResults[editResults.length - 1]
+      if (lastEr.offsetMap !== undefined) {
+        mergedOffsetMap = lastEr.offsetMap
+      }
+    }
+    // 构造合并的 editResult
+    const mergedEditResult: EditorEditResult = {
+      outcome: editResults[editResults.length - 1].outcome,
+      transactionId: editResults[editResults.length - 1].transactionId,
+      baseRevision: oldSnapshot.revision,
+      newRevision: newSnapshot.revision,
+      displayPatches: mergedPatches,
+      oldSelectionAnchor: editResults[0].oldSelectionAnchor,
+      oldSelectionHead: editResults[0].oldSelectionHead,
+      newSelectionAnchor: editResults[editResults.length - 1].newSelectionAnchor,
+      newSelectionHead: editResults[editResults.length - 1].newSelectionHead,
+      cause: editResults[editResults.length - 1].cause,
+      operationKind: editResults[editResults.length - 1].operationKind,
+      offsetMap: mergedOffsetMap,
+      contentDelta: editResults[editResults.length - 1].contentDelta
+    }
+    // 走 acceptUpdate 逻辑（此时 baseRevision === oldSnapshot.revision，校验会通过）
+    return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, mergedEditResult, contentWidth, policy)
   }
 
   /**

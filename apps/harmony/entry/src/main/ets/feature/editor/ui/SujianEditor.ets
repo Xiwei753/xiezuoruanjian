@@ -61,6 +61,8 @@ import { EditorVisualFrame } from '../motion/EditorVisualFrame'
 import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
 import { EditorMotionCoordinator } from '../motion/EditorMotionCoordinator'
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams, MotionWindowSource } from '../motion/EditorMotionLayer'
+// Issue #879 最新复核评论修复（问题1）：EditorEditResult 用于收集事务链。
+import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 // Issue #879 复核评论修复（问题1/3/4）：前后台排版隔离 + 稳定运动字形源池。
 import { EditorPendingLayoutHost, PendingLayoutRequest } from './EditorPendingLayoutHost'
 import { EditorMotionSourcePool } from '../motion/EditorMotionSourcePool'
@@ -113,7 +115,10 @@ export struct SujianEditor {
   @State private staticClipCommands: string = 'M0 0 L99999 0 L99999 99999 L0 99999 Z'
   // Issue #879 复核评论修复：延迟到 layout observer 后才做运动规划。
   // onPresentationUpdateChanged 暂存 pendingPresentationUpdate，等 layout 回调后才调 updateVisualFrame。
-  private pendingPresentationUpdate: EditorPresentationUpdate | null = null
+  // Issue #879 最新复核评论修复（问题1）：改为数组保留连续编辑事务链——
+  // 连续快速输入时，多笔 editResult 按顺序保存，onPendingLayoutReady 中合并消费，
+  // 不再只保留最新一个导致中间事务被丢弃。
+  private pendingPresentationUpdates: EditorPresentationUpdate[] = []
   // Issue #879 复核评论修复：保存旧 snapshot 供 acceptUpdate 使用。
   private previousSnapshot: EditorLayoutSnapshot | null = null
   // Issue #879 第三轮复核修复：保存旧布局行几何——在 refreshRender 之前缓存，
@@ -142,6 +147,8 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题1）：token → StyledString 映射——父组件维护原始引用，
   // EditorPendingLayoutHost 通过 resolveLayoutRequest(token) 回调获取，不走 @Prop 深拷贝。
   private styledStringByToken: Map<number, StyledString> = new Map()
+  // Issue #879 复核评论修复（问题3）：已消费的 token 集合——防止同一 token 重复消费。
+  private consumedTokens: Set<number> = new Set()
   // Issue #879 复核评论修复（问题6）：后台排版完成的行布局——作为 Coordinator 和
   // computeStaticMaskRects 的唯一相同输入，不用 renderResult.lines（可能为空）。
   private committedLineLayouts: LineLayout[] = []
@@ -276,9 +283,9 @@ export struct SujianEditor {
     // Issue #879 复核评论修复（问题4）：初始化静态裁切 path 为全尺寸矩形（不裁切）。
     this.updateStaticClipCommands()
     // Issue #879 复核评论修复：不立即调 updateVisualFrame()——Text layout 尚未完成。
-    // 暂存 pendingPresentationUpdate，等 Text.onAppear → attachTextLayoutObserver → layout 回调后才消费。
+    // 暂存到 pendingPresentationUpdates，等 Text.onAppear → attachTextLayoutObserver → layout 回调后才消费。
     if (this.presentationUpdate !== null) {
-      this.pendingPresentationUpdate = this.presentationUpdate
+      this.pendingPresentationUpdates.push(this.presentationUpdate)
     }
     // Issue #629 评论11 第2项：注册行级导航解析器到 Dispatcher。
     // SujianEditor 持有 renderResult；每次渲染更新后同步给 resolver。
@@ -328,6 +335,8 @@ export struct SujianEditor {
     this.motionSourcePool.clear()
     // Issue #879 复核评论修复（问题1）：清空 token→StyledString 映射。
     this.styledStringByToken.clear()
+    // Issue #879 复核评论修复（问题3）：清空已消费的 token 集合。
+    this.consumedTokens.clear()
     // Issue #768 评论5837824666：兜底注销布局观察者（onDisAppear 可能未触发）。
     this.detachTextLayoutObserver()
     // Issue #629 评论11 第2项 + 评论15 第3项：取消行导航等待 + 注销行级导航解析器。
@@ -607,8 +616,12 @@ export struct SujianEditor {
       this.caretRect = null
       this.compositionUnderlineRects = []
       this.visualFrame = null
-      this.pendingPresentationUpdate = null
+      this.pendingPresentationUpdates = []
       this.previousLayout = []
+      // Issue #879 复核评论修复（问题3）：会话切换时清空 styledStringByToken、consumedTokens、pendingLayoutRequest。
+      this.styledStringByToken.clear()
+      this.consumedTokens.clear()
+      this.pendingLayoutRequest = null
       // Issue #879 复核评论修复（问题3）：清空运动源池。
       this.motionSourcePool.clear()
       // Issue #879 复核评论修复（问题4）：会话切换时清空所有窗口 Controller。
@@ -650,8 +663,9 @@ export struct SujianEditor {
     // 直到后台排版完成后才更新前台 Text。
     // 也不立即调 refreshRender()——新 StyledString 只发给 EditorPendingLayoutHost 排版。
 
-    // 暂存 pendingPresentationUpdate，等后台排版完成后才调 updateVisualFrame。
-    this.pendingPresentationUpdate = this.presentationUpdate
+    // Issue #879 最新复核评论修复（问题1）：追加到事务链数组末尾，而非覆盖。
+    // 连续快速输入时，多笔事务按顺序保存，onPendingLayoutReady 中合并消费。
+    this.pendingPresentationUpdates.push(this.presentationUpdate)
 
     // Issue #879 复核评论修复（问题1）：通过 EditorPendingLayoutHost 请求后台排版新 StyledString。
     // 新 StyledString 不发给主 Text——主 Text 继续显示旧内容。
@@ -664,17 +678,32 @@ export struct SujianEditor {
       this.pendingLayoutToken++
       // 把 StyledString 存入 token 映射——EditorPendingLayoutHost 通过回调获取
       this.styledStringByToken.set(this.pendingLayoutToken, this.newStyledString)
+      // Issue #879 复核评论修复（问题3）：新请求到来时清理所有不再等待的旧 token→StyledString 映射条目。
+      // 两次后台排版之间若 token 1 被 token 2 替换，token 1 从未被清理——这里统一清理。
+      const keysToDelete: number[] = []
+      this.styledStringByToken.forEach((_: StyledString, key: number) => {
+        if (key < this.pendingLayoutToken) {
+          keysToDelete.push(key)
+        }
+      })
+      for (const key of keysToDelete) {
+        this.styledStringByToken.delete(key)
+      }
       const fullTextLength = this.newStyledString.getString().length
       // Issue #879 复核评论修复（问题3）：用 pendingSnap 的 fontSize/lineSpacing，
       // 而非 this.currentSnapshot（旧内容）的值。
       const fontSize = pendingSnap.fontSize
       const lineSpacing = pendingSnap.lineSpacingMultiplier
+      // Issue #879 复核评论修复（问题2）：styleKey 包含更多影响几何的值——
+      // 至少包含 fontSize、lineSpacing、autoIndentEnabled、autoIndentWidth。
+      const autoIndentEnabled = pendingSnap.autoIndentEnabled
+      const autoIndentWidth = pendingSnap.autoIndentWidth
       const request: PendingLayoutRequest = {
         token: this.pendingLayoutToken,
         contentWidth: this.contentWidth,
         fontSize: fontSize,
         fullTextLength: fullTextLength,
-        styleKey: `${fontSize}-${lineSpacing}`,
+        styleKey: `${fontSize}-${lineSpacing}-${autoIndentEnabled}-${autoIndentWidth}`,
       }
       this.pendingLayoutRequest = request
     }
@@ -689,29 +718,39 @@ export struct SujianEditor {
   // - 把新 StyledString 写入主 Text（触发主 Text 的 layout）
   // - 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
   // - 不用等主 Text 的 layout observer 回调——后台排版结果已经是正确的行布局
+  //
+  // Issue #879 最新复核评论修复（问题1）：消费整个事务链——
+  // 从 pendingPresentationUpdates 数组中取出所有事务，收集所有 editResult，
+  // 调用 motionCoordinator.acceptUpdateWithChain 合并事务链。
   private onPendingLayoutReady(token: number, lineLayouts: LineLayout[]): void {
-    // 校验 token 匹配——防止旧请求的回调覆盖新请求
-    if (token !== this.pendingLayoutToken) {
+    // Issue #879 复核评论修复（问题3）：要求 pendingPresentationUpdates 非空才消费。
+    if (token !== this.pendingLayoutToken || this.pendingPresentationUpdates.length === 0) {
       return
     }
+    // Issue #879 复核评论修复（问题3）：检查已消费的 token——防止同一 token 重复消费。
+    if (this.consumedTokens.has(token)) {
+      return
+    }
+    this.consumedTokens.add(token)
     // Issue #879 复核评论修复（问题3）：后台排版结果获批后，先将 displayed 指向新版本，
     // 然后才把新 StyledString 写入主 Text，然后才调 updateVisualFrameWithLayout。
-    // 1. 更新 displayed 版本——当前正在显示的快照/行布局/StyledString
-    this.displayedSnapshot = this.pendingPresentationUpdate?.layoutSnapshot ?? this.currentSnapshot
+    // 1. 取最新版本作为 displayed 版本
+    const latestUpdate = this.pendingPresentationUpdates[this.pendingPresentationUpdates.length - 1]
+    this.displayedSnapshot = latestUpdate.layoutSnapshot
     this.displayedLineLayouts = lineLayouts
     this.displayedStyledString = this.newStyledString
     // 2. 更新 currentSnapshot——业务状态切换到新版本
-    this.currentSnapshot = this.pendingPresentationUpdate?.layoutSnapshot ?? this.currentSnapshot
+    this.currentSnapshot = latestUpdate.layoutSnapshot
     // 3. 保存后台排版的行布局——作为 Coordinator 和 computeStaticMaskRects 的唯一相同输入
     this.committedLineLayouts = lineLayouts
     // 4. 把新 StyledString 写入主 Text（触发主 Text 的 layout）
     this.refreshRender()
-    // 5. 用后台排版结果（lineLayouts）作为新布局，调 updateVisualFrameWithLayout
+    // 5. 收集所有 editResult 形成事务链，调 updateVisualFrameWithLayout
     this.updateVisualFrameWithLayout(lineLayouts)
     // 6. 更新 displayedPresentation——当前正在显示的版本（在清空 pending 之前保存）
-    this.displayedPresentation = this.pendingPresentationUpdate
-    // 7. 清空 pendingPresentationUpdate——防止重复消费
-    this.pendingPresentationUpdate = null
+    this.displayedPresentation = latestUpdate
+    // 7. 清空 pendingPresentationUpdates——防止重复消费
+    this.pendingPresentationUpdates = []
     // Issue #879 复核评论修复（问题1）：清理已消费的 token→StyledString 映射条目
     this.styledStringByToken.delete(token)
   }
@@ -719,18 +758,28 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题1）：用后台排版结果更新视觉帧。
   // 类似 updateVisualFrame()，但接收外部传入的 lineLayouts（来自 EditorPendingLayoutHost），
   // 而不是从 renderResult.lines 读取。
+  // Issue #879 最新复核评论修复（问题1）：收集所有 pendingPresentationUpdates 的 editResult，
+  // 调用 acceptUpdateWithChain 合并事务链，而非只传单个 editResult。
   private updateVisualFrameWithLayout(newLineLayouts: LineLayout[]): void {
-    if (this.currentSnapshot === null || this.pendingPresentationUpdate === null) {
+    if (this.currentSnapshot === null || this.pendingPresentationUpdates.length === 0) {
       return
     }
     const oldSnapshot = this.previousSnapshot ?? this.currentSnapshot
-    const editResult = this.pendingPresentationUpdate.editResult
-    this.visualFrame = this.motionCoordinator.acceptUpdate(
+    // 收集所有 pendingPresentationUpdates 的 editResult 形成事务链
+    const editResults: EditorEditResult[] = []
+    for (const update of this.pendingPresentationUpdates) {
+      if (update.editResult !== null) {
+        editResults.push(update.editResult)
+      }
+    }
+    // Issue #879 最新复核评论修复（问题1）：调用 acceptUpdateWithChain 合并事务链。
+    // 如果事务链只有一个 editResult，acceptUpdateWithChain 内部走原来的 acceptUpdate 逻辑。
+    this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,
       this.currentSnapshot,
       newLineLayouts,
-      editResult,
+      editResults,
       this.contentWidth,
       this.motionPolicy
     )
@@ -892,7 +941,7 @@ export struct SujianEditor {
   // Issue #879 第三轮复核修复：使用 this.previousLayout（在 onPresentationUpdateChanged 中缓存），
   // 不再从参数接收 oldLineLayouts——旧布局在 refreshRender 之前已缓存。
   private updateVisualFrame(): void {
-    if (this.currentSnapshot === null || this.pendingPresentationUpdate === null) {
+    if (this.currentSnapshot === null || this.pendingPresentationUpdates.length === 0) {
       this.visualFrame = null
       // Issue #879 本轮复核评论修复（问题3）：visualFrame 清空时更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
@@ -902,13 +951,19 @@ export struct SujianEditor {
     const newLineLayouts = this.renderResult?.lines ?? []
     // oldSnapshot = previousSnapshot（编辑前的 snapshot）
     const oldSnapshot = this.previousSnapshot ?? this.currentSnapshot
-    const editResult = this.pendingPresentationUpdate.editResult
-    this.visualFrame = this.motionCoordinator.acceptUpdate(
+    // 收集所有 pendingPresentationUpdates 的 editResult 形成事务链
+    const editResults: EditorEditResult[] = []
+    for (const update of this.pendingPresentationUpdates) {
+      if (update.editResult !== null) {
+        editResults.push(update.editResult)
+      }
+    }
+    this.visualFrame = this.motionCoordinator.acceptUpdateWithChain(
       oldSnapshot,
       this.previousLayout,  // 使用缓存的旧布局
       this.currentSnapshot,
       newLineLayouts,
-      editResult,
+      editResults,
       this.contentWidth,
       this.motionPolicy
     )
