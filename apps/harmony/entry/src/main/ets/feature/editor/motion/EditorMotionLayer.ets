@@ -331,6 +331,8 @@ export interface MotionTextOverlayParams {
   clipRects: ClipRect[]
   /** 正文排版宽度（vp）——Text 的 width，确保排版和主 Text 一致，不被 clipRect 约束 */
   textWidth: number
+  /** Issue #879 修复（问题2）：ForEach key 的递增前缀，确保每次新事务的窗口 key 不同 */
+  runIdPrefix: number
 }
 
 /**
@@ -440,7 +442,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             })
           }
         },
-        (window: MotionGlyphWindow, index: number) => `${window.sourceKind}-${index}`
+        (window: MotionGlyphWindow, index: number) => `${window.sourceKind}-${params.runIdPrefix}-${index}`
       )
     }
     .width('100%')
