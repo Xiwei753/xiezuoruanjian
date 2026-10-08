@@ -8,16 +8,18 @@
 // 3. 同一字形在每一帧只能由静态正文或运动层绘制一次。
 // 4. 光标位置 = 裁切前沿 front。
 //
-// Issue #879 本轮复核评论修复：
+// Issue #879 复核评论修复：
 // - 问题1：添加 computeStaticMaskPath/computeStaticMaskRects 方法，
 //   从 EditorVisualFrame.staticVisibleRanges 和行布局生成静态可见裁切区域。
 //   主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape 裁切——
 //   只显示未被运动接管的范围。不再用背景色 Rect 遮罩。
-// - 问题2（本轮修复）：MotionTextOverlayParams 改为接收 oldStyledString/newStyledString
-//   （StyledString 类型），不再接收 TextController。
-//   Builder 内部为每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
-//   这样每个窗口的 Text 都是独立的，有自己的 controller 和 StyledString，不会互相干扰。
-//   SujianEditor 只负责保存 oldStyledString 和 newStyledString，传给 MotionTextOverlayBuilder。
+// - 问题2：MotionTextOverlayParams 改为接收 motionSources（MotionSourceEntry[]），
+//   不再接收 TextController 数组 / StyledString / runIdPrefix。
+//   ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
+//   同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
+//   TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
+// - 问题4：needsStaticMask 只有确切有 motion owner（motionGlyphWindows 中至少有一个 window
+//   的 runId 非空）时才返回 true。非动画时不裁切。
 //
 // ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
 // 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
@@ -26,6 +28,7 @@ import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } 
 import { CaretRect, LineLayout } from '../render/editor_render_geometry'
 import { RectShape, PathShape } from '@ohos.arkui.shape'
 import { EditorMotionCoordinator } from './EditorMotionCoordinator'
+import { MotionSourceEntry } from './EditorMotionSourcePool'
 
 /**
  * 裁切矩形——用于 clipShape/maskShape 的矩形区域。
@@ -288,12 +291,26 @@ export class EditorMotionLayer {
   /**
    * 判断当前帧是否需要对主 Text 做静态可见区裁切。
    *
-   * Issue #879 本轮复核评论修复（问题1）：
+   * Issue #879 复核评论修复（问题1/4）：
    * 动画中且 needsMotionLayer 时，主 Text 需要按 staticVisibleRanges 裁切，
    * 排除被运动接管的字形。非动画时不裁切（全显示）。
+   *
+   * Issue #879 复核评论修复（问题4）：
+   * 只有确切有 motion owner（motionGlyphWindows 中至少有一个 window 的 runId 非空，
+   * 即有对应的稳定源）时才返回 true。非动画时不裁切——staticClipCommands 默认应为
+   * 全尺寸矩形（不裁切），而非空 path（完全隐藏）。
    */
   static needsStaticMask(frame: EditorVisualFrame): boolean {
-    return EditorMotionLayer.needsMotionLayer(frame)
+    if (!EditorMotionLayer.needsMotionLayer(frame)) {
+      return false
+    }
+    // 确保至少有一个 window 有有效的 runId（确切的 motion owner）
+    for (const window of frame.motionGlyphWindows) {
+      if (window.runId.length > 0) {
+        return true
+      }
+    }
+    return false
   }
 
   // ── 私有方法 ──
@@ -306,33 +323,28 @@ export class EditorMotionLayer {
  * ArkTS 要求 @Builder 函数的参数类型必须是显式声明的 interface 或 class，
  * 不能用对象字面量类型。
  *
- * Issue #879 本轮复核评论修复（问题2）：
- * - 不再接收 TextController——改为接收 oldStyledString/newStyledString（StyledString | null）。
- * - Builder 内部为每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
- * - 每个窗口的 Text 都是独立的，有自己的 controller 和 StyledString，不会互相干扰。
- * - SujianEditor 只负责保存 oldStyledString 和 newStyledString，传给 MotionTextOverlayBuilder。
+ * Issue #879 复核评论修复（问题2）：
+ * - 不再接收 TextController 数组 / StyledString / runIdPrefix——改为接收 motionSources（稳定源池）。
+ * - ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
+ * - 同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
+ * - TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
+ * - Text.onAppear 中调 source.textController.setStyledString(source.styledString)——只在首次挂载时设置。
  */
+/** 预匹配的运动窗口+源+裁切矩形三元组——避免在 @Builder 中做匹配（ArkUI 限制） */
+export interface MotionWindowSource {
+  /** 运动字形窗口 */
+  window: MotionGlyphWindow
+  /** 匹配的稳定源 */
+  source: MotionSourceEntry
+  /** 裁切矩形 */
+  clipRect: ClipRect
+}
+
 export interface MotionTextOverlayParams {
-  /** 旧排版源 TextController 列表（吞字时显示旧字），每个运动窗口一个独立 controller */
-  oldTextControllers: TextController[]
-  /** 新排版源 TextController 列表（吐字时显示新字），每个运动窗口一个独立 controller */
-  newTextControllers: TextController[]
-  /** 旧排版源 StyledString（吞字时显示旧字）——在 Text.onAppear 时通过 controller.setStyledString 下发 */
-  oldStyledString: StyledString | null
-  /** 新排版源 StyledString（吐字时显示新字）——在 Text.onAppear 时通过 controller.setStyledString 下发 */
-  newStyledString: StyledString | null
-  /** 旧排版源 TextController 列表是否已设置 StyledString */
-  hasOldSource: boolean
-  /** 新排版源 TextController 列表是否已设置 StyledString */
-  hasNewSource: boolean
-  /** 当前视觉帧 */
-  visualFrame: EditorVisualFrame
-  /** 裁切矩形列表（与 motionGlyphWindows 一一对应） */
-  clipRects: ClipRect[]
+  /** 预匹配的窗口-源-裁切矩形列表 */
+  motionWindowSources: MotionWindowSource[]
   /** 正文排版宽度（vp）——Text 的 width，确保排版和主 Text 一致，不被 clipRect 约束 */
   textWidth: number
-  /** Issue #879 修复（问题2）：ForEach key 的递增前缀，确保每次新事务的窗口 key 不同 */
-  runIdPrefix: number
 }
 
 /**
@@ -341,10 +353,11 @@ export interface MotionTextOverlayParams {
  * 在 ArkUI 组件树中渲染运动层——对真实 ArkUI Text 组件做 clipShape 裁切，
  * 实现吐字/吞字的像素级遮罩效果。
  *
- * Issue #879 本轮复核评论修复（问题2）：
- * - 每个窗口创建独立的 TextController + Text，在 onAppear 时设置 StyledString。
- * - 不再共享 TextController——每个窗口的 Text 都是独立的，不会互相干扰。
- * - StyledString 通过参数传入（oldStyledString/newStyledString），由 SujianEditor 在运动开始时准备。
+ * Issue #879 复核评论修复（问题2）：
+ * - ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
+ * - 同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
+ * - TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
+ * - Text.onAppear 中调 source.textController.setStyledString(source.styledString)——只在首次挂载时设置。
  *
  * 渲染策略：
  * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
@@ -358,91 +371,39 @@ export interface MotionTextOverlayParams {
  */
 @Builder
 export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
-  // 条件渲染：非动画状态或无运动字形窗口时不渲染任何内容
-  if (params.visualFrame.isAnimating && params.visualFrame.motionGlyphWindows.length > 0) {
-    // 用 Stack 层叠多个 Text 组件，每个对应一个 MotionGlyphWindow
+  if (params.motionWindowSources.length > 0) {
     Stack() {
-      // 遍历 motionGlyphWindows，为每个窗口创建一个带 clipShape 的 Text
       ForEach(
-        params.visualFrame.motionGlyphWindows,
-        (window: MotionGlyphWindow, index: number) => {
-          // 根据 sourceKind 选择对应的 TextController
-          // 吐字（Reveal）：sourceKind='new'，用 newTextControllers[index]
-          // 吞字（Conceal/ConcealForward）：sourceKind='old'，用 oldTextControllers[index]
-          // Reflow（RetainedMove）：sourceKind='old'，用 oldTextControllers[index] + offset 平移
-          // Issue #879 本轮复核评论修复（问题1）：访问 controllers 前检查索引是否存在，
-          // 防止 controller 数量与窗口数量不匹配时访问 undefined。
-          if (window.sourceKind === 'new' && params.hasNewSource &&
-              index < params.newTextControllers.length) {
-            // 新字源：完整排版，用 Stack + offset + clipShape 限制可见区域
-            // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
-            // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
-            // wordBreak(BREAK_ALL) 与主 Text 一致，确保折行行为相同。
-            // clipShape 只裁切显示区域，不影响 Text 的排版宽度。
-            // 通过 TextController.setStyledString 设置的 StyledString 包含字号/行高/首行缩进样式，
-            // 不需要在 Text 属性上重复设置 fontSize/lineHeight。
-            Stack() {
-              Text(undefined, { controller: params.newTextControllers[index] })
-                .width(params.textWidth)
-                .textAlign(TextAlign.Start)
-                .wordBreak(WordBreak.BREAK_ALL)
-                .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
-                .onAppear(() => {
-                  // Issue #879 复核评论修复（问题1）：API 14 及以下，controller 尚未绑定 Text 时
-                  // setStyledString 无效。在 Text.onAppear（controller 已绑定）时才调 setStyledString。
-                  if (params.newStyledString !== null) {
-                    params.newTextControllers[index].setStyledString(params.newStyledString)
-                  }
-                })
-            }
-            .width(params.clipRects[index].width)
-            .height(params.clipRects[index].height)
-            .clipShape(new RectShape({
-              width: params.clipRects[index].width,
-              height: params.clipRects[index].height
-            }))
-            .position({
-              x: params.clipRects[index].x,
-              y: params.clipRects[index].y
-            })
-          } else if (window.sourceKind === 'old' && params.hasOldSource &&
-                     index < params.oldTextControllers.length) {
-            // 旧字源：完整排版，用 Stack + offset + clipShape 限制可见区域
-            // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
-            // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
-            // wordBreak(BREAK_ALL) 与主 Text 一致，确保折行行为相同。
-            // clipShape 只裁切显示区域，不影响 Text 的排版宽度。
-            // RetainedMove 的平移通过 window.offsetX/offsetY 实现（叠加在 offset 上）。
-            Stack() {
-              Text(undefined, { controller: params.oldTextControllers[index] })
-                .width(params.textWidth)
-                .textAlign(TextAlign.Start)
-                .wordBreak(WordBreak.BREAK_ALL)
-                .offset({
-                  x: -params.clipRects[index].x + window.offsetX,
-                  y: -params.clipRects[index].y + window.offsetY
-                })
-                .onAppear(() => {
-                  // Issue #879 复核评论修复（问题1）：API 14 及以下，controller 尚未绑定 Text 时
-                  // setStyledString 无效。在 Text.onAppear（controller 已绑定）时才调 setStyledString。
-                  if (params.oldStyledString !== null) {
-                    params.oldTextControllers[index].setStyledString(params.oldStyledString)
-                  }
-                })
-            }
-            .width(params.clipRects[index].width)
-            .height(params.clipRects[index].height)
-            .clipShape(new RectShape({
-              width: params.clipRects[index].width,
-              height: params.clipRects[index].height
-            }))
-            .position({
-              x: params.clipRects[index].x,
-              y: params.clipRects[index].y
-            })
+        params.motionWindowSources,
+        (item: MotionWindowSource, index: number) => {
+          Stack() {
+            Text(undefined, { controller: item.source.textController })
+              .width(params.textWidth)
+              .textAlign(TextAlign.Start)
+              .wordBreak(WordBreak.BREAK_ALL)
+              .offset({
+                x: -item.clipRect.x + item.window.offsetX,
+                y: -item.clipRect.y + item.window.offsetY
+              })
+              .onAppear(() => {
+                if (!item.source.mounted) {
+                  item.source.mounted = true
+                  item.source.textController.setStyledString(item.source.styledString)
+                }
+              })
           }
+          .width(item.clipRect.width)
+          .height(item.clipRect.height)
+          .clipShape(new RectShape({
+            width: item.clipRect.width,
+            height: item.clipRect.height
+          }))
+          .position({
+            x: item.clipRect.x,
+            y: item.clipRect.y
+          })
         },
-        (window: MotionGlyphWindow, index: number) => `${window.sourceKind}-${params.runIdPrefix}-${index}`
+        (item: MotionWindowSource, index: number) => `${item.window.runId}-${index}`
       )
     }
     .width('100%')

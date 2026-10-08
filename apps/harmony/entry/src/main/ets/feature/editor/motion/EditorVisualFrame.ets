@@ -15,6 +15,12 @@
 // - 保留 MotionKind 枚举用于 EditorVisualFrame.motionKind（表示当前帧的主要运动类型，
 //   供 needsMotionLayer 判断），但 plan 不再用单一 motionKind 决定整个事务。
 //
+// Issue #879 本轮复核评论修复（字形身份与连续编辑衔接）：
+// - MotionGlyphWindow 新增 runId / sourceRevision / clusterId / currentClipLeft /
+//   currentClipRight / currentPositionX / currentPositionY 字段。
+// - 连续快速编辑时，新 plan 的起始帧应以当前帧的实际屏幕状态（clip 起点位置）
+//   而非旧版整字初态矩形作为下一动画起点，避免快速打字/连续 Backspace 从整字初态跳起。
+//
 // 所有坐标单位 vp，相对组件左上角。
 // 所有文本 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
 
@@ -141,6 +147,16 @@ export interface RetainedMove {
  * MotionGlyphWindow 仍保留——由 Coordinator 从多通道 plan（InsertRun/DeletedRun/RetainedMove）
  * 采样生成，描述某一帧运动层要画的字形窗口。EditorMotionLayer 消费本结构做 clipShape 裁切。
  * 新增 offsetX/offsetY 字段支持 RetainedMove 的平移动画（旧字源绘制后整体偏移到当前插值位置）。
+ *
+ * Issue #879 本轮复核评论修复（字形身份与连续编辑衔接）：
+ * 新增 runId / sourceRevision / clusterId / currentClipLeft / currentClipRight /
+ * currentPositionX / currentPositionY 字段。连续快速编辑时，新 plan 的起始帧应使用
+ * 当前帧的实际屏幕状态（clip 起点位置）而非旧版整字初态矩形作为下一动画起点。
+ * - runId：与 EditorMotionSourcePool 的 runId 对应，ForEach 中保持稳定身份。
+ * - sourceRevision：识别字形来自哪个版本，快速打字时新 plan 起始帧用当前帧的 revision。
+ * - clusterId：以 sourceKind + sourceRevision + utf16Start + utf16End 构造，跨版本追踪同一字形。
+ * - currentClipLeft/Right：当前帧实际裁切窗口边界，作为下一动画起点而非整字初态 x0/x1。
+ * - currentPositionX/Y：当前帧实际字形位置（含 offset），作为下一动画起点而非旧版整字初态位置。
  */
 export interface MotionGlyphWindow {
   /** 字形来源：'old'（旧正文）或 'new'（新正文） */
@@ -169,6 +185,20 @@ export interface MotionGlyphWindow {
   offsetX: number
   /** 绘制偏移 y（vp）——RetainedMove 平移动画时把旧字源整体偏移到当前插值位置 */
   offsetY: number
+  /** 运动源 run 身份标识——与 EditorMotionSourcePool 的 runId 对应，用于在 ForEach 中保持稳定身份 */
+  runId: string
+  /** 字形源对应的正文 revision——连续编辑时识别字形来自哪个版本 */
+  sourceRevision: number
+  /** 字形簇身份标识——跨版本追踪同一字形，以 sourceKind + sourceRevision + utf16Start + utf16End 构造 */
+  clusterId: string
+  /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
+  currentClipLeft: number
+  /** 当前帧的裁切窗口右边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x1 */
+  currentClipRight: number
+  /** 当前帧的字形位置 x（含 offset，vp）——连续编辑时作为下一动画起点而非旧版整字初态位置 */
+  currentPositionX: number
+  /** 当前帧的字形位置 y（含 offset，vp）——连续编辑时作为下一动画起点而非旧版整字初态位置 */
+  currentPositionY: number
 }
 
 /**

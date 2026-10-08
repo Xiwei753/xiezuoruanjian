@@ -289,6 +289,7 @@ export class EditorMotionCoordinator {
       const x0 = run.rect.x
       const x1 = run.rect.x + run.rect.width
       const front = x0 + (x1 - x0) * p
+      const newRevision = this.newSnapshot?.revision ?? 0
       motionGlyphWindows.push({
         sourceKind: 'new',
         utf16Start: run.utf16Start,
@@ -302,7 +303,14 @@ export class EditorMotionCoordinator {
         glyphWidth: run.rect.width,
         glyphHeight: run.rect.height,
         offsetX: 0,
-        offsetY: 0
+        offsetY: 0,
+        runId: `new-${newRevision}`,
+        sourceRevision: newRevision,
+        clusterId: `new-${newRevision}-${run.utf16Start}-${run.utf16End}`,
+        currentClipLeft: x0,
+        currentClipRight: front,
+        currentPositionX: run.rect.x,
+        currentPositionY: run.rect.y
       })
     }
 
@@ -316,6 +324,7 @@ export class EditorMotionCoordinator {
         const x0 = caretX
         const x1 = run.rect.x + run.rect.width
         const front = x1 + (x0 - x1) * p
+        const oldRevision = this.oldSnapshot?.revision ?? 0
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -329,13 +338,21 @@ export class EditorMotionCoordinator {
           glyphWidth: run.rect.width,
           glyphHeight: run.rect.height,
           offsetX: 0,
-          offsetY: 0
+          offsetY: 0,
+          runId: `old-${oldRevision}`,
+          sourceRevision: oldRevision,
+          clusterId: `old-${oldRevision}-${run.utf16Start}-${run.utf16End}`,
+          currentClipLeft: caretX,
+          currentClipRight: front,
+          currentPositionX: run.rect.x,
+          currentPositionY: run.rect.y
         })
       } else {
         // Backspace：裁切窗口从 [x0, x1] 缩到 [x0, x0]
         const x0 = run.rect.x
         const x1 = run.rect.x + run.rect.width
         const front = x1 + (x0 - x1) * p
+        const oldRevision = this.oldSnapshot?.revision ?? 0
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -349,7 +366,14 @@ export class EditorMotionCoordinator {
           glyphWidth: run.rect.width,
           glyphHeight: run.rect.height,
           offsetX: 0,
-          offsetY: 0
+          offsetY: 0,
+          runId: `old-${oldRevision}`,
+          sourceRevision: oldRevision,
+          clusterId: `old-${oldRevision}-${run.utf16Start}-${run.utf16End}`,
+          currentClipLeft: x0,
+          currentClipRight: front,
+          currentPositionX: run.rect.x,
+          currentPositionY: run.rect.y
         })
       }
     }
@@ -360,6 +384,7 @@ export class EditorMotionCoordinator {
     for (const move of plan.retainedMoves) {
       const currentX = move.oldRect.x + (move.newRect.x - move.oldRect.x) * p
       const currentY = move.oldRect.y + (move.newRect.y - move.oldRect.y) * p
+      const oldRevision = this.oldSnapshot?.revision ?? 0
       motionGlyphWindows.push({
         sourceKind: 'old',
         utf16Start: move.oldUtf16Start,
@@ -373,7 +398,14 @@ export class EditorMotionCoordinator {
         glyphWidth: move.oldRect.width,
         glyphHeight: move.oldRect.height,
         offsetX: currentX - move.oldRect.x,
-        offsetY: currentY - move.oldRect.y
+        offsetY: currentY - move.oldRect.y,
+        runId: `old-${oldRevision}`,
+        sourceRevision: oldRevision,
+        clusterId: `old-${oldRevision}-${move.oldUtf16Start}-${move.oldUtf16End}`,
+        currentClipLeft: currentX,
+        currentClipRight: currentX + move.oldRect.width,
+        currentPositionX: move.oldRect.x + (currentX - move.oldRect.x),
+        currentPositionY: move.oldRect.y + (currentY - move.oldRect.y)
       })
     }
 
