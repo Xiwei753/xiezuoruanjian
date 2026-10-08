@@ -401,6 +401,39 @@ jobs:
               )
           source = source.replace(submit_anchor, submit_replacement, 1)
 
+          # Huawei review slots may not be released instantly after cancellation.
+          # Retry only that exact business failure, without creating another draft.
+          submit_call_anchor = """  const resp = await client.post<SubmitTestVersionResponse>(
+    '/publish/v2/test/app/version/submit',
+    body,
+    undefined,
+    { appId }
+  )
+
+  if (resp.ret.code !== 0) {
+    throw new Error(`Failed to submit test version: ${resp.ret.code} ${resp.ret.msg}`)
+  }"""
+          submit_call_replacement = """  for (let attempt = 1; attempt <= 6; attempt++) {
+    const resp = await client.post<SubmitTestVersionResponse>(
+      '/publish/v2/test/app/version/submit',
+      body,
+      undefined,
+      { appId }
+    )
+    if (Number(resp.ret.code) === 0) break
+    if (Number(resp.ret.code) !== 204144692 || attempt === 6) {
+      throw new Error(`Failed to submit test version: ${resp.ret.code} ${resp.ret.msg}`)
+    }
+    core.warning('AGC audit slot not released yet; retrying same version ' +
+      versionId + ' (attempt ' + attempt + '/6)')
+    await new Promise<void>(resolve => setTimeout(resolve, attempt * 10000))
+  }"""
+          if source.count(submit_call_anchor) != 1:
+              raise SystemExit(
+                  f"Pinned upstream submit call anchor count={source.count(submit_call_anchor)}; refusing blind patch"
+              )
+          source = source.replace(submit_call_anchor, submit_call_replacement, 1)
+
           path.write_text(source, encoding="utf-8")
           PY
 
