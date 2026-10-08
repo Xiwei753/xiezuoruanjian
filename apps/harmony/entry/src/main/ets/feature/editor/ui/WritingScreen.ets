@@ -148,9 +148,9 @@ export struct WritingScreen {
   // 已删除。它们只服务于「保存时拿整章 old/new 文本比较」的旧统计上报；
   // 写作统计改由 EditorStatsQueue 按编辑事务上报后，会话 id 与时长口径由 Core 侧管理。
   @State adaptiveState: AdaptiveState = getAdaptiveState()
-  @State editorSnapshot: EditorLayoutSnapshot | null = null
-  // Issue #879：保存 editResult 供运动层消费（构造 EditorPresentationUpdate 时需要）。
-  @State editorEditResult: EditorEditResult | null = null
+  // Issue #879：用单个 @State presentationUpdate 替代分离的 editorSnapshot + editorEditResult，
+  // 防止两份数据配错或额外重建时重放旧 editResult。
+  @State presentationUpdate: EditorPresentationUpdate | null = null
   // Issue #879：运动策略，从 LocalSettings 构造，设置变化时同步更新。
   @State motionPolicy: EditorMotionPolicy = EditorMotionPolicy.fromSettings({
     editorFontSize: 16,
@@ -323,7 +323,7 @@ export struct WritingScreen {
     }
 
     const self = this
-    // 注册编辑会话状态监听器：open/编辑命令成功后回流 editorSnapshot/content/hasUnsaved/wordCount。
+    // 注册编辑会话状态监听器：open/编辑命令成功后回流 presentationUpdate/content/hasUnsaved/wordCount。
     // 选区/正文变化后持续写入当前接续状态，保证 onContinue 读取到最新编辑器状态。
     // Issue #629 评论9 第4项：listener 改 typed EditorStateUpdate{snapshot, editResult}。
     // wordCount 实时来自 editResult.contentDelta（insertedNonWhitespaceChars/deletedNonWhitespaceChars，
@@ -332,15 +332,20 @@ export struct WritingScreen {
     // Core 已 Applied 只是平台 patch 失败时 recovery 后 editResult=本次 result.data，仍按 contentDelta 更新。
     this.coordinator.setStateListener((update: EditorStateUpdate) => {
       const snap = update.snapshot
-      self.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+      // Issue #879：将 snapshot + editResult + sessionId 保存在一个 @State presentationUpdate 中，
+      // 防止两份数据配错或额外重建时重放旧 editResult。
+      const layoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
         snap,
         self.settings.editorFontSize,
         self.settings.editorLineSpacingMultiplier,
         self.settings.autoIndentEnabled,
         self.settings.autoIndentWidth
       )
-      // Issue #879：保存 editResult 供运动层消费。
-      self.editorEditResult = update.editResult
+      self.presentationUpdate = new EditorPresentationUpdate(
+        layoutSnapshot,
+        update.editResult,
+        self.coordinator.getSessionId() ?? 0
+      )
       self.content = snap.text
       self.hasUnsavedChanges = snap.text !== self.lastSavedContent
       // 实时字数：消费 editResult.contentDelta（Core 非空白字符增量）
@@ -688,7 +693,7 @@ export struct WritingScreen {
   }
 
   // Issue #768 评论5838296806：先加载排版设置，再打开章节会话。
-  // 避免并发加载时 coordinator.open() 先完成导致 editorSnapshot 用默认设置生成。
+  // 避免并发加载时 coordinator.open() 先完成导致 presentationUpdate 用默认设置生成。
   private async loadWritingContent(): Promise<void> {
     await this.loadSettings()
     await this.loadChapter()
@@ -709,7 +714,7 @@ export struct WritingScreen {
         this.hasUnsavedChanges = false
         // Issue #829 评论 #5995146525：不再记录 sessionOldText。打开章节时正文还没被编辑过，
         // 没有任何编辑事务可上报，统计基线由队列从第一条真实编辑事件开始算。
-        // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
+        // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 presentationUpdate/content/hasUnsaved/wordCount。
         // Issue #653 评论 5608056955：Harmony 没有 persistent/temporary 两套宿主生命周期，
         // close 在 requestLeave 统一做，open 不再接收 isPersistent 参数。
         const snapResult = await this.coordinator.open(this.chapterId, result.data.content)
@@ -1228,15 +1233,21 @@ export struct WritingScreen {
       this.editorFormatDraftLineSpacing = settings.editorLineSpacingMultiplier
     }
     // Issue #768 评论5838296806：设置真相变化后，如果 coordinator 已有 snapshot，
-    // 同步重建 editorSnapshot，保证 StyledString 与设置真相一致。
+    // 同步重建 presentationUpdate（editResult=null 表示布局重建，不是编辑事务），
+    // 保证 StyledString 与设置真相一致。
     const existingSnap = this.coordinator.getSnapshot()
     if (existingSnap !== null) {
-      this.editorSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
+      const newLayoutSnapshot = EditorLayoutSnapshot.fromEditorSnapshot(
         existingSnap,
         this.settings.editorFontSize,
         this.settings.editorLineSpacingMultiplier,
         this.settings.autoIndentEnabled,
         this.settings.autoIndentWidth
+      )
+      this.presentationUpdate = new EditorPresentationUpdate(
+        newLayoutSnapshot,
+        null,
+        this.coordinator.getSessionId() ?? 0
       )
     }
     // Issue #705：Core 的 themeMode 已废弃，运行时恒为 null；
@@ -1977,13 +1988,7 @@ export struct WritingScreen {
       } else {
         SujianEditor({
           scroller: this.editorScroller,
-          presentationUpdate: this.editorSnapshot !== null
-            ? new EditorPresentationUpdate(
-                this.editorSnapshot,
-                this.editorEditResult,
-                this.coordinator.getSessionId() ?? 0
-              )
-            : null,
+          presentationUpdate: this.presentationUpdate,
           motionPolicy: this.motionPolicy,
           harmonyImeConnection: this.harmonyImeConnection,
           inputAdapter: this.inputAdapter,
