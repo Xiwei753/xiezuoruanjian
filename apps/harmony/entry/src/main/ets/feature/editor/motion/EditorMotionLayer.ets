@@ -242,6 +242,8 @@ export interface MotionTextOverlayParams {
   fontSize: number
   /** 行高（vp） */
   lineHeight: number
+  /** 正文排版宽度（vp）——Text 的 width，确保排版和主 Text 一致，不被 clipRect 约束 */
+  textWidth: number
 }
 
 /**
@@ -259,7 +261,8 @@ export interface MotionTextOverlayParams {
  *     visualFrame: this.visualFrame,
  *     clipRects: EditorMotionLayer.buildAllClipRects(this.visualFrame),
  *     fontSize: this.currentSnapshot?.fontSize ?? 16,
- *     lineHeight: (this.currentSnapshot?.fontSize ?? 16) * (this.currentSnapshot?.lineSpacingMultiplier ?? 1.8)
+ *     lineHeight: (this.currentSnapshot?.fontSize ?? 16) * (this.currentSnapshot?.lineSpacingMultiplier ?? 1.8),
+ *     textWidth: this.contentWidth
  *   })
  * }
  * ```
@@ -279,6 +282,7 @@ export interface MotionTextOverlayParams {
  * @param params.clipRects 裁切矩形列表（与 motionGlyphWindows 一一对应）
  * @param params.fontSize 字体大小（vp）
  * @param params.lineHeight 行高（vp）
+ * @param params.textWidth 正文排版宽度（vp）——Text 的 width，确保排版和主 Text 一致
  */
 @Builder
 export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
@@ -296,11 +300,17 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
           // Reflow：sourceKind='new'，用 newTextContent
           if (window.sourceKind === 'new' && params.newTextContent !== null) {
             // 新字源：完整排版，用 Stack + offset + clipShape 限制可见区域
-            // RectShape 不支持 x/y 偏移，用 Stack 包裹 Text 并用 offset 移动 Text 使裁切窗口对齐 Stack 左上角
+            // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
+            // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
+            // wordBreak(BREAK_ALL) 与主 Text 一致，确保折行行为相同。
+            // clipShape 只裁切显示区域，不影响 Text 的排版宽度。
             Stack() {
               Text(params.newTextContent)
                 .fontSize(params.fontSize)
                 .lineHeight(params.lineHeight)
+                .wordBreak(WordBreak.BREAK_ALL)
+                .width(params.textWidth)
+                .textAlign(TextAlign.Start)
                 .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
             }
             .width(params.clipRects[index].width)
@@ -315,10 +325,17 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
             })
           } else if (window.sourceKind === 'old' && params.oldTextContent !== null) {
             // 旧字源：完整排版，用 Stack + offset + clipShape 限制可见区域
+            // Text 的 width 设为 textWidth（完整排版宽度），不是 clipRect.width（裁切窗口宽度），
+            // 确保排版和主 Text 一致，不会因 Stack 宽度限制而重新换行。
+            // wordBreak(BREAK_ALL) 与主 Text 一致，确保折行行为相同。
+            // clipShape 只裁切显示区域，不影响 Text 的排版宽度。
             Stack() {
               Text(params.oldTextContent)
                 .fontSize(params.fontSize)
                 .lineHeight(params.lineHeight)
+                .wordBreak(WordBreak.BREAK_ALL)
+                .width(params.textWidth)
+                .textAlign(TextAlign.Start)
                 .offset({ x: -params.clipRects[index].x, y: -params.clipRects[index].y })
             }
             .width(params.clipRects[index].width)
