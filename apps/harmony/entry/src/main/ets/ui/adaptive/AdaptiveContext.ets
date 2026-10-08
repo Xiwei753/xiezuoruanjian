@@ -111,8 +111,14 @@ export class AdaptiveContext {
       this.readSafeAreas()
       this.readKeyboardVisible()
       this.readFoldPosture()
-      // 读取初始窗口状态
+      // 先注册窗口状态变化监听（确保不漏事件）
+      this.registerWindowStatusChange()
+      // 再读取当前窗口状态
       this.readWindowStatus()
+      // 将初次已知状态送入 reconcileWindowPolicy 做首次政策应用
+      if (this.cachedIsDedicatedLandscapeTablet && this.mainWindow) {
+        this.reconcileWindowPolicy(this.cachedWindowStatus)
+      }
 
       // 底部手势条（导航指示器）沉浸式适配。
       // ArkUI 默认把页面内容布局在安全区内，实机 dumpLayout 证实 Navigation / NavDestination /
@@ -159,8 +165,6 @@ export class AdaptiveContext {
       this.registerAvoidAreaChange()
       // 注册折叠状态变化监听
       this.registerFoldStatusChange()
-      // 注册窗口状态变化监听（检测全屏 ↔ 分屏/自由窗口切换）
-      this.registerWindowStatusChange()
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to initialize: ${JSON.stringify(err)}`)
     }
@@ -620,6 +624,46 @@ export class AdaptiveContext {
     }
   }
 
+  /**
+   * 统一的窗口政策协调入口，供初始状态和事件回调共用。
+   *
+   * 将串行化逻辑集中在此方法中：
+   * - 更新 cachedWindowStatus
+   * - 递增 generation 并串到 windowStatusTask 链上确保串行执行
+   * - FULL_SCREEN → applyTabletWindowPolicy（强制横屏 + 隐藏系统栏）
+   * - UNDEFINED → 不执行政策，等待状态明确后再统一处理
+   * - 其他 → restoreWindowPolicy（恢复默认方向与系统栏）
+   */
+  private reconcileWindowPolicy(windowStatus: window.WindowStatusType): void {
+    if (!this.mainWindow || !this.cachedIsDedicatedLandscapeTablet) {
+      return
+    }
+    // 更新缓存状态
+    this.cachedWindowStatus = windowStatus
+
+    this.windowStatusGeneration++
+    const currentGeneration: number = this.windowStatusGeneration
+    const mainWindow: window.Window = this.mainWindow
+
+    this.windowStatusTask = this.windowStatusTask.then(() => {
+      if (currentGeneration !== this.windowStatusGeneration) {
+        hilog.info(DOMAIN, TAG, `WindowStatus task generation ${currentGeneration} is stale, skipping`)
+        return
+      }
+      if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
+        return TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
+      } else if (windowStatus === window.WindowStatusType.UNDEFINED) {
+        // UNDEFINED：冷启动窗口状态还没就绪，不凭猜测强制横屏，等待状态明确后再统一处理
+        hilog.info(DOMAIN, TAG, 'WindowStatus UNDEFINED: deferring policy until status is confirmed')
+        return
+      } else {
+        return TabletWindowPolicy.restoreWindowPolicy(mainWindow)
+      }
+    }).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, `WindowStatus task failed: ${JSON.stringify(err)}`)
+    })
+  }
+
   private handleWindowStatusChange(windowStatus: window.WindowStatusType): void {
     if (!this.mainWindow || !this.cachedIsDedicatedLandscapeTablet) {
       return
@@ -627,31 +671,8 @@ export class AdaptiveContext {
     if (windowStatus === this.cachedWindowStatus) {
       return
     }
-    const oldStatus: window.WindowStatusType = this.cachedWindowStatus
-    this.cachedWindowStatus = windowStatus
-    hilog.info(DOMAIN, TAG, `WindowStatus changed: ${oldStatus} → ${windowStatus}`)
-
-    // 递增 generation，串到 windowStatusTask 链上确保串行执行
-    this.windowStatusGeneration++
-    const currentGeneration: number = this.windowStatusGeneration
-    const mainWindow: window.Window = this.mainWindow
-
-    this.windowStatusTask = this.windowStatusTask.then(() => {
-      // 执行前检查 generation 是否仍是最新的，过期的丢弃
-      if (currentGeneration !== this.windowStatusGeneration) {
-        hilog.info(DOMAIN, TAG, `WindowStatus task generation ${currentGeneration} is stale (current: ${this.windowStatusGeneration}), skipping`)
-        return
-      }
-      if (windowStatus === window.WindowStatusType.FULL_SCREEN) {
-        // 真正回到独占全屏：重新套用平板窗口政策（强制横屏 + 隐藏系统栏）
-        return TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
-      } else {
-        // 分屏 / 悬浮 / 最大化：恢复默认方向与系统栏，布局按真实 windowRect 走
-        return TabletWindowPolicy.restoreWindowPolicy(mainWindow)
-      }
-    }).catch((err: Error) => {
-      hilog.error(DOMAIN, TAG, `WindowStatus task failed: ${JSON.stringify(err)}`)
-    })
+    hilog.info(DOMAIN, TAG, `WindowStatus changed: ${this.cachedWindowStatus} → ${windowStatus}`)
+    this.reconcileWindowPolicy(windowStatus)
   }
 }
 

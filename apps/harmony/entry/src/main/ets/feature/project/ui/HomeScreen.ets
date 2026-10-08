@@ -70,6 +70,10 @@ export struct HomeScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
+  // 导航意图序号：每次点击作品或重试时递增，await 返回后只有最新序号才允许 push。
+  // 解决同作品复用 Promise 时两个等待者各执行一次 pushWritingRoute 的问题。
+  private openNavigationGeneration: number = 0
+
   async aboutToAppear() {
     hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
@@ -131,16 +135,20 @@ export struct HomeScreen {
   // 空作品只由「成功返回的空目录」决定：chapterId 为空即 Writing 的未选章节工作台。
   // prepareOpenProject 返回确定值，页面只对当前请求结果做一次 pushPath。
   private async navigateToWritingFromProject(projectId: string, projectName: string): Promise<void> {
+    this.openNavigationGeneration++
+    const myGeneration: number = this.openNavigationGeneration
     const target: ProjectOpenTarget | null = await this.viewModel.prepareOpenProject(projectId, projectName)
-    if (target !== null) {
+    if (target !== null && myGeneration === this.openNavigationGeneration) {
       this.pushWritingRoute(target)
     }
   }
 
   // 重试入口：只重跑 getProjectTree(projectId)，成功后走同一段进 Writing 的逻辑。
   private async retryTreeLoad(): Promise<void> {
+    this.openNavigationGeneration++
+    const myGeneration: number = this.openNavigationGeneration
     const target: ProjectOpenTarget | null = await this.viewModel.retryOpenProject()
-    if (target !== null) {
+    if (target !== null && myGeneration === this.openNavigationGeneration) {
       this.pushWritingRoute(target)
     }
   }
@@ -891,6 +899,7 @@ export struct HomeScreen {
             .fontSize(14)
             .height(36)
             .onClick(() => {
+              this.openNavigationGeneration++
               this.viewModel.dismissOpenProjectError()
             })
 

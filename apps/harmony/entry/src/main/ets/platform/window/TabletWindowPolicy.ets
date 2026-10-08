@@ -187,15 +187,15 @@ export class TabletWindowPolicy {
    * 只有 FULL_SCREEN 是独占全屏；分屏 / 悬浮 / 最大化都会保留系统栏与其它窗口，
    * 套上强制横屏 + 隐藏系统栏等于把全屏 UI 硬压到一块非全屏窗口上。
    * UNDEFINED 是冷启动窗口状态还没就绪，不套用强制政策（避免在未确认全屏时
-   * 强制横屏 + 隐藏系统栏）；读取失败（窗口尚未创建）保守返回 true 不阻断。
+   * 强制横屏 + 隐藏系统栏）；读取失败也不凭猜测强制横屏，保守返回 false。
    */
   private static isExclusiveFullScreenState(mainWindow: window.Window): boolean {
     try {
       const status: window.WindowStatusType = mainWindow.getWindowStatus()
       return status === window.WindowStatusType.FULL_SCREEN
     } catch (err) {
-      hilog.info(DOMAIN, TAG, `getWindowStatus failed, assume exclusive fullscreen: ${JSON.stringify(err)}`)
-      return true
+      hilog.info(DOMAIN, TAG, `getWindowStatus failed, not assuming exclusive fullscreen: ${JSON.stringify(err)}`)
+      return false
     }
   }
 }

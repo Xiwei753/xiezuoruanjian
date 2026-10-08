@@ -404,6 +404,10 @@ export struct WritingScreen {
   // 返回 boolean：保存失败/close 失败都返回 false（不 detach/close/pop，未落盘正文留在活跃会话）。
   // 幂等：closeTask 复用同一 Promise；失败后重置允许重试。
   private async performGracefulClose(): Promise<boolean> {
+    // 无编辑会话（零章节工作台）：没有 session 需要 close/save/detach，直接允许离开。
+    if (this.chapterId.length === 0 && this.coordinator.getSessionId() === null) {
+      return true
+    }
     // Issue #629 评论7 第5项：已有 closeTask 时直接返回同一 Promise（幂等）。
     if (this.closeTask !== null) {
       return this.closeTask
