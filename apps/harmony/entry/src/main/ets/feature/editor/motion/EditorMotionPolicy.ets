@@ -7,7 +7,11 @@
 // - typingDurationMs：吐字/吞字动画时长（默认 100ms）。
 // - cursorDurationMs：光标平滑移动时长（默认 80ms）。
 // - mode：协同模式（文字和光标一起动画）或独立模式（分别动画）。
-// - reduceMotion：减少动态效果（动画时长归零，直接跳到终态）。
+// - reduceMotion：系统级减少动态效果（无障碍），独立于用户动画开关。
+//
+// Issue #879 复核评论：reduceMotion 不应因 typing 和 cursor 都关就推成 true。
+// reduceMotion 的语义是"系统级减少动态效果"（无障碍），不是"用户关了某个动画开关"。
+// 各动画开关（typing/cursor/coordinated）独立判断，互不影响。
 //
 // 不修改 DTO 与 Rust，只读 LocalSettings。
 
@@ -32,6 +36,12 @@ export enum MotionMode {
  * 封装从 LocalSettings 投影出的动画参数和模式判断。
  * 运动协调器（EditorMotionCoordinator）和规划器（EditorMotionPlanner）
  * 消费本策略决定是否启动动画、动画时长、协同/独立模式。
+ *
+ * Issue #879 复核评论修复：
+ * - reduceMotion 独立于用户动画开关，语义为"系统级无障碍减少动态效果"。
+ * - shouldAnimateText() 只检查 isTypingAnimationEnabled。
+ * - shouldAnimateCaret() 只检查 isSmoothCursorEnabled。
+ * - shouldUseCoordinatedMode() 只检查 isCoordinatedEnabled。
  */
 export class EditorMotionPolicy {
   /** 吐字/吞字动画时长（ms） */
@@ -40,7 +50,7 @@ export class EditorMotionPolicy {
   readonly cursorDurationMs: number
   /** 运动模式：协同或独立 */
   readonly mode: MotionMode
-  /** 减少动态效果（无障碍）——为 true 时所有动画时长归零 */
+  /** 系统级减少动态效果（无障碍）——独立于用户动画开关 */
   readonly reduceMotion: boolean
   /** 是否启用吐字动画 */
   readonly isTypingAnimationEnabled: boolean
@@ -77,14 +87,16 @@ export class EditorMotionPolicy {
    * - isTypingAnimationEnabled ← editorTypingAnimationEnabled
    * - isSmoothCursorEnabled ← editorSmoothCursorEnabled
    * - isCoordinatedEnabled ← editorCoordinatedTextCursorAnimationEnabled
-   * - reduceMotion：当前 Harmony 端没有独立的 reduceMotion 设置，
-   *   当 typingAnimationEnabled 和 smoothCursorEnabled 都为 false 时视为 reduceMotion。
+   * - reduceMotion：当前 Harmony 端没有独立的 reduceMotion 设置，设为 false。
+   *   reduceMotion 的语义是"系统级无障碍减少动态效果"，不是"用户关了某个动画开关"。
+   *   未来可从系统无障碍设置获取。
    */
   static fromSettings(settings: LocalSettings): EditorMotionPolicy {
     const isTypingAnimationEnabled: boolean = settings.editorTypingAnimationEnabled
     const isSmoothCursorEnabled: boolean = settings.editorSmoothCursorEnabled
     const isCoordinatedEnabled: boolean = settings.editorCoordinatedTextCursorAnimationEnabled
-    const reduceMotion: boolean = !isTypingAnimationEnabled && !isSmoothCursorEnabled
+    // reduceMotion 独立于用户动画开关——当前 Harmony 端没有系统级 reduceMotion 设置
+    const reduceMotion: boolean = false
     const mode: MotionMode = isCoordinatedEnabled ? MotionMode.Coordinated : MotionMode.Independent
 
     return new EditorMotionPolicy(
@@ -100,31 +112,33 @@ export class EditorMotionPolicy {
 
   /**
    * 是否应该对文字（吐字/吞字）启动动画。
-   * reduceMotion 为 true 或 isTypingAnimationEnabled 为 false 时返回 false。
+   * 只检查 isTypingAnimationEnabled——用户开关独立判断，不受 reduceMotion 影响。
    */
   shouldAnimateText(): boolean {
-    if (this.reduceMotion) {
-      return false
-    }
     return this.isTypingAnimationEnabled
   }
 
   /**
    * 是否应该对光标启动平滑移动动画。
-   * reduceMotion 为 true 或 isSmoothCursorEnabled 为 false 时返回 false。
+   * 只检查 isSmoothCursorEnabled——用户开关独立判断，不受 reduceMotion 影响。
    */
   shouldAnimateCaret(): boolean {
-    if (this.reduceMotion) {
-      return false
-    }
     return this.isSmoothCursorEnabled
   }
 
   /**
    * 是否应该使用协同模式（文字+光标一起动画）。
-   * mode 为 Coordinated 时返回 true。
+   * 只检查 isCoordinatedEnabled。
    */
   shouldUseCoordinatedMode(): boolean {
-    return this.mode === MotionMode.Coordinated
+    return this.isCoordinatedEnabled
+  }
+
+  /**
+   * 是否有任何动画启用（文字或光标）。
+   * 用于判断是否需要启动逐帧驱动。
+   */
+  shouldAnimate(): boolean {
+    return this.shouldAnimateText() || this.shouldAnimateCaret()
   }
 }

@@ -6,40 +6,69 @@
 // 1. 接收 EditorPresentationUpdate，保存当前可见画面。
 // 2. 用 EditorMotionPlanner 生成新 plan。
 // 3. 直接 retarget——不等旧动画完成，立即切换到新 plan 的起始状态。
-// 4. sampleFrame(progress) 从 plan 和 progress 计算视觉帧：
+// 4. tick(now) 逐帧驱动：接收时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
+// 5. sampleFrame(progress) 从 plan 和 progress 计算视觉帧：
 //    - 吐字：front = x0 + (x1-x0) * easing(p)
 //    - 吞字：front = x1 + (x0-x1) * easing(p)
 //    - 光标画在 front
-// 5. finishMotion() 动画完成，归还静态层。
+// 6. finishMotion() 动画完成，按最新目标全文 layout 重建静态所有权。
 //
-// 渲染身份：revision + generation + compositionSessionId + compositionGeneration + fontSize + lineSpacing + contentWidth。
-// 渲染身份变化时说明布局重建（字号变更/切换章节等），直接显示静态画面。
+// Issue #879 复核评论修复：
+// - 拆分身份检查：GeometryKey（fontSize, lineSpacing, contentWidth, compositionSessionId）
+//   和 TextRevisionKey（revision, generation, compositionGeneration）。
+//   正文版本变化不能作为取消动画理由——只有会话切换、字号/宽度变化才走静态重建。
+// - 添加旧布局缓存：保存上一帧的 EditorLayoutSnapshot（含旧 text）和旧 LineLayout[]，
+//   供 Planner 计算旧字形位置。
+// - 添加 tick(now) 方法：接收当前时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
+//   progress 达到 1 时在同一帧调用 finishMotion()。
+// - 修复 finishMotion：结束帧按最新目标全文 layout 重建静态所有权（所有字形归静态层），
+//   不照搬可能已排除目标文字的 staticVisibleRanges。
+// - contentWidth 由调用方传入。
 //
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
 import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
-import { EditorPresentationUpdate } from './EditorPresentationUpdate'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner, GlyphSource } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
+import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 
 /**
- * 渲染身份——标识一次布局重建。
+ * 几何身份——标识绘制环境是否改变。
  *
- * 当 revision + generation + compositionSessionId + compositionGeneration + fontSize + lineSpacing + contentWidth
- * 中任一字段变化时，说明布局重建（字号变更/切换章节/内容宽度变化等），
+ * 只有这些字段变化时才说明布局重建（字号变更/宽度变化/会话切换），
  * 运动协调器应直接显示静态画面，不启动动画。
+ *
+ * Issue #879 复核评论修复：正文版本（revision/generation/compositionGeneration）
+ * 不属于几何身份——正常打字会改变 revision，但不应取消动画。
  */
-export interface LayoutIdentity {
-  readonly revision: number
-  readonly generation: number
-  readonly compositionSessionId: number
-  readonly compositionGeneration: number
+export interface GeometryKey {
+  /** 字体大小（vp） */
   readonly fontSize: number
+  /** 行距倍数 */
   readonly lineSpacing: number
+  /** 内容宽度（vp）——由调用方传入 */
   readonly contentWidth: number
+  /** 编辑会话 ID——会话切换说明切换了章节/文档 */
+  readonly compositionSessionId: number
+}
+
+/**
+ * 正文版本身份——标识新旧布局是否对应本次编辑。
+ *
+ * 用于验证 editResult.baseRevision == cachedOldRevision、
+ * editResult.newRevision == newSnapshot.revision，
+ * 确保规划时使用的旧布局确实对应本次编辑的 base revision。
+ */
+export interface TextRevisionKey {
+  /** 正文 revision */
+  readonly revision: number
+  /** 编辑 generation */
+  readonly generation: number
+  /** composition generation */
+  readonly compositionGeneration: number
 }
 
 /**
@@ -47,20 +76,34 @@ export interface LayoutIdentity {
  *
  * 保存上一帧真正已显示的状态，接收新的编辑更新后 retarget 到最新 canonical。
  * 不等旧动画完成——如果用户快速连续输入，直接切换到新 plan 的起始状态。
+ *
+ * Issue #879 复核评论修复：
+ * - 拆分 GeometryKey / TextRevisionKey，正文版本变化不取消动画
+ * - 添加旧布局缓存，供 Planner 计算旧字形位置
+ * - 添加 tick(now) 逐帧驱动方法
+ * - 修复 finishMotion 按最新 layout 重建静态所有权
  */
 export class EditorMotionCoordinator {
   /** 当前视觉帧 */
   private currentFrame: EditorVisualFrame
-  /** 当前 revision */
-  private currentRevision: number
+  /** 当前几何身份 */
+  private geometryKey: GeometryKey
+  /** 当前正文版本身份 */
+  private textRevisionKey: TextRevisionKey
+  /** 旧布局快照缓存（含旧 text）——供 Planner 计算旧字形位置 */
+  private oldSnapshot: EditorLayoutSnapshot | null
+  /** 旧行布局缓存——供 Planner 计算旧字形几何 */
+  private oldLayout: LineLayout[]
+  /** 新布局快照（含新 text）——供 Planner 计算新字形位置和 finishMotion 重建 */
+  private newSnapshot: EditorLayoutSnapshot | null
+  /** 新行布局——供 Planner 计算新字形几何和 finishMotion 重建 */
+  private newLayout: LineLayout[]
   /** 动画开始时间（ms，performance.now 语义） */
   private motionStartTime: number
   /** 动画时长（ms） */
   private motionDurationMs: number
   /** 当前运动规划 */
   private currentPlan: EditorMotionPlan
-  /** 当前渲染身份 */
-  private layoutIdentity: LayoutIdentity
 
   constructor() {
     this.currentFrame = {
@@ -72,7 +115,21 @@ export class EditorMotionCoordinator {
       isAnimating: false,
       motionKind: MotionKind.None
     }
-    this.currentRevision = 0
+    this.geometryKey = {
+      fontSize: 16,
+      lineSpacing: 1.8,
+      contentWidth: 0,
+      compositionSessionId: 0
+    }
+    this.textRevisionKey = {
+      revision: 0,
+      generation: 0,
+      compositionGeneration: -1
+    }
+    this.oldSnapshot = null
+    this.oldLayout = []
+    this.newSnapshot = null
+    this.newLayout = []
     this.motionStartTime = 0
     this.motionDurationMs = 0
     this.currentPlan = {
@@ -83,62 +140,109 @@ export class EditorMotionCoordinator {
       newGlyphTargets: [],
       durationMs: 0
     }
-    this.layoutIdentity = {
-      revision: 0,
-      generation: 0,
-      compositionSessionId: 0,
-      compositionGeneration: -1,
-      fontSize: 16,
-      lineSpacing: 1.8,
-      contentWidth: 0
-    }
   }
 
   /**
    * 接收编辑更新，生成新 plan，retarget 到最新 canonical。
    *
-   * 先保存当前可见画面（作为新动画的起始状态），
-   * 用 Planner 生成新 plan，直接 retarget——不等旧动画完成。
+   * Issue #879 复核评论修复：
+   * - 先验证 editResult.baseRevision == cachedOldRevision、editResult.newRevision == newSnapshot.revision
+   * - 只有 GeometryKey 变化（会话切换/字号/宽度变化）才走静态重建
+   * - 正文版本变化不取消动画
+   * - contentWidth 由调用方传入
+   * - 入参改为 oldSnapshot + oldLayout + newSnapshot + newLayout + editResult + lastVisibleFrame
    *
-   * @param update 本次编辑更新
-   * @param lineLayouts 当前行布局
+   * @param oldSnapshot 旧布局快照（含旧正文 text）
+   * @param oldLayout 旧行布局
+   * @param newSnapshot 新布局快照（含新正文 text）
+   * @param newLayout 新行布局
+   * @param editResult 本次编辑事务结果（null 表示非编辑触发的更新）
+   * @param contentWidth 内容宽度（vp）
    * @param policy 运动策略
    * @returns 新的视觉帧（动画起始帧）
    */
   acceptUpdate(
-    update: EditorPresentationUpdate,
-    lineLayouts: LineLayout[],
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResult: EditorEditResult | null,
+    contentWidth: number,
     policy: EditorMotionPolicy
   ): EditorVisualFrame {
-    const snapshot = update.layoutSnapshot
-
-    // 计算新渲染身份
-    const newIdentity: LayoutIdentity = {
-      revision: snapshot.revision,
-      generation: snapshot.generation,
-      compositionSessionId: snapshot.compositionSessionId,
-      compositionGeneration: snapshot.compositionGeneration,
-      fontSize: snapshot.fontSize,
-      lineSpacing: snapshot.lineSpacingMultiplier,
-      contentWidth: 0 // 由调用方在 lineLayouts 推断或外部传入
+    // 计算新几何身份
+    const newGeometryKey: GeometryKey = {
+      fontSize: newSnapshot.fontSize,
+      lineSpacing: newSnapshot.lineSpacingMultiplier,
+      contentWidth: contentWidth,
+      compositionSessionId: newSnapshot.compositionSessionId
     }
 
-    // 渲染身份变化（字号变更/切换章节等）→ 直接显示静态画面
-    if (!EditorMotionCoordinator.identityEquals(this.layoutIdentity, newIdentity)) {
-      this.layoutIdentity = newIdentity
-      this.currentPlan = EditorMotionPlanner.plan(this.currentFrame, update, lineLayouts)
-      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(snapshot, lineLayouts)
-      this.currentRevision = snapshot.revision
+    // 几何身份变化（字号变更/会话切换/宽度变化）→ 直接显示静态画面
+    if (!EditorMotionCoordinator.geometryEquals(this.geometryKey, newGeometryKey)) {
+      this.geometryKey = newGeometryKey
+      this.textRevisionKey = {
+        revision: newSnapshot.revision,
+        generation: newSnapshot.generation,
+        compositionGeneration: newSnapshot.compositionGeneration
+      }
+      this.oldSnapshot = newSnapshot
+      this.oldLayout = newLayout
+      this.newSnapshot = newSnapshot
+      this.newLayout = newLayout
+      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
+      this.currentPlan = {
+        motionKind: MotionKind.None,
+        segments: [],
+        affectedRanges: [],
+        oldGlyphSources: [],
+        newGlyphTargets: [],
+        durationMs: 0
+      }
       this.motionDurationMs = 0
       this.currentFrame.isAnimating = false
       return this.currentFrame
     }
 
+    // 验证 editResult 的 baseRevision 和 newRevision 是否匹配
+    if (editResult !== null) {
+      // editResult.baseRevision 应该等于旧 snapshot 的 revision
+      // editResult.newRevision 应该等于新 snapshot 的 revision
+      // 如果不匹配，说明布局缓存已过期，走静态重建
+      if (editResult.baseRevision !== oldSnapshot.revision ||
+          editResult.newRevision !== newSnapshot.revision) {
+        this.geometryKey = newGeometryKey
+        this.textRevisionKey = {
+          revision: newSnapshot.revision,
+          generation: newSnapshot.generation,
+          compositionGeneration: newSnapshot.compositionGeneration
+        }
+        this.oldSnapshot = newSnapshot
+        this.oldLayout = newLayout
+        this.newSnapshot = newSnapshot
+        this.newLayout = newLayout
+        this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
+        this.currentPlan = {
+          motionKind: MotionKind.None,
+          segments: [],
+          affectedRanges: [],
+          oldGlyphSources: [],
+          newGlyphTargets: [],
+          durationMs: 0
+        }
+        this.motionDurationMs = 0
+        this.currentFrame.isAnimating = false
+        return this.currentFrame
+      }
+    }
+
     // 保存当前可见画面作为起始状态
     const startFrame = this.currentFrame
 
-    // 用 Planner 生成新 plan
-    this.currentPlan = EditorMotionPlanner.plan(startFrame, update, lineLayouts)
+    // 用 Planner 生成新 plan（传入 oldSnapshot + oldLayout + newSnapshot + newLayout）
+    this.currentPlan = EditorMotionPlanner.plan(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, startFrame
+    )
 
     // 确定动画时长
     if (this.currentPlan.motionKind === MotionKind.None ||
@@ -153,22 +257,68 @@ export class EditorMotionCoordinator {
     // 设置 plan 的 durationMs
     this.currentPlan.durationMs = this.motionDurationMs
 
-    // 记录动画开始时间
-    this.motionStartTime = 0 // 由 sampleFrame 的 progress 参数驱动，不依赖绝对时间
+    // 更新缓存
+    this.oldSnapshot = oldSnapshot
+    this.oldLayout = oldLayout
+    this.newSnapshot = newSnapshot
+    this.newLayout = newLayout
+    this.geometryKey = newGeometryKey
+    this.textRevisionKey = {
+      revision: newSnapshot.revision,
+      generation: newSnapshot.generation,
+      compositionGeneration: newSnapshot.compositionGeneration
+    }
 
-    // 更新 revision
-    this.currentRevision = snapshot.revision
-    this.layoutIdentity = newIdentity
-
-    // 如果不需要动画（时长为 0 或 reduceMotion），直接返回终态帧
+    // 如果不需要动画（时长为 0），直接返回终态帧
     if (this.motionDurationMs <= 0) {
-      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(snapshot, lineLayouts)
+      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout)
       this.currentFrame.isAnimating = false
       return this.currentFrame
     }
 
-    // 生成动画起始帧（progress=0）
+    // 记录动画开始时间——由 tick(now) 驱动
+    this.motionStartTime = 0 // 将在第一次 tick 时设置
+
+    // 生成动画起始帧（progress=0）并回写 currentFrame
     this.currentFrame = this.sampleFrame(0)
+    return this.currentFrame
+  }
+
+  /**
+   * 逐帧驱动——接收当前时间戳，计算 progress，调用 sampleFrame 并回写 currentFrame。
+   *
+   * Issue #879 复核评论修复：添加 tick(now) 方法实现逐帧驱动。
+   * - 第一次调用时设置 motionStartTime = now
+   * - progress = clamp((now - motionStartTime) / motionDurationMs, 0, 1)
+   * - 调用 sampleFrame(progress) 并回写 currentFrame
+   * - progress 达到 1 时在同一帧调用 finishMotion()
+   *
+   * @param now 当前时间戳（ms，performance.now 语义）
+   * @returns 当前进度的视觉帧
+   */
+  tick(now: number): EditorVisualFrame {
+    // 如果不在动画中，直接返回当前帧
+    if (!this.currentFrame.isAnimating || this.motionDurationMs <= 0) {
+      return this.currentFrame
+    }
+
+    // 第一次调用时设置动画开始时间
+    if (this.motionStartTime === 0) {
+      this.motionStartTime = now
+    }
+
+    // 计算 progress
+    const rawProgress = (now - this.motionStartTime) / this.motionDurationMs
+    const progress = Math.max(0, Math.min(1, rawProgress))
+
+    // 调用 sampleFrame 并回写 currentFrame
+    this.currentFrame = this.sampleFrame(progress)
+
+    // progress 达到 1 时在同一帧调用 finishMotion()
+    if (progress >= 1) {
+      this.currentFrame = this.finishMotion()
+    }
+
     return this.currentFrame
   }
 
@@ -195,9 +345,15 @@ export class EditorMotionCoordinator {
     if (plan.motionKind === MotionKind.CaretMove) {
       // 纯光标移动：从 segments 插值
       if (plan.segments.length > 0) {
-        const seg = plan.segments[0]
-        const caretX = seg.startCaretX + (seg.endCaretX - seg.startCaretX) * p
-        const caretY = seg.startCaretY + (seg.endCaretY - seg.startCaretY) * p
+        // 多段轨迹：按 progress 分配到各段
+        const segCount = plan.segments.length
+        const segProgress = progress * segCount
+        const segIndex = Math.min(segCount - 1, Math.floor(segProgress))
+        const localProgress = Math.min(1, segProgress - segIndex)
+        const seg = plan.segments[segIndex]
+        const localEased = EditorMotionCoordinator.easing(localProgress)
+        const caretX = seg.startCaretX + (seg.endCaretX - seg.startCaretX) * localEased
+        const caretY = seg.startCaretY + (seg.endCaretY - seg.startCaretY) * localEased
         return {
           caretX,
           caretY,
@@ -377,15 +533,49 @@ export class EditorMotionCoordinator {
   /**
    * 动画完成，归还静态层。
    *
-   * 清除所有运动层字形窗口，把所有字形归还给静态层绘制。
-   * 光标移动到最终位置。
+   * Issue #879 复核评论修复：
+   * 结束帧按最新目标全文 layout 重建静态所有权（所有字形归静态层），
+   * 和撤窗口一次提交。不照搬可能已排除目标文字的 staticVisibleRanges。
    */
   finishMotion(): EditorVisualFrame {
+    // 按最新目标全文 layout 重建静态所有权
+    // 所有字形归静态层——用 newSnapshot + newLayout 计算完整的静态可见范围
+    const staticVisibleRanges: StaticVisibleRange[] = []
+    if (this.newSnapshot !== null && this.newLayout.length > 0) {
+      // 所有字形都归静态层
+      staticVisibleRanges.push({
+        utf16Start: this.newLayout[0].startUtf16,
+        utf16End: this.newLayout[this.newLayout.length - 1].endUtf16
+      })
+    }
+
+    // 计算最终光标位置（从 newSnapshot + newLayout）
+    let caretX = this.currentFrame.caretX
+    let caretY = this.currentFrame.caretY
+    let caretHeight = this.currentFrame.caretHeight
+    if (this.newSnapshot !== null && this.newLayout.length > 0) {
+      const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(this.newSnapshot.text, this.newSnapshot.cursorByteOffset)
+      for (const line of this.newLayout) {
+        if (cursorUtf16 >= line.startUtf16 && cursorUtf16 <= line.endUtf16) {
+          let x = line.left
+          for (const stop of line.caretStops) {
+            if (stop.utf16Offset <= cursorUtf16) {
+              x = stop.x
+            }
+          }
+          caretX = x
+          caretY = line.y
+          caretHeight = line.height
+          break
+        }
+      }
+    }
+
     this.currentFrame = {
-      caretX: this.currentFrame.caretX,
-      caretY: this.currentFrame.caretY,
-      caretHeight: this.currentFrame.caretHeight,
-      staticVisibleRanges: this.currentFrame.staticVisibleRanges,
+      caretX,
+      caretY,
+      caretHeight,
+      staticVisibleRanges,
       motionGlyphWindows: [],
       isAnimating: false,
       motionKind: MotionKind.None
@@ -399,6 +589,7 @@ export class EditorMotionCoordinator {
       durationMs: 0
     }
     this.motionDurationMs = 0
+    this.motionStartTime = 0
     return this.currentFrame
   }
 
@@ -433,16 +624,17 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * 判断两个渲染身份是否相等。
+   * 判断两个几何身份是否相等。
+   *
+   * Issue #879 复核评论修复：只比较几何字段（fontSize, lineSpacing, contentWidth, compositionSessionId）。
+   * 正文版本（revision/generation/compositionGeneration）不参与比较——
+   * 正常打字会改变 revision，但不应取消动画。
    */
-  private static identityEquals(a: LayoutIdentity, b: LayoutIdentity): boolean {
-    return a.revision === b.revision &&
-           a.generation === b.generation &&
-           a.compositionSessionId === b.compositionSessionId &&
-           a.compositionGeneration === b.compositionGeneration &&
-           a.fontSize === b.fontSize &&
+  private static geometryEquals(a: GeometryKey, b: GeometryKey): boolean {
+    return a.fontSize === b.fontSize &&
            a.lineSpacing === b.lineSpacing &&
-           a.contentWidth === b.contentWidth
+           a.contentWidth === b.contentWidth &&
+           a.compositionSessionId === b.compositionSessionId
   }
 
   /**
@@ -569,3 +761,4 @@ export class EditorMotionCoordinator {
     return result
   }
 }
+

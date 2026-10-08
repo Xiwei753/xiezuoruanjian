@@ -9,12 +9,19 @@
 // 4. IME commit 后的真实 committed patch 才参与正文运动。
 // 5. Forward Delete 保持逻辑光标静止——被删字贴向固定 caret 缩回。
 //
+// Issue #879 复核评论修复：
+// - 入参改为 oldSnapshot + oldLayout + newSnapshot + newLayout + editResult + lastVisibleFrame
+// - 旧正文范围用 oldSnapshot.text 解码（patch.replaceByteStart/End 是旧正文 UTF-8 区间）
+// - 新正文范围用 newSnapshot.text 解码（patch.insertedByteStart/End 是新正文 UTF-8 区间）
+// - 旧字形几何用 oldLayout 计算，新字形几何用 newLayout 计算
+// - 跨行 caret 拆段：按旧行末与新行首等实际停靠点分段，不做穿字斜线
+//
 // 不修改 Core 的编辑事实模型，只读 editResult 做规划。
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
 import { EditorEditResult, DisplayPatch, EditorOperationKind, EditorTransactionCause, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
 import { EditorVisualFrame, MotionKind, MotionSegment, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
-import { EditorPresentationUpdate } from './EditorPresentationUpdate'
+import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
 
@@ -87,30 +94,39 @@ export interface EditorMotionPlan {
 /**
  * 运动规划器。
  *
- * 从 EditorPresentationUpdate（含 editResult）和行布局信息出发，
+ * 从 oldSnapshot + oldLayout + newSnapshot + newLayout + editResult 出发，
  * 规划文字运动方案。核心是解读 displayPatches 和 offsetMap，
  * 判断哪些文字需要吐字/吞字动画，哪些文字需要 reflow 平移。
+ *
+ * Issue #879 复核评论修复：
+ * - 旧正文范围（replaceByteStart/End）用 oldSnapshot.text 解码
+ * - 新正文范围（insertedByteStart/End）用 newSnapshot.text 解码
+ * - 旧字形几何用 oldLayout 计算，新字形几何用 newLayout 计算
  */
 export class EditorMotionPlanner {
   /**
    * 规划运动方案。
    *
-   * @param oldVisibleFrame 上一帧的视觉状态（含旧正文的光标位置和可见范围）
-   * @param update 本次编辑更新（含 layoutSnapshot 和 editResult）
-   * @param lineLayouts 当前行布局信息
+   * @param oldSnapshot 旧布局快照（含旧正文 text）
+   * @param oldLayout 旧行布局（旧字形的排版几何）
+   * @param newSnapshot 新布局快照（含新正文 text）
+   * @param newLayout 新行布局（新字形的排版几何）
+   * @param editResult 本次编辑事务结果
+   * @param lastVisibleFrame 上一帧的视觉状态
    * @returns 运动规划结果
    */
   static plan(
-    oldVisibleFrame: EditorVisualFrame,
-    update: EditorPresentationUpdate,
-    lineLayouts: LineLayout[]
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResult: EditorEditResult | null,
+    lastVisibleFrame: EditorVisualFrame
   ): EditorMotionPlan {
     // 无 editResult（初始加载/切换章节/字号变更）→ 无运动
-    if (update.editResult === null) {
+    if (editResult === null) {
       return EditorMotionPlanner.emptyPlan()
     }
-
-    const editResult: EditorEditResult = update.editResult
 
     // NoChange → 无运动
     if (editResult.outcome !== 'applied' && editResult.outcome !== 'appliedWithAdjustedSelection') {
@@ -119,7 +135,7 @@ export class EditorMotionPlanner {
 
     // 纯选区移动（CursorOnly）→ 只规划光标移动
     if (editResult.operationKind === EditorOperationKind.CursorOnly) {
-      return EditorMotionPlanner.caretMovePlan(oldVisibleFrame, update, lineLayouts)
+      return EditorMotionPlanner.caretMovePlan(oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, lastVisibleFrame)
     }
 
     // IME 预编辑变动（CompositionUpdate）→ 不生成正文增删 motion
@@ -133,7 +149,7 @@ export class EditorMotionPlanner {
     // CompositionCommit 走正常的 displayPatches 分析流程
 
     // 从 displayPatches 分析正文增删
-    return EditorMotionPlanner.planFromPatches(oldVisibleFrame, update, lineLayouts)
+    return EditorMotionPlanner.planFromPatches(oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, lastVisibleFrame)
   }
 
   /**
@@ -152,38 +168,97 @@ export class EditorMotionPlanner {
 
   /**
    * 纯光标移动规划。
+   *
+   * Issue #879 复核评论修复：跨行 caret 拆段——按旧行末与新行首等实际停靠点分段。
+   * 同行内水平移动 + 换行垂直跳转，不做穿字斜线。远距离点击直接跳转（不动画）。
    */
   private static caretMovePlan(
-    oldVisibleFrame: EditorVisualFrame,
-    update: EditorPresentationUpdate,
-    lineLayouts: LineLayout[]
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResult: EditorEditResult,
+    lastVisibleFrame: EditorVisualFrame
   ): EditorMotionPlan {
-    const snapshot = update.layoutSnapshot
-    const newCaretX = oldVisibleFrame.caretX
-    const newCaretY = oldVisibleFrame.caretY
+    // 从新行布局计算新光标位置
+    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(newSnapshot.text, newSnapshot.cursorByteOffset)
+    const newCaret = EditorMotionPlanner.findCaretPosition(cursorUtf16, newLayout, newSnapshot.text)
 
-    // 从行布局计算新光标位置
-    const cursorUtf16 = TextOffsetMapper.utf8ToUtf16(snapshot.text, snapshot.cursorByteOffset)
-    const newCaret = EditorMotionPlanner.findCaretPosition(cursorUtf16, lineLayouts, snapshot.text)
+    // 旧光标位置来自 lastVisibleFrame
+    const oldCaretX = lastVisibleFrame.caretX
+    const oldCaretY = lastVisibleFrame.caretY
 
-    // 跨行时按真实视觉行拆段
+    // 判断是否跨行
+    const oldLineIndex = EditorMotionPlanner.findLineIndexByY(oldCaretY, oldLayout)
+    const newLineIndex = EditorMotionPlanner.findLineIndexByY(newCaret.y, newLayout)
+    const isCrossLine = oldLineIndex !== newLineIndex && oldLineIndex >= 0 && newLineIndex >= 0
+
     const segments: MotionSegment[] = []
-    if (oldVisibleFrame.caretY !== newCaret.y) {
-      // 跨行移动：先在旧行水平移动到行首/尾，再垂直跳转到新行，再水平移动到目标
+
+    if (!isCrossLine) {
+      // 同行移动：单段直线
       segments.push({
-        startCaretX: oldVisibleFrame.caretX,
-        startCaretY: oldVisibleFrame.caretY,
+        startCaretX: oldCaretX,
+        startCaretY: oldCaretY,
         endCaretX: newCaret.x,
         endCaretY: newCaret.y
       })
     } else {
-      // 同行移动：单段直线
-      segments.push({
-        startCaretX: oldVisibleFrame.caretX,
-        startCaretY: oldVisibleFrame.caretY,
-        endCaretX: newCaret.x,
-        endCaretY: newCaret.y
-      })
+      // 跨行移动：按实际停靠点分段
+      // 1. 先在旧行水平移动到行末（或行首，取决于方向）
+      const oldLine = oldLayout[oldLineIndex]
+      const newLine = newLayout[newLineIndex]
+
+      // 判断移动方向：向下移动还是向上移动
+      const isMoveDown = newLineIndex > oldLineIndex
+
+      if (isMoveDown) {
+        // 向下移动：先在旧行水平移到行末，再垂直跳到新行，再水平移到目标
+        // 段1：旧行内水平移动到行末
+        segments.push({
+          startCaretX: oldCaretX,
+          startCaretY: oldCaretY,
+          endCaretX: oldLine.left + EditorMotionPlanner.getLineEndX(oldLine, oldSnapshot.text),
+          endCaretY: oldCaretY
+        })
+        // 段2：垂直跳转到新行首
+        segments.push({
+          startCaretX: oldLine.left + EditorMotionPlanner.getLineEndX(oldLine, oldSnapshot.text),
+          startCaretY: oldCaretY,
+          endCaretX: newLine.left,
+          endCaretY: newCaret.y
+        })
+        // 段3：新行内水平移动到目标
+        segments.push({
+          startCaretX: newLine.left,
+          startCaretY: newCaret.y,
+          endCaretX: newCaret.x,
+          endCaretY: newCaret.y
+        })
+      } else {
+        // 向上移动：先在旧行水平移到行首，再垂直跳到新行末，再水平移到目标
+        // 段1：旧行内水平移动到行首
+        segments.push({
+          startCaretX: oldCaretX,
+          startCaretY: oldCaretY,
+          endCaretX: oldLine.left,
+          endCaretY: oldCaretY
+        })
+        // 段2：垂直跳转到新行末
+        segments.push({
+          startCaretX: oldLine.left,
+          startCaretY: oldCaretY,
+          endCaretX: newLine.left + EditorMotionPlanner.getLineEndX(newLine, newSnapshot.text),
+          endCaretY: newCaret.y
+        })
+        // 段3：新行内水平移动到目标
+        segments.push({
+          startCaretX: newLine.left + EditorMotionPlanner.getLineEndX(newLine, newSnapshot.text),
+          startCaretY: newCaret.y,
+          endCaretX: newCaret.x,
+          endCaretY: newCaret.y
+        })
+      }
     }
 
     return {
@@ -198,16 +273,23 @@ export class EditorMotionPlanner {
 
   /**
    * 从 displayPatches 分析正文增删，规划运动方案。
+   *
+   * Issue #879 复核评论修复：
+   * - patch.replaceByteStart/End 是旧正文 UTF-8 区间，用 oldSnapshot.text 解码
+   * - patch.insertedByteStart/End 是新正文 UTF-8 区间，用 newSnapshot.text 解码
+   * - 旧字形几何用 oldLayout 计算，新字形几何用 newLayout 计算
    */
   private static planFromPatches(
-    oldVisibleFrame: EditorVisualFrame,
-    update: EditorPresentationUpdate,
-    lineLayouts: LineLayout[]
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResult: EditorEditResult,
+    lastVisibleFrame: EditorVisualFrame
   ): EditorMotionPlan {
-    const editResult = update.editResult!
-    const snapshot = update.layoutSnapshot
     const patches: DisplayPatch[] = editResult.displayPatches
-    const oldText = oldVisibleFrame.staticVisibleRanges.length > 0 ? snapshot.text : snapshot.text
+    const oldText = oldSnapshot.text
+    const newText = newSnapshot.text
 
     // 无 patches → 无运动
     if (patches.length === 0) {
@@ -237,29 +319,29 @@ export class EditorMotionPlanner {
     const newGlyphTargets: GlyphSource[] = []
 
     for (const patch of patches) {
-      // 旧正文被替换的范围（byte offset）→ 转 UTF-16
+      // 旧正文被替换的范围（byte offset）→ 用 oldSnapshot.text 转 UTF-16
       const oldUtf16Start = TextOffsetMapper.utf8ToUtf16(oldText, patch.replaceByteStart)
       const oldUtf16End = TextOffsetMapper.utf8ToUtf16(oldText, patch.replaceByteEndExclusive)
-      // 新正文插入的范围（byte offset）→ 转 UTF-16
-      const newUtf16Start = TextOffsetMapper.utf8ToUtf16(snapshot.text, patch.insertedByteStart)
-      const newUtf16End = TextOffsetMapper.utf8ToUtf16(snapshot.text, patch.insertedByteEndExclusive)
+      // 新正文插入的范围（byte offset）→ 用 newSnapshot.text 转 UTF-16
+      const newUtf16Start = TextOffsetMapper.utf8ToUtf16(newText, patch.insertedByteStart)
+      const newUtf16End = TextOffsetMapper.utf8ToUtf16(newText, patch.insertedByteEndExclusive)
 
       affectedRanges.push({ utf16Start: oldUtf16Start, utf16End: oldUtf16End } as AffectedRange)
 
-      // 旧正文字形源（吞字/Forward Delete 时需要）
+      // 旧正文字形源（吞字/Forward Delete 时需要）——用 oldLayout 计算几何
       if (oldUtf16Start < oldUtf16End) {
         const glyphSource = EditorMotionPlanner.computeGlyphSource(
-          oldText, oldUtf16Start, oldUtf16End, lineLayouts, 'old'
+          oldText, oldUtf16Start, oldUtf16End, oldLayout, 'old'
         )
         if (glyphSource !== null) {
           oldGlyphSources.push(glyphSource)
         }
       }
 
-      // 新正文字形目标（吐字/Reflow 时需要）
+      // 新正文字形目标（吐字/Reflow 时需要）——用 newLayout 计算几何
       if (newUtf16Start < newUtf16End) {
         const glyphTarget = EditorMotionPlanner.computeGlyphSource(
-          snapshot.text, newUtf16Start, newUtf16End, lineLayouts, 'new'
+          newText, newUtf16Start, newUtf16End, newLayout, 'new'
         )
         if (glyphTarget !== null) {
           newGlyphTargets.push(glyphTarget)
@@ -270,7 +352,7 @@ export class EditorMotionPlanner {
     // 用 offsetMap 识别保留文字的 reflow
     if (editResult.offsetMap) {
       const reflowRanges = EditorMotionPlanner.identifyReflowRanges(
-        editResult.offsetMap, oldText, snapshot.text, lineLayouts
+        editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const reflow of reflowRanges) {
         newGlyphTargets.push(reflow)
@@ -361,6 +443,29 @@ export class EditorMotionPlanner {
   }
 
   /**
+   * 根据 y 坐标找到行索引。
+   */
+  private static findLineIndexByY(y: number, lineLayouts: LineLayout[]): number {
+    for (let i = 0; i < lineLayouts.length; i++) {
+      const line = lineLayouts[i]
+      if (y >= line.y && y < line.y + line.height) {
+        return i
+      }
+    }
+    return -1
+  }
+
+  /**
+   * 获取行末的 x 坐标（最后一个 caretStop 的 x）。
+   */
+  private static getLineEndX(line: LineLayout, text: string): number {
+    if (line.caretStops.length === 0) {
+      return 0
+    }
+    return line.caretStops[line.caretStops.length - 1].x - line.left
+  }
+
+  /**
    * 计算字形源的排版位置。
    */
   private static computeGlyphSource(
@@ -410,12 +515,17 @@ export class EditorMotionPlanner {
    * offsetMap 记录旧正文 → 新正文的字符身份映射。
    * Identity 条目表示字符位置不变（无 reflow）；
    * Shifted 条目表示字符位置发生了偏移（需要 reflow 动画）。
+   *
+   * Issue #879 复核评论修复：
+   * - 旧正文范围用 oldText 解码，旧字形几何用 oldLayout 计算
+   * - 新正文范围用 newText 解码，新字形几何用 newLayout 计算
    */
   private static identifyReflowRanges(
     offsetMap: OffsetMap,
     oldText: string,
     newText: string,
-    lineLayouts: LineLayout[]
+    oldLayout: LineLayout[],
+    newLayout: LineLayout[]
   ): GlyphSource[] {
     const reflowTargets: GlyphSource[] = []
     const entries: OffsetMapEntry[] = offsetMap.entries
@@ -436,8 +546,9 @@ export class EditorMotionPlanner {
         continue
       }
 
+      // reflow 目标用新字形几何（newLayout），因为文字最终要在新位置显示
       const glyphTarget = EditorMotionPlanner.computeGlyphSource(
-        newText, newUtf16Start, newUtf16End, lineLayouts, 'new'
+        newText, newUtf16Start, newUtf16End, newLayout, 'new'
       )
       if (glyphTarget !== null) {
         reflowTargets.push(glyphTarget)
