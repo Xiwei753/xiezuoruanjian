@@ -310,6 +310,73 @@ jobs:
             ]
           }]"""
           source = source[:language_start] + language_replacement + source[language_end:]
+          # The new package is already uploaded, compiled and populated by this
+          # point. Only then withdraw older, still-in-review invitation tests.
+          submit_anchor = "  const body: SubmitTestVersionRequest = { versionId }"
+          submit_replacement = """  // Only replace HarmonyOS invitation versions that are still under review.
+          // Never stop a live test or withdraw a normal production release.
+          const versionList = await client.post<any>(
+            '/publish/v3/version/brief-info/list',
+            {},
+            { appId }
+          )
+          if (String(versionList?.ret?.code) !== '0') {
+            throw new Error('AGC version list failed; refusing to withdraw an unknown version')
+          }
+
+          const knownVersions: any[] = []
+          function walkVersions(value: any): void {
+            if (Array.isArray(value)) {
+              value.forEach(walkVersions)
+              return
+            }
+            if (!value || typeof value !== 'object') return
+            if (value.versionId != null && value.state != null && value.releaseType != null) {
+              knownVersions.push(value)
+            }
+            Object.values(value).forEach(walkVersions)
+          }
+          walkVersions(versionList)
+
+          if (knownVersions.length === 0) {
+            throw new Error('AGC returned no recognized version states; refusing blind review cancellation')
+          }
+
+          const inReview = knownVersions.filter(
+            (v) => String(v.releaseType) === '6' &&
+              String(v.state) === '4' &&
+              String(v.versionId) !== versionId
+          )
+          if (inReview.some((v) => v.testType == null)) {
+            throw new Error('AGC omitted testType for an in-review test; refusing to cancel an unknown test type')
+          }
+          const oldVersionIds = [...new Set(inReview
+            .filter((v) => String(v.testType) === '3')
+            .map((v) => String(v.versionId)))]
+          for (const oldVersionId of oldVersionIds) {
+            core.info('Withdrawing older in-review invitation test: ' + oldVersionId)
+            const cancelled = await client.put<any>(
+              '/publish/v3/version/on-shelf/cancel',
+              { versionId: oldVersionId },
+              undefined,
+              { appId }
+            )
+            if (String(cancelled?.ret?.code) !== '0') {
+              throw new Error(
+                'AGC failed to withdraw in-review test ' + oldVersionId +
+                ': code=' + cancelled?.ret?.code
+              )
+            }
+            core.info('Withdrawn in-review invitation test: ' + oldVersionId)
+          }
+
+          const body: SubmitTestVersionRequest = { versionId }"""
+          if source.count(submit_anchor) != 1:
+              raise SystemExit(
+                  f"Pinned upstream submit anchor count={source.count(submit_anchor)}; refusing blind patch"
+              )
+          source = source.replace(submit_anchor, submit_replacement, 1)
+
           path.write_text(source, encoding="utf-8")
           PY
 
