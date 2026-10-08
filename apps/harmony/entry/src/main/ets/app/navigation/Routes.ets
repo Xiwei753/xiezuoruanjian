@@ -22,10 +22,10 @@ export interface WorkspaceRouteParams {
 }
 
 export interface WritingRouteParams {
-  chapterId: string
-  chapterTitle: string
+  chapterId?: string              // 可选：未选章节时不传
+  chapterTitle?: string           // 可选：未选章节时不传
   projectId: string
-  volumeId: string
+  volumeId?: string               // 可选：未选章节时不传
   // 接续编辑器状态（Issue #629 评论 5306513458 问题4 + 评论 5 第 8 节）。
   // selection/cursor 是 UTF-16 code unit offset（UI 坐标，跨设备平台无关）；
   // 恢复时由 WritingScreen 转成 Core UTF-8 byte offset。

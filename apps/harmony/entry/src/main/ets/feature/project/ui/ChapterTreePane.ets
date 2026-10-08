@@ -65,9 +65,11 @@ export struct ChapterTreePane {
 
         Button('+')
           .fontSize(14)
-          .width(24)
-          .height(24)
-          .backgroundColor(Color.Transparent)
+          .width(28)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+          .border({ width: 1, color: $r('sys.color.icon_secondary') })
           .onClick(() => {
             if (this.onCreateVolume) {
               this.onCreateVolume()
@@ -121,6 +123,11 @@ export struct ChapterTreePane {
           .width(16)
           .height(16)
           .margin({ right: 6 })
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Text(volumeTree.volume.title)
           .fontSize(14)
@@ -129,17 +136,29 @@ export struct ChapterTreePane {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Text(`${volumeTree.chapters.length}`)
           .fontSize(11)
           .fontColor($r('sys.color.font_secondary'))
           .margin({ right: 8 })
+          .onClick(() => {
+            if (this.onToggleVolume) {
+              this.onToggleVolume(volumeTree.volume.id)
+            }
+          })
 
         Button('+')
           .fontSize(14)
-          .width(24)
-          .height(24)
-          .backgroundColor(Color.Transparent)
+          .width(28)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
+          .border({ width: 1, color: $r('sys.color.icon_secondary') })
           .onClick(() => {
             if (this.onCreateChapter) {
               this.onCreateChapter(volumeTree.volume.id)
@@ -150,11 +169,6 @@ export struct ChapterTreePane {
       .height(36)
       .padding({ left: 20, right: 8 })
       .alignItems(VerticalAlign.Center)
-      .onClick(() => {
-        if (this.onToggleVolume) {
-          this.onToggleVolume(volumeTree.volume.id)
-        }
-      })
 
       // 章节列表：手稿里章节行是单行「标题 … 字数」，不再上下两行堆叠。
       if (this.expandedVolumes.has(volumeTree.volume.id)) {

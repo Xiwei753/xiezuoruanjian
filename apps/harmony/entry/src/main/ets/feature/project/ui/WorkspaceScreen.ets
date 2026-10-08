@@ -1,6 +1,5 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
-import { VolumeTree, ChapterMeta } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
@@ -10,18 +9,12 @@ import { AppContinuationService } from '../../../platform/continuity/AppContinua
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
 import { NavigationTransactionCoordinator } from '../../../app/navigation/NavigationTransactionCoordinator'
 import { ProjectWorkspaceViewModel, VolumeCardState, ChapterRowState } from '../presentation/ProjectWorkspaceViewModel'
-import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass, WorkspaceLayoutMode } from '../../../corebridge/dto/PlatformDtos'
+import { ActionSlot, ActionTarget, ActionRole, ScreenRole, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 import { NavigationChromeStore } from '../../../app/navigation/NavigationChromeStore'
 import { PlatformApiResolver } from '../../../platform/version/PlatformApiResolver'
 import { HdsWorkspaceDestinationApi23 } from '../../../app/navigation/impl/api23/HdsWorkspaceDestinationApi23'
 import { buildNavMenuItems } from '../../../app/navigation/NavigationHeaderActionMenu'
 import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
-
-/** 左侧面板宽度（双栏模式） */
-const LEFT_PANEL_WIDTH: number = 320
-
-/** 分割线宽度 */
-const DIVIDER_WIDTH: number = 0.5
 
 /** Issue #827 评论 1 第 7 点：确认框内容最大宽度（vp），与 HomeScreen 同口径。
  *  原来写 .width('80%')，宽屏上会被拉到近 1000vp 宽。 */
@@ -228,18 +221,9 @@ export struct WorkspaceScreen {
         if (this.adaptiveState.sizeClass === WidthClass.Compact) {
           // ── 窄屏模式：卷卡可展开设计（Issue #760） ──
           this.CompactWorkspaceLayout()
-        } else if (this.adaptiveState.layoutPlan.workspaceLayoutMode === WorkspaceLayoutMode.Workbench) {
-          // ── 宽屏模式：左侧目录 + 右侧写作入口提示 ──
-          // Issue #827 评论 1 第 4 点：这里原来判的是 adaptiveState.isTwoPane，
-          // 而 isTwoPane 只在 ShellMode.TwoPane 时为 true。Core 在 1200–1600vp
-          // （1244.44 × 817.78 vp 就是这一档）给的是 ThreePane + Workbench，
-          // 于是越宽反而掉进 LegacySinglePaneLayout —— 单栏回退就是这么来的。
-          // 改判 Core 下发的 workspaceLayoutMode，宽屏一律走双栏工作台。
-          this.TwoPaneLayout()
         } else {
-          // ── 非 Workbench 且非 Compact：Core 没给工作台，按窄屏结构兜底 ──
-          // LegacySinglePaneLayout() 及其两个子 Builder 已随本次修复删除，
-          // 不再保留第二套单栏树。
+          // 非 Compact：Core 没给工作台（宽屏入口不再 push Workspace），
+          // 按窄屏结构兜底
           this.CompactWorkspaceLayout()
         }
       }
@@ -291,187 +275,6 @@ export struct WorkspaceScreen {
         NavigationChromeStore.getInstance().reportScreenRole(ScreenRole.ProjectWorkspace, 0)
       })
     }
-  }
-
-  // ────────────────────────────────────────
-  // 双栏布局（保持原样，数据源改为 ViewModel）
-  // ────────────────────────────────────────
-
-  @Builder
-  TwoPaneLayout() {
-    Row() {
-      // 左侧面板：卷/章节树
-      this.LeftPanel()
-
-      // 分割线
-      Column() {}
-        .width(DIVIDER_WIDTH)
-        .height('100%')
-      // 右侧面板：提示选择章节（不再内联编辑）
-      this.RightPanelPlaceholder()
-    }
-    .width('100%')
-    .height('100%')
-  }
-
-  @Builder
-  LeftPanel() {
-    Column() {
-      // 标题栏
-      // Issue #768：删除手写返回按钮，改用 NavDestination 原生标题栏的返回按钮
-      // Issue #774：标题由 NavDestination/HdsWorkspaceDestination 原生标题栏承载，删除重复 projectName
-      Row() {
-        Button($r('app.string.new_volume'))
-          .fontSize(12)
-          .height(28)
-          .onClick(() => this.handleCreateVolume())
-      }
-      .width('100%')
-      .padding({ left: 12, right: 12, top: 16, bottom: 12 })
-
-      // 目录内容
-      if (this.viewModel.isLoadingState) {
-        Column() {
-          LoadingProgress()
-            .width(36)
-            .height(36)
-          Text($r('app.string.loading'))
-            .fontSize(13)
-            .margin({ top: 8 })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.viewModel.errorMessageState) {
-        Column() {
-          Text(this.viewModel.errorMessageState)
-            .fontSize(14)
-            .margin({ bottom: 12 })
-
-          Button($r('app.string.retry'))
-            .fontSize(13)
-            .height(32)
-            .onClick(() => this.handleRetry())
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.viewModel.volumeTrees.length === 0) {
-        Column() {
-          Text($r('app.string.no_volumes_chapters'))
-            .fontSize(14)
-            .margin({ bottom: 8 })
-          Text($r('app.string.click_new_volume_to_start'))
-            .fontSize(12)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        Scroll() {
-          Column() {
-            ForEach(this.viewModel.volumeTrees, (volumeTree: VolumeTree) => {
-              this.VolumeSection(volumeTree)
-            }, (volumeTree: VolumeTree) => volumeTree.volume.id)
-          }
-          .width('100%')
-        }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-      }
-    }
-    .width(LEFT_PANEL_WIDTH)
-    .height('100%')
-  }
-
-  @Builder
-  VolumeSection(volumeTree: VolumeTree) {
-    Column() {
-      // 卷头
-      Row() {
-        Image(this.viewModel.isVolumeExpanded(volumeTree.volume.id)
-          ? $r('sys.media.ohos_ic_public_arrow_down')
-          : $r('sys.media.ohos_ic_public_arrow_right'))
-          .width(16)
-          .height(16)
-          .margin({ right: 8 })
-
-        Text(volumeTree.volume.title)
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .layoutWeight(1)
-
-        Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
-          .fontSize(11)
-          .margin({ right: 8 })
-
-        Button({ type: ButtonType.Normal }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(28)
-            .fontColor([$r('sys.color.icon_primary')])
-        }
-        .width(48)
-        .height(48)
-        .backgroundColor(Color.Transparent)
-        .onClick(() => this.handleCreateChapter(volumeTree.volume.id))
-      }
-      .width('100%')
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .onClick(() => this.handleToggleVolume(volumeTree.volume.id))
-
-      // 章节列表
-      if (this.viewModel.isVolumeExpanded(volumeTree.volume.id)) {
-        if (volumeTree.chapters.length === 0) {
-          Text($r('app.string.no_chapters'))
-            .fontSize(12)
-            .padding({ left: 28, top: 8, bottom: 8 })
-        } else {
-          ForEach(volumeTree.chapters, (chapter: ChapterMeta) => {
-            Row() {
-              Column() {
-                Text(chapter.title)
-                  .fontSize(14)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-                Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
-                  .fontSize(11)
-                  .margin({ top: 2 })
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              Image($r('sys.media.ohos_ic_public_arrow_right'))
-                .width(16)
-                .height(16)
-                .margin({ left: 8 })
-            }
-            .width('100%')
-            .padding({ left: 28, right: 12, top: 8, bottom: 8 })
-            .onClick(() => this.navigateToWriting(chapter.id, chapter.title, volumeTree.volume.id))
-          }, (chapter: ChapterMeta) => chapter.id)
-        }
-      }
-    }
-    .width('100%')
-  }
-
-  // Issue #629 评论14 第1项：双栏右侧不再内联编辑，只显示提示。
-  // 章节点击统一 navigateToWriting()，由 WritingScreen 持有编辑会话。
-  @Builder
-  RightPanelPlaceholder() {
-    Column() {
-      Column() {
-        Text($r('app.string.select_chapter_to_start'))
-          .fontSize(16)
-      }
-      .width('100%')
-      .layoutWeight(1)
-      .justifyContent(FlexAlign.Center)
-    }
-    .layoutWeight(1)
-    .height('100%')
-    .alignItems(HorizontalAlign.Center)
   }
 
   // ────────────────────────────────────────

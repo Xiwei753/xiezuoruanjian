@@ -5,6 +5,7 @@ import { getBridge } from '../../app/AppContext'
 import { WindowViewport, LayoutPlan, LayoutContract, FoldPosture, WidthClass, ShellMode, WorkspaceLayoutMode, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { harmonyAvailablePaneCount, buildHarmonyLayoutPlan, defaultLayoutMetrics } from './LayoutPolicyHelper'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
+import { TabletWindowPolicy } from '../../platform/window/TabletWindowPolicy'
 
 /**
  * 响应式布局状态 — 直接映射 Core LayoutPlan
@@ -21,6 +22,10 @@ export interface AdaptiveState {
   gridColumns: number
   // 底部安全区域高度（导航栏避让），单位 vp
   safeBottomVp: number
+  // 当前是否偏好宽屏布局（专用横屏平板且 widthVp >= 600，或 sizeClass === Expanded）
+  prefersWideLayout: boolean
+  // 是否是专用横屏平板（deviceType=tablet + 非折叠 + 宽高比>=1.25）
+  isDedicatedLandscapeTablet: boolean
 }
 
 /**
@@ -70,6 +75,8 @@ export class AdaptiveContext {
   private cachedSafeBottomVp: number = 0
   private cachedKeyboardVisible: boolean = false
   private cachedFoldPosture: FoldPosture = FoldPosture.Unknown
+  // 专用横屏平板判定（只算一次设备能力）
+  private cachedIsDedicatedLandscapeTablet: boolean = false
 
   private constructor() {}
 
@@ -88,6 +95,9 @@ export class AdaptiveContext {
     try {
       this.mainWindow = await windowStage.getMainWindow()
       hilog.info(DOMAIN, TAG, 'Got main window')
+
+      // 初始化专用横屏平板判定（只算一次设备能力）
+      this.cachedIsDedicatedLandscapeTablet = TabletWindowPolicy.isDedicatedLandscapeTablet()
 
       // 读取初始安全区域 / 键盘 / 折叠状态
       this.readSafeAreas()
@@ -151,7 +161,9 @@ export class AdaptiveContext {
       contentMaxWidth: this.state.contentMaxWidth,
       pagePadding: this.state.pagePadding,
       gridColumns: this.state.gridColumns,
-      safeBottomVp: this.cachedSafeBottomVp
+      safeBottomVp: this.cachedSafeBottomVp,
+      prefersWideLayout: this.state.prefersWideLayout,
+      isDedicatedLandscapeTablet: this.state.isDedicatedLandscapeTablet
     }
   }
 
@@ -268,16 +280,22 @@ export class AdaptiveContext {
       if (result.success && contract !== undefined) {
         // Harmony 平台值（纸面宽度/内边距/网格列数）在平台层叠加，不在 Core。
         const plan: LayoutPlan = buildHarmonyLayoutPlan(contract, widthVp)
+        const sizeClass: WidthClass = this.harmonySizeClass(widthVp)
+        // prefersWideLayout: 专用横屏平板且 widthVp >= 600，或 sizeClass === Expanded
+        const prefersWideLayout: boolean =
+          (this.cachedIsDedicatedLandscapeTablet && widthVp >= 600) || sizeClass === WidthClass.Expanded
         this.state = {
           widthVp: Math.round(widthVp * 100) / 100,
           heightVp: Math.round(heightVp * 100) / 100,
           layoutPlan: plan,
-          sizeClass: this.harmonySizeClass(widthVp),
+          sizeClass: sizeClass,
           isTwoPane: contract.shellMode === ShellMode.TwoPane,
           contentMaxWidth: plan.contentMaxWidthVp === 0 ? Number.MAX_SAFE_INTEGER : plan.contentMaxWidthVp,
           pagePadding: plan.pagePaddingVp,
           gridColumns: plan.gridColumns,
-          safeBottomVp: this.cachedSafeBottomVp
+          safeBottomVp: this.cachedSafeBottomVp,
+          prefersWideLayout: prefersWideLayout,
+          isDedicatedLandscapeTablet: this.cachedIsDedicatedLandscapeTablet
         }
         // Issue #752：第一次拿到非 0 有效尺寸的首帧路标日志。
         if (isFirstValidSize) {
@@ -332,7 +350,9 @@ export class AdaptiveContext {
       contentMaxWidth: Number.MAX_SAFE_INTEGER,
       pagePadding: 16,
       gridColumns: 2,
-      safeBottomVp: 0
+      safeBottomVp: 0,
+      prefersWideLayout: false,
+      isDedicatedLandscapeTablet: false
     }
   }
 

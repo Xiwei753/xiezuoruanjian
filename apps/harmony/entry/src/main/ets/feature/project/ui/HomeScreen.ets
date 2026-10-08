@@ -12,7 +12,8 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
-import { Routes, WorkspaceRouteParams } from '../../../app/navigation/Routes'
+import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
+import { getBridge } from '../../../app/AppContext'
 import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
@@ -115,8 +116,61 @@ export struct HomeScreen {
     if (!navPathStack) {
       return
     }
-    const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
-    navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
+    if (this.adaptiveState.prefersWideLayout) {
+      // 宽屏：直接进入写作工作台
+      this.navigateToWritingFromProject(projectId, projectName)
+    } else {
+      // 窄屏：保留原有卷章管理页面
+      const workspaceParam: WorkspaceRouteParams = { projectId, projectName }
+      navPathStack.pushPath({ name: Routes.Workspace, param: workspaceParam })
+    }
+  }
+
+  // 宽屏从首页直接进入写作工作台：查询项目树，优先选择第一个有效章节。
+  // 没有章节时也直接进入 Writing 的未选章节状态，不经过中间页。
+  private async navigateToWritingFromProject(projectId: string, projectName: string): Promise<void> {
+    const navPathStack = this.navCoordinator.getNavPathStack()
+    if (!navPathStack) {
+      return
+    }
+    try {
+      const bridge = getBridge()
+      const treeResult = await bridge.getProjectTree(projectId)
+      if (treeResult.success && treeResult.data) {
+        const volumes = treeResult.data.volumes
+        // 找第一个有效章节
+        let firstChapterId: string = ''
+        let firstChapterTitle: string = ''
+        let firstVolumeId: string = ''
+        for (const vt of volumes) {
+          if (vt.chapters.length > 0) {
+            firstChapterId = vt.chapters[0].id
+            firstChapterTitle = vt.chapters[0].title
+            firstVolumeId = vt.volume.id
+            break
+          }
+        }
+        const writingParam: WritingRouteParams = {
+          projectId: projectId,
+          chapterId: firstChapterId || undefined,
+          chapterTitle: firstChapterTitle || undefined,
+          volumeId: firstVolumeId || undefined
+        }
+        navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+      } else {
+        // 项目树加载失败或空，仍进入写作页（未选章节状态）
+        const writingParam: WritingRouteParams = {
+          projectId: projectId
+        }
+        navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+      }
+    } catch (err) {
+      // 异常时仍进入写作页（未选章节状态）
+      const writingParam: WritingRouteParams = {
+        projectId: projectId
+      }
+      navPathStack.pushPath({ name: Routes.Writing, param: writingParam })
+    }
   }
 
   // Issue #768 评论5838624438：星图快捷入口改为回调切换一级 tab。
@@ -474,7 +528,7 @@ export struct HomeScreen {
     .borderRadius(DesignTokens.cardRadius)
     // Issue #827 评论 3 第 5 点：普通 1px 边框。草图里它和作品卡是同一种外框，
     // 区别只在中央一个大「+」，不要自行发明虚线这一种卡片视觉。
-    .border({ width: 1, color: $r('sys.color.comp_background_gray') })
+    .border({ width: 1, color: $r('sys.color.icon_secondary') })
     // Issue #827 评论 5：「+」卡和真实作品卡共用同一个卡片面与同一份阴影，
     // 否则浅灰页面上它一眼就是一张空心卡。区别只应该在里面的内容。
     .backgroundColor($r('sys.color.ohos_id_color_card_bg'))

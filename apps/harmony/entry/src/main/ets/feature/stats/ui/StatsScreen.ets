@@ -230,7 +230,8 @@ export struct StatsScreen {
       HdsAppDestinationApi23({
         title: '统计',
         screenRole: ScreenRole.Stats,
-        screenTabIndex: 2
+        screenTabIndex: 2,
+        showTitleBar: !this.adaptiveState.prefersWideLayout
       }) {
         this.StatsContent()
       }
@@ -238,7 +239,7 @@ export struct StatsScreen {
       NavDestination() {
         this.StatsContent()
       }
-      .hideTitleBar(false)
+      .hideTitleBar(this.adaptiveState.prefersWideLayout)
       .hideBackButton(true)
       .onBackPressed(() => handleRootBack())
       .title('统计')

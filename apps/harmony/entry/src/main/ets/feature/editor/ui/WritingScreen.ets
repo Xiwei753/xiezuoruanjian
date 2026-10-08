@@ -274,19 +274,21 @@ export struct WritingScreen {
     const paramsArr = this.navPathStack.getParamByName(Routes.Writing) as WritingRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
-      this.chapterId = params.chapterId
-      this.chapterTitle = params.chapterTitle
       this.projectId = params.projectId || ''
       this.volumeId = params.volumeId || ''
-      // 暂存接续参数，loadChapter 在 coordinator.open 成功后消费以恢复编辑器状态。
+      this.chapterId = params.chapterId || ''
+      this.chapterTitle = params.chapterTitle || ''
       this.continuationParams = params
-      this.loadWritingContent()
-      // Issue #629 评论14 第1项：宽屏双栏模式下加载项目树（供 ChapterTreePane）。
+      // 只要有 projectId 就加载目录树和工作台布局
       this.ensureWorkbenchProjectTree()
-      // Issue #825 复核第 2 项：进页面先要一份 Core 七角色 bounds 计划。
       this.refreshWorkbenchPlan()
-      // Issue #829 评论2第2项：状态栏两段进度先拉一次 Core 真值。
       this.refreshWritingStatusData()
+      // 有有效 chapterId 才加载正文和打开编辑会话
+      if (this.chapterId.length > 0) {
+        this.loadWritingContent()
+      } else {
+        this.isLoading = false
+      }
     }
 
     const self = this
@@ -1103,11 +1105,15 @@ export struct WritingScreen {
   }
 
   // Issue #629 评论14 第1项：创建章节（宽屏左侧目录面板回调）。
+  // 创建成功后直接 switchChapter 打开新章节，不再只刷新目录树。
   private async createChapter(volumeId: string): Promise<void> {
     try {
       const defaultName = getContext(this).resourceManager.getStringSync($r('app.string.default_new_chapter_title').id)
       const result = await this.bridge.createChapter(volumeId, defaultName)
-      if (result.success) {
+      if (result.success && result.data) {
+        this.loadProjectTree()
+        this.switchChapter(result.data.id, result.data.title, volumeId)
+      } else {
         this.loadProjectTree()
       }
     } catch (err) {
@@ -1488,7 +1494,19 @@ export struct WritingScreen {
               // Issue #829 评论2第1项：这里只放正文主体，不再调完整 EditorPane()。
               // EditorPane() 自带窄屏旧底栏，宽屏再叠一条 WritingStatusBar 就是两条
               // 状态栏、且状态有两份来源。宽屏的唯一状态栏是下面那条 WritingStatusBar。
-              this.EditorBody()
+              // 未选章节时显示空状态提示，不加载编辑器。
+              if (this.chapterId.length === 0) {
+                Column() {
+                  Text('从左侧选择或新建章节')
+                    .fontSize(16)
+                    .fontColor($r('sys.color.font_secondary'))
+                }
+                .width('100%')
+                .layoutWeight(1)
+                .justifyContent(FlexAlign.Center)
+              } else {
+                this.EditorBody()
+              }
 
               PaneFoldButton({
                 glyph: this.leftPaneCollapsed ? '⌃' : '⌄',

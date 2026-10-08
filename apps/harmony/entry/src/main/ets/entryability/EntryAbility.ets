@@ -13,6 +13,7 @@ import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
+import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
 
@@ -140,6 +141,10 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
 
+    // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
+    // getMainWindowSync() 是同步方法，确保方向和系统栏在页面加载前就设置好。
+    this.initWindowPolicy(windowStage)
+
     // Issue #752：先 loadContent 成功再 initialize AdaptiveContext。
     // 实机冷启动 loadContent 完成前 windowRect 可能是 0x0，提前 initialize 会把 0x0 写入布局状态导致白屏。
     windowStage.loadContent('pages/Index', async (err, data) => {
@@ -165,6 +170,9 @@ export default class EntryAbility extends UIAbility {
   // 由 NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
+
+    // Issue #880：与 onWindowStageCreate 等价，在 loadContent 之前应用平板专用横屏窗口政策。
+    this.initWindowPolicy(windowStage)
 
     // Issue #752：与 onWindowStageCreate 等价，先 loadContent 成功再 initialize AdaptiveContext。
     windowStage.loadContent('pages/Index', async (err, data) => {
@@ -242,6 +250,19 @@ export default class EntryAbility extends UIAbility {
   }
 
   // —— private ——
+
+  // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
+  // 冷启动（onWindowStageCreate）和接续恢复（onWindowStageRestore）共用同一初始化路径，
+  // 避免两者表现不同。getMainWindowSync() 是同步方法，确保方向和系统栏在页面加载前设置好。
+  private initWindowPolicy(windowStage: window.WindowStage): void {
+    try {
+      const mainWindow: window.Window = windowStage.getMainWindowSync()
+      TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
+    } catch (e) {
+      hilog.error(0x0000, 'EntryAbility', 'initWindowPolicy exception: %{public}s', String(e))
+    }
+  }
+
   // 从 want.parameters 读取接续 payload，交给 AppContinuationService.restoreFromWant() 还原，
   // 再交 NavigationTransactionCoordinator.restoreFromContinuation() 手动重建 NavPathStack
   // （SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移）。
