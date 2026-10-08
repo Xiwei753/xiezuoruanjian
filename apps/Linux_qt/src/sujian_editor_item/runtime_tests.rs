@@ -143,6 +143,7 @@ fn build_render_plan_full_produces_drawn_caret_rect() {
                 selection_preedit,
                 cursor_style,
                 selection_preedit_style,
+                false,
                 frame_now,
                 None,
             );
@@ -184,6 +185,7 @@ fn build_render_plan_full_drawn_caret_reflects_cursor_state() {
                 SelectionPreeditPlan::default(),
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
+                false,
                 Instant::now(),
                 None,
             );

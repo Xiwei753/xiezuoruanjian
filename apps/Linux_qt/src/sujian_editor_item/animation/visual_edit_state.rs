@@ -11,6 +11,7 @@ use super::super::layout_snapshot::{
     EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
 };
 use super::super::render_ownership::RenderOwnershipPlan;
+use super::super::render_plan::VisualCaretGeometry;
 use super::visual_frame::{VisualCluster, VisualFrame};
 use crate::sujian_editor_item::edit_motion::{DeleteEdge, DeletedRangeEdge};
 
@@ -29,6 +30,15 @@ enum MotionKind {
     Reveal,
     Delete(DeleteEdge),
     CrossFade,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum MotionBoundary {
+    /// This cluster can share the current visual caret as its clipping boundary.
+    VisualCaret(f64),
+    /// Cross-line/shaping transitions and stationary leading-edge deletes retain
+    /// this VisualEditState's explicit text-progress geometry.
+    TextProgress,
 }
 
 #[derive(Clone, Debug)]
@@ -241,7 +251,11 @@ impl VisualEditState {
         ids
     }
 
-    pub(crate) fn build_ownership_plan(&self, now: Instant) -> RenderOwnershipPlan {
+    pub(crate) fn build_ownership_plan(
+        &self,
+        now: Instant,
+        visual_caret: Option<VisualCaretGeometry>,
+    ) -> RenderOwnershipPlan {
         let p = self.progress(now);
         let terminal_frame = p >= 1.0;
         let handoff_pending = terminal_frame && self.terminal_frame_committed;
@@ -280,7 +294,15 @@ impl VisualEditState {
                     let Some(target) = &motion.target else {
                         continue;
                     };
-                    let visible = target.rect.w * p;
+                    // Coordinated mode uses this frame's already-sampled visual caret as the
+                    // reveal edge for clusters on its current line. Cross-line/layout cases
+                    // retain the explicit VisualEditState progress geometry.
+                    let visible = match reveal_boundary(target, visual_caret) {
+                        MotionBoundary::VisualCaret(caret_x) => {
+                            reveal_width_to_caret(target, caret_x)
+                        }
+                        MotionBoundary::TextProgress => target.rect.w * p,
+                    };
                     if visible <= 1e-6 || target.rect.h <= 1e-6 {
                         continue;
                     }
@@ -303,7 +325,15 @@ impl VisualEditState {
                     let Some(source) = &motion.source else {
                         continue;
                     };
-                    let visible = source.rect.w * (1.0 - p);
+                    // A moving trailing caret boundary directly controls the retained slice.
+                    // Leading-edge deletes keep the caret fixed at the deletion origin, so
+                    // their explicit text-progress geometry remains the correct driver.
+                    let visible = match delete_boundary(source, delete_edge, visual_caret) {
+                        MotionBoundary::VisualCaret(caret_x) => {
+                            delete_width_to_caret(source, delete_edge, caret_x)
+                        }
+                        MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
+                    };
                     if visible <= 1e-6 || source.rect.h <= 1e-6 {
                         continue;
                     }
@@ -369,6 +399,69 @@ impl VisualEditState {
             terminal_frame,
         )
     }
+}
+
+fn caret_is_on_line(caret: VisualCaretGeometry, rect: &SourceRect) -> bool {
+    let caret_center_y = caret.y + caret.h * 0.5;
+    caret_center_y >= rect.y - 0.5 && caret_center_y <= rect.y + rect.h + 0.5
+}
+
+fn reveal_boundary(
+    target: &TargetCluster,
+    visual_caret: Option<VisualCaretGeometry>,
+) -> MotionBoundary {
+    visual_caret
+        .filter(|caret| caret_is_on_line(*caret, &target.rect))
+        .map(|caret| MotionBoundary::VisualCaret(caret.x))
+        .unwrap_or(MotionBoundary::TextProgress)
+}
+
+fn delete_boundary(
+    source: &VisualCluster,
+    delete_edge: DeleteEdge,
+    visual_caret: Option<VisualCaretGeometry>,
+) -> MotionBoundary {
+    visual_caret
+        .filter(|caret| caret_is_on_line(*caret, &source.rect))
+        .filter(|caret| !caret_is_stationary_leading_edge(source, delete_edge, caret.x))
+        .map(|caret| MotionBoundary::VisualCaret(caret.x))
+        .unwrap_or(MotionBoundary::TextProgress)
+}
+
+fn reveal_width_to_caret(target: &TargetCluster, caret_x: f64) -> f64 {
+    let right = target.rect.x + target.rect.w;
+    let width = if target.shaping_identity.direction_rtl {
+        right - caret_x
+    } else {
+        caret_x - target.rect.x
+    };
+    width.clamp(0.0, target.rect.w)
+}
+
+fn delete_width_to_caret(source: &VisualCluster, delete_edge: DeleteEdge, caret_x: f64) -> f64 {
+    let right = source.rect.x + source.rect.w;
+    let width = if delete_retains_right_edge(delete_edge, source.shaping_identity.direction_rtl) {
+        right - caret_x
+    } else {
+        caret_x - source.rect.x
+    };
+    width.clamp(0.0, source.rect.w)
+}
+
+fn caret_is_stationary_leading_edge(
+    source: &VisualCluster,
+    delete_edge: DeleteEdge,
+    caret_x: f64,
+) -> bool {
+    if delete_edge != DeleteEdge::Leading {
+        return false;
+    }
+    let leading_edge_x = if source.shaping_identity.direction_rtl {
+        source.rect.x + source.rect.w
+    } else {
+        source.rect.x
+    };
+    (caret_x - leading_edge_x).abs() <= 0.5
 }
 
 fn pair_cluster(
@@ -473,10 +566,7 @@ fn visible_slice_source(
 ) -> (SourceRect, SourceRect) {
     let width = visible_width.clamp(0.0, source.rect.w);
     let rtl = source.shaping_identity.direction_rtl;
-    let retain_right_edge = match (delete_edge, rtl) {
-        (DeleteEdge::Leading, false) | (DeleteEdge::Trailing, true) => true,
-        (DeleteEdge::Leading, true) | (DeleteEdge::Trailing, false) => false,
-    };
+    let retain_right_edge = delete_retains_right_edge(delete_edge, rtl);
     let x_offset = if retain_right_edge {
         source.rect.w - width
     } else {
@@ -502,6 +592,13 @@ fn visible_slice_source(
             w: source_width,
             h: source.source_rect.h,
         },
+    )
+}
+
+fn delete_retains_right_edge(delete_edge: DeleteEdge, rtl: bool) -> bool {
+    matches!(
+        (delete_edge, rtl),
+        (DeleteEdge::Leading, false) | (DeleteEdge::Trailing, true)
     )
 }
 

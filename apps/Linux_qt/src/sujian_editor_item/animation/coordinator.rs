@@ -21,6 +21,7 @@ use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnaps
 use crate::sujian_editor_item::render_ownership::{
     ClusterOwnerKey, ClusterVisualOwner, RenderOwnershipPlan,
 };
+use crate::sujian_editor_item::render_plan::VisualCaretGeometry;
 
 struct CommittedOwnership {
     document_session: u64,
@@ -176,9 +177,10 @@ impl LinuxEditorAnimationCoordinator {
         &self,
         frame_now: Instant,
         canonical_snapshot: Option<&EditorLayoutSnapshot>,
+        visual_caret: Option<VisualCaretGeometry>,
     ) -> RenderOwnershipPlan {
         let mut plan = if let Some(state) = self.visual_edit_state.as_ref() {
-            state.build_ownership_plan(self.effective_text_animation_time(frame_now))
+            state.build_ownership_plan(self.effective_text_animation_time(frame_now), visual_caret)
         } else {
             canonical_snapshot
                 .map(RenderOwnershipPlan::canonical)

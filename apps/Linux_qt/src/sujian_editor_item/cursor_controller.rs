@@ -46,7 +46,7 @@ pub enum CursorMoveSource {
     LayoutChange,
     /// 滚动：Snap
     Scroll,
-    /// 正文事务（输入/删除等）：继续由正文协同光标处理
+    /// 正文事务（输入/删除等）：按有效动画开关 Tween 到最新 canonical caret。
     TextTransaction,
 }
 
