@@ -230,6 +230,9 @@ impl LinuxEditorAnimationCoordinator {
         let keeps_animation = resources_ready && !plan.handoff_pending;
         if keeps_animation {
             if let Some(state) = self.visual_edit_state.as_mut() {
+                if !plan.animated_glyphs.is_empty() {
+                    state.commit_presented_frame();
+                }
                 state.commit_terminal_motions(&plan.terminal_motion_indices);
             }
         }
