@@ -31,11 +31,11 @@ impl LinuxEditorAnimationCoordinator {
                     y: cursor_render_state.y,
                     h: cursor_render_state.h,
                     movement_source,
+                    layout_revision: cursor_render_state.driver_revision,
                     target_x: cursor_render_state.target_x,
                     target_y: cursor_render_state.target_y,
                     path_start_x: cursor_render_state.path_start_x,
                     path_start_y: cursor_render_state.path_start_y,
-                    layout_revision: canonical_snapshot.map(|snapshot| snapshot.revision),
                     document_session: self.document_session,
                 })
         } else {

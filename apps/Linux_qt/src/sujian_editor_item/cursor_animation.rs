@@ -1,4 +1,6 @@
+use super::cursor_controller::CursorMoveSource;
 use super::edit_motion::CursorRect;
+use super::layout_revision::LayoutRevision;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum CursorBlinkMode {
@@ -27,6 +29,9 @@ pub(crate) enum CursorTransition {
 pub(crate) struct CursorAnimationPlan {
     pub should_be_visible: bool,
     pub transition: CursorTransition,
+    /// Stable identity of the cursor route that VisualEditState may follow.
+    pub movement_source: CursorMoveSource,
+    pub driver_revision: Option<LayoutRevision>,
     pub cursor_x: f64,
     pub cursor_y: f64,
     pub cursor_h: f64,

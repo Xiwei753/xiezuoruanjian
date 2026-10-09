@@ -130,6 +130,11 @@ impl SujianEditorItem {
 
         // Issue #853：用户编辑只更新 canonical selection；caret 由唯一的
         // cursor controller 立即跟到最新位置。正文过渡不拥有也不 retarget caret。
+        let driver_revision = self
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .map(|snapshot| snapshot.revision);
         let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
             &super::animation::CursorMoveInputs {
                 cursor_x,
@@ -146,6 +151,7 @@ impl SujianEditorItem {
                     self.current_coordinated_animation_enabled,
                 ),
                 movement_source: self.cursor_ctrl.last_move_source,
+                driver_revision,
                 visual_position_valid: self.cursor_ctrl.visibility_state
                     != super::cursor_controller::CursorVisibilityState::Uninitialized,
                 duration_ms: u64::from(self.current_cursor_animation_duration_ms),
