@@ -30,6 +30,9 @@ pub(crate) struct VisualFrame {
     pub document_session: u64,
     pub canonical_revision: Option<LayoutRevision>,
     pub canonical_byte_len: usize,
+    /// Captured visual contributions, not a one-entry-per-character index. A CrossFade
+    /// can leave several layers with the same canonical range; preserve each rendered
+    /// layer here and let the next edit group them back into one logical target cluster.
     pub clusters: Vec<VisualCluster>,
 }
 
@@ -67,6 +70,8 @@ impl VisualFrame {
             }
         }
 
+        // Keep every committed layer. Multiple glyphs can represent one canonical cluster
+        // during a CrossFade and must not be mistaken for separate logical characters.
         for glyph in &ownership.animated_glyphs {
             clusters.push(VisualCluster {
                 snapshot_id: glyph.snapshot_id,
