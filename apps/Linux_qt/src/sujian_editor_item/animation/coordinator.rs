@@ -16,6 +16,7 @@ use crate::sujian_editor_item::cursor_animation::{
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::CursorRect;
 use crate::sujian_editor_item::edit_motion::DeletedRangeEdge;
+use crate::sujian_editor_item::frame_submission::SubmittedFrameTicket;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use crate::sujian_editor_item::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use crate::sujian_editor_item::render_ownership::{
@@ -230,9 +231,6 @@ impl LinuxEditorAnimationCoordinator {
         let keeps_animation = resources_ready && !plan.handoff_pending;
         if keeps_animation {
             if let Some(state) = self.visual_edit_state.as_mut() {
-                if !plan.animated_glyphs.is_empty() {
-                    state.commit_presented_frame();
-                }
                 state.commit_terminal_motions(&plan.terminal_motion_indices);
             }
         }
@@ -291,6 +289,18 @@ impl LinuxEditorAnimationCoordinator {
         } else if plan.terminal_frame {
             if let Some(state) = self.visual_edit_state.as_mut() {
                 state.terminal_frame_committed = true;
+            }
+        }
+    }
+
+    /// Advance fast-input pacing only for a unique frame Qt confirmed as submitted.
+    pub(crate) fn acknowledge_submitted_frame(&mut self, ticket: SubmittedFrameTicket) {
+        if ticket.document_session != self.document_session {
+            return;
+        }
+        if let Some(state) = self.visual_edit_state.as_mut() {
+            if state.target_snapshot.revision == ticket.layout_revision {
+                state.commit_submitted_frame(ticket.render_frame_id);
             }
         }
     }

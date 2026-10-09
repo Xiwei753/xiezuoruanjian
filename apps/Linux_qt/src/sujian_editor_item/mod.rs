@@ -28,6 +28,7 @@ pub(crate) mod edit_flow;
 pub(crate) mod edit_motion;
 pub(crate) mod edit_snapshot;
 pub(crate) mod editing;
+pub(crate) mod frame_submission;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
@@ -67,7 +68,9 @@ use cpp::cpp;
 use edit_snapshot::EditorSnapshot;
 use qmetaobject::prelude::*;
 use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::Arc;
 use text_utils::{
     byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
     prev_char_boundary,
@@ -532,6 +535,11 @@ pub struct SujianEditorItem {
     /// - render thread（`update_paint_node()`）只读，不调用任何排版方法。
     /// - `None` 表示需要 GUI 侧重新准备，render thread 跳过静态正文渲染。
     prepared_frame: Option<render_plan::PreparedEditorFrame>,
+    /// Render-thread publication and Qt afterFrameEnd acknowledgment channel.
+    frame_submission_mailbox: Arc<frame_submission::FrameSubmissionMailbox>,
+    /// Window signal connections are rebound on QQuickItem::windowChanged.
+    frame_window_connections: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
+    window_changed_connection: Option<Box<dyn FnMut()>>,
     cursor_ctrl: cursor_controller::CursorController,
     /// Issue #690 评论 5675007226 步骤 1: render thread 上次采样的帧时间。
     /// 供 `tick_cursor_animation()` 在 GUI 线程使用，确保光标和文字 progress
@@ -684,10 +692,26 @@ impl Default for SujianEditorItem {
             scene_dirty: true,
             last_committed_ownership_revision: 0,
             prepared_frame: None,
+            frame_submission_mailbox: Arc::default(),
+            frame_window_connections: Rc::default(),
+            window_changed_connection: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             last_frame_now: None,
             prev_cursor_blink_suppressed: false,
         }
+    }
+}
+
+impl Drop for SujianEditorItem {
+    fn drop(&mut self) {
+        if let Some(connection) = self.window_changed_connection.as_mut() {
+            connection();
+        }
+        let mut connections = self.frame_window_connections.borrow_mut();
+        for disconnect in connections.iter_mut() {
+            disconnect();
+        }
+        connections.clear();
     }
 }
 

@@ -287,6 +287,50 @@ fn configure_cpp_standard(config: &mut cpp_build::Config) {
     config.flag(CPP_STANDARD_FLAG);
 }
 
+/// Find qmetaobject's public-to-its-cpp!-macros shim header for the C++ signal
+/// descriptors used by the editor's frame-submission bridge.
+fn qmetaobject_include_dir() -> PathBuf {
+    const QMETAOBJECT_DIR: &str = "qmetaobject-0.2.10";
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    for ancestor in manifest_dir.ancestors() {
+        for candidate in [
+            ancestor.join("vendor").join(QMETAOBJECT_DIR),
+            ancestor.join("vendor").join("qmetaobject"),
+        ] {
+            if candidate.join("qmetaobject_rust.hpp").is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    let mut cargo_homes = Vec::new();
+    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+        cargo_homes.push(PathBuf::from(cargo_home));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        cargo_homes.push(PathBuf::from(home).join(".cargo"));
+    }
+    for cargo_home in cargo_homes {
+        let registry_src = cargo_home.join("registry").join("src");
+        let Ok(registries) = fs::read_dir(registry_src) else {
+            continue;
+        };
+        for registry in registries.flatten() {
+            let candidate = registry.path().join(QMETAOBJECT_DIR);
+            if candidate.join("qmetaobject_rust.hpp").is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    panic!(
+        "qmetaobject 0.2.10 source header qmetaobject_rust.hpp was not found; \
+         install the locked crate in CARGO_HOME or provide it under vendor/"
+    );
+}
+
 /// Find the Qt6 lrelease tool for compiling .ts → .qm translation files.
 fn find_lrelease() -> Option<PathBuf> {
     if let Ok(lrelease) = std::env::var("LRELEASE") {
@@ -542,6 +586,13 @@ fn main() {
 
     let mut config = cpp_build::Config::new();
     configure_cpp_standard(&mut config);
+    println!("cargo:rerun-if-env-changed=CARGO_HOME");
+    let qmetaobject_dir = qmetaobject_include_dir();
+    println!(
+        "cargo:rerun-if-changed={}",
+        qmetaobject_dir.join("qmetaobject_rust.hpp").display()
+    );
+    config.include(qmetaobject_dir);
     qt_info.apply_to(&mut config);
     println!(
         "cargo:warning=Linux Qt binding selected Qt {} via {}",
