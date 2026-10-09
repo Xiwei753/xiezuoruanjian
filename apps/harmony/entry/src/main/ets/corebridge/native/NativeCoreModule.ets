@@ -1,15 +1,20 @@
 import nativeModule from 'libwriter_core.so'
-import { ResultEnvelope } from '../dto/ResultEnvelope'
+import { ResultEnvelope, ChangedEntity } from '../dto/ResultEnvelope'
 import { DecodeResult } from '../codec/CoreWireDecoders'
 
-// Core `ffi/mod.rs` ok_json / err_json 实际发出的 envelope 字段。
-// messageKey / messageArgs / rawError / warnings / changedPaths / changedEntities
-// 都是平台端自己发明的字段，Core 从不下发，读它们等于读空 —— 已删除。
+// Core `core/writer_core/src/api/envelope.rs` 的 ResultEnvelope 实际发出的 JSON 字段。
+// Core 使用 camelCase 序列化，包含 messageKey/messageArgs/rawError/warnings/changedPaths/changedEntities。
 interface NativeJsonEnvelope {
   success: boolean
   data?: Object
   errorCode?: string
   userMessage?: string
+  messageKey?: string
+  messageArgs?: Record<string, string>
+  rawError?: string
+  warnings?: string[]
+  changedPaths?: string[]
+  changedEntities?: Object[]
 }
 
 interface ChapterLocationResult {
@@ -63,7 +68,16 @@ export class NativeCoreModule {
         success: obj.success,
         data: obj.data,
         errorCode: obj.errorCode as string | undefined,
-        userMessage: obj.userMessage
+        userMessage: obj.userMessage,
+        messageKey: obj.messageKey,
+        messageArgs: obj.messageArgs ? new Map(Object.entries(obj.messageArgs)) : undefined,
+        rawError: obj.rawError,
+        warnings: obj.warnings,
+        changedPaths: obj.changedPaths,
+        changedEntities: obj.changedEntities?.map((e: Object) => {
+          const entity = e as Record<string, Object>
+          return { entityType: entity['entityType'] as string, entityId: entity['entityId'] as string | undefined }
+        })
       }
       return result
     } catch (e) {
@@ -92,7 +106,13 @@ export class NativeCoreModule {
       success: raw.success,
       data: raw.data as T | undefined,
       errorCode: raw.errorCode,
-      userMessage: raw.userMessage
+      userMessage: raw.userMessage,
+      messageKey: raw.messageKey,
+      messageArgs: raw.messageArgs,
+      rawError: raw.rawError,
+      warnings: raw.warnings,
+      changedPaths: raw.changedPaths,
+      changedEntities: raw.changedEntities
     }
     return result
   }
@@ -107,7 +127,8 @@ export class NativeCoreModule {
     const result: ResultEnvelope<T> = {
       success: false,
       errorCode: 'SCHEMA_MISMATCH',
-      userMessage: `SCHEMA_MISMATCH: ${message}`
+      userMessage: `SCHEMA_MISMATCH: ${message}`,
+      rawError: message
     }
     return result
   }
@@ -126,7 +147,13 @@ export class NativeCoreModule {
       const errResult: ResultEnvelope<T> = {
         success: false,
         errorCode: raw.errorCode,
-        userMessage: raw.userMessage
+        userMessage: raw.userMessage,
+        messageKey: raw.messageKey,
+        messageArgs: raw.messageArgs,
+        rawError: raw.rawError,
+        warnings: raw.warnings,
+        changedPaths: raw.changedPaths,
+        changedEntities: raw.changedEntities
       }
       return errResult
     }

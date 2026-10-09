@@ -131,32 +131,78 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 
 // ── Core lifecycle ──
 
-// NativeInit: Initialize core with app data root path. Returns int32 status code:
-//   0 = success
-//   -1 = null/empty path
-//   -2 = directory creation failed
-//   -3 = core state initialization failed (sync state, settings, etc.)
+// NativeInit: Initialize core with Harmony-specific PlatformServices injection.
+//   Accepts 7 arguments: app_data_root, files_dir, cache_dir, device_id, app_version, locale, timezone.
+//   For backward compatibility, if only 1 argument is provided (app_data_root), the rest are passed as null
+//   and Rust-side defaults apply.
+//   Returns int32 status code:
+//     0 = success
+//     -1 = app_data_root is null
+//     -2 = invalid UTF-8
+//     -4 = bootstrap failed
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
+    size_t argc = 7;
+    napi_value args[7];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     if (argc < 1) {
-        OH_LOG_ERROR(LOG_APP, "NativeInit: expected 1 argument (path), got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 1 argument: path");
+        OH_LOG_ERROR(LOG_APP, "NativeInit: expected at least 1 argument (app_data_root), got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected at least 1 argument: app_data_root");
         return nullptr;
     }
 
-    char path[2048] = {0};
-    size_t path_len = 0;
-    napi_get_value_string_utf8(env, args[0], path, sizeof(path), &path_len);
+    char app_data_root[2048] = {0};
+    char files_dir[2048] = {0};
+    char cache_dir[2048] = {0};
+    char device_id[256] = {0};
+    char app_version[128] = {0};
+    char locale[64] = {0};
+    char timezone[64] = {0};
+    size_t len = 0;
 
-    OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init with path='%{public}s'", path);
-    int32_t result = writer_core_init(path);
-    OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init returned %{public}d", result);
+    napi_get_value_string_utf8(env, args[0], app_data_root, sizeof(app_data_root), &len);
+
+    // Optional arguments: only read if provided, otherwise pass null to Rust
+    const char* p_files_dir = nullptr;
+    const char* p_cache_dir = nullptr;
+    const char* p_device_id = nullptr;
+    const char* p_app_version = nullptr;
+    const char* p_locale = nullptr;
+    const char* p_timezone = nullptr;
+
+    if (argc >= 2) {
+        napi_get_value_string_utf8(env, args[1], files_dir, sizeof(files_dir), &len);
+        p_files_dir = files_dir;
+    }
+    if (argc >= 3) {
+        napi_get_value_string_utf8(env, args[2], cache_dir, sizeof(cache_dir), &len);
+        p_cache_dir = cache_dir;
+    }
+    if (argc >= 4) {
+        napi_get_value_string_utf8(env, args[3], device_id, sizeof(device_id), &len);
+        p_device_id = device_id;
+    }
+    if (argc >= 5) {
+        napi_get_value_string_utf8(env, args[4], app_version, sizeof(app_version), &len);
+        p_app_version = app_version;
+    }
+    if (argc >= 6) {
+        napi_get_value_string_utf8(env, args[5], locale, sizeof(locale), &len);
+        p_locale = locale;
+    }
+    if (argc >= 7) {
+        napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
+        p_timezone = timezone;
+    }
+
+    OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init_harmony with app_data_root='%{public}s' (argc=%{public}zu)",
+                app_data_root, argc);
+    int32_t result = writer_core_init_harmony(app_data_root, p_files_dir, p_cache_dir,
+                                               p_device_id, p_app_version, p_locale, p_timezone);
+    OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init_harmony returned %{public}d", result);
 
     if (result != 0) {
-        OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (path='%{public}s')", result, path);
+        OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (app_data_root='%{public}s')", result, app_data_root);
     }
 
     napi_value ret;

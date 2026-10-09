@@ -12,6 +12,10 @@ extern "C" {
 //   -1 if path is null/empty, -2 if projects dir creation failed, -3 if core state init failed.
 // All char* return values are heap-allocated by core and MUST be freed via writer_core_free_string.
 int32_t writer_core_init(const char* path);
+// writer_core_init_harmony: Harmony-specific init with PlatformServices injection.
+//   Injects SyncTransportFactory for GitHub API sync support.
+//   Returns 0 on success, -1 if app_data_root is null, -2 if invalid UTF-8, -4 if bootstrap failed.
+int32_t writer_core_init_harmony(const char* app_data_root, const char* files_dir, const char* cache_dir, const char* device_id, const char* app_version, const char* locale, const char* timezone);
 char*  writer_core_get_load_status(void);
 char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);

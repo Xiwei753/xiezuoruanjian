@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::app_service::WriterAppService;
 
+use writer_platform_api::PlatformServices;
+
 /// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
 ///
 ///   FFI 写操作统一改走 `with_app_service`，
@@ -209,6 +211,55 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
                 return -4;
             }
         };
+    APP_SERVICE.get_or_init(|| app_service);
+    0
+}
+
+/// 用已组装的 `PlatformServices` 初始化全局 `WriterAppService` 单例。
+///
+/// 供 Harmony 等需要注入 `SyncTransportFactory` 的平台端使用。
+/// 与 `writer_core_init` 共享同一份 `APP_SERVICE`，只是初始化路径不同。
+///
+/// 这是 Rust 内部调用（非跨语言 C ABI），`PlatformServices` 包含 trait object
+/// 字段，不适合作为 extern "C" 参数。
+///
+/// # Safety
+/// `path` must be a valid null-terminated UTF-8 C string.
+///
+/// Return codes:
+///   0  = success
+///  -1  = null pointer
+///  -2  = invalid UTF-8
+///  -4  = bootstrap failed
+#[no_mangle]
+#[allow(improper_ctypes_definitions)]
+pub unsafe extern "C" fn writer_core_init_with_services(
+    path: *const c_char,
+    services: PlatformServices,
+) -> i32 {
+    let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
+    let c_str = match c_str_to_rust(path) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error("path is null or invalid UTF-8");
+            return e;
+        }
+    };
+    let projects_root = std::path::Path::new(&c_str).join("projects");
+    std::fs::create_dir_all(&projects_root).ok();
+    let app_data_root_str = c_str.clone();
+    let projects_root_str = projects_root.to_string_lossy().to_string();
+    let app_service = match crate::api::bootstrap::open_app_service_with_services(
+        app_data_root_str,
+        projects_root_str,
+        services,
+    ) {
+        Ok(svc) => svc,
+        Err(e) => {
+            set_last_error(&format!("bootstrap failed: {}", e));
+            return -4;
+        }
+    };
     APP_SERVICE.get_or_init(|| app_service);
     0
 }

@@ -150,3 +150,89 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
         Err(_) => Err(-2),
     }
 }
+
+// ── C-ABI Harmony 专用初始化入口 ──
+
+/// Harmony 专用 C-ABI 初始化入口。
+///
+/// 由 NAPI 桥接层调用，把目录/设备/版本/locale/timezone 等信息从 ArkTS 传进 Rust，
+/// 构造 Harmony `PlatformServices`（含 `SyncTransportFactory`），再通过
+/// `writer_core_init_with_services` 初始化同一份全局 `APP_SERVICE`。
+///
+/// 与 `writer_core_init` 的区别：本入口注入 `PlatformServices`（含同步传输工厂），
+/// 让 Harmony 平台具备 GitHub 同步能力。`writer_core_init` 仍保留供不带同步的
+/// 简单初始化场景使用。
+///
+/// ## 参数
+///
+/// 所有 `*const c_char` 参数均为 NUL-terminated UTF-8 C 字符串。`app_data_root`
+/// 为 null 时返回 `-1`。其余参数为 null 时使用空字符串默认值。
+///
+/// ## 返回码
+///
+/// - `0`  成功
+/// - `-1` `app_data_root` 为 null
+/// - `-2` 任一参数含无效 UTF-8
+/// - `-4` bootstrap 失败
+///
+/// ## Safety
+///
+/// 调用方必须保证非 null 参数指向有效的 NUL-terminated UTF-8 C 字符串。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_init_harmony(
+    app_data_root: *const c_char,
+    files_dir: *const c_char,
+    cache_dir: *const c_char,
+    device_id: *const c_char,
+    app_version: *const c_char,
+    locale: *const c_char,
+    timezone: *const c_char,
+) -> i32 {
+    let app_data_root_str = match c_str_to_rust(app_data_root) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    // files_dir 默认与 app_data_root 相同。
+    let files_dir_str = match c_str_to_rust(files_dir) {
+        Ok(s) => s,
+        Err(_) => app_data_root_str.clone(),
+    };
+    let cache_dir_str = match c_str_to_rust(cache_dir) {
+        Ok(s) => s,
+        Err(_) => app_data_root_str.clone(),
+    };
+    let device_id_str = match c_str_to_rust(device_id) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+    let app_version_str = match c_str_to_rust(app_version) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+    let locale_str = match c_str_to_rust(locale) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+    let timezone_str = match c_str_to_rust(timezone) {
+        Ok(s) => s,
+        Err(_) => String::new(),
+    };
+
+    let platform_init = create_platform_init(
+        PathBuf::from(files_dir_str),
+        PathBuf::from(cache_dir_str),
+        device_id_str,
+        app_version_str,
+        locale_str,
+        timezone_str,
+    );
+
+    let services = super::services::create_platform_services(platform_init, true, false);
+
+    // SAFETY: app_data_root_str 是有效的 NUL-terminated UTF-8 C string 的 Rust 拷贝。
+    let path_c = std::ffi::CString::new(app_data_root_str).unwrap_or_default();
+    // SAFETY: path_c 是有效的 NUL-terminated UTF-8 C string，services 是 Rust 端构造的合法 PlatformServices。
+    unsafe {
+        writer_core::ffi::writer_core_init_with_services(path_c.as_ptr(), services)
+    }
+}

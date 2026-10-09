@@ -4,6 +4,7 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import { FloatingPageHeader } from '../../../ui/components/FloatingPageHeader'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -19,6 +20,11 @@ import { ScreenPolicyBridge } from '../../../ui/adaptive/ScreenPolicyBridge'
 /** Issue #827 评论 1 第 7 点：确认框内容最大宽度（vp），与 HomeScreen 同口径。
  *  原来写 .width('80%')，宽屏上会被拉到近 1000vp 宽。 */
 const DIALOG_CONTENT_MAX_WIDTH: number = 420
+
+// Issue #888：悬浮标题栏高度（vp），用于内容区顶部留白计算。
+const FLOATING_HEADER_HEIGHT_VP: number = 48
+// 悬浮标题栏与内容区之间的间距（vp）。
+const FLOATING_HEADER_BOTTOM_GAP_VP: number = 8
 
 // Issue #629 评论14 第1项：WorkspaceScreen 只保留项目/卷/章节浏览和目录操作。
 // 章节正文只有 WritingScreen 一个页面级 owner。
@@ -57,12 +63,11 @@ export struct WorkspaceScreen {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
-    // Issue #784 评论5857397503 第4点：API < 23 时加载 ScreenPolicy 的 HeaderTrailing 动作。
-    if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectWorkspace)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
+    // Issue #888：无论 API 23 与否都取同一份 policy，
+    // 窄屏悬浮标题栏（FloatingPageHeader）需要 headerActions 来渲染右上动作胶囊。
+    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectWorkspace)
+    if (policy !== null) {
+      this.headerActions = policy.actionSlots
     }
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
@@ -229,6 +234,20 @@ export struct WorkspaceScreen {
       }
       .width('100%')
       .height('100%')
+
+      // ── 悬浮标题栏（窄屏） ──
+      // Issue #888：窄屏不再使用 HDS 原生标题栏，改用 FloatingPageHeader 悬浮在内容流。
+      // 工作区的左上返回直接调用原 handleBack()。
+      if (!this.adaptiveState.prefersWideLayout) {
+        FloatingPageHeader({
+          title: this.viewModel.projectName,
+          showBackButton: true,
+          onBack: () => { this.handleBack() },
+          actionSlots: this.headerActions
+        })
+        .position({ x: 0, y: this.adaptiveState.safeTopVp })
+      }
+
       // ── 对话框层 ──
       if (this.viewModel.renameTarget !== null) {
         this.RenameDialog()
@@ -239,6 +258,9 @@ export struct WorkspaceScreen {
     }
     .width('100%')
     .height('100%')
+    // Issue #888：页面底色用系统 background_secondary，与 HomeScreen 一致。
+    // 卷卡用 ohos_id_color_card_bg，与页面底色拉开色阶，深浅模式自动跟随系统。
+    .backgroundColor($r('sys.color.background_secondary'))
   }
 
   build() {
@@ -256,7 +278,9 @@ export struct WorkspaceScreen {
         screenRole: ScreenRole.ProjectWorkspace,
         // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 提供，
         // 工作区页再画一条 HDS 标题栏就会在双栏内容上方留出整宽空白。
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        // Issue #888：窄屏也不再使用 HDS 原生标题栏，改用 FloatingPageHeader 悬浮在内容流，
+        // 消除标题栏整条白底。所以 showTitleBar 始终为 false。
+        showTitleBar: false
       }) {
         this.NavContent()
       }
@@ -324,7 +348,13 @@ export struct WorkspaceScreen {
             .width('100%')
             .justifyContent(FlexAlign.Start)
             .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 24 })
+            .padding({
+              left: this.adaptiveState.pagePadding,
+              right: this.adaptiveState.pagePadding,
+              // Issue #888：窄屏悬浮标题栏后，列表首项从安全区 + Header 高度之后开始。
+              top: this.adaptiveState.safeTopVp + FLOATING_HEADER_HEIGHT_VP + FLOATING_HEADER_BOTTOM_GAP_VP,
+              bottom: 24
+            })
           }
           .layoutWeight(1)
           .scrollBar(BarState.Off)
@@ -464,6 +494,8 @@ export struct WorkspaceScreen {
     .margin({ bottom: 12 })
     .borderRadius(DesignTokens.radiusSm)
     .clip(true)
+    // Issue #888：卷卡加系统卡片底色，与页面底色 background_secondary 拉开色阶。
+    .backgroundColor($r('sys.color.ohos_id_color_card_bg'))
     .shadow({ radius: 2, offsetX: 0, offsetY: 1  })
   }
 

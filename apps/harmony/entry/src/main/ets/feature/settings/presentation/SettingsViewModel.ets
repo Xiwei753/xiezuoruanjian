@@ -20,6 +20,7 @@ import { LocalSettingsStore } from './LocalSettingsStore'
 import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../platform/diagnostics/HarmonyDiagnosticsExporter'
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
+import { SyncOperationController, SyncOutcome } from './SyncOperationController'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
 const TAG = 'SettingsViewModel'
@@ -291,35 +292,12 @@ export class SettingsViewModel {
     this.syncMessage = ''
 
     try {
-      const result = await this.bridge.performSync()
-      if (result.success && result.data) {
-        const syncResult = result.data
-        if (syncResult.overallStatus === 'conflict' || syncResult.overallStatus === 'partial_conflict') {
-          this.syncMessage = 'error:sync_conflict'
-        } else if (syncResult.overallStatus === 'dirty_repo_blocked') {
-          this.syncMessage = 'error:dirty_repo_blocked'
-        } else if (syncResult.overallStatus === 'no_changes') {
-          this.syncMessage = `sync_complete:0`
-        } else if (syncResult.overallStatus === 'recoverable_error' ||
-          syncResult.overallStatus === 'fatal_error' ||
-          syncResult.overallStatus === 'error' ||
-          syncResult.overallStatus === 'syncing') {
-          const errorCategory = syncResult.errorCategory
-          if (errorCategory && errorCategory.length > 0) {
-            this.syncMessage = `error:${errorCategory}`
-          } else {
-            this.syncMessage = 'error:sync_error'
-          }
-        } else {
-          this.syncMessage = `sync_complete:${syncResult.totalDownloaded}`
-        }
+      const controller = SyncOperationController.getInstance()
+      const outcome = await controller.performSync()
+      if (outcome.phase === 'success') {
+        this.syncMessage = `sync_complete:0`
       } else {
-        const errorCategory = result.data?.errorCategory
-        if (errorCategory && errorCategory.length > 0) {
-          this.syncMessage = `error:${errorCategory}`
-        } else {
-          this.syncMessage = `error:${result.errorCode || 'sync_error'}`
-        }
+        this.syncMessage = `error:${outcome.errorCode ?? 'sync_error'}`
       }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to perform sync: ${err}`)
@@ -336,10 +314,12 @@ export class SettingsViewModel {
     this.syncDiagnostics = null
 
     try {
-      const result = await this.bridge.syncDiagnostics()
+      const controller = SyncOperationController.getInstance()
+      const result = await controller.runDiagnostics()
       if (result.success && result.data && result.data.diagnostics) {
         this.syncDiagnostics = result.data.diagnostics
       } else {
+        // 保留真实 errorCode/messageKey/rawError，不用固定 "unknown"/"diagnostics_error" 替换
         const diagResult: SyncDiagnosticsResult = {
           success: false,
           providerType: '',
@@ -351,8 +331,8 @@ export class SettingsViewModel {
           remoteOk: false,
           networkStatus: '',
           authStatus: '',
-          errorCategory: 'unknown',
-          rawError: 'diagnostics_error',
+          errorCategory: result.errorCode ?? 'unknown',
+          rawError: result.rawError ?? result.userMessage ?? '',
           providerDetails: null
         }
         this.syncDiagnostics = diagResult
@@ -370,8 +350,8 @@ export class SettingsViewModel {
         remoteOk: false,
         networkStatus: '',
         authStatus: '',
-        errorCategory: 'unknown',
-        rawError: 'diagnostics_error_detail',
+        errorCategory: 'NATIVE_ERROR',
+        rawError: String(err),
         providerDetails: null
       }
       this.syncDiagnostics = diagResult

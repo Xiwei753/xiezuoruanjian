@@ -1325,6 +1325,30 @@ pub fn open_app_service_with_init(
     Ok(service)
 }
 
+/// 注入完整 `PlatformServices` 打开服务。
+///
+/// 供 Harmony 等需要直接注入已组装 `PlatformServices`（含 `SyncTransportFactory`）
+/// 的平台端调用。内部走 `bootstrap_workspace` 确保 `.git` 存在、删除事务已恢复，
+/// 并注入正确的 `GitRepoLayout`，不裸构造未 bootstrap 的服务。
+pub fn open_app_service_with_services(
+    app_data_root: String,
+    projects_root: String,
+    services: PlatformServices,
+) -> std::result::Result<Arc<WriterAppService>, WriterError> {
+    crate::storage::git_runtime::ensure_initialized()?;
+    let layout = bootstrap_workspace(Path::new(&app_data_root))?;
+    let service = Arc::new(WriterAppService::with_platform_services(
+        app_data_root,
+        projects_root,
+        services,
+    ));
+    service.set_workspace_git_layout(layout);
+    if let Err(e) = service.rebuild_search_index(None) {
+        log::warn!("Failed to rebuild search index on open_app_service_with_services: {e}");
+    }
+    Ok(service)
+}
+
 /// 注入平台初始化信息与安全存储 callback 打开服务。
 #[::uniffi::export]
 pub fn open_app_service_with_secure_storage(

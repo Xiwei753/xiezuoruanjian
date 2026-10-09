@@ -28,6 +28,11 @@ pub use writer_core::ffi::{
 
 mod diagnostics;
 mod init;
+mod services;
+mod transport;
 
 pub use diagnostics::*;
 pub use init::*;
+pub use services::*;
+#[cfg(feature = "github-api")]
+pub use transport::*;
