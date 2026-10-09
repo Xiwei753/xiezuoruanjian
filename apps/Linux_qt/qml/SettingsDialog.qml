@@ -53,11 +53,18 @@ Dialog {
     property var layoutPlan: null
     // 宽屏顶部搜索关键词。只做分组过滤，不改任何设置读取/保存路径。
     property string searchText: ""
-    // Issue #833：accordion 单一展开 key。默认只展开"外观"。
-    // 点已展开项则收起（expandedSectionKey 变成 ""）。
-    property string expandedSectionKey: qsTr("外观")
+    // Issue #842：多分组同时展开。默认只展开"外观"，其余按需独立切换。
+    property var expandedSections: ({ "外观": true })
+    function sectionExpanded(key) {
+        return !!root.expandedSections[key]
+    }
     function toggleSection(key) {
-        root.expandedSectionKey = root.expandedSectionKey === key ? "" : key
+        var next = {}
+        for (var k in root.expandedSections) {
+            next[k] = root.expandedSections[k]
+        }
+        next[key] = !root.sectionExpanded(key)
+        root.expandedSections = next
     }
     property var theme: null
     property var settingsBackendRef: null
@@ -279,7 +286,7 @@ Dialog {
         // 不用 RowLayout+visible:false（窄屏会把右列三组设置删没），也不用旧
         // GridLayout columns=2（左右卡片互相拉高）。左列：外观/编辑器和动画/AI；
         // 右列：保存和同步/诊断与日志/关于。每个 SettingsSection 根据
-        // expandedSectionKey 设置 expanded，toggleRequested 时切换 key；点已展开项则收起。
+        // expandedSections 设置 expanded，toggleRequested 时独立切换该分组展开状态。
         Item {
             id: settingsColumns
             width: settingsScroll.availableWidth
@@ -302,7 +309,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("外观")
                     visible: root.sectionVisible(qsTr("外观"))
-                    expanded: root.expandedSectionKey === qsTr("外观")
+                    expanded: root.sectionExpanded(qsTr("外观"))
                     onToggleRequested: root.toggleSection(qsTr("外观"))
                     Layout.fillWidth: true
                     SettingsRow {
@@ -436,7 +443,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("编辑器和动画")
                     visible: root.sectionVisible(qsTr("编辑器和动画"))
-                    expanded: root.expandedSectionKey === qsTr("编辑器和动画")
+                    expanded: root.sectionExpanded(qsTr("编辑器和动画"))
                     onToggleRequested: root.toggleSection(qsTr("编辑器和动画"))
                     Layout.fillWidth: true
                     SettingsRow {
@@ -556,7 +563,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("AI")
                     Layout.fillWidth: true
-                    expanded: root.expandedSectionKey === qsTr("AI")
+                    expanded: root.sectionExpanded(qsTr("AI"))
                     onToggleRequested: root.toggleSection(qsTr("AI"))
                     visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
                              && root.sectionVisible(qsTr("AI"))
@@ -584,7 +591,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("保存和同步")
                     visible: root.sectionVisible(qsTr("保存和同步"))
-                    expanded: root.expandedSectionKey === qsTr("保存和同步")
+                    expanded: root.sectionExpanded(qsTr("保存和同步"))
                     onToggleRequested: root.toggleSection(qsTr("保存和同步"))
                     Layout.fillWidth: true
                     SettingsRow {
@@ -638,7 +645,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("诊断与日志")
                     visible: root.sectionVisible(qsTr("诊断与日志"))
-                    expanded: root.expandedSectionKey === qsTr("诊断与日志")
+                    expanded: root.sectionExpanded(qsTr("诊断与日志"))
                     onToggleRequested: root.toggleSection(qsTr("诊断与日志"))
                     Layout.fillWidth: true
                     SettingsRow {
@@ -794,7 +801,7 @@ Dialog {
                     dt: root.dt
                     title: qsTr("关于")
                     visible: root.sectionVisible(qsTr("关于"))
-                    expanded: root.expandedSectionKey === qsTr("关于")
+                    expanded: root.sectionExpanded(qsTr("关于"))
                     onToggleRequested: root.toggleSection(qsTr("关于"))
                     Layout.fillWidth: true
                     SettingsRow {

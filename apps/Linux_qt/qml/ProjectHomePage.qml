@@ -118,6 +118,9 @@ Rectangle {
         contentHeight: Math.max(0, flow.implicitHeight) + _pagePadding * 2
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        // Issue #842: 桌面鼠标左键不能按住空白处拖页面，
+        // 保留滚轮/触摸板/滚动条/触屏滚动。
+        acceptedButtons: Qt.NoButton
 
         // 左对齐、按卡宽自然换行：不居中，也不把卡拉宽填满一列。
         Flow {

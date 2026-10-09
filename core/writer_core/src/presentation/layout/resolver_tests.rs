@@ -4,7 +4,7 @@
 //! workbench 计算已拆到 [`super::workbench`]，测试通过公共 API 验证。
 
 use super::resolver::*;
-use super::workbench::resolve_workbench_layout;
+use super::workbench::{resolve_workbench_layout, resolve_workbench_layout_with_pane_widths};
 use super::{PrimaryNavigationPlacement, ShellMode, WorkspaceLayoutMode};
 
 /// 测试辅助：构造无遮挡的 viewport。
@@ -771,5 +771,161 @@ fn test_workbench_plan_visibility_false_reduces_min_width() {
     assert!(
         editor.width() >= 240.0,
         "Editor 应 >= editor_min_width_dp=240"
+    );
+}
+
+// ──   ：compute_content_pane_widths clamp 修复（问题 3a/3b） ──
+
+#[test]
+fn test_hidden_pane_with_stored_width_does_not_consume_budget() {
+    // 问题 3a：左栏已收起（visibility=false）但 pane_widths 仍保留之前拖拽的宽度。
+    // 旧实现先看 pane_widths > 0，把隐藏左栏的 400 计入 total_requested，
+    // 误判"不够 requested"，把右栏压回 min。新实现先看 visibility，
+    // 隐藏 pane requested=0 不参与预算，右栏应拿到 preferred。
+    //
+    // region_w=900：旧 total_requested=400+240+56+240=936>900 → 走"不够 requested"
+    // → total_min=0+200+56+240=496<=900 → return (0,200)，右栏被压到 min。
+    // 新实现：chapter_nav_requested=0，右栏 budget 充足 → tool_pane=240。
+    let viewport = viewport(900.0, 800.0);
+    let plan = resolve_workbench_layout_with_pane_widths(
+        &viewport,
+        WorkbenchVisibility {
+            chapter_navigation_visible: false,
+            tool_pane_visible: true,
+        },
+        WorkbenchPaneWidths {
+            chapter_navigation_dp: 400.0,
+            tool_pane_dp: 0.0,
+        },
+    );
+    assert_eq!(
+        plan.mode,
+        ResolvedWorkspaceMode::Workbench,
+        "900dp 宽放得下隐藏左栏 + 右栏 preferred + tool_rail + editor_min"
+    );
+    let chapter_nav = bounds_for(&plan, WorkbenchRole::ChapterNavigation);
+    let tool_pane = bounds_for(&plan, WorkbenchRole::ToolPane);
+    assert_eq!(
+        chapter_nav.width(),
+        0.0,
+        "chapter_navigation_visible=false 时宽度应为 0，不应因 pane_widths>0 而占用预算"
+    );
+    assert_eq!(
+        tool_pane.width(),
+        240.0,
+        "右栏应拿到 preferred=240，不应被隐藏左栏的残留 requested 压回 min=200"
+    );
+}
+
+#[test]
+fn test_over_budget_panes_compress_proportionally_not_jump_to_min() {
+    // 问题 3b：requested 总和略超预算时，按比例压缩 extra，不一刀切打回 min。
+    // 左栏拖到 500，右栏 240，region_w=1000。
+    // total_requested=500+240+56+240=1036>1000，旧实现直接 return (200,200) 跳变；
+    // 新实现 budget=704, extra_budget=304, total_extra=340，按比例压缩：
+    //   ratio=304/340≈0.894，chapter_nav=200+300*0.894≈468.24，
+    //   tool_pane=200+40*0.894≈235.76，都明显 > min=200。
+    let viewport = viewport(1000.0, 800.0);
+    let plan = resolve_workbench_layout_with_pane_widths(
+        &viewport,
+        WorkbenchVisibility {
+            chapter_navigation_visible: true,
+            tool_pane_visible: true,
+        },
+        WorkbenchPaneWidths {
+            chapter_navigation_dp: 500.0,
+            tool_pane_dp: 240.0,
+        },
+    );
+    assert_eq!(plan.mode, ResolvedWorkspaceMode::Workbench);
+    let chapter_nav = bounds_for(&plan, WorkbenchRole::ChapterNavigation);
+    let tool_pane = bounds_for(&plan, WorkbenchRole::ToolPane);
+    let editor = bounds_for(&plan, WorkbenchRole::Editor);
+    // 两栏都应明显大于 min=200，证明没有跳回 min。
+    assert!(
+        chapter_nav.width() > 450.0,
+        "左栏应按比例压缩到 ~468，不应跳回 min=200，实际 = {}",
+        chapter_nav.width()
+    );
+    assert!(
+        tool_pane.width() > 230.0,
+        "右栏应按比例压缩到 ~236，不应跳回 min=200，实际 = {}",
+        tool_pane.width()
+    );
+    // Editor 始终保住 editor_min_width_dp=240。
+    assert!(
+        editor.width() >= 240.0,
+        "Editor 应 >= editor_min=240，实际 = {}",
+        editor.width()
+    );
+    // pane 总和 + tool_rail + editor ≈ region_w（预算用尽）。
+    let total = chapter_nav.width() + tool_pane.width() + 56.0 + editor.width();
+    assert!(
+        (total - 1000.0).abs() < 1.0,
+        "pane+tool_rail+editor 应 ≈ region_w=1000，实际 = {}",
+        total
+    );
+}
+
+#[test]
+fn test_drag_to_limit_stays_at_limit_no_jump() {
+    // 问题 3b 连续性：拖到刚好极限和略超极限 1dp，pane 宽度应连续变化（不跳变）。
+    // pane_widths: chapter_nav=500, tool_pane=240。
+    // region_w=1036 刚好够 requested（500+240+56+240=1036），pane=(500,240)。
+    // region_w=1035 略超 1dp，新实现按比例压缩到 (~499.12, ~239.88)，
+    // 旧实现会从 (500,240) 跳到 (200,200)——跳变 340dp。
+    let pane_widths = WorkbenchPaneWidths {
+        chapter_navigation_dp: 500.0,
+        tool_pane_dp: 240.0,
+    };
+    let visibility = WorkbenchVisibility {
+        chapter_navigation_visible: true,
+        tool_pane_visible: true,
+    };
+
+    let plan_enough = resolve_workbench_layout_with_pane_widths(
+        &viewport(1036.0, 800.0),
+        visibility,
+        pane_widths,
+    );
+    let plan_slightly_over = resolve_workbench_layout_with_pane_widths(
+        &viewport(1035.0, 800.0),
+        visibility,
+        pane_widths,
+    );
+
+    let nav_enough = bounds_for(&plan_enough, WorkbenchRole::ChapterNavigation).width();
+    let nav_over = bounds_for(&plan_slightly_over, WorkbenchRole::ChapterNavigation).width();
+    let tool_enough = bounds_for(&plan_enough, WorkbenchRole::ToolPane).width();
+    let tool_over = bounds_for(&plan_slightly_over, WorkbenchRole::ToolPane).width();
+
+    // 刚好够时拿到 requested。
+    assert!(
+        (nav_enough - 500.0).abs() < 0.5 && (tool_enough - 240.0).abs() < 0.5,
+        "刚好够预算时应拿到 requested (500,240)，实际 = ({}, {})",
+        nav_enough,
+        tool_enough
+    );
+    // 略超 1dp 时应接近 requested（连续），不是跳回 min=200。
+    assert!(
+        nav_over > 495.0,
+        "略超预算 1dp 时左栏应 ~499，不应跳回 min=200，实际 = {}",
+        nav_over
+    );
+    assert!(
+        tool_over > 238.0,
+        "略超预算 1dp 时右栏应 ~239.9，不应跳回 min=200，实际 = {}",
+        tool_over
+    );
+    // 极限点两侧连续：pane 宽度变化 < 2dp（不跳变 340dp）。
+    assert!(
+        (nav_enough - nav_over).abs() < 2.0,
+        "极限点两侧左栏应连续变化 < 2dp，实际跳了 {}dp",
+        (nav_enough - nav_over).abs()
+    );
+    assert!(
+        (tool_enough - tool_over).abs() < 2.0,
+        "极限点两侧右栏应连续变化 < 2dp，实际跳了 {}dp",
+        (tool_enough - tool_over).abs()
     );
 }

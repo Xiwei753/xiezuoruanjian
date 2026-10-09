@@ -61,9 +61,18 @@ Rectangle {
     // 工具 pane 用「选中的工具 key」表达："" = 收起，非空 = 展开并显示该工具。
     // Issue #829：手稿里的常驻入口是 starmap / ai；冲突只作为动态附加工具。
     // 不再保留 drawerOpen + drawerTab 两份状态，避免第二套开关。
-    property string drawerTool: ""
-    readonly property bool drawerOpen: root.drawerTool !== ""
+    // Issue #842 任务3：drawerTool 只表示当前工具选择，不再同时表达折叠状态。
+    // rightPaneCollapsed 独立控制右栏折叠；drawerOpen 由 rightPaneCollapsed 派生。
+    property string drawerTool: "starmap"
+    property bool rightPaneCollapsed: true
+    readonly property bool drawerOpen: !root.rightPaneCollapsed
     property bool leftPaneCollapsed: false
+    // Issue #842 任务2：用户拖拽请求的 pane 宽度，0 代表用 Core 默认。
+    property real requestedChapterNavWidth: 0
+    property real requestedToolPaneWidth: 0
+    // 拖拽起始宽度记录（内部属性）
+    property real _dragStartChapterNavWidth: 0
+    property real _dragStartToolPaneWidth: 0
     // Issue #833 复核：SinglePane（非 Workbench 或 Core 退回单栏）下章节导航
     // 作为覆盖在正文上的浮层打开，不参与 RowLayout 宽度分配。
     // Workbench 下章节导航由 leftPaneCollapsed + Core ChapterNavigation bounds 管理，
@@ -174,53 +183,40 @@ Rectangle {
     // 现在一个属性都不改就先把候选组合问一遍，哪一组是 Workbench 就整体提交；
     // 两组都不行就什么都不改，不留"已展开但看不见"的端侧状态，也没有中间态闪烁。
     function requestToolPaneOpen(toolKey, allowCollapseLeft) {
-        // 目标状态初始就是"当前左栏状态"，不是 false：
-        // 候选一是「保持当前左栏状态」，命中时要提交的就是它本身。
-        // 用"有没有走第二候选"反推全部状态，会在用户本来就收着左栏时
-        // 反而把左栏重新打开，提交出来的 UI 状态和刚拿到的 Core plan 也对不上。
-        // 只有走候选二（左栏让位）才强制改成 true。
         var targetLeftCollapsed = root.leftPaneCollapsed;
-        // 候选一：保持当前左栏状态，展开右 pane。
         var plan = resolveWorkbenchCandidate(!root.leftPaneCollapsed, true);
         if (!isWorkbenchPlan(plan) && allowCollapseLeft === true) {
-            // 候选二：左栏让位，右 pane 展开。
             plan = resolveWorkbenchCandidate(false, true);
             targetLeftCollapsed = true;
         }
         if (!isWorkbenchPlan(plan)) return;
-        // 一次性提交最终组合。
         root.leftPaneCollapsed = targetLeftCollapsed;
         root.drawerTool = toolKey || "starmap";
+        root.rightPaneCollapsed = false;
         root.workbenchPlan = plan;
     }
 
     // 左目录栏的展开请求，与右侧对称：必要时让右 pane 让位，仍放不下就不改任何状态。
     function requestChapterNavigationOpen() {
-        // Issue #833 复核：SinglePane（非 Workbench 或 Core 退回单栏）下不再调
-        // Workbench resolver（resolveWorkbenchCandidate 直接返回 null），改成打开
-        // 覆盖在正文上的章节导航浮层。这样正文顶部那个重新展开章节栏的按钮在
-        // SinglePane 下也能拉回章节导航，不再卡死。
         if (root.singlePaneMode) {
             root.singlePaneNavOpen = true;
             return;
         }
-        var targetDrawerTool = root.drawerTool;
-        // 候选一：保持当前右 pane 状态，展开左目录栏。
-        var plan = resolveWorkbenchCandidate(true, root.drawerOpen);
+        var targetRightPaneCollapsed = root.rightPaneCollapsed;
+        var plan = resolveWorkbenchCandidate(true, !root.rightPaneCollapsed);
         if (!isWorkbenchPlan(plan)) {
-            // 候选二：右 pane 让位，左目录栏展开。
             plan = resolveWorkbenchCandidate(true, false);
-            targetDrawerTool = "";
+            targetRightPaneCollapsed = true;
         }
         if (!isWorkbenchPlan(plan)) return;
-        root.drawerTool = targetDrawerTool;
+        root.rightPaneCollapsed = targetRightPaneCollapsed;
         root.leftPaneCollapsed = false;
         root.workbenchPlan = plan;
     }
 
     // 关闭方向不会把窗口撑小，永远放得下，直接改状态即可（refreshWorkbenchPlan 随后重算）。
     function closeToolPane() {
-        root.drawerTool = "";
+        root.rightPaneCollapsed = true;
     }
 
     function closeChapterNavigation() {
@@ -234,11 +230,14 @@ Rectangle {
     }
 
     // 展开/收起工具 pane 的统一入口（rail 的展开收起按钮 + 右侧折叠把手）。
+    // Issue #842 评论修复（问题2）：展开走 requestToolPaneOpen() 候选入口，
+    // 不再绕过「先算候选、必要时收左栏再展开」逻辑。drawerTool 已独立保存当前工具，
+    // 不会重新硬切星图；空值兜底 "starmap"。
     function toggleToolPane() {
         if (root.drawerOpen) {
             root.closeToolPane();
         } else {
-            root.requestToolPaneOpen("starmap", true);
+            root.requestToolPaneOpen(root.drawerTool || "starmap", true);
         }
     }
 
@@ -262,7 +261,9 @@ Rectangle {
             root.width,
             root.height,
             chapterVisible,
-            toolVisible
+            toolVisible,
+            root.requestedChapterNavWidth,
+            root.requestedToolPaneWidth
         );
     }
 
@@ -273,7 +274,7 @@ Rectangle {
     onWidthChanged: refreshWorkbenchPlan()
     onHeightChanged: refreshWorkbenchPlan()
     onLeftPaneCollapsedChanged: refreshWorkbenchPlan()
-    onDrawerToolChanged: refreshWorkbenchPlan()
+    onRightPaneCollapsedChanged: refreshWorkbenchPlan()
     onWideWorkbenchChanged: refreshWorkbenchPlan()
     // Issue #828：根对象上只能有一个 Component.onCompleted。
     // #825 新增的启动期 refreshWorkbenchPlan() 与下面原有的启动初始化块
@@ -1220,6 +1221,7 @@ Rectangle {
                 dt: root.dt
                 hasConflicts: root.hasConflicts
                 selectedTool: root.drawerTool
+                toolPaneOpen: root.drawerOpen
                 // Issue #825 复核4 第2项：rail 内部的按钮宽度也吃 Core 的 ToolRail bounds，
                 // 不能容器用 Core 宽度、组件内部还按默认 56 画。
                 railWidth: root.coreSized ? root.toolRailWidth : 56
@@ -1227,6 +1229,92 @@ Rectangle {
                 onToolPaneToggled: {
                     root.toggleToolPane();
                     if (root.drawerOpen) root.requestEditorFocus();
+                }
+            }
+        }
+
+        // Issue #842 评论修复（问题1）：左 resize separator 改为 overlay，
+        // 不再作为 RowLayout 子项参与宽度分配。Core 的四角色（ChapterNavigation +
+        // Editor + ToolPane + ToolRail）已占满 placement region，separator 只盖在
+        // 章节栏右边界上做命中与拖拽，z 提高确保盖在内容之上。可视线 1vp（居中
+        // Rectangle），命中 Item 12vp。x 跟随 sidebarRect 右边界（中心对齐边界）。
+        // 垂直范围锚到 parent（contentSlot）顶/底，与 RowLayout 同高。
+        Item {
+            id: leftResizeSeparator
+            visible: !root.singlePaneMode && !root.leftPaneCollapsed && root.coreSized
+            width: 12
+            x: sidebarRect.x + sidebarRect.width - width / 2
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            z: 50
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1
+                height: parent.height
+                color: root.dt.border
+            }
+
+            DragHandler {
+                target: null
+                cursorShape: Qt.SplitHCursor
+                onActiveChanged: {
+                    if (active) {
+                        // 每次手势从 Core 当前实际宽度起算，避免旧 requested 与实际宽度
+                        // 不一致造成死区，或 requested<=0 触发 Core"恢复默认宽度"语义。
+                        root._dragStartChapterNavWidth = root.chapterNavWidth
+                    }
+                }
+                onTranslationChanged: {
+                    if (active) {
+                        // Math.max(1,...) 只防误触 Core 的"<=0 表示默认宽度"哨兵；
+                        // 实际最小值仍由 Core list_pane_min_width_dp clamp。
+                        // activeTranslation 每次手势从 0 重置（translation 已 deprecated）。
+                        root.requestedChapterNavWidth =
+                            Math.max(1, root._dragStartChapterNavWidth + activeTranslation.x)
+                        root.refreshWorkbenchPlan()
+                    }
+                }
+            }
+        }
+
+        // Issue #842 评论修复（问题1）：右 resize separator 改为 overlay。
+        // x 跟随 rightDrawerRect 左边界（Editor 右边界），中心对齐边界。
+        Item {
+            id: rightResizeSeparator
+            visible: root.drawerOpen && !root.hideContentPanes && root.coreSized
+            width: 12
+            x: rightDrawerRect.x - width / 2
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            z: 50
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 1
+                height: parent.height
+                color: root.dt.border
+            }
+
+            DragHandler {
+                target: null
+                cursorShape: Qt.SplitHCursor
+                onActiveChanged: {
+                    if (active) {
+                        // 每次手势从 Core 当前实际宽度起算，避免旧 requested 与实际宽度
+                        // 不一致造成死区，或 requested<=0 触发 Core"恢复默认宽度"语义。
+                        root._dragStartToolPaneWidth = root.toolPaneWidth
+                    }
+                }
+                onTranslationChanged: {
+                    if (active) {
+                        // Math.max(1,...) 只防误触 Core 的"<=0 表示默认宽度"哨兵；
+                        // 实际最小值仍由 Core tool_pane_min_width_dp clamp。
+                        // activeTranslation 每次手势从 0 重置（translation 已 deprecated）。
+                        root.requestedToolPaneWidth =
+                            Math.max(1, root._dragStartToolPaneWidth - activeTranslation.x)
+                        root.refreshWorkbenchPlan()
+                    }
                 }
             }
         }
@@ -1289,7 +1377,7 @@ Rectangle {
         // 避免落到没有内容的工具状态。仍由 WritingWorkspace 统一持有工具状态，
         // 不让 RightDrawer 自己猜外部 drawer 状态。
         if (!root.hasConflicts && root.drawerTool === "conflict") {
-            root.closeToolPane();
+            root.drawerTool = "starmap";
         }
     }
 

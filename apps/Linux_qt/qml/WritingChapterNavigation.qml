@@ -173,6 +173,9 @@ Rectangle {
             ListView {
                 id: treeListView
                 model: treeModel
+                // Issue #842: 桌面鼠标左键不能按住空白处拖页面，
+                // 保留滚轮/触摸板/滚动条/触屏滚动。
+                acceptedButtons: Qt.NoButton
                 delegate: Item {
                     width: treeListView.width
                     height: model.rowType === "volume" ? 36 : 32

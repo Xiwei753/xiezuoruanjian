@@ -21,8 +21,8 @@ Rectangle {
 
     signal triggered()
 
-    width: iconSize
-    height: iconSize
+    implicitWidth: iconSize
+    implicitHeight: iconSize
     radius: dt.radiusPill
     color: hoverArea.containsMouse ? dt.surfaceVariant : "transparent"
 

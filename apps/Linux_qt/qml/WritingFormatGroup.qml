@@ -73,8 +73,8 @@ Rectangle {
 
         // Font button (triggers popover)
         Rectangle {
-            width: fontRow.implicitWidth + dt.sp12
-            height: 32
+            Layout.preferredWidth: fontRow.implicitWidth + dt.sp12
+            Layout.preferredHeight: 32
             radius: dt.radiusPill
             color: fontPopover.visible || fontHover.containsMouse ?
                    dt.primaryContainer : "transparent"
@@ -121,8 +121,8 @@ Rectangle {
 
         // Line Spacing button (triggers lineSpacingPopover)
         Rectangle {
-            width: spacingRow.implicitWidth + dt.sp12
-            height: 32
+            Layout.preferredWidth: spacingRow.implicitWidth + dt.sp12
+            Layout.preferredHeight: 32
             radius: dt.radiusPill
             color: lineSpacingPopover.visible || spacingHover.containsMouse ?
                    dt.primaryContainer : "transparent"
@@ -168,8 +168,8 @@ Rectangle {
 
         // Paragraph Layout button (triggers layoutPopover)
         Rectangle {
-            width: layoutRow.implicitWidth + dt.sp12
-            height: 32
+            Layout.preferredWidth: layoutRow.implicitWidth + dt.sp12
+            Layout.preferredHeight: 32
             radius: dt.radiusPill
             color: layoutPopover.visible || layoutHover.containsMouse ?
                    dt.primaryContainer : "transparent"
@@ -217,8 +217,8 @@ Rectangle {
         // Format button
         Rectangle {
             visible: true
-            width: formatRow.implicitWidth + dt.sp12
-            height: 32
+            Layout.preferredWidth: formatRow.implicitWidth + dt.sp12
+            Layout.preferredHeight: 32
             radius: dt.radiusPill
             color: formatHover.containsMouse ? dt.surfaceVariant : "transparent"
             border.color: dt.border
@@ -256,6 +256,7 @@ Rectangle {
             font.pointSize: dt.captionPt
             font.family: dt.fontFamily
             visible: text !== ""
+            Layout.alignment: Qt.AlignVCenter
         }
 
     }

@@ -8,7 +8,7 @@
 //   - 纯 UI 组件，设置行通过 default property 传入
 //   - 使用 DesignTokens 统一样式
 //   - Issue #833：改成真正的折叠分组。expanded 由外部（SettingsDialog）控制，
-//     toggleRequested 通知外部切换 expandedSectionKey，不自己写 expanded。
+//     toggleRequested 通知外部切换对应分组的展开状态，不自己写 expanded。
 // =============================================================================
 //
 // 关于 Layouts 中的 implicitHeight

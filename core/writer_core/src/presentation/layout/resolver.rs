@@ -208,6 +208,19 @@ pub struct WorkbenchVisibility {
     pub tool_pane_visible: bool,
 }
 
+/// 平台端请求的 pane 宽度（dp）。<= 0 表示使用 LayoutMetrics 默认宽度。
+///
+/// 平台端可通过此结构把用户拖拽后的 pane 宽度传给 Core，
+/// Core 在 clamp 时优先采用用户请求值，再受 min_width 和 editor_min_width 约束。
+/// 全 0（`Default`）时退化为纯 LayoutMetrics 行为，不改变现有各端输出。
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct WorkbenchPaneWidths {
+    /// 章节导航请求宽度，<= 0 表示用默认。
+    pub chapter_navigation_dp: f32,
+    /// 工具面板请求宽度，<= 0 表示用默认。
+    pub tool_pane_dp: f32,
+}
+
 /// 工作台布局计划的最终产品模式（  02:59:39Z 版）。
 ///
 /// Rust 根据当前 viewport + occlusions + visibility 产出**最终 mode + bounds**；
