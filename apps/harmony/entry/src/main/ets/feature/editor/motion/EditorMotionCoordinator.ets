@@ -1099,18 +1099,26 @@ export class EditorMotionCoordinator {
         const currentLeft = piece.startClipLeft + (targetLeft - piece.startClipLeft) * p
         const currentRight = piece.startClipRight + (targetRight - piece.startClipRight) * p
         const windowInstanceId = allocator.allocate(piece.glyphIds)
+        // Issue #879 复核评论6083352210 问题1：用 glyphRectForRange 取得 piece 自身的几何，
+        // 而不是整 run 的 rect——否则拆成多 piece 时 glyphWidth 仍是整 run 宽度，
+        // identifyCarryOverMotionRuns 判断 insert 完成时永远不满足。
+        const pieceRect = glyphRectForRange(newLayout, pieceUtf16Start, pieceUtf16End)
+        const pieceGlyphX = pieceRect !== null ? pieceRect.x : run.rect.x
+        const pieceGlyphY = pieceRect !== null ? pieceRect.y : run.rect.y
+        const pieceGlyphWidth = pieceRect !== null ? pieceRect.width : run.rect.width
+        const pieceGlyphHeight = pieceRect !== null ? pieceRect.height : run.rect.height
         motionGlyphWindows.push({
           sourceKind: 'new',
           utf16Start: pieceUtf16Start,
           utf16End: pieceUtf16End,
           clipLeft: currentLeft,
           clipRight: currentRight,
-          clipTop: run.rect.y,
-          clipBottom: run.rect.y + run.rect.height,
-          glyphX: run.rect.x,
-          glyphY: run.rect.y,
-          glyphWidth: run.rect.width,
-          glyphHeight: run.rect.height,
+          clipTop: pieceGlyphY,
+          clipBottom: pieceGlyphY + pieceGlyphHeight,
+          glyphX: pieceGlyphX,
+          glyphY: pieceGlyphY,
+          glyphWidth: pieceGlyphWidth,
+          glyphHeight: pieceGlyphHeight,
           offsetX: 0,
           offsetY: 0,
           runId: `new-${newRevision}`,
@@ -1121,8 +1129,8 @@ export class EditorMotionCoordinator {
           renderNodeKey: `new-${newRevision}-${windowInstanceId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
-          currentPositionX: run.rect.x,
-          currentPositionY: run.rect.y,
+          currentPositionX: pieceGlyphX,
+          currentPositionY: pieceGlyphY,
           motionOwnerKind: 'insert'
         })
       }
@@ -1484,22 +1492,29 @@ export class EditorMotionCoordinator {
       if (w.currentClipRight - w.currentClipLeft <= 0.01) {
         continue
       }
-      // 该窗口的 glyphIds 全部不在本轮新 plan 的 run 集合中（是真正的残影）
-      let allGhost = true
+      // Issue #879 复核评论6083352210 问题2：按 glyphId 分区。
+      // 将窗口的 glyphIds 分为两组：
+      // - coveredIds：在本轮新 plan 的 planGlyphIds 中（由新 plan 接手）
+      // - uncoveredIds：不在新 plan 中（是真正的残影，需要继承消退）
+      // 不能"有一个重叠就舍弃全窗"——只有 uncoveredIds 部分才需要继承。
+      const coveredIds: string[] = []
+      const uncoveredIds: string[] = []
       for (const gid of w.glyphIds) {
         if (planGlyphIds.has(gid)) {
-          allGhost = false
-          break
+          coveredIds.push(gid)
+        } else {
+          uncoveredIds.push(gid)
         }
       }
-      if (!allGhost) {
+      // 全部被新 plan 接管——不需要继承残影
+      if (uncoveredIds.length === 0) {
         continue
       }
       // 目标 clip = 零宽度（继续消退到完全隐藏）
       const targetClipLeft = w.currentClipLeft
       const targetClipRight = w.currentClipLeft
       ghosts.push({
-        glyphIds: w.glyphIds,
+        glyphIds: uncoveredIds,
         windowId: w.windowId,
         sourceRevision: w.sourceRevision,
         utf16Start: w.utf16Start,
@@ -1556,77 +1571,39 @@ export class EditorMotionCoordinator {
       if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
         continue
       }
-      // 本轮新 plan 的 run 已覆盖该字形——不需要延续
-      let coveredByNewPlan = false
+      // Issue #879 复核评论6083352210 问题2：按 glyphId 分区。
+      // 将窗口的 glyphIds 分为两组：
+      // - coveredIds：在本轮新 plan 的 planGlyphIds 中（由新 plan 接手）
+      // - uncoveredIds：不在新 plan 中（需要 carry-over）
+      // 不能"有一个重叠就舍弃全窗"——只有 uncoveredIds 部分才需要 carry-over。
+      const coveredIds: string[] = []
+      const uncoveredIds: string[] = []
       for (const gid of w.glyphIds) {
         if (planGlyphIds.has(gid)) {
-          coveredByNewPlan = true
-          break
+          coveredIds.push(gid)
+        } else {
+          uncoveredIds.push(gid)
         }
       }
-      if (coveredByNewPlan) {
+      // 全部被新 plan 接管——不需要延续
+      if (uncoveredIds.length === 0) {
         continue
       }
-      // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
-      // - insert 完成 = 可见裁切达终点（currentClipRight - currentClipLeft >= glyphWidth - 0.01）
-      // - reflow 完成 = 当前位置已接近目标 x/y（用距离判断）
-      if (w.motionOwnerKind === 'insert') {
-        const fullWidth = w.glyphWidth
-        const currentWidth = w.currentClipRight - w.currentClipLeft
-        if (currentWidth >= fullWidth - 0.01) {
-          continue  // insert 已完全可见，不需要延续
-        }
-      } else {
-        // reflow：判断当前位置是否已接近目标位置
-        // 目标位置从新版布局查出——用 glyphRectForRange 获取
-        // 先确定 reflow 的目标 UTF-16 范围（在新版正文中）
-        let reflowTargetUtf16Start = w.utf16Start
-        let reflowTargetUtf16End = w.utf16End
-        if (newIdentityTable !== null) {
-          // 用字形身份表查找旧字形在新版正文中的对应范围
-          let foundStart = -1
-          let foundEnd = -1
-          for (const gid of w.glyphIds) {
-            const entry = newIdentityTable.entryByGlyphId(gid)
-            if (entry !== null) {
-              if (foundStart < 0 || entry.utf16Start < foundStart) {
-                foundStart = entry.utf16Start
-              }
-              if (entry.utf16End > foundEnd) {
-                foundEnd = entry.utf16End
-              }
-            }
-          }
-          if (foundStart >= 0 && foundEnd >= 0) {
-            reflowTargetUtf16Start = foundStart
-            reflowTargetUtf16End = foundEnd
-          }
-        }
-        const targetRect = glyphRectForRange(newLayout, reflowTargetUtf16Start, reflowTargetUtf16End)
-        if (targetRect !== null) {
-          const targetX = targetRect.x
-          const targetY = targetRect.y
-          if (Math.abs(w.currentPositionX - targetX) < 0.01 &&
-              Math.abs(w.currentPositionY - targetY) < 0.01) {
-            continue  // reflow 已到达目标位置，不需要延续
-          }
-        }
-      }
+      // 全部不被新 plan 接管——保持原有逻辑（整窗口进入 carry-over）
+      // 如果 coveredIds 非空（部分被接管），只对 uncoveredIds 部分生成 carry-over run
 
-      // Issue #879 复核评论6082616112 问题1：明确源类型和源 runId。
-      // 旧 insert 窗口的源是 'new'，旧 reflow 窗口的源是 'old'。
-      const sourceKind: 'new' | 'old' = w.motionOwnerKind === 'insert' ? 'new' : 'old'
-      const sourceRunId = `${sourceKind}-${w.sourceRevision}`
-
-      // Issue #879 复核评论6082616112 问题3：确定 target UTF-16 范围。
-      // 用字形身份表查找旧字形在新版正文中的对应范围。
-      // 如果无法确定目标范围，用 sourceUtf16Start/End 作为 fallback（宁可重影也不要漏字）。
-      let targetUtf16Start = w.utf16Start
-      let targetUtf16End = w.utf16End
+      // Issue #879 复核评论6083352210 问题3：目标身份解析。
+      // 用字形身份表查找 uncoveredIds 在新版正文中的对应范围。
+      // 如果所有 uncoveredIds 都找不到目标字形，说明这些字已从新版正文中消失——
+      // 不能继续按 insert/reflow 处理（旧 offset 在新正文中无意义），
+      // 应交给 deleted/carryGhost owner 消退。
+      let targetUtf16Start = -1
+      let targetUtf16End = -1
+      let targetResolved = false
       if (newIdentityTable !== null) {
         let foundStart = -1
         let foundEnd = -1
-        for (const gid of w.glyphIds) {
+        for (const gid of uncoveredIds) {
           const entry = newIdentityTable.entryByGlyphId(gid)
           if (entry !== null) {
             if (foundStart < 0 || entry.utf16Start < foundStart) {
@@ -1640,20 +1617,95 @@ export class EditorMotionCoordinator {
         if (foundStart >= 0 && foundEnd >= 0) {
           targetUtf16Start = foundStart
           targetUtf16End = foundEnd
+          targetResolved = true
         }
-        // 如果无法确定目标范围，用 sourceUtf16Start/End 作为 fallback
+      }
+      // 问题3修复：目标身份解析失败时，不生成 carry-over insert/reflow run。
+      // 这些字已不在新版正文中，继续按 insert/reflow 处理会用伪 target offset
+      // 误扣最新版静态字形。交给 identifyCarryOverGhosts 处理消退。
+      if (!targetResolved) {
+        continue
+      }
+
+      // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
+      if (w.motionOwnerKind === 'insert') {
+        const fullWidth = w.glyphWidth
+        const currentWidth = w.currentClipRight - w.currentClipLeft
+        if (currentWidth >= fullWidth - 0.01) {
+          continue  // insert 已完全可见，不需要延续
+        }
+      } else {
+        // reflow：判断当前位置是否已接近目标位置
+        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
+        if (targetRect !== null) {
+          const targetX = targetRect.x
+          const targetY = targetRect.y
+          if (Math.abs(w.currentPositionX - targetX) < 0.01 &&
+              Math.abs(w.currentPositionY - targetY) < 0.01) {
+            continue  // reflow 已到达目标位置，不需要延续
+          }
+        }
+      }
+
+      // Issue #879 复核评论6082616112 问题1：明确源类型和源 runId。
+      const sourceKind: 'new' | 'old' = w.motionOwnerKind === 'insert' ? 'new' : 'old'
+      const sourceRunId = `${sourceKind}-${w.sourceRevision}`
+
+      // Issue #879 复核评论6083352210 问题2：如果窗口被部分接管（coveredIds 非空），
+      // 只对 uncoveredIds 部分生成 carry-over run。
+      // 拆分窗口时需要为子窗口设置独立的 utf16 范围和几何。
+      const effectiveGlyphIds = uncoveredIds
+      let effectiveSourceUtf16Start = w.utf16Start
+      let effectiveSourceUtf16End = w.utf16End
+      let effectiveGlyphX = w.glyphX
+      let effectiveGlyphY = w.glyphY
+      let effectiveGlyphWidth = w.glyphWidth
+      let effectiveGlyphHeight = w.glyphHeight
+      let effectiveClipTop = w.clipTop
+      let effectiveClipBottom = w.clipBottom
+      let effectiveCurrentClipLeft = w.currentClipLeft
+      let effectiveCurrentClipRight = w.currentClipRight
+      let effectiveCurrentPositionX = w.currentPositionX
+      let effectiveCurrentPositionY = w.currentPositionY
+
+      if (coveredIds.length > 0) {
+        // 窗口被部分接管——需要拆分。
+        // 用 newIdentityTable 查找 uncoveredIds 在源正文中的 utf16 范围，
+        // 用 glyphRectForRange 获取子窗口的几何。
+        // 源正文范围：用 uncoveredIds 对应的 source identity 查找。
+        // 但源正文身份表可能不可用——此时用 w.utf16Start/End 作为 fallback。
+        // 目标正文范围已由上面的 targetUtf16Start/End 确定。
+        // 几何：用 glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End) 获取目标几何，
+        // 源几何沿用窗口的几何（因为 carry-over run 的 buildFrame 用源几何绘制旧 Text）。
+        // 对于 insert，glyphX/Y/Width/Height 是源排版的几何——拆分时需要用源布局计算。
+        // 但我们没有源布局的 glyphRectForRange——用窗口几何作为近似。
+        // clip 范围：uncoveredIds 的 currentClip 应该是原窗口 clip 中属于这些字形的部分。
+        // 简化处理：对于 insert，clip 是从左到右扩展的，uncoveredIds 如果是窗口的尾部字形，
+        // 其 clip 就是原窗口的 currentClipRight 附近。这里用原窗口几何作为保守近似。
+        // 关键是 targetUtf16Start/End 已正确设置（只包含 uncoveredIds 的目标范围），
+        // 这样 computeStaticRangesMultiChannel 只扣 uncoveredIds 的目标范围，
+        // 不会误扣被新 plan 接管的 coveredIds 的目标范围。
+        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
+        if (targetRect !== null) {
+          effectiveGlyphX = targetRect.x
+          effectiveGlyphY = targetRect.y
+          effectiveGlyphWidth = targetRect.width
+          effectiveGlyphHeight = targetRect.height
+          effectiveClipTop = targetRect.y
+          effectiveClipBottom = targetRect.y + targetRect.height
+        }
       }
 
       // Issue #879 复核评论6082616112 问题2：计算 reflow 的 startX/startY/targetX/targetY。
-      let startX = w.currentPositionX
-      let startY = w.currentPositionY
-      let targetX = w.glyphX + w.offsetX
-      let targetY = w.glyphY + w.offsetY
+      let startX = effectiveCurrentPositionX
+      let startY = effectiveCurrentPositionY
+      let targetX = effectiveGlyphX + w.offsetX
+      let targetY = effectiveGlyphY + w.offsetY
       // 计算 targetClipLeft/Right：
       // - insert：目标是完整可见（targetClipLeft = glyphX, targetClipRight = glyphX + glyphWidth）
       // - reflow：目标是新版布局中的位置——用 glyphRectForRange 查出
-      let targetClipLeft = w.glyphX
-      let targetClipRight = w.glyphX + w.glyphWidth
+      let targetClipLeft = effectiveGlyphX
+      let targetClipRight = effectiveGlyphX + effectiveGlyphWidth
       if (w.motionOwnerKind === 'reflow') {
         // reflow 的目标位置在新版布局中——用 glyphRectForRange 查出
         const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
@@ -1666,29 +1718,29 @@ export class EditorMotionCoordinator {
       }
       runs.push({
         motionOwnerKind: w.motionOwnerKind,
-        glyphIds: w.glyphIds,
+        glyphIds: effectiveGlyphIds,
         windowId: w.windowId,
         sourceRevision: w.sourceRevision,
         sourceKind: sourceKind,
         sourceRunId: sourceRunId,
-        sourceUtf16Start: w.utf16Start,
-        sourceUtf16End: w.utf16End,
+        sourceUtf16Start: effectiveSourceUtf16Start,
+        sourceUtf16End: effectiveSourceUtf16End,
         targetUtf16Start: targetUtf16Start,
         targetUtf16End: targetUtf16End,
-        currentClipLeft: w.currentClipLeft,
-        currentClipRight: w.currentClipRight,
+        currentClipLeft: effectiveCurrentClipLeft,
+        currentClipRight: effectiveCurrentClipRight,
         targetClipLeft: targetClipLeft,
         targetClipRight: targetClipRight,
-        clipTop: w.clipTop,
-        clipBottom: w.clipBottom,
-        glyphX: w.glyphX,
-        glyphY: w.glyphY,
-        glyphWidth: w.glyphWidth,
-        glyphHeight: w.glyphHeight,
+        clipTop: effectiveClipTop,
+        clipBottom: effectiveClipBottom,
+        glyphX: effectiveGlyphX,
+        glyphY: effectiveGlyphY,
+        glyphWidth: effectiveGlyphWidth,
+        glyphHeight: effectiveGlyphHeight,
         offsetX: w.offsetX,
         offsetY: w.offsetY,
-        currentPositionX: w.currentPositionX,
-        currentPositionY: w.currentPositionY,
+        currentPositionX: effectiveCurrentPositionX,
+        currentPositionY: effectiveCurrentPositionY,
         startX: startX,
         startY: startY,
         targetX: targetX,

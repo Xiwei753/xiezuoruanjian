@@ -23,6 +23,7 @@
 // 纯逻辑：不依赖 ArkUI、不 import .ets，生产由 Planner/Coordinator 调用，Node 单测直接 import。
 
 import type { LineLayout } from '../render/editor_render_geometry.ts'
+import { glyphRectForRange } from '../render/editor_render_geometry.ts'
 import type { LineRange } from '../render/editor_layout_math.ts'
 import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math.ts'
 import type { GlyphIdentityTable } from './editor_glyph_identity.ts'
@@ -441,15 +442,19 @@ function sourceGlyphGeometry(
   displayed: DisplayedContext,
   frozenByGlyphId: Map<string, FrozenWindowSpan>,
   glyphId: string
-): { x0: number, x1: number } | null {
+): { x0: number, x1: number, y0: number, height: number } | null {
+  // Issue #879 复核评论6083352210 问题4：用 glyphRectForRange 取得精确矩形，
+  // 确保 end offset 用 Upstream affinity 选行，并获取真实行高。
   // 1. 先查 displayed.identities
   const entry = displayed.identities === null
     ? null
     : displayed.identities.entryByGlyphId(glyphId)
   if (entry !== null) {
-    const x0 = xAtOffset(displayed.layout, entry.utf16Start, 0)
-    const x1 = xAtOffset(displayed.layout, entry.utf16End, x0)
-    return { x0, x1 }
+    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+    if (rect !== null) {
+      return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+    }
+    return null
   }
 
   // 2. ghost 字形：用窗口的 sourceLayout
@@ -457,9 +462,10 @@ function sourceGlyphGeometry(
   if (span !== undefined && span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
     const utf16Range = span.glyphUtf16Ranges.get(glyphId)
     if (utf16Range !== undefined) {
-      const x0 = xAtOffset(span.sourceLayout, utf16Range[0], 0)
-      const x1 = xAtOffset(span.sourceLayout, utf16Range[1], x0)
-      return { x0, x1 }
+      const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+      if (rect !== null) {
+        return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+      }
     }
   }
 
@@ -681,18 +687,25 @@ function clusterVisible(
   frozenByGlyphId: Map<string, FrozenWindowSpan>,
   glyphId: string
 ): OnScreenInterval | null {
+  // Issue #879 复核评论6083352210 问题4：用 glyphRectForRange 取得精确矩形，
+  // 确保 end offset 用 Upstream affinity 选行，并获取真实行高（替代硬编码 20）。
   // 1. 先查 displayed.identities
   const entry = displayed.identities === null
     ? null
     : displayed.identities.entryByGlyphId(glyphId)
   if (entry !== null) {
-    const x0 = xAtOffset(displayed.layout, entry.utf16Start, 0)
-    const x1 = xAtOffset(displayed.layout, entry.utf16End, x0)
-    const y0 = yAtOffset(displayed.layout, entry.utf16Start, 0)
+    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+    if (rect === null) {
+      return null
+    }
+    const x0 = rect.x
+    const x1 = rect.x + rect.width
+    const y0 = rect.y
+    const glyphHeight = rect.height
     const span = frozenByGlyphId.get(glyphId)
     if (span === undefined) {
       // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
-      return { left: x0, right: x1, top: y0, bottom: y0 + 20 }
+      return { left: x0, right: x1, top: y0, bottom: y0 + glyphHeight }
     }
     // 被运动窗口接管：可见区间 = 字形在屏区间 ∩ 窗口 clip
     const onScreenLeft = Math.max(x0 + span.offsetX, span.clipLeft)
@@ -704,7 +717,7 @@ function clusterVisible(
       left: onScreenLeft,
       right: onScreenRight,
       top: y0 + span.offsetY,
-      bottom: y0 + span.offsetY + 20,
+      bottom: y0 + span.offsetY + glyphHeight,
     }
   }
 
@@ -714,12 +727,14 @@ function clusterVisible(
     // ghost字形：该 glyphId 已从 displayed 正文删除，但冻结窗口仍在绘制它
     const utf16Range = span.glyphUtf16Ranges.get(glyphId)
     if (utf16Range !== undefined) {
-      // 用窗口的 sourceLayout 来获取字形在源修订正文中的像素位置
-      // （ghost字形不在 displayed 正文中，不能用 displayed.layout；
-      //   窗口的 sourceLayout 是窗口源文本的行布局，与 glyphUtf16Ranges 配合使用）
-      const x0 = xAtOffset(span.sourceLayout, utf16Range[0], 0)
-      const x1 = xAtOffset(span.sourceLayout, utf16Range[1], x0)
-      const y0 = yAtOffset(span.sourceLayout, utf16Range[0], 0)
+      const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+      if (rect === null) {
+        return null
+      }
+      const x0 = rect.x
+      const x1 = rect.x + rect.width
+      const y0 = rect.y
+      const glyphHeight = rect.height
       const onScreenLeft = Math.max(x0 + span.offsetX, span.clipLeft)
       const onScreenRight = Math.min(x1 + span.offsetX, span.clipRight)
       if (onScreenRight - onScreenLeft <= VISIBLE_EPSILON) {
@@ -729,7 +744,7 @@ function clusterVisible(
         left: onScreenLeft,
         right: onScreenRight,
         top: y0 + span.offsetY,
-        bottom: y0 + span.offsetY + 20,
+        bottom: y0 + span.offsetY + glyphHeight,
       }
     }
   }
