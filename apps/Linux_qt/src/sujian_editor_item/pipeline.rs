@@ -1695,6 +1695,14 @@ impl LinuxEditorPipeline {
                         .unwrap_or_else(|| OffsetMap::build(&motion.old_text, &motion.new_text)),
                     deleted_range_edges: motion.deleted_range_edges.clone(),
                     caret_motion: motion.old_cursor_rect.zip(motion.new_cursor_rect),
+                    caret_byte_offsets: motion.old_cursor_rect.zip(motion.new_cursor_rect).map(
+                        |_| {
+                            (
+                                motion.old_selection.head.index.value(),
+                                motion.new_selection.head.index.value(),
+                            )
+                        },
+                    ),
                     animate: text_animation_enabled,
                     now: edit_now,
                 });

@@ -559,6 +559,8 @@ pub struct SujianEditorItem {
 
 impl Default for SujianEditorItem {
     fn default() -> Self {
+        let pipeline = pipeline::LinuxEditorPipeline::new();
+        let frame_submission_mailbox = pipeline.animation_coordinator().frame_submission_mailbox();
         Self {
             base: Default::default(),
             plain_text: Default::default(),
@@ -651,7 +653,7 @@ impl Default for SujianEditorItem {
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
 
-            pipeline: pipeline::LinuxEditorPipeline::new(),
+            pipeline,
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
@@ -692,7 +694,7 @@ impl Default for SujianEditorItem {
             scene_dirty: true,
             last_committed_ownership_revision: 0,
             prepared_frame: None,
-            frame_submission_mailbox: Arc::default(),
+            frame_submission_mailbox,
             frame_window_connections: Rc::default(),
             window_changed_connection: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
