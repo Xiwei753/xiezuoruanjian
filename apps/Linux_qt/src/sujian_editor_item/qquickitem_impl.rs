@@ -7,6 +7,76 @@ use super::render_plan::{CursorStyle, SelectionPreeditStyle};
 use super::scene_graph_renderer::StaticTextParams;
 use std::time::Instant;
 
+cpp::cpp! {{
+    #include <qmetaobject_rust.hpp>
+    #include <QtQuick/QQuickItem>
+    #include <QtQuick/QQuickWindow>
+}}
+
+fn qquickitem_window_changed_signal() -> qmetaobject::Signal<fn(*mut std::ffi::c_void)> {
+    // SAFETY: QQuickItem::windowChanged has the exact signature void(QQuickWindow *).
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickItem::windowChanged;
+        }))
+    }
+}
+
+fn qquickwindow_after_synchronizing_signal() -> qmetaobject::Signal<fn()> {
+    // SAFETY: QQuickWindow::afterSynchronizing has the exact signature void().
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickWindow::afterSynchronizing;
+        }))
+    }
+}
+
+fn qquickwindow_after_frame_end_signal() -> qmetaobject::Signal<fn()> {
+    // SAFETY: QQuickWindow::afterFrameEnd has the exact signature void().
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickWindow::afterFrameEnd;
+        }))
+    }
+}
+
+fn bind_frame_submission_window(
+    window_ptr: *mut std::ffi::c_void,
+    connections: &std::rc::Rc<std::cell::RefCell<Vec<Box<dyn FnMut()>>>>,
+    mailbox: &std::sync::Arc<frame_submission::FrameSubmissionMailbox>,
+) {
+    let mut connections = connections.borrow_mut();
+    for disconnect in connections.iter_mut() {
+        disconnect();
+    }
+    connections.clear();
+    if window_ptr.is_null() {
+        return;
+    }
+
+    let sync_mailbox = std::sync::Arc::clone(mailbox);
+    // SAFETY: window_ptr is QQuickItem::window() (or its windowChanged argument), and
+    // both direct callbacks capture only the thread-safe mailbox; neither touches item state.
+    let mut after_synchronizing = unsafe {
+        qmetaobject::connect(
+            window_ptr,
+            qquickwindow_after_synchronizing_signal(),
+            move || sync_mailbox.after_synchronizing(),
+        )
+    };
+    let frame_mailbox = std::sync::Arc::clone(mailbox);
+    // SAFETY: Same live QQuickWindow pointer and zero-argument signal signature as above.
+    let mut after_frame_end = unsafe {
+        qmetaobject::connect(
+            window_ptr,
+            qquickwindow_after_frame_end_signal(),
+            move || frame_mailbox.after_frame_end(),
+        )
+    };
+    connections.push(Box::new(move || after_synchronizing.disconnect()));
+    connections.push(Box::new(move || after_frame_end.disconnect()));
+}
+
 impl QQuickItem for SujianEditorItem {
     fn component_complete(&mut self) {
         let obj_ptr = self.get_cpp_object();
@@ -16,6 +86,27 @@ impl QQuickItem for SujianEditorItem {
         let item_ptr = self as *mut Self as *mut std::ffi::c_void;
         input::install_event_filter(obj_ptr, item_ptr);
         self.pipeline.clipboard_adapter_mut().set_item_ptr(obj_ptr);
+
+        let connections = std::rc::Rc::clone(&self.frame_window_connections);
+        let mailbox = std::sync::Arc::clone(&self.frame_submission_mailbox);
+        // SAFETY: QQuickItem::windowChanged's pointer argument is passed as one pointer-sized
+        // value by Qt; this slot only uses it to bind that live window's frame signals.
+        let mut window_changed_connection = unsafe {
+            qmetaobject::connect(
+                obj_ptr,
+                qquickitem_window_changed_signal(),
+                move |window_ptr: &*mut std::ffi::c_void| {
+                    bind_frame_submission_window(*window_ptr, &connections, &mailbox);
+                },
+            )
+        };
+        self.window_changed_connection =
+            Some(Box::new(move || window_changed_connection.disconnect()));
+        bind_frame_submission_window(
+            rendering::qquickitem_window(obj_ptr),
+            &self.frame_window_connections,
+            &self.frame_submission_mailbox,
+        );
     }
 
     fn geometry_changed(&mut self, new_geometry: QRectF, old_geometry: QRectF) {
@@ -130,6 +221,14 @@ impl QQuickItem for SujianEditorItem {
         // 消除 GUI 线程 FrameAnimation tick 和 Scene Graph 渲染帧之间的采样偏差。
         let frame_now = frame_start;
         self.last_frame_now = Some(frame_now);
+
+        // Qt invokes this method during synchronization. Consume only acknowledgments that
+        // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
+        for ticket in self.frame_submission_mailbox.take_submitted_frames() {
+            self.pipeline
+                .animation_coordinator_mut()
+                .acknowledge_submitted_frame(ticket);
+        }
 
         // Issue #853：视觉光标的唯一 owner 是 cursor controller。
         // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
@@ -332,6 +431,17 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
+                if animation_resources_ready
+                    && !render_plan.ownership.handoff_pending
+                    && !render_plan.ownership.animated_glyphs.is_empty()
+                {
+                    if let Some(layout_revision) = render_plan.ownership.target_layout_revision {
+                        self.frame_submission_mailbox.publish_rendered_animation(
+                            render_plan.ownership.document_session,
+                            layout_revision,
+                        );
+                    }
+                }
                 if canonical_handoff_committed {
                     // renderer 已在同一次 update_paint_node 成功提交 canonical static
                     // 并清理 animation layer，现在才可释放旧文档/过渡的 QImage。

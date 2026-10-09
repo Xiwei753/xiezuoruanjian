@@ -3,6 +3,7 @@
 //! 每次编辑都丢弃上一份 transition，从最近成功提交的 VisualFrame 直接构造新目标。
 //! 不保存 burst、stage、travelling distance 或排队中的编辑历史。
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use writer_core::editor::OffsetMap;
@@ -157,8 +158,9 @@ pub(crate) struct VisualEditState {
     pub duration_ms: u64,
     pub input_interval_ms: u64,
     pub visual_lag_px: f64,
-    /// Fast-input transitions consume this budget only as frames are successfully committed.
+    /// Fast-input transitions consume this budget only after unique Qt frame submissions.
     presented_frame_count: u8,
+    presented_frame_ids: HashSet<u64>,
     minimum_presented_frames: u8,
     /// 终点帧已成功绘制；下一帧才可请求 Static ownership handoff。
     pub terminal_frame_committed: bool,
@@ -324,6 +326,12 @@ impl VisualEditState {
             for motion in &mut motions {
                 let line_id = match (&motion.source, &motion.target, motion.kind) {
                     (None, Some(target), MotionKind::Reveal) => Some(target.snapshot_id),
+                    (Some(source), Some(target), MotionKind::RevealFromCommittedSlice)
+                        if VisualLineIdentity::from(source.snapshot_id)
+                            == VisualLineIdentity::from(target.snapshot_id) =>
+                    {
+                        Some(target.snapshot_id)
+                    }
                     (Some(source), None, MotionKind::Delete(_)) => Some(source.snapshot_id),
                     _ => None,
                 };
@@ -362,6 +370,7 @@ impl VisualEditState {
             input_interval_ms,
             visual_lag_px,
             presented_frame_count: 0,
+            presented_frame_ids: HashSet::new(),
             minimum_presented_frames,
             terminal_frame_committed: false,
         }
@@ -395,11 +404,13 @@ impl VisualEditState {
         })
     }
 
-    pub(crate) fn commit_presented_frame(&mut self) {
-        self.presented_frame_count = self
-            .presented_frame_count
-            .saturating_add(1)
-            .min(self.minimum_presented_frames);
+    pub(crate) fn commit_submitted_frame(&mut self, frame_id: u64) {
+        if self.presented_frame_count >= self.minimum_presented_frames
+            || !self.presented_frame_ids.insert(frame_id)
+        {
+            return;
+        }
+        self.presented_frame_count = self.presented_frame_count.saturating_add(1);
     }
 
     pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
@@ -498,17 +509,38 @@ impl VisualEditState {
                     push_retiring_source_glyphs(motion, p, &mut glyphs);
                 }
                 MotionKind::RevealFromCommittedSlice => {
-                    terminal_frame &= p >= 1.0;
                     let (Some(source), Some(target)) = (&motion.source, &motion.target) else {
                         continue;
                     };
-                    let width = lerp(source.rect.w.min(target.rect.w), target.rect.w, p);
-                    let (target_slice, source_rect) = visible_slice(target, width);
+                    let start_width = source.rect.w.min(target.rect.w);
+                    let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
+                    let visible = if motion.terminal_geometry_committed {
+                        target.rect.w
+                    } else {
+                        match boundary {
+                            MotionBoundary::VisualCaret(caret_x) => start_width.max(
+                                reveal_width_to_caret_during_transition(source, target, caret_x, p)
+                                    .min(target.rect.w * presented_progress_limit),
+                            ),
+                            MotionBoundary::TextProgress => lerp(start_width, target.rect.w, p),
+                        }
+                    }
+                    .clamp(0.0, target.rect.w);
+                    let motion_terminal =
+                        motion.terminal_geometry_committed || visible >= target.rect.w - 1e-6;
+                    terminal_frame &= motion_terminal;
+                    if motion_terminal && !motion.terminal_geometry_committed {
+                        terminal_motion_indices.push(motion_index);
+                    }
+                    if visible <= 1e-6 || target.rect.h <= 1e-6 {
+                        continue;
+                    }
+                    let (target_slice, source_rect) = visible_slice(target, visible);
                     let mut start_rect = source.rect.clone();
                     if source.shaping_identity.direction_rtl {
-                        start_rect.x += (source.rect.w - width).max(0.0);
+                        start_rect.x += source.rect.w - visible;
                     }
-                    start_rect.w = width;
+                    start_rect.w = visible;
                     let rect = lerp_rect(&start_rect, &target_slice, p);
                     glyphs.push(RenderOwnershipPlan::glyph(
                         rect.x,
@@ -735,6 +767,32 @@ fn reveal_width_to_caret(target: &TargetCluster, caret_x: f64) -> f64 {
     width.clamp(0.0, target.rect.w)
 }
 
+fn reveal_width_to_caret_during_transition(
+    source: &VisualCluster,
+    target: &TargetCluster,
+    caret_x: f64,
+    p: f64,
+) -> f64 {
+    let rtl = target.shaping_identity.direction_rtl;
+    let source_edge = if rtl {
+        source.rect.x + source.rect.w
+    } else {
+        source.rect.x
+    };
+    let target_edge = if rtl {
+        target.rect.x + target.rect.w
+    } else {
+        target.rect.x
+    };
+    let moving_edge = lerp(source_edge, target_edge, p);
+    let width = if rtl {
+        moving_edge - caret_x
+    } else {
+        caret_x - moving_edge
+    };
+    width.clamp(0.0, target.rect.w)
+}
+
 fn delete_width_to_caret(source: &VisualCluster, delete_edge: DeleteEdge, caret_x: f64) -> f64 {
     let right = source.rect.x + source.rect.w;
     let width = if delete_retains_right_edge(delete_edge, source.shaping_identity.direction_rtl) {
@@ -907,7 +965,7 @@ fn catch_up_duration(base_ms: u64, input_interval_ms: u64, lag_px: f64) -> u64 {
     let lag_factor = (lag_px / 160.0).clamp(0.0, 3.0);
     let compression = 1.0 + velocity * (1.0 + lag_factor);
     // Wall-clock compression can finish before Qt presents another frame. Fast-input
-    // progress is therefore additionally capped by committed frame count above; this
+    // progress is therefore additionally capped by confirmed submitted frames above; this
     // duration is only the temporal envelope, not evidence that a transition was shown.
     ((cadence_ms as f64 / compression).round() as u64).clamp(1, base_ms)
 }

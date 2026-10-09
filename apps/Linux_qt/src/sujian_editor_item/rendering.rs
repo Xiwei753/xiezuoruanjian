@@ -7,6 +7,19 @@ use std::time::Instant;
 use super::cursor_controller::CursorUpdateResult;
 use super::SujianEditorItem;
 
+cpp::cpp! {{
+    #include <QtQuick/QQuickItem>
+    #include <QtQuick/QQuickWindow>
+}}
+
+/// Read the current scene-graph window for frame-submission signal binding.
+pub(crate) fn qquickitem_window(item_ptr: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    // SAFETY: Called on the GUI thread with the live QObject pointer of this QQuickItem.
+    cpp!(unsafe [item_ptr as "QQuickItem *"] -> *mut std::ffi::c_void as "QQuickWindow *" {
+        return item_ptr->window();
+    })
+}
+
 /// 光标动画状态。CursorController 覆盖最新目标，Scene Graph 用当前帧时间独立推进。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
