@@ -370,9 +370,13 @@ export interface MotionWindowSource {
   onWindowLayoutReady: ((renderNodeKey: string) => void) | null
   /**
    * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
-   * 父组件调用 motionSourcePool.releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver。
+   * 父组件调用 motionSourcePool.releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver，
+   * 同时调用 motionCoordinator.releaseWindowInstance(windowInstanceId) 释放窗口实例 ID。
+   *
+   * Issue #879 复核评论6077187962 问题4：新增 windowInstanceId 参数，
+   * 用于释放有限长度的窗口实例 ID（win-<number>），使编号可被重新分配。
    */
-  onWindowDisappear: ((renderNodeKey: string) => void) | null
+  onWindowDisappear: ((renderNodeKey: string, windowInstanceId: string) => void) | null
 }
 
 export interface MotionTextOverlayParams {
@@ -450,8 +454,10 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 // 父组件调用 releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver。
                 // Issue #879 本轮复核评论修复（问题2）：
                 // Text 从组件树移除时清理本窗口状态——用 renderNodeKey 作为窗口身份。
+                // Issue #879 复核评论6077187962 问题4：
+                // 同时传递 windowInstanceId，让父组件释放有限长度的窗口实例 ID。
                 if (item.onWindowDisappear !== null) {
-                  item.onWindowDisappear(item.window.renderNodeKey)
+                  item.onWindowDisappear(item.window.renderNodeKey, item.window.windowInstanceId)
                 }
               })
           }
@@ -469,10 +475,10 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
           // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。
           .opacity(item.visible ? 1 : 0)
         },
-        // Issue #879 复核评论问题4：ForEach key 使用 renderNodeKey，
-        // 它 = sourceKind + '-' + sourceRevision + '-' + windowId。
-        // windowId 由完整 glyphIds 序列派生（win-<len>-<fnv1a-hash>），
-        // 不同簇序列不会碰撞；切源时 sourceKind/sourceRevision 变化也创建新节点。
+        // Issue #879 复核评论6077187962 问题4：ForEach key 使用 renderNodeKey，
+        // 它 = sourceKind + '-' + sourceRevision + '-' + windowInstanceId。
+        // windowInstanceId 是有限长度的 win-<number>（由 WindowInstanceIdAllocator 分配），
+        // 不随 glyphIds 数量线性增长。windowId（算法身份）仍保留在数据结构中用于匹配/查找。
         (item: MotionWindowSource, index: number) => `${item.window.renderNodeKey}`
       )
     }

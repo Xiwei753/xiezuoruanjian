@@ -260,25 +260,40 @@ export interface MotionGlyphWindow {
    */
   glyphIds: string[]
   /**
-   * Issue #879 复核评论问题4：独立于字形单元身份的窗口身份（见 InsertRun.windowId）。
+   * Issue #879 复核评论6077187962 问题4：独立于字形单元身份的窗口身份（见 InsertRun.windowId）。
    *
    * 字形单元 id 是单个字符簇的身份；windowId 是"一整段文字裁切窗口"的身份，
    * 由覆盖的簇身份序列派生。窗口与上帧接续一律走 glyphIds 交集映射，
    * 本字段只描述窗口自身。
+   *
+   * windowId 的长度随 glyphIds 数量线性增长，不适合直接用作 ArkUI 节点 ID。
+   * 它保留在数据结构中作为算法内部的精确身份（用于匹配/查找）。
    */
   windowId: string
+  /**
+   * Issue #879 复核评论6077187962 问题4：有限长度的窗口实例 ID。
+   *
+   * 格式为 `win-<number>`（如 `win-0`, `win-1`），由 WindowInstanceIdAllocator 分配。
+   * 长度固定，不随 glyphIds 数量增长，专门用于 ArkUI 节点 ID / ForEach key /
+   * ComponentObserver 索引等渲染层场景。
+   *
+   * 同一 glyphIds 序列在活跃期间始终映射到同一个 windowInstanceId；
+   * 窗口释放后该 ID 可被重新分配给不同的 glyphIds。
+   */
+  windowInstanceId: string
   /**
    * 渲染节点身份标识——用于 ForEach key 和 TextController/窗口状态管理。
    *
    * Issue #879 本轮复核评论修复（问题2）：
-   * renderNodeKey = sourceKind + '-' + sourceRevision + '-' + windowId。
+   * renderNodeKey = sourceKind + '-' + sourceRevision + '-' + windowInstanceId。
    * 当字形源从 new-rN 变为 old-rN 时 renderNodeKey 改变——ForEach 创建新 Text 节点而非复用旧节点。
    * 这解决了"上一帧 new 字形变成下一笔 old 字形时 ForEach 复用同一 Text 节点，
    * 但源已从 new-rN 切换为 old-rN，onAppear 不再触发，节点仍画原先的 StyledString"的问题。
    *
-   * Issue #879 复核评论问题4：windowId 由完整 glyphIds 序列派生（win-<len>-<fnv1a-hash>），
-   * 不同簇序列不会碰撞；renderNodeKey 包含 sourceKind + sourceRevision + windowId,
-   * 切源或窗口内容变化时均创建新节点而非复用旧节点。
+   * Issue #879 复核评论6077187962 问题4：renderNodeKey 现在使用 windowInstanceId（win-<number>）
+   * 而非 windowId（长度随 glyphIds 线性增长）。windowInstanceId 是有限长度的，
+   * 保证 renderNodeKey 不随窗口覆盖的字符簇数量增长。
+   * windowId 仍保留在数据结构中作为算法内部的精确身份（用于匹配/查找）。
    */
   renderNodeKey: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */

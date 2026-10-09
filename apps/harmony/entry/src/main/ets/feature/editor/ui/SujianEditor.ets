@@ -418,6 +418,8 @@ export struct SujianEditor {
     this.candidateToken = null
     // Issue #879 复核评论修复（问题3）：清空运动源池。
     this.motionSourcePool.clear()
+    // Issue #879 复核评论6077187962 问题4：清空窗口实例 ID 映射。
+    this.motionCoordinator.clearWindowInstances()
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
     this.cleanupAllWindowsObservers()
     this.pendingFirstCaretRect = null
@@ -719,6 +721,8 @@ export struct SujianEditor {
       this.pendingLayoutRequest = null
       // Issue #879 复核评论修复（问题3）：清空运动源池。
       this.motionSourcePool.clear()
+      // Issue #879 复核评论6077187962 问题4：清空窗口实例 ID 映射。
+      this.motionCoordinator.clearWindowInstances()
       // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver 和回调。
       this.cleanupAllWindowsObservers()
       this.pendingFirstCaretRect = null
@@ -1221,9 +1225,11 @@ export struct SujianEditor {
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
           },
-          onWindowDisappear: (rnKey: string): void => {
+          onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
             this.motionSourcePool.releaseWindowState(rnKey)
+            // Issue #879 复核评论6077187962 问题4：释放窗口实例 ID，使编号可被重新分配。
+            this.motionCoordinator.releaseWindowInstance(winInstanceId)
           }
         })
       }
@@ -1257,9 +1263,11 @@ export struct SujianEditor {
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
           },
-          onWindowDisappear: (rnKey: string): void => {
+          onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
             this.motionSourcePool.releaseWindowState(rnKey)
+            // Issue #879 复核评论6077187962 问题4：释放窗口实例 ID，使编号可被重新分配。
+            this.motionCoordinator.releaseWindowInstance(winInstanceId)
           }
         })
       }

@@ -32,7 +32,7 @@ import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, Re
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
-import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
@@ -337,7 +337,9 @@ export class EditorMotionPlanner {
       text: oldText,
       layout: oldLayout,
       identities: oldIdentities,
-      frozenWindows: EditorMotionPlanner.frozenWindowSpans(lastVisibleFrame)
+      frozenWindows: EditorMotionPlanner.frozenWindowSpans(
+        lastVisibleFrame, oldText, oldLayout, newText, newLayout
+      )
     }
 
     // 收集多通道
@@ -543,13 +545,29 @@ export class EditorMotionPlanner {
    * 只带出「可见性判定」需要的字段：字形身份列表 + 当前裁切区间 + 字形基准 x。
    * 不做匹配、不取窗口整体裁切范围——交给 editor_commit_start 按字形逐个判定。
    */
-  private static frozenWindowSpans(frame: EditorVisualFrame): FrozenWindowSpan[] {
+  private static frozenWindowSpans(
+    frame: EditorVisualFrame,
+    oldText: string,
+    oldLayout: LineLayout[],
+    newText: string,
+    newLayout: LineLayout[]
+  ): FrozenWindowSpan[] {
     const spans: FrozenWindowSpan[] = []
     if (!frame.isAnimating) {
       // 旧动画已结束：屏幕上没有运动窗口，displayed 正文全部静态可见。
       return spans
     }
     for (const w of frame.motionGlyphWindows) {
+      // 根据 sourceKind 选择对应的源文本和源布局
+      const sourceText = w.sourceKind === 'old' ? oldText : newText
+      const sourceLayout = w.sourceKind === 'old' ? oldLayout : newLayout
+
+      // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
+      // 再与 glyphIds 一一对应，构建 glyphUtf16Ranges。
+      const glyphUtf16Ranges = EditorMotionPlanner.buildGlyphUtf16Ranges(
+        w.glyphIds, w.utf16Start, w.utf16End, sourceText
+      )
+
       spans.push({
         glyphIds: w.glyphIds,
         clipLeft: w.currentClipLeft,
@@ -557,10 +575,40 @@ export class EditorMotionPlanner {
         // 吐字/吞字窗口 offsetX 为 0（clip 只表达可见范围）；
         // 保留字平移窗口 offsetX = 当前位置 - 布局位置（clip 即平移后的位置）。
         offsetX: w.offsetX,
-        offsetY: w.offsetY
+        offsetY: w.offsetY,
+        sourceRevision: w.sourceRevision,
+        glyphUtf16Ranges: glyphUtf16Ranges,
+        sourceLayout: sourceLayout
       })
     }
     return spans
+  }
+
+  /**
+   * 为 FrozenWindowSpan 的 glyphUtf16Ranges 字段构建映射。
+   * 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
+   * 再与 glyphIds 一一对应：glyphIds[i] → [boundaries[i], boundaries[i+1]]。
+   */
+  private static buildGlyphUtf16Ranges(
+    glyphIds: string[],
+    utf16Start: number,
+    utf16End: number,
+    sourceText: string
+  ): Map<string, [number, number]> | null {
+    if (glyphIds.length === 0) {
+      return null
+    }
+    const boundaries = clusterBoundaries(sourceText, utf16Start, utf16End)
+    // 簇数 = boundaries.length - 1，应与 glyphIds.length 一致
+    if (boundaries.length !== glyphIds.length + 1) {
+      // 簇数与身份数对不上——返回 null 表示窗口不提供此映射
+      return null
+    }
+    const ranges: Map<string, [number, number]> = new Map()
+    for (let i = 0; i < glyphIds.length; i++) {
+      ranges.set(glyphIds[i], [boundaries[i], boundaries[i + 1]])
+    }
+    return ranges
   }
 
   /**

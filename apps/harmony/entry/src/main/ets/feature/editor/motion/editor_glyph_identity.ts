@@ -151,6 +151,121 @@ export function clusterBoundaries(text: string, utf16Start: number, utf16End: nu
 }
 
 /**
+ * Issue #879 复核评论6077187962 问题4：窗口实例 ID 分配器。
+ *
+ * `windowIdForGlyphIds()` 的输出长度随 glyphIds 数量线性增长，不适合直接用作
+ * ArkUI ForEach key / 组件 .id() / ComponentObserver 索引——长 key 影响渲染性能，
+ * 也让调试日志难以阅读。
+ *
+ * 本分配器把完整身份序列留在算法内部（`windowIdForGlyphIds()` 不变），
+ * 为 ArkUI 节点分配独立的有限长度 `win-<number>` 格式 ID。
+ *
+ * - `allocate(glyphIds)` —— 给定 glyphIds，返回对应的 `win-<number>`（已存在则复用）
+ * - `resolve(windowInstanceId)` —— 给定 instanceId，返回对应的 glyphIds（调试/日志用）
+ * - `release(windowInstanceId)` —— 释放一个 instanceId（窗口不再需要时）
+ * - `releaseByWindowId(windowId)` —— 通过算法身份释放
+ *
+ * 释放后的 instanceId 可以被重新分配（但同一时间不能有两个相同 instanceId 的活跃窗口）。
+ *
+ * 纯逻辑：不依赖 ArkUI，可被 Node 单测直接 import。
+ */
+export class WindowInstanceIdAllocator {
+  /** 下一个待分配的编号 */
+  private nextId: number = 0
+  /** windowIdForGlyphIds() 结果 → windowInstanceId 的映射 */
+  private windowIdToInstanceId: Map<string, string> = new Map()
+  /** windowInstanceId → windowIdForGlyphIds() 结果 的反向映射 */
+  private instanceIdToWindowId: Map<string, string> = new Map()
+  /** windowInstanceId → glyphIds 的反向映射（调试/日志用） */
+  private instanceIdToGlyphIds: Map<string, string[]> = new Map()
+  /** 已释放的 instanceId 列表——可复用以避免编号无限增长 */
+  private releasedIds: string[] = []
+
+  /**
+   * 给定 glyphIds，返回对应的 `win-<number>` 格式 instanceId。
+   *
+   * 已存在（同一 glyphIds 序列）则复用，不存在则新建。
+   * 释放后的 instanceId 可被重新分配给不同的 glyphIds。
+   *
+   * @param glyphIds 字形身份列表（非空）
+   * @returns `win-<number>` 格式的有限长度 ID
+   */
+  allocate(glyphIds: string[]): string {
+    const windowId = windowIdForGlyphIds(glyphIds)
+    const existing = this.windowIdToInstanceId.get(windowId)
+    if (existing !== undefined) {
+      return existing
+    }
+    // 优先复用已释放的 ID，避免编号无限增长
+    let instanceId: string
+    if (this.releasedIds.length > 0) {
+      instanceId = this.releasedIds.pop()!
+    } else {
+      instanceId = `win-${this.nextId++}`
+    }
+    this.windowIdToInstanceId.set(windowId, instanceId)
+    this.instanceIdToWindowId.set(instanceId, windowId)
+    this.instanceIdToGlyphIds.set(instanceId, glyphIds)
+    return instanceId
+  }
+
+  /**
+   * 给定 instanceId，返回对应的 glyphIds（调试/日志用）。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   * @returns 对应的 glyphIds，或 null（不存在或已释放）
+   */
+  resolve(windowInstanceId: string): string[] | null {
+    const glyphIds = this.instanceIdToGlyphIds.get(windowInstanceId)
+    if (glyphIds !== undefined) {
+      return glyphIds
+    }
+    return null
+  }
+
+  /**
+   * 释放一个 instanceId（窗口不再需要时）。
+   *
+   * 释放后该 instanceId 可被重新分配给不同的 glyphIds。
+   * 同一时间不会有两个相同 instanceId 的活跃窗口。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  release(windowInstanceId: string): void {
+    const windowId = this.instanceIdToWindowId.get(windowInstanceId)
+    if (windowId !== undefined) {
+      this.windowIdToInstanceId.delete(windowId)
+      this.instanceIdToWindowId.delete(windowInstanceId)
+      this.instanceIdToGlyphIds.delete(windowInstanceId)
+      this.releasedIds.push(windowInstanceId)
+    }
+  }
+
+  /**
+   * 通过算法身份（windowIdForGlyphIds() 的结果）释放。
+   *
+   * @param windowId `windowIdForGlyphIds()` 的输出
+   */
+  releaseByWindowId(windowId: string): void {
+    const instanceId = this.windowIdToInstanceId.get(windowId)
+    if (instanceId !== undefined) {
+      this.release(instanceId)
+    }
+  }
+
+  /**
+   * 清空所有映射和已释放 ID——编辑器重置/会话切换时调用。
+   */
+  clear(): void {
+    this.nextId = 0
+    this.windowIdToInstanceId.clear()
+    this.instanceIdToWindowId.clear()
+    this.instanceIdToGlyphIds.clear()
+    this.releasedIds = []
+  }
+}
+
+/**
  * 稳定字形身份表。
  *
  * 一张表描述一个 revision 的完整文本：条目按位置升序、首尾相接覆盖 [0, text.length)。

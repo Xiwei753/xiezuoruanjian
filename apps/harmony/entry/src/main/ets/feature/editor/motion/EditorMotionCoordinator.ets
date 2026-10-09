@@ -44,7 +44,7 @@ import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/d
 import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
 import type { GlyphCarryPatch } from './editor_patch_carry'
 import { applyPatchesToText } from './editor_patch_carry'
-import { GlyphIdentityTable } from './editor_glyph_identity'
+import { GlyphIdentityTable, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
@@ -196,6 +196,14 @@ export class EditorMotionCoordinator {
    * 而不是按「位置 + 内容」。
    */
   private glyphIdentities: GlyphIdentityTable | null
+  /**
+   * Issue #879 复核评论6077187962 问题4：窗口实例 ID 分配器。
+   *
+   * 为 ArkUI 节点分配有限长度的 `win-<number>` 格式 ID，
+   * 替代随 glyphIds 数量线性增长的 windowId 作为渲染节点 ID。
+   * 完整身份序列（windowIdForGlyphIds() 的结果）留在算法内部用于匹配/查找。
+   */
+  private windowIdAllocator: WindowInstanceIdAllocator
 
   constructor() {
     this.currentFrame = {
@@ -224,6 +232,7 @@ export class EditorMotionCoordinator {
     this.motionDurationMs = 0
     this.firstCaretRect = null
     this.glyphIdentities = null
+    this.windowIdAllocator = new WindowInstanceIdAllocator()
     this.currentPlan = {
       insertRuns: [],
       deletedRuns: [],
@@ -464,7 +473,8 @@ export class EditorMotionCoordinator {
       prepared.state.newSnapshot,
       prepared.state.newLayout,
       latestDisplayedFrame,
-      0
+      0,
+      this.windowIdAllocator
     )
 
     // 创建新的 state（复制旧 state，替换 plan 和 frame）
@@ -636,7 +646,8 @@ export class EditorMotionCoordinator {
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
-          plan, oldSnapshot, newSnapshot, newLayout, startFrame, 0
+          plan, oldSnapshot, newSnapshot, newLayout, startFrame, 0,
+          this.windowIdAllocator
         )
       : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
 
@@ -853,7 +864,8 @@ export class EditorMotionCoordinator {
       this.newSnapshot,
       this.newLayout,
       this.currentFrame,
-      progress
+      progress,
+      this.windowIdAllocator
     )
   }
 
@@ -871,6 +883,11 @@ export class EditorMotionCoordinator {
    * Issue #879 复核评论问题4：窗口身份与字形身份分开——renderNodeKey 用 plan 计算出的
    * windowId（窗口身份），跨帧接续用窗口的 glyphIds（字形单元身份）交集，
    * 不再用 utf16 区间 + 文本 hash 现场重算，也不拿窗口首字形代表整窗口。
+   *
+   * Issue #879 复核评论6077187962 问题4：renderNodeKey 改用 windowInstanceId（win-<number>）
+   * 替代 windowId（长度随 glyphIds 线性增长）。windowInstanceId 由 WindowInstanceIdAllocator
+   * 分配，同一 glyphIds 序列在活跃期间始终映射到同一个 windowInstanceId。
+   * windowId 仍保留在 MotionGlyphWindow 中作为算法内部的精确身份。
    */
   private static buildFrame(
     plan: EditorMotionPlan,
@@ -878,7 +895,8 @@ export class EditorMotionCoordinator {
     newSnapshot: EditorLayoutSnapshot | null,
     newLayout: LineLayout[],
     caretBase: EditorVisualFrame,
-    progress: number
+    progress: number,
+    allocator: WindowInstanceIdAllocator
   ): EditorVisualFrame {
     const newRevision = newSnapshot?.revision ?? 0
     const newText = newSnapshot?.text ?? ''
@@ -908,6 +926,9 @@ export class EditorMotionCoordinator {
       const targetRight = run.rect.x + run.rect.width
       const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
       const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
+      // Issue #879 复核评论6077187962 问题4：windowInstanceId 由分配器分配（win-<number>），
+      // renderNodeKey 使用 windowInstanceId 而非 windowId，保证有限长度。
+      const windowInstanceId = allocator.allocate(run.glyphIds)
       motionGlyphWindows.push({
         sourceKind: 'new',
         utf16Start: run.utf16Start,
@@ -924,11 +945,10 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        // Issue #879 复核评论问题4：窗口身份用 windowId（独立于单字形身份），
-        // glyphIds 用于与上一帧按幸存字形身份交集接续。
         glyphIds: run.glyphIds,
         windowId: run.windowId,
-        renderNodeKey: `new-${newRevision}-${run.windowId}`,
+        windowInstanceId: windowInstanceId,
+        renderNodeKey: `new-${newRevision}-${windowInstanceId}`,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: run.rect.x,
@@ -949,6 +969,7 @@ export class EditorMotionCoordinator {
         const targetRight = caretX
         const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
         const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
+        const windowInstanceId = allocator.allocate(run.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -965,10 +986,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
           glyphIds: run.glyphIds,
           windowId: run.windowId,
-          renderNodeKey: `old-${oldRevision}-${run.windowId}`,
+          windowInstanceId: windowInstanceId,
+          renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -980,6 +1001,7 @@ export class EditorMotionCoordinator {
         const targetRight = run.rect.x
         const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
         const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
+        const windowInstanceId = allocator.allocate(run.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -996,10 +1018,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
           glyphIds: run.glyphIds,
           windowId: run.windowId,
-          renderNodeKey: `old-${oldRevision}-${run.windowId}`,
+          windowInstanceId: windowInstanceId,
+          renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -1015,6 +1037,7 @@ export class EditorMotionCoordinator {
     for (const move of plan.retainedMoves) {
       const currentX = move.startPositionX + (move.newRect.x - move.startPositionX) * p
       const currentY = move.startPositionY + (move.newRect.y - move.startPositionY) * p
+      const windowInstanceId = allocator.allocate(move.glyphIds)
       motionGlyphWindows.push({
         sourceKind: 'old',
         utf16Start: move.oldUtf16Start,
@@ -1031,10 +1054,10 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
         glyphIds: move.glyphIds,
         windowId: move.windowId,
-        renderNodeKey: `old-${oldRevision}-${move.windowId}`,
+        windowInstanceId: windowInstanceId,
+        renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
         currentPositionX: currentX,
@@ -1121,12 +1144,25 @@ export class EditorMotionCoordinator {
     }
     const frozenWindows: FrozenWindowSpan[] = []
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
+      // 根据 sourceKind 选择对应的源文本和源布局
+      const sourceText = w.sourceKind === 'old' ? displayed.snapshot.text : prepared.state.newSnapshot.text
+      const sourceLayout = w.sourceKind === 'old' ? displayed.layout : prepared.state.newLayout
+
+      // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
+      // 再与 glyphIds 一一对应，构建 glyphUtf16Ranges。
+      const glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
+        w.glyphIds, w.utf16Start, w.utf16End, sourceText
+      )
+
       frozenWindows.push({
         glyphIds: w.glyphIds,
         clipLeft: w.currentClipLeft,
         clipRight: w.currentClipRight,
         offsetX: w.offsetX,
-        offsetY: w.offsetY
+        offsetY: w.offsetY,
+        sourceRevision: w.sourceRevision,
+        glyphUtf16Ranges: glyphUtf16Ranges,
+        sourceLayout: sourceLayout
       })
     }
     return {
@@ -1135,6 +1171,33 @@ export class EditorMotionCoordinator {
       identities: displayed.identities,
       frozenWindows: frozenWindows
     }
+  }
+
+  /**
+   * 为 FrozenWindowSpan 的 glyphUtf16Ranges 字段构建映射。
+   * 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
+   * 再与 glyphIds 一一对应：glyphIds[i] → [boundaries[i], boundaries[i+1]]。
+   */
+  private static buildGlyphUtf16Ranges(
+    glyphIds: string[],
+    utf16Start: number,
+    utf16End: number,
+    sourceText: string
+  ): Map<string, [number, number]> | null {
+    if (glyphIds.length === 0) {
+      return null
+    }
+    const boundaries = clusterBoundaries(sourceText, utf16Start, utf16End)
+    // 簇数 = boundaries.length - 1，应与 glyphIds.length 一致
+    if (boundaries.length !== glyphIds.length + 1) {
+      // 簇数与身份数对不上——返回 null 表示窗口不提供此映射
+      return null
+    }
+    const ranges: Map<string, [number, number]> = new Map()
+    for (let i = 0; i < glyphIds.length; i++) {
+      ranges.set(glyphIds[i], [boundaries[i], boundaries[i + 1]])
+    }
+    return ranges
   }
 
   /**
@@ -1430,5 +1493,26 @@ export class EditorMotionCoordinator {
       }
     }
     return result
+  }
+
+  /**
+   * Issue #879 复核评论6077187962 问题4：释放窗口实例 ID。
+   *
+   * 当窗口不再需要（Text.onDisAppear）时调用，释放 windowInstanceId
+   * 使其可被重新分配。同一时间不会有两个相同 instanceId 的活跃窗口。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  releaseWindowInstance(windowInstanceId: string): void {
+    this.windowIdAllocator.release(windowInstanceId)
+  }
+
+  /**
+   * Issue #879 复核评论6077187962 问题4：清空所有窗口实例 ID 映射。
+   *
+   * 会话切换或编辑器重置时调用。
+   */
+  clearWindowInstances(): void {
+    this.windowIdAllocator.clear()
   }
 }
