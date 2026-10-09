@@ -66,6 +66,8 @@ export interface PreparedCandidate {
   readonly startFrame: EditorVisualFrame
   /** 候选提交状态——commitCandidate 一次性安装（内部数据，UI 不要读） */
   readonly state: MotionCommittedState
+  /** 问题3：稳定的物理 key 集合——retargetCandidate 保留这些 key，只更新几何采样 */
+  readonly stableWindowKeys?: string[]
 }
 
 /**
@@ -367,10 +369,18 @@ export class EditorMotionCoordinator {
       contentWidth, policy, displayedFrame, firstCaretRect,
       sessionId
     )
+    // 问题3：提取稳定的物理 key 集合（基于 plan 的 runs，不是基于可见性）
+    const stableWindowKeys: string[] = []
+    if (state.frame.isAnimating) {
+      for (let i = 0; i < state.frame.motionGlyphWindows.length; i++) {
+        stableWindowKeys.push(state.frame.motionGlyphWindows[i].renderNodeKey)
+      }
+    }
     return {
       plan: state.plan,
       startFrame: state.frame,
-      state: state
+      state: state,
+      stableWindowKeys: stableWindowKeys
     }
   }
 
@@ -447,6 +457,9 @@ export class EditorMotionCoordinator {
       // 没有 animator 会推进它，主 Text 会停在半裁切状态。
       return prepared
     }
+    // 问题3：保留 prepareCandidate 时确定的稳定物理 key 集合
+    const stableWindowKeys = prepared.stableWindowKeys ?? EditorMotionCoordinator.extractWindowKeys(prepared.startFrame)
+
     // Issue #879 复核评论6075662695问题3：起始状态改为**按字形重算**——
     // 由 editor_commit_start 逐个 glyphId 判断它此刻在屏可见不可见、在哪里，
     // 再把可见段换算成 run 自己布局里的 startClip/startPosition。
@@ -677,8 +690,22 @@ export class EditorMotionCoordinator {
     return {
       plan: newPlan,
       startFrame: newStartFrame,
-      state: newState
+      state: newState,
+      stableWindowKeys: stableWindowKeys
     }
+  }
+
+  /**
+   * 问题3：从帧中提取所有运动窗口的 renderNodeKey
+   */
+  private static extractWindowKeys(frame: EditorVisualFrame): string[] {
+    const keys: string[] = []
+    if (frame.isAnimating) {
+      for (let i = 0; i < frame.motionGlyphWindows.length; i++) {
+        keys.push(frame.motionGlyphWindows[i].renderNodeKey)
+      }
+    }
+    return keys
   }
 
   /**

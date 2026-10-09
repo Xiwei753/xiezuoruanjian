@@ -62,21 +62,18 @@ export interface MotionWindowState {
   /** 本窗口的布局是否已完成（ComponentObserver 'layout' 回调已触发） */
   layoutReady: boolean
   /**
-   * Issue #879 评论6086564975 问题1：displayed owner 引用计数。
+   * Issue #879 评论6087544240 问题1：逻辑 owner 集合（幂等管理）。
    *
-   * buildMotionWindowSources 中每个窗口调 acquireWindowState(key, 'displayed') 递增，
-   * onWindowDisappear 中调 releaseWindowState(key, 'displayed') 递减。
-   * 只有 displayedRefCount 和 candidateRefCount 都归 0 才真正删除 windowState——
-   * 避免 displayed 窗口消失时把 candidate 仍需引用的共享窗口状态一起删掉。
-   */
-  displayedRefCount: number
-  /**
-   * Issue #879 评论6086564975 问题1：candidate owner 引用计数。
+   * 元素为 'displayed' 或 'candidate'，由 reconcileWindowOwners 一次性设置。
+   * 旧实现用 displayedRefCount/candidateRefCount 在 build 阶段逐次 ++，
+   * 但 build() 在 ArkUI 构建/重绘阶段被反复调用（动画逐帧、光标移动、候选切换），
+   * 同一物理 Text 从头到尾只创建/销毁一次，计数可能从 1 累加到上千，
+   * 结束时仅减 1，永远不会删掉 windowState。
    *
-   * buildCandidateMotionWindowSources 中每个窗口调 acquireWindowState(key, 'candidate') 递增，
-   * onWindowDisappear 中调 releaseWindowState(key, 'candidate') 递减。
+   * 改用 Set<string> 后，reconcileWindowOwners 对同一集合应用任意次结果不变（幂等），
+   * owner 集合为空且 mounted === false（物理节点已卸载）时才删除 windowState。
    */
-  candidateRefCount: number
+  owners: Set<string>
 }
 
 /**
@@ -110,14 +107,15 @@ export interface MotionSourceRoots {
  * - 同一 revision 的多个窗口共享同一个 source 的 StyledString，但各自有独立的窗口状态
  *
  * 使用方式：
- * 1. 运动开始时，调用 getOrCreateSource 获取或创建 old/new 源（可共享内容）。
- * 2. 为每个运动窗口调用 getOrCreateWindowState 获取或创建窗口级状态。
- * 3. ForEach key 使用 renderNodeKey（稳定身份），确保同一窗口的 Text 常驻不重建。
- * 4. Text.onAppear 中调用 markWindowMounted 标记本窗口已挂载。
- * 5. ComponentObserver 'layout' 回调中调用 markWindowLayoutReady 标记本窗口布局完成。
- * 6. 每轮按存活根集合 releaseUnusedSources 释放没人引用的源。
- * 7. Text.onDisAppear 中调用 releaseWindowState 清理本窗口状态。
- */
+  * 1. 运动开始时，调用 getOrCreateSource 获取或创建 old/new 源（可共享内容）。
+  * 2. 为每个运动窗口调用 getOrCreateWindowState 获取或创建窗口级状态。
+  * 3. ForEach key 使用 renderNodeKey（稳定身份），确保同一窗口的 Text 常驻不重建。
+  * 4. Text.onAppear 中调用 markWindowMounted 标记本窗口已挂载。
+  * 5. ComponentObserver 'layout' 回调中调用 markWindowLayoutReady 标记本窗口布局完成。
+  * 6. 每轮按存活根集合 releaseUnusedSources 释放没人引用的源。
+  * 7. prepareMotionSources 中调用 reconcileWindowOwners 幂等对齐 owner 集合。
+  * 8. Text.onDisAppear 中调用 markWindowUnmounted 标记物理卸载（不删除状态）。
+  */
 export class EditorMotionSourcePool {
   /** 可共享的源内容——按 runId（sourceKind + revision）管理 */
   private sources: Map<string, MotionSourceEntry> = new Map()
@@ -261,10 +259,9 @@ export class EditorMotionSourcePool {
       textController: new TextController(),
       mounted: false,
       layoutReady: false,
-      // Issue #879 评论6086564975 问题1：双 owner 引用计数初始化为 0。
-      // acquireWindowState 时递增，releaseWindowState 时递减。
-      displayedRefCount: 0,
-      candidateRefCount: 0
+      // Issue #879 评论6087544240 问题1：owners 集合由 reconcileWindowOwners 幂等管理，
+      // 不再在 build 阶段逐次 ++ 引用计数。
+      owners: new Set<string>()
     }
     this.windowStates.set(renderNodeKey, state)
     return state
@@ -332,54 +329,85 @@ export class EditorMotionSourcePool {
   }
 
   /**
-   * Issue #879 评论6086564975 问题1：获取窗口状态引用（递增 owner 引用计数）。
+   * Issue #879 评论6087544240 问题1：幂等对齐窗口逻辑 owner 集合。
    *
-   * buildMotionWindowSources 中对每个窗口调 acquireWindowState(key, 'displayed')，
-   * buildCandidateMotionWindowSources 中对每个窗口调 acquireWindowState(key, 'candidate')。
-   * 同一 renderNodeKey 被 displayed 和 candidate 同时引用时两个计数各自独立递增，
-   * 只有都归 0 才真正删除 windowState。
+   * 旧实现用 acquireWindowState/releaseWindowState 在 build 阶段逐次 ++/-- 引用计数，
+   * 但 build() 在 ArkUI 构建/重绘阶段被反复调用（动画逐帧、光标移动、候选切换），
+   * 同一物理 Text 从头到尾只创建/销毁一次，计数可能从 1 累加到上千，结束时仅减 1，
+   * 永远不会删掉 MotionWindowState。
    *
-   * @param renderNodeKey 窗口渲染节点身份标识
-   * @param owner 引用方——'displayed' 或 'candidate'
+   * 改法：build() 只做声明式状态投影，不执行修改引用计数的副作用。
+   * 由 prepareMotionSources 在每次候选准备时一次性调用 reconcileWindowOwners，
+   * 传入当前 displayed 帧和 candidate 帧的所有窗口 renderNodeKey：
+   * - 对每个 key 调 getOrCreateWindowState 确保存在；
+   * - 对 displayedKeys 中的 key，添加 'displayed' 到 owners；
+   * - 对 candidateKeys 中的 key，添加 'candidate' 到 owners；
+   * - 对不在 displayedKeys 中的已有 key，从 owners 中删除 'displayed'；
+   * - 对不在 candidateKeys 中的已有 key，从 owners 中删除 'candidate'；
+   * - owner 集合为空且 mounted === false（物理节点已卸载）时才删除 windowState。
+   *
+   * **关键**：同样的集合被应用任意次，结果不变（幂等）。
+   *
+   * Issue #879 评论6087544240 问题2：共享 key 的 candidate 被去重后没有自己的 onDisappear，
+   * 双 owner 计数不可能对称归还。改用集合差集更新 owner 后，
+   * 取消候选（candidateVisualFrame = null）时不清理仍被 displayed 使用的 TextController/observer——
+   * candidate owner 退出，displayed owner 仍在则保留。
+   *
+   * @param displayedKeys displayed 帧所有窗口的 renderNodeKey
+   * @param candidateKeys candidate 帧所有窗口的 renderNodeKey
    */
-  acquireWindowState(renderNodeKey: string, owner: 'displayed' | 'candidate'): void {
-    const state = this.getOrCreateWindowState(renderNodeKey)
-    if (owner === 'displayed') {
-      state.displayedRefCount++
-    } else {
-      state.candidateRefCount++
+  reconcileWindowOwners(displayedKeys: string[], candidateKeys: string[]): void {
+    const displayedSet: Set<string> = new Set(displayedKeys)
+    const candidateSet: Set<string> = new Set(candidateKeys)
+
+    // 确保所有 key 的 windowState 存在
+    for (let i = 0; i < displayedKeys.length; i++) {
+      this.getOrCreateWindowState(displayedKeys[i])
+    }
+    for (let i = 0; i < candidateKeys.length; i++) {
+      this.getOrCreateWindowState(candidateKeys[i])
+    }
+
+    // 对每个已有 windowState，按集合差集更新 owner
+    const toDelete: string[] = []
+    this.windowStates.forEach((state: MotionWindowState, key: string) => {
+      if (displayedSet.has(key)) {
+        state.owners.add('displayed')
+      } else {
+        state.owners.delete('displayed')
+      }
+      if (candidateSet.has(key)) {
+        state.owners.add('candidate')
+      } else {
+        state.owners.delete('candidate')
+      }
+      // owner 集合为空且物理节点已卸载才删除 windowState。
+      // mounted === true 时即使 owner 集合为空也保留——等 onDisAppear 标记 mounted=false 后下一轮再清。
+      if (state.owners.size === 0 && !state.mounted) {
+        toDelete.push(key)
+      }
+    })
+    for (let i = 0; i < toDelete.length; i++) {
+      this.windowStates.delete(toDelete[i])
     }
   }
 
   /**
-   * 释放本窗口状态。
+   * Issue #879 评论6087544240 问题1+2：标记窗口物理卸载。
    *
-   * Issue #879 评论6086564975 问题1：改为双 owner 引用计数。
-   * Text.onDisAppear 中调用——递减对应 owner 的引用计数，
-   * 只有 displayedRefCount 和 candidateRefCount 都归 0 才真正删除 windowState。
-   * 这样 displayed 窗口消失时不会把 candidate 仍需引用的共享窗口状态一起删掉。
+   * Text.onDisAppear 中调用——只标记 mounted = false，不删除 windowState。
+   * windowState 的删除由 reconcileWindowOwners 负责（owner 集合为空且 mounted === false）。
+   *
+   * 旧实现 releaseWindowState 递减 owner 引用计数，但共享 key 的 candidate 被去重后
+   * 没有自己的 onDisappear，双 owner 计数不可能对称归还。改为只标记物理卸载，
+   * owner 集合由 reconcileWindowOwners 统一管理。
    *
    * @param renderNodeKey 窗口渲染节点身份标识
-   * @param owner 引用方——'displayed' 或 'candidate'
    */
-  releaseWindowState(renderNodeKey: string, owner: 'displayed' | 'candidate'): void {
+  markWindowUnmounted(renderNodeKey: string): void {
     const state = this.windowStates.get(renderNodeKey)
-    if (state === undefined) {
-      return
-    }
-    if (owner === 'displayed') {
-      if (state.displayedRefCount > 0) {
-        state.displayedRefCount--
-      }
-    } else {
-      if (state.candidateRefCount > 0) {
-        state.candidateRefCount--
-      }
-    }
-    // 只有两个计数都归 0 才真正删除——
-    // 避免 displayed 窗口消失时把 candidate 仍需引用的共享窗口状态一起删掉。
-    if (state.displayedRefCount === 0 && state.candidateRefCount === 0) {
-      this.windowStates.delete(renderNodeKey)
+    if (state !== undefined) {
+      state.mounted = false
     }
   }
 

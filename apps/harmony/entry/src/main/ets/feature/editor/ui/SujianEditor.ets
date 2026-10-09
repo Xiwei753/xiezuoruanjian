@@ -1139,12 +1139,13 @@ export struct SujianEditor {
     }
 
     // 步骤4：检查 retarget 后最终窗口集合是否都已 layoutReady。
-    // 共享 key（displayed 已 mounted 且 layoutReady）沿用其 ready 状态——
-    // isWindowLayoutReady 按 renderNodeKey 查同一个 windowState。
-    const finalKeys = this.motionCoordinator.peekCommittedWindowKeys(retargeted)
+    // 问题3修复：使用 stableWindowKeys（prepareCandidate 时确定的稳定物理 key 集合），
+    // 而不是 peekCommittedWindowKeys(retargeted)——retargetCandidate 可能重新拆分 piece，
+    // 但 stableWindowKeys 保持稳定，不随可见性边界变化。
+    const stableKeys = retargeted.stableWindowKeys ?? this.motionCoordinator.peekCommittedWindowKeys(retargeted)
     let allFinalWindowsReady = true
-    for (let i = 0; i < finalKeys.length; i++) {
-      if (!this.motionSourcePool.isWindowLayoutReady(finalKeys[i])) {
+    for (let i = 0; i < stableKeys.length; i++) {
+      if (!this.motionSourcePool.isWindowLayoutReady(stableKeys[i])) {
         allFinalWindowsReady = false
         break
       }
@@ -1188,9 +1189,6 @@ export struct SujianEditor {
     // 重新 retarget（用冻结帧，因为旧 animator 停止后帧可能和步骤3不同）。
     // 步骤3的 retarget 是"试探"——检查最终窗口集合和准备 staging。
     // 步骤6的 retarget 才是"真正"的——用冻结帧重算起始状态。
-    // 步骤3和6的 retarget 产生的 renderNodeKey 集合应该相同
-    // （plan 中的 runs 不变，只是 pieces 的数值不同），
-    // 所以步骤5中 staging 的窗口就是步骤6需要的窗口。
     let finalRetargeted: PreparedCandidate = retargeted
     if (this.pendingCandidate !== null) {
       finalRetargeted = this.motionCoordinator.retargetCandidate(
@@ -1198,7 +1196,32 @@ export struct SujianEditor {
       )
     }
 
-    // 所有最终窗口都 ready——提交。
+    // 问题3修复：步骤6在 commit 前核对 finalRetargeted.startFrame.motionGlyphWindows 的 key
+    // 与 stableWindowKeys（prepareCandidate 时确定的稳定物理 key 集合）。
+    // 如果集合不同，继续 staging 新节点并保持旧动画运行，不得先 cancel 再布局。
+    const finalKeys = this.motionCoordinator.peekCommittedWindowKeys(finalRetargeted)
+    const finalKeySet = new Set<string>(finalKeys)
+    const stableKeySet = new Set<string>(stableKeys)
+    let keysMatch = finalKeys.length === stableKeys.size
+    if (keysMatch) {
+      for (const key of finalKeys) {
+        if (!stableKeySet.has(key)) {
+          keysMatch = false
+          break
+        }
+      }
+    }
+    if (!keysMatch) {
+      // 集合不同：继续 staging 新节点，不 cancel 旧 animator
+      // 旧 animator 继续逐帧运行，屏幕不冻结
+      this.pendingRetargetedCandidate = finalRetargeted
+      this.candidateVisualFrame = finalRetargeted.startFrame
+      // 不置 pendingDisplayData = null，不更新 displayed* 字段，不清 candidateToken。
+      // 不 cancel 旧 animator——屏幕上运动不停顿。
+      return false
+    }
+
+    // 所有最终窗口都 ready 且 key 集合一致——提交。
     this.pendingDisplayData = null
     this.pendingCandidate = null
     this.pendingRetargetedCandidate = null
@@ -1585,9 +1608,14 @@ export struct SujianEditor {
   // Issue #879 复核评论6085414957 问题2：如果有 pendingRetargetedCandidate，
   // 检查最终将接管显示的窗口集合（retarget 后的窗口），而非原始候选窗口。
   // retarget 可能产生新 renderNodeKey，这些新窗口需要先参与布局才能 ready。
+  //
+  // 问题3修复：使用 stableWindowKeys（prepareCandidate 时确定的稳定物理 key 集合）检查，
+  // 而不是 peekCommittedWindowKeys——retargetCandidate 保留 stableWindowKeys 不变，
+  // 只更新几何采样，确保集合稳定。
   private allMotionWindowsReady(): boolean {
     if (this.pendingRetargetedCandidate !== null) {
-      const keys = this.motionCoordinator.peekCommittedWindowKeys(this.pendingRetargetedCandidate)
+      const keys = this.pendingRetargetedCandidate.stableWindowKeys ??
+        this.motionCoordinator.peekCommittedWindowKeys(this.pendingRetargetedCandidate)
       for (let i = 0; i < keys.length; i++) {
         // 共享 key 沿用 displayed 已 mounted 的 ready 状态——
         // isWindowLayoutReady 按 renderNodeKey 查同一个 windowState。
