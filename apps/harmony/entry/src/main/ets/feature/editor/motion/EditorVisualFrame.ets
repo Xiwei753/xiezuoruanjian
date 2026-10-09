@@ -89,6 +89,14 @@ export interface InsertRun {
   startClipLeft: number
   /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x（零宽度） */
   startClipRight: number
+  /**
+   * 跨修订稳定字形身份（取起始字符簇的身份）。
+   *
+   * Issue #879 最新复核评论问题3：由 EditorMotionCoordinator 的身份表（随每笔编辑
+   * 逐笔搬运字符簇身份）给出，而不是 `utf16Start-utf16End-hash`——
+   * 后者在字前插入/删除后 offset 平移即失配。
+   */
+  stableGlyphId: string
 }
 
 /**
@@ -121,6 +129,8 @@ export interface DeletedRun {
   startClipLeft: number
   /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x+rect.width */
   startClipRight: number
+  /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
+  stableGlyphId: string
 }
 
 /**
@@ -160,6 +170,8 @@ export interface RetainedMove {
   startPositionX: number
   /** 起始位置 y（vp）——连续编辑时来自上一帧的 currentPositionY，默认 oldRect.y */
   startPositionY: number
+  /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
+  stableGlyphId: string
 }
 
 /**

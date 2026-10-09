@@ -64,6 +64,25 @@ export interface MotionWindowState {
 }
 
 /**
+ * Issue #879 最新复核评论问题1：源池存活根集合。
+ *
+ * 一个源是否可以被释放，只能由「谁还在引用它」决定：
+ * - runIds：displayed 帧 ∪ candidate 帧的窗口 runId——运动层正在绘制这些字形，
+ *   释放它们会让可见文字突然消失；
+ * - revisions：displayed 版本 ∪ candidate 版本的正文 revision——主 Text 与候选
+ *   主文本源正在使用该版本的 StyledString。
+ *
+ * 两阶段发布期间 displayed 与 candidate 两个 owner 都算存活；
+ * 释放只发生在 owner 退出（提交完成、候选被取代、会话切换）之后的下一轮收集里。
+ */
+export interface MotionSourceRoots {
+  /** displayed ∪ candidate 帧的窗口 runId */
+  runIds: Set<string>
+  /** displayed ∪ candidate 依赖的正文 revision */
+  revisions: Set<number>
+}
+
+/**
  * 稳定运动字形源池。
  *
  * 管理 MotionSourceEntry（可共享内容）和 MotionWindowState（窗口级状态）的
@@ -80,7 +99,7 @@ export interface MotionWindowState {
  * 3. ForEach key 使用 renderNodeKey（稳定身份），确保同一窗口的 Text 常驻不重建。
  * 4. Text.onAppear 中调用 markWindowMounted 标记本窗口已挂载。
  * 5. ComponentObserver 'layout' 回调中调用 markWindowLayoutReady 标记本窗口布局完成。
- * 6. 交棒完成后调用 markForRelease 标记旧源可释放，releaseMarkedSources 真正释放。
+ * 6. 每轮按存活根集合 releaseUnusedSources 释放没人引用的源。
  * 7. Text.onDisAppear 中调用 releaseWindowState 清理本窗口状态。
  */
 export class EditorMotionSourcePool {
@@ -160,21 +179,17 @@ export class EditorMotionSourcePool {
   }
 
   /**
-   * 释放不再被任何窗口引用且不属于当前 displayed/pending 版本的源。
+   * 按存活根集合释放没人引用的源。
    *
-   * @param activeRunIds 当前 visualFrame 的 motionGlyphWindows 中所有 runId
-   * @param displayedRevision 当前正在显示的正文 revision
-   * @param pendingRevision 等待排版的正文 revision（可能还未消费）
+   * Issue #879 最新复核评论问题1：存活根只有两个来源——
+   * displayed/candidate 帧的窗口 runId，以及 displayed/candidate 的正文 revision。
+   * 不在任何根里的源说明既没有窗口在画它、也不属于任何在屏版本，才可以释放。
+   *
+   * @param roots 存活根集合（displayed ∪ candidate ∪ 主文本源）
    */
-  releaseUnusedSources(
-    activeRunIds: Set<string>,
-    displayedRevision: number,
-    pendingRevision: number
-  ): void {
+  releaseUnusedSources(roots: MotionSourceRoots): void {
     this.sources.forEach((entry: MotionSourceEntry) => {
-      if (!activeRunIds.has(entry.runId) &&
-          entry.sourceRevision !== displayedRevision &&
-          entry.sourceRevision !== pendingRevision) {
+      if (!roots.runIds.has(entry.runId) && !roots.revisions.has(entry.sourceRevision)) {
         entry.markedForRelease = true
       }
     })

@@ -59,13 +59,14 @@ import hilog from '@ohos.hilog'
 import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
 import { EditorVisualFrame } from '../motion/EditorVisualFrame'
 import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
-import { EditorMotionCoordinator } from '../motion/EditorMotionCoordinator'
+import { EditorMotionCoordinator, PreparedCandidate } from '../motion/EditorMotionCoordinator'
+import { RevisionPositionMap, PositionMapStep } from '../motion/editor_revision_position_map'
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams, MotionWindowSource } from '../motion/EditorMotionLayer'
 // Issue #879 最新复核评论修复（问题1）：EditorEditResult 用于收集事务链。
 import { EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 // Issue #879 复核评论修复（问题1/3/4）：前后台排版隔离 + 稳定运动字形源池。
 import { EditorPendingLayoutHost, PendingLayoutRequest } from './EditorPendingLayoutHost'
-import { EditorMotionSourcePool } from '../motion/EditorMotionSourcePool'
+import { EditorMotionSourcePool, MotionSourceRoots } from '../motion/EditorMotionSourcePool'
 // Issue #879 本轮复核评论修复（问题6）：用 getUIContext().createAnimator 替代 Animator.create。
 // Animator.create 从 API18 起废弃。@kit.ArkUI 导出 AnimatorOptions 和 AnimatorResult。
 // 创建 animator 改为 this.getUIContext().createAnimator(options)。
@@ -108,7 +109,15 @@ export struct SujianEditor {
   )
   // 从 presentationUpdate.layoutSnapshot 同步出来的当前布局快照，
   // 供所有内部方法消费（替代旧的 this.currentSnapshot）。
+  // Issue #879 最新复核评论修复（问题2）：currentSnapshot 只在 executeDisplaySwitch 中
+  // 与 displayedSnapshot 一起更新——不再在 onPendingLayoutReady 中提前更新。
+  // 后台候选等待期间，hitTest/cursor 使用 displayedSnapshot（对应主 Text 的 LayoutManager）。
   @State currentSnapshot: EditorLayoutSnapshot | null = null
+  // Issue #879 最新复核评论修复（问题2）：Core 最新编辑事实——
+  // onPendingLayoutReady 中保存 latestUpdate.layoutSnapshot 到此字段，
+  // 供向 Core 发送命令时做版本映射（displayedSnapshot → latestCoreSnapshot）。
+  // currentSnapshot 不再在 onPendingLayoutReady 中提前更新，改用此字段。
+  private latestCoreSnapshot: EditorLayoutSnapshot | null = null
   // Issue #879：运动协调器——接收编辑更新，生成运动规划，输出视觉帧。
   private motionCoordinator: EditorMotionCoordinator = new EditorMotionCoordinator()
   // Issue #879：当前视觉帧——描述某一时刻的完整视觉状态（光标位置、静态/运动层字形范围）。
@@ -118,6 +127,9 @@ export struct SujianEditor {
   // 候选源全 ready 后原子提交（displayedVisualFrame = candidateVisualFrame）。
   @State private displayedVisualFrame: EditorVisualFrame | null = null
   @State private candidateVisualFrame: EditorVisualFrame | null = null
+  // Issue #879 最新复核评论问题4：候选句柄——prepareCandidate 返回的不可变候选。
+  // executeDisplaySwitch 用它一次性提交（而不是从 Coordinator 读“当前计划”）。
+  private pendingCandidate: PreparedCandidate | null = null
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 替换 animateTo + @Watch。
   // animateTo 改的是 UI 状态目标值，@Watch 只看状态赋值，不会把渲染层每帧插值值回写。
   // AnimatorResult.onFrame(progress) 是 ArkUI 渲染层逐帧回调，每帧同步 visualFrame。
@@ -159,9 +171,9 @@ export struct SujianEditor {
   // @Watch 自动触发排版。token 用于校验回调对应哪次排版请求。
   @State private pendingLayoutRequest: PendingLayoutRequest | null = null
   private pendingLayoutToken: number = 0
-  // Issue #879 最新复核评论修复（问题5）：编辑器会话标识——用于区分不同编辑会话的排版请求。
-  // 每个编辑器实例分配一个唯一 sessionId，防止跨会话的排版回调误判。
-  private editorSessionId: number = Date.now()
+  // Issue #879 最新复核评论修复（问题5）：删除 editorSessionId（Date.now()）——
+  // 改用 presentationUpdate.sessionId 作为排版请求的 sessionId，
+  // pendingSnap.revision 作为排版请求的 revision。
   // Issue #879 复核评论修复（问题1）：token → StyledString 映射——父组件维护原始引用，
   // EditorPendingLayoutHost 通过 resolveLayoutRequest(token) 回调获取，不走 @Prop 深拷贝。
   private styledStringByToken: Map<number, StyledString> = new Map()
@@ -257,7 +269,11 @@ export struct SujianEditor {
   // 不再有第二份状态。
   // Issue #629 评论5324447292 第1项：drag anchor 持有完整 VisualCaretPosition（含 affinity），
   // 不丢弃命中测试的 soft-wrap 亲和性。
+  // Issue #879 最新复核评论问题2：dragAnchor 保存「可见修订」坐标，只用于判断是否单击
+  // （与命中测试结果同坐标系）；真正发给 dispatcher 的 anchor 是 dragAnchorCore
+  // （已映射到 Core 最新修订），避免拖选期间跨修订错位。
   private dragAnchor: VisualCaretPosition | null = null
+  private dragAnchorCore: VisualCaretPosition | null = null
   private isDragging: boolean = false
   // Issue #768：编辑器焦点状态，供诊断快照读取。
   private isFocused: boolean = false
@@ -309,6 +325,8 @@ export struct SujianEditor {
       // displayedSnapshot/displayedStyledString 与 currentSnapshot/newStyledString 同步。
       this.displayedSnapshot = this.currentSnapshot
       this.displayedStyledString = this.newStyledString
+      // Issue #879 最新复核评论修复（问题2）：初始化 latestCoreSnapshot。
+      this.latestCoreSnapshot = this.currentSnapshot
     }
     this.refreshRender()
     // Issue #879 复核评论修复（问题4）：初始化静态裁切 path 为全尺寸矩形（不裁切）。
@@ -364,6 +382,8 @@ export struct SujianEditor {
     this.stopActiveAnimation()
     // Issue #879 复核评论修复（问题1）：清空候选帧。
     this.candidateVisualFrame = null
+    // Issue #879 最新复核评论问题4：候选句柄一并清空——不再有可提交的候选。
+    this.pendingCandidate = null
     // Issue #879 复核评论修复（问题3）：清空运动源池。
     this.motionSourcePool.clear()
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
@@ -432,11 +452,13 @@ export struct SujianEditor {
   }
 
   // Issue #768：把当前编辑器运行时状态推送到诊断快照存储。
-  // 从 this.currentSnapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
+  // 从 displayedSnapshot、几何状态、IME 状态、滚动状态等读取数据构造完整快照。
   // 不写正文内容，只写长度、offset、几何和状态。在各生命周期点调用。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 诊断快照应反映当前显示的内容。
   private pushDiagnosticsSnapshot(): void {
     const store = EditorRuntimeSnapshotStore.getInstance()
-    const snap = this.currentSnapshot
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
 
     // 滚动偏移
     let scrollX: number = 0
@@ -654,6 +676,8 @@ export struct SujianEditor {
       this.compositionUnderlineRects = []
       this.displayedVisualFrame = null
       this.candidateVisualFrame = null
+      // Issue #879 最新复核评论问题4：会话失效时丢弃候选句柄。
+      this.pendingCandidate = null
       this.pendingPresentationUpdates = []
       this.previousLayout = []
       // Issue #879 复核评论修复（问题3）：会话切换时清空 styledStringByToken、consumedTokens、pendingLayoutRequest。
@@ -674,6 +698,19 @@ export struct SujianEditor {
       this.pushDiagnosticsSnapshot()
       return
     }
+    // Issue #879 最新复核评论问题5：会话切换时丢弃上一会话的待发布事务链和候选——
+    // 旧会话的排版回调（sessionId 不同）不得被新会话复用。
+    if (this.pendingPresentationUpdates.length > 0) {
+      const pendingSessionId = this.pendingPresentationUpdates[0].sessionId
+      if (pendingSessionId !== this.presentationUpdate.sessionId) {
+        this.pendingPresentationUpdates = []
+        this.pendingCandidate = null
+        this.candidateVisualFrame = null
+        this.pendingDisplayData = null
+        this.pendingAnimationDurationMs = 0
+      }
+    }
+
     // Issue #879 复核评论修复（问题3）：不立即切换 currentSnapshot——
     // 保持 currentSnapshot 指向 displayed 版本（旧内容），新内容暂存到 pending 字段。
     // currentSnapshot 在 onPendingLayoutReady 中才更新为新版本。
@@ -744,10 +781,12 @@ export struct SujianEditor {
       // textHash 只有 length:firstCharCode:lastCharCode，"甲中乙"和"甲文乙"相同。
       // fullText 是完整文本内容，相同长度/首尾字符也能区分。
       const fullText = this.newStyledString.getString()
-      // Issue #879 最新复核评论修复（问题5）：sessionId 用于区分不同编辑会话，
-      // revision 用于区分不同内容修订——防止跨会话/跨修订的误判。
-      const sessionId = this.editorSessionId
-      const revision = this.pendingLayoutToken
+      // Issue #879 最新复核评论修复（问题5）：使用真实 Core 信息——
+      // sessionId 用 presentationUpdate.sessionId（Core 编辑会话 ID），
+      // revision 用 pendingSnap.revision（layoutSnapshot.revision）。
+      // 不再用 editorSessionId（Date.now()）或 pendingLayoutToken。
+      const sessionId = this.presentationUpdate.sessionId
+      const revision = pendingSnap.revision
       const request: PendingLayoutRequest = {
         token: this.pendingLayoutToken,
         contentWidth: this.contentWidth,
@@ -824,28 +863,33 @@ export struct SujianEditor {
       }
     }
 
-    // Issue #879 本轮复核评论修复（问题4）：步骤3——设置 currentSnapshot 为新版本，
-    // 供 acceptUpdateWithChain 使用（Coordinator 需要新 snapshot 生成 plan）。
-    // 但不更新 displayed 版本——displayed 版本在 executeDisplaySwitch 中才更新。
-    this.currentSnapshot = latestUpdate.layoutSnapshot
+    // Issue #879 最新复核评论修复（问题2）：步骤3——保存 Core 最新编辑事实到 latestCoreSnapshot，
+    // 不再提前更新 currentSnapshot——currentSnapshot 只在 executeDisplaySwitch 中与 displayedSnapshot 一起更新。
+    // 后台候选等待期间，hitTest/cursor 使用 displayedSnapshot（对应主 Text 的 LayoutManager）。
+    this.latestCoreSnapshot = latestUpdate.layoutSnapshot
 
     // Issue #879 本轮复核评论修复（问题4）：步骤4——保存后台排版的行布局。
     this.committedLineLayouts = lineLayouts
 
-    // Issue #879 复核评论修复（问题1）：步骤5——生成候选 RenderPlan，设置 candidateVisualFrame。
-    // candidateVisualFrame 只用于后台准备新 Text 源——候选窗口在同一 ForEach 中以 opacity 0 渲染，
-    // 参与布局但不可见。displayedVisualFrame 保持不变，继续驱动当前可见的运动窗口、光标和静态裁切。
-    // 候选窗口 layoutReady 后原子提交（displayedVisualFrame = candidateVisualFrame）。
-    this.candidateVisualFrame = this.motionCoordinator.acceptUpdateWithChain(
+    // Issue #879 最新复核评论修复（问题4）：步骤5——使用 prepareCandidate 生成候选 plan，
+    // 不修改 Coordinator 的 currentPlan/currentFrame——旧动画在交棒期间仍能正确使用旧状态。
+    // displayedVisualFrame 作为起始状态传给 prepareCandidate。
+    const displayedFrameForCandidate = this.displayedVisualFrame ?? this.motionCoordinator.getCurrentFrame()
+    const prepared = this.motionCoordinator.prepareCandidate(
       oldSnapshot,
       this.previousLayout,
-      this.currentSnapshot,
+      this.latestCoreSnapshot ?? this.currentSnapshot,
       lineLayouts,
       editResults,
       this.contentWidth,
       this.motionPolicy,
-      this.pendingFirstCaretRect
+      this.pendingFirstCaretRect,
+      displayedFrameForCandidate
     )
+    // 旧候选（若有）被本次更高 revision 的候选取代：直接丢弃即可，
+    // Coordinator 的已提交计划/帧从未被候选改动，旧动画仍按旧 plan 采样。
+    this.pendingCandidate = prepared
+    this.candidateVisualFrame = prepared.startFrame
 
     // Issue #879 本轮复核评论修复（问题4）：步骤6——准备运动源。
     this.prepareMotionSources()
@@ -860,23 +904,19 @@ export struct SujianEditor {
       newStyledString: this.newStyledString,
     } as PendingDisplayData
 
-    // Issue #879 复核评论修复（问题1）：步骤8——根据动画状态决定执行路径。
-    if (this.motionCoordinator.isAnimating()) {
-      const durationMs = this.motionCoordinator.getCurrentPlan().durationMs
-      if (durationMs <= 0) {
-        // 动画时长为 0（动画被禁用）——直接执行显示切换并跳到终态
-        this.executeDisplaySwitch()
-        this.displayedVisualFrame = this.motionCoordinator.finishMotion()
-        this.candidateVisualFrame = null
-        this.isMotionAnimating = false
-        this.updateStaticClipCommands()
-      } else if (this.allMotionWindowsReady()) {
+    // Issue #879 最新复核评论修复（问题4）：步骤8——根据候选 plan 的动画状态决定执行路径。
+    // 注意：prepareCandidate 不修改 Coordinator 的 currentPlan，所以不能用
+    // motionCoordinator.isAnimating() 或 getCurrentPlan().durationMs 判断候选状态——
+    // 它们仍反映旧状态。改用 prepared.plan 判断候选的动画状态。
+    const candidateDurationMs = prepared.plan.durationMs
+    if (candidateDurationMs > 0) {
+      if (this.allMotionWindowsReady()) {
         // 所有窗口已 ready——先执行显示切换，再启动动画
         this.executeDisplaySwitch()
-        this.startMotionAnimation(durationMs)
+        this.startMotionAnimation(candidateDurationMs)
       } else {
         // 窗口未 ready——暂存动画时长，等窗口 layout 回调后再执行显示切换 + 启动动画
-        this.pendingAnimationDurationMs = durationMs
+        this.pendingAnimationDurationMs = candidateDurationMs
       }
     } else {
       // 无动画（静态帧）——直接执行显示切换
@@ -892,6 +932,7 @@ export struct SujianEditor {
   // displayed 版本字段和 currentSnapshot。
   // 从 pendingDisplayData 取出暂存的数据，更新所有 displayed 版本字段，
   // 写入新 StyledString 到主 Text，更新静态裁切 path，清空 pendingPresentationUpdates。
+  // Issue #879 最新复核评论修复（问题4）：调用 commitCandidate 一次性替换 Coordinator 的内部状态。
   // Issue #879 复核评论修复（问题1）：原子提交候选帧——
   // displayedVisualFrame = candidateVisualFrame，candidateVisualFrame = null。
   // 提交后 ForEach 中原候选窗口 visible 从 false 变为 true（因为现在它们属于 displayedVisualFrame），
@@ -909,14 +950,18 @@ export struct SujianEditor {
     this.displayedStyledString = data.newStyledString
     this.displayedPresentation = data.latestUpdate
 
-    // currentSnapshot 已在 onPendingLayoutReady 中更新为新版本，这里保持不变
+    // Issue #879 最新复核评论修复（问题2）：currentSnapshot 在这里与 displayedSnapshot 一起更新——
+    // 不再在 onPendingLayoutReady 中提前更新。后台候选等待期间 hitTest/cursor 使用 displayedSnapshot。
+    this.currentSnapshot = data.latestUpdate.layoutSnapshot
+    this.latestCoreSnapshot = data.latestUpdate.layoutSnapshot
 
-    // Issue #879 复核评论修复（问题1）：原子提交候选帧——
-    // displayedVisualFrame 接管 candidateVisualFrame，candidateVisualFrame 清空。
-    // ForEach 中原候选窗口的 renderNodeKey 与新 displayedVisualFrame 的 renderNodeKey 相同，
-    // 不会被重建——只更新 visible 从 false 到 true、clipRect 和 position。
-    if (this.candidateVisualFrame !== null) {
-      this.displayedVisualFrame = this.candidateVisualFrame
+    // Issue #879 最新复核评论问题4：调用 commitCandidate 一次性替换 Coordinator 的内部状态。
+    // 候选句柄本身就是原子量：安装它返回的起始帧就是冻结时刻的可见状态，
+    // 新 animator 从这一帧继续推进，无需另行传入一帧，画面不跳变。
+    const candidate = this.pendingCandidate
+    if (candidate !== null) {
+      this.pendingCandidate = null
+      this.displayedVisualFrame = this.motionCoordinator.commitCandidate(candidate)
       this.candidateVisualFrame = null
     }
 
@@ -937,20 +982,49 @@ export struct SujianEditor {
   // 不再被任何窗口引用且不属于 displayed/pending 版本的源立即标记释放并清理。
   // Issue #879 复核评论修复（问题1）：使用 candidateVisualFrame 准备运动源——
   // candidateVisualFrame 是后台准备的候选帧，其窗口需要创建源并参与布局。
+  // Issue #879 最新复核评论修复（问题1）：存活根集合包含 displayedVisualFrame 和
+  // candidateVisualFrame 的所有 runId——两阶段交棒期间 displayedVisualFrame 仍可见，
+  // 其中可能有不同版本的 old-... 源（如 old-10），不能因候选只含 old-11/new-12 就释放 old-10。
+  // Issue #879 最新复核评论问题1：存活根集合 = displayed ∪ candidate ∪ 当前主文本源。
+  // 两阶段发布期间 displayed 帧仍可见（主 Text 还是旧内容），它的窗口 runId
+  // 也可能是不同版本（如 old-10），不能因为候选只含 old-11/new-12 就释放。
+  // 主文本源（主 Text 正在渲染的 StyledString）由 displayed/candidate 的 revision 兜底保护。
+  private collectLiveSourceRoots(): MotionSourceRoots {
+    const roots: MotionSourceRoots = {
+      runIds: new Set<string>(),
+      revisions: new Set<number>()
+    }
+    const frames: (EditorVisualFrame | null)[] = [this.displayedVisualFrame, this.candidateVisualFrame]
+    for (const frame of frames) {
+      if (frame === null || !frame.isAnimating) {
+        continue
+      }
+      const windows = frame.motionGlyphWindows
+      for (let i = 0; i < windows.length; i++) {
+        roots.runIds.add(windows[i].runId)
+        roots.revisions.add(windows[i].sourceRevision)
+      }
+    }
+    // 主文本源：displayed 版本是主 Text 正在渲染的内容；
+    // candidate 版本是本次将要接管的新主文本源，两者都必须存活。
+    if (this.displayedSnapshot !== null) {
+      roots.revisions.add(this.displayedSnapshot.revision)
+    }
+    if (this.latestCoreSnapshot !== null) {
+      roots.revisions.add(this.latestCoreSnapshot.revision)
+    }
+    const oldRevision = this.previousSnapshot?.revision
+    if (oldRevision !== undefined) {
+      roots.revisions.add(oldRevision)
+    }
+    return roots
+  }
+
   private prepareMotionSources(): void {
     if (this.candidateVisualFrame === null || !this.candidateVisualFrame.isAnimating) {
       return
     }
-    // Issue #879 复核评论修复（问题4）：释放不再被任何窗口引用且不属于 displayed/pending 版本的源。
-    // 获取 candidateVisualFrame 的 motionGlyphWindows 中所有 runId
-    const activeRunIds: Set<string> = new Set()
-    const windows = this.candidateVisualFrame.motionGlyphWindows
-    for (let i = 0; i < windows.length; i++) {
-      activeRunIds.add(windows[i].runId)
-    }
-    const displayedRevision = this.displayedSnapshot?.revision ?? 0
-    const pendingRevision = this.pendingRevision
-    this.motionSourcePool.releaseUnusedSources(activeRunIds, displayedRevision, pendingRevision)
+    this.motionSourcePool.releaseUnusedSources(this.collectLiveSourceRoots())
 
     // Issue #879 最新复核评论修复（问题3）：窗口级状态（TextController/mounted/layoutReady）
     // 已移到 MotionWindowState 中管理，不再需要手动清理 motionWindowControllers。
@@ -958,7 +1032,9 @@ export struct SujianEditor {
 
     // 为运动窗口获取或创建源
     const oldRevision = this.previousSnapshot?.revision ?? 0
-    const newRevision = this.currentSnapshot?.revision ?? 0
+    // Issue #879 最新复核评论修复（问题2）：使用 latestCoreSnapshot 获取新版本 revision——
+    // currentSnapshot 在 executeDisplaySwitch 之前还是旧版本。
+    const newRevision = this.latestCoreSnapshot?.revision ?? this.currentSnapshot?.revision ?? 0
 
     if (this.oldStyledString !== null) {
       this.motionSourcePool.getOrCreateSource('old', oldRevision, this.oldStyledString)
@@ -1142,25 +1218,28 @@ export struct SujianEditor {
   // 旧实现只比 currentSnapshot 和 pendingRevision/generation/style/width——它们当然相等（同一份数据）。
   // 新增：用 LayoutManager 的行数和最后一行 endIndex 推算排版内容的总 UTF-16 长度，
   // 与 pending text 的 UTF-16 长度比较——如果不匹配，说明 LayoutManager 排版的还是旧内容。
+  // Issue #879 最新复核评论修复（问题2）：使用 latestCoreSnapshot 而非 currentSnapshot——
+  // 验证 pending 身份时需要与 Core 最新编辑事实比较。
   private validatePendingIdentity(): boolean {
-    if (this.currentSnapshot === null) {
+    const snap = this.latestCoreSnapshot ?? this.currentSnapshot
+    if (snap === null) {
       return false
     }
     // 校验 revision/generation/compositionGeneration
-    if (this.currentSnapshot.revision !== this.pendingRevision) {
+    if (snap.revision !== this.pendingRevision) {
       return false
     }
-    if (this.currentSnapshot.generation !== this.pendingGeneration) {
+    if (snap.generation !== this.pendingGeneration) {
       return false
     }
-    if (this.currentSnapshot.compositionGeneration !== this.pendingCompositionGeneration) {
+    if (snap.compositionGeneration !== this.pendingCompositionGeneration) {
       return false
     }
     // 校验 style（fontSize/lineSpacing）
-    if (this.currentSnapshot.fontSize !== this.pendingFontSize) {
+    if (snap.fontSize !== this.pendingFontSize) {
       return false
     }
-    if (this.currentSnapshot.lineSpacingMultiplier !== this.pendingLineSpacing) {
+    if (snap.lineSpacingMultiplier !== this.pendingLineSpacing) {
       return false
     }
     // 校验 width（contentWidth 可能还在更新，用 renderResult 的行布局宽度校验）
@@ -1178,7 +1257,7 @@ export struct SujianEditor {
       if (lineCount > 0) {
         const lastLineMetrics = layout.getLineMetrics(lineCount - 1)
         const layoutTextLength = lastLineMetrics.endIndex
-        const pendingTextLength = this.currentSnapshot.text.length
+        const pendingTextLength = snap.text.length
         if (layoutTextLength !== pendingTextLength) {
           // LayoutManager 排版的内容长度与 pending 不匹配——排版可能还是旧内容
           return false
@@ -1256,16 +1335,20 @@ export struct SujianEditor {
   }
 
   // Issue #879 复核评论修复（问题4）：统一所有权交接——动画结束后释放不再需要的源。
-  // - 所有运动窗口消失后，旧源可以标记释放
-  // - 但保留当前 displayed 版本的源（因为可能下一笔编辑还需要）
-  // - pending 版本的源也保留（等待后台排版完成后消费）
+  // Issue #879 最新复核评论问题1：改用存活根集合——当时只有主文本源（displayed 版本）
+  // 还有引用，运动窗口已全部消失，因此 runIds 为空、revisions 只含在屏版本。
   private releaseSourcesAfterMotion(): void {
-    const displayedRevision = this.displayedSnapshot?.revision ?? 0
-    const pendingRevision = this.pendingRevision
-    // 动画结束后不再有运动窗口——activeRunIds 为空集
-    // 所有源都不在 activeRunIds 中，但保留 displayed/pending 版本的源
-    const emptyRunIds: Set<string> = new Set()
-    this.motionSourcePool.releaseUnusedSources(emptyRunIds, displayedRevision, pendingRevision)
+    const roots: MotionSourceRoots = {
+      runIds: new Set<string>(),
+      revisions: new Set<number>()
+    }
+    if (this.displayedSnapshot !== null) {
+      roots.revisions.add(this.displayedSnapshot.revision)
+    }
+    if (this.latestCoreSnapshot !== null) {
+      roots.revisions.add(this.latestCoreSnapshot.revision)
+    }
+    this.motionSourcePool.releaseUnusedSources(roots)
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver——
     // 动画结束后所有运动窗口消失，observer 不再需要。
     this.cleanupAllWindowsObservers()
@@ -1660,8 +1743,13 @@ export struct SujianEditor {
   // Issue #768 任务10：优先使用系统 LayoutManager 的 getGlyphPositionAtCoordinate 做命中测试，
   // 消除自算折行与系统布局的错位。Fallback 到旧的自计算路径。
   // 命中测试逻辑已下沉到 EditorRenderBackend.hitTestByLayoutManager()。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // LayoutManager 对应的是 displayedSnapshot（主 Text 当前显示的内容）。
+  // 后台候选等待期间 currentSnapshot 可能已更新为新版本，但主 Text 还在显示旧内容。
   private hitTestContent(contentX: number, contentY: number): VisualCaretPosition {
-    if (!this.currentSnapshot || !this.renderResult || this.contentWidth <= 0) {
+    // Issue #879 最新复核评论修复（问题2）：优先使用 displayedSnapshot（对应主 Text 的 LayoutManager）
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap || !this.renderResult || this.contentWidth <= 0) {
       return { utf16Offset: 0, affinity: CaretAffinity.Downstream }
     }
 
@@ -1680,8 +1768,7 @@ export struct SujianEditor {
       }
     }
 
-    // Fallback: 旧的自计算命中测试
-    const snap = this.currentSnapshot
+    // Fallback: 旧的自计算命中测试——使用 displayedSnapshot
     // Issue #776 评论5848626733 第6项：measureUtils.measureText 返回 px，
     // fallback 几何统一到 vp，这里包一层 px2vp。
     const measureUtils = this.getUIContext().getMeasureUtils()
@@ -1697,31 +1784,93 @@ export struct SujianEditor {
     )
   }
 
+  // Issue #879 最新复核评论问题2：把可见修订（displayed）的 UTF-16 位置映射到 Core 最新修订。
+  //
+  // 命中测试用的是 displayedSnapshot + 主 Text 的 LayoutManager，得到的是「屏幕那一版」
+  // 的位置；而 dispatcher 出队时按 Core 最新 snapshot 解释该位置。
+  // 两阶段发布等待期间 displayed 落后 Core（候选还没提交），二者不是同一坐标系，
+  // 因此必须用待发布编辑链把位置映射过去，不能把旧版 offset 直接当新版 offset 发出去。
+  //
+  // 无待发布编辑（displayed 已是最新）或链不可信时返回 null，调用方按原值发送。
+  private buildDisplayedToCorePositionMap(): RevisionPositionMap | null {
+    const from = this.displayedSnapshot
+    const to = this.latestCoreSnapshot
+    if (!from || !to || from.revision === to.revision) {
+      return null
+    }
+    if (this.pendingPresentationUpdates.length === 0) {
+      return null
+    }
+    const steps: PositionMapStep[] = []
+    let beforeText = from.text
+    for (const update of this.pendingPresentationUpdates) {
+      const editResult = update.editResult
+      if (editResult === null) {
+        // 非编辑更新（纯光标移动等）不改正文——不产生位置映射步。
+        continue
+      }
+      const afterText = update.layoutSnapshot.text
+      steps.push({
+        beforeText: beforeText,
+        afterText: afterText,
+        patches: EditorMotionCoordinator.collectCarryPatches(editResult)
+      })
+      beforeText = afterText
+    }
+    if (steps.length === 0 || beforeText !== to.text) {
+      return null
+    }
+    return RevisionPositionMap.build(steps, from.revision, to.revision)
+  }
+
+  // Issue #879 最新复核评论问题2：把可见坐标转成 Core 最新修订坐标后再发 dispatcher。
+  // 映射不可用时保留原值，但按 Core 最新正文长度夹紧，避免发出越界偏移。
+  private toCoreCaretPosition(position: VisualCaretPosition): VisualCaretPosition {
+    const map = this.buildDisplayedToCorePositionMap()
+    let offset = position.utf16Offset
+    if (map !== null) {
+      offset = map.mapOffset(offset)
+    }
+    const latest = this.latestCoreSnapshot ?? this.displayedSnapshot
+    if (latest !== null) {
+      offset = Math.max(0, Math.min(offset, latest.text.length))
+    }
+    return { utf16Offset: offset, affinity: position.affinity }
+  }
+
   // 当前光标 UTF-16 offset（从 snapshot.cursorByteOffset 转）。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 光标位置应与当前显示的内容对应，而非可能已更新但尚未显示的新版本。
   private currentCursorUtf16(): number {
-    if (!this.currentSnapshot) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap) {
       return 0
     }
-    return TextOffsetMapper.utf8ToUtf16(this.currentSnapshot.text, this.currentSnapshot.cursorByteOffset)
+    return TextOffsetMapper.utf8ToUtf16(snap.text, snap.cursorByteOffset)
   }
 
   // 当前选区 [anchorUtf16, headUtf16]（从 snapshot 的 byte offset 转）。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 选区位置应与当前显示的内容对应。
   private currentSelectionUtf16(): [number, number] {
-    if (!this.currentSnapshot) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap) {
       return [0, 0]
     }
-    const text = this.currentSnapshot.text
-    const anchor = TextOffsetMapper.utf8ToUtf16(text, this.currentSnapshot.selectionAnchor)
-    const head = TextOffsetMapper.utf8ToUtf16(text, this.currentSnapshot.selectionHead)
+    const text = snap.text
+    const anchor = TextOffsetMapper.utf8ToUtf16(text, snap.selectionAnchor)
+    const head = TextOffsetMapper.utf8ToUtf16(text, snap.selectionHead)
     return [anchor, head]
   }
 
   // 是否有非空选区（anchor != head）。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot。
   private hasSelection(): boolean {
-    if (!this.currentSnapshot) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap) {
       return false
     }
-    return this.currentSnapshot.selectionAnchor !== this.currentSnapshot.selectionHead
+    return snap.selectionAnchor !== snap.selectionHead
   }
 
   // Issue #767 评论 5829138873 第 1 节：focusAndAttachIme 在 requestFocus 成功后直接 attach IME。
@@ -1764,8 +1913,11 @@ export struct SujianEditor {
   // 不再用 UTF-16 ±1 猜字符边界。
   // Issue #629 评论11 第2项：arrowUp/arrowDown/home/end 改用语义命令 lineUp/lineDown/lineHome/lineEnd，
   // 不在入队前读旧布局计算目标。出队时由 LineNavigationResolver 基于最新行布局计算。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 键盘命令应基于当前显示的内容派发。
   private dispatchKeyCommand(cmd: SemanticKeyCommand): void {
-    if (!this.dispatcher || !this.currentSnapshot) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!this.dispatcher || !snap) {
       return
     }
     const dispatcher: EditorSemanticDispatcher = this.dispatcher
@@ -1849,8 +2001,11 @@ export struct SujianEditor {
   // Issue #629 评论6 Part A：所有输入经 dispatcher 统一排队，不再直接调 SelectionController。
   // Issue #629 R11 评论5329310563 第2项：mouse down/drag 走 dispatchSelectionAndSyncIme，
   // 成功后查询最终 selection 再通知 IME（鼠标 selection 之前完全没通知 IME）。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 命中测试和选区操作应基于当前显示的内容。
   private handleMouseEvent(raw: MouseEvent): void {
-    if (!this.currentSnapshot || !this.renderResult || !this.dispatcher) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap || !this.renderResult || !this.dispatcher) {
       return
     }
     const ev: PlatformPointerEvent = this.pointerService.normalizeMouseEvent(raw)
@@ -1879,22 +2034,30 @@ export struct SujianEditor {
           }
           // 左键按下：记 anchor position，开始 potential drag。
           this.dragAnchor = hitPos
+          this.dragAnchorCore = this.toCoreCaretPosition(hitPos)
           this.isDragging = true
           // Issue #629 评论5324447292 第1项：setSelection 走 executeDisplaySelection 统一入口。
           // Issue #629 R11 评论5329310563 第2项：成功后查询最终 selection 再通知 IME。
-          this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: hitPos })
+          // Issue #879 最新复核评论问题2：发命令前把可见坐标映射到 Core 最新修订。
+          this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.dragAnchorCore })
         }
         break
       case 'move':
-        if (this.isDragging && this.dragAnchor !== null && inContentArea) {
+        if (this.isDragging && this.dragAnchorCore !== null && inContentArea) {
           // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
-          this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
+          // Issue #879 最新复核评论问题2：anchor 已是 Core 坐标，head 现场映射。
+          this.dispatchSelectionAndSyncIme({
+            kind: 'dragSelect',
+            anchor: this.dragAnchorCore,
+            head: this.toCoreCaretPosition(hitPos)
+          })
         }
         break
       case 'up':
         if (this.isDragging) {
           this.isDragging = false
           this.dragAnchor = null
+          this.dragAnchorCore = null
         }
         break
       case 'wheel':
@@ -1912,8 +2075,11 @@ export struct SujianEditor {
   // Issue #629 评论6 Part A+D：所有输入经 dispatcher 统一排队；删除重复 onSelectionTap prop（双 owner）。
   // Issue #629 R11 评论5329310563 第2项：TouchUp/TouchMove drag 走 dispatchSelectionAndSyncIme，
   // 成功后查询最终 selection 再通知 IME，不再 fire-and-forget 后立即用原 hitPos 通知。
+  // Issue #879 最新复核评论修复（问题2）：使用 displayedSnapshot 而非 currentSnapshot——
+  // 命中测试和选区操作应基于当前显示的内容。
   private handleTouchEvent(event: TouchEvent): void {
-    if (!this.currentSnapshot || !this.renderResult || !this.dispatcher) {
+    const snap = this.displayedSnapshot ?? this.currentSnapshot
+    if (!snap || !this.renderResult || !this.dispatcher) {
       return
     }
     // Issue #743 评论5792119958：空触点边界检查必须先于 touches[0] 解引用。
@@ -1965,13 +2131,19 @@ export struct SujianEditor {
         }
         // 按下：记 anchor，开始 potential drag。
         this.dragAnchor = hitPos
+        this.dragAnchorCore = this.toCoreCaretPosition(hitPos)
         this.isDragging = true
         break
       case TouchType.Move:
         // 拖动选区：anchor 不变，head 跟随当前位置。传完整 VisualCaretPosition。
-        if (this.isDragging && this.dragAnchor !== null && inContentArea
-          && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
-          this.dispatchSelectionAndSyncIme({ kind: 'dragSelect', anchor: this.dragAnchor, head: hitPos })
+        // Issue #879 最新复核评论问题2：比较用可见坐标，发命令用 Core 坐标。
+        if (this.isDragging && this.dragAnchor !== null && this.dragAnchorCore !== null
+          && inContentArea && this.dragAnchor.utf16Offset !== hitPos.utf16Offset) {
+          this.dispatchSelectionAndSyncIme({
+            kind: 'dragSelect',
+            anchor: this.dragAnchorCore,
+            head: this.toCoreCaretPosition(hitPos)
+          })
         }
         break
       case TouchType.Up:
@@ -1979,10 +2151,12 @@ export struct SujianEditor {
           if (inContentArea && this.dragAnchor !== null
             && this.dragAnchor.utf16Offset === hitPos.utf16Offset) {
             // 单击：经 dispatcher 发 selection，成功后查询最终 selection 再通知 IME。
-            this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: hitPos })
+            // Issue #879 最新复核评论问题2：发命令前映射到 Core 最新修订坐标。
+            this.dispatchSelectionAndSyncIme({ kind: 'setSelection', position: this.toCoreCaretPosition(hitPos) })
           }
           this.isDragging = false
           this.dragAnchor = null
+          this.dragAnchorCore = null
         }
         break
       default:
@@ -2042,7 +2216,7 @@ export struct SujianEditor {
         // 正文 Text 只负责绘制文字，不再承担"可点击输入框"职责。
         // 这样空白处点击也能命中宿主节点，触发 focus + IME attach。
         Stack() {
-        if (this.renderResult && this.currentSnapshot) {
+        if (this.renderResult && (this.displayedSnapshot ?? this.currentSnapshot)) {
           // 1. selection background（最底层）
           ForEach(this.selectionRects, (rect: SelectionRect, index: number) => {
             Rect()

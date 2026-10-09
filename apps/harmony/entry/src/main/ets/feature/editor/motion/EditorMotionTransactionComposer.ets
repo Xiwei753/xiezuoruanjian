@@ -100,7 +100,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: [],
         offsetMap: undefined,
         isValid: false,
-        validationError: '事务链为空'
+        validationError: '事务链为空',
       }
     }
 
@@ -110,7 +110,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: [],
         offsetMap: undefined,
         isValid: false,
-        validationError: `首笔 baseRevision(${editResults[0].baseRevision}) !== oldRevision(${oldRevision})`
+        validationError: `首笔 baseRevision(${editResults[0].baseRevision}) !== oldRevision(${oldRevision})`,
       }
     }
     const lastEr = editResults[editResults.length - 1]
@@ -119,7 +119,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: [],
         offsetMap: undefined,
         isValid: false,
-        validationError: `末笔 newRevision(${lastEr.newRevision}) !== newRevision(${newRevision})`
+        validationError: `末笔 newRevision(${lastEr.newRevision}) !== newRevision(${newRevision})`,
       }
     }
 
@@ -130,7 +130,7 @@ export class EditorMotionTransactionComposer {
           displayPatches: [],
           offsetMap: undefined,
           isValid: false,
-          validationError: `链断裂：editResults[${i}].baseRevision(${editResults[i].baseRevision}) !== editResults[${i - 1}].newRevision(${editResults[i - 1].newRevision})`
+          validationError: `链断裂：editResults[${i}].baseRevision(${editResults[i].baseRevision}) !== editResults[${i - 1}].newRevision(${editResults[i - 1].newRevision})`,
         }
       }
     }
@@ -141,7 +141,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: editResults[0].displayPatches,
         offsetMap: editResults[0].offsetMap,
         isValid: true,
-        validationError: null
+        validationError: null,
       }
     }
 
@@ -166,7 +166,7 @@ export class EditorMotionTransactionComposer {
             displayPatches: [],
             offsetMap: undefined,
             isValid: false,
-            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) > 当前文本字节长度(${currentByteLen})`
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) > 当前文本字节长度(${currentByteLen})`,
           }
         }
         if (patch.replaceByteEndExclusive > currentByteLen) {
@@ -174,7 +174,7 @@ export class EditorMotionTransactionComposer {
             displayPatches: [],
             offsetMap: undefined,
             isValid: false,
-            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) > 当前文本字节长度(${currentByteLen})`
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) > 当前文本字节长度(${currentByteLen})`,
           }
         }
         // 验证 replaceByteStart/End 是合法 UTF-8 字符边界
@@ -183,7 +183,7 @@ export class EditorMotionTransactionComposer {
             displayPatches: [],
             offsetMap: undefined,
             isValid: false,
-            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) 不是合法 UTF-8 字符边界`
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteStart(${patch.replaceByteStart}) 不是合法 UTF-8 字符边界`,
           }
         }
         if (!EditorMotionTransactionComposer.isValidUtf8Boundary(currentText, patch.replaceByteEndExclusive)) {
@@ -191,7 +191,7 @@ export class EditorMotionTransactionComposer {
             displayPatches: [],
             offsetMap: undefined,
             isValid: false,
-            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) 不是合法 UTF-8 字符边界`
+            validationError: `editResults[${i}].displayPatches[${p}].replaceByteEndExclusive(${patch.replaceByteEndExclusive}) 不是合法 UTF-8 字符边界`,
           }
         }
       }
@@ -206,7 +206,7 @@ export class EditorMotionTransactionComposer {
           displayPatches: [],
           offsetMap: undefined,
           isValid: false,
-          validationError: result.error
+          validationError: result.error,
         }
       }
       segments = result.segments
@@ -219,7 +219,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: [],
         offsetMap: undefined,
         isValid: false,
-        validationError: '复合后文本与 newText 不一致'
+        validationError: '复合后文本与 newText 不一致',
       }
     }
 
@@ -232,7 +232,7 @@ export class EditorMotionTransactionComposer {
         displayPatches: [],
         offsetMap: undefined,
         isValid: false,
-        validationError: 'Segment 表重建文本与 newText 不一致'
+        validationError: 'Segment 表重建文本与 newText 不一致',
       }
     }
 

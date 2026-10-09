@@ -42,6 +42,60 @@ import { LineLayout, CaretRect } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/dto/EditorDtos'
 import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
+import type { GlyphCarryPatch } from './editor_patch_carry'
+import { applyPatchesToText } from './editor_patch_carry'
+import { GlyphIdentityTable } from './editor_glyph_identity'
+
+/**
+ * Issue #879 最新复核评论问题4：prepareCandidate 的返回类型。
+ *
+ * prepareCandidate 只生成不可变候选（plan + 起始帧 + 候选提交状态），
+ * 不修改 Coordinator 的 currentPlan/currentFrame/oldSnapshot/newSnapshot；
+ * 候选窗口用 plan/startFrame 做 staging，全部 ready 后再 commitCandidate 一次性替换。
+ */
+export interface PreparedCandidate {
+  /** 候选运动规划 */
+  readonly plan: EditorMotionPlan
+  /** 候选起始帧（progress=0 的帧，或时长为0时的终态帧） */
+  readonly startFrame: EditorVisualFrame
+  /** 候选提交状态——commitCandidate 一次性安装（内部数据，UI 不要读） */
+  readonly state: MotionCommittedState
+}
+
+/**
+ * Coordinator 的一次完整“已提交状态”。
+ *
+ * 把 acceptUpdate 会写入的所有字段打包成一个不可变对象：
+ * - 普通路径（acceptUpdate）直接安装；
+ * - 两阶段路径（prepareCandidate → commitCandidate）先持有候选状态，
+ *   等候选源 ready 后一次性安装，期间旧动画继续使用旧的已提交状态。
+ */
+export interface MotionCommittedState {
+  plan: EditorMotionPlan
+  frame: EditorVisualFrame
+  oldSnapshot: EditorLayoutSnapshot
+  oldLayout: LineLayout[]
+  newSnapshot: EditorLayoutSnapshot
+  newLayout: LineLayout[]
+  geometryKey: GeometryKey
+  textRevisionKey: TextRevisionKey
+  motionDurationMs: number
+  firstCaretRect: CaretRect | null
+  glyphIdentities: GlyphIdentityTable | null
+}
+
+/**
+ * Issue #879 最新复核评论问题3：一次更新的字形身份推进结果。
+ *
+ * - oldTable：描述旧正文（匹配上一帧窗口用）
+ * - newTable：描述新正文（提交后成为当前表）
+ *
+ * 任一为 null 表示身份不可信，Planner 应对该侧退回内容 hash。
+ */
+export interface IdentityAdvance {
+  oldTable: GlyphIdentityTable | null
+  newTable: GlyphIdentityTable | null
+}
 
 /**
  * 几何身份——标识绘制环境是否改变。
@@ -113,6 +167,14 @@ export class EditorMotionCoordinator {
   private currentPlan: EditorMotionPlan
   /** 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入） */
   private firstCaretRect: CaretRect | null
+  /**
+   * Issue #879 最新复核评论问题3：当前已提交正文的稳定字形身份表。
+   *
+   * 描述 newSnapshot.revision 的正文：每次编辑按 patch 逐笔搬运字符簇身份。
+   * Planner 用它给出 InsertRun/DeletedRun/RetainedMove 的 stableGlyphId，
+   * 连续编辑时按身份查找上一帧窗口，而不是按「位置 + 内容」。
+   */
+  private glyphIdentities: GlyphIdentityTable | null
 
   constructor() {
     this.currentFrame = {
@@ -140,6 +202,7 @@ export class EditorMotionCoordinator {
     this.newLayout = []
     this.motionDurationMs = 0
     this.firstCaretRect = null
+    this.glyphIdentities = null
     this.currentPlan = {
       insertRuns: [],
       deletedRuns: [],
@@ -151,25 +214,66 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 最新复核评论问题4：准备候选——只返回不可变计划，不修改任何已提交状态。
+   *
+   * 两阶段发布期间屏幕仍在显示上一版（displayedVisualFrame），Coordinator 的
+   * currentPlan/currentFrame 必须继续描述那份可见画面：
+   * - 旧 animator 继续用它采样，不会拿到候选 plan；
+   * - 候选被更高 revision 覆盖时直接丢弃 PreparedCandidate 即可，不影响当前显示。
+   *
+   * 只有 commitCandidate 才把候选状态一次性安装为已提交状态。
+   *
+   * @param displayedFrame 当前显示帧——候选 plan 以它为起始状态
+   */
+  prepareCandidate(
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResults: EditorEditResult[],
+    contentWidth: number,
+    policy: EditorMotionPolicy,
+    firstCaretRect: CaretRect | null,
+    displayedFrame: EditorVisualFrame
+  ): PreparedCandidate {
+    const state = this.computeUpdateState(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
+      contentWidth, policy, displayedFrame, firstCaretRect
+    )
+    return {
+      plan: state.plan,
+      startFrame: state.frame,
+      state: state
+    }
+  }
+
+  /**
+   * Issue #879 最新复核评论问题4：提交候选——一次性安装候选状态。
+   *
+   * 安装的 currentFrame 就是候选起始帧（frozenDisplayedFrame）：它的 clip/位置
+   * 正是 prepareCandidate 那一刻冻结的可见状态，新 animator 从这一帧继续推进，
+   * 无需调用方另传一帧——传别的帧只会让 plan 起点与已提交帧不一致。
+   *
+   * @param prepared prepareCandidate 返回的不可变候选
+   * @returns 提交后的当前帧
+   */
+  commitCandidate(prepared: PreparedCandidate): EditorVisualFrame {
+    this.applyCommittedState(prepared.state)
+    return this.currentFrame
+  }
+
+  /**
    * 接收编辑更新（带事务链），生成新 plan，retarget 到最新 canonical。
    *
-   * Issue #879 最新复核评论修复（问题1）：连续快速输入时，多笔 editResult 形成事务链。
+   * Issue #879 最新复核评论问题1：连续快速输入时，多笔 editResult 形成事务链。
    * 使用 EditorMotionTransactionComposer 逐笔转换/复合 UTF-8 字符身份映射，
    * 输出起始显示正文→最终正文的统一可见差分和保留字符映射。
    * 不再简单拼接 displayPatches 或把最后一笔 offsetMap 当整条链的 offsetMap——
    * 每一笔 patch 的 UTF-8 坐标系不同，简单拼接必然错位。
    *
-   * Issue #879 最新复核评论修复（问题5）：新增 firstCaretRect 参数，
-   * 空正文时优先使用 firstCaretRect 而非估算。
+   * Issue #879 最新复核评论问题4：本方法只在“提交”时调用（单笔编辑或无需 staging 的场景）；
+   * 两阶段发布走 prepareCandidate + commitCandidate。
    *
-   * @param oldSnapshot 旧布局快照（含旧正文 text）
-   * @param oldLayout 旧行布局
-   * @param newSnapshot 新布局快照（含新正文 text）
-   * @param newLayout 新行布局
-   * @param editResults 事务链（按顺序排列的 editResult 数组）
-   * @param contentWidth 内容宽度（vp）
-   * @param policy 运动策略
-   * @param firstCaretRect 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入）
    * @returns 新的视觉帧（动画起始帧）
    */
   acceptUpdateWithChain(
@@ -182,15 +286,196 @@ export class EditorMotionCoordinator {
     policy: EditorMotionPolicy,
     firstCaretRect?: CaretRect | null
   ): EditorVisualFrame {
-    // 无事务链 → 走 acceptUpdate（editResult=null）
+    const state = this.computeUpdateState(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
+      contentWidth, policy, this.currentFrame, firstCaretRect ?? null
+    )
+    this.applyCommittedState(state)
+    return this.currentFrame
+  }
+
+  /**
+   * 接收编辑更新，生成新 plan，retarget 到最新 canonical。
+   *
+   * @param editResult 本次编辑事务结果（null 表示非编辑触发的更新）
+   * @returns 新的视觉帧（动画起始帧）
+   */
+  acceptUpdate(
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResult: EditorEditResult | null,
+    contentWidth: number,
+    policy: EditorMotionPolicy,
+    firstCaretRect?: CaretRect | null
+  ): EditorVisualFrame {
+    const chain: EditorEditResult[] = []
+    if (editResult !== null) {
+      chain.push(editResult)
+    }
+    const state = this.computeUpdateState(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, chain,
+      contentWidth, policy, this.currentFrame, firstCaretRect ?? null
+    )
+    this.applyCommittedState(state)
+    return this.currentFrame
+  }
+
+  /**
+   * 计算一次更新后的完整已提交状态——不修改任何字段。
+   *
+   * 两阶段发布（prepareCandidate）与直接提交（acceptUpdate）共用这条路径，
+   * 因此候选 plan 与直接提交的 plan 使用完全相同的规则，不会出现两套行为。
+   *
+   * @param editResults 事务链（空数组表示非编辑触发的更新）
+   * @param startFrame 起始可见帧——plan 的起始状态
+   * @returns 该次更新的完整状态
+   */
+  private computeUpdateState(
+    oldSnapshot: EditorLayoutSnapshot,
+    oldLayout: LineLayout[],
+    newSnapshot: EditorLayoutSnapshot,
+    newLayout: LineLayout[],
+    editResults: EditorEditResult[],
+    contentWidth: number,
+    policy: EditorMotionPolicy,
+    startFrame: EditorVisualFrame,
+    firstCaretRect: CaretRect | null
+  ): MotionCommittedState {
+    const newGeometryKey: GeometryKey = {
+      fontSize: newSnapshot.fontSize,
+      lineSpacing: newSnapshot.lineSpacingMultiplier,
+      contentWidth: contentWidth
+    }
+    const newTextRevisionKey: TextRevisionKey = {
+      revision: newSnapshot.revision,
+      generation: newSnapshot.generation,
+      compositionGeneration: newSnapshot.compositionGeneration
+    }
+
+    // 身份表始终尽量向前推进（即使本次不做动画）——下一次动画要靠它认字。
+    const editResult = EditorMotionCoordinator.composeChain(editResults, oldSnapshot, newSnapshot)
+    const identities = EditorMotionCoordinator.advanceIdentities(
+      this.glyphIdentities, editResults.length === 0, oldSnapshot, newSnapshot, editResult
+    )
+
+    // 几何身份变化（字号变更/宽度变化）或 revision 对不上 → 直接显示静态画面
+    let reset = false
+    if (!EditorMotionCoordinator.geometryEquals(this.geometryKey, newGeometryKey)) {
+      reset = true
+    }
+    if (editResults.length > 0 && editResult === null) {
+      reset = true
+    }
+    if (editResult !== null &&
+        (editResult.baseRevision !== oldSnapshot.revision ||
+         editResult.newRevision !== newSnapshot.revision)) {
+      reset = true
+    }
+
+    if (reset) {
+      return {
+        plan: EditorMotionCoordinator.emptyPlan(),
+        frame: EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect),
+        oldSnapshot: newSnapshot,
+        oldLayout: newLayout,
+        newSnapshot: newSnapshot,
+        newLayout: newLayout,
+        geometryKey: newGeometryKey,
+        textRevisionKey: newTextRevisionKey,
+        motionDurationMs: 0,
+        firstCaretRect: firstCaretRect,
+        glyphIdentities: identities.newTable
+      }
+    }
+
+    // 用 Planner 生成新 plan（传入 oldSnapshot + oldLayout + newSnapshot + newLayout）
+    const plan = EditorMotionPlanner.plan(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, startFrame,
+      identities.oldTable, identities.newTable
+    )
+
+    // 确定动画时长
+    let durationMs = 0
+    if (plan.motionKind === MotionKind.None || plan.motionKind === MotionKind.CaretMove) {
+      // 纯光标移动用 cursorDurationMs
+      durationMs = policy.shouldAnimateCaret() ? policy.cursorDurationMs : 0
+    } else {
+      // 正文增删用 typingDurationMs
+      durationMs = policy.shouldAnimateText() ? policy.typingDurationMs : 0
+    }
+    plan.durationMs = durationMs
+
+    const frame = durationMs > 0
+      ? EditorMotionCoordinator.buildFrame(
+          plan, oldSnapshot, newSnapshot, newLayout, startFrame, 0
+        )
+      : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
+
+    return {
+      plan: plan,
+      frame: frame,
+      oldSnapshot: oldSnapshot,
+      oldLayout: oldLayout,
+      newSnapshot: newSnapshot,
+      newLayout: newLayout,
+      geometryKey: newGeometryKey,
+      textRevisionKey: newTextRevisionKey,
+      motionDurationMs: durationMs,
+      firstCaretRect: firstCaretRect,
+      glyphIdentities: identities.newTable
+    }
+  }
+
+  /**
+   * 安装已提交状态。
+   */
+  private applyCommittedState(state: MotionCommittedState): void {
+    this.currentPlan = state.plan
+    this.currentFrame = state.frame
+    this.oldSnapshot = state.oldSnapshot
+    this.oldLayout = state.oldLayout
+    this.newSnapshot = state.newSnapshot
+    this.newLayout = state.newLayout
+    this.geometryKey = state.geometryKey
+    this.textRevisionKey = state.textRevisionKey
+    this.motionDurationMs = state.motionDurationMs
+    this.firstCaretRect = state.firstCaretRect
+    this.glyphIdentities = state.glyphIdentities
+  }
+
+  /**
+   * 空规划。
+   */
+  private static emptyPlan(): EditorMotionPlan {
+    return {
+      insertRuns: [],
+      deletedRuns: [],
+      retainedMoves: [],
+      caretPath: [],
+      durationMs: 0,
+      motionKind: MotionKind.None
+    }
+  }
+
+  /**
+   * 把事务链复合成一个统一坐标系的 editResult。
+   *
+   * 单笔/空链直接返回原值；多笔走 EditorMotionTransactionComposer，
+   * 校验失败返回 null（调用方按静态重置处理，不得发布缺片的动画）。
+   */
+  private static composeChain(
+    editResults: EditorEditResult[],
+    oldSnapshot: EditorLayoutSnapshot,
+    newSnapshot: EditorLayoutSnapshot
+  ): EditorEditResult | null {
     if (editResults.length === 0) {
-      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, null, contentWidth, policy, firstCaretRect)
+      return null
     }
-    // 单事务 → 走 acceptUpdate（传单个 editResult）
     if (editResults.length === 1) {
-      return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, editResults[0], contentWidth, policy, firstCaretRect)
+      return editResults[0]
     }
-    // 多事务 → 使用 TransactionComposer 逐笔复合
     const composed = EditorMotionTransactionComposer.compose(
       editResults,
       oldSnapshot.text,
@@ -198,19 +483,11 @@ export class EditorMotionCoordinator {
       oldSnapshot.revision,
       newSnapshot.revision
     )
-    // 校验失败 → 链断裂或首尾 revision 不匹配，走 resetToStatic
     if (!composed.isValid) {
-      const newGeometryKey: GeometryKey = {
-        fontSize: newSnapshot.fontSize,
-        lineSpacing: newSnapshot.lineSpacingMultiplier,
-        contentWidth: contentWidth
-      }
-      this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
-      return this.currentFrame
+      return null
     }
-    // 构造复合后的 editResult——使用统一坐标系的 displayPatches 和 offsetMap
     const lastEr = editResults[editResults.length - 1]
-    const composedEditResult: EditorEditResult = {
+    return {
       outcome: lastEr.outcome,
       transactionId: lastEr.transactionId,
       baseRevision: oldSnapshot.revision,
@@ -225,103 +502,89 @@ export class EditorMotionCoordinator {
       offsetMap: composed.offsetMap,
       contentDelta: lastEr.contentDelta
     }
-    // 走 acceptUpdate 逻辑（此时 baseRevision === oldSnapshot.revision，校验会通过）
-    return this.acceptUpdate(oldSnapshot, oldLayout, newSnapshot, newLayout, composedEditResult, contentWidth, policy, firstCaretRect)
   }
 
   /**
-   * 接收编辑更新，生成新 plan，retarget 到最新 canonical。
+   * Issue #879 最新复核评论问题3：把字符簇身份表向前搬运到 newSnapshot。
    *
-   * Issue #879 最新复核评论修复（问题5）：新增 firstCaretRect 参数，
-   * 空正文时优先使用 firstCaretRect 而非估算。
+   * - 旧表与 oldSnapshot 不匹配时（首次、会话切换、几何重置）用 oldSnapshot.text 重建；
+   * - 有真实编辑时按该笔 patch 逐笔搬运；搬运失败（越界/非字符边界/文本不符）时
+   *   退化为 null——宁可让本次匹配退回内容 hash，也不能发布错身份。
    *
-   * @param oldSnapshot 旧布局快照（含旧正文 text）
-   * @param oldLayout 旧行布局
-   * @param newSnapshot 新布局快照（含新正文 text）
-   * @param newLayout 新行布局
-   * @param editResult 本次编辑事务结果（null 表示非编辑触发的更新）
-   * @param contentWidth 内容宽度（vp）
-   * @param policy 运动策略
-   * @param firstCaretRect 首行 caret 几何（可选，空正文时由调用方从 EditorPendingLayoutHost 传入）
-   * @returns 新的视觉帧（动画起始帧）
+   * @param includeOld 仅当没有编辑时（纯光标/样式更新）才需要旧表用于匹配
+   * @returns oldTable（匹配上一帧用）与 newTable（提交后成为当前表）
    */
-  acceptUpdate(
+  private static advanceIdentities(
+    current: GlyphIdentityTable | null,
+    includeOld: boolean,
     oldSnapshot: EditorLayoutSnapshot,
-    oldLayout: LineLayout[],
     newSnapshot: EditorLayoutSnapshot,
-    newLayout: LineLayout[],
-    editResult: EditorEditResult | null,
-    contentWidth: number,
-    policy: EditorMotionPolicy,
-    firstCaretRect?: CaretRect | null
-  ): EditorVisualFrame {
-    // 计算新几何身份
-    const newGeometryKey: GeometryKey = {
-      fontSize: newSnapshot.fontSize,
-      lineSpacing: newSnapshot.lineSpacingMultiplier,
-      contentWidth: contentWidth
-    }
-
-    // 几何身份变化（字号变更/宽度变化）→ 直接显示静态画面
-    if (!EditorMotionCoordinator.geometryEquals(this.geometryKey, newGeometryKey)) {
-      this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
-      return this.currentFrame
-    }
-
-    // 验证 editResult 的 baseRevision 和 newRevision 是否匹配
-    if (editResult !== null) {
-      if (editResult.baseRevision !== oldSnapshot.revision ||
-          editResult.newRevision !== newSnapshot.revision) {
-        this.resetToStatic(newGeometryKey, newSnapshot, newLayout)
-        return this.currentFrame
+    editResult: EditorEditResult | null
+  ): IdentityAdvance {
+    let oldTable: GlyphIdentityTable | null = null
+    if (includeOld) {
+      if (current !== null && current.revision === newSnapshot.revision && current.text === newSnapshot.text) {
+        // 没有编辑：旧表已经描述新正文（同一 revision）——直接复用，身份不变
+        return { oldTable: current, newTable: current }
+      }
+      oldTable = current !== null && current.revision === oldSnapshot.revision &&
+        current.text === oldSnapshot.text
+        ? current
+        : GlyphIdentityTable.create(oldSnapshot.text, oldSnapshot.revision)
+      // 非编辑更新：正文没变就沿用同一份身份，只把 revision 标签推进——
+      // 否则下一次编辑会因 revision 对不上而重建整张表，丢掉全部跨修订身份。
+      return {
+        oldTable: oldTable,
+        newTable: newSnapshot.text === oldSnapshot.text
+          ? oldTable.withRevision(newSnapshot.revision)
+          : GlyphIdentityTable.create(newSnapshot.text, newSnapshot.revision)
       }
     }
 
-    // 保存当前可见画面作为起始状态
-    const startFrame = this.currentFrame
-
-    // 用 Planner 生成新 plan（传入 oldSnapshot + oldLayout + newSnapshot + newLayout）
-    this.currentPlan = EditorMotionPlanner.plan(
-      oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, startFrame
-    )
-
-    // 确定动画时长
-    if (this.currentPlan.motionKind === MotionKind.None ||
-        this.currentPlan.motionKind === MotionKind.CaretMove) {
-      // 纯光标移动用 cursorDurationMs
-      this.motionDurationMs = policy.shouldAnimateCaret() ? policy.cursorDurationMs : 0
+    if (current !== null && current.revision === oldSnapshot.revision && current.text === oldSnapshot.text) {
+      oldTable = current
+    } else if (current !== null && current.revision === newSnapshot.revision && current.text === newSnapshot.text) {
+      // 已提交到新正文（重复回调）——旧侧无法匹配，但仍保留表
+      return { oldTable: null, newTable: current }
     } else {
-      // 正文增删用 typingDurationMs
-      this.motionDurationMs = policy.shouldAnimateText() ? policy.typingDurationMs : 0
+      oldTable = GlyphIdentityTable.create(oldSnapshot.text, oldSnapshot.revision)
     }
 
-    // 设置 plan 的 durationMs
-    this.currentPlan.durationMs = this.motionDurationMs
-
-    // 更新缓存
-    this.oldSnapshot = oldSnapshot
-    this.oldLayout = oldLayout
-    this.newSnapshot = newSnapshot
-    this.newLayout = newLayout
-    this.geometryKey = newGeometryKey
-    this.firstCaretRect = firstCaretRect ?? null
-    this.textRevisionKey = {
-      revision: newSnapshot.revision,
-      generation: newSnapshot.generation,
-      compositionGeneration: newSnapshot.compositionGeneration
+    if (editResult === null) {
+      return {
+        oldTable: oldTable,
+        newTable: newSnapshot.text === oldSnapshot.text
+          ? oldTable.withRevision(newSnapshot.revision)
+          : GlyphIdentityTable.create(newSnapshot.text, newSnapshot.revision)
+      }
     }
 
-    // 如果不需要动画（时长为 0），直接返回终态帧
-    if (this.motionDurationMs <= 0) {
-      this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, this.firstCaretRect)
-      this.currentFrame.isAnimating = false
-      return this.currentFrame
+    const patches = EditorMotionCoordinator.collectCarryPatches(editResult)
+    const nextText = applyPatchesToText(oldSnapshot.text, patches)
+    if (nextText === null || nextText !== newSnapshot.text) {
+      // 搬运结果与 Core 给出的新正文不一致——身份不可信，退回内容 hash
+      return { oldTable: oldTable, newTable: null }
     }
+    const newTable = oldTable.applyPatches(patches, nextText, newSnapshot.revision)
+    if (newTable === null) {
+      return { oldTable: oldTable, newTable: null }
+    }
+    return { oldTable: oldTable, newTable: newTable }
+  }
 
-    // 生成动画起始帧（progress=0）并回写 currentFrame
-    // Issue #879 本轮复核评论修复（问题3）：用 advance 而非 sampleFrame 回写 currentFrame。
-    this.currentFrame = this.advance(0)
-    return this.currentFrame
+  /**
+   * 把 DisplayPatch 投影成不依赖 DTO 的纯数据（供身份表 / 位置映射使用）。
+   */
+  static collectCarryPatches(editResult: EditorEditResult): GlyphCarryPatch[] {
+    const patches: GlyphCarryPatch[] = []
+    for (const patch of editResult.displayPatches) {
+      patches.push({
+        replaceStartByte: patch.replaceByteStart,
+        replaceEndByte: patch.replaceByteEndExclusive,
+        insertedText: patch.insertedText
+      })
+    }
+    return patches
   }
 
   /**
@@ -357,7 +620,43 @@ export class EditorMotionCoordinator {
    * @returns 当前进度的视觉帧（不回写 currentFrame——用 advance 回写）
    */
   sampleFrame(progress: number): EditorVisualFrame {
-    const plan = this.currentPlan
+    return EditorMotionCoordinator.buildFrame(
+      this.currentPlan,
+      this.oldSnapshot,
+      this.newSnapshot,
+      this.newLayout,
+      this.currentFrame,
+      progress
+    )
+  }
+
+  /**
+   * 从 plan 和 progress 计算视觉帧——同一 progress 同时采样所有通道。
+   *
+   * Issue #879 最新复核评论问题4：显式传入快照/布局/起始帧，候选 plan 也能在不触碰
+   * 已提交状态的前提下采样（prepareCandidate 用它生成候选起始帧）。
+   *
+   * 同一 progress 同时采样 insertRuns（吐字）、deletedRuns（吞字）、
+   * retainedMoves（保留字移动）、caretPath（光标），静态可见区完整扣除所有
+   * 被 motion 接管的目标 glyph 身份（insertRuns + retainedMoves 的新位置 +
+   * deletedRuns 的旧位置）。
+   *
+   * Issue #879 最新复核评论问题3：clusterId/renderNodeKey 直接取 plan 计算出的
+   * stableGlyphId（跨修订稳定的字符身份），不再用 utf16 区间 + 文本 hash 现场重算。
+   */
+  private static buildFrame(
+    plan: EditorMotionPlan,
+    oldSnapshot: EditorLayoutSnapshot | null,
+    newSnapshot: EditorLayoutSnapshot | null,
+    newLayout: LineLayout[],
+    caretBase: EditorVisualFrame,
+    progress: number
+  ): EditorVisualFrame {
+    const newRevision = newSnapshot?.revision ?? 0
+    const newText = newSnapshot?.text ?? ''
+    const oldRevision = oldSnapshot?.revision ?? 0
+    const oldText = oldSnapshot?.text ?? ''
+
     const p = EditorMotionCoordinator.easing(progress)
 
     // 无运动 → 返回当前帧
@@ -366,7 +665,7 @@ export class EditorMotionCoordinator {
         plan.deletedRuns.length === 0 &&
         plan.retainedMoves.length === 0 &&
         plan.caretPath.length === 0) {
-      return this.currentFrame
+      return caretBase
     }
 
     // 同一 progress 同时采样所有通道
@@ -381,8 +680,6 @@ export class EditorMotionCoordinator {
       const targetRight = run.rect.x + run.rect.width
       const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
       const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
-      const newRevision = this.newSnapshot?.revision ?? 0
-      const newText = this.newSnapshot?.text ?? ''
       motionGlyphWindows.push({
         sourceKind: 'new',
         utf16Start: run.utf16Start,
@@ -399,8 +696,8 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, newText),
-        renderNodeKey: `new-${newRevision}-${EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, newText)}`,
+        clusterId: run.stableGlyphId,
+        renderNodeKey: `new-${newRevision}-${run.stableGlyphId}`,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: run.rect.x,
@@ -416,13 +713,11 @@ export class EditorMotionCoordinator {
     for (const run of plan.deletedRuns) {
       if (run.isForward) {
         // Forward Delete：目标裁切窗口是 [caret, caret]（零宽度）
-        const caretX = this.currentFrame.caretX
+        const caretX = caretBase.caretX
         const targetLeft = caretX
         const targetRight = caretX
         const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
         const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
-        const oldRevision = this.oldSnapshot?.revision ?? 0
-        const oldText = this.oldSnapshot?.text ?? ''
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -439,8 +734,8 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText),
-          renderNodeKey: `old-${oldRevision}-${EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText)}`,
+          clusterId: run.stableGlyphId,
+          renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -452,8 +747,6 @@ export class EditorMotionCoordinator {
         const targetRight = run.rect.x
         const currentLeft = run.startClipLeft + (targetLeft - run.startClipLeft) * p
         const currentRight = run.startClipRight + (targetRight - run.startClipRight) * p
-        const oldRevision = this.oldSnapshot?.revision ?? 0
-        const oldText = this.oldSnapshot?.text ?? ''
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: run.utf16Start,
@@ -470,8 +763,8 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText),
-          renderNodeKey: `old-${oldRevision}-${EditorMotionCoordinator.makeStableGlyphId(run.utf16Start, run.utf16End, oldText)}`,
+          clusterId: run.stableGlyphId,
+          renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -487,8 +780,6 @@ export class EditorMotionCoordinator {
     for (const move of plan.retainedMoves) {
       const currentX = move.startPositionX + (move.newRect.x - move.startPositionX) * p
       const currentY = move.startPositionY + (move.newRect.y - move.startPositionY) * p
-      const oldRevision = this.oldSnapshot?.revision ?? 0
-      const oldText = this.oldSnapshot?.text ?? ''
       motionGlyphWindows.push({
         sourceKind: 'old',
         utf16Start: move.oldUtf16Start,
@@ -505,8 +796,8 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        clusterId: EditorMotionCoordinator.makeStableGlyphId(move.oldUtf16Start, move.oldUtf16End, oldText),
-        renderNodeKey: `old-${oldRevision}-${EditorMotionCoordinator.makeStableGlyphId(move.oldUtf16Start, move.oldUtf16End, oldText)}`,
+        clusterId: move.stableGlyphId,
+        renderNodeKey: `old-${oldRevision}-${move.stableGlyphId}`,
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
         currentPositionX: currentX,
@@ -515,9 +806,9 @@ export class EditorMotionCoordinator {
     }
 
     // 4. 光标位置：从 caretPath 插值
-    let caretX = this.currentFrame.caretX
-    let caretY = this.currentFrame.caretY
-    let caretHeight = this.currentFrame.caretHeight
+    let caretX = caretBase.caretX
+    let caretY = caretBase.caretY
+    let caretHeight = caretBase.caretHeight
     if (plan.caretPath.length > 0) {
       // 多段轨迹：按 progress 分配到各段
       const segCount = plan.caretPath.length
@@ -556,7 +847,7 @@ export class EditorMotionCoordinator {
     }
 
     // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
-    const staticVisibleRanges = this.computeStaticRangesMultiChannel(plan)
+    const staticVisibleRanges = EditorMotionCoordinator.computeStaticRangesMultiChannel(plan, newLayout)
 
     return {
       caretX,
@@ -567,13 +858,6 @@ export class EditorMotionCoordinator {
       isAnimating: progress < 1,
       motionKind: plan.motionKind
     }
-  }
-
-  /**
-   * 是否正在动画中。
-   */
-  isAnimating(): boolean {
-    return this.currentFrame.isAnimating
   }
 
   /**
@@ -658,45 +942,7 @@ export class EditorMotionCoordinator {
     return this.currentFrame
   }
 
-  /**
-   * 获取当前运动规划。
-   */
-  getCurrentPlan(): EditorMotionPlan {
-    return this.currentPlan
-  }
-
   // ── 私有方法 ──
-
-  /**
-   * 重置到静态画面（几何身份变化或 revision 不匹配时）。
-   */
-  private resetToStatic(
-    newGeometryKey: GeometryKey,
-    newSnapshot: EditorLayoutSnapshot,
-    newLayout: LineLayout[]
-  ): void {
-    this.geometryKey = newGeometryKey
-    this.textRevisionKey = {
-      revision: newSnapshot.revision,
-      generation: newSnapshot.generation,
-      compositionGeneration: newSnapshot.compositionGeneration
-    }
-    this.oldSnapshot = newSnapshot
-    this.oldLayout = newLayout
-    this.newSnapshot = newSnapshot
-    this.newLayout = newLayout
-    this.currentFrame = EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, this.firstCaretRect)
-    this.currentPlan = {
-      insertRuns: [],
-      deletedRuns: [],
-      retainedMoves: [],
-      caretPath: [],
-      durationMs: 0,
-      motionKind: MotionKind.None
-    }
-    this.motionDurationMs = 0
-    this.currentFrame.isAnimating = false
-  }
 
   /**
    * easing 函数：三次方缓出。
@@ -719,27 +965,6 @@ export class EditorMotionCoordinator {
     return a.fontSize === b.fontSize &&
            a.lineSpacing === b.lineSpacing &&
            a.contentWidth === b.contentWidth
-  }
-
-  /**
-   * 生成跨版本稳定的 stableGlyphId（即 clusterId 的值）。
-   *
-   * Issue #879 最新复核评论修复（问题3）：
-   * stableGlyphId 不再包含 sourceKind——同一字符在上一笔是"new"（刚插入），
-   * 下一笔它成了"old"（旧正文）时，sourceKind 会从 new 变 old 导致不匹配。
-   * 必须与 EditorMotionPlanner.makeStableGlyphId 使用相同算法。
-   */
-  private static makeStableGlyphId(
-    utf16Start: number,
-    utf16End: number,
-    text: string
-  ): string {
-    const content = text.substring(utf16Start, utf16End)
-    let hash = 0
-    for (let i = 0; i < content.length; i++) {
-      hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0
-    }
-    return `${utf16Start}-${utf16End}-${hash}`
   }
 
   /**
@@ -818,13 +1043,16 @@ export class EditorMotionCoordinator {
    * 拿旧 offset 在新正文上做减法会误删新正文的字。
    * 每帧从同一版完整目标静态范围重新计算，不从上一帧已经裁过的范围递减。
    */
-  private computeStaticRangesMultiChannel(plan: EditorMotionPlan): StaticVisibleRange[] {
+  private static computeStaticRangesMultiChannel(
+    plan: EditorMotionPlan,
+    newLayout: LineLayout[]
+  ): StaticVisibleRange[] {
     // 以本次 newLayout 的完整 UTF-16 区间为底，每帧重新计算
     const fullRange: StaticVisibleRange[] = []
-    if (this.newLayout.length > 0) {
+    if (newLayout.length > 0) {
       fullRange.push({
-        utf16Start: this.newLayout[0].startUtf16,
-        utf16End: this.newLayout[this.newLayout.length - 1].endUtf16
+        utf16Start: newLayout[0].startUtf16,
+        utf16End: newLayout[newLayout.length - 1].endUtf16
       })
     }
 

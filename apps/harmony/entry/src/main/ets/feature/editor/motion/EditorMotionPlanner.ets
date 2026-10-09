@@ -32,6 +32,25 @@ import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, Re
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
+import { GlyphIdentityTable } from './editor_glyph_identity'
+
+/**
+ * Issue #879 最新复核评论问题3：保留字移动的中间结构。
+ *
+ * identifyRetainedMoves 只负责几何配对，不决定字形身份——
+ * stableGlyphId 由调用方用身份表按旧正文位置解析，避免中间层凭空造身份。
+ */
+interface RetainedMoveSpan {
+  oldUtf16Start: number
+  oldUtf16End: number
+  newUtf16Start: number
+  newUtf16End: number
+  sourceKind: 'old' | 'new'
+  oldRect: GlyphRect
+  newRect: GlyphRect
+  startPositionX: number
+  startPositionY: number
+}
 
 /**
  * 受影响的正文范围（UTF-16 offset 对）。
@@ -123,7 +142,9 @@ export class EditorMotionPlanner {
     newSnapshot: EditorLayoutSnapshot,
     newLayout: LineLayout[],
     editResult: EditorEditResult | null,
-    lastVisibleFrame: EditorVisualFrame
+    lastVisibleFrame: EditorVisualFrame,
+    oldIdentities: GlyphIdentityTable | null,
+    newIdentities: GlyphIdentityTable | null
   ): EditorMotionPlan {
     // 无 editResult（初始加载/切换章节/字号变更）→ 无运动
     if (editResult === null) {
@@ -151,7 +172,10 @@ export class EditorMotionPlanner {
     // CompositionCommit 走正常的 displayPatches 分析流程
 
     // 从 displayPatches 分析正文增删
-    return EditorMotionPlanner.planFromPatches(oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, lastVisibleFrame)
+    return EditorMotionPlanner.planFromPatches(
+      oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, lastVisibleFrame,
+      oldIdentities, newIdentities
+    )
   }
 
   /**
@@ -285,7 +309,9 @@ export class EditorMotionPlanner {
     newSnapshot: EditorLayoutSnapshot,
     newLayout: LineLayout[],
     editResult: EditorEditResult,
-    lastVisibleFrame: EditorVisualFrame
+    lastVisibleFrame: EditorVisualFrame,
+    oldIdentities: GlyphIdentityTable | null,
+    newIdentities: GlyphIdentityTable | null
   ): EditorMotionPlan {
     const patches: DisplayPatch[] = editResult.displayPatches
     const oldText = oldSnapshot.text
@@ -301,7 +327,8 @@ export class EditorMotionPlanner {
 
     // Issue #879 最新复核评论修复（问题3）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
     // 用于在连续快速输入时消费当前帧的实际裁切窗口和位置作为起始状态。
-    // clusterId（stableGlyphId）不含 sourceKind——同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
+    // key 是 stableGlyphId（跨修订稳定的字形身份）——同一字符在上一笔是"new"
+    // 下一笔成为"old"时身份不变，与 sourceKind / 位置无关。
     const visibleWindowMap: Map<string, MotionGlyphWindow> = new Map()
     if (lastVisibleFrame.isAnimating && lastVisibleFrame.motionGlyphWindows.length > 0) {
       for (const w of lastVisibleFrame.motionGlyphWindows) {
@@ -329,10 +356,11 @@ export class EditorMotionPlanner {
           oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
         for (const rect of oldRects) {
-          // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind——
-          // 同一字符在上一笔是"new"（刚插入），下一笔它成了"old"（旧正文），
-          // 用 sourceKind 构造 clusterId 会查不到——改为不含 sourceKind 的稳定身份。
-          const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(rect.utf16Start, rect.utf16End, oldText)
+          // Issue #879 最新复核评论问题3：稳定身份来自身份表的字符簇搬运结果，
+          // 位置平移、old/new 角色变化都不改身份；表缺失时退回内容 hash。
+          const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+            oldIdentities, rect.utf16Start, rect.utf16End, oldText
+          )
           const visibleWindow = visibleWindowMap.get(stableGlyphId)
           // 目标状态：rect.rect（旧排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认完整宽度
@@ -345,7 +373,8 @@ export class EditorMotionPlanner {
             rect: rect.rect,
             isForward: isForwardDelete,
             startClipLeft: startClipLeft,
-            startClipRight: startClipRight
+            startClipRight: startClipRight,
+            stableGlyphId: stableGlyphId
           })
         }
       }
@@ -357,8 +386,11 @@ export class EditorMotionPlanner {
           newText, newUtf16Start, newUtf16End, newLayout
         )
         for (const rect of newRects) {
-          // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind。
-          const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(rect.utf16Start, rect.utf16End, newText)
+          // Issue #879 最新复核评论问题3：新插入的字拿到独立身份（ins-…），
+          // 它在本笔之后成为旧正文时仍沿用同一身份。
+          const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+            newIdentities, rect.utf16Start, rect.utf16End, newText
+          )
           const visibleWindow = visibleWindowMap.get(stableGlyphId)
           // 目标状态：rect.rect（新排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认零宽度
@@ -370,7 +402,8 @@ export class EditorMotionPlanner {
             sourceKind: 'new',
             rect: rect.rect,
             startClipLeft: startClipLeft,
-            startClipRight: startClipRight
+            startClipRight: startClipRight,
+            stableGlyphId: stableGlyphId
           })
         }
       }
@@ -382,8 +415,10 @@ export class EditorMotionPlanner {
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const move of moves) {
-        // Issue #879 最新复核评论修复（问题3）：stableGlyphId 不含 sourceKind。
-        const stableGlyphId = EditorMotionPlanner.makeStableGlyphId(move.oldUtf16Start, move.oldUtf16End, oldText)
+        // Issue #879 最新复核评论问题3：保留字身份同样来自身份表（旧正文侧）。
+        const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+          oldIdentities, move.oldUtf16Start, move.oldUtf16End, oldText
+        )
         const visibleWindow = visibleWindowMap.get(stableGlyphId)
         // 目标状态：move.newRect（新排版中的位置）
         // 起始状态：如果有匹配的 visibleWindow，用其 currentPositionX/Y；否则默认 oldRect.x/y
@@ -398,7 +433,8 @@ export class EditorMotionPlanner {
           oldRect: move.oldRect,
           newRect: move.newRect,
           startPositionX: startPositionX,
-          startPositionY: startPositionY
+          startPositionY: startPositionY,
+          stableGlyphId: stableGlyphId
         })
       }
     }
@@ -457,18 +493,33 @@ export class EditorMotionPlanner {
   }
 
   /**
-   * 生成跨版本稳定的 stableGlyphId（即 clusterId 的值）。
+   * 解析一个字形范围的跨修订稳定身份。
    *
-   * Issue #879 最新复核评论修复（问题3）：
-   * stableGlyphId 不再包含 sourceKind——同一字符在上一笔是"new"（刚插入），
-   * 下一笔它成了"old"（旧正文）时，sourceKind 会从 new 变 old 导致不匹配。
-   * 去掉 sourceKind 后，只要字符内容和位置相同就能匹配。
-   *
-   * 格式：utf16Start + utf16End + textHash
-   * 其中 textHash 是 text.substring(utf16Start, utf16End) 的简单 hash，
-   * 用于区分相同 offset 但不同内容的字符（理论上不会发生，但作为安全保障）。
+   * Issue #879 最新复核评论问题3：
+   * 优先使用身份表——它由每笔编辑逐笔搬运字符簇身份得到，
+   * 位置平移、old/new 角色变化都不改身份，相同位置的不同字也不会互相误配。
+   * 身份表缺失该位置时（例如表本身不可用）退回内容 hash：
+   * 它只能保证「位置 + 内容」相同才算同一个字，不如身份表可靠，但不会错配到别的字。
    */
-  private static makeStableGlyphId(
+  private static resolveGlyphId(
+    identities: GlyphIdentityTable | null,
+    utf16Start: number,
+    utf16End: number,
+    text: string
+  ): string {
+    if (identities !== null) {
+      const glyphId = identities.glyphIdAt(utf16Start)
+      if (glyphId !== null) {
+        return glyphId
+      }
+    }
+    return EditorMotionPlanner.fallbackGlyphId(utf16Start, utf16End, text)
+  }
+
+  /**
+   * 身份表不可用时的兜底身份（位置 + 内容 hash）。
+   */
+  private static fallbackGlyphId(
     utf16Start: number,
     utf16End: number,
     text: string
@@ -690,8 +741,8 @@ export class EditorMotionPlanner {
     newText: string,
     oldLayout: LineLayout[],
     newLayout: LineLayout[]
-  ): RetainedMove[] {
-    const moves: RetainedMove[] = []
+  ): RetainedMoveSpan[] {
+    const moves: RetainedMoveSpan[] = []
     const entries: OffsetMapEntry[] = offsetMap.entries
 
     for (const entry of entries) {
