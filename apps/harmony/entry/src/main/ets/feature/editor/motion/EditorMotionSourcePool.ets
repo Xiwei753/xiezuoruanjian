@@ -61,6 +61,22 @@ export interface MotionWindowState {
   mounted: boolean
   /** 本窗口的布局是否已完成（ComponentObserver 'layout' 回调已触发） */
   layoutReady: boolean
+  /**
+   * Issue #879 评论6086564975 问题1：displayed owner 引用计数。
+   *
+   * buildMotionWindowSources 中每个窗口调 acquireWindowState(key, 'displayed') 递增，
+   * onWindowDisappear 中调 releaseWindowState(key, 'displayed') 递减。
+   * 只有 displayedRefCount 和 candidateRefCount 都归 0 才真正删除 windowState——
+   * 避免 displayed 窗口消失时把 candidate 仍需引用的共享窗口状态一起删掉。
+   */
+  displayedRefCount: number
+  /**
+   * Issue #879 评论6086564975 问题1：candidate owner 引用计数。
+   *
+   * buildCandidateMotionWindowSources 中每个窗口调 acquireWindowState(key, 'candidate') 递增，
+   * onWindowDisappear 中调 releaseWindowState(key, 'candidate') 递减。
+   */
+  candidateRefCount: number
 }
 
 /**
@@ -244,7 +260,11 @@ export class EditorMotionSourcePool {
       renderNodeKey,
       textController: new TextController(),
       mounted: false,
-      layoutReady: false
+      layoutReady: false,
+      // Issue #879 评论6086564975 问题1：双 owner 引用计数初始化为 0。
+      // acquireWindowState 时递增，releaseWindowState 时递减。
+      displayedRefCount: 0,
+      candidateRefCount: 0
     }
     this.windowStates.set(renderNodeKey, state)
     return state
@@ -312,16 +332,55 @@ export class EditorMotionSourcePool {
   }
 
   /**
-   * 释放本窗口状态。
+   * Issue #879 评论6086564975 问题1：获取窗口状态引用（递增 owner 引用计数）。
    *
-   * Issue #879 最新复核评论修复（问题3）：
-   * Text.onDisAppear 中调用——清理本窗口的 TextController/mounted/layoutReady 状态。
-   * 对应的 Text 组件已从组件树中移除，窗口状态不再需要。
+   * buildMotionWindowSources 中对每个窗口调 acquireWindowState(key, 'displayed')，
+   * buildCandidateMotionWindowSources 中对每个窗口调 acquireWindowState(key, 'candidate')。
+   * 同一 renderNodeKey 被 displayed 和 candidate 同时引用时两个计数各自独立递增，
+   * 只有都归 0 才真正删除 windowState。
    *
    * @param renderNodeKey 窗口渲染节点身份标识
+   * @param owner 引用方——'displayed' 或 'candidate'
    */
-  releaseWindowState(renderNodeKey: string): void {
-    this.windowStates.delete(renderNodeKey)
+  acquireWindowState(renderNodeKey: string, owner: 'displayed' | 'candidate'): void {
+    const state = this.getOrCreateWindowState(renderNodeKey)
+    if (owner === 'displayed') {
+      state.displayedRefCount++
+    } else {
+      state.candidateRefCount++
+    }
+  }
+
+  /**
+   * 释放本窗口状态。
+   *
+   * Issue #879 评论6086564975 问题1：改为双 owner 引用计数。
+   * Text.onDisAppear 中调用——递减对应 owner 的引用计数，
+   * 只有 displayedRefCount 和 candidateRefCount 都归 0 才真正删除 windowState。
+   * 这样 displayed 窗口消失时不会把 candidate 仍需引用的共享窗口状态一起删掉。
+   *
+   * @param renderNodeKey 窗口渲染节点身份标识
+   * @param owner 引用方——'displayed' 或 'candidate'
+   */
+  releaseWindowState(renderNodeKey: string, owner: 'displayed' | 'candidate'): void {
+    const state = this.windowStates.get(renderNodeKey)
+    if (state === undefined) {
+      return
+    }
+    if (owner === 'displayed') {
+      if (state.displayedRefCount > 0) {
+        state.displayedRefCount--
+      }
+    } else {
+      if (state.candidateRefCount > 0) {
+        state.candidateRefCount--
+      }
+    }
+    // 只有两个计数都归 0 才真正删除——
+    // 避免 displayed 窗口消失时把 candidate 仍需引用的共享窗口状态一起删掉。
+    if (state.displayedRefCount === 0 && state.candidateRefCount === 0) {
+      this.windowStates.delete(renderNodeKey)
+    }
   }
 
   /**

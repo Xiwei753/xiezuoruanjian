@@ -1069,12 +1069,25 @@ export struct SujianEditor {
   // 只有确属当前候选的 token 才能消费事务链；旧候选的回调拿不到有效 token。
   // 消费只清掉截至已提交 revision 的事务，不能无条件 pendingPresentationUpdates=[]。
   //
-  // Issue #879 复核评论修复（问题3）：窗口 ready 后才调本方法——
-  // 先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame →
-  // 调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
-  // 旧 animator 在候选准备阶段继续运行，屏幕上的上一笔吐字/光标动画不停顿；
-  // 提交瞬间才停止旧 animator，冻结真实屏幕帧，用 retargetCandidate 把候选 plan 的
-  // 起始 clip/position 替换为冻结帧的真实值，再一次性 commitCandidate 和更新主 Text。
+  // Issue #879 评论6086564975 问题2：重新设计流程——先准备节点，最终交棒时才冻结旧动画。
+  //
+  // 旧流程的问题：先 ++motionGeneration + cancel 旧 animator，然后才 retarget 和检查
+  // 最终窗口 ready。如果有新 key 未 ready，返回 false 但旧 animator 已 cancel，屏幕上运动停住。
+  //
+  // 新流程（实际最简方案）：
+  // 1. token 校验
+  // 2. 取 data（先不置 null）
+  // 3. 先 retarget（用当前 displayedVisualFrame——不管旧动画是否在跑，retarget 只是计算起始状态，不改变屏幕）
+  // 4. 检查 peekCommittedWindowKeys(retargeted) 全部 ready
+  // 5. 未 ready：pendingRetargetedCandidate = retargeted，candidateVisualFrame = retargeted.startFrame，
+  //    return false（不 cancel 旧 animator，旧 animator 继续逐帧运行，屏幕不冻结）
+  // 6. 都 ready：++motionGeneration → cancel 旧 animator → 冻结帧 → 重新 retarget（用冻结帧）→ commit
+  //
+  // 步骤3的 retarget 是"试探"——检查最终窗口集合和准备 staging。
+  // 步骤6的 retarget 才是"真正"的——用冻结帧重算起始状态。
+  // 步骤3和6的 retarget 产生的 renderNodeKey 集合应该相同（plan 中的 runs 不变，只是 pieces 的数值不同），
+  // 所以步骤5中 staging 的窗口就是步骤6需要的窗口。
+  // pendingRetargetedCandidate 只用于让 allMotionWindowsReady 知道该检查哪些 key。
   //
   // @returns 真正提交了返回 true；token 已过期或没有候选数据时返回 false（调用方不得再启动动画）。
   private executeDisplaySwitch(expectedToken: CandidateToken | null): boolean {
@@ -1095,12 +1108,62 @@ export struct SujianEditor {
       return false
     }
     const data = this.pendingDisplayData
-    // Issue #879 复核评论6085414957 问题2：先不置 pendingDisplayData = null，
+    // Issue #879 评论6086564975 问题2：先不置 pendingDisplayData = null，
     // 等确定所有最终窗口都 layoutReady 后才置 null 并提交。
     // 如果 retarget 后有新 key 未 ready，需要保留 pendingDisplayData 供下次重入使用。
 
-    // Issue #879 复核评论修复（问题3）：先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame。
-    // 旧 animator 在候选准备阶段继续运行，提交瞬间才停止。
+    // Issue #879 评论6086564975 问题2：重新设计流程——先准备节点，最终交棒时才冻结旧动画。
+    //
+    // 步骤3：先 retarget（用当前 displayedVisualFrame——不管旧动画是否在跑）。
+    // retarget 只是计算起始状态，不改变屏幕。
+    // 重入时（pendingRetargetedCandidate !== null）也重新 retarget——
+    // 旧动画可能已推进，displayedVisualFrame 已更新，需要用最新帧重算起始状态。
+    // pendingRetargetedCandidate 只用于让 allMotionWindowsReady 知道该检查哪些 key。
+    const currentDisplayedFrame = this.displayedVisualFrame ?? this.motionCoordinator.getCurrentFrame()
+    const currentDisplayed: DisplayedSnapshotContext = {
+      snapshot: this.displayedSnapshot ?? data.latestUpdate.layoutSnapshot,
+      layout: this.displayedLineLayouts,
+      identities: this.motionCoordinator.getCommittedIdentities()
+    }
+    let retargeted: PreparedCandidate | null = null
+    if (this.pendingCandidate !== null) {
+      retargeted = this.motionCoordinator.retargetCandidate(
+        this.pendingCandidate, currentDisplayedFrame, currentDisplayed
+      )
+    } else if (this.pendingRetargetedCandidate !== null) {
+      // pendingCandidate 已被消费（不应该发生），用暂存的 fallback。
+      retargeted = this.pendingRetargetedCandidate
+    }
+    if (retargeted === null) {
+      return false
+    }
+
+    // 步骤4：检查 retarget 后最终窗口集合是否都已 layoutReady。
+    // 共享 key（displayed 已 mounted 且 layoutReady）沿用其 ready 状态——
+    // isWindowLayoutReady 按 renderNodeKey 查同一个 windowState。
+    const finalKeys = this.motionCoordinator.peekCommittedWindowKeys(retargeted)
+    let allFinalWindowsReady = true
+    for (let i = 0; i < finalKeys.length; i++) {
+      if (!this.motionSourcePool.isWindowLayoutReady(finalKeys[i])) {
+        allFinalWindowsReady = false
+        break
+      }
+    }
+
+    // 步骤5：未 ready——暂存 retargeted，不 cancel 旧 animator，return false。
+    // 旧 animator 继续逐帧运行，屏幕不冻结。
+    // candidateVisualFrame 设为 retargeted.startFrame 让 ForEach 创建新窗口（opacity 0）。
+    // 新窗口的 layout 回调会调 tryCommitCandidate → allMotionWindowsReady
+    // → executeDisplaySwitch（重入，步骤3重新 retarget）。
+    if (!allFinalWindowsReady) {
+      this.pendingRetargetedCandidate = retargeted
+      this.candidateVisualFrame = retargeted.startFrame
+      // 不置 pendingDisplayData = null，不更新 displayed* 字段，不清 candidateToken。
+      // 不 cancel 旧 animator——屏幕上运动不停顿。
+      return false
+    }
+
+    // 步骤6：都 ready——此时才 ++motionGeneration → cancel 旧 animator → 冻结帧 → 重新 retarget → commit。
     // 必须先 ++motionGeneration 再 cancel——cancel 会额外触发一次终点 onFrame，
     // 先 cancel 再 ++generation 会让旧动画终值写到新画面。
     this.motionGeneration++
@@ -1113,7 +1176,7 @@ export struct SujianEditor {
     // 冻结当前 displayedVisualFrame——这是旧 animator 停止后的真实屏幕状态。
     // 其 MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 反映真实屏幕进度。
     const frozenDisplayedFrame = this.displayedVisualFrame ?? this.motionCoordinator.getCurrentFrame()
-    // Issue #879 复核评论6075662695问题3：提交瞬间的「在屏」上下文——
+    // 提交瞬间的「在屏」上下文——
     // 必须在覆盖 displayed* 字段之前取出，retargetCandidate 用它按字形重算起始 clip/position。
     // 身份表用 Coordinator 当前已提交版本的表（描述在屏正文，提交前不推进）。
     const frozenDisplayed: DisplayedSnapshotContext = {
@@ -1122,44 +1185,17 @@ export struct SujianEditor {
       identities: this.motionCoordinator.getCommittedIdentities()
     }
 
-    // Issue #879 复核评论6085414957 问题2：retarget 候选。
-    // 如果有 pendingRetargetedCandidate（上次因窗口未 ready 暂存），直接用它；
-    // 否则调 retargetCandidate 重新规划候选起点。
-    // retargetCandidate 可能重新拆分 piece，产生新 renderNodeKey。
-    let retargeted: PreparedCandidate | null = null
-    if (this.pendingRetargetedCandidate !== null) {
-      retargeted = this.pendingRetargetedCandidate
-    } else if (this.pendingCandidate !== null) {
-      retargeted = this.motionCoordinator.retargetCandidate(
+    // 重新 retarget（用冻结帧，因为旧 animator 停止后帧可能和步骤3不同）。
+    // 步骤3的 retarget 是"试探"——检查最终窗口集合和准备 staging。
+    // 步骤6的 retarget 才是"真正"的——用冻结帧重算起始状态。
+    // 步骤3和6的 retarget 产生的 renderNodeKey 集合应该相同
+    // （plan 中的 runs 不变，只是 pieces 的数值不同），
+    // 所以步骤5中 staging 的窗口就是步骤6需要的窗口。
+    let finalRetargeted: PreparedCandidate = retargeted
+    if (this.pendingCandidate !== null) {
+      finalRetargeted = this.motionCoordinator.retargetCandidate(
         this.pendingCandidate, frozenDisplayedFrame, frozenDisplayed
       )
-    }
-    if (retargeted === null) {
-      return false
-    }
-
-    // Issue #879 复核评论6085414957 问题2：检查 retarget 后最终窗口集合是否都已 layoutReady。
-    // retarget 可能产生新 renderNodeKey（重新拆分 piece），这些新 key 对应的窗口
-    // 需要先参与布局才能 ready。如果有未 ready 的窗口，暂存 retargeted 并返回 false，
-    // 把 candidateVisualFrame 设为 retargeted.startFrame 让 ForEach 创建新窗口（opacity 0）。
-    // 旧 animator 已 cancel，屏幕冻结在 frozenDisplayedFrame，等新窗口 layout 回调再次触发提交。
-    const finalKeys = this.motionCoordinator.peekCommittedWindowKeys(retargeted)
-    let allFinalWindowsReady = true
-    for (let i = 0; i < finalKeys.length; i++) {
-      if (!this.motionSourcePool.isWindowLayoutReady(finalKeys[i])) {
-        allFinalWindowsReady = false
-        break
-      }
-    }
-    if (!allFinalWindowsReady) {
-      this.pendingRetargetedCandidate = retargeted
-      // 把 candidateVisualFrame 设为 retargeted.startFrame，
-      // 让 ForEach 创建 retarget 后的新窗口（作为不可见候选窗口参与布局）。
-      // 新窗口的 layout 回调会调 tryCommitCandidate → allMotionWindowsReady
-      // → executeDisplaySwitch（pendingRetargetedCandidate 不为 null，直接用它）。
-      this.candidateVisualFrame = retargeted.startFrame
-      // 不置 pendingDisplayData = null，不更新 displayed* 字段，不清 candidateToken。
-      return false
     }
 
     // 所有最终窗口都 ready——提交。
@@ -1181,7 +1217,7 @@ export struct SujianEditor {
     // Issue #879 复核评论修复（问题3）：commitCandidate → 更新主 Text。
     // 用提交瞬间真实在屏布局 + 冻结帧按字形重算起始 clip/position，
     // 确保新动画从真实屏幕状态开始，而非从过时的起始状态跳变。
-    this.displayedVisualFrame = this.motionCoordinator.commitCandidate(retargeted)
+    this.displayedVisualFrame = this.motionCoordinator.commitCandidate(finalRetargeted)
     this.candidateVisualFrame = null
 
     // 写入新 StyledString 到主 Text
@@ -1312,6 +1348,8 @@ export struct SujianEditor {
       if (source !== undefined) {
         const renderNodeKey = windows[i].renderNodeKey
         const windowState = this.motionSourcePool.getOrCreateWindowState(renderNodeKey)
+        // Issue #879 评论6086564975 问题1：displayed owner 引用计数。
+        this.motionSourcePool.acquireWindowState(renderNodeKey, 'displayed')
         result.push({
           window: windows[i],
           source: source,
@@ -1330,7 +1368,9 @@ export struct SujianEditor {
           },
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
-            this.motionSourcePool.releaseWindowState(rnKey)
+            // Issue #879 评论6086564975 问题1：带 owner 释放——
+            // 只有 displayed 和 candidate 引用计数都归 0 才真正删除 windowState。
+            this.motionSourcePool.releaseWindowState(rnKey, 'displayed')
             // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
             // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
             this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
@@ -1356,6 +1396,8 @@ export struct SujianEditor {
       if (source !== undefined) {
         const renderNodeKey = windows[i].renderNodeKey
         const windowState = this.motionSourcePool.getOrCreateWindowState(renderNodeKey)
+        // Issue #879 评论6086564975 问题1：candidate owner 引用计数。
+        this.motionSourcePool.acquireWindowState(renderNodeKey, 'candidate')
         result.push({
           window: windows[i],
           source: source,
@@ -1374,7 +1416,9 @@ export struct SujianEditor {
           },
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
-            this.motionSourcePool.releaseWindowState(rnKey)
+            // Issue #879 评论6086564975 问题1：带 owner 释放——
+            // 只有 displayed 和 candidate 引用计数都归 0 才真正删除 windowState。
+            this.motionSourcePool.releaseWindowState(rnKey, 'candidate')
             // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
             // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
             this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
@@ -1385,13 +1429,40 @@ export struct SujianEditor {
     return result
   }
 
-  // Issue #879 复核评论修复（问题1）：合并可见窗口源和候选窗口源。
-  // ForEach key 是 renderNodeKey，displayed 和 candidate 的 renderNodeKey 不同
-  // （sourceRevision 不同），不会冲突。候选窗口 ready 后原子提交时
-  // displayedVisualFrame = candidateVisualFrame，candidateVisualFrame = null，
-  // 旧 displayed 窗口被移除，原 candidate 窗口 visible 变为 true。
+  // Issue #879 评论6086564975 问题1：合并可见窗口源和候选窗口源——按 renderNodeKey 去重。
+  //
+  // 根因：继承运动字形保留原 sourceKind/sourceRevision/glyphIds，
+  // WindowInstanceIdAllocator.allocate(glyphIds) 对同一字形序列返回同一个 win-N，
+  // 因此 displayed 和 candidate 各产生同一个 renderNodeKey。
+  // 旧实现简单拼接 [...displayed, ...candidate] 后两个 item 使用相同 ForEach key——ArkUI 不允许重复键。
+  //
+  // 改法：一个 renderNodeKey 只输出一个 MotionWindowSource。
+  // displayed 与 candidate 同时引用同一 key 时，显示权归 displayed（visible=true），
+  // candidate 不额外生成第二个 Text。
+  // 候选窗口 ready 后原子提交时 displayedVisualFrame = candidateVisualFrame，
+  // candidateVisualFrame = null，旧 displayed 窗口被移除，原 candidate 窗口 visible 变为 true。
   private buildAllMotionWindowSources(): MotionWindowSource[] {
-    return [...this.buildMotionWindowSources(), ...this.buildCandidateMotionWindowSources()]
+    const displayed = this.buildMotionWindowSources()
+    const candidate = this.buildCandidateMotionWindowSources()
+    // 按 renderNodeKey 去重——displayed 优先（visible=true），candidate 的共享 key 跳过。
+    const result: MotionWindowSource[] = []
+    const seenKeys: Set<string> = new Set()
+    for (let i = 0; i < displayed.length; i++) {
+      const key = displayed[i].window.renderNodeKey
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key)
+        result.push(displayed[i])
+      }
+    }
+    for (let i = 0; i < candidate.length; i++) {
+      const key = candidate[i].window.renderNodeKey
+      // displayed 已引用的 key 跳过——显示权归 displayed（visible=true）。
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key)
+        result.push(candidate[i])
+      }
+    }
+    return result
   }
 
   /**
@@ -1503,9 +1574,14 @@ export struct SujianEditor {
     this.windowLayoutCallbacks.clear()
   }
 
-  // Issue #879 复核评论修复（问题1）：检查候选帧的运动窗口是否已 layoutReady。
-  // 启动动画前检查——未 ready 的窗口保持旧画面显示，等所有窗口 ready 后才启动动画。
-  // 使用 candidateVisualFrame 而非 displayedVisualFrame——候选窗口是正在准备的新窗口。
+  // Issue #879 评论6086564975 问题1：检查候选帧的运动窗口是否已 layoutReady。
+  //
+  // 共享 key（displayed 和 candidate 同一 renderNodeKey）沿用 displayed 已 mounted 的 ready 状态——
+  // 由于 buildAllMotionWindowSources 按 renderNodeKey 去重（displayed 优先），
+  // 共享 key 只有一个 MotionWindowState（同一个 TextController/mounted/layoutReady）。
+  // displayed 窗口已 layoutReady 时，isWindowLayoutReady(key) 自动返回 true，
+  // candidate 不需要再等一份不存在的候选节点。
+  //
   // Issue #879 复核评论6085414957 问题2：如果有 pendingRetargetedCandidate，
   // 检查最终将接管显示的窗口集合（retarget 后的窗口），而非原始候选窗口。
   // retarget 可能产生新 renderNodeKey，这些新窗口需要先参与布局才能 ready。
@@ -1513,6 +1589,8 @@ export struct SujianEditor {
     if (this.pendingRetargetedCandidate !== null) {
       const keys = this.motionCoordinator.peekCommittedWindowKeys(this.pendingRetargetedCandidate)
       for (let i = 0; i < keys.length; i++) {
+        // 共享 key 沿用 displayed 已 mounted 的 ready 状态——
+        // isWindowLayoutReady 按 renderNodeKey 查同一个 windowState。
         if (!this.motionSourcePool.isWindowLayoutReady(keys[i])) {
           return false
         }
@@ -1524,6 +1602,8 @@ export struct SujianEditor {
     }
     const windows = this.candidateVisualFrame.motionGlyphWindows
     for (let i = 0; i < windows.length; i++) {
+      // 共享 key 沿用 displayed 已 mounted 的 ready 状态——
+      // isWindowLayoutReady 按 renderNodeKey 查同一个 windowState。
       if (!this.motionSourcePool.isWindowLayoutReady(windows[i].renderNodeKey)) {
         return false
       }
