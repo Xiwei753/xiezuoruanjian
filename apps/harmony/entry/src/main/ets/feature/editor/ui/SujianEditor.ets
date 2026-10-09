@@ -155,6 +155,11 @@ export struct SujianEditor {
   // Issue #879 最新复核评论问题4：候选句柄——prepareCandidate 返回的不可变候选。
   // executeDisplaySwitch 用它一次性提交（而不是从 Coordinator 读“当前计划”）。
   private pendingCandidate: PreparedCandidate | null = null
+  // Issue #879 复核评论6085414957 问题2：retarget 后暂存的候选。
+  // retargetCandidate 可能产生新 renderNodeKey（重新拆分 piece），
+  // 对应的新窗口需要先作为不可见候选窗口参与布局，layoutReady 后才提交。
+  // 期间旧 animator 已 cancel，屏幕冻结在 frozenDisplayedFrame。
+  private pendingRetargetedCandidate: PreparedCandidate | null = null
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 替换 animateTo + @Watch。
   // animateTo 改的是 UI 状态目标值，@Watch 只看状态赋值，不会把渲染层每帧插值值回写。
   // AnimatorResult.onFrame(progress) 是 ArkUI 渲染层逐帧回调，每帧同步 visualFrame。
@@ -420,6 +425,7 @@ export struct SujianEditor {
     this.candidateVisualFrame = null
     // Issue #879 最新复核评论问题4：候选句柄一并清空——不再有可提交的候选。
     this.pendingCandidate = null
+    this.pendingRetargetedCandidate = null
     // Issue #879 复核评论修复（问题1）：清空候选 token。
     this.candidateToken = null
     // Issue #879 复核评论修复（问题3）：清空运动源池。
@@ -721,6 +727,7 @@ export struct SujianEditor {
       this.candidateVisualFrame = null
       // Issue #879 最新复核评论问题4：会话失效时丢弃候选句柄。
       this.pendingCandidate = null
+      this.pendingRetargetedCandidate = null
       // Issue #879 复核评论修复（问题1）：清空候选 token。
       this.candidateToken = null
       this.pendingPresentationUpdates = []
@@ -762,6 +769,7 @@ export struct SujianEditor {
       this.stopActiveAnimation()
       this.pendingPresentationUpdates = []
       this.pendingCandidate = null
+      this.pendingRetargetedCandidate = null
       this.candidateVisualFrame = null
       this.pendingDisplayData = null
       this.candidateToken = null
@@ -801,6 +809,7 @@ export struct SujianEditor {
     // tryCommitCandidate 也会因 candidateToken/pendingDisplayData 为空而拒绝提交。
     if (this.pendingCandidate !== null && this.candidateToken !== null) {
       this.pendingCandidate = null
+      this.pendingRetargetedCandidate = null
       this.candidateVisualFrame = null
       this.pendingDisplayData = null
       // 旧候选 token 一并作废——只有 onPendingLayoutReady 为最新 revision 准备出的候选
@@ -998,6 +1007,8 @@ export struct SujianEditor {
     // 旧候选（若有）被本次更高 revision 的候选取代：直接丢弃即可，
     // Coordinator 的已提交计划/帧从未被候选改动，旧动画仍按旧 plan 采样。
     this.pendingCandidate = prepared
+    // Issue #879 复核评论6085414957 问题2：新候选到来时丢弃旧 retarget 暂存。
+    this.pendingRetargetedCandidate = null
     this.candidateVisualFrame = prepared.startFrame
 
     // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份，
@@ -1084,7 +1095,9 @@ export struct SujianEditor {
       return false
     }
     const data = this.pendingDisplayData
-    this.pendingDisplayData = null
+    // Issue #879 复核评论6085414957 问题2：先不置 pendingDisplayData = null，
+    // 等确定所有最终窗口都 layoutReady 后才置 null 并提交。
+    // 如果 retarget 后有新 key 未 ready，需要保留 pendingDisplayData 供下次重入使用。
 
     // Issue #879 复核评论修复（问题3）：先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame。
     // 旧 animator 在候选准备阶段继续运行，提交瞬间才停止。
@@ -1109,6 +1122,51 @@ export struct SujianEditor {
       identities: this.motionCoordinator.getCommittedIdentities()
     }
 
+    // Issue #879 复核评论6085414957 问题2：retarget 候选。
+    // 如果有 pendingRetargetedCandidate（上次因窗口未 ready 暂存），直接用它；
+    // 否则调 retargetCandidate 重新规划候选起点。
+    // retargetCandidate 可能重新拆分 piece，产生新 renderNodeKey。
+    let retargeted: PreparedCandidate | null = null
+    if (this.pendingRetargetedCandidate !== null) {
+      retargeted = this.pendingRetargetedCandidate
+    } else if (this.pendingCandidate !== null) {
+      retargeted = this.motionCoordinator.retargetCandidate(
+        this.pendingCandidate, frozenDisplayedFrame, frozenDisplayed
+      )
+    }
+    if (retargeted === null) {
+      return false
+    }
+
+    // Issue #879 复核评论6085414957 问题2：检查 retarget 后最终窗口集合是否都已 layoutReady。
+    // retarget 可能产生新 renderNodeKey（重新拆分 piece），这些新 key 对应的窗口
+    // 需要先参与布局才能 ready。如果有未 ready 的窗口，暂存 retargeted 并返回 false，
+    // 把 candidateVisualFrame 设为 retargeted.startFrame 让 ForEach 创建新窗口（opacity 0）。
+    // 旧 animator 已 cancel，屏幕冻结在 frozenDisplayedFrame，等新窗口 layout 回调再次触发提交。
+    const finalKeys = this.motionCoordinator.peekCommittedWindowKeys(retargeted)
+    let allFinalWindowsReady = true
+    for (let i = 0; i < finalKeys.length; i++) {
+      if (!this.motionSourcePool.isWindowLayoutReady(finalKeys[i])) {
+        allFinalWindowsReady = false
+        break
+      }
+    }
+    if (!allFinalWindowsReady) {
+      this.pendingRetargetedCandidate = retargeted
+      // 把 candidateVisualFrame 设为 retargeted.startFrame，
+      // 让 ForEach 创建 retarget 后的新窗口（作为不可见候选窗口参与布局）。
+      // 新窗口的 layout 回调会调 tryCommitCandidate → allMotionWindowsReady
+      // → executeDisplaySwitch（pendingRetargetedCandidate 不为 null，直接用它）。
+      this.candidateVisualFrame = retargeted.startFrame
+      // 不置 pendingDisplayData = null，不更新 displayed* 字段，不清 candidateToken。
+      return false
+    }
+
+    // 所有最终窗口都 ready——提交。
+    this.pendingDisplayData = null
+    this.pendingCandidate = null
+    this.pendingRetargetedCandidate = null
+
     // 更新 displayed 版本字段
     this.displayedSnapshot = data.latestUpdate.layoutSnapshot
     this.displayedLineLayouts = data.lineLayouts
@@ -1120,18 +1178,11 @@ export struct SujianEditor {
     this.currentSnapshot = data.latestUpdate.layoutSnapshot
     this.latestCoreSnapshot = data.latestUpdate.layoutSnapshot
 
-    // Issue #879 复核评论修复（问题3）：调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
+    // Issue #879 复核评论修复（问题3）：commitCandidate → 更新主 Text。
     // 用提交瞬间真实在屏布局 + 冻结帧按字形重算起始 clip/position，
     // 确保新动画从真实屏幕状态开始，而非从过时的起始状态跳变。
-    const candidate = this.pendingCandidate
-    if (candidate !== null) {
-      this.pendingCandidate = null
-      const retargeted = this.motionCoordinator.retargetCandidate(
-        candidate, frozenDisplayedFrame, frozenDisplayed
-      )
-      this.displayedVisualFrame = this.motionCoordinator.commitCandidate(retargeted)
-      this.candidateVisualFrame = null
-    }
+    this.displayedVisualFrame = this.motionCoordinator.commitCandidate(retargeted)
+    this.candidateVisualFrame = null
 
     // 写入新 StyledString 到主 Text
     this.refreshRender()
@@ -1355,7 +1406,10 @@ export struct SujianEditor {
    */
   private tryCommitCandidate(triggeredByKey: string | null): boolean {
     const token = this.candidateToken
-    if (token === null || this.pendingDisplayData === null || this.pendingCandidate === null) {
+    // Issue #879 复核评论6085414957 问题2：pendingRetargetedCandidate 不为 null 时
+    // 也允许提交（retarget 后暂存的候选，等新窗口 ready 后重入）。
+    if (token === null || this.pendingDisplayData === null ||
+        (this.pendingCandidate === null && this.pendingRetargetedCandidate === null)) {
       return false
     }
     // 归属校验：只有属于当前候选帧的窗口才有权推进提交。
@@ -1452,7 +1506,19 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题1）：检查候选帧的运动窗口是否已 layoutReady。
   // 启动动画前检查——未 ready 的窗口保持旧画面显示，等所有窗口 ready 后才启动动画。
   // 使用 candidateVisualFrame 而非 displayedVisualFrame——候选窗口是正在准备的新窗口。
+  // Issue #879 复核评论6085414957 问题2：如果有 pendingRetargetedCandidate，
+  // 检查最终将接管显示的窗口集合（retarget 后的窗口），而非原始候选窗口。
+  // retarget 可能产生新 renderNodeKey，这些新窗口需要先参与布局才能 ready。
   private allMotionWindowsReady(): boolean {
+    if (this.pendingRetargetedCandidate !== null) {
+      const keys = this.motionCoordinator.peekCommittedWindowKeys(this.pendingRetargetedCandidate)
+      for (let i = 0; i < keys.length; i++) {
+        if (!this.motionSourcePool.isWindowLayoutReady(keys[i])) {
+          return false
+        }
+      }
+      return true
+    }
     if (this.candidateVisualFrame === null || !this.candidateVisualFrame.isAnimating) {
       return true
     }

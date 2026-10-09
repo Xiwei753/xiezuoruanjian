@@ -390,6 +390,32 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 复核评论6085414957 问题2：预计算 commitCandidate 后的运动窗口 renderNodeKey 集合。
+   *
+   * executeDisplaySwitch 在提交前用它检查最终将接管显示的窗口是否都已 layoutReady。
+   * retargetCandidate 可能重新拆分 piece（insertRunStartState 等按字形可见性重新拆），
+   * 产生新的 windowInstanceId/renderNodeKey，这些新 key 对应的窗口需要先参与布局
+   * （作为不可见候选窗口）才能 ready，否则提交后跳变。
+   *
+   * commitCandidate 返回的帧就是 prepared.startFrame（applyCommittedState 安装 prepared.state.frame），
+   * 后续 advance(progress) 用同一 plan + 同一 allocator 采样，renderNodeKey 不变
+   * （allocator 按 glyphIds 复用 instanceId）。因此直接从 startFrame 提取即可。
+   *
+   * @param prepared prepareCandidate/retargetCandidate 返回的候选
+   * @returns 最终窗口的 renderNodeKey 数组（无动画时为空）
+   */
+  peekCommittedWindowKeys(prepared: PreparedCandidate): string[] {
+    const keys: string[] = []
+    const frame = prepared.startFrame
+    if (frame.isAnimating) {
+      for (let i = 0; i < frame.motionGlyphWindows.length; i++) {
+        keys.push(frame.motionGlyphWindows[i].renderNodeKey)
+      }
+    }
+    return keys
+  }
+
+  /**
    * Issue #879 复核评论6075662695问题3：重定向候选——按**提交瞬间**的真实在屏状态
    * 重算起始 clip / position / 光标起点，替换候选 plan 里过时的起始状态。
    *
@@ -1591,15 +1617,25 @@ export class EditorMotionCoordinator {
       )]
     }
 
-    // Issue #879 复核评论6084803105 问题3：按源+目标 UTF-16 范围的连续性分组。
-    // 不再只按源 range 相邻分组——还要检查目标 range 是否相邻。
-    // - (b) 类 glyph（新版仍存在）：只有源 range 相邻且目标 range 相邻才合并为一组
+    // Issue #879 复核评论6085414957 问题1：按源+目标 UTF-16 范围连续性 + 源/目标视觉行相同分组。
+    // 不再只按源/目标 range 相邻分组——还要检查视觉行。
+    // 当一组字形跨软换行时，glyphRectForRange 只返回首行 rect，
+    // 下一行的字形在动画中消失。因此行号变化就断组。
+    // - (b) 类 glyph（新版仍存在）：源 range 相邻 + 目标 range 相邻 + 源视觉行相同 + 目标视觉行相同
     // - (c) 类 glyph（新版已删除）：单独成组，不与 (b) 类混合
+    const sourceLineRanges: LineRange[] = sourceLayout.map((l: LineLayout): LineRange => ({
+      start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+    }))
+    const newLineRanges: LineRange[] = newLayout.map((l: LineLayout): LineRange => ({
+      start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+    }))
     const groups: string[][] = []
     let currentGroup: string[] = []
     let currentGroupSourceEnd = -1
     let currentGroupTargetEnd = -1
     let currentGroupHasTarget = false
+    let currentGroupSourceLineIdx = -1
+    let currentGroupTargetLineIdx = -1
     for (const gid of uncoveredIds) {
       const range = glyphUtf16Ranges.get(gid)
       if (range === undefined) {
@@ -1612,6 +1648,8 @@ export class EditorMotionCoordinator {
         currentGroupSourceEnd = -1
         currentGroupTargetEnd = -1
         currentGroupHasTarget = false
+        currentGroupSourceLineIdx = -1
+        currentGroupTargetLineIdx = -1
         continue
       }
       const start = range[0]
@@ -1636,29 +1674,46 @@ export class EditorMotionCoordinator {
         currentGroupSourceEnd = -1
         currentGroupTargetEnd = -1
         currentGroupHasTarget = false
+        currentGroupSourceLineIdx = -1
+        currentGroupTargetLineIdx = -1
         continue
       }
 
-      // (b) 类 glyph（新版仍存在）——检查源 range 和目标 range 是否都与前一个相邻
+      // Issue #879 复核评论6085414957 问题1：计算源/目标视觉行索引。
+      // 源视觉行用 range[0]（Downstream），目标视觉行用 targetEntry.utf16Start（Downstream）。
+      // 行号变化即断组，避免 glyphRectForRange 跨行只返回首行 rect 导致下一行字形消失。
+      const sourceLineIdx = resolveVisualLineIndex(sourceLineRanges,
+        { utf16Offset: start, affinity: CaretAffinity.Downstream })
+      const targetLineIdx = resolveVisualLineIndex(newLineRanges,
+        { utf16Offset: targetEntry.utf16Start, affinity: CaretAffinity.Downstream })
+
+      // (b) 类 glyph（新版仍存在）——检查四元组：
+      // 源 range 相邻 + 目标 range 相邻 + 源视觉行相同 + 目标视觉行相同
       if (currentGroup.length === 0) {
         currentGroup = [gid]
         currentGroupSourceEnd = end
         currentGroupTargetEnd = targetEntry.utf16End
         currentGroupHasTarget = true
+        currentGroupSourceLineIdx = sourceLineIdx
+        currentGroupTargetLineIdx = targetLineIdx
       } else if (start === currentGroupSourceEnd &&
                  targetEntry.utf16Start === currentGroupTargetEnd &&
-                 currentGroupHasTarget) {
-        // 源 range 相邻且目标 range 相邻——归入当前组
+                 currentGroupHasTarget &&
+                 sourceLineIdx === currentGroupSourceLineIdx &&
+                 targetLineIdx === currentGroupTargetLineIdx) {
+        // 源 range 相邻 + 目标 range 相邻 + 源视觉行相同 + 目标视觉行相同——归入当前组
         currentGroup.push(gid)
         currentGroupSourceEnd = end
         currentGroupTargetEnd = targetEntry.utf16End
       } else {
-        // 源 range 不相邻 或 目标 range 不相邻——新组
+        // 任一条件不满足——新组
         groups.push(currentGroup)
         currentGroup = [gid]
         currentGroupSourceEnd = end
         currentGroupTargetEnd = targetEntry.utf16End
         currentGroupHasTarget = true
+        currentGroupSourceLineIdx = sourceLineIdx
+        currentGroupTargetLineIdx = targetLineIdx
       }
     }
     if (currentGroup.length > 0) {
@@ -1703,6 +1758,10 @@ export class EditorMotionCoordinator {
    *
    * 源矩形来自源布局（sourceLayout），不是新版 targetRect。
    * 目标 UTF-16 只包含该连续组的目标范围，不把不相邻字压成一个 min/max。
+   *
+   * Issue #879 复核评论6085414957 问题1：调用方（splitFrozenWindowByGlyphOwnership）
+   * 已保证同一组内的 glyph 属于同一源视觉行和同一目标视觉行，
+   * 因此 glyphRectForRange 不会遇到跨行情况，不会只返回首行 rect。
    */
   private buildFrozenWindowPiece(
     w: MotionGlyphWindow,
