@@ -100,6 +100,59 @@ export interface SourceLayoutRecord {
 }
 
 /**
+ * Issue #879 复核评论6084020082 问题1+2+3：冻结窗口按字形所有权拆分后的片段。
+ *
+ * splitFrozenWindowByGlyphOwnership 返回的每个 piece 包含独立的源/目标范围和几何，
+ * 不再共享母窗口的整段范围。
+ */
+interface FrozenWindowPiece {
+  /** 该片段覆盖的字符簇身份列表 */
+  glyphIds: string[]
+  /** 该片段在源正文中的 UTF-16 起始 offset */
+  sourceUtf16Start: number
+  /** 该片段在源正文中的 UTF-16 结束 offset（exclusive） */
+  sourceUtf16End: number
+  /** 该片段在源排版中的矩形（来自源布局，不是新版 targetRect） */
+  sourceRect: GlyphRect | null
+  /** 字形排版位置 x（vp）——来自源布局 */
+  glyphX: number
+  /** 字形排版位置 y（vp）——来自源布局 */
+  glyphY: number
+  /** 字形宽度（vp）——来自源布局 */
+  glyphWidth: number
+  /** 字形高度（vp）——来自源布局 */
+  glyphHeight: number
+  /** 冻结裁切左边界（vp）——源矩形与原窗口 clip 的交集 */
+  clipLeft: number
+  /** 冻结裁切右边界（vp）——源矩形与原窗口 clip 的交集 */
+  clipRight: number
+  /** 冻结裁切上边界（vp） */
+  clipTop: number
+  /** 冻结裁切下边界（vp） */
+  clipBottom: number
+  /** 绘制偏移 x（vp）——沿用原窗口的 offsetX */
+  offsetX: number
+  /** 绘制偏移 y（vp）——沿用原窗口的 offsetY */
+  offsetY: number
+  /** 当前位置 x（vp）——沿用原窗口的 currentPositionX */
+  currentPositionX: number
+  /** 当前位置 y（vp）——沿用原窗口的 currentPositionY */
+  currentPositionY: number
+  /** 该片段在新版正文中的 UTF-16 起始 offset（-1 表示未解析） */
+  targetUtf16Start: number
+  /** 该片段在新版正文中的 UTF-16 结束 offset（exclusive，-1 表示未解析） */
+  targetUtf16End: number
+  /** 目标范围是否已解析（newIdentityTable 中查到了对应范围） */
+  targetResolved: boolean
+  /** 该片段在新版布局中的矩形（null 表示未解析） */
+  targetRect: GlyphRect | null
+  /** 独立的渲染节点身份标识 */
+  renderNodeKey: string
+  /** 独立的窗口实例 ID */
+  windowInstanceId: string
+}
+
+/**
  * Coordinator 的一次完整“已提交状态”。
  *
  * 把 acceptUpdate 会写入的所有字段打包成一个不可变对象：
@@ -544,7 +597,8 @@ export class EditorMotionCoordinator {
       }
     }
     const carryOverGhostRuns = this.identifyCarryOverGhosts(
-      latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds
+      latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds,
+      prepared.state.glyphIdentities
     )
 
     // Issue #879 复核评论6081596024 问题1：识别跨事务延续的运动窗口（insert/reflow）。
@@ -751,6 +805,36 @@ export class EditorMotionCoordinator {
       durationMs = policy.shouldAnimateText() ? policy.typingDurationMs : 0
     }
     plan.durationMs = durationMs
+
+    // Issue #879 复核评论6084020082 问题4：在 prepareCandidate 中预生成 carry-over runs。
+    // 用 displayedVisualFrame（startFrame）作为冻结帧近似——
+    // retargetCandidate 中会用真实冻结帧替换近似值。
+    // 这样 buildFrame 在 progress=0 时会为 carry-over runs 生成窗口，
+    // prepared.startFrame 就包含了 carry-over 窗口。
+    if (durationMs > 0 && startFrame.isAnimating) {
+      const planGlyphIds: Set<string> = new Set()
+      for (const run of plan.insertRuns) {
+        for (const gid of run.glyphIds) {
+          planGlyphIds.add(gid)
+        }
+      }
+      for (const run of plan.deletedRuns) {
+        for (const gid of run.glyphIds) {
+          planGlyphIds.add(gid)
+        }
+      }
+      for (const move of plan.retainedMoves) {
+        for (const gid of move.glyphIds) {
+          planGlyphIds.add(gid)
+        }
+      }
+      plan.carryOverGhostRuns = this.identifyCarryOverGhosts(
+        startFrame, newSnapshot.revision, planGlyphIds, identities.newTable
+      )
+      plan.carryOverMotionRuns = this.identifyCarryOverMotionRuns(
+        startFrame, newSnapshot.revision, newLayout, planGlyphIds, identities.newTable
+      )
+    }
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
@@ -1447,62 +1531,328 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 复核评论6084020082 问题1+2+3：按源字形连续性拆分冻结窗口。
+   *
+   * 上一轮的"按 glyphId 分区"只拆了 glyphIds 数组，没有真正拆窗口——
+   * 源范围、裁切、偏移仍是整窗口。本方法创建真正的按源字形连续性拆片。
+   *
+   * 输入：一个冻结窗口 w，uncoveredIds（需要 carry-over 的 glyphId 列表），
+   * newIdentityTable（新版字形身份表），newLayout（新版行布局），windowIdAllocator。
+   *
+   * 按 sourceRevision 获取源排版记录（含 sourceText 和 sourceLayout），
+   * 用 buildGlyphUtf16Ranges 获取每个 glyphId 的源 UTF-16 范围，
+   * 将 uncoveredIds 按源 UTF-16 范围的连续性分组：
+   * 相邻的 glyphId（源范围首尾相接）归为同一组。
+   *
+   * 每个连续组分别计算：
+   * - 源 UTF-16：该组 glyphIds 在源正文中的 [minStart, maxEnd]
+   * - 源矩形：用 glyphRectForRange(sourceLayout, groupSourceStart, groupSourceEnd)
+   * - 冻结 clip：源矩形与原窗口 clip 的交集
+   * - 偏移：沿用原窗口的 offsetX/Y
+   * - 目标 UTF-16：用 newIdentityTable 查找该组每个 glyphId 在新版正文中的对应范围
+   * - 目标矩形：用 glyphRectForRange(newLayout, groupTargetStart, groupTargetEnd)
+   * - renderNodeKey：为每个 piece 分配独立的 renderNodeKey
+   */
+  private splitFrozenWindowByGlyphOwnership(
+    w: MotionGlyphWindow,
+    uncoveredIds: string[],
+    newIdentityTable: GlyphIdentityTable | null,
+    newLayout: LineLayout[]
+  ): FrozenWindowPiece[] {
+    // 用 sourceRevision 查源排版记录
+    const sourceRecord = this.getSourceLayout(w.sourceRevision)
+    let sourceText: string
+    let sourceLayout: LineLayout[]
+    if (sourceRecord !== null) {
+      sourceText = sourceRecord.text
+      sourceLayout = sourceRecord.lineLayouts
+    } else {
+      // fallback：缓存中没有该 revision，退回 sourceKind 猜测
+      sourceText = w.sourceKind === 'old'
+        ? (this.oldSnapshot?.text ?? '')
+        : (this.newSnapshot?.text ?? '')
+      sourceLayout = w.sourceKind === 'old' ? this.oldLayout : this.newLayout
+    }
+
+    // 用 buildGlyphUtf16Ranges 获取每个 glyphId 的源 UTF-16 范围
+    const glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
+      w.glyphIds, w.utf16Start, w.utf16End, sourceText
+    )
+
+    // 如果 buildGlyphUtf16Ranges 返回 null（簇数不匹配），用 w.utf16Start/End 作为 fallback
+    // 整个 uncoveredIds 作为一个组
+    if (glyphUtf16Ranges === null) {
+      return [this.buildFrozenWindowPiece(
+        w, uncoveredIds, w.utf16Start, w.utf16End,
+        sourceLayout, newIdentityTable, newLayout
+      )]
+    }
+
+    // 将 uncoveredIds 按源 UTF-16 范围的连续性分组
+    // 相邻的 glyphId（源范围首尾相接）归为同一组
+    const groups: string[][] = []
+    let currentGroup: string[] = []
+    let currentGroupEnd = -1
+    for (const gid of uncoveredIds) {
+      const range = glyphUtf16Ranges.get(gid)
+      if (range === undefined) {
+        // glyphId 不在映射中——单独成组
+        if (currentGroup.length > 0) {
+          groups.push(currentGroup)
+          currentGroup = []
+        }
+        groups.push([gid])
+        currentGroupEnd = -1
+        continue
+      }
+      const start = range[0]
+      const end = range[1]
+      if (currentGroup.length === 0) {
+        currentGroup = [gid]
+        currentGroupEnd = end
+      } else if (start === currentGroupEnd) {
+        // 相邻——归入当前组
+        currentGroup.push(gid)
+        currentGroupEnd = end
+      } else {
+        // 不相邻——新组
+        groups.push(currentGroup)
+        currentGroup = [gid]
+        currentGroupEnd = end
+      }
+    }
+    if (currentGroup.length > 0) {
+      groups.push(currentGroup)
+    }
+
+    // 每个连续组分别计算 piece
+    const pieces: FrozenWindowPiece[] = []
+    for (const group of groups) {
+      // 该组 glyphIds 在源正文中的 [minStart, maxEnd]
+      let groupSourceStart = -1
+      let groupSourceEnd = -1
+      for (const gid of group) {
+        const range = glyphUtf16Ranges.get(gid)
+        if (range !== undefined) {
+          const start = range[0]
+          const end = range[1]
+          if (groupSourceStart < 0 || start < groupSourceStart) {
+            groupSourceStart = start
+          }
+          if (end > groupSourceEnd) {
+            groupSourceEnd = end
+          }
+        }
+      }
+      // fallback：如果组中没有任何 glyphId 在映射中，用 w.utf16Start/End
+      if (groupSourceStart < 0) {
+        groupSourceStart = w.utf16Start
+        groupSourceEnd = w.utf16End
+      }
+
+      pieces.push(this.buildFrozenWindowPiece(
+        w, group, groupSourceStart, groupSourceEnd,
+        sourceLayout, newIdentityTable, newLayout
+      ))
+    }
+    return pieces
+  }
+
+  /**
+   * Issue #879 复核评论6084020082：为每个连续组构建一个 FrozenWindowPiece。
+   *
+   * 源矩形来自源布局（sourceLayout），不是新版 targetRect。
+   * 目标 UTF-16 只包含该连续组的目标范围，不把不相邻字压成一个 min/max。
+   */
+  private buildFrozenWindowPiece(
+    w: MotionGlyphWindow,
+    groupGlyphIds: string[],
+    groupSourceStart: number,
+    groupSourceEnd: number,
+    sourceLayout: LineLayout[],
+    newIdentityTable: GlyphIdentityTable | null,
+    newLayout: LineLayout[]
+  ): FrozenWindowPiece {
+    // 源矩形：用 glyphRectForRange(sourceLayout, groupSourceStart, groupSourceEnd)
+    const sourceRect = glyphRectForRange(sourceLayout, groupSourceStart, groupSourceEnd)
+    const pieceGlyphX = sourceRect !== null ? sourceRect.x : w.glyphX
+    const pieceGlyphY = sourceRect !== null ? sourceRect.y : w.glyphY
+    const pieceGlyphWidth = sourceRect !== null ? sourceRect.width : w.glyphWidth
+    const pieceGlyphHeight = sourceRect !== null ? sourceRect.height : w.glyphHeight
+
+    // 冻结 clip：源矩形与原窗口 clip 的交集
+    const pieceClipLeft = Math.max(pieceGlyphX, w.currentClipLeft)
+    const pieceClipRight = Math.min(pieceGlyphX + pieceGlyphWidth, w.currentClipRight)
+    const pieceClipTop = pieceGlyphY
+    const pieceClipBottom = pieceGlyphY + pieceGlyphHeight
+
+    // 偏移：沿用原窗口的 offsetX/Y
+    const pieceOffsetX = w.offsetX
+    const pieceOffsetY = w.offsetY
+
+    // 目标 UTF-16：用 newIdentityTable 查找该组每个 glyphId 在新版正文中的对应范围
+    let targetUtf16Start = -1
+    let targetUtf16End = -1
+    let targetResolved = false
+    if (newIdentityTable !== null) {
+      let foundStart = -1
+      let foundEnd = -1
+      for (const gid of groupGlyphIds) {
+        const entry = newIdentityTable.entryByGlyphId(gid)
+        if (entry !== null) {
+          if (foundStart < 0 || entry.utf16Start < foundStart) {
+            foundStart = entry.utf16Start
+          }
+          if (entry.utf16End > foundEnd) {
+            foundEnd = entry.utf16End
+          }
+        }
+      }
+      if (foundStart >= 0 && foundEnd >= 0) {
+        targetUtf16Start = foundStart
+        targetUtf16End = foundEnd
+        targetResolved = true
+      }
+    }
+
+    // 目标矩形：用 glyphRectForRange(newLayout, groupTargetStart, groupTargetEnd)
+    let targetRect: GlyphRect | null = null
+    if (targetResolved) {
+      targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
+    }
+
+    // 为每个 piece 分配独立的 renderNodeKey
+    const windowInstanceId = this.windowIdAllocator.allocate(groupGlyphIds)
+    const renderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${windowInstanceId}`
+
+    return {
+      glyphIds: groupGlyphIds,
+      sourceUtf16Start: groupSourceStart,
+      sourceUtf16End: groupSourceEnd,
+      sourceRect: sourceRect,
+      glyphX: pieceGlyphX,
+      glyphY: pieceGlyphY,
+      glyphWidth: pieceGlyphWidth,
+      glyphHeight: pieceGlyphHeight,
+      clipLeft: pieceClipLeft,
+      clipRight: pieceClipRight,
+      clipTop: pieceClipTop,
+      clipBottom: pieceClipBottom,
+      offsetX: pieceOffsetX,
+      offsetY: pieceOffsetY,
+      currentPositionX: w.currentPositionX,
+      currentPositionY: w.currentPositionY,
+      targetUtf16Start: targetUtf16Start,
+      targetUtf16End: targetUtf16End,
+      targetResolved: targetResolved,
+      targetRect: targetRect,
+      renderNodeKey: renderNodeKey,
+      windowInstanceId: windowInstanceId
+    }
+  }
+
+  /**
    * Issue #879 复核评论6078682695 问题2：识别 carryOver ghost 残影。
    *
    * 上一帧仍有非零 clip、且尚未归还静态层的旧窗口作为残影继承到候选 plan。
-   * 条件：
-   * - 窗口的 motionOwnerKind 是 'deleted' 或 'carryGhost'（只继承删除残影和上一帧的 carryGhost）
-   * - 窗口的 sourceRevision 不等于新正文 revision（不是本轮新插入的）
-   * - 窗口仍有非零 clip 宽度（尚未完全消退）
-   * - 窗口的 glyphIds 全部不在本轮新 plan 的 run 集合中（是真正的残影）
    *
-   * Issue #879 复核评论6080604353 问题1修复：
-   * - 增加了 motionOwnerKind 检查——排除 'reflow'（保留字移动）和 'insert'（吐字）类型的窗口
-   *   被误判为 ghost。'reflow' 类型的窗口虽然 sourceKind==='old'，但它们仍存在于新版正文中，
-   *   应该继续平移或回到新版静态层，不应作为 ghost 消退。
-   * - motionOwnerKind 检查在 sourceKind 检查之前（更语义化）。
+   * Issue #879 复核评论6084020082 问题1+2+3：
+   * - 用 splitFrozenWindowByGlyphOwnership 真正按源字形连续性拆分窗口，
+   *   每个 piece 有独立的 utf16Start/End、glyphX/Y/Width/Height、currentClipLeft/Right
+   * - 接受 insert/reflow 转来的 ghost：当 insert/reflow 窗口的字形在新版不存在时
+   *   （newIdentityTable 查不到），将其转为 ghost 消退，不再直接丢弃
+   * - 增加 newIdentityTable 参数，用于判断 insert/reflow 字形是否在新版正文中存在
    *
    * 残影的目标 clip = 零宽度（继续消退到完全隐藏）。
    *
    * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame
    * @param newRevision 新正文 revision
    * @param planGlyphIds 本轮新 plan 中所有 run 的 glyphIds 集合（用于排除正在处理的字形）
+   * @param newIdentityTable 新版正文的字形身份表——用于判断 insert/reflow 字形是否在新版存在
    */
   private identifyCarryOverGhosts(
     latestDisplayedFrame: EditorVisualFrame,
     newRevision: number,
-    planGlyphIds: Set<string>
+    planGlyphIds: Set<string>,
+    newIdentityTable: GlyphIdentityTable | null
   ): CarryOverGhostRun[] {
     const ghosts: CarryOverGhostRun[] = []
     if (!latestDisplayedFrame.isAnimating) {
       return ghosts
     }
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      // Issue #879 复核评论6080604353 问题1：只继承删除残影和上一帧的 carryGhost——
-      // 不继承 reflow（保留字移动）和 insert（吐字）。
-      // reflow 类型的窗口虽然 sourceKind==='old'，但它们仍存在于新版正文中，
-      // 应该继续平移或回到新版静态层，不应作为 ghost 消退。
+      // 仍有非零 clip 宽度
+      if (w.currentClipRight - w.currentClipLeft <= 0.01) {
+        continue
+      }
+
+      // Issue #879 复核评论6084020082 问题2：接受 insert/reflow 转来的 ghost。
+      // 当 insert/reflow 窗口的字形在新版不存在时（newIdentityTable 查不到），
+      // 将其转为 ghost 消退，不再直接丢弃导致文字突然消失。
+      if (w.motionOwnerKind === 'insert' || w.motionOwnerKind === 'reflow') {
+        // 检查 uncoveredIds 是否在新版正文中存在
+        const uncoveredIds: string[] = []
+        for (const gid of w.glyphIds) {
+          if (!planGlyphIds.has(gid)) {
+            uncoveredIds.push(gid)
+          }
+        }
+        if (uncoveredIds.length === 0) {
+          continue
+        }
+        // 用 newIdentityTable 检查哪些字形在新版正文中不存在
+        const ghostIds: string[] = []
+        for (const gid of uncoveredIds) {
+          if (newIdentityTable === null || newIdentityTable.entryByGlyphId(gid) === null) {
+            ghostIds.push(gid)
+          }
+        }
+        if (ghostIds.length === 0) {
+          continue  // 所有 uncoveredIds 都在新版正文中存在——不转为 ghost
+        }
+        // Issue #879 复核评论6084020082 问题1+3：用 splitFrozenWindowByGlyphOwnership 拆分
+        const pieces = this.splitFrozenWindowByGlyphOwnership(
+          w, ghostIds, newIdentityTable, this.newLayout
+        )
+        for (const piece of pieces) {
+          // 目标 clip = 零宽度（继续消退到完全隐藏）
+          const targetClipLeft = piece.clipLeft
+          const targetClipRight = piece.clipLeft
+          ghosts.push({
+            glyphIds: piece.glyphIds,
+            windowId: w.windowId,
+            sourceRevision: w.sourceRevision,
+            utf16Start: piece.sourceUtf16Start,
+            utf16End: piece.sourceUtf16End,
+            currentClipLeft: piece.clipLeft,
+            currentClipRight: piece.clipRight,
+            targetClipLeft: targetClipLeft,
+            targetClipRight: targetClipRight,
+            clipTop: piece.clipTop,
+            clipBottom: piece.clipBottom,
+            glyphX: piece.glyphX,
+            glyphY: piece.glyphY,
+            glyphWidth: piece.glyphWidth,
+            glyphHeight: piece.glyphHeight,
+            offsetX: piece.offsetX,
+            offsetY: piece.offsetY
+          })
+        }
+        continue
+      }
+
+      // 只处理 deleted 和 carryGhost——insert/reflow 已在上面处理
       if (w.motionOwnerKind !== 'deleted' && w.motionOwnerKind !== 'carryGhost') {
         continue
       }
       if (w.sourceRevision === newRevision) {
         continue
       }
-      // 仍有非零 clip 宽度
-      if (w.currentClipRight - w.currentClipLeft <= 0.01) {
-        continue
-      }
-      // Issue #879 复核评论6083352210 问题2：按 glyphId 分区。
-      // 将窗口的 glyphIds 分为两组：
-      // - coveredIds：在本轮新 plan 的 planGlyphIds 中（由新 plan 接手）
-      // - uncoveredIds：不在新 plan 中（是真正的残影，需要继承消退）
-      // 不能"有一个重叠就舍弃全窗"——只有 uncoveredIds 部分才需要继承。
-      const coveredIds: string[] = []
+
+      // 按 glyphId 分区
       const uncoveredIds: string[] = []
       for (const gid of w.glyphIds) {
-        if (planGlyphIds.has(gid)) {
-          coveredIds.push(gid)
-        } else {
+        if (!planGlyphIds.has(gid)) {
           uncoveredIds.push(gid)
         }
       }
@@ -1510,28 +1860,35 @@ export class EditorMotionCoordinator {
       if (uncoveredIds.length === 0) {
         continue
       }
-      // 目标 clip = 零宽度（继续消退到完全隐藏）
-      const targetClipLeft = w.currentClipLeft
-      const targetClipRight = w.currentClipLeft
-      ghosts.push({
-        glyphIds: uncoveredIds,
-        windowId: w.windowId,
-        sourceRevision: w.sourceRevision,
-        utf16Start: w.utf16Start,
-        utf16End: w.utf16End,
-        currentClipLeft: w.currentClipLeft,
-        currentClipRight: w.currentClipRight,
-        targetClipLeft: targetClipLeft,
-        targetClipRight: targetClipRight,
-        clipTop: w.clipTop,
-        clipBottom: w.clipBottom,
-        glyphX: w.glyphX,
-        glyphY: w.glyphY,
-        glyphWidth: w.glyphWidth,
-        glyphHeight: w.glyphHeight,
-        offsetX: w.offsetX,
-        offsetY: w.offsetY
-      })
+
+      // Issue #879 复核评论6084020082 问题1+3：用 splitFrozenWindowByGlyphOwnership 拆分
+      const pieces = this.splitFrozenWindowByGlyphOwnership(
+        w, uncoveredIds, newIdentityTable, this.newLayout
+      )
+      for (const piece of pieces) {
+        // 目标 clip = 零宽度（继续消退到完全隐藏）
+        const targetClipLeft = piece.clipLeft
+        const targetClipRight = piece.clipLeft
+        ghosts.push({
+          glyphIds: piece.glyphIds,
+          windowId: w.windowId,
+          sourceRevision: w.sourceRevision,
+          utf16Start: piece.sourceUtf16Start,
+          utf16End: piece.sourceUtf16End,
+          currentClipLeft: piece.clipLeft,
+          currentClipRight: piece.clipRight,
+          targetClipLeft: targetClipLeft,
+          targetClipRight: targetClipRight,
+          clipTop: piece.clipTop,
+          clipBottom: piece.clipBottom,
+          glyphX: piece.glyphX,
+          glyphY: piece.glyphY,
+          glyphWidth: piece.glyphWidth,
+          glyphHeight: piece.glyphHeight,
+          offsetX: piece.offsetX,
+          offsetY: piece.offsetY
+        })
+      }
     }
     return ghosts
   }
@@ -1548,6 +1905,11 @@ export class EditorMotionCoordinator {
    * 与 identifyCarryOverGhosts 的区别：
    * - ghosts 处理 deleted/carryGhost（字形已不存在于新版正文，消退到零宽度）
    * - motion runs 处理 insert/reflow（字形仍存在于新版正文，继续向目标运动）
+   *
+   * Issue #879 复核评论6084020082 问题1+2+3：用 splitFrozenWindowByGlyphOwnership
+   * 真正按源字形连续性拆分窗口，不再只拆 glyphIds 数组而保留整窗口的源范围/裁切/偏移。
+   * 每个 piece 有独立的 sourceUtf16Start/End、glyphX/Y/Width/Height（来自源排版）、
+   * targetUtf16Start/End（来自新版身份表），绝不用新版 targetRect 替代旧源字形基准。
    *
    * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame
    * @param newRevision 新正文 revision
@@ -1571,17 +1933,10 @@ export class EditorMotionCoordinator {
       if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
         continue
       }
-      // Issue #879 复核评论6083352210 问题2：按 glyphId 分区。
-      // 将窗口的 glyphIds 分为两组：
-      // - coveredIds：在本轮新 plan 的 planGlyphIds 中（由新 plan 接手）
-      // - uncoveredIds：不在新 plan 中（需要 carry-over）
-      // 不能"有一个重叠就舍弃全窗"——只有 uncoveredIds 部分才需要 carry-over。
-      const coveredIds: string[] = []
+      // 按 glyphId 分区：coveredIds（由新 plan 接手）和 uncoveredIds（需要 carry-over）
       const uncoveredIds: string[] = []
       for (const gid of w.glyphIds) {
-        if (planGlyphIds.has(gid)) {
-          coveredIds.push(gid)
-        } else {
+        if (!planGlyphIds.has(gid)) {
           uncoveredIds.push(gid)
         }
       }
@@ -1589,163 +1944,93 @@ export class EditorMotionCoordinator {
       if (uncoveredIds.length === 0) {
         continue
       }
-      // 全部不被新 plan 接管——保持原有逻辑（整窗口进入 carry-over）
-      // 如果 coveredIds 非空（部分被接管），只对 uncoveredIds 部分生成 carry-over run
 
-      // Issue #879 复核评论6083352210 问题3：目标身份解析。
-      // 用字形身份表查找 uncoveredIds 在新版正文中的对应范围。
-      // 如果所有 uncoveredIds 都找不到目标字形，说明这些字已从新版正文中消失——
-      // 不能继续按 insert/reflow 处理（旧 offset 在新正文中无意义），
-      // 应交给 deleted/carryGhost owner 消退。
-      let targetUtf16Start = -1
-      let targetUtf16End = -1
-      let targetResolved = false
-      if (newIdentityTable !== null) {
-        let foundStart = -1
-        let foundEnd = -1
-        for (const gid of uncoveredIds) {
-          const entry = newIdentityTable.entryByGlyphId(gid)
-          if (entry !== null) {
-            if (foundStart < 0 || entry.utf16Start < foundStart) {
-              foundStart = entry.utf16Start
-            }
-            if (entry.utf16End > foundEnd) {
-              foundEnd = entry.utf16End
-            }
-          }
-        }
-        if (foundStart >= 0 && foundEnd >= 0) {
-          targetUtf16Start = foundStart
-          targetUtf16End = foundEnd
-          targetResolved = true
-        }
-      }
-      // 问题3修复：目标身份解析失败时，不生成 carry-over insert/reflow run。
-      // 这些字已不在新版正文中，继续按 insert/reflow 处理会用伪 target offset
-      // 误扣最新版静态字形。交给 identifyCarryOverGhosts 处理消退。
-      if (!targetResolved) {
-        continue
-      }
-
-      // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
-      if (w.motionOwnerKind === 'insert') {
-        const fullWidth = w.glyphWidth
-        const currentWidth = w.currentClipRight - w.currentClipLeft
-        if (currentWidth >= fullWidth - 0.01) {
-          continue  // insert 已完全可见，不需要延续
-        }
-      } else {
-        // reflow：判断当前位置是否已接近目标位置
-        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
-        if (targetRect !== null) {
-          const targetX = targetRect.x
-          const targetY = targetRect.y
-          if (Math.abs(w.currentPositionX - targetX) < 0.01 &&
-              Math.abs(w.currentPositionY - targetY) < 0.01) {
-            continue  // reflow 已到达目标位置，不需要延续
-          }
-        }
-      }
+      // Issue #879 复核评论6084020082 问题1+2+3：用 splitFrozenWindowByGlyphOwnership
+      // 真正按源字形连续性拆分窗口。每个 piece 有独立的源/目标范围和几何。
+      const pieces = this.splitFrozenWindowByGlyphOwnership(
+        w, uncoveredIds, newIdentityTable, newLayout
+      )
 
       // Issue #879 复核评论6082616112 问题1：明确源类型和源 runId。
       const sourceKind: 'new' | 'old' = w.motionOwnerKind === 'insert' ? 'new' : 'old'
       const sourceRunId = `${sourceKind}-${w.sourceRevision}`
 
-      // Issue #879 复核评论6083352210 问题2：如果窗口被部分接管（coveredIds 非空），
-      // 只对 uncoveredIds 部分生成 carry-over run。
-      // 拆分窗口时需要为子窗口设置独立的 utf16 范围和几何。
-      const effectiveGlyphIds = uncoveredIds
-      let effectiveSourceUtf16Start = w.utf16Start
-      let effectiveSourceUtf16End = w.utf16End
-      let effectiveGlyphX = w.glyphX
-      let effectiveGlyphY = w.glyphY
-      let effectiveGlyphWidth = w.glyphWidth
-      let effectiveGlyphHeight = w.glyphHeight
-      let effectiveClipTop = w.clipTop
-      let effectiveClipBottom = w.clipBottom
-      let effectiveCurrentClipLeft = w.currentClipLeft
-      let effectiveCurrentClipRight = w.currentClipRight
-      let effectiveCurrentPositionX = w.currentPositionX
-      let effectiveCurrentPositionY = w.currentPositionY
-
-      if (coveredIds.length > 0) {
-        // 窗口被部分接管——需要拆分。
-        // 用 newIdentityTable 查找 uncoveredIds 在源正文中的 utf16 范围，
-        // 用 glyphRectForRange 获取子窗口的几何。
-        // 源正文范围：用 uncoveredIds 对应的 source identity 查找。
-        // 但源正文身份表可能不可用——此时用 w.utf16Start/End 作为 fallback。
-        // 目标正文范围已由上面的 targetUtf16Start/End 确定。
-        // 几何：用 glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End) 获取目标几何，
-        // 源几何沿用窗口的几何（因为 carry-over run 的 buildFrame 用源几何绘制旧 Text）。
-        // 对于 insert，glyphX/Y/Width/Height 是源排版的几何——拆分时需要用源布局计算。
-        // 但我们没有源布局的 glyphRectForRange——用窗口几何作为近似。
-        // clip 范围：uncoveredIds 的 currentClip 应该是原窗口 clip 中属于这些字形的部分。
-        // 简化处理：对于 insert，clip 是从左到右扩展的，uncoveredIds 如果是窗口的尾部字形，
-        // 其 clip 就是原窗口的 currentClipRight 附近。这里用原窗口几何作为保守近似。
-        // 关键是 targetUtf16Start/End 已正确设置（只包含 uncoveredIds 的目标范围），
-        // 这样 computeStaticRangesMultiChannel 只扣 uncoveredIds 的目标范围，
-        // 不会误扣被新 plan 接管的 coveredIds 的目标范围。
-        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
-        if (targetRect !== null) {
-          effectiveGlyphX = targetRect.x
-          effectiveGlyphY = targetRect.y
-          effectiveGlyphWidth = targetRect.width
-          effectiveGlyphHeight = targetRect.height
-          effectiveClipTop = targetRect.y
-          effectiveClipBottom = targetRect.y + targetRect.height
+      for (const piece of pieces) {
+        // 问题2：目标身份消失的字形不生成 carry-over motion run——
+        // 交给 identifyCarryOverGhosts 处理消退。
+        if (!piece.targetResolved) {
+          continue
         }
-      }
 
-      // Issue #879 复核评论6082616112 问题2：计算 reflow 的 startX/startY/targetX/targetY。
-      let startX = effectiveCurrentPositionX
-      let startY = effectiveCurrentPositionY
-      let targetX = effectiveGlyphX + w.offsetX
-      let targetY = effectiveGlyphY + w.offsetY
-      // 计算 targetClipLeft/Right：
-      // - insert：目标是完整可见（targetClipLeft = glyphX, targetClipRight = glyphX + glyphWidth）
-      // - reflow：目标是新版布局中的位置——用 glyphRectForRange 查出
-      let targetClipLeft = effectiveGlyphX
-      let targetClipRight = effectiveGlyphX + effectiveGlyphWidth
-      if (w.motionOwnerKind === 'reflow') {
-        // reflow 的目标位置在新版布局中——用 glyphRectForRange 查出
-        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
-        if (targetRect !== null) {
-          targetX = targetRect.x
-          targetY = targetRect.y
-          targetClipLeft = targetX
-          targetClipRight = targetX + targetRect.width
+        // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
+        if (w.motionOwnerKind === 'insert') {
+          const fullWidth = piece.glyphWidth
+          const currentWidth = piece.clipRight - piece.clipLeft
+          if (currentWidth >= fullWidth - 0.01) {
+            continue  // insert 已完全可见，不需要延续
+          }
+        } else {
+          // reflow：判断当前位置是否已接近目标位置
+          if (piece.targetRect !== null) {
+            const targetX = piece.targetRect.x
+            const targetY = piece.targetRect.y
+            if (Math.abs(piece.currentPositionX - targetX) < 0.01 &&
+                Math.abs(piece.currentPositionY - targetY) < 0.01) {
+              continue  // reflow 已到达目标位置，不需要延续
+            }
+          }
         }
+
+        // Issue #879 复核评论6082616112 问题2：计算 reflow 的 startX/startY/targetX/targetY。
+        let startX = piece.currentPositionX
+        let startY = piece.currentPositionY
+        let targetX = piece.glyphX + piece.offsetX
+        let targetY = piece.glyphY + piece.offsetY
+        // 计算 targetClipLeft/Right：
+        // - insert：目标是完整可见（targetClipLeft = glyphX, targetClipRight = glyphX + glyphWidth）
+        // - reflow：目标是新版布局中的位置——用 piece.targetRect
+        let targetClipLeft = piece.glyphX
+        let targetClipRight = piece.glyphX + piece.glyphWidth
+        if (w.motionOwnerKind === 'reflow') {
+          // reflow 的目标位置在新版布局中——用 piece.targetRect
+          if (piece.targetRect !== null) {
+            targetX = piece.targetRect.x
+            targetY = piece.targetRect.y
+            targetClipLeft = targetX
+            targetClipRight = targetX + piece.targetRect.width
+          }
+        }
+        runs.push({
+          motionOwnerKind: w.motionOwnerKind,
+          glyphIds: piece.glyphIds,
+          windowId: w.windowId,
+          sourceRevision: w.sourceRevision,
+          sourceKind: sourceKind,
+          sourceRunId: sourceRunId,
+          sourceUtf16Start: piece.sourceUtf16Start,
+          sourceUtf16End: piece.sourceUtf16End,
+          targetUtf16Start: piece.targetUtf16Start,
+          targetUtf16End: piece.targetUtf16End,
+          currentClipLeft: piece.clipLeft,
+          currentClipRight: piece.clipRight,
+          targetClipLeft: targetClipLeft,
+          targetClipRight: targetClipRight,
+          clipTop: piece.clipTop,
+          clipBottom: piece.clipBottom,
+          glyphX: piece.glyphX,
+          glyphY: piece.glyphY,
+          glyphWidth: piece.glyphWidth,
+          glyphHeight: piece.glyphHeight,
+          offsetX: piece.offsetX,
+          offsetY: piece.offsetY,
+          currentPositionX: piece.currentPositionX,
+          currentPositionY: piece.currentPositionY,
+          startX: startX,
+          startY: startY,
+          targetX: targetX,
+          targetY: targetY
+        })
       }
-      runs.push({
-        motionOwnerKind: w.motionOwnerKind,
-        glyphIds: effectiveGlyphIds,
-        windowId: w.windowId,
-        sourceRevision: w.sourceRevision,
-        sourceKind: sourceKind,
-        sourceRunId: sourceRunId,
-        sourceUtf16Start: effectiveSourceUtf16Start,
-        sourceUtf16End: effectiveSourceUtf16End,
-        targetUtf16Start: targetUtf16Start,
-        targetUtf16End: targetUtf16End,
-        currentClipLeft: effectiveCurrentClipLeft,
-        currentClipRight: effectiveCurrentClipRight,
-        targetClipLeft: targetClipLeft,
-        targetClipRight: targetClipRight,
-        clipTop: effectiveClipTop,
-        clipBottom: effectiveClipBottom,
-        glyphX: effectiveGlyphX,
-        glyphY: effectiveGlyphY,
-        glyphWidth: effectiveGlyphWidth,
-        glyphHeight: effectiveGlyphHeight,
-        offsetX: w.offsetX,
-        offsetY: w.offsetY,
-        currentPositionX: effectiveCurrentPositionX,
-        currentPositionY: effectiveCurrentPositionY,
-        startX: startX,
-        startY: startY,
-        targetX: targetX,
-        targetY: targetY
-      })
     }
     return runs
   }
