@@ -420,6 +420,8 @@ export struct SujianEditor {
     this.motionSourcePool.clear()
     // Issue #879 复核评论6077187962 问题4：清空窗口实例 ID 映射。
     this.motionCoordinator.clearWindowInstances()
+    // Issue #879 复核评论问题5：清空源排版记录缓存。
+    this.motionCoordinator.clearSourceLayoutRecords()
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
     this.cleanupAllWindowsObservers()
     this.pendingFirstCaretRect = null
@@ -723,6 +725,8 @@ export struct SujianEditor {
       this.motionSourcePool.clear()
       // Issue #879 复核评论6077187962 问题4：清空窗口实例 ID 映射。
       this.motionCoordinator.clearWindowInstances()
+      // Issue #879 复核评论问题5：清空源排版记录缓存——防止跨会话 revision 重复时取到旧布局。
+      this.motionCoordinator.clearSourceLayoutRecords()
       // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver 和回调。
       this.cleanupAllWindowsObservers()
       this.pendingFirstCaretRect = null
@@ -744,6 +748,8 @@ export struct SujianEditor {
         this.candidateVisualFrame = null
         this.pendingDisplayData = null
         this.candidateToken = null
+        // Issue #879 复核评论问题5：跨会话切换时清空源排版记录缓存。
+        this.motionCoordinator.clearSourceLayoutRecords()
       }
     }
 
@@ -946,7 +952,8 @@ export struct SujianEditor {
       this.contentWidth,
       this.motionPolicy,
       this.pendingFirstCaretRect,
-      displayedFrameForCandidate
+      displayedFrameForCandidate,
+      latestUpdate.sessionId
     )
     // 旧候选（若有）被本次更高 revision 的候选取代：直接丢弃即可，
     // Coordinator 的已提交计划/帧从未被候选改动，旧动画仍按旧 plan 采样。
@@ -1225,6 +1232,11 @@ export struct SujianEditor {
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
           },
+          onWindowAcquireLease: (rnKey: string, winInstanceId: string): void => {
+            // Issue #879 复核评论问题4：lease 在 onAppear 后才 acquire——
+            // buildFrame 不再登记 lease，只有 Text 真正挂载后才 acquire。
+            this.motionCoordinator.acquireRenderNodeLease(rnKey, winInstanceId)
+          },
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
             this.motionSourcePool.releaseWindowState(rnKey)
@@ -1263,6 +1275,11 @@ export struct SujianEditor {
           visible: false,
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
+          },
+          onWindowAcquireLease: (rnKey: string, winInstanceId: string): void => {
+            // Issue #879 复核评论问题4：lease 在 onAppear 后才 acquire——
+            // buildFrame 不再登记 lease，只有 Text 真正挂载后才 acquire。
+            this.motionCoordinator.acquireRenderNodeLease(rnKey, winInstanceId)
           },
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)

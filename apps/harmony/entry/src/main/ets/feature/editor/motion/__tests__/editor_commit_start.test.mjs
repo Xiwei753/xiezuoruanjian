@@ -275,7 +275,7 @@ test('问题2：多段可见字形——deletedRunStartState 保留两段 piece�
   assert.equal(start[1].startClipRight, 40)
 })
 
-test('问题2：多段可见字形——insertRunStartState 保留两段 piece，不合并并集', () => {
+test('问题2：多段可见字形——insertRunStartState 保留两段可见 piece + 间隙 0宽度 piece', () => {
   const ctx = context('甲乙丙丁', 722, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
@@ -283,18 +283,25 @@ test('问题2：多段可见字形——insertRunStartState 保留两段 piece�
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = insertRunStartState(run, withWindow)
-  // Issue #879 复核评论6078682695 问题1：不再合并并集，保留两段独立 piece
-  assert.equal(start.length, 2)
+  // 修复后：3 个 piece = [0..1 可见] + [2 间隙 0宽度] + [3 可见]
+  // 间隙 piece 以 0 宽度进入，动画期间逐步吐出，不会在第一帧"冒出来"
+  assert.equal(start.length, 3)
   // 第一段：簇0..簇1，clip [0, 20]
   assert.equal(start[0].firstIndex, 0)
   assert.equal(start[0].lastIndex, 1)
   assert.equal(start[0].startClipLeft, 0)
   assert.equal(start[0].startClipRight, 20)
-  // 第二段：簇3，clip [30, 40]
-  assert.equal(start[1].firstIndex, 3)
-  assert.equal(start[1].lastIndex, 3)
-  assert.equal(start[1].startClipLeft, 30)
-  assert.equal(start[1].startClipRight, 40)
+  // 第二段：簇2，间隙（0 宽度）——丙在第一帧不可见，但 piece 存在以便动画逐步吐出
+  assert.equal(start[1].firstIndex, 2)
+  assert.equal(start[1].lastIndex, 2)
+  assert.equal(start[1].startClipLeft, 0)
+  assert.equal(start[1].startClipRight, 0)
+  assert.deepEqual(start[1].glyphIds, [ids[2]])
+  // 第三段：簇3，clip [30, 40]
+  assert.equal(start[2].firstIndex, 3)
+  assert.equal(start[2].lastIndex, 3)
+  assert.equal(start[2].startClipLeft, 30)
+  assert.equal(start[2].startClipRight, 40)
 })
 
 test('问题2：多段可见字形——retainedMoveStartState 保留两段 piece，不合并并集', () => {
@@ -668,6 +675,240 @@ test('问题2：跨事务 ghost——源布局与目标布局不同时投影正�
   assert.equal(pieces[0].ownLeft, 35)
   // 投影：ratio = (20-10)/(20-10) = 1.0 → ownRight = 30 + 1.0 * (40-30) = 40
   assert.equal(pieces[0].ownRight, 40)
+})
+
+// ====== 空数组分支修复：无旧可见字形时应覆盖整段新 run ======
+
+test('空数组分支：纯新插入（所有字都不在旧画面）——piece 应覆盖整段', () => {
+  const ctx = context('甲乙', 760, [])
+  // 3 个全新插入的字，都不在旧画面里
+  const run = {
+    glyphIds: ['ins-760-0', 'ins-760-1', 'ins-760-2'],
+    ownText: 'ABC',
+    ownUtf16Start: 0,
+    ownUtf16End: 3,
+    ownRect: { x: 50, y: 0, width: 30, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 3,
+      left: 50,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: [
+        { utf16Offset: 0, x: 50 },
+        { utf16Offset: 1, x: 60 },
+        { utf16Offset: 2, x: 70 },
+        { utf16Offset: 3, x: 80 },
+      ],
+    }],
+  }
+  const start = insertRunStartState(run, ctx)
+  // 应返回单个 piece，覆盖整段
+  assert.equal(start.length, 1)
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 2)
+  assert.equal(start[0].glyphIds.length, 3)
+  assert.deepEqual(start[0].glyphIds, ['ins-760-0', 'ins-760-1', 'ins-760-2'])
+  // 零宽度起点
+  assert.equal(start[0].startClipLeft, 50)
+  assert.equal(start[0].startClipRight, 50)
+})
+
+test('空数组分支：纯新插入多字——不再只返回第一个字形', () => {
+  const ctx = context('甲', 761, [])
+  // 5 个全新插入的字
+  const run = {
+    glyphIds: ['ins-761-0', 'ins-761-1', 'ins-761-2', 'ins-761-3', 'ins-761-4'],
+    ownText: 'ABCDE',
+    ownUtf16Start: 0,
+    ownUtf16End: 5,
+    ownRect: { x: 100, y: 0, width: 50, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 5,
+      left: 100,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: Array.from({ length: 6 }, (_v, i) => ({ utf16Offset: i, x: 100 + i * 10 })),
+    }],
+  }
+  const start = insertRunStartState(run, ctx)
+  assert.equal(start.length, 1)
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 4)
+  assert.equal(start[0].glyphIds.length, 5)
+  assert.deepEqual(start[0].glyphIds, ['ins-761-0', 'ins-761-1', 'ins-761-2', 'ins-761-3', 'ins-761-4'])
+})
+
+test('混合 run：部分旧可见+部分新插入——间隙作为 0 宽度 piece', () => {
+  // displayed 正文 '甲乙丙丁戊'，run 覆盖 0..5
+  // 簇0（甲）、簇1（乙）静态可见，簇2（丙）被窗口接管且不可见，
+  // 簇3（丁）是新插入字（不在身份表中），簇4（戊）静态可见
+  const ctx = context('甲乙丙丁戊', 762, [])
+  const ids = idsOf(ctx, 0, 5)
+  // 簇2（丙）被窗口接管且完全不可见
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 762, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 的 glyphIds：簇0、簇1、簇2 是旧字（在身份表中），簇3 是新字，簇4 是旧字
+  // 但簇3 不在身份表中——需要构造一个不在身份表中的 glyphId
+  const run = {
+    glyphIds: [ids[0], ids[1], ids[2], 'ins-762-3', ids[4]],
+    ownText: '甲乙丙X戊',
+    ownUtf16Start: 0,
+    ownUtf16End: 5,
+    ownRect: { x: 0, y: 0, width: 50, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 5,
+      left: 0,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: Array.from({ length: 6 }, (_v, i) => ({ utf16Offset: i, x: i * 10 })),
+    }],
+  }
+  const start = insertRunStartState(run, withWindow)
+  // visibleGlyphPieces 会返回：簇0..簇1（可见），簇4（可见）
+  // 簇2 不可见（窗口接管且 clip=0），簇3 不在身份表中（新字）
+  // 间隙：index 2（簇2，不可见的旧字）和 index 3（簇3，新字）
+  // 应该有 3 个 piece：[0..1 可见], [2..3 间隙 0宽度], [4 可见]
+  assert.equal(start.length, 3)
+  // 第一段：簇0..簇1，可见
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
+  assert.deepEqual(start[0].glyphIds, [ids[0], ids[1]])
+  // 第二段：簇2..簇3，间隙（0 宽度）
+  assert.equal(start[1].firstIndex, 2)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 0)
+  assert.equal(start[1].startClipRight, 0)
+  assert.deepEqual(start[1].glyphIds, [ids[2], 'ins-762-3'])
+  // 第三段：簇4，可见
+  assert.equal(start[2].firstIndex, 4)
+  assert.equal(start[2].lastIndex, 4)
+  assert.equal(start[2].startClipLeft, 40)
+  assert.equal(start[2].startClipRight, 50)
+  assert.deepEqual(start[2].glyphIds, [ids[4]])
+})
+
+test('混合 run：头部新插入+尾部旧可见——头部间隙作为 0 宽度 piece', () => {
+  // run 的前 2 个字是新插入的（不在身份表中），后 2 个字是旧可见
+  const ctx = context('甲乙', 763, [])
+  const ids = idsOf(ctx, 0, 2)
+  const run = {
+    glyphIds: ['ins-763-0', 'ins-763-1', ids[0], ids[1]],
+    ownText: 'XY甲乙',
+    ownUtf16Start: 0,
+    ownUtf16End: 4,
+    ownRect: { x: 0, y: 0, width: 40, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 4,
+      left: 0,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: Array.from({ length: 5 }, (_v, i) => ({ utf16Offset: i, x: i * 10 })),
+    }],
+  }
+  const start = insertRunStartState(run, ctx)
+  // visibleGlyphPieces 返回：簇2..簇3（甲乙可见）
+  // 间隙：index 0..1（新插入字）
+  // 应该有 2 个 piece：[0..1 间隙 0宽度], [2..3 可见]
+  assert.equal(start.length, 2)
+  // 第一段：簇0..簇1，间隙（0 宽度）
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 0)
+  assert.deepEqual(start[0].glyphIds, ['ins-763-0', 'ins-763-1'])
+  // 第二段：簇2..簇3，可见
+  assert.equal(start[1].firstIndex, 2)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 20)
+  assert.equal(start[1].startClipRight, 40)
+  assert.deepEqual(start[1].glyphIds, [ids[0], ids[1]])
+})
+
+test('混合 run：旧可见+尾部新插入——尾部间隙作为 0 宽度 piece', () => {
+  // run 的前 2 个字是旧可见，后 2 个字是新插入的
+  const ctx = context('甲乙', 764, [])
+  const ids = idsOf(ctx, 0, 2)
+  const run = {
+    glyphIds: [ids[0], ids[1], 'ins-764-2', 'ins-764-3'],
+    ownText: '甲乙XY',
+    ownUtf16Start: 0,
+    ownUtf16End: 4,
+    ownRect: { x: 0, y: 0, width: 40, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 4,
+      left: 0,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: Array.from({ length: 5 }, (_v, i) => ({ utf16Offset: i, x: i * 10 })),
+    }],
+  }
+  const start = insertRunStartState(run, ctx)
+  // visibleGlyphPieces 返回：簇0..簇1（甲乙可见）
+  // 尾部间隙：index 2..3（新插入字）
+  // 应该有 2 个 piece：[0..1 可见], [2..3 尾部间隙 0宽度]
+  assert.equal(start.length, 2)
+  // 第一段：簇0..簇1，可见
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
+  assert.deepEqual(start[0].glyphIds, [ids[0], ids[1]])
+  // 第二段：簇2..簇3，尾部间隙（0 宽度）
+  assert.equal(start[1].firstIndex, 2)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 0)
+  assert.equal(start[1].startClipRight, 0)
+  assert.deepEqual(start[1].glyphIds, ['ins-764-2', 'ins-764-3'])
+})
+
+test('deletedRunStartState 空数组分支——覆盖整段 glyphIds，不只取第一个', () => {
+  const ctx = context('甲乙', 765, [])
+  const ids = idsOf(ctx, 0, 2)
+  // 窗口覆盖甲乙且完全不可见
+  const frozen = [frozenWindow(ids, 0, 0, 0, 0, 765, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 2, { x: 0, y: 0, width: 20, height: 20 })
+  const start = deletedRunStartState(run, withWindow, 5)
+  assert.equal(start.length, 1)
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].glyphIds.length, 2)
+  assert.deepEqual(start[0].glyphIds, ids)
+  // 塌到 collapseX
+  assert.equal(start[0].startClipLeft, 5)
+  assert.equal(start[0].startClipRight, 5)
+})
+
+test('retainedMoveStartState 空数组分支——覆盖整段 glyphIds，不只取第一个', () => {
+  const ctx = context('甲乙丙丁', 766, [])
+  const all = idsOf(ctx, 0, 4)
+  const frozen = [frozenWindow(all, 0, 0, 0, 0, 766, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const fallback = {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 100, startPositionY: 20,
+  }
+  const start = retainedMoveStartState(run, withWindow, fallback)
+  assert.equal(start.length, 1)
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 3)
+  assert.equal(start[0].glyphIds.length, 4)
+  assert.deepEqual(start[0].glyphIds, all)
+  // fallback 位置
+  assert.equal(start[0].startPositionX, 100)
+  assert.equal(start[0].startPositionY, 20)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

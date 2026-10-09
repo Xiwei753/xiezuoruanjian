@@ -369,6 +369,14 @@ export interface MotionWindowSource {
    */
   onWindowLayoutReady: ((renderNodeKey: string) => void) | null
   /**
+   * Issue #879 复核评论问题4：窗口租约获取回调——Text.onAppear 中调用。
+   *
+   * buildFrame 不再登记 lease（lease 在 onAppear 后才 acquire）。
+   * 候选被作废时 ArkUI 可能从未创建那个 Text，此时不存在对应 onDisAppear，
+   * lease 不应被提前登记。只有 Text 真正挂载后才 acquire lease。
+   */
+  onWindowAcquireLease: ((renderNodeKey: string, windowInstanceId: string) => void) | null
+  /**
    * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
    * 父组件调用 motionSourcePool.releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver，
    * 同时调用 motionCoordinator.releaseWindowInstance(windowInstanceId) 释放窗口实例 ID。
@@ -438,6 +446,13 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 // 不再检查 !item.mounted 跳过，避免同版本新窗口从源池读到 mounted=true 而漏字。
                 // 每个 Text 都调用自己的 textController.setStyledString(source.styledString)。
                 item.textController.setStyledString(item.source.styledString)
+                // Issue #879 复核评论问题4：在 onAppear 后才 acquire lease——
+                // buildFrame 不再登记 lease，只有 Text 真正挂载后才 acquire。
+                // 候选被作废时 ArkUI 可能从未创建那个 Text，此时不存在对应 onDisAppear，
+                // lease 不应被提前登记。
+                if (item.onWindowAcquireLease !== null) {
+                  item.onWindowAcquireLease(item.window.renderNodeKey, item.window.windowInstanceId)
+                }
                 // 通知父组件本窗口已挂载——父组件创建 ComponentObserver 监听 layout 事件。
                 // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
                 // 才调用 markWindowLayoutReady(renderNodeKey)，不再用 setTimeout 充当绘制完成证据。

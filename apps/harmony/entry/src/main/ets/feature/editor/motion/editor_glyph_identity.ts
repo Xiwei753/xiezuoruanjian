@@ -283,8 +283,10 @@ export class WindowInstanceIdAllocator {
   releaseLease(renderNodeKey: string, windowInstanceId: string): void {
     const leases = this.instanceIdToLeases.get(windowInstanceId)
     if (leases === undefined) {
-      // 没有租约记录——直接释放（兼容旧路径）
-      this.release(windowInstanceId)
+      // 没有租约记录——无副作用返回，不直接释放共享 ID。
+      // Issue #879 复核评论问题4：未登记过 lease 的 release 不应误释放别人的身份。
+      // 候选被作废时 buildFrame 不再登记 lease（lease 在 onAppear 后才 acquire），
+      // 所以不存在 lease 记录是正常情况。
       return
     }
     leases.delete(renderNodeKey)

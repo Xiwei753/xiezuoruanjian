@@ -117,6 +117,11 @@ export interface MotionCommittedState {
   motionDurationMs: number
   firstCaretRect: CaretRect | null
   glyphIdentities: GlyphIdentityTable | null
+  /**
+   * Issue #879 复核评论问题5：Core 编辑会话 ID。
+   * 用于 sourceLayoutRecords 的复合键，防止跨会话 revision 重复时取到旧布局。
+   */
+  sessionId: number
 }
 
 /**
@@ -224,8 +229,18 @@ export class EditorMotionCoordinator {
    *
    * 每个冻结窗口按 w.sourceRevision 查它自己的布局，不能按 sourceKind 猜 displayed/newSnapshot。
    * 跨修订残影时（如 rev10 的旧窗口在 rev12 仍在消退），通过此缓存获取 rev10 的源排版。
+   *
+   * Issue #879 复核评论问题5：缓存键改为 sessionId+revision（复合键），
+   * 防止跨会话 revision 重复时取到上一个作品的旧布局。
    */
-  private sourceLayoutRecords: Map<number, SourceLayoutRecord>
+  private sourceLayoutRecords: Map<string, SourceLayoutRecord>
+  /**
+   * Issue #879 复核评论问题5：当前 Core 编辑会话 ID。
+   *
+   * 用于 sourceLayoutRecords 的复合键（sessionId+revision），
+   * 防止跨会话 revision 重复时取到上一个作品的旧布局。
+   */
+  private currentSessionId: number = 0
 
   constructor() {
     this.currentFrame = {
@@ -288,11 +303,13 @@ export class EditorMotionCoordinator {
     contentWidth: number,
     policy: EditorMotionPolicy,
     firstCaretRect: CaretRect | null,
-    displayedFrame: EditorVisualFrame
+    displayedFrame: EditorVisualFrame,
+    sessionId: number
   ): PreparedCandidate {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
-      contentWidth, policy, displayedFrame, firstCaretRect
+      contentWidth, policy, displayedFrame, firstCaretRect,
+      sessionId
     )
     return {
       plan: state.plan,
@@ -365,12 +382,12 @@ export class EditorMotionCoordinator {
       const pieces: RunStartPiece[] = context === null
         ? [{
             firstIndex: 0,
-            lastIndex: 0,
+            lastIndex: run.glyphIds.length - 1,
             startClipLeft: run.startClipLeft,
             startClipRight: run.startClipRight,
             startPositionX: run.rect.x,
             startPositionY: run.rect.y,
-            glyphIds: run.glyphIds
+            glyphIds: [...run.glyphIds]
           }]
         : insertRunStartState(
             EditorMotionCoordinator.runGeometry(
@@ -406,12 +423,12 @@ export class EditorMotionCoordinator {
       const pieces: RunStartPiece[] = context === null
         ? [{
             firstIndex: 0,
-            lastIndex: 0,
+            lastIndex: run.glyphIds.length - 1,
             startClipLeft: run.startClipLeft,
             startClipRight: run.startClipRight,
             startPositionX: run.rect.x,
             startPositionY: run.rect.y,
-            glyphIds: run.glyphIds
+            glyphIds: [...run.glyphIds]
           }]
         : deletedRunStartState(
             EditorMotionCoordinator.runGeometry(
@@ -444,12 +461,12 @@ export class EditorMotionCoordinator {
       const pieces: RunStartPiece[] = context === null
         ? [{
             firstIndex: 0,
-            lastIndex: 0,
+            lastIndex: move.glyphIds.length - 1,
             startClipLeft: move.oldRect.x,
             startClipRight: move.oldRect.x + move.oldRect.width,
             startPositionX: move.startPositionX,
             startPositionY: move.startPositionY,
-            glyphIds: move.glyphIds
+            glyphIds: [...move.glyphIds]
           }]
         : retainedMoveStartState(
             EditorMotionCoordinator.runGeometry(
@@ -504,8 +521,27 @@ export class EditorMotionCoordinator {
     // 上一帧仍有非零 clip、且尚未归还静态层的旧窗口作为残影继承到候选 plan。
     // buildFrame 每帧同时采样本轮新 run 与 carryOver ghost，
     // 保持其旧源 TextController/StyledString 有效，直到残影真正隐藏才释放。
+    //
+    // Issue #879 问题1修复：planGlyphIds 来自本轮新 plan 的 run 集合，
+    // 而不是冻结帧自身的窗口 glyphIds——否则 allGhost 永远为 false。
+    const planGlyphIds: Set<string> = new Set()
+    for (const run of prepared.plan.insertRuns) {
+      for (const gid of run.glyphIds) {
+        planGlyphIds.add(gid)
+      }
+    }
+    for (const run of prepared.plan.deletedRuns) {
+      for (const gid of run.glyphIds) {
+        planGlyphIds.add(gid)
+      }
+    }
+    for (const move of prepared.plan.retainedMoves) {
+      for (const gid of move.glyphIds) {
+        planGlyphIds.add(gid)
+      }
+    }
     const carryOverGhostRuns = this.identifyCarryOverGhosts(
-      latestDisplayedFrame, prepared.state.newSnapshot.revision
+      latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds
     )
 
     const newPlan: EditorMotionPlan = {
@@ -522,6 +558,7 @@ export class EditorMotionCoordinator {
     const newStartFrame = EditorMotionCoordinator.buildFrame(
       newPlan,
       prepared.state.oldSnapshot,
+      prepared.state.oldLayout,
       prepared.state.newSnapshot,
       prepared.state.newLayout,
       latestDisplayedFrame,
@@ -541,7 +578,8 @@ export class EditorMotionCoordinator {
       textRevisionKey: prepared.state.textRevisionKey,
       motionDurationMs: prepared.state.motionDurationMs,
       firstCaretRect: prepared.state.firstCaretRect,
-      glyphIdentities: prepared.state.glyphIdentities
+      glyphIdentities: prepared.state.glyphIdentities,
+      sessionId: prepared.state.sessionId
     }
 
     return {
@@ -573,11 +611,13 @@ export class EditorMotionCoordinator {
     editResults: EditorEditResult[],
     contentWidth: number,
     policy: EditorMotionPolicy,
-    firstCaretRect?: CaretRect | null
+    firstCaretRect?: CaretRect | null,
+    sessionId?: number
   ): EditorVisualFrame {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
-      contentWidth, policy, this.currentFrame, firstCaretRect ?? null
+      contentWidth, policy, this.currentFrame, firstCaretRect ?? null,
+      sessionId ?? this.currentSessionId
     )
     this.applyCommittedState(state)
     return this.currentFrame
@@ -597,7 +637,8 @@ export class EditorMotionCoordinator {
     editResult: EditorEditResult | null,
     contentWidth: number,
     policy: EditorMotionPolicy,
-    firstCaretRect?: CaretRect | null
+    firstCaretRect?: CaretRect | null,
+    sessionId?: number
   ): EditorVisualFrame {
     const chain: EditorEditResult[] = []
     if (editResult !== null) {
@@ -605,7 +646,8 @@ export class EditorMotionCoordinator {
     }
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, chain,
-      contentWidth, policy, this.currentFrame, firstCaretRect ?? null
+      contentWidth, policy, this.currentFrame, firstCaretRect ?? null,
+      sessionId ?? this.currentSessionId
     )
     this.applyCommittedState(state)
     return this.currentFrame
@@ -630,7 +672,8 @@ export class EditorMotionCoordinator {
     contentWidth: number,
     policy: EditorMotionPolicy,
     startFrame: EditorVisualFrame,
-    firstCaretRect: CaretRect | null
+    firstCaretRect: CaretRect | null,
+    sessionId: number
   ): MotionCommittedState {
     const newGeometryKey: GeometryKey = {
       fontSize: newSnapshot.fontSize,
@@ -675,7 +718,8 @@ export class EditorMotionCoordinator {
         textRevisionKey: newTextRevisionKey,
         motionDurationMs: 0,
         firstCaretRect: firstCaretRect,
-        glyphIdentities: identities.newTable
+        glyphIdentities: identities.newTable,
+        sessionId: sessionId
       }
     }
 
@@ -698,7 +742,7 @@ export class EditorMotionCoordinator {
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
-          plan, oldSnapshot, newSnapshot, newLayout, startFrame, 0,
+          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0,
           this.windowIdAllocator
         )
       : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
@@ -714,7 +758,8 @@ export class EditorMotionCoordinator {
       textRevisionKey: newTextRevisionKey,
       motionDurationMs: durationMs,
       firstCaretRect: firstCaretRect,
-      glyphIdentities: identities.newTable
+      glyphIdentities: identities.newTable,
+      sessionId: sessionId
     }
   }
 
@@ -733,6 +778,8 @@ export class EditorMotionCoordinator {
     this.motionDurationMs = state.motionDurationMs
     this.firstCaretRect = state.firstCaretRect
     this.glyphIdentities = state.glyphIdentities
+    // Issue #879 复核评论问题5：记录当前会话 ID，用于 sourceLayoutRecords 复合键。
+    this.currentSessionId = state.sessionId
     // Issue #879 复核评论6078682695 问题2：记录不可变源排版，供跨修订残影查源布局。
     this.recordSourceLayout(state.oldSnapshot, state.oldLayout)
     this.recordSourceLayout(state.newSnapshot, state.newLayout)
@@ -741,11 +788,15 @@ export class EditorMotionCoordinator {
   /**
    * Issue #879 复核评论6078682695 问题2：记录一个 revision 的不可变源排版。
    *
-   * 按 revision 标识缓存 {text, lineLayouts}，供冻结窗口按 w.sourceRevision 查它自己的布局。
+   * 按 sessionId+revision 标识缓存 {text, lineLayouts}，供冻结窗口按 w.sourceRevision 查它自己的布局。
+   *
+   * Issue #879 复核评论问题5：缓存键改为 sessionId+revision（复合键），
+   * 防止跨会话 revision 重复时取到上一个作品的旧布局。
    */
   private recordSourceLayout(snapshot: EditorLayoutSnapshot, layout: LineLayout[]): void {
-    if (!this.sourceLayoutRecords.has(snapshot.revision)) {
-      this.sourceLayoutRecords.set(snapshot.revision, {
+    const key = `${this.currentSessionId}-${snapshot.revision}`
+    if (!this.sourceLayoutRecords.has(key)) {
+      this.sourceLayoutRecords.set(key, {
         revision: snapshot.revision,
         text: snapshot.text,
         lineLayouts: layout
@@ -756,10 +807,14 @@ export class EditorMotionCoordinator {
   /**
    * Issue #879 复核评论6078682695 问题2：按 sourceRevision 查不可变源排版记录。
    *
+   * Issue #879 复核评论问题5：缓存键改为 sessionId+revision（复合键），
+   * 防止跨会话 revision 重复时取到上一个作品的旧布局。
+   *
    * @returns 匹配的源排版记录，或 null（缓存中没有该 revision）
    */
   private getSourceLayout(revision: number): SourceLayoutRecord | null {
-    const record = this.sourceLayoutRecords.get(revision)
+    const key = `${this.currentSessionId}-${revision}`
+    const record = this.sourceLayoutRecords.get(key)
     return record ?? null
   }
 
@@ -942,6 +997,7 @@ export class EditorMotionCoordinator {
     return EditorMotionCoordinator.buildFrame(
       this.currentPlan,
       this.oldSnapshot,
+      this.oldLayout,
       this.newSnapshot,
       this.newLayout,
       this.currentFrame,
@@ -973,6 +1029,7 @@ export class EditorMotionCoordinator {
   private static buildFrame(
     plan: EditorMotionPlan,
     oldSnapshot: EditorLayoutSnapshot | null,
+    oldLayout: LineLayout[],
     newSnapshot: EditorLayoutSnapshot | null,
     newLayout: LineLayout[],
     caretBase: EditorVisualFrame,
@@ -1050,8 +1107,20 @@ export class EditorMotionCoordinator {
 
     // 2. 吞字通道：旧字源留在动画层，裁切窗口从起始状态缩到目标状态
     //    Issue #879 复核评论6078682695 问题1：按 piece 分别采样。
+    //    Issue #879 问题3修复：每个 piece 的 utf16Start/End 按 piece 的
+    //    firstIndex/lastIndex 和 clusterBoundaries 计算，不再写整 run 范围。
+    //    clipTop/Bottom/glyphX/Y/Width/Height 也按 piece 对应的 oldLayout 几何产生。
     for (const run of plan.deletedRuns) {
+      const runBoundaries = clusterBoundaries(oldText, run.utf16Start, run.utf16End)
       for (const piece of run.pieces) {
+        // 计算 piece 的 utf16 范围
+        let pieceUtf16Start = run.utf16Start
+        let pieceUtf16End = run.utf16End
+        if (runBoundaries.length === run.glyphIds.length + 1 &&
+            piece.firstIndex >= 0 && piece.lastIndex + 1 < runBoundaries.length) {
+          pieceUtf16Start = runBoundaries[piece.firstIndex]
+          pieceUtf16End = runBoundaries[piece.lastIndex + 1]
+        }
         // 目标 clip = 零宽度（collapseX）
         const collapseX = run.isForward ? caretBase.caretX : run.rect.x
         const targetLeft = collapseX
@@ -1061,8 +1130,8 @@ export class EditorMotionCoordinator {
         const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
-          utf16Start: run.utf16Start,
-          utf16End: run.utf16End,
+          utf16Start: pieceUtf16Start,
+          utf16End: pieceUtf16End,
           clipLeft: currentLeft,
           clipRight: currentRight,
           clipTop: run.rect.y,
@@ -1089,17 +1158,37 @@ export class EditorMotionCoordinator {
 
     // 3. 保留字移动通道：旧字源绘制后整体偏移到当前插值位置
     //    Issue #879 复核评论6078682695 问题1：按 piece 分别采样。
+    //    Issue #879 问题3修复：每个 piece 的 utf16Start/End 按 piece 的
+    //    firstIndex/lastIndex 和 clusterBoundaries 计算，不再写整 move 范围。
+    //    clipLeft/Right 也按 piece 对应的 oldLayout 几何产生，而非整块 oldRect.width。
     for (const move of plan.retainedMoves) {
+      const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       for (const piece of move.pieces) {
+        // 计算 piece 的 utf16 范围
+        let pieceUtf16Start = move.oldUtf16Start
+        let pieceUtf16End = move.oldUtf16End
+        let pieceOldLeft = move.oldRect.x
+        let pieceOldRight = move.oldRect.x + move.oldRect.width
+        if (moveBoundaries.length === move.glyphIds.length + 1 &&
+            piece.firstIndex >= 0 && piece.lastIndex + 1 < moveBoundaries.length) {
+          pieceUtf16Start = moveBoundaries[piece.firstIndex]
+          pieceUtf16End = moveBoundaries[piece.lastIndex + 1]
+          // 按 piece 在 oldLayout 中的位置计算裁切宽度
+          pieceOldLeft = EditorMotionCoordinator.xAtOffsetLocal(
+            oldLayout, pieceUtf16Start, move.oldRect.x)
+          pieceOldRight = EditorMotionCoordinator.xAtOffsetLocal(
+            oldLayout, pieceUtf16End, move.oldRect.x + move.oldRect.width)
+        }
+        const pieceOldWidth = pieceOldRight - pieceOldLeft
         const currentX = piece.startPositionX + (move.newRect.x - piece.startPositionX) * p
         const currentY = piece.startPositionY + (move.newRect.y - piece.startPositionY) * p
         const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
-          utf16Start: move.oldUtf16Start,
-          utf16End: move.oldUtf16End,
+          utf16Start: pieceUtf16Start,
+          utf16End: pieceUtf16End,
           clipLeft: currentX,
-          clipRight: currentX + move.oldRect.width,
+          clipRight: currentX + pieceOldWidth,
           clipTop: currentY,
           clipBottom: currentY + move.oldRect.height,
           glyphX: move.oldRect.x,
@@ -1115,7 +1204,7 @@ export class EditorMotionCoordinator {
           windowInstanceId: windowInstanceId,
           renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
           currentClipLeft: currentX,
-          currentClipRight: currentX + move.oldRect.width,
+          currentClipRight: currentX + pieceOldWidth,
           currentPositionX: currentX,
           currentPositionY: currentY
         })
@@ -1201,12 +1290,11 @@ export class EditorMotionCoordinator {
     // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
     const staticVisibleRanges = EditorMotionCoordinator.computeStaticRangesMultiChannel(plan, newLayout)
 
-    // Issue #879 复核评论6078682695 问题3：为每个窗口注册租约。
-    // 同一 glyphIds 序列可能被多个 renderNodeKey 的 Text 节点同时使用，
-    // addLease 记数确保只有所有节点都 onDisAppear 后才真正释放 instanceId。
-    for (const w of motionGlyphWindows) {
-      allocator.addLease(w.renderNodeKey, w.windowInstanceId)
-    }
+    // Issue #879 复核评论问题4：buildFrame 不再登记 lease——
+    // lease 在 Text.onAppear 后才 acquire（由 SujianEditor 调 acquireRenderNodeLease）。
+    // 候选被更高 revision 作废时 ArkUI 可能从未创建那个 Text，
+    // 此时不存在对应 onDisAppear，lease 不应被提前登记。
+    // buildFrame 只构造不可变窗口描述与匹配 ID。
 
     return {
       caretX,
@@ -1227,24 +1315,28 @@ export class EditorMotionCoordinator {
    * - 窗口的 sourceKind === 'old'（旧删除 ghost）
    * - 窗口的 sourceRevision 不等于新正文 revision（不是本轮新插入的）
    * - 窗口仍有非零 clip 宽度（尚未完全消退）
-   * - 窗口的 glyphIds 不在本轮新 run 集合中（不是本轮正在处理的）
+   * - 窗口的 glyphIds 不在本轮新 plan 的 run 集合中（不是本轮正在处理的）
+   *
+   * Issue #879 问题1修复：currentGlyphIds 必须来自本轮新 plan 的
+   * insertRuns/deletedRuns/retainedMoves 的 glyphIds，而不是冻结帧自身的窗口。
+   * 旧实现从 latestDisplayedFrame.motionGlyphWindows 构建 currentGlyphIds，
+   * 然后又遍历同一个数组检查 allGhost——set 就是从这些窗口建立的，
+   * 对任何有非空 glyphIds 的窗口 allGhost 必然 false，ghost 通道实际为空。
    *
    * 残影的目标 clip = 零宽度（继续消退到完全隐藏）。
+   *
+   * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame
+   * @param newRevision 新正文 revision
+   * @param planGlyphIds 本轮新 plan 中所有 run 的 glyphIds 集合（用于排除正在处理的字形）
    */
   private identifyCarryOverGhosts(
     latestDisplayedFrame: EditorVisualFrame,
-    newRevision: number
+    newRevision: number,
+    planGlyphIds: Set<string>
   ): CarryOverGhostRun[] {
     const ghosts: CarryOverGhostRun[] = []
     if (!latestDisplayedFrame.isAnimating) {
       return ghosts
-    }
-    // 收集本轮新 run 的所有 glyphIds，用于排除正在处理的字形
-    const currentGlyphIds: Set<string> = new Set()
-    for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      for (const gid of w.glyphIds) {
-        currentGlyphIds.add(gid)
-      }
     }
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
       // 只继承旧删除 ghost（sourceKind === 'old' 且 sourceRevision 不是新正文）
@@ -1258,10 +1350,10 @@ export class EditorMotionCoordinator {
       if (w.currentClipRight - w.currentClipLeft <= 0.01) {
         continue
       }
-      // 该窗口的 glyphIds 全部不在本轮新 run 集合中（是真正的残影）
+      // 该窗口的 glyphIds 全部不在本轮新 plan 的 run 集合中（是真正的残影）
       let allGhost = true
       for (const gid of w.glyphIds) {
-        if (currentGlyphIds.has(gid)) {
+        if (planGlyphIds.has(gid)) {
           allGhost = false
           break
         }
@@ -1702,6 +1794,21 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 复核评论问题4：在 Text.onAppear 后获取渲染节点租约。
+   *
+   * buildFrame 只构造窗口描述与匹配 ID，不登记 lease。
+   * lease 在 Text 真正挂载（onAppear）后才 acquire——
+   * 候选被作废时 ArkUI 可能从未创建那个 Text，此时不存在对应 onDisAppear，
+   * lease 不应被提前登记。
+   *
+   * @param renderNodeKey 渲染节点身份标识
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  acquireRenderNodeLease(renderNodeKey: string, windowInstanceId: string): void {
+    this.windowIdAllocator.addLease(renderNodeKey, windowInstanceId)
+  }
+
+  /**
    * Issue #879 复核评论6078682695 问题3：释放渲染节点租约。
    *
    * Text.onDisAppear 时调用——只释放该 renderNodeKey 持有的租约，
@@ -1730,5 +1837,16 @@ export class EditorMotionCoordinator {
    */
   clearWindowInstances(): void {
     this.windowIdAllocator.clear()
+  }
+
+  /**
+   * Issue #879 复核评论问题5：清空源排版记录缓存。
+   *
+   * 会话切换时调用——防止跨会话 revision 重复时取到上一个作品的旧布局。
+   * 缓存键为 sessionId+revision，会话切换后新会话的键不会命中旧会话的记录，
+   * 但清空可防止 Map 无限增长。
+   */
+  clearSourceLayoutRecords(): void {
+    this.sourceLayoutRecords.clear()
   }
 }

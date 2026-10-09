@@ -466,25 +466,69 @@ function sourceGlyphGeometry(
 export function insertRunStartState(run: RunGeometry, displayed: DisplayedContext): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
+    // 无旧可见字形（一次插入的所有字都不在旧画面里——粘贴多字、一次 IME 上屏多个字）：
+    // 产生覆盖整段新 run 的合法 piece，从零宽度逐步吐出到这段最终的完整 clip。
     return [{
       firstIndex: 0,
-      lastIndex: 0,
+      lastIndex: run.glyphIds.length - 1,
       startClipLeft: run.ownRect.x,
       startClipRight: run.ownRect.x,
       startPositionX: run.ownRect.x,
       startPositionY: run.ownRect.y,
-      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+      glyphIds: [...run.glyphIds],
     }]
   }
-  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
-    firstIndex: p.firstIndex,
-    lastIndex: p.lastIndex,
-    startClipLeft: p.ownLeft,
-    startClipRight: p.ownRight,
-    startPositionX: run.ownRect.x,
-    startPositionY: run.ownRect.y,
-    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
-  }))
+
+  // 混合 run（部分旧可见+真正新插入）：必须同时包含原可见片段与尚未出现的新片段。
+  // visibleGlyphPieces 返回的片段列表可能有间隙（如 piece1 覆盖 index 0-1，piece2 覆盖 index 3-4，
+  // 但 index 2 是新插入的字没有被任何 piece 覆盖），这些间隙作为 0 宽度的新 piece 加入。
+  const result: RunStartPiece[] = []
+  let prevLastIndex = -1
+
+  for (const p of pieces) {
+    // 间隙区域（新插入的字）作为 0 宽度 piece 加入
+    if (p.firstIndex > prevLastIndex + 1) {
+      const gapFirst = prevLastIndex + 1
+      const gapLast = p.firstIndex - 1
+      result.push({
+        firstIndex: gapFirst,
+        lastIndex: gapLast,
+        startClipLeft: run.ownRect.x,
+        startClipRight: run.ownRect.x,
+        startPositionX: run.ownRect.x,
+        startPositionY: run.ownRect.y,
+        glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+      })
+    }
+    // 添加当前可见 piece
+    result.push({
+      firstIndex: p.firstIndex,
+      lastIndex: p.lastIndex,
+      startClipLeft: p.ownLeft,
+      startClipRight: p.ownRight,
+      startPositionX: run.ownRect.x,
+      startPositionY: run.ownRect.y,
+      glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+    })
+    prevLastIndex = p.lastIndex
+  }
+
+  // 尾部间隙：如果最后一个 piece 的 lastIndex < glyphIds.length - 1
+  if (prevLastIndex < run.glyphIds.length - 1) {
+    const gapFirst = prevLastIndex + 1
+    const gapLast = run.glyphIds.length - 1
+    result.push({
+      firstIndex: gapFirst,
+      lastIndex: gapLast,
+      startClipLeft: run.ownRect.x,
+      startClipRight: run.ownRect.x,
+      startPositionX: run.ownRect.x,
+      startPositionY: run.ownRect.y,
+      glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+    })
+  }
+
+  return result
 }
 
 /**
@@ -503,14 +547,17 @@ export function deletedRunStartState(
 ): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
+    // 全不可见（上一笔动画已经把它吞掉）时塌到 collapseX——
+    // 起点＝终点，这一笔不再产生二次运动。
+    // 覆盖整段 run 的 glyphIds，而不是只取第一个字形。
     return [{
       firstIndex: 0,
-      lastIndex: 0,
+      lastIndex: run.glyphIds.length - 1,
       startClipLeft: collapseX,
       startClipRight: collapseX,
       startPositionX: run.ownRect.x,
       startPositionY: run.ownRect.y,
-      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+      glyphIds: [...run.glyphIds],
     }]
   }
   return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
@@ -540,14 +587,16 @@ export function retainedMoveStartState(
 ): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
+    // 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 返回 fallback。
+    // 覆盖整段 run 的 glyphIds，而不是只取第一个字形。
     return [{
       firstIndex: 0,
-      lastIndex: 0,
+      lastIndex: run.glyphIds.length - 1,
       startClipLeft: fallback.startClipLeft,
       startClipRight: fallback.startClipRight,
       startPositionX: fallback.startPositionX,
       startPositionY: fallback.startPositionY,
-      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+      glyphIds: [...run.glyphIds],
     }]
   }
   return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
