@@ -50,10 +50,28 @@ struct CaretPosition {
     h: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VisualLineIdentity {
+    // These fields form the row key across adjacent layout revisions. The revision itself
+    // changes on every edit, so comparing complete LineSnapshotIds would reject valid moves.
+    paragraph_id: u64,
+    visual_line_ordinal: u32,
+}
+
+impl From<LineSnapshotId> for VisualLineIdentity {
+    fn from(id: LineSnapshotId) -> Self {
+        Self {
+            paragraph_id: id.paragraph_id,
+            visual_line_ordinal: id.visual_line_ordinal,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CaretMotion {
-    from: CaretPosition,
     to: CaretPosition,
+    from_line: Option<VisualLineIdentity>,
+    to_line: Option<VisualLineIdentity>,
     layout_revision: LayoutRevision,
     document_session: u64,
 }
@@ -62,31 +80,37 @@ impl CaretMotion {
     fn new(
         from: CursorRect,
         to: CursorRect,
+        base_snapshot: &EditorLayoutSnapshot,
+        target_snapshot: &EditorLayoutSnapshot,
         layout_revision: LayoutRevision,
         document_session: u64,
     ) -> Self {
+        let from = CaretPosition {
+            x: from.x,
+            y: from.top,
+            h: (from.bottom - from.top).max(0.0),
+        };
+        let to = CaretPosition {
+            x: to.x,
+            y: to.top,
+            h: (to.bottom - to.top).max(0.0),
+        };
         Self {
-            from: CaretPosition {
-                x: from.x,
-                y: from.top,
-                h: (from.bottom - from.top).max(0.0),
-            },
-            to: CaretPosition {
-                x: to.x,
-                y: to.top,
-                h: (to.bottom - to.top).max(0.0),
-            },
+            to,
+            from_line: caret_line_identity(base_snapshot, from),
+            to_line: caret_line_identity(target_snapshot, to),
             layout_revision,
             document_session,
         }
     }
 
-    fn touches_line(self, rect: &SourceRect) -> bool {
-        let from_center = self.from.y + self.from.h * 0.5;
-        let to_center = self.to.y + self.to.h * 0.5;
-        let min_y = from_center.min(to_center);
-        let max_y = from_center.max(to_center);
-        max_y >= rect.y - 2.0 && min_y <= rect.y + rect.h + 2.0
+    fn can_drive_cluster_line(self, line_id: LineSnapshotId) -> bool {
+        // Only clusters on the uniquely resolved source and destination row may use the
+        // caret boundary. A route crossing rows stays on text progress for its whole life.
+        matches!(
+            (self.from_line, self.to_line),
+            (Some(from), Some(to)) if from == to && from == line_id.into()
+        )
     }
 
     fn matches(self, caret: VisualCaretGeometry) -> bool {
@@ -147,7 +171,14 @@ impl VisualEditState {
             .unwrap_or_else(|| VisualFrame::from_static_snapshot(base_snapshot));
         let targets = target_clusters(&target_snapshot);
         let caret_motion = caret_rects.map(|(from, to)| {
-            CaretMotion::new(from, to, target_snapshot.revision, document_session)
+            CaretMotion::new(
+                from,
+                to,
+                base_snapshot,
+                &target_snapshot,
+                target_snapshot.revision,
+                document_session,
+            )
         });
         let mut source_used = vec![false; source_frame.clusters.len()];
         let mut target_used = vec![false; targets.len()];
@@ -270,12 +301,12 @@ impl VisualEditState {
 
         if let Some(caret_motion) = caret_motion {
             for motion in &mut motions {
-                let rect = match (&motion.source, &motion.target, motion.kind) {
-                    (None, Some(target), MotionKind::Reveal) => Some(&target.rect),
-                    (Some(source), None, MotionKind::Delete(_)) => Some(&source.rect),
+                let line_id = match (&motion.source, &motion.target, motion.kind) {
+                    (None, Some(target), MotionKind::Reveal) => Some(target.snapshot_id),
+                    (Some(source), None, MotionKind::Delete(_)) => Some(source.snapshot_id),
                     _ => None,
                 };
-                if rect.is_some_and(|rect| caret_motion.touches_line(rect)) {
+                if line_id.is_some_and(|line_id| caret_motion.can_drive_cluster_line(line_id)) {
                     motion.caret_motion = Some(caret_motion);
                 }
             }
@@ -554,9 +585,20 @@ impl VisualEditState {
     }
 }
 
-fn caret_is_on_line(caret: VisualCaretGeometry, rect: &SourceRect) -> bool {
+fn caret_line_identity(
+    snapshot: &EditorLayoutSnapshot,
+    caret: CaretPosition,
+) -> Option<VisualLineIdentity> {
     let caret_center_y = caret.y + caret.h * 0.5;
-    caret_center_y >= rect.y - 0.5 && caret_center_y <= rect.y + rect.h + 0.5
+    let mut matching_lines = snapshot.line_snapshots.iter().filter(|line| {
+        caret_center_y >= line.visual_line_top - 0.5
+            && caret_center_y <= line.visual_line_bottom + 0.5
+    });
+    let line = matching_lines.next()?;
+    if matching_lines.next().is_some() {
+        return None;
+    }
+    Some(line.id.into())
 }
 
 fn reveal_boundary(
@@ -565,8 +607,11 @@ fn reveal_boundary(
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
-        .filter(|caret| driver.is_some_and(|driver| driver.matches(*caret)))
-        .filter(|caret| caret_is_on_line(*caret, &target.rect))
+        .filter(|caret| {
+            driver.is_some_and(|driver| {
+                driver.can_drive_cluster_line(target.snapshot_id) && driver.matches(*caret)
+            })
+        })
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
 }
@@ -578,8 +623,11 @@ fn delete_boundary(
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
-        .filter(|caret| driver.is_some_and(|driver| driver.matches(*caret)))
-        .filter(|caret| caret_is_on_line(*caret, &source.rect))
+        .filter(|caret| {
+            driver.is_some_and(|driver| {
+                driver.can_drive_cluster_line(source.snapshot_id) && driver.matches(*caret)
+            })
+        })
         .filter(|caret| !caret_is_stationary_leading_edge(source, delete_edge, caret.x))
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
