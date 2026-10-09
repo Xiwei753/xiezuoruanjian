@@ -32,13 +32,13 @@ import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, Re
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
-import { GlyphIdentityTable, GlyphIdentityEntry } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds } from './editor_glyph_identity'
 
 /**
  * Issue #879 最新复核评论问题3：保留字移动的中间结构。
  *
  * identifyRetainedMoves 只负责几何配对，不决定字形身份——
- * stableGlyphId 由调用方用身份表按旧正文位置解析，避免中间层凭空造身份。
+ * 字形身份（glyphIds）由调用方用身份表按旧正文位置解析，避免中间层凭空造身份。
  */
 interface RetainedMoveSpan {
   oldUtf16Start: number
@@ -359,14 +359,11 @@ export class EditorMotionPlanner {
         )
         for (const rect of oldRects) {
           // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
-          // windowId 是独立的窗口身份——不再仅用起始字符簇身份代表整窗口。
+          // windowId 由簇身份序列派生——不再仅用起始字符簇身份代表整窗口。
           const glyphIds = EditorMotionPlanner.resolveGlyphIds(
             oldIdentities, rect.utf16Start, rect.utf16End, oldText
           )
-          const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
-            rect.utf16Start, rect.utf16End, oldText
-          )
-          const windowId = `del-${rect.utf16Start}-${rect.utf16End}`
+          const windowId = windowIdForGlyphIds(glyphIds)
           // Issue #879 复核评论问题4：用 glyphIds 数组逐个查 visibleWindowByGlyphId，
           // 取交集最大的窗口作为匹配
           const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
@@ -384,7 +381,6 @@ export class EditorMotionPlanner {
             isForward: isForwardDelete,
             startClipLeft: startClipLeft,
             startClipRight: startClipRight,
-            stableGlyphId: stableGlyphId,
             glyphIds: glyphIds,
             windowId: windowId
           })
@@ -399,14 +395,11 @@ export class EditorMotionPlanner {
         )
         for (const rect of newRects) {
           // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
-          // windowId 是独立的窗口身份。
+          // windowId 由簇身份序列派生。
           const glyphIds = EditorMotionPlanner.resolveGlyphIds(
             newIdentities, rect.utf16Start, rect.utf16End, newText
           )
-          const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
-            rect.utf16Start, rect.utf16End, newText
-          )
-          const windowId = `ins-${rect.utf16Start}-${rect.utf16End}`
+          const windowId = windowIdForGlyphIds(glyphIds)
           // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
           const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
             visibleWindowByGlyphId, glyphIds
@@ -422,7 +415,6 @@ export class EditorMotionPlanner {
             rect: rect.rect,
             startClipLeft: startClipLeft,
             startClipRight: startClipRight,
-            stableGlyphId: stableGlyphId,
             glyphIds: glyphIds,
             windowId: windowId
           })
@@ -437,14 +429,11 @@ export class EditorMotionPlanner {
       )
       for (const move of moves) {
         // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
-        // windowId 是独立的窗口身份。
+        // windowId 由簇身份序列派生。
         const glyphIds = EditorMotionPlanner.resolveGlyphIds(
           oldIdentities, move.oldUtf16Start, move.oldUtf16End, oldText
         )
-        const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
-          move.oldUtf16Start, move.oldUtf16End, oldText
-        )
-        const windowId = `ret-${move.oldUtf16Start}-${move.oldUtf16End}`
+        const windowId = windowIdForGlyphIds(glyphIds)
         // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
         const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
           visibleWindowByGlyphId, glyphIds
@@ -463,7 +452,6 @@ export class EditorMotionPlanner {
           newRect: move.newRect,
           startPositionX: startPositionX,
           startPositionY: startPositionY,
-          stableGlyphId: stableGlyphId,
           glyphIds: glyphIds,
           windowId: windowId
         })
@@ -549,7 +537,7 @@ export class EditorMotionPlanner {
    * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 visibleWindowByGlyphId，
    * 取交集最大的窗口作为匹配。
    *
-   * 不再仅靠起始字符簇身份（clusterId）匹配——一个 run 可能覆盖多个字符簇，
+   * 不再仅靠起始字符簇身份匹配——一个 run 可能覆盖多个字符簇，
    * 折行变化/运动区间拆分合并后首字符可能变，但幸存 glyphId 的交集仍能建立
    * 旧窗口→新窗口的重分段映射。
    */

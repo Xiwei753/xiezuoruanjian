@@ -16,7 +16,7 @@
 //   供 needsMotionLayer 判断），但 plan 不再用单一 motionKind 决定整个事务。
 //
 // Issue #879 本轮复核评论修复（字形身份与连续编辑衔接）：
-// - MotionGlyphWindow 新增 runId / sourceRevision / clusterId / currentClipLeft /
+// - MotionGlyphWindow 新增 runId / sourceRevision / glyphIds / windowId / currentClipLeft /
 //   currentClipRight / currentPositionX / currentPositionY 字段。
 // - 连续快速编辑时，新 plan 的起始帧应以当前帧的实际屏幕状态（clip 起点位置）
 //   而非旧版整字初态矩形作为下一动画起点，避免快速打字/连续 Backspace 从整字初态跳起。
@@ -90,28 +90,21 @@ export interface InsertRun {
   /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x（零宽度） */
   startClipRight: number
   /**
-   * 跨修订稳定字形身份（取起始字符簇的身份）。
+   * Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的稳定身份列表（字形单元身份）。
    *
-   * Issue #879 最新复核评论问题3：由 EditorMotionCoordinator 的身份表（随每笔编辑
-   * 逐笔搬运字符簇身份）给出，而不是 `utf16Start-utf16End-hash`——
-   * 后者在字前插入/删除后 offset 平移即失配。
-   */
-  stableGlyphId: string
-  /**
-   * Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表。
-   *
-   * 一个 run 可能覆盖多个字符簇（跨行片段、多字连续区间）。
-   * glyphIds 记录所有字符簇的身份，用于与上一帧窗口按 glyphId 交集匹配——
-   * 不再仅靠起始字符簇身份代表整窗口。
+   * 由身份表（editor_glyph_identity.ts，随每笔编辑逐笔搬运字符簇身份）给出，
+   * 位置平移、old/new 角色变化都不改身份。
+   * 一个 run 可能覆盖多个字符簇（跨行片段、多字连续区间），
+   * 与上一帧窗口接续时以本列表的幸存 glyphId 交集建立重分段映射，
+   * 不再拿"窗口第一个字"代表整段窗口身份。
    */
   glyphIds: string[]
   /**
-   * Issue #879 复核评论问题4：独立的窗口身份标识。
+   * Issue #879 复核评论问题4：独立于字形单元身份的窗口身份。
    *
-   * windowId 与 glyphIds 拆分：字形单元 id 是单个字符簇的身份，
-   * windowId 是"一整段文字裁切窗口"的身份。
-   * 折行变化/运动区间拆分合并后，run 的第一字符可能变，
-   * 但 windowId 保持稳定，确保窗口能和上帧按同一 id 接续。
+   * 由本 run 覆盖的字符簇身份序列派生（首簇身份 + 簇数），因此位置平移、
+   * 折行重分段只要覆盖的簇序列不变就保持稳定——它是"一整段文字裁切窗口"的身份，
+   * 与单个字形单元的 glyphId 不是同一种对象。
    */
   windowId: string
 }
@@ -146,11 +139,9 @@ export interface DeletedRun {
   startClipLeft: number
   /** 起始裁切窗口右边界（vp）——连续编辑时来自上一帧的 currentClipRight，默认 rect.x+rect.width */
   startClipRight: number
-  /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
-  stableGlyphId: string
-  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表——见 InsertRun.glyphIds */
+  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇身份列表——见 InsertRun.glyphIds */
   glyphIds: string[]
-  /** Issue #879 复核评论问题4：独立的窗口身份标识——见 InsertRun.windowId */
+  /** Issue #879 复核评论问题4：独立于字形单元身份的窗口身份——见 InsertRun.windowId */
   windowId: string
 }
 
@@ -191,11 +182,9 @@ export interface RetainedMove {
   startPositionX: number
   /** 起始位置 y（vp）——连续编辑时来自上一帧的 currentPositionY，默认 oldRect.y */
   startPositionY: number
-  /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
-  stableGlyphId: string
-  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表——见 InsertRun.glyphIds */
+  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇身份列表——见 InsertRun.glyphIds */
   glyphIds: string[]
-  /** Issue #879 复核评论问题4：独立的窗口身份标识——见 InsertRun.windowId */
+  /** Issue #879 复核评论问题4：独立于字形单元身份的窗口身份——见 InsertRun.windowId */
   windowId: string
 }
 
@@ -215,21 +204,21 @@ export interface RetainedMove {
  * 新增 offsetX/offsetY 字段支持 RetainedMove 的平移动画（旧字源绘制后整体偏移到当前插值位置）。
  *
  * Issue #879 本轮复核评论修复（字形身份与连续编辑衔接）：
- * 新增 runId / sourceRevision / clusterId / currentClipLeft / currentClipRight /
+ * 新增 runId / sourceRevision / glyphIds / windowId / currentClipLeft / currentClipRight /
  * currentPositionX / currentPositionY 字段。连续快速编辑时，新 plan 的起始帧应使用
  * 当前帧的实际屏幕状态（clip 起点位置）而非旧版整字初态矩形作为下一动画起点。
  * - runId：与 EditorMotionSourcePool 的 runId 对应，ForEach 中保持稳定身份。
  * - sourceRevision：识别字形来自哪个版本，快速打字时新 plan 起始帧用当前帧的 revision。
- * - clusterId：跨版本稳定身份——基于字符内容 hash（utf16Start + utf16End + textHash），
- *   不含 sourceKind，确保同一字符在上一笔是"new"下一笔是"old"时仍能匹配。
+ * - glyphIds：本窗口覆盖的字符簇身份列表，跨版本稳定——
+ *   同一字符在上一笔是"new"下一笔是"old"时身份不变，位置平移也不改身份。
  * - currentClipLeft/Right：当前帧实际裁切窗口边界，作为下一动画起点而非整字初态 x0/x1。
  * - currentPositionX/Y：当前帧实际字形位置（含 offset），作为下一动画起点而非旧版整字初态位置。
  *
  * Issue #879 本轮复核评论修复（问题2）：
  * - 新增 renderNodeKey 字段——分离 ForEach/TextController 管理和跨版本匹配。
- *   renderNodeKey = sourceKind + '-' + sourceRevision + '-' + clusterId，
+ *   renderNodeKey = sourceKind + '-' + sourceRevision + '-' + windowId，
  *   当字形源从 new-rN 变为 old-rN 时 renderNodeKey 改变，ForEach 创建新 Text 节点而非复用旧节点。
- *   clusterId 只用于寻找上一帧相同字形的 clip/位置——跨版本匹配。
+ *   glyphIds 只用于寻找上一帧相同字形的 clip/位置——跨版本匹配。
  *   更换内容源时对应布局 ready 失效（新 renderNodeKey → 新窗口状态 → layoutReady=false）。
  */
 export interface MotionGlyphWindow {
@@ -263,33 +252,31 @@ export interface MotionGlyphWindow {
   runId: string
   /** 字形源对应的正文 revision——连续编辑时识别字形来自哪个版本 */
   sourceRevision: number
-  /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（utf16Start + utf16End + textHash），不含 sourceKind，不依赖 sourceRevision */
-  clusterId: string
   /**
-   * Issue #879 复核评论问题4：该窗口覆盖的所有字符簇的 stableGlyphId 列表。
+   * Issue #879 复核评论问题4：该窗口覆盖的所有字符簇的稳定身份列表（字形单元身份）。
    *
    * 用于与上一帧窗口按 glyphId 交集匹配——查找时用 glyphIds 数组逐个查，
-   * 取交集最大的窗口作为匹配，不再仅靠 clusterId（首字符簇身份）匹配。
+   * 取交集最大的窗口作为匹配，不再仅靠起始簇身份匹配。
    */
   glyphIds: string[]
   /**
-   * Issue #879 复核评论问题4：独立的窗口身份标识。
+   * Issue #879 复核评论问题4：独立于字形单元身份的窗口身份（见 InsertRun.windowId）。
    *
-   * 与 glyphIds 拆分：字形单元 id 是单个字符簇的身份，
-   * windowId 是"一整段文字裁切窗口"的身份。
-   * buildFrame 中 MotionGlyphWindow 的 clusterId 改为 windowId——
-   * 窗口身份不再混用首字符簇身份。
+   * 字形单元 id 是单个字符簇的身份；windowId 是"一整段文字裁切窗口"的身份，
+   * 由覆盖的簇身份序列派生。窗口与上帧接续一律走 glyphIds 交集映射，
+   * 本字段只描述窗口自身。
    */
   windowId: string
   /**
    * 渲染节点身份标识——用于 ForEach key 和 TextController/窗口状态管理。
    *
    * Issue #879 本轮复核评论修复（问题2）：
-   * renderNodeKey = sourceKind + '-' + sourceRevision + '-' + clusterId。
+   * renderNodeKey = sourceKind + '-' + sourceRevision + '-' + windowId。
    * 当字形源从 new-rN 变为 old-rN 时 renderNodeKey 改变——ForEach 创建新 Text 节点而非复用旧节点。
    * 这解决了"上一帧 new 字形变成下一笔 old 字形时 ForEach 复用同一 Text 节点，
    * 但源已从 new-rN 切换为 old-rN，onAppear 不再触发，节点仍画原先的 StyledString"的问题。
-   * clusterId 只用于跨版本匹配（visibleWindowMap 查找），不用于 ForEach key。
+   *
+   * Issue #879 复核评论问题4：窗口身份用 windowId，不再拿窗口首字形的身份代替整窗口身份。
    */
   renderNodeKey: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */

@@ -43,6 +43,7 @@ apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/
 apps/Linux_qt/build/
 
 # HarmonyOS
+/.hvigor/
 apps/harmony/oh_modules/
 apps/harmony/.hvigor/
 apps/harmony/hvigor/wrapper/

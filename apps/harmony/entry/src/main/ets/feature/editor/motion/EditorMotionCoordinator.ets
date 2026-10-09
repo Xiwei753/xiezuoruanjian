@@ -34,7 +34,7 @@
 //
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
@@ -171,8 +171,9 @@ export class EditorMotionCoordinator {
    * Issue #879 最新复核评论问题3：当前已提交正文的稳定字形身份表。
    *
    * 描述 newSnapshot.revision 的正文：每次编辑按 patch 逐笔搬运字符簇身份。
-   * Planner 用它给出 InsertRun/DeletedRun/RetainedMove 的 stableGlyphId，
-   * 连续编辑时按身份查找上一帧窗口，而不是按「位置 + 内容」。
+   * Planner 用它给出 InsertRun/DeletedRun/RetainedMove 的 glyphIds（字形单元身份）
+   * 与 windowId（窗口身份），连续编辑时按幸存字形身份交集查找上一帧窗口，
+   * 而不是按「位置 + 内容」。
    */
   private glyphIdentities: GlyphIdentityTable | null
 
@@ -263,19 +264,22 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 复核评论修复（问题3）：重定向候选——用最新冻结帧的 clip/position
-   * 替换候选 plan 中各 run 的 startClipLeft/Right/startPositionX/Y。
+   * Issue #879 复核评论修复（问题3）：重定向候选——用最新冻结帧的
+   * clip / position / 光标起点替换候选 plan 里过时的起始状态。
    *
    * 在 executeDisplaySwitch 中（窗口 ready 后才调）：
    * 先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame →
    * 调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
    *
    * 旧 animator 被取消时 displayedVisualFrame 停在某一中间进度，其
-   * MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 反映真实屏幕状态。
-   * 候选 plan 的 startClipLeft/Right/startPositionX/Y 是在 prepareCandidate 阶段
-   * 用 displayedFrameForCandidate（当时帧）计算的——但实际提交时旧 animator 已推进，
-   * 屏幕状态已变。retargetCandidate 用冻结帧的真实值替换候选 plan 的起始值，
-   * 确保新动画从真实屏幕状态开始，而非从过时的起始状态跳变。
+   * MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 与 caretX/Y 反映真实屏幕状态。
+   * 候选 plan 的起始值是在 prepareCandidate 阶段用 displayedFrameForCandidate（当时帧）
+   * 计算的——但实际提交时旧 animator 已推进，屏幕状态已变。
+   * retargetCandidate 用冻结帧的真实值替换候选 plan 的起始值：
+   * - 吐字/吞字窗口起点 clip；
+   * - 保留字平移起点 position；
+   * - 光标轨迹首段起点。
+   * 确保新动画从真实屏幕状态接续，而非从过时的起始状态跳变或倒跳。
    *
    * @param prepared prepareCandidate 返回的不可变候选
    * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame（旧 animator 停止后的真实帧）
@@ -284,7 +288,7 @@ export class EditorMotionCoordinator {
   retargetCandidate(prepared: PreparedCandidate, latestDisplayedFrame: EditorVisualFrame): PreparedCandidate {
     // Issue #879 复核评论问题4：构建 glyphId → frozen window 映射，
     // 用于按字形身份列表逐个查找冻结帧中的当前状态。
-    // 不再仅用 clusterId（首字符簇身份）匹配——用 glyphIds 交集最大匹配。
+    // 不再仅用窗口首字符簇身份匹配——用 glyphIds 交集最大匹配。
     const frozenByGlyphId: Map<string, MotionGlyphWindow> = new Map()
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
       for (const gid of w.glyphIds) {
@@ -304,7 +308,6 @@ export class EditorMotionCoordinator {
         rect: run.rect,
         startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
         startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
-        stableGlyphId: run.stableGlyphId,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -322,7 +325,6 @@ export class EditorMotionCoordinator {
         isForward: run.isForward,
         startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
         startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
-        stableGlyphId: run.stableGlyphId,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -342,17 +344,35 @@ export class EditorMotionCoordinator {
         newRect: move.newRect,
         startPositionX: frozen !== undefined ? frozen.currentPositionX : move.startPositionX,
         startPositionY: frozen !== undefined ? frozen.currentPositionY : move.startPositionY,
-        stableGlyphId: move.stableGlyphId,
         glyphIds: move.glyphIds,
         windowId: move.windowId
       })
+    }
+
+    // Issue #879 复核评论问题3：光标轨迹起点同样以冻结帧为准。
+    // plan.caretPath 首段起点来自 prepareCandidate 时刻的 lastVisibleFrame.caretX/Y，
+    // 但候选等待期间旧 animator 仍在推进，提交瞬间可见光标已前移——
+    // 不重定向起点，新动画会从旧起点重跑，出现倒跳。
+    const retargetedCaretPath: MotionSegment[] = []
+    for (let i = 0; i < prepared.plan.caretPath.length; i++) {
+      const seg = prepared.plan.caretPath[i]
+      if (i === 0) {
+        retargetedCaretPath.push({
+          startCaretX: latestDisplayedFrame.caretX,
+          startCaretY: latestDisplayedFrame.caretY,
+          endCaretX: seg.endCaretX,
+          endCaretY: seg.endCaretY
+        })
+      } else {
+        retargetedCaretPath.push(seg)
+      }
     }
 
     const newPlan: EditorMotionPlan = {
       insertRuns: newInsertRuns,
       deletedRuns: newDeletedRuns,
       retainedMoves: newRetainedMoves,
-      caretPath: prepared.plan.caretPath,
+      caretPath: retargetedCaretPath,
       durationMs: prepared.plan.durationMs,
       motionKind: prepared.plan.motionKind
     }
@@ -768,8 +788,9 @@ export class EditorMotionCoordinator {
    * 被 motion 接管的目标 glyph 身份（insertRuns + retainedMoves 的新位置 +
    * deletedRuns 的旧位置）。
    *
-   * Issue #879 最新复核评论问题3：clusterId/renderNodeKey 直接取 plan 计算出的
-   * stableGlyphId（跨修订稳定的字符身份），不再用 utf16 区间 + 文本 hash 现场重算。
+   * Issue #879 复核评论问题4：窗口身份与字形身份分开——renderNodeKey 用 plan 计算出的
+   * windowId（窗口身份），跨帧接续用窗口的 glyphIds（字形单元身份）交集，
+   * 不再用 utf16 区间 + 文本 hash 现场重算，也不拿窗口首字形代表整窗口。
    */
   private static buildFrame(
     plan: EditorMotionPlan,
@@ -823,12 +844,11 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        // Issue #879 复核评论问题4：clusterId 改为 windowId（独立窗口身份），
-        // glyphIds 数组也传入——不再拿窗口第一个字代替整窗口身份
-        clusterId: run.windowId,
+        // Issue #879 复核评论问题4：窗口身份用 windowId（独立于单字形身份），
+        // glyphIds 用于与上一帧按幸存字形身份交集接续。
         glyphIds: run.glyphIds,
         windowId: run.windowId,
-        renderNodeKey: `new-${newRevision}-${run.stableGlyphId}`,
+        renderNodeKey: `new-${newRevision}-${run.windowId}`,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: run.rect.x,
@@ -865,11 +885,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
-          clusterId: run.windowId,
+          // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
           glyphIds: run.glyphIds,
           windowId: run.windowId,
-          renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
+          renderNodeKey: `old-${oldRevision}-${run.windowId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -897,11 +916,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
-          clusterId: run.windowId,
+          // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
           glyphIds: run.glyphIds,
           windowId: run.windowId,
-          renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
+          renderNodeKey: `old-${oldRevision}-${run.windowId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
@@ -933,11 +951,10 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
-        clusterId: move.windowId,
+        // Issue #879 复核评论问题4：窗口身份用 windowId，glyphIds 供跨帧接续。
         glyphIds: move.glyphIds,
         windowId: move.windowId,
-        renderNodeKey: `old-${oldRevision}-${move.stableGlyphId}`,
+        renderNodeKey: `old-${oldRevision}-${move.windowId}`,
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
         currentPositionX: currentX,
@@ -1002,7 +1019,7 @@ export class EditorMotionCoordinator {
 
   /**
    * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 frozenByGlyphId，
-   * 取交集最大的窗口作为匹配——不再仅靠 clusterId（首字符簇身份）匹配。
+   * 取交集最大的窗口作为匹配——不再仅靠窗口首字符簇身份匹配。
    */
   private static findBestMatchFrozenWindow(
     frozenByGlyphId: Map<string, MotionGlyphWindow>,

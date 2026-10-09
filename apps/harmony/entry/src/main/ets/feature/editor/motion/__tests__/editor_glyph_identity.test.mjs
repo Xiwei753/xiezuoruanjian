@@ -10,7 +10,7 @@
 import { strict as assert } from 'node:assert'
 import { utf16ToUtf8 } from '../../input/text_offset_mapper.ts'
 import { applyPatchesToText, toUtf16CarryPatches } from '../editor_patch_carry.ts'
-import { GlyphIdentityTable } from '../editor_glyph_identity.ts'
+import { GlyphIdentityTable, windowIdForGlyphIds } from '../editor_glyph_identity.ts'
 import { RevisionPositionMap } from '../editor_revision_position_map.ts'
 
 let passed = 0
@@ -192,13 +192,22 @@ test('applyPatchesToText: 多 patch 重放文本正确', () => {
 })
 
 // ── 位置映射：显示版 → Core 最新版 ──
+/** 构造一笔位置映射步骤——revision 必须首尾相接。 */
+const step = (baseRevision, nextRevision, beforeText, afterText, patches) => ({
+  baseRevision,
+  nextRevision,
+  beforeText,
+  afterText,
+  patches,
+})
+
 test('positionMap: 无编辑时 build 返回 null（调用方不做映射）', () => {
   assert.equal(RevisionPositionMap.build([], 1, 1), null)
 })
 
 test('positionMap: 开头插入把后续位置整体后移', () => {
   const map = RevisionPositionMap.build([
-    { beforeText: 'xy', afterText: 'axy', patches: [patch('xy', 0, 0, 'a')] },
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
   ], 10, 11)
   assert.notEqual(map, null)
   assert.equal(map.mapOffset(0), 0)
@@ -208,7 +217,7 @@ test('positionMap: 开头插入把后续位置整体后移', () => {
 
 test('positionMap: 点击被删字符映射到删除点', () => {
   const map = RevisionPositionMap.build([
-    { beforeText: 'abc', afterText: 'ac', patches: [patch('abc', 1, 2, '')] },
+    step(20, 21, 'abc', 'ac', [patch('abc', 1, 2, '')]),
   ], 20, 21)
   assert.equal(map.mapOffset(1), 1)
   assert.equal(map.mapOffset(2), 1)
@@ -217,8 +226,8 @@ test('positionMap: 点击被删字符映射到删除点', () => {
 
 test('positionMap: 两笔连续编辑（插入+删除）映射到 Core 最新坐标', () => {
   const map = RevisionPositionMap.build([
-    { beforeText: 'xy', afterText: 'axy', patches: [patch('xy', 0, 0, 'a')] },
-    { beforeText: 'axy', afterText: 'ay', patches: [patch('axy', 1, 2, '')] },
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(11, 12, 'axy', 'ay', [patch('axy', 1, 2, '')]),
   ], 10, 12)
   assert.equal(map.mapOffset(0), 0)
   assert.equal(map.mapOffset(1), 1) // 点在被删的 x 上 → 删除点
@@ -227,19 +236,68 @@ test('positionMap: 两笔连续编辑（插入+删除）映射到 Core 最新坐
 
 test('positionMap: 链中任一笔记不上返回 null', () => {
   assert.equal(RevisionPositionMap.build([
-    { beforeText: 'xy', afterText: 'axy', patches: [patch('xy', 0, 0, 'a')] },
-    { beforeText: 'axy', afterText: 'zzz', patches: [patch('axy', 1, 2, '')] },
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(11, 12, 'axy', 'zzz', [patch('axy', 1, 2, '')]),
   ], 10, 12), null)
 })
 
 test('positionMap: UTF-8 多字节偏移可正确映射', () => {
   const map = RevisionPositionMap.build([
-    { beforeText: '甲中乙', afterText: '甲乙', patches: [patch('甲中乙', 1, 2, '')] },
+    step(30, 31, '甲中乙', '甲乙', [patch('甲中乙', 1, 2, '')]),
   ], 30, 31)
   assert.equal(map.mapOffset(0), 0)
   assert.equal(map.mapOffset(1), 1)
   assert.equal(map.mapOffset(2), 1)
   assert.equal(map.mapOffset(3), 2)
+})
+
+// ── 位置映射：revision 链首尾与连续性校验（Issue #879 复核问题2） ──
+test('positionMap: 首笔 baseRevision 与可见版本不一致时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(11, 12, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+test('positionMap: 末笔 nextRevision 与 Core 最新版不一致时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+test('positionMap: 链中间断档（11 → 13）时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 11, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+    step(12, 13, 'axy', 'ay', [patch('axy', 1, 2, '')]),
+  ], 10, 13), null)
+})
+
+test('positionMap: 单笔跨多 revision 时拒绝映射', () => {
+  assert.equal(RevisionPositionMap.build([
+    step(10, 12, 'xy', 'axy', [patch('xy', 0, 0, 'a')]),
+  ], 10, 12), null)
+})
+
+// ── 窗口身份：窗口身份与字形单元身份分开（Issue #879 复核问题4） ──
+test('windowId: 位置平移不改变窗口身份', () => {
+  const t0 = GlyphIdentityTable.create('甲乙丙', 40)
+  // 在字前插入一个字：原三簇整体平移，覆盖的簇序列不变
+  const t1 = t0.applyPatches([patch('甲乙丙', 0, 0, '前')], '前甲乙丙', 41)
+  const spanOf = (t, from, to) => windowIdForGlyphIds(t.idsForRange(from, to).map((e) => e.glyphId))
+  assert.equal(spanOf(t1, 1, 4), spanOf(t0, 0, 3))
+})
+
+test('windowId: 覆盖簇数不同则窗口身份不同', () => {
+  const t = GlyphIdentityTable.create('甲乙丙', 42)
+  const first = t.idsForRange(0, 1).map((e) => e.glyphId)
+  const all = t.idsForRange(0, 3).map((e) => e.glyphId)
+  assert.notEqual(windowIdForGlyphIds(first), windowIdForGlyphIds(all))
+})
+
+test('windowId: 空集合与组件 id 安全性', () => {
+  assert.equal(windowIdForGlyphIds([]), 'win-empty')
+  const t = GlyphIdentityTable.create('甲乙', 43)
+  const id = windowIdForGlyphIds(t.idsForRange(0, 2).map((e) => e.glyphId))
+  assert.match(id, /^[A-Za-z0-9-]+$/)
 })
 
 test('withRevision: 正文不变时沿用同一份身份，只推进 revision 标签', () => {

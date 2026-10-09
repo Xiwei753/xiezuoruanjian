@@ -4,7 +4,7 @@
 // 旧的 `utf16Start-utf16End-hash(textSlice)` 在字前插入/删除后 offset 平移即失配，
 // 相同内容出现在相同位置也可能被误认成同一个字。
 //
-// 本模块维护一张随每次编辑“搬运”的「字符簇 → stableGlyphId」表：
+// 本模块维护一张随每次编辑“搬运”的「字符簇 → glyphId」表：
 // - 建立时按字符簇分配 id（`orig-<revision>-<utf16Start>`）。
 // - 每笔事务按 patch 逐笔搬运：被替换范围覆盖的条目丢弃；幸存条目保留原 id、
 //   位置随搬运平移；新插入的文本按字符簇分配新 id（`ins-<revision>-<utf16Start>`）。
@@ -93,6 +93,25 @@ function splitClusterRanges(text: string): ClusterRange[] {
     index = end
   }
   return ranges
+}
+
+/**
+ * Issue #879 复核评论问题4：由一段字符簇身份序列派生「窗口身份」。
+ *
+ * 字形单元 id（glyphId）是单个字符簇的身份，而动画里的一个裁切窗口往往覆盖
+ * 多个字符簇；两者不是同一种对象，不能拿首字符簇身份代表整窗口。窗口身份定义为
+ * 首簇身份 + 簇数，因此：
+ * - 位置平移不改变窗口身份（id 里不含 utf16 区间，也不含窗口坐标）；
+ * - 折行 / 运动区间重分段导致簇序列变化时窗口身份随之变化，
+ *   此时由 Planner 用幸存 glyphId 交集建立旧窗口 → 新窗口的重分段映射。
+ *
+ * 只用字母数字与 `-x` 分隔符，保证可直接用作 ArkUI 组件 id。
+ */
+export function windowIdForGlyphIds(glyphIds: string[]): string {
+  if (glyphIds.length === 0) {
+    return 'win-empty'
+  }
+  return `win-${glyphIds[0]}x${glyphIds.length}`
 }
 
 /**

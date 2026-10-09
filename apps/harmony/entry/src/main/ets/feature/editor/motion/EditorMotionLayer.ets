@@ -28,7 +28,7 @@
 //   @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
 //   让父组件（SujianEditor）创建 observer，layout 回调中调用 markWindowLayoutReady。
 // - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
-// - 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
+// - 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份），供父组件创建 ComponentObserver。
 //
 // ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
 // 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
@@ -338,7 +338,7 @@ export class EditorMotionLayer {
  *   导致新 Text 的 onAppear 跳过 setStyledString 而空白。
  * - onWindowLayoutReady 回调替代旧的 onLayoutReady + setTimeout：
  *   @Builder 中不能直接创建 ComponentObserver，通过回调让父组件创建 observer，
- *   layout 回调中调用 markWindowLayoutReady(clusterId)。
+ *   layout 回调中调用 markWindowLayoutReady(renderNodeKey)。
  * - onWindowDisappear 回调：Text.onDisAppear 中通知父组件清理本窗口状态。
  */
 /** 预匹配的运动窗口+源+裁切矩形三元组——避免在 @Builder 中做匹配（ArkUI 限制） */
@@ -395,7 +395,7 @@ export interface MotionTextOverlayParams {
  *   @Builder 中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
  *   让父组件创建 observer，layout 回调中调用 markWindowLayoutReady。
  * - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
- * - 每个 Text 添加 .id() 基于 clusterId，供父组件创建 ComponentObserver。
+ * - 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份），供父组件创建 ComponentObserver。
  *
  * 渲染策略：
  * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
@@ -420,7 +420,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               .textAlign(TextAlign.Start)
               .wordBreak(WordBreak.BREAK_ALL)
               // Issue #879 本轮复核评论修复（问题2）：
-              // 每个 Text 添加 .id() 基于 renderNodeKey（而非 clusterId），
+              // 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份 windowId），
               // 供父组件创建 ComponentObserver。renderNodeKey 包含 sourceKind + sourceRevision，
               // 切源时创建新节点而非复用旧节点。
               .id(`motion-window-${item.window.renderNodeKey}`)
@@ -436,9 +436,9 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 item.textController.setStyledString(item.source.styledString)
                 // 通知父组件本窗口已挂载——父组件创建 ComponentObserver 监听 layout 事件。
                 // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
-                // 才调用 markWindowLayoutReady(clusterId)，不再用 setTimeout 充当绘制完成证据。
+                // 才调用 markWindowLayoutReady(renderNodeKey)，不再用 setTimeout 充当绘制完成证据。
                 // Issue #879 本轮复核评论修复（问题2）：
-                // 通知父组件本窗口已挂载——用 renderNodeKey（而非 clusterId）作为窗口身份。
+                // 通知父组件本窗口已挂载——用 renderNodeKey 作为窗口身份。
                 // renderNodeKey 包含 sourceKind + sourceRevision，切源时创建新窗口状态。
                 if (item.onWindowLayoutReady !== null) {
                   item.onWindowLayoutReady(item.window.renderNodeKey)
@@ -447,7 +447,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               .onDisAppear(() => {
                 // Issue #879 最新复核评论修复（问题3）：
                 // Text 从组件树移除时清理本窗口状态——
-                // 父组件调用 releaseWindowState(clusterId) 并销毁对应的 ComponentObserver。
+                // 父组件调用 releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver。
                 // Issue #879 本轮复核评论修复（问题2）：
                 // Text 从组件树移除时清理本窗口状态——用 renderNodeKey 作为窗口身份。
                 if (item.onWindowDisappear !== null) {

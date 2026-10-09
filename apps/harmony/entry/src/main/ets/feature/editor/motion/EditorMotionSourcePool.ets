@@ -47,7 +47,7 @@ export interface MotionSourceEntry {
  * 避免某一窗口先 mounted 后，后续同版本新窗口从 source 读到 mounted=true，
  * 导致新 Text 的 onAppear 跳过 setStyledString 而空白。
  *
- * - renderNodeKey：以 sourceKind + sourceRevision + clusterId 构造的渲染节点身份标识
+ * - renderNodeKey：以 sourceKind + sourceRevision + windowId 构造的渲染节点身份标识
  * - textController：每个窗口独立的 TextController（ArkUI 不允许同一 Controller 绑定多个 Text）
  * - mounted：本窗口的 Text 是否已挂载（onAppear 已触发）
  * - layoutReady：本窗口的布局是否已完成（ComponentObserver 'layout' 回调已触发）
