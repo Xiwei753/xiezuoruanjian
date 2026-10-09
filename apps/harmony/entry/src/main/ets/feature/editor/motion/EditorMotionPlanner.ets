@@ -28,13 +28,13 @@
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
 import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
-import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
 import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
-  DisplayedContext, FrozenWindowSpan, RunGeometry,
+  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
 } from './editor_commit_start'
 
@@ -102,6 +102,15 @@ export interface EditorMotionPlan {
   durationMs: number
   /** 主要运动类型——供 needsMotionLayer 判断，不决定整个事务 */
   motionKind: MotionKind
+  /**
+   * Issue #879 复核评论6078682695 问题2：carryOver ghost 残影通道。
+   *
+   * 上一帧仍有非零 clip、且尚未归还静态层的旧窗口作为残影继承到候选 plan。
+   * buildFrame 每帧同时采样本轮新 run 与 carryOver ghost。
+   * Planner 自身不产生 carryOverGhostRuns（由 Coordinator.retargetCandidate 识别），
+   * 但 plan 接口需要容纳此字段。
+   */
+  carryOverGhostRuns: CarryOverGhostRun[]
 }
 
 /**
@@ -192,7 +201,8 @@ export class EditorMotionPlanner {
       retainedMoves: [],
       caretPath: [],
       durationMs: 0,
-      motionKind: MotionKind.None
+      motionKind: MotionKind.None,
+      carryOverGhostRuns: []
     }
   }
 
@@ -290,7 +300,8 @@ export class EditorMotionPlanner {
       retainedMoves: [],
       caretPath,
       durationMs: 0, // 由 policy 决定实际时长
-      motionKind: MotionKind.CaretMove
+      motionKind: MotionKind.CaretMove,
+      carryOverGhostRuns: []
     }
   }
 
@@ -338,7 +349,8 @@ export class EditorMotionPlanner {
       layout: oldLayout,
       identities: oldIdentities,
       frozenWindows: EditorMotionPlanner.frozenWindowSpans(
-        lastVisibleFrame, oldText, oldLayout, newText, newLayout
+        lastVisibleFrame, oldText, oldLayout, newText, newLayout,
+        oldSnapshot.revision, newSnapshot.revision
       )
     }
 
@@ -368,23 +380,25 @@ export class EditorMotionPlanner {
             oldIdentities, rect.utf16Start, rect.utf16End, oldText
           )
           const windowId = windowIdForGlyphIds(glyphIds)
-          // Issue #879 复核评论6075662695问题3：起始状态按字形算——
-          // 仍可见的字形段就留在它此刻的位置上，已全被吞掉的塌到目标边缘。
-          const start = deletedRunStartState(
+          // Issue #879 复核评论6078682695 问题1：起始状态按字形算，返回 RunStartPiece[]。
+          const pieces = deletedRunStartState(
             EditorMotionPlanner.runGeometry(glyphIds, oldText, rect.utf16Start, rect.utf16End, rect.rect, oldLayout),
             displayedContext,
             isForwardDelete ? lastVisibleFrame.caretX : rect.rect.x
           )
+          const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
+          const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
           deletedRuns.push({
             utf16Start: rect.utf16Start,
             utf16End: rect.utf16End,
             sourceKind: 'old',
             rect: rect.rect,
             isForward: isForwardDelete,
-            startClipLeft: start.startClipLeft,
-            startClipRight: start.startClipRight,
+            startClipLeft: compatLeft,
+            startClipRight: compatRight,
             glyphIds: glyphIds,
-            windowId: windowId
+            windowId: windowId,
+            pieces: pieces
           })
         }
       }
@@ -402,21 +416,23 @@ export class EditorMotionPlanner {
             newIdentities, rect.utf16Start, rect.utf16End, newText
           )
           const windowId = windowIdForGlyphIds(glyphIds)
-          // Issue #879 复核评论6075662695问题3：吐字起点按字形算——
-          // 已经在屏上的共享字形留在原处，不在屏上的新字从 run 左边界零宽度开始吐。
-          const start = insertRunStartState(
+          // Issue #879 复核评论6078682695 问题1：吐字起点按字形算，返回 RunStartPiece[]。
+          const pieces = insertRunStartState(
             EditorMotionPlanner.runGeometry(glyphIds, newText, rect.utf16Start, rect.utf16End, rect.rect, newLayout),
             displayedContext
           )
+          const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
+          const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
           insertRuns.push({
             utf16Start: rect.utf16Start,
             utf16End: rect.utf16End,
             sourceKind: 'new',
             rect: rect.rect,
-            startClipLeft: start.startClipLeft,
-            startClipRight: start.startClipRight,
+            startClipLeft: compatLeft,
+            startClipRight: compatRight,
             glyphIds: glyphIds,
-            windowId: windowId
+            windowId: windowId,
+            pieces: pieces
           })
         }
       }
@@ -434,9 +450,8 @@ export class EditorMotionPlanner {
           oldIdentities, move.oldUtf16Start, move.oldUtf16End, oldText
         )
         const windowId = windowIdForGlyphIds(glyphIds)
-        // Issue #879 复核评论6075662695问题3：起点按字形交集校正——
-        // 让第一个仍可见的字形停在它此刻在屏的位置上，而不是直接拿旧整窗口的位置。
-        const start = retainedMoveStartState(
+        // Issue #879 复核评论6078682695 问题1：起点按字形交集校正，返回 RunStartPiece[]。
+        const pieces = retainedMoveStartState(
           EditorMotionPlanner.runGeometry(
             glyphIds, oldText, move.oldUtf16Start, move.oldUtf16End, move.oldRect, oldLayout
           ),
@@ -448,6 +463,7 @@ export class EditorMotionPlanner {
             startPositionY: move.oldRect.y
           }
         )
+        const firstPiece = pieces[0]
         retainedMoves.push({
           oldUtf16Start: move.oldUtf16Start,
           oldUtf16End: move.oldUtf16End,
@@ -456,10 +472,11 @@ export class EditorMotionPlanner {
           sourceKind: 'old',
           oldRect: move.oldRect,
           newRect: move.newRect,
-          startPositionX: start.startPositionX,
-          startPositionY: start.startPositionY,
+          startPositionX: firstPiece.startPositionX,
+          startPositionY: firstPiece.startPositionY,
           glyphIds: glyphIds,
-          windowId: windowId
+          windowId: windowId,
+          pieces: pieces
         })
       }
     }
@@ -473,7 +490,8 @@ export class EditorMotionPlanner {
       retainedMoves,
       caretPath: [],
       durationMs: 0, // 由 policy 决定实际时长
-      motionKind
+      motionKind,
+      carryOverGhostRuns: []
     }
   }
 
@@ -550,7 +568,9 @@ export class EditorMotionPlanner {
     oldText: string,
     oldLayout: LineLayout[],
     newText: string,
-    newLayout: LineLayout[]
+    newLayout: LineLayout[],
+    oldRevision: number,
+    newRevision: number
   ): FrozenWindowSpan[] {
     const spans: FrozenWindowSpan[] = []
     if (!frame.isAnimating) {
@@ -558,9 +578,21 @@ export class EditorMotionPlanner {
       return spans
     }
     for (const w of frame.motionGlyphWindows) {
-      // 根据 sourceKind 选择对应的源文本和源布局
-      const sourceText = w.sourceKind === 'old' ? oldText : newText
-      const sourceLayout = w.sourceKind === 'old' ? oldLayout : newLayout
+      // Issue #879 复核评论6078682695 问题2：按 w.sourceRevision 查源布局，
+      // 不按 sourceKind 猜 oldText/newText——跨修订残影时 sourceKind==='old' 不等于本轮 oldText。
+      let sourceText: string
+      let sourceLayout: LineLayout[]
+      if (w.sourceRevision === oldRevision) {
+        sourceText = oldText
+        sourceLayout = oldLayout
+      } else if (w.sourceRevision === newRevision) {
+        sourceText = newText
+        sourceLayout = newLayout
+      } else {
+        // 跨修订残影：无法从本轮快照获取源布局，退回 sourceKind 猜测
+        sourceText = w.sourceKind === 'old' ? oldText : newText
+        sourceLayout = w.sourceKind === 'old' ? oldLayout : newLayout
+      }
 
       // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
       // 再与 glyphIds 一一对应，构建 glyphUtf16Ranges。

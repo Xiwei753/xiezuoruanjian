@@ -1,9 +1,16 @@
 // editor_commit_start.test.mjs — 提交瞬间起始状态（按字形重算）的纯逻辑单测。
 //
-// Issue #879 复核评论6077187962 的 3 个核心问题修复：
+// Issue #879 复核评论6078187962 的 3 个核心问题修复：
 // 问题1：部分裁切的字形在交棒时跳字 → clusterVisible 返回精确可见区间
 // 问题2：不连续的多段可见字形被压成"最长一段" → visibleGlyphPieces 返回全部可见段
 // 问题3：ghost字形（已删除但仍被运动窗口绘制）→ 冻结窗口作为独立可见来源
+//
+// Issue #879 复核评论6078682695 的 4 个问题修复：
+// 问题1：多段可见片段不再合并成连续矩形 → insertRunStartState/deletedRunStartState/retainedMoveStartState
+//       返回 RunStartPiece[]，每个 piece 生成独立 MotionGlyphWindow
+// 问题2：旧删除 ghost 的源布局按 sourceRevision 查（不按 sourceKind 猜）
+// 问题3：窗口实例 ID 引用计数 → addLease/releaseLease
+// 问题4：精确可见像素区间跨字体/换行几何时投影到目标局部位置
 //
 // 运行：
 //   node apps/harmony/entry/src/main/ets/feature/editor/motion/__tests__/editor_commit_start.test.mjs
@@ -65,7 +72,7 @@ const frozenWindow = (glyphIds, clipLeft, clipRight, offsetX, offsetY, sourceRev
   sourceLayout: sourceLayout ?? null,
 })
 
-console.log('editor_commit_start 纯逻辑单测（Issue #879 复核评论6077187962）')
+console.log('editor_commit_start 纯逻辑单测（Issue #879 复核评论6078187962 + 6078682695）')
 
 // ====== 问题1：部分裁切的字形在交棒时跳字 ======
 
@@ -74,8 +81,8 @@ test('问题1：静态在屏帧（无运动窗口）——仍然可见的字形�
   const run = runGeometry(ctx, 1, 3, { x: 10, y: 0, width: 20, height: 20 })
   const start = deletedRunStartState(run, ctx, 10)
   // 全部字形静态可见 → 起点＝run 自己布局里的完整区间（10..30），不是旧窗口 clip
-  assert.equal(start.startClipLeft, 10)
-  assert.equal(start.startClipRight, 30)
+  assert.equal(start[0].startClipLeft, 10)
+  assert.equal(start[0].startClipRight, 30)
 })
 
 test('问题1：冻结窗口只露出一部分——起点必须是精确裁切区间 [15,25]，不能是 [10,30]', () => {
@@ -92,8 +99,8 @@ test('问题1：冻结窗口只露出一部分——起点必须是精确裁切�
   const run = runGeometry(withWindow, 1, 4, { x: 10, y: 0, width: 30, height: 20 })
   const start = deletedRunStartState(run, withWindow, 10)
   // 起点必须是精确裁切区间 [15,25]，不能是完整边界 [10,30]
-  assert.equal(start.startClipLeft, 15)
-  assert.equal(start.startClipRight, 25)
+  assert.equal(start[0].startClipLeft, 15)
+  assert.equal(start[0].startClipRight, 25)
 })
 
 test('问题1：旧窗口大、目标窗口短——不得让新 run 瞬间多露字（不得超出自身区间）', () => {
@@ -105,8 +112,8 @@ test('问题1：旧窗口大、目标窗口短——不得让新 run 瞬间多�
   const run = runGeometry(withWindow, 0, 2, { x: 0, y: 0, width: 20, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
   // 起点只能是 run 自己的 0..20，不能变成旧窗口的 0..40
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 20)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
 })
 
 test('问题1：未被窗口覆盖的字形属于静态主文本——可见段按最长连续可见段取', () => {
@@ -142,8 +149,8 @@ test('问题1：真正的新字（不在在屏身份表里）——零宽度起�
     ownLayout: [{ ...line('AB', 0), left: 50 }],
   }
   const start = insertRunStartState(run, ctx)
-  assert.equal(start.startClipLeft, 50)
-  assert.equal(start.startClipRight, 50)
+  assert.equal(start[0].startClipLeft, 50)
+  assert.equal(start[0].startClipRight, 50)
 })
 
 test('问题1：吞字 run 全不可见——塌到目标边缘（起点＝终点，不二次运动）', () => {
@@ -153,8 +160,8 @@ test('问题1：吞字 run 全不可见——塌到目标边缘（起点＝终�
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 0)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 0)
 })
 
 test('问题1：保留字平移——起点让第一个仍可见的字形停在此刻在屏的位置', () => {
@@ -167,8 +174,8 @@ test('问题1：保留字平移——起点让第一个仍可见的字形停在�
   const start = retainedMoveStartState(run, withWindow, {
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
   })
-  assert.equal(start.startPositionX, 5)
-  assert.equal(start.startPositionY, 0)
+  assert.equal(start[0].startPositionX, 5)
+  assert.equal(start[0].startPositionY, 0)
 })
 
 test('问题1：保留字平移——只有后半段可见时，按第一个可见字形做局部校正', () => {
@@ -186,7 +193,7 @@ test('问题1：保留字平移——只有后半段可见时，按第一个可�
     startClipLeft: 0, startClipRight: 60, startPositionX: 0, startPositionY: 0,
   })
   // 第一个可见字形（簇3，own 左界 30）此刻在屏位置 35 → 起点 = 35 - (30 - 0) = 5
-  assert.equal(start.startPositionX, 5)
+  assert.equal(start[0].startPositionX, 5)
 })
 
 test('问题1：保留字平移——一个共享字形都不在屏上 → 用兜底位置，不做凭空平移', () => {
@@ -199,8 +206,8 @@ test('问题1：保留字平移——一个共享字形都不在屏上 → 用�
     startClipLeft: 0, startClipRight: 40, startPositionX: 100, startPositionY: 20,
   }
   const start = retainedMoveStartState(run, withWindow, fallback)
-  assert.equal(start.startPositionX, 100)
-  assert.equal(start.startPositionY, 20)
+  assert.equal(start[0].startPositionX, 100)
+  assert.equal(start[0].startPositionY, 20)
 })
 
 test('问题1：簇数与字形身份数不匹配——不猜几何，交给兜底起点', () => {
@@ -215,8 +222,8 @@ test('问题1：簇数与字形身份数不匹配——不猜几何，交给兜�
   }
   assert.equal(visibleGlyphPieces(run, ctx).length, 0)
   const start = insertRunStartState(run, ctx)
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 0)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 0)
 })
 
 test('问题1：身份表不可信（null）——不认字，全部按不可见处理', () => {
@@ -246,7 +253,7 @@ test('问题2：多段可见字形——甲乙可见、丙不可见、丁可见 
   assert.equal(pieces[1].lastIndex, 3)
 })
 
-test('问题2：多段可见字形——deletedRunStartState 取所有 piece 的并集', () => {
+test('问题2：多段可见字形——deletedRunStartState 保留两段 piece，不合并并集', () => {
   const ctx = context('甲乙丙丁', 721, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
@@ -254,12 +261,21 @@ test('问题2：多段可见字形——deletedRunStartState 取所有 piece 的
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
-  // 并集 = [0, 40]（簇0的ownLeft=0 到 簇3的ownRight=40）
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 40)
+  // Issue #879 复核评论6078682695 问题1：不再合并并集，保留两段独立 piece
+  assert.equal(start.length, 2)
+  // 第一段：簇0..簇1，clip [0, 20]
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
+  // 第二段：簇3，clip [30, 40]——丙的空洞绝不填补
+  assert.equal(start[1].firstIndex, 3)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 30)
+  assert.equal(start[1].startClipRight, 40)
 })
 
-test('问题2：多段可见字形——insertRunStartState 取所有 piece 的并集', () => {
+test('问题2：多段可见字形——insertRunStartState 保留两段 piece，不合并并集', () => {
   const ctx = context('甲乙丙丁', 722, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
@@ -267,12 +283,21 @@ test('问题2：多段可见字形——insertRunStartState 取所有 piece 的�
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = insertRunStartState(run, withWindow)
-  // 并集 = [0, 40]
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 40)
+  // Issue #879 复核评论6078682695 问题1：不再合并并集，保留两段独立 piece
+  assert.equal(start.length, 2)
+  // 第一段：簇0..簇1，clip [0, 20]
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
+  // 第二段：簇3，clip [30, 40]
+  assert.equal(start[1].firstIndex, 3)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 30)
+  assert.equal(start[1].startClipRight, 40)
 })
 
-test('问题2：多段可见字形——retainedMoveStartState 保留逐段可见区间', () => {
+test('问题2：多段可见字形——retainedMoveStartState 保留两段 piece，不合并并集', () => {
   const ctx = context('甲乙丙丁', 723, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
@@ -282,11 +307,20 @@ test('问题2：多段可见字形——retainedMoveStartState 保留逐段可�
   const start = retainedMoveStartState(run, withWindow, {
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
   })
+  // Issue #879 复核评论6078682695 问题1：不再合并并集，保留两段独立 piece
+  assert.equal(start.length, 2)
+  // 第一段：簇0..簇1
+  assert.equal(start[0].firstIndex, 0)
+  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].startClipLeft, 0)
+  assert.equal(start[0].startClipRight, 20)
   // 簇0是静态可见，在屏位置 = ownLeft = 0 → startPositionX = 0 - (0 - 0) = 0
-  assert.equal(start.startPositionX, 0)
-  // 并集 = [0, 40]
-  assert.equal(start.startClipLeft, 0)
-  assert.equal(start.startClipRight, 40)
+  assert.equal(start[0].startPositionX, 0)
+  // 第二段：簇3
+  assert.equal(start[1].firstIndex, 3)
+  assert.equal(start[1].lastIndex, 3)
+  assert.equal(start[1].startClipLeft, 30)
+  assert.equal(start[1].startClipRight, 40)
 })
 
 test('问题2：三段可见——甲可见、乙不可见、丙可见、丁不可见、戊可见', () => {
@@ -456,6 +490,184 @@ test('问题3：ghost字形——glyphUtf16Ranges 为 null 时不识别 ghost', 
   const pieces = visibleGlyphPieces(run, withWindow)
   // glyphUtf16Ranges 为 null → 无法识别 ghost字形 → 不可见
   assert.equal(pieces.length, 0)
+})
+
+// ====== Issue #879 复核评论6078682695 问题4：跨字体/换行几何投影 ======
+
+test('问题4：源布局和目标布局不同——可见比例投影到目标局部位置', () => {
+  // 源布局：字形在 [40, 50]（10vp 宽）
+  // 目标布局：同一字形在 [10, 20]（10vp 宽）
+  // 冻结窗口 clip [45, 50]：只露出右半（5vp）
+  // 投影后：目标中右半 = [15, 20]
+  const ctx = context('XXXX甲', 740, [])  // 5 字，甲在 [40, 50]
+  const glyphId = idsOf(ctx, 4, 5)[0]     // 甲的 glyphId
+  const frozen = [frozenWindow([glyphId], 45, 50, 0, 0, 740, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 的 ownLayout 把甲放在 [10, 20]（不同前缀宽度）
+  const run = {
+    glyphIds: [glyphId],
+    ownText: '甲',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 1,
+      left: 10,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: [
+        { utf16Offset: 0, x: 10 },
+        { utf16Offset: 1, x: 20 },
+      ],
+    }],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1)
+  // 投影后 ownLeft = 10 + (45-40)/(50-40) * (20-10) = 15
+  assert.equal(pieces[0].ownLeft, 15)
+  // 投影后 ownRight = 10 + (50-40)/(50-40) * (20-10) = 20
+  assert.equal(pieces[0].ownRight, 20)
+})
+
+test('问题4：源布局和目标布局相同——投影是恒等变换', () => {
+  // 源和目标布局相同：投影不应改变坐标
+  const ctx = context('甲乙丙丁', 741, [])
+  const all = idsOf(ctx, 0, 4)
+  // clip [15, 25]：簇1部分可见 [15,20]，簇2部分可见 [20,25]
+  const frozen = [frozenWindow(all, 15, 25, 0, 0, 741, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1)
+  // 源＝目标 → ownLeft=15, ownRight=25（恒等）
+  assert.equal(pieces[0].ownLeft, 15)
+  assert.equal(pieces[0].ownRight, 25)
+})
+
+test('问题4：多字形 piece 跨字体投影——首尾字形各自投影到自己的目标边界', () => {
+  // 源布局：簇0在 [0,10]，簇1在 [10,20]，簇2在 [20,30]
+  // 目标布局：簇0在 [0,20]，簇1在 [20,40]，簇2在 [40,60]（每个字形宽 20vp）
+  // 冻结窗口 clip [5, 25]：簇0右半 [5,10] 可见，簇1全 [10,20] 可见，簇2左半 [20,25] 可见
+  // 投影后：
+  //   簇0 ownLeft = 0 + (5-0)/(10-0) * (20-0) = 10
+  //   簇2 ownRight = 40 + (25-20)/(30-20) * (60-40) = 50
+  const ctx = context('甲乙丙', 742, [])
+  const all = idsOf(ctx, 0, 3)
+  const frozen = [frozenWindow(all, 5, 25, 0, 0, 742, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 的 ownLayout 每个字形宽 20vp
+  const run = {
+    glyphIds: all,
+    ownText: '甲乙丙',
+    ownUtf16Start: 0,
+    ownUtf16End: 3,
+    ownRect: { x: 0, y: 0, width: 60, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 3,
+      left: 0,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: [
+        { utf16Offset: 0, x: 0 },
+        { utf16Offset: 1, x: 20 },
+        { utf16Offset: 2, x: 40 },
+        { utf16Offset: 3, x: 60 },
+      ],
+    }],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1)
+  // 簇0 ownLeft = 0 + (5-0)/(10-0) * (20-0) = 10
+  assert.equal(pieces[0].ownLeft, 10)
+  // 簇2 ownRight = 40 + (25-20)/(30-20) * (60-40) = 50
+  assert.equal(pieces[0].ownRight, 50)
+})
+
+// ====== Issue #879 复核评论6078682695 问题2：跨事务 ghost 源布局按 sourceRevision 查 ======
+
+test('问题2：跨事务 ghost——sourceRevision 不同于 displayed revision，源布局仍正确', () => {
+  // 场景：rev10 'ab' → rev11 'a'（b 被删除，ghost 仍在动画）→ rev12 'ac'
+  // rev12 时，b 的 ghost 仍在消退，其 sourceRevision=10，sourceLayout 是 rev10 的布局
+  // displayed 正文是 'ac'（rev12），b 不在 displayed 身份表中
+  // 冻结窗口的 sourceRevision=10，sourceLayout 是 'ab' 的布局
+  const ctx = context('ac', 750, [])
+  const ghostId = 'orig-10-1'  // b 在 rev10 中的 glyphId
+  const ghostRanges = new Map([
+    [ghostId, [1, 2]],  // b 在 rev10 正文 'ab' 中的 UTF-16 区间
+  ])
+  // sourceLayout 是 rev10 正文 'ab' 的行布局：a 在 [0,10]，b 在 [10,20]
+  const sourceLayout = [line('ab', 0)]
+  // 窗口 clip [10, 20]，offsetX=0：b 在屏 [10,20] 可见（仍在消退中）
+  const frozen = [frozenWindow([ghostId], 10, 20, 0, 0, 10, ghostRanges, sourceLayout)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 覆盖 b（在 rev10 正文中）
+  const run = {
+    glyphIds: [ghostId],
+    ownText: 'ab',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('ab', 0)],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  // ghost 字形 b 应该可见——源布局按 sourceRevision=10 查到，不按 sourceKind 猜
+  assert.equal(pieces.length, 1)
+  assert.equal(pieces[0].firstIndex, 0)
+  assert.equal(pieces[0].lastIndex, 0)
+  // ownLeft = max(10, 10-0) = 10
+  assert.equal(pieces[0].ownLeft, 10)
+  // ownRight = min(20, 20-0) = 20
+  assert.equal(pieces[0].ownRight, 20)
+  // sourceGlyphX0/X1 应来自 sourceLayout（rev10 的布局）
+  assert.equal(pieces[0].sourceGlyphX0, 10)
+  assert.equal(pieces[0].sourceGlyphX1, 20)
+})
+
+test('问题2：跨事务 ghost——源布局与目标布局不同时投影正确', () => {
+  // 场景：rev10 'ab' → rev11 'a'（b 被删除）→ rev12 'ac'
+  // b 的 ghost 源布局（rev10）：b 在 [10,20]
+  // run 的目标布局：b 在 [30,40]（不同位置）
+  // 冻结窗口 clip [15, 20]：只露出 b 的右半
+  // 投影后：目标中右半 = [35, 40]
+  const ctx = context('ac', 751, [])
+  const ghostId = 'orig-10-1'
+  const ghostRanges = new Map([
+    [ghostId, [1, 2]],
+  ])
+  const sourceLayout = [line('ab', 0)]  // b 在 [10,20]
+  const frozen = [frozenWindow([ghostId], 15, 20, 0, 0, 10, ghostRanges, sourceLayout)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 的 ownLayout 把 b 放在 [30, 40]
+  const run = {
+    glyphIds: [ghostId],
+    ownText: 'ab',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 30, y: 0, width: 10, height: 20 },
+    ownLayout: [{
+      startUtf16: 0,
+      endUtf16: 2,
+      left: 0,
+      y: 0,
+      height: 20,
+      breakKind: 'wrap',
+      caretStops: [
+        { utf16Offset: 0, x: 0 },
+        { utf16Offset: 1, x: 30 },
+        { utf16Offset: 2, x: 40 },
+      ],
+    }],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1)
+  // 投影：ratio = (15-10)/(20-10) = 0.5 → ownLeft = 30 + 0.5 * (40-30) = 35
+  assert.equal(pieces[0].ownLeft, 35)
+  // 投影：ratio = (20-10)/(20-10) = 1.0 → ownRight = 30 + 1.0 * (40-30) = 40
+  assert.equal(pieces[0].ownRight, 40)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

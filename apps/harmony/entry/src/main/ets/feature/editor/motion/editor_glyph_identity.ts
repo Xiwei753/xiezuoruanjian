@@ -180,6 +180,16 @@ export class WindowInstanceIdAllocator {
   private instanceIdToGlyphIds: Map<string, string[]> = new Map()
   /** 已释放的 instanceId 列表——可复用以避免编号无限增长 */
   private releasedIds: string[] = []
+  /**
+   * Issue #879 复核评论6078682695 问题3：按 renderNodeKey 管理的引用计数。
+   *
+   * 同一 glyphIds 序列可以被上一帧 `new-r11` 与候选 `old-r11` 两个不同 Text 节点
+   * 同时使用，共享同一 instanceId。任一节点 onDisAppear 不应直接释放整段 glyph 序列——
+   * 只有最后一个 lease 被归还才真正释放 instanceId。
+   *
+   * Map<instanceId, Set<renderNodeKey>>：记录每个 instanceId 被哪些 renderNodeKey 引用。
+   */
+  private instanceIdToLeases: Map<string, Set<string>> = new Map()
 
   /**
    * 给定 glyphIds，返回对应的 `win-<number>` 格式 instanceId。
@@ -242,6 +252,50 @@ export class WindowInstanceIdAllocator {
   }
 
   /**
+   * Issue #879 复核评论6078682695 问题3：为 renderNodeKey 添加对 instanceId 的租约。
+   *
+   * 同一 glyphIds 序列可以被多个不同 Text 节点同时使用，共享同一 instanceId。
+   * 每个节点持有一个 lease，只有所有 lease 都被归还才真正释放 instanceId。
+   *
+   * 使用 Set 确保幂等：同一 renderNodeKey 多次调用不会创建重复 lease。
+   *
+   * @param renderNodeKey 渲染节点身份标识
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  addLease(renderNodeKey: string, windowInstanceId: string): void {
+    let leases = this.instanceIdToLeases.get(windowInstanceId)
+    if (leases === undefined) {
+      leases = new Set<string>()
+      this.instanceIdToLeases.set(windowInstanceId, leases)
+    }
+    leases.add(renderNodeKey)
+  }
+
+  /**
+   * Issue #879 复核评论6078682695 问题3：释放 renderNodeKey 对 instanceId 的租约。
+   *
+   * Text.onDisAppear 时调用——只释放该 renderNodeKey 持有的 lease，
+   * 同一 glyphIds 序列同时供多个节点使用时，只有最后一个 lease 被归还才真正释放 instanceId。
+   *
+   * @param renderNodeKey 渲染节点身份标识
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  releaseLease(renderNodeKey: string, windowInstanceId: string): void {
+    const leases = this.instanceIdToLeases.get(windowInstanceId)
+    if (leases === undefined) {
+      // 没有租约记录——直接释放（兼容旧路径）
+      this.release(windowInstanceId)
+      return
+    }
+    leases.delete(renderNodeKey)
+    if (leases.size === 0) {
+      // 所有租约已归还——真正释放 instanceId
+      this.instanceIdToLeases.delete(windowInstanceId)
+      this.release(windowInstanceId)
+    }
+  }
+
+  /**
    * 通过算法身份（windowIdForGlyphIds() 的结果）释放。
    *
    * @param windowId `windowIdForGlyphIds()` 的输出
@@ -262,6 +316,7 @@ export class WindowInstanceIdAllocator {
     this.instanceIdToWindowId.clear()
     this.instanceIdToGlyphIds.clear()
     this.releasedIds = []
+    this.instanceIdToLeases.clear()
   }
 }
 

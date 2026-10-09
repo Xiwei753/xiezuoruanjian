@@ -1228,8 +1228,9 @@ export struct SujianEditor {
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
             this.motionSourcePool.releaseWindowState(rnKey)
-            // Issue #879 复核评论6077187962 问题4：释放窗口实例 ID，使编号可被重新分配。
-            this.motionCoordinator.releaseWindowInstance(winInstanceId)
+            // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
+            // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
+            this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
           }
         })
       }
@@ -1266,8 +1267,9 @@ export struct SujianEditor {
           onWindowDisappear: (rnKey: string, winInstanceId: string): void => {
             this.detachWindowLayoutObserver(rnKey)
             this.motionSourcePool.releaseWindowState(rnKey)
-            // Issue #879 复核评论6077187962 问题4：释放窗口实例 ID，使编号可被重新分配。
-            this.motionCoordinator.releaseWindowInstance(winInstanceId)
+            // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
+            // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
+            this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
           }
         })
       }

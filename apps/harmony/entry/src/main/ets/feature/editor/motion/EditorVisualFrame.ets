@@ -21,8 +21,18 @@
 // - 连续快速编辑时，新 plan 的起始帧应以当前帧的实际屏幕状态（clip 起点位置）
 //   而非旧版整字初态矩形作为下一动画起点，避免快速打字/连续 Backspace 从整字初态跳起。
 //
+// Issue #879 复核评论6078682695 修复：
+// - 问题1：InsertRun/DeletedRun/RetainedMove 新增 pieces: RunStartPiece[] 字段——
+//   多段可见片段不再合并成连续矩形，每个 piece 各有独立 startClipLeft/Right，
+//   buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+// - 问题2：EditorMotionPlan 新增 carryOverGhostRuns: CarryOverGhostRun[]——
+//   上一帧仍有非零 clip、尚未归还静态层的旧窗口作为残影继承到候选 plan，
+//   buildFrame 每帧同时采样本轮新 run 与 carryOver ghost。
+//
 // 所有坐标单位 vp，相对组件左上角。
 // 所有文本 offset 是 UTF-16 code unit offset（ArkTS string.length 语义）。
+
+import type { RunStartPiece } from './editor_commit_start'
 
 /**
  * 运动类型枚举。
@@ -107,6 +117,14 @@ export interface InsertRun {
    * 与单个字形单元的 glyphId 不是同一种对象。不同簇序列不会碰撞。
    */
   windowId: string
+  /**
+   * Issue #879 复核评论6078682695 问题1：按 piece 分开的起始可见区间。
+   *
+   * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right，
+   * buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+   * 区间之间的空洞绝不填补。
+   */
+  pieces: RunStartPiece[]
 }
 
 /**
@@ -143,6 +161,8 @@ export interface DeletedRun {
   glyphIds: string[]
   /** Issue #879 复核评论问题4：独立于字形单元身份的窗口身份——见 InsertRun.windowId */
   windowId: string
+  /** Issue #879 复核评论6078682695 问题1：按 piece 分开的起始可见区间——见 InsertRun.pieces */
+  pieces: RunStartPiece[]
 }
 
 /**
@@ -186,6 +206,55 @@ export interface RetainedMove {
   glyphIds: string[]
   /** Issue #879 复核评论问题4：独立于字形单元身份的窗口身份——见 InsertRun.windowId */
   windowId: string
+  /** Issue #879 复核评论6078682695 问题1：按 piece 分开的起始可见区间——见 InsertRun.pieces */
+  pieces: RunStartPiece[]
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题2：carryOver ghost 残影通道。
+ *
+ * 上一帧仍有非零 clip、且尚未归还静态层的旧窗口作为残影继承到候选 plan。
+ * buildFrame 每帧同时采样本轮新 run 与 carryOver ghost，
+ * 保持其旧源 TextController/StyledString 有效，直到残影真正隐藏才释放。
+ *
+ * 跨事务残影场景：rev10 `ab`→rev11 `a`（`b` 半吞）→rev12 `ac`，
+ * 新候选第一帧仍含 old-10 的半个 `b`，并继续消退。
+ */
+export interface CarryOverGhostRun {
+  /** 该残影覆盖的字符簇身份列表 */
+  glyphIds: string[]
+  /** 独立于字形单元身份的窗口身份 */
+  windowId: string
+  /** 该残影的源修订号——按此查不可变源排版记录 */
+  sourceRevision: number
+  /** 该残影在源正文中的 UTF-16 起始 offset */
+  utf16Start: number
+  /** 该残影在源正文中的 UTF-16 结束 offset（exclusive） */
+  utf16End: number
+  /** 当前裁切左边界（vp）——继承自上一帧的 currentClipLeft */
+  currentClipLeft: number
+  /** 当前裁切右边界（vp）——继承自上一帧的 currentClipRight */
+  currentClipRight: number
+  /** 目标裁切左边界（vp）——残影消退的终点（零宽度） */
+  targetClipLeft: number
+  /** 目标裁切右边界（vp）——残影消退的终点（零宽度） */
+  targetClipRight: number
+  /** 裁切窗口上边界（vp） */
+  clipTop: number
+  /** 裁切窗口下边界（vp） */
+  clipBottom: number
+  /** 字形排版位置 x（vp）——源 StyledString 排版出的原始位置 */
+  glyphX: number
+  /** 字形排版位置 y（vp） */
+  glyphY: number
+  /** 字形宽度（vp） */
+  glyphWidth: number
+  /** 字形高度（vp） */
+  glyphHeight: number
+  /** 绘制偏移 x（vp）——继承自上一帧的 offsetX */
+  offsetX: number
+  /** 绘制偏移 y（vp）——继承自上一帧的 offsetY */
+  offsetY: number
 }
 
 /**

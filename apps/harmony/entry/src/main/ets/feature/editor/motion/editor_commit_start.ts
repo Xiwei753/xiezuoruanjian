@@ -122,6 +122,49 @@ export interface VisibleRunPiece {
   onScreenTop: number
   /** 最后一个可见簇此刻在屏的精确可见右边界（vp，含窗口平移和裁切） */
   onScreenRight: number
+  /**
+   * Issue #879 复核评论6078682695 问题4：首字形在**源布局**中的完整左边界（vp）。
+   *
+   * 源布局 = 冻结窗口的 sourceLayout（ghost 字形）或 displayed.layout（静态/被窗口覆盖的 displayed 字形）。
+   * 与 ownLeft（run 自己布局里的投影后边界）不同——ownLeft 是投影到目标局部坐标系后的值，
+   * sourceGlyphX0 是源布局坐标系里的原始值。用于跨字体/换行几何的可见比例投影。
+   */
+  sourceGlyphX0: number
+  /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的完整右边界（vp） */
+  sourceGlyphX1: number
+  /**
+   * Issue #879 复核评论6078682695 问题4：首字形在源布局中的真实可见左边界（vp，含裁切）。
+   *
+   * = max(sourceGlyphX0, clipLeft - offsetX)，在源布局坐标系里。
+   * 与 onScreenLeft（含 offset 的在屏坐标）不同——visiblePixelLeft 不含 offset。
+   */
+  visiblePixelLeft: number
+  /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的真实可见右边界（vp，含裁切） */
+  visiblePixelRight: number
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题1：一个 run 的一个可见片段的起始状态。
+ *
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立的 startClipLeft/Right，
+ * buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+ * 区间之间的空洞绝不填补（丙被旧动画吞没时，新 plan 第一帧不会让丙冒出来）。
+ */
+export interface RunStartPiece {
+  /** 该片段覆盖的 run 簇序起始下标（含） */
+  firstIndex: number
+  /** 该片段覆盖的 run 簇序末下标（含） */
+  lastIndex: number
+  /** 该片段的起始裁切左边界（vp，在 run 自己布局里） */
+  startClipLeft: number
+  /** 该片段的起始裁切右边界（vp，在 run 自己布局里） */
+  startClipRight: number
+  /** 该片段的起始位置 x（vp）——保留字平移用 */
+  startPositionX: number
+  /** 该片段的起始位置 y（vp）——保留字平移用 */
+  startPositionY: number
+  /** 该片段覆盖的 glyphId 子序列 */
+  glyphIds: string[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -213,10 +256,18 @@ export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext
  * 构建一个可见段（piece）。
  *
  * ownLeft/ownRight 需要精确反映部分裁切后的可见宽度，而非字形的完整边界。
- * 对于被冻结窗口覆盖的字形：
- *   在屏可见区间 = max(字形在屏left, clipLeft) 到 min(字形在屏right, clipRight)
- *   换算回 run 坐标系 = max(字形在run布局left, clipLeft - offsetX) 到 min(字形在run布局right, clipRight - offsetX)
- * 对于静态可见的字形：ownLeft/ownRight = 字形在 run 自己布局中的完整边界。
+ *
+ * Issue #879 复核评论6078682695 问题4：
+ * 源窗口的裁切区间（冻结源布局的 vp 边界）不能直接与 run.ownLayout 的 ownFullLeft/Right
+ * 做 max/min——源窗口和新目标 run 一旦因文字变更产生不同前缀宽度、折行或位置，
+ * 二者不是同一局部坐标系，简单比较 vp 会导致首尾裁切错位。
+ *
+ * 修复：先计算首/尾字形在**源布局**中的完整边界 [sourceGlyphX0, sourceGlyphX1] 和
+ * 裁切后的可见区间 [visiblePixelLeft, visiblePixelRight]（都在源布局坐标系里），
+ * 再按可见比例投影到**目标 run 布局**的 [ownFullLeft, ownFullRight]：
+ *   ratio = (visiblePixelLeft - sourceGlyphX0) / (sourceGlyphX1 - sourceGlyphX0)
+ *   ownLeft = ownFullLeft + ratio * (ownFullRight - ownFullLeft)
+ * 跨行必须分别处理（每个 piece 只在一行内），不能以原始全局 x 当新布局 x。
  */
 function buildPiece(
   run: RunGeometry,
@@ -230,37 +281,88 @@ function buildPiece(
   const firstBoundary = boundaries[firstIndex]
   const lastBoundary = boundaries[lastIndex + 1]
 
-  // 字形在 run 自己布局中的完整边界
+  // 字形在 run 自己布局中的完整边界（目标局部坐标系）
   const ownFullLeft = xAtOffset(run.ownLayout, firstBoundary, run.ownRect.x)
   const ownFullRight = xAtOffset(run.ownLayout, lastBoundary, run.ownRect.x + run.ownRect.width)
 
-  // 计算精确可见区间（含部分裁切）
+  // Issue #879 复核评论6078682695 问题4：
+  // 首字形和尾字形各自在目标布局中的完整边界——投影时必须按各自字形的目标边界，
+  // 不能用整个 piece 的 [ownFullLeft, ownFullRight]。
+  // 否则多字形 piece 在源＝目标时会得到非恒等结果（首字形可见比例被映射到整段宽度）。
+  const firstGlyphTargetLeft = ownFullLeft
+  const firstGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[firstIndex + 1], run.ownRect.x + run.ownRect.width)
+  const lastGlyphTargetLeft = xAtOffset(run.ownLayout, boundaries[lastIndex], run.ownRect.x)
+  const lastGlyphTargetRight = ownFullRight
+
   const firstGlyphId = run.glyphIds[firstIndex]
   const lastGlyphId = run.glyphIds[lastIndex]
   const lastVisible = clusterVisible(displayed, frozenByGlyphId, lastGlyphId)
 
-  // 对于首字形的 ownLeft：如果被窗口覆盖，需要精确裁切
+  // ── 首字形 ──
   const firstSpan = frozenByGlyphId.get(firstGlyphId)
   let ownLeft: number
   let onScreenLeft: number
+  let sourceGlyphX0: number
+  let sourceGlyphX1: number
+  let visiblePixelLeft: number
+  let visiblePixelRight: number
+
   if (firstSpan !== undefined) {
-    // 被窗口覆盖：精确裁切
-    ownLeft = Math.max(ownFullLeft, firstSpan.clipLeft - firstSpan.offsetX)
+    // 被窗口覆盖：计算源字形几何，然后投影到目标布局
+    const sourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, firstGlyphId)
+    if (sourceGeom !== null) {
+      sourceGlyphX0 = sourceGeom.x0
+      sourceGlyphX1 = sourceGeom.x1
+      // 源布局坐标系中的可见区间（裁切后，不含 offset）
+      const clipLeftInSource = firstSpan.clipLeft - firstSpan.offsetX
+      const clipRightInSource = firstSpan.clipRight - firstSpan.offsetX
+      visiblePixelLeft = Math.max(sourceGlyphX0, clipLeftInSource)
+      visiblePixelRight = Math.min(sourceGlyphX1, clipRightInSource)
+      // 投影到目标布局（问题4）——按首字形的目标边界投影
+      ownLeft = projectToTarget(visiblePixelLeft, sourceGlyphX0, sourceGlyphX1, firstGlyphTargetLeft, firstGlyphTargetRight)
+    } else {
+      // 无法获取源字形几何——退回完整边界
+      sourceGlyphX0 = ownFullLeft
+      sourceGlyphX1 = ownFullRight
+      visiblePixelLeft = ownFullLeft
+      visiblePixelRight = ownFullRight
+      ownLeft = ownFullLeft
+    }
     onScreenLeft = Math.max(firstVisible.left, firstSpan.clipLeft)
   } else {
-    // 静态可见：完整边界
+    // 静态可见：完整边界（源 = 目标）
+    sourceGlyphX0 = ownFullLeft
+    sourceGlyphX1 = ownFullRight
+    visiblePixelLeft = ownFullLeft
+    visiblePixelRight = ownFullRight
     ownLeft = ownFullLeft
     onScreenLeft = firstVisible.left
   }
 
-  // 对于尾字形的 ownRight：如果被窗口覆盖，需要精确裁切
+  // ── 尾字形 ──
   let ownRight: number
   let onScreenRight: number
   if (lastVisible !== null) {
     const lastSpan = frozenByGlyphId.get(lastGlyphId)
     if (lastSpan !== undefined) {
-      // 被窗口覆盖：精确裁切
-      ownRight = Math.min(ownFullRight, lastSpan.clipRight - lastSpan.offsetX)
+      // 被窗口覆盖：计算源字形几何，然后投影到目标布局
+      const lastSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, lastGlyphId)
+      if (lastSourceGeom !== null) {
+        // 尾字形的源几何
+        const lastSourceX0 = lastSourceGeom.x0
+        const lastSourceX1 = lastSourceGeom.x1
+        const lastClipLeftInSource = lastSpan.clipLeft - lastSpan.offsetX
+        const lastClipRightInSource = lastSpan.clipRight - lastSpan.offsetX
+        const lastVisiblePixelLeft = Math.max(lastSourceX0, lastClipLeftInSource)
+        const lastVisiblePixelRight = Math.min(lastSourceX1, lastClipRightInSource)
+        // 投影尾字形的可见右边界到目标布局——按尾字形的目标边界投影
+        ownRight = projectToTarget(lastVisiblePixelRight, lastSourceX0, lastSourceX1, lastGlyphTargetLeft, lastGlyphTargetRight)
+        // 更新 sourceGlyphX1 为尾字形的源右边界
+        sourceGlyphX1 = lastSourceX1
+        visiblePixelRight = lastVisiblePixelRight
+      } else {
+        ownRight = ownFullRight
+      }
       onScreenRight = Math.min(lastVisible.right, lastSpan.clipRight)
     } else {
       // 静态可见：完整边界
@@ -281,92 +383,183 @@ function buildPiece(
     onScreenLeft: onScreenLeft,
     onScreenTop: firstVisible.top,
     onScreenRight: onScreenRight,
+    sourceGlyphX0: sourceGlyphX0,
+    sourceGlyphX1: sourceGlyphX1,
+    visiblePixelLeft: visiblePixelLeft,
+    visiblePixelRight: visiblePixelRight,
   }
 }
 
 /**
- * 出字 run 的起始状态：可见段在 run 自己布局里的区间；全不可见时从 run 左边界零宽度开始。
+ * Issue #879 复核评论6078682695 问题4：把源布局坐标系中的可见边界投影到目标布局。
  *
- * 多 piece 时取所有 piece 的并集（最小 ownLeft 到最大 ownRight）。
+ * 当源和目标布局不同（不同前缀宽度、折行或位置）时，不能直接套原坐标。
+ * 按可见比例投影：
+ *   ratio = (sourceVisible - sourceX0) / (sourceX1 - sourceX0)
+ *   target = targetX0 + ratio * (targetX1 - targetX0)
+ *
+ * 源宽度为零时退回 targetX0（退化情况）。
  */
-export function insertRunStartState(run: RunGeometry, displayed: DisplayedContext): RunStartState {
+function projectToTarget(
+  sourceVisible: number,
+  sourceX0: number,
+  sourceX1: number,
+  targetX0: number,
+  targetX1: number
+): number {
+  const sourceWidth = sourceX1 - sourceX0
+  if (sourceWidth <= VISIBLE_EPSILON) {
+    return targetX0
+  }
+  const ratio = (sourceVisible - sourceX0) / sourceWidth
+  return targetX0 + ratio * (targetX1 - targetX0)
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题4：获取一个字形在**源布局**中的完整几何。
+ *
+ * 两个来源：
+ * 1. 字形在 displayed 正文身份表中 → 用 displayed.layout 计算（源 = displayed 布局）
+ * 2. ghost 字形（不在 displayed 身份表，但冻结窗口仍在绘制）→ 用窗口的 sourceLayout 计算
+ *
+ * 返回的 x0/x1 是源布局坐标系里的值（不含窗口 offset），用于投影计算。
+ */
+function sourceGlyphGeometry(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan>,
+  glyphId: string
+): { x0: number, x1: number } | null {
+  // 1. 先查 displayed.identities
+  const entry = displayed.identities === null
+    ? null
+    : displayed.identities.entryByGlyphId(glyphId)
+  if (entry !== null) {
+    const x0 = xAtOffset(displayed.layout, entry.utf16Start, 0)
+    const x1 = xAtOffset(displayed.layout, entry.utf16End, x0)
+    return { x0, x1 }
+  }
+
+  // 2. ghost 字形：用窗口的 sourceLayout
+  const span = frozenByGlyphId.get(glyphId)
+  if (span !== undefined && span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
+    const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+    if (utf16Range !== undefined) {
+      const x0 = xAtOffset(span.sourceLayout, utf16Range[0], 0)
+      const x1 = xAtOffset(span.sourceLayout, utf16Range[1], x0)
+      return { x0, x1 }
+    }
+  }
+
+  return null
+}
+
+/**
+ * 出字 run 的起始状态：每个可见段各有一个独立的起始裁切区间。
+ *
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right，
+ * buildFrame 按 piece 分别采样，每个 piece 生成独立的 MotionGlyphWindow。
+ * 区间之间的空洞绝不填补（丙被旧动画吞没时，新 plan 第一帧不会让丙冒出来）。
+ *
+ * 全不可见时返回单个零宽度 piece（从 run 左边界开始）。
+ */
+export function insertRunStartState(run: RunGeometry, displayed: DisplayedContext): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
-    return {
+    return [{
+      firstIndex: 0,
+      lastIndex: 0,
       startClipLeft: run.ownRect.x,
       startClipRight: run.ownRect.x,
       startPositionX: run.ownRect.x,
       startPositionY: run.ownRect.y,
-    }
+      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+    }]
   }
-  // 取所有 piece 的并集
-  const left = Math.min(...pieces.map((p) => p.ownLeft))
-  const right = Math.max(...pieces.map((p) => p.ownRight))
-  return {
-    startClipLeft: left,
-    startClipRight: right,
+  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.ownLeft,
+    startClipRight: p.ownRight,
     startPositionX: run.ownRect.x,
     startPositionY: run.ownRect.y,
-  }
+    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+  }))
 }
 
 /**
- * 吞字 run 的起始状态：仍可见的字形段在 run 自己布局里的区间。
+ * 吞字 run 的起始状态：每个仍可见的字形段各有独立的起始裁切区间。
+ *
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right。
  *
  * 已经全不可见（上一笔动画已经把它吞掉）时塌到 collapseX——
  * 起点＝终点，这一笔不再产生二次运动。
- * 多 piece 时取所有 piece 的并集（最小 ownLeft 到最大 ownRight）。
  */
 export function deletedRunStartState(
   run: RunGeometry,
   displayed: DisplayedContext,
   collapseX: number
-): RunStartState {
+): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
-    return {
+    return [{
+      firstIndex: 0,
+      lastIndex: 0,
       startClipLeft: collapseX,
       startClipRight: collapseX,
       startPositionX: run.ownRect.x,
       startPositionY: run.ownRect.y,
-    }
+      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+    }]
   }
-  // 取所有 piece 的并集
-  const left = Math.min(...pieces.map((p) => p.ownLeft))
-  const right = Math.max(...pieces.map((p) => p.ownRight))
-  return {
-    startClipLeft: left,
-    startClipRight: right,
+  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.ownLeft,
+    startClipRight: p.ownRight,
     startPositionX: run.ownRect.x,
     startPositionY: run.ownRect.y,
-  }
+    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+  }))
 }
 
 /**
- * 保留字平移 run 的起始状态：让第一个仍可见的字形停在此刻在屏的位置上。
+ * 保留字平移 run 的起始状态：每个仍可见的字形段各有独立的起始位置。
  *
- * 多 piece 时取所有 piece 的并集作为可见区间，用第一个 piece 的在屏位置做平移校正。
+ * Issue #879 复核评论6078682695 问题1：
+ * 多段可见片段不再合并成连续矩形——每个 piece 各有独立 startClipLeft/Right 和 startPosition。
+ * 让每个 piece 的第一个仍可见的字形停在此刻在屏的位置上。
+ *
+ * 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 返回 fallback。
  */
 export function retainedMoveStartState(
   run: RunGeometry,
   displayed: DisplayedContext,
   fallback: RunStartState
-): RunStartState {
+): RunStartPiece[] {
   const pieces = visibleGlyphPieces(run, displayed)
   if (pieces.length === 0) {
-    return fallback
+    return [{
+      firstIndex: 0,
+      lastIndex: 0,
+      startClipLeft: fallback.startClipLeft,
+      startClipRight: fallback.startClipRight,
+      startPositionX: fallback.startPositionX,
+      startPositionY: fallback.startPositionY,
+      glyphIds: run.glyphIds.length > 0 ? [run.glyphIds[0]] : [],
+    }]
   }
-  // 取所有 piece 的并集作为可见区间
-  const ownLeft = Math.min(...pieces.map((p) => p.ownLeft))
-  const ownRight = Math.max(...pieces.map((p) => p.ownRight))
-  // 用第一个 piece 的在屏位置做平移校正
-  const firstPiece = pieces[0]
-  return {
-    startClipLeft: ownLeft,
-    startClipRight: ownRight,
-    startPositionX: firstPiece.onScreenLeft - (firstPiece.ownLeft - run.ownRect.x),
-    startPositionY: firstPiece.onScreenTop,
-  }
+  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.ownLeft,
+    startClipRight: p.ownRight,
+    // 每个 piece 的 startPosition 让该 piece 的第一个可见字形停在此刻在屏的位置上
+    startPositionX: p.onScreenLeft - (p.ownLeft - run.ownRect.x),
+    startPositionY: p.onScreenTop,
+    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+  }))
 }
 
 /** 某个字形此刻在屏的精确可见区间（vp）。 */
