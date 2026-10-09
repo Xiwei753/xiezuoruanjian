@@ -95,8 +95,6 @@ impl CaretMotion {
             && caret.document_session == self.document_session
             && (caret.target_x - self.to.x).abs() <= 0.5
             && (caret.target_y - self.to.y).abs() <= 0.5
-            && (caret.path_start_x - self.from.x).abs() <= 0.5
-            && (caret.path_start_y - self.from.y).abs() <= 0.5
             && point_is_on_route(
                 caret.x,
                 caret.y,
@@ -114,6 +112,7 @@ struct ClusterMotion {
     target: Option<TargetCluster>,
     kind: MotionKind,
     caret_motion: Option<CaretMotion>,
+    terminal_geometry_committed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -237,6 +236,7 @@ impl VisualEditState {
                     target: Some(target.clone()),
                     kind: MotionKind::Reveal,
                     caret_motion: None,
+                    terminal_geometry_committed: false,
                 });
             }
         }
@@ -263,6 +263,7 @@ impl VisualEditState {
                     target: None,
                     kind: MotionKind::Delete(delete_edge),
                     caret_motion: None,
+                    terminal_geometry_committed: false,
                 });
             }
         }
@@ -339,6 +340,14 @@ impl VisualEditState {
             .any(|motion| motion.caret_motion.is_some())
     }
 
+    pub(crate) fn commit_terminal_motions(&mut self, motion_indices: &[usize]) {
+        for &motion_index in motion_indices {
+            if let Some(motion) = self.motions.get_mut(motion_index) {
+                motion.terminal_geometry_committed = true;
+            }
+        }
+    }
+
     pub(crate) fn clear_caret_driver(&mut self) {
         for motion in &mut self.motions {
             motion.caret_motion = None;
@@ -371,8 +380,9 @@ impl VisualEditState {
         let mut terminal_frame = true;
         let mut owned = Vec::new();
         let mut glyphs = Vec::new();
+        let mut terminal_motion_indices = Vec::new();
 
-        for motion in &self.motions {
+        for (motion_index, motion) in self.motions.iter().enumerate() {
             if let Some(target) = motion.target.as_ref() {
                 owned.push(RenderOwnershipPlan::owner_key(
                     target.snapshot_id,
@@ -409,16 +419,22 @@ impl VisualEditState {
                     // reveal edge for clusters on its current line. Cross-line/layout cases
                     // retain the explicit VisualEditState progress geometry.
                     let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
-                    let visible = match boundary {
-                        MotionBoundary::VisualCaret(caret_x) => {
-                            reveal_width_to_caret(target, caret_x)
+                    let visible = if motion.terminal_geometry_committed {
+                        target.rect.w
+                    } else {
+                        match boundary {
+                            MotionBoundary::VisualCaret(caret_x) => {
+                                reveal_width_to_caret(target, caret_x)
+                            }
+                            MotionBoundary::TextProgress => target.rect.w * p,
                         }
-                        MotionBoundary::TextProgress => target.rect.w * p,
                     };
-                    terminal_frame &= match boundary {
-                        MotionBoundary::VisualCaret(_) => visible >= target.rect.w - 1e-6,
-                        MotionBoundary::TextProgress => p >= 1.0,
-                    };
+                    let motion_terminal =
+                        motion.terminal_geometry_committed || visible >= target.rect.w - 1e-6;
+                    terminal_frame &= motion_terminal;
+                    if motion_terminal && !motion.terminal_geometry_committed {
+                        terminal_motion_indices.push(motion_index);
+                    }
                     if visible <= 1e-6 || target.rect.h <= 1e-6 {
                         continue;
                     }
@@ -446,16 +462,23 @@ impl VisualEditState {
                     // their explicit text-progress geometry remains the correct driver.
                     let boundary =
                         delete_boundary(source, delete_edge, motion.caret_motion, visual_caret);
-                    let visible = match boundary {
-                        MotionBoundary::VisualCaret(caret_x) => {
-                            delete_width_to_caret(source, delete_edge, caret_x)
+                    let visible = if motion.terminal_geometry_committed {
+                        0.0
+                    } else {
+                        match boundary {
+                            MotionBoundary::VisualCaret(caret_x) => {
+                                delete_width_to_caret(source, delete_edge, caret_x)
+                            }
+                            MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
                         }
-                        MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
                     };
-                    terminal_frame &= match boundary {
-                        MotionBoundary::VisualCaret(_) => visible <= 1e-6 || source.opacity <= 1e-6,
-                        MotionBoundary::TextProgress => p >= 1.0,
-                    };
+                    let motion_terminal = motion.terminal_geometry_committed
+                        || visible <= 1e-6
+                        || source.opacity <= 1e-6;
+                    terminal_frame &= motion_terminal;
+                    if motion_terminal && !motion.terminal_geometry_committed {
+                        terminal_motion_indices.push(motion_index);
+                    }
                     if visible <= 1e-6 || source.rect.h <= 1e-6 {
                         continue;
                     }
@@ -519,13 +542,15 @@ impl VisualEditState {
         let terminal_frame = terminal_frame || self.terminal_frame_committed;
         let handoff_pending = self.terminal_frame_committed;
 
-        RenderOwnershipPlan::from_owner_table(
+        let mut plan = RenderOwnershipPlan::from_owner_table(
             &self.target_snapshot,
             owned,
             glyphs,
             handoff_pending,
             terminal_frame,
-        )
+        );
+        plan.terminal_motion_indices = terminal_motion_indices;
+        plan
     }
 }
 
@@ -644,6 +669,7 @@ fn pair_cluster(
             MotionKind::CrossFade
         },
         caret_motion: None,
+        terminal_geometry_committed: false,
     });
 }
 

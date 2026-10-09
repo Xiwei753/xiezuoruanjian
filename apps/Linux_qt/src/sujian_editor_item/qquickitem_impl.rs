@@ -472,21 +472,12 @@ impl SujianEditorItem {
             y: self.cursor_ctrl.visual_y,
             h: self.cursor_ctrl.visual_h,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
-            movement_source: Some(self.cursor_ctrl.last_move_source),
-            target_x: self.cursor_ctrl.target_x,
-            target_y: self.cursor_ctrl.target_y,
-            path_start_x: self
-                .cursor_ctrl
-                .animation
-                .as_ref()
-                .map(|animation| animation.start_x)
-                .unwrap_or(self.cursor_ctrl.target_x),
-            path_start_y: self
-                .cursor_ctrl
-                .animation
-                .as_ref()
-                .map(|animation| animation.start_y)
-                .unwrap_or(self.cursor_ctrl.target_y),
+            movement_source: Some(self.cursor_ctrl.motion_source),
+            driver_revision: self.cursor_ctrl.motion_layout_revision,
+            target_x: self.cursor_ctrl.motion_target_x,
+            target_y: self.cursor_ctrl.motion_target_y,
+            path_start_x: self.cursor_ctrl.motion_start_x,
+            path_start_y: self.cursor_ctrl.motion_start_y,
         }
     }
 

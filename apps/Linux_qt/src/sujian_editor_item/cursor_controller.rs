@@ -21,6 +21,7 @@
 //! 滚动和动画期间闪烁暂停。
 
 use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
+use super::layout_revision::LayoutRevision;
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
 use std::time::{Duration, Instant};
@@ -34,7 +35,7 @@ const BLINK_INTERVAL_MS: u64 = 530;
 /// - `PointerClick` / `KeyboardNavigation`：smooth cursor 开启时允许跨行 Tween
 /// - `DragSelection` / `LayoutChange` / `Scroll`：硬 Snap
 /// - `TextTransaction`：正常正文提交按有效动画设置追到最新 canonical caret
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CursorMoveSource {
     /// 鼠标点击：smooth cursor 开启时允许跨行 Tween
     PointerClick,
@@ -43,6 +44,7 @@ pub enum CursorMoveSource {
     /// 拖选：Snap
     DragSelection,
     /// 布局变化（窗口宽度改变等）：Snap
+    #[default]
     LayoutChange,
     /// 滚动：Snap
     Scroll,
@@ -94,6 +96,15 @@ pub struct CursorController {
     pub anchor_visual_x: Option<f64>,
     pub anchor_visual_y: Option<f64>,
     pub animation: Option<CursorAnimationState>,
+    /// Last route sampled from the displayed caret position to its current target.
+    /// It remains available after `animation` reaches its endpoint so text rendering
+    /// can keep the same driver identity through static handoff.
+    pub motion_start_x: f64,
+    pub motion_start_y: f64,
+    pub motion_target_x: f64,
+    pub motion_target_y: f64,
+    pub motion_source: CursorMoveSource,
+    pub motion_layout_revision: Option<LayoutRevision>,
     pub force_snap_next: bool,
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
@@ -134,6 +145,12 @@ impl CursorController {
             anchor_visual_x: None,
             anchor_visual_y: None,
             animation: None,
+            motion_start_x: 0.0,
+            motion_start_y: 0.0,
+            motion_target_x: 0.0,
+            motion_target_y: 0.0,
+            motion_source: CursorMoveSource::LayoutChange,
+            motion_layout_revision: None,
             force_snap_next: false,
             blink_visible: true,
             blink_last_toggle: Instant::now(),
@@ -221,6 +238,8 @@ impl CursorController {
 
         self.target_x = plan.cursor_x;
         self.target_y = plan.cursor_y;
+        self.motion_source = plan.movement_source;
+        self.motion_layout_revision = plan.driver_revision;
         self.visual_h = plan.cursor_h;
         self.ime_cursor_rect_h = plan.cursor_h;
         self.visible = plan.should_be_visible;
@@ -247,6 +266,7 @@ impl CursorController {
                 self.visual_x = plan.cursor_x;
                 self.visual_y = plan.cursor_y;
                 self.visual_baseline_y = plan.cursor_baseline_y;
+                self.set_motion_route(plan.cursor_x, plan.cursor_y, plan.cursor_x, plan.cursor_y);
                 // 清 animation：选区期间光标不绘制，不需要动画推进。
                 // 恢复时从 visual_x/visual_y（selection head 位置）建新 Tween，
                 // 不走旧 animation 的 finished/rebase 分支避免跳到旧 target。
@@ -269,6 +289,7 @@ impl CursorController {
             self.visual_x = plan.cursor_x;
             self.visual_y = plan.cursor_y;
             self.visual_baseline_y = plan.cursor_baseline_y;
+            self.set_motion_route(plan.cursor_x, plan.cursor_y, plan.cursor_x, plan.cursor_y);
             self.blink_visible = true;
             // Issue #810 评论 问题2: 非选区原因隐藏，重置为 Uninitialized。
             self.visibility_state = CursorVisibilityState::Uninitialized;
@@ -302,6 +323,7 @@ impl CursorController {
                 self.visual_x = plan.cursor_x;
                 self.visual_y = plan.cursor_y;
                 self.visual_baseline_y = plan.cursor_baseline_y;
+                self.set_motion_route(plan.cursor_x, plan.cursor_y, plan.cursor_x, plan.cursor_y);
                 self.animation = None;
             }
             CursorTransition::Tween {
@@ -330,6 +352,7 @@ impl CursorController {
                         // Retarget from the position last presented by the scene graph,
                         // never from the previous animation's stale target.
                         let (cur_x, cur_y) = (self.visual_x, self.visual_y);
+                        self.set_motion_route(cur_x, cur_y, target_x, target_y);
                         self.animation = Some(CursorAnimationState {
                             start_x: cur_x,
                             start_y: cur_y,
@@ -352,6 +375,7 @@ impl CursorController {
                         self.visual_x = anim.target_x;
                         self.visual_y = anim.target_y;
                         self.visual_baseline_y = new_rect.baseline_y;
+                        // Keep the completed route until another route replaces it.
                         self.animation = None;
                     } else {
                         // `visual_x/y` already hold the most recently displayed frame.
@@ -374,6 +398,7 @@ impl CursorController {
                             // 首次出现：尚无可信 visual position，用 old_rect 初始化。
                             (start_x, start_y)
                         };
+                        self.set_motion_route(init_x, init_y, target_x, target_y);
                         self.animation = Some(CursorAnimationState {
                             start_x: init_x,
                             start_y: init_y,
@@ -394,6 +419,7 @@ impl CursorController {
                         self.visual_x = target_x;
                         self.visual_y = target_y;
                         self.visual_baseline_y = new_rect.baseline_y;
+                        self.set_motion_route(target_x, target_y, target_x, target_y);
                     }
                 }
             }
@@ -437,6 +463,13 @@ impl CursorController {
             blink_changed,
             visual_position_changed: pos_changed,
         }
+    }
+
+    fn set_motion_route(&mut self, start_x: f64, start_y: f64, target_x: f64, target_y: f64) {
+        self.motion_start_x = start_x;
+        self.motion_start_y = start_y;
+        self.motion_target_x = target_x;
+        self.motion_target_y = target_y;
     }
 
     /// Issue #826 评论 36：视觉光标 Tween 的**每帧唯一推进入口**。

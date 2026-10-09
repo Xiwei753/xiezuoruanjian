@@ -119,6 +119,7 @@ pub(crate) struct CursorRenderState {
     pub opacity: f64,
     /// The active move intent and the route currently owned by CursorController.
     pub movement_source: Option<CursorMoveSource>,
+    pub driver_revision: Option<LayoutRevision>,
     pub target_x: f64,
     pub target_y: f64,
     pub path_start_x: f64,

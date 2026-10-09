@@ -61,6 +61,7 @@ pub(crate) struct CursorMoveInputs {
     pub smooth_cursor_enabled: bool,
     pub cursor_animation_enabled: bool,
     pub movement_source: CursorMoveSource,
+    pub driver_revision: Option<LayoutRevision>,
     pub visual_position_valid: bool,
     pub duration_ms: u64,
     pub visual_x: f64,
@@ -227,6 +228,11 @@ impl LinuxEditorAnimationCoordinator {
         self.last_committed_visual_frame = Some(committed_frame);
         let mut committed_animation_ids = Vec::new();
         let keeps_animation = resources_ready && !plan.handoff_pending;
+        if keeps_animation {
+            if let Some(state) = self.visual_edit_state.as_mut() {
+                state.commit_terminal_motions(&plan.terminal_motion_indices);
+            }
+        }
         if keeps_animation {
             for glyph in &plan.animated_glyphs {
                 if !committed_animation_ids.contains(&glyph.snapshot_id) {
@@ -476,6 +482,8 @@ impl LinuxEditorAnimationCoordinator {
         CursorAnimationPlan {
             should_be_visible,
             transition,
+            movement_source: inputs.movement_source,
+            driver_revision: inputs.driver_revision,
             cursor_x: new_rect.x,
             cursor_y: new_rect.top,
             cursor_h: inputs.cursor_h,

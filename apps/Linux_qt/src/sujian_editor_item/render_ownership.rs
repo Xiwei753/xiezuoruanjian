@@ -35,6 +35,8 @@ pub(crate) struct RenderOwnershipPlan {
     pub document_session: u64,
     /// 当前帧是否已到完整动画终点。
     pub terminal_frame: bool,
+    /// Reveal/Delete motions whose terminal geometry was successfully committed.
+    pub terminal_motion_indices: Vec<usize>,
     /// 动画到达终点。本次 render 需先让静态层成功接管，再清空动画层。
     pub handoff_pending: bool,
     pub target_layout_revision: Option<LayoutRevision>,
@@ -137,6 +139,7 @@ impl RenderOwnershipPlan {
             ownership_revision,
             document_session: 0,
             terminal_frame,
+            terminal_motion_indices: Vec::new(),
             handoff_pending,
             target_layout_revision: Some(snapshot.revision),
             candidate_frame: VisualFrame::default(),
