@@ -227,6 +227,18 @@ export interface CarryOverGhostRun {
   windowId: string
   /** 该残影的源修订号——按此查不可变源排版记录 */
   sourceRevision: number
+  /**
+   * Issue #879 复核评论6084803105 问题1：该残影的源类型。
+   * insert/reflow 转来的 ghost 源可能是 'new'；deleted/carryGhost 的源通常是 'old'。
+   * buildFrame 中 sourceKind 从此字段读取，不再硬编码 'old'。
+   */
+  sourceKind: 'old' | 'new'
+  /**
+   * Issue #879 复核评论6084803105 问题1：该残影的源 runId。
+   * 如 `new-11` 或 `old-11`——buildFrame 中 runId 必须沿用此值，
+   * 不再硬编码 `old-${ghost.sourceRevision}`。
+   */
+  sourceRunId: string
   /** 该残影在源正文中的 UTF-16 起始 offset */
   utf16Start: number
   /** 该残影在源正文中的 UTF-16 结束 offset（exclusive） */

@@ -46,7 +46,7 @@ import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/d
 import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
 import type { GlyphCarryPatch } from './editor_patch_carry'
 import { applyPatchesToText } from './editor_patch_carry'
-import { GlyphIdentityTable, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
@@ -1364,7 +1364,8 @@ export class EditorMotionCoordinator {
       const currentRight = ghost.currentClipRight + (ghost.targetClipRight - ghost.currentClipRight) * p
       const windowInstanceId = allocator.allocate(ghost.glyphIds)
       motionGlyphWindows.push({
-        sourceKind: 'old',
+        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceKind 替代硬编码 'old'
+        sourceKind: ghost.sourceKind,
         utf16Start: ghost.utf16Start,
         utf16End: ghost.utf16End,
         clipLeft: currentLeft,
@@ -1377,12 +1378,14 @@ export class EditorMotionCoordinator {
         glyphHeight: ghost.glyphHeight,
         offsetX: ghost.offsetX,
         offsetY: ghost.offsetY,
-        runId: `old-${ghost.sourceRevision}`,
+        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceRunId 替代硬编码 `old-${ghost.sourceRevision}`
+        runId: ghost.sourceRunId,
         sourceRevision: ghost.sourceRevision,
         glyphIds: ghost.glyphIds,
         windowId: ghost.windowId,
         windowInstanceId: windowInstanceId,
-        renderNodeKey: `old-${ghost.sourceRevision}-${windowInstanceId}`,
+        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceKind 替代硬编码 'old'
+        renderNodeKey: `${ghost.sourceKind}-${ghost.sourceRevision}-${windowInstanceId}`,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: ghost.glyphX + ghost.offsetX,
@@ -1588,11 +1591,15 @@ export class EditorMotionCoordinator {
       )]
     }
 
-    // 将 uncoveredIds 按源 UTF-16 范围的连续性分组
-    // 相邻的 glyphId（源范围首尾相接）归为同一组
+    // Issue #879 复核评论6084803105 问题3：按源+目标 UTF-16 范围的连续性分组。
+    // 不再只按源 range 相邻分组——还要检查目标 range 是否相邻。
+    // - (b) 类 glyph（新版仍存在）：只有源 range 相邻且目标 range 相邻才合并为一组
+    // - (c) 类 glyph（新版已删除）：单独成组，不与 (b) 类混合
     const groups: string[][] = []
     let currentGroup: string[] = []
-    let currentGroupEnd = -1
+    let currentGroupSourceEnd = -1
+    let currentGroupTargetEnd = -1
+    let currentGroupHasTarget = false
     for (const gid of uncoveredIds) {
       const range = glyphUtf16Ranges.get(gid)
       if (range === undefined) {
@@ -1602,23 +1609,56 @@ export class EditorMotionCoordinator {
           currentGroup = []
         }
         groups.push([gid])
-        currentGroupEnd = -1
+        currentGroupSourceEnd = -1
+        currentGroupTargetEnd = -1
+        currentGroupHasTarget = false
         continue
       }
       const start = range[0]
       const end = range[1]
+
+      // 查目标 range
+      let targetEntry: GlyphIdentityEntry | null = null
+      if (newIdentityTable !== null) {
+        targetEntry = newIdentityTable.entryByGlyphId(gid)
+      }
+
+      // Issue #879 复核评论6084803105 问题3：(c) 类 glyph（新版已删除）单独成组，
+      // 不与 (b) 类混合。调用方（identifyCarryOverMotionRuns）会跳过 targetResolved=false 的 piece，
+      // identifyCarryOverGhosts 会接管它们。
+      if (targetEntry === null) {
+        // 新版已删除——单独成组
+        if (currentGroup.length > 0) {
+          groups.push(currentGroup)
+          currentGroup = []
+        }
+        groups.push([gid])
+        currentGroupSourceEnd = -1
+        currentGroupTargetEnd = -1
+        currentGroupHasTarget = false
+        continue
+      }
+
+      // (b) 类 glyph（新版仍存在）——检查源 range 和目标 range 是否都与前一个相邻
       if (currentGroup.length === 0) {
         currentGroup = [gid]
-        currentGroupEnd = end
-      } else if (start === currentGroupEnd) {
-        // 相邻——归入当前组
+        currentGroupSourceEnd = end
+        currentGroupTargetEnd = targetEntry.utf16End
+        currentGroupHasTarget = true
+      } else if (start === currentGroupSourceEnd &&
+                 targetEntry.utf16Start === currentGroupTargetEnd &&
+                 currentGroupHasTarget) {
+        // 源 range 相邻且目标 range 相邻——归入当前组
         currentGroup.push(gid)
-        currentGroupEnd = end
+        currentGroupSourceEnd = end
+        currentGroupTargetEnd = targetEntry.utf16End
       } else {
-        // 不相邻——新组
+        // 源 range 不相邻 或 目标 range 不相邻——新组
         groups.push(currentGroup)
         currentGroup = [gid]
-        currentGroupEnd = end
+        currentGroupSourceEnd = end
+        currentGroupTargetEnd = targetEntry.utf16End
+        currentGroupHasTarget = true
       }
     }
     if (currentGroup.length > 0) {
@@ -1680,15 +1720,26 @@ export class EditorMotionCoordinator {
     const pieceGlyphWidth = sourceRect !== null ? sourceRect.width : w.glyphWidth
     const pieceGlyphHeight = sourceRect !== null ? sourceRect.height : w.glyphHeight
 
-    // 冻结 clip：源矩形与原窗口 clip 的交集
-    const pieceClipLeft = Math.max(pieceGlyphX, w.currentClipLeft)
-    const pieceClipRight = Math.min(pieceGlyphX + pieceGlyphWidth, w.currentClipRight)
-    const pieceClipTop = pieceGlyphY
-    const pieceClipBottom = pieceGlyphY + pieceGlyphHeight
+    // Issue #879 复核评论6084803105 问题2：源矩形加冻结偏移得到屏幕坐标再做交集。
+    // sourceRect 是源排版原始坐标，w.currentClipLeft/Right 是屏幕坐标（已移动后的），
+    // w.offsetX/Y 是二者间位移。必须先加偏移再与 currentClip 做交集。
+    const onScreenX = pieceGlyphX + w.offsetX
+    const onScreenY = pieceGlyphY + w.offsetY
+
+    // 冻结 clip：屏幕坐标的源矩形与原窗口 clip 的二维交集
+    const pieceClipLeft = Math.max(onScreenX, w.currentClipLeft)
+    const pieceClipRight = Math.min(onScreenX + pieceGlyphWidth, w.currentClipRight)
+    const pieceClipTop = Math.max(onScreenY, w.clipTop)
+    const pieceClipBottom = Math.min(onScreenY + pieceGlyphHeight, w.clipBottom)
 
     // 偏移：沿用原窗口的 offsetX/Y
     const pieceOffsetX = w.offsetX
     const pieceOffsetY = w.offsetY
+
+    // Issue #879 复核评论6084803105 问题2：子片段 currentPositionX/Y 使用自己的屏幕坐标，
+    // 而非母窗口 w.currentPositionX/Y——同一母窗口被拆为几段时各 piece 的起点不同。
+    const pieceCurrentPositionX = onScreenX
+    const pieceCurrentPositionY = onScreenY
 
     // 目标 UTF-16：用 newIdentityTable 查找该组每个 glyphId 在新版正文中的对应范围
     let targetUtf16Start = -1
@@ -1730,18 +1781,23 @@ export class EditorMotionCoordinator {
       sourceUtf16Start: groupSourceStart,
       sourceUtf16End: groupSourceEnd,
       sourceRect: sourceRect,
+      // Issue #879 复核评论6084803105 问题2：glyphX/Y 保持源排版原始坐标（不加偏移），
+      // 因为 buildFrame 中会用 glyphX + offsetX 来计算屏幕位置。
       glyphX: pieceGlyphX,
       glyphY: pieceGlyphY,
       glyphWidth: pieceGlyphWidth,
       glyphHeight: pieceGlyphHeight,
+      // Issue #879 复核评论6084803105 问题2：clipLeft/Right/Top/Bottom 是屏幕坐标
+      // （加了偏移后的），因为它们要与 currentClipLeft/Right 做交集。
       clipLeft: pieceClipLeft,
       clipRight: pieceClipRight,
       clipTop: pieceClipTop,
       clipBottom: pieceClipBottom,
       offsetX: pieceOffsetX,
       offsetY: pieceOffsetY,
-      currentPositionX: w.currentPositionX,
-      currentPositionY: w.currentPositionY,
+      // Issue #879 复核评论6084803105 问题2：使用子片段自己的屏幕坐标
+      currentPositionX: pieceCurrentPositionX,
+      currentPositionY: pieceCurrentPositionY,
       targetUtf16Start: targetUtf16Start,
       targetUtf16End: targetUtf16End,
       targetResolved: targetResolved,
@@ -1822,6 +1878,9 @@ export class EditorMotionCoordinator {
             glyphIds: piece.glyphIds,
             windowId: w.windowId,
             sourceRevision: w.sourceRevision,
+            // Issue #879 复核评论6084803105 问题1：从原窗口继承 sourceKind/sourceRunId
+            sourceKind: w.sourceKind,
+            sourceRunId: w.runId,
             utf16Start: piece.sourceUtf16Start,
             utf16End: piece.sourceUtf16End,
             currentClipLeft: piece.clipLeft,
@@ -1873,6 +1932,9 @@ export class EditorMotionCoordinator {
           glyphIds: piece.glyphIds,
           windowId: w.windowId,
           sourceRevision: w.sourceRevision,
+          // Issue #879 复核评论6084803105 问题1：从原窗口继承 sourceKind/sourceRunId
+          sourceKind: w.sourceKind,
+          sourceRunId: w.runId,
           utf16Start: piece.sourceUtf16Start,
           utf16End: piece.sourceUtf16End,
           currentClipLeft: piece.clipLeft,
