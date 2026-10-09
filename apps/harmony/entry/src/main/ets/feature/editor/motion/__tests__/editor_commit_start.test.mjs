@@ -292,10 +292,12 @@ test('问题2：多段可见字形——insertRunStartState 保留两段可见 p
   assert.equal(start[0].startClipLeft, 0)
   assert.equal(start[0].startClipRight, 20)
   // 第二段：簇2，间隙（0 宽度）——丙在第一帧不可见，但 piece 存在以便动画逐步吐出
+  // Issue #879 复核评论6080604353 问题2：gap 的 startClipLeft/Right 用 gap 自身在 ownLayout
+  // 中的左边界（丙在 [20,30]，左边界=20），而不是整 run 的 ownRect.x（0）
   assert.equal(start[1].firstIndex, 2)
   assert.equal(start[1].lastIndex, 2)
-  assert.equal(start[1].startClipLeft, 0)
-  assert.equal(start[1].startClipRight, 0)
+  assert.equal(start[1].startClipLeft, 20)
+  assert.equal(start[1].startClipRight, 20)
   assert.deepEqual(start[1].glyphIds, [ids[2]])
   // 第三段：簇3，clip [30, 40]
   assert.equal(start[2].firstIndex, 3)
@@ -782,10 +784,11 @@ test('混合 run：部分旧可见+部分新插入——间隙作为 0 宽度 pi
   assert.equal(start[0].startClipRight, 20)
   assert.deepEqual(start[0].glyphIds, [ids[0], ids[1]])
   // 第二段：簇2..簇3，间隙（0 宽度）
+  // Issue #879 复核评论6080604353 问题2：gap 左边界 = 簇2在 ownLayout 中的 x = 20
   assert.equal(start[1].firstIndex, 2)
   assert.equal(start[1].lastIndex, 3)
-  assert.equal(start[1].startClipLeft, 0)
-  assert.equal(start[1].startClipRight, 0)
+  assert.equal(start[1].startClipLeft, 20)
+  assert.equal(start[1].startClipRight, 20)
   assert.deepEqual(start[1].glyphIds, [ids[2], 'ins-762-3'])
   // 第三段：簇4，可见
   assert.equal(start[2].firstIndex, 4)
@@ -866,10 +869,11 @@ test('混合 run：旧可见+尾部新插入——尾部间隙作为 0 宽度 pi
   assert.equal(start[0].startClipRight, 20)
   assert.deepEqual(start[0].glyphIds, [ids[0], ids[1]])
   // 第二段：簇2..簇3，尾部间隙（0 宽度）
+  // Issue #879 复核评论6080604353 问题2：尾部 gap 左边界 = 簇2在 ownLayout 中的 x = 20
   assert.equal(start[1].firstIndex, 2)
   assert.equal(start[1].lastIndex, 3)
-  assert.equal(start[1].startClipLeft, 0)
-  assert.equal(start[1].startClipRight, 0)
+  assert.equal(start[1].startClipLeft, 20)
+  assert.equal(start[1].startClipRight, 20)
   assert.deepEqual(start[1].glyphIds, ['ins-764-2', 'ins-764-3'])
 })
 

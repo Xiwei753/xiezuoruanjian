@@ -373,6 +373,16 @@ export interface MotionGlyphWindow {
   currentPositionX: number
   /** 当前帧的字形位置 y（含 offset，vp）——连续编辑时作为下一动画起点而非旧版整字初态位置 */
   currentPositionY: number
+  /**
+   * Issue #879 复核评论6080604353 问题1：该窗口的运动所有权类型。
+   *
+   * 用于 identifyCarryOverGhosts 区分删除残影和正常保留字移动：
+   * - 'deleted'：吞字通道（旧删除 ghost），应被继承为 carryOver ghost
+   * - 'reflow'：保留字移动通道，**不应**被继承为 carryOver ghost
+   * - 'insert'：吐字通道（新插入字），**不应**被继承为 carryOver ghost
+   * - 'carryGhost'：上一帧继承的 carryOver ghost，应继续被继承直到完全消退
+   */
+  motionOwnerKind: 'deleted' | 'reflow' | 'insert' | 'carryGhost'
 }
 
 /**

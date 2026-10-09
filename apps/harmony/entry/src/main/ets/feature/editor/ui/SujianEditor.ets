@@ -738,19 +738,33 @@ export struct SujianEditor {
       this.pushDiagnosticsSnapshot()
       return
     }
-    // Issue #879 最新复核评论问题5：会话切换时丢弃上一会话的待发布事务链和候选——
-    // 旧会话的排版回调（sessionId 不同）不得被新会话复用。
-    if (this.pendingPresentationUpdates.length > 0) {
-      const pendingSessionId = this.pendingPresentationUpdates[0].sessionId
-      if (pendingSessionId !== this.presentationUpdate.sessionId) {
-        this.pendingPresentationUpdates = []
-        this.pendingCandidate = null
-        this.candidateVisualFrame = null
-        this.pendingDisplayData = null
-        this.candidateToken = null
-        // Issue #879 复核评论问题5：跨会话切换时清空源排版记录缓存。
-        this.motionCoordinator.clearSourceLayoutRecords()
-      }
+    // Issue #879 复核评论6080604353 问题5：会话切换检测——
+    // 不管 pending 是否为空，只要 displayedPresentation 的 sessionId 与新 presentationUpdate 不同，
+    // 就是会话切换。旧实现只在 pending 非空时检查，会漏掉 pending 已清空的常见场景。
+    const displayedSessionId = this.displayedPresentation?.sessionId
+    if (displayedSessionId !== undefined && displayedSessionId !== this.presentationUpdate.sessionId) {
+      // 会话切换：原子撤销旧会话的所有状态
+      this.stopActiveAnimation()
+      this.pendingPresentationUpdates = []
+      this.pendingCandidate = null
+      this.candidateVisualFrame = null
+      this.pendingDisplayData = null
+      this.candidateToken = null
+      // 清空排版相关缓存
+      this.styledStringByToken.clear()
+      this.consumedTokens.clear()
+      this.pendingLayoutRequest = null
+      // 清空运动源池和窗口实例
+      this.motionSourcePool.clear()
+      this.motionCoordinator.clearWindowInstances()
+      this.cleanupAllWindowsObservers()
+      // 调用 Coordinator 的 resetForSession 重置所有状态
+      this.motionCoordinator.resetForSession(
+        this.presentationUpdate.sessionId,
+        this.presentationUpdate.layoutSnapshot,
+        []  // 初始无布局，等排版完成后才有
+      )
+      this.pendingFirstCaretRect = null
     }
 
     // Issue #879 复核评论修复（问题1）：同会话内收到新 presentationUpdate 时，

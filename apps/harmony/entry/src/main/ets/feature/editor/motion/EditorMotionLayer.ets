@@ -98,7 +98,7 @@ export class EditorMotionLayer {
     lineLayouts: LineLayout[]
   ): StaticVisibleRange[] {
     // 非动画状态：所有字形归静态层
-    if (!frame.isAnimating || frame.motionKind === MotionKind.None) {
+    if (!frame.isAnimating) {
       if (lineLayouts.length === 0) {
         return []
       }
@@ -146,7 +146,7 @@ export class EditorMotionLayer {
     fullHeight: number
   ): ClipRect[] {
     // 非动画状态：全显示（单个全尺寸矩形）
-    if (!frame.isAnimating || frame.motionKind === MotionKind.None) {
+    if (!frame.isAnimating) {
       return [{ x: 0, y: 0, width: fullWidth, height: fullHeight }]
     }
 
@@ -275,13 +275,14 @@ export class EditorMotionLayer {
    * 判断当前帧是否需要运动层绘制。
    *
    * isAnimating 且 motionGlyphWindows 非空时才需要运动层。
-   * 纯光标移动（CaretMove）不需要运动层——光标直接在静态层上方绘制。
+   *
+   * Issue #879 复核评论6080604353 问题4修复：
+   * 不再因 motionKind===CaretMove 无条件返回 false——新 plan 可能是纯光标移动，
+   * 但 retarget 时继承了尚未吞完的旧删除 ghost，buildFrame 已创建 ghost windows。
+   * 只要 isAnimating 且有 motionGlyphWindows，就需要运动层绘制这些残影。
    */
   static needsMotionLayer(frame: EditorVisualFrame): boolean {
     if (!frame.isAnimating) {
-      return false
-    }
-    if (frame.motionKind === MotionKind.CaretMove) {
       return false
     }
     return frame.motionGlyphWindows.length > 0

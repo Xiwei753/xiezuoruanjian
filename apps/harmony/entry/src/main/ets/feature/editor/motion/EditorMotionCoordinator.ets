@@ -1073,6 +1073,12 @@ export class EditorMotionCoordinator {
           pieceUtf16End = runBoundaries[piece.lastIndex + 1]
           targetLeft = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16Start, run.rect.x)
           targetRight = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16End, run.rect.x + run.rect.width)
+        } else {
+          // Issue #879 复核评论6080604353 问题2coord：fallback 分支用 piece 自身的起始 clip
+          // 作为目标左右边界参考——gap piece 的起始位置应该是 piece 自身的左边界，
+          // 而不是整 run 的左边界。
+          targetLeft = piece.startClipLeft
+          targetRight = piece.startClipRight
         }
         const currentLeft = piece.startClipLeft + (targetLeft - piece.startClipLeft) * p
         const currentRight = piece.startClipRight + (targetRight - piece.startClipRight) * p
@@ -1100,7 +1106,8 @@ export class EditorMotionCoordinator {
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
-          currentPositionY: run.rect.y
+          currentPositionY: run.rect.y,
+          motionOwnerKind: 'insert'
         })
       }
     }
@@ -1151,7 +1158,8 @@ export class EditorMotionCoordinator {
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: run.rect.x,
-          currentPositionY: run.rect.y
+          currentPositionY: run.rect.y,
+          motionOwnerKind: 'deleted'
         })
       }
     }
@@ -1161,14 +1169,22 @@ export class EditorMotionCoordinator {
     //    Issue #879 问题3修复：每个 piece 的 utf16Start/End 按 piece 的
     //    firstIndex/lastIndex 和 clusterBoundaries 计算，不再写整 move 范围。
     //    clipLeft/Right 也按 piece 对应的 oldLayout 几何产生，而非整块 oldRect.width。
+    //    Issue #879 复核评论6080604353 问题3修复：每个 piece 运动到各自的新版目标位置，
+    //    而不是都奔向同一个 move.newRect.x/y。用 newLayout 的 clusterBoundaries
+    //    查出每个 piece 在新布局中的 pieceNewX/pieceNewY/pieceNewWidth。
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
+      // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
+      const newMoveBoundaries = clusterBoundaries(newText, move.newUtf16Start, move.newUtf16End)
       for (const piece of move.pieces) {
         // 计算 piece 的 utf16 范围
         let pieceUtf16Start = move.oldUtf16Start
         let pieceUtf16End = move.oldUtf16End
         let pieceOldLeft = move.oldRect.x
         let pieceOldRight = move.oldRect.x + move.oldRect.width
+        // Issue #879 复核评论6080604353 问题3：每个 piece 运动到各自的新版目标位置
+        let pieceNewX = move.newRect.x
+        let pieceNewY = move.newRect.y
         if (moveBoundaries.length === move.glyphIds.length + 1 &&
             piece.firstIndex >= 0 && piece.lastIndex + 1 < moveBoundaries.length) {
           pieceUtf16Start = moveBoundaries[piece.firstIndex]
@@ -1178,10 +1194,21 @@ export class EditorMotionCoordinator {
             oldLayout, pieceUtf16Start, move.oldRect.x)
           pieceOldRight = EditorMotionCoordinator.xAtOffsetLocal(
             oldLayout, pieceUtf16End, move.oldRect.x + move.oldRect.width)
+          // 用新正文的 clusterBoundaries 计算每个 piece 在新布局中的位置
+          if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+              piece.firstIndex >= 0 && piece.lastIndex + 1 < newMoveBoundaries.length) {
+            const pieceNewUtf16Start = newMoveBoundaries[piece.firstIndex]
+            const pieceNewUtf16End = newMoveBoundaries[piece.lastIndex + 1]
+            pieceNewX = EditorMotionCoordinator.xAtOffsetLocal(
+              newLayout, pieceNewUtf16Start, move.newRect.x)
+            pieceNewY = EditorMotionCoordinator.yAtOffsetLocal(
+              newLayout, pieceNewUtf16Start, move.newRect.y)
+          }
         }
         const pieceOldWidth = pieceOldRight - pieceOldLeft
-        const currentX = piece.startPositionX + (move.newRect.x - piece.startPositionX) * p
-        const currentY = piece.startPositionY + (move.newRect.y - piece.startPositionY) * p
+        // 每个 piece 运动到各自的新版目标位置
+        const currentX = piece.startPositionX + (pieceNewX - piece.startPositionX) * p
+        const currentY = piece.startPositionY + (pieceNewY - piece.startPositionY) * p
         const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
@@ -1195,7 +1222,8 @@ export class EditorMotionCoordinator {
           glyphY: move.oldRect.y,
           glyphWidth: move.oldRect.width,
           glyphHeight: move.oldRect.height,
-          offsetX: currentX - move.oldRect.x,
+          // Issue #879 复核评论6080604353 问题3：offsetX 基于 piece 的旧左边界，而非整 move 的旧左边界
+          offsetX: currentX - pieceOldLeft,
           offsetY: currentY - move.oldRect.y,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
@@ -1206,7 +1234,8 @@ export class EditorMotionCoordinator {
           currentClipLeft: currentX,
           currentClipRight: currentX + pieceOldWidth,
           currentPositionX: currentX,
-          currentPositionY: currentY
+          currentPositionY: currentY,
+          motionOwnerKind: 'reflow'
         })
       }
     }
@@ -1242,9 +1271,10 @@ export class EditorMotionCoordinator {
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: ghost.glyphX + ghost.offsetX,
-        currentPositionY: ghost.glyphY + ghost.offsetY
-      })
-    }
+        currentPositionY: ghost.glyphY + ghost.offsetY,
+        motionOwnerKind: 'carryGhost'
+        })
+      }
 
     // 4. 光标位置：从 caretPath 插值
     let caretX = caretBase.caretX
@@ -1312,16 +1342,16 @@ export class EditorMotionCoordinator {
    *
    * 上一帧仍有非零 clip、且尚未归还静态层的旧窗口作为残影继承到候选 plan。
    * 条件：
-   * - 窗口的 sourceKind === 'old'（旧删除 ghost）
+   * - 窗口的 motionOwnerKind 是 'deleted' 或 'carryGhost'（只继承删除残影和上一帧的 carryGhost）
    * - 窗口的 sourceRevision 不等于新正文 revision（不是本轮新插入的）
    * - 窗口仍有非零 clip 宽度（尚未完全消退）
-   * - 窗口的 glyphIds 不在本轮新 plan 的 run 集合中（不是本轮正在处理的）
+   * - 窗口的 glyphIds 全部不在本轮新 plan 的 run 集合中（是真正的残影）
    *
-   * Issue #879 问题1修复：currentGlyphIds 必须来自本轮新 plan 的
-   * insertRuns/deletedRuns/retainedMoves 的 glyphIds，而不是冻结帧自身的窗口。
-   * 旧实现从 latestDisplayedFrame.motionGlyphWindows 构建 currentGlyphIds，
-   * 然后又遍历同一个数组检查 allGhost——set 就是从这些窗口建立的，
-   * 对任何有非空 glyphIds 的窗口 allGhost 必然 false，ghost 通道实际为空。
+   * Issue #879 复核评论6080604353 问题1修复：
+   * - 增加了 motionOwnerKind 检查——排除 'reflow'（保留字移动）和 'insert'（吐字）类型的窗口
+   *   被误判为 ghost。'reflow' 类型的窗口虽然 sourceKind==='old'，但它们仍存在于新版正文中，
+   *   应该继续平移或回到新版静态层，不应作为 ghost 消退。
+   * - motionOwnerKind 检查在 sourceKind 检查之前（更语义化）。
    *
    * 残影的目标 clip = 零宽度（继续消退到完全隐藏）。
    *
@@ -1339,8 +1369,11 @@ export class EditorMotionCoordinator {
       return ghosts
     }
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      // 只继承旧删除 ghost（sourceKind === 'old' 且 sourceRevision 不是新正文）
-      if (w.sourceKind !== 'old') {
+      // Issue #879 复核评论6080604353 问题1：只继承删除残影和上一帧的 carryGhost——
+      // 不继承 reflow（保留字移动）和 insert（吐字）。
+      // reflow 类型的窗口虽然 sourceKind==='old'，但它们仍存在于新版正文中，
+      // 应该继续平移或回到新版静态层，不应作为 ghost 消退。
+      if (w.motionOwnerKind !== 'deleted' && w.motionOwnerKind !== 'carryGhost') {
         continue
       }
       if (w.sourceRevision === newRevision) {
@@ -1615,6 +1648,21 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 复核评论6080604353 问题3：取 offset 在一行布局里的 y（vp）。
+   *
+   * RetainedMove 通道按 piece 采样时需要计算每个 piece 在新布局中的 y 坐标，
+   * 用于让每个 piece 运动到各自的新版目标行位置（而非整 move 的 newRect.y）。
+   */
+  private static yAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number): number {
+    for (const line of layout) {
+      if (offset >= line.startUtf16 && offset <= line.endUtf16) {
+        return line.y
+      }
+    }
+    return fallback
+  }
+
+  /**
    * easing 函数：三次方缓出。
    * p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
    */
@@ -1848,5 +1896,47 @@ export class EditorMotionCoordinator {
    */
   clearSourceLayoutRecords(): void {
     this.sourceLayoutRecords.clear()
+  }
+
+  /**
+   * Issue #879 复核评论6080604353 问题5：会话切换时重置 Coordinator 状态。
+   *
+   * 清空当前 plan、已提交身份表、源版本缓存、窗口实例 ID。
+   * 安装新会话的初始快照与布局，使 Coordinator 从新会话的静态状态开始工作。
+   *
+   * @param sessionId 新会话 ID
+   * @param snapshot 新会话的初始正文快照
+   * @param layout 新会话的初始行布局
+   */
+  resetForSession(sessionId: number, snapshot: EditorLayoutSnapshot, layout: LineLayout[]): void {
+    this.currentPlan = EditorMotionCoordinator.emptyPlan()
+    this.currentFrame = EditorMotionCoordinator.computeStaticFrame(snapshot, layout, null)
+    this.glyphIdentities = GlyphIdentityTable.create(snapshot.text, snapshot.revision)
+    this.sourceLayoutRecords.clear()
+    this.windowIdAllocator.clear()
+    this.currentSessionId = sessionId
+    // 保存新会话的源排版记录
+    this.sourceLayoutRecords.set(`${sessionId}-${snapshot.revision}`, {
+      revision: snapshot.revision,
+      text: snapshot.text,
+      lineLayouts: layout
+    })
+    // 重置几何和版本身份
+    this.geometryKey = {
+      fontSize: snapshot.fontSize,
+      lineSpacing: snapshot.lineSpacingMultiplier,
+      contentWidth: 0
+    }
+    this.textRevisionKey = {
+      revision: snapshot.revision,
+      generation: snapshot.generation,
+      compositionGeneration: snapshot.compositionGeneration
+    }
+    this.oldSnapshot = snapshot
+    this.oldLayout = layout
+    this.newSnapshot = snapshot
+    this.newLayout = layout
+    this.motionDurationMs = 0
+    this.firstCaretRect = null
   }
 }

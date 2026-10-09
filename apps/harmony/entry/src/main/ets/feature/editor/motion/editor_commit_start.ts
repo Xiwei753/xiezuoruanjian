@@ -482,6 +482,12 @@ export function insertRunStartState(run: RunGeometry, displayed: DisplayedContex
   // 混合 run（部分旧可见+真正新插入）：必须同时包含原可见片段与尚未出现的新片段。
   // visibleGlyphPieces 返回的片段列表可能有间隙（如 piece1 覆盖 index 0-1，piece2 覆盖 index 3-4，
   // 但 index 2 是新插入的字没有被任何 piece 覆盖），这些间隙作为 0 宽度的新 piece 加入。
+  //
+  // Issue #879 复核评论6080604353 问题2：
+  // 间隙 gap piece 的 startClipLeft/Right/startPositionX 必须用 gap 自身在 ownLayout 中的
+  // 真正左边界（通过 clusterBoundaries + xAtOffset 计算），而不是整 run 的 ownRect.x。
+  // 否则混合插入中间/尾部的零宽度 gap piece 从整 run 左端启动，会短暂露出别的字。
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
   const result: RunStartPiece[] = []
   let prevLastIndex = -1
 
@@ -490,12 +496,16 @@ export function insertRunStartState(run: RunGeometry, displayed: DisplayedContex
     if (p.firstIndex > prevLastIndex + 1) {
       const gapFirst = prevLastIndex + 1
       const gapLast = p.firstIndex - 1
+      // gap 自身在 run 布局中的真正左边界，而不是整 run 的 ownRect.x
+      const gapLeft = boundaries.length > 0
+        ? xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+        : run.ownRect.x
       result.push({
         firstIndex: gapFirst,
         lastIndex: gapLast,
-        startClipLeft: run.ownRect.x,
-        startClipRight: run.ownRect.x,
-        startPositionX: run.ownRect.x,
+        startClipLeft: gapLeft,
+        startClipRight: gapLeft,
+        startPositionX: gapLeft,
         startPositionY: run.ownRect.y,
         glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
       })
@@ -517,12 +527,16 @@ export function insertRunStartState(run: RunGeometry, displayed: DisplayedContex
   if (prevLastIndex < run.glyphIds.length - 1) {
     const gapFirst = prevLastIndex + 1
     const gapLast = run.glyphIds.length - 1
+    // 尾部 gap 同样用自身在 run 布局中的真正左边界
+    const gapLeft = boundaries.length > 0
+      ? xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+      : run.ownRect.x
     result.push({
       firstIndex: gapFirst,
       lastIndex: gapLast,
-      startClipLeft: run.ownRect.x,
-      startClipRight: run.ownRect.x,
-      startPositionX: run.ownRect.x,
+      startClipLeft: gapLeft,
+      startClipRight: gapLeft,
+      startPositionX: gapLeft,
       startPositionY: run.ownRect.y,
       glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
     })
