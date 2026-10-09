@@ -10,7 +10,7 @@
 import { strict as assert } from 'node:assert'
 import { utf16ToUtf8 } from '../../input/text_offset_mapper.ts'
 import { applyPatchesToText, toUtf16CarryPatches } from '../editor_patch_carry.ts'
-import { GlyphIdentityTable, windowIdForGlyphIds } from '../editor_glyph_identity.ts'
+import { GlyphIdentityTable, windowIdForGlyphIds, clusterBoundaries } from '../editor_glyph_identity.ts'
 import { RevisionPositionMap } from '../editor_revision_position_map.ts'
 
 let passed = 0
@@ -293,11 +293,63 @@ test('windowId: 覆盖簇数不同则窗口身份不同', () => {
   assert.notEqual(windowIdForGlyphIds(first), windowIdForGlyphIds(all))
 })
 
+test('windowId: 首簇相同、数量相同的不同序列不碰撞（Issue #879 复核问题4）', () => {
+  // 旧实现 win-<首簇>x<数量> 会让 [A,B,C] 与 [A,D,E] 撞成同一个 ID。
+  const t = GlyphIdentityTable.create('甲乙丙丁戊', 46)
+  const abc = t.idsForRange(0, 3).map((e) => e.glyphId)
+  const ade = t.idsForRange(4, 5).map((e) => e.glyphId)
+  const sameFirst = [abc[0], ade[0], abc[2]]
+  assert.equal(abc.length, sameFirst.length)
+  assert.equal(abc[0], sameFirst[0])
+  assert.notEqual(windowIdForGlyphIds(abc), windowIdForGlyphIds(sameFirst))
+})
+
+test('windowId: 长度前缀编码能从 id 唯一还原完整序列', () => {
+  const ids = ['orig-1-0', 'ins-2-3', 'orig-1-9']
+  const decoded = []
+  const encoded = windowIdForGlyphIds(ids)
+  const body = encoded.substring(encoded.indexOf('-', 4) + 1)
+  let cursor = 0
+  while (cursor < body.length) {
+    const colon = body.indexOf(':', cursor)
+    const size = Number.parseInt(body.substring(cursor, colon), 10)
+    decoded.push(body.substring(colon + 1, colon + 1 + size))
+    cursor = colon + 1 + size
+  }
+  assert.deepEqual(decoded, ids)
+})
+
 test('windowId: 空集合与组件 id 安全性', () => {
-  assert.equal(windowIdForGlyphIds([]), 'win-empty')
   const t = GlyphIdentityTable.create('甲乙', 43)
   const id = windowIdForGlyphIds(t.idsForRange(0, 2).map((e) => e.glyphId))
-  assert.match(id, /^[A-Za-z0-9-]+$/)
+  // 组件 id / ForEach key 允许字母数字、'-' 与长度分隔符 ':'
+  assert.match(id, /^[A-Za-z0-9:-]+$/)
+  // 空序列在生产路径不可达：身份表不可用时 Planner 会退回内容 hash 单元素列表，
+  // 因此这里只是一个稳定的哨兵值，不会被当成窗口节点身份使用。
+  assert.equal(windowIdForGlyphIds([]), 'win-empty')
+})
+
+test('entryByGlyphId: 按身份反查在屏正文区间', () => {
+  const t = GlyphIdentityTable.create('甲乙丙', 44)
+  const id = t.glyphIdAt(2)
+  const entry = t.entryByGlyphId(id)
+  assert.notEqual(entry, null)
+  assert.equal(entry.utf16Start, 2)
+  assert.equal(entry.utf16End, 3)
+  // 不在这份正文里的字（尚未上屏的新字）返回 null
+  assert.equal(t.entryByGlyphId('ins-999-0'), null)
+})
+
+test('clusterBoundaries: 与身份表分簇一致（emoji 整体一簇）', () => {
+  const text = 'a👨‍👩‍👧b'
+  const boundaries = clusterBoundaries(text, 0, text.length)
+  assert.equal(boundaries[0], 0)
+  assert.equal(boundaries[boundaries.length - 1], text.length)
+  // 'a' + 家庭 emoji（含 ZWJ）+ 'b' = 3 簇
+  assert.equal(boundaries.length - 1, 3)
+  // 与身份表条目一一对应
+  const table = GlyphIdentityTable.create(text, 45)
+  assert.equal(table.entries.length, boundaries.length - 1)
 })
 
 test('withRevision: 正文不变时沿用同一份身份，只推进 revision 标签', () => {

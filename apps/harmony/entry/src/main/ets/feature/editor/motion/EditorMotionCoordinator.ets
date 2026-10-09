@@ -34,9 +34,9 @@
 //
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
-import { EditorMotionPlan, EditorMotionPlanner, WindowMatchResult } from './EditorMotionPlanner'
+import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout, CaretRect } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
@@ -45,6 +45,10 @@ import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMo
 import type { GlyphCarryPatch } from './editor_patch_carry'
 import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable } from './editor_glyph_identity'
+import {
+  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState,
+  deletedRunStartState, insertRunStartState, retainedMoveStartState
+} from './editor_commit_start'
 
 /**
  * Issue #879 最新复核评论问题4：prepareCandidate 的返回类型。
@@ -60,6 +64,22 @@ export interface PreparedCandidate {
   readonly startFrame: EditorVisualFrame
   /** 候选提交状态——commitCandidate 一次性安装（内部数据，UI 不要读） */
   readonly state: MotionCommittedState
+}
+
+/**
+ * Issue #879 复核评论6075662695问题3：提交瞬间的「在屏」上下文。
+ *
+ * retargetCandidate 用它按字形重算起始 clip/position——
+ * 必须是**提交那一刻**真实显示的正文、布局和身份表，
+ * 而不是 prepareCandidate 时刻的快照（候选等待期间旧动画可能已经推进/结束）。
+ */
+export interface DisplayedSnapshotContext {
+  /** 提交瞬间正在显示的正文快照（链基准 revision） */
+  readonly snapshot: EditorLayoutSnapshot
+  /** 提交瞬间正在显示的行布局 */
+  readonly layout: LineLayout[]
+  /** 描述在屏正文的字形身份表；null 表示身份不可信 */
+  readonly identities: GlyphIdentityTable | null
 }
 
 /**
@@ -264,73 +284,72 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 复核评论修复（问题3）：重定向候选——用最新冻结帧的
-   * clip / position / 光标起点替换候选 plan 里过时的起始状态。
+   * Issue #879 复核评论6075662695问题3：重定向候选——按**提交瞬间**的真实在屏状态
+   * 重算起始 clip / position / 光标起点，替换候选 plan 里过时的起始状态。
    *
    * 在 executeDisplaySwitch 中（窗口 ready 后才调）：
    * 先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame →
    * 调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
    *
-   * 旧 animator 被取消时 displayedVisualFrame 停在某一中间进度，其
-   * MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 与 caretX/Y 反映真实屏幕状态。
-   * 候选 plan 的起始值是在 prepareCandidate 阶段用 displayedFrameForCandidate（当时帧）
-   * 计算的——但实际提交时旧 animator 已推进，屏幕状态已变。
-   * retargetCandidate 用冻结帧的真实值替换候选 plan 的起始值：
-   * - 吐字/吞字窗口起点 clip；
-   * - 保留字平移起点 position；
-   * - 光标轨迹首段起点。
-   * 确保新动画从真实屏幕状态接续，而非从过时的起始状态跳变或倒跳。
+   * 起点不是「抄旧窗口的绝对 clip/position」，而是按字形逐个判定可见性后
+   * 换算到 run 自己的布局坐标（见 editor_commit_start）：
+   * - 被冻结窗口覆盖的字形：可见区间 = 字形在屏区间 ∩ 窗口 clip；
+   * - 没被任何窗口覆盖的字形：displayed 主文本静态绘制 → 完整可见
+   *   （旧动画自然结束后没有运动窗口，这一条给出真正的静态完整状态，不会倒跳）；
+   * - 保留字平移：起点按可见字形交集做局部校正，让第一个仍可见的字形停在原处；
+   * - 光标轨迹首段起点同样以冻结帧为准。
    *
    * @param prepared prepareCandidate 返回的不可变候选
    * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame（旧 animator 停止后的真实帧）
+   * @param displayed 提交瞬间正在显示的正文/布局/身份表；null 时保留 plan 起点
    * @returns 重定向后的新候选
    */
-  retargetCandidate(prepared: PreparedCandidate, latestDisplayedFrame: EditorVisualFrame): PreparedCandidate {
-    // Issue #879 复核评论问题4：构建 glyphId → frozen window 映射，
-    // 用于按字形身份列表逐个查找冻结帧中的当前状态。
-    // 不再仅用窗口首字符簇身份匹配——用 glyphIds 交集最大匹配。
-    const frozenByGlyphId: Map<string, MotionGlyphWindow> = new Map()
-    for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      for (const gid of w.glyphIds) {
-        frozenByGlyphId.set(gid, w)
-      }
+  retargetCandidate(
+    prepared: PreparedCandidate,
+    latestDisplayedFrame: EditorVisualFrame,
+    displayed: DisplayedSnapshotContext | null
+  ): PreparedCandidate {
+    if (prepared.plan.durationMs <= 0) {
+      // 无动画（动效关闭 / 时长为 0）：候选起始帧已经是静态终态帧。
+      // 不能再用 buildFrame(progress=0) 重建一个「动画中」的裁切帧——
+      // 没有 animator 会推进它，主 Text 会停在半裁切状态。
+      return prepared
     }
+    // Issue #879 复核评论6075662695问题3：起始状态改为**按字形重算**——
+    // 由 editor_commit_start 逐个 glyphId 判断它此刻在屏可见不可见、在哪里，
+    // 再把可见段换算成 run 自己布局里的 startClip/startPosition。
+    // 不再「找到交集最多的旧窗口 → 抄它的绝对 clip/position」，
+    // 因此旧窗口被折行拆段、目标窗口更短、或旧动画已结束（无运动窗口）都不会多露字/倒跳。
+    //
+    // 上下文用提交瞬间的真实 displayed 正文 + 布局 + 身份表；
+    // 身份表缺失或 revision 对不上（链基准已移动）时不猜几何，保留 plan 里的起点。
+    const context: DisplayedContext | null = EditorMotionCoordinator.commitDisplayedContext(
+      prepared, latestDisplayedFrame, displayed
+    )
 
-    // 深拷贝 plan，替换起始值
-    // Issue #879 复核评论问题3：不再直接复用旧窗口的 currentClipLeft/Right——
-    // 当原窗口跨折行被拆成多窗口、旧窗口只剩一部分字仍属于新窗口，或 x/y 因重排变化时，
-    // 旧整个窗口的裁切范围并不对应新窗口内同一段字的可见范围。
-    // 改为按 per-piece 局部几何计算 startClip/targetClip/startPosition：
-    // - 完全匹配（所有 glyphIds 都在 frozen 窗口中）：用 frozen 的 currentClip
-    // - 部分匹配：用 frozen 的 currentClipLeft 作为起点（零宽度）
-    // - 无 frozen 窗口（旧帧已静态化）：起点来自最新 displayed 的完整静态 glyph 矩形
     const newInsertRuns: InsertRun[] = []
     for (const run of prepared.plan.insertRuns) {
-      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
-      let startClipLeft: number
-      let startClipRight: number
-      if (match !== undefined && match.isFullMatch) {
-        // 完全匹配——用 frozen 的 currentClip
-        startClipLeft = match.window.currentClipLeft
-        startClipRight = match.window.currentClipRight
-      } else if (match !== undefined) {
-        // 部分匹配——从 frozen 的左边界开始（零宽度），不直接复用整个窗口的裁切范围
-        startClipLeft = match.window.currentClipLeft
-        startClipRight = match.window.currentClipLeft
-      } else {
-        // 旧帧已静态化（没有运动窗口）——起点来自最新 displayed 的完整静态 glyph 矩形
-        // 对于 InsertRun：零宽度起点（rect.x）
-        startClipLeft = run.rect.x
-        startClipRight = run.rect.x
-      }
+      const start: RunStartState = context === null
+        ? {
+            startClipLeft: run.startClipLeft,
+            startClipRight: run.startClipRight,
+            startPositionX: run.rect.x,
+            startPositionY: run.rect.y
+          }
+        : insertRunStartState(
+            EditorMotionCoordinator.runGeometry(
+              run.glyphIds, prepared.state.newSnapshot.text, run.utf16Start, run.utf16End, run.rect,
+              prepared.state.newLayout
+            ),
+            context
+          )
       newInsertRuns.push({
         utf16Start: run.utf16Start,
         utf16End: run.utf16End,
         sourceKind: run.sourceKind,
         rect: run.rect,
-        startClipLeft: startClipLeft,
-        startClipRight: startClipRight,
+        startClipLeft: start.startClipLeft,
+        startClipRight: start.startClipRight,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -338,33 +357,34 @@ export class EditorMotionCoordinator {
 
     const newDeletedRuns: DeletedRun[] = []
     for (const run of prepared.plan.deletedRuns) {
-      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      // Issue #879 复核评论问题3：按 per-piece 局部几何计算 startClip
-      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
-      let startClipLeft: number
-      let startClipRight: number
-      if (match !== undefined && match.isFullMatch) {
-        // 完全匹配——用 frozen 的 currentClip
-        startClipLeft = match.window.currentClipLeft
-        startClipRight = match.window.currentClipRight
-      } else if (match !== undefined) {
-        // 部分匹配——从 frozen 的左边界开始（零宽度）
-        startClipLeft = match.window.currentClipLeft
-        startClipRight = match.window.currentClipLeft
-      } else {
-        // 旧帧已静态化（没有运动窗口）——起点来自最新 displayed 的完整静态 glyph 矩形
-        // 对于 DeletedRun：完整宽度起点（rect.x 到 rect.x + rect.width）
-        startClipLeft = run.rect.x
-        startClipRight = run.rect.x + run.rect.width
-      }
+      // 已经全被吞掉（起点＝终点）时塌到该 run 的目标边缘：
+      // Forward Delete 塌到光标，Backspace 塌到 run 左边界——与 buildFrame 的目标一致。
+      const collapseX = run.isForward
+        ? latestDisplayedFrame.caretX
+        : run.rect.x
+      const start: RunStartState = context === null
+        ? {
+            startClipLeft: run.startClipLeft,
+            startClipRight: run.startClipRight,
+            startPositionX: run.rect.x,
+            startPositionY: run.rect.y
+          }
+        : deletedRunStartState(
+            EditorMotionCoordinator.runGeometry(
+              run.glyphIds, prepared.state.oldSnapshot.text, run.utf16Start, run.utf16End, run.rect,
+              prepared.state.oldLayout
+            ),
+            context,
+            collapseX
+          )
       newDeletedRuns.push({
         utf16Start: run.utf16Start,
         utf16End: run.utf16End,
         sourceKind: run.sourceKind,
         rect: run.rect,
         isForward: run.isForward,
-        startClipLeft: startClipLeft,
-        startClipRight: startClipRight,
+        startClipLeft: start.startClipLeft,
+        startClipRight: start.startClipRight,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -372,20 +392,28 @@ export class EditorMotionCoordinator {
 
     const newRetainedMoves: RetainedMove[] = []
     for (const move of prepared.plan.retainedMoves) {
-      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      // Issue #879 复核评论问题3：旧帧已静态化时起点来自 oldRect 而非 prepared plan 中过期的 startPosition
-      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, move.glyphIds)
-      let startPositionX: number
-      let startPositionY: number
-      if (match !== undefined) {
-        // 有 frozen 窗口（完全或部分匹配）——用 frozen 的 currentPosition
-        startPositionX = match.window.currentPositionX
-        startPositionY = match.window.currentPositionY
-      } else {
-        // 旧帧已静态化（没有运动窗口）——起点来自 oldRect（完整静态 glyph 矩形）
-        startPositionX = move.oldRect.x
-        startPositionY = move.oldRect.y
-      }
+      // 起点按字形交集校正：让第一个仍可见的字形停在它此刻在屏的位置上。
+      // 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 保留 run 自己的位置。
+      const start: RunStartState = context === null
+        ? {
+            startClipLeft: move.oldRect.x,
+            startClipRight: move.oldRect.x + move.oldRect.width,
+            startPositionX: move.startPositionX,
+            startPositionY: move.startPositionY
+          }
+        : retainedMoveStartState(
+            EditorMotionCoordinator.runGeometry(
+              move.glyphIds, prepared.state.oldSnapshot.text, move.oldUtf16Start, move.oldUtf16End,
+              move.oldRect, prepared.state.oldLayout
+            ),
+            context,
+            {
+              startClipLeft: move.oldRect.x,
+              startClipRight: move.oldRect.x + move.oldRect.width,
+              startPositionX: move.oldRect.x,
+              startPositionY: move.oldRect.y
+            }
+          )
       newRetainedMoves.push({
         oldUtf16Start: move.oldUtf16Start,
         oldUtf16End: move.oldUtf16End,
@@ -394,8 +422,8 @@ export class EditorMotionCoordinator {
         sourceKind: move.sourceKind,
         oldRect: move.oldRect,
         newRect: move.newRect,
-        startPositionX: startPositionX,
-        startPositionY: startPositionY,
+        startPositionX: start.startPositionX,
+        startPositionY: start.startPositionY,
         glyphIds: move.glyphIds,
         windowId: move.windowId
       })
@@ -1070,41 +1098,63 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 frozenByGlyphId，
-   * 取交集最大的窗口作为匹配——不再仅靠窗口首字符簇身份匹配。
+   * Issue #879 复核评论6075662695问题3：组装提交瞬间的「在屏」上下文。
    *
-   * Issue #879 复核评论问题3：返回 WindowMatchResult 而非裸窗口——
-   * 调用方需要知道是完全匹配还是部分匹配，以决定 startClip 的取值方式。
+   * 上下文 = 提交瞬间真实的 displayed 正文 + 布局 + 身份表 + 冻结帧的运动窗口。
+   * 身份表缺失、或者 displayed 的 revision 与候选链基准不一致（链基准已移动）时
+   * 返回 null——此时不猜几何，调用方保留 plan 里的起点。
+   *
+   * 冻结帧已经没有运动窗口（旧动画正常结束）是**合法**情况：
+   * 此时 empty windows 表示 displayed 正文全部静态可见，
+   * 起点由 displayed 布局的真实字形几何给出，而不是 prepareCandidate 时刻的半裁切值。
    */
-  private static findBestMatchFrozenWindow(
-    frozenByGlyphId: Map<string, MotionGlyphWindow>,
-    glyphIds: string[]
-  ): WindowMatchResult | undefined {
-    if (glyphIds.length === 0) {
-      return undefined
+  private static commitDisplayedContext(
+    prepared: PreparedCandidate,
+    latestDisplayedFrame: EditorVisualFrame,
+    displayed: DisplayedSnapshotContext | null
+  ): DisplayedContext | null {
+    if (displayed === null || displayed.identities === null) {
+      return null
     }
-    const windowHitCount: Map<MotionGlyphWindow, number> = new Map()
-    for (const gid of glyphIds) {
-      const w = frozenByGlyphId.get(gid)
-      if (w !== undefined) {
-        windowHitCount.set(w, (windowHitCount.get(w) ?? 0) + 1)
-      }
+    if (displayed.snapshot.revision !== prepared.state.oldSnapshot.revision) {
+      return null
     }
-    let bestWindow: MotionGlyphWindow | undefined = undefined
-    let bestCount = 0
-    windowHitCount.forEach((count: number, w: MotionGlyphWindow): void => {
-      if (count > bestCount) {
-        bestWindow = w
-        bestCount = count
-      }
-    })
-    if (bestWindow === undefined) {
-      return undefined
+    const frozenWindows: FrozenWindowSpan[] = []
+    for (const w of latestDisplayedFrame.motionGlyphWindows) {
+      frozenWindows.push({
+        glyphIds: w.glyphIds,
+        clipLeft: w.currentClipLeft,
+        clipRight: w.currentClipRight,
+        offsetX: w.offsetX,
+        offsetY: w.offsetY
+      })
     }
     return {
-      window: bestWindow,
-      matchedCount: bestCount,
-      isFullMatch: bestCount === glyphIds.length
+      text: displayed.snapshot.text,
+      layout: displayed.layout,
+      identities: displayed.identities,
+      frozenWindows: frozenWindows
+    }
+  }
+
+  /**
+   * Issue #879 复核评论6075662695问题3：组装一个 run 参与起始状态计算的几何信息。
+   */
+  private static runGeometry(
+    glyphIds: string[],
+    ownText: string,
+    ownUtf16Start: number,
+    ownUtf16End: number,
+    ownRect: GlyphRect,
+    ownLayout: LineLayout[]
+  ): RunGeometry {
+    return {
+      glyphIds: glyphIds,
+      ownText: ownText,
+      ownUtf16Start: ownUtf16Start,
+      ownUtf16End: ownUtf16End,
+      ownRect: ownRect,
+      ownLayout: ownLayout
     }
   }
 
@@ -1188,6 +1238,17 @@ export class EditorMotionCoordinator {
    */
   getCurrentFrame(): EditorVisualFrame {
     return this.currentFrame
+  }
+
+  /**
+   * Issue #879 复核评论6075662695问题3：获取描述**当前已提交（在屏）正文**的字形身份表。
+   *
+   * 候选提交瞬间的位置重算要用它把 run 携带的 glyphId 映射回在屏正文的 UTF-16 区间。
+   * 表描述的是 currentFrame 对应的 revision：候选准备期间不推进，
+   * 提交后（applyCommittedState）才换成新版本的表。
+   */
+  getCommittedIdentities(): GlyphIdentityTable | null {
+    return this.glyphIdentities
   }
 
   // ── 私有方法 ──

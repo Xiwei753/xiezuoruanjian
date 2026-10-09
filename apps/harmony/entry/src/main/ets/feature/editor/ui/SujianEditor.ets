@@ -59,7 +59,7 @@ import hilog from '@ohos.hilog'
 import { EditorPresentationUpdate } from '../motion/EditorPresentationUpdate'
 import { EditorVisualFrame } from '../motion/EditorVisualFrame'
 import { EditorMotionPolicy, MotionMode } from '../motion/EditorMotionPolicy'
-import { EditorMotionCoordinator, PreparedCandidate } from '../motion/EditorMotionCoordinator'
+import { EditorMotionCoordinator, DisplayedSnapshotContext, PreparedCandidate } from '../motion/EditorMotionCoordinator'
 import { RevisionPositionMap, PositionMapStep } from '../motion/editor_revision_position_map'
 import { EditorMotionLayer, ClipRect, MotionTextOverlayBuilder, MotionTextOverlayParams, MotionWindowSource } from '../motion/EditorMotionLayer'
 // Issue #879 最新复核评论修复（问题1）：EditorEditResult 用于收集事务链。
@@ -101,11 +101,14 @@ interface PendingDisplayData {
 /**
  * Issue #879 复核评论修复（问题1）：候选 token——标识一次候选的完整身份。
  *
- * pendingCandidate、pendingDisplayData、pendingAnimationDurationMs 归属于同一个 candidateToken。
+ * pendingCandidate、pendingDisplayData、durationMs 归属于同一个 candidateToken。
  * 每次收到同会话的新 presentationUpdate，立刻使旧候选失效并释放其独占 staging 窗口，
  * 但保留从 displayed revision 开始的全部 pendingPresentationUpdates 事务链。
- * attachWindowLayoutObserver 的回调携带候选 token，只有 token 匹配时才可 commit。
- * executeDisplaySwitch(expectedToken) 提交前再次核对身份。
+ *
+ * Issue #879 复核评论6075662695问题2：**等待状态挂在候选自己身上**——
+ * 启动动画的时长放在 token 里，不再用一个会被多个窗口回调抢占的全局
+ * pendingAnimationDurationMs。窗口 layout 回调只能推进「属于当前候选帧」的窗口，
+ * 旧 displayed / 旧候选窗口的回调既不能提交版本，也不能吞掉新候选的启动时长。
  */
 interface CandidateToken {
   /** Core 编辑会话 ID */
@@ -116,6 +119,8 @@ interface CandidateToken {
   layoutToken: number
   /** 候选 generation（每次创建新候选递增） */
   generation: number
+  /** 候选自己的动画时长（窗口 ready 后用它启动 animator；0 = 无动画） */
+  durationMs: number
 }
 
 @Component
@@ -213,17 +218,14 @@ export struct SujianEditor {
   // Text.onDisAppear 中通过 onWindowDisappear 回调通知 SujianEditor 清理 observer 和窗口状态。
   private windowLayoutObservers: Map<string, inspector.ComponentObserver> = new Map()
   private windowLayoutCallbacks: Map<string, () => void> = new Map()
-  // Issue #879 最新复核评论修复（问题3）：pending 动画时长——
-  // 窗口未 layoutReady 时暂存动画时长，等所有窗口 ready 后在 layout 回调中启动动画。
-  private pendingAnimationDurationMs: number = 0
   // Issue #879 本轮复核评论修复（问题4）：两阶段发布——pending 显示切换数据。
   // 运动窗口 layoutReady 之前不切换主 Text/静态遮罩，暂存切换数据，
   // 等窗口 ready 后在 executeDisplaySwitch 中统一执行。
   private pendingDisplayData: PendingDisplayData | null = null
   // Issue #879 复核评论修复（问题1）：候选 token——标识当前候选的完整身份。
-  // pendingCandidate、pendingDisplayData、pendingAnimationDurationMs 归属于同一个 candidateToken。
+  // pendingCandidate、pendingDisplayData、候选动画时长归属于同一个 candidateToken。
   // 每次收到同会话的新 presentationUpdate，立刻使旧候选失效，但保留 pendingPresentationUpdates 事务链。
-  // attachWindowLayoutObserver 的回调携带候选 token，只有 token 匹配时才可 commit。
+  // 提交走 tryCommitCandidate：token 只用于身份核对，窗口回调按「是否属于当前候选帧」判定归属。
   private candidateToken: CandidateToken | null = null
   // Issue #879 复核评论修复（问题1）：候选 generation——每次创建新候选递增。
   // 用于 CandidateToken.generation 字段，确保每次候选有唯一身份。
@@ -418,7 +420,6 @@ export struct SujianEditor {
     this.motionSourcePool.clear()
     // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver。
     this.cleanupAllWindowsObservers()
-    this.pendingAnimationDurationMs = 0
     this.pendingFirstCaretRect = null
     // Issue #879 复核评论修复（问题1）：清空 token→StyledString 映射。
     this.styledStringByToken.clear()
@@ -720,7 +721,6 @@ export struct SujianEditor {
       this.motionSourcePool.clear()
       // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver 和回调。
       this.cleanupAllWindowsObservers()
-      this.pendingAnimationDurationMs = 0
       this.pendingFirstCaretRect = null
       // Issue #879 本轮复核评论修复（问题4）：会话切换时清空 pendingDisplayData。
       this.pendingDisplayData = null
@@ -739,21 +739,20 @@ export struct SujianEditor {
         this.pendingCandidate = null
         this.candidateVisualFrame = null
         this.pendingDisplayData = null
-        this.pendingAnimationDurationMs = 0
         this.candidateToken = null
       }
     }
 
     // Issue #879 复核评论修复（问题1）：同会话内收到新 presentationUpdate 时，
-    // 立刻使旧候选失效——丢弃 pendingCandidate/pendingDisplayData/pendingAnimationDurationMs
+    // 立刻使旧候选失效——丢弃 pendingCandidate/pendingDisplayData 与候选自己的等待状态
     // 与旧候选 token，并释放它独占的 staging 窗口；
     // 但保留 pendingPresentationUpdates 事务链（从 displayed revision 开始的全部事务）。
-    // 旧候选的窗口布局回调携带旧 candidateToken，token 不匹配时无权消费新链。
+    // 旧候选的窗口布局回调不再携带 token；候选帧被丢弃后它对不上任何窗口，
+    // tryCommitCandidate 也会因 candidateToken/pendingDisplayData 为空而拒绝提交。
     if (this.pendingCandidate !== null && this.candidateToken !== null) {
       this.pendingCandidate = null
       this.candidateVisualFrame = null
       this.pendingDisplayData = null
-      this.pendingAnimationDurationMs = 0
       // 旧候选 token 一并作废——只有 onPendingLayoutReady 为最新 revision 准备出的候选
       // 才能重新拿到 token，旧回调永远对不上。
       this.candidateToken = null
@@ -880,7 +879,7 @@ export struct SujianEditor {
   // 6. 不调 updateStaticClipCommands()（保持全尺寸矩形，不裁切）
   // 7. 暂存 pendingDisplayData
   // 8. 如果有动画且窗口已 ready → 立即执行显示切换 + 启动动画
-  // 9. 如果有动画但窗口未 ready → 暂存 pendingAnimationDurationMs，等窗口 ready
+  // 9. 如果有动画但窗口未 ready → 等待属于本候选的窗口 layout 回调再提交（时长在 token 上）
   // 10. 如果无动画 → 立即执行显示切换
   //
   // Issue #879 复核评论修复（问题3）：本阶段不停旧 animator——保持旧 animator 运行。
@@ -888,8 +887,8 @@ export struct SujianEditor {
   // 不会在候选准备阶段停顿。只有 executeDisplaySwitch（窗口 ready 后才调）才停旧 animator、
   // 冻结真实屏幕帧并用 retargetCandidate 把候选起点对齐到该帧。
   //
-  // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份。
-  // attachWindowLayoutObserver 的回调携带 token，只有 token 匹配时才可 commit。
+  // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份；
+  // 提交由 tryCommitCandidate 兜底（窗口 layout 回调与候选准备流程共用同一入口）。
   private onPendingLayoutReady(token: number, lineLayouts: LineLayout[], firstCaretRect?: CaretRect): void {
     // Issue #879 复核评论修复（问题3）：要求 pendingPresentationUpdates 非空才消费。
     if (token !== this.pendingLayoutToken || this.pendingPresentationUpdates.length === 0) {
@@ -950,14 +949,20 @@ export struct SujianEditor {
     this.pendingCandidate = prepared
     this.candidateVisualFrame = prepared.startFrame
 
-    // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份。
-    // attachWindowLayoutObserver 的回调携带 token，只有 token 匹配时才可 commit。
+    // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份，
+    // 提交前由 executeDisplaySwitch 核对 generation/session/revision/layoutToken。
     this.candidateGeneration++
+    // Issue #879 复核评论6075662695问题2：等启动时长挂在候选自己身上（token.durationMs），
+    // 不再写全局 pendingAnimationDurationMs——旧窗口回调无法吞掉新候选的启动时长。
+    // 注意：prepareCandidate 不修改 Coordinator 的 currentPlan，所以不能用
+    // motionCoordinator.isAnimating()/getCurrentPlan().durationMs 判断候选动画状态，
+    // 只能用 prepared.plan.durationMs。
     this.candidateToken = {
       sessionId: latestUpdate.sessionId,
       revision: latestUpdate.layoutSnapshot.revision,
       layoutToken: token,
-      generation: this.candidateGeneration
+      generation: this.candidateGeneration,
+      durationMs: prepared.plan.durationMs
     }
 
     // Issue #879 本轮复核评论修复（问题4）：步骤6——准备运动源。
@@ -973,26 +978,11 @@ export struct SujianEditor {
       newStyledString: this.newStyledString,
     } as PendingDisplayData
 
-    // Issue #879 最新复核评论修复（问题4）：步骤8——根据候选 plan 的动画状态决定执行路径。
-    // 注意：prepareCandidate 不修改 Coordinator 的 currentPlan，所以不能用
-    // motionCoordinator.isAnimating() 或 getCurrentPlan().durationMs 判断候选状态——
-    // 它们仍反映旧状态。改用 prepared.plan 判断候选的动画状态。
-    const candidateDurationMs = prepared.plan.durationMs
-    if (candidateDurationMs > 0) {
-      if (this.allMotionWindowsReady()) {
-        // 所有窗口已 ready——先执行显示切换，再启动动画。
-        // 只有切换真的提交了才启动动画——否则会用旧 plan 配新时长空跑一遍。
-        if (this.executeDisplaySwitch(this.candidateToken)) {
-          this.startMotionAnimation(candidateDurationMs)
-        }
-      } else {
-        // 窗口未 ready——暂存动画时长，等窗口 layout 回调后再执行显示切换 + 启动动画
-        this.pendingAnimationDurationMs = candidateDurationMs
-      }
-    } else {
-      // 无动画（静态帧）——直接执行显示切换
-      this.executeDisplaySwitch(this.candidateToken)
-    }
+    // Issue #879 复核评论6075662695问题2：步骤8——所有运动窗口都已就绪就立刻提交，
+    // 否则什么都不做：等待属于本候选的窗口 layout 回调再调 tryCommitCandidate。
+    // 未就绪的窗口一定是本候选新建的 renderNodeKey，它的回调会带上自己的 key，
+    // 由 isWindowOfCurrentCandidate 判定归属——不依赖「最后一个无关窗口」的布局回调。
+    this.tryCommitCandidate(null)
 
     // Issue #879 复核评论修复（问题1）：清理已消费的 token→StyledString 映射条目
     this.styledStringByToken.delete(token)
@@ -1013,8 +1003,8 @@ export struct SujianEditor {
   // 提交后 ForEach 中原候选窗口 visible 从 false 变为 true（因为现在它们属于 displayedVisualFrame），
   // 旧 displayed 窗口被移除（renderNodeKey 不同）。
   //
-  // Issue #879 复核评论修复（问题1）：executeDisplaySwitch(expectedToken)——提交前再次核对身份。
-  // 旧候选的窗口布局回调携带旧 candidateToken，token 不匹配时直接 return，无权消费新链。
+  // Issue #879 复核评论修复（问题1）：executeDisplaySwitch(expectedToken)——提交前再次核对身份，
+  // 只有确属当前候选的 token 才能消费事务链；旧候选的回调拿不到有效 token。
   // 消费只清掉截至已提交 revision 的事务，不能无条件 pendingPresentationUpdates=[]。
   //
   // Issue #879 复核评论修复（问题3）：窗口 ready 后才调本方法——
@@ -1059,6 +1049,14 @@ export struct SujianEditor {
     // 冻结当前 displayedVisualFrame——这是旧 animator 停止后的真实屏幕状态。
     // 其 MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 反映真实屏幕进度。
     const frozenDisplayedFrame = this.displayedVisualFrame ?? this.motionCoordinator.getCurrentFrame()
+    // Issue #879 复核评论6075662695问题3：提交瞬间的「在屏」上下文——
+    // 必须在覆盖 displayed* 字段之前取出，retargetCandidate 用它按字形重算起始 clip/position。
+    // 身份表用 Coordinator 当前已提交版本的表（描述在屏正文，提交前不推进）。
+    const frozenDisplayed: DisplayedSnapshotContext = {
+      snapshot: this.displayedSnapshot ?? data.latestUpdate.layoutSnapshot,
+      layout: this.displayedLineLayouts,
+      identities: this.motionCoordinator.getCommittedIdentities()
+    }
 
     // 更新 displayed 版本字段
     this.displayedSnapshot = data.latestUpdate.layoutSnapshot
@@ -1072,12 +1070,14 @@ export struct SujianEditor {
     this.latestCoreSnapshot = data.latestUpdate.layoutSnapshot
 
     // Issue #879 复核评论修复（问题3）：调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
-    // 用冻结帧的真实 clip/position 替换候选 plan 中各 run 的 startClipLeft/Right/startPositionX/Y，
+    // 用提交瞬间真实在屏布局 + 冻结帧按字形重算起始 clip/position，
     // 确保新动画从真实屏幕状态开始，而非从过时的起始状态跳变。
     const candidate = this.pendingCandidate
     if (candidate !== null) {
       this.pendingCandidate = null
-      const retargeted = this.motionCoordinator.retargetCandidate(candidate, frozenDisplayedFrame)
+      const retargeted = this.motionCoordinator.retargetCandidate(
+        candidate, frozenDisplayedFrame, frozenDisplayed
+      )
       this.displayedVisualFrame = this.motionCoordinator.commitCandidate(retargeted)
       this.candidateVisualFrame = null
     }
@@ -1276,15 +1276,68 @@ export struct SujianEditor {
     return [...this.buildMotionWindowSources(), ...this.buildCandidateMotionWindowSources()]
   }
 
+  /**
+   * Issue #879 复核评论6075662695问题2：提交候选的唯一入口。
+   *
+   * 等待状态属于候选自己（candidateToken.durationMs），窗口 layout 回调只是触发时机，
+   * 不再有「谁先把全局 pendingAnimationDurationMs 清零」的抢占。
+   *
+   * @param triggeredByKey 触发本次尝试的窗口 renderNodeKey；
+   *        null 表示由候选准备流程主动尝试（无窗口回调）。
+   * @returns 真正提交并（有动画时）启动动画返回 true。
+   */
+  private tryCommitCandidate(triggeredByKey: string | null): boolean {
+    const token = this.candidateToken
+    if (token === null || this.pendingDisplayData === null || this.pendingCandidate === null) {
+      return false
+    }
+    // 归属校验：只有属于当前候选帧的窗口才有权推进提交。
+    // 旧 displayed / 旧候选窗口的 layout 回调既不能提交版本，也不能吞掉新候选的启动时长。
+    if (triggeredByKey !== null && !this.isWindowOfCurrentCandidate(triggeredByKey)) {
+      return false
+    }
+    if (!this.allMotionWindowsReady()) {
+      // 还有窗口没布局完——保持旧画面，等本候选自己的窗口回调再次触发。
+      return false
+    }
+    if (!this.executeDisplaySwitch(token)) {
+      return false
+    }
+    if (token.durationMs > 0) {
+      this.startMotionAnimation(token.durationMs)
+    }
+    return true
+  }
+
+  /**
+   * Issue #879 复核评论6075662695问题2：判断一个窗口是否属于当前候选帧。
+   *
+   * 用「窗口所属帧」而不是「attach 时捕获的 token」判定归属：
+   * 候选窗口复用同一 renderNodeKey（同 revision 重新准备）时，
+   * 观察者仍是旧回调，但它渲染的确实是当前候选的窗口，理应有权推进提交。
+   */
+  private isWindowOfCurrentCandidate(renderNodeKey: string): boolean {
+    const frame = this.candidateVisualFrame
+    if (frame === null || !frame.isAnimating) {
+      return false
+    }
+    const windows = frame.motionGlyphWindows
+    for (let i = 0; i < windows.length; i++) {
+      if (windows[i].renderNodeKey === renderNodeKey) {
+        return true
+      }
+    }
+    return false
+  }
+
   // Issue #879 本轮复核评论修复（问题2）：为运动窗口创建 ComponentObserver 监听 layout 事件。
   // @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调让 SujianEditor 创建。
   // ComponentObserver 通过组件 id（`motion-window-${renderNodeKey}`）监听 layout 事件，
   // layout 回调中调用 markWindowLayoutReady + markWindowMounted，确认布局真正完成。
   // renderNodeKey 包含 sourceKind + sourceRevision，切源时创建新 observer 和窗口状态。
   //
-  // Issue #879 复核评论修复（问题1）：回调携带候选 token——
-  // 旧候选的窗口布局回调携带旧 candidateToken，token 不匹配时无权消费新链。
-  // 只有 token===pendingLayoutToken && candidateToken===token && session/revision 同最新 update 时才可 commit。
+  // Issue #879 复核评论6075662695问题2：回调不再携带 attach 时捕获的 token——
+  // 改成「标记本窗口 ready + 尝试提交」，由 isWindowOfCurrentCandidate 判定归属。
   private attachWindowLayoutObserver(renderNodeKey: string): void {
     if (this.windowLayoutObservers.has(renderNodeKey)) {
       return
@@ -1293,32 +1346,11 @@ export struct SujianEditor {
     const observer = this.getUIContext()
       .getUIInspector()
       .createComponentObserver(componentId)
-    // Issue #879 复核评论修复（问题1）：捕获当前 candidateToken——
-    // 旧候选的窗口布局回调携带旧 token，token 不匹配时无权消费新链。
-    const callbackToken = this.candidateToken
     const callback = (): void => {
       this.motionSourcePool.markWindowLayoutReady(renderNodeKey)
       this.motionSourcePool.markWindowMounted(renderNodeKey)
-      // Issue #879 最新复核评论修复（问题2）：先校验 token——旧窗口的回调不得消费新候选的 pending 状态。
-      if (callbackToken !== this.candidateToken) {
-        return
-      }
-      // Issue #879 最新复核评论修复（问题3）：所有窗口 ready 后启动 pending 动画。
-      // 窗口未 layoutReady 时 startMotionAnimation 暂存动画时长不启动 animator，
-      // 等所有窗口 layout 回调后再启动——旧画面在新窗口未准备好前继续保持显示。
-      // Issue #879 本轮复核评论修复（问题4）：所有窗口 ready → 先执行显示切换，再启动动画。
-      // 在窗口 ready 之前主 Text 保持旧内容、staticClipCommands 保持全尺寸矩形，
-      // 窗口 ready 后才统一切换主 Text、静态遮罩、运动源和 caret。
-      if (this.pendingAnimationDurationMs > 0 && this.allMotionWindowsReady()) {
-        const durationMs = this.pendingAnimationDurationMs
-        // Issue #879 最新复核评论修复（问题2）：只有切换真的提交了才消费 pending 时长并启动动画。
-        // executeDisplaySwitch 返回 false 时不清零 pendingAnimationDurationMs——
-        // 旧窗口的 layout 回调不得吞掉新候选的 pending 动画时长。
-        if (this.executeDisplaySwitch(callbackToken)) {
-          this.pendingAnimationDurationMs = 0
-          this.startMotionAnimation(durationMs)
-        }
-      }
+      // 属于当前候选帧的窗口 → 若所有窗口已 ready，立刻提交并启动候选自己的动画时长。
+      this.tryCommitCandidate(renderNodeKey)
     }
     observer.on('layout', callback)
     this.windowLayoutObservers.set(renderNodeKey, observer)
@@ -1468,48 +1500,46 @@ export struct SujianEditor {
       this.motionAnimator = null
     }
     this.isMotionAnimating = false
-    // Issue #879 最新复核评论修复（问题3）：清理 pending 动画时长。
-    this.pendingAnimationDurationMs = 0
     // Issue #879 复核评论修复（问题4）：停止动画后清理不再需要的源。
     this.releaseSourcesAfterMotion()
-    // Issue #879 最新复核评论修复（问题1）：停止动画时清理所有窗口级 ComponentObserver——
-    // releaseSourcesAfterMotion 只清理旧版本 observer，stopActiveAnimation 需要彻底清理。
+    // Issue #879 最新复核评论修复（问题1）：停止动画时清理所有窗口级 ComponentObserver。
+    // stopActiveAnimation 只被静态重建、会话切换、设置变化、页面卸载这些
+    // 「整帧作废」的路径调用（调用方同时丢掉 candidateToken/candidateVisualFrame），
+    // 所以这里可以彻底清理；旧 animator 的 onFinish 不走这条路。
     this.cleanupAllWindowsObservers()
   }
 
-  // Issue #879 复核评论修复（问题4）：统一所有权交接——动画结束后释放不再需要的源。
-  // Issue #879 最新复核评论问题1：改用存活根集合——当时只有主文本源（displayed 版本）
-  // 还有引用，运动窗口已全部消失，因此 runIds 为空、revisions 只含在屏版本。
+  // Issue #879 复核评论修复（问题4）：统一所有权交接——动画结束后释放不再需要的源与 observer。
+  //
+  // Issue #879 复核评论6075662695问题1：旧 animator 的 onFinish 也会调本方法，
+  // 而候选可能正在 staging（窗口已挂载、还没启动动画）。因此这里必须
+  // **按 owner 释放**，不能全局清空：
+  // - 源用 collectLiveSourceRoots()（displayed ∪ candidate ∪ 主文本版本）做存活根，
+  //   候选/旧 displayed 窗口的源不会被误收；
+  // - observer 只针对「不属于 displayed/candidate 帧」的窗口解绑，
+  //   新候选尚未完成的观察者、计时与待提交身份都保持不变。
+  // 会话彻底退出时由 stopActiveAnimation/会话切换路径清空全部 observer。
   private releaseSourcesAfterMotion(): void {
-    const roots: MotionSourceRoots = {
-      runIds: new Set<string>(),
-      revisions: new Set<number>()
+    this.motionSourcePool.releaseUnusedSources(this.collectLiveSourceRoots())
+    const liveKeys: Set<string> = new Set<string>()
+    const frames: (EditorVisualFrame | null)[] = [this.displayedVisualFrame, this.candidateVisualFrame]
+    for (const frame of frames) {
+      if (frame === null || !frame.isAnimating) {
+        continue
+      }
+      for (const w of frame.motionGlyphWindows) {
+        liveKeys.add(w.renderNodeKey)
+      }
     }
-    if (this.displayedSnapshot !== null) {
-      roots.revisions.add(this.displayedSnapshot.revision)
-    }
-    if (this.latestCoreSnapshot !== null) {
-      roots.revisions.add(this.latestCoreSnapshot.revision)
-    }
-    this.motionSourcePool.releaseUnusedSources(roots)
-    // Issue #879 最新复核评论修复（问题1）：只释放属于旧版本的 observer——
-    // 不再全局清空所有 observer，保留当前 displayed/candidate 版本的 observer。
-    // renderNodeKey 格式为 kind-revision-windowId，从中提取 revision 判断是否属于存活版本。
     const keysToDelete: string[] = []
     this.windowLayoutObservers.forEach((_observer: inspector.ComponentObserver, key: string) => {
-      const parts = key.split('-')
-      if (parts.length >= 2) {
-        const revision = parseInt(parts[1], 10)
-        if (!isNaN(revision) && !roots.revisions.has(revision)) {
-          keysToDelete.push(key)
-        }
+      if (!liveKeys.has(key)) {
+        keysToDelete.push(key)
       }
     })
     for (const key of keysToDelete) {
       this.detachWindowLayoutObserver(key)
     }
-    // Issue #879 最新复核评论修复（问题1）：不再设 pendingAnimationDurationMs = 0——
-    // 这个值只应由 startMotionAnimation 或 stopActiveAnimation 管理。
   }
 
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 实现真正的逐帧回调。
@@ -1532,15 +1562,14 @@ export struct SujianEditor {
       this.isMotionAnimating = false
       return
     }
-    // Issue #879 最新复核评论修复（问题3）：启动动画前检查所有窗口是否 layoutReady。
-    // 未 ready 的窗口保持旧画面显示——不启动 animator，暂存动画时长，
-    // 等所有窗口 layout 回调（attachWindowLayoutObserver 中的 ComponentObserver 'layout'）后再启动。
-    // 这确保运动窗口 Text 的 measure/layout 真正完成后才开始动画，避免跳帧。
+    // Issue #879 复核评论6075662695问题2：本方法只由 tryCommitCandidate 调用，
+    // 而它已经在提交前确认过 allMotionWindowsReady()——这里不再暂存任何等待状态
+    // （等待状态属于候选 token，不属于这个全局方法）。
     if (!this.allMotionWindowsReady()) {
-      this.pendingAnimationDurationMs = durationMs
+      // 防御：窗口在提交与启动之间被解绑。此时不启动动画，保持已提交的起始帧，
+      // 等属于本候选的窗口回调再次触发提交（候选仍在 staging 时不会走到这里）。
       return
     }
-    this.pendingAnimationDurationMs = 0
     // Issue #879 本轮复核评论修复（问题3）：先 ++motionGeneration 再 cancel 旧 animator。
     // 华为 AnimatorResult.cancel() 会额外触发一次终点 onFrame，
     // 先 cancel 再 ++generation 会让旧动画终值写到新画面。

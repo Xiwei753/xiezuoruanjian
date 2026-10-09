@@ -96,41 +96,58 @@ function splitClusterRanges(text: string): ClusterRange[] {
 }
 
 /**
- * FNV-1a 32 位确定性 hash——把字符串映射为固定长度十六进制摘要。
- *
- * 用于 windowIdForGlyphIds 中对完整 glyphIds 序列做 hash，
- * 保证不同序列产生不同 windowId（碰撞概率 ≈ 1/2^32），
- * 同时 windowId 长度固定，不随 glyphIds 序列长度增长。
- */
-function fnv1aHash(str: string): string {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return (hash >>> 0).toString(16)
-}
-
-/**
  * Issue #879 复核评论问题4：由一段字符簇身份序列派生「窗口身份」。
  *
  * 字形单元 id（glyphId）是单个字符簇的身份，而动画里的一个裁切窗口往往覆盖
- * 多个字符簇；两者不是同一种对象，不能拿首字符簇身份代表整窗口。窗口身份定义为
- * 完整簇身份序列的确定性 hash（长度前缀 + FNV-1a 摘要），因此：
- * - 位置平移不改变窗口身份（id 里不含 utf16 区间，也不含窗口坐标）；
- * - 折行 / 运动区间重分段导致簇序列变化时窗口身份随之变化，
- *   此时由 Planner 用幸存 glyphId 交集建立旧窗口 → 新窗口的重分段映射；
- * - 不同簇序列只要内容不同就产生不同 windowId，不会碰撞
- *   （旧实现 `win-${glyphIds[0]}x${glyphIds.length}` 仅用首簇+数量，
- *   `[A,B,C]` 与 `[A,D,E]` 会产生相同 ID）。
+ * 多个字符簇；两者不是同一种对象，不能拿首字符簇身份代表整窗口。
  *
- * 只用字母数字与 `-` 分隔符，保证可直接用作 ArkUI 组件 id。
+ * 窗口身份 = 完整簇身份序列的**单射编码**：`win-<簇数>-` 后面跟着每个簇的
+ * `<长度>:<glyphId>`。任何一个序列都能被唯一地解析回来，因此：
+ * - 位置平移不改变窗口身份（id 里不含 utf16 区间，也不含窗口坐标）；
+ * - 折行 / 运动区间重分段导致簇序列变化时窗口身份随之变化；
+ * - 不同簇序列（包括 `[A,B,C]` 与 `[A,D,E]` 这种首簇相同、数量相同的序列）
+ *   一定得到不同 windowId——不用 hash，不做「首簇 + 数量」近似，无碰撞。
+ *
+ * 长度前缀编码对分隔符没有假设：即使 glyphId 里出现 `:` 或 `-`，
+ * 也能按长度无歧义地解析（旧实现 `win-${glyphIds[0]}x${glyphIds.length}`
+ * 会碰撞，`join('-')` + hash 也只是把碰撞概率缩小而不是消除）。
+ *
+ * 只用字母数字、`-` 和 `:`，保证可直接用作 ArkUI 组件 id 与 ForEach key。
+ * 调用方必须保证 glyphIds 非空（身份表兜底会让空序列拿到内容 hash id）。
  */
 export function windowIdForGlyphIds(glyphIds: string[]): string {
   if (glyphIds.length === 0) {
+    // 空序列在生产路径不可达：身份表不可用时 Planner 会退回内容 hash 的单元素列表。
+    // 这里只给一个固定哨兵，不会被当成真实窗口节点身份使用。
     return 'win-empty'
   }
-  return `win-${glyphIds.length}-${fnv1aHash(glyphIds.join('-'))}`
+  let encoded = `win-${glyphIds.length}-`
+  for (let i = 0; i < glyphIds.length; i++) {
+    const id = glyphIds[i]
+    encoded += `${id.length}:${id}`
+  }
+  return encoded
+}
+
+/**
+ * Issue #879 复核评论6075662695问题3：把 [utf16Start, utf16End) 切成字符簇边界。
+ *
+ * 返回簇边界 offset 列表，长度 = 簇数 + 1：第 i 个簇占 [result[i], result[i+1])。
+ * 与身份表分簇规则完全一致（splitClusterRanges），
+ * 因此 run 携带的 glyphIds[i] 与这里的第 i 个簇一一对应——
+ * 提交瞬间按字形算局部几何（可见宽度/锚点）时不会错位。
+ */
+export function clusterBoundaries(text: string, utf16Start: number, utf16End: number): number[] {
+  if (utf16Start >= utf16End || utf16Start < 0 || utf16End > text.length) {
+    return []
+  }
+  const ranges = splitClusterRanges(text.substring(utf16Start, utf16End))
+  const boundaries: number[] = []
+  for (const range of ranges) {
+    boundaries.push(utf16Start + range.start)
+  }
+  boundaries.push(utf16End)
+  return boundaries
 }
 
 /**
@@ -146,6 +163,8 @@ export class GlyphIdentityTable {
   readonly text: string
   /** 字符簇身份条目（按 utf16Start 升序，首尾相接） */
   readonly entries: GlyphIdentityEntry[]
+  /** glyphId → 条目 的惰性索引（表不可变，首次查询时建立） */
+  private glyphIdIndex: Map<string, GlyphIdentityEntry> | null = null
 
   private constructor(revision: number, text: string, entries: GlyphIdentityEntry[]) {
     this.revision = revision
@@ -304,6 +323,29 @@ export class GlyphIdentityTable {
   /** 条目数（诊断/测试用）。 */
   entryCount(): number {
     return this.entries.length
+  }
+
+  /**
+   * Issue #879 复核评论6075662695问题3：按 glyphId 反查它在**本表正文**中的位置。
+   *
+   * 提交瞬间要判断「某个字形此刻在屏上处于哪一段可见区」，
+   * 需要把 run 携带的 glyphId 映射回在屏正文的 UTF-16 区间——
+   * 表里没有这个 id 说明这个字不在本表描述的正文里（属于真正的新字，尚未上屏）。
+   *
+   * 用 glypId → 条目的索引缓存（表不可变，缓存只在首次查询时建一次）。
+   * 同一个 id 在表里只出现一次（条目首尾相接、身份唯一）。
+   */
+  entryByGlyphId(glyphId: string): GlyphIdentityEntry | null {
+    if (this.glyphIdIndex === null) {
+      const index: Map<string, GlyphIdentityEntry> = new Map()
+      for (const entry of this.entries) {
+        if (!index.has(entry.glyphId)) {
+          index.set(entry.glyphId, entry)
+        }
+      }
+      this.glyphIdIndex = index
+    }
+    return this.glyphIdIndex.get(glyphId) ?? null
   }
 
   /**
