@@ -119,6 +119,15 @@ impl SujianEditorItem {
         let selection_gesture_active = self.selection_gesture_active;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
+        if self.current_coordinated_animation_enabled
+            && self.cursor_ctrl.last_move_source
+                != super::cursor_controller::CursorMoveSource::TextTransaction
+        {
+            self.pipeline
+                .animation_coordinator_mut()
+                .detach_caret_driven_transition(Instant::now());
+        }
+
         // Issue #853：用户编辑只更新 canonical selection；caret 由唯一的
         // cursor controller 立即跟到最新位置。正文过渡不拥有也不 retarget caret。
         let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(

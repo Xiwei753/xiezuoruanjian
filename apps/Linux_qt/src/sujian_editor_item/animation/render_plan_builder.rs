@@ -23,12 +23,24 @@ impl LinuxEditorAnimationCoordinator {
             cursor_render_state.y,
             cursor_render_state.h,
         );
-        let visual_caret = (coordinated_animation_enabled && cursor_render_state.visible)
-            .then_some(VisualCaretGeometry {
-                x: cursor_render_state.x,
-                y: cursor_render_state.y,
-                h: cursor_render_state.h,
-            });
+        let visual_caret = if coordinated_animation_enabled && cursor_render_state.visible {
+            cursor_render_state
+                .movement_source
+                .map(|movement_source| VisualCaretGeometry {
+                    x: cursor_render_state.x,
+                    y: cursor_render_state.y,
+                    h: cursor_render_state.h,
+                    movement_source,
+                    target_x: cursor_render_state.target_x,
+                    target_y: cursor_render_state.target_y,
+                    path_start_x: cursor_render_state.path_start_x,
+                    path_start_y: cursor_render_state.path_start_y,
+                    layout_revision: canonical_snapshot.map(|snapshot| snapshot.revision),
+                    document_session: self.document_session,
+                })
+        } else {
+            None
+        };
         RenderPlan {
             ownership: self.ownership_plan(frame_now, canonical_snapshot, visual_caret),
             selection_preedit,

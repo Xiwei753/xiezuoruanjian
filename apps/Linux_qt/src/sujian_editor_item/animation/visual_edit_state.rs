@@ -13,7 +13,9 @@ use super::super::layout_snapshot::{
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::render_plan::VisualCaretGeometry;
 use super::visual_frame::{VisualCluster, VisualFrame};
-use crate::sujian_editor_item::edit_motion::{DeleteEdge, DeletedRangeEdge};
+use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
+use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge, DeletedRangeEdge};
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
 
 #[derive(Clone, Debug)]
 struct TargetCluster {
@@ -41,11 +43,77 @@ enum MotionBoundary {
     TextProgress,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CaretPosition {
+    x: f64,
+    y: f64,
+    h: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CaretMotion {
+    from: CaretPosition,
+    to: CaretPosition,
+    layout_revision: LayoutRevision,
+    document_session: u64,
+}
+
+impl CaretMotion {
+    fn new(
+        from: CursorRect,
+        to: CursorRect,
+        layout_revision: LayoutRevision,
+        document_session: u64,
+    ) -> Self {
+        Self {
+            from: CaretPosition {
+                x: from.x,
+                y: from.top,
+                h: (from.bottom - from.top).max(0.0),
+            },
+            to: CaretPosition {
+                x: to.x,
+                y: to.top,
+                h: (to.bottom - to.top).max(0.0),
+            },
+            layout_revision,
+            document_session,
+        }
+    }
+
+    fn touches_line(self, rect: &SourceRect) -> bool {
+        let from_center = self.from.y + self.from.h * 0.5;
+        let to_center = self.to.y + self.to.h * 0.5;
+        let min_y = from_center.min(to_center);
+        let max_y = from_center.max(to_center);
+        max_y >= rect.y - 2.0 && min_y <= rect.y + rect.h + 2.0
+    }
+
+    fn matches(self, caret: VisualCaretGeometry) -> bool {
+        caret.movement_source == CursorMoveSource::TextTransaction
+            && caret.layout_revision == Some(self.layout_revision)
+            && caret.document_session == self.document_session
+            && (caret.target_x - self.to.x).abs() <= 0.5
+            && (caret.target_y - self.to.y).abs() <= 0.5
+            && (caret.path_start_x - self.from.x).abs() <= 0.5
+            && (caret.path_start_y - self.from.y).abs() <= 0.5
+            && point_is_on_route(
+                caret.x,
+                caret.y,
+                caret.path_start_x,
+                caret.path_start_y,
+                caret.target_x,
+                caret.target_y,
+            )
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ClusterMotion {
     source: Option<VisualCluster>,
     target: Option<TargetCluster>,
     kind: MotionKind,
+    caret_motion: Option<CaretMotion>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,11 +140,16 @@ impl VisualEditState {
         now: Instant,
         base_duration_ms: u64,
         previous_edit_at: Option<Instant>,
+        caret_rects: Option<(CursorRect, CursorRect)>,
+        document_session: u64,
     ) -> Self {
         let source_frame = committed_frame
             .cloned()
             .unwrap_or_else(|| VisualFrame::from_static_snapshot(base_snapshot));
         let targets = target_clusters(&target_snapshot);
+        let caret_motion = caret_rects.map(|(from, to)| {
+            CaretMotion::new(from, to, target_snapshot.revision, document_session)
+        });
         let mut source_used = vec![false; source_frame.clusters.len()];
         let mut target_used = vec![false; targets.len()];
         let mut motions = Vec::new();
@@ -163,6 +236,7 @@ impl VisualEditState {
                     source: None,
                     target: Some(target.clone()),
                     kind: MotionKind::Reveal,
+                    caret_motion: None,
                 });
             }
         }
@@ -188,7 +262,21 @@ impl VisualEditState {
                     source: Some(source.clone()),
                     target: None,
                     kind: MotionKind::Delete(delete_edge),
+                    caret_motion: None,
                 });
+            }
+        }
+
+        if let Some(caret_motion) = caret_motion {
+            for motion in &mut motions {
+                let rect = match (&motion.source, &motion.target, motion.kind) {
+                    (None, Some(target), MotionKind::Reveal) => Some(&target.rect),
+                    (Some(source), None, MotionKind::Delete(_)) => Some(&source.rect),
+                    _ => None,
+                };
+                if rect.is_some_and(|rect| caret_motion.touches_line(rect)) {
+                    motion.caret_motion = Some(caret_motion);
+                }
             }
         }
 
@@ -234,6 +322,29 @@ impl VisualEditState {
         1.0 - (1.0 - linear).powi(3)
     }
 
+    pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
+        if self.duration_ms == 0 {
+            return 0;
+        }
+        let eased = self.progress(now);
+        let linear = 1.0 - (1.0 - eased).cbrt();
+        (self.duration_ms as f64 * (1.0 - linear))
+            .round()
+            .clamp(1.0, self.duration_ms as f64) as u64
+    }
+
+    pub(crate) fn has_caret_driven_motions(&self) -> bool {
+        self.motions
+            .iter()
+            .any(|motion| motion.caret_motion.is_some())
+    }
+
+    pub(crate) fn clear_caret_driver(&mut self) {
+        for motion in &mut self.motions {
+            motion.caret_motion = None;
+        }
+    }
+
     pub(crate) fn active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
         let mut ids = Vec::new();
         for motion in &self.motions {
@@ -257,8 +368,7 @@ impl VisualEditState {
         visual_caret: Option<VisualCaretGeometry>,
     ) -> RenderOwnershipPlan {
         let p = self.progress(now);
-        let terminal_frame = p >= 1.0;
-        let handoff_pending = terminal_frame && self.terminal_frame_committed;
+        let mut terminal_frame = true;
         let mut owned = Vec::new();
         let mut glyphs = Vec::new();
 
@@ -272,6 +382,7 @@ impl VisualEditState {
 
             match motion.kind {
                 MotionKind::Transform => {
+                    terminal_frame &= p >= 1.0;
                     let (Some(source), Some(target)) = (&motion.source, &motion.target) else {
                         continue;
                     };
@@ -297,11 +408,16 @@ impl VisualEditState {
                     // Coordinated mode uses this frame's already-sampled visual caret as the
                     // reveal edge for clusters on its current line. Cross-line/layout cases
                     // retain the explicit VisualEditState progress geometry.
-                    let visible = match reveal_boundary(target, visual_caret) {
+                    let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
+                    let visible = match boundary {
                         MotionBoundary::VisualCaret(caret_x) => {
                             reveal_width_to_caret(target, caret_x)
                         }
                         MotionBoundary::TextProgress => target.rect.w * p,
+                    };
+                    terminal_frame &= match boundary {
+                        MotionBoundary::VisualCaret(_) => visible >= target.rect.w - 1e-6,
+                        MotionBoundary::TextProgress => p >= 1.0,
                     };
                     if visible <= 1e-6 || target.rect.h <= 1e-6 {
                         continue;
@@ -328,11 +444,17 @@ impl VisualEditState {
                     // A moving trailing caret boundary directly controls the retained slice.
                     // Leading-edge deletes keep the caret fixed at the deletion origin, so
                     // their explicit text-progress geometry remains the correct driver.
-                    let visible = match delete_boundary(source, delete_edge, visual_caret) {
+                    let boundary =
+                        delete_boundary(source, delete_edge, motion.caret_motion, visual_caret);
+                    let visible = match boundary {
                         MotionBoundary::VisualCaret(caret_x) => {
                             delete_width_to_caret(source, delete_edge, caret_x)
                         }
                         MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
+                    };
+                    terminal_frame &= match boundary {
+                        MotionBoundary::VisualCaret(_) => visible <= 1e-6 || source.opacity <= 1e-6,
+                        MotionBoundary::TextProgress => p >= 1.0,
                     };
                     if visible <= 1e-6 || source.rect.h <= 1e-6 {
                         continue;
@@ -353,6 +475,7 @@ impl VisualEditState {
                     ));
                 }
                 MotionKind::CrossFade => {
+                    terminal_frame &= p >= 1.0;
                     if let Some(source) = &motion.source {
                         if source.opacity * (1.0 - p) > 1e-6 {
                             glyphs.push(RenderOwnershipPlan::glyph(
@@ -391,6 +514,11 @@ impl VisualEditState {
             }
         }
 
+        // Once a complete terminal geometry was successfully committed, preserve it
+        // through the following frame even if a new, unrelated caret route now exists.
+        let terminal_frame = terminal_frame || self.terminal_frame_committed;
+        let handoff_pending = self.terminal_frame_committed;
+
         RenderOwnershipPlan::from_owner_table(
             &self.target_snapshot,
             owned,
@@ -408,9 +536,11 @@ fn caret_is_on_line(caret: VisualCaretGeometry, rect: &SourceRect) -> bool {
 
 fn reveal_boundary(
     target: &TargetCluster,
+    driver: Option<CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
+        .filter(|caret| driver.is_some_and(|driver| driver.matches(*caret)))
         .filter(|caret| caret_is_on_line(*caret, &target.rect))
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
@@ -419,13 +549,28 @@ fn reveal_boundary(
 fn delete_boundary(
     source: &VisualCluster,
     delete_edge: DeleteEdge,
+    driver: Option<CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
+        .filter(|caret| driver.is_some_and(|driver| driver.matches(*caret)))
         .filter(|caret| caret_is_on_line(*caret, &source.rect))
         .filter(|caret| !caret_is_stationary_leading_edge(source, delete_edge, caret.x))
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
+}
+
+fn point_is_on_route(x: f64, y: f64, from_x: f64, from_y: f64, to_x: f64, to_y: f64) -> bool {
+    let dx = to_x - from_x;
+    let dy = to_y - from_y;
+    let length_squared = dx * dx + dy * dy;
+    if length_squared <= 1e-6 {
+        return (x - to_x).abs() <= 0.5 && (y - to_y).abs() <= 0.5;
+    }
+    let t = (((x - from_x) * dx + (y - from_y) * dy) / length_squared).clamp(0.0, 1.0);
+    let projected_x = from_x + t * dx;
+    let projected_y = from_y + t * dy;
+    (x - projected_x).hypot(y - projected_y) <= 1.0
 }
 
 fn reveal_width_to_caret(target: &TargetCluster, caret_x: f64) -> f64 {
@@ -498,6 +643,7 @@ fn pair_cluster(
         } else {
             MotionKind::CrossFade
         },
+        caret_motion: None,
     });
 }
 

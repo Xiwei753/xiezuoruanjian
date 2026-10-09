@@ -43,6 +43,7 @@ pub(crate) struct VisualEditRequest {
     pub target_snapshot: EditorLayoutSnapshot,
     pub offset_map: OffsetMap,
     pub deleted_range_edges: Vec<DeletedRangeEdge>,
+    pub caret_motion: Option<(CursorRect, CursorRect)>,
     pub animate: bool,
     pub now: Instant,
 }
@@ -75,7 +76,7 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     /// 继续保留其动画行纹理 ID，直到静态层成功替换它。
     last_committed_ownership: Option<CommittedOwnership>,
     frame_to_current_map: Option<FrameRevisionMap>,
-    document_session: u64,
+    pub(crate) document_session: u64,
     handoff_pending: bool,
     last_edit_at: Option<Instant>,
     typing_animation_duration_ms: u32,
@@ -167,6 +168,8 @@ impl LinuxEditorAnimationCoordinator {
             request.now,
             u64::from(self.typing_animation_duration_ms),
             previous_edit_at,
+            request.caret_motion,
+            self.document_session,
         );
         self.visual_edit_state = Some(state);
         // 新 transition 覆盖了待收口的旧画面；它会和新的静态层一起原子提交。
@@ -287,6 +290,56 @@ impl LinuxEditorAnimationCoordinator {
         self.visual_edit_state
             .as_ref()
             .map(|state| &state.target_snapshot)
+    }
+
+    /// Move a caret-driven text transition onto its own saved visual frame before an
+    /// unrelated caret movement takes over CursorController's single animation route.
+    pub(crate) fn detach_caret_driven_transition(&mut self, now: Instant) {
+        let Some(state) = self.visual_edit_state.as_ref() else {
+            return;
+        };
+        if !state.has_caret_driven_motions() || state.terminal_frame_committed {
+            return;
+        }
+        if self.is_paused() {
+            if let Some(state) = self.visual_edit_state.as_mut() {
+                state.clear_caret_driver();
+            }
+            return;
+        }
+
+        let target_snapshot = state.target_snapshot.clone();
+        let remaining_ms = state.remaining_duration_ms(now);
+        let committed_frame = self
+            .last_committed_visual_frame
+            .as_ref()
+            .filter(|frame| {
+                frame.document_session == self.document_session
+                    && frame.canonical_revision == Some(target_snapshot.revision)
+            })
+            .cloned();
+
+        if let Some(frame) = committed_frame {
+            let identity = identity_map(frame.canonical_byte_len);
+            self.visual_edit_state = Some(VisualEditState::new(
+                Some(&frame),
+                &target_snapshot,
+                target_snapshot.clone(),
+                &identity,
+                &identity,
+                &[],
+                now,
+                remaining_ms,
+                None,
+                None,
+                self.document_session,
+            ));
+        } else if let Some(state) = self.visual_edit_state.as_mut() {
+            // No frame from this revision has been presented yet, so there is no
+            // caret-driven slice to preserve. Keep the existing text clock and detach
+            // its boundary driver before the unrelated caret route starts.
+            state.clear_caret_driver();
+        }
     }
 
     pub(crate) fn active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
