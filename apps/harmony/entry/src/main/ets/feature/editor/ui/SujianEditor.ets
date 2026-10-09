@@ -1299,19 +1299,23 @@ export struct SujianEditor {
     const callback = (): void => {
       this.motionSourcePool.markWindowLayoutReady(renderNodeKey)
       this.motionSourcePool.markWindowMounted(renderNodeKey)
+      // Issue #879 最新复核评论修复（问题2）：先校验 token——旧窗口的回调不得消费新候选的 pending 状态。
+      if (callbackToken !== this.candidateToken) {
+        return
+      }
       // Issue #879 最新复核评论修复（问题3）：所有窗口 ready 后启动 pending 动画。
       // 窗口未 layoutReady 时 startMotionAnimation 暂存动画时长不启动 animator，
       // 等所有窗口 layout 回调后再启动——旧画面在新窗口未准备好前继续保持显示。
       // Issue #879 本轮复核评论修复（问题4）：所有窗口 ready → 先执行显示切换，再启动动画。
       // 在窗口 ready 之前主 Text 保持旧内容、staticClipCommands 保持全尺寸矩形，
       // 窗口 ready 后才统一切换主 Text、静态遮罩、运动源和 caret。
-      // Issue #879 复核评论修复（问题1）：回调携带候选 token——
-      // 旧候选的窗口布局回调携带旧 candidateToken，token 不匹配时无权消费新链。
       if (this.pendingAnimationDurationMs > 0 && this.allMotionWindowsReady()) {
         const durationMs = this.pendingAnimationDurationMs
-        this.pendingAnimationDurationMs = 0
-        // 只有切换真的提交了才启动动画——回调 token 已过期时不得消费新链、也不空跑动画。
+        // Issue #879 最新复核评论修复（问题2）：只有切换真的提交了才消费 pending 时长并启动动画。
+        // executeDisplaySwitch 返回 false 时不清零 pendingAnimationDurationMs——
+        // 旧窗口的 layout 回调不得吞掉新候选的 pending 动画时长。
         if (this.executeDisplaySwitch(callbackToken)) {
+          this.pendingAnimationDurationMs = 0
           this.startMotionAnimation(durationMs)
         }
       }
@@ -1468,6 +1472,9 @@ export struct SujianEditor {
     this.pendingAnimationDurationMs = 0
     // Issue #879 复核评论修复（问题4）：停止动画后清理不再需要的源。
     this.releaseSourcesAfterMotion()
+    // Issue #879 最新复核评论修复（问题1）：停止动画时清理所有窗口级 ComponentObserver——
+    // releaseSourcesAfterMotion 只清理旧版本 observer，stopActiveAnimation 需要彻底清理。
+    this.cleanupAllWindowsObservers()
   }
 
   // Issue #879 复核评论修复（问题4）：统一所有权交接——动画结束后释放不再需要的源。
@@ -1485,10 +1492,24 @@ export struct SujianEditor {
       roots.revisions.add(this.latestCoreSnapshot.revision)
     }
     this.motionSourcePool.releaseUnusedSources(roots)
-    // Issue #879 最新复核评论修复（问题3）：清理窗口级 ComponentObserver——
-    // 动画结束后所有运动窗口消失，observer 不再需要。
-    this.cleanupAllWindowsObservers()
-    this.pendingAnimationDurationMs = 0
+    // Issue #879 最新复核评论修复（问题1）：只释放属于旧版本的 observer——
+    // 不再全局清空所有 observer，保留当前 displayed/candidate 版本的 observer。
+    // renderNodeKey 格式为 kind-revision-windowId，从中提取 revision 判断是否属于存活版本。
+    const keysToDelete: string[] = []
+    this.windowLayoutObservers.forEach((_observer: inspector.ComponentObserver, key: string) => {
+      const parts = key.split('-')
+      if (parts.length >= 2) {
+        const revision = parseInt(parts[1], 10)
+        if (!isNaN(revision) && !roots.revisions.has(revision)) {
+          keysToDelete.push(key)
+        }
+      }
+    })
+    for (const key of keysToDelete) {
+      this.detachWindowLayoutObserver(key)
+    }
+    // Issue #879 最新复核评论修复（问题1）：不再设 pendingAnimationDurationMs = 0——
+    // 这个值只应由 startMotionAnimation 或 stopActiveAnimation 管理。
   }
 
   // Issue #879 第三轮复核修复：逐帧动画驱动——用 AnimatorResult.onFrame 实现真正的逐帧回调。

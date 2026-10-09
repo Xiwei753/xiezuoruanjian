@@ -469,6 +469,10 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
           // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。
           .opacity(item.visible ? 1 : 0)
         },
+        // Issue #879 复核评论问题4：ForEach key 使用 renderNodeKey，
+        // 它 = sourceKind + '-' + sourceRevision + '-' + windowId。
+        // windowId 由完整 glyphIds 序列派生（win-<len>-<fnv1a-hash>），
+        // 不同簇序列不会碰撞；切源时 sourceKind/sourceRevision 变化也创建新节点。
         (item: MotionWindowSource, index: number) => `${item.window.renderNodeKey}`
       )
     }

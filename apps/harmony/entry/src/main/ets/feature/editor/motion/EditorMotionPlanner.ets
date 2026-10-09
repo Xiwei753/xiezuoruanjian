@@ -114,6 +114,24 @@ export interface GlyphRectSegment {
 }
 
 /**
+ * Issue #879 复核评论问题3：窗口匹配结果——包含交集信息。
+ *
+ * findBestMatchWindow / findBestMatchFrozenWindow 返回此结构，
+ * 调用方根据 isFullMatch 决定 startClip 的取值方式：
+ * - 完全匹配：用窗口的 currentClipLeft/Right
+ * - 部分匹配：用窗口的 currentClipLeft 作为起点（零宽度）
+ * - 无匹配：用 run.rect 的目标值作为起点
+ */
+export interface WindowMatchResult {
+  /** 匹配的窗口 */
+  window: MotionGlyphWindow
+  /** 匹配的 glyphId 数量（交集大小） */
+  matchedCount: number
+  /** 是否完全匹配（所有 glyphIds 都在窗口中） */
+  isFullMatch: boolean
+}
+
+/**
  * 运动规划器。
  *
  * 从 oldSnapshot + oldLayout + newSnapshot + newLayout + editResult 出发，
@@ -366,13 +384,26 @@ export class EditorMotionPlanner {
           const windowId = windowIdForGlyphIds(glyphIds)
           // Issue #879 复核评论问题4：用 glyphIds 数组逐个查 visibleWindowByGlyphId，
           // 取交集最大的窗口作为匹配
-          const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+          // Issue #879 复核评论问题3：不再直接复用旧窗口的 currentClipLeft/Right——
+          // 部分匹配时旧整个窗口的裁切范围并不对应新窗口内同一段字的可见范围。
+          const match = EditorMotionPlanner.findBestMatchWindow(
             visibleWindowByGlyphId, glyphIds
           )
           // 目标状态：rect.rect（旧排版中的完整位置）
-          // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认完整宽度
-          const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
-          const startClipRight = visibleWindow !== undefined ? visibleWindow.currentClipRight : rect.rect.x + rect.rect.width
+          // 起始状态：完全匹配用窗口 currentClip；部分匹配从左边界开始；无匹配默认完整宽度
+          let startClipLeft: number
+          let startClipRight: number
+          if (match !== undefined && match.isFullMatch) {
+            startClipLeft = match.window.currentClipLeft
+            startClipRight = match.window.currentClipRight
+          } else if (match !== undefined) {
+            // 部分匹配——从窗口左边界开始（零宽度），不直接复用整个窗口的裁切范围
+            startClipLeft = match.window.currentClipLeft
+            startClipRight = match.window.currentClipLeft
+          } else {
+            startClipLeft = rect.rect.x
+            startClipRight = rect.rect.x + rect.rect.width
+          }
           deletedRuns.push({
             utf16Start: rect.utf16Start,
             utf16End: rect.utf16End,
@@ -401,13 +432,26 @@ export class EditorMotionPlanner {
           )
           const windowId = windowIdForGlyphIds(glyphIds)
           // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
-          const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+          // Issue #879 复核评论问题3：不再直接复用旧窗口的 currentClipLeft/Right——
+          // 部分匹配时旧整个窗口的裁切范围并不对应新窗口内同一段字的可见范围。
+          const match = EditorMotionPlanner.findBestMatchWindow(
             visibleWindowByGlyphId, glyphIds
           )
           // 目标状态：rect.rect（新排版中的完整位置）
-          // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认零宽度
-          const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
-          const startClipRight = visibleWindow !== undefined ? visibleWindow.currentClipRight : rect.rect.x
+          // 起始状态：完全匹配用窗口 currentClip；部分匹配从左边界开始；无匹配默认零宽度
+          let startClipLeft: number
+          let startClipRight: number
+          if (match !== undefined && match.isFullMatch) {
+            startClipLeft = match.window.currentClipLeft
+            startClipRight = match.window.currentClipRight
+          } else if (match !== undefined) {
+            // 部分匹配——从窗口左边界开始（零宽度），不直接复用整个窗口的裁切范围
+            startClipLeft = match.window.currentClipLeft
+            startClipRight = match.window.currentClipLeft
+          } else {
+            startClipLeft = rect.rect.x
+            startClipRight = rect.rect.x
+          }
           insertRuns.push({
             utf16Start: rect.utf16Start,
             utf16End: rect.utf16End,
@@ -435,13 +479,14 @@ export class EditorMotionPlanner {
         )
         const windowId = windowIdForGlyphIds(glyphIds)
         // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
-        const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+        // Issue #879 复核评论问题3：RetainedMove 的 startPosition 用窗口的 currentPosition
+        const match = EditorMotionPlanner.findBestMatchWindow(
           visibleWindowByGlyphId, glyphIds
         )
         // 目标状态：move.newRect（新排版中的位置）
-        // 起始状态：如果有匹配的 visibleWindow，用其 currentPositionX/Y；否则默认 oldRect.x/y
-        const startPositionX = visibleWindow !== undefined ? visibleWindow.currentPositionX : move.oldRect.x
-        const startPositionY = visibleWindow !== undefined ? visibleWindow.currentPositionY : move.oldRect.y
+        // 起始状态：有匹配用窗口 currentPosition；无匹配默认 oldRect.x/y
+        const startPositionX = match !== undefined ? match.window.currentPositionX : move.oldRect.x
+        const startPositionY = match !== undefined ? match.window.currentPositionY : move.oldRect.y
         retainedMoves.push({
           oldUtf16Start: move.oldUtf16Start,
           oldUtf16End: move.oldUtf16End,
@@ -540,11 +585,16 @@ export class EditorMotionPlanner {
    * 不再仅靠起始字符簇身份匹配——一个 run 可能覆盖多个字符簇，
    * 折行变化/运动区间拆分合并后首字符可能变，但幸存 glyphId 的交集仍能建立
    * 旧窗口→新窗口的重分段映射。
+   *
+   * Issue #879 复核评论问题3：返回 WindowMatchResult 而非裸窗口——
+   * 调用方需要知道是完全匹配还是部分匹配，以决定 startClip 的取值方式：
+   * - 完全匹配：用窗口的 currentClipLeft/Right
+   * - 部分匹配：用窗口的 currentClipLeft 作为起点（零宽度），不直接复用整个窗口的裁切范围
    */
   private static findBestMatchWindow(
     visibleWindowByGlyphId: Map<string, MotionGlyphWindow>,
     glyphIds: string[]
-  ): MotionGlyphWindow | undefined {
+  ): WindowMatchResult | undefined {
     if (glyphIds.length === 0) {
       return undefined
     }
@@ -565,7 +615,14 @@ export class EditorMotionPlanner {
         bestCount = count
       }
     })
-    return bestWindow
+    if (bestWindow === undefined) {
+      return undefined
+    }
+    return {
+      window: bestWindow,
+      matchedCount: bestCount,
+      isFullMatch: bestCount === glyphIds.length
+    }
   }
 
   /**

@@ -36,7 +36,7 @@
 
 import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
-import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
+import { EditorMotionPlan, EditorMotionPlanner, WindowMatchResult } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout, CaretRect } from '../render/editor_render_geometry'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
@@ -297,17 +297,40 @@ export class EditorMotionCoordinator {
     }
 
     // 深拷贝 plan，替换起始值
+    // Issue #879 复核评论问题3：不再直接复用旧窗口的 currentClipLeft/Right——
+    // 当原窗口跨折行被拆成多窗口、旧窗口只剩一部分字仍属于新窗口，或 x/y 因重排变化时，
+    // 旧整个窗口的裁切范围并不对应新窗口内同一段字的可见范围。
+    // 改为按 per-piece 局部几何计算 startClip/targetClip/startPosition：
+    // - 完全匹配（所有 glyphIds 都在 frozen 窗口中）：用 frozen 的 currentClip
+    // - 部分匹配：用 frozen 的 currentClipLeft 作为起点（零宽度）
+    // - 无 frozen 窗口（旧帧已静态化）：起点来自最新 displayed 的完整静态 glyph 矩形
     const newInsertRuns: InsertRun[] = []
     for (const run of prepared.plan.insertRuns) {
       // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      let startClipLeft: number
+      let startClipRight: number
+      if (match !== undefined && match.isFullMatch) {
+        // 完全匹配——用 frozen 的 currentClip
+        startClipLeft = match.window.currentClipLeft
+        startClipRight = match.window.currentClipRight
+      } else if (match !== undefined) {
+        // 部分匹配——从 frozen 的左边界开始（零宽度），不直接复用整个窗口的裁切范围
+        startClipLeft = match.window.currentClipLeft
+        startClipRight = match.window.currentClipLeft
+      } else {
+        // 旧帧已静态化（没有运动窗口）——起点来自最新 displayed 的完整静态 glyph 矩形
+        // 对于 InsertRun：零宽度起点（rect.x）
+        startClipLeft = run.rect.x
+        startClipRight = run.rect.x
+      }
       newInsertRuns.push({
         utf16Start: run.utf16Start,
         utf16End: run.utf16End,
         sourceKind: run.sourceKind,
         rect: run.rect,
-        startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
-        startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
+        startClipLeft: startClipLeft,
+        startClipRight: startClipRight,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -316,15 +339,32 @@ export class EditorMotionCoordinator {
     const newDeletedRuns: DeletedRun[] = []
     for (const run of prepared.plan.deletedRuns) {
       // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      // Issue #879 复核评论问题3：按 per-piece 局部几何计算 startClip
+      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      let startClipLeft: number
+      let startClipRight: number
+      if (match !== undefined && match.isFullMatch) {
+        // 完全匹配——用 frozen 的 currentClip
+        startClipLeft = match.window.currentClipLeft
+        startClipRight = match.window.currentClipRight
+      } else if (match !== undefined) {
+        // 部分匹配——从 frozen 的左边界开始（零宽度）
+        startClipLeft = match.window.currentClipLeft
+        startClipRight = match.window.currentClipLeft
+      } else {
+        // 旧帧已静态化（没有运动窗口）——起点来自最新 displayed 的完整静态 glyph 矩形
+        // 对于 DeletedRun：完整宽度起点（rect.x 到 rect.x + rect.width）
+        startClipLeft = run.rect.x
+        startClipRight = run.rect.x + run.rect.width
+      }
       newDeletedRuns.push({
         utf16Start: run.utf16Start,
         utf16End: run.utf16End,
         sourceKind: run.sourceKind,
         rect: run.rect,
         isForward: run.isForward,
-        startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
-        startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
+        startClipLeft: startClipLeft,
+        startClipRight: startClipRight,
         glyphIds: run.glyphIds,
         windowId: run.windowId
       })
@@ -333,7 +373,19 @@ export class EditorMotionCoordinator {
     const newRetainedMoves: RetainedMove[] = []
     for (const move of prepared.plan.retainedMoves) {
       // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
-      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, move.glyphIds)
+      // Issue #879 复核评论问题3：旧帧已静态化时起点来自 oldRect 而非 prepared plan 中过期的 startPosition
+      const match = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, move.glyphIds)
+      let startPositionX: number
+      let startPositionY: number
+      if (match !== undefined) {
+        // 有 frozen 窗口（完全或部分匹配）——用 frozen 的 currentPosition
+        startPositionX = match.window.currentPositionX
+        startPositionY = match.window.currentPositionY
+      } else {
+        // 旧帧已静态化（没有运动窗口）——起点来自 oldRect（完整静态 glyph 矩形）
+        startPositionX = move.oldRect.x
+        startPositionY = move.oldRect.y
+      }
       newRetainedMoves.push({
         oldUtf16Start: move.oldUtf16Start,
         oldUtf16End: move.oldUtf16End,
@@ -342,8 +394,8 @@ export class EditorMotionCoordinator {
         sourceKind: move.sourceKind,
         oldRect: move.oldRect,
         newRect: move.newRect,
-        startPositionX: frozen !== undefined ? frozen.currentPositionX : move.startPositionX,
-        startPositionY: frozen !== undefined ? frozen.currentPositionY : move.startPositionY,
+        startPositionX: startPositionX,
+        startPositionY: startPositionY,
         glyphIds: move.glyphIds,
         windowId: move.windowId
       })
@@ -1020,11 +1072,14 @@ export class EditorMotionCoordinator {
   /**
    * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 frozenByGlyphId，
    * 取交集最大的窗口作为匹配——不再仅靠窗口首字符簇身份匹配。
+   *
+   * Issue #879 复核评论问题3：返回 WindowMatchResult 而非裸窗口——
+   * 调用方需要知道是完全匹配还是部分匹配，以决定 startClip 的取值方式。
    */
   private static findBestMatchFrozenWindow(
     frozenByGlyphId: Map<string, MotionGlyphWindow>,
     glyphIds: string[]
-  ): MotionGlyphWindow | undefined {
+  ): WindowMatchResult | undefined {
     if (glyphIds.length === 0) {
       return undefined
     }
@@ -1043,7 +1098,14 @@ export class EditorMotionCoordinator {
         bestCount = count
       }
     })
-    return bestWindow
+    if (bestWindow === undefined) {
+      return undefined
+    }
+    return {
+      window: bestWindow,
+      matchedCount: bestCount,
+      isFullMatch: bestCount === glyphIds.length
+    }
   }
 
   /**

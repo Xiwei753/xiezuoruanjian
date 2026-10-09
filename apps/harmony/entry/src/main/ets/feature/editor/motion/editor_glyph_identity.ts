@@ -96,22 +96,41 @@ function splitClusterRanges(text: string): ClusterRange[] {
 }
 
 /**
+ * FNV-1a 32 位确定性 hash——把字符串映射为固定长度十六进制摘要。
+ *
+ * 用于 windowIdForGlyphIds 中对完整 glyphIds 序列做 hash，
+ * 保证不同序列产生不同 windowId（碰撞概率 ≈ 1/2^32），
+ * 同时 windowId 长度固定，不随 glyphIds 序列长度增长。
+ */
+function fnv1aHash(str: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16)
+}
+
+/**
  * Issue #879 复核评论问题4：由一段字符簇身份序列派生「窗口身份」。
  *
  * 字形单元 id（glyphId）是单个字符簇的身份，而动画里的一个裁切窗口往往覆盖
  * 多个字符簇；两者不是同一种对象，不能拿首字符簇身份代表整窗口。窗口身份定义为
- * 首簇身份 + 簇数，因此：
+ * 完整簇身份序列的确定性 hash（长度前缀 + FNV-1a 摘要），因此：
  * - 位置平移不改变窗口身份（id 里不含 utf16 区间，也不含窗口坐标）；
  * - 折行 / 运动区间重分段导致簇序列变化时窗口身份随之变化，
- *   此时由 Planner 用幸存 glyphId 交集建立旧窗口 → 新窗口的重分段映射。
+ *   此时由 Planner 用幸存 glyphId 交集建立旧窗口 → 新窗口的重分段映射；
+ * - 不同簇序列只要内容不同就产生不同 windowId，不会碰撞
+ *   （旧实现 `win-${glyphIds[0]}x${glyphIds.length}` 仅用首簇+数量，
+ *   `[A,B,C]` 与 `[A,D,E]` 会产生相同 ID）。
  *
- * 只用字母数字与 `-x` 分隔符，保证可直接用作 ArkUI 组件 id。
+ * 只用字母数字与 `-` 分隔符，保证可直接用作 ArkUI 组件 id。
  */
 export function windowIdForGlyphIds(glyphIds: string[]): string {
   if (glyphIds.length === 0) {
     return 'win-empty'
   }
-  return `win-${glyphIds[0]}x${glyphIds.length}`
+  return `win-${glyphIds.length}-${fnv1aHash(glyphIds.join('-'))}`
 }
 
 /**

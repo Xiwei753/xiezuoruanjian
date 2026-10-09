@@ -102,9 +102,9 @@ export interface InsertRun {
   /**
    * Issue #879 复核评论问题4：独立于字形单元身份的窗口身份。
    *
-   * 由本 run 覆盖的字符簇身份序列派生（首簇身份 + 簇数），因此位置平移、
-   * 折行重分段只要覆盖的簇序列不变就保持稳定——它是"一整段文字裁切窗口"的身份，
-   * 与单个字形单元的 glyphId 不是同一种对象。
+   * 由本 run 覆盖的完整字符簇身份序列派生（win-<len>-<fnv1a-hash>），
+   * 因此位置平移、折行重分段只要覆盖的簇序列不变就保持稳定——它是"一整段文字裁切窗口"的身份，
+   * 与单个字形单元的 glyphId 不是同一种对象。不同簇序列不会碰撞。
    */
   windowId: string
 }
@@ -276,7 +276,9 @@ export interface MotionGlyphWindow {
    * 这解决了"上一帧 new 字形变成下一笔 old 字形时 ForEach 复用同一 Text 节点，
    * 但源已从 new-rN 切换为 old-rN，onAppear 不再触发，节点仍画原先的 StyledString"的问题。
    *
-   * Issue #879 复核评论问题4：窗口身份用 windowId，不再拿窗口首字形的身份代替整窗口身份。
+   * Issue #879 复核评论问题4：windowId 由完整 glyphIds 序列派生（win-<len>-<fnv1a-hash>），
+   * 不同簇序列不会碰撞；renderNodeKey 包含 sourceKind + sourceRevision + windowId,
+   * 切源或窗口内容变化时均创建新节点而非复用旧节点。
    */
   renderNodeKey: string
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
