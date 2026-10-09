@@ -176,6 +176,7 @@ fn build_render_plan_full_drawn_caret_reflects_cursor_state() {
             y: 17.0,
             h: 22.0,
             opacity: 1.0,
+            ..CursorRenderState::default()
         };
         let plan = item
             .pipeline

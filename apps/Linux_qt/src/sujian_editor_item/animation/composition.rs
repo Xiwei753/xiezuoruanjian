@@ -59,6 +59,7 @@ impl LinuxEditorAnimationCoordinator {
                 .clone()
                 .unwrap_or_else(|| OffsetMap::build(&motion.old_text, &motion.new_text)),
             deleted_range_edges: motion.deleted_range_edges,
+            caret_motion: motion.old_cursor_rect.zip(motion.new_cursor_rect),
             animate: true,
             now,
         });

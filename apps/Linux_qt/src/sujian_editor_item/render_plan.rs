@@ -1,6 +1,8 @@
+use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::render_ownership::RenderOwnershipPlan;
 use crate::editor::layout::LayoutSnapshot;
+use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::DeleteEdge;
 
 #[derive(Clone, Debug)]
@@ -115,6 +117,12 @@ pub(crate) struct CursorRenderState {
     pub y: f64,
     pub h: f64,
     pub opacity: f64,
+    /// The active move intent and the route currently owned by CursorController.
+    pub movement_source: Option<CursorMoveSource>,
+    pub target_x: f64,
+    pub target_y: f64,
+    pub path_start_x: f64,
+    pub path_start_y: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +131,13 @@ pub(crate) struct VisualCaretGeometry {
     pub x: f64,
     pub y: f64,
     pub h: f64,
+    pub movement_source: CursorMoveSource,
+    pub target_x: f64,
+    pub target_y: f64,
+    pub path_start_x: f64,
+    pub path_start_y: f64,
+    pub layout_revision: Option<LayoutRevision>,
+    pub document_session: u64,
 }
 
 #[derive(Clone, Debug, Default)]
