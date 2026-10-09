@@ -97,6 +97,23 @@ export interface InsertRun {
    * 后者在字前插入/删除后 offset 平移即失配。
    */
   stableGlyphId: string
+  /**
+   * Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表。
+   *
+   * 一个 run 可能覆盖多个字符簇（跨行片段、多字连续区间）。
+   * glyphIds 记录所有字符簇的身份，用于与上一帧窗口按 glyphId 交集匹配——
+   * 不再仅靠起始字符簇身份代表整窗口。
+   */
+  glyphIds: string[]
+  /**
+   * Issue #879 复核评论问题4：独立的窗口身份标识。
+   *
+   * windowId 与 glyphIds 拆分：字形单元 id 是单个字符簇的身份，
+   * windowId 是"一整段文字裁切窗口"的身份。
+   * 折行变化/运动区间拆分合并后，run 的第一字符可能变，
+   * 但 windowId 保持稳定，确保窗口能和上帧按同一 id 接续。
+   */
+  windowId: string
 }
 
 /**
@@ -131,6 +148,10 @@ export interface DeletedRun {
   startClipRight: number
   /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
   stableGlyphId: string
+  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表——见 InsertRun.glyphIds */
+  glyphIds: string[]
+  /** Issue #879 复核评论问题4：独立的窗口身份标识——见 InsertRun.windowId */
+  windowId: string
 }
 
 /**
@@ -172,6 +193,10 @@ export interface RetainedMove {
   startPositionY: number
   /** 跨修订稳定字形身份（取起始字符簇的身份）——见 InsertRun.stableGlyphId */
   stableGlyphId: string
+  /** Issue #879 复核评论问题4：该 run 覆盖的所有字符簇的 stableGlyphId 列表——见 InsertRun.glyphIds */
+  glyphIds: string[]
+  /** Issue #879 复核评论问题4：独立的窗口身份标识——见 InsertRun.windowId */
+  windowId: string
 }
 
 /**
@@ -240,6 +265,22 @@ export interface MotionGlyphWindow {
   sourceRevision: number
   /** 字形簇身份标识——跨版本稳定身份，基于字符内容 hash（utf16Start + utf16End + textHash），不含 sourceKind，不依赖 sourceRevision */
   clusterId: string
+  /**
+   * Issue #879 复核评论问题4：该窗口覆盖的所有字符簇的 stableGlyphId 列表。
+   *
+   * 用于与上一帧窗口按 glyphId 交集匹配——查找时用 glyphIds 数组逐个查，
+   * 取交集最大的窗口作为匹配，不再仅靠 clusterId（首字符簇身份）匹配。
+   */
+  glyphIds: string[]
+  /**
+   * Issue #879 复核评论问题4：独立的窗口身份标识。
+   *
+   * 与 glyphIds 拆分：字形单元 id 是单个字符簇的身份，
+   * windowId 是"一整段文字裁切窗口"的身份。
+   * buildFrame 中 MotionGlyphWindow 的 clusterId 改为 windowId——
+   * 窗口身份不再混用首字符簇身份。
+   */
+  windowId: string
   /**
    * 渲染节点身份标识——用于 ForEach key 和 TextController/窗口状态管理。
    *

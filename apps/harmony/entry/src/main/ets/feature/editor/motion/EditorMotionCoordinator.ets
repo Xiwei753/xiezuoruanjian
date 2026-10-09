@@ -263,6 +263,133 @@ export class EditorMotionCoordinator {
   }
 
   /**
+   * Issue #879 复核评论修复（问题3）：重定向候选——用最新冻结帧的 clip/position
+   * 替换候选 plan 中各 run 的 startClipLeft/Right/startPositionX/Y。
+   *
+   * 在 executeDisplaySwitch 中（窗口 ready 后才调）：
+   * 先 ++motionGeneration + cancel 旧 animator → 冻结当前 displayedVisualFrame →
+   * 调 retargetCandidate 重新规划候选 → commitCandidate → 更新主 Text。
+   *
+   * 旧 animator 被取消时 displayedVisualFrame 停在某一中间进度，其
+   * MotionGlyphWindow.currentClipLeft/Right/currentPositionX/Y 反映真实屏幕状态。
+   * 候选 plan 的 startClipLeft/Right/startPositionX/Y 是在 prepareCandidate 阶段
+   * 用 displayedFrameForCandidate（当时帧）计算的——但实际提交时旧 animator 已推进，
+   * 屏幕状态已变。retargetCandidate 用冻结帧的真实值替换候选 plan 的起始值，
+   * 确保新动画从真实屏幕状态开始，而非从过时的起始状态跳变。
+   *
+   * @param prepared prepareCandidate 返回的不可变候选
+   * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame（旧 animator 停止后的真实帧）
+   * @returns 重定向后的新候选
+   */
+  retargetCandidate(prepared: PreparedCandidate, latestDisplayedFrame: EditorVisualFrame): PreparedCandidate {
+    // Issue #879 复核评论问题4：构建 glyphId → frozen window 映射，
+    // 用于按字形身份列表逐个查找冻结帧中的当前状态。
+    // 不再仅用 clusterId（首字符簇身份）匹配——用 glyphIds 交集最大匹配。
+    const frozenByGlyphId: Map<string, MotionGlyphWindow> = new Map()
+    for (const w of latestDisplayedFrame.motionGlyphWindows) {
+      for (const gid of w.glyphIds) {
+        frozenByGlyphId.set(gid, w)
+      }
+    }
+
+    // 深拷贝 plan，替换起始值
+    const newInsertRuns: InsertRun[] = []
+    for (const run of prepared.plan.insertRuns) {
+      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
+      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      newInsertRuns.push({
+        utf16Start: run.utf16Start,
+        utf16End: run.utf16End,
+        sourceKind: run.sourceKind,
+        rect: run.rect,
+        startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
+        startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
+        stableGlyphId: run.stableGlyphId,
+        glyphIds: run.glyphIds,
+        windowId: run.windowId
+      })
+    }
+
+    const newDeletedRuns: DeletedRun[] = []
+    for (const run of prepared.plan.deletedRuns) {
+      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
+      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, run.glyphIds)
+      newDeletedRuns.push({
+        utf16Start: run.utf16Start,
+        utf16End: run.utf16End,
+        sourceKind: run.sourceKind,
+        rect: run.rect,
+        isForward: run.isForward,
+        startClipLeft: frozen !== undefined ? frozen.currentClipLeft : run.startClipLeft,
+        startClipRight: frozen !== undefined ? frozen.currentClipRight : run.startClipRight,
+        stableGlyphId: run.stableGlyphId,
+        glyphIds: run.glyphIds,
+        windowId: run.windowId
+      })
+    }
+
+    const newRetainedMoves: RetainedMove[] = []
+    for (const move of prepared.plan.retainedMoves) {
+      // Issue #879 复核评论问题4：用 glyphIds 逐个查，取交集最大的窗口
+      const frozen = EditorMotionCoordinator.findBestMatchFrozenWindow(frozenByGlyphId, move.glyphIds)
+      newRetainedMoves.push({
+        oldUtf16Start: move.oldUtf16Start,
+        oldUtf16End: move.oldUtf16End,
+        newUtf16Start: move.newUtf16Start,
+        newUtf16End: move.newUtf16End,
+        sourceKind: move.sourceKind,
+        oldRect: move.oldRect,
+        newRect: move.newRect,
+        startPositionX: frozen !== undefined ? frozen.currentPositionX : move.startPositionX,
+        startPositionY: frozen !== undefined ? frozen.currentPositionY : move.startPositionY,
+        stableGlyphId: move.stableGlyphId,
+        glyphIds: move.glyphIds,
+        windowId: move.windowId
+      })
+    }
+
+    const newPlan: EditorMotionPlan = {
+      insertRuns: newInsertRuns,
+      deletedRuns: newDeletedRuns,
+      retainedMoves: newRetainedMoves,
+      caretPath: prepared.plan.caretPath,
+      durationMs: prepared.plan.durationMs,
+      motionKind: prepared.plan.motionKind
+    }
+
+    // 用更新后的 plan 和冻结帧构建新的起始帧（progress=0）
+    const newStartFrame = EditorMotionCoordinator.buildFrame(
+      newPlan,
+      prepared.state.oldSnapshot,
+      prepared.state.newSnapshot,
+      prepared.state.newLayout,
+      latestDisplayedFrame,
+      0
+    )
+
+    // 创建新的 state（复制旧 state，替换 plan 和 frame）
+    const newState: MotionCommittedState = {
+      plan: newPlan,
+      frame: newStartFrame,
+      oldSnapshot: prepared.state.oldSnapshot,
+      oldLayout: prepared.state.oldLayout,
+      newSnapshot: prepared.state.newSnapshot,
+      newLayout: prepared.state.newLayout,
+      geometryKey: prepared.state.geometryKey,
+      textRevisionKey: prepared.state.textRevisionKey,
+      motionDurationMs: prepared.state.motionDurationMs,
+      firstCaretRect: prepared.state.firstCaretRect,
+      glyphIdentities: prepared.state.glyphIdentities
+    }
+
+    return {
+      plan: newPlan,
+      startFrame: newStartFrame,
+      state: newState
+    }
+  }
+
+  /**
    * 接收编辑更新（带事务链），生成新 plan，retarget 到最新 canonical。
    *
    * Issue #879 最新复核评论问题1：连续快速输入时，多笔 editResult 形成事务链。
@@ -696,7 +823,11 @@ export class EditorMotionCoordinator {
         offsetY: 0,
         runId: `new-${newRevision}`,
         sourceRevision: newRevision,
-        clusterId: run.stableGlyphId,
+        // Issue #879 复核评论问题4：clusterId 改为 windowId（独立窗口身份），
+        // glyphIds 数组也传入——不再拿窗口第一个字代替整窗口身份
+        clusterId: run.windowId,
+        glyphIds: run.glyphIds,
+        windowId: run.windowId,
         renderNodeKey: `new-${newRevision}-${run.stableGlyphId}`,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
@@ -734,7 +865,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: run.stableGlyphId,
+          // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
+          clusterId: run.windowId,
+          glyphIds: run.glyphIds,
+          windowId: run.windowId,
           renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
@@ -763,7 +897,10 @@ export class EditorMotionCoordinator {
           offsetY: 0,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
-          clusterId: run.stableGlyphId,
+          // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
+          clusterId: run.windowId,
+          glyphIds: run.glyphIds,
+          windowId: run.windowId,
           renderNodeKey: `old-${oldRevision}-${run.stableGlyphId}`,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
@@ -796,7 +933,10 @@ export class EditorMotionCoordinator {
         offsetY: currentY - move.oldRect.y,
         runId: `old-${oldRevision}`,
         sourceRevision: oldRevision,
-        clusterId: move.stableGlyphId,
+        // Issue #879 复核评论问题4：clusterId 改为 windowId，glyphIds 数组也传入
+        clusterId: move.windowId,
+        glyphIds: move.glyphIds,
+        windowId: move.windowId,
         renderNodeKey: `old-${oldRevision}-${move.stableGlyphId}`,
         currentClipLeft: currentX,
         currentClipRight: currentX + move.oldRect.width,
@@ -858,6 +998,35 @@ export class EditorMotionCoordinator {
       isAnimating: progress < 1,
       motionKind: plan.motionKind
     }
+  }
+
+  /**
+   * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 frozenByGlyphId，
+   * 取交集最大的窗口作为匹配——不再仅靠 clusterId（首字符簇身份）匹配。
+   */
+  private static findBestMatchFrozenWindow(
+    frozenByGlyphId: Map<string, MotionGlyphWindow>,
+    glyphIds: string[]
+  ): MotionGlyphWindow | undefined {
+    if (glyphIds.length === 0) {
+      return undefined
+    }
+    const windowHitCount: Map<MotionGlyphWindow, number> = new Map()
+    for (const gid of glyphIds) {
+      const w = frozenByGlyphId.get(gid)
+      if (w !== undefined) {
+        windowHitCount.set(w, (windowHitCount.get(w) ?? 0) + 1)
+      }
+    }
+    let bestWindow: MotionGlyphWindow | undefined = undefined
+    let bestCount = 0
+    windowHitCount.forEach((count: number, w: MotionGlyphWindow): void => {
+      if (count > bestCount) {
+        bestWindow = w
+        bestCount = count
+      }
+    })
+    return bestWindow
   }
 
   /**

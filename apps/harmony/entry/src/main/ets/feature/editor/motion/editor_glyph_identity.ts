@@ -203,6 +203,44 @@ export class GlyphIdentityTable {
   }
 
   /**
+   * Issue #879 复核评论问题4：返回 [utf16Start, utf16End) 范围内所有字符簇的身份条目列表。
+   *
+   * 一个 Planner run（InsertRun/DeletedRun/RetainedMove）可能覆盖多个字符簇，
+   * 仅取起始字符簇的身份无法在折行变化/运动区间拆分合并后正确接续。
+   * 本方法返回该范围内所有字符簇的 GlyphIdentityEntry，供 Planner 为每个 run
+   * 构建 glyphIds 列表和独立 windowId。
+   *
+   * @param utf16Start 起始 UTF-16 offset（inclusive）
+   * @param utf16End 结束 UTF-16 offset（exclusive）
+   * @returns 范围内所有字符簇的身份条目列表（按 utf16Start 升序）；范围无效时返回空数组
+   */
+  idsForRange(utf16Start: number, utf16End: number): GlyphIdentityEntry[] {
+    if (utf16Start >= utf16End) {
+      return []
+    }
+    const result: GlyphIdentityEntry[] = []
+    for (const entry of this.entries) {
+      // 条目完全在范围内
+      if (entry.utf16Start >= utf16Start && entry.utf16End <= utf16End) {
+        result.push(entry)
+      }
+      // 条目部分重叠——裁切后纳入
+      if (entry.utf16Start < utf16Start && entry.utf16End > utf16Start) {
+        result.push({
+          utf16Start: utf16Start,
+          utf16End: Math.min(entry.utf16End, utf16End),
+          glyphId: entry.glyphId,
+        })
+      }
+      // 已越过范围
+      if (entry.utf16Start >= utf16End) {
+        break
+      }
+    }
+    return result
+  }
+
+  /**
    * 查询 utf16Start 所在字符簇的稳定身份。
    *
    * 窗口身份取「起始字符簇」——一个窗口被折行拆成多段时，每段的起始字符簇不同，

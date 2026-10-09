@@ -32,7 +32,7 @@ import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, Re
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
-import { GlyphIdentityTable } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry } from './editor_glyph_identity'
 
 /**
  * Issue #879 最新复核评论问题3：保留字移动的中间结构。
@@ -325,14 +325,16 @@ export class EditorMotionPlanner {
     // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
 
-    // Issue #879 最新复核评论修复（问题3）：从 lastVisibleFrame.motionGlyphWindows 构建查找 Map，
-    // 用于在连续快速输入时消费当前帧的实际裁切窗口和位置作为起始状态。
-    // key 是 stableGlyphId（跨修订稳定的字形身份）——同一字符在上一笔是"new"
-    // 下一笔成为"old"时身份不变，与 sourceKind / 位置无关。
-    const visibleWindowMap: Map<string, MotionGlyphWindow> = new Map()
+    // Issue #879 复核评论问题4：visibleWindowMap 的 key 改为 glyphId（单个字符簇身份），
+    // value 为该 glyphId 所属的窗口。查找时用 glyphIds 数组逐个查，
+    // 取交集最大的窗口作为匹配——不再拿窗口第一个字代替整窗口身份。
+    const visibleWindowByGlyphId: Map<string, MotionGlyphWindow> = new Map()
     if (lastVisibleFrame.isAnimating && lastVisibleFrame.motionGlyphWindows.length > 0) {
       for (const w of lastVisibleFrame.motionGlyphWindows) {
-        visibleWindowMap.set(w.clusterId, w)
+        // 用窗口的 glyphIds 数组逐个注册——每个 glyphId 映射到所属窗口
+        for (const gid of w.glyphIds) {
+          visibleWindowByGlyphId.set(gid, w)
+        }
       }
     }
 
@@ -356,12 +358,20 @@ export class EditorMotionPlanner {
           oldText, oldUtf16Start, oldUtf16End, oldLayout
         )
         for (const rect of oldRects) {
-          // Issue #879 最新复核评论问题3：稳定身份来自身份表的字符簇搬运结果，
-          // 位置平移、old/new 角色变化都不改身份；表缺失时退回内容 hash。
-          const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+          // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
+          // windowId 是独立的窗口身份——不再仅用起始字符簇身份代表整窗口。
+          const glyphIds = EditorMotionPlanner.resolveGlyphIds(
             oldIdentities, rect.utf16Start, rect.utf16End, oldText
           )
-          const visibleWindow = visibleWindowMap.get(stableGlyphId)
+          const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
+            rect.utf16Start, rect.utf16End, oldText
+          )
+          const windowId = `del-${rect.utf16Start}-${rect.utf16End}`
+          // Issue #879 复核评论问题4：用 glyphIds 数组逐个查 visibleWindowByGlyphId，
+          // 取交集最大的窗口作为匹配
+          const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+            visibleWindowByGlyphId, glyphIds
+          )
           // 目标状态：rect.rect（旧排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认完整宽度
           const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
@@ -374,7 +384,9 @@ export class EditorMotionPlanner {
             isForward: isForwardDelete,
             startClipLeft: startClipLeft,
             startClipRight: startClipRight,
-            stableGlyphId: stableGlyphId
+            stableGlyphId: stableGlyphId,
+            glyphIds: glyphIds,
+            windowId: windowId
           })
         }
       }
@@ -386,12 +398,19 @@ export class EditorMotionPlanner {
           newText, newUtf16Start, newUtf16End, newLayout
         )
         for (const rect of newRects) {
-          // Issue #879 最新复核评论问题3：新插入的字拿到独立身份（ins-…），
-          // 它在本笔之后成为旧正文时仍沿用同一身份。
-          const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+          // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
+          // windowId 是独立的窗口身份。
+          const glyphIds = EditorMotionPlanner.resolveGlyphIds(
             newIdentities, rect.utf16Start, rect.utf16End, newText
           )
-          const visibleWindow = visibleWindowMap.get(stableGlyphId)
+          const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
+            rect.utf16Start, rect.utf16End, newText
+          )
+          const windowId = `ins-${rect.utf16Start}-${rect.utf16End}`
+          // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
+          const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+            visibleWindowByGlyphId, glyphIds
+          )
           // 目标状态：rect.rect（新排版中的完整位置）
           // 起始状态：如果有匹配的 visibleWindow，用其 currentClipLeft/Right；否则默认零宽度
           const startClipLeft = visibleWindow !== undefined ? visibleWindow.currentClipLeft : rect.rect.x
@@ -403,7 +422,9 @@ export class EditorMotionPlanner {
             rect: rect.rect,
             startClipLeft: startClipLeft,
             startClipRight: startClipRight,
-            stableGlyphId: stableGlyphId
+            stableGlyphId: stableGlyphId,
+            glyphIds: glyphIds,
+            windowId: windowId
           })
         }
       }
@@ -415,11 +436,19 @@ export class EditorMotionPlanner {
         editResult.offsetMap, oldText, newText, oldLayout, newLayout
       )
       for (const move of moves) {
-        // Issue #879 最新复核评论问题3：保留字身份同样来自身份表（旧正文侧）。
-        const stableGlyphId = EditorMotionPlanner.resolveGlyphId(
+        // Issue #879 复核评论问题4：glyphIds 取该范围内所有字符簇身份列表，
+        // windowId 是独立的窗口身份。
+        const glyphIds = EditorMotionPlanner.resolveGlyphIds(
           oldIdentities, move.oldUtf16Start, move.oldUtf16End, oldText
         )
-        const visibleWindow = visibleWindowMap.get(stableGlyphId)
+        const stableGlyphId = glyphIds.length > 0 ? glyphIds[0] : EditorMotionPlanner.fallbackGlyphId(
+          move.oldUtf16Start, move.oldUtf16End, oldText
+        )
+        const windowId = `ret-${move.oldUtf16Start}-${move.oldUtf16End}`
+        // Issue #879 复核评论问题4：用 glyphIds 数组逐个查，取交集最大的窗口作为匹配
+        const visibleWindow = EditorMotionPlanner.findBestMatchWindow(
+          visibleWindowByGlyphId, glyphIds
+        )
         // 目标状态：move.newRect（新排版中的位置）
         // 起始状态：如果有匹配的 visibleWindow，用其 currentPositionX/Y；否则默认 oldRect.x/y
         const startPositionX = visibleWindow !== undefined ? visibleWindow.currentPositionX : move.oldRect.x
@@ -434,7 +463,9 @@ export class EditorMotionPlanner {
           newRect: move.newRect,
           startPositionX: startPositionX,
           startPositionY: startPositionY,
-          stableGlyphId: stableGlyphId
+          stableGlyphId: stableGlyphId,
+          glyphIds: glyphIds,
+          windowId: windowId
         })
       }
     }
@@ -490,6 +521,63 @@ export class EditorMotionPlanner {
       return MotionKind.Reflow
     }
     return MotionKind.None
+  }
+
+  /**
+   * Issue #879 复核评论问题4：解析一个字形范围内所有字符簇的跨修订稳定身份列表。
+   *
+   * 使用身份表的 idsForRange 方法获取范围内所有字符簇的 GlyphIdentityEntry，
+   * 提取 glyphId 列表。身份表缺失时退回单个内容 hash 作为兜底。
+   */
+  private static resolveGlyphIds(
+    identities: GlyphIdentityTable | null,
+    utf16Start: number,
+    utf16End: number,
+    text: string
+  ): string[] {
+    if (identities !== null) {
+      const entries = identities.idsForRange(utf16Start, utf16End)
+      if (entries.length > 0) {
+        return entries.map((e: GlyphIdentityEntry): string => e.glyphId)
+      }
+    }
+    // 兜底：单个内容 hash
+    return [EditorMotionPlanner.fallbackGlyphId(utf16Start, utf16End, text)]
+  }
+
+  /**
+   * Issue #879 复核评论问题4：用 glyphIds 数组逐个查 visibleWindowByGlyphId，
+   * 取交集最大的窗口作为匹配。
+   *
+   * 不再仅靠起始字符簇身份（clusterId）匹配——一个 run 可能覆盖多个字符簇，
+   * 折行变化/运动区间拆分合并后首字符可能变，但幸存 glyphId 的交集仍能建立
+   * 旧窗口→新窗口的重分段映射。
+   */
+  private static findBestMatchWindow(
+    visibleWindowByGlyphId: Map<string, MotionGlyphWindow>,
+    glyphIds: string[]
+  ): MotionGlyphWindow | undefined {
+    if (glyphIds.length === 0) {
+      return undefined
+    }
+    // 统计每个窗口被多少个 glyphId 命中
+    const windowHitCount: Map<MotionGlyphWindow, number> = new Map()
+    for (const gid of glyphIds) {
+      const w = visibleWindowByGlyphId.get(gid)
+      if (w !== undefined) {
+        windowHitCount.set(w, (windowHitCount.get(w) ?? 0) + 1)
+      }
+    }
+    // 取命中数最多的窗口
+    let bestWindow: MotionGlyphWindow | undefined = undefined
+    let bestCount = 0
+    windowHitCount.forEach((count: number, w: MotionGlyphWindow): void => {
+      if (count > bestCount) {
+        bestWindow = w
+        bestCount = count
+      }
+    })
+    return bestWindow
   }
 
   /**
