@@ -295,7 +295,7 @@ export class SettingsViewModel {
       const controller = SyncOperationController.getInstance()
       const outcome = await controller.performSync()
       if (outcome.phase === 'success') {
-        this.syncMessage = `sync_complete:0`
+        this.syncMessage = `sync_complete:${outcome.totalDownloaded ?? 0}`
       } else {
         this.syncMessage = `error:${outcome.errorCode ?? 'sync_error'}`
       }

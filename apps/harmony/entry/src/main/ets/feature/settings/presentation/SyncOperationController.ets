@@ -19,6 +19,9 @@ export interface SyncOutcome {
   message: string
   errorCode?: string
   rawError?: string
+  totalDownloaded?: number
+  totalUploaded?: number
+  overallStatus?: string
 }
 
 export class SyncOperationController {
@@ -78,33 +81,46 @@ export class SyncOperationController {
         return { phase: 'failed', message: '同步结果数据缺失', errorCode: 'SCHEMA_MISMATCH' }
       }
 
-      // 只允许明确的成功终态显示"完成"
+      // 只允许明确的成功终态显示"完成"（与 Core sync_status_to_wire 对齐）
       const status = syncResult.overallStatus
-      if (status === 'all_synced' || status === 'no_changes') {
+      if (status === 'success' || status === 'no_changes' || status === 'latest_wins_applied') {
         hilog.info(DOMAIN, TAG, 'performSync: success, status=%{public}s', status)
         return {
           phase: 'success',
-          message: status === 'no_changes' ? '同步完成，无变更' : `同步完成，下载 ${syncResult.totalDownloaded} 项`
+          message: status === 'no_changes' ? '同步完成，无变更' :
+            status === 'latest_wins_applied' ? '同步完成，最新版本已应用' :
+            `同步完成，下载 ${syncResult.totalDownloaded} 项`,
+          totalDownloaded: syncResult.totalDownloaded,
+          totalUploaded: syncResult.totalUploaded,
+          overallStatus: status
         }
       }
 
       // 明确的失败终态
       if (status === 'conflict' || status === 'partial_conflict') {
-        return { phase: 'failed', message: '同步冲突，需要手动解决', errorCode: 'SYNC_CONFLICT' }
-      }
-      if (status === 'dirty_repo_blocked') {
-        return { phase: 'failed', message: '本地仓库有未提交变更，同步被阻止', errorCode: 'SYNC_DIRTY_REPO' }
+        return {
+          phase: 'failed',
+          message: '同步冲突，需要手动解决',
+          errorCode: 'SYNC_CONFLICT',
+          overallStatus: status
+        }
       }
       if (status === 'recoverable_error' || status === 'fatal_error' || status === 'error') {
         const errorCategory = syncResult.errorCategory ?? ''
+        const errorMsg = syncResult.error ?? ''
         return {
           phase: 'failed',
-          message: this.syncErrorMessage(errorCategory),
-          errorCode: errorCategory || 'SYNC_ERROR'
+          message: this.syncErrorMessage(errorCategory) || errorMsg,
+          errorCode: errorCategory || 'SYNC_ERROR',
+          rawError: errorMsg,
+          overallStatus: status
         }
       }
       if (status === 'syncing') {
         return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
+      }
+      if (status === 'idle' || status === 'configured_not_tested') {
+        return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
       }
 
       // 未知值是协议错误

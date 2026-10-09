@@ -220,8 +220,10 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
 /// 供 Harmony 等需要注入 `SyncTransportFactory` 的平台端使用。
 /// 与 `writer_core_init` 共享同一份 `APP_SERVICE`，只是初始化路径不同。
 ///
-/// 这是 Rust 内部调用（非跨语言 C ABI），`PlatformServices` 包含 trait object
-/// 字段，不适合作为 extern "C" 参数。
+/// 这是 Rust 内部跨 crate 调用（非跨语言 C ABI），`PlatformServices` 包含
+/// trait object 字段，不适合作为 `extern "C"` 参数。真正的 C ABI 入口
+/// 在 `platform/rust/harmony/src/init.rs::writer_core_init_harmony`，由它
+/// 在 Rust 内调用本函数。
 ///
 /// # Safety
 /// `path` must be a valid null-terminated UTF-8 C string.
@@ -231,9 +233,7 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
 ///  -1  = null pointer
 ///  -2  = invalid UTF-8
 ///  -4  = bootstrap failed
-#[no_mangle]
-#[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn writer_core_init_with_services(
+pub unsafe fn writer_core_init_with_services(
     path: *const c_char,
     services: PlatformServices,
 ) -> i32 {

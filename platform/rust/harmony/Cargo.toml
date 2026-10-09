@@ -10,7 +10,7 @@ workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["github-api"]
 github-api = ["writer_core/github-api", "dep:reqwest"]
 
 [dependencies]
