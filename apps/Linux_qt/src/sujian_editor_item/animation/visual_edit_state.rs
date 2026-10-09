@@ -1,6 +1,6 @@
 //! 单一的正文视觉过渡。
 //!
-//! 每次编辑都丢弃上一份 transition，从最近成功提交的 VisualFrame 直接构造新目标。
+//! 每次编辑都丢弃上一份 transition，从最近收到 Qt 提交回执的 VisualFrame 构造新目标。
 //! 不保存 burst、stage、travelling distance 或排队中的编辑历史。
 
 use std::collections::HashSet;
@@ -30,14 +30,14 @@ struct TargetCluster {
 #[derive(Clone, Copy, Debug)]
 enum MotionKind {
     Transform,
-    /// Continue a same-shaped glyph from the last committed visible slice.
+    /// Continue a same-shaped glyph from the latest Qt-submitted visible slice.
     RevealFromCommittedSlice,
     Reveal,
     Delete(DeleteEdge),
     CrossFade,
 }
 
-const MIN_CATCH_UP_PRESENTED_FRAMES: u8 = 3;
+const MIN_CATCH_UP_SUBMITTED_FRAMES: u8 = 3;
 
 #[derive(Clone, Copy, Debug)]
 enum MotionBoundary {
@@ -74,7 +74,9 @@ impl From<LineSnapshotId> for VisualLineIdentity {
 
 #[derive(Clone, Copy, Debug)]
 struct CaretMotion {
+    from: CaretPosition,
     to: CaretPosition,
+    to_byte: usize,
     from_line: Option<VisualLineIdentity>,
     to_line: Option<VisualLineIdentity>,
     layout_revision: LayoutRevision,
@@ -85,6 +87,7 @@ impl CaretMotion {
     fn new(
         from: CursorRect,
         to: CursorRect,
+        caret_byte_offsets: (usize, usize),
         base_snapshot: &EditorLayoutSnapshot,
         target_snapshot: &EditorLayoutSnapshot,
         layout_revision: LayoutRevision,
@@ -101,7 +104,9 @@ impl CaretMotion {
             h: (to.bottom - to.top).max(0.0),
         };
         Self {
+            from,
             to,
+            to_byte: caret_byte_offsets.1,
             from_line: caret_line_identity(base_snapshot, from),
             to_line: caret_line_identity(target_snapshot, to),
             layout_revision,
@@ -116,6 +121,39 @@ impl CaretMotion {
             (self.from_line, self.to_line),
             (Some(from), Some(to)) if from == to && from == line_id.into()
         )
+    }
+
+    fn drives_committed_slice(
+        self,
+        source: &VisualCluster,
+        target: &TargetCluster,
+        offset_map: &OffsetMap,
+    ) -> bool {
+        if !self.can_drive_cluster_line(target.snapshot_id) {
+            return false;
+        }
+        let Some(mapped_source_range) =
+            offset_map.map_new_range_to_old(target.byte_range.0, target.byte_range.1)
+        else {
+            return false;
+        };
+        if source.canonical_range != Some(mapped_source_range) {
+            return false;
+        }
+
+        // The route must reach this cluster's logical trailing boundary and its
+        // direction-aware visible frontier. Merely sharing a visual row is insufficient.
+        let logical_frontier = target.byte_range.1;
+        if self.to_byte < logical_frontier {
+            return false;
+        }
+
+        let frontier_x = if target.shaping_identity.direction_rtl {
+            target.rect.x
+        } else {
+            target.rect.x + target.rect.w
+        };
+        route_crosses_cluster_frontier(self.from, self.to, frontier_x, &target.rect)
     }
 
     fn matches(self, caret: VisualCaretGeometry) -> bool {
@@ -133,6 +171,31 @@ impl CaretMotion {
                 caret.target_y,
             )
     }
+
+    fn matches_committed_slice(self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
+        if !self.can_drive_cluster_line(target.snapshot_id)
+            || self.to_byte < target.byte_range.1
+            || !self.matches(caret)
+        {
+            return false;
+        }
+        let from = CaretPosition {
+            x: caret.path_start_x,
+            y: caret.path_start_y,
+            h: caret.h.max(0.0),
+        };
+        let to = CaretPosition {
+            x: caret.target_x,
+            y: caret.target_y,
+            h: caret.h.max(0.0),
+        };
+        let frontier_x = if target.shaping_identity.direction_rtl {
+            target.rect.x
+        } else {
+            target.rect.x + target.rect.w
+        };
+        route_crosses_cluster_frontier(from, to, frontier_x, &target.rect)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -147,6 +210,8 @@ struct ClusterMotion {
     kind: MotionKind,
     caret_motion: Option<CaretMotion>,
     terminal_geometry_committed: bool,
+    /// Width represented by the latest Qt-submitted frame, never a staged plan.
+    submitted_visible_width: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -159,16 +224,16 @@ pub(crate) struct VisualEditState {
     pub input_interval_ms: u64,
     pub visual_lag_px: f64,
     /// Fast-input transitions consume this budget only after unique Qt frame submissions.
-    presented_frame_count: u8,
-    presented_frame_ids: HashSet<u64>,
-    minimum_presented_frames: u8,
-    /// 终点帧已成功绘制；下一帧才可请求 Static ownership handoff。
+    submitted_frame_count: u8,
+    submitted_frame_ids: HashSet<u64>,
+    minimum_submitted_frames: u8,
+    /// 终点帧收到 Qt 提交回执；之后才可请求 Static ownership handoff。
     pub terminal_frame_committed: bool,
 }
 
 impl VisualEditState {
     pub(crate) fn new(
-        committed_frame: Option<&VisualFrame>,
+        submitted_frame: Option<&VisualFrame>,
         base_snapshot: &EditorLayoutSnapshot,
         target_snapshot: EditorLayoutSnapshot,
         frame_to_base_map: &OffsetMap,
@@ -178,22 +243,26 @@ impl VisualEditState {
         base_duration_ms: u64,
         previous_edit_at: Option<Instant>,
         caret_rects: Option<(CursorRect, CursorRect)>,
+        caret_byte_offsets: Option<(usize, usize)>,
         document_session: u64,
     ) -> Self {
-        let source_frame = committed_frame
+        let source_frame = submitted_frame
             .cloned()
             .unwrap_or_else(|| VisualFrame::from_static_snapshot(base_snapshot));
         let targets = target_clusters(&target_snapshot);
-        let caret_motion = caret_rects.map(|(from, to)| {
-            CaretMotion::new(
-                from,
-                to,
-                base_snapshot,
-                &target_snapshot,
-                target_snapshot.revision,
-                document_session,
-            )
-        });
+        let caret_motion = caret_rects
+            .zip(caret_byte_offsets)
+            .map(|((from, to), byte_offsets)| {
+                CaretMotion::new(
+                    from,
+                    to,
+                    byte_offsets,
+                    base_snapshot,
+                    &target_snapshot,
+                    target_snapshot.revision,
+                    document_session,
+                )
+            });
         let mut source_used = vec![false; source_frame.clusters.len()];
         let mut target_used = vec![false; targets.len()];
         let mut motions = Vec::new();
@@ -271,6 +340,7 @@ impl VisualEditState {
                     kind: MotionKind::Reveal,
                     caret_motion: None,
                     terminal_geometry_committed: false,
+                    submitted_visible_width: 0.0,
                 });
             }
         }
@@ -291,6 +361,7 @@ impl VisualEditState {
                         kind: MotionKind::CrossFade,
                         caret_motion: None,
                         terminal_geometry_committed: false,
+                        submitted_visible_width: 0.0,
                     });
                     continue;
                 }
@@ -318,6 +389,7 @@ impl VisualEditState {
                     kind: MotionKind::Delete(delete_edge),
                     caret_motion: None,
                     terminal_geometry_committed: false,
+                    submitted_visible_width: 0.0,
                 });
             }
         }
@@ -327,8 +399,7 @@ impl VisualEditState {
                 let line_id = match (&motion.source, &motion.target, motion.kind) {
                     (None, Some(target), MotionKind::Reveal) => Some(target.snapshot_id),
                     (Some(source), Some(target), MotionKind::RevealFromCommittedSlice)
-                        if VisualLineIdentity::from(source.snapshot_id)
-                            == VisualLineIdentity::from(target.snapshot_id) =>
+                        if caret_motion.drives_committed_slice(source, target, offset_map) =>
                     {
                         Some(target.snapshot_id)
                     }
@@ -338,6 +409,13 @@ impl VisualEditState {
                 if line_id.is_some_and(|line_id| caret_motion.can_drive_cluster_line(line_id)) {
                     motion.caret_motion = Some(caret_motion);
                 }
+            }
+        }
+        for motion in &mut motions {
+            if let (Some(source), Some(target), MotionKind::RevealFromCommittedSlice) =
+                (&motion.source, &motion.target, motion.kind)
+            {
+                motion.submitted_visible_width = source.rect.w.min(target.rect.w);
             }
         }
 
@@ -354,9 +432,9 @@ impl VisualEditState {
             })
             .fold(0.0_f64, f64::max);
         let duration_ms = catch_up_duration(base_duration_ms, input_interval_ms, visual_lag_px);
-        let minimum_presented_frames =
+        let minimum_submitted_frames =
             if base_duration_ms > 0 && input_interval_ms < base_duration_ms {
-                MIN_CATCH_UP_PRESENTED_FRAMES
+                MIN_CATCH_UP_SUBMITTED_FRAMES
             } else {
                 1
             };
@@ -369,9 +447,9 @@ impl VisualEditState {
             duration_ms,
             input_interval_ms,
             visual_lag_px,
-            presented_frame_count: 0,
-            presented_frame_ids: HashSet::new(),
-            minimum_presented_frames,
+            submitted_frame_count: 0,
+            submitted_frame_ids: HashSet::new(),
+            minimum_submitted_frames,
             terminal_frame_committed: false,
         }
     }
@@ -390,27 +468,27 @@ impl VisualEditState {
         let elapsed = now.saturating_duration_since(self.started_at).as_millis() as f64;
         let linear = (elapsed / self.duration_ms as f64).clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - linear).powi(3);
-        self.presented_progress_limit()
+        self.submitted_progress_limit()
             .map_or(eased, |limit| eased.min(limit))
     }
 
-    fn presented_progress_limit(&self) -> Option<f64> {
-        (self.minimum_presented_frames > 1).then(|| {
+    fn submitted_progress_limit(&self) -> Option<f64> {
+        (self.minimum_submitted_frames > 1).then(|| {
             f64::from(
-                self.presented_frame_count
+                self.submitted_frame_count
                     .saturating_add(1)
-                    .min(self.minimum_presented_frames),
-            ) / f64::from(self.minimum_presented_frames)
+                    .min(self.minimum_submitted_frames),
+            ) / f64::from(self.minimum_submitted_frames)
         })
     }
 
     pub(crate) fn commit_submitted_frame(&mut self, frame_id: u64) {
-        if self.presented_frame_count >= self.minimum_presented_frames
-            || !self.presented_frame_ids.insert(frame_id)
+        if self.submitted_frame_count >= self.minimum_submitted_frames
+            || !self.submitted_frame_ids.insert(frame_id)
         {
             return;
         }
-        self.presented_frame_count = self.presented_frame_count.saturating_add(1);
+        self.submitted_frame_count = self.submitted_frame_count.saturating_add(1);
     }
 
     pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
@@ -434,6 +512,17 @@ impl VisualEditState {
         for &motion_index in motion_indices {
             if let Some(motion) = self.motions.get_mut(motion_index) {
                 motion.terminal_geometry_committed = true;
+            }
+        }
+    }
+
+    pub(crate) fn commit_submitted_visible_widths(&mut self, widths: &[(usize, f64)]) {
+        for &(motion_index, width) in widths {
+            if let Some(motion) = self.motions.get_mut(motion_index) {
+                if matches!(motion.kind, MotionKind::RevealFromCommittedSlice) {
+                    motion.submitted_visible_width =
+                        motion.submitted_visible_width.max(width.max(0.0));
+                }
             }
         }
     }
@@ -472,11 +561,12 @@ impl VisualEditState {
         visual_caret: Option<VisualCaretGeometry>,
     ) -> RenderOwnershipPlan {
         let p = self.progress(now);
-        let presented_progress_limit = self.presented_progress_limit().unwrap_or(1.0);
+        let submitted_progress_limit = self.submitted_progress_limit().unwrap_or(1.0);
         let mut terminal_frame = true;
         let mut owned = Vec::new();
         let mut glyphs = Vec::new();
         let mut terminal_motion_indices = Vec::new();
+        let mut submitted_visible_widths = Vec::new();
 
         for (motion_index, motion) in self.motions.iter().enumerate() {
             if let Some(target) = motion.target.as_ref() {
@@ -514,18 +604,22 @@ impl VisualEditState {
                     };
                     let start_width = source.rect.w.min(target.rect.w);
                     let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
-                    let visible = if motion.terminal_geometry_committed {
+                    let proposed_visible = if motion.terminal_geometry_committed {
                         target.rect.w
                     } else {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => start_width.max(
                                 reveal_width_to_caret_during_transition(source, target, caret_x, p)
-                                    .min(target.rect.w * presented_progress_limit),
+                                    .min(target.rect.w * submitted_progress_limit),
                             ),
                             MotionBoundary::TextProgress => lerp(start_width, target.rect.w, p),
                         }
-                    }
-                    .clamp(0.0, target.rect.w);
+                    };
+                    let visible = motion
+                        .submitted_visible_width
+                        .max(proposed_visible)
+                        .clamp(0.0, target.rect.w);
+                    submitted_visible_widths.push((motion_index, visible));
                     let motion_terminal =
                         motion.terminal_geometry_committed || visible >= target.rect.w - 1e-6;
                     terminal_frame &= motion_terminal;
@@ -571,7 +665,7 @@ impl VisualEditState {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => {
                                 reveal_width_to_caret(target, caret_x)
-                                    .min(target.rect.w * presented_progress_limit)
+                                    .min(target.rect.w * submitted_progress_limit)
                             }
                             MotionBoundary::TextProgress => target.rect.w * p,
                         }
@@ -615,7 +709,7 @@ impl VisualEditState {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => {
                                 delete_width_to_caret(source, delete_edge, caret_x)
-                                    .max(source.rect.w * (1.0 - presented_progress_limit))
+                                    .max(source.rect.w * (1.0 - submitted_progress_limit))
                             }
                             MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
                         }
@@ -692,6 +786,7 @@ impl VisualEditState {
             terminal_frame,
         );
         plan.terminal_motion_indices = terminal_motion_indices;
+        plan.submitted_visible_widths = submitted_visible_widths;
         plan
     }
 }
@@ -718,11 +813,7 @@ fn reveal_boundary(
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
-        .filter(|caret| {
-            driver.is_some_and(|driver| {
-                driver.can_drive_cluster_line(target.snapshot_id) && driver.matches(*caret)
-            })
-        })
+        .filter(|caret| driver.is_some_and(|driver| driver.matches_committed_slice(target, *caret)))
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
 }
@@ -755,6 +846,30 @@ fn point_is_on_route(x: f64, y: f64, from_x: f64, from_y: f64, to_x: f64, to_y: 
     let projected_x = from_x + t * dx;
     let projected_y = from_y + t * dy;
     (x - projected_x).hypot(y - projected_y) <= 1.0
+}
+
+fn route_crosses_cluster_frontier(
+    from: CaretPosition,
+    to: CaretPosition,
+    frontier_x: f64,
+    cluster: &SourceRect,
+) -> bool {
+    let dx = to.x - from.x;
+    if dx.abs() <= 0.5 {
+        return false;
+    }
+    let t = (frontier_x - from.x) / dx;
+    // Touching the edge at the route's start or end does not prove the caret passed
+    // through this glyph. Such a reveal stays on this motion's text clock.
+    if !(1e-3..1.0 - 1e-3).contains(&t) {
+        return false;
+    }
+    let from_center_y = from.y + from.h * 0.5;
+    let to_center_y = to.y + to.h * 0.5;
+    let route_y = lerp(from_center_y, to_center_y, t);
+    let cluster_center_y = cluster.y + cluster.h * 0.5;
+    let vertical_tolerance = ((from.h + cluster.h) * 0.5).max(1.0);
+    (route_y - cluster_center_y).abs() <= vertical_tolerance
 }
 
 fn reveal_width_to_caret(target: &TargetCluster, caret_x: f64) -> f64 {
@@ -918,20 +1033,27 @@ fn pair_cluster(
     let starts_from_partial_visual = source.opacity < 0.999
         || source.rect.w + 0.01 < target.rect.w
         || source.source_rect.w + 0.01 < target.source_rect.w;
+    let kind = if same_shaping && starts_from_partial_visual {
+        MotionKind::RevealFromCommittedSlice
+    } else if same_shaping {
+        MotionKind::Transform
+    } else {
+        MotionKind::CrossFade
+    };
+    let submitted_visible_width = if matches!(kind, MotionKind::RevealFromCommittedSlice) {
+        source.rect.w.min(target.rect.w)
+    } else {
+        0.0
+    };
     motions.push(ClusterMotion {
         source: Some(source),
         retiring_sources,
         target: Some(target),
         source_canonical_range: Some(targets[target_index].byte_range),
-        kind: if same_shaping && starts_from_partial_visual {
-            MotionKind::RevealFromCommittedSlice
-        } else if same_shaping {
-            MotionKind::Transform
-        } else {
-            MotionKind::CrossFade
-        },
+        kind,
         caret_motion: None,
         terminal_geometry_committed: false,
+        submitted_visible_width,
     });
 }
 

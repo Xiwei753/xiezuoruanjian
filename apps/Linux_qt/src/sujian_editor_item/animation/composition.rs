@@ -51,6 +51,12 @@ impl LinuxEditorAnimationCoordinator {
 
         // preedit glyph 不进入正文视觉状态。commit 的新 transition 从最后一帧实际
         // 绘制结果重定向到新的 canonical layout，多个快速编辑也不会积累动画历史。
+        let caret_byte_offsets = motion.old_cursor_rect.zip(motion.new_cursor_rect).map(|_| {
+            (
+                motion.old_selection.head.index.value(),
+                motion.new_selection.head.index.value(),
+            )
+        });
         self.begin_visual_edit(VisualEditRequest {
             base_snapshot: old_snapshot,
             target_snapshot: new_snapshot,
@@ -60,6 +66,7 @@ impl LinuxEditorAnimationCoordinator {
                 .unwrap_or_else(|| OffsetMap::build(&motion.old_text, &motion.new_text)),
             deleted_range_edges: motion.deleted_range_edges,
             caret_motion: motion.old_cursor_rect.zip(motion.new_cursor_rect),
+            caret_byte_offsets,
             animate: true,
             now,
         });

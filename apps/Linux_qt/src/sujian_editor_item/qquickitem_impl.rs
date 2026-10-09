@@ -45,6 +45,7 @@ fn bind_frame_submission_window(
     connections: &std::rc::Rc<std::cell::RefCell<Vec<Box<dyn FnMut()>>>>,
     mailbox: &std::sync::Arc<frame_submission::FrameSubmissionMailbox>,
 ) {
+    let window_generation = mailbox.reset_window();
     let mut connections = connections.borrow_mut();
     for disconnect in connections.iter_mut() {
         disconnect();
@@ -55,22 +56,24 @@ fn bind_frame_submission_window(
     }
 
     let sync_mailbox = std::sync::Arc::clone(mailbox);
+    let sync_generation = window_generation;
     // SAFETY: window_ptr is QQuickItem::window() (or its windowChanged argument), and
     // both direct callbacks capture only the thread-safe mailbox; neither touches item state.
     let mut after_synchronizing = unsafe {
         qmetaobject::connect(
             window_ptr,
             qquickwindow_after_synchronizing_signal(),
-            move || sync_mailbox.after_synchronizing(),
+            move || sync_mailbox.after_synchronizing(sync_generation),
         )
     };
     let frame_mailbox = std::sync::Arc::clone(mailbox);
+    let frame_generation = window_generation;
     // SAFETY: Same live QQuickWindow pointer and zero-argument signal signature as above.
     let mut after_frame_end = unsafe {
         qmetaobject::connect(
             window_ptr,
             qquickwindow_after_frame_end_signal(),
-            move || frame_mailbox.after_frame_end(),
+            move || frame_mailbox.after_frame_end(frame_generation),
         )
     };
     connections.push(Box::new(move || after_synchronizing.disconnect()));
@@ -224,11 +227,9 @@ impl QQuickItem for SujianEditorItem {
 
         // Qt invokes this method during synchronization. Consume only acknowledgments that
         // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
-        for ticket in self.frame_submission_mailbox.take_submitted_frames() {
-            self.pipeline
-                .animation_coordinator_mut()
-                .acknowledge_submitted_frame(ticket);
-        }
+        self.pipeline
+            .animation_coordinator_mut()
+            .consume_submitted_frames();
 
         // Issue #853：视觉光标的唯一 owner 是 cursor controller。
         // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
@@ -431,17 +432,6 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
-                if animation_resources_ready
-                    && !render_plan.ownership.handoff_pending
-                    && !render_plan.ownership.animated_glyphs.is_empty()
-                {
-                    if let Some(layout_revision) = render_plan.ownership.target_layout_revision {
-                        self.frame_submission_mailbox.publish_rendered_animation(
-                            render_plan.ownership.document_session,
-                            layout_revision,
-                        );
-                    }
-                }
                 if canonical_handoff_committed {
                     // renderer 已在同一次 update_paint_node 成功提交 canonical static
                     // 并清理 animation layer，现在才可释放旧文档/过渡的 QImage。

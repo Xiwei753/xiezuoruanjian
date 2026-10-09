@@ -1,4 +1,4 @@
-//! 上一帧已成功提交到 Qt Scene Graph 的正文视觉事实。
+//! 收到 Qt 帧提交回执后的正文视觉事实。
 //!
 //! 该快照只记录画面结果，不包含动画时钟或历史事务。新编辑只能从成功渲染的
 //! 这份快照开始，静态 cluster 和动画 glyph 都在同一个列表里。
@@ -29,6 +29,8 @@ pub(crate) struct VisualFrame {
     /// 文档视觉会话。layout revision 可能在切章时重用，因此不能单独证明 source 有效。
     pub document_session: u64,
     pub canonical_revision: Option<LayoutRevision>,
+    /// Static ownership is 0; animated ownership is tied to the frame submission ticket.
+    pub ownership_revision: u64,
     pub canonical_byte_len: usize,
     /// Captured visual contributions, not a one-entry-per-character index. A CrossFade
     /// can leave several layers with the same canonical range; preserve each rendered
@@ -37,7 +39,7 @@ pub(crate) struct VisualFrame {
 }
 
 impl VisualFrame {
-    /// Materialize exactly what is on screen after a successful frame commit.
+    /// Materialize the visual candidate represented by this rendered plan.
     pub(crate) fn from_rendered_plan(
         snapshot: &EditorLayoutSnapshot,
         ownership: &RenderOwnershipPlan,
@@ -92,6 +94,7 @@ impl VisualFrame {
         Self {
             document_session: 0,
             canonical_revision: Some(snapshot.revision),
+            ownership_revision: ownership.ownership_revision,
             canonical_byte_len: canonical_byte_len(snapshot),
             clusters,
         }
@@ -116,6 +119,7 @@ impl VisualFrame {
         Self {
             document_session: 0,
             canonical_revision: Some(snapshot.revision),
+            ownership_revision: 0,
             canonical_byte_len: canonical_byte_len(snapshot),
             clusters,
         }

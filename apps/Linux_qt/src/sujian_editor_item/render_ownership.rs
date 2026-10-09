@@ -37,10 +37,13 @@ pub(crate) struct RenderOwnershipPlan {
     pub terminal_frame: bool,
     /// Reveal/Delete motions whose terminal geometry was successfully committed.
     pub terminal_motion_indices: Vec<usize>,
+    /// RevealFromCommittedSlice widths represented by this candidate frame. These become
+    /// monotonic floors only after the matching Qt frame submission is acknowledged.
+    pub submitted_visible_widths: Vec<(usize, f64)>,
     /// 动画到达终点。本次 render 需先让静态层成功接管，再清空动画层。
     pub handoff_pending: bool,
     pub target_layout_revision: Option<LayoutRevision>,
-    /// 若 render 成功，本字段成为下一次编辑唯一允许读取的视觉起点。
+    /// 该候选帧收到 Qt 提交回执后，才成为下一次编辑可读取的视觉起点。
     pub candidate_frame: VisualFrame,
     /// 纹理缺失时 canonical 静态层的实际视觉状态。
     pub canonical_frame: VisualFrame,
@@ -77,7 +80,7 @@ impl RenderOwnershipPlan {
         }
 
         // Owner request 与 canonical cluster 不一致时 fail closed：整帧回到 canonical，
-        // 并在成功绘制后收掉这份无效 transition，不能产生 orphan glyph/exclusion。
+        // 并在成功同步场景图后收掉这份无效 transition，不能产生 orphan glyph/exclusion。
         let owner_table_matches =
             matched_requests.len() == requested.len() && cluster_owners.len() == cluster_count;
         if !owner_table_matches {
@@ -140,6 +143,7 @@ impl RenderOwnershipPlan {
             document_session: 0,
             terminal_frame,
             terminal_motion_indices: Vec::new(),
+            submitted_visible_widths: Vec::new(),
             handoff_pending,
             target_layout_revision: Some(snapshot.revision),
             candidate_frame: VisualFrame::default(),

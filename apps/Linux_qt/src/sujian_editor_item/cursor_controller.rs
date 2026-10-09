@@ -349,7 +349,7 @@ impl CursorController {
 
                     if target_changed {
                         // 从当前视觉位置 rebase，不落回 old_rect。
-                        // Retarget from the position last presented by the scene graph,
+                        // Retarget from CursorController's current visual position,
                         // never from the previous animation's stale target.
                         let (cur_x, cur_y) = (self.visual_x, self.visual_y);
                         self.set_motion_route(cur_x, cur_y, target_x, target_y);
