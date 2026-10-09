@@ -378,10 +378,13 @@ export function glyphRectForRange(
   const startLine = layout[startLineIdx]
   if (startLine === undefined) { return null }
   // 起始 x：在起始行中找 startUtf16 对应的 x
+  // Issue #879 复核评论6082616112 问题4：caretStops 为空时先处理，返回 line.left
   let x = startLine.left
-  for (const stop of startLine.caretStops) {
-    if (stop.utf16Offset <= startUtf16) {
-      x = stop.x
+  if (startLine.caretStops.length > 0) {
+    for (const stop of startLine.caretStops) {
+      if (stop.utf16Offset <= startUtf16) {
+        x = stop.x
+      }
     }
   }
   // 结束位置用 Upstream affinity：结束 offset 属于当前行末
@@ -389,16 +392,30 @@ export function glyphRectForRange(
   const endLine = layout[endLineIdx]
   if (endLine === undefined) { return null }
   // 结束 x：在结束行中找 endUtf16 对应的 x
+  // Issue #879 复核评论6082616112 问题4：caretStops 为空时先处理，返回 line.left
   let endX = endLine.left
-  for (const stop of endLine.caretStops) {
-    if (stop.utf16Offset <= endUtf16) {
-      endX = stop.x
+  if (endLine.caretStops.length > 0) {
+    for (const stop of endLine.caretStops) {
+      if (stop.utf16Offset <= endUtf16) {
+        endX = stop.x
+      }
     }
   }
   // 如果跨行，宽度就是从 startUtf16 到起始行末
   // 但动画代码中 piece 通常不跨行（跨行的 move 已被拆成多个 piece）
   // 所以简单返回起始行的矩形即可
-  const width = startLineIdx === endLineIdx ? endX - x : startLine.caretStops[startLine.caretStops.length - 1].x - x
+  // Issue #879 复核评论6082616112 问题4：caretStops 为空时不访问 [length-1].x
+  let width: number
+  if (startLineIdx === endLineIdx) {
+    width = endX - x
+  } else {
+    // 跨行：宽度从 x 到起始行的最后一个 caret stop 的 x
+    if (startLine.caretStops.length > 0) {
+      width = startLine.caretStops[startLine.caretStops.length - 1].x - x
+    } else {
+      width = 0
+    }
+  }
   return {
     x,
     y: startLine.y,

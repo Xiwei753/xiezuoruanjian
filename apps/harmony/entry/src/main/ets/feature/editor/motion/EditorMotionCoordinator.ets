@@ -38,7 +38,7 @@ import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, Static
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
-import { LineLayout, CaretRect } from '../render/editor_render_geometry'
+import { LineLayout, CaretRect, glyphRectForRange } from '../render/editor_render_geometry'
 import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math'
 import type { LineRange } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
@@ -551,7 +551,8 @@ export class EditorMotionCoordinator {
     // 上一帧的 insert/reflow 窗口如果尚未完成动画，且其字形不属于本次新 plan 的任何 run，
     // 需要继承到新 plan 继续运动——避免未完成的吐字/保留字移动在新编辑时被丢弃导致跳字。
     const carryOverMotionRuns = this.identifyCarryOverMotionRuns(
-      latestDisplayedFrame, prepared.state.newSnapshot.revision, prepared.state.newLayout, planGlyphIds
+      latestDisplayedFrame, prepared.state.newSnapshot.revision, prepared.state.newLayout, planGlyphIds,
+      prepared.state.glyphIdentities
     )
 
     const newPlan: EditorMotionPlan = {
@@ -1084,8 +1085,10 @@ export class EditorMotionCoordinator {
             piece.firstIndex >= 0 && piece.lastIndex + 1 < runBoundaries.length) {
           pieceUtf16Start = runBoundaries[piece.firstIndex]
           pieceUtf16End = runBoundaries[piece.lastIndex + 1]
+          // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
           targetLeft = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16Start, run.rect.x)
-          targetRight = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16End, run.rect.x + run.rect.width)
+          targetRight = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16End, run.rect.x + run.rect.width,
+            CaretAffinity.Upstream)
         } else {
           // Issue #879 复核评论6080604353 问题2coord：fallback 分支用 piece 自身的起始 clip
           // 作为目标左右边界参考——gap piece 的起始位置应该是 piece 自身的左边界，
@@ -1203,10 +1206,11 @@ export class EditorMotionCoordinator {
           pieceUtf16Start = moveBoundaries[piece.firstIndex]
           pieceUtf16End = moveBoundaries[piece.lastIndex + 1]
           // 按 piece 在 oldLayout 中的位置计算裁切宽度
+          // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
           pieceOldLeft = EditorMotionCoordinator.xAtOffsetLocal(
             oldLayout, pieceUtf16Start, move.oldRect.x)
           pieceOldRight = EditorMotionCoordinator.xAtOffsetLocal(
-            oldLayout, pieceUtf16End, move.oldRect.x + move.oldRect.width)
+            oldLayout, pieceUtf16End, move.oldRect.x + move.oldRect.width, CaretAffinity.Upstream)
           // 用新正文的 clusterBoundaries 计算每个 piece 在新布局中的位置
           if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
               piece.firstIndex >= 0 && piece.lastIndex + 1 < newMoveBoundaries.length) {
@@ -1297,36 +1301,80 @@ export class EditorMotionCoordinator {
 
     // Issue #879 复核评论6081596024 问题1：carryOver motion 延续窗口采样。
     // 上一帧的 insert/reflow 窗口如果尚未完成动画，继续从冻结状态向目标运动。
+    // Issue #879 复核评论6082616112 修复：
+    // - 问题1：runId 沿用 motionRun.sourceRunId，renderNodeKey 用 sourceKind-sourceRevision-windowInstanceId
+    // - 问题2：reflow 每帧插值 currentPositionX/Y，并相应更新 offsetX/Y 和 clipLeft/Right/Top/Bottom
+    // - 问题3：utf16Start/End 用 sourceUtf16Start/End（给旧 TextController 绘制的源范围）
     for (const motionRun of plan.carryOverMotionRuns) {
-      const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
-      const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
       const windowInstanceId = allocator.allocate(motionRun.glyphIds)
-      motionGlyphWindows.push({
-        sourceKind: motionRun.motionOwnerKind === 'insert' ? 'new' : 'old',
-        utf16Start: motionRun.utf16Start,
-        utf16End: motionRun.utf16End,
-        clipLeft: currentLeft,
-        clipRight: currentRight,
-        clipTop: motionRun.clipTop,
-        clipBottom: motionRun.clipBottom,
-        glyphX: motionRun.glyphX,
-        glyphY: motionRun.glyphY,
-        glyphWidth: motionRun.glyphWidth,
-        glyphHeight: motionRun.glyphHeight,
-        offsetX: motionRun.offsetX,
-        offsetY: motionRun.offsetY,
-        runId: motionRun.motionOwnerKind === 'insert' ? `new-${newRevision}` : `old-${motionRun.sourceRevision}`,
-        sourceRevision: motionRun.sourceRevision,
-        glyphIds: motionRun.glyphIds,
-        windowId: motionRun.windowId,
-        windowInstanceId: windowInstanceId,
-        renderNodeKey: `${motionRun.motionOwnerKind === 'insert' ? 'new' : 'old'}-${motionRun.sourceRevision}-${windowInstanceId}`,
-        currentClipLeft: currentLeft,
-        currentClipRight: currentRight,
-        currentPositionX: motionRun.currentPositionX,
-        currentPositionY: motionRun.currentPositionY,
-        motionOwnerKind: motionRun.motionOwnerKind
-      })
+      if (motionRun.motionOwnerKind === 'reflow') {
+        // reflow：每帧插值 currentPositionX/Y，并相应更新 offset/clip
+        const currentX = motionRun.startX + (motionRun.targetX - motionRun.startX) * p
+        const currentY = motionRun.startY + (motionRun.targetY - motionRun.startY) * p
+        const currentOffsetX = currentX - motionRun.glyphX
+        const currentOffsetY = currentY - motionRun.glyphY
+        // reflow 的 clip 始终跟随当前位置
+        const clipLeft = currentX
+        const clipRight = currentX + motionRun.glyphWidth
+        const clipTop = currentY
+        const clipBottom = currentY + motionRun.glyphHeight
+        motionGlyphWindows.push({
+          sourceKind: motionRun.sourceKind,
+          utf16Start: motionRun.sourceUtf16Start,
+          utf16End: motionRun.sourceUtf16End,
+          clipLeft: clipLeft,
+          clipRight: clipRight,
+          clipTop: clipTop,
+          clipBottom: clipBottom,
+          glyphX: motionRun.glyphX,
+          glyphY: motionRun.glyphY,
+          glyphWidth: motionRun.glyphWidth,
+          glyphHeight: motionRun.glyphHeight,
+          offsetX: currentOffsetX,
+          offsetY: currentOffsetY,
+          runId: motionRun.sourceRunId,
+          sourceRevision: motionRun.sourceRevision,
+          glyphIds: motionRun.glyphIds,
+          windowId: motionRun.windowId,
+          windowInstanceId: windowInstanceId,
+          renderNodeKey: `${motionRun.sourceKind}-${motionRun.sourceRevision}-${windowInstanceId}`,
+          currentClipLeft: clipLeft,
+          currentClipRight: clipRight,
+          currentPositionX: currentX,
+          currentPositionY: currentY,
+          motionOwnerKind: motionRun.motionOwnerKind
+        })
+      } else {
+        // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
+        const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
+        const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
+        motionGlyphWindows.push({
+          sourceKind: motionRun.sourceKind,
+          utf16Start: motionRun.sourceUtf16Start,
+          utf16End: motionRun.sourceUtf16End,
+          clipLeft: currentLeft,
+          clipRight: currentRight,
+          clipTop: motionRun.clipTop,
+          clipBottom: motionRun.clipBottom,
+          glyphX: motionRun.glyphX,
+          glyphY: motionRun.glyphY,
+          glyphWidth: motionRun.glyphWidth,
+          glyphHeight: motionRun.glyphHeight,
+          offsetX: motionRun.offsetX,
+          offsetY: motionRun.offsetY,
+          runId: motionRun.sourceRunId,
+          sourceRevision: motionRun.sourceRevision,
+          glyphIds: motionRun.glyphIds,
+          windowId: motionRun.windowId,
+          windowInstanceId: windowInstanceId,
+          renderNodeKey: `${motionRun.sourceKind}-${motionRun.sourceRevision}-${windowInstanceId}`,
+          currentClipLeft: currentLeft,
+          currentClipRight: currentRight,
+          currentPositionX: motionRun.currentPositionX,
+          currentPositionY: motionRun.currentPositionY,
+          motionOwnerKind: motionRun.motionOwnerKind
+        })
+      }
     }
 
     // 4. 光标位置：从 caretPath 插值
@@ -1490,12 +1538,14 @@ export class EditorMotionCoordinator {
    * @param newRevision 新正文 revision
    * @param newLayout 新版行布局
    * @param planGlyphIds 本轮新 plan 中所有 run 的 glyphIds 集合
+   * @param newIdentityTable 新版正文的字形身份表——用于查找旧字形在新版正文中的对应 UTF-16 范围
    */
   private identifyCarryOverMotionRuns(
     latestDisplayedFrame: EditorVisualFrame,
     newRevision: number,
     newLayout: LineLayout[],
-    planGlyphIds: Set<string>
+    planGlyphIds: Set<string>,
+    newIdentityTable: GlyphIdentityTable | null
   ): CarryOverMotionRun[] {
     const runs: CarryOverMotionRun[] = []
     if (!latestDisplayedFrame.isAnimating) {
@@ -1517,33 +1567,114 @@ export class EditorMotionCoordinator {
       if (coveredByNewPlan) {
         continue
       }
-      // 窗口已完成动画（clip 已达到目标范围）——不需要延续
-      // 对 insert：currentClipRight - currentClipLeft >= glyphWidth 表示已完成
-      // 对 reflow：currentPositionX/Y 已接近目标——简化判断：clip 宽度接近完整宽度
-      const fullWidth = w.glyphWidth
-      const currentWidth = w.currentClipRight - w.currentClipLeft
-      if (currentWidth >= fullWidth - 0.01) {
-        continue  // 已完全可见，不需要延续
+      // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
+      // - insert 完成 = 可见裁切达终点（currentClipRight - currentClipLeft >= glyphWidth - 0.01）
+      // - reflow 完成 = 当前位置已接近目标 x/y（用距离判断）
+      if (w.motionOwnerKind === 'insert') {
+        const fullWidth = w.glyphWidth
+        const currentWidth = w.currentClipRight - w.currentClipLeft
+        if (currentWidth >= fullWidth - 0.01) {
+          continue  // insert 已完全可见，不需要延续
+        }
+      } else {
+        // reflow：判断当前位置是否已接近目标位置
+        // 目标位置从新版布局查出——用 glyphRectForRange 获取
+        // 先确定 reflow 的目标 UTF-16 范围（在新版正文中）
+        let reflowTargetUtf16Start = w.utf16Start
+        let reflowTargetUtf16End = w.utf16End
+        if (newIdentityTable !== null) {
+          // 用字形身份表查找旧字形在新版正文中的对应范围
+          let foundStart = -1
+          let foundEnd = -1
+          for (const gid of w.glyphIds) {
+            const entry = newIdentityTable.entryByGlyphId(gid)
+            if (entry !== null) {
+              if (foundStart < 0 || entry.utf16Start < foundStart) {
+                foundStart = entry.utf16Start
+              }
+              if (entry.utf16End > foundEnd) {
+                foundEnd = entry.utf16End
+              }
+            }
+          }
+          if (foundStart >= 0 && foundEnd >= 0) {
+            reflowTargetUtf16Start = foundStart
+            reflowTargetUtf16End = foundEnd
+          }
+        }
+        const targetRect = glyphRectForRange(newLayout, reflowTargetUtf16Start, reflowTargetUtf16End)
+        if (targetRect !== null) {
+          const targetX = targetRect.x
+          const targetY = targetRect.y
+          if (Math.abs(w.currentPositionX - targetX) < 0.01 &&
+              Math.abs(w.currentPositionY - targetY) < 0.01) {
+            continue  // reflow 已到达目标位置，不需要延续
+          }
+        }
       }
+
+      // Issue #879 复核评论6082616112 问题1：明确源类型和源 runId。
+      // 旧 insert 窗口的源是 'new'，旧 reflow 窗口的源是 'old'。
+      const sourceKind: 'new' | 'old' = w.motionOwnerKind === 'insert' ? 'new' : 'old'
+      const sourceRunId = `${sourceKind}-${w.sourceRevision}`
+
+      // Issue #879 复核评论6082616112 问题3：确定 target UTF-16 范围。
+      // 用字形身份表查找旧字形在新版正文中的对应范围。
+      // 如果无法确定目标范围，用 sourceUtf16Start/End 作为 fallback（宁可重影也不要漏字）。
+      let targetUtf16Start = w.utf16Start
+      let targetUtf16End = w.utf16End
+      if (newIdentityTable !== null) {
+        let foundStart = -1
+        let foundEnd = -1
+        for (const gid of w.glyphIds) {
+          const entry = newIdentityTable.entryByGlyphId(gid)
+          if (entry !== null) {
+            if (foundStart < 0 || entry.utf16Start < foundStart) {
+              foundStart = entry.utf16Start
+            }
+            if (entry.utf16End > foundEnd) {
+              foundEnd = entry.utf16End
+            }
+          }
+        }
+        if (foundStart >= 0 && foundEnd >= 0) {
+          targetUtf16Start = foundStart
+          targetUtf16End = foundEnd
+        }
+        // 如果无法确定目标范围，用 sourceUtf16Start/End 作为 fallback
+      }
+
+      // Issue #879 复核评论6082616112 问题2：计算 reflow 的 startX/startY/targetX/targetY。
+      let startX = w.currentPositionX
+      let startY = w.currentPositionY
+      let targetX = w.glyphX + w.offsetX
+      let targetY = w.glyphY + w.offsetY
       // 计算 targetClipLeft/Right：
       // - insert：目标是完整可见（targetClipLeft = glyphX, targetClipRight = glyphX + glyphWidth）
-      // - reflow：目标是新版布局中的位置——用 newLayout 查出
+      // - reflow：目标是新版布局中的位置——用 glyphRectForRange 查出
       let targetClipLeft = w.glyphX
       let targetClipRight = w.glyphX + w.glyphWidth
       if (w.motionOwnerKind === 'reflow') {
-        // reflow 的目标位置在新版布局中——用 xAtOffsetLocal/yAtOffsetLocal 查
-        const newTargetX = EditorMotionCoordinator.xAtOffsetLocal(
-          newLayout, w.utf16Start, w.glyphX)
-        targetClipLeft = newTargetX
-        targetClipRight = newTargetX + w.glyphWidth
+        // reflow 的目标位置在新版布局中——用 glyphRectForRange 查出
+        const targetRect = glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End)
+        if (targetRect !== null) {
+          targetX = targetRect.x
+          targetY = targetRect.y
+          targetClipLeft = targetX
+          targetClipRight = targetX + targetRect.width
+        }
       }
       runs.push({
         motionOwnerKind: w.motionOwnerKind,
         glyphIds: w.glyphIds,
         windowId: w.windowId,
         sourceRevision: w.sourceRevision,
-        utf16Start: w.utf16Start,
-        utf16End: w.utf16End,
+        sourceKind: sourceKind,
+        sourceRunId: sourceRunId,
+        sourceUtf16Start: w.utf16Start,
+        sourceUtf16End: w.utf16End,
+        targetUtf16Start: targetUtf16Start,
+        targetUtf16End: targetUtf16End,
         currentClipLeft: w.currentClipLeft,
         currentClipRight: w.currentClipRight,
         targetClipLeft: targetClipLeft,
@@ -1557,7 +1688,11 @@ export class EditorMotionCoordinator {
         offsetX: w.offsetX,
         offsetY: w.offsetY,
         currentPositionX: w.currentPositionX,
-        currentPositionY: w.currentPositionY
+        currentPositionY: w.currentPositionY,
+        startX: startX,
+        startY: startY,
+        targetX: targetX,
+        targetY: targetY
       })
     }
     return runs
@@ -1772,19 +1907,19 @@ export class EditorMotionCoordinator {
   // ── 私有方法 ──
 
   /**
-   * Issue #879 复核评论6081596024 问题2：取 offset 在一行布局里的 x（vp）。
-   *
-   * 用 resolveVisualLineIndex + Downstream affinity 选行——
-   * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
+   * Issue #879 复核评论6082616112 问题4：添加 affinity 参数。
+   * 默认 Downstream（软换行边界属于下一行），但 end offset 应传 Upstream
+   * （结束位置属于当前行末，而非下一行行首）。
    *
    * buildFrame 按 piece 采样时需要计算 piece 的目标 clip（该 piece 覆盖的字形在目标布局中的完整边界）。
    */
-  private static xAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number): number {
+  private static xAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number,
+    affinity: CaretAffinity = CaretAffinity.Downstream): number {
     if (layout.length === 0) { return fallback }
     const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
       start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
     }))
-    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity })
     const line = layout[idx]
     if (line === undefined) { return fallback }
     let x = line.left
@@ -1797,20 +1932,19 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 复核评论6081596024 问题2：取 offset 在一行布局里的 y（vp）。
-   *
-   * 用 resolveVisualLineIndex + Downstream affinity 选行——
-   * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
+   * Issue #879 复核评论6082616112 问题4：添加 affinity 参数。
+   * 默认 Downstream，但 end offset 应传 Upstream。
    *
    * RetainedMove 通道按 piece 采样时需要计算每个 piece 在新布局中的 y 坐标，
    * 用于让每个 piece 运动到各自的新版目标行位置（而非整 move 的 newRect.y）。
    */
-  private static yAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number): number {
+  private static yAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number,
+    affinity: CaretAffinity = CaretAffinity.Downstream): number {
     if (layout.length === 0) { return fallback }
     const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
       start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
     }))
-    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity })
     const line = layout[idx]
     if (line === undefined) { return fallback }
     return line.y
@@ -1938,8 +2072,11 @@ export class EditorMotionCoordinator {
     }
     // Issue #879 复核评论6081596024 问题1：carryOverMotionRuns 的字形仍由运动层绘制——
     // 从静态层扣除，避免同一字形在静态层和运动层重复绘制（重影）。
+    // Issue #879 复核评论6082616112 问题3：只扣 targetUtf16Start/End（新正文范围），
+    // 不扣 sourceUtf16Start/End（旧源范围）——旧源范围在新正文中无意义，
+    // 拿旧源 offset 在新正文上做减法会误删新正文的字。
     for (const motionRun of plan.carryOverMotionRuns) {
-      excluded.push({ utf16Start: motionRun.utf16Start, utf16End: motionRun.utf16End })
+      excluded.push({ utf16Start: motionRun.targetUtf16Start, utf16End: motionRun.targetUtf16End })
     }
     // 不扣 deletedRuns 的旧正文 offset——旧 offset 在新正文中无意义
 

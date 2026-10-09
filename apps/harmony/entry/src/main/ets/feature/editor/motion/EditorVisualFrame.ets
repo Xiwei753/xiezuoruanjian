@@ -277,10 +277,33 @@ export interface CarryOverMotionRun {
   windowId: string
   /** 该窗口的源修订号——按此查不可变源排版记录 */
   sourceRevision: number
-  /** 该窗口在源正文中的 UTF-16 起始 offset */
-  utf16Start: number
-  /** 该窗口在源正文中的 UTF-16 结束 offset（exclusive） */
-  utf16End: number
+  /**
+   * Issue #879 复核评论6082616112 问题1：明确源类型——'new' 或 'old'。
+   * 旧 insert 窗口的源是 'new'（新正文），旧 reflow 窗口的源是 'old'（旧正文）。
+   * buildFrame 中 sourceKind 从此字段读取，不再根据 motionOwnerKind 推断。
+   */
+  sourceKind: 'new' | 'old'
+  /**
+   * Issue #879 复核评论6082616112 问题1：旧窗口的真实源 runId。
+   * 如 `new-11` 或 `old-11`——buildFrame 中 runId 必须沿用此值，
+   * 而非用最新 revision 构造新的 runId。
+   */
+  sourceRunId: string
+  /**
+   * Issue #879 复核评论6082616112 问题3：旧源 UTF-16 范围——给旧 TextController 绘制用。
+   * 这是字形在源正文中的范围，buildFrame 中 utf16Start/End 用此值。
+   */
+  sourceUtf16Start: number
+  /** Issue #879 复核评论6082616112 问题3：旧源 UTF-16 结束 offset（exclusive） */
+  sourceUtf16End: number
+  /**
+   * Issue #879 复核评论6082616112 问题3：新正文 UTF-16 范围——给静态遮罩扣除用。
+   * 这是字形在新版正文中的对应范围，computeStaticRangesMultiChannel 只扣此范围。
+   * 如果无法确定目标范围，用 sourceUtf16Start/End 作为 fallback（但加注释说明）。
+   */
+  targetUtf16Start: number
+  /** Issue #879 复核评论6082616112 问题3：新正文 UTF-16 结束 offset（exclusive） */
+  targetUtf16End: number
   /** 当前裁切左边界（vp）——继承自上一帧的 currentClipLeft */
   currentClipLeft: number
   /** 当前裁切右边界（vp）——继承自上一帧的 currentClipRight */
@@ -309,6 +332,20 @@ export interface CarryOverMotionRun {
   currentPositionX: number
   /** 当前位置 y（vp）——继承自上一帧的 currentPositionY */
   currentPositionY: number
+  /**
+   * Issue #879 复核评论6082616112 问题2：reflow 起始位置 x（vp）。
+   * = 上一帧 currentPositionX——buildFrame 每帧插值 currentPositionX = startX + (targetX - startX) * p。
+   */
+  startX: number
+  /** Issue #879 复核评论6082616112 问题2：reflow 起始位置 y（vp） */
+  startY: number
+  /**
+   * Issue #879 复核评论6082616112 问题2：reflow 目标位置 x（vp）。
+   * 从新版布局 glyphRectForRange(newLayout, targetUtf16Start, targetUtf16End) 获取。
+   */
+  targetX: number
+  /** Issue #879 复核评论6082616112 问题2：reflow 目标位置 y（vp） */
+  targetY: number
 }
 
 /**

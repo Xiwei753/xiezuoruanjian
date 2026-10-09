@@ -173,23 +173,25 @@ export interface RunStartPiece {
 const VISIBLE_EPSILON = 0.01
 
 /**
- * Issue #879 复核评论6081596024 问题2：找 offset 所在的行。
+ * Issue #879 复核评论6082616112 问题4：找 offset 所在的行。
  *
- * 用 resolveVisualLineIndex + Downstream affinity 选行——
- * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
+ * 用 resolveVisualLineIndex + 指定 affinity 选行——
+ * 软换行边界 offset 属于下一行（Downstream）或上一行（Upstream）。
  */
-function lineForOffset(layout: LineLayout[], offset: number): LineLayout | null {
+function lineForOffset(layout: LineLayout[], offset: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): LineLayout | null {
   if (layout.length === 0) { return null }
   const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
     start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
   }))
-  const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+  const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity })
   return layout[idx] ?? null
 }
 
 /** 取 offset 在一行布局里的 x（vp）：用 caretStops 找最近的前一个停止点。 */
-function xAtOffset(layout: LineLayout[], offset: number, fallback: number): number {
-  const line = lineForOffset(layout, offset)
+function xAtOffset(layout: LineLayout[], offset: number, fallback: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): number {
+  const line = lineForOffset(layout, offset, affinity)
   if (line === null) {
     return fallback
   }
@@ -203,8 +205,9 @@ function xAtOffset(layout: LineLayout[], offset: number, fallback: number): numb
 }
 
 /** 取 offset 所在行的 y（vp）。 */
-function yAtOffset(layout: LineLayout[], offset: number, fallback: number): number {
-  const line = lineForOffset(layout, offset)
+function yAtOffset(layout: LineLayout[], offset: number, fallback: number,
+  affinity: CaretAffinity = CaretAffinity.Downstream): number {
+  const line = lineForOffset(layout, offset, affinity)
   return line === null ? fallback : line.y
 }
 
@@ -289,15 +292,18 @@ function buildPiece(
   const lastBoundary = boundaries[lastIndex + 1]
 
   // 字形在 run 自己布局中的完整边界（目标局部坐标系）
+  // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
   const ownFullLeft = xAtOffset(run.ownLayout, firstBoundary, run.ownRect.x)
-  const ownFullRight = xAtOffset(run.ownLayout, lastBoundary, run.ownRect.x + run.ownRect.width)
+  const ownFullRight = xAtOffset(run.ownLayout, lastBoundary, run.ownRect.x + run.ownRect.width,
+    CaretAffinity.Upstream)
 
   // Issue #879 复核评论6078682695 问题4：
   // 首字形和尾字形各自在目标布局中的完整边界——投影时必须按各自字形的目标边界，
   // 不能用整个 piece 的 [ownFullLeft, ownFullRight]。
   // 否则多字形 piece 在源＝目标时会得到非恒等结果（首字形可见比例被映射到整段宽度）。
   const firstGlyphTargetLeft = ownFullLeft
-  const firstGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[firstIndex + 1], run.ownRect.x + run.ownRect.width)
+  const firstGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[firstIndex + 1], run.ownRect.x + run.ownRect.width,
+    CaretAffinity.Upstream)
   const lastGlyphTargetLeft = xAtOffset(run.ownLayout, boundaries[lastIndex], run.ownRect.x)
   const lastGlyphTargetRight = ownFullRight
 
