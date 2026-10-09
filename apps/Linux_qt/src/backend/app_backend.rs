@@ -377,6 +377,7 @@ pub struct AppBackend {
     /// 因此在 reload_tree() 遍历 Core 数据时同步构建这份 serde 镜像。
     pub(crate) cached_tree_json: serde_json::Value,
 
+
     current_sync_enabled: bool,
     current_sync_backend_type: String,
     current_sync_remote_url: String,
@@ -449,6 +450,8 @@ pub struct AppBackend {
             height_vp: f64,
             chapter_navigation_visible: bool,
             tool_pane_visible: bool,
+            chapter_navigation_width_vp: f64,
+            tool_pane_width_vp: f64,
         ) -> QJsonObject
     ),
 }
@@ -753,8 +756,12 @@ impl AppBackend {
         height_vp: f64,
         chapter_navigation_visible: bool,
         tool_pane_visible: bool,
+        chapter_navigation_width_vp: f64,
+        tool_pane_width_vp: f64,
     ) -> QJsonObject {
-        use writer_core::presentation::layout::resolver::{WindowViewport, WorkbenchVisibility};
+        use writer_core::presentation::layout::resolver::{
+            WindowViewport, WorkbenchPaneWidths, WorkbenchVisibility,
+        };
 
         let viewport = WindowViewport {
             width_dp: width_vp as f32,
@@ -766,9 +773,16 @@ impl AppBackend {
             chapter_navigation_visible,
             tool_pane_visible,
         };
+        let pane_widths = WorkbenchPaneWidths {
+            chapter_navigation_dp: chapter_navigation_width_vp as f32,
+            tool_pane_dp: tool_pane_width_vp as f32,
+        };
 
-        let plan =
-            writer_core::presentation::layout::resolve_workbench_layout(&viewport, visibility);
+        let plan = writer_core::presentation::layout::resolve_workbench_layout_with_pane_widths(
+            &viewport,
+            visibility,
+            pane_widths,
+        );
         let dto = LinuxQtWorkbenchPlanDto::from_plan(&plan);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)

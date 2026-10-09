@@ -115,3 +115,14 @@ pub fn resolve_workbench_layout(
 ) -> resolver::WorkbenchLayoutPlan {
     workbench::resolve_workbench_layout(viewport, visibility)
 }
+
+/// 解析工作台布局计划（带平台端 pane 宽度请求）。
+///
+/// 详见 [`workbench::resolve_workbench_layout_with_pane_widths`]。
+pub fn resolve_workbench_layout_with_pane_widths(
+    viewport: &resolver::WindowViewport,
+    visibility: resolver::WorkbenchVisibility,
+    pane_widths: resolver::WorkbenchPaneWidths,
+) -> resolver::WorkbenchLayoutPlan {
+    workbench::resolve_workbench_layout_with_pane_widths(viewport, visibility, pane_widths)
+}

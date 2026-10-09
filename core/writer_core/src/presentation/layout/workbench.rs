@@ -21,7 +21,7 @@
 use super::metrics::LayoutMetrics;
 use super::resolver::{
     LayoutRect, ResolvedWorkspaceMode, WindowOcclusion, WindowViewport, WorkbenchLayoutPlan,
-    WorkbenchPlacement, WorkbenchRole, WorkbenchVisibility,
+    WorkbenchPaneWidths, WorkbenchPlacement, WorkbenchRole, WorkbenchVisibility,
 };
 
 /// 解析工作台布局计划（  第 1-2 步�，）。
@@ -50,6 +50,20 @@ use super::resolver::{
 pub fn resolve_workbench_layout(
     viewport: &WindowViewport,
     visibility: WorkbenchVisibility,
+) -> WorkbenchLayoutPlan {
+    resolve_workbench_layout_with_pane_widths(viewport, visibility, WorkbenchPaneWidths::default())
+}
+
+/// 解析工作台布局计划（带平台端 pane 宽度请求）。
+///
+/// 在 [`resolve_workbench_layout`] 基础上增加 [`WorkbenchPaneWidths`] 参数：
+/// 平台端可把用户拖拽后的 pane 宽度传入，Core 在 clamp 时优先采用用户请求值，
+/// 再受 `list_pane_min_width_dp` / `tool_pane_min_width_dp` 和 `editor_min_width_dp` 约束。
+/// `pane_widths` 全 0 时退化为纯 LayoutMetrics 行为，不改变现有各端输出。
+pub fn resolve_workbench_layout_with_pane_widths(
+    viewport: &WindowViewport,
+    visibility: WorkbenchVisibility,
+    pane_widths: WorkbenchPaneWidths,
 ) -> WorkbenchLayoutPlan {
     let metrics = LayoutMetrics::default();
     let vw = viewport.width_dp.max(0.0);
@@ -87,7 +101,7 @@ pub fn resolve_workbench_layout(
         .copied();
 
     if let Some(region) = placement_region {
-        let placements = place_workbench_in_region(region, &metrics, &visibility);
+        let placements = place_workbench_in_region(region, &metrics, &visibility, &pane_widths);
         WorkbenchLayoutPlan {
             placements,
             mode: ResolvedWorkspaceMode::Workbench,
@@ -260,6 +274,7 @@ fn place_workbench_in_region(
     region: LayoutRect,
     metrics: &LayoutMetrics,
     visibility: &WorkbenchVisibility,
+    pane_widths: &WorkbenchPaneWidths,
 ) -> Vec<WorkbenchPlacement> {
     let region_w = region.width();
     let region_h = region.height();
@@ -268,7 +283,8 @@ fn place_workbench_in_region(
     let content_bottom = region.bottom_dp;
     let toolbar_bottom = region.top_dp + toolbar_h;
 
-    let (chapter_nav_w, tool_pane_w) = compute_content_pane_widths(region_w, metrics, visibility);
+    let (chapter_nav_w, tool_pane_w) =
+        compute_content_pane_widths(region_w, metrics, visibility, pane_widths);
     let tool_rail_w = metrics.tool_rail_width_dp;
     let chapter_nav_right = region.left_dp + chapter_nav_w;
     let tool_rail_left = region.right_dp - tool_rail_w;
@@ -277,7 +293,15 @@ fn place_workbench_in_region(
     let editor_right = tool_pane_left;
 
     let (toolbar_leading_bounds, toolbar_center_bounds, toolbar_trailing_bounds) =
-        compute_toolbar_bounds(region, region_w, metrics, toolbar_bottom);
+        compute_toolbar_bounds(
+            region,
+            region_w,
+            metrics,
+            toolbar_bottom,
+            chapter_nav_w,
+            tool_pane_w,
+            tool_rail_w,
+        );
 
     vec![
         WorkbenchPlacement {
@@ -331,24 +355,46 @@ fn place_workbench_in_region(
     ]
 }
 
-/// 计算 content 区域 chapter_nav / tool_pane 的实际宽度（preferred 或压缩到 min）。
+/// 计算 content 区域 chapter_nav / tool_pane 的实际宽度。
+///
+/// 优先采用 `pane_widths` 中用户请求的宽度（> 0 才用），
+/// 再用 `list_pane_min_width_dp` / `tool_pane_min_width_dp` 和
+/// "必须给 Editor 留 `editor_min_width_dp`" 做 clamp。
 fn compute_content_pane_widths(
     region_w: f32,
     metrics: &LayoutMetrics,
     visibility: &WorkbenchVisibility,
+    pane_widths: &WorkbenchPaneWidths,
 ) -> (f32, f32) {
-    let chapter_nav_preferred = if visibility.chapter_navigation_visible {
-        metrics.list_pane_width_dp
+    // 用户请求宽度：先看 visibility，不可见时 requested 直接为 0（不参与预算）。
+    // 可见时优先采用 pane_widths 中用户拖拽后的宽度（> 0 才用），
+    // 否则用 LayoutMetrics 默认 preferred 宽度。
+    //
+    //   问题 3a：旧实现先看 pane_widths > 0 再看 visibility，导致已收起的 pane
+    // 仍把之前拖拽存的宽度计入 total_requested，误判"不够 requested"把另一栏压回 min。
+    // 此处改为先看 visibility，隐藏 pane 的 requested 一律为 0。
+    let chapter_nav_requested = if visibility.chapter_navigation_visible {
+        if pane_widths.chapter_navigation_dp > 0.0 {
+            pane_widths.chapter_navigation_dp
+        } else {
+            metrics.list_pane_width_dp
+        }
     } else {
         0.0
     };
+    let tool_pane_requested = if visibility.tool_pane_visible {
+        if pane_widths.tool_pane_dp > 0.0 {
+            pane_widths.tool_pane_dp
+        } else {
+            metrics.tool_pane_width_dp
+        }
+    } else {
+        0.0
+    };
+
+    // 最小宽度：visibility 不可见时为 0。
     let chapter_nav_min = if visibility.chapter_navigation_visible {
         metrics.list_pane_min_width_dp
-    } else {
-        0.0
-    };
-    let tool_pane_preferred = if visibility.tool_pane_visible {
-        metrics.tool_pane_width_dp
     } else {
         0.0
     };
@@ -357,29 +403,89 @@ fn compute_content_pane_widths(
     } else {
         0.0
     };
-    let total_preferred = chapter_nav_preferred
-        + tool_pane_preferred
-        + metrics.tool_rail_width_dp
-        + metrics.editor_min_width_dp;
 
-    // 空间够 preferred 时用 preferred；否则压 pane 到 min，editor 拿剩余（>= editor_min_w）。
-    if region_w >= total_preferred {
-        (chapter_nav_preferred, tool_pane_preferred)
+    let tool_rail_w = metrics.tool_rail_width_dp;
+    let editor_min_w = metrics.editor_min_width_dp;
+
+    //   问题 3b：min + extra 连续 clamp。
+    // 旧实现超预算时直接 return (min, min)，拖拽越过上限一像素就整栏跳回 min。
+    // 改为：可见 pane 先各自拿 min，再把剩余 extra 预算按请求比例分配给超出 min 的部分，
+    // 超预算时只压缩 extra（按比例），min 全给——拖到极限停在极限，不跳变。
+    // Editor 始终保住 editor_min_width_dp，不参与 pane 压缩。
+
+    // pane 可用总预算 = region_w - tool_rail - editor_min，clamp 到 >= 0。
+    let budget = (region_w - tool_rail_w - editor_min_w).max(0.0);
+
+    // 可见 pane 先各自拿自己的 min（不可见为 0）。
+    let min_sum = chapter_nav_min + tool_pane_min;
+    // extra 预算 = budget - min_sum。>= 0 表示两个 min 都能放下还有富余。
+    let extra_budget = budget - min_sum;
+
+    // 请求超出 min 的部分（>= 0）。requested 低于 min 时 extra 为 0，final 不低于 min。
+    let left_extra = (chapter_nav_requested - chapter_nav_min).max(0.0);
+    let right_extra = (tool_pane_requested - tool_pane_min).max(0.0);
+    let total_extra = left_extra + right_extra;
+
+    if extra_budget < 0.0 {
+        // 连 min 都放不下：budget 不够给两个 min，按 min 比例压缩。
+        // budget 已 clamp 到 >= 0。保留 visibility 不可见对应 pane 宽度为 0 的语义。
+        if min_sum > 0.0 {
+            let ratio = budget / min_sum;
+            let chapter_nav_final = if visibility.chapter_navigation_visible {
+                (chapter_nav_min * ratio).max(0.0)
+            } else {
+                0.0
+            };
+            let tool_pane_final = if visibility.tool_pane_visible {
+                (tool_pane_min * ratio).max(0.0)
+            } else {
+                0.0
+            };
+            (chapter_nav_final, tool_pane_final)
+        } else {
+            // 两个 pane 都不可见（min_sum = 0），直接返回 (0, 0)。
+            (0.0, 0.0)
+        }
+    } else if total_extra <= extra_budget {
+        // extra 没超预算：原样给。final = min + extra（即 requested，但不低于 min）。
+        let chapter_nav_final = chapter_nav_min + left_extra;
+        let tool_pane_final = tool_pane_min + right_extra;
+        (chapter_nav_final, tool_pane_final)
     } else {
-        (chapter_nav_min, tool_pane_min)
+        // total_extra > extra_budget（且 total_extra > 0，因为 extra_budget >= 0）：
+        // 按比例压缩 extra 部分，不一刀切打回 min，保证拖拽连续不跳变。
+        // min 部分全给，只压缩超出 min 的 extra，拖到极限停在极限。
+        let ratio = extra_budget / total_extra;
+        let chapter_nav_final = chapter_nav_min + left_extra * ratio;
+        let tool_pane_final = tool_pane_min + right_extra * ratio;
+        (chapter_nav_final, tool_pane_final)
     }
 }
 
 /// 计算 toolbar 三组 bounds（leading/center/trailing）。
+///
+/// leading 的右边界至少覆盖实际 ChapterNavigation 宽度（`chapter_nav_w`），
+/// trailing 的左边界至少覆盖实际 ToolPane + ToolRail 宽度（`tool_pane_w + tool_rail_w`）。
+/// `toolbar_leading_width_dp` / `toolbar_trailing_width_dp` 只当工具内容自己的最小宽度，
+/// 不再当另一套独立栏宽——这样左栏/右栏拖宽以后，顶栏也跟着同一条分割线移动。
 fn compute_toolbar_bounds(
     region: LayoutRect,
     region_w: f32,
     metrics: &LayoutMetrics,
     toolbar_bottom: f32,
+    chapter_nav_w: f32,
+    tool_pane_w: f32,
+    tool_rail_w: f32,
 ) -> (LayoutRect, LayoutRect, LayoutRect) {
-    let toolbar_leading_w = metrics.toolbar_leading_width_dp.min(region_w);
+    // leading 至少覆盖 ChapterNavigation 宽度。
+    let toolbar_leading_w = metrics
+        .toolbar_leading_width_dp
+        .max(chapter_nav_w)
+        .min(region_w);
+    // trailing 至少覆盖 ToolPane + ToolRail 宽度。
     let toolbar_trailing_w = metrics
         .toolbar_trailing_width_dp
+        .max(tool_pane_w + tool_rail_w)
         .min((region_w - toolbar_leading_w).max(0.0));
     let toolbar_leading_right = region.left_dp + toolbar_leading_w;
     let toolbar_trailing_left = region.right_dp - toolbar_trailing_w;

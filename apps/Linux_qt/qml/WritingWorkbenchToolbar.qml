@@ -78,6 +78,7 @@ ColumnLayout {
                 // Core 没给 bounds（SinglePane）时按内容自适应，不让内部内容被压扁。
                 implicitWidth: leadingInner.implicitWidth + root.dt.sp12 + root.dt.sp8
                 Layout.fillWidth: false
+                Layout.fillHeight: true
                 Layout.preferredWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
                 Layout.minimumWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
                 Layout.maximumWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
@@ -118,6 +119,7 @@ ColumnLayout {
             // ── ToolbarCenter 角色 wrapper：宽度严格等于 Core 的 ToolbarCenter ──
             Item {
                 Layout.fillWidth: root.centerWidth <= 0
+                Layout.fillHeight: true
                 Layout.preferredWidth: root.centerWidth > 0 ? root.centerWidth : -1
                 Layout.minimumWidth: root.centerWidth > 0 ? root.centerWidth : 0
                 Layout.maximumWidth: root.centerWidth > 0 ? root.centerWidth : Number.POSITIVE_INFINITY
@@ -143,6 +145,7 @@ ColumnLayout {
                 id: trailingSlot
                 implicitWidth: trailingInner.implicitWidth + root.dt.sp8 + root.dt.sp16
                 Layout.fillWidth: false
+                Layout.fillHeight: true
                 Layout.preferredWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
                 Layout.minimumWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
                 Layout.maximumWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth

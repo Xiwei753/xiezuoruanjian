@@ -37,7 +37,9 @@ Rectangle {
     // 当前选中的工具 key（"" = 工具 pane 收起）。单向输入，由 WritingWorkspace 写。
     property string selectedTool: ""
 
-    readonly property bool toolPaneOpen: root.selectedTool !== ""
+    // Issue #842 任务3：toolPaneOpen 改为独立输入属性，不再从 selectedTool 派生。
+    // 由 WritingWorkspace 绑定到 rightPaneCollapsed 的反值，与工具选择解耦。
+    property bool toolPaneOpen: false
 
     // Issue #829：右侧工具 rail 的空间骨架按手稿固定。
     // 星图始终占这个入口；真实内容在 RightDrawer 里接，不再改 rail 结构。

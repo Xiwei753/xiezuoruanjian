@@ -28,8 +28,8 @@ RowLayout {
 
     // 同步状态指示
     Rectangle {
-        width: syncRow.implicitWidth + dt.sp16
-        height: 40
+        Layout.preferredWidth: syncRow.implicitWidth + dt.sp16
+        Layout.preferredHeight: 40
         radius: dt.radiusPill
         color: syncHover.containsMouse ? dt.surfaceVariant : "transparent"
 
@@ -80,8 +80,8 @@ RowLayout {
 
     // 搜索按钮（固定显示）
     Rectangle {
-        width: searchText.implicitWidth + 24
-        height: 40
+        Layout.preferredWidth: searchText.implicitWidth + 24
+        Layout.preferredHeight: 40
         radius: dt.radiusPill
         color: searchHover.containsMouse ? dt.surfaceVariant : "transparent"
 
@@ -106,8 +106,8 @@ RowLayout {
 
     // 设置按钮
     Rectangle {
-        width: settingsText.implicitWidth + 24
-        height: 40
+        Layout.preferredWidth: settingsText.implicitWidth + 24
+        Layout.preferredHeight: 40
         radius: dt.radiusPill
         color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
 
