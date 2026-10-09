@@ -156,6 +156,20 @@ impl CaretMotion {
         route_crosses_cluster_frontier(self.from, self.to, frontier_x, &target.rect)
     }
 
+    fn drives_new_reveal(self, target: &TargetCluster, offset_map: &OffsetMap) -> bool {
+        if !self.can_drive_cluster_line(target.snapshot_id)
+            || self.to_byte < target.byte_range.1
+            || offset_map
+                .map_new_range_to_old(target.byte_range.0, target.byte_range.1)
+                .is_some()
+        {
+            return false;
+        }
+
+        let frontier_x = cluster_trailing_frontier_x(target);
+        route_reaches_cluster_frontier(self.from, self.to, frontier_x, &target.rect)
+    }
+
     fn matches(self, caret: VisualCaretGeometry) -> bool {
         caret.movement_source == CursorMoveSource::TextTransaction
             && caret.layout_revision == Some(self.layout_revision)
@@ -189,12 +203,28 @@ impl CaretMotion {
             y: caret.target_y,
             h: caret.h.max(0.0),
         };
-        let frontier_x = if target.shaping_identity.direction_rtl {
-            target.rect.x
-        } else {
-            target.rect.x + target.rect.w
-        };
+        let frontier_x = cluster_trailing_frontier_x(target);
         route_crosses_cluster_frontier(from, to, frontier_x, &target.rect)
+    }
+
+    fn matches_new_reveal(self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
+        if !self.can_drive_cluster_line(target.snapshot_id)
+            || self.to_byte < target.byte_range.1
+            || !self.matches(caret)
+        {
+            return false;
+        }
+        let from = CaretPosition {
+            x: caret.path_start_x,
+            y: caret.path_start_y,
+            h: caret.h.max(0.0),
+        };
+        let to = CaretPosition {
+            x: caret.target_x,
+            y: caret.target_y,
+            h: caret.h.max(0.0),
+        };
+        route_reaches_cluster_frontier(from, to, cluster_trailing_frontier_x(target), &target.rect)
     }
 }
 
@@ -397,7 +427,11 @@ impl VisualEditState {
         if let Some(caret_motion) = caret_motion {
             for motion in &mut motions {
                 let line_id = match (&motion.source, &motion.target, motion.kind) {
-                    (None, Some(target), MotionKind::Reveal) => Some(target.snapshot_id),
+                    (None, Some(target), MotionKind::Reveal)
+                        if caret_motion.drives_new_reveal(target, offset_map) =>
+                    {
+                        Some(target.snapshot_id)
+                    }
                     (Some(source), Some(target), MotionKind::RevealFromCommittedSlice)
                         if caret_motion.drives_committed_slice(source, target, offset_map) =>
                     {
@@ -603,7 +637,8 @@ impl VisualEditState {
                         continue;
                     };
                     let start_width = source.rect.w.min(target.rect.w);
-                    let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
+                    let boundary =
+                        committed_slice_boundary(target, motion.caret_motion, visual_caret);
                     let proposed_visible = if motion.terminal_geometry_committed {
                         target.rect.w
                     } else {
@@ -620,8 +655,8 @@ impl VisualEditState {
                         .max(proposed_visible)
                         .clamp(0.0, target.rect.w);
                     submitted_visible_widths.push((motion_index, visible));
-                    let motion_terminal =
-                        motion.terminal_geometry_committed || visible >= target.rect.w - 1e-6;
+                    let motion_terminal = motion.terminal_geometry_committed
+                        || (visible >= target.rect.w - 1e-6 && p >= 1.0);
                     terminal_frame &= motion_terminal;
                     if motion_terminal && !motion.terminal_geometry_committed {
                         terminal_motion_indices.push(motion_index);
@@ -658,7 +693,7 @@ impl VisualEditState {
                     // Coordinated mode uses this frame's already-sampled visual caret as the
                     // reveal edge for clusters on its current line. Cross-line/layout cases
                     // retain the explicit VisualEditState progress geometry.
-                    let boundary = reveal_boundary(target, motion.caret_motion, visual_caret);
+                    let boundary = new_reveal_boundary(target, motion.caret_motion, visual_caret);
                     let visible = if motion.terminal_geometry_committed {
                         target.rect.w
                     } else {
@@ -807,13 +842,24 @@ fn caret_line_identity(
     Some(line.id.into())
 }
 
-fn reveal_boundary(
+fn committed_slice_boundary(
     target: &TargetCluster,
     driver: Option<CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
         .filter(|caret| driver.is_some_and(|driver| driver.matches_committed_slice(target, *caret)))
+        .map(|caret| MotionBoundary::VisualCaret(caret.x))
+        .unwrap_or(MotionBoundary::TextProgress)
+}
+
+fn new_reveal_boundary(
+    target: &TargetCluster,
+    driver: Option<CaretMotion>,
+    visual_caret: Option<VisualCaretGeometry>,
+) -> MotionBoundary {
+    visual_caret
+        .filter(|caret| driver.is_some_and(|driver| driver.matches_new_reveal(target, *caret)))
         .map(|caret| MotionBoundary::VisualCaret(caret.x))
         .unwrap_or(MotionBoundary::TextProgress)
 }
@@ -870,6 +916,37 @@ fn route_crosses_cluster_frontier(
     let cluster_center_y = cluster.y + cluster.h * 0.5;
     let vertical_tolerance = ((from.h + cluster.h) * 0.5).max(1.0);
     (route_y - cluster_center_y).abs() <= vertical_tolerance
+}
+
+fn route_reaches_cluster_frontier(
+    from: CaretPosition,
+    to: CaretPosition,
+    frontier_x: f64,
+    cluster: &SourceRect,
+) -> bool {
+    let dx = to.x - from.x;
+    if dx.abs() <= 0.5 {
+        return false;
+    }
+    let t = (frontier_x - from.x) / dx;
+    let endpoint_tolerance = 0.5 / dx.abs();
+    if t <= 1e-3 || t > 1.0 + endpoint_tolerance {
+        return false;
+    }
+    let from_center_y = from.y + from.h * 0.5;
+    let to_center_y = to.y + to.h * 0.5;
+    let route_y = lerp(from_center_y, to_center_y, t.clamp(0.0, 1.0));
+    let cluster_center_y = cluster.y + cluster.h * 0.5;
+    let vertical_tolerance = ((from.h + cluster.h) * 0.5).max(1.0);
+    (route_y - cluster_center_y).abs() <= vertical_tolerance
+}
+
+fn cluster_trailing_frontier_x(target: &TargetCluster) -> f64 {
+    if target.shaping_identity.direction_rtl {
+        target.rect.x
+    } else {
+        target.rect.x + target.rect.w
+    }
 }
 
 fn reveal_width_to_caret(target: &TargetCluster, caret_x: f64) -> f64 {
@@ -1030,10 +1107,9 @@ fn pair_cluster(
     if same_shaping && !moved && retiring_sources.is_empty() {
         return;
     }
-    let starts_from_partial_visual = source.opacity < 0.999
-        || source.rect.w + 0.01 < target.rect.w
-        || source.source_rect.w + 0.01 < target.source_rect.w;
-    let kind = if same_shaping && starts_from_partial_visual {
+    let starts_from_partial_width =
+        source.rect.w + 0.01 < target.rect.w || source.source_rect.w + 0.01 < target.source_rect.w;
+    let kind = if same_shaping && starts_from_partial_width {
         MotionKind::RevealFromCommittedSlice
     } else if same_shaping {
         MotionKind::Transform
