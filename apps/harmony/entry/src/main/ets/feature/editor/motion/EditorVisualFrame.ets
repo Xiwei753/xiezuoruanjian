@@ -258,6 +258,60 @@ export interface CarryOverGhostRun {
 }
 
 /**
+ * Issue #879 复核评论6081596024 问题1：跨事务延续的运动窗口。
+ *
+ * 上一帧的 insert（吐字）或 reflow（保留字移动）窗口如果尚未完成动画，
+ * 且其字形不属于本次新 plan 的任何 run，需要继承到新 plan 继续运动。
+ * 与 CarryOverGhostRun 不同——这些字形仍存在于新版正文中，
+ * 需要从冻结视觉状态继续向目标运动，而不是消退到零宽度。
+ *
+ * - carryOverInsert：上一帧正在吐出的字，继续从当前 clip 扩展到完整可见
+ * - carryOverReflow：上一帧正在移动的字，继续从当前位置移动到新版布局位置
+ */
+export interface CarryOverMotionRun {
+  /** 运动所有权类型——'insert' 或 'reflow' */
+  motionOwnerKind: 'insert' | 'reflow'
+  /** 该窗口覆盖的字符簇身份列表 */
+  glyphIds: string[]
+  /** 独立于字形单元身份的窗口身份 */
+  windowId: string
+  /** 该窗口的源修订号——按此查不可变源排版记录 */
+  sourceRevision: number
+  /** 该窗口在源正文中的 UTF-16 起始 offset */
+  utf16Start: number
+  /** 该窗口在源正文中的 UTF-16 结束 offset（exclusive） */
+  utf16End: number
+  /** 当前裁切左边界（vp）——继承自上一帧的 currentClipLeft */
+  currentClipLeft: number
+  /** 当前裁切右边界（vp）——继承自上一帧的 currentClipRight */
+  currentClipRight: number
+  /** 目标裁切左边界（vp）——运动终点 */
+  targetClipLeft: number
+  /** 目标裁切右边界（vp）——运动终点 */
+  targetClipRight: number
+  /** 裁切窗口上边界（vp） */
+  clipTop: number
+  /** 裁切窗口下边界（vp） */
+  clipBottom: number
+  /** 字形排版位置 x（vp）——源 StyledString 排版出的原始位置 */
+  glyphX: number
+  /** 字形排版位置 y（vp） */
+  glyphY: number
+  /** 字形宽度（vp） */
+  glyphWidth: number
+  /** 字形高度（vp） */
+  glyphHeight: number
+  /** 绘制偏移 x（vp）——继承自上一帧的 offsetX */
+  offsetX: number
+  /** 绘制偏移 y（vp）——继承自上一帧的 offsetY */
+  offsetY: number
+  /** 当前位置 x（vp）——继承自上一帧的 currentPositionX */
+  currentPositionX: number
+  /** 当前位置 y（vp）——继承自上一帧的 currentPositionY */
+  currentPositionY: number
+}
+
+/**
  * 运动层字形窗口。
  *
  * 描述一个正在动画中的字形（或字形组）的裁切窗口和排版位置。

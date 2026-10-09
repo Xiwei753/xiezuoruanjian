@@ -28,7 +28,7 @@
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
 import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
-import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
@@ -111,6 +111,15 @@ export interface EditorMotionPlan {
    * 但 plan 接口需要容纳此字段。
    */
   carryOverGhostRuns: CarryOverGhostRun[]
+  /**
+   * Issue #879 复核评论6081596024 问题1：跨事务延续的运动窗口（insert/reflow）。
+   *
+   * 上一帧的 insert（吐字）或 reflow（保留字移动）窗口如果尚未完成动画，
+   * 且其字形不属于本次新 plan 的任何 run，需要继承到新 plan 继续运动。
+   * Planner 自身不产生 carryOverMotionRuns（由 Coordinator.retargetCandidate 识别），
+   * 但 plan 接口需要容纳此字段。
+   */
+  carryOverMotionRuns: CarryOverMotionRun[]
 }
 
 /**
@@ -202,7 +211,8 @@ export class EditorMotionPlanner {
       caretPath: [],
       durationMs: 0,
       motionKind: MotionKind.None,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
   }
 
@@ -301,7 +311,8 @@ export class EditorMotionPlanner {
       caretPath,
       durationMs: 0, // 由 policy 决定实际时长
       motionKind: MotionKind.CaretMove,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
   }
 
@@ -491,7 +502,8 @@ export class EditorMotionPlanner {
       caretPath: [],
       durationMs: 0, // 由 policy 决定实际时长
       motionKind,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
   }
 

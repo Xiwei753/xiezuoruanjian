@@ -23,6 +23,8 @@
 // 纯逻辑：不依赖 ArkUI、不 import .ets，生产由 Planner/Coordinator 调用，Node 单测直接 import。
 
 import type { LineLayout } from '../render/editor_render_geometry.ts'
+import type { LineRange } from '../render/editor_layout_math.ts'
+import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math.ts'
 import type { GlyphIdentityTable } from './editor_glyph_identity.ts'
 import { clusterBoundaries } from './editor_glyph_identity.ts'
 
@@ -170,14 +172,19 @@ export interface RunStartPiece {
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
 const VISIBLE_EPSILON = 0.01
 
-/** 找 offset 所在的行（行区间 [startUtf16, endUtf16] 闭区间，与光标定位一致）。 */
+/**
+ * Issue #879 复核评论6081596024 问题2：找 offset 所在的行。
+ *
+ * 用 resolveVisualLineIndex + Downstream affinity 选行——
+ * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
+ */
 function lineForOffset(layout: LineLayout[], offset: number): LineLayout | null {
-  for (const line of layout) {
-    if (offset >= line.startUtf16 && offset <= line.endUtf16) {
-      return line
-    }
-  }
-  return null
+  if (layout.length === 0) { return null }
+  const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
+    start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+  }))
+  const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+  return layout[idx] ?? null
 }
 
 /** 取 offset 在一行布局里的 x（vp）：用 caretStops 找最近的前一个停止点。 */

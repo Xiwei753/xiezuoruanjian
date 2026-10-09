@@ -230,6 +230,9 @@ export struct SujianEditor {
   // Issue #879 复核评论修复（问题1）：候选 generation——每次创建新候选递增。
   // 用于 CandidateToken.generation 字段，确保每次候选有唯一身份。
   private candidateGeneration: number = 0
+  // Issue #879 复核评论6081596024 问题3：activeSessionId 在接受新会话第一次 update 时就切换，
+  // 不依赖 displayedPresentation 是否已提交——避免 B 的后续 update 被误判为跨会话切换。
+  private activeSessionId: number = -1
   // Issue #879 最新复核评论修复（问题5）：保存从 onPendingLayoutReady 回调获取的 firstCaretRect——
   // 空正文时由 EditorPendingLayoutHost 从 LayoutManager 计算的光标位置，
   // 传递给 Coordinator 的 acceptUpdateWithChain，空正文时优先使用而非估算。
@@ -339,6 +342,9 @@ export struct SujianEditor {
     if (this.presentationUpdate !== null) {
       this.currentSnapshot = this.presentationUpdate.layoutSnapshot
       this.displayedPresentation = this.presentationUpdate
+      // Issue #879 复核评论6081596024 问题3：初始化 activeSessionId——
+      // aboutToAppear 时若已有 presentationUpdate，直接记录其 sessionId。
+      this.activeSessionId = this.presentationUpdate.sessionId
       // Issue #879 本轮复核评论修复（问题2）：在 aboutToAppear 中也构造 newStyledString，
       // 确保 Text.onAppear → applyStyledText 时 newStyledString 已就绪。
       // onPresentationUpdateChanged 中也会构造，但 @Watch 回调可能在 Text.onAppear 之后才触发。
@@ -694,6 +700,8 @@ export struct SujianEditor {
     if (this.presentationUpdate === null) {
       this.currentSnapshot = null
       this.displayedPresentation = null
+      // Issue #879 复核评论6081596024 问题3：会话失效时重置 activeSessionId。
+      this.activeSessionId = -1
       // Issue #879 复核评论修复（问题3）：清空 displayed 版本字段。
       this.displayedSnapshot = null
       this.displayedLineLayouts = []
@@ -738,11 +746,18 @@ export struct SujianEditor {
       this.pushDiagnosticsSnapshot()
       return
     }
-    // Issue #879 复核评论6080604353 问题5：会话切换检测——
-    // 不管 pending 是否为空，只要 displayedPresentation 的 sessionId 与新 presentationUpdate 不同，
-    // 就是会话切换。旧实现只在 pending 非空时检查，会漏掉 pending 已清空的常见场景。
-    const displayedSessionId = this.displayedPresentation?.sessionId
-    if (displayedSessionId !== undefined && displayedSessionId !== this.presentationUpdate.sessionId) {
+    // Issue #879 复核评论6081596024 问题3：首次加载时初始化 activeSessionId——
+    // aboutToAppear 可能未收到 presentationUpdate（@Watch 在 aboutToAppear 之后才触发），
+    // 这里兜底初始化，确保后续会话切换检测正确。
+    if (this.activeSessionId === -1 && this.presentationUpdate !== null) {
+      this.activeSessionId = this.presentationUpdate.sessionId
+    }
+
+    // Issue #879 复核评论6081596024 问题3：用 activeSessionId 判断会话切换——
+    // 在接受 B 的第一次 update 时就切换 activeSessionId，
+    // 此后 B 的更新一律按同会话累积，不再依赖 displayedPresentation 是否已提交。
+    const isNewSession = this.activeSessionId !== -1 && this.activeSessionId !== this.presentationUpdate.sessionId
+    if (isNewSession) {
       // 会话切换：原子撤销旧会话的所有状态
       this.stopActiveAnimation()
       this.pendingPresentationUpdates = []
@@ -765,6 +780,17 @@ export struct SujianEditor {
         []  // 初始无布局，等排版完成后才有
       )
       this.pendingFirstCaretRect = null
+      // Issue #879 复核评论6081596024 问题3：切换 activeSessionId 到新会话。
+      this.activeSessionId = this.presentationUpdate.sessionId
+      // Issue #879 复核评论6081596024 问题3：清空旧会话的 displayed 状态——
+      // 防止 onPendingLayoutReady 把 A 的 previousSnapshot/previousLayout 与 B 的 Core 更新混合。
+      this.displayedSnapshot = null
+      this.displayedStyledString = null
+      this.displayedLineLayouts = []
+      this.displayedVisualFrame = null
+      this.previousSnapshot = null
+      this.previousLayout = []
+      this.oldStyledString = null
     }
 
     // Issue #879 复核评论修复（问题1）：同会话内收到新 presentationUpdate 时，

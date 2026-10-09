@@ -351,3 +351,58 @@ export function computeCompositionUnderlineRectsFromLineLayouts(
   }
   return rects
 }
+
+/**
+ * Issue #879 复核评论6081596024 问题2：统一的字形矩形几何入口。
+ *
+ * 用 resolveVisualLineIndex + Downstream affinity 选行——
+ * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
+ * 返回 [startUtf16, endUtf16) 范围内字形的完整矩形 {x, y, width, height}。
+ *
+ * @param layout LineLayout[]（含 left/y/height/caretStops）
+ * @param startUtf16 字形起始 UTF-16 offset（用 Downstream affinity 选行）
+ * @param endUtf16 字形结束 UTF-16 offset（用 Upstream affinity 选行，即结束位置属于当前行）
+ * @returns {x, y, width, height} 或 null（范围不在任何行内）
+ */
+export function glyphRectForRange(
+  layout: LineLayout[],
+  startUtf16: number,
+  endUtf16: number
+): { x: number; y: number; width: number; height: number } | null {
+  if (layout.length === 0) { return null }
+  // 起始位置用 Downstream affinity：软换行边界属于下一行
+  const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
+    start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+  }))
+  const startLineIdx = resolveVisualLineIndex(lineRanges, { utf16Offset: startUtf16, affinity: CaretAffinity.Downstream })
+  const startLine = layout[startLineIdx]
+  if (startLine === undefined) { return null }
+  // 起始 x：在起始行中找 startUtf16 对应的 x
+  let x = startLine.left
+  for (const stop of startLine.caretStops) {
+    if (stop.utf16Offset <= startUtf16) {
+      x = stop.x
+    }
+  }
+  // 结束位置用 Upstream affinity：结束 offset 属于当前行末
+  const endLineIdx = resolveVisualLineIndex(lineRanges, { utf16Offset: endUtf16, affinity: CaretAffinity.Upstream })
+  const endLine = layout[endLineIdx]
+  if (endLine === undefined) { return null }
+  // 结束 x：在结束行中找 endUtf16 对应的 x
+  let endX = endLine.left
+  for (const stop of endLine.caretStops) {
+    if (stop.utf16Offset <= endUtf16) {
+      endX = stop.x
+    }
+  }
+  // 如果跨行，宽度就是从 startUtf16 到起始行末
+  // 但动画代码中 piece 通常不跨行（跨行的 move 已被拆成多个 piece）
+  // 所以简单返回起始行的矩形即可
+  const width = startLineIdx === endLineIdx ? endX - x : startLine.caretStops[startLine.caretStops.length - 1].x - x
+  return {
+    x,
+    y: startLine.y,
+    width: Math.max(0, width),
+    height: startLine.height,
+  }
+}

@@ -34,11 +34,13 @@
 //
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout, CaretRect } from '../render/editor_render_geometry'
+import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math'
+import type { LineRange } from '../render/editor_layout_math'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/dto/EditorDtos'
 import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
@@ -278,7 +280,8 @@ export class EditorMotionCoordinator {
       caretPath: [],
       durationMs: 0,
       motionKind: MotionKind.None,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
   }
 
@@ -544,6 +547,13 @@ export class EditorMotionCoordinator {
       latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds
     )
 
+    // Issue #879 复核评论6081596024 问题1：识别跨事务延续的运动窗口（insert/reflow）。
+    // 上一帧的 insert/reflow 窗口如果尚未完成动画，且其字形不属于本次新 plan 的任何 run，
+    // 需要继承到新 plan 继续运动——避免未完成的吐字/保留字移动在新编辑时被丢弃导致跳字。
+    const carryOverMotionRuns = this.identifyCarryOverMotionRuns(
+      latestDisplayedFrame, prepared.state.newSnapshot.revision, prepared.state.newLayout, planGlyphIds
+    )
+
     const newPlan: EditorMotionPlan = {
       insertRuns: newInsertRuns,
       deletedRuns: newDeletedRuns,
@@ -551,7 +561,8 @@ export class EditorMotionCoordinator {
       caretPath: retargetedCaretPath,
       durationMs: prepared.plan.durationMs,
       motionKind: prepared.plan.motionKind,
-      carryOverGhostRuns: carryOverGhostRuns
+      carryOverGhostRuns: carryOverGhostRuns,
+      carryOverMotionRuns: carryOverMotionRuns
     }
 
     // 用更新后的 plan 和冻结帧构建新的起始帧（progress=0）
@@ -829,7 +840,8 @@ export class EditorMotionCoordinator {
       caretPath: [],
       durationMs: 0,
       motionKind: MotionKind.None,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
   }
 
@@ -1049,6 +1061,7 @@ export class EditorMotionCoordinator {
         plan.deletedRuns.length === 0 &&
         plan.retainedMoves.length === 0 &&
         plan.carryOverGhostRuns.length === 0 &&
+        plan.carryOverMotionRuns.length === 0 &&
         plan.caretPath.length === 0) {
       return caretBase
     }
@@ -1206,6 +1219,12 @@ export class EditorMotionCoordinator {
           }
         }
         const pieceOldWidth = pieceOldRight - pieceOldLeft
+        // Issue #879 复核评论6081596024 问题4：计算 piece 级别的旧矩形，
+        // 让 MotionGlyphWindow 的所有几何字段引用 piece 自己的旧排版位置，
+        // 而非整 move 的 oldRect。
+        const pieceOldLineY = EditorMotionCoordinator.yAtOffsetLocal(
+          oldLayout, pieceUtf16Start, move.oldRect.y)
+        const pieceOldLineHeight = move.oldRect.height  // 行高通常整 move 一致
         // 每个 piece 运动到各自的新版目标位置
         const currentX = piece.startPositionX + (pieceNewX - piece.startPositionX) * p
         const currentY = piece.startPositionY + (pieceNewY - piece.startPositionY) * p
@@ -1217,14 +1236,14 @@ export class EditorMotionCoordinator {
           clipLeft: currentX,
           clipRight: currentX + pieceOldWidth,
           clipTop: currentY,
-          clipBottom: currentY + move.oldRect.height,
-          glyphX: move.oldRect.x,
-          glyphY: move.oldRect.y,
-          glyphWidth: move.oldRect.width,
-          glyphHeight: move.oldRect.height,
+          clipBottom: currentY + pieceOldLineHeight,
+          glyphX: pieceOldLeft,
+          glyphY: pieceOldLineY,
+          glyphWidth: pieceOldWidth,
+          glyphHeight: pieceOldLineHeight,
           // Issue #879 复核评论6080604353 问题3：offsetX 基于 piece 的旧左边界，而非整 move 的旧左边界
           offsetX: currentX - pieceOldLeft,
-          offsetY: currentY - move.oldRect.y,
+          offsetY: currentY - pieceOldLineY,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
           glyphIds: piece.glyphIds,
@@ -1275,6 +1294,40 @@ export class EditorMotionCoordinator {
         motionOwnerKind: 'carryGhost'
         })
       }
+
+    // Issue #879 复核评论6081596024 问题1：carryOver motion 延续窗口采样。
+    // 上一帧的 insert/reflow 窗口如果尚未完成动画，继续从冻结状态向目标运动。
+    for (const motionRun of plan.carryOverMotionRuns) {
+      const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
+      const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
+      const windowInstanceId = allocator.allocate(motionRun.glyphIds)
+      motionGlyphWindows.push({
+        sourceKind: motionRun.motionOwnerKind === 'insert' ? 'new' : 'old',
+        utf16Start: motionRun.utf16Start,
+        utf16End: motionRun.utf16End,
+        clipLeft: currentLeft,
+        clipRight: currentRight,
+        clipTop: motionRun.clipTop,
+        clipBottom: motionRun.clipBottom,
+        glyphX: motionRun.glyphX,
+        glyphY: motionRun.glyphY,
+        glyphWidth: motionRun.glyphWidth,
+        glyphHeight: motionRun.glyphHeight,
+        offsetX: motionRun.offsetX,
+        offsetY: motionRun.offsetY,
+        runId: motionRun.motionOwnerKind === 'insert' ? `new-${newRevision}` : `old-${motionRun.sourceRevision}`,
+        sourceRevision: motionRun.sourceRevision,
+        glyphIds: motionRun.glyphIds,
+        windowId: motionRun.windowId,
+        windowInstanceId: windowInstanceId,
+        renderNodeKey: `${motionRun.motionOwnerKind === 'insert' ? 'new' : 'old'}-${motionRun.sourceRevision}-${windowInstanceId}`,
+        currentClipLeft: currentLeft,
+        currentClipRight: currentRight,
+        currentPositionX: motionRun.currentPositionX,
+        currentPositionY: motionRun.currentPositionY,
+        motionOwnerKind: motionRun.motionOwnerKind
+      })
+    }
 
     // 4. 光标位置：从 caretPath 插值
     let caretX = caretBase.caretX
@@ -1418,6 +1471,96 @@ export class EditorMotionCoordinator {
       })
     }
     return ghosts
+  }
+
+  /**
+   * Issue #879 复核评论6081596024 问题1：识别跨事务延续的运动窗口。
+   *
+   * 上一帧的 insert（吐字）或 reflow（保留字移动）窗口如果尚未完成动画，
+   * 且其字形不属于本次新 plan 的任何 run，需要继承到新 plan 继续运动。
+   *
+   * - insert：继续从当前 clip 扩展到完整可见（targetClipLeft/Right = 完整字形范围）
+   * - reflow：继续从当前位置移动到新版布局对应位置
+   *
+   * 与 identifyCarryOverGhosts 的区别：
+   * - ghosts 处理 deleted/carryGhost（字形已不存在于新版正文，消退到零宽度）
+   * - motion runs 处理 insert/reflow（字形仍存在于新版正文，继续向目标运动）
+   *
+   * @param latestDisplayedFrame 冻结时刻的 displayedVisualFrame
+   * @param newRevision 新正文 revision
+   * @param newLayout 新版行布局
+   * @param planGlyphIds 本轮新 plan 中所有 run 的 glyphIds 集合
+   */
+  private identifyCarryOverMotionRuns(
+    latestDisplayedFrame: EditorVisualFrame,
+    newRevision: number,
+    newLayout: LineLayout[],
+    planGlyphIds: Set<string>
+  ): CarryOverMotionRun[] {
+    const runs: CarryOverMotionRun[] = []
+    if (!latestDisplayedFrame.isAnimating) {
+      return runs
+    }
+    for (const w of latestDisplayedFrame.motionGlyphWindows) {
+      // 只处理 insert 和 reflow——deleted/carryGhost 由 identifyCarryOverGhosts 处理
+      if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
+        continue
+      }
+      // 本轮新 plan 的 run 已覆盖该字形——不需要延续
+      let coveredByNewPlan = false
+      for (const gid of w.glyphIds) {
+        if (planGlyphIds.has(gid)) {
+          coveredByNewPlan = true
+          break
+        }
+      }
+      if (coveredByNewPlan) {
+        continue
+      }
+      // 窗口已完成动画（clip 已达到目标范围）——不需要延续
+      // 对 insert：currentClipRight - currentClipLeft >= glyphWidth 表示已完成
+      // 对 reflow：currentPositionX/Y 已接近目标——简化判断：clip 宽度接近完整宽度
+      const fullWidth = w.glyphWidth
+      const currentWidth = w.currentClipRight - w.currentClipLeft
+      if (currentWidth >= fullWidth - 0.01) {
+        continue  // 已完全可见，不需要延续
+      }
+      // 计算 targetClipLeft/Right：
+      // - insert：目标是完整可见（targetClipLeft = glyphX, targetClipRight = glyphX + glyphWidth）
+      // - reflow：目标是新版布局中的位置——用 newLayout 查出
+      let targetClipLeft = w.glyphX
+      let targetClipRight = w.glyphX + w.glyphWidth
+      if (w.motionOwnerKind === 'reflow') {
+        // reflow 的目标位置在新版布局中——用 xAtOffsetLocal/yAtOffsetLocal 查
+        const newTargetX = EditorMotionCoordinator.xAtOffsetLocal(
+          newLayout, w.utf16Start, w.glyphX)
+        targetClipLeft = newTargetX
+        targetClipRight = newTargetX + w.glyphWidth
+      }
+      runs.push({
+        motionOwnerKind: w.motionOwnerKind,
+        glyphIds: w.glyphIds,
+        windowId: w.windowId,
+        sourceRevision: w.sourceRevision,
+        utf16Start: w.utf16Start,
+        utf16End: w.utf16End,
+        currentClipLeft: w.currentClipLeft,
+        currentClipRight: w.currentClipRight,
+        targetClipLeft: targetClipLeft,
+        targetClipRight: targetClipRight,
+        clipTop: w.clipTop,
+        clipBottom: w.clipBottom,
+        glyphX: w.glyphX,
+        glyphY: w.glyphY,
+        glyphWidth: w.glyphWidth,
+        glyphHeight: w.glyphHeight,
+        offsetX: w.offsetX,
+        offsetY: w.offsetY,
+        currentPositionX: w.currentPositionX,
+        currentPositionY: w.currentPositionY
+      })
+    }
+    return runs
   }
 
   /**
@@ -1601,7 +1744,8 @@ export class EditorMotionCoordinator {
       caretPath: [],
       durationMs: 0,
       motionKind: MotionKind.None,
-      carryOverGhostRuns: []
+      carryOverGhostRuns: [],
+      carryOverMotionRuns: []
     }
     this.motionDurationMs = 0
     return this.currentFrame
@@ -1628,38 +1772,48 @@ export class EditorMotionCoordinator {
   // ── 私有方法 ──
 
   /**
-   * Issue #879 复核评论6078682695 问题1：取 offset 在一行布局里的 x（vp）。
+   * Issue #879 复核评论6081596024 问题2：取 offset 在一行布局里的 x（vp）。
+   *
+   * 用 resolveVisualLineIndex + Downstream affinity 选行——
+   * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
    *
    * buildFrame 按 piece 采样时需要计算 piece 的目标 clip（该 piece 覆盖的字形在目标布局中的完整边界）。
    */
   private static xAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number): number {
-    for (const line of layout) {
-      if (offset >= line.startUtf16 && offset <= line.endUtf16) {
-        let x = line.left
-        for (const stop of line.caretStops) {
-          if (stop.utf16Offset <= offset) {
-            x = stop.x
-          }
-        }
-        return x
+    if (layout.length === 0) { return fallback }
+    const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
+      start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+    }))
+    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+    const line = layout[idx]
+    if (line === undefined) { return fallback }
+    let x = line.left
+    for (const stop of line.caretStops) {
+      if (stop.utf16Offset <= offset) {
+        x = stop.x
       }
     }
-    return fallback
+    return x
   }
 
   /**
-   * Issue #879 复核评论6080604353 问题3：取 offset 在一行布局里的 y（vp）。
+   * Issue #879 复核评论6081596024 问题2：取 offset 在一行布局里的 y（vp）。
+   *
+   * 用 resolveVisualLineIndex + Downstream affinity 选行——
+   * 软换行边界 offset 属于下一行（右侧视觉行），不属于上一行。
    *
    * RetainedMove 通道按 piece 采样时需要计算每个 piece 在新布局中的 y 坐标，
    * 用于让每个 piece 运动到各自的新版目标行位置（而非整 move 的 newRect.y）。
    */
   private static yAtOffsetLocal(layout: LineLayout[], offset: number, fallback: number): number {
-    for (const line of layout) {
-      if (offset >= line.startUtf16 && offset <= line.endUtf16) {
-        return line.y
-      }
-    }
-    return fallback
+    if (layout.length === 0) { return fallback }
+    const lineRanges: LineRange[] = layout.map((l: LineLayout): LineRange => ({
+      start: l.startUtf16, end: l.endUtf16, breakKind: l.breakKind,
+    }))
+    const idx = resolveVisualLineIndex(lineRanges, { utf16Offset: offset, affinity: CaretAffinity.Downstream })
+    const line = layout[idx]
+    if (line === undefined) { return fallback }
+    return line.y
   }
 
   /**
@@ -1781,6 +1935,11 @@ export class EditorMotionCoordinator {
     }
     for (const move of plan.retainedMoves) {
       excluded.push({ utf16Start: move.newUtf16Start, utf16End: move.newUtf16End })
+    }
+    // Issue #879 复核评论6081596024 问题1：carryOverMotionRuns 的字形仍由运动层绘制——
+    // 从静态层扣除，避免同一字形在静态层和运动层重复绘制（重影）。
+    for (const motionRun of plan.carryOverMotionRuns) {
+      excluded.push({ utf16Start: motionRun.utf16Start, utf16End: motionRun.utf16End })
     }
     // 不扣 deletedRuns 的旧正文 offset——旧 offset 在新正文中无意义
 
