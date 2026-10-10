@@ -27,6 +27,8 @@ pub(crate) struct RenderOwnershipPlan {
     pub transition_id: u64,
     /// Shared edit timeline sample used by every text glyph in this plan.
     pub shared_progress: f64,
+    /// Monotonic response phase carried through rapid retargets.
+    pub timeline_progress: f64,
     pub reflow_cluster_count: usize,
     pub crossfade_cluster_count: usize,
     pub ownership_conflict_count: usize,
@@ -60,10 +62,12 @@ impl RenderOwnershipPlan {
     pub(crate) fn from_owner_table(
         snapshot: &EditorLayoutSnapshot,
         requested_animation_owners: Vec<ClusterOwnerKey>,
-        mut animated_glyphs: Vec<TextAnimationGlyphInfo>,
+        animated_glyphs: Vec<TextAnimationGlyphInfo>,
         handoff_pending: bool,
         terminal_frame: bool,
     ) -> Self {
+        let (mut animated_glyphs, merged_visual_contributions) =
+            merge_visual_contributions(animated_glyphs);
         let requested_count = requested_animation_owners.len();
         let requested: HashSet<ClusterOwnerKey> = requested_animation_owners.into_iter().collect();
         let duplicate_requests = requested_count.saturating_sub(requested.len());
@@ -90,21 +94,14 @@ impl RenderOwnershipPlan {
 
         // Owner request 与 canonical cluster 不一致时 fail closed：整帧回到 canonical，
         // 并在成功同步场景图后收掉这份无效 transition，不能产生 orphan glyph/exclusion。
-        let owner_table_matches =
-            matched_requests.len() == requested.len() && cluster_owners.len() == cluster_count;
-        let mut seen_visual_contributions = HashSet::new();
-        let mut duplicate_visual_contributions = 0usize;
-        for glyph in &animated_glyphs {
-            if let Some(canonical_range) = glyph.canonical_range {
-                let contribution = (canonical_range, glyph.shaping_identity.clone());
-                if !seen_visual_contributions.insert(contribution) {
-                    duplicate_visual_contributions += 1;
-                }
-            }
-        }
+        let duplicate_visual_contributions = count_duplicate_visual_contributions(&animated_glyphs);
+        let owner_table_matches = matched_requests.len() == requested.len()
+            && cluster_owners.len() == cluster_count
+            && duplicate_visual_contributions == 0;
         let ownership_conflict_count = duplicate_requests
             .saturating_add(requested.len().saturating_sub(matched_requests.len()))
             .saturating_add(cluster_count.saturating_sub(cluster_owners.len()))
+            .saturating_add(merged_visual_contributions)
             .saturating_add(duplicate_visual_contributions);
         if !owner_table_matches {
             for owner in cluster_owners.values_mut() {
@@ -161,6 +158,7 @@ impl RenderOwnershipPlan {
         let mut plan = Self {
             cluster_owners,
             shared_progress: 1.0,
+            timeline_progress: 1.0,
             reflow_cluster_count: 0,
             crossfade_cluster_count: 0,
             ownership_conflict_count,
@@ -263,4 +261,79 @@ impl RenderOwnershipPlan {
             shaping_identity,
         }
     }
+}
+
+fn merge_visual_contributions(
+    glyphs: Vec<TextAnimationGlyphInfo>,
+) -> (Vec<TextAnimationGlyphInfo>, usize) {
+    let mut merged: Vec<TextAnimationGlyphInfo> = Vec::with_capacity(glyphs.len());
+    let mut indexes: HashMap<((usize, usize), (usize, usize), ShapingIdentity), usize> =
+        HashMap::new();
+    let mut merged_count = 0usize;
+    for glyph in glyphs {
+        let Some(canonical_range) = glyph.canonical_range else {
+            merged.push(glyph);
+            continue;
+        };
+        let key = (
+            canonical_range,
+            glyph.logical_range,
+            glyph.shaping_identity.clone(),
+        );
+        if let Some(&index) = indexes.get(&key) {
+            merge_glyph_geometry(&mut merged[index], &glyph);
+            merged_count += 1;
+        } else {
+            indexes.insert(key, merged.len());
+            merged.push(glyph);
+        }
+    }
+    (merged, merged_count)
+}
+
+fn merge_glyph_geometry(
+    target: &mut TextAnimationGlyphInfo,
+    contribution: &TextAnimationGlyphInfo,
+) {
+    let replace_source = contribution.opacity > target.opacity;
+    let target_weight = target.opacity.max(0.0);
+    let contribution_weight = contribution.opacity.max(0.0);
+    let total_weight = target_weight + contribution_weight;
+    let (target_weight, contribution_weight) = if total_weight > f64::EPSILON {
+        (
+            target_weight / total_weight,
+            contribution_weight / total_weight,
+        )
+    } else {
+        (0.5, 0.5)
+    };
+    let weighted = |left: f64, right: f64| left * target_weight + right * contribution_weight;
+    target.x = weighted(target.x, contribution.x);
+    target.y = weighted(target.y, contribution.y);
+    target.w = weighted(target.w, contribution.w);
+    target.h = weighted(target.h, contribution.h);
+    target.opacity = (target.opacity + contribution.opacity).clamp(0.0, 1.0);
+    if replace_source {
+        target.snapshot_id = contribution.snapshot_id;
+        target.source_rect = contribution.source_rect.clone();
+        target.logical_range = contribution.logical_range;
+        target.delete_edge = contribution.delete_edge;
+    }
+}
+
+fn count_duplicate_visual_contributions(glyphs: &[TextAnimationGlyphInfo]) -> usize {
+    let mut seen = HashSet::new();
+    let mut duplicates = 0usize;
+    for glyph in glyphs {
+        if let Some(canonical_range) = glyph.canonical_range {
+            if !seen.insert((
+                canonical_range,
+                glyph.logical_range,
+                glyph.shaping_identity.clone(),
+            )) {
+                duplicates += 1;
+            }
+        }
+    }
+    duplicates
 }

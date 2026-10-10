@@ -72,6 +72,7 @@ pub(crate) struct SubmittedVisualFrame {
     pub terminal_frame: bool,
     pub handoff_pending: bool,
     pub shared_progress: f64,
+    pub timeline_progress: f64,
     pub ownership_conflict_count: usize,
 }
 
@@ -115,6 +116,7 @@ impl FrameSubmissionMailbox {
         terminal_frame: bool,
         handoff_pending: bool,
         shared_progress: f64,
+        timeline_progress: f64,
         ownership_conflict_count: usize,
     ) {
         let mut state = self.lock_state();
@@ -133,6 +135,7 @@ impl FrameSubmissionMailbox {
             terminal_frame,
             handoff_pending,
             shared_progress,
+            timeline_progress,
             ownership_conflict_count,
         };
         state.pending_sync = Some(staged);

@@ -151,6 +151,7 @@ impl LinuxEditorAnimationCoordinator {
                 state.duration_ms(),
                 None,
                 sample.eased_progress,
+                sample.timeline_progress,
                 sample.caret_rect,
                 sample.caret_target,
                 state.reflow_cluster_count,
@@ -168,6 +169,16 @@ impl LinuxEditorAnimationCoordinator {
     pub(crate) fn begin_visual_edit(&mut self, request: VisualEditRequest) {
         self.consume_submitted_frames();
         let retargeting = self.visual_edit_state.is_some();
+        let effective_now = self.effective_text_animation_time(request.now);
+        let continuation = self
+            .visual_edit_state
+            .as_ref()
+            .and_then(|state| state.retarget_timing(effective_now));
+        let effective_duration_ms = continuation
+            .map(|(remaining, _, _)| remaining)
+            .unwrap_or_else(|| u64::from(self.typing_animation_duration_ms));
+        let inherited_velocity_per_second = continuation.map(|(_, velocity, _)| velocity);
+        let inherited_shared_progress = continuation.map_or(0.0, |(_, _, progress)| progress);
         let mut submitted_source = self
             .last_submitted_visual_frame
             .as_ref()
@@ -225,8 +236,10 @@ impl LinuxEditorAnimationCoordinator {
             &frame_to_base_map,
             &frame_to_target_map,
             &request.deleted_range_edges,
-            request.now,
-            u64::from(self.typing_animation_duration_ms),
+            effective_now,
+            effective_duration_ms,
+            inherited_velocity_per_second,
+            inherited_shared_progress,
             request.transaction_id,
             request.operation_kind,
             caret_motion,
@@ -238,7 +251,7 @@ impl LinuxEditorAnimationCoordinator {
             .map(|source| source.ticket.render_frame_id);
         self.visual_edit_state = Some(state);
         if let Some(state) = self.visual_edit_state.as_ref() {
-            let sample = state.sample(request.now);
+            let sample = state.sample(effective_now);
             record_timeline_event(
                 if retargeting {
                     "editor.edit.visual.retarget"
@@ -253,6 +266,7 @@ impl LinuxEditorAnimationCoordinator {
                 state.duration_ms(),
                 source_frame_id,
                 sample.eased_progress,
+                sample.timeline_progress,
                 sample.caret_from,
                 sample.caret_target,
                 state.reflow_cluster_count,
@@ -389,6 +403,7 @@ impl LinuxEditorAnimationCoordinator {
                 keeps_animation && plan.terminal_frame,
                 plan.handoff_pending || !resources_ready,
                 plan.shared_progress,
+                plan.timeline_progress,
                 plan.ownership_conflict_count,
             );
         }
@@ -443,6 +458,7 @@ impl LinuxEditorAnimationCoordinator {
                         state.duration_ms(),
                         Some(ticket.render_frame_id),
                         frame.shared_progress,
+                        frame.timeline_progress,
                         submitted_caret,
                         state.sample(Instant::now()).caret_target,
                         state.reflow_cluster_count,
@@ -468,6 +484,7 @@ impl LinuxEditorAnimationCoordinator {
                         state.duration_ms(),
                         Some(ticket.render_frame_id),
                         frame.shared_progress,
+                        frame.timeline_progress,
                         submitted_caret,
                         state.sample(Instant::now()).caret_target,
                         state.reflow_cluster_count,
@@ -593,6 +610,8 @@ impl LinuxEditorAnimationCoordinator {
                 &[],
                 now,
                 remaining_ms,
+                None,
+                0.0,
                 state.transaction_id,
                 state.operation_kind.clone(),
                 None,

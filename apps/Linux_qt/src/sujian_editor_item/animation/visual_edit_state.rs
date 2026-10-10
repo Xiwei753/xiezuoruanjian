@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 use writer_core::editor::OffsetMap;
 
 use super::super::layout_snapshot::{
-    EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
+    EditorLayoutSnapshot, LineSnapshotId, PreparedLineSnapshot, ShapingIdentity, SourceRect,
 };
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::render_plan::VisualCaretGeometry;
-use super::edit_timeline::{EditMotionSample, EditVisualTimeline};
+use super::edit_timeline::{CaretPath, EditMotionSample, EditVisualTimeline};
 use super::visual_frame::{VisualCluster, VisualFrame};
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge, DeletedRangeEdge};
@@ -74,7 +74,7 @@ impl From<LineSnapshotId> for VisualLineIdentity {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct CaretMotion {
     transition_id: u64,
     from: CaretPosition,
@@ -84,6 +84,7 @@ struct CaretMotion {
     to_line: Option<VisualLineIdentity>,
     layout_revision: LayoutRevision,
     document_session: u64,
+    path: Option<CaretPath>,
 }
 
 impl CaretMotion {
@@ -97,6 +98,8 @@ impl CaretMotion {
         layout_revision: LayoutRevision,
         document_session: u64,
     ) -> Self {
+        let from_rect = from;
+        let to_rect = to;
         let from = CaretPosition {
             x: from.x,
             y: from.top,
@@ -107,6 +110,16 @@ impl CaretMotion {
             y: to.top,
             h: (to.bottom - to.top).max(0.0),
         };
+        let from_line_snapshot = line_for_caret(base_snapshot, from);
+        let to_line_snapshot = line_for_caret(target_snapshot, to);
+        let path = from_line_snapshot
+            .zip(to_line_snapshot)
+            .filter(|(from_line, to_line)| {
+                VisualLineIdentity::from(from_line.id) != VisualLineIdentity::from(to_line.id)
+            })
+            .and_then(|(from_line, to_line)| {
+                build_caret_path(from_line, to_line, from_rect, to_rect, caret_byte_offsets)
+            });
         Self {
             transition_id,
             from,
@@ -116,10 +129,11 @@ impl CaretMotion {
             to_line: caret_line_identity(target_snapshot, to),
             layout_revision,
             document_session,
+            path,
         }
     }
 
-    fn can_drive_cluster_line(self, line_id: LineSnapshotId) -> bool {
+    fn can_drive_cluster_line(&self, line_id: LineSnapshotId) -> bool {
         // Only clusters on the uniquely resolved source and destination row may use the
         // caret boundary. A route crossing rows stays on text progress for its whole life.
         matches!(
@@ -129,7 +143,7 @@ impl CaretMotion {
     }
 
     fn drives_committed_slice(
-        self,
+        &self,
         source: &VisualCluster,
         target: &TargetCluster,
         offset_map: &OffsetMap,
@@ -142,7 +156,9 @@ impl CaretMotion {
         else {
             return false;
         };
-        if source.canonical_range != Some(mapped_source_range) {
+        if source.canonical_range != Some(mapped_source_range)
+            && source.canonical_range != Some(target.byte_range)
+        {
             return false;
         }
 
@@ -161,7 +177,7 @@ impl CaretMotion {
         route_crosses_cluster_frontier(self.from, self.to, frontier_x, &target.rect)
     }
 
-    fn drives_new_reveal(self, target: &TargetCluster, offset_map: &OffsetMap) -> bool {
+    fn drives_new_reveal(&self, target: &TargetCluster, offset_map: &OffsetMap) -> bool {
         if !self.can_drive_cluster_line(target.snapshot_id)
             || self.to_byte < target.byte_range.1
             || offset_map
@@ -175,24 +191,29 @@ impl CaretMotion {
         route_reaches_cluster_frontier(self.from, self.to, frontier_x, &target.rect)
     }
 
-    fn matches(self, caret: VisualCaretGeometry) -> bool {
+    fn matches(&self, caret: VisualCaretGeometry) -> bool {
         caret.movement_source == CursorMoveSource::TextTransaction
             && caret.transition_id == self.transition_id
             && caret.layout_revision == Some(self.layout_revision)
             && caret.document_session == self.document_session
             && (caret.target_x - self.to.x).abs() <= 0.5
             && (caret.target_y - self.to.y).abs() <= 0.5
-            && point_is_on_route(
-                caret.x,
-                caret.y,
-                caret.path_start_x,
-                caret.path_start_y,
-                caret.target_x,
-                caret.target_y,
+            && self.path.as_ref().map_or_else(
+                || {
+                    point_is_on_route(
+                        caret.x,
+                        caret.y,
+                        caret.path_start_x,
+                        caret.path_start_y,
+                        caret.target_x,
+                        caret.target_y,
+                    )
+                },
+                |path| path.contains_point(caret.x, caret.y),
             )
     }
 
-    fn matches_committed_slice(self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
+    fn matches_committed_slice(&self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
         if !self.can_drive_cluster_line(target.snapshot_id)
             || self.to_byte < target.byte_range.1
             || !self.matches(caret)
@@ -213,7 +234,7 @@ impl CaretMotion {
         route_crosses_cluster_frontier(from, to, frontier_x, &target.rect)
     }
 
-    fn matches_new_reveal(self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
+    fn matches_new_reveal(&self, target: &TargetCluster, caret: VisualCaretGeometry) -> bool {
         if !self.can_drive_cluster_line(target.snapshot_id)
             || self.to_byte < target.byte_range.1
             || !self.matches(caret)
@@ -245,9 +266,19 @@ struct ClusterMotion {
     source_canonical_range: Option<(usize, usize)>,
     kind: MotionKind,
     caret_motion: Option<CaretMotion>,
+    /// Cross-line glyphs follow the shared caret path while retaining their per-line offset.
+    reflow_offsets: Option<CaretReflowOffsets>,
     terminal_geometry_committed: bool,
     /// Width represented by the latest Qt-submitted frame, never a staged plan.
     submitted_visible_width: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CaretReflowOffsets {
+    source_x: f64,
+    source_y: f64,
+    target_x: f64,
+    target_y: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -277,6 +308,8 @@ impl VisualEditState {
         deleted_range_edges: &[DeletedRangeEdge],
         now: Instant,
         base_duration_ms: u64,
+        inherited_velocity_per_second: Option<f64>,
+        inherited_shared_progress: f64,
         transaction_id: u64,
         operation_kind: String,
         caret_rects: Option<(CursorRect, CursorRect)>,
@@ -378,6 +411,7 @@ impl VisualEditState {
                     source_canonical_range: None,
                     kind: MotionKind::Reveal,
                     caret_motion: None,
+                    reflow_offsets: None,
                     terminal_geometry_committed: false,
                     submitted_visible_width: 0.0,
                 });
@@ -399,6 +433,7 @@ impl VisualEditState {
                         source_canonical_range: Some(mapped_range),
                         kind: MotionKind::CrossFade,
                         caret_motion: None,
+                        reflow_offsets: None,
                         terminal_geometry_committed: false,
                         submitted_visible_width: 0.0,
                     });
@@ -427,13 +462,14 @@ impl VisualEditState {
                     source_canonical_range: None,
                     kind: MotionKind::Delete(delete_edge),
                     caret_motion: None,
+                    reflow_offsets: None,
                     terminal_geometry_committed: false,
                     submitted_visible_width: 0.0,
                 });
             }
         }
 
-        if let Some(caret_motion) = caret_motion {
+        if let Some(caret_motion) = caret_motion.as_ref() {
             for motion in &mut motions {
                 let line_id = match (&motion.source, &motion.target, motion.kind) {
                     (None, Some(target), MotionKind::Reveal)
@@ -450,7 +486,27 @@ impl VisualEditState {
                     _ => None,
                 };
                 if line_id.is_some_and(|line_id| caret_motion.can_drive_cluster_line(line_id)) {
-                    motion.caret_motion = Some(caret_motion);
+                    motion.caret_motion = Some(caret_motion.clone());
+                }
+            }
+        }
+        if let Some(caret_motion) = caret_motion.as_ref() {
+            if caret_motion.path.is_some() {
+                for motion in &mut motions {
+                    let (Some(source), Some(target)) = (&motion.source, &motion.target) else {
+                        continue;
+                    };
+                    if VisualLineIdentity::from(source.snapshot_id)
+                        == VisualLineIdentity::from(target.snapshot_id)
+                    {
+                        continue;
+                    }
+                    motion.reflow_offsets = Some(CaretReflowOffsets {
+                        source_x: source.rect.x - caret_motion.from.x,
+                        source_y: source.rect.y - caret_motion.from.y,
+                        target_x: target.rect.x - caret_motion.to.x,
+                        target_y: target.rect.y - caret_motion.to.y,
+                    });
                 }
             }
         }
@@ -470,6 +526,9 @@ impl VisualEditState {
             base_duration_ms,
             caret_rects.map(|(from, _)| from),
             caret_rects.map(|(_, to)| to),
+            caret_motion.as_ref().and_then(|motion| motion.path.clone()),
+            inherited_velocity_per_second,
+            inherited_shared_progress,
         );
         let reflow_cluster_count = motions
             .iter()
@@ -530,6 +589,16 @@ impl VisualEditState {
 
     pub(crate) fn retime(&mut self, now: Instant, duration_ms: u64) -> f64 {
         self.timeline.retime(now, duration_ms)
+    }
+
+    pub(crate) fn retarget_timing(&self, now: Instant) -> Option<(u64, f64, f64)> {
+        let sample = self.sample(now);
+        let remaining = self.timeline.remaining_duration_ms(now);
+        (sample.eased_progress < 1.0 && remaining > 0).then_some((
+            remaining,
+            sample.velocity_per_second,
+            sample.timeline_progress,
+        ))
     }
 
     pub(crate) fn duration_ms(&self) -> u64 {
@@ -623,7 +692,7 @@ impl VisualEditState {
                     let (Some(source), Some(target)) = (&motion.source, &motion.target) else {
                         continue;
                     };
-                    let rect = lerp_rect(&source.rect, &target.rect, p);
+                    let rect = motion_rect(motion, source, target, sample);
                     glyphs.push(RenderOwnershipPlan::glyph(
                         rect.x,
                         rect.y,
@@ -644,8 +713,11 @@ impl VisualEditState {
                         continue;
                     };
                     let start_width = source.rect.w.min(target.rect.w);
-                    let boundary =
-                        committed_slice_boundary(target, motion.caret_motion, visual_caret);
+                    let boundary = committed_slice_boundary(
+                        target,
+                        motion.caret_motion.as_ref(),
+                        visual_caret,
+                    );
                     let proposed_visible = if motion.terminal_geometry_committed {
                         target.rect.w
                     } else {
@@ -676,7 +748,24 @@ impl VisualEditState {
                         start_rect.x += source.rect.w - visible;
                     }
                     start_rect.w = visible;
-                    let rect = lerp_rect(&start_rect, &target_slice, p);
+                    let rect = motion
+                        .reflow_offsets
+                        .and_then(|_| sample.caret_rect)
+                        .map(|_| {
+                            let path_rect = motion_rect(motion, source, target, sample);
+                            let x = if source.shaping_identity.direction_rtl {
+                                path_rect.x + path_rect.w - visible
+                            } else {
+                                path_rect.x
+                            };
+                            SourceRect {
+                                x,
+                                y: path_rect.y,
+                                w: visible,
+                                h: path_rect.h,
+                            }
+                        })
+                        .unwrap_or_else(|| lerp_rect(&start_rect, &target_slice, p));
                     glyphs.push(RenderOwnershipPlan::glyph(
                         rect.x,
                         rect.y,
@@ -699,7 +788,8 @@ impl VisualEditState {
                     // Coordinated mode uses this frame's already-sampled visual caret as the
                     // reveal edge for clusters on its current line. Cross-line/layout cases
                     // retain the explicit VisualEditState progress geometry.
-                    let boundary = new_reveal_boundary(target, motion.caret_motion, visual_caret);
+                    let boundary =
+                        new_reveal_boundary(target, motion.caret_motion.as_ref(), visual_caret);
                     let visible = if motion.terminal_geometry_committed {
                         target.rect.w
                     } else {
@@ -741,8 +831,12 @@ impl VisualEditState {
                     // A moving trailing caret boundary directly controls the retained slice.
                     // Leading-edge deletes keep the caret fixed at the deletion origin, so
                     // their explicit text-progress geometry remains the correct driver.
-                    let boundary =
-                        delete_boundary(source, delete_edge, motion.caret_motion, visual_caret);
+                    let boundary = delete_boundary(
+                        source,
+                        delete_edge,
+                        motion.caret_motion.as_ref(),
+                        visual_caret,
+                    );
                     let visible = if motion.terminal_geometry_committed {
                         0.0
                     } else {
@@ -785,19 +879,32 @@ impl VisualEditState {
                         .as_ref()
                         .map(|target| target.byte_range)
                         .or(motion.source_canonical_range);
-                    if let Some(source) = &motion.source {
-                        push_crossfade_source_glyph(source, source_canonical_range, p, &mut glyphs);
-                    }
-                    for source in &motion.retiring_sources {
-                        push_crossfade_source_glyph(source, source_canonical_range, p, &mut glyphs);
-                    }
-                    if let Some(target) = &motion.target {
+                    if let (Some(source), Some(target)) = (&motion.source, &motion.target) {
+                        let path_rect = motion_rect(motion, source, target, sample);
+                        push_crossfade_source_glyph_at(
+                            source,
+                            source_canonical_range,
+                            p,
+                            &path_rect,
+                            source,
+                            &mut glyphs,
+                        );
+                        for retiring in &motion.retiring_sources {
+                            push_crossfade_source_glyph_at(
+                                retiring,
+                                source_canonical_range,
+                                p,
+                                &path_rect,
+                                source,
+                                &mut glyphs,
+                            );
+                        }
                         if p > 1e-6 {
                             glyphs.push(RenderOwnershipPlan::glyph(
-                                target.rect.x,
-                                target.rect.y,
-                                target.rect.w,
-                                target.rect.h,
+                                path_rect.x,
+                                path_rect.y,
+                                path_rect.w,
+                                path_rect.h,
                                 p,
                                 target.snapshot_id,
                                 target.source_rect.clone(),
@@ -826,6 +933,7 @@ impl VisualEditState {
         );
         plan.transition_id = self.transition_id;
         plan.shared_progress = sample.eased_progress;
+        plan.timeline_progress = sample.timeline_progress;
         plan.reflow_cluster_count = self.reflow_cluster_count;
         plan.crossfade_cluster_count = self.crossfade_cluster_count;
         plan.ownership_conflict_count = plan
@@ -841,21 +949,123 @@ fn caret_line_identity(
     snapshot: &EditorLayoutSnapshot,
     caret: CaretPosition,
 ) -> Option<VisualLineIdentity> {
+    line_for_caret(snapshot, caret).map(|line| line.id.into())
+}
+
+fn line_for_caret(
+    snapshot: &EditorLayoutSnapshot,
+    caret: CaretPosition,
+) -> Option<&PreparedLineSnapshot> {
     let caret_center_y = caret.y + caret.h * 0.5;
-    let mut matching_lines = snapshot.line_snapshots.iter().filter(|line| {
-        caret_center_y >= line.visual_line_top - 0.5
-            && caret_center_y <= line.visual_line_bottom + 0.5
-    });
-    let line = matching_lines.next()?;
-    if matching_lines.next().is_some() {
-        return None;
+    snapshot.line_snapshots.iter().min_by(|left, right| {
+        let distance = |line: &PreparedLineSnapshot| {
+            if caret_center_y < line.visual_line_top {
+                line.visual_line_top - caret_center_y
+            } else if caret_center_y > line.visual_line_bottom {
+                caret_center_y - line.visual_line_bottom
+            } else {
+                0.0
+            }
+        };
+        distance(left).total_cmp(&distance(right))
+    })
+}
+
+fn build_caret_path(
+    source_line: &PreparedLineSnapshot,
+    target_line: &PreparedLineSnapshot,
+    from: CursorRect,
+    to: CursorRect,
+    caret_byte_offsets: (usize, usize),
+) -> Option<CaretPath> {
+    let (source_line_left, source_line_right) = line_horizontal_bounds(source_line);
+    let (target_line_left, target_line_right) = line_horizontal_bounds(target_line);
+    let source_left = source_line_left.min(from.x);
+    let source_right = source_line_right.max(from.x);
+    let target_left = target_line_left.min(to.x);
+    let target_right = target_line_right.max(to.x);
+    let forward = caret_byte_offsets.1 >= caret_byte_offsets.0;
+    let source_rtl = line_is_rtl(source_line);
+    let target_rtl = line_is_rtl(target_line);
+    let source_leading = if source_rtl {
+        source_right
+    } else {
+        source_left
+    };
+    let source_trailing = if source_rtl {
+        source_left
+    } else {
+        source_right
+    };
+    let target_leading = if target_rtl {
+        target_right
+    } else {
+        target_left
+    };
+    let target_trailing = if target_rtl {
+        target_left
+    } else {
+        target_right
+    };
+    let (exit_x, entry_x) = if (from.x - to.x).abs() <= 8.0 {
+        // Enter at the current caret boundary when a split or soft wrap keeps the
+        // horizontal caret coordinate stable; traversing the whole row would misroute it.
+        (from.x, to.x)
+    } else {
+        (
+            if forward {
+                source_trailing
+            } else {
+                source_leading
+            },
+            if forward {
+                target_leading
+            } else {
+                target_trailing
+            },
+        )
+    };
+    let source_exit = CursorRect {
+        x: exit_x,
+        top: source_line.caret_top,
+        bottom: source_line.caret_top + source_line.caret_height,
+        baseline_y: from.baseline_y,
+    };
+    let target_vertical = CursorRect {
+        x: exit_x,
+        top: target_line.caret_top,
+        bottom: target_line.caret_top + target_line.caret_height,
+        baseline_y: to.baseline_y,
+    };
+    let target_entry = CursorRect {
+        x: entry_x,
+        top: target_line.caret_top,
+        bottom: target_line.caret_top + target_line.caret_height,
+        baseline_y: to.baseline_y,
+    };
+    CaretPath::new(vec![from, source_exit, target_vertical, target_entry, to])
+}
+
+fn line_horizontal_bounds(line: &PreparedLineSnapshot) -> (f64, f64) {
+    let mut left = line.visual_x;
+    let mut right = line.visual_x;
+    for cluster in &line.clusters {
+        let rect = line.source_rect_to_document_rect(&cluster.source_rect);
+        left = left.min(rect.x);
+        right = right.max(rect.x + rect.w);
     }
-    Some(line.id.into())
+    (left, right)
+}
+
+fn line_is_rtl(line: &PreparedLineSnapshot) -> bool {
+    line.clusters
+        .first()
+        .is_some_and(|cluster| cluster.shaping_identity.direction_rtl)
 }
 
 fn committed_slice_boundary(
     target: &TargetCluster,
-    driver: Option<CaretMotion>,
+    driver: Option<&CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
@@ -866,7 +1076,7 @@ fn committed_slice_boundary(
 
 fn new_reveal_boundary(
     target: &TargetCluster,
-    driver: Option<CaretMotion>,
+    driver: Option<&CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
@@ -878,7 +1088,7 @@ fn new_reveal_boundary(
 fn delete_boundary(
     source: &VisualCluster,
     delete_edge: DeleteEdge,
-    driver: Option<CaretMotion>,
+    driver: Option<&CaretMotion>,
     visual_caret: Option<VisualCaretGeometry>,
 ) -> MotionBoundary {
     visual_caret
@@ -1040,11 +1250,62 @@ fn push_crossfade_source_glyph(
         opacity,
         source.snapshot_id,
         source.source_rect.clone(),
-        source.byte_range,
+        source.canonical_range.unwrap_or(source.byte_range),
         canonical_range,
         None,
         source.shaping_identity.clone(),
     ));
+}
+
+fn push_crossfade_source_glyph_at(
+    source: &VisualCluster,
+    canonical_range: Option<(usize, usize)>,
+    progress: f64,
+    path_rect: &SourceRect,
+    primary: &VisualCluster,
+    glyphs: &mut Vec<crate::sujian_editor_item::render_plan::TextAnimationGlyphInfo>,
+) {
+    let opacity = source.opacity * (1.0 - progress);
+    if opacity <= 1e-6 {
+        return;
+    }
+    let same_logical_cluster = source.canonical_range == primary.canonical_range;
+    let offset_scale = if same_logical_cluster {
+        0.0
+    } else {
+        1.0 - progress
+    };
+    glyphs.push(RenderOwnershipPlan::glyph(
+        path_rect.x + (source.rect.x - primary.rect.x) * offset_scale,
+        path_rect.y + (source.rect.y - primary.rect.y) * offset_scale,
+        path_rect.w,
+        path_rect.h,
+        opacity,
+        source.snapshot_id,
+        source.source_rect.clone(),
+        source.canonical_range.unwrap_or(source.byte_range),
+        canonical_range,
+        None,
+        source.shaping_identity.clone(),
+    ));
+}
+
+fn motion_rect(
+    motion: &ClusterMotion,
+    source: &VisualCluster,
+    target: &TargetCluster,
+    sample: EditMotionSample,
+) -> SourceRect {
+    let p = sample.eased_progress;
+    if let (Some(offsets), Some(caret)) = (motion.reflow_offsets, sample.caret_rect) {
+        return SourceRect {
+            x: caret.x + lerp(offsets.source_x, offsets.target_x, p),
+            y: caret.top + lerp(offsets.source_y, offsets.target_y, p),
+            w: lerp(source.rect.w, target.rect.w, p),
+            h: lerp(source.rect.h, target.rect.h, p),
+        };
+    }
+    lerp_rect(&source.rect, &target.rect, p)
 }
 
 fn push_retiring_source_glyphs(
@@ -1073,22 +1334,40 @@ fn pair_cluster(
     motions: &mut Vec<ClusterMotion>,
 ) {
     let target = targets[target_index].clone();
-    let primary_source_index = source_indices
-        .iter()
-        .copied()
+    // Collapse repeated committed contributions for the same logical range and shaping
+    // before choosing a motion owner. Their visible geometry is opacity-weighted, so a
+    // retarget keeps the actual submitted position instead of dropping extra layers.
+    let mut source_groups: Vec<VisualCluster> = Vec::new();
+    for &source_index in source_indices {
+        let contribution = source_frame.clusters[source_index].clone();
+        if let Some(existing) = source_groups.iter_mut().find(|existing| {
+            existing.canonical_range == contribution.canonical_range
+                && existing.shaping_identity == contribution.shaping_identity
+        }) {
+            merge_visual_cluster(existing, &contribution);
+        } else {
+            source_groups.push(contribution);
+        }
+    }
+    for source in &mut source_groups {
+        if let Some(range) = source.canonical_range {
+            source.canonical_range = offset_map
+                .map_old_range_to_new(range.0, range.1)
+                .or(Some(range));
+        }
+    }
+    let primary_source_index = (0..source_groups.len())
         .max_by(|left_index, right_index| {
-            let left = &source_frame.clusters[*left_index];
-            let right = &source_frame.clusters[*right_index];
+            let left = &source_groups[*left_index];
+            let right = &source_groups[*right_index];
             let left_same_shaping = left.shaping_identity == target.shaping_identity;
             let right_same_shaping = right.shaping_identity == target.shaping_identity;
             let left_overlap = left
                 .canonical_range
-                .and_then(|range| offset_map.map_old_range_to_new(range.0, range.1))
                 .map(|range| overlap_len(range, target.byte_range))
                 .unwrap_or(0);
             let right_overlap = right
                 .canonical_range
-                .and_then(|range| offset_map.map_old_range_to_new(range.0, range.1))
                 .map(|range| overlap_len(range, target.byte_range))
                 .unwrap_or(0);
             left_same_shaping
@@ -1096,21 +1375,21 @@ fn pair_cluster(
                 .then_with(|| left_overlap.cmp(&right_overlap))
                 .then_with(|| left.opacity.total_cmp(&right.opacity))
         })
-        .unwrap_or(source_indices[0]);
-    let source = source_frame.clusters[primary_source_index].clone();
-    let same_shaping = source.shaping_identity == target.shaping_identity;
-    // A same-shaped logical cluster that already moved to another line has one visual
-    // path. Retire duplicate committed contributions at the retarget boundary instead
-    // of carrying them as extra glyphs through another transition. Keep multiple sources
-    // only for a real shaping change, where CrossFade is the correct representation.
-    let retiring_sources: Vec<VisualCluster> = if same_shaping {
+        .unwrap_or(0);
+    let source = source_groups[primary_source_index].clone();
+    let same_shaping =
+        source_groups.len() == 1 && source.shaping_identity == target.shaping_identity;
+    // A target has one motion owner. Distinct old shaping contributions are retained in
+    // that owner's CrossFade source set; only identical logical/shaping duplicates above
+    // are coalesced into one submitted visual contribution.
+    let retiring_sources: Vec<VisualCluster> = if source_groups.len() == 1 {
         Vec::new()
     } else {
-        source_indices
+        source_groups
             .iter()
-            .copied()
-            .filter(|index| *index != primary_source_index)
-            .map(|index| source_frame.clusters[index].clone())
+            .enumerate()
+            .filter(|(index, _)| *index != primary_source_index)
+            .map(|(_, source)| source.clone())
             .collect()
     };
     for &source_index in source_indices {
@@ -1147,9 +1426,39 @@ fn pair_cluster(
         source_canonical_range: Some(targets[target_index].byte_range),
         kind,
         caret_motion: None,
+        reflow_offsets: None,
         terminal_geometry_committed: false,
         submitted_visible_width,
     });
+}
+
+fn merge_visual_cluster(target: &mut VisualCluster, contribution: &VisualCluster) {
+    let replace_source = contribution.opacity > target.opacity;
+    let target_weight = target.opacity.max(0.0);
+    let contribution_weight = contribution.opacity.max(0.0);
+    let total_weight = target_weight + contribution_weight;
+    let (target_weight, contribution_weight) = if total_weight > f64::EPSILON {
+        (
+            target_weight / total_weight,
+            contribution_weight / total_weight,
+        )
+    } else {
+        (0.5, 0.5)
+    };
+    let weighted = |left: f64, right: f64| left * target_weight + right * contribution_weight;
+    target.rect = SourceRect {
+        x: weighted(target.rect.x, contribution.rect.x),
+        y: weighted(target.rect.y, contribution.rect.y),
+        w: weighted(target.rect.w, contribution.rect.w),
+        h: weighted(target.rect.h, contribution.rect.h),
+    };
+    target.opacity = (target.opacity + contribution.opacity).clamp(0.0, 1.0);
+    if replace_source {
+        target.snapshot_id = contribution.snapshot_id;
+        target.byte_range = contribution.byte_range;
+        target.source_rect = contribution.source_rect.clone();
+        target.delete_edge = contribution.delete_edge;
+    }
 }
 
 fn target_clusters(snapshot: &EditorLayoutSnapshot) -> Vec<TargetCluster> {
