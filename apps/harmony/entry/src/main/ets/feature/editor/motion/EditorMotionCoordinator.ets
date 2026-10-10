@@ -150,6 +150,8 @@ interface FrozenWindowPiece {
   renderNodeKey: string
   /** 独立的窗口实例 ID */
   windowInstanceId: string
+  /** Issue #879 评论6096633126 问题1：该片段在冻结帧的多岛裁切矩形（与原窗口 clipRects 求交） */
+  clipRects: ClipRect[]
 }
 
 /**
@@ -1566,6 +1568,23 @@ export class EditorMotionCoordinator {
     for (const ghost of plan.carryOverGhostRuns) {
       const currentLeft = ghost.currentClipLeft + (ghost.targetClipLeft - ghost.currentClipLeft) * p
       const currentRight = ghost.currentClipRight + (ghost.targetClipRight - ghost.currentClipRight) * p
+      // Issue #879 评论6096633126 问题1：按岛插值——每岛各自从自己的 clipRect 缩到零宽度
+      const ghostClipRects: ClipRect[] = []
+      for (const cr of ghost.clipRects) {
+        const islandCurrentLeft = cr.x
+        const islandCurrentRight = cr.x + cr.width
+        // 每岛的目标是缩到自己的零宽度位置
+        const islandTargetLeft = cr.x
+        const islandTargetRight = cr.x
+        const frameLeft = islandCurrentLeft + (islandTargetLeft - islandCurrentLeft) * p
+        const frameRight = islandCurrentRight + (islandTargetRight - islandCurrentRight) * p
+        ghostClipRects.push({
+          x: frameLeft,
+          y: cr.y,
+          width: Math.max(0, frameRight - frameLeft),
+          height: cr.height
+        })
+      }
       const windowInstanceId = allocator.allocate(ghost.glyphIds)
       motionGlyphWindows.push({
         // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceKind 替代硬编码 'old'
@@ -1576,7 +1595,7 @@ export class EditorMotionCoordinator {
         clipRight: currentRight,
         clipTop: ghost.clipTop,
         clipBottom: ghost.clipBottom,
-        clipRects: [{ x: currentLeft, y: ghost.clipTop, width: Math.max(0, currentRight - currentLeft), height: Math.max(0, ghost.clipBottom - ghost.clipTop) }],
+        clipRects: ghostClipRects,
         glyphX: ghost.glyphX,
         glyphY: ghost.glyphY,
         glyphWidth: ghost.glyphWidth,
@@ -1618,6 +1637,20 @@ export class EditorMotionCoordinator {
         const clipRight = currentX + motionRun.glyphWidth
         const clipTop = currentY
         const clipBottom = currentY + motionRun.glyphHeight
+        // Issue #879 评论6096633126 问题1：按岛移动——每岛跟随整体偏移移动
+        const reflowClipRects: ClipRect[] = []
+        for (const cr of motionRun.clipRects) {
+          // 每岛从冻结位置移动到当前位置（整体偏移 = currentX - motionRun.glyphX - motionRun.offsetX）
+          // 简化：每岛跟随整体偏移移动
+          const islandDx = currentOffsetX - motionRun.offsetX
+          const islandDy = currentOffsetY - motionRun.offsetY
+          reflowClipRects.push({
+            x: cr.x + islandDx,
+            y: cr.y + islandDy,
+            width: cr.width,
+            height: cr.height
+          })
+        }
         motionGlyphWindows.push({
           sourceKind: motionRun.sourceKind,
           utf16Start: motionRun.sourceUtf16Start,
@@ -1626,7 +1659,7 @@ export class EditorMotionCoordinator {
           clipRight: clipRight,
           clipTop: clipTop,
           clipBottom: clipBottom,
-          clipRects: [{ x: clipLeft, y: clipTop, width: Math.max(0, clipRight - clipLeft), height: Math.max(0, clipBottom - clipTop) }],
+          clipRects: reflowClipRects,
           glyphX: motionRun.glyphX,
           glyphY: motionRun.glyphY,
           glyphWidth: motionRun.glyphWidth,
@@ -1649,6 +1682,23 @@ export class EditorMotionCoordinator {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
         const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
         const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
+        // Issue #879 评论6096633126 问题1：按岛扩展——每岛各自从自己的 clipRect 扩展到目标
+        const insertClipRects: ClipRect[] = []
+        for (const cr of motionRun.clipRects) {
+          const islandCurrentLeft = cr.x
+          const islandCurrentRight = cr.x + cr.width
+          // 每岛的目标：左边界不变，右边界扩展到 targetClipRight
+          const islandTargetLeft = cr.x
+          const islandTargetRight = motionRun.targetClipRight
+          const frameLeft = islandCurrentLeft + (islandTargetLeft - islandCurrentLeft) * p
+          const frameRight = islandCurrentRight + (islandTargetRight - islandCurrentRight) * p
+          insertClipRects.push({
+            x: frameLeft,
+            y: cr.y,
+            width: Math.max(0, frameRight - frameLeft),
+            height: cr.height
+          })
+        }
         motionGlyphWindows.push({
           sourceKind: motionRun.sourceKind,
           utf16Start: motionRun.sourceUtf16Start,
@@ -1657,7 +1707,7 @@ export class EditorMotionCoordinator {
           clipRight: currentRight,
           clipTop: motionRun.clipTop,
           clipBottom: motionRun.clipBottom,
-          clipRects: [{ x: currentLeft, y: motionRun.clipTop, width: Math.max(0, currentRight - currentLeft), height: Math.max(0, motionRun.clipBottom - motionRun.clipTop) }],
+          clipRects: insertClipRects,
           glyphX: motionRun.glyphX,
           glyphY: motionRun.glyphY,
           glyphWidth: motionRun.glyphWidth,
@@ -2016,6 +2066,36 @@ export class EditorMotionCoordinator {
     const windowInstanceId = this.windowIdAllocator.allocate(groupGlyphIds)
     const renderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${windowInstanceId}`
 
+    // Issue #879 评论6096633126 问题1：计算 piece 的多岛 clipRects。
+    // 原窗口 w.clipRects 是屏幕坐标的多岛并集，piece 源矩形加 offset 后的屏幕坐标为
+    // [onScreenX, onScreenX + pieceGlyphWidth] × [onScreenY, onScreenY + pieceGlyphHeight]。
+    // piece 的 clipRects = 原窗口每个 clipRect 与 piece 源矩形（加 offset 后的屏幕坐标）的二维交集。
+    // 交集为空（宽度或高度 ≤ 0）的 clipRect 不包含在结果中。
+    // 如果所有交集都为空，fallback 到单矩形。
+    const pieceClipRects: ClipRect[] = []
+    for (const cr of w.clipRects) {
+      const interLeft = Math.max(cr.x, onScreenX)
+      const interRight = Math.min(cr.x + cr.width, onScreenX + pieceGlyphWidth)
+      const interTop = Math.max(cr.y, onScreenY)
+      const interBottom = Math.min(cr.y + cr.height, onScreenY + pieceGlyphHeight)
+      if (interRight - interLeft > 0 && interBottom - interTop > 0) {
+        pieceClipRects.push({
+          x: interLeft,
+          y: interTop,
+          width: interRight - interLeft,
+          height: interBottom - interTop
+        })
+      }
+    }
+    if (pieceClipRects.length === 0) {
+      pieceClipRects.push({
+        x: pieceClipLeft,
+        y: pieceClipTop,
+        width: Math.max(0, pieceClipRight - pieceClipLeft),
+        height: Math.max(0, pieceClipBottom - pieceClipTop)
+      })
+    }
+
     return {
       glyphIds: groupGlyphIds,
       sourceUtf16Start: groupSourceStart,
@@ -2043,7 +2123,8 @@ export class EditorMotionCoordinator {
       targetResolved: targetResolved,
       targetRect: targetRect,
       renderNodeKey: renderNodeKey,
-      windowInstanceId: windowInstanceId
+      windowInstanceId: windowInstanceId,
+      clipRects: pieceClipRects
     }
   }
 
@@ -2134,7 +2215,8 @@ export class EditorMotionCoordinator {
             glyphWidth: piece.glyphWidth,
             glyphHeight: piece.glyphHeight,
             offsetX: piece.offsetX,
-            offsetY: piece.offsetY
+            offsetY: piece.offsetY,
+            clipRects: piece.clipRects
           })
         }
         continue
@@ -2188,7 +2270,8 @@ export class EditorMotionCoordinator {
           glyphWidth: piece.glyphWidth,
           glyphHeight: piece.glyphHeight,
           offsetX: piece.offsetX,
-          offsetY: piece.offsetY
+          offsetY: piece.offsetY,
+          clipRects: piece.clipRects
         })
       }
     }
@@ -2330,7 +2413,8 @@ export class EditorMotionCoordinator {
           startX: startX,
           startY: startY,
           targetX: targetX,
-          targetY: targetY
+          targetY: targetY,
+          clipRects: piece.clipRects
         })
       }
     }

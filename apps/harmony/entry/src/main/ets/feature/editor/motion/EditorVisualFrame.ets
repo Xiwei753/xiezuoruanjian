@@ -281,6 +281,12 @@ export interface CarryOverGhostRun {
   offsetX: number
   /** 绘制偏移 y（vp）——继承自上一帧的 offsetY */
   offsetY: number
+  /**
+   * Issue #879 评论6096633126 问题1：该残影在冻结帧的所有可见裁切矩形（多岛并集）。
+   * 单岛场景退化为只有一个元素。buildFrame 按岛插值输出 clipRects，
+   * 每岛各自从自己的 clipRect 缩到零宽度，不丢任何可见字形。
+   */
+  clipRects: ClipRect[]
 }
 
 /**
@@ -372,6 +378,12 @@ export interface CarryOverMotionRun {
   targetX: number
   /** Issue #879 复核评论6082616112 问题2：reflow 目标位置 y（vp） */
   targetY: number
+  /**
+   * Issue #879 评论6096633126 问题1：该窗口在冻结帧的所有可见裁切矩形（多岛并集）。
+   * 单岛场景退化为只有一个元素。buildFrame 按岛插值输出 clipRects，
+   * 每岛各自从自己的 clipRect 扩展/移动到目标位置，不丢任何可见字形。
+   */
+  clipRects: ClipRect[]
 }
 
 /**
