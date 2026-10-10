@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts, rectDifference, isFullyCovered
+  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio
 } from './editor_commit_start'
 
 /**
@@ -1564,12 +1564,27 @@ export class EditorMotionCoordinator {
             const frozenDrawOffsetY = interval.frozenDrawOffsetY !== undefined
               ? interval.frozenDrawOffsetY
               : interval.startPositionY - move.oldRect.y
-            // 字形在目标布局中的完整屏幕位置
-            const fullTargetX = islandNewX + (sr.x - islandOldLeft)
-            const fullTargetY = islandNewY
-            const fullTargetHeight = Math.max(0, sr.height)
-            // 字形在起始布局中的完整屏幕左边界（用于计算间隙碎片的起始位置）
-            const fullStartLeft = sr.x + frozenDrawOffsetX
+
+            // Issue #879 复核评论6103000047 问题4：目标字形几何使用新布局而不是旧布局。
+            // 旧实现用 sr（旧布局坐标系中的源字形矩形）计算目标位置和宽度/高度，
+            // 但新布局中同一 glyph 可能因排版宽度、软换行或样式变化而有不同目标尺寸。
+            // 修复：用 newMoveBoundaries 和 glyphRectForRange(newLayout,...) 计算新布局中
+            // 该岛/字形的完整矩形 newGlyphRect，把旧布局的 clipRects 和间隙按比例映射到新布局。
+            let newGlyphRect: RectLike = {
+              x: islandNewX + (sr.x - islandOldLeft),
+              y: islandNewY,
+              width: Math.max(0, sr.width),
+              height: Math.max(0, sr.height)
+            }
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
+              const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
+              if (newRect !== null) {
+                newGlyphRect = newRect
+              }
+            }
 
             // Issue #879 复核评论6102724233 问题3+4：用 rectDifference 计算尚未覆盖的区域。
             // 与 carry insert 的找间隙逻辑共用同一个几何求差函数。
@@ -1580,27 +1595,32 @@ export class EditorMotionCoordinator {
             const startRects: ClipRect[] = []
             const targetRects: ClipRect[] = []
 
-            // 已可见碎片：起始和目标都是自身位置（随平移动画移动），宽度不变
+            // Issue #879 复核评论6103000047 问题4：已可见碎片的目标按比例映射到新布局。
+            // 旧布局中相对于字形的位置比例 → 新布局中相对于新字形的位置。
+            // 当新旧布局字形尺寸相同时，比例映射结果与旧实现一致（relX*newWidth = cr.x-islandOldLeft）。
+            // 当新旧布局字形尺寸不同时（换行/字宽变化），目标几何正确匹配新布局。
             for (const cr of interval.clipRects) {
               startRects.push({
                 x: cr.x + frozenDrawOffsetX, y: cr.y + frozenDrawOffsetY,
                 width: Math.max(0, cr.width), height: Math.max(0, cr.height)
               })
+              const mapped = mapRectByRatio(cr, sr, newGlyphRect)
               targetRects.push({
-                x: islandNewX + (cr.x - islandOldLeft), y: fullTargetY,
-                width: Math.max(0, cr.width), height: fullTargetHeight
+                x: mapped.x, y: mapped.y,
+                width: mapped.width, height: mapped.height
               })
             }
 
-            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 完整目标区间
+            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
             for (const gap of remaining) {
               startRects.push({
                 x: gap.x + frozenDrawOffsetX, y: gap.y + frozenDrawOffsetY,
                 width: 0, height: Math.max(0, gap.height)
               })
+              const mappedGap = mapRectByRatio(gap, sr, newGlyphRect)
               targetRects.push({
-                x: islandNewX + (gap.x - islandOldLeft), y: fullTargetY,
-                width: Math.max(0, gap.width), height: fullTargetHeight
+                x: mappedGap.x, y: mappedGap.y,
+                width: mappedGap.width, height: mappedGap.height
               })
             }
 

@@ -431,6 +431,39 @@ export function isFullyCovered(fullRect: RectLike, clipRects: RectLike[]): boole
 }
 
 /**
+ * Issue #879 复核评论6103000047 问题4：把旧布局坐标系中的矩形按比例映射到新布局。
+ *
+ * 当新旧布局中字形尺寸不同（换行/字宽变化/样式变化）时，clipRect 的绝对位置和宽度
+ * 不能直接复用——需要按相对于源字形矩形的比例映射到目标字形矩形中。
+ *
+ *   relX = (rect.x - sourceRect.x) / sourceRect.width
+ *   targetX = targetRect.x + relX * targetRect.width
+ *
+ * 源宽度/高度为零时退回 targetRect 的左边界/上边界（退化情况）。
+ *
+ * @param rect 旧布局坐标系中的矩形（clipRect 或 gap）
+ * @param sourceRect 旧布局中该字形的完整矩形
+ * @param targetRect 新布局中该字形的完整矩形
+ * @returns 映射到新布局坐标系中的矩形
+ */
+export function mapRectByRatio(
+  rect: RectLike,
+  sourceRect: RectLike,
+  targetRect: RectLike
+): RectLike {
+  const relX = sourceRect.width > VISIBLE_EPSILON ? (rect.x - sourceRect.x) / sourceRect.width : 0
+  const relWidth = sourceRect.width > VISIBLE_EPSILON ? rect.width / sourceRect.width : 0
+  const relY = sourceRect.height > VISIBLE_EPSILON ? (rect.y - sourceRect.y) / sourceRect.height : 0
+  const relHeight = sourceRect.height > VISIBLE_EPSILON ? rect.height / sourceRect.height : 0
+  return {
+    x: targetRect.x + relX * targetRect.width,
+    y: targetRect.y + relY * targetRect.height,
+    width: Math.max(0, relWidth * targetRect.width),
+    height: Math.max(0, relHeight * targetRect.height),
+  }
+}
+
+/**
  * Issue #879 复核评论6082616112 问题4：找 offset 所在的行。
  *
  * 用 resolveVisualLineIndex + 指定 affinity 选行——

@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert'
 import { GlyphIdentityTable, WindowInstanceIdAllocator } from '../editor_glyph_identity.ts'
 import {
   visibleGlyphPieces, insertRunStartState, deletedRunStartState, retainedMoveStartState,
-  retargetRunStarts, rectDifference, isFullyCovered,
+  retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio,
 } from '../editor_commit_start.ts'
 
 let passed = 0
@@ -2812,6 +2812,118 @@ test('问题2：clonePieces 深拷贝 startScreenClipRects——不共享引用'
     assert.ok(iv.frozenDrawOffsetX !== undefined, 'clonePieces 后 frozenDrawOffsetX 应保留')
     assert.ok(iv.frozenDrawOffsetY !== undefined, 'clonePieces 后 frozenDrawOffsetY 应保留')
   }
+})
+
+// ─── Issue #879 复核评论6103000047 问题4：mapRectByRatio 测试 ───
+
+console.log('\n--- Issue #879 复核评论6103000047 问题4 新增测试 ---')
+
+test('mapRectByRatio——新旧布局尺寸相同时映射是恒等变换', () => {
+  const sourceRect = { x: 10, y: 5, width: 20, height: 30 }
+  const targetRect = { x: 10, y: 5, width: 20, height: 30 }
+  const clipRect = { x: 15, y: 8, width: 10, height: 20 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // 比例映射：relX=(15-10)/20=0.25, targetX=10+0.25*20=15
+  // relWidth=10/20=0.5, targetWidth=0.5*20=10
+  assert.ok(Math.abs(result.x - 15) < 0.001, 'x 应为 15')
+  assert.ok(Math.abs(result.y - 8) < 0.001, 'y 应为 8')
+  assert.ok(Math.abs(result.width - 10) < 0.001, 'width 应为 10')
+  assert.ok(Math.abs(result.height - 20) < 0.001, 'height 应为 20')
+})
+
+test('mapRectByRatio——新布局字形更宽时目标位置和宽度按比例扩展', () => {
+  const sourceRect = { x: 10, y: 5, width: 20, height: 30 }
+  const targetRect = { x: 50, y: 100, width: 40, height: 60 }
+  const clipRect = { x: 15, y: 8, width: 10, height: 20 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // relX=(15-10)/20=0.25, targetX=50+0.25*40=60
+  // relWidth=10/20=0.5, targetWidth=0.5*40=20
+  // relY=(8-5)/30=0.1, targetY=100+0.1*60=106
+  // relHeight=20/30≈0.667, targetHeight=0.667*60=40
+  assert.ok(Math.abs(result.x - 60) < 0.001, 'x 应为 60')
+  assert.ok(Math.abs(result.width - 20) < 0.001, 'width 应为 20')
+  assert.ok(Math.abs(result.y - 106) < 0.001, 'y 应为 106')
+  assert.ok(Math.abs(result.height - 40) < 0.001, 'height 应为 40')
+})
+
+test('mapRectByRatio——新布局字形更窄时目标位置和宽度按比例收缩', () => {
+  const sourceRect = { x: 0, y: 0, width: 40, height: 60 }
+  const targetRect = { x: 100, y: 200, width: 20, height: 30 }
+  const clipRect = { x: 10, y: 15, width: 20, height: 30 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // relX=10/40=0.25, targetX=100+0.25*20=105
+  // relWidth=20/40=0.5, targetWidth=0.5*20=10
+  // relY=15/60=0.25, targetY=200+0.25*30=207.5
+  // relHeight=30/60=0.5, targetHeight=0.5*30=15
+  assert.ok(Math.abs(result.x - 105) < 0.001, 'x 应为 105')
+  assert.ok(Math.abs(result.width - 10) < 0.001, 'width 应为 10')
+  assert.ok(Math.abs(result.y - 207.5) < 0.001, 'y 应为 207.5')
+  assert.ok(Math.abs(result.height - 15) < 0.001, 'height 应为 15')
+})
+
+test('mapRectByRatio——源宽度为零时退回 targetRect 左边界', () => {
+  const sourceRect = { x: 10, y: 5, width: 0, height: 30 }
+  const targetRect = { x: 50, y: 100, width: 40, height: 60 }
+  const clipRect = { x: 10, y: 8, width: 0, height: 20 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // 源宽度为零：relX=0, relWidth=0 → targetX=50, targetWidth=0
+  // 源高度非零：relY=(8-5)/30=0.1, targetY=100+0.1*60=106
+  assert.ok(Math.abs(result.x - 50) < 0.001, 'x 应为 50（退回 targetRect.x）')
+  assert.ok(Math.abs(result.width - 0) < 0.001, 'width 应为 0')
+  assert.ok(Math.abs(result.y - 106) < 0.001, 'y 应为 106')
+})
+
+test('mapRectByRatio——源高度为零时退回 targetRect 上边界', () => {
+  const sourceRect = { x: 10, y: 5, width: 20, height: 0 }
+  const targetRect = { x: 50, y: 100, width: 40, height: 60 }
+  const clipRect = { x: 15, y: 5, width: 10, height: 0 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // 源宽度非零：relX=(15-10)/20=0.25, targetX=50+0.25*40=60
+  // 源高度为零：relY=0, relHeight=0 → targetY=100, targetHeight=0
+  assert.ok(Math.abs(result.x - 60) < 0.001, 'x 应为 60')
+  assert.ok(Math.abs(result.width - 20) < 0.001, 'width 应为 20')
+  assert.ok(Math.abs(result.y - 100) < 0.001, 'y 应为 100（退回 targetRect.y）')
+  assert.ok(Math.abs(result.height - 0) < 0.001, 'height 应为 0')
+})
+
+test('mapRectByRatio——clipRect 在源字形左半部分，新布局宽度翻倍', () => {
+  // 模拟换行场景：旧布局字形宽 10，新布局字形宽 20
+  const sourceRect = { x: 0, y: 0, width: 10, height: 20 }
+  const targetRect = { x: 0, y: 0, width: 20, height: 20 }
+  // 旧布局中只显示左半部分 [0, 5]
+  const clipRect = { x: 0, y: 0, width: 5, height: 20 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // relX=0, relWidth=5/10=0.5 → targetX=0, targetWidth=0.5*20=10
+  // 即新布局中左半部分对应 [0, 10]
+  assert.ok(Math.abs(result.x - 0) < 0.001, 'x 应为 0')
+  assert.ok(Math.abs(result.width - 10) < 0.001, 'width 应为 10（新布局左半部分）')
+  assert.ok(Math.abs(result.height - 20) < 0.001, 'height 应为 20')
+})
+
+test('mapRectByRatio——间隙碎片映射：旧布局中间隙 [5,10] 映射到新布局 [10,20]', () => {
+  // 模拟换行场景：旧布局字形宽 10，新布局字形宽 20
+  const sourceRect = { x: 0, y: 0, width: 10, height: 20 }
+  const targetRect = { x: 0, y: 0, width: 20, height: 20 }
+  // 旧布局中间隙 [5, 10]（右半部分不可见）
+  const gapRect = { x: 5, y: 0, width: 5, height: 20 }
+  const result = mapRectByRatio(gapRect, sourceRect, targetRect)
+  // relX=5/10=0.5, relWidth=5/10=0.5 → targetX=0+0.5*20=10, targetWidth=0.5*20=10
+  // 即新布局中间隙对应 [10, 20]
+  assert.ok(Math.abs(result.x - 10) < 0.001, 'x 应为 10')
+  assert.ok(Math.abs(result.width - 10) < 0.001, 'width 应为 10（新布局右半部分）')
+  assert.ok(Math.abs(result.height - 20) < 0.001, 'height 应为 20')
+})
+
+test('mapRectByRatio——纵向半字映射：旧布局上半部分映射到新布局不同行高', () => {
+  // 模拟行高变化：旧布局行高 20，新布局行高 30
+  const sourceRect = { x: 0, y: 0, width: 10, height: 20 }
+  const targetRect = { x: 0, y: 100, width: 10, height: 30 }
+  // 旧布局中只显示上半部分 [0, 8]
+  const clipRect = { x: 0, y: 0, width: 10, height: 8 }
+  const result = mapRectByRatio(clipRect, sourceRect, targetRect)
+  // relY=0, relHeight=8/20=0.4 → targetY=100, targetHeight=0.4*30=12
+  assert.ok(Math.abs(result.y - 100) < 0.001, 'y 应为 100')
+  assert.ok(Math.abs(result.height - 12) < 0.001, 'height 应为 12（新布局上半部分按比例）')
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
