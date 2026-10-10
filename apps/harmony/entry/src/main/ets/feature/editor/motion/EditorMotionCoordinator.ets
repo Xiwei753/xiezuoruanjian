@@ -1538,11 +1538,18 @@ export class EditorMotionCoordinator {
             for (let si = 0; si < interval.clipRects.length; si++) {
               const cr = interval.clipRects[si]
               const sr = interval.sourceGlyphRects[si]
-              // 起始裁切矩形（屏幕坐标）：clipRect 在 run 布局坐标中，
-              // 加上岛起始屏幕位置相对于岛起始裁切左边界的偏移
-              const startScreenX = islandStartX + (cr.x - interval.startClipLeft)
+              // Issue #879 复核评论6101344441 问题4：首帧每块应为 cr.x + frozenOffsetX，
+              // 其中 frozenOffsetX = interval.startPositionX - move.oldRect.x。
+              // 旧实现用 islandStartX + (cr.x - interval.startClipLeft) 把"字形在屏完整
+              // 绘制左边界"当成"首个可见区的左边界"。当字形部分可见时（如源 x=0..10，
+              // 仅 x=4..10 可见），islandStartX=0，interval.startClipLeft=4，cr.x=4，
+              // 所以 startScreenX=0+(4-4)=0，但正确应该是 4。修复后用 cr.x 加冻结窗口
+              // 偏移，cr.x 是冻结帧屏幕坐标，frozenOffsetX 是窗口偏移，结果正确。
+              const frozenOffsetX = interval.startPositionX - move.oldRect.x
+              const frozenOffsetY = interval.startPositionY - move.oldRect.y
+              const startScreenX = cr.x + frozenOffsetX
               const startWidth = Math.max(0, cr.width)
-              const startScreenY = islandStartY
+              const startScreenY = cr.y + frozenOffsetY
               const startHeight = Math.max(0, cr.height)
               // 目标裁切矩形（屏幕坐标）：sourceGlyphRect 映射到目标布局位置，
               // sourceGlyphRect 相对于岛旧左边界的偏移 + 岛目标屏幕位置
@@ -1769,8 +1776,10 @@ export class EditorMotionCoordinator {
         const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
         const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
         // Issue #879 缺口1：按岛插值——每岛从 islandStartRects[i] 插值到 islandTargetRects[i]（完整可见）
+        // Issue #879 复核评论6101344441 问题2：循环上界用 islandStartRects.length 而非
+        // clipRects.length，因为问题2修复后 islandStartRects 可能比 clipRects 长（增加了间隙碎片）。
         const insertClipRects: ClipRect[] = []
-        for (let ii = 0; ii < motionRun.clipRects.length; ii++) {
+        for (let ii = 0; ii < motionRun.islandStartRects.length; ii++) {
           const sr = motionRun.islandStartRects[ii]
           const tr = motionRun.islandTargetRects[ii]
           const frameLeft = sr.x + (tr.x - sr.x) * p
@@ -2516,28 +2525,56 @@ export class EditorMotionCoordinator {
           // 裁切，这样 buildFrame 逐帧从当前裁切插值到完整字形，吐字动画正常推进。
           // piece 按源字形连续性拆分，每个 piece 通常只有一个字形，目标矩形即完整字形
           // 可见矩形；若 sourceRect 不为 null 则优先用 sourceRect 的位置和大小。
+          // Issue #879 复核评论6101344441 问题3：piece.sourceRect.x/y 和 piece.glyphX/Y
+          // 是源排版坐标，但 piece.clipRects 是冻结帧屏幕坐标。fullRect 必须加
+          // piece.offsetX/Y 才能转换到屏幕坐标系，否则间隙碎片和目标矩形位置错位。
           const fullRect: ClipRect = piece.sourceRect !== null
             ? {
-              x: piece.sourceRect.x,
-              y: piece.sourceRect.y,
+              x: piece.sourceRect.x + piece.offsetX,
+              y: piece.sourceRect.y + piece.offsetY,
               width: piece.sourceRect.width,
               height: piece.sourceRect.height
             }
             : {
-              x: piece.glyphX,
-              y: piece.glyphY,
+              x: piece.glyphX + piece.offsetX,
+              y: piece.glyphY + piece.offsetY,
               width: piece.glyphWidth,
               height: piece.glyphHeight
             }
           if (piece.clipRects.length > 0) {
-            // 已有部分可见裁切：起始 = 冻结帧裁切，目标 = 完整字形可见矩形
-            islandStartRects = piece.clipRects
-            islandTargetRects = piece.clipRects.map((_cr: ClipRect): ClipRect => ({
-              x: fullRect.x,
-              y: fullRect.y,
-              width: fullRect.width,
-              height: fullRect.height
-            }))
+            // Issue #879 复核评论6101344441 问题2：已可见碎片保持不变（目标=起始），
+            // 间隙碎片从零宽度扩展到间隙宽度。旧实现把每个 cr 都映射到同一个 fullRect，
+            // 导致多个岛都插值到同一个完整矩形，运动过程中两个矩形从两头扩张、互相覆盖，
+            // 间隙被填平。修复后已可见碎片保持不动，间隙碎片独立从零宽扩展到间隙宽度。
+            const startRects: ClipRect[] = []
+            const targetRects: ClipRect[] = []
+            // 检查左边界间隙
+            if (piece.clipRects[0].x > fullRect.x + 0.01) {
+              startRects.push({ x: fullRect.x, y: fullRect.y, width: 0, height: fullRect.height })
+              targetRects.push({ x: fullRect.x, y: fullRect.y, width: piece.clipRects[0].x - fullRect.x, height: fullRect.height })
+            }
+            for (let ci = 0; ci < piece.clipRects.length; ci++) {
+              const cr = piece.clipRects[ci]
+              startRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+              targetRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+              if (ci < piece.clipRects.length - 1) {
+                const nextCr = piece.clipRects[ci + 1]
+                const gapLeft = cr.x + cr.width
+                const gapRight = nextCr.x
+                if (gapRight > gapLeft + 0.01) {
+                  startRects.push({ x: gapLeft, y: fullRect.y, width: 0, height: fullRect.height })
+                  targetRects.push({ x: gapLeft, y: fullRect.y, width: gapRight - gapLeft, height: fullRect.height })
+                }
+              }
+            }
+            const lastCr = piece.clipRects[piece.clipRects.length - 1]
+            if (lastCr.x + lastCr.width < fullRect.x + fullRect.width - 0.01) {
+              startRects.push({ x: lastCr.x + lastCr.width, y: fullRect.y, width: 0, height: fullRect.height })
+              targetRects.push({ x: lastCr.x + lastCr.width, y: fullRect.y, width: fullRect.x + fullRect.width - (lastCr.x + lastCr.width), height: fullRect.height })
+            }
+            islandStartRects = startRects
+            islandTargetRects = targetRects
+            runClipRects = startRects
           } else {
             // 尚未吐出但在新正文仍存在：建立零宽度起点和非零目标
             islandStartRects = [{
