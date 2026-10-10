@@ -36,7 +36,7 @@ impl LinuxEditorAnimationCoordinator {
                     target_y: cursor_render_state.target_y,
                     path_start_x: cursor_render_state.path_start_x,
                     path_start_y: cursor_render_state.path_start_y,
-                    document_session: self.document_session,
+                    document_session: cursor_render_state.document_session,
                 })
         } else {
             None
