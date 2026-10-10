@@ -287,6 +287,12 @@ export interface CarryOverGhostRun {
    * 每岛各自从自己的 clipRect 缩到零宽度，不丢任何可见字形。
    */
   clipRects: ClipRect[]
+  /**
+   * Issue #879 缺口1：每个岛的目标裁切矩形（零宽度位置）。
+   * ghost 的每岛目标是缩到自己的零宽度位置——islandTargetRects[i] = {x: clipRects[i].x, y: clipRects[i].y, width: 0, height: clipRects[i].height}。
+   * buildFrame 中每岛从 clipRects[i] 插值到 islandTargetRects[i]。
+   */
+  islandTargetRects: ClipRect[]
 }
 
 /**
@@ -384,6 +390,19 @@ export interface CarryOverMotionRun {
    * 每岛各自从自己的 clipRect 扩展/移动到目标位置，不丢任何可见字形。
    */
   clipRects: ClipRect[]
+  /**
+   * Issue #879 缺口1：每个岛的起始裁切矩形（冻结帧位置）。
+   * = clipRects（冻结帧的可见裁切矩形），但作为独立字段保留以便 buildFrame 逐岛插值。
+   * buildFrame 中每岛从 islandStartRects[i] 插值到 islandTargetRects[i]。
+   */
+  islandStartRects: ClipRect[]
+  /**
+   * Issue #879 缺口1：每个岛的目标裁切矩形。
+   * - reflow 的每岛目标是各自的新版布局位置
+   * - insert 的每岛目标是各自的完整可见位置
+   * buildFrame 中每岛从 islandStartRects[i] 插值到 islandTargetRects[i]。
+   */
+  islandTargetRects: ClipRect[]
 }
 
 /**

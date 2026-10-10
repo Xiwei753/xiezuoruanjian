@@ -1422,12 +1422,17 @@ export class EditorMotionCoordinator {
     //    Issue #879 复核评论6080604353 问题3修复：每个 piece 运动到各自的新版目标位置，
     //    而不是都奔向同一个 move.newRect.x/y。用 newLayout 的 clusterBoundaries
     //    查出每个 piece 在新布局中的 pieceNewX/pieceNewY/pieceNewWidth。
+    // Issue #879 缺口3修复：为每个岛创建独立的 MotionGlyphWindow。
+    //    原来一个 piece（多岛）只创建一个 MotionGlyphWindow，clipRect 逐岛插值但
+    //    offsetX/offsetY 是 piece 级统一值——裁切框位置变了，Text 内字形却没有随之独立移动。
+    //    现在每个岛各自创建独立的 MotionGlyphWindow，拥有自己的 offset/clipRect/glyphIds，
+    //    clipRect 和 Text 内字形位置一致。单岛 piece 行为与原来相同。
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
       const newMoveBoundaries = clusterBoundaries(newText, move.newUtf16Start, move.newUtf16End)
       for (const piece of move.pieces) {
-        // 计算 piece 的 utf16 范围（整 piece，用于 Text 节点源与静态扣除）
+        // 计算 piece 的 utf16 范围（整 piece，用于参考和 fallback）
         let pieceUtf16Start = move.oldUtf16Start
         let pieceUtf16End = move.oldUtf16End
         let pieceOldLeft = move.oldRect.x
@@ -1457,31 +1462,15 @@ export class EditorMotionCoordinator {
           }
         }
         const pieceOldWidth = pieceOldRight - pieceOldLeft
-        // Issue #879 复核评论6081596024 问题4：计算 piece 级别的旧矩形，
-        // 让 MotionGlyphWindow 的所有几何字段引用 piece 自己的旧排版位置，
-        // 而非整 move 的 oldRect。
         const pieceOldLineY = EditorMotionCoordinator.yAtOffsetLocal(
           oldLayout, pieceUtf16Start, move.oldRect.y)
         const pieceOldLineHeight = move.oldRect.height  // 行高通常整 move 一致
-        // Issue #879 评论6096421590 问题4：piece 级 offset 仍保留，用于 MotionGlyphWindow 的
-        // offsetX/offsetY 字段（整个 Text 节点的平移量）。但每个岛的 clipRect 改为逐岛插值——
-        // 从 interval.startPositionX/Y 插值到该岛在新布局中的目标位置，而非用统一 offset 平移。
-        const currentX = piece.startPositionX + (pieceNewX - piece.startPositionX) * p
-        const currentY = piece.startPositionY + (pieceNewY - piece.startPositionY) * p
-        const offsetX = currentX - pieceOldLeft
-        const offsetY = currentY - pieceOldLineY
-        // Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 覆盖多个不连续可见岛，
-        // 每个岛各自从自己起始裁切插值到各自目标位置，合成「多岛并集」clipRects——
-        // 同一 renderNodeKey 对应唯一物理 Text，不丢任何可见字形。
+
+        // Issue #879 缺口3：为每个岛创建独立的 MotionGlyphWindow，
+        // 每个窗口有自己的 offset/clipRect/glyphIds，clipRect 和字形位置一致。
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
-        const clipRects: ClipRect[] = []
-        let bboxLeft = 0
-        let bboxRight = 0
-        let bboxTop = pieceOldLineY + offsetY
-        let bboxBottom = pieceOldLineY + offsetY + pieceOldLineHeight
-        let firstRect = true
         for (const interval of intervals) {
-          // 该岛在旧布局中的几何（刚体平移前）
+          // 该岛在旧布局中的 utf16 范围
           let iStart = pieceUtf16Start
           let iEnd = pieceUtf16End
           if (moveBoundaries.length === move.glyphIds.length + 1 &&
@@ -1489,12 +1478,13 @@ export class EditorMotionCoordinator {
             iStart = moveBoundaries[interval.firstIndex]
             iEnd = moveBoundaries[interval.lastIndex + 1]
           }
+          // 该岛在旧布局中的几何（刚体平移前）
           const iRect = glyphRectForRange(oldLayout, iStart, iEnd)
           const islandOldLeft = iRect !== null ? iRect.x : pieceOldLeft
           const islandOldTop = iRect !== null ? iRect.y : pieceOldLineY
           const islandOldWidth = iRect !== null ? iRect.width : pieceOldWidth
           const islandOldHeight = iRect !== null ? iRect.height : pieceOldLineHeight
-          // Issue #879 评论6096421590 问题4：逐岛插值——该岛在新布局中的目标位置。
+          // 该岛在新布局中的目标位置
           let islandNewX = pieceNewX
           let islandNewY = pieceNewY
           if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
@@ -1505,59 +1495,54 @@ export class EditorMotionCoordinator {
             islandNewY = EditorMotionCoordinator.yAtOffsetLocal(
               newLayout, islandNewUtf16Start, move.newRect.y)
           }
-          // 从 interval.startPositionX/Y 插值到该岛目标位置，而非用 piece 级统一 offset。
+          // 从 interval.startPositionX/Y 插值到该岛目标位置
           const islandCurrentX = interval.startPositionX + (islandNewX - interval.startPositionX) * p
           const islandCurrentY = interval.startPositionY + (islandNewY - interval.startPositionY) * p
-          const cLeft = islandCurrentX
-          const cTop = islandCurrentY
-          clipRects.push({
-            x: cLeft,
-            y: cTop,
+          // 该岛的独立 offset——基于该岛的旧位置和当前插值位置
+          const islandOffsetX = islandCurrentX - islandOldLeft
+          const islandOffsetY = islandCurrentY - islandOldTop
+          // 该岛的 clipRect（单岛只有一个）
+          const islandClipRect: ClipRect = {
+            x: islandCurrentX,
+            y: islandCurrentY,
             width: Math.max(0, islandOldWidth),
             height: Math.max(0, islandOldHeight)
-          })
-          if (firstRect) {
-            bboxLeft = cLeft
-            bboxRight = cLeft + islandOldWidth
-            bboxTop = cTop
-            bboxBottom = cTop + islandOldHeight
-            firstRect = false
-          } else {
-            bboxLeft = Math.min(bboxLeft, cLeft)
-            bboxRight = Math.max(bboxRight, cLeft + islandOldWidth)
-            bboxTop = Math.min(bboxTop, cTop)
-            bboxBottom = Math.max(bboxBottom, cTop + islandOldHeight)
           }
+          // 该岛的包围盒（单岛即 clipRect 边界）
+          const islandBboxLeft = islandCurrentX
+          const islandBboxRight = islandCurrentX + islandOldWidth
+          const islandBboxTop = islandCurrentY
+          const islandBboxBottom = islandCurrentY + islandOldHeight
+          // 为该岛独立分配 windowInstanceId（用岛的 glyphIds 子序列）
+          const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
+          motionGlyphWindows.push({
+            sourceKind: 'old',
+            utf16Start: iStart,
+            utf16End: iEnd,
+            clipLeft: islandBboxLeft,
+            clipRight: islandBboxRight,
+            clipTop: islandBboxTop,
+            clipBottom: islandBboxBottom,
+            clipRects: [islandClipRect],
+            glyphX: islandOldLeft,
+            glyphY: islandOldTop,
+            glyphWidth: islandOldWidth,
+            glyphHeight: islandOldHeight,
+            offsetX: islandOffsetX,
+            offsetY: islandOffsetY,
+            runId: `old-${oldRevision}`,
+            sourceRevision: oldRevision,
+            glyphIds: interval.glyphIds,
+            windowId: move.windowId,
+            windowInstanceId: islandWindowInstanceId,
+            renderNodeKey: `old-${oldRevision}-${islandWindowInstanceId}`,
+            currentClipLeft: islandBboxLeft,
+            currentClipRight: islandBboxRight,
+            currentPositionX: islandCurrentX,
+            currentPositionY: islandCurrentY,
+            motionOwnerKind: 'reflow'
+          })
         }
-        const windowInstanceId = allocator.allocate(piece.glyphIds)
-        motionGlyphWindows.push({
-          sourceKind: 'old',
-          utf16Start: pieceUtf16Start,
-          utf16End: pieceUtf16End,
-          clipLeft: bboxLeft,
-          clipRight: bboxRight,
-          clipTop: bboxTop,
-          clipBottom: bboxBottom,
-          clipRects: clipRects,
-          glyphX: pieceOldLeft,
-          glyphY: pieceOldLineY,
-          glyphWidth: pieceOldWidth,
-          glyphHeight: pieceOldLineHeight,
-          // Issue #879 复核评论6080604353 问题3：offsetX 基于 piece 的旧左边界，而非整 move 的旧左边界
-          offsetX: offsetX,
-          offsetY: offsetY,
-          runId: `old-${oldRevision}`,
-          sourceRevision: oldRevision,
-          glyphIds: piece.glyphIds,
-          windowId: move.windowId,
-          windowInstanceId: windowInstanceId,
-          renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
-          currentClipLeft: bboxLeft,
-          currentClipRight: bboxRight,
-          currentPositionX: currentX,
-          currentPositionY: currentY,
-          motionOwnerKind: 'reflow'
-        })
       }
     }
 
@@ -1568,21 +1553,18 @@ export class EditorMotionCoordinator {
     for (const ghost of plan.carryOverGhostRuns) {
       const currentLeft = ghost.currentClipLeft + (ghost.targetClipLeft - ghost.currentClipLeft) * p
       const currentRight = ghost.currentClipRight + (ghost.targetClipRight - ghost.currentClipRight) * p
-      // Issue #879 评论6096633126 问题1：按岛插值——每岛各自从自己的 clipRect 缩到零宽度
+      // Issue #879 缺口1：按岛插值——每岛从 clipRects[i] 插值到 islandTargetRects[i]（零宽度）
       const ghostClipRects: ClipRect[] = []
-      for (const cr of ghost.clipRects) {
-        const islandCurrentLeft = cr.x
-        const islandCurrentRight = cr.x + cr.width
-        // 每岛的目标是缩到自己的零宽度位置
-        const islandTargetLeft = cr.x
-        const islandTargetRight = cr.x
-        const frameLeft = islandCurrentLeft + (islandTargetLeft - islandCurrentLeft) * p
-        const frameRight = islandCurrentRight + (islandTargetRight - islandCurrentRight) * p
+      for (let gi = 0; gi < ghost.clipRects.length; gi++) {
+        const cr = ghost.clipRects[gi]
+        const tr = ghost.islandTargetRects[gi]
+        const frameLeft = cr.x + (tr.x - cr.x) * p
+        const frameRight = cr.x + cr.width + (tr.x + tr.width - cr.x - cr.width) * p
         ghostClipRects.push({
           x: frameLeft,
-          y: cr.y,
+          y: cr.y + (tr.y - cr.y) * p,
           width: Math.max(0, frameRight - frameLeft),
-          height: cr.height
+          height: cr.height + (tr.height - cr.height) * p
         })
       }
       const windowInstanceId = allocator.allocate(ghost.glyphIds)
@@ -1637,18 +1619,20 @@ export class EditorMotionCoordinator {
         const clipRight = currentX + motionRun.glyphWidth
         const clipTop = currentY
         const clipBottom = currentY + motionRun.glyphHeight
-        // Issue #879 评论6096633126 问题1：按岛移动——每岛跟随整体偏移移动
+        // Issue #879 缺口1：按岛插值——每岛从 islandStartRects[i] 插值到 islandTargetRects[i]（新版布局位置）
         const reflowClipRects: ClipRect[] = []
-        for (const cr of motionRun.clipRects) {
-          // 每岛从冻结位置移动到当前位置（整体偏移 = currentX - motionRun.glyphX - motionRun.offsetX）
-          // 简化：每岛跟随整体偏移移动
-          const islandDx = currentOffsetX - motionRun.offsetX
-          const islandDy = currentOffsetY - motionRun.offsetY
+        for (let ri = 0; ri < motionRun.clipRects.length; ri++) {
+          const sr = motionRun.islandStartRects[ri]
+          const tr = motionRun.islandTargetRects[ri]
+          const frameLeft = sr.x + (tr.x - sr.x) * p
+          const frameRight = sr.x + sr.width + (tr.x + tr.width - sr.x - sr.width) * p
+          const frameTop = sr.y + (tr.y - sr.y) * p
+          const frameBottom = sr.y + sr.height + (tr.y + tr.height - sr.y - sr.height) * p
           reflowClipRects.push({
-            x: cr.x + islandDx,
-            y: cr.y + islandDy,
-            width: cr.width,
-            height: cr.height
+            x: frameLeft,
+            y: frameTop,
+            width: Math.max(0, frameRight - frameLeft),
+            height: Math.max(0, frameBottom - frameTop)
           })
         }
         motionGlyphWindows.push({
@@ -1682,21 +1666,18 @@ export class EditorMotionCoordinator {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
         const currentLeft = motionRun.currentClipLeft + (motionRun.targetClipLeft - motionRun.currentClipLeft) * p
         const currentRight = motionRun.currentClipRight + (motionRun.targetClipRight - motionRun.currentClipRight) * p
-        // Issue #879 评论6096633126 问题1：按岛扩展——每岛各自从自己的 clipRect 扩展到目标
+        // Issue #879 缺口1：按岛插值——每岛从 islandStartRects[i] 插值到 islandTargetRects[i]（完整可见）
         const insertClipRects: ClipRect[] = []
-        for (const cr of motionRun.clipRects) {
-          const islandCurrentLeft = cr.x
-          const islandCurrentRight = cr.x + cr.width
-          // 每岛的目标：左边界不变，右边界扩展到 targetClipRight
-          const islandTargetLeft = cr.x
-          const islandTargetRight = motionRun.targetClipRight
-          const frameLeft = islandCurrentLeft + (islandTargetLeft - islandCurrentLeft) * p
-          const frameRight = islandCurrentRight + (islandTargetRight - islandCurrentRight) * p
+        for (let ii = 0; ii < motionRun.clipRects.length; ii++) {
+          const sr = motionRun.islandStartRects[ii]
+          const tr = motionRun.islandTargetRects[ii]
+          const frameLeft = sr.x + (tr.x - sr.x) * p
+          const frameRight = sr.x + sr.width + (tr.x + tr.width - sr.x - sr.width) * p
           insertClipRects.push({
             x: frameLeft,
-            y: cr.y,
+            y: sr.y + (tr.y - sr.y) * p,
             width: Math.max(0, frameRight - frameLeft),
-            height: cr.height
+            height: sr.height + (tr.height - sr.height) * p
           })
         }
         motionGlyphWindows.push({
@@ -2195,6 +2176,10 @@ export class EditorMotionCoordinator {
           // 目标 clip = 零宽度（继续消退到完全隐藏）
           const targetClipLeft = piece.clipLeft
           const targetClipRight = piece.clipLeft
+          // Issue #879 缺口1：每岛目标裁切矩形——缩到自己的零宽度位置
+          const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
+            x: cr.x, y: cr.y, width: 0, height: cr.height
+          }))
           ghosts.push({
             glyphIds: piece.glyphIds,
             windowId: w.windowId,
@@ -2216,7 +2201,8 @@ export class EditorMotionCoordinator {
             glyphHeight: piece.glyphHeight,
             offsetX: piece.offsetX,
             offsetY: piece.offsetY,
-            clipRects: piece.clipRects
+            clipRects: piece.clipRects,
+            islandTargetRects: islandTargetRects
           })
         }
         continue
@@ -2250,6 +2236,10 @@ export class EditorMotionCoordinator {
         // 目标 clip = 零宽度（继续消退到完全隐藏）
         const targetClipLeft = piece.clipLeft
         const targetClipRight = piece.clipLeft
+        // Issue #879 缺口1：每岛目标裁切矩形——缩到自己的零宽度位置
+        const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
+          x: cr.x, y: cr.y, width: 0, height: cr.height
+        }))
         ghosts.push({
           glyphIds: piece.glyphIds,
           windowId: w.windowId,
@@ -2271,7 +2261,8 @@ export class EditorMotionCoordinator {
           glyphHeight: piece.glyphHeight,
           offsetX: piece.offsetX,
           offsetY: piece.offsetY,
-          clipRects: piece.clipRects
+          clipRects: piece.clipRects,
+          islandTargetRects: islandTargetRects
         })
       }
     }
@@ -2385,6 +2376,40 @@ export class EditorMotionCoordinator {
             targetClipRight = targetX + piece.targetRect.width
           }
         }
+        // Issue #879 缺口1：计算每岛的起始裁切矩形和目标裁切矩形
+        // islandStartRects = piece.clipRects（冻结帧位置）
+        const islandStartRects: ClipRect[] = piece.clipRects
+        // islandTargetRects：根据通道类型计算每岛的目标裁切矩形
+        let islandTargetRects: ClipRect[]
+        if (w.motionOwnerKind === 'reflow') {
+          // reflow：每岛目标是各自的新版布局位置
+          // 每岛从冻结位置移动到新版布局位置——偏移量 = targetRect.x - currentPositionX
+          if (piece.targetRect !== null) {
+            const dx = piece.targetRect.x - piece.currentPositionX
+            const dy = piece.targetRect.y - piece.currentPositionY
+            islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({
+              x: cr.x + dx,
+              y: cr.y + dy,
+              width: cr.width,
+              height: cr.height
+            }))
+          } else {
+            // fallback：无目标矩形时，目标 = 起始（不动）
+            islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({ ...cr }))
+          }
+        } else {
+          // insert：每岛目标是各自的完整可见位置
+          // 每岛的左边界不变，右边界扩展到该岛在新布局中的完整右边界
+          // piece 的完整字形矩形在屏幕坐标中是 [glyphX + offsetX, glyphX + offsetX + glyphWidth]
+          const fullLeft = piece.glyphX + piece.offsetX
+          const fullRight = fullLeft + piece.glyphWidth
+          islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({
+            x: cr.x,
+            y: cr.y,
+            width: Math.max(0, fullRight - cr.x),
+            height: cr.height
+          }))
+        }
         runs.push({
           motionOwnerKind: w.motionOwnerKind,
           glyphIds: piece.glyphIds,
@@ -2414,7 +2439,9 @@ export class EditorMotionCoordinator {
           startY: startY,
           targetX: targetX,
           targetY: targetY,
-          clipRects: piece.clipRects
+          clipRects: piece.clipRects,
+          islandStartRects: islandStartRects,
+          islandTargetRects: islandTargetRects
         })
       }
     }

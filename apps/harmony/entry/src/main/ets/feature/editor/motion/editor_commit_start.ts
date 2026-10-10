@@ -334,6 +334,39 @@ export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext
  *   ownLeft = ownFullLeft + ratio * (ownFullRight - ownFullLeft)
  * 跨行必须分别处理（每个 piece 只在一行内），不能以原始全局 x 当新布局 x。
  */
+/**
+ * 缺口2修复：从 OnScreenInterval 的 rects 数组中取最左边的 x（vp，屏幕坐标）。
+ */
+function onScreenLeftOf(interval: OnScreenInterval): number {
+  let min = Infinity
+  for (const r of interval.rects) {
+    if (r.x < min) { min = r.x }
+  }
+  return min
+}
+
+/**
+ * 缺口2修复：从 OnScreenInterval 的 rects 数组中取最右边的 x+width（vp，屏幕坐标）。
+ */
+function onScreenRightOf(interval: OnScreenInterval): number {
+  let max = -Infinity
+  for (const r of interval.rects) {
+    if (r.x + r.width > max) { max = r.x + r.width }
+  }
+  return max
+}
+
+/**
+ * 缺口2修复：从 OnScreenInterval 的 rects 数组中取最上边的 y（vp，屏幕坐标）。
+ */
+function onScreenTopOf(interval: OnScreenInterval): number {
+  let min = Infinity
+  for (const r of interval.rects) {
+    if (r.y < min) { min = r.y }
+  }
+  return min
+}
+
 function buildPiece(
   run: RunGeometry,
   boundaries: number[],
@@ -381,31 +414,39 @@ function buildPiece(
     if (sourceGeom !== null) {
       sourceGlyphX0 = sourceGeom.x0
       sourceGlyphX1 = sourceGeom.x1
-      // Issue #879 评论6096421590 问题2：对每个 clipRect 求交（多岛并集），
-      // 不能只看包围盒 clipLeft/clipRight，否则两个可见岛之间不可见的字会被误判为可见。
-      let bestVisLeft = sourceGlyphX0
-      let bestVisRight = sourceGlyphX0
-      let hasVisible = false
-      for (const cr of firstSpan.clipRects) {
-        const crLeftInSource = cr.x - firstSpan.offsetX
-        const crRightInSource = cr.x + cr.width - firstSpan.offsetX
-        const intersectLeft = Math.max(sourceGlyphX0, crLeftInSource)
-        const intersectRight = Math.min(sourceGlyphX1, crRightInSource)
-        if (intersectRight - intersectLeft > 0) {
-          if (!hasVisible) {
-            bestVisLeft = intersectLeft
-            bestVisRight = intersectRight
-            hasVisible = true
-          } else {
-            bestVisLeft = Math.min(bestVisLeft, intersectLeft)
-            bestVisRight = Math.max(bestVisRight, intersectRight)
+      // 缺口2修复：逐段投影——对 firstVisible.rects 中每个 rect 分别投影，
+      // 不能用 min/max 合并成连续区间。ownLeft = 最左边 rect 的投影左边界。
+      let minProjectedLeft = Infinity
+      let minVisLeft = Infinity
+      let maxVisRight = -Infinity
+      for (const r of firstVisible.rects) {
+        const visLeftInSource = Math.max(sourceGlyphX0, r.x - firstSpan.offsetX)
+        const visRightInSource = Math.min(sourceGlyphX1, r.x + r.width - firstSpan.offsetX)
+        if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+          const projectedLeft = projectToTarget(
+            visLeftInSource, sourceGlyphX0, sourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          if (projectedLeft < minProjectedLeft) {
+            minProjectedLeft = projectedLeft
+          }
+          if (visLeftInSource < minVisLeft) {
+            minVisLeft = visLeftInSource
+          }
+          if (visRightInSource > maxVisRight) {
+            maxVisRight = visRightInSource
           }
         }
       }
-      visiblePixelLeft = hasVisible ? bestVisLeft : sourceGlyphX0
-      visiblePixelRight = hasVisible ? bestVisRight : sourceGlyphX0
-      // 投影到目标布局（问题4）——按首字形的目标边界投影
-      ownLeft = projectToTarget(visiblePixelLeft, sourceGlyphX0, sourceGlyphX1, firstGlyphTargetLeft, firstGlyphTargetRight)
+      if (minProjectedLeft === Infinity) {
+        ownLeft = ownFullLeft
+        visiblePixelLeft = sourceGlyphX0
+        visiblePixelRight = sourceGlyphX0
+      } else {
+        ownLeft = minProjectedLeft
+        visiblePixelLeft = minVisLeft
+        visiblePixelRight = maxVisRight
+      }
     } else {
       // 无法获取源字形几何——退回完整边界
       sourceGlyphX0 = ownFullLeft
@@ -414,9 +455,8 @@ function buildPiece(
       visiblePixelRight = ownFullRight
       ownLeft = ownFullLeft
     }
-    // Issue #879 评论6096421590 问题2：firstVisible.left 已由 clusterVisible 对 clipRects
-    // 逐岛求交得出，无需再用包围盒 clipLeft 做 Math.max。
-    onScreenLeft = firstVisible.left
+    // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
+    onScreenLeft = onScreenLeftOf(firstVisible)
   } else {
     // 静态可见：完整边界（源 = 目标）
     sourceGlyphX0 = ownFullLeft
@@ -424,7 +464,7 @@ function buildPiece(
     visiblePixelLeft = ownFullLeft
     visiblePixelRight = ownFullRight
     ownLeft = ownFullLeft
-    onScreenLeft = firstVisible.left
+    onScreenLeft = onScreenLeftOf(firstVisible)
   }
 
   // ── 尾字形 ──
@@ -436,46 +476,48 @@ function buildPiece(
       // 被窗口覆盖：计算源字形几何，然后投影到目标布局
       const lastSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, lastGlyphId)
       if (lastSourceGeom !== null) {
-        // 尾字形的源几何
         const lastSourceX0 = lastSourceGeom.x0
         const lastSourceX1 = lastSourceGeom.x1
-        // Issue #879 评论6096421590 问题2：对每个 clipRect 求交（多岛并集）
-        let bestVisLeft = lastSourceX0
-        let bestVisRight = lastSourceX0
-        let hasVisible = false
-        for (const cr of lastSpan.clipRects) {
-          const crLeftInSource = cr.x - lastSpan.offsetX
-          const crRightInSource = cr.x + cr.width - lastSpan.offsetX
-          const intersectLeft = Math.max(lastSourceX0, crLeftInSource)
-          const intersectRight = Math.min(lastSourceX1, crRightInSource)
-          if (intersectRight - intersectLeft > 0) {
-            if (!hasVisible) {
-              bestVisLeft = intersectLeft
-              bestVisRight = intersectRight
-              hasVisible = true
-            } else {
-              bestVisLeft = Math.min(bestVisLeft, intersectLeft)
-              bestVisRight = Math.max(bestVisRight, intersectRight)
+        // 缺口2修复：逐段投影——对 lastVisible.rects 中每个 rect 分别投影，
+        // ownRight = 最右边 rect 的投影右边界。
+        let maxProjectedRight = -Infinity
+        let minVisLeft = Infinity
+        let maxVisRight = -Infinity
+        for (const r of lastVisible.rects) {
+          const visLeftInSource = Math.max(lastSourceX0, r.x - lastSpan.offsetX)
+          const visRightInSource = Math.min(lastSourceX1, r.x + r.width - lastSpan.offsetX)
+          if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+            const projectedRight = projectToTarget(
+              visRightInSource, lastSourceX0, lastSourceX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
+            if (projectedRight > maxProjectedRight) {
+              maxProjectedRight = projectedRight
+            }
+            if (visLeftInSource < minVisLeft) {
+              minVisLeft = visLeftInSource
+            }
+            if (visRightInSource > maxVisRight) {
+              maxVisRight = visRightInSource
             }
           }
         }
-        const lastVisiblePixelLeft = hasVisible ? bestVisLeft : lastSourceX0
-        const lastVisiblePixelRight = hasVisible ? bestVisRight : lastSourceX0
-        // 投影尾字形的可见右边界到目标布局——按尾字形的目标边界投影
-        ownRight = projectToTarget(lastVisiblePixelRight, lastSourceX0, lastSourceX1, lastGlyphTargetLeft, lastGlyphTargetRight)
-        // 更新 sourceGlyphX1 为尾字形的源右边界
-        sourceGlyphX1 = lastSourceX1
-        visiblePixelRight = lastVisiblePixelRight
+        if (maxProjectedRight === -Infinity) {
+          ownRight = ownFullRight
+        } else {
+          ownRight = maxProjectedRight
+          sourceGlyphX1 = lastSourceX1
+          visiblePixelRight = maxVisRight
+        }
       } else {
         ownRight = ownFullRight
       }
-      // Issue #879 评论6096421590 问题2：lastVisible.right 已由 clusterVisible 对 clipRects
-      // 逐岛求交得出，无需再用包围盒 clipRight 做 Math.min。
-      onScreenRight = lastVisible.right
+      // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
+      onScreenRight = onScreenRightOf(lastVisible)
     } else {
       // 静态可见：完整边界
       ownRight = ownFullRight
-      onScreenRight = lastVisible.right
+      onScreenRight = onScreenRightOf(lastVisible)
     }
   } else {
     // lastVisible 为 null 不应发生（lastIndex 是可见段的最后一个）
@@ -489,7 +531,7 @@ function buildPiece(
     ownLeft: ownLeft,
     ownRight: ownRight,
     onScreenLeft: onScreenLeft,
-    onScreenTop: firstVisible.top,
+    onScreenTop: onScreenTopOf(firstVisible),
     onScreenRight: onScreenRight,
     sourceGlyphX0: sourceGlyphX0,
     sourceGlyphX1: sourceGlyphX1,
@@ -800,26 +842,91 @@ export function retargetRunStarts(
       }
     }
 
+    // 缺口4：insert 通道为不可见连续子区间（空洞）建立零宽度起始 interval。
+    // 空洞里的新字不从 run 左边界吐出，而是从前一个可见岛的右边界旁开始展开，
+    // 避免空洞里的新字直到动画结束才出现。
+    if (kind === 'insert') {
+      const zeroWidthIntervals: RunStartInterval[] = []
+      let cursor = piece.firstIndex
+      let prevClipRight: number | null = null
+      for (const island of islands) {
+        if (island.firstIndex > cursor) {
+          const gapFirst = cursor
+          const gapLast = island.firstIndex - 1
+          const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
+          const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+          zeroWidthIntervals.push({
+            firstIndex: gapFirst,
+            lastIndex: gapLast,
+            glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+            startClipLeft: gapClipX,
+            startClipRight: gapClipX,
+            startPositionX: gapStartX,
+            startPositionY: piece.startPositionY,
+            utf16Start: boundaries[gapFirst],
+            utf16End: boundaries[gapLast + 1],
+          })
+        }
+        const islandInterval = intervals.find(iv => iv.firstIndex === island.firstIndex)
+        if (islandInterval !== undefined) {
+          prevClipRight = islandInterval.startClipRight
+        }
+        cursor = island.lastIndex + 1
+      }
+      if (cursor <= piece.lastIndex) {
+        const gapFirst = cursor
+        const gapLast = piece.lastIndex
+        const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
+        const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+        zeroWidthIntervals.push({
+          firstIndex: gapFirst,
+          lastIndex: gapLast,
+          glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+          startClipLeft: gapClipX,
+          startClipRight: gapClipX,
+          startPositionX: gapStartX,
+          startPositionY: piece.startPositionY,
+          utf16Start: boundaries[gapFirst],
+          utf16End: boundaries[gapLast + 1],
+        })
+      }
+      if (zeroWidthIntervals.length > 0) {
+        intervals.push(...zeroWidthIntervals)
+        intervals.sort((a, b) => a.firstIndex - b.firstIndex)
+      }
+    }
+
     // legacy 单段起始（最长岛）保持原语义，供未读 intervals 的代码兼容。
+    // 缺口4：零宽度 interval（空洞）不参与 legacy 最长岛选取——
+    // 它们只为动画层提供独立 clip，不应影响兼容单段 clip 的语义。
     let startClipLeft = pieceOwnLeft
     let startClipRight = pieceOwnLeft
     let startPositionX = piece.startPositionX
     let startPositionY = piece.startPositionY
     let resolved = false
     if (intervals.length > 0) {
-      let longest = intervals[0]
+      let longest: RunStartInterval | null = null
       for (const iv of intervals) {
+        if (iv.startClipRight - iv.startClipLeft <= VISIBLE_EPSILON) {
+          continue
+        }
+        if (longest === null) {
+          longest = iv
+          continue
+        }
         const len = iv.lastIndex - iv.firstIndex
         const bestLen = longest.lastIndex - longest.firstIndex
         if (len > bestLen || (len === bestLen && iv.firstIndex < longest.firstIndex)) {
           longest = iv
         }
       }
-      startClipLeft = longest.startClipLeft
-      startClipRight = longest.startClipRight
-      startPositionX = longest.startPositionX
-      startPositionY = longest.startPositionY
-      resolved = true
+      if (longest !== null) {
+        startClipLeft = longest.startClipLeft
+        startClipRight = longest.startClipRight
+        startPositionX = longest.startPositionX
+        startPositionY = longest.startPositionY
+        resolved = true
+      }
     }
     if (!resolved) {
       // 该 piece 的字形此刻全部不可见——按通道语义塌缩，不猜几何。
@@ -961,12 +1068,16 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
 // intervalForIsland 取代——固定 piece 分区下需返回该 piece 内所有不连续可见岛，
 // 而非仅最长一段，否则其余可见段会被裁切层丢弃而永远无法归还静态层。
 
-/** 某个字形此刻在屏的精确可见区间（vp）。 */
+/**
+ * 某个字形此刻在屏的精确可见区间（vp，屏幕坐标）。
+ *
+ * 缺口2修复：改为支持多个不连续的可见矩形。不同视觉行即使 x 相同，
+ * 只要 y 完全不相交也不应被误认为可见；两个矩形裁中同一字形的不同不连续
+ * 横向部分时，各自作为独立 rect 保留，不用 min/max 合并成连续区间。
+ */
 interface OnScreenInterval {
-  left: number
-  right: number
-  top: number
-  bottom: number
+  /** 各段不连续可见矩形（vp，屏幕坐标） */
+  rects: RectLike[]
 }
 
 /** 冻结窗口按字形身份索引：一个字形只可能落在一个窗口里（窗口区间互不重叠）。 */
@@ -1022,42 +1133,38 @@ function clusterVisible(
     const span = frozenByGlyphId.get(glyphId)
     if (span === undefined) {
       // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
-      return { left: x0, right: x1, top: y0, bottom: y0 + glyphHeight }
+      return { rects: [{ x: x0, y: y0, width: x1 - x0, height: glyphHeight }] }
     }
     // 被运动窗口接管：对每个 clipRect 求交（多岛并集）
     // Issue #879 评论6096421590 问题2：不能只看包围盒 clipLeft/clipRight，
     // 否则两个可见岛之间不可见的字会被误判为可见。
+    // 缺口2修复：同时检查 x 和 y 交集，不合并不连续区间——
+    // 每个 clipRect 与字形矩形的交集作为独立的 rect 保留。
     const glyphOnScreenLeft = x0 + span.offsetX
     const glyphOnScreenRight = x1 + span.offsetX
     const glyphOnScreenTop = y0 + span.offsetY
     const glyphOnScreenBottom = y0 + span.offsetY + glyphHeight
 
-    let bestLeft = 0
-    let bestRight = 0
-    let hasVisible = false
+    const rects: RectLike[] = []
     for (const cr of span.clipRects) {
       const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
       const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
-      if (intersectRight - intersectLeft > VISIBLE_EPSILON) {
-        if (!hasVisible) {
-          bestLeft = intersectLeft
-          bestRight = intersectRight
-          hasVisible = true
-        } else {
-          bestLeft = Math.min(bestLeft, intersectLeft)
-          bestRight = Math.max(bestRight, intersectRight)
-        }
+      const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+      const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+      if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+          intersectBottom - intersectTop > VISIBLE_EPSILON) {
+        rects.push({
+          x: intersectLeft,
+          y: intersectTop,
+          width: intersectRight - intersectLeft,
+          height: intersectBottom - intersectTop,
+        })
       }
     }
-    if (!hasVisible) {
+    if (rects.length === 0) {
       return null
     }
-    return {
-      left: bestLeft,
-      right: bestRight,
-      top: glyphOnScreenTop,
-      bottom: glyphOnScreenBottom,
-    }
+    return { rects }
   }
 
   // 2. displayed 正文身份表中找不到 → 查冻结窗口（ghost字形）
@@ -1074,17 +1181,33 @@ function clusterVisible(
       const x1 = rect.x + rect.width
       const y0 = rect.y
       const glyphHeight = rect.height
-      const onScreenLeft = Math.max(x0 + span.offsetX, span.clipLeft)
-      const onScreenRight = Math.min(x1 + span.offsetX, span.clipRight)
-      if (onScreenRight - onScreenLeft <= VISIBLE_EPSILON) {
+      // 缺口2修复：ghost 分支也按 clipRects 求交（不再只用 clipLeft/clipRight），
+      // 同时检查 x 和 y 交集，不合并不连续区间。
+      const glyphOnScreenLeft = x0 + span.offsetX
+      const glyphOnScreenRight = x1 + span.offsetX
+      const glyphOnScreenTop = y0 + span.offsetY
+      const glyphOnScreenBottom = y0 + span.offsetY + glyphHeight
+
+      const rects: RectLike[] = []
+      for (const cr of span.clipRects) {
+        const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+        const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+        const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+        const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+        if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+            intersectBottom - intersectTop > VISIBLE_EPSILON) {
+          rects.push({
+            x: intersectLeft,
+            y: intersectTop,
+            width: intersectRight - intersectLeft,
+            height: intersectBottom - intersectTop,
+          })
+        }
+      }
+      if (rects.length === 0) {
         return null
       }
-      return {
-        left: onScreenLeft,
-        right: onScreenRight,
-        top: y0 + span.offsetY,
-        bottom: y0 + span.offsetY + glyphHeight,
-      }
+      return { rects }
     }
   }
 

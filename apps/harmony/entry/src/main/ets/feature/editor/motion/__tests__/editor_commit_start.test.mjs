@@ -1083,25 +1083,32 @@ test('问题2：固定 piece 被冻结窗口局部裁切断开——retarget 返
   )
   // 分区不变——物理节点身份（glyphIds）不被临时可见分组改变
   assertSamePartition(prepared, retargeted)
-  // 必须返回两段可见岛，而不是只保留最长一段
+  // 缺口4：insert 通道除了两段可见岛，还为空洞簇2 建立零宽度 interval → 共 3 段
   assert.ok(retargeted[0].intervals !== undefined, 'piece 应携带 intervals')
-  assert.equal(retargeted[0].intervals.length, 2, '应有两个不连续可见岛')
+  assert.equal(retargeted[0].intervals.length, 3, '应有两段可见岛 + 一段零宽度空洞 interval')
   const ivs = retargeted[0].intervals
+  // 按 firstIndex 升序：可见岛[0,1]、零宽度[2,2]、可见岛[3,4]
   assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 1])
-  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [3, 4])
-  // 被裁掉的簇2 不应出现在任何可见岛里（它此刻仍不可见，留在静态层）
+  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [2, 2])
+  assert.deepEqual([ivs[2].firstIndex, ivs[2].lastIndex], [3, 4])
+  // 空洞 interval 是零宽度（startClipLeft === startClipRight）
+  assert.equal(ivs[1].startClipLeft, ivs[1].startClipRight, '空洞 interval 应为零宽度')
+  // 空洞的 startPositionX 紧接前一个可见岛的右边界（20）
+  assert.equal(ivs[1].startPositionX, 20, '空洞 startPositionX 应紧接前一个可见岛右边界')
+  // 所有簇都被某个 interval 覆盖——可见岛覆盖可见簇，零宽度 interval 覆盖不可见簇
   const covered = new Set()
   for (const iv of ivs) {
     for (let i = iv.firstIndex; i <= iv.lastIndex; i++) { covered.add(i) }
   }
-  assert.ok(!covered.has(2), '被冻结窗口裁掉的簇2 不应进入可见岛')
-  assert.ok(covered.has(0) && covered.has(1) && covered.has(3) && covered.has(4),
-    '所有静态可见的簇都应被某个可见岛覆盖，不能丢字')
+  assert.ok(covered.has(0) && covered.has(1) && covered.has(2) && covered.has(3) && covered.has(4),
+    '所有簇都应被某个 interval 覆盖，不能丢字')
   // 每个岛携带自己在 run 自己正文里的 UTF-16 区间，供静态层精确扣除
   assert.equal(ivs[0].utf16Start, 0)
   assert.equal(ivs[0].utf16End, 2)
-  assert.equal(ivs[1].utf16Start, 3)
-  assert.equal(ivs[1].utf16End, 5)
+  assert.equal(ivs[1].utf16Start, 2)
+  assert.equal(ivs[1].utf16End, 3)
+  assert.equal(ivs[2].utf16Start, 3)
+  assert.equal(ivs[2].utf16End, 5)
 })
 
 test('问题2：多个可见岛时 legacy 单段 clip 取最长岛（等长取靠前的），不影响兼容读', () => {
@@ -1153,5 +1160,237 @@ test('问题2：retained 通道——同一固定 piece 的多段可见岛各自
   assert.strictEqual(typeof ivs[1].startPositionY, 'number')
 })
 
+
+// ====== 缺口2：clusterVisible 的 y 交集检查和不合并不连续区间 ======
+
+test('缺口2：clipRect 的 y 范围与字形不相交时，即使 x 相交也不可见', () => {
+  const ctx = context('甲乙丙丁', 800, [])
+  const all = idsOf(ctx, 0, 4)
+  // 字形在 y=0 行（高度 20），clipRect 在 y=100 行（完全不相交的 y 范围）
+  // 即使 x 范围覆盖字形，y 不相交也不应可见
+  const frozen = [{
+    glyphIds: all,
+    clipLeft: 0,
+    clipRight: 40,
+    clipRects: [{ x: 0, y: 100, width: 40, height: 20 }],
+    offsetX: 0,
+    offsetY: 0,
+    sourceRevision: 800,
+    glyphUtf16Ranges: null,
+    sourceLayout: null,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  // y 不相交 → 所有字形不可见
+  assert.equal(pieces.length, 0)
+})
+
+test('缺口2：不合并不连续区间——间隙中的字形不被误判为可见', () => {
+  const ctx = context('甲乙丙', 801, [])
+  const all = idsOf(ctx, 0, 3)
+  // 两个不连续的 clipRect：
+  // rect1: [0,10] → 甲 [0,10] 完整可见
+  // rect2: [20,30] → 丙 [20,30] 完整可见
+  // 乙 [10,20] 完全在间隙中 → 不可见
+  // 如果合并 clipRects 成 [0,30]，乙会被误判为可见
+  const frozen = [{
+    glyphIds: all,
+    clipLeft: 0,
+    clipRight: 30,
+    clipRects: [
+      { x: 0, y: 0, width: 10, height: 20 },
+      { x: 20, y: 0, width: 10, height: 20 },
+    ],
+    offsetX: 0,
+    offsetY: 0,
+    sourceRevision: 801,
+    glyphUtf16Ranges: null,
+    sourceLayout: null,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 3, { x: 0, y: 0, width: 30, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  // 甲和丙可见，乙不可见 → 两段 piece
+  assert.equal(pieces.length, 2)
+  assert.equal(pieces[0].firstIndex, 0)
+  assert.equal(pieces[0].lastIndex, 0)
+  assert.equal(pieces[1].firstIndex, 2)
+  assert.equal(pieces[1].lastIndex, 2)
+})
+
+test('缺口2：ghost 字形按 clipRects 求交——间隙中的 ghost 不可见', () => {
+  // displayed 正文是 '甲'（乙丙丁已被删除），但旧窗口仍在绘制乙丙丁
+  // 乙在源布局中 [10,20]，丙在 [20,30]，丁在 [30,40]
+  // 两个不连续的 clipRect：
+  // rect1: [10,20] → 乙完整可见
+  // rect2: [30,40] → 丁完整可见
+  // 丙 [20,30] 完全在间隙中 → 不可见
+  // 如果用 clipLeft=10, clipRight=40（包围盒），丙会被误判为可见
+  const ctx = context('甲', 802, [])
+  const ghostIds = ['orig-802-1', 'orig-802-2', 'orig-802-3']
+  const ghostRanges = new Map([
+    ['orig-802-1', [1, 2]],
+    ['orig-802-2', [2, 3]],
+    ['orig-802-3', [3, 4]],
+  ])
+  const sourceLayout = [line('甲乙丙丁', 0)]
+  const frozen = [{
+    glyphIds: ghostIds,
+    clipLeft: 10,
+    clipRight: 40,
+    clipRects: [
+      { x: 10, y: 0, width: 10, height: 20 },
+      { x: 30, y: 0, width: 10, height: 20 },
+    ],
+    offsetX: 0,
+    offsetY: 0,
+    sourceRevision: 802,
+    glyphUtf16Ranges: ghostRanges,
+    sourceLayout: sourceLayout,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: ghostIds,
+    ownText: '甲乙丙丁',
+    ownUtf16Start: 1,
+    ownUtf16End: 4,
+    ownRect: { x: 10, y: 0, width: 30, height: 20 },
+    ownLayout: [line('甲乙丙丁', 0)],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  // 乙和丁可见，丙不可见 → 两段 piece
+  assert.equal(pieces.length, 2)
+  assert.equal(pieces[0].firstIndex, 0)
+  assert.equal(pieces[0].lastIndex, 0)
+  assert.equal(pieces[1].firstIndex, 2)
+  assert.equal(pieces[1].lastIndex, 2)
+})
+
+// ====== 缺口4：insert 通道为零宽度空洞建立 interval ======
+
+test('缺口4：空洞在 piece 最前面——零宽度 interval 的 startPositionX 为 piece 的 startPositionX', () => {
+  const ctx = context('甲乙丙丁戊', 810, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见 → 单个 piece 覆盖 0..4
+  const prepared = insertRunStartState(run, ctx)
+  assert.equal(prepared.length, 1)
+  // retarget：簇0、簇1 被冻结窗口吞掉（clip 0..0），簇2..簇4 静态可见
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[0], all[1]], 0, 0, 0, 0, 810, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  assert.ok(retargeted[0].intervals !== undefined)
+  // intervals 应包含：空洞[0,1] + 可见岛[2,4]
+  assert.equal(retargeted[0].intervals.length, 2)
+  const ivs = retargeted[0].intervals
+  // 空洞 interval
+  assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 1])
+  assert.equal(ivs[0].startClipLeft, ivs[0].startClipRight, '空洞 interval 应为零宽度')
+  // 空洞在 piece 最前面 → startPositionX = piece.startPositionX = 0
+  assert.equal(ivs[0].startPositionX, 0)
+  // 可见岛
+  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [2, 4])
+})
+
+test('缺口4：空洞在 piece 最后面——零宽度 interval 的 startPositionX 为前一个可见岛的 startClipRight', () => {
+  const ctx = context('甲乙丙丁戊', 811, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见 → 单个 piece 覆盖 0..4
+  const prepared = insertRunStartState(run, ctx)
+  // retarget：簇3、簇4 被冻结窗口吞掉（clip 0..0），簇0..簇2 静态可见
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[3], all[4]], 0, 0, 0, 0, 811, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  assert.ok(retargeted[0].intervals !== undefined)
+  // intervals 应包含：可见岛[0,2] + 空洞[3,4]
+  assert.equal(retargeted[0].intervals.length, 2)
+  const ivs = retargeted[0].intervals
+  // 可见岛
+  assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 2])
+  // 空洞 interval
+  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [3, 4])
+  assert.equal(ivs[1].startClipLeft, ivs[1].startClipRight, '空洞 interval 应为零宽度')
+  // 空洞在 piece 最后面 → startPositionX = 前一个可见岛的 startClipRight = 30
+  assert.equal(ivs[1].startPositionX, 30)
+})
+
+test('缺口4：多个空洞——每个空洞都有零宽度 interval', () => {
+  const ctx = context('甲乙丙丁戊己庚', 812, [])
+  const all = idsOf(ctx, 0, 7)
+  const run = runGeometry(ctx, 0, 7, { x: 0, y: 0, width: 70, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见 → 单个 piece 覆盖 0..6
+  const prepared = insertRunStartState(run, ctx)
+  // retarget：簇1（乙）和簇3（丁）被冻结窗口吞掉，其余静态可见
+  // 可见-不可见-可见-不可见-可见：甲可见、乙不可见、丙可见、丁不可见、戊己庚可见
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [
+      frozenWindow([all[1]], 0, 0, 0, 0, 812, null),
+      frozenWindow([all[3]], 0, 0, 0, 0, 812, null),
+    ] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 70, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  assert.ok(retargeted[0].intervals !== undefined)
+  // intervals 应包含：可见岛[0,0] + 空洞[1,1] + 可见岛[2,2] + 空洞[3,3] + 可见岛[4,6]
+  // = 5 个 interval
+  assert.equal(retargeted[0].intervals.length, 5)
+  const ivs = retargeted[0].intervals
+  // 可见岛[0,0]：甲
+  assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 0])
+  // 空洞[1,1]：乙
+  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [1, 1])
+  assert.equal(ivs[1].startClipLeft, ivs[1].startClipRight, '空洞1 应为零宽度')
+  // 可见岛[2,2]：丙
+  assert.deepEqual([ivs[2].firstIndex, ivs[2].lastIndex], [2, 2])
+  // 空洞[3,3]：丁
+  assert.deepEqual([ivs[3].firstIndex, ivs[3].lastIndex], [3, 3])
+  assert.equal(ivs[3].startClipLeft, ivs[3].startClipRight, '空洞2 应为零宽度')
+  // 可见岛[4,6]：戊己庚
+  assert.deepEqual([ivs[4].firstIndex, ivs[4].lastIndex], [4, 6])
+})
+
+test('缺口4：整个 piece 都不可见——insert 通道创建覆盖整个 piece 的零宽度 interval', () => {
+  const ctx = context('甲乙丙丁', 813, [])
+  const all = idsOf(ctx, 0, 4)
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见 → 单个 piece 覆盖 0..3
+  const prepared = insertRunStartState(run, ctx)
+  // retarget：所有字形被冻结窗口吞掉（clip 0..0）
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 813, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  assert.ok(retargeted[0].intervals !== undefined)
+  // 没有可见岛 → 只有一个零宽度 interval 覆盖整个 piece
+  assert.equal(retargeted[0].intervals.length, 1)
+  const ivs = retargeted[0].intervals
+  assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 3])
+  assert.equal(ivs[0].startClipLeft, ivs[0].startClipRight, '应为零宽度')
+  // 空洞在 piece 最前面（也是最后面）→ startPositionX = piece.startPositionX = 0
+  assert.equal(ivs[0].startPositionX, 0)
+})
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
