@@ -1501,16 +1501,17 @@ export class EditorMotionCoordinator {
             islandNewY = EditorMotionCoordinator.yAtOffsetLocal(
               newLayout, islandNewUtf16Start, move.newRect.y)
           }
-          // Issue #879 复核评论6097927249 问题3：retained 多岛坐标语义一致。
-          // interval.startPositionX 来自 intervalForIsland（editor_commit_start.ts），
-          // 对于 retained 通道计算为 visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)，
-          // 引入了 run.ownRect.x（源布局）偏移，与 islandNewX（新版布局左边界，屏幕坐标）
-          // 坐标语义不一致。补偿为 visible.onScreenLeft（该岛在屏真实左边界）：
-          //   islandStartX = startPositionX + startClipLeft - oldRect.x
-          // 其中 interval.startClipLeft === visible.ownLeft，move.oldRect.x === run.ownRect.x
-          // （retained 通道 runGeometry 用 move.oldRect 作为 ownRect）。
-          // 这样 islandStartX 和 islandNewX 都在屏幕坐标系中，插值正确。
-          const islandStartX = interval.startPositionX + interval.startClipLeft - move.oldRect.x
+          // Issue #879 复核评论6099791364 问题3：islandStartX 必须是字形在屏绘制原点，
+          // 不是当前可见裁切的左边界。旧实现用 startPositionX + startClipLeft - oldRect.x
+          // 得到的是 clip 在屏左边界，p=0 时 islandOffsetX 会把局部可见半字偏移扩大成整字。
+          // 正确语义：字形在屏位置 = 源字形左边界 + 窗口偏移。
+          //   islandOldLeft = 源字形左边界（iRect.x 或 pieceOldLeft）
+          //   interval.startPositionX - move.oldRect.x = 当前窗口偏移
+          // （retained 通道 startPositionX = onScreenLeft - ownLeft + ownRect.x，
+          //   所以 startPositionX - ownRect.x = onScreenLeft - ownLeft = currentWindowOffset）
+          // 这样 p=0 时 islandOffsetX = currentWindowOffset，字形停在原位 + 窗口偏移，
+          // clip 保持当前裁切在屏坐标，局部可见半字不会移动。
+          const islandStartX = islandOldLeft + interval.startPositionX - move.oldRect.x
           const islandStartY = interval.startPositionY
           const islandCurrentX = islandStartX + (islandNewX - islandStartX) * p
           const islandCurrentY = islandStartY + (islandNewY - islandStartY) * p
@@ -2450,9 +2451,12 @@ export class EditorMotionCoordinator {
         }
         // Issue #879 缺口1：计算每岛的起始裁切矩形和目标裁切矩形
         // islandStartRects = piece.clipRects（冻结帧位置）
-        const islandStartRects: ClipRect[] = piece.clipRects
+        let islandStartRects: ClipRect[] = piece.clipRects
         // islandTargetRects：根据通道类型计算每岛的目标裁切矩形
         let islandTargetRects: ClipRect[]
+        // Issue #879 复核评论6099791364 问题2：clipRects 为空时 buildFrame 用
+        // motionRun.clipRects.length 作为循环上界会跳过该 run，需要保证非空。
+        let runClipRects: ClipRect[] = piece.clipRects
         if (w.motionOwnerKind === 'reflow') {
           // reflow：每岛目标是各自的新版布局位置
           // 每岛从冻结位置移动到新版布局位置——偏移量 = targetRect.x - currentPositionX
@@ -2470,21 +2474,53 @@ export class EditorMotionCoordinator {
             islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({ ...cr }))
           }
         } else {
-          // insert：每岛目标是各自的完整可见位置
-          // Issue #879 复核评论6097927249 问题2：每岛只扩展到自己的右边界，
-          // 不扩展到整段 fullRight，避免跨过其他小岛与空洞。
-          // islandStartRects = piece.clipRects（冻结帧 clip），
-          // islandTargetRects = 每岛自己的完整可见矩形（保持该岛自己的位置和宽度）。
-          // piece.clipRects 已是 buildFrozenWindowPiece 计算的"原窗口 clipRects 与该组
-          // 字形屏幕矩形的二维交集"，即每个岛在冻结帧的可见裁切矩形。
-          // carry-over insert 从该岛当前 clip 继续扩展到该岛自己的完整可见宽度，
-          // 不会跨过其他岛的范围去填补岛间空洞。
-          islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({
-            x: cr.x,
-            y: cr.y,
-            width: cr.width,
-            height: cr.height
-          }))
+          // insert：每岛目标是各自所属字形的完整可见矩形。
+          // Issue #879 复核评论6099791364 问题2：旧实现直接拷贝 piece.clipRects 作为
+          // islandTargetRects，与 islandStartRects 字段完全相同，导致 buildFrame 每帧
+          // clipRects 不变，吐字动画停滞（半吐字停在半截直到结束才突然出现整字）。
+          // 修复：目标矩形根据 piece 的源字形几何计算完整可见矩形，起始矩形保持冻结帧
+          // 裁切，这样 buildFrame 逐帧从当前裁切插值到完整字形，吐字动画正常推进。
+          // piece 按源字形连续性拆分，每个 piece 通常只有一个字形，目标矩形即完整字形
+          // 可见矩形；若 sourceRect 不为 null 则优先用 sourceRect 的位置和大小。
+          const fullRect: ClipRect = piece.sourceRect !== null
+            ? {
+              x: piece.sourceRect.x,
+              y: piece.sourceRect.y,
+              width: piece.sourceRect.width,
+              height: piece.sourceRect.height
+            }
+            : {
+              x: piece.glyphX,
+              y: piece.glyphY,
+              width: piece.glyphWidth,
+              height: piece.glyphHeight
+            }
+          if (piece.clipRects.length > 0) {
+            // 已有部分可见裁切：起始 = 冻结帧裁切，目标 = 完整字形可见矩形
+            islandStartRects = piece.clipRects
+            islandTargetRects = piece.clipRects.map((_cr: ClipRect): ClipRect => ({
+              x: fullRect.x,
+              y: fullRect.y,
+              width: fullRect.width,
+              height: fullRect.height
+            }))
+          } else {
+            // 尚未吐出但在新正文仍存在：建立零宽度起点和非零目标
+            islandStartRects = [{
+              x: piece.glyphX,
+              y: piece.glyphY,
+              width: 0,
+              height: piece.glyphHeight
+            }]
+            islandTargetRects = [{
+              x: fullRect.x,
+              y: fullRect.y,
+              width: fullRect.width,
+              height: fullRect.height
+            }]
+            // 确保 clipRects 字段非空（buildFrame 用其 length 作为循环上界）
+            runClipRects = islandStartRects
+          }
         }
         runs.push({
           motionOwnerKind: w.motionOwnerKind,
@@ -2515,7 +2551,7 @@ export class EditorMotionCoordinator {
           startY: startY,
           targetX: targetX,
           targetY: targetY,
-          clipRects: piece.clipRects,
+          clipRects: runClipRects,
           islandStartRects: islandStartRects,
           islandTargetRects: islandTargetRects
         })

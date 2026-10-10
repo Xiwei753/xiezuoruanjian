@@ -1582,4 +1582,255 @@ test('问题4：clonePieces 深拷贝 clipRects——retarget 全不可见时 cl
   assert.equal(retargeted[0].intervals[0].startClipLeft, retargeted[0].intervals[0].startClipRight)
 })
 
+// ====== Issue #879 复核评论6099791364：问题3（retained islandStartX 用源字形绘制原点） ======
+// 旧公式 islandStartX = startPositionX + startClipLeft - oldRect.x 得到 clip 在屏左边界，
+// p=0 时 islandOffsetX 把局部可见半字偏移扩大成整字。
+// 修复后 islandStartX = islandOldLeft + startPositionX - oldRect.x（字形在屏绘制原点），
+// p=0 时 offset = currentWindowOffset，字形停在原位 + 窗口偏移，clip 保持当前裁切。
+// 注：islandOldLeft 是源字形完整左边界（sourceGlyphX0），不是裁切后可见左边界（ownLeft）。
+
+test('问题3：retained 部分裁切——interval.startPositionX 是窗口偏移，新公式给字形绘制原点不是 clip 在屏左边界', () => {
+  const ctx = context('甲乙丙丁', 910, [])
+  const all = idsOf(ctx, 0, 4)
+  // 冻结窗口 clip=[6,36], offsetX=3：
+  // 甲在源[0,10]，在屏[3,13]（源+offset），clip[6,36]交集→在屏可见[6,13]，源可见[3,10]
+  // onScreenLeft=6（clip 在屏左边界），ownLeft=3（裁切后投影），sourceGlyphX0=0（完整左边界）
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 910, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+
+  const pieces = visibleGlyphPieces(run, withWindow)
+  const piece = pieces[0]
+  // 首字形（甲）的几何
+  const onScreenLeft = piece.onScreenLeft
+  const ownLeft = piece.ownLeft
+  const sourceGlyphX0 = piece.sourceGlyphX0
+  const ownRectX = run.ownRect.x
+
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // 甲的 interval（retained 每字形一个稳定 interval）
+  const iv = start[0].intervals[0]
+  const startPositionX = iv.startPositionX
+  const startClipLeft = iv.startClipLeft
+
+  // 1. startPositionX 语义：onScreenLeft - ownLeft + ownRect.x = 6 - 3 + 0 = 3
+  assert.equal(startPositionX, onScreenLeft - ownLeft + ownRectX)
+  // 2. startPositionX - ownRect.x 等于当前窗口偏移（onScreenLeft - ownLeft = 3 = offsetX）
+  const currentWindowOffset = onScreenLeft - ownLeft
+  assert.equal(startPositionX - ownRectX, currentWindowOffset)
+  // 3. 新公式 islandStartX = islandOldLeft + startPositionX - oldRect.x
+  //    islandOldLeft = sourceGlyphX0（源字形完整左边界，不是裁切后的 ownLeft）
+  const islandOldLeft = sourceGlyphX0
+  const newIslandStartX = islandOldLeft + startPositionX - ownRectX
+  //    应等于 islandOldLeft + currentWindowOffset（字形在屏绘制原点 = 0 + 3 = 3）
+  assert.equal(newIslandStartX, islandOldLeft + currentWindowOffset)
+  // 4. 部分裁切时（sourceGlyphX0 !== ownLeft），新公式结果不等于 onScreenLeft（clip 在屏左边界）
+  assert.notEqual(sourceGlyphX0, ownLeft, '部分裁切时完整边界应不同于裁切后边界')
+  assert.notEqual(newIslandStartX, onScreenLeft, '新公式应给字形绘制原点(3)，不是 clip 在屏左边界(6)')
+  // 5. 旧公式 islandStartX = startPositionX + startClipLeft - oldRect.x 会等于 onScreenLeft（错误）
+  const oldIslandStartX = startPositionX + startClipLeft - ownRectX
+  assert.equal(oldIslandStartX, onScreenLeft, '旧公式给 clip 在屏左边界(6)——错误语义')
+})
+
+test('问题3：retained retarget 后 interval.startPositionX 仍保持窗口偏移语义', () => {
+  const ctx = context('甲乙丙丁', 911, [])
+  const all = idsOf(ctx, 0, 4)
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见
+  const prepared = retainedMoveStartState(run, ctx, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // retarget：加冻结窗口 clip=[6,36] offsetX=3，甲被部分裁切
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 911, null)]
+  const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'retained', 0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
+
+  // retarget 后仍保留稳定 intervals 分区（每字形一个）
+  assert.ok(retargeted[0].intervals !== undefined)
+  const iv = retargeted[0].intervals[0]  // 甲的 interval
+  // retarget 重算 clip/position：甲在屏可见[6,13]，ownLeft=3, onScreenLeft=6
+  // startPositionX = onScreenLeft - ownLeft + ownRect.x = 6 - 3 + 0 = 3
+  assert.equal(iv.startPositionX, 3)
+  // 新公式 islandStartX = sourceGlyphX0 + startPositionX - ownRect.x = 0 + 3 - 0 = 3（字形绘制原点）
+  const sourceGlyphX0 = 0  // 甲完整左边界
+  const newIslandStartX = sourceGlyphX0 + iv.startPositionX - run.ownRect.x
+  assert.equal(newIslandStartX, 3, '新公式给字形绘制原点(3)')
+  assert.notEqual(newIslandStartX, 6, '不等于 clip 在屏左边界(6)')
+})
+
+test('问题3：retained 部分裁切 p=0 时——新公式 islandOffsetX 等于 currentWindowOffset，不扩大偏移', () => {
+  const ctx = context('甲乙丙丁', 912, [])
+  const all = idsOf(ctx, 0, 4)
+  // clip=[6,36] offsetX=3：甲在屏可见[6,13]，只露出右半 7vp（局部可见半字）
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 912, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  const piece = pieces[0]
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals[0]
+
+  const sourceGlyphX0 = piece.sourceGlyphX0  // 0（甲完整左边界）
+  const ownRectX = run.ownRect.x  // 0
+  const currentWindowOffset = piece.onScreenLeft - piece.ownLeft  // 6 - 3 = 3
+
+  // 新公式 p=0 时 islandOffsetX = islandStartX - islandOldLeft
+  const newIslandStartX = sourceGlyphX0 + iv.startPositionX - ownRectX
+  const newIslandOffsetX = newIslandStartX - sourceGlyphX0
+  // 应等于 currentWindowOffset（字形停在原位 + 窗口偏移，clip 保持当前裁切）
+  assert.equal(newIslandOffsetX, currentWindowOffset,
+    '新公式 p=0 时 offset 应等于 currentWindowOffset(3)，不扩大局部可见半字偏移')
+
+  // 旧公式 p=0 时 islandOffsetX 会把 clip 在屏左边界当成字形原点，偏移被扩大
+  const oldIslandStartX = iv.startPositionX + iv.startClipLeft - ownRectX
+  const oldIslandOffsetX = oldIslandStartX - sourceGlyphX0
+  assert.notEqual(oldIslandOffsetX, currentWindowOffset,
+    '旧公式 p=0 时 offset 不等于 currentWindowOffset——错误')
+  assert.equal(oldIslandOffsetX, piece.onScreenLeft - sourceGlyphX0,
+    '旧公式 offset = onScreenLeft - islandOldLeft(6)——把局部可见半字偏移扩大成整字')
+})
+
+// ====== Issue #879 复核评论6099791364：问题2（carry insert 目标矩形用完整字形几何） ======
+// 旧实现 islandTargetRects 直接拷贝 piece.clipRects，与 islandStartRects 完全相同，
+// 导致吐字动画完全停滞（每帧 clipRects 不变）。
+// 修复后 islandTargetRects 根据 piece.sourceRect 或 glyphX/glyphY/glyphWidth/glyphHeight
+// 计算完整字形可见矩形；clipRects 为空时建立零宽度起点和非零目标。
+// 在 .ts 层面验证 VisibleRunPiece/RunStartInterval 携带完整字形几何（sourceGlyphX0/X1）
+// 和裁切矩形（clipRects），数据结构完整性支撑 .ets 层计算完整目标矩形。
+
+test('问题2：VisibleRunPiece 携带 sourceGlyphX0/X1 完整字形边界——与裁切后 ownLeft/ownRight 不同', () => {
+  const ctx = context('甲乙丙丁', 913, [])
+  const all = idsOf(ctx, 0, 4)
+  // clip=[4,36] offsetX=0：甲在源[0,10]可见[4,10]，部分裁切（左 4vp 被裁掉）
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 913, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1)
+  const piece = pieces[0]
+  // sourceGlyphX0 是首字形（甲）完整左边界 = 0（未裁切的原始边界）
+  assert.equal(piece.sourceGlyphX0, 0)
+  // ownLeft 是裁切后可见左边界 = 4（甲被裁掉左 4vp）
+  assert.equal(piece.ownLeft, 4)
+  // 完整边界 ≠ 裁切后边界 → sourceGlyphX0/X1 可用于计算完整目标矩形，不与 clipRects 混淆
+  assert.notEqual(piece.sourceGlyphX0, piece.ownLeft,
+    '部分裁切时完整字形边界(sourceGlyphX0)应不同于裁切后边界(ownLeft)')
+  // sourceGlyphX1 是尾字形（丁）完整右边界 = 40
+  assert.equal(piece.sourceGlyphX1, 40)
+  // ownRight 是丁裁切后右边界 = 36（丁被裁掉右 4vp）
+  assert.equal(piece.ownRight, 36)
+  assert.notEqual(piece.sourceGlyphX1, piece.ownRight,
+    '部分裁切时完整字形边界(sourceGlyphX1)应不同于裁切后边界(ownRight)')
+})
+
+test('问题2：piece 的 clipRects 是投影后裁切矩形——不直接拷贝冻结窗口 clipRects', () => {
+  const ctx = context('甲乙丙丁', 914, [])
+  const all = idsOf(ctx, 0, 4)
+  // clip=[6,36] offsetX=3：窗口 clipRects=[{x:6,width:30}]
+  // 甲在源[0,10]在屏[3,13]，可见在屏[6,13]→源可见[3,10]→投影到目标 ownLeft=3
+  // piece.clipRects 应是投影到 run 自己布局的值，不是直接拷贝窗口的 {x:6,width:30}
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 914, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  const piece = pieces[0]
+  assert.ok(piece.clipRects !== undefined, 'piece 应携带 clipRects')
+  // clipRects 不等于窗口的 clipRects [{x:6,width:30}]——是投影后的多段矩形
+  assert.notEqual(piece.clipRects.length, 1, '部分裁切多字形时 clipRects 应有多段，不是直接拷贝窗口单段')
+  // 首段左边界 = 3（投影后），不是窗口的 6
+  assert.equal(piece.clipRects[0].x, 3, 'clipRects 首段应投影到 run 布局(x=3)，不是窗口 clip 的 x=6')
+  // sourceGlyphX0/X1 提供完整字形边界，可用于计算完整目标矩形（不依赖 clipRects）
+  assert.strictEqual(typeof piece.sourceGlyphX0, 'number')
+  assert.strictEqual(typeof piece.sourceGlyphX1, 'number')
+  // clipRects 总宽度 = ownRight - ownLeft（裁切后可见宽度）
+  const clipWidth = piece.clipRects.reduce((sum, r) => sum + r.width, 0)
+  assert.equal(clipWidth, piece.ownRight - piece.ownLeft,
+    'clipRects 总宽度应等于裁切后可见宽度')
+})
+
+test('问题2：retarget insert 通道 interval 携带 clipRects——几何信息完整传递', () => {
+  const ctx = context('甲乙丙丁', 915, [])
+  const all = idsOf(ctx, 0, 4)
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见
+  const prepared = insertRunStartState(run, ctx)
+  // retarget：加冻结窗口 clip=[4,36]，甲丁部分裁切
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 915, null)]
+  const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
+  // insert 通道 interval 应携带 clipRects（可见岛）
+  assert.ok(retargeted[0].intervals !== undefined)
+  for (const iv of retargeted[0].intervals) {
+    // 可见岛（非零宽度）interval 应携带 clipRects
+    if (iv.startClipRight - iv.startClipLeft > 0.01) {
+      assert.ok(iv.clipRects !== undefined, '可见岛 interval 应携带 clipRects')
+      assert.ok(iv.clipRects.length >= 1, 'clipRects 应至少有一段')
+      // clipRects 几何与 startClipLeft/Right 一致
+      const ivClipLeft = Math.min(...iv.clipRects.map(r => r.x))
+      const ivClipRight = Math.max(...iv.clipRects.map(r => r.x + r.width))
+      assert.equal(ivClipLeft, iv.startClipLeft, 'clipRects 左边界应与 startClipLeft 一致')
+      assert.equal(ivClipRight, iv.startClipRight, 'clipRects 右边界应与 startClipRight 一致')
+    }
+  }
+})
+
+test('问题2：字形不可见时 insert 通道建立零宽度 interval——完整字形信息可恢复非零目标矩形', () => {
+  const ctx = context('甲乙丙丁', 916, [])
+  const all = idsOf(ctx, 0, 4)
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见
+  const prepared = insertRunStartState(run, ctx)
+  // retarget：所有字形被冻结窗口吞掉（clip 0..0）→ clipRects 为空
+  const frozen = [frozenWindow(all, 0, 0, 0, 0, 916, null)]
+  const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
+  // insert 通道为零宽度空洞建立 interval（零宽度起点 + 非零目标的基础）
+  assert.ok(retargeted[0].intervals !== undefined)
+  assert.equal(retargeted[0].intervals.length, 1)
+  const iv = retargeted[0].intervals[0]
+  // 零宽度 interval（clipRects 为空/未定义，但 startPositionX 存在——零宽度起点）
+  assert.equal(iv.startClipLeft, iv.startClipRight, '应为零宽度 interval（零宽度起点）')
+  assert.strictEqual(typeof iv.startPositionX, 'number', '零宽度 interval 应有 startPositionX')
+  // 完整字形信息保留：firstIndex/lastIndex/glyphIds 覆盖整段
+  // .ets 层可据此用 sourceRect/glyphX/glyphY/glyphWidth/glyphHeight 计算非零目标矩形
+  assert.deepEqual([iv.firstIndex, iv.lastIndex], [0, 3])
+  assert.equal(iv.glyphIds.length, 4, 'interval 应保留全部 4 个 glyphId——支撑计算非零目标矩形')
+  assert.deepEqual(iv.glyphIds, all, 'glyphIds 应与 run 完全一致')
+})
+
+test('问题2：retained interval 的 clipRects 与 startPositionX 共同支撑完整目标矩形计算', () => {
+  const ctx = context('甲乙丙丁', 917, [])
+  const all = idsOf(ctx, 0, 4)
+  // clip=[4,36] offsetX=0：甲可见[4,10]（左 4vp 裁掉），丁可见[30,36]（右 4vp 裁掉）
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 917, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // retained 每字形一个稳定 interval
+  assert.ok(start[0].intervals !== undefined)
+  assert.equal(start[0].intervals.length, 4)
+  // 甲的 interval（部分裁切）
+  const iv0 = start[0].intervals[0]
+  assert.ok(iv0.clipRects !== undefined, '甲的 interval 应携带 clipRects')
+  // clipRects 反映裁切后可见矩形（甲可见[4,10]→clipRect x=4,width=6）
+  assert.equal(iv0.clipRects[0].x, 4)
+  assert.equal(iv0.clipRects[0].width, 6)
+  // startPositionX = 0（offsetX=0，onScreenLeft=ownLeft 时窗口偏移为 0）
+  assert.equal(iv0.startPositionX, 0)
+  // sourceGlyphX0（完整左边界=0）+ startPositionX - ownRect.x = 0 → 字形绘制原点
+  // 与 clipRects 的 x=4（裁切后）不同——完整字形几何与裁切矩形各自独立可用
+  // .ets 层据 sourceGlyphX0/glyphWidth 计算完整目标矩形，据 clipRects 计算起始裁切
+  const pieces = visibleGlyphPieces(run, withWindow)
+  const sourceGlyphX0 = pieces[0].sourceGlyphX0  // 0
+  const islandStartX = sourceGlyphX0 + iv0.startPositionX - run.ownRect.x  // 0
+  assert.notEqual(islandStartX, iv0.clipRects[0].x,
+    '字形绘制原点(0)应不同于裁切后左边界(4)——完整几何与裁切矩形独立')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
