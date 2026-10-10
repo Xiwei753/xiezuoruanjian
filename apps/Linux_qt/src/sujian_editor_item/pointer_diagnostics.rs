@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use super::frame_submission::{PointerFramePhase, PointerFrameSubmission, SubmittedPointerFrame};
+
 const MOVE_SAMPLE_INTERVAL: Duration = Duration::from_millis(34);
 
 #[derive(Default)]
@@ -287,6 +289,103 @@ impl PointerDiagnostics {
     pub(crate) fn clear_pending_render(&mut self) {
         self.pending_render = None;
     }
+
+    pub(crate) fn next_frame_phase(
+        &self,
+        animation_active: bool,
+    ) -> Option<(u64, PointerFramePhase)> {
+        let pending = self.pending_render?;
+        let phase = if !pending.first_frame_logged {
+            if animation_active {
+                PointerFramePhase::FirstFrame
+            } else {
+                PointerFramePhase::Settled
+            }
+        } else if !animation_active {
+            PointerFramePhase::AnimationComplete
+        } else {
+            return None;
+        };
+        Some((pending.sequence, phase))
+    }
+
+    pub(crate) fn record_caret_submitted(&self, frame: SubmittedPointerFrame) {
+        let fields = pointer_frame_fields(frame);
+        record_event(
+            "editor.pointer.caret_submitted",
+            Some(frame.submission.pointer_sequence),
+            fields,
+        );
+    }
+
+    pub(crate) fn record_frame_end(&mut self, frame: SubmittedPointerFrame) {
+        let Some(pending) = self.pending_render else {
+            return;
+        };
+        if pending.sequence != frame.submission.pointer_sequence {
+            // A newer click superseded this request before its frame-end receipt arrived.
+            // Keep the earlier superseded_before_frame record as the only outcome.
+            return;
+        }
+
+        let phase = frame.submission.phase;
+        let phase_is_valid = match phase {
+            PointerFramePhase::FirstFrame => !pending.first_frame_logged,
+            PointerFramePhase::Settled => !pending.first_frame_logged,
+            PointerFramePhase::AnimationComplete => pending.first_frame_logged,
+        };
+        if !phase_is_valid {
+            return;
+        }
+
+        let mut fields = pointer_frame_fields(frame);
+        fields.insert("frame_end_confirmed".to_string(), json!(true));
+        record_event(
+            "editor.pointer.frame_end",
+            Some(frame.submission.pointer_sequence),
+            fields,
+        );
+
+        match phase {
+            PointerFramePhase::FirstFrame => {
+                self.mark_pending_render_frame_logged();
+            }
+            PointerFramePhase::Settled | PointerFramePhase::AnimationComplete => {
+                self.clear_pending_render();
+            }
+        }
+    }
+}
+
+fn pointer_frame_fields(frame: SubmittedPointerFrame) -> BTreeMap<String, Value> {
+    let submission: PointerFrameSubmission = frame.submission;
+    let mut fields = BTreeMap::new();
+    fields.insert("phase".to_string(), json!(submission.phase.as_str()));
+    fields.insert("render_frame_id".to_string(), json!(frame.render_frame_id));
+    fields.insert(
+        "window_generation".to_string(),
+        json!(frame.window_generation),
+    );
+    fields.insert("caret_present".to_string(), json!(submission.caret_present));
+    fields.insert("drawn_caret_x".to_string(), json!(submission.drawn_caret_x));
+    fields.insert("drawn_caret_y".to_string(), json!(submission.drawn_caret_y));
+    fields.insert(
+        "drawn_viewport_y".to_string(),
+        json!(submission.drawn_viewport_y),
+    );
+    fields.insert("visible".to_string(), json!(submission.visible));
+    fields.insert("opacity".to_string(), json!(submission.opacity));
+    fields.insert("h".to_string(), json!(submission.h));
+    fields.insert("scroll_y".to_string(), json!(submission.scroll_y));
+    fields.insert(
+        "effective_visible".to_string(),
+        json!(submission.effective_visible),
+    );
+    fields.insert(
+        "animation_active".to_string(),
+        json!(submission.animation_active),
+    );
+    fields
 }
 
 fn base_window_fields(

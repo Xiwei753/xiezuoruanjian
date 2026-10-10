@@ -14,6 +14,46 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::LineSnapshotId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PointerFramePhase {
+    FirstFrame,
+    Settled,
+    AnimationComplete,
+}
+
+impl PointerFramePhase {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::FirstFrame => "first_frame",
+            Self::Settled => "settled",
+            Self::AnimationComplete => "animation_complete",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PointerFrameSubmission {
+    pub pointer_sequence: u64,
+    pub phase: PointerFramePhase,
+    pub caret_present: bool,
+    pub drawn_caret_x: Option<f64>,
+    pub drawn_caret_y: Option<f64>,
+    pub drawn_viewport_y: Option<f64>,
+    pub visible: bool,
+    pub opacity: f64,
+    pub h: f64,
+    pub scroll_y: f64,
+    pub effective_visible: bool,
+    pub animation_active: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SubmittedPointerFrame {
+    pub submission: PointerFrameSubmission,
+    pub render_frame_id: u64,
+    pub window_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SubmittedFrameTicket {
     pub document_session: u64,
     pub layout_revision: LayoutRevision,
@@ -40,6 +80,9 @@ struct FrameMailboxState {
     pending_sync: Option<SubmittedVisualFrame>,
     synchronized: Option<SubmittedVisualFrame>,
     submitted: VecDeque<SubmittedVisualFrame>,
+    pending_pointer_sync: Option<SubmittedPointerFrame>,
+    synchronized_pointer: Option<SubmittedPointerFrame>,
+    submitted_pointer: VecDeque<SubmittedPointerFrame>,
 }
 
 pub(crate) struct FrameSubmissionMailbox {
@@ -92,6 +135,22 @@ impl FrameSubmissionMailbox {
         state.pending_sync = Some(staged);
     }
 
+    /// Stage a caret diagnostic for this scene-graph frame. It remains a request until
+    /// the matching `afterFrameEnd` callback moves it to the submitted queue.
+    pub(crate) fn stage_pointer_frame(
+        &self,
+        submission: PointerFrameSubmission,
+    ) -> SubmittedPointerFrame {
+        let mut state = self.lock_state();
+        let submitted = SubmittedPointerFrame {
+            submission,
+            render_frame_id: self.next_frame_id.fetch_add(1, Ordering::Relaxed),
+            window_generation: state.window_generation,
+        };
+        state.pending_pointer_sync = Some(submitted);
+        submitted
+    }
+
     /// Rebind signals to another window and invalidate every ticket from the old one.
     pub(crate) fn reset_window(&self) -> u64 {
         let mut state = self.lock_state();
@@ -99,6 +158,9 @@ impl FrameSubmissionMailbox {
         state.pending_sync = None;
         state.synchronized = None;
         state.submitted.clear();
+        state.pending_pointer_sync = None;
+        state.synchronized_pointer = None;
+        state.submitted_pointer.clear();
         state.window_generation
     }
 
@@ -107,6 +169,9 @@ impl FrameSubmissionMailbox {
         state.pending_sync = None;
         state.synchronized = None;
         state.submitted.clear();
+        state.pending_pointer_sync = None;
+        state.synchronized_pointer = None;
+        state.submitted_pointer.clear();
     }
 
     pub(crate) fn window_generation(&self) -> u64 {
@@ -121,6 +186,7 @@ impl FrameSubmissionMailbox {
             return;
         }
         state.synchronized = state.pending_sync.take();
+        state.synchronized_pointer = state.pending_pointer_sync.take();
     }
 
     /// Confirm the plan captured for this synchronization after Qt submits the frame.
@@ -132,10 +198,17 @@ impl FrameSubmissionMailbox {
         if let Some(frame) = state.synchronized.take() {
             state.submitted.push_back(frame);
         }
+        if let Some(frame) = state.synchronized_pointer.take() {
+            state.submitted_pointer.push_back(frame);
+        }
     }
 
     pub(crate) fn take_submitted_frames(&self) -> Vec<SubmittedVisualFrame> {
         self.lock_state().submitted.drain(..).collect()
+    }
+
+    pub(crate) fn take_submitted_pointer_frames(&self) -> Vec<SubmittedPointerFrame> {
+        self.lock_state().submitted_pointer.drain(..).collect()
     }
 
     /// Snapshot IDs referenced by frames that Qt has not fully acknowledged yet.

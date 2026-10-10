@@ -147,6 +147,8 @@ impl QQuickItem for SujianEditorItem {
         let frame_now = frame_start;
         self.last_frame_now = Some(frame_now);
 
+        self.drain_pointer_frame_submissions();
+
         // Qt invokes this method during synchronization. Consume only acknowledgments that
         // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
         let handoff_promoted = self
@@ -630,18 +632,16 @@ impl SujianEditorItem {
         // 真正的推进是 `tick_animation(frame_now)` —— `update_paint_node` 在
         // 整帧唯一的 frame_now 上每帧调一次，先推进 visual，再
         // `build_cursor_render_state_for_frame()` 读本帧位置。这里只把本帧
-        // 真正画出的位置同步回 visual_x / visual_y / visual_h，不再有
-        // Running/Finished 两种正文事务驱动的进度回写。
+        // RenderPlan 的 caret 位置同步回 visual_x / visual_y / visual_h；这表示
+        // Scene Graph 的计划位置，不代表 Qt 已提交或屏幕已显示。
 
         // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
-        // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去
-        // 的 caret rect)。下一次输入、删除、鼠标点击创建新事务时,
-        // 只允许从这个"上一帧真正画出来的位置" rebase。
+        // visual_y/visual_h 同步成 drawn_caret_rect（本帧计划的 caret rect）。
+        // 下一次输入、删除、鼠标点击创建新事务时,从这个上一帧计划位置 rebase。
         // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
         // 当前屏幕位置。
         // Issue #727 评论 5757225958 问题1: drawn_caret_rect 的 y 是文档坐标，
         // visual_y 现在也统一保存文档坐标，不再减 scroll_y。
-        let _ = scroll_y;
         let drawn_caret_rect = render_plan.drawn_caret_rect;
         if let Some((cx, cy, ch)) = drawn_caret_rect {
             self.cursor_ctrl.visual_x = cx;
@@ -651,67 +651,37 @@ impl SujianEditorItem {
             }
         }
 
-        if let Some(pending) = self.pointer_diagnostics.pending_render() {
-            let animation_active = self.cursor_ctrl.animation.is_some();
-            let phase = if !pending.first_frame_logged {
-                Some(if animation_active {
-                    "first_frame"
-                } else {
-                    "settled"
-                })
-            } else if !animation_active {
-                Some("animation_complete")
-            } else {
-                None
-            };
-            if let Some(phase) = phase {
-                let drawn = drawn_caret_rect.map(|(x, y, _)| (x, y));
-                let mut fields = std::collections::BTreeMap::new();
-                fields.insert("phase".to_string(), serde_json::json!(phase));
-                fields.insert(
-                    "caret_present".to_string(),
-                    serde_json::json!(drawn.is_some()),
-                );
-                fields.insert(
-                    "drawn_caret_x".to_string(),
-                    serde_json::json!(drawn.map(|point| point.0)),
-                );
-                fields.insert(
-                    "drawn_caret_y".to_string(),
-                    serde_json::json!(drawn.map(|point| point.1)),
-                );
-                fields.insert(
-                    "drawn_viewport_y".to_string(),
-                    serde_json::json!(drawn.map(|point| point.1 - scroll_y)),
-                );
-                fields.insert(
-                    "target_x".to_string(),
-                    serde_json::json!(self.cursor_ctrl.target_x),
-                );
-                fields.insert(
-                    "target_y".to_string(),
-                    serde_json::json!(self.cursor_ctrl.target_y),
-                );
-                fields.insert("scroll_y".to_string(), serde_json::json!(scroll_y));
-                fields.insert(
-                    "visible".to_string(),
-                    serde_json::json!(self.cursor_ctrl.visible),
-                );
-                fields.insert(
-                    "animation_active".to_string(),
-                    serde_json::json!(animation_active),
-                );
-                super::pointer_diagnostics::record_event(
-                    "editor.pointer.rendered",
-                    Some(pending.sequence),
-                    fields,
-                );
-                if animation_active {
-                    self.pointer_diagnostics.mark_pending_render_frame_logged();
-                } else {
-                    self.pointer_diagnostics.clear_pending_render();
-                }
-            }
+        let animation_active = self.cursor_ctrl.animation.is_some();
+        if let Some((pointer_sequence, phase)) =
+            self.pointer_diagnostics.next_frame_phase(animation_active)
+        {
+            let caret = render_plan.cursor;
+            let submission = self.frame_submission_mailbox.stage_pointer_frame(
+                frame_submission::PointerFrameSubmission {
+                    pointer_sequence,
+                    phase,
+                    caret_present: drawn_caret_rect.is_some(),
+                    drawn_caret_x: drawn_caret_rect.map(|rect| rect.0),
+                    drawn_caret_y: drawn_caret_rect.map(|rect| rect.1),
+                    drawn_viewport_y: drawn_caret_rect.map(|rect| rect.1 - scroll_y),
+                    visible: caret.visible,
+                    opacity: caret.opacity,
+                    h: caret.h,
+                    scroll_y,
+                    effective_visible: caret.visible && caret.opacity > 0.0 && caret.h > 0.0,
+                    animation_active,
+                },
+            );
+            self.pointer_diagnostics.record_caret_submitted(submission);
+        }
+    }
+
+    pub(crate) fn drain_pointer_frame_submissions(&mut self) {
+        let submitted = self
+            .frame_submission_mailbox
+            .take_submitted_pointer_frames();
+        for frame in submitted {
+            self.pointer_diagnostics.record_frame_end(frame);
         }
     }
 }

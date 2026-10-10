@@ -597,6 +597,9 @@ impl SujianEditorItem {
     /// 旧路线的 caret handover / detach / epoch ownership 全部删除：光标与文字
     /// 动画完全解耦，点击不需要"抢"正文动画的 caret 所有权。
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        // Apply completed Qt frame receipts before deciding whether the previous click
+        // was superseded before its first submitted frame.
+        self.drain_pointer_frame_submissions();
         let pointer_sequence = self.pointer_diagnostics.ensure_active_sequence();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         let old_cursor = self.pipeline.cursor();
@@ -711,7 +714,7 @@ impl SujianEditorItem {
                 serde_json::json!(pointer_sequence),
             );
             super::pointer_diagnostics::record_event(
-                "editor.pointer.rendered",
+                "editor.pointer.caret_superseded",
                 Some(previous.sequence),
                 fields,
             );
