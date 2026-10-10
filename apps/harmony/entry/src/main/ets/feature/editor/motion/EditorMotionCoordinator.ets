@@ -1532,36 +1532,90 @@ export class EditorMotionCoordinator {
           if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
               interval.sourceGlyphRects !== undefined &&
               interval.sourceGlyphRects.length === interval.clipRects.length) {
-            // Issue #879 复核评论6100665268 问题3：用 sourceGlyphRects 精确映射每段裁切矩形
-            // 从冻结布局到目标 glyph 对应边界，不按起始可见宽度比例虚构 targetWidth。
-            // 每段的最终几何来自字形真实源/目标矩形，clipRects 可以逐帧合并但不能填平间隙。
-            for (let si = 0; si < interval.clipRects.length; si++) {
-              const cr = interval.clipRects[si]
-              const sr = interval.sourceGlyphRects[si]
-              // Issue #879 复核评论6101344441 问题4：首帧每块应为 cr.x + frozenOffsetX，
-              // 其中 frozenOffsetX = interval.startPositionX - move.oldRect.x。
-              // 旧实现用 islandStartX + (cr.x - interval.startClipLeft) 把"字形在屏完整
-              // 绘制左边界"当成"首个可见区的左边界"。当字形部分可见时（如源 x=0..10，
-              // 仅 x=4..10 可见），islandStartX=0，interval.startClipLeft=4，cr.x=4，
-              // 所以 startScreenX=0+(4-4)=0，但正确应该是 4。修复后用 cr.x 加冻结窗口
-              // 偏移，cr.x 是冻结帧屏幕坐标，frozenOffsetX 是窗口偏移，结果正确。
-              const frozenOffsetX = interval.startPositionX - move.oldRect.x
-              const frozenOffsetY = interval.startPositionY - move.oldRect.y
-              const startScreenX = cr.x + frozenOffsetX
-              const startWidth = Math.max(0, cr.width)
-              const startScreenY = cr.y + frozenOffsetY
-              const startHeight = Math.max(0, cr.height)
-              // 目标裁切矩形（屏幕坐标）：sourceGlyphRect 映射到目标布局位置，
-              // sourceGlyphRect 相对于岛旧左边界的偏移 + 岛目标屏幕位置
-              const targetScreenX = islandNewX + (sr.x - islandOldLeft)
-              const targetWidth = Math.max(0, sr.width)
-              const targetScreenY = islandNewY
-              const targetHeight = Math.max(0, sr.height)
-              // 逐帧插值：p=0 时 frameRect = startRect，p=1 时 frameRect = targetRect
-              const frameX = startScreenX + (targetScreenX - startScreenX) * p
-              const frameWidth = startWidth + (targetWidth - startWidth) * p
-              const frameY = startScreenY + (targetScreenY - startScreenY) * p
-              const frameHeight = startHeight + (targetHeight - startHeight) * p
+            // Issue #879 复核评论6101908111 问题2：每块可见碎片不应各自独立插值到同一个
+            // sourceGlyphRect（fullRect），否则 p=1 时多块重叠。采用 carry insert 同款逻辑：
+            // 已可见碎片保持自身位置随平移移动（宽度不变），间隙碎片从零宽扩展到间隙宽度。
+            // 所有碎片的位置随 islandStartX→islandNewX 平移。
+            //
+            // retained 通道的 interval 通常只覆盖一个字形（retainedMoveStartState 为每个
+            // glyph 创建单字形 interval），sourceGlyphRects 中所有元素都相同。取第一个
+            // sourceGlyphRect 作为整个字形的完整 rect。
+            const sr = interval.sourceGlyphRects[0]
+            const frozenOffsetX = interval.startPositionX - move.oldRect.x
+            const frozenOffsetY = interval.startPositionY - move.oldRect.y
+            // 字形在目标布局中的完整屏幕位置
+            const fullTargetX = islandNewX + (sr.x - islandOldLeft)
+            const fullTargetY = islandNewY
+            const fullTargetHeight = Math.max(0, sr.height)
+            // 字形在起始布局中的完整屏幕左边界（用于计算间隙碎片的起始位置）
+            const fullStartLeft = sr.x + frozenOffsetX
+
+            const startRects: ClipRect[] = []
+            const targetRects: ClipRect[] = []
+
+            // 检查左边界间隙（字形完整左边界到第一个可见碎片之间）
+            if (interval.clipRects[0].x > sr.x + 0.01) {
+              startRects.push({
+                x: fullStartLeft, y: interval.clipRects[0].y + frozenOffsetY,
+                width: 0, height: Math.max(0, interval.clipRects[0].height)
+              })
+              targetRects.push({
+                x: fullTargetX, y: fullTargetY,
+                width: interval.clipRects[0].x - sr.x, height: fullTargetHeight
+              })
+            }
+
+            for (let ci = 0; ci < interval.clipRects.length; ci++) {
+              const cr = interval.clipRects[ci]
+              // 已可见碎片：起始和目标都是自身位置（随平移动画移动），宽度不变
+              startRects.push({
+                x: cr.x + frozenOffsetX, y: cr.y + frozenOffsetY,
+                width: Math.max(0, cr.width), height: Math.max(0, cr.height)
+              })
+              targetRects.push({
+                x: islandNewX + (cr.x - islandOldLeft), y: fullTargetY,
+                width: Math.max(0, cr.width), height: fullTargetHeight
+              })
+              // 检查碎片之间的间隙
+              if (ci < interval.clipRects.length - 1) {
+                const nextCr = interval.clipRects[ci + 1]
+                const gapLeft = cr.x + cr.width
+                const gapRight = nextCr.x
+                if (gapRight > gapLeft + 0.01) {
+                  startRects.push({
+                    x: gapLeft + frozenOffsetX, y: cr.y + frozenOffsetY,
+                    width: 0, height: Math.max(0, cr.height)
+                  })
+                  targetRects.push({
+                    x: islandNewX + (gapLeft - islandOldLeft), y: fullTargetY,
+                    width: gapRight - gapLeft, height: fullTargetHeight
+                  })
+                }
+              }
+            }
+
+            // 检查右边界间隙（最后一个可见碎片到字形完整右边界之间）
+            const lastClip = interval.clipRects[interval.clipRects.length - 1]
+            if (lastClip.x + lastClip.width < sr.x + sr.width - 0.01) {
+              startRects.push({
+                x: (lastClip.x + lastClip.width) + frozenOffsetX,
+                y: lastClip.y + frozenOffsetY,
+                width: 0, height: Math.max(0, lastClip.height)
+              })
+              targetRects.push({
+                x: islandNewX + ((lastClip.x + lastClip.width) - islandOldLeft),
+                y: fullTargetY,
+                width: (sr.x + sr.width) - (lastClip.x + lastClip.width),
+                height: fullTargetHeight
+              })
+            }
+
+            // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+            for (let si = 0; si < startRects.length; si++) {
+              const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
+              const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
+              const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
+              const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
               islandClipRects.push({
                 x: frameX,
                 y: frameY,

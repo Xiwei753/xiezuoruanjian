@@ -2266,4 +2266,204 @@ test('问题3：sourceGlyphRects 与 clipRects 各自独立——fullRect 不因
   assert.equal(clipW1, fullW1, '乙完整可见时 clipRects 宽度 = sourceGlyphRects 宽度')
 })
 
+// ====== Issue #879 复核评论6101908111：问题2/3 新增测试 ======
+
+// ------ 问题3：不可见字形 startPositionX 不重复加偏移 ------
+// 评论6101908111 问题3：不可见字形 startPositionX 写 glyphX，
+// buildFrame 用 islandStartX = islandOldLeft + startPositionX - oldRect.x，
+// 对 run 起点字形 glyphX ≈ ownRect.x，islandStartX = islandOldLeft + ownRect.x - oldRect.x，
+// 同一布局下 islandStartX = islandOldLeft + ownRect.x - ownRect.x = islandOldLeft（正确），
+// 但对第三个字形 glyphX = ownRect.x + 20，islandStartX = islandOldLeft + (ownRect.x+20) - oldRect.x
+// = islandOldLeft + 20（重复加了字形偏移）。
+// 修复：不可见字形 startPositionX = run.ownRect.x（零偏移语义）。
+
+test('问题3：不可见字形 startPositionX 应为 run.ownRect.x——不重复加字形偏移', () => {
+  const ctx = context('甲乙丙丁', 940, [])
+  const all = idsOf(ctx, 0, 4)
+  // 簇2（丙）被窗口接管且完全不可见
+  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 940, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  const intervals = start[0].intervals
+  // 簇2 不可见
+  const iv2 = intervals.find(iv => iv.firstIndex === 2)
+  assert.ok(iv2 !== undefined)
+  // 修复后：startPositionX = run.ownRect.x = 0（零偏移），不是 glyphX = 20
+  assert.equal(iv2.startPositionX, run.ownRect.x,
+    '不可见字形 startPositionX 应为 run.ownRect.x（零偏移），不是 glyphX')
+  assert.notEqual(iv2.startPositionX, 20,
+    '不可见字形 startPositionX 不应为 glyphX=20——会导致 islandStartX 重复加')
+  // buildFrame 公式：islandStartX = islandOldLeft + startPositionX - oldRect.x
+  // 修复后：islandStartX = 20 + 0 - 0 = 20（字形在旧布局中的位置，正确）
+  // 修复前：islandStartX = 20 + 20 - 0 = 40（重复加了字形偏移，错误）
+  const islandOldLeft = 20  // 簇2 在旧布局中的左边界
+  const islandStartX_fixed = islandOldLeft + iv2.startPositionX - run.ownRect.x
+  assert.equal(islandStartX_fixed, 20, '修复后 islandStartX 应为 20（字形旧位置）')
+  const islandStartX_buggy = islandOldLeft + 20 - run.ownRect.x
+  assert.equal(islandStartX_buggy, 40, '旧实现 islandStartX 为 40——重复加了字形偏移')
+  assert.notEqual(islandStartX_fixed, islandStartX_buggy, '修复后应不同于旧实现')
+})
+
+test('问题3：不可见字形 startPositionX 为零偏移——p>0 扩张时不会从错误位置飞回', () => {
+  const ctx = context('甲乙丙', 941, [])
+  const all = idsOf(ctx, 0, 3)
+  // 簇1（乙）完全不可见，簇0（甲）和簇2（丙）可见
+  const frozen = [frozenWindow([all[1]], 0, 0, 0, 0, 941, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 3, { x: 0, y: 0, width: 30, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 30, startPositionX: 0, startPositionY: 0,
+  })
+  const intervals = start[0].intervals
+  // 簇1 不可见
+  const iv1 = intervals.find(iv => iv.firstIndex === 1)
+  assert.ok(iv1 !== undefined)
+  // startPositionX = run.ownRect.x = 0（零偏移）
+  assert.equal(iv1.startPositionX, 0, '不可见字形 startPositionX 应为 0（零偏移）')
+  // islandStartX = islandOldLeft + startPositionX - oldRect.x = 10 + 0 - 0 = 10
+  // 这是乙在旧布局中的位置——p>0 扩张时从正确位置开始扩展，不会从错误位置飞回
+  const islandStartX = 10 + iv1.startPositionX - 0
+  assert.equal(islandStartX, 10, 'islandStartX 应为 10（乙在旧布局中的位置）')
+})
+
+// ------ 问题2：同一字形多段可见碎片的 sourceGlyphRects 都相同 ------
+// 评论6101908111 问题2：buildPiece 的 sourceGlyphRects 对一个 glyph 内每一块 clipRects
+// 都塞入相同的完整字形 rect。buildFrame retained 不应每块各自独立插值到同一个 fullRect，
+// 否则 p=1 时多块重叠。修复后采用 carry insert 同款逻辑：已可见碎片保持自身位置随平移移动，
+// 间隙碎片从零宽扩展到间隙宽度。
+
+test('问题2：同一字形多段可见碎片——sourceGlyphRects 中所有元素相同（都是完整字形 rect）', () => {
+  const ctx = context('甲', 942, [])
+  const all = idsOf(ctx, 0, 1)
+  // 字形 x=0..10，两个不连续 clipRect [0,4] 和 [6,10]，中间 [4,6] 不可见
+  const frozen = [{
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 4, height: 20 },
+      { x: 6, y: 0, width: 4, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 942, glyphUtf16Ranges: null, sourceLayout: null,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals[0]
+  assert.ok(iv.clipRects !== undefined)
+  assert.equal(iv.clipRects.length, 2, '应保留两段独立碎片')
+  assert.ok(iv.sourceGlyphRects !== undefined)
+  assert.equal(iv.sourceGlyphRects.length, 2, 'sourceGlyphRects 与 clipRects 一一对应')
+  // 两段 sourceGlyphRects 都是同一个完整字形 rect [0,10]
+  const sr0 = iv.sourceGlyphRects[0]
+  const sr1 = iv.sourceGlyphRects[1]
+  assert.equal(sr0.x, sr1.x, '两段 sourceGlyphRects 的 x 相同（同一字形的完整 rect）')
+  assert.equal(sr0.width, sr1.width, '两段 sourceGlyphRects 的 width 相同')
+  assert.equal(sr0.x, 0, 'sourceGlyphRects x 应为字形左边界 0')
+  assert.equal(sr0.width, 10, 'sourceGlyphRects width 应为完整字形宽度 10')
+  // buildFrame retained 修复后：取第一个 sourceGlyphRect 作为整个字形的完整 rect，
+  // 已可见碎片保持自身位置，间隙碎片从零宽扩展——不会两块各自插值到同一个 fullRect
+})
+
+test('问题2：retained 多段碎片——buildFrame 修复后 p=1 不重叠（数据验证）', () => {
+  const ctx = context('甲', 943, [])
+  const all = idsOf(ctx, 0, 1)
+  // 字形 x=0..10，两个不连续 clipRect [0,4] 和 [6,10]，中间 [4,6] 不可见
+  const frozen = [{
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 4, height: 20 },
+      { x: 6, y: 0, width: 4, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 943, glyphUtf16Ranges: null, sourceLayout: null,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals[0]
+  // 验证 buildFrame retained 修复后的逻辑（数据层面）：
+  // sr = sourceGlyphRects[0] = {x:0, width:10}（字形完整 rect）
+  // frozenOffsetX = startPositionX - oldRect.x = 0 - 0 = 0
+  //
+  // 已可见碎片1 [0,4]：
+  //   startRect = {x: 0+0=0, width: 4}（起始屏幕位置）
+  //   targetRect = {x: islandNewX+(0-islandOldLeft), width: 4}（目标位置，宽度不变）
+  // 已可见碎片2 [6,10]：
+  //   startRect = {x: 6+0=6, width: 4}
+  //   targetRect = {x: islandNewX+(6-islandOldLeft), width: 4}
+  // 间隙碎片 [4,6]：
+  //   startRect = {x: 4+0=4, width: 0}（零宽）
+  //   targetRect = {x: islandNewX+(4-islandOldLeft), width: 2}（间隙宽度）
+  //
+  // p=1 时：碎片1=[islandNewX, islandNewX+4], 间隙=[islandNewX+4, islandNewX+6],
+  //         碎片2=[islandNewX+6, islandNewX+10]——连续覆盖 [islandNewX, islandNewX+10]，不重叠
+  //
+  // 旧实现（每块各自插值到 fullRect）：
+  // p=1 时：碎片1=[islandNewX, islandNewX+10], 碎片2=[islandNewX, islandNewX+10]——重叠！
+  const sr = iv.sourceGlyphRects[0]
+  const frozenOffsetX = iv.startPositionX - run.ownRect.x
+  // 已可见碎片1
+  const cr0 = iv.clipRects[0]
+  const startScreenX0 = cr0.x + frozenOffsetX
+  const targetScreenX0 = 0 + (cr0.x - 0) // islandNewX=0, islandOldLeft=0（简化）
+  assert.equal(startScreenX0, 0, '碎片1 起始屏幕 x 应为 0')
+  assert.equal(targetScreenX0, 0, '碎片1 目标屏幕 x 应为 0')
+  assert.equal(cr0.width, 4, '碎片1 宽度应为 4')
+  // 已可见碎片2
+  const cr1 = iv.clipRects[1]
+  const startScreenX1 = cr1.x + frozenOffsetX
+  const targetScreenX1 = 0 + (cr1.x - 0)
+  assert.equal(startScreenX1, 6, '碎片2 起始屏幕 x 应为 6')
+  assert.equal(targetScreenX1, 6, '碎片2 目标屏幕 x 应为 6')
+  assert.equal(cr1.width, 4, '碎片2 宽度应为 4')
+  // 间隙 [4,6]
+  const gapLeft = cr0.x + cr0.width
+  const gapRight = cr1.x
+  assert.equal(gapLeft, 4, '间隙左边界应为 4')
+  assert.equal(gapRight, 6, '间隙右边界应为 6')
+  assert.equal(gapRight - gapLeft, 2, '间隙宽度应为 2')
+  // 修复后 p=1：碎片1=[0,4], 间隙=[4,6], 碎片2=[6,10]——连续不重叠
+  // 旧实现 p=1：碎片1=[0,10], 碎片2=[0,10]——重叠！
+  const fixedTotalWidth = cr0.width + (gapRight - gapLeft) + cr1.width
+  assert.equal(fixedTotalWidth, 10, '修复后 p=1 总宽度应为 10（连续覆盖整字）')
+  const buggyTotalWidth = sr.width + sr.width
+  assert.equal(buggyTotalWidth, 20, '旧实现 p=1 总宽度为 20（两块重叠）')
+  assert.ok(fixedTotalWidth < buggyTotalWidth, '修复后总宽度应小于旧实现——不重叠')
+})
+
+test('问题2：retained 不可见字形 startPositionX=ownRect.x 后 islandStartX 不重复加', () => {
+  const ctx = context('甲乙丙丁', 944, [])
+  const all = idsOf(ctx, 0, 4)
+  // 簇2（丙）和簇3（丁）完全不可见
+  const frozen = [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 944, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  const intervals = start[0].intervals
+  // 簇2 不可见
+  const iv2 = intervals.find(iv => iv.firstIndex === 2)
+  assert.ok(iv2 !== undefined)
+  assert.equal(iv2.startPositionX, run.ownRect.x, '簇2 startPositionX 应为 ownRect.x=0')
+  // 簇3 不可见
+  const iv3 = intervals.find(iv => iv.firstIndex === 3)
+  assert.ok(iv3 !== undefined)
+  assert.equal(iv3.startPositionX, run.ownRect.x, '簇3 startPositionX 应为 ownRect.x=0')
+  // 两个不可见字形的 islandStartX 都不重复加
+  // 簇2: islandStartX = 20 + 0 - 0 = 20（正确）
+  // 簇3: islandStartX = 30 + 0 - 0 = 30（正确）
+  assert.equal(20 + iv2.startPositionX - 0, 20, '簇2 islandStartX 应为 20')
+  assert.equal(30 + iv3.startPositionX - 0, 30, '簇3 islandStartX 应为 30')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

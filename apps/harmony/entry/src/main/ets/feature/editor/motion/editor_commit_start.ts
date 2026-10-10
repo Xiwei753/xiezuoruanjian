@@ -990,13 +990,20 @@ export function retainedMoveStartState(
         ? xAtOffset(run.ownLayout, boundaries[i + 1], run.ownRect.x + run.ownRect.width,
           CaretAffinity.Upstream) - glyphX
         : 0
+      // Issue #879 复核评论6101908111 问题3：不可见字形的 startPositionX 必须是 run.ownRect.x
+      //（零偏移语义），而不是 glyphX（字形自己的位置）。
+      // buildFrame 用 islandStartX = islandOldLeft + startPositionX - move.oldRect.x，
+      // 若 startPositionX = glyphX = islandOldLeft（同一布局下），则 islandStartX 被重复加。
+      // 正确语义：不可见字形没有窗口偏移，startPositionX = run.ownRect.x 表示 Text 绘制原点
+      // 在 run 左边界（零偏移），islandStartX = islandOldLeft + ownRect.x - oldRect.x，
+      // 同一布局下 islandStartX = islandOldLeft（字形在旧布局中的位置），不重复加。
       intervals.push({
         firstIndex: i,
         lastIndex: i,
         glyphIds: [run.glyphIds[i]],
         startClipLeft: glyphX,
         startClipRight: glyphX,
-        startPositionX: glyphX,
+        startPositionX: run.ownRect.x,
         startPositionY: run.ownRect.y,
         utf16Start: boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
         utf16End: boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End,
