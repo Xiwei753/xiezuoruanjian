@@ -163,6 +163,7 @@ impl SujianEditorItem {
                     self.current_smooth_cursor_enabled,
                     self.current_coordinated_animation_enabled,
                 ),
+                coordinated_animation_enabled: self.current_coordinated_animation_enabled,
                 movement_source: self.cursor_ctrl.last_move_source,
                 driver_revision,
                 visual_position_valid: self.cursor_ctrl.visibility_state

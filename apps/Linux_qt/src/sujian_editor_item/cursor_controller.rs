@@ -108,6 +108,7 @@ pub struct CursorController {
     pub motion_source: CursorMoveSource,
     pub motion_layout_revision: Option<LayoutRevision>,
     pub motion_document_session: u64,
+    pub motion_transition_id: u64,
     coordinated_caret_progress_limit: Option<CoordinatedCaretProgressLimit>,
     pub force_snap_next: bool,
     pub blink_visible: bool,
@@ -156,6 +157,7 @@ impl CursorController {
             motion_source: CursorMoveSource::LayoutChange,
             motion_layout_revision: None,
             motion_document_session: 0,
+            motion_transition_id: 0,
             coordinated_caret_progress_limit: None,
             force_snap_next: false,
             blink_visible: true,
@@ -233,6 +235,10 @@ impl CursorController {
         let old_blink_visible = self.blink_visible;
         let old_visual_position_valid =
             self.visibility_state != CursorVisibilityState::Uninitialized;
+        let driver_changed = self.motion_source != plan.movement_source
+            || self.motion_layout_revision != plan.driver_revision
+            || self.motion_document_session != plan.driver_session
+            || self.motion_transition_id != plan.driver_transition_id;
 
         // Issue #709 评论 issue-body-709: 明确的"刚启动或 rebase 一次光标 Tween"信号。
         // 旧实现只在 pos_changed == true 时设置 blink_visible/dirty，但新建 Tween 第一帧
@@ -247,6 +253,7 @@ impl CursorController {
         self.motion_source = plan.movement_source;
         self.motion_layout_revision = plan.driver_revision;
         self.motion_document_session = plan.driver_session;
+        self.motion_transition_id = plan.driver_transition_id;
         self.visual_h = plan.cursor_h;
         self.ime_cursor_rect_h = plan.cursor_h;
         self.visible = plan.should_be_visible;
@@ -354,7 +361,7 @@ impl CursorController {
                     let target_changed = (anim.target_x - target_x).abs() > 0.01
                         || (anim.target_y - target_y).abs() > 0.01;
 
-                    if target_changed {
+                    if target_changed || driver_changed {
                         // 从当前视觉位置 rebase，不落回 old_rect。
                         // Retarget from CursorController's current visual position,
                         // never from the previous animation's stale target.
@@ -497,6 +504,7 @@ impl CursorController {
             .coordinated_caret_progress_limit
             .filter(|limit| {
                 self.motion_source == CursorMoveSource::TextTransaction
+                    && self.motion_transition_id == limit.transition_id
                     && self.motion_document_session == limit.document_session
                     && self.motion_layout_revision == Some(limit.layout_revision)
                     && (self.motion_target_x - limit.target_x).abs() <= 0.5
@@ -523,7 +531,11 @@ impl CursorController {
                     .as_secs_f64()
                     / duration.as_secs_f64()
             };
-            raw_progress_limit.map_or(elapsed_progress, |limit| elapsed_progress.min(limit))
+            let limited_progress =
+                raw_progress_limit.map_or(elapsed_progress, |limit| elapsed_progress.min(limit));
+            // apply_plan rebases a changed driver to a fresh Tween first. Within one Tween
+            // lifetime, a newly observed ceiling may hold progress but must never rewind it.
+            limited_progress.max(anim.progress)
         };
         self.update_animation_progress(progress)
     }

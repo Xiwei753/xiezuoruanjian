@@ -16,6 +16,7 @@ use super::layout_revision::LayoutRevision;
 pub(crate) struct SubmittedFrameTicket {
     pub document_session: u64,
     pub layout_revision: LayoutRevision,
+    pub transition_id: u64,
     pub ownership_revision: u64,
     pub render_frame_id: u64,
     pub window_generation: u64,
@@ -61,6 +62,7 @@ impl FrameSubmissionMailbox {
         &self,
         document_session: u64,
         layout_revision: LayoutRevision,
+        transition_id: u64,
         ownership_revision: u64,
         visual_frame: VisualFrame,
         terminal_motion_indices: Vec<usize>,
@@ -74,6 +76,7 @@ impl FrameSubmissionMailbox {
             ticket: SubmittedFrameTicket {
                 document_session,
                 layout_revision,
+                transition_id,
                 ownership_revision,
                 render_frame_id: self.next_frame_id.fetch_add(1, Ordering::Relaxed),
                 window_generation: state.window_generation,

@@ -69,6 +69,7 @@ pub(crate) struct CursorMoveInputs {
     pub is_preediting: bool,
     pub smooth_cursor_enabled: bool,
     pub cursor_animation_enabled: bool,
+    pub coordinated_animation_enabled: bool,
     pub movement_source: CursorMoveSource,
     pub driver_revision: Option<LayoutRevision>,
     pub visual_position_valid: bool,
@@ -300,6 +301,7 @@ impl LinuxEditorAnimationCoordinator {
             self.submission_mailbox.stage_rendered_frame(
                 self.document_session,
                 layout_revision,
+                plan.transition_id,
                 committed_revision,
                 committed_frame,
                 if keeps_animation {
@@ -340,16 +342,16 @@ impl LinuxEditorAnimationCoordinator {
             return;
         }
 
-        let same_active_revision = self
-            .visual_edit_state
-            .as_ref()
-            .is_some_and(|state| state.target_snapshot.revision == ticket.layout_revision);
+        let same_active_transition = self.visual_edit_state.as_ref().is_some_and(|state| {
+            state.transition_id == ticket.transition_id
+                && state.target_snapshot.revision == ticket.layout_revision
+        });
         self.last_submitted_visual_frame = Some(SubmittedVisualFrameSource {
             ticket,
             visual_frame: frame.visual_frame,
         });
 
-        if same_active_revision {
+        if same_active_transition {
             if let Some(state) = self.visual_edit_state.as_mut() {
                 state.commit_submitted_visible_widths(&frame.visible_width_updates);
                 state.commit_terminal_motions(&frame.terminal_motion_indices);
@@ -361,8 +363,8 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
         }
-        if frame.handoff_pending && (same_active_revision || self.visual_edit_state.is_none()) {
-            if same_active_revision {
+        if frame.handoff_pending && (same_active_transition || self.visual_edit_state.is_none()) {
+            if same_active_transition {
                 self.visual_edit_state = None;
             }
             self.handoff_pending = false;
@@ -640,6 +642,15 @@ impl LinuxEditorAnimationCoordinator {
         } else {
             CursorTransition::Snap
         };
+        let driver_transition_id = if inputs.coordinated_animation_enabled
+            && inputs.movement_source == CursorMoveSource::TextTransaction
+        {
+            self.visual_edit_state
+                .as_ref()
+                .map_or(0, |state| state.transition_id)
+        } else {
+            0
+        };
 
         CursorAnimationPlan {
             should_be_visible,
@@ -647,6 +658,7 @@ impl LinuxEditorAnimationCoordinator {
             movement_source: inputs.movement_source,
             driver_revision: inputs.driver_revision,
             driver_session: self.document_session,
+            driver_transition_id,
             cursor_x: new_rect.x,
             cursor_y: new_rect.top,
             cursor_h: inputs.cursor_h,
