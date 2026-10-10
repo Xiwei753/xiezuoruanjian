@@ -38,6 +38,8 @@ import { CaretRect, LineLayout } from '../render/editor_render_geometry'
 import { RectShape, PathShape } from '@ohos.arkui.shape'
 import { EditorMotionCoordinator } from './EditorMotionCoordinator'
 import { MotionSourceEntry } from './EditorMotionSourcePool'
+// Issue #879：重新导出 ClipRect，供 SujianEditor 从 EditorMotionLayer 统一导入运动层类型。
+export { ClipRect } from './EditorVisualFrame'
 
 /**
  * 运动层绘制工具。
@@ -410,6 +412,8 @@ export interface MotionWindowSource {
   source: MotionSourceEntry
   /** 裁切矩形列表（多岛并集——一个固定 piece 物理 Text 可能覆盖多个不连续可见岛） */
   clipRects: ClipRect[]
+  /** clipRects 的并集包围盒——预计算以避免在 @Builder 中用 const 声明（ArkTS 限制） */
+  clipBBox: ClipRect
   /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
   textController: TextController
   /** 是否已挂载（onAppear 已触发）——从窗口级状态读取，而非从源池 source 读取 */
@@ -489,7 +493,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
         (item: MotionWindowSource, index: number) => {
           // Issue #879 本轮复核评论（高优先级）：同一物理 Text 可能覆盖多个不连续可见岛，
           // 用并集包围盒定位外层 Stack，PathShape 用相对坐标表达各岛。
-          const clipBBox = EditorMotionLayer.clipRectsBBox(item.clipRects)
+          // clipBBox 由构建 MotionWindowSource 时预计算（ArkTS @Builder 中不能用 const）。
           Stack() {
             Text(undefined, { controller: item.textController })
               .width(params.textWidth)
