@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece,
-  deletedRunStartState, insertRunStartState, retainedMoveStartState
+  retargetRunStarts
 } from './editor_commit_start'
 
 /**
@@ -66,8 +66,6 @@ export interface PreparedCandidate {
   readonly startFrame: EditorVisualFrame
   /** 候选提交状态——commitCandidate 一次性安装（内部数据，UI 不要读） */
   readonly state: MotionCommittedState
-  /** 问题3：稳定的物理 key 集合——retargetCandidate 保留这些 key，只更新几何采样 */
-  readonly stableWindowKeys?: string[]
 }
 
 /**
@@ -369,18 +367,10 @@ export class EditorMotionCoordinator {
       contentWidth, policy, displayedFrame, firstCaretRect,
       sessionId
     )
-    // 问题3：提取稳定的物理 key 集合（基于 plan 的 runs，不是基于可见性）
-    const stableWindowKeys: string[] = []
-    if (state.frame.isAnimating) {
-      for (let i = 0; i < state.frame.motionGlyphWindows.length; i++) {
-        stableWindowKeys.push(state.frame.motionGlyphWindows[i].renderNodeKey)
-      }
-    }
     return {
       plan: state.plan,
       startFrame: state.frame,
-      state: state,
-      stableWindowKeys: stableWindowKeys
+      state: state
     }
   }
 
@@ -400,27 +390,46 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 复核评论6085414957 问题2：预计算 commitCandidate 后的运动窗口 renderNodeKey 集合。
+   * Issue #879 复核评论6088787701 问题4：按**稳定物理节点规划**列出候选提交后将占用的
+   * renderNodeKey 集合。
    *
-   * executeDisplaySwitch 在提交前用它检查最终将接管显示的窗口是否都已 layoutReady。
-   * retargetCandidate 可能重新拆分 piece（insertRunStartState 等按字形可见性重新拆），
-   * 产生新的 windowInstanceId/renderNodeKey，这些新 key 对应的窗口需要先参与布局
-   * （作为不可见候选窗口）才能 ready，否则提交后跳变。
+   * 身份策略与真正采样帧的 buildFrame 完全一致——同一个 run 的同一个 piece 在这里和
+   * buildFrame 里调用同一个 windowIdAllocator.allocate(piece.glyphIds)，因此返回的 key
+   * 就是提交后真实窗口的 key（无动画时为空数组）。
    *
-   * commitCandidate 返回的帧就是 prepared.startFrame（applyCommittedState 安装 prepared.state.frame），
-   * 后续 advance(progress) 用同一 plan + 同一 allocator 采样，renderNodeKey 不变
-   * （allocator 按 glyphIds 复用 instanceId）。因此直接从 startFrame 提取即可。
+   * 关键：key 只来自 plan 的 run/piece 结构与 sourceRevision，**不依赖任何一帧的可见性**。
+   * retargetCandidate 只重算 piece 的起始 clip/position，不再重新拆分 piece，
+   * 所以「staging 阶段检查的 key 集合」就是「提交后真实窗口的 key 集合」，
+   * 全部节点可以在 cancel 旧 animator 之前挂载并完成布局。
    *
    * @param prepared prepareCandidate/retargetCandidate 返回的候选
-   * @returns 最终窗口的 renderNodeKey 数组（无动画时为空）
+   * @returns 提交后窗口的 renderNodeKey 数组（无动画时为空）
    */
-  peekCommittedWindowKeys(prepared: PreparedCandidate): string[] {
+  plannedWindowKeys(prepared: PreparedCandidate): string[] {
+    const plan = prepared.plan
     const keys: string[] = []
-    const frame = prepared.startFrame
-    if (frame.isAnimating) {
-      for (let i = 0; i < frame.motionGlyphWindows.length; i++) {
-        keys.push(frame.motionGlyphWindows[i].renderNodeKey)
+    const newRevision = prepared.state.newSnapshot?.revision ?? 0
+    const oldRevision = prepared.state.oldSnapshot?.revision ?? 0
+    for (const run of plan.insertRuns) {
+      for (const piece of run.pieces) {
+        keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
       }
+    }
+    for (const run of plan.deletedRuns) {
+      for (const piece of run.pieces) {
+        keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
+      }
+    }
+    for (const move of plan.retainedMoves) {
+      for (const piece of move.pieces) {
+        keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
+      }
+    }
+    for (const ghost of plan.carryOverGhostRuns) {
+      keys.push(`${ghost.sourceKind}-${ghost.sourceRevision}-${this.windowIdAllocator.allocate(ghost.glyphIds)}`)
+    }
+    for (const motionRun of plan.carryOverMotionRuns) {
+      keys.push(`${motionRun.sourceKind}-${motionRun.sourceRevision}-${this.windowIdAllocator.allocate(motionRun.glyphIds)}`)
     }
     return keys
   }
@@ -457,8 +466,6 @@ export class EditorMotionCoordinator {
       // 没有 animator 会推进它，主 Text 会停在半裁切状态。
       return prepared
     }
-    // 问题3：保留 prepareCandidate 时确定的稳定物理 key 集合
-    const stableWindowKeys = prepared.stableWindowKeys ?? EditorMotionCoordinator.extractWindowKeys(prepared.startFrame)
 
     // Issue #879 复核评论6075662695问题3：起始状态改为**按字形重算**——
     // 由 editor_commit_start 逐个 glyphId 判断它此刻在屏可见不可见、在哪里，
@@ -474,22 +481,27 @@ export class EditorMotionCoordinator {
 
     const newInsertRuns: InsertRun[] = []
     for (const run of prepared.plan.insertRuns) {
+      // Issue #879 复核评论6088787701 问题4：
+      // piece 分区（firstIndex/lastIndex/glyphIds）沿用 prepare 时的结果，只重算起始 clip。
+      // 不再用提交瞬间的可见性重新拆分 piece——那会让同一字形换出不同 renderNodeKey，
+      // 交棒前刚准备完的物理节点作废（旧 animator 已 cancel，新节点未布局）。
       const pieces: RunStartPiece[] = context === null
-        ? [{
-            firstIndex: 0,
-            lastIndex: run.glyphIds.length - 1,
-            startClipLeft: run.startClipLeft,
-            startClipRight: run.startClipRight,
-            startPositionX: run.rect.x,
-            startPositionY: run.rect.y,
-            glyphIds: [...run.glyphIds]
-          }]
-        : insertRunStartState(
+        ? run.pieces
+        : retargetRunStarts(
             EditorMotionCoordinator.runGeometry(
               run.glyphIds, prepared.state.newSnapshot.text, run.utf16Start, run.utf16End, run.rect,
               prepared.state.newLayout
             ),
-            context
+            run.pieces,
+            context,
+            'insert',
+            run.rect.x,
+            {
+              startClipLeft: run.startClipLeft,
+              startClipRight: run.startClipRight,
+              startPositionX: run.rect.x,
+              startPositionY: run.rect.y
+            }
           )
       // Issue #879 复核评论6078682695 问题1：保留兼容的 startClipLeft/Right（取 pieces 的并集），
       // 同时把 pieces 传给 run，buildFrame 按 piece 分别采样。
@@ -516,22 +528,22 @@ export class EditorMotionCoordinator {
         ? latestDisplayedFrame.caretX
         : run.rect.x
       const pieces: RunStartPiece[] = context === null
-        ? [{
-            firstIndex: 0,
-            lastIndex: run.glyphIds.length - 1,
-            startClipLeft: run.startClipLeft,
-            startClipRight: run.startClipRight,
-            startPositionX: run.rect.x,
-            startPositionY: run.rect.y,
-            glyphIds: [...run.glyphIds]
-          }]
-        : deletedRunStartState(
+        ? run.pieces
+        : retargetRunStarts(
             EditorMotionCoordinator.runGeometry(
               run.glyphIds, prepared.state.oldSnapshot.text, run.utf16Start, run.utf16End, run.rect,
               prepared.state.oldLayout
             ),
+            run.pieces,
             context,
-            collapseX
+            'deleted',
+            collapseX,
+            {
+              startClipLeft: collapseX,
+              startClipRight: collapseX,
+              startPositionX: run.rect.x,
+              startPositionY: run.rect.y
+            }
           )
       const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : run.startClipLeft
       const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : run.startClipRight
@@ -554,21 +566,16 @@ export class EditorMotionCoordinator {
       // 起点按字形交集校正：让第一个仍可见的字形停在它此刻在屏的位置上。
       // 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 保留 run 自己的位置。
       const pieces: RunStartPiece[] = context === null
-        ? [{
-            firstIndex: 0,
-            lastIndex: move.glyphIds.length - 1,
-            startClipLeft: move.oldRect.x,
-            startClipRight: move.oldRect.x + move.oldRect.width,
-            startPositionX: move.startPositionX,
-            startPositionY: move.startPositionY,
-            glyphIds: [...move.glyphIds]
-          }]
-        : retainedMoveStartState(
+        ? move.pieces
+        : retargetRunStarts(
             EditorMotionCoordinator.runGeometry(
               move.glyphIds, prepared.state.oldSnapshot.text, move.oldUtf16Start, move.oldUtf16End,
               move.oldRect, prepared.state.oldLayout
             ),
+            move.pieces,
             context,
+            'retained',
+            move.oldRect.x,
             {
               startClipLeft: move.oldRect.x,
               startClipRight: move.oldRect.x + move.oldRect.width,
@@ -690,17 +697,16 @@ export class EditorMotionCoordinator {
     return {
       plan: newPlan,
       startFrame: newStartFrame,
-      state: newState,
-      stableWindowKeys: stableWindowKeys
+      state: newState
     }
   }
 
   /**
-   * 问题3：从帧中提取所有运动窗口的 renderNodeKey
+   * 从帧中提取所有运动窗口的 renderNodeKey（窗口逻辑 owner 同步用；frame 为 null 时返回空数组）。
    */
-  private static extractWindowKeys(frame: EditorVisualFrame): string[] {
+  static extractWindowKeys(frame: EditorVisualFrame | null): string[] {
     const keys: string[] = []
-    if (frame.isAnimating) {
+    if (frame !== null && frame.isAnimating) {
       for (let i = 0; i < frame.motionGlyphWindows.length; i++) {
         keys.push(frame.motionGlyphWindows[i].renderNodeKey)
       }

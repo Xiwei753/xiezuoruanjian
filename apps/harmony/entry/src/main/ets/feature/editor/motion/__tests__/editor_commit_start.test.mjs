@@ -16,9 +16,10 @@
 //   node apps/harmony/entry/src/main/ets/feature/editor/motion/__tests__/editor_commit_start.test.mjs
 
 import { strict as assert } from 'node:assert'
-import { GlyphIdentityTable } from '../editor_glyph_identity.ts'
+import { GlyphIdentityTable, WindowInstanceIdAllocator } from '../editor_glyph_identity.ts'
 import {
   visibleGlyphPieces, insertRunStartState, deletedRunStartState, retainedMoveStartState,
+  retargetRunStarts,
 } from '../editor_commit_start.ts'
 
 let passed = 0
@@ -913,6 +914,145 @@ test('retainedMoveStartState 空数组分支——覆盖整段 glyphIds，不只
   // fallback 位置
   assert.equal(start[0].startPositionX, 100)
   assert.equal(start[0].startPositionY, 20)
+})
+
+// ====== 问题4：retarget 不得因为临时可见分组更换物理 Text key ======
+
+/** 分区（boundaries + glyphIds）必须逐 piece 完全一致。 */
+const assertSamePartition = (before, after) => {
+  assert.equal(after.length, before.length, 'piece 数量不得变化')
+  for (let i = 0; i < before.length; i++) {
+    assert.equal(after[i].firstIndex, before[i].firstIndex, `piece${i} firstIndex 不得变化`)
+    assert.equal(after[i].lastIndex, before[i].lastIndex, `piece${i} lastIndex 不得变化`)
+    assert.deepEqual(after[i].glyphIds, before[i].glyphIds, `piece${i} glyphIds 不得变化`)
+  }
+}
+
+test('问题4：可见性变化后 retarget——piece 分区与 glyphIds 完全不变，只重算 clip', () => {
+  const ctx = context('甲乙丙丁戊', 780, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  // prepare：整段被旧窗口覆盖且完整可见（clip 0..50）→ 单个 piece 覆盖 0..4
+  const prepared = insertRunStartState({ ...run, ownLayout: ctx.layout }, {
+    ...ctx,
+    frozenWindows: [frozenWindow(all, 0, 50, 0, 0, 780, null)],
+  })
+  assert.equal(prepared.length, 1)
+  // retarget：同一个窗口缩到 clip 20..30（簇2 完整可见、簇1/簇3 部分可见）——可见分组变了
+  const retargeted = retargetRunStarts(
+    { ...run, ownLayout: ctx.layout },
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow(all, 20, 30, 0, 0, 780, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  // 分区必须原样保留——否则 glyphIds 变化会让 allocator 分配出新的 win-N，
+  // 交棒前刚准备完的物理 Text 节点作废。
+  assertSamePartition(prepared, retargeted)
+  // clip 却被重算到提交瞬间的真实可见区间
+  assert.equal(retargeted[0].startClipLeft, 20)
+  assert.equal(retargeted[0].startClipRight, 30)
+})
+
+test('问题4：两段可见合成一段——prepare 的两个 piece 仍保留为两个（不合并）', () => {
+  const ctx = context('甲乙丙丁戊', 781, [])
+  const ids = idsOf(ctx, 0, 5)
+  // 簇2 完全不可见（clip 0..0），其余静态可见 → 两段 piece：[0..1] 与 [3..4]
+  const prepared = deletedRunStartState(runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 }), {
+    ...ctx,
+    frozenWindows: [frozenWindow([ids[2]], 0, 0, 0, 0, 781, null)],
+  }, 0)
+  assert.equal(prepared.length, 2, 'prepare 应有两段可见 piece')
+  // retarget：旧窗口已完全消失（空 frozenWindows），整段静态可见 → 可见性变成一整段
+  const retargeted = retargetRunStarts(
+    runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 }),
+    prepared,
+    { ...ctx, frozenWindows: [] },
+    'deleted',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  // 分区不因「两段合成一段」而改变——两个物理节点各画各自的一段
+  assertSamePartition(prepared, retargeted)
+  assert.equal(retargeted[0].startClipLeft, 0)
+  assert.equal(retargeted[0].startClipRight, 20)
+  assert.equal(retargeted[1].startClipLeft, 30)
+  assert.equal(retargeted[1].startClipRight, 50)
+})
+
+test('问题4：piece 内字形全部不可见——按通道语义塌缩，分区仍不变', () => {
+  const ctx = context('甲乙丙丁', 782, [])
+  const all = idsOf(ctx, 0, 4)
+  const hidden = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 782, null)] }
+  const run = runGeometry(hidden, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const prepared = insertRunStartState(run, hidden)
+  // insert：该 piece 自身左边界零宽度（不是整 run 左边界，也不是别的 run 的位置）
+  const insertRetarget = retargetRunStarts(run, prepared, hidden, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
+  assertSamePartition(prepared, insertRetarget)
+  assert.equal(insertRetarget[0].startClipLeft, 0)
+  assert.equal(insertRetarget[0].startClipRight, 0)
+  // deleted：塌到 collapseX
+  const deletedRetarget = retargetRunStarts(run, prepared, hidden, 'deleted', 7,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
+  assertSamePartition(prepared, deletedRetarget)
+  assert.equal(deletedRetarget[0].startClipLeft, 7)
+  assert.equal(deletedRetarget[0].startClipRight, 7)
+  // retained：用 fallback 起始状态
+  const fallback = { startClipLeft: 1, startClipRight: 2, startPositionX: 3, startPositionY: 4 }
+  const retainedRetarget = retargetRunStarts(run, prepared, hidden, 'retained', 0, fallback)
+  assertSamePartition(prepared, retainedRetarget)
+  assert.equal(retainedRetarget[0].startClipLeft, 1)
+  assert.equal(retainedRetarget[0].startClipRight, 2)
+  assert.equal(retainedRetarget[0].startPositionX, 3)
+  assert.equal(retainedRetarget[0].startPositionY, 4)
+})
+
+test('问题4：retarget 前后 piece 的 glyphIds 决定同一个 windowInstanceId（物理 key 稳定）', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const ctx = context('甲乙丙丁戊己', 783, [])
+  const all = idsOf(ctx, 0, 6)
+  const run = runGeometry(ctx, 0, 6, { x: 0, y: 0, width: 60, height: 20 })
+  // prepare：簇2、簇3 被吞（clip 0..0）→ 两段 piece
+  const prepared = insertRunStartState(run, {
+    ...ctx,
+    frozenWindows: [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 783, null)],
+  })
+  const beforeKeys = prepared.map((p) => allocator.allocate(p.glyphIds))
+  // retarget：可见性大幅变化（只剩第一段的一小部分可见）
+  const retargeted = retargetRunStarts(run, prepared, {
+    ...ctx,
+    frozenWindows: [frozenWindow(all, 0, 5, 0, 0, 783, null)],
+  }, 'insert', 0, { startClipLeft: 0, startClipRight: 60, startPositionX: 0, startPositionY: 0 })
+  const afterKeys = retargeted.map((p) => allocator.allocate(p.glyphIds))
+  // 同一个 piece 的 glyphIds 未变 → 分配器返回同一个 win-N → renderNodeKey 不变
+  assert.deepEqual(afterKeys, beforeKeys)
+})
+
+test('问题4：insert 间隙 piece 在 retarget 后仍是零宽度，不填补空洞', () => {
+  const ctx = context('甲乙丙丁戊', 784, [])
+  const ids = idsOf(ctx, 0, 5)
+  // 整段都被同一个旧窗口接管，但 clip 只露出簇2（20..30）→ 其余字形是被裁掉的新字
+  const prepareCtx = {
+    ...ctx,
+    frozenWindows: [frozenWindow(ids, 20, 30, 0, 0, 784, null)],
+  }
+  const run = runGeometry(prepareCtx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = insertRunStartState(run, prepareCtx)
+  assert.equal(prepared.length, 3)
+  assert.equal(prepared[0].firstIndex, 0)
+  assert.equal(prepared[1].firstIndex, 2)
+  assert.equal(prepared[2].firstIndex, 3)
+  const retargeted = retargetRunStarts(run, prepared, prepareCtx, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
+  assertSamePartition(prepared, retargeted)
+  // 尾间隙 piece 的起始位置仍在该 gap 自己的左边界（簇3 的 x=30），且零宽度
+  assert.equal(retargeted[2].startClipLeft, 30)
+  assert.equal(retargeted[2].startClipRight, 30)
+  // 前间隙同理停在簇0 的左边界
+  assert.equal(retargeted[0].startClipLeft, 0)
+  assert.equal(retargeted[0].startClipRight, 0)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

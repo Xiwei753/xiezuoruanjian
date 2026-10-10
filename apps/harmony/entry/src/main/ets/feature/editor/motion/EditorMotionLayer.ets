@@ -379,7 +379,7 @@ export interface MotionWindowSource {
   onWindowAcquireLease: ((renderNodeKey: string, windowInstanceId: string) => void) | null
   /**
    * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
-   * 父组件调用 motionSourcePool.releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver，
+   * 父组件调用 motionSourcePool.markWindowUnmounted(renderNodeKey) 并销毁对应的 ComponentObserver，
    * 同时调用 motionCoordinator.releaseWindowInstance(windowInstanceId) 释放窗口实例 ID。
    *
    * Issue #879 复核评论6077187962 问题4：新增 windowInstanceId 参数，
@@ -467,7 +467,7 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               .onDisAppear(() => {
                 // Issue #879 最新复核评论修复（问题3）：
                 // Text 从组件树移除时清理本窗口状态——
-                // 父组件调用 releaseWindowState(renderNodeKey) 并销毁对应的 ComponentObserver。
+                // 父组件调用 markWindowUnmounted(renderNodeKey) 并销毁对应的 ComponentObserver。
                 // Issue #879 本轮复核评论修复（问题2）：
                 // Text 从组件树移除时清理本窗口状态——用 renderNodeKey 作为窗口身份。
                 // Issue #879 复核评论6077187962 问题4：

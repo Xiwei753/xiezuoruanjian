@@ -644,6 +644,169 @@ export function retainedMoveStartState(
   }))
 }
 
+/**
+ * Issue #879 复核评论6088787701 问题4：piece 分区在 retarget 之间保持不变，只重算起始数据。
+ *
+ * 物理 Text 节点的身份由 piece 的 glyphIds 序列决定（WindowInstanceIdAllocator）。
+ * 旧 retarget 用提交瞬间的可见性**重新拆分** piece，于是同一个字形在两个时刻可能落到
+ * 不同的 glyphIds 序列上 → 分配出不同 renderNodeKey → 交棒前刚准备完的节点作废，
+ * 旧 animator 已 cancel 而新节点还没布局，形成「一直等、一直不交棒」。
+ *
+ * 修复：分区（firstIndex/lastIndex/glyphIds）在 prepare 时由可见性确定一次，
+ * retarget 只重算该 piece 的起始 clip/position 数据。同一个字形在两次 retarget 之间
+ * 不会因为临时可见分组改变而更换物理 Text key。
+ *
+ * 数据语义：
+ * - piece 内仍有可见字形：起始 clip = 该 piece 内**最长连续可见段**投影回 run 自己布局的边界
+ *   （piece 之间的空洞依旧不填补——每条 clip 只覆盖一段连续区间）。
+ * - piece 内字形已全部不可见：insert 用该 piece 自身左边界零宽度、deleted 塌到 collapseX、
+ *   retained 用 fallback——与 prepare 时同语义，不猜几何。
+ *
+ * @param run 该 piece 所属的 run 几何
+ * @param pieces prepare 时确定的分区（边界与 glyphIds 保持不变）
+ * @param displayed 提交瞬间的在屏上下文
+ * @param kind 通道类别，决定全不可见时的兜底语义
+ * @param collapseX deleted 通道全不可见时的塌缩位置（vp）
+ * @param fallback retained 通道全不可见时的兜底起始状态
+ * @returns 与入参 piece 一一对应的新 piece 数组（同 firstIndex/lastIndex/glyphIds）
+ */
+export function retargetRunStarts(
+  run: RunGeometry,
+  pieces: RunStartPiece[],
+  displayed: DisplayedContext,
+  kind: RunStartKind,
+  collapseX: number,
+  fallback: RunStartState
+): RunStartPiece[] {
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  if (boundaries.length !== run.glyphIds.length + 1) {
+    // 簇数与身份数对不上（范围不是整簇边界）——不猜几何，保留原起始数据。
+    return clonePieces(pieces)
+  }
+  const frozenByGlyphId = frozenIndex(displayed)
+
+  const result: RunStartPiece[] = []
+  for (const piece of pieces) {
+    const pieceOwnLeft = xAtOffset(run.ownLayout, boundaries[piece.firstIndex], run.ownRect.x)
+    const island = longestVisibleIsland(
+      run, boundaries, piece.firstIndex, piece.lastIndex, displayed, frozenByGlyphId
+    )
+    let startClipLeft = pieceOwnLeft
+    let startClipRight = pieceOwnLeft
+    let startPositionX = piece.startPositionX
+    let startPositionY = piece.startPositionY
+    let resolved = false
+    if (island !== null) {
+      const visible = buildPiece(
+        run, boundaries, island.firstIndex, island.lastIndex, island.interval, displayed, frozenByGlyphId
+      )
+      if (visible !== null) {
+        startClipLeft = visible.ownLeft
+        startClipRight = visible.ownRight
+        if (kind === 'retained') {
+          // 让该 piece 的第一个仍可见字形停在此刻在屏的位置上。
+          startPositionX = visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)
+          startPositionY = visible.onScreenTop
+        }
+        resolved = true
+      }
+    }
+    if (!resolved) {
+      // 该 piece 的字形此刻全部不可见——按通道语义塌缩，不猜几何。
+      if (kind === 'deleted') {
+        startClipLeft = collapseX
+        startClipRight = collapseX
+      } else if (kind === 'retained') {
+        startClipLeft = fallback.startClipLeft
+        startClipRight = fallback.startClipRight
+        startPositionX = fallback.startPositionX
+        startPositionY = fallback.startPositionY
+      }
+    }
+    result.push({
+      firstIndex: piece.firstIndex,
+      lastIndex: piece.lastIndex,
+      startClipLeft: startClipLeft,
+      startClipRight: startClipRight,
+      startPositionX: startPositionX,
+      startPositionY: startPositionY,
+      glyphIds: [...piece.glyphIds],
+    })
+  }
+  return result
+}
+
+/** piece 起始状态的通道类别。 */
+export type RunStartKind = 'insert' | 'deleted' | 'retained'
+
+/** 复制 pieces（分区不变时的兜底返回）。 */
+function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
+  return pieces.map((p: RunStartPiece): RunStartPiece => ({
+    firstIndex: p.firstIndex,
+    lastIndex: p.lastIndex,
+    startClipLeft: p.startClipLeft,
+    startClipRight: p.startClipRight,
+    startPositionX: p.startPositionX,
+    startPositionY: p.startPositionY,
+    glyphIds: [...p.glyphIds],
+  }))
+}
+
+/**
+ * 在 piece 的字母下标区间内找**最长**的连续可见段。
+ *
+ * 多段可见时取最长一段（等长取靠前一段）：单片段的 clip 只能表达一段连续区间，
+ * 取最长一段保证不填补空洞、也不因为取错段落而丢字。
+ */
+function longestVisibleIsland(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan>
+): { firstIndex: number, lastIndex: number, interval: OnScreenInterval } | null {
+  let bestFirst = -1
+  let bestLast = -1
+  let bestLength = 0
+  let bestInterval: OnScreenInterval | null = null
+  let currentFirst = -1
+  let currentInterval: OnScreenInterval | null = null
+
+  for (let i = firstIndex; i <= lastIndex; i++) {
+    const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
+    if (visible !== null) {
+      if (currentFirst < 0) {
+        currentFirst = i
+        currentInterval = visible
+      }
+    } else if (currentFirst >= 0) {
+      const length = i - currentFirst
+      if (length > bestLength) {
+        bestLength = length
+        bestFirst = currentFirst
+        bestLast = i - 1
+        bestInterval = currentInterval
+      }
+      currentFirst = -1
+      currentInterval = null
+    }
+  }
+  if (currentFirst >= 0) {
+    const length = lastIndex + 1 - currentFirst
+    if (length > bestLength) {
+      bestLength = length
+      bestFirst = currentFirst
+      bestLast = lastIndex
+      bestInterval = currentInterval
+    }
+  }
+  if (bestInterval === null || bestFirst < 0) {
+    return null
+  }
+  return { firstIndex: bestFirst, lastIndex: bestLast, interval: bestInterval }
+}
+
 /** 某个字形此刻在屏的精确可见区间（vp）。 */
 interface OnScreenInterval {
   left: number

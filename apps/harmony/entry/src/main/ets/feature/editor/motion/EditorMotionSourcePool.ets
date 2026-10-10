@@ -395,19 +395,25 @@ export class EditorMotionSourcePool {
   /**
    * Issue #879 评论6087544240 问题1+2：标记窗口物理卸载。
    *
-   * Text.onDisAppear 中调用——只标记 mounted = false，不删除 windowState。
-   * windowState 的删除由 reconcileWindowOwners 负责（owner 集合为空且 mounted === false）。
+   * Text.onDisAppear 中调用。**必须同时清 mounted 和 layoutReady**——
+   * 组件已从树上移除，它的历史 layout 回调不能当作「这个 key 已经布局好」的证据：
+   * 若同 key 的逻辑 owner 暂存在集合里，下一次检查会把已卸载组件的历史 ready 当真，
+   * 于是候选在真实 Text 未挂载/未布局时就被提交。
    *
-   * 旧实现 releaseWindowState 递减 owner 引用计数，但共享 key 的 candidate 被去重后
-   * 没有自己的 onDisappear，双 owner 计数不可能对称归还。改为只标记物理卸载，
-   * owner 集合由 reconcileWindowOwners 统一管理。
+   * - owner 集合为空（双 owner 都已退出）：直接删除 windowState，避免残留历史 ready；
+   * - 还有 owner：保留状态但两者都清零，后续重新挂载时要重新等该物理 Text 的真实 layout 回调。
    *
    * @param renderNodeKey 窗口渲染节点身份标识
    */
   markWindowUnmounted(renderNodeKey: string): void {
     const state = this.windowStates.get(renderNodeKey)
-    if (state !== undefined) {
-      state.mounted = false
+    if (state === undefined) {
+      return
+    }
+    state.mounted = false
+    state.layoutReady = false
+    if (state.owners.size === 0) {
+      this.windowStates.delete(renderNodeKey)
     }
   }
 
