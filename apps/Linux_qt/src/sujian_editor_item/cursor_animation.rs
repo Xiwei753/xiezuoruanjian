@@ -2,18 +2,6 @@ use super::cursor_controller::CursorMoveSource;
 use super::edit_motion::CursorRect;
 use super::layout_revision::LayoutRevision;
 
-/// A frame-acknowledged progress ceiling shared by a caret-driven text edit and
-/// the matching TextTransaction cursor route.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CoordinatedCaretProgressLimit {
-    pub transition_id: u64,
-    pub document_session: u64,
-    pub layout_revision: LayoutRevision,
-    pub target_x: f64,
-    pub target_y: f64,
-    pub max_eased_progress: f64,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum CursorBlinkMode {
     #[default]
@@ -21,8 +9,8 @@ pub(crate) enum CursorBlinkMode {
     Suppressed,
 }
 
-/// 光标目标由 CursorController 覆盖更新。Tween 用 Scene Graph 当前帧推进；匹配的快速
-/// 协调正文事务可以额外设置一个由 Qt 帧回执解锁的 progress 上限。
+/// 光标目标由 CursorController 覆盖更新。独立光标 Tween 用 Scene Graph 当前帧推进；
+/// 协同 TextTransaction 光标由 EditVisualTimeline 直接采样，不另启 Tween。
 #[derive(Clone, Debug, Default)]
 pub(crate) enum CursorTransition {
     #[default]
@@ -31,7 +19,7 @@ pub(crate) enum CursorTransition {
         old_rect: CursorRect,
         new_rect: CursorRect,
         /// 光标动画时长（毫秒）。CursorAnimationState 用 Scene Graph 当前帧 frame_now
-        /// 推进 from→to 动画；匹配的协调事务可再限制 eased progress 上限。
+        /// 推进 from→to 动画。
         duration_ms: u64,
     },
 }

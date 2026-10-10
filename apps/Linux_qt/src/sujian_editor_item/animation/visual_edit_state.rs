@@ -9,12 +9,12 @@ use std::time::{Duration, Instant};
 
 use writer_core::editor::OffsetMap;
 
-use super::super::cursor_animation::CoordinatedCaretProgressLimit;
 use super::super::layout_snapshot::{
     EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
 };
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::render_plan::VisualCaretGeometry;
+use super::edit_timeline::{EditMotionSample, EditVisualTimeline};
 use super::visual_frame::{VisualCluster, VisualFrame};
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge, DeletedRangeEdge};
@@ -39,7 +39,6 @@ enum MotionKind {
     CrossFade,
 }
 
-const MIN_CATCH_UP_SUBMITTED_FRAMES: u8 = 3;
 static NEXT_VISUAL_TRANSITION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug)]
@@ -77,6 +76,7 @@ impl From<LineSnapshotId> for VisualLineIdentity {
 
 #[derive(Clone, Copy, Debug)]
 struct CaretMotion {
+    transition_id: u64,
     from: CaretPosition,
     to: CaretPosition,
     to_byte: usize,
@@ -88,6 +88,7 @@ struct CaretMotion {
 
 impl CaretMotion {
     fn new(
+        transition_id: u64,
         from: CursorRect,
         to: CursorRect,
         caret_byte_offsets: (usize, usize),
@@ -107,6 +108,7 @@ impl CaretMotion {
             h: (to.bottom - to.top).max(0.0),
         };
         Self {
+            transition_id,
             from,
             to,
             to_byte: caret_byte_offsets.1,
@@ -175,6 +177,7 @@ impl CaretMotion {
 
     fn matches(self, caret: VisualCaretGeometry) -> bool {
         caret.movement_source == CursorMoveSource::TextTransaction
+            && caret.transition_id == self.transition_id
             && caret.layout_revision == Some(self.layout_revision)
             && caret.document_session == self.document_session
             && (caret.target_x - self.to.x).abs() <= 0.5
@@ -250,17 +253,16 @@ struct ClusterMotion {
 #[derive(Clone, Debug)]
 pub(crate) struct VisualEditState {
     pub transition_id: u64,
+    pub transaction_id: u64,
+    pub operation_kind: String,
     pub source_frame: VisualFrame,
     pub target_snapshot: EditorLayoutSnapshot,
     motions: Vec<ClusterMotion>,
-    pub started_at: Instant,
-    pub duration_ms: u64,
-    pub input_interval_ms: u64,
-    pub visual_lag_px: f64,
-    /// Fast-input transitions consume this budget only after unique Qt frame submissions.
-    submitted_frame_count: u8,
-    submitted_frame_ids: HashSet<u64>,
-    minimum_submitted_frames: u8,
+    timeline: EditVisualTimeline,
+    pub reflow_cluster_count: usize,
+    pub crossfade_cluster_count: usize,
+    pub ownership_conflict_count: usize,
+    pub first_committed_frame_id: Option<u64>,
     /// 终点帧收到 Qt 提交回执；之后才可请求 Static ownership handoff。
     pub terminal_frame_committed: bool,
 }
@@ -275,7 +277,8 @@ impl VisualEditState {
         deleted_range_edges: &[DeletedRangeEdge],
         now: Instant,
         base_duration_ms: u64,
-        previous_edit_at: Option<Instant>,
+        transaction_id: u64,
+        operation_kind: String,
         caret_rects: Option<(CursorRect, CursorRect)>,
         caret_byte_offsets: Option<(usize, usize)>,
         document_session: u64,
@@ -289,6 +292,7 @@ impl VisualEditState {
             .zip(caret_byte_offsets)
             .map(|((from, to), byte_offsets)| {
                 CaretMotion::new(
+                    transition_id,
                     from,
                     to,
                     byte_offsets,
@@ -458,107 +462,92 @@ impl VisualEditState {
             }
         }
 
-        let input_interval_ms = previous_edit_at
-            .map(|previous| now.saturating_duration_since(previous).as_millis() as u64)
-            .unwrap_or(base_duration_ms);
-        let visual_lag_px = motions
+        let timeline = EditVisualTimeline::new(
+            transition_id,
+            document_session,
+            target_snapshot.revision,
+            now,
+            base_duration_ms,
+            caret_rects.map(|(from, _)| from),
+            caret_rects.map(|(_, to)| to),
+        );
+        let reflow_cluster_count = motions
             .iter()
-            .filter_map(|motion| match (&motion.source, &motion.target) {
-                (Some(source), Some(target)) => Some(rect_distance(&source.rect, &target.rect)),
-                (None, Some(target)) => Some(target.rect.w),
-                (Some(source), None) => Some(source.rect.w),
-                _ => None,
+            .filter(|motion| {
+                matches!(motion.kind, MotionKind::Transform)
+                    && motion
+                        .source
+                        .as_ref()
+                        .zip(motion.target.as_ref())
+                        .is_some_and(|(source, target)| {
+                            (
+                                source.snapshot_id.paragraph_id,
+                                source.snapshot_id.visual_line_ordinal,
+                            ) != (
+                                target.snapshot_id.paragraph_id,
+                                target.snapshot_id.visual_line_ordinal,
+                            )
+                        })
             })
-            .fold(0.0_f64, f64::max);
-        let duration_ms = catch_up_duration(base_duration_ms, input_interval_ms, visual_lag_px);
-        let minimum_submitted_frames =
-            if base_duration_ms > 0 && input_interval_ms < base_duration_ms {
-                MIN_CATCH_UP_SUBMITTED_FRAMES
-            } else {
-                1
-            };
+            .count();
+        let crossfade_cluster_count = motions
+            .iter()
+            .filter(|motion| matches!(motion.kind, MotionKind::CrossFade))
+            .count();
+        let mut logical_targets = HashSet::new();
+        let mut ownership_conflict_count = 0usize;
+        for motion in &motions {
+            if let Some(target) = motion.target.as_ref() {
+                if !logical_targets.insert((target.byte_range.0, target.byte_range.1)) {
+                    ownership_conflict_count += 1;
+                }
+            }
+        }
 
         Self {
             transition_id,
+            transaction_id,
+            operation_kind,
             source_frame,
             target_snapshot,
             motions,
-            started_at: now,
-            duration_ms,
-            input_interval_ms,
-            visual_lag_px,
-            submitted_frame_count: 0,
-            submitted_frame_ids: HashSet::new(),
-            minimum_submitted_frames,
+            timeline,
+            reflow_cluster_count,
+            crossfade_cluster_count,
+            ownership_conflict_count,
+            first_committed_frame_id: None,
             terminal_frame_committed: false,
         }
     }
 
     pub(crate) fn shift_started_at(&mut self, delta: Duration) {
-        self.started_at = self
-            .started_at
-            .checked_add(delta)
-            .unwrap_or(self.started_at);
+        self.timeline.shift_started_at(delta);
     }
 
-    pub(crate) fn progress(&self, now: Instant) -> f64 {
-        if self.duration_ms == 0 {
-            return 1.0;
-        }
-        let elapsed = now.saturating_duration_since(self.started_at).as_millis() as f64;
-        let linear = (elapsed / self.duration_ms as f64).clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - linear).powi(3);
-        self.submitted_progress_limit()
-            .map_or(eased, |limit| eased.min(limit))
+    pub(crate) fn sample(&self, frame_now: Instant) -> EditMotionSample {
+        self.timeline.sample(frame_now)
     }
 
-    fn submitted_progress_limit(&self) -> Option<f64> {
-        (self.minimum_submitted_frames > 1).then(|| {
-            f64::from(
-                self.submitted_frame_count
-                    .saturating_add(1)
-                    .min(self.minimum_submitted_frames),
-            ) / f64::from(self.minimum_submitted_frames)
-        })
+    pub(crate) fn retime(&mut self, now: Instant, duration_ms: u64) -> f64 {
+        self.timeline.retime(now, duration_ms)
     }
 
-    pub(crate) fn commit_submitted_frame(&mut self, frame_id: u64) {
-        if self.submitted_frame_count >= self.minimum_submitted_frames
-            || !self.submitted_frame_ids.insert(frame_id)
-        {
-            return;
-        }
-        self.submitted_frame_count = self.submitted_frame_count.saturating_add(1);
+    pub(crate) fn duration_ms(&self) -> u64 {
+        self.timeline.duration_ms()
+    }
+
+    pub(crate) fn has_caret_timeline(&self) -> bool {
+        self.timeline.has_caret_motion()
     }
 
     pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
-        if self.duration_ms == 0 {
-            return 0;
-        }
-        let eased = self.progress(now);
-        let linear = 1.0 - (1.0 - eased).cbrt();
-        (self.duration_ms as f64 * (1.0 - linear))
-            .round()
-            .clamp(1.0, self.duration_ms as f64) as u64
+        self.timeline.remaining_duration_ms(now)
     }
 
     pub(crate) fn has_caret_driven_motions(&self) -> bool {
         self.motions
             .iter()
             .any(|motion| motion.caret_motion.is_some())
-    }
-
-    pub(crate) fn coordinated_caret_progress_limit(&self) -> Option<CoordinatedCaretProgressLimit> {
-        let max_eased_progress = self.submitted_progress_limit()?;
-        let caret_motion = self.motions.iter().find_map(|motion| motion.caret_motion)?;
-        Some(CoordinatedCaretProgressLimit {
-            transition_id: self.transition_id,
-            document_session: caret_motion.document_session,
-            layout_revision: caret_motion.layout_revision,
-            target_x: caret_motion.to.x,
-            target_y: caret_motion.to.y,
-            max_eased_progress,
-        })
     }
 
     pub(crate) fn commit_terminal_motions(&mut self, motion_indices: &[usize]) {
@@ -610,11 +599,10 @@ impl VisualEditState {
 
     pub(crate) fn build_ownership_plan(
         &self,
-        now: Instant,
+        sample: EditMotionSample,
         visual_caret: Option<VisualCaretGeometry>,
     ) -> RenderOwnershipPlan {
-        let p = self.progress(now);
-        let submitted_progress_limit = self.submitted_progress_limit().unwrap_or(1.0);
+        let p = sample.eased_progress;
         let mut terminal_frame = true;
         let mut owned = Vec::new();
         let mut glyphs = Vec::new();
@@ -663,8 +651,7 @@ impl VisualEditState {
                     } else {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => start_width.max(
-                                reveal_width_to_caret_during_transition(source, target, caret_x, p)
-                                    .min(target.rect.w * submitted_progress_limit),
+                                reveal_width_to_caret_during_transition(source, target, caret_x, p),
                             ),
                             MotionBoundary::TextProgress => lerp(start_width, target.rect.w, p),
                         }
@@ -719,7 +706,6 @@ impl VisualEditState {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => {
                                 reveal_width_to_caret(target, caret_x)
-                                    .min(target.rect.w * submitted_progress_limit)
                             }
                             MotionBoundary::TextProgress => target.rect.w * p,
                         }
@@ -763,7 +749,6 @@ impl VisualEditState {
                         match boundary {
                             MotionBoundary::VisualCaret(caret_x) => {
                                 delete_width_to_caret(source, delete_edge, caret_x)
-                                    .max(source.rect.w * (1.0 - submitted_progress_limit))
                             }
                             MotionBoundary::TextProgress => source.rect.w * (1.0 - p),
                         }
@@ -840,6 +825,12 @@ impl VisualEditState {
             terminal_frame,
         );
         plan.transition_id = self.transition_id;
+        plan.shared_progress = sample.eased_progress;
+        plan.reflow_cluster_count = self.reflow_cluster_count;
+        plan.crossfade_cluster_count = self.crossfade_cluster_count;
+        plan.ownership_conflict_count = plan
+            .ownership_conflict_count
+            .max(self.ownership_conflict_count);
         plan.terminal_motion_indices = terminal_motion_indices;
         plan.submitted_visible_widths = submitted_visible_widths;
         plan
@@ -1107,18 +1098,26 @@ fn pair_cluster(
         })
         .unwrap_or(source_indices[0]);
     let source = source_frame.clusters[primary_source_index].clone();
-    let retiring_sources: Vec<VisualCluster> = source_indices
-        .iter()
-        .copied()
-        .filter(|index| *index != primary_source_index)
-        .map(|index| source_frame.clusters[index].clone())
-        .collect();
+    let same_shaping = source.shaping_identity == target.shaping_identity;
+    // A same-shaped logical cluster that already moved to another line has one visual
+    // path. Retire duplicate committed contributions at the retarget boundary instead
+    // of carrying them as extra glyphs through another transition. Keep multiple sources
+    // only for a real shaping change, where CrossFade is the correct representation.
+    let retiring_sources: Vec<VisualCluster> = if same_shaping {
+        Vec::new()
+    } else {
+        source_indices
+            .iter()
+            .copied()
+            .filter(|index| *index != primary_source_index)
+            .map(|index| source_frame.clusters[index].clone())
+            .collect()
+    };
     for &source_index in source_indices {
         source_used[source_index] = true;
     }
     target_used[target_index] = true;
 
-    let same_shaping = source.shaping_identity == target.shaping_identity;
     let moved = rect_distance(&source.rect, &target.rect) > 0.01
         || (source.rect.w - target.rect.w).abs() > 0.01
         || (source.rect.h - target.rect.h).abs() > 0.01
@@ -1167,25 +1166,6 @@ fn target_clusters(snapshot: &EditorLayoutSnapshot) -> Vec<TargetCluster> {
         }
     }
     result
-}
-
-fn catch_up_duration(base_ms: u64, input_interval_ms: u64, lag_px: f64) -> u64 {
-    if base_ms == 0 {
-        return 0;
-    }
-    // 慢速或单次输入保留用户设置的完整时长；只有连续输入才压缩动画，
-    // 而视觉落后越远，压缩越明显。
-    if input_interval_ms >= base_ms {
-        return base_ms;
-    }
-    let cadence_ms = input_interval_ms.max(1);
-    let velocity = (1.0 - input_interval_ms as f64 / base_ms as f64).clamp(0.0, 1.0);
-    let lag_factor = (lag_px / 160.0).clamp(0.0, 3.0);
-    let compression = 1.0 + velocity * (1.0 + lag_factor);
-    // Wall-clock compression can finish before Qt presents another frame. Fast-input
-    // progress is therefore additionally capped by confirmed submitted frames above; this
-    // duration is only the temporal envelope, not evidence that a transition was shown.
-    ((cadence_ms as f64 / compression).round() as u64).clamp(1, base_ms)
 }
 
 fn visible_slice(target: &TargetCluster, visible_width: f64) -> (SourceRect, SourceRect) {

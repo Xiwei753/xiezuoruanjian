@@ -191,17 +191,9 @@ impl QQuickItem for SujianEditorItem {
             self.pipeline.retain_active_snapshot_ids(&active_ids);
         }
 
-        let caret_progress_limit = self
-            .pipeline
-            .animation_coordinator()
-            .coordinated_caret_progress_limit(self.current_coordinated_animation_enabled);
-        self.cursor_ctrl
-            .set_coordinated_caret_progress_limit(caret_progress_limit);
-
-        // Issue #853：视觉光标的唯一 owner 是 cursor controller。
-        // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None）。快速输入时，
-        // 匹配的 TextTransaction 路径与正文共用 Qt 提交回执进度上限；其他光标路线仍
-        // 按各自时间推进。后面 build_cursor_render_state_for_frame() 读取本帧位置。
+        // Pure pointer/keyboard routes remain owned by CursorController. In coordinated
+        // TextTransaction mode, build_render_plan_full samples the edit timeline once and
+        // applies that same sample to both glyph geometry and the caret.
         self.cursor_ctrl.tick_animation(frame_now);
 
         // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
@@ -393,7 +385,19 @@ impl QQuickItem for SujianEditorItem {
                     .committed_revision(animation_resources_ready);
                 self.pipeline
                     .animation_coordinator_mut()
-                    .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
+                    .commit_rendered_plan(
+                        &render_plan.ownership,
+                        render_plan
+                            .cursor
+                            .visible
+                            .then_some(super::edit_motion::CursorRect {
+                                x: render_plan.cursor.x,
+                                top: render_plan.cursor.y,
+                                bottom: render_plan.cursor.y + render_plan.cursor.h,
+                                baseline_y: render_plan.cursor.baseline_y,
+                            }),
+                        animation_resources_ready,
+                    );
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -620,9 +624,11 @@ impl SujianEditorItem {
             x: self.cursor_ctrl.visual_x,
             y: self.cursor_ctrl.visual_y,
             h: self.cursor_ctrl.visual_h,
+            baseline_y: self.cursor_ctrl.visual_baseline_y,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
             movement_source: Some(self.cursor_ctrl.motion_source),
             driver_revision: self.cursor_ctrl.motion_layout_revision,
+            driver_transition_id: self.cursor_ctrl.motion_transition_id,
             document_session: self.cursor_ctrl.motion_document_session,
             target_x: self.cursor_ctrl.motion_target_x,
             target_y: self.cursor_ctrl.motion_target_y,
@@ -677,6 +683,7 @@ impl SujianEditorItem {
             if ch > 0.0 {
                 self.cursor_ctrl.visual_h = ch;
             }
+            self.cursor_ctrl.visual_baseline_y = render_plan.cursor.baseline_y;
         }
 
         let animation_active = self.cursor_ctrl.animation.is_some();

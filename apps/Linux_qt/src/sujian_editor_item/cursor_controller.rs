@@ -20,9 +20,7 @@
 //! 编辑操作触发 `blink_reset_requested`，使光标重新可见并重置闪烁计时器。
 //! 滚动和动画期间闪烁暂停。
 
-use super::cursor_animation::{
-    CoordinatedCaretProgressLimit, CursorAnimationPlan, CursorBlinkMode, CursorTransition,
-};
+use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
@@ -36,7 +34,7 @@ const BLINK_INTERVAL_MS: u64 = 530;
 /// 改为按光标移动来源决定 Snap/Tween：
 /// - `PointerClick` / `KeyboardNavigation`：smooth cursor 开启时允许跨行 Tween
 /// - `DragSelection` / `LayoutChange` / `Scroll`：硬 Snap
-/// - `TextTransaction`：正常正文提交按有效动画设置追到最新 canonical caret
+/// - `TextTransaction`：协同模式跟随编辑 timeline；独立模式按光标设置追到最新 caret
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CursorMoveSource {
     /// 鼠标点击：smooth cursor 开启时允许跨行 Tween
@@ -50,7 +48,7 @@ pub enum CursorMoveSource {
     LayoutChange,
     /// 滚动：Snap
     Scroll,
-    /// 正文事务（输入/删除等）：Tween 到最新 canonical caret；快速协调输入另受 Qt 回执限速。
+    /// 正文事务（输入/删除等）：协同模式由 EditVisualTimeline 采样；独立模式使用光标 Tween。
     TextTransaction,
 }
 
@@ -109,7 +107,6 @@ pub struct CursorController {
     pub motion_layout_revision: Option<LayoutRevision>,
     pub motion_document_session: u64,
     pub motion_transition_id: u64,
-    coordinated_caret_progress_limit: Option<CoordinatedCaretProgressLimit>,
     pub force_snap_next: bool,
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
@@ -158,7 +155,6 @@ impl CursorController {
             motion_layout_revision: None,
             motion_document_session: 0,
             motion_transition_id: 0,
-            coordinated_caret_progress_limit: None,
             force_snap_next: false,
             blink_visible: true,
             blink_last_toggle: Instant::now(),
@@ -490,8 +486,8 @@ impl CursorController {
     ///
     /// `apply_plan()` 只负责创建 / 重基 Tween（`progress = 0`、`started_at = None`），
     /// 真正的推进在这里：Scene Graph 每帧用同一个 `frame_now` 调一次，
-    /// 不引入第二个 `Instant::now()`。通常按光标时长推进；匹配的快速协调正文事务
-    /// 额外受同一 Qt 提交回执进度上限约束。
+    /// 不引入第二个 `Instant::now()`。这里只推进 PointerClick / KeyboardNavigation
+    /// 等独立光标 Tween；协同 TextTransaction 从 EditVisualTimeline 取样。
     ///
     /// ① 无 animation -> false；
     /// ② 首帧（`started_at == None`）-> 记起点，visual 保持 start，progress 仍 0，返回 true；
@@ -500,20 +496,6 @@ impl CursorController {
     /// ④ 到 1.0 -> `update_animation_progress()` 内部落 target 并清 animation，返回 false；
     /// ⑤ 未结束 -> 返回 true（调用方据此继续 `request_frame_update()`）。
     pub(crate) fn tick_animation(&mut self, frame_now: Instant) -> bool {
-        let raw_progress_limit = self
-            .coordinated_caret_progress_limit
-            .filter(|limit| {
-                self.motion_source == CursorMoveSource::TextTransaction
-                    && self.motion_transition_id == limit.transition_id
-                    && self.motion_document_session == limit.document_session
-                    && self.motion_layout_revision == Some(limit.layout_revision)
-                    && (self.motion_target_x - limit.target_x).abs() <= 0.5
-                    && (self.motion_target_y - limit.target_y).abs() <= 0.5
-            })
-            .map(|limit| {
-                let eased = limit.max_eased_progress.clamp(0.0, 1.0);
-                1.0 - (1.0 - eased).cbrt()
-            });
         let progress = {
             let Some(anim) = self.animation.as_mut() else {
                 return false;
@@ -531,20 +513,9 @@ impl CursorController {
                     .as_secs_f64()
                     / duration.as_secs_f64()
             };
-            let limited_progress =
-                raw_progress_limit.map_or(elapsed_progress, |limit| elapsed_progress.min(limit));
-            // apply_plan rebases a changed driver to a fresh Tween first. Within one Tween
-            // lifetime, a newly observed ceiling may hold progress but must never rewind it.
-            limited_progress.max(anim.progress)
+            elapsed_progress.max(anim.progress)
         };
         self.update_animation_progress(progress)
-    }
-
-    pub(crate) fn set_coordinated_caret_progress_limit(
-        &mut self,
-        limit: Option<CoordinatedCaretProgressLimit>,
-    ) {
-        self.coordinated_caret_progress_limit = limit;
     }
 
     pub fn update_animation_progress(&mut self, progress: f64) -> bool {

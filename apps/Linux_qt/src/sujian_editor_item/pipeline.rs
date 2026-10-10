@@ -731,7 +731,7 @@ impl LinuxEditorPipeline {
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
         self.animation_coordinator
-            .set_typing_animation_duration_ms(ms);
+            .set_typing_animation_duration_ms(ms, Instant::now());
     }
 
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
@@ -1188,7 +1188,7 @@ impl LinuxEditorPipeline {
         if !text_animation_enabled && !caret_animation_enabled {
             return VisualPrepareOutcome::AnimationDisabled;
         }
-        // 光标时长只交给 CursorController；正文的时长和追赶策略由 VisualEditState 决定。
+        // 协同 TextTransaction 的文字与 caret 共用 typing duration；独立光标移动仍用 cursor duration。
         let mut motion = PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
         // 本次正文编辑创建唯一视觉过渡，或记录明确的跳过原因。
         let mut visual_outcome = VisualPrepareOutcome::Skipped(
@@ -1687,6 +1687,8 @@ impl LinuxEditorPipeline {
             let edit_now = Instant::now();
             self.animation_coordinator
                 .begin_visual_edit(VisualEditRequest {
+                    transaction_id: motion.transaction_id,
+                    operation_kind: motion.operation_kind.clone(),
                     base_snapshot: old_snap.clone(),
                     target_snapshot: new_snap.clone(),
                     offset_map: motion

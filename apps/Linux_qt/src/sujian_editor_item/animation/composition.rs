@@ -58,6 +58,8 @@ impl LinuxEditorAnimationCoordinator {
             )
         });
         self.begin_visual_edit(VisualEditRequest {
+            transaction_id: motion.transaction_id,
+            operation_kind: motion.operation_kind.clone(),
             base_snapshot: old_snapshot,
             target_snapshot: new_snapshot,
             offset_map: motion

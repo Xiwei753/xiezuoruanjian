@@ -71,7 +71,8 @@ pub(crate) struct SubmittedVisualFrame {
     pub visible_width_updates: Vec<(usize, f64)>,
     pub terminal_frame: bool,
     pub handoff_pending: bool,
-    pub animation_frame: bool,
+    pub shared_progress: f64,
+    pub ownership_conflict_count: usize,
 }
 
 #[derive(Default)]
@@ -113,7 +114,8 @@ impl FrameSubmissionMailbox {
         visible_width_updates: Vec<(usize, f64)>,
         terminal_frame: bool,
         handoff_pending: bool,
-        animation_frame: bool,
+        shared_progress: f64,
+        ownership_conflict_count: usize,
     ) {
         let mut state = self.lock_state();
         let staged = SubmittedVisualFrame {
@@ -130,7 +132,8 @@ impl FrameSubmissionMailbox {
             visible_width_updates,
             terminal_frame,
             handoff_pending,
-            animation_frame,
+            shared_progress,
+            ownership_conflict_count,
         };
         state.pending_sync = Some(staged);
     }

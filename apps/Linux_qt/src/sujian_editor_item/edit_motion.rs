@@ -167,6 +167,8 @@ impl EditorAnimationKind {
 /// - `old_cursor_rect` / `new_cursor_rect`：由 pipeline 从布局快照计算后填入
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedEditMotion {
+    pub transaction_id: u64,
+    pub operation_kind: String,
     pub kind: EditorAnimationKind,
     /// Issue #826 评论 9 阻塞 2：Core 在 `EditorEditResult` 里给出的精确映射。
     ///
@@ -224,6 +226,9 @@ impl PreparedEditMotion {
             .first()
             .map(|&(start, end)| Utf8ByteRange::from_ordered(start, end));
         Self {
+            transaction_id: result.transaction_id,
+            operation_kind: super::transaction::editor_operation_kind_label(result.operation_kind)
+                .to_string(),
             kind,
             offset_map: result.offset_map.clone(),
             inserted_ranges,

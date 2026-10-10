@@ -1,6 +1,7 @@
 //! 将单一视觉过渡投影为 immutable RenderPlan。
 
 use super::coordinator::LinuxEditorAnimationCoordinator;
+use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::layout_snapshot::EditorLayoutSnapshot;
 use crate::sujian_editor_item::render_plan::{
     CursorRenderState, CursorStyle, RenderPlan, SelectionPreeditPlan, SelectionPreeditStyle,
@@ -18,6 +19,33 @@ impl LinuxEditorAnimationCoordinator {
         frame_now: std::time::Instant,
         canonical_snapshot: Option<&EditorLayoutSnapshot>,
     ) -> RenderPlan {
+        let edit_sample = self.sample_edit_timeline(frame_now);
+        let mut cursor_render_state = cursor_render_state;
+        if coordinated_animation_enabled
+            && cursor_render_state.visible
+            && cursor_render_state.movement_source == Some(CursorMoveSource::TextTransaction)
+        {
+            if let Some(sample) = edit_sample.filter(|sample| {
+                sample.transition_id == cursor_render_state.driver_transition_id
+                    && sample.document_session == cursor_render_state.document_session
+                    && Some(sample.target_revision) == cursor_render_state.driver_revision
+            }) {
+                if let Some(caret) = sample.caret_rect {
+                    cursor_render_state.x = caret.x;
+                    cursor_render_state.y = caret.top;
+                    cursor_render_state.h = (caret.bottom - caret.top).max(0.0);
+                    cursor_render_state.baseline_y = caret.baseline_y;
+                    if let Some(from) = sample.caret_from {
+                        cursor_render_state.path_start_x = from.x;
+                        cursor_render_state.path_start_y = from.top;
+                    }
+                    if let Some(target) = sample.caret_target {
+                        cursor_render_state.target_x = target.x;
+                        cursor_render_state.target_y = target.top;
+                    }
+                }
+            }
+        }
         let caret = (
             cursor_render_state.x,
             cursor_render_state.y,
@@ -31,6 +59,7 @@ impl LinuxEditorAnimationCoordinator {
                     y: cursor_render_state.y,
                     h: cursor_render_state.h,
                     movement_source,
+                    transition_id: cursor_render_state.driver_transition_id,
                     layout_revision: cursor_render_state.driver_revision,
                     target_x: cursor_render_state.target_x,
                     target_y: cursor_render_state.target_y,
@@ -42,7 +71,7 @@ impl LinuxEditorAnimationCoordinator {
             None
         };
         RenderPlan {
-            ownership: self.ownership_plan(frame_now, canonical_snapshot, visual_caret),
+            ownership: self.ownership_plan(edit_sample, canonical_snapshot, visual_caret),
             selection_preedit,
             cursor: cursor_render_state,
             cursor_style,

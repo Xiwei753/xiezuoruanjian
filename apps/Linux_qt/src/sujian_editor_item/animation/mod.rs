@@ -1,9 +1,11 @@
 //! Linux Qt 正文过渡只持有一份 `VisualEditState`，从成功提交的 `VisualFrame`
-//! 到最新 canonical layout 生成唯一 `RenderOwnershipPlan`。光标仍由唯一
-//! `CursorController` 管理；协同模式只把同帧视觉 caret 几何传给正文裁切计划。
+//! 到最新 canonical layout 生成唯一 `RenderOwnershipPlan`。协同 TextTransaction
+//! 的文字与 caret 共用一份 `EditVisualTimeline` sample；其他光标移动仍由
+//! `CursorController` 管理自己的 Tween。
 
 pub(crate) mod composition;
 pub(crate) mod coordinator;
+pub(crate) mod edit_timeline;
 pub(crate) mod render_plan_builder;
 pub(crate) mod visual_edit_state;
 pub(crate) mod visual_frame;

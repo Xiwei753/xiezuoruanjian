@@ -25,6 +25,11 @@ pub(crate) enum ClusterVisualOwner {
 pub(crate) struct RenderOwnershipPlan {
     /// Identity of the VisualEditState that produced this candidate frame, or zero for canonical frames.
     pub transition_id: u64,
+    /// Shared edit timeline sample used by every text glyph in this plan.
+    pub shared_progress: f64,
+    pub reflow_cluster_count: usize,
+    pub crossfade_cluster_count: usize,
+    pub ownership_conflict_count: usize,
     /// 当前 canonical 快照中的每个 target cluster 都有且只有一个 owner。
     pub cluster_owners: HashMap<ClusterOwnerKey, ClusterVisualOwner>,
     /// 同一 owner table 投影出的静态层 exclusions。
@@ -59,7 +64,9 @@ impl RenderOwnershipPlan {
         handoff_pending: bool,
         terminal_frame: bool,
     ) -> Self {
+        let requested_count = requested_animation_owners.len();
         let requested: HashSet<ClusterOwnerKey> = requested_animation_owners.into_iter().collect();
+        let duplicate_requests = requested_count.saturating_sub(requested.len());
         let mut cluster_owners = HashMap::new();
         let mut matched_requests = HashSet::new();
         let mut cluster_count = 0usize;
@@ -85,6 +92,20 @@ impl RenderOwnershipPlan {
         // 并在成功同步场景图后收掉这份无效 transition，不能产生 orphan glyph/exclusion。
         let owner_table_matches =
             matched_requests.len() == requested.len() && cluster_owners.len() == cluster_count;
+        let mut seen_visual_contributions = HashSet::new();
+        let mut duplicate_visual_contributions = 0usize;
+        for glyph in &animated_glyphs {
+            if let Some(canonical_range) = glyph.canonical_range {
+                let contribution = (canonical_range, glyph.shaping_identity.clone());
+                if !seen_visual_contributions.insert(contribution) {
+                    duplicate_visual_contributions += 1;
+                }
+            }
+        }
+        let ownership_conflict_count = duplicate_requests
+            .saturating_add(requested.len().saturating_sub(matched_requests.len()))
+            .saturating_add(cluster_count.saturating_sub(cluster_owners.len()))
+            .saturating_add(duplicate_visual_contributions);
         if !owner_table_matches {
             for owner in cluster_owners.values_mut() {
                 *owner = ClusterVisualOwner::Static;
@@ -139,6 +160,10 @@ impl RenderOwnershipPlan {
         let canonical_frame = VisualFrame::from_static_snapshot(snapshot);
         let mut plan = Self {
             cluster_owners,
+            shared_progress: 1.0,
+            reflow_cluster_count: 0,
+            crossfade_cluster_count: 0,
+            ownership_conflict_count,
             transition_id: 0,
             static_exclusions,
             animated_glyphs,

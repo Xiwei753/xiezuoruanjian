@@ -1,7 +1,7 @@
 //! Linux Qt 正文过渡与光标动画的协调器。
 //!
 //! 正文每次编辑都由一个 `VisualEditState` 直接从最近收到 Qt 提交回执的 `VisualFrame`
-//! 过渡到最新 canonical snapshot。光标仍由独立的 CursorController 管理。
+//! 过渡到最新 canonical snapshot。协同 TextTransaction 的光标与正文共享其 timeline。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -9,10 +9,13 @@ use std::time::Instant;
 
 use writer_core::editor::OffsetMap;
 
+use crate::sujian_editor_item::animation::edit_timeline::{
+    record_timeline_event, EditMotionSample,
+};
 use crate::sujian_editor_item::animation::visual_edit_state::VisualEditState;
 use crate::sujian_editor_item::animation::visual_frame::VisualFrame;
 use crate::sujian_editor_item::cursor_animation::{
-    CoordinatedCaretProgressLimit, CursorAnimationPlan, CursorBlinkMode, CursorTransition,
+    CursorAnimationPlan, CursorBlinkMode, CursorTransition,
 };
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::CursorRect;
@@ -47,6 +50,8 @@ struct SubmittedVisualFrameSource {
 }
 
 pub(crate) struct VisualEditRequest {
+    pub transaction_id: u64,
+    pub operation_kind: String,
     pub base_snapshot: EditorLayoutSnapshot,
     pub target_snapshot: EditorLayoutSnapshot,
     pub offset_map: OffsetMap,
@@ -91,7 +96,6 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     submission_window_generation: u64,
     pub(crate) document_session: u64,
     handoff_pending: bool,
-    last_edit_at: Option<Instant>,
     typing_animation_duration_ms: u32,
     cursor_animation_duration_ms: u32,
     paused_at: Option<Instant>,
@@ -108,7 +112,6 @@ impl LinuxEditorAnimationCoordinator {
             submission_window_generation: 0,
             document_session: 0,
             handoff_pending: false,
-            last_edit_at: None,
             typing_animation_duration_ms: 160,
             cursor_animation_duration_ms: 120,
             paused_at: None,
@@ -132,8 +135,29 @@ impl LinuxEditorAnimationCoordinator {
         handoff_promoted
     }
 
-    pub(crate) fn set_typing_animation_duration_ms(&mut self, ms: u32) {
+    pub(crate) fn set_typing_animation_duration_ms(&mut self, ms: u32, now: Instant) {
         self.typing_animation_duration_ms = ms;
+        let effective_now = self.effective_text_animation_time(now);
+        if let Some(state) = self.visual_edit_state.as_mut() {
+            state.retime(effective_now, u64::from(ms));
+            let sample = state.sample(effective_now);
+            record_timeline_event(
+                "editor.edit.visual.duration_changed",
+                state.transaction_id,
+                state.transition_id,
+                state.target_snapshot.revision,
+                &state.operation_kind,
+                ms,
+                state.duration_ms(),
+                None,
+                sample.eased_progress,
+                sample.caret_rect,
+                sample.caret_target,
+                state.reflow_cluster_count,
+                state.crossfade_cluster_count,
+                state.ownership_conflict_count,
+            );
+        }
     }
 
     pub(crate) fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
@@ -143,7 +167,7 @@ impl LinuxEditorAnimationCoordinator {
     /// 新编辑直接替换当前过渡，从 Qt 已确认提交的最新视觉状态重新计算。
     pub(crate) fn begin_visual_edit(&mut self, request: VisualEditRequest) {
         self.consume_submitted_frames();
-        let previous_edit_at = self.last_edit_at;
+        let retargeting = self.visual_edit_state.is_some();
         let mut submitted_source = self
             .last_submitted_visual_frame
             .as_ref()
@@ -173,6 +197,13 @@ impl LinuxEditorAnimationCoordinator {
             request.offset_map.clone()
         };
 
+        let submitted_caret = submitted_source
+            .as_ref()
+            .and_then(|source| source.visual_frame.caret_rect);
+        let caret_motion = request
+            .caret_motion
+            .map(|(fallback_from, to)| (submitted_caret.unwrap_or(fallback_from), to));
+
         self.revision_transitions.push_back(FrameRevisionMap {
             document_session: self.document_session,
             from_revision: request.base_snapshot.revision,
@@ -180,7 +211,6 @@ impl LinuxEditorAnimationCoordinator {
             offset_map: request.offset_map.clone(),
         });
 
-        self.last_edit_at = Some(request.now);
         if !request.animate {
             self.visual_edit_state = None;
             self.handoff_pending = true;
@@ -197,12 +227,39 @@ impl LinuxEditorAnimationCoordinator {
             &request.deleted_range_edges,
             request.now,
             u64::from(self.typing_animation_duration_ms),
-            previous_edit_at,
-            request.caret_motion,
+            request.transaction_id,
+            request.operation_kind,
+            caret_motion,
             request.caret_byte_offsets,
             self.document_session,
         );
+        let source_frame_id = submitted_source
+            .as_ref()
+            .map(|source| source.ticket.render_frame_id);
         self.visual_edit_state = Some(state);
+        if let Some(state) = self.visual_edit_state.as_ref() {
+            let sample = state.sample(request.now);
+            record_timeline_event(
+                if retargeting {
+                    "editor.edit.visual.retarget"
+                } else {
+                    "editor.edit.visual.start"
+                },
+                state.transaction_id,
+                state.transition_id,
+                state.target_snapshot.revision,
+                &state.operation_kind,
+                self.typing_animation_duration_ms,
+                state.duration_ms(),
+                source_frame_id,
+                sample.eased_progress,
+                sample.caret_from,
+                sample.caret_target,
+                state.reflow_cluster_count,
+                state.crossfade_cluster_count,
+                state.ownership_conflict_count,
+            );
+        }
         // 新 transition 覆盖了待收口的旧画面；它会和新的静态层一起原子提交。
         self.handoff_pending = false;
         self.prune_revision_transitions();
@@ -210,16 +267,21 @@ impl LinuxEditorAnimationCoordinator {
 
     pub(crate) fn ownership_plan(
         &self,
-        frame_now: Instant,
+        sample: Option<EditMotionSample>,
         canonical_snapshot: Option<&EditorLayoutSnapshot>,
         visual_caret: Option<VisualCaretGeometry>,
     ) -> RenderOwnershipPlan {
-        let mut plan = if let Some(state) = self.visual_edit_state.as_ref() {
-            state.build_ownership_plan(self.effective_text_animation_time(frame_now), visual_caret)
-        } else {
-            canonical_snapshot
+        let mut plan = match (self.visual_edit_state.as_ref(), sample) {
+            (Some(state), Some(sample))
+                if sample.transition_id == state.transition_id
+                    && sample.document_session == self.document_session
+                    && sample.target_revision == state.target_snapshot.revision =>
+            {
+                state.build_ownership_plan(sample, visual_caret)
+            }
+            _ => canonical_snapshot
                 .map(RenderOwnershipPlan::canonical)
-                .unwrap_or_default()
+                .unwrap_or_default(),
         };
         plan.document_session = self.document_session;
         if self.handoff_pending {
@@ -231,11 +293,18 @@ impl LinuxEditorAnimationCoordinator {
         plan
     }
 
+    pub(crate) fn sample_edit_timeline(&self, frame_now: Instant) -> Option<EditMotionSample> {
+        self.visual_edit_state
+            .as_ref()
+            .map(|state| state.sample(self.effective_text_animation_time(frame_now)))
+    }
+
     /// 更新成功写入 Scene Graph 的 owner/resource 事实，并把视觉候选暂存到回执通道。
     /// 视觉 source 与终点状态要等 `afterFrameEnd` 回执后才生效。
     pub(crate) fn commit_rendered_plan(
         &mut self,
         plan: &RenderOwnershipPlan,
+        caret_rect: Option<CursorRect>,
         resources_ready: bool,
     ) {
         if plan.document_session != self.document_session {
@@ -248,6 +317,7 @@ impl LinuxEditorAnimationCoordinator {
         };
         let mut committed_frame = committed_frame;
         committed_frame.document_session = self.document_session;
+        committed_frame.caret_rect = caret_rect;
         let mut committed_animation_ids = Vec::new();
         let keeps_animation = resources_ready && !plan.handoff_pending;
         if keeps_animation {
@@ -318,7 +388,8 @@ impl LinuxEditorAnimationCoordinator {
                 },
                 keeps_animation && plan.terminal_frame,
                 plan.handoff_pending || !resources_ready,
-                keeps_animation && !plan.animated_glyphs.is_empty(),
+                plan.shared_progress,
+                plan.ownership_conflict_count,
             );
         }
     }
@@ -350,6 +421,7 @@ impl LinuxEditorAnimationCoordinator {
         });
         let handoff_promoted =
             frame.handoff_pending && (same_active_transition || self.visual_edit_state.is_none());
+        let submitted_caret = frame.visual_frame.caret_rect;
         self.last_submitted_visual_frame = Some(SubmittedVisualFrameSource {
             ticket,
             visual_frame: frame.visual_frame,
@@ -359,8 +431,24 @@ impl LinuxEditorAnimationCoordinator {
             if let Some(state) = self.visual_edit_state.as_mut() {
                 state.commit_submitted_visible_widths(&frame.visible_width_updates);
                 state.commit_terminal_motions(&frame.terminal_motion_indices);
-                if frame.animation_frame {
-                    state.commit_submitted_frame(ticket.render_frame_id);
+                if state.first_committed_frame_id.is_none() {
+                    state.first_committed_frame_id = Some(ticket.render_frame_id);
+                    record_timeline_event(
+                        "editor.edit.visual.first_committed_frame",
+                        state.transaction_id,
+                        state.transition_id,
+                        state.target_snapshot.revision,
+                        &state.operation_kind,
+                        self.typing_animation_duration_ms,
+                        state.duration_ms(),
+                        Some(ticket.render_frame_id),
+                        frame.shared_progress,
+                        submitted_caret,
+                        state.sample(Instant::now()).caret_target,
+                        state.reflow_cluster_count,
+                        state.crossfade_cluster_count,
+                        frame.ownership_conflict_count,
+                    );
                 }
                 if frame.terminal_frame {
                     state.terminal_frame_committed = true;
@@ -369,6 +457,24 @@ impl LinuxEditorAnimationCoordinator {
         }
         if handoff_promoted {
             if same_active_transition {
+                if let Some(state) = self.visual_edit_state.as_ref() {
+                    record_timeline_event(
+                        "editor.edit.visual.handoff",
+                        state.transaction_id,
+                        state.transition_id,
+                        state.target_snapshot.revision,
+                        &state.operation_kind,
+                        self.typing_animation_duration_ms,
+                        state.duration_ms(),
+                        Some(ticket.render_frame_id),
+                        frame.shared_progress,
+                        submitted_caret,
+                        state.sample(Instant::now()).caret_target,
+                        state.reflow_cluster_count,
+                        state.crossfade_cluster_count,
+                        frame.ownership_conflict_count,
+                    );
+                }
                 self.visual_edit_state = None;
             }
             self.handoff_pending = false;
@@ -447,22 +553,6 @@ impl LinuxEditorAnimationCoordinator {
             .map(|state| &state.target_snapshot)
     }
 
-    /// Share the fast-input submission ceiling with the matching text-driven caret tween.
-    /// The ceiling advances only when consume_submitted_frames processes Qt acknowledgments.
-    pub(crate) fn coordinated_caret_progress_limit(
-        &self,
-        coordinated_mode: bool,
-    ) -> Option<CoordinatedCaretProgressLimit> {
-        if !coordinated_mode {
-            return None;
-        }
-        let state = self.visual_edit_state.as_ref()?;
-        let limit = state.coordinated_caret_progress_limit()?;
-        (limit.document_session == self.document_session
-            && limit.layout_revision == state.target_snapshot.revision)
-            .then_some(limit)
-    }
-
     /// Move a caret-driven text transition onto its own saved visual frame before an
     /// unrelated caret movement takes over CursorController's single animation route.
     pub(crate) fn detach_caret_driven_transition(&mut self, now: Instant) {
@@ -503,7 +593,8 @@ impl LinuxEditorAnimationCoordinator {
                 &[],
                 now,
                 remaining_ms,
-                None,
+                state.transaction_id,
+                state.operation_kind.clone(),
                 None,
                 None,
                 self.document_session,
@@ -567,7 +658,6 @@ impl LinuxEditorAnimationCoordinator {
         let had = self.visual_edit_state.is_some();
         self.clear_visual_edit();
         self.paused_at = None;
-        self.last_edit_at = None;
         had
     }
 
@@ -579,7 +669,6 @@ impl LinuxEditorAnimationCoordinator {
         self.last_submitted_visual_frame = None;
         self.revision_transitions.clear();
         self.submission_mailbox.discard_all_frames();
-        self.last_edit_at = None;
         self.paused_at = None;
         self.handoff_pending = true;
     }
@@ -595,9 +684,6 @@ impl LinuxEditorAnimationCoordinator {
             if let Some(state) = self.visual_edit_state.as_mut() {
                 state.shift_started_at(delta);
             }
-            if let Some(last_edit_at) = self.last_edit_at.as_mut() {
-                *last_edit_at = last_edit_at.checked_add(delta).unwrap_or(*last_edit_at);
-            }
         }
     }
 
@@ -605,7 +691,6 @@ impl LinuxEditorAnimationCoordinator {
         let had = self.visual_edit_state.is_some();
         self.visual_edit_state = None;
         self.paused_at = None;
-        self.last_edit_at = None;
         self.handoff_pending |= had;
         had
     }
@@ -633,8 +718,16 @@ impl LinuxEditorAnimationCoordinator {
             bottom: inputs.cursor_y + inputs.cursor_h,
             baseline_y: inputs.baseline_y,
         };
+        let shared_text_timeline = inputs.coordinated_animation_enabled
+            && inputs.movement_source == CursorMoveSource::TextTransaction
+            && self
+                .visual_edit_state
+                .as_ref()
+                .is_some_and(VisualEditState::has_caret_timeline);
         let source_allows_tween = match inputs.movement_source {
-            CursorMoveSource::TextTransaction => inputs.cursor_animation_enabled,
+            CursorMoveSource::TextTransaction => {
+                inputs.cursor_animation_enabled && !shared_text_timeline
+            }
             CursorMoveSource::PointerClick | CursorMoveSource::KeyboardNavigation => {
                 inputs.smooth_cursor_enabled
             }

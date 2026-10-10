@@ -7,7 +7,7 @@ use super::super::layout_revision::LayoutRevision;
 use super::super::layout_snapshot::{EditorLayoutSnapshot, ShapingIdentity, SourceRect};
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::snapshot_id::LineSnapshotId;
-use crate::sujian_editor_item::edit_motion::DeleteEdge;
+use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge};
 
 #[derive(Clone, Debug)]
 pub(crate) struct VisualCluster {
@@ -32,6 +32,9 @@ pub(crate) struct VisualFrame {
     /// Static ownership is 0; animated ownership is tied to the frame submission ticket.
     pub ownership_revision: u64,
     pub canonical_byte_len: usize,
+    /// Caret geometry from the frame Qt actually submitted. New edit timelines use this
+    /// as their source when retargeting an in-flight visual edit.
+    pub caret_rect: Option<CursorRect>,
     /// Captured visual contributions, not a one-entry-per-character index. A CrossFade
     /// can leave several layers with the same canonical range; preserve each rendered
     /// layer here and let the next edit group them back into one logical target cluster.
@@ -96,6 +99,7 @@ impl VisualFrame {
             canonical_revision: Some(snapshot.revision),
             ownership_revision: ownership.ownership_revision,
             canonical_byte_len: canonical_byte_len(snapshot),
+            caret_rect: None,
             clusters,
         }
     }
@@ -121,6 +125,7 @@ impl VisualFrame {
             canonical_revision: Some(snapshot.revision),
             ownership_revision: 0,
             canonical_byte_len: canonical_byte_len(snapshot),
+            caret_rect: None,
             clusters,
         }
     }

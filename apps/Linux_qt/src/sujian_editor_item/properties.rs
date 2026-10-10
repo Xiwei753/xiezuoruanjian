@@ -383,6 +383,7 @@ impl SujianEditorItem {
         }
         self.current_typing_animation_duration_ms = clamped;
         self.pipeline.set_typing_animation_duration_ms(clamped);
+        self.request_frame_update();
         editor_animation_debug_log(&format!(
             "typing_animation_duration_ms_changed: {}",
             clamped
