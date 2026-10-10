@@ -159,6 +159,14 @@ export interface VisibleRunPiece {
    * 缺省时回落到 [ownLeft, ownRight] 单段（legacy 语义）。
    */
   clipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6100665268 问题3：每段 clipRect 对应的源字形完整矩形
+   * （在 run 自己布局坐标系中）。
+   *
+   * buildFrame retained 多矩形算法用此精确映射每段裁切矩形从冻结布局到目标 glyph
+   * 对应边界。与 clipRects 一一对应；缺省时 buildFrame 回落到按比例分配（legacy 语义）。
+   */
+  sourceGlyphRects?: RectLike[]
 }
 
 /**
@@ -241,6 +249,16 @@ export interface RunStartInterval {
    * 缺省（legacy/未填充）时回落到 startClipLeft/startClipRight 单段语义。
    */
   clipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6100665268 问题3：每段 clipRect 对应的源字形完整矩形
+   * （在 run 自己布局坐标系中）。
+   *
+   * buildFrame retained 多矩形算法用此精确映射每段裁切矩形从冻结布局到目标 glyph
+   * 对应边界——不按起始可见宽度比例虚构 targetWidth，每段的最终几何来自字形真实
+   * 源/目标矩形。clipRects 可以逐帧合并，但不能填平原本的间隙或溢出字形边界。
+   * 与 clipRects 一一对应；缺省时 buildFrame 回落到按比例分配（legacy 语义）。
+   */
+  sourceGlyphRects?: RectLike[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -418,6 +436,11 @@ function buildPiece(
   const lastGlyphId = run.glyphIds[lastIndex]
   const lastVisible = clusterVisible(displayed, frozenByGlyphId, lastGlyphId)
 
+  // Issue #879 复核评论6100665268 问题3：同时收集 clipRect 和对应的源字形完整矩形。
+  // 每段 clipRect 对应一个字形在 run 自己布局中的完整矩形（sourceGlyphRect），
+  // buildFrame retained 用此精确映射每段裁切矩形到目标 glyph 对应边界。
+  interface ClipWithSource { clip: RectLike; sourceRect: RectLike }
+
   // ── 首字形 ──
   const firstSpan = frozenByGlyphId.get(firstGlyphId)
   let ownLeft: number
@@ -428,6 +451,12 @@ function buildPiece(
   let visiblePixelRight: number
   // Issue #879 复核评论6099070438 问题4：首字形逐段交集投影收集器。
   const firstClipRects: RectLike[] = []
+  const firstSourceGlyphRects: RectLike[] = []
+  // 首字形在 run 自己布局中的完整矩形
+  const firstGlyphFullRect: RectLike = {
+    x: firstGlyphTargetLeft, y: run.ownRect.y,
+    width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
+  }
 
   if (firstSpan !== undefined) {
     // 被窗口覆盖：计算源字形几何，然后投影到目标布局
@@ -459,6 +488,7 @@ function buildPiece(
             x: projectedLeft, y: run.ownRect.y,
             width: projectedRight - projectedLeft, height: run.ownRect.height,
           })
+          firstSourceGlyphRects.push(firstGlyphFullRect)
           if (projectedLeft < minProjectedLeft) {
             minProjectedLeft = projectedLeft
           }
@@ -490,6 +520,7 @@ function buildPiece(
         x: ownFullLeft, y: run.ownRect.y,
         width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
       })
+      firstSourceGlyphRects.push(firstGlyphFullRect)
     }
     // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
     onScreenLeft = onScreenLeftOf(firstVisible)
@@ -505,6 +536,7 @@ function buildPiece(
       x: firstGlyphTargetLeft, y: run.ownRect.y,
       width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
     })
+    firstSourceGlyphRects.push(firstGlyphFullRect)
   }
 
   // ── 尾字形 ──
@@ -512,6 +544,12 @@ function buildPiece(
   let onScreenRight: number
   // Issue #879 复核评论6099070438 问题4：尾字形逐段交集投影收集器。
   const lastClipRects: RectLike[] = []
+  const lastSourceGlyphRects: RectLike[] = []
+  // 尾字形在 run 自己布局中的完整矩形
+  const lastGlyphFullRect: RectLike = {
+    x: lastGlyphTargetLeft, y: run.ownRect.y,
+    width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
+  }
   if (lastVisible !== null) {
     const lastSpan = frozenByGlyphId.get(lastGlyphId)
     if (lastSpan !== undefined) {
@@ -542,6 +580,7 @@ function buildPiece(
               x: projectedLeft, y: run.ownRect.y,
               width: projectedRight - projectedLeft, height: run.ownRect.height,
             })
+            lastSourceGlyphRects.push(lastGlyphFullRect)
             if (projectedRight > maxProjectedRight) {
               maxProjectedRight = projectedRight
             }
@@ -566,6 +605,7 @@ function buildPiece(
           x: lastGlyphTargetLeft, y: run.ownRect.y,
           width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
         })
+        lastSourceGlyphRects.push(lastGlyphFullRect)
       }
       // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
       onScreenRight = onScreenRightOf(lastVisible)
@@ -577,6 +617,7 @@ function buildPiece(
         x: lastGlyphTargetLeft, y: run.ownRect.y,
         width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
       })
+      lastSourceGlyphRects.push(lastGlyphFullRect)
     }
   } else {
     // lastVisible 为 null 不应发生（lastIndex 是可见段的最后一个）
@@ -584,24 +625,87 @@ function buildPiece(
     onScreenRight = onScreenLeft
   }
 
-  // Issue #879 复核评论6099070438 问题4：合并首/尾 clipRects 为该可见段的多段裁切子矩形。
+  // Issue #879 复核评论6100665268 问题4：合并首/尾 clipRects 为该可见段的多段裁切子矩形。
   // - 首尾同字形（单字形 piece）：只用 firstClipRects（首尾是同一字形的可见区间）。
-  // - 首尾不同字形：首字形可见段 + 中间整段 + 尾字形可见段，覆盖整个岛的所有可见部分。
+  // - 首尾不同字形：首字形可见段 + 中间逐字形可见段 + 尾字形可见段。
+  //
+  // 旧实现把 firstIndex..lastIndex 之间的中间字形直接画一个完整矩形
+  // (midLeft=firstGlyphTargetRight → midRight=lastGlyphTargetLeft)，
+  // 假设中间字形完整可见。实际上连续可见的中间字形也可能只是部分显示
+  // （例如三个字形都可见，但中间的"乙"仅显示左半）。
+  // 因为 visibleGlyphPieces 只按"是否有非空交集"分段，buildPiece 直接画满乙，
+  // 会重新露出乙的隐藏部分。
+  //
+  // 修复：遍历 firstIndex..lastIndex 的每个 glyphId，从 clusterVisible(...).rects
+  // 获得所有真实二维可见子矩形，逐 glyph 投影到 run.ownLayout（用 projectToTarget），
+  // 再组装 clipRects。不能假设中间字形完整可见。
   const pieceClipRects: RectLike[] = []
+  const pieceSourceGlyphRects: RectLike[] = []
   if (firstIndex === lastIndex) {
     pieceClipRects.push(...firstClipRects)
+    pieceSourceGlyphRects.push(...firstSourceGlyphRects)
   } else {
     pieceClipRects.push(...firstClipRects)
-    // 中间整段（首字形右边界 → 尾字形左边界），中间字形完整可见
-    const midLeft = firstGlyphTargetRight
-    const midRight = lastGlyphTargetLeft
-    if (midRight - midLeft > VISIBLE_EPSILON) {
-      pieceClipRects.push({
-        x: midLeft, y: run.ownRect.y,
-        width: midRight - midLeft, height: run.ownRect.height,
-      })
+    pieceSourceGlyphRects.push(...firstSourceGlyphRects)
+    // 中间字形逐个处理——不能假设完整可见
+    for (let i = firstIndex + 1; i < lastIndex; i++) {
+      const midGlyphId = run.glyphIds[i]
+      const midVisible = clusterVisible(displayed, frozenByGlyphId, midGlyphId)
+      if (midVisible === null) {
+        // 中间字形不可见——跳过，不产生 clipRect（不填补空洞）
+        continue
+      }
+      // 该字形在 run 自己布局中的完整边界
+      const midGlyphTargetLeft = xAtOffset(run.ownLayout, boundaries[i], run.ownRect.x)
+      const midGlyphTargetRight = xAtOffset(run.ownLayout, boundaries[i + 1],
+        run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
+      const midGlyphFullRect: RectLike = {
+        x: midGlyphTargetLeft, y: run.ownRect.y,
+        width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
+      }
+      const midSpan = frozenByGlyphId.get(midGlyphId)
+      if (midSpan !== undefined) {
+        // 被窗口覆盖：逐段投影
+        const midSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, midGlyphId)
+        if (midSourceGeom !== null) {
+          for (const r of midVisible.rects) {
+            const visLeftInSource = Math.max(midSourceGeom.x0, r.x - midSpan.offsetX)
+            const visRightInSource = Math.min(midSourceGeom.x1, r.x + r.width - midSpan.offsetX)
+            if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+              const projectedLeft = projectToTarget(
+                visLeftInSource, midSourceGeom.x0, midSourceGeom.x1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              const projectedRight = projectToTarget(
+                visRightInSource, midSourceGeom.x0, midSourceGeom.x1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              pieceClipRects.push({
+                x: projectedLeft, y: run.ownRect.y,
+                width: projectedRight - projectedLeft, height: run.ownRect.height,
+              })
+              pieceSourceGlyphRects.push(midGlyphFullRect)
+            }
+          }
+        } else {
+          // 无法获取源字形几何——退回完整边界
+          pieceClipRects.push({
+            x: midGlyphTargetLeft, y: run.ownRect.y,
+            width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
+          })
+          pieceSourceGlyphRects.push(midGlyphFullRect)
+        }
+      } else {
+        // 静态可见：完整边界（源 = 目标）
+        pieceClipRects.push({
+          x: midGlyphTargetLeft, y: run.ownRect.y,
+          width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
+        })
+        pieceSourceGlyphRects.push(midGlyphFullRect)
+      }
     }
     pieceClipRects.push(...lastClipRects)
+    pieceSourceGlyphRects.push(...lastSourceGlyphRects)
   }
 
   return {
@@ -617,6 +721,7 @@ function buildPiece(
     visiblePixelLeft: visiblePixelLeft,
     visiblePixelRight: visiblePixelRight,
     clipRects: pieceClipRects.length > 0 ? pieceClipRects : undefined,
+    sourceGlyphRects: pieceSourceGlyphRects.length > 0 ? pieceSourceGlyphRects : undefined,
   }
 }
 
@@ -834,49 +939,89 @@ export function retainedMoveStartState(
   displayed: DisplayedContext,
   fallback: RunStartState
 ): RunStartPiece[] {
-  const pieces = visibleGlyphPieces(run, displayed)
-  if (pieces.length === 0) {
-    // 一个共享字形都不在屏上（旧帧已静态化且全部消失）→ 返回 fallback。
-    // 覆盖整段 run 的 glyphIds，而不是只取第一个字形。
-    return [{
-      firstIndex: 0,
-      lastIndex: run.glyphIds.length - 1,
-      startClipLeft: fallback.startClipLeft,
-      startClipRight: fallback.startClipRight,
-      startPositionX: fallback.startPositionX,
-      startPositionY: fallback.startPositionY,
-      glyphIds: [...run.glyphIds],
-    }]
-  }
-  // Issue #879 复核评论6099070438 问题1：为每个 retained piece 预先规划稳定的物理窗口分区——
-  // 每个字形一个 interval（firstIndex=lastIndex=i）。这样 plannedWindowKeys 和 buildFrame
-  // 都按 interval 分配 key，多岛时两个集合相等，sameKeySet 不再恒 false，候选不再持续滞留。
-  // retarget 保留此稳定分区（firstIndex/lastIndex/glyphIds 不变），只重算每个 interval 的
-  // clip/position（见 retargetRunStarts retained 分支）。
+  // Issue #879 复核评论6100665268 问题1：retained 的固定物理窗口分区必须覆盖
+  // run.glyphIds 的全部字符簇，与 prepare 时可不可见无关。
+  //
+  // 旧实现用 visibleGlyphPieces 只返回当时可见的字形段，不可见字形没有 interval。
+  // 如果 prepare 时整段不可见，回退成覆盖全 run、没有 intervals 的 piece。
+  // 此时 plannedWindowKeys 按整 run glyphIds 规划 1 个 key；若等待窗口期间旧动画
+  // 露出局部字形，下一次 retargetRunStarts(kind='retained') 因 piece.intervals
+  // 不存在走 allVisibleIslands，生成若干小 interval.glyphIds，随后 plannedWindowKeys
+  // 和 buildFrame 就变成另一组 key——物理 Text 节点身份不稳定。
+  //
+  // 修复：只有一个 piece 覆盖整个 run（firstIndex=0, lastIndex=glyphIds.length-1），
+  // 其 intervals 覆盖所有字形——按完整 [0..glyphIds.length-1] 每个 glyph 固定一个
+  // interval（firstIndex=lastIndex=i）。可见字形用 intervalForIsland 计算正确的
+  // clip/position/clipRects；不可见字形使用显式零宽/空裁切（startClipLeft=startClipRight），
+  // 但 interval 分区保留。retargetRunStarts(kind='retained') 永远只刷新这份已冻结分区
+  // 内的 startClip/startPosition/clipRects，不增删 glyphIds key。
   const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
   const frozenByGlyphId = frozenIndex(displayed)
-  return pieces.map((p: VisibleRunPiece): RunStartPiece => {
-    const intervals: RunStartInterval[] = []
-    for (let i = p.firstIndex; i <= p.lastIndex; i++) {
-      const interval = intervalForIsland(
-        run, boundaries, i, i, 'retained', displayed, frozenByGlyphId
-      )
-      if (interval !== null) {
-        intervals.push(interval)
+  const intervals: RunStartInterval[] = []
+  let legacyStartClipLeft = fallback.startClipLeft
+  let legacyStartClipRight = fallback.startClipRight
+  let legacyStartPositionX = fallback.startPositionX
+  let legacyStartPositionY = fallback.startPositionY
+  let legacyResolved = false
+
+  for (let i = 0; i < run.glyphIds.length; i++) {
+    const interval = intervalForIsland(
+      run, boundaries, i, i, 'retained', displayed, frozenByGlyphId
+    )
+    if (interval !== null) {
+      intervals.push(interval)
+      // legacy 单段起始取第一个可见 interval 的值
+      if (!legacyResolved) {
+        legacyStartClipLeft = interval.startClipLeft
+        legacyStartClipRight = interval.startClipRight
+        legacyStartPositionX = interval.startPositionX
+        legacyStartPositionY = interval.startPositionY
+        legacyResolved = true
       }
+    } else {
+      // 不可见字形：保留分区，使用显式零宽/空裁切
+      const glyphX = boundaries.length > i
+        ? xAtOffset(run.ownLayout, boundaries[i], run.ownRect.x)
+        : run.ownRect.x
+      // Issue #879 复核评论6100665268 问题3：不可见字形的 sourceGlyphRects 保留完整字形矩形，
+      // clipRects 设为零宽度。buildFrame retained 多矩形算法据此在字形重新可见时
+      // 精确映射裁切矩形到目标 glyph 对应边界。
+      const glyphFullWidth = boundaries.length > i + 1
+        ? xAtOffset(run.ownLayout, boundaries[i + 1], run.ownRect.x + run.ownRect.width,
+          CaretAffinity.Upstream) - glyphX
+        : 0
+      intervals.push({
+        firstIndex: i,
+        lastIndex: i,
+        glyphIds: [run.glyphIds[i]],
+        startClipLeft: glyphX,
+        startClipRight: glyphX,
+        startPositionX: glyphX,
+        startPositionY: run.ownRect.y,
+        utf16Start: boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
+        utf16End: boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End,
+        clipRects: [{
+          x: glyphX, y: run.ownRect.y,
+          width: 0, height: run.ownRect.height,
+        }],
+        sourceGlyphRects: [{
+          x: glyphX, y: run.ownRect.y,
+          width: glyphFullWidth, height: run.ownRect.height,
+        }],
+      })
     }
-    return {
-      firstIndex: p.firstIndex,
-      lastIndex: p.lastIndex,
-      startClipLeft: p.ownLeft,
-      startClipRight: p.ownRight,
-      // 每个 piece 的 startPosition 让该 piece 的第一个可见字形停在此刻在屏的位置上
-      startPositionX: p.onScreenLeft - (p.ownLeft - run.ownRect.x),
-      startPositionY: p.onScreenTop,
-      glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
-      intervals: intervals.length > 0 ? intervals : undefined,
-    }
-  })
+  }
+
+  return [{
+    firstIndex: 0,
+    lastIndex: run.glyphIds.length - 1,
+    startClipLeft: legacyStartClipLeft,
+    startClipRight: legacyStartClipRight,
+    startPositionX: legacyStartPositionX,
+    startPositionY: legacyStartPositionY,
+    glyphIds: [...run.glyphIds],
+    intervals: intervals.length > 0 ? intervals : undefined,
+  }]
 }
 
 /**
@@ -952,6 +1097,14 @@ export function retargetRunStarts(
             startPositionY: prevInterval.startPositionY,
             utf16Start: prevInterval.utf16Start,
             utf16End: prevInterval.utf16End,
+            // Issue #879 复核评论6100665268 问题3：不可见时 clipRects 设为零宽度，
+            // 保留分区但不露出任何可见区域。
+            clipRects: [{
+              x: clipX, y: prevInterval.startPositionY,
+              width: 0, height: run.ownRect.height,
+            }],
+            // 保留 prevInterval.sourceGlyphRects 的引用即可（不可见时不需要重新计算）。
+            sourceGlyphRects: prevInterval.sourceGlyphRects,
           })
         }
       }
@@ -984,6 +1137,11 @@ export function retargetRunStarts(
             const gapLast = island.firstIndex - 1
             const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
             const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+            // Issue #879 复核评论6100665268 问题3：空洞的 sourceGlyphRects 保留完整字形矩形，
+            // clipRects 设为零宽度，保持数据结构一致性。
+            const gapGlyphLeft = xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+            const gapGlyphRight = xAtOffset(run.ownLayout, boundaries[gapLast + 1],
+              run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
             zeroWidthIntervals.push({
               firstIndex: gapFirst,
               lastIndex: gapLast,
@@ -994,6 +1152,14 @@ export function retargetRunStarts(
               startPositionY: piece.startPositionY,
               utf16Start: boundaries[gapFirst],
               utf16End: boundaries[gapLast + 1],
+              clipRects: [{
+                x: gapClipX, y: piece.startPositionY,
+                width: 0, height: run.ownRect.height,
+              }],
+              sourceGlyphRects: [{
+                x: gapGlyphLeft, y: piece.startPositionY,
+                width: gapGlyphRight - gapGlyphLeft, height: run.ownRect.height,
+              }],
             })
           }
           const islandInterval = intervals.find(iv => iv.firstIndex === island.firstIndex)
@@ -1007,6 +1173,11 @@ export function retargetRunStarts(
           const gapLast = piece.lastIndex
           const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
           const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+          // Issue #879 复核评论6100665268 问题3：尾部空洞的 sourceGlyphRects 保留完整字形矩形，
+          // clipRects 设为零宽度，保持数据结构一致性。
+          const gapGlyphLeft = xAtOffset(run.ownLayout, boundaries[gapFirst], run.ownRect.x)
+          const gapGlyphRight = xAtOffset(run.ownLayout, boundaries[gapLast + 1],
+            run.ownRect.x + run.ownRect.width, CaretAffinity.Upstream)
           zeroWidthIntervals.push({
             firstIndex: gapFirst,
             lastIndex: gapLast,
@@ -1017,6 +1188,14 @@ export function retargetRunStarts(
             startPositionY: piece.startPositionY,
             utf16Start: boundaries[gapFirst],
             utf16End: boundaries[gapLast + 1],
+            clipRects: [{
+              x: gapClipX, y: piece.startPositionY,
+              width: 0, height: run.ownRect.height,
+            }],
+            sourceGlyphRects: [{
+              x: gapGlyphLeft, y: piece.startPositionY,
+              width: gapGlyphRight - gapGlyphLeft, height: run.ownRect.height,
+            }],
           })
         }
         if (zeroWidthIntervals.length > 0) {
@@ -1165,6 +1344,9 @@ function intervalForIsland(
     // Issue #879 复核评论6099070438 问题4：传递 buildPiece 收集的多段裁切子矩形，
     // buildFrame 据此逐段插值，避免把不连续可见压成连续区间。
     clipRects: visible.clipRects,
+    // Issue #879 复核评论6100665268 问题3：传递每段 clipRect 对应的源字形完整矩形，
+    // buildFrame retained 多矩形算法用此精确映射每段裁切矩形到目标 glyph 对应边界。
+    sourceGlyphRects: visible.sourceGlyphRects,
   }
 }
 
@@ -1198,6 +1380,12 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
           ? undefined
           : iv.clipRects.map((cr: RectLike): RectLike => ({
             x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
+        // Issue #879 复核评论6100665268 问题3：深拷贝 sourceGlyphRects，避免共享引用。
+        sourceGlyphRects: iv.sourceGlyphRects === undefined
+          ? undefined
+          : iv.sourceGlyphRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
           })),
       })),
   }))

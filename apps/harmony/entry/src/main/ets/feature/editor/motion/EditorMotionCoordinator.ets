@@ -1529,7 +1529,41 @@ export class EditorMotionCoordinator {
           // 宽度按各自在起始总宽度中的比例从起始宽度插值到目标宽度。
           // 否则回落到单个 islandClipRect（legacy 语义）。
           const islandClipRects: ClipRect[] = []
-          if (interval.clipRects !== undefined && interval.clipRects.length > 0) {
+          if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
+              interval.sourceGlyphRects !== undefined &&
+              interval.sourceGlyphRects.length === interval.clipRects.length) {
+            // Issue #879 复核评论6100665268 问题3：用 sourceGlyphRects 精确映射每段裁切矩形
+            // 从冻结布局到目标 glyph 对应边界，不按起始可见宽度比例虚构 targetWidth。
+            // 每段的最终几何来自字形真实源/目标矩形，clipRects 可以逐帧合并但不能填平间隙。
+            for (let si = 0; si < interval.clipRects.length; si++) {
+              const cr = interval.clipRects[si]
+              const sr = interval.sourceGlyphRects[si]
+              // 起始裁切矩形（屏幕坐标）：clipRect 在 run 布局坐标中，
+              // 加上岛起始屏幕位置相对于岛起始裁切左边界的偏移
+              const startScreenX = islandStartX + (cr.x - interval.startClipLeft)
+              const startWidth = Math.max(0, cr.width)
+              const startScreenY = islandStartY
+              const startHeight = Math.max(0, cr.height)
+              // 目标裁切矩形（屏幕坐标）：sourceGlyphRect 映射到目标布局位置，
+              // sourceGlyphRect 相对于岛旧左边界的偏移 + 岛目标屏幕位置
+              const targetScreenX = islandNewX + (sr.x - islandOldLeft)
+              const targetWidth = Math.max(0, sr.width)
+              const targetScreenY = islandNewY
+              const targetHeight = Math.max(0, sr.height)
+              // 逐帧插值：p=0 时 frameRect = startRect，p=1 时 frameRect = targetRect
+              const frameX = startScreenX + (targetScreenX - startScreenX) * p
+              const frameWidth = startWidth + (targetWidth - startWidth) * p
+              const frameY = startScreenY + (targetScreenY - startScreenY) * p
+              const frameHeight = startHeight + (targetHeight - startHeight) * p
+              islandClipRects.push({
+                x: frameX,
+                y: frameY,
+                width: Math.max(0, frameWidth),
+                height: Math.max(0, frameHeight),
+              })
+            }
+          } else if (interval.clipRects !== undefined && interval.clipRects.length > 0) {
+            // legacy：按比例分配（sourceGlyphRects 不存在或长度不匹配时回落）
             let totalStartWidth = 0
             for (const cr of interval.clipRects) {
               totalStartWidth += Math.max(0, cr.width)

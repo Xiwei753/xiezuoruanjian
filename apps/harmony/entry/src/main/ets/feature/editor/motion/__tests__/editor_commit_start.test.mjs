@@ -310,7 +310,7 @@ test('问题2：多段可见字形——insertRunStartState 保留两段可见 p
   assert.equal(start[2].startClipRight, 40)
 })
 
-test('问题2：多段可见字形——retainedMoveStartState 保留两段 piece，不合并并集', () => {
+test('问题2：多段可见字形——retainedMoveStartState 单一 piece + intervals 覆盖所有字形', () => {
   const ctx = context('甲乙丙丁', 723, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
@@ -320,20 +320,39 @@ test('问题2：多段可见字形——retainedMoveStartState 保留两段 piec
   const start = retainedMoveStartState(run, withWindow, {
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
   })
-  // Issue #879 复核评论6078682695 问题1：不再合并并集，保留两段独立 piece
-  assert.equal(start.length, 2)
-  // 第一段：簇0..簇1
+  // Issue #879 复核评论6100665268 问题1：retained 总是返回单一 piece 覆盖整个 run，
+  // intervals 覆盖所有字形（每字形一个），不可见字形用零宽度 interval 保留分区。
+  assert.equal(start.length, 1)
   assert.equal(start[0].firstIndex, 0)
-  assert.equal(start[0].lastIndex, 1)
+  assert.equal(start[0].lastIndex, 3)  // 覆盖所有 glyphIds
+  assert.deepEqual(start[0].glyphIds, ids)
+  // intervals 覆盖所有字形（每字形一个 interval）
+  const intervals = start[0].intervals
+  assert.ok(intervals !== undefined && intervals.length === 4)
+  // legacy 单段起始取第一个可见 interval（簇0）的值
   assert.equal(start[0].startClipLeft, 0)
-  assert.equal(start[0].startClipRight, 20)
-  // 簇0是静态可见，在屏位置 = ownLeft = 0 → startPositionX = 0 - (0 - 0) = 0
+  assert.equal(start[0].startClipRight, 10)
+  // 簇0 静态可见，在屏位置 = ownLeft = 0 → startPositionX = 0 - (0 - 0) = 0
   assert.equal(start[0].startPositionX, 0)
-  // 第二段：簇3
-  assert.equal(start[1].firstIndex, 3)
-  assert.equal(start[1].lastIndex, 3)
-  assert.equal(start[1].startClipLeft, 30)
-  assert.equal(start[1].startClipRight, 40)
+  // 簇0 可见 [0,10]
+  const iv0 = intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv0 !== undefined)
+  assert.equal(iv0.startClipLeft, 0)
+  assert.equal(iv0.startClipRight, 10)
+  // 簇1 可见 [10,20]
+  const iv1 = intervals.find(iv => iv.firstIndex === 1)
+  assert.ok(iv1 !== undefined)
+  assert.equal(iv1.startClipLeft, 10)
+  assert.equal(iv1.startClipRight, 20)
+  // 簇2 不可见 → 零宽度 interval（保留分区但不露出可见区域）
+  const iv2 = intervals.find(iv => iv.firstIndex === 2)
+  assert.ok(iv2 !== undefined)
+  assert.equal(iv2.startClipLeft, iv2.startClipRight, '不可见字形 interval 应为零宽度')
+  // 簇3 可见 [30,40]——丙的空洞绝不填补
+  const iv3 = intervals.find(iv => iv.firstIndex === 3)
+  assert.ok(iv3 !== undefined)
+  assert.equal(iv3.startClipLeft, 30)
+  assert.equal(iv3.startClipRight, 40)
 })
 
 test('问题2：三段可见——甲可见、乙不可见、丙可见、丁不可见、戊可见', () => {
@@ -1831,6 +1850,99 @@ test('问题2：retained interval 的 clipRects 与 startPositionX 共同支撑�
   const islandStartX = sourceGlyphX0 + iv0.startPositionX - run.ownRect.x  // 0
   assert.notEqual(islandStartX, iv0.clipRects[0].x,
     '字形绘制原点(0)应不同于裁切后左边界(4)——完整几何与裁切矩形独立')
+})
+
+// ====== Issue #879 复核评论6100665268 问题3：retainedMoveStartState 的 sourceGlyphRects ======
+// 新语义下 retainedMoveStartState 总是返回单一 piece，intervals 覆盖所有字形。
+// 可见字形 interval 携带 clipRects 和 sourceGlyphRects（长度一致）；
+// 不可见字形 interval 携带零宽 clipRects 和完整 sourceGlyphRects。
+// retargetRunStarts retained 通道保留 sourceGlyphRects，支撑 buildFrame 精确映射裁切矩形。
+
+test('问题3：retainedMoveStartState 可见字形 interval 携带 clipRects 和 sourceGlyphRects，且长度一致', () => {
+  const ctx = context('甲乙丙丁', 920, [])
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const start = retainedMoveStartState(run, ctx, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // Issue #879 复核评论6100665268 问题3：可见字形 interval 携带 clipRects 和 sourceGlyphRects
+  assert.equal(start.length, 1)
+  const intervals = start[0].intervals
+  assert.ok(intervals !== undefined && intervals.length === 4)
+  for (let i = 0; i < 4; i++) {
+    const iv = intervals[i]
+    assert.ok(iv.clipRects !== undefined, `interval${i} 应携带 clipRects`)
+    assert.ok(iv.sourceGlyphRects !== undefined, `interval${i} 应携带 sourceGlyphRects`)
+    // clipRects 和 sourceGlyphRects 长度一致——每段裁切对应一个源字形矩形
+    assert.equal(iv.clipRects.length, iv.sourceGlyphRects.length,
+      `interval${i} clipRects 和 sourceGlyphRects 长度应一致`)
+    // sourceGlyphRects 是完整字形矩形（宽 10vp，高 20vp）
+    for (const sr of iv.sourceGlyphRects) {
+      assert.equal(sr.height, 20, 'sourceGlyphRect 高度应为字形高度 20')
+      assert.ok(sr.width > 0, '可见字形 sourceGlyphRect 宽度应大于 0')
+    }
+  }
+})
+
+test('问题3：retainedMoveStartState 不可见字形 interval 携带零宽 clipRects 和完整 sourceGlyphRects', () => {
+  const ctx = context('甲乙丙丁', 921, [])
+  const ids = idsOf(ctx, 0, 4)
+  // 簇2（丙）被窗口接管且完全不可见
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 921, null)]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // Issue #879 复核评论6100665268 问题3：不可见字形 interval 携带零宽 clipRects 和完整 sourceGlyphRects
+  assert.equal(start.length, 1)
+  const intervals = start[0].intervals
+  assert.ok(intervals !== undefined && intervals.length === 4)
+  // 簇2 不可见
+  const iv2 = intervals.find(iv => iv.firstIndex === 2)
+  assert.ok(iv2 !== undefined)
+  // clipRects 是零宽度
+  assert.ok(iv2.clipRects !== undefined, '不可见字形 interval 应携带 clipRects')
+  assert.equal(iv2.clipRects.length, 1)
+  assert.equal(iv2.clipRects[0].width, 0, '不可见字形 clipRects 应为零宽度')
+  // sourceGlyphRects 是完整字形矩形（宽 10vp，高 20vp）
+  assert.ok(iv2.sourceGlyphRects !== undefined, '不可见字形 interval 应携带 sourceGlyphRects')
+  assert.equal(iv2.sourceGlyphRects.length, 1)
+  assert.equal(iv2.sourceGlyphRects[0].width, 10, '不可见字形 sourceGlyphRects 应为完整字形宽度 10')
+  assert.equal(iv2.sourceGlyphRects[0].height, 20, '不可见字形 sourceGlyphRects 应为完整字形高度 20')
+  // 簇2 在 run 布局中 [20,30]
+  assert.equal(iv2.sourceGlyphRects[0].x, 20, '不可见字形 sourceGlyphRects x 应为簇2 左边界 20')
+})
+
+test('问题3：retargetRunStarts retained 通道保留 sourceGlyphRects', () => {
+  const ctx = context('甲乙丙丁', 922, [])
+  const all = idsOf(ctx, 0, 4)
+  const run = runGeometry(ctx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见
+  const prepared = retainedMoveStartState(run, ctx, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  // retarget：簇2 被冻结窗口吞掉（clip 0..0）
+  const retargeted = retargetRunStarts(
+    run, prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 922, null)] },
+    'retained', 0,
+    { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 },
+  )
+  // Issue #879 复核评论6100665268 问题3：retarget 保留 sourceGlyphRects
+  assert.ok(retargeted[0].intervals !== undefined)
+  assert.equal(retargeted[0].intervals.length, 4)
+  // 簇2 不可见 → interval clip 为零宽度，但 sourceGlyphRects 保留
+  const iv2 = retargeted[0].intervals.find(iv => iv.firstIndex === 2)
+  assert.ok(iv2 !== undefined)
+  assert.equal(iv2.startClipLeft, iv2.startClipRight, '不可见字形 interval 应为零宽度')
+  assert.ok(iv2.sourceGlyphRects !== undefined, '不可见字形 interval 应保留 sourceGlyphRects')
+  assert.equal(iv2.sourceGlyphRects.length, 1)
+  assert.equal(iv2.sourceGlyphRects[0].width, 10, 'retarget 后 sourceGlyphRects 应为完整字形宽度 10')
+  // 可见字形也保留 sourceGlyphRects
+  const iv0 = retargeted[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv0 !== undefined)
+  assert.ok(iv0.sourceGlyphRects !== undefined, '可见字形 interval 应保留 sourceGlyphRects')
+  assert.ok(iv0.sourceGlyphRects.length >= 1)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
