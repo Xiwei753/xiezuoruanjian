@@ -1495,9 +1495,19 @@ export class EditorMotionCoordinator {
             islandNewY = EditorMotionCoordinator.yAtOffsetLocal(
               newLayout, islandNewUtf16Start, move.newRect.y)
           }
-          // 从 interval.startPositionX/Y 插值到该岛目标位置
-          const islandCurrentX = interval.startPositionX + (islandNewX - interval.startPositionX) * p
-          const islandCurrentY = interval.startPositionY + (islandNewY - interval.startPositionY) * p
+          // Issue #879 复核评论6097927249 问题3：retained 多岛坐标语义一致。
+          // interval.startPositionX 来自 intervalForIsland（editor_commit_start.ts），
+          // 对于 retained 通道计算为 visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)，
+          // 引入了 run.ownRect.x（源布局）偏移，与 islandNewX（新版布局左边界，屏幕坐标）
+          // 坐标语义不一致。补偿为 visible.onScreenLeft（该岛在屏真实左边界）：
+          //   islandStartX = startPositionX + startClipLeft - oldRect.x
+          // 其中 interval.startClipLeft === visible.ownLeft，move.oldRect.x === run.ownRect.x
+          // （retained 通道 runGeometry 用 move.oldRect 作为 ownRect）。
+          // 这样 islandStartX 和 islandNewX 都在屏幕坐标系中，插值正确。
+          const islandStartX = interval.startPositionX + interval.startClipLeft - move.oldRect.x
+          const islandStartY = interval.startPositionY
+          const islandCurrentX = islandStartX + (islandNewX - islandStartX) * p
+          const islandCurrentY = islandStartY + (islandNewY - islandStartY) * p
           // 该岛的独立 offset——基于该岛的旧位置和当前插值位置
           const islandOffsetX = islandCurrentX - islandOldLeft
           const islandOffsetY = islandCurrentY - islandOldTop
@@ -2052,7 +2062,10 @@ export class EditorMotionCoordinator {
     // [onScreenX, onScreenX + pieceGlyphWidth] × [onScreenY, onScreenY + pieceGlyphHeight]。
     // piece 的 clipRects = 原窗口每个 clipRect 与 piece 源矩形（加 offset 后的屏幕坐标）的二维交集。
     // 交集为空（宽度或高度 ≤ 0）的 clipRect 不包含在结果中。
-    // 如果所有交集都为空，fallback 到单矩形。
+    // Issue #879 复核评论6097927249 问题1：所有交集都为空时保持空数组，
+    // 明确表示"无可见交集"——不回退到包围盒，避免隐藏字重新出现。
+    // FrozenWindowPiece.clipRects 允许为空数组，下游 buildWindowClipRects
+    // 区分 undefined（旧数据兼容）与空数组（显式完全不可见）。
     const pieceClipRects: ClipRect[] = []
     for (const cr of w.clipRects) {
       const interLeft = Math.max(cr.x, onScreenX)
@@ -2067,14 +2080,6 @@ export class EditorMotionCoordinator {
           height: interBottom - interTop
         })
       }
-    }
-    if (pieceClipRects.length === 0) {
-      pieceClipRects.push({
-        x: pieceClipLeft,
-        y: pieceClipTop,
-        width: Math.max(0, pieceClipRight - pieceClipLeft),
-        height: Math.max(0, pieceClipBottom - pieceClipTop)
-      })
     }
 
     return {
@@ -2173,6 +2178,11 @@ export class EditorMotionCoordinator {
           w, ghostIds, newIdentityTable, this.newLayout
         )
         for (const piece of pieces) {
+          // Issue #879 复核评论6097927249 问题1：已不可见的 ghost 不得反向生成残影。
+          // piece.clipRects 为空数组表示该 piece 在冻结帧完全不可见，跳过不生成 ghost。
+          if (piece.clipRects.length === 0) {
+            continue
+          }
           // 目标 clip = 零宽度（继续消退到完全隐藏）
           const targetClipLeft = piece.clipLeft
           const targetClipRight = piece.clipLeft
@@ -2233,6 +2243,11 @@ export class EditorMotionCoordinator {
         w, uncoveredIds, newIdentityTable, this.newLayout
       )
       for (const piece of pieces) {
+        // Issue #879 复核评论6097927249 问题1：已不可见的 ghost 不得反向生成残影。
+        // piece.clipRects 为空数组表示该 piece 在冻结帧完全不可见，跳过不生成 ghost。
+        if (piece.clipRects.length === 0) {
+          continue
+        }
         // 目标 clip = 零宽度（继续消退到完全隐藏）
         const targetClipLeft = piece.clipLeft
         const targetClipRight = piece.clipLeft
@@ -2399,14 +2414,18 @@ export class EditorMotionCoordinator {
           }
         } else {
           // insert：每岛目标是各自的完整可见位置
-          // 每岛的左边界不变，右边界扩展到该岛在新布局中的完整右边界
-          // piece 的完整字形矩形在屏幕坐标中是 [glyphX + offsetX, glyphX + offsetX + glyphWidth]
-          const fullLeft = piece.glyphX + piece.offsetX
-          const fullRight = fullLeft + piece.glyphWidth
+          // Issue #879 复核评论6097927249 问题2：每岛只扩展到自己的右边界，
+          // 不扩展到整段 fullRight，避免跨过其他小岛与空洞。
+          // islandStartRects = piece.clipRects（冻结帧 clip），
+          // islandTargetRects = 每岛自己的完整可见矩形（保持该岛自己的位置和宽度）。
+          // piece.clipRects 已是 buildFrozenWindowPiece 计算的"原窗口 clipRects 与该组
+          // 字形屏幕矩形的二维交集"，即每个岛在冻结帧的可见裁切矩形。
+          // carry-over insert 从该岛当前 clip 继续扩展到该岛自己的完整可见宽度，
+          // 不会跨过其他岛的范围去填补岛间空洞。
           islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({
             x: cr.x,
             y: cr.y,
-            width: Math.max(0, fullRight - cr.x),
+            width: cr.width,
             height: cr.height
           }))
         }

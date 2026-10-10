@@ -76,11 +76,19 @@ export class EditorMotionLayer {
    * Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 可能覆盖多个不连续可见岛，
    * 这些岛以「多个不连续 clip 矩形的并集」由一个 Text 节点绘制。返回 window.clipRects；
    * 若为空（旧数据/未填充），退回由包围盒 clipLeft/Right/Top/Bottom 构造的单个矩形。
+   *
+   * Issue #879 复核评论6097927249 问题1：区分 undefined 与空数组两种语义：
+   * - clipRects === undefined：旧数据缺字段，回退到包围盒（兼容）
+   * - clipRects !== undefined && clipRects.length === 0：显式空数组＝当前完全不可见，
+   *   返回空数组 []（不裁切任何内容，Text 完全不可见）
+   * - clipRects.length > 0：返回 clipRects
    */
   static buildWindowClipRects(window: MotionGlyphWindow): ClipRect[] {
-    if (window.clipRects !== undefined && window.clipRects.length > 0) {
+    if (window.clipRects !== undefined) {
+      // 显式空数组＝当前完全不可见，返回 []（不裁切任何内容）
       return window.clipRects
     }
+    // clipRects === undefined：旧数据缺字段，回退到包围盒（兼容）
     const x = window.clipLeft
     const y = window.clipTop
     const width = Math.max(0, window.clipRight - window.clipLeft)
