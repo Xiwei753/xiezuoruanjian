@@ -37,6 +37,7 @@ pub(crate) mod layout_snapshot;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod pipeline;
+pub(crate) mod pointer_diagnostics;
 /// Issue #819 评论 5956495850 第 6 节：左键指针手势状态机。
 /// 是 `pointer_drag_selecting` / `selection_gesture_active` 的唯一 owner。
 pub(crate) mod pointer_gesture;
@@ -67,7 +68,7 @@ use crate::editor::scene_graph;
 use cpp::cpp;
 use edit_snapshot::EditorSnapshot;
 use qmetaobject::prelude::*;
-use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
+use qmetaobject::{QQuickItem, QRectF, QString};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -316,17 +317,6 @@ pub struct SujianEditorItem {
     is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     is_applying_format: qt_property!(bool; READ is_applying_format WRITE set_is_applying_format NOTIFY visual_settings_changed),
-    /// Issue #819 评论 5967250411 问题 4：长按 Timer 是否激活。
-    /// QML Timer.running 绑定本 property。Rust mouse_event 左键 Press 时置 true，
-    /// Release/Cancel/Move 超阈值时置 false。不再用 TapHandler 接管 pointer event。
-    #[allow(dead_code)]
-    long_press_timer_active: qt_property!(bool; READ long_press_timer_active WRITE set_long_press_timer_active NOTIFY long_press_timer_changed),
-    /// Issue #819 评论 5967250411 问题 4：长按待处理位置 x（QML Timer 到点时读）。
-    #[allow(dead_code)]
-    long_press_pending_x: qt_property!(f32; READ long_press_pending_x WRITE set_long_press_pending_x NOTIFY long_press_timer_changed),
-    /// Issue #819 评论 5967250411 问题 4：长按待处理位置 y（QML Timer 到点时读）。
-    #[allow(dead_code)]
-    long_press_pending_y: qt_property!(f32; READ long_press_pending_y WRITE set_long_press_pending_y NOTIFY long_press_timer_changed),
     #[allow(dead_code)]
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
@@ -382,11 +372,6 @@ pub struct SujianEditorItem {
     context_menu_requested: qt_signal!(x: f32, y: f32),
     #[allow(dead_code)]
     hide_context_menu_requested: qt_signal!(),
-    /// Issue #819 评论 5967250411 问题 4：长按 Timer 启停变化通知。
-    /// QML Timer.running 绑定 `long_press_timer_active` property，本 signal 通知 QML
-    /// property 变化。不再用 TapHandler 接管 pointer event——左键 press/release/cancel
-    /// 全部由 qquickitem_impl mouse_event 单一 owner 处理。
-    long_press_timer_changed: qt_signal!(),
     /// Issue #843: 编辑事务事实 signal。
     ///
     /// 在 `apply_edit_with_visuals()` 成功并拿到 `EditorEditResult` 后发出。
@@ -429,6 +414,16 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     handle_key: qt_method!(fn(&mut self, key: i32, modifiers: i32) -> bool),
     #[allow(dead_code)]
+    pointer_press: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
+    pointer_move: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
+    pointer_release: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
+    pointer_cancel: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
+    record_pointer_activity: qt_method!(fn(&mut self, kind: QString, x: f32, y: f32, buttons: i32)),
+    #[allow(dead_code)]
     click_at: qt_method!(fn(&mut self, x: f32, y: f32, extend: bool)),
     #[allow(dead_code)]
     drag_select_at: qt_method!(fn(&mut self, x: f32, y: f32)),
@@ -448,19 +443,11 @@ pub struct SujianEditorItem {
     tick_cursor_animation: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
-    /// Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点时调用。
-    /// 调 pointer_gesture 状态机的 activate_long_press，再调 long_press_at 选词。
+    /// Issue #898：MouseArea onPressAndHold 调用。
+    /// 状态机激活长按选择后，再由 long_press_at 选词。
     /// 左键长按只负责选择，不弹菜单（菜单只由右键入口触发）。
     #[allow(dead_code)]
     activate_pointer_long_press: qt_method!(fn(&mut self, x: f32, y: f32)),
-    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
-    /// QML 在 onLongPressed 时调用，设置 selection_gesture_active = true。
-    #[allow(dead_code)]
-    begin_selection_gesture: qt_method!(fn(&mut self)),
-    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期出口。
-    /// QML 在指针释放/取消时调用，委托到私有 end_selection_gesture。
-    #[allow(dead_code)]
-    end_selection_gesture_qml: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     #[allow(dead_code)]
@@ -499,6 +486,7 @@ pub struct SujianEditorItem {
     /// 但其值由状态机维护：每次状态机 transition 后，把状态机的
     /// `pointer_drag_selecting()` / `selection_gesture_active()` 同步回这两个字段。
     pointer_gesture: pointer_gesture::PointerGestureState,
+    pointer_diagnostics: pointer_diagnostics::PointerDiagnostics,
     current_font_pixel_size: f32,
     current_font_family: QString,
     current_line_spacing: f32,
@@ -616,7 +604,6 @@ impl Default for SujianEditorItem {
             explicit_clear_requested: Default::default(),
             context_menu_requested: Default::default(),
             hide_context_menu_requested: Default::default(),
-            long_press_timer_changed: Default::default(),
             editor_change_applied: Default::default(),
 
             get_plain_text: Default::default(),
@@ -633,6 +620,11 @@ impl Default for SujianEditorItem {
             undo: Default::default(),
             redo: Default::default(),
             handle_key: Default::default(),
+            pointer_press: Default::default(),
+            pointer_move: Default::default(),
+            pointer_release: Default::default(),
+            pointer_cancel: Default::default(),
+            record_pointer_activity: Default::default(),
             click_at: Default::default(),
             drag_select_at: Default::default(),
             clipboard_copy: Default::default(),
@@ -643,11 +635,7 @@ impl Default for SujianEditorItem {
             flush_content_height: Default::default(),
             tick_cursor_animation: Default::default(),
             long_press_at: Default::default(),
-            // Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点调用。
             activate_pointer_long_press: Default::default(),
-            // Issue #810 评论 5932233052 问题3: 触屏长按 selection gesture 生命周期方法。
-            begin_selection_gesture: Default::default(),
-            end_selection_gesture_qml: Default::default(),
             select_word_at: Default::default(),
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
@@ -662,11 +650,7 @@ impl Default for SujianEditorItem {
             selection_gesture_active: false,
             // Issue #819 评论 5956495850 第 6 节：状态机初始 Idle。
             pointer_gesture: pointer_gesture::PointerGestureState::default(),
-            // Issue #819 评论 5967250411 问题 4：长按 Timer 初始未激活。
-            // qt_property 宏生成同名字段，这里初始化宏生成的字段。
-            long_press_timer_active: false,
-            long_press_pending_x: 0.0,
-            long_press_pending_y: 0.0,
+            pointer_diagnostics: pointer_diagnostics::PointerDiagnostics::default(),
             current_font_pixel_size: 22.0,
             current_font_family: QString::from("Noto Sans CJK SC"),
             current_line_spacing: 1.5,

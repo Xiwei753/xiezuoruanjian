@@ -1,5 +1,3 @@
-use super::input_host::is_left_button_event;
-use super::input_host::is_left_button_pressed;
 use super::*;
 
 use super::pointer_gesture::MoveOutcome;
@@ -135,82 +133,6 @@ impl QQuickItem for SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         // request_static_repaint 会在 GUI 线程预计算 snapshot
         self.request_static_repaint();
-    }
-
-    fn mouse_event(&mut self, event: QMouseEvent) -> bool {
-        let pos = event.position();
-        match event.event_type() {
-            qmetaobject::QMouseEventType::MouseButtonPress => {
-                // Issue #819 评论 5967250411 问题 4：只有左键 press 才进入 pointer gesture。
-                // 右键不进入 pointer gesture（右键菜单由 QML TapHandler acceptedButtons:
-                // Qt.RightButton 独立处理）。以前不判断按钮，qt_surface 是 AllButtons，
-                // 右键也会进入 pointer_gesture.press()。
-                if !is_left_button_event(&event) {
-                    return true;
-                }
-                // Issue #819 评论 5956495850 第 6 节：左键 press 通过状态机驱动。
-                // 先 hit_test 得到 hit_index 作为拖选 anchor，再 click_at 设置 cursor。
-                // 状态机 press 会清除上一轮手势的残留状态（pointer_drag_selecting /
-                // selection_gesture_active），避免上一轮手势的 Snap/隐藏状态污染本次点击。
-                let (hit_index, _) = self.hit_test(pos.x, pos.y);
-                self.pointer_gesture
-                    .press((pos.x as f32, pos.y as f32), hit_index, Instant::now());
-                self.sync_pointer_gesture_flags();
-                self.click_at(pos.x as f32, pos.y as f32, false);
-                let obj_ptr = self.get_cpp_object();
-                input::focus_item(obj_ptr);
-                // Issue #819 评论 5967250411 问题 4：左键 press 启动长按 Timer。
-                // 不再由 QML TapHandler 接管 pointer event——Timer 只由 Rust property
-                // 控制启停，到点调 activate_pointer_long_press。
-                self.start_long_press_timer(pos.x as f32, pos.y as f32);
-            }
-            qmetaobject::QMouseEventType::MouseMove => {
-                if is_left_button_pressed(&event) {
-                    // Issue #819 评论 5956495850 第 6 节：move 通过状态机驱动。
-                    // 状态机决定是否进入/继续 DragSelecting / LongPressSelecting。
-                    // selection_gesture_active 决定 render_plan_builder 的 hard_snap，
-                    // 不再用 Core has_selection（选区是否存在）代替手势状态。
-                    let outcome = self.pointer_gesture.move_pos((pos.x as f32, pos.y as f32));
-                    self.sync_pointer_gesture_flags();
-                    match outcome {
-                        MoveOutcome::StartedDragSelect { .. }
-                        | MoveOutcome::ContinueDragSelect { .. }
-                        | MoveOutcome::ContinueLongPressSelect { .. } => {
-                            // 从 anchor 持续扩选到当前位置。
-                            // drag_select_at 内部用 Core selection_anchor() 作为 anchor，
-                            // 与状态机 anchor 一致（press 时 click_at 设置
-                            // selection(hit_index, hit_index)）。
-                            self.drag_select_at(pos.x as f32, pos.y as f32);
-                            // Issue #819 评论 5967250411 问题 4：拖选超过阈值，停止长按 Timer。
-                            // ContinueLongPressSelect 时长按已激活，Timer 已触发，stop 无副作用。
-                            self.stop_long_press_timer();
-                        }
-                        MoveOutcome::StillPressed | MoveOutcome::Ignored => {
-                            // 未超过拖动阈值或无 press，不扩选。
-                        }
-                    }
-                }
-            }
-            qmetaobject::QMouseEventType::MouseButtonRelease => {
-                // Issue #819 评论 5967250411 问题 4：只有左键 release 才进入 pointer gesture。
-                if !is_left_button_event(&event) {
-                    return true;
-                }
-                // Issue #819 评论 5956495850 第 6 节：release 走统一的手势结束路径。
-                // 状态机 release 清 pointer_drag_selecting / selection_gesture_active，
-                // end_selection_gesture 额外告诉 cursor controller 手势结束，保留当前
-                // selection head visual rect 供选区收起后恢复光标运动。
-                // Issue #819 评论 5967250411 问题 4：release/cancel 的 selection gesture
-                // 结束只由 qquickitem_impl 做一次，不再从 QML 调 end_selection_gesture_qml()。
-                self.pointer_gesture.release();
-                self.sync_pointer_gesture_flags();
-                self.end_selection_gesture();
-                // Issue #819 评论 5967250411 问题 4：release 停止长按 Timer。
-                self.stop_long_press_timer();
-            }
-            _ => {}
-        }
-        true
     }
 
     fn update_paint_node(
@@ -552,6 +474,98 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    pub(crate) fn record_pointer_activity(&mut self, kind: QString, x: f32, y: f32, buttons: i32) {
+        let kind = kind.to_string();
+        self.pointer_diagnostics.record_qml_activity(
+            &kind,
+            x,
+            y,
+            buttons,
+            self.pointer_drag_selecting || self.selection_gesture_active,
+        );
+    }
+
+    pub(crate) fn record_pointer_window_activity(
+        &mut self,
+        kind: i32,
+        window_x: f64,
+        window_y: f64,
+        editor_x: f64,
+        editor_y: f64,
+        button: i32,
+        buttons: i32,
+        modifiers: i32,
+        inside_editor: bool,
+        active_focus: bool,
+        qt_timestamp: u64,
+        wheel_pixel_x: i32,
+        wheel_pixel_y: i32,
+        wheel_angle_x: i32,
+        wheel_angle_y: i32,
+    ) {
+        self.pointer_diagnostics.record_window_activity(
+            kind,
+            window_x,
+            window_y,
+            editor_x,
+            editor_y,
+            button,
+            buttons,
+            modifiers,
+            inside_editor,
+            active_focus,
+            qt_timestamp,
+            wheel_pixel_x,
+            wheel_pixel_y,
+            wheel_angle_x,
+            wheel_angle_y,
+        );
+    }
+
+    pub(crate) fn flush_pointer_move_activity(&mut self) {
+        let sequence = self.pointer_diagnostics.active_sequence();
+        self.pointer_diagnostics.flush_moves(sequence);
+    }
+
+    pub(crate) fn finish_pointer_sequence(&mut self) {
+        self.pointer_diagnostics.close_sequence();
+    }
+
+    pub(crate) fn pointer_press(&mut self, x: f32, y: f32) {
+        self.pointer_diagnostics.ensure_active_sequence();
+        let (hit_index, _) = self.hit_test(f64::from(x), f64::from(y));
+        self.pointer_gesture
+            .press((x, y), hit_index, Instant::now());
+        self.sync_pointer_gesture_flags();
+        self.click_at(x, y, false);
+    }
+
+    pub(crate) fn pointer_move(&mut self, x: f32, y: f32) {
+        let outcome = self.pointer_gesture.move_pos((x, y));
+        self.sync_pointer_gesture_flags();
+        match outcome {
+            MoveOutcome::StartedDragSelect { .. }
+            | MoveOutcome::ContinueDragSelect { .. }
+            | MoveOutcome::ContinueLongPressSelect { .. } => self.drag_select_at(x, y),
+            MoveOutcome::StillPressed | MoveOutcome::Ignored => {}
+        }
+    }
+
+    pub(crate) fn pointer_release(&mut self) {
+        self.pointer_gesture.release();
+        self.sync_pointer_gesture_flags();
+        self.end_selection_gesture();
+        self.pointer_diagnostics.close_sequence();
+    }
+
+    pub(crate) fn pointer_cancel(&mut self) {
+        self.pointer_gesture.cancel();
+        self.sync_pointer_gesture_flags();
+        self.end_selection_gesture();
+        self.pointer_diagnostics.close_sequence();
+        self.request_static_repaint();
+    }
+
     /// 构造和 `update_paint_node` 完全一致的 `CursorRenderState`。
     ///
     /// 从 `cursor_ctrl.visual_x/y/h/visible` 和当前 blink mode 算出 opacity。
@@ -628,11 +642,75 @@ impl SujianEditorItem {
         // Issue #727 评论 5757225958 问题1: drawn_caret_rect 的 y 是文档坐标，
         // visual_y 现在也统一保存文档坐标，不再减 scroll_y。
         let _ = scroll_y;
-        if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
+        let drawn_caret_rect = render_plan.drawn_caret_rect;
+        if let Some((cx, cy, ch)) = drawn_caret_rect {
             self.cursor_ctrl.visual_x = cx;
             self.cursor_ctrl.visual_y = cy;
             if ch > 0.0 {
                 self.cursor_ctrl.visual_h = ch;
+            }
+        }
+
+        if let Some(pending) = self.pointer_diagnostics.pending_render() {
+            let animation_active = self.cursor_ctrl.animation.is_some();
+            let phase = if !pending.first_frame_logged {
+                Some(if animation_active {
+                    "first_frame"
+                } else {
+                    "settled"
+                })
+            } else if !animation_active {
+                Some("animation_complete")
+            } else {
+                None
+            };
+            if let Some(phase) = phase {
+                let drawn = drawn_caret_rect.map(|(x, y, _)| (x, y));
+                let mut fields = std::collections::BTreeMap::new();
+                fields.insert("phase".to_string(), serde_json::json!(phase));
+                fields.insert(
+                    "caret_present".to_string(),
+                    serde_json::json!(drawn.is_some()),
+                );
+                fields.insert(
+                    "drawn_caret_x".to_string(),
+                    serde_json::json!(drawn.map(|point| point.0)),
+                );
+                fields.insert(
+                    "drawn_caret_y".to_string(),
+                    serde_json::json!(drawn.map(|point| point.1)),
+                );
+                fields.insert(
+                    "drawn_viewport_y".to_string(),
+                    serde_json::json!(drawn.map(|point| point.1 - scroll_y)),
+                );
+                fields.insert(
+                    "target_x".to_string(),
+                    serde_json::json!(self.cursor_ctrl.target_x),
+                );
+                fields.insert(
+                    "target_y".to_string(),
+                    serde_json::json!(self.cursor_ctrl.target_y),
+                );
+                fields.insert("scroll_y".to_string(), serde_json::json!(scroll_y));
+                fields.insert(
+                    "visible".to_string(),
+                    serde_json::json!(self.cursor_ctrl.visible),
+                );
+                fields.insert(
+                    "animation_active".to_string(),
+                    serde_json::json!(animation_active),
+                );
+                super::pointer_diagnostics::record_event(
+                    "editor.pointer.rendered",
+                    Some(pending.sequence),
+                    fields,
+                );
+                if animation_active {
+                    self.pointer_diagnostics.mark_pending_render_frame_logged();
+                } else {
+                    self.pointer_diagnostics.clear_pending_render();
+                }
             }
         }
     }
@@ -650,67 +728,13 @@ impl SujianEditorItem {
         self.selection_gesture_active = self.pointer_gesture.selection_gesture_active();
     }
 
-    /// Issue #819 评论 5967250411 问题 4：长按 Timer 启动。
-    ///
-    /// 由 `mouse_event` 左键 Press 调用。设置 `long_press_timer_active = true` 和
-    /// 待处理位置 x/y，QML Timer.running 绑定该 property 自动启动。Timer 到点调
-    /// `activate_pointer_long_press`。不再由 QML TapHandler 接管 pointer event。
-    fn start_long_press_timer(&mut self, x: f32, y: f32) {
-        self.long_press_pending_x = x;
-        self.long_press_pending_y = y;
-        self.set_long_press_timer_active(true);
-    }
-
-    /// Issue #819 评论 5967250411 问题 4：长按 Timer 停止。
-    ///
-    /// 由 `mouse_event` Release / Move 超阈值调用。设置 `long_press_timer_active = false`，
-    /// QML Timer.running 绑定该 property 自动停止。
-    fn stop_long_press_timer(&mut self) {
-        self.set_long_press_timer_active(false);
-    }
-
-    pub(crate) fn long_press_timer_active(&self) -> bool {
-        self.long_press_timer_active
-    }
-
-    pub(crate) fn set_long_press_timer_active(&mut self, v: bool) {
-        if self.long_press_timer_active != v {
-            self.long_press_timer_active = v;
-            let obj_ptr = self.get_cpp_object();
-            if !obj_ptr.is_null() {
-                self.long_press_timer_changed();
-            }
-        }
-    }
-
-    pub(crate) fn long_press_pending_x(&self) -> f32 {
-        self.long_press_pending_x
-    }
-
-    pub(crate) fn set_long_press_pending_x(&mut self, v: f32) {
-        self.long_press_pending_x = v;
-    }
-
-    pub(crate) fn long_press_pending_y(&self) -> f32 {
-        self.long_press_pending_y
-    }
-
-    pub(crate) fn set_long_press_pending_y(&mut self, v: f32) {
-        self.long_press_pending_y = v;
-    }
-
-    /// Issue #819 评论 5956495850 第 6 节：QML Timer 长按到点时调用。
+    /// Issue #898：QML MouseArea 的 onPressAndHold 调用。
     ///
     /// 调状态机 `activate_long_press`，若成功激活（返回 true）则调
     /// `long_press_at` 选词。左键长按只负责选择，不弹菜单
     /// （菜单只由右键 TapHandler 触发）。
     ///
-    /// 与旧 `begin_selection_gesture + long_press_at` 链路的区别：
-    /// - 旧链路：QML onLongPressed 调 begin_selection_gesture（置
-    ///   selection_gesture_active=true）+ long_press_at（选词 + 弹菜单）。
-    /// - 新链路：QML Timer 到点调 activate_pointer_long_press，内部状态机
-    ///   activate_long_press（置 selection_gesture_active=true +
-    ///   pointer_drag_selecting=true）+ long_press_at（只选词，不弹菜单）。
+    /// 状态机负责选择手势，右键菜单仍由右键 TapHandler 单独触发。
     pub(crate) fn activate_pointer_long_press(&mut self, x: f32, y: f32) {
         let activated = self.pointer_gesture.activate_long_press();
         self.sync_pointer_gesture_flags();
@@ -720,23 +744,9 @@ impl SujianEditorItem {
         }
     }
 
-    /// Issue #810 评论 5932233052 问题3: 触屏/手写笔长按 selection gesture 生命周期入口。
-    ///
-    /// 保留供 QML 兼容调用，但内部改成通过状态机驱动：等价于在当前 press 窗口内
-    /// 激活长按。Issue #819 评论 5956495850 第 7 节接线后，QML Timer 改调
-    /// `activate_pointer_long_press`，此方法仅作向后兼容入口。
-    pub(crate) fn begin_selection_gesture(&mut self) {
-        // 状态机 activate_long_press 在 Pressed 状态下会置
-        // selection_gesture_active=true / pointer_drag_selecting=true。
-        // 若当前不在 Pressed（如 QML 在没有 press 的情况下调），则 no-op。
-        let _ = self.pointer_gesture.activate_long_press();
-        self.sync_pointer_gesture_flags();
-    }
-
     /// Issue #810 评论 5932233052 问题3: 统一的选择手势结束路径。
     ///
-    /// 由 `mouse_event` 的 `MouseButtonRelease` 调用，替代旧的
-    /// `self.pointer_drag_selecting = false`。负责：
+    /// 由 QML pointer release/cancel 入口调用，负责：
     /// 1. 清 `pointer_drag_selecting` / `selection_gesture_active`
     /// 2. 告诉 cursor controller 手势结束，保留当前 selection head 的 visual rect，
     ///    供选区收起后从该位置恢复 Tween（而非 Snap 瞬移）。
@@ -746,25 +756,12 @@ impl SujianEditorItem {
     /// 那时 `selection_gesture_active` 已为 false，build_cursor_plan 不再强制 Snap，
     /// 从 `selection_head_rect`（= visual_x/visual_y）建 Tween 到新 cursor 位置。
     ///
-    /// Issue #819 评论 5956495850 第 6 节：状态机 flag 同步由调用方
-    /// （mouse_event release 分支）在调本方法前完成。本方法只负责 cursor_ctrl 收尾。
+    /// 状态机 flag 同步由调用方在调本方法前完成。本方法只负责 cursor_ctrl 收尾。
     fn end_selection_gesture(&mut self) {
         // 记录当前 selection head 的 visual rect。
         // 手势结束时光标因 has_selection 隐藏（should_be_visible=false），
         // visual_x/visual_y 是最后一次拖选的 cursor 位置（selection head）。
         // 选区收起后从此位置恢复 Tween。
         self.cursor_ctrl.record_selection_head_rect();
-    }
-
-    /// Issue #810 评论 5932233052 问题3: QML 暴露的选择手势结束入口。
-    ///
-    /// QML TapHandler onPressedChanged / onCanceled 在触屏/手写笔长按释放时调用，
-    /// 委托到私有 `end_selection_gesture`，与鼠标 MouseButtonRelease 走统一路径。
-    ///
-    /// Issue #819 评论 5956495850 第 6 节：同时调状态机 cancel，确保状态机回到 Idle。
-    pub(crate) fn end_selection_gesture_qml(&mut self) {
-        self.pointer_gesture.cancel();
-        self.sync_pointer_gesture_flags();
-        self.end_selection_gesture();
     }
 }

@@ -13,26 +13,6 @@ use crate::editor::input::events::ImeReplaceEvent;
 // - Qt IME 协议使用 UTF-16 code unit（QChar index）
 // - 本模块在调用 Core 前完成坐标转换
 
-pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
-        return event ? (event->buttons() & Qt::LeftButton) : false;
-    })
-}
-
-/// Issue #819 评论 5967250411 问题 4：判断本次鼠标事件的触发按钮是否是左键。
-///
-/// 与 [`is_left_button_pressed`] 不同：后者用 `event->buttons()` 判断"左键是否
-/// 正在按下"（用于 MouseMove 拖拽判断），本函数用 `event->button()` 判断
-/// "本次 Press/Release 事件由哪个按钮触发"。对于 MouseButtonRelease 事件，
-/// `buttons()` 不包含刚释放的按钮，必须用 `button()` 才能正确判断。
-pub(crate) fn is_left_button_event(event: &QMouseEvent) -> bool {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
-        return event ? (event->button() == Qt::LeftButton) : false;
-    })
-}
-
 impl SujianEditorItem {
     /// 确保 composition session 存在。使用 `self.pipeline.cursor()` 读取
     /// 当前已提交文本的光标位置（CommittedTextMirror 只读投影）。

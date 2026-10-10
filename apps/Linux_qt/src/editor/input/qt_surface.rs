@@ -7,6 +7,7 @@
 //! 此文件包含 C++ PlatformImeAdapter 类和 SujianEventFilter 类定义。
 //! cpp! 宏将所有 cpp! 块合并到同一编译单元，类定义只能出现在一个 Rust 文件中。
 
+use crate::sujian_editor_item::SujianEditorItem;
 use cpp::cpp;
 use std::ffi::c_void;
 
@@ -16,9 +17,14 @@ cpp! {{
     #include <QtGui/QKeySequence>
     #include <QtGui/QTextCharFormat>
     #include <QtGui/QTextFormat>
+    #include <QtGui/QMouseEvent>
+    #include <QtGui/QWheelEvent>
     #include <QtQuick/QQuickItem>
+    #include <QtQuick/QQuickWindow>
     #include <QEvent>
     #include <QObject>
+    #include <QPointer>
+    #include <QTimer>
     #include <QRectF>
     #include <QString>
     #include <QDebug>
@@ -33,6 +39,14 @@ cpp! {{
     extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count, const int* attr_formats);
     extern "C" void sujian_ime_cancel(void* rust_item);
     extern "C" void sujian_request_repaint(void* rust_item);
+    extern "C" void sujian_flush_pointer_moves(void* rust_item);
+    extern "C" void sujian_finish_pointer_sequence(void* rust_item);
+    extern "C" void sujian_record_pointer_window_activity(
+        void* rust_item, int kind, double window_x, double window_y,
+        double editor_x, double editor_y, int button, int buttons,
+        int modifiers, bool inside_editor, bool active_focus,
+        unsigned long long qt_timestamp, int wheel_pixel_x, int wheel_pixel_y,
+        int wheel_angle_x, int wheel_angle_y);
 
     // ── IME query data source: Rust-side state via FFI (platform adapter path) ──
     struct SujianImeQueryData {
@@ -62,14 +76,54 @@ cpp! {{
     public:
         void* rust_item;
         PlatformImeAdapter ime_adapter;
+        QPointer<QQuickItem> editor_item;
+        QPointer<QQuickWindow> watched_window;
+        QTimer move_idle_timer;
+        QTimer release_close_timer;
 
-        SujianEventFilter(QObject* parent, void* item)
-            : QObject(parent), rust_item(item) {
+        SujianEventFilter(QObject* parent, QQuickItem* item, void* rust_item_ptr)
+            : QObject(parent), rust_item(rust_item_ptr), editor_item(item) {
             ime_adapter.detect_platform();
+            move_idle_timer.setSingleShot(true);
+            move_idle_timer.setInterval(120);
+            release_close_timer.setSingleShot(true);
+            release_close_timer.setInterval(0);
+            QObject::connect(&move_idle_timer, &QTimer::timeout, this, [this]() {
+                if (rust_item) sujian_flush_pointer_moves(rust_item);
+            });
+            QObject::connect(&release_close_timer, &QTimer::timeout, this, [this]() {
+                if (rust_item) sujian_finish_pointer_sequence(rust_item);
+            });
+            if (item) {
+                QObject::connect(item, &QQuickItem::windowChanged, this,
+                    [this](QQuickWindow* window) { bind_pointer_window(window); });
+                bind_pointer_window(item->window());
+            }
+        }
+
+        ~SujianEventFilter() override {
+            bind_pointer_window(nullptr);
         }
 
         bool eventFilter(QObject* obj, QEvent* event) override {
             if (!rust_item) return false;
+            if (obj == watched_window) {
+                if (event->type() == QEvent::MouseMove) {
+                    move_idle_timer.start();
+                } else if (event->type() == QEvent::MouseButtonPress
+                    || event->type() == QEvent::MouseButtonRelease
+                    || event->type() == QEvent::MouseButtonDblClick
+                    || event->type() == QEvent::Wheel) {
+                    move_idle_timer.stop();
+                }
+                record_window_pointer_activity(event);
+                if (event->type() == QEvent::MouseButtonRelease) {
+                    // Let QML MouseArea/TapHandler finish this same input dispatch first.
+                    release_close_timer.start();
+                }
+                return false;
+            }
+            if (obj != editor_item) return false;
 
             switch (event->type()) {
             case QEvent::KeyPress: {
@@ -90,6 +144,70 @@ cpp! {{
         }
 
     private:
+        void bind_pointer_window(QQuickWindow* window) {
+            if (watched_window == window) return;
+            if (watched_window && watched_window != window) {
+                watched_window->removeEventFilter(this);
+            }
+            watched_window = window;
+            if (watched_window) {
+                watched_window->installEventFilter(this);
+            }
+        }
+
+        void record_window_pointer_activity(QEvent* event) {
+            QQuickWindow* window = watched_window.data();
+            QQuickItem* item = editor_item.data();
+            if (!window || !item || !event) return;
+
+            int kind = 0;
+            int button = 0;
+            int buttons = 0;
+            int modifiers = 0;
+            int pixel_x = 0;
+            int pixel_y = 0;
+            int angle_x = 0;
+            int angle_y = 0;
+            QPointF window_position;
+            unsigned long long qt_timestamp = 0;
+            if (event->type() == QEvent::MouseMove
+                || event->type() == QEvent::MouseButtonPress
+                || event->type() == QEvent::MouseButtonRelease
+                || event->type() == QEvent::MouseButtonDblClick) {
+                auto* mouse = static_cast<QMouseEvent*>(event);
+                kind = event->type() == QEvent::MouseMove ? 1
+                    : event->type() == QEvent::MouseButtonRelease ? 3
+                    : event->type() == QEvent::MouseButtonDblClick ? 5 : 2;
+                window_position = mouse->position();
+                button = static_cast<int>(mouse->button());
+                buttons = static_cast<int>(mouse->buttons());
+                modifiers = static_cast<int>(mouse->modifiers());
+                qt_timestamp = static_cast<unsigned long long>(mouse->timestamp());
+            } else if (event->type() == QEvent::Wheel) {
+                auto* wheel = static_cast<QWheelEvent*>(event);
+                kind = 4;
+                window_position = wheel->position();
+                buttons = static_cast<int>(wheel->buttons());
+                modifiers = static_cast<int>(wheel->modifiers());
+                qt_timestamp = static_cast<unsigned long long>(wheel->timestamp());
+                pixel_x = wheel->pixelDelta().x();
+                pixel_y = wheel->pixelDelta().y();
+                angle_x = wheel->angleDelta().x();
+                angle_y = wheel->angleDelta().y();
+            } else {
+                return;
+            }
+
+            QQuickItem* content_item = window->contentItem();
+            if (!content_item) return;
+            const QPointF editor_position = content_item->mapToItem(item, window_position);
+            sujian_record_pointer_window_activity(
+                rust_item, kind, window_position.x(), window_position.y(),
+                editor_position.x(), editor_position.y(), button, buttons, modifiers,
+                item->contains(editor_position), item->hasActiveFocus(), qt_timestamp,
+                pixel_x, pixel_y, angle_x, angle_y);
+        }
+
         // ── Layer 1 → Layer 2: KeyPress 分支 ──
         bool handle_key_press(QObject* obj, QKeyEvent* ke) {
             // ── Standard shortcut matching via QKeySequence ──
@@ -375,13 +493,11 @@ cpp! {{
 
     void sujian_install_event_filter(QQuickItem* item, void* rust_item) {
         if (!item) return;
-        auto* filter = new SujianEventFilter(item, rust_item);
+        auto* filter = new SujianEventFilter(item, item, rust_item);
         item->installEventFilter(filter);
         item->setFlag(QQuickItem::ItemHasContents, true);
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
-        item->setAcceptedMouseButtons(Qt::AllButtons);
-        // Issue #714: 保持鼠标 grab，防止拖选时事件被其他组件抢走
-        item->setKeepMouseGrab(true);
+        item->setAcceptedMouseButtons(Qt::NoButton);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         item->setFocusPolicy(Qt::StrongFocus);
 #endif
@@ -447,5 +563,77 @@ pub(crate) fn focus_item(item: *mut c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [item as "QQuickItem*"] {
         sujian_focus_item(item);
+    });
+}
+
+#[no_mangle]
+extern "C" fn sujian_record_pointer_window_activity(
+    rust_item: *mut c_void,
+    kind: i32,
+    window_x: f64,
+    window_y: f64,
+    editor_x: f64,
+    editor_y: f64,
+    button: i32,
+    buttons: i32,
+    modifiers: i32,
+    inside_editor: bool,
+    active_focus: bool,
+    qt_timestamp: u64,
+    wheel_pixel_x: i32,
+    wheel_pixel_y: i32,
+    wheel_angle_x: i32,
+    wheel_angle_y: i32,
+) {
+    if rust_item.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(move || {
+        // SAFETY: The C++ event filter is a child of this QQuickItem, is removed when its
+        // QQuickWindow changes, and calls this function only on the GUI thread while the item lives.
+        let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
+        item.record_pointer_window_activity(
+            kind,
+            window_x,
+            window_y,
+            editor_x,
+            editor_y,
+            button,
+            buttons,
+            modifiers,
+            inside_editor,
+            active_focus,
+            qt_timestamp,
+            wheel_pixel_x,
+            wheel_pixel_y,
+            wheel_angle_x,
+            wheel_angle_y,
+        );
+    });
+}
+
+#[no_mangle]
+extern "C" fn sujian_flush_pointer_moves(rust_item: *mut c_void) {
+    if rust_item.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(move || {
+        // SAFETY: The timer is owned by the event filter, which is a child of the item and
+        // runs this callback only on the GUI thread while both are alive.
+        let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
+        item.flush_pointer_move_activity();
+    });
+}
+
+#[no_mangle]
+extern "C" fn sujian_finish_pointer_sequence(rust_item: *mut c_void) {
+    if rust_item.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(move || {
+        // SAFETY: The timer is owned by the event filter, which is a child of the item and
+        // runs this callback only on the GUI thread while both are alive.
+        let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
+        item.finish_pointer_sequence();
     });
 }

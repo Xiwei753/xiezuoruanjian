@@ -21,8 +21,8 @@
 //! - `selection_gesture_active` 只在真正进入拖选或长按选词后为 true；普通 press
 //!   立即执行 click，但不会把一个点击误判为选择手势。
 //! - `pointer_drag_selecting` 只在真正发生拖选（move 超过阈值）后为 true。
-//! - 长按由外部 Timer 在到点时调 `activate_long_press`，状态机不自己计时，
-//!   也不接管 pointer grab / MouseMove / Release。
+//! - QML MouseArea 在长按到点时调 `activate_long_press`；状态机不接收原始 Qt
+//!   鼠标事件，也不接管 pointer grab。
 
 use std::time::Instant;
 
@@ -41,8 +41,7 @@ pub(crate) enum PointerGesturePhase {
         origin: (f32, f32),
         /// press 时的 hit_test 结果（byte index），作为拖选 anchor。
         hit_index: usize,
-        /// press 时刻，供外部 Timer 判断长按时延。当前状态机不自己计时，
-        /// 保留此字段供未来需要时延判断的场景使用。
+        /// press 时刻，供手势诊断使用；长按时序由 QML MouseArea 判定。
         started_at: Instant,
     },
     /// 拖选进行中。anchor 是拖选起点（byte index）。
@@ -55,8 +54,8 @@ pub(crate) enum PointerGesturePhase {
 /// 左键指针手势状态机。
 ///
 /// 唯一 owner of `pointer_drag_selecting` 和 `selection_gesture_active`。
-/// `qquickitem_impl.rs` 的 mouse_event 和 QML Timer 都通过这个状态机驱动
-/// 手势生命周期，不再直接修改两个布尔字段。
+/// QML MouseArea 经由 qquickitem_impl.rs 的命名入口驱动这个状态机，
+/// 不再直接修改两个布尔字段。
 #[derive(Clone, Debug)]
 pub(crate) struct PointerGestureState {
     phase: PointerGesturePhase,
@@ -188,8 +187,8 @@ impl PointerGestureState {
         }
     }
 
-    /// 长按激活。由外部 QML Timer 在到点时调用（通过 Rust 的
-    /// `activate_pointer_long_press` qt_method）。
+    /// 长按激活。由 QML MouseArea 的 onPressAndHold 调用 Rust
+    /// `activate_pointer_long_press` qt_method。
     ///
     /// 只有处于 Pressed 状态时才生效；已进入 DragSelecting 则忽略
     /// （拖选优先于长按）。激活后进入 LongPressSelecting，调用方据此

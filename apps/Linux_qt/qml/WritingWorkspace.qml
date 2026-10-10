@@ -1002,41 +1002,60 @@ Rectangle {
                                 acceptedButtons: Qt.RightButton
                                 onTapped: function(eventPoint) {
                                     sujianEditor.click_at(eventPoint.position.x, eventPoint.position.y, false)
+                                    sujianEditor.record_pointer_activity(
+                                        "context_menu",
+                                        eventPoint.position.x,
+                                        eventPoint.position.y,
+                                        0)
                                     editorContextMenu.popup()
                                 }
                             }
 
-                            // Issue #819 评论 5967250411 问题 4：左键长按选词改用
-                            // Rust property 驱动的 Timer，不再用 TapHandler 接管 pointer event。
-                            //
-                            // 设计：
-                            // - qquickitem_impl mouse_event 是左键 pointer event 的唯一 owner。
-                            //   左键 Press 时 Rust 设 long_press_timer_active = true + 记录 x/y；
-                            //   Release / Move 超阈值时设 false。
-                            // - QML Timer.running 绑定 sujianEditor.long_press_timer_active，
-                            //   到点时调 sujianEditor.activate_pointer_long_press(x, y)。
-                            // - Timer 不接管 pointer grab，不处理 MouseMove/Release。
-                            // - release/cancel 的 selection gesture 结束只由 qquickitem_impl
-                            //   mouse_event 做一次，不再从 QML 结束选择手势。
-                            // - 左键长按只负责选择，不弹菜单（菜单只由右键 TapHandler 触发）。
-                            //
-                            // 旧 leftButtonLongPressHandler (TapHandler) 已删除：它和
-                            // qquickitem_impl mouse_event 双 owner，且 TapHandler onPressedChanged
-                            // / onCanceled 结束选择手势与 mouse_event release
-                            // 重复结束手势。Issue #815 评论 6042062633 修改 1 恢复的鼠标左键
-                            // 长按选词语义保留（Timer 到点调 activate_pointer_long_press）。
-                            Timer {
-                                id: leftButtonLongPressTimer
-                                // Timer.running 绑定 Rust property，由 mouse_event 控制启停。
-                                running: sujianEditor.long_press_timer_active
-                                interval: 800
-                                repeat: false
-                                // Timer 到点时调 activate_pointer_long_press，
-                                // 不接管 pointer grab，不处理 MouseMove/Release。
-                                onTriggered: {
-                                    sujianEditor.activate_pointer_long_press(
-                                        sujianEditor.long_press_pending_x,
-                                        sujianEditor.long_press_pending_y)
+                            // Left-button events have one owner here. Rust only receives
+                            // normalized press/move/release/cancel calls from this area.
+                            MouseArea {
+                                id: editorPointerArea
+                                anchors.fill: parent
+                                acceptedButtons: Qt.LeftButton
+                                preventStealing: true
+                                hoverEnabled: true
+                                pressAndHoldInterval: 800
+
+                                onEntered: {
+                                    sujianEditor.record_pointer_activity(
+                                        "enter", mouseX, mouseY, pressed ? Qt.LeftButton : 0)
+                                }
+                                onExited: {
+                                    sujianEditor.record_pointer_activity(
+                                        "leave", mouseX, mouseY, pressed ? Qt.LeftButton : 0)
+                                }
+                                onPositionChanged: function(mouse) {
+                                    sujianEditor.record_pointer_activity(
+                                        "move", mouse.x, mouse.y, mouse.buttons)
+                                    if (pressed) {
+                                        sujianEditor.pointer_move(mouse.x, mouse.y)
+                                    }
+                                }
+                                onPressed: function(mouse) {
+                                    sujianEditor.record_pointer_activity(
+                                        "press", mouse.x, mouse.y, mouse.buttons)
+                                    sujianEditor.pointer_press(mouse.x, mouse.y)
+                                    sujianEditor.request_text_input_focus()
+                                }
+                                onReleased: function(mouse) {
+                                    sujianEditor.record_pointer_activity(
+                                        "release", mouse.x, mouse.y, mouse.buttons)
+                                    sujianEditor.pointer_release()
+                                }
+                                onCanceled: {
+                                    sujianEditor.record_pointer_activity(
+                                        "cancel", mouseX, mouseY, 0)
+                                    sujianEditor.pointer_cancel()
+                                }
+                                onPressAndHold: function(mouse) {
+                                    sujianEditor.record_pointer_activity(
+                                        "long_press", mouse.x, mouse.y, mouse.buttons)
+                                    sujianEditor.activate_pointer_long_press(mouse.x, mouse.y)
                                 }
                             }
 

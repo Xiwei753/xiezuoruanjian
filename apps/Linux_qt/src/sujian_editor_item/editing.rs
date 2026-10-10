@@ -597,6 +597,7 @@ impl SujianEditorItem {
     /// 旧路线的 caret handover / detach / epoch ownership 全部删除：光标与文字
     /// 动画完全解耦，点击不需要"抢"正文动画的 caret 所有权。
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        let pointer_sequence = self.pointer_diagnostics.ensure_active_sequence();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         let old_cursor = self.pipeline.cursor();
         let old_anchor = self.pipeline.selection_anchor();
@@ -621,7 +622,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.dirty = true;
         self.update_cursor_visual_position();
 
-        // Issue #826: 点击写正式诊断事件 `editor.pointer.click`。
+        // A click commits the logical caret immediately. The pointer sequence joins
+        // this logical result to its visual target and the caret submitted for drawing.
         record_pointer_click(
             x,
             y,
@@ -630,7 +632,92 @@ impl SujianEditorItem {
             self.pipeline.cursor(),
             old_anchor,
             anchor,
+            pointer_sequence,
+            affinity,
+            self.current_scroll_y,
         );
+
+        let mut target_fields = std::collections::BTreeMap::new();
+        target_fields.insert(
+            "logical_byte_index".to_string(),
+            serde_json::json!(self.pipeline.cursor()),
+        );
+        target_fields.insert(
+            "affinity".to_string(),
+            serde_json::json!(format!("{:?}", affinity)),
+        );
+        target_fields.insert(
+            "target_x".to_string(),
+            serde_json::json!(self.cursor_ctrl.target_x),
+        );
+        target_fields.insert(
+            "target_y".to_string(),
+            serde_json::json!(self.cursor_ctrl.target_y),
+        );
+        target_fields.insert(
+            "visual_x".to_string(),
+            serde_json::json!(self.cursor_ctrl.visual_x),
+        );
+        target_fields.insert(
+            "visual_y".to_string(),
+            serde_json::json!(self.cursor_ctrl.visual_y),
+        );
+        target_fields.insert(
+            "scroll_y".to_string(),
+            serde_json::json!(self.current_scroll_y),
+        );
+        target_fields.insert(
+            "visible".to_string(),
+            serde_json::json!(self.cursor_ctrl.visible),
+        );
+        target_fields.insert(
+            "animation_active".to_string(),
+            serde_json::json!(self.cursor_ctrl.animation.is_some()),
+        );
+        target_fields.insert(
+            "smooth_cursor_enabled".to_string(),
+            serde_json::json!(self.current_smooth_cursor_enabled),
+        );
+        target_fields.insert(
+            "coordinated_animation_enabled".to_string(),
+            serde_json::json!(self.current_coordinated_animation_enabled),
+        );
+        super::pointer_diagnostics::record_event(
+            "editor.pointer.visual_target",
+            Some(pointer_sequence),
+            target_fields,
+        );
+
+        if let Some(previous) = self.pointer_diagnostics.pending_render() {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert(
+                "phase".to_string(),
+                serde_json::json!(if previous.first_frame_logged {
+                    "retargeted_by_new_click"
+                } else {
+                    "superseded_before_frame"
+                }),
+            );
+            fields.insert(
+                "drawn_caret_x".to_string(),
+                serde_json::json!(self.cursor_ctrl.visual_x),
+            );
+            fields.insert(
+                "drawn_caret_y".to_string(),
+                serde_json::json!(self.cursor_ctrl.visual_y),
+            );
+            fields.insert(
+                "new_pointer_sequence".to_string(),
+                serde_json::json!(pointer_sequence),
+            );
+            super::pointer_diagnostics::record_event(
+                "editor.pointer.rendered",
+                Some(previous.sequence),
+                fields,
+            );
+        }
+        self.pointer_diagnostics
+            .set_pending_render(pointer_sequence);
 
         self.request_static_repaint();
     }
@@ -645,9 +732,30 @@ impl SujianEditorItem {
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
         // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
         self.snap_cursor_for_pointer_action();
-        let _ = self
-            .pipeline
-            .set_selection(self.pipeline.selection_anchor(), index);
+        let old_cursor = self.pipeline.cursor();
+        let old_anchor = self.pipeline.selection_anchor();
+        let anchor = self.pipeline.selection_anchor();
+        let _ = self.pipeline.set_selection(anchor, index);
+        if old_cursor != self.pipeline.cursor() || old_anchor != self.pipeline.selection_anchor() {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("x".to_string(), serde_json::json!(x));
+            fields.insert("y".to_string(), serde_json::json!(y));
+            fields.insert("old_cursor".to_string(), serde_json::json!(old_cursor));
+            fields.insert(
+                "new_cursor".to_string(),
+                serde_json::json!(self.pipeline.cursor()),
+            );
+            fields.insert("old_anchor".to_string(), serde_json::json!(old_anchor));
+            fields.insert(
+                "new_anchor".to_string(),
+                serde_json::json!(self.pipeline.selection_anchor()),
+            );
+            super::pointer_diagnostics::record_event(
+                "editor.pointer.selection",
+                self.pointer_diagnostics.active_sequence(),
+                fields,
+            );
+        }
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -948,6 +1056,9 @@ fn record_pointer_click(
     new_cursor: usize,
     old_anchor: usize,
     new_anchor: usize,
+    pointer_sequence: u64,
+    affinity: CaretAffinity,
+    scroll_y: f32,
 ) {
     let mut fields: std::collections::BTreeMap<String, serde_json::Value> =
         std::collections::BTreeMap::new();
@@ -961,20 +1072,16 @@ fn record_pointer_click(
     fields.insert("new_cursor".to_string(), serde_json::json!(new_cursor));
     fields.insert("old_anchor".to_string(), serde_json::json!(old_anchor));
     fields.insert("new_anchor".to_string(), serde_json::json!(new_anchor));
-    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
-        timestamp_ms: chrono::Utc::now().timestamp_millis(),
-        sequence: 0,
-        session_id: String::new(),
-        level: writer_diagnostics::DiagnosticLevel::Info,
-        origin: writer_diagnostics::DiagnosticOrigin::App,
-        event: "editor.pointer.click".to_string(),
-        target: "editor.pointer".to_string(),
-        message: Some(format!(
-            "Issue #826: 指针点击 hit_index={} old_cursor={} new_cursor={} old_anchor={} new_anchor={}",
-            hit_test_byte_index, old_cursor, new_cursor, old_anchor, new_anchor
-        )),
+    fields.insert(
+        "affinity".to_string(),
+        serde_json::json!(format!("{:?}", affinity)),
+    );
+    fields.insert("scroll_y".to_string(), serde_json::json!(scroll_y));
+    super::pointer_diagnostics::record_event(
+        "editor.pointer.click",
+        Some(pointer_sequence),
         fields,
-    });
+    );
 }
 
 /// Issue #815 评论 6042062633 修改 8: IME composition commit 的正式跳过事件。
