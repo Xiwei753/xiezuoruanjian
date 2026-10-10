@@ -219,6 +219,7 @@ fn cursor_tween_plan(
         should_be_visible: true,
         movement_source: super::cursor_controller::CursorMoveSource::LayoutChange,
         driver_revision: None,
+        driver_session: 0,
         transition: CursorTransition::Tween {
             old_rect: CursorRect {
                 x: start_x,

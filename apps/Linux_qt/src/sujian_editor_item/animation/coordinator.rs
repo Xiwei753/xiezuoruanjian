@@ -12,7 +12,7 @@ use writer_core::editor::OffsetMap;
 use crate::sujian_editor_item::animation::visual_edit_state::VisualEditState;
 use crate::sujian_editor_item::animation::visual_frame::VisualFrame;
 use crate::sujian_editor_item::cursor_animation::{
-    CursorAnimationPlan, CursorBlinkMode, CursorTransition,
+    CoordinatedCaretProgressLimit, CursorAnimationPlan, CursorBlinkMode, CursorTransition,
 };
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::CursorRect;
@@ -440,6 +440,22 @@ impl LinuxEditorAnimationCoordinator {
             .map(|state| &state.target_snapshot)
     }
 
+    /// Share the fast-input submission ceiling with the matching text-driven caret tween.
+    /// The ceiling advances only when consume_submitted_frames processes Qt acknowledgments.
+    pub(crate) fn coordinated_caret_progress_limit(
+        &self,
+        coordinated_mode: bool,
+    ) -> Option<CoordinatedCaretProgressLimit> {
+        if !coordinated_mode {
+            return None;
+        }
+        let state = self.visual_edit_state.as_ref()?;
+        let limit = state.coordinated_caret_progress_limit()?;
+        (limit.document_session == self.document_session
+            && limit.layout_revision == state.target_snapshot.revision)
+            .then_some(limit)
+    }
+
     /// Move a caret-driven text transition onto its own saved visual frame before an
     /// unrelated caret movement takes over CursorController's single animation route.
     pub(crate) fn detach_caret_driven_transition(&mut self, now: Instant) {
@@ -630,6 +646,7 @@ impl LinuxEditorAnimationCoordinator {
             transition,
             movement_source: inputs.movement_source,
             driver_revision: inputs.driver_revision,
+            driver_session: self.document_session,
             cursor_x: new_rect.x,
             cursor_y: new_rect.top,
             cursor_h: inputs.cursor_h,

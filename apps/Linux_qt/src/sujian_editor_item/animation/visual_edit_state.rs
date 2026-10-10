@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use writer_core::editor::OffsetMap;
 
+use super::super::cursor_animation::CoordinatedCaretProgressLimit;
 use super::super::layout_snapshot::{
     EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
 };
@@ -540,6 +541,18 @@ impl VisualEditState {
         self.motions
             .iter()
             .any(|motion| motion.caret_motion.is_some())
+    }
+
+    pub(crate) fn coordinated_caret_progress_limit(&self) -> Option<CoordinatedCaretProgressLimit> {
+        let max_eased_progress = self.submitted_progress_limit()?;
+        let caret_motion = self.motions.iter().find_map(|motion| motion.caret_motion)?;
+        Some(CoordinatedCaretProgressLimit {
+            document_session: caret_motion.document_session,
+            layout_revision: caret_motion.layout_revision,
+            target_x: caret_motion.to.x,
+            target_y: caret_motion.to.y,
+            max_eased_progress,
+        })
     }
 
     pub(crate) fn commit_terminal_motions(&mut self, motion_indices: &[usize]) {

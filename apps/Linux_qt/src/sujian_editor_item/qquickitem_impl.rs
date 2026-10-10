@@ -231,11 +231,17 @@ impl QQuickItem for SujianEditorItem {
             .animation_coordinator_mut()
             .consume_submitted_frames();
 
+        let caret_progress_limit = self
+            .pipeline
+            .animation_coordinator()
+            .coordinated_caret_progress_limit(self.current_coordinated_animation_enabled);
+        self.cursor_ctrl
+            .set_coordinated_caret_progress_limit(caret_progress_limit);
+
         // Issue #853：视觉光标的唯一 owner 是 cursor controller。
-        // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None），
-        // 这里用整帧唯一的 frame_now 推进一次：先 tick_animation 推 visual，
-        // 后面 build_cursor_render_state_for_frame() 才读到本帧真正的位置。
-        // 正文层不创建或采样第二条 caret 动画。
+        // `apply_plan()` 只创建/重基 Tween（progress=0、started_at=None）。快速输入时，
+        // 匹配的 TextTransaction 路径与正文共用 Qt 提交回执进度上限；其他光标路线仍
+        // 按各自时间推进。后面 build_cursor_render_state_for_frame() 读取本帧位置。
         self.cursor_ctrl.tick_animation(frame_now);
 
         // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
@@ -574,6 +580,7 @@ impl SujianEditorItem {
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
             movement_source: Some(self.cursor_ctrl.motion_source),
             driver_revision: self.cursor_ctrl.motion_layout_revision,
+            document_session: self.cursor_ctrl.motion_document_session,
             target_x: self.cursor_ctrl.motion_target_x,
             target_y: self.cursor_ctrl.motion_target_y,
             path_start_x: self.cursor_ctrl.motion_start_x,
