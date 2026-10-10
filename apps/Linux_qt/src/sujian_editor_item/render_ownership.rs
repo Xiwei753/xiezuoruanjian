@@ -23,6 +23,8 @@ pub(crate) enum ClusterVisualOwner {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RenderOwnershipPlan {
+    /// Identity of the VisualEditState that produced this candidate frame, or zero for canonical frames.
+    pub transition_id: u64,
     /// 当前 canonical 快照中的每个 target cluster 都有且只有一个 owner。
     pub cluster_owners: HashMap<ClusterOwnerKey, ClusterVisualOwner>,
     /// 同一 owner table 投影出的静态层 exclusions。
@@ -137,6 +139,7 @@ impl RenderOwnershipPlan {
         let canonical_frame = VisualFrame::from_static_snapshot(snapshot);
         let mut plan = Self {
             cluster_owners,
+            transition_id: 0,
             static_exclusions,
             animated_glyphs,
             ownership_revision,

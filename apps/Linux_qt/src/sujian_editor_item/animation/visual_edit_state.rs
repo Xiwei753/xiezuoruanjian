@@ -4,6 +4,7 @@
 //! 不保存 burst、stage、travelling distance 或排队中的编辑历史。
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use writer_core::editor::OffsetMap;
@@ -39,6 +40,7 @@ enum MotionKind {
 }
 
 const MIN_CATCH_UP_SUBMITTED_FRAMES: u8 = 3;
+static NEXT_VISUAL_TRANSITION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug)]
 enum MotionBoundary {
@@ -247,6 +249,7 @@ struct ClusterMotion {
 
 #[derive(Clone, Debug)]
 pub(crate) struct VisualEditState {
+    pub transition_id: u64,
     pub source_frame: VisualFrame,
     pub target_snapshot: EditorLayoutSnapshot,
     motions: Vec<ClusterMotion>,
@@ -277,6 +280,7 @@ impl VisualEditState {
         caret_byte_offsets: Option<(usize, usize)>,
         document_session: u64,
     ) -> Self {
+        let transition_id = NEXT_VISUAL_TRANSITION_ID.fetch_add(1, Ordering::Relaxed);
         let source_frame = submitted_frame
             .cloned()
             .unwrap_or_else(|| VisualFrame::from_static_snapshot(base_snapshot));
@@ -475,6 +479,7 @@ impl VisualEditState {
             };
 
         Self {
+            transition_id,
             source_frame,
             target_snapshot,
             motions,
@@ -547,6 +552,7 @@ impl VisualEditState {
         let max_eased_progress = self.submitted_progress_limit()?;
         let caret_motion = self.motions.iter().find_map(|motion| motion.caret_motion)?;
         Some(CoordinatedCaretProgressLimit {
+            transition_id: self.transition_id,
             document_session: caret_motion.document_session,
             layout_revision: caret_motion.layout_revision,
             target_x: caret_motion.to.x,
@@ -833,6 +839,7 @@ impl VisualEditState {
             handoff_pending,
             terminal_frame,
         );
+        plan.transition_id = self.transition_id;
         plan.terminal_motion_indices = terminal_motion_indices;
         plan.submitted_visible_widths = submitted_visible_widths;
         plan

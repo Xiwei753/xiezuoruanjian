@@ -6,6 +6,7 @@ use super::layout_revision::LayoutRevision;
 /// the matching TextTransaction cursor route.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CoordinatedCaretProgressLimit {
+    pub transition_id: u64,
     pub document_session: u64,
     pub layout_revision: LayoutRevision,
     pub target_x: f64,
@@ -43,6 +44,7 @@ pub(crate) struct CursorAnimationPlan {
     pub movement_source: CursorMoveSource,
     pub driver_revision: Option<LayoutRevision>,
     pub driver_session: u64,
+    pub driver_transition_id: u64,
     pub cursor_x: f64,
     pub cursor_y: f64,
     pub cursor_h: f64,
