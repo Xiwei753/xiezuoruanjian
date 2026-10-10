@@ -40,6 +40,8 @@ fn qquickwindow_after_frame_end_signal() -> qmetaobject::Signal<fn()> {
 
 fn bind_frame_submission_window(
     window_ptr: *mut std::ffi::c_void,
+    item_context_ptr: *mut std::ffi::c_void,
+    rust_item_ptr: *mut std::ffi::c_void,
     connections: &std::rc::Rc<std::cell::RefCell<Vec<Box<dyn FnMut()>>>>,
     mailbox: &std::sync::Arc<frame_submission::FrameSubmissionMailbox>,
 ) {
@@ -76,6 +78,22 @@ fn bind_frame_submission_window(
     };
     connections.push(Box::new(move || after_synchronizing.disconnect()));
     connections.push(Box::new(move || after_frame_end.disconnect()));
+
+    // SAFETY: These live Qt pointers come from this item/window binding. The C++ wrapper
+    // stores the item as the queued connection context and captures this generation.
+    let queued_frame_end = unsafe {
+        input::connect_after_frame_end_queued(
+            window_ptr,
+            item_context_ptr,
+            rust_item_ptr,
+            window_generation,
+        )
+    };
+    connections.push(Box::new(move || {
+        // SAFETY: The opaque handle is returned by connect_after_frame_end_queued and this
+        // stored disconnect closure is invoked once on rebind or item destruction.
+        unsafe { input::disconnect_after_frame_end_queued(queued_frame_end) }
+    }));
 }
 
 impl QQuickItem for SujianEditorItem {
@@ -90,6 +108,8 @@ impl QQuickItem for SujianEditorItem {
 
         let connections = std::rc::Rc::clone(&self.frame_window_connections);
         let mailbox = std::sync::Arc::clone(&self.frame_submission_mailbox);
+        let rust_item = item_ptr;
+        let item_context = obj_ptr;
         // SAFETY: QQuickItem::windowChanged's pointer argument is passed as one pointer-sized
         // value by Qt; this slot only uses it to bind that live window's frame signals.
         let mut window_changed_connection = unsafe {
@@ -97,7 +117,13 @@ impl QQuickItem for SujianEditorItem {
                 obj_ptr,
                 qquickitem_window_changed_signal(),
                 move |window_ptr: &*mut std::ffi::c_void| {
-                    bind_frame_submission_window(*window_ptr, &connections, &mailbox);
+                    bind_frame_submission_window(
+                        *window_ptr,
+                        item_context,
+                        rust_item,
+                        &connections,
+                        &mailbox,
+                    );
                 },
             )
         };
@@ -105,6 +131,8 @@ impl QQuickItem for SujianEditorItem {
             Some(Box::new(move || window_changed_connection.disconnect()));
         bind_frame_submission_window(
             rendering::qquickitem_window(obj_ptr),
+            obj_ptr,
+            item_ptr,
             &self.frame_window_connections,
             &self.frame_submission_mailbox,
         );
@@ -684,6 +712,32 @@ impl SujianEditorItem {
             self.pointer_diagnostics.record_frame_end(frame);
         }
     }
+
+    pub(crate) fn drain_pointer_frame_submissions_for_generation(
+        &mut self,
+        expected_generation: u64,
+    ) {
+        if self.frame_submission_mailbox.window_generation() != expected_generation {
+            return;
+        }
+        self.drain_pointer_frame_submissions();
+    }
+}
+
+#[no_mangle]
+extern "C" fn sujian_drain_pointer_frame_submissions(
+    rust_item: *mut std::ffi::c_void,
+    window_generation: u64,
+) {
+    if rust_item.is_null() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(move || {
+        // SAFETY: The queued Qt connection uses the QQuickItem QObject as its context and
+        // Qt::QueuedConnection, so this callback runs on the item's GUI thread while it lives.
+        let item = unsafe { &mut *(rust_item as *mut SujianEditorItem) };
+        item.drain_pointer_frame_submissions_for_generation(window_generation);
+    });
 }
 
 impl SujianEditorItem {

@@ -24,7 +24,10 @@ pub mod qt_surface;
 pub(crate) use controller::{
     cancel_preedit, commit_preedit_text, handle_key, insert_preedit_text, EditorInputHost,
 };
-pub(crate) use qt_surface::{focus_item, install_event_filter};
+pub(crate) use qt_surface::{
+    connect_after_frame_end_queued, disconnect_after_frame_end_queued, focus_item,
+    install_event_filter,
+};
 
 #[cfg(test)]
 mod tests;

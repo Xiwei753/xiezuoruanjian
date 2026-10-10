@@ -31,6 +31,8 @@ cpp! {{
     #include <QtGui/QInputMethod>
     #include <QGuiApplication>
     #include <QMetaMethod>
+    #include <QMetaObject>
+    #include <new>
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
@@ -60,6 +62,34 @@ cpp! {{
     extern "C" int sujian_ime_query_text_before_cursor(void* rust_item, ushort* buf, int buf_capacity);
     extern "C" int sujian_ime_query_text_after_cursor(void* rust_item, ushort* buf, int buf_capacity);
     extern "C" int sujian_ime_query_selection_text(void* rust_item, ushort* buf, int buf_capacity);
+    extern "C" void sujian_drain_pointer_frame_submissions(void* rust_item, unsigned long long window_generation);
+
+    static QMetaObject::Connection* sujian_connect_queued_frame_end(
+        QQuickWindow* window,
+        QObject* context,
+        void* rust_item,
+        unsigned long long window_generation) {
+        if (!window || !context || !rust_item) return nullptr;
+        auto connection = QObject::connect(
+            window,
+            &QQuickWindow::afterFrameEnd,
+            context,
+            [rust_item, window_generation]() {
+                sujian_drain_pointer_frame_submissions(rust_item, window_generation);
+            },
+            Qt::QueuedConnection);
+        if (!connection) return nullptr;
+        auto* owned = new (std::nothrow) QMetaObject::Connection(connection);
+        if (!owned) QObject::disconnect(connection);
+        return owned;
+    }
+
+    static void sujian_disconnect_queued_frame_end(void* raw_connection) {
+        auto* connection = static_cast<QMetaObject::Connection*>(raw_connection);
+        if (!connection) return;
+        QObject::disconnect(*connection);
+        delete connection;
+    }
 
     // PlatformImeAdapter is defined by editor/input/platform/linux/input_surface.rs.
     // Keep this file as QtInputSurface only so Linux IME policy stays isolated.
@@ -563,6 +593,41 @@ pub(crate) fn focus_item(item: *mut c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [item as "QQuickItem*"] {
         sujian_focus_item(item);
+    });
+}
+
+/// Connect a render-thread frame-end signal to an item-context queued GUI-thread callback.
+///
+/// # Safety
+/// `window_ptr`, `item_context_ptr`, and `rust_item_ptr` must refer to live objects for the
+/// duration of the connection. The context QObject must own the Rust item's lifetime.
+pub(crate) unsafe fn connect_after_frame_end_queued(
+    window_ptr: *mut c_void,
+    item_context_ptr: *mut c_void,
+    rust_item_ptr: *mut c_void,
+    window_generation: u64,
+) -> *mut c_void {
+    // SAFETY: The caller guarantees live QQuickWindow/QObject/Rust item pointers above.
+    cpp!(unsafe [
+        window_ptr as "QQuickWindow*",
+        item_context_ptr as "QObject*",
+        rust_item_ptr as "void*",
+        window_generation as "unsigned long long"
+    ] -> *mut c_void as "void*" {
+        return sujian_connect_queued_frame_end(
+            window_ptr, item_context_ptr, rust_item_ptr, window_generation);
+    })
+}
+
+/// Disconnect and release a handle returned by `connect_after_frame_end_queued`.
+///
+/// # Safety
+/// `connection_ptr` must be null or an opaque handle returned by that function, and this
+/// function must be called at most once for each non-null handle.
+pub(crate) unsafe fn disconnect_after_frame_end_queued(connection_ptr: *mut c_void) {
+    // SAFETY: The caller guarantees this is the owned handle returned by the connect wrapper.
+    cpp!(unsafe [connection_ptr as "void*"] {
+        sujian_disconnect_queued_frame_end(connection_ptr);
     });
 }
 
