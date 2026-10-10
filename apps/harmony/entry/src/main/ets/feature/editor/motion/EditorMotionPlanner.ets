@@ -28,13 +28,13 @@
 // 所有 byte offset 通过 TextOffsetMapper 转 UTF-16 offset 供渲染层使用。
 
 import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetMapEntry, OffsetMapKind } from '../../../corebridge/dto/EditorDtos'
-import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun, ClipRect } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout } from '../render/editor_render_geometry'
 import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
-  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece,
+  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece, RectLike,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
 } from './editor_commit_start'
 
@@ -620,6 +620,8 @@ export class EditorMotionPlanner {
         // 保留字平移窗口 offsetX = 当前位置 - 布局位置（clip 即平移后的位置）。
         offsetX: w.offsetX,
         offsetY: w.offsetY,
+        // Issue #879 评论6096421590 问题2：保留多岛 clipRects，供 clusterVisible/buildPiece 逐岛求交
+        clipRects: w.clipRects.map((r: ClipRect): RectLike => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
         sourceRevision: w.sourceRevision,
         glyphUtf16Ranges: glyphUtf16Ranges,
         sourceLayout: sourceLayout

@@ -48,6 +48,12 @@ export interface FrozenWindowSpan {
   offsetX: number
   /** 该窗口相对自身布局的纵向平移量（vp） */
   offsetY: number
+  /**
+   * Issue #879 评论6096421590 问题2：该窗口在冻结帧的所有可见裁切矩形（多岛并集）。
+   * 单岛场景退化为只有一个元素。用于 clusterVisible/buildPiece 对每个 clipRect 求交，
+   * 避免只看包围盒 clipLeft/clipRight 把两个可见岛之间不可见的字误判为可见。
+   */
+  clipRects: RectLike[]
   /** 该窗口所属的源修订号（用于识别 ghost 字形的来源） */
   sourceRevision: number
   /**
@@ -375,11 +381,29 @@ function buildPiece(
     if (sourceGeom !== null) {
       sourceGlyphX0 = sourceGeom.x0
       sourceGlyphX1 = sourceGeom.x1
-      // 源布局坐标系中的可见区间（裁切后，不含 offset）
-      const clipLeftInSource = firstSpan.clipLeft - firstSpan.offsetX
-      const clipRightInSource = firstSpan.clipRight - firstSpan.offsetX
-      visiblePixelLeft = Math.max(sourceGlyphX0, clipLeftInSource)
-      visiblePixelRight = Math.min(sourceGlyphX1, clipRightInSource)
+      // Issue #879 评论6096421590 问题2：对每个 clipRect 求交（多岛并集），
+      // 不能只看包围盒 clipLeft/clipRight，否则两个可见岛之间不可见的字会被误判为可见。
+      let bestVisLeft = sourceGlyphX0
+      let bestVisRight = sourceGlyphX0
+      let hasVisible = false
+      for (const cr of firstSpan.clipRects) {
+        const crLeftInSource = cr.x - firstSpan.offsetX
+        const crRightInSource = cr.x + cr.width - firstSpan.offsetX
+        const intersectLeft = Math.max(sourceGlyphX0, crLeftInSource)
+        const intersectRight = Math.min(sourceGlyphX1, crRightInSource)
+        if (intersectRight - intersectLeft > 0) {
+          if (!hasVisible) {
+            bestVisLeft = intersectLeft
+            bestVisRight = intersectRight
+            hasVisible = true
+          } else {
+            bestVisLeft = Math.min(bestVisLeft, intersectLeft)
+            bestVisRight = Math.max(bestVisRight, intersectRight)
+          }
+        }
+      }
+      visiblePixelLeft = hasVisible ? bestVisLeft : sourceGlyphX0
+      visiblePixelRight = hasVisible ? bestVisRight : sourceGlyphX0
       // 投影到目标布局（问题4）——按首字形的目标边界投影
       ownLeft = projectToTarget(visiblePixelLeft, sourceGlyphX0, sourceGlyphX1, firstGlyphTargetLeft, firstGlyphTargetRight)
     } else {
@@ -390,7 +414,9 @@ function buildPiece(
       visiblePixelRight = ownFullRight
       ownLeft = ownFullLeft
     }
-    onScreenLeft = Math.max(firstVisible.left, firstSpan.clipLeft)
+    // Issue #879 评论6096421590 问题2：firstVisible.left 已由 clusterVisible 对 clipRects
+    // 逐岛求交得出，无需再用包围盒 clipLeft 做 Math.max。
+    onScreenLeft = firstVisible.left
   } else {
     // 静态可见：完整边界（源 = 目标）
     sourceGlyphX0 = ownFullLeft
@@ -413,10 +439,28 @@ function buildPiece(
         // 尾字形的源几何
         const lastSourceX0 = lastSourceGeom.x0
         const lastSourceX1 = lastSourceGeom.x1
-        const lastClipLeftInSource = lastSpan.clipLeft - lastSpan.offsetX
-        const lastClipRightInSource = lastSpan.clipRight - lastSpan.offsetX
-        const lastVisiblePixelLeft = Math.max(lastSourceX0, lastClipLeftInSource)
-        const lastVisiblePixelRight = Math.min(lastSourceX1, lastClipRightInSource)
+        // Issue #879 评论6096421590 问题2：对每个 clipRect 求交（多岛并集）
+        let bestVisLeft = lastSourceX0
+        let bestVisRight = lastSourceX0
+        let hasVisible = false
+        for (const cr of lastSpan.clipRects) {
+          const crLeftInSource = cr.x - lastSpan.offsetX
+          const crRightInSource = cr.x + cr.width - lastSpan.offsetX
+          const intersectLeft = Math.max(lastSourceX0, crLeftInSource)
+          const intersectRight = Math.min(lastSourceX1, crRightInSource)
+          if (intersectRight - intersectLeft > 0) {
+            if (!hasVisible) {
+              bestVisLeft = intersectLeft
+              bestVisRight = intersectRight
+              hasVisible = true
+            } else {
+              bestVisLeft = Math.min(bestVisLeft, intersectLeft)
+              bestVisRight = Math.max(bestVisRight, intersectRight)
+            }
+          }
+        }
+        const lastVisiblePixelLeft = hasVisible ? bestVisLeft : lastSourceX0
+        const lastVisiblePixelRight = hasVisible ? bestVisRight : lastSourceX0
         // 投影尾字形的可见右边界到目标布局——按尾字形的目标边界投影
         ownRight = projectToTarget(lastVisiblePixelRight, lastSourceX0, lastSourceX1, lastGlyphTargetLeft, lastGlyphTargetRight)
         // 更新 sourceGlyphX1 为尾字形的源右边界
@@ -425,7 +469,9 @@ function buildPiece(
       } else {
         ownRight = ownFullRight
       }
-      onScreenRight = Math.min(lastVisible.right, lastSpan.clipRight)
+      // Issue #879 评论6096421590 问题2：lastVisible.right 已由 clusterVisible 对 clipRects
+      // 逐岛求交得出，无需再用包围盒 clipRight 做 Math.min。
+      onScreenRight = lastVisible.right
     } else {
       // 静态可见：完整边界
       ownRight = ownFullRight
@@ -978,17 +1024,39 @@ function clusterVisible(
       // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
       return { left: x0, right: x1, top: y0, bottom: y0 + glyphHeight }
     }
-    // 被运动窗口接管：可见区间 = 字形在屏区间 ∩ 窗口 clip
-    const onScreenLeft = Math.max(x0 + span.offsetX, span.clipLeft)
-    const onScreenRight = Math.min(x1 + span.offsetX, span.clipRight)
-    if (onScreenRight - onScreenLeft <= VISIBLE_EPSILON) {
+    // 被运动窗口接管：对每个 clipRect 求交（多岛并集）
+    // Issue #879 评论6096421590 问题2：不能只看包围盒 clipLeft/clipRight，
+    // 否则两个可见岛之间不可见的字会被误判为可见。
+    const glyphOnScreenLeft = x0 + span.offsetX
+    const glyphOnScreenRight = x1 + span.offsetX
+    const glyphOnScreenTop = y0 + span.offsetY
+    const glyphOnScreenBottom = y0 + span.offsetY + glyphHeight
+
+    let bestLeft = 0
+    let bestRight = 0
+    let hasVisible = false
+    for (const cr of span.clipRects) {
+      const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+      const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+      if (intersectRight - intersectLeft > VISIBLE_EPSILON) {
+        if (!hasVisible) {
+          bestLeft = intersectLeft
+          bestRight = intersectRight
+          hasVisible = true
+        } else {
+          bestLeft = Math.min(bestLeft, intersectLeft)
+          bestRight = Math.max(bestRight, intersectRight)
+        }
+      }
+    }
+    if (!hasVisible) {
       return null
     }
     return {
-      left: onScreenLeft,
-      right: onScreenRight,
-      top: y0 + span.offsetY,
-      bottom: y0 + span.offsetY + glyphHeight,
+      left: bestLeft,
+      right: bestRight,
+      top: glyphOnScreenTop,
+      bottom: glyphOnScreenBottom,
     }
   }
 

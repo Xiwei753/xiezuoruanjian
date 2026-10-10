@@ -66,6 +66,9 @@ const frozenWindow = (glyphIds, clipLeft, clipRight, offsetX, offsetY, sourceRev
   glyphIds,
   clipLeft,
   clipRight,
+  // Issue #879 评论6096421590 问题2：从 clipLeft/clipRight 自动生成 clipRects，
+  // 供 clusterVisible/buildPiece 逐岛求交。测试中字形高度默认 20（见 runGeometry）。
+  clipRects: [{ x: clipLeft, y: 0, width: Math.max(0, clipRight - clipLeft), height: 20 }],
   offsetX: offsetX ?? 0,
   offsetY: offsetY ?? 0,
   sourceRevision: sourceRevision ?? 0,

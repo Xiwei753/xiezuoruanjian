@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  retargetRunStarts
+  RectLike, retargetRunStarts
 } from './editor_commit_start'
 
 /**
@@ -1461,7 +1461,9 @@ export class EditorMotionCoordinator {
         const pieceOldLineY = EditorMotionCoordinator.yAtOffsetLocal(
           oldLayout, pieceUtf16Start, move.oldRect.y)
         const pieceOldLineHeight = move.oldRect.height  // 行高通常整 move 一致
-        // 整个 piece 作为刚体平移：统一 offset，所有可见岛共享同一平移量。
+        // Issue #879 评论6096421590 问题4：piece 级 offset 仍保留，用于 MotionGlyphWindow 的
+        // offsetX/offsetY 字段（整个 Text 节点的平移量）。但每个岛的 clipRect 改为逐岛插值——
+        // 从 interval.startPositionX/Y 插值到该岛在新布局中的目标位置，而非用统一 offset 平移。
         const currentX = piece.startPositionX + (pieceNewX - piece.startPositionX) * p
         const currentY = piece.startPositionY + (pieceNewY - piece.startPositionY) * p
         const offsetX = currentX - pieceOldLeft
@@ -1490,9 +1492,22 @@ export class EditorMotionCoordinator {
           const islandOldTop = iRect !== null ? iRect.y : pieceOldLineY
           const islandOldWidth = iRect !== null ? iRect.width : pieceOldWidth
           const islandOldHeight = iRect !== null ? iRect.height : pieceOldLineHeight
-          // 刚体平移后：岛在编辑器坐标系的位置 = 旧几何 + 统一 offset
-          const cLeft = islandOldLeft + offsetX
-          const cTop = islandOldTop + offsetY
+          // Issue #879 评论6096421590 问题4：逐岛插值——该岛在新布局中的目标位置。
+          let islandNewX = pieceNewX
+          let islandNewY = pieceNewY
+          if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+              interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+            const islandNewUtf16Start = newMoveBoundaries[interval.firstIndex]
+            islandNewX = EditorMotionCoordinator.xAtOffsetLocal(
+              newLayout, islandNewUtf16Start, move.newRect.x)
+            islandNewY = EditorMotionCoordinator.yAtOffsetLocal(
+              newLayout, islandNewUtf16Start, move.newRect.y)
+          }
+          // 从 interval.startPositionX/Y 插值到该岛目标位置，而非用 piece 级统一 offset。
+          const islandCurrentX = interval.startPositionX + (islandNewX - interval.startPositionX) * p
+          const islandCurrentY = interval.startPositionY + (islandNewY - interval.startPositionY) * p
+          const cLeft = islandCurrentX
+          const cTop = islandCurrentY
           clipRects.push({
             x: cLeft,
             y: cTop,
@@ -2372,6 +2387,8 @@ export class EditorMotionCoordinator {
         clipRight: w.currentClipRight,
         offsetX: w.offsetX,
         offsetY: w.offsetY,
+        // Issue #879 评论6096421590 问题2：保留多岛 clipRects，供 clusterVisible/buildPiece 逐岛求交
+        clipRects: w.clipRects.map((r: ClipRect): RectLike => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
         sourceRevision: w.sourceRevision,
         glyphUtf16Ranges: glyphUtf16Ranges,
         sourceLayout: sourceLayout
@@ -2689,27 +2706,11 @@ export class EditorMotionCoordinator {
     // 只扣目标新正文的 insertRuns 和 retainedMoves.newUtf16*（都是新正文 offset）
     const excluded: StaticVisibleRange[] = []
     for (const run of plan.insertRuns) {
-      // Issue #879 本轮复核评论（高优先级）：固定 piece 分区下，一个 piece 可能被冻结窗口
-      // 局部裁切而断成多个不连续可见岛。静态层只扣「真正落在可见岛」的字形范围，
-      // 岛之间的空洞（此刻仍被旧动画裁切、尚未归还的字形）留在静态层，
-      // 保证同一字形每帧恰好由静态层或运动层之一绘制——不丢字、不重影。
-      // 每个 piece 独立处理：有 intervals 就按岛扣，无（legacy/未 retarget/间隙 piece）就扣整段，
-      // 避免「部分 piece 有岛、部分没有」时把间隙 piece 的字形误留在静态层。
-      for (const piece of run.pieces) {
-        const ivs = piece.intervals
-        if (ivs !== undefined && ivs.length > 0 && ivs[0].utf16Start !== undefined) {
-          for (const iv of ivs) {
-            // 同一 piece 的 intervals 要么都带 utf16 区间，要么都不带——此处再判一次以通过类型收窄。
-            if (iv.utf16Start !== undefined && iv.utf16End !== undefined) {
-              excluded.push({ utf16Start: iv.utf16Start, utf16End: iv.utf16End })
-            }
-          }
-        } else {
-          // 间隙 piece（新插入、尚未露出的字）或未 retarget 的 legacy piece：
-          // 整段从静态层扣除，由运动层负责按 clip 动画吐出。
-          excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
-        }
-      }
+      // Issue #879 评论6096421590 问题3：在 insert 仍在吐字的过程，
+      // 所有新插入的字都归运动层负责，静态层必须排除整个 insert run。
+      // 不能只扣「可见岛」而把岛之间的字留在静态层——那些字也属于尚未吐出的新字，
+      // 静态层提前显示会导致闪字/双字。完整文字一笔结束统一回到静态层。
+      excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
     }
     for (const move of plan.retainedMoves) {
       excluded.push({ utf16Start: move.newUtf16Start, utf16End: move.newUtf16End })
