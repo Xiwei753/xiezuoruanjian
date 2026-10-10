@@ -431,7 +431,13 @@ export class EditorMotionCoordinator {
     }
     for (const move of plan.retainedMoves) {
       for (const piece of move.pieces) {
-        keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
+        // Issue #879 复核评论6099070438 问题1：retained 按 interval 分配 key，
+        // 与 buildFrame retainedMoves 一致——多岛时 plannedWindowKeys 和帧输出 key 集合相等，
+        // sameKeySet 不再恒 false，候选不再持续滞留，屏幕能切换到新版正文。
+        const intervals = EditorMotionCoordinator.pieceIntervals(piece)
+        for (const interval of intervals) {
+          keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+        }
       }
     }
     for (const ghost of plan.carryOverGhostRuns) {
@@ -1511,18 +1517,69 @@ export class EditorMotionCoordinator {
           // 该岛的独立 offset——基于该岛的旧位置和当前插值位置
           const islandOffsetX = islandCurrentX - islandOldLeft
           const islandOffsetY = islandCurrentY - islandOldTop
-          // 该岛的 clipRect（单岛只有一个）
-          const islandClipRect: ClipRect = {
-            x: islandCurrentX,
-            y: islandCurrentY,
-            width: Math.max(0, islandOldWidth),
-            height: Math.max(0, islandOldHeight)
+          // Issue #879 复核评论6099070438 问题2：clip 宽度从 interval 的 startClipLeft/startClipRight
+          // 插值——保留部分可见裁切宽度，不简单恢复 islandOldWidth 整段。
+          // p=0 时 clip 宽度 = 当前裁切宽度（startClipRight - startClipLeft），
+          // p=1 时 clip 宽度 = 该岛在新布局中的完整宽度（islandOldWidth）。
+          const startClipWidth = Math.max(0, interval.startClipRight - interval.startClipLeft)
+          const targetClipWidth = Math.max(0, islandOldWidth)
+          // Issue #879 复核评论6099070438 问题4：如果 interval 有 clipRects（多段裁切子矩形），
+          // 用 clipRects 作为该岛的裁切矩形——每段一个 ClipRect，位置随 offset 插值，
+          // 宽度按各自在起始总宽度中的比例从起始宽度插值到目标宽度。
+          // 否则回落到单个 islandClipRect（legacy 语义）。
+          const islandClipRects: ClipRect[] = []
+          if (interval.clipRects !== undefined && interval.clipRects.length > 0) {
+            let totalStartWidth = 0
+            for (const cr of interval.clipRects) {
+              totalStartWidth += Math.max(0, cr.width)
+            }
+            const segCount = interval.clipRects.length
+            for (const cr of interval.clipRects) {
+              const segStartWidth = Math.max(0, cr.width)
+              const segRatio = totalStartWidth > 0.01
+                ? segStartWidth / totalStartWidth
+                : 1 / segCount
+              const segTargetWidth = segRatio * targetClipWidth
+              const segCurrentWidth = segStartWidth + (segTargetWidth - segStartWidth) * p
+              // 该段相对岛左边界的偏移（run 布局坐标系）
+              const relX = cr.x - interval.startClipLeft
+              // 起始/目标屏幕位置——整体随 islandStartX→islandNewX 平移
+              const segStartX = islandStartX + relX
+              const segTargetX = islandNewX + relX
+              const segCurrentX = segStartX + (segTargetX - segStartX) * p
+              islandClipRects.push({
+                x: segCurrentX,
+                y: islandCurrentY,
+                width: Math.max(0, segCurrentWidth),
+                height: Math.max(0, islandOldHeight),
+              })
+            }
+          } else {
+            const currentClipWidth = startClipWidth + (targetClipWidth - startClipWidth) * p
+            islandClipRects.push({
+              x: islandCurrentX,
+              y: islandCurrentY,
+              width: currentClipWidth,
+              height: Math.max(0, islandOldHeight),
+            })
           }
-          // 该岛的包围盒（单岛即 clipRect 边界）
-          const islandBboxLeft = islandCurrentX
-          const islandBboxRight = islandCurrentX + islandOldWidth
-          const islandBboxTop = islandCurrentY
-          const islandBboxBottom = islandCurrentY + islandOldHeight
+          // 包围盒 = 所有 clipRects 的并集
+          let islandBboxLeft = Infinity
+          let islandBboxRight = -Infinity
+          let islandBboxTop = Infinity
+          let islandBboxBottom = -Infinity
+          for (const cr of islandClipRects) {
+            islandBboxLeft = Math.min(islandBboxLeft, cr.x)
+            islandBboxRight = Math.max(islandBboxRight, cr.x + cr.width)
+            islandBboxTop = Math.min(islandBboxTop, cr.y)
+            islandBboxBottom = Math.max(islandBboxBottom, cr.y + cr.height)
+          }
+          if (islandBboxLeft === Infinity) {
+            islandBboxLeft = islandCurrentX
+            islandBboxRight = islandCurrentX
+            islandBboxTop = islandCurrentY
+            islandBboxBottom = islandCurrentY
+          }
           // 为该岛独立分配 windowInstanceId（用岛的 glyphIds 子序列）
           const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
           motionGlyphWindows.push({
@@ -1533,7 +1590,7 @@ export class EditorMotionCoordinator {
             clipRight: islandBboxRight,
             clipTop: islandBboxTop,
             clipBottom: islandBboxBottom,
-            clipRects: [islandClipRect],
+            clipRects: islandClipRects,
             glyphX: islandOldLeft,
             glyphY: islandOldTop,
             glyphWidth: islandOldWidth,

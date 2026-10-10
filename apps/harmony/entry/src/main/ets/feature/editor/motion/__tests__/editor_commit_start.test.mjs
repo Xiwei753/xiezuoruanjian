@@ -1146,16 +1146,28 @@ test('问题2：retained 通道——同一固定 piece 的多段可见岛各自
   )
   assertSamePartition(prepared, retargeted)
   assert.ok(retargeted[0].intervals !== undefined)
-  assert.equal(retargeted[0].intervals.length, 2)
-  // 两个岛都应各自携带起始位置（retained：停在各自在屏位置）。本例 own 布局与在屏布局
-  // 一致，故起始位置退化为 0——重点是每个岛都有独立且合法的起始状态，而非共享单段 clip。
+  // Issue #879 复核评论6099070438 问题1：retained 通道 prepare 阶段每字形一个稳定 interval，
+  // retarget 保留稳定分区只重算 clip/position。字形 2 不可见时其 interval clip 为零宽度。
+  assert.equal(retargeted[0].intervals.length, 5)
   const ivs = retargeted[0].intervals
+  // 每个字形一个 interval（稳定分区：firstIndex=lastIndex=i）
   assert.equal(ivs[0].firstIndex, 0)
-  assert.equal(ivs[0].lastIndex, 1)
-  assert.equal(ivs[1].firstIndex, 3)
-  assert.equal(ivs[1].lastIndex, 4)
+  assert.equal(ivs[0].lastIndex, 0)
+  assert.equal(ivs[1].firstIndex, 1)
+  assert.equal(ivs[1].lastIndex, 1)
+  assert.equal(ivs[2].firstIndex, 2)
+  assert.equal(ivs[2].lastIndex, 2)
+  // 字形 2 不可见（被冻结窗口吞掉）→ 零宽度，但分区保留
+  assert.equal(ivs[2].startClipLeft, ivs[2].startClipRight, '不可见字形应为零宽度')
+  assert.equal(ivs[3].firstIndex, 3)
+  assert.equal(ivs[3].lastIndex, 3)
+  assert.equal(ivs[4].firstIndex, 4)
+  assert.equal(ivs[4].lastIndex, 4)
+  // 每个可见字形都有独立且合法的起始位置（retained：停在各自在屏位置）
   assert.strictEqual(typeof ivs[0].startPositionX, 'number')
   assert.strictEqual(typeof ivs[1].startPositionX, 'number')
+  assert.strictEqual(typeof ivs[3].startPositionX, 'number')
+  assert.strictEqual(typeof ivs[4].startPositionX, 'number')
   assert.strictEqual(typeof ivs[0].startPositionY, 'number')
   assert.strictEqual(typeof ivs[1].startPositionY, 'number')
 })
@@ -1391,6 +1403,183 @@ test('缺口4：整个 piece 都不可见——insert 通道创建覆盖整个 p
   assert.equal(ivs[0].startClipLeft, ivs[0].startClipRight, '应为零宽度')
   // 空洞在 piece 最前面（也是最后面）→ startPositionX = piece.startPositionX = 0
   assert.equal(ivs[0].startPositionX, 0)
+})
+
+
+// ====== Issue #879 复核评论6099070438：问题1/2/4 新增测试 ======
+
+test('问题1：retainedMoveStartState 为每个 piece 设置稳定 intervals（每字形一个）', () => {
+  const ctx = context('甲乙丙丁戊', 900, [])
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = retainedMoveStartState(run, ctx,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
+  assert.equal(prepared.length, 1)
+  assert.ok(prepared[0].intervals !== undefined)
+  // 每个字形一个 interval（firstIndex === lastIndex），共 5 个
+  assert.equal(prepared[0].intervals.length, 5)
+  for (let i = 0; i < 5; i++) {
+    const iv = prepared[0].intervals[i]
+    assert.equal(iv.firstIndex, i, `interval${i} firstIndex 应为 ${i}`)
+    assert.equal(iv.lastIndex, i, `interval${i} lastIndex 应为 ${i}`)
+    assert.equal(iv.glyphIds.length, 1, `interval${i} 应只含 1 个 glyphId`)
+  }
+})
+
+test('问题1：retarget 后 retained intervals 分区不变（firstIndex/lastIndex/glyphIds）', () => {
+  const ctx = context('甲乙丙丁戊', 901, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = retainedMoveStartState(run, ctx,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
+  // retarget：字形 2 被冻结窗口吞掉（clip 0..0）
+  const retargeted = retargetRunStarts(
+    run, prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 901, null)] },
+    'retained', 0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  // intervals 分区不变：每字形一个，firstIndex/lastIndex/glyphIds 完全一致
+  assert.equal(retargeted[0].intervals.length, prepared[0].intervals.length)
+  for (let i = 0; i < prepared[0].intervals.length; i++) {
+    assert.equal(retargeted[0].intervals[i].firstIndex, prepared[0].intervals[i].firstIndex)
+    assert.equal(retargeted[0].intervals[i].lastIndex, prepared[0].intervals[i].lastIndex)
+    assert.deepEqual(retargeted[0].intervals[i].glyphIds, prepared[0].intervals[i].glyphIds)
+  }
+  // 字形 2 不可见 → 其 interval clip 为零宽度，但分区保留
+  const iv2 = retargeted[0].intervals[2]
+  assert.equal(iv2.startClipLeft, iv2.startClipRight, '不可见字形 interval 应为零宽度')
+})
+
+test('问题1：retained prepare/retarget 的 interval.glyphIds 产生相同 windowInstanceId', () => {
+  const ctx = context('甲乙丙丁戊', 902, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = retainedMoveStartState(run, ctx,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
+  const retargeted = retargetRunStarts(
+    run, prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 902, null)] },
+    'retained', 0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  // plannedWindowKeys 和 buildFrame 都按 interval.glyphIds 分配 key，
+  // prepare 和 retarget 的 interval.glyphIds 必须完全一致 → key 集合相等
+  const alloc1 = new WindowInstanceIdAllocator()
+  const alloc2 = new WindowInstanceIdAllocator()
+  const keys1 = prepared[0].intervals.map(iv => alloc1.allocate(iv.glyphIds))
+  const keys2 = retargeted[0].intervals.map(iv => alloc2.allocate(iv.glyphIds))
+  assert.deepEqual(keys1, keys2, 'prepare/retarget 的 windowInstanceId 应完全一致')
+})
+
+test('问题4：同一字形左右两块露出、中间有空洞——clipRects 有多段', () => {
+  const ctx = context('甲', 903, [])
+  const all = idsOf(ctx, 0, 1)
+  const run = runGeometry(ctx, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  // 冻结窗口有两个 clipRect：[0,4] 和 [6,10]，中间 [4,6] 不可见
+  const span = {
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 4, height: 20 },
+      { x: 6, y: 0, width: 4, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 903, glyphUtf16Ranges: null, sourceLayout: null,
+  }
+  const pieces = visibleGlyphPieces(run, { ...ctx, frozenWindows: [span] })
+  assert.equal(pieces.length, 1)
+  assert.ok(pieces[0].clipRects !== undefined, 'piece 应有 clipRects')
+  // 应有 2 段裁切子矩形（左右两块露出），不是压成 [0,10] 连续区间
+  assert.equal(pieces[0].clipRects.length, 2)
+  assert.equal(pieces[0].clipRects[0].x, 0)
+  assert.equal(pieces[0].clipRects[0].width, 4)
+  assert.equal(pieces[0].clipRects[1].x, 6)
+  assert.equal(pieces[0].clipRects[1].width, 4)
+})
+
+test('问题4：retainedMoveStartState 的 interval 携带 clipRects', () => {
+  const ctx = context('甲', 904, [])
+  const all = idsOf(ctx, 0, 1)
+  const run = runGeometry(ctx, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const span = {
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 4, height: 20 },
+      { x: 6, y: 0, width: 4, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 904, glyphUtf16Ranges: null, sourceLayout: null,
+  }
+  const prepared = retainedMoveStartState(run, { ...ctx, frozenWindows: [span] },
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
+  assert.equal(prepared.length, 1)
+  assert.ok(prepared[0].intervals !== undefined)
+  assert.equal(prepared[0].intervals.length, 1)
+  assert.ok(prepared[0].intervals[0].clipRects !== undefined, 'interval 应有 clipRects')
+  assert.equal(prepared[0].intervals[0].clipRects.length, 2)
+})
+
+test('问题4：retarget 后 retained interval 的 clipRects 反映新可见性', () => {
+  const ctx = context('甲', 905, [])
+  const all = idsOf(ctx, 0, 1)
+  const run = runGeometry(ctx, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  // prepare：完整可见（无冻结窗口）
+  const prepared = retainedMoveStartState(run, ctx,
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
+  // retarget：被裁切成两段 [0,3] 和 [7,10]
+  const span = {
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 3, height: 20 },
+      { x: 7, y: 0, width: 3, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 905, glyphUtf16Ranges: null, sourceLayout: null,
+  }
+  const retargeted = retargetRunStarts(
+    run, prepared, { ...ctx, frozenWindows: [span] },
+    'retained', 0,
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 },
+  )
+  assert.ok(retargeted[0].intervals[0].clipRects !== undefined)
+  assert.equal(retargeted[0].intervals[0].clipRects.length, 2)
+  // 裁切宽度反映 retarget 时的可见性（3vp 每段）
+  assert.equal(retargeted[0].intervals[0].clipRects[0].width, 3)
+  assert.equal(retargeted[0].intervals[0].clipRects[1].width, 3)
+})
+
+test('问题4：clonePieces 深拷贝 clipRects——retarget 全不可见时 clipRects 仍保留', () => {
+  const ctx = context('甲', 906, [])
+  const all = idsOf(ctx, 0, 1)
+  const run = runGeometry(ctx, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  // prepare：被裁切成两段
+  const span = {
+    glyphIds: all,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [
+      { x: 0, y: 0, width: 4, height: 20 },
+      { x: 6, y: 0, width: 4, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 906, glyphUtf16Ranges: null, sourceLayout: null,
+  }
+  const prepared = retainedMoveStartState(run, { ...ctx, frozenWindows: [span] },
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
+  assert.ok(prepared[0].intervals[0].clipRects !== undefined)
+  // retarget：字形完全不可见（clip 0..0）→ intervalForIsland 返回 null → 零宽度 interval
+  // 但分区保留，clipRects 不复制（零宽度 interval 不带 clipRects）
+  const retargeted = retargetRunStarts(
+    run, prepared,
+    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 906, null)] },
+    'retained', 0,
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  // 不可见字形的 interval 应为零宽度
+  assert.equal(retargeted[0].intervals[0].startClipLeft, retargeted[0].intervals[0].startClipRight)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

@@ -150,6 +150,15 @@ export interface VisibleRunPiece {
   visiblePixelLeft: number
   /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的真实可见右边界（vp，含裁切） */
   visiblePixelRight: number
+  /**
+   * Issue #879 复核评论6099070438 问题4：该可见段的多段裁切子矩形（在 run 自己布局坐标系中）。
+   *
+   * buildPiece 把首/尾字形与冻结窗口 clipRects 的逐段交集投影保留下来，
+   * 避免只取 min/max 把不连续可见压成连续区间。intervalForIsland 传递到
+   * RunStartInterval.clipRects，buildFrame 据此逐段插值。
+   * 缺省时回落到 [ownLeft, ownRight] 单段（legacy 语义）。
+   */
+  clipRects?: RectLike[]
 }
 
 /**
@@ -222,6 +231,16 @@ export interface RunStartInterval {
   utf16Start?: number
   /** 该岛在 run 自己正文里的 UTF-16 结束 offset（exclusive） */
   utf16End?: number
+  /**
+   * Issue #879 复核评论6099070438 问题4：该岛的多段源/目标裁切子矩形（在 run 自己布局坐标系中）。
+   *
+   * 同一个字形的左右两块露出、中间有空洞时，不能用 [最左,最右] 连续区间——
+   * 那会画出该字原本不可见的中间区域。buildPiece 把首/尾字形与冻结窗口 clipRects
+   * 的逐段交集投影保留下来，buildFrame 从这些矩形逐段插值并作为一个稳定物理窗口
+   * 的多个 clip 输出。
+   * 缺省（legacy/未填充）时回落到 startClipLeft/startClipRight 单段语义。
+   */
+  clipRects?: RectLike[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -407,6 +426,8 @@ function buildPiece(
   let sourceGlyphX1: number
   let visiblePixelLeft: number
   let visiblePixelRight: number
+  // Issue #879 复核评论6099070438 问题4：首字形逐段交集投影收集器。
+  const firstClipRects: RectLike[] = []
 
   if (firstSpan !== undefined) {
     // 被窗口覆盖：计算源字形几何，然后投影到目标布局
@@ -427,6 +448,17 @@ function buildPiece(
             visLeftInSource, sourceGlyphX0, sourceGlyphX1,
             firstGlyphTargetLeft, firstGlyphTargetRight
           )
+          // Issue #879 复核评论6099070438 问题4：逐段投影保留为 clipRect，
+          // 不只用 min/max 压成连续区间——同一字形左右两块露出、中间有空洞时
+          // 避免画出不可见的中间区域。
+          const projectedRight = projectToTarget(
+            visRightInSource, sourceGlyphX0, sourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          firstClipRects.push({
+            x: projectedLeft, y: run.ownRect.y,
+            width: projectedRight - projectedLeft, height: run.ownRect.height,
+          })
           if (projectedLeft < minProjectedLeft) {
             minProjectedLeft = projectedLeft
           }
@@ -454,6 +486,10 @@ function buildPiece(
       visiblePixelLeft = ownFullLeft
       visiblePixelRight = ownFullRight
       ownLeft = ownFullLeft
+      firstClipRects.push({
+        x: ownFullLeft, y: run.ownRect.y,
+        width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
+      })
     }
     // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
     onScreenLeft = onScreenLeftOf(firstVisible)
@@ -465,11 +501,17 @@ function buildPiece(
     visiblePixelRight = ownFullRight
     ownLeft = ownFullLeft
     onScreenLeft = onScreenLeftOf(firstVisible)
+    firstClipRects.push({
+      x: firstGlyphTargetLeft, y: run.ownRect.y,
+      width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
+    })
   }
 
   // ── 尾字形 ──
   let ownRight: number
   let onScreenRight: number
+  // Issue #879 复核评论6099070438 问题4：尾字形逐段交集投影收集器。
+  const lastClipRects: RectLike[] = []
   if (lastVisible !== null) {
     const lastSpan = frozenByGlyphId.get(lastGlyphId)
     if (lastSpan !== undefined) {
@@ -487,10 +529,19 @@ function buildPiece(
           const visLeftInSource = Math.max(lastSourceX0, r.x - lastSpan.offsetX)
           const visRightInSource = Math.min(lastSourceX1, r.x + r.width - lastSpan.offsetX)
           if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+            const projectedLeft = projectToTarget(
+              visLeftInSource, lastSourceX0, lastSourceX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
             const projectedRight = projectToTarget(
               visRightInSource, lastSourceX0, lastSourceX1,
               lastGlyphTargetLeft, lastGlyphTargetRight
             )
+            // Issue #879 复核评论6099070438 问题4：逐段投影保留为 clipRect。
+            lastClipRects.push({
+              x: projectedLeft, y: run.ownRect.y,
+              width: projectedRight - projectedLeft, height: run.ownRect.height,
+            })
             if (projectedRight > maxProjectedRight) {
               maxProjectedRight = projectedRight
             }
@@ -511,6 +562,10 @@ function buildPiece(
         }
       } else {
         ownRight = ownFullRight
+        lastClipRects.push({
+          x: lastGlyphTargetLeft, y: run.ownRect.y,
+          width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
+        })
       }
       // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
       onScreenRight = onScreenRightOf(lastVisible)
@@ -518,11 +573,35 @@ function buildPiece(
       // 静态可见：完整边界
       ownRight = ownFullRight
       onScreenRight = onScreenRightOf(lastVisible)
+      lastClipRects.push({
+        x: lastGlyphTargetLeft, y: run.ownRect.y,
+        width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
+      })
     }
   } else {
     // lastVisible 为 null 不应发生（lastIndex 是可见段的最后一个）
     ownRight = ownFullRight
     onScreenRight = onScreenLeft
+  }
+
+  // Issue #879 复核评论6099070438 问题4：合并首/尾 clipRects 为该可见段的多段裁切子矩形。
+  // - 首尾同字形（单字形 piece）：只用 firstClipRects（首尾是同一字形的可见区间）。
+  // - 首尾不同字形：首字形可见段 + 中间整段 + 尾字形可见段，覆盖整个岛的所有可见部分。
+  const pieceClipRects: RectLike[] = []
+  if (firstIndex === lastIndex) {
+    pieceClipRects.push(...firstClipRects)
+  } else {
+    pieceClipRects.push(...firstClipRects)
+    // 中间整段（首字形右边界 → 尾字形左边界），中间字形完整可见
+    const midLeft = firstGlyphTargetRight
+    const midRight = lastGlyphTargetLeft
+    if (midRight - midLeft > VISIBLE_EPSILON) {
+      pieceClipRects.push({
+        x: midLeft, y: run.ownRect.y,
+        width: midRight - midLeft, height: run.ownRect.height,
+      })
+    }
+    pieceClipRects.push(...lastClipRects)
   }
 
   return {
@@ -537,6 +616,7 @@ function buildPiece(
     sourceGlyphX1: sourceGlyphX1,
     visiblePixelLeft: visiblePixelLeft,
     visiblePixelRight: visiblePixelRight,
+    clipRects: pieceClipRects.length > 0 ? pieceClipRects : undefined,
   }
 }
 
@@ -768,16 +848,35 @@ export function retainedMoveStartState(
       glyphIds: [...run.glyphIds],
     }]
   }
-  return pieces.map((p: VisibleRunPiece): RunStartPiece => ({
-    firstIndex: p.firstIndex,
-    lastIndex: p.lastIndex,
-    startClipLeft: p.ownLeft,
-    startClipRight: p.ownRight,
-    // 每个 piece 的 startPosition 让该 piece 的第一个可见字形停在此刻在屏的位置上
-    startPositionX: p.onScreenLeft - (p.ownLeft - run.ownRect.x),
-    startPositionY: p.onScreenTop,
-    glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
-  }))
+  // Issue #879 复核评论6099070438 问题1：为每个 retained piece 预先规划稳定的物理窗口分区——
+  // 每个字形一个 interval（firstIndex=lastIndex=i）。这样 plannedWindowKeys 和 buildFrame
+  // 都按 interval 分配 key，多岛时两个集合相等，sameKeySet 不再恒 false，候选不再持续滞留。
+  // retarget 保留此稳定分区（firstIndex/lastIndex/glyphIds 不变），只重算每个 interval 的
+  // clip/position（见 retargetRunStarts retained 分支）。
+  const boundaries = clusterBoundaries(run.ownText, run.ownUtf16Start, run.ownUtf16End)
+  const frozenByGlyphId = frozenIndex(displayed)
+  return pieces.map((p: VisibleRunPiece): RunStartPiece => {
+    const intervals: RunStartInterval[] = []
+    for (let i = p.firstIndex; i <= p.lastIndex; i++) {
+      const interval = intervalForIsland(
+        run, boundaries, i, i, 'retained', displayed, frozenByGlyphId
+      )
+      if (interval !== null) {
+        intervals.push(interval)
+      }
+    }
+    return {
+      firstIndex: p.firstIndex,
+      lastIndex: p.lastIndex,
+      startClipLeft: p.ownLeft,
+      startClipRight: p.ownRight,
+      // 每个 piece 的 startPosition 让该 piece 的第一个可见字形停在此刻在屏的位置上
+      startPositionX: p.onScreenLeft - (p.ownLeft - run.ownRect.x),
+      startPositionY: p.onScreenTop,
+      glyphIds: run.glyphIds.slice(p.firstIndex, p.lastIndex + 1),
+      intervals: intervals.length > 0 ? intervals : undefined,
+    }
+  })
 }
 
 /**
@@ -826,33 +925,86 @@ export function retargetRunStarts(
   const result: RunStartPiece[] = []
   for (const piece of pieces) {
     const pieceOwnLeft = xAtOffset(run.ownLayout, boundaries[piece.firstIndex], run.ownRect.x)
-    // Issue #879 本轮复核评论（高优先级）：计算该 piece 内所有不连续可见岛，
-    // 每段各自独立起始裁切——保留字停在各自在屏位置、吞字各自缩到 collapseX、
-    // 吐字各自从零宽度吐出。不丢任何可见字形（旧 longestVisibleIsland 只保留最长一段）。
-    const islands = allVisibleIslands(
-      run, boundaries, piece.firstIndex, piece.lastIndex, displayed, frozenByGlyphId
-    )
     const intervals: RunStartInterval[] = []
-    for (const island of islands) {
-      const interval = intervalForIsland(
-        run, boundaries, island.firstIndex, island.lastIndex, kind, displayed, frozenByGlyphId
-      )
-      if (interval !== null) {
-        intervals.push(interval)
+    // Issue #879 复核评论6099070438 问题1：retained 通道保留 prepare 阶段的稳定 intervals 分区
+    // （firstIndex/lastIndex/glyphIds 不变），只重算每个 interval 的 clip/position。
+    // 不调 allVisibleIslands 重新拆分——同一字形在两次 retarget 之间不会因临时可见分组
+    // 改变而更换物理 Text key。如果某个 interval 的字形在 retarget 时不可见，
+    // 将其 clip 设为零宽度（startClipLeft=startClipRight），分区仍保留。
+    if (kind === 'retained' && piece.intervals !== undefined && piece.intervals.length > 0) {
+      for (const prevInterval of piece.intervals) {
+        const reInterval = intervalForIsland(
+          run, boundaries, prevInterval.firstIndex, prevInterval.lastIndex,
+          'retained', displayed, frozenByGlyphId
+        )
+        if (reInterval !== null) {
+          intervals.push(reInterval)
+        } else {
+          // 该 interval 的字形在 retarget 时不可见——保留分区，clip 设为零宽度
+          const clipX = prevInterval.startClipLeft
+          intervals.push({
+            firstIndex: prevInterval.firstIndex,
+            lastIndex: prevInterval.lastIndex,
+            glyphIds: [...prevInterval.glyphIds],
+            startClipLeft: clipX,
+            startClipRight: clipX,
+            startPositionX: prevInterval.startPositionX,
+            startPositionY: prevInterval.startPositionY,
+            utf16Start: prevInterval.utf16Start,
+            utf16End: prevInterval.utf16End,
+          })
+        }
       }
-    }
-
-    // 缺口4：insert 通道为不可见连续子区间（空洞）建立零宽度起始 interval。
-    // 空洞里的新字不从 run 左边界吐出，而是从前一个可见岛的右边界旁开始展开，
-    // 避免空洞里的新字直到动画结束才出现。
-    if (kind === 'insert') {
-      const zeroWidthIntervals: RunStartInterval[] = []
-      let cursor = piece.firstIndex
-      let prevClipRight: number | null = null
+    } else {
+      // insert/deleted 通道：计算该 piece 内所有不连续可见岛，
+      // 每段各自独立起始裁切——保留字停在各自在屏位置、吞字各自缩到 collapseX、
+      // 吐字各自从零宽度吐出。不丢任何可见字形（旧 longestVisibleIsland 只保留最长一段）。
+      const islands = allVisibleIslands(
+        run, boundaries, piece.firstIndex, piece.lastIndex, displayed, frozenByGlyphId
+      )
       for (const island of islands) {
-        if (island.firstIndex > cursor) {
+        const interval = intervalForIsland(
+          run, boundaries, island.firstIndex, island.lastIndex, kind, displayed, frozenByGlyphId
+        )
+        if (interval !== null) {
+          intervals.push(interval)
+        }
+      }
+
+      // 缺口4：insert 通道为不可见连续子区间（空洞）建立零宽度起始 interval。
+      // 空洞里的新字不从 run 左边界吐出，而是从前一个可见岛的右边界旁开始展开，
+      // 避免空洞里的新字直到动画结束才出现。
+      if (kind === 'insert') {
+        const zeroWidthIntervals: RunStartInterval[] = []
+        let cursor = piece.firstIndex
+        let prevClipRight: number | null = null
+        for (const island of islands) {
+          if (island.firstIndex > cursor) {
+            const gapFirst = cursor
+            const gapLast = island.firstIndex - 1
+            const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
+            const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
+            zeroWidthIntervals.push({
+              firstIndex: gapFirst,
+              lastIndex: gapLast,
+              glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
+              startClipLeft: gapClipX,
+              startClipRight: gapClipX,
+              startPositionX: gapStartX,
+              startPositionY: piece.startPositionY,
+              utf16Start: boundaries[gapFirst],
+              utf16End: boundaries[gapLast + 1],
+            })
+          }
+          const islandInterval = intervals.find(iv => iv.firstIndex === island.firstIndex)
+          if (islandInterval !== undefined) {
+            prevClipRight = islandInterval.startClipRight
+          }
+          cursor = island.lastIndex + 1
+        }
+        if (cursor <= piece.lastIndex) {
           const gapFirst = cursor
-          const gapLast = island.firstIndex - 1
+          const gapLast = piece.lastIndex
           const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
           const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
           zeroWidthIntervals.push({
@@ -867,32 +1019,10 @@ export function retargetRunStarts(
             utf16End: boundaries[gapLast + 1],
           })
         }
-        const islandInterval = intervals.find(iv => iv.firstIndex === island.firstIndex)
-        if (islandInterval !== undefined) {
-          prevClipRight = islandInterval.startClipRight
+        if (zeroWidthIntervals.length > 0) {
+          intervals.push(...zeroWidthIntervals)
+          intervals.sort((a, b) => a.firstIndex - b.firstIndex)
         }
-        cursor = island.lastIndex + 1
-      }
-      if (cursor <= piece.lastIndex) {
-        const gapFirst = cursor
-        const gapLast = piece.lastIndex
-        const gapClipX = prevClipRight !== null ? prevClipRight : pieceOwnLeft
-        const gapStartX = prevClipRight !== null ? prevClipRight : piece.startPositionX
-        zeroWidthIntervals.push({
-          firstIndex: gapFirst,
-          lastIndex: gapLast,
-          glyphIds: run.glyphIds.slice(gapFirst, gapLast + 1),
-          startClipLeft: gapClipX,
-          startClipRight: gapClipX,
-          startPositionX: gapStartX,
-          startPositionY: piece.startPositionY,
-          utf16Start: boundaries[gapFirst],
-          utf16End: boundaries[gapLast + 1],
-        })
-      }
-      if (zeroWidthIntervals.length > 0) {
-        intervals.push(...zeroWidthIntervals)
-        intervals.sort((a, b) => a.firstIndex - b.firstIndex)
       }
     }
 
@@ -1032,6 +1162,9 @@ function intervalForIsland(
     // 该岛在 run 自己正文里的 UTF-16 区间——供 computeStaticRangesMultiChannel 精确扣除。
     utf16Start: boundaries[firstIndex],
     utf16End: boundaries[lastIndex + 1],
+    // Issue #879 复核评论6099070438 问题4：传递 buildPiece 收集的多段裁切子矩形，
+    // buildFrame 据此逐段插值，避免把不连续可见压成连续区间。
+    clipRects: visible.clipRects,
   }
 }
 
@@ -1060,6 +1193,12 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
         startPositionY: iv.startPositionY,
         utf16Start: iv.utf16Start,
         utf16End: iv.utf16End,
+        // Issue #879 复核评论6099070438 问题4：深拷贝 clipRects，避免共享引用。
+        clipRects: iv.clipRects === undefined
+          ? undefined
+          : iv.clipRects.map((cr: RectLike): RectLike => ({
+            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
       })),
   }))
 }
