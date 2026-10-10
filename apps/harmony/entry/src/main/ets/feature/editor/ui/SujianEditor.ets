@@ -1145,17 +1145,24 @@ export struct SujianEditor {
     // 这个集合只由 plan 的 run/piece 结构与 sourceRevision 决定（与 buildFrame 同一身份策略），
     // 不依赖任何一帧的可见性；retarget 只重算 piece 的起始 clip/position，不再重新拆分 piece。
     // 因此「staging 阶段等待的 key 集合」= 「提交后真实窗口的 key 集合」。
-    const plannedKeys = this.motionCoordinator.plannedWindowKeys(retargeted)
+    // Issue #879 本轮复核评论（阻塞）：动效关闭 / 时长为 0 时无动画候选——
+    // plannedWindowKeys 返回空数组，没有运动 Text 需要 layout/等待，直接跳过一致性闸与就绪检查，
+    // 只原子切换主 Text、静态裁切、正文/光标状态。
+    const noAnimation = retargeted.plan.durationMs <= 0
+    const plannedKeys = noAnimation ? [] : this.motionCoordinator.plannedWindowKeys(retargeted)
     // 一致性闸 + 就绪检查：staging 帧的真实 key 必须等于计划集合（否则身份策略漂移），
     // 且每个计划 key 对应的物理 Text 都已完成真实 layout。
-    let allFinalWindowsReady = SujianEditor.sameKeySet(
-      plannedKeys, EditorMotionCoordinator.extractWindowKeys(retargeted.startFrame)
-    )
-    if (allFinalWindowsReady) {
-      for (let i = 0; i < plannedKeys.length; i++) {
-        if (!this.motionSourcePool.isWindowLayoutReady(plannedKeys[i])) {
-          allFinalWindowsReady = false
-          break
+    let allFinalWindowsReady = true
+    if (!noAnimation) {
+      allFinalWindowsReady = SujianEditor.sameKeySet(
+        plannedKeys, EditorMotionCoordinator.extractWindowKeys(retargeted.startFrame)
+      )
+      if (allFinalWindowsReady) {
+        for (let i = 0; i < plannedKeys.length; i++) {
+          if (!this.motionSourcePool.isWindowLayoutReady(plannedKeys[i])) {
+            allFinalWindowsReady = false
+            break
+          }
         }
       }
     }
@@ -1409,7 +1416,7 @@ export struct SujianEditor {
         result.push({
           window: windows[i],
           source: source,
-          clipRect: clipRects[i],
+          clipRects: clipRects[i],
           textController: windowState.textController,
           mounted: windowState.mounted,
           layoutReady: windowState.layoutReady,
@@ -1456,7 +1463,7 @@ export struct SujianEditor {
         result.push({
           window: windows[i],
           source: source,
-          clipRect: clipRects[i],
+          clipRects: clipRects[i],
           textController: windowState.textController,
           mounted: windowState.mounted,
           layoutReady: windowState.layoutReady,
@@ -1643,6 +1650,11 @@ export struct SujianEditor {
   private allMotionWindowsReady(): boolean {
     const prepared = this.pendingRetargetedCandidate ?? this.pendingCandidate
     if (prepared === null) {
+      return true
+    }
+    // Issue #879 本轮复核评论（阻塞）：动效关闭 / 时长为 0 时无动画候选——
+    // 不走候选运动窗口等待，直接 ready，让正文静态提交不被卡住。
+    if (prepared.plan.durationMs <= 0) {
       return true
     }
     const keys = this.motionCoordinator.plannedWindowKeys(prepared)

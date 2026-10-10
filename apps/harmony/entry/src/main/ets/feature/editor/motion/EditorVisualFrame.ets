@@ -35,6 +35,20 @@
 import type { RunStartPiece } from './editor_commit_start'
 
 /**
+ * 裁切矩形——用于 clipShape/maskShape 的矩形区域（vp，相对组件左上角）。
+ */
+export interface ClipRect {
+  /** 左边界（vp） */
+  x: number
+  /** 上边界（vp） */
+  y: number
+  /** 宽度（vp） */
+  width: number
+  /** 高度（vp） */
+  height: number
+}
+
+/**
  * 运动类型枚举。
  *
  * - None：无运动（静态画面）。
@@ -468,6 +482,14 @@ export interface MotionGlyphWindow {
    * windowId 仍保留在数据结构中作为算法内部的精确身份（用于匹配/查找）。
    */
   renderNodeKey: string
+  /**
+   * Issue #879 本轮复核评论（高优先级）：一个物理 Text（同一 renderNodeKey）可能覆盖多个
+   * 不连续可见岛（固定 piece 分区下，交棒瞬间某字形被冻结窗口局部裁切而断开成多段）。
+   * 这些岛不能是同一个跨空洞矩形，也不能只取其中一个——它们必须以「多个不连续 clip 矩形的并集」
+   * 由一个 Text 节点绘制。clipRects 是该窗口在本帧的所有可见裁切矩形（编辑器坐标系）。
+   * 单岛场景退化为只有一个元素的数组。clipLeft/Right/Top/Bottom 仍保留为并集包围盒，供兼容读取。
+   */
+  clipRects: ClipRect[]
   /** 当前帧的裁切窗口左边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x0 */
   currentClipLeft: number
   /** 当前帧的裁切窗口右边界（vp）——连续编辑时作为下一动画起点而非整字初态的 x1 */

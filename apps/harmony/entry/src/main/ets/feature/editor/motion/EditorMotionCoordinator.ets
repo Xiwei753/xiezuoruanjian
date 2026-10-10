@@ -34,7 +34,7 @@
 //
 // easing 函数：p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3)
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun, ClipRect } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
 import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
@@ -48,7 +48,7 @@ import type { GlyphCarryPatch } from './editor_patch_carry'
 import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
-  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece,
+  DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
   retargetRunStarts
 } from './editor_commit_start'
 
@@ -407,6 +407,13 @@ export class EditorMotionCoordinator {
    */
   plannedWindowKeys(prepared: PreparedCandidate): string[] {
     const plan = prepared.plan
+    // Issue #879 本轮复核评论（阻塞）：动效关闭 / 动画时长为 0 时，plan 仍可能含 run，
+    // 但 buildFrame 生成的是 computeStaticFrame（isAnimating=false、motionGlyphWindows=[]），
+    // 不会有任何运动 Text 需要 layout。这里直接返回空数组，与「无动画时返回空数组」的契约一致——
+    // 否则会返回一批永远等不到 layout 的 key，让 allMotionWindowsReady 一直 false、正文永不提交。
+    if (plan.durationMs <= 0) {
+      return []
+    }
     const keys: string[] = []
     const newRevision = prepared.state.newSnapshot?.revision ?? 0
     const oldRevision = prepared.state.oldSnapshot?.revision ?? 0
@@ -1182,6 +1189,28 @@ export class EditorMotionCoordinator {
    * 分配，同一 glyphIds 序列在活跃期间始终映射到同一个 windowInstanceId。
    * windowId 仍保留在 MotionGlyphWindow 中作为算法内部的精确身份。
    */
+  /**
+   * Issue #879 本轮复核评论（高优先级）：把固定 piece 的起始状态规范成「按岛」的区间列表。
+   *
+   * retargetRunStarts 已为每个 piece 计算好所有不连续可见岛（RunStartInterval[]），
+   * 这里直接复用；legacy 数据（无 intervals）回落到整 piece 单个区间。
+   * 返回的区间列表至少有一个元素，buildFrame 据此为同一个物理 Text 生成多个裁切矩形（并集）。
+   */
+  private static pieceIntervals(piece: RunStartPiece): RunStartInterval[] {
+    if (piece.intervals !== undefined && piece.intervals.length > 0) {
+      return piece.intervals
+    }
+    return [{
+      firstIndex: piece.firstIndex,
+      lastIndex: piece.lastIndex,
+      glyphIds: piece.glyphIds,
+      startClipLeft: piece.startClipLeft,
+      startClipRight: piece.startClipRight,
+      startPositionX: piece.startPositionX,
+      startPositionY: piece.startPositionY
+    }]
+  }
+
   private static buildFrame(
     plan: EditorMotionPlan,
     oldSnapshot: EditorLayoutSnapshot | null,
@@ -1219,29 +1248,15 @@ export class EditorMotionCoordinator {
     for (const run of plan.insertRuns) {
       const runBoundaries = clusterBoundaries(newText, run.utf16Start, run.utf16End)
       for (const piece of run.pieces) {
-        // 计算 piece 的目标 clip（该 piece 覆盖的字形在目标布局中的完整边界）
-        let targetLeft = run.rect.x
-        let targetRight = run.rect.x + run.rect.width
+        const intervals = EditorMotionCoordinator.pieceIntervals(piece)
+        // 整个 piece 的 utf16 范围（window 的 utf16Start/End 与静态扣除都按整 piece）
         let pieceUtf16Start = run.utf16Start
         let pieceUtf16End = run.utf16End
         if (runBoundaries.length === run.glyphIds.length + 1 &&
             piece.firstIndex >= 0 && piece.lastIndex + 1 < runBoundaries.length) {
           pieceUtf16Start = runBoundaries[piece.firstIndex]
           pieceUtf16End = runBoundaries[piece.lastIndex + 1]
-          // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
-          targetLeft = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16Start, run.rect.x)
-          targetRight = EditorMotionCoordinator.xAtOffsetLocal(newLayout, pieceUtf16End, run.rect.x + run.rect.width,
-            CaretAffinity.Upstream)
-        } else {
-          // Issue #879 复核评论6080604353 问题2coord：fallback 分支用 piece 自身的起始 clip
-          // 作为目标左右边界参考——gap piece 的起始位置应该是 piece 自身的左边界，
-          // 而不是整 run 的左边界。
-          targetLeft = piece.startClipLeft
-          targetRight = piece.startClipRight
         }
-        const currentLeft = piece.startClipLeft + (targetLeft - piece.startClipLeft) * p
-        const currentRight = piece.startClipRight + (targetRight - piece.startClipRight) * p
-        const windowInstanceId = allocator.allocate(piece.glyphIds)
         // Issue #879 复核评论6083352210 问题1：用 glyphRectForRange 取得 piece 自身的几何，
         // 而不是整 run 的 rect——否则拆成多 piece 时 glyphWidth 仍是整 run 宽度，
         // identifyCarryOverMotionRuns 判断 insert 完成时永远不满足。
@@ -1250,14 +1265,61 @@ export class EditorMotionCoordinator {
         const pieceGlyphY = pieceRect !== null ? pieceRect.y : run.rect.y
         const pieceGlyphWidth = pieceRect !== null ? pieceRect.width : run.rect.width
         const pieceGlyphHeight = pieceRect !== null ? pieceRect.height : run.rect.height
+        // Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 可能覆盖多个不连续可见岛，
+        // 每个岛各自从自己的起始裁切插值到自己的目标裁切，合成「多岛并集」clipRects。
+        const clipRects: ClipRect[] = []
+        let bboxLeft = 0
+        let bboxRight = 0
+        let bboxTop = pieceGlyphY
+        let bboxBottom = pieceGlyphY + pieceGlyphHeight
+        let firstRect = true
+        for (const interval of intervals) {
+          let iStart = pieceUtf16Start
+          let iEnd = pieceUtf16End
+          let targetLeft = run.rect.x
+          let targetRight = run.rect.x + run.rect.width
+          if (runBoundaries.length === run.glyphIds.length + 1 &&
+              interval.firstIndex >= 0 && interval.lastIndex + 1 < runBoundaries.length) {
+            iStart = runBoundaries[interval.firstIndex]
+            iEnd = runBoundaries[interval.lastIndex + 1]
+            // Issue #879 复核评论6082616112 问题4：start 用 Downstream、end 用 Upstream
+            targetLeft = EditorMotionCoordinator.xAtOffsetLocal(newLayout, iStart, run.rect.x)
+            targetRight = EditorMotionCoordinator.xAtOffsetLocal(newLayout, iEnd, run.rect.x + run.rect.width,
+              CaretAffinity.Upstream)
+          } else {
+            targetLeft = interval.startClipLeft
+            targetRight = interval.startClipRight
+          }
+          const currentLeft = interval.startClipLeft + (targetLeft - interval.startClipLeft) * p
+          const currentRight = interval.startClipRight + (targetRight - interval.startClipRight) * p
+          // 该岛自身的几何（top/bottom 可能跨行）
+          const iRect = glyphRectForRange(newLayout, iStart, iEnd)
+          const top = iRect !== null ? iRect.y : pieceGlyphY
+          const height = iRect !== null ? iRect.height : pieceGlyphHeight
+          clipRects.push({ x: currentLeft, y: top, width: Math.max(0, currentRight - currentLeft), height: height })
+          if (firstRect) {
+            bboxLeft = currentLeft
+            bboxRight = currentRight
+            bboxTop = top
+            bboxBottom = top + height
+            firstRect = false
+          } else {
+            bboxLeft = Math.min(bboxLeft, currentLeft)
+            bboxRight = Math.max(bboxRight, currentRight)
+            bboxTop = Math.min(bboxTop, top)
+            bboxBottom = Math.max(bboxBottom, top + height)
+          }
+        }
+        const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'new',
           utf16Start: pieceUtf16Start,
           utf16End: pieceUtf16End,
-          clipLeft: currentLeft,
-          clipRight: currentRight,
-          clipTop: pieceGlyphY,
-          clipBottom: pieceGlyphY + pieceGlyphHeight,
+          clipLeft: bboxLeft,
+          clipRight: bboxRight,
+          clipTop: bboxTop,
+          clipBottom: bboxBottom,
+          clipRects: clipRects,
           glyphX: pieceGlyphX,
           glyphY: pieceGlyphY,
           glyphWidth: pieceGlyphWidth,
@@ -1270,8 +1332,8 @@ export class EditorMotionCoordinator {
           windowId: run.windowId,
           windowInstanceId: windowInstanceId,
           renderNodeKey: `new-${newRevision}-${windowInstanceId}`,
-          currentClipLeft: currentLeft,
-          currentClipRight: currentRight,
+          currentClipLeft: bboxLeft,
+          currentClipRight: bboxRight,
           currentPositionX: pieceGlyphX,
           currentPositionY: pieceGlyphY,
           motionOwnerKind: 'insert'
@@ -1287,6 +1349,7 @@ export class EditorMotionCoordinator {
     for (const run of plan.deletedRuns) {
       const runBoundaries = clusterBoundaries(oldText, run.utf16Start, run.utf16End)
       for (const piece of run.pieces) {
+        const intervals = EditorMotionCoordinator.pieceIntervals(piece)
         // 计算 piece 的 utf16 范围
         let pieceUtf16Start = run.utf16Start
         let pieceUtf16End = run.utf16End
@@ -1299,17 +1362,35 @@ export class EditorMotionCoordinator {
         const collapseX = run.isForward ? caretBase.caretX : run.rect.x
         const targetLeft = collapseX
         const targetRight = collapseX
-        const currentLeft = piece.startClipLeft + (targetLeft - piece.startClipLeft) * p
-        const currentRight = piece.startClipRight + (targetRight - piece.startClipRight) * p
+        // Issue #879 本轮复核评论（高优先级）：每个可见岛各自从自己的起始裁切缩到 collapseX，
+        // 合成「多岛并集」clipRects——同一固定 piece 物理 Text 不丢任何可见字形。
+        const clipRects: ClipRect[] = []
+        let bboxLeft = 0
+        let bboxRight = 0
+        let firstRect = true
+        for (const interval of intervals) {
+          const currentLeft = interval.startClipLeft + (targetLeft - interval.startClipLeft) * p
+          const currentRight = interval.startClipRight + (targetRight - interval.startClipRight) * p
+          clipRects.push({ x: currentLeft, y: run.rect.y, width: Math.max(0, currentRight - currentLeft), height: run.rect.height })
+          if (firstRect) {
+            bboxLeft = currentLeft
+            bboxRight = currentRight
+            firstRect = false
+          } else {
+            bboxLeft = Math.min(bboxLeft, currentLeft)
+            bboxRight = Math.max(bboxRight, currentRight)
+          }
+        }
         const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: pieceUtf16Start,
           utf16End: pieceUtf16End,
-          clipLeft: currentLeft,
-          clipRight: currentRight,
+          clipLeft: bboxLeft,
+          clipRight: bboxRight,
           clipTop: run.rect.y,
           clipBottom: run.rect.y + run.rect.height,
+          clipRects: clipRects,
           glyphX: run.rect.x,
           glyphY: run.rect.y,
           glyphWidth: run.rect.width,
@@ -1322,8 +1403,8 @@ export class EditorMotionCoordinator {
           windowId: run.windowId,
           windowInstanceId: windowInstanceId,
           renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
-          currentClipLeft: currentLeft,
-          currentClipRight: currentRight,
+          currentClipLeft: bboxLeft,
+          currentClipRight: bboxRight,
           currentPositionX: run.rect.x,
           currentPositionY: run.rect.y,
           motionOwnerKind: 'deleted'
@@ -1344,7 +1425,7 @@ export class EditorMotionCoordinator {
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
       const newMoveBoundaries = clusterBoundaries(newText, move.newUtf16Start, move.newUtf16End)
       for (const piece of move.pieces) {
-        // 计算 piece 的 utf16 范围
+        // 计算 piece 的 utf16 范围（整 piece，用于 Text 节点源与静态扣除）
         let pieceUtf16Start = move.oldUtf16Start
         let pieceUtf16End = move.oldUtf16End
         let pieceOldLeft = move.oldRect.x
@@ -1380,33 +1461,82 @@ export class EditorMotionCoordinator {
         const pieceOldLineY = EditorMotionCoordinator.yAtOffsetLocal(
           oldLayout, pieceUtf16Start, move.oldRect.y)
         const pieceOldLineHeight = move.oldRect.height  // 行高通常整 move 一致
-        // 每个 piece 运动到各自的新版目标位置
+        // 整个 piece 作为刚体平移：统一 offset，所有可见岛共享同一平移量。
         const currentX = piece.startPositionX + (pieceNewX - piece.startPositionX) * p
         const currentY = piece.startPositionY + (pieceNewY - piece.startPositionY) * p
+        const offsetX = currentX - pieceOldLeft
+        const offsetY = currentY - pieceOldLineY
+        // Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 覆盖多个不连续可见岛，
+        // 每个岛各自从自己起始裁切插值到各自目标位置，合成「多岛并集」clipRects——
+        // 同一 renderNodeKey 对应唯一物理 Text，不丢任何可见字形。
+        const intervals = EditorMotionCoordinator.pieceIntervals(piece)
+        const clipRects: ClipRect[] = []
+        let bboxLeft = 0
+        let bboxRight = 0
+        let bboxTop = pieceOldLineY + offsetY
+        let bboxBottom = pieceOldLineY + offsetY + pieceOldLineHeight
+        let firstRect = true
+        for (const interval of intervals) {
+          // 该岛在旧布局中的几何（刚体平移前）
+          let iStart = pieceUtf16Start
+          let iEnd = pieceUtf16End
+          if (moveBoundaries.length === move.glyphIds.length + 1 &&
+              interval.firstIndex >= 0 && interval.lastIndex + 1 < moveBoundaries.length) {
+            iStart = moveBoundaries[interval.firstIndex]
+            iEnd = moveBoundaries[interval.lastIndex + 1]
+          }
+          const iRect = glyphRectForRange(oldLayout, iStart, iEnd)
+          const islandOldLeft = iRect !== null ? iRect.x : pieceOldLeft
+          const islandOldTop = iRect !== null ? iRect.y : pieceOldLineY
+          const islandOldWidth = iRect !== null ? iRect.width : pieceOldWidth
+          const islandOldHeight = iRect !== null ? iRect.height : pieceOldLineHeight
+          // 刚体平移后：岛在编辑器坐标系的位置 = 旧几何 + 统一 offset
+          const cLeft = islandOldLeft + offsetX
+          const cTop = islandOldTop + offsetY
+          clipRects.push({
+            x: cLeft,
+            y: cTop,
+            width: Math.max(0, islandOldWidth),
+            height: Math.max(0, islandOldHeight)
+          })
+          if (firstRect) {
+            bboxLeft = cLeft
+            bboxRight = cLeft + islandOldWidth
+            bboxTop = cTop
+            bboxBottom = cTop + islandOldHeight
+            firstRect = false
+          } else {
+            bboxLeft = Math.min(bboxLeft, cLeft)
+            bboxRight = Math.max(bboxRight, cLeft + islandOldWidth)
+            bboxTop = Math.min(bboxTop, cTop)
+            bboxBottom = Math.max(bboxBottom, cTop + islandOldHeight)
+          }
+        }
         const windowInstanceId = allocator.allocate(piece.glyphIds)
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: pieceUtf16Start,
           utf16End: pieceUtf16End,
-          clipLeft: currentX,
-          clipRight: currentX + pieceOldWidth,
-          clipTop: currentY,
-          clipBottom: currentY + pieceOldLineHeight,
+          clipLeft: bboxLeft,
+          clipRight: bboxRight,
+          clipTop: bboxTop,
+          clipBottom: bboxBottom,
+          clipRects: clipRects,
           glyphX: pieceOldLeft,
           glyphY: pieceOldLineY,
           glyphWidth: pieceOldWidth,
           glyphHeight: pieceOldLineHeight,
           // Issue #879 复核评论6080604353 问题3：offsetX 基于 piece 的旧左边界，而非整 move 的旧左边界
-          offsetX: currentX - pieceOldLeft,
-          offsetY: currentY - pieceOldLineY,
+          offsetX: offsetX,
+          offsetY: offsetY,
           runId: `old-${oldRevision}`,
           sourceRevision: oldRevision,
           glyphIds: piece.glyphIds,
           windowId: move.windowId,
           windowInstanceId: windowInstanceId,
           renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
-          currentClipLeft: currentX,
-          currentClipRight: currentX + pieceOldWidth,
+          currentClipLeft: bboxLeft,
+          currentClipRight: bboxRight,
           currentPositionX: currentX,
           currentPositionY: currentY,
           motionOwnerKind: 'reflow'
@@ -2556,7 +2686,27 @@ export class EditorMotionCoordinator {
     // 只扣目标新正文的 insertRuns 和 retainedMoves.newUtf16*（都是新正文 offset）
     const excluded: StaticVisibleRange[] = []
     for (const run of plan.insertRuns) {
-      excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
+      // Issue #879 本轮复核评论（高优先级）：固定 piece 分区下，一个 piece 可能被冻结窗口
+      // 局部裁切而断成多个不连续可见岛。静态层只扣「真正落在可见岛」的字形范围，
+      // 岛之间的空洞（此刻仍被旧动画裁切、尚未归还的字形）留在静态层，
+      // 保证同一字形每帧恰好由静态层或运动层之一绘制——不丢字、不重影。
+      // 每个 piece 独立处理：有 intervals 就按岛扣，无（legacy/未 retarget/间隙 piece）就扣整段，
+      // 避免「部分 piece 有岛、部分没有」时把间隙 piece 的字形误留在静态层。
+      for (const piece of run.pieces) {
+        const ivs = piece.intervals
+        if (ivs !== undefined && ivs.length > 0 && ivs[0].utf16Start !== undefined) {
+          for (const iv of ivs) {
+            // 同一 piece 的 intervals 要么都带 utf16 区间，要么都不带——此处再判一次以通过类型收窄。
+            if (iv.utf16Start !== undefined && iv.utf16End !== undefined) {
+              excluded.push({ utf16Start: iv.utf16Start, utf16End: iv.utf16End })
+            }
+          }
+        } else {
+          // 间隙 piece（新插入、尚未露出的字）或未 retarget 的 legacy piece：
+          // 整段从静态层扣除，由运动层负责按 clip 动画吐出。
+          excluded.push({ utf16Start: run.utf16Start, utf16End: run.utf16End })
+        }
+      }
     }
     for (const move of plan.retainedMoves) {
       excluded.push({ utf16Start: move.newUtf16Start, utf16End: move.newUtf16End })

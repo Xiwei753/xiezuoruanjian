@@ -168,6 +168,54 @@ export interface RunStartPiece {
   startPositionY: number
   /** 该片段覆盖的 glyphId 子序列 */
   glyphIds: string[]
+  /**
+   * Issue #879 本轮复核评论（高优先级）：该 piece 内所有不连续可见岛的起始裁切区间列表。
+   *
+   * 固定 piece 分区下，交棒瞬间某字形可能被冻结窗口局部裁切而断开成多段；
+   * 每一段各自独立计算 own/source/onScreen clip。buildFrame 据此为同一物理 Text
+   * （同一 renderNodeKey）生成「多岛并集」clipRects，不丢任何可见字形。
+   * 该字段为 undefined 或空时，buildFrame 回落到 piece 自身的单段 clip（legacy 语义）。
+   */
+  intervals?: RunStartInterval[]
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：一个固定 piece 内的一段不连续可见岛的起始状态。
+ *
+ * 与 RunStartPiece 不同——RunStartPiece 是「按固定分区划分的稳定物理节点单元」，
+ * 而 RunStartInterval 是「该 piece 在某时刻被冻结窗口局部裁切后实际露出的一个可见子段」，
+ * 一个 piece 可能包含多个不连续 RunStartInterval。buildFrame 为每个 interval 各生成一段 clipRect，
+ * 合成并集后由同一个物理 Text 绘制。
+ */
+export interface RunStartInterval {
+  /** 该岛覆盖的 run 簇序起始下标（含） */
+  firstIndex: number
+  /** 该岛覆盖的 run 簇序末下标（含） */
+  lastIndex: number
+  /** 该岛覆盖的 glyphId 子序列 */
+  glyphIds: string[]
+  /** 该岛起始裁切左边界（vp，在 run 自己布局里） */
+  startClipLeft: number
+  /** 该岛起始裁切右边界（vp，在 run 自己布局里） */
+  startClipRight: number
+  /** 该岛起始位置 x（vp）——保留字平移用 */
+  startPositionX: number
+  /** 该岛起始位置 y（vp）——保留字平移用 */
+  startPositionY: number
+  /**
+   * 该岛在 run 自己正文里的 UTF-16 区间（exclusive end）。
+   *
+   * 由 retargetRunStarts 在可见性已知的时刻用 clusterBoundaries 算出，
+   * 供 computeStaticRangesMultiChannel 精确扣除「被运动层接管」的字形范围——
+   * 只有真正落在可见岛里的字形才从静态层扣除，岛之间的空洞（被冻结窗口局部裁切断开、
+   * 此刻仍不可见的字形）留在静态层，避免真实丢字。
+   * 缺省（legacy/未填充）时调用方回落到整 piece/整 run 扣除。
+   * 注：insert 通道 own 即新正文，本区间即新正文偏移；deleted/retained 通道 own 为旧正文，
+   * 本区间仅用于旧正文侧几何，静态扣除对 deleted 不生效、对 retained 走 newUtf16 整段。
+   */
+  utf16Start?: number
+  /** 该岛在 run 自己正文里的 UTF-16 结束 offset（exclusive） */
+  utf16End?: number
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -657,8 +705,10 @@ export function retainedMoveStartState(
  * 不会因为临时可见分组改变而更换物理 Text key。
  *
  * 数据语义：
- * - piece 内仍有可见字形：起始 clip = 该 piece 内**最长连续可见段**投影回 run 自己布局的边界
- *   （piece 之间的空洞依旧不填补——每条 clip 只覆盖一段连续区间）。
+ * - piece 内仍有可见字形：为该 piece 内**所有不连续可见段**各算一段 RunStartInterval
+ *   （intervals 字段），每段独立起始裁切；legacy 单段字段（startClipLeft/Right/Position）
+ *   回落取最长一段，供未读 intervals 的代码兼容。piece 之间的空洞依旧不填补——
+ *   每条 clip 只覆盖一段连续区间，但一个 piece 可以有多条。
  * - piece 内字形已全部不可见：insert 用该 piece 自身左边界零宽度、deleted 塌到 collapseX、
  *   retained 用 fallback——与 prepare 时同语义，不猜几何。
  *
@@ -688,28 +738,42 @@ export function retargetRunStarts(
   const result: RunStartPiece[] = []
   for (const piece of pieces) {
     const pieceOwnLeft = xAtOffset(run.ownLayout, boundaries[piece.firstIndex], run.ownRect.x)
-    const island = longestVisibleIsland(
+    // Issue #879 本轮复核评论（高优先级）：计算该 piece 内所有不连续可见岛，
+    // 每段各自独立起始裁切——保留字停在各自在屏位置、吞字各自缩到 collapseX、
+    // 吐字各自从零宽度吐出。不丢任何可见字形（旧 longestVisibleIsland 只保留最长一段）。
+    const islands = allVisibleIslands(
       run, boundaries, piece.firstIndex, piece.lastIndex, displayed, frozenByGlyphId
     )
+    const intervals: RunStartInterval[] = []
+    for (const island of islands) {
+      const interval = intervalForIsland(
+        run, boundaries, island.firstIndex, island.lastIndex, kind, displayed, frozenByGlyphId
+      )
+      if (interval !== null) {
+        intervals.push(interval)
+      }
+    }
+
+    // legacy 单段起始（最长岛）保持原语义，供未读 intervals 的代码兼容。
     let startClipLeft = pieceOwnLeft
     let startClipRight = pieceOwnLeft
     let startPositionX = piece.startPositionX
     let startPositionY = piece.startPositionY
     let resolved = false
-    if (island !== null) {
-      const visible = buildPiece(
-        run, boundaries, island.firstIndex, island.lastIndex, island.interval, displayed, frozenByGlyphId
-      )
-      if (visible !== null) {
-        startClipLeft = visible.ownLeft
-        startClipRight = visible.ownRight
-        if (kind === 'retained') {
-          // 让该 piece 的第一个仍可见字形停在此刻在屏的位置上。
-          startPositionX = visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)
-          startPositionY = visible.onScreenTop
+    if (intervals.length > 0) {
+      let longest = intervals[0]
+      for (const iv of intervals) {
+        const len = iv.lastIndex - iv.firstIndex
+        const bestLen = longest.lastIndex - longest.firstIndex
+        if (len > bestLen || (len === bestLen && iv.firstIndex < longest.firstIndex)) {
+          longest = iv
         }
-        resolved = true
       }
+      startClipLeft = longest.startClipLeft
+      startClipRight = longest.startClipRight
+      startPositionX = longest.startPositionX
+      startPositionY = longest.startPositionY
+      resolved = true
     }
     if (!resolved) {
       // 该 piece 的字形此刻全部不可见——按通道语义塌缩，不猜几何。
@@ -731,9 +795,91 @@ export function retargetRunStarts(
       startPositionX: startPositionX,
       startPositionY: startPositionY,
       glyphIds: [...piece.glyphIds],
+      intervals: intervals.length > 0 ? intervals : undefined,
     })
   }
   return result
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：在 piece 的字母下标区间内找**所有**连续可见段。
+ *
+ * 与已删除的 longestVisibleIsland 不同——这里返回区间内每一段连续可见的下标对，
+ * 段与段之间的空洞（被冻结窗口局部裁切断开）各自作为独立岛返回，
+ * 交棒时每段都生成一段独立 clip，不丢任何可见字形。
+ */
+function allVisibleIslands(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan>
+): Array<{ firstIndex: number, lastIndex: number }> {
+  const islands: Array<{ firstIndex: number, lastIndex: number }> = []
+  let currentFirst = -1
+  for (let i = firstIndex; i <= lastIndex; i++) {
+    const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
+    if (visible !== null) {
+      if (currentFirst < 0) {
+        currentFirst = i
+      }
+    } else if (currentFirst >= 0) {
+      islands.push({ firstIndex: currentFirst, lastIndex: i - 1 })
+      currentFirst = -1
+    }
+  }
+  if (currentFirst >= 0) {
+    islands.push({ firstIndex: currentFirst, lastIndex: lastIndex })
+  }
+  return islands
+}
+
+/**
+ * Issue #879 本轮复核评论（高优先级）：为一段连续可见岛计算其起始裁切区间。
+ *
+ * 复用 buildPiece 计算该岛在 run 自己布局里的精确可见边界 ownLeft/ownRight，
+ * 以及（保留字）在屏起始位置。insert/deleted 通道不平移，起始位置落到 run 左/上边界；
+ * retained 通道让该岛第一个仍可见字形停在此刻在屏位置。
+ *
+ * @returns 该岛的 RunStartInterval；岛内无任何字形可见时返回 null。
+ */
+function intervalForIsland(
+  run: RunGeometry,
+  boundaries: number[],
+  firstIndex: number,
+  lastIndex: number,
+  kind: RunStartKind,
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan>
+): RunStartInterval | null {
+  const firstVisible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+  if (firstVisible === null) {
+    return null
+  }
+  const visible = buildPiece(run, boundaries, firstIndex, lastIndex, firstVisible, displayed, frozenByGlyphId)
+  if (visible === null) {
+    return null
+  }
+  let startPositionX = run.ownRect.x
+  let startPositionY = run.ownRect.y
+  if (kind === 'retained') {
+    // 让该岛第一个仍可见字形停在此刻在屏的位置上。
+    startPositionX = visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)
+    startPositionY = visible.onScreenTop
+  }
+  return {
+    firstIndex: firstIndex,
+    lastIndex: lastIndex,
+    glyphIds: run.glyphIds.slice(firstIndex, lastIndex + 1),
+    startClipLeft: visible.ownLeft,
+    startClipRight: visible.ownRight,
+    startPositionX: startPositionX,
+    startPositionY: startPositionY,
+    // 该岛在 run 自己正文里的 UTF-16 区间——供 computeStaticRangesMultiChannel 精确扣除。
+    utf16Start: boundaries[firstIndex],
+    utf16End: boundaries[lastIndex + 1],
+  }
 }
 
 /** piece 起始状态的通道类别。 */
@@ -749,63 +895,25 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
     startPositionX: p.startPositionX,
     startPositionY: p.startPositionY,
     glyphIds: [...p.glyphIds],
+    intervals: p.intervals === undefined
+      ? undefined
+      : p.intervals.map((iv: RunStartInterval): RunStartInterval => ({
+        firstIndex: iv.firstIndex,
+        lastIndex: iv.lastIndex,
+        glyphIds: [...iv.glyphIds],
+        startClipLeft: iv.startClipLeft,
+        startClipRight: iv.startClipRight,
+        startPositionX: iv.startPositionX,
+        startPositionY: iv.startPositionY,
+        utf16Start: iv.utf16Start,
+        utf16End: iv.utf16End,
+      })),
   }))
 }
 
-/**
- * 在 piece 的字母下标区间内找**最长**的连续可见段。
- *
- * 多段可见时取最长一段（等长取靠前一段）：单片段的 clip 只能表达一段连续区间，
- * 取最长一段保证不填补空洞、也不因为取错段落而丢字。
- */
-function longestVisibleIsland(
-  run: RunGeometry,
-  boundaries: number[],
-  firstIndex: number,
-  lastIndex: number,
-  displayed: DisplayedContext,
-  frozenByGlyphId: Map<string, FrozenWindowSpan>
-): { firstIndex: number, lastIndex: number, interval: OnScreenInterval } | null {
-  let bestFirst = -1
-  let bestLast = -1
-  let bestLength = 0
-  let bestInterval: OnScreenInterval | null = null
-  let currentFirst = -1
-  let currentInterval: OnScreenInterval | null = null
-
-  for (let i = firstIndex; i <= lastIndex; i++) {
-    const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
-    if (visible !== null) {
-      if (currentFirst < 0) {
-        currentFirst = i
-        currentInterval = visible
-      }
-    } else if (currentFirst >= 0) {
-      const length = i - currentFirst
-      if (length > bestLength) {
-        bestLength = length
-        bestFirst = currentFirst
-        bestLast = i - 1
-        bestInterval = currentInterval
-      }
-      currentFirst = -1
-      currentInterval = null
-    }
-  }
-  if (currentFirst >= 0) {
-    const length = lastIndex + 1 - currentFirst
-    if (length > bestLength) {
-      bestLength = length
-      bestFirst = currentFirst
-      bestLast = lastIndex
-      bestInterval = currentInterval
-    }
-  }
-  if (bestInterval === null || bestFirst < 0) {
-    return null
-  }
-  return { firstIndex: bestFirst, lastIndex: bestLast, interval: bestInterval }
-}
+// Issue #879 本轮复核评论（高优先级）：longestVisibleIsland 已被 allVisibleIslands +
+// intervalForIsland 取代——固定 piece 分区下需返回该 piece 内所有不连续可见岛，
+// 而非仅最长一段，否则其余可见段会被裁切层丢弃而永远无法归还静态层。
 
 /** 某个字形此刻在屏的精确可见区间（vp）。 */
 interface OnScreenInterval {

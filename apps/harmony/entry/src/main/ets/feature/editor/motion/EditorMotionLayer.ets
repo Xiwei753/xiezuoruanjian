@@ -33,25 +33,11 @@
 // ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
 // 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
 
-import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange } from './EditorVisualFrame'
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange, ClipRect } from './EditorVisualFrame'
 import { CaretRect, LineLayout } from '../render/editor_render_geometry'
 import { RectShape, PathShape } from '@ohos.arkui.shape'
 import { EditorMotionCoordinator } from './EditorMotionCoordinator'
 import { MotionSourceEntry } from './EditorMotionSourcePool'
-
-/**
- * 裁切矩形——用于 clipShape/maskShape 的矩形区域。
- */
-export interface ClipRect {
-  /** 左边界（vp） */
-  x: number
-  /** 上边界（vp） */
-  y: number
-  /** 宽度（vp） */
-  width: number
-  /** 高度（vp） */
-  height: number
-}
 
 /**
  * 运动层绘制工具。
@@ -80,6 +66,80 @@ export class EditorMotionLayer {
     const width = Math.max(0, window.clipRight - window.clipLeft)
     const height = Math.max(0, window.clipBottom - window.clipTop)
     return { x, y, width, height }
+  }
+
+  /**
+   * 取一个运动窗口在本帧的所有可见裁切矩形（多岛并集）。
+   *
+   * Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 可能覆盖多个不连续可见岛，
+   * 这些岛以「多个不连续 clip 矩形的并集」由一个 Text 节点绘制。返回 window.clipRects；
+   * 若为空（旧数据/未填充），退回由包围盒 clipLeft/Right/Top/Bottom 构造的单个矩形。
+   */
+  static buildWindowClipRects(window: MotionGlyphWindow): ClipRect[] {
+    if (window.clipRects !== undefined && window.clipRects.length > 0) {
+      return window.clipRects
+    }
+    const x = window.clipLeft
+    const y = window.clipTop
+    const width = Math.max(0, window.clipRight - window.clipLeft)
+    const height = Math.max(0, window.clipBottom - window.clipTop)
+    return [{ x, y, width, height }]
+  }
+
+  /**
+   * 把若干裁切矩形合并成一个 SVG path 命令字符串（供 PathShape 用 fillRule 组合成并集）。
+   *
+   * 每个矩形生成一段 M...L...L...L...Z 子路径；坐标相对 (originX, originY) 偏移，
+   * 因为外层 Stack 定位在并集包围盒左上角，所以每个矩形要在 Stack 局部坐标系里表达。
+   *
+   * @param rects 裁切矩形列表（编辑器坐标系）
+   * @param originX 并集包围盒左上角 x（Stack 定位点）
+   * @param originY 并集包围盒左上角 y
+   * @returns SVG path 命令字符串；空列表返回不可见 path
+   */
+  static buildClipPath(rects: ClipRect[], originX: number, originY: number): string {
+    if (rects.length === 0) {
+      return 'M0 0 Z'
+    }
+    const parts: string[] = []
+    for (const r of rects) {
+      const x = r.x - originX
+      const y = r.y - originY
+      if (r.width <= 0 || r.height <= 0) {
+        continue
+      }
+      parts.push(`M${x} ${y} L${x + r.width} ${y} L${x + r.width} ${y + r.height} L${x} ${y + r.height} Z`)
+    }
+    if (parts.length === 0) {
+      return 'M0 0 Z'
+    }
+    return parts.join(' ')
+  }
+
+  /**
+   * 计算一组裁切矩形的并集包围盒。
+   *
+   * 外层 Stack 定位在包围盒左上角，PathShape 用相对坐标表达各子矩形，
+   * 这样多个不连续可见岛可以共用一个 Text 节点的裁切。
+   */
+  static clipRectsBBox(rects: ClipRect[]): ClipRect {
+    if (rects.length === 0) {
+      return { x: 0, y: 0, width: 0, height: 0 }
+    }
+    let minX = rects[0].x
+    let minY = rects[0].y
+    let maxX = rects[0].x + rects[0].width
+    let maxY = rects[0].y + rects[0].height
+    for (let i = 1; i < rects.length; i++) {
+      const r = rects[i]
+      if (r.x < minX) { minX = r.x }
+      if (r.y < minY) { minY = r.y }
+      const right = r.x + r.width
+      const bottom = r.y + r.height
+      if (right > maxX) { maxX = right }
+      if (bottom > maxY) { maxY = bottom }
+    }
+    return { x: minX, y: minY, width: Math.max(0, maxX - minX), height: Math.max(0, maxY - minY) }
   }
 
   /**
@@ -260,14 +320,14 @@ export class EditorMotionLayer {
   }
 
   /**
-   * 计算运动层需要绘制的字形窗口的裁切矩形列表。
+   * 计算运动层需要绘制的字形窗口的裁切矩形列表（每个窗口一组矩形，多岛并集）。
    *
-   * 每个 MotionGlyphWindow 对应一个 ClipRect，
-   * ArkUI 组件层用 Stack + 多个 clipShape 层叠实现多窗口裁切。
+   * 返回与 frame.motionGlyphWindows 等长的数组，每个元素是该窗口的 ClipRect[]，
+   * ArkUI 组件层对每个窗口用 PathShape 组合成并集裁切。
    */
-  static buildAllClipRects(frame: EditorVisualFrame): ClipRect[] {
+  static buildAllClipRects(frame: EditorVisualFrame): ClipRect[][] {
     return frame.motionGlyphWindows.map(
-      (w: MotionGlyphWindow): ClipRect => EditorMotionLayer.buildClipRect(w)
+      (w: MotionGlyphWindow): ClipRect[] => EditorMotionLayer.buildWindowClipRects(w)
     )
   }
 
@@ -348,8 +408,8 @@ export interface MotionWindowSource {
   window: MotionGlyphWindow
   /** 匹配的稳定源（提供可共享的 StyledString） */
   source: MotionSourceEntry
-  /** 裁切矩形 */
-  clipRect: ClipRect
+  /** 裁切矩形列表（多岛并集——一个固定 piece 物理 Text 可能覆盖多个不连续可见岛） */
+  clipRects: ClipRect[]
   /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
   textController: TextController
   /** 是否已挂载（onAppear 已触发）——从窗口级状态读取，而非从源池 source 读取 */
@@ -427,6 +487,9 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
       ForEach(
         params.motionWindowSources,
         (item: MotionWindowSource, index: number) => {
+          // Issue #879 本轮复核评论（高优先级）：同一物理 Text 可能覆盖多个不连续可见岛，
+          // 用并集包围盒定位外层 Stack，PathShape 用相对坐标表达各岛。
+          const clipBBox = EditorMotionLayer.clipRectsBBox(item.clipRects)
           Stack() {
             Text(undefined, { controller: item.textController })
               .width(params.textWidth)
@@ -438,8 +501,8 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
               // 切源时创建新节点而非复用旧节点。
               .id(`motion-window-${item.window.renderNodeKey}`)
               .offset({
-                x: -item.clipRect.x + item.window.offsetX,
-                y: -item.clipRect.y + item.window.offsetY
+                x: -item.clipBBox.x + item.window.offsetX,
+                y: -item.clipBBox.y + item.window.offsetY
               })
               .onAppear(() => {
                 // Issue #879 最新复核评论修复（问题3）：
@@ -477,15 +540,16 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
                 }
               })
           }
-          .width(item.clipRect.width)
-          .height(item.clipRect.height)
-          .clipShape(new RectShape({
-            width: item.clipRect.width,
-            height: item.clipRect.height
+          .width(item.clipBBox.width)
+          .height(item.clipBBox.height)
+          .clipShape(new PathShape({
+            // Issue #879 本轮复核评论（高优先级）：多个不连续可见岛用 PathShape 组合成并集裁切，
+            // 同一 renderNodeKey 对应唯一物理 Text，但其可见区域是多个不连续 clip 矩形的并集。
+            commands: EditorMotionLayer.buildClipPath(item.clipRects, item.clipBBox.x, item.clipBBox.y)
           }))
           .position({
-            x: item.clipRect.x,
-            y: item.clipRect.y
+            x: item.clipBBox.x,
+            y: item.clipBBox.y
           })
           // Issue #879 复核评论修复（问题1）：候选窗口 opacity 0——参与布局但不可见。
           // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。

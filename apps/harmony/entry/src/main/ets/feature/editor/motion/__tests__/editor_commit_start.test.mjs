@@ -1055,4 +1055,100 @@ test('问题4：insert 间隙 piece 在 retarget 后仍是零宽度，不填补�
   assert.equal(retargeted[0].startClipRight, 0)
 })
 
+// ====== 问题2（高优先级）：固定 piece 分区下，交棒瞬间被冻结窗口局部裁切而断开成多段可见岛 ======
+// 旧实现用 longestVisibleIsland 只保留最长一段，其余可见岛会被裁切层丢弃而永远无法归还
+// 静态层——真实丢字。修复后 retargetRunStarts 必须返回该 piece 内所有不连续可见岛。
+
+test('问题2：固定 piece 被冻结窗口局部裁切断开——retarget 返回所有不连续可见岛', () => {
+  const ctx = context('甲乙丙丁戊', 790, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  // prepare：无冻结窗口，整段静态完整可见 → 单个 piece 覆盖 0..4
+  const prepared = insertRunStartState(run, ctx)
+  assert.equal(prepared.length, 1, 'prepare 应为单个 piece')
+  assert.equal(prepared[0].firstIndex, 0)
+  assert.equal(prepared[0].lastIndex, 4)
+  // retarget：一个冻结窗口把中段簇2（丙，x=20..30）彻底吞掉（clip 0..0），
+  // 簇0/1/3/4 静态可见 → 该 piece 断成两段不连续可见岛 [0,1] 与 [3,4]。
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 790, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  // 分区不变——物理节点身份（glyphIds）不被临时可见分组改变
+  assertSamePartition(prepared, retargeted)
+  // 必须返回两段可见岛，而不是只保留最长一段
+  assert.ok(retargeted[0].intervals !== undefined, 'piece 应携带 intervals')
+  assert.equal(retargeted[0].intervals.length, 2, '应有两个不连续可见岛')
+  const ivs = retargeted[0].intervals
+  assert.deepEqual([ivs[0].firstIndex, ivs[0].lastIndex], [0, 1])
+  assert.deepEqual([ivs[1].firstIndex, ivs[1].lastIndex], [3, 4])
+  // 被裁掉的簇2 不应出现在任何可见岛里（它此刻仍不可见，留在静态层）
+  const covered = new Set()
+  for (const iv of ivs) {
+    for (let i = iv.firstIndex; i <= iv.lastIndex; i++) { covered.add(i) }
+  }
+  assert.ok(!covered.has(2), '被冻结窗口裁掉的簇2 不应进入可见岛')
+  assert.ok(covered.has(0) && covered.has(1) && covered.has(3) && covered.has(4),
+    '所有静态可见的簇都应被某个可见岛覆盖，不能丢字')
+  // 每个岛携带自己在 run 自己正文里的 UTF-16 区间，供静态层精确扣除
+  assert.equal(ivs[0].utf16Start, 0)
+  assert.equal(ivs[0].utf16End, 2)
+  assert.equal(ivs[1].utf16Start, 3)
+  assert.equal(ivs[1].utf16End, 5)
+})
+
+test('问题2：多个可见岛时 legacy 单段 clip 取最长岛（等长取靠前的），不影响兼容读', () => {
+  const ctx = context('甲乙丙丁戊', 791, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = insertRunStartState(run, ctx)
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 791, null)] },
+    'insert',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  // 两段岛等长（各 2 簇）→ legacy 取靠前第一段 [0,1]，其 ownLeft/ownRight = 0..20
+  assert.equal(retargeted[0].startClipLeft, 0)
+  assert.equal(retargeted[0].startClipRight, 20)
+})
+
+test('问题2：retained 通道——同一固定 piece 的多段可见岛各自停在各自在屏位置', () => {
+  const ctx = context('甲乙丙丁戊', 792, [])
+  const all = idsOf(ctx, 0, 5)
+  const run = runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
+  const prepared = retainedMoveStartState(run, ctx,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
+  assert.equal(prepared.length, 1)
+  const retargeted = retargetRunStarts(
+    run,
+    prepared,
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 792, null)] },
+    'retained',
+    0,
+    { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
+  )
+  assertSamePartition(prepared, retargeted)
+  assert.ok(retargeted[0].intervals !== undefined)
+  assert.equal(retargeted[0].intervals.length, 2)
+  // 两个岛都应各自携带起始位置（retained：停在各自在屏位置）。本例 own 布局与在屏布局
+  // 一致，故起始位置退化为 0——重点是每个岛都有独立且合法的起始状态，而非共享单段 clip。
+  const ivs = retargeted[0].intervals
+  assert.equal(ivs[0].firstIndex, 0)
+  assert.equal(ivs[0].lastIndex, 1)
+  assert.equal(ivs[1].firstIndex, 3)
+  assert.equal(ivs[1].lastIndex, 4)
+  assert.strictEqual(typeof ivs[0].startPositionX, 'number')
+  assert.strictEqual(typeof ivs[1].startPositionX, 'number')
+  assert.strictEqual(typeof ivs[0].startPositionY, 'number')
+  assert.strictEqual(typeof ivs[1].startPositionY, 'number')
+})
+
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
