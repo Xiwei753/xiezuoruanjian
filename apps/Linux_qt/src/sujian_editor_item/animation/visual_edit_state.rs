@@ -308,7 +308,8 @@ impl VisualEditState {
         deleted_range_edges: &[DeletedRangeEdge],
         now: Instant,
         base_duration_ms: u64,
-        inherited_velocity_per_second: Option<f64>,
+        inherited_spatial_speed_per_second: Option<f64>,
+        inherited_caret_velocity: Option<CursorRect>,
         inherited_shared_progress: f64,
         transaction_id: u64,
         operation_kind: String,
@@ -423,11 +424,55 @@ impl VisualEditState {
                     .canonical_range
                     .and_then(|range| offset_map.map_old_range_to_new(range.0, range.1));
                 if let Some(mapped_range) = mapped_range {
-                    // The Core map says this logical text survives. If no render cluster
-                    // claimed it (for example, a shaping boundary changed), fade its
-                    // committed contribution out without assigning Delete semantics.
+                    let mut contribution = source.clone();
+                    contribution.canonical_range = Some(mapped_range);
+                    let owner_motion_index = motions
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, motion)| {
+                            let target = motion.target.as_ref()?;
+                            ranges_overlap(mapped_range, target.byte_range).then_some((
+                                index,
+                                target.shaping_identity == contribution.shaping_identity,
+                                overlap_len(mapped_range, target.byte_range),
+                            ))
+                        })
+                        .max_by_key(|(_, same_shaping, overlap)| (*same_shaping, *overlap))
+                        .map(|(index, _, _)| index);
+                    if let Some(motion) =
+                        owner_motion_index.and_then(|index| motions.get_mut(index))
+                    {
+                        if !motion
+                            .source
+                            .iter()
+                            .chain(motion.retiring_sources.iter())
+                            .any(|existing| same_visual_cluster(existing, &contribution))
+                        {
+                            if let Some(target) = motion.target.as_ref() {
+                                if motion.source.is_none() {
+                                    motion.kind = if contribution.shaping_identity
+                                        == target.shaping_identity
+                                    {
+                                        MotionKind::Transform
+                                    } else {
+                                        MotionKind::CrossFade
+                                    };
+                                    motion.source = Some(contribution);
+                                } else {
+                                    if contribution.shaping_identity != target.shaping_identity {
+                                        motion.kind = MotionKind::CrossFade;
+                                    }
+                                    motion.retiring_sources.push(contribution);
+                                }
+                            }
+                        }
+                        source_used[source_index] = true;
+                        continue;
+                    }
+                    // If no target cluster exists, retain the submitted glyph until its
+                    // source-only transition has faded it out from the actual source rect.
                     motions.push(ClusterMotion {
-                        source: Some(source.clone()),
+                        source: Some(contribution),
                         retiring_sources: Vec::new(),
                         target: None,
                         source_canonical_range: Some(mapped_range),
@@ -518,6 +563,7 @@ impl VisualEditState {
             }
         }
 
+        let response_distance = response_distance(&motions, caret_motion.as_ref());
         let timeline = EditVisualTimeline::new(
             transition_id,
             document_session,
@@ -527,7 +573,9 @@ impl VisualEditState {
             caret_rects.map(|(from, _)| from),
             caret_rects.map(|(_, to)| to),
             caret_motion.as_ref().and_then(|motion| motion.path.clone()),
-            inherited_velocity_per_second,
+            inherited_spatial_speed_per_second,
+            inherited_caret_velocity,
+            response_distance,
             inherited_shared_progress,
         );
         let reflow_cluster_count = motions
@@ -591,26 +639,12 @@ impl VisualEditState {
         self.timeline.retime(now, duration_ms)
     }
 
-    pub(crate) fn retarget_timing(&self, now: Instant) -> Option<(u64, f64, f64)> {
-        let sample = self.sample(now);
-        let remaining = self.timeline.remaining_duration_ms(now);
-        (sample.eased_progress < 1.0 && remaining > 0).then_some((
-            remaining,
-            sample.velocity_per_second,
-            sample.timeline_progress,
-        ))
-    }
-
     pub(crate) fn duration_ms(&self) -> u64 {
         self.timeline.duration_ms()
     }
 
     pub(crate) fn has_caret_timeline(&self) -> bool {
         self.timeline.has_caret_motion()
-    }
-
-    pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
-        self.timeline.remaining_duration_ms(now)
     }
 
     pub(crate) fn has_caret_driven_motions(&self) -> bool {
@@ -706,7 +740,16 @@ impl VisualEditState {
                         None,
                         target.shaping_identity.clone(),
                     ));
-                    push_retiring_source_glyphs(motion, p, &mut glyphs);
+                    for retiring in &motion.retiring_sources {
+                        push_crossfade_source_glyph_at(
+                            retiring,
+                            Some(target.byte_range),
+                            p,
+                            &rect,
+                            source,
+                            &mut glyphs,
+                        );
+                    }
                 }
                 MotionKind::RevealFromCommittedSlice => {
                     let (Some(source), Some(target)) = (&motion.source, &motion.target) else {
@@ -779,7 +822,16 @@ impl VisualEditState {
                         None,
                         target.shaping_identity.clone(),
                     ));
-                    push_retiring_source_glyphs(motion, p, &mut glyphs);
+                    for retiring in &motion.retiring_sources {
+                        push_crossfade_source_glyph_at(
+                            retiring,
+                            Some(target.byte_range),
+                            p,
+                            &rect,
+                            source,
+                            &mut glyphs,
+                        );
+                    }
                 }
                 MotionKind::Reveal => {
                     let Some(target) = &motion.target else {
@@ -914,6 +966,21 @@ impl VisualEditState {
                                 target.shaping_identity.clone(),
                             ));
                         }
+                    } else if let Some(source) = &motion.source {
+                        push_crossfade_source_glyph(
+                            source,
+                            motion.source_canonical_range,
+                            p,
+                            &mut glyphs,
+                        );
+                        for retiring in &motion.retiring_sources {
+                            push_crossfade_source_glyph(
+                                retiring,
+                                motion.source_canonical_range,
+                                p,
+                                &mut glyphs,
+                            );
+                        }
                     }
                 }
             }
@@ -934,6 +1001,8 @@ impl VisualEditState {
         plan.transition_id = self.transition_id;
         plan.shared_progress = sample.eased_progress;
         plan.timeline_progress = sample.timeline_progress;
+        plan.spatial_speed_per_second = sample.spatial_speed_per_second;
+        plan.caret_velocity = sample.caret_velocity;
         plan.reflow_cluster_count = self.reflow_cluster_count;
         plan.crossfade_cluster_count = self.crossfade_cluster_count;
         plan.ownership_conflict_count = plan
@@ -941,6 +1010,7 @@ impl VisualEditState {
             .max(self.ownership_conflict_count);
         plan.terminal_motion_indices = terminal_motion_indices;
         plan.submitted_visible_widths = submitted_visible_widths;
+        plan.candidate_frame = VisualFrame::from_rendered_plan(&self.target_snapshot, &plan);
         plan
     }
 }
@@ -1269,17 +1339,12 @@ fn push_crossfade_source_glyph_at(
     if opacity <= 1e-6 {
         return;
     }
-    let same_logical_cluster = source.canonical_range == primary.canonical_range;
-    let offset_scale = if same_logical_cluster {
-        0.0
-    } else {
-        1.0 - progress
-    };
+    let offset_scale = 1.0 - progress;
     glyphs.push(RenderOwnershipPlan::glyph(
         path_rect.x + (source.rect.x - primary.rect.x) * offset_scale,
         path_rect.y + (source.rect.y - primary.rect.y) * offset_scale,
-        path_rect.w,
-        path_rect.h,
+        lerp(source.rect.w, path_rect.w, progress),
+        lerp(source.rect.h, path_rect.h, progress),
         opacity,
         source.snapshot_id,
         source.source_rect.clone(),
@@ -1308,21 +1373,6 @@ fn motion_rect(
     lerp_rect(&source.rect, &target.rect, p)
 }
 
-fn push_retiring_source_glyphs(
-    motion: &ClusterMotion,
-    progress: f64,
-    glyphs: &mut Vec<crate::sujian_editor_item::render_plan::TextAnimationGlyphInfo>,
-) {
-    let canonical_range = motion
-        .target
-        .as_ref()
-        .map(|target| target.byte_range)
-        .or(motion.source_canonical_range);
-    for source in &motion.retiring_sources {
-        push_crossfade_source_glyph(source, canonical_range, progress, glyphs);
-    }
-}
-
 fn pair_cluster(
     source_indices: &[usize],
     target_index: usize,
@@ -1334,18 +1384,15 @@ fn pair_cluster(
     motions: &mut Vec<ClusterMotion>,
 ) {
     let target = targets[target_index].clone();
-    // Collapse repeated committed contributions for the same logical range and shaping
-    // before choosing a motion owner. Their visible geometry is opacity-weighted, so a
-    // retarget keeps the actual submitted position instead of dropping extra layers.
+    // Keep each submitted contribution at its actual geometry. Only byte-for-byte
+    // duplicates of the same texture, crop, rect, and opacity are redundant.
     let mut source_groups: Vec<VisualCluster> = Vec::new();
     for &source_index in source_indices {
         let contribution = source_frame.clusters[source_index].clone();
-        if let Some(existing) = source_groups.iter_mut().find(|existing| {
-            existing.canonical_range == contribution.canonical_range
-                && existing.shaping_identity == contribution.shaping_identity
-        }) {
-            merge_visual_cluster(existing, &contribution);
-        } else {
+        if !source_groups
+            .iter()
+            .any(|existing| same_visual_cluster(existing, &contribution))
+        {
             source_groups.push(contribution);
         }
     }
@@ -1377,11 +1424,11 @@ fn pair_cluster(
         })
         .unwrap_or(0);
     let source = source_groups[primary_source_index].clone();
-    let same_shaping =
-        source_groups.len() == 1 && source.shaping_identity == target.shaping_identity;
-    // A target has one motion owner. Distinct old shaping contributions are retained in
-    // that owner's CrossFade source set; only identical logical/shaping duplicates above
-    // are coalesced into one submitted visual contribution.
+    let same_shaping = source_groups
+        .iter()
+        .all(|source| source.shaping_identity == target.shaping_identity);
+    // A target has one motion owner. Every distinct committed contribution stays attached
+    // to it; each old layer follows its own source geometry into the target path.
     let retiring_sources: Vec<VisualCluster> = if source_groups.len() == 1 {
         Vec::new()
     } else {
@@ -1407,7 +1454,7 @@ fn pair_cluster(
     }
     let starts_from_partial_width =
         source.rect.w + 0.01 < target.rect.w || source.source_rect.w + 0.01 < target.source_rect.w;
-    let kind = if same_shaping && starts_from_partial_width {
+    let kind = if same_shaping && source_groups.len() == 1 && starts_from_partial_width {
         MotionKind::RevealFromCommittedSlice
     } else if same_shaping {
         MotionKind::Transform
@@ -1432,33 +1479,18 @@ fn pair_cluster(
     });
 }
 
-fn merge_visual_cluster(target: &mut VisualCluster, contribution: &VisualCluster) {
-    let replace_source = contribution.opacity > target.opacity;
-    let target_weight = target.opacity.max(0.0);
-    let contribution_weight = contribution.opacity.max(0.0);
-    let total_weight = target_weight + contribution_weight;
-    let (target_weight, contribution_weight) = if total_weight > f64::EPSILON {
-        (
-            target_weight / total_weight,
-            contribution_weight / total_weight,
-        )
-    } else {
-        (0.5, 0.5)
-    };
-    let weighted = |left: f64, right: f64| left * target_weight + right * contribution_weight;
-    target.rect = SourceRect {
-        x: weighted(target.rect.x, contribution.rect.x),
-        y: weighted(target.rect.y, contribution.rect.y),
-        w: weighted(target.rect.w, contribution.rect.w),
-        h: weighted(target.rect.h, contribution.rect.h),
-    };
-    target.opacity = (target.opacity + contribution.opacity).clamp(0.0, 1.0);
-    if replace_source {
-        target.snapshot_id = contribution.snapshot_id;
-        target.byte_range = contribution.byte_range;
-        target.source_rect = contribution.source_rect.clone();
-        target.delete_edge = contribution.delete_edge;
-    }
+fn same_visual_cluster(left: &VisualCluster, right: &VisualCluster) -> bool {
+    left.snapshot_id == right.snapshot_id
+        && left.byte_range == right.byte_range
+        && left.canonical_range == right.canonical_range
+        && left.delete_edge == right.delete_edge
+        && left.shaping_identity == right.shaping_identity
+        && left.rect.x == right.rect.x
+        && left.rect.y == right.rect.y
+        && left.rect.w == right.rect.w
+        && left.rect.h == right.rect.h
+        && left.source_rect == right.source_rect
+        && left.opacity == right.opacity
 }
 
 fn target_clusters(snapshot: &EditorLayoutSnapshot) -> Vec<TargetCluster> {
@@ -1475,6 +1507,43 @@ fn target_clusters(snapshot: &EditorLayoutSnapshot) -> Vec<TargetCluster> {
         }
     }
     result
+}
+
+fn response_distance(motions: &[ClusterMotion], caret_motion: Option<&CaretMotion>) -> f64 {
+    let caret_distance = caret_motion
+        .and_then(|motion| {
+            motion.path.as_ref().map(CaretPath::length).or_else(|| {
+                let from = CursorRect {
+                    x: motion.from.x,
+                    top: motion.from.y,
+                    bottom: motion.from.y + motion.from.h,
+                    baseline_y: motion.from.y + motion.from.h,
+                };
+                let to = CursorRect {
+                    x: motion.to.x,
+                    top: motion.to.y,
+                    bottom: motion.to.y + motion.to.h,
+                    baseline_y: motion.to.y + motion.to.h,
+                };
+                Some(
+                    (from.x - to.x)
+                        .hypot(from.top - to.top)
+                        .max((from.bottom - to.bottom).abs())
+                        .max((from.baseline_y - to.baseline_y).abs()),
+                )
+            })
+        })
+        .unwrap_or_default();
+    let text_distance = motions
+        .iter()
+        .map(|motion| match (&motion.source, &motion.target) {
+            (Some(source), Some(target)) => rect_distance(&source.rect, &target.rect),
+            (Some(source), None) => source.rect.w.max(source.rect.h),
+            (None, Some(target)) => target.rect.w.max(target.rect.h),
+            (None, None) => 0.0,
+        })
+        .fold(0.0, f64::max);
+    caret_distance.max(text_distance).max(1.0)
 }
 
 fn visible_slice(target: &TargetCluster, visible_width: f64) -> (SourceRect, SourceRect) {

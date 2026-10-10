@@ -92,17 +92,19 @@ pub(crate) struct EditMotionSample {
     pub transition_id: u64,
     pub document_session: u64,
     pub target_revision: LayoutRevision,
-    /// Monotonic shared progress carried across continuous retargets.
-    pub progress: f64,
     /// Local distance through this submitted-source to canonical-target transition.
     pub eased_progress: f64,
     /// Continuous phase used to carry the response clock across a retarget.
     pub timeline_progress: f64,
     /// Shared distance velocity, in progress units per second.
     pub velocity_per_second: f64,
+    /// Representative screen-space speed of the geometry following this timeline.
+    pub spatial_speed_per_second: f64,
     pub caret_from: Option<CursorRect>,
     pub caret_target: Option<CursorRect>,
     pub caret_rect: Option<CursorRect>,
+    /// Geometric caret velocity at this sample, in document units per second.
+    pub caret_velocity: Option<CursorRect>,
 }
 
 /// Piecewise-linear caret path through real line boundaries. Time is still sampled once;
@@ -162,6 +164,33 @@ impl CaretPath {
         lerp_caret(self.points[segment], self.points[segment + 1], local)
     }
 
+    pub(crate) fn derivative(&self, progress: f64) -> CursorRect {
+        let distance = progress.clamp(0.0, 1.0) * self.total_length;
+        let segment = self
+            .cumulative
+            .windows(2)
+            .position(|window| distance <= window[1])
+            .unwrap_or(self.points.len() - 2);
+        let start = self.cumulative[segment];
+        let end = self.cumulative[segment + 1];
+        let segment_length = end - start;
+        if segment_length <= f64::EPSILON {
+            return zero_caret_velocity();
+        }
+        scale_caret(
+            subtract_caret(self.points[segment + 1], self.points[segment]),
+            self.total_length / segment_length,
+        )
+    }
+
+    pub(crate) fn initial_progress_velocity(&self, velocity: CursorRect) -> f64 {
+        project_velocity(self.derivative(0.0), velocity)
+    }
+
+    pub(crate) fn length(&self) -> f64 {
+        self.total_length
+    }
+
     pub(crate) fn contains_point(&self, x: f64, y: f64) -> bool {
         self.points
             .windows(2)
@@ -198,7 +227,8 @@ pub(crate) struct EditVisualTimeline {
     duration_ms: u64,
     segment_start_shared_progress: f64,
     segment_start_motion_progress: f64,
-    initial_velocity_per_second: f64,
+    initial_progress_velocity_per_second: f64,
+    reference_distance: f64,
     caret_from: Option<CursorRect>,
     caret_target: Option<CursorRect>,
     caret_path: Option<CaretPath>,
@@ -214,15 +244,33 @@ impl EditVisualTimeline {
         caret_from: Option<CursorRect>,
         caret_target: Option<CursorRect>,
         caret_path: Option<CaretPath>,
-        initial_velocity_per_second: Option<f64>,
+        inherited_spatial_speed_per_second: Option<f64>,
+        inherited_caret_velocity: Option<CursorRect>,
+        reference_distance: f64,
         shared_progress_start: f64,
     ) -> Self {
         let shared_progress_start = shared_progress_start.clamp(0.0, 1.0);
-        let default_velocity = if duration_ms == 0 {
+        let response_seconds = duration_ms as f64 / 1000.0;
+        let default_spatial_speed = if response_seconds <= f64::EPSILON {
             0.0
         } else {
-            3_000.0 * (1.0 - shared_progress_start) / duration_ms as f64
+            3.0 * reference_distance.max(1.0) / response_seconds
         };
+        let initial_progress_velocity_per_second = inherited_caret_velocity
+            .zip(caret_path.as_ref())
+            .map(|(velocity, path)| path.initial_progress_velocity(velocity))
+            .or_else(|| {
+                inherited_caret_velocity
+                    .zip(caret_from.zip(caret_target))
+                    .map(|(velocity, (from, target))| {
+                        project_velocity(subtract_caret(target, from), velocity)
+                    })
+            })
+            .unwrap_or_else(|| {
+                inherited_spatial_speed_per_second.unwrap_or(default_spatial_speed)
+                    / reference_distance.max(1.0)
+            })
+            .max(0.0);
         Self {
             transition_id,
             document_session,
@@ -231,9 +279,8 @@ impl EditVisualTimeline {
             duration_ms,
             segment_start_shared_progress: shared_progress_start,
             segment_start_motion_progress: 0.0,
-            initial_velocity_per_second: initial_velocity_per_second
-                .unwrap_or(default_velocity)
-                .max(0.0),
+            initial_progress_velocity_per_second,
+            reference_distance: reference_distance.max(1.0),
             caret_from,
             caret_target,
             caret_path,
@@ -241,42 +288,46 @@ impl EditVisualTimeline {
     }
 
     pub(crate) fn sample(&self, frame_now: Instant) -> EditMotionSample {
-        let remaining_shared_progress = 1.0 - self.segment_start_shared_progress;
-        let remaining_motion_progress = 1.0 - self.segment_start_motion_progress;
-        let remaining_duration_seconds =
-            self.duration_ms as f64 * remaining_motion_progress.max(0.0) / 1000.0;
         let elapsed_seconds = frame_now
             .saturating_duration_since(self.started_at)
             .as_secs_f64();
-        let progress = if self.duration_ms == 0 || remaining_duration_seconds <= f64::EPSILON {
-            1.0
-        } else {
-            (elapsed_seconds / remaining_duration_seconds).clamp(0.0, 1.0)
-        };
-        let tangent = if self.duration_ms == 0
-            || remaining_shared_progress <= f64::EPSILON
-            || remaining_motion_progress <= f64::EPSILON
-        {
+        let response_seconds = self.duration_ms as f64 / 1000.0;
+        let omega = if response_seconds <= f64::EPSILON {
             0.0
         } else {
-            (self.initial_velocity_per_second * remaining_duration_seconds
-                / remaining_shared_progress)
-                .clamp(0.0, 3.0)
+            12.0 / response_seconds
         };
-        let eased_segment = hermite_progress(progress, tangent);
-        let timeline_progress =
-            self.segment_start_shared_progress + remaining_shared_progress * eased_segment;
-        let eased_progress =
-            self.segment_start_motion_progress + remaining_motion_progress * eased_segment;
-        let velocity_per_second = if progress >= 1.0 {
-            0.0
-        } else if remaining_duration_seconds > f64::EPSILON {
-            (remaining_shared_progress * hermite_derivative(progress, tangent)
-                / remaining_duration_seconds)
-                .max(0.0)
+        let (mut eased_progress, velocity_per_second) = if omega <= f64::EPSILON {
+            (1.0, 0.0)
         } else {
-            0.0
+            damped_progress(
+                self.segment_start_motion_progress,
+                self.initial_progress_velocity_per_second,
+                omega,
+                elapsed_seconds,
+            )
         };
+        if 1.0 - eased_progress <= 1e-4 {
+            eased_progress = 1.0;
+        }
+        let timeline_progress = self.segment_start_shared_progress
+            + (1.0 - self.segment_start_shared_progress) * eased_progress;
+        let velocity_per_second = if eased_progress >= 1.0 {
+            0.0
+        } else {
+            velocity_per_second
+        };
+        let caret_velocity = self
+            .caret_path
+            .as_ref()
+            .map(|path| scale_caret(path.derivative(eased_progress), velocity_per_second))
+            .or_else(|| {
+                self.caret_from
+                    .zip(self.caret_target)
+                    .map(|(from, target)| {
+                        scale_caret(subtract_caret(target, from), velocity_per_second)
+                    })
+            });
         let caret_rect = self
             .caret_path
             .as_ref()
@@ -290,13 +341,14 @@ impl EditVisualTimeline {
             transition_id: self.transition_id,
             document_session: self.document_session,
             target_revision: self.target_revision,
-            progress,
             eased_progress,
             timeline_progress,
             velocity_per_second,
+            spatial_speed_per_second: velocity_per_second * self.reference_distance,
             caret_from: self.caret_from,
             caret_target: self.caret_target,
             caret_rect,
+            caret_velocity,
         }
     }
 
@@ -306,7 +358,7 @@ impl EditVisualTimeline {
         self.duration_ms = duration_ms;
         self.segment_start_shared_progress = sample.timeline_progress;
         self.segment_start_motion_progress = progress;
-        self.initial_velocity_per_second = sample.velocity_per_second;
+        self.initial_progress_velocity_per_second = sample.velocity_per_second;
         self.started_at = now;
         progress
     }
@@ -318,17 +370,6 @@ impl EditVisualTimeline {
             .unwrap_or(self.started_at);
     }
 
-    pub(crate) fn remaining_duration_ms(&self, now: Instant) -> u64 {
-        if self.duration_ms == 0 {
-            return 0;
-        }
-        let sample = self.sample(now);
-        let remaining_motion_progress = 1.0 - self.segment_start_motion_progress;
-        (self.duration_ms as f64 * remaining_motion_progress * (1.0 - sample.progress))
-            .round()
-            .clamp(0.0, self.duration_ms as f64) as u64
-    }
-
     pub(crate) fn duration_ms(&self) -> u64 {
         self.duration_ms
     }
@@ -338,19 +379,78 @@ impl EditVisualTimeline {
     }
 }
 
-fn hermite_progress(progress: f64, initial_tangent: f64) -> f64 {
-    let progress = progress.clamp(0.0, 1.0);
-    let tangent = initial_tangent.clamp(0.0, 3.0);
-    let p2 = progress * progress;
-    let p3 = p2 * progress;
-    (p3 - 2.0 * p2 + progress) * tangent + (-2.0 * p3 + 3.0 * p2)
+fn damped_progress(
+    start_progress: f64,
+    initial_velocity: f64,
+    omega: f64,
+    elapsed_seconds: f64,
+) -> (f64, f64) {
+    let remaining = (1.0 - start_progress).max(0.0);
+    if remaining <= f64::EPSILON {
+        return (1.0, 0.0);
+    }
+    let initial_velocity = initial_velocity.clamp(0.0, omega * remaining);
+    let slope = omega * remaining - initial_velocity;
+    let decay = (-omega * elapsed_seconds).exp();
+    let error = (remaining + slope * elapsed_seconds) * decay;
+    let velocity = (initial_velocity + omega * slope * elapsed_seconds) * decay;
+    ((1.0 - error).clamp(start_progress, 1.0), velocity.max(0.0))
 }
 
-fn hermite_derivative(progress: f64, initial_tangent: f64) -> f64 {
-    let progress = progress.clamp(0.0, 1.0);
-    let tangent = initial_tangent.clamp(0.0, 3.0);
-    (3.0 * progress * progress - 4.0 * progress + 1.0) * tangent
-        + (-6.0 * progress * progress + 6.0 * progress)
+fn project_velocity(route_derivative: CursorRect, velocity: CursorRect) -> f64 {
+    let route = [
+        route_derivative.x,
+        route_derivative.top,
+        route_derivative.bottom,
+        route_derivative.baseline_y,
+    ];
+    let velocity = [
+        velocity.x,
+        velocity.top,
+        velocity.bottom,
+        velocity.baseline_y,
+    ];
+    let dot = route
+        .iter()
+        .zip(velocity)
+        .map(|(route, velocity)| route * velocity)
+        .sum::<f64>();
+    let route_length_squared = route
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>();
+    if route_length_squared <= f64::EPSILON {
+        0.0
+    } else {
+        (dot / route_length_squared).max(0.0)
+    }
+}
+
+fn zero_caret_velocity() -> CursorRect {
+    CursorRect {
+        x: 0.0,
+        top: 0.0,
+        bottom: 0.0,
+        baseline_y: 0.0,
+    }
+}
+
+fn subtract_caret(a: CursorRect, b: CursorRect) -> CursorRect {
+    CursorRect {
+        x: a.x - b.x,
+        top: a.top - b.top,
+        bottom: a.bottom - b.bottom,
+        baseline_y: a.baseline_y - b.baseline_y,
+    }
+}
+
+fn scale_caret(caret: CursorRect, scale: f64) -> CursorRect {
+    CursorRect {
+        x: caret.x * scale,
+        top: caret.top * scale,
+        bottom: caret.bottom * scale,
+        baseline_y: caret.baseline_y * scale,
+    }
 }
 
 fn lerp_caret(from: CursorRect, target: CursorRect, progress: f64) -> CursorRect {

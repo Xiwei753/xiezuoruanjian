@@ -170,15 +170,7 @@ impl LinuxEditorAnimationCoordinator {
         self.consume_submitted_frames();
         let retargeting = self.visual_edit_state.is_some();
         let effective_now = self.effective_text_animation_time(request.now);
-        let continuation = self
-            .visual_edit_state
-            .as_ref()
-            .and_then(|state| state.retarget_timing(effective_now));
-        let effective_duration_ms = continuation
-            .map(|(remaining, _, _)| remaining)
-            .unwrap_or_else(|| u64::from(self.typing_animation_duration_ms));
-        let inherited_velocity_per_second = continuation.map(|(_, velocity, _)| velocity);
-        let inherited_shared_progress = continuation.map_or(0.0, |(_, _, progress)| progress);
+        let effective_duration_ms = u64::from(self.typing_animation_duration_ms);
         let mut submitted_source = self
             .last_submitted_visual_frame
             .as_ref()
@@ -202,6 +194,15 @@ impl LinuxEditorAnimationCoordinator {
                 submitted_source = None;
                 identity_map(snapshot_byte_len(&request.base_snapshot))
             });
+        let inherited_spatial_speed_per_second = submitted_source
+            .as_ref()
+            .map(|source| source.visual_frame.spatial_speed_per_second);
+        let inherited_caret_velocity = submitted_source
+            .as_ref()
+            .and_then(|source| source.visual_frame.caret_velocity);
+        let inherited_shared_progress = submitted_source
+            .as_ref()
+            .map_or(0.0, |source| source.visual_frame.timeline_progress);
         let frame_to_target_map = if submitted_source.is_some() {
             frame_to_base_map.compose(&request.offset_map)
         } else {
@@ -238,7 +239,8 @@ impl LinuxEditorAnimationCoordinator {
             &request.deleted_range_edges,
             effective_now,
             effective_duration_ms,
-            inherited_velocity_per_second,
+            inherited_spatial_speed_per_second,
+            inherited_caret_velocity,
             inherited_shared_progress,
             request.transaction_id,
             request.operation_kind,
@@ -588,7 +590,7 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         let target_snapshot = state.target_snapshot.clone();
-        let remaining_ms = state.remaining_duration_ms(now);
+        let duration_ms = state.duration_ms();
         let committed_frame = self
             .last_submitted_visual_frame
             .as_ref()
@@ -609,9 +611,10 @@ impl LinuxEditorAnimationCoordinator {
                 &identity,
                 &[],
                 now,
-                remaining_ms,
-                None,
-                0.0,
+                duration_ms,
+                Some(frame.spatial_speed_per_second),
+                frame.caret_velocity,
+                frame.timeline_progress,
                 state.transaction_id,
                 state.operation_kind.clone(),
                 None,

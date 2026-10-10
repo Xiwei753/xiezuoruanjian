@@ -8,6 +8,7 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity};
 use super::qt_text_node::AnimationClipRect;
 use super::render_plan::TextAnimationGlyphInfo;
+use crate::sujian_editor_item::edit_motion::CursorRect;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ClusterOwnerKey {
@@ -29,6 +30,10 @@ pub(crate) struct RenderOwnershipPlan {
     pub shared_progress: f64,
     /// Monotonic response phase carried through rapid retargets.
     pub timeline_progress: f64,
+    /// Screen-space response speed sampled from the same edit timeline.
+    pub spatial_speed_per_second: f64,
+    /// Geometric caret velocity sampled with the text motion.
+    pub caret_velocity: Option<CursorRect>,
     pub reflow_cluster_count: usize,
     pub crossfade_cluster_count: usize,
     pub ownership_conflict_count: usize,
@@ -56,6 +61,17 @@ pub(crate) struct RenderOwnershipPlan {
     pub candidate_frame: VisualFrame,
     /// 纹理缺失时 canonical 静态层的实际视觉状态。
     pub canonical_frame: VisualFrame,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct VisualContributionIdentity {
+    geometry: [u64; 5],
+    snapshot_id: LineSnapshotId,
+    source_rect: [u64; 4],
+    logical_range: (usize, usize),
+    canonical_range: Option<(usize, usize)>,
+    delete_edge: Option<u8>,
+    shaping_identity: ShapingIdentity,
 }
 
 impl RenderOwnershipPlan {
@@ -159,6 +175,8 @@ impl RenderOwnershipPlan {
             cluster_owners,
             shared_progress: 1.0,
             timeline_progress: 1.0,
+            spatial_speed_per_second: 0.0,
+            caret_velocity: None,
             reflow_cluster_count: 0,
             crossfade_cluster_count: 0,
             ownership_conflict_count,
@@ -267,57 +285,41 @@ fn merge_visual_contributions(
     glyphs: Vec<TextAnimationGlyphInfo>,
 ) -> (Vec<TextAnimationGlyphInfo>, usize) {
     let mut merged: Vec<TextAnimationGlyphInfo> = Vec::with_capacity(glyphs.len());
-    let mut indexes: HashMap<((usize, usize), (usize, usize), ShapingIdentity), usize> =
-        HashMap::new();
+    let mut seen = HashSet::new();
     let mut merged_count = 0usize;
     for glyph in glyphs {
-        let Some(canonical_range) = glyph.canonical_range else {
-            merged.push(glyph);
-            continue;
-        };
-        let key = (
-            canonical_range,
-            glyph.logical_range,
-            glyph.shaping_identity.clone(),
-        );
-        if let Some(&index) = indexes.get(&key) {
-            merge_glyph_geometry(&mut merged[index], &glyph);
+        if !seen.insert(visual_contribution_identity(&glyph)) {
             merged_count += 1;
         } else {
-            indexes.insert(key, merged.len());
             merged.push(glyph);
         }
     }
     (merged, merged_count)
 }
 
-fn merge_glyph_geometry(
-    target: &mut TextAnimationGlyphInfo,
-    contribution: &TextAnimationGlyphInfo,
-) {
-    let replace_source = contribution.opacity > target.opacity;
-    let target_weight = target.opacity.max(0.0);
-    let contribution_weight = contribution.opacity.max(0.0);
-    let total_weight = target_weight + contribution_weight;
-    let (target_weight, contribution_weight) = if total_weight > f64::EPSILON {
-        (
-            target_weight / total_weight,
-            contribution_weight / total_weight,
-        )
-    } else {
-        (0.5, 0.5)
-    };
-    let weighted = |left: f64, right: f64| left * target_weight + right * contribution_weight;
-    target.x = weighted(target.x, contribution.x);
-    target.y = weighted(target.y, contribution.y);
-    target.w = weighted(target.w, contribution.w);
-    target.h = weighted(target.h, contribution.h);
-    target.opacity = (target.opacity + contribution.opacity).clamp(0.0, 1.0);
-    if replace_source {
-        target.snapshot_id = contribution.snapshot_id;
-        target.source_rect = contribution.source_rect.clone();
-        target.logical_range = contribution.logical_range;
-        target.delete_edge = contribution.delete_edge;
+fn visual_contribution_identity(glyph: &TextAnimationGlyphInfo) -> VisualContributionIdentity {
+    VisualContributionIdentity {
+        geometry: [
+            glyph.x.to_bits(),
+            glyph.y.to_bits(),
+            glyph.w.to_bits(),
+            glyph.h.to_bits(),
+            glyph.opacity.to_bits(),
+        ],
+        snapshot_id: glyph.snapshot_id,
+        source_rect: [
+            glyph.source_rect.x.to_bits(),
+            glyph.source_rect.y.to_bits(),
+            glyph.source_rect.w.to_bits(),
+            glyph.source_rect.h.to_bits(),
+        ],
+        logical_range: glyph.logical_range,
+        canonical_range: glyph.canonical_range,
+        delete_edge: glyph.delete_edge.map(|edge| match edge {
+            crate::sujian_editor_item::edit_motion::DeleteEdge::Leading => 0,
+            crate::sujian_editor_item::edit_motion::DeleteEdge::Trailing => 1,
+        }),
+        shaping_identity: glyph.shaping_identity.clone(),
     }
 }
 
@@ -325,14 +327,8 @@ fn count_duplicate_visual_contributions(glyphs: &[TextAnimationGlyphInfo]) -> us
     let mut seen = HashSet::new();
     let mut duplicates = 0usize;
     for glyph in glyphs {
-        if let Some(canonical_range) = glyph.canonical_range {
-            if !seen.insert((
-                canonical_range,
-                glyph.logical_range,
-                glyph.shaping_identity.clone(),
-            )) {
-                duplicates += 1;
-            }
+        if !seen.insert(visual_contribution_identity(glyph)) {
+            duplicates += 1;
         }
     }
     duplicates

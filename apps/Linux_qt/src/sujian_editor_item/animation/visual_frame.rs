@@ -35,6 +35,12 @@ pub(crate) struct VisualFrame {
     /// Caret geometry from the frame Qt actually submitted. New edit timelines use this
     /// as their source when retargeting an in-flight visual edit.
     pub caret_rect: Option<CursorRect>,
+    /// Screen-space motion speed captured from the same submitted timeline sample.
+    pub spatial_speed_per_second: f64,
+    /// Actual caret velocity at the frame accepted by Qt.
+    pub caret_velocity: Option<CursorRect>,
+    /// Monotonic diagnostic phase captured from the same submitted timeline sample.
+    pub timeline_progress: f64,
     /// Captured visual contributions, not a one-entry-per-character index. A CrossFade
     /// can leave several layers with the same canonical range; preserve each rendered
     /// layer here and let the next edit group them back into one logical target cluster.
@@ -100,6 +106,9 @@ impl VisualFrame {
             ownership_revision: ownership.ownership_revision,
             canonical_byte_len: canonical_byte_len(snapshot),
             caret_rect: None,
+            spatial_speed_per_second: ownership.spatial_speed_per_second,
+            caret_velocity: ownership.caret_velocity,
+            timeline_progress: ownership.timeline_progress,
             clusters,
         }
     }
@@ -126,6 +135,9 @@ impl VisualFrame {
             ownership_revision: 0,
             canonical_byte_len: canonical_byte_len(snapshot),
             caret_rect: None,
+            spatial_speed_per_second: 0.0,
+            caret_velocity: None,
+            timeline_progress: 0.0,
             clusters,
         }
     }
