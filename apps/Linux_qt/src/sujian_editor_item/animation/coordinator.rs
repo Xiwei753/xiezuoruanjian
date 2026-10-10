@@ -121,13 +121,15 @@ impl LinuxEditorAnimationCoordinator {
 
     /// Apply only frames Qt has acknowledged. Called both at render synchronization and
     /// immediately before an edit chooses its visual source.
-    pub(crate) fn consume_submitted_frames(&mut self) {
+    pub(crate) fn consume_submitted_frames(&mut self) -> bool {
         self.sync_submission_window_generation();
         let frames = self.submission_mailbox.take_submitted_frames();
+        let mut handoff_promoted = false;
         for frame in frames {
-            self.acknowledge_submitted_visual_frame(frame);
+            handoff_promoted |= self.acknowledge_submitted_visual_frame(frame);
         }
         self.prune_revision_transitions();
+        handoff_promoted
     }
 
     pub(crate) fn set_typing_animation_duration_ms(&mut self, ms: u32) {
@@ -321,7 +323,7 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    fn acknowledge_submitted_visual_frame(&mut self, frame: SubmittedVisualFrame) {
+    fn acknowledge_submitted_visual_frame(&mut self, frame: SubmittedVisualFrame) -> bool {
         let ticket = frame.ticket;
         if ticket.document_session != self.document_session
             || ticket.window_generation != self.submission_window_generation
@@ -329,7 +331,7 @@ impl LinuxEditorAnimationCoordinator {
             || frame.visual_frame.canonical_revision != Some(ticket.layout_revision)
             || frame.visual_frame.ownership_revision != ticket.ownership_revision
         {
-            return;
+            return false;
         }
         if self
             .last_submitted_visual_frame
@@ -339,13 +341,15 @@ impl LinuxEditorAnimationCoordinator {
                     && previous.ticket.render_frame_id >= ticket.render_frame_id
             })
         {
-            return;
+            return false;
         }
 
         let same_active_transition = self.visual_edit_state.as_ref().is_some_and(|state| {
             state.transition_id == ticket.transition_id
                 && state.target_snapshot.revision == ticket.layout_revision
         });
+        let handoff_promoted =
+            frame.handoff_pending && (same_active_transition || self.visual_edit_state.is_none());
         self.last_submitted_visual_frame = Some(SubmittedVisualFrameSource {
             ticket,
             visual_frame: frame.visual_frame,
@@ -363,13 +367,14 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
         }
-        if frame.handoff_pending && (same_active_transition || self.visual_edit_state.is_none()) {
+        if handoff_promoted {
             if same_active_transition {
                 self.visual_edit_state = None;
             }
             self.handoff_pending = false;
         }
         self.prune_revision_transitions();
+        handoff_promoted
     }
 
     fn sync_submission_window_generation(&mut self) {
@@ -518,15 +523,27 @@ impl LinuxEditorAnimationCoordinator {
             .unwrap_or_default()
     }
 
-    /// Keep the old call name at existing cache-retention sites. Preserve resources
-    /// referenced by both the latest transition and the still-visible committed plan.
+    /// Preserve every texture that can still be used by an active transition, a submitted
+    /// visual source, a committed scene-graph owner, or a frame awaiting Qt acknowledgment.
     pub(crate) fn collect_active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
         let mut ids = self.active_snapshot_ids();
+        if let Some(source) = self.last_submitted_visual_frame.as_ref() {
+            for cluster in &source.visual_frame.clusters {
+                if !ids.contains(&cluster.snapshot_id) {
+                    ids.push(cluster.snapshot_id);
+                }
+            }
+        }
         if let Some(committed) = self.last_committed_ownership.as_ref() {
             for snapshot_id in &committed.animation_snapshot_ids {
                 if !ids.contains(snapshot_id) {
                     ids.push(*snapshot_id);
                 }
+            }
+        }
+        for snapshot_id in self.submission_mailbox.active_snapshot_ids() {
+            if !ids.contains(&snapshot_id) {
+                ids.push(snapshot_id);
             }
         }
         ids

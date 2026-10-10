@@ -227,9 +227,17 @@ impl QQuickItem for SujianEditorItem {
 
         // Qt invokes this method during synchronization. Consume only acknowledgments that
         // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
-        self.pipeline
+        let handoff_promoted = self
+            .pipeline
             .animation_coordinator_mut()
             .consume_submitted_frames();
+        if handoff_promoted {
+            let active_ids = self
+                .pipeline
+                .animation_coordinator()
+                .collect_active_snapshot_ids();
+            self.pipeline.retain_active_snapshot_ids(&active_ids);
+        }
 
         let caret_progress_limit = self
             .pipeline
@@ -427,10 +435,6 @@ impl QQuickItem for SujianEditorItem {
                     render_plan.ownership.target_layout_revision == Some(snapshot.revision)
                 })
                 .unwrap_or(false);
-            let canonical_handoff_committed = static_rebuild_ok
-                && has_snapshot
-                && ownership_snapshot_matches
-                && (render_plan.ownership.handoff_pending || !animation_resources_ready);
             if static_rebuild_ok && has_snapshot && ownership_snapshot_matches {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
@@ -438,11 +442,6 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .commit_rendered_plan(&render_plan.ownership, animation_resources_ready);
-                if canonical_handoff_committed {
-                    // renderer 已在同一次 update_paint_node 成功提交 canonical static
-                    // 并清理 animation layer，现在才可释放旧文档/过渡的 QImage。
-                    self.pipeline.texture_cache_mut().clear();
-                }
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成

@@ -11,6 +11,7 @@ use std::sync::Mutex;
 
 use super::animation::visual_frame::VisualFrame;
 use super::layout_revision::LayoutRevision;
+use super::layout_snapshot::LineSnapshotId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SubmittedFrameTicket {
@@ -135,6 +136,26 @@ impl FrameSubmissionMailbox {
 
     pub(crate) fn take_submitted_frames(&self) -> Vec<SubmittedVisualFrame> {
         self.lock_state().submitted.drain(..).collect()
+    }
+
+    /// Snapshot IDs referenced by frames that Qt has not fully acknowledged yet.
+    /// Their QImages must remain available if a newer edit rebases from one of these frames.
+    pub(crate) fn active_snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let state = self.lock_state();
+        let mut ids = Vec::new();
+        for frame in state
+            .pending_sync
+            .iter()
+            .chain(state.synchronized.iter())
+            .chain(state.submitted.iter())
+        {
+            for cluster in &frame.visual_frame.clusters {
+                if !ids.contains(&cluster.snapshot_id) {
+                    ids.push(cluster.snapshot_id);
+                }
+            }
+        }
+        ids
     }
 
     pub(crate) fn oldest_unconfirmed_revision(&self) -> Option<LayoutRevision> {
