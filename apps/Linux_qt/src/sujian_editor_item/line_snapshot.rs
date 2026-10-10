@@ -34,10 +34,6 @@ impl LineTextureStore {
         let active_set: std::collections::HashSet<&LineSnapshotId> = active_ids.iter().collect();
         self.textures.retain(|id, _| active_set.contains(id));
     }
-
-    pub fn clear(&mut self) {
-        self.textures.clear();
-    }
 }
 
 impl Default for LineTextureStore {

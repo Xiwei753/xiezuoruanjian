@@ -30,10 +30,6 @@ impl TextureCache {
     pub fn retain_active_snapshot_ids(&mut self, active_snapshot_ids: &[LineSnapshotId]) {
         self.line_store.retain(active_snapshot_ids);
     }
-
-    pub fn clear(&mut self) {
-        self.line_store.clear();
-    }
 }
 
 impl Default for TextureCache {
