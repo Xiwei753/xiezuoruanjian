@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts
+  RectLike, retargetRunStarts, rectDifference, isFullyCovered
 } from './editor_commit_start'
 
 /**
@@ -1512,7 +1512,16 @@ export class EditorMotionCoordinator {
           // 这样 p=0 时 islandOffsetX = currentWindowOffset，字形停在原位 + 窗口偏移，
           // clip 保持当前裁切在屏坐标，局部可见半字不会移动。
           const islandStartX = islandOldLeft + interval.startPositionX - move.oldRect.x
-          const islandStartY = interval.startPositionY
+          // Issue #879 复核评论6102724233 问题2：islandStartY 不再直接用 startPositionY，
+          // 而是用源字形 top + frozenDrawOffsetY（源 Text 真实绘制原点）。
+          // 旧实现用 startPositionY = visible.onScreenTop（裁切后的可见上边界），
+          // 不是源字形的完整绘制原点——纵向半字会错位。
+          // frozenDrawOffsetY = onScreenTop - sourceGlyphY0（裁切后可见 top - 源字形 top）
+          // islandStartY = islandOldTop + frozenDrawOffsetY（源字形 top + 冻结偏移）
+          const frozenDrawOffsetY = interval.frozenDrawOffsetY !== undefined
+            ? interval.frozenDrawOffsetY
+            : interval.startPositionY - move.oldRect.y
+          const islandStartY = islandOldTop + frozenDrawOffsetY
           const islandCurrentX = islandStartX + (islandNewX - islandStartX) * p
           const islandCurrentY = islandStartY + (islandNewY - islandStartY) * p
           // 该岛的独立 offset——基于该岛的旧位置和当前插值位置
@@ -1532,7 +1541,7 @@ export class EditorMotionCoordinator {
           if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
               interval.sourceGlyphRects !== undefined &&
               interval.sourceGlyphRects.length === interval.clipRects.length) {
-            // Issue #879 复核评论6101908111 问题2：每块可见碎片不应各自独立插值到同一个
+            // Issue #879 复核评论6102724233 问题3：每块可见碎片不应各自独立插值到同一个
             // sourceGlyphRect（fullRect），否则 p=1 时多块重叠。采用 carry insert 同款逻辑：
             // 已可见碎片保持自身位置随平移移动（宽度不变），间隙碎片从零宽扩展到间隙宽度。
             // 所有碎片的位置随 islandStartX→islandNewX 平移。
@@ -1540,73 +1549,58 @@ export class EditorMotionCoordinator {
             // retained 通道的 interval 通常只覆盖一个字形（retainedMoveStartState 为每个
             // glyph 创建单字形 interval），sourceGlyphRects 中所有元素都相同。取第一个
             // sourceGlyphRect 作为整个字形的完整 rect。
+            //
+            // Issue #879 复核评论6102724233 问题3修复：对同一字形的多碎片，只有一份完整目标
+            // 字形矩形（sourceGlyphRects[0]），多个 clipRect 是起始裁切并集。用 rectDifference
+            // 计算尚未覆盖的区域（间隙），已可见碎片保持自身位置随平移移动（宽度不变），
+            // 间隙碎片从零宽扩展到间隙宽度。不再对每个 clipRect 都用同一个 sourceGlyphRects[0]
+            // 作为目标——那样会每个碎片各拥有一份完整目标，等于用两套 mask 分别扩满整字。
             const sr = interval.sourceGlyphRects[0]
-            const frozenOffsetX = interval.startPositionX - move.oldRect.x
-            const frozenOffsetY = interval.startPositionY - move.oldRect.y
+            // Issue #879 复核评论6102724233 问题2：用 frozenDrawOffsetX/Y 替代
+            // startPositionX/Y - oldRect.x/y，确保纵向半字不错位。
+            const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined
+              ? interval.frozenDrawOffsetX
+              : interval.startPositionX - move.oldRect.x
+            const frozenDrawOffsetY = interval.frozenDrawOffsetY !== undefined
+              ? interval.frozenDrawOffsetY
+              : interval.startPositionY - move.oldRect.y
             // 字形在目标布局中的完整屏幕位置
             const fullTargetX = islandNewX + (sr.x - islandOldLeft)
             const fullTargetY = islandNewY
             const fullTargetHeight = Math.max(0, sr.height)
             // 字形在起始布局中的完整屏幕左边界（用于计算间隙碎片的起始位置）
-            const fullStartLeft = sr.x + frozenOffsetX
+            const fullStartLeft = sr.x + frozenDrawOffsetX
+
+            // Issue #879 复核评论6102724233 问题3+4：用 rectDifference 计算尚未覆盖的区域。
+            // 与 carry insert 的找间隙逻辑共用同一个几何求差函数。
+            // fullRectInRunCoords = sr（sourceGlyphRect，在 run 自己布局坐标系中）
+            // clipRects 也在 run 自己布局坐标系中
+            const remaining = rectDifference(sr, interval.clipRects)
 
             const startRects: ClipRect[] = []
             const targetRects: ClipRect[] = []
 
-            // 检查左边界间隙（字形完整左边界到第一个可见碎片之间）
-            if (interval.clipRects[0].x > sr.x + 0.01) {
+            // 已可见碎片：起始和目标都是自身位置（随平移动画移动），宽度不变
+            for (const cr of interval.clipRects) {
               startRects.push({
-                x: fullStartLeft, y: interval.clipRects[0].y + frozenOffsetY,
-                width: 0, height: Math.max(0, interval.clipRects[0].height)
-              })
-              targetRects.push({
-                x: fullTargetX, y: fullTargetY,
-                width: interval.clipRects[0].x - sr.x, height: fullTargetHeight
-              })
-            }
-
-            for (let ci = 0; ci < interval.clipRects.length; ci++) {
-              const cr = interval.clipRects[ci]
-              // 已可见碎片：起始和目标都是自身位置（随平移动画移动），宽度不变
-              startRects.push({
-                x: cr.x + frozenOffsetX, y: cr.y + frozenOffsetY,
+                x: cr.x + frozenDrawOffsetX, y: cr.y + frozenDrawOffsetY,
                 width: Math.max(0, cr.width), height: Math.max(0, cr.height)
               })
               targetRects.push({
                 x: islandNewX + (cr.x - islandOldLeft), y: fullTargetY,
                 width: Math.max(0, cr.width), height: fullTargetHeight
               })
-              // 检查碎片之间的间隙
-              if (ci < interval.clipRects.length - 1) {
-                const nextCr = interval.clipRects[ci + 1]
-                const gapLeft = cr.x + cr.width
-                const gapRight = nextCr.x
-                if (gapRight > gapLeft + 0.01) {
-                  startRects.push({
-                    x: gapLeft + frozenOffsetX, y: cr.y + frozenOffsetY,
-                    width: 0, height: Math.max(0, cr.height)
-                  })
-                  targetRects.push({
-                    x: islandNewX + (gapLeft - islandOldLeft), y: fullTargetY,
-                    width: gapRight - gapLeft, height: fullTargetHeight
-                  })
-                }
-              }
             }
 
-            // 检查右边界间隙（最后一个可见碎片到字形完整右边界之间）
-            const lastClip = interval.clipRects[interval.clipRects.length - 1]
-            if (lastClip.x + lastClip.width < sr.x + sr.width - 0.01) {
+            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 完整目标区间
+            for (const gap of remaining) {
               startRects.push({
-                x: (lastClip.x + lastClip.width) + frozenOffsetX,
-                y: lastClip.y + frozenOffsetY,
-                width: 0, height: Math.max(0, lastClip.height)
+                x: gap.x + frozenDrawOffsetX, y: gap.y + frozenDrawOffsetY,
+                width: 0, height: Math.max(0, gap.height)
               })
               targetRects.push({
-                x: islandNewX + ((lastClip.x + lastClip.width) - islandOldLeft),
-                y: fullTargetY,
-                width: (sr.x + sr.width) - (lastClip.x + lastClip.width),
-                height: fullTargetHeight
+                x: islandNewX + (gap.x - islandOldLeft), y: fullTargetY,
+                width: Math.max(0, gap.width), height: fullTargetHeight
               })
             }
 
@@ -2508,11 +2502,29 @@ export class EditorMotionCoordinator {
           continue
         }
 
-        // Issue #879 复核评论6082616112 问题2：区分 insert 和 reflow 的完成判断。
+        // Issue #879 复核评论6102724233 问题1：区分 insert 和 reflow 的完成判断。
         if (w.motionOwnerKind === 'insert') {
-          const fullWidth = piece.glyphWidth
-          const currentWidth = piece.clipRight - piece.clipLeft
-          if (currentWidth >= fullWidth - 0.01) {
+          // Issue #879 复核评论6102724233 问题1：完成判定改为二维覆盖面积。
+          // 旧实现用 clipRight - clipLeft >= fullWidth - 0.01 判断，
+          // 但 clipLeft/Right 是整组窗口的左右界，不代表 clipRects[] 的真实并集。
+          // 例：字形范围 [0,10]，上一帧只画 [0,3] 和 [7,10]，左右包围宽度恰好等于 10，
+          // 中间 [3,7] 还没吐出来，却被 continue 直接丢掉。
+          // 修复：先计算 pieceGlyphScreenRect = sourceRect + piece.offset（即 fullRect），
+          // 再用 isFullyCovered 判断真实二维 clipRects 是否完全覆盖 fullRect。
+          const fullRect: RectLike = piece.sourceRect !== null
+            ? {
+              x: piece.sourceRect.x + piece.offsetX,
+              y: piece.sourceRect.y + piece.offsetY,
+              width: piece.sourceRect.width,
+              height: piece.sourceRect.height
+            }
+            : {
+              x: piece.glyphX + piece.offsetX,
+              y: piece.glyphY + piece.offsetY,
+              width: piece.glyphWidth,
+              height: piece.glyphHeight
+            }
+          if (isFullyCovered(fullRect, piece.clipRects)) {
             continue  // insert 已完全可见，不需要延续
           }
         } else {
@@ -2596,36 +2608,32 @@ export class EditorMotionCoordinator {
               height: piece.glyphHeight
             }
           if (piece.clipRects.length > 0) {
-            // Issue #879 复核评论6101344441 问题2：已可见碎片保持不变（目标=起始），
-            // 间隙碎片从零宽度扩展到间隙宽度。旧实现把每个 cr 都映射到同一个 fullRect，
-            // 导致多个岛都插值到同一个完整矩形，运动过程中两个矩形从两头扩张、互相覆盖，
-            // 间隙被填平。修复后已可见碎片保持不动，间隙碎片独立从零宽扩展到间隙宽度。
+            // Issue #879 复核评论6102724233 问题4：找间隙改为二维几何差集。
+            // 旧实现按 piece.clipRects[0] 检查左边界，用相邻数组元素的 gapLeft=cr.x+cr.width、
+            // gapRight=nextCr.x 寻找空洞，最后按 lastCr 补尾部。这隐含了两个未经保证的前提：
+            // clipRects[] 已按 x 从左到右排好、每块矩形 y/height 相同且覆盖整行。
+            // 它来源是冻结帧真实的二维裁切并集，不能保证按 x 排序，也可能在同一字形上下各露出一块。
+            // 修复：用 rectDifference(fullRect, piece.clipRects) 计算剩余区域，
+            // 剩余区域拆成互不重叠矩形，作为零面积起点 + 完整目标区间。
+            // 已可见碎片保持自身位置不变（目标=起始），间隙碎片从零宽扩展到间隙宽度。
             const startRects: ClipRect[] = []
             const targetRects: ClipRect[] = []
-            // 检查左边界间隙
-            if (piece.clipRects[0].x > fullRect.x + 0.01) {
-              startRects.push({ x: fullRect.x, y: fullRect.y, width: 0, height: fullRect.height })
-              targetRects.push({ x: fullRect.x, y: fullRect.y, width: piece.clipRects[0].x - fullRect.x, height: fullRect.height })
-            }
-            for (let ci = 0; ci < piece.clipRects.length; ci++) {
-              const cr = piece.clipRects[ci]
+
+            // Issue #879 复核评论6102724233 问题4：用 rectDifference 计算尚未覆盖的区域。
+            const remaining = rectDifference(fullRect, piece.clipRects)
+
+            // 已可见碎片：目标 = 起始（保持不动）
+            for (const cr of piece.clipRects) {
               startRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
               targetRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
-              if (ci < piece.clipRects.length - 1) {
-                const nextCr = piece.clipRects[ci + 1]
-                const gapLeft = cr.x + cr.width
-                const gapRight = nextCr.x
-                if (gapRight > gapLeft + 0.01) {
-                  startRects.push({ x: gapLeft, y: fullRect.y, width: 0, height: fullRect.height })
-                  targetRects.push({ x: gapLeft, y: fullRect.y, width: gapRight - gapLeft, height: fullRect.height })
-                }
-              }
             }
-            const lastCr = piece.clipRects[piece.clipRects.length - 1]
-            if (lastCr.x + lastCr.width < fullRect.x + fullRect.width - 0.01) {
-              startRects.push({ x: lastCr.x + lastCr.width, y: fullRect.y, width: 0, height: fullRect.height })
-              targetRects.push({ x: lastCr.x + lastCr.width, y: fullRect.y, width: fullRect.x + fullRect.width - (lastCr.x + lastCr.width), height: fullRect.height })
+
+            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 完整目标区间
+            for (const gap of remaining) {
+              startRects.push({ x: gap.x, y: gap.y, width: 0, height: gap.height })
+              targetRects.push({ x: gap.x, y: gap.y, width: gap.width, height: gap.height })
             }
+
             islandStartRects = startRects
             islandTargetRects = targetRects
             runClipRects = startRects

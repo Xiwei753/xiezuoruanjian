@@ -142,6 +142,14 @@ export interface VisibleRunPiece {
   /** Issue #879 复核评论6078682695 问题4：尾字形在源布局中的完整右边界（vp） */
   sourceGlyphX1: number
   /**
+   * Issue #879 复核评论6102724233 问题2：首字形在源布局中的完整上边界（vp）。
+   *
+   * 与 onScreenTop（裁切后的可见上边界）不同——sourceGlyphY0 是源字形在源布局坐标系
+   * 中的原始 top，不含窗口 offset。用于 retained 通道计算冻结帧的真实绘制原点，
+   * 避免用裁切后的 onScreenTop 导致纵向半字错位。
+   */
+  sourceGlyphY0: number
+  /**
    * Issue #879 复核评论6078682695 问题4：首字形在源布局中的真实可见左边界（vp，含裁切）。
    *
    * = max(sourceGlyphX0, clipLeft - offsetX)，在源布局坐标系里。
@@ -259,10 +267,168 @@ export interface RunStartInterval {
    * 与 clipRects 一一对应；缺省时 buildFrame 回落到按比例分配（legacy 语义）。
    */
   sourceGlyphRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移 x（vp）。
+   *
+   * retained 通道中 startPositionX 是"让第一个可见字形停在屏上位置"的语义，
+   * 不等于源 Text 的真实绘制偏移。frozenDrawOffsetX 记录源 Text 在冻结帧的真实偏移
+   * （= onScreenLeft - sourceGlyphX0），buildFrame 用它计算字形在屏绘制原点，
+   * 而不是用裁切后的可见边界。缺省时回落到 startPositionX - oldRect.x（legacy 语义）。
+   */
+  frozenDrawOffsetX?: number
+  /**
+   * Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移 y（vp）。
+   *
+   * 与 frozenDrawOffsetX 同理——startPositionY 不再用 visible.onScreenTop（裁切后
+   * 可见上边界），而是用源字形 top + frozenDrawOffsetY。缺省时回落到 0（legacy 语义）。
+   */
+  frozenDrawOffsetY?: number
+  /**
+   * Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+   *
+   * 与 clipRects（run 自己布局坐标系）不同——startScreenClipRects 是冻结帧屏幕坐标系
+   * 中的真实裁切矩形，buildFrame 用它做 clip 插值的起始值。缺省时回落到 clipRects
+   * 加 frozenDrawOffset（legacy 语义）。
+   */
+  startScreenClipRects?: RectLike[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
 const VISIBLE_EPSILON = 0.01
+
+/**
+ * Issue #879 复核评论6102724233 问题1+4：二维矩形几何求差函数。
+ *
+ * 计算 fullRect \ union(clipRects ∩ fullRect) 的剩余区域，
+ * 拆成互不重叠的矩形列表。用于：
+ * - 问题1：carry insert 的"已完全显示"判定——剩余区域面积为 0 时才认为完整覆盖
+ * - 问题4：carry insert 的"找间隙"——剩余区域即为尚未吐出的空洞
+ *
+ * 算法：先标准化 clipRects（裁剪到 fullRect 内、排序、合并重叠），
+ * 再逐行扫描差集。为简化实现，采用矩形分割法：
+ * 1. 将所有 clipRect 裁剪到 fullRect 内
+ * 2. 按 x 坐标排序并合并重叠
+ * 3. 用合并后的矩形从 fullRect 中逐个减去，得到剩余矩形列表
+ *
+ * @param fullRect 完整目标矩形
+ * @param clipRects 当前已可见的裁切矩形列表（可能与 fullRect 不相交）
+ * @returns 剩余不可见区域矩形列表（已排序、不重叠）；fullRect 完全被覆盖时返回空数组
+ */
+export function rectDifference(fullRect: RectLike, clipRects: RectLike[]): RectLike[] {
+  // 1. 裁剪每个 clipRect 到 fullRect 内，丢弃无交集的
+  const clipped: RectLike[] = []
+  for (const cr of clipRects) {
+    const interLeft = Math.max(cr.x, fullRect.x)
+    const interRight = Math.min(cr.x + cr.width, fullRect.x + fullRect.width)
+    const interTop = Math.max(cr.y, fullRect.y)
+    const interBottom = Math.min(cr.y + cr.height, fullRect.y + fullRect.height)
+    if (interRight - interLeft > VISIBLE_EPSILON && interBottom - interTop > VISIBLE_EPSILON) {
+      clipped.push({
+        x: interLeft, y: interTop,
+        width: interRight - interLeft, height: interBottom - interTop,
+      })
+    }
+  }
+  if (clipped.length === 0) {
+    // 没有任何可见区域——整个 fullRect 都是剩余
+    return [fullRect]
+  }
+
+  // 2. 标准化：排序（先按 y，再按 x），合并重叠矩形
+  clipped.sort((a: RectLike, b: RectLike): number => {
+    if (Math.abs(a.y - b.y) > VISIBLE_EPSILON) { return a.y - b.y }
+    return a.x - b.x
+  })
+  const merged: RectLike[] = []
+  for (const cr of clipped) {
+    if (merged.length > 0) {
+      const last = merged[merged.length - 1]
+      // 同一行（y 和 height 相同）且 x 相邻或重叠 → 合并
+      if (Math.abs(last.y - cr.y) <= VISIBLE_EPSILON &&
+          Math.abs(last.height - cr.height) <= VISIBLE_EPSILON &&
+          cr.x <= last.x + last.width + VISIBLE_EPSILON) {
+        last.width = Math.max(last.x + last.width, cr.x + cr.width) - last.x
+        continue
+      }
+    }
+    merged.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+  }
+
+  // 3. 从 fullRect 中逐个减去 merged 矩形，得到剩余区域
+  // 采用扫描线法：将 fullRect 按 merged 矩形的 y 边界分段，
+  // 每段内做一维 x 方向差集
+  // 收集所有 y 分段边界
+  const yBoundaries: number[] = [fullRect.y, fullRect.y + fullRect.height]
+  for (const m of merged) {
+    if (m.y > fullRect.y + VISIBLE_EPSILON && m.y < fullRect.y + fullRect.height - VISIBLE_EPSILON) {
+      yBoundaries.push(m.y)
+    }
+    if (m.y + m.height > fullRect.y + VISIBLE_EPSILON &&
+        m.y + m.height < fullRect.y + fullRect.height - VISIBLE_EPSILON) {
+      yBoundaries.push(m.y + m.height)
+    }
+  }
+  yBoundaries.sort((a: number, b: number): number => a - b)
+
+  const result: RectLike[] = []
+  for (let yi = 0; yi < yBoundaries.length - 1; yi++) {
+    const segTop = yBoundaries[yi]
+    const segBottom = yBoundaries[yi + 1]
+    if (segBottom - segTop <= VISIBLE_EPSILON) { continue }
+
+    // 该 y 段内被 merged 覆盖的 x 区间
+    const coveredX: Array<[number, number]> = []
+    for (const m of merged) {
+      if (m.y <= segTop + VISIBLE_EPSILON && m.y + m.height >= segBottom - VISIBLE_EPSILON) {
+        coveredX.push([m.x, m.x + m.width])
+      }
+    }
+    // 排序并合并 coveredX
+    coveredX.sort((a: [number, number], b: [number, number]): number => a[0] - b[0])
+    const mergedX: Array<[number, number]> = []
+    for (const cx of coveredX) {
+      if (mergedX.length > 0) {
+        const last = mergedX[mergedX.length - 1]
+        if (cx[0] <= last[1] + VISIBLE_EPSILON) {
+          last[1] = Math.max(last[1], cx[1])
+          continue
+        }
+      }
+      mergedX.push([cx[0], cx[1]])
+    }
+
+    // 从 [fullRect.x, fullRect.x + fullRect.width] 中减去 mergedX
+    let cursor = fullRect.x
+    const fullRight = fullRect.x + fullRect.width
+    for (const mx of mergedX) {
+      if (mx[0] > cursor + VISIBLE_EPSILON) {
+        result.push({
+          x: cursor, y: segTop,
+          width: mx[0] - cursor, height: segBottom - segTop,
+        })
+      }
+      cursor = Math.max(cursor, mx[1])
+    }
+    if (cursor < fullRight - VISIBLE_EPSILON) {
+      result.push({
+        x: cursor, y: segTop,
+        width: fullRight - cursor, height: segBottom - segTop,
+      })
+    }
+  }
+  return result
+}
+
+/**
+ * Issue #879 复核评论6102724233 问题1：判断 fullRect 是否被 clipRects 完全覆盖。
+ *
+ * 使用 rectDifference 计算剩余区域，面积为 0 时认为完全覆盖。
+ * 不使用 clipRight - clipLeft 的一维宽度比较——那会把中间有空洞的包围盒误判为完整覆盖。
+ */
+export function isFullyCovered(fullRect: RectLike, clipRects: RectLike[]): boolean {
+  const remaining = rectDifference(fullRect, clipRects)
+  return remaining.length === 0
+}
 
 /**
  * Issue #879 复核评论6082616112 问题4：找 offset 所在的行。
@@ -708,6 +874,22 @@ function buildPiece(
     pieceSourceGlyphRects.push(...lastSourceGlyphRects)
   }
 
+  // Issue #879 复核评论6102724233 问题2：计算首字形在源布局中的完整上边界（sourceGlyphY0）。
+  // sourceGlyphY0 是源字形在源布局坐标系中的原始 top，不含窗口 offset。
+  // 用于 retained 通道计算冻结帧的真实绘制原点，避免用裁切后的 onScreenTop 导致纵向半字错位。
+  let sourceGlyphY0: number
+  if (firstSpan !== undefined) {
+    const sourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, firstGlyphId)
+    if (sourceGeom !== null) {
+      sourceGlyphY0 = sourceGeom.y0
+    } else {
+      sourceGlyphY0 = run.ownRect.y
+    }
+  } else {
+    // 静态可见：源 = 目标
+    sourceGlyphY0 = run.ownRect.y
+  }
+
   return {
     firstIndex: firstIndex,
     lastIndex: lastIndex,
@@ -718,6 +900,7 @@ function buildPiece(
     onScreenRight: onScreenRight,
     sourceGlyphX0: sourceGlyphX0,
     sourceGlyphX1: sourceGlyphX1,
+    sourceGlyphY0: sourceGlyphY0,
     visiblePixelLeft: visiblePixelLeft,
     visiblePixelRight: visiblePixelRight,
     clipRects: pieceClipRects.length > 0 ? pieceClipRects : undefined,
@@ -997,6 +1180,9 @@ export function retainedMoveStartState(
       // 正确语义：不可见字形没有窗口偏移，startPositionX = run.ownRect.x 表示 Text 绘制原点
       // 在 run 左边界（零偏移），islandStartX = islandOldLeft + ownRect.x - oldRect.x，
       // 同一布局下 islandStartX = islandOldLeft（字形在旧布局中的位置），不重复加。
+      // Issue #879 复核评论6102724233 问题5：不可见字形的 frozenDrawOffsetX/Y = 0（零偏移语义），
+      // 与 startPositionX = run.ownRect.x 一致——源字形自己的 y 单独存在 sourceGlyphRects 中，
+      // 不通过 startPositionY 编码字形位置。startPositionY = run.ownRect.y 代表偏移 0。
       intervals.push({
         firstIndex: i,
         lastIndex: i,
@@ -1015,6 +1201,9 @@ export function retainedMoveStartState(
           x: glyphX, y: run.ownRect.y,
           width: glyphFullWidth, height: run.ownRect.height,
         }],
+        // Issue #879 复核评论6102724233 问题5：不可见字形冻结偏移为 0（零偏移语义）。
+        frozenDrawOffsetX: 0,
+        frozenDrawOffsetY: 0,
       })
     }
   }
@@ -1112,6 +1301,10 @@ export function retargetRunStarts(
             }],
             // 保留 prevInterval.sourceGlyphRects 的引用即可（不可见时不需要重新计算）。
             sourceGlyphRects: prevInterval.sourceGlyphRects,
+            // Issue #879 复核评论6102724233 问题2+5：保留 prevInterval 的冻结偏移字段。
+            frozenDrawOffsetX: prevInterval.frozenDrawOffsetX,
+            frozenDrawOffsetY: prevInterval.frozenDrawOffsetY,
+            startScreenClipRects: prevInterval.startScreenClipRects,
           })
         }
       }
@@ -1332,10 +1525,46 @@ function intervalForIsland(
   }
   let startPositionX = run.ownRect.x
   let startPositionY = run.ownRect.y
+  // Issue #879 复核评论6102724233 问题2：retained 通道的冻结帧绘制偏移。
+  // frozenDrawOffsetX/Y 是源 Text 在冻结帧的真实偏移（= onScreenLeft - sourceGlyphX0），
+  // buildFrame 用它计算字形在屏绘制原点，而不是用裁切后的可见边界。
+  let frozenDrawOffsetX: number | undefined
+  let frozenDrawOffsetY: number | undefined
+  // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+  let startScreenClipRects: RectLike[] | undefined
   if (kind === 'retained') {
     // 让该岛第一个仍可见字形停在此刻在屏的位置上。
     startPositionX = visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)
-    startPositionY = visible.onScreenTop
+    // Issue #879 复核评论6102724233 问题2：startPositionY 不再用 visible.onScreenTop（裁切后
+    // 可见上边界），改用源字形 top + 冻结偏移。onScreenTop 是裁切后的可见上边界，
+    // 不是源字形的完整绘制原点——用 onScreenTop 会导致纵向半字错位。
+    // 正确语义：startPositionY = sourceGlyphY0 + (onScreenTop - sourceGlyphY0)
+    //   = onScreenTop（当源字形 top 与裁切后可见 top 相同时）
+    //   但当源字形有纵向偏移时（offsetY != 0），onScreenTop = sourceGlyphY0 + offsetY + clipTop，
+    //   而 startPositionY 应该是 sourceGlyphY0 + offsetY（源 Text 真实绘制原点）。
+    // frozenDrawOffsetY = onScreenTop - sourceGlyphY0（裁切后可见 top - 源字形 top）
+    // startPositionY = sourceGlyphY0 + frozenDrawOffsetY = onScreenTop（当裁切不改变 top 时）
+    // 但当裁切使可见 top > 源字形 top + offsetY 时，startPositionY 仍应是源字形 top + offsetY。
+    // 因此：frozenDrawOffsetY = visible.onScreenTop - visible.sourceGlyphY0
+    //       startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY = visible.onScreenTop
+    // 但关键区别在于：buildFrame 中 islandStartY 不再直接用 startPositionY，
+    // 而是用 sourceGlyphY0 + frozenDrawOffsetY（即源字形真实绘制原点）。
+    frozenDrawOffsetY = visible.onScreenTop - visible.sourceGlyphY0
+    startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY
+    // frozenDrawOffsetX 与现有 startPositionX 语义一致：
+    // startPositionX = onScreenLeft - (ownLeft - ownRect.x) = onScreenLeft - ownLeft + ownRect.x
+    // frozenDrawOffsetX = startPositionX - run.ownRect.x = onScreenLeft - ownLeft
+    frozenDrawOffsetX = startPositionX - run.ownRect.x
+    // startScreenClipRects：冻结帧屏幕坐标系中的真实裁切矩形
+    // clipRects 在 run 自己布局坐标系中，加 frozenDrawOffset 转换到屏幕坐标
+    if (visible.clipRects !== undefined) {
+      startScreenClipRects = visible.clipRects.map((cr: RectLike): RectLike => ({
+        x: cr.x + frozenDrawOffsetX!,
+        y: cr.y + frozenDrawOffsetY!,
+        width: cr.width,
+        height: cr.height,
+      }))
+    }
   }
   return {
     firstIndex: firstIndex,
@@ -1354,6 +1583,11 @@ function intervalForIsland(
     // Issue #879 复核评论6100665268 问题3：传递每段 clipRect 对应的源字形完整矩形，
     // buildFrame retained 多矩形算法用此精确映射每段裁切矩形到目标 glyph 对应边界。
     sourceGlyphRects: visible.sourceGlyphRects,
+    // Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移。
+    frozenDrawOffsetX: frozenDrawOffsetX,
+    frozenDrawOffsetY: frozenDrawOffsetY,
+    // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
+    startScreenClipRects: startScreenClipRects,
   }
 }
 
@@ -1392,6 +1626,14 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
         sourceGlyphRects: iv.sourceGlyphRects === undefined
           ? undefined
           : iv.sourceGlyphRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
+          })),
+        // Issue #879 复核评论6102724233 问题2：深拷贝 frozenDrawOffsetX/Y 和 startScreenClipRects。
+        frozenDrawOffsetX: iv.frozenDrawOffsetX,
+        frozenDrawOffsetY: iv.frozenDrawOffsetY,
+        startScreenClipRects: iv.startScreenClipRects === undefined
+          ? undefined
+          : iv.startScreenClipRects.map((sr: RectLike): RectLike => ({
             x: sr.x, y: sr.y, width: sr.width, height: sr.height,
           })),
       })),
