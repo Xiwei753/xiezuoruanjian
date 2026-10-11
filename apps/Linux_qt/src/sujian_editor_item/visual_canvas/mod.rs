@@ -94,9 +94,16 @@ impl VisualCanvas {
     /// 创建视觉画布。
     ///
     /// `initial_revision` 是当前 Core 的 revision（也是初始 presented revision）。
-    pub(crate) fn new(settings: CanvasSettings, initial_revision: EditorRevision, now_ms: f64) -> Self {
+    /// `initial_session` 是当前 document session id，`on_frame_committed` 只接受
+    /// 此 session 的帧。
+    pub(crate) fn new(
+        settings: CanvasSettings,
+        initial_revision: EditorRevision,
+        initial_session: u64,
+        now_ms: f64,
+    ) -> Self {
         Self {
-            controller: CanvasController::new(settings, initial_revision, now_ms),
+            controller: CanvasController::new(settings, initial_revision, initial_session, now_ms),
             target_layout_revision: None,
         }
     }
@@ -153,10 +160,40 @@ impl VisualCanvas {
     ///
     /// 委托给 `CanvasController::reset`，清除旧章的 `PresentedScene` 和
     /// `TargetLayoutDescriptor`。同时清 `target_layout_revision`。
-    /// 调用方（`reset_document_visual_state`）在调用前已递增 `document_session`，
-    /// 使 `CanvasController::on_frame_committed` 忽略旧 session 的迟到帧。
+    ///
+    /// **注意**：此方法不重置 `RevisionChain` / `FrameClock` / `TextFrontier`
+    /// 和 `expected_session`。切章时应优先使用 `reset_for_new_document`，
+    /// 它会用新章的 Core revision / session / caret / scroll 完全重新初始化
+    /// 这些状态，避免新章第一次修改继承旧章的字节映射和动画时间/光标。
     pub(crate) fn reset(&mut self) {
         self.controller.reset();
+        self.target_layout_revision = None;
+    }
+
+    /// Issue #901 问题6：切章/清文档时完全重置画布状态。
+    ///
+    /// 委托给 `CanvasController::reset_for_new_document`，用新章的
+    /// `session` / `core_revision` / `initial_caret` / `initial_scroll`
+    /// 完全重新初始化 `RevisionChain` / `FrameClock` / `TextFrontier`，
+    /// 并设置 `expected_session`。同时清 `target_layout_revision`。
+    ///
+    /// 调用方（`reset_document_visual_state`）在调用前已递增 `document_session`，
+    /// 传入的新 session 使 `on_frame_committed` 只接受新 session 的帧。
+    pub(crate) fn reset_for_new_document(
+        &mut self,
+        session: u64,
+        core_revision: EditorRevision,
+        initial_caret: usize,
+        initial_scroll: f64,
+        now_ms: f64,
+    ) {
+        self.controller.reset_for_new_document(
+            session,
+            core_revision,
+            initial_caret,
+            initial_scroll,
+            now_ms,
+        );
         self.target_layout_revision = None;
     }
 
@@ -242,7 +279,7 @@ mod tests {
     #[test]
     fn canvas_creation() {
         let settings = CanvasSettings::default();
-        let canvas = VisualCanvas::new(settings, EditorRevision::initial(), 0.0);
+        let canvas = VisualCanvas::new(settings, EditorRevision::initial(), 1, 0.0);
         assert!(canvas.presented_scene().is_none());
         assert!(!canvas.revision_chain().has_pending_edits());
         assert!(canvas.target_layout_revision().is_none());
@@ -253,6 +290,7 @@ mod tests {
         let canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         let plan = canvas.frame(16.0);
@@ -264,6 +302,7 @@ mod tests {
         let mut canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         let rev = LayoutRevision::next();
@@ -276,6 +315,7 @@ mod tests {
         let mut canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         let mut settings = CanvasSettings::default();
@@ -289,6 +329,7 @@ mod tests {
         let mut canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         // 有 offset_map 的编辑
@@ -310,6 +351,7 @@ mod tests {
         let mut canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
 
@@ -344,6 +386,7 @@ mod tests {
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
                 byte_range: (0, 100),
+                source_revision: EditorRevision::new(1),
             }],
             caret: None,
             scroll: PresentedScroll::default(),
@@ -361,6 +404,7 @@ mod tests {
         let mut canvas = VisualCanvas::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
 

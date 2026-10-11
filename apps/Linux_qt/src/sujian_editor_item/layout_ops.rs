@@ -61,6 +61,143 @@ impl SujianEditorItem {
             .clone()
     }
 
+    /// Issue #901 问题4: 增量排版入口 — 普通编辑走此路径，不全章重排。
+    ///
+    /// 与 [`build_editor_layout_snapshot`] 的区别：
+    /// - 不调用 `prepare_document_visual_snapshot_scoped`（全篇排版），
+    ///   而是走 `EditorLayout::snapshot()` 增量路径，只重排受影响段落。
+    /// - 从 `EditorLayout::last_canonical_snapshot()` 获取增量排版结果，
+    ///   构建 `EditorLayoutSnapshot`。
+    /// - 为受影响行提取 QImage 纹理并填充到 `PreparedLineSnapshot.image`，
+    ///   使 `prepare_visual_edit_textures` 能注入 texture_cache，
+    ///   闭环"普通输入也产生纹理"。
+    /// - 不分配独立 animation generation，复用 `EditorLayout` 的 current generation，
+    ///   避免为准备动画 target 再全章排版一次。
+    ///
+    /// `affected_range` 是 Core `display_patches` 提供的受影响字节范围。
+    /// `None` 表示无明确范围（fallback 到全篇重排）。
+    pub(crate) fn build_incremental_layout_snapshot(
+        &mut self,
+        width: f64,
+        affected_range: Option<(usize, usize)>,
+    ) -> Result<EditorLayoutSnapshot, String> {
+        // 1. 设置受影响范围，让 EditorLayout::snapshot() 增量路径能定位受影响段落。
+        if let Some((start, end)) = affected_range {
+            self.editor_layout.set_last_edit_affected_range(start, end);
+        }
+
+        // 2. 走增量排版。EditorLayout::snapshot() 内部判断：
+        //    - 排版参数变化 → 全局失效 + 全篇重排
+        //    - 仅 text_revision 变化 → 增量排版（只重排受影响段落）
+        //    - 都没变 → cache hit，直接返回
+        // 用 block 限定 &mut borrow，释放后才能调 last_canonical_snapshot()。
+        let generation = {
+            let params = self.layout_params(width);
+            let layout_snap = self.editor_layout.snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            );
+            layout_snap.layout_generation
+        };
+
+        // 3. 从 last_snapshot 获取增量排版产生的 CanonicalDocumentVisualSnapshot。
+        let doc_snapshot = match self.editor_layout.last_canonical_snapshot() {
+            Some(s) => s,
+            None => {
+                return Err(
+                    "build_incremental_layout_snapshot: no canonical snapshot after layout".to_string(),
+                );
+            }
+        };
+
+        let scroll_y = f64::from(self.current_scroll_y);
+        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
+        let revision = LayoutRevision::next();
+
+        // 4. 构建 EditorLayoutSnapshot（此时 image 可能为 None，下面填充）。
+        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            revision,
+            doc_snapshot,
+            scroll_y,
+            viewport_h,
+        ) {
+            Ok(s) => s,
+            Err(err) => return Err(err),
+        };
+
+        // 5. 为受影响行提取 QImage 纹理，填充到 PreparedLineSnapshot.image。
+        // 普通输入也走此路径，不再只在 composition_range 非空时才提取。
+        let (affected_start, affected_end) = affected_range.unwrap_or((0, 0));
+        if affected_start < affected_end {
+            let dpr = {
+                let item_ptr = self.get_cpp_object();
+                if !item_ptr.is_null() {
+                    crate::editor::renderer::sujian_item_dpr(item_ptr)
+                } else {
+                    1.0
+                }
+            };
+            let text_color = self.current_text_color.to_string();
+
+            // 找到受影响行在 visual_lines 中的索引。
+            let mut affected_line_indices: Vec<usize> = Vec::new();
+            for (i, vl) in doc_snapshot.visual_lines.iter().enumerate() {
+                if vl.byte_start < affected_end && vl.byte_end > affected_start {
+                    affected_line_indices.push(i);
+                }
+            }
+
+            if !affected_line_indices.is_empty() {
+                let handle = crate::editor::layout::PreparedLayoutHandle {
+                    generation,
+                    lines: &doc_snapshot.visual_lines,
+                };
+                let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
+                    &handle,
+                    &affected_line_indices,
+                    dpr,
+                    &text_color,
+                );
+
+                // 构建 (para_start, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
+                use std::collections::HashMap;
+                let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
+                    HashMap::with_capacity(affected_line_indices.len());
+                for &idx in &affected_line_indices {
+                    let vl = &doc_snapshot.visual_lines[idx];
+                    para_qtextline_to_byte_start
+                        .insert((vl.para_start, vl.qtextline_idx), vl.byte_start);
+                }
+
+                // 把 QImage 填充到对应的 PreparedLineSnapshot。
+                for anim_line in anim_visuals {
+                    if let Some(image) = anim_line.image {
+                        if let Some(&byte_start) = para_qtextline_to_byte_start
+                            .get(&(anim_line.paragraph_document_byte_start, anim_line.qtextline_idx))
+                        {
+                            if let Some(prep_line) =
+                                snapshot.line_snapshots.iter_mut().find(|pl| pl.byte_start == byte_start)
+                            {
+                                prep_line.image = Some(image);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. 计算 caret（视口坐标 + 文档坐标）。
+        let cursor_byte = self.pipeline.cursor();
+        let caret = doc_snapshot.cursor_rect(cursor_byte, self.cursor_ctrl.affinity, scroll_y, viewport_h);
+        let caret_doc = doc_snapshot.cursor_rect_doc(cursor_byte, self.cursor_ctrl.affinity);
+        snapshot.caret_rect = Some(caret);
+        snapshot.caret_rect_doc = Some(caret_doc);
+        snapshot.caret_affinity = self.cursor_ctrl.affinity;
+
+        Ok(snapshot)
+    }
+
     // Issue #658 评论 5622188166 问题 1: 删除 layout_snapshot_for_text。
     // 该函数为 fill_visual_transaction_coords_legacy 专用，用同一 EditorLayout
     // 对任意 text 做 snapshot，连续调用会互相清 generation，导致光标 x 塌缩到行首。

@@ -11,6 +11,14 @@ use crate::editor::scene_graph;
 /// Issue #901 问题4：不再按 `opacity < 1.0` 过滤。存活字 FLIP 的 opacity=1
 /// 也要被绘制。按 `DrawCommandKind::TextFragment` 和真正 owner/几何变化来绘制，
 /// 不根据 alpha<1 决定"是否属于动画"。
+///
+/// Issue #901 问题2：`DrawCommand.target_rect` 和 `clip_rect` 始终使用文档坐标。
+/// C++ 动画层（`AnimationLayerNode`）统一施加一次 `translate(0, -scroll_y)`
+/// 变换（通过 `update_animation_layer` 的 `scroll_y` 参数）。
+///
+/// Issue #901 问题3：动画层的动态 clip 按 `progress` 更新（通过
+/// `DrawCommand.target_rect` 和 `DrawCommand.clip_rect`），与静态层排除区
+/// （`static_exclusion_rects`）是不同的两个概念。
 pub(crate) fn canvas_draw_plan_to_glyph_infos(
     canvas_plan: &CanvasDrawPlan,
     _texture_cache: &TextureCache,
@@ -64,27 +72,32 @@ pub(crate) fn canvas_draw_plan_to_glyph_infos(
         .collect()
 }
 
-/// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的命令推导静态层裁剪矩形。
+/// Issue #901 问题3：从 `CanvasDrawPlan` 的 `static_exclusion_rects` 推导
+/// 静态层裁剪矩形。
 ///
-/// 动画 glyph（`TextFragment` 命令）的 `target_rect` 需要从静态层裁剪掉，
-/// 避免静态正文盖住动画。
+/// 静态层的 **target 字形排除区**覆盖本次由动画画布接管的**完整目标范围**，
+/// 整个过渡期间与 `progress` 无关。只在接管集合改变时重建静态 QSGTextNode，
+/// 不在每帧改变挖空矩形。
 ///
-/// Issue #901 问题4：不再按 `opacity < 1.0` 过滤。存活字 FLIP 的 opacity=1
-/// 也要被裁剪。所有 `TextFragment` 命令的 target_rect 都从静态层裁剪掉。
+/// 动画层的动态 clip/UV 才按 `progress` 更新（在 `canvas_draw_plan_to_glyph_infos`
+/// 中用 `DrawCommand.target_rect` 和 `DrawCommand.clip_rect`）。
+///
+/// Issue #901 问题2：`static_exclusion_rects` 使用文档坐标，与 `AnimationClipRect`
+/// 的文档坐标契约一致。C++ 静态层（`QSGTransformNode`）统一施加一次
+/// `translate(0, -scroll_y)` 变换。
 pub(crate) fn canvas_draw_plan_to_clip_rects(
     canvas_plan: &CanvasDrawPlan,
 ) -> Vec<qt_text_node::AnimationClipRect> {
     canvas_plan
-        .commands
+        .static_exclusion_rects
         .iter()
-        .filter(|cmd| cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0)
-        .map(|cmd| qt_text_node::AnimationClipRect {
-            x: cmd.target_rect.x,
-            y: cmd.target_rect.y,
-            w: cmd.target_rect.w,
-            h: cmd.target_rect.h,
+        .map(|excl| qt_text_node::AnimationClipRect {
+            x: excl.rect.x,
+            y: excl.rect.y,
+            w: excl.rect.w,
+            h: excl.rect.h,
             // Issue #901 问题2：直接使用完整 LineSnapshotId。
-            snapshot_id: cmd.snapshot_id,
+            snapshot_id: excl.snapshot_id,
         })
         .collect()
 }

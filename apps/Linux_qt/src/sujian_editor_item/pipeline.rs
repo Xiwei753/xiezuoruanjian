@@ -449,6 +449,7 @@ impl LinuxEditorPipeline {
             visual_canvas: VisualCanvas::new(
                 CanvasSettings::default(),
                 EditorRevision::initial(),
+                1, // initial_session：与 SujianEditorItem::document_session 初始值 1 对齐
                 0.0,
             ),
             texture_cache: TextureCache::new(),

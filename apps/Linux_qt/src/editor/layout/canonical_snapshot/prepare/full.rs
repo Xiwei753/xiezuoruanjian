@@ -558,7 +558,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
-    previous_snapshot: Option<&CanonicalDocumentVisualSnapshot>,
+    // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
+    // visual_lines/paragraphs，避免全章 clone。
+    previous_snapshot: Option<CanonicalDocumentVisualSnapshot>,
     paragraph_store: &mut super::super::super::paragraph_layout_store::ParagraphLayoutStore,
     height_index: &mut super::super::super::paragraph_height_index::ParagraphHeightIndex,
 ) -> CanonicalDocumentVisualSnapshot {
@@ -588,7 +590,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // - 如果不一致 → 即使 affected_range 为空，也必须走增量重排，
     //   否则会把旧排版伪装成新正文（text_revision 标新但 layout 是旧的）。
     if !needs_full_relayout && no_affected_range {
-        let prev = previous_snapshot.unwrap();
+        let prev = previous_snapshot.as_ref().unwrap();
         if prev_snapshot_text_matches(prev, text) {
             // 真正无正文变化：安全复用旧 snapshot，只更新 text_revision 和排版参数。
             return CanonicalDocumentVisualSnapshot {
@@ -649,12 +651,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     }
 
     // ── 2. 增量重排路径 ──
-    // needs_full_relayout 已检查 previous_snapshot.is_none()，此处一定为 Some。
-    let prev = match previous_snapshot {
+    // Issue #901 问题5: 不遍历整章。take prev 的 visual_lines/paragraphs（move，不 clone），
+    // 只重排受影响段落，splice 受影响段落的行和段落。
+    // 对长章非结构性编辑，每帧成本与受影响段落+后续段行数相关，
+    // 不再逐段 to_vec() + clone()。
+    let mut prev = match previous_snapshot {
         Some(s) => s,
         None => {
             // 逻辑上不会走到这里（needs_full_relayout 已覆盖 None 情况）。
-            // 返回空 snapshot 作为安全兜底。
             return CanonicalDocumentVisualSnapshot {
                 text_revision,
                 font_size,
@@ -673,46 +677,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 用 store 计算受影响段落范围
     let affected = paragraph_store.compute_affected_paragraphs(affected_byte_start, affected_byte_end);
 
-    // 遍历所有段落，受影响的重新排版，不受影响的复用
-    let mut paragraphs: Vec<CanonicalParagraphSnapshot> = Vec::new();
-    let mut visual_lines: Vec<VisualLine> = Vec::new();
-    let mut y: f64 = padding;
-    let mut paragraph_start: usize = 0;
-    let mut paragraph_qchar_start: usize = 0;
-    let mut line_id: usize = 0;
-    let mut paragraph_idx: i32 = 0;
-    // Issue #901 第三轮复核问题 4: 跟踪实际重排的段落索引。
-    // no_affected_range fall-through 时 affected 为空，但文本变化的段落仍被重排。
-    // 用此列表驱动后续 height_index/store 更新，避免漏更新。
-    let mut relayouted_indices: Vec<usize> = Vec::new();
+    // Issue #901 问题5: 段落身份用 paragraph_store 的 ParagraphId 匹配，
+    // 不按 prev.paragraphs[current_idx] 下标匹配。
+    let prev_para_count = prev.paragraphs.len();
 
-    // Issue #901: 增量更新 store 的文本信息，不调用 rebuild_from_text（全章扫描）。
-    // 只更新受影响段落的 cache_key，未改段落的 ParagraphId 和 cache_key 保持不变。
-    // rebuild_from_text 会重新分配所有段落的 cache_key（即使内容没变），
-    // 导致所有段落的 needs_relayout 返回 true，失去增量排版的意义。
-    // 此处用 update_paragraph_text 只更新受影响段落的 cache_key。
+    // 增量更新 store 的文本信息
     {
         let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
-        let old_paras: Vec<&str> = {
-            // 从 previous_snapshot 提取旧段落文本
-            let mut old = Vec::new();
-            if let Some(prev) = previous_snapshot {
-                for para in &prev.paragraphs {
-                    old.push(para.paragraph_text.as_str());
-                }
-            }
-            old
-        };
-
-        // 如果段落数量变化或 store 段落数与新文本不匹配，需要 rebuild
         let store_needs_rebuild = paragraph_store.paragraph_count() != new_paras.len()
-            || old_paras.len() != new_paras.len();
+            || prev_para_count != new_paras.len();
 
         if store_needs_rebuild {
-            // Issue #901 第二轮复核: 段落数变化（换行拆段/删回车合段），需要重建 store。
-            // rebuild_from_text 已修改为保留未变化段的 ParagraphId 和排版结果
-            // （layout_generation/cache_slot/height 等），只有内容变化的段落才重置。
-            // 这样未变化段不需要重新走 QTextLayout，只调整 y 坐标。
             paragraph_store.rebuild_from_text(
                 text,
                 font_size,
@@ -723,7 +698,6 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 width,
             );
         } else {
-            // 段萂数不变，只更新受影响段落的 cache_key
             let affected_start = affected.relayout_start;
             let affected_end = affected.relayout_end;
             for i in affected_start..affected_end {
@@ -744,112 +718,85 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
-    // Issue #901 第三轮复核问题 2: 构建 para_start → (line_start, line_end) 索引，
-    // O(all_lines) 一次构建，使未变段落的行集合查找从 O(all_lines) 降为 O(1)。
-    // 此前每个未改段都 `prev.visual_lines.iter().filter(...)` 扫描所有旧行，
-    // 最坏 O(段落数 × 视觉行数)。
+    // 构建 para_start → (line_start, line_end) 索引
     let prev_line_index = build_para_start_to_line_range(&prev.visual_lines);
 
-    for paragraph in text.split_inclusive('\n') {
+    // Issue #901 问题5: take prev 的 visual_lines 和 paragraphs（move，不 clone）。
+    // 后续只 splice 受影响段落的行和段落，未修改段直接复用 move 出的数据。
+    let mut visual_lines: Vec<VisualLine> = std::mem::take(&mut prev.visual_lines);
+    let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
+
+    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+    let new_para_count = new_paras.len();
+
+    // 计算受影响段落范围（在新文本坐标中）
+    let affected_start = if affected.full_relayout {
+        0
+    } else {
+        affected.relayout_start
+    };
+    let affected_end = if affected.full_relayout {
+        new_para_count
+    } else {
+        affected.relayout_end.min(new_para_count)
+    };
+
+    // 找到受影响段落在 visual_lines 中的行范围（用旧段落 byte_start 匹配）
+    let mut vl_start_idx: usize = 0;
+    let mut vl_end_idx: usize = visual_lines.len();
+    if affected_start < prev_paragraphs.len() {
+        let para_start = prev_paragraphs[affected_start].paragraph_document_byte_start;
+        if let Some(&(s, _)) = prev_line_index.get(&para_start) {
+            vl_start_idx = s;
+        }
+    }
+    if affected_end < prev_paragraphs.len() {
+        let para_start = prev_paragraphs[affected_end].paragraph_document_byte_start;
+        if let Some(&(s, _)) = prev_line_index.get(&para_start) {
+            vl_end_idx = s;
+        }
+    }
+
+    // 计算受影响段落的旧高度和旧 byte 范围
+    let old_affected_height: f64 = visual_lines[vl_start_idx..vl_end_idx]
+        .iter()
+        .map(|vl| vl.height)
+        .sum();
+    let old_affected_byte_start: usize = visual_lines.get(vl_start_idx)
+        .map(|vl| vl.byte_start)
+        .unwrap_or(0);
+
+    // 重新排版受影响段落
+    let mut new_visual_lines: Vec<VisualLine> = Vec::new();
+    let mut new_paragraphs: Vec<CanonicalParagraphSnapshot> = Vec::new();
+    let mut relayouted_indices: Vec<usize> = Vec::new();
+
+    // 计算受影响段落的起始 y 和起始 byte offset
+    let y_start: f64 = if vl_start_idx > 0 {
+        visual_lines[vl_start_idx - 1].y + visual_lines[vl_start_idx - 1].height
+    } else {
+        padding
+    };
+
+    // 计算受影响段落的起始 paragraph_start 和 paragraph_qchar_start
+    let mut paragraph_start: usize = 0;
+    let mut paragraph_qchar_start: usize = 0;
+    for para in &new_paras[..affected_start.min(new_para_count)] {
+        paragraph_start += para.len();
+        paragraph_qchar_start += para.chars().map(|c| c.len_utf16()).sum::<usize>();
+    }
+
+    let mut y: f64 = y_start;
+    let mut line_id: usize = vl_start_idx;
+    let mut paragraph_idx: i32 = affected_start as i32;
+
+    for para_idx in affected_start..affected_end {
+        let paragraph = new_paras[para_idx];
         let hard_break = paragraph.ends_with('\n');
         let paragraph_text = paragraph.trim_end_matches('\n');
 
-        let current_idx = paragraph_idx as usize;
-        let is_affected = affected.full_relayout
-            || (current_idx >= affected.relayout_start && current_idx < affected.relayout_end);
+        relayouted_indices.push(para_idx);
 
-        // 尝试从 previous_snapshot 复用
-        let can_reuse = !is_affected && current_idx < prev.paragraphs.len();
-
-        if can_reuse {
-            let prev_para = &prev.paragraphs[current_idx];
-            // 检查段落文本是否相同（内容未变才能复用 shaping）
-            if prev_para.paragraph_text == paragraph_text {
-                // Issue #901 第三轮复核问题 2: 用 para_start → line range 索引 O(1) 查找，
-                // 代替 `prev.visual_lines.iter().filter(...)` 的 O(all_lines) 扫描。
-                let prev_lines: Vec<VisualLine> =
-                    if let Some(&(start, end)) = prev_line_index.get(&prev_para.paragraph_document_byte_start) {
-                        prev.visual_lines[start..end].to_vec()
-                    } else {
-                        Vec::new()
-                    };
-
-                if !prev_lines.is_empty() {
-                    let y_offset = y - prev_lines.first().map(|l| l.y).unwrap_or(y);
-                    let byte_offset = paragraph_start as i64 - prev_para.paragraph_document_byte_start as i64;
-                    // Issue #901 第三轮复核问题 2: qchar_offset 也用索引 O(1) 查找，
-                    // 代替 `prev.visual_lines.iter().filter(...).next()` 的 O(all_lines) 扫描。
-                    let qchar_offset = paragraph_qchar_start as i64
-                        - prev_lines.first()
-                            .map(|l| l.qchar_start as i64 - l.para_qchar_start as i64)
-                            .unwrap_or(0);
-
-                    let line_start_for_store = line_id;
-                    let reused_line_count = prev_lines.len();
-                    let mut para_height = 0.0f64;
-                    for mut vl in prev_lines {
-                        vl.id = line_id;
-                        vl.y += y_offset;
-                        if byte_offset != 0 {
-                            vl.para_start = (vl.para_start as i64 + byte_offset) as usize;
-                            vl.byte_start = (vl.byte_start as i64 + byte_offset) as usize;
-                            vl.byte_end = (vl.byte_end as i64 + byte_offset) as usize;
-                        }
-                        if qchar_offset != 0 {
-                            vl.qchar_start = (vl.qchar_start as i64 + qchar_offset) as usize;
-                            vl.qchar_end = (vl.qchar_end as i64 + qchar_offset) as usize;
-                        }
-                        para_height += vl.height;
-                        visual_lines.push(vl);
-                        line_id += 1;
-                    }
-                    y += para_height;
-
-                    // 复用 CanonicalParagraphSnapshot，更新 byte offset
-                    let mut para = prev_para.clone();
-                    if byte_offset != 0 {
-                        para.paragraph_document_byte_start = paragraph_start;
-                        para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
-                            &para.paragraph_text,
-                            paragraph_start,
-                        );
-                        for line in &mut para.lines {
-                            line.document_byte_start =
-                                (line.document_byte_start as i64 + byte_offset) as usize;
-                            line.document_byte_end =
-                                (line.document_byte_end as i64 + byte_offset) as usize;
-                            line.paragraph_document_byte_start = paragraph_start;
-                            for cluster in &mut line.clusters {
-                                cluster.document_byte_start =
-                                    (cluster.document_byte_start as i64 + byte_offset) as usize;
-                                cluster.document_byte_end =
-                                    (cluster.document_byte_end as i64 + byte_offset) as usize;
-                            }
-                        }
-                    }
-                    paragraphs.push(para);
-
-                    // 更新 store 的排版结果（复用）
-                    paragraph_store.update_layout_result(
-                        current_idx,
-                        generation,
-                        current_idx as i32,
-                        para_height,
-                        reused_line_count,
-                        line_start_for_store,
-                    );
-
-                    paragraph_start += paragraph.len();
-                    paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
-                    paragraph_idx += 1;
-                    continue;
-                }
-            }
-        }
-
-        // ── 受影响段落：重新走 QTextLayout ──
-        // Issue #901 第三轮复核: 记录实际重排的段落索引。
-        relayouted_indices.push(current_idx);
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
@@ -867,7 +814,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 generation,
                 false,
             );
-            visual_lines.push(VisualLine {
+            new_visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: paragraph_start,
                 byte_end: paragraph_start,
@@ -894,7 +841,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             line_id += 1;
             y += line_height;
 
-            paragraphs.push(CanonicalParagraphSnapshot {
+            new_paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
                 paragraph_document_byte_start: paragraph_start,
                 lines: Vec::new(),
@@ -904,9 +851,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 ),
             });
 
-            // 更新 store 排版结果
             paragraph_store.update_layout_result(
-                current_idx,
+                para_idx,
                 generation,
                 paragraph_idx,
                 line_height,
@@ -949,7 +895,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
             let is_first = line_idx == 0;
 
-            visual_lines.push(VisualLine {
+            new_visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: canonical_line.document_byte_start,
                 byte_end: canonical_line.document_byte_end,
@@ -978,9 +924,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             para_height += actual_line_h;
         }
 
-        // 更新 store 排版结果
         paragraph_store.update_layout_result(
-            current_idx,
+            para_idx,
             generation,
             paragraph_idx,
             para_height,
@@ -991,9 +936,117 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraph_start += paragraph.len();
         paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
 
-        paragraphs.push(canonical);
+        new_paragraphs.push(canonical);
         paragraph_idx += 1;
     }
+
+    // 计算新受影响段落的高度
+    let new_affected_height: f64 = new_visual_lines.iter().map(|vl| vl.height).sum();
+    let delta_height = new_affected_height - old_affected_height;
+
+    // splice visual_lines：替换受影响段落的行
+    let new_affected_line_count = new_visual_lines.len();
+    visual_lines.splice(vl_start_idx..vl_end_idx, new_visual_lines);
+
+    // splice paragraphs：替换受影响段落
+    // Issue #901 问题5: 段落身份用 paragraph_store 的 ParagraphId 匹配。
+    // prev_paragraphs 是旧段落（move 出来的），按受影响范围 splice。
+    let splice_para_start = affected_start.min(prev_paragraphs.len());
+    let splice_para_end = affected_end.min(prev_paragraphs.len());
+    prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
+    let mut paragraphs = prev_paragraphs;
+
+    // Issue #901 问题5: 更新后续段的 y 和 byte offset。
+    // 只在高度变化或 byte offset 变化时更新，避免不必要的遍历。
+    // 对长章非结构性编辑（高度不变），此处跳过，成本 O(1)。
+    if delta_height.abs() > 0.001 {
+        let update_start = vl_start_idx + new_affected_line_count;
+        for vl in &mut visual_lines[update_start..] {
+            vl.y += delta_height;
+        }
+    }
+
+    // 更新后续段的 byte offset 和 line_id
+    // byte offset 变化 = 新文本中受影响段落后的 byte offset - 旧文本中对应的 byte offset
+    // 用新文本的 paragraph_start（已累加到受影响段落后）和旧文本的 old_affected_byte_start 比较
+    let new_affected_byte_end = paragraph_start;
+    // 旧受影响段落的 byte end = vl_end_idx 对应行的 byte_end
+    let old_affected_byte_end: usize = if vl_end_idx > 0 && vl_end_idx <= visual_lines.len() {
+        // vl_end_idx 可能已经因为 splice 变化，用 splice 后的位置
+        let after_splice_end = vl_start_idx + new_affected_line_count;
+        if after_splice_end < visual_lines.len() {
+            visual_lines[after_splice_end].byte_start
+        } else {
+            new_affected_byte_end
+        }
+    } else {
+        new_affected_byte_end
+    };
+    let byte_delta = new_affected_byte_end as i64 - old_affected_byte_end as i64;
+
+    if byte_delta != 0 {
+        let update_start = vl_start_idx + new_affected_line_count;
+        for vl in &mut visual_lines[update_start..] {
+            vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
+            vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
+            vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
+        }
+        // 更新后续段落的 paragraph_document_byte_start
+        let para_update_start = affected_end.min(paragraphs.len());
+        for para in &mut paragraphs[para_update_start..] {
+            para.paragraph_document_byte_start =
+                (para.paragraph_document_byte_start as i64 + byte_delta) as usize;
+            // 重建 index_map
+            para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                &para.paragraph_text,
+                para.paragraph_document_byte_start,
+            );
+            for line in &mut para.lines {
+                line.document_byte_start =
+                    (line.document_byte_start as i64 + byte_delta) as usize;
+                line.document_byte_end =
+                    (line.document_byte_end as i64 + byte_delta) as usize;
+                line.paragraph_document_byte_start =
+                    (line.paragraph_document_byte_start as i64 + byte_delta) as usize;
+                for cluster in &mut line.clusters {
+                    cluster.document_byte_start =
+                        (cluster.document_byte_start as i64 + byte_delta) as usize;
+                    cluster.document_byte_end =
+                        (cluster.document_byte_end as i64 + byte_delta) as usize;
+                }
+            }
+        }
+    }
+
+    // 更新后续段的 line_id（确保连续）
+    let mut next_id = vl_start_idx + new_affected_line_count;
+    for vl in &mut visual_lines[vl_start_idx + new_affected_line_count..] {
+        vl.id = next_id;
+        next_id += 1;
+    }
+
+    // 更新后续段的 qchar_start/qchar_end
+    // qchar offset 变化 = 新文本中受影响段落后的 qchar offset - 旧文本中对应的 qchar offset
+    let new_affected_qchar_end = paragraph_qchar_start;
+    let old_affected_qchar_end: usize = if vl_start_idx + new_affected_line_count < visual_lines.len() {
+        let after = vl_start_idx + new_affected_line_count;
+        visual_lines[after].qchar_start - visual_lines[after].para_qchar_start
+    } else {
+        new_affected_qchar_end
+    };
+    let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
+    if qchar_delta != 0 {
+        for vl in &mut visual_lines[vl_start_idx + new_affected_line_count..] {
+            vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
+            vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
+        }
+    }
+    // Issue #901 问题5: 增量路径只遍历了受影响段落，line_id/y/paragraph_idx
+    // 是受影响段落结束后的值。空文本/尾部换行处理需要文档末尾的值。
+    // 更新到 splice 后的文档末尾。
+    line_id = visual_lines.len();
+    y = visual_lines.last().map(|vl| vl.y + vl.height).unwrap_or(padding);
+    paragraph_idx = paragraphs.len() as i32;
 
     // 空文本处理
     if text.is_empty() {
@@ -1125,7 +1178,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
     // 段落数变化时用 rebuild 从 snapshot 提取全部高度（O(n) 但不涉及 QTextLayout），
     // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
-    let prev_para_count = prev.paragraphs.len();
+    // prev_para_count 已在 take 之前定义（line 683），此处直接复用。
     let curr_para_count = snapshot.paragraphs.len();
     if curr_para_count != prev_para_count {
         // 段落数变化（Enter 拆段/Backspace 合段），重建高度索引

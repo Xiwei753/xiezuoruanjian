@@ -28,31 +28,67 @@ impl SujianEditorItem {
         // Issue #901: 编辑结果收口到 visual_canvas，由 RevisionChain 精确消费 offset map。
         self.pipeline.visual_canvas_mut().apply_edit_result(result);
 
-        // Issue #901 问题2：在构建 TargetLayoutDescriptor 之前，确保 pipeline 的
-        // current_layout_snapshot 已基于本次 Core edit 后的新正文构建。
-        // 普通输入/删除路径中，Core edit 已应用（mirror 已更新为新正文），
-        // 但 current_layout_snapshot 仍是旧值或 None（它只在 IME commit 路径
-        // 和此处被更新）。如果不在此重建，build_target_layout_descriptor 会读到
-        // 旧布局或 None，导致动画 target 始终指向上一笔排版。
-        //
-        // 原子收口顺序：Core edit → 新文本排版(EditorLayoutSnapshot) →
-        // set_current_layout_snapshot → TargetLayoutDescriptor →
-        // visual_canvas.apply_target_layout。
-        let width = self.bounding_width();
-        let needs_new_layout = match self.pipeline.current_layout_snapshot() {
-            None => true,
-            // 普通输入路径从不更新 current_layout_snapshot，所以总是需要重建。
-            // 即使 Some，它也是上一笔的旧布局（revision 不匹配本次 Core new revision）。
-            Some(_) => true,
+        // Issue #901 问题4：从 Core display_patches 提取受影响字节范围，
+        // 传给 EditorLayout 增量排版路径，只重排受影响段落。
+        // replace_byte_range 是旧坐标，inserted_byte_range 是新坐标，
+        // 取两者并集用于定位受影响段落（近似足够准确）。
+        let mut affected_start = usize::MAX;
+        let mut affected_end = 0usize;
+        for patch in &result.display_patches {
+            let rep_start = patch.replace_byte_range.start().value();
+            let rep_end = patch.replace_byte_range.end().value();
+            let ins_start = patch.inserted_byte_range.start().value();
+            let ins_end = patch.inserted_byte_range.end().value();
+            affected_start = affected_start.min(rep_start).min(ins_start);
+            affected_end = affected_end.max(rep_end).max(ins_end);
+        }
+        let affected_range = if affected_start < affected_end {
+            Some((affected_start, affected_end))
+        } else {
+            None
         };
-        if needs_new_layout {
-            if let Ok(new_snap) = self.build_editor_layout_snapshot(width, false, None) {
-                self.pipeline
-                    .set_current_layout_snapshot(Some(new_snap));
+
+        // Issue #901 问题4：普通编辑走增量排版路径，不全章重排。
+        // needs_new_layout 判断：
+        // - current_layout_snapshot 为 None → 需要排版（首次/重置后）
+        // - current_layout_snapshot 为 Some 但宽度/字体变化 → 需要重排
+        // - current_layout_snapshot 为 Some 且宽度/字体未变 → 走增量路径
+        //   （EditorLayout::snapshot 内部判断 text_revision 变化，只重排受影响段落）
+        let width = self.bounding_width();
+        let current_snap = self.pipeline.current_layout_snapshot().clone();
+        let needs_new_layout = match &current_snap {
+            None => true,
+            Some(snap) => {
+                // 宽度/字体变化时需要全篇重排
+                (snap.line_snapshots.is_empty())
+                    || false // 增量路径内部会处理参数变化
             }
-            // Err 时 build_editor_layout_snapshot 内部已记诊断，
-            // current_layout_snapshot 保持旧值，build_target_layout_descriptor
-            // 会 fallback 到旧 target 或 None——不伪装成功。
+        };
+
+        if needs_new_layout || current_snap.is_some() {
+            // Issue #901 问题4：走增量排版路径。
+            // build_incremental_layout_snapshot 内部调 EditorLayout::snapshot()，
+            // 只重排受影响段落，不调用全篇 prepare_document_visual_snapshot_scoped。
+            // 同时为受影响行提取 QImage 纹理，闭环"普通输入也产生纹理"。
+            match self.build_incremental_layout_snapshot(width, affected_range) {
+                Ok(new_snap) => {
+                    // Issue #901 问题4：把新 snapshot 通过 prepare_visual_edit_textures
+                    // 注入 texture_cache，使渲染层能找到受影响行的纹理。
+                    self.prepare_visual_edit_textures(&new_snap);
+                    self.pipeline
+                        .set_current_layout_snapshot(Some(new_snap));
+                }
+                Err(_err) => {
+                    // 增量排版失败时 fallback 到全篇排版。
+                    // build_editor_layout_snapshot 内部已记诊断，
+                    // current_layout_snapshot 保持旧值——不伪装成功。
+                    if let Ok(new_snap) = self.build_editor_layout_snapshot(width, false, None) {
+                        self.prepare_visual_edit_textures(&new_snap);
+                        self.pipeline
+                            .set_current_layout_snapshot(Some(new_snap));
+                    }
+                }
+            }
         }
 
         // Issue #901 阻塞 1：从当前 Qt LayoutSnapshot 产生 TargetLayoutDescriptor

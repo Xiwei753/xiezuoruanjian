@@ -418,7 +418,14 @@ pub(crate) struct VisualLineClipInfo {
 
 /// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
 ///
-/// Issue #658: 改为完整的 x/y/w/h 文档坐标矩形，
+/// Issue #901 问题3：这是静态层的**排除区**，覆盖动画画布接管的**完整目标范围**，
+/// 整个过渡期间与 `progress` 无关。只在接管集合改变时重建静态 QSGTextNode，
+/// 不在每帧改变挖空矩形。动画层的动态 clip 才按 `progress` 更新。
+///
+/// Issue #901 问题2：使用文档坐标，C++ 静态层（`QSGTransformNode`）统一施加
+/// 一次 `translate(0, -scroll_y)` 变换。
+///
+/// Issue #658：改为完整的 x/y/w/h 文档坐标矩形，
 /// 由 build_render_plan_full() 通过 PreparedLineSnapshot::source_rect_to_document_rect() 转换。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimationClipRect {

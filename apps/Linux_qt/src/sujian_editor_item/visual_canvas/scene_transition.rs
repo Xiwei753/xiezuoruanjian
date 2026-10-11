@@ -133,6 +133,9 @@ impl SceneTransition {
         let fade_in = progress; // 新增字裁剪揭示系数
 
         let mut commands = Vec::new();
+        // Issue #901 问题3：静态层排除矩形 —— 动画画布接管的完整目标范围。
+        // 整个过渡期间与 progress 无关，只在接管集合改变时重建静态 QSGTextNode。
+        let mut static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
 
         // 记算每个 target glyph run 是否是存活字（在 presented revision 中存在）。
         // 存活字的 target 索引集合 —— 这些 run 由 presented 侧的 FLIP 处理。
@@ -169,6 +172,13 @@ impl SceneTransition {
                         presented,
                         target,
                     ) {
+                        // Issue #901 问题3：存活字接管的完整目标范围（文档坐标，
+                        // 与 progress 无关）加入静态排除列表。
+                        static_exclusion_rects
+                            .push(super::draw_plan::StaticExclusionRect {
+                                rect: run.document_rect,
+                                snapshot_id: run.snapshot_id,
+                            });
                         commands.push(cmd);
                     }
                 } else {
@@ -179,6 +189,11 @@ impl SceneTransition {
                         presented,
                         super::ownership::OwnershipRule::StaticText,
                     ) {
+                        static_exclusion_rects
+                            .push(super::draw_plan::StaticExclusionRect {
+                                rect: contrib.document_rect,
+                                snapshot_id: contrib.snapshot_id,
+                            });
                         commands.push(cmd);
                     }
                 }
@@ -187,6 +202,14 @@ impl SceneTransition {
                 // Issue #901 问题4：不是 opacity=(1-progress)，
                 // 而是 source_uv/target_rect 宽度按 (1-progress) 收缩。
                 if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                    // Issue #901 问题3：删除字接管的完整目标范围（文档坐标，
+                    // 与 progress 无关）加入静态排除列表。删除字的完整范围是
+                    // presented 的 document_rect（旧位置）。
+                    static_exclusion_rects
+                        .push(super::draw_plan::StaticExclusionRect {
+                            rect: contrib.document_rect,
+                            snapshot_id: contrib.snapshot_id,
+                        });
                     commands.push(cmd);
                 }
             }
@@ -198,6 +221,13 @@ impl SceneTransition {
                 // 存活字已由 presented 侧 FLIP 处理，跳过。
                 continue;
             }
+            // Issue #901 问题3：无论 progress 为何，新增字的完整目标范围都
+            // 加入静态排除列表。即使 progress=0（command_for_inserting 返回
+            // None），静态层也必须挖空，否则新字会在动画开始前就完整显示。
+            static_exclusion_rects.push(super::draw_plan::StaticExclusionRect {
+                rect: run.document_rect,
+                snapshot_id: run.snapshot_id,
+            });
             // 新增字：沿文字方向从 0→full_width 裁剪揭示。
             // Issue #901 问题4：不是 opacity=progress，
             // 而是 source_uv/target_rect 宽度按 progress 展开。
@@ -228,6 +258,9 @@ impl SceneTransition {
             presented.document_session,
             presented.source_revision,
             revision_chain.latest_revision(),
+            // Issue #901 问题1：携带本次采样的真实 progress，不硬编码 1.0。
+            progress,
+            static_exclusion_rects,
         )
     }
 
@@ -241,6 +274,9 @@ impl SceneTransition {
         now_ms: f64,
     ) -> CanvasDrawPlan {
         let mut commands = Vec::new();
+        // Issue #901 问题3：静态排除矩形 —— presented only 时所有贡献都是
+        // 静态正文，不需要排除（没有动画接管）。
+        let static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
 
         // 从 presented 生成文字命令（完整透明度）。
         for contrib in &presented.pixel_contributions {
@@ -276,6 +312,9 @@ impl SceneTransition {
             presented.document_session,
             presented.source_revision,
             presented.source_revision, // 无 target，target_revision = source
+            // Issue #901 问题1：携带真实 progress。
+            pose.progress.clamp(0.0, 1.0),
+            static_exclusion_rects,
         )
     }
 
@@ -291,6 +330,9 @@ impl SceneTransition {
         now_ms: f64,
     ) -> CanvasDrawPlan {
         let mut commands = Vec::new();
+        // Issue #901 问题3：target only 时所有 glyph run 都是静态正文
+        // （progress=1.0 完整显示），没有动画接管，不需要排除。
+        let static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
 
         // 从 target 生成静态画面（progress=1.0，完整显示）。
         for run in &target.glyph_runs {
@@ -320,6 +362,9 @@ impl SceneTransition {
             0, // document_session: 尚无
             revision_chain.presented_revision(),
             revision_chain.latest_revision(),
+            // Issue #901 问题1：首帧完整显示，progress=1.0。
+            1.0,
+            static_exclusion_rects,
         )
     }
 
@@ -358,14 +403,17 @@ impl SceneTransition {
 
     /// 为存活字生成 FLIP 位移命令。
     ///
-    /// 在 old_rect（presented 的画布坐标）和 new_rect（target 的视口坐标）之间
+    /// 在 old_rect（presented 的文档坐标）和 new_rect（target 的文档坐标）之间
     /// 按 `progress` 插值。透明度保持 1.0（不淡出淡入）。
+    ///
+    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
     fn command_for_surviving(
         contrib: &PixelContribution,
         run: &TargetGlyphRun,
         progress: f64,
         presented: &PresentedScene,
-        target: &TargetLayoutDescriptor,
+        _target: &TargetLayoutDescriptor,
     ) -> Option<DrawCommand> {
         if !contrib.has_visible_area() {
             return None;
@@ -374,7 +422,7 @@ impl SceneTransition {
             return None;
         }
 
-        // old_rect：presented 的 document_rect 经过 transform 映射到画布坐标。
+        // old_rect：presented 的 document_rect 经过 transform 映射到文档坐标。
         let old_transformed = Self::transform_rect(contrib.document_rect, presented.transform);
         let old_rect = CanvasRect::new(
             old_transformed.x + presented.position.x,
@@ -383,13 +431,9 @@ impl SceneTransition {
             old_transformed.h,
         );
 
-        // new_rect：target 的 document_rect 减去滚动偏移 → 视口坐标。
-        let new_rect = CanvasRect::new(
-            run.document_rect.x - target.scroll.x,
-            run.document_rect.y - target.scroll.y,
-            run.document_rect.w,
-            run.document_rect.h,
-        );
+        // Issue #901 问题2：new_rect 直接使用 target 的 document_rect（文档坐标），
+        // 不减 scroll_y。C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        let new_rect = run.document_rect;
 
         // FLIP：在 old_rect 和 new_rect 之间插值。
         let interpolated = CanvasRect::new(
@@ -409,7 +453,8 @@ impl SceneTransition {
         // 用 target.clip 与 interpolated_rect 求交，不是拿旧 visible_clip 与
         // 新 viewport 求交。旧裁剪是旧帧屏幕坐标，字形已移动后这块裁剪
         // 不能原地不变。
-        let clip = Self::intersect_clip(target.clip, interpolated);
+        // Issue #901 问题2：clip 使用文档坐标，C++ 动画层统一施加 scroll transform。
+        let clip = Self::intersect_clip(_target.clip, interpolated);
         Some(DrawCommand::text_fragment(
             run.snapshot_id,
             run.source_uv,
@@ -474,11 +519,14 @@ impl SceneTransition {
 
     /// 从 `TargetGlyphRun` 生成一条文字绘制命令。
     ///
-    /// 透明度乘以 `fade`（淡入系数）。目标矩形减去滚动偏移转为视口坐标。
+    /// 透明度乘以 `fade`（淡入系数）。
+    ///
+    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
     fn command_from_glyph_run(
         run: &TargetGlyphRun,
         fade: f64,
-        target: &TargetLayoutDescriptor,
+        _target: &TargetLayoutDescriptor,
     ) -> Option<DrawCommand> {
         if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
             return None;
@@ -487,18 +535,14 @@ impl SceneTransition {
         if opacity <= 0.0 {
             return None;
         }
-        // 文档坐标减去滚动偏移 → 视口坐标。
-        let viewport_rect = CanvasRect::new(
-            run.document_rect.x - target.scroll.x,
-            run.document_rect.y - target.scroll.y,
-            run.document_rect.w,
-            run.document_rect.h,
-        );
+        // Issue #901 问题2：直接使用文档坐标，不减滚动偏移。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        let doc_rect = run.document_rect;
         Some(DrawCommand::text_fragment(
             run.snapshot_id,
             run.source_uv,
-            viewport_rect,
-            target.clip,
+            doc_rect,
+            _target.clip,
             opacity,
             super::ownership::OwnershipRule::AnimatedText,
             // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
@@ -512,10 +556,13 @@ impl SceneTransition {
     /// `source_uv` 宽度从 `full_width * progress` 计算，
     /// `target_rect` 宽度也按 `progress` 展开。
     /// **不是 opacity=progress**——用裁剪揭示而非透明度淡入。
+    ///
+    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
     fn command_for_inserting(
         run: &TargetGlyphRun,
         progress: f64,
-        target: &TargetLayoutDescriptor,
+        _target: &TargetLayoutDescriptor,
     ) -> Option<DrawCommand> {
         if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
             return None;
@@ -535,17 +582,19 @@ impl SceneTransition {
             revealed_uv_w,
             run.source_uv.h,
         );
-        let viewport_rect = CanvasRect::new(
-            run.document_rect.x - target.scroll.x,
-            run.document_rect.y - target.scroll.y,
+        // Issue #901 问题2：直接使用文档坐标，不减滚动偏移。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        let doc_rect = CanvasRect::new(
+            run.document_rect.x,
+            run.document_rect.y,
             revealed_doc_w,
             run.document_rect.h,
         );
         Some(DrawCommand::text_fragment(
             run.snapshot_id,
             source_uv,
-            viewport_rect,
-            target.clip,
+            doc_rect,
+            _target.clip,
             1.0, // 用裁剪揭示，不用透明度
             super::ownership::OwnershipRule::AnimatedText,
             run.byte_range,
@@ -688,6 +737,7 @@ mod tests {
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
                 byte_range: (0, 5),
+                source_revision: EditorRevision::initial(),
             }],
             caret: None,
             scroll: PresentedScroll::default(),
@@ -988,6 +1038,8 @@ mod tests {
 
     #[test]
     fn target_scroll_offsets_glyph_run() {
+        // Issue #901 问题2：target_rect 始终使用文档坐标，不减 scroll_y。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y) 变换。
         let target = TargetLayoutDescriptor {
             layout_revision: LayoutRevision::initial(),
             glyph_runs: vec![TargetGlyphRun {
@@ -1015,8 +1067,9 @@ mod tests {
             .iter()
             .find(|c| c.ownership == OwnershipRule::AnimatedText)
             .expect("target glyph run must produce a command");
-        // 文档坐标 (100, 200) 减去滚动 (10, 50) → 视口 (90, 150)。
-        assert!((cmd.target_rect.x - 90.0).abs() < 1e-9);
-        assert!((cmd.target_rect.y - 150.0).abs() < 1e-9);
+        // Issue #901 问题2：target_rect 是文档坐标 (100, 200)，不减 scroll。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        assert!((cmd.target_rect.x - 100.0).abs() < 1e-9);
+        assert!((cmd.target_rect.y - 200.0).abs() < 1e-9);
     }
 }

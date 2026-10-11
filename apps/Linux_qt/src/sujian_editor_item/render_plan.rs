@@ -8,19 +8,26 @@ use crate::sujian_editor_item::edit_motion::DeleteEdge;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
+    /// Issue #901 问题2：文档坐标 x（不含滚动偏移）。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
     pub x: f64,
+    /// Issue #901 问题2：文档坐标 y（不含滚动偏移）。
     pub y: f64,
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
-    /// Issue #901 问题4：裁剪矩形（画布/视口坐标）。
+    /// Issue #901 问题4：裁剪矩形（文档坐标）。
     ///
     /// 渲染时只绘制 `target_rect ∩ clip_rect`。由 `canvas_draw_plan_to_glyph_infos`
     /// 从 `DrawCommand.clip_rect` 填充。`render_text_animation_layer` 用它对
     /// target_rect 和 source_uv 做预裁剪，使动画纹理的 reveal/conceal 裁剪
     /// 真正作用到 Qt 图形层，不再只靠静态层排除。
+    ///
+    /// Issue #901 问题3：这是动画层的**动态 clip**，按 `progress` 更新。
+    /// 与静态层排除区（`static_exclusion_rects`）是不同的两个概念：
+    /// 静态排除区覆盖完整目标范围（与 progress 无关），动态 clip 随 progress 变化。
     pub clip_rect: SourceRect,
     /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
     pub logical_range: (usize, usize),

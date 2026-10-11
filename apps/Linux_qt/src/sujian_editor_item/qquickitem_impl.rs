@@ -443,10 +443,10 @@ impl QQuickItem for SujianEditorItem {
                     &render_plan,
                     scroll_y,
                     vp_h,
-                    // Issue #901 问题3：绑定产生这帧实际绘制计划时的 Core revision，
-                    // 而非直接读取当前 pipeline text_revision（后者可能在帧提交前
-                    // 已被新编辑推进）。
-                    self.pipeline.text_revision(),
+                    // Issue #901 问题1：不再传 bound_revision（pipeline.text_revision()）。
+                    // build_presented_scene_from_frame 从 canvas_plan.source_revision /
+                    // target_revision / pose_progress 读取真实值，不硬编码 1.0，
+                    // 也不在绘制尾部重新读取正文 revision 冒充计划版本。
                     self.next_render_frame_id,
                     // geometry_id 用 visual_revision 标识排版几何版本。
                     self.pipeline.visual_revision(),
@@ -753,9 +753,17 @@ impl SujianEditorItem {
     /// 从 `CursorRenderState` 转换为 `PresentedCaret`，
     /// 从 scroll_y 转换为 `PresentedScroll`。
     ///
+    /// Issue #901 问题1：
+    /// - `pose_progress` 从 `canvas_plan.pose_progress` 读取（本次采样的真实
+    ///   `VisualPose.progress`），不再硬编码 1.0。
+    /// - `source_revision` 从 `canvas_plan.source_revision` 读取（产生计划时
+    ///   绑定的旧贡献来源 revision），不再取外部 `pipeline.text_revision()`。
+    /// - 每条 `PixelContribution` 携带自己的 `source_revision`：
+    ///   `StaticText`（存活字/删除字）→ `canvas_plan.source_revision`，
+    ///   `AnimatedText`（新增字）→ `canvas_plan.target_revision`。
+    ///   混合 old/new 的半成品帧中，旧贡献标旧 revision、新贡献标 target revision。
+    ///
     /// Issue #901 问题3：
-    /// - `source_revision` 使用产生这帧实际绘制计划时绑定的 Core revision
-    ///   （`bound_revision`），而非直接读取当前 pipeline text_revision。
     /// - `document_session`、`frame_id`、`geometry_id` 使用真实值而非常量。
     /// - 每个 `PixelContribution` 的 `byte_range` 从 `DrawCommand.byte_range` 获取，
     ///   不硬编码 `(0, 0)`。
@@ -765,7 +773,6 @@ impl SujianEditorItem {
         render_plan: &super::render_plan::RenderPlan,
         scroll_y: f64,
         viewport_h: f64,
-        bound_revision: u64,
         frame_id: u64,
         geometry_id: u64,
     ) -> Option<super::visual_canvas::PresentedScene> {
@@ -773,24 +780,38 @@ impl SujianEditorItem {
             CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedCaret,
             PresentedScene, PresentedScroll,
         };
-        use writer_core::editor::EditorRevision;
+        use super::visual_canvas::OwnershipRule;
 
-        // Issue #901 问题3：使用绑定的 revision，而非当前 pipeline text_revision。
-        let source_revision = EditorRevision::new(bound_revision);
+        // Issue #901 问题1：从 canvas_plan 读取真实的 source/target revision 和
+        // pose_progress，不硬编码 1.0，不取外部 pipeline.text_revision()。
+        let plan_source_revision = canvas_plan.source_revision;
+        let plan_target_revision = canvas_plan.target_revision;
+        let pose_progress = canvas_plan.pose_progress.clamp(0.0, 1.0);
 
         // 从 canvas_plan 的 TextFragment 命令转换为 PixelContribution 列表。
+        // Issue #901 问题1：每条贡献携带自己的 source_revision。
         // Issue #901 问题3：byte_range 从 DrawCommand.byte_range 获取，不硬编码 (0,0)。
         let pixel_contributions: Vec<PixelContribution> = canvas_plan
             .commands
             .iter()
             .filter(|cmd| cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment)
-            .map(|cmd| PixelContribution {
-                snapshot_id: cmd.snapshot_id,
-                source_uv: cmd.source_uv,
-                document_rect: cmd.target_rect,
-                visible_clip: cmd.clip_rect,
-                opacity: cmd.opacity,
-                byte_range: cmd.byte_range,
+            .map(|cmd| {
+                // Issue #901 问题1：根据 ownership 推导每条贡献的 source_revision。
+                // StaticText（存活字/删除字）→ plan_source_revision（旧贡献）。
+                // AnimatedText（新增字）→ plan_target_revision（新贡献）。
+                let contrib_revision = match cmd.ownership {
+                    OwnershipRule::AnimatedText => plan_target_revision,
+                    _ => plan_source_revision,
+                };
+                PixelContribution {
+                    snapshot_id: cmd.snapshot_id,
+                    source_uv: cmd.source_uv,
+                    document_rect: cmd.target_rect,
+                    visible_clip: cmd.clip_rect,
+                    opacity: cmd.opacity,
+                    byte_range: cmd.byte_range,
+                    source_revision: contrib_revision,
+                }
             })
             .collect();
 
@@ -813,11 +834,13 @@ impl SujianEditorItem {
         };
 
         Some(PresentedScene {
-            source_revision,
+            // Issue #901 问题1：使用计划绑定的 source_revision，不取外部 revision。
+            source_revision: plan_source_revision,
             document_session: self.document_session,
             frame_id,
             geometry_id,
-            pose_progress: 1.0,
+            // Issue #901 问题1：使用真实的 pose_progress，不硬编码 1.0。
+            pose_progress,
             clip: CanvasRect::new(0.0, 0.0, self.bounding_width(), viewport_h),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

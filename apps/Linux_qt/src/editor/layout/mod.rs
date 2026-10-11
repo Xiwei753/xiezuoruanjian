@@ -399,7 +399,7 @@ impl EditorLayout {
                 current_gen,
                 affected_start,
                 affected_end,
-                prev_snapshot.as_ref(),
+                prev_snapshot,
                 &mut self.paragraph_store,
                 &mut self.height_index,
             );
@@ -604,6 +604,19 @@ impl EditorLayout {
         affinity: CaretAffinity,
     ) -> f64 {
         calculate_cursor_x_for_line(line, cursor, affinity, snapshot)
+    }
+
+    /// Issue #901 问题4: 获取上一次排版产生的 `CanonicalDocumentVisualSnapshot` 的只读引用。
+    ///
+    /// `snapshot()` 在增量排版路径中会把结果存入 `last_snapshot`。
+    /// 普通编辑路径通过此方法获取 canonical snapshot，用于构建 `EditorLayoutSnapshot`
+    ///（含 QImage/cluster），不需要再走 `build_editor_layout_snapshot` 的全篇排版路径。
+    ///
+    /// 返回 `None` 表示尚未排版（初始化/参数变化后 invalidate）。
+    pub fn last_canonical_snapshot(
+        &self,
+    ) -> Option<&CanonicalDocumentVisualSnapshot> {
+        self.last_snapshot.as_ref()
     }
 
     /// Issue #748: 用 QFontMetricsF::horizontalAdvance 测量文本宽度（纯 QFont 测量），

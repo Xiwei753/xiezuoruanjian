@@ -44,15 +44,25 @@ pub(crate) struct CanvasController {
     text_frontier: TextFrontier,
     /// 当前设置。
     settings: CanvasSettings,
+    /// Issue #901 问题6：预期 document session id。
+    ///
+    /// `on_frame_committed` 永远与此值比对，而不是只与当前 `PresentedScene` 的
+    /// session 比对。切章时 `reset_for_new_document` 把此值设为新 session，
+    /// 保证刚 reset 后（`presented_scene = None`）旧 session 的迟到帧即使没被
+    /// mailbox 完全隔绝，也不会被注册成新章第一张场景。
+    expected_session: u64,
 }
 
 impl CanvasController {
     /// 创建画布控制器。
     ///
     /// `initial_revision` 是当前 Core 的 revision（也是初始 presented revision）。
+    /// `initial_session` 是当前 document session id，`on_frame_committed` 只接受
+    /// 此 session 的帧。
     pub(crate) fn new(
         settings: CanvasSettings,
         initial_revision: EditorRevision,
+        initial_session: u64,
         now_ms: f64,
     ) -> Self {
         let frame_clock = FrameClock::new(
@@ -68,6 +78,7 @@ impl CanvasController {
             target_layout: None,
             text_frontier,
             settings,
+            expected_session: initial_session,
         }
     }
 
@@ -111,37 +122,44 @@ impl CanvasController {
 
     /// 帧提交回执（Qt `afterFrameEnd`）。
     ///
-    /// 更新 `PresentedScene` 和 `RevisionChain`：如果该帧的 `source_revision`
-    /// 等于当前 `latest_revision` **且画面真正达到终点**（`is_settled`），
-    /// 画面已追上 Core，累计映射归零。
+    /// 更新 `PresentedScene` 和 `RevisionChain`：如果该帧的所有像素贡献的
+    /// `source_revision` 都等于当前 `latest_revision` **且画面真正达到终点**
+    /// （`pose_progress` 接近 1.0），画面已追上 Core，累计映射归零。
     /// 同时更新 `FrameClock` 的已提交姿态。
+    ///
+    /// Issue #901 问题1：
+    /// - 不再用单一的 `scene.source_revision == latest` 判断 `reset_to_committed`。
+    ///   混合 old/new 的半成品帧中，旧贡献的 `source_revision` 是旧 revision，
+    ///   新贡献的 `source_revision` 是 target revision。只有当**所有可见贡献**
+    ///   都来自 `latest_revision` 且 `pose_progress` 真正接近 1.0 时，才认为
+    ///   画面已完全追上 Core，可以 reset。
+    /// - `pose_progress` 从 `PresentedScene.pose_progress` 读取（由渲染层填入
+    ///   真实值），不从 `frame_clock.frame_now` 估算理论进度。
     ///
     /// Issue #901 问题3：
     /// - 只接受同 `document_session` 且 `frame_id` 比当前 presented 更新的帧。
-    ///   如果帧的 session 不同或 frame_id 更旧，忽略（防止旧画面覆盖新 scene）。
-    /// - 不再以 `frame_revision == latest` 单独判定 `reset_to_committed`。
-    ///   只有在 `is_settled` 为真（progress 真正接近 1.0）**且**
-    ///   `frame_revision == latest` 时才 reset。如果 progress < 1，保留
-    ///   revision_chain 映射，因为画面还在过渡中。
-    /// - progress 从 `PresentedScene.pose_progress` 读取（由渲染层填入真实值），
-    ///   不从 `frame_clock.frame_now` 估算理论进度。
     pub(crate) fn on_frame_committed(&mut self, scene: PresentedScene, now_ms: f64) {
-        // Issue #901 问题3：只接受同 session 且更新的帧。
+        // Issue #901 问题6：永远与 controller 的预期 session 比对，而不是只与
+        // 当前 `PresentedScene` 的 session 比对。刚 `reset_for_new_document` 后
+        // `presented_scene = None`，如果只与 `presented_scene` 比对，旧 session
+        // 的迟到帧即使没被 mailbox 完全隔绝，依旧可能被注册成新章第一张场景。
+        // 与 `expected_session` 比对保证旧 session 的帧一律被拒绝。
+        if scene.document_session != self.expected_session {
+            // 不同 session：忽略旧 session 的迟到帧。
+            return;
+        }
+
+        // Issue #901 问题3：同 session 内只接受 frame_id 更新的帧。
         if let Some(current) = &self.presented_scene {
-            if scene.document_session != current.document_session {
-                // 不同 session：忽略旧 session 的迟到帧。
-                return;
-            }
             if scene.frame_id <= current.frame_id {
                 // 同 session 但 frame_id 更旧或相同：忽略乱序帧。
                 return;
             }
         }
 
-        let frame_revision = scene.source_revision;
         let latest = self.revision_chain.latest_revision();
 
-        // Issue #901 问题3：progress 从 PresentedScene.pose_progress 读取，
+        // Issue #901 问题1：progress 从 PresentedScene.pose_progress 读取，
         // 不从 frame_clock.frame_now 估算。pose_progress 由渲染层在
         // afterFrameEnd 时填入该帧实际对应的 VisualPose.progress。
         let progress = scene.pose_progress.clamp(0.0, 1.0);
@@ -150,14 +168,25 @@ impl CanvasController {
         let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, progress);
         self.frame_clock.commit_pose(pose, now_ms);
 
-        // Issue #901 问题3：只有在帧的 pose_progress 真正接近 1.0
-        // 且 frame_revision == latest 时才 reset_to_committed。
-        // 用 scene.pose_progress（渲染层填入的真实值）判断，不用
-        // frame_clock.is_settled（理论估算值）——帧的实际进度才是真实事实。
-        // 如果 progress < 1，画面还在过渡中，保留 revision_chain 映射，
-        // 后续"输入 A、露出半字、删除 A"必须保留 A 的当前可见部分和旧→新逻辑映射。
-        if frame_revision == latest && progress >= 1.0 - 0.001 {
-            self.revision_chain.reset_to_committed(frame_revision);
+        // Issue #901 问题1：只有当所有可见像素贡献的 source_revision 都等于
+        // latest_revision 且 pose_progress 真正接近 1.0 时，才 reset_to_committed。
+        // 混合 old/new 的半成品帧中，旧贡献标旧 revision、新贡献标 target revision，
+        // 只要还有任何旧贡献可见，就不能 reset——画面还在过渡中。
+        // 空贡献列表（无可见内容）且 progress >= 1.0 也视为已追上 Core。
+        let all_contributions_from_latest = scene
+            .pixel_contributions
+            .iter()
+            .filter(|c| c.has_visible_area())
+            .all(|c| c.source_revision == latest);
+        let has_visible_contributions = scene
+            .pixel_contributions
+            .iter()
+            .any(|c| c.has_visible_area());
+        let frame_settled = progress >= 1.0 - 0.001
+            && all_contributions_from_latest
+            && (has_visible_contributions || scene.pixel_contributions.is_empty());
+        if frame_settled {
+            self.revision_chain.reset_to_committed(latest);
         }
 
         // 更新 TextFrontier 的可见范围为已提交帧的可见范围。
@@ -200,11 +229,66 @@ impl CanvasController {
     /// （丢弃旧章的目标布局）。保留 `revision_chain` 的 latest_revision
     /// （Core revision 仍正确）、`frame_clock`、`text_frontier` 和 `settings`。
     ///
-    /// 切章后下一帧 `frame()` 会从新 target 生成静态画面，
-    /// `on_frame_committed` 会注册新 session 的 `PresentedScene`。
+    /// **注意**：此方法不重置 `revision_chain` / `frame_clock` / `text_frontier`
+    /// 和 `expected_session`。切章时应优先使用 `reset_for_new_document`，它会
+    /// 用新章的 Core revision / session / caret / scroll 完全重新初始化这些状态。
+    /// 此方法保留供不需要重置 revision chain 的场景使用。
     pub(crate) fn reset(&mut self) {
         self.presented_scene = None;
         self.target_layout = None;
+    }
+
+    /// Issue #901 问题6：切章/清文档时完全重置画布状态。
+    ///
+    /// 与 `reset()` 不同，此方法**完全重新初始化**所有视觉状态：
+    /// - `revision_chain`：用新章的 `core_revision` 重新创建（presented == latest，
+    ///   累计映射归零），不继承旧章的字节映射。
+    /// - `frame_clock`：重新创建（`last_committed_pose = None`，时间重置），
+    ///   不继承旧章的动画时间/光标位置。
+    /// - `text_frontier`：用 `initial_caret` 重新创建（空可见范围），
+    ///   不继承旧章的文字前沿。
+    /// - `presented_scene` / `target_layout`：清空。
+    /// - `expected_session`：设为 `session`，使 `on_frame_committed` 只接受
+    ///   新 session 的帧。
+    ///
+    /// `initial_caret` 是新章光标的 byte offset，用于初始化 `TextFrontier` 的
+    /// 可见范围起点。`initial_scroll` 是新章的垂直滚动位置，用于初始化
+    /// `FrameClock` 的初始姿态 scroll_position。
+    pub(crate) fn reset_for_new_document(
+        &mut self,
+        session: u64,
+        core_revision: EditorRevision,
+        initial_caret: usize,
+        initial_scroll: f64,
+        now_ms: f64,
+    ) {
+        // 重新初始化 revision_chain：presented == latest == core_revision，累计映射归零。
+        self.revision_chain = RevisionChain::new(core_revision);
+
+        // 重新初始化 frame_clock：清空 last_committed_pose，重置时间。
+        // 初始姿态的 scroll_position 用 initial_scroll，caret 从 (0,0) 开始
+        // （具体光标位置由后续 target_layout 的 retarget 设定）。
+        let initial_pose = VisualPose {
+            progress: 0.0,
+            caret_position: super::presented_scene::CanvasVec2::new(0.0, 0.0),
+            scroll_position: super::presented_scene::CanvasVec2::new(0.0, initial_scroll),
+        };
+        self.frame_clock = FrameClock::new(
+            initial_pose,
+            self.settings.response_duration_ms,
+            now_ms,
+        );
+
+        // 重新初始化 text_frontier：可见范围 = (initial_caret, initial_caret)（空），
+        // 行边界为空（排版后由 set_line_boundaries 更新）。
+        self.text_frontier = TextFrontier::new(initial_caret, initial_caret, Vec::new(), 0.5);
+
+        // 清空 presented_scene 和 target_layout。
+        self.presented_scene = None;
+        self.target_layout = None;
+
+        // 设置 expected_session，使 on_frame_committed 只接受新 session 的帧。
+        self.expected_session = session;
     }
 
     /// 产生绘制计划。
@@ -462,6 +546,7 @@ mod tests {
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
                 byte_range: (0, 5),
+                source_revision: EditorRevision::initial(),
             }],
             caret: None,
             scroll: PresentedScroll::default(),
@@ -473,6 +558,7 @@ mod tests {
         let ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         assert!(ctrl.presented_scene().is_none());
@@ -485,6 +571,7 @@ mod tests {
         let ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         let plan = ctrl.frame(16.0);
@@ -496,6 +583,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         let map = OffsetMap {
@@ -519,6 +607,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         // 第一笔：有 offset_map。
@@ -551,6 +640,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         let map = OffsetMap {
@@ -567,6 +657,10 @@ mod tests {
         // 提交追上 Core 的帧。
         let mut scene = sample_presented();
         scene.source_revision = EditorRevision::new(1);
+        // 帧的所有像素贡献也必须来自 latest revision，frame_settled 才为 true。
+        for c in &mut scene.pixel_contributions {
+            c.source_revision = EditorRevision::new(1);
+        }
         ctrl.on_frame_committed(scene, 32.0);
         assert!(!ctrl.revision_chain().has_pending_edits());
 
@@ -580,6 +674,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         ctrl.on_frame_committed(sample_presented(), 0.0);
@@ -595,6 +690,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::initial(),
+            1,
             0.0,
         );
         let mut settings = CanvasSettings::default();
@@ -610,6 +706,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         ctrl.on_frame_committed(sample_presented(), 0.0);
@@ -633,6 +730,7 @@ mod tests {
         let mut ctrl = CanvasController::new(
             CanvasSettings::default(),
             EditorRevision::new(0),
+            1,
             0.0,
         );
         let target = sample_target();
@@ -642,5 +740,97 @@ mod tests {
         let (ts, te) = ctrl.text_frontier().target_range();
         assert_eq!(ts, 0);
         assert_eq!(te, 5);
+    }
+
+    /// Issue #901 问题6：切章后 reset_for_new_document 完全重置画布状态，
+    /// 旧 session 的迟到帧被拒绝，新 session 的帧被接受。
+    #[test]
+    fn controller_reset_for_new_document_rejects_old_session_frames() {
+        let mut ctrl = CanvasController::new(
+            CanvasSettings::default(),
+            EditorRevision::new(0),
+            1, // initial_session = 1
+            0.0,
+        );
+
+        // 旧章：编辑推进 revision 到 1，提交一帧。
+        let map = OffsetMap {
+            entries: vec![writer_core::editor::OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(0),
+                new_byte_offset: Utf8ByteOffset::unchecked(0),
+                length: 5,
+                kind: writer_core::editor::OffsetMapKind::Identity,
+            }],
+        };
+        ctrl.on_edit_result(&dummy_edit_result(0, 1, Some(map)), &sample_target(), 16.0);
+        assert!(ctrl.revision_chain().has_pending_edits());
+
+        // 切章：reset_for_new_document 用新 session=2、新 core_revision=10。
+        ctrl.reset_for_new_document(2, EditorRevision::new(10), 0, 0.0, 32.0);
+
+        // revision_chain 应被重新初始化：presented == latest == 10，无 pending edits。
+        assert_eq!(
+            ctrl.revision_chain().presented_revision(),
+            EditorRevision::new(10)
+        );
+        assert_eq!(
+            ctrl.revision_chain().latest_revision(),
+            EditorRevision::new(10)
+        );
+        assert!(!ctrl.revision_chain().has_pending_edits());
+
+        // frame_clock 的 last_committed_pose 应被清空。
+        assert!(ctrl.frame_clock().last_committed_pose().is_none());
+
+        // presented_scene 和 target_layout 应被清空。
+        assert!(ctrl.presented_scene().is_none());
+        assert!(ctrl.target_layout().is_none());
+
+        // 旧 session（session=1）的迟到帧应被拒绝。
+        let mut old_scene = sample_presented();
+        old_scene.document_session = 1; // 旧 session
+        old_scene.frame_id = 999; // 比任何之前的 frame_id 都新
+        ctrl.on_frame_committed(old_scene, 48.0);
+        assert!(
+            ctrl.presented_scene().is_none(),
+            "old session frame must be rejected"
+        );
+
+        // 新 session（session=2）的帧应被接受。
+        let mut new_scene = sample_presented();
+        new_scene.document_session = 2; // 新 session
+        new_scene.frame_id = 1;
+        new_scene.source_revision = EditorRevision::new(10);
+        for c in &mut new_scene.pixel_contributions {
+            c.source_revision = EditorRevision::new(10);
+        }
+        ctrl.on_frame_committed(new_scene, 64.0);
+        assert!(
+            ctrl.presented_scene().is_some(),
+            "new session frame must be accepted"
+        );
+    }
+
+    /// Issue #901 问题6：reset_for_new_document 不继承旧章的 text_frontier。
+    #[test]
+    fn controller_reset_for_new_document_resets_text_frontier() {
+        let mut ctrl = CanvasController::new(
+            CanvasSettings::default(),
+            EditorRevision::new(0),
+            1,
+            0.0,
+        );
+
+        // 旧章：编辑使 text_frontier 的 target 更新到 (0, 5)。
+        ctrl.on_edit_result(&dummy_edit_result(0, 1, None), &sample_target(), 16.0);
+        let (ts, te) = ctrl.text_frontier().target_range();
+        assert_eq!((ts, te), (0, 5));
+
+        // 切章：用 initial_caret=3 重置。
+        ctrl.reset_for_new_document(2, EditorRevision::new(5), 3, 0.0, 32.0);
+
+        // text_frontier 的可见范围应被重置为 (3, 3)（空范围，光标处）。
+        let (vs, ve) = ctrl.text_frontier().visible_range();
+        assert_eq!((vs, ve), (3, 3), "text_frontier must be reset to initial_caret");
     }
 }

@@ -123,6 +123,12 @@ impl Default for CanvasAffine2 {
 /// `SceneTransition` 据此通过 `RevisionChain` 判断每个贡献是存活、删除
 /// 还是新插入，从而实现吞字/吐字/存活字移动而非全文淡入淡出。
 ///
+/// Issue #901 问题1：`source_revision` 携带该贡献自己的来源 Core revision。
+/// 旧贡献（存活字/删除字）标 `presented.source_revision`，新贡献（新增字）
+/// 标 target revision。`controller.rs` 据此判断每条贡献的真实来源，
+/// 混合 old/new 的半成品帧不能简单用单一 `scene.source_revision` 表示
+/// 整张画面的字节身份。
+///
 /// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`，而非 u64 hash。
 /// 动画层通过完整 `LineSnapshotId` 查询 `TextureCache`，不再从 u64 反解。
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +148,13 @@ pub(crate) struct PixelContribution {
     /// Issue #901 阻塞 2：`SceneTransition` 用此字段通过 `RevisionChain`
     /// 判断该贡献在最新 revision 中是存活、删除还是新插入。
     pub byte_range: (usize, usize),
+    /// Issue #901 问题1：该贡献对应的 Core source revision。
+    ///
+    /// 旧贡献（存活字/删除字）标 `presented.source_revision`，
+    /// 新贡献（新增字）标 target revision。
+    /// `controller.rs` 据此判断每条贡献的真实来源，混合 old/new 的半成品帧
+    /// 不能简单用单一 `scene.source_revision` 表示整张画面的字节身份。
+    pub source_revision: EditorRevision,
 }
 
 impl PixelContribution {
@@ -268,6 +281,7 @@ mod tests {
             visible_clip: CanvasRect::new(10.0, 10.0, clip_w, clip_h),
             opacity,
             byte_range: (0, 100),
+            source_revision: EditorRevision::initial(),
         }
     }
 

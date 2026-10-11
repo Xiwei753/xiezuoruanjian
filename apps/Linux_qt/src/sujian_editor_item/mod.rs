@@ -79,7 +79,7 @@ use text_utils::{
     prev_char_boundary,
 };
 
-use writer_core::editor::EditorTransactionCause;
+use writer_core::editor::{EditorRevision, EditorTransactionCause};
 
 // Issue #735: 重新导出 Linux 私有视觉类型，供 `use super::*` 的子模块使用。
 pub(crate) use edit_motion::CursorRect;
@@ -815,9 +815,21 @@ impl SujianEditorItem {
         // Issue #901 问题3：切章/清文档时递增 document_session，
         // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。
         self.document_session = self.document_session.wrapping_add(1);
-        // Issue #901 问题3：重置 VisualCanvas 的 PresentedScene 和
-        // TargetLayoutDescriptor，丢弃旧章的视觉真相和目标布局。
-        self.pipeline.visual_canvas_mut().reset();
+        // Issue #901 问题6：向画布传入新 session/revision/caret/scroll，
+        // 完全重新初始化 RevisionChain / FrameClock / TextFrontier，
+        // 不继承旧章的字节映射、动画时间和文字前沿。
+        let core_revision = EditorRevision::new(self.pipeline.mirror().revision());
+        let initial_caret = self.pipeline.cursor();
+        let initial_scroll = 0.0; // 切章后回到顶部
+        self.pipeline
+            .visual_canvas_mut()
+            .reset_for_new_document(
+                self.document_session,
+                core_revision,
+                initial_caret,
+                initial_scroll,
+                0.0,
+            );
         // Issue #901 问题3/问题6：清 frame_submission_mailbox，
         // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
         self.frame_submission_mailbox.discard_all_frames();

@@ -10,6 +10,13 @@
 //! - `DrawCommand` 是不可变值类型：一旦创建不再修改。`Ownership::resolve`
 //!   通过 clone + 修改 `clip_rect` 产生裁剪后的新命令，不原地修改。
 //!
+//! ## 坐标契约（Issue #901 问题2）
+//!
+//! `DrawCommand.target_rect` 和 `DrawCommand.clip_rect` 始终使用**文档坐标**
+//! （不含滚动偏移）。C++ 动画层（`AnimationLayerNode`）和静态层
+//! （`QSGTransformNode`）各自统一施加一次 `translate(0, -scroll_y)` 变换。
+//! Rust 侧不在 `target_rect` 中预减 `scroll_y`，避免滚动时被减两次。
+//!
 //! ## 纯 Rust
 //!
 //! 本模块不依赖 Qt C++ 类型。所有几何都是纯 Rust f64。
@@ -32,15 +39,37 @@ pub(crate) enum DrawCommandKind {
     Preedit,
 }
 
+/// Issue #901 问题3：静态层排除矩形 —— 动画画布接管的**完整目标范围**（文档坐标）。
+///
+/// 整个过渡期间与 `progress` 无关。静态正文层在这些区域挖空，由动画层绘制。
+/// 动画层的动态 clip 才按 `progress` 更新（在 `DrawCommand.target_rect` /
+/// `DrawCommand.clip_rect` 中）。
+///
+/// 与 `DrawCommand.target_rect` 的区别：
+/// - `DrawCommand.target_rect`：当前帧实际绘制的目标矩形（可能按 progress 缩短）。
+/// - `StaticExclusionRect.rect`：整个过渡期间动画画布接管的完整目标范围。
+///
+/// 只在接管集合改变时重建静态 QSGTextNode，不在每帧改变挖空矩形。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StaticExclusionRect {
+    /// 文档坐标系中的完整目标矩形（与 progress 无关）。
+    pub rect: CanvasRect,
+    /// 源纹理的行快照 id（用于纹理依赖检查）。
+    pub snapshot_id: LineSnapshotId,
+}
+
 /// 不可变单条绘制命令。
 ///
 /// 每条命令引用一个源纹理区域（`snapshot_id` + `source_uv`），将其绘制到
-/// 画布坐标系的 `target_rect`，受 `clip_rect` 裁剪，整体透明度乘以 `opacity`。
+/// **文档坐标系**的 `target_rect`，受 `clip_rect` 裁剪，整体透明度乘以 `opacity`。
 ///
 /// `snapshot_id` 为 `LineSnapshotId::none()` 表示纯色填充（用于光标、选区背景等
 /// 无纹理的绘制）。
 ///
 /// **不可变**：一旦创建不再修改。`Ownership::resolve` 通过 clone 产生新命令。
+///
+/// Issue #901 问题2：`target_rect` 和 `clip_rect` 始终使用**文档坐标**（不含滚动
+/// 偏移）。C++ 动画层和静态层各自统一施加一次 `translate(0, -scroll_y)`。
 ///
 /// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`（layout_revision +
 /// paragraph_id + visual_line_ordinal），而非 u64 hash。u64 hash 只在渲染器中
@@ -182,6 +211,18 @@ pub(crate) struct CanvasDrawPlan {
     pub source_revision: EditorRevision,
     /// Issue #901 问题3：该计划对应的最新 Core target revision。
     pub target_revision: EditorRevision,
+    /// Issue #901 问题1：本次采样的真实 `VisualPose.progress`（0.0 – 1.0）。
+    ///
+    /// 由 `SceneTransition::build_draw_plan` 从 `VisualPose.progress` 拷贝，
+    /// 供 `build_presented_scene_from_frame` 原样回填到 `PresentedScene.pose_progress`，
+    /// 不再硬编码 1.0。`controller.rs` 据此判断画面是否真正到达终点。
+    pub pose_progress: f64,
+    /// Issue #901 问题3：静态层排除矩形列表 —— 动画画布接管的完整目标范围。
+    ///
+    /// 整个过渡期间与 `progress` 无关。`scene_graph_renderer` 据此让静态正文层
+    /// 在这些区域挖空，由动画层绘制。动画层的动态 clip 按 `progress` 更新
+    /// （在 `commands` 中）。只在接管集合改变时重建静态 QSGTextNode。
+    pub static_exclusion_rects: Vec<StaticExclusionRect>,
 }
 
 impl CanvasDrawPlan {
@@ -196,6 +237,8 @@ impl CanvasDrawPlan {
             document_session: 0,
             source_revision: EditorRevision::initial(),
             target_revision: EditorRevision::initial(),
+            pose_progress: 0.0,
+            static_exclusion_rects: Vec::new(),
         }
     }
 
@@ -218,6 +261,8 @@ impl CanvasDrawPlan {
             document_session: 0,
             source_revision: EditorRevision::initial(),
             target_revision: EditorRevision::initial(),
+            pose_progress: 0.0,
+            static_exclusion_rects: Vec::new(),
         }
     }
 
@@ -225,7 +270,14 @@ impl CanvasDrawPlan {
     ///
     /// `build_presented_scene_from_frame` 可从返回的 `CanvasDrawPlan` 原样
     /// 拷贝 `frame_id` / `document_session` / `source_revision` /
-    /// `target_revision` 到下一张 `PresentedScene`，不依赖外部额外传参。
+    /// `target_revision` / `pose_progress` 到下一张 `PresentedScene`，不依赖
+    /// 外部额外传参。
+    ///
+    /// Issue #901 问题1：`pose_progress` 携带本次采样的真实 `VisualPose.progress`，
+    /// 不再硬编码 1.0。
+    ///
+    /// Issue #901 问题3：`static_exclusion_rects` 携带动画画布接管的完整目标范围，
+    /// 与 `progress` 无关，供静态层挖空。
     pub(crate) fn from_commands_with_metadata(
         now_ms: f64,
         caret_sample: CanvasVec2,
@@ -234,6 +286,8 @@ impl CanvasDrawPlan {
         document_session: u64,
         source_revision: EditorRevision,
         target_revision: EditorRevision,
+        pose_progress: f64,
+        static_exclusion_rects: Vec<StaticExclusionRect>,
     ) -> Self {
         let has_visible = commands.iter().any(DrawCommand::has_visible_area);
         Self {
@@ -245,6 +299,8 @@ impl CanvasDrawPlan {
             document_session,
             source_revision,
             target_revision,
+            pose_progress,
+            static_exclusion_rects,
         }
     }
 

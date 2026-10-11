@@ -227,7 +227,10 @@ pub fn prepare_incremental_visual_snapshot(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
-    previous_snapshot: Option<&CanonicalDocumentVisualSnapshot>,
+    // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
+    // visual_lines/paragraphs，避免全章 clone。调用方在 mod.rs 用 mem::take
+    // 取走 last_snapshot 的所有权后传入。
+    previous_snapshot: Option<CanonicalDocumentVisualSnapshot>,
     paragraph_store: &mut super::super::paragraph_layout_store::ParagraphLayoutStore,
     height_index: &mut super::super::paragraph_height_index::ParagraphHeightIndex,
 ) -> CanonicalDocumentVisualSnapshot {
