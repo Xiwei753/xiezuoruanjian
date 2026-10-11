@@ -247,6 +247,7 @@ mod tests {
     use super::*;
     use super::super::draw_plan::DrawCommandKind;
     use super::super::presented_scene::CanvasRect;
+    use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
 
     fn text_cmd(
         x: f64,
@@ -257,12 +258,13 @@ mod tests {
     ) -> DrawCommand {
         DrawCommand {
             kind: DrawCommandKind::TextFragment,
-            texture_id: 1,
+            snapshot_id: LineSnapshotId::new(1, 0, 0),
             source_uv: CanvasRect::new(0.0, 0.0, w, h),
             target_rect: CanvasRect::new(x, y, w, h),
             clip_rect: CanvasRect::new(x, y, w, h),
             opacity: 1.0,
             ownership,
+            byte_range: (0, 0),
         }
     }
 

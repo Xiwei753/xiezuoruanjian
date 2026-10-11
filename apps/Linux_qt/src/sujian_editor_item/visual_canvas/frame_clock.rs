@@ -180,6 +180,21 @@ impl FrameClock {
         self.last_committed_pose
     }
 
+    /// 判断当前姿态是否已到达目标（已稳定）。
+    ///
+    /// Issue #901 问题5：帧调度不再仅用 `opacity<1` 判断是否需要下一帧。
+    /// 改为由 `FrameClock` 是否到达终点决定。
+    ///
+    /// 只检查 `progress` 是否接近 1.0——progress=1.0 时所有几何自然到达
+    /// 目标位置（FLIP 插值在 progress=1.0 时返回 target_rect）。
+    /// 不单独检查 caret/scroll 位置，因为它们由 progress 统一驱动。
+    ///
+    /// `epsilon` 是 progress 的容差（如 0.01 表示 progress > 0.99 视为 settled）。
+    pub(crate) fn is_settled(&self, now_ms: f64, epsilon: f64) -> bool {
+        let current = self.frame_now(now_ms);
+        (current.progress - self.target_pose.progress).abs() < epsilon
+    }
+
     /// 计算指数衰减的收敛系数 alpha ∈ [0, 1)。
     ///
     /// `alpha = 1 - exp(-elapsed / response_time)`。

@@ -17,6 +17,8 @@
 
 use writer_core::editor::EditorRevision;
 
+use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
+
 // ── 纯 Rust 几何类型 ──
 
 /// 画布二维向量 / 点（纯 Rust，文档坐标或视口坐标由调用方契约决定）。
@@ -120,10 +122,13 @@ impl Default for CanvasAffine2 {
 /// `byte_range` 记录该贡献对应的 Core 逻辑 UTF-8 byte range，
 /// `SceneTransition` 据此通过 `RevisionChain` 判断每个贡献是存活、删除
 /// 还是新插入，从而实现吞字/吐字/存活字移动而非全文淡入淡出。
+///
+/// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`，而非 u64 hash。
+/// 动画层通过完整 `LineSnapshotId` 查询 `TextureCache`，不再从 u64 反解。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PixelContribution {
-    /// 源纹理 id（GPU texture cache key）。
-    pub texture_id: u64,
+    /// 源纹理的完整行快照 id。
+    pub snapshot_id: LineSnapshotId,
     /// 源纹理中的 UV 区域（纹理局部坐标，已乘 DPR）。
     pub source_uv: CanvasRect,
     /// 文档坐标系中的目标矩形（不含滚动偏移）。
@@ -250,7 +255,7 @@ mod tests {
 
     fn sample_contribution(clip_w: f64, clip_h: f64, opacity: f64) -> PixelContribution {
         PixelContribution {
-            texture_id: 1,
+            snapshot_id: LineSnapshotId::new(1, 0, 0),
             source_uv: CanvasRect::new(0.0, 0.0, 100.0, 100.0),
             document_rect: CanvasRect::new(10.0, 10.0, 100.0, 100.0),
             visible_clip: CanvasRect::new(10.0, 10.0, clip_w, clip_h),

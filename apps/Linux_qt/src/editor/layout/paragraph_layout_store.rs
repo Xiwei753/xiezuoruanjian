@@ -249,6 +249,12 @@ impl ParagraphLayoutStore {
     /// 用于初始化、文档加载或全局参数变化（宽度/字体/字号/行距）。
     /// 已有段落的 `ParagraphId` 尽量保留（按文档顺序对齐），
     /// 新段落分配新 Id，多余段落的 Id 丢弃。
+    ///
+    /// Issue #901 第二轮复核: 保留未变化段的排版结果
+    /// （layout_generation/cache_slot/height/visual_line_count/line_start）。
+    /// 只有 cache_key 变化的段落（内容或参数变了）才重置排版结果，
+    /// 需要重新走 QTextLayout。内容相同的段落保留旧 shaping/行数据/纹理，
+    /// 不重建全部 QTextLayout/静态 QSGTextNode。
     pub fn rebuild_from_text(
         &mut self,
         text: &str,
@@ -275,23 +281,49 @@ impl ParagraphLayoutStore {
                 width,
             );
 
-            // 尽量保留已有 Id（按文档顺序对齐）
-            let id = if i < self.entries.len() {
-                self.entries[i].id
+            // Issue #901 第二轮复核: 尽量保留已有 Id 和排版结果。
+            // 如果旧 entry 的 cache_key 与新 cache_key 相同（内容+参数没变），
+            // 保留 layout_generation/cache_slot/height/visual_line_count/line_start，
+            // 该段落不需要重新走 QTextLayout。
+            // 只有内容变化的段落才重置排版结果。
+            let (
+                id,
+                layout_generation,
+                cache_slot,
+                height,
+                visual_line_count,
+                line_start,
+            ) = if i < self.entries.len() {
+                let old = &self.entries[i];
+                if old.cache_key == cache_key {
+                    // 内容相同，保留 Id 和排版结果
+                    (
+                        old.id,
+                        old.layout_generation,
+                        old.cache_slot,
+                        old.height,
+                        old.visual_line_count,
+                        old.line_start,
+                    )
+                } else {
+                    // 内容不同，保留 Id 但重置排版结果
+                    (old.id, 0u64, -1, 0.0f64, 0usize, 0usize)
+                }
             } else {
-                self.allocate_id()
+                // 新段落，分配新 Id
+                (self.allocate_id(), 0u64, -1, 0.0f64, 0usize, 0usize)
             };
 
             new_entries.push(ParagraphLayoutEntry {
                 id,
                 cache_key,
-                layout_generation: 0,
-                cache_slot: -1,
+                layout_generation,
+                cache_slot,
                 document_byte_start: byte_offset,
                 paragraph_text_len: paragraph_text.len(),
-                height: 0.0,
-                visual_line_count: 0,
-                line_start: 0,
+                height,
+                visual_line_count,
+                line_start,
             });
 
             byte_offset += paragraph.len();
@@ -891,6 +923,48 @@ mod tests {
         assert_eq!(store.paragraph_id_at(0), Some(id0));
         // 第二段 Id 被丢弃
         assert_ne!(store.paragraph_id_at(0), Some(id1));
+    }
+
+    #[test]
+    fn rebuild_from_text_preserves_unchanged_layout_result() {
+        // Issue #901 第二轮复核: rebuild_from_text 应保留未变化段的排版结果，
+        // 只有内容变化的段落才重置 layout_generation/cache_slot/height。
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+
+        // 模拟排版完成：设置 layout_generation 和 height
+        store.update_layout_result(0, 42, 0, 20.0, 1, 0);
+        store.update_layout_result(1, 42, 1, 25.0, 1, 1);
+
+        // rebuild_from_text，段落 0 内容不变，段落 1 内容变化
+        store.rebuild_from_text("hello\nWORLD", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+
+        // 段落 0 内容不变，保留排版结果
+        let entry0 = store.entry(0).unwrap();
+        assert_eq!(entry0.layout_generation, 42);
+        assert_eq!(entry0.cache_slot, 0);
+        assert_eq!(entry0.height, 20.0);
+        assert_eq!(entry0.visual_line_count, 1);
+
+        // 段落 1 内容变化，重置排版结果
+        let entry1 = store.entry(1).unwrap();
+        assert_eq!(entry1.layout_generation, 0);
+        assert_eq!(entry1.cache_slot, -1);
+        assert_eq!(entry1.height, 0.0);
+    }
+
+    #[test]
+    fn rebuild_from_text_preserves_id_on_unchanged() {
+        // Issue #901 第二轮复核: rebuild_from_text 保留未变化段的 ParagraphId。
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+
+        // rebuild，内容不变
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_id_at(0), Some(id0));
+        assert_eq!(store.paragraph_id_at(1), Some(id1));
     }
 
     #[test]

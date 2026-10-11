@@ -16,6 +16,7 @@
 
 use super::ownership::OwnershipRule;
 use super::presented_scene::{CanvasRect, CanvasVec2};
+use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
 
 /// 绘制命令类型 —— 决定渲染层如何绘制该命令。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,18 +33,23 @@ pub(crate) enum DrawCommandKind {
 
 /// 不可变单条绘制命令。
 ///
-/// 每条命令引用一个源纹理区域（`texture_id` + `source_uv`），将其绘制到
+/// 每条命令引用一个源纹理区域（`snapshot_id` + `source_uv`），将其绘制到
 /// 画布坐标系的 `target_rect`，受 `clip_rect` 裁剪，整体透明度乘以 `opacity`。
 ///
-/// `texture_id` 为 0 表示纯色填充（用于光标、选区背景等无纹理的绘制）。
+/// `snapshot_id` 为 `LineSnapshotId::none()` 表示纯色填充（用于光标、选区背景等
+/// 无纹理的绘制）。
 ///
 /// **不可变**：一旦创建不再修改。`Ownership::resolve` 通过 clone 产生新命令。
+///
+/// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`（layout_revision +
+/// paragraph_id + visual_line_ordinal），而非 u64 hash。u64 hash 只在渲染器中
+/// 通过 `to_cache_key()` 生成 GPU 缓存 key，绝不反解成 `LineSnapshotId`。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DrawCommand {
     /// 命令类型。
     pub kind: DrawCommandKind,
-    /// 源纹理 id（GPU texture cache key）。0 表示纯色填充。
-    pub texture_id: u64,
+    /// 源纹理的完整行快照 id。`LineSnapshotId::none()` 表示纯色填充。
+    pub snapshot_id: LineSnapshotId,
     /// 源纹理中的 UV 区域（纹理局部坐标）。
     pub source_uv: CanvasRect,
     /// 目标矩形（画布/视口坐标）。
@@ -54,43 +60,53 @@ pub(crate) struct DrawCommand {
     pub opacity: f64,
     /// 像素归属规则（用于 `Ownership::resolve` 解决重叠）。
     pub ownership: OwnershipRule,
+    /// 该命令对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间）。
+    ///
+    /// Issue #901 问题3：从 `PixelContribution.byte_range` 或
+    /// `TargetGlyphRun.byte_range` 传递，供 `build_presented_scene_from_frame`
+    /// 构造 `PixelContribution` 时使用真实字节范围，不硬编码 `(0, 0)`。
+    /// 非文字命令（光标/选区/preedit）使用 `(0, 0)`。
+    pub byte_range: (usize, usize),
 }
 
 impl DrawCommand {
     /// 创建一条文字片段绘制命令。
     pub(crate) fn text_fragment(
-        texture_id: u64,
+        snapshot_id: LineSnapshotId,
         source_uv: CanvasRect,
         target_rect: CanvasRect,
         clip_rect: CanvasRect,
         opacity: f64,
         ownership: OwnershipRule,
+        byte_range: (usize, usize),
     ) -> Self {
         Self {
             kind: DrawCommandKind::TextFragment,
-            texture_id,
+            snapshot_id,
             source_uv,
             target_rect,
             clip_rect,
             opacity,
             ownership,
+            byte_range,
         }
     }
 
-    /// 创建一条光标绘制命令（纯色填充，`texture_id = 0`）。
+    /// 创建一条光标绘制命令（纯色填充，`snapshot_id = none()`）。
     pub(crate) fn caret(target_rect: CanvasRect, clip_rect: CanvasRect, opacity: f64) -> Self {
         Self {
             kind: DrawCommandKind::Caret,
-            texture_id: 0,
+            snapshot_id: LineSnapshotId::none(),
             source_uv: CanvasRect::zero(),
             target_rect,
             clip_rect,
             opacity,
             ownership: OwnershipRule::Cursor,
+            byte_range: (0, 0),
         }
     }
 
-    /// 创建一条选区背景绘制命令（纯色填充，`texture_id = 0`）。
+    /// 创建一条选区背景绘制命令（纯色填充，`snapshot_id = none()`）。
     pub(crate) fn selection_background(
         target_rect: CanvasRect,
         clip_rect: CanvasRect,
@@ -98,18 +114,19 @@ impl DrawCommand {
     ) -> Self {
         Self {
             kind: DrawCommandKind::SelectionBackground,
-            texture_id: 0,
+            snapshot_id: LineSnapshotId::none(),
             source_uv: CanvasRect::zero(),
             target_rect,
             clip_rect,
             opacity,
             ownership: OwnershipRule::Selection,
+            byte_range: (0, 0),
         }
     }
 
     /// 创建一条预输入绘制命令。
     pub(crate) fn preedit(
-        texture_id: u64,
+        snapshot_id: LineSnapshotId,
         source_uv: CanvasRect,
         target_rect: CanvasRect,
         clip_rect: CanvasRect,
@@ -117,12 +134,13 @@ impl DrawCommand {
     ) -> Self {
         Self {
             kind: DrawCommandKind::Preedit,
-            texture_id,
+            snapshot_id,
             source_uv,
             target_rect,
             clip_rect,
             opacity,
             ownership: OwnershipRule::Preedit,
+            byte_range: (0, 0),
         }
     }
 
@@ -199,18 +217,23 @@ mod tests {
         CanvasRect::new(x, y, w, h)
     }
 
+    fn sample_snapshot_id() -> LineSnapshotId {
+        LineSnapshotId::new(1, 0, 0)
+    }
+
     #[test]
     fn draw_command_text_fragment_construction() {
         let cmd = DrawCommand::text_fragment(
-            1,
+            sample_snapshot_id(),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             1.0,
             OwnershipRule::StaticText,
+            (0, 5),
         );
         assert_eq!(cmd.kind, DrawCommandKind::TextFragment);
-        assert_eq!(cmd.texture_id, 1);
+        assert_eq!(cmd.snapshot_id, sample_snapshot_id());
         assert!(cmd.has_visible_area());
     }
 
@@ -222,7 +245,7 @@ mod tests {
             1.0,
         );
         assert_eq!(cmd.kind, DrawCommandKind::Caret);
-        assert_eq!(cmd.texture_id, 0);
+        assert!(cmd.snapshot_id.is_none());
         assert_eq!(cmd.ownership, OwnershipRule::Cursor);
         assert!(cmd.has_visible_area());
     }
@@ -242,7 +265,7 @@ mod tests {
     #[test]
     fn draw_command_preedit() {
         let cmd = DrawCommand::preedit(
-            2,
+            LineSnapshotId::new(2, 0, 0),
             sample_rect(0.0, 0.0, 30.0, 20.0),
             sample_rect(10.0, 0.0, 30.0, 20.0),
             sample_rect(0.0, 0.0, 800.0, 600.0),
@@ -256,12 +279,13 @@ mod tests {
     #[test]
     fn draw_command_zero_clip_not_visible() {
         let cmd = DrawCommand::text_fragment(
-            1,
+            sample_snapshot_id(),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             CanvasRect::zero(),
             1.0,
             OwnershipRule::StaticText,
+            (0, 5),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -269,12 +293,13 @@ mod tests {
     #[test]
     fn draw_command_zero_opacity_not_visible() {
         let cmd = DrawCommand::text_fragment(
-            1,
+            sample_snapshot_id(),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             0.0,
             OwnershipRule::StaticText,
+            (0, 5),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -290,12 +315,13 @@ mod tests {
     #[test]
     fn canvas_draw_plan_from_commands() {
         let cmd = DrawCommand::text_fragment(
-            1,
+            sample_snapshot_id(),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             sample_rect(0.0, 0.0, 10.0, 10.0),
             1.0,
             OwnershipRule::StaticText,
+            (0, 5),
         );
         let plan = CanvasDrawPlan::from_commands(
             16.0,

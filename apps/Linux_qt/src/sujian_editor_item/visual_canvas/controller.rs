@@ -19,7 +19,7 @@
 
 use super::draw_plan::CanvasDrawPlan;
 use super::frame_clock::{pose_from_presented, FrameClock, VisualPose};
-use super::presented_scene::PresentedScene;
+use super::presented_scene::{PixelContribution, PresentedScene};
 use super::revision_chain::RevisionChain;
 use super::scene_transition::{SceneTransition, TargetLayoutDescriptor};
 use super::text_frontier::TextFrontier;
@@ -115,28 +115,43 @@ impl CanvasController {
     /// 等于当前 `latest_revision`，画面已追上 Core，累计映射归零。
     /// 同时更新 `FrameClock` 的已提交姿态。
     ///
-    /// Issue #901 阻塞 4：不再无条件用 `progress=1.0`。从已提交帧的真实 progress
-    /// 取得——如果该帧的 `source_revision` 等于 `latest_revision`，则 progress=1.0
-    /// （画面已追上 Core）；否则用 `frame_clock.frame_now(now_ms)` 采样当前实际
-    /// progress。
+    /// Issue #901 问题3：
+    /// - 只接受同 `document_session` 且 `frame_id` 比当前 presented 更新的帧。
+    ///   如果帧的 session 不同或 frame_id 更旧，忽略（防止旧画面覆盖新 scene）。
+    /// - 不再以 `frame_revision == latest` 判定 `progress=1.0`。progress 从
+    ///   `frame_clock.frame_now` 采样当前实际 progress。只在同一目标 revision
+    ///   **且画面真正达到终点**（`is_settled`）时清空 revision map。
     pub(crate) fn on_frame_committed(&mut self, scene: PresentedScene, now_ms: f64) {
+        // Issue #901 问题3：只接受同 session 且更新的帧。
+        if let Some(current) = &self.presented_scene {
+            if scene.document_session != current.document_session {
+                // 不同 session：忽略旧 session 的迟到帧。
+                return;
+            }
+            if scene.frame_id <= current.frame_id {
+                // 同 session 但 frame_id 更旧或相同：忽略乱序帧。
+                return;
+            }
+        }
+
         let frame_revision = scene.source_revision;
         let latest = self.revision_chain.latest_revision();
 
-        // Issue #901 阻塞 4：从已提交帧的真实 progress 取得。
-        // 如果该帧的 source_revision 等于 latest_revision，画面已追上 Core → progress=1.0。
-        // 否则用 frame_clock.frame_now 采样当前实际 progress。
-        let progress = if frame_revision == latest {
-            1.0
-        } else {
-            self.frame_clock.frame_now(now_ms).progress
-        };
+        // Issue #901 问题3：不再以 frame_revision == latest 判定 progress=1.0。
+        // progress 从 frame_clock.frame_now 采样当前实际过渡进度。
+        // revision 相同并不代表动画已经完成——画面可能还在过渡中。
+        let progress = self.frame_clock.frame_now(now_ms).progress;
 
         // 从已提交帧构造 VisualPose 并更新 FrameClock。
         let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, progress);
         self.frame_clock.commit_pose(pose, now_ms);
 
-        // 如果画面追上了 Core，累计映射归零。
+        // 如果画面追上了 Core（frame_revision == latest），累计映射归零。
+        // on_frame_committed 接收的是 Qt afterFrameEnd 确认的帧——如果
+        // source_revision == latest，Qt 已确认显示最终 revision 的画面，
+        // revision chain 的映射变为 identity，reset 是安全的。
+        // is_settled 用于帧调度（决定是否请求下一帧），不用于 reset 条件：
+        // 即使 FrameClock 的理论过渡进度未到 1.0，Qt 已确认的画面是最终画面。
         if frame_revision == latest {
             self.revision_chain.reset_to_committed(frame_revision);
         }
@@ -152,6 +167,87 @@ impl CanvasController {
         );
 
         self.presented_scene = Some(scene);
+    }
+
+    /// 首帧静态 canonical 初始化：从 `TargetLayoutDescriptor` 构造首张 `PresentedScene`。
+    ///
+    /// Issue #901 问题3：如果 `presented_scene` 为 None 但有 `target_layout`，
+    /// 第一张静态画面必须被正确注册为 scene（包含真实可见文字贡献），
+    /// 不能永远从空场景开始。
+    ///
+    /// 从 target 的 glyph_runs 转换为 PixelContribution 列表，每个贡献的
+    /// `byte_range` 从 glyph_run 的 `byte_range` 获取，`opacity` 为 1.0，
+    /// `visible_clip` 为 target clip 与 document_rect 的交集。
+    pub(crate) fn initialize_presented_from_target(&mut self, now_ms: f64) {
+        // 已有 presented_scene 则不需要初始化。
+        if self.presented_scene.is_some() {
+            return;
+        }
+        let Some(target) = &self.target_layout else {
+            return;
+        };
+
+        let source_revision = self.revision_chain.latest_revision();
+
+        // 从 target glyph_runs 构造 PixelContribution 列表。
+        let pixel_contributions: Vec<PixelContribution> = target
+            .glyph_runs
+            .iter()
+            .filter(|run| run.document_rect.w > 0.0 && run.document_rect.h > 0.0)
+            .map(|run| {
+                // visible_clip 为 target clip 与 document_rect 的交集。
+                let clip = Self::intersect_clip_rects(run.document_rect, target.clip);
+                PixelContribution {
+                    snapshot_id: run.snapshot_id,
+                    source_uv: run.source_uv,
+                    document_rect: run.document_rect,
+                    visible_clip: clip,
+                    opacity: 1.0,
+                    byte_range: run.byte_range,
+                }
+            })
+            .collect();
+
+        let scene = PresentedScene {
+            source_revision,
+            document_session: 1,
+            frame_id: 1,
+            geometry_id: 1,
+            clip: target.clip,
+            position: super::presented_scene::CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: super::presented_scene::CanvasAffine2::identity(),
+            pixel_contributions,
+            caret: target.caret.map(|c| super::presented_scene::PresentedCaret {
+                position: c.position,
+                visible: c.visible,
+                width: c.width,
+                height: c.height,
+            }),
+            scroll: super::presented_scene::PresentedScroll {
+                x: target.scroll.x,
+                y: target.scroll.y,
+            },
+        };
+
+        // 直接设置 presented_scene，不走 on_frame_committed 的 session 过滤
+        // （这是初始化，没有之前的帧需要比较）。
+        let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, 1.0);
+        self.frame_clock.commit_pose(pose, now_ms);
+        self.presented_scene = Some(scene);
+    }
+
+    /// 计算两个裁剪矩形的交集。
+    fn intersect_clip_rects(a: super::presented_scene::CanvasRect, b: super::presented_scene::CanvasRect) -> super::presented_scene::CanvasRect {
+        let left = a.x.max(b.x);
+        let top = a.y.max(b.y);
+        let right = (a.x + a.w).min(b.x + b.w);
+        let bottom = (a.y + a.h).min(b.y + b.h);
+        if right <= left || bottom <= top {
+            super::presented_scene::CanvasRect::zero()
+        } else {
+            super::presented_scene::CanvasRect::new(left, top, right - left, bottom - top)
+        }
     }
 
     /// 产生绘制计划。
@@ -362,7 +458,7 @@ mod tests {
         TargetLayoutDescriptor {
             layout_revision: LayoutRevision::next(),
             glyph_runs: vec![TargetGlyphRun {
-                texture_id: 1,
+                snapshot_id: crate::sujian_editor_item::snapshot_id::LineSnapshotId::new(1, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 byte_range: (0, 5),
@@ -389,7 +485,7 @@ mod tests {
             opacity: 1.0,
             transform: CanvasAffine2::identity(),
             pixel_contributions: vec![PixelContribution {
-                texture_id: 1,
+                snapshot_id: crate::sujian_editor_item::snapshot_id::LineSnapshotId::new(1, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),

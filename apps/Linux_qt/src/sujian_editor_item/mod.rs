@@ -545,6 +545,13 @@ pub struct SujianEditorItem {
     /// 之前只跟踪 has_active_insert（只认 Insert），CursorOnly Tween 的起止不触发边沿重置。
     /// 现在跟踪 current_cursor_blink_mode() == Suppressed，覆盖 CursorOnly Tween。
     prev_cursor_blink_suppressed: bool,
+    /// Issue #901 问题3：document session generation，每次文档内容根本性变更
+    /// （load/clear 等）时递增。`PresentedScene.document_session` 用此值，
+    /// `CanvasController` 只接受同 session 的帧。
+    document_session: u64,
+    /// Issue #901 问题3：渲染帧 id 计数器，每次 `update_paint_node` 成功渲染时递增。
+    /// `PresentedScene.frame_id` 用此值，`CanvasController` 只接受更新的帧。
+    next_render_frame_id: u64,
 }
 
 impl Default for SujianEditorItem {
@@ -688,6 +695,8 @@ impl Default for SujianEditorItem {
             cursor_ctrl: cursor_controller::CursorController::new(),
             last_frame_now: None,
             prev_cursor_blink_suppressed: false,
+            document_session: 1,
+            next_render_frame_id: 1,
         }
     }
 }

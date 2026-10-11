@@ -150,6 +150,18 @@ impl SujianEditorItem {
         // 旧 PreparedEditMotion / handle_composition_commit_or_cancel 已删除。
         self.pipeline.visual_canvas_mut().apply_edit_result(result);
 
+        // Issue #901 问题5：IME composition commit 专属路径除了调用
+        // visual_canvas.apply_edit_result，还要像 transaction.rs::record_transaction
+        // 一样调用 build_target_layout_descriptor + visual_canvas.apply_target_layout，
+        // 把这份真正的 new snapshot 转换成并提交到 CanvasController.target_layout。
+        // 与普通 record_transaction 的新接线一致。
+        let now_ms = Self::frame_now_ms(&self.last_frame_now);
+        if let Some(target) = self.build_target_layout_descriptor() {
+            self.pipeline
+                .visual_canvas_mut()
+                .apply_target_layout(target, now_ms);
+        }
+
         let new_revision = LayoutRevision::next();
 
         let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;

@@ -99,6 +99,25 @@ impl RevisionChain {
         }
     }
 
+    /// Issue #901 问题4：将 presented 中的半开 byte range 映射到 latest revision 坐标。
+    ///
+    /// 仅当整个 range 落在同一个映射条目内时返回 `Some`（range 跨越映射/未映射
+    /// 区域边界时返回 `None` — 那不指向同一逻辑对象）。这比仅凭
+    /// `map_presented_to_latest(old_end)` 的起点是 `Some` 更精确：
+    /// 半开范围映射条目末端本来就可能返回 `None`，不能据此宣告整条 run 存活。
+    ///
+    /// presented == latest 时直接返回原 range（identity）。
+    pub(crate) fn map_presented_range_to_latest(
+        &self,
+        old_start: usize,
+        old_end: usize,
+    ) -> Option<(usize, usize)> {
+        match &self.accumulated_map {
+            None => Some((old_start, old_end)),
+            Some(map) => map.map_old_range_to_new(old_start, old_end),
+        }
+    }
+
     /// 新帧已提交：把 presented_revision 前进到该帧的 revision，累计映射归零。
     ///
     /// 调用时机：Qt `afterFrameEnd` 确认了一帧，且该帧的 `source_revision`

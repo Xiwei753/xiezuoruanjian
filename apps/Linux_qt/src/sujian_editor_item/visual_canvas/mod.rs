@@ -141,6 +141,14 @@ impl VisualCanvas {
         self.controller.apply_settings(settings);
     }
 
+    /// Issue #901 问题3：首帧静态 canonical 初始化。
+    ///
+    /// 如果 `presented_scene` 为 None 但有 `target_layout`，从 target 构造
+    /// 首张 `PresentedScene`，使第一帧静态画面被正确注册为 scene。
+    pub(crate) fn initialize_presented_from_target(&mut self, now_ms: f64) {
+        self.controller.initialize_presented_from_target(now_ms);
+    }
+
     /// 提交已呈现画面（Qt `afterFrameEnd` 回执）。
     ///
     /// 更新 `PresentedScene` 和 `RevisionChain`：如果该帧的 `source_revision`
@@ -318,7 +326,7 @@ mod tests {
             opacity: 1.0,
             transform: CanvasAffine2::identity(),
             pixel_contributions: vec![PixelContribution {
-                texture_id: 1,
+                snapshot_id: crate::sujian_editor_item::snapshot_id::LineSnapshotId::new(1, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),

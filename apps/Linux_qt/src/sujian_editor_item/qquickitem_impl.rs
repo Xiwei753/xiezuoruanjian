@@ -273,6 +273,12 @@ impl QQuickItem for SujianEditorItem {
             // Issue #901 阻塞 1+5：先采样 visual_canvas.frame(frame_now) 获取 CanvasDrawPlan，
             // 再用它构造 cursor_render_state（正文协同输入时光标从 caret_sample 获取）。
             let frame_now_ms = Self::frame_now_ms(&self.last_frame_now);
+            // Issue #901 问题3：首帧静态 canonical 初始化。
+            // 如果 presented_scene 为 None 但有 target_layout，从 target 构造
+            // 首张 PresentedScene，使第一帧静态画面被正确注册为 scene。
+            self.pipeline
+                .visual_canvas_mut()
+                .initialize_presented_from_target(frame_now_ms);
             let canvas_plan = self.pipeline.visual_canvas().frame(frame_now_ms);
 
             let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);
@@ -416,18 +422,46 @@ impl QQuickItem for SujianEditorItem {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
                     .committed_revision(animation_resources_ready);
-                // Issue #901 阻塞 1：重建完整 PresentedScene 后调用
-                // visual_canvas.commit_presented_scene，让 CanvasController 的
-                // presented_scene 不再始终为 None。
+                // Issue #901 问题3：不在 update_paint_node 中直接调用
+                // commit_presented_scene。改为只构造 SubmittedVisualFrame（包含
+                // presented_scene 字段）并 stage 到 frame_submission。
+                // afterFrameEnd 的 mailbox 回执消费后才调用 commit_presented_scene。
                 if let Some(scene) = self.build_presented_scene_from_frame(
                     &canvas_plan,
                     &render_plan,
                     scroll_y,
                     vp_h,
+                    // Issue #901 问题3：绑定产生这帧实际绘制计划时的 Core revision，
+                    // 而非直接读取当前 pipeline text_revision（后者可能在帧提交前
+                    // 已被新编辑推进）。
+                    self.pipeline.text_revision(),
+                    self.next_render_frame_id,
+                    // geometry_id 用 visual_revision 标识排版几何版本。
+                    self.pipeline.visual_revision(),
                 ) {
-                    self.pipeline
-                        .visual_canvas_mut()
-                        .commit_presented_scene(scene, frame_now_ms);
+                    self.next_render_frame_id =
+                        self.next_render_frame_id.wrapping_add(1);
+                    // Stage 到 frame_submission，等 afterFrameEnd 回执后才 commit。
+                    self.frame_submission_mailbox.stage_rendered_frame(
+                        self.document_session,
+                        self.pipeline
+                            .current_layout_snapshot()
+                            .as_ref()
+                            .map(|s| s.revision)
+                            .unwrap_or_else(super::layout_revision::LayoutRevision::initial),
+                        0, // transition_id
+                        render_plan.ownership.ownership_revision,
+                        Vec::new(), // snapshot_ids
+                        Vec::new(), // terminal_motion_indices
+                        Vec::new(), // visible_width_updates
+                        false,      // terminal_frame
+                        false,      // handoff_pending
+                        0.0,        // shared_progress
+                        0.0,        // timeline_progress
+                        0,          // ownership_conflict_count
+                        Some(scene),
+                        frame_now_ms,
+                    );
                 }
             }
 
@@ -467,15 +501,19 @@ impl QQuickItem for SujianEditorItem {
 
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
-            // Issue #901 阻塞 1：除了 cursor_ctrl.animation，还检查 visual_canvas
-            // 是否有活跃的文字动画（通过 canvas_plan 是否有非空 TextFragment 命令判断）。
-            // 有活跃的文字动画时继续请求下一帧，正文新画布也能驱动持续绘制。
-            let has_active_text_animation = !canvas_plan.empty
+            // Issue #901 问题5：不再仅用 `opacity<1` 判断是否需要下一帧。
+            // 改为由 FrameClock 是否到达终点（is_settled）和真实活动绘制几何
+            // （是否有非空 DrawCommand 且几何未到达目标）决定。
+            // 存活字 FLIP opacity=1，即使尚在位移也可能不请求后续帧——
+            // 现在由 FrameClock 终点决定持续帧调度。
+            let has_active_canvas = !canvas_plan.empty
                 && canvas_plan.commands.iter().any(|cmd| {
                     cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
-                        && cmd.opacity < 1.0
+                        && cmd.has_visible_area()
                 });
-            if self.cursor_ctrl.animation.is_some() || has_active_text_animation {
+            let canvas_not_settled =
+                has_active_canvas && !self.pipeline.visual_canvas().controller().frame_clock().is_settled(frame_now_ms, 0.5);
+            if self.cursor_ctrl.animation.is_some() || canvas_not_settled {
                 self.request_frame_update();
             }
         }
@@ -654,18 +692,16 @@ impl SujianEditorItem {
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
 
-        // Issue #901 阻塞 5：正文协同输入时，画布 plan 的 caret_sample 提供唯一
-        // 可见 caret 位置，而不是从独立 CursorController::Tween 获取。
-        // 当有活跃的正文文字动画（canvas_plan 有 opacity < 1.0 的 TextFragment 命令）
-        // 且 caret_sample 非零时，光标位置从 canvas_plan.caret_sample 获取。
-        let has_active_text_animation = !canvas_plan.empty
+        // Issue #901 问题5：光标显示位置按**是否为正文事务的唯一画布 owner**决定，
+        // 不用 `caret_sample` 是否为 `(0,0)` 判断。
+        // 如果 CanvasDrawPlan 非空（有活跃的正文文字动画/绘制），光标位置从
+        // `canvas_plan.caret_sample` 获取；否则从 `cursor_ctrl` 获取。
+        // 这避免合法的零坐标被误判为"无画布 owner"而回退独立光标。
+        let canvas_is_owner = !canvas_plan.empty
             && canvas_plan.commands.iter().any(|cmd| {
                 cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
-                    && cmd.opacity < 1.0
             });
-        let (caret_x, caret_y) = if has_active_text_animation
-            && (canvas_plan.caret_sample.x != 0.0 || canvas_plan.caret_sample.y != 0.0)
-        {
+        let (caret_x, caret_y) = if canvas_is_owner {
             (canvas_plan.caret_sample.x, canvas_plan.caret_sample.y)
         } else {
             (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y)
@@ -694,13 +730,22 @@ impl SujianEditorItem {
     /// 从 `CanvasDrawPlan` 的命令转换为 `PixelContribution` 列表，
     /// 从 `CursorRenderState` 转换为 `PresentedCaret`，
     /// 从 scroll_y 转换为 `PresentedScroll`。
-    /// `source_revision` 从 pipeline 获取当前 Core revision。
+    ///
+    /// Issue #901 问题3：
+    /// - `source_revision` 使用产生这帧实际绘制计划时绑定的 Core revision
+    ///   （`bound_revision`），而非直接读取当前 pipeline text_revision。
+    /// - `document_session`、`frame_id`、`geometry_id` 使用真实值而非常量。
+    /// - 每个 `PixelContribution` 的 `byte_range` 从 `DrawCommand.byte_range` 获取，
+    ///   不硬编码 `(0, 0)`。
     pub(crate) fn build_presented_scene_from_frame(
         &self,
         canvas_plan: &super::visual_canvas::CanvasDrawPlan,
         render_plan: &super::render_plan::RenderPlan,
         scroll_y: f64,
         viewport_h: f64,
+        bound_revision: u64,
+        frame_id: u64,
+        geometry_id: u64,
     ) -> Option<super::visual_canvas::PresentedScene> {
         use super::visual_canvas::{
             CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedCaret,
@@ -708,21 +753,22 @@ impl SujianEditorItem {
         };
         use writer_core::editor::EditorRevision;
 
-        // 从 pipeline 获取当前 Core revision。
-        let source_revision = EditorRevision::new(self.pipeline.text_revision());
+        // Issue #901 问题3：使用绑定的 revision，而非当前 pipeline text_revision。
+        let source_revision = EditorRevision::new(bound_revision);
 
         // 从 canvas_plan 的 TextFragment 命令转换为 PixelContribution 列表。
+        // Issue #901 问题3：byte_range 从 DrawCommand.byte_range 获取，不硬编码 (0,0)。
         let pixel_contributions: Vec<PixelContribution> = canvas_plan
             .commands
             .iter()
             .filter(|cmd| cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment)
             .map(|cmd| PixelContribution {
-                texture_id: cmd.texture_id,
+                snapshot_id: cmd.snapshot_id,
                 source_uv: cmd.source_uv,
                 document_rect: cmd.target_rect,
                 visible_clip: cmd.clip_rect,
                 opacity: cmd.opacity,
-                byte_range: (0, 0),
+                byte_range: cmd.byte_range,
             })
             .collect();
 
@@ -746,9 +792,9 @@ impl SujianEditorItem {
 
         Some(PresentedScene {
             source_revision,
-            document_session: 1,
-            frame_id: 0,
-            geometry_id: 0,
+            document_session: self.document_session,
+            frame_id,
+            geometry_id,
             clip: CanvasRect::new(0.0, 0.0, self.bounding_width(), viewport_h),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

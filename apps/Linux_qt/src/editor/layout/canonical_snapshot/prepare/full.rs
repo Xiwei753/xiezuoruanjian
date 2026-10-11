@@ -436,6 +436,9 @@ fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<
 ///
 /// 只对 `affected_indices` 中列出的段落提取 `(段落索引, 新高度)`，
 /// 用于 `ParagraphHeightIndex::update_heights_incremental`。
+///
+/// Issue #901 第二轮复核问题 3: 一次构建 para_start → 段落顺序索引 和
+/// para_start → 累计高度 的 HashMap，不在循环内每次重建全部 para_starts + Vec::contains。
 fn extract_affected_height_updates(
     snapshot: &CanonicalDocumentVisualSnapshot,
     affected_indices: &[usize],
@@ -446,35 +449,31 @@ fn extract_affected_height_updates(
         return Vec::new();
     }
 
-    // 构建 para_start → 段落索引 的映射
-    let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
-    for (i, vl) in snapshot.visual_lines.iter().enumerate() {
-        // 只记录第一次出现的 para_start，保持段落顺序
-        para_start_to_idx.entry(vl.para_start).or_insert(i);
+    // 一次遍历 visual_lines，构建：
+    // - para_start → 段落顺序索引（按首次出现顺序编号）
+    // - para_start → 累计高度
+    let mut para_start_to_order: HashMap<usize, usize> = HashMap::new();
+    let mut para_start_to_height: HashMap<usize, f64> = HashMap::new();
+    for vl in &snapshot.visual_lines {
+        // 先取当前长度再插入，避免 entry 借用与 len 借用冲突
+        let order = para_start_to_order.len();
+        para_start_to_order.entry(vl.para_start).or_insert(order);
+        *para_start_to_height.entry(vl.para_start).or_insert(0.0) += vl.height;
     }
 
-    // 对每个受影响段落，累加其视觉行高度
+    // 反转 order → para_start，用于按段落顺序索引查找
+    let mut order_to_para_start: HashMap<usize, usize> = HashMap::new();
+    for (&para_start, &order) in &para_start_to_order {
+        order_to_para_start.insert(order, para_start);
+    }
+
+    // 对每个受影响段落，O(1) 查表获取高度
     let mut updates: Vec<(usize, f64)> = Vec::new();
     for &idx in affected_indices {
-        // 段落索引 idx 对应第 idx 个出现的 para_start
-        let para_starts: Vec<usize> = {
-            let mut seen: Vec<usize> = Vec::new();
-            for vl in &snapshot.visual_lines {
-                if !seen.contains(&vl.para_start) {
-                    seen.push(vl.para_start);
-                }
+        if let Some(&para_start) = order_to_para_start.get(&idx) {
+            if let Some(&height) = para_start_to_height.get(&para_start) {
+                updates.push((idx, height));
             }
-            seen
-        };
-
-        if let Some(&para_start) = para_starts.get(idx) {
-            let mut height = 0.0f64;
-            for vl in &snapshot.visual_lines {
-                if vl.para_start == para_start {
-                    height += vl.height;
-                }
-            }
-            updates.push((idx, height));
         }
     }
     updates
@@ -531,7 +530,28 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 检查排版参数是否变化（通过 store 中已有段落的 cache_key 判断）
     let params_changed = check_params_changed(paragraph_store, font_size, font_family, line_spacing, indent, padding, width);
 
-    let needs_full_relayout = store_empty || no_affected_range || params_changed || previous_snapshot.is_none();
+    // Issue #901 第二轮复核问题 1: previous_snapshot 非 None 时不进入全篇重排。
+    // no_affected_range（无明确受影响范围）在有 previous_snapshot 时表示"无变化"，
+    // 增量排版路径会全部复用 previous_snapshot，不重排任何段落。
+    // 只有 store 为空、参数变化、或无 previous_snapshot 时才全篇重排。
+    let needs_full_relayout = store_empty || params_changed || previous_snapshot.is_none();
+
+    // no_affected_range 且有 previous_snapshot：无明确受影响范围，直接复用旧 snapshot。
+    if !needs_full_relayout && no_affected_range {
+        let prev = previous_snapshot.unwrap();
+        return CanonicalDocumentVisualSnapshot {
+            text_revision,
+            font_size,
+            font_family: font_family.to_string(),
+            line_spacing,
+            text_indent: indent,
+            padding,
+            width,
+            dpr,
+            paragraphs: prev.paragraphs.clone(),
+            visual_lines: prev.visual_lines.clone(),
+        };
+    }
 
     if needs_full_relayout {
         // 全局重排路径：重建 store + 全篇排版 + 重建 height_index
@@ -629,7 +649,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             || old_paras.len() != new_paras.len();
 
         if store_needs_rebuild {
-            // 段萂数变化（换行拆段/删回车合段），需要重建 store
+            // Issue #901 第二轮复核: 段落数变化（换行拆段/删回车合段），需要重建 store。
+            // rebuild_from_text 已修改为保留未变化段的 ParagraphId 和排版结果
+            // （layout_generation/cache_slot/height 等），只有内容变化的段落才重置。
+            // 这样未变化段不需要重新走 QTextLayout，只调整 y 坐标。
             paragraph_store.rebuild_from_text(
                 text,
                 font_size,
@@ -1022,10 +1045,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         (affected.relayout_start..affected.relayout_end).collect()
     };
 
-    // 增量更新 height_index：只更新受影响段落的高度
-    let height_updates = extract_affected_height_updates(&snapshot, &affected_indices);
-    let total_paras = snapshot.paragraphs.len();
-    height_index.update_heights_incremental(&height_updates, total_paras, line_height);
+    // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致
+    // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
+    // 段落数变化时用 rebuild 从 snapshot 提取全部高度（O(n) 但不涉及 QTextLayout），
+    // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
+    let prev_para_count = prev.paragraphs.len();
+    let curr_para_count = snapshot.paragraphs.len();
+    if curr_para_count != prev_para_count {
+        // 段落数变化（Enter 拆段/Backspace 合段），重建高度索引
+        let heights = extract_paragraph_heights(&snapshot);
+        height_index.rebuild(heights);
+    } else {
+        // 段落数不变，只更新受影响段落的高度（O(k log n)）
+        let height_updates = extract_affected_height_updates(&snapshot, &affected_indices);
+        height_index.update_heights_incremental(&height_updates, curr_para_count, line_height);
+    }
 
     // 增量同步 paragraph_store：只更新受影响段落的排版结果
     paragraph_store.sync_from_visual_lines_incremental(

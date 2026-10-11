@@ -83,6 +83,11 @@ pub struct EditorLayout {
     paragraph_store: ParagraphLayoutStore,
     /// Issue #901: 段落高度索引 — Fenwick 树前缀高度。
     height_index: ParagraphHeightIndex,
+    /// Issue #901 第二轮复核: 上一版 immutable canonical snapshot，
+    /// 传给 `prepare_incremental_visual_snapshot` 的 `previous_snapshot` 参数，
+    /// 使增量排版路径能复用不受影响段落的 VisualLine/shaping/纹理。
+    /// 参数变化（invalidate_params）时清空，普通编辑保留。
+    last_snapshot: Option<CanonicalDocumentVisualSnapshot>,
 }
 
 impl EditorLayout {
@@ -101,6 +106,8 @@ impl EditorLayout {
         // Issue #901: 同步清空增量排版子系统（全局失效）。
         self.paragraph_store.clear();
         self.height_index.clear();
+        // Issue #901 第二轮复核: 参数变化全局失效，旧 snapshot 不再可复用。
+        self.last_snapshot = None;
     }
 
     /// Issue #901: 全局参数失效 — 字体/宽度/字号/行距/全局格式变化时调用。
@@ -227,6 +234,11 @@ impl EditorLayout {
         let heights = self.paragraph_store.paragraph_heights();
         self.height_index.rebuild(heights);
 
+        // Issue #901 第二轮复核: promoted layout 是外部全篇排版结果，
+        // 不携带 CanonicalDocumentVisualSnapshot，清空 last_snapshot。
+        // 下次 snapshot() 若 text 变化会先走全篇重排，之后才能增量复用。
+        self.last_snapshot = None;
+
         self.cache = Some(LayoutSnapshot {
             text_revision,
             text_ptr,
@@ -281,13 +293,20 @@ impl EditorLayout {
             self.invalidate_params();
         }
 
-        if params_changed || text_changed {
-            // Issue #658 评论 5620035970 问题 2: 重新排版前释放旧 generation，
-            // 分配新 generation。
+        if params_changed {
+            // Issue #901 第二轮复核问题 2: 排版参数变化时才清旧 generation 并分配新 generation。
+            // 普通编辑（仅 text_changed）不清旧 generation —— 旧 QTextLayout/纹理要保留
+            // 供不受影响段落复用。受影响段落用同一 generation 重排（覆盖旧 cache slot）。
             if self.current_generation != 0 {
                 clear_layout_generation(self.current_generation);
             }
             self.current_generation = begin_layout_generation();
+            self.cache = None;
+        } else if text_changed {
+            // 仅文本变化 → 增量排版。
+            // 不清旧 generation：保留旧 QTextLayout 供不受影响段落复用。
+            // 不分配新 generation：受影响段落用当前 generation 重排（覆盖旧 cache slot）。
+            // 旧 generation 在下次参数变化时由 invalidate_params 清理。
             self.cache = None;
         }
 
@@ -316,6 +335,12 @@ impl EditorLayout {
             let (affected_start, affected_end) =
                 self.compute_affected_byte_range(text, &new_paras, old_para_count);
 
+            // Issue #901 第二轮复核问题 1: 真正传递旧 snapshot，
+            // 使 prepare_incremental_visual_snapshot 的 previous_snapshot 非 None，
+            // 增量排版路径能复用不受影响段落的 VisualLine/shaping/纹理。
+            // 先 clone 出旧 snapshot 避免借用冲突（函数需要 &mut self.paragraph_store/height_index）。
+            let prev_snapshot = self.last_snapshot.clone();
+
             let doc_snapshot = prepare_incremental_visual_snapshot(
                 text,
                 text_revision,
@@ -330,10 +355,13 @@ impl EditorLayout {
                 current_gen,
                 affected_start,
                 affected_end,
-                None,
+                prev_snapshot.as_ref(),
                 &mut self.paragraph_store,
                 &mut self.height_index,
             );
+
+            // 保存新 snapshot 供下次增量排版复用
+            self.last_snapshot = Some(doc_snapshot.clone());
 
             LayoutSnapshot {
                 text_revision,
@@ -380,6 +408,9 @@ impl EditorLayout {
             let heights = self.paragraph_store.paragraph_heights();
             self.height_index.rebuild(heights);
 
+            // Issue #901 第二轮复核: 保存全篇重排结果供下次增量排版复用。
+            self.last_snapshot = Some(doc_snapshot.clone());
+
             LayoutSnapshot {
                 text_revision,
                 text_ptr,
@@ -404,19 +435,17 @@ impl EditorLayout {
     /// 比较 `paragraph_store` 中已缓存的段落信息和 new text 的段落，
     /// 确定哪些段落的文本内容发生了变化，返回受影响的字节范围。
     ///
-    /// 如果段落数量变化（换行拆段/删回车合段），返回整个文本范围。
+    /// Issue #901 第二轮复核问题 4: 段落数量变化（换行拆段/删回车合段）时，
+    /// 只返回拆/并段及受影响范围，不把 affected 设成整个 text 范围。
+    /// 后续段只调整 y 坐标（由 height_index 前缀和计算），不需要重排。
     fn compute_affected_byte_range(
         &self,
-        text: &str,
+        _text: &str,
         new_paras: &[&str],
-        old_para_count: usize,
+        _old_para_count: usize,
     ) -> (usize, usize) {
-        // 段落数量变化 → 全局重排
-        if old_para_count != new_paras.len() {
-            return (0, text.len().max(1));
-        }
-
-        // 逐段比较，找第一个内容不同的段落
+        // 逐段比较，找内容不同的段落范围。
+        // 段落数变化时也只返回差异范围，不返回整个文本。
         let mut byte_start = 0usize;
         let mut affected_start: Option<usize> = None;
         let mut affected_end: Option<usize> = None;
@@ -452,7 +481,7 @@ impl EditorLayout {
                     affected_end = Some(para_end);
                 }
             } else {
-                // store 中没有该段落，需要重排
+                // store 中没有该段落（新增段），需要重排
                 if affected_start.is_none() {
                     affected_start = Some(byte_start);
                 }

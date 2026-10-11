@@ -312,6 +312,37 @@ impl ParagraphHeightIndex {
         }
     }
 
+    /// Issue #901 第二轮复核: 段落数变化时增量更新 — 只在结构变化位置插入/删除高度，
+    /// 保留未变化段的高度数据。
+    ///
+    /// 与 `ensure_len` + `rebuild_bit` 的区别：`ensure_len` 用 `resize` 在末尾
+    /// 添加/截断，但 Enter 拆段/Backspace 合段的变化在中间位置，resize 会导致
+    /// 高度错位。此方法用 `insert`/`remove` 在正确位置操作，保留未变化段高度。
+    ///
+    /// # 参数
+    ///
+    /// - `insert_at`：插入位置和高度（`Some` 表示插入新段落）。
+    /// - `remove_at`：删除位置（`Some` 表示删除段落）。
+    /// - `height_updates`：受影响段落的 `(索引, 新高度)` 列表。
+    pub fn update_for_structural_change(
+        &mut self,
+        insert_at: Option<(usize, f64)>,
+        remove_at: Option<usize>,
+        height_updates: &[(usize, f64)],
+    ) {
+        // 先处理结构变化（插入/删除），保留未变化段高度
+        if let Some((pos, height)) = insert_at {
+            self.insert(pos, height);
+        }
+        if let Some(pos) = remove_at {
+            self.remove(pos);
+        }
+        // 再更新受影响段落的高度
+        for &(index, new_height) in height_updates {
+            self.update_height(index, new_height);
+        }
+    }
+
     /// 获取所有段落高度（按文档顺序）。
     pub fn heights(&self) -> &[f64] {
         &self.heights
@@ -603,5 +634,37 @@ mod tests {
         assert_eq!(idx.height_at(1), 20.0);
         assert_eq!(idx.height_at(2), 12.0);
         assert_eq!(idx.total_height(), 47.0);
+    }
+
+    #[test]
+    fn update_for_structural_change_insert_preserves_unchanged() {
+        // Issue #901 第二轮复核: Enter 拆段时在中间位置插入高度，
+        // 保留未变化段的高度数据。
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 30.0]);
+        // 在 index 1 处插入高度 20.0（拆段），并更新原段高度
+        idx.update_for_structural_change(Some((1, 20.0)), None, &[(0, 15.0)]);
+        assert_eq!(idx.len(), 3);
+        // 段落 0 高度被更新为 15.0
+        assert_eq!(idx.height_at(0), 15.0);
+        // 新插入的段落 1 高度为 20.0
+        assert_eq!(idx.height_at(1), 20.0);
+        // 原段落 1（现在是段落 2）高度保留为 30.0
+        assert_eq!(idx.height_at(2), 30.0);
+        assert_eq!(idx.total_height(), 65.0);
+    }
+
+    #[test]
+    fn update_for_structural_change_remove_preserves_unchanged() {
+        // Issue #901 第二轮复核: Backspace 合段时删除中间位置的高度，
+        // 保留未变化段的高度数据。
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 删除 index 1（合段），并更新合并后段落 0 的高度
+        idx.update_for_structural_change(None, Some(1), &[(0, 25.0)]);
+        assert_eq!(idx.len(), 2);
+        // 合并后段落 0 高度为 25.0
+        assert_eq!(idx.height_at(0), 25.0);
+        // 段落 1（原段落 2）高度保留为 30.0
+        assert_eq!(idx.height_at(1), 30.0);
+        assert_eq!(idx.total_height(), 55.0);
     }
 }

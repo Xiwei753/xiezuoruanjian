@@ -27,6 +27,7 @@ use super::presented_scene::{
 };
 use super::revision_chain::RevisionChain;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
 
 // ── 目标布局描述 ──
 
@@ -49,15 +50,18 @@ pub(crate) struct TargetLayoutDescriptor {
 }
 
 /// 目标布局中的单个 glyph run —— 一段连续的文字片段及其纹理。
+///
+/// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`，而非 u64 hash。
+/// 渲染层通过完整 `LineSnapshotId` 查询 `TextureCache`，不再从 u64 反解。
 #[derive(Clone, Debug)]
 pub(crate) struct TargetGlyphRun {
-    /// 源纹理 id。
-    pub texture_id: u64,
+    /// 源纹理的完整行快照 id。
+    pub snapshot_id: LineSnapshotId,
     /// 源纹理 UV 区域。
     pub source_uv: CanvasRect,
     /// 文档坐标系中的目标矩形。
     pub document_rect: CanvasRect,
-    /// 该 glyph run 对应的 byte range（用于前沿裁剪）。
+    /// 该 glyph run 对应的 byte range（用于前沿裁剪和存活判断）。
     pub byte_range: (usize, usize),
 }
 
@@ -266,18 +270,25 @@ impl SceneTransition {
     ///
     /// `latest_offset` 是 presented byte_range 起始通过 `RevisionChain` 映射到
     /// latest revision 的 offset。匹配条件：target run 的 byte_range 包含
-    /// 映射后的 range。
+    /// 映射后的整个 range。
+    ///
+    /// Issue #901 问题4：使用 `map_presented_range_to_latest` 精确判断整个区间
+    /// 身份，而非仅凭 `map_presented_to_latest(old_end)` 的起点是 `Some` 就宣告
+    /// 整条 run 存活。`OffsetMap` 是半开范围，映射条目末端本来就可能返回 `None`。
     fn find_matching_target_run<'a>(
         target: &'a TargetLayoutDescriptor,
         latest_offset: usize,
         presented_byte_range: (usize, usize),
         revision_chain: &RevisionChain,
     ) -> Option<(usize, &'a TargetGlyphRun)> {
-        // 映射整个 byte_range 到 latest 坐标。
-        let latest_start = latest_offset;
-        let latest_end = revision_chain
-            .map_presented_to_latest(presented_byte_range.1)
-            .unwrap_or(latest_start);
+        // 精确映射整个 byte_range 到 latest 坐标。
+        // 仅当整个 range 落在同一个映射条目内时才视为存活。
+        let (latest_start, latest_end) = revision_chain
+            .map_presented_range_to_latest(
+                presented_byte_range.0,
+                presented_byte_range.1,
+            )
+            .unwrap_or((latest_offset, latest_offset));
 
         for (idx, run) in target.glyph_runs.iter().enumerate() {
             // target run 的 byte_range 包含映射后的 range。
@@ -340,12 +351,15 @@ impl SceneTransition {
         // clip 用 presented 的 visible_clip（已显示部分）与 target clip 的合并。
         let clip = Self::intersect_clip(contrib.visible_clip, target.clip);
         Some(DrawCommand::text_fragment(
-            run.texture_id,
+            run.snapshot_id,
             run.source_uv,
             interpolated,
             clip,
             opacity,
             super::ownership::OwnershipRule::StaticText,
+            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
+            // 存活字用 target run 的 byte_range（映射后的最新坐标）。
+            run.byte_range,
         ))
     }
 
@@ -387,12 +401,14 @@ impl SceneTransition {
             target_rect.h,
         );
         Some(DrawCommand::text_fragment(
-            contrib.texture_id,
+            contrib.snapshot_id,
             contrib.source_uv,
             target_rect,
             contrib.visible_clip,
             opacity,
             ownership,
+            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
+            contrib.byte_range,
         ))
     }
 
@@ -419,12 +435,14 @@ impl SceneTransition {
             run.document_rect.h,
         );
         Some(DrawCommand::text_fragment(
-            run.texture_id,
+            run.snapshot_id,
             run.source_uv,
             viewport_rect,
             target.clip,
             opacity,
             super::ownership::OwnershipRule::AnimatedText,
+            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
+            run.byte_range,
         ))
     }
 
@@ -505,7 +523,7 @@ mod tests {
             opacity,
             transform: CanvasAffine2::identity(),
             pixel_contributions: vec![PixelContribution {
-                texture_id: 1,
+                snapshot_id: LineSnapshotId::new(1, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
@@ -521,7 +539,7 @@ mod tests {
         TargetLayoutDescriptor {
             layout_revision: LayoutRevision::initial(),
             glyph_runs: vec![TargetGlyphRun {
-                texture_id: 2,
+                snapshot_id: LineSnapshotId::new(2, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 byte_range: (0, 5),
@@ -612,7 +630,7 @@ mod tests {
         let target = TargetLayoutDescriptor {
             layout_revision: LayoutRevision::initial(),
             glyph_runs: vec![TargetGlyphRun {
-                texture_id: 2,
+                snapshot_id: LineSnapshotId::new(2, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(200.0, 100.0, 100.0, 20.0),
                 byte_range: (0, 5),
@@ -798,7 +816,7 @@ mod tests {
         let target = TargetLayoutDescriptor {
             layout_revision: LayoutRevision::initial(),
             glyph_runs: vec![TargetGlyphRun {
-                texture_id: 1,
+                snapshot_id: LineSnapshotId::new(1, 0, 0),
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(100.0, 200.0, 100.0, 20.0),
                 byte_range: (0, 5),

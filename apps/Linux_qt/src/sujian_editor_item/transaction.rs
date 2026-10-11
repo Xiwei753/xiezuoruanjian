@@ -120,65 +120,61 @@ impl SujianEditorItem {
     pub(crate) fn build_target_layout_descriptor(&self) -> Option<TargetLayoutDescriptor> {
         let snapshot = self.pipeline.current_layout_snapshot().as_ref()?;
 
-        // 从 line_snapshots 转换为 TargetGlyphRun 列表。
-        // 每个 PreparedLineSnapshot 对应一个 glyph run。
+        // Issue #901 问题4：基于 cluster 分割而非整行一个 TargetGlyphRun。
+        // 每个 cluster 产生一个 TargetGlyphRun，携带完整 LineSnapshotId。
+        // document_rect 的 width 从 cluster 的真实字形范围计算（source_rect.w / dpr），
+        // height 是行高（visual_line_bottom - visual_line_top）。
+        // byte_range 使用 cluster 的字节范围，而非整行的 (byte_start, byte_end)。
+        // 这样 SceneTransition 能精确判断每个 cluster 的存活/插入/删除身份。
         let glyph_runs: Vec<TargetGlyphRun> = snapshot
             .line_snapshots
             .iter()
-            .map(|line| {
-                let texture_id = line.id.to_cache_key();
-                // source_uv：行视觉资源内的局部裁剪区域。
-                // 从 clusters 的 source_rect 合并出整行的 UV。
-                let source_uv = if line.clusters.is_empty() {
-                    CanvasRect::new(0.0, 0.0, 0.0, 0.0)
+            .flat_map(|line| {
+                let line_height = (line.visual_line_bottom - line.visual_line_top).max(0.0);
+                // source_rect 是纹理局部坐标（已乘 DPR），转回文档逻辑坐标需除以 dpr。
+                let dpr = if line.dpr > 0.0 { line.dpr } else { 1.0 };
+
+                if line.clusters.is_empty() {
+                    // cluster 信息不足时 fallback：整行一个 run。
+                    // width=0 表示无可见字形范围（不产生绘制命令），但 byte_range
+                    // 仍正确，find_matching_target_run 可匹配存活判断。
+                    vec![TargetGlyphRun {
+                        snapshot_id: line.id,
+                        source_uv: CanvasRect::zero(),
+                        document_rect: CanvasRect::new(
+                            line.visual_x,
+                            line.visual_line_top,
+                            0.0,
+                            line_height,
+                        ),
+                        byte_range: (line.byte_start, line.byte_end),
+                    }]
                 } else {
-                    let min_x = line
-                        .clusters
+                    // 按 cluster 分割：每个 cluster 一个 TargetGlyphRun。
+                    line.clusters
                         .iter()
-                        .map(|c| c.source_rect.x)
-                        .fold(f64::MAX, f64::min);
-                    let min_y = line
-                        .clusters
-                        .iter()
-                        .map(|c| c.source_rect.y)
-                        .fold(f64::MAX, f64::min);
-                    let max_right = line
-                        .clusters
-                        .iter()
-                        .map(|c| c.source_rect.x + c.source_rect.w)
-                        .fold(f64::MIN, f64::max);
-                    let max_bottom = line
-                        .clusters
-                        .iter()
-                        .map(|c| c.source_rect.y + c.source_rect.h)
-                        .fold(f64::MIN, f64::max);
-                    CanvasRect::new(
-                        if min_x.is_finite() { min_x } else { 0.0 },
-                        if min_y.is_finite() { min_y } else { 0.0 },
-                        if max_right.is_finite() {
-                            (max_right - min_x).max(0.0)
-                        } else {
-                            0.0
-                        },
-                        if max_bottom.is_finite() {
-                            (max_bottom - min_y).max(0.0)
-                        } else {
-                            0.0
-                        },
-                    )
-                };
-                // document_rect：行在文档坐标系中的矩形。
-                let document_rect = CanvasRect::new(
-                    line.visual_x,
-                    line.visual_line_top,
-                    (line.visual_line_bottom - line.visual_line_top).max(0.0),
-                    (line.visual_line_bottom - line.visual_line_top).max(0.0),
-                );
-                TargetGlyphRun {
-                    texture_id,
-                    source_uv,
-                    document_rect,
-                    byte_range: (line.byte_start, line.byte_end),
+                        .map(|cluster| {
+                            let doc_x = line.visual_x + cluster.source_rect.x / dpr;
+                            let doc_w = (cluster.source_rect.w / dpr).max(0.0);
+                            TargetGlyphRun {
+                                // Issue #901 问题2：携带完整 LineSnapshotId，不转 u64 hash。
+                                snapshot_id: line.id,
+                                source_uv: CanvasRect::new(
+                                    cluster.source_rect.x,
+                                    cluster.source_rect.y,
+                                    cluster.source_rect.w,
+                                    cluster.source_rect.h,
+                                ),
+                                document_rect: CanvasRect::new(
+                                    doc_x,
+                                    line.visual_line_top,
+                                    doc_w,
+                                    line_height,
+                                ),
+                                byte_range: (cluster.byte_start, cluster.byte_end),
+                            }
+                        })
+                        .collect()
                 }
             })
             .collect();

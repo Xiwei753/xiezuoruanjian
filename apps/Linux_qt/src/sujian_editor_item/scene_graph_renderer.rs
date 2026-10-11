@@ -8,26 +8,24 @@ use crate::editor::scene_graph;
 /// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
 /// `TextAnimationGlyphInfo` 列表，供动画层消费。
 ///
-/// 只转换 `opacity < 1.0` 的命令（正在淡入/淡出的动画 glyph），
-/// `opacity == 1.0` 的命令由静态层处理。
+/// Issue #901 问题4：不再按 `opacity < 1.0` 过滤。存活字 FLIP 的 opacity=1
+/// 也要被绘制。按 `DrawCommandKind::TextFragment` 和真正 owner/几何变化来绘制，
+/// 不根据 alpha<1 决定"是否属于动画"。
 pub(crate) fn canvas_draw_plan_to_glyph_infos(
     canvas_plan: &CanvasDrawPlan,
     _texture_cache: &TextureCache,
 ) -> Vec<TextAnimationGlyphInfo> {
-    use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
+    use super::layout_snapshot::{ShapingIdentity, SourceRect};
     use super::edit_motion::DeleteEdge;
 
     canvas_plan
         .commands
         .iter()
-        .filter(|cmd| {
-            cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0 && cmd.opacity < 1.0
-        })
+        .filter(|cmd| cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0)
         .map(|cmd| {
-            // 从 texture_id 反推 LineSnapshotId。
-            // texture_id 是 LineSnapshotId::to_cache_key() 的结果，
-            // 这里用占位 snapshot_id——动画层通过 texture_cache 查找纹理。
-            let snapshot_id = LineSnapshotId::new(0, 0, cmd.texture_id as u32);
+            // Issue #901 问题2：直接使用 DrawCommand 携带的完整 LineSnapshotId，
+            // 不再从 u64 hash 反解。动画层通过完整 LineSnapshotId 查询 texture_cache。
+            let snapshot_id = cmd.snapshot_id;
             TextAnimationGlyphInfo {
                 x: cmd.target_rect.x,
                 y: cmd.target_rect.y,
@@ -59,25 +57,25 @@ pub(crate) fn canvas_draw_plan_to_glyph_infos(
 
 /// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的命令推导静态层裁剪矩形。
 ///
-/// 动画 glyph（`opacity < 1.0` 的 `TextFragment` 命令）的 `target_rect`
-/// 需要从静态层裁剪掉，避免静态正文盖住动画。
+/// 动画 glyph（`TextFragment` 命令）的 `target_rect` 需要从静态层裁剪掉，
+/// 避免静态正文盖住动画。
+///
+/// Issue #901 问题4：不再按 `opacity < 1.0` 过滤。存活字 FLIP 的 opacity=1
+/// 也要被裁剪。所有 `TextFragment` 命令的 target_rect 都从静态层裁剪掉。
 pub(crate) fn canvas_draw_plan_to_clip_rects(
     canvas_plan: &CanvasDrawPlan,
 ) -> Vec<qt_text_node::AnimationClipRect> {
-    use super::layout_snapshot::LineSnapshotId;
-
     canvas_plan
         .commands
         .iter()
-        .filter(|cmd| {
-            cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0 && cmd.opacity < 1.0
-        })
+        .filter(|cmd| cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0)
         .map(|cmd| qt_text_node::AnimationClipRect {
             x: cmd.target_rect.x,
             y: cmd.target_rect.y,
             w: cmd.target_rect.w,
             h: cmd.target_rect.h,
-            snapshot_id: LineSnapshotId::new(0, 0, cmd.texture_id as u32),
+            // Issue #901 问题2：直接使用完整 LineSnapshotId。
+            snapshot_id: cmd.snapshot_id,
         })
         .collect()
 }
