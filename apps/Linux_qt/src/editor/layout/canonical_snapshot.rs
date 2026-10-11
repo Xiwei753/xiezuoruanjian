@@ -360,6 +360,7 @@ pub use prepare::{
     assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
+    prepare_incremental_visual_snapshot,
 };
 // Issue #810 评论 5932233052 问题1: AnimationRasterVisual 定义在本模块（pub struct），
 // 外部通过 canonical_snapshot::AnimationRasterVisual 访问，无需额外 re-export。

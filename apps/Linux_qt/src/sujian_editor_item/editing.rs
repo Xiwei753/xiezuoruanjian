@@ -146,31 +146,16 @@ impl SujianEditorItem {
             }
         };
 
-        // Issue #826: 正文动画只认 Core display_patches。`from_edit_result` 已经把它
-        // 派生成 inserted/deleted ranges（正文动画分类的唯一事实源）。
-        let motion =
-            super::edit_motion::PreparedEditMotion::from_edit_result(result, &old.text, &new.text);
+        // Issue #901: 编辑结果收口到 visual_canvas，由 RevisionChain 精确消费 offset map。
+        // 旧 PreparedEditMotion / handle_composition_commit_or_cancel 已删除。
+        self.pipeline.visual_canvas_mut().apply_edit_result(result);
 
         let new_revision = LayoutRevision::next();
-        let edit_now = std::time::Instant::now();
 
-        let outcome = self
-            .pipeline
-            .animation_coordinator_mut()
-            .handle_composition_commit_or_cancel(
-                super::animation::composition::CompositionVisualEditInput {
-                    motion,
-                    old_snapshot: old_snapshot.clone(),
-                    new_snapshot: new_snapshot.clone(),
-                    now: edit_now,
-                },
-            );
         let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
-        // 旧行纹理由最近成功绘制帧引用，保留到新的帧成功提交后再裁掉。
-        let active_ids = self
-            .pipeline
-            .animation_coordinator()
-            .collect_active_snapshot_ids();
+        // Issue #901: 旧 animation_coordinator.collect_active_snapshot_ids() 已删除。
+        // TODO(issue-901): active ids 由 visual_canvas 的绘制计划决定，暂用空列表。
+        let active_ids: [super::texture_cache::LineSnapshotId; 0] = [];
         self.pipeline.retain_active_snapshot_ids(&active_ids);
         self.prepare_visual_edit_textures(&old_snapshot);
 
@@ -206,7 +191,6 @@ impl SujianEditorItem {
         self.transaction_created();
         // Issue #819 评论 5968931455 问题 2.2: 返回 VisualPrepareOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
-        let _ = outcome;
         visual_outcome
     }
 

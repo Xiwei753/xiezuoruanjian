@@ -17,11 +17,15 @@
 // - canonical_snapshot: Canonical document visual snapshot
 // - diff: VisualLine diff / affected paragraph ranges
 // - test_support: 测试线程 helper (run_on_qt_thread)，仅 test/test-helpers feature 下编译
+// - paragraph_layout_store: Issue #901 稳定段落身份 + 布局缓存
+// - paragraph_height_index: Issue #901 Fenwick 树段落前缀高度索引
 
 mod canonical_snapshot;
 mod diff;
 mod engine;
 mod hit_test;
+mod paragraph_height_index;
+mod paragraph_layout_store;
 mod qt_cache;
 mod test_support;
 mod types;
@@ -31,10 +35,17 @@ pub use canonical_snapshot::{
     assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    AnimationRasterVisual, CanonicalClusterSnapshot, CanonicalDocumentVisualSnapshot,
-    CanonicalLineSnapshot, CanonicalParagraphSnapshot, CursorXMapEntry,
+    prepare_incremental_visual_snapshot, AnimationRasterVisual, CanonicalClusterSnapshot,
+    CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot,
+    CursorXMapEntry,
 };
 pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff};
+// Issue #901: 增量排版子系统 — 稳定段落身份 + 布局缓存 + Fenwick 树高度索引
+pub use paragraph_height_index::ParagraphHeightIndex;
+pub use paragraph_layout_store::{
+    AffectedParagraphRanges, ParagraphId, ParagraphLayoutCacheKey, ParagraphLayoutEntry,
+    ParagraphLayoutStore,
+};
 pub use engine::{
     byte_offset_to_qchar_offset, cursor_rect_for_line, get_font_ascent, get_font_descent,
     qchar_offset_to_byte_offset, text_baseline_y,
@@ -60,10 +71,18 @@ pub use types::{
 /// 缓存策略：snapshot() 在参数/revision 不变时复用缓存，避免重复排版。
 /// Issue #658 评论 5620035970 问题 2: 持有 current_generation，
 /// invalidate 时 clear 旧 generation，重新排版时分配新 generation。
+///
+/// Issue #901: 集成增量排版子系统：
+/// - `paragraph_store`: 稳定段落身份 + 布局缓存，判断哪些段落需要重排。
+/// - `height_index`: Fenwick 树段落前缀高度索引，O(log n) 查 y→段落 / 段顶 / 改段高。
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
     current_generation: u64,
+    /// Issue #901: 段落布局存储 — 稳定段落身份 + 布局缓存。
+    paragraph_store: ParagraphLayoutStore,
+    /// Issue #901: 段落高度索引 — Fenwick 树前缀高度。
+    height_index: ParagraphHeightIndex,
 }
 
 impl EditorLayout {
@@ -74,10 +93,33 @@ impl EditorLayout {
             self.current_generation = 0;
         }
         self.cache = None;
+        // Issue #901: 同步清空增量排版子系统。
+        self.paragraph_store.clear();
+        self.height_index.clear();
     }
 
     pub fn cache(&self) -> Option<&LayoutSnapshot> {
         self.cache.as_ref()
+    }
+
+    /// Issue #901: 获取段落布局存储的只读引用。
+    pub fn paragraph_store(&self) -> &ParagraphLayoutStore {
+        &self.paragraph_store
+    }
+
+    /// Issue #901: 获取段落布局存储的可变引用。
+    pub fn paragraph_store_mut(&mut self) -> &mut ParagraphLayoutStore {
+        &mut self.paragraph_store
+    }
+
+    /// Issue #901: 获取段落高度索引的只读引用。
+    pub fn height_index(&self) -> &ParagraphHeightIndex {
+        &self.height_index
+    }
+
+    /// Issue #901: 获取段落高度索引的可变引用。
+    pub fn height_index_mut(&mut self) -> &mut ParagraphHeightIndex {
+        &mut self.height_index
     }
 
     /// Issue #658 评论 5624570557 问题 1: 获取当前有效的 prepared layout 句柄（如果存在）。

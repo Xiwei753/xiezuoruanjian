@@ -45,7 +45,7 @@ pub(crate) mod pointer_gesture;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod qt_text_node;
-pub(crate) mod render_ownership;
+// Issue #901: render_ownership 已删除，由 visual_canvas::Ownership 替代。
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `RenderPlan`。
 pub mod render_plan;
 pub(crate) mod rendering;
@@ -57,6 +57,8 @@ pub(crate) mod snapshot_id;
 pub(crate) mod text_utils;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
+/// Issue #901：视觉画布基础模块。
+pub(crate) mod visual_canvas;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
@@ -548,7 +550,9 @@ pub struct SujianEditorItem {
 impl Default for SujianEditorItem {
     fn default() -> Self {
         let pipeline = pipeline::LinuxEditorPipeline::new();
-        let frame_submission_mailbox = pipeline.animation_coordinator().frame_submission_mailbox();
+        // Issue #901: 旧 animation_coordinator.frame_submission_mailbox() 已删除。
+        // 帧提交 mailbox 现在独立创建，不再从 animation_coordinator 获取。
+        let frame_submission_mailbox = std::sync::Arc::new(frame_submission::FrameSubmissionMailbox::default());
         Self {
             base: Default::default(),
             plain_text: Default::default(),
@@ -777,11 +781,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {
-        if self.pipeline.animation_coordinator_mut().suppress_all() {
-            // 只请求 canonical ownership handoff。旧静态层、动画 glyph 和纹理
-            // 必须保留到 renderer 成功构建完整 canonical static layer 之后。
-            self.request_scene_rebuild();
-        }
+        // Issue #901: 旧 animation_coordinator.suppress_all() 已删除。
+        // TODO(issue-901): integrate with visual_canvas to suppress active text animations.
+        // 暂时直接请求 scene rebuild，让静态正文从 canonical 重新渲染。
+        self.request_scene_rebuild();
     }
 
     /// Issue #715: 章节 Load 的完整视觉状态边界。
@@ -800,9 +803,8 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
-        self.pipeline
-            .animation_coordinator_mut()
-            .reset_document_visual_session();
+        // Issue #901: 旧 animation_coordinator.reset_document_visual_session() 已删除。
+        // TODO(issue-901): integrate with visual_canvas to reset document visual session.
         self.pipeline.set_current_layout_snapshot(None);
         self.pipeline.set_previous_layout_snapshot(None);
         self.pipeline.set_current_canonical_snapshot(None);

@@ -1,0 +1,919 @@
+//! 段落布局存储 — 稳定段落身份与布局缓存。
+//!
+//! Issue #901: 增量排版子系统。
+//!
+//! # 核心设计
+//!
+//! - [`ParagraphId`] 是稳定段落身份，不随 byte offset 变化。
+//! - [`ParagraphLayoutCacheKey`] 由文本内容 + 格式 + 字体 + 宽度的哈希构成，
+//!   用于判断段落是否需要重新走 QTextLayout。
+//! - 普通中间编辑只变更所在段及实际连带范围的 cache_key。
+//! - 换行拆段：原段保留 Id，新段分配新 Id。
+//! - 删回车合段：被合并段的 Id 失效，保留段保持原 Id。
+//! - 不能以随编辑移动的 byte offset 当稳定对象 identity。
+//!
+//! # 线程安全
+//!
+//! 与 `EditorLayout` 相同，仅在 GUI 线程中使用，不跨线程共享。
+
+use std::hash::{Hash, Hasher};
+
+use super::types::VisualLine;
+
+// ── 稳定段落身份 ──
+
+/// 稳定段落身份 — 不随 byte offset 变化的段落唯一标识。
+///
+/// 每次创建新段落（换行拆段、粘贴新段、加载文档）时分配一个新的 `ParagraphId`。
+/// 段落内容编辑不改变 `ParagraphId`。
+/// 删回车合段时，被合并的段落的 `ParagraphId` 失效，保留的段落保持原 Id。
+///
+/// **不能**以随编辑移动的 byte offset 当稳定对象 identity ——
+/// 在段前插入文本会让所有后续段落的 byte offset 移动，但它们的 `ParagraphId` 不变。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ParagraphId(u64);
+
+impl ParagraphId {
+    /// 占位 Id，表示无效/未分配。
+    pub const INVALID: ParagraphId = ParagraphId(0);
+
+    /// 返回内部数值，仅供测试/调试使用。
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+// ── 布局缓存 key ──
+
+/// 布局缓存 key — 文本内容 + 格式 + 字体 + 宽度的哈希。
+///
+/// 用于判断段落是否需要重新走 QTextLayout。
+/// - key 相同 → shaping/行数据/纹理可复用。
+/// - key 不同 → 需要重新排版。
+///
+/// 字段全部是整数/哈希值，可直接用 `==` 比较，无需浮点容差。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ParagraphLayoutCacheKey {
+    text_hash: u64,
+    font_size_bits: u64,
+    font_family_hash: u64,
+    line_spacing_bits: u64,
+    text_indent_bits: u64,
+    padding_bits: u64,
+    width_bits: u64,
+}
+
+impl ParagraphLayoutCacheKey {
+    /// 从段落文本和排版参数构建缓存 key。
+    ///
+    /// `paragraph_text` 不含尾部 `'\n'`。
+    /// 浮点参数用 `f64::to_bits()` 转为可 `==` 比较的整数，
+    /// 避免浮点容差问题 —— 排版参数变化时 key 必然不同。
+    pub fn build(
+        paragraph_text: &str,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) -> Self {
+        let text_hash = hash_str(paragraph_text);
+        let font_family_hash = hash_str(font_family);
+
+        Self {
+            text_hash,
+            font_size_bits: font_size.to_bits(),
+            font_family_hash,
+            line_spacing_bits: line_spacing.to_bits(),
+            text_indent_bits: text_indent.to_bits(),
+            padding_bits: padding.to_bits(),
+            width_bits: width.to_bits(),
+        }
+    }
+
+    /// 快速判断两个 key 是否匹配（内容 + 格式 + 宽度全相同）。
+    pub fn matches(&self, other: &ParagraphLayoutCacheKey) -> bool {
+        self == other
+    }
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ── 段落布局缓存条目 ──
+
+/// 单个段落的布局缓存条目。
+///
+/// 存储段落的稳定身份、布局缓存 key、QTextLayout generation 引用
+/// 和视觉行缓存引用。
+#[derive(Clone, Debug)]
+pub struct ParagraphLayoutEntry {
+    /// 段落稳定身份（不随 byte offset 变化）
+    pub id: ParagraphId,
+    /// 布局缓存 key（文本内容 + 格式 + 字体 + 宽度的哈希）
+    pub cache_key: ParagraphLayoutCacheKey,
+    /// QTextLayout generation 引用 — 对应 `g_layout_generations` 中的代。
+    /// 0 表示尚未排版。
+    pub layout_generation: u64,
+    /// 该段落在 generation cache 中的 slot 索引。
+    /// -1 表示尚未分配 slot。
+    pub cache_slot: i32,
+    /// 段落文档 byte 起始偏移（随编辑移动，**不作为 identity**）。
+    pub document_byte_start: usize,
+    /// 段落文本长度（UTF-8 byte，不含尾部 `'\n'`）。
+    pub paragraph_text_len: usize,
+    /// 段落总高度（所有视觉行高度之和）。
+    pub height: f64,
+    /// 段落内视觉行数。
+    pub visual_line_count: usize,
+    /// 该段落的视觉行引用（在 `LayoutSnapshot.lines` 中的索引范围 `[line_start, line_start + visual_line_count)`）。
+    pub line_start: usize,
+}
+
+impl ParagraphLayoutEntry {
+    /// 该段落是否已排版（有有效的 generation 和 slot）。
+    pub fn is_laid_out(&self) -> bool {
+        self.layout_generation != 0 && self.cache_slot >= 0
+    }
+}
+
+// ── 受影响段落范围 ──
+
+/// 增量排版需要重排的段落范围。
+///
+/// 由 [`ParagraphLayoutStore::compute_affected_paragraphs`] 计算。
+/// 只有这些段落的 cache_key 变化或身份变化，需要重新走 QTextLayout。
+/// 其他段落的 shaping/行数据/纹理可复用。
+#[derive(Clone, Debug)]
+pub struct AffectedParagraphRanges {
+    /// 需要重新排版的段落索引范围 `[start, end)`（文档顺序，0-indexed）。
+    pub relayout_start: usize,
+    pub relayout_end: usize,
+    /// 是否需要全局重排（宽度/字体/字号/行距/全局格式变化时为 true）。
+    pub full_relayout: bool,
+}
+
+// ── 段落布局存储 ──
+
+/// 段落布局存储 — 管理所有段落的稳定身份和布局缓存。
+///
+/// # 核心不变量
+///
+/// 1. `ParagraphId` 在段落生命周期内不变，不随 byte offset 移动。
+/// 2. 普通中间编辑只变更所在段及实际连带范围的 `cache_key`。
+/// 3. 换行拆段：原段保留 Id，新段分配新 Id。
+/// 4. 删回车合段：被合并段的 Id 失效，保留段保持原 Id。
+/// 5. `entries` 按文档顺序排列，索引即段落在文档中的顺序。
+///
+/// # 增量更新策略
+///
+/// - **普通编辑**（不涉及 `'\n'`）：只更新所在段落的 `cache_key`，
+///   其他段落不变。
+/// - **换行拆段**（插入 `'\n'`）：原段保留 Id，在原段后插入新段（分配新 Id）。
+/// - **删回车合段**（删除 `'\n'`）：移除后一段，将其内容并入前一段，
+///   保留前一段 Id，丢弃后一段 Id。
+/// - **宽度/字体/字号/行距变化**：全局失效，所有段落的 `cache_key` 失效。
+#[derive(Clone, Debug, Default)]
+pub struct ParagraphLayoutStore {
+    /// 按文档顺序排列的段落缓存条目。
+    entries: Vec<ParagraphLayoutEntry>,
+    /// 下一个可分配的 `ParagraphId` 内部数值（从 1 开始）。
+    next_id: u64,
+}
+
+impl ParagraphLayoutStore {
+    /// 创建空的段落布局存储。
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// 分配一个新的 `ParagraphId`。
+    fn allocate_id(&mut self) -> ParagraphId {
+        let id = ParagraphId(self.next_id);
+        self.next_id += 1;
+        id
+    }
+
+    /// 段落数量。
+    pub fn paragraph_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// 清空所有缓存（全局失效）。
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
+    }
+
+    /// 获取指定索引处段落的只读引用。
+    pub fn entry(&self, index: usize) -> Option<&ParagraphLayoutEntry> {
+        self.entries.get(index)
+    }
+
+    /// 获取指定索引处段落的可变引用。
+    pub fn entry_mut(&mut self, index: usize) -> Option<&mut ParagraphLayoutEntry> {
+        self.entries.get_mut(index)
+    }
+
+    /// 按 `ParagraphId` 查找段落索引。
+    pub fn paragraph_index_by_id(&self, id: ParagraphId) -> Option<usize> {
+        self.entries.iter().position(|e| e.id == id)
+    }
+
+    /// 获取指定索引处段落的 `ParagraphId`。
+    pub fn paragraph_id_at(&self, index: usize) -> Option<ParagraphId> {
+        self.entries.get(index).map(|e| e.id)
+    }
+
+    // ── 全文重建 ──
+
+    /// 从全文文本重建段落身份和缓存 key。
+    ///
+    /// 用于初始化、文档加载或全局参数变化（宽度/字体/字号/行距）。
+    /// 已有段落的 `ParagraphId` 尽量保留（按文档顺序对齐），
+    /// 新段落分配新 Id，多余段落的 Id 丢弃。
+    pub fn rebuild_from_text(
+        &mut self,
+        text: &str,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) {
+        let paragraphs: Vec<&str> = text.split_inclusive('\n').collect();
+        let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(paragraphs.len());
+        let mut byte_offset = 0usize;
+
+        for (i, paragraph) in paragraphs.iter().enumerate() {
+            let paragraph_text = paragraph.trim_end_matches('\n');
+            let cache_key = ParagraphLayoutCacheKey::build(
+                paragraph_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+
+            // 尽量保留已有 Id（按文档顺序对齐）
+            let id = if i < self.entries.len() {
+                self.entries[i].id
+            } else {
+                self.allocate_id()
+            };
+
+            new_entries.push(ParagraphLayoutEntry {
+                id,
+                cache_key,
+                layout_generation: 0,
+                cache_slot: -1,
+                document_byte_start: byte_offset,
+                paragraph_text_len: paragraph_text.len(),
+                height: 0.0,
+                visual_line_count: 0,
+                line_start: 0,
+            });
+
+            byte_offset += paragraph.len();
+        }
+
+        self.entries = new_entries;
+    }
+
+    // ── 增量更新：换行拆段 ──
+
+    /// 换行拆段 — 在段落 `index` 的 `split_byte_offset` 处插入 `'\n'`。
+    ///
+    /// 原段保留 `ParagraphId`，在 `index + 1` 处插入新段（分配新 Id）。
+    /// 两段的 `cache_key` 都需要重新计算（内容变了）。
+    ///
+    /// `split_byte_offset` 是相对于段落文本开头的 byte offset（不含 `'\n'`）。
+    ///
+    /// 返回 `(原段索引, 新段索引)`，失败返回 `None`。
+    pub fn split_paragraph(
+        &mut self,
+        index: usize,
+        split_byte_offset: usize,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+        original_text_before_split: &str,
+        original_text_after_split: &str,
+    ) -> Option<(usize, usize)> {
+        if index >= self.entries.len() {
+            return None;
+        }
+
+        let new_id = self.allocate_id();
+        let original_entry = &mut self.entries[index];
+
+        // 更新原段（split 点之前的部分）
+        let original_doc_start = original_entry.document_byte_start;
+        original_entry.cache_key = ParagraphLayoutCacheKey::build(
+            original_text_before_split,
+            font_size,
+            font_family,
+            line_spacing,
+            text_indent,
+            padding,
+            width,
+        );
+        original_entry.layout_generation = 0;
+        original_entry.cache_slot = -1;
+        original_entry.paragraph_text_len = original_text_before_split.len();
+        original_entry.height = 0.0;
+        original_entry.visual_line_count = 0;
+
+        // 新段（split 点之后的部分）
+        let new_doc_start = original_doc_start + split_byte_offset + 1; // +1 for '\n'
+        let new_entry = ParagraphLayoutEntry {
+            id: new_id,
+            cache_key: ParagraphLayoutCacheKey::build(
+                original_text_after_split,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            ),
+            layout_generation: 0,
+            cache_slot: -1,
+            document_byte_start: new_doc_start,
+            paragraph_text_len: original_text_after_split.len(),
+            height: 0.0,
+            visual_line_count: 0,
+            line_start: 0,
+        };
+
+        self.entries.insert(index + 1, new_entry);
+        Some((index, index + 1))
+    }
+
+    // ── 增量更新：删回车合段 ──
+
+    /// 删回车合段 — 删除段落 `index` 和 `index + 1` 之间的 `'\n'`，
+    /// 将 `index + 1` 的内容并入 `index`。
+    ///
+    /// 保留段落 `index` 的 `ParagraphId`，丢弃段落 `index + 1` 的 Id。
+    /// 合并后段落的 `cache_key` 需要重新计算。
+    ///
+    /// 返回合并后的段落索引，失败返回 `None`。
+    pub fn merge_paragraphs(
+        &mut self,
+        index: usize,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+        merged_text: &str,
+    ) -> Option<usize> {
+        if index + 1 >= self.entries.len() {
+            return None;
+        }
+
+        let entry = &mut self.entries[index];
+        entry.cache_key = ParagraphLayoutCacheKey::build(
+            merged_text,
+            font_size,
+            font_family,
+            line_spacing,
+            text_indent,
+            padding,
+            width,
+        );
+        entry.layout_generation = 0;
+        entry.cache_slot = -1;
+        entry.paragraph_text_len = merged_text.len();
+        entry.height = 0.0;
+        entry.visual_line_count = 0;
+
+        // 移除被合并的段落（index + 1）
+        self.entries.remove(index + 1);
+        Some(index)
+    }
+
+    // ── 增量更新：普通编辑 ──
+
+    /// 普通编辑 — 更新段落 `index` 的文本内容（不涉及 `'\n'`）。
+    ///
+    /// 只变更该段的 `cache_key`，其他段落不变。
+    /// 段落 `ParagraphId` 不变。
+    pub fn update_paragraph_text(
+        &mut self,
+        index: usize,
+        new_text: &str,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        let new_key = ParagraphLayoutCacheKey::build(
+            new_text,
+            font_size,
+            font_family,
+            line_spacing,
+            text_indent,
+            padding,
+            width,
+        );
+        let changed = entry.cache_key != new_key;
+        entry.cache_key = new_key;
+        if changed {
+            entry.layout_generation = 0;
+            entry.cache_slot = -1;
+            entry.paragraph_text_len = new_text.len();
+            entry.height = 0.0;
+            entry.visual_line_count = 0;
+        }
+        changed
+    }
+
+    /// 更新段落 `index` 的文档 byte 起始偏移。
+    ///
+    /// 段前插入/删除文本时，后续段落的 `document_byte_start` 需要平移。
+    /// **不改变** `ParagraphId` 和 `cache_key`。
+    pub fn shift_document_byte_start(&mut self, index: usize, new_start: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        entry.document_byte_start = new_start;
+        true
+    }
+
+    // ── 增量更新：段落插入/删除 ──
+
+    /// 在 `index` 处插入新段落（分配新 Id）。
+    pub fn insert_paragraph(
+        &mut self,
+        index: usize,
+        text: &str,
+        document_byte_start: usize,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) {
+        let id = self.allocate_id();
+        let entry = ParagraphLayoutEntry {
+            id,
+            cache_key: ParagraphLayoutCacheKey::build(
+                text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            ),
+            layout_generation: 0,
+            cache_slot: -1,
+            document_byte_start,
+            paragraph_text_len: text.len(),
+            height: 0.0,
+            visual_line_count: 0,
+            line_start: 0,
+        };
+        self.entries.insert(index.min(self.entries.len()), entry);
+    }
+
+    /// 删除段落 `index`（丢弃其 Id）。
+    pub fn remove_paragraph(&mut self, index: usize) -> Option<ParagraphLayoutEntry> {
+        if index < self.entries.len() {
+            Some(self.entries.remove(index))
+        } else {
+            None
+        }
+    }
+
+    // ── 排版结果更新 ──
+
+    /// 更新段落 `index` 的排版结果。
+    ///
+    /// 排版完成后，记录 generation、cache_slot、高度、视觉行数等信息。
+    pub fn update_layout_result(
+        &mut self,
+        index: usize,
+        layout_generation: u64,
+        cache_slot: i32,
+        height: f64,
+        visual_line_count: usize,
+        line_start: usize,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        entry.layout_generation = layout_generation;
+        entry.cache_slot = cache_slot;
+        entry.height = height;
+        entry.visual_line_count = visual_line_count;
+        entry.line_start = line_start;
+        true
+    }
+
+    // ── 判断是否需要重排 ──
+
+    /// 判断段落 `index` 是否需要重新排版。
+    ///
+    /// 需要重排的条件：
+    /// - 尚未排版（`layout_generation == 0` 或 `cache_slot < 0`）
+    /// - 给定的缓存 key 与当前 key 不匹配
+    pub fn needs_relayout(&self, index: usize, expected_key: &ParagraphLayoutCacheKey) -> bool {
+        match self.entries.get(index) {
+            Some(entry) => !entry.is_laid_out() || entry.cache_key != *expected_key,
+            None => true,
+        }
+    }
+
+    /// 计算受影响段落范围。
+    ///
+    /// 根据编辑的 byte 范围确定哪些段落需要重排。
+    /// 返回 [`AffectedParagraphRanges`]，只有这些段落需要重新走 QTextLayout。
+    pub fn compute_affected_paragraphs(
+        &self,
+        affected_byte_start: usize,
+        affected_byte_end: usize,
+    ) -> AffectedParagraphRanges {
+        if self.entries.is_empty() {
+            return AffectedParagraphRanges {
+                relayout_start: 0,
+                relayout_end: 0,
+                full_relayout: true,
+            };
+        }
+
+        // 找到第一个与受影响范围相交的段落
+        let start = self
+            .entries
+            .iter()
+            .position(|e| {
+                let seg_end = e.document_byte_start + e.paragraph_text_len;
+                seg_end >= affected_byte_start && e.document_byte_start < affected_byte_end
+            })
+            .unwrap_or(0);
+
+        // 找到最后一个与受影响范围相交的段落
+        let end = self
+            .entries
+            .iter()
+            .rposition(|e| {
+                let seg_end = e.document_byte_start + e.paragraph_text_len;
+                seg_end >= affected_byte_start && e.document_byte_start < affected_byte_end
+            })
+            .map(|i| i + 1)
+            .unwrap_or(self.entries.len());
+
+        AffectedParagraphRanges {
+            relayout_start: start,
+            relayout_end: end,
+            full_relayout: false,
+        }
+    }
+
+    /// 全局失效 — 标记所有段落需要重排。
+    pub fn invalidate_all(&mut self) {
+        for entry in &mut self.entries {
+            entry.layout_generation = 0;
+            entry.cache_slot = -1;
+            entry.height = 0.0;
+            entry.visual_line_count = 0;
+        }
+    }
+
+    /// 使段落 `index` 的布局缓存失效。
+    pub fn invalidate_paragraph(&mut self, index: usize) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        entry.layout_generation = 0;
+        entry.cache_slot = -1;
+        entry.height = 0.0;
+        entry.visual_line_count = 0;
+        true
+    }
+
+    /// 使范围 `[start, end)` 内的段落缓存失效。
+    pub fn invalidate_range(&mut self, start: usize, end: usize) {
+        for i in start..end {
+            self.invalidate_paragraph(i);
+        }
+    }
+
+    // ── 从 VisualLine 数组同步 ──
+
+    /// 从已有的 `VisualLine` 数组同步段落布局结果。
+    ///
+    /// 按 `cache_slot` 分组，将每个段落的视觉行数、高度、line_start 等信息
+    /// 更新到对应的 `ParagraphLayoutEntry`。
+    pub fn sync_from_visual_lines(&mut self, lines: &[VisualLine], layout_generation: u64) {
+        if lines.is_empty() {
+            for entry in &mut self.entries {
+                entry.layout_generation = layout_generation;
+                entry.visual_line_count = 0;
+                entry.height = 0.0;
+            }
+            return;
+        }
+
+        // 按 cache_slot 分组统计
+        let mut slot_stats: Vec<(i32, usize, f64, usize)> = Vec::new();
+        // (cache_slot, line_count, total_height, first_line_index)
+
+        let mut current_slot: i32 = lines[0].cache_slot;
+        let mut count = 0usize;
+        let mut height = 0.0f64;
+        let mut first_idx = 0usize;
+
+        for (i, line) in lines.iter().enumerate() {
+            if line.cache_slot != current_slot {
+                slot_stats.push((current_slot, count, height, first_idx));
+                current_slot = line.cache_slot;
+                count = 0;
+                height = 0.0;
+                first_idx = i;
+            }
+            count += 1;
+            height += line.height;
+        }
+        slot_stats.push((current_slot, count, height, first_idx));
+
+        // 更新对应段落
+        for (slot, line_count, total_height, line_start) in slot_stats {
+            if slot >= 0 && (slot as usize) < self.entries.len() {
+                let entry = &mut self.entries[slot as usize];
+                entry.layout_generation = layout_generation;
+                entry.cache_slot = slot;
+                entry.visual_line_count = line_count;
+                entry.height = total_height;
+                entry.line_start = line_start;
+            }
+        }
+    }
+
+    /// 获取所有段落的 `ParagraphId` 列表（按文档顺序）。
+    pub fn paragraph_ids(&self) -> Vec<ParagraphId> {
+        self.entries.iter().map(|e| e.id).collect()
+    }
+
+    /// 获取所有段落的高度列表（按文档顺序）。
+    pub fn paragraph_heights(&self) -> Vec<f64> {
+        self.entries.iter().map(|e| e.height).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_key(text: &str) -> ParagraphLayoutCacheKey {
+        ParagraphLayoutCacheKey::build(text, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0)
+    }
+
+    #[test]
+    fn paragraph_id_is_stable() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_count(), 2);
+
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+        assert_ne!(id0, ParagraphId::INVALID);
+        assert_ne!(id1, ParagraphId::INVALID);
+        assert_ne!(id0, id1);
+
+        // 普通编辑不改 Id
+        store.update_paragraph_text(0, "hi", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_id_at(0), Some(id0));
+        assert_eq!(store.paragraph_id_at(1), Some(id1));
+    }
+
+    #[test]
+    fn split_preserves_original_id() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("helloworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let original_id = store.paragraph_id_at(0).unwrap();
+
+        let (orig_idx, new_idx) = store
+            .split_paragraph(
+                0,
+                5,
+                16.0,
+                "Sans",
+                1.2,
+                0.0,
+                0.0,
+                600.0,
+                "hello",
+                "world",
+            )
+            .unwrap();
+
+        assert_eq!(orig_idx, 0);
+        assert_eq!(new_idx, 1);
+        assert_eq!(store.paragraph_count(), 2);
+        // 原段保留 Id
+        assert_eq!(store.paragraph_id_at(0), Some(original_id));
+        // 新段分配新 Id
+        let new_id = store.paragraph_id_at(1).unwrap();
+        assert_ne!(new_id, original_id);
+    }
+
+    #[test]
+    fn merge_preserves_first_id() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+
+        let merged_idx = store
+            .merge_paragraphs(0, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0, "helloworld")
+            .unwrap();
+
+        assert_eq!(merged_idx, 0);
+        assert_eq!(store.paragraph_count(), 1);
+        // 保留第一段 Id
+        assert_eq!(store.paragraph_id_at(0), Some(id0));
+        // 第二段 Id 被丢弃
+        assert_ne!(store.paragraph_id_at(0), Some(id1));
+    }
+
+    #[test]
+    fn cache_key_changes_on_text_edit() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+
+        let original_key = store.entry(0).unwrap().cache_key.clone();
+        let changed = store.update_paragraph_text(0, "hi", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert!(changed);
+
+        let new_key = store.entry(0).unwrap().cache_key.clone();
+        assert_ne!(original_key, new_key);
+    }
+
+    #[test]
+    fn cache_key_same_on_no_change() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+
+        let changed = store.update_paragraph_text(0, "hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn cache_key_changes_on_width_change() {
+        let key1 = make_key("hello");
+        let key2 = ParagraphLayoutCacheKey::build("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 800.0);
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_changes_on_font_change() {
+        let key1 = make_key("hello");
+        let key2 = ParagraphLayoutCacheKey::build("hello", 18.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn needs_relayout_for_unlaid_out() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let key = store.entry(0).unwrap().cache_key.clone();
+        assert!(store.needs_relayout(0, &key));
+    }
+
+    #[test]
+    fn needs_relayout_for_changed_key() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        store.update_layout_result(0, 1, 0, 20.0, 1, 0);
+        let different_key = make_key("world");
+        assert!(store.needs_relayout(0, &different_key));
+    }
+
+    #[test]
+    fn no_relayout_after_layout_result() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let key = store.entry(0).unwrap().cache_key.clone();
+        store.update_layout_result(0, 1, 0, 20.0, 1, 0);
+        assert!(!store.needs_relayout(0, &key));
+    }
+
+    #[test]
+    fn compute_affected_paragraphs_basic() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nbbb\nccc", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        // 段落 0: byte [0, 3), 段落 1: byte [4, 7), 段落 2: byte [8, 11)
+        let ranges = store.compute_affected_paragraphs(4, 7);
+        assert_eq!(ranges.relayout_start, 1);
+        assert_eq!(ranges.relayout_end, 2);
+        assert!(!ranges.full_relayout);
+    }
+
+    #[test]
+    fn compute_affected_paragraphs_empty() {
+        let store = ParagraphLayoutStore::new();
+        let ranges = store.compute_affected_paragraphs(0, 10);
+        assert!(ranges.full_relayout);
+    }
+
+    #[test]
+    fn invalidate_all_clears_layout() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("hello\nworld", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        store.update_layout_result(0, 1, 0, 20.0, 1, 0);
+        store.update_layout_result(1, 1, 1, 20.0, 1, 1);
+        assert!(!store.entry(0).unwrap().needs_relayout_check());
+        store.invalidate_all();
+        assert!(store.entry(0).unwrap().needs_relayout_check());
+    }
+
+    #[test]
+    fn rebuild_preserves_ids_for_aligned_paragraphs() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+
+        // 重建（全局参数变化），同位置段落保留 Id
+        store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 800.0);
+        assert_eq!(store.paragraph_id_at(0), Some(id0));
+        assert_eq!(store.paragraph_id_at(1), Some(id1));
+    }
+
+    #[test]
+    fn rebuild_allocates_new_ids_for_new_paragraphs() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id0 = store.paragraph_id_at(0).unwrap();
+
+        store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        // 段落 0 保留 Id
+        assert_eq!(store.paragraph_id_at(0), Some(id0));
+        // 段落 1 是新段落，分配新 Id
+        let id1 = store.paragraph_id_at(1).unwrap();
+        assert_ne!(id1, id0);
+    }
+
+    #[test]
+    fn insert_and_remove_paragraph() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nccc", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_count(), 2);
+
+        store.insert_paragraph(1, "bbb", 4, 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_count(), 3);
+
+        let removed = store.remove_paragraph(1);
+        assert!(removed.is_some());
+        assert_eq!(store.paragraph_count(), 2);
+    }
+
+    #[test]
+    fn shift_document_byte_start_preserves_id_and_key() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id1 = store.paragraph_id_at(1).unwrap();
+        let key1 = store.entry(1).unwrap().cache_key.clone();
+
+        store.shift_document_byte_start(1, 100);
+        assert_eq!(store.paragraph_id_at(1), Some(id1));
+        assert_eq!(store.entry(1).unwrap().cache_key, key1);
+        assert_eq!(store.entry(1).unwrap().document_byte_start, 100);
+    }
+}
+
+/// 辅助 trait：检查段落是否需要重排（仅供测试）。
+#[cfg(test)]
+impl ParagraphLayoutEntry {
+    fn needs_relayout_check(&self) -> bool {
+        !self.is_laid_out()
+    }
+}

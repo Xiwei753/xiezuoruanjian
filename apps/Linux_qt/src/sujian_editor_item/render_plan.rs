@@ -1,6 +1,7 @@
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
-use super::render_ownership::RenderOwnershipPlan;
+use super::qt_text_node::AnimationClipRect;
+use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::DeleteEdge;
@@ -129,6 +130,54 @@ pub(crate) struct CursorRenderState {
     pub path_start_y: f64,
 }
 
+/// Issue #901：简化的渲染归属计划。
+///
+/// 旧 `RenderOwnershipPlan`（来自已删除的 `render_ownership` 模块）已由
+/// `visual_canvas::Ownership` + `visual_canvas::CanvasDrawPlan` 替代。
+/// 本结构保留 `scene_graph_renderer` / `qquickitem_impl` 需要的最小接口，
+/// 让四层渲染（静态正文/动画/选区/光标）在过渡期间继续工作。
+///
+/// 新的 `visual_canvas::CanvasDrawPlan` 最终会完全接管本结构，但在接线
+/// 阶段保留此薄层避免一次性改太多渲染热路径。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RenderOwnership {
+    /// 动画 glyph 列表（吐字/吞字/重排动画的纹理切片）。
+    pub animated_glyphs: Vec<TextAnimationGlyphInfo>,
+    /// 静态层重建时需要裁剪掉的矩形（让给动画 owner 的 target cluster）。
+    pub clip_rects: Vec<AnimationClipRect>,
+    /// 是否有未完成的 ownership 交接。
+    pub handoff_pending: bool,
+    /// ownership 版本号——变化时触发静态 rebuild。
+    pub ownership_revision: u64,
+    /// 目标 layout revision（用于判断 ownership 是否匹配当前 canonical）。
+    pub target_layout_revision: Option<LayoutRevision>,
+}
+
+impl RenderOwnership {
+    /// 检查所有动画 glyph 的纹理是否已在 `texture_cache` 中就绪。
+    pub(crate) fn has_animation_resources(&self, texture_cache: &TextureCache) -> bool {
+        self.animated_glyphs
+            .iter()
+            .all(|glyph| texture_cache.contains_line(&glyph.snapshot_id))
+    }
+
+    /// 返回静态层重建用的裁剪矩形列表。
+    pub(crate) fn clips_for_static_rebuild(&self) -> &[AnimationClipRect] {
+        &self.clip_rects
+    }
+
+    /// 返回本帧提交后的 ownership revision。
+    ///
+    /// `resources_ready` 为 false 时返回旧 revision，触发下一帧重试。
+    pub(crate) fn committed_revision(&self, resources_ready: bool) -> u64 {
+        if resources_ready {
+            self.ownership_revision
+        } else {
+            self.ownership_revision.wrapping_sub(1)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VisualCaretGeometry {
     /// 文档坐标，与动画 glyph rect 使用同一坐标系。
@@ -152,11 +201,11 @@ pub(crate) struct VisualCaretGeometry {
 /// renderer 不读取动画状态，也不重新决定 owner。
 pub struct RenderPlan {
     // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
-    // 状态（RenderOwnershipPlan / CursorRenderState / FrameContext 等），
+    // 状态（RenderOwnership / CursorRenderState / FrameContext 等），
     // 集成测试只需要 drawn_caret_rect 这个 (x, y, h) 裸元组。
     //
     // 光标采样在 CursorController 内完成，RenderPlan 只保存最终要显示的位置。
-    pub(crate) ownership: RenderOwnershipPlan,
+    pub(crate) ownership: RenderOwnership,
     pub(crate) selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。

@@ -178,16 +178,14 @@ impl QQuickItem for SujianEditorItem {
         self.drain_pointer_frame_submissions();
 
         // Qt invokes this method during synchronization. Consume only acknowledgments that
-        // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
-        let handoff_promoted = self
-            .pipeline
-            .animation_coordinator_mut()
-            .consume_submitted_frames();
+        // arrived from afterFrameEnd.
+        // Issue #901: 旧 animation_coordinator.consume_submitted_frames /
+        // collect_active_snapshot_ids 已删除。帧提交 mailbox 的 texture retain
+        // 改由 visual_canvas 的绘制计划决定。
+        // TODO(issue-901): integrate with visual_canvas to retain active snapshot ids.
+        let handoff_promoted = false;
         if handoff_promoted {
-            let active_ids = self
-                .pipeline
-                .animation_coordinator()
-                .collect_active_snapshot_ids();
+            let active_ids: Vec<super::layout_snapshot::LineSnapshotId> = Vec::new();
             self.pipeline.retain_active_snapshot_ids(&active_ids);
         }
 
@@ -319,18 +317,27 @@ impl QQuickItem for SujianEditorItem {
                     _ => false,
                 };
 
-            let render_plan = self
-                .pipeline
-                .animation_coordinator_mut()
-                .build_render_plan_full(
-                    cursor_render_state,
-                    selection_preedit,
-                    cursor_style,
-                    selection_preedit_style,
-                    self.current_coordinated_animation_enabled,
-                    frame_now,
-                    canonical_visual_snapshot.as_ref(),
-                );
+            // Issue #901: 旧 animation_coordinator.build_render_plan_full 已删除。
+            // 直接构造 RenderPlan，ownership 用简化的 RenderOwnership（无动画 glyph）。
+            // TODO(issue-901): integrate with visual_canvas.frame(now) to get CanvasDrawPlan
+            // and convert animated glyphs / clip rects from DrawCommand list.
+            let drawn_caret_rect = if cursor_render_state.visible {
+                Some((
+                    cursor_render_state.x,
+                    cursor_render_state.y,
+                    cursor_render_state.h,
+                ))
+            } else {
+                None
+            };
+            let render_plan = super::render_plan::RenderPlan {
+                ownership: super::render_plan::RenderOwnership::default(),
+                selection_preedit,
+                cursor: cursor_render_state,
+                cursor_style,
+                selection_preedit_style,
+                drawn_caret_rect,
+            };
 
             // owner revision 来自完整 cluster owner set，A→A+B 也会触发静态 rebuild。
             // 只在 static + animation 整帧成功后提交 revision；失败时下一帧仍会重试。
@@ -383,21 +390,9 @@ impl QQuickItem for SujianEditorItem {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
                     .committed_revision(animation_resources_ready);
-                self.pipeline
-                    .animation_coordinator_mut()
-                    .commit_rendered_plan(
-                        &render_plan.ownership,
-                        render_plan
-                            .cursor
-                            .visible
-                            .then_some(super::edit_motion::CursorRect {
-                                x: render_plan.cursor.x,
-                                top: render_plan.cursor.y,
-                                bottom: render_plan.cursor.y + render_plan.cursor.h,
-                                baseline_y: render_plan.cursor.baseline_y,
-                            }),
-                        animation_resources_ready,
-                    );
+                // Issue #901: 旧 animation_coordinator.commit_rendered_plan 已删除。
+                // ownership 提交改由 visual_canvas.commit_presented_scene 处理。
+                // TODO(issue-901): integrate with visual_canvas.commit_presented_scene.
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -437,11 +432,10 @@ impl QQuickItem for SujianEditorItem {
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
             // 正文过渡与光标 tween 各自未结束时都继续请求下一帧.
-            if self
-                .pipeline
-                .animation_coordinator()
-                .has_active_text_animation(frame_now)
-                || self.cursor_ctrl.animation.is_some()
+            // Issue #901: 旧 animation_coordinator.has_active_text_animation 已删除。
+            // TODO(issue-901): integrate with visual_canvas FrameClock to query active text animation.
+            // 暂时只由 cursor_ctrl.animation 决定是否继续请求下一帧。
+            if self.cursor_ctrl.animation.is_some()
             {
                 self.request_frame_update();
             }

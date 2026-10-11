@@ -177,13 +177,79 @@ pub fn prepare_document_visual_snapshot_scoped(
     )
 }
 
-// 实际组装逻辑（整篇 impl / 从 VisualLine 组装 / 局部受影响段落）移到 full.rs。
+// 实际组装逻辑（整篇 impl / 从 VisualLine 组装 / 局部受影响段落 / 增量排版）移到 full.rs。
 mod full;
 
 use full::prepare_document_visual_snapshot_impl;
 pub use full::{
     assemble_document_visual_snapshot_from_lines, prepare_affected_paragraphs_visual_snapshot,
 };
+
+/// Issue #901: 增量排版入口 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
+///
+/// 利用 [`ParagraphLayoutStore`] 判断哪些段落需要重排（cache_key 不匹配或未排版），
+/// 利用 [`ParagraphHeightIndex`] 更新高度索引。
+///
+/// # 参数
+///
+/// - `text` / `text_revision`：新文本和 revision。
+/// - `affected_byte_start/end`：Core 提供的受影响字节范围（DisplayPatch 的 replace_byte_range）。
+///   `affected_byte_start >= affected_byte_end` 表示无受影响范围，走全局重排。
+/// - `previous_snapshot`：上一次排版的 snapshot，用于复用不受影响段落的 VisualLine。
+///   `None` 时走全局重排。
+/// - `paragraph_store`：段落布局存储，判断哪些段落需要重排。
+///   为空时走全局重排（初始化/参数变化后 invalidate 清空）。
+/// - `height_index`：段落高度索引，计算 y 坐标和更新高度。
+///
+/// # 全局重排条件
+///
+/// - `paragraph_store` 为空（初始化/参数变化后 invalidate）
+/// - `affected_byte_start >= affected_byte_end`（无受影响范围）
+/// - `previous_snapshot` 为 None（首次排版）
+///
+/// # 增量重排策略
+///
+/// - 受影响段落（包括手动 Enter 拆段、Backspace 合段）重新走 QTextLayout。
+/// - 其他段落复用 `previous_snapshot` 的 VisualLine（只更新 y 坐标和 byte offset）。
+/// - 段落高度变化只改受影响段的数据（Fenwick 树单点更新）。
+/// - **不能因其高度变化，顺带重新 shaping 后面所有段落。**
+pub fn prepare_incremental_visual_snapshot(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: Option<&str>,
+    generation: u64,
+    affected_byte_start: usize,
+    affected_byte_end: usize,
+    previous_snapshot: Option<&CanonicalDocumentVisualSnapshot>,
+    paragraph_store: &mut super::super::paragraph_layout_store::ParagraphLayoutStore,
+    height_index: &mut super::super::paragraph_height_index::ParagraphHeightIndex,
+) -> CanonicalDocumentVisualSnapshot {
+    full::prepare_incremental_visual_snapshot_impl(
+        text,
+        text_revision,
+        font_size,
+        font_family,
+        line_spacing,
+        padding,
+        indent,
+        width,
+        dpr,
+        text_color,
+        generation,
+        affected_byte_start,
+        affected_byte_end,
+        previous_snapshot,
+        paragraph_store,
+        height_index,
+    )
+}
 
 /// Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画 raster 视觉注入到 doc snapshot。
 ///

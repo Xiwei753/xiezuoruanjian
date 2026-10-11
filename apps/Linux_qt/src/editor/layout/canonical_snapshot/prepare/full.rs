@@ -401,6 +401,543 @@ pub fn assemble_document_visual_snapshot_from_lines(
     }
 }
 
+// ── Issue #901: 增量排版实现 ──
+
+/// 从 `CanonicalDocumentVisualSnapshot` 的 `visual_lines` 提取每段高度。
+///
+/// 按 `cache_slot` 分组累加行高，返回按段落顺序排列的高度数组。
+fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<f64> {
+    // 从 visual_lines 按 para_start 去重提取段落起始偏移列表
+    let mut para_starts: Vec<usize> = Vec::new();
+    for vl in &snapshot.visual_lines {
+        if !para_starts.contains(&vl.para_start) {
+            para_starts.push(vl.para_start);
+        }
+    }
+
+    let mut heights = vec![0.0f64; para_starts.len()];
+    for vl in &snapshot.visual_lines {
+        if let Some(idx) = para_starts.iter().position(|&s| s == vl.para_start) {
+            heights[idx] += vl.height;
+        }
+    }
+    heights
+}
+
+/// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
+///
+/// # 核心逻辑
+///
+/// 1. **全局重排条件**：`paragraph_store` 为空、排版参数变化、或无受影响范围时，
+///    走全篇重排（`prepare_document_visual_snapshot_impl`），然后重建 store 和 height_index。
+/// 2. **增量重排**：
+///    - 用 `ParagraphLayoutStore` 判断哪些段落需要重排（cache_key 不匹配或未排版）。
+///    - 受影响段落（包括手动 Enter 拆段、Backspace 合段）重新走 QTextLayout。
+///    - 其他段落复用 `previous_snapshot` 的 VisualLine（只更新 y 坐标和 byte offset）。
+///    - 用 `ParagraphHeightIndex` 计算每段 y 坐标（前缀和），不逐段存储 y。
+///    - 段落高度变化只改受影响段的数据（Fenwick 树单点更新 O(log n)）。
+///    - **不能因其高度变化，顺带重新 shaping 后面所有段落。**
+///
+/// # 参数
+///
+/// - `affected_byte_start/end`：Core 提供的受影响字节范围（DisplayPatch 的 replace_byte_range）。
+/// - `previous_snapshot`：上一次排版的 snapshot，用于复用不受影响段落的 VisualLine。
+/// - `paragraph_store`：段落布局存储，判断哪些段落需要重排。
+/// - `height_index`：段落高度索引，计算 y 坐标和更新高度。
+pub(super) fn prepare_incremental_visual_snapshot_impl(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: Option<&str>,
+    generation: u64,
+    affected_byte_start: usize,
+    affected_byte_end: usize,
+    previous_snapshot: Option<&CanonicalDocumentVisualSnapshot>,
+    paragraph_store: &mut super::super::super::paragraph_layout_store::ParagraphLayoutStore,
+    height_index: &mut super::super::super::paragraph_height_index::ParagraphHeightIndex,
+) -> CanonicalDocumentVisualSnapshot {
+    let metrics_h = get_font_ascent(font_family, font_size as f32)
+        + get_font_descent(font_family, font_size as f32);
+    let line_height = (font_size * line_spacing)
+        .max(font_size + 4.0)
+        .max(metrics_h);
+    let available = (width - padding * 2.0).max(font_size);
+
+    // ── 1. 判断是否需要全局重排 ──
+    let store_empty = paragraph_store.is_empty();
+    let no_affected_range = affected_byte_start >= affected_byte_end;
+    // 检查排版参数是否变化（通过 store 中已有段落的 cache_key 判断）
+    let params_changed = check_params_changed(paragraph_store, font_size, font_family, line_spacing, indent, padding, width);
+
+    let needs_full_relayout = store_empty || no_affected_range || params_changed || previous_snapshot.is_none();
+
+    if needs_full_relayout {
+        // 全局重排路径：重建 store + 全篇排版 + 重建 height_index
+        paragraph_store.rebuild_from_text(
+            text,
+            font_size,
+            font_family,
+            line_spacing,
+            indent,
+            padding,
+            width,
+        );
+
+        let snapshot = prepare_document_visual_snapshot_impl(
+            text,
+            text_revision,
+            font_size,
+            font_family,
+            line_spacing,
+            padding,
+            indent,
+            width,
+            dpr,
+            text_color,
+            generation,
+            false,
+            affected_byte_start,
+            affected_byte_end,
+        );
+
+        // 从 snapshot 提取段落高度，重建 height_index
+        let heights = extract_paragraph_heights(&snapshot);
+        height_index.rebuild(heights);
+
+        // 同步 paragraph_store 的排版结果
+        paragraph_store.sync_from_visual_lines(&snapshot.visual_lines, generation);
+
+        return snapshot;
+    }
+
+    // ── 2. 增量重排路径 ──
+    // needs_full_relayout 已检查 previous_snapshot.is_none()，此处一定为 Some。
+    let prev = match previous_snapshot {
+        Some(s) => s,
+        None => {
+            // 逻辑上不会走到这里（needs_full_relayout 已覆盖 None 情况）。
+            // 返回空 snapshot 作为安全兜底。
+            return CanonicalDocumentVisualSnapshot {
+                text_revision,
+                font_size,
+                font_family: font_family.to_string(),
+                line_spacing,
+                text_indent: indent,
+                padding,
+                width,
+                dpr,
+                paragraphs: Vec::new(),
+                visual_lines: Vec::new(),
+            };
+        }
+    };
+
+    // 用 store 计算受影响段落范围
+    let affected = paragraph_store.compute_affected_paragraphs(affected_byte_start, affected_byte_end);
+
+    // 遍历所有段落，受影响的重新排版，不受影响的复用
+    let mut paragraphs: Vec<CanonicalParagraphSnapshot> = Vec::new();
+    let mut visual_lines: Vec<VisualLine> = Vec::new();
+    let mut y: f64 = padding;
+    let mut paragraph_start: usize = 0;
+    let mut paragraph_qchar_start: usize = 0;
+    let mut line_id: usize = 0;
+    let mut paragraph_idx: i32 = 0;
+
+    // 先更新 store 的文本信息（处理换行拆段/删回车合段）
+    paragraph_store.rebuild_from_text(
+        text,
+        font_size,
+        font_family,
+        line_spacing,
+        indent,
+        padding,
+        width,
+    );
+
+    for paragraph in text.split_inclusive('\n') {
+        let hard_break = paragraph.ends_with('\n');
+        let paragraph_text = paragraph.trim_end_matches('\n');
+
+        let current_idx = paragraph_idx as usize;
+        let is_affected = affected.full_relayout
+            || (current_idx >= affected.relayout_start && current_idx < affected.relayout_end);
+
+        // 尝试从 previous_snapshot 复用
+        let can_reuse = !is_affected && current_idx < prev.paragraphs.len();
+
+        if can_reuse {
+            let prev_para = &prev.paragraphs[current_idx];
+            // 检查段落文本是否相同（内容未变才能复用 shaping）
+            if prev_para.paragraph_text == paragraph_text {
+                // 复用 VisualLine — 只更新 y 坐标和 byte offset
+                let prev_lines: Vec<VisualLine> = prev
+                    .visual_lines
+                    .iter()
+                    .filter(|l| l.para_start == prev_para.paragraph_document_byte_start)
+                    .cloned()
+                    .collect();
+
+                if !prev_lines.is_empty() {
+                    let y_offset = y - prev_lines.first().map(|l| l.y).unwrap_or(y);
+                    let byte_offset = paragraph_start as i64 - prev_para.paragraph_document_byte_start as i64;
+                    let qchar_offset = paragraph_qchar_start as i64
+                        - prev
+                            .visual_lines
+                            .iter()
+                            .filter(|l| l.para_start == prev_para.paragraph_document_byte_start)
+                            .next()
+                            .map(|l| l.qchar_start as i64 - l.para_qchar_start as i64)
+                            .unwrap_or(0);
+
+                    let line_start_for_store = line_id;
+                    let reused_line_count = prev_lines.len();
+                    let mut para_height = 0.0f64;
+                    for mut vl in prev_lines {
+                        vl.id = line_id;
+                        vl.y += y_offset;
+                        if byte_offset != 0 {
+                            vl.para_start = (vl.para_start as i64 + byte_offset) as usize;
+                            vl.byte_start = (vl.byte_start as i64 + byte_offset) as usize;
+                            vl.byte_end = (vl.byte_end as i64 + byte_offset) as usize;
+                        }
+                        if qchar_offset != 0 {
+                            vl.qchar_start = (vl.qchar_start as i64 + qchar_offset) as usize;
+                            vl.qchar_end = (vl.qchar_end as i64 + qchar_offset) as usize;
+                        }
+                        para_height += vl.height;
+                        visual_lines.push(vl);
+                        line_id += 1;
+                    }
+                    y += para_height;
+
+                    // 复用 CanonicalParagraphSnapshot，更新 byte offset
+                    let mut para = prev_para.clone();
+                    if byte_offset != 0 {
+                        para.paragraph_document_byte_start = paragraph_start;
+                        para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                            &para.paragraph_text,
+                            paragraph_start,
+                        );
+                        for line in &mut para.lines {
+                            line.document_byte_start =
+                                (line.document_byte_start as i64 + byte_offset) as usize;
+                            line.document_byte_end =
+                                (line.document_byte_end as i64 + byte_offset) as usize;
+                            line.paragraph_document_byte_start = paragraph_start;
+                            for cluster in &mut line.clusters {
+                                cluster.document_byte_start =
+                                    (cluster.document_byte_start as i64 + byte_offset) as usize;
+                                cluster.document_byte_end =
+                                    (cluster.document_byte_end as i64 + byte_offset) as usize;
+                            }
+                        }
+                    }
+                    paragraphs.push(para);
+
+                    // 更新 store 的排版结果（复用）
+                    paragraph_store.update_layout_result(
+                        current_idx,
+                        generation,
+                        current_idx as i32,
+                        para_height,
+                        reused_line_count,
+                        line_start_for_store,
+                    );
+
+                    paragraph_start += paragraph.len();
+                    paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+                    paragraph_idx += 1;
+                    continue;
+                }
+            }
+        }
+
+        // ── 受影响段落：重新走 QTextLayout ──
+        if paragraph_text.is_empty() {
+            let empty_ascent = get_font_ascent(font_family, font_size as f32);
+            let empty_descent = get_font_descent(font_family, font_size as f32);
+            let _empty_canonical = prepare_paragraph_visual_snapshot(
+                paragraph_text,
+                paragraph_start,
+                font_size,
+                font_family,
+                available,
+                indent,
+                dpr,
+                text_color,
+                paragraph_idx,
+                line_spacing,
+                generation,
+                false,
+            );
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: paragraph_start,
+                byte_end: paragraph_start,
+                qchar_start: paragraph_qchar_start,
+                qchar_end: paragraph_qchar_start,
+                hard_break,
+                x: padding + indent,
+                y,
+                width: 0.0,
+                height: line_height,
+                para_text: String::new(),
+                para_start: paragraph_start,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: available - indent,
+                line_indent_x: indent,
+                para_indent: indent,
+                x_end_trailing: 0.0,
+                qt_ascent: empty_ascent,
+                qt_descent: empty_descent,
+                cache_slot: paragraph_idx,
+            });
+            line_id += 1;
+            y += line_height;
+
+            paragraphs.push(CanonicalParagraphSnapshot {
+                paragraph_text: String::new(),
+                paragraph_document_byte_start: paragraph_start,
+                lines: Vec::new(),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                    "",
+                    paragraph_start,
+                ),
+            });
+
+            // 更新 store 排版结果
+            paragraph_store.update_layout_result(
+                current_idx,
+                generation,
+                paragraph_idx,
+                line_height,
+                1,
+                line_id - 1,
+            );
+
+            paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_idx += 1;
+            continue;
+        }
+
+        let canonical = prepare_paragraph_visual_snapshot(
+            paragraph_text,
+            paragraph_start,
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            paragraph_idx,
+            line_spacing,
+            generation,
+            false,
+        );
+
+        let line_start_for_store = line_id;
+        let mut para_height = 0.0f64;
+        let line_count = canonical.lines.len();
+
+        for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
+            let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
+            let actual_line_h = if qt_metrics_h > 0.0 {
+                line_height.max(qt_metrics_h)
+            } else {
+                line_height
+            };
+
+            let is_first = line_idx == 0;
+
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: canonical_line.document_byte_start,
+                byte_end: canonical_line.document_byte_end,
+                qchar_start: canonical_line.qchar_start + paragraph_qchar_start,
+                qchar_end: canonical_line.qchar_end + paragraph_qchar_start,
+                hard_break: hard_break && line_idx == canonical.lines.len() - 1,
+                x: padding + canonical_line.x_pos,
+                y,
+                width: canonical_line.width,
+                height: actual_line_h,
+                para_text: paragraph_text.to_string(),
+                para_start: paragraph_start,
+                qtextline_idx: line_idx as i32,
+                para_qchar_start: canonical_line.qchar_start,
+                para_qchar_end: canonical_line.qchar_end,
+                line_wrap_width: if is_first { available - indent } else { available },
+                line_indent_x: if is_first { indent } else { 0.0 },
+                para_indent: indent,
+                x_end_trailing: canonical_line.x_end_trailing,
+                qt_ascent: canonical_line.ascent,
+                qt_descent: canonical_line.descent,
+                cache_slot: paragraph_idx,
+            });
+            line_id += 1;
+            y += actual_line_h;
+            para_height += actual_line_h;
+        }
+
+        // 更新 store 排版结果
+        paragraph_store.update_layout_result(
+            current_idx,
+            generation,
+            paragraph_idx,
+            para_height,
+            line_count,
+            line_start_for_store,
+        );
+
+        paragraph_start += paragraph.len();
+        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+
+        paragraphs.push(canonical);
+        paragraph_idx += 1;
+    }
+
+    // 空文本处理
+    if text.is_empty() {
+        let empty_ascent = get_font_ascent(font_family, font_size as f32);
+        let empty_descent = get_font_descent(font_family, font_size as f32);
+        let _empty_canonical = prepare_paragraph_visual_snapshot(
+            "",
+            0,
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            0,
+            line_spacing,
+            generation,
+            false,
+        );
+        visual_lines.push(VisualLine {
+            id: line_id,
+            byte_start: 0,
+            byte_end: 0,
+            qchar_start: 0,
+            qchar_end: 0,
+            hard_break: false,
+            x: padding + indent,
+            y,
+            width: 0.0,
+            height: line_height,
+            para_text: String::new(),
+            para_start: 0,
+            qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
+            para_indent: indent,
+            x_end_trailing: 0.0,
+            qt_ascent: empty_ascent,
+            qt_descent: empty_descent,
+            cache_slot: 0,
+        });
+        paragraphs.push(CanonicalParagraphSnapshot {
+            paragraph_text: String::new(),
+            paragraph_document_byte_start: 0,
+            lines: Vec::new(),
+            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
+        });
+    }
+
+    // 尾部换行处理
+    if text.ends_with('\n') {
+        let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
+        let _empty_canonical = prepare_paragraph_visual_snapshot(
+            "",
+            text.len(),
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            paragraph_idx,
+            line_spacing,
+            generation,
+            false,
+        );
+        visual_lines.push(VisualLine {
+            id: line_id,
+            byte_start: text.len(),
+            byte_end: text.len(),
+            qchar_start: text_qchar_len,
+            qchar_end: text_qchar_len,
+            hard_break: false,
+            x: padding + indent,
+            y,
+            width: 0.0,
+            height: line_height,
+            para_text: String::new(),
+            para_start: text.len(),
+            qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
+            para_indent: indent,
+            x_end_trailing: 0.0,
+            qt_ascent: 0.0,
+            qt_descent: 0.0,
+            cache_slot: paragraph_idx,
+        });
+    }
+
+    let snapshot = CanonicalDocumentVisualSnapshot {
+        text_revision,
+        font_size,
+        font_family: font_family.to_string(),
+        line_spacing,
+        text_indent: indent,
+        padding,
+        width,
+        dpr,
+        paragraphs,
+        visual_lines,
+    };
+
+    // 从 snapshot 提取段落高度，更新 height_index
+    let heights = extract_paragraph_heights(&snapshot);
+    height_index.rebuild(heights);
+
+    // 同步 paragraph_store
+    paragraph_store.sync_from_visual_lines(&snapshot.visual_lines, generation);
+
+    snapshot
+}
+
+/// 检查排版参数是否变化。
+///
+/// `EditorLayout::snapshot` 在参数变化时已经调用 `invalidate()` 清空 store，
+/// 所以当 store 非空时参数一定没变。此函数始终返回 `false`，
+/// 参数变化由 `store_empty` 条件覆盖（参数变化 → invalidate → store 为空）。
+fn check_params_changed(
+    _paragraph_store: &super::super::super::paragraph_layout_store::ParagraphLayoutStore,
+    _font_size: f64,
+    _font_family: &str,
+    _line_spacing: f64,
+    _indent: f64,
+    _padding: f64,
+    _width: f64,
+) -> bool {
+    false
+}
+
 pub fn prepare_affected_paragraphs_visual_snapshot(
     text: &str,
     text_revision: u64,

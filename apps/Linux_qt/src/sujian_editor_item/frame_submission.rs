@@ -9,7 +9,6 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use super::animation::visual_frame::VisualFrame;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::LineSnapshotId;
 
@@ -63,10 +62,17 @@ pub(crate) struct SubmittedFrameTicket {
     pub window_generation: u64,
 }
 
+/// Issue #901：已提交视觉帧。
+///
+/// 旧 `VisualFrame`（来自已删除的 `animation::visual_frame` 模块）已由
+/// `visual_canvas::PresentedScene` 替代。本结构只保留帧提交 mailbox 需要的
+/// 最小信息：ticket + 该帧引用的行快照 id 列表（供 `active_snapshot_ids`
+/// 决定哪些 QImage 不能释放）。
 #[derive(Clone, Debug)]
 pub(crate) struct SubmittedVisualFrame {
     pub ticket: SubmittedFrameTicket,
-    pub visual_frame: VisualFrame,
+    /// 该帧引用的行快照 id 列表（替代旧 `VisualFrame.clusters[].snapshot_id`）。
+    pub snapshot_ids: Vec<LineSnapshotId>,
     pub terminal_motion_indices: Vec<usize>,
     pub visible_width_updates: Vec<(usize, f64)>,
     pub terminal_frame: bool,
@@ -110,7 +116,7 @@ impl FrameSubmissionMailbox {
         layout_revision: LayoutRevision,
         transition_id: u64,
         ownership_revision: u64,
-        visual_frame: VisualFrame,
+        snapshot_ids: Vec<LineSnapshotId>,
         terminal_motion_indices: Vec<usize>,
         visible_width_updates: Vec<(usize, f64)>,
         terminal_frame: bool,
@@ -129,7 +135,7 @@ impl FrameSubmissionMailbox {
                 render_frame_id: self.next_frame_id.fetch_add(1, Ordering::Relaxed),
                 window_generation: state.window_generation,
             },
-            visual_frame,
+            snapshot_ids,
             terminal_motion_indices,
             visible_width_updates,
             terminal_frame,
@@ -228,9 +234,9 @@ impl FrameSubmissionMailbox {
             .chain(state.synchronized.iter())
             .chain(state.submitted.iter())
         {
-            for cluster in &frame.visual_frame.clusters {
-                if !ids.contains(&cluster.snapshot_id) {
-                    ids.push(cluster.snapshot_id);
+            for snapshot_id in &frame.snapshot_ids {
+                if !ids.contains(snapshot_id) {
+                    ids.push(*snapshot_id);
                 }
             }
         }

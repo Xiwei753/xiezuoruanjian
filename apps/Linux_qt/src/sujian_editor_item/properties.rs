@@ -468,29 +468,10 @@ impl SujianEditorItem {
             // Issue #826 评论 34：pause 是**时间轴级**的——只记 pause 瞬间，
             // resume 时把暂停时长平移回三层 `started_at`，所以滚动期间 progress
             // 真正停住，恢复后仍从 pause 那一刻继续，而不是按墙钟直接跳终态。
-            // 这里同时拿回 active ids：若之后正文真的被编辑（记录在
-            // `record_transaction` 的 scrolling suppressed 分支收口），
-            // 这些旧行纹理才有机会被 retain 掉。
-            let freed_snapshot_ids = self
-                .pipeline
-                .animation_coordinator_mut()
-                .pause_all(std::time::Instant::now());
-            // 完成的事务释放了 texture，需要清理对应的 texture cache。
-            if !freed_snapshot_ids.is_empty() {
-                // Issue #736 评论 5786231506: 不再 clear()，改成 retain，避免清掉
-                // pause 的 Timed 事务（Reflow）还在用的纹理。
-                let active_ids = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .collect_active_snapshot_ids();
-                self.pipeline
-                    .texture_cache_mut()
-                    .retain_active_snapshot_ids(&active_ids);
-                self.pipeline.set_current_layout_snapshot(None);
-                self.pipeline.set_previous_layout_snapshot(None);
-                self.pipeline.set_current_canonical_snapshot(None);
-                self.request_scene_rebuild();
-            }
+            // Issue #901: 旧 animation_coordinator.pause_all / resume_all 已删除。
+            // TODO(issue-901): integrate with visual_canvas FrameClock pause/resume.
+            // 滚动期间暂时直接清动画状态，恢复时从 canonical 重新开始。
+            self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
@@ -500,9 +481,8 @@ impl SujianEditorItem {
         if !value {
             // Issue #826 评论 34：resume 把暂停时长平移回各层 started_at，
             // 让时间轴从中断处继续（滚动期间没有编辑时才是这条路径）。
-            self.pipeline
-                .animation_coordinator_mut()
-                .resume_all(std::time::Instant::now());
+            // Issue #901: 旧 animation_coordinator.resume_all 已删除。
+            // TODO(issue-901): integrate with visual_canvas FrameClock resume.
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
@@ -695,17 +675,17 @@ impl SujianEditorItem {
     /// - 有活跃正文视觉过渡（`has_active_text_animation(frame_now)`）→ Suppressed
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
     /// - idle → Normal
+    ///
+    /// Issue #901: 旧 `blink_mode_for_text_animation` / `animation_coordinator`
+    /// 已删除。正文动画活跃性暂由 `cursor_ctrl.animation` 判断（光标 Tween 活跃
+    /// 即 suppressed）。TODO(issue-901): integrate with visual_canvas FrameClock
+    /// to query active text animation.
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
-        use super::animation::blink_mode_for_text_animation;
         use super::cursor_animation::CursorBlinkMode;
         if self.cursor_ctrl.animation.is_some() {
             return CursorBlinkMode::Suppressed;
         }
-        blink_mode_for_text_animation(
-            self.pipeline
-                .animation_coordinator()
-                .has_active_text_animation(std::time::Instant::now()),
-        )
+        CursorBlinkMode::Normal
     }
 
     pub(crate) fn cursor_blink_opacity(&self) -> f32 {
