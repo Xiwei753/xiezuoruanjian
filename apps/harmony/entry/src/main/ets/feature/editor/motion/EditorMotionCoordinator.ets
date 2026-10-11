@@ -1705,10 +1705,16 @@ export class EditorMotionCoordinator {
               const memberUtf16Start = isOldSource ? iStart : newSourceUtf16Start
               const memberUtf16End = isOldSource ? iEnd : newSourceUtf16End
 
-              // opacity：成员自带 opacity 优先；否则按 needsSourceCrossfade 计算；否则完全不透明
+              // Issue #879 评论6108234595：从冻结 opacity 插值到目标 opacity
+              // p=0 时 opacity = 冻结值（如 0.4），p=1 时 opacity = 目标值
+              // 旧源目标 = needsSourceCrossfade ? 0 : 1（动画结束旧源消失或完全可见）
+              // 新源目标 = needsSourceCrossfade ? 1 : 1（动画结束新源完全可见）
               let memberOpacity: number | undefined
               if (member.opacity !== undefined) {
-                memberOpacity = member.opacity
+                const targetOpacity = needsSourceCrossfade
+                  ? (isOldSource ? 0 : 1)
+                  : 1
+                memberOpacity = member.opacity + (targetOpacity - member.opacity) * p
               } else if (needsSourceCrossfade) {
                 memberOpacity = isOldSource ? 1 - p : p
               } else {
@@ -1772,11 +1778,15 @@ export class EditorMotionCoordinator {
               : interval.startPositionY - move.oldRect.y
 
             // 确定要遍历的源字形矩形列表：
-            // 优先使用 frozenSourceGlyphRects（所有成员），否则回退到 sourceGlyphRects[0]
+            // Issue #879 评论6108234595：多成员场景应由 sourceMembers 分支处理，
+            // fallback 分支只处理单成员场景，避免混合不同成员的 offset/clip。
+            // 当 frozenSourceGlyphRects 有多个成员时只取第一个，不遍历所有成员。
             const sourceRectsToIterate: RectLike[] =
               interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
-                ? interval.frozenSourceGlyphRects
-                : [interval.sourceGlyphRects[0]]
+                ? [interval.frozenSourceGlyphRects[0]]
+                : (interval.sourceGlyphRects !== undefined && interval.sourceGlyphRects.length > 0
+                   ? [interval.sourceGlyphRects[0]]
+                   : [])
 
             // 先计算 interval 级别的 newGlyphRect（当 newMoveBoundaries 可用时），
             // 供 needsSourceCrossfade 和所有成员共用。当 newMoveBoundaries 不可用时，

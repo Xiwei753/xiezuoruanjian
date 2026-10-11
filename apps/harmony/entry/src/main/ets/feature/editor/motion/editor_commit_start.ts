@@ -1792,10 +1792,11 @@ function allVisibleIslands(
  * 为每个能提供字形几何的成员构建一个 FrozenGlyphMember，保留各自的
  * sourceGlyphRect/offsetX/offsetY/clipRects/opacity。
  *
- * clipRects 匹配：clusterVisible 和本函数都以相同顺序遍历相同的 spans，
- * 但 clusterVisible 可能跳过 rects.length === 0 的成员（clip 与字形无交集）。
- * 因此用顺序匹配——按 sourceKind + offset 对齐 OnScreenInterval，
- * 匹配上的取其 rects 作为该成员的 clipRects，匹配不上的成员 clipRects 为空数组。
+ * clipRects 匹配：对每个 span，在 firstVisible 中按 sourceKind + offset 查找匹配的
+ * OnScreenInterval（不依赖顺序——clusterVisible 可能跳过 rects.length === 0 的成员，
+ * 导致顺序错位）。匹配上的取其 rects 作为该成员的 clipRects，并标记该 interval 已消费；
+ * 匹配不上的从 span.clipRects 与字形在屏矩形（sourceGlyphRect + offset）求交，
+ * 得到该成员自己的 clipRects。
  *
  * Issue #879 评论6108900966 问题3：opacity=0 的成员仍保留在 sourceMembers 中
  *（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
@@ -1806,7 +1807,10 @@ function buildSourceMembers(
   glyphId: string
 ): FrozenGlyphMember[] {
   const members: FrozenGlyphMember[] = []
-  let visibleIdx = 0
+  // Issue #879 评论6108234595：不再使用 visibleIdx 顺序匹配。
+  // clusterVisible 可能跳过某些 span（clip 与字形无交集时 rects.length===0），
+  // 导致后续的顺序匹配全部错位。改为按 sourceKind+offset 稳健查找匹配。
+  const consumed = new Set<number>()
   for (const span of spans) {
     if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
       continue
@@ -1820,18 +1824,45 @@ function buildSourceMembers(
       continue
     }
     // 该 span 有有效几何——构建 FrozenGlyphMember
-    // 尝试匹配 clusterVisible 返回的 OnScreenInterval（顺序匹配）
+    // 按 sourceKind + offset 在 firstVisible 中查找匹配的 OnScreenInterval
     let clipRects: RectLike[] = []
-    if (visibleIdx < firstVisible.length) {
-      const interval = firstVisible[visibleIdx]
-      // 顺序匹配：sourceKind 和 offset 一致时认为是同一成员
+    let matched = false
+    for (let vi = 0; vi < firstVisible.length; vi++) {
+      if (consumed.has(vi)) {
+        continue
+      }
+      const interval = firstVisible[vi]
       if (interval.sourceKind === span.sourceKind &&
           interval.offsetX === span.offsetX &&
           interval.offsetY === span.offsetY) {
         clipRects = interval.rects.map((r: RectLike): RectLike => ({
           x: r.x, y: r.y, width: r.width, height: r.height,
         }))
-        visibleIdx++
+        consumed.add(vi)
+        matched = true
+        break
+      }
+    }
+    // 匹配不上时：从 span.clipRects 与字形在屏矩形求交，自行计算 clipRects
+    if (!matched) {
+      const glyphOnScreenLeft = rect.x + span.offsetX
+      const glyphOnScreenRight = rect.x + rect.width + span.offsetX
+      const glyphOnScreenTop = rect.y + span.offsetY
+      const glyphOnScreenBottom = rect.y + rect.height + span.offsetY
+      for (const cr of span.clipRects) {
+        const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+        const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+        const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+        const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+        if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+            intersectBottom - intersectTop > VISIBLE_EPSILON) {
+          clipRects.push({
+            x: intersectLeft,
+            y: intersectTop,
+            width: intersectRight - intersectLeft,
+            height: intersectBottom - intersectTop,
+          })
+        }
       }
     }
     const runId = `${span.sourceKind}-${span.sourceRevision}`
@@ -1942,6 +1973,58 @@ function intervalForIsland(
     //（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
     if (firstSpans !== undefined && firstSpans.length > 0) {
       sourceMembers = buildSourceMembers(firstSpans, firstVisible, run.glyphIds[firstIndex])
+    }
+    // Issue #879 评论6108234595：当 buildSourceMembers 返回空数组但 frozenSourceGlyphRects
+    // 有多个成员时，从 allFrozenGeoms 构建 fallback sourceMembers，避免 buildFrame 走 fallback
+    // 分支混合不同成员的 offset。
+    if ((sourceMembers === undefined || sourceMembers.length === 0) && allFrozenGeoms.length > 1) {
+      const glyphId = run.glyphIds[firstIndex]
+      const allSpans = frozenByGlyphId.get(glyphId)
+      sourceMembers = allFrozenGeoms.map(g => {
+        // 按 sourceKind + offset 匹配 span，获取 sourceRevision 和 opacity
+        let sourceRevision = 0
+        let opacity: number | undefined = undefined
+        if (allSpans !== undefined) {
+          for (const sp of allSpans) {
+            if (sp.sourceKind === g.sourceKind &&
+                sp.offsetX === g.offsetX &&
+                sp.offsetY === g.offsetY) {
+              sourceRevision = sp.sourceRevision
+              opacity = sp.opacity
+              break
+            }
+          }
+        }
+        // 按 sourceKind + offset 匹配 firstVisible 中的 OnScreenInterval，获取 clipRects
+        let clipRects: RectLike[] = []
+        for (const interval of firstVisible) {
+          if (interval.sourceKind === g.sourceKind &&
+              interval.offsetX === g.offsetX &&
+              interval.offsetY === g.offsetY) {
+            clipRects = interval.rects.map((r: RectLike): RectLike => ({
+              x: r.x, y: r.y, width: r.width, height: r.height,
+            }))
+            break
+          }
+        }
+        const runId = `${g.sourceKind}-${sourceRevision}`
+        return {
+          sourceKind: g.sourceKind,
+          sourceRevision: sourceRevision,
+          runId: runId,
+          renderNodeKey: runId,
+          sourceGlyphRect: {
+            x: g.x0,
+            y: g.y0,
+            width: g.x1 - g.x0,
+            height: g.height,
+          },
+          offsetX: g.offsetX,
+          offsetY: g.offsetY,
+          clipRects: clipRects,
+          opacity: opacity,
+        }
+      })
     }
   }
   return {

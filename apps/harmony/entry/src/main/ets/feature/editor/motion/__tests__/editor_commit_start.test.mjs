@@ -4319,4 +4319,393 @@ test('问题3-6107257451：opacity=0 的成员在 buildPiece 中不被投影', (
     'startScreenClipRects[1] 应来自 new 源（x=70）')
 })
 
+// ====== Issue #879 评论6108234595 问题4：双源 buildFrame 输出测试 ======
+// 覆盖 buildSourceMembers 稳健匹配、fallback clipRects 计算、opacity 保留、
+// retargetRunStarts 后双源成员状态保持等场景。
+
+test('问题4-6108234595：buildSourceMembers 稳健匹配——clusterVisible 跳过 new span 时 old 成员不错位', () => {
+  // 场景：两个 span（old 和 new），clusterVisible 对 new span 的 clip 与字形无交集
+  //（rects.length===0），只返回 old 的 OnScreenInterval。
+  // buildSourceMembers 应：
+  // - old span 匹配到 firstVisible[0]（old interval），取其 rects
+  // - new span 匹配不到 firstVisible 中的 interval，从 span.clipRects 自行计算 clipRects
+  //  （应为空数组，因为 clip 与字形无交集）
+  const ctx = context('甲乙', 1200, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  // old 源布局：乙在 x=50, width=12
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  // new 源布局：乙在 x=70, width=10
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  // old span：clipRects 与字形有交集 → clusterVisible 返回 old 的 OnScreenInterval
+  // 屏幕：字形 x=53..65（50+3..62+3），clip x=53..62 → 有交集
+  // new span：clipRects 与字形无交集 → clusterVisible 跳过 new span
+  // 屏幕：字形 x=75..85（70+5..80+5），clip x=200..205 → 无交集
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 200, clipRight: 205,
+      clipRects: [{ x: 200, y: 0, width: 5, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. 验证 clusterVisible 只返回 old 的 OnScreenInterval（new 被 skipped）
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 1,
+    'clusterVisible 应只返回 1 个 OnScreenInterval（new span clip 无交集被跳过）')
+  assert.equal(intervals[0].sourceKind, 'old',
+    '唯一的 OnScreenInterval 应来自 old span')
+
+  // 2. 验证 retainedMoveStartState 的 sourceMembers 仍有 2 个成员
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2,
+    'sourceMembers 应有 2 个成员（old + new），即使 new span 的 clip 无交集')
+
+  // old 成员：匹配到 firstVisible[0]（old interval），clipRects 非空
+  const oldMember = iv.sourceMembers[0]
+  assert.equal(oldMember.sourceKind, 'old')
+  assert.ok(oldMember.clipRects.length > 0,
+    'old 成员的 clipRects 应非空（来自匹配的 OnScreenInterval）')
+  assert.equal(oldMember.clipRects[0].x, 53)
+  assert.equal(oldMember.clipRects[0].width, 9)
+
+  // new 成员：匹配不到 firstVisible 中的 interval，从 span.clipRects 自行计算 clipRects
+  // 因为 clip（x=200..205）与字形屏幕位置（x=75..85）无交集，clipRects 应为空数组
+  const newMember = iv.sourceMembers[1]
+  assert.equal(newMember.sourceKind, 'new')
+  assert.equal(newMember.clipRects.length, 0,
+    'new 成员的 clipRects 应为空数组（clip 与字形无交集，fallback 计算也为空）')
+  // new 成员的其他字段仍正确
+  assert.equal(newMember.offsetX, 5)
+  assert.equal(newMember.sourceGlyphRect.x, 70)
+  assert.equal(newMember.opacity, 0.4)
+})
+
+test('问题4-6108234595：buildSourceMembers 匹配失败时从 span.clipRects 自行计算 clipRects——old span 无交集', () => {
+  // 场景：反转——old span 的 clip 与字形无交集，new span 有交集。
+  // buildSourceMembers 应：
+  // - old span 匹配不到 firstVisible 中的 interval，从 span.clipRects 自行计算 clipRects（空数组）
+  // - new span 匹配到 firstVisible[0]（new interval），取其 rects
+  const ctx = context('甲乙', 1201, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  // old span：clipRects 与字形无交集 → clusterVisible 跳过 old span
+  // 屏幕：字形 x=53..65（50+3..62+3），clip x=200..205 → 无交集
+  // new span：clipRects 与字形有交集 → clusterVisible 返回 new 的 OnScreenInterval
+  // 屏幕：字形 x=75..85（70+5..80+5），clip x=75..83 → 有交集
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 200, clipRight: 205,
+      clipRects: [{ x: 200, y: 0, width: 5, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. 验证 clusterVisible 只返回 new 的 OnScreenInterval（old 被 skipped）
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 1,
+    'clusterVisible 应只返回 1 个 OnScreenInterval（old span clip 无交集被跳过）')
+  assert.equal(intervals[0].sourceKind, 'new',
+    '唯一的 OnScreenInterval 应来自 new span')
+
+  // 2. 验证 sourceMembers
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2,
+    'sourceMembers 应有 2 个成员')
+
+  // old 成员：匹配不到 firstVisible 中的 interval，fallback 计算 clipRects 为空
+  const oldMember = iv.sourceMembers[0]
+  assert.equal(oldMember.sourceKind, 'old')
+  assert.equal(oldMember.clipRects.length, 0,
+    'old 成员的 clipRects 应为空数组（clip 与字形无交集）')
+  // old 成员的其他字段仍正确
+  assert.equal(oldMember.offsetX, 3)
+  assert.equal(oldMember.sourceGlyphRect.x, 50)
+  assert.equal(oldMember.opacity, 0.6)
+
+  // new 成员：匹配到 firstVisible[0]（new interval），clipRects 非空
+  const newMember = iv.sourceMembers[1]
+  assert.equal(newMember.sourceKind, 'new')
+  assert.ok(newMember.clipRects.length > 0,
+    'new 成员的 clipRects 应非空（来自匹配的 OnScreenInterval）')
+  assert.equal(newMember.clipRects[0].x, 75)
+  assert.equal(newMember.clipRects[0].width, 8)
+})
+
+test('问题4-6108234595：双源成员的 opacity 在 sourceMembers 中正确保留——独立 opacity 值', () => {
+  // 场景：old span opacity=0.6，new span opacity=0.4。
+  // 两个 span 都有可见 clip（clusterVisible 为两者都生成 OnScreenInterval）。
+  // buildSourceMembers 应为每个成员保留各自的 opacity。
+  const ctx = context('甲乙', 1202, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 80,
+      clipRects: [{ x: 75, y: 0, width: 5, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. clusterVisible 返回 2 个 OnScreenInterval，各自携带正确的 opacity
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 2)
+  assert.equal(intervals[0].sourceKind, 'old')
+  assert.equal(intervals[0].opacity, 0.6)
+  assert.equal(intervals[1].sourceKind, 'new')
+  assert.equal(intervals[1].opacity, 0.4)
+
+  // 2. retainedMoveStartState 的 sourceMembers 各自保留独立的 opacity
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined)
+  assert.ok(iv.sourceMembers !== undefined)
+  assert.equal(iv.sourceMembers.length, 2)
+
+  // old 成员的 opacity=0.6
+  assert.equal(iv.sourceMembers[0].sourceKind, 'old')
+  assert.equal(iv.sourceMembers[0].opacity, 0.6,
+    'old 成员的 opacity 应为 0.6')
+  // new 成员的 opacity=0.4
+  assert.equal(iv.sourceMembers[1].sourceKind, 'new')
+  assert.equal(iv.sourceMembers[1].opacity, 0.4,
+    'new 成员的 opacity 应为 0.4')
+
+  // 3. opacity=undefined 的场景：非交叉淡入淡出窗口
+  const frozenNoOpacity = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: undefined,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 80,
+      clipRects: [{ x: 75, y: 0, width: 5, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: undefined,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindowNoOpacity = { ...ctx, frozenWindows: frozenNoOpacity }
+  const startNoOpacity = retainedMoveStartState(run, withWindowNoOpacity, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const ivNoOpacity = startNoOpacity[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(ivNoOpacity !== undefined)
+  assert.ok(ivNoOpacity.sourceMembers !== undefined)
+  assert.equal(ivNoOpacity.sourceMembers.length, 2)
+  assert.equal(ivNoOpacity.sourceMembers[0].opacity, undefined,
+    'old 成员的 opacity 应为 undefined（非交叉淡入淡出）')
+  assert.equal(ivNoOpacity.sourceMembers[1].opacity, undefined,
+    'new 成员的 opacity 应为 undefined（非交叉淡入淡出）')
+})
+
+test('问题4-6108234595：retargetRunStarts 后双源成员的 sourceMembers 和 needsCrossfade 保持', () => {
+  // 场景：先构建双源 sourceMembers（old opacity=0.6, new opacity=0.4），
+  // 然后 retargetRunStarts。retarget 后：
+  // - sourceMembers 应被深拷贝（修改原 piece 不影响 retarget 结果）
+  // - needsCrossfade 应被传递
+  // - 每个成员的 opacity 应保持不变
+  const ctx = context('甲乙', 1203, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+
+  // 1. 先用 retainedMoveStartState 生成初始 pieces（带 sourceMembers）
+  const prepared = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const prevIv = prepared[0].intervals[0]
+  assert.ok(prevIv.sourceMembers !== undefined)
+  assert.equal(prevIv.sourceMembers.length, 2)
+  assert.equal(prevIv.sourceMembers[0].opacity, 0.6)
+  assert.equal(prevIv.sourceMembers[1].opacity, 0.4)
+
+  // 2. 手动设置 needsCrossfade=true 模拟 plan 阶段写入
+  prevIv.needsCrossfade = true
+
+  // 3. 调用 retargetRunStarts
+  const retargeted = retargetRunStarts(run, prepared, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const reIv = retargeted[0].intervals[0]
+
+  // 4. 验证 sourceMembers 保持
+  assert.ok(reIv.sourceMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(reIv.sourceMembers.length, 2, 'retarget 后应有 2 个成员')
+
+  // 5. 验证 opacity 保持不变
+  assert.equal(reIv.sourceMembers[0].sourceKind, 'old')
+  assert.equal(reIv.sourceMembers[0].opacity, 0.6,
+    'retarget 后 old 成员的 opacity 应保持 0.6')
+  assert.equal(reIv.sourceMembers[1].sourceKind, 'new')
+  assert.equal(reIv.sourceMembers[1].opacity, 0.4,
+    'retarget 后 new 成员的 opacity 应保持 0.4')
+
+  // 6. 验证 needsCrossfade 传递
+  assert.equal(reIv.needsCrossfade, true, 'needsCrossfade 应从 prevInterval 继承')
+
+  // 7. 验证深拷贝：修改原成员不影响 retargeted 的成员
+  prevIv.sourceMembers[0].offsetX = 999
+  assert.notEqual(reIv.sourceMembers[0].offsetX, 999,
+    '深拷贝：修改原成员 offsetX 不应影响 retargeted 的成员')
+
+  prevIv.sourceMembers[0].clipRects[0].x = 999
+  assert.notEqual(reIv.sourceMembers[0].clipRects[0].x, 999,
+    '深拷贝：修改原 clipRects 不应影响 retargeted 的 clipRects')
+
+  prevIv.sourceMembers[0].sourceGlyphRect.x = 999
+  assert.notEqual(reIv.sourceMembers[0].sourceGlyphRect.x, 999,
+    '深拷贝：修改原 sourceGlyphRect 不应影响 retargeted 的 sourceGlyphRect')
+
+  prevIv.sourceMembers[0].opacity = 0
+  assert.notEqual(reIv.sourceMembers[0].opacity, 0,
+    '深拷贝：修改原 opacity 不应影响 retargeted 的 opacity')
+
+  // 8. 验证 retarget 后各成员的其他字段仍正确
+  assert.equal(reIv.sourceMembers[0].offsetX, 3, 'old 成员 offsetX 应为 3')
+  assert.equal(reIv.sourceMembers[0].sourceGlyphRect.x, 50, 'old 成员 sourceGlyphRect.x 应为 50')
+  assert.equal(reIv.sourceMembers[1].offsetX, 5, 'new 成员 offsetX 应为 5')
+  assert.equal(reIv.sourceMembers[1].sourceGlyphRect.x, 70, 'new 成员 sourceGlyphRect.x 应为 70')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
