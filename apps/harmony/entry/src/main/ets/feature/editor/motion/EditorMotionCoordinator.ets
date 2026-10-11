@@ -2787,11 +2787,19 @@ export class EditorMotionCoordinator {
             const targetY = piece.targetRect.y
             const positionDone = Math.abs(piece.currentPositionX - targetX) < 0.01 &&
                 Math.abs(piece.currentPositionY - targetY) < 0.01
-            // Issue #879 复核评论6105482207 问题2：位置到达但透明度未完成时仍必须继续渲染。
             const opacityDone = w.opacity === undefined ||
                 (w.sourceKind === 'old' ? w.opacity < 0.01 : w.opacity > 0.99)
-            if (positionDone && opacityDone) {
-              continue  // reflow 已到达目标位置且透明度已完成，不需要延续
+            // Issue #879 复核评论6106658725 问题3：clip 完成检查——
+            // reflow 的 clip 应完整覆盖目标字形矩形，否则字形部分不可见时不应提前结束。
+            const targetFullRect: RectLike = {
+              x: piece.targetRect.x,
+              y: piece.targetRect.y,
+              width: piece.targetRect.width,
+              height: piece.targetRect.height
+            }
+            const clipDone = isFullyCovered(targetFullRect, piece.clipRects)
+            if (positionDone && opacityDone && clipDone) {
+              continue  // reflow 已到达目标位置、透明度已完成、clip 已完整覆盖
             }
           }
         }

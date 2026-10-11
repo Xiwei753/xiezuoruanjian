@@ -1085,14 +1085,17 @@ function frozenGlyphGeometry(
       }
     }
   }
-  // 没有冻结窗口或冻结窗口无法提供几何时，从 displayed.layout 获取
-  const entry = displayed.identities === null
-    ? null
-    : displayed.identities.entryByGlyphId(glyphId)
-  if (entry !== null) {
-    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
-    if (rect !== null) {
-      return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+  // 只有没有冻结窗口时才从 displayed.layout 获取
+  // 冻结窗口存在但无法提供字形几何时，返回 null——不应混用 displayed.layout 坐标和冻结源 offset
+  if (spans === undefined || spans.length === 0) {
+    const entry = displayed.identities === null
+      ? null
+      : displayed.identities.entryByGlyphId(glyphId)
+    if (entry !== null) {
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect !== null) {
+        return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+      }
     }
   }
   return null
@@ -1138,8 +1141,9 @@ function sourceGlyphGeometryAll(
     }
   }
 
-  // 回退：从 displayed.identities + displayed.layout 获取静态字形几何
-  if (results.length === 0) {
+  // 回退：只有没有冻结窗口时才从 displayed.identities + displayed.layout 获取静态字形几何
+  // 冻结窗口存在但无法提供字形几何时，返回空数组——不应混用 displayed.layout 坐标和冻结源 offset
+  if (results.length === 0 && (spans === undefined || spans.length === 0)) {
     const entry = displayed.identities === null
       ? null
       : displayed.identities.entryByGlyphId(glyphId)
@@ -1926,7 +1930,7 @@ interface OnScreenInterval {
  * clusterVisible 分别以各成员的 sourceLayout+offset+clipRects 求交，
  * 保留每个交集对应的源身份和透明度。
  */
-function frozenIndex(displayed: DisplayedContext): Map<string, FrozenWindowSpan[]> {
+export function frozenIndex(displayed: DisplayedContext): Map<string, FrozenWindowSpan[]> {
   const index: Map<string, FrozenWindowSpan[]> = new Map()
   for (const span of displayed.frozenWindows) {
     for (const glyphId of span.glyphIds) {
@@ -1961,7 +1965,7 @@ function frozenIndex(displayed: DisplayedContext): Map<string, FrozenWindowSpan[
  *   可见区间 = max(字形在屏left, clipLeft) 到 min(字形在屏right, clipRight)
  *   字形在屏位置 = 字形在窗口源文本布局中的位置 + 窗口的 offsetX/offsetY
  */
-function clusterVisible(
+export function clusterVisible(
   displayed: DisplayedContext,
   frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
   glyphId: string
@@ -1973,17 +1977,18 @@ function clusterVisible(
     ? null
     : displayed.identities.entryByGlyphId(glyphId)
   if (entry !== null) {
-    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
-    if (rect === null) {
-      return []
-    }
-    const x0 = rect.x
-    const x1 = rect.x + rect.width
-    const y0 = rect.y
-    const glyphHeight = rect.height
     const spans = frozenByGlyphId.get(glyphId)
     if (spans === undefined || spans.length === 0) {
       // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
+      // 只有此时才从 displayed.layout 取字形几何（静态可见）
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect === null) {
+        return []
+      }
+      const x0 = rect.x
+      const x1 = rect.x + rect.width
+      const y0 = rect.y
+      const glyphHeight = rect.height
       return [{
         rects: [{ x: x0, y: y0, width: x1 - x0, height: glyphHeight }],
         sourceKind: undefined, opacity: undefined,
@@ -1993,27 +1998,27 @@ function clusterVisible(
         sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
       }]
     }
-    // Issue #879 复核评论6105482207 问题1：遍历所有覆盖该 glyphId 的冻结窗口成员，
-    // 每个成员各自用其 clipRects 求交，保留每个交集对应的源身份和透明度。
-    // Issue #879 复核评论6105482207 问题4：当冻结窗口有 sourceLayout 时，
-    // 字形在屏位置应从 sourceLayout + offset 计算，而不是 displayed.layout + offset。
-    // 这确保 clusterVisible 的屏幕坐标与 sourceGlyphGeometry/frozenGlyphGeometry 的源坐标一致。
+    // 有冻结窗口覆盖：不从 displayed.layout 取初始字形几何，
+    // 直接从冻结源的 sourceLayout + glyphUtf16Ranges 获取。
+    // span.sourceLayout/glyphUtf16Ranges 不可用时跳过该 span——
+    // 不混用 displayed.layout 坐标和冻结源 offset（坐标系不一致会导致跳字）。
     const intervals: OnScreenInterval[] = []
     for (const span of spans) {
-      // 优先从冻结窗口的 sourceLayout 获取字形几何（问题4）
-      let spanX0 = x0, spanX1 = x1, spanY0 = y0, spanGlyphHeight = glyphHeight
-      if (span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
-        const utf16Range = span.glyphUtf16Ranges.get(glyphId)
-        if (utf16Range !== undefined) {
-          const sourceRect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
-          if (sourceRect !== null) {
-            spanX0 = sourceRect.x
-            spanX1 = sourceRect.x + sourceRect.width
-            spanY0 = sourceRect.y
-            spanGlyphHeight = sourceRect.height
-          }
-        }
+      if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
+        continue  // 跳过无法提供字形几何的 span
       }
+      const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+      if (utf16Range === undefined) {
+        continue
+      }
+      const sourceRect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+      if (sourceRect === null) {
+        continue
+      }
+      const spanX0 = sourceRect.x
+      const spanX1 = sourceRect.x + sourceRect.width
+      const spanY0 = sourceRect.y
+      const spanGlyphHeight = sourceRect.height
       // 被运动窗口接管：对每个 clipRect 求交（多岛并集）
       const glyphOnScreenLeft = spanX0 + span.offsetX
       const glyphOnScreenRight = spanX1 + span.offsetX

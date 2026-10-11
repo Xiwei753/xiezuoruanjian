@@ -20,6 +20,7 @@ import { GlyphIdentityTable, WindowInstanceIdAllocator } from '../editor_glyph_i
 import {
   visibleGlyphPieces, insertRunStartState, deletedRunStartState, retainedMoveStartState,
   retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, shouldCrossfadeSources,
+  frozenIndex, clusterVisible,
 } from '../editor_commit_start.ts'
 
 let passed = 0
@@ -61,20 +62,56 @@ const runGeometry = (ctx, from, to, rect) => ({
   ownLayout: ctx.layout,
 })
 
-/** 构造冻结窗口（含 sourceRevision、glyphUtf16Ranges 和 sourceLayout）。 */
-const frozenWindow = (glyphIds, clipLeft, clipRight, offsetX, offsetY, sourceRevision, glyphUtf16Ranges, sourceLayout) => ({
-  glyphIds,
-  clipLeft,
-  clipRight,
-  // Issue #879 评论6096421590 问题2：从 clipLeft/clipRight 自动生成 clipRects，
-  // 供 clusterVisible/buildPiece 逐岛求交。测试中字形高度默认 20（见 runGeometry）。
-  clipRects: [{ x: clipLeft, y: 0, width: Math.max(0, clipRight - clipLeft), height: 20 }],
-  offsetX: offsetX ?? 0,
-  offsetY: offsetY ?? 0,
-  sourceRevision: sourceRevision ?? 0,
-  glyphUtf16Ranges: glyphUtf16Ranges ?? null,
-  sourceLayout: sourceLayout ?? null,
-})
+/**
+ * 构造冻结窗口（含 sourceRevision、glyphUtf16Ranges 和 sourceLayout）。
+ *
+ * 当 glyphUtf16Ranges/sourceLayout 为 null 且 ctx 提供时，自动构造：
+ * - glyphUtf16Ranges：从 ctx.identities 查每个 glyphId 的 UTF-16 区间
+ * - sourceLayout：使用 ctx.layout（与 displayed.layout 相同，适用于 sourceRevision === displayed revision 的场景）
+ */
+const frozenWindow = (glyphIds, clipLeft, clipRight, offsetX, offsetY, sourceRevision, glyphUtf16Ranges, sourceLayout, ctx) => {
+  // 当 glyphUtf16Ranges 为 null 且 ctx 提供时，自动构造映射
+  if (glyphUtf16Ranges === null && ctx !== undefined) {
+    const ranges = new Map()
+    for (const gid of glyphIds) {
+      const entry = ctx.identities === null ? null : ctx.identities.entryByGlyphId(gid)
+      if (entry !== null) {
+        ranges.set(gid, [entry.utf16Start, entry.utf16End])
+      }
+    }
+    glyphUtf16Ranges = ranges
+  }
+  // 当 sourceLayout 为 null 且 ctx 提供时，使用 ctx.layout
+  if (sourceLayout === null && ctx !== undefined) {
+    sourceLayout = ctx.layout
+  }
+  return {
+    glyphIds,
+    clipLeft,
+    clipRight,
+    // Issue #879 评论6096421590 问题2：从 clipLeft/clipRight 自动生成 clipRects，
+    // 供 clusterVisible/buildPiece 逐岛求交。测试中字形高度默认 20（见 runGeometry）。
+    clipRects: [{ x: clipLeft, y: 0, width: Math.max(0, clipRight - clipLeft), height: 20 }],
+    offsetX: offsetX ?? 0,
+    offsetY: offsetY ?? 0,
+    sourceRevision: sourceRevision ?? 0,
+    glyphUtf16Ranges: glyphUtf16Ranges ?? null,
+    sourceLayout: sourceLayout ?? null,
+  }
+}
+
+// 辅助：从 ctx.identities 自动构造 glyphUtf16Ranges Map（与 frozenWindow 内部逻辑一致）
+const autoRanges = (glyphIds, ctx) => {
+  const ranges = new Map()
+  if (ctx.identities === null) return ranges
+  for (const gid of glyphIds) {
+    const entry = ctx.identities.entryByGlyphId(gid)
+    if (entry !== null) {
+      ranges.set(gid, [entry.utf16Start, entry.utf16End])
+    }
+  }
+  return ranges
+}
 
 console.log('editor_commit_start 纯逻辑单测（Issue #879 复核评论6078187962 + 6078682695）')
 
@@ -98,7 +135,7 @@ test('问题1：冻结窗口只露出一部分——起点必须是精确裁切�
   // 可见段 = 簇1..簇2
   // 簇1在 run 布局中的完整边界 = [10,20]，但精确裁切后 ownLeft = max(10, 15-0) = 15
   // 簇2在 run 布局中的完整边界 = [20,30]，但精确裁切后 ownRight = min(30, 25-0) = 25
-  const frozen = [frozenWindow(all, 15, 25, 0, 0, 701, null)]
+  const frozen = [frozenWindow(all, 15, 25, 0, 0, 701, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 1, 4, { x: 10, y: 0, width: 30, height: 20 })
   const start = deletedRunStartState(run, withWindow, 10)
@@ -111,7 +148,7 @@ test('问题1：旧窗口大、目标窗口短——不得让新 run 瞬间多�
   const ctx = context('甲乙丙丁', 702, [])
   const all = idsOf(ctx, 0, 4)
   // 旧窗口覆盖 4 个字且整段可见（clip 0..40），新 run 只覆盖前 2 个字
-  const frozen = [frozenWindow(all, 0, 40, 0, 0, 702, null)]
+  const frozen = [frozenWindow(all, 0, 40, 0, 0, 702, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 2, { x: 0, y: 0, width: 20, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
@@ -124,7 +161,7 @@ test('问题1：未被窗口覆盖的字形属于静态主文本——可见段�
   const ctx = context('甲乙丙丁', 703, [])
   const ids = idsOf(ctx, 0, 4)
   // 只有簇2被窗口接管且当前完全不可见；簇0、簇1、簇3 仍是静态主文本
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 703, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 703, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -160,7 +197,7 @@ test('问题1：真正的新字（不在在屏身份表里）——零宽度起�
 test('问题1：吞字 run 全不可见——塌到目标边缘（起点＝终点，不二次运动）', () => {
   const ctx = context('甲乙', 705, [])
   const ids = idsOf(ctx, 0, 1)
-  const frozen = [frozenWindow(ids, 0, 0, 0, 0, 705, null)]
+  const frozen = [frozenWindow(ids, 0, 0, 0, 0, 705, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
@@ -172,7 +209,7 @@ test('问题1：保留字平移——起点让第一个仍可见的字形停在�
   const ctx = context('甲乙丙丁', 706, [])
   const all = idsOf(ctx, 0, 4)
   // 旧窗口整体右移 5vp，整段仍可见
-  const frozen = [frozenWindow(all, 5, 45, 5, 0, 706, null)]
+  const frozen = [frozenWindow(all, 5, 45, 5, 0, 706, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -188,7 +225,7 @@ test('问题1：保留字平移——只有后半段可见时，按第一个可�
   // 窗口右移 5，但左侧被裁掉一部分：只剩簇3..簇5 可见
   // 簇3在屏 [35,45]，clip [35,65] → 可见 [35,45]
   // 簇3在 run 布局中 [30,40]，精确裁切 ownLeft = max(30, 35-5) = 30
-  const frozen = [frozenWindow(all, 35, 65, 5, 0, 707, null)]
+  const frozen = [frozenWindow(all, 35, 65, 5, 0, 707, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 6, { x: 0, y: 0, width: 60, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -205,7 +242,7 @@ test('问题1：保留字平移——只有后半段可见时，按第一个可�
 test('问题1：保留字平移——一个共享字形都不在屏上 → 用兜底位置，不做凭空平移', () => {
   const ctx = context('甲乙丙丁', 708, [])
   const all = idsOf(ctx, 0, 4)
-  const frozen = [frozenWindow(all, 0, 0, 0, 0, 708, null)]
+  const frozen = [frozenWindow(all, 0, 0, 0, 0, 708, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const fallback = {
@@ -245,7 +282,7 @@ test('问题2：多段可见字形——甲乙可见、丙不可见、丁可见 
   const ctx = context('甲乙丙丁', 720, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 720, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 720, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -263,7 +300,7 @@ test('问题2：多段可见字形——deletedRunStartState 保留两段 piece�
   const ctx = context('甲乙丙丁', 721, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 721, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 721, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = deletedRunStartState(run, withWindow, 0)
@@ -285,7 +322,7 @@ test('问题2：多段可见字形——insertRunStartState 保留两段可见 p
   const ctx = context('甲乙丙丁', 722, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 722, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 722, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = insertRunStartState(run, withWindow)
@@ -316,7 +353,7 @@ test('问题2：多段可见字形——retainedMoveStartState 单一 piece + in
   const ctx = context('甲乙丙丁', 723, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见；簇0、簇1、簇3 可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 723, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 723, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -362,8 +399,8 @@ test('问题2：三段可见——甲可见、乙不可见、丙可见、丁不�
   const ids = idsOf(ctx, 0, 5)
   // 簇1（乙）和簇3（丁）不可见；簇0、簇2、簇4 可见
   const frozen = [
-    frozenWindow([ids[1]], 0, 0, 0, 0, 724, null),
-    frozenWindow([ids[3]], 0, 0, 0, 0, 724, null),
+    frozenWindow([ids[1]], 0, 0, 0, 0, 724, null, null, ctx),
+    frozenWindow([ids[3]], 0, 0, 0, 0, 724, null, null, ctx),
   ]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
@@ -511,7 +548,7 @@ test('问题3：ghost字形——glyphUtf16Ranges 为 null 时不识别 ghost', 
   const ctx = context('甲乙', 734, [])
   const ghostIds = ['orig-734-2', 'orig-734-3']
   // glyphUtf16Ranges 为 null → 无法定位 ghost字形
-  const frozen = [frozenWindow(ghostIds, 20, 40, 0, 0, 734, null, null)]
+  const frozen = [frozenWindow(ghostIds, 20, 40, 0, 0, 734, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = {
     glyphIds: ghostIds,
@@ -535,7 +572,7 @@ test('问题4：源布局和目标布局不同——可见比例投影到目标�
   // 投影后：目标中右半 = [15, 20]
   const ctx = context('XXXX甲', 740, [])  // 5 字，甲在 [40, 50]
   const glyphId = idsOf(ctx, 4, 5)[0]     // 甲的 glyphId
-  const frozen = [frozenWindow([glyphId], 45, 50, 0, 0, 740, null)]
+  const frozen = [frozenWindow([glyphId], 45, 50, 0, 0, 740, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   // run 的 ownLayout 把甲放在 [10, 20]（不同前缀宽度）
   const run = {
@@ -570,7 +607,7 @@ test('问题4：源布局和目标布局相同——投影是恒等变换', () =
   const ctx = context('甲乙丙丁', 741, [])
   const all = idsOf(ctx, 0, 4)
   // clip [15, 25]：簇1部分可见 [15,20]，簇2部分可见 [20,25]
-  const frozen = [frozenWindow(all, 15, 25, 0, 0, 741, null)]
+  const frozen = [frozenWindow(all, 15, 25, 0, 0, 741, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -589,7 +626,7 @@ test('问题4：多字形 piece 跨字体投影——首尾字形各自投影到
   //   簇2 ownRight = 40 + (25-20)/(30-20) * (60-40) = 50
   const ctx = context('甲乙丙', 742, [])
   const all = idsOf(ctx, 0, 3)
-  const frozen = [frozenWindow(all, 5, 25, 0, 0, 742, null)]
+  const frozen = [frozenWindow(all, 5, 25, 0, 0, 742, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   // run 的 ownLayout 每个字形宽 20vp
   const run = {
@@ -776,7 +813,7 @@ test('混合 run：部分旧可见+部分新插入——间隙作为 0 宽度 pi
   const ctx = context('甲乙丙丁戊', 762, [])
   const ids = idsOf(ctx, 0, 5)
   // 簇2（丙）被窗口接管且完全不可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 762, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 762, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   // run 的 glyphIds：簇0、簇1、簇2 是旧字（在身份表中），簇3 是新字，簇4 是旧字
   // 但簇3 不在身份表中——需要构造一个不在身份表中的 glyphId
@@ -906,7 +943,7 @@ test('deletedRunStartState 空数组分支——覆盖整段 glyphIds，不只�
   const ctx = context('甲乙', 765, [])
   const ids = idsOf(ctx, 0, 2)
   // 窗口覆盖甲乙且完全不可见
-  const frozen = [frozenWindow(ids, 0, 0, 0, 0, 765, null)]
+  const frozen = [frozenWindow(ids, 0, 0, 0, 0, 765, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 2, { x: 0, y: 0, width: 20, height: 20 })
   const start = deletedRunStartState(run, withWindow, 5)
@@ -923,7 +960,7 @@ test('deletedRunStartState 空数组分支——覆盖整段 glyphIds，不只�
 test('retainedMoveStartState 空数组分支——覆盖整段 glyphIds，不只取第一个', () => {
   const ctx = context('甲乙丙丁', 766, [])
   const all = idsOf(ctx, 0, 4)
-  const frozen = [frozenWindow(all, 0, 0, 0, 0, 766, null)]
+  const frozen = [frozenWindow(all, 0, 0, 0, 0, 766, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const fallback = {
@@ -959,14 +996,14 @@ test('问题4：可见性变化后 retarget——piece 分区与 glyphIds 完全
   // prepare：整段被旧窗口覆盖且完整可见（clip 0..50）→ 单个 piece 覆盖 0..4
   const prepared = insertRunStartState({ ...run, ownLayout: ctx.layout }, {
     ...ctx,
-    frozenWindows: [frozenWindow(all, 0, 50, 0, 0, 780, null)],
+    frozenWindows: [frozenWindow(all, 0, 50, 0, 0, 780, null, null, ctx)],
   })
   assert.equal(prepared.length, 1)
   // retarget：同一个窗口缩到 clip 20..30（簇2 完整可见、簇1/簇3 部分可见）——可见分组变了
   const retargeted = retargetRunStarts(
     { ...run, ownLayout: ctx.layout },
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow(all, 20, 30, 0, 0, 780, null)] },
+    { ...ctx, frozenWindows: [frozenWindow(all, 20, 30, 0, 0, 780, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -985,7 +1022,7 @@ test('问题4：两段可见合成一段——prepare 的两个 piece 仍保留�
   // 簇2 完全不可见（clip 0..0），其余静态可见 → 两段 piece：[0..1] 与 [3..4]
   const prepared = deletedRunStartState(runGeometry(ctx, 0, 5, { x: 0, y: 0, width: 50, height: 20 }), {
     ...ctx,
-    frozenWindows: [frozenWindow([ids[2]], 0, 0, 0, 0, 781, null)],
+    frozenWindows: [frozenWindow([ids[2]], 0, 0, 0, 0, 781, null, null, ctx)],
   }, 0)
   assert.equal(prepared.length, 2, 'prepare 应有两段可见 piece')
   // retarget：旧窗口已完全消失（空 frozenWindows），整段静态可见 → 可见性变成一整段
@@ -1008,7 +1045,7 @@ test('问题4：两段可见合成一段——prepare 的两个 piece 仍保留�
 test('问题4：piece 内字形全部不可见——按通道语义塌缩，分区仍不变', () => {
   const ctx = context('甲乙丙丁', 782, [])
   const all = idsOf(ctx, 0, 4)
-  const hidden = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 782, null)] }
+  const hidden = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 782, null, null, ctx)] }
   const run = runGeometry(hidden, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const prepared = insertRunStartState(run, hidden)
   // insert：该 piece 自身左边界零宽度（不是整 run 左边界，也不是别的 run 的位置）
@@ -1041,13 +1078,13 @@ test('问题4：retarget 前后 piece 的 glyphIds 决定同一个 windowInstanc
   // prepare：簇2、簇3 被吞（clip 0..0）→ 两段 piece
   const prepared = insertRunStartState(run, {
     ...ctx,
-    frozenWindows: [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 783, null)],
+    frozenWindows: [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 783, null, null, ctx)],
   })
   const beforeKeys = prepared.map((p) => allocator.allocate(p.glyphIds))
   // retarget：可见性大幅变化（只剩第一段的一小部分可见）
   const retargeted = retargetRunStarts(run, prepared, {
     ...ctx,
-    frozenWindows: [frozenWindow(all, 0, 5, 0, 0, 783, null)],
+    frozenWindows: [frozenWindow(all, 0, 5, 0, 0, 783, null, null, ctx)],
   }, 'insert', 0, { startClipLeft: 0, startClipRight: 60, startPositionX: 0, startPositionY: 0 })
   const afterKeys = retargeted.map((p) => allocator.allocate(p.glyphIds))
   // 同一个 piece 的 glyphIds 未变 → 分配器返回同一个 win-N → renderNodeKey 不变
@@ -1060,7 +1097,7 @@ test('问题4：insert 间隙 piece 在 retarget 后仍是零宽度，不填补�
   // 整段都被同一个旧窗口接管，但 clip 只露出簇2（20..30）→ 其余字形是被裁掉的新字
   const prepareCtx = {
     ...ctx,
-    frozenWindows: [frozenWindow(ids, 20, 30, 0, 0, 784, null)],
+    frozenWindows: [frozenWindow(ids, 20, 30, 0, 0, 784, null, null, ctx)],
   }
   const run = runGeometry(prepareCtx, 0, 5, { x: 0, y: 0, width: 50, height: 20 })
   const prepared = insertRunStartState(run, prepareCtx)
@@ -1097,7 +1134,7 @@ test('问题2：固定 piece 被冻结窗口局部裁切断开——retarget 返
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 790, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 790, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -1140,7 +1177,7 @@ test('问题2：多个可见岛时 legacy 单段 clip 取最长岛（等长取�
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 791, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 791, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -1160,7 +1197,7 @@ test('问题2：retained 通道——同一固定 piece 的多段可见岛各自
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 792, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 792, null, null, ctx)] },
     'retained',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -1209,8 +1246,8 @@ test('缺口2：clipRect 的 y 范围与字形不相交时，即使 x 相交也�
     offsetX: 0,
     offsetY: 0,
     sourceRevision: 800,
-    glyphUtf16Ranges: null,
-    sourceLayout: null,
+    glyphUtf16Ranges: autoRanges(all, ctx),
+    sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
@@ -1238,8 +1275,8 @@ test('缺口2：不合并不连续区间——间隙中的字形不被误判为�
     offsetX: 0,
     offsetY: 0,
     sourceRevision: 801,
-    glyphUtf16Ranges: null,
-    sourceLayout: null,
+    glyphUtf16Ranges: autoRanges(all, ctx),
+    sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 3, { x: 0, y: 0, width: 30, height: 20 })
@@ -1313,7 +1350,7 @@ test('缺口4：空洞在 piece 最前面——零宽度 interval 的 startPosit
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[0], all[1]], 0, 0, 0, 0, 810, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[0], all[1]], 0, 0, 0, 0, 810, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -1342,7 +1379,7 @@ test('缺口4：空洞在 piece 最后面——零宽度 interval 的 startPosit
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[3], all[4]], 0, 0, 0, 0, 811, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[3], all[4]], 0, 0, 0, 0, 811, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
@@ -1373,8 +1410,8 @@ test('缺口4：多个空洞——每个空洞都有零宽度 interval', () => {
     run,
     prepared,
     { ...ctx, frozenWindows: [
-      frozenWindow([all[1]], 0, 0, 0, 0, 812, null),
-      frozenWindow([all[3]], 0, 0, 0, 0, 812, null),
+      frozenWindow([all[1]], 0, 0, 0, 0, 812, null, null, ctx),
+      frozenWindow([all[3]], 0, 0, 0, 0, 812, null, null, ctx),
     ] },
     'insert',
     0,
@@ -1410,7 +1447,7 @@ test('缺口4：整个 piece 都不可见——insert 通道创建覆盖整个 p
   const retargeted = retargetRunStarts(
     run,
     prepared,
-    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 813, null)] },
+    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 813, null, null, ctx)] },
     'insert',
     0,
     { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 },
@@ -1455,7 +1492,7 @@ test('问题1：retarget 后 retained intervals 分区不变（firstIndex/lastIn
   // retarget：字形 2 被冻结窗口吞掉（clip 0..0）
   const retargeted = retargetRunStarts(
     run, prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 901, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 901, null, null, ctx)] },
     'retained', 0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
   )
@@ -1480,7 +1517,7 @@ test('问题1：retained prepare/retarget 的 interval.glyphIds 产生相同 win
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 })
   const retargeted = retargetRunStarts(
     run, prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 902, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 902, null, null, ctx)] },
     'retained', 0,
     { startClipLeft: 0, startClipRight: 50, startPositionX: 0, startPositionY: 0 },
   )
@@ -1506,7 +1543,7 @@ test('问题4：同一字形左右两块露出、中间有空洞——clipRects 
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 903, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 903, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }
   const pieces = visibleGlyphPieces(run, { ...ctx, frozenWindows: [span] })
   assert.equal(pieces.length, 1)
@@ -1531,7 +1568,7 @@ test('问题4：retainedMoveStartState 的 interval 携带 clipRects', () => {
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 904, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 904, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }
   const prepared = retainedMoveStartState(run, { ...ctx, frozenWindows: [span] },
     { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
@@ -1558,7 +1595,7 @@ test('问题4：retarget 后 retained interval 的 clipRects 反映新可见性'
       { x: 7, y: 0, width: 3, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 905, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 905, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }
   const retargeted = retargetRunStarts(
     run, prepared, { ...ctx, frozenWindows: [span] },
@@ -1585,7 +1622,7 @@ test('问题4：clonePieces 深拷贝 clipRects——retarget 全不可见时 cl
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 906, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 906, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }
   const prepared = retainedMoveStartState(run, { ...ctx, frozenWindows: [span] },
     { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
@@ -1594,7 +1631,7 @@ test('问题4：clonePieces 深拷贝 clipRects——retarget 全不可见时 cl
   // 但分区保留，clipRects 不复制（零宽度 interval 不带 clipRects）
   const retargeted = retargetRunStarts(
     run, prepared,
-    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 906, null)] },
+    { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 906, null, null, ctx)] },
     'retained', 0,
     { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 },
   )
@@ -1616,7 +1653,7 @@ test('问题3：retained 部分裁切——interval.startPositionX 是窗口偏�
   // 冻结窗口 clip=[6,36], offsetX=3：
   // 甲在源[0,10]，在屏[3,13]（源+offset），clip[6,36]交集→在屏可见[6,13]，源可见[3,10]
   // onScreenLeft=6（clip 在屏左边界），ownLeft=3（裁切后投影），sourceGlyphX0=0（完整左边界）
-  const frozen = [frozenWindow(all, 6, 36, 3, 0, 910, null)]
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 910, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
 
@@ -1664,7 +1701,7 @@ test('问题3：retained retarget 后 interval.startPositionX 仍保持窗口偏
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
   })
   // retarget：加冻结窗口 clip=[6,36] offsetX=3，甲被部分裁切
-  const frozen = [frozenWindow(all, 6, 36, 3, 0, 911, null)]
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 911, null, null, ctx)]
   const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'retained', 0,
     { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
 
@@ -1685,7 +1722,7 @@ test('问题3：retained 部分裁切 p=0 时——新公式 islandOffsetX 等�
   const ctx = context('甲乙丙丁', 912, [])
   const all = idsOf(ctx, 0, 4)
   // clip=[6,36] offsetX=3：甲在屏可见[6,13]，只露出右半 7vp（局部可见半字）
-  const frozen = [frozenWindow(all, 6, 36, 3, 0, 912, null)]
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 912, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -1727,7 +1764,7 @@ test('问题2：VisibleRunPiece 携带 sourceGlyphX0/X1 完整字形边界——
   const ctx = context('甲乙丙丁', 913, [])
   const all = idsOf(ctx, 0, 4)
   // clip=[4,36] offsetX=0：甲在源[0,10]可见[4,10]，部分裁切（左 4vp 被裁掉）
-  const frozen = [frozenWindow(all, 4, 36, 0, 0, 913, null)]
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 913, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -1754,7 +1791,7 @@ test('问题2：piece 的 clipRects 是投影后裁切矩形——不直接拷�
   // clip=[6,36] offsetX=3：窗口 clipRects=[{x:6,width:30}]
   // 甲在源[0,10]在屏[3,13]，可见在屏[6,13]→源可见[3,10]→投影到目标 ownLeft=3
   // piece.clipRects 应是投影到 run 自己布局的值，不是直接拷贝窗口的 {x:6,width:30}
-  const frozen = [frozenWindow(all, 6, 36, 3, 0, 914, null)]
+  const frozen = [frozenWindow(all, 6, 36, 3, 0, 914, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const pieces = visibleGlyphPieces(run, withWindow)
@@ -1780,7 +1817,7 @@ test('问题2：retarget insert 通道 interval 携带 clipRects——几何信�
   // prepare：无冻结窗口，整段静态完整可见
   const prepared = insertRunStartState(run, ctx)
   // retarget：加冻结窗口 clip=[4,36]，甲丁部分裁切
-  const frozen = [frozenWindow(all, 4, 36, 0, 0, 915, null)]
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 915, null, null, ctx)]
   const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'insert', 0,
     { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
   // insert 通道 interval 应携带 clipRects（可见岛）
@@ -1806,7 +1843,7 @@ test('问题2：字形不可见时 insert 通道建立零宽度 interval——�
   // prepare：无冻结窗口，整段静态完整可见
   const prepared = insertRunStartState(run, ctx)
   // retarget：所有字形被冻结窗口吞掉（clip 0..0）→ clipRects 为空
-  const frozen = [frozenWindow(all, 0, 0, 0, 0, 916, null)]
+  const frozen = [frozenWindow(all, 0, 0, 0, 0, 916, null, null, ctx)]
   const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'insert', 0,
     { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 })
   // insert 通道为零宽度空洞建立 interval（零宽度起点 + 非零目标的基础）
@@ -1827,7 +1864,7 @@ test('问题2：retained interval 的 clipRects 与 startPositionX 共同支撑�
   const ctx = context('甲乙丙丁', 917, [])
   const all = idsOf(ctx, 0, 4)
   // clip=[4,36] offsetX=0：甲可见[4,10]（左 4vp 裁掉），丁可见[30,36]（右 4vp 裁掉）
-  const frozen = [frozenWindow(all, 4, 36, 0, 0, 917, null)]
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 917, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -1889,7 +1926,7 @@ test('问题3：retainedMoveStartState 不可见字形 interval 携带零宽 cli
   const ctx = context('甲乙丙丁', 921, [])
   const ids = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见
-  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 921, null)]
+  const frozen = [frozenWindow([ids[2]], 0, 0, 0, 0, 921, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -1926,7 +1963,7 @@ test('问题3：retargetRunStarts retained 通道保留 sourceGlyphRects', () =>
   // retarget：簇2 被冻结窗口吞掉（clip 0..0）
   const retargeted = retargetRunStarts(
     run, prepared,
-    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 922, null)] },
+    { ...ctx, frozenWindows: [frozenWindow([all[2]], 0, 0, 0, 0, 922, null, null, ctx)] },
     'retained', 0,
     { startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0 },
   )
@@ -1968,7 +2005,7 @@ test('问题4：retained 部分可见字形首帧 clip 位置——cr.x + (start
     clipLeft: 4, clipRight: 10,
     clipRects: [{ x: 4, y: 0, width: 6, height: 20 }],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 930, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 930, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2013,7 +2050,7 @@ test('问题4：retained 带窗口偏移时首帧 clip 位置——cr.x + (start
     clipLeft: 8, clipRight: 15,
     clipRects: [{ x: 8, y: 0, width: 7, height: 20 }],
     offsetX: 5, offsetY: 0,
-    sourceRevision: 931, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 931, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2054,7 +2091,7 @@ test('问题2：retained 同一字形多段可见碎片——clipRects 不合并
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 932, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 932, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2094,7 +2131,7 @@ test('问题2：retained 多字形各自可见中间有间隙——interval clip
       { x: 15, y: 0, width: 3, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 933, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 933, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 2, { x: 0, y: 0, width: 20, height: 20 })
@@ -2138,7 +2175,7 @@ test('问题2：retarget 后 retained 多段碎片仍不合并——间隙持续
       { x: 7, y: 0, width: 3, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 934, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 934, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'retained', 0,
     { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
@@ -2175,7 +2212,7 @@ test('问题3：retained interval.sourceGlyphRects 是源字形几何（不含 o
     clipLeft: 8, clipRight: 15,
     clipRects: [{ x: 8, y: 0, width: 7, height: 20 }],
     offsetX: 5, offsetY: 0,
-    sourceRevision: 935, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 935, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2211,7 +2248,7 @@ test('问题3：retarget 后 retained interval 仍携带完整 sourceGlyphRects�
     startClipLeft: 0, startClipRight: 20, startPositionX: 0, startPositionY: 0,
   })
   // retarget：加冻结窗口 offsetX=3，clip [3,23]
-  const frozen = [frozenWindow(all, 3, 23, 3, 0, 936, null)]
+  const frozen = [frozenWindow(all, 3, 23, 3, 0, 936, null, null, ctx)]
   const retargeted = retargetRunStarts(run, prepared, { ...ctx, frozenWindows: frozen }, 'retained', 0,
     { startClipLeft: 0, startClipRight: 20, startPositionX: 0, startPositionY: 0 })
   assert.ok(retargeted[0].intervals !== undefined)
@@ -2238,7 +2275,7 @@ test('问题3：sourceGlyphRects 与 clipRects 各自独立——fullRect 不因
   const all = idsOf(ctx, 0, 4)
   // clip=[4,36] offsetX=0：甲可见[4,10]（左 4vp 裁掉），丁可见[30,36]（右 4vp 裁掉）
   // 乙丙完整可见 [10,30]
-  const frozen = [frozenWindow(all, 4, 36, 0, 0, 937, null)]
+  const frozen = [frozenWindow(all, 4, 36, 0, 0, 937, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2281,7 +2318,7 @@ test('问题3：不可见字形 startPositionX 应为字形绝对屏幕原点—
   const ctx = context('甲乙丙丁', 940, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见
-  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 940, null)]
+  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 940, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2306,7 +2343,7 @@ test('问题3：不可见字形 startPositionX 为字形绝对原点——p>0 �
   const ctx = context('甲乙丙', 941, [])
   const all = idsOf(ctx, 0, 3)
   // 簇1（乙）完全不可见，簇0（甲）和簇2（丙）可见
-  const frozen = [frozenWindow([all[1]], 0, 0, 0, 0, 941, null)]
+  const frozen = [frozenWindow([all[1]], 0, 0, 0, 0, 941, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 3, { x: 0, y: 0, width: 30, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2341,7 +2378,7 @@ test('问题2：同一字形多段可见碎片——sourceGlyphRects 中所有�
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 942, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 942, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2376,7 +2413,7 @@ test('问题2：retained 多段碎片——buildFrame 修复后 p=1 不重叠（
       { x: 6, y: 0, width: 4, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 943, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 943, glyphUtf16Ranges: autoRanges(all, ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2438,7 +2475,7 @@ test('问题2：retained 不可见字形 startPositionX 为字形绝对原点—
   const ctx = context('甲乙丙丁', 944, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）和簇3（丁）完全不可见
-  const frozen = [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 944, null)]
+  const frozen = [frozenWindow([all[2], all[3]], 0, 0, 0, 0, 944, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2563,7 +2600,7 @@ test('问题2：VisibleRunPiece 携带 sourceGlyphY0——与 onScreenTop 不同
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 8, width: 10, height: 15 }],
     offsetX: 0, offsetY: 3,
-    sourceRevision: 945, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 945, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2601,7 +2638,7 @@ test('问题2：retained interval 携带 frozenDrawOffsetY——不等于 startP
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 8, width: 10, height: 15 }],
     offsetX: 0, offsetY: 3,
-    sourceRevision: 946, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 946, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2626,7 +2663,7 @@ test('问题2：retained interval 携带 startScreenClipRects——屏幕坐标�
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 947, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 947, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2648,7 +2685,7 @@ test('问题5：不可见 retained glyph 的 frozenDrawOffsetX/Y 为 0（零偏�
   const ctx = context('甲乙丙丁', 948, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）完全不可见
-  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 948, null)]
+  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 948, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2665,7 +2702,7 @@ test('问题5：不可见 retained glyph 的 startPositionY 为 run.ownRect.y（
   const ctx = context('甲乙丙丁', 949, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）完全不可见
-  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 949, null)]
+  const frozen = [frozenWindow([all[2]], 0, 0, 0, 0, 949, null, null, ctx)]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const start = retainedMoveStartState(run, withWindow, {
@@ -2693,7 +2730,7 @@ test('问题3：同一字形多碎片——sourceGlyphRects 中所有元素都�
       { x: 7, y: 0, width: 3, height: 20 },
     ],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 950, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 950, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
@@ -2726,7 +2763,7 @@ test('问题2+5：retargetRunStarts retained 通道保留 frozenDrawOffsetX/Y', 
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 951, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 951, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
@@ -2759,7 +2796,7 @@ test('问题2：retargetRunStarts retained 通道保留 startScreenClipRects', (
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 952, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 952, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
@@ -2787,7 +2824,7 @@ test('问题2：clonePieces 深拷贝 startScreenClipRects——不共享引用'
     clipLeft: 0, clipRight: 10,
     clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
     offsetX: 0, offsetY: 0,
-    sourceRevision: 953, glyphUtf16Ranges: null, sourceLayout: null,
+    sourceRevision: 953, glyphUtf16Ranges: autoRanges([all[0]], ctx), sourceLayout: ctx.layout,
   }]
   const withWindow = { ...ctx, frozenWindows: frozen }
   const run = runGeometry(withWindow, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
@@ -2994,7 +3031,7 @@ test('问题4-1：prepare 可见、retarget 变全不可见——startScreenClip
   const ctx = context('甲乙丙丁', 970, [])
   const all = idsOf(ctx, 0, 4)
   // prepare：簇0 完整可见 [0,10]，interval 携带非空 startScreenClipRects
-  const prepareCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 10, 0, 0, 970, null)] }
+  const prepareCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 10, 0, 0, 970, null, null, ctx)] }
   const run = runGeometry(prepareCtx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
   const prepared = retainedMoveStartState(run, prepareCtx, {
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
@@ -3004,7 +3041,7 @@ test('问题4-1：prepare 可见、retarget 变全不可见——startScreenClip
     'prepare 可见时 startScreenClipRects 应非空')
 
   // 提交瞬间旧动画把簇0 吞得完全不可见（clip 宽度为 0）
-  const retargetCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 0, 0, 0, 970, null)] }
+  const retargetCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 0, 0, 0, 970, null, null, ctx)] }
   const retargeted = retargetRunStarts(run, prepared, retargetCtx, 'retained', 0, {
     startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
   })
@@ -3034,7 +3071,7 @@ test('问题4-2：多行 retained 不可见字形——startPositionX/Y 为字�
   }
   const all = idsOf(ctx, 0, 4)
   // 整段被旧动画吞得完全不可见
-  const hiddenCtx = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 971, null)] }
+  const hiddenCtx = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 971, null, null, ctx)] }
   const run = {
     glyphIds: all,
     ownText: '甲乙丙丁',
@@ -3263,6 +3300,190 @@ test('双源冻结窗口：glyphId 同时被旧源和新源两个冻结窗口覆
   assert.ok(iv.sourceGlyphRects !== undefined, 'sourceGlyphRects 应填充')
   assert.equal(iv.sourceGlyphRects[0].x, 10,
     'sourceGlyphRects.x 仍来自 run.ownLayout（10），与 frozenSourceGlyphRects 不同')
+})
+
+// ====== Issue #879 复核评论6106658725：整条链路一致性测试 ======
+
+test('问题1-6106658725：冻结源坐标统一——startPositionX、startScreenClipRects、frozenSourceGlyphRects 全部来自冻结源布局', () => {
+  const ctx = context('甲乙', 972, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const sourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const yiRanges = new Map([[yiId, [1, 2]]])
+  const frozen = [{
+    glyphIds: [yiId],
+    clipLeft: 53,
+    clipRight: 63,
+    clipRects: [{ x: 53, y: 0, width: 10, height: 20 }],
+    offsetX: 3,
+    offsetY: 0,
+    sourceRevision: 970,
+    glyphUtf16Ranges: yiRanges,
+    sourceLayout: sourceLayout,
+    sourceKind: 'old',
+    runId: 'old-11',
+    renderNodeKey: 'old-node-11',
+    opacity: undefined,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const ownLayout = [line('甲乙', 0)]
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: ownLayout,
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.frozenSourceGlyphRects !== undefined)
+  assert.equal(iv.frozenSourceGlyphRects[0].x, 50,
+    'frozenSourceGlyphRects.x 应来自冻结源布局（50）')
+  assert.equal(iv.startPositionX, 53,
+    'startPositionX 应为 53（源字形 50 + offset 3）')
+  assert.ok(iv.startScreenClipRects !== undefined)
+  assert.equal(iv.startScreenClipRects[0].x, 53,
+    'startScreenClipRects.x 应为 53（冻结源在屏位置）')
+  assert.ok(iv.sourceGlyphRects !== undefined)
+  assert.equal(iv.sourceGlyphRects[0].x, 10,
+    'sourceGlyphRects.x 仍来自 run.ownLayout（10）')
+})
+
+test('问题1-6106658725：双源冻结窗口——startPositionX 来自第一个成员的冻结源坐标', () => {
+  const ctx = context('甲乙', 972, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const yiRanges = new Map([[yiId, [1, 2]]])
+  const frozen = [
+    {
+      glyphIds: [yiId],
+      clipLeft: 53, clipRight: 58,
+      clipRects: [{ x: 53, y: 0, width: 5, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 970,
+      glyphUtf16Ranges: yiRanges,
+      sourceLayout: oldSourceLayout,
+      sourceKind: 'old',
+      runId: 'old-11',
+      renderNodeKey: 'old-node-11',
+      opacity: 0.5,
+    },
+    {
+      glyphIds: [yiId],
+      clipLeft: 75, clipRight: 80,
+      clipRects: [{ x: 75, y: 0, width: 5, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 974,
+      glyphUtf16Ranges: yiRanges,
+      sourceLayout: newSourceLayout,
+      sourceKind: 'new',
+      runId: 'new-11',
+      renderNodeKey: 'new-node-11',
+      opacity: 0.5,
+    },
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const ownLayout = [line('甲乙', 0)]
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: ownLayout,
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined)
+  assert.equal(iv.startPositionX, 53,
+    'startPositionX 应为 53（第一个成员源字形 50 + offset 3）')
+  assert.equal(iv.frozenSourceGlyphRects.length, 2)
+  assert.equal(iv.frozenSourceGlyphRects[0].x, 50)
+  assert.equal(iv.frozenSourceGlyphRects[1].x, 70)
+  assert.equal(iv.startScreenClipRects.length, 2)
+  assert.equal(iv.startScreenClipRects[0].x, 53)
+  assert.equal(iv.startScreenClipRects[1].x, 75)
+})
+
+test('问题1-6106658725：冻结窗口 glyphUtf16Ranges 为 null 时跳过 span——不回退到 displayed.layout', () => {
+  const ctx = context('甲乙', 980, [])
+  const ids = idsOf(ctx, 0, 2)
+  const frozen = [{
+    glyphIds: [ids[1]],
+    clipLeft: 10, clipRight: 20,
+    clipRects: [{ x: 10, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 980,
+    glyphUtf16Ranges: null,
+    sourceLayout: null,
+    sourceKind: 'old',
+    runId: 'old-11',
+    renderNodeKey: 'old-node-11',
+    opacity: undefined,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 1, 2, { x: 10, y: 0, width: 10, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 0, '冻结窗口无法提供 sourceLayout 时，字形应不可见')
+})
+
+test('问题1-6106658725：clusterVisible 有冻结窗口时 OnScreenInterval.sourceGlyphX0 来自冻结源布局', () => {
+  // 验证 clusterVisible 返回的 OnScreenInterval 中 sourceGlyphX0/X1 来自冻结源布局，
+  // 而不是 displayed.layout。这是确保 buildPiece/intervalForIsland/buildFrame
+  // 四段统一使用冻结源坐标的关键。
+  const ctx = context('甲乙', 972, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const sourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const yiRanges = new Map([[yiId, [1, 2]]])
+  const frozen = [{
+    glyphIds: [yiId],
+    clipLeft: 53,
+    clipRight: 63,
+    clipRects: [{ x: 53, y: 0, width: 10, height: 20 }],
+    offsetX: 3,
+    offsetY: 0,
+    sourceRevision: 970,
+    glyphUtf16Ranges: yiRanges,
+    sourceLayout: sourceLayout,
+    sourceKind: 'old',
+    runId: 'old-11',
+    renderNodeKey: 'old-node-11',
+    opacity: undefined,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // 直接测试 frozenIndex + clusterVisible
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.ok(intervals.length > 0, '乙应可见')
+  // sourceGlyphX0 应来自冻结源布局（50），不是 displayed.layout（10）
+  assert.equal(intervals[0].sourceGlyphX0, 50,
+    'sourceGlyphX0 应来自冻结源布局（50）')
+  assert.equal(intervals[0].sourceGlyphX1, 60,
+    'sourceGlyphX1 应来自冻结源布局（60）')
+  // rects 的屏幕坐标应基于冻结源布局 + offset（53..63）
+  assert.equal(intervals[0].rects[0].x, 53,
+    'rects[0].x 应为 53（冻结源 50 + offset 3）')
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
