@@ -118,6 +118,51 @@ impl RevisionChain {
         }
     }
 
+    /// Issue #901 第五轮阻塞1：将任意源 revision 的 byte offset 映射到 latest revision 坐标。
+    ///
+    /// - 如果 `source_revision == latest_revision`，直接返回原 offset（已经是 latest 坐标）。
+    /// - 如果 `source_revision == presented_revision`，用累计映射映射。
+    /// - 否则返回 `None`（无法精确映射中间 revision，调用方应视为删除）。
+    ///
+    /// 这解决了旧实现中"一律用 `map_presented_to_latest` 映射"的问题：
+    /// 存活字的 `source_revision` 是 target revision（latest），`byte_range` 已经是
+    /// latest 坐标，不应再被当作 presented 坐标映射一次。
+    pub(crate) fn map_to_latest(
+        &self,
+        source_revision: EditorRevision,
+        offset: usize,
+    ) -> Option<usize> {
+        if source_revision == self.latest_revision {
+            return Some(offset);
+        }
+        if source_revision == self.presented_revision {
+            return self.map_presented_to_latest(offset);
+        }
+        // 其他 revision：无法精确映射，视为删除。
+        None
+    }
+
+    /// Issue #901 第五轮阻塞1：将任意源 revision 的半开 byte range 映射到 latest revision 坐标。
+    ///
+    /// - 如果 `source_revision == latest_revision`，直接返回原 range。
+    /// - 如果 `source_revision == presented_revision`，用累计映射映射。
+    /// - 否则返回 `None`（无法精确映射中间 revision，调用方应视为删除）。
+    pub(crate) fn map_range_to_latest(
+        &self,
+        source_revision: EditorRevision,
+        start: usize,
+        end: usize,
+    ) -> Option<(usize, usize)> {
+        if source_revision == self.latest_revision {
+            return Some((start, end));
+        }
+        if source_revision == self.presented_revision {
+            return self.map_presented_range_to_latest(start, end);
+        }
+        // 其他 revision：无法精确映射，视为删除。
+        None
+    }
+
     /// 新帧已提交：把 presented_revision 前进到该帧的 revision，累计映射归零。
     ///
     /// 调用时机：Qt `afterFrameEnd` 确认了一帧，且该帧的 `source_revision`

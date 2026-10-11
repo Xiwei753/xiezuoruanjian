@@ -141,6 +141,10 @@ impl SceneTransition {
         // 存活字的 target 索引集合 —— 这些 run 由 presented 侧的 FLIP 处理。
         let mut surviving_target_indices: Vec<bool> = vec![false; target.glyph_runs.len()];
 
+        // Issue #901 第五轮阻塞1：latest revision 用于保证存活字/新增字的
+        // source_revision 与 byte_range 同一版。
+        let latest_revision = revision_chain.latest_revision();
+
         // 1. 从 presented 生成文字命令。
         for contrib in &presented.pixel_contributions {
             if !contrib.has_visible_area() {
@@ -149,14 +153,19 @@ impl SceneTransition {
             // 贡献的实际可见透明度（contrib.opacity * presented.opacity）。
             // 如果为 0，该贡献不可见，不标记存活 —— 让 target 侧作为新增字处理。
             let contrib_visible_opacity = contrib.opacity * presented.opacity;
-            // 用 RevisionChain 判断该贡献是存活还是删除。
-            let survived_offset = revision_chain.map_presented_to_latest(contrib.byte_range.0);
+            // Issue #901 第五轮阻塞1：根据 contrib.source_revision 判断是否需要映射。
+            // 如果 source_revision == latest_revision，byte_range 已经是 latest 坐标，
+            // 不需要映射。否则用 revision_chain 映射。旧实现一律用
+            // map_presented_to_latest，把已经是新坐标的 byte_range 当旧坐标再映射一次。
+            let survived_offset =
+                revision_chain.map_to_latest(contrib.source_revision, contrib.byte_range.0);
             if let Some(latest_offset) = survived_offset {
                 // 存活字：尝试匹配 target glyph run 做 FLIP 位移。
                 let matched = Self::find_matching_target_run(
                     target,
                     latest_offset,
                     contrib.byte_range,
+                    contrib.source_revision,
                     revision_chain,
                 );
                 if let Some((run_idx, run)) = matched {
@@ -171,6 +180,7 @@ impl SceneTransition {
                         progress,
                         presented,
                         target,
+                        latest_revision,
                     ) {
                         // Issue #901 问题3：存活字接管的完整目标范围（文档坐标，
                         // 与 progress 无关）加入静态排除列表。
@@ -231,7 +241,7 @@ impl SceneTransition {
             // 新增字：沿文字方向从 0→full_width 裁剪揭示。
             // Issue #901 问题4：不是 opacity=progress，
             // 而是 source_uv/target_rect 宽度按 progress 展开。
-            if let Some(cmd) = Self::command_for_inserting(run, progress, target) {
+            if let Some(cmd) = Self::command_for_inserting(run, progress, target, latest_revision) {
                 commands.push(cmd);
             }
         }
@@ -324,22 +334,25 @@ impl SceneTransition {
     /// 从 target 的 glyph_runs 生成完整静态画面（progress=1.0）。
     /// **不注册为 `presented_scene`**——`presented_scene` 只在
     /// `on_frame_committed`（afterFrameEnd 回执）时设置。
+    ///
+    /// Issue #901 第五轮阻塞3：初始帧不创建动画层 TextFragment 命令，让静态层
+    /// 全权绘制正文。旧实现为全部 target glyph_runs 创建 TextFragment 但
+    /// `static_exclusion_rects=[]`，导致静态层画完整正文 + 动画层也画完整正文
+    /// → 双重绘制。新实现只保留光标命令，正文由静态 QSGTextNode 绘制。
+    /// `build_presented_scene_from_frame` 在无 TextFragment 命令时返回 None，
+    /// 不注册 `presented_scene`；`qquickitem_impl.rs` 在静态层成功提交后
+    /// 据真实 rendered snapshot 建立初始 `PresentedScene`。
     pub(crate) fn build_draw_plan_target_only(
         target: &TargetLayoutDescriptor,
         revision_chain: &RevisionChain,
         now_ms: f64,
     ) -> CanvasDrawPlan {
+        // Issue #901 第五轮阻塞3：不创建动画层 TextFragment 命令。
+        // 初始帧时静态层刚提交完整正文，动画层不应再 overlay 全文，否则双重绘制。
+        // 只保留光标命令，正文由静态 QSGTextNode 全权绘制。
         let mut commands = Vec::new();
-        // Issue #901 问题3：target only 时所有 glyph run 都是静态正文
-        // （progress=1.0 完整显示），没有动画接管，不需要排除。
+        // static_exclusion_rects 为空：动画层不接管任何区域，静态层画完整正文。
         let static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
-
-        // 从 target 生成静态画面（progress=1.0，完整显示）。
-        for run in &target.glyph_runs {
-            if let Some(cmd) = Self::command_from_glyph_run(run, 1.0, target) {
-                commands.push(cmd);
-            }
-        }
 
         // 光标命令。
         if let Some(tc) = &target.caret {
@@ -381,12 +394,16 @@ impl SceneTransition {
         target: &'a TargetLayoutDescriptor,
         latest_offset: usize,
         presented_byte_range: (usize, usize),
+        source_revision: writer_core::editor::EditorRevision,
         revision_chain: &RevisionChain,
     ) -> Option<(usize, &'a TargetGlyphRun)> {
         // 精确映射整个 byte_range 到 latest 坐标。
         // 仅当整个 range 落在同一个映射条目内时才视为存活。
+        // Issue #901 第五轮阻塞1：根据 source_revision 判断是否需要映射。
+        // 如果 source_revision == latest_revision，byte_range 已经是 latest 坐标。
         let (latest_start, latest_end) = revision_chain
-            .map_presented_range_to_latest(
+            .map_range_to_latest(
+                source_revision,
                 presented_byte_range.0,
                 presented_byte_range.1,
             )
@@ -414,6 +431,7 @@ impl SceneTransition {
         progress: f64,
         presented: &PresentedScene,
         _target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
     ) -> Option<DrawCommand> {
         if !contrib.has_visible_area() {
             return None;
@@ -465,6 +483,10 @@ impl SceneTransition {
             // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
             // 存活字用 target run 的 byte_range（映射后的最新坐标）。
             run.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 target 的（新坐标），source_revision 也必须是
+            // target revision（latest_revision），不能标 presented 的旧 revision。
+            latest_revision,
         ))
     }
 
@@ -514,39 +536,10 @@ impl SceneTransition {
             ownership,
             // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
             contrib.byte_range,
-        ))
-    }
-
-    /// 从 `TargetGlyphRun` 生成一条文字绘制命令。
-    ///
-    /// 透明度乘以 `fade`（淡入系数）。
-    ///
-    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
-    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
-    fn command_from_glyph_run(
-        run: &TargetGlyphRun,
-        fade: f64,
-        _target: &TargetLayoutDescriptor,
-    ) -> Option<DrawCommand> {
-        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
-            return None;
-        }
-        let opacity = fade;
-        if opacity <= 0.0 {
-            return None;
-        }
-        // Issue #901 问题2：直接使用文档坐标，不减滚动偏移。
-        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
-        let doc_rect = run.document_rect;
-        Some(DrawCommand::text_fragment(
-            run.snapshot_id,
-            run.source_uv,
-            doc_rect,
-            _target.clip,
-            opacity,
-            super::ownership::OwnershipRule::AnimatedText,
-            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
-            run.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 contrib 的（presented 坐标），source_revision 也用
+            // contrib 的（presented revision），不通过 ownership 猜来源。
+            contrib.source_revision,
         ))
     }
 
@@ -563,6 +556,7 @@ impl SceneTransition {
         run: &TargetGlyphRun,
         progress: f64,
         _target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
     ) -> Option<DrawCommand> {
         if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
             return None;
@@ -598,6 +592,10 @@ impl SceneTransition {
             1.0, // 用裁剪揭示，不用透明度
             super::ownership::OwnershipRule::AnimatedText,
             run.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 target run 的（新坐标），source_revision 也是
+            // target revision（latest_revision）。
+            latest_revision,
         ))
     }
 
@@ -650,6 +648,10 @@ impl SceneTransition {
             opacity,
             super::ownership::OwnershipRule::StaticText,
             contrib.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 contrib 的（presented 坐标），source_revision 也用
+            // contrib 的（presented revision），不通过 ownership 猜来源。
+            contrib.source_revision,
         ))
     }
 

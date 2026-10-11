@@ -305,10 +305,17 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            let canonical_para = doc_snapshot
-                .paragraphs
-                .iter()
-                .find(|p| p.paragraph_document_byte_start == line.para_start);
+            // Issue #901 第五轮阻塞2: 用二分查找替代线性 find，因为 paragraphs
+            // 按 paragraph_document_byte_start 递增排列。O(log n) vs O(n)。
+            let canonical_para = {
+                let idx = doc_snapshot
+                    .paragraphs
+                    .partition_point(|p| p.paragraph_document_byte_start < line.para_start);
+                doc_snapshot
+                    .paragraphs
+                    .get(idx)
+                    .filter(|p| p.paragraph_document_byte_start == line.para_start)
+            };
 
             let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);

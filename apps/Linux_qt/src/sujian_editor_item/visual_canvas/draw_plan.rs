@@ -97,6 +97,20 @@ pub(crate) struct DrawCommand {
     /// 构造 `PixelContribution` 时使用真实字节范围，不硬编码 `(0, 0)`。
     /// 非文字命令（光标/选区/preedit）使用 `(0, 0)`。
     pub byte_range: (usize, usize),
+    /// Issue #901 第五轮阻塞1：该命令对应的 Core source revision。
+    ///
+    /// **必须与 `byte_range` 来自同一版本**：
+    /// - 存活字（FLIP）：`byte_range` 用 target 的（新坐标），`source_revision`
+    ///   也必须是 target revision（`latest_revision`）。
+    /// - 删除字：`byte_range` 用 presented 的（旧坐标），`source_revision`
+    ///   必须是 presented revision（`contrib.source_revision`）。
+    /// - 新增字：`byte_range` 用 target 的（新坐标），`source_revision`
+    ///   也必须是 target revision（`latest_revision`）。
+    ///
+    /// `build_presented_scene_from_frame` 直接按此字段填写
+    /// `PixelContribution.source_revision`，不通过 `OwnershipRule` 猜来源。
+    /// 非文字命令（光标/选区/preedit）使用 `EditorRevision::initial()`。
+    pub source_revision: EditorRevision,
 }
 
 impl DrawCommand {
@@ -109,6 +123,7 @@ impl DrawCommand {
         opacity: f64,
         ownership: OwnershipRule,
         byte_range: (usize, usize),
+        source_revision: EditorRevision,
     ) -> Self {
         Self {
             kind: DrawCommandKind::TextFragment,
@@ -119,6 +134,7 @@ impl DrawCommand {
             opacity,
             ownership,
             byte_range,
+            source_revision,
         }
     }
 
@@ -133,6 +149,7 @@ impl DrawCommand {
             opacity,
             ownership: OwnershipRule::Cursor,
             byte_range: (0, 0),
+            source_revision: EditorRevision::initial(),
         }
     }
 
@@ -151,6 +168,7 @@ impl DrawCommand {
             opacity,
             ownership: OwnershipRule::Selection,
             byte_range: (0, 0),
+            source_revision: EditorRevision::initial(),
         }
     }
 
@@ -171,6 +189,7 @@ impl DrawCommand {
             opacity,
             ownership: OwnershipRule::Preedit,
             byte_range: (0, 0),
+            source_revision: EditorRevision::initial(),
         }
     }
 
@@ -335,6 +354,7 @@ mod tests {
             1.0,
             OwnershipRule::StaticText,
             (0, 5),
+            EditorRevision::initial(),
         );
         assert_eq!(cmd.kind, DrawCommandKind::TextFragment);
         assert_eq!(cmd.snapshot_id, sample_snapshot_id());
@@ -390,6 +410,7 @@ mod tests {
             1.0,
             OwnershipRule::StaticText,
             (0, 5),
+            EditorRevision::initial(),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -404,6 +425,7 @@ mod tests {
             0.0,
             OwnershipRule::StaticText,
             (0, 5),
+            EditorRevision::initial(),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -426,6 +448,7 @@ mod tests {
             1.0,
             OwnershipRule::StaticText,
             (0, 5),
+            EditorRevision::initial(),
         );
         let plan = CanvasDrawPlan::from_commands(
             16.0,

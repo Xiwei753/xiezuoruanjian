@@ -733,6 +733,23 @@ impl LinuxEditorPipeline {
         self.text_revision = self.text_revision.wrapping_add(1);
     }
 
+    /// Issue #901 第五轮阻塞4：用 Core `EditorEditResult.new_revision` 直接设置
+    /// text_revision，使排版版本在 Core 编辑完成时立即一致。
+    ///
+    /// 普通编辑流程是先 Core edit → `record_transaction` → 后续 `emit_content_changed`
+    /// 才 `bump_text_revision`。如果 `record_transaction` 内部用尚未 bump 的
+    /// `text_revision()` 调 `EditorLayout::snapshot`，等字节长度替换（text_ptr +
+    /// text_len 不变）会命中 cache 直接返回旧布局，导致中段同宽替换/IME 替换的
+    /// 光标、字形和正文版本脱节。
+    ///
+    /// 此方法在 `record_transaction` 建立增量目标**之前**调用，把 text_revision
+    /// 提交到 Core 的 new_revision，使 `snapshot` 收到的 revision 一定和 cache
+    /// 中的不同（cache 中是旧 revision），强制走重排路径。后续 `emit_content_changed`
+    /// 的 `bump_text_revision` 在此基础上再 +1，表示平台端视觉刷新。
+    pub fn set_text_revision(&mut self, revision: u64) {
+        self.text_revision = revision;
+    }
+
     /// 保留最后成功显示帧和当前视觉过渡引用的行纹理。
     pub fn retain_active_snapshot_ids(&mut self, active_ids: &[LineSnapshotId]) {
         self.texture_cache.retain_active_snapshot_ids(active_ids);

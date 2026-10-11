@@ -778,6 +778,13 @@ pub fn update_affected_text_nodes(
     origin_x: f64,
     generation: u64,
 ) -> bool {
+    // Issue #901 第五轮阻塞2: 防御性空指针检查 — 如果 Qt 场景图根节点或
+    // item 指针为空，说明场景图尚未初始化（如首次渲染前或组件销毁后），
+    // 直接返回 false 让调用方回退到全量重建路径，避免 C++ 侧解引用空指针。
+    if root_raw.is_null() || item_ptr.is_null() {
+        return false;
+    }
+
     if affected_indices.is_empty() {
         // 没有受影响段落，只更新滚动位移
         update_scroll_transform(root_raw, scroll_y);

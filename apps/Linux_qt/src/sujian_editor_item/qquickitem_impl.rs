@@ -780,29 +780,24 @@ impl SujianEditorItem {
             CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedCaret,
             PresentedScene, PresentedScroll,
         };
-        use super::visual_canvas::OwnershipRule;
 
         // Issue #901 问题1：从 canvas_plan 读取真实的 source/target revision 和
         // pose_progress，不硬编码 1.0，不取外部 pipeline.text_revision()。
         let plan_source_revision = canvas_plan.source_revision;
-        let plan_target_revision = canvas_plan.target_revision;
         let pose_progress = canvas_plan.pose_progress.clamp(0.0, 1.0);
 
         // 从 canvas_plan 的 TextFragment 命令转换为 PixelContribution 列表。
         // Issue #901 问题1：每条贡献携带自己的 source_revision。
         // Issue #901 问题3：byte_range 从 DrawCommand.byte_range 获取，不硬编码 (0,0)。
+        // Issue #901 第五轮阻塞1：直接用 DrawCommand.source_revision 填写
+        // PixelContribution.source_revision，不通过 OwnershipRule 猜来源。
+        // 旧实现把 StaticText 一律给 plan_source_revision（旧 revision），
+        // 但存活字的 byte_range 用的是 target 的（新坐标），导致混搭。
         let pixel_contributions: Vec<PixelContribution> = canvas_plan
             .commands
             .iter()
             .filter(|cmd| cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment)
             .map(|cmd| {
-                // Issue #901 问题1：根据 ownership 推导每条贡献的 source_revision。
-                // StaticText（存活字/删除字）→ plan_source_revision（旧贡献）。
-                // AnimatedText（新增字）→ plan_target_revision（新贡献）。
-                let contrib_revision = match cmd.ownership {
-                    OwnershipRule::AnimatedText => plan_target_revision,
-                    _ => plan_source_revision,
-                };
                 PixelContribution {
                     snapshot_id: cmd.snapshot_id,
                     source_uv: cmd.source_uv,
@@ -810,7 +805,7 @@ impl SujianEditorItem {
                     visible_clip: cmd.clip_rect,
                     opacity: cmd.opacity,
                     byte_range: cmd.byte_range,
-                    source_revision: contrib_revision,
+                    source_revision: cmd.source_revision,
                 }
             })
             .collect();

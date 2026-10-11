@@ -377,6 +377,13 @@ impl ParagraphHeightIndex {
         if self.len == 0 || y_end < 0.0 {
             return (0, 0);
         }
+        // Issue #901 第五轮阻塞2: 防御性处理 y_start > y_end 的调用，
+        // 自动交换以保证 start <= end，避免返回空范围或越界。
+        let (y_start, y_end) = if y_start > y_end {
+            (y_end, y_start)
+        } else {
+            (y_start, y_end)
+        };
         let start = self.y_to_paragraph(y_start);
         // y_end 对应的段落 +1（因为 y_to_paragraph 返回包含 y 的段落，
         // 我们要的是最后一个相交段落的下一个）

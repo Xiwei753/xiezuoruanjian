@@ -5,6 +5,8 @@
 //! `prepare.rs` 只保留对外入口与动画视觉资源提取。
 
 use super::*;
+// Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
+use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
 
 pub(super) fn prepare_document_visual_snapshot_impl(
     text: &str,
@@ -694,14 +696,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let old_para_texts: Vec<&str> = prev.paragraphs.iter().map(|p| p.paragraph_text.as_str()).collect();
 
     let splice_ranges = if affected.full_relayout {
-        super::super::super::paragraph_layout_store::ParagraphSpliceRanges {
+        ParagraphSpliceRanges {
             old_splice_start: 0,
             old_splice_end: prev_para_count,
             new_layout_start: 0,
             new_layout_end: new_para_count,
         }
     } else {
-        super::super::super::paragraph_layout_store::ParagraphLayoutStore::compute_old_new_paragraph_ranges(
+        ParagraphLayoutStore::compute_old_new_paragraph_ranges(
             &old_para_texts,
             &new_para_texts,
         )

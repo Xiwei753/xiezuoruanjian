@@ -323,6 +323,14 @@ impl EditorLayout {
                 c.text_revision != text_revision
                     || c.text_ptr != text_ptr
                     || c.text_len != text_len
+                    // Issue #901 第五轮阻塞4：如果有未消费的 last_edit_affected_range，
+                    // 即使 text_revision + text_ptr + text_len 都相同也必须重排。
+                    // 禁止靠指针和长度判断是否需要重排——等字节长度替换（如 IME
+                    // 替换中文字符、同宽 ASCII 替换）text_ptr 和 text_len 可能不变，
+                    // 但内容已变。last_edit_affected_range 由外部从 Core
+                    // display_patches 提取后通过 set_last_edit_affected_range 设置，
+                    // 在增量排版路径中被 take() 消费。
+                    || self.last_edit_affected_range.is_some()
             }
             None => true,
         };
@@ -407,6 +415,15 @@ impl EditorLayout {
             // Issue #901 第三轮复核问题 1: 只 clone visual_lines 给 LayoutSnapshot，
             // 把整个 doc_snapshot move 到 last_snapshot（避免 clone paragraphs/images）。
             // 此前是 clone 整个 doc_snapshot 再 move visual_lines，多 clone 了 paragraphs。
+            //
+            // Issue #901 第五轮阻塞5: 此处 visual_lines.clone() 是所有权模型的必要 clone：
+            // LayoutSnapshot.lines（Vec<VisualLine>）和 last_snapshot
+            //（CanonicalDocumentVisualSnapshot.visual_lines）各需一份 visual_lines 的
+            // 所有权。当前类型为 Vec，无法共享所有权。未来可将 LayoutSnapshot.lines 和
+            // CanonicalDocumentVisualSnapshot.visual_lines 改为 Arc<Vec<VisualLine>>，
+            // 用 Arc::clone（仅增引用计数）消除此深拷贝。该改动涉及 types.rs /
+            // canonical_snapshot.rs / full.rs / scene_graph_renderer.rs 等多文件，
+            // 需统一协调，不在本轮阻塞修复范围。
             let lines = doc_snapshot.visual_lines.clone();
             self.last_snapshot = Some(doc_snapshot);
 
@@ -457,6 +474,8 @@ impl EditorLayout {
 
             // Issue #901 第二轮复核: 保存全篇重排结果供下次增量排版复用。
             // Issue #901 第三轮复核: 只 clone visual_lines，move 整个 doc_snapshot 到 last_snapshot。
+            // Issue #901 第五轮阻塞5: 同增量路径，visual_lines.clone() 是所有权必要 clone，
+            // 详见增量路径注释。未来可用 Arc<Vec<VisualLine>> 共享所有权消除。
             let lines = doc_snapshot.visual_lines.clone();
             self.last_snapshot = Some(doc_snapshot);
 

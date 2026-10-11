@@ -178,7 +178,7 @@ pub struct AffectedParagraphRanges {
 /// - `old_count - old_splice_end == new_count - new_layout_end`：编辑点之后的段落数不变。
 /// - 前 `old_splice_start` 段和后 `old_count - old_splice_end` 段内容完全相同，
 ///   可直接复用 prev snapshot 的排版结果。
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParagraphSpliceRanges {
     /// 旧段数组中要删除的范围 `[start, end)`。
     pub old_splice_start: usize,

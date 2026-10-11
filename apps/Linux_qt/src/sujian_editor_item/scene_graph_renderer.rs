@@ -155,6 +155,16 @@ pub(crate) fn render_frame(
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
         if let Some(snapshot) = static_text.layout_snapshot {
+            // Issue #901 第五轮阻塞5：只遍历视口内的行，不全文重建。
+            // 长章中只有视口附近的行需要处理，成本与视口大小相关，
+            // 而不是和全章长度相关。扩展一个视口高度的 margin 避免滚动时
+            // 频繁重建边界段落。
+            let viewport_top = static_text.scroll_y;
+            let viewport_bottom = static_text.scroll_y + static_text.viewport_height;
+            let margin = static_text.viewport_height.max(100.0);
+            let visible_top = viewport_top - margin;
+            let visible_bottom = viewport_bottom + margin;
+
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。
             // cache_idx 直接从 VisualLine.cache_slot 读取（由 layout 阶段按段落出现顺序
             // 分配的稳定 slot），不再自行计数。
@@ -162,6 +172,10 @@ pub(crate) fn render_frame(
             let mut last_para_start: Option<usize> = None;
 
             for line in &snapshot.lines {
+                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
+                if line.y + line.height < visible_top || line.y > visible_bottom {
+                    continue;
+                }
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
                     last_para_start = Some(line.para_start);
@@ -186,9 +200,17 @@ pub(crate) fn render_frame(
             let mut para_y_map: std::collections::HashMap<usize, f64> =
                 std::collections::HashMap::new();
             for line in &snapshot.lines {
+                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
+                if line.y + line.height < visible_top || line.y > visible_bottom {
+                    continue;
+                }
                 para_y_map.entry(line.para_start).or_insert(line.y);
             }
             for line in &snapshot.lines {
+                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
+                if line.y + line.height < visible_top || line.y > visible_bottom {
+                    continue;
+                }
                 let para_y = *para_y_map.get(&line.para_start).unwrap_or(&line.y);
                 visual_line_clips.push(qt_text_node::VisualLineClipInfo {
                     cache_idx: line.cache_slot,

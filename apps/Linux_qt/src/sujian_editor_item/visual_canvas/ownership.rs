@@ -276,6 +276,7 @@ mod tests {
             opacity: 1.0,
             ownership,
             byte_range: (0, 0),
+            source_revision: writer_core::editor::EditorRevision::initial(),
         }
     }
 

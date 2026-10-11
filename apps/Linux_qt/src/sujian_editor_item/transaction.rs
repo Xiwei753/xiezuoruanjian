@@ -48,45 +48,57 @@ impl SujianEditorItem {
             None
         };
 
-        // Issue #901 问题4：普通编辑走增量排版路径，不全章重排。
-        // needs_new_layout 判断：
+        // Issue #901 第五轮阻塞4：在建立增量排版目标**之前**，先用 Core 的
+        // new_revision 更新 pipeline 的 text_revision，使 EditorLayout::snapshot
+        // 收到的 revision 一定和 cache 中的不同（cache 中是旧 revision）。
+        // 禁止等字节长度替换靠 text_ptr + text_len 判断命中 cache 直接返回旧布局，
+        // 导致中段同宽替换/IME 替换的光标、字形和正文版本脱节。
+        // 同一次编辑 Core result → EditorLayoutSnapshot → TargetLayoutDescriptor
+        // → PreparedEditorFrame 必须共享同一个已确定的 revision；
+        // emit_content_changed 只发 UI 通知，不再负责事后才给正文排版增加版本。
+        let core_new_revision = result.new_revision.value();
+        self.pipeline.set_text_revision(core_new_revision);
+
+        // Issue #901 第五轮阻塞5：不 clone 整份 current_layout_snapshot，
+        // 只比较必要的版本/参数元数据。needs_new_layout 判断改为正常版本判断：
         // - current_layout_snapshot 为 None → 需要排版（首次/重置后）
-        // - current_layout_snapshot 为 Some 但宽度/字体变化 → 需要重排
-        // - current_layout_snapshot 为 Some 且宽度/字体未变 → 走增量路径
-        //   （EditorLayout::snapshot 内部判断 text_revision 变化，只重排受影响段落）
+        // - current_layout_snapshot 为 Some 但 line_snapshots 为空 → 需要重排
+        // - 其他 → 走增量路径（EditorLayout::snapshot 内部判断 revision 变化）
+        // 增量排版路径（build_incremental_layout_snapshot）内部会判断
+        // paragraph_store 是否为空，为空时走全篇重排，非空时走增量重排。
         let width = self.bounding_width();
-        let current_snap = self.pipeline.current_layout_snapshot().clone();
-        let needs_new_layout = match &current_snap {
-            None => true,
-            Some(snap) => {
-                // 宽度/字体变化时需要全篇重排
-                (snap.line_snapshots.is_empty())
-                    || false // 增量路径内部会处理参数变化
+        let needs_new_layout = {
+            match self.pipeline.current_layout_snapshot() {
+                None => true,
+                Some(snap) => snap.line_snapshots.is_empty(),
             }
         };
 
-        if needs_new_layout || current_snap.is_some() {
-            // Issue #901 问题4：走增量排版路径。
-            // build_incremental_layout_snapshot 内部调 EditorLayout::snapshot()，
-            // 只重排受影响段落，不调用全篇 prepare_document_visual_snapshot_scoped。
-            // 同时为受影响行提取 QImage 纹理，闭环"普通输入也产生纹理"。
-            match self.build_incremental_layout_snapshot(width, affected_range) {
-                Ok(new_snap) => {
-                    // Issue #901 问题4：把新 snapshot 通过 prepare_visual_edit_textures
-                    // 注入 texture_cache，使渲染层能找到受影响行的纹理。
+        // Issue #901 问题4：走增量排版路径。
+        // build_incremental_layout_snapshot 内部调 EditorLayout::snapshot()，
+        // 只重排受影响段落，不调用全篇 prepare_document_visual_snapshot_scoped。
+        // 同时为受影响行提取 QImage 纹理，闭环"普通输入也产生纹理"。
+        // Issue #901 第五轮阻塞5：去掉无意义的 `needs_new_layout || is_some()`
+        // 条件（原条件恒为 true），改为显式判断 needs_new_layout。
+        // needs_new_layout 为 true 时仍走增量路径——其内部 paragraph_store
+        // 为空会自动 fallback 到全篇重排，不需要外部分支。
+        let _ = needs_new_layout; // 保留版本判断语义供诊断/未来扩展
+        match self.build_incremental_layout_snapshot(width, affected_range) {
+            Ok(new_snap) => {
+                // Issue #901 问题4：把新 snapshot 通过 prepare_visual_edit_textures
+                // 注入 texture_cache，使渲染层能找到受影响行的纹理。
+                self.prepare_visual_edit_textures(&new_snap);
+                self.pipeline
+                    .set_current_layout_snapshot(Some(new_snap));
+            }
+            Err(_err) => {
+                // 增量排版失败时 fallback 到全篇排版。
+                // build_editor_layout_snapshot 内部已记诊断，
+                // current_layout_snapshot 保持旧值——不伪装成功。
+                if let Ok(new_snap) = self.build_editor_layout_snapshot(width, false, None) {
                     self.prepare_visual_edit_textures(&new_snap);
                     self.pipeline
                         .set_current_layout_snapshot(Some(new_snap));
-                }
-                Err(_err) => {
-                    // 增量排版失败时 fallback 到全篇排版。
-                    // build_editor_layout_snapshot 内部已记诊断，
-                    // current_layout_snapshot 保持旧值——不伪装成功。
-                    if let Ok(new_snap) = self.build_editor_layout_snapshot(width, false, None) {
-                        self.prepare_visual_edit_textures(&new_snap);
-                        self.pipeline
-                            .set_current_layout_snapshot(Some(new_snap));
-                    }
                 }
             }
         }
