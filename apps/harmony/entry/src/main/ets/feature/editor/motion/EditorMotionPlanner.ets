@@ -492,7 +492,7 @@ export class EditorMotionPlanner {
                 interval.utf16End ?? move.oldUtf16End
               )
               // 用新布局计算该 interval 的字形矩形
-              let newIntervalRect: { x: number; y: number; width: number; height: number } | null = null
+              let newIntervalRect: RectLike | null = null
               if (newMoveBoundaries.length === glyphIds.length + 1 &&
                   interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
                 newIntervalRect = glyphRectForRange(
