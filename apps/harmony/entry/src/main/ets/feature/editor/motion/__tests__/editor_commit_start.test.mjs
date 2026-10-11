@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert'
 import { GlyphIdentityTable, WindowInstanceIdAllocator } from '../editor_glyph_identity.ts'
 import {
   visibleGlyphPieces, insertRunStartState, deletedRunStartState, retainedMoveStartState,
-  retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio,
+  retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, shouldCrossfadeSources,
 } from '../editor_commit_start.ts'
 
 let passed = 0
@@ -2926,6 +2926,71 @@ test('mapRectByRatio——纵向半字映射：旧布局上半部分映射到新
   // relY=0, relHeight=8/20=0.4 → targetY=100, targetHeight=0.4*30=12
   assert.ok(Math.abs(result.y - 100) < 0.001, 'y 应为 100')
   assert.ok(Math.abs(result.height - 12) < 0.001, 'height 应为 12（新布局上半部分按比例）')
+})
+
+// ─── Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出 ───
+//
+// retained 通道在新旧字宽/高不同时，同时输出旧源(opacity=1-p)和新源(opacity=p)两个窗口。
+// shouldCrossfadeSources 判断是否需要新旧源切换——当 width 或 height 差异 > 0.5vp 时返回 true。
+
+console.log('\n--- Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出 ---')
+
+test('shouldCrossfadeSources——新旧字宽相同时不需要交叉淡入淡出', () => {
+  const sourceGlyph = { x: 10, y: 20, width: 15, height: 24 }
+  const newGlyph = { x: 50, y: 20, width: 15, height: 24 }
+  assert.ok(!shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '字宽/高相同（仅位置不同）时不需要交叉淡入淡出')
+})
+
+test('shouldCrossfadeSources——新旧字宽差异 > 0.5vp 时需要交叉淡入淡出', () => {
+  // 评论中的例子：旧源字形宽 10vp，新版宽 20vp
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  const newGlyph = { x: 50, y: 0, width: 20, height: 24 }
+  assert.ok(shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '字宽差异 10vp > 0.5vp 时需要交叉淡入淡出')
+})
+
+test('shouldCrossfadeSources——新旧行高差异 > 0.5vp 时需要交叉淡入淡出', () => {
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 20 }
+  const newGlyph = { x: 0, y: 0, width: 10, height: 30 }
+  assert.ok(shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '行高差异 10vp > 0.5vp 时需要交叉淡入淡出')
+})
+
+test('shouldCrossfadeSources——新旧字宽差异 ≤ 0.5vp 时不需要交叉淡入淡出', () => {
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  const newGlyph = { x: 50, y: 0, width: 10.3, height: 24 }
+  assert.ok(!shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '字宽差异 0.3vp ≤ 0.5vp 时不需要交叉淡入淡出（浮点误差范围内）')
+})
+
+test('shouldCrossfadeSources——新旧行高差异 ≤ 0.5vp 时不需要交叉淡入淡出', () => {
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  const newGlyph = { x: 0, y: 0, width: 10, height: 24.4 }
+  assert.ok(!shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '行高差异 0.4vp ≤ 0.5vp 时不需要交叉淡入淡出（浮点误差范围内）')
+})
+
+test('shouldCrossfadeSources——字宽变窄时也需要交叉淡入淡出', () => {
+  // 删除文字后换行变化导致字宽变窄
+  const sourceGlyph = { x: 0, y: 0, width: 20, height: 24 }
+  const newGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  assert.ok(shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '字宽从 20vp 变窄到 10vp 时需要交叉淡入淡出')
+})
+
+test('shouldCrossfadeSources——边界情况：差异正好 0.5vp 时不触发', () => {
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  const newGlyph = { x: 0, y: 0, width: 10.5, height: 24 }
+  assert.ok(!shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '差异正好 0.5vp 时不触发（> 0.5 才触发）')
+})
+
+test('shouldCrossfadeSources——边界情况：差异 0.51vp 时触发', () => {
+  const sourceGlyph = { x: 0, y: 0, width: 10, height: 24 }
+  const newGlyph = { x: 0, y: 0, width: 10.51, height: 24 }
+  assert.ok(shouldCrossfadeSources(sourceGlyph, newGlyph),
+    '差异 0.51vp > 0.5vp 时触发')
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

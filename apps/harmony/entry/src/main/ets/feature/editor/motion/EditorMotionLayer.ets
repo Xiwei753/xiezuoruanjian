@@ -457,7 +457,16 @@ export interface MotionWindowSource {
    * Issue #879 复核评论6077187962 问题4：新增 windowInstanceId 参数，
    * 用于释放有限长度的窗口实例 ID（win-<number>），使编号可被重新分配。
    */
-  onWindowDisappear: ((renderNodeKey: string, windowInstanceId: string) => void) | null
+   onWindowDisappear: ((renderNodeKey: string, windowInstanceId: string) => void) | null
+  /**
+   * Issue #879 复核评论6103606574 缺口1：窗口透明度（0-1）。
+   *
+   * retained 通道新旧源交叉淡入淡出时：
+   * - 旧源窗口 opacity = 1-p
+   * - 新源窗口 opacity = p
+   * 其他通道缺省为 1（完全不透明）。
+   */
+  opacity: number
 }
 
 export interface MotionTextOverlayParams {
@@ -565,7 +574,9 @@ export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
           })
           // Issue #879 复核评论修复（问题1）：候选窗口 opacity 0——参与布局但不可见。
           // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。
-          .opacity(item.visible ? 1 : 0)
+          // Issue #879 复核评论6103606574 缺口1：visible 窗口使用 item.opacity 控制透明度——
+          // retained 通道新旧源交叉淡入淡出时，旧源 opacity=1-p，新源 opacity=p。
+          .opacity(item.visible ? item.opacity : 0)
         },
         // Issue #879 复核评论6077187962 问题4：ForEach key 使用 renderNodeKey，
         // 它 = sourceKind + '-' + sourceRevision + '-' + windowInstanceId。

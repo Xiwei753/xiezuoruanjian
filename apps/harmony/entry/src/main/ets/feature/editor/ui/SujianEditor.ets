@@ -1422,6 +1422,9 @@ export struct SujianEditor {
           mounted: windowState.mounted,
           layoutReady: windowState.layoutReady,
           visible: true,
+          // Issue #879 复核评论6103606574 缺口1：传递窗口透明度——
+          // retained 通道新旧源交叉淡入淡出时，旧源 opacity=1-p，新源 opacity=p。
+          opacity: windows[i].opacity ?? 1,
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
           },
@@ -1470,6 +1473,8 @@ export struct SujianEditor {
           mounted: windowState.mounted,
           layoutReady: windowState.layoutReady,
           visible: false,
+          // Issue #879 复核评论6103606574 缺口1：传递窗口透明度（候选窗口同样支持新旧源交叉淡入淡出）
+          opacity: windows[i].opacity ?? 1,
           onWindowLayoutReady: (rnKey: string): void => {
             this.attachWindowLayoutObserver(rnKey)
           },

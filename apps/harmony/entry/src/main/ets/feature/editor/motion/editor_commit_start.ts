@@ -465,6 +465,28 @@ export function mapRectByRatio(
 }
 
 /**
+ * Issue #879 复核评论6103606574 缺口1：判断 retained 通道是否需要新旧源交叉淡入淡出。
+ *
+ * 当旧源字形和新布局字形的 width 或 height 差异超过阈值（0.5vp）时，需要新旧源切换。
+ * 原因：旧源 Text 的字形宽度是旧字宽，但 clip 被映射到新字宽，多出来的部分没有文字图形。
+ * 通过同时输出新源窗口(opacity=p)与旧源窗口(opacity=1-p)交叉淡入淡出，避免跳字。
+ *
+ * 当新旧字宽/高相同（差异 ≤ 0.5vp）时，不需要新旧源切换——旧源 Text 加 offset 平移即可。
+ *
+ * @param sourceGlyphOnScreen 旧源字形在屏矩形（屏幕坐标系）
+ * @param newGlyphRect 新布局字形矩形（新布局坐标系）
+ * @returns true 表示需要新旧源交叉淡入淡出
+ */
+export function shouldCrossfadeSources(
+  sourceGlyphOnScreen: RectLike,
+  newGlyphRect: RectLike
+): boolean {
+  const CROSSFADE_THRESHOLD = 0.5
+  return Math.abs(newGlyphRect.width - sourceGlyphOnScreen.width) > CROSSFADE_THRESHOLD ||
+         Math.abs(newGlyphRect.height - sourceGlyphOnScreen.height) > CROSSFADE_THRESHOLD
+}
+
+/**
  * Issue #879 复核评论6082616112 问题4：找 offset 所在的行。
  *
  * 用 resolveVisualLineIndex + 指定 affinity 选行——

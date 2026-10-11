@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio
+  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, shouldCrossfadeSources
 } from './editor_commit_start'
 
 /**
@@ -1521,6 +1521,16 @@ export class EditorMotionCoordinator {
           // 用 clipRects 作为该岛的裁切矩形——每段一个 ClipRect，位置随 offset 插值，
           // 宽度按各自在起始总宽度中的比例从起始宽度插值到目标宽度。
           // 否则回落到单个 islandClipRect（legacy 语义）。
+          // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出。
+          // 当新旧字宽/高不同时，retained 通道同时输出旧源(opacity=1-p)和新源(opacity=p)两个窗口，
+          // 避免字宽变化时 clip 放宽但旧 Text 实际排版宽高不变导致跳字。
+          let needsSourceCrossfade = false
+          let newSourceUtf16Start = iStart
+          let newSourceUtf16End = iEnd
+          let newSourceGlyphX = islandNewX
+          let newSourceGlyphY = islandNewY
+          let newSourceGlyphWidth = islandOldWidth
+          let newSourceGlyphHeight = islandOldHeight
           const islandClipRects: ClipRect[] = []
           // Issue #879 复核评论6102724233 问题2+3：优先使用 startScreenClipRects（屏幕坐标的
           // 真实裁切交集矩形），它包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分）。
@@ -1563,6 +1573,23 @@ export class EditorMotionCoordinator {
               if (newRect !== null) {
                 newGlyphRect = newRect
               }
+            }
+
+            // Issue #879 复核评论6103606574 缺口1：检查新旧字宽/高差异。
+            // 当差异 > 0.5vp 时，需要新旧源交叉淡入淡出——
+            // 旧源 Text 的字形宽度是旧字宽，但 clip 被映射到新字宽，
+            // 多出来的部分没有文字图形。通过同时输出新源窗口(opacity=p)弥补。
+            if (shouldCrossfadeSources(sourceGlyphOnScreen, newGlyphRect)) {
+              needsSourceCrossfade = true
+              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              }
+              newSourceGlyphX = newGlyphRect.x
+              newSourceGlyphY = newGlyphRect.y
+              newSourceGlyphWidth = newGlyphRect.width
+              newSourceGlyphHeight = newGlyphRect.height
             }
 
             // Issue #879 复核评论6102724233 问题3：用 rectDifference 在屏幕坐标系中计算
@@ -1658,6 +1685,28 @@ export class EditorMotionCoordinator {
               if (newRect !== null) {
                 newGlyphRect = newRect
               }
+            }
+
+            // Issue #879 复核评论6103606574 缺口1：检查新旧字宽/高差异（clipRects 分支）。
+            // 与 startScreenClipRects 分支同款逻辑——当新旧字宽/高差异 > 0.5vp 时，
+            // 需要新旧源交叉淡入淡出。
+            const sourceGlyphForCheck: RectLike = {
+              x: sr.x + frozenDrawOffsetX,
+              y: sr.y + frozenDrawOffsetY,
+              width: sr.width,
+              height: sr.height
+            }
+            if (shouldCrossfadeSources(sourceGlyphForCheck, newGlyphRect)) {
+              needsSourceCrossfade = true
+              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              }
+              newSourceGlyphX = newGlyphRect.x
+              newSourceGlyphY = newGlyphRect.y
+              newSourceGlyphWidth = newGlyphRect.width
+              newSourceGlyphHeight = newGlyphRect.height
             }
 
             // Issue #879 复核评论6102724233 问题3+4：用 rectDifference 计算尚未覆盖的区域。
@@ -1791,8 +1840,48 @@ export class EditorMotionCoordinator {
             currentClipRight: islandBboxRight,
             currentPositionX: islandCurrentX,
             currentPositionY: islandCurrentY,
-            motionOwnerKind: 'reflow'
+            motionOwnerKind: 'reflow',
+            // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出时旧源 opacity=1-p
+            opacity: needsSourceCrossfade ? 1 - p : undefined
           })
+          // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出。
+          // 当新旧字宽/高不同时，额外输出新源窗口(opacity=p)，与旧源互补。
+          // p=0 时只有旧源可见(opacity=1)，新源不可见(opacity=0)；
+          // p=1 时只有新源可见(opacity=1)，旧源不可见(opacity=0)；
+          // 中间交叉淡入淡出，避免字宽变化时 clip 放宽但旧 Text 实际排版宽高不变导致跳字。
+          // 新源窗口使用新正文 UTF-16 范围、新布局字形位置、offset=0（新源 Text 已在新布局位置）。
+          // renderNodeKey 与旧源不同（sourceKind='new' + newRevision），ForEach 创建独立 Text 节点。
+          // windowInstanceId 与旧源相同——WindowInstanceIdAllocator 通过 lease 机制安全管理多引用。
+          if (needsSourceCrossfade) {
+            motionGlyphWindows.push({
+              sourceKind: 'new',
+              utf16Start: newSourceUtf16Start,
+              utf16End: newSourceUtf16End,
+              clipLeft: islandBboxLeft,
+              clipRight: islandBboxRight,
+              clipTop: islandBboxTop,
+              clipBottom: islandBboxBottom,
+              clipRects: islandClipRects,
+              glyphX: newSourceGlyphX,
+              glyphY: newSourceGlyphY,
+              glyphWidth: newSourceGlyphWidth,
+              glyphHeight: newSourceGlyphHeight,
+              offsetX: 0,
+              offsetY: 0,
+              runId: `new-${newRevision}`,
+              sourceRevision: newRevision,
+              glyphIds: interval.glyphIds,
+              windowId: move.windowId,
+              windowInstanceId: islandWindowInstanceId,
+              renderNodeKey: `new-${newRevision}-${islandWindowInstanceId}`,
+              currentClipLeft: islandBboxLeft,
+              currentClipRight: islandBboxRight,
+              currentPositionX: newSourceGlyphX,
+              currentPositionY: newSourceGlyphY,
+              motionOwnerKind: 'reflow',
+              opacity: p
+            })
+          }
         }
       }
     }

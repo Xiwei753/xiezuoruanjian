@@ -538,7 +538,17 @@ export interface MotionGlyphWindow {
    * - 'insert'：吐字通道（新插入字），**不应**被继承为 carryOver ghost
    * - 'carryGhost'：上一帧继承的 carryOver ghost，应继续被继承直到完全消退
    */
-  motionOwnerKind: 'deleted' | 'reflow' | 'insert' | 'carryGhost'
+   motionOwnerKind: 'deleted' | 'reflow' | 'insert' | 'carryGhost'
+  /**
+   * Issue #879 复核评论6103606574 缺口1：窗口透明度（0-1）。
+   *
+   * retained 通道在新旧字宽/高不同时，同时输出旧源和新源两个窗口，
+   * 通过互补透明度交叉淡入淡出：
+   * - 旧源窗口：opacity = 1-p（从完全可见渐变到不可见）
+   * - 新源窗口：opacity = p（从不可见渐变到完全可见）
+   * 缺省时为 1（完全不透明）——不影响其他通道（insert/deleted/carryGhost）。
+   */
+  opacity?: number
 }
 
 /**
