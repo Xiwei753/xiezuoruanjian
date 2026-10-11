@@ -1542,7 +1542,12 @@ export class EditorMotionCoordinator {
             // Issue #879 复核评论6102724233 问题2+3：startScreenClipRects 是屏幕坐标的
             // 真实裁切交集矩形，直接作为 p=0 的起始 clip。p>0 时用 mapRectByRatio 从
             // 源字形在屏矩形映射到目标字形矩形，每个碎片保留真实纵向子矩形。
-            const sr = interval.sourceGlyphRects[0]
+            // Issue #879 复核评论6104161755 问题3：优先使用 frozenSourceGlyphRects（来自源布局坐标系），
+            // 它与 frozenDrawOffsetX/Y（来自 FrozenWindowSpan.offsetX/Y）在同一坐标系。
+            // sourceGlyphRects 来自 run.ownLayout，跨事务继承旧修订文字时坐标系不匹配。
+            const sr = interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
+              ? interval.frozenSourceGlyphRects[0]
+              : interval.sourceGlyphRects[0]
             const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined
               ? interval.frozenDrawOffsetX
               : interval.startPositionX - move.oldRect.x
@@ -1656,7 +1661,10 @@ export class EditorMotionCoordinator {
             // 计算尚未覆盖的区域（间隙），已可见碎片保持自身位置随平移移动（宽度不变），
             // 间隙碎片从零宽扩展到间隙宽度。不再对每个 clipRect 都用同一个 sourceGlyphRects[0]
             // 作为目标——那样会每个碎片各拥有一份完整目标，等于用两套 mask 分别扩满整字。
-            const sr = interval.sourceGlyphRects[0]
+            // Issue #879 复核评论6104161755 问题3：优先使用 frozenSourceGlyphRects（来自源布局坐标系）。
+            const sr = interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
+              ? interval.frozenSourceGlyphRects[0]
+              : interval.sourceGlyphRects[0]
             // Issue #879 复核评论6102724233 问题2：用 frozenDrawOffsetX/Y 替代
             // startPositionX/Y - oldRect.x/y，确保纵向半字不错位。
             const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined

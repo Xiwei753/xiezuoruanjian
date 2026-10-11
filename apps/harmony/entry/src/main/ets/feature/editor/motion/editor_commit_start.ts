@@ -292,6 +292,16 @@ export interface RunStartInterval {
    * 缺省时为 undefined（legacy 语义）。
    */
   startScreenClipRects?: RectLike[]
+  /**
+   * Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的实际完整矩形。
+   *
+   * 与 sourceGlyphRects（来自 run.ownLayout）不同——frozenSourceGlyphRects 来自
+   * 冻结窗口的 sourceLayout 或 displayed.layout，是冻结屏幕上那一个真实字形的范围。
+   * buildFrame 的 sourceGlyphOnScreen 应从 frozenSourceGlyphRects[0] + FrozenWindowSpan.offsetX/Y
+   * 生成，而不是从 sourceGlyphRects[0] + frozenDrawOffsetX/Y。
+   * 缺省时 buildFrame 回落到 sourceGlyphRects + frozenDrawOffsetX/Y（legacy 语义）。
+   */
+  frozenSourceGlyphRects?: RectLike[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -1219,47 +1229,47 @@ export function retainedMoveStartState(
       }
     } else {
       // 不可见字形：保留分区，使用显式零宽/空裁切
-      const glyphX = boundaries.length > i
-        ? xAtOffset(run.ownLayout, boundaries[i], run.ownRect.x)
-        : run.ownRect.x
-      // Issue #879 复核评论6100665268 问题3：不可见字形的 sourceGlyphRects 保留完整字形矩形，
-      // clipRects 设为零宽度。buildFrame retained 多矩形算法据此在字形重新可见时
-      // 精确映射裁切矩形到目标 glyph 对应边界。
-      const glyphFullWidth = boundaries.length > i + 1
-        ? xAtOffset(run.ownLayout, boundaries[i + 1], run.ownRect.x + run.ownRect.width,
-          CaretAffinity.Upstream) - glyphX
-        : 0
-      // Issue #879 复核评论6101908111 问题3：不可见字形的 startPositionX 必须是 run.ownRect.x
-      //（零偏移语义），而不是 glyphX（字形自己的位置）。
-      // buildFrame 用 islandStartX = islandOldLeft + startPositionX - move.oldRect.x，
-      // 若 startPositionX = glyphX = islandOldLeft（同一布局下），则 islandStartX 被重复加。
-      // 正确语义：不可见字形没有窗口偏移，startPositionX = run.ownRect.x 表示 Text 绘制原点
-      // 在 run 左边界（零偏移），islandStartX = islandOldLeft + ownRect.x - oldRect.x，
-      // 同一布局下 islandStartX = islandOldLeft（字形在旧布局中的位置），不重复加。
-      // Issue #879 复核评论6102724233 问题5：不可见字形的 frozenDrawOffsetX/Y = 0（零偏移语义），
-      // 与 startPositionX = run.ownRect.x 一致——源字形自己的 y 单独存在 sourceGlyphRects 中，
-      // 不通过 startPositionY 编码字形位置。startPositionY = run.ownRect.y 代表偏移 0。
+      // Issue #879 复核评论6104161755 问题2：用 glyphRectForRange 获取字形完整矩形，
+      // startPositionX/Y 改为字形绝对屏幕原点（与 buildFrame 的 islandStartX 语义一致），
+      // 不再用 run.ownRect.x/y（零偏移语义）。buildFrame 现在直接使用
+      // islandStartX = interval.startPositionX，若 startPositionX = run.ownRect.x（零偏移），
+      // 则 islandStartX 被设为 run 左端而非字形真实位置，导致字形被挪到错误位置。
+      // 修复：startPositionX = ownGlyphRect.x（真绝对字形原点），
+      // frozenDrawOffsetX/Y = 0（不可见字形没有窗口偏移）。
+      const ownGlyphRect = glyphRectForRange(run.ownLayout,
+        boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
+        boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End)
+      const glyphX = ownGlyphRect !== null ? ownGlyphRect.x : run.ownRect.x
+      const glyphY = ownGlyphRect !== null ? ownGlyphRect.y : run.ownRect.y
+      const glyphFullWidth = ownGlyphRect !== null ? ownGlyphRect.width : 0
+      const glyphHeight = ownGlyphRect !== null ? ownGlyphRect.height : run.ownRect.height
       intervals.push({
         firstIndex: i,
         lastIndex: i,
         glyphIds: [run.glyphIds[i]],
         startClipLeft: glyphX,
         startClipRight: glyphX,
-        startPositionX: run.ownRect.x,
-        startPositionY: run.ownRect.y,
+        startPositionX: glyphX,
+        startPositionY: glyphY,
         utf16Start: boundaries.length > i ? boundaries[i] : run.ownUtf16Start,
         utf16End: boundaries.length > i + 1 ? boundaries[i + 1] : run.ownUtf16End,
         clipRects: [{
-          x: glyphX, y: run.ownRect.y,
-          width: 0, height: run.ownRect.height,
+          x: glyphX, y: glyphY,
+          width: 0, height: glyphHeight,
         }],
         sourceGlyphRects: [{
-          x: glyphX, y: run.ownRect.y,
-          width: glyphFullWidth, height: run.ownRect.height,
+          x: glyphX, y: glyphY,
+          width: glyphFullWidth, height: glyphHeight,
         }],
-        // Issue #879 复核评论6102724233 问题5：不可见字形冻结偏移为 0（零偏移语义）。
+        // Issue #879 复核评论6102724233 问题5：不可见字形冻结偏移为 0。
         frozenDrawOffsetX: 0,
         frozenDrawOffsetY: 0,
+        // Issue #879 复核评论6104161755 问题3：不可见字形没有冻结窗口覆盖，
+        // 源布局就是 run.ownLayout，frozenSourceGlyphRects = sourceGlyphRects。
+        frozenSourceGlyphRects: [{
+          x: glyphX, y: glyphY,
+          width: glyphFullWidth, height: glyphHeight,
+        }],
       })
     }
   }
@@ -1360,7 +1370,12 @@ export function retargetRunStarts(
             // Issue #879 复核评论6102724233 问题2+5：保留 prevInterval 的冻结偏移字段。
             frozenDrawOffsetX: prevInterval.frozenDrawOffsetX,
             frozenDrawOffsetY: prevInterval.frozenDrawOffsetY,
-            startScreenClipRects: prevInterval.startScreenClipRects,
+            // Issue #879 复核评论6104161755 问题1：不可见时 startScreenClipRects 必须设为空数组，
+            // 不能沿用 prepare 可见数据——否则 buildFrame 新优先分支会绕开刚更新的零宽 clipRects，
+            // 用旧矩形作 p=0 的可见 clip，导致快速连续删除/输入时回闪或双字。
+            startScreenClipRects: [],
+            // Issue #879 复核评论6104161755 问题3：保留 prevInterval 的 frozenSourceGlyphRects。
+            frozenSourceGlyphRects: prevInterval.frozenSourceGlyphRects,
           })
         }
       }
@@ -1588,6 +1603,8 @@ function intervalForIsland(
   let frozenDrawOffsetY: number | undefined
   // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
   let startScreenClipRects: RectLike[] | undefined
+  // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
+  let frozenSourceGlyphRects: RectLike[] | undefined
   if (kind === 'retained') {
     // Issue #879 复核评论6102724233 问题1：frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y
     // 读取，不再从裁切边界反推。onScreenTop/onScreenLeft 是裁切后的可见边界，不是源 Text
@@ -1604,6 +1621,18 @@ function intervalForIsland(
     // 而 visible.clipRects 在 run 自己布局坐标系中，y/height 都是整字值，简单相加偏移
     // 不能还原冻结屏幕矩形。
     startScreenClipRects = firstVisible.rects
+    // Issue #879 复核评论6104161755 问题3：从 sourceGlyphGeometry 获取冻结源字形在源布局
+    // 坐标系中的完整矩形（不是 run.ownLayout 的）。buildFrame 的 sourceGlyphOnScreen 应从
+    // frozenSourceGlyphRects[0] + FrozenWindowSpan.offsetX/Y 生成。
+    const frozenSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+    if (frozenSourceGeom !== null) {
+      frozenSourceGlyphRects = [{
+        x: frozenSourceGeom.x0,
+        y: frozenSourceGeom.y0,
+        width: frozenSourceGeom.x1 - frozenSourceGeom.x0,
+        height: frozenSourceGeom.height,
+      }]
+    }
   }
   return {
     firstIndex: firstIndex,
@@ -1627,6 +1656,8 @@ function intervalForIsland(
     frozenDrawOffsetY: frozenDrawOffsetY,
     // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
     startScreenClipRects: startScreenClipRects,
+    // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
+    frozenSourceGlyphRects: frozenSourceGlyphRects,
   }
 }
 
@@ -1673,6 +1704,12 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
         startScreenClipRects: iv.startScreenClipRects === undefined
           ? undefined
           : iv.startScreenClipRects.map((sr: RectLike): RectLike => ({
+            x: sr.x, y: sr.y, width: sr.width, height: sr.height,
+          })),
+        // Issue #879 复核评论6104161755 问题3：深拷贝 frozenSourceGlyphRects，避免共享引用。
+        frozenSourceGlyphRects: iv.frozenSourceGlyphRects === undefined
+          ? undefined
+          : iv.frozenSourceGlyphRects.map((sr: RectLike): RectLike => ({
             x: sr.x, y: sr.y, width: sr.width, height: sr.height,
           })),
       })),

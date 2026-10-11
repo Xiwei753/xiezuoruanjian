@@ -2270,16 +2270,14 @@ test('问题3：sourceGlyphRects 与 clipRects 各自独立——fullRect 不因
 
 // ====== Issue #879 复核评论6101908111：问题2/3 新增测试 ======
 
-// ------ 问题3：不可见字形 startPositionX 不重复加偏移 ------
-// 评论6101908111 问题3：不可见字形 startPositionX 写 glyphX，
-// buildFrame 用 islandStartX = islandOldLeft + startPositionX - oldRect.x，
-// 对 run 起点字形 glyphX ≈ ownRect.x，islandStartX = islandOldLeft + ownRect.x - oldRect.x，
-// 同一布局下 islandStartX = islandOldLeft + ownRect.x - ownRect.x = islandOldLeft（正确），
-// 但对第三个字形 glyphX = ownRect.x + 20，islandStartX = islandOldLeft + (ownRect.x+20) - oldRect.x
-// = islandOldLeft + 20（重复加了字形偏移）。
-// 修复：不可见字形 startPositionX = run.ownRect.x（零偏移语义）。
+// ------ 问题3：不可见字形 startPositionX 为字形绝对屏幕原点 ------
+// 评论6104161755 问题2：buildFrame 现在直接使用 islandStartX = interval.startPositionX
+// （将该字段视为绝对屏幕字形左边界），不再用 islandOldLeft + startPositionX - oldRect.x。
+// 旧实现写 startPositionX = run.ownRect.x（零偏移语义），buildFrame 令 islandStartX = 0，
+// 而字形真实位置在 x=20，导致字形被挪到 x=0。
+// 修复：不可见字形 startPositionX = ownGlyphRect.x（真绝对字形原点）。
 
-test('问题3：不可见字形 startPositionX 应为 run.ownRect.x——不重复加字形偏移', () => {
+test('问题3：不可见字形 startPositionX 应为字形绝对屏幕原点——与 buildFrame 新语义一致', () => {
   const ctx = context('甲乙丙丁', 940, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）被窗口接管且完全不可见
@@ -2293,23 +2291,18 @@ test('问题3：不可见字形 startPositionX 应为 run.ownRect.x——不重�
   // 簇2 不可见
   const iv2 = intervals.find(iv => iv.firstIndex === 2)
   assert.ok(iv2 !== undefined)
-  // 修复后：startPositionX = run.ownRect.x = 0（零偏移），不是 glyphX = 20
-  assert.equal(iv2.startPositionX, run.ownRect.x,
-    '不可见字形 startPositionX 应为 run.ownRect.x（零偏移），不是 glyphX')
-  assert.notEqual(iv2.startPositionX, 20,
-    '不可见字形 startPositionX 不应为 glyphX=20——会导致 islandStartX 重复加')
-  // buildFrame 公式：islandStartX = islandOldLeft + startPositionX - oldRect.x
-  // 修复后：islandStartX = 20 + 0 - 0 = 20（字形在旧布局中的位置，正确）
-  // 修复前：islandStartX = 20 + 20 - 0 = 40（重复加了字形偏移，错误）
-  const islandOldLeft = 20  // 簇2 在旧布局中的左边界
-  const islandStartX_fixed = islandOldLeft + iv2.startPositionX - run.ownRect.x
-  assert.equal(islandStartX_fixed, 20, '修复后 islandStartX 应为 20（字形旧位置）')
-  const islandStartX_buggy = islandOldLeft + 20 - run.ownRect.x
-  assert.equal(islandStartX_buggy, 40, '旧实现 islandStartX 为 40——重复加了字形偏移')
-  assert.notEqual(islandStartX_fixed, islandStartX_buggy, '修复后应不同于旧实现')
+  // 修复后：startPositionX = ownGlyphRect.x = 20（字形绝对原点），不是 run.ownRect.x = 0
+  assert.equal(iv2.startPositionX, 20,
+    '不可见字形 startPositionX 应为字形绝对屏幕原点 20，不是 run.ownRect.x = 0')
+  assert.notEqual(iv2.startPositionX, run.ownRect.x,
+    '不可见字形 startPositionX 不应为 run.ownRect.x=0——buildFrame 新语义会令 islandStartX=0 而非 20')
+  // buildFrame 新公式：islandStartX = interval.startPositionX = 20（字形在屏左边界）
+  // 修复后：islandStartX = 20（字形真实位置，正确）
+  // 旧实现：islandStartX = 0（run 左端，字形被挪到错误位置）
+  assert.equal(iv2.startPositionX, 20, '修复后 islandStartX 应为 20（字形真实位置）')
 })
 
-test('问题3：不可见字形 startPositionX 为零偏移——p>0 扩张时不会从错误位置飞回', () => {
+test('问题3：不可见字形 startPositionX 为字形绝对原点——p>0 扩张时从正确位置开始', () => {
   const ctx = context('甲乙丙', 941, [])
   const all = idsOf(ctx, 0, 3)
   // 簇1（乙）完全不可见，簇0（甲）和簇2（丙）可见
@@ -2323,12 +2316,11 @@ test('问题3：不可见字形 startPositionX 为零偏移——p>0 扩张时�
   // 簇1 不可见
   const iv1 = intervals.find(iv => iv.firstIndex === 1)
   assert.ok(iv1 !== undefined)
-  // startPositionX = run.ownRect.x = 0（零偏移）
-  assert.equal(iv1.startPositionX, 0, '不可见字形 startPositionX 应为 0（零偏移）')
-  // islandStartX = islandOldLeft + startPositionX - oldRect.x = 10 + 0 - 0 = 10
-  // 这是乙在旧布局中的位置——p>0 扩张时从正确位置开始扩展，不会从错误位置飞回
-  const islandStartX = 10 + iv1.startPositionX - 0
-  assert.equal(islandStartX, 10, 'islandStartX 应为 10（乙在旧布局中的位置）')
+  // startPositionX = ownGlyphRect.x = 10（乙的字形绝对原点）
+  assert.equal(iv1.startPositionX, 10, '不可见字形 startPositionX 应为字形绝对原点 10')
+  // buildFrame 新公式：islandStartX = interval.startPositionX = 10
+  // 这是乙在屏上的真实位置——p>0 扩张时从正确位置开始扩展
+  assert.equal(iv1.startPositionX, 10, 'islandStartX 应为 10（乙的字形绝对位置）')
 })
 
 // ------ 问题2：同一字形多段可见碎片的 sourceGlyphRects 都相同 ------
@@ -2442,7 +2434,7 @@ test('问题2：retained 多段碎片——buildFrame 修复后 p=1 不重叠（
   assert.ok(fixedTotalWidth < buggyTotalWidth, '修复后总宽度应小于旧实现——不重叠')
 })
 
-test('问题2：retained 不可见字形 startPositionX=ownRect.x 后 islandStartX 不重复加', () => {
+test('问题2：retained 不可见字形 startPositionX 为字形绝对原点——islandStartX 正确', () => {
   const ctx = context('甲乙丙丁', 944, [])
   const all = idsOf(ctx, 0, 4)
   // 簇2（丙）和簇3（丁）完全不可见
@@ -2456,16 +2448,17 @@ test('问题2：retained 不可见字形 startPositionX=ownRect.x 后 islandStar
   // 簇2 不可见
   const iv2 = intervals.find(iv => iv.firstIndex === 2)
   assert.ok(iv2 !== undefined)
-  assert.equal(iv2.startPositionX, run.ownRect.x, '簇2 startPositionX 应为 ownRect.x=0')
+  // Issue #879 复核评论6104161755 问题2：startPositionX = ownGlyphRect.x（字形绝对原点）
+  assert.equal(iv2.startPositionX, 20, '簇2 startPositionX 应为字形绝对原点 20')
   // 簇3 不可见
   const iv3 = intervals.find(iv => iv.firstIndex === 3)
   assert.ok(iv3 !== undefined)
-  assert.equal(iv3.startPositionX, run.ownRect.x, '簇3 startPositionX 应为 ownRect.x=0')
-  // 两个不可见字形的 islandStartX 都不重复加
-  // 簇2: islandStartX = 20 + 0 - 0 = 20（正确）
-  // 簇3: islandStartX = 30 + 0 - 0 = 30（正确）
-  assert.equal(20 + iv2.startPositionX - 0, 20, '簇2 islandStartX 应为 20')
-  assert.equal(30 + iv3.startPositionX - 0, 30, '簇3 islandStartX 应为 30')
+  assert.equal(iv3.startPositionX, 30, '簇3 startPositionX 应为字形绝对原点 30')
+  // buildFrame 新公式：islandStartX = interval.startPositionX（绝对屏幕字形左边界）
+  // 簇2: islandStartX = 20（字形真实位置，正确）
+  // 簇3: islandStartX = 30（字形真实位置，正确）
+  assert.equal(iv2.startPositionX, 20, '簇2 islandStartX 应为 20')
+  assert.equal(iv3.startPositionX, 30, '簇3 islandStartX 应为 30')
 })
 
 // ====== Issue #879 复核评论6102724233 新增测试 ======
