@@ -905,6 +905,9 @@ function buildPiece(
     if (minProjectedLeft === Infinity) {
       // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
       // 零像素不可见，返回零宽起点，不回退画满字形。
+      // Issue #879 评论6110857105 问题5验证：此分支中所有变量均设为有限值——
+      // ownLeft/sourceGlyphX0/sourceGlyphX1/visiblePixelLeft/visiblePixelRight = ownFullLeft（有限），
+      // onScreenLeft 由 hasVisiblePixels 守卫（L928），onScreenTop 由 hasVisiblePixels 守卫（L1149）。
       ownLeft = ownFullLeft
       sourceGlyphX0 = ownFullLeft
       sourceGlyphX1 = ownFullLeft
@@ -1005,6 +1008,8 @@ function buildPiece(
       if (maxProjectedRight === -Infinity) {
         // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
         // 零像素不可见，返回零宽终点，不回退画满字形。
+        // Issue #879 评论6110857105 问题5验证：此分支中 ownRight = ownFullRight（有限），
+        // onScreenRight 由 hasVisiblePixels 守卫（L1020），不会产生 -Infinity。
         ownRight = ownFullRight
         // 不 push lastClipRects（零宽不可见，没有 clipRect）
         // 不 push lastSourceGlyphRects
@@ -1254,8 +1259,8 @@ function sourceGlyphGeometryAll(
   displayed: DisplayedContext,
   frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
   glyphId: string
-): { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new' }[] {
-  const results: { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new' }[] = []
+): { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new', renderNodeKey: string, sourceRevision: number }[] {
+  const results: { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new', renderNodeKey: string, sourceRevision: number }[] = []
   const spans = frozenByGlyphId.get(glyphId)
   if (spans !== undefined) {
     for (const span of spans) {
@@ -1267,6 +1272,9 @@ function sourceGlyphGeometryAll(
             results.push({
               x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
               offsetX: span.offsetX, offsetY: span.offsetY, sourceKind: span.sourceKind,
+              // Issue #879 评论6110857105 问题6：携带 renderNodeKey 和 sourceRevision，
+              // 供 fallback 分支按唯一身份标识匹配 OnScreenInterval 和 FrozenWindowSpan
+              renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
             })
           }
         }
@@ -1286,6 +1294,8 @@ function sourceGlyphGeometryAll(
         results.push({
           x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
           offsetX: 0, offsetY: 0, sourceKind: 'old',
+          // Issue #879 评论6110857105 问题6：静态主文本没有渲染节点标识和源修订号
+          renderNodeKey: '', sourceRevision: 0,
         })
       }
     }
@@ -1627,6 +1637,9 @@ export function retargetRunStarts(
           intervals.push(reInterval)
         } else {
           // 该 interval 的字形在 retarget 时不可见——保留分区，clip 设为零宽度
+          // Issue #879 评论6110857105 问题4验证：不可见分支已正确清空所有可见数据——
+          // clipRects 为零宽度矩形、startScreenClipRects 为空数组、sourceMembers.clipRects 为空数组、
+          // opacity/targetOpacity 都为 0。deepCloneSourceMembers 已正确处理 renderNodeKey 和 sourceRevision 字段。
           const clipX = prevInterval.startClipLeft
           intervals.push({
             firstIndex: prevInterval.firstIndex,
@@ -1886,7 +1899,9 @@ function buildSourceMembers(
   const members: FrozenGlyphMember[] = []
   // Issue #879 评论6108234595：不再使用 visibleIdx 顺序匹配。
   // clusterVisible 可能跳过某些 span（clip 与字形无交集时 rects.length===0），
-  // 导致后续的顺序匹配全部错位。改为按 sourceKind+offset 稳健查找匹配。
+  // 导致后续的顺序匹配全部错位。改为按 renderNodeKey + sourceRevision 稳健查找匹配。
+  // Issue #879 评论6110857105 问题6：旧逻辑按 sourceKind + offset 匹配，但同源类别、
+  // 相同 offset 的不同 sourceRevision/renderNodeKey 会发生错误匹配。改为按唯一身份标识匹配。
   const consumed = new Set<number>()
   for (const span of spans) {
     if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
@@ -1901,7 +1916,8 @@ function buildSourceMembers(
       continue
     }
     // 该 span 有有效几何——构建 FrozenGlyphMember
-    // 按 sourceKind + offset 在 firstVisible 中查找匹配的 OnScreenInterval
+    // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 在 firstVisible 中
+    // 查找匹配的 OnScreenInterval（唯一身份标识匹配，避免同源同 offset 的不同成员错误匹配）
     let clipRects: RectLike[] = []
     let matched = false
     for (let vi = 0; vi < firstVisible.length; vi++) {
@@ -1909,9 +1925,8 @@ function buildSourceMembers(
         continue
       }
       const interval = firstVisible[vi]
-      if (interval.sourceKind === span.sourceKind &&
-          interval.offsetX === span.offsetX &&
-          interval.offsetY === span.offsetY) {
+      if (interval.renderNodeKey === span.renderNodeKey &&
+          interval.sourceRevision === span.sourceRevision) {
         clipRects = interval.rects.map((r: RectLike): RectLike => ({
           x: r.x, y: r.y, width: r.width, height: r.height,
         }))
@@ -2073,16 +2088,16 @@ function intervalForIsland(
       const glyphId = run.glyphIds[firstIndex]
       const allSpans = frozenByGlyphId.get(glyphId)
       sourceMembers = allFrozenGeoms.map(g => {
-        // 按 sourceKind + offset 匹配 span，获取 sourceRevision、opacity 和 utf16Range
+        // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 匹配 span，
+        // 获取 sourceRevision、opacity 和 utf16Range（唯一身份标识匹配）
         let sourceRevision = 0
         let opacity: number | undefined = undefined
         let sourceUtf16Start = 0
         let sourceUtf16End = 0
         if (allSpans !== undefined) {
           for (const sp of allSpans) {
-            if (sp.sourceKind === g.sourceKind &&
-                sp.offsetX === g.offsetX &&
-                sp.offsetY === g.offsetY) {
+            if (sp.renderNodeKey === g.renderNodeKey &&
+                sp.sourceRevision === g.sourceRevision) {
               sourceRevision = sp.sourceRevision
               opacity = sp.opacity
               const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
@@ -2094,12 +2109,11 @@ function intervalForIsland(
             }
           }
         }
-        // 按 sourceKind + offset 匹配 firstVisible 中的 OnScreenInterval，获取 clipRects
+        // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 匹配 firstVisible 中的 OnScreenInterval
         let clipRects: RectLike[] = []
         for (const interval of firstVisible) {
-          if (interval.sourceKind === g.sourceKind &&
-              interval.offsetX === g.offsetX &&
-              interval.offsetY === g.offsetY) {
+          if (interval.renderNodeKey === g.renderNodeKey &&
+              interval.sourceRevision === g.sourceRevision) {
             clipRects = interval.rects.map((r: RectLike): RectLike => ({
               x: r.x, y: r.y, width: r.width, height: r.height,
             }))
@@ -2111,7 +2125,9 @@ function intervalForIsland(
           sourceKind: g.sourceKind,
           sourceRevision: sourceRevision,
           runId: runId,
-          renderNodeKey: runId,
+          // Issue #879 评论6110857105 问题6：使用 g.renderNodeKey 而非 runId，
+          // 确保与 FrozenWindowSpan.renderNodeKey 一致
+          renderNodeKey: g.renderNodeKey,
           sourceGlyphRect: {
             x: g.x0,
             y: g.y0,
@@ -2296,6 +2312,17 @@ interface OnScreenInterval {
   sourceGlyphY0: number
   /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形高度 */
   sourceGlyphHeight: number
+  /**
+   * Issue #879 评论6110857105 问题6：该可见区间对应成员的渲染节点身份标识（来自 FrozenWindowSpan.renderNodeKey）。
+   * 静态主文本为 ''（没有渲染节点标识）。用于 buildSourceMembers 按唯一身份匹配 OnScreenInterval 和 FrozenWindowSpan，
+   * 避免 sourceKind + offset 匹配时同源类别、相同 offset 的不同 sourceRevision/renderNodeKey 发生错误匹配。
+   */
+  renderNodeKey: string
+  /**
+   * Issue #879 评论6110857105 问题6：该可见区间对应成员的源修订号（来自 FrozenWindowSpan.sourceRevision）。
+   * 静态主文本为 0。与 renderNodeKey 一起构成唯一身份标识，用于 buildSourceMembers 精确匹配。
+   */
+  sourceRevision: number
 }
 
 /**
@@ -2372,6 +2399,8 @@ export function clusterVisible(
         offsetX: 0, offsetY: 0,
         sourceGlyphX0: x0, sourceGlyphX1: x1,
         sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+        // Issue #879 评论6110857105 问题6：静态主文本没有渲染节点标识和源修订号
+        renderNodeKey: '', sourceRevision: 0,
       }]
     }
     // 有冻结窗口覆盖：不从 displayed.layout 取初始字形几何，
@@ -2427,6 +2456,8 @@ export function clusterVisible(
           offsetX: span.offsetX, offsetY: span.offsetY,
           sourceGlyphX0: spanX0, sourceGlyphX1: spanX1,
           sourceGlyphY0: spanY0, sourceGlyphHeight: spanGlyphHeight,
+          // Issue #879 评论6110857105 问题6：存入该成员的渲染节点标识和源修订号
+          renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
         })
       }
     }
@@ -2479,6 +2510,8 @@ export function clusterVisible(
               offsetX: span.offsetX, offsetY: span.offsetY,
               sourceGlyphX0: x0, sourceGlyphX1: x1,
               sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+              // Issue #879 评论6110857105 问题6：存入该成员的渲染节点标识和源修订号
+              renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
             })
           }
         }
