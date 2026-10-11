@@ -2986,4 +2986,125 @@ test('shouldCrossfadeSources——边界情况：差异 0.51vp 时触发', () =>
     '差异 0.51vp > 0.5vp 时触发')
 })
 
+// ─── Issue #879 复核评论6104942471 问题4：冻结帧真实绘制位置/裁切交接 ───
+
+console.log('\n--- Issue #879 复核评论6104942471 问题4 新增测试 ---')
+
+test('问题4-1：prepare 可见、retarget 变全不可见——startScreenClipRects 必须清空，不能复活已吞掉的字', () => {
+  const ctx = context('甲乙丙丁', 970, [])
+  const all = idsOf(ctx, 0, 4)
+  // prepare：簇0 完整可见 [0,10]，interval 携带非空 startScreenClipRects
+  const prepareCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 10, 0, 0, 970, null)] }
+  const run = runGeometry(prepareCtx, 0, 4, { x: 0, y: 0, width: 40, height: 20 })
+  const prepared = retainedMoveStartState(run, prepareCtx, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  const iv0Before = prepared[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv0Before.startScreenClipRects !== undefined && iv0Before.startScreenClipRects.length > 0,
+    'prepare 可见时 startScreenClipRects 应非空')
+
+  // 提交瞬间旧动画把簇0 吞得完全不可见（clip 宽度为 0）
+  const retargetCtx = { ...ctx, frozenWindows: [frozenWindow([all[0]], 0, 0, 0, 0, 970, null)] }
+  const retargeted = retargetRunStarts(run, prepared, retargetCtx, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 40, startPositionX: 0, startPositionY: 0,
+  })
+  const iv0 = retargeted[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv0 !== undefined, '分区必须保留')
+  assert.deepEqual(iv0.startScreenClipRects, [], '本次提交已不可见——必须清空，不能沿用 prepare 的旧可见矩形')
+  assert.equal(iv0.startClipLeft, iv0.startClipRight, '零宽起点')
+  assert.equal(iv0.clipRects[0].width, 0, 'clipRects 零宽')
+})
+
+test('问题4-2：多行 retained 不可见字形——startPositionX/Y 为字形自己的绝对原点，不是 run 原点', () => {
+  const twoLineLayout = [
+    {
+      startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'softWrap',
+      caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 20 }],
+    },
+    {
+      startUtf16: 2, endUtf16: 4, left: 0, y: 20, height: 20, breakKind: 'endOfText',
+      caretStops: [{ utf16Offset: 2, x: 0 }, { utf16Offset: 3, x: 10 }, { utf16Offset: 4, x: 20 }],
+    },
+  ]
+  const ctx = {
+    text: '甲乙丙丁',
+    layout: twoLineLayout,
+    identities: GlyphIdentityTable.create('甲乙丙丁', 971),
+    frozenWindows: [],
+  }
+  const all = idsOf(ctx, 0, 4)
+  // 整段被旧动画吞得完全不可见
+  const hiddenCtx = { ...ctx, frozenWindows: [frozenWindow(all, 0, 0, 0, 0, 971, null)] }
+  const run = {
+    glyphIds: all,
+    ownText: '甲乙丙丁',
+    ownUtf16Start: 0,
+    ownUtf16End: 4,
+    ownRect: { x: 0, y: 0, width: 20, height: 40 },
+    ownLayout: twoLineLayout,
+  }
+  const start = retainedMoveStartState(run, hiddenCtx, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const ivs = start[0].intervals
+  const iv1 = ivs.find(iv => iv.firstIndex === 1)  // 乙：第一行 y=0
+  const iv2 = ivs.find(iv => iv.firstIndex === 2)  // 丙：第二行 y=20
+  assert.equal(iv1.startPositionY, 0, '第一行字形的 startPositionY')
+  assert.equal(iv2.startPositionY, 20, '第二行字形的 startPositionY 应为字形所在行 y=20，不是 run.ownRect.y=0')
+  assert.equal(iv2.clipRects[0].y, 20, 'clipRects.y 与字形行一致')
+  assert.equal(iv2.sourceGlyphRects[0].y, 20, 'sourceGlyphRects.y 与字形行一致')
+  assert.equal(iv2.startPositionX, 0, '丙 在第二行行首 x=0')
+  assert.equal(iv2.startPositionX, iv2.clipRects[0].x, 'startPositionX 与零宽起点锚定同一字形原点')
+})
+
+test('问题4-3：frozenSourceGlyphRects 取自冻结源布局，而非 run.ownLayout', () => {
+  // displayed 正文只有 '甲'；'orig-972-1'（乙）是 ghost——已从正文删除但旧窗口仍绘制
+  const ctx = context('甲', 972, [])
+  const ghostId = 'orig-972-1'
+  const ghostRanges = new Map([[ghostId, [1, 2]]])
+  // 冻结源布局把乙排在 x=50（与 run.ownLayout 的 x=10 不同）
+  const sourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const ownLayout = [line('甲乙', 0)]  // 乙在 x=10
+  const frozen = [{
+    glyphIds: [ghostId],
+    clipLeft: 50,
+    clipRight: 60,
+    clipRects: [{ x: 50, y: 0, width: 10, height: 20 }],
+    offsetX: 0,
+    offsetY: 0,
+    sourceRevision: 972,
+    glyphUtf16Ranges: ghostRanges,
+    sourceLayout: sourceLayout,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [ghostId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: ownLayout,
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv.frozenSourceGlyphRects !== undefined, 'frozenSourceGlyphRects 应填充')
+  assert.equal(iv.frozenSourceGlyphRects[0].x, 50, '冻结源字形 x 来自 sourceLayout（50）')
+  assert.equal(iv.sourceGlyphRects[0].x, 10, 'sourceGlyphRects 仍来自 run.ownLayout（10）')
+  assert.notEqual(iv.frozenSourceGlyphRects[0].x, iv.sourceGlyphRects[0].x,
+    '两者坐标系不同——证明 buildFrame 必须用 frozenSourceGlyphRects 计算 sourceGlyphOnScreen')
+  // startPositionX 与冻结源字形一致（同一坐标系），不是 ownLayout 的 10
+  assert.equal(iv.startPositionX, 50, 'startPositionX 应与冻结源字形在屏位置一致')
+  // retarget 后 frozenSourceGlyphRects 保留
+  const retargeted = retargetRunStarts(run, start, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const riv = retargeted[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.equal(riv.frozenSourceGlyphRects[0].x, 50, 'retarget 后 frozenSourceGlyphRects 应保留')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

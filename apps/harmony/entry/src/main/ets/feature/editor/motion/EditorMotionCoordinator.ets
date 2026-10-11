@@ -2016,7 +2016,10 @@ export class EditorMotionCoordinator {
           currentPositionY: currentY,
           motionOwnerKind: motionRun.motionOwnerKind,
           // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity
-          opacity: motionRun.opacity
+          // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到 targetOpacity。
+          opacity: motionRun.opacity === undefined
+            ? undefined
+            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p
         })
       } else {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
@@ -2065,7 +2068,10 @@ export class EditorMotionCoordinator {
           currentPositionY: motionRun.currentPositionY,
           motionOwnerKind: motionRun.motionOwnerKind,
           // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity
-          opacity: motionRun.opacity
+          // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到 targetOpacity。
+          opacity: motionRun.opacity === undefined
+            ? undefined
+            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p
         })
       }
     }
@@ -2899,7 +2905,13 @@ export class EditorMotionCoordinator {
           islandTargetRects: islandTargetRects,
           // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity，
           // 交叉淡入淡出的新源窗口被 carry-over 时保持透明度关系。
-          opacity: w.opacity
+          opacity: w.opacity,
+          // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到目标——
+          // 旧源成员继续淡出到 0，新源成员继续淡入到 1，保持互补关系（两者之和恒为 1）。
+          // 否则两源会停在冻结时的半透明，动画结束时静态正文接管会闪烁/双字。
+          targetOpacity: w.opacity === undefined
+            ? undefined
+            : (sourceKind === 'old' ? 0 : 1)
         })
       }
     }
