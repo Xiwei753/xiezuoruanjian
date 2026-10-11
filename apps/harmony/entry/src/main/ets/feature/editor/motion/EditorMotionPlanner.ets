@@ -31,7 +31,7 @@ import { EditorEditResult, DisplayPatch, EditorOperationKind, OffsetMap, OffsetM
 import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun, ClipRect } from './EditorVisualFrame'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
-import { LineLayout } from '../render/editor_render_geometry'
+import { LineLayout, glyphRectForRange } from '../render/editor_render_geometry'
 import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece, RectLike,
@@ -478,7 +478,41 @@ export class EditorMotionPlanner {
         // Issue #879 复核评论6104619192 问题1：计算是否需要新旧源交叉淡入淡出。
         // 当新旧字宽/高差异 > 0.5vp 时，buildFrame 会同时输出旧源和新源两个窗口，
         // plannedWindowKeys 也必须同时输出两个 key，否则 sameKeySet 检查失败，候选无法提交。
-        const needsCrossfade =
+        // Issue #879 复核评论6105482207 问题3：逐 interval 计算 per-glyph needsCrossfade。
+        // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+        const newMoveBoundaries = clusterBoundaries(newText, move.newUtf16Start, move.newUtf16End)
+        let anyIntervalNeedsCrossfade = false
+        for (const piece of pieces) {
+          if (piece.intervals !== undefined && piece.intervals.length > 0) {
+            for (const interval of piece.intervals) {
+              // 用旧布局计算该 interval 的字形矩形
+              const oldIntervalRect = glyphRectForRange(
+                oldLayout,
+                interval.utf16Start ?? move.oldUtf16Start,
+                interval.utf16End ?? move.oldUtf16End
+              )
+              // 用新布局计算该 interval 的字形矩形
+              let newIntervalRect: { x: number; y: number; width: number; height: number } | null = null
+              if (newMoveBoundaries.length === glyphIds.length + 1 &&
+                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+                newIntervalRect = glyphRectForRange(
+                  newLayout,
+                  newMoveBoundaries[interval.firstIndex],
+                  newMoveBoundaries[interval.lastIndex + 1]
+                )
+              }
+              const intervalNeedsCrossfade =
+                (oldIntervalRect !== null && newIntervalRect !== null) &&
+                (Math.abs(oldIntervalRect.width - newIntervalRect.width) > 0.5 ||
+                 Math.abs(oldIntervalRect.height - newIntervalRect.height) > 0.5)
+              if (intervalNeedsCrossfade) {
+                anyIntervalNeedsCrossfade = true
+                interval.needsCrossfade = true
+              }
+            }
+          }
+        }
+        const needsCrossfade = anyIntervalNeedsCrossfade ||
           Math.abs(move.oldRect.width - move.newRect.width) > 0.5 ||
           Math.abs(move.oldRect.height - move.newRect.height) > 0.5
         retainedMoves.push({
@@ -631,7 +665,12 @@ export class EditorMotionPlanner {
         clipRects: w.clipRects.map((r: ClipRect): RectLike => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
         sourceRevision: w.sourceRevision,
         glyphUtf16Ranges: glyphUtf16Ranges,
-        sourceLayout: sourceLayout
+        sourceLayout: sourceLayout,
+        // Issue #879 复核评论6105482207 问题1：冻结新字段，供双源交叉淡入淡出使用
+        sourceKind: w.sourceKind,
+        runId: w.runId,
+        renderNodeKey: w.renderNodeKey,
+        opacity: w.opacity
       })
     }
     return spans

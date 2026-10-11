@@ -439,7 +439,12 @@ export class EditorMotionCoordinator {
           keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
           // Issue #879 复核评论6104619192 问题1：交叉淡入淡出时，buildFrame 会额外输出新源窗口，
           // plannedWindowKeys 必须同时输出 new key，否则 sameKeySet 检查失败，候选无法提交。
-          if (move.needsCrossfade) {
+          // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade，
+          // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+          const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
+            ? interval.needsCrossfade
+            : move.needsCrossfade
+          if (intervalNeedsCrossfade) {
             keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
           }
         }
@@ -1534,7 +1539,11 @@ export class EditorMotionCoordinator {
           // 避免字宽变化时 clip 放宽但旧 Text 实际排版宽高不变导致跳字。
           // Issue #879 复核评论6104619192 问题1：使用 move.needsCrossfade 标志（在 plan 阶段计算），
           // 不再逐 interval 动态判断——保证 plannedWindowKeys 和 buildFrame 输出 key 集合一致。
-          let needsSourceCrossfade = move.needsCrossfade
+          // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade，
+          // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+          let needsSourceCrossfade = interval.needsCrossfade !== undefined
+            ? interval.needsCrossfade
+            : move.needsCrossfade
           let newSourceUtf16Start = iStart
           let newSourceUtf16End = iEnd
           let newSourceGlyphX = islandNewX
@@ -2745,9 +2754,13 @@ export class EditorMotionCoordinator {
           if (piece.targetRect !== null) {
             const targetX = piece.targetRect.x
             const targetY = piece.targetRect.y
-            if (Math.abs(piece.currentPositionX - targetX) < 0.01 &&
-                Math.abs(piece.currentPositionY - targetY) < 0.01) {
-              continue  // reflow 已到达目标位置，不需要延续
+            const positionDone = Math.abs(piece.currentPositionX - targetX) < 0.01 &&
+                Math.abs(piece.currentPositionY - targetY) < 0.01
+            // Issue #879 复核评论6105482207 问题2：位置到达但透明度未完成时仍必须继续渲染。
+            const opacityDone = w.opacity === undefined ||
+                (w.sourceKind === 'old' ? w.opacity < 0.01 : w.opacity > 0.99)
+            if (positionDone && opacityDone) {
+              continue  // reflow 已到达目标位置且透明度已完成，不需要延续
             }
           }
         }
@@ -2975,7 +2988,12 @@ export class EditorMotionCoordinator {
         clipRects: w.clipRects.map((r: ClipRect): RectLike => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
         sourceRevision: w.sourceRevision,
         glyphUtf16Ranges: glyphUtf16Ranges,
-        sourceLayout: sourceLayout
+        sourceLayout: sourceLayout,
+        // Issue #879 复核评论6105482207 问题1：冻结新字段，供双源交叉淡入淡出使用
+        sourceKind: w.sourceKind,
+        runId: w.runId,
+        renderNodeKey: w.renderNodeKey,
+        opacity: w.opacity
       })
     }
     return {

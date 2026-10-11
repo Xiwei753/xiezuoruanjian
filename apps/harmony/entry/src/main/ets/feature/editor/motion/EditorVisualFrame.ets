@@ -229,6 +229,9 @@ export interface RetainedMove {
    * plannedWindowKeys 据此为每个 interval 同时输出 old 和 new 两个 key，
    * buildFrame 据此为每个 interval 同时输出旧源和新源两个窗口，
    * 保证 sameKeySet(plannedKeys, extractWindowKeys(retargeted.startFrame)) 成立。
+   * Issue #879 复核评论6105482207 问题3：per-interval needsCrossfade 优先于此字段——
+   * 整段总宽可能不变但单个字形宽高变化，RunStartInterval.needsCrossfade 按 interval 判断。
+   * buildFrame 和 plannedWindowKeys 优先读取 interval.needsCrossfade，缺省时回落到此字段。
    */
   needsCrossfade: boolean
 }

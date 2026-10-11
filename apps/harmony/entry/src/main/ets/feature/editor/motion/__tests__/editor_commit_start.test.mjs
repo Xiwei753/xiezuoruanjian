@@ -3111,8 +3111,8 @@ test('问题2-6105187411：字形在 displayed 身份表中且正由冻结窗口
   // 场景：displayed 正文仍包含 '乙'（身份表中有），但乙正由一个冻结旧源 Text 窗口绘制。
   // 旧 sourceGlyphGeometry 优先从 displayed.layout 读取（x=10），返回错误的坐标。
   // frozenGlyphGeometry 优先从冻结窗口的 sourceLayout 读取（x=50），返回正确坐标。
-  // 冻结窗口的 clipRect 基于 displayed.layout + offset（让 clusterVisible 判定可见），
-  // 但 sourceLayout 的坐标不同（验证 frozenSourceGlyphRects 的来源）。
+  // Issue #879 复核评论6105482207 问题4：clusterVisible 也应从 sourceLayout + offset 计算屏幕坐标，
+  // clipRect 基于 sourceLayout + offset（x=50+3=53），与冻结窗口真实绘制位置一致。
   const ctx = context('甲乙', 972, [])
   const glyphIds = idsOf(ctx, 0, 2)
   const yiId = glyphIds[1]  // 乙的 glyphId
@@ -3122,12 +3122,12 @@ test('问题2-6105187411：字形在 displayed 身份表中且正由冻结窗口
     caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
   }]
   const yiRanges = new Map([[yiId, [1, 2]]])
-  // clipRect 基于 displayed.layout + offset（x=10+3=13），让 clusterVisible 判定可见
+  // clipRect 基于 sourceLayout + offset（x=50+3=53），与冻结窗口真实绘制位置一致
   const frozen = [{
     glyphIds: [yiId],
-    clipLeft: 13,
-    clipRight: 18,
-    clipRects: [{ x: 13, y: 0, width: 5, height: 20 }],
+    clipLeft: 53,
+    clipRight: 58,
+    clipRects: [{ x: 53, y: 0, width: 5, height: 20 }],
     offsetX: 3,
     offsetY: 0,
     sourceRevision: 970,
@@ -3155,6 +3155,7 @@ test('问题2-6105187411：字形在 displayed 身份表中且正由冻结窗口
   assert.equal(iv.frozenSourceGlyphRects[0].x, 50,
     'frozenSourceGlyphRects.x 应来自冻结窗口 sourceLayout（50），不是 displayed.layout（10）')
   // sourceGlyphRects 仍来自 run.ownLayout（x=10）——两者坐标系不同
+  assert.ok(iv.sourceGlyphRects !== undefined, 'sourceGlyphRects 应填充')
   assert.equal(iv.sourceGlyphRects[0].x, 10,
     'sourceGlyphRects.x 仍来自 run.ownLayout（10）')
 })
