@@ -10,12 +10,12 @@ use std::time::{Duration, Instant};
 use writer_core::editor::OffsetMap;
 
 use super::super::layout_snapshot::{
-    EditorLayoutSnapshot, LineSnapshotId, PreparedLineSnapshot, ShapingIdentity, SourceRect,
+    EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect,
 };
 use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::render_plan::VisualCaretGeometry;
 use super::edit_timeline::{CaretPath, EditMotionSample, EditVisualTimeline};
-use super::visual_frame::{VisualCluster, VisualFrame};
+use super::visual_frame::{VisualCluster, VisualFrame, VisualLineGeometry};
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge, DeletedRangeEdge};
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
@@ -82,6 +82,8 @@ struct CaretMotion {
     to_byte: usize,
     from_line: Option<VisualLineIdentity>,
     to_line: Option<VisualLineIdentity>,
+    source_line_snapshot_id: Option<LineSnapshotId>,
+    target_line_snapshot_id: Option<LineSnapshotId>,
     layout_revision: LayoutRevision,
     document_session: u64,
     path: Option<CaretPath>,
@@ -93,7 +95,8 @@ impl CaretMotion {
         from: CursorRect,
         to: CursorRect,
         caret_byte_offsets: (usize, usize),
-        base_snapshot: &EditorLayoutSnapshot,
+        source_frame: &VisualFrame,
+        frame_to_base_map: &OffsetMap,
         target_snapshot: &EditorLayoutSnapshot,
         layout_revision: LayoutRevision,
         document_session: u64,
@@ -110,23 +113,47 @@ impl CaretMotion {
             y: to.top,
             h: (to.bottom - to.top).max(0.0),
         };
-        let from_line_snapshot = line_for_caret(base_snapshot, from);
-        let to_line_snapshot = line_for_caret(target_snapshot, to);
-        let path = from_line_snapshot
-            .zip(to_line_snapshot)
-            .filter(|(from_line, to_line)| {
-                VisualLineIdentity::from(from_line.id) != VisualLineIdentity::from(to_line.id)
+        let source_byte_offset = frame_to_base_map.map_new_to_old(caret_byte_offsets.0);
+        let from_line_snapshot = if source_frame.caret_rect.is_some() {
+            source_frame.caret_line_snapshot_id.and_then(|line_id| {
+                source_frame
+                    .line_geometries
+                    .iter()
+                    .find(|line| line.id == line_id)
             })
-            .and_then(|(from_line, to_line)| {
+        } else {
+            source_byte_offset
+                .and_then(|offset| line_for_caret(&source_frame.line_geometries, offset, from))
+                .or_else(|| line_for_exact_caret(&source_frame.line_geometries, from))
+        };
+        let target_lines = target_snapshot
+            .line_snapshots
+            .iter()
+            .map(VisualLineGeometry::from)
+            .collect::<Vec<_>>();
+        let to_line_snapshot = line_for_caret(&target_lines, caret_byte_offsets.1, to)
+            .or_else(|| line_for_exact_caret(&target_lines, to));
+        let path = match (from_line_snapshot, to_line_snapshot) {
+            (Some(from_line), Some(to_line))
+                if VisualLineIdentity::from(from_line.id)
+                    != VisualLineIdentity::from(to_line.id) =>
+            {
                 build_caret_path(from_line, to_line, from_rect, to_rect, caret_byte_offsets)
-            });
+            }
+            (None, Some(to_line)) => {
+                build_caret_path_from_position(to_line, from_rect, to_rect, caret_byte_offsets)
+            }
+            _ => None,
+        };
         Self {
             transition_id,
             from,
             to,
             to_byte: caret_byte_offsets.1,
-            from_line: caret_line_identity(base_snapshot, from),
-            to_line: caret_line_identity(target_snapshot, to),
+            from_line: from_line_snapshot.map(|line| line.id.into()),
+            to_line: to_line_snapshot.map(|line| line.id.into()),
+            source_line_snapshot_id: from_line_snapshot.map(|line| line.id),
+            target_line_snapshot_id: to_line_snapshot.map(|line| line.id),
             layout_revision,
             document_session,
             path,
@@ -138,7 +165,10 @@ impl CaretMotion {
         // caret boundary. A route crossing rows stays on text progress for its whole life.
         matches!(
             (self.from_line, self.to_line),
-            (Some(from), Some(to)) if from == to && from == line_id.into()
+            (Some(from), Some(to))
+                if from == to
+                    && to == line_id.into()
+                    && self.target_line_snapshot_id == Some(line_id)
         )
     }
 
@@ -149,6 +179,9 @@ impl CaretMotion {
         offset_map: &OffsetMap,
     ) -> bool {
         if !self.can_drive_cluster_line(target.snapshot_id) {
+            return false;
+        }
+        if self.source_line_snapshot_id != Some(source.snapshot_id) {
             return false;
         }
         let Some(mapped_source_range) =
@@ -253,6 +286,42 @@ impl CaretMotion {
         };
         route_reaches_cluster_frontier(from, to, cluster_trailing_frontier_x(target), &target.rect)
     }
+
+    fn line_id_at(
+        &self,
+        caret: Option<CursorRect>,
+        source_frame: &VisualFrame,
+        target_snapshot: &EditorLayoutSnapshot,
+    ) -> Option<LineSnapshotId> {
+        let caret = caret?;
+        let position = CaretPosition {
+            x: caret.x,
+            y: caret.top,
+            h: (caret.bottom - caret.top).max(0.0),
+        };
+        let target_line = self.target_line_snapshot_id.and_then(|line_id| {
+            target_snapshot
+                .line_snapshots
+                .iter()
+                .find(|line| line.id == line_id)
+                .map(VisualLineGeometry::from)
+        });
+        if target_line
+            .as_ref()
+            .is_some_and(|line| caret_matches_line(position, line))
+        {
+            return self.target_line_snapshot_id;
+        }
+        self.source_line_snapshot_id
+            .and_then(|line_id| {
+                source_frame
+                    .line_geometries
+                    .iter()
+                    .find(|line| line.id == line_id)
+            })
+            .filter(|line| caret_matches_line(position, line))
+            .map(|line| line.id)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +358,7 @@ pub(crate) struct VisualEditState {
     pub source_frame: VisualFrame,
     pub target_snapshot: EditorLayoutSnapshot,
     motions: Vec<ClusterMotion>,
+    caret_motion: Option<CaretMotion>,
     timeline: EditVisualTimeline,
     pub reflow_cluster_count: usize,
     pub crossfade_cluster_count: usize,
@@ -330,7 +400,8 @@ impl VisualEditState {
                     from,
                     to,
                     byte_offsets,
-                    base_snapshot,
+                    &source_frame,
+                    frame_to_base_map,
                     &target_snapshot,
                     target_snapshot.revision,
                     document_session,
@@ -618,6 +689,7 @@ impl VisualEditState {
             source_frame,
             target_snapshot,
             motions,
+            caret_motion,
             timeline,
             reflow_cluster_count,
             crossfade_cluster_count,
@@ -1010,53 +1082,110 @@ impl VisualEditState {
             .max(self.ownership_conflict_count);
         plan.terminal_motion_indices = terminal_motion_indices;
         plan.submitted_visible_widths = submitted_visible_widths;
-        plan.candidate_frame = VisualFrame::from_rendered_plan(&self.target_snapshot, &plan);
+        plan.candidate_frame = VisualFrame::from_rendered_plan(
+            &self.target_snapshot,
+            &plan,
+            &self.source_frame.line_geometries,
+        );
+        plan.candidate_frame.caret_line_snapshot_id =
+            self.caret_motion.as_ref().and_then(|motion| {
+                motion.line_id_at(sample.caret_rect, &self.source_frame, &self.target_snapshot)
+            });
+        if let Some(line_id) = plan.candidate_frame.caret_line_snapshot_id {
+            if !plan
+                .candidate_frame
+                .line_geometries
+                .iter()
+                .any(|line| line.id == line_id)
+            {
+                if let Some(line) = self
+                    .source_frame
+                    .line_geometries
+                    .iter()
+                    .find(|line| line.id == line_id)
+                {
+                    plan.candidate_frame.line_geometries.push(line.clone());
+                }
+            }
+        }
         plan
     }
 }
 
-fn caret_line_identity(
-    snapshot: &EditorLayoutSnapshot,
+fn line_for_caret(
+    lines: &[VisualLineGeometry],
+    byte_offset: usize,
     caret: CaretPosition,
-) -> Option<VisualLineIdentity> {
-    line_for_caret(snapshot, caret).map(|line| line.id.into())
+) -> Option<&VisualLineGeometry> {
+    let candidates: Vec<_> = lines
+        .iter()
+        .filter(|line| byte_offset >= line.byte_start && byte_offset <= line.byte_end)
+        .collect();
+    match candidates.as_slice() {
+        [line] => Some(*line),
+        [] => None,
+        _ => unique_caret_aligned_line(&candidates, caret),
+    }
 }
 
-fn line_for_caret(
-    snapshot: &EditorLayoutSnapshot,
+fn line_for_exact_caret(
+    lines: &[VisualLineGeometry],
     caret: CaretPosition,
-) -> Option<&PreparedLineSnapshot> {
-    let caret_center_y = caret.y + caret.h * 0.5;
-    snapshot.line_snapshots.iter().min_by(|left, right| {
-        let distance = |line: &PreparedLineSnapshot| {
-            if caret_center_y < line.visual_line_top {
-                line.visual_line_top - caret_center_y
-            } else if caret_center_y > line.visual_line_bottom {
-                caret_center_y - line.visual_line_bottom
-            } else {
-                0.0
-            }
-        };
-        distance(left).total_cmp(&distance(right))
-    })
+) -> Option<&VisualLineGeometry> {
+    let candidates: Vec<_> = lines
+        .iter()
+        .filter(|line| caret_matches_line(caret, line))
+        .collect();
+    match candidates.as_slice() {
+        [line] => Some(*line),
+        _ => None,
+    }
+}
+
+fn unique_caret_aligned_line<'a>(
+    lines: &[&'a VisualLineGeometry],
+    caret: CaretPosition,
+) -> Option<&'a VisualLineGeometry> {
+    let candidates: Vec<_> = lines
+        .iter()
+        .copied()
+        .filter(|line| caret_matches_line(caret, line))
+        .collect();
+    match candidates.as_slice() {
+        [line] => Some(*line),
+        _ => None,
+    }
+}
+
+fn caret_matches_line(caret: CaretPosition, line: &VisualLineGeometry) -> bool {
+    (caret.y - line.caret_top).abs() <= 1.5
+        && (caret.h - line.caret_height).abs() <= 1.5
+        && caret.y >= line.top - 1.5
+        && caret.y + caret.h <= line.bottom + 1.5
 }
 
 fn build_caret_path(
-    source_line: &PreparedLineSnapshot,
-    target_line: &PreparedLineSnapshot,
+    source_line: &VisualLineGeometry,
+    target_line: &VisualLineGeometry,
     from: CursorRect,
     to: CursorRect,
     caret_byte_offsets: (usize, usize),
 ) -> Option<CaretPath> {
-    let (source_line_left, source_line_right) = line_horizontal_bounds(source_line);
-    let (target_line_left, target_line_right) = line_horizontal_bounds(target_line);
-    let source_left = source_line_left.min(from.x);
-    let source_right = source_line_right.max(from.x);
-    let target_left = target_line_left.min(to.x);
-    let target_right = target_line_right.max(to.x);
+    let source_aligned = caret_matches_line(
+        CaretPosition {
+            x: from.x,
+            y: from.top,
+            h: (from.bottom - from.top).max(0.0),
+        },
+        source_line,
+    );
+    let source_left = source_line.left.min(from.x);
+    let source_right = source_line.right.max(from.x);
+    let target_left = target_line.left.min(to.x);
+    let target_right = target_line.right.max(to.x);
     let forward = caret_byte_offsets.1 >= caret_byte_offsets.0;
-    let source_rtl = line_is_rtl(source_line);
-    let target_rtl = line_is_rtl(target_line);
+    let source_rtl = source_line.direction_rtl;
+    let target_rtl = target_line.direction_rtl;
     let source_leading = if source_rtl {
         source_right
     } else {
@@ -1077,7 +1206,7 @@ fn build_caret_path(
     } else {
         target_right
     };
-    let (exit_x, entry_x) = if (from.x - to.x).abs() <= 8.0 {
+    let (exit_x, entry_x) = if !source_aligned || (from.x - to.x).abs() <= 8.0 {
         // Enter at the current caret boundary when a split or soft wrap keeps the
         // horizontal caret coordinate stable; traversing the whole row would misroute it.
         (from.x, to.x)
@@ -1095,11 +1224,15 @@ fn build_caret_path(
             },
         )
     };
-    let source_exit = CursorRect {
-        x: exit_x,
-        top: source_line.caret_top,
-        bottom: source_line.caret_top + source_line.caret_height,
-        baseline_y: from.baseline_y,
+    let source_exit = if source_aligned {
+        CursorRect {
+            x: exit_x,
+            top: source_line.caret_top,
+            bottom: source_line.caret_top + source_line.caret_height,
+            baseline_y: from.baseline_y,
+        }
+    } else {
+        from
     };
     let target_vertical = CursorRect {
         x: exit_x,
@@ -1116,21 +1249,46 @@ fn build_caret_path(
     CaretPath::new(vec![from, source_exit, target_vertical, target_entry, to])
 }
 
-fn line_horizontal_bounds(line: &PreparedLineSnapshot) -> (f64, f64) {
-    let mut left = line.visual_x;
-    let mut right = line.visual_x;
-    for cluster in &line.clusters {
-        let rect = line.source_rect_to_document_rect(&cluster.source_rect);
-        left = left.min(rect.x);
-        right = right.max(rect.x + rect.w);
-    }
-    (left, right)
-}
-
-fn line_is_rtl(line: &PreparedLineSnapshot) -> bool {
-    line.clusters
-        .first()
-        .is_some_and(|cluster| cluster.shaping_identity.direction_rtl)
+fn build_caret_path_from_position(
+    target_line: &VisualLineGeometry,
+    from: CursorRect,
+    to: CursorRect,
+    caret_byte_offsets: (usize, usize),
+) -> Option<CaretPath> {
+    let target_left = target_line.left.min(to.x);
+    let target_right = target_line.right.max(to.x);
+    let target_rtl = target_line.direction_rtl;
+    let forward = caret_byte_offsets.1 >= caret_byte_offsets.0;
+    let target_leading = if target_rtl {
+        target_right
+    } else {
+        target_left
+    };
+    let target_trailing = if target_rtl {
+        target_left
+    } else {
+        target_right
+    };
+    let entry_x = if (from.x - to.x).abs() <= 8.0 {
+        to.x
+    } else if forward {
+        target_leading
+    } else {
+        target_trailing
+    };
+    let target_vertical = CursorRect {
+        x: from.x,
+        top: target_line.caret_top,
+        bottom: target_line.caret_top + target_line.caret_height,
+        baseline_y: to.baseline_y,
+    };
+    let target_entry = CursorRect {
+        x: entry_x,
+        top: target_line.caret_top,
+        bottom: target_line.caret_top + target_line.caret_height,
+        baseline_y: to.baseline_y,
+    };
+    CaretPath::new(vec![from, target_vertical, target_entry, to])
 }
 
 fn committed_slice_boundary(

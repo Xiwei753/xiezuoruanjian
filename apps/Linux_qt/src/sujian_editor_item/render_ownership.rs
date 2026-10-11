@@ -193,7 +193,7 @@ impl RenderOwnershipPlan {
             candidate_frame: VisualFrame::default(),
             canonical_frame,
         };
-        plan.candidate_frame = VisualFrame::from_rendered_plan(snapshot, &plan);
+        plan.candidate_frame = VisualFrame::from_rendered_plan(snapshot, &plan, &[]);
         plan
     }
 

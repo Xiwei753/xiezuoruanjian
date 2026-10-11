@@ -9,6 +9,22 @@ use super::super::render_ownership::RenderOwnershipPlan;
 use super::super::snapshot_id::LineSnapshotId;
 use crate::sujian_editor_item::edit_motion::{CursorRect, DeleteEdge};
 
+/// Lightweight row geometry captured with the frame Qt actually submitted.
+/// It deliberately excludes the row image and cluster payloads.
+#[derive(Clone, Debug)]
+pub(crate) struct VisualLineGeometry {
+    pub id: LineSnapshotId,
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub top: f64,
+    pub bottom: f64,
+    pub caret_top: f64,
+    pub caret_height: f64,
+    pub left: f64,
+    pub right: f64,
+    pub direction_rtl: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct VisualCluster {
     pub snapshot_id: LineSnapshotId,
@@ -39,6 +55,12 @@ pub(crate) struct VisualFrame {
     pub spatial_speed_per_second: f64,
     /// Actual caret velocity at the frame accepted by Qt.
     pub caret_velocity: Option<CursorRect>,
+    /// Row the submitted caret actually occupies. `None` is meaningful for a caret
+    /// between rows while a cross-line path is in flight.
+    pub caret_line_snapshot_id: Option<LineSnapshotId>,
+    /// Row geometry from the same submitted visual frame, including rows that still
+    /// contribute old glyphs during a reflow or cross-fade.
+    pub line_geometries: Vec<VisualLineGeometry>,
     /// Monotonic diagnostic phase captured from the same submitted timeline sample.
     pub timeline_progress: f64,
     /// Captured visual contributions, not a one-entry-per-character index. A CrossFade
@@ -52,6 +74,7 @@ impl VisualFrame {
     pub(crate) fn from_rendered_plan(
         snapshot: &EditorLayoutSnapshot,
         ownership: &RenderOwnershipPlan,
+        inherited_line_geometries: &[VisualLineGeometry],
     ) -> Self {
         if ownership.handoff_pending {
             return Self::from_static_snapshot(snapshot);
@@ -100,6 +123,25 @@ impl VisualFrame {
                 opacity: glyph.opacity,
             });
         }
+        let mut line_geometries = snapshot
+            .line_snapshots
+            .iter()
+            .map(VisualLineGeometry::from)
+            .collect::<Vec<_>>();
+        for glyph in &ownership.animated_glyphs {
+            if line_geometries
+                .iter()
+                .any(|line| line.id == glyph.snapshot_id)
+            {
+                continue;
+            }
+            if let Some(line) = inherited_line_geometries
+                .iter()
+                .find(|line| line.id == glyph.snapshot_id)
+            {
+                line_geometries.push(line.clone());
+            }
+        }
         Self {
             document_session: 0,
             canonical_revision: Some(snapshot.revision),
@@ -108,6 +150,8 @@ impl VisualFrame {
             caret_rect: None,
             spatial_speed_per_second: ownership.spatial_speed_per_second,
             caret_velocity: ownership.caret_velocity,
+            caret_line_snapshot_id: None,
+            line_geometries,
             timeline_progress: ownership.timeline_progress,
             clusters,
         }
@@ -137,8 +181,64 @@ impl VisualFrame {
             caret_rect: None,
             spatial_speed_per_second: 0.0,
             caret_velocity: None,
+            caret_line_snapshot_id: None,
+            line_geometries: snapshot
+                .line_snapshots
+                .iter()
+                .map(VisualLineGeometry::from)
+                .collect(),
             timeline_progress: 0.0,
             clusters,
+        }
+    }
+
+    pub(crate) fn line_id_aligned_with_caret(
+        &self,
+        caret: CursorRect,
+        preferred: Option<LineSnapshotId>,
+    ) -> Option<LineSnapshotId> {
+        let height = (caret.bottom - caret.top).max(0.0);
+        let candidates: Vec<_> = self
+            .line_geometries
+            .iter()
+            .filter(|line| {
+                (caret.top - line.caret_top).abs() <= 1.5
+                    && (height - line.caret_height).abs() <= 1.5
+                    && caret.top >= line.top - 1.5
+                    && caret.bottom <= line.bottom + 1.5
+            })
+            .map(|line| line.id)
+            .collect();
+        match candidates.as_slice() {
+            [line_id] => Some(*line_id),
+            _ => preferred.filter(|line_id| candidates.contains(line_id)),
+        }
+    }
+}
+
+impl From<&super::super::layout_snapshot::PreparedLineSnapshot> for VisualLineGeometry {
+    fn from(line: &super::super::layout_snapshot::PreparedLineSnapshot) -> Self {
+        let (left, right) =
+            line.clusters
+                .iter()
+                .fold((line.visual_x, line.visual_x), |(left, right), cluster| {
+                    let rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                    (left.min(rect.x), right.max(rect.x + rect.w))
+                });
+        Self {
+            id: line.id,
+            byte_start: line.byte_start,
+            byte_end: line.byte_end,
+            top: line.visual_line_top,
+            bottom: line.visual_line_bottom,
+            caret_top: line.caret_top,
+            caret_height: line.caret_height,
+            left,
+            right,
+            direction_rtl: line
+                .clusters
+                .first()
+                .is_some_and(|cluster| cluster.shaping_identity.direction_rtl),
         }
     }
 }

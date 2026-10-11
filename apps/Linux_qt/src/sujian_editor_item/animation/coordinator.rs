@@ -334,6 +334,10 @@ impl LinuxEditorAnimationCoordinator {
         let mut committed_frame = committed_frame;
         committed_frame.document_session = self.document_session;
         committed_frame.caret_rect = caret_rect;
+        let planned_caret_line = committed_frame.caret_line_snapshot_id;
+        committed_frame.caret_line_snapshot_id = caret_rect.and_then(|caret| {
+            committed_frame.line_id_aligned_with_caret(caret, planned_caret_line)
+        });
         let mut committed_animation_ids = Vec::new();
         let keeps_animation = resources_ready && !plan.handoff_pending;
         if keeps_animation {
