@@ -1501,27 +1501,11 @@ export class EditorMotionCoordinator {
             islandNewY = EditorMotionCoordinator.yAtOffsetLocal(
               newLayout, islandNewUtf16Start, move.newRect.y)
           }
-          // Issue #879 复核评论6099791364 问题3：islandStartX 必须是字形在屏绘制原点，
-          // 不是当前可见裁切的左边界。旧实现用 startPositionX + startClipLeft - oldRect.x
-          // 得到的是 clip 在屏左边界，p=0 时 islandOffsetX 会把局部可见半字偏移扩大成整字。
-          // 正确语义：字形在屏位置 = 源字形左边界 + 窗口偏移。
-          //   islandOldLeft = 源字形左边界（iRect.x 或 pieceOldLeft）
-          //   interval.startPositionX - move.oldRect.x = 当前窗口偏移
-          // （retained 通道 startPositionX = onScreenLeft - ownLeft + ownRect.x，
-          //   所以 startPositionX - ownRect.x = onScreenLeft - ownLeft = currentWindowOffset）
-          // 这样 p=0 时 islandOffsetX = currentWindowOffset，字形停在原位 + 窗口偏移，
-          // clip 保持当前裁切在屏坐标，局部可见半字不会移动。
-          const islandStartX = islandOldLeft + interval.startPositionX - move.oldRect.x
-          // Issue #879 复核评论6102724233 问题2：islandStartY 不再直接用 startPositionY，
-          // 而是用源字形 top + frozenDrawOffsetY（源 Text 真实绘制原点）。
-          // 旧实现用 startPositionY = visible.onScreenTop（裁切后的可见上边界），
-          // 不是源字形的完整绘制原点——纵向半字会错位。
-          // frozenDrawOffsetY = onScreenTop - sourceGlyphY0（裁切后可见 top - 源字形 top）
-          // islandStartY = islandOldTop + frozenDrawOffsetY（源字形 top + 冻结偏移）
-          const frozenDrawOffsetY = interval.frozenDrawOffsetY !== undefined
-            ? interval.frozenDrawOffsetY
-            : interval.startPositionY - move.oldRect.y
-          const islandStartY = islandOldTop + frozenDrawOffsetY
+          // Issue #879 复核评论6102724233 问题2：startPositionX/Y 语义已变更为屏幕坐标系
+          // 绝对位置（sourceGlyphX0 + frozenDrawOffsetX / sourceGlyphY0 + frozenDrawOffsetY），
+          // 直接使用，不需要加减 islandOldLeft 或 oldRect.x/y。
+          const islandStartX = interval.startPositionX
+          const islandStartY = interval.startPositionY
           const islandCurrentX = islandStartX + (islandNewX - islandStartX) * p
           const islandCurrentY = islandStartY + (islandNewY - islandStartY) * p
           // 该岛的独立 offset——基于该岛的旧位置和当前插值位置
@@ -1538,7 +1522,97 @@ export class EditorMotionCoordinator {
           // 宽度按各自在起始总宽度中的比例从起始宽度插值到目标宽度。
           // 否则回落到单个 islandClipRect（legacy 语义）。
           const islandClipRects: ClipRect[] = []
-          if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
+          // Issue #879 复核评论6102724233 问题2+3：优先使用 startScreenClipRects（屏幕坐标的
+          // 真实裁切交集矩形），它包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分）。
+          // 旧实现用 clipRects + frozenDrawOffset 现场重算起始 x/y，但 clipRects 的 y/height
+          // 都是整字值（run.ownRect.y 和 run.ownRect.height），映射后的目标 y/height 也都是整字值，
+          // 到 p=1 时所有碎片都变成整字高度，多张 mask 重叠。
+          if (interval.startScreenClipRects !== undefined && interval.startScreenClipRects.length > 0 &&
+              interval.sourceGlyphRects !== undefined && interval.sourceGlyphRects.length > 0) {
+            // Issue #879 复核评论6102724233 问题2+3：startScreenClipRects 是屏幕坐标的
+            // 真实裁切交集矩形，直接作为 p=0 的起始 clip。p>0 时用 mapRectByRatio 从
+            // 源字形在屏矩形映射到目标字形矩形，每个碎片保留真实纵向子矩形。
+            const sr = interval.sourceGlyphRects[0]
+            const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined
+              ? interval.frozenDrawOffsetX
+              : interval.startPositionX - move.oldRect.x
+            const frozenDrawOffsetY = interval.frozenDrawOffsetY !== undefined
+              ? interval.frozenDrawOffsetY
+              : interval.startPositionY - move.oldRect.y
+
+            // 源字形在屏矩形 = 源字形布局矩形 + 冻结窗口偏移（屏幕坐标系）
+            const sourceGlyphOnScreen: RectLike = {
+              x: sr.x + frozenDrawOffsetX,
+              y: sr.y + frozenDrawOffsetY,
+              width: sr.width,
+              height: sr.height
+            }
+
+            // Issue #879 复核评论6103000047 问题4：目标字形几何使用新布局而不是旧布局。
+            let newGlyphRect: RectLike = {
+              x: islandNewX + (sr.x - islandOldLeft),
+              y: islandNewY,
+              width: Math.max(0, sr.width),
+              height: Math.max(0, sr.height)
+            }
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
+              const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
+              if (newRect !== null) {
+                newGlyphRect = newRect
+              }
+            }
+
+            // Issue #879 复核评论6102724233 问题3：用 rectDifference 在屏幕坐标系中计算
+            // 尚未覆盖的区域（间隙）。sourceGlyphOnScreen 和 startScreenClipRects 都在屏幕坐标。
+            const remaining = rectDifference(sourceGlyphOnScreen, interval.startScreenClipRects)
+
+            const startRects: ClipRect[] = []
+            const targetRects: ClipRect[] = []
+
+            // 已可见碎片：起始 = startScreenClipRects（屏幕坐标真实裁切矩形，含真实纵向裁切），
+            // 目标 = mapRectByRatio 从源字形在屏矩形映射到新布局字形矩形
+            for (const scr of interval.startScreenClipRects) {
+              startRects.push({
+                x: scr.x, y: scr.y,
+                width: Math.max(0, scr.width), height: Math.max(0, scr.height)
+              })
+              const mapped = mapRectByRatio(scr, sourceGlyphOnScreen, newGlyphRect)
+              targetRects.push({
+                x: mapped.x, y: mapped.y,
+                width: mapped.width, height: mapped.height
+              })
+            }
+
+            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
+            for (const gap of remaining) {
+              startRects.push({
+                x: gap.x, y: gap.y,
+                width: 0, height: Math.max(0, gap.height)
+              })
+              const mappedGap = mapRectByRatio(gap, sourceGlyphOnScreen, newGlyphRect)
+              targetRects.push({
+                x: mappedGap.x, y: mappedGap.y,
+                width: mappedGap.width, height: mappedGap.height
+              })
+            }
+
+            // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+            for (let si = 0; si < startRects.length; si++) {
+              const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
+              const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
+              const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
+              const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
+              islandClipRects.push({
+                x: frameX,
+                y: frameY,
+                width: Math.max(0, frameWidth),
+                height: Math.max(0, frameHeight),
+              })
+            }
+          } else if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
               interval.sourceGlyphRects !== undefined &&
               interval.sourceGlyphRects.length === interval.clipRects.length) {
             // Issue #879 复核评论6102724233 问题3：每块可见碎片不应各自独立插值到同一个
@@ -2659,9 +2733,13 @@ export class EditorMotionCoordinator {
             runClipRects = startRects
           } else {
             // 尚未吐出但在新正文仍存在：建立零宽度起点和非零目标
+            // Issue #879 复核评论6102724233 问题4：piece.glyphX/glyphY 是源排版坐标，
+            // 但 piece.clipRects 是冻结帧屏幕坐标。零面积起点应该使用
+            // piece.glyphX + piece.offsetX 和 piece.glyphY + piece.offsetY（冻结屏幕字形原点），
+            // 与已有部分可见分支处于同一坐标系。
             islandStartRects = [{
-              x: piece.glyphX,
-              y: piece.glyphY,
+              x: piece.glyphX + piece.offsetX,
+              y: piece.glyphY + piece.offsetY,
               width: 0,
               height: piece.glyphHeight
             }]

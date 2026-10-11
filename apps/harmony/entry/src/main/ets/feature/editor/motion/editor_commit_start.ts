@@ -268,27 +268,28 @@ export interface RunStartInterval {
    */
   sourceGlyphRects?: RectLike[]
   /**
-   * Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移 x（vp）。
+   * Issue #879 复核评论6102724233 问题1+2：冻结帧源 Text 的真实绘制偏移 x（vp）。
    *
-   * retained 通道中 startPositionX 是"让第一个可见字形停在屏上位置"的语义，
-   * 不等于源 Text 的真实绘制偏移。frozenDrawOffsetX 记录源 Text 在冻结帧的真实偏移
-   * （= onScreenLeft - sourceGlyphX0），buildFrame 用它计算字形在屏绘制原点，
-   * 而不是用裁切后的可见边界。缺省时回落到 startPositionX - oldRect.x（legacy 语义）。
+   * 直接从 FrozenWindowSpan.offsetX 读取（窗口真实平移量），不从裁切边界反推。
+   * startPositionX = sourceGlyphX0 + frozenDrawOffsetX（屏幕坐标系中的值）。
+   * buildFrame 用它计算字形在屏绘制原点。缺省时回落到 0（legacy 语义）。
    */
   frozenDrawOffsetX?: number
   /**
-   * Issue #879 复核评论6102724233 问题2：冻结帧源 Text 的真实绘制偏移 y（vp）。
+   * Issue #879 复核评论6102724233 问题1+2：冻结帧源 Text 的真实绘制偏移 y（vp）。
    *
-   * 与 frozenDrawOffsetX 同理——startPositionY 不再用 visible.onScreenTop（裁切后
-   * 可见上边界），而是用源字形 top + frozenDrawOffsetY。缺省时回落到 0（legacy 语义）。
+   * 直接从 FrozenWindowSpan.offsetY 读取（窗口真实平移量），不从裁切边界反推。
+   * startPositionY = sourceGlyphY0 + frozenDrawOffsetY（屏幕坐标系中的值）。
+   * buildFrame 用它计算字形在屏绘制原点。缺省时回落到 0（legacy 语义）。
    */
   frozenDrawOffsetY?: number
   /**
    * Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
    *
-   * 与 clipRects（run 自己布局坐标系）不同——startScreenClipRects 是冻结帧屏幕坐标系
-   * 中的真实裁切矩形，buildFrame 用它做 clip 插值的起始值。缺省时回落到 clipRects
-   * 加 frozenDrawOffset（legacy 语义）。
+   * 直接使用 clusterVisible 返回的 firstVisible.rects（屏幕坐标真实裁切交集矩形），
+   * 包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分）。
+   * 与 clipRects（run 自己布局坐标系）不同——buildFrame 用它做 clip 插值的起始值。
+   * 缺省时为 undefined（legacy 语义）。
    */
   startScreenClipRects?: RectLike[]
 }
@@ -1558,46 +1559,29 @@ function intervalForIsland(
   }
   let startPositionX = run.ownRect.x
   let startPositionY = run.ownRect.y
-  // Issue #879 复核评论6102724233 问题2：retained 通道的冻结帧绘制偏移。
-  // frozenDrawOffsetX/Y 是源 Text 在冻结帧的真实偏移（= onScreenLeft - sourceGlyphX0），
-  // buildFrame 用它计算字形在屏绘制原点，而不是用裁切后的可见边界。
+  // Issue #879 复核评论6102724233 问题1+2：retained 通道的冻结帧绘制偏移。
+  // frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y 读取（窗口真实平移量），
+  // 不再从裁切边界反推。buildFrame 用它计算字形在屏绘制原点。
   let frozenDrawOffsetX: number | undefined
   let frozenDrawOffsetY: number | undefined
   // Issue #879 复核评论6102724233 问题2：冻结帧真实的二维裁切矩形（屏幕坐标）。
   let startScreenClipRects: RectLike[] | undefined
   if (kind === 'retained') {
-    // 让该岛第一个仍可见字形停在此刻在屏的位置上。
-    startPositionX = visible.onScreenLeft - (visible.ownLeft - run.ownRect.x)
-    // Issue #879 复核评论6102724233 问题2：startPositionY 不再用 visible.onScreenTop（裁切后
-    // 可见上边界），改用源字形 top + 冻结偏移。onScreenTop 是裁切后的可见上边界，
-    // 不是源字形的完整绘制原点——用 onScreenTop 会导致纵向半字错位。
-    // 正确语义：startPositionY = sourceGlyphY0 + (onScreenTop - sourceGlyphY0)
-    //   = onScreenTop（当源字形 top 与裁切后可见 top 相同时）
-    //   但当源字形有纵向偏移时（offsetY != 0），onScreenTop = sourceGlyphY0 + offsetY + clipTop，
-    //   而 startPositionY 应该是 sourceGlyphY0 + offsetY（源 Text 真实绘制原点）。
-    // frozenDrawOffsetY = onScreenTop - sourceGlyphY0（裁切后可见 top - 源字形 top）
-    // startPositionY = sourceGlyphY0 + frozenDrawOffsetY = onScreenTop（当裁切不改变 top 时）
-    // 但当裁切使可见 top > 源字形 top + offsetY 时，startPositionY 仍应是源字形 top + offsetY。
-    // 因此：frozenDrawOffsetY = visible.onScreenTop - visible.sourceGlyphY0
-    //       startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY = visible.onScreenTop
-    // 但关键区别在于：buildFrame 中 islandStartY 不再直接用 startPositionY，
-    // 而是用 sourceGlyphY0 + frozenDrawOffsetY（即源字形真实绘制原点）。
-    frozenDrawOffsetY = visible.onScreenTop - visible.sourceGlyphY0
+    // Issue #879 复核评论6102724233 问题1：frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y
+    // 读取，不再从裁切边界反推。onScreenTop/onScreenLeft 是裁切后的可见边界，不是源 Text
+    // 的真实偏移——用裁切边界反推会把纵向裁切误当成平移，导致半字错位。
+    const firstSpan = frozenByGlyphId.get(run.glyphIds[firstIndex])
+    frozenDrawOffsetX = firstSpan !== undefined ? firstSpan.offsetX : 0
+    frozenDrawOffsetY = firstSpan !== undefined ? firstSpan.offsetY : 0
+    // startPositionX/Y = 源字形原点 + 窗口真实偏移（不是裁切后可见边界）
+    startPositionX = visible.sourceGlyphX0 + frozenDrawOffsetX
     startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY
-    // frozenDrawOffsetX 与现有 startPositionX 语义一致：
-    // startPositionX = onScreenLeft - (ownLeft - ownRect.x) = onScreenLeft - ownLeft + ownRect.x
-    // frozenDrawOffsetX = startPositionX - run.ownRect.x = onScreenLeft - ownLeft
-    frozenDrawOffsetX = startPositionX - run.ownRect.x
-    // startScreenClipRects：冻结帧屏幕坐标系中的真实裁切矩形
-    // clipRects 在 run 自己布局坐标系中，加 frozenDrawOffset 转换到屏幕坐标
-    if (visible.clipRects !== undefined) {
-      startScreenClipRects = visible.clipRects.map((cr: RectLike): RectLike => ({
-        x: cr.x + frozenDrawOffsetX!,
-        y: cr.y + frozenDrawOffsetY!,
-        width: cr.width,
-        height: cr.height,
-      }))
-    }
+    // Issue #879 复核评论6102724233 问题2：startScreenClipRects 直接使用 firstVisible.rects
+    // （clusterVisible 返回的屏幕坐标真实裁切交集矩形），不通过 clipRects.map(...) 计算。
+    // firstVisible.rects 包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分），
+    // 而 visible.clipRects 在 run 自己布局坐标系中，y/height 都是整字值，简单相加偏移
+    // 不能还原冻结屏幕矩形。
+    startScreenClipRects = firstVisible.rects
   }
   return {
     firstIndex: firstIndex,

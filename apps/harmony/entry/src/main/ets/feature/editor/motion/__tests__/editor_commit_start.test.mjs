@@ -196,8 +196,10 @@ test('问题1：保留字平移——只有后半段可见时，按第一个可�
   const start = retainedMoveStartState(run, withWindow, {
     startClipLeft: 0, startClipRight: 60, startPositionX: 0, startPositionY: 0,
   })
-  // 第一个可见字形（簇3，own 左界 30）此刻在屏位置 35 → 起点 = 35 - (30 - 0) = 5
-  assert.equal(start[0].startPositionX, 5)
+  // Issue #879 复核评论6102724233 问题1：startPositionX 现在是屏幕坐标系中的值
+  // （sourceGlyphX0 + frozenDrawOffsetX），不再是 run 布局坐标系中的偏移量。
+  // 簇3 sourceGlyphX0=30，窗口 offsetX=5 → startPositionX = 30 + 5 = 35
+  assert.equal(start[0].startPositionX, 35)
 })
 
 test('问题1：保留字平移——一个共享字形都不在屏上 → 用兜底位置，不做凭空平移', () => {
