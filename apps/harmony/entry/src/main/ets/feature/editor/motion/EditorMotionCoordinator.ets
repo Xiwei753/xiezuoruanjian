@@ -436,16 +436,25 @@ export class EditorMotionCoordinator {
         // sameKeySet 不再恒 false，候选不再持续滞留，屏幕能切换到新版正文。
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
         for (const interval of intervals) {
-          keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
-          // Issue #879 复核评论6104619192 问题1：交叉淡入淡出时，buildFrame 会额外输出新源窗口，
-          // plannedWindowKeys 必须同时输出 new key，否则 sameKeySet 检查失败，候选无法提交。
-          // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade，
-          // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
-          const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
-            ? interval.needsCrossfade
-            : move.needsCrossfade
-          if (intervalNeedsCrossfade) {
-            keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+          // Issue #879 评论6108900966 问题1：优先检查 sourceMembers，
+          // 为每个成员输出对应的 renderNodeKey。
+          if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
+            const winId = this.windowIdAllocator.allocate(interval.glyphIds)
+            for (const member of interval.sourceMembers) {
+              keys.push(`${member.renderNodeKey}-${winId}`)
+            }
+          } else {
+            keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+            // Issue #879 复核评论6104619192 问题1：交叉淡入淡出时，buildFrame 会额外输出新源窗口，
+            // plannedWindowKeys 必须同时输出 new key，否则 sameKeySet 检查失败，候选无法提交。
+            // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade，
+            // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+            const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
+              ? interval.needsCrossfade
+              : move.needsCrossfade
+            if (intervalNeedsCrossfade) {
+              keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+            }
           }
         }
       }
@@ -1551,6 +1560,193 @@ export class EditorMotionCoordinator {
           let newSourceGlyphWidth = islandOldWidth
           let newSourceGlyphHeight = islandOldHeight
           const islandClipRects: ClipRect[] = []
+          // Issue #879 评论6108900966 问题1：优先检查 sourceMembers，逐成员独立计算。
+          // 每个 FrozenGlyphMember 包含自己的 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
+          // buildFrame 逐成员独立插值，不做笛卡尔混合。
+          // 缺省时回落到旧字段（startScreenClipRects/frozenDrawOffsetX/Y/frozenSourceGlyphRects）。
+          if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
+            // 计算 interval 级别的 newGlyphRect（所有成员共用）
+            let intervalNewGlyphRect: RectLike | null = null
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
+              const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
+              if (newRect !== null) {
+                intervalNewGlyphRect = newRect
+              }
+            }
+
+            // 计算 newSourceUtf16Start/End 和 newSourceGlyphX/Y/Width/Height（needsSourceCrossfade 时）
+            if (needsSourceCrossfade) {
+              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              }
+              if (intervalNewGlyphRect !== null) {
+                newSourceGlyphX = intervalNewGlyphRect.x
+                newSourceGlyphY = intervalNewGlyphRect.y
+                newSourceGlyphWidth = intervalNewGlyphRect.width
+                newSourceGlyphHeight = intervalNewGlyphRect.height
+              }
+            }
+
+            // 逐成员计算 clipRects——每个成员只用自己的 sourceGlyphRect+offset、clipRects
+            const memberClipRectsList: ClipRect[][] = []
+            for (const member of interval.sourceMembers) {
+              // 成员的源字形在屏矩形 = 成员的 sourceGlyphRect + 成员的 offset
+              const memberSourceGlyphOnScreen: RectLike = {
+                x: member.sourceGlyphRect.x + member.offsetX,
+                y: member.sourceGlyphRect.y + member.offsetY,
+                width: member.sourceGlyphRect.width,
+                height: member.sourceGlyphRect.height
+              }
+
+              // 成员的目标字形几何
+              let memberNewGlyphRect: RectLike
+              if (intervalNewGlyphRect !== null) {
+                memberNewGlyphRect = intervalNewGlyphRect
+              } else {
+                memberNewGlyphRect = {
+                  x: islandNewX + (member.sourceGlyphRect.x - islandOldLeft),
+                  y: islandNewY,
+                  width: Math.max(0, member.sourceGlyphRect.width),
+                  height: Math.max(0, member.sourceGlyphRect.height)
+                }
+              }
+
+              // 用成员自己的 clipRects 求间隙
+              const remaining = rectDifference(memberSourceGlyphOnScreen, member.clipRects)
+
+              const startRects: ClipRect[] = []
+              const targetRects: ClipRect[] = []
+
+              // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标），目标 = mapRectByRatio 映射到新布局
+              for (const scr of member.clipRects) {
+                startRects.push({
+                  x: scr.x, y: scr.y,
+                  width: Math.max(0, scr.width), height: Math.max(0, scr.height)
+                })
+                const mapped = mapRectByRatio(scr, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                targetRects.push({
+                  x: mapped.x, y: mapped.y,
+                  width: mapped.width, height: mapped.height
+                })
+              }
+
+              // 间隙碎片：零面积起点 + 按比例映射到新布局的间隙目标
+              for (const gap of remaining) {
+                startRects.push({
+                  x: gap.x, y: gap.y,
+                  width: 0, height: Math.max(0, gap.height)
+                })
+                const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                targetRects.push({
+                  x: mappedGap.x, y: mappedGap.y,
+                  width: mappedGap.width, height: mappedGap.height
+                })
+              }
+
+              // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+              const memberClipRects: ClipRect[] = []
+              for (let si = 0; si < startRects.length; si++) {
+                const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
+                const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
+                const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
+                const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
+                memberClipRects.push({
+                  x: frameX,
+                  y: frameY,
+                  width: Math.max(0, frameWidth),
+                  height: Math.max(0, frameHeight),
+                })
+              }
+              memberClipRectsList.push(memberClipRects)
+            }
+
+            // 包围盒 = 所有成员 clipRects 的并集
+            let islandBboxLeft = Infinity
+            let islandBboxRight = -Infinity
+            let islandBboxTop = Infinity
+            let islandBboxBottom = -Infinity
+            for (const memberClipRects of memberClipRectsList) {
+              for (const cr of memberClipRects) {
+                islandBboxLeft = Math.min(islandBboxLeft, cr.x)
+                islandBboxRight = Math.max(islandBboxRight, cr.x + cr.width)
+                islandBboxTop = Math.min(islandBboxTop, cr.y)
+                islandBboxBottom = Math.max(islandBboxBottom, cr.y + cr.height)
+              }
+            }
+            if (islandBboxLeft === Infinity) {
+              islandBboxLeft = islandCurrentX
+              islandBboxRight = islandCurrentX
+              islandBboxTop = islandCurrentY
+              islandBboxBottom = islandCurrentY
+            }
+
+            // 为该岛独立分配 windowInstanceId（所有成员共用，WindowInstanceIdAllocator 通过 lease 机制安全管理多引用）
+            const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
+
+            // 逐成员输出独立的 MotionGlyphWindow
+            for (let mi = 0; mi < interval.sourceMembers.length; mi++) {
+              const member = interval.sourceMembers[mi]
+              const memberClipRects = memberClipRectsList[mi]
+              const memberRenderNodeKey = `${member.renderNodeKey}-${islandWindowInstanceId}`
+              const isOldSource = member.sourceKind === 'old'
+
+              // 旧源用旧布局几何，新源用新布局几何
+              const memberGlyphX = isOldSource ? islandOldLeft : newSourceGlyphX
+              const memberGlyphY = isOldSource ? islandOldTop : newSourceGlyphY
+              const memberGlyphWidth = isOldSource ? islandOldWidth : newSourceGlyphWidth
+              const memberGlyphHeight = isOldSource ? islandOldHeight : newSourceGlyphHeight
+              const memberOffsetX = isOldSource ? islandOffsetX : (islandCurrentX - newSourceGlyphX)
+              const memberOffsetY = isOldSource ? islandOffsetY : (islandCurrentY - newSourceGlyphY)
+              const memberUtf16Start = isOldSource ? iStart : newSourceUtf16Start
+              const memberUtf16End = isOldSource ? iEnd : newSourceUtf16End
+
+              // opacity：成员自带 opacity 优先；否则按 needsSourceCrossfade 计算；否则完全不透明
+              let memberOpacity: number | undefined
+              if (member.opacity !== undefined) {
+                memberOpacity = member.opacity
+              } else if (needsSourceCrossfade) {
+                memberOpacity = isOldSource ? 1 - p : p
+              } else {
+                memberOpacity = undefined
+              }
+
+              motionGlyphWindows.push({
+                sourceKind: member.sourceKind,
+                utf16Start: memberUtf16Start,
+                utf16End: memberUtf16End,
+                clipLeft: islandBboxLeft,
+                clipRight: islandBboxRight,
+                clipTop: islandBboxTop,
+                clipBottom: islandBboxBottom,
+                clipRects: memberClipRects,
+                glyphX: memberGlyphX,
+                glyphY: memberGlyphY,
+                glyphWidth: memberGlyphWidth,
+                glyphHeight: memberGlyphHeight,
+                offsetX: memberOffsetX,
+                offsetY: memberOffsetY,
+                runId: member.runId,
+                sourceRevision: member.sourceRevision,
+                glyphIds: interval.glyphIds,
+                windowId: move.windowId,
+                windowInstanceId: islandWindowInstanceId,
+                renderNodeKey: memberRenderNodeKey,
+                currentClipLeft: islandBboxLeft,
+                currentClipRight: islandBboxRight,
+                currentPositionX: islandCurrentX,
+                currentPositionY: islandCurrentY,
+                motionOwnerKind: 'reflow',
+                opacity: memberOpacity
+              })
+            }
+            // sourceMembers 分支已处理 bbox 和窗口输出，跳过旧逻辑
+            continue
+          }
           // Issue #879 复核评论6102724233 问题2+3：优先使用 startScreenClipRects（屏幕坐标的
           // 真实裁切交集矩形），它包含真实的纵向裁切信息（y 和 height 反映裁切后的可见部分）。
           // 旧实现用 clipRects + frozenDrawOffset 现场重算起始 x/y，但 clipRects 的 y/height
@@ -2718,9 +2914,92 @@ export class EditorMotionCoordinator {
     if (!latestDisplayedFrame.isAnimating) {
       return runs
     }
+    // Issue #879 评论6108900966 问题4：按 windowId 分组计算完成状态。
+    // 同一 glyph 的所有成员（sourceMembers 产生的多窗口）必须全部到达目标才认为该 glyph 运动完成。
+    // 不能其中一个先结束、另一个还没交棒却让静态层重复绘制。
+    const windowIdDoneMap = new Map<string, boolean>()
+    for (const w of latestDisplayedFrame.motionGlyphWindows) {
+      if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
+        continue
+      }
+      // 按 glyphId 分区：coveredIds（由新 plan 接手）和 uncoveredIds（需要 carry-over）
+      const uncoveredIds: string[] = []
+      for (const gid of w.glyphIds) {
+        if (!planGlyphIds.has(gid)) {
+          uncoveredIds.push(gid)
+        }
+      }
+      // 全部被新 plan 接管——该窗口不需要延续，视为完成
+      if (uncoveredIds.length === 0) {
+        const prev = windowIdDoneMap.get(w.windowId)
+        windowIdDoneMap.set(w.windowId, prev === undefined ? true : prev)
+        continue
+      }
+      // 计算 pieces 并检查是否所有 piece 都已完成
+      const pieces = this.splitFrozenWindowByGlyphOwnership(
+        w, uncoveredIds, newIdentityTable, newLayout
+      )
+      let allPiecesDone = true
+      for (const piece of pieces) {
+        if (!piece.targetResolved) {
+          allPiecesDone = false
+          break
+        }
+        if (w.motionOwnerKind === 'insert') {
+          const fullRect: RectLike = piece.sourceRect !== null
+            ? {
+              x: piece.sourceRect.x + piece.offsetX,
+              y: piece.sourceRect.y + piece.offsetY,
+              width: piece.sourceRect.width,
+              height: piece.sourceRect.height
+            }
+            : {
+              x: piece.glyphX + piece.offsetX,
+              y: piece.glyphY + piece.offsetY,
+              width: piece.glyphWidth,
+              height: piece.glyphHeight
+            }
+          if (!isFullyCovered(fullRect, piece.clipRects)) {
+            allPiecesDone = false
+            break
+          }
+        } else {
+          // reflow：检查 positionDone && opacityDone && clipDone
+          if (piece.targetRect !== null) {
+            const targetX = piece.targetRect.x
+            const targetY = piece.targetRect.y
+            const positionDone = Math.abs(piece.currentPositionX - targetX) < 0.01 &&
+                Math.abs(piece.currentPositionY - targetY) < 0.01
+            const opacityDone = w.opacity === undefined ||
+                (w.sourceKind === 'old' ? w.opacity < 0.01 : w.opacity > 0.99)
+            const targetFullRect: RectLike = {
+              x: piece.targetRect.x,
+              y: piece.targetRect.y,
+              width: piece.targetRect.width,
+              height: piece.targetRect.height
+            }
+            const clipDone = isFullyCovered(targetFullRect, piece.clipRects)
+            if (!(positionDone && opacityDone && clipDone)) {
+              allPiecesDone = false
+              break
+            }
+          } else {
+            allPiecesDone = false
+            break
+          }
+        }
+      }
+      // 按 windowId 聚合：只有所有成员都完成时才认为该 windowId 完成
+      const prev = windowIdDoneMap.get(w.windowId)
+      windowIdDoneMap.set(w.windowId, prev === undefined ? allPiecesDone : (prev && allPiecesDone))
+    }
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
       // 只处理 insert 和 reflow——deleted/carryGhost 由 identifyCarryOverGhosts 处理
       if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
+        continue
+      }
+      // Issue #879 评论6108900966 问题4：同一 windowId 的所有成员都完成时才跳过
+      if (windowIdDoneMap.get(w.windowId) === true) {
         continue
       }
       // 按 glyphId 分区：coveredIds（由新 plan 接手）和 uncoveredIds（需要 carry-over）
@@ -2778,7 +3057,12 @@ export class EditorMotionCoordinator {
               height: piece.glyphHeight
             }
           if (isFullyCovered(fullRect, piece.clipRects)) {
-            continue  // insert 已完全可见，不需要延续
+            // Issue #879 评论6108900966 问题4：即使该 piece 已完成，
+            // 也需要检查同一 windowId 的所有成员是否都完成。
+            // 如果其他成员还未到达目标，不能提前结束该成员的运动。
+            if (windowIdDoneMap.get(w.windowId) === true) {
+              continue  // insert 已完全可见且所有成员都完成，不需要延续
+            }
           }
         } else {
           // reflow：判断当前位置是否已接近目标位置
@@ -2799,7 +3083,12 @@ export class EditorMotionCoordinator {
             }
             const clipDone = isFullyCovered(targetFullRect, piece.clipRects)
             if (positionDone && opacityDone && clipDone) {
-              continue  // reflow 已到达目标位置、透明度已完成、clip 已完整覆盖
+              // Issue #879 评论6108900966 问题4：即使该 piece 已完成，
+              // 也需要检查同一 windowId 的所有成员是否都完成。
+              // 如果其他成员还未到达目标，不能提前结束该成员的运动。
+              if (windowIdDoneMap.get(w.windowId) === true) {
+                continue  // reflow 已到达目标位置、透明度已完成、clip 已完整覆盖且所有成员都完成
+              }
             }
           }
         }

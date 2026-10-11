@@ -486,6 +486,7 @@ export class EditorMotionPlanner {
         for (const piece of pieces) {
           if (piece.intervals !== undefined && piece.intervals.length > 0) {
             for (const interval of piece.intervals) {
+              let intervalNeedsCrossfade = false
               // 逐 glyph 比较：一个 interval 可能包含多个 glyph，
               // 整段比较会掩盖单个 glyph 的宽高变化。
               for (let gi = interval.firstIndex; gi <= interval.lastIndex; gi++) {
@@ -514,10 +515,13 @@ export class EditorMotionPlanner {
                   (Math.abs(oldGlyphRect.width - newGlyphRect.width) > 0.5 ||
                    Math.abs(oldGlyphRect.height - newGlyphRect.height) > 0.5)
                 if (glyphNeedsCrossfade) {
-                  anyIntervalNeedsCrossfade = true
-                  interval.needsCrossfade = true
+                  intervalNeedsCrossfade = true
                   break // 该 interval 已确定需要 crossfade，无需继续检查其他 glyph
                 }
+              }
+              interval.needsCrossfade = intervalNeedsCrossfade
+              if (intervalNeedsCrossfade) {
+                anyIntervalNeedsCrossfade = true
               }
             }
           }

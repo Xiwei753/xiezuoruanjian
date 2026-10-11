@@ -145,6 +145,42 @@ export interface RectLike {
   height: number
 }
 
+/**
+ * Issue #879 评论6108900966 问题1：冻结帧中一个源字形成员的完整绑定信息。
+ *
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖。
+ * 旧实现只保存第一张的 frozenDrawOffsetX 并合并所有成员的 startScreenClipRects，
+ * 导致 buildFrame 执行笛卡尔式混合——old/new 两份源矩形各自与 old+new 全部剪裁矩形做交叉。
+ *
+ * FrozenGlyphMember 为每个成员保留各自的 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
+ * 让 buildFrame 逐成员独立插值，不做笛卡尔混合。
+ */
+export interface FrozenGlyphMember {
+  /** 该成员的源类型——'old' 或 'new' */
+  sourceKind: 'old' | 'new'
+  /** 该成员的源修订号 */
+  sourceRevision: number
+  /** 该成员的源 runId（暂时用 `sourceKind-revision` 格式，buildFrame 会重新分配 windowInstanceId） */
+  runId: string
+  /** 该成员的渲染节点身份标识（暂时用 `sourceKind-revision` 格式） */
+  renderNodeKey: string
+  /** 该成员在源布局坐标系中的完整矩形 */
+  sourceGlyphRect: RectLike
+  /** 该成员相对自身布局的横向平移量（vp） */
+  offsetX: number
+  /** 该成员相对自身布局的纵向平移量（vp） */
+  offsetY: number
+  /** 该成员自己的裁切矩形（屏幕坐标）——只包含该成员对应的 interval 的 rects */
+  clipRects: RectLike[]
+  /**
+   * 该成员的真实透明度（0-1）。
+   * opacity=0 的成员仍保留在 sourceMembers 中（为了提前挂载稳定的 Text），
+   * 但 buildFrame 知道该成员的像素贡献为零。
+   * undefined 表示完全不透明（非交叉淡入淡出窗口）。
+   */
+  opacity: number | undefined
+}
+
 /** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
 export interface VisibleRunPiece {
   /** run 簇序里第一个可见簇的下标 */
@@ -340,7 +376,16 @@ export interface RunStartInterval {
    * 的宽高差异，差异超过阈值时设置此标志。buildFrame 和 plannedWindowKeys 优先读取
    * interval.needsCrossfade，缺省时回落到 move.needsCrossfade（legacy 语义）。
    */
-  needsCrossfade?: boolean
+   needsCrossfade?: boolean
+  /**
+   * Issue #879 评论6108900966 问题1：该 interval 的所有源字形成员绑定列表。
+   *
+   * 替代 frozenSourceGlyphRects、frozenDrawOffsetX/Y、startScreenClipRects 三个分离字段——
+   * 每个成员各自保留 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
+   * buildFrame 逐成员独立插值，不做笛卡尔混合。
+   * 缺省时 buildFrame 回落到旧字段（frozenSourceGlyphRects/frozenDrawOffsetX/Y/startScreenClipRects）。
+   */
+  sourceMembers?: FrozenGlyphMember[]
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -1482,6 +1527,15 @@ export function retargetRunStarts(
           'retained', displayed, frozenByGlyphId
         )
         if (reInterval !== null) {
+          // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
+          // needsCrossfade 在 plan 阶段由 planFromPatches 逐 interval 计算，
+          // retarget 时不应重新计算——直接继承 prevInterval 的值。
+          reInterval.needsCrossfade = prevInterval.needsCrossfade
+          // sourceMembers 深拷贝——retarget 时 intervalForIsland 会重新构建 sourceMembers，
+          // 但如果 reInterval 没有 sourceMembers（非 retained 通道），则继承 prevInterval 的。
+          if (reInterval.sourceMembers === undefined && prevInterval.sourceMembers !== undefined) {
+            reInterval.sourceMembers = deepCloneSourceMembers(prevInterval.sourceMembers)
+          }
           intervals.push(reInterval)
         } else {
           // 该 interval 的字形在 retarget 时不可见——保留分区，clip 设为零宽度
@@ -1513,6 +1567,11 @@ export function retargetRunStarts(
             startScreenClipRects: [],
             // Issue #879 复核评论6104161755 问题3：保留 prevInterval 的 frozenSourceGlyphRects。
             frozenSourceGlyphRects: prevInterval.frozenSourceGlyphRects,
+            // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
+            needsCrossfade: prevInterval.needsCrossfade,
+            sourceMembers: prevInterval.sourceMembers !== undefined
+              ? deepCloneSourceMembers(prevInterval.sourceMembers)
+              : undefined,
           })
         }
       }
@@ -1706,6 +1765,74 @@ function allVisibleIslands(
 }
 
 /**
+ * Issue #879 评论6108900966 问题1：为每个冻结窗口成员构建 FrozenGlyphMember。
+ *
+ * 遍历 FrozenWindowSpan[]（与 clusterVisible / sourceGlyphGeometryAll 相同的遍历顺序），
+ * 为每个能提供字形几何的成员构建一个 FrozenGlyphMember，保留各自的
+ * sourceGlyphRect/offsetX/offsetY/clipRects/opacity。
+ *
+ * clipRects 匹配：clusterVisible 和本函数都以相同顺序遍历相同的 spans，
+ * 但 clusterVisible 可能跳过 rects.length === 0 的成员（clip 与字形无交集）。
+ * 因此用顺序匹配——按 sourceKind + offset 对齐 OnScreenInterval，
+ * 匹配上的取其 rects 作为该成员的 clipRects，匹配不上的成员 clipRects 为空数组。
+ *
+ * Issue #879 评论6108900966 问题3：opacity=0 的成员仍保留在 sourceMembers 中
+ *（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
+ */
+function buildSourceMembers(
+  spans: FrozenWindowSpan[],
+  firstVisible: OnScreenInterval[],
+  glyphId: string
+): FrozenGlyphMember[] {
+  const members: FrozenGlyphMember[] = []
+  let visibleIdx = 0
+  for (const span of spans) {
+    if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
+      continue
+    }
+    const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+    if (utf16Range === undefined) {
+      continue
+    }
+    const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+    if (rect === null) {
+      continue
+    }
+    // 该 span 有有效几何——构建 FrozenGlyphMember
+    // 尝试匹配 clusterVisible 返回的 OnScreenInterval（顺序匹配）
+    let clipRects: RectLike[] = []
+    if (visibleIdx < firstVisible.length) {
+      const interval = firstVisible[visibleIdx]
+      // 顺序匹配：sourceKind 和 offset 一致时认为是同一成员
+      if (interval.sourceKind === span.sourceKind &&
+          interval.offsetX === span.offsetX &&
+          interval.offsetY === span.offsetY) {
+        clipRects = interval.rects.map((r: RectLike): RectLike => ({
+          x: r.x, y: r.y, width: r.width, height: r.height,
+        }))
+        visibleIdx++
+      }
+    }
+    const runId = `${span.sourceKind}-${span.sourceRevision}`
+    members.push({
+      sourceKind: span.sourceKind,
+      sourceRevision: span.sourceRevision,
+      runId: runId,
+      renderNodeKey: runId,
+      sourceGlyphRect: {
+        x: rect.x, y: rect.y,
+        width: rect.width, height: rect.height,
+      },
+      offsetX: span.offsetX,
+      offsetY: span.offsetY,
+      clipRects: clipRects,
+      opacity: span.opacity,
+    })
+  }
+  return members
+}
+
+/**
  * Issue #879 本轮复核评论（高优先级）：为一段连续可见岛计算其起始裁切区间。
  *
  * 复用 buildPiece 计算该岛在 run 自己布局里的精确可见边界 ownLeft/ownRight，
@@ -1742,6 +1869,8 @@ function intervalForIsland(
   let startScreenClipRects: RectLike[] | undefined
   // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
   let frozenSourceGlyphRects: RectLike[] | undefined
+  // Issue #879 评论6108900966 问题1：sourceMembers 替代分离的旧字段。
+  let sourceMembers: FrozenGlyphMember[] | undefined
   if (kind === 'retained') {
     // Issue #879 复核评论6102724233 问题1：frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y
     // 读取，不再从裁切边界反推。onScreenTop/onScreenLeft 是裁切后的可见边界，不是源 Text
@@ -1784,6 +1913,15 @@ function intervalForIsland(
         height: g.height,
       }))
     }
+
+    // Issue #879 评论6108900966 问题1：构建 sourceMembers——为每个成员保留各自的
+    // sourceGlyphRect/offsetX/offsetY/clipRects/opacity，替代分离的旧字段。
+    // buildFrame 逐成员独立插值，不做笛卡尔混合。
+    // Issue #879 评论6108900966 问题3：opacity=0 的成员仍保留在 sourceMembers 中
+    //（为了提前挂载稳定的 Text），但 opacity 字段标记为 0 让 buildFrame 知道像素贡献为零。
+    if (firstSpans !== undefined && firstSpans.length > 0) {
+      sourceMembers = buildSourceMembers(firstSpans, firstVisible, run.glyphIds[firstIndex])
+    }
   }
   return {
     firstIndex: firstIndex,
@@ -1809,11 +1947,35 @@ function intervalForIsland(
     startScreenClipRects: startScreenClipRects,
     // Issue #879 复核评论6104161755 问题3：冻结源字形在源布局坐标系中的完整矩形。
     frozenSourceGlyphRects: frozenSourceGlyphRects,
+    // Issue #879 评论6108900966 问题1：该 interval 的所有源字形成员绑定列表。
+    sourceMembers: sourceMembers,
   }
 }
 
 /** piece 起始状态的通道类别。 */
 export type RunStartKind = 'insert' | 'deleted' | 'retained'
+
+/**
+ * Issue #879 评论6108900966 问题1：深拷贝 FrozenGlyphMember[]，避免共享引用。
+ */
+function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember[] {
+  return members.map((m: FrozenGlyphMember): FrozenGlyphMember => ({
+    sourceKind: m.sourceKind,
+    sourceRevision: m.sourceRevision,
+    runId: m.runId,
+    renderNodeKey: m.renderNodeKey,
+    sourceGlyphRect: {
+      x: m.sourceGlyphRect.x, y: m.sourceGlyphRect.y,
+      width: m.sourceGlyphRect.width, height: m.sourceGlyphRect.height,
+    },
+    offsetX: m.offsetX,
+    offsetY: m.offsetY,
+    clipRects: m.clipRects.map((cr: RectLike): RectLike => ({
+      x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+    })),
+    opacity: m.opacity,
+  }))
+}
 
 /** 复制 pieces（分区不变时的兜底返回）。 */
 function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
@@ -1863,6 +2025,11 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
           : iv.frozenSourceGlyphRects.map((sr: RectLike): RectLike => ({
             x: sr.x, y: sr.y, width: sr.width, height: sr.height,
           })),
+        // Issue #879 评论6108900966 问题1+2：深拷贝 needsCrossfade 和 sourceMembers。
+        needsCrossfade: iv.needsCrossfade,
+        sourceMembers: iv.sourceMembers === undefined
+          ? undefined
+          : deepCloneSourceMembers(iv.sourceMembers),
       })),
   }))
 }
@@ -2041,6 +2208,9 @@ export function clusterVisible(
           })
         }
       }
+      // Issue #879 评论6108900966 问题3：opacity=0 的成员仍要保留在 OnScreenInterval[] 中
+      //（为了提前挂载稳定的 Text），只要其 clip 与源字形相交（rects.length > 0）就 push。
+      // opacity 字段标记为 span.opacity（可能为 0），让下游知道该成员的像素贡献为零。
       if (rects.length > 0) {
         intervals.push({
           rects, sourceKind: span.sourceKind, opacity: span.opacity,
@@ -2092,6 +2262,7 @@ export function clusterVisible(
               })
             }
           }
+          // Issue #879 评论6108900966 问题3：opacity=0 的成员仍要保留（同上）
           if (rects.length > 0) {
             intervals.push({
               rects, sourceKind: span.sourceKind, opacity: span.opacity,
