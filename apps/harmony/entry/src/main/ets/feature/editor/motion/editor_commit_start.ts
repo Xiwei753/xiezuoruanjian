@@ -697,6 +697,10 @@ export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext
 function onScreenLeftOf(intervals: OnScreenInterval[]): number {
   let min = Infinity
   for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
     for (const r of interval.rects) {
       if (r.x < min) { min = r.x }
     }
@@ -711,6 +715,10 @@ function onScreenLeftOf(intervals: OnScreenInterval[]): number {
 function onScreenRightOf(intervals: OnScreenInterval[]): number {
   let max = -Infinity
   for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
     for (const r of interval.rects) {
       if (r.x + r.width > max) { max = r.x + r.width }
     }
@@ -725,6 +733,10 @@ function onScreenRightOf(intervals: OnScreenInterval[]): number {
 function onScreenTopOf(intervals: OnScreenInterval[]): number {
   let min = Infinity
   for (const interval of intervals) {
+    // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，不计入屏幕边界
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
     for (const r of interval.rects) {
       if (r.y < min) { min = r.y }
     }
@@ -798,6 +810,10 @@ function buildPiece(
     let minVisLeft = Infinity
     let maxVisRight = -Infinity
     for (const interval of firstVisible) {
+      // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，跳过投影
+      if (interval.opacity !== undefined && interval.opacity <= 0) {
+        continue
+      }
       // 用 interval 的成员信息，回退到 firstSpan/ownFullLeft（兼容旧代码路径）
       const intervalOffsetX = interval.offsetX ?? firstSpan.offsetX
       const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? ownFullLeft
@@ -892,6 +908,10 @@ function buildPiece(
       let minVisLeft = Infinity
       let maxVisRight = -Infinity
       for (const interval of lastVisible) {
+        // Issue #879 评论6107257451 问题3：opacity=0 的成员没有像素贡献，跳过投影
+        if (interval.opacity !== undefined && interval.opacity <= 0) {
+          continue
+        }
         const intervalOffsetX = interval.offsetX ?? lastSpan.offsetX
         const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? lastGlyphTargetLeft
         const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? lastGlyphTargetRight
@@ -1749,7 +1769,8 @@ function allVisibleIslands(
   let currentFirst = -1
   for (let i = firstIndex; i <= lastIndex; i++) {
     const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
-    if (visible.length > 0) {
+    const hasVisiblePixels = visible.some(iv => iv.opacity === undefined || iv.opacity > 0)
+    if (hasVisiblePixels) {
       if (currentFirst < 0) {
         currentFirst = i
       }

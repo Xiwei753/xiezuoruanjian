@@ -3992,4 +3992,331 @@ test('问题4-6108900966：opacity=0 的成员仍保留在 sourceMembers 中—�
   assert.equal(newMember.clipRects[0].x, 75)
 })
 
+// ====== Issue #879 评论6107257451 问题4：真实双源场景 ======
+
+test('问题4-6107257451：真实双源场景——不同宽度/sourceLayout/offset/alpha=0.6/0.4', () => {
+  // 构造同一 glyphId 的 old/new 两张冻结窗口：
+  // old 源：sourceLayout 中字形 x=10, width=20（屏幕 x=13, width=20，offset=3），opacity=0.6
+  // new 源：sourceLayout 中字形 x=50, width=30（屏幕 x=40, width=30，offset=-10），opacity=0.4
+  const ctx = context('甲乙', 1100, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]  // 乙的 glyphId
+
+  // old 源布局：乙在 x=10, width=20
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 30 }],
+  }]
+  // new 源布局：乙在 x=50, width=30
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 13, clipRight: 33,
+      clipRects: [{ x: 13, y: 0, width: 20, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 40, clipRight: 70,
+      clipRects: [{ x: 40, y: 0, width: 30, height: 20 }],
+      offsetX: -10, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. 验证 clusterVisible 返回 2 个 OnScreenInterval，各自携带正确的 sourceKind/opacity/offset/sourceGlyphX0/X1
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 2, 'clusterVisible 应返回 2 个 OnScreenInterval')
+  // old interval
+  assert.equal(intervals[0].sourceKind, 'old')
+  assert.equal(intervals[0].opacity, 0.6)
+  assert.equal(intervals[0].offsetX, 3)
+  assert.equal(intervals[0].sourceGlyphX0, 10)
+  assert.equal(intervals[0].sourceGlyphX1, 30)
+  assert.equal(intervals[0].rects.length, 1)
+  assert.equal(intervals[0].rects[0].x, 13)
+  assert.equal(intervals[0].rects[0].width, 20)
+  // new interval
+  assert.equal(intervals[1].sourceKind, 'new')
+  assert.equal(intervals[1].opacity, 0.4)
+  assert.equal(intervals[1].offsetX, -10)
+  assert.equal(intervals[1].sourceGlyphX0, 50)
+  assert.equal(intervals[1].sourceGlyphX1, 80)
+  assert.equal(intervals[1].rects.length, 1)
+  assert.equal(intervals[1].rects[0].x, 40)
+  assert.equal(intervals[1].rects[0].width, 30)
+
+  // 2. 验证 retainedMoveStartState 的 sourceMembers 包含 2 个成员，各自有独立的 sourceGlyphRect/offset/clipRects/opacity
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2, '应有 2 个成员（old + new）')
+  // old 成员：独立的 sourceGlyphRect/offset/clipRects/opacity
+  const oldMember = iv.sourceMembers[0]
+  assert.equal(oldMember.sourceKind, 'old')
+  assert.equal(oldMember.offsetX, 3)
+  assert.equal(oldMember.offsetY, 0)
+  assert.equal(oldMember.opacity, 0.6)
+  assert.equal(oldMember.sourceGlyphRect.x, 10)
+  assert.equal(oldMember.sourceGlyphRect.width, 20)
+  assert.equal(oldMember.clipRects.length, 1)
+  assert.equal(oldMember.clipRects[0].x, 13)
+  assert.equal(oldMember.clipRects[0].width, 20)
+  // new 成员：独立的 sourceGlyphRect/offset/clipRects/opacity（与 old 不同）
+  const newMember = iv.sourceMembers[1]
+  assert.equal(newMember.sourceKind, 'new')
+  assert.equal(newMember.offsetX, -10)
+  assert.equal(newMember.offsetY, 0)
+  assert.equal(newMember.opacity, 0.4)
+  assert.equal(newMember.sourceGlyphRect.x, 50)
+  assert.equal(newMember.sourceGlyphRect.width, 30)
+  assert.equal(newMember.clipRects.length, 1)
+  assert.equal(newMember.clipRects[0].x, 40)
+  assert.equal(newMember.clipRects[0].width, 30)
+  // 确保两个成员的几何确实不同
+  assert.notEqual(oldMember.sourceGlyphRect.x, newMember.sourceGlyphRect.x,
+    'old/new 成员的 sourceGlyphRect.x 应不同（10 vs 50）')
+  assert.notEqual(oldMember.sourceGlyphRect.width, newMember.sourceGlyphRect.width,
+    'old/new 成员的 sourceGlyphRect.width 应不同（20 vs 30）')
+  assert.notEqual(oldMember.offsetX, newMember.offsetX,
+    'old/new 成员的 offsetX 应不同（3 vs -10）')
+  assert.notEqual(oldMember.opacity, newMember.opacity,
+    'old/new 成员的 opacity 应不同（0.6 vs 0.4）')
+
+  // 3. 验证 retargetRunStarts 深拷贝 sourceMembers 且 needsCrossfade 传递正确
+  iv.needsCrossfade = true
+  const retargeted = retargetRunStarts(run, start, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const reIv = retargeted[0].intervals[0]
+  assert.ok(reIv.sourceMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(reIv.sourceMembers.length, 2, 'retarget 后应有 2 个成员')
+  assert.equal(reIv.needsCrossfade, true, 'needsCrossfade 应从 prevInterval 继承')
+  // 深拷贝验证：修改原成员不影响 retargeted 的成员
+  iv.sourceMembers[0].offsetX = 999
+  assert.notEqual(reIv.sourceMembers[0].offsetX, 999,
+    '深拷贝：修改原成员 offsetX 不应影响 retargeted 的成员')
+  // 深拷贝验证：clipRects 也是独立的
+  iv.sourceMembers[0].clipRects[0].x = 999
+  assert.notEqual(reIv.sourceMembers[0].clipRects[0].x, 999,
+    '深拷贝：修改原 clipRects 不应影响 retargeted 的 clipRects')
+  // 深拷贝验证：sourceGlyphRect 也是独立的
+  iv.sourceMembers[0].sourceGlyphRect.x = 999
+  assert.notEqual(reIv.sourceMembers[0].sourceGlyphRect.x, 999,
+    '深拷贝：修改原 sourceGlyphRect 不应影响 retargeted 的 sourceGlyphRect')
+  // retarget 后各成员的几何仍正确
+  assert.equal(reIv.sourceMembers[0].sourceKind, 'old')
+  assert.equal(reIv.sourceMembers[0].offsetX, 3)
+  assert.equal(reIv.sourceMembers[0].opacity, 0.6)
+  assert.equal(reIv.sourceMembers[1].sourceKind, 'new')
+  assert.equal(reIv.sourceMembers[1].offsetX, -10)
+  assert.equal(reIv.sourceMembers[1].opacity, 0.4)
+})
+
+test('问题4-6107257451：opacity=0 不被算作可见像素——allVisibleIslands 正确过滤', () => {
+  // allVisibleIslands 是内部函数，通过 retargetRunStarts（insert 通道）间接验证。
+  // allVisibleIslands 判断可见像素时检查 iv.opacity === undefined || iv.opacity > 0，
+  // opacity=0 的成员没有像素贡献，不被视为可见岛。
+
+  // 场景1：glyphId 只有 opacity=0 的冻结窗口覆盖
+  const ctx1 = context('甲', 1110, [])
+  const ids1 = idsOf(ctx1, 0, 1)
+  const opacityZeroLayout = [{
+    startUtf16: 0, endUtf16: 1, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }],
+  }]
+  const frozen1 = [{
+    glyphIds: ids1,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1110,
+    glyphUtf16Ranges: new Map([[ids1[0], [0, 1]]]),
+    sourceLayout: opacityZeroLayout,
+    sourceKind: 'old',
+    runId: 'old-1110',
+    renderNodeKey: 'old-node-1110',
+    opacity: 0,
+  }]
+  const withWindow1 = { ...ctx1, frozenWindows: frozen1 }
+
+  // clusterVisible 仍返回 OnScreenInterval（rects 非空，opacity=0）
+  const frozenByGlyphId1 = frozenIndex(withWindow1)
+  const intervals1 = clusterVisible(withWindow1, frozenByGlyphId1, ids1[0])
+  assert.equal(intervals1.length, 1, 'clusterVisible 应返回 1 个 OnScreenInterval')
+  assert.equal(intervals1[0].opacity, 0, 'opacity 应为 0')
+  assert.ok(intervals1[0].rects.length > 0, 'rects 应非空（有裁切交集）')
+
+  // allVisibleIslands 不将该字形视为可见 → retargetRunStarts insert 通道给零宽度 interval
+  const run1 = runGeometry(withWindow1, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const prepared1 = insertRunStartState(run1, withWindow1)
+  const retargeted1 = retargetRunStarts(run1, prepared1, withWindow1, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
+  // 字形不被 allVisibleIslands 视为可见 → 零宽度 interval（空洞）
+  assert.ok(retargeted1[0].intervals !== undefined)
+  const zeroIv = retargeted1[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(zeroIv !== undefined)
+  assert.equal(zeroIv.startClipLeft, zeroIv.startClipRight,
+    'opacity=0 的字形应获得零宽度 interval（allVisibleIslands 不视为可见）')
+
+  // 场景2：glyphId 有 opacity=0.6 的冻结窗口覆盖
+  const ctx2 = context('甲', 1111, [])
+  const ids2 = idsOf(ctx2, 0, 1)
+  const opacityHalfLayout = [{
+    startUtf16: 0, endUtf16: 1, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }],
+  }]
+  const frozen2 = [{
+    glyphIds: ids2,
+    clipLeft: 0, clipRight: 10,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1111,
+    glyphUtf16Ranges: new Map([[ids2[0], [0, 1]]]),
+    sourceLayout: opacityHalfLayout,
+    sourceKind: 'old',
+    runId: 'old-1111',
+    renderNodeKey: 'old-node-1111',
+    opacity: 0.6,
+  }]
+  const withWindow2 = { ...ctx2, frozenWindows: frozen2 }
+
+  // clusterVisible 返回 OnScreenInterval（rects 非空，opacity=0.6）
+  const frozenByGlyphId2 = frozenIndex(withWindow2)
+  const intervals2 = clusterVisible(withWindow2, frozenByGlyphId2, ids2[0])
+  assert.equal(intervals2.length, 1, 'clusterVisible 应返回 1 个 OnScreenInterval')
+  assert.equal(intervals2[0].opacity, 0.6, 'opacity 应为 0.6')
+  assert.ok(intervals2[0].rects.length > 0, 'rects 应非空')
+
+  // allVisibleIslands 将该字形视为可见 → retargetRunStarts insert 通道给非零宽度 interval
+  const run2 = runGeometry(withWindow2, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const prepared2 = insertRunStartState(run2, withWindow2)
+  const retargeted2 = retargetRunStarts(run2, prepared2, withWindow2, 'insert', 0,
+    { startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0 })
+  assert.ok(retargeted2[0].intervals !== undefined)
+  const visibleIv = retargeted2[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(visibleIv !== undefined)
+  assert.ok(visibleIv.startClipRight - visibleIv.startClipLeft > 0,
+    'opacity=0.6 的字形应获得非零宽度 interval（allVisibleIslands 视为可见）')
+})
+
+test('问题3-6107257451：opacity=0 的成员在 buildPiece 中不被投影', () => {
+  // 构造一个 glyphId 同时有 opacity=0 和 opacity=1 的冻结窗口：
+  // buildPiece 在投影时跳过 opacity<=0 的成员（onScreenLeftOf/onScreenRightOf 和 clipRects 收集均跳过），
+  // 但 sourceMembers 仍包含 opacity=0 的成员（用于提前挂载稳定的 Text）。
+  const ctx = context('甲乙', 1120, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]  // 乙的 glyphId
+
+  // old 源：opacity=0（刚挂载但不可见），sourceLayout 中乙在 x=50, width=10
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  // new 源：opacity=1（完全可见），sourceLayout 中乙在 x=70, width=10
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 50, clipRight: 60,
+      clipRects: [{ x: 50, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 70, clipRight: 80,
+      clipRects: [{ x: 70, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 11, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. clusterVisible 返回 2 个 OnScreenInterval（opacity=0 和 opacity=1 各一个）
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 2, 'clusterVisible 应返回 2 个 OnScreenInterval')
+  assert.equal(intervals[0].sourceKind, 'old')
+  assert.equal(intervals[0].opacity, 0, 'old 源 opacity=0')
+  assert.equal(intervals[1].sourceKind, 'new')
+  assert.equal(intervals[1].opacity, 1, 'new 源 opacity=1')
+
+  // 2. retainedMoveStartState：buildPiece 只投影 opacity=1 的成员的 clipRects
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+
+  // sourceMembers 仍包含 opacity=0 的成员（用于挂载）
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2, 'sourceMembers 应包含 2 个成员（包括 opacity=0）')
+  assert.equal(iv.sourceMembers[0].sourceKind, 'old')
+  assert.equal(iv.sourceMembers[0].opacity, 0, 'old 成员 opacity=0——仍保留在 sourceMembers 中')
+  assert.equal(iv.sourceMembers[1].sourceKind, 'new')
+  assert.equal(iv.sourceMembers[1].opacity, 1, 'new 成员 opacity=1')
+
+  // buildPiece 投影时跳过 opacity=0 的成员——clipRects 只包含 opacity=1 成员的投影
+  // interval 的 clipRects 来自 buildPiece 的 visible.clipRects，后者跳过 opacity<=0 的成员
+  assert.ok(iv.clipRects !== undefined, 'interval 应有 clipRects')
+  // clipRects 只反映 opacity=1 成员的投影（new 源在 x=70..80，offset=0 → 屏幕 x=70..80）
+  // 投影到 run.ownLayout（乙在 x=10..20）：ratio = (70-70)/(80-70) = 0 → ownLeft = 10
+  //                                      ratio = (80-70)/(80-70) = 1 → ownRight = 20
+  // 所以 clipRects 应只有 opacity=1 成员的投影矩形
+  const clipWidth = iv.clipRects.reduce((sum, r) => sum + r.width, 0)
+  assert.ok(clipWidth > 0, 'clipRects 总宽度应大于 0（opacity=1 成员有投影）')
+  // clipRects 不包含 opacity=0 成员的投影（old 源在 x=50..60 → 屏幕 x=50..60）
+  // 如果包含了 opacity=0 成员的投影，clipRects 会有额外的矩形或更宽的总宽度
+  for (const cr of iv.clipRects) {
+    // opacity=1 成员的投影矩形应在 run.ownLayout 坐标系中（乙在 [10, 20]）
+    assert.ok(cr.x >= 10 && cr.x + cr.width <= 20,
+      `clipRect 应在 run.ownLayout 坐标系 [10,20] 内，实际 [${cr.x}, ${cr.x + cr.width}]`)
+  }
+
+  // startScreenClipRects 合并所有成员的 rects（包括 opacity=0），因为用于挂载
+  assert.ok(iv.startScreenClipRects !== undefined, 'startScreenClipRects 应填充')
+  assert.equal(iv.startScreenClipRects.length, 2,
+    'startScreenClipRects 应合并所有成员的 rects（包括 opacity=0 的成员）')
+  // old 源（opacity=0）的 rect：x=50
+  assert.equal(iv.startScreenClipRects[0].x, 50,
+    'startScreenClipRects[0] 应来自 old 源（x=50）')
+  // new 源（opacity=1）的 rect：x=70
+  assert.equal(iv.startScreenClipRects[1].x, 70,
+    'startScreenClipRects[1] 应来自 new 源（x=70）')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
