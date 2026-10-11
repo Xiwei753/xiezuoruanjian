@@ -359,6 +359,33 @@ impl ParagraphHeightIndex {
         let bottom = top + self.heights[index];
         Some((top, bottom))
     }
+
+    /// Issue #901 第五轮阻塞5: 枚举 y 范围内的段落索引范围。
+    ///
+    /// 返回 `[start, end)`，使得段落 `start` 是第一个与 `[y_start, y_end]`
+    /// 相交的段落，段落 `end - 1` 是最后一个相交的段落。
+    ///
+    /// 用于视口枚举：`y_start = scroll_y`，`y_end = scroll_y + viewport_h`。
+    /// O(log n) 用 Fenwick 树二分搜索，不遍历全部段落。
+    ///
+    /// # 边界
+    ///
+    /// - 空索引 → 返回 `(0, 0)`
+    /// - `y_start < 0` → 从段落 0 开始
+    /// - `y_end >= total_height` → 到最后一个段落
+    pub fn paragraphs_in_y_range(&self, y_start: f64, y_end: f64) -> (usize, usize) {
+        if self.len == 0 || y_end < 0.0 {
+            return (0, 0);
+        }
+        let start = self.y_to_paragraph(y_start);
+        // y_end 对应的段落 +1（因为 y_to_paragraph 返回包含 y 的段落，
+        // 我们要的是最后一个相交段落的下一个）
+        let end = (self.y_to_paragraph(y_end) + 1).min(self.len);
+        if start >= end {
+            return (start, start);
+        }
+        (start, end)
+    }
 }
 
 /// 计算 `x` 的最低位（lowest set bit），即 `x & (-x)`。
@@ -666,5 +693,52 @@ mod tests {
         // 段落 1（原段落 2）高度保留为 30.0
         assert_eq!(idx.height_at(1), 30.0);
         assert_eq!(idx.total_height(), 55.0);
+    }
+
+    // ── Issue #901 第五轮阻塞5: paragraphs_in_y_range 测试 ──
+
+    #[test]
+    fn paragraphs_in_y_range_basic() {
+        let idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 段落 0: [0, 10), 段落 1: [10, 30), 段落 2: [30, 60)
+        // 视口 [5, 25] 覆盖段落 0 和 1
+        let (start, end) = idx.paragraphs_in_y_range(5.0, 25.0);
+        assert_eq!(start, 0);
+        assert_eq!(end, 2);
+    }
+
+    #[test]
+    fn paragraphs_in_y_range_full() {
+        let idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 视口覆盖全部
+        let (start, end) = idx.paragraphs_in_y_range(0.0, 60.0);
+        assert_eq!(start, 0);
+        assert_eq!(end, 3);
+    }
+
+    #[test]
+    fn paragraphs_in_y_range_single() {
+        let idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 视口只在段落 2 内
+        let (start, end) = idx.paragraphs_in_y_range(35.0, 45.0);
+        assert_eq!(start, 2);
+        assert_eq!(end, 3);
+    }
+
+    #[test]
+    fn paragraphs_in_y_range_empty() {
+        let idx = ParagraphHeightIndex::new();
+        let (start, end) = idx.paragraphs_in_y_range(0.0, 100.0);
+        assert_eq!(start, 0);
+        assert_eq!(end, 0);
+    }
+
+    #[test]
+    fn paragraphs_in_y_range_negative_y() {
+        let idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0]);
+        // 负 y 从段落 0 开始
+        let (start, end) = idx.paragraphs_in_y_range(-10.0, 15.0);
+        assert_eq!(start, 0);
+        assert_eq!(end, 2);
     }
 }

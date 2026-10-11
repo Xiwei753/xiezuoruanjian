@@ -162,6 +162,32 @@ pub struct AffectedParagraphRanges {
     pub full_relayout: bool,
 }
 
+/// Issue #901 第五轮阻塞2: 旧段 splice 范围与新段建立范围。
+///
+/// Enter 拆段（旧 1 段→新 2 段）和 Backspace 合段（旧 2 段→新 1 段）时，
+/// **旧删段数不等于新添段数**，不能用同一 `affected_start..affected_end`
+/// 同时 splice 旧段数组和新段数组。
+///
+/// 此结构分别保存：
+/// - `old_splice_start..old_splice_end`：在旧段数组中要删除的范围。
+/// - `new_layout_start..new_layout_end`：在新段数组中要建立（重排版）的范围。
+///
+/// # 不变量
+///
+/// - `old_splice_start == new_layout_start`：编辑点之前的段落数不变。
+/// - `old_count - old_splice_end == new_count - new_layout_end`：编辑点之后的段落数不变。
+/// - 前 `old_splice_start` 段和后 `old_count - old_splice_end` 段内容完全相同，
+///   可直接复用 prev snapshot 的排版结果。
+#[derive(Clone, Debug)]
+pub struct ParagraphSpliceRanges {
+    /// 旧段数组中要删除的范围 `[start, end)`。
+    pub old_splice_start: usize,
+    pub old_splice_end: usize,
+    /// 新段数组中要建立（重排版）的范围 `[start, end)`。
+    pub new_layout_start: usize,
+    pub new_layout_end: usize,
+}
+
 // ── 段落布局存储 ──
 
 /// 段落布局存储 — 管理所有段落的稳定身份和布局缓存。
@@ -650,6 +676,100 @@ impl ParagraphLayoutStore {
         }
 
         affected
+    }
+
+    /// Issue #901 第五轮阻塞2: 通过段落文本比较计算旧段 splice 范围和新段建立范围。
+    ///
+    /// Enter 拆段（旧 1 段→新 2 段）和 Backspace 合段（旧 2 段→新 1 段）时，
+    /// 旧删段数不等于新添段数。此方法通过逐段比较新旧段落文本，分别找出：
+    /// - 前缀公共段（内容相同，直接复用 prev 排版）
+    /// - 后缀公共段（内容相同，直接复用 prev 排版）
+    /// - 中间差异段（旧段要删除，新段要建立）
+    ///
+    /// # 算法
+    ///
+    /// 1. 从前扫描找前缀公共段数 `prefix`。
+    /// 2. 从后扫描找后缀公共段数 `suffix`（在前缀之后的部分中找）。
+    /// 3. `old_splice = [prefix, old_count - suffix)`
+    ///    `new_layout = [prefix, new_count - suffix)`
+    ///
+    /// # 复杂度
+    ///
+    /// O(n)（n 为段落数），但只在段落数变化或内容变化时调用，
+    /// 段落数远小于行数，可接受。
+    pub fn compute_old_new_paragraph_ranges(
+        old_para_texts: &[&str],
+        new_para_texts: &[&str],
+    ) -> ParagraphSpliceRanges {
+        let old_count = old_para_texts.len();
+        let new_count = new_para_texts.len();
+
+        // 找前缀公共段
+        let mut prefix_common = 0usize;
+        let min_len = old_count.min(new_count);
+        for i in 0..min_len {
+            if old_para_texts[i] == new_para_texts[i] {
+                prefix_common = i + 1;
+            } else {
+                break;
+            }
+        }
+
+        // 找后缀公共段（在前缀之后的部分中找）
+        let mut suffix_common = 0usize;
+        let remaining_old = old_count - prefix_common;
+        let remaining_new = new_count - prefix_common;
+        let max_suffix = remaining_old.min(remaining_new);
+        while suffix_common < max_suffix {
+            let old_idx = old_count - 1 - suffix_common;
+            let new_idx = new_count - 1 - suffix_common;
+            if old_para_texts[old_idx] == new_para_texts[new_idx] {
+                suffix_common += 1;
+            } else {
+                break;
+            }
+        }
+
+        ParagraphSpliceRanges {
+            old_splice_start: prefix_common,
+            old_splice_end: old_count - suffix_common,
+            new_layout_start: prefix_common,
+            new_layout_end: new_count - suffix_common,
+        }
+    }
+
+    /// Issue #901 第五轮阻塞2: 增量更新段落文本 — 只更新新段范围内段落的 cache_key，
+    /// 不用 `rebuild_from_text` 全局重建。保留旧段 Id 和排版结果。
+    ///
+    /// 用于 `prepare_incremental_visual_snapshot_impl` 中段落数不变但内容变化的场景。
+    /// 对 `new_layout_start..new_layout_end` 范围内的段落调用 `update_paragraph_text`，
+    /// 其他段落不变。
+    pub fn update_affected_paragraph_texts(
+        &mut self,
+        new_para_texts: &[&str],
+        new_layout_start: usize,
+        new_layout_end: usize,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) {
+        for i in new_layout_start..new_layout_end.min(new_para_texts.len()) {
+            if i < self.entries.len() {
+                self.update_paragraph_text(
+                    i,
+                    new_para_texts[i],
+                    font_size,
+                    font_family,
+                    line_spacing,
+                    text_indent,
+                    padding,
+                    width,
+                );
+            }
+        }
     }
 
     /// Issue #901: 增量同步 — 只更新受影响段落的排版结果。
@@ -1243,6 +1363,103 @@ mod tests {
         // 段落 0 不受影响
         let entry0 = store.entry(0).unwrap();
         assert_eq!(entry0.layout_generation, 0);
+    }
+
+    // ── Issue #901 第五轮阻塞2: compute_old_new_paragraph_ranges 测试 ──
+
+    #[test]
+    fn compute_old_new_ranges_enter_split() {
+        // Enter 拆段：旧 1 段 "helloworld" → 新 2 段 "hello" + "world"
+        let old: Vec<&str> = vec!["helloworld"];
+        let new: Vec<&str> = vec!["hello", "world"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 旧删 1 段 [0,1)，新建 2 段 [0,2)
+        assert_eq!(ranges.old_splice_start, 0);
+        assert_eq!(ranges.old_splice_end, 1);
+        assert_eq!(ranges.new_layout_start, 0);
+        assert_eq!(ranges.new_layout_end, 2);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_backspace_merge() {
+        // Backspace 合段：旧 2 段 "hello" + "world" → 新 1 段 "helloworld"
+        let old: Vec<&str> = vec!["hello", "world"];
+        let new: Vec<&str> = vec!["helloworld"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 旧删 2 段 [0,2)，新建 1 段 [0,1)
+        assert_eq!(ranges.old_splice_start, 0);
+        assert_eq!(ranges.old_splice_end, 2);
+        assert_eq!(ranges.new_layout_start, 0);
+        assert_eq!(ranges.new_layout_end, 1);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_edit_middle() {
+        // 普通编辑中间段：段落数不变
+        let old: Vec<&str> = vec!["aaa", "bbb", "ccc"];
+        let new: Vec<&str> = vec!["aaa", "BBB", "ccc"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 前缀公共 1 段，后缀公共 1 段
+        // 旧删 [1,2)，新建 [1,2)
+        assert_eq!(ranges.old_splice_start, 1);
+        assert_eq!(ranges.old_splice_end, 2);
+        assert_eq!(ranges.new_layout_start, 1);
+        assert_eq!(ranges.new_layout_end, 2);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_add_trailing() {
+        // 末尾新增段落
+        let old: Vec<&str> = vec!["aaa", "bbb"];
+        let new: Vec<&str> = vec!["aaa", "bbb", "ccc"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 前缀公共 2 段，后缀公共 0 段
+        // 旧删 [2,2)（空），新建 [2,3)
+        assert_eq!(ranges.old_splice_start, 2);
+        assert_eq!(ranges.old_splice_end, 2);
+        assert_eq!(ranges.new_layout_start, 2);
+        assert_eq!(ranges.new_layout_end, 3);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_remove_trailing() {
+        // 末尾删除段落
+        let old: Vec<&str> = vec!["aaa", "bbb", "ccc"];
+        let new: Vec<&str> = vec!["aaa", "bbb"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 前缀公共 2 段，后缀公共 0 段
+        // 旧删 [2,3)，新建 [2,2)（空）
+        assert_eq!(ranges.old_splice_start, 2);
+        assert_eq!(ranges.old_splice_end, 3);
+        assert_eq!(ranges.new_layout_start, 2);
+        assert_eq!(ranges.new_layout_end, 2);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_no_change() {
+        // 无变化
+        let old: Vec<&str> = vec!["aaa", "bbb"];
+        let new: Vec<&str> = vec!["aaa", "bbb"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 全部是前缀公共，旧删和新建都是空范围
+        assert_eq!(ranges.old_splice_start, 2);
+        assert_eq!(ranges.old_splice_end, 2);
+        assert_eq!(ranges.new_layout_start, 2);
+        assert_eq!(ranges.new_layout_end, 2);
+    }
+
+    #[test]
+    fn compute_old_new_ranges_insert_newline_between() {
+        // 在第一、二段之间新插空行
+        let old: Vec<&str> = vec!["aaa", "bbb", "ccc"];
+        let new: Vec<&str> = vec!["aaa", "", "bbb", "ccc"];
+        let ranges = ParagraphLayoutStore::compute_old_new_paragraph_ranges(&old, &new);
+        // 前缀公共 1 段（"aaa"），后缀公共 2 段（"bbb","ccc"）
+        // 旧删 [1,1)（空），新建 [1,2)（空行）
+        assert_eq!(ranges.old_splice_start, 1);
+        assert_eq!(ranges.old_splice_end, 1);
+        assert_eq!(ranges.new_layout_start, 1);
+        assert_eq!(ranges.new_layout_end, 2);
     }
 }
 

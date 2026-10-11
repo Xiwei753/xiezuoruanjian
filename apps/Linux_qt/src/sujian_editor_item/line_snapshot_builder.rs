@@ -24,6 +24,7 @@ use super::layout_snapshot::{
 use crate::editor::layout::{
     cursor_rect_for_line, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine,
 };
+use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
@@ -150,6 +151,207 @@ impl LineSnapshotBuilder {
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
             // Issue #826 评论 42：真实 drawn caret top/height（不贴行顶）。
+            let (caret_top, caret_height) =
+                cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
+            line_snapshots.push(PreparedLineSnapshot {
+                id,
+                image,
+                clusters,
+                document_origin_y: line.y,
+                dpr: doc_snapshot.dpr,
+                byte_start: line.byte_start,
+                byte_end: line.byte_end,
+                visual_x: line.x,
+                visual_line_top: line.y,
+                visual_line_bottom: line.y + line.height,
+                caret_top,
+                caret_height,
+            });
+
+            visual_line_ordinal += 1;
+        }
+
+        Ok(EditorLayoutSnapshot {
+            revision,
+            line_snapshots,
+            caret_rect: None,
+            caret_rect_doc: None,
+            caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+        })
+    }
+
+    /// Issue #901 第五轮阻塞5: 通过段落高度索引直接枚举 viewport+边距内行。
+    ///
+    /// 与 `build_from_canonical_document` 的区别：用 `ParagraphHeightIndex`
+    /// O(log n) 定位视口内的段落范围，再用二分查找在 visual_lines 中定位
+    /// 这些段落的行范围，只遍历视口内的行构建 cluster。
+    /// 不在视口内的行只做轻量 paragraph_id/visual_line_ordinal 推算（用高度索引
+    /// 直接计算，不遍历前面的行）。
+    ///
+    /// # 参数
+    ///
+    /// - `height_index`：段落高度索引，用于 O(log n) 定位视口内段落。
+    ///   必须与 `doc_snapshot` 的段落数一致。
+    pub fn build_from_canonical_document_with_height_index(
+        revision: LayoutRevision,
+        doc_snapshot: &CanonicalDocumentVisualSnapshot,
+        scroll_y: f64,
+        viewport_h: f64,
+        height_index: &ParagraphHeightIndex,
+    ) -> Result<EditorLayoutSnapshot, String> {
+        let mut line_snapshots = Vec::new();
+
+        if doc_snapshot.visual_lines.is_empty() {
+            return Ok(EditorLayoutSnapshot {
+                revision,
+                line_snapshots,
+                caret_rect: None,
+                caret_rect_doc: None,
+                caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+            });
+        }
+
+        // Issue #901 第五轮阻塞5: 用高度索引 O(log n) 定位视口内段落范围。
+        // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
+        // 加边距确保边缘行不被遗漏。
+        let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
+        let viewport_top = scroll_y - max_line_h;
+        let viewport_bottom = scroll_y + viewport_h + max_line_h;
+
+        // 用高度索引找到视口顶部和底部对应的段落索引
+        let first_para_idx = height_index.y_to_paragraph(viewport_top.max(0.0));
+        let last_para_idx = height_index.y_to_paragraph(viewport_bottom);
+
+        // 在 visual_lines 中用二分查找定位这些段落的行范围
+        // visual_lines 按段落顺序排列，同一段落的所有行连续且 para_start 相同
+        let start_idx = if first_para_idx < doc_snapshot.paragraphs.len() {
+            let target_para_start =
+                doc_snapshot.paragraphs[first_para_idx].paragraph_document_byte_start;
+            doc_snapshot
+                .visual_lines
+                .partition_point(|vl| vl.para_start < target_para_start)
+        } else {
+            doc_snapshot.visual_lines.len()
+        };
+
+        // 找视口底部段落之后第一个行的索引
+        let end_idx = if last_para_idx + 1 < doc_snapshot.paragraphs.len() {
+            let target_para_start =
+                doc_snapshot.paragraphs[last_para_idx + 1].paragraph_document_byte_start;
+            doc_snapshot
+                .visual_lines
+                .partition_point(|vl| vl.para_start < target_para_start)
+        } else {
+            doc_snapshot.visual_lines.len()
+        };
+
+        // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
+        // 不遍历前面的行。visual_line_ordinal 在段落内从 0 递增。
+        let mut prev_para_start: Option<usize> = None;
+        let mut paragraph_id: u64 = first_para_idx as u64;
+        let mut visual_line_ordinal: u32 = 0;
+
+        for line in &doc_snapshot.visual_lines[start_idx..end_idx] {
+            if line.para_text.is_empty() {
+                if prev_para_start != Some(line.para_start) && prev_para_start.is_some() {
+                    paragraph_id = paragraph_id.wrapping_add(1);
+                }
+                visual_line_ordinal = 0;
+                prev_para_start = Some(line.para_start);
+
+                let line_top = line.y - scroll_y;
+                let line_bottom = line_top + line.height;
+                if line_bottom < -line.height || line_top > viewport_h + line.height {
+                    visual_line_ordinal += 1;
+                    continue;
+                }
+
+                let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
+                let (caret_top, caret_height) =
+                    cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
+                line_snapshots.push(PreparedLineSnapshot {
+                    id,
+                    image: None,
+                    clusters: Vec::new(),
+                    document_origin_y: line.y,
+                    dpr: doc_snapshot.dpr,
+                    byte_start: line.byte_start,
+                    byte_end: line.byte_end,
+                    visual_x: line.x,
+                    visual_line_top: line.y,
+                    visual_line_bottom: line.y + line.height,
+                    caret_top,
+                    caret_height,
+                });
+
+                visual_line_ordinal += 1;
+                continue;
+            }
+
+            if prev_para_start != Some(line.para_start) {
+                if prev_para_start.is_some() {
+                    paragraph_id = paragraph_id.wrapping_add(1);
+                }
+                visual_line_ordinal = 0;
+                prev_para_start = Some(line.para_start);
+            }
+
+            let line_top = line.y - scroll_y;
+            let line_bottom = line_top + line.height;
+            if line_bottom < -line.height || line_top > viewport_h + line.height {
+                visual_line_ordinal += 1;
+                continue;
+            }
+
+            let canonical_para = doc_snapshot
+                .paragraphs
+                .iter()
+                .find(|p| p.paragraph_document_byte_start == line.para_start);
+
+            let (image, clusters) = if let Some(canonical) = canonical_para {
+                let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
+                let img = canonical_line.and_then(|cl| cl.image.clone());
+                let cls = canonical_line
+                    .map(|cl| Self::build_clusters_from_canonical(cl, line, &canonical.index_map))
+                    .unwrap_or_default();
+                (img, cls)
+            } else {
+                (None, Vec::new())
+            };
+
+            if clusters.is_empty()
+                && line
+                    .para_text
+                    .chars()
+                    .any(|c| !c.is_whitespace() && !c.is_control())
+            {
+                crate::backend::app_backend::debug_error_static(
+                    "line_snapshot_builder",
+                    "canonical_line_clusters_empty_invariant_failure",
+                    &format!(
+                        "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} \
+                         image={} — clusters empty and line contains visible chars, \
+                         this is an invariant failure: canonical layout should always produce \
+                         clusters (Issue #810). Returning Err to surface the failure upstream, \
+                         not producing a half-built snapshot.",
+                        revision.0,
+                        line.para_start,
+                        line.qtextline_idx,
+                        line.byte_start,
+                        line.byte_end,
+                        image.is_some(),
+                    ),
+                );
+                return Err(format!(
+                    "canonical_line_clusters_empty_invariant_failure: \
+                     revision={} para_start={} qtextline_idx={} byte_start={} byte_end={}",
+                    revision.0, line.para_start, line.qtextline_idx, line.byte_start, line.byte_end,
+                ));
+            }
+
+            let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
             let (caret_top, caret_height) =
                 cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
 

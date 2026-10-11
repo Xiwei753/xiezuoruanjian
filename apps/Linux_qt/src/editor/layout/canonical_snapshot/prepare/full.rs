@@ -674,16 +674,41 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     };
 
-    // 用 store 计算受影响段落范围
+    // 用 store 计算受影响段落范围（用于 full_relayout 判断）
     let affected = paragraph_store.compute_affected_paragraphs(affected_byte_start, affected_byte_end);
 
     // Issue #901 问题5: 段落身份用 paragraph_store 的 ParagraphId 匹配，
     // 不按 prev.paragraphs[current_idx] 下标匹配。
     let prev_para_count = prev.paragraphs.len();
 
+    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+    let new_para_count = new_paras.len();
+
+    // Issue #901 第五轮阻塞2: 用段落文本比较计算旧段 splice 范围和新段建立范围。
+    // Enter 拆段（旧1段→新2段）和 Backspace 合段（旧2段→新1段）时，
+    // 旧删段数不等于新添段数，不能用同一 affected_start..affected_end
+    // 同时 splice 旧段数组和新段数组。分别用两套独立范围：
+    // - old_splice_start..old_splice_end：在旧段数组中删除的范围
+    // - new_layout_start..new_layout_end：在新段数组中建立（重排版）的范围
+    let new_para_texts: Vec<&str> = new_paras.iter().map(|p| p.trim_end_matches('\n')).collect();
+    let old_para_texts: Vec<&str> = prev.paragraphs.iter().map(|p| p.paragraph_text.as_str()).collect();
+
+    let splice_ranges = if affected.full_relayout {
+        super::super::super::paragraph_layout_store::ParagraphSpliceRanges {
+            old_splice_start: 0,
+            old_splice_end: prev_para_count,
+            new_layout_start: 0,
+            new_layout_end: new_para_count,
+        }
+    } else {
+        super::super::super::paragraph_layout_store::ParagraphLayoutStore::compute_old_new_paragraph_ranges(
+            &old_para_texts,
+            &new_para_texts,
+        )
+    };
+
     // 增量更新 store 的文本信息
     {
-        let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
         let store_needs_rebuild = paragraph_store.paragraph_count() != new_paras.len()
             || prev_para_count != new_paras.len();
 
@@ -698,23 +723,18 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 width,
             );
         } else {
-            let affected_start = affected.relayout_start;
-            let affected_end = affected.relayout_end;
-            for i in affected_start..affected_end {
-                if i < new_paras.len() {
-                    let para_text = new_paras[i].trim_end_matches('\n');
-                    paragraph_store.update_paragraph_text(
-                        i,
-                        para_text,
-                        font_size,
-                        font_family,
-                        line_spacing,
-                        indent,
-                        padding,
-                        width,
-                    );
-                }
-            }
+            // Issue #901 第五轮阻塞2: 用新段范围更新 store，不用 affected byte range。
+            paragraph_store.update_affected_paragraph_texts(
+                &new_para_texts,
+                splice_ranges.new_layout_start,
+                splice_ranges.new_layout_end,
+                font_size,
+                font_family,
+                line_spacing,
+                indent,
+                padding,
+                width,
+            );
         }
     }
 
@@ -726,32 +746,23 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut visual_lines: Vec<VisualLine> = std::mem::take(&mut prev.visual_lines);
     let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
 
-    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
-    let new_para_count = new_paras.len();
+    // Issue #901 第五轮阻塞2: 用旧段范围找旧视觉行范围，用新段范围建立新段。
+    let old_splice_start = splice_ranges.old_splice_start;
+    let old_splice_end = splice_ranges.old_splice_end;
+    let new_layout_start = splice_ranges.new_layout_start;
+    let new_layout_end = splice_ranges.new_layout_end;
 
-    // 计算受影响段落范围（在新文本坐标中）
-    let affected_start = if affected.full_relayout {
-        0
-    } else {
-        affected.relayout_start
-    };
-    let affected_end = if affected.full_relayout {
-        new_para_count
-    } else {
-        affected.relayout_end.min(new_para_count)
-    };
-
-    // 找到受影响段落在 visual_lines 中的行范围（用旧段落 byte_start 匹配）
+    // 找到旧段 splice 范围在 visual_lines 中的行范围（用旧段落 byte_start 匹配）
     let mut vl_start_idx: usize = 0;
     let mut vl_end_idx: usize = visual_lines.len();
-    if affected_start < prev_paragraphs.len() {
-        let para_start = prev_paragraphs[affected_start].paragraph_document_byte_start;
+    if old_splice_start < prev_paragraphs.len() {
+        let para_start = prev_paragraphs[old_splice_start].paragraph_document_byte_start;
         if let Some(&(s, _)) = prev_line_index.get(&para_start) {
             vl_start_idx = s;
         }
     }
-    if affected_end < prev_paragraphs.len() {
-        let para_start = prev_paragraphs[affected_end].paragraph_document_byte_start;
+    if old_splice_end < prev_paragraphs.len() {
+        let para_start = prev_paragraphs[old_splice_end].paragraph_document_byte_start;
         if let Some(&(s, _)) = prev_line_index.get(&para_start) {
             vl_end_idx = s;
         }
@@ -779,18 +790,20 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     };
 
     // 计算受影响段落的起始 paragraph_start 和 paragraph_qchar_start
+    // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start 计算起始偏移
     let mut paragraph_start: usize = 0;
     let mut paragraph_qchar_start: usize = 0;
-    for para in &new_paras[..affected_start.min(new_para_count)] {
+    for para in &new_paras[..new_layout_start.min(new_para_count)] {
         paragraph_start += para.len();
         paragraph_qchar_start += para.chars().map(|c| c.len_utf16()).sum::<usize>();
     }
 
     let mut y: f64 = y_start;
     let mut line_id: usize = vl_start_idx;
-    let mut paragraph_idx: i32 = affected_start as i32;
+    let mut paragraph_idx: i32 = new_layout_start as i32;
 
-    for para_idx in affected_start..affected_end {
+    // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start..new_layout_end 建立新段
+    for para_idx in new_layout_start..new_layout_end {
         let paragraph = new_paras[para_idx];
         let hard_break = paragraph.ends_with('\n');
         let paragraph_text = paragraph.trim_end_matches('\n');
@@ -949,10 +962,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     visual_lines.splice(vl_start_idx..vl_end_idx, new_visual_lines);
 
     // splice paragraphs：替换受影响段落
-    // Issue #901 问题5: 段落身份用 paragraph_store 的 ParagraphId 匹配。
-    // prev_paragraphs 是旧段落（move 出来的），按受影响范围 splice。
-    let splice_para_start = affected_start.min(prev_paragraphs.len());
-    let splice_para_end = affected_end.min(prev_paragraphs.len());
+    // Issue #901 第五轮阻塞2: 用旧段范围 old_splice_start..old_splice_end 切旧段数组，
+    // 用新段范围 new_layout_start..new_layout_end 建立新段。
+    // Enter 拆段（旧1段→新2段）时 old_splice 范围=[0,1)，new_layout 范围=[0,2)，
+    // 旧删1段新添2段；Backspace 合段（旧2段→新1段）时 old_splice=[0,2)，new_layout=[0,1)，
+    // 旧删2段新添1段。不能用同一范围同时切新旧段。
+    let splice_para_start = old_splice_start.min(prev_paragraphs.len());
+    let splice_para_end = old_splice_end.min(prev_paragraphs.len());
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
@@ -992,7 +1008,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
         }
         // 更新后续段落的 paragraph_document_byte_start
-        let para_update_start = affected_end.min(paragraphs.len());
+        // Issue #901 第五轮阻塞2: 用新段范围 new_layout_end 定位后续段
+        let para_update_start = new_layout_end.min(paragraphs.len());
         for para in &mut paragraphs[para_update_start..] {
             para.paragraph_document_byte_start =
                 (para.paragraph_document_byte_start as i64 + byte_delta) as usize;
@@ -1099,46 +1116,56 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     }
 
     // 尾部换行处理
+    // Issue #901 第五轮阻塞2: 增量路径已搬运 prev 的尾部空行（如果 prev 也有尾部 \n），
+    // 修改前面段落时可能重复插入末尾空视觉行。只对**确实需要新增**的末尾空视觉行
+    // 创建节点，不允许沿用的 prev 哨兵再复制。
+    // 检查 splice 后的最后一个视觉行是否已经是末尾空行（para_text 为空且
+    // byte_start == text.len()），如果是则不再追加。
     if text.ends_with('\n') {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
-        let _empty_canonical = prepare_paragraph_visual_snapshot(
-            "",
-            text.len(),
-            font_size,
-            font_family,
-            available,
-            indent,
-            dpr,
-            text_color,
-            paragraph_idx,
-            line_spacing,
-            generation,
-            false,
-        );
-        visual_lines.push(VisualLine {
-            id: line_id,
-            byte_start: text.len(),
-            byte_end: text.len(),
-            qchar_start: text_qchar_len,
-            qchar_end: text_qchar_len,
-            hard_break: false,
-            x: padding + indent,
-            y,
-            width: 0.0,
-            height: line_height,
-            para_text: String::new(),
-            para_start: text.len(),
-            qtextline_idx: 0,
-            para_qchar_start: 0,
-            para_qchar_end: 0,
-            line_wrap_width: available - indent,
-            line_indent_x: indent,
-            para_indent: indent,
-            x_end_trailing: 0.0,
-            qt_ascent: 0.0,
-            qt_descent: 0.0,
-            cache_slot: paragraph_idx,
+        let already_has_trailing_empty = visual_lines.last().map_or(false, |vl| {
+            vl.para_text.is_empty() && vl.byte_start == text.len()
         });
+        if !already_has_trailing_empty {
+            let _empty_canonical = prepare_paragraph_visual_snapshot(
+                "",
+                text.len(),
+                font_size,
+                font_family,
+                available,
+                indent,
+                dpr,
+                text_color,
+                paragraph_idx,
+                line_spacing,
+                generation,
+                false,
+            );
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: text.len(),
+                byte_end: text.len(),
+                qchar_start: text_qchar_len,
+                qchar_end: text_qchar_len,
+                hard_break: false,
+                x: padding + indent,
+                y,
+                width: 0.0,
+                height: line_height,
+                para_text: String::new(),
+                para_start: text.len(),
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: available - indent,
+                line_indent_x: indent,
+                para_indent: indent,
+                x_end_trailing: 0.0,
+                qt_ascent: 0.0,
+                qt_descent: 0.0,
+                cache_slot: paragraph_idx,
+            });
+        }
     }
 
     let snapshot = CanonicalDocumentVisualSnapshot {
@@ -1159,14 +1186,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 只对受影响段落同步排版结果，不 sync_from_visual_lines（O(n)）。
 
     // Issue #901 第三轮复核问题 4: 用实际重排的段落索引驱动后续更新。
-    // affected_indices 基于 affected range，但 no_affected_range fall-through 时
-    // affected 为空而 relayouted_indices 记录了真正重排的段落。
-    // 合并 affected_indices 和 relayouted_indices，去重。
+    // Issue #901 第五轮阻塞2: 用 new_layout 范围替代 affected byte range 范围，
+    // 因为 new_layout 范围精确反映了新段中需要重排的段落。
     let affected_indices: Vec<usize> = if affected.full_relayout {
         (0..snapshot.paragraphs.len()).collect()
     } else {
-        // 合并 affected range 和实际重排的段落
-        let mut indices: Vec<usize> = (affected.relayout_start..affected.relayout_end)
+        // 合并 new_layout range 和实际重排的段落
+        let mut indices: Vec<usize> = (new_layout_start..new_layout_end)
             .chain(relayouted_indices.iter().copied())
             .collect();
         indices.sort_unstable();

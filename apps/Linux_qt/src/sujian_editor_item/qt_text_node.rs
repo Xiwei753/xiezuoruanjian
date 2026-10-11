@@ -366,6 +366,85 @@ cpp! {{
         staticLayer->setMatrix(mat);
         staticLayer->markDirty(QSGNode::DirtyMatrix);
     }
+
+    /// Issue #901 第五轮阻塞5: 只重建受影响段落的 QSGTextNode，不全文重建。
+    ///
+    /// staticLayer 的子节点是 per-paragraph QSGTextNode（按段落顺序排列）。
+    /// 对 `affected_indices` 中列出的段落，删除旧子节点并创建新 QSGTextNode；
+    /// 不在 `affected_indices` 中的段落保持原子节点不变。
+    /// 最后更新滚动位移矩阵。
+    ///
+    /// 返回 true 表示成功更新；false 表示 staticLayer 子节点数与 para_count
+    /// 不匹配（需要先调用 rebuild_text_node_from_paragraphs 全量重建）。
+    bool update_affected_paragraph_nodes(
+        QSGNode* root_raw, QQuickItem* item_ptr,
+        const char** text_ptrs, const int* text_lens,
+        const int* cache_idx_arr,
+        const double* para_y_arr,
+        int para_count,
+        const int* affected_indices, int affected_count,
+        float font_size, const QString& font_family,
+        double scroll_y, const QString& color_q,
+        double origin_x,
+        uint64_t generation
+    ) {
+        if (!root_raw || !item_ptr) return false;
+        QQuickWindow *window = item_ptr->window();
+        if (!window) return false;
+
+        if (root_raw->childCount() == 0) return false;
+        auto *staticLayer = static_cast<QSGTransformNode*>(root_raw->childAtIndex(0));
+        if (!staticLayer) return false;
+
+        // 检查 staticLayer 子节点数是否匹配 para_count
+        // 不匹配说明需要全量重建，返回 false
+        if (staticLayer->childCount() != para_count) return false;
+
+        QColor textColor(color_q);
+
+        // 只重建受影响段落的 QSGTextNode
+        for (int a = 0; a < affected_count; a++) {
+            int i = affected_indices[a];
+            if (i < 0 || i >= para_count) continue;
+            if (i >= staticLayer->childCount()) continue;
+
+            // 空段落不需要 QSGTextNode，但需要占位（保持子节点数一致）
+            if (text_lens[i] == 0) continue;
+
+            // 检查 layout 可用性
+            int cacheIdx = cache_idx_arr[i];
+            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            if (!cachedLayout) {
+                return false;
+            }
+
+            // 获取旧子节点（要替换的）
+            QSGNode* oldChild = staticLayer->childAtIndex(i);
+            if (!oldChild) continue;
+
+            // 创建新 QSGTextNode
+            QSGTextNode* newTextNode = window->createTextNode();
+            if (!newTextNode) continue;
+
+            newTextNode->setColor(textColor);
+            double y = para_y_arr[i];
+            newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
+            newTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+
+            // 原子替换：在旧节点前插入新节点，然后移除并删除旧节点
+            staticLayer->insertChildNodeBefore(newTextNode, oldChild);
+            staticLayer->removeChildNode(oldChild);
+            delete oldChild;
+        }
+
+        // 更新滚动位移矩阵
+        QMatrix4x4 mat;
+        mat.translate(0.0f, static_cast<float>(-scroll_y), 0.0f);
+        staticLayer->setMatrix(mat);
+        staticLayer->markDirty(QSGNode::DirtyMatrix);
+
+        return true;
+    }
 }}
 
 /// 由 `EditorLayout::snapshot()` 提供的 per-paragraph 排版数据。
@@ -674,6 +753,100 @@ pub fn rebuild_text_node_from_paragraphs(
     // Issue #668: 即使 rebuild 返回 false（layout 缺失），也不在此清除缓存——
     // 缺失说明 generation 已被提前 clear_layout_generation 释放，下一帧
     // snapshot() 会分配新 generation 重新排版。
+    success
+}
+
+/// Issue #901 第五轮阻塞5: 只重建受影响段落的 QSGTextNode，不全文重建。
+///
+/// 与 `rebuild_text_node_from_paragraphs` 的区别：不删除和重建所有段落的节点，
+/// 只对 `affected_indices` 中列出的段落删除旧 QSGTextNode 并创建新的。
+/// 不在列表中的段落保持原节点不变，避免全文重建的开销。
+///
+/// **前提**：staticLayer 的子节点数必须等于 `paragraphs.len()`，且子节点按
+/// 段落顺序排列。如果不匹配（如首次渲染或段落数变化），返回 `false`，
+/// 调用方应回退到 `rebuild_text_node_from_paragraphs` 全量重建。
+///
+/// # Safety
+/// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
+pub fn update_affected_text_nodes(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    paragraphs: &[ParagraphLineInfo],
+    affected_indices: &[usize],
+    scroll_y: f64,
+    color: &str,
+    origin_x: f64,
+    generation: u64,
+) -> bool {
+    if affected_indices.is_empty() {
+        // 没有受影响段落，只更新滚动位移
+        update_scroll_transform(root_raw, scroll_y);
+        return true;
+    }
+
+    let font_size = paragraphs.first().map(|p| p.font_size).unwrap_or(16.0);
+    let font_family_owned: String = paragraphs
+        .first()
+        .map(|p| p.font_family.clone())
+        .unwrap_or_else(|| "Noto Sans CJK SC".to_string());
+    let font_family = &font_family_owned;
+
+    let font_family_q: qmetaobject::QString = font_family.clone().into();
+    let color_q: qmetaobject::QString = color.to_string().into();
+
+    let text_ptrs: Vec<*const u8> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.as_ptr())
+        .collect();
+    let text_lens: Vec<i32> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.len() as i32)
+        .collect();
+    let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
+    let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
+
+    let affected_idxs: Vec<i32> = affected_indices.iter().map(|&i| i as i32).collect();
+
+    let para_count = paragraphs.len() as i32;
+    let affected_count = affected_idxs.len() as i32;
+
+    let text_ptrs_ptr = text_ptrs.as_ptr();
+    let text_lens_ptr = text_lens.as_ptr();
+    let cache_idxs_ptr = cache_idxs.as_ptr();
+    let para_y_ptr = para_y.as_ptr();
+    let affected_idxs_ptr = affected_idxs.as_ptr();
+
+    let success = cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        text_ptrs_ptr as "const char**",
+        text_lens_ptr as "const int*",
+        cache_idxs_ptr as "const int*",
+        para_y_ptr as "const double*",
+        para_count as "int",
+        affected_idxs_ptr as "const int*",
+        affected_count as "int",
+        font_size as "float",
+        font_family_q as "QString",
+        scroll_y as "double",
+        color_q as "QString",
+        origin_x as "double",
+        generation as "uint64_t"
+    ] -> bool as "bool" {
+        return update_affected_paragraph_nodes(
+            root_raw, item_ptr,
+            text_ptrs_ptr, text_lens_ptr,
+            cache_idxs_ptr,
+            para_y_ptr,
+            para_count,
+            affected_idxs_ptr, affected_count,
+            font_size, font_family_q,
+            scroll_y, color_q,
+            origin_x,
+            generation
+        );
+    });
+
     success
 }
 
