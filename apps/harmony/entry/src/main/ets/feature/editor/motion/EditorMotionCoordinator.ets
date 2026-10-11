@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, shouldCrossfadeSources
+  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio
 } from './editor_commit_start'
 
 /**
@@ -437,6 +437,11 @@ export class EditorMotionCoordinator {
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
         for (const interval of intervals) {
           keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+          // Issue #879 复核评论6104619192 问题1：交叉淡入淡出时，buildFrame 会额外输出新源窗口，
+          // plannedWindowKeys 必须同时输出 new key，否则 sameKeySet 检查失败，候选无法提交。
+          if (move.needsCrossfade) {
+            keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+          }
         }
       }
     }
@@ -611,7 +616,10 @@ export class EditorMotionCoordinator {
         startPositionY: firstPiece.startPositionY,
         glyphIds: move.glyphIds,
         windowId: move.windowId,
-        pieces: pieces
+        pieces: pieces,
+        // Issue #879 复核评论6104619192 问题1：继承 needsCrossfade 标志，
+        // 保证 retarget 后 plannedWindowKeys 仍与 buildFrame 输出 key 集合一致。
+        needsCrossfade: move.needsCrossfade
       })
     }
 
@@ -1524,7 +1532,9 @@ export class EditorMotionCoordinator {
           // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出。
           // 当新旧字宽/高不同时，retained 通道同时输出旧源(opacity=1-p)和新源(opacity=p)两个窗口，
           // 避免字宽变化时 clip 放宽但旧 Text 实际排版宽高不变导致跳字。
-          let needsSourceCrossfade = false
+          // Issue #879 复核评论6104619192 问题1：使用 move.needsCrossfade 标志（在 plan 阶段计算），
+          // 不再逐 interval 动态判断——保证 plannedWindowKeys 和 buildFrame 输出 key 集合一致。
+          let needsSourceCrossfade = move.needsCrossfade
           let newSourceUtf16Start = iStart
           let newSourceUtf16End = iEnd
           let newSourceGlyphX = islandNewX
@@ -1580,12 +1590,9 @@ export class EditorMotionCoordinator {
               }
             }
 
-            // Issue #879 复核评论6103606574 缺口1：检查新旧字宽/高差异。
-            // 当差异 > 0.5vp 时，需要新旧源交叉淡入淡出——
-            // 旧源 Text 的字形宽度是旧字宽，但 clip 被映射到新字宽，
-            // 多出来的部分没有文字图形。通过同时输出新源窗口(opacity=p)弥补。
-            if (shouldCrossfadeSources(sourceGlyphOnScreen, newGlyphRect)) {
-              needsSourceCrossfade = true
+            // Issue #879 复核评论6104619192 问题1：needsCrossfade 已在 plan 阶段由 move.needsCrossfade 确定，
+            // 不再逐 interval 动态判断。此处始终计算新源几何参数，供 needsSourceCrossfade=true 时使用。
+            if (needsSourceCrossfade) {
               if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
                   interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
                 newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
@@ -1695,17 +1702,9 @@ export class EditorMotionCoordinator {
               }
             }
 
-            // Issue #879 复核评论6103606574 缺口1：检查新旧字宽/高差异（clipRects 分支）。
-            // 与 startScreenClipRects 分支同款逻辑——当新旧字宽/高差异 > 0.5vp 时，
-            // 需要新旧源交叉淡入淡出。
-            const sourceGlyphForCheck: RectLike = {
-              x: sr.x + frozenDrawOffsetX,
-              y: sr.y + frozenDrawOffsetY,
-              width: sr.width,
-              height: sr.height
-            }
-            if (shouldCrossfadeSources(sourceGlyphForCheck, newGlyphRect)) {
-              needsSourceCrossfade = true
+            // Issue #879 复核评论6104619192 问题1：needsCrossfade 已在 plan 阶段由 move.needsCrossfade 确定，
+            // 不再逐 interval 动态判断。此处始终计算新源几何参数，供 needsSourceCrossfade=true 时使用。
+            if (needsSourceCrossfade) {
               if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
                   interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
                 newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
@@ -1860,6 +1859,13 @@ export class EditorMotionCoordinator {
           // 新源窗口使用新正文 UTF-16 范围、新布局字形位置、offset=0（新源 Text 已在新布局位置）。
           // renderNodeKey 与旧源不同（sourceKind='new' + newRevision），ForEach 创建独立 Text 节点。
           // windowInstanceId 与旧源相同——WindowInstanceIdAllocator 通过 lease 机制安全管理多引用。
+          // Issue #879 复核评论6104619192 问题2：新源窗口也跟随运动位置移动。
+          // 旧实现将新源固定在终点（offsetX=0, currentPositionX=newSourceGlyphX），
+          // 导致渐变不是"沿路径运动的同一个字由旧形状渐变成新形状"，
+          // 而是"旧字跟着 clip 移动，新字一直待在终点被另一个地方的 clip 裁掉"。
+          // 修复：新源也使用 islandCurrentX/Y 作为当前绘制位置，
+          // offsetX/Y = islandCurrentX/Y - newSourceGlyphX/Y，
+          // 使新源与旧源在屏幕上的 glyph 锚点相同，clipRects 可继续共用（屏幕坐标系）。
           if (needsSourceCrossfade) {
             motionGlyphWindows.push({
               sourceKind: 'new',
@@ -1874,8 +1880,8 @@ export class EditorMotionCoordinator {
               glyphY: newSourceGlyphY,
               glyphWidth: newSourceGlyphWidth,
               glyphHeight: newSourceGlyphHeight,
-              offsetX: 0,
-              offsetY: 0,
+              offsetX: islandCurrentX - newSourceGlyphX,
+              offsetY: islandCurrentY - newSourceGlyphY,
               runId: `new-${newRevision}`,
               sourceRevision: newRevision,
               glyphIds: interval.glyphIds,
@@ -1884,8 +1890,8 @@ export class EditorMotionCoordinator {
               renderNodeKey: `new-${newRevision}-${islandWindowInstanceId}`,
               currentClipLeft: islandBboxLeft,
               currentClipRight: islandBboxRight,
-              currentPositionX: newSourceGlyphX,
-              currentPositionY: newSourceGlyphY,
+              currentPositionX: islandCurrentX,
+              currentPositionY: islandCurrentY,
               motionOwnerKind: 'reflow',
               opacity: p
             })
@@ -2008,7 +2014,9 @@ export class EditorMotionCoordinator {
           currentClipRight: clipRight,
           currentPositionX: currentX,
           currentPositionY: currentY,
-          motionOwnerKind: motionRun.motionOwnerKind
+          motionOwnerKind: motionRun.motionOwnerKind,
+          // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity
+          opacity: motionRun.opacity
         })
       } else {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
@@ -2055,7 +2063,9 @@ export class EditorMotionCoordinator {
           currentClipRight: currentRight,
           currentPositionX: motionRun.currentPositionX,
           currentPositionY: motionRun.currentPositionY,
-          motionOwnerKind: motionRun.motionOwnerKind
+          motionOwnerKind: motionRun.motionOwnerKind,
+          // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity
+          opacity: motionRun.opacity
         })
       }
     }
@@ -2683,7 +2693,10 @@ export class EditorMotionCoordinator {
       )
 
       // Issue #879 复核评论6082616112 问题1：明确源类型和源 runId。
-      const sourceKind: 'new' | 'old' = w.motionOwnerKind === 'insert' ? 'new' : 'old'
+      // Issue #879 复核评论6104619192 问题3：直接沿用 w.sourceKind，不再根据 motionOwnerKind 推断。
+      // reflow 窗口的 sourceKind 可能是 'old' 或 'new'（交叉淡入淡出的新源窗口 motionOwnerKind='reflow'），
+      // 强行推断为 'old' 会把新源窗口改名为 old-${newRevision}，指向不存在的旧版源。
+      const sourceKind: 'new' | 'old' = w.sourceKind
       const sourceRunId = `${sourceKind}-${w.sourceRevision}`
 
       for (const piece of pieces) {
@@ -2883,7 +2896,10 @@ export class EditorMotionCoordinator {
           targetY: targetY,
           clipRects: runClipRects,
           islandStartRects: islandStartRects,
-          islandTargetRects: islandTargetRects
+          islandTargetRects: islandTargetRects,
+          // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity，
+          // 交叉淡入淡出的新源窗口被 carry-over 时保持透明度关系。
+          opacity: w.opacity
         })
       }
     }

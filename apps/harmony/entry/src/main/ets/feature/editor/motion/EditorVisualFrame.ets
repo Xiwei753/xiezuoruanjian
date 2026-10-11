@@ -222,6 +222,15 @@ export interface RetainedMove {
   windowId: string
   /** Issue #879 复核评论6078682695 问题1：按 piece 分开的起始可见区间——见 InsertRun.pieces */
   pieces: RunStartPiece[]
+  /**
+   * Issue #879 复核评论6104619192 问题1：是否需要新旧源交叉淡入淡出。
+   *
+   * 当 |oldRect.width - newRect.width| > 0.5vp 或 |oldRect.height - newRect.height| > 0.5vp 时为 true。
+   * plannedWindowKeys 据此为每个 interval 同时输出 old 和 new 两个 key，
+   * buildFrame 据此为每个 interval 同时输出旧源和新源两个窗口，
+   * 保证 sameKeySet(plannedKeys, extractWindowKeys(retargeted.startFrame)) 成立。
+   */
+  needsCrossfade: boolean
 }
 
 /**
@@ -403,6 +412,14 @@ export interface CarryOverMotionRun {
    * buildFrame 中每岛从 islandStartRects[i] 插值到 islandTargetRects[i]。
    */
   islandTargetRects: ClipRect[]
+  /**
+   * Issue #879 复核评论6104619192 问题3：窗口透明度（0-1），继承自源窗口。
+   *
+   * 交叉淡入淡出的新源窗口（sourceKind='new', motionOwnerKind='reflow'）被 carry-over 时，
+   * 需要继承原窗口的 opacity 值，否则 carry-over motion run 输出的窗口始终全不透明，
+   * 与旧源窗口的互补淡入淡出关系断裂。
+   */
+  opacity?: number
 }
 
 /**

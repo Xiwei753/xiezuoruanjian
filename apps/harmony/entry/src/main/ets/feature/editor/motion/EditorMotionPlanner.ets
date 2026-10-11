@@ -475,6 +475,12 @@ export class EditorMotionPlanner {
           }
         )
         const firstPiece = pieces[0]
+        // Issue #879 复核评论6104619192 问题1：计算是否需要新旧源交叉淡入淡出。
+        // 当新旧字宽/高差异 > 0.5vp 时，buildFrame 会同时输出旧源和新源两个窗口，
+        // plannedWindowKeys 也必须同时输出两个 key，否则 sameKeySet 检查失败，候选无法提交。
+        const needsCrossfade =
+          Math.abs(move.oldRect.width - move.newRect.width) > 0.5 ||
+          Math.abs(move.oldRect.height - move.newRect.height) > 0.5
         retainedMoves.push({
           oldUtf16Start: move.oldUtf16Start,
           oldUtf16End: move.oldUtf16End,
@@ -487,7 +493,8 @@ export class EditorMotionPlanner {
           startPositionY: firstPiece.startPositionY,
           glyphIds: glyphIds,
           windowId: windowId,
-          pieces: pieces
+          pieces: pieces,
+          needsCrossfade: needsCrossfade
         })
       }
     }
