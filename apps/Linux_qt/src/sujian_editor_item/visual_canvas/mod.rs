@@ -49,7 +49,7 @@ pub(crate) use revision_chain::RevisionChain;
 pub(crate) use scene_transition::{
     SceneTransition, TargetCaret, TargetGlyphRun, TargetLayoutDescriptor, TargetScroll,
 };
-pub(crate) use text_frontier::TextFrontier;
+pub(crate) use text_frontier::{ClusterBoundary, TextFrontier};
 
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 use writer_core::editor::{EditorEditResult, EditorRevision};
@@ -147,6 +147,17 @@ impl VisualCanvas {
     /// 首张 `PresentedScene`，使第一帧静态画面被正确注册为 scene。
     pub(crate) fn initialize_presented_from_target(&mut self, now_ms: f64) {
         self.controller.initialize_presented_from_target(now_ms);
+    }
+
+    /// Issue #901 问题3：重置视觉状态，用于切章/清文档。
+    ///
+    /// 委托给 `CanvasController::reset`，清除旧章的 `PresentedScene` 和
+    /// `TargetLayoutDescriptor`。同时清 `target_layout_revision`。
+    /// 调用方（`reset_document_visual_state`）在调用前已递增 `document_session`，
+    /// 使 `CanvasController::on_frame_committed` 忽略旧 session 的迟到帧。
+    pub(crate) fn reset(&mut self) {
+        self.controller.reset();
+        self.target_layout_revision = None;
     }
 
     /// 提交已呈现画面（Qt `afterFrameEnd` 回执）。
@@ -321,6 +332,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

@@ -19,7 +19,7 @@
 
 use super::draw_plan::CanvasDrawPlan;
 use super::frame_clock::{pose_from_presented, FrameClock, VisualPose};
-use super::presented_scene::{PixelContribution, PresentedScene};
+use super::presented_scene::PresentedScene;
 use super::revision_chain::RevisionChain;
 use super::scene_transition::{SceneTransition, TargetLayoutDescriptor};
 use super::text_frontier::TextFrontier;
@@ -112,15 +112,19 @@ impl CanvasController {
     /// 帧提交回执（Qt `afterFrameEnd`）。
     ///
     /// 更新 `PresentedScene` 和 `RevisionChain`：如果该帧的 `source_revision`
-    /// 等于当前 `latest_revision`，画面已追上 Core，累计映射归零。
+    /// 等于当前 `latest_revision` **且画面真正达到终点**（`is_settled`），
+    /// 画面已追上 Core，累计映射归零。
     /// 同时更新 `FrameClock` 的已提交姿态。
     ///
     /// Issue #901 问题3：
     /// - 只接受同 `document_session` 且 `frame_id` 比当前 presented 更新的帧。
     ///   如果帧的 session 不同或 frame_id 更旧，忽略（防止旧画面覆盖新 scene）。
-    /// - 不再以 `frame_revision == latest` 判定 `progress=1.0`。progress 从
-    ///   `frame_clock.frame_now` 采样当前实际 progress。只在同一目标 revision
-    ///   **且画面真正达到终点**（`is_settled`）时清空 revision map。
+    /// - 不再以 `frame_revision == latest` 单独判定 `reset_to_committed`。
+    ///   只有在 `is_settled` 为真（progress 真正接近 1.0）**且**
+    ///   `frame_revision == latest` 时才 reset。如果 progress < 1，保留
+    ///   revision_chain 映射，因为画面还在过渡中。
+    /// - progress 从 `PresentedScene.pose_progress` 读取（由渲染层填入真实值），
+    ///   不从 `frame_clock.frame_now` 估算理论进度。
     pub(crate) fn on_frame_committed(&mut self, scene: PresentedScene, now_ms: f64) {
         // Issue #901 问题3：只接受同 session 且更新的帧。
         if let Some(current) = &self.presented_scene {
@@ -137,22 +141,22 @@ impl CanvasController {
         let frame_revision = scene.source_revision;
         let latest = self.revision_chain.latest_revision();
 
-        // Issue #901 问题3：不再以 frame_revision == latest 判定 progress=1.0。
-        // progress 从 frame_clock.frame_now 采样当前实际过渡进度。
-        // revision 相同并不代表动画已经完成——画面可能还在过渡中。
-        let progress = self.frame_clock.frame_now(now_ms).progress;
+        // Issue #901 问题3：progress 从 PresentedScene.pose_progress 读取，
+        // 不从 frame_clock.frame_now 估算。pose_progress 由渲染层在
+        // afterFrameEnd 时填入该帧实际对应的 VisualPose.progress。
+        let progress = scene.pose_progress.clamp(0.0, 1.0);
 
         // 从已提交帧构造 VisualPose 并更新 FrameClock。
         let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, progress);
         self.frame_clock.commit_pose(pose, now_ms);
 
-        // 如果画面追上了 Core（frame_revision == latest），累计映射归零。
-        // on_frame_committed 接收的是 Qt afterFrameEnd 确认的帧——如果
-        // source_revision == latest，Qt 已确认显示最终 revision 的画面，
-        // revision chain 的映射变为 identity，reset 是安全的。
-        // is_settled 用于帧调度（决定是否请求下一帧），不用于 reset 条件：
-        // 即使 FrameClock 的理论过渡进度未到 1.0，Qt 已确认的画面是最终画面。
-        if frame_revision == latest {
+        // Issue #901 问题3：只有在帧的 pose_progress 真正接近 1.0
+        // 且 frame_revision == latest 时才 reset_to_committed。
+        // 用 scene.pose_progress（渲染层填入的真实值）判断，不用
+        // frame_clock.is_settled（理论估算值）——帧的实际进度才是真实事实。
+        // 如果 progress < 1，画面还在过渡中，保留 revision_chain 映射，
+        // 后续"输入 A、露出半字、删除 A"必须保留 A 的当前可见部分和旧→新逻辑映射。
+        if frame_revision == latest && progress >= 1.0 - 0.001 {
             self.revision_chain.reset_to_committed(frame_revision);
         }
 
@@ -169,85 +173,38 @@ impl CanvasController {
         self.presented_scene = Some(scene);
     }
 
-    /// 首帧静态 canonical 初始化：从 `TargetLayoutDescriptor` 构造首张 `PresentedScene`。
+    /// 首帧静态 canonical 初始化（Issue #901 问题1+3 修复后改为 no-op）。
     ///
-    /// Issue #901 问题3：如果 `presented_scene` 为 None 但有 `target_layout`，
-    /// 第一张静态画面必须被正确注册为 scene（包含真实可见文字贡献），
-    /// 不能永远从空场景开始。
+    /// **旧实现**从 `TargetLayoutDescriptor` 伪造一张 progress=1.0 的
+    /// "已显示场景"并注册为 `presented_scene`，导致：
+    /// - 首帧 `commit_pose` 把 `last_committed_pose.progress` 设为 1.0。
+    /// - 后续 `retarget` 从 1.0 继承起始进度，新过渡 1→1 没有运动。
     ///
-    /// 从 target 的 glyph_runs 转换为 PixelContribution 列表，每个贡献的
-    /// `byte_range` 从 glyph_run 的 `byte_range` 获取，`opacity` 为 1.0，
-    /// `visible_clip` 为 target clip 与 document_rect 的交集。
-    pub(crate) fn initialize_presented_from_target(&mut self, now_ms: f64) {
-        // 已有 presented_scene 则不需要初始化。
-        if self.presented_scene.is_some() {
-            return;
-        }
-        let Some(target) = &self.target_layout else {
-            return;
-        };
-
-        let source_revision = self.revision_chain.latest_revision();
-
-        // 从 target glyph_runs 构造 PixelContribution 列表。
-        let pixel_contributions: Vec<PixelContribution> = target
-            .glyph_runs
-            .iter()
-            .filter(|run| run.document_rect.w > 0.0 && run.document_rect.h > 0.0)
-            .map(|run| {
-                // visible_clip 为 target clip 与 document_rect 的交集。
-                let clip = Self::intersect_clip_rects(run.document_rect, target.clip);
-                PixelContribution {
-                    snapshot_id: run.snapshot_id,
-                    source_uv: run.source_uv,
-                    document_rect: run.document_rect,
-                    visible_clip: clip,
-                    opacity: 1.0,
-                    byte_range: run.byte_range,
-                }
-            })
-            .collect();
-
-        let scene = PresentedScene {
-            source_revision,
-            document_session: 1,
-            frame_id: 1,
-            geometry_id: 1,
-            clip: target.clip,
-            position: super::presented_scene::CanvasVec2::new(0.0, 0.0),
-            opacity: 1.0,
-            transform: super::presented_scene::CanvasAffine2::identity(),
-            pixel_contributions,
-            caret: target.caret.map(|c| super::presented_scene::PresentedCaret {
-                position: c.position,
-                visible: c.visible,
-                width: c.width,
-                height: c.height,
-            }),
-            scroll: super::presented_scene::PresentedScroll {
-                x: target.scroll.x,
-                y: target.scroll.y,
-            },
-        };
-
-        // 直接设置 presented_scene，不走 on_frame_committed 的 session 过滤
-        // （这是初始化，没有之前的帧需要比较）。
-        let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, 1.0);
-        self.frame_clock.commit_pose(pose, now_ms);
-        self.presented_scene = Some(scene);
+    /// **新实现**不再伪造首帧。`presented_scene` 只在 Qt `afterFrameEnd`
+    /// 回执时设置（`on_frame_committed`）。如果 `presented_scene` 为 None，
+    /// `frame()` 从 target 生成初始静态画面但不注册为 `presented_scene`。
+    ///
+    /// 此方法保留公开 API 签名（`VisualCanvas::initialize_presented_from_target`
+    /// 委托到此），但内部不再做任何事。调用方（`qquickitem_impl.rs`）仍可
+    /// 安全调用，行为从"伪造首帧"变为"无操作"。
+    pub(crate) fn initialize_presented_from_target(&mut self, _now_ms: f64) {
+        // Issue #901 问题1+3：不再从 target 伪造首帧。
+        // presented_scene 只在 on_frame_committed（afterFrameEnd 回执）时设置。
+        // frame() 在 presented_scene 为 None 时从 target 生成静态画面。
+        // 此处 intentionally empty。
     }
 
-    /// 计算两个裁剪矩形的交集。
-    fn intersect_clip_rects(a: super::presented_scene::CanvasRect, b: super::presented_scene::CanvasRect) -> super::presented_scene::CanvasRect {
-        let left = a.x.max(b.x);
-        let top = a.y.max(b.y);
-        let right = (a.x + a.w).min(b.x + b.w);
-        let bottom = (a.y + a.h).min(b.y + b.h);
-        if right <= left || bottom <= top {
-            super::presented_scene::CanvasRect::zero()
-        } else {
-            super::presented_scene::CanvasRect::new(left, top, right - left, bottom - top)
-        }
+    /// Issue #901 问题3：重置视觉状态，用于切章/清文档。
+    ///
+    /// 清除 `presented_scene`（丢弃旧章的视觉真相）和 `target_layout`
+    /// （丢弃旧章的目标布局）。保留 `revision_chain` 的 latest_revision
+    /// （Core revision 仍正确）、`frame_clock`、`text_frontier` 和 `settings`。
+    ///
+    /// 切章后下一帧 `frame()` 会从新 target 生成静态画面，
+    /// `on_frame_committed` 会注册新 session 的 `PresentedScene`。
+    pub(crate) fn reset(&mut self) {
+        self.presented_scene = None;
+        self.target_layout = None;
     }
 
     /// 产生绘制计划。
@@ -259,12 +216,25 @@ impl CanvasController {
     /// Issue #901 阻塞 2：`revision_chain` 传递给 `SceneTransition::build_draw_plan`，
     /// 用于判断每个已显示字形贡献是存活、删除还是新插入。
     ///
-    /// 如果尚无 `PresentedScene` 或 `TargetLayoutDescriptor`，返回空计划。
+    /// Issue #901 问题1+3：如果尚无 `PresentedScene`（首帧未提交）但有
+    /// `TargetLayoutDescriptor`，从 target 生成初始静态画面（progress=1.0），
+    /// **但不注册为 `presented_scene`**。`presented_scene` 只在
+    /// `on_frame_committed`（afterFrameEnd 回执）时设置。
+    /// 如果两者都无，返回空计划。
     pub(crate) fn frame(&self, now_ms: f64) -> CanvasDrawPlan {
         let pose = self.frame_clock.frame_now(now_ms);
 
         let Some(presented) = &self.presented_scene else {
-            return CanvasDrawPlan::empty(now_ms);
+            // 尚无已提交帧：从 target 生成初始静态画面（progress=1.0），
+            // 但不注册为 presented_scene。
+            let Some(target) = &self.target_layout else {
+                return CanvasDrawPlan::empty(now_ms);
+            };
+            return SceneTransition::build_draw_plan_target_only(
+                target,
+                &self.revision_chain,
+                now_ms,
+            );
         };
         let Some(target) = &self.target_layout else {
             // 有 presented 但无 target：只显示 presented。
@@ -480,6 +450,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

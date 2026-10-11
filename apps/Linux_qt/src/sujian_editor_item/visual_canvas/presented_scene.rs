@@ -209,6 +209,13 @@ pub(crate) struct PresentedScene {
     /// 该画面对应的 geometry id（排版几何版本）。
     pub geometry_id: u64,
 
+    /// Issue #901 问题3：该帧提交时的真实过渡进度（0.0 – 1.0）。
+    ///
+    /// 由渲染层在 `afterFrameEnd` 时填入该帧实际对应的 `VisualPose.progress`。
+    /// `on_frame_committed` 用此值判断画面是否真正到达终点（而非从
+    /// `frame_clock.frame_now` 估算理论进度）。`1.0` 表示画面已完全到达目标。
+    pub pose_progress: f64,
+
     /// 整体裁剪区域（视口或 clip node 的可见矩形）。
     pub clip: CanvasRect,
     /// 整体位置偏移（画布坐标系）。
@@ -283,6 +290,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,
@@ -303,6 +311,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

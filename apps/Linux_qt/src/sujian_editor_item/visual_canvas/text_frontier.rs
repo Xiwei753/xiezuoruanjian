@@ -14,9 +14,30 @@
 //! - **吐字**（前沿推进）：`target > visible`，新内容逐步出现。
 //! - **吞字**（前沿收缩）：`target < visible`，旧内容逐步消失。
 //!
+//! ## Issue #901 问题4：cluster 几何分段
+//!
+//! 旧实现按全章 UTF-8 bytes/ms 跳行，不考虑字形实际宽度。新实现支持
+//! Qt cluster 几何分段边界（`ClusterBoundary`），`visible_range_at_progress`
+//! 根据 progress 和 cluster 宽度计算当前可见范围，而非按字节速率推进。
+//!
 //! ## 纯 Rust
 //!
-//! 本模块只做 byte range 算术，不依赖 Qt 类型。
+//! 本模块只做 byte range 算术和几何分段，不依赖 Qt 类型。
+
+/// Issue #901 问题4：Qt cluster 几何分段边界。
+///
+/// 描述一个 cluster（字形段）的 byte range 和文档坐标宽度。
+/// `visible_range_at_progress` 用此信息按宽度比例计算当前可见 byte range，
+/// 而非按全章 UTF-8 bytes/ms 匀速推进。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ClusterBoundary {
+    /// 该 cluster 的起始 byte offset。
+    pub byte_offset: usize,
+    /// 该 cluster 的结束 byte offset（半开）。
+    pub byte_end: usize,
+    /// 该 cluster 在文档坐标系中的宽度（像素）。
+    pub width: f64,
+}
 
 /// 二维文字前沿 —— 跟踪文字展开/收缩的可见范围边界。
 ///
@@ -38,6 +59,12 @@ pub(crate) struct TextFrontier {
     line_boundaries: Vec<usize>,
     /// 前沿推进速度（bytes per millisecond）。
     advance_rate_bytes_per_ms: f64,
+    /// Issue #901 问题4：Qt cluster 几何分段边界列表。
+    ///
+    /// 从 `TargetGlyphRun` 的 `byte_range` 和 `document_rect` 推导。
+    /// 非空时 `visible_range_at_progress` 按 cluster 宽度比例计算可见范围，
+    /// 而非按字节速率匀速推进。
+    cluster_boundaries: Vec<ClusterBoundary>,
 }
 
 impl TextFrontier {
@@ -58,6 +85,7 @@ impl TextFrontier {
             target_end: end,
             line_boundaries,
             advance_rate_bytes_per_ms: advance_rate_bytes_per_ms.max(0.0),
+            cluster_boundaries: Vec::new(),
         }
     }
 
@@ -74,6 +102,75 @@ impl TextFrontier {
     /// 前沿是否已到达目标（可见范围 == 目标范围）。
     pub(crate) fn is_settled(&self) -> bool {
         self.visible_start == self.target_start && self.visible_end == self.target_end
+    }
+
+    /// Issue #901 问题4：设置 Qt cluster 几何分段边界。
+    ///
+    /// 从 `TargetGlyphRun` 的 `byte_range` 和 `document_rect` 推导。
+    /// 设置后 `visible_range_at_progress` 按 cluster 宽度比例计算可见范围。
+    pub(crate) fn set_cluster_boundaries(&mut self, boundaries: Vec<ClusterBoundary>) {
+        self.cluster_boundaries = boundaries;
+    }
+
+    /// Issue #901 问题4：根据 progress 和 cluster 宽度计算当前可见范围。
+    ///
+    /// 如果 `cluster_boundaries` 非空，按宽度比例在 target 范围内插值：
+    /// - `progress=0` → 返回 `(target_start, target_start)`（空范围）。
+    /// - `progress=1` → 返回 `(target_start, target_end)`（完整范围）。
+    /// - 中间值按 cluster 宽度累加到 `progress * total_width` 处的 byte offset。
+    ///
+    /// 如果 `cluster_boundaries` 为空，回退到线性 byte range 插值。
+    pub(crate) fn visible_range_at_progress(&self, progress: f64) -> (usize, usize) {
+        let p = progress.clamp(0.0, 1.0);
+        let target_span = self.target_end.saturating_sub(self.target_start);
+
+        if self.cluster_boundaries.is_empty() || target_span == 0 {
+            // 回退到线性插值。
+            let visible_end = self.target_start + (target_span as f64 * p).round() as usize;
+            return (self.target_start, visible_end.min(self.target_end));
+        }
+
+        // 按 cluster 宽度比例插值。
+        // 只考虑落在 target 范围内的 cluster。
+        let relevant: Vec<&ClusterBoundary> = self
+            .cluster_boundaries
+            .iter()
+            .filter(|cb| cb.byte_end > self.target_start && cb.byte_offset < self.target_end)
+            .collect();
+
+        if relevant.is_empty() {
+            let visible_end = self.target_start + (target_span as f64 * p).round() as usize;
+            return (self.target_start, visible_end.min(self.target_end));
+        }
+
+        let total_width: f64 = relevant.iter().map(|cb| cb.width).sum();
+        if total_width <= 0.0 {
+            let visible_end = self.target_start + (target_span as f64 * p).round() as usize;
+            return (self.target_start, visible_end.min(self.target_end));
+        }
+
+        let target_width = total_width * p;
+        let mut acc_width = 0.0;
+        let mut visible_end = self.target_start;
+
+        for cb in &relevant {
+            if acc_width + cb.width <= target_width {
+                acc_width += cb.width;
+                visible_end = cb.byte_end.min(self.target_end);
+            } else {
+                // 在该 cluster 内部，按比例插值 byte offset。
+                let remaining = target_width - acc_width;
+                if cb.width > 0.0 {
+                    let frac = remaining / cb.width;
+                    let cluster_span = cb.byte_end.saturating_sub(cb.byte_offset);
+                    visible_end = cb.byte_offset + (cluster_span as f64 * frac).round() as usize;
+                    visible_end = visible_end.min(self.target_end);
+                }
+                break;
+            }
+        }
+
+        (self.target_start, visible_end.max(self.target_start))
     }
 
     /// 推进前沿 `delta_ms` 毫秒。
@@ -340,5 +437,41 @@ mod tests {
         f.retarget((0, 5));
         f.advance(1000.0); // 远超目标
         assert_eq!(f.visible_range(), (0, 5), "must not overshoot target");
+    }
+
+    #[test]
+    fn visible_range_at_progress_without_clusters_falls_back_to_linear() {
+        // 无 cluster_boundaries 时回退到线性插值。
+        let mut f = TextFrontier::new(0, 0, vec![], 10.0);
+        f.retarget((0, 100));
+        let (s, e) = f.visible_range_at_progress(0.5);
+        assert_eq!(s, 0);
+        assert!((e as f64 - 50.0).abs() < 1.0, "linear fallback: expected ~50, got {e}");
+    }
+
+    #[test]
+    fn visible_range_at_progress_with_clusters() {
+        // 有 cluster_boundaries 时按宽度比例插值。
+        let mut f = TextFrontier::new(0, 0, vec![], 10.0);
+        f.retarget((0, 10));
+        // 两个 cluster：byte [0,5) 宽 30px，byte [5,10) 宽 70px。
+        // total_width=100, progress=0.3 → target_width=30 → 刚好到第一个 cluster 末尾。
+        f.set_cluster_boundaries(vec![
+            ClusterBoundary { byte_offset: 0, byte_end: 5, width: 30.0 },
+            ClusterBoundary { byte_offset: 5, byte_end: 10, width: 70.0 },
+        ]);
+        let (s, e) = f.visible_range_at_progress(0.3);
+        assert_eq!(s, 0);
+        assert_eq!(e, 5, "progress=0.3 (30px) should reach first cluster end (byte 5)");
+
+        // progress=0.5 → target_width=50 → 在第二个 cluster 内 20px 处。
+        // cluster_span=5, frac=20/70≈0.286, offset=5+5*0.286≈6.43→round=6
+        let (s2, e2) = f.visible_range_at_progress(0.5);
+        assert_eq!(s2, 0);
+        assert!(e2 > 5 && e2 < 10, "progress=0.5 should be within second cluster, got {e2}");
+
+        // progress=1.0 → 完整范围。
+        let (s3, e3) = f.visible_range_at_progress(1.0);
+        assert_eq!((s3, e3), (0, 10), "progress=1.0 must reach full target range");
     }
 }

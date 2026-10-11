@@ -657,6 +657,10 @@ impl ParagraphLayoutStore {
     /// 与 [`sync_from_visual_lines`] 的区别：只更新 `affected_indices` 中列出的段落，
     /// 不扫描全部视觉行。用于增量排版路径，避免 O(n) 全章扫描。
     ///
+    /// Issue #901 第三轮复核: 用 para_start → (line_start, line_end, height) 索引
+    /// 一次遍历 lines（O(all_lines)），代替每个受影响段落都扫描全部 lines
+    ///（O(affected × all_lines)）。
+    ///
     /// # 参数
     ///
     /// - `lines`：本次排版产生的全部视觉行（含复用 + 重排段落的行）。
@@ -672,43 +676,49 @@ impl ParagraphLayoutStore {
             return;
         }
 
-        // 构建 para_start → 段落索引 的映射，用于从 VisualLine.para_start 找到段落
-        // 只对受影响段落构建映射，避免全章扫描
+        // Issue #901 第三轮复核: 一次遍历 lines，构建 para_start → 统计信息索引。
+        // visual_lines 按段落顺序排列，para_start 变化时切换段落。
         use std::collections::HashMap;
-        let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
-        for &idx in affected_indices {
-            if let Some(entry) = self.entries.get(idx) {
-                para_start_to_idx.insert(entry.document_byte_start, idx);
+        let mut para_stats: HashMap<usize, (usize, usize, f64)> = HashMap::new();
+        // (first_line_index, line_count, total_height)
+        if !lines.is_empty() {
+            let mut current_para_start = lines[0].para_start;
+            let mut first_idx = 0usize;
+            let mut count = 0usize;
+            let mut height = 0.0f64;
+            for (i, line) in lines.iter().enumerate().skip(1) {
+                if line.para_start != current_para_start {
+                    para_stats.insert(current_para_start, (first_idx, count, height));
+                    current_para_start = line.para_start;
+                    first_idx = i;
+                    count = 0;
+                    height = 0.0;
+                }
+                count += 1;
+                height += line.height;
             }
+            para_stats.insert(current_para_start, (first_idx, count, height));
         }
 
-        // 对每个受影响段落，从 lines 中找到对应的视觉行并统计
+        // 对每个受影响段落，O(1) 查表获取统计信息
         for &idx in affected_indices {
             let Some(entry) = self.entries.get(idx) else {
                 continue;
             };
             let para_start = entry.document_byte_start;
 
-            let mut line_count = 0usize;
-            let mut height = 0.0f64;
-            let mut line_start: Option<usize> = None;
-
-            for (i, line) in lines.iter().enumerate() {
-                if line.para_start == para_start {
-                    if line_start.is_none() {
-                        line_start = Some(i);
-                    }
-                    line_count += 1;
-                    height += line.height;
-                }
-            }
+            let (line_count, height, line_start) = if let Some(&(fs, cnt, h)) = para_stats.get(&para_start) {
+                (cnt, h, fs)
+            } else {
+                (0usize, 0.0f64, 0usize)
+            };
 
             if let Some(entry) = self.entries.get_mut(idx) {
                 entry.layout_generation = layout_generation;
                 entry.cache_slot = idx as i32;
                 entry.visual_line_count = line_count;
                 entry.height = height;
-                entry.line_start = line_start.unwrap_or(0);
+                entry.line_start = line_start;
             }
         }
     }

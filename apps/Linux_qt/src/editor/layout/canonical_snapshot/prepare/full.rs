@@ -479,6 +479,51 @@ fn extract_affected_height_updates(
     updates
 }
 
+/// Issue #901 第三轮复核问题 4: 检查 previous_snapshot 的段落文本是否与 new text 完全一致。
+///
+/// 用于区分"真正无正文变化"和"换行结构变化/空行插删"。
+/// 从 prev snapshot 的 `paragraphs` 重建文本，与 `text` 比较。
+/// O(n) 但只在 `no_affected_range` 边界情况调用，不影响常规编辑性能。
+fn prev_snapshot_text_matches(prev: &CanonicalDocumentVisualSnapshot, text: &str) -> bool {
+    let mut reconstructed = String::with_capacity(text.len());
+    for para in &prev.paragraphs {
+        reconstructed.push_str(&para.paragraph_text);
+        reconstructed.push('\n');
+    }
+    // 如果 text 不以 '\n' 结尾，reconstructed 会多一个尾部 '\n'，去掉。
+    if !text.ends_with('\n') && reconstructed.ends_with('\n') {
+        reconstructed.pop();
+    }
+    reconstructed == text
+}
+
+/// Issue #901 第三轮复核问题 2: 从 previous_snapshot 的 visual_lines 构建
+/// `para_start → (line_start_idx, line_end_idx)` 索引，O(all_lines) 一次构建。
+///
+/// 用于增量排版路径中未变段落的 O(1) 行集合查找，
+/// 代替 `prev.visual_lines.iter().filter(...)` 的 O(all_lines) 每段扫描。
+fn build_para_start_to_line_range(
+    visual_lines: &[VisualLine],
+) -> std::collections::HashMap<usize, (usize, usize)> {
+    use std::collections::HashMap;
+    let mut map: HashMap<usize, (usize, usize)> = HashMap::new();
+    if visual_lines.is_empty() {
+        return map;
+    }
+    let mut range_start = 0usize;
+    let mut current_para_start = visual_lines[0].para_start;
+    for (i, vl) in visual_lines.iter().enumerate().skip(1) {
+        if vl.para_start != current_para_start {
+            map.insert(current_para_start, (range_start, i));
+            range_start = i;
+            current_para_start = vl.para_start;
+        }
+    }
+    // 最后一个段落的范围
+    map.insert(current_para_start, (range_start, visual_lines.len()));
+    map
+}
+
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
 ///
 /// # 核心逻辑
@@ -536,21 +581,32 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 只有 store 为空、参数变化、或无 previous_snapshot 时才全篇重排。
     let needs_full_relayout = store_empty || params_changed || previous_snapshot.is_none();
 
-    // no_affected_range 且有 previous_snapshot：无明确受影响范围，直接复用旧 snapshot。
+    // Issue #901 第三轮复核问题 4: no_affected_range 且有 previous_snapshot 时，
+    // 不能盲目复制旧 layout 并换新 text_revision。
+    // 必须区分"真正无正文变化"和"换行结构变化/空行插删/只有换行符变化"：
+    // - 如果 prev snapshot 的段落文本与 new text 完全一致 → 真正无变化，安全复用。
+    // - 如果不一致 → 即使 affected_range 为空，也必须走增量重排，
+    //   否则会把旧排版伪装成新正文（text_revision 标新但 layout 是旧的）。
     if !needs_full_relayout && no_affected_range {
         let prev = previous_snapshot.unwrap();
-        return CanonicalDocumentVisualSnapshot {
-            text_revision,
-            font_size,
-            font_family: font_family.to_string(),
-            line_spacing,
-            text_indent: indent,
-            padding,
-            width,
-            dpr,
-            paragraphs: prev.paragraphs.clone(),
-            visual_lines: prev.visual_lines.clone(),
-        };
+        if prev_snapshot_text_matches(prev, text) {
+            // 真正无正文变化：安全复用旧 snapshot，只更新 text_revision 和排版参数。
+            return CanonicalDocumentVisualSnapshot {
+                text_revision,
+                font_size,
+                font_family: font_family.to_string(),
+                line_spacing,
+                text_indent: indent,
+                padding,
+                width,
+                dpr,
+                paragraphs: prev.paragraphs.clone(),
+                visual_lines: prev.visual_lines.clone(),
+            };
+        }
+        // prev 与 new text 不一致但 affected_range 为空：
+        // 这是错误范围/换行结构变化/空行插删的情况，fall through 到增量重排。
+        // 增量重排会通过段落文本比较找到真正变化的段落并重排。
     }
 
     if needs_full_relayout {
@@ -625,6 +681,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut paragraph_qchar_start: usize = 0;
     let mut line_id: usize = 0;
     let mut paragraph_idx: i32 = 0;
+    // Issue #901 第三轮复核问题 4: 跟踪实际重排的段落索引。
+    // no_affected_range fall-through 时 affected 为空，但文本变化的段落仍被重排。
+    // 用此列表驱动后续 height_index/store 更新，避免漏更新。
+    let mut relayouted_indices: Vec<usize> = Vec::new();
 
     // Issue #901: 增量更新 store 的文本信息，不调用 rebuild_from_text（全章扫描）。
     // 只更新受影响段落的 cache_key，未改段落的 ParagraphId 和 cache_key 保持不变。
@@ -684,6 +744,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
+    // Issue #901 第三轮复核问题 2: 构建 para_start → (line_start, line_end) 索引，
+    // O(all_lines) 一次构建，使未变段落的行集合查找从 O(all_lines) 降为 O(1)。
+    // 此前每个未改段都 `prev.visual_lines.iter().filter(...)` 扫描所有旧行，
+    // 最坏 O(段落数 × 视觉行数)。
+    let prev_line_index = build_para_start_to_line_range(&prev.visual_lines);
+
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
         let paragraph_text = paragraph.trim_end_matches('\n');
@@ -699,23 +765,22 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             let prev_para = &prev.paragraphs[current_idx];
             // 检查段落文本是否相同（内容未变才能复用 shaping）
             if prev_para.paragraph_text == paragraph_text {
-                // 复用 VisualLine — 只更新 y 坐标和 byte offset
-                let prev_lines: Vec<VisualLine> = prev
-                    .visual_lines
-                    .iter()
-                    .filter(|l| l.para_start == prev_para.paragraph_document_byte_start)
-                    .cloned()
-                    .collect();
+                // Issue #901 第三轮复核问题 2: 用 para_start → line range 索引 O(1) 查找，
+                // 代替 `prev.visual_lines.iter().filter(...)` 的 O(all_lines) 扫描。
+                let prev_lines: Vec<VisualLine> =
+                    if let Some(&(start, end)) = prev_line_index.get(&prev_para.paragraph_document_byte_start) {
+                        prev.visual_lines[start..end].to_vec()
+                    } else {
+                        Vec::new()
+                    };
 
                 if !prev_lines.is_empty() {
                     let y_offset = y - prev_lines.first().map(|l| l.y).unwrap_or(y);
                     let byte_offset = paragraph_start as i64 - prev_para.paragraph_document_byte_start as i64;
+                    // Issue #901 第三轮复核问题 2: qchar_offset 也用索引 O(1) 查找，
+                    // 代替 `prev.visual_lines.iter().filter(...).next()` 的 O(all_lines) 扫描。
                     let qchar_offset = paragraph_qchar_start as i64
-                        - prev
-                            .visual_lines
-                            .iter()
-                            .filter(|l| l.para_start == prev_para.paragraph_document_byte_start)
-                            .next()
+                        - prev_lines.first()
                             .map(|l| l.qchar_start as i64 - l.para_qchar_start as i64)
                             .unwrap_or(0);
 
@@ -783,6 +848,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
 
         // ── 受影响段落：重新走 QTextLayout ──
+        // Issue #901 第三轮复核: 记录实际重排的段落索引。
+        relayouted_indices.push(current_idx);
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
@@ -1038,11 +1105,20 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 只对受影响段落调用 update_height（O(k log n)），不 rebuild（O(n)）。
     // 只对受影响段落同步排版结果，不 sync_from_visual_lines（O(n)）。
 
-    // 计算受影响段落索引列表
+    // Issue #901 第三轮复核问题 4: 用实际重排的段落索引驱动后续更新。
+    // affected_indices 基于 affected range，但 no_affected_range fall-through 时
+    // affected 为空而 relayouted_indices 记录了真正重排的段落。
+    // 合并 affected_indices 和 relayouted_indices，去重。
     let affected_indices: Vec<usize> = if affected.full_relayout {
         (0..snapshot.paragraphs.len()).collect()
     } else {
-        (affected.relayout_start..affected.relayout_end).collect()
+        // 合并 affected range 和实际重排的段落
+        let mut indices: Vec<usize> = (affected.relayout_start..affected.relayout_end)
+            .chain(relayouted_indices.iter().copied())
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
     };
 
     // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致

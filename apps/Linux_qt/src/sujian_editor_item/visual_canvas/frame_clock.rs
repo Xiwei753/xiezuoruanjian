@@ -120,21 +120,34 @@ impl FrameClock {
 
     /// 设定新目标姿态。
     ///
-    /// **先从最新成功提交的真实视觉 pose 读取 current_pose**（Issue #901 阻塞 4），
-    /// 再设定新 target。如果 `last_committed_pose` 存在，用它作为新的 `current_pose`；
-    /// 否则回退到 `frame_now` 采样当前实际显示 pose。
+    /// **先从最新成功提交的真实视觉 pose 读取 current_pose 的 caret/scroll**
+    /// （Issue #901 阻塞 4），再设定新 target。
+    ///
+    /// Issue #901 问题1：**progress 重置为 0**，新过渡从头开始。
+    /// 旧实现把 `last_committed_pose.progress`（上一过渡的 1.0）继承成
+    /// 新过渡的起始进度，导致起点和终点都是 1→1，`SceneTransition` 每帧
+    /// 取 progress=1，吞字/吐字直接跳终点，没有运动。新实现保留 caret/scroll
+    /// 的视觉连续性，但 progress 从 0 开始插值到 target.progress（始终 1.0）。
     ///
     /// 这保证：
-    /// - 新 target 到来保留当前已提交姿态/速度，不从 1.0 饱和进度继承。
+    /// - 新 target 到来保留当前已提交姿态的 caret/scroll，不从 1.0 饱和进度继承。
+    /// - 新过渡的 progress 从 0 开始，最终到达 1.0，动画真正运动。
     /// - "已显示半字 → 立即删除"从半字真正接续，不会从理论位置跳变。
     /// - 姿态和速度连续，无跳变。
     pub(crate) fn retarget(&mut self, new_target: VisualPose, now_ms: f64) {
-        // Issue #901 阻塞 4：优先从最新成功提交的真实视觉 pose 读取。
+        // Issue #901 阻塞 4：优先从最新成功提交的真实视觉 pose 读取 caret/scroll。
         let current_displayed = match self.last_committed_pose {
             Some(committed) => committed,
             None => self.frame_now(now_ms),
         };
-        self.current_pose = current_displayed;
+        // Issue #901 问题1：progress 重置为 0，新过渡从头开始。
+        // caret/scroll 从 last_committed_pose 取（保留视觉连续），
+        // 但 progress 不继承上一过渡的 1.0。
+        self.current_pose = VisualPose {
+            progress: 0.0,
+            caret_position: current_displayed.caret_position,
+            scroll_position: current_displayed.scroll_position,
+        };
         self.target_pose = new_target;
         self.retarget_time_ms = now_ms;
     }
@@ -185,14 +198,22 @@ impl FrameClock {
     /// Issue #901 问题5：帧调度不再仅用 `opacity<1` 判断是否需要下一帧。
     /// 改为由 `FrameClock` 是否到达终点决定。
     ///
+    /// Issue #901 问题1：`epsilon` 钳制为不超过 `0.001`（严格小容差）。
+    /// 旧实现接受调用方传入 `0.5`，导致 progress 只走到约 50% 就被判完成，
+    /// 动画半途停住。新实现无论调用方传入多大的 epsilon，实际都用
+    /// `min(epsilon, 0.001)`，确保 progress 真正接近 1.0 才视为 settled。
+    ///
+    /// **调用方应传入 `0.001` 而非 `0.5`**。此处的钳制是防御性措施，
+    /// 防止旧调用方的大容差导致动画提前结束。
+    ///
     /// 只检查 `progress` 是否接近 1.0——progress=1.0 时所有几何自然到达
     /// 目标位置（FLIP 插值在 progress=1.0 时返回 target_rect）。
     /// 不单独检查 caret/scroll 位置，因为它们由 progress 统一驱动。
-    ///
-    /// `epsilon` 是 progress 的容差（如 0.01 表示 progress > 0.99 视为 settled）。
     pub(crate) fn is_settled(&self, now_ms: f64, epsilon: f64) -> bool {
+        // Issue #901 问题1：钳制 epsilon 上限为 0.001，防止大容差导致动画提前结束。
+        let eps = epsilon.min(0.001);
         let current = self.frame_now(now_ms);
-        (current.progress - self.target_pose.progress).abs() < epsilon
+        (current.progress - self.target_pose.progress).abs() < eps
     }
 
     /// 计算指数衰减的收敛系数 alpha ∈ [0, 1)。
@@ -409,5 +430,63 @@ mod tests {
         let committed = pose(0.5, 50.0, 0.0, 0.0, 0.0);
         clock.commit_pose(committed, 16.0);
         assert_eq!(clock.last_committed_pose(), Some(committed));
+    }
+
+    #[test]
+    fn retarget_resets_progress_to_zero() {
+        // Issue #901 问题1：retarget 后 current_pose.progress 必须为 0，
+        // 不从 last_committed_pose 的 1.0 继承。
+        let initial = pose(0.0, 0.0, 0.0, 0.0, 0.0);
+        let target1 = pose(1.0, 100.0, 0.0, 0.0, 0.0);
+        let mut clock = FrameClock::new(initial, 100.0, 0.0);
+        clock.retarget(target1, 0.0);
+
+        // 提交一个 progress=1.0 的帧（动画完成）。
+        let committed = pose(1.0, 100.0, 0.0, 0.0, 0.0);
+        clock.commit_pose(committed, 200.0);
+
+        // 新 target 到来：current_pose.progress 必须重置为 0，
+        // 不能从 committed.progress=1.0 继承。
+        let target2 = pose(1.0, 200.0, 0.0, 0.0, 0.0);
+        clock.retarget(target2, 200.0);
+
+        // retarget 后 frame_now(200) elapsed=0 → 返回 current_pose。
+        let after_retarget = clock.frame_now(200.0);
+        assert!(
+            (after_retarget.progress - 0.0).abs() < 1e-9,
+            "retarget must reset progress to 0, got {}",
+            after_retarget.progress
+        );
+        // caret/scroll 仍从 committed 继承（视觉连续）。
+        assert!(
+            (after_retarget.caret_position.x - 100.0).abs() < 1e-9,
+            "retarget must preserve caret from committed, got {}",
+            after_retarget.caret_position.x
+        );
+    }
+
+    #[test]
+    fn is_settled_clamps_large_epsilon() {
+        // Issue #901 问题1：is_settled 钳制 epsilon 上限为 0.001，
+        // 即使调用方传入 0.5 也只用 0.001。
+        let current = pose(0.0, 0.0, 0.0, 0.0, 0.0);
+        let target = pose(1.0, 100.0, 0.0, 0.0, 0.0);
+        let mut clock = FrameClock::new(current, 100.0, 0.0);
+        clock.retarget(target, 0.0);
+
+        // elapsed=50ms, alpha≈0.393, progress≈0.393。
+        // 旧实现用 epsilon=0.5 → |0.393-1.0|=0.607 > 0.5 → not settled（刚好不 settled）。
+        // 但如果 progress=0.6，旧实现 |0.6-1.0|=0.4 < 0.5 → settled（错误，只走到 60%）。
+        // 新实现钳制 epsilon=0.001 → |0.393-1.0|=0.607 > 0.001 → not settled。
+        assert!(
+            !clock.is_settled(50.0, 0.5),
+            "is_settled must clamp epsilon to 0.001, not accept 0.5"
+        );
+
+        // 很长时间后 progress≈1.0 → settled。
+        assert!(
+            clock.is_settled(10000.0, 0.5),
+            "is_settled must be true when progress truly reaches 1.0"
+        );
     }
 }

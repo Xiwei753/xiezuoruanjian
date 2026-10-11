@@ -150,11 +150,26 @@ impl SujianEditorItem {
         // 旧 PreparedEditMotion / handle_composition_commit_or_cancel 已删除。
         self.pipeline.visual_canvas_mut().apply_edit_result(result);
 
+        // Issue #901 问题2：IME commit 专属路径原子收口。
+        // 原顺序是先 build_target_layout_descriptor（读旧 current_layout_snapshot），
+        // 后 set_current_layout_snapshot(Some(new_snapshot))——target 读到的是旧布局。
+        // 修复：先设置 new/previous layout snapshot，再 build target，
+        // 让 build_target_layout_descriptor 读到本次 Core edit 后的新排版。
+        //
+        // 原子收口顺序：Core edit → 新文本排版(new_snapshot) →
+        // set_current_layout_snapshot → TargetLayoutDescriptor →
+        // visual_canvas.apply_target_layout。
+        self.pipeline
+            .set_previous_layout_snapshot(Some(old_snapshot.clone()));
+        self.pipeline
+            .set_current_layout_snapshot(Some(new_snapshot.clone()));
+
         // Issue #901 问题5：IME composition commit 专属路径除了调用
         // visual_canvas.apply_edit_result，还要像 transaction.rs::record_transaction
         // 一样调用 build_target_layout_descriptor + visual_canvas.apply_target_layout，
         // 把这份真正的 new snapshot 转换成并提交到 CanvasController.target_layout。
         // 与普通 record_transaction 的新接线一致。
+        // Issue #901 问题2：此时 current_layout_snapshot 已是本次 Core edit 后的新布局。
         let now_ms = Self::frame_now_ms(&self.last_frame_now);
         if let Some(target) = self.build_target_layout_descriptor() {
             self.pipeline
@@ -165,9 +180,10 @@ impl SujianEditorItem {
         let new_revision = LayoutRevision::next();
 
         let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
-        // Issue #901: 旧 animation_coordinator.collect_active_snapshot_ids() 已删除。
-        // TODO(issue-901): active ids 由 visual_canvas 的绘制计划决定，暂用空列表。
-        let active_ids: [super::texture_cache::LineSnapshotId; 0] = [];
+        // Issue #901 问题6：active ids 不再传空列表。
+        // 从当前 layout snapshot 和 previous layout snapshot 的 line_snapshots
+        // 提取所有 LineSnapshotId，保证动画过渡期间新旧行纹理都被保留。
+        let active_ids = self.collect_active_snapshot_ids_from_layout();
         self.pipeline.retain_active_snapshot_ids(&active_ids);
         self.prepare_visual_edit_textures(&old_snapshot);
 
@@ -177,10 +193,6 @@ impl SujianEditorItem {
         self.pipeline.set_layout_revision(new_revision);
         self.pipeline
             .set_current_canonical_snapshot(Some(new_canonical));
-        self.pipeline
-            .set_previous_layout_snapshot(Some(old_snapshot));
-        self.pipeline
-            .set_current_layout_snapshot(Some(new_snapshot));
 
         self.last_event_count = 1;
         self.last_summary = format!(
@@ -204,6 +216,15 @@ impl SujianEditorItem {
         // Issue #819 评论 5968931455 问题 2.2: 返回 VisualPrepareOutcome，
         // 透传 skip reason，不再让 edit_flow.rs 猜。
         visual_outcome
+    }
+
+    /// Issue #901 问题6：从 pipeline 的 current/previous layout snapshot
+    /// 提取所有 active LineSnapshotId，供纹理生命周期 retain 使用。
+    /// 委托到 pipeline 的同名方法。
+    pub(crate) fn collect_active_snapshot_ids_from_layout(
+        &self,
+    ) -> Vec<super::texture_cache::LineSnapshotId> {
+        self.pipeline.collect_active_snapshot_ids_from_layout()
     }
 
     /// Issue #810 评论 5934060933 问题1: 在真正调用 Core edit command 之前保证

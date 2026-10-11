@@ -15,6 +15,13 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub opacity: f64,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
+    /// Issue #901 问题4：裁剪矩形（画布/视口坐标）。
+    ///
+    /// 渲染时只绘制 `target_rect ∩ clip_rect`。由 `canvas_draw_plan_to_glyph_infos`
+    /// 从 `DrawCommand.clip_rect` 填充。`render_text_animation_layer` 用它对
+    /// target_rect 和 source_uv 做预裁剪，使动画纹理的 reveal/conceal 裁剪
+    /// 真正作用到 Qt 图形层，不再只靠静态层排除。
+    pub clip_rect: SourceRect,
     /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
     pub logical_range: (usize, usize),
     /// 此 glyph 在当前 canonical revision 中对应的范围。纯删除旧字没有该身份。

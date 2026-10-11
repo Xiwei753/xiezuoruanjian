@@ -509,9 +509,10 @@ impl LinuxEditorPipeline {
         // 视觉过渡由 visual_canvas 的 RevisionChain 管理。
         // 把新 canonical 保存为当前 canonical。
         self.current_canonical_snapshot = Some(new_snapshot);
-        // TODO(issue-901): retain_active_snapshot_ids 的 active ids 来源由
-        // visual_canvas 的绘制计划决定，暂用空列表释放所有动画纹理。
-        let active_ids: [LineSnapshotId; 0] = [];
+        // Issue #901 问题6：不再传空 active ids。
+        // 从 current/previous layout snapshot 的 line_snapshots 提取所有
+        // 非 none 的 LineSnapshotId，保证动画过渡期间新旧行纹理都被保留。
+        let active_ids = self.collect_active_snapshot_ids_from_layout();
         self.texture_cache.retain_active_snapshot_ids(&active_ids);
         new_revision
     }
@@ -1068,6 +1069,31 @@ impl LinuxEditorPipeline {
 
     pub fn current_layout_snapshot(&self) -> &Option<EditorLayoutSnapshot> {
         &self.current_layout_snapshot
+    }
+
+    /// Issue #901 问题6：返回前一次布局快照，供 active snapshot ids 提取。
+    pub fn previous_layout_snapshot(&self) -> &Option<EditorLayoutSnapshot> {
+        &self.previous_layout_snapshot
+    }
+
+    /// Issue #901 问题6：从 current/previous layout snapshot 的 line_snapshots
+    /// 提取所有非 none 的 LineSnapshotId，作为纹理生命周期 retain 的 active ids。
+    ///
+    /// 动画过渡期间新旧行纹理都在使用（presented 来自旧布局，target 来自新布局），
+    /// 所以两个 snapshot 的行 id 都必须保留。去重后返回。
+    pub fn collect_active_snapshot_ids_from_layout(&self) -> Vec<LineSnapshotId> {
+        let mut ids: Vec<LineSnapshotId> = Vec::new();
+        for snap in [self.current_layout_snapshot.as_ref(), self.previous_layout_snapshot.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            for line in &snap.line_snapshots {
+                if !line.id.is_none() && !ids.contains(&line.id) {
+                    ids.push(line.id);
+                }
+            }
+        }
+        ids
     }
 
     pub fn set_current_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {

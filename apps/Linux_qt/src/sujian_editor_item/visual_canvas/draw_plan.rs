@@ -17,6 +17,7 @@
 use super::ownership::OwnershipRule;
 use super::presented_scene::{CanvasRect, CanvasVec2};
 use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
+use writer_core::editor::EditorRevision;
 
 /// 绘制命令类型 —— 决定渲染层如何绘制该命令。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -170,6 +171,17 @@ pub(crate) struct CanvasDrawPlan {
     pub empty: bool,
     /// 已解决重叠的绘制命令列表。
     pub commands: Vec<DrawCommand>,
+    /// Issue #901 问题3：该计划对应的 render frame id。
+    ///
+    /// 由 `SceneTransition::build_draw_plan` 从 `PresentedScene.frame_id` 拷贝，
+    /// 供 `build_presented_scene_from_frame` 原样回填到下一张 `PresentedScene`。
+    pub frame_id: u64,
+    /// Issue #901 问题3：该计划对应的 document session generation。
+    pub document_session: u64,
+    /// Issue #901 问题3：产生该计划时绑定的 Core source revision。
+    pub source_revision: EditorRevision,
+    /// Issue #901 问题3：该计划对应的最新 Core target revision。
+    pub target_revision: EditorRevision,
 }
 
 impl CanvasDrawPlan {
@@ -180,12 +192,17 @@ impl CanvasDrawPlan {
             caret_sample: CanvasVec2::new(0.0, 0.0),
             empty: true,
             commands: Vec::new(),
+            frame_id: 0,
+            document_session: 0,
+            source_revision: EditorRevision::initial(),
+            target_revision: EditorRevision::initial(),
         }
     }
 
     /// 从绘制命令列表构造绘制计划。
     ///
     /// `empty` 由命令列表是否含可见内容自动推导。
+    /// 元数据字段使用默认值；需要真实元数据时用 `from_commands_with_metadata`。
     pub(crate) fn from_commands(
         now_ms: f64,
         caret_sample: CanvasVec2,
@@ -197,6 +214,37 @@ impl CanvasDrawPlan {
             caret_sample,
             empty: !has_visible,
             commands,
+            frame_id: 0,
+            document_session: 0,
+            source_revision: EditorRevision::initial(),
+            target_revision: EditorRevision::initial(),
+        }
+    }
+
+    /// Issue #901 问题3：从绘制命令列表构造绘制计划，携带完整元数据。
+    ///
+    /// `build_presented_scene_from_frame` 可从返回的 `CanvasDrawPlan` 原样
+    /// 拷贝 `frame_id` / `document_session` / `source_revision` /
+    /// `target_revision` 到下一张 `PresentedScene`，不依赖外部额外传参。
+    pub(crate) fn from_commands_with_metadata(
+        now_ms: f64,
+        caret_sample: CanvasVec2,
+        commands: Vec<DrawCommand>,
+        frame_id: u64,
+        document_session: u64,
+        source_revision: EditorRevision,
+        target_revision: EditorRevision,
+    ) -> Self {
+        let has_visible = commands.iter().any(DrawCommand::has_visible_area);
+        Self {
+            now_ms,
+            caret_sample,
+            empty: !has_visible,
+            commands,
+            frame_id,
+            document_session,
+            source_revision,
+            target_revision,
         }
     }
 

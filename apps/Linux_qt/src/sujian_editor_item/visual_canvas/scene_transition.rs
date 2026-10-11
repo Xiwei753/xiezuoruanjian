@@ -109,11 +109,13 @@ impl SceneTransition {
     /// 通过 `RevisionChain` 判断每个已显示字形贡献在最终正文里的关系：
     /// - **存活字**：`map_presented_to_latest(byte_range)` 返回 `Some`，
     ///   只做老→新矩形位移（FLIP），不淡出淡入。透明度保持 1.0。
+    ///   clip 从 target 坐标系计算（`target.clip ∩ interpolated_rect`）。
     /// - **删除字**：`map_presented_to_latest(byte_range)` 返回 `None`，
-    ///   从其已显示裁剪收回，透明度由 `(1 - progress)` 控制。
+    ///   沿相反方向从已显示宽度→0 裁剪收回（`source_uv` 宽度按
+    ///   `displayed_width * (1-progress)` 收缩），不是 opacity=(1-progress)。
     /// - **新增字**：target glyph run 的 byte_range 在 presented revision 中
-    ///   不存在（`map_latest_to_presented` 返回 `None`），做 UV/裁剪揭示，
-    ///   透明度由 `progress` 控制。
+    ///   不存在，沿文字方向从 0→实际字形可见宽度裁剪揭示（`source_uv` 宽度
+    ///   按 `full_width * progress` 展开），不是 opacity=progress。
     ///
     /// ## 重叠解决
     ///
@@ -127,8 +129,8 @@ impl SceneTransition {
         now_ms: f64,
     ) -> CanvasDrawPlan {
         let progress = pose.progress.clamp(0.0, 1.0);
-        let fade_out = 1.0 - progress; // 删除字淡出系数
-        let fade_in = progress; // 新增字淡入系数
+        let fade_out = 1.0 - progress; // 删除字裁剪收回系数
+        let fade_in = progress; // 新增字裁剪揭示系数
 
         let mut commands = Vec::new();
 
@@ -181,31 +183,26 @@ impl SceneTransition {
                     }
                 }
             } else {
-                // 删除字：从已显示裁剪收回，透明度由 (1 - progress) 控制。
-                if fade_out > 0.0 {
-                    if let Some(cmd) = Self::command_from_contribution(
-                        contrib,
-                        fade_out,
-                        presented,
-                        super::ownership::OwnershipRule::StaticText,
-                    ) {
-                        commands.push(cmd);
-                    }
+                // 删除字：沿相反方向从已显示宽度→0 裁剪收回。
+                // Issue #901 问题4：不是 opacity=(1-progress)，
+                // 而是 source_uv/target_rect 宽度按 (1-progress) 收缩。
+                if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                    commands.push(cmd);
                 }
             }
         }
 
         // 2. 从 target 生成新增字命令（非存活的 glyph run）。
-        if fade_in > 0.0 {
-            for (idx, run) in target.glyph_runs.iter().enumerate() {
-                if surviving_target_indices[idx] {
-                    // 存活字已由 presented 侧 FLIP 处理，跳过。
-                    continue;
-                }
-                // 新增字：做 UV/裁剪揭示，透明度由 progress 控制。
-                if let Some(cmd) = Self::command_from_glyph_run(run, fade_in, target) {
-                    commands.push(cmd);
-                }
+        for (idx, run) in target.glyph_runs.iter().enumerate() {
+            if surviving_target_indices[idx] {
+                // 存活字已由 presented 侧 FLIP 处理，跳过。
+                continue;
+            }
+            // 新增字：沿文字方向从 0→full_width 裁剪揭示。
+            // Issue #901 问题4：不是 opacity=progress，
+            // 而是 source_uv/target_rect 宽度按 progress 展开。
+            if let Some(cmd) = Self::command_for_inserting(run, progress, target) {
+                commands.push(cmd);
             }
         }
 
@@ -223,7 +220,15 @@ impl SceneTransition {
         let resolved = Ownership::resolve(&commands);
 
         let caret_sample = pose.caret_position;
-        CanvasDrawPlan::from_commands(now_ms, caret_sample, resolved)
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            caret_sample,
+            resolved,
+            presented.frame_id,
+            presented.document_session,
+            presented.source_revision,
+            revision_chain.latest_revision(),
+        )
     }
 
     /// 只从 `PresentedScene` 生成绘制计划（无目标布局时使用）。
@@ -263,7 +268,59 @@ impl SceneTransition {
         }
 
         let resolved = Ownership::resolve(&commands);
-        CanvasDrawPlan::from_commands(now_ms, pose.caret_position, resolved)
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            pose.caret_position,
+            resolved,
+            presented.frame_id,
+            presented.document_session,
+            presented.source_revision,
+            presented.source_revision, // 无 target，target_revision = source
+        )
+    }
+
+    /// Issue #901 问题1+3：尚无 `PresentedScene` 时从 target 生成初始静态画面。
+    ///
+    /// 首帧（`presented_scene` 为 None）但有 `TargetLayoutDescriptor` 时，
+    /// 从 target 的 glyph_runs 生成完整静态画面（progress=1.0）。
+    /// **不注册为 `presented_scene`**——`presented_scene` 只在
+    /// `on_frame_committed`（afterFrameEnd 回执）时设置。
+    pub(crate) fn build_draw_plan_target_only(
+        target: &TargetLayoutDescriptor,
+        revision_chain: &RevisionChain,
+        now_ms: f64,
+    ) -> CanvasDrawPlan {
+        let mut commands = Vec::new();
+
+        // 从 target 生成静态画面（progress=1.0，完整显示）。
+        for run in &target.glyph_runs {
+            if let Some(cmd) = Self::command_from_glyph_run(run, 1.0, target) {
+                commands.push(cmd);
+            }
+        }
+
+        // 光标命令。
+        if let Some(tc) = &target.caret {
+            if tc.visible {
+                let rect = CanvasRect::new(tc.position.x, tc.position.y, tc.width, tc.height);
+                commands.push(DrawCommand::caret(rect, target.clip, 1.0));
+            }
+        }
+
+        let resolved = Ownership::resolve(&commands);
+        let caret_sample = super::presented_scene::CanvasVec2::new(
+            target.caret.filter(|c| c.visible).map(|c| c.position.x).unwrap_or(0.0),
+            target.caret.filter(|c| c.visible).map(|c| c.position.y).unwrap_or(0.0),
+        );
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            caret_sample,
+            resolved,
+            0, // frame_id: 尚无已提交帧
+            0, // document_session: 尚无
+            revision_chain.presented_revision(),
+            revision_chain.latest_revision(),
+        )
     }
 
     /// 在 target glyph_runs 中查找与存活贡献匹配的 run。
@@ -348,8 +405,11 @@ impl SceneTransition {
         }
 
         // 存活字用 StaticText 标记（不参与淡入淡出，保持完整透明度）。
-        // clip 用 presented 的 visible_clip（已显示部分）与 target clip 的合并。
-        let clip = Self::intersect_clip(contrib.visible_clip, target.clip);
+        // Issue #901 问题4：clip 从 target 坐标系计算（字形已移动到新位置），
+        // 用 target.clip 与 interpolated_rect 求交，不是拿旧 visible_clip 与
+        // 新 viewport 求交。旧裁剪是旧帧屏幕坐标，字形已移动后这块裁剪
+        // 不能原地不变。
+        let clip = Self::intersect_clip(target.clip, interpolated);
         Some(DrawCommand::text_fragment(
             run.snapshot_id,
             run.source_uv,
@@ -446,6 +506,104 @@ impl SceneTransition {
         ))
     }
 
+    /// Issue #901 问题4：为新增字生成裁剪揭示命令。
+    ///
+    /// 沿文字视觉方向从 0→实际字形可见宽度逐步揭示。
+    /// `source_uv` 宽度从 `full_width * progress` 计算，
+    /// `target_rect` 宽度也按 `progress` 展开。
+    /// **不是 opacity=progress**——用裁剪揭示而非透明度淡入。
+    fn command_for_inserting(
+        run: &TargetGlyphRun,
+        progress: f64,
+        target: &TargetLayoutDescriptor,
+    ) -> Option<DrawCommand> {
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return None;
+        }
+        if progress <= 0.0 {
+            return None;
+        }
+        // 沿文字方向从 0→full_width 揭示。
+        let revealed_uv_w = run.source_uv.w * progress;
+        let revealed_doc_w = run.document_rect.w * progress;
+        if revealed_uv_w <= 0.0 || revealed_doc_w <= 0.0 {
+            return None;
+        }
+        let source_uv = CanvasRect::new(
+            run.source_uv.x,
+            run.source_uv.y,
+            revealed_uv_w,
+            run.source_uv.h,
+        );
+        let viewport_rect = CanvasRect::new(
+            run.document_rect.x - target.scroll.x,
+            run.document_rect.y - target.scroll.y,
+            revealed_doc_w,
+            run.document_rect.h,
+        );
+        Some(DrawCommand::text_fragment(
+            run.snapshot_id,
+            source_uv,
+            viewport_rect,
+            target.clip,
+            1.0, // 用裁剪揭示，不用透明度
+            super::ownership::OwnershipRule::AnimatedText,
+            run.byte_range,
+        ))
+    }
+
+    /// Issue #901 问题4：为删除字生成裁剪收回命令。
+    ///
+    /// 沿相反方向从已显示宽度→0 逐步收回。
+    /// `source_uv` 宽度从 `displayed_width * (1-progress)` 计算，
+    /// `target_rect` 宽度也按 `(1-progress)` 收缩。
+    /// **不是 opacity=(1-progress)**——用裁剪收回而非透明度淡出。
+    fn command_for_deleting(
+        contrib: &PixelContribution,
+        progress: f64,
+        presented: &PresentedScene,
+    ) -> Option<DrawCommand> {
+        if !contrib.has_visible_area() {
+            return None;
+        }
+        let fade_out = 1.0 - progress;
+        if fade_out <= 0.0 {
+            return None;
+        }
+        // 沿相反方向从已显示宽度→0 收回。
+        let remaining_uv_w = contrib.source_uv.w * fade_out;
+        let remaining_doc_w = contrib.document_rect.w * fade_out;
+        if remaining_uv_w <= 0.0 || remaining_doc_w <= 0.0 {
+            return None;
+        }
+        let source_uv = CanvasRect::new(
+            contrib.source_uv.x,
+            contrib.source_uv.y,
+            remaining_uv_w,
+            contrib.source_uv.h,
+        );
+        let transformed = Self::transform_rect(contrib.document_rect, presented.transform);
+        let target_rect = CanvasRect::new(
+            transformed.x + presented.position.x,
+            transformed.y + presented.position.y,
+            remaining_doc_w,
+            transformed.h,
+        );
+        let opacity = contrib.opacity * presented.opacity;
+        if opacity <= 0.0 {
+            return None;
+        }
+        Some(DrawCommand::text_fragment(
+            contrib.snapshot_id,
+            source_uv,
+            target_rect,
+            contrib.visible_clip,
+            opacity,
+            super::ownership::OwnershipRule::StaticText,
+            contrib.byte_range,
+        ))
+    }
+
     /// 生成光标命令：插值 presented caret 和 target caret。
     ///
     /// - `progress < 0.5`：显示 presented caret（淡出）。
@@ -518,6 +676,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity,
@@ -670,6 +829,7 @@ mod tests {
     #[test]
     fn build_draw_plan_deleted_text_fades_out() {
         // 删除字：RevisionChain 将 byte_range 映射到 None。
+        // Issue #901 问题4：删除字用裁剪收回而非透明度淡出。
         let presented = sample_presented(1.0);
         let target = TargetLayoutDescriptor {
             layout_revision: LayoutRevision::initial(),
@@ -693,27 +853,35 @@ mod tests {
             16.0,
         );
 
-        // 删除字在 progress=0.5 时透明度 = (1 - 0.5) = 0.5。
+        // 删除字在 progress=0.5 时用裁剪收回：
+        // source_uv 宽度 = 100 * (1 - 0.5) = 50，opacity 保持 1.0。
         let static_cmd = plan
             .commands
             .iter()
             .find(|c| c.ownership == OwnershipRule::StaticText)
-            .expect("deleted text must be present as StaticText fading out");
+            .expect("deleted text must be present as StaticText clipping out");
         assert!(
-            (static_cmd.opacity - 0.5).abs() < 1e-9,
-            "deleted text opacity must be (1 - progress) = 0.5, got {}",
+            (static_cmd.opacity - 1.0).abs() < 1e-9,
+            "deleted text opacity must be 1.0 (clip-based, not fade), got {}",
             static_cmd.opacity
+        );
+        assert!(
+            (static_cmd.source_uv.w - 50.0).abs() < 1e-9,
+            "deleted text source_uv width must be 50 (100 * (1-0.5)), got {}",
+            static_cmd.source_uv.w
         );
     }
 
     #[test]
     fn build_draw_plan_new_text_fades_in() {
         // 新增字：target 有 glyph run，presented 无对应贡献。
+        // Issue #901 问题4：新增字用裁剪揭示而非透明度淡入。
         let presented = PresentedScene {
             source_revision: EditorRevision::initial(),
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,
@@ -732,16 +900,22 @@ mod tests {
             16.0,
         );
 
-        // 新增字在 progress=0.5 时透明度 = 0.5。
+        // 新增字在 progress=0.5 时用裁剪揭示：
+        // source_uv 宽度 = 100 * 0.5 = 50，opacity 保持 1.0。
         let animated_cmd = plan
             .commands
             .iter()
             .find(|c| c.ownership == OwnershipRule::AnimatedText)
-            .expect("new text must be present as AnimatedText fading in");
+            .expect("new text must be present as AnimatedText clipping in");
         assert!(
-            (animated_cmd.opacity - 0.5).abs() < 1e-9,
-            "new text opacity must be progress = 0.5, got {}",
+            (animated_cmd.opacity - 1.0).abs() < 1e-9,
+            "new text opacity must be 1.0 (clip-based, not fade), got {}",
             animated_cmd.opacity
+        );
+        assert!(
+            (animated_cmd.source_uv.w - 50.0).abs() < 1e-9,
+            "new text source_uv width must be 50 (100 * 0.5), got {}",
+            animated_cmd.source_uv.w
         );
     }
 
@@ -752,6 +926,7 @@ mod tests {
             document_session: 1,
             frame_id: 1,
             geometry_id: 1,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

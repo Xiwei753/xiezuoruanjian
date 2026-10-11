@@ -182,12 +182,9 @@ impl QQuickItem for SujianEditorItem {
         // Issue #901: 旧 animation_coordinator.consume_submitted_frames /
         // collect_active_snapshot_ids 已删除。帧提交 mailbox 的 texture retain
         // 改由 visual_canvas 的绘制计划决定。
-        // TODO(issue-901): integrate with visual_canvas to retain active snapshot ids.
-        let handoff_promoted = false;
-        if handoff_promoted {
-            let active_ids: Vec<super::layout_snapshot::LineSnapshotId> = Vec::new();
-            self.pipeline.retain_active_snapshot_ids(&active_ids);
-        }
+        // Issue #901 问题3/问题6：retain_active_snapshot_ids 的真实 active ids
+        // 在下方 canvas_plan 采样之后计算（需要 canvas_plan 的 snapshot_ids +
+        // mailbox 的未确认帧 snapshot_ids）。此处的占位已移到 canvas_plan 之后。
 
         // Pure pointer/keyboard routes remain owned by CursorController. In coordinated
         // TextTransaction mode, build_render_plan_full samples the edit timeline once and
@@ -280,6 +277,21 @@ impl QQuickItem for SujianEditorItem {
                 .visual_canvas_mut()
                 .initialize_presented_from_target(frame_now_ms);
             let canvas_plan = self.pipeline.visual_canvas().frame(frame_now_ms);
+
+            // Issue #901 问题3/问题6：从 frame_submission_mailbox 的未确认帧
+            // 引用的 snapshot ids + 当前 canvas_plan 引用的 snapshot ids，
+            // 计算真正活跃的 snapshot id 列表，传给 retain_active_snapshot_ids。
+            // 这保证正在动画的纹理和尚未被 afterFrameEnd 确认的帧引用的纹理
+            // 都不会被 texture_cache 回收。
+            {
+                let mut active_ids = self.frame_submission_mailbox.active_snapshot_ids();
+                for cmd in &canvas_plan.commands {
+                    if !cmd.snapshot_id.is_none() && !active_ids.contains(&cmd.snapshot_id) {
+                        active_ids.push(cmd.snapshot_id);
+                    }
+                }
+                self.pipeline.retain_active_snapshot_ids(&active_ids);
+            }
 
             let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);
 
@@ -441,6 +453,16 @@ impl QQuickItem for SujianEditorItem {
                 ) {
                     self.next_render_frame_id =
                         self.next_render_frame_id.wrapping_add(1);
+                    // Issue #901 问题3/问题6：从 canvas_plan 的 commands 提取真实
+                    // snapshot_ids，不再传 Vec::new()。帧提交 mailbox 的
+                    // active_snapshot_ids() 依赖此列表决定哪些 QImage 不能释放，
+                    // retain_active_snapshot_ids 也依赖它保持纹理生命周期。
+                    let snapshot_ids: Vec<super::layout_snapshot::LineSnapshotId> = canvas_plan
+                        .commands
+                        .iter()
+                        .filter(|cmd| !cmd.snapshot_id.is_none())
+                        .map(|cmd| cmd.snapshot_id)
+                        .collect();
                     // Stage 到 frame_submission，等 afterFrameEnd 回执后才 commit。
                     self.frame_submission_mailbox.stage_rendered_frame(
                         self.document_session,
@@ -451,7 +473,7 @@ impl QQuickItem for SujianEditorItem {
                             .unwrap_or_else(super::layout_revision::LayoutRevision::initial),
                         0, // transition_id
                         render_plan.ownership.ownership_revision,
-                        Vec::new(), // snapshot_ids
+                        snapshot_ids, // 真实 snapshot_ids
                         Vec::new(), // terminal_motion_indices
                         Vec::new(), // visible_width_updates
                         false,      // terminal_frame
@@ -512,7 +534,7 @@ impl QQuickItem for SujianEditorItem {
                         && cmd.has_visible_area()
                 });
             let canvas_not_settled =
-                has_active_canvas && !self.pipeline.visual_canvas().controller().frame_clock().is_settled(frame_now_ms, 0.5);
+                has_active_canvas && !self.pipeline.visual_canvas().controller().frame_clock().is_settled(frame_now_ms, 0.001);
             if self.cursor_ctrl.animation.is_some() || canvas_not_settled {
                 self.request_frame_update();
             }
@@ -795,6 +817,7 @@ impl SujianEditorItem {
             document_session: self.document_session,
             frame_id,
             geometry_id,
+            pose_progress: 1.0,
             clip: CanvasRect::new(0.0, 0.0, self.bounding_width(), viewport_h),
             position: CanvasVec2::new(0.0, 0.0),
             opacity: 1.0,

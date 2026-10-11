@@ -88,6 +88,11 @@ pub struct EditorLayout {
     /// 使增量排版路径能复用不受影响段落的 VisualLine/shaping/纹理。
     /// 参数变化（invalidate_params）时清空，普通编辑保留。
     last_snapshot: Option<CanonicalDocumentVisualSnapshot>,
+    /// Issue #901 第三轮复核: Core `EditorEditResult.display_patches` 提供的
+    /// 受影响字节范围。由外部调用 `set_last_edit_affected_range` 设置，
+    /// `snapshot()` 消费后清空。优先于按段落下标比较 hash 推测编辑范围，
+    /// 避免 Enter 拆段/Backspace 合段后段落索引整体偏移导致的误判。
+    last_edit_affected_range: Option<(usize, usize)>,
 }
 
 impl EditorLayout {
@@ -108,6 +113,8 @@ impl EditorLayout {
         self.height_index.clear();
         // Issue #901 第二轮复核: 参数变化全局失效，旧 snapshot 不再可复用。
         self.last_snapshot = None;
+        // Issue #901 第三轮复核: 清空编辑范围缓存。
+        self.last_edit_affected_range = None;
     }
 
     /// Issue #901: 全局参数失效 — 字体/宽度/字号/行距/全局格式变化时调用。
@@ -147,6 +154,18 @@ impl EditorLayout {
 
     pub fn cache(&self) -> Option<&LayoutSnapshot> {
         self.cache.as_ref()
+    }
+
+    /// Issue #901 第三轮复核: 设置本次编辑的受影响字节范围。
+    ///
+    /// 由外部从 Core `EditorEditResult.display_patches` 的
+    /// `replace_byte_range` / `inserted_byte_range` 提取后调用。
+    /// `snapshot()` 会优先消费此范围定位受影响段落，
+    /// 不再以整章下标比较 hash 冒充段落身份。
+    ///
+    /// 调用时机：在 `snapshot()` 之前调用。`snapshot()` 消费后自动清空。
+    pub fn set_last_edit_affected_range(&mut self, byte_start: usize, byte_end: usize) {
+        self.last_edit_affected_range = Some((byte_start, byte_end));
     }
 
     /// Issue #901: 获取段落布局存储的只读引用。
@@ -234,10 +253,30 @@ impl EditorLayout {
         let heights = self.paragraph_store.paragraph_heights();
         self.height_index.rebuild(heights);
 
-        // Issue #901 第二轮复核: promoted layout 是外部全篇排版结果，
-        // 不携带 CanonicalDocumentVisualSnapshot，清空 last_snapshot。
-        // 下次 snapshot() 若 text 变化会先走全篇重排，之后才能增量复用。
-        self.last_snapshot = None;
+        // Issue #901 第三轮复核问题 5: 不再把 last_snapshot 设为 None。
+        // 从 promoted visual_lines 组装 CanonicalDocumentVisualSnapshot 并存入 last_snapshot，
+        // 使下次普通编辑（仅 text_revision 变化）能走增量排版路径，
+        // 不会因为 last_snapshot=None 而退化为全篇重排。
+        // promote_prepared_layout 与增量缓存共用同一身份和生命周期。
+        self.last_snapshot = Some(assemble_document_visual_snapshot_from_lines(
+            &promoted.visual_lines,
+            text_revision,
+            font_size,
+            font_family,
+            line_spacing,
+            text_indent,
+            padding,
+            width,
+            1.0,
+        ));
+        // promoted visual_lines 已 move 到 last_snapshot 中，clone 一份给 cache。
+        // Issue #901 第三轮复核: 此 clone 不可避免——cache 和 last_snapshot 各需一份 visual_lines。
+        // 但只在 promote 路径（非每次普通编辑）发生，不影响常规输入性能。
+        let cache_lines = self
+            .last_snapshot
+            .as_ref()
+            .map(|s| s.visual_lines.clone())
+            .unwrap_or_default();
 
         self.cache = Some(LayoutSnapshot {
             text_revision,
@@ -249,7 +288,7 @@ impl EditorLayout {
             line_spacing: promoted.line_spacing,
             text_indent: promoted.text_indent,
             padding: promoted.padding,
-            lines: promoted.visual_lines,
+            lines: cache_lines,
             layout_generation: promoted.generation,
         });
     }
@@ -331,15 +370,20 @@ impl EditorLayout {
             let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
             let old_para_count = self.paragraph_store.paragraph_count();
 
-            // 计算受影响字节范围
+            // Issue #901 第三轮复核: 优先消费 Core display_patches 提供的受影响范围。
+            // 消费后清空，避免下次无编辑信息时误用旧范围。
             let (affected_start, affected_end) =
-                self.compute_affected_byte_range(text, &new_paras, old_para_count);
+                if let Some(range) = self.last_edit_affected_range.take() {
+                    range
+                } else {
+                    // 无 display_patches 时回退到按段落 hash 比较
+                    self.compute_affected_byte_range(text, &new_paras, old_para_count)
+                };
 
-            // Issue #901 第二轮复核问题 1: 真正传递旧 snapshot，
-            // 使 prepare_incremental_visual_snapshot 的 previous_snapshot 非 None，
-            // 增量排版路径能复用不受影响段落的 VisualLine/shaping/纹理。
-            // 先 clone 出旧 snapshot 避免借用冲突（函数需要 &mut self.paragraph_store/height_index）。
-            let prev_snapshot = self.last_snapshot.clone();
+            // Issue #901 第三轮复核问题 1: 用 mem::take 取走 last_snapshot 的所有权，
+            // 避免 clone 整篇 CanonicalDocumentVisualSnapshot（含 paragraphs/images）。
+            // 函数只需 &previous_snapshot 引用，take 后在函数返回前 prev_snapshot 持有所有权。
+            let prev_snapshot = std::mem::take(&mut self.last_snapshot);
 
             let doc_snapshot = prepare_incremental_visual_snapshot(
                 text,
@@ -360,8 +404,11 @@ impl EditorLayout {
                 &mut self.height_index,
             );
 
-            // 保存新 snapshot 供下次增量排版复用
-            self.last_snapshot = Some(doc_snapshot.clone());
+            // Issue #901 第三轮复核问题 1: 只 clone visual_lines 给 LayoutSnapshot，
+            // 把整个 doc_snapshot move 到 last_snapshot（避免 clone paragraphs/images）。
+            // 此前是 clone 整个 doc_snapshot 再 move visual_lines，多 clone 了 paragraphs。
+            let lines = doc_snapshot.visual_lines.clone();
+            self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
                 text_revision,
@@ -373,7 +420,7 @@ impl EditorLayout {
                 line_spacing: params.line_spacing,
                 text_indent: params.text_indent,
                 padding: params.padding,
-                lines: doc_snapshot.visual_lines,
+                lines,
                 layout_generation: current_gen,
             }
         } else {
@@ -409,7 +456,9 @@ impl EditorLayout {
             self.height_index.rebuild(heights);
 
             // Issue #901 第二轮复核: 保存全篇重排结果供下次增量排版复用。
-            self.last_snapshot = Some(doc_snapshot.clone());
+            // Issue #901 第三轮复核: 只 clone visual_lines，move 整个 doc_snapshot 到 last_snapshot。
+            let lines = doc_snapshot.visual_lines.clone();
+            self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
                 text_revision,
@@ -421,7 +470,7 @@ impl EditorLayout {
                 line_spacing: params.line_spacing,
                 text_indent: params.text_indent,
                 padding: params.padding,
-                lines: doc_snapshot.visual_lines,
+                lines,
                 layout_generation: current_gen,
             }
         };

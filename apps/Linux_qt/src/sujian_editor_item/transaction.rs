@@ -28,9 +28,37 @@ impl SujianEditorItem {
         // Issue #901: 编辑结果收口到 visual_canvas，由 RevisionChain 精确消费 offset map。
         self.pipeline.visual_canvas_mut().apply_edit_result(result);
 
+        // Issue #901 问题2：在构建 TargetLayoutDescriptor 之前，确保 pipeline 的
+        // current_layout_snapshot 已基于本次 Core edit 后的新正文构建。
+        // 普通输入/删除路径中，Core edit 已应用（mirror 已更新为新正文），
+        // 但 current_layout_snapshot 仍是旧值或 None（它只在 IME commit 路径
+        // 和此处被更新）。如果不在此重建，build_target_layout_descriptor 会读到
+        // 旧布局或 None，导致动画 target 始终指向上一笔排版。
+        //
+        // 原子收口顺序：Core edit → 新文本排版(EditorLayoutSnapshot) →
+        // set_current_layout_snapshot → TargetLayoutDescriptor →
+        // visual_canvas.apply_target_layout。
+        let width = self.bounding_width();
+        let needs_new_layout = match self.pipeline.current_layout_snapshot() {
+            None => true,
+            // 普通输入路径从不更新 current_layout_snapshot，所以总是需要重建。
+            // 即使 Some，它也是上一笔的旧布局（revision 不匹配本次 Core new revision）。
+            Some(_) => true,
+        };
+        if needs_new_layout {
+            if let Ok(new_snap) = self.build_editor_layout_snapshot(width, false, None) {
+                self.pipeline
+                    .set_current_layout_snapshot(Some(new_snap));
+            }
+            // Err 时 build_editor_layout_snapshot 内部已记诊断，
+            // current_layout_snapshot 保持旧值，build_target_layout_descriptor
+            // 会 fallback 到旧 target 或 None——不伪装成功。
+        }
+
         // Issue #901 阻塞 1：从当前 Qt LayoutSnapshot 产生 TargetLayoutDescriptor
         // 并调用 apply_target_layout，让 CanvasController 的 target_layout 不再为 None。
         // 这样 SceneTransition::build_draw_plan 才能从 presented + target 生成绘制计划。
+        // Issue #901 问题2：此时 current_layout_snapshot 已是本次 Core edit 后的新布局。
         let now_ms = Self::frame_now_ms(&self.last_frame_now);
         if let Some(target) = self.build_target_layout_descriptor() {
             self.pipeline

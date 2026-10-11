@@ -39,6 +39,15 @@ pub(crate) fn canvas_draw_plan_to_glyph_infos(
                     w: cmd.source_uv.w,
                     h: cmd.source_uv.h,
                 },
+                // Issue #901 问题4：把 DrawCommand.clip_rect 传给动画 glyph，
+                // 让 render_text_animation_layer 对 target_rect 和 source_uv
+                // 做预裁剪，使吞字/吐字的 reveal/conceal 裁剪真正作用到 Qt 图形层。
+                clip_rect: SourceRect {
+                    x: cmd.clip_rect.x,
+                    y: cmd.clip_rect.y,
+                    w: cmd.clip_rect.w,
+                    h: cmd.clip_rect.h,
+                },
                 logical_range: (0, 0),
                 canonical_range: None,
                 delete_edge: None,
@@ -294,14 +303,55 @@ fn render_text_animation_layer(
             None => continue,
         };
 
-        glyph_data.extend_from_slice(&[glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity]);
+        // Issue #901 问题4：用 clip_rect 对 target_rect 做预裁剪，并按比例
+        // 调整 source_uv，使吞字/吐字的 reveal/conceal 裁剪真正作用到 Qt
+        // 图形层。不需要改 C++ 签名 —— 裁剪后的 target_rect 和 source_uv
+        // 直接传给 update_animation_layer。
+        //
+        // 矩形交集 + UV 映射：
+        //   ix = max(tx, cx), iy = max(ty, cy)
+        //   ix2 = min(tx+tw, cx+cw), iy2 = min(ty+th, cy+ch)
+        //   new_target = (ix, iy, ix2-ix, iy2-iy)
+        //   u_scale = sw/tw, v_scale = sh/th
+        //   new_source = (sx + (ix-tx)*u_scale, sy + (iy-ty)*v_scale,
+        //                 (ix2-ix)*u_scale, (iy2-iy)*v_scale)
+        let tx = glyph.x;
+        let ty = glyph.y;
+        let tw = glyph.w;
+        let th = glyph.h;
+        let sx = glyph.source_rect.x;
+        let sy = glyph.source_rect.y;
+        let sw = glyph.source_rect.w;
+        let sh = glyph.source_rect.h;
+        let cx = glyph.clip_rect.x;
+        let cy = glyph.clip_rect.y;
+        let cw = glyph.clip_rect.w;
+        let ch = glyph.clip_rect.h;
 
-        source_rects.extend_from_slice(&[
-            glyph.source_rect.x,
-            glyph.source_rect.y,
-            glyph.source_rect.w,
-            glyph.source_rect.h,
-        ]);
+        let ix = tx.max(cx);
+        let iy = ty.max(cy);
+        let ix2 = (tx + tw).min(cx + cw);
+        let iy2 = (ty + th).min(cy + ch);
+        let iw = ix2 - ix;
+        let ih = iy2 - iy;
+
+        // 裁剪后无可见面积则跳过此 glyph。
+        if iw <= 0.0 || ih <= 0.0 {
+            continue;
+        }
+
+        // UV 按比例调整。tw/th 为 0 时不会到达这里（上面 iw/ih 判断已过滤），
+        // 但防御性处理避免除零。
+        let u_scale = if tw > 0.0 { sw / tw } else { 0.0 };
+        let v_scale = if th > 0.0 { sh / th } else { 0.0 };
+        let new_sx = sx + (ix - tx) * u_scale;
+        let new_sy = sy + (iy - ty) * v_scale;
+        let new_sw = iw * u_scale;
+        let new_sh = ih * v_scale;
+
+        glyph_data.extend_from_slice(&[ix, iy, iw, ih, glyph.opacity]);
+
+        source_rects.extend_from_slice(&[new_sx, new_sy, new_sw, new_sh]);
 
         let cache_key = glyph.snapshot_id.to_cache_key();
         snapshot_ids.push(cache_key);

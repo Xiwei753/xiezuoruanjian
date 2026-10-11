@@ -812,8 +812,16 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
+        // Issue #901 问题3：切章/清文档时递增 document_session，
+        // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。
+        self.document_session = self.document_session.wrapping_add(1);
+        // Issue #901 问题3：重置 VisualCanvas 的 PresentedScene 和
+        // TargetLayoutDescriptor，丢弃旧章的视觉真相和目标布局。
+        self.pipeline.visual_canvas_mut().reset();
+        // Issue #901 问题3/问题6：清 frame_submission_mailbox，
+        // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
+        self.frame_submission_mailbox.discard_all_frames();
         // Issue #901: 旧 animation_coordinator.reset_document_visual_session() 已删除。
-        // TODO(issue-901): integrate with visual_canvas to reset document visual session.
         self.pipeline.set_current_layout_snapshot(None);
         self.pipeline.set_previous_layout_snapshot(None);
         self.pipeline.set_current_canonical_snapshot(None);

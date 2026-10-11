@@ -19,6 +19,17 @@
 //! 不是吞字吐字也不是平滑 CrossFade。新实现让文字层之间用透明度叠加，只有
 //! `Cursor`/`Preedit`/`Selection` 这些真正需要互斥的层才做矩形裁剪。
 //!
+//! ## Issue #901 问题4 复核
+//!
+//! 确认：静态、移动和新/旧图形的真实绘制互斥关系正确。
+//! - `StaticText`（存活字/删除字）和 `AnimatedText`（新增字）**不互斥**：
+//!   各自以自己的透明度绘制（alpha compositing），不做矩形裁剪。
+//!   不能用"旧半透明矩形占据了就彻底禁止画新字"表达淡入淡出。
+//! - 只有 `Cursor`/`Preedit`/`Selection` 做矩形裁剪（`is_exclusive = true`）。
+//! - 文字层之间的叠加通过 `opacity` 字段实现，裁剪揭示/收回通过 `source_uv`
+//!   和 `clip_rect` 的宽度收缩实现（见 `SceneTransition::command_for_inserting`
+//!   和 `command_for_deleting`），不通过 ownership 互斥。
+//!
 //! ## 纯 Rust
 //!
 //! 本模块只做矩形几何运算，不依赖 Qt 类型。
