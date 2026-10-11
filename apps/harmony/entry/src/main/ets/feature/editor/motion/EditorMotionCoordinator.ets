@@ -2763,7 +2763,9 @@ export class EditorMotionCoordinator {
             }))
           } else {
             // fallback：无目标矩形时，目标 = 起始（不动）
-            islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({ ...cr }))
+            islandTargetRects = piece.clipRects.map((cr: ClipRect): ClipRect => ({
+              x: cr.x, y: cr.y, width: cr.width, height: cr.height
+            }))
           }
         } else {
           // insert：每岛目标是各自所属字形的完整可见矩形。
