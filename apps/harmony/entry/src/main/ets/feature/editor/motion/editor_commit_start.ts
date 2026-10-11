@@ -179,6 +179,17 @@ export interface FrozenGlyphMember {
    * undefined 表示完全不透明（非交叉淡入淡出窗口）。
    */
   opacity: number | undefined
+  /** 该成员在源修订正文中的 UTF-16 起始位置 */
+  sourceUtf16Start: number
+  /** 该成员在源修订正文中的 UTF-16 结束位置（exclusive） */
+  sourceUtf16End: number
+  /**
+   * 该成员的目标透明度（0-1）。
+   * 历史源（sourceRevision < newRevision）的 targetOpacity = 0（动画结束消失）。
+   * 本次新源（sourceRevision === newRevision）的 targetOpacity = 1（动画结束完全可见）。
+   * -1 表示未设置，buildFrame 会根据 sourceRevision 与 newRevision 的关系推断。
+   */
+  targetOpacity: number
 }
 
 /** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
@@ -1590,7 +1601,10 @@ export function retargetRunStarts(
             // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
             needsCrossfade: prevInterval.needsCrossfade,
             sourceMembers: prevInterval.sourceMembers !== undefined
-              ? deepCloneSourceMembers(prevInterval.sourceMembers)
+              ? deepCloneSourceMembers(prevInterval.sourceMembers).map(m => ({
+                  ...m,
+                  clipRects: [],  // 不可见时清空 clipRects，避免回闪
+                }))
               : undefined,
           })
         }
@@ -1879,6 +1893,9 @@ function buildSourceMembers(
       offsetY: span.offsetY,
       clipRects: clipRects,
       opacity: span.opacity,
+      sourceUtf16Start: utf16Range[0],
+      sourceUtf16End: utf16Range[1],
+      targetOpacity: -1,
     })
   }
   return members
@@ -1981,9 +1998,11 @@ function intervalForIsland(
       const glyphId = run.glyphIds[firstIndex]
       const allSpans = frozenByGlyphId.get(glyphId)
       sourceMembers = allFrozenGeoms.map(g => {
-        // 按 sourceKind + offset 匹配 span，获取 sourceRevision 和 opacity
+        // 按 sourceKind + offset 匹配 span，获取 sourceRevision、opacity 和 utf16Range
         let sourceRevision = 0
         let opacity: number | undefined = undefined
+        let sourceUtf16Start = 0
+        let sourceUtf16End = 0
         if (allSpans !== undefined) {
           for (const sp of allSpans) {
             if (sp.sourceKind === g.sourceKind &&
@@ -1991,6 +2010,11 @@ function intervalForIsland(
                 sp.offsetY === g.offsetY) {
               sourceRevision = sp.sourceRevision
               opacity = sp.opacity
+              const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
+              if (utf16Range !== undefined) {
+                sourceUtf16Start = utf16Range[0]
+                sourceUtf16End = utf16Range[1]
+              }
               break
             }
           }
@@ -2023,6 +2047,9 @@ function intervalForIsland(
           offsetY: g.offsetY,
           clipRects: clipRects,
           opacity: opacity,
+          sourceUtf16Start: sourceUtf16Start,
+          sourceUtf16End: sourceUtf16End,
+          targetOpacity: -1,
         }
       })
     }
@@ -2078,6 +2105,9 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
       x: cr.x, y: cr.y, width: cr.width, height: cr.height,
     })),
     opacity: m.opacity,
+    sourceUtf16Start: m.sourceUtf16Start,
+    sourceUtf16End: m.sourceUtf16End,
+    targetOpacity: m.targetOpacity,
   }))
 }
 

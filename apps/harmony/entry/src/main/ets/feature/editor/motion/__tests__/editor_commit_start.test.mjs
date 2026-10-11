@@ -4708,4 +4708,383 @@ test('问题4-6108234595：retargetRunStarts 后双源成员的 sourceMembers �
   assert.equal(reIv.sourceMembers[1].sourceGlyphRect.x, 70, 'new 成员 sourceGlyphRect.x 应为 70')
 })
 
+// ====== Issue #879 新增测试：FrozenGlyphMember 新字段 + 不可见分支 clipRects 清空 ======
+
+console.log('\n--- Issue #879 新增测试：FrozenGlyphMember 新字段 + 不可见分支 clipRects 清空 ---')
+
+// 测试1：FrozenGlyphMember 包含 sourceUtf16Start/End 和 targetOpacity 字段
+test('问题1：buildSourceMembers 返回的 FrozenGlyphMember 包含 sourceUtf16Start/End 和 targetOpacity=-1', () => {
+  const ctx = context('甲乙', 1300, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]  // 乙的 glyphId
+  // old 源布局：乙在 x=50, width=12
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  // new 源布局：乙在 x=70, width=10
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2, '应有 2 个成员（old + new）')
+  // old 成员：sourceUtf16Start/End 来自 span.glyphUtf16Ranges.get(glyphId)
+  const oldMember = iv.sourceMembers[0]
+  assert.equal(oldMember.sourceKind, 'old')
+  assert.equal(oldMember.sourceUtf16Start, 1, 'old 成员 sourceUtf16Start 应为 1（来自 glyphUtf16Ranges）')
+  assert.equal(oldMember.sourceUtf16End, 2, 'old 成员 sourceUtf16End 应为 2（来自 glyphUtf16Ranges）')
+  assert.equal(oldMember.targetOpacity, -1, 'old 成员 targetOpacity 应为 -1（未设置）')
+  // new 成员
+  const newMember = iv.sourceMembers[1]
+  assert.equal(newMember.sourceKind, 'new')
+  assert.equal(newMember.sourceUtf16Start, 1, 'new 成员 sourceUtf16Start 应为 1（来自 glyphUtf16Ranges）')
+  assert.equal(newMember.sourceUtf16End, 2, 'new 成员 sourceUtf16End 应为 2（来自 glyphUtf16Ranges）')
+  assert.equal(newMember.targetOpacity, -1, 'new 成员 targetOpacity 应为 -1（未设置）')
+})
+
+// 测试2：retargetRunStarts 不可见分支清空成员 clipRects（问题4）
+test('问题4：retargetRunStarts 不可见分支——sourceMembers 的 clipRects 被清空为空数组', () => {
+  const ctx = context('甲乙', 1301, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  // prepare：有可见 sourceMembers
+  const prepared = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const prevIv = prepared[0].intervals[0]
+  assert.ok(prevIv.sourceMembers !== undefined)
+  assert.ok(prevIv.sourceMembers[0].clipRects.length > 0, 'prepare 时 old 成员 clipRects 应非空')
+  assert.ok(prevIv.sourceMembers[1].clipRects.length > 0, 'prepare 时 new 成员 clipRects 应非空')
+  // retarget：让该 interval 不可见——冻结窗口仍存在但 clip 为零（与字形无交集）
+  // clusterVisible 对每个 span 的 clipRects 求交后 rects.length===0 → 返回空数组
+  // → intervalForIsland 返回 null → 走不可见分支
+  const hiddenFrozen = [
+    {
+      ...frozen[0],
+      clipLeft: 200, clipRight: 200,
+      clipRects: [{ x: 200, y: 0, width: 0, height: 20 }],
+    },
+    {
+      ...frozen[1],
+      clipLeft: 200, clipRight: 200,
+      clipRects: [{ x: 200, y: 0, width: 0, height: 20 }],
+    },
+  ]
+  const hiddenCtx = { ...ctx, frozenWindows: hiddenFrozen }
+  const retargeted = retargetRunStarts(run, prepared, hiddenCtx, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const reIv = retargeted[0].intervals[0]
+  assert.equal(reIv.startClipLeft, reIv.startClipRight, '不可见时 clip 应为零宽度')
+  assert.ok(reIv.sourceMembers !== undefined, '不可见分支也应传递 sourceMembers')
+  assert.equal(reIv.sourceMembers.length, 2, '不可见分支的 sourceMembers 应有 2 个成员')
+  // 每个成员的 clipRects 应被清空为空数组
+  assert.equal(reIv.sourceMembers[0].clipRects.length, 0,
+    '不可见分支 old 成员的 clipRects 应被清空为空数组')
+  assert.equal(reIv.sourceMembers[1].clipRects.length, 0,
+    '不可见分支 new 成员的 clipRects 应被清空为空数组')
+})
+
+// 测试3：deepCloneSourceMembers 包含新字段（通过 retargetRunStarts retained 通道间接验证）
+test('问题3：deepCloneSourceMembers 正确拷贝 sourceUtf16Start/End 和 targetOpacity', () => {
+  const ctx = context('甲乙', 1302, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  // prepare：生成有 sourceMembers 的 interval
+  const prepared = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  // retarget（boundaries 匹配，走 reInterval !== null 路径，深拷贝 sourceMembers）
+  const retargeted = retargetRunStarts(run, prepared, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const reIv = retargeted[0].intervals[0]
+  assert.ok(reIv.sourceMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(reIv.sourceMembers.length, 2, 'retarget 后应有 2 个成员')
+  // 验证 deepCloneSourceMembers 正确拷贝了新字段
+  assert.equal(reIv.sourceMembers[0].sourceUtf16Start, 1,
+    'retarget 后 old 成员 sourceUtf16Start 应与原始一致（1）')
+  assert.equal(reIv.sourceMembers[0].sourceUtf16End, 2,
+    'retarget 后 old 成员 sourceUtf16End 应与原始一致（2）')
+  assert.equal(reIv.sourceMembers[0].targetOpacity, -1,
+    'retarget 后 old 成员 targetOpacity 应与原始一致（-1）')
+  assert.equal(reIv.sourceMembers[1].sourceUtf16Start, 1,
+    'retarget 后 new 成员 sourceUtf16Start 应与原始一致（1）')
+  assert.equal(reIv.sourceMembers[1].sourceUtf16End, 2,
+    'retarget 后 new 成员 sourceUtf16End 应与原始一致（2）')
+  assert.equal(reIv.sourceMembers[1].targetOpacity, -1,
+    'retarget 后 new 成员 targetOpacity 应与原始一致（-1）')
+  // 深拷贝验证：修改原成员的新字段不影响 retargeted 的成员
+  prepared[0].intervals[0].sourceMembers[0].sourceUtf16Start = 999
+  assert.notEqual(reIv.sourceMembers[0].sourceUtf16Start, 999,
+    '深拷贝：修改原 sourceUtf16Start 不应影响 retargeted 的成员')
+  prepared[0].intervals[0].sourceMembers[0].targetOpacity = 999
+  assert.notEqual(reIv.sourceMembers[0].targetOpacity, 999,
+    '深拷贝：修改原 targetOpacity 不应影响 retargeted 的成员')
+})
+
+// 测试4：双源场景下 sourceMembers 包含新字段
+test('问题4：双源场景 sourceMembers 包含 sourceUtf16Start/End 和 targetOpacity', () => {
+  const ctx = context('甲乙', 1303, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应填充')
+  assert.equal(iv.sourceMembers.length, 2, '应有 2 个成员（allFrozenGeoms.length > 1）')
+  // 验证每个成员包含 sourceUtf16Start/End 和 targetOpacity
+  for (const member of iv.sourceMembers) {
+    assert.ok(typeof member.sourceUtf16Start === 'number',
+      '成员应包含 sourceUtf16Start（数字类型）')
+    assert.ok(typeof member.sourceUtf16End === 'number',
+      '成员应包含 sourceUtf16End（数字类型）')
+    assert.ok(typeof member.targetOpacity === 'number',
+      '成员应包含 targetOpacity（数字类型）')
+    assert.equal(member.targetOpacity, -1,
+      '成员 targetOpacity 应为 -1（未设置）')
+  }
+  // 验证具体的 UTF-16 区间值
+  assert.equal(iv.sourceMembers[0].sourceUtf16Start, 1,
+    'old 成员 sourceUtf16Start 应为 1')
+  assert.equal(iv.sourceMembers[0].sourceUtf16End, 2,
+    'old 成员 sourceUtf16End 应为 2')
+  assert.equal(iv.sourceMembers[1].sourceUtf16Start, 1,
+    'new 成员 sourceUtf16Start 应为 1')
+  assert.equal(iv.sourceMembers[1].sourceUtf16End, 2,
+    'new 成员 sourceUtf16End 应为 2')
+})
+
+// 测试5：retargetRunStarts 不可见分支保留成员身份但清空 clipRects
+test('问题5：retargetRunStarts 不可见分支——保留成员身份字段但只清空 clipRects', () => {
+  const ctx = context('甲乙', 1304, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 62 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 53, clipRight: 62,
+      clipRects: [{ x: 53, y: 0, width: 9, height: 20 }],
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.6,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 75, clipRight: 83,
+      clipRects: [{ x: 75, y: 0, width: 8, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 11, opacity: 0.4,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  // prepare：有可见 sourceMembers
+  const prepared = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  // retarget：让该 interval 不可见——冻结窗口仍存在但 clip 为零（与字形无交集）
+  const hiddenFrozen = [
+    {
+      ...frozen[0],
+      clipLeft: 200, clipRight: 200,
+      clipRects: [{ x: 200, y: 0, width: 0, height: 20 }],
+    },
+    {
+      ...frozen[1],
+      clipLeft: 200, clipRight: 200,
+      clipRects: [{ x: 200, y: 0, width: 0, height: 20 }],
+    },
+  ]
+  const hiddenCtx = { ...ctx, frozenWindows: hiddenFrozen }
+  const retargeted = retargetRunStarts(run, prepared, hiddenCtx, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const reIv = retargeted[0].intervals[0]
+  assert.ok(reIv.sourceMembers !== undefined, '不可见分支应传递 sourceMembers')
+  assert.equal(reIv.sourceMembers.length, 2, '应有 2 个成员')
+  // 验证保留的身份字段
+  const oldMember = reIv.sourceMembers[0]
+  assert.equal(oldMember.sourceKind, 'old', '不可见分支保留 sourceKind')
+  assert.equal(oldMember.sourceRevision, 10, '不可见分支保留 sourceRevision')
+  assert.equal(oldMember.runId, 'old-10', '不可见分支保留 runId')
+  assert.equal(oldMember.renderNodeKey, 'old-10', '不可见分支保留 renderNodeKey')
+  assert.equal(oldMember.sourceGlyphRect.x, 50, '不可见分支保留 sourceGlyphRect.x')
+  assert.equal(oldMember.sourceGlyphRect.width, 12, '不可见分支保留 sourceGlyphRect.width')
+  assert.equal(oldMember.offsetX, 3, '不可见分支保留 offsetX')
+  assert.equal(oldMember.offsetY, 0, '不可见分支保留 offsetY')
+  assert.equal(oldMember.opacity, 0.6, '不可见分支保留 opacity')
+  assert.equal(oldMember.sourceUtf16Start, 1, '不可见分支保留 sourceUtf16Start')
+  assert.equal(oldMember.sourceUtf16End, 2, '不可见分支保留 sourceUtf16End')
+  assert.equal(oldMember.targetOpacity, -1, '不可见分支保留 targetOpacity')
+  // 只有 clipRects 被清空
+  assert.equal(oldMember.clipRects.length, 0, '不可见分支只有 clipRects 被清空')
+  // new 成员同理
+  const newMember = reIv.sourceMembers[1]
+  assert.equal(newMember.sourceKind, 'new', '不可见分支保留 sourceKind')
+  assert.equal(newMember.sourceRevision, 11, '不可见分支保留 sourceRevision')
+  assert.equal(newMember.runId, 'new-11', '不可见分支保留 runId')
+  assert.equal(newMember.renderNodeKey, 'new-11', '不可见分支保留 renderNodeKey')
+  assert.equal(newMember.sourceGlyphRect.x, 70, '不可见分支保留 sourceGlyphRect.x')
+  assert.equal(newMember.sourceGlyphRect.width, 10, '不可见分支保留 sourceGlyphRect.width')
+  assert.equal(newMember.offsetX, 5, '不可见分支保留 offsetX')
+  assert.equal(newMember.offsetY, 0, '不可见分支保留 offsetY')
+  assert.equal(newMember.opacity, 0.4, '不可见分支保留 opacity')
+  assert.equal(newMember.sourceUtf16Start, 1, '不可见分支保留 sourceUtf16Start')
+  assert.equal(newMember.sourceUtf16End, 2, '不可见分支保留 sourceUtf16End')
+  assert.equal(newMember.targetOpacity, -1, '不可见分支保留 targetOpacity')
+  assert.equal(newMember.clipRects.length, 0, '不可见分支只有 clipRects 被清空')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

@@ -49,7 +49,7 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio
+  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, FrozenGlyphMember
 } from './editor_commit_start'
 
 /**
@@ -442,6 +442,15 @@ export class EditorMotionCoordinator {
             const winId = this.windowIdAllocator.allocate(interval.glyphIds)
             for (const member of interval.sourceMembers) {
               keys.push(`${member.renderNodeKey}-${winId}`)
+            }
+            // 问题5：如果没有 newRevision 目标成员，额外输出 new key
+            // buildFrame 会为没有 newRevision 成员的 interval 创建新目标成员，
+            // plannedWindowKeys 必须同时输出对应的 key，否则 sameKeySet 检查失败
+            const hasNewRevisionMember = interval.sourceMembers.some(
+              m => m.sourceRevision === newRevision
+            )
+            if (!hasNewRevisionMember) {
+              keys.push(`new-${newRevision}-${winId}`)
             }
           } else {
             keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
@@ -1592,9 +1601,38 @@ export class EditorMotionCoordinator {
               }
             }
 
+            // 问题2：构建 effective members——原始 sourceMembers + 可能新增的 newRevision 目标成员
+            // 如果 interval 没有 sourceRevision === newRevision 的成员，创建一个新目标成员
+            // （p=0 时 opacity=0、clipRects 为空，随动画推进逐渐淡入并显露）
+            const effectiveMembers: FrozenGlyphMember[] = [...interval.sourceMembers]
+            const hasNewRevisionMember = interval.sourceMembers.some(
+              m => m.sourceRevision === newRevision
+            )
+            if (!hasNewRevisionMember && intervalNewGlyphRect !== null) {
+              effectiveMembers.push({
+                sourceKind: 'new',
+                sourceRevision: newRevision,
+                runId: `new-${newRevision}`,
+                renderNodeKey: `new-${newRevision}`,
+                sourceGlyphRect: {
+                  x: intervalNewGlyphRect.x,
+                  y: intervalNewGlyphRect.y,
+                  width: intervalNewGlyphRect.width,
+                  height: intervalNewGlyphRect.height,
+                },
+                offsetX: islandCurrentX - intervalNewGlyphRect.x,
+                offsetY: islandCurrentY - intervalNewGlyphRect.y,
+                clipRects: [],
+                opacity: 0,
+                sourceUtf16Start: newSourceUtf16Start,
+                sourceUtf16End: newSourceUtf16End,
+                targetOpacity: 1,
+              })
+            }
+
             // 逐成员计算 clipRects——每个成员只用自己的 sourceGlyphRect+offset、clipRects
             const memberClipRectsList: ClipRect[][] = []
-            for (const member of interval.sourceMembers) {
+            for (const member of effectiveMembers) {
               // 成员的源字形在屏矩形 = 成员的 sourceGlyphRect + 成员的 offset
               const memberSourceGlyphOnScreen: RectLike = {
                 x: member.sourceGlyphRect.x + member.offsetX,
@@ -1622,30 +1660,47 @@ export class EditorMotionCoordinator {
               const startRects: ClipRect[] = []
               const targetRects: ClipRect[] = []
 
-              // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标），目标 = mapRectByRatio 映射到新布局
-              for (const scr of member.clipRects) {
+              if (member.clipRects.length === 0) {
+                // 问题2：新目标成员——从零宽度逐渐扩展到完整字形
+                // 起始：零面积；目标：完整字形矩形
                 startRects.push({
-                  x: scr.x, y: scr.y,
-                  width: Math.max(0, scr.width), height: Math.max(0, scr.height)
+                  x: memberSourceGlyphOnScreen.x,
+                  y: memberSourceGlyphOnScreen.y,
+                  width: 0,
+                  height: memberSourceGlyphOnScreen.height,
                 })
-                const mapped = mapRectByRatio(scr, memberSourceGlyphOnScreen, memberNewGlyphRect)
                 targetRects.push({
-                  x: mapped.x, y: mapped.y,
-                  width: mapped.width, height: mapped.height
+                  x: memberNewGlyphRect.x,
+                  y: memberNewGlyphRect.y,
+                  width: memberNewGlyphRect.width,
+                  height: memberNewGlyphRect.height,
                 })
-              }
+              } else {
+                // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标），目标 = mapRectByRatio 映射到新布局
+                for (const scr of member.clipRects) {
+                  startRects.push({
+                    x: scr.x, y: scr.y,
+                    width: Math.max(0, scr.width), height: Math.max(0, scr.height)
+                  })
+                  const mapped = mapRectByRatio(scr, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                  targetRects.push({
+                    x: mapped.x, y: mapped.y,
+                    width: mapped.width, height: mapped.height
+                  })
+                }
 
-              // 间隙碎片：零面积起点 + 按比例映射到新布局的间隙目标
-              for (const gap of remaining) {
-                startRects.push({
-                  x: gap.x, y: gap.y,
-                  width: 0, height: Math.max(0, gap.height)
-                })
-                const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberNewGlyphRect)
-                targetRects.push({
-                  x: mappedGap.x, y: mappedGap.y,
-                  width: mappedGap.width, height: mappedGap.height
-                })
+                // 间隙碎片：零面积起点 + 按比例映射到新布局的间隙目标
+                for (const gap of remaining) {
+                  startRects.push({
+                    x: gap.x, y: gap.y,
+                    width: 0, height: Math.max(0, gap.height)
+                  })
+                  const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                  targetRects.push({
+                    x: mappedGap.x, y: mappedGap.y,
+                    width: mappedGap.width, height: mappedGap.height
+                  })
+                }
               }
 
               // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
@@ -1689,34 +1744,35 @@ export class EditorMotionCoordinator {
             const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
 
             // 逐成员输出独立的 MotionGlyphWindow
-            for (let mi = 0; mi < interval.sourceMembers.length; mi++) {
-              const member = interval.sourceMembers[mi]
+            for (let mi = 0; mi < effectiveMembers.length; mi++) {
+              const member = effectiveMembers[mi]
               const memberClipRects = memberClipRectsList[mi]
               const memberRenderNodeKey = `${member.renderNodeKey}-${islandWindowInstanceId}`
-              const isOldSource = member.sourceKind === 'old'
 
-              // 旧源用旧布局几何，新源用新布局几何
-              const memberGlyphX = isOldSource ? islandOldLeft : newSourceGlyphX
-              const memberGlyphY = isOldSource ? islandOldTop : newSourceGlyphY
-              const memberGlyphWidth = isOldSource ? islandOldWidth : newSourceGlyphWidth
-              const memberGlyphHeight = isOldSource ? islandOldHeight : newSourceGlyphHeight
-              const memberOffsetX = isOldSource ? islandOffsetX : (islandCurrentX - newSourceGlyphX)
-              const memberOffsetY = isOldSource ? islandOffsetY : (islandCurrentY - newSourceGlyphY)
-              const memberUtf16Start = isOldSource ? iStart : newSourceUtf16Start
-              const memberUtf16End = isOldSource ? iEnd : newSourceUtf16End
+              // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
+              // member.sourceRevision 可能是前前次编辑的源，真正的源布局位置是 member.sourceGlyphRect，
+              // 真正的 UTF-16 范围是冻结 span 的 glyphUtf16Ranges，并不一定等于本次 oldSnapshot/newSnapshot
+              const memberGlyphX = member.sourceGlyphRect.x
+              const memberGlyphY = member.sourceGlyphRect.y
+              const memberGlyphWidth = member.sourceGlyphRect.width
+              const memberGlyphHeight = member.sourceGlyphRect.height
+              const memberOffsetX = member.offsetX
+              const memberOffsetY = member.offsetY
+              const memberUtf16Start = member.sourceUtf16Start
+              const memberUtf16End = member.sourceUtf16End
 
-              // Issue #879 评论6108234595：从冻结 opacity 插值到目标 opacity
-              // p=0 时 opacity = 冻结值（如 0.4），p=1 时 opacity = 目标值
-              // 旧源目标 = needsSourceCrossfade ? 0 : 1（动画结束旧源消失或完全可见）
-              // 新源目标 = needsSourceCrossfade ? 1 : 1（动画结束新源完全可见）
+              // 问题3：透明度用 startOpacity→targetOpacity 插值
+              // targetOpacity 已在成员创建时设置；-1 表示未设置，按 sourceRevision 推断
+              // sourceKind='new' 的历史源（sourceRevision < newRevision）应淡出至0，而不是淡入至1
               let memberOpacity: number | undefined
               if (member.opacity !== undefined) {
-                const targetOpacity = needsSourceCrossfade
-                  ? (isOldSource ? 0 : 1)
-                  : 1
-                memberOpacity = member.opacity + (targetOpacity - member.opacity) * p
+                const memberTargetOpacity = member.targetOpacity >= 0
+                  ? member.targetOpacity
+                  : (member.sourceRevision === newRevision ? 1 : 0)
+                memberOpacity = member.opacity + (memberTargetOpacity - member.opacity) * p
               } else if (needsSourceCrossfade) {
-                memberOpacity = isOldSource ? 1 - p : p
+                // 没有冻结 opacity 的成员（非交叉淡入淡出窗口的旧字段 fallback）
+                memberOpacity = member.sourceRevision === newRevision ? p : (1 - p)
               } else {
                 memberOpacity = undefined
               }
