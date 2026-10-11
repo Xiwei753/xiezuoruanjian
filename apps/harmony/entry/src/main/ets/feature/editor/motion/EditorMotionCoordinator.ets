@@ -1668,10 +1668,13 @@ export class EditorMotionCoordinator {
             // 计算尚未覆盖的区域（间隙），已可见碎片保持自身位置随平移移动（宽度不变），
             // 间隙碎片从零宽扩展到间隙宽度。不再对每个 clipRect 都用同一个 sourceGlyphRects[0]
             // 作为目标——那样会每个碎片各拥有一份完整目标，等于用两套 mask 分别扩满整字。
-            // Issue #879 复核评论6104161755 问题3：优先使用 frozenSourceGlyphRects（来自源布局坐标系）。
-            const sr = interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
-              ? interval.frozenSourceGlyphRects[0]
-              : interval.sourceGlyphRects[0]
+            // Issue #879 复核评论6105187411 问题3：第二分支统一使用 sourceGlyphRects[0]
+            //（ownLayout 坐标系），不使用 frozenSourceGlyphRects[0]（源布局坐标系）。
+            // frozenSourceGlyphRects 只用于第一分支（与 startScreenClipRects + frozenDrawOffsetX/Y
+            // 配合使用）。第二分支的 clipRects 也是 ownLayout 坐标系，两者必须在同一坐标系。
+            // 旧实现把 sr 换成 frozenSourceGlyphRects[0]，但 clipRects 仍由 buildPiece 投影到
+            // run.ownLayout，导致 rectDifference(sr, clipRects) 混用两个坐标系，计算错位。
+            const sr = interval.sourceGlyphRects[0]
             // Issue #879 复核评论6102724233 问题2：用 frozenDrawOffsetX/Y 替代
             // startPositionX/Y - oldRect.x/y，确保纵向半字不错位。
             const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined

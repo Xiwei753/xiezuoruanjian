@@ -3107,4 +3107,56 @@ test('问题4-3：frozenSourceGlyphRects 取自冻结源布局，而非 run.ownL
   assert.equal(riv.frozenSourceGlyphRects[0].x, 50, 'retarget 后 frozenSourceGlyphRects 应保留')
 })
 
+test('问题2-6105187411：字形在 displayed 身份表中且正由冻结窗口绘制时，frozenSourceGlyphRects 仍来自冻结窗口 sourceLayout', () => {
+  // 场景：displayed 正文仍包含 '乙'（身份表中有），但乙正由一个冻结旧源 Text 窗口绘制。
+  // 旧 sourceGlyphGeometry 优先从 displayed.layout 读取（x=10），返回错误的坐标。
+  // frozenGlyphGeometry 优先从冻结窗口的 sourceLayout 读取（x=50），返回正确坐标。
+  // 冻结窗口的 clipRect 基于 displayed.layout + offset（让 clusterVisible 判定可见），
+  // 但 sourceLayout 的坐标不同（验证 frozenSourceGlyphRects 的来源）。
+  const ctx = context('甲乙', 972, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]  // 乙的 glyphId
+  // 冻结源布局把乙排在 x=50（与 displayed.layout 的 x=10 不同）
+  const sourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const yiRanges = new Map([[yiId, [1, 2]]])
+  // clipRect 基于 displayed.layout + offset（x=10+3=13），让 clusterVisible 判定可见
+  const frozen = [{
+    glyphIds: [yiId],
+    clipLeft: 13,
+    clipRight: 18,
+    clipRects: [{ x: 13, y: 0, width: 5, height: 20 }],
+    offsetX: 3,
+    offsetY: 0,
+    sourceRevision: 970,
+    glyphUtf16Ranges: yiRanges,
+    sourceLayout: sourceLayout,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 覆盖乙——ownLayout 中乙在 x=10
+  const ownLayout = [line('甲乙', 0)]
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: ownLayout,
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.frozenSourceGlyphRects !== undefined, 'frozenSourceGlyphRects 应填充')
+  // frozenSourceGlyphRects 应来自冻结窗口的 sourceLayout（x=50），不是 displayed.layout（x=10）
+  assert.equal(iv.frozenSourceGlyphRects[0].x, 50,
+    'frozenSourceGlyphRects.x 应来自冻结窗口 sourceLayout（50），不是 displayed.layout（10）')
+  // sourceGlyphRects 仍来自 run.ownLayout（x=10）——两者坐标系不同
+  assert.equal(iv.sourceGlyphRects[0].x, 10,
+    'sourceGlyphRects.x 仍来自 run.ownLayout（10）')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

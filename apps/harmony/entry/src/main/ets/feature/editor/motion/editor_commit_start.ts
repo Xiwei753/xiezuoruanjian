@@ -1000,6 +1000,49 @@ function projectToTarget(
 }
 
 /**
+ * Issue #879 复核评论6105187411 问题2：获取一个字形在**真实冻结 Text 源**布局中的完整几何。
+ *
+ * 与 sourceGlyphGeometry 不同——优先从冻结窗口的 sourceLayout 读取，而不是 displayed.layout。
+ * 即使该字形在 displayed 身份表中仍存在，只要它正由一个冻结旧源 Text 窗口绘制，
+ * 就应该用冻结窗口的 sourceLayout 来获取字形几何，确保 startPositionX/Y、frozenSourceGlyphRects、
+ * FrozenWindowSpan.offset 与 startScreenClipRects 对应同一份真正绘制的 Text。
+ *
+ * 优先级：
+ * 1. 有 FrozenWindowSpan 且 glyphUtf16Ranges、sourceLayout 可取 → 用冻结窗口的 sourceLayout 计算
+ * 2. 没有冻结窗口 → 从 displayed.layout 取得静态字形
+ *
+ * 返回的 x0/x1 是源布局坐标系里的值（不含窗口 offset），用于投影计算。
+ */
+function frozenGlyphGeometry(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan>,
+  glyphId: string
+): { x0: number, x1: number, y0: number, height: number } | null {
+  // 1. 优先从冻结窗口的 sourceLayout 获取
+  const span = frozenByGlyphId.get(glyphId)
+  if (span !== undefined && span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
+    const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+    if (utf16Range !== undefined) {
+      const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+      if (rect !== null) {
+        return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+      }
+    }
+  }
+  // 2. 没有冻结窗口时，从 displayed.layout 获取
+  const entry = displayed.identities === null
+    ? null
+    : displayed.identities.entryByGlyphId(glyphId)
+  if (entry !== null) {
+    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+    if (rect !== null) {
+      return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+    }
+  }
+  return null
+}
+
+/**
  * Issue #879 复核评论6078682695 问题4：获取一个字形在**源布局**中的完整几何。
  *
  * 两个来源：
@@ -1621,10 +1664,13 @@ function intervalForIsland(
     // 而 visible.clipRects 在 run 自己布局坐标系中，y/height 都是整字值，简单相加偏移
     // 不能还原冻结屏幕矩形。
     startScreenClipRects = firstVisible.rects
-    // Issue #879 复核评论6104161755 问题3：从 sourceGlyphGeometry 获取冻结源字形在源布局
+    // Issue #879 复核评论6105187411 问题2：从 frozenGlyphGeometry 获取冻结源字形在源布局
     // 坐标系中的完整矩形（不是 run.ownLayout 的）。buildFrame 的 sourceGlyphOnScreen 应从
     // frozenSourceGlyphRects[0] + FrozenWindowSpan.offsetX/Y 生成。
-    const frozenSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+    // frozenGlyphGeometry 优先从冻结窗口的 sourceLayout 读取（而不是 displayed.layout），
+    // 确保 startPositionX/Y、frozenSourceGlyphRects、FrozenWindowSpan.offset 与
+    // startScreenClipRects 对应同一份真正绘制的 Text。
+    const frozenSourceGeom = frozenGlyphGeometry(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
     if (frozenSourceGeom !== null) {
       frozenSourceGlyphRects = [{
         x: frozenSourceGeom.x0,
