@@ -654,7 +654,9 @@ export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext
 
   for (let i = 0; i < clusterCount; i++) {
     const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
-    if (visible.length > 0) {
+    // Issue #879 评论6110293866 问题1：用 hasVisiblePixels 替代 visible.length > 0，
+    // 因为 clusterVisible 可能返回 opacity=0 的成员（用于物理节点预挂载）。
+    if (hasVisiblePixels(visible)) {
       if (currentFirst < 0) {
         currentFirst = i
         currentFirstVisible = visible
@@ -701,6 +703,48 @@ export function visibleGlyphPieces(run: RunGeometry, displayed: DisplayedContext
  *   ownLeft = ownFullLeft + ratio * (ownFullRight - ownFullLeft)
  * 跨行必须分别处理（每个 piece 只在一行内），不能以原始全局 x 当新布局 x。
  */
+/**
+ * Issue #879 评论6110293866 问题1：统一的可见性判断函数。
+ *
+ * 判断 OnScreenInterval[] 中是否存在至少一个有像素贡献的可见矩形：
+ * - opacity > 0（或 opacity === undefined 表示完全不透明）
+ * - rect 面积有效（width > 0 && height > 0）
+ *
+ * 替代所有 `visible.length > 0` 的可见性判断——clusterVisible 返回的 OnScreenInterval[]
+ * 可能包含 opacity=0 的成员（用于物理节点预挂载），`length > 0` 不等于有像素可见。
+ * 节点存在与像素可见是两套判断：sourceMembers 保留 opacity=0 的成员用于挂载，
+ * 但可见性判断必须用 hasVisiblePixels。
+ */
+function hasVisiblePixels(intervals: OnScreenInterval[]): boolean {
+  for (const interval of intervals) {
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    for (const r of interval.rects) {
+      if (r.width > 0 && r.height > 0) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Issue #879 评论6110293866 问题2：返回第一个有可见像素贡献的 OnScreenInterval。
+ *
+ * clusterVisible 返回的 OnScreenInterval[] 可能包含 opacity=0 的成员（用于物理节点预挂载）。
+ * 取坐标/几何信息时必须跳过这些不可见成员，从第一个实际有像素贡献的成员取得。
+ */
+function firstVisibleInterval(intervals: OnScreenInterval[]): OnScreenInterval | null {
+  for (const interval of intervals) {
+    if (interval.opacity !== undefined && interval.opacity <= 0) {
+      continue
+    }
+    return interval
+  }
+  return null
+}
+
 /**
  * 缺口2修复：从 OnScreenInterval[] 的所有 rects 中取最左边的 x（vp，屏幕坐标）。
  * Issue #879 复核评论6105482207 问题1：适配多成员索引，合并所有成员的 rects。
@@ -859,26 +903,29 @@ function buildPiece(
       }
     }
     if (minProjectedLeft === Infinity) {
+      // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
+      // 零像素不可见，返回零宽起点，不回退画满字形。
       ownLeft = ownFullLeft
-      sourceGlyphX0 = firstVisible[0].sourceGlyphX0 ?? ownFullLeft
-      sourceGlyphX1 = firstVisible[0].sourceGlyphX1 ?? ownFullRight
-      visiblePixelLeft = sourceGlyphX0
-      visiblePixelRight = sourceGlyphX0
-      firstClipRects.push({
-        x: ownFullLeft, y: run.ownRect.y,
-        width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
-      })
-      firstSourceGlyphRects.push(firstGlyphFullRect)
+      sourceGlyphX0 = ownFullLeft
+      sourceGlyphX1 = ownFullLeft
+      visiblePixelLeft = ownFullLeft
+      visiblePixelRight = ownFullLeft
+      // 不 push firstClipRects（零宽不可见，没有 clipRect）
+      // 不 push firstSourceGlyphRects
     } else {
       ownLeft = minProjectedLeft
       visiblePixelLeft = minVisLeft
       visiblePixelRight = maxVisRight
-      // sourceGlyphX0/X1 从 firstVisible[0] 获取（首字形的源布局完整边界）
-      sourceGlyphX0 = firstVisible[0].sourceGlyphX0 ?? ownFullLeft
-      sourceGlyphX1 = firstVisible[0].sourceGlyphX1 ?? ownFullRight
+      // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的成员取得 sourceGlyphX0/X1，
+      // 不再从 firstVisible[0] 取（firstVisible[0] 可能是 opacity=0 的不可见成员）。
+      const firstVis = firstVisibleInterval(firstVisible) ?? firstVisible[0]
+      sourceGlyphX0 = firstVis.sourceGlyphX0 ?? ownFullLeft
+      sourceGlyphX1 = firstVis.sourceGlyphX1 ?? ownFullRight
     }
     // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
-    onScreenLeft = onScreenLeftOf(firstVisible)
+    // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+    // onScreenLeftOf 会返回 Infinity——不得让 Infinity 进入 RunStartPiece。
+    onScreenLeft = hasVisiblePixels(firstVisible) ? onScreenLeftOf(firstVisible) : ownFullLeft
   } else {
     // 静态可见：完整边界（源 = 目标）
     sourceGlyphX0 = ownFullLeft
@@ -956,12 +1003,11 @@ function buildPiece(
         }
       }
       if (maxProjectedRight === -Infinity) {
+        // Issue #879 评论6110293866 问题1：所有 interval 都是 opacity=0 或无交集——
+        // 零像素不可见，返回零宽终点，不回退画满字形。
         ownRight = ownFullRight
-        lastClipRects.push({
-          x: lastGlyphTargetLeft, y: run.ownRect.y,
-          width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
-        })
-        lastSourceGlyphRects.push(lastGlyphFullRect)
+        // 不 push lastClipRects（零宽不可见，没有 clipRect）
+        // 不 push lastSourceGlyphRects
       } else {
         ownRight = maxProjectedRight
         // 尾字形的 sourceGlyphX1 从 lastVisible[0] 获取
@@ -969,7 +1015,9 @@ function buildPiece(
         visiblePixelRight = maxVisRight
       }
       // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
-      onScreenRight = onScreenRightOf(lastVisible)
+      // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+      // onScreenRightOf 会返回 -Infinity——不得让 -Infinity 进入 RunStartPiece。
+      onScreenRight = hasVisiblePixels(lastVisible) ? onScreenRightOf(lastVisible) : ownFullRight
     } else {
       // 静态可见：完整边界
       ownRight = ownFullRight
@@ -1034,6 +1082,10 @@ function buildPiece(
         // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
         // 不再使用 midSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
         for (const interval of midVisible) {
+          // Issue #879 评论6110293866 问题2：跳过 opacity=0 的不可见成员
+          if (interval.opacity !== undefined && interval.opacity <= 0) {
+            continue
+          }
           const intervalOffsetX = interval.offsetX ?? midSpan.offsetX
           const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? midGlyphTargetLeft
           const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? midGlyphTargetRight
@@ -1077,7 +1129,10 @@ function buildPiece(
   // 改为从 firstVisible[0].sourceGlyphY0 获取（如果 firstVisible 非空）。
   let sourceGlyphY0: number
   if (firstSpan !== undefined && firstVisible.length > 0) {
-    sourceGlyphY0 = firstVisible[0].sourceGlyphY0 ?? run.ownRect.y
+    // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的成员取得 sourceGlyphY0，
+    // 不再从 firstVisible[0] 取（firstVisible[0] 可能是 opacity=0 的不可见成员）。
+    const firstVis = firstVisibleInterval(firstVisible) ?? firstVisible[0]
+    sourceGlyphY0 = firstVis.sourceGlyphY0 ?? run.ownRect.y
   } else {
     // 静态可见或 firstVisible 为空：源 = 目标
     sourceGlyphY0 = run.ownRect.y
@@ -1089,7 +1144,9 @@ function buildPiece(
     ownLeft: ownLeft,
     ownRight: ownRight,
     onScreenLeft: onScreenLeft,
-    onScreenTop: onScreenTopOf(firstVisible),
+    // Issue #879 评论6110293866 问题1：当所有 interval 都是 opacity=0 时，
+    // onScreenTopOf 会返回 Infinity——不得让 Infinity 进入 RunStartPiece。
+    onScreenTop: hasVisiblePixels(firstVisible) ? onScreenTopOf(firstVisible) : run.ownRect.y,
     onScreenRight: onScreenRight,
     sourceGlyphX0: sourceGlyphX0,
     sourceGlyphX1: sourceGlyphX1,
@@ -1604,6 +1661,10 @@ export function retargetRunStarts(
               ? deepCloneSourceMembers(prevInterval.sourceMembers).map(m => ({
                   ...m,
                   clipRects: [],  // 不可见时清空 clipRects，避免回闪
+                  // Issue #879 评论6110293866 问题3：不可见时 opacity 和 targetOpacity 都设为 0，
+                  // 确保 buildFrame 中 memberOpacity 始终为 0，避免动画过程中不可见成员变得可见。
+                  opacity: 0,
+                  targetOpacity: 0,
                 }))
               : undefined,
           })
@@ -1783,8 +1844,10 @@ function allVisibleIslands(
   let currentFirst = -1
   for (let i = firstIndex; i <= lastIndex; i++) {
     const visible = clusterVisible(displayed, frozenByGlyphId, run.glyphIds[i])
-    const hasVisiblePixels = visible.some(iv => iv.opacity === undefined || iv.opacity > 0)
-    if (hasVisiblePixels) {
+    // Issue #879 评论6110293866 问题1：用统一的 hasVisiblePixels 替代局部 some() 判断。
+    // 注意：原局部变量名 hasVisiblePixels 与全局函数同名，改为 visibleResult 避免冲突。
+    const visibleResult = hasVisiblePixels(visible)
+    if (visibleResult) {
       if (currentFirst < 0) {
         currentFirst = i
       }
@@ -1923,6 +1986,11 @@ function intervalForIsland(
   if (firstVisible.length === 0) {
     return null
   }
+  // Issue #879 评论6110293866 问题1：有 interval 但全部 opacity=0 时也不可见，
+  // 用统一的 hasVisiblePixels 判断替代 firstVisible.length === 0 的可见性语义。
+  if (!hasVisiblePixels(firstVisible)) {
+    return null
+  }
   const visible = buildPiece(run, boundaries, firstIndex, lastIndex, firstVisible, displayed, frozenByGlyphId)
   if (visible === null) {
     return null
@@ -1944,12 +2012,19 @@ function intervalForIsland(
     // Issue #879 复核评论6102724233 问题1：frozenDrawOffsetX/Y 直接从 FrozenWindowSpan.offsetX/Y
     // 读取，不再从裁切边界反推。onScreenTop/onScreenLeft 是裁切后的可见边界，不是源 Text
     // 的真实偏移——用裁切边界反推会把纵向裁切误当成平移，导致半字错位。
-    // Issue #879 复核评论6105482207 问题1：frozenByGlyphId 改为 Map<string, FrozenWindowSpan[]>，
-    // 取第一个成员的 offset（多成员场景下各成员的 offset 通常一致）。
+    // Issue #879 评论6110293866 问题2：从第一个有可见像素贡献的 interval 取 offset，
+    // 不再从 firstSpans[0] 取（firstSpans[0] 可能是 opacity=0 的不可见源）。
     const firstSpans = frozenByGlyphId.get(run.glyphIds[firstIndex])
+    const firstVis = firstVisibleInterval(firstVisible)
+    if (firstVis !== null) {
+      frozenDrawOffsetX = firstVis.offsetX
+      frozenDrawOffsetY = firstVis.offsetY
+    } else {
+      // 不应走到这里——hasVisiblePixels 已在前面检查过
+      frozenDrawOffsetX = 0
+      frozenDrawOffsetY = 0
+    }
     const firstSpan = firstSpans !== undefined && firstSpans.length > 0 ? firstSpans[0] : undefined
-    frozenDrawOffsetX = firstSpan !== undefined ? firstSpan.offsetX : 0
-    frozenDrawOffsetY = firstSpan !== undefined ? firstSpan.offsetY : 0
     // startPositionX/Y = 源字形原点 + 窗口真实偏移（不是裁切后可见边界）
     startPositionX = visible.sourceGlyphX0 + frozenDrawOffsetX
     startPositionY = visible.sourceGlyphY0 + frozenDrawOffsetY

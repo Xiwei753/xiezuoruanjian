@@ -5064,10 +5064,12 @@ test('问题5：retargetRunStarts 不可见分支——保留成员身份字段�
   assert.equal(oldMember.sourceGlyphRect.width, 12, '不可见分支保留 sourceGlyphRect.width')
   assert.equal(oldMember.offsetX, 3, '不可见分支保留 offsetX')
   assert.equal(oldMember.offsetY, 0, '不可见分支保留 offsetY')
-  assert.equal(oldMember.opacity, 0.6, '不可见分支保留 opacity')
+  // Issue #879 评论6110293866 问题3：不可见分支 opacity 和 targetOpacity 都设为 0，
+  // 确保 buildFrame 中 memberOpacity 始终为 0，避免动画过程中不可见成员变得可见。
+  assert.equal(oldMember.opacity, 0, '不可见分支 opacity 设为 0')
   assert.equal(oldMember.sourceUtf16Start, 1, '不可见分支保留 sourceUtf16Start')
   assert.equal(oldMember.sourceUtf16End, 2, '不可见分支保留 sourceUtf16End')
-  assert.equal(oldMember.targetOpacity, -1, '不可见分支保留 targetOpacity')
+  assert.equal(oldMember.targetOpacity, 0, '不可见分支 targetOpacity 设为 0')
   // 只有 clipRects 被清空
   assert.equal(oldMember.clipRects.length, 0, '不可见分支只有 clipRects 被清空')
   // new 成员同理
@@ -5080,11 +5082,218 @@ test('问题5：retargetRunStarts 不可见分支——保留成员身份字段�
   assert.equal(newMember.sourceGlyphRect.width, 10, '不可见分支保留 sourceGlyphRect.width')
   assert.equal(newMember.offsetX, 5, '不可见分支保留 offsetX')
   assert.equal(newMember.offsetY, 0, '不可见分支保留 offsetY')
-  assert.equal(newMember.opacity, 0.4, '不可见分支保留 opacity')
+  assert.equal(newMember.opacity, 0, '不可见分支 opacity 设为 0')
   assert.equal(newMember.sourceUtf16Start, 1, '不可见分支保留 sourceUtf16Start')
   assert.equal(newMember.sourceUtf16End, 2, '不可见分支保留 sourceUtf16End')
-  assert.equal(newMember.targetOpacity, -1, '不可见分支保留 targetOpacity')
+  assert.equal(newMember.targetOpacity, 0, '不可见分支 targetOpacity 设为 0')
   assert.equal(newMember.clipRects.length, 0, '不可见分支只有 clipRects 被清空')
+})
+
+// ====== Issue #879 评论6110293866 补充测试 ======
+
+test('问题1-6110293866：opacity=0 时不产生 Infinity 几何——clusterVisible 返回成员但 retainedMoveStartState 不产生 Infinity', () => {
+  // 场景：glyphId 在冻结窗口中，窗口 opacity=0（完全透明），clipRect 与字形有交集。
+  // 验证：
+  //   1. clusterVisible 返回 OnScreenInterval[] 包含 opacity=0 的成员（rects.length > 0）
+  //   2. visibleGlyphPieces 不把该字形列为可见段（返回空数组）
+  //   3. retainedMoveStartState 不产生 Infinity 的 onScreenLeft/onScreenTop 或 -Infinity 的 onScreenRight
+  const ctx = context('A', 1400, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const aId = glyphIds[0]
+
+  // 源布局：A 在 x=0, width=10
+  const sourceLayout = [{
+    startUtf16: 0, endUtf16: 1, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }],
+  }]
+
+  const frozen = [{
+    glyphIds: [aId],
+    clipLeft: 0, clipRight: 10,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1400,
+    glyphUtf16Ranges: new Map([[aId, [0, 1]]]),
+    sourceLayout: sourceLayout,
+    sourceKind: 'old',
+    runId: 'old-1400',
+    renderNodeKey: 'old-node-1400',
+    opacity: 0,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. clusterVisible 返回 OnScreenInterval，包含 opacity=0 的成员
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, aId)
+  assert.equal(intervals.length, 1, 'clusterVisible 应返回 1 个 OnScreenInterval')
+  assert.equal(intervals[0].opacity, 0, 'opacity 应为 0')
+  assert.ok(intervals[0].rects.length > 0, 'rects 应非空（有裁切交集）')
+
+  // 2. visibleGlyphPieces 不把该字形列为可见段（hasVisiblePixels 为 false）
+  const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 0, 'visibleGlyphPieces 不应返回任何可见段（opacity=0 无可见像素）')
+
+  // 3. retainedMoveStartState 不产生 Infinity 几何
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到 A 的 interval')
+  // onScreenLeft 不应为 Infinity
+  assert.ok(iv.startClipLeft !== Infinity, `startClipLeft 不应为 Infinity，实际 ${iv.startClipLeft}`)
+  // startClipRight 不应为 -Infinity
+  assert.ok(iv.startClipRight !== -Infinity, `startClipRight 不应为 -Infinity，实际 ${iv.startClipRight}`)
+  // startPositionX 不应为 Infinity 或 -Infinity
+  assert.ok(iv.startPositionX !== Infinity && iv.startPositionX !== -Infinity,
+    `startPositionX 不应为 Infinity，实际 ${iv.startPositionX}`)
+  // startPositionY 不应为 Infinity 或 -Infinity
+  assert.ok(iv.startPositionY !== Infinity && iv.startPositionY !== -Infinity,
+    `startPositionY 不应为 Infinity，实际 ${iv.startPositionY}`)
+  // opacity=0 时应为零宽 interval
+  assert.equal(iv.startClipLeft, iv.startClipRight,
+    'opacity=0 的字形应获得零宽度 interval')
+})
+
+test('问题2-6110293866：第一张源透明、第二张源可见时 startPositionX 取自可见源', () => {
+  // 场景：glyphId 同时被两个冻结窗口覆盖——旧源 opacity=0、x=50；新源 opacity=1、x=70。两者 offset=0。
+  // 验证：
+  //   1. clusterVisible 返回两个 OnScreenInterval（一个 opacity=0，一个 opacity=1）
+  //   2. retainedMoveStartState 的 startPositionX = 70（取自 opacity=1 的成员），不是 50
+  const ctx = context('甲乙', 1401, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  // old 源布局：乙在 x=50, width=10
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  // new 源布局：乙在 x=70, width=10
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 50, clipRight: 60,
+      clipRects: [{ x: 50, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 70, clipRight: 80,
+      clipRects: [{ x: 70, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 11, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. clusterVisible 返回两个 OnScreenInterval
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, yiId)
+  assert.equal(intervals.length, 2, 'clusterVisible 应返回 2 个 OnScreenInterval')
+  assert.equal(intervals[0].sourceKind, 'old')
+  assert.equal(intervals[0].opacity, 0, 'old 源 opacity=0')
+  assert.equal(intervals[1].sourceKind, 'new')
+  assert.equal(intervals[1].opacity, 1, 'new 源 opacity=1')
+
+  // 2. retainedMoveStartState 的 startPositionX 取自可见源（new 源 x=70）
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  // startPositionX = sourceGlyphX0 + frozenDrawOffsetX = 70 + 0 = 70
+  assert.equal(iv.startPositionX, 70,
+    `startPositionX 应取自可见源（new 源 x=70），实际 ${iv.startPositionX}`)
+  // 不应取自旧源（x=50）
+  assert.notEqual(iv.startPositionX, 50,
+    'startPositionX 不应取自 opacity=0 的旧源')
+})
+
+test('问题4-6110293866：双源成员场景——glyphId 同时在 displayed 身份表和冻结窗口里，clusterVisible 优先使用冻结窗口 sourceLayout', () => {
+  // 场景：glyphId 在 displayed 正文身份表中存在（静态可见），同时被冻结窗口覆盖。
+  // 验证：
+  //   1. clusterVisible 优先使用冻结窗口的 sourceLayout（而不是 displayed.layout）
+  //   2. 返回的 OnScreenInterval 携带冻结窗口的 sourceKind 和 opacity
+  //   3. visibleGlyphPieces 的投影使用冻结窗口的源字形几何
+  const ctx = context('甲', 1402, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const jiaId = glyphIds[0]
+
+  // displayed.layout 中甲在 x=0, width=10（默认 line() 构造）
+  // 冻结窗口 sourceLayout 中甲在 x=100, width=10
+  const frozenSourceLayout = [{
+    startUtf16: 0, endUtf16: 1, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 100 }, { utf16Offset: 1, x: 110 }],
+  }]
+
+  const frozen = [{
+    glyphIds: [jiaId],
+    clipLeft: 100, clipRight: 110,
+    clipRects: [{ x: 100, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1402,
+    glyphUtf16Ranges: new Map([[jiaId, [0, 1]]]),
+    sourceLayout: frozenSourceLayout,
+    sourceKind: 'old',
+    runId: 'old-1402',
+    renderNodeKey: 'old-node-1402',
+    opacity: 1,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 1. clusterVisible 返回 OnScreenInterval，sourceGlyphX0 来自冻结窗口 sourceLayout（x=100）
+  const frozenByGlyphId = frozenIndex(withWindow)
+  const intervals = clusterVisible(withWindow, frozenByGlyphId, jiaId)
+  assert.equal(intervals.length, 1, 'clusterVisible 应返回 1 个 OnScreenInterval')
+  assert.equal(intervals[0].sourceKind, 'old', 'sourceKind 应为 old（来自冻结窗口）')
+  assert.equal(intervals[0].opacity, 1, 'opacity 应为 1')
+  assert.equal(intervals[0].sourceGlyphX0, 100,
+    `sourceGlyphX0 应来自冻结窗口 sourceLayout（x=100），实际 ${intervals[0].sourceGlyphX0}`)
+  assert.equal(intervals[0].sourceGlyphX1, 110,
+    `sourceGlyphX1 应来自冻结窗口 sourceLayout（x=110），实际 ${intervals[0].sourceGlyphX1}`)
+  // 不应来自 displayed.layout（x=0）
+  assert.notEqual(intervals[0].sourceGlyphX0, 0,
+    'sourceGlyphX0 不应来自 displayed.layout（x=0）')
+
+  // 2. visibleGlyphPieces 使用冻结窗口的源字形几何投影
+  const run = runGeometry(withWindow, 0, 1, { x: 0, y: 0, width: 10, height: 20 })
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1, 'visibleGlyphPieces 应返回 1 个可见段')
+  // 投影：源 x=100..110 → 目标 x=0..10（run.ownRect.x=0, width=10）
+  // clipRects 应在目标坐标系 [0, 10] 内
+  assert.ok(pieces[0].clipRects.length > 0, '应有 clipRects')
+  for (const cr of pieces[0].clipRects) {
+    assert.ok(cr.x >= 0 && cr.x + cr.width <= 10,
+      `clipRect 应在目标坐标系 [0,10] 内，实际 [${cr.x}, ${cr.x + cr.width}]`)
+  }
+
+  // 3. retainedMoveStartState 的 startPositionX 使用冻结窗口源字形几何
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到甲的 interval')
+  // startPositionX = sourceGlyphX0 + frozenDrawOffsetX = 100 + 0 = 100
+  assert.equal(iv.startPositionX, 100,
+    `startPositionX 应来自冻结窗口源字形几何（x=100），实际 ${iv.startPositionX}`)
+  assert.notEqual(iv.startPositionX, 0,
+    'startPositionX 不应来自 displayed.layout（x=0）')
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
