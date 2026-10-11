@@ -3160,4 +3160,109 @@ test('问题2-6105187411：字形在 displayed 身份表中且正由冻结窗口
     'sourceGlyphRects.x 仍来自 run.ownLayout（10）')
 })
 
+test('双源冻结窗口：glyphId 同时被旧源和新源两个冻结窗口覆盖时，frozenSourceGlyphRects 包含2个成员', () => {
+  // 场景：displayed 正文 '甲乙'（revision 972），乙的 glyphId 同时被两个冻结窗口覆盖：
+  // 旧源窗口（sourceKind='old'）：sourceLayout 中乙在 x=50，offsetX=3，clipRects=[{x:53, y:0, width:5, height:20}]
+  // 新源窗口（sourceKind='new'）：sourceLayout 中乙在 x=70，offsetX=5，clipRects=[{x:75, y:0, width:5, height:20}]
+  // 验证 frozenSourceGlyphRects 有2个条目，startScreenClipRects 合并两个成员的 rects，
+  // frozenDrawOffsetX 取自第一个成员的 offset。
+  const ctx = context('甲乙', 972, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]  // 乙的 glyphId
+
+  // 旧源窗口的 sourceLayout：乙在 x=50（与 displayed.layout 的 x=10 不同）
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  // 新源窗口的 sourceLayout：乙在 x=70
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const yiRanges = new Map([[yiId, [1, 2]]])
+
+  // 手动构造 FrozenWindowSpan（需要 sourceKind/runId/renderNodeKey/opacity）
+  const frozen = [
+    {
+      glyphIds: [yiId],
+      clipLeft: 53,
+      clipRight: 58,
+      clipRects: [{ x: 53, y: 0, width: 5, height: 20 }],
+      offsetX: 3,
+      offsetY: 0,
+      sourceRevision: 970,
+      glyphUtf16Ranges: yiRanges,
+      sourceLayout: oldSourceLayout,
+      sourceKind: 'old',
+      runId: 'old-11',
+      renderNodeKey: 'old-node-11',
+      opacity: 0.5,
+    },
+    {
+      glyphIds: [yiId],
+      clipLeft: 75,
+      clipRight: 80,
+      clipRects: [{ x: 75, y: 0, width: 5, height: 20 }],
+      offsetX: 5,
+      offsetY: 0,
+      sourceRevision: 974,
+      glyphUtf16Ranges: yiRanges,
+      sourceLayout: newSourceLayout,
+      sourceKind: 'new',
+      runId: 'new-11',
+      renderNodeKey: 'new-node-11',
+      opacity: 0.5,
+    },
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  // run 覆盖乙——ownLayout 中乙在 x=10（与冻结源布局不同）
+  const ownLayout = [line('甲乙', 0)]
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: ownLayout,
+  }
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+
+  // 1. frozenSourceGlyphRects 有2个条目（不是1个）
+  assert.ok(iv.frozenSourceGlyphRects !== undefined, 'frozenSourceGlyphRects 应填充')
+  assert.equal(iv.frozenSourceGlyphRects.length, 2,
+    'frozenSourceGlyphRects 应有2个条目（旧源+新源），不是1个')
+
+  // 2. 第一个条目对应旧源窗口的 sourceLayout（x=50），第二个对应新源窗口的 sourceLayout（x=70）
+  assert.equal(iv.frozenSourceGlyphRects[0].x, 50,
+    '第一个 frozenSourceGlyphRects 条目应来自旧源窗口 sourceLayout（x=50）')
+  assert.equal(iv.frozenSourceGlyphRects[1].x, 70,
+    '第二个 frozenSourceGlyphRects 条目应来自新源窗口 sourceLayout（x=70）')
+
+  // 3. startScreenClipRects 合并了两个成员的 rects（每个成员各1个 rect，总共2个）
+  assert.ok(iv.startScreenClipRects !== undefined, 'startScreenClipRects 应填充')
+  assert.equal(iv.startScreenClipRects.length, 2,
+    'startScreenClipRects 应合并两个成员的 rects，总共2个')
+  // 旧源成员的 rect：x=53（50+3=53，clipRect 与字形在屏位置求交）
+  assert.equal(iv.startScreenClipRects[0].x, 53,
+    '第一个 startScreenClipRects 应来自旧源窗口（x=53）')
+  // 新源成员的 rect：x=75（70+5=75，clipRect 与字形在屏位置求交）
+  assert.equal(iv.startScreenClipRects[1].x, 75,
+    '第二个 startScreenClipRects 应来自新源窗口（x=75）')
+
+  // 4. frozenDrawOffsetX 取自第一个成员的 offset（3）
+  assert.equal(iv.frozenDrawOffsetX, 3,
+    'frozenDrawOffsetX 应取自第一个成员（旧源窗口）的 offset（3）')
+
+  // sourceGlyphRects 仍来自 run.ownLayout（x=10）——与 frozenSourceGlyphRects 坐标系不同
+  assert.ok(iv.sourceGlyphRects !== undefined, 'sourceGlyphRects 应填充')
+  assert.equal(iv.sourceGlyphRects[0].x, 10,
+    'sourceGlyphRects.x 仍来自 run.ownLayout（10），与 frozenSourceGlyphRects 不同')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

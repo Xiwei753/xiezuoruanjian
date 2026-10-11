@@ -1564,9 +1564,10 @@ export class EditorMotionCoordinator {
             // Issue #879 复核评论6104161755 问题3：优先使用 frozenSourceGlyphRects（来自源布局坐标系），
             // 它与 frozenDrawOffsetX/Y（来自 FrozenWindowSpan.offsetX/Y）在同一坐标系。
             // sourceGlyphRects 来自 run.ownLayout，跨事务继承旧修订文字时坐标系不匹配。
-            const sr = interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
-              ? interval.frozenSourceGlyphRects[0]
-              : interval.sourceGlyphRects[0]
+            // Issue #879 复核评论6105482207 问题1：遍历 frozenSourceGlyphRects 的所有成员，
+            // 为每个成员分别计算 sourceGlyphOnScreen 和 clipRects，合并到 islandClipRects。
+            // 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源两个窗口覆盖，
+            // 每个成员的几何对应一个 RectLike，需要分别计算。
             const frozenDrawOffsetX = interval.frozenDrawOffsetX !== undefined
               ? interval.frozenDrawOffsetX
               : interval.startPositionX - move.oldRect.x
@@ -1574,91 +1575,121 @@ export class EditorMotionCoordinator {
               ? interval.frozenDrawOffsetY
               : interval.startPositionY - move.oldRect.y
 
-            // 源字形在屏矩形 = 源字形布局矩形 + 冻结窗口偏移（屏幕坐标系）
-            const sourceGlyphOnScreen: RectLike = {
-              x: sr.x + frozenDrawOffsetX,
-              y: sr.y + frozenDrawOffsetY,
-              width: sr.width,
-              height: sr.height
-            }
+            // 确定要遍历的源字形矩形列表：
+            // 优先使用 frozenSourceGlyphRects（所有成员），否则回退到 sourceGlyphRects[0]
+            const sourceRectsToIterate: RectLike[] =
+              interval.frozenSourceGlyphRects !== undefined && interval.frozenSourceGlyphRects.length > 0
+                ? interval.frozenSourceGlyphRects
+                : [interval.sourceGlyphRects[0]]
 
-            // Issue #879 复核评论6103000047 问题4：目标字形几何使用新布局而不是旧布局。
-            let newGlyphRect: RectLike = {
-              x: islandNewX + (sr.x - islandOldLeft),
-              y: islandNewY,
-              width: Math.max(0, sr.width),
-              height: Math.max(0, sr.height)
-            }
+            // 先计算 interval 级别的 newGlyphRect（当 newMoveBoundaries 可用时），
+            // 供 needsSourceCrossfade 和所有成员共用。当 newMoveBoundaries 不可用时，
+            // 各成员使用自己的 sr 计算 fallback 值。
+            let intervalNewGlyphRect: RectLike | null = null
             if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
                 interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
               const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
               const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
               const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
               if (newRect !== null) {
-                newGlyphRect = newRect
+                intervalNewGlyphRect = newRect
               }
             }
 
             // Issue #879 复核评论6104619192 问题1：needsCrossfade 已在 plan 阶段由 move.needsCrossfade 确定，
             // 不再逐 interval 动态判断。此处始终计算新源几何参数，供 needsSourceCrossfade=true 时使用。
+            // needsSourceCrossfade 是 interval 级别的，只执行一次。
             if (needsSourceCrossfade) {
               if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
                   interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
                 newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
                 newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
               }
-              newSourceGlyphX = newGlyphRect.x
-              newSourceGlyphY = newGlyphRect.y
-              newSourceGlyphWidth = newGlyphRect.width
-              newSourceGlyphHeight = newGlyphRect.height
+              if (intervalNewGlyphRect !== null) {
+                newSourceGlyphX = intervalNewGlyphRect.x
+                newSourceGlyphY = intervalNewGlyphRect.y
+                newSourceGlyphWidth = intervalNewGlyphRect.width
+                newSourceGlyphHeight = intervalNewGlyphRect.height
+              } else {
+                // fallback：用第一个成员的 sr 计算（与旧实现行为一致）
+                const firstSr = sourceRectsToIterate[0]
+                newSourceGlyphX = islandNewX + (firstSr.x - islandOldLeft)
+                newSourceGlyphY = islandNewY
+                newSourceGlyphWidth = Math.max(0, firstSr.width)
+                newSourceGlyphHeight = Math.max(0, firstSr.height)
+              }
             }
 
-            // Issue #879 复核评论6102724233 问题3：用 rectDifference 在屏幕坐标系中计算
-            // 尚未覆盖的区域（间隙）。sourceGlyphOnScreen 和 startScreenClipRects 都在屏幕坐标。
-            const remaining = rectDifference(sourceGlyphOnScreen, interval.startScreenClipRects)
+            // 遍历所有成员，为每个成员分别计算 sourceGlyphOnScreen、newGlyphRect、clipRects
+            for (const sr of sourceRectsToIterate) {
+              // 源字形在屏矩形 = 源字形布局矩形 + 冻结窗口偏移（屏幕坐标系）
+              const sourceGlyphOnScreen: RectLike = {
+                x: sr.x + frozenDrawOffsetX,
+                y: sr.y + frozenDrawOffsetY,
+                width: sr.width,
+                height: sr.height
+              }
 
-            const startRects: ClipRect[] = []
-            const targetRects: ClipRect[] = []
+              // Issue #879 复核评论6103000047 问题4：目标字形几何使用新布局而不是旧布局。
+              let newGlyphRect: RectLike
+              if (intervalNewGlyphRect !== null) {
+                newGlyphRect = intervalNewGlyphRect
+              } else {
+                newGlyphRect = {
+                  x: islandNewX + (sr.x - islandOldLeft),
+                  y: islandNewY,
+                  width: Math.max(0, sr.width),
+                  height: Math.max(0, sr.height)
+                }
+              }
 
-            // 已可见碎片：起始 = startScreenClipRects（屏幕坐标真实裁切矩形，含真实纵向裁切），
-            // 目标 = mapRectByRatio 从源字形在屏矩形映射到新布局字形矩形
-            for (const scr of interval.startScreenClipRects) {
-              startRects.push({
-                x: scr.x, y: scr.y,
-                width: Math.max(0, scr.width), height: Math.max(0, scr.height)
-              })
-              const mapped = mapRectByRatio(scr, sourceGlyphOnScreen, newGlyphRect)
-              targetRects.push({
-                x: mapped.x, y: mapped.y,
-                width: mapped.width, height: mapped.height
-              })
-            }
+              // Issue #879 复核评论6102724233 问题3：用 rectDifference 在屏幕坐标系中计算
+              // 尚未覆盖的区域（间隙）。sourceGlyphOnScreen 和 startScreenClipRects 都在屏幕坐标。
+              const remaining = rectDifference(sourceGlyphOnScreen, interval.startScreenClipRects)
 
-            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
-            for (const gap of remaining) {
-              startRects.push({
-                x: gap.x, y: gap.y,
-                width: 0, height: Math.max(0, gap.height)
-              })
-              const mappedGap = mapRectByRatio(gap, sourceGlyphOnScreen, newGlyphRect)
-              targetRects.push({
-                x: mappedGap.x, y: mappedGap.y,
-                width: mappedGap.width, height: mappedGap.height
-              })
-            }
+              const startRects: ClipRect[] = []
+              const targetRects: ClipRect[] = []
 
-            // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
-            for (let si = 0; si < startRects.length; si++) {
-              const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
-              const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
-              const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
-              const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
-              islandClipRects.push({
-                x: frameX,
-                y: frameY,
-                width: Math.max(0, frameWidth),
-                height: Math.max(0, frameHeight),
-              })
+              // 已可见碎片：起始 = startScreenClipRects（屏幕坐标真实裁切矩形，含真实纵向裁切），
+              // 目标 = mapRectByRatio 从源字形在屏矩形映射到新布局字形矩形
+              for (const scr of interval.startScreenClipRects) {
+                startRects.push({
+                  x: scr.x, y: scr.y,
+                  width: Math.max(0, scr.width), height: Math.max(0, scr.height)
+                })
+                const mapped = mapRectByRatio(scr, sourceGlyphOnScreen, newGlyphRect)
+                targetRects.push({
+                  x: mapped.x, y: mapped.y,
+                  width: mapped.width, height: mapped.height
+                })
+              }
+
+              // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
+              for (const gap of remaining) {
+                startRects.push({
+                  x: gap.x, y: gap.y,
+                  width: 0, height: Math.max(0, gap.height)
+                })
+                const mappedGap = mapRectByRatio(gap, sourceGlyphOnScreen, newGlyphRect)
+                targetRects.push({
+                  x: mappedGap.x, y: mappedGap.y,
+                  width: mappedGap.width, height: mappedGap.height
+                })
+              }
+
+              // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+              for (let si = 0; si < startRects.length; si++) {
+                const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
+                const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
+                const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
+                const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
+                islandClipRects.push({
+                  x: frameX,
+                  y: frameY,
+                  width: Math.max(0, frameWidth),
+                  height: Math.max(0, frameHeight),
+                })
+              }
             }
           } else if (interval.clipRects !== undefined && interval.clipRects.length > 0 &&
               interval.sourceGlyphRects !== undefined &&

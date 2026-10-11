@@ -745,72 +745,65 @@ function buildPiece(
   }
 
   if (firstSpan !== undefined) {
-    // 被窗口覆盖：计算源字形几何，然后投影到目标布局
-    const sourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, firstGlyphId)
-    if (sourceGeom !== null) {
-      sourceGlyphX0 = sourceGeom.x0
-      sourceGlyphX1 = sourceGeom.x1
-      // 缺口2修复：逐段投影——对 firstVisible 中每个 interval 的每个 rect 分别投影，
-      // 不能用 min/max 合并成连续区间。ownLeft = 最左边 rect 的投影左边界。
-      // Issue #879 复核评论6105482207 问题1：firstVisible 是 OnScreenInterval[]，
-      // 需遍历所有成员的 rects。
-      let minProjectedLeft = Infinity
-      let minVisLeft = Infinity
-      let maxVisRight = -Infinity
-      for (const interval of firstVisible) {
-        for (const r of interval.rects) {
-          const visLeftInSource = Math.max(sourceGlyphX0, r.x - firstSpan.offsetX)
-          const visRightInSource = Math.min(sourceGlyphX1, r.x + r.width - firstSpan.offsetX)
-          if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
-            const projectedLeft = projectToTarget(
-              visLeftInSource, sourceGlyphX0, sourceGlyphX1,
-              firstGlyphTargetLeft, firstGlyphTargetRight
-            )
-            // Issue #879 复核评论6099070438 问题4：逐段投影保留为 clipRect，
-            // 不只用 min/max 压成连续区间——同一字形左右两块露出、中间有空洞时
-            // 避免画出不可见的中间区域。
-            const projectedRight = projectToTarget(
-              visRightInSource, sourceGlyphX0, sourceGlyphX1,
-              firstGlyphTargetLeft, firstGlyphTargetRight
-            )
-            firstClipRects.push({
-              x: projectedLeft, y: run.ownRect.y,
-              width: projectedRight - projectedLeft, height: run.ownRect.height,
-            })
-            firstSourceGlyphRects.push(firstGlyphFullRect)
-            if (projectedLeft < minProjectedLeft) {
-              minProjectedLeft = projectedLeft
-            }
-            if (visLeftInSource < minVisLeft) {
-              minVisLeft = visLeftInSource
-            }
-            if (visRightInSource > maxVisRight) {
-              maxVisRight = visRightInSource
-            }
+    // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+    // 不再使用 firstSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+    // 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源两个窗口覆盖，
+    // 每个 interval 携带各自成员的 offset 和源字形几何，必须逐 interval 投影。
+    let minProjectedLeft = Infinity
+    let minVisLeft = Infinity
+    let maxVisRight = -Infinity
+    for (const interval of firstVisible) {
+      // 用 interval 的成员信息，回退到 firstSpan/ownFullLeft（兼容旧代码路径）
+      const intervalOffsetX = interval.offsetX ?? firstSpan.offsetX
+      const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? ownFullLeft
+      const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? ownFullRight
+      for (const r of interval.rects) {
+        const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+        const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+        if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+          const projectedLeft = projectToTarget(
+            visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          const projectedRight = projectToTarget(
+            visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+            firstGlyphTargetLeft, firstGlyphTargetRight
+          )
+          firstClipRects.push({
+            x: projectedLeft, y: run.ownRect.y,
+            width: projectedRight - projectedLeft, height: run.ownRect.height,
+          })
+          firstSourceGlyphRects.push(firstGlyphFullRect)
+          if (projectedLeft < minProjectedLeft) {
+            minProjectedLeft = projectedLeft
+          }
+          if (visLeftInSource < minVisLeft) {
+            minVisLeft = visLeftInSource
+          }
+          if (visRightInSource > maxVisRight) {
+            maxVisRight = visRightInSource
           }
         }
       }
-      if (minProjectedLeft === Infinity) {
-        ownLeft = ownFullLeft
-        visiblePixelLeft = sourceGlyphX0
-        visiblePixelRight = sourceGlyphX0
-      } else {
-        ownLeft = minProjectedLeft
-        visiblePixelLeft = minVisLeft
-        visiblePixelRight = maxVisRight
-      }
-    } else {
-      // 无法获取源字形几何——退回完整边界
-      sourceGlyphX0 = ownFullLeft
-      sourceGlyphX1 = ownFullRight
-      visiblePixelLeft = ownFullLeft
-      visiblePixelRight = ownFullRight
+    }
+    if (minProjectedLeft === Infinity) {
       ownLeft = ownFullLeft
+      sourceGlyphX0 = firstVisible[0].sourceGlyphX0 ?? ownFullLeft
+      sourceGlyphX1 = firstVisible[0].sourceGlyphX1 ?? ownFullRight
+      visiblePixelLeft = sourceGlyphX0
+      visiblePixelRight = sourceGlyphX0
       firstClipRects.push({
         x: ownFullLeft, y: run.ownRect.y,
         width: firstGlyphTargetRight - firstGlyphTargetLeft, height: run.ownRect.height,
       })
       firstSourceGlyphRects.push(firstGlyphFullRect)
+    } else {
+      ownLeft = minProjectedLeft
+      visiblePixelLeft = minVisLeft
+      visiblePixelRight = maxVisRight
+      // sourceGlyphX0/X1 从 firstVisible[0] 获取（首字形的源布局完整边界）
+      sourceGlyphX0 = firstVisible[0].sourceGlyphX0 ?? ownFullLeft
+      sourceGlyphX1 = firstVisible[0].sourceGlyphX1 ?? ownFullRight
     }
     // 缺口2修复：onScreenLeft 从 firstVisible.rects 中取最左边的 x
     onScreenLeft = onScreenLeftOf(firstVisible)
@@ -848,62 +841,56 @@ function buildPiece(
     const lastSpans = frozenByGlyphId.get(lastGlyphId)
     const lastSpan = lastSpans !== undefined && lastSpans.length > 0 ? lastSpans[0] : undefined
     if (lastSpan !== undefined) {
-      // 被窗口覆盖：计算源字形几何，然后投影到目标布局
-      const lastSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, lastGlyphId)
-      if (lastSourceGeom !== null) {
-        const lastSourceX0 = lastSourceGeom.x0
-        const lastSourceX1 = lastSourceGeom.x1
-        // 缺口2修复：逐段投影——对 lastVisible 中每个 interval 的每个 rect 分别投影，
-        // ownRight = 最右边 rect 的投影右边界。
-        // Issue #879 复核评论6105482207 问题1：遍历所有 OnScreenInterval 成员的 rects。
-        let maxProjectedRight = -Infinity
-        let minVisLeft = Infinity
-        let maxVisRight = -Infinity
-        for (const interval of lastVisible) {
-          for (const r of interval.rects) {
-            const visLeftInSource = Math.max(lastSourceX0, r.x - lastSpan.offsetX)
-            const visRightInSource = Math.min(lastSourceX1, r.x + r.width - lastSpan.offsetX)
-            if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
-              const projectedLeft = projectToTarget(
-                visLeftInSource, lastSourceX0, lastSourceX1,
-                lastGlyphTargetLeft, lastGlyphTargetRight
-              )
-              const projectedRight = projectToTarget(
-                visRightInSource, lastSourceX0, lastSourceX1,
-                lastGlyphTargetLeft, lastGlyphTargetRight
-              )
-              // Issue #879 复核评论6099070438 问题4：逐段投影保留为 clipRect。
-              lastClipRects.push({
-                x: projectedLeft, y: run.ownRect.y,
-                width: projectedRight - projectedLeft, height: run.ownRect.height,
-              })
-              lastSourceGlyphRects.push(lastGlyphFullRect)
-              if (projectedRight > maxProjectedRight) {
-                maxProjectedRight = projectedRight
-              }
-              if (visLeftInSource < minVisLeft) {
-                minVisLeft = visLeftInSource
-              }
-              if (visRightInSource > maxVisRight) {
-                maxVisRight = visRightInSource
-              }
+      // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+      // 不再使用 lastSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+      let maxProjectedRight = -Infinity
+      let minVisLeft = Infinity
+      let maxVisRight = -Infinity
+      for (const interval of lastVisible) {
+        const intervalOffsetX = interval.offsetX ?? lastSpan.offsetX
+        const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? lastGlyphTargetLeft
+        const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? lastGlyphTargetRight
+        for (const r of interval.rects) {
+          const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+          const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+          if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+            const projectedLeft = projectToTarget(
+              visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
+            const projectedRight = projectToTarget(
+              visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+              lastGlyphTargetLeft, lastGlyphTargetRight
+            )
+            lastClipRects.push({
+              x: projectedLeft, y: run.ownRect.y,
+              width: projectedRight - projectedLeft, height: run.ownRect.height,
+            })
+            lastSourceGlyphRects.push(lastGlyphFullRect)
+            if (projectedRight > maxProjectedRight) {
+              maxProjectedRight = projectedRight
+            }
+            if (visLeftInSource < minVisLeft) {
+              minVisLeft = visLeftInSource
+            }
+            if (visRightInSource > maxVisRight) {
+              maxVisRight = visRightInSource
             }
           }
         }
-        if (maxProjectedRight === -Infinity) {
-          ownRight = ownFullRight
-        } else {
-          ownRight = maxProjectedRight
-          sourceGlyphX1 = lastSourceX1
-          visiblePixelRight = maxVisRight
-        }
-      } else {
+      }
+      if (maxProjectedRight === -Infinity) {
         ownRight = ownFullRight
         lastClipRects.push({
           x: lastGlyphTargetLeft, y: run.ownRect.y,
           width: lastGlyphTargetRight - lastGlyphTargetLeft, height: run.ownRect.height,
         })
         lastSourceGlyphRects.push(lastGlyphFullRect)
+      } else {
+        ownRight = maxProjectedRight
+        // 尾字形的 sourceGlyphX1 从 lastVisible[0] 获取
+        sourceGlyphX1 = lastVisible[0].sourceGlyphX1 ?? ownFullRight
+        visiblePixelRight = maxVisRight
       }
       // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
       onScreenRight = onScreenRightOf(lastVisible)
@@ -968,38 +955,31 @@ function buildPiece(
       const midSpans = frozenByGlyphId.get(midGlyphId)
       const midSpan = midSpans !== undefined && midSpans.length > 0 ? midSpans[0] : undefined
       if (midSpan !== undefined) {
-        // 被窗口覆盖：逐段投影
-        const midSourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, midGlyphId)
-        if (midSourceGeom !== null) {
-          // Issue #879 复核评论6105482207 问题1：遍历所有 OnScreenInterval 成员的 rects。
-          for (const interval of midVisible) {
-            for (const r of interval.rects) {
-              const visLeftInSource = Math.max(midSourceGeom.x0, r.x - midSpan.offsetX)
-              const visRightInSource = Math.min(midSourceGeom.x1, r.x + r.width - midSpan.offsetX)
-              if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
-                const projectedLeft = projectToTarget(
-                  visLeftInSource, midSourceGeom.x0, midSourceGeom.x1,
-                  midGlyphTargetLeft, midGlyphTargetRight
-                )
-                const projectedRight = projectToTarget(
-                  visRightInSource, midSourceGeom.x0, midSourceGeom.x1,
-                  midGlyphTargetLeft, midGlyphTargetRight
-                )
-                pieceClipRects.push({
-                  x: projectedLeft, y: run.ownRect.y,
-                  width: projectedRight - projectedLeft, height: run.ownRect.height,
-                })
-                pieceSourceGlyphRects.push(midGlyphFullRect)
-              }
+        // Issue #879 复核评论6105482207 问题1+3：用 interval 的成员信息投影，
+        // 不再使用 midSpan.offsetX 和 sourceGlyphGeometry() 的第一个结果。
+        for (const interval of midVisible) {
+          const intervalOffsetX = interval.offsetX ?? midSpan.offsetX
+          const intervalSourceGlyphX0 = interval.sourceGlyphX0 ?? midGlyphTargetLeft
+          const intervalSourceGlyphX1 = interval.sourceGlyphX1 ?? midGlyphTargetRight
+          for (const r of interval.rects) {
+            const visLeftInSource = Math.max(intervalSourceGlyphX0, r.x - intervalOffsetX)
+            const visRightInSource = Math.min(intervalSourceGlyphX1, r.x + r.width - intervalOffsetX)
+            if (visRightInSource - visLeftInSource > VISIBLE_EPSILON) {
+              const projectedLeft = projectToTarget(
+                visLeftInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              const projectedRight = projectToTarget(
+                visRightInSource, intervalSourceGlyphX0, intervalSourceGlyphX1,
+                midGlyphTargetLeft, midGlyphTargetRight
+              )
+              pieceClipRects.push({
+                x: projectedLeft, y: run.ownRect.y,
+                width: projectedRight - projectedLeft, height: run.ownRect.height,
+              })
+              pieceSourceGlyphRects.push(midGlyphFullRect)
             }
           }
-        } else {
-          // 无法获取源字形几何——退回完整边界
-          pieceClipRects.push({
-            x: midGlyphTargetLeft, y: run.ownRect.y,
-            width: midGlyphTargetRight - midGlyphTargetLeft, height: run.ownRect.height,
-          })
-          pieceSourceGlyphRects.push(midGlyphFullRect)
         }
       } else {
         // 静态可见：完整边界（源 = 目标）
@@ -1017,16 +997,13 @@ function buildPiece(
   // Issue #879 复核评论6102724233 问题2：计算首字形在源布局中的完整上边界（sourceGlyphY0）。
   // sourceGlyphY0 是源字形在源布局坐标系中的原始 top，不含窗口 offset。
   // 用于 retained 通道计算冻结帧的真实绘制原点，避免用裁切后的 onScreenTop 导致纵向半字错位。
+  // Issue #879 复核评论6105482207 问题1+3：不再调用 sourceGlyphGeometry()，
+  // 改为从 firstVisible[0].sourceGlyphY0 获取（如果 firstVisible 非空）。
   let sourceGlyphY0: number
-  if (firstSpan !== undefined) {
-    const sourceGeom = sourceGlyphGeometry(displayed, frozenByGlyphId, firstGlyphId)
-    if (sourceGeom !== null) {
-      sourceGlyphY0 = sourceGeom.y0
-    } else {
-      sourceGlyphY0 = run.ownRect.y
-    }
+  if (firstSpan !== undefined && firstVisible.length > 0) {
+    sourceGlyphY0 = firstVisible[0].sourceGlyphY0 ?? run.ownRect.y
   } else {
-    // 静态可见：源 = 目标
+    // 静态可见或 firstVisible 为空：源 = 目标
     sourceGlyphY0 = run.ownRect.y
   }
 
@@ -1122,13 +1099,14 @@ function frozenGlyphGeometry(
 }
 
 /**
- * Issue #879 复核评论6078682695 问题4：获取一个字形在**源布局**中的完整几何。
+ * Issue #879 复核评论6105482207 问题1+3：获取一个字形在**源布局**中的所有成员几何列表。
  *
- * Issue #879 复核评论6105482207 问题4：优先级修正——优先从冻结窗口的 sourceLayout 取值，
- * 而不是先查 displayed.identities。双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口
- * 和新源窗口覆盖，此时字形在 displayed.identities 中的布局坐标可能与冻结窗口的 sourceLayout
- * 不一致（前缀宽度不同、折行不同等），导致投影错误。只有冻结窗口无法提供几何时才回退到
- * displayed.layout。
+ * 双源交叉淡入淡出时，同一 glyphId 可能同时被旧源窗口和新源窗口覆盖。
+ * 旧 sourceGlyphGeometry 只返回第一个能成功计算的成员几何，丢弃其他成员，
+ * 导致新源成员的画面贡献被丢弃。改为返回所有成员的几何列表。
+ *
+ * 每个成员的几何包含 offsetX/offsetY/sourceKind，用于 buildPiece/intervalForIsland
+ * 逐成员投影和 frozenSourceGlyphRects 的多成员几何存储。
  *
  * 优先级：
  * 1. 有 FrozenWindowSpan 且 glyphUtf16Ranges、sourceLayout 可取 → 用冻结窗口的 sourceLayout 计算
@@ -1136,13 +1114,12 @@ function frozenGlyphGeometry(
  *
  * 返回的 x0/x1 是源布局坐标系里的值（不含窗口 offset），用于投影计算。
  */
-function sourceGlyphGeometry(
+function sourceGlyphGeometryAll(
   displayed: DisplayedContext,
   frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
   glyphId: string
-): { x0: number, x1: number, y0: number, height: number } | null {
-  // Issue #879 复核评论6105482207 问题4：优先从冻结窗口的 sourceLayout 获取。
-  // 遍历所有覆盖该 glyphId 的冻结窗口成员，返回第一个能成功计算的几何。
+): { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new' }[] {
+  const results: { x0: number, x1: number, y0: number, height: number, offsetX: number, offsetY: number, sourceKind: 'old' | 'new' }[] = []
   const spans = frozenByGlyphId.get(glyphId)
   if (spans !== undefined) {
     for (const span of spans) {
@@ -1151,7 +1128,10 @@ function sourceGlyphGeometry(
         if (utf16Range !== undefined) {
           const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
           if (rect !== null) {
-            return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+            results.push({
+              x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
+              offsetX: span.offsetX, offsetY: span.offsetY, sourceKind: span.sourceKind,
+            })
           }
         }
       }
@@ -1159,16 +1139,39 @@ function sourceGlyphGeometry(
   }
 
   // 回退：从 displayed.identities + displayed.layout 获取静态字形几何
-  const entry = displayed.identities === null
-    ? null
-    : displayed.identities.entryByGlyphId(glyphId)
-  if (entry !== null) {
-    const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
-    if (rect !== null) {
-      return { x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height }
+  if (results.length === 0) {
+    const entry = displayed.identities === null
+      ? null
+      : displayed.identities.entryByGlyphId(glyphId)
+    if (entry !== null) {
+      const rect = glyphRectForRange(displayed.layout, entry.utf16Start, entry.utf16End)
+      if (rect !== null) {
+        results.push({
+          x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
+          offsetX: 0, offsetY: 0, sourceKind: 'old',
+        })
+      }
     }
   }
 
+  return results
+}
+
+/**
+ * Issue #879 复核评论6078682695 问题4：获取一个字形在**源布局**中的完整几何（兼容包装）。
+ *
+ * 调用 sourceGlyphGeometryAll 取第一个结果，保持与旧 sourceGlyphGeometry 相同的签名和语义。
+ * intervalForIsland 中仍然需要获取单个几何作为 frozenSourceGlyphRects 的基础。
+ */
+function sourceGlyphGeometry(
+  displayed: DisplayedContext,
+  frozenByGlyphId: Map<string, FrozenWindowSpan[]>,
+  glyphId: string
+): { x0: number, x1: number, y0: number, height: number } | null {
+  const all = sourceGlyphGeometryAll(displayed, frozenByGlyphId, glyphId)
+  if (all.length > 0) {
+    return { x0: all[0].x0, x1: all[0].x1, y0: all[0].y0, height: all[0].height }
+  }
   return null
 }
 
@@ -1765,14 +1768,17 @@ function intervalForIsland(
     // frozenGlyphGeometry 优先从冻结窗口的 sourceLayout 读取（而不是 displayed.layout），
     // 确保 startPositionX/Y、frozenSourceGlyphRects、FrozenWindowSpan.offset 与
     // startScreenClipRects 对应同一份真正绘制的 Text。
-    const frozenSourceGeom = frozenGlyphGeometry(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
-    if (frozenSourceGeom !== null) {
-      frozenSourceGlyphRects = [{
-        x: frozenSourceGeom.x0,
-        y: frozenSourceGeom.y0,
-        width: frozenSourceGeom.x1 - frozenSourceGeom.x0,
-        height: frozenSourceGeom.height,
-      }]
+    // Issue #879 复核评论6105482207 问题1+3：frozenSourceGlyphRects 改为存储所有成员的几何列表，
+    // 不再只存储第一个成员的几何。双源交叉淡入淡出时，同一 glyphId 可能同时被旧源和新源
+    // 两个窗口覆盖，每个成员的几何对应一个 RectLike。
+    const allFrozenGeoms = sourceGlyphGeometryAll(displayed, frozenByGlyphId, run.glyphIds[firstIndex])
+    if (allFrozenGeoms.length > 0) {
+      frozenSourceGlyphRects = allFrozenGeoms.map(g => ({
+        x: g.x0,
+        y: g.y0,
+        width: g.x1 - g.x0,
+        height: g.height,
+      }))
     }
   }
   return {
@@ -1887,6 +1893,29 @@ interface OnScreenInterval {
    * undefined 表示完全不透明（静态主文本或非交叉淡入淡出窗口）。
    */
   opacity: number | undefined
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的 offsetX（来自 FrozenWindowSpan.offsetX）。
+   * 静态主文本为 0。用于 buildPiece 逐 interval 投影时知道每个成员的窗口平移量，
+   * 不再只取 firstSpan.offsetX（双源交叉淡入淡出时旧源和新源的 offset 可能不同）。
+   */
+  offsetX: number
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的 offsetY（来自 FrozenWindowSpan.offsetY）。
+   * 静态主文本为 0。
+   */
+  offsetY: number
+  /**
+   * Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的左边界。
+   * 用于 buildPiece 逐 interval 投影时知道每个成员的源字形几何，
+   * 不再只取 sourceGlyphGeometry() 第一个结果（双源交叉淡入淡出时旧源和新源的几何可能不同）。
+   */
+  sourceGlyphX0: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的右边界 */
+  sourceGlyphX1: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形在源布局坐标系中的上边界 */
+  sourceGlyphY0: number
+  /** Issue #879 复核评论6105482207 问题1+3：该可见区间对应成员的源字形高度 */
+  sourceGlyphHeight: number
 }
 
 /**
@@ -1955,7 +1984,14 @@ function clusterVisible(
     const spans = frozenByGlyphId.get(glyphId)
     if (spans === undefined || spans.length === 0) {
       // 没有被任何窗口覆盖：主文本静态绘制这一整段，字形完整可见。
-      return [{ rects: [{ x: x0, y: y0, width: x1 - x0, height: glyphHeight }], sourceKind: undefined, opacity: undefined }]
+      return [{
+        rects: [{ x: x0, y: y0, width: x1 - x0, height: glyphHeight }],
+        sourceKind: undefined, opacity: undefined,
+        // Issue #879 复核评论6105482207 问题1+3：静态主文本的成员信息
+        offsetX: 0, offsetY: 0,
+        sourceGlyphX0: x0, sourceGlyphX1: x1,
+        sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+      }]
     }
     // Issue #879 复核评论6105482207 问题1：遍历所有覆盖该 glyphId 的冻结窗口成员，
     // 每个成员各自用其 clipRects 求交，保留每个交集对应的源身份和透明度。
@@ -2001,7 +2037,13 @@ function clusterVisible(
         }
       }
       if (rects.length > 0) {
-        intervals.push({ rects, sourceKind: span.sourceKind, opacity: span.opacity })
+        intervals.push({
+          rects, sourceKind: span.sourceKind, opacity: span.opacity,
+          // Issue #879 复核评论6105482207 问题1+3：存入该成员的 offset 和源字形几何
+          offsetX: span.offsetX, offsetY: span.offsetY,
+          sourceGlyphX0: spanX0, sourceGlyphX1: spanX1,
+          sourceGlyphY0: spanY0, sourceGlyphHeight: spanGlyphHeight,
+        })
       }
     }
     return intervals
@@ -2046,7 +2088,13 @@ function clusterVisible(
             }
           }
           if (rects.length > 0) {
-            intervals.push({ rects, sourceKind: span.sourceKind, opacity: span.opacity })
+            intervals.push({
+              rects, sourceKind: span.sourceKind, opacity: span.opacity,
+              // Issue #879 复核评论6105482207 问题1+3：存入该成员的 offset 和源字形几何
+              offsetX: span.offsetX, offsetY: span.offsetY,
+              sourceGlyphX0: x0, sourceGlyphX1: x1,
+              sourceGlyphY0: y0, sourceGlyphHeight: glyphHeight,
+            })
           }
         }
       }
