@@ -116,6 +116,10 @@ impl Default for CanvasAffine2 {
 /// 记录的是**纹理事实和裁剪事实**，不是操作类型或动画进度。
 /// 一个字符呈现 40% 时，`visible_clip` 只覆盖源纹理 40% 的区域；
 /// 从未呈现的字符不产生任何 `PixelContribution`。
+///
+/// `byte_range` 记录该贡献对应的 Core 逻辑 UTF-8 byte range，
+/// `SceneTransition` 据此通过 `RevisionChain` 判断每个贡献是存活、删除
+/// 还是新插入，从而实现吞字/吐字/存活字移动而非全文淡入淡出。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PixelContribution {
     /// 源纹理 id（GPU texture cache key）。
@@ -128,6 +132,11 @@ pub(crate) struct PixelContribution {
     pub visible_clip: CanvasRect,
     /// 该绘制对象的透明度（0.0 完全透明 – 1.0 完全不透明）。
     pub opacity: f64,
+    /// 该贡献对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间）。
+    ///
+    /// Issue #901 阻塞 2：`SceneTransition` 用此字段通过 `RevisionChain`
+    /// 判断该贡献在最新 revision 中是存活、删除还是新插入。
+    pub byte_range: (usize, usize),
 }
 
 impl PixelContribution {
@@ -246,6 +255,7 @@ mod tests {
             document_rect: CanvasRect::new(10.0, 10.0, 100.0, 100.0),
             visible_clip: CanvasRect::new(10.0, 10.0, clip_w, clip_h),
             opacity,
+            byte_range: (0, 100),
         }
     }
 

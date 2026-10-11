@@ -86,6 +86,11 @@ pub struct EditorLayout {
 }
 
 impl EditorLayout {
+    /// 全局失效 — 清空所有缓存（排版参数变化时调用）。
+    ///
+    /// Issue #901: 此方法对应**字体/宽度/字号/行距/全局格式变化**的全局失效。
+    /// 清空 `paragraph_store` 和 `height_index`，因为这些缓存依赖排版参数，
+    /// 参数变化后所有段落的 cache_key 都失效，必须全部重排。
     pub fn invalidate(&mut self) {
         // Issue #658 评论 5620035970 问题 2: 失效时释放旧 generation 的 layout cache。
         if self.current_generation != 0 {
@@ -93,9 +98,44 @@ impl EditorLayout {
             self.current_generation = 0;
         }
         self.cache = None;
-        // Issue #901: 同步清空增量排版子系统。
+        // Issue #901: 同步清空增量排版子系统（全局失效）。
         self.paragraph_store.clear();
         self.height_index.clear();
+    }
+
+    /// Issue #901: 全局参数失效 — 字体/宽度/字号/行距/全局格式变化时调用。
+    ///
+    /// 与 [`invalidate`] 相同，清空所有缓存。语义上明确表示这是参数变化导致的
+    /// 全局失效，不是普通正文编辑。
+    pub fn invalidate_params(&mut self) {
+        self.invalidate();
+    }
+
+    /// Issue #901: 局部段落失效 — 普通正文编辑时调用。
+    ///
+    /// 只失效受影响段落，不清空整个缓存。未改段落的 shaping/行数据/纹理保持有效。
+    ///
+    /// # 参数
+    ///
+    /// - `affected_byte_start` / `affected_byte_end`：受影响字节范围。
+    ///   `affected_byte_start >= affected_byte_end` 表示无明确范围，不做任何操作
+    ///   （下一次 `snapshot` 会通过 text_revision 变化检测到需要重排）。
+    pub fn invalidate_affected(&mut self, affected_byte_start: usize, affected_byte_end: usize) {
+        if affected_byte_start >= affected_byte_end {
+            return;
+        }
+        // 只失效受影响段落的布局缓存，不清空整个 store
+        let affected = self
+            .paragraph_store
+            .compute_affected_paragraphs(affected_byte_start, affected_byte_end);
+        if !affected.full_relayout {
+            self.paragraph_store
+                .invalidate_range(affected.relayout_start, affected.relayout_end);
+        } else {
+            // store 为空或全局失效
+            self.paragraph_store.clear();
+            self.height_index.clear();
+        }
     }
 
     pub fn cache(&self) -> Option<&LayoutSnapshot> {
@@ -161,6 +201,32 @@ impl EditorLayout {
             clear_layout_generation(promoted.old_generation);
         }
         self.current_generation = promoted.generation;
+
+        // Issue #901: 同步增量排版子系统。
+        // 从 promoted visual_lines 提取排版参数，重建 paragraph_store 和 height_index。
+        // promoted layout 是全篇排版结果，需要同步到 store 和 height_index。
+        let font_size = promoted.font_size as f64;
+        let font_family = &promoted.font_family;
+        let line_spacing = promoted.line_spacing as f64;
+        let text_indent = promoted.text_indent as f64;
+        let padding = promoted.padding as f64;
+        let width = promoted.width;
+
+        self.paragraph_store.rebuild_from_text(
+            text,
+            font_size,
+            font_family,
+            line_spacing,
+            text_indent,
+            padding,
+            width,
+        );
+        self.paragraph_store
+            .sync_from_visual_lines(&promoted.visual_lines, promoted.generation);
+
+        let heights = self.paragraph_store.paragraph_heights();
+        self.height_index.rebuild(heights);
+
         self.cache = Some(LayoutSnapshot {
             text_revision,
             text_ptr,
@@ -184,12 +250,14 @@ impl EditorLayout {
     ) -> &LayoutSnapshot {
         let text_ptr = text.as_ptr() as usize;
         let text_len = text.len();
-        let needs_refresh = match &self.cache {
+
+        // Issue #901: 区分"排版参数变化"和"仅 text_revision 变化"。
+        // - 排版参数变化（宽度/字体/字号/行距/缩进/内边距）→ 全局失效，全篇重排。
+        // - 仅 text_revision 变化（普通正文编辑）→ 增量排版，只重排受影响段落。
+        let cache = &self.cache;
+        let params_changed = match cache {
             Some(c) => {
-                c.text_revision != text_revision
-                    || c.text_ptr != text_ptr
-                    || c.text_len != text_len
-                    || (c.width - params.width).abs() > 0.1
+                (c.width - params.width).abs() > 0.1
                     || (c.font_size - params.font_size).abs() > 0.1
                     || c.font_family != params.font_family
                     || (c.line_spacing - params.line_spacing).abs() > 0.01
@@ -199,9 +267,23 @@ impl EditorLayout {
             None => true,
         };
 
-        if needs_refresh {
+        let text_changed = match cache {
+            Some(c) => {
+                c.text_revision != text_revision
+                    || c.text_ptr != text_ptr
+                    || c.text_len != text_len
+            }
+            None => true,
+        };
+
+        if params_changed {
+            // 排版参数变化 → 全局失效
+            self.invalidate_params();
+        }
+
+        if params_changed || text_changed {
             // Issue #658 评论 5620035970 问题 2: 重新排版前释放旧 generation，
-            // 分配新 generation，避免静态正文和动画/IME 互相清空 layout cache。
+            // 分配新 generation。
             if self.current_generation != 0 {
                 clear_layout_generation(self.current_generation);
             }
@@ -209,19 +291,32 @@ impl EditorLayout {
             self.cache = None;
         }
 
-        self.cache.get_or_insert_with(|| {
-            // Issue #658 评论 5622829886 问题 2: 分离基础排版与动画视觉生成。
-            // 静态正文只做基础排版（QTextLayout + VisualLine + cursor map），
-            // 不生成 QImage/glyphRuns/cluster（generate_animation_visuals=false）。
-            // QSGTextNode 直接消费已排好的 QTextLayout（通过 generation cache），
-            // 不需要先把静态正文画进 QImage。同一正文状态的每段只调用一次
-            // prepare_paragraph_layout_core，QTextLayout 存入
-            // g_layout_generations[self.current_generation]。
-            // 真正需要 line images 的动画/IME 路径各自分配独立 generation
-            // 调 prepare_document_visual_snapshot 传 generate_animation_visuals=true。
-            // Issue #688: 静态布局准备不接收颜色参数；text_color 仅在
-            // generate_animation_visuals=true 时用于 QImage 绘制。
-            let doc_snapshot = prepare_document_visual_snapshot(
+        // Issue #901: 不用 get_or_insert_with（闭包不能同时借用 self 的多个字段），
+        // 改为先检查 cache 是否存在，不存在时在闭包外计算。
+        if self.cache.is_some() {
+            // cache 已存在，直接返回
+            return self.cache.as_ref().unwrap();
+        }
+
+        // Issue #901: 增量排版路径。
+        // 当 paragraph_store 非空（有缓存的排版结果）且 text_revision 变化时，
+        // 走增量排版：只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
+        //
+        // 当 paragraph_store 为空（初始化/参数变化后 invalidate）时，
+        // 走全篇重排（prepare_document_visual_snapshot）。
+        let store_has_cache = !self.paragraph_store.is_empty();
+        let current_gen = self.current_generation;
+
+        let new_snapshot = if store_has_cache {
+            // Issue #901: 增量排版路径
+            let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+            let old_para_count = self.paragraph_store.paragraph_count();
+
+            // 计算受影响字节范围
+            let (affected_start, affected_end) =
+                self.compute_affected_byte_range(text, &new_paras, old_para_count);
+
+            let doc_snapshot = prepare_incremental_visual_snapshot(
                 text,
                 text_revision,
                 f64::from(params.font_size),
@@ -231,9 +326,15 @@ impl EditorLayout {
                 f64::from(params.text_indent),
                 params.width,
                 1.0,
-                self.current_generation,
-                false,
+                None,
+                current_gen,
+                affected_start,
+                affected_end,
+                None,
+                &mut self.paragraph_store,
+                &mut self.height_index,
             );
+
             LayoutSnapshot {
                 text_revision,
                 text_ptr,
@@ -245,9 +346,126 @@ impl EditorLayout {
                 text_indent: params.text_indent,
                 padding: params.padding,
                 lines: doc_snapshot.visual_lines,
-                layout_generation: self.current_generation,
+                layout_generation: current_gen,
             }
-        })
+        } else {
+            // 全篇重排路径（初始化/参数变化后 invalidate 清空了 store）
+            // Issue #658 评论 5622829886 问题 2: 静态正文只做基础排版。
+            let doc_snapshot = prepare_document_visual_snapshot(
+                text,
+                text_revision,
+                f64::from(params.font_size),
+                &params.font_family,
+                f64::from(params.line_spacing),
+                f64::from(params.padding),
+                f64::from(params.text_indent),
+                params.width,
+                1.0,
+                current_gen,
+                false,
+            );
+
+            // Issue #901: 全篇重排后同步 paragraph_store 和 height_index
+            self.paragraph_store.rebuild_from_text(
+                text,
+                f64::from(params.font_size),
+                &params.font_family,
+                f64::from(params.line_spacing),
+                f64::from(params.text_indent),
+                f64::from(params.padding),
+                params.width,
+            );
+            self.paragraph_store
+                .sync_from_visual_lines(&doc_snapshot.visual_lines, current_gen);
+            let heights = self.paragraph_store.paragraph_heights();
+            self.height_index.rebuild(heights);
+
+            LayoutSnapshot {
+                text_revision,
+                text_ptr,
+                text_len,
+                width: params.width,
+                font_size: params.font_size,
+                font_family: params.font_family,
+                line_spacing: params.line_spacing,
+                text_indent: params.text_indent,
+                padding: params.padding,
+                lines: doc_snapshot.visual_lines,
+                layout_generation: current_gen,
+            }
+        };
+
+        self.cache = Some(new_snapshot);
+        self.cache.as_ref().unwrap()
+    }
+
+    /// Issue #901: 计算受影响字节范围。
+    ///
+    /// 比较 `paragraph_store` 中已缓存的段落信息和 new text 的段落，
+    /// 确定哪些段落的文本内容发生了变化，返回受影响的字节范围。
+    ///
+    /// 如果段落数量变化（换行拆段/删回车合段），返回整个文本范围。
+    fn compute_affected_byte_range(
+        &self,
+        text: &str,
+        new_paras: &[&str],
+        old_para_count: usize,
+    ) -> (usize, usize) {
+        // 段落数量变化 → 全局重排
+        if old_para_count != new_paras.len() {
+            return (0, text.len().max(1));
+        }
+
+        // 逐段比较，找第一个内容不同的段落
+        let mut byte_start = 0usize;
+        let mut affected_start: Option<usize> = None;
+        let mut affected_end: Option<usize> = None;
+
+        for (i, para) in new_paras.iter().enumerate() {
+            let para_text = para.trim_end_matches('\n');
+            let para_end = byte_start + para.len();
+
+            // 从 store 获取旧段落的 cache_key，与新段落的 cache_key 比较
+            if let Some(entry) = self.paragraph_store.entry(i) {
+                let new_key = ParagraphLayoutCacheKey::build(
+                    para_text,
+                    // 使用 entry 中已有的排版参数构建 key 进行比较
+                    // cache_key 中包含了排版参数，如果参数变了 key 自然不同
+                    // 但参数变化已经由 invalidate_params 处理，此处参数一定没变
+                    // 用 entry.cache_key 中的参数（通过重建 key 比较 text_hash）
+                    // 简化：直接比较 paragraph_text_len 和 cache_key
+                    0.0, // placeholder，实际用 text_hash 比较
+                    "",
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                );
+                // 比较文本长度和内容 hash
+                let text_changed = entry.paragraph_text_len != para_text.len()
+                    || entry.cache_key.text_hash() != new_key.text_hash();
+
+                if text_changed {
+                    if affected_start.is_none() {
+                        affected_start = Some(byte_start);
+                    }
+                    affected_end = Some(para_end);
+                }
+            } else {
+                // store 中没有该段落，需要重排
+                if affected_start.is_none() {
+                    affected_start = Some(byte_start);
+                }
+                affected_end = Some(para_end);
+            }
+
+            byte_start = para_end;
+        }
+
+        match (affected_start, affected_end) {
+            (Some(s), Some(e)) => (s, e),
+            _ => (0, 0), // 无变化
+        }
     }
 
     pub fn hit_test(

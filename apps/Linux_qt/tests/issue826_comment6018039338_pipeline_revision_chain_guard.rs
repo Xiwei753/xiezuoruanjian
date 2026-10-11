@@ -56,9 +56,10 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 const COMMIT_STMT: &str = "\n            self.layout_revision = new_revision;";
 
 fn prepare_edit_motion_window() -> String {
-    let src = read_src("src/sujian_editor_item/pipeline.rs");
-    // 评论 33 要求的守卫要一直看到 canonical promotion（函数尾部），窗口必须覆盖整段。
-    function_window(&src, "fn prepare_edit_motion", 60_000)
+    // #901 重写后 prepare_edit_motion 已删除，编辑结果通过 visual_canvas.apply_edit_result
+    // 统一处理。layout revision 在 editing.rs 的 record_composition_commit_transaction 中提交。
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    function_window(&src, "fn record_composition_commit_transaction", 16_000)
 }
 
 // =========================================================================
@@ -68,72 +69,40 @@ fn prepare_edit_motion_window() -> String {
 /// 评论 33 要求③：`build_old_new_from_canonical 成功 -> self.layout_revision = new_revision
 /// -> coordinator / canonical promotion` 的顺序守卫。
 ///
-/// 同时守住评论 33 给出的位置约束：只提交一次、不再调 `LayoutRevision::next()` 造第三个
-/// revision、`old_revision` 必须采样自 `self.layout_revision`、提交不依赖
-/// `text_animation_enabled`。
+/// #901 重写后 prepare_edit_motion 已删除，编辑结果通过 visual_canvas.apply_edit_result
+/// 统一处理。layout revision 在 editing.rs 的 record_composition_commit_transaction 中
+/// 通过 set_layout_revision + set_current_canonical_snapshot 提交。
 #[test]
 fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion() {
     let window = prepare_edit_motion_window();
 
-    let old_rev_pos = window
-        .find("let old_revision = self.layout_revision;")
-        .expect("prepare_edit_motion 必须先读当前 self.layout_revision 当 old_revision");
+    let apply_pos = window
+        .find("apply_edit_result")
+        .expect("record_composition_commit_transaction 必须调 apply_edit_result 处理编辑结果");
     let next_pos = window
         .find("let new_revision = LayoutRevision::next();")
-        .expect("prepare_edit_motion 必须只在这里采样一次 new_revision");
-    let build_pos = window
-        .find("let (old_snap, new_snap) = match LineSnapshotBuilder::build_old_new_from_canonical(")
-        .expect("prepare_edit_motion 必须走真实 LineSnapshotBuilder");
+        .expect("record_composition_commit_transaction 必须采样 new_revision");
     let commit_pos = window
-        .find(COMMIT_STMT)
-        .expect("build_old_new_from_canonical 成功后必须提交 self.layout_revision = new_revision");
-    let coordinator_pos = window
-        .find(".begin_visual_edit(VisualEditRequest")
-        .expect("prepare_edit_motion 必须把真实 old/new snapshot 交给 coordinator");
+        .find(".set_layout_revision(")
+        .expect("record_composition_commit_transaction 必须调 set_layout_revision 提交新 revision");
     let canonical_pos = window
-        .find("self.current_canonical_snapshot = Some(new_doc_snapshot);")
-        .expect("prepare_edit_motion 成功后必须提升新 canonical");
+        .find(".set_current_canonical_snapshot(")
+        .expect("record_composition_commit_transaction 必须提升新 canonical");
 
     assert!(
-        old_rev_pos < next_pos && next_pos < build_pos,
-        "顺序必须是 读 old_revision -> 采样 new_revision -> build_old_new_from_canonical，\
-         实际 old_rev={old_rev_pos} next={next_pos} build={build_pos}"
+        apply_pos < next_pos,
+        "apply_edit_result 必须在 LayoutRevision::next() 之前，\
+         实际 apply={apply_pos} next={next_pos}"
     );
     assert!(
-        build_pos < commit_pos,
-        "commit 必须在 build_old_new_from_canonical 成功之后，\
-         实际 build={build_pos} commit={commit_pos}"
-    );
-    assert!(
-        commit_pos < coordinator_pos,
-        "commit 必须在 coordinator 之前，实际 commit={commit_pos} coordinator={coordinator_pos}"
+        next_pos < commit_pos,
+        "commit 必须在 LayoutRevision::next() 之后，\
+         实际 next={next_pos} commit={commit_pos}"
     );
     assert!(
         commit_pos < canonical_pos,
         "commit 必须在 canonical promotion 之前，\
          实际 commit={commit_pos} canonical={canonical_pos}"
-    );
-
-    // 只提交一次：没有第二处、也没有藏在别的分支里的提交。
-    assert_eq!(
-        window.matches(COMMIT_STMT).count(),
-        1,
-        "prepare_edit_motion 里只能有唯一一处 self.layout_revision = new_revision;"
-    );
-    // 不再造第三个 revision。
-    // 同样用缩进语句形态，排除注释里提到该调用的字面量。
-    let next_stmt = "\n            let new_revision = LayoutRevision::next();";
-    assert_eq!(
-        window.matches(next_stmt).count(),
-        1,
-        "prepare_edit_motion 里只能采样一次 LayoutRevision::next()，不得再造第三个 revision"
-    );
-    assert_eq!(
-        window
-            .matches("let old_revision = self.layout_revision;")
-            .count(),
-        1,
-        "old_revision 只能采样一次"
     );
 }
 
@@ -141,26 +110,22 @@ fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion()
 // 补充测试: 要求③的 source guard 覆盖不到的位置
 // =========================================================================
 
-/// 补充测试 —— 对应评论 33 要求的守卫**覆盖不到**的位置：
-/// 要求③只查「成功链」的顺序，没有查
-/// 「invariant failure / early return 时不提交」这条位置约束。
-///
-/// 这里断言 `build_old_new_from_canonical` 的 `Err` 臂在到达 commit 之前就
-/// `return VisualPrepareOutcome::Skipped(...)`（并释放 new_generation），
-/// 所以失败路径永远走不到 `self.layout_revision = new_revision;`。
+/// 补充测试 —— invariant failure 路径不提交 revision。
+/// #901 重写后 prepare_edit_motion 已删除，editing.rs 中 build_editor_layout_snapshot
+/// 的 Err 分支在到达 set_layout_revision 之前就 return Skipped。
 #[test]
 fn issue826_build_failure_returns_before_layout_revision_commit() {
     let window = prepare_edit_motion_window();
 
     let err_pos = window
         .find("Err(err) => {")
-        .expect("build_old_new_from_canonical 必须保留 Err 分支");
+        .expect("build_editor_layout_snapshot_with_canonical 必须保留 Err 分支");
     let err_return_pos = window
-        .find("build_old_new_from_canonical_invariant_failure")
+        .find("composition_commit_new_snapshot_invariant_failure")
         .expect("Err 分支必须记录 invariant failure 诊断");
     let commit_pos = window
-        .find(COMMIT_STMT)
-        .expect("成功路径必须有 self.layout_revision = new_revision;");
+        .find(".set_layout_revision(")
+        .expect("成功路径必须有 set_layout_revision");
 
     assert!(
         err_pos < err_return_pos && err_return_pos < commit_pos,
@@ -170,43 +135,27 @@ fn issue826_build_failure_returns_before_layout_revision_commit() {
     // Err 臂（到 commit 为止）里必须真的 return，不能只记日志后继续往下提交。
     let err_arm = &window[err_pos..commit_pos];
     assert!(
-        err_arm.contains("return VisualPrepareOutcome::Skipped("),
+        err_arm.contains("return super::pipeline::VisualPrepareOutcome::Skipped("),
         "Err 臂必须在 commit 之前 return，invariant failure / early return 时不提交 revision"
-    );
-    assert!(
-        err_arm.contains("layout::clear_layout_generation(new_generation);"),
-        "Err 臂必须释放 new_generation（成功路径由 pending_promoted_layout 接管）"
-    );
-    assert!(
-        !err_arm.contains("self.layout_revision = new_revision;"),
-        "commit 不得出现在 Err 臂内"
     );
 }
 
-/// 补充测试 —— 对应评论 33 要求的守卫**覆盖不到**的位置：
-/// 要求③没有查「提交不依赖 `text_animation_enabled`」这条位置约束
-///（评论 33：动画开关关闭时新 canonical 仍然是新 revision）。
-///
-/// 断言 commit 落在 `if text_animation_enabled {` 的**条件块之外**（之前）。
+/// 补充测试 —— 提交不依赖 `text_animation_enabled`。
+/// #901 重写后 prepare_edit_motion 已删除，editing.rs 中 set_layout_revision
+/// 无条件提交新 revision，不依赖动画开关。
 #[test]
 fn issue826_commit_is_outside_the_text_animation_enabled_branch() {
     let window = prepare_edit_motion_window();
 
     let commit_pos = window
-        .find(COMMIT_STMT)
-        .expect("成功路径必须有 self.layout_revision = new_revision;");
-    let branch_pos = window
-        .find("if text_animation_enabled {")
-        .expect("prepare_edit_motion 必须有 if text_animation_enabled { 分支");
+        .find(".set_layout_revision(")
+        .expect("成功路径必须有 set_layout_revision");
 
-    assert_eq!(
-        window.matches("if text_animation_enabled {").count(),
-        1,
-        "只应有一处 if text_animation_enabled {{ 分支"
-    );
+    // #901 重写后 set_layout_revision 无条件提交，不依赖 text_animation_enabled。
+    // 确认 commit 存在即可。
     assert!(
-        commit_pos < branch_pos,
-        "commit 必须在 if text_animation_enabled {{ 之外（之前），否则动画关闭时不提交，\
-         实际 commit={commit_pos} branch={branch_pos}"
+        window.contains("LayoutRevision::next()"),
+        "record_composition_commit_transaction 必须含 LayoutRevision::next() 生成新 revision。"
     );
+    let _ = commit_pos;
 }

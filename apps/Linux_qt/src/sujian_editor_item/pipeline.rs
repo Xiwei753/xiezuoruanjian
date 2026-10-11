@@ -718,6 +718,11 @@ impl LinuxEditorPipeline {
         self.text_revision
     }
 
+    /// Issue #901 阻塞 1：返回当前 visual revision，供 RenderOwnership 的 ownership_revision 使用。
+    pub fn visual_revision(&self) -> u64 {
+        self.visual_revision
+    }
+
     pub fn bump_visual_revision(&mut self) {
         self.visual_revision = self.visual_revision.wrapping_add(1);
     }
@@ -731,16 +736,24 @@ impl LinuxEditorPipeline {
         self.texture_cache.retain_active_snapshot_ids(active_ids);
     }
 
+    /// Issue #901 阻塞 5：typing 动画时长是正文视觉过渡的唯一响应时长。
+    /// 通过 `VisualCanvas::apply_settings` 传入 `CanvasSettings.response_duration_ms`，
+    /// 不再留第二套硬编码速度。
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
-        // Issue #901: 动画时长设置迁移到 visual_canvas 的 CanvasSettings。
-        // TODO(issue-901): migrate to visual_canvas apply_settings
+        let mut settings = self.visual_canvas.settings().clone();
+        settings.response_duration_ms = f64::from(ms);
+        self.visual_canvas.apply_settings(settings);
     }
 
+    /// Issue #901 阻塞 5：cursor 动画时长控制光标 Tween 的响应速度。
+    /// 鼠标/方向键光标 Tween 仍由 `CursorController` 独立推进，但画布设置
+    /// 同步更新，保证 `CanvasSettings` 不留第二套硬编码速度。
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
         self.cursor_animation_duration_ms = ms;
-        // Issue #901: 动画时长设置迁移到 visual_canvas 的 CanvasSettings。
-        // TODO(issue-901): migrate to visual_canvas apply_settings
+        let mut settings = self.visual_canvas.settings().clone();
+        settings.cursor_animation_enabled = ms > 0;
+        self.visual_canvas.apply_settings(settings);
     }
 
     /// 从 kernel snapshot 完整重建 mirror。

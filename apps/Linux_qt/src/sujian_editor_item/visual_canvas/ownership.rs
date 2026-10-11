@@ -1,16 +1,23 @@
 //! Issue #901：像素归属与互斥。
 //!
-//! `Ownership` 确保同一像素只被一个绘制命令拥有。当多个 `DrawCommand` 的
-//! 目标矩形重叠时，按 `OwnershipRule` 优先级解决：高优先级命令保留完整区域，
-//! 低优先级命令的裁剪矩形减去高优先级命令覆盖的区域。
+//! `Ownership` 确保同一像素只被一个**需要互斥**的绘制命令拥有。当多个
+//! `DrawCommand` 的目标矩形重叠时，按 `OwnershipRule` 优先级解决：高优先级
+//! 互斥命令保留完整区域，低优先级命令的裁剪矩形减去高优先级命令覆盖的区域。
 //!
 //! ## 优先级规则
 //!
-//! - 静态正文（`StaticText`）优先于动画过渡（`AnimatedText`）。
-//! - 已提交帧的已呈现部分优先于新内容。
 //! - 光标（`Cursor`）在文字之上，优先级最高。
 //! - 预输入（`Preedit`）在正文之上、光标之下。
 //! - 选区背景（`Selection`）在正文之下，优先级最低。
+//! - 静态正文（`StaticText`）和动画过渡（`AnimatedText`）**不互斥**：
+//!   各自以自己的透明度绘制（alpha compositing），不做矩形裁剪。
+//!
+//! ## Issue #901 阻塞 2 修复
+//!
+//! 旧实现把 `StaticText` 标为高优先级、`AnimatedText` 标为低优先级，重叠时
+//! 高优先级旧矩形裁掉低优先级新矩形——同一位置 A→B 时新 B 被完全裁掉，既
+//! 不是吞字吐字也不是平滑 CrossFade。新实现让文字层之间用透明度叠加，只有
+//! `Cursor`/`Preedit`/`Selection` 这些真正需要互斥的层才做矩形裁剪。
 //!
 //! ## 纯 Rust
 //!
@@ -22,17 +29,22 @@ use super::presented_scene::CanvasRect;
 /// 像素归属规则 —— 决定重叠时哪个命令优先拥有该像素。
 ///
 /// 优先级从高到低：`Cursor` > `Preedit` > `StaticText` > `AnimatedText` > `Selection`。
+///
+/// Issue #901 阻塞 2：`StaticText` 和 `AnimatedText` **不互斥**（`is_exclusive`
+/// 返回 `false`），各自以透明度绘制（alpha compositing）。只有 `Cursor`、
+/// `Preedit`、`Selection` 是互斥层（`is_exclusive` 返回 `true`），占据区域
+/// 并裁剪后续命令。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum OwnershipRule {
-    /// 静态正文 —— 已稳定呈现、不参与过渡的文字。
+    /// 静态正文 —— 已稳定呈现、不参与过渡的文字。不互斥。
     StaticText,
-    /// 动画过渡中的文字 —— 正在进入/退出的文字。
+    /// 动画过渡中的文字 —— 正在进入/退出的文字。不互斥。
     AnimatedText,
-    /// 光标 —— 视觉最顶层。
+    /// 光标 —— 视觉最顶层。互斥。
     Cursor,
-    /// 选区背景 —— 视觉最底层。
+    /// 选区背景 —— 视觉最底层。互斥。
     Selection,
-    /// 预输入（IME preedit）—— 正文之上、光标之下。
+    /// 预输入（IME preedit）—— 正文之上、光标之下。互斥。
     Preedit,
 }
 
@@ -50,13 +62,30 @@ impl OwnershipRule {
             Self::Selection => 20,
         }
     }
+
+    /// 该规则是否为**互斥层** —— 占据区域并裁剪后续命令。
+    ///
+    /// Issue #901 阻塞 2：`StaticText` 和 `AnimatedText` 返回 `false`，
+    /// 它们各自以透明度绘制（alpha compositing），不做矩形裁剪互斥。
+    /// `Cursor`、`Preedit`、`Selection` 返回 `true`，占据区域并裁剪后续命令。
+    pub(crate) fn is_exclusive(self) -> bool {
+        match self {
+            Self::Cursor | Self::Preedit | Self::Selection => true,
+            Self::StaticText | Self::AnimatedText => false,
+        }
+    }
 }
 
 /// 像素互斥管理器 —— 解决绘制命令间的重叠。
 ///
-/// `resolve` 接收一组 `DrawCommand`，按优先级从高到低处理：每条高优先级命令
-/// 的目标矩形"占据"其覆盖的像素，后续低优先级命令的裁剪矩形减去已被占据的
-/// 区域。最终每条命令的 `clip_rect` 只覆盖未被更高优先级命令占据的部分。
+/// `resolve` 接收一组 `DrawCommand`，按优先级从高到低处理：
+/// - **互斥层**（`Cursor`/`Preedit`/`Selection`）的目标矩形"占据"其覆盖的像素，
+///   后续命令的裁剪矩形减去已被占据的区域。
+/// - **文字层**（`StaticText`/`AnimatedText`）**不占据区域**，各自以自己的
+///   透明度绘制（alpha compositing），不被其他文字层裁剪。
+///
+/// Issue #901 阻塞 2：旧实现让 `StaticText` 占据区域裁掉 `AnimatedText`，
+/// 导致同一位置 A→B 时新 B 被完全裁掉。新实现让文字层之间用透明度叠加。
 pub(crate) struct Ownership;
 
 impl Ownership {
@@ -64,12 +93,15 @@ impl Ownership {
     ///
     /// 算法：
     /// 1. 按优先级从高到低排序（稳定排序，同优先级保持原顺序）。
-    /// 2. 维护一个"已占据区域"列表。
+    /// 2. 维护一个"已占据区域"列表（仅互斥层命令的目标矩形加入）。
     /// 3. 对每条命令，将其 `clip_rect` 减去所有已占据区域，得到剩余裁剪。
-    /// 4. 将该命令的原始目标矩形加入已占据区域。
+    /// 4. 如果该命令是互斥层（`is_exclusive`），将其原始目标矩形加入已占据区域。
     /// 5. 按原始顺序返回结果。
     ///
     /// 透明度为 0 或裁剪面积为零的命令被过滤掉。
+    ///
+    /// Issue #901 阻塞 2：文字层（`StaticText`/`AnimatedText`）不占据区域，
+    /// 不裁剪彼此，各自以透明度绘制。
     pub(crate) fn resolve(commands: &[DrawCommand]) -> Vec<DrawCommand> {
         if commands.is_empty() {
             return Vec::new();
@@ -85,7 +117,7 @@ impl Ownership {
                 .then(a.0.cmp(&b.0))
         });
 
-        // 已占据的矩形列表（高优先级命令的目标矩形）。
+        // 已占据的矩形列表（仅互斥层命令的目标矩形）。
         let mut occupied: Vec<CanvasRect> = Vec::new();
 
         // 存放 (原始索引, 裁剪后的命令)。
@@ -108,8 +140,12 @@ impl Ownership {
                 }
             }
 
-            // 该命令的目标矩形加入已占据区域。
-            if cmd.target_rect.w > 0.0 && cmd.target_rect.h > 0.0 {
+            // 只有互斥层命令的目标矩形加入已占据区域。
+            // 文字层（StaticText/AnimatedText）不占据区域，不裁剪后续命令。
+            if cmd.ownership.is_exclusive()
+                && cmd.target_rect.w > 0.0
+                && cmd.target_rect.h > 0.0
+            {
                 occupied.push(cmd.target_rect);
             }
         }
@@ -255,61 +291,91 @@ mod tests {
     }
 
     #[test]
-    fn resolve_static_text_overrides_animated() {
-        // 静态正文和动画文字重叠：静态正文保留完整区域，动画文字被裁剪。
+    fn resolve_static_text_and_animated_coexist() {
+        // Issue #901 阻塞 2：静态正文和动画文字重叠时不再互斥裁剪，
+        // 各自以自己的透明度绘制（alpha compositing）。
         let cmds = vec![
             text_cmd(0.0, 0.0, 10.0, 10.0, OwnershipRule::AnimatedText),
             text_cmd(0.0, 0.0, 10.0, 10.0, OwnershipRule::StaticText),
         ];
         let result = Ownership::resolve(&cmds);
 
-        // 静态正文保留完整 10x10。
+        // 两者都保留完整区域。
         let static_cmd = result
             .iter()
             .find(|c| c.ownership == OwnershipRule::StaticText)
             .expect("static text must survive");
         assert_eq!(static_cmd.clip_rect, CanvasRect::new(0.0, 0.0, 10.0, 10.0));
 
-        // 动画文字被完全裁剪掉（被静态正文覆盖）。
-        let animated_cmds: Vec<_> = result
+        let animated_cmd = result
             .iter()
-            .filter(|c| c.ownership == OwnershipRule::AnimatedText)
-            .collect();
-        assert!(
-            animated_cmds.is_empty(),
-            "animated text fully covered by static text should be removed"
+            .find(|c| c.ownership == OwnershipRule::AnimatedText)
+            .expect("animated text must also survive");
+        assert_eq!(
+            animated_cmd.clip_rect,
+            CanvasRect::new(0.0, 0.0, 10.0, 10.0),
+            "animated text must NOT be clipped by static text (alpha compositing)"
         );
     }
 
     #[test]
-    fn resolve_partial_overlap() {
-        // 静态正文 [0,0,10,10]，动画文字 [5,0,10,10]（部分重叠）。
+    fn resolve_partial_overlap_text_coexist() {
+        // Issue #901 阻塞 2：部分重叠的文字层也各自完整绘制。
         let cmds = vec![
             text_cmd(5.0, 0.0, 10.0, 10.0, OwnershipRule::AnimatedText),
             text_cmd(0.0, 0.0, 10.0, 10.0, OwnershipRule::StaticText),
         ];
         let result = Ownership::resolve(&cmds);
 
-        // 静态正文保留完整。
+        // 两者都保留完整裁剪区域。
         let static_cmd = result
             .iter()
             .find(|c| c.ownership == OwnershipRule::StaticText)
             .expect("static text must survive");
         assert_eq!(static_cmd.clip_rect.w, 10.0);
 
-        // 动画文字只保留 [10,0,5,10]（右侧未被覆盖部分）。
         let animated_cmds: Vec<_> = result
             .iter()
             .filter(|c| c.ownership == OwnershipRule::AnimatedText)
             .collect();
-        assert!(!animated_cmds.is_empty(), "animated text partially visible");
+        assert!(!animated_cmds.is_empty(), "animated text fully visible");
+        // AnimatedText 不被 StaticText 裁剪，保留完整 10x10。
         let total_area: f64 = animated_cmds
             .iter()
             .map(|c| c.clip_rect.w * c.clip_rect.h)
             .sum();
         assert!(
-            (total_area - 50.0).abs() < 1e-9,
-            "animated text remaining area should be 50, got {total_area}"
+            (total_area - 100.0).abs() < 1e-9,
+            "animated text area should be 100 (not clipped by static text), got {total_area}"
+        );
+    }
+
+    #[test]
+    fn resolve_cursor_clips_text() {
+        // Issue #901 阻塞 2：光标（互斥层）仍然裁剪文字。
+        let cmds = vec![
+            text_cmd(0.0, 0.0, 10.0, 10.0, OwnershipRule::StaticText),
+            text_cmd(0.0, 0.0, 2.0, 10.0, OwnershipRule::Cursor),
+        ];
+        let result = Ownership::resolve(&cmds);
+
+        // 光标保留完整。
+        let cursor_cmd = result
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::Cursor)
+            .expect("cursor must survive");
+        assert_eq!(cursor_cmd.clip_rect, CanvasRect::new(0.0, 0.0, 2.0, 10.0));
+
+        // 文字被光标裁剪：剩余 [2,0,8,10]。
+        let text_cmds: Vec<_> = result
+            .iter()
+            .filter(|c| c.ownership == OwnershipRule::StaticText)
+            .collect();
+        assert!(!text_cmds.is_empty(), "text partially visible after cursor");
+        let total_area: f64 = text_cmds.iter().map(|c| c.clip_rect.w * c.clip_rect.h).sum();
+        assert!(
+            (total_area - 80.0).abs() < 1e-9,
+            "text remaining area should be 80 (clipped by cursor), got {total_area}"
         );
     }
 

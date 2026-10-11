@@ -406,22 +406,78 @@ pub fn assemble_document_visual_snapshot_from_lines(
 /// 从 `CanonicalDocumentVisualSnapshot` 的 `visual_lines` 提取每段高度。
 ///
 /// 按 `cache_slot` 分组累加行高，返回按段落顺序排列的高度数组。
+///
+/// Issue #901: 用 HashMap 索引代替 Vec `contains/position` 线性查找，
+/// 避免 O(行数 × 段数) 最坏复杂度。
 fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<f64> {
-    // 从 visual_lines 按 para_start 去重提取段落起始偏移列表
+    use std::collections::HashMap;
+
+    // 用 HashMap 按 para_start 去重并记录段落顺序索引
+    let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
     let mut para_starts: Vec<usize> = Vec::new();
     for vl in &snapshot.visual_lines {
-        if !para_starts.contains(&vl.para_start) {
+        if !para_start_to_idx.contains_key(&vl.para_start) {
+            para_start_to_idx.insert(vl.para_start, para_starts.len());
             para_starts.push(vl.para_start);
         }
     }
 
     let mut heights = vec![0.0f64; para_starts.len()];
+    // 用 HashMap 直接索引，O(1) 查找
     for vl in &snapshot.visual_lines {
-        if let Some(idx) = para_starts.iter().position(|&s| s == vl.para_start) {
+        if let Some(&idx) = para_start_to_idx.get(&vl.para_start) {
             heights[idx] += vl.height;
         }
     }
     heights
+}
+
+/// Issue #901: 从 snapshot 提取受影响段落的高度更新列表。
+///
+/// 只对 `affected_indices` 中列出的段落提取 `(段落索引, 新高度)`，
+/// 用于 `ParagraphHeightIndex::update_heights_incremental`。
+fn extract_affected_height_updates(
+    snapshot: &CanonicalDocumentVisualSnapshot,
+    affected_indices: &[usize],
+) -> Vec<(usize, f64)> {
+    use std::collections::HashMap;
+
+    if affected_indices.is_empty() {
+        return Vec::new();
+    }
+
+    // 构建 para_start → 段落索引 的映射
+    let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
+    for (i, vl) in snapshot.visual_lines.iter().enumerate() {
+        // 只记录第一次出现的 para_start，保持段落顺序
+        para_start_to_idx.entry(vl.para_start).or_insert(i);
+    }
+
+    // 对每个受影响段落，累加其视觉行高度
+    let mut updates: Vec<(usize, f64)> = Vec::new();
+    for &idx in affected_indices {
+        // 段落索引 idx 对应第 idx 个出现的 para_start
+        let para_starts: Vec<usize> = {
+            let mut seen: Vec<usize> = Vec::new();
+            for vl in &snapshot.visual_lines {
+                if !seen.contains(&vl.para_start) {
+                    seen.push(vl.para_start);
+                }
+            }
+            seen
+        };
+
+        if let Some(&para_start) = para_starts.get(idx) {
+            let mut height = 0.0f64;
+            for vl in &snapshot.visual_lines {
+                if vl.para_start == para_start {
+                    height += vl.height;
+                }
+            }
+            updates.push((idx, height));
+        }
+    }
+    updates
 }
 
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
@@ -550,16 +606,60 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut line_id: usize = 0;
     let mut paragraph_idx: i32 = 0;
 
-    // 先更新 store 的文本信息（处理换行拆段/删回车合段）
-    paragraph_store.rebuild_from_text(
-        text,
-        font_size,
-        font_family,
-        line_spacing,
-        indent,
-        padding,
-        width,
-    );
+    // Issue #901: 增量更新 store 的文本信息，不调用 rebuild_from_text（全章扫描）。
+    // 只更新受影响段落的 cache_key，未改段落的 ParagraphId 和 cache_key 保持不变。
+    // rebuild_from_text 会重新分配所有段落的 cache_key（即使内容没变），
+    // 导致所有段落的 needs_relayout 返回 true，失去增量排版的意义。
+    // 此处用 update_paragraph_text 只更新受影响段落的 cache_key。
+    {
+        let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+        let old_paras: Vec<&str> = {
+            // 从 previous_snapshot 提取旧段落文本
+            let mut old = Vec::new();
+            if let Some(prev) = previous_snapshot {
+                for para in &prev.paragraphs {
+                    old.push(para.paragraph_text.as_str());
+                }
+            }
+            old
+        };
+
+        // 如果段落数量变化或 store 段落数与新文本不匹配，需要 rebuild
+        let store_needs_rebuild = paragraph_store.paragraph_count() != new_paras.len()
+            || old_paras.len() != new_paras.len();
+
+        if store_needs_rebuild {
+            // 段萂数变化（换行拆段/删回车合段），需要重建 store
+            paragraph_store.rebuild_from_text(
+                text,
+                font_size,
+                font_family,
+                line_spacing,
+                indent,
+                padding,
+                width,
+            );
+        } else {
+            // 段萂数不变，只更新受影响段落的 cache_key
+            let affected_start = affected.relayout_start;
+            let affected_end = affected.relayout_end;
+            for i in affected_start..affected_end {
+                if i < new_paras.len() {
+                    let para_text = new_paras[i].trim_end_matches('\n');
+                    paragraph_store.update_paragraph_text(
+                        i,
+                        para_text,
+                        font_size,
+                        font_family,
+                        line_spacing,
+                        indent,
+                        padding,
+                        width,
+                    );
+                }
+            }
+        }
+    }
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
@@ -911,12 +1011,28 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         visual_lines,
     };
 
-    // 从 snapshot 提取段落高度，更新 height_index
-    let heights = extract_paragraph_heights(&snapshot);
-    height_index.rebuild(heights);
+    // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
+    // 只对受影响段落调用 update_height（O(k log n)），不 rebuild（O(n)）。
+    // 只对受影响段落同步排版结果，不 sync_from_visual_lines（O(n)）。
 
-    // 同步 paragraph_store
-    paragraph_store.sync_from_visual_lines(&snapshot.visual_lines, generation);
+    // 计算受影响段落索引列表
+    let affected_indices: Vec<usize> = if affected.full_relayout {
+        (0..snapshot.paragraphs.len()).collect()
+    } else {
+        (affected.relayout_start..affected.relayout_end).collect()
+    };
+
+    // 增量更新 height_index：只更新受影响段落的高度
+    let height_updates = extract_affected_height_updates(&snapshot, &affected_indices);
+    let total_paras = snapshot.paragraphs.len();
+    height_index.update_heights_incremental(&height_updates, total_paras, line_height);
+
+    // 增量同步 paragraph_store：只更新受影响段落的排版结果
+    paragraph_store.sync_from_visual_lines_incremental(
+        &snapshot.visual_lines,
+        generation,
+        &affected_indices,
+    );
 
     snapshot
 }

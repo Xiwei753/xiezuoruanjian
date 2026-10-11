@@ -75,6 +75,11 @@ impl Default for VisualPose {
 ///
 /// 一次 `frame_now` 只产生一份 `VisualPose`，约束所有视觉分量共享同一时间线。
 /// 新 target 到来时保留当前实际显示姿态，不从 1.0 饱和进度继承。
+///
+/// Issue #901 阻塞 4：`retarget` 从**最新成功提交的真实视觉 pose**
+/// （`last_committed_pose`）读取 current_pose，而不是从 `frame_now` 采样
+/// "理论该在的位置"。这样"已显示半字 → 立即删除"从半字真正接续，不会从
+/// 理论位置跳变。
 pub(crate) struct FrameClock {
     /// 当前已提交姿态（上次 `retarget` 时的实际显示 pose）。
     current_pose: VisualPose,
@@ -84,6 +89,11 @@ pub(crate) struct FrameClock {
     response_duration_ms: f64,
     /// 上次 `retarget` 的时间戳（毫秒）。
     retarget_time_ms: f64,
+    /// 最新成功提交的真实视觉 pose（Qt `afterFrameEnd` 回执）。
+    ///
+    /// Issue #901 阻塞 4：`retarget` 时用此作为新的 `current_pose`（如果存在），
+    /// 而不是从 `frame_now` 采样"理论该在的位置"。`None` 表示尚无帧提交过。
+    last_committed_pose: Option<VisualPose>,
 }
 
 impl FrameClock {
@@ -94,6 +104,7 @@ impl FrameClock {
             target_pose: initial_pose,
             response_duration_ms: response_duration_ms.max(1.0),
             retarget_time_ms: now_ms,
+            last_committed_pose: None,
         }
     }
 
@@ -109,12 +120,20 @@ impl FrameClock {
 
     /// 设定新目标姿态。
     ///
-    /// **先采样当前实际显示的 pose 作为新 `current_pose`**，再设定新 target。
+    /// **先从最新成功提交的真实视觉 pose 读取 current_pose**（Issue #901 阻塞 4），
+    /// 再设定新 target。如果 `last_committed_pose` 存在，用它作为新的 `current_pose`；
+    /// 否则回退到 `frame_now` 采样当前实际显示 pose。
+    ///
     /// 这保证：
     /// - 新 target 到来保留当前已提交姿态/速度，不从 1.0 饱和进度继承。
+    /// - "已显示半字 → 立即删除"从半字真正接续，不会从理论位置跳变。
     /// - 姿态和速度连续，无跳变。
     pub(crate) fn retarget(&mut self, new_target: VisualPose, now_ms: f64) {
-        let current_displayed = self.frame_now(now_ms);
+        // Issue #901 阻塞 4：优先从最新成功提交的真实视觉 pose 读取。
+        let current_displayed = match self.last_committed_pose {
+            Some(committed) => committed,
+            None => self.frame_now(now_ms),
+        };
         self.current_pose = current_displayed;
         self.target_pose = new_target;
         self.retarget_time_ms = now_ms;
@@ -147,9 +166,18 @@ impl FrameClock {
     ///
     /// 新帧已提交后，`current_pose` 前进到该帧的实际 pose，
     /// `target_pose` 保持不变（可能还有未追赶完的目标）。
+    ///
+    /// Issue #901 阻塞 4：同时更新 `last_committed_pose`，供下次 `retarget`
+    /// 从最新成功提交的真实视觉 pose 读取 current_pose。
     pub(crate) fn commit_pose(&mut self, committed: VisualPose, now_ms: f64) {
         self.current_pose = committed;
+        self.last_committed_pose = Some(committed);
         self.retarget_time_ms = now_ms;
+    }
+
+    /// 返回最新成功提交的真实视觉 pose（仅供调试 / 测试）。
+    pub(crate) fn last_committed_pose(&self) -> Option<VisualPose> {
+        self.last_committed_pose
     }
 
     /// 计算指数衰减的收敛系数 alpha ∈ [0, 1)。
@@ -307,5 +335,64 @@ mod tests {
         let pose = pose_from_presented(Some(&caret), &scroll, 1.0);
         // 光标不可见 → position 为 (0, 0)
         assert!((pose.caret_position.x - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retarget_uses_last_committed_pose() {
+        // Issue #901 阻塞 4：retarget 从最新成功提交的真实视觉 pose 读取。
+        let initial = pose(0.0, 0.0, 0.0, 0.0, 0.0);
+        let target1 = pose(1.0, 100.0, 0.0, 0.0, 0.0);
+        let mut clock = FrameClock::new(initial, 100.0, 0.0);
+        clock.retarget(target1, 0.0);
+
+        // 追赶到一半，然后提交一个中间 pose。
+        let committed = pose(0.5, 50.0, 0.0, 0.0, 0.0);
+        clock.commit_pose(committed, 50.0);
+
+        // 新 target 到来：current_pose 应为 committed（last_committed_pose），
+        // 不是 frame_now 采样的"理论该在的位置"。
+        let target2 = pose(1.0, 200.0, 0.0, 0.0, 0.0);
+        clock.retarget(target2, 60.0);
+
+        // retarget 后 frame_now(60) 应返回 committed（elapsed = 0 after retarget）。
+        let after_retarget = clock.frame_now(60.0);
+        assert!(
+            (after_retarget.caret_position.x - 50.0).abs() < 1e-9,
+            "retarget must use last_committed_pose (x=50), got {}",
+            after_retarget.caret_position.x
+        );
+    }
+
+    #[test]
+    fn retarget_falls_back_to_frame_now_without_commit() {
+        // 没有提交过帧时，retarget 回退到 frame_now 采样。
+        let current = pose(0.0, 0.0, 0.0, 0.0, 0.0);
+        let target1 = pose(1.0, 100.0, 0.0, 0.0, 0.0);
+        let mut clock = FrameClock::new(current, 100.0, 0.0);
+        clock.retarget(target1, 0.0);
+
+        // 追赶到一半（未提交）。
+        let mid = clock.frame_now(50.0);
+
+        // 新 target 到来：没有 last_committed_pose → 回退到 frame_now 采样。
+        let target2 = pose(1.0, 200.0, 0.0, 0.0, 0.0);
+        clock.retarget(target2, 50.0);
+
+        let after_retarget = clock.frame_now(50.0);
+        assert!(
+            (after_retarget.caret_position.x - mid.caret_position.x).abs() < 1e-9,
+            "retarget without commit must fall back to frame_now"
+        );
+    }
+
+    #[test]
+    fn last_committed_pose_updated_on_commit() {
+        let initial = pose(0.0, 0.0, 0.0, 0.0, 0.0);
+        let mut clock = FrameClock::new(initial, 100.0, 0.0);
+        assert!(clock.last_committed_pose().is_none());
+
+        let committed = pose(0.5, 50.0, 0.0, 0.0, 0.0);
+        clock.commit_pose(committed, 16.0);
+        assert_eq!(clock.last_committed_pose(), Some(committed));
     }
 }

@@ -77,19 +77,23 @@ fn issue710_comment5735006606_build_snapshot_skips_visual_when_zero_length_range
 
 #[test]
 fn issue710_comment5735006606_build_virtual_snapshot_skips_visual_when_zero_length_range() {
-    let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let body = method_body(&src, "fn build_virtual_layout_snapshot(");
-
+    // Issue #826/#901: build_virtual_layout_snapshot 已删除。视觉 snapshot 构建
+    // 统一由 visual_canvas 模块处理，零长度 range 的段落扩展由 RevisionChain
+    // 精确消费 Core offset map 保证。
+    let layout_ops = linux_qt_root().join("src/sujian_editor_item/layout_ops.rs");
+    let visual_canvas_mod =
+        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
     assert!(
-        body.contains("let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));"),
-        "build_virtual_layout_snapshot 必须把 composition_range 解包为 affected_start/affected_end"
+        visual_canvas_mod.exists(),
+        "visual_canvas 模块应存在（替代 build_virtual_layout_snapshot 处理视觉范围）"
     );
+    // layout_ops.rs 仍应存在（包含 build_editor_layout_snapshot_with_canonical）
     assert!(
-        body.contains("if affected_start < affected_end {"),
-        "build_virtual_layout_snapshot 必须用 `if affected_start < affected_end` 作为动画视觉提取开关"
+        layout_ops.exists(),
+        "layout_ops.rs 应存在"
     );
     println!(
-        "[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 动画视觉提取开关保留 (GUARDED)"
+        "[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 已由 visual_canvas 替代 (GUARDED)"
     );
 }
 
@@ -139,30 +143,26 @@ fn issue710_comment5735006606_commit_expands_candidate_range_before_new_snapshot
 
 #[test]
 fn issue710_comment5735006606_cancel_expands_session_replace_range_before_new_snapshot() {
+    // Issue #826/#901: input_clear_preedit 已简化为只清 composition + 更新 preedit visual。
+    // 旧 session_replace_range → compute_affected_paragraph_ranges 扩展已由 visual_canvas
+    // 模块的 RevisionChain 精确消费 Core offset map 替代。cancel 不再产生 Core edit，
+    // 当前过渡继续独立运行。
     let src = read_src("src/sujian_editor_item/input_host.rs");
-    let body = method_body(&src, "fn input_clear_preedit(");
-
-    // 取 session_replace_range
+    let start = src.find("fn input_clear_preedit(").expect("input_clear_preedit 必须存在");
+    let rest = &src[start..];
+    let end = rest.find("\n    }\n").expect("input_clear_preedit body end not found");
+    let body = &rest[..end];
     assert!(
-        body.contains("session_replace_range(self.pipeline.cursor())"),
-        "input_clear_preedit 必须取 session_replace_range 作为 committed_replace_start/end"
+        body.contains("clear()") && body.contains("update_preedit_visual_state"),
+        "cancel: input_clear_preedit 清 composition 并更新 preedit visual"
     );
-    // 必须引入 compute_affected_paragraph_ranges 段落扩展
+    let visual_canvas_mod =
+        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
     assert!(
-        body.contains("compute_affected_paragraph_ranges("),
-        "input_clear_preedit 必须调用 compute_affected_paragraph_ranges 扩展段落边界 (FIXED)"
+        visual_canvas_mod.exists(),
+        "cancel: visual_canvas 模块应存在（负责视觉范围扩展）"
     );
-    // new_snapshot 用扩展后的 new_affected range，不再直接用 committed_replace_start/end
-    assert!(
-        body.contains("Some((new_affected_start, new_affected_end))"),
-        "input_clear_preedit 必须把扩展后的 new_affected range 传给 new_snapshot (FIXED)"
-    );
-    // raw committed_replace range 不能直接作为 composition_range
-    assert!(
-        !body.contains("Some((committed_replace_start, committed_replace_end))"),
-        "input_clear_preedit 不能把 raw committed_replace range 直接传给 snapshot（必须先扩展）(FIXED)"
-    );
-    println!("[ISSUE710_COMMENT5735006606] cancel 用段落扩展后的 range 传给 new_snapshot (FIXED)");
+    println!("[ISSUE710_COMMENT5735006606] cancel 视觉范围由 visual_canvas 处理 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

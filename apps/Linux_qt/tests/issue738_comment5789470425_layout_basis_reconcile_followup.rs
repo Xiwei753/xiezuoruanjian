@@ -127,6 +127,13 @@ fn issue1_layout_property_changed_reconciles_after_new_layout_computed() {
 /// 跳过 basis 不一致的事务。
 #[test]
 fn issue1_find_cursor_transaction_for_target_takes_layout_revision() {
+    // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。
+    let motion_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    if !motion_path.exists() {
+        println!("[BUGFIX_VERIFY] issue1: cursor_motion.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/cursor_motion.rs");
     let window = function_window(&src, "fn find_cursor_transaction_for_target", 2000);
     assert!(
@@ -147,6 +154,12 @@ fn issue1_find_cursor_transaction_for_target_takes_layout_revision() {
 /// 问题2 守卫1: AnimatedSlice 应有 reflow_anchors 字段，ReflowAnchor 结构应存在。
 #[test]
 fn issue2_animated_slice_has_reflow_anchors() {
+    // Issue #826/#901: animated_slice.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animated_slice.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue2: animated_slice.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animated_slice.rs");
     assert!(
         src.contains("pub reflow_anchors: Vec<ReflowAnchor>"),
@@ -154,8 +167,7 @@ fn issue2_animated_slice_has_reflow_anchors() {
     );
     assert!(
         src.contains("struct ReflowAnchor"),
-        "ReflowAnchor 结构应存在，保存原始 cluster 的 byte range、shaping identity、\
-         from/to document rect 等身份。"
+        "ReflowAnchor 结构应存在。"
     );
 }
 
@@ -163,30 +175,42 @@ fn issue2_animated_slice_has_reflow_anchors() {
 /// 应合并 reflow_anchors 列表。
 #[test]
 fn issue2_merge_two_merges_anchors_not_single_shaping() {
+    // Issue #826/#901: transaction_builder.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animation/transaction_builder.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue2: transaction_builder.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn merge_two", 1200);
     assert!(
         !window.contains("shaping_identity: a.shaping_identity.clone()"),
-        "merge_two 不应再用 shaping_identity: a.shaping_identity.clone()（只保留单个 shaping）。"
+        "merge_two 不应再用 shaping_identity: a.shaping_identity.clone()。"
     );
     assert!(
         window.contains("reflow_anchors"),
-        "merge_two 应合并 reflow_anchors 列表，保留被合并各 cluster 的细分身份。"
+        "merge_two 应合并 reflow_anchors 列表。"
     );
 }
 
 /// 问题2 守卫3: merge_two 不应再用 bounding_box 做 from/to_document_rect。
 #[test]
 fn issue2_merge_two_no_bounding_box_for_document_rects() {
+    // Issue #826/#901: transaction_builder.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animation/transaction_builder.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue2: transaction_builder.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction_builder.rs");
     let window = function_window(&src, "fn merge_two", 1200);
     assert!(
         !window.contains("from_document_rect: bounding_box("),
-        "merge_two 不应再用 from_document_rect: bounding_box( 框成大矩形。"
+        "merge_two 不应再用 from_document_rect: bounding_box(。"
     );
     assert!(
         !window.contains("to_document_rect: bounding_box("),
-        "merge_two 不应再用 to_document_rect: bounding_box( 框成大矩形。"
+        "merge_two 不应再用 to_document_rect: bounding_box(。"
     );
 }
 
@@ -194,20 +218,25 @@ fn issue2_merge_two_no_bounding_box_for_document_rects() {
 /// 不再做 bounding box + first shaping。
 #[test]
 fn issue2_find_clusters_in_canonical_per_cluster() {
+    // Issue #826/#901: transaction/rebind.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animation/transaction/rebind.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue2: transaction/rebind.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     assert!(
         src.contains("fn find_clusters_in_canonical"),
-        "应存在 find_clusters_in_canonical（逐 cluster 返回列表），替代旧的\
-         find_cluster_in_canonical（bounding box + first shaping）。"
+        "应存在 find_clusters_in_canonical。"
     );
     let window = function_window(&src, "fn find_clusters_in_canonical", 2000);
     assert!(
         !window.contains("first_shaping.is_none()"),
-        "find_clusters_in_canonical 不应只用 first_shaping.is_none() 取第一个 cluster 的 shaping。"
+        "find_clusters_in_canonical 不应只用 first_shaping.is_none()。"
     );
     assert!(
         window.contains("hits.push"),
-        "find_clusters_in_canonical 应逐 cluster push 到 hits 列表，而非做 bounding box。"
+        "find_clusters_in_canonical 应逐 cluster push 到 hits 列表。"
     );
 }
 
@@ -218,6 +247,12 @@ fn issue2_find_clusters_in_canonical_per_cluster() {
 /// 问题3 守卫1: AnimatedSlice 应有 crossfade_group_id 和 crossfade_side 字段。
 #[test]
 fn issue3_animated_slice_has_crossfade_group_id_and_side() {
+    // Issue #826/#901: animated_slice.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animated_slice.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue3: animated_slice.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animated_slice.rs");
     assert!(
         src.contains("pub crossfade_group_id: Option<u64>"),
@@ -229,7 +264,7 @@ fn issue3_animated_slice_has_crossfade_group_id_and_side() {
     );
     assert!(
         src.contains("enum CrossFadeSide"),
-        "CrossFadeSide 枚举应存在（Old/New 侧标记）。"
+        "CrossFadeSide 枚举应存在。"
     );
 }
 
@@ -237,28 +272,38 @@ fn issue3_animated_slice_has_crossfade_group_id_and_side() {
 /// （is_same_shaping(&cluster_shaping)），应以 group 为单位成对重绑。
 #[test]
 fn issue3_rebind_pairwise_not_independent_shaping_compare() {
+    // Issue #826/#901: transaction/rebind.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animation/transaction/rebind.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue3: transaction/rebind.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
     assert!(
         !window.contains("is_same_shaping(&cluster_shaping)"),
-        "rebind_timed_units_to_canonical 不应再用 is_same_shaping(&cluster_shaping)\
-         把每个 unit 独立和 canonical 比 shaping。"
+        "rebind_timed_units_to_canonical 不应再用 is_same_shaping(&cluster_shaping)。"
     );
     assert!(
         !window.contains("RebindOutcome::Remove"),
-        "rebind_timed_units_to_canonical 不应再用 RebindOutcome::Remove 独立判死 unit。"
+        "rebind_timed_units_to_canonical 不应再用 RebindOutcome::Remove。"
     );
 }
 
 /// 问题3 守卫3: rebind_timed_units_to_canonical 应有成对重绑逻辑（crossfade_pair）。
 #[test]
 fn issue3_rebind_has_pairwise_crossfade_rebind() {
+    // Issue #826/#901: transaction/rebind.rs 已删除。
+    let path = linux_qt_root().join("src/sujian_editor_item/animation/transaction/rebind.rs");
+    if !path.exists() {
+        println!("[BUGFIX_VERIFY] issue3: transaction/rebind.rs 已删除");
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 4000);
     assert!(
         window.contains("crossfade_pair"),
-        "rebind_timed_units_to_canonical 应有 crossfade_pair 成对重绑逻辑：\
-         查找配对 old/new side、按同一剩余时间同步、new-side anchor 失效时整组结束。"
+        "rebind_timed_units_to_canonical 应有 crossfade_pair 成对重绑逻辑。"
     );
     assert!(
         window.contains("CrossFadeSide::Old") && window.contains("CrossFadeSide::New"),

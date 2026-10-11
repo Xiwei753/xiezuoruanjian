@@ -320,7 +320,9 @@ fn render_state_uses_sampled_cursor_position_not_stale_visual() {
         item.cursor_ctrl
             .tick_animation(t0 + Duration::from_millis(50));
 
-        let state = item.build_cursor_render_state_for_frame();
+        let state = item.build_cursor_render_state_for_frame(
+            &crate::sujian_editor_item::visual_canvas::CanvasDrawPlan::empty(0.0),
+        );
         assert!(
             (state.x - item.cursor_ctrl.visual_x).abs() < 1e-9,
             "render state 必须读本帧已推进的 visual，实际 state.x={} visual_x={}",
@@ -480,7 +482,7 @@ fn scene_graph_frame_is_the_only_production_cursor_timeline_sample_point() {
         .find(CALL)
         .expect("update_paint_node 必须调用 cursor_ctrl.tick_animation(frame_now)");
     let state_pos = src
-        .find("let cursor_render_state = self.build_cursor_render_state_for_frame();")
+        .find("let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);")
         .expect("build_cursor_render_state_for_frame 必须存在");
     assert!(
         frame_now_pos < tick_pos && tick_pos < state_pos,
@@ -611,7 +613,9 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
             "动画结束后尾部条件必须为假（不再 request_frame_update）"
         );
 
-        let state = item.build_cursor_render_state_for_frame();
+        let state = item.build_cursor_render_state_for_frame(
+            &crate::sujian_editor_item::visual_canvas::CanvasDrawPlan::empty(0.0),
+        );
         assert!(
             (state.x - 100.0).abs() < 1e-9,
             "结束后的 render state 必须仍是 target，实际 {}",

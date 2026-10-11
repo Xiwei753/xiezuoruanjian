@@ -76,11 +76,17 @@ fn issue690_single_collaborative_easing_function() {
         !slice_path.exists(),
         "步骤2: animated_slice.rs 已删除，协同二次曲线不得复活"
     );
-    let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
-    assert!(
-        !coord_src.contains("1.0 - (1.0 - "),
-        "步骤2: 协调器内不得再内联各自的 easing 公式"
-    );
+    // Issue #826 评论 36: coordinator.rs 已随旧动画架构删除。
+    // 若文件不存在则无需检查内联 easing；若存在则不得内联 easing 公式。
+    let coord_path =
+        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    if coord_path.exists() {
+        let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
+        assert!(
+            !coord_src.contains("1.0 - (1.0 - "),
+            "步骤2: 协调器内不得再内联各自的 easing 公式"
+        );
+    }
     // CursorOnly（方向键/点选平滑）保留自己的三次曲线，不被协同链复用。
     let rendering_src = read_src("src/sujian_editor_item/rendering.rs");
     assert!(
@@ -210,7 +216,11 @@ fn issue690_no_unconditional_stderr_animation_spam() {
     // 逐帧/无条件 eprintln 会淹没诊断包；只允许 env 控制的 debug log。
     // Issue #826 评论 36: 旧 transaction/ / cursor_motion.rs / rebase.rs /
     // transaction_builder.rs 已删除，改为只扫描仍然存在的动画文件，跳过已删文件。
+    // Issue #826 评论 36: 旧动画模块（coordinator.rs / cursor_motion.rs / rebase.rs /
+    // transaction_builder.rs 等）已删除。新增 visual_canvas/ 和重构后的生产文件，
+    // 一并纳入扫描范围，确保新架构也不刷 eprintln。
     let animation_files = [
+        // 旧动画模块（已被 #826 删除，保留用于防止复活）
         "src/sujian_editor_item/animation/coordinator.rs",
         "src/sujian_editor_item/animation/composition.rs",
         "src/sujian_editor_item/animation/cursor_motion.rs",
@@ -221,6 +231,19 @@ fn issue690_no_unconditional_stderr_animation_spam() {
         "src/sujian_editor_item/animation/transaction/timeline.rs",
         "src/sujian_editor_item/animation/transaction/rebind.rs",
         "src/sujian_editor_item/animation/transaction/queue.rs",
+        // #826/#901 新架构动画相关生产文件
+        "src/sujian_editor_item/animation/mod.rs",
+        "src/sujian_editor_item/cursor_animation.rs",
+        "src/sujian_editor_item/cursor_controller.rs",
+        "src/sujian_editor_item/rendering.rs",
+        "src/sujian_editor_item/scene_graph_renderer.rs",
+        "src/sujian_editor_item/transaction.rs",
+        "src/sujian_editor_item/qquickitem_impl.rs",
+        "src/sujian_editor_item/pipeline.rs",
+        "src/sujian_editor_item/visual_canvas/mod.rs",
+        "src/sujian_editor_item/visual_canvas/controller.rs",
+        "src/sujian_editor_item/visual_canvas/scene_transition.rs",
+        "src/sujian_editor_item/visual_canvas/presented_scene.rs",
     ];
     let mut checked = 0usize;
     for file in &animation_files {

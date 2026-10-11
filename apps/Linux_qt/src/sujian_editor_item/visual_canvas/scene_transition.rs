@@ -2,10 +2,12 @@
 //!
 //! ## 核心语义
 //!
-//! - `build_draw_plan` 根据当前 `VisualPose` 的 `progress` 插值 presented 和 target。
-//! - `progress = 0`：完全显示 presented（已提交画面）。
-//! - `progress = 1`：完全显示 target（最新目标布局）。
-//! - 中间状态：旧帧已呈现部分保持原位（淡出），新内容从前沿逐步展开（淡入）。
+//! - `build_draw_plan` 根据 `RevisionChain` 判断每个已显示字形贡献在最终正文里
+//!   的存活/删除/新插入关系，分别做不同处理：
+//!   - **存活字**：只做老→新矩形位移（FLIP），不淡出淡入。
+//!   - **新增字**：做 UV/裁剪揭示（从前沿逐步展开），透明度由 `progress` 控制。
+//!   - **删除字**：从其已显示裁剪收回，透明度由 `(1 - progress)` 控制。
+//!   - **shaping 替换**：字形已改变可用同一次 `progress` 下的旧→新贴图替换。
 //!
 //! ## 连续性
 //!
@@ -23,6 +25,7 @@ use super::ownership::Ownership;
 use super::presented_scene::{
     CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedScene,
 };
+use super::revision_chain::RevisionChain;
 use crate::sujian_editor_item::layout_revision::LayoutRevision;
 
 // ── 目标布局描述 ──
@@ -97,43 +100,105 @@ pub(crate) struct SceneTransition;
 impl SceneTransition {
     /// 从已提交画面和目标布局生成绘制计划。
     ///
-    /// ## 插值规则
+    /// ## 存活/删除/新插入分类（Issue #901 阻塞 2）
     ///
-    /// - `progress = 0`：完全显示 presented，target 透明度为 0。
-    /// - `progress = 1`：完全显示 target，presented 透明度为 0。
-    /// - 中间状态：presented 以 `(1 - progress)` 淡出，target 以 `progress` 淡入。
-    ///   旧帧已呈现部分保持原位（不移动），新内容从前沿逐步展开。
+    /// 通过 `RevisionChain` 判断每个已显示字形贡献在最终正文里的关系：
+    /// - **存活字**：`map_presented_to_latest(byte_range)` 返回 `Some`，
+    ///   只做老→新矩形位移（FLIP），不淡出淡入。透明度保持 1.0。
+    /// - **删除字**：`map_presented_to_latest(byte_range)` 返回 `None`，
+    ///   从其已显示裁剪收回，透明度由 `(1 - progress)` 控制。
+    /// - **新增字**：target glyph run 的 byte_range 在 presented revision 中
+    ///   不存在（`map_latest_to_presented` 返回 `None`），做 UV/裁剪揭示，
+    ///   透明度由 `progress` 控制。
     ///
     /// ## 重叠解决
     ///
-    /// 生成的命令通过 `Ownership::resolve` 解决重叠：
-    /// - presented 的文字标记为 `StaticText`（已呈现部分优先）。
-    /// - target 的文字标记为 `AnimatedText`（新内容）。
-    /// - 光标标记为 `Cursor`，选区标记为 `Selection`，预输入标记为 `Preedit`。
+    /// 生成的命令通过 `Ownership::resolve` 解决重叠。文字层之间用透明度叠加
+    /// （alpha compositing），只有 `Cursor`/`Preedit`/`Selection` 做矩形裁剪。
     pub(crate) fn build_draw_plan(
         presented: &PresentedScene,
         target: &TargetLayoutDescriptor,
         pose: &VisualPose,
+        revision_chain: &RevisionChain,
         now_ms: f64,
     ) -> CanvasDrawPlan {
         let progress = pose.progress.clamp(0.0, 1.0);
-        let fade_out = 1.0 - progress; // presented 淡出系数
-        let fade_in = progress; // target 淡入系数
+        let fade_out = 1.0 - progress; // 删除字淡出系数
+        let fade_in = progress; // 新增字淡入系数
 
         let mut commands = Vec::new();
 
-        // 1. 从 presented 生成文字命令（淡出）。
-        if fade_out > 0.0 {
-            for contrib in &presented.pixel_contributions {
-                if let Some(cmd) = Self::command_from_contribution(contrib, fade_out, presented) {
-                    commands.push(cmd);
+        // 记算每个 target glyph run 是否是存活字（在 presented revision 中存在）。
+        // 存活字的 target 索引集合 —— 这些 run 由 presented 侧的 FLIP 处理。
+        let mut surviving_target_indices: Vec<bool> = vec![false; target.glyph_runs.len()];
+
+        // 1. 从 presented 生成文字命令。
+        for contrib in &presented.pixel_contributions {
+            if !contrib.has_visible_area() {
+                continue;
+            }
+            // 贡献的实际可见透明度（contrib.opacity * presented.opacity）。
+            // 如果为 0，该贡献不可见，不标记存活 —— 让 target 侧作为新增字处理。
+            let contrib_visible_opacity = contrib.opacity * presented.opacity;
+            // 用 RevisionChain 判断该贡献是存活还是删除。
+            let survived_offset = revision_chain.map_presented_to_latest(contrib.byte_range.0);
+            if let Some(latest_offset) = survived_offset {
+                // 存活字：尝试匹配 target glyph run 做 FLIP 位移。
+                let matched = Self::find_matching_target_run(
+                    target,
+                    latest_offset,
+                    contrib.byte_range,
+                    revision_chain,
+                );
+                if let Some((run_idx, run)) = matched {
+                    // 只有当贡献实际可见时才标记存活，否则让 target 侧作为新增字。
+                    if contrib_visible_opacity > 0.0 {
+                        surviving_target_indices[run_idx] = true;
+                    }
+                    // FLIP：在 old_rect 和 new_rect 之间插值，透明度保持 1.0。
+                    if let Some(cmd) = Self::command_for_surviving(
+                        contrib,
+                        run,
+                        progress,
+                        presented,
+                        target,
+                    ) {
+                        commands.push(cmd);
+                    }
+                } else {
+                    // 未找到匹配 target run：按存活字原地保持（无位移）。
+                    if let Some(cmd) = Self::command_from_contribution(
+                        contrib,
+                        1.0,
+                        presented,
+                        super::ownership::OwnershipRule::StaticText,
+                    ) {
+                        commands.push(cmd);
+                    }
+                }
+            } else {
+                // 删除字：从已显示裁剪收回，透明度由 (1 - progress) 控制。
+                if fade_out > 0.0 {
+                    if let Some(cmd) = Self::command_from_contribution(
+                        contrib,
+                        fade_out,
+                        presented,
+                        super::ownership::OwnershipRule::StaticText,
+                    ) {
+                        commands.push(cmd);
+                    }
                 }
             }
         }
 
-        // 2. 从 target 生成文字命令（淡入）。
+        // 2. 从 target 生成新增字命令（非存活的 glyph run）。
         if fade_in > 0.0 {
-            for run in &target.glyph_runs {
+            for (idx, run) in target.glyph_runs.iter().enumerate() {
+                if surviving_target_indices[idx] {
+                    // 存活字已由 presented 侧 FLIP 处理，跳过。
+                    continue;
+                }
+                // 新增字：做 UV/裁剪揭示，透明度由 progress 控制。
                 if let Some(cmd) = Self::command_from_glyph_run(run, fade_in, target) {
                     commands.push(cmd);
                 }
@@ -170,7 +235,12 @@ impl SceneTransition {
 
         // 从 presented 生成文字命令（完整透明度）。
         for contrib in &presented.pixel_contributions {
-            if let Some(cmd) = Self::command_from_contribution(contrib, 1.0, presented) {
+            if let Some(cmd) = Self::command_from_contribution(
+                contrib,
+                1.0,
+                presented,
+                super::ownership::OwnershipRule::StaticText,
+            ) {
                 commands.push(cmd);
             }
         }
@@ -192,13 +262,114 @@ impl SceneTransition {
         CanvasDrawPlan::from_commands(now_ms, pose.caret_position, resolved)
     }
 
+    /// 在 target glyph_runs 中查找与存活贡献匹配的 run。
+    ///
+    /// `latest_offset` 是 presented byte_range 起始通过 `RevisionChain` 映射到
+    /// latest revision 的 offset。匹配条件：target run 的 byte_range 包含
+    /// 映射后的 range。
+    fn find_matching_target_run<'a>(
+        target: &'a TargetLayoutDescriptor,
+        latest_offset: usize,
+        presented_byte_range: (usize, usize),
+        revision_chain: &RevisionChain,
+    ) -> Option<(usize, &'a TargetGlyphRun)> {
+        // 映射整个 byte_range 到 latest 坐标。
+        let latest_start = latest_offset;
+        let latest_end = revision_chain
+            .map_presented_to_latest(presented_byte_range.1)
+            .unwrap_or(latest_start);
+
+        for (idx, run) in target.glyph_runs.iter().enumerate() {
+            // target run 的 byte_range 包含映射后的 range。
+            if run.byte_range.0 <= latest_start && run.byte_range.1 >= latest_end {
+                return Some((idx, run));
+            }
+        }
+        None
+    }
+
+    /// 为存活字生成 FLIP 位移命令。
+    ///
+    /// 在 old_rect（presented 的画布坐标）和 new_rect（target 的视口坐标）之间
+    /// 按 `progress` 插值。透明度保持 1.0（不淡出淡入）。
+    fn command_for_surviving(
+        contrib: &PixelContribution,
+        run: &TargetGlyphRun,
+        progress: f64,
+        presented: &PresentedScene,
+        target: &TargetLayoutDescriptor,
+    ) -> Option<DrawCommand> {
+        if !contrib.has_visible_area() {
+            return None;
+        }
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return None;
+        }
+
+        // old_rect：presented 的 document_rect 经过 transform 映射到画布坐标。
+        let old_transformed = Self::transform_rect(contrib.document_rect, presented.transform);
+        let old_rect = CanvasRect::new(
+            old_transformed.x + presented.position.x,
+            old_transformed.y + presented.position.y,
+            old_transformed.w,
+            old_transformed.h,
+        );
+
+        // new_rect：target 的 document_rect 减去滚动偏移 → 视口坐标。
+        let new_rect = CanvasRect::new(
+            run.document_rect.x - target.scroll.x,
+            run.document_rect.y - target.scroll.y,
+            run.document_rect.w,
+            run.document_rect.h,
+        );
+
+        // FLIP：在 old_rect 和 new_rect 之间插值。
+        let interpolated = CanvasRect::new(
+            old_rect.x + (new_rect.x - old_rect.x) * progress,
+            old_rect.y + (new_rect.y - old_rect.y) * progress,
+            old_rect.w + (new_rect.w - old_rect.w) * progress,
+            old_rect.h + (new_rect.h - old_rect.h) * progress,
+        );
+
+        let opacity = contrib.opacity * presented.opacity;
+        if opacity <= 0.0 {
+            return None;
+        }
+
+        // 存活字用 StaticText 标记（不参与淡入淡出，保持完整透明度）。
+        // clip 用 presented 的 visible_clip（已显示部分）与 target clip 的合并。
+        let clip = Self::intersect_clip(contrib.visible_clip, target.clip);
+        Some(DrawCommand::text_fragment(
+            run.texture_id,
+            run.source_uv,
+            interpolated,
+            clip,
+            opacity,
+            super::ownership::OwnershipRule::StaticText,
+        ))
+    }
+
+    /// 计算两个裁剪矩形的交集（取交集，保证不扩大可见区域）。
+    fn intersect_clip(a: CanvasRect, b: CanvasRect) -> CanvasRect {
+        let left = a.x.max(b.x);
+        let top = a.y.max(b.y);
+        let right = (a.x + a.w).min(b.x + b.w);
+        let bottom = (a.y + a.h).min(b.y + b.h);
+        if right <= left || bottom <= top {
+            CanvasRect::zero()
+        } else {
+            CanvasRect::new(left, top, right - left, bottom - top)
+        }
+    }
+
     /// 从 `PixelContribution` 生成一条文字绘制命令。
     ///
-    /// 透明度乘以 `fade`（淡出系数）和 presented 整体透明度。
+    /// 透明度乘以 `fade` 和 presented 整体透明度。
     fn command_from_contribution(
         contrib: &PixelContribution,
         fade: f64,
         presented: &PresentedScene,
+        ownership: super::ownership::OwnershipRule,
     ) -> Option<DrawCommand> {
         if !contrib.has_visible_area() {
             return None;
@@ -221,7 +392,7 @@ impl SceneTransition {
             target_rect,
             contrib.visible_clip,
             opacity,
-            super::ownership::OwnershipRule::StaticText,
+            ownership,
         ))
     }
 
@@ -319,6 +490,10 @@ mod tests {
     use super::super::presented_scene::{PresentedCaret, PresentedScroll};
     use writer_core::editor::EditorRevision;
 
+    fn identity_chain() -> RevisionChain {
+        RevisionChain::new(EditorRevision::initial())
+    }
+
     fn sample_presented(opacity: f64) -> PresentedScene {
         PresentedScene {
             source_revision: EditorRevision::initial(),
@@ -335,6 +510,7 @@ mod tests {
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
+                byte_range: (0, 5),
             }],
             caret: None,
             scroll: PresentedScroll::default(),
@@ -365,64 +541,190 @@ mod tests {
     }
 
     #[test]
-    fn build_draw_plan_progress_zero_shows_presented() {
+    fn build_draw_plan_surviving_text_uses_flip() {
+        // identity chain → presented byte_range (0,5) 存活 → FLIP 位移。
         let presented = sample_presented(1.0);
         let target = sample_target();
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(0.0), 16.0);
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.0),
+            &chain,
+            16.0,
+        );
 
-        // progress=0 → 完全显示 presented，target 透明度为 0。
+        // progress=0 → 存活字显示 old_rect（presented 位置），标记为 StaticText。
         assert!(!plan.empty);
-        // presented 的文字命令应该存在（StaticText）。
         let static_cmds: Vec<_> = plan
             .commands
             .iter()
             .filter(|c| c.ownership == OwnershipRule::StaticText)
             .collect();
-        assert!(!static_cmds.is_empty(), "presented text must be visible at progress=0");
-        // target 的文字命令不应该存在（AnimatedText 透明度为 0 被过滤）。
+        assert!(
+            !static_cmds.is_empty(),
+            "surviving text must be visible as StaticText at progress=0"
+        );
+        // 存活字不产生 AnimatedText（不淡入淡出）。
         let animated_cmds: Vec<_> = plan
             .commands
             .iter()
             .filter(|c| c.ownership == OwnershipRule::AnimatedText)
             .collect();
-        assert!(animated_cmds.is_empty(), "target text must be invisible at progress=0");
+        assert!(
+            animated_cmds.is_empty(),
+            "surviving text must NOT produce AnimatedText (FLIP, not fade)"
+        );
     }
 
     #[test]
-    fn build_draw_plan_progress_one_shows_target() {
+    fn build_draw_plan_surviving_text_at_progress_one() {
+        // identity chain → 存活字，progress=1 → 显示 new_rect（target 位置）。
         let presented = sample_presented(1.0);
         let target = sample_target();
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(1.0), 16.0);
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(1.0),
+            &chain,
+            16.0,
+        );
 
-        // progress=1 → 完全显示 target，presented 透明度为 0。
         assert!(!plan.empty);
-        let animated_cmds: Vec<_> = plan
-            .commands
-            .iter()
-            .filter(|c| c.ownership == OwnershipRule::AnimatedText)
-            .collect();
-        assert!(!animated_cmds.is_empty(), "target text must be visible at progress=1");
+        // 存活字始终是 StaticText（FLIP），不变成 AnimatedText。
         let static_cmds: Vec<_> = plan
             .commands
             .iter()
             .filter(|c| c.ownership == OwnershipRule::StaticText)
             .collect();
-        assert!(static_cmds.is_empty(), "presented text must be invisible at progress=1");
+        assert!(
+            !static_cmds.is_empty(),
+            "surviving text must be visible as StaticText at progress=1"
+        );
     }
 
     #[test]
-    fn build_draw_plan_progress_half_shows_both() {
+    fn build_draw_plan_surviving_text_flip_interpolates_position() {
+        // 存活字在 progress=0.5 时位置应在 old_rect 和 new_rect 中间。
         let presented = sample_presented(1.0);
-        let target = sample_target();
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(0.5), 16.0);
+        // target 在不同位置 (200, 100)。
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![TargetGlyphRun {
+                texture_id: 2,
+                source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                document_rect: CanvasRect::new(200.0, 100.0, 100.0, 20.0),
+                byte_range: (0, 5),
+            }],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
 
-        // 中间状态：两者都有（各自 0.5 透明度）。
-        assert!(!plan.empty);
-        // 由于 presented 和 target 在同一位置重叠，Ownership::resolve 会让
-        // StaticText 优先，AnimatedText 被裁剪。但两者都应该在 resolve 前生成。
-        // resolve 后 StaticText 保留，AnimatedText 可能被裁剪。
-        let has_content = !plan.commands.is_empty();
-        assert!(has_content, "mid-progress must have visible content");
+        let static_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::StaticText)
+            .expect("surviving text must be present");
+        // old_rect.x=0, new_rect.x=200 → progress=0.5 → x=100。
+        assert!(
+            (static_cmd.target_rect.x - 100.0).abs() < 1e-9,
+            "FLIP must interpolate position: expected x=100, got {}",
+            static_cmd.target_rect.x
+        );
+        // old_rect.y=0, new_rect.y=100 → progress=0.5 → y=50。
+        assert!(
+            (static_cmd.target_rect.y - 50.0).abs() < 1e-9,
+            "FLIP must interpolate position: expected y=50, got {}",
+            static_cmd.target_rect.y
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_deleted_text_fades_out() {
+        // 删除字：RevisionChain 将 byte_range 映射到 None。
+        let presented = sample_presented(1.0);
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        // 构造一个删除映射：空 entries → 所有 offset 映射到 None。
+        let mut chain = identity_chain();
+        let empty_map = writer_core::editor::OffsetMap {
+            entries: Vec::new(),
+        };
+        chain.compose(&empty_map, EditorRevision::new(1));
+
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+
+        // 删除字在 progress=0.5 时透明度 = (1 - 0.5) = 0.5。
+        let static_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::StaticText)
+            .expect("deleted text must be present as StaticText fading out");
+        assert!(
+            (static_cmd.opacity - 0.5).abs() < 1e-9,
+            "deleted text opacity must be (1 - progress) = 0.5, got {}",
+            static_cmd.opacity
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_new_text_fades_in() {
+        // 新增字：target 有 glyph run，presented 无对应贡献。
+        let presented = PresentedScene {
+            source_revision: EditorRevision::initial(),
+            document_session: 1,
+            frame_id: 1,
+            geometry_id: 1,
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions: vec![],
+            caret: None,
+            scroll: PresentedScroll::default(),
+        };
+        let target = sample_target();
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+
+        // 新增字在 progress=0.5 时透明度 = 0.5。
+        let animated_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::AnimatedText)
+            .expect("new text must be present as AnimatedText fading in");
+        assert!(
+            (animated_cmd.opacity - 0.5).abs() < 1e-9,
+            "new text opacity must be progress = 0.5, got {}",
+            animated_cmd.opacity
+        );
     }
 
     #[test]
@@ -447,7 +749,14 @@ mod tests {
             scroll: TargetScroll::default(),
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
         };
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(0.5), 16.0);
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
         assert!(plan.empty);
     }
 
@@ -461,7 +770,14 @@ mod tests {
             height: 20.0,
         });
         let target = sample_target();
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(0.0), 16.0);
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.0),
+            &chain,
+            16.0,
+        );
 
         let has_caret = plan
             .commands
@@ -492,7 +808,14 @@ mod tests {
             clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
         };
         let presented = sample_presented(0.0); // 透明，不产生命令
-        let plan = SceneTransition::build_draw_plan(&presented, &target, &pose(1.0), 16.0);
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(1.0),
+            &chain,
+            16.0,
+        );
 
         let cmd = plan
             .commands

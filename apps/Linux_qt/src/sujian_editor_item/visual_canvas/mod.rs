@@ -323,6 +323,7 @@ mod tests {
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
+                byte_range: (0, 100),
             }],
             caret: None,
             scroll: PresentedScroll::default(),

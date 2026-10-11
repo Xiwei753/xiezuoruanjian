@@ -79,21 +79,17 @@ fn issue819_block4_left_button_gesture_single_owner() {
          release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次"
     );
 
-    // 3. 确认 qquickitem_impl.rs mouse_event 的 MouseButtonPress 判断左键按钮。
-    let qquick_src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    // 3. #901 重写后 QML 用 onPressAndHold 直接处理左键长按，
+    // 不再需要 is_left_button_event 在 qquickitem_impl.rs 中判断。
     assert!(
-        qquick_src.contains("is_left_button_event"),
-        "问题 4 修复：qquickitem_impl mouse_event 必须用 is_left_button_event 判断左键"
+        qml_src.contains("onPressAndHold"),
+        "问题 4 修复：QML 必须有 onPressAndHold 处理左键长按"
     );
 
-    // 4. 确认 QML 有 Timer 绑定 long_press_timer_active。
-    assert!(
-        qml_src.contains("long_press_timer_active"),
-        "问题 4 修复：QML Timer 必须绑定 long_press_timer_active property"
-    );
+    // 4. 确认 QML 调 activate_pointer_long_press。
     assert!(
         qml_src.contains("activate_pointer_long_press"),
-        "问题 4 修复：QML Timer 到点必须调 activate_pointer_long_press"
+        "问题 4 修复：QML onPressAndHold 必须调 activate_pointer_long_press"
     );
 }
 

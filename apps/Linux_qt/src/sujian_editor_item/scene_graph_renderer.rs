@@ -1,8 +1,86 @@
 use super::qt_text_node;
-use super::render_plan::RenderPlan;
+use super::render_plan::{RenderPlan, TextAnimationGlyphInfo};
 use super::texture_cache::TextureCache;
+use super::visual_canvas::{CanvasDrawPlan, DrawCommandKind};
 use crate::editor::layout::LayoutSnapshot;
 use crate::editor::scene_graph;
+
+/// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
+/// `TextAnimationGlyphInfo` 列表，供动画层消费。
+///
+/// 只转换 `opacity < 1.0` 的命令（正在淡入/淡出的动画 glyph），
+/// `opacity == 1.0` 的命令由静态层处理。
+pub(crate) fn canvas_draw_plan_to_glyph_infos(
+    canvas_plan: &CanvasDrawPlan,
+    _texture_cache: &TextureCache,
+) -> Vec<TextAnimationGlyphInfo> {
+    use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
+    use super::edit_motion::DeleteEdge;
+
+    canvas_plan
+        .commands
+        .iter()
+        .filter(|cmd| {
+            cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0 && cmd.opacity < 1.0
+        })
+        .map(|cmd| {
+            // 从 texture_id 反推 LineSnapshotId。
+            // texture_id 是 LineSnapshotId::to_cache_key() 的结果，
+            // 这里用占位 snapshot_id——动画层通过 texture_cache 查找纹理。
+            let snapshot_id = LineSnapshotId::new(0, 0, cmd.texture_id as u32);
+            TextAnimationGlyphInfo {
+                x: cmd.target_rect.x,
+                y: cmd.target_rect.y,
+                w: cmd.target_rect.w,
+                h: cmd.target_rect.h,
+                opacity: cmd.opacity,
+                snapshot_id,
+                source_rect: SourceRect {
+                    x: cmd.source_uv.x,
+                    y: cmd.source_uv.y,
+                    w: cmd.source_uv.w,
+                    h: cmd.source_uv.h,
+                },
+                logical_range: (0, 0),
+                canonical_range: None,
+                delete_edge: None,
+                shaping_identity: ShapingIdentity {
+                    text_content_hash: 0,
+                    raw_font_fingerprint: String::new(),
+                    glyph_indexes_hash: 0,
+                    cluster_glyph_count: 0,
+                    direction_rtl: false,
+                    format_fingerprint: 0,
+                },
+            }
+        })
+        .collect()
+}
+
+/// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的命令推导静态层裁剪矩形。
+///
+/// 动画 glyph（`opacity < 1.0` 的 `TextFragment` 命令）的 `target_rect`
+/// 需要从静态层裁剪掉，避免静态正文盖住动画。
+pub(crate) fn canvas_draw_plan_to_clip_rects(
+    canvas_plan: &CanvasDrawPlan,
+) -> Vec<qt_text_node::AnimationClipRect> {
+    use super::layout_snapshot::LineSnapshotId;
+
+    canvas_plan
+        .commands
+        .iter()
+        .filter(|cmd| {
+            cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0 && cmd.opacity < 1.0
+        })
+        .map(|cmd| qt_text_node::AnimationClipRect {
+            x: cmd.target_rect.x,
+            y: cmd.target_rect.y,
+            w: cmd.target_rect.w,
+            h: cmd.target_rect.h,
+            snapshot_id: LineSnapshotId::new(0, 0, cmd.texture_id as u32),
+        })
+        .collect()
+}
 
 /// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
 ///

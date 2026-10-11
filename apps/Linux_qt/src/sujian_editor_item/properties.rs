@@ -330,6 +330,9 @@ impl SujianEditorItem {
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
+        // Issue #901 阻塞 5：把光标动画开关同步到 visual_canvas 的 CanvasSettings，
+        // 不留第二套硬编码状态。
+        self.sync_animation_settings_to_visual_canvas();
         self.visual_settings_changed();
     }
 
@@ -368,6 +371,8 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
+        // Issue #901 阻塞 5：把文字动画开关同步到 visual_canvas 的 CanvasSettings。
+        self.sync_animation_settings_to_visual_canvas();
         editor_animation_debug_log(&format!("typing_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
@@ -391,6 +396,28 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
+    /// Issue #901 阻塞 5：把当前动画开关/时长同步到 `visual_canvas` 的 `CanvasSettings`。
+    ///
+    /// 确保设置变更通过 `pipeline.rs` 正确传递到 `visual_canvas.apply_settings`，
+    /// 不留第二套硬编码速度。`typing_animation_duration_ms` 控制新 `CanvasTransition`
+    /// 的唯一正文视觉时长；鼠标点击保留 `cursor_animation_duration_ms`。
+    /// 开关控制动画启用，不能默默改成另一套硬编码速度。
+    pub(crate) fn sync_animation_settings_to_visual_canvas(&mut self) {
+        let text_enabled = super::animation::text_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        let cursor_enabled = super::animation::cursor_animation_enabled(
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        let mut settings = self.pipeline.visual_canvas().settings().clone();
+        settings.text_animation_enabled = text_enabled;
+        settings.cursor_animation_enabled = cursor_enabled;
+        settings.response_duration_ms = f64::from(self.current_typing_animation_duration_ms);
+        self.pipeline.visual_canvas_mut().apply_settings(settings);
+    }
+
     // Issue #756: 协同动画显式模式开关 getter/setter。
     pub(crate) fn coordinated_animation_enabled(&self) -> bool {
         self.current_coordinated_animation_enabled
@@ -409,6 +436,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.request_static_repaint();
+        // Issue #901 阻塞 5：协同模式切换也同步到 visual_canvas。
+        self.sync_animation_settings_to_visual_canvas();
         editor_animation_debug_log(&format!("coordinated_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }

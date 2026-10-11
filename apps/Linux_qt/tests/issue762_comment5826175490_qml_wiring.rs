@@ -66,7 +66,7 @@ fn strip_line_comments(source: &str) -> String {
 #[test]
 fn writing_workspace_refreshes_conflicts_on_open() {
     let src = read_src("qml/WritingWorkspace.qml");
-    let on_completed = window_from(&src, "Component.onCompleted: {", 900);
+    let on_completed = window_from(&src, "Component.onCompleted: {", 1200);
     assert!(
         on_completed.contains("refreshConflictList()"),
         "Component 初始化完成后必须刷新冲突列表，实际窗口:\n{on_completed}"
@@ -138,8 +138,9 @@ fn writing_workspace_exposes_open_conflict_path() {
         func.contains("refreshConflictList()"),
         "openConflictPath 必须刷新冲突列表，实际窗口:\n{func}"
     );
+    // #826/#901: 旧 conflictTabIdx 已改为 requestToolPaneOpen("conflict", ...) 打开冲突 tab。
     assert!(
-        func.contains("conflictTabIdx"),
+        func.contains("requestToolPaneOpen"),
         "openConflictPath 必须打开冲突 tab，实际窗口:\n{func}"
     );
 }

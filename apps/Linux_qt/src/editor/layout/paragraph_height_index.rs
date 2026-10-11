@@ -264,6 +264,54 @@ impl ParagraphHeightIndex {
         }
     }
 
+    /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
+    ///
+    /// 用于增量排版路径：当段落数量没变时，不需要 `rebuild`（O(n)），
+    /// 只需对受影响段落调用 `update_height`（O(k log n)）。
+    /// 当段落数量变化（换行拆段/删回车合段）时，才需要重建。
+    ///
+    /// # 参数
+    ///
+    /// - `expected_len`：期望的段落数量。
+    /// - `default_height`：新增段落的默认高度。
+    ///
+    /// # 返回
+    ///
+    /// 返回 `true` 表示发生了重建（段落数变化），`false` 表示长度已匹配无需重建。
+    pub fn ensure_len(&mut self, expected_len: usize, default_height: f64) -> bool {
+        if self.len == expected_len {
+            return false;
+        }
+        // 段落数变化，重建
+        self.heights.resize(expected_len, default_height);
+        self.rebuild_bit();
+        true
+    }
+
+    /// Issue #901: 增量更新受影响段落的高度。
+    ///
+    /// 对 `updates` 中列出的段落逐个调用 `update_height`（O(k log n)），
+    /// 不扫描全章。只在段落数量不匹配时才调用 `ensure_len` 重建。
+    ///
+    /// # 参数
+    ///
+    /// - `updates`：`(段落索引, 新高度)` 列表。
+    /// - `expected_len`：期望的段落数量。不匹配时先重建。
+    /// - `default_height`：新增段落的默认高度。
+    pub fn update_heights_incremental(
+        &mut self,
+        updates: &[(usize, f64)],
+        expected_len: usize,
+        default_height: f64,
+    ) {
+        // 先确保长度匹配
+        self.ensure_len(expected_len, default_height);
+        // 逐个更新受影响段落
+        for &(index, new_height) in updates {
+            self.update_height(index, new_height);
+        }
+    }
+
     /// 获取所有段落高度（按文档顺序）。
     pub fn heights(&self) -> &[f64] {
         &self.heights
@@ -498,5 +546,62 @@ mod tests {
         assert_eq!(lowbit(8), 8);
         assert_eq!(lowbit(12), 4);
         assert_eq!(lowbit(16), 16);
+    }
+
+    // ── Issue #901: 增量更新测试 ──
+
+    #[test]
+    fn ensure_len_no_change() {
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 长度已匹配，不需要重建
+        assert!(!idx.ensure_len(3, 0.0));
+        assert_eq!(idx.total_height(), 60.0);
+    }
+
+    #[test]
+    fn ensure_len_grow() {
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0]);
+        // 长度从 2 增到 4，需要重建
+        assert!(idx.ensure_len(4, 15.0));
+        assert_eq!(idx.len(), 4);
+        assert_eq!(idx.height_at(0), 10.0);
+        assert_eq!(idx.height_at(1), 20.0);
+        assert_eq!(idx.height_at(2), 15.0);
+        assert_eq!(idx.height_at(3), 15.0);
+        assert_eq!(idx.total_height(), 60.0);
+    }
+
+    #[test]
+    fn ensure_len_shrink() {
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 长度从 3 减到 2，需要重建
+        assert!(idx.ensure_len(2, 0.0));
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx.height_at(0), 10.0);
+        assert_eq!(idx.height_at(1), 20.0);
+        assert_eq!(idx.total_height(), 30.0);
+    }
+
+    #[test]
+    fn update_heights_incremental_no_len_change() {
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0, 30.0]);
+        // 段落数不变，只更新段落 1 的高度
+        idx.update_heights_incremental(&[(1, 25.0)], 3, 0.0);
+        assert_eq!(idx.height_at(0), 10.0);
+        assert_eq!(idx.height_at(1), 25.0);
+        assert_eq!(idx.height_at(2), 30.0);
+        assert_eq!(idx.total_height(), 65.0);
+    }
+
+    #[test]
+    fn update_heights_incremental_with_len_change() {
+        let mut idx = ParagraphHeightIndex::from_heights(vec![10.0, 20.0]);
+        // 段落数从 2 增到 3，同时更新段落 0 的高度
+        idx.update_heights_incremental(&[(0, 15.0)], 3, 12.0);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.height_at(0), 15.0);
+        assert_eq!(idx.height_at(1), 20.0);
+        assert_eq!(idx.height_at(2), 12.0);
+        assert_eq!(idx.total_height(), 47.0);
     }
 }

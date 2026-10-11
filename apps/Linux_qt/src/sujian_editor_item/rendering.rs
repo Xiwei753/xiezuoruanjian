@@ -202,13 +202,19 @@ impl SujianEditorItem {
             super::cursor_animation::CursorTransition::Snap
         };
 
+        // Issue #901 阻塞 5：driver_session 和 driver_transition_id 从 visual_canvas
+        // 获取真实的 session 和 transition id，不再固定为 0。
+        // visual_canvas 的 revision_chain 提供 latest_revision 作为 session 标识，
+        // text_revision 作为 transition id。
+        let driver_session = self.pipeline.text_revision();
+        let driver_transition_id = self.pipeline.visual_revision();
         let cursor_plan = super::cursor_animation::CursorAnimationPlan {
             should_be_visible,
             transition,
             movement_source,
             driver_revision,
-            driver_session: 0,
-            driver_transition_id: 0,
+            driver_session,
+            driver_transition_id,
             cursor_x,
             cursor_y,
             cursor_h,

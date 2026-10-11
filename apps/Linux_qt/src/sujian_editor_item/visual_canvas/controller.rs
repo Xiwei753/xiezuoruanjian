@@ -114,12 +114,26 @@ impl CanvasController {
     /// 更新 `PresentedScene` 和 `RevisionChain`：如果该帧的 `source_revision`
     /// 等于当前 `latest_revision`，画面已追上 Core，累计映射归零。
     /// 同时更新 `FrameClock` 的已提交姿态。
+    ///
+    /// Issue #901 阻塞 4：不再无条件用 `progress=1.0`。从已提交帧的真实 progress
+    /// 取得——如果该帧的 `source_revision` 等于 `latest_revision`，则 progress=1.0
+    /// （画面已追上 Core）；否则用 `frame_clock.frame_now(now_ms)` 采样当前实际
+    /// progress。
     pub(crate) fn on_frame_committed(&mut self, scene: PresentedScene, now_ms: f64) {
         let frame_revision = scene.source_revision;
         let latest = self.revision_chain.latest_revision();
 
+        // Issue #901 阻塞 4：从已提交帧的真实 progress 取得。
+        // 如果该帧的 source_revision 等于 latest_revision，画面已追上 Core → progress=1.0。
+        // 否则用 frame_clock.frame_now 采样当前实际 progress。
+        let progress = if frame_revision == latest {
+            1.0
+        } else {
+            self.frame_clock.frame_now(now_ms).progress
+        };
+
         // 从已提交帧构造 VisualPose 并更新 FrameClock。
-        let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, 1.0);
+        let pose = pose_from_presented(scene.caret.as_ref(), &scene.scroll, progress);
         self.frame_clock.commit_pose(pose, now_ms);
 
         // 如果画面追上了 Core，累计映射归零。
@@ -146,6 +160,9 @@ impl CanvasController {
     /// `CanvasDrawPlan`，通过 `SceneTransition::build_draw_plan` 插值，
     /// 通过 `Ownership::resolve` 解决重叠。
     ///
+    /// Issue #901 阻塞 2：`revision_chain` 传递给 `SceneTransition::build_draw_plan`，
+    /// 用于判断每个已显示字形贡献是存活、删除还是新插入。
+    ///
     /// 如果尚无 `PresentedScene` 或 `TargetLayoutDescriptor`，返回空计划。
     pub(crate) fn frame(&self, now_ms: f64) -> CanvasDrawPlan {
         let pose = self.frame_clock.frame_now(now_ms);
@@ -158,7 +175,13 @@ impl CanvasController {
             return SceneTransition::build_draw_plan_presented_only(presented, &pose, now_ms);
         };
 
-        SceneTransition::build_draw_plan(presented, target, &pose, now_ms)
+        SceneTransition::build_draw_plan(
+            presented,
+            target,
+            &pose,
+            &self.revision_chain,
+            now_ms,
+        )
     }
 
     /// 更新设置。
@@ -257,15 +280,26 @@ impl CanvasController {
 
     /// 从 `PresentedScene` 推导已提交帧的可见文字 byte range。
     ///
-    /// `PresentedScene` 不直接携带 byte range，这里用 pixel_contributions 的
-    /// 数量作为近似（实际 byte range 由调用方通过 RevisionChain 映射）。
+    /// Issue #901 阻塞 4：用 `PixelContribution` 的 `byte_range` 字段计算真实的
+    /// UTF-8 byte range，不再用 `pixel_contributions.len()` 代替字节范围。
+    /// 返回所有贡献的 byte_range 的并集 `(min_start, max_end)`。
     fn presented_text_range(&self, scene: &PresentedScene) -> (usize, usize) {
         if scene.pixel_contributions.is_empty() {
-            (0, 0)
-        } else {
-            // 近似：可见范围覆盖所有贡献。
-            (0, scene.pixel_contributions.len())
+            return (0, 0);
         }
+        let start = scene
+            .pixel_contributions
+            .iter()
+            .map(|c| c.byte_range.0)
+            .min()
+            .unwrap_or(0);
+        let end = scene
+            .pixel_contributions
+            .iter()
+            .map(|c| c.byte_range.1)
+            .max()
+            .unwrap_or(0);
+        (start, end)
     }
 }
 
@@ -360,6 +394,7 @@ mod tests {
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
+                byte_range: (0, 5),
             }],
             caret: None,
             scroll: PresentedScroll::default(),

@@ -96,6 +96,11 @@ impl ParagraphLayoutCacheKey {
     pub fn matches(&self, other: &ParagraphLayoutCacheKey) -> bool {
         self == other
     }
+
+    /// Issue #901: 返回文本内容的哈希值，用于快速判断段落文本是否变化。
+    pub fn text_hash(&self) -> u64 {
+        self.text_hash
+    }
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -552,6 +557,130 @@ impl ParagraphLayoutStore {
         }
     }
 
+    /// Issue #901: 根据新旧文本差异确定受影响段落索引列表。
+    ///
+    /// 比较新旧文本的段落分割（按 `'\n'` 分段），找出内容不同的段落索引。
+    /// 用于增量排版：只有这些段落需要重新走 QTextLayout，其他段落可复用。
+    ///
+    /// # 算法
+    ///
+    /// 1. 将 `old_text` 和 `new_text` 按 `'\n'` 分段。
+    /// 2. 逐段比较文本内容，内容不同的段落标记为受影响。
+    /// 3. 段落数量变化（换行拆段/删回车合段）时，从第一个变化点起所有后续段落
+    ///    都标记为受影响（因为 byte offset 全部漂移）。
+    ///
+    /// # 返回
+    ///
+    /// 受影响段落索引列表（按升序排列）。空列表表示无变化（old_text == new_text）。
+    pub fn affected_paragraphs(old_text: &str, new_text: &str) -> Vec<usize> {
+        if old_text == new_text {
+            return Vec::new();
+        }
+
+        let old_paras: Vec<&str> = old_text.split_inclusive('\n').collect();
+        let new_paras: Vec<&str> = new_text.split_inclusive('\n').collect();
+
+        let mut affected: Vec<usize> = Vec::new();
+        let min_len = old_paras.len().min(new_paras.len());
+
+        // 逐段比较段落文本内容（去掉尾部换行符），找第一个不同的段落
+        let mut first_diff: Option<usize> = None;
+        for i in 0..min_len {
+            // 比较段落文本内容，忽略尾部换行符差异
+            //（末尾换行符变化只是因为后面增删了段落，不影响本段 shaping）
+            let old_text = old_paras[i].trim_end_matches('\n');
+            let new_text = new_paras[i].trim_end_matches('\n');
+            if old_text != new_text {
+                first_diff = Some(i);
+                break;
+            }
+        }
+
+        match first_diff {
+            None => {
+                // 前 min_len 段内容全相同，差异只在段落数量（末尾增删段）
+                // 新增/删除的段落都需要重排
+                if new_paras.len() > old_paras.len() {
+                    // 新增了段落
+                    for i in old_paras.len()..new_paras.len() {
+                        affected.push(i);
+                    }
+                }
+                // 如果段落数量减少，旧多出的段落已不存在，不需要标记
+            }
+            Some(diff_idx) => {
+                // 从第一个差异段起，该段及所有后续段都可能受影响
+                //（byte offset 漂移，但段落内容可能没变 —— 仍需重排以更新坐标）
+                for i in diff_idx..new_paras.len() {
+                    affected.push(i);
+                }
+            }
+        }
+
+        affected
+    }
+
+    /// Issue #901: 增量同步 — 只更新受影响段落的排版结果。
+    ///
+    /// 与 [`sync_from_visual_lines`] 的区别：只更新 `affected_indices` 中列出的段落，
+    /// 不扫描全部视觉行。用于增量排版路径，避免 O(n) 全章扫描。
+    ///
+    /// # 参数
+    ///
+    /// - `lines`：本次排版产生的全部视觉行（含复用 + 重排段落的行）。
+    /// - `layout_generation`：本次排版的 generation。
+    /// - `affected_indices`：受影响段落索引列表（由 [`affected_paragraphs`] 计算）。
+    pub fn sync_from_visual_lines_incremental(
+        &mut self,
+        lines: &[VisualLine],
+        layout_generation: u64,
+        affected_indices: &[usize],
+    ) {
+        if affected_indices.is_empty() {
+            return;
+        }
+
+        // 构建 para_start → 段落索引 的映射，用于从 VisualLine.para_start 找到段落
+        // 只对受影响段落构建映射，避免全章扫描
+        use std::collections::HashMap;
+        let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
+        for &idx in affected_indices {
+            if let Some(entry) = self.entries.get(idx) {
+                para_start_to_idx.insert(entry.document_byte_start, idx);
+            }
+        }
+
+        // 对每个受影响段落，从 lines 中找到对应的视觉行并统计
+        for &idx in affected_indices {
+            let Some(entry) = self.entries.get(idx) else {
+                continue;
+            };
+            let para_start = entry.document_byte_start;
+
+            let mut line_count = 0usize;
+            let mut height = 0.0f64;
+            let mut line_start: Option<usize> = None;
+
+            for (i, line) in lines.iter().enumerate() {
+                if line.para_start == para_start {
+                    if line_start.is_none() {
+                        line_start = Some(i);
+                    }
+                    line_count += 1;
+                    height += line.height;
+                }
+            }
+
+            if let Some(entry) = self.entries.get_mut(idx) {
+                entry.layout_generation = layout_generation;
+                entry.cache_slot = idx as i32;
+                entry.visual_line_count = line_count;
+                entry.height = height;
+                entry.line_start = line_start.unwrap_or(0);
+            }
+        }
+    }
+
     /// 计算受影响段落范围。
     ///
     /// 根据编辑的 byte 范围确定哪些段落需要重排。
@@ -907,6 +1036,129 @@ mod tests {
         assert_eq!(store.paragraph_id_at(1), Some(id1));
         assert_eq!(store.entry(1).unwrap().cache_key, key1);
         assert_eq!(store.entry(1).unwrap().document_byte_start, 100);
+    }
+
+    // ── Issue #901: affected_paragraphs 测试 ──
+
+    #[test]
+    fn affected_paragraphs_no_change() {
+        let affected = ParagraphLayoutStore::affected_paragraphs("hello\nworld", "hello\nworld");
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn affected_paragraphs_single_edit() {
+        // 只编辑第一段内容
+        let affected = ParagraphLayoutStore::affected_paragraphs("hello\nworld", "hi\nworld");
+        // 从第一个差异段起所有后续段都标记为受影响
+        assert_eq!(affected, vec![0, 1]);
+    }
+
+    #[test]
+    fn affected_paragraphs_edit_second_para() {
+        // 编辑第二段内容，第一段不变
+        let affected =
+            ParagraphLayoutStore::affected_paragraphs("aaa\nbbb\nccc", "aaa\nBBB\nccc");
+        // 从差异段（index 1）起所有后续段
+        assert_eq!(affected, vec![1, 2]);
+    }
+
+    #[test]
+    fn affected_paragraphs_add_paragraph() {
+        // 末尾新增段落
+        let affected = ParagraphLayoutStore::affected_paragraphs("aaa\nbbb", "aaa\nbbb\nccc");
+        // 前两段相同，新增第三段
+        assert_eq!(affected, vec![2]);
+    }
+
+    #[test]
+    fn affected_paragraphs_remove_paragraph() {
+        // 末尾删除段落
+        let affected = ParagraphLayoutStore::affected_paragraphs("aaa\nbbb\nccc", "aaa\nbbb");
+        // 段落数量减少，旧多出的段落已不存在
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn affected_paragraphs_insert_newline() {
+        // 在第一段中间插入换行（拆段）
+        let affected = ParagraphLayoutStore::affected_paragraphs("helloworld", "hello\nworld");
+        // 从第一个差异段起所有后续段
+        assert_eq!(affected, vec![0, 1]);
+    }
+
+    #[test]
+    fn affected_paragraphs_empty_texts() {
+        let affected = ParagraphLayoutStore::affected_paragraphs("", "");
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn sync_from_visual_lines_incremental_basic() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+
+        // 构造视觉行：段落 0 有 1 行高 20.0，段落 1 有 1 行高 20.0
+        let lines = vec![
+            VisualLine {
+                id: 0,
+                byte_start: 0,
+                byte_end: 3,
+                qchar_start: 0,
+                qchar_end: 3,
+                hard_break: true,
+                x: 0.0,
+                y: 0.0,
+                width: 30.0,
+                height: 20.0,
+                para_text: "aaa".to_string(),
+                para_start: 0,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 3,
+                line_wrap_width: 600.0,
+                line_indent_x: 0.0,
+                para_indent: 0.0,
+                x_end_trailing: 0.0,
+                qt_ascent: 16.0,
+                qt_descent: 4.0,
+                cache_slot: 0,
+            },
+            VisualLine {
+                id: 1,
+                byte_start: 4,
+                byte_end: 7,
+                qchar_start: 4,
+                qchar_end: 7,
+                hard_break: false,
+                x: 0.0,
+                y: 20.0,
+                width: 30.0,
+                height: 20.0,
+                para_text: "bbb".to_string(),
+                para_start: 4,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 3,
+                line_wrap_width: 600.0,
+                line_indent_x: 0.0,
+                para_indent: 0.0,
+                x_end_trailing: 0.0,
+                qt_ascent: 16.0,
+                qt_descent: 4.0,
+                cache_slot: 1,
+            },
+        ];
+
+        // 只增量更新段落 1
+        store.sync_from_visual_lines_incremental(&lines, 42, &[1]);
+        let entry1 = store.entry(1).unwrap();
+        assert_eq!(entry1.layout_generation, 42);
+        assert_eq!(entry1.height, 20.0);
+        assert_eq!(entry1.visual_line_count, 1);
+        // 段落 0 不受影响
+        let entry0 = store.entry(0).unwrap();
+        assert_eq!(entry0.layout_generation, 0);
     }
 }
 

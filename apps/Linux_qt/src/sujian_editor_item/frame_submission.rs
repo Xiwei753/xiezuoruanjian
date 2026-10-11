@@ -68,6 +68,9 @@ pub(crate) struct SubmittedFrameTicket {
 /// `visual_canvas::PresentedScene` 替代。本结构只保留帧提交 mailbox 需要的
 /// 最小信息：ticket + 该帧引用的行快照 id 列表（供 `active_snapshot_ids`
 /// 决定哪些 QImage 不能释放）。
+///
+/// Issue #901 阻塞 1：添加 `presented_scene` 字段携带 `PresentedScene` 信息，
+/// 供 GUI 线程在 `drain_submitted_frames` 中调用 `visual_canvas.commit_presented_scene`。
 #[derive(Clone, Debug)]
 pub(crate) struct SubmittedVisualFrame {
     pub ticket: SubmittedFrameTicket,
@@ -80,6 +83,10 @@ pub(crate) struct SubmittedVisualFrame {
     pub shared_progress: f64,
     pub timeline_progress: f64,
     pub ownership_conflict_count: usize,
+    /// Issue #901 阻塞 1：该帧对应的 `PresentedScene`，供 GUI 线程提交给 visual_canvas。
+    pub presented_scene: Option<super::visual_canvas::PresentedScene>,
+    /// Issue #901 阻塞 1：该帧!对应的帧时间戳（毫秒），供 visual_canvas.commit_presented_scene 使用。
+    pub frame_now_ms: f64,
 }
 
 #[derive(Default)]
@@ -124,6 +131,8 @@ impl FrameSubmissionMailbox {
         shared_progress: f64,
         timeline_progress: f64,
         ownership_conflict_count: usize,
+        presented_scene: Option<super::visual_canvas::PresentedScene>,
+        frame_now_ms: f64,
     ) {
         let mut state = self.lock_state();
         let staged = SubmittedVisualFrame {
@@ -143,6 +152,8 @@ impl FrameSubmissionMailbox {
             shared_progress,
             timeline_progress,
             ownership_conflict_count,
+            presented_scene,
+            frame_now_ms,
         };
         state.pending_sync = Some(staged);
     }

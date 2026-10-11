@@ -270,7 +270,12 @@ impl QQuickItem for SujianEditorItem {
             // build_render_plan_full 内部，用同一份 AnimationFrameSample。
             // Issue #707 评论 5725190370: CursorRenderState 构造抽成
             // build_cursor_render_state_for_frame，和 runtime_tests 共用同一份逻辑。
-            let cursor_render_state = self.build_cursor_render_state_for_frame();
+            // Issue #901 阻塞 1+5：先采样 visual_canvas.frame(frame_now) 获取 CanvasDrawPlan，
+            // 再用它构造 cursor_render_state（正文协同输入时光标从 caret_sample 获取）。
+            let frame_now_ms = Self::frame_now_ms(&self.last_frame_now);
+            let canvas_plan = self.pipeline.visual_canvas().frame(frame_now_ms);
+
+            let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);
 
             // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
             // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
@@ -317,10 +322,10 @@ impl QQuickItem for SujianEditorItem {
                     _ => false,
                 };
 
-            // Issue #901: 旧 animation_coordinator.build_render_plan_full 已删除。
-            // 直接构造 RenderPlan，ownership 用简化的 RenderOwnership（无动画 glyph）。
-            // TODO(issue-901): integrate with visual_canvas.frame(now) to get CanvasDrawPlan
-            // and convert animated glyphs / clip rects from DrawCommand list.
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的 TextFragment 命令转换为
+            // TextAnimationGlyphInfo 列表，供动画层消费。
+            // canvas_plan 已在上方采样（供 cursor_render_state 使用）。
+
             let drawn_caret_rect = if cursor_render_state.visible {
                 Some((
                     cursor_render_state.x,
@@ -330,8 +335,29 @@ impl QQuickItem for SujianEditorItem {
             } else {
                 None
             };
+
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的 TextFragment 命令转换为
+            // TextAnimationGlyphInfo 列表，供动画层消费。
+            let animated_glyphs = super::scene_graph_renderer::canvas_draw_plan_to_glyph_infos(
+                &canvas_plan,
+                self.pipeline.texture_cache(),
+            );
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的命令推导静态层裁剪矩形。
+            let clip_rects = super::scene_graph_renderer::canvas_draw_plan_to_clip_rects(
+                &canvas_plan,
+            );
+
             let render_plan = super::render_plan::RenderPlan {
-                ownership: super::render_plan::RenderOwnership::default(),
+                ownership: super::render_plan::RenderOwnership {
+                    animated_glyphs,
+                    clip_rects,
+                    handoff_pending: false,
+                    ownership_revision: self.pipeline.visual_revision(),
+                    target_layout_revision: self
+                        .pipeline
+                        .visual_canvas()
+                        .target_layout_revision(),
+                },
                 selection_preedit,
                 cursor: cursor_render_state,
                 cursor_style,
@@ -390,9 +416,19 @@ impl QQuickItem for SujianEditorItem {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
                     .committed_revision(animation_resources_ready);
-                // Issue #901: 旧 animation_coordinator.commit_rendered_plan 已删除。
-                // ownership 提交改由 visual_canvas.commit_presented_scene 处理。
-                // TODO(issue-901): integrate with visual_canvas.commit_presented_scene.
+                // Issue #901 阻塞 1：重建完整 PresentedScene 后调用
+                // visual_canvas.commit_presented_scene，让 CanvasController 的
+                // presented_scene 不再始终为 None。
+                if let Some(scene) = self.build_presented_scene_from_frame(
+                    &canvas_plan,
+                    &render_plan,
+                    scroll_y,
+                    vp_h,
+                ) {
+                    self.pipeline
+                        .visual_canvas_mut()
+                        .commit_presented_scene(scene, frame_now_ms);
+                }
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -431,12 +467,15 @@ impl QQuickItem for SujianEditorItem {
 
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
-            // 正文过渡与光标 tween 各自未结束时都继续请求下一帧.
-            // Issue #901: 旧 animation_coordinator.has_active_text_animation 已删除。
-            // TODO(issue-901): integrate with visual_canvas FrameClock to query active text animation.
-            // 暂时只由 cursor_ctrl.animation 决定是否继续请求下一帧。
-            if self.cursor_ctrl.animation.is_some()
-            {
+            // Issue #901 阻塞 1：除了 cursor_ctrl.animation，还检查 visual_canvas
+            // 是否有活跃的文字动画（通过 canvas_plan 是否有非空 TextFragment 命令判断）。
+            // 有活跃的文字动画时继续请求下一帧，正文新画布也能驱动持续绘制。
+            let has_active_text_animation = !canvas_plan.empty
+                && canvas_plan.commands.iter().any(|cmd| {
+                    cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
+                        && cmd.opacity < 1.0
+                });
+            if self.cursor_ctrl.animation.is_some() || has_active_text_animation {
                 self.request_frame_update();
             }
         }
@@ -607,16 +646,35 @@ impl SujianEditorItem {
     /// 边沿检测中处理，确保光标从可见状态开始、事务结束后重新开始正常 blink。
     pub(crate) fn build_cursor_render_state_for_frame(
         &self,
+        canvas_plan: &super::visual_canvas::CanvasDrawPlan,
     ) -> super::render_plan::CursorRenderState {
         // Issue #679 评论 5657313927 / #701 评论 5699573227 第三阶段 (F5):
         // 每帧只采样一次 frame state。blink mode 由 current_cursor_blink_mode()
         // 统一决定（Issue #710 评论 5732160521 问题 2），保证 tick/render/opacity/
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
+
+        // Issue #901 阻塞 5：正文协同输入时，画布 plan 的 caret_sample 提供唯一
+        // 可见 caret 位置，而不是从独立 CursorController::Tween 获取。
+        // 当有活跃的正文文字动画（canvas_plan 有 opacity < 1.0 的 TextFragment 命令）
+        // 且 caret_sample 非零时，光标位置从 canvas_plan.caret_sample 获取。
+        let has_active_text_animation = !canvas_plan.empty
+            && canvas_plan.commands.iter().any(|cmd| {
+                cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
+                    && cmd.opacity < 1.0
+            });
+        let (caret_x, caret_y) = if has_active_text_animation
+            && (canvas_plan.caret_sample.x != 0.0 || canvas_plan.caret_sample.y != 0.0)
+        {
+            (canvas_plan.caret_sample.x, canvas_plan.caret_sample.y)
+        } else {
+            (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y)
+        };
+
         super::render_plan::CursorRenderState {
             visible: self.cursor_ctrl.visible,
-            x: self.cursor_ctrl.visual_x,
-            y: self.cursor_ctrl.visual_y,
+            x: caret_x,
+            y: caret_y,
             h: self.cursor_ctrl.visual_h,
             baseline_y: self.cursor_ctrl.visual_baseline_y,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
@@ -629,6 +687,76 @@ impl SujianEditorItem {
             path_start_x: self.cursor_ctrl.motion_start_x,
             path_start_y: self.cursor_ctrl.motion_start_y,
         }
+    }
+
+    /// Issue #901 阻塞 1：从当前帧构造 `PresentedScene`。
+    ///
+    /// 从 `CanvasDrawPlan` 的命令转换为 `PixelContribution` 列表，
+    /// 从 `CursorRenderState` 转换为 `PresentedCaret`，
+    /// 从 scroll_y 转换为 `PresentedScroll`。
+    /// `source_revision` 从 pipeline 获取当前 Core revision。
+    pub(crate) fn build_presented_scene_from_frame(
+        &self,
+        canvas_plan: &super::visual_canvas::CanvasDrawPlan,
+        render_plan: &super::render_plan::RenderPlan,
+        scroll_y: f64,
+        viewport_h: f64,
+    ) -> Option<super::visual_canvas::PresentedScene> {
+        use super::visual_canvas::{
+            CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedCaret,
+            PresentedScene, PresentedScroll,
+        };
+        use writer_core::editor::EditorRevision;
+
+        // 从 pipeline 获取当前 Core revision。
+        let source_revision = EditorRevision::new(self.pipeline.text_revision());
+
+        // 从 canvas_plan 的 TextFragment 命令转换为 PixelContribution 列表。
+        let pixel_contributions: Vec<PixelContribution> = canvas_plan
+            .commands
+            .iter()
+            .filter(|cmd| cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment)
+            .map(|cmd| PixelContribution {
+                texture_id: cmd.texture_id,
+                source_uv: cmd.source_uv,
+                document_rect: cmd.target_rect,
+                visible_clip: cmd.clip_rect,
+                opacity: cmd.opacity,
+                byte_range: (0, 0),
+            })
+            .collect();
+
+        // 从 cursor_render_state 转换为 PresentedCaret。
+        let caret = if render_plan.cursor.visible {
+            Some(PresentedCaret {
+                position: CanvasVec2::new(render_plan.cursor.x, render_plan.cursor.y),
+                visible: render_plan.cursor.visible,
+                width: render_plan.cursor_style.width,
+                height: render_plan.cursor.h,
+            })
+        } else {
+            None
+        };
+
+        // 从 scroll_y 转换为 PresentedScroll。
+        let scroll = PresentedScroll {
+            x: 0.0,
+            y: scroll_y,
+        };
+
+        Some(PresentedScene {
+            source_revision,
+            document_session: 1,
+            frame_id: 0,
+            geometry_id: 0,
+            clip: CanvasRect::new(0.0, 0.0, self.bounding_width(), viewport_h),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions,
+            caret,
+            scroll,
+        })
     }
 
     /// Issue #707 评论 5725190370: 把 `update_paint_node` 里"根据 RenderPlan 更新
@@ -706,6 +834,18 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drain_pointer_frame_submissions(&mut self) {
+        // Issue #901 阻塞 1：处理已提交的 visual frames，调用 commit_presented_scene。
+        // afterFrameEnd 回调在渲染线程触发，只把帧放入 mailbox；
+        // 这里在 GUI 线程 drain 并提交给 visual_canvas。
+        let submitted_visual = self.frame_submission_mailbox.take_submitted_frames();
+        for frame in submitted_visual {
+            if let Some(scene) = frame.presented_scene {
+                self.pipeline
+                    .visual_canvas_mut()
+                    .commit_presented_scene(scene, frame.frame_now_ms);
+            }
+        }
+
         let submitted = self
             .frame_submission_mailbox
             .take_submitted_pointer_frames();

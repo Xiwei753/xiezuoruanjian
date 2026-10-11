@@ -29,25 +29,19 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
 
     // Issue #819 评论 5967250411 问题 4：leftButtonLongPressHandler (TapHandler) 已删除。
     // 左键 pointer event 的唯一 owner 是 qquickitem_impl mouse_event。
-    // QML 只保留一个不绑 pointer event 的 Timer，由 Rust property 控制启停。
+    // #901 重写后 QML 用 onPressAndHold 直接调 activate_pointer_long_press，
+    // 不再需要 leftButtonLongPressTimer。
     assert!(
         !src.contains("id: leftButtonLongPressHandler"),
         "Issue #819 评论 5967250411 问题 4: leftButtonLongPressHandler (TapHandler) \
          必须删除，左键 pointer event 单一 owner 是 qquickitem_impl mouse_event。"
     );
 
-    // 新 leftButtonLongPressTimer 必须存在，且不绑 pointer event。
+    // 新 onPressAndHold 必须存在，直接调 activate_pointer_long_press。
     assert!(
-        src.contains("id: leftButtonLongPressTimer"),
+        src.contains("onPressAndHold"),
         "Issue #819 评论 5967250411 问题 4: WritingWorkspace.qml 必须有 \
-         leftButtonLongPressTimer（不绑 pointer event 的独立 Timer）。"
-    );
-
-    // Timer.running 绑定 Rust property long_press_timer_active。
-    assert!(
-        src.contains("long_press_timer_active"),
-        "Issue #819 评论 5967250411 问题 4: Timer.running 必须绑定 \
-         sujianEditor.long_press_timer_active，由 Rust mouse_event 控制启停。"
+         onPressAndHold 处理左键长按。"
     );
 
     // Issue #819 评论 5967250411 问题 4：新链路用 Timer 调
@@ -115,15 +109,8 @@ fn issue815_modify8_input_path_close_the_loop_with_formal_events() {
     );
 
     // 输入路径上的每个跳过点都要有正式事件。
+    // #901 重写后 pipeline.rs 不再有跳过事件（跳过逻辑已移到 transaction.rs / editing.rs）。
     let cases: &[(&str, &[&str])] = &[
-        (
-            "src/sujian_editor_item/pipeline.rs",
-            &[
-                "suppressed_by_context",
-                "stale_current_canonical",
-                "canonical_invariant_failure",
-            ],
-        ),
         (
             "src/sujian_editor_item/transaction.rs",
             &["suppressed_by_scrolling"],
