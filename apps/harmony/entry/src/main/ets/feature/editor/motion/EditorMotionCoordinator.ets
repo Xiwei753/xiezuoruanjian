@@ -1572,6 +1572,8 @@ export class EditorMotionCoordinator {
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一个聚合 MotionGlyphWindow，合并 clipRects 和 UTF-16 范围。
     const frozenWindowAggregator = new Map<string, MotionGlyphWindow>()
+    // Issue #879 评论6126357273 问题1：冲突计数器——为身份冲突的成员分配唯一 renderNodeKey。
+    let conflictCounter = 0
     // Issue #879 复核评论6120195493：用 FrozenWindowGroupPlan 替代 frozenGroupDelta，
     // 窗口级属性从原始 FrozenWindowSpan/MotionGlyphWindow 选取，不由首成员抢占。
     const frozenGroupPlans = new Map<string, FrozenWindowGroupPlan>()
@@ -1723,7 +1725,10 @@ export class EditorMotionCoordinator {
           originalUtf16End: baseMember.sourceUtf16End,
           originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
             ? baseMember.glyphUtf16Ranges : null,
-          originalGlyphIds: baseEntry.intervalGlyphIds,
+          // Issue #879 评论6126357273 问题3：originalGlyphIds 从 fullWindowGlyphIds 取值，
+          // 不再只取单个 interval 的 glyphIds。确保 MotionGlyphWindow.glyphIds 携带完整字形列表，
+          // 下一笔 frozenIndex 能为窗口内所有字形建立索引。
+          originalGlyphIds: fullWindowGlyphIds,
           // Issue #879 第32轮复核问题2：完整窗口数据
           fullWindowGlyphIds: fullWindowGlyphIds,
           fullWindowUtf16Start: fullWindowUtf16Start,
@@ -2019,7 +2024,7 @@ export class EditorMotionCoordinator {
                       originalUtf16End: member.sourceUtf16End,
                       originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
                         ? baseMember.glyphUtf16Ranges : null,
-                      originalGlyphIds: interval.glyphIds,
+                      originalGlyphIds: fullWindowGlyphIdsFallback, // Issue #879 评论6126357273 问题3
                       fullWindowGlyphIds: fullWindowGlyphIdsFallback,
                       fullWindowUtf16Start: fullWindowUtf16StartFallback,
                       fullWindowUtf16End: fullWindowUtf16EndFallback,
@@ -2319,23 +2324,22 @@ export class EditorMotionCoordinator {
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
-                  // Issue #879 复核评论6121854424 问题1：聚合身份一致性检查。
-                  // 同一 renderNodeKey = sourceKind-sourceRevision-windowInstanceId 的成员
-                  // 在 sourceRevision/runId 上必然一致（runId = sourceKind-sourceRevision）。
-                  // 此处显式校验，若上游分配异常导致不一致，则不合并也不 push——
-                  // memberWindow.renderNodeKey 仍等于 existing.renderNodeKey，
-                  // push 会与下方 frozenWindowAggregator.values() 输出的 existing 产生重复 key，
-                  // buildAllMotionWindowSources 按 renderNodeKey 去重时第二张被吞掉，
-                  // 不能作为独立物理 Text。
-                  // 真正的物理来源身份必须在 EditorMotionPlanner.ets 的准备阶段就确定：
-                  // 一个 key 对应一个不可变 sourceRevision/runId/windowInstanceId。
-                  // 同 key 但身份不一致说明源成员计划有错误，应修正上游身份建立与匹配；
-                  // 确实是不同物理 Text 的，准备阶段分配不同且固定的最终 key。
-                  // 聚合层只能合并经同一物理身份明确归组的成员，不在这里追加冲突 key。
-                  // 正常情况下此分支永不触发；它是一道结构约束护栏。
+                  // Issue #879 评论6126357273 问题1：身份冲突时不再丢掉成员。
+                  // 旧实现：同 renderNodeKey 但 runId/sourceRevision 不一致时执行空分支，
+                  //         冲突成员直接消失——"直接丢掉源成员"不是正确的来源管理。
+                  // 新实现：为冲突成员分配新的唯一 renderNodeKey（添加冲突后缀），
+                  //         作为独立物理 Text 输出到 motionGlyphWindows。
+                  //         同 key 但身份不一致说明上游分配了重复的 renderNodeKey——
+                  //         两个不同物理来源从准备阶段就应该分配两个最终 renderNodeKey。
+                  //         聚合层在检测到冲突时为第二个成员分配新 key，确保不丢字。
                   if (existing.runId !== memberWindow.runId ||
                       existing.sourceRevision !== memberWindow.sourceRevision) {
-                    // 不 push——避免重复 renderNodeKey。existing 仍由 frozenWindowAggregator 输出。
+                    // Issue #879 评论6126357273 问题1：为冲突成员分配新的 renderNodeKey。
+                    // 使用冲突计数器确保唯一性，避免与 frozenWindowAggregator 中的 existing 产生重复 key。
+                    const conflictKey = `${memberRenderNodeKey}-conflict-${conflictCounter}`
+                    conflictCounter++
+                    memberWindow.renderNodeKey = conflictKey
+                    motionGlyphWindows.push(memberWindow)
                   } else {
                     // Issue #879 复核评论6120195493：只合并裁切和显示片段。
                     // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。

@@ -5527,6 +5527,11 @@ const makeSpan = (glyphId, opts, ctx) => ({
   renderNodeKey: opts.renderNodeKey ?? `${opts.sourceKind ?? 'old'}-node-${opts.sourceRevision}`,
   opacity: opts.opacity ?? 1,
   windowInstanceId: opts.windowInstanceId ?? `win-${opts.sourceRevision}`,
+  // Issue #879 第32轮复核问题2：fullWindowGlyphIds 默认与 glyphIds 一致
+  fullWindowGlyphIds: opts.fullWindowGlyphIds ?? [glyphId],
+  fullWindowUtf16Start: opts.fullWindowUtf16Start ?? opts.utf16Range?.[0],
+  fullWindowUtf16End: opts.fullWindowUtf16End ?? opts.utf16Range?.[1],
+  fullWindowGlyphUtf16Ranges: opts.fullWindowGlyphUtf16Ranges ?? new Map([[glyphId, opts.utf16Range]]),
 })
 
 // 辅助：从 pieces 中提取第一个 interval 的 sourceMembers
@@ -7007,49 +7012,13 @@ test('场景3-frozen不补间隙：frozen 成员 clipRects 只含可见碎片，
 
 console.log('\n--- Issue #879 复核评论6121854424 问题1：不一致分支不产生重复 renderNodeKey ---')
 
-test('问题1-6121854424：不一致时不 push 同 key 窗口——motionGlyphWindows 无重复 renderNodeKey', () => {
-  // 模拟 frozenWindowAggregator 的聚合逻辑（修复后）
+test('问题1-6126357273：身份冲突时为冲突成员分配新 renderNodeKey 并独立输出——不丢字', () => {
+  // Issue #879 评论6126357273 问题1：身份冲突时不再丢掉成员。
+  // 旧实现：同 renderNodeKey 但 runId/sourceRevision 不一致时执行空分支，成员直接消失。
+  // 新实现：为冲突成员分配新的唯一 renderNodeKey（添加冲突后缀），独立输出到 motionGlyphWindows。
   const frozenWindowAggregator = new Map()
   const motionGlyphWindows = []
-  // 两个同一 renderNodeKey 但 runId 不一致的成员（上游 Planner 分配异常的防御场景）
-  const renderNodeKey = 'old-42-win-3'
-  const existingWindow = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
-  const inconsistentWindow = { renderNodeKey, runId: 'new-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
-
-  // 模拟 buildFrame 中两个成员的聚合处理
-  for (const memberWindow of [existingWindow, inconsistentWindow]) {
-    const existing = frozenWindowAggregator.get(memberWindow.renderNodeKey)
-    if (existing !== undefined) {
-      if (existing.runId !== memberWindow.runId ||
-          existing.sourceRevision !== memberWindow.sourceRevision) {
-        // 修复后：不 push——避免重复 renderNodeKey
-      } else {
-        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
-      }
-    } else {
-      frozenWindowAggregator.set(memberWindow.renderNodeKey, memberWindow)
-    }
-  }
-  // 模拟 buildFrame 末尾将 frozenWindowAggregator 的值 push 到 motionGlyphWindows
-  for (const frozenWindow of frozenWindowAggregator.values()) {
-    motionGlyphWindows.push(frozenWindow)
-  }
-
-  // 验证：motionGlyphWindows 中没有重复 renderNodeKey
-  const keys = motionGlyphWindows.map(w => w.renderNodeKey)
-  const uniqueKeys = new Set(keys)
-  assert.equal(keys.length, uniqueKeys.size,
-    `motionGlyphWindows 不应有重复 renderNodeKey，实际 ${keys.length} 个窗口、${uniqueKeys.size} 个唯一 key`)
-  assert.equal(keys.length, 1,
-    `应只有 1 个窗口（existing），实际 ${keys.length}`)
-  assert.equal(keys[0], renderNodeKey,
-    `唯一窗口的 renderNodeKey 应为 ${renderNodeKey}，实际 ${keys[0]}`)
-})
-
-test('问题1-6121854424：旧实现（push 不一致窗口）会产生重复 renderNodeKey——反证修复必要性', () => {
-  // 模拟旧实现的行为（不一致时 push memberWindow）
-  const frozenWindowAggregator = new Map()
-  const motionGlyphWindows = []
+  let conflictCounter = 0
   const renderNodeKey = 'old-42-win-3'
   const existingWindow = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
   const inconsistentWindow = { renderNodeKey, runId: 'new-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
@@ -7059,7 +7028,10 @@ test('问题1-6121854424：旧实现（push 不一致窗口）会产生重复 re
     if (existing !== undefined) {
       if (existing.runId !== memberWindow.runId ||
           existing.sourceRevision !== memberWindow.sourceRevision) {
-        // 旧实现：push——产生重复 key
+        // 新实现：为冲突成员分配新的 renderNodeKey
+        const conflictKey = `${memberWindow.renderNodeKey}-conflict-${conflictCounter}`
+        conflictCounter++
+        memberWindow.renderNodeKey = conflictKey
         motionGlyphWindows.push(memberWindow)
       } else {
         existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
@@ -7072,27 +7044,64 @@ test('问题1-6121854424：旧实现（push 不一致窗口）会产生重复 re
     motionGlyphWindows.push(frozenWindow)
   }
 
-  // 旧实现：motionGlyphWindows 有两个同 key 窗口
+  // 验证：motionGlyphWindows 中没有重复 renderNodeKey
   const keys = motionGlyphWindows.map(w => w.renderNodeKey)
   const uniqueKeys = new Set(keys)
-  assert.ok(keys.length > uniqueKeys.size,
-    `旧实现应有重复 renderNodeKey（${keys.length} 个窗口 > ${uniqueKeys.size} 个唯一 key）`)
+  assert.equal(keys.length, uniqueKeys.size,
+    `motionGlyphWindows 不应有重复 renderNodeKey，实际 ${keys.length} 个窗口、${uniqueKeys.size} 个唯一 key`)
+  // 验证：有 2 个窗口（existing + 冲突成员），不丢字
   assert.equal(keys.length, 2,
-    `旧实现应有 2 个窗口（existing + 不一致 push），实际 ${keys.length}`)
-  // buildAllMotionWindowSources 去重后只留第一张，第二张的 clip/字形被吞掉
-  const seenKeys = new Set()
-  const deduped = []
-  for (const w of motionGlyphWindows) {
-    if (!seenKeys.has(w.renderNodeKey)) {
-      seenKeys.add(w.renderNodeKey)
-      deduped.push(w)
-    }
-  }
-  assert.equal(deduped.length, 1,
-    `buildAllMotionWindowSources 去重后只留 1 张，第二张被吞掉——反证旧实现错误`)
+    `应有 2 个窗口（existing + 冲突成员），实际 ${keys.length}`)
+  // 验证：existing 的 key 保持不变
+  assert.ok(keys.includes(renderNodeKey),
+    `existing 的 renderNodeKey 应为 ${renderNodeKey}`)
+  // 验证：冲突成员的 key 是新分配的
+  const conflictKeys = keys.filter(k => k !== renderNodeKey)
+  assert.equal(conflictKeys.length, 1,
+    `应有 1 个冲突 key，实际 ${conflictKeys.length}`)
+  assert.ok(conflictKeys[0].includes('conflict'),
+    `冲突 key 应包含 'conflict'，实际 ${conflictKeys[0]}`)
 })
 
-test('问题1-6121854424：一致时正常合并——不丢字', () => {
+test('问题1-6126357273：旧实现（空分支丢成员）会丢字——反证修复必要性', () => {
+  // 模拟旧实现的行为（不一致时空分支不 push，成员直接消失）
+  const frozenWindowAggregator = new Map()
+  const motionGlyphWindows = []
+  const renderNodeKey = 'old-42-win-3'
+  const existingWindow = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
+  const inconsistentWindow = { renderNodeKey, runId: 'new-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
+
+  for (const memberWindow of [existingWindow, inconsistentWindow]) {
+    const existing = frozenWindowAggregator.get(memberWindow.renderNodeKey)
+    if (existing !== undefined) {
+      if (existing.runId !== memberWindow.runId ||
+          existing.sourceRevision !== memberWindow.sourceRevision) {
+        // 旧实现：空分支——不 push，成员直接消失
+      } else {
+        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+      }
+    } else {
+      frozenWindowAggregator.set(memberWindow.renderNodeKey, memberWindow)
+    }
+  }
+  for (const frozenWindow of frozenWindowAggregator.values()) {
+    motionGlyphWindows.push(frozenWindow)
+  }
+
+  // 旧实现：motionGlyphWindows 只有 1 个窗口，冲突成员的文字直接消失
+  const keys = motionGlyphWindows.map(w => w.renderNodeKey)
+  assert.equal(keys.length, 1,
+    `旧实现应只有 1 个窗口（冲突成员被丢掉），实际 ${keys.length}`)
+  assert.equal(keys[0], renderNodeKey,
+    `唯一窗口的 renderNodeKey 应为 ${renderNodeKey}，实际 ${keys[0]}`)
+  // 冲突成员的 clipRects 被完全丢弃——这就是"直接丢掉源成员"的错误行为
+  const totalClipRects = motionGlyphWindows.reduce(
+    (sum, w) => sum + w.clipRects.length, 0)
+  assert.equal(totalClipRects, 1,
+    `旧实现只保留 existing 的 1 个 clipRect，冲突成员的 clipRect 被丢弃`)
+})
+
+test('问题1-6126357273：一致时正常合并——不丢字', () => {
   // 一致时应合并 clipRects，不丢字
   const frozenWindowAggregator = new Map()
   const motionGlyphWindows = []
@@ -7105,7 +7114,7 @@ test('问题1-6121854424：一致时正常合并——不丢字', () => {
     if (existing !== undefined) {
       if (existing.runId !== memberWindow.runId ||
           existing.sourceRevision !== memberWindow.sourceRevision) {
-        // 不 push
+        // 新实现：为冲突成员分配新 key——此处不会触发（一致场景）
       } else {
         existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
       }
@@ -7182,7 +7191,7 @@ const simulateFrozenGroupPlan = (frozenMembersByKey) => {
       originalUtf16Start: baseMember.sourceUtf16Start,
       originalUtf16End: baseMember.sourceUtf16End,
       originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null,
-      originalGlyphIds: baseEntry.intervalGlyphIds,
+      originalGlyphIds: fullWindowGlyphIds, // Issue #879 评论6126357273 问题3：从 fullWindowGlyphIds 取值
       fullWindowGlyphIds: fullWindowGlyphIds,
       fullWindowUtf16Start: fullWindowUtf16Start,
       fullWindowUtf16End: fullWindowUtf16End,
@@ -7232,12 +7241,18 @@ const simulateFrozenWindowOutput = (member, groupPlan, memberClipRects, islandBb
 // 辅助：模拟 buildFrame 的 frozenWindowAggregator 聚合逻辑
 const simulateAggregator = (memberWindows) => {
   const aggregator = new Map()
+  const output = []
+  let conflictCounter = 0
   for (const memberWindow of memberWindows) {
     const existing = aggregator.get(memberWindow.renderNodeKey)
     if (existing !== undefined) {
       if (existing.runId !== memberWindow.runId ||
           existing.sourceRevision !== memberWindow.sourceRevision) {
-        // 不一致时不 push——避免重复 renderNodeKey
+        // Issue #879 评论6126357273 问题1：为冲突成员分配新 renderNodeKey
+        const conflictKey = `${memberWindow.renderNodeKey}-conflict-${conflictCounter}`
+        conflictCounter++
+        memberWindow.renderNodeKey = conflictKey
+        output.push(memberWindow)
       } else {
         existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
         existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
@@ -7247,7 +7262,7 @@ const simulateAggregator = (memberWindows) => {
       aggregator.set(memberWindow.renderNodeKey, memberWindow)
     }
   }
-  return Array.from(aggregator.values())
+  return [...output, ...Array.from(aggregator.values())]
 }
 
 // --- 场景1：跨两个 piece 的甲隐乙显 ---
@@ -7651,6 +7666,114 @@ test('buildFrame场景3-半字可见：hasVisibleGap 触发 needsCrossfade，创
   const gapFragments = newSourceWindow.clipRects.filter(cr => cr.width === 0)
   assert.ok(gapFragments.length > 0,
     `新源窗口 clipRects 应包含 gap 碎片（起始零面积），实际 ${gapFragments.length} 个零宽碎片`)
+})
+
+// ====== Issue #879 评论6126357273 问题3：originalGlyphIds 从 fullWindowGlyphIds 取值 ======
+//
+// 旧实现：FrozenWindowGroupPlan.originalGlyphIds = baseEntry.intervalGlyphIds
+//   — 只包含单个 interval 的 glyphIds，下一笔 frozenIndex 无法找到窗口内其余字形。
+// 新实现：FrozenWindowGroupPlan.originalGlyphIds = fullWindowGlyphIds
+//   — 包含物理源窗口的完整 glyphIds，确保 MotionGlyphWindow.glyphIds 携带完整字形列表。
+
+console.log('\n--- Issue #879 评论6126357273 问题3：originalGlyphIds 从 fullWindowGlyphIds 取值 ---')
+
+test('问题3-6126357273：originalGlyphIds 从 fullWindowGlyphIds 取值——不只取单个 interval', () => {
+  // 场景：物理源窗口包含甲乙丙三个字形，但当前 interval 只覆盖甲。
+  // 旧实现：originalGlyphIds = [甲]（只取 intervalGlyphIds）
+  //   → MotionGlyphWindow.glyphIds = [甲]
+  //   → 下一笔 frozenIndex 只能为甲建立索引，乙丙找不到
+  // 新实现：originalGlyphIds = [甲,乙,丙]（取 fullWindowGlyphIds）
+  //   → MotionGlyphWindow.glyphIds = [甲,乙,丙]
+  //   → 下一笔 frozenIndex 能为甲乙丙都建立索引
+
+  const jiaId = 'glyph-jia'
+  const yiId = 'glyph-yi'
+  const bingId = 'glyph-bing'
+  const fullWindowGlyphIds = [jiaId, yiId, bingId]
+  const intervalGlyphIds = [jiaId] // 当前 interval 只覆盖甲
+
+  // 模拟 FrozenWindowGroupPlan 的 originalGlyphIds 赋值逻辑
+  // 旧实现：originalGlyphIds = intervalGlyphIds
+  const oldOriginalGlyphIds = intervalGlyphIds
+  // 新实现：originalGlyphIds = fullWindowGlyphIds
+  const newOriginalGlyphIds = fullWindowGlyphIds
+
+  // 验证旧实现的错误：originalGlyphIds 只包含单个 interval 的 glyphIds
+  assert.equal(oldOriginalGlyphIds.length, 1,
+    `旧实现 originalGlyphIds 应只有 1 个（单个 interval），实际 ${oldOriginalGlyphIds.length}`)
+  assert.ok(!oldOriginalGlyphIds.includes(yiId),
+    `旧实现 originalGlyphIds 不包含乙——下一笔 frozenIndex 找不到乙`)
+  assert.ok(!oldOriginalGlyphIds.includes(bingId),
+    `旧实现 originalGlyphIds 不包含丙——下一笔 frozenIndex 找不到丙`)
+
+  // 验证新修复：originalGlyphIds 包含完整窗口的 glyphIds
+  assert.equal(newOriginalGlyphIds.length, 3,
+    `新实现 originalGlyphIds 应有 3 个（完整窗口），实际 ${newOriginalGlyphIds.length}`)
+  assert.ok(newOriginalGlyphIds.includes(jiaId),
+    `新实现 originalGlyphIds 应包含甲`)
+  assert.ok(newOriginalGlyphIds.includes(yiId),
+    `新实现 originalGlyphIds 应包含乙——下一笔 frozenIndex 能找到乙`)
+  assert.ok(newOriginalGlyphIds.includes(bingId),
+    `新实现 originalGlyphIds 应包含丙——下一笔 frozenIndex 能找到丙`)
+})
+
+test('问题3-6126357273：simulateFrozenGroupPlan 的 originalGlyphIds 从 fullWindowGlyphIds 取值', () => {
+  // 验证测试辅助函数 simulateFrozenGroupPlan 也使用了正确的逻辑
+  const jiaId = 'glyph-jia'
+  const yiId = 'glyph-yi'
+  const bingId = 'glyph-bing'
+
+  const layout = srcLayout('甲乙丙')
+  const frozen = [
+    makeSpan(jiaId, {
+      clipLeft: 0, clipRight: 10,
+      clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [0, 1], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'old-10-win-10',
+      fullWindowGlyphIds: [jiaId, yiId, bingId],
+    }),
+  ]
+  const ctx = context('甲乙丙', 3000, [])
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [jiaId],
+    ownText: '甲乙丙',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 10, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length >= 1, '应有至少 1 个 frozen 成员')
+
+  // 模拟 buildFrame 的 FrozenWindowGroupPlan 预计算逻辑
+  const frozenMembersByKey = new Map()
+  frozenMembersByKey.set('old-10-win-10', members.map(m => ({
+    member: m,
+    intervalGlyphIds: pieces[0].intervals[0].glyphIds, // 只是单个 interval 的 glyphIds
+  })))
+  const groupPlans = simulateFrozenGroupPlan(frozenMembersByKey)
+
+  const plan = groupPlans.get('old-10-win-10')
+  assert.ok(plan !== undefined, 'FrozenWindowGroupPlan 应存在')
+
+  // 关键验证：originalGlyphIds 从 fullWindowGlyphIds 取值，包含甲乙丙
+  assert.equal(plan.originalGlyphIds.length, 3,
+    `originalGlyphIds 应有 3 个（完整窗口甲乙丙），实际 ${plan.originalGlyphIds.length}`)
+  assert.ok(plan.originalGlyphIds.includes(jiaId),
+    `originalGlyphIds 应包含甲`)
+  assert.ok(plan.originalGlyphIds.includes(yiId),
+    `originalGlyphIds 应包含乙——从 fullWindowGlyphIds 取值，不是 intervalGlyphIds`)
+  assert.ok(plan.originalGlyphIds.includes(bingId),
+    `originalGlyphIds 应包含丙——从 fullWindowGlyphIds 取值，不是 intervalGlyphIds`)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
