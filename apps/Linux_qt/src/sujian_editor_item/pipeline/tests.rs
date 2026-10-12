@@ -117,6 +117,7 @@ fn test_doc_snapshot(
             crate::editor::layout::ParagraphOffsetIndex::new(),
         height_index:
             crate::editor::layout::ParagraphHeightIndex::new(),
+        paragraph_id_to_slot: std::collections::HashMap::new(),
     }
 }
 
@@ -150,6 +151,7 @@ fn test_visual_line(
         qt_ascent: 16.0,
         qt_descent: 4.0,
         cache_slot: 0,
+        paragraph_id: crate::editor::layout::ParagraphId::INVALID,
     }
 }
 
@@ -271,7 +273,22 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
         )],
     );
     doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
-    let prepared = vec![test_raster_visual(0, 0)];
+    // Issue #901 第十八轮问题3: has_image 检查要求 canonical line 已有 image，
+    // 且 inject 只在 image.is_some() 时计为成功注入。
+    // 给 canonical line 和 prepared raster visual 都设置 1x1 image。
+    let test_image = qmetaobject::QImage::new(
+        qmetaobject::QSize {
+            width: 1,
+            height: 1,
+        },
+        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+    );
+    doc.paragraphs[0].lines[0].image = Some(test_image.clone());
+    let prepared = vec![crate::editor::layout::AnimationRasterVisual {
+        image: Some(test_image),
+        paragraph_slot: 0,
+        qtextline_idx: 0,
+    }];
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,

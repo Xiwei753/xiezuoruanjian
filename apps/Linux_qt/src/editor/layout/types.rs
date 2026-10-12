@@ -15,6 +15,38 @@ pub enum CaretAffinity {
     Downstream,
 }
 
+// ── 稳定段落身份 ──
+
+/// 稳定段落身份 — 不随 byte offset 变化的段落唯一标识。
+///
+/// Issue #901 第十八轮问题4: 从 `paragraph_layout_store` 移到 `types`，
+/// 使 `VisualLine` 可直接持有 `ParagraphId` 而不产生模块循环依赖。
+///
+/// 每次创建新段落（换行拆段、粘贴新段、加载文档）时分配一个新的 `ParagraphId`。
+/// 段落内容编辑不改变 `ParagraphId`。
+/// 删回车合段时，被合并的段落的 `ParagraphId` 失效，保留的段落保持原 Id。
+///
+/// **不能**以随编辑移动的 byte offset 当稳定对象 identity ——
+/// 在段前插入文本会让所有后续段落的 byte offset 移动，但它们的 `ParagraphId` 不变。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ParagraphId(u64);
+
+impl ParagraphId {
+    /// 占位 Id，表示无效/未分配。
+    pub const INVALID: ParagraphId = ParagraphId(0);
+
+    /// 返回内部数值，仅供测试/调试使用。
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    /// Issue #901 第十八轮问题4: 从内部数值构造 `ParagraphId`。
+    /// 仅供 `paragraph_layout_store` 分配新 Id 使用，外部不应调用。
+    pub(crate) fn from_u64(value: u64) -> ParagraphId {
+        ParagraphId(value)
+    }
+}
+
 /// 视觉行 — 排版后的单行文本，同时持有 UTF-8 byte offset 和 QChar (UTF-16) offset。
 ///
 /// 坐标空间：x/y/width/height 为文档坐标系（不含 scroll offset）。
@@ -55,6 +87,13 @@ pub struct VisualLine {
     /// 按段落在文档中出现的顺序（含空段落）从 0 递增分配，与 cache slot 一一对应。
     /// scene_graph_renderer 直接消费此字段，不再自行计数 cache_idx。
     pub cache_slot: i32,
+    /// Issue #901 第十八轮问题4: 稳定段落身份，不随编辑移动的 byte offset 变化。
+    /// `materialize_line` 优先用此字段通过 `paragraph_id_to_slot` 映射解析当前 slot，
+    /// 不再依赖需要遍历后缀行更新的 `cache_slot`。增量编辑拆段/合段后，
+    /// 后缀行的 `cache_slot` 可能过时，但 `paragraph_id` 不变，
+    /// `materialize_line` 用 `paragraph_id` 查 `paragraph_id_to_slot` 得到新 slot。
+    /// `ParagraphId::INVALID` 时回退到 `cache_slot`（兼容旧路径/fallback）。
+    pub paragraph_id: ParagraphId,
 }
 
 /// 光标矩形 — 文档坐标系（不含 scroll offset）。
@@ -181,6 +220,10 @@ impl LayoutSnapshot {
             qt_ascent: line.qt_ascent,
             qt_descent: line.qt_descent,
             cache_slot: line.cache_slot,
+            // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
+            // LayoutSnapshot 没有 paragraph_id_to_slot 映射，materialize_line 仍用
+            // cache_slot 解析 slot，但 paragraph_id 透传给消费方（如 canonical snapshot）。
+            paragraph_id: line.paragraph_id,
         }
     }
 
@@ -199,6 +242,7 @@ impl LayoutSnapshot {
                 para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0,
+                paragraph_id: ParagraphId::INVALID,
             },
         }
     }
@@ -317,6 +361,10 @@ pub struct PromotedLayout {
     pub generation: u64,
     /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免 clone Vec<VisualLine>。
     pub visual_lines: Arc<Vec<VisualLine>>,
+    /// Issue #901 第十八轮问题1+2: 完整 canonical snapshot，包含所有空段、
+    /// clusters、cursor_x_map、image、index map 等。promotion 直接转交，
+    /// 不再从 visual_lines 重建（重建会丢空段和已绘制字形数据）。
+    pub canonical_snapshot: super::CanonicalDocumentVisualSnapshot,
     pub width: f64,
     pub font_size: f32,
     pub font_family: String,

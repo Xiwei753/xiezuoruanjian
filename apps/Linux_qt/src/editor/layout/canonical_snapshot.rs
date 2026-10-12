@@ -8,7 +8,7 @@ use std::sync::Arc;
 // 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
 use super::engine::{get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot};
 use super::paragraph_height_index::{ParagraphHeightIndex, ParagraphOffsetIndex};
-use super::types::{CaretAffinity, CaretRect, VisualLine};
+use super::types::{CaretAffinity, CaretRect, ParagraphId, VisualLine};
 
 // ── Qt 文本布局模块：Canonical document visual snapshot ──
 
@@ -123,6 +123,12 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
     /// 计算文档级绝对 y 坐标。
     pub height_index: ParagraphHeightIndex,
+    /// Issue #901 第十八轮问题4: ParagraphId → 当前段落 slot 映射。
+    /// `materialize_line` 优先用此映射解析 slot，不依赖需要遍历后缀行更新的 `cache_slot`。
+    /// 增量编辑拆段/合段后，后缀行的 `cache_slot` 可能过时，但 `paragraph_id` 不变，
+    /// 通过此映射查到新 slot。`ParagraphId::INVALID` 不存入映射，
+    /// `materialize_line` 遇到 INVALID 回退到 `cache_slot`。
+    pub paragraph_id_to_slot: std::collections::HashMap<ParagraphId, usize>,
 }
 
 impl CanonicalDocumentVisualSnapshot {
@@ -131,7 +137,16 @@ impl CanonicalDocumentVisualSnapshot {
     /// 物化时用 visual_lines 中的索引作为全局 id，不再依赖段内 ordinal，
     /// 避免受影响段新行与后缀未改行 id 冲突。
     fn materialize_line(&self, line: &VisualLine, global_id: usize) -> VisualLine {
-        let slot = line.cache_slot as usize;
+        // Issue #901 第十八轮问题4: 优先用 paragraph_id_to_slot 映射解析 slot，
+        // 不依赖需要遍历后缀行更新的 cache_slot。fallback 到 cache_slot 保证兼容。
+        let slot = if line.paragraph_id != ParagraphId::INVALID {
+            self.paragraph_id_to_slot
+                .get(&line.paragraph_id)
+                .copied()
+                .unwrap_or(line.cache_slot as usize)
+        } else {
+            line.cache_slot as usize
+        };
         let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
         let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
         let para_top_y = self.padding + self.height_index.paragraph_top_y(slot);
@@ -158,6 +173,8 @@ impl CanonicalDocumentVisualSnapshot {
             qt_ascent: line.qt_ascent,
             qt_descent: line.qt_descent,
             cache_slot: line.cache_slot,
+            // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
+            paragraph_id: line.paragraph_id,
         }
     }
 
@@ -176,6 +193,7 @@ impl CanonicalDocumentVisualSnapshot {
                 para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0,
+                paragraph_id: super::types::ParagraphId::INVALID,
             },
         }
     }
@@ -347,6 +365,7 @@ impl CanonicalDocumentVisualSnapshot {
             qt_ascent: 0.0,
             qt_descent: 0.0,
             cache_slot: 0,
+            paragraph_id: super::types::ParagraphId::INVALID,
         };
 
         if self.visual_lines.is_empty() {
@@ -555,7 +574,7 @@ mod ffi;
 mod prepare;
 
 pub use prepare::{
-    assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
+    inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
     prepare_incremental_visual_snapshot,

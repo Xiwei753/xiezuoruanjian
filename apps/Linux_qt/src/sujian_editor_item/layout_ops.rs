@@ -572,10 +572,18 @@ impl SujianEditorItem {
             // old_generation 设为 0。
             // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据，不 clone Vec。
             let promoted_visual_lines = Arc::clone(&doc_snapshot.visual_lines);
+            // Issue #901 第十八轮问题1+2: 直接转交完整 canonical snapshot，
+            // 不再从 visual_lines 重建（重建会丢空段和 clusters/image/cursor_x_map）。
+            // doc_snapshot 在函数末尾仍要返回给调用方，此处 clone 一份。
+            // CanonicalDocumentVisualSnapshot 的 visual_lines 是 Arc（clone 廉价），
+            // paragraphs 是 Vec 需 deep clone，但这是 IME commit 路径（非每笔普通编辑），
+            // clone 一次可接受。
+            let promoted_canonical = doc_snapshot.clone();
             self.pipeline.set_pending_promoted_layout(Some(
                 crate::editor::layout::PromotedLayout {
                     generation,
                     visual_lines: promoted_visual_lines,
+                    canonical_snapshot: promoted_canonical,
                     width,
                     font_size: font_size as f32,
                     font_family: font_family.clone(),

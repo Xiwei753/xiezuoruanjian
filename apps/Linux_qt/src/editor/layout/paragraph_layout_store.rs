@@ -18,30 +18,14 @@
 
 use std::hash::{Hash, Hasher};
 
-use super::types::VisualLine;
+use super::types::{ParagraphId, VisualLine};
 
 // ── 稳定段落身份 ──
-
-/// 稳定段落身份 — 不随 byte offset 变化的段落唯一标识。
-///
-/// 每次创建新段落（换行拆段、粘贴新段、加载文档）时分配一个新的 `ParagraphId`。
-/// 段落内容编辑不改变 `ParagraphId`。
-/// 删回车合段时，被合并的段落的 `ParagraphId` 失效，保留的段落保持原 Id。
-///
-/// **不能**以随编辑移动的 byte offset 当稳定对象 identity ——
-/// 在段前插入文本会让所有后续段落的 byte offset 移动，但它们的 `ParagraphId` 不变。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ParagraphId(u64);
-
-impl ParagraphId {
-    /// 占位 Id，表示无效/未分配。
-    pub const INVALID: ParagraphId = ParagraphId(0);
-
-    /// 返回内部数值，仅供测试/调试使用。
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
-}
+//
+// Issue #901 第十八轮问题4: `ParagraphId` 定义已移到 `super::types`，
+// 使 `VisualLine` 可直接持有 `ParagraphId`。此处通过 `use` 导入保持本模块
+// 内 `ParagraphId` 引用不变（`ParagraphLayoutEntry.id` 等仍用此类型）。
+// 原 doc 注释保留为模块级文档，描述稳定身份语义。
 
 // ── 布局缓存 key ──
 
@@ -242,7 +226,7 @@ impl ParagraphLayoutStore {
 
     /// 分配一个新的 `ParagraphId`。
     fn allocate_id(&mut self) -> ParagraphId {
-        let id = ParagraphId(self.next_id);
+        let id = ParagraphId::from_u64(self.next_id);
         self.next_id += 1;
         id
     }
@@ -1570,6 +1554,7 @@ mod tests {
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
                 cache_slot: 0,
+                paragraph_id: ParagraphId::INVALID,
             },
             VisualLine {
                 id: 1,
@@ -1594,6 +1579,7 @@ mod tests {
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
                 cache_slot: 1,
+                paragraph_id: ParagraphId::INVALID,
             },
         ];
 

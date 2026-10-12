@@ -172,6 +172,7 @@ fn find_caret_line_in_layout_snapshot(
         qt_ascent: 0.0,
         qt_descent: 0.0,
         cache_slot: 0,
+        paragraph_id: super::types::ParagraphId::INVALID,
     };
 
     if snapshot.lines.is_empty() {

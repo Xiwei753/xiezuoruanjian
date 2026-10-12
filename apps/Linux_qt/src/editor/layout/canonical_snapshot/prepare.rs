@@ -178,9 +178,7 @@ pub fn prepare_document_visual_snapshot_scoped(
 mod full;
 
 use full::prepare_document_visual_snapshot_impl;
-pub use full::{
-    assemble_document_visual_snapshot_from_lines, prepare_affected_paragraphs_visual_snapshot,
-};
+pub use full::{prepare_affected_paragraphs_visual_snapshot};
 
 /// Issue #901: 增量排版入口 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
 ///
@@ -284,8 +282,13 @@ pub fn inject_animation_visuals_into_snapshot(
             if let Some(line) = para.lines.get_mut(line_idx) {
                 // Issue #810 评论 5932233052 问题1: 只注入可延迟的 image/texture，
                 // 不覆盖基础 canonical 排版已产出的 cluster。
+                // Issue #901 第十八轮问题3: 只在 image 真正存在时才计为成功注入。
+                // image:None 不计成功注入，避免误报纹理可用。
+                let image_present = anim_line.image.is_some();
                 line.image = anim_line.image.clone();
-                injected_count += 1;
+                if image_present {
+                    injected_count += 1;
+                }
                 matched = true;
             }
         }

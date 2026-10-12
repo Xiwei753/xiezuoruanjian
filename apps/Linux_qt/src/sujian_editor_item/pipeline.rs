@@ -1250,6 +1250,8 @@ pub(crate) struct AnimationVisualsInjectStatus {
     pub prepare_miss_count: usize,
     /// prepare 命中但 clusters 为空的行数。
     pub clusters_empty_count: usize,
+    /// Issue #901 第十八轮问题3: prepare 命中且 clusters 非空但 image 为 None 的行数。
+    pub image_missing_count: usize,
     /// prepare 命中且 clusters 非空的行数（正常）。
     pub ok_count: usize,
     /// inject 期望行数。
@@ -1293,6 +1295,10 @@ pub(crate) enum AnimationVisualsFailedReason {
     /// inject_animation_visuals_into_snapshot 未将该行注入 doc_snapshot
     ///（稳定行身份在目标 snapshot 中找不到匹配行）。
     InjectMiss,
+    /// Issue #901 第十八轮问题3: clusters 非空但 image 为 None。
+    ///
+    /// 动画纹理未成功准备或注入，该行动画视觉不可用，需要重试注入纹理。
+    ImageMissing,
 }
 
 /// Issue #785 评论 5857873894 修改 3 + 2b + Issue #808 评论 5916391891 修改 2:
@@ -1313,6 +1319,8 @@ fn inject_new_animation_visuals_with_diagnostics(
     let mut checked_line_count = 0usize;
     let mut prepare_miss_count = 0usize;
     let mut clusters_empty_count = 0usize;
+    // Issue #901 第十八轮问题3: clusters 非空但 image 为 None 的行数。
+    let mut image_missing_count = 0usize;
     let mut ok_count = 0usize;
     // Issue #808 评论 5917296533 问题1: 收集具体失败行集合。
     let mut failed_lines: Vec<AnimationVisualsFailedLine> = Vec::new();
@@ -1427,6 +1435,13 @@ fn inject_new_animation_visuals_with_diagnostics(
                             vl.cache_slot as usize,
                             vl.qtextline_idx,
                         );
+                        // Issue #901 第十八轮问题3: 同时检查 image 是否已注入。
+                        // clusters 非空不证明 image 已注入，必须分开检查。
+                        let has_image = canonical_line_has_image(
+                            new_doc_snapshot,
+                            vl.cache_slot as usize,
+                            vl.qtextline_idx,
+                        );
                         if !has_clusters {
                             clusters_empty_count += 1;
                             failed_lines.push(AnimationVisualsFailedLine {
@@ -1446,6 +1461,35 @@ fn inject_new_animation_visuals_with_diagnostics(
                                      byte_end={} — canonical line clusters empty, \
                                      animation visuals incomplete, \
                                      this line's InsertReveal will be skipped",
+                                    ins_start,
+                                    ins_end,
+                                    i,
+                                    vl.cache_slot as usize,
+                                    vl.qtextline_idx,
+                                    vl.byte_start,
+                                    vl.byte_end,
+                                ),
+                            );
+                        } else if !has_image {
+                            // Issue #901 第十八轮问题3: clusters 非空但 image 缺失。
+                            // 动画纹理未成功准备或注入，需要重试注入纹理。
+                            image_missing_count += 1;
+                            failed_lines.push(AnimationVisualsFailedLine {
+                                visual_line_idx: *i,
+                                paragraph_slot: vl.cache_slot as usize,
+                                qtextline_idx: vl.qtextline_idx,
+                                byte_start: vl.byte_start,
+                                byte_end: vl.byte_end,
+                                reason: AnimationVisualsFailedReason::ImageMissing,
+                            });
+                            crate::backend::app_backend::debug_warn_static(
+                                "pipeline",
+                                "prepare_animation_visuals_image_missing_for_inserted_line",
+                                &format!(
+                                    "inserted_range=[{}..{}) visual_line_idx={} \
+                                     paragraph_slot={} qtextline_idx={} byte_start={} \
+                                     byte_end={} — canonical line has clusters but image \
+                                     is None, animation texture not injected, retry needed",
                                     ins_start,
                                     ins_end,
                                     i,
@@ -1497,8 +1541,19 @@ fn inject_new_animation_visuals_with_diagnostics(
     for (vidx, paragraph_slot, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
         // Issue #808 评论 5918236360 问题1: 直接读回 canonical 行的真实 clusters，
         // 不用 inject 计数推断（inject 计数只说明行身份被命中，不说明 clusters 非空）。
-        let injected = canonical_line_has_clusters(new_doc_snapshot, *paragraph_slot, *qtextline_idx);
-        if !injected {
+        // Issue #901 第十八轮问题3: 同时检查 image 是否已注入。
+        // clusters 非空不证明 image 已注入，必须分开检查。
+        let has_clusters = canonical_line_has_clusters(
+            new_doc_snapshot,
+            *paragraph_slot,
+            *qtextline_idx,
+        );
+        let has_image = canonical_line_has_image(
+            new_doc_snapshot,
+            *paragraph_slot,
+            *qtextline_idx,
+        );
+        if !has_clusters || !has_image {
             inject_miss_count += 1;
             failed_lines.push(AnimationVisualsFailedLine {
                 visual_line_idx: *vidx,
@@ -1538,8 +1593,11 @@ fn inject_new_animation_visuals_with_diagnostics(
     }
     // Issue #808 评论 5918236360 问题1: inject miss 也算动画视觉不可用——
     // 这类行 prepare 成功但 inject 没命中目标行，必须让上游触发第二次精确重取。
+    // Issue #901 第十八轮问题3: image 缺失也算动画视觉不可用——
+    // clusters 非空但 image 为 None，纹理未注入，必须让上游触发第二次精确重取。
     let has_unavailable_lines = prepare_miss_count > 0
         || clusters_empty_count > 0
+        || image_missing_count > 0
         || inject_miss_count > 0
         || actual_inject_count < expected_inject_count;
     // Issue #808 评论 5918236360 问题1: 第一遍注入后的失败行摘要日志。
@@ -1550,6 +1608,7 @@ fn inject_new_animation_visuals_with_diagnostics(
         checked_line_count,
         prepare_miss_count,
         clusters_empty_count,
+        image_missing_count,
         ok_count,
         expected_inject_count,
         actual_inject_count,
@@ -1578,12 +1637,13 @@ fn animation_visuals_status_summary(status: &AnimationVisualsInjectStatus) -> St
             format!("[{}..{})", r.start().value(), r.end().value())
         });
     format!(
-        "inserted_range={} checked={} prepare_miss={} clusters_empty={} ok={} \
-         expected_inject={} actual_inject={} failed_lines={}",
+        "inserted_range={} checked={} prepare_miss={} clusters_empty={} \
+         image_missing={} ok={} expected_inject={} actual_inject={} failed_lines={}",
         ins_range_label,
         status.checked_line_count,
         status.prepare_miss_count,
         status.clusters_empty_count,
+        status.image_missing_count,
         status.ok_count,
         status.expected_inject_count,
         status.actual_inject_count,
@@ -1611,6 +1671,23 @@ fn canonical_line_has_clusters(
         .get(paragraph_slot)
         .and_then(|para| para.lines.get(qtextline_idx as usize))
         .map(|line| !line.clusters.is_empty())
+        .unwrap_or(false)
+}
+
+/// Issue #901 第十八轮问题3: 检查指定行的 QImage 是否已成功准备并写入。
+///
+/// 与 `canonical_line_has_clusters` 分开，因为 clusters 由基础排版产出，
+/// image 由可延迟的动画纹理注入。clusters 非空不证明 image 已注入。
+fn canonical_line_has_image(
+    doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
+    paragraph_slot: usize,
+    qtextline_idx: i32,
+) -> bool {
+    doc_snapshot
+        .paragraphs
+        .get(paragraph_slot)
+        .and_then(|para| para.lines.get(qtextline_idx as usize))
+        .map(|line| line.image.is_some())
         .unwrap_or(false)
 }
 
@@ -1660,11 +1737,18 @@ fn retry_failed_animation_visuals(
         layout::inject_animation_visuals_into_snapshot(new_doc_snapshot, retry_snapshots);
     // 重取后再次验证 canonical line 的真实 clusters。inject 计数只说明行身份被命中，
     // 不能说明 clusters 非空，所以这里逐行读回目标行的 clusters。
+    // Issue #901 第十八轮问题3: 重取后同时验证 clusters 和 image。
+    // clusters 非空不证明 image 已注入，必须分开检查。
     let still_unavailable: Vec<&AnimationVisualsFailedLine> = status
         .failed_lines
         .iter()
         .filter(|fl| {
             !canonical_line_has_clusters(new_doc_snapshot, fl.paragraph_slot, fl.qtextline_idx)
+                || !canonical_line_has_image(
+                    new_doc_snapshot,
+                    fl.paragraph_slot,
+                    fl.qtextline_idx,
+                )
         })
         .collect();
     if still_unavailable.is_empty() {

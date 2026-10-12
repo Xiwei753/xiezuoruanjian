@@ -32,7 +32,7 @@ mod types;
 
 // ── re-export：外部公开类型 ──
 pub use canonical_snapshot::{
-    assemble_document_visual_snapshot_from_lines, inject_animation_visuals_into_snapshot,
+    inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
     prepare_incremental_visual_snapshot, AnimationRasterVisual, CanonicalClusterSnapshot,
@@ -43,7 +43,7 @@ pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, 
 // Issue #901: 增量排版子系统 — 稳定段落身份 + 布局缓存 + Fenwick 树高度索引
 pub use paragraph_height_index::{ParagraphHeightIndex, ParagraphOffsetIndex};
 pub use paragraph_layout_store::{
-    AffectedParagraphRanges, ParagraphId, ParagraphLayoutCacheKey, ParagraphLayoutEntry,
+    AffectedParagraphRanges, ParagraphLayoutCacheKey, ParagraphLayoutEntry,
     ParagraphLayoutStore,
 };
 pub use engine::{
@@ -61,8 +61,8 @@ pub use qt_cache::{
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_support::run_on_qt_thread;
 pub use types::{
-    CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, PreparedLayoutHandle,
-    PromotedLayout, VisualLine,
+    CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, ParagraphId,
+    PreparedLayoutHandle, PromotedLayout, VisualLine,
 };
 use std::sync::Arc;
 
@@ -255,21 +255,12 @@ impl EditorLayout {
         self.height_index.rebuild(heights);
 
         // Issue #901 第三轮复核问题 5: 不再把 last_snapshot 设为 None。
-        // 从 promoted visual_lines 组装 CanonicalDocumentVisualSnapshot 并存入 last_snapshot，
+        // Issue #901 第十八轮问题1+2: 直接使用 promoted 携带的完整 canonical snapshot，
+        // 不再从 visual_lines 重建（重建会丢空段和 clusters/image/cursor_x_map）。
         // 使下次普通编辑（仅 text_revision 变化）能走增量排版路径，
         // 不会因为 last_snapshot=None 而退化为全篇重排。
         // promote_prepared_layout 与增量缓存共用同一身份和生命周期。
-        self.last_snapshot = Some(assemble_document_visual_snapshot_from_lines(
-            promoted.visual_lines.as_slice(),
-            text_revision,
-            font_size,
-            font_family,
-            line_spacing,
-            text_indent,
-            padding,
-            width,
-            1.0,
-        ));
+        self.last_snapshot = Some(promoted.canonical_snapshot);
         // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
         // cache 和 last_snapshot 通过 Arc 共享同一份视觉行数据。
         let cache_lines = Arc::clone(
