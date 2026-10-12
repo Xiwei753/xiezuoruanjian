@@ -291,6 +291,10 @@ impl EditorLayout {
             text_indent: promoted.text_indent,
             padding: promoted.padding,
             lines: cache_lines,
+            paragraph_offset_index: self.last_snapshot.as_ref()
+                .map(|s| s.paragraph_offset_index.clone())
+                .unwrap_or_default(),
+            height_index: self.height_index.clone(),
             layout_generation: promoted.generation,
         });
     }
@@ -424,6 +428,7 @@ impl EditorLayout {
             // 的 Arc（refcount==1），prepare_incremental_visual_snapshot 内部 Arc::make_mut
             // 原地修改，不产生 Vec clone。
             let lines = Arc::clone(&doc_snapshot.visual_lines);
+            let paragraph_offset_index = doc_snapshot.paragraph_offset_index.clone();
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -437,6 +442,8 @@ impl EditorLayout {
                 text_indent: params.text_indent,
                 padding: params.padding,
                 lines,
+                paragraph_offset_index,
+                height_index: self.height_index.clone(),
                 layout_generation: current_gen,
             }
         } else {
@@ -475,6 +482,7 @@ impl EditorLayout {
             // Issue #901 第三轮复核: 只 clone visual_lines，move 整个 doc_snapshot 到 last_snapshot。
             // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
             let lines = Arc::clone(&doc_snapshot.visual_lines);
+            let paragraph_offset_index = doc_snapshot.paragraph_offset_index.clone();
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -488,6 +496,8 @@ impl EditorLayout {
                 text_indent: params.text_indent,
                 padding: params.padding,
                 lines,
+                paragraph_offset_index,
+                height_index: self.height_index.clone(),
                 layout_generation: current_gen,
             }
         };

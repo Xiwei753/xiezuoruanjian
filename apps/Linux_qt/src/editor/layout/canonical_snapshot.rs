@@ -7,7 +7,7 @@ use std::sync::Arc;
 // 模块使用（prepare_animation_visuals_from_layout 改为 raster-only，不再做 QChar→byte
 // 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
 use super::engine::{get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot};
-use super::paragraph_height_index::ParagraphOffsetIndex;
+use super::paragraph_height_index::{ParagraphHeightIndex, ParagraphOffsetIndex};
 use super::types::{CaretAffinity, CaretRect, VisualLine};
 
 // ── Qt 文本布局模块：Canonical document visual snapshot ──
@@ -117,16 +117,51 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// 维护每段 byte/qchar 长度的前缀和。段首绝对坐标 = `paragraph_offset_index.paragraph_byte_start(idx)`。
     /// 增量编辑时只更新受影响段的长度（O(k log n)），后续段的起始偏移由前缀和自动反映。
     pub paragraph_offset_index: ParagraphOffsetIndex,
+    /// Issue #901 第十四轮问题1: 段落高度索引 — 段首 y 坐标权威来源。
+    /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
+    /// 计算文档级绝对 y 坐标。
+    pub height_index: ParagraphHeightIndex,
 }
 
 impl CanonicalDocumentVisualSnapshot {
-    /// Issue #901 第十三轮问题1+2+6: 获取单行绝对坐标。
+    /// Issue #901 第十四轮问题1: 将段内相对坐标物化为文档级绝对坐标。
+    fn materialize_line(&self, line: &VisualLine) -> VisualLine {
+        let slot = line.cache_slot as usize;
+        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
+        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
+        let para_top_y = self.padding + self.height_index.paragraph_top_y(slot);
+        VisualLine {
+            byte_start: line.byte_start + para_byte_start,
+            byte_end: line.byte_end + para_byte_start,
+            qchar_start: line.qchar_start + para_qchar_start,
+            qchar_end: line.qchar_end + para_qchar_start,
+            y: line.y + para_top_y,
+            para_start: para_byte_start,
+            id: line.id,
+            hard_break: line.hard_break,
+            x: line.x,
+            width: line.width,
+            height: line.height,
+            para_text: line.para_text.clone(),
+            qtextline_idx: line.qtextline_idx,
+            para_qchar_start: line.para_qchar_start,
+            para_qchar_end: line.para_qchar_end,
+            line_wrap_width: line.line_wrap_width,
+            line_indent_x: line.line_indent_x,
+            para_indent: line.para_indent,
+            x_end_trailing: line.x_end_trailing,
+            qt_ascent: line.qt_ascent,
+            qt_descent: line.qt_descent,
+            cache_slot: line.cache_slot,
+        }
+    }
+
+    /// Issue #901 第十四轮问题1: 获取单行绝对坐标。
     ///
-    /// 移除 SuffixTransform 后，`visual_lines` 全部是已物化的绝对坐标，
-    /// 直接返回 clone 即可。保留方法签名以兼容消费方。
+    /// `visual_lines` 存储段内相对坐标，本方法物化为文档级绝对坐标后返回。
     pub fn resolve_visual_line(&self, idx: usize) -> VisualLine {
         match self.visual_lines.get(idx) {
-            Some(vl) => vl.clone(),
+            Some(vl) => self.materialize_line(vl),
             None => VisualLine {
                 id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
                 hard_break: true, x: 0.0, y: 0.0, width: 0.0,
@@ -139,18 +174,25 @@ impl CanonicalDocumentVisualSnapshot {
         }
     }
 
-    /// Issue #901 第十三轮问题1+2+6: 空操作 — SuffixTransform 已移除，
-    /// `visual_lines` 全部是已物化的绝对坐标，无需物化。保留方法签名以兼容消费方。
+    /// Issue #901 第十四轮问题1: 空操作 — 物化在 resolved_visual_lines 中完成。
     pub fn materialize_suffix_in_place(&mut self) {
-        // SuffixTransform 已移除，visual_lines 全部是已物化的绝对坐标。
+        // 物化在 resolved_visual_lines / resolve_visual_line 中按需完成。
     }
 
-    /// Issue #901 第十三轮问题1+2+6: 返回 visual_lines 的 Cow 视图。
+    /// Issue #901 第十四轮问题1: 返回 visual_lines 的物化绝对坐标 Cow 视图。
     ///
-    /// 移除 SuffixTransform 后，`visual_lines` 全部是已物化的绝对坐标，
-    /// 直接返回 `Cow::Borrowed`，零分配。保留方法签名以兼容消费方。
+    /// `visual_lines` 存储段内相对坐标，本方法通过 `paragraph_offset_index` + `height_index`
+    /// 物化为文档级绝对坐标。消费方（cursor_rect 等）直接使用返回的绝对坐标。
     pub fn resolved_visual_lines(&self) -> Cow<'_, [VisualLine]> {
-        Cow::Borrowed(self.visual_lines.as_slice())
+        if self.visual_lines.is_empty() {
+            return Cow::Borrowed(self.visual_lines.as_slice());
+        }
+        let materialized: Vec<VisualLine> = self
+            .visual_lines
+            .iter()
+            .map(|line| self.materialize_line(line))
+            .collect();
+        Cow::Owned(materialized)
     }
 
     pub fn cursor_rect(
@@ -402,6 +444,9 @@ impl CanonicalDocumentVisualSnapshot {
             padding: self.padding as f32,
             // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据，不 clone Vec。
             lines: Arc::clone(&self.visual_lines),
+            // Issue #901 第十四轮问题1: 段落偏移和高度索引。
+            paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex::new(),
+            height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,

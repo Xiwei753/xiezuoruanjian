@@ -422,17 +422,23 @@ fn lowbit(x: usize) -> usize {
 /// `ParagraphHeightIndex` 维护段落**高度**前缀和（用于 y 坐标）。
 /// `ParagraphOffsetIndex` 维护段落**文本长度**前缀和（用于 byte/qchar 坐标）。
 /// 两者独立，分别支持 y→段落和 byte→段落查询。
+///
+/// Issue #901 第十四轮问题1: 改用 Fenwick 树（Binary Indexed Tree）维护前缀和，
+/// `update_paragraph_length` 为 O(log n) 单点更新，不再 O(n) 重建前缀和数组。
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphOffsetIndex {
     /// 每段 byte 长度（含尾部 `'\n'`）。
     byte_lengths: Vec<usize>,
     /// 每段 qchar (UTF-16) 长度（含尾部 `'\n'`）。
     qchar_lengths: Vec<usize>,
-    /// byte 前缀和：`byte_prefix[i] = byte_lengths[0..i] 之和`。
-    /// `byte_prefix[0] = 0`，`byte_prefix[i] = byte_prefix[i-1] + byte_lengths[i-1]`。
-    byte_prefix: Vec<usize>,
-    /// qchar 前缀和：`qchar_prefix[i] = qchar_lengths[0..i] 之和`。
-    qchar_prefix: Vec<usize>,
+    /// byte Fenwick 树数组（1-indexed，`byte_bit[1..=n]`）。
+    byte_bit: Vec<usize>,
+    /// qchar Fenwick 树数组（1-indexed，`qchar_bit[1..=n]`）。
+    qchar_bit: Vec<usize>,
+    /// 缓存的总 byte 长度（O(1) 查询）。
+    byte_total: usize,
+    /// 缓存的总 qchar 长度（O(1) 查询）。
+    qchar_total: usize,
 }
 
 impl ParagraphOffsetIndex {
@@ -455,8 +461,10 @@ impl ParagraphOffsetIndex {
     pub fn clear(&mut self) {
         self.byte_lengths.clear();
         self.qchar_lengths.clear();
-        self.byte_prefix.clear();
-        self.qchar_prefix.clear();
+        self.byte_bit.clear();
+        self.qchar_bit.clear();
+        self.byte_total = 0;
+        self.qchar_total = 0;
     }
 
     /// 从段落长度数组重建偏移索引。
@@ -470,34 +478,67 @@ impl ParagraphOffsetIndex {
             "byte_lengths 和 qchar_lengths 长度必须一致"
         );
         let n = byte_lengths.len();
-        let mut byte_prefix = vec![0usize; n + 1];
-        let mut qchar_prefix = vec![0usize; n + 1];
+        // 构建 Fenwick 树
+        let mut byte_bit = vec![0usize; n + 1];
+        let mut qchar_bit = vec![0usize; n + 1];
+        let mut byte_total = 0usize;
+        let mut qchar_total = 0usize;
         for i in 0..n {
-            byte_prefix[i + 1] = byte_prefix[i] + byte_lengths[i];
-            qchar_prefix[i + 1] = qchar_prefix[i] + qchar_lengths[i];
+            byte_total += byte_lengths[i];
+            qchar_total += qchar_lengths[i];
+            Self::fenwick_update(&mut byte_bit, i, byte_lengths[i]);
+            Self::fenwick_update(&mut qchar_bit, i, qchar_lengths[i]);
         }
         self.byte_lengths = byte_lengths;
         self.qchar_lengths = qchar_lengths;
-        self.byte_prefix = byte_prefix;
-        self.qchar_prefix = qchar_prefix;
+        self.byte_bit = byte_bit;
+        self.qchar_bit = qchar_bit;
+        self.byte_total = byte_total;
+        self.qchar_total = qchar_total;
+    }
+
+    /// Fenwick 树单点更新：在位置 `i`（0-indexed）增加 `delta`。
+    fn fenwick_update(bit: &mut [usize], i: usize, delta: usize) {
+        let n = bit.len() - 1; // bit[1..=n]
+        let mut j = i + 1; // 转为 1-indexed
+        while j <= n {
+            bit[j] += delta;
+            j += j & (!j).wrapping_add(1); // j += lowbit(j)
+        }
+    }
+
+    /// Fenwick 树前缀查询：`bit[0] + ... + bit[i-1]`（前 `i` 个元素之和）。
+    fn fenwick_query(bit: &[usize], i: usize) -> usize {
+        let mut j = i; // 查询前 i 个元素（1-indexed count = i）
+        let mut sum = 0usize;
+        while j > 0 {
+            sum += bit[j];
+            j -= j & (!j).wrapping_add(1); // j -= lowbit(j)
+        }
+        sum
     }
 
     /// 查询段落 `index` 的文档 byte 起始偏移（前缀和）。
     ///
     /// 即 `byte_lengths[0] + ... + byte_lengths[index-1]`。
     /// `index == 0` 返回 0。越界返回总 byte 长度。
+    /// O(log n)。
     pub fn paragraph_byte_start(&self, index: usize) -> usize {
-        self.byte_prefix.get(index).copied().unwrap_or_else(|| {
-            // 越界返回总长度
-            *self.byte_prefix.last().unwrap_or(&0)
-        })
+        if index >= self.byte_lengths.len() {
+            self.byte_total
+        } else {
+            Self::fenwick_query(&self.byte_bit, index)
+        }
     }
 
     /// 查询段落 `index` 的文档 qchar 起始偏移（前缀和）。
+    /// O(log n)。
     pub fn paragraph_qchar_start(&self, index: usize) -> usize {
-        self.qchar_prefix.get(index).copied().unwrap_or_else(|| {
-            *self.qchar_prefix.last().unwrap_or(&0)
-        })
+        if index >= self.qchar_lengths.len() {
+            self.qchar_total
+        } else {
+            Self::fenwick_query(&self.qchar_bit, index)
+        }
     }
 
     /// 获取段落 `index` 的 byte 长度。越界返回 0。
@@ -510,10 +551,10 @@ impl ParagraphOffsetIndex {
         self.qchar_lengths.get(index).copied().unwrap_or(0)
     }
 
-    /// 更新段落 `index` 的 byte 和 qchar 长度，重建前缀和。
+    /// 更新段落 `index` 的 byte 和 qchar 长度。
     ///
-    /// 段前插入/删除只改受影响段的长度，后续段的起始偏移由前缀和自动反映。
-    /// O(n) 重建前缀和（n = 段落数），不逐段写 document_byte_start。
+    /// 段前插入/删除只改受影响段的长度，后续段的起始偏移由 Fenwick 树前缀和自动反映。
+    /// O(log n) 单点更新（Fenwick 树），不再 O(n) 重建前缀和数组。
     /// 返回 false 表示越界未更新。
     pub fn update_paragraph_length(
         &mut self,
@@ -524,54 +565,66 @@ impl ParagraphOffsetIndex {
         if index >= self.byte_lengths.len() {
             return false;
         }
+        let old_byte = self.byte_lengths[index];
+        let old_qchar = self.qchar_lengths[index];
         self.byte_lengths[index] = byte_length;
         self.qchar_lengths[index] = qchar_length;
-        self.rebuild_prefix();
+        // Fenwick 树单点更新：delta = new - old
+        let byte_delta = byte_length.wrapping_sub(old_byte);
+        let qchar_delta = qchar_length.wrapping_sub(old_qchar);
+        Self::fenwick_update(&mut self.byte_bit, index, byte_delta);
+        Self::fenwick_update(&mut self.qchar_bit, index, qchar_delta);
+        self.byte_total = self.byte_total.wrapping_sub(old_byte).wrapping_add(byte_length);
+        self.qchar_total = self.qchar_total.wrapping_sub(old_qchar).wrapping_add(qchar_length);
         true
-    }
-
-    /// 重建前缀和数组（内部辅助）。
-    fn rebuild_prefix(&mut self) {
-        let n = self.byte_lengths.len();
-        self.byte_prefix = vec![0usize; n + 1];
-        self.qchar_prefix = vec![0usize; n + 1];
-        for i in 0..n {
-            self.byte_prefix[i + 1] = self.byte_prefix[i] + self.byte_lengths[i];
-            self.qchar_prefix[i + 1] = self.qchar_prefix[i] + self.qchar_lengths[i];
-        }
     }
 
     /// 段落插入 — 在 `index` 处插入长度为 `(byte_length, qchar_length)` 的新段落。
     ///
-    /// O(n) 重建前缀和。后续段落的起始偏移自动右移。
+    /// O(n) 重建 Fenwick 树。后续段落的起始偏移自动右移。
     pub fn insert(&mut self, index: usize, byte_length: usize, qchar_length: usize) {
         let pos = index.min(self.byte_lengths.len());
         self.byte_lengths.insert(pos, byte_length);
         self.qchar_lengths.insert(pos, qchar_length);
-        self.rebuild_prefix();
+        self.rebuild_fenwick();
     }
 
     /// 段落删除 — 删除段落 `index`。
     ///
-    /// O(n) 重建前缀和。后续段落的起始偏移自动左移。
+    /// O(n) 重建 Fenwick 树。后续段落的起始偏移自动左移。
     pub fn remove(&mut self, index: usize) -> bool {
         if index >= self.byte_lengths.len() {
             return false;
         }
         self.byte_lengths.remove(index);
         self.qchar_lengths.remove(index);
-        self.rebuild_prefix();
+        self.rebuild_fenwick();
         true
     }
 
-    /// 总 byte 长度（所有段落之和）。
-    pub fn total_byte_length(&self) -> usize {
-        *self.byte_prefix.last().unwrap_or(&0)
+    /// 重建 Fenwick 树数组（内部辅助，O(n)）。
+    fn rebuild_fenwick(&mut self) {
+        let n = self.byte_lengths.len();
+        self.byte_bit = vec![0usize; n + 1];
+        self.qchar_bit = vec![0usize; n + 1];
+        self.byte_total = 0;
+        self.qchar_total = 0;
+        for i in 0..n {
+            self.byte_total += self.byte_lengths[i];
+            self.qchar_total += self.qchar_lengths[i];
+            Self::fenwick_update(&mut self.byte_bit, i, self.byte_lengths[i]);
+            Self::fenwick_update(&mut self.qchar_bit, i, self.qchar_lengths[i]);
+        }
     }
 
-    /// 总 qchar 长度（所有段落之和）。
+    /// 总 byte 长度（所有段落之和）。O(1)。
+    pub fn total_byte_length(&self) -> usize {
+        self.byte_total
+    }
+
+    /// 总 qchar 长度（所有段落之和）。O(1)。
     pub fn total_qchar_length(&self) -> usize {
-        *self.qchar_prefix.last().unwrap_or(&0)
+        self.qchar_total
     }
 }
 
@@ -920,5 +973,112 @@ mod tests {
         let (start, end) = idx.paragraphs_in_y_range(-10.0, 15.0);
         assert_eq!(start, 0);
         assert_eq!(end, 2);
+    }
+
+    // ── Issue #901 第十四轮问题1: ParagraphOffsetIndex Fenwick 树测试 ──
+
+    #[test]
+    fn offset_index_empty() {
+        let idx = ParagraphOffsetIndex::new();
+        assert_eq!(idx.len(), 0);
+        assert!(idx.is_empty());
+        assert_eq!(idx.total_byte_length(), 0);
+        assert_eq!(idx.total_qchar_length(), 0);
+    }
+
+    #[test]
+    fn offset_index_rebuild_basic() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![3, 5, 7]);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.total_byte_length(), 15);
+        assert_eq!(idx.total_qchar_length(), 15);
+    }
+
+    #[test]
+    fn offset_index_paragraph_starts() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![2, 4, 6]);
+        assert_eq!(idx.paragraph_byte_start(0), 0);
+        assert_eq!(idx.paragraph_byte_start(1), 3);
+        assert_eq!(idx.paragraph_byte_start(2), 8);
+        assert_eq!(idx.paragraph_byte_start(3), 15); // 越界返回总长度
+
+        assert_eq!(idx.paragraph_qchar_start(0), 0);
+        assert_eq!(idx.paragraph_qchar_start(1), 2);
+        assert_eq!(idx.paragraph_qchar_start(2), 6);
+        assert_eq!(idx.paragraph_qchar_start(3), 12); // 越界返回总长度
+    }
+
+    #[test]
+    fn offset_index_update_paragraph_length() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![3, 5, 7]);
+        // 更新段落 1 的长度
+        assert!(idx.update_paragraph_length(1, 10, 10));
+        assert_eq!(idx.byte_length_at(1), 10);
+        assert_eq!(idx.qchar_length_at(1), 10);
+        // 段落 2 的起始偏移应自动反映
+        assert_eq!(idx.paragraph_byte_start(2), 13); // 3 + 10
+        assert_eq!(idx.paragraph_qchar_start(2), 13);
+        assert_eq!(idx.total_byte_length(), 20); // 3 + 10 + 7
+        assert_eq!(idx.total_qchar_length(), 20);
+    }
+
+    #[test]
+    fn offset_index_update_out_of_bounds() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5], vec![3, 5]);
+        assert!(!idx.update_paragraph_length(5, 10, 10));
+    }
+
+    #[test]
+    fn offset_index_insert() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 7], vec![3, 7]);
+        idx.insert(1, 5, 5);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.byte_length_at(1), 5);
+        assert_eq!(idx.paragraph_byte_start(2), 8); // 3 + 5
+        assert_eq!(idx.total_byte_length(), 15);
+    }
+
+    #[test]
+    fn offset_index_remove() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![3, 5, 7]);
+        assert!(idx.remove(1));
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx.byte_length_at(1), 7);
+        assert_eq!(idx.paragraph_byte_start(1), 3);
+        assert_eq!(idx.total_byte_length(), 10);
+    }
+
+    #[test]
+    fn offset_index_many_updates() {
+        // 测试多次更新后 Fenwick 树正确性
+        let mut idx = ParagraphOffsetIndex::new();
+        let n = 100;
+        idx.rebuild((1..=n).collect(), (1..=n).collect());
+        // 多次更新
+        for i in 0..n {
+            assert!(idx.update_paragraph_length(i, i + 1, i + 1));
+        }
+        // 验证前缀和
+        let mut expected = 0usize;
+        for i in 0..n {
+            assert_eq!(idx.paragraph_byte_start(i), expected);
+            expected += i + 1;
+        }
+        assert_eq!(idx.total_byte_length(), expected);
+    }
+
+    #[test]
+    fn offset_index_clear() {
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![3, 5, 7]);
+        idx.clear();
+        assert!(idx.is_empty());
+        assert_eq!(idx.total_byte_length(), 0);
     }
 }

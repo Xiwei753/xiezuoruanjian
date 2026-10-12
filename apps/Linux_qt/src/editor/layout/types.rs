@@ -102,7 +102,18 @@ pub struct LayoutSnapshot {
     /// `LayoutSnapshot` 和 `CanonicalDocumentVisualSnapshot.visual_lines`
     /// 通过 `Arc::clone` 共享同一份视觉行数据，编辑时 `Arc::make_mut`
     /// 原地修改（refcount==1）或 COW（refcount>1）。
+    ///
+    /// Issue #901 第十四轮问题1: `lines` 存储段内相对坐标（y/byte/qchar 相对于段首）。
+    /// 绝对坐标由消费方通过 `paragraph_offset_index` + `height_index` 按需计算。
     pub lines: Arc<Vec<VisualLine>>,
+    /// Issue #901 第十四轮问题1: 段落前缀偏移索引 — 段首 byte/qchar 坐标权威来源。
+    /// 消费方通过 `paragraph_offset_index.paragraph_byte_start(cache_slot) + line.byte_start`
+    /// 计算文档级绝对 byte offset。
+    pub paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex,
+    /// Issue #901 第十四轮问题1: 段落高度索引 — 段首 y 坐标权威来源。
+    /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
+    /// 计算文档级绝对 y 坐标。
+    pub height_index: super::paragraph_height_index::ParagraphHeightIndex,
     /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
     /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
     pub layout_generation: u64,
@@ -125,19 +136,58 @@ impl LayoutSnapshot {
             text_indent: 0.0,
             padding: 0.0,
             lines: Arc::new(Vec::new()),
+            paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex::new(),
+            height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
             layout_generation: 0,
         }
     }
 }
 
 impl LayoutSnapshot {
-    /// Issue #901 第十三轮问题1+2+6: 获取单行绝对坐标。
+    /// Issue #901 第十四轮问题1: 将段内相对坐标物化为文档级绝对坐标。
     ///
-    /// 移除 SuffixTransform 后，`lines` 全部是已物化的绝对坐标，
-    /// 直接返回 clone 即可。保留方法签名以兼容消费方。
+    /// `lines` 存储段内相对坐标（y/byte/qchar 相对于段首）。
+    /// 本方法通过 `paragraph_offset_index` + `height_index` 计算段首绝对坐标，
+    /// 加上段内相对偏移得到文档级绝对坐标。
+    fn materialize_line(&self, line: &VisualLine) -> VisualLine {
+        let slot = line.cache_slot as usize;
+        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
+        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
+        let para_top_y = f64::from(self.padding) + self.height_index.paragraph_top_y(slot);
+        VisualLine {
+            byte_start: line.byte_start + para_byte_start,
+            byte_end: line.byte_end + para_byte_start,
+            qchar_start: line.qchar_start + para_qchar_start,
+            qchar_end: line.qchar_end + para_qchar_start,
+            y: line.y + para_top_y,
+            // para_start 恢复为段首绝对 byte offset，兼容 index_at_line_x 等消费方
+            para_start: para_byte_start,
+            // 其他字段不变
+            id: line.id,
+            hard_break: line.hard_break,
+            x: line.x,
+            width: line.width,
+            height: line.height,
+            para_text: line.para_text.clone(),
+            qtextline_idx: line.qtextline_idx,
+            para_qchar_start: line.para_qchar_start,
+            para_qchar_end: line.para_qchar_end,
+            line_wrap_width: line.line_wrap_width,
+            line_indent_x: line.line_indent_x,
+            para_indent: line.para_indent,
+            x_end_trailing: line.x_end_trailing,
+            qt_ascent: line.qt_ascent,
+            qt_descent: line.qt_descent,
+            cache_slot: line.cache_slot,
+        }
+    }
+
+    /// Issue #901 第十四轮问题1: 获取单行绝对坐标。
+    ///
+    /// `lines` 存储段内相对坐标，本方法物化为文档级绝对坐标后返回。
     pub fn resolve_line(&self, idx: usize) -> VisualLine {
         match self.lines.get(idx) {
-            Some(vl) => vl.clone(),
+            Some(vl) => self.materialize_line(vl),
             None => return VisualLine {
                 id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
                 hard_break: true, x: 0.0, y: 0.0, width: 0.0,
@@ -150,18 +200,25 @@ impl LayoutSnapshot {
         }
     }
 
-    /// Issue #901 第十三轮问题1+2+6: 空操作 — SuffixTransform 已移除，
-    /// `lines` 全部是已物化的绝对坐标，无需物化。保留方法签名以兼容消费方。
+    /// Issue #901 第十四轮问题1: 空操作 — 无 SuffixTransform，物化在 resolved_lines 中完成。
     pub fn materialize_suffix_in_place(&mut self) {
-        // SuffixTransform 已移除，lines 全部是已物化的绝对坐标。
+        // 物化在 resolved_lines / resolve_line 中按需完成。
     }
 
-    /// Issue #901 第十三轮问题1+2+6: 返回 lines 的 Cow 视图。
+    /// Issue #901 第十四轮问题1: 返回 lines 的物化绝对坐标 Cow 视图。
     ///
-    /// 移除 SuffixTransform 后，`lines` 全部是已物化的绝对坐标，
-    /// 直接返回 `Cow::Borrowed`，零分配。保留方法签名以兼容消费方。
+    /// `lines` 存储段内相对坐标，本方法通过 `paragraph_offset_index` + `height_index`
+    /// 物化为文档级绝对坐标。消费方（hit_test、caret_rect 等）直接使用返回的绝对坐标。
     pub fn resolved_lines(&self) -> Cow<'_, [VisualLine]> {
-        Cow::Borrowed(self.lines.as_slice())
+        if self.lines.is_empty() {
+            return Cow::Borrowed(self.lines.as_slice());
+        }
+        let materialized: Vec<VisualLine> = self
+            .lines
+            .iter()
+            .map(|line| self.materialize_line(line))
+            .collect();
+        Cow::Owned(materialized)
     }
 }
 

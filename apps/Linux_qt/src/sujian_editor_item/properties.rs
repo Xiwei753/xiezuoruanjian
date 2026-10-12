@@ -757,6 +757,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn layout_property_changed(&mut self) {
+        // Issue #901 第十四轮问题2: 标记真正全局排版属性变化，
+        // 供 update_paint_node 传 force_full_relayout=true 给 render_frame。
+        self.force_full_relayout_pending = true;
         self.invalidate_layout_cache();
         self.bump_visual_revision();
         // Issue #738 评论 5789470425 问题1: layout_property_changed 只负责标记 layout dirty。

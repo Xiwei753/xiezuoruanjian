@@ -9,6 +9,7 @@ use super::*;
 use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
 // Issue #901 第十三轮问题1+2+6: 引入 ParagraphOffsetIndex 作为段首坐标权威来源。
 use super::super::super::paragraph_height_index::ParagraphOffsetIndex;
+use super::super::super::paragraph_height_index::ParagraphHeightIndex;
 // Issue #901 第九轮阻塞5: Arc 共享视觉行数据。
 use std::sync::Arc;
 
@@ -76,6 +77,33 @@ fn build_offset_index_from_lines(lines: &[VisualLine]) -> ParagraphOffsetIndex {
     idx
 }
 
+/// Issue #901 第十四轮问题1: 从视觉行数组构建段落高度索引。
+///
+/// 按 `para_start`（段落索引）分组累加行高，返回 `ParagraphHeightIndex`。
+fn build_height_index_from_lines(lines: &[VisualLine]) -> ParagraphHeightIndex {
+    if lines.is_empty() {
+        return ParagraphHeightIndex::new();
+    }
+    use std::collections::HashMap;
+    let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
+    let mut para_starts: Vec<usize> = Vec::new();
+    for vl in lines {
+        if !para_start_to_idx.contains_key(&vl.para_start) {
+            para_start_to_idx.insert(vl.para_start, para_starts.len());
+            para_starts.push(vl.para_start);
+        }
+    }
+    let mut heights = vec![0.0f64; para_starts.len()];
+    for vl in lines {
+        if let Some(&idx) = para_start_to_idx.get(&vl.para_start) {
+            heights[idx] += vl.height;
+        }
+    }
+    let mut idx = ParagraphHeightIndex::new();
+    idx.rebuild(heights);
+    idx
+}
+
 pub(super) fn prepare_document_visual_snapshot_impl(
     text: &str,
     text_revision: u64,
@@ -114,10 +142,15 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     let mut paragraph_qchar_start: usize = 0;
     let mut line_id: usize = 0;
     let mut paragraph_idx: i32 = 0;
+    // Issue #901 第十四轮问题1: 段内相对存储 — 追踪段顶 y 用于计算相对 y。
+    let mut paragraph_top_y: f64 = padding;
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
         let paragraph_text = paragraph.trim_end_matches('\n');
+
+        // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
+        paragraph_top_y = y;
 
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
@@ -126,7 +159,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             // 保持 cache_slot 与文档段落一一对应。
             let _empty_canonical = prepare_paragraph_visual_snapshot(
                 paragraph_text,
-                paragraph_start,
+                paragraph_idx as usize,
                 font_size,
                 font_family,
                 available,
@@ -140,17 +173,17 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             );
             visual_lines.push(VisualLine {
                 id: line_id,
-                byte_start: paragraph_start,
-                byte_end: paragraph_start,
-                qchar_start: paragraph_qchar_start,
-                qchar_end: paragraph_qchar_start,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
                 hard_break,
                 x: padding + indent,
-                y,
+                y: 0.0,
                 width: 0.0,
                 height: line_height,
                 para_text: String::new(),
-                para_start: paragraph_start,
+                para_start: paragraph_idx as usize,
                 qtextline_idx: 0,
                 para_qchar_start: 0,
                 para_qchar_end: 0,
@@ -167,11 +200,11 @@ pub(super) fn prepare_document_visual_snapshot_impl(
 
             paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
-                paragraph_document_byte_start: paragraph_start,
+                paragraph_document_byte_start: paragraph_idx as usize,
                 lines: Vec::new(),
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                     "",
-                    paragraph_start,
+                    0,
                 ),
             });
 
@@ -183,7 +216,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
 
         let canonical = prepare_paragraph_visual_snapshot(
             paragraph_text,
-            paragraph_start,
+            paragraph_idx as usize,
             font_size,
             font_family,
             available,
@@ -218,15 +251,15 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 id: line_id,
                 byte_start: canonical_line.document_byte_start,
                 byte_end: canonical_line.document_byte_end,
-                qchar_start: canonical_line.qchar_start + paragraph_qchar_start,
-                qchar_end: canonical_line.qchar_end + paragraph_qchar_start,
+                qchar_start: canonical_line.qchar_start,
+                qchar_end: canonical_line.qchar_end,
                 hard_break: hard_break && line_idx == canonical.lines.len() - 1,
                 x: padding + canonical_line.x_pos,
-                y,
+                y: y - paragraph_top_y,
                 width: canonical_line.width,
                 height: actual_line_h,
                 para_text: paragraph_text.to_string(),
-                para_start: paragraph_start,
+                para_start: (paragraph_idx - 1) as usize,
                 qtextline_idx: line_idx as i32,
                 para_qchar_start: canonical_line.qchar_start,
                 para_qchar_end: canonical_line.qchar_end,
@@ -280,7 +313,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             qchar_end: 0,
             hard_break: false,
             x: padding + indent,
-            y,
+            y: 0.0,
             width: 0.0,
             height: line_height,
             para_text: String::new(),
@@ -305,11 +338,12 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     }
 
     if text.ends_with('\n') {
-        let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
+        // Issue #901 第十四轮问题1: 段内相对存储 — 尾部换行空段的段顶 y。
+        paragraph_top_y = y;
         // Issue #658: 尾部换行产生的空段也占 null slot。
         let _empty_canonical = prepare_paragraph_visual_snapshot(
             "",
-            text.len(),
+            paragraph_idx as usize,
             font_size,
             font_family,
             available,
@@ -323,17 +357,17 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         );
         visual_lines.push(VisualLine {
             id: line_id,
-            byte_start: text.len(),
-            byte_end: text.len(),
-            qchar_start: text_qchar_len,
-            qchar_end: text_qchar_len,
+            byte_start: 0,
+            byte_end: 0,
+            qchar_start: 0,
+            qchar_end: 0,
             hard_break: false,
             x: padding + indent,
-            y,
+            y: 0.0,
             width: 0.0,
             height: line_height,
             para_text: String::new(),
-            para_start: text.len(),
+            para_start: paragraph_idx as usize,
             qtextline_idx: 0,
             para_qchar_start: 0,
             para_qchar_end: 0,
@@ -348,6 +382,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         // paragraph_idx 递增省略：尾部换行分支后不再使用。
     }
 
+    let height_index = build_height_index_from_lines(&visual_lines);
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -360,6 +395,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         paragraphs,
         visual_lines: Arc::new(visual_lines),
         paragraph_offset_index: build_offset_index_from_text(text),
+        height_index,
     }
 }
 
@@ -414,9 +450,10 @@ pub fn assemble_document_visual_snapshot_from_lines(
                 paragraph_text: line.para_text.clone(),
                 paragraph_document_byte_start: line.para_start,
                 lines: Vec::new(),
+                // Issue #901 第十四轮问题1: 段内相对存储 — index map 用 0 构建。
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                     &line.para_text,
-                    line.para_start,
+                    0,
                 ),
             });
             // 刚 push 成功，新索引 = len - 1，逻辑上一定 < len。
@@ -457,6 +494,7 @@ pub fn assemble_document_visual_snapshot_from_lines(
         });
     }
 
+    let height_index = build_height_index_from_lines(lines);
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -471,6 +509,7 @@ pub fn assemble_document_visual_snapshot_from_lines(
         // Issue #901 第九轮阻塞5: 用 Arc 包装，共享视觉行数据。
         visual_lines: Arc::new(lines.to_vec()),
         paragraph_offset_index: build_offset_index_from_lines(lines),
+        height_index,
     }
 }
 
@@ -676,6 +715,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 visual_lines: Arc::clone(&prev.visual_lines),
                 // Issue #901 第十三轮问题1+2+6: 沿用 prev 的 paragraph_offset_index。
                 paragraph_offset_index: prev.paragraph_offset_index.clone(),
+                height_index: prev.height_index.clone(),
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -744,6 +784,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 // Issue #901 第九轮阻塞5: Arc 包装空 Vec。
                 visual_lines: Arc::new(Vec::new()),
                 paragraph_offset_index: ParagraphOffsetIndex::new(),
+                height_index: ParagraphHeightIndex::new(),
             };
         }
     };
@@ -899,8 +940,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut relayouted_indices: Vec<usize> = Vec::new();
 
     // 计算受影响段落的起始 y 和起始 byte offset
+    // Issue #901 第十四轮问题1: 段内相对存储 — y_start 用 height_index 计算绝对 y。
     let y_start: f64 = if vl_start_idx > 0 {
-        visual_lines[vl_start_idx - 1].y + visual_lines[vl_start_idx - 1].height
+        let prev_line = &visual_lines[vl_start_idx - 1];
+        padding + height_index.paragraph_top_y(prev_line.cache_slot as usize) + prev_line.y + prev_line.height
     } else {
         padding
     };
@@ -917,12 +960,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut y: f64 = y_start;
     let mut line_id: usize = vl_start_idx;
     let mut paragraph_idx: i32 = new_layout_start as i32;
+    // Issue #901 第十四轮问题1: 段内相对存储 — 追踪段顶 y 用于计算相对 y。
+    let mut paragraph_top_y: f64 = y_start;
 
     // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start..new_layout_end 建立新段
     for para_idx in new_layout_start..new_layout_end {
         let paragraph = new_paras[para_idx];
         let hard_break = paragraph.ends_with('\n');
         let paragraph_text = paragraph.trim_end_matches('\n');
+
+        // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
+        paragraph_top_y = y;
 
         relayouted_indices.push(para_idx);
 
@@ -931,7 +979,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             let empty_descent = get_font_descent(font_family, font_size as f32);
             let _empty_canonical = prepare_paragraph_visual_snapshot(
                 paragraph_text,
-                paragraph_start,
+                paragraph_idx as usize,
                 font_size,
                 font_family,
                 available,
@@ -945,17 +993,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             );
             new_visual_lines.push(VisualLine {
                 id: line_id,
-                byte_start: paragraph_start,
-                byte_end: paragraph_start,
-                qchar_start: paragraph_qchar_start,
-                qchar_end: paragraph_qchar_start,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
                 hard_break,
                 x: padding + indent,
-                y,
+                y: 0.0,
                 width: 0.0,
                 height: line_height,
                 para_text: String::new(),
-                para_start: paragraph_start,
+                para_start: paragraph_idx as usize,
                 qtextline_idx: 0,
                 para_qchar_start: 0,
                 para_qchar_end: 0,
@@ -972,11 +1020,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
             new_paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
-                paragraph_document_byte_start: paragraph_start,
+                paragraph_document_byte_start: paragraph_idx as usize,
                 lines: Vec::new(),
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                     "",
-                    paragraph_start,
+                    0,
                 ),
             });
 
@@ -997,7 +1045,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
         let canonical = prepare_paragraph_visual_snapshot(
             paragraph_text,
-            paragraph_start,
+            paragraph_idx as usize,
             font_size,
             font_family,
             available,
@@ -1028,15 +1076,15 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 id: line_id,
                 byte_start: canonical_line.document_byte_start,
                 byte_end: canonical_line.document_byte_end,
-                qchar_start: canonical_line.qchar_start + paragraph_qchar_start,
-                qchar_end: canonical_line.qchar_end + paragraph_qchar_start,
+                qchar_start: canonical_line.qchar_start,
+                qchar_end: canonical_line.qchar_end,
                 hard_break: hard_break && line_idx == canonical.lines.len() - 1,
                 x: padding + canonical_line.x_pos,
-                y,
+                y: y - paragraph_top_y,
                 width: canonical_line.width,
                 height: actual_line_h,
                 para_text: paragraph_text.to_string(),
-                para_start: paragraph_start,
+                para_start: paragraph_idx as usize,
                 qtextline_idx: line_idx as i32,
                 para_qchar_start: canonical_line.qchar_start,
                 para_qchar_end: canonical_line.qchar_end,
@@ -1071,31 +1119,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // 计算新受影响段落的高度
     let new_affected_height: f64 = new_visual_lines.iter().map(|vl| vl.height).sum();
-    let delta_height = new_affected_height - old_affected_height;
+    let _delta_height = new_affected_height - old_affected_height;
 
-    // Issue #901 第八轮问题4: 在 splice 之前保存旧后缀边界。
-    // splice 后旧 visual_lines 已被改写，不能用旧下标 vl_end_idx 访问新数组
-    // 反推旧边界——若删除长段使新数组比 vl_end_idx 短，条件判 false 会令
-    // byte_delta/qchar_delta 归零，后续段落坐标停留在旧值，导致换行/混排/光标错乱。
-    // old_suffix_byte_start: 旧文档中受影响段落后的 byte offset（后缀段落起点）
-    //
-    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
-    // 已物化的绝对坐标，直接读取即可，不需要 resolve_byte_with_suffix。
-    let old_suffix_byte_start: usize = if old_splice_end < prev_paragraphs.len() {
-        prev_paragraphs[old_splice_end].paragraph_document_byte_start
-    } else if vl_end_idx < visual_lines.len() {
-        visual_lines[vl_end_idx].byte_start
-    } else {
-        visual_lines.last().map(|vl| vl.byte_end).unwrap_or(0)
-    };
-    // old_suffix_qchar_start: 旧文档中受影响段落后的 qchar offset（后缀段落起点）
-    // qchar_start 是文档绝对 qchar，para_qchar_start 是行内段落相对 qchar 起点，
-    // 两者之差即该行所在段落的文档 qchar 起点。
-    let old_suffix_qchar_start: usize = if vl_end_idx < visual_lines.len() {
-        visual_lines[vl_end_idx].qchar_start - visual_lines[vl_end_idx].para_qchar_start
-    } else {
-        visual_lines.last().map(|vl| vl.qchar_end).unwrap_or(0)
-    };
+    // Issue #901 第十四轮问题1: 段内相对存储 — 不再需要 old_suffix_byte_start/qchar_start
+    // 和 byte_delta/qchar_delta/line_id_delta，因为后缀段的相对坐标不需要更新。
+    // 绝对坐标由消费方通过 ParagraphOffsetIndex + ParagraphHeightIndex 按需计算。
 
     // splice visual_lines：替换受影响段落的行
     let new_affected_line_count = new_visual_lines.len();
@@ -1112,95 +1140,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
-    // Issue #901 第十三轮问题1+2+6: 移除 SuffixTransform 机制。
-    // 后缀段的绝对坐标就地更新（O(后缀行数)），不再用延迟物化的 delta 变换。
-    // 这修复了问题2（连续编辑覆盖未物化 delta）——不再有 delta 机制被覆盖。
-    let new_affected_byte_end = paragraph_start;
-    let old_affected_byte_end: usize = old_suffix_byte_start;
-    let byte_delta = new_affected_byte_end as i64 - old_affected_byte_end as i64;
+    // Issue #901 第十四轮问题1: 移除后缀绝对坐标就地更新循环。
+    // 段内相对存储后，后缀段的 y/byte/qchar/id/para_start 全部是段内相对坐标，
+    // 不随编辑变化，不需要更新。绝对坐标由消费方通过偏移索引按需计算。
+    // 同理，后缀段的 paragraph_document_byte_start（现为段落索引）和内部行/cluster
+    // 的 document_byte_start/end（现为段内相对偏移）也不需要更新。
 
-    let new_affected_qchar_end = paragraph_qchar_start;
-    let old_affected_qchar_end: usize = old_suffix_qchar_start;
-    let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
-
-    let update_start = vl_start_idx + new_affected_line_count;
-    let old_affected_line_count = vl_end_idx - vl_start_idx;
-    let line_id_delta = new_affected_line_count as i64 - old_affected_line_count as i64;
-
-    // Issue #901 第十三轮问题1+2+6: 就地更新后缀段 visual_lines 的绝对坐标。
-    // 移除 SuffixTransform 后，后缀段的 y/byte/qchar/line_id 直接就地更新，
-    // 确保消费方读到正确绝对坐标。这是 O(后缀行数) 的操作，
-    // 但保证了正确性——不再有未物化的 delta 被连续编辑覆盖。
-    if update_start < visual_lines.len()
-        && (delta_height.abs() > 0.001 || byte_delta != 0 || qchar_delta != 0 || line_id_delta != 0)
-    {
-        let need_y = delta_height.abs() > 0.001;
-        for i in update_start..visual_lines.len() {
-            let vl = &mut visual_lines[i];
-            if need_y {
-                vl.y += delta_height;
-            }
-            if byte_delta != 0 {
-                vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
-                vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
-                vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
-            }
-            if qchar_delta != 0 {
-                vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
-                vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
-            }
-            if line_id_delta != 0 {
-                vl.id = (vl.id as i64 + line_id_delta) as usize;
-            }
-        }
-    }
-
-    // 更新后续段落的 paragraph_document_byte_start 及其内部行/cluster 的 byte offset。
-    // Issue #901 第十三轮问题1+2+6: 用 ParagraphOffsetIndex 作为段首 byte 坐标权威来源。
-    // paragraphs 数组的 paragraph_document_byte_start 仍就地更新（消费方直接读），
-    // 但 paragraph_offset_index 通过 build_offset_index_from_text 重建，
-    // 为未来迁移到"消费方通过偏移索引获取段首坐标"做准备。
-    if byte_delta != 0 {
-        let para_update_start = new_layout_end.min(paragraphs.len());
-        for para in &mut paragraphs[para_update_start..] {
-            para.paragraph_document_byte_start =
-                (para.paragraph_document_byte_start as i64 + byte_delta) as usize;
-            // 重建 index_map
-            para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
-                &para.paragraph_text,
-                para.paragraph_document_byte_start,
-            );
-            for line in &mut para.lines {
-                line.document_byte_start =
-                    (line.document_byte_start as i64 + byte_delta) as usize;
-                line.document_byte_end =
-                    (line.document_byte_end as i64 + byte_delta) as usize;
-                line.paragraph_document_byte_start =
-                    (line.paragraph_document_byte_start as i64 + byte_delta) as usize;
-                for cluster in &mut line.clusters {
-                    cluster.document_byte_start =
-                        (cluster.document_byte_start as i64 + byte_delta) as usize;
-                    cluster.document_byte_end =
-                        (cluster.document_byte_end as i64 + byte_delta) as usize;
-                }
-            }
-        }
-    }
-
-    // Issue #901 问题5: 增量路径只遍历了受影响段落，line_id/y/paragraph_idx
-    // 是受影响段落结束后的值。空文本/尾部换行处理需要文档末尾的值。
-    // 更新到 splice 后的文档末尾。
-    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
-    // 已物化的绝对坐标，直接读取最后一行的 y 即可。
-    line_id = visual_lines.len();
-    y = visual_lines.last().map(|vl| {
-        let resolved_y = if update_start < visual_lines.len() {
-            vl.y + delta_height
-        } else {
-            vl.y
-        };
-        resolved_y + vl.height
-    }).unwrap_or(padding);
+    // Issue #901 第十四轮问题1: 段内相对存储 — line_id/y 不再需要绝对值。
+    // 尾部换行处理使用相对坐标（id=0, y=0.0）。
     paragraph_idx = paragraphs.len() as i32;
 
     // 空文本处理
@@ -1229,7 +1176,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             qchar_end: 0,
             hard_break: false,
             x: padding + indent,
-            y,
+            y: 0.0,
             width: 0.0,
             height: line_height,
             para_text: String::new(),
@@ -1257,19 +1204,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第五轮阻塞2: 增量路径已搬运 prev 的尾部空行（如果 prev 也有尾部 \n），
     // 修改前面段落时可能重复插入末尾空视觉行。只对**确实需要新增**的末尾空视觉行
     // 创建节点，不允许沿用的 prev 哨兵再复制。
-    // 检查 splice 后的最后一个视觉行是否已经是末尾空行（para_text 为空且
-    // byte_start == text.len()），如果是则不再追加。
-    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
-    // 已物化的绝对坐标，直接读取 byte_start 即可。
+    // Issue #901 第十四轮问题1: 段内相对存储 — 检查最后一个视觉行是否是末尾空行
+    //（para_text 为空且 cache_slot == paragraph_idx - 1）。
     if text.ends_with('\n') {
-        let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
         let already_has_trailing_empty = visual_lines.last().map_or(false, |vl| {
-            vl.para_text.is_empty() && vl.byte_start == text.len()
+            vl.para_text.is_empty() && vl.cache_slot == paragraph_idx - 1
         });
         if !already_has_trailing_empty {
             let _empty_canonical = prepare_paragraph_visual_snapshot(
                 "",
-                text.len(),
+                paragraph_idx as usize,
                 font_size,
                 font_family,
                 available,
@@ -1283,17 +1227,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             );
             visual_lines.push(VisualLine {
                 id: line_id,
-                byte_start: text.len(),
-                byte_end: text.len(),
-                qchar_start: text_qchar_len,
-                qchar_end: text_qchar_len,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
                 hard_break: false,
                 x: padding + indent,
-                y,
+                y: 0.0,
                 width: 0.0,
                 height: line_height,
                 para_text: String::new(),
-                para_start: text.len(),
+                para_start: paragraph_idx as usize,
                 qtextline_idx: 0,
                 para_qchar_start: 0,
                 para_qchar_end: 0,
@@ -1308,6 +1252,35 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
+    // Issue #901 第十四轮问题1: 增量更新 paragraph_offset_index，不扫全文。
+    // 从 prev 的偏移索引 clone，只更新受影响段落的长度（O(k log n)）。
+    // 段落数变化时用 rebuild（O(n)），段落数不变时用 update_paragraph_length（O(log n)）。
+    let paragraph_offset_index = {
+        let mut idx = prev.paragraph_offset_index.clone();
+        let curr_count = paragraphs.len();
+        if curr_count != prev_para_count {
+            // 段落数变化（Enter 拆段/Backspace 合段），重建偏移索引
+            let mut byte_lengths = Vec::with_capacity(curr_count);
+            let mut qchar_lengths = Vec::with_capacity(curr_count);
+            for para_text in new_paras.iter() {
+                byte_lengths.push(para_text.len());
+                qchar_lengths.push(para_text.chars().map(|c| c.len_utf16()).sum::<usize>());
+            }
+            idx.rebuild(byte_lengths, qchar_lengths);
+        } else {
+            // 段落数不变，只更新受影响段落的长度（O(k log n)）
+            for para_idx in new_layout_start..new_layout_end {
+                if para_idx < new_paras.len() {
+                    let para = new_paras[para_idx];
+                    let byte_len = para.len();
+                    let qchar_len = para.chars().map(|c| c.len_utf16()).sum::<usize>();
+                    idx.update_paragraph_length(para_idx, byte_len, qchar_len);
+                }
+            }
+        }
+        idx
+    };
+
     let snapshot = CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -1320,8 +1293,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraphs,
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
-        // Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引 — 段首 byte/qchar 坐标权威来源。
-        paragraph_offset_index: build_offset_index_from_text(text),
+        // Issue #901 第十四轮问题1: 段落前缀偏移索引 — 增量更新，不扫全文。
+        paragraph_offset_index,
+        // Issue #901 第十四轮问题1: 段落高度索引 — 增量更新，不扫全文。
+        height_index: height_index.clone(),
     };
 
     // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
@@ -1815,6 +1790,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         });
     }
 
+    let height_index = build_height_index_from_lines(&visual_lines);
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -1829,5 +1805,6 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         visual_lines: Arc::new(visual_lines),
         // Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引。
         paragraph_offset_index: build_offset_index_from_text(text),
+        height_index,
     }
 }

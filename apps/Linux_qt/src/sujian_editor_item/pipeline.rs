@@ -1216,8 +1216,11 @@ fn make_cursor_rect_from_caret_doc(
     doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
     font_family: &str,
 ) -> CursorRect {
-    let line = doc_snapshot
-        .visual_lines
+    // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标，
+    // 再按 id 查找行（id 现为全局行索引）。
+    let resolved = doc_snapshot.resolved_visual_lines();
+    let line = resolved
+        .as_ref()
         .iter()
         .find(|l| l.id == caret.visual_line_id);
     // Issue #722 评论 5748596920 问题1: caret track 保存文档坐标（不减 scroll_y），
@@ -1327,7 +1330,9 @@ fn inject_new_animation_visuals_with_diagnostics(
         let ins_start = range.start().value();
         let ins_end = range.end().value();
         if ins_end > ins_start {
-            for (i, vl) in new_doc_snapshot.visual_lines.iter().enumerate() {
+            // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+            let resolved = new_doc_snapshot.resolved_visual_lines();
+            for (i, vl) in resolved.as_ref().iter().enumerate() {
                 // 只检查与 inserted_range 相交且含可见字符的行
                 if vl.byte_start >= ins_end || vl.byte_end <= ins_start {
                     continue;

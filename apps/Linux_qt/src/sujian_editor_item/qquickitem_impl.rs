@@ -575,6 +575,17 @@ impl QQuickItem for SujianEditorItem {
             // Issue #901 第九轮阻塞4: 传入稳定 ParagraphId 列表，
             // 供 ParagraphLineInfo 填入稳定身份标识。
             let paragraph_ids = self.editor_layout.paragraph_store().paragraph_ids();
+            // Issue #901 第十四轮问题2: 消费 force_full_relayout_pending。
+            // true 表示真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度），
+            // render_frame 传 force_full_relayout=true，C++ 侧无条件重建所有段落。
+            // 普通正文输入不设此标志，由 per-paragraph content_revision 独立判断。
+            let force_full_relayout = self.force_full_relayout_pending;
+            self.force_full_relayout_pending = false;
+            // Issue #901 第十四轮问题2: changed_paragraph_ids 来自 layout 层增量排版结果。
+            // 目前传空集：C++ 侧通过 per-paragraph content_revision 独立判断哪些段变化，
+            // 不依赖此集合。此字段供 Rust 侧做日志/调试参考。
+            let changed_paragraph_ids: std::collections::HashSet<ParagraphId> =
+                std::collections::HashSet::new();
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
@@ -584,6 +595,9 @@ impl QQuickItem for SujianEditorItem {
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
                 needs_relayout: frame_needs_relayout,
+                force_full_relayout,
+                changed_paragraph_ids: &changed_paragraph_ids,
+                session_id: self.document_session,
                 // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
                 loaded_para_range: self.loaded_para_range,
                 paragraph_ids: Some(&paragraph_ids),

@@ -63,7 +63,7 @@ pub(crate) mod visual_canvas;
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
-    VisualLine,
+    ParagraphId, VisualLine,
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
@@ -516,6 +516,14 @@ pub struct SujianEditorItem {
     layout_dirty: bool,
     /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
     scene_dirty: bool,
+    /// Issue #901 第十四轮问题2: 真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度）
+    /// 时为 true，update_paint_node 消费后置为 false。
+    ///
+    /// 与 `layout_dirty` 区分：`layout_dirty` 在普通正文输入时也为 true，
+    /// 但普通正文输入只影响个别段落，不应 force_full_update=true。
+    /// `force_full_relayout_pending=true` 时 render_frame 传 force_full_relayout=true，
+    /// C++ 侧无条件重建所有已有段落子节点。
+    force_full_relayout_pending: bool,
     /// 最后一次成功提交的动画 owner 集合版本。render 失败时保留旧值，下一帧重试。
     last_committed_ownership_revision: u64,
     /// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
@@ -691,6 +699,7 @@ impl Default for SujianEditorItem {
             editor_layout: EditorLayout::default(),
             layout_dirty: true,
             scene_dirty: true,
+            force_full_relayout_pending: true,
             last_committed_ownership_revision: 0,
             prepared_frame: None,
             frame_submission_mailbox,

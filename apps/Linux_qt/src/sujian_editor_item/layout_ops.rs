@@ -161,6 +161,10 @@ impl SujianEditorItem {
         };
         let text_color = self.current_text_color.to_string();
 
+        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        let resolved = doc_snapshot.resolved_visual_lines();
+        let resolved_lines = resolved.as_ref();
+
         // 合并 affected range 行索引和视口内可见行索引。
         use std::collections::HashSet;
         let mut line_indices_set: HashSet<usize> = HashSet::new();
@@ -180,11 +184,9 @@ impl SujianEditorItem {
             // - end   = 第一个 byte_start >= affected_end 的索引
             //   （partition_point 返回第一个不满足 byte_start < affected_end 的位置）
             // [start, end) 即所有满足原条件的行，与线性扫描结果完全一致。
-            let start = doc_snapshot
-                .visual_lines
+            let start = resolved_lines
                 .partition_point(|vl| vl.byte_end <= affected_start);
-            let end = doc_snapshot
-                .visual_lines
+            let end = resolved_lines
                 .partition_point(|vl| vl.byte_start < affected_end);
             line_indices_set.extend(start..end);
         }
@@ -196,11 +198,9 @@ impl SujianEditorItem {
         let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
         let vp_top = scroll_y - max_line_h;
         let vp_bottom = scroll_y + viewport_h + max_line_h;
-        let viewport_start = doc_snapshot
-            .visual_lines
+        let viewport_start = resolved_lines
             .partition_point(|vl| vl.y + vl.height <= vp_top);
-        let viewport_end = doc_snapshot
-            .visual_lines
+        let viewport_end = resolved_lines
             .partition_point(|vl| vl.y < vp_bottom);
         line_indices_set.extend(viewport_start..viewport_end);
 
@@ -210,7 +210,7 @@ impl SujianEditorItem {
         if !affected_line_indices.is_empty() {
             let handle = crate::editor::layout::PreparedLayoutHandle {
                 generation,
-                lines: doc_snapshot.visual_lines.as_slice(),
+                lines: resolved_lines,
             };
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
                 &handle,
@@ -224,7 +224,7 @@ impl SujianEditorItem {
             let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
                 HashMap::with_capacity(affected_line_indices.len());
             for &idx in &affected_line_indices {
-                let vl = &doc_snapshot.visual_lines[idx];
+                let vl = &resolved_lines[idx];
                 para_qtextline_to_byte_start
                     .insert((vl.para_start, vl.qtextline_idx), vl.byte_start);
             }
@@ -381,6 +381,10 @@ impl SujianEditorItem {
             affected_end,
         );
 
+        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        let resolved = doc_snapshot.resolved_visual_lines();
+        let resolved_lines = resolved.as_ref();
+
         // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
         // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
         // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
@@ -397,11 +401,13 @@ impl SujianEditorItem {
         // 只合并 coverage，不改成"每次全文 QImage 栅格化"。
         if affected_start < affected_end {
             let line_ids: Vec<usize> = {
-                let old_lines_opt = self.editor_layout.cache().map(|c| c.lines.as_slice());
+                // Issue #901 第十四轮问题1: 用 resolved_lines 物化绝对坐标做 diff。
+                let old_resolved = self.editor_layout.cache().map(|c| c.resolved_lines());
+                let old_lines_opt = old_resolved.as_ref().map(|c| c.as_ref());
                 let mut ids = if let Some(old_lines) = old_lines_opt {
                     let diff = crate::editor::layout::compare_old_new_visual_lines(
                         old_lines,
-                        doc_snapshot.visual_lines.as_slice(),
+                        resolved_lines,
                         Some((affected_start, affected_end)),
                         None,
                     );
@@ -418,7 +424,7 @@ impl SujianEditorItem {
                     Vec::new()
                 };
                 // 并入 composition range 直接覆盖的行
-                for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
+                for (i, l) in resolved_lines.iter().enumerate() {
                     if l.byte_start < affected_end
                         && l.byte_end > affected_start
                         && !ids.contains(&i)
@@ -436,7 +442,7 @@ impl SujianEditorItem {
                 // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
-                    lines: doc_snapshot.visual_lines.as_slice(),
+                    lines: resolved_lines,
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &handle, &line_ids, dpr, text_color,

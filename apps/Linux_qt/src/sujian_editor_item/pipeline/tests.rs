@@ -115,6 +115,8 @@ fn test_doc_snapshot(
         visual_lines: Arc::new(Vec::new()),
         paragraph_offset_index:
             crate::editor::layout::ParagraphOffsetIndex::new(),
+        height_index:
+            crate::editor::layout::ParagraphHeightIndex::new(),
     }
 }
 
@@ -174,16 +176,17 @@ fn test_raster_visual(
 ///（reason=ClustersEmpty），让上游知道这是 invariant failure。
 #[test]
 fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
-    // 目标 snapshot 里只有一个段落 (para_start=999)，且其第 7 行没有 clusters；
-    // inserted visible line 的稳定身份也是 (para_start=999, qtextline_idx=7)，
+    // 目标 snapshot 里只有一个段落 (para_start=0)，且其第 7 行没有 clusters；
+    // inserted visible line 的稳定身份也是 (para_start=0, qtextline_idx=7)，
     // prepare 命中但 canonical_line_has_clusters 返回 false → ClustersEmpty。
+    // Issue #901 第十四轮问题1: para_start 现为段落索引（0），不再是绝对 byte offset。
     let mut doc = test_doc_snapshot(
         "ab",
-        999,
-        vec![test_canonical_line(999, 7, 0, 2, Vec::new())],
+        0,
+        vec![test_canonical_line(0, 7, 0, 2, Vec::new())],
     );
-    doc.visual_lines = Arc::new(vec![test_visual_line(999, 7, 0, 2, "ab")]);
-    let prepared = vec![test_raster_visual(999, 7)];
+    doc.visual_lines = Arc::new(vec![test_visual_line(0, 7, 0, 2, "ab")]);
+    let prepared = vec![test_raster_visual(0, 7)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,
@@ -212,11 +215,11 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
     );
     let fl = &status.failed_lines[0];
     assert_eq!(fl.visual_line_idx, 0);
-    assert_eq!(fl.para_start, 999);
+    assert_eq!(fl.para_start, 0);
     assert_eq!(fl.qtextline_idx, 7);
     assert_eq!(fl.reason, AnimationVisualsFailedReason::ClustersEmpty);
     assert!(
-        !canonical_line_has_clusters(&doc, 999, 7),
+        !canonical_line_has_clusters(&doc, 0, 7),
         "canonical 行仍然没有 clusters"
     );
 }

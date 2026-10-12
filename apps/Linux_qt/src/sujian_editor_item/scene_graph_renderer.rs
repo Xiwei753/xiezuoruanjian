@@ -268,6 +268,22 @@ pub(crate) struct StaticTextParams<'a> {
     pub viewport_height: f64,
     pub color: &'a str,
     pub needs_relayout: bool,
+    /// Issue #901 第十四轮问题2: 真正全局变化（字体/宽度/字号变化）时为 true。
+    ///
+    /// 与 `needs_relayout` 区分：`needs_relayout` 在普通正文输入时也为 true，
+    /// 但普通正文输入只影响个别段落，不应 `force_full_update=true` 无差别重建所有段落。
+    /// `force_full_relayout=true` 时 C++ 侧无条件重建所有已有段落子节点。
+    pub force_full_relayout: bool,
+    /// Issue #901 第十四轮问题2: 本帧内容变化的段落身份集合。
+    ///
+    /// 来自 layout 层增量排版结果。C++ 侧通过 per-paragraph `content_revision`
+    /// 独立判断每段是否变化，此集合供 Rust 侧做日志/调试参考。
+    pub changed_paragraph_ids: &'a std::collections::HashSet<ParagraphId>,
+    /// Issue #901 第十四轮问题4: 文档 session 标识。
+    ///
+    /// 切章/清文档时递增。C++ 侧据此检测 session 变化，自动清空旧 map，
+    /// 消除 `void*` 全局映射的地址复用风险。
+    pub session_id: u64,
     /// Issue #901 第九轮阻塞4: 上次 rebuild 成功后加载的段落索引范围。
     /// `None` 表示尚未加载任何段落（首次渲染或上次 rebuild 失败）。
     pub loaded_para_range: Option<(usize, usize)>,
@@ -527,6 +543,27 @@ pub(crate) fn render_frame(
                         })
                         .unwrap_or(0);
                     current_paragraph_id = paragraph_id;
+                    // Issue #901 第十四轮问题2: 计算 per-paragraph content_revision。
+                    // 用 paragraph_text 的哈希值作为内容版本签名，
+                    // 与 ParagraphLayoutCacheKey::text_hash 一致。
+                    let content_revision = {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        line.para_text.hash(&mut hasher);
+                        hasher.finish()
+                    };
+                    // Issue #901 第十四轮问题2: 计算段落总高度，供 C++ 侧过滤 clip。
+                    // 有 height_index 时用 O(1) 前缀和差，否则用单行高度作 fallback。
+                    let paragraph_height = if let Some(hi) = static_text.height_index {
+                        if line.cache_slot >= 0 {
+                            let slot = line.cache_slot as usize;
+                            hi.paragraph_bottom_y(slot) - hi.paragraph_top_y(slot)
+                        } else {
+                            line.height
+                        }
+                    } else {
+                        line.height
+                    };
                     paragraphs.push(qt_text_node::ParagraphLineInfo {
                         paragraph_text: line.para_text.clone(),
                         para_start: line.para_start,
@@ -537,6 +574,8 @@ pub(crate) fn render_frame(
                         font_size: snapshot.font_size,
                         font_family: snapshot.font_family.clone(),
                         doc_width: snapshot.width,
+                        content_revision,
+                        paragraph_height,
                     });
                 }
 
@@ -583,11 +622,12 @@ pub(crate) fn render_frame(
             // Issue #901 第十轮问题4: 改为调用 update_text_nodes_incremental
             // 做增量 insert/remove/update，而非全量 rebuild。
             //
-            // force_full_update 判断：
-            // - needs_relayout: 正文/字体/宽度变化，段落内容可能变了 → update 所有已有段落
-            // - !animation_resources_ready: 资源缺失，从有 clip 到无 clip 或反之 → update 所有
-            // - viewport_exceeds_loaded（纯滚动跨出）: 段落内容不变 → 只 insert/remove，
-            //   force_full_update=false，已有段落按 generation 签名决定是否重建
+            // Issue #901 第十四轮问题2: force_full_update 判断修正：
+            // - force_full_relayout: 真正全局变化（字体/宽度/字号）→ 重建所有已有段落
+            // - !animation_resources_ready: 资源缺失，从有 clip 到无 clip 或反之 → 重建所有
+            // - needs_relayout（普通正文输入）: 不再 force_full_update=true，
+            //   由 C++ 侧 per-paragraph content_revision 独立判断哪些段变化
+            // - viewport_exceeds_loaded（纯滚动跨出）: 段落内容不变 → 只 insert/remove
             //
             // Issue #901 第十一轮问题5：handoff_pending 只影响 clip 集合，不影响段落
             // 内容/布局。不再因 handoff_pending 就 force_full_update=true 无差别重建所有
@@ -595,14 +635,14 @@ pub(crate) fn render_frame(
             // animation_clip_rects 参数独立完成，不依赖 force_full_update。
             //
             // Issue #901 第十三轮问题3+4：force_full_update=false 时不再无差别 continue，
-            // 而是由 update_text_nodes_incremental 内部按 per-paragraph 内容版本签名
-            // (generation, cache_idx) 和 clip signature 比较驱动：
+            // 而是由 update_text_nodes_incremental 内部按 per-paragraph content_revision
+            // 和 per-paragraph clip signature 比较驱动：
             // - para_y 变化 → 只更新 transform_node 矩阵（不重建子节点）
-            // - (generation, cache_idx) 变化 → 重建子节点（内容变了）
+            // - content_revision 变化 → 重建子节点（内容变了）
             // - clip signature 变化 → 重建子节点（裁剪变了）
             // - 都不变 → 真正跳过
             // 这样即使 force_full_update=false，内容/裁剪变了的段落也会被重建。
-            let force_full_update = static_text.needs_relayout
+            let force_full_update = static_text.force_full_relayout
                 || !animation_resources_ready;
 
             static_rebuild_ok = qt_text_node::update_text_nodes_incremental(
@@ -616,6 +656,7 @@ pub(crate) fn render_frame(
                 f64::from(snapshot.padding),
                 snapshot.layout_generation,
                 force_full_update,
+                static_text.session_id,
             );
 
             // Issue #901 第十轮问题4: 增量更新失败时（paragraph_id == 0 或 layout 缺失），

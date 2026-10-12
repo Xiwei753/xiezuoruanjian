@@ -249,7 +249,10 @@ impl SujianEditorItem {
         {
             let mut line_info = String::new();
             if let Some(snapshot) = self.editor_layout.cache() {
-                if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
+                // Issue #901 第十四轮问题1: 用 resolved_lines 物化绝对坐标，
+                // 再按 id 查找行（id 现为全局行索引）。
+                let resolved = snapshot.resolved_lines();
+                if let Some(line) = resolved.as_ref().iter().find(|l| l.id == visual_line_id) {
                     let font_size = f64::from(snapshot.font_size);
                     let font_family = &snapshot.font_family;
                     let ascent = if line.qt_ascent > 0.0 {

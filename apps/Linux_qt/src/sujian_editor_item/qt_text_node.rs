@@ -59,34 +59,45 @@ cpp! {{
     // QSGTextNode 或 QSGClipNode 集合（段内 y=0 构建）。
     // 增量更新时按 ParagraphId 做 insert/remove/update，不全量重建。
     //
-    // key: item_ptr (QQuickItem*), value: ItemNodeMap
+    // Issue #901 第十四轮问题4: key 改为 QSGTransformNode*（staticLayer 指针），
+    // 不再用 void*（item_ptr），消除地址复用风险。
+    // ItemNodeMap 新增 session_id 字段，切章时 session_id 变化自动清空旧 map。
     struct IncrementalParaNodeInfo {
         // Issue #901 第十三轮问题3: 段落位置层 QSGTransformNode。
         // 矩阵为 translate(0, para_y)，把段内 y=0 的子节点平移到文档坐标。
         // para_y 变化时只更新此矩阵和 markDirty(DirtyMatrix)，不重建子节点。
         QSGTransformNode* transform_node;
         double para_y;       // 段落第一行文档 y（用于排序和 transform 矩阵）
-        // Issue #901 第十三轮问题3: per-paragraph 内容版本签名 (generation, cache_idx)。
-        // 不用全局 content_generation，加上 cache_idx 区分同 generation 下不同段的
-        // 重新排版。两者任一变化 → 重建子节点。
-        uint64_t applied_generation;
+        // Issue #901 第十四轮问题2: per-paragraph 内容版本签名 (content_revision)。
+        // 不用全局 generation，而是 per-paragraph 的 text hash。
+        // content_revision 变化 → 重建子节点。其他段变化不影响本段判断。
+        uint64_t applied_content_revision;
         int applied_cache_idx;
-        // Issue #901 第十三轮问题4: 该段实际应用的 static exclusion/clip signature。
+        // Issue #901 第十三轮问题4+第十四轮问题2: 该段实际相交的 clip signature。
+        // 只保存与该段 y 范围相交的 clip（按 visual line y 范围过滤），
+        // 而非整页 clip。这样无关 clip 变化不会触发该段重建。
         // clip signature 变化时重建裁剪子节点，内容 QSGTextNode 不动。
         std::vector<std::pair<double,double>> applied_clip_xy;
         std::vector<std::pair<double,double>> applied_clip_wh;
         // 该段实际应用的 visual line qtextline 索引集合。
         std::vector<int> applied_vl_qtextline_idxs;
     };
-    // per-item 的映射表 + 所属 staticLayer 指针。
+    // per-item 的映射表 + 所属 staticLayer 指针 + session_id。
     // static_layer 用于检测 QSG 树变更（item 销毁后重建会生成新 staticLayer），
     // 此时旧 map 条目中的 container 指针已悬空，需清空 map 重新开始。
+    // session_id 用于检测切章/清文档（session 变化时清空 para_map）。
+    // item_ptr 用于 cleanup 函数按 item 查找并清理 map 条目。
     struct ItemNodeMap {
         std::unordered_map<uint64_t, IncrementalParaNodeInfo> para_map;
         QSGTransformNode* static_layer;
-        ItemNodeMap() : static_layer(nullptr) {}
+        uint64_t session_id;
+        void* item_ptr;
+        ItemNodeMap() : static_layer(nullptr), session_id(0), item_ptr(nullptr) {}
     };
-    static std::unordered_map<void*, ItemNodeMap> g_incremental_para_map;
+    // Issue #901 第十四轮问题4: key 改为 QSGTransformNode*（staticLayer 指针）。
+    // staticLayer 是 QSG 树节点指针，item 销毁后 QSG 树被回收，
+    // 新 item 生成新 QSG 树和新 staticLayer 指针，不会地址复用。
+    static std::unordered_map<QSGTransformNode*, ItemNodeMap> g_incremental_para_map;
 
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
@@ -373,8 +384,9 @@ cpp! {{
         // 必须在删除子节点**之前**清空该 item 的增量映射条目，否则下一次增量
         // 路径会通过旧 container 指针访问已释放的内存（removeChildNode/delete/
         // childCount），导致崩溃。全量 rebuild 后 map 为空，下一次增量路径从头
-        // 建立节点身份表。erase 不会解引用 item_ptr，仅按指针值移除 map 条目，安全。
-        g_incremental_para_map.erase(item_ptr);
+        // 建立节点身份表。erase 不会解引用指针，仅按指针值移除 map 条目，安全。
+        // Issue #901 第十四轮问题4: key 改为 QSGTransformNode*（staticLayer 指针）。
+        g_incremental_para_map.erase(staticLayer);
         while (staticLayer->childCount() > 0) {
             QSGNode *oldChild = staticLayer->childAtIndex(staticLayer->childCount() - 1);
             staticLayer->removeChildNode(oldChild);
@@ -536,7 +548,14 @@ cpp! {{
             textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
             container->appendChildNode(textNode);
         } else {
-            // 有 clip：按 visual line 创建 clipNode + clipTextNode
+            // Issue #901 第十四轮问题3: 二维矩形差集精确裁剪。
+            //
+            // 对每个视觉行，用二维矩形差集（视觉行矩形减去所有与它相交的 clip 矩形）
+            // 替代旧的 xClips + complement 方式。旧方式按"纵向有任何交集"就把 x 区间
+            // 加入 xClips 对整行高度挖掉，导致部分 y 交集的 clip 挖掉过多。
+            //
+            // 二维差集算法：rect_subtract_holes(rect, holes) 返回 rect 减去所有 holes
+            // 后的非重叠矩形集合。每个结果矩形创建一个 QSGClipNode + QSGTextNode。
             for (int vl_idx : vl_indices) {
                 int qline = vl_qtextline_idx_arr[vl_idx];
                 double ly = vl_y_arr[vl_idx];
@@ -551,59 +570,79 @@ cpp! {{
                 double contentRight = dw - origin_x;
                 if (contentRight < contentLeft) contentRight = contentLeft;
 
-                // 收集与该行 y 范围相交的 clip rects
-                struct TempXClip { double x, x2; };
-                std::vector<TempXClip> xClips;
+                // 视觉行矩形（文档坐标）
+                double lineRect_x = contentLeft;
+                double lineRect_y = ly;
+                double lineRect_w = contentRight - contentLeft;
+                double lineRect_h = lh;
+
+                // 收集与该行矩形相交的 clip rects（二维交集）
+                struct Rect { double x, y, w, h; };
+                std::vector<Rect> holes;
                 for (size_t c = 0; c < clip_rects_xy.size(); c++) {
                     double cx = clip_rects_xy[c].first;
                     double cy = clip_rects_xy[c].second;
                     double cw = clip_rects_wh[c].first;
                     double ch = clip_rects_wh[c].second;
-                    if (cy < ly + lh && cy + ch > ly) {
-                        double crLeft = cx;
-                        double crRight = cx + cw;
-                        if (crLeft < contentLeft) crLeft = contentLeft;
-                        if (crRight > contentRight) crRight = contentRight;
-                        if (crLeft < crRight) {
-                            xClips.push_back({crLeft, crRight});
+                    // 二维交集判断：x 和 y 都有重叠
+                    if (cx < lineRect_x + lineRect_w && cx + cw > lineRect_x &&
+                        cy < lineRect_y + lineRect_h && cy + ch > lineRect_y) {
+                        // clip 与行矩形相交，加入 holes
+                        holes.push_back({cx, cy, cw, ch});
+                    }
+                }
+
+                // 二维矩形差集：lineRect - holes
+                // 算法：对每个 hole，从当前矩形集合中减去它。
+                // rect - hole 最多产生 4 个子矩形（上、下、左、右）。
+                std::vector<Rect> fragments;
+                fragments.push_back({lineRect_x, lineRect_y, lineRect_w, lineRect_h});
+
+                for (const auto& hole : holes) {
+                    std::vector<Rect> next_fragments;
+                    for (const auto& rect : fragments) {
+                        // 检查 rect 和 hole 是否相交
+                        double ix = std::max(rect.x, hole.x);
+                        double iy = std::max(rect.y, hole.y);
+                        double ix2 = std::min(rect.x + rect.w, hole.x + hole.w);
+                        double iy2 = std::min(rect.y + rect.h, hole.y + hole.h);
+                        if (ix >= ix2 || iy >= iy2) {
+                            // 不相交，rect 保留
+                            next_fragments.push_back(rect);
+                            continue;
+                        }
+                        // 相交，计算 rect - hole 的子矩形
+                        // 上条
+                        if (iy > rect.y) {
+                            next_fragments.push_back({rect.x, rect.y, rect.w, iy - rect.y});
+                        }
+                        // 下条
+                        if (iy2 < rect.y + rect.h) {
+                            next_fragments.push_back({rect.x, iy2, rect.w, rect.y + rect.h - iy2});
+                        }
+                        // 左条（y 范围与 hole 的 y 交集对齐）
+                        if (ix > rect.x) {
+                            next_fragments.push_back({rect.x, iy, ix - rect.x, iy2 - iy});
+                        }
+                        // 右条
+                        if (ix2 < rect.x + rect.w) {
+                            next_fragments.push_back({ix2, iy, rect.x + rect.w - ix2, iy2 - iy});
                         }
                     }
+                    fragments = std::move(next_fragments);
                 }
 
-                std::sort(xClips.begin(), xClips.end(),
-                    [](const TempXClip& a, const TempXClip& b) { return a.x < b.x; });
-
-                struct XRange { double left, right; };
-                std::vector<XRange> mergedClips;
-                for (const auto& xc : xClips) {
-                    if (!mergedClips.empty() && xc.x <= mergedClips.back().right) {
-                        mergedClips.back().right = std::max(mergedClips.back().right, xc.x2);
-                    } else {
-                        mergedClips.push_back({xc.x, xc.x2});
-                    }
-                }
-
-                std::vector<XRange> complements;
-                double curX = contentLeft;
-                for (const auto& mc : mergedClips) {
-                    if (mc.left > curX) {
-                        complements.push_back({curX, mc.left});
-                    }
-                    curX = mc.right;
-                }
-                if (curX < contentRight) {
-                    complements.push_back({curX, contentRight});
-                }
-
-                for (const auto& comp : complements) {
-                    double clipW = comp.right - comp.left;
-                    if (clipW < 0.5) continue;
+                // 为每个差集结果矩形创建 QSGClipNode + QSGTextNode
+                for (const auto& frag : fragments) {
+                    double clipW = frag.w;
+                    double clipH = frag.h;
+                    if (clipW < 0.5 || clipH < 0.5) continue;
 
                     auto* clipNode = new QSGClipNode;
                     clipNode->setIsRectangular(true);
-                    // Issue #901 第十三轮问题3: clip rect 转为段内坐标（ly - para_y），
+                    // Issue #901 第十三轮问题3: clip rect 转为段内坐标（y - para_y），
                     // 由 transform_node 平移回文档坐标。
-                    clipNode->setClipRect(QRectF(comp.left, ly - para_y, clipW, lh));
+                    clipNode->setClipRect(QRectF(frag.x, frag.y - para_y, clipW, clipH));
 
                     QSGTextNode* clipTextNode = window->createTextNode();
                     if (clipTextNode) {
@@ -630,15 +669,17 @@ cpp! {{
     /// - 新出现的 ParagraphId → insert 新容器节点 + 子节点
     /// - 消失的 ParagraphId → remove 容器节点（从 staticLayer 移除并删除）
     /// - 已存在且 force_full_update=true → update（删除旧子节点，创建新子节点）
-    /// - 已存在且 force_full_update=false → 按 per-paragraph generation 签名决定：
-    ///   - content_generation == generation 且 para_y 相同 → 跳过
-    ///   - content_generation == generation 但 para_y 不同 → 只更新 para_y
-    ///   - content_generation != generation → 重建子节点
+    /// - 已存在且 force_full_update=false → 按 per-paragraph content_revision 决定：
+    ///   - content_revision 相同且 para_y 相同 → 跳过
+    ///   - content_revision 相同但 para_y 不同 → 只更新 para_y
+    ///   - content_revision 不同 → 重建子节点
     ///
-    /// force_full_update=true 用于 needs_relayout / clip 模式切换等需要重建所有
-    /// 已有段落子节点的场景（例外情况，非常态）。
-    /// force_full_update=false 用于纯滚动跨出（viewport_exceeds_loaded）或
-    /// 局部变化，按 generation 签名只重建内容变了的段落，未变段落保持不动。
+    /// Issue #901 第十四轮问题2: force_full_update 只用于真正全局变化
+    /// （字体/宽度/字号变化），普通正文输入不应 force_full_update=true。
+    /// force_full_update=false 时由 per-paragraph content_revision 独立判断。
+    ///
+    /// Issue #901 第十四轮问题4: g_incremental_para_map key 改为 staticLayer 指针，
+    /// session_id 变化时清空 para_map。
     ///
     /// 返回 true 表示成功；false 表示因 layout 缺失或场景图无效而放弃
     /// （调用方应保留 dirty 标志，下一帧重试）。
@@ -648,6 +689,8 @@ cpp! {{
         const int* cache_idx_arr,
         const double* para_y_arr,
         const uint64_t* paragraph_id_arr,
+        const uint64_t* content_revision_arr,
+        const double* paragraph_height_arr,
         int para_count,
         const int* vl_cache_idx_arr,
         const int* vl_qtextline_idx_arr,
@@ -663,7 +706,8 @@ cpp! {{
         int clip_count,
         double origin_x,
         uint64_t generation,
-        bool force_full_update
+        bool force_full_update,
+        uint64_t session_id
     ) {
         if (!root_raw || !item_ptr) return false;
         QQuickWindow* window = item_ptr->window();
@@ -690,13 +734,30 @@ cpp! {{
         }
 
         QColor textColor(color_q);
-        auto& item_map = g_incremental_para_map[item_ptr];
+        // Issue #901 第十四轮问题4: key 改为 staticLayer 指针。
+        // staticLayer 是 QSG 树节点指针，item 销毁后 QSG 树被回收，
+        // 新 item 生成新 staticLayer 指针，不会地址复用。
+        auto& item_map = g_incremental_para_map[staticLayer];
+        // 记录 item_ptr，供 cleanup 函数按 item 查找并清理 map 条目。
+        item_map.item_ptr = item_ptr;
         // 安全检查：如果 staticLayer 变了（item 销毁后重建生成新 QSG 树），
         // 旧 map 条目中的 container 指针已悬空。清空 map（不 delete 节点，
         // 它们属于旧 QSG 树，已被 Qt 管理），重新开始。
         if (item_map.static_layer != staticLayer) {
             item_map.para_map.clear();
             item_map.static_layer = staticLayer;
+        }
+        // Issue #901 第十四轮问题4: session_id 变化时清空 para_map。
+        // 切章/清文档时 session_id 递增，旧段落节点不再有效。
+        if (item_map.session_id != session_id) {
+            // 清空 staticLayer 的所有旧子节点（旧 session 的段落节点）
+            while (staticLayer->childCount() > 0) {
+                QSGNode* oldChild = staticLayer->childAtIndex(staticLayer->childCount() - 1);
+                staticLayer->removeChildNode(oldChild);
+                delete oldChild;
+            }
+            item_map.para_map.clear();
+            item_map.session_id = session_id;
         }
         auto& node_map = item_map.para_map;
 
@@ -738,15 +799,15 @@ cpp! {{
             }
         }
 
-        // ── 准备 clipRects ──
-        std::vector<std::pair<double,double>> clip_rects_xy;
-        std::vector<std::pair<double,double>> clip_rects_wh;
+        // ── 准备全量 clipRects ──
+        std::vector<std::pair<double,double>> all_clip_rects_xy;
+        std::vector<std::pair<double,double>> all_clip_rects_wh;
         for (int c = 0; c < clip_count; c++) {
             double cw = clip_w_arr[c];
             double ch = clip_h_arr[c];
             if (ch > 0.0 && cw > 0.0) {
-                clip_rects_xy.push_back({clip_x_arr[c], clip_y_arr[c]});
-                clip_rects_wh.push_back({cw, ch});
+                all_clip_rects_xy.push_back({clip_x_arr[c], clip_y_arr[c]});
+                all_clip_rects_wh.push_back({cw, ch});
             }
         }
 
@@ -757,19 +818,21 @@ cpp! {{
         }
 
         // ── Insert / Update ──
-        // Issue #901 第十三轮问题3+4: 按 per-paragraph 内容版本签名和 clip signature
-        // 驱动增量更新，而非 force_full_update 全量重建。
-        // - force_full_update=true: 无条件重建所有已有段落子节点（全局变化如 needs_relayout）。
+        // Issue #901 第十四轮问题2: 按 per-paragraph content_revision 和
+        // per-paragraph filtered clip signature 驱动增量更新。
+        // - force_full_update=true: 无条件重建所有已有段落子节点（真正全局变化）。
         // - force_full_update=false:
-        //     - para_y 变化 → 只更新 transform_node 矩阵（问题3：不重建子节点）
-        //     - (generation, cache_idx) 变化 → 重建子节点（内容变了）
-        //     - clip signature 变化 → 重建子节点（裁剪变了，问题4）
+        //     - para_y 变化 → 只更新 transform_node 矩阵（不重建子节点）
+        //     - content_revision 变化 → 重建子节点（内容变了）
+        //     - filtered clip signature 变化 → 重建子节点（裁剪变了）
         //     - 都不变 → 真正跳过
         for (int i = 0; i < para_count; i++) {
             uint64_t id = paragraph_id_arr[i];
             double para_y = para_y_arr[i];
             int cacheIdx = cache_idx_arr[i];
             bool is_empty = (text_lens[i] == 0);
+            uint64_t content_revision = content_revision_arr[i];
+            double para_height = paragraph_height_arr[i];
 
             // 计算该段的 visual line qtextline 索引集合（clip signature 的一部分）
             auto vl_it = vl_for_para.find(id);
@@ -779,6 +842,22 @@ cpp! {{
             para_vl_qtextline_idxs.reserve(vl_indices.size());
             for (int vl_idx : vl_indices) {
                 para_vl_qtextline_idxs.push_back(vl_qtextline_idx_arr[vl_idx]);
+            }
+
+            // Issue #901 第十四轮问题2: 按段 y 范围过滤 clip。
+            // 只保留与该段 y 范围 [para_y, para_y + para_height) 相交的 clip，
+            // 而非整页 clip。这样无关 clip 变化不会触发该段重建。
+            std::vector<std::pair<double,double>> para_clip_xy;
+            std::vector<std::pair<double,double>> para_clip_wh;
+            double para_top = para_y;
+            double para_bottom = para_y + para_height;
+            for (size_t c = 0; c < all_clip_rects_xy.size(); c++) {
+                double cy = all_clip_rects_xy[c].second;
+                double ch = all_clip_rects_wh[c].second;
+                if (cy < para_bottom && cy + ch > para_top) {
+                    para_clip_xy.push_back(all_clip_rects_xy[c]);
+                    para_clip_wh.push_back(all_clip_rects_wh[c]);
+                }
             }
 
             auto it = node_map.find(id);
@@ -793,11 +872,13 @@ cpp! {{
                     it->second.para_y = para_y;
                 }
 
-                // 问题3+4: 内容版本签名和 clip signature 决定是否重建
-                bool content_changed = (it->second.applied_generation != generation) ||
+                // Issue #901 第十四轮问题2: 用 per-paragraph content_revision 判断内容变化。
+                // 不再用全局 generation，只比较该段自己的 content_revision。
+                bool content_changed = (it->second.applied_content_revision != content_revision) ||
                                        (it->second.applied_cache_idx != cacheIdx);
-                bool clip_changed = (it->second.applied_clip_xy != clip_rects_xy) ||
-                                    (it->second.applied_clip_wh != clip_rects_wh) ||
+                // Issue #901 第十四轮问题2: 用 per-paragraph filtered clip signature。
+                bool clip_changed = (it->second.applied_clip_xy != para_clip_xy) ||
+                                    (it->second.applied_clip_wh != para_clip_wh) ||
                                     (it->second.applied_vl_qtextline_idxs != para_vl_qtextline_idxs);
                 bool need_rebuild = force_full_update || content_changed || clip_changed;
 
@@ -823,15 +904,15 @@ cpp! {{
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
                         vl_indices,
-                        clip_rects_xy, clip_rects_wh,
+                        para_clip_xy, para_clip_wh,
                         font_size, font_family,
                         textColor, origin_x, generation
                     );
                 }
-                it->second.applied_generation = generation;
+                it->second.applied_content_revision = content_revision;
                 it->second.applied_cache_idx = cacheIdx;
-                it->second.applied_clip_xy = clip_rects_xy;
-                it->second.applied_clip_wh = clip_rects_wh;
+                it->second.applied_clip_xy = para_clip_xy;
+                it->second.applied_clip_wh = para_clip_wh;
                 it->second.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
             } else {
                 // 新节点：创建段落位置层 QSGTransformNode
@@ -850,7 +931,7 @@ cpp! {{
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
                         vl_indices,
-                        clip_rects_xy, clip_rects_wh,
+                        para_clip_xy, para_clip_wh,
                         font_size, font_family,
                         textColor, origin_x, generation
                     );
@@ -859,10 +940,10 @@ cpp! {{
                 IncrementalParaNodeInfo info;
                 info.transform_node = transform_node;
                 info.para_y = para_y;
-                info.applied_generation = generation;
+                info.applied_content_revision = content_revision;
                 info.applied_cache_idx = cacheIdx;
-                info.applied_clip_xy = clip_rects_xy;
-                info.applied_clip_wh = clip_rects_wh;
+                info.applied_clip_xy = para_clip_xy;
+                info.applied_clip_wh = para_clip_wh;
                 info.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
                 node_map[id] = info;
             }
@@ -894,17 +975,26 @@ cpp! {{
         return true;
     }
 
-    /// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
+    /// Issue #901 第十轮问题4+第十四轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
     ///
-    /// 在渲染线程调用（如 sceneGraphInvalidated 回调），避免全局 map 中残留悬空指针。
+    /// 在渲染线程调用（如全量 rebuild 回退前），避免全局 map 中残留悬空指针。
     /// 不删除 QSGNode（由 Qt 场景图自行管理），只清理 map 条目。
+    /// Issue #901 第十四轮问题4: map key 改为 QSGTransformNode*（staticLayer），
+    /// 此函数按 item_ptr 遍历 map 查找并清理对应条目。
     void clear_incremental_para_map(QQuickItem* item_ptr) {
         if (!item_ptr) return;
-        g_incremental_para_map.erase(item_ptr);
+        // 按 item_ptr 遍历 map，清理所有匹配条目（通常只有 1 个）。
+        for (auto it = g_incremental_para_map.begin(); it != g_incremental_para_map.end(); ) {
+            if (it->second.item_ptr == item_ptr) {
+                it = g_incremental_para_map.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
-    // Issue #901 第十三轮问题5: 通过 QQuickWindow::scheduleRenderJob 在渲染线程
-    // 安全清理 g_incremental_para_map[item_ptr]。
+    // Issue #901 第十三轮问题5+第十四轮问题4: 通过 QQuickWindow::scheduleRenderJob
+    // 在渲染线程安全清理 g_incremental_para_map 中属于 item_ptr 的条目。
     //
     // Qt 官方文档：releaseResources() 在 GUI 线程触发，涉及 render 资源的清理
     // 需使用 QQuickWindow::scheduleRenderJob()，在渲染线程执行 job。
@@ -912,20 +1002,27 @@ cpp! {{
     // GUI 线程直接 erase 是跨线程数据竞争。scheduleRenderJob 保证 job 在渲染线程执行，
     // 与同在渲染线程的 update_text_nodes_incremental 读写互斥安全。
     //
-    // erase 只按指针值移除 map 条目，不解引用 item_ptr，所以即使 job 执行时
-    // item 已被销毁，item_ptr 仍可安全用作 map key。
+    // Issue #901 第十四轮问题4: cleanup 按 item_ptr 遍历 map 查找，
+    // 不解引用 item_ptr，所以即使 job 执行时 item 已被销毁，item_ptr 仍可安全比较。
     class ClearIncrementalParaMapJob : public QRunnable {
     public:
         ClearIncrementalParaMapJob(void* key) : m_key(key) {}
         void run() override {
-            g_incremental_para_map.erase(m_key);
+            // 按 item_ptr 遍历 map，清理所有匹配条目。
+            for (auto it = g_incremental_para_map.begin(); it != g_incremental_para_map.end(); ) {
+                if (it->second.item_ptr == m_key) {
+                    it = g_incremental_para_map.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     private:
         void* m_key;
     };
 
     /// Issue #901 第十三轮问题5: 在 GUI 线程调用，通过 scheduleRenderJob
-    /// 调度渲染线程清理 g_incremental_para_map[item_ptr]。
+    /// 调度渲染线程清理 g_incremental_para_map 中属于 item_ptr 的条目。
     /// 用于 QQuickItem::releaseResources() 和切章/清文档场景。
     void schedule_clear_incremental_para_map(QQuickItem* item_ptr) {
         if (!item_ptr) return;
@@ -950,9 +1047,16 @@ cpp! {{
     /// Issue #901 第十三轮问题5: 在渲染线程直接清理（用于 sceneGraphInvalidated 回调）。
     /// sceneGraphInvalidated 在渲染线程触发，回调直接在渲染线程执行，
     /// 与 update_paint_node 互斥安全。
+    /// Issue #901 第十四轮问题4: 按 item_ptr 遍历 map 查找并清理。
     void clear_incremental_para_map_render_thread(void* item_ptr) {
         if (!item_ptr) return;
-        g_incremental_para_map.erase(item_ptr);
+        for (auto it = g_incremental_para_map.begin(); it != g_incremental_para_map.end(); ) {
+            if (it->second.item_ptr == item_ptr) {
+                it = g_incremental_para_map.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 }}
 
@@ -982,6 +1086,17 @@ pub(crate) struct ParagraphLineInfo {
     pub font_family: String,
     /// 段落换行宽度（用于 C++ complement 区间判断）
     pub doc_width: f64,
+    /// Issue #901 第十四轮问题2: 段落内容版本签名（per-paragraph content revision）。
+    ///
+    /// 随段落文本/排版变化递增的计数器，而非全局 generation。
+    /// C++ 侧据此判断该段内容是否变化，不受其他段落变化影响。
+    /// 由 `hash_str(paragraph_text)` 计算，与 `ParagraphLayoutCacheKey::text_hash` 一致。
+    pub content_revision: u64,
+    /// Issue #901 第十四轮问题2: 段落总高度（所有视觉行高度之和）。
+    ///
+    /// C++ 侧据此过滤 clip：只保留与该段 y 范围 `[y, y + paragraph_height)` 相交的 clip，
+    /// 而非保存整页 clip。这样某段无关 clip 变化不会触发该段重建。
+    pub paragraph_height: f64,
 }
 
 /// Issue #658: per-visual-line 裁剪数据 — 用于按视觉行裁剪动画接管区域。
@@ -1429,6 +1544,7 @@ pub fn update_text_nodes_incremental(
     origin_x: f64,
     generation: u64,
     force_full_update: bool,
+    session_id: u64,
 ) -> bool {
     // 防御性空指针检查
     if root_raw.is_null() || item_ptr.is_null() {
@@ -1463,6 +1579,8 @@ pub fn update_text_nodes_incremental(
     let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
     let paragraph_ids: Vec<u64> = paragraphs.iter().map(|p| p.paragraph_id).collect();
+    let content_revisions: Vec<u64> = paragraphs.iter().map(|p| p.content_revision).collect();
+    let paragraph_heights: Vec<f64> = paragraphs.iter().map(|p| p.paragraph_height).collect();
 
     let vl_cache_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.cache_idx).collect();
     let vl_qtextline_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.qtextline_idx).collect();
@@ -1486,6 +1604,8 @@ pub fn update_text_nodes_incremental(
     let cache_idxs_ptr = cache_idxs.as_ptr();
     let para_y_ptr = para_y.as_ptr();
     let paragraph_ids_ptr = paragraph_ids.as_ptr();
+    let content_revisions_ptr = content_revisions.as_ptr();
+    let paragraph_heights_ptr = paragraph_heights.as_ptr();
     let vl_cache_idxs_ptr = vl_cache_idxs.as_ptr();
     let vl_qtextline_idxs_ptr = vl_qtextline_idxs.as_ptr();
     let vl_y_ptr = vl_y.as_ptr();
@@ -1506,6 +1626,8 @@ pub fn update_text_nodes_incremental(
         cache_idxs_ptr as "const int*",
         para_y_ptr as "const double*",
         paragraph_ids_ptr as "const uint64_t*",
+        content_revisions_ptr as "const uint64_t*",
+        paragraph_heights_ptr as "const double*",
         para_count as "int",
         vl_cache_idxs_ptr as "const int*",
         vl_qtextline_idxs_ptr as "const int*",
@@ -1526,7 +1648,8 @@ pub fn update_text_nodes_incremental(
         clip_count as "int",
         origin_x as "double",
         generation as "uint64_t",
-        force_full_update as "bool"
+        force_full_update as "bool",
+        session_id as "uint64_t"
     ] -> bool as "bool" {
         return update_text_nodes_incremental(
             root_raw, item_ptr,
@@ -1534,6 +1657,8 @@ pub fn update_text_nodes_incremental(
             cache_idxs_ptr,
             para_y_ptr,
             paragraph_ids_ptr,
+            content_revisions_ptr,
+            paragraph_heights_ptr,
             para_count,
             vl_cache_idxs_ptr,
             vl_qtextline_idxs_ptr,
@@ -1549,7 +1674,8 @@ pub fn update_text_nodes_incremental(
             clip_count,
             origin_x,
             generation,
-            force_full_update
+            force_full_update,
+            session_id
         );
     });
 

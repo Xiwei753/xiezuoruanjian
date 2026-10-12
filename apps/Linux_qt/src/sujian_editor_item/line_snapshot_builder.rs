@@ -46,7 +46,9 @@ impl LineSnapshotBuilder {
         let mut prev_para_start: Option<usize> = None;
         let mut visual_line_ordinal: u32 = 0;
 
-        for line in &*doc_snapshot.visual_lines {
+        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        let resolved_lines = doc_snapshot.resolved_visual_lines();
+        for line in resolved_lines.as_ref() {
             if line.para_text.is_empty() {
                 paragraph_id = paragraph_id.wrapping_add(1);
                 visual_line_ordinal = 0;
@@ -63,7 +65,7 @@ impl LineSnapshotBuilder {
 
                 // Issue #826 评论 42：真实 drawn caret top/height（不贴行顶）。
                 let (caret_top, caret_height) =
-                    cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+                    cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
@@ -106,7 +108,7 @@ impl LineSnapshotBuilder {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, line, &canonical.index_map))
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map))
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -252,7 +254,11 @@ impl LineSnapshotBuilder {
         let mut paragraph_id: u64 = first_para_idx as u64;
         let mut visual_line_ordinal: u32 = 0;
 
-        for line in &doc_snapshot.visual_lines[start_idx..end_idx] {
+        // Issue #901 第十四轮问题1: 用 resolve_visual_line 物化绝对坐标。
+        // partition_point 仍在 raw visual_lines 上做（para_start 为段落索引，
+        // 与 paragraph_document_byte_start 一致），但行的 y/byte 坐标需物化为绝对。
+        for idx in start_idx..end_idx {
+            let line = doc_snapshot.resolve_visual_line(idx);
             if line.para_text.is_empty() {
                 if prev_para_start != Some(line.para_start) && prev_para_start.is_some() {
                     paragraph_id = paragraph_id.wrapping_add(1);
@@ -269,7 +275,7 @@ impl LineSnapshotBuilder {
 
                 let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
                 let (caret_top, caret_height) =
-                    cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+                    cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
@@ -321,7 +327,7 @@ impl LineSnapshotBuilder {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, line, &canonical.index_map))
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map))
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -360,7 +366,7 @@ impl LineSnapshotBuilder {
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
             let (caret_top, caret_height) =
-                cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+                cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
             line_snapshots.push(PreparedLineSnapshot {
                 id,
