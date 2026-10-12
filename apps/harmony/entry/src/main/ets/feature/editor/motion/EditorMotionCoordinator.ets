@@ -155,6 +155,16 @@ interface FrozenWindowPiece {
 }
 
 /**
+ * Issue #879 复核评论6119020043 问题1：同一物理 Text（同一 renderNodeKey）的冻结成员
+ * 共用的位移增量。一个物理 Text 只有一个位移轨迹，聚合多个成员时必须用同一份增量，
+ * 否则会出现「裁切框移动、字形不动」的丢字/重影。
+ */
+interface FrozenGroupDelta {
+  dx: number
+  dy: number
+}
+
+/**
  * Coordinator 的一次完整“已提交状态”。
  *
  * 把 acceptUpdate 会写入的所有字段打包成一个不可变对象：
@@ -1480,6 +1490,12 @@ export class EditorMotionCoordinator {
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一个聚合 MotionGlyphWindow，合并 clipRects 和 UTF-16 范围。
     const frozenWindowAggregator = new Map<string, MotionGlyphWindow>()
+    // Issue #879 复核评论6119020043 问题1：同一物理 Text（同一 renderNodeKey）只有一份
+    // 位移轨迹。一个冻结窗口可能在多个 interval 里出现，但它们的成员共享同一个物理 Text
+    // 节点，Text 无法同时按多个不同的目标分别平移。这里以该 key 首次出现的成员算出
+    // 平移增量，所有同 key 成员共用这一个增量，保证聚合后 Text 的 offset 与每个 clipRect
+    // 位于同一坐标系——不出现「裁切框移动到新行、字形却停在本行」的丢字。
+    const frozenGroupDelta = new Map<string, FrozenGroupDelta>()
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
@@ -1684,18 +1700,26 @@ export class EditorMotionCoordinator {
               // 问题5：先计算位置插值——每帧成员的真实屏幕位置
               const memberStartScreenX = member.sourceGlyphRect.x + member.offsetX
               const memberStartScreenY = member.sourceGlyphRect.y + member.offsetY
-              let memberTargetScreenX: number
-              let memberTargetScreenY: number
-              if (intervalNewGlyphRect !== null) {
-                memberTargetScreenX = intervalNewGlyphRect.x
-                memberTargetScreenY = intervalNewGlyphRect.y
-              } else {
-                memberTargetScreenX = islandNewX
-                memberTargetScreenY = islandNewY
-              }
               const memberRole = member.role !== undefined
                 ? member.role
                 : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+              // 该成员按自身 interval 目标求出的目标位置（target 成员直接使用）
+              const ownTargetX = intervalNewGlyphRect !== null ? intervalNewGlyphRect.x : islandNewX
+              const ownTargetY = intervalNewGlyphRect !== null ? intervalNewGlyphRect.y : islandNewY
+              let memberTargetScreenX: number = ownTargetX
+              let memberTargetScreenY: number = ownTargetY
+              // Issue #879 复核评论6119020043 问题1：frozen 成员共享同一物理 Text 的位移轨迹。
+              // 同 renderNodeKey 的成员用首次出现成员算出的平移增量统一移动，避免「每个字一条
+              // 轨迹、却只有一张 Text」——聚合后 clipRects 与 Text offset 同处一个坐标系。
+              if (memberRole === 'frozen') {
+                let groupDelta = frozenGroupDelta.get(member.renderNodeKey)
+                if (groupDelta === undefined) {
+                  groupDelta = { dx: ownTargetX - memberStartScreenX, dy: ownTargetY - memberStartScreenY }
+                  frozenGroupDelta.set(member.renderNodeKey, groupDelta)
+                }
+                memberTargetScreenX = memberStartScreenX + groupDelta.dx
+                memberTargetScreenY = memberStartScreenY + groupDelta.dy
+              }
               let memberCurrentX: number
               let memberCurrentY: number
               if (memberRole === 'frozen' && member.clipRects.length === 0) {
@@ -1780,17 +1804,22 @@ export class EditorMotionCoordinator {
                   })
                 }
 
-                // 间隙碎片：零面积起点 + 按比例映射到 p=1 时真实屏幕 Text 矩形的间隙目标
-                for (const gap of remaining) {
-                  startRects.push({
-                    x: gap.x, y: gap.y,
-                    width: 0, height: Math.max(0, gap.height)
-                  })
-                  const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberFinalScreenRect)
-                  targetRects.push({
-                    x: mappedGap.x, y: mappedGap.y,
-                    width: mappedGap.width, height: mappedGap.height
-                  })
+                // 间隙碎片：零面积起点 + 按比例映射到 p=1 时真实屏幕 Text 矩形的间隙目标。
+                // Issue #879 复核评论6119020043 问题3：只有 target 新源才允许把上一帧尚未
+                // 显示的间隙「吐回来」。frozen 历史源上一笔已经吞掉/裁掉的部分必须继续隐藏，
+                // 不能因为下一笔编辑又长出已经消失的笔画（否则旧字会短暂冒泡回屏）。
+                if (memberRole === 'target') {
+                  for (const gap of remaining) {
+                    startRects.push({
+                      x: gap.x, y: gap.y,
+                      width: 0, height: Math.max(0, gap.height)
+                    })
+                    const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberFinalScreenRect)
+                    targetRects.push({
+                      x: mappedGap.x, y: mappedGap.y,
+                      width: mappedGap.width, height: mappedGap.height
+                    })
+                  }
                 }
               }
 
@@ -1859,19 +1888,20 @@ export class EditorMotionCoordinator {
                 ? member.role
                 : (member.sourceRevision === newRevision ? 'target' : 'frozen')
 
-              // 问题3：透明度用 startOpacity→targetOpacity 插值
-              let memberOpacity: number | undefined
-              if (member.opacity !== undefined) {
-                const memberTargetOpacity = member.targetOpacity >= 0
-                  ? member.targetOpacity
-                  : (member.sourceRevision === newRevision ? 1 : 0)
-                memberOpacity = member.opacity + (memberTargetOpacity - member.opacity) * p
-              } else if (needsSourceCrossfade) {
-                // 没有冻结 opacity 的成员（非交叉淡入淡出窗口的旧字段 fallback）
-                memberOpacity = member.sourceRevision === newRevision ? p : (1 - p)
-              } else {
-                memberOpacity = undefined
-              }
+              // 问题3：透明度用 startOpacity→targetOpacity 插值。
+              // Issue #879 复核评论6119020043 问题2：不再让「来源 opacity 是否定义」控制是否
+              // 采用 Planner 给出的目标 alpha。opacity===undefined 在语义上就是「当前完全不
+              // 透明」（普通非交叉淡变源的合法输入），frozen 源若因此被当作始终不透明，就会
+              // 整轮盖住正在淡入的新目标字。统一成显式数值：
+              //   frozen 起始 alpha = opacity ?? 1；target 起始 alpha = opacity ?? 0；
+              //   终点 alpha = targetOpacity>=0 ? targetOpacity : (target ? 1 : 0)。
+              const memberEndOpacity = member.targetOpacity >= 0
+                ? member.targetOpacity
+                : (memberRole === 'target' ? 1 : 0)
+              const memberStartOpacity = member.opacity !== undefined
+                ? member.opacity
+                : (memberRole === 'target' ? 0 : 1)
+              const memberOpacity: number = memberStartOpacity + (memberEndOpacity - memberStartOpacity) * p
 
               const memberWindow: MotionGlyphWindow = {
                 sourceKind: member.sourceKind,
