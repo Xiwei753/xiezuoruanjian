@@ -585,17 +585,19 @@ pub(crate) fn render_frame(
             //
             // force_full_update 判断：
             // - needs_relayout: 正文/字体/宽度变化，段落内容可能变了 → update 所有已有段落
-            // - handoff_pending: 动画交接，clip 集合变化 → 只需更新 clip 子节点，不需重建段落内容
             // - !animation_resources_ready: 资源缺失，从有 clip 到无 clip 或反之 → update 所有
             // - viewport_exceeds_loaded（纯滚动跨出）: 段落内容不变 → 只 insert/remove，
-            //   force_full_update=false，已有段落保持不动
+            //   force_full_update=false，已有段落按 generation 签名决定是否重建
             //
             // Issue #901 第十一轮问题5：handoff_pending 只影响 clip 集合，不影响段落
             // 内容/布局。不再因 handoff_pending 就 force_full_update=true 无差别重建所有
             // 已有段落节点。clip 子节点的更新由 update_text_nodes_incremental 内部根据
             // animation_clip_rects 参数独立完成，不依赖 force_full_update。
-            // needs_relayout 的进一步优化（按段落比较内容 hash/layout_generation 只重建
-            // 变更段落）需要 update_text_nodes_incremental 内部支持，此处暂保持整体重建。
+            //
+            // Issue #901 第十二轮问题5：force_full_update=false 时不再无差别 continue，
+            // 而是由 update_text_nodes_incremental 内部按 per-paragraph content_generation
+            // 与当前 generation 比较驱动：generation 不同则重建该段落，相同则跳过或只
+            // 更新 para_y。这样即使 force_full_update=false，内容变了的段落也会被重建。
             let force_full_update = static_text.needs_relayout
                 || !animation_resources_ready;
 
@@ -782,6 +784,10 @@ fn compute_drawn_static_fragments(
 
     let viewport_top = static_text.scroll_y;
     let viewport_bottom = static_text.scroll_y + static_text.viewport_height;
+    // Issue #901 第十二轮问题1补充: viewport_top/viewport_bottom 保留供
+    // 诊断和断言使用，视口裁剪已由上游 qquickitem_impl 写入 info.visible_clip，
+    // 本函数不再重复做视口求交，直接消费 visible_clip。
+    let _ = (viewport_top, viewport_bottom);
 
     let mut fragments = Vec::new();
 
@@ -805,20 +811,27 @@ fn compute_drawn_static_fragments(
     // 旧实现（qquickitem_impl.rs:462-556）有纹理时减 holes、无纹理时不减，
     // 现统一为减 holes。
     for info in &plan.static_text_contributions {
+        // Issue #901 第十二轮问题1补充:
+        // doc_rect 是裁剪前的完整字形几何（cluster 真实高度），
+        // 用于 UV 比例计算和 original_glyph_rect，避免视口边缘"半字高度"
+        // 冒充完整字形高度导致 FLIP 变换基准错误。
+        // visible_rect 直接采用上游已与视口求交的 info.visible_clip，
+        // 不再在本函数重复做视口裁剪。
         let doc_rect = (
             info.document_rect.x,
             info.document_rect.y,
             info.document_rect.w,
             info.document_rect.h,
         );
-        // 视口裁剪（文档坐标）。
-        let clip_y = doc_rect.1.max(viewport_top);
-        let clip_bottom = (doc_rect.1 + doc_rect.3).min(viewport_bottom);
-        let clip_h = (clip_bottom - clip_y).max(0.0);
-        if clip_h <= 0.0 {
+        let visible_rect = (
+            info.visible_clip.x,
+            info.visible_clip.y,
+            info.visible_clip.w,
+            info.visible_clip.h,
+        );
+        if visible_rect.3 <= 0.0 {
             continue;
         }
-        let visible_rect = (doc_rect.0, clip_y, doc_rect.2, clip_h);
         // Issue #901 第十轮问题3：统一减去 effective_holes，无论有无纹理。
         let sub_fragments = rect_subtract_holes(visible_rect, &effective_holes);
         for (frag_idx, frag) in sub_fragments.iter().enumerate() {

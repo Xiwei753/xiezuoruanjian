@@ -60,6 +60,12 @@ cpp! {{
     struct IncrementalParaNodeInfo {
         QSGNode* container;  // 挂在 staticLayer 下的容器节点
         double para_y;       // 段落第一行文档 y（用于排序）
+        // Issue #901 第十二轮问题5: 该段落上次构建子节点时的 layout generation。
+        // 用于按段落 generation 签名驱动增量更新：
+        // - content_generation == 当前 generation 且 para_y 相同 → 跳过（内容未变且位置未变）
+        // - content_generation == 当前 generation 但 para_y 不同 → 只更新 para_y（位置变了但内容未变）
+        // - content_generation != 当前 generation → 重建子节点（内容可能变了）
+        uint64_t content_generation;
     };
     // per-item 的映射表 + 所属 staticLayer 指针。
     // static_layer 用于检测 QSG 树变更（item 销毁后重建会生成新 staticLayer），
@@ -607,12 +613,15 @@ cpp! {{
     /// - 新出现的 ParagraphId → insert 新容器节点 + 子节点
     /// - 消失的 ParagraphId → remove 容器节点（从 staticLayer 移除并删除）
     /// - 已存在且 force_full_update=true → update（删除旧子节点，创建新子节点）
-    /// - 已存在且 force_full_update=false → 保持不动
+    /// - 已存在且 force_full_update=false → 按 per-paragraph generation 签名决定：
+    ///   - content_generation == generation 且 para_y 相同 → 跳过
+    ///   - content_generation == generation 但 para_y 不同 → 只更新 para_y
+    ///   - content_generation != generation → 重建子节点
     ///
-    /// force_full_update=true 用于 needs_relayout / handoff_pending / clip 模式切换等
-    /// 需要重建所有已有段落子节点的场景。
-    /// force_full_update=false 用于纯滚动跨出（viewport_exceeds_loaded），
-    /// 只 insert 新进入视口的段落、remove 离开视口的段落，已有段落保持不动。
+    /// force_full_update=true 用于 needs_relayout / clip 模式切换等需要重建所有
+    /// 已有段落子节点的场景（例外情况，非常态）。
+    /// force_full_update=false 用于纯滚动跨出（viewport_exceeds_loaded）或
+    /// 局部变化，按 generation 签名只重建内容变了的段落，未变段落保持不动。
     ///
     /// 返回 true 表示成功；false 表示因 layout 缺失或场景图无效而放弃
     /// （调用方应保留 dirty 标志，下一帧重试）。
@@ -731,6 +740,13 @@ cpp! {{
         }
 
         // ── Insert / Update ──
+        // Issue #901 第十二轮问题5: 按 per-paragraph generation 签名驱动增量更新，
+        // 而非 force_full_update 全量重建。
+        // - force_full_update=true: 无条件重建所有已有段落子节点（全局变化如 needs_relayout）。
+        // - force_full_update=false:
+        //     - content_generation == generation 且 para_y 相同 → 跳过（内容未变且位置未变）
+        //     - content_generation == generation 但 para_y 不同 → 只更新 para_y（位置变了但内容未变）
+        //     - content_generation != generation → 重建子节点（内容可能变了）
         for (int i = 0; i < para_count; i++) {
             uint64_t id = paragraph_id_arr[i];
             double para_y = para_y_arr[i];
@@ -739,12 +755,22 @@ cpp! {{
 
             auto it = node_map.find(id);
             if (it != node_map.end()) {
-                // 已有节点
+                // 已有节点：按 generation 签名决定是否重建
+                bool need_rebuild = force_full_update;
                 if (!force_full_update) {
-                    // 保持不动（纯滚动跨出场景）
+                    if (it->second.content_generation != generation) {
+                        // generation 不同：段落内容可能变了，重建子节点
+                        need_rebuild = true;
+                    } else if (it->second.para_y != para_y) {
+                        // generation 相同但 para_y 不同：只更新位置，不重建子节点
+                        it->second.para_y = para_y;
+                    }
+                    // else: generation 相同且 para_y 相同，真正跳过
+                }
+                if (!need_rebuild) {
                     continue;
                 }
-                // force_full_update: 重建子节点
+                // 重建子节点（force_full_update 或 generation 不同）
                 QSGNode* container = it->second.container;
                 while (container->childCount() > 0) {
                     QSGNode* child = container->childAtIndex(container->childCount() - 1);
@@ -771,6 +797,7 @@ cpp! {{
                     );
                 }
                 it->second.para_y = para_y;
+                it->second.content_generation = generation;
             } else {
                 // 新节点
                 QSGNode* container = new QSGNode;
@@ -794,7 +821,7 @@ cpp! {{
                     );
                 }
                 staticLayer->appendChildNode(container);
-                node_map[id] = {container, para_y};
+                node_map[id] = {container, para_y, generation};
             }
         }
 

@@ -220,6 +220,16 @@ impl QQuickItem for SujianEditorItem {
             1.0
         };
 
+        // Issue #901 第十二轮问题4: 检查延迟清理标记。
+        // Drop/切章时在 GUI 线程设置标记，此处渲染线程检查并执行清理，
+        // 避免 GUI 线程与渲染线程对全局 g_incremental_para_map 的数据竞争。
+        // update_paint_node 在 Qt Scene Graph 渲染线程执行，GUI 线程此时被阻塞，
+        // 此处清理 map 与同在渲染线程的 update_text_nodes_incremental 读写互斥安全。
+        if self.pending_clear_incremental_map.get() && !item_ptr.is_null() {
+            qt_text_node::clear_incremental_para_map(item_ptr);
+            self.pending_clear_incremental_map.set(false);
+        }
+
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
         let _content_h = f64::from(self.current_content_height);
@@ -443,11 +453,17 @@ impl QQuickItem for SujianEditorItem {
                                     vec![super::render_plan::StaticTextContributionInfo {
                                         snapshot_id: line.id,
                                         byte_range,
+                                        // Issue #901 第十二轮问题1补充:
+                                        // document_rect 保存裁剪前的完整字形几何
+                                        //（doc_rect.y = line.visual_line_top, h = line_h），
+                                        // 供下游 original_glyph_rect 使用完整字形高度，
+                                        // 避免 FLIP 变换基准被视口边缘的"半字高度"冒充。
+                                        // 视口裁剪后的可见区域由 visible_clip 承载。
                                         document_rect: super::layout_snapshot::SourceRect {
                                             x: doc_rect.x,
-                                            y: clip_y,
+                                            y: doc_rect.y,
                                             w: doc_rect.w,
-                                            h: clip_h,
+                                            h: doc_rect.h,
                                         },
                                         visible_clip: super::layout_snapshot::SourceRect {
                                             x: doc_rect.x,

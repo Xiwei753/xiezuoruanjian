@@ -556,6 +556,17 @@ pub struct SujianEditorItem {
     /// 替代原全局 `static LOADED_PARA_RANGE`。每次 rebuild 成功后由
     /// `FrameRenderOutcome::new_loaded_para_range` 更新。
     loaded_para_range: Option<(usize, usize)>,
+    /// Issue #901 第十二轮问题4: 延迟清理增量段落节点映射的标记。
+    ///
+    /// Drop 和切章时不在 GUI 线程直接调用 `clear_incremental_para_map`
+    ///（会与渲染线程的 `update_paint_node` 对全局 `g_incremental_para_map`
+    /// 产生跨线程数据竞争），改为设置此标记，下一次 `update_paint_node`
+    ///（渲染线程）检查标记并在渲染线程内执行清理，保证 map 的读写都在同一线程。
+    ///
+    /// Drop 时 item 可能正在被销毁，不再请求渲染。如果有未完成的渲染帧，
+    /// map 清理会在下一次渲染时完成；如果 item 已销毁不再渲染，map 中的
+    /// 悬空条目按 `item_ptr` 索引，不影响其他 item 的映射表。
+    pending_clear_incremental_map: Cell<bool>,
 }
 
 impl Default for SujianEditorItem {
@@ -702,21 +713,22 @@ impl Default for SujianEditorItem {
             document_session: 1,
             next_render_frame_id: 1,
             loaded_para_range: None,
+            pending_clear_incremental_map: Cell::new(false),
         }
     }
 }
 
 impl Drop for SujianEditorItem {
     fn drop(&mut self) {
-        // Issue #901 第十一轮问题3: item 销毁时清除增量段落节点映射，
-        // 避免全局 g_incremental_para_map 中残留悬空指针条目。
-        // get_cpp_object() 在 Drop 时可能返回 null（C++ 对象已析构），
-        // clear_incremental_para_map 内部有 null 检查，双重保护。
-        // erase 仅按指针值移除 map 条目，不解引用 item_ptr，安全。
-        let item_ptr = self.get_cpp_object();
-        if !item_ptr.is_null() {
-            qt_text_node::clear_incremental_para_map(item_ptr);
-        }
+        // Issue #901 第十二轮问题4: 不在 GUI 线程直接调用 clear_incremental_para_map。
+        // 全局 g_incremental_para_map 被 update_paint_node（Qt Scene Graph 渲染线程）
+        // 读写，GUI 线程的 Drop 直接对同一无锁 map 执行 erase 是跨线程数据竞争。
+        // 改为设置延迟清理标记，下一次 update_paint_node（渲染线程）检查并执行清理。
+        //
+        // Drop 时 item 可能正在被销毁，不再请求渲染。如果有未完成的渲染帧，
+        // map 清理会在下一次渲染时完成；如果 item 已销毁不再渲染，map 中的
+        // 悬空条目按 item_ptr 索引，不影响其他 item 的映射表。
+        self.pending_clear_incremental_map.set(true);
         if let Some(connection) = self.window_changed_connection.as_mut() {
             connection();
         }
@@ -826,14 +838,12 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
-        // Issue #901 第十一轮问题3: 切章/清文档时清除本 item 的增量段落节点映射，
-        // 避免旧章的 QSG 节点身份表跨章残留导致悬空指针或双层文字。
-        // 旧章的 QSG 节点由 Qt 场景图管理，此处只清理 map 条目，不 delete 节点。
+        // Issue #901 第十二轮问题4: 切章/清文档时不直接调用
+        // clear_incremental_para_map（GUI 线程），改为设置延迟清理标记，
+        // 下一次 update_paint_node（渲染线程）检查并执行清理。
+        // 旧章的 QSG 节点由 Qt 场景图管理，清理 map 条目不 delete 节点。
         // 同时把 loaded_para_range 置空，下一帧按新章从头加载段落范围。
-        let item_ptr = self.get_cpp_object();
-        if !item_ptr.is_null() {
-            qt_text_node::clear_incremental_para_map(item_ptr);
-        }
+        self.pending_clear_incremental_map.set(true);
         self.loaded_para_range = None;
         // Issue #901 问题3：切章/清文档时递增 document_session，
         // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。

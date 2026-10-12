@@ -508,12 +508,15 @@ impl SceneTransition {
     /// 变成同一字被"存活"多次，也避免把 fragment 的局部 UV 拉伸覆盖整字。
     ///
     /// **策略**：
-    /// 1. 用第一个碎片的 document_rect 作为 old_rect 代表，与 target run 的
-    ///    document_rect 做 FLIP 插值，得到整体的 interpolated_rect。
-    /// 2. 对每块碎片，按其在 old_rect 中的相对位置，映射到 interpolated_rect
+    /// 1. 用第一个碎片的 original_glyph_rect（完整字形矩形）经 transform 得到
+    ///    old_rect，与 target run 的 document_rect 做 FLIP 插值，得到整体的
+    ///    interpolated_rect。
+    /// 2. 对每块碎片，用其 document_rect（碎片实际可见矩形）经 transform 得到
+    ///    frag_old，按 frag_old 在 old_rect 中的相对位置，映射到 interpolated_rect
     ///    中的子矩形。每块碎片的 source_uv 保持自身值（不拉伸到整字）。
-    /// 3. 若只有一块碎片（fragment_index=0 且 group.len()==1），退化为
-    ///    command_for_surviving 的原行为。
+    /// 3. Issue #901 第十二轮问题1：不再特殊处理 group.len()==1。单个 fragment
+    ///    也可能只是剩下的半个字（另一半已被动画接管），不能以只有一块就认定
+    ///    没有裁剪。所有 fragment 统一走 document_rect 变换路径。
     fn commands_for_surviving_group(
         group: &[usize],
         presented: &PresentedScene,
@@ -587,53 +590,55 @@ impl SceneTransition {
                 continue;
             }
 
-            // Issue #901 第十轮问题2：按碎片在 old_rect 中的相对位置映射到
+            // Issue #901 第十二轮问题1：按碎片在 old_rect 中的相对位置映射到
             // interpolated 中的子矩形。每块碎片的 source_uv 保持自身值。
             //
-            // 若 group 只有一块碎片（常见情况），直接用 interpolated 作为
-            // target_rect，与 command_for_surviving 行为一致。
-            let frag_target_rect = if group.len() == 1 {
-                interpolated
+            // 不再特殊处理 group.len()==1：单个 fragment 也可能只是剩下的
+            // 半个字（另一半已被动画接管），不能以只有一块就认定没有裁剪。
+            // 所有 fragment 统一走 document_rect 变换路径。
+            //
+            // 用 contrib.document_rect（碎片实际可见矩形）做变换计算 frag_old，
+            // 而非 original_glyph_rect（完整字形矩形）。同一 glyph 的各个碎片
+            // 拥有相同 original_glyph_rect，用它会让 frag_old == old_rect，导致
+            // rel_x=0, rel_y=0, rel_w=1, rel_h=1，每个碎片都被映射到整个
+            // interpolated glyph 矩形，重影/变形没有解决。
+            // original_glyph_rect 仅作为 old_rect 的归一化基准（完整字形矩形），
+            // 不参与碎片级别的变换。
+            let frag_transformed =
+                Self::transform_rect(contrib.document_rect, presented.transform);
+            let frag_old = CanvasRect::new(
+                frag_transformed.x + presented.position.x,
+                frag_transformed.y + presented.position.y,
+                frag_transformed.w,
+                frag_transformed.h,
+            );
+            // 相对偏移比例（避免除零）。
+            let rel_x = if old_rect.w > 0.0 {
+                (frag_old.x - old_rect.x) / old_rect.w
             } else {
-                // 按碎片在 original_glyph_rect 中的相对偏移和尺寸，映射到 interpolated。
-                // 用 original_glyph_rect（完整字形）而非 document_rect（子矩形），
-                // 保证相对偏移在 [0,1] 范围内，不会映射到 target 字外。
-                let frag_transformed =
-                    Self::transform_rect(contrib.original_glyph_rect, presented.transform);
-                let frag_old = CanvasRect::new(
-                    frag_transformed.x + presented.position.x,
-                    frag_transformed.y + presented.position.y,
-                    frag_transformed.w,
-                    frag_transformed.h,
-                );
-                // 相对偏移比例（避免除零）。
-                let rel_x = if old_rect.w > 0.0 {
-                    (frag_old.x - old_rect.x) / old_rect.w
-                } else {
-                    0.0
-                };
-                let rel_y = if old_rect.h > 0.0 {
-                    (frag_old.y - old_rect.y) / old_rect.h
-                } else {
-                    0.0
-                };
-                let rel_w = if old_rect.w > 0.0 {
-                    frag_old.w / old_rect.w
-                } else {
-                    1.0
-                };
-                let rel_h = if old_rect.h > 0.0 {
-                    frag_old.h / old_rect.h
-                } else {
-                    1.0
-                };
-                CanvasRect::new(
-                    interpolated.x + rel_x * interpolated.w,
-                    interpolated.y + rel_y * interpolated.h,
-                    rel_w * interpolated.w,
-                    rel_h * interpolated.h,
-                )
+                0.0
             };
+            let rel_y = if old_rect.h > 0.0 {
+                (frag_old.y - old_rect.y) / old_rect.h
+            } else {
+                0.0
+            };
+            let rel_w = if old_rect.w > 0.0 {
+                frag_old.w / old_rect.w
+            } else {
+                1.0
+            };
+            let rel_h = if old_rect.h > 0.0 {
+                frag_old.h / old_rect.h
+            } else {
+                1.0
+            };
+            let frag_target_rect = CanvasRect::new(
+                interpolated.x + rel_x * interpolated.w,
+                interpolated.y + rel_y * interpolated.h,
+                rel_w * interpolated.w,
+                rel_h * interpolated.h,
+            );
 
             // clip 从 target 坐标系计算（用 target.clip，不是 run.document_rect）。
             let clip = Self::intersect_clip(target.clip, frag_target_rect);
@@ -641,8 +646,15 @@ impl SceneTransition {
                 continue;
             }
 
+            // Issue #901 第十二轮问题2：FLIP 显示历史已提交像素时，命令的
+            // snapshot_id 必须与 contrib.source_uv 的源纹理配对。contrib.source_uv
+            // 属于旧 presented 场景的 contrib.snapshot_id 行纹理，而 run.snapshot_id
+            // 是当前目标排版的行纹理 ID。连续输入、换行、字体重排会出现不同的
+            // LineSnapshotId；从新纹理按旧 UV 裁图没有任何身份保证，可能截到
+            // 另一个字甚至越界。因此这里用 contrib.snapshot_id 与 contrib.source_uv
+            // 配对，保证纹理身份一致。
             result.push(DrawCommand::text_fragment(
-                run.snapshot_id,
+                contrib.snapshot_id,
                 // 每块碎片的 source_uv 保持自身值，不拉伸到整字。
                 contrib.source_uv,
                 frag_target_rect,
