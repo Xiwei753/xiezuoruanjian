@@ -6141,4 +6141,61 @@ test('修复3-测试2：mergeMemberUpdates 不追加 newMembers 中多出的陌�
     '结果不应包含 renderNodeKey=extra-node-12 的陌生成员')
 })
 
+// ====== Issue #879 评论6116985734 问题4：mapRectByRatio fallback 分支 clip 跟随 Text 平移 ======
+// 问题4指出：clipRects 不应直接 mapRectByRatio 到不同宽高的目标布局，
+// 而应跟随 Text 平移保持相对位置不变。
+// 修复后在 fallback 分支中使用源字形的宽高而不是目标字形的宽高。
+
+test('问题4-6116985734：mapRectByRatio 相同宽高时 clip 保持相对位置不变（等价于平移）', () => {
+  // sourceRect: x=10, y=5, width=20, height=30
+  // targetRect: x=50, y=10, width=20, height=30（相同宽高，只是位置变化）
+  // clip: x=15, y=8, width=10, height=20（在 sourceRect 内）
+  const result = mapRectByRatio(
+    {x: 15, y: 8, width: 10, height: 20},
+    {x: 10, y: 5, width: 20, height: 30},
+    {x: 50, y: 10, width: 20, height: 30}
+  )
+  // 相对位置：relX = (15-10)/20 = 0.25, relWidth = 10/20 = 0.5
+  // 期望：x = 50 + 0.25*20 = 55, width = 0.5*20 = 10
+  // 相对位置不变：clip 在 sourceRect 中的位置比例 = clip 在 targetRect 中的位置比例
+  assert(result.x === 55, `x 应为 55（平移 40），实际 ${result.x}`)
+  assert(result.width === 10, `width 应保持 10，实际 ${result.width}`)
+  assert(result.y === 13, `y 应为 13（平移 5），实际 ${result.y}`)
+  assert(result.height === 20, `height 应保持 20，实际 ${result.height}`)
+})
+
+test('问题4-6116985734：mapRectByRatio 不同宽高时按比例缩放（旧错误行为——clip 滑走）', () => {
+  // sourceRect: x=10, y=5, width=20, height=30
+  // targetRect: x=50, y=10, width=10, height=15（宽高减半）
+  // clip: x=15, y=8, width=10, height=20（在 sourceRect 内）
+  const result = mapRectByRatio(
+    {x: 15, y: 8, width: 10, height: 20},
+    {x: 10, y: 5, width: 20, height: 30},
+    {x: 50, y: 10, width: 10, height: 15}
+  )
+  // 旧行为（按比例缩放）：relX = (15-10)/20 = 0.25, relWidth = 10/20 = 0.5
+  // x = 50 + 0.25*10 = 52.5, width = 0.5*10 = 5
+  // clip 的宽度从 10 变成 5——这是错误的，因为 Text 只平移不变形
+  assert(result.x === 52.5, `x 按 0.25 比例映射到 52.5，实际 ${result.x}`)
+  assert(result.width === 5, `width 按比例缩放到 5（旧错误行为），实际 ${result.width}`)
+  // 这证明了直接用 mapRectByRatio 映射到不同宽高会导致 clip 滑走
+})
+
+test('问题4-6116985734：修复后使用源字形宽高——clip 跟随 Text 平移保持相对位置不变', () => {
+  // sourceRect: x=10, y=5, width=20, height=30
+  // newGlyphRect: x=50, y=10, width=10, height=15（宽高不同）
+  // 修复后 targetRect = {x: 50, y: 10, width: 20, height: 30}（使用源字形宽高）
+  // clip: x=15, y=8, width=10, height:20（在 sourceRect 内）
+  const result = mapRectByRatio(
+    {x: 15, y: 8, width: 10, height: 20},
+    {x: 10, y: 5, width: 20, height: 30},
+    {x: 50, y: 10, width: 20, height: 30}  // 使用源字形宽高，不是 newGlyphRect 的宽高
+  )
+  // 修复后：clip 保持相对位置不变，只是跟随 Text 平移
+  assert(result.x === 55, `x 应为 55（平移 40），实际 ${result.x}`)
+  assert(result.width === 10, `width 应保持 10（不按比例缩放），实际 ${result.width}`)
+  assert(result.y === 13, `y 应为 13（平移 5），实际 ${result.y}`)
+  assert(result.height === 20, `height 应保持 20（不按比例缩放），实际 ${result.height}`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

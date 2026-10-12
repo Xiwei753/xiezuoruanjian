@@ -2072,7 +2072,13 @@ export class EditorMotionCoordinator {
                   x: scr.x, y: scr.y,
                   width: Math.max(0, scr.width), height: Math.max(0, scr.height)
                 })
-                const mapped = mapRectByRatio(scr, sourceGlyphOnScreen, newGlyphRect)
+                // Issue #879 评论6116985734 问题4：clip 跟随 Text 平移，不按比例映射到不同宽高。
+                // frozen 成员的 Text 只平移不变形，clip 应保持相对位置不变。
+                // 当新旧布局字形宽高差异超过阈值时，由 needsSourceCrossfade 机制处理交叉淡入淡出。
+                const mapped = mapRectByRatio(scr, sourceGlyphOnScreen, {
+                  x: newGlyphRect.x, y: newGlyphRect.y,
+                  width: sourceGlyphOnScreen.width, height: sourceGlyphOnScreen.height
+                })
                 targetRects.push({
                   x: mapped.x, y: mapped.y,
                   width: mapped.width, height: mapped.height
@@ -2085,7 +2091,11 @@ export class EditorMotionCoordinator {
                   x: gap.x, y: gap.y,
                   width: 0, height: Math.max(0, gap.height)
                 })
-                const mappedGap = mapRectByRatio(gap, sourceGlyphOnScreen, newGlyphRect)
+                // Issue #879 评论6116985734 问题4：clip 跟随 Text 平移，不按比例映射到不同宽高。
+                const mappedGap = mapRectByRatio(gap, sourceGlyphOnScreen, {
+                  x: newGlyphRect.x, y: newGlyphRect.y,
+                  width: sourceGlyphOnScreen.width, height: sourceGlyphOnScreen.height
+                })
                 targetRects.push({
                   x: mappedGap.x, y: mappedGap.y,
                   width: mappedGap.width, height: mappedGap.height
@@ -2190,7 +2200,11 @@ export class EditorMotionCoordinator {
                 x: cr.x + frozenDrawOffsetX, y: cr.y + frozenDrawOffsetY,
                 width: Math.max(0, cr.width), height: Math.max(0, cr.height)
               })
-              const mapped = mapRectByRatio(cr, sr, newGlyphRect)
+              // Issue #879 评论6116985734 问题4：clip 跟随 Text 平移，不按比例映射到不同宽高。
+              const mapped = mapRectByRatio(cr, sr, {
+                x: newGlyphRect.x, y: newGlyphRect.y,
+                width: sr.width, height: sr.height
+              })
               targetRects.push({
                 x: mapped.x, y: mapped.y,
                 width: mapped.width, height: mapped.height
@@ -2203,7 +2217,11 @@ export class EditorMotionCoordinator {
                 x: gap.x + frozenDrawOffsetX, y: gap.y + frozenDrawOffsetY,
                 width: 0, height: Math.max(0, gap.height)
               })
-              const mappedGap = mapRectByRatio(gap, sr, newGlyphRect)
+              // Issue #879 评论6116985734 问题4：clip 跟随 Text 平移，不按比例映射到不同宽高。
+              const mappedGap = mapRectByRatio(gap, sr, {
+                x: newGlyphRect.x, y: newGlyphRect.y,
+                width: sr.width, height: sr.height
+              })
               targetRects.push({
                 x: mappedGap.x, y: mappedGap.y,
                 width: mappedGap.width, height: mappedGap.height
