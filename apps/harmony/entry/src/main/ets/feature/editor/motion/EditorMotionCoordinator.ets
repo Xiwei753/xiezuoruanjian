@@ -1939,20 +1939,31 @@ export class EditorMotionCoordinator {
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
-                  // 合并：扩展 UTF-16 范围、合并 clipRects、扩展包围盒
-                  existing.utf16Start = Math.min(existing.utf16Start, memberWindow.utf16Start)
-                  existing.utf16End = Math.max(existing.utf16End, memberWindow.utf16End)
-                  existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
-                  existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
-                  existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
-                  existing.clipTop = Math.min(existing.clipTop, memberWindow.clipTop)
-                  existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
-                  existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
-                  existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
-                  // glyphIds 合并去重
-                  for (const gid of memberWindow.glyphIds) {
-                    if (!existing.glyphIds.includes(gid)) {
-                      existing.glyphIds.push(gid)
+                  // Issue #879 复核评论6119020043 问题4：聚合身份一致性检查。
+                  // 同一 renderNodeKey = sourceKind-sourceRevision-windowInstanceId 的成员
+                  // 在 sourceRevision/runId 上必然一致（runId = sourceKind-sourceRevision）。
+                  // 此处显式校验，若上游分配异常导致不一致，则不合并——将本成员作为独立
+                  // 窗口 push，避免「随手扩展 UTF-16 区间，留下混搭的其他字段」。
+                  // 正常情况下此分支永不触发；它是一道结构约束护栏。
+                  if (existing.runId !== memberWindow.runId ||
+                      existing.sourceRevision !== memberWindow.sourceRevision) {
+                    motionGlyphWindows.push(memberWindow)
+                  } else {
+                    // 合并：扩展 UTF-16 范围、合并 clipRects、扩展包围盒
+                    existing.utf16Start = Math.min(existing.utf16Start, memberWindow.utf16Start)
+                    existing.utf16End = Math.max(existing.utf16End, memberWindow.utf16End)
+                    existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+                    existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
+                    existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
+                    existing.clipTop = Math.min(existing.clipTop, memberWindow.clipTop)
+                    existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
+                    existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
+                    existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
+                    // glyphIds 合并去重
+                    for (const gid of memberWindow.glyphIds) {
+                      if (!existing.glyphIds.includes(gid)) {
+                        existing.glyphIds.push(gid)
+                      }
                     }
                   }
                 } else {

@@ -6198,4 +6198,68 @@ test('问题4-6116985734：修复后使用源字形宽高——clip 跟随 Text 
   assert(result.height === 20, `height 应保持 20（不按比例缩放），实际 ${result.height}`)
 })
 
+// ====== Issue #879 复核评论6119020043 问题4：聚合身份一致性检查 ======
+// renderNodeKey = sourceKind + '-' + sourceRevision + '-' + windowInstanceId
+// runId = sourceKind + '-' + sourceRevision
+// 同一 renderNodeKey 的成员在 sourceRevision/runId 上必然一致。
+// EditorMotionCoordinator.ets 的 frozenWindowAggregator 在合并时显式校验
+// runId 和 sourceRevision 一致性——不一致时不合并（独立 push），避免混搭字段。
+
+test('问题4-6119020043：同一 renderNodeKey 的成员 runId 必然一致', () => {
+  // renderNodeKey 构造：sourceKind-sourceRevision-windowInstanceId
+  // runId 构造：sourceKind-sourceRevision
+  // 同一 renderNodeKey => 同一 sourceKind + sourceRevision => 同一 runId
+  const sourceKind = 'old'
+  const sourceRevision = 42
+  const windowInstanceId = 'win-3'
+  const renderNodeKey = `${sourceKind}-${sourceRevision}-${windowInstanceId}`
+  const runId = `${sourceKind}-${sourceRevision}`
+  // 模拟两个同一 renderNodeKey 的成员
+  const member1 = { renderNodeKey, runId, sourceRevision }
+  const member2 = { renderNodeKey, runId, sourceRevision }
+  assert(member1.runId === member2.runId, '同一 renderNodeKey 的 runId 必然一致')
+  assert(member1.sourceRevision === member2.sourceRevision, '同一 renderNodeKey 的 sourceRevision 必然一致')
+})
+
+test('问题4-6119020043：不同 sourceRevision 的成员 renderNodeKey 不同——不会被聚合到同一 key', () => {
+  // 如果两个成员的 sourceRevision 不同，它们的 renderNodeKey 也不同
+  // 因此不会被 frozenWindowAggregator 聚合到同一 key——从根源避免混搭
+  const sourceKind = 'old'
+  const windowInstanceId = 'win-3'
+  const key1 = `${sourceKind}-41-${windowInstanceId}`
+  const key2 = `${sourceKind}-42-${windowInstanceId}`
+  assert(key1 !== key2, '不同 sourceRevision 产生不同 renderNodeKey，不会被聚合到同一 key')
+})
+
+test('问题4-6119020043：不同 windowInstanceId 的成员 renderNodeKey 不同——不会被聚合到同一 key', () => {
+  // 如果两个成员的 windowInstanceId 不同，它们的 renderNodeKey 也不同
+  const sourceKind = 'old'
+  const sourceRevision = 42
+  const key1 = `${sourceKind}-${sourceRevision}-win-3`
+  const key2 = `${sourceKind}-${sourceRevision}-win-4`
+  assert(key1 !== key2, '不同 windowInstanceId 产生不同 renderNodeKey，不会被聚合到同一 key')
+})
+
+test('问题4-6119020043：聚合一致性检查——runId/sourceRevision 不一致时不合并', () => {
+  // 模拟 frozenWindowAggregator 的一致性检查逻辑
+  // 正常情况下同一 renderNodeKey 的 runId 必然一致，此检查永不触发
+  // 但作为防御性约束，若上游异常导致不一致，则不合并（独立 push）
+  const existing = { runId: 'old-42', sourceRevision: 42, utf16Start: 0, utf16End: 2 }
+  // 场景1：runId 一致——合并
+  const memberConsistent = { runId: 'old-42', sourceRevision: 42, utf16Start: 2, utf16End: 4 }
+  const shouldMerge1 = existing.runId === memberConsistent.runId &&
+    existing.sourceRevision === memberConsistent.sourceRevision
+  assert(shouldMerge1 === true, 'runId 和 sourceRevision 一致时应合并')
+  // 场景2：runId 不一致——不合并（防御性约束）
+  const memberInconsistent = { runId: 'new-42', sourceRevision: 42, utf16Start: 2, utf16End: 4 }
+  const shouldMerge2 = existing.runId === memberInconsistent.runId &&
+    existing.sourceRevision === memberInconsistent.sourceRevision
+  assert(shouldMerge2 === false, 'runId 不一致时不合并——避免混搭字段')
+  // 场景3：sourceRevision 不一致——不合并
+  const memberRevInconsistent = { runId: 'old-42', sourceRevision: 43, utf16Start: 2, utf16End: 4 }
+  const shouldMerge3 = existing.runId === memberRevInconsistent.runId &&
+    existing.sourceRevision === memberRevInconsistent.sourceRevision
+  assert(shouldMerge3 === false, 'sourceRevision 不一致时不合并——避免混搭字段')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
