@@ -402,6 +402,179 @@ fn lowbit(x: usize) -> usize {
     x & x.wrapping_neg()
 }
 
+// ── Issue #901 第十轮问题5: 段落前缀偏移索引 ──
+
+/// 段落前缀偏移索引 — 维护段落文本长度（byte 和 qchar）的前缀和。
+///
+/// 段落 `i` 的文档 byte 起始 = `byte_lengths[0] + ... + byte_lengths[i-1]`（前缀和）。
+/// 段落 `i` 的文档 qchar 起始 = `qchar_lengths[0] + ... + qchar_lengths[i-1]`（前缀和）。
+///
+/// # 核心设计
+///
+/// - 段前插入/删除只改受影响段的 `byte_length` / `qchar_length`，
+///   后续段的起始偏移由前缀和**自动反映**，不逐段写 `document_byte_start`。
+/// - 查询段落起始偏移 O(1)（前缀和数组直接访问）。
+/// - 单段长度更新 O(n) 重建前缀和（n = 段落数，远小于行数）。
+/// - 段落数变化（Enter/Backspace）时 `rebuild` O(n)。
+///
+/// # 与 ParagraphHeightIndex 的关系
+///
+/// `ParagraphHeightIndex` 维护段落**高度**前缀和（用于 y 坐标）。
+/// `ParagraphOffsetIndex` 维护段落**文本长度**前缀和（用于 byte/qchar 坐标）。
+/// 两者独立，分别支持 y→段落和 byte→段落查询。
+#[derive(Clone, Debug, Default)]
+pub struct ParagraphOffsetIndex {
+    /// 每段 byte 长度（含尾部 `'\n'`）。
+    byte_lengths: Vec<usize>,
+    /// 每段 qchar (UTF-16) 长度（含尾部 `'\n'`）。
+    qchar_lengths: Vec<usize>,
+    /// byte 前缀和：`byte_prefix[i] = byte_lengths[0..i] 之和`。
+    /// `byte_prefix[0] = 0`，`byte_prefix[i] = byte_prefix[i-1] + byte_lengths[i-1]`。
+    byte_prefix: Vec<usize>,
+    /// qchar 前缀和：`qchar_prefix[i] = qchar_lengths[0..i] 之和`。
+    qchar_prefix: Vec<usize>,
+}
+
+impl ParagraphOffsetIndex {
+    /// 创建空的偏移索引。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 段落数量。
+    pub fn len(&self) -> usize {
+        self.byte_lengths.len()
+    }
+
+    /// 是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.byte_lengths.is_empty()
+    }
+
+    /// 清空所有数据。
+    pub fn clear(&mut self) {
+        self.byte_lengths.clear();
+        self.qchar_lengths.clear();
+        self.byte_prefix.clear();
+        self.qchar_prefix.clear();
+    }
+
+    /// 从段落长度数组重建偏移索引。
+    ///
+    /// `byte_lengths[i]` / `qchar_lengths[i]` 是段落 `i` 的文本长度（含尾部 `'\n'`）。
+    /// O(n)。
+    pub fn rebuild(&mut self, byte_lengths: Vec<usize>, qchar_lengths: Vec<usize>) {
+        debug_assert_eq!(
+            byte_lengths.len(),
+            qchar_lengths.len(),
+            "byte_lengths 和 qchar_lengths 长度必须一致"
+        );
+        let n = byte_lengths.len();
+        let mut byte_prefix = vec![0usize; n + 1];
+        let mut qchar_prefix = vec![0usize; n + 1];
+        for i in 0..n {
+            byte_prefix[i + 1] = byte_prefix[i] + byte_lengths[i];
+            qchar_prefix[i + 1] = qchar_prefix[i] + qchar_lengths[i];
+        }
+        self.byte_lengths = byte_lengths;
+        self.qchar_lengths = qchar_lengths;
+        self.byte_prefix = byte_prefix;
+        self.qchar_prefix = qchar_prefix;
+    }
+
+    /// 查询段落 `index` 的文档 byte 起始偏移（前缀和）。
+    ///
+    /// 即 `byte_lengths[0] + ... + byte_lengths[index-1]`。
+    /// `index == 0` 返回 0。越界返回总 byte 长度。
+    pub fn paragraph_byte_start(&self, index: usize) -> usize {
+        self.byte_prefix.get(index).copied().unwrap_or_else(|| {
+            // 越界返回总长度
+            *self.byte_prefix.last().unwrap_or(&0)
+        })
+    }
+
+    /// 查询段落 `index` 的文档 qchar 起始偏移（前缀和）。
+    pub fn paragraph_qchar_start(&self, index: usize) -> usize {
+        self.qchar_prefix.get(index).copied().unwrap_or_else(|| {
+            *self.qchar_prefix.last().unwrap_or(&0)
+        })
+    }
+
+    /// 获取段落 `index` 的 byte 长度。越界返回 0。
+    pub fn byte_length_at(&self, index: usize) -> usize {
+        self.byte_lengths.get(index).copied().unwrap_or(0)
+    }
+
+    /// 获取段落 `index` 的 qchar 长度。越界返回 0。
+    pub fn qchar_length_at(&self, index: usize) -> usize {
+        self.qchar_lengths.get(index).copied().unwrap_or(0)
+    }
+
+    /// 更新段落 `index` 的 byte 和 qchar 长度，重建前缀和。
+    ///
+    /// 段前插入/删除只改受影响段的长度，后续段的起始偏移由前缀和自动反映。
+    /// O(n) 重建前缀和（n = 段落数），不逐段写 document_byte_start。
+    /// 返回 false 表示越界未更新。
+    pub fn update_paragraph_length(
+        &mut self,
+        index: usize,
+        byte_length: usize,
+        qchar_length: usize,
+    ) -> bool {
+        if index >= self.byte_lengths.len() {
+            return false;
+        }
+        self.byte_lengths[index] = byte_length;
+        self.qchar_lengths[index] = qchar_length;
+        self.rebuild_prefix();
+        true
+    }
+
+    /// 重建前缀和数组（内部辅助）。
+    fn rebuild_prefix(&mut self) {
+        let n = self.byte_lengths.len();
+        self.byte_prefix = vec![0usize; n + 1];
+        self.qchar_prefix = vec![0usize; n + 1];
+        for i in 0..n {
+            self.byte_prefix[i + 1] = self.byte_prefix[i] + self.byte_lengths[i];
+            self.qchar_prefix[i + 1] = self.qchar_prefix[i] + self.qchar_lengths[i];
+        }
+    }
+
+    /// 段落插入 — 在 `index` 处插入长度为 `(byte_length, qchar_length)` 的新段落。
+    ///
+    /// O(n) 重建前缀和。后续段落的起始偏移自动右移。
+    pub fn insert(&mut self, index: usize, byte_length: usize, qchar_length: usize) {
+        let pos = index.min(self.byte_lengths.len());
+        self.byte_lengths.insert(pos, byte_length);
+        self.qchar_lengths.insert(pos, qchar_length);
+        self.rebuild_prefix();
+    }
+
+    /// 段落删除 — 删除段落 `index`。
+    ///
+    /// O(n) 重建前缀和。后续段落的起始偏移自动左移。
+    pub fn remove(&mut self, index: usize) -> bool {
+        if index >= self.byte_lengths.len() {
+            return false;
+        }
+        self.byte_lengths.remove(index);
+        self.qchar_lengths.remove(index);
+        self.rebuild_prefix();
+        true
+    }
+
+    /// 总 byte 长度（所有段落之和）。
+    pub fn total_byte_length(&self) -> usize {
+        *self.byte_prefix.last().unwrap_or(&0)
+    }
+
+    /// 总 qchar 长度（所有段落之和）。
+    pub fn total_qchar_length(&self) -> usize {
+        *self.qchar_prefix.last().unwrap_or(&0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -137,6 +137,21 @@ pub struct ParagraphLayoutEntry {
     pub visual_line_count: usize,
     /// 该段落的视觉行引用（在 `LayoutSnapshot.lines` 中的索引范围 `[line_start, line_start + visual_line_count)`）。
     pub line_start: usize,
+    /// Issue #901 第十轮问题5: 段内相对视觉行 — 按 ParagraphId 持久分块储存。
+    ///
+    /// 每行的坐标是**段内相对值**：
+    /// - `y` 从段顶 0 起累加行高。
+    /// - `byte_start` / `byte_end` 相对段落文本开头（0-based）。
+    /// - `qchar_start` / `qchar_end` 相对段落文本开头（0-based）。
+    /// - `para_start` = 0。
+    /// - `id` = 段内行索引（0-based）。
+    ///
+    /// 段落前缀偏移（段顶 y、段首 byte/qchar）由 [`ParagraphHeightIndex`] 的
+    /// 偏移索引按需解析，不随段前编辑逐行重写。
+    ///
+    /// 增量编辑时只 splice 受影响段的 `relative_lines`，未改后缀段的
+    /// `relative_lines` 不变，消除 O(后缀行数) 热路径。
+    pub relative_lines: Vec<VisualLine>,
 }
 
 impl ParagraphLayoutEntry {
@@ -312,6 +327,10 @@ impl ParagraphLayoutStore {
             // 保留 layout_generation/cache_slot/height/visual_line_count/line_start，
             // 该段落不需要重新走 QTextLayout。
             // 只有内容变化的段落才重置排版结果。
+            //
+            // Issue #901 第十轮问题5: relative_lines 同样保留/重置。
+            // 内容相同的段落保留旧 relative_lines（段内相对坐标不变），
+            // 内容变化的段落重置为空（待重排后回填）。
             let (
                 id,
                 layout_generation,
@@ -319,6 +338,7 @@ impl ParagraphLayoutStore {
                 height,
                 visual_line_count,
                 line_start,
+                relative_lines,
             ) = if i < self.entries.len() {
                 let old = &self.entries[i];
                 if old.cache_key == cache_key {
@@ -330,14 +350,15 @@ impl ParagraphLayoutStore {
                         old.height,
                         old.visual_line_count,
                         old.line_start,
+                        old.relative_lines.clone(),
                     )
                 } else {
                     // 内容不同，保留 Id 但重置排版结果
-                    (old.id, 0u64, -1, 0.0f64, 0usize, 0usize)
+                    (old.id, 0u64, -1, 0.0f64, 0usize, 0usize, Vec::new())
                 }
             } else {
                 // 新段落，分配新 Id
-                (self.allocate_id(), 0u64, -1, 0.0f64, 0usize, 0usize)
+                (self.allocate_id(), 0u64, -1, 0.0f64, 0usize, 0usize, Vec::new())
             };
 
             new_entries.push(ParagraphLayoutEntry {
@@ -350,6 +371,7 @@ impl ParagraphLayoutStore {
                 height,
                 visual_line_count,
                 line_start,
+                relative_lines,
             });
 
             byte_offset += paragraph.len();
@@ -425,6 +447,7 @@ impl ParagraphLayoutStore {
             height: 0.0,
             visual_line_count: 0,
             line_start: 0,
+            relative_lines: Vec::new(),
         };
 
         self.entries.insert(index + 1, new_entry);
@@ -563,6 +586,7 @@ impl ParagraphLayoutStore {
             height: 0.0,
             visual_line_count: 0,
             line_start: 0,
+            relative_lines: Vec::new(),
         };
         self.entries.insert(index.min(self.entries.len()), entry);
     }
@@ -989,6 +1013,65 @@ impl ParagraphLayoutStore {
     /// 获取所有段落的高度列表（按文档顺序）。
     pub fn paragraph_heights(&self) -> Vec<f64> {
         self.entries.iter().map(|e| e.height).collect()
+    }
+
+    // ── Issue #901 第十轮问题5: 段内相对视觉行分块储存 ──
+
+    /// 获取段落 `index` 的段内相对视觉行（只读引用）。
+    ///
+    /// 段内相对坐标：y 从段顶 0 起，byte/qchar 从段首 0 起。
+    /// 绝对坐标由消费方通过 [`ParagraphHeightIndex`] 段落前缀偏移按需解析。
+    pub fn relative_lines(&self, index: usize) -> Option<&[VisualLine]> {
+        self.entries.get(index).map(|e| e.relative_lines.as_slice())
+    }
+
+    /// 获取段落 `index` 的段内相对视觉行（可变引用）。
+    pub fn relative_lines_mut(&mut self, index: usize) -> Option<&mut Vec<VisualLine>> {
+        self.entries.get_mut(index).map(|e| &mut e.relative_lines)
+    }
+
+    /// 设置段落 `index` 的段内相对视觉行。
+    ///
+    /// 排版完成后回填。同时更新 `visual_line_count` 和 `height`。
+    pub fn set_relative_lines(
+        &mut self,
+        index: usize,
+        lines: Vec<VisualLine>,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        entry.visual_line_count = lines.len();
+        entry.height = lines.iter().map(|l| l.height).sum();
+        entry.relative_lines = lines;
+        true
+    }
+
+    /// Issue #901 第十轮问题5: 按段落索引直接定位行范围，不建全章 HashMap。
+    ///
+    /// 返回段落 `index` 在扁平 `visual_lines` 数组中的行范围
+    /// `[line_start, line_start + visual_line_count)`。
+    /// 用于增量排版路径代替 `build_para_start_to_line_range` 的 O(all_lines) 建图。
+    ///
+    /// 越界或未排版返回 `(0, 0)`。
+    pub fn line_range_of_paragraph(&self, index: usize) -> (usize, usize) {
+        match self.entries.get(index) {
+            Some(e) => (e.line_start, e.line_start + e.visual_line_count),
+            None => (0, 0),
+        }
+    }
+
+    /// Issue #901 第十轮问题5: 批量更新后续段落的 `document_byte_start`。
+    ///
+    /// 段前插入/删除导致后续段落 byte 起点平移 `delta`。
+    /// 只改 `document_byte_start`（段落级元数据），不逐行改 visual_lines，
+    /// 也不改 `cache_key` / `ParagraphId` / `relative_lines`。
+    /// 绝对坐标在消费时由偏移索引按需解析。
+    pub fn shift_suffix_document_byte_starts(&mut self, start_index: usize, delta: i64) {
+        let len = self.entries.len();
+        for entry in &mut self.entries[start_index.min(len)..] {
+            entry.document_byte_start = (entry.document_byte_start as i64 + delta) as usize;
+        }
     }
 }
 

@@ -121,6 +121,15 @@ impl SceneTransition {
     ///
     /// 生成的命令通过 `Ownership::resolve` 解决重叠。文字层之间用透明度叠加
     /// （alpha compositing），只有 `Cursor`/`Preedit`/`Selection` 做矩形裁剪。
+    ///
+    /// ## Issue #901 第十轮问题2：按字形身份聚合
+    ///
+    /// 旧实现逐块用整个 byte_range 查 target，同一个原字的两个静态碎片都可
+    /// 匹配同一 target run，各创建一个 `command_for_surviving`，导致同一字被
+    /// "存活"多次，且 fragment 的局部 UV 被拉伸覆盖整字。
+    /// 现先按 `glyph_id` 聚合同一 glyph 的所有碎片，再对**同一个 glyph 的同一个
+    /// target**只计算一次几何变换（FLIP/删除），按每块原 clip/UV 映射出实际
+    /// 可绘制的目标子矩形。fragment 数量不再变成同一字被"存活"多次。
     pub(crate) fn build_draw_plan(
         presented: &PresentedScene,
         target: &TargetLayoutDescriptor,
@@ -145,27 +154,72 @@ impl SceneTransition {
         // source_revision 与 byte_range 同一版。
         let latest_revision = revision_chain.latest_revision();
 
-        // 1. 从 presented 生成文字命令。
-        for contrib in &presented.pixel_contributions {
-            if !contrib.has_visible_area() {
+        // Issue #901 第十轮问题2：按 glyph_id 聚合 presented.pixel_contributions。
+        //
+        // 同一 glyph_id 的多个碎片（同一 cluster 被裁成多个静态片段）聚合到一起，
+        // 对同一个 glyph 的同一个 target 只计算一次几何变换。按每块原 clip/UV
+        // 映射出实际可绘制的目标子矩形，不让 fragment 数量变成同一字被"存活"多次，
+        // 也不把 fragment 的局部 UV 拉伸覆盖整字。
+        //
+        // 聚合策略：
+        // 1. 按 glyph_id 分组，每组内按 fragment_index 升序排列。
+        // 2. 对每组用第一个碎片（fragment_index 最小）的 byte_range 做
+        //    RevisionChain 映射，判断存活/删除。同组所有碎片共享同一映射结果。
+        // 3. 存活时：对匹配的 target run 只计算一次 FLIP 几何变换（old_rect →
+        //    new_rect 插值），然后按每块碎片的 clip/UV 映射出目标子矩形。
+        //    不让每个碎片都独立做一次 FLIP 到完整 target run。
+        // 4. 删除时：对每块碎片按其自身 UV/clip 做裁剪收回，但共享同一 fade_out。
+        //
+        // 用 Vec 而非 HashMap 保持顺序稳定（presented.pixel_contributions 已按
+        // 文档顺序排列），且 glyph_id 是 u64，HashMap 开销不必要。
+        let mut grouped_indices: Vec<Vec<usize>> = Vec::new();
+        let mut glyph_id_to_group: std::collections::HashMap<u64, usize> =
+            std::collections::HashMap::new();
+        for (idx, contrib) in presented.pixel_contributions.iter().enumerate() {
+            let group_idx = *glyph_id_to_group
+                .entry(contrib.glyph_id)
+                .or_insert_with(|| {
+                    grouped_indices.push(Vec::new());
+                    grouped_indices.len() - 1
+                });
+            grouped_indices[group_idx].push(idx);
+        }
+        // 每组内按 fragment_index 升序排列，保证帧间稳定顺序。
+        for group in &mut grouped_indices {
+            group.sort_by_key(|&idx| presented.pixel_contributions[idx].fragment_index);
+        }
+
+        // 1. 从 presented 生成文字命令（按 glyph_id 聚合）。
+        for group in &grouped_indices {
+            if group.is_empty() {
                 continue;
             }
-            // 贡献的实际可见透明度（contrib.opacity * presented.opacity）。
-            // 如果为 0，该贡献不可见，不标记存活 —— 让 target 侧作为新增字处理。
-            let contrib_visible_opacity = contrib.opacity * presented.opacity;
+            // 用第一个碎片做 RevisionChain 映射判断存活/删除。
+            let first_idx = group[0];
+            let first_contrib = &presented.pixel_contributions[first_idx];
+
+            // 跳过完全不可见的组（所有碎片都无可见面积）。
+            let group_has_visible = group
+                .iter()
+                .any(|&idx| presented.pixel_contributions[idx].has_visible_area());
+            if !group_has_visible {
+                continue;
+            }
+
+            // 贡献的实际可见透明度（用第一个碎片代表整组）。
+            let contrib_visible_opacity = first_contrib.opacity * presented.opacity;
             // Issue #901 第五轮阻塞1：根据 contrib.source_revision 判断是否需要映射。
-            // 如果 source_revision == latest_revision，byte_range 已经是 latest 坐标，
-            // 不需要映射。否则用 revision_chain 映射。旧实现一律用
-            // map_presented_to_latest，把已经是新坐标的 byte_range 当旧坐标再映射一次。
-            let survived_offset =
-                revision_chain.map_to_latest(contrib.source_revision, contrib.byte_range.0);
+            let survived_offset = revision_chain.map_to_latest(
+                first_contrib.source_revision,
+                first_contrib.byte_range.0,
+            );
             if let Some(latest_offset) = survived_offset {
                 // 存活字：尝试匹配 target glyph run 做 FLIP 位移。
                 let matched = Self::find_matching_target_run(
                     target,
                     latest_offset,
-                    contrib.byte_range,
-                    contrib.source_revision,
+                    first_contrib.byte_range,
+                    first_contrib.source_revision,
                     revision_chain,
                 );
                 if let Some((run_idx, run)) = matched {
@@ -173,15 +227,17 @@ impl SceneTransition {
                     if contrib_visible_opacity > 0.0 {
                         surviving_target_indices[run_idx] = true;
                     }
-                    // FLIP：在 old_rect 和 new_rect 之间插值，透明度保持 1.0。
-                    if let Some(cmd) = Self::command_for_surviving(
-                        contrib,
+                    // Issue #901 第十轮问题2：对同一个 glyph 的同一个 target
+                    // 只计算一次几何变换，按每块碎片的 clip/UV 映射出目标子矩形。
+                    let group_cmds = Self::commands_for_surviving_group(
+                        group,
+                        presented,
                         run,
                         progress,
-                        presented,
                         target,
                         latest_revision,
-                    ) {
+                    );
+                    for cmd in group_cmds {
                         // Issue #901 问题3：存活字接管的完整目标范围（文档坐标，
                         // 与 progress 无关）加入静态排除列表。
                         static_exclusion_rects
@@ -193,34 +249,35 @@ impl SceneTransition {
                     }
                 } else {
                     // Issue #901 第六轮阻塞4：未找到匹配 target run 表示该贡献不可存活。
-                    // 可能原因：
-                    // 1. `map_range_to_latest` 返回 None（deleted/reshaped）——
-                    //    `find_matching_target_run` 通过 `?` 传播 None。
-                    // 2. target 布局中无包含该 latest range 的 glyph run——
-                    //    字符在最新正文中已不存在或不在当前视口。
-                    // 两种情况都按删除收回处理，不原地保持——原地保持会制造幽灵字
-                    // （已不存在的字符继续显示在旧位置）。
-                    if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                    let group_cmds = Self::commands_for_deleting_group(
+                        group,
+                        presented,
+                        progress,
+                    );
+                    for cmd in group_cmds {
                         static_exclusion_rects
                             .push(super::draw_plan::StaticExclusionRect {
-                                rect: contrib.document_rect,
-                                snapshot_id: contrib.snapshot_id,
+                                rect: first_contrib.document_rect,
+                                snapshot_id: first_contrib.snapshot_id,
                             });
                         commands.push(cmd);
                     }
                 }
             } else {
                 // 删除字：沿相反方向从已显示宽度→0 裁剪收回。
-                // Issue #901 问题4：不是 opacity=(1-progress)，
-                // 而是 source_uv/target_rect 宽度按 (1-progress) 收缩。
-                if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                let group_cmds = Self::commands_for_deleting_group(
+                    group,
+                    presented,
+                    progress,
+                );
+                for cmd in group_cmds {
                     // Issue #901 问题3：删除字接管的完整目标范围（文档坐标，
                     // 与 progress 无关）加入静态排除列表。删除字的完整范围是
                     // presented 的 document_rect（旧位置）。
                     static_exclusion_rects
                         .push(super::draw_plan::StaticExclusionRect {
-                            rect: contrib.document_rect,
-                            snapshot_id: contrib.snapshot_id,
+                            rect: first_contrib.document_rect,
+                            snapshot_id: first_contrib.snapshot_id,
                         });
                     commands.push(cmd);
                 }
@@ -441,6 +498,177 @@ impl SceneTransition {
             }
         }
         None
+    }
+
+    /// Issue #901 第十轮问题2：为存活字组生成 FLIP 位移命令（按碎片聚合）。
+    ///
+    /// 对同一个 glyph 的同一个 target run 只计算一次几何变换（old_rect →
+    /// new_rect 插值），然后按每块碎片的 clip/UV 映射出目标子矩形。
+    /// 不让每个碎片都独立做一次 FLIP 到完整 target run，避免 fragment 数量
+    /// 变成同一字被"存活"多次，也避免把 fragment 的局部 UV 拉伸覆盖整字。
+    ///
+    /// **策略**：
+    /// 1. 用第一个碎片的 document_rect 作为 old_rect 代表，与 target run 的
+    ///    document_rect 做 FLIP 插值，得到整体的 interpolated_rect。
+    /// 2. 对每块碎片，按其在 old_rect 中的相对位置，映射到 interpolated_rect
+    ///    中的子矩形。每块碎片的 source_uv 保持自身值（不拉伸到整字）。
+    /// 3. 若只有一块碎片（fragment_index=0 且 group.len()==1），退化为
+    ///    command_for_surviving 的原行为。
+    fn commands_for_surviving_group(
+        group: &[usize],
+        presented: &PresentedScene,
+        run: &TargetGlyphRun,
+        progress: f64,
+        target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
+    ) -> Vec<DrawCommand> {
+        if group.is_empty() {
+            return Vec::new();
+        }
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return Vec::new();
+        }
+
+        // 用第一个碎片做 FLIP 几何变换。
+        let first = &presented.pixel_contributions[group[0]];
+        if !first.has_visible_area() {
+            // 第一个碎片不可见，但仍可能有其他碎片可见。
+            // 用第一个可见碎片做 FLIP。
+            let visible_idx = group
+                .iter()
+                .copied()
+                .find(|&idx| presented.pixel_contributions[idx].has_visible_area());
+            let visible_idx = match visible_idx {
+                Some(idx) => idx,
+                None => return Vec::new(),
+            };
+            return Self::commands_for_surviving_group(
+                &[visible_idx],
+                presented,
+                run,
+                progress,
+                target,
+                latest_revision,
+            );
+        }
+
+        // old_rect：presented 的 document_rect 经过 transform 映射到文档坐标。
+        let old_transformed = Self::transform_rect(first.document_rect, presented.transform);
+        let old_rect = CanvasRect::new(
+            old_transformed.x + presented.position.x,
+            old_transformed.y + presented.position.y,
+            old_transformed.w,
+            old_transformed.h,
+        );
+
+        // Issue #901 问题2：new_rect 直接使用 target 的 document_rect（文档坐标）。
+        let new_rect = run.document_rect;
+
+        // FLIP：在 old_rect 和 new_rect 之间插值。
+        let interpolated = CanvasRect::new(
+            old_rect.x + (new_rect.x - old_rect.x) * progress,
+            old_rect.y + (new_rect.y - old_rect.y) * progress,
+            old_rect.w + (new_rect.w - old_rect.w) * progress,
+            old_rect.h + (new_rect.h - old_rect.h) * progress,
+        );
+
+        let mut result = Vec::new();
+
+        for &idx in group {
+            let contrib = &presented.pixel_contributions[idx];
+            if !contrib.has_visible_area() {
+                continue;
+            }
+            let opacity = contrib.opacity * presented.opacity;
+            if opacity <= 0.0 {
+                continue;
+            }
+
+            // Issue #901 第十轮问题2：按碎片在 old_rect 中的相对位置映射到
+            // interpolated 中的子矩形。每块碎片的 source_uv 保持自身值。
+            //
+            // 若 group 只有一块碎片（常见情况），直接用 interpolated 作为
+            // target_rect，与 command_for_surviving 行为一致。
+            let frag_target_rect = if group.len() == 1 {
+                interpolated
+            } else {
+                // 按碎片在 old_rect 中的相对偏移和尺寸，映射到 interpolated。
+                let frag_transformed =
+                    Self::transform_rect(contrib.document_rect, presented.transform);
+                let frag_old = CanvasRect::new(
+                    frag_transformed.x + presented.position.x,
+                    frag_transformed.y + presented.position.y,
+                    frag_transformed.w,
+                    frag_transformed.h,
+                );
+                // 相对偏移比例（避免除零）。
+                let rel_x = if old_rect.w > 0.0 {
+                    (frag_old.x - old_rect.x) / old_rect.w
+                } else {
+                    0.0
+                };
+                let rel_y = if old_rect.h > 0.0 {
+                    (frag_old.y - old_rect.y) / old_rect.h
+                } else {
+                    0.0
+                };
+                let rel_w = if old_rect.w > 0.0 {
+                    frag_old.w / old_rect.w
+                } else {
+                    1.0
+                };
+                let rel_h = if old_rect.h > 0.0 {
+                    frag_old.h / old_rect.h
+                } else {
+                    1.0
+                };
+                CanvasRect::new(
+                    interpolated.x + rel_x * interpolated.w,
+                    interpolated.y + rel_y * interpolated.h,
+                    rel_w * interpolated.w,
+                    rel_h * interpolated.h,
+                )
+            };
+
+            // clip 从 target 坐标系计算（用 target.clip，不是 run.document_rect）。
+            let clip = Self::intersect_clip(target.clip, frag_target_rect);
+            if frag_target_rect.w <= 0.0 || frag_target_rect.h <= 0.0 {
+                continue;
+            }
+
+            result.push(DrawCommand::text_fragment(
+                run.snapshot_id,
+                // 每块碎片的 source_uv 保持自身值，不拉伸到整字。
+                contrib.source_uv,
+                frag_target_rect,
+                clip,
+                opacity,
+                super::ownership::OwnershipRule::StaticText,
+                run.byte_range,
+                latest_revision,
+            ));
+        }
+
+        result
+    }
+
+    /// Issue #901 第十轮问题2：为删除字组生成裁剪收回命令（按碎片聚合）。
+    ///
+    /// 对每块碎片按其自身 UV/clip 做裁剪收回，共享同一 fade_out。
+    /// 不把 fragment 的局部 UV 拉伸覆盖整字。
+    fn commands_for_deleting_group(
+        group: &[usize],
+        presented: &PresentedScene,
+        progress: f64,
+    ) -> Vec<DrawCommand> {
+        let mut result = Vec::new();
+        for &idx in group {
+            let contrib = &presented.pixel_contributions[idx];
+            if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                result.push(cmd);
+            }
+        }
+        result
     }
 
     /// 为存活字生成 FLIP 位移命令。
@@ -747,6 +975,8 @@ mod tests {
     }
 
     fn sample_presented(opacity: f64) -> PresentedScene {
+        let snapshot_id = LineSnapshotId::new(1, 0, 0);
+        let byte_range = (0, 5);
         PresentedScene {
             source_revision: EditorRevision::initial(),
             document_session: 1,
@@ -758,12 +988,14 @@ mod tests {
             opacity,
             transform: CanvasAffine2::identity(),
             pixel_contributions: vec![PixelContribution {
-                snapshot_id: LineSnapshotId::new(1, 0, 0),
+                glyph_id: PixelContribution::derive_glyph_id(&snapshot_id, byte_range),
+                fragment_index: 0,
+                snapshot_id,
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
-                byte_range: (0, 5),
+                byte_range,
                 source_revision: EditorRevision::initial(),
             }],
             caret: None,

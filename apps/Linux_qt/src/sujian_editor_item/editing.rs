@@ -936,7 +936,8 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x / index_at_line_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        let lines = snapshot.lines.clone();
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let lines = snapshot.resolved_lines();
         let Some((line_idx, x)) = self.cursor_line_and_x() else {
             return;
         };
@@ -979,7 +980,8 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        let lines = snapshot.lines.clone();
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let lines = snapshot.resolved_lines();
         let Some((line_idx, _)) = self.cursor_line_and_x() else {
             return;
         };

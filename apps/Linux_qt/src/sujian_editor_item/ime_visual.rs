@@ -42,8 +42,10 @@ impl SujianEditorItem {
         let cursor_byte = self.pipeline.cursor();
         let snapshot = self.layout_snapshot(width);
 
-        let cursor_line = snapshot
-            .lines
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let resolved_lines = snapshot.resolved_lines();
+        let cursor_line = resolved_lines
+            .as_ref()
             .iter()
             .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte);
 

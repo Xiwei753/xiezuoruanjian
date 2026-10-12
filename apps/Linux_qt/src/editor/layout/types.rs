@@ -7,6 +7,9 @@
 //   在调用本模块函数前完成坐标转换
 
 use std::sync::Arc;
+use std::borrow::Cow;
+
+use super::canonical_snapshot::SuffixTransform;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretAffinity {
@@ -105,6 +108,12 @@ pub struct LayoutSnapshot {
     /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
     /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
     pub layout_generation: u64,
+    /// Issue #901 第十轮问题5: 后缀段平移变换。
+    ///
+    /// `None` 表示 `lines` 全部是已物化的绝对坐标。
+    /// `Some(t)` 表示 `lines[t.start_line_idx..t.end_line_idx]` 是旧绝对坐标（基础值），
+    /// 消费方通过 [`LayoutSnapshot::resolve_line`] 按需加 delta 得到正确绝对坐标。
+    pub suffix_transform: Option<SuffixTransform>,
 }
 
 #[cfg(test)]
@@ -125,8 +134,67 @@ impl LayoutSnapshot {
             padding: 0.0,
             lines: Arc::new(Vec::new()),
             layout_generation: 0,
+            suffix_transform: None,
         }
     }
+}
+
+impl LayoutSnapshot {
+    /// Issue #901 第十轮问题5: 按需解析单行绝对坐标。
+    ///
+    /// 如果 `suffix_transform` 为 None 或 idx 不在 [start_line_idx, end_line_idx)，
+    /// 返回基础值 clone。否则返回基础值 + delta。
+    pub fn resolve_line(&self, idx: usize) -> VisualLine {
+        let base = match self.lines.get(idx) {
+            Some(vl) => vl.clone(),
+            None => return VisualLine {
+                id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
+                hard_break: true, x: 0.0, y: 0.0, width: 0.0,
+                height: self.font_size as f64 * self.line_spacing as f64,
+                para_text: String::new(), para_start: 0, qtextline_idx: 0,
+                para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
+                line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
+                qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0,
+            },
+        };
+        match self.suffix_transform {
+            Some(t) if idx >= t.start_line_idx && idx < t.end_line_idx => {
+                apply_suffix_transform(base, t)
+            }
+            _ => base,
+        }
+    }
+
+    /// Issue #901 第十轮问题5: 物化全部视觉行为绝对坐标的 Cow 视图。
+    pub fn resolved_lines(&self) -> Cow<'_, [VisualLine]> {
+        match self.suffix_transform {
+            Some(t) if !t.is_identity() => {
+                let resolved: Vec<VisualLine> = (0..self.lines.len())
+                    .map(|i| self.resolve_line(i))
+                    .collect();
+                Cow::Owned(resolved)
+            }
+            _ => Cow::Borrowed(self.lines.as_slice()),
+        }
+    }
+}
+
+/// Issue #901 第十轮问题5: 对单行应用后缀段平移变换。
+fn apply_suffix_transform(mut vl: VisualLine, t: SuffixTransform) -> VisualLine {
+    vl.y += t.y_delta;
+    if t.byte_delta != 0 {
+        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
+        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
+        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
+    }
+    if t.qchar_delta != 0 {
+        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
+        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
+    }
+    if t.line_id_delta != 0 {
+        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
+    }
+    vl
 }
 
 /// Issue #658 评论 5622829886 问题 1: 已排好的 prepared layout 提升为 EditorLayout current。

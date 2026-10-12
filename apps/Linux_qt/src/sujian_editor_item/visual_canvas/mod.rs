@@ -369,6 +369,8 @@ mod tests {
         assert!(canvas.revision_chain().has_pending_edits());
 
         // 提交追上 Core 的帧
+        let snapshot_id = crate::sujian_editor_item::snapshot_id::LineSnapshotId::new(1, 0, 0);
+        let byte_range = (0, 100);
         let scene = PresentedScene {
             source_revision: EditorRevision::new(1),
             document_session: 1,
@@ -380,12 +382,14 @@ mod tests {
             opacity: 1.0,
             transform: CanvasAffine2::identity(),
             pixel_contributions: vec![PixelContribution {
-                snapshot_id: crate::sujian_editor_item::snapshot_id::LineSnapshotId::new(1, 0, 0),
+                glyph_id: PixelContribution::derive_glyph_id(&snapshot_id, byte_range),
+                fragment_index: 0,
+                snapshot_id,
                 source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
                 opacity: 1.0,
-                byte_range: (0, 100),
+                byte_range,
                 source_revision: EditorRevision::new(1),
             }],
             caret: None,

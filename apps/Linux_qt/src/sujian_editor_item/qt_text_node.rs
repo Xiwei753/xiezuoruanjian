@@ -46,6 +46,30 @@ cpp! {{
     #include <QDebug>
     #include <vector>
     #include <algorithm>
+    #include <unordered_map>
+    #include <unordered_set>
+
+    // Issue #901 第十轮问题4: per-item ParagraphId → 段落容器节点 映射。
+    //
+    // C++ 静态层持久维护每个 item/session、ParagraphId 对应的 QSG 节点。
+    // staticLayer (QSGTransformNode) 下挂 per-paragraph 的容器节点 (QSGNode)，
+    // 容器节点下挂该段落的 QSGTextNode 或 QSGClipNode 集合。
+    // 增量更新时按 ParagraphId 做 insert/remove/update，不全量重建。
+    //
+    // key: item_ptr (QQuickItem*), value: ItemNodeMap
+    struct IncrementalParaNodeInfo {
+        QSGNode* container;  // 挂在 staticLayer 下的容器节点
+        double para_y;       // 段落第一行文档 y（用于排序）
+    };
+    // per-item 的映射表 + 所属 staticLayer 指针。
+    // static_layer 用于检测 QSG 树变更（item 销毁后重建会生成新 staticLayer），
+    // 此时旧 map 条目中的 container 指针已悬空，需清空 map 重新开始。
+    struct ItemNodeMap {
+        std::unordered_map<uint64_t, IncrementalParaNodeInfo> para_map;
+        QSGTransformNode* static_layer;
+        ItemNodeMap() : static_layer(nullptr) {}
+    };
+    static std::unordered_map<void*, ItemNodeMap> g_incremental_para_map;
 
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
@@ -445,6 +469,346 @@ cpp! {{
 
         return true;
     }
+
+    /// Issue #901 第十轮问题4: 为单个段落构建子节点（textNode 或 clipNode 集合），
+    /// 挂到 container 下。被 update_text_nodes_incremental 的 insert/update 路径复用。
+    ///
+    /// clip_count == 0：创建一个 QSGTextNode，整段 addTextLayout。
+    /// clip_count > 0：按该段落的 visual lines 计算 complement，创建 clipNode + clipTextNode。
+    /// vl_indices 是 vl_*_arr 中属于该段落的索引列表。
+    static void build_paragraph_subtree(
+        QSGNode* container, QQuickWindow* window,
+        const char* text_ptr, int text_len,
+        int cacheIdx, double para_y,
+        const int* vl_cache_idx_arr,
+        const int* vl_qtextline_idx_arr,
+        const double* vl_y_arr, const double* vl_height_arr,
+        const double* vl_doc_width_arr,
+        const double* vl_para_y_arr,
+        const std::vector<int>& vl_indices,
+        const std::vector<std::pair<double,double>>& clip_rects_xy,
+        const std::vector<std::pair<double,double>>& clip_rects_wh,
+        float font_size, const QString& font_family,
+        const QColor& textColor,
+        double origin_x,
+        uint64_t generation
+    ) {
+        (void)font_size;
+        (void)font_family;
+        if (!container || !window) return;
+        if (text_len == 0) return;
+
+        QTextLayout* layout = get_paragraph_layout(generation, cacheIdx);
+        if (!layout) return;
+
+        if (clip_rects_xy.empty()) {
+            // 无 clip：创建一个完整 QSGTextNode，整段 addTextLayout
+            QSGTextNode* textNode = window->createTextNode();
+            if (!textNode) return;
+            textNode->setColor(textColor);
+            textNode->addTextLayout(QPointF(origin_x, para_y), layout);
+            textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            container->appendChildNode(textNode);
+        } else {
+            // 有 clip：按 visual line 创建 clipNode + clipTextNode
+            for (int vl_idx : vl_indices) {
+                int qline = vl_qtextline_idx_arr[vl_idx];
+                double ly = vl_y_arr[vl_idx];
+                double lh = vl_height_arr[vl_idx];
+                if (lh < 1.0) lh = 1.0;
+                double dw = vl_doc_width_arr[vl_idx];
+                double paraY = vl_para_y_arr[vl_idx];
+
+                double contentLeft = origin_x;
+                double contentRight = dw - origin_x;
+                if (contentRight < contentLeft) contentRight = contentLeft;
+
+                // 收集与该行 y 范围相交的 clip rects
+                struct TempXClip { double x, x2; };
+                std::vector<TempXClip> xClips;
+                for (size_t c = 0; c < clip_rects_xy.size(); c++) {
+                    double cx = clip_rects_xy[c].first;
+                    double cy = clip_rects_xy[c].second;
+                    double cw = clip_rects_wh[c].first;
+                    double ch = clip_rects_wh[c].second;
+                    if (cy < ly + lh && cy + ch > ly) {
+                        double crLeft = cx;
+                        double crRight = cx + cw;
+                        if (crLeft < contentLeft) crLeft = contentLeft;
+                        if (crRight > contentRight) crRight = contentRight;
+                        if (crLeft < crRight) {
+                            xClips.push_back({crLeft, crRight});
+                        }
+                    }
+                }
+
+                std::sort(xClips.begin(), xClips.end(),
+                    [](const TempXClip& a, const TempXClip& b) { return a.x < b.x; });
+
+                struct XRange { double left, right; };
+                std::vector<XRange> mergedClips;
+                for (const auto& xc : xClips) {
+                    if (!mergedClips.empty() && xc.x <= mergedClips.back().right) {
+                        mergedClips.back().right = std::max(mergedClips.back().right, xc.x2);
+                    } else {
+                        mergedClips.push_back({xc.x, xc.x2});
+                    }
+                }
+
+                std::vector<XRange> complements;
+                double curX = contentLeft;
+                for (const auto& mc : mergedClips) {
+                    if (mc.left > curX) {
+                        complements.push_back({curX, mc.left});
+                    }
+                    curX = mc.right;
+                }
+                if (curX < contentRight) {
+                    complements.push_back({curX, contentRight});
+                }
+
+                for (const auto& comp : complements) {
+                    double clipW = comp.right - comp.left;
+                    if (clipW < 0.5) continue;
+
+                    auto* clipNode = new QSGClipNode;
+                    clipNode->setIsRectangular(true);
+                    clipNode->setClipRect(QRectF(comp.left, ly, clipW, lh));
+
+                    QSGTextNode* clipTextNode = window->createTextNode();
+                    if (clipTextNode) {
+                        clipTextNode->setColor(textColor);
+                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                        clipNode->appendChildNode(clipTextNode);
+                        clipTextNode->addTextLayout(QPointF(origin_x, paraY), layout, -1, -1, qline, 1);
+                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                        container->appendChildNode(clipNode);
+                    } else {
+                        delete clipNode;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Issue #901 第十轮问题4: 增量更新静态正文 QSG 节点。
+    ///
+    /// 基于 ParagraphId 持久维护 per-item 的 ParagraphId→QSGNode 映射，
+    /// 单次调用仅 insert/remove/update 变化的段落节点，不全量重建。
+    ///
+    /// - 新出现的 ParagraphId → insert 新容器节点 + 子节点
+    /// - 消失的 ParagraphId → remove 容器节点（从 staticLayer 移除并删除）
+    /// - 已存在且 force_full_update=true → update（删除旧子节点，创建新子节点）
+    /// - 已存在且 force_full_update=false → 保持不动
+    ///
+    /// force_full_update=true 用于 needs_relayout / handoff_pending / clip 模式切换等
+    /// 需要重建所有已有段落子节点的场景。
+    /// force_full_update=false 用于纯滚动跨出（viewport_exceeds_loaded），
+    /// 只 insert 新进入视口的段落、remove 离开视口的段落，已有段落保持不动。
+    ///
+    /// 返回 true 表示成功；false 表示因 layout 缺失或场景图无效而放弃
+    /// （调用方应保留 dirty 标志，下一帧重试）。
+    bool update_text_nodes_incremental(
+        QSGNode* root_raw, QQuickItem* item_ptr,
+        const char** text_ptrs, const int* text_lens,
+        const int* cache_idx_arr,
+        const double* para_y_arr,
+        const uint64_t* paragraph_id_arr,
+        int para_count,
+        const int* vl_cache_idx_arr,
+        const int* vl_qtextline_idx_arr,
+        const double* vl_y_arr, const double* vl_height_arr,
+        const double* vl_doc_width_arr,
+        const double* vl_para_y_arr,
+        const uint64_t* vl_paragraph_id_arr,
+        int vl_count,
+        float font_size, const QString& font_family,
+        double scroll_y, const QString& color_q,
+        const double* clip_x_arr, const double* clip_y_arr,
+        const double* clip_w_arr, const double* clip_h_arr,
+        int clip_count,
+        double origin_x,
+        uint64_t generation,
+        bool force_full_update
+    ) {
+        if (!root_raw || !item_ptr) return false;
+        QQuickWindow* window = item_ptr->window();
+        if (!window) return false;
+
+        if (root_raw->childCount() == 0) return false;
+        auto* staticLayer = static_cast<QSGTransformNode*>(root_raw->childAtIndex(0));
+        if (!staticLayer) return false;
+
+        // 检查所有非空段落的 layout 可用性
+        for (int i = 0; i < para_count; i++) {
+            if (text_lens[i] == 0) continue;
+            int cacheIdx = cache_idx_arr[i];
+            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            if (!cachedLayout) return false;
+        }
+        // 检查 visual line layout 可用性
+        if (clip_count > 0 && vl_count > 0) {
+            for (int i = 0; i < vl_count; i++) {
+                int cacheIdx = vl_cache_idx_arr[i];
+                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                if (!cachedLayout) return false;
+            }
+        }
+
+        QColor textColor(color_q);
+        auto& item_map = g_incremental_para_map[item_ptr];
+        // 安全检查：如果 staticLayer 变了（item 销毁后重建生成新 QSG 树），
+        // 旧 map 条目中的 container 指针已悬空。清空 map（不 delete 节点，
+        // 它们属于旧 QSG 树，已被 Qt 管理），重新开始。
+        if (item_map.static_layer != staticLayer) {
+            item_map.para_map.clear();
+            item_map.static_layer = staticLayer;
+        }
+        auto& node_map = item_map.para_map;
+
+        // 构建 needed_ids 集合
+        std::unordered_set<uint64_t> needed_ids;
+        for (int i = 0; i < para_count; i++) {
+            needed_ids.insert(paragraph_id_arr[i]);
+        }
+
+        // ── Remove: 删除不在 needed_ids 中的已有节点 ──
+        std::vector<uint64_t> to_remove;
+        for (auto& kv : node_map) {
+            if (needed_ids.find(kv.first) == needed_ids.end()) {
+                to_remove.push_back(kv.first);
+            }
+        }
+        for (uint64_t id : to_remove) {
+            auto it = node_map.find(id);
+            if (it != node_map.end()) {
+                QSGNode* container = it->second.container;
+                staticLayer->removeChildNode(container);
+                delete container;
+                node_map.erase(it);
+            }
+        }
+
+        // ── 准备 clipRects ──
+        std::vector<std::pair<double,double>> clip_rects_xy;
+        std::vector<std::pair<double,double>> clip_rects_wh;
+        for (int c = 0; c < clip_count; c++) {
+            double cw = clip_w_arr[c];
+            double ch = clip_h_arr[c];
+            if (ch > 0.0 && cw > 0.0) {
+                clip_rects_xy.push_back({clip_x_arr[c], clip_y_arr[c]});
+                clip_rects_wh.push_back({cw, ch});
+            }
+        }
+
+        // ── 按 paragraph_id 分组 visual lines ──
+        std::unordered_map<uint64_t, std::vector<int>> vl_for_para;
+        for (int i = 0; i < vl_count; i++) {
+            vl_for_para[vl_paragraph_id_arr[i]].push_back(i);
+        }
+
+        // ── Insert / Update ──
+        for (int i = 0; i < para_count; i++) {
+            uint64_t id = paragraph_id_arr[i];
+            double para_y = para_y_arr[i];
+            int cacheIdx = cache_idx_arr[i];
+            bool is_empty = (text_lens[i] == 0);
+
+            auto it = node_map.find(id);
+            if (it != node_map.end()) {
+                // 已有节点
+                if (!force_full_update) {
+                    // 保持不动（纯滚动跨出场景）
+                    continue;
+                }
+                // force_full_update: 重建子节点
+                QSGNode* container = it->second.container;
+                while (container->childCount() > 0) {
+                    QSGNode* child = container->childAtIndex(container->childCount() - 1);
+                    container->removeChildNode(child);
+                    delete child;
+                }
+                if (!is_empty) {
+                    const char* text_ptr = text_ptrs[i];
+                    int text_len = text_lens[i];
+                    auto vl_it = vl_for_para.find(id);
+                    std::vector<int> empty_vl;
+                    const std::vector<int>& vl_indices = (vl_it != vl_for_para.end()) ? vl_it->second : empty_vl;
+                    build_paragraph_subtree(
+                        container, window,
+                        text_ptr, text_len,
+                        cacheIdx, para_y,
+                        vl_cache_idx_arr, vl_qtextline_idx_arr,
+                        vl_y_arr, vl_height_arr,
+                        vl_doc_width_arr, vl_para_y_arr,
+                        vl_indices,
+                        clip_rects_xy, clip_rects_wh,
+                        font_size, font_family,
+                        textColor, origin_x, generation
+                    );
+                }
+                it->second.para_y = para_y;
+            } else {
+                // 新节点
+                QSGNode* container = new QSGNode;
+                if (!is_empty) {
+                    const char* text_ptr = text_ptrs[i];
+                    int text_len = text_lens[i];
+                    auto vl_it = vl_for_para.find(id);
+                    std::vector<int> empty_vl;
+                    const std::vector<int>& vl_indices = (vl_it != vl_for_para.end()) ? vl_it->second : empty_vl;
+                    build_paragraph_subtree(
+                        container, window,
+                        text_ptr, text_len,
+                        cacheIdx, para_y,
+                        vl_cache_idx_arr, vl_qtextline_idx_arr,
+                        vl_y_arr, vl_height_arr,
+                        vl_doc_width_arr, vl_para_y_arr,
+                        vl_indices,
+                        clip_rects_xy, clip_rects_wh,
+                        font_size, font_family,
+                        textColor, origin_x, generation
+                    );
+                }
+                staticLayer->appendChildNode(container);
+                node_map[id] = {container, para_y};
+            }
+        }
+
+        // ── 按 para_y 排序 staticLayer 的子节点（保证绘制顺序正确） ──
+        std::vector<std::pair<QSGNode*, double>> children_with_y;
+        children_with_y.reserve(node_map.size());
+        for (auto& kv : node_map) {
+            children_with_y.push_back({kv.second.container, kv.second.para_y});
+        }
+        std::sort(children_with_y.begin(), children_with_y.end(),
+            [](const std::pair<QSGNode*, double>& a, const std::pair<QSGNode*, double>& b) {
+                return a.second < b.second;
+            });
+        for (auto& entry : children_with_y) {
+            staticLayer->removeChildNode(entry.first);
+        }
+        for (auto& entry : children_with_y) {
+            staticLayer->appendChildNode(entry.first);
+        }
+
+        // ── 更新滚动位移矩阵 ──
+        QMatrix4x4 mat;
+        mat.translate(0.0f, static_cast<float>(-scroll_y), 0.0f);
+        staticLayer->setMatrix(mat);
+        staticLayer->markDirty(QSGNode::DirtyMatrix);
+
+        return true;
+    }
+
+    /// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
+    ///
+    /// 在 item 销毁时调用，避免全局 map 中残留悬空指针。
+    /// 不删除 QSGNode（由 Qt 场景图自行管理），只清理 map 条目。
+    void clear_incremental_para_map(QQuickItem* item_ptr) {
+        if (!item_ptr) return;
+        g_incremental_para_map.erase(item_ptr);
+    }
 }}
 
 /// 由 `EditorLayout::snapshot()` 提供的 per-paragraph 排版数据。
@@ -497,6 +861,10 @@ pub(crate) struct VisualLineClipInfo {
     pub para_y: f64,
     /// 文档宽度（complement 区间右边界）
     pub doc_width: f64,
+    /// Issue #901 第十轮问题4: 该视觉行所属段落的稳定 ParagraphId。
+    /// C++ 侧据此把 visual line 归组到正确的段落容器节点，
+    /// 实现按 ParagraphId 的增量 insert/remove/update。
+    pub paragraph_id: u64,
 }
 
 /// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
@@ -877,5 +1245,186 @@ pub fn update_scroll_transform(root_raw: *mut std::ffi::c_void, scroll_y: f64) {
         scroll_y as "double"
     ] {
         update_scroll_transform(root_raw, scroll_y);
+    });
+}
+
+/// Issue #901 第十轮问题4: 增量更新静态正文 QSG 节点。
+///
+/// 基于 ParagraphId 持久维护 per-item 的 ParagraphId→QSGNode 映射，
+/// 单次调用仅 insert/remove/update 变化的段落节点，不全量重建。
+///
+/// # 增量策略
+///
+/// - **新出现的 ParagraphId** → insert 新容器节点 + 子节点
+/// - **消失的 ParagraphId** → remove 容器节点
+/// - **已存在且 `force_full_update=true`** → update（删除旧子节点，创建新子节点）
+/// - **已存在且 `force_full_update=false`** → 保持不动
+///
+/// `force_full_update=true` 用于 `needs_relayout` / `handoff_pending` / clip 模式切换
+/// 等需要重建所有已有段落子节点的场景。
+/// `force_full_update=false` 用于纯滚动跨出（`viewport_exceeds_loaded`），
+/// 只 insert 新进入视口的段落、remove 离开视口的段落，已有段落保持不动。
+///
+/// # 安全回退
+///
+/// 当 `paragraphs` 中存在 `paragraph_id == 0`（`ParagraphId::INVALID`）的段落时，
+/// 增量映射无法正确区分不同段落（多个 id=0 会冲突）。此时返回 `false`，
+/// 调用方应回退到 `rebuild_text_node_from_paragraphs` 全量重建。
+///
+/// # Safety
+/// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
+pub fn update_text_nodes_incremental(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    paragraphs: &[ParagraphLineInfo],
+    visual_line_clips: &[VisualLineClipInfo],
+    scroll_y: f64,
+    color: &str,
+    animation_clip_rects: &[AnimationClipRect],
+    origin_x: f64,
+    generation: u64,
+    force_full_update: bool,
+) -> bool {
+    // 防御性空指针检查
+    if root_raw.is_null() || item_ptr.is_null() {
+        return false;
+    }
+
+    // Issue #901 第十轮问题4: 检查是否存在 paragraph_id == 0 的段落。
+    // ParagraphId::INVALID (0) 表示未分配有效 ID，多个段落共用 id=0 会在
+    // C++ map 中冲突。此时回退到全量重建（调用方处理）。
+    if paragraphs.iter().any(|p| p.paragraph_id == 0) {
+        return false;
+    }
+
+    let font_size = paragraphs.first().map(|p| p.font_size).unwrap_or(16.0);
+    let font_family_owned: String = paragraphs
+        .first()
+        .map(|p| p.font_family.clone())
+        .unwrap_or_else(|| "Noto Sans CJK SC".to_string());
+    let font_family = &font_family_owned;
+
+    let font_family_q: qmetaobject::QString = font_family.clone().into();
+    let color_q: qmetaobject::QString = color.to_string().into();
+
+    let text_ptrs: Vec<*const u8> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.as_ptr())
+        .collect();
+    let text_lens: Vec<i32> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.len() as i32)
+        .collect();
+    let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
+    let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
+    let paragraph_ids: Vec<u64> = paragraphs.iter().map(|p| p.paragraph_id).collect();
+
+    let vl_cache_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.cache_idx).collect();
+    let vl_qtextline_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.qtextline_idx).collect();
+    let vl_y: Vec<f64> = visual_line_clips.iter().map(|v| v.y).collect();
+    let vl_height: Vec<f64> = visual_line_clips.iter().map(|v| v.height).collect();
+    let vl_doc_width: Vec<f64> = visual_line_clips.iter().map(|v| v.doc_width).collect();
+    let vl_para_y: Vec<f64> = visual_line_clips.iter().map(|v| v.para_y).collect();
+    let vl_paragraph_ids: Vec<u64> = visual_line_clips.iter().map(|v| v.paragraph_id).collect();
+
+    let clip_x: Vec<f64> = animation_clip_rects.iter().map(|c| c.x).collect();
+    let clip_y: Vec<f64> = animation_clip_rects.iter().map(|c| c.y).collect();
+    let clip_w: Vec<f64> = animation_clip_rects.iter().map(|c| c.w).collect();
+    let clip_h: Vec<f64> = animation_clip_rects.iter().map(|c| c.h).collect();
+
+    let para_count = paragraphs.len() as i32;
+    let vl_count = visual_line_clips.len() as i32;
+    let clip_count = animation_clip_rects.len() as i32;
+
+    let text_ptrs_ptr = text_ptrs.as_ptr();
+    let text_lens_ptr = text_lens.as_ptr();
+    let cache_idxs_ptr = cache_idxs.as_ptr();
+    let para_y_ptr = para_y.as_ptr();
+    let paragraph_ids_ptr = paragraph_ids.as_ptr();
+    let vl_cache_idxs_ptr = vl_cache_idxs.as_ptr();
+    let vl_qtextline_idxs_ptr = vl_qtextline_idxs.as_ptr();
+    let vl_y_ptr = vl_y.as_ptr();
+    let vl_height_ptr = vl_height.as_ptr();
+    let vl_doc_width_ptr = vl_doc_width.as_ptr();
+    let vl_para_y_ptr = vl_para_y.as_ptr();
+    let vl_paragraph_ids_ptr = vl_paragraph_ids.as_ptr();
+    let clip_x_ptr = clip_x.as_ptr();
+    let clip_y_ptr = clip_y.as_ptr();
+    let clip_w_ptr = clip_w.as_ptr();
+    let clip_h_ptr = clip_h.as_ptr();
+
+    let success = cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        text_ptrs_ptr as "const char**",
+        text_lens_ptr as "const int*",
+        cache_idxs_ptr as "const int*",
+        para_y_ptr as "const double*",
+        paragraph_ids_ptr as "const uint64_t*",
+        para_count as "int",
+        vl_cache_idxs_ptr as "const int*",
+        vl_qtextline_idxs_ptr as "const int*",
+        vl_y_ptr as "const double*",
+        vl_height_ptr as "const double*",
+        vl_doc_width_ptr as "const double*",
+        vl_para_y_ptr as "const double*",
+        vl_paragraph_ids_ptr as "const uint64_t*",
+        vl_count as "int",
+        font_size as "float",
+        font_family_q as "QString",
+        scroll_y as "double",
+        color_q as "QString",
+        clip_x_ptr as "const double*",
+        clip_y_ptr as "const double*",
+        clip_w_ptr as "const double*",
+        clip_h_ptr as "const double*",
+        clip_count as "int",
+        origin_x as "double",
+        generation as "uint64_t",
+        force_full_update as "bool"
+    ] -> bool as "bool" {
+        return update_text_nodes_incremental(
+            root_raw, item_ptr,
+            text_ptrs_ptr, text_lens_ptr,
+            cache_idxs_ptr,
+            para_y_ptr,
+            paragraph_ids_ptr,
+            para_count,
+            vl_cache_idxs_ptr,
+            vl_qtextline_idxs_ptr,
+            vl_y_ptr, vl_height_ptr,
+            vl_doc_width_ptr,
+            vl_para_y_ptr,
+            vl_paragraph_ids_ptr,
+            vl_count,
+            font_size, font_family_q,
+            scroll_y, color_q,
+            clip_x_ptr, clip_y_ptr,
+            clip_w_ptr, clip_h_ptr,
+            clip_count,
+            origin_x,
+            generation,
+            force_full_update
+        );
+    });
+
+    success
+}
+
+/// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
+///
+/// 在 item 销毁时调用，避免全局 map 中残留悬空指针。
+/// 不删除 QSGNode（由 Qt 场景图自行管理），只清理 map 条目。
+///
+/// # Safety
+/// `item_ptr` 必须是有效的 QQuickItem 指针或 null（null 时无操作）。
+pub fn clear_incremental_para_map(item_ptr: *mut std::ffi::c_void) {
+    if item_ptr.is_null() {
+        return;
+    }
+    cpp!(unsafe [
+        item_ptr as "QQuickItem*"
+    ] {
+        clear_incremental_para_map(item_ptr);
     });
 }

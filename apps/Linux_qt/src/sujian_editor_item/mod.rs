@@ -896,13 +896,16 @@ impl SujianEditorItem {
 
         let mut plan = render_plan::SelectionPreeditPlan::default();
 
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let resolved_lines = snapshot.resolved_lines();
+
         if self.pipeline.has_selection() {
             plan.has_selection = true;
 
             let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
             let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
 
-            for line in &*snapshot.lines {
+            for line in resolved_lines.as_ref() {
                 if line.para_text.is_empty() {
                     continue;
                 }
@@ -947,8 +950,8 @@ impl SujianEditorItem {
                 let font_family = &self.current_font_family.to_string();
                 let cursor_byte = self.pipeline.cursor();
 
-                if let Some(line) = snapshot
-                    .lines
+                if let Some(line) = resolved_lines
+                    .as_ref()
                     .iter()
                     .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
                 {

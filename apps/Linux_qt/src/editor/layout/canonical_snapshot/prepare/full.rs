@@ -293,6 +293,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         dpr,
         paragraphs,
         visual_lines: Arc::new(visual_lines),
+        suffix_transform: None,
     }
 }
 
@@ -403,6 +404,7 @@ pub fn assemble_document_visual_snapshot_from_lines(
         // visual_lines 直接 clone，保持与原 layout 一致的 Rust 几何数据。
         // Issue #901 第九轮阻塞5: 用 Arc 包装，共享视觉行数据。
         visual_lines: Arc::new(lines.to_vec()),
+        suffix_transform: None,
     }
 }
 
@@ -502,31 +504,27 @@ fn prev_snapshot_text_matches(prev: &CanonicalDocumentVisualSnapshot, text: &str
     reconstructed == text
 }
 
-/// Issue #901 第三轮复核问题 2: 从 previous_snapshot 的 visual_lines 构建
-/// `para_start → (line_start_idx, line_end_idx)` 索引，O(all_lines) 一次构建。
+/// Issue #901 第十轮问题5: 用二分查找在已排序的 visual_lines 中定位
+/// `para_start` 对应的行范围，O(log n)，代替 `build_para_start_to_line_range`
+/// 的 O(all_lines) HashMap 建图。
 ///
-/// 用于增量排版路径中未变段落的 O(1) 行集合查找，
-/// 代替 `prev.visual_lines.iter().filter(...)` 的 O(all_lines) 每段扫描。
-fn build_para_start_to_line_range(
+/// `visual_lines` 按 `para_start` 非降序排列（段落顺序 = 行顺序），
+/// 同一段落的所有行 `para_start` 相同且连续。
+fn find_line_range_by_para_start(
     visual_lines: &[VisualLine],
-) -> std::collections::HashMap<usize, (usize, usize)> {
-    use std::collections::HashMap;
-    let mut map: HashMap<usize, (usize, usize)> = HashMap::new();
+    para_start: usize,
+) -> Option<(usize, usize)> {
     if visual_lines.is_empty() {
-        return map;
+        return None;
     }
-    let mut range_start = 0usize;
-    let mut current_para_start = visual_lines[0].para_start;
-    for (i, vl) in visual_lines.iter().enumerate().skip(1) {
-        if vl.para_start != current_para_start {
-            map.insert(current_para_start, (range_start, i));
-            range_start = i;
-            current_para_start = vl.para_start;
-        }
+    // 二分查找第一个 para_start >= target 的行
+    let start = visual_lines.partition_point(|vl| vl.para_start < para_start);
+    if start >= visual_lines.len() || visual_lines[start].para_start != para_start {
+        return None;
     }
-    // 最后一个段落的范围
-    map.insert(current_para_start, (range_start, visual_lines.len()));
-    map
+    // 二分查找段落后第一个 para_start != target 的行
+    let end = visual_lines[start..].partition_point(|vl| vl.para_start == para_start) + start;
+    Some((start, end))
 }
 
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
@@ -610,6 +608,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraphs: prev.paragraphs.clone(),
                 // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据。
                 visual_lines: Arc::clone(&prev.visual_lines),
+                // Issue #901 第十轮问题5: 无正文变化，沿用 prev 的 suffix_transform。
+                suffix_transform: prev.suffix_transform,
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -677,6 +677,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraphs: Vec::new(),
                 // Issue #901 第九轮阻塞5: Arc 包装空 Vec。
                 visual_lines: Arc::new(Vec::new()),
+                suffix_transform: None,
             };
         }
     };
@@ -745,8 +746,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
-    // 构建 para_start → (line_start, line_end) 索引
-    let prev_line_index = build_para_start_to_line_range(prev.visual_lines.as_slice());
+    // Issue #901 第十轮问题5: 不再构建 O(all_lines) HashMap，
+    // 用二分查找 O(log n) 按需定位段落行范围。
 
     // Issue #901 问题5: take prev 的 visual_lines 和 paragraphs（move，不 clone）。
     // 后续只 splice 受影响段落的行和段落，未修改段直接复用 move 出的数据。
@@ -777,13 +778,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut vl_end_idx: usize = vl_total;
     if old_splice_start < prev_paragraphs.len() {
         let para_start = prev_paragraphs[old_splice_start].paragraph_document_byte_start;
-        if let Some(&(s, _)) = prev_line_index.get(&para_start) {
+        if let Some((s, _)) = find_line_range_by_para_start(&visual_lines, para_start) {
             vl_start_idx = s;
         }
     }
     if old_splice_end < prev_paragraphs.len() {
         let para_start = prev_paragraphs[old_splice_end].paragraph_document_byte_start;
-        if let Some(&(s, _)) = prev_line_index.get(&para_start) {
+        if let Some((s, _)) = find_line_range_by_para_start(&visual_lines, para_start) {
             vl_end_idx = s;
         }
     }
@@ -1027,12 +1028,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
-    // Issue #901 问题5缺陷C + 第八轮问题5性能优化:
-    // 合并 y/byte/qchar 三个独立遍历为单次遍历，减少缓存未命中。
-    // 完整架构方案（未改段落不物化绝对坐标，通过 ParagraphHeightIndex 按需计算
-    // paragraph_top_y(para_idx) + relative_y，byte/qchar 用段落相对偏移 + 段落起点）
-    // 涉及 visual_lines 消费方、cursor_rect、hit test 等多处改动，超出本轮范围。
-    // 当前在"无变化时跳过"前置条件下已最优，此处进一步把多趟 O(后续行数) 合并为单趟。
+    // Issue #901 第十轮问题5: 不再逐行物化后缀段绝对坐标。
+    // 记算后缀段平移变换（SuffixTransform），消费方通过 resolve_visual_line 按需应用。
+    // 这把 O(后续行数) 的热路径降为 O(1)，纯字符替换（等长同高同行数）suffix_transform=None。
     let new_affected_byte_end = paragraph_start;
     // 旧受影响段落的 byte end = splice 前保存的旧后缀起点
     // Issue #901 第八轮问题4: 不再用旧下标 vl_end_idx 访问 splice 后的新数组反推旧边界
@@ -1046,32 +1044,40 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
 
     let update_start = vl_start_idx + new_affected_line_count;
-    let need_y = delta_height.abs() > 0.001;
-    let need_byte = byte_delta != 0;
-    let need_qchar = qchar_delta != 0;
+    let old_affected_line_count = vl_end_idx - vl_start_idx;
+    let line_id_delta = new_affected_line_count as i64 - old_affected_line_count as i64;
 
-    // 合并的单次遍历：同时更新 y / byte / qchar 偏移。
-    // 原实现为三个独立循环各遍历 visual_lines[update_start..] 一次（最多 3 趟），
-    // 此处合并为最多 1 趟，仅在对应 delta != 0 时更新对应字段。
-    if need_y || need_byte || need_qchar {
-        for vl in &mut visual_lines[update_start..] {
-            if need_y {
-                vl.y += delta_height;
-            }
-            if need_byte {
-                vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
-                vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
-                vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
-            }
-            if need_qchar {
-                vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
-                vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
-            }
+    // 后缀段范围 [update_start, suffix_end_line_idx)。
+    // splice 后、尾部空行追加前的 visual_lines.len() 是后缀段的末尾。
+    // 尾部空行（空文本/尾部换行）是新构造的行，绝对坐标已正确，不在变换范围内。
+    let suffix_end_line_idx = visual_lines.len();
+
+    // 构造 SuffixTransform：仅在非恒等时记录。
+    // y_delta = delta_height（段落高度变化导致后续段 y 漂移）
+    // byte_delta / qchar_delta / line_id_delta 如上计算。
+    let suffix_transform: Option<super::super::SuffixTransform> = {
+        let need_y = delta_height.abs() > 0.001;
+        let need_byte = byte_delta != 0;
+        let need_qchar = qchar_delta != 0;
+        let need_line_id = line_id_delta != 0;
+        if update_start < suffix_end_line_idx
+            && (need_y || need_byte || need_qchar || need_line_id)
+        {
+            Some(super::super::SuffixTransform {
+                start_line_idx: update_start,
+                end_line_idx: suffix_end_line_idx,
+                y_delta: if need_y { delta_height } else { 0.0 },
+                byte_delta,
+                qchar_delta,
+                line_id_delta,
+            })
+        } else {
+            None
         }
-    }
+    };
 
     // 更新后续段落的 paragraph_document_byte_start 及其内部行/cluster 的 byte offset。
-    // paragraphs 数组独立于 visual_lines，无法并入上面的遍历。
+    // paragraphs 数组独立于 visual_lines，无法用 SuffixTransform 懒记录。
     // Issue #901 第五轮阻塞2: 用新段范围 new_layout_end 定位后续段
     if byte_delta != 0 {
         let para_update_start = new_layout_end.min(paragraphs.len());
@@ -1100,27 +1106,19 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
-    // 更新后续段的 line_id（确保连续）
-    // Issue #901 问题5缺陷C修复: line_id 在构建时赋值为连续整数（line_id == 行索引）。
-    // splice 替换了 [vl_start_idx, vl_end_idx) 的旧行，新行 id 已在构建
-    // new_visual_lines 时从 vl_start_idx 起连续赋值。后续行的 id 只有在 splice
-    // 改变受影响行数（new != old）时才会因行索引漂移而失配；行数不变时
-    // （如纯字符替换不增删行）后续行索引不变，id 仍 == 行索引，可跳过 O(后续行数) 遍历。
-    // 这对长章非结构性编辑（高度不变、行数不变、byte 不变）将此步从 O(后续行数) 降为 O(1)。
-    // line_id 更新需维护 next_id 状态变量，无法并入上面的无状态偏移遍历，保留独立循环。
-    let old_affected_line_count = vl_end_idx - vl_start_idx;
-    if new_affected_line_count != old_affected_line_count {
-        let mut next_id = update_start;
-        for vl in &mut visual_lines[update_start..] {
-            vl.id = next_id;
-            next_id += 1;
-        }
-    }
     // Issue #901 问题5: 增量路径只遍历了受影响段落，line_id/y/paragraph_idx
     // 是受影响段落结束后的值。空文本/尾部换行处理需要文档末尾的值。
     // 更新到 splice 后的文档末尾。
+    // Issue #901 第十轮问题5: 后缀段 y 未物化，需用 SuffixTransform 解析最后一行的 y。
     line_id = visual_lines.len();
-    y = visual_lines.last().map(|vl| vl.y + vl.height).unwrap_or(padding);
+    y = visual_lines.last().map(|vl| {
+        let resolved_y = if update_start < visual_lines.len() {
+            vl.y + delta_height
+        } else {
+            vl.y
+        };
+        resolved_y + vl.height
+    }).unwrap_or(padding);
     paragraph_idx = paragraphs.len() as i32;
 
     // 空文本处理
@@ -1238,6 +1236,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraphs,
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
+        // Issue #901 第十轮问题5: 后缀段平移变换，消费方按需解析。
+        suffix_transform,
     };
 
     // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
@@ -1743,5 +1743,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         paragraphs,
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
+        // Issue #901 第十轮问题5: 全篇重排无后缀段平移变换。
+        suffix_transform: None,
     }
 }

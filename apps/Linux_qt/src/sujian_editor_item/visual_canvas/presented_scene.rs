@@ -131,6 +131,20 @@ impl Default for CanvasAffine2 {
 ///
 /// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`，而非 u64 hash。
 /// 动画层通过完整 `LineSnapshotId` 查询 `TextureCache`，不再从 u64 反解。
+///
+/// Issue #901 第十轮问题2：明确区分**逻辑字形身份**与**该字形一个可见像素碎片**。
+/// 旧实现把一个 cluster 被裁成多个静态片段后，每块都保留整个 cluster 的
+/// `byte_range`，`scene_transition.rs` 逐块用整个 byte_range 查 target，
+/// 同一个原字的两个静态碎片都可匹配同一 target run，各创建一个
+/// `command_for_surviving`，导致同一字被"存活"多次。
+/// 现引入 `glyph_id`（字形逻辑身份，同一字形的所有碎片共享）和
+/// `fragment_index`（同一字形内的碎片序号）两个显式字段：
+/// - `glyph_id` 由 `(snapshot_id, byte_range)` 派生，`scene_transition.rs`
+///   先按 `glyph_id` 聚合同一 glyph 的所有碎片，再对**同一个 glyph 的同一个
+///   target**只计算一次几何变换（FLIP/删除/新增），按每块原 clip/UV 映射出
+///   实际可绘制的目标子矩形。fragment 数量不再变成同一字被"存活"多次。
+/// - `fragment_index` 让同一字形的不同碎片在聚合时有稳定序，避免随机顺序
+///   导致帧间抖动。
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PixelContribution {
     /// 源纹理的完整行快照 id。
@@ -155,12 +169,45 @@ pub(crate) struct PixelContribution {
     /// `controller.rs` 据此判断每条贡献的真实来源，混合 old/new 的半成品帧
     /// 不能简单用单一 `scene.source_revision` 表示整张画面的字节身份。
     pub source_revision: EditorRevision,
+    /// Issue #901 第十轮问题2：字形逻辑身份。
+    ///
+    /// 同一字形（同一 cluster 的所有可见碎片）共享同一 `glyph_id`。
+    /// `scene_transition.rs` 据此聚合同一 glyph 的所有碎片，对同一个 glyph
+    /// 的同一个 target 只计算一次几何变换，避免 fragment 数量变成同一字被
+    /// "存活"多次。由 `(snapshot_id.to_cache_key(), byte_range)` 派生，
+    /// 保证同一行纹理内不同 cluster 的 glyph_id 不同。
+    pub glyph_id: u64,
+    /// Issue #901 第十轮问题2：同一字形内的碎片序号。
+    ///
+    /// 同一 `glyph_id` 的多个碎片按 `fragment_index` 升序聚合，保证帧间
+    /// 稳定顺序。单一 cluster 未被裁剪时 `fragment_index = 0`。
+    pub fragment_index: u32,
 }
 
 impl PixelContribution {
     /// 该贡献是否有非零可见面积。
     pub(crate) fn has_visible_area(&self) -> bool {
         self.visible_clip.w > 0.0 && self.visible_clip.h > 0.0 && self.opacity > 0.0
+    }
+
+    /// Issue #901 第十轮问题2：从 `(snapshot_id, byte_range)` 派生稳定的 glyph_id。
+    ///
+    /// 同一行纹理内同一 cluster 的所有碎片共享同一 glyph_id，不同 cluster
+    /// 的 glyph_id 不同。用 `LineSnapshotId::to_cache_key` 的散列组合
+    /// `byte_range` 起止，保证全局唯一性（跨行通过 snapshot_id 区分）。
+    pub(crate) fn derive_glyph_id(
+        snapshot_id: &LineSnapshotId,
+        byte_range: (usize, usize),
+    ) -> u64 {
+        let mut h = snapshot_id.to_cache_key();
+        h = h.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h = h.wrapping_add(byte_range.0 as u64);
+        h = h.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+        h = h.wrapping_add(byte_range.1 as u64);
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= h >> 29;
+        h
     }
 }
 
@@ -274,13 +321,17 @@ mod tests {
     use super::*;
 
     fn sample_contribution(clip_w: f64, clip_h: f64, opacity: f64) -> PixelContribution {
+        let snapshot_id = LineSnapshotId::new(1, 0, 0);
+        let byte_range = (0, 100);
         PixelContribution {
-            snapshot_id: LineSnapshotId::new(1, 0, 0),
+            glyph_id: PixelContribution::derive_glyph_id(&snapshot_id, byte_range),
+            fragment_index: 0,
+            snapshot_id,
             source_uv: CanvasRect::new(0.0, 0.0, 100.0, 100.0),
             document_rect: CanvasRect::new(10.0, 10.0, 100.0, 100.0),
             visible_clip: CanvasRect::new(10.0, 10.0, clip_w, clip_h),
             opacity,
-            byte_range: (0, 100),
+            byte_range,
             source_revision: EditorRevision::initial(),
         }
     }

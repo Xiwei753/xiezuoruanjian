@@ -224,6 +224,12 @@ impl RenderOwnership {
 /// `document_rect` / `visible_clip` / `source_uv` 使用 `SourceRect`（与
 /// `render_plan` 模块已有的几何载体一致），在 `build_presented_scene_from_frame`
 /// 中转换为 `CanvasRect` 填入 `PixelContribution`。
+///
+/// Issue #901 第十轮问题2：添加 `glyph_id` / `fragment_index` 字段，与
+/// `PixelContribution` 的字形身份/碎片序号对齐。同一 cluster 被裁成多个
+/// 静态片段时，每块共享同一 `glyph_id`、不同 `fragment_index`，
+/// `scene_transition.rs` 据此聚合同一 glyph 的所有碎片，对同一个 glyph 的
+/// 同一个 target 只计算一次几何变换。
 #[derive(Clone, Debug)]
 pub(crate) struct StaticTextContributionInfo {
     /// 源纹理的完整行快照 id（来自 `PreparedLineSnapshot.id`）。
@@ -254,6 +260,16 @@ pub(crate) struct StaticTextContributionInfo {
     /// 使 `controller.rs` 的 reset 条件永远无法满足（每帧重复登记旧 revision
     /// 的静态贡献，动画到 progress=1 后也无法完成归还/清理）。
     pub source_revision: EditorRevision,
+    /// Issue #901 第十轮问题2：字形逻辑身份。
+    ///
+    /// 同一 cluster 的所有静态碎片共享同一 `glyph_id`。由
+    /// `PixelContribution::derive_glyph_id(&snapshot_id, byte_range)` 派生。
+    pub glyph_id: u64,
+    /// Issue #901 第十轮问题2：同一字形内的碎片序号。
+    ///
+    /// 同一 `glyph_id` 的多个碎片按 `fragment_index` 升序聚合。
+    /// 单一 cluster 未被裁剪时 `fragment_index = 0`。
+    pub fragment_index: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -19,7 +19,17 @@ impl SujianEditorItem {
         let padding = self.current_padding;
         let font_size = self.current_font_pixel_size;
         let line_spacing = self.current_line_spacing;
-        let lines = self.ensure_layout_cached(width);
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let params = self.layout_params(width);
+        let snapshot = self
+            .editor_layout
+            .snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            );
+        let resolved = snapshot.resolved_lines();
+        let lines = resolved.as_ref();
         let height = lines
             .last()
             .map(|line| line.y + line.height + f64::from(padding))
@@ -521,7 +531,17 @@ impl SujianEditorItem {
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
         let width = self.bounding_width();
         let cursor = self.pipeline.cursor();
-        let lines = self.ensure_layout_cached(width);
+        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        let params = self.layout_params(width);
+        let snapshot = self
+            .editor_layout
+            .snapshot(
+                self.pipeline.committed_text(),
+                params,
+                self.pipeline.text_revision(),
+            );
+        let resolved = snapshot.resolved_lines();
+        let lines = resolved.as_ref();
 
         let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
             idx + 1 < lines.len() && line.byte_end == cursor && lines[idx + 1].byte_start == cursor

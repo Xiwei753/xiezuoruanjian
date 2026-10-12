@@ -197,7 +197,7 @@ fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
     let end = rest.find("\n}\n").expect("步骤4: caret_rect 实现结束位置") + 3;
     let body = &rest[..end];
     assert!(
-        body.contains("or_else(|| snapshot.lines.last())"),
+        body.contains("or_else(|| lines_slice.last())"),
         "步骤4: 空正文要靠 caret_rect 兜底行，不靠注入假字符"
     );
     assert!(

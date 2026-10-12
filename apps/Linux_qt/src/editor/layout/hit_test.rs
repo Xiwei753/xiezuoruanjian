@@ -14,7 +14,9 @@ pub fn hit_test(
     y: f64,
     scroll_y: f64,
 ) -> (usize, CaretAffinity) {
-    let lines = &snapshot.lines;
+    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    let lines_cow = snapshot.resolved_lines();
+    let lines = lines_cow.as_ref();
     if lines.is_empty() {
         return (0, CaretAffinity::Downstream);
     }
@@ -77,15 +79,17 @@ pub fn caret_rect(
     scroll_y: f64,
     viewport_h: f64,
 ) -> CaretRect {
-    let line = snapshot
-        .lines
+    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    let lines_cow = snapshot.resolved_lines();
+    let lines_slice = lines_cow.as_ref();
+    let line = lines_slice
         .iter()
         .enumerate()
         .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(snapshot.lines.as_slice(), *idx, cursor_byte, affinity)
+            line_contains_cursor_with_affinity(lines_slice, *idx, cursor_byte, affinity)
         })
         .map(|(_, line)| line)
-        .or_else(|| snapshot.lines.last());
+        .or_else(|| lines_slice.last());
 
     let fallback;
     let line = match line {
@@ -174,15 +178,17 @@ pub fn caret_rect_doc(
     cursor_byte: usize,
     affinity: CaretAffinity,
 ) -> CaretRect {
-    let line = snapshot
-        .lines
+    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    let lines_cow = snapshot.resolved_lines();
+    let lines_slice = lines_cow.as_ref();
+    let line = lines_slice
         .iter()
         .enumerate()
         .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(snapshot.lines.as_slice(), *idx, cursor_byte, affinity)
+            line_contains_cursor_with_affinity(lines_slice, *idx, cursor_byte, affinity)
         })
         .map(|(_, line)| line)
-        .or_else(|| snapshot.lines.last());
+        .or_else(|| lines_slice.last());
 
     let fallback;
     let line = match line {
@@ -255,7 +261,9 @@ pub fn cursor_line_and_x(
     cursor: usize,
     affinity: CaretAffinity,
 ) -> Option<(usize, f64)> {
-    let lines = &snapshot.lines;
+    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    let lines_cow = snapshot.resolved_lines();
+    let lines = lines_cow.as_ref();
     if lines.is_empty() {
         return None;
     }
