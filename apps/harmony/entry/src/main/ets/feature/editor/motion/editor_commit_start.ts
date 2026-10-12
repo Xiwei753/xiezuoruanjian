@@ -160,6 +160,14 @@ export interface FrozenGlyphMember {
   sourceKind: 'old' | 'new'
   /** 该成员的源修订号 */
   sourceRevision: number
+  /**
+   * Issue #879 复核评论6111437799 问题1：该成员的角色——'target' 或 'frozen'。
+   *
+   * 'target' = 本次 newRevision 的目标新源成员，需从零开始露出（空 clip 时从零宽展开到完整字形）。
+   * 'frozen' = 历史源已被上一笔吞没/裁出屏幕，必须保持不可见并淡出（空 clip 时保持零面积并降低透明度）。
+   * 缺省时 buildFrame 按 sourceRevision === newRevision 推断（=newRevision → 'target'，<newRevision → 'frozen'）。
+   */
+  role: 'target' | 'frozen'
   /** 该成员的源 runId（暂时用 `sourceKind-revision` 格式，buildFrame 会重新分配 windowInstanceId） */
   runId: string
   /** 该成员的渲染节点身份标识（暂时用 `sourceKind-revision` 格式） */
@@ -1629,10 +1637,20 @@ export function retargetRunStarts(
           // needsCrossfade 在 plan 阶段由 planFromPatches 逐 interval 计算，
           // retarget 时不应重新计算——直接继承 prevInterval 的值。
           reInterval.needsCrossfade = prevInterval.needsCrossfade
-          // sourceMembers 深拷贝——retarget 时 intervalForIsland 会重新构建 sourceMembers，
-          // 但如果 reInterval 没有 sourceMembers（非 retained 通道），则继承 prevInterval 的。
-          if (reInterval.sourceMembers === undefined && prevInterval.sourceMembers !== undefined) {
-            reInterval.sourceMembers = deepCloneSourceMembers(prevInterval.sourceMembers)
+          // Issue #879 复核评论6111437799 问题5：源窗口集合固定为 PreparedCandidate 不可变成员身份。
+          // retarget 只刷新已固定成员的 clip、位置、alpha，源已离屏则 clip/alpha 归零但成员物理 key 不变。
+          // 不使用 intervalForIsland 重新构建的 sourceMembers——那会因 frozenWindows 变化而引入/丢失成员。
+          // 优先继承 prevInterval 的 sourceMembers（保持 renderNodeKey/sourceRevision/role 不变），
+          // 只用 reInterval 的 sourceMembers 作为 fallback（prevInterval 没有 sourceMembers 时）。
+          if (prevInterval.sourceMembers !== undefined) {
+            // 从 reInterval 的 sourceMembers 中提取新的 clipRects/opacity 信息，
+            // 但保持 prevInterval 的成员身份（renderNodeKey/sourceRevision/role）不变。
+            reInterval.sourceMembers = mergeMemberUpdates(
+              prevInterval.sourceMembers,
+              reInterval.sourceMembers
+            )
+          } else if (reInterval.sourceMembers === undefined) {
+            // 两个都没有 sourceMembers——不需要处理
           }
           intervals.push(reInterval)
         } else {
@@ -1960,6 +1978,9 @@ function buildSourceMembers(
     members.push({
       sourceKind: span.sourceKind,
       sourceRevision: span.sourceRevision,
+      // Issue #879 复核评论6111437799 问题1：来自冻结窗口的成员 role='frozen'，
+      // 空clip时应保持不可见并淡出，而不是从零宽恢复到完整字。
+      role: 'frozen',
       runId: span.runId,
       renderNodeKey: span.renderNodeKey,
       sourceGlyphRect: {
@@ -2123,6 +2144,8 @@ function intervalForIsland(
         return {
           sourceKind: g.sourceKind,
           sourceRevision: sourceRevision,
+          // Issue #879 复核评论6111437799 问题1：fallback 成员也来自冻结窗口，role='frozen'。
+          role: 'frozen',
           runId: runId,
           // Issue #879 评论6110857105 问题6：使用 g.renderNodeKey 而非 runId，
           // 确保与 FrozenWindowSpan.renderNodeKey 一致
@@ -2183,6 +2206,8 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
   return members.map((m: FrozenGlyphMember): FrozenGlyphMember => ({
     sourceKind: m.sourceKind,
     sourceRevision: m.sourceRevision,
+    // Issue #879 复核评论6111437799 问题1：深拷贝 role 字段
+    role: m.role,
     runId: m.runId,
     renderNodeKey: m.renderNodeKey,
     sourceGlyphRect: {
@@ -2199,6 +2224,117 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
     sourceUtf16End: m.sourceUtf16End,
     targetOpacity: m.targetOpacity,
   }))
+}
+
+/**
+ * Issue #879 复核评论6111437799 问题5：合并成员更新——保持 prevMembers 的物理身份不变，
+ * 只用 newMembers 的 clipRects/opacity 更新对应成员。
+ *
+ * retarget 时 frozenWindows 可能已变化（旧动画结束、窗口消失），intervalForIsland 重新构建的
+ * sourceMembers 可能丢失旧成员或引入新成员。但物理 Text 节点的身份必须在 PreparedCandidate
+ * 生命周期内保持不变——否则 plannedWindowKeys 和 buildFrame 的 sameKeySet 检查会失败。
+ *
+ * 策略：
+ * - 以 prevMembers 为基准（保持 renderNodeKey/sourceRevision/role 不变）
+ * - 对每个 prevMember，在 newMembers 中按 renderNodeKey + sourceRevision 查找匹配
+ *   - 匹配上：更新 clipRects/opacity/offsetX/offsetY（位置和裁切信息）
+ *   - 匹配不上：保持成员身份不变，但 clipRects 清空、opacity=0（源已离屏）
+ * - newMembers 中多出的成员（prevMembers 没有）：追加到结果末尾（新出现的源成员）
+ */
+function mergeMemberUpdates(
+  prevMembers: FrozenGlyphMember[],
+  newMembers: FrozenGlyphMember[] | undefined
+): FrozenGlyphMember[] {
+  const result: FrozenGlyphMember[] = []
+  const consumedNew = new Set<number>()
+  for (const prev of prevMembers) {
+    let matched = false
+    if (newMembers !== undefined) {
+      for (let ni = 0; ni < newMembers.length; ni++) {
+        if (consumedNew.has(ni)) {
+          continue
+        }
+        const nw = newMembers[ni]
+        if (nw.renderNodeKey === prev.renderNodeKey &&
+            nw.sourceRevision === prev.sourceRevision) {
+          // 匹配上：保持 prev 的身份字段，更新 clipRects/opacity/offset
+          result.push({
+            sourceKind: prev.sourceKind,
+            sourceRevision: prev.sourceRevision,
+            role: prev.role,
+            runId: prev.runId,
+            renderNodeKey: prev.renderNodeKey,
+            sourceGlyphRect: {
+              x: nw.sourceGlyphRect.x, y: nw.sourceGlyphRect.y,
+              width: nw.sourceGlyphRect.width, height: nw.sourceGlyphRect.height,
+            },
+            offsetX: nw.offsetX,
+            offsetY: nw.offsetY,
+            clipRects: nw.clipRects.map((cr: RectLike): RectLike => ({
+              x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+            })),
+            opacity: nw.opacity,
+            sourceUtf16Start: nw.sourceUtf16Start,
+            sourceUtf16End: nw.sourceUtf16End,
+            targetOpacity: nw.targetOpacity,
+          })
+          consumedNew.add(ni)
+          matched = true
+          break
+        }
+      }
+    }
+    if (!matched) {
+      // 没匹配上：源已离屏，保持身份但 clipRects 清空、opacity=0
+      result.push({
+        sourceKind: prev.sourceKind,
+        sourceRevision: prev.sourceRevision,
+        role: prev.role,
+        runId: prev.runId,
+        renderNodeKey: prev.renderNodeKey,
+        sourceGlyphRect: {
+          x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
+          width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
+        },
+        offsetX: prev.offsetX,
+        offsetY: prev.offsetY,
+        clipRects: [],
+        opacity: 0,
+        sourceUtf16Start: prev.sourceUtf16Start,
+        sourceUtf16End: prev.sourceUtf16End,
+        targetOpacity: 0,
+      })
+    }
+  }
+  // 追加 newMembers 中多出的成员（prevMembers 没有的新源成员）
+  if (newMembers !== undefined) {
+    for (let ni = 0; ni < newMembers.length; ni++) {
+      if (!consumedNew.has(ni)) {
+        const nw = newMembers[ni]
+        result.push({
+          sourceKind: nw.sourceKind,
+          sourceRevision: nw.sourceRevision,
+          role: nw.role,
+          runId: nw.runId,
+          renderNodeKey: nw.renderNodeKey,
+          sourceGlyphRect: {
+            x: nw.sourceGlyphRect.x, y: nw.sourceGlyphRect.y,
+            width: nw.sourceGlyphRect.width, height: nw.sourceGlyphRect.height,
+          },
+          offsetX: nw.offsetX,
+          offsetY: nw.offsetY,
+          clipRects: nw.clipRects.map((cr: RectLike): RectLike => ({
+            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
+          opacity: nw.opacity,
+          sourceUtf16Start: nw.sourceUtf16Start,
+          sourceUtf16End: nw.sourceUtf16End,
+          targetOpacity: nw.targetOpacity,
+        })
+      }
+    }
+  }
+  return result
 }
 
 /** 复制 pieces（分区不变时的兜底返回）。 */

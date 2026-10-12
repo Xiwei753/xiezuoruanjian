@@ -567,6 +567,8 @@ export class EditorMotionPlanner {
                       const newMember: FrozenGlyphMember = {
                         sourceKind: 'new',
                         sourceRevision: newRevision,
+                        // Issue #879 复核评论6111437799 问题1：新建目标成员 role='target'
+                        role: 'target',
                         runId: newMemberRunId,
                         renderNodeKey: newMemberRunId,
                         sourceGlyphRect: {

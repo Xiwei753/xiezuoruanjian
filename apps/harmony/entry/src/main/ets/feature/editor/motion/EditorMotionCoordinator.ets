@@ -1586,19 +1586,19 @@ export class EditorMotionCoordinator {
               }
             }
 
-            // 计算 newSourceUtf16Start/End 和 newSourceGlyphX/Y/Width/Height（needsSourceCrossfade 时）
-            if (needsSourceCrossfade) {
-              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
-                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
-                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
-                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
-              }
-              if (intervalNewGlyphRect !== null) {
-                newSourceGlyphX = intervalNewGlyphRect.x
-                newSourceGlyphY = intervalNewGlyphRect.y
-                newSourceGlyphWidth = intervalNewGlyphRect.width
-                newSourceGlyphHeight = intervalNewGlyphRect.height
-              }
+            // Issue #879 复核评论6111437799 问题2：newSourceUtf16Start/End 和 newSourceGlyphX/Y/Width/Height
+            // 的计算不再受 needsSourceCrossfade 条件控制——只要拿到有效的 newMoveBoundaries 就独立计算。
+            // needsSourceCrossfade 仅控制是否有必要额外切换文字形态，不能控制新源的字符范围。
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+              newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+            }
+            if (intervalNewGlyphRect !== null) {
+              newSourceGlyphX = intervalNewGlyphRect.x
+              newSourceGlyphY = intervalNewGlyphRect.y
+              newSourceGlyphWidth = intervalNewGlyphRect.width
+              newSourceGlyphHeight = intervalNewGlyphRect.height
             }
 
             // 问题2：构建 effective members——原始 sourceMembers + 可能新增的 newRevision 目标成员
@@ -1608,20 +1608,34 @@ export class EditorMotionCoordinator {
             const hasNewRevisionMember = interval.sourceMembers.some(
               m => m.sourceRevision === newRevision
             )
-            if (!hasNewRevisionMember && intervalNewGlyphRect !== null) {
+            // Issue #879 复核评论6111437799 问题3：即使 intervalNewGlyphRect === null 也创建目标成员，
+            // 用零面积 clip + opacity=0，保留稳定 key——与 plannedWindowKeys 的无条件输出对齐。
+            if (!hasNewRevisionMember) {
+              // Issue #879 复核评论6111437799 问题3：当 intervalNewGlyphRect === null 时用 fallback 几何
+              const targetGlyphRect: RectLike = intervalNewGlyphRect !== null
+                ? intervalNewGlyphRect
+                : {
+                    x: islandNewX,
+                    y: islandNewY,
+                    width: 0,
+                    height: islandOldHeight,
+                  }
               effectiveMembers.push({
                 sourceKind: 'new',
                 sourceRevision: newRevision,
+                // Issue #879 复核评论6111437799 问题1：新建目标成员 role='target'，
+                // 空clip时从零宽展开到完整字形。
+                role: 'target',
                 runId: `new-${newRevision}`,
                 renderNodeKey: `new-${newRevision}`,
                 sourceGlyphRect: {
-                  x: intervalNewGlyphRect.x,
-                  y: intervalNewGlyphRect.y,
-                  width: intervalNewGlyphRect.width,
-                  height: intervalNewGlyphRect.height,
+                  x: targetGlyphRect.x,
+                  y: targetGlyphRect.y,
+                  width: targetGlyphRect.width,
+                  height: targetGlyphRect.height,
                 },
-                offsetX: islandCurrentX - intervalNewGlyphRect.x,
-                offsetY: islandCurrentY - intervalNewGlyphRect.y,
+                offsetX: islandCurrentX - targetGlyphRect.x,
+                offsetY: islandCurrentY - targetGlyphRect.y,
                 clipRects: [],
                 opacity: 0,
                 sourceUtf16Start: newSourceUtf16Start,
@@ -1661,20 +1675,42 @@ export class EditorMotionCoordinator {
               const targetRects: ClipRect[] = []
 
               if (member.clipRects.length === 0) {
-                // 问题2：新目标成员——从零宽度逐渐扩展到完整字形
-                // 起始：零面积；目标：完整字形矩形
-                startRects.push({
-                  x: memberSourceGlyphOnScreen.x,
-                  y: memberSourceGlyphOnScreen.y,
-                  width: 0,
-                  height: memberSourceGlyphOnScreen.height,
-                })
-                targetRects.push({
-                  x: memberNewGlyphRect.x,
-                  y: memberNewGlyphRect.y,
-                  width: memberNewGlyphRect.width,
-                  height: memberNewGlyphRect.height,
-                })
+                // Issue #879 复核评论6111437799 问题1：空 clip 有两种本质不同的语义：
+                // ① target 角色（本次 newRevision 目标新源）——从零宽度逐渐扩展到完整字形
+                // ② frozen 角色（历史源已被上一笔吞没/裁出屏幕）——保持不可见并淡出
+                const memberRole = member.role !== undefined
+                  ? member.role
+                  : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+                if (memberRole === 'target') {
+                  // target：起始零面积，目标完整字形矩形
+                  startRects.push({
+                    x: memberSourceGlyphOnScreen.x,
+                    y: memberSourceGlyphOnScreen.y,
+                    width: 0,
+                    height: memberSourceGlyphOnScreen.height,
+                  })
+                  targetRects.push({
+                    x: memberNewGlyphRect.x,
+                    y: memberNewGlyphRect.y,
+                    width: memberNewGlyphRect.width,
+                    height: memberNewGlyphRect.height,
+                  })
+                } else {
+                  // frozen：保持空 clip（startRects 和 targetRects 都是零面积），
+                  // 透明度从当前值降到0——由 memberOpacity 插值控制，这里只保证几何不可见
+                  startRects.push({
+                    x: memberSourceGlyphOnScreen.x,
+                    y: memberSourceGlyphOnScreen.y,
+                    width: 0,
+                    height: 0,
+                  })
+                  targetRects.push({
+                    x: memberSourceGlyphOnScreen.x,
+                    y: memberSourceGlyphOnScreen.y,
+                    width: 0,
+                    height: 0,
+                  })
+                }
               } else {
                 // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标），目标 = mapRectByRatio 映射到新布局
                 for (const scr of member.clipRects) {
@@ -1750,20 +1786,49 @@ export class EditorMotionCoordinator {
               const memberRenderNodeKey = `${member.renderNodeKey}-${islandWindowInstanceId}`
 
               // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
-              // member.sourceRevision 可能是前前次编辑的源，真正的源布局位置是 member.sourceGlyphRect，
-              // 真正的 UTF-16 范围是冻结 span 的 glyphUtf16Ranges，并不一定等于本次 oldSnapshot/newSnapshot
               const memberGlyphX = member.sourceGlyphRect.x
               const memberGlyphY = member.sourceGlyphRect.y
               const memberGlyphWidth = member.sourceGlyphRect.width
               const memberGlyphHeight = member.sourceGlyphRect.height
-              const memberOffsetX = member.offsetX
-              const memberOffsetY = member.offsetY
               const memberUtf16Start = member.sourceUtf16Start
               const memberUtf16End = member.sourceUtf16End
 
+              // Issue #879 复核评论6111437799 问题4：每个成员有独立的位置插值轨迹。
+              // 历史源成员的起始屏幕位置 = sourceGlyphRect.x + offsetX, sourceGlyphRect.y + offsetY
+              // 目标屏幕位置 = intervalNewGlyphRect.x/y（或 fallback islandNewX/Y）
+              // 每帧 currentX = startScreenX + (targetScreenX - startScreenX) * p
+              // offsetX = currentX - member.sourceGlyphRect.x
+              const memberStartScreenX = member.sourceGlyphRect.x + member.offsetX
+              const memberStartScreenY = member.sourceGlyphRect.y + member.offsetY
+              let memberTargetScreenX: number
+              let memberTargetScreenY: number
+              if (intervalNewGlyphRect !== null) {
+                memberTargetScreenX = intervalNewGlyphRect.x
+                memberTargetScreenY = intervalNewGlyphRect.y
+              } else {
+                // fallback：目标位置与 island 级别的目标一致
+                memberTargetScreenX = islandNewX
+                memberTargetScreenY = islandNewY
+              }
+              // Issue #879 复核评论6111437799 问题1：frozen 角色且空 clip 的成员保持不可见——
+              // 位置不插值到目标，保持在起始位置（透明度降到0让它消失）
+              const memberRole = member.role !== undefined
+                ? member.role
+                : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+              let memberCurrentX: number
+              let memberCurrentY: number
+              if (memberRole === 'frozen' && member.clipRects.length === 0) {
+                // frozen + 空 clip：保持起始位置不动，由 opacity 淡出
+                memberCurrentX = memberStartScreenX
+                memberCurrentY = memberStartScreenY
+              } else {
+                memberCurrentX = memberStartScreenX + (memberTargetScreenX - memberStartScreenX) * p
+                memberCurrentY = memberStartScreenY + (memberTargetScreenY - memberStartScreenY) * p
+              }
+              const memberOffsetX = memberCurrentX - member.sourceGlyphRect.x
+              const memberOffsetY = memberCurrentY - member.sourceGlyphRect.y
+
               // 问题3：透明度用 startOpacity→targetOpacity 插值
-              // targetOpacity 已在成员创建时设置；-1 表示未设置，按 sourceRevision 推断
-              // sourceKind='new' 的历史源（sourceRevision < newRevision）应淡出至0，而不是淡入至1
               let memberOpacity: number | undefined
               if (member.opacity !== undefined) {
                 const memberTargetOpacity = member.targetOpacity >= 0
@@ -1800,8 +1865,8 @@ export class EditorMotionCoordinator {
                 renderNodeKey: memberRenderNodeKey,
                 currentClipLeft: islandBboxLeft,
                 currentClipRight: islandBboxRight,
-                currentPositionX: islandCurrentX,
-                currentPositionY: islandCurrentY,
+                currentPositionX: memberCurrentX,
+                currentPositionY: memberCurrentY,
                 motionOwnerKind: 'reflow',
                 opacity: memberOpacity
               })
@@ -1858,28 +1923,25 @@ export class EditorMotionCoordinator {
               }
             }
 
-            // Issue #879 复核评论6104619192 问题1：needsCrossfade 已在 plan 阶段由 move.needsCrossfade 确定，
-            // 不再逐 interval 动态判断。此处始终计算新源几何参数，供 needsSourceCrossfade=true 时使用。
-            // needsSourceCrossfade 是 interval 级别的，只执行一次。
-            if (needsSourceCrossfade) {
-              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
-                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
-                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
-                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
-              }
-              if (intervalNewGlyphRect !== null) {
-                newSourceGlyphX = intervalNewGlyphRect.x
-                newSourceGlyphY = intervalNewGlyphRect.y
-                newSourceGlyphWidth = intervalNewGlyphRect.width
-                newSourceGlyphHeight = intervalNewGlyphRect.height
-              } else {
-                // fallback：用第一个成员的 sr 计算（与旧实现行为一致）
-                const firstSr = sourceRectsToIterate[0]
-                newSourceGlyphX = islandNewX + (firstSr.x - islandOldLeft)
-                newSourceGlyphY = islandNewY
-                newSourceGlyphWidth = Math.max(0, firstSr.width)
-                newSourceGlyphHeight = Math.max(0, firstSr.height)
-              }
+            // Issue #879 复核评论6111437799 问题2：newSourceUtf16Start/End 和 newSourceGlyphX/Y/Width/Height
+            // 的计算不再受 needsSourceCrossfade 条件控制——只要拿到有效的 newMoveBoundaries 就独立计算。
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+              newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+            }
+            if (intervalNewGlyphRect !== null) {
+              newSourceGlyphX = intervalNewGlyphRect.x
+              newSourceGlyphY = intervalNewGlyphRect.y
+              newSourceGlyphWidth = intervalNewGlyphRect.width
+              newSourceGlyphHeight = intervalNewGlyphRect.height
+            } else {
+              // fallback：用第一个成员的 sr 计算（与旧实现行为一致）
+              const firstSr = sourceRectsToIterate[0]
+              newSourceGlyphX = islandNewX + (firstSr.x - islandOldLeft)
+              newSourceGlyphY = islandNewY
+              newSourceGlyphWidth = Math.max(0, firstSr.width)
+              newSourceGlyphHeight = Math.max(0, firstSr.height)
             }
 
             // 遍历所有成员，为每个成员分别计算 sourceGlyphOnScreen、newGlyphRect、clipRects
@@ -2007,19 +2069,17 @@ export class EditorMotionCoordinator {
               }
             }
 
-            // Issue #879 复核评论6104619192 问题1：needsCrossfade 已在 plan 阶段由 move.needsCrossfade 确定，
-            // 不再逐 interval 动态判断。此处始终计算新源几何参数，供 needsSourceCrossfade=true 时使用。
-            if (needsSourceCrossfade) {
-              if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
-                  interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
-                newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
-                newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
-              }
-              newSourceGlyphX = newGlyphRect.x
-              newSourceGlyphY = newGlyphRect.y
-              newSourceGlyphWidth = newGlyphRect.width
-              newSourceGlyphHeight = newGlyphRect.height
+            // Issue #879 复核评论6111437799 问题2：newSourceUtf16Start/End 和 newSourceGlyphX/Y/Width/Height
+            // 的计算不再受 needsSourceCrossfade 条件控制——只要拿到有效的 newMoveBoundaries 就独立计算。
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              newSourceUtf16Start = newMoveBoundaries[interval.firstIndex]
+              newSourceUtf16End = newMoveBoundaries[interval.lastIndex + 1]
             }
+            newSourceGlyphX = newGlyphRect.x
+            newSourceGlyphY = newGlyphRect.y
+            newSourceGlyphWidth = newGlyphRect.width
+            newSourceGlyphHeight = newGlyphRect.height
 
             // Issue #879 复核评论6102724233 问题3+4：用 rectDifference 计算尚未覆盖的区域。
             // 与 carry insert 的找间隙逻辑共用同一个几何求差函数。
