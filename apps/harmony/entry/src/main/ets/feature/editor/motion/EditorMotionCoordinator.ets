@@ -1571,6 +1571,121 @@ export class EditorMotionCoordinator {
         // Issue #879 缺口3：为每个岛创建独立的 MotionGlyphWindow，
         // 每个窗口有自己的 offset/clipRect/glyphIds，clipRect 和字形位置一致。
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
+
+        // Issue #879 复核评论6120849815 问题1：预计算 FrozenWindowGroupPlan。
+        // 在处理任何 interval 之前，为每个 renderNodeKey 预计算统一的 group plan。
+        // 预计算考虑所有 interval 中共享该 renderNodeKey 的所有 frozen 成员，
+        // 选择第一个可见成员（clipRects 非空）作为 baseMember。
+        // 如果所有成员都隐藏，才用第一个成员的值。
+        // 这避免了按 interval 创建 group plan 时，隐藏成员（clipRects=[]、opacity=0）
+        // 抢占整窗 offset/alpha 的问题。
+        {
+          const frozenMembersByKey = new Map<string, Array<{
+            member: FrozenGlyphMember
+            ownTargetX: number
+            ownTargetY: number
+            intervalGlyphIds: string[]
+          }>>()
+
+          for (const interval of intervals) {
+            if (interval.sourceMembers === undefined) continue
+
+            // 计算 interval 级别的目标位置（与循环内逻辑一致）
+            let intervalNewGlyphRect: RectLike | null = null
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
+              const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
+              const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
+              if (newRect !== null) {
+                intervalNewGlyphRect = newRect
+              }
+            }
+            let intervalIslandNewX = pieceNewX
+            let intervalIslandNewY = pieceNewY
+            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
+              const islandNewUtf16Start = newMoveBoundaries[interval.firstIndex]
+              intervalIslandNewX = EditorMotionCoordinator.xAtOffsetLocal(
+                newLayout, islandNewUtf16Start, move.newRect.x)
+              intervalIslandNewY = EditorMotionCoordinator.yAtOffsetLocal(
+                newLayout, islandNewUtf16Start, move.newRect.y)
+            }
+            const ownTargetX = intervalNewGlyphRect !== null
+              ? intervalNewGlyphRect.x : intervalIslandNewX
+            const ownTargetY = intervalNewGlyphRect !== null
+              ? intervalNewGlyphRect.y : intervalIslandNewY
+
+            for (const member of interval.sourceMembers) {
+              const memberRole = member.role !== undefined
+                ? member.role
+                : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+              if (memberRole !== 'frozen') continue
+
+              const key = member.renderNodeKey
+              if (!frozenMembersByKey.has(key)) {
+                frozenMembersByKey.set(key, [])
+              }
+              frozenMembersByKey.get(key)!.push({
+                member,
+                ownTargetX,
+                ownTargetY,
+                intervalGlyphIds: interval.glyphIds
+              })
+            }
+          }
+
+          // 为每个 renderNodeKey 创建统一的 FrozenWindowGroupPlan
+          for (const [renderNodeKey, entries] of frozenMembersByKey) {
+            if (frozenGroupPlans.has(renderNodeKey)) continue
+
+            // 选择第一个可见成员（clipRects 非空）作为 baseMember
+            let baseEntry = entries[0]
+            for (const entry of entries) {
+              if (entry.member.clipRects.length > 0) {
+                baseEntry = entry
+                break
+              }
+            }
+            const baseMember = baseEntry.member
+
+            const gpStartOffsetX = baseMember.offsetX
+            const gpStartOffsetY = baseMember.offsetY
+            const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
+            const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
+            const gpTargetOffsetX = baseEntry.ownTargetX - baseMember.sourceGlyphRect.x
+            const gpTargetOffsetY = baseEntry.ownTargetY - baseMember.sourceGlyphRect.y
+            const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
+              (gpTargetOffsetX - gpStartOffsetX) * p
+            const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
+              (gpTargetOffsetY - gpStartOffsetY) * p
+            const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
+
+            frozenGroupPlans.set(renderNodeKey, {
+              startOffsetX: gpStartOffsetX,
+              startOffsetY: gpStartOffsetY,
+              startAlpha: gpStartAlpha,
+              endAlpha: gpEndAlpha,
+              targetOffsetX: gpTargetOffsetX,
+              targetOffsetY: gpTargetOffsetY,
+              currentX: gpCurrentX,
+              currentY: gpCurrentY,
+              currentAlpha: gpCurrentAlpha,
+              renderNodeKey: renderNodeKey,
+              runId: baseMember.runId,
+              sourceRevision: baseMember.sourceRevision,
+              sourceKind: baseMember.sourceKind,
+              windowInstanceId: baseMember.windowInstanceId !== undefined
+                ? baseMember.windowInstanceId : '',
+              originalUtf16Start: baseMember.sourceUtf16Start,
+              originalUtf16End: baseMember.sourceUtf16End,
+              originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
+                ? baseMember.glyphUtf16Ranges : null,
+              originalGlyphIds: baseEntry.intervalGlyphIds,
+            })
+          }
+        }
+
         for (const interval of intervals) {
           // 该岛在旧布局中的 utf16 范围
           let iStart = pieceUtf16Start
@@ -1634,6 +1749,12 @@ export class EditorMotionCoordinator {
           let newSourceGlyphWidth = islandOldWidth
           let newSourceGlyphHeight = islandOldHeight
           const islandClipRects: ClipRect[] = []
+          // Issue #879 评论6120849815 问题3：fallback 分支中区分 frozen/target 角色。
+          // frozen（旧源窗口）不补间隙——只保留已可见碎片，不让被裁掉的旧笔画重新长出来。
+          // target（新源交叉淡入淡出窗口）可以补间隙——从零面积渐显至完整目标。
+          // islandClipRects 存放已可见碎片（frozen 和 target 共用的基础碎片），
+          // targetIslandClipRects 存放间隙碎片（只有 target 窗口才使用）。
+          const targetIslandClipRects: ClipRect[] = []
           // Issue #879 评论6108900966 问题1：优先检查 sourceMembers，逐成员独立计算。
           // 每个 FrozenGlyphMember 包含自己的 sourceGlyphRect/offsetX/offsetY/clipRects/opacity，
           // buildFrame 逐成员独立插值，不做笛卡尔混合。
@@ -1746,12 +1867,13 @@ export class EditorMotionCoordinator {
               // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
               // offsetX/offsetY/opacity 等字段）选取，确保隐藏成员不影响整张窗口位置/alpha。
               if (memberRole === 'frozen') {
+                // Issue #879 复核评论6120849815 问题1：group plan 已在 interval 循环之前
+                // 预计算完成（跨所有 interval 选可见 baseMember），此处直接使用。
+                // 仅当预计算遗漏时才回退到按当前 interval 的 effectiveMembers 创建。
                 let groupPlan = frozenGroupPlans.get(member.renderNodeKey)
                 if (groupPlan === undefined) {
-                  // Issue #879 复核评论6120195493：窗口级属性优先从可见成员（clipRects 非空）
-                  // 选取，不由首成员（可能隐藏 opacity=0/clipRects=[]）抢占。先遍历同 key 的
-                  // 所有 frozen 成员，选取第一个可见成员的 offset/opacity/glyphUtf16Ranges
-                  // 作为窗口级值；如果全部隐藏，才用当前成员的值。
+                  // 回退：按当前 interval 的 effectiveMembers 创建 group plan。
+                  // 注意：此回退只在当前 interval 内搜索可见成员，可能不如预计算准确。
                   let baseMember = member
                   for (const m of effectiveMembers) {
                     if (m.renderNodeKey === member.renderNodeKey &&
@@ -1760,15 +1882,12 @@ export class EditorMotionCoordinator {
                       break
                     }
                   }
-                  // 窗口级起始 offset = baseMember.offsetX/Y（来自原始 FrozenWindowSpan）
                   const gpStartOffsetX = baseMember.offsetX
                   const gpStartOffsetY = baseMember.offsetY
                   const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
                   const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
-                  // 窗口级目标 offset = 目标位置 - sourceGlyphRect.x/y
                   const gpTargetOffsetX = ownTargetX - baseMember.sourceGlyphRect.x
                   const gpTargetOffsetY = ownTargetY - baseMember.sourceGlyphRect.y
-                  // 窗口级当前位置 = startOffset + (targetOffset - startOffset) * p
                   const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
                     (gpTargetOffsetX - gpStartOffsetX) * p
                   const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
@@ -1792,9 +1911,6 @@ export class EditorMotionCoordinator {
                       ? member.windowInstanceId : '',
                     originalUtf16Start: member.sourceUtf16Start,
                     originalUtf16End: member.sourceUtf16End,
-                    // Issue #879 复核评论6120195493：从可见成员携带原始窗口的完整
-                    // glyphUtf16Ranges 映射，避免下游 buildGlyphUtf16Ranges 在不连续
-                    // 幸存字场景用 min/max 重新猜导致返回 null。
                     originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
                       ? baseMember.glyphUtf16Ranges : null,
                     originalGlyphIds: interval.glyphIds,
@@ -2081,7 +2197,6 @@ export class EditorMotionCoordinator {
                     motionGlyphWindows.push(memberWindow)
                   } else {
                     // Issue #879 复核评论6120195493：只合并裁切和显示片段。
-                    // 不合并 glyphIds 和 UTF-16 范围——保留原始完整映射。
                     // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
                     existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
                     existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
@@ -2090,6 +2205,17 @@ export class EditorMotionCoordinator {
                     existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
                     existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
                     existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
+                    // Issue #879 复核评论6120849815 问题2：从 group plan 更新 glyphUtf16Ranges、
+                    // utf16Start/End 和 glyphIds，确保聚合后的窗口携带完整的逐字映射。
+                    // 第一个成员可能来自只包含部分字形的 interval，其 glyphUtf16Ranges/utf16Start/End/glyphIds
+                    // 可能不完整。从 group plan 的原始值更新，确保聚合窗口携带完整映射。
+                    const gp = frozenGroupPlans.get(memberRenderNodeKey)
+                    if (gp !== undefined) {
+                      existing.glyphUtf16Ranges = gp.originalGlyphUtf16Ranges
+                      existing.utf16Start = gp.originalUtf16Start
+                      existing.utf16End = gp.originalUtf16End
+                      existing.glyphIds = gp.originalGlyphIds
+                    }
                   }
                 } else {
                   frozenWindowAggregator.set(memberRenderNodeKey, memberWindow)
@@ -2221,9 +2347,13 @@ export class EditorMotionCoordinator {
                 })
               }
 
-              // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
+              // Issue #879 评论6120849815 问题3：间隙碎片只对 target 角色生成。
+              // frozen 成员（旧源窗口）不补间隙——被裁掉的旧笔画不能重新长出来。
+              // target 成员（新源交叉淡入淡出窗口）可以从零面积渐显至完整目标。
+              const gapStartRects: ClipRect[] = []
+              const gapTargetRects: ClipRect[] = []
               for (const gap of remaining) {
-                startRects.push({
+                gapStartRects.push({
                   x: gap.x, y: gap.y,
                   width: 0, height: Math.max(0, gap.height)
                 })
@@ -2232,19 +2362,32 @@ export class EditorMotionCoordinator {
                   x: newGlyphRect.x, y: newGlyphRect.y,
                   width: sourceGlyphOnScreen.width, height: sourceGlyphOnScreen.height
                 })
-                targetRects.push({
+                gapTargetRects.push({
                   x: mappedGap.x, y: mappedGap.y,
                   width: mappedGap.width, height: mappedGap.height
                 })
               }
 
-              // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+              // 已可见碎片的逐帧插值 → islandClipRects（frozen 和 target 共用的基础碎片）
               for (let si = 0; si < startRects.length; si++) {
                 const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
                 const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
                 const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
                 const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
                 islandClipRects.push({
+                  x: frameX,
+                  y: frameY,
+                  width: Math.max(0, frameWidth),
+                  height: Math.max(0, frameHeight),
+                })
+              }
+              // 间隙碎片的逐帧插值 → targetIslandClipRects（只有 target 窗口才使用）
+              for (let si = 0; si < gapStartRects.length; si++) {
+                const frameX = gapStartRects[si].x + (gapTargetRects[si].x - gapStartRects[si].x) * p
+                const frameWidth = gapStartRects[si].width + (gapTargetRects[si].width - gapStartRects[si].width) * p
+                const frameY = gapStartRects[si].y + (gapTargetRects[si].y - gapStartRects[si].y) * p
+                const frameHeight = gapStartRects[si].height + (gapTargetRects[si].height - gapStartRects[si].height) * p
+                targetIslandClipRects.push({
                   x: frameX,
                   y: frameY,
                   width: Math.max(0, frameWidth),
@@ -2347,9 +2490,13 @@ export class EditorMotionCoordinator {
               })
             }
 
-            // 间隙碎片（rectDifference 返回的剩余区域）：零面积起点 + 按比例映射到新布局的间隙目标
+            // Issue #879 评论6120849815 问题3：间隙碎片只对 target 角色生成。
+            // frozen 成员（旧源窗口）不补间隙——被裁掉的旧笔画不能重新长出来。
+            // target 成员（新源交叉淡入淡出窗口）可以从零面积渐显至完整目标。
+            const gapStartRects: ClipRect[] = []
+            const gapTargetRects: ClipRect[] = []
             for (const gap of remaining) {
-              startRects.push({
+              gapStartRects.push({
                 x: gap.x + frozenDrawOffsetX, y: gap.y + frozenDrawOffsetY,
                 width: 0, height: Math.max(0, gap.height)
               })
@@ -2358,19 +2505,32 @@ export class EditorMotionCoordinator {
                 x: newGlyphRect.x, y: newGlyphRect.y,
                 width: sr.width, height: sr.height
               })
-              targetRects.push({
+              gapTargetRects.push({
                 x: mappedGap.x, y: mappedGap.y,
                 width: mappedGap.width, height: mappedGap.height
               })
             }
 
-            // 逐帧插值：每个碎片从起始位置/宽度插值到目标位置/宽度
+            // 已可见碎片的逐帧插值 → islandClipRects（frozen 和 target 共用的基础碎片）
             for (let si = 0; si < startRects.length; si++) {
               const frameX = startRects[si].x + (targetRects[si].x - startRects[si].x) * p
               const frameWidth = startRects[si].width + (targetRects[si].width - startRects[si].width) * p
               const frameY = startRects[si].y + (targetRects[si].y - startRects[si].y) * p
               const frameHeight = startRects[si].height + (targetRects[si].height - startRects[si].height) * p
               islandClipRects.push({
+                x: frameX,
+                y: frameY,
+                width: Math.max(0, frameWidth),
+                height: Math.max(0, frameHeight),
+              })
+            }
+            // 间隙碎片的逐帧插值 → targetIslandClipRects（只有 target 窗口才使用）
+            for (let si = 0; si < gapStartRects.length; si++) {
+              const frameX = gapStartRects[si].x + (gapTargetRects[si].x - gapStartRects[si].x) * p
+              const frameWidth = gapStartRects[si].width + (gapTargetRects[si].width - gapStartRects[si].width) * p
+              const frameY = gapStartRects[si].y + (gapTargetRects[si].y - gapStartRects[si].y) * p
+              const frameHeight = gapStartRects[si].height + (gapTargetRects[si].height - gapStartRects[si].height) * p
+              targetIslandClipRects.push({
                 x: frameX,
                 y: frameY,
                 width: Math.max(0, frameWidth),
@@ -2413,7 +2573,17 @@ export class EditorMotionCoordinator {
               height: Math.max(0, islandOldHeight),
             })
           }
-          // 包围盒 = 所有 clipRects 的并集
+          // Issue #879 评论6120849815 问题3：区分 frozen/target 包围盒。
+          // frozen（旧源窗口）的包围盒只基于已可见碎片（islandClipRects），
+          // target（新源交叉淡入淡出窗口）的包围盒基于已可见碎片 + 间隙碎片。
+          // 如果没有交叉淡入淡出（!needsSourceCrossfade），则只有旧源窗口，
+          // 使用 frozen 包围盒（即 islandClipRects 的包围盒）。
+          // 如果有交叉淡入淡出，旧源和新源各自有独立的 clipRects 和包围盒。
+          const targetClipRects = targetIslandClipRects.length > 0
+            ? [...islandClipRects, ...targetIslandClipRects]
+            : islandClipRects
+
+          // frozen 包围盒 = islandClipRects（已可见碎片）的并集
           let islandBboxLeft = Infinity
           let islandBboxRight = -Infinity
           let islandBboxTop = Infinity
@@ -2430,8 +2600,29 @@ export class EditorMotionCoordinator {
             islandBboxTop = islandCurrentY
             islandBboxBottom = islandCurrentY
           }
+
+          // target 包围盒 = targetClipRects（已可见碎片 + 间隙碎片）的并集
+          let targetBboxLeft = Infinity
+          let targetBboxRight = -Infinity
+          let targetBboxTop = Infinity
+          let targetBboxBottom = -Infinity
+          for (const cr of targetClipRects) {
+            targetBboxLeft = Math.min(targetBboxLeft, cr.x)
+            targetBboxRight = Math.max(targetBboxRight, cr.x + cr.width)
+            targetBboxTop = Math.min(targetBboxTop, cr.y)
+            targetBboxBottom = Math.max(targetBboxBottom, cr.y + cr.height)
+          }
+          if (targetBboxLeft === Infinity) {
+            targetBboxLeft = islandBboxLeft
+            targetBboxRight = islandBboxRight
+            targetBboxTop = islandBboxTop
+            targetBboxBottom = islandBboxBottom
+          }
+
           // 为该岛独立分配 windowInstanceId（用岛的 glyphIds 子序列）
           const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
+          // Issue #879 评论6120849815 问题3：旧源窗口（frozen 角色）使用 islandClipRects（不含间隙碎片）。
+          // frozen 成员不补间隙——被裁掉的旧笔画不能重新长出来。
           motionGlyphWindows.push({
             sourceKind: 'old',
             utf16Start: iStart,
@@ -2477,15 +2668,17 @@ export class EditorMotionCoordinator {
           // offsetX/Y = islandCurrentX/Y - newSourceGlyphX/Y，
           // 使新源与旧源在屏幕上的 glyph 锚点相同，clipRects 可继续共用（屏幕坐标系）。
           if (needsSourceCrossfade) {
+            // Issue #879 评论6120849815 问题3：新源窗口（target 角色）使用 targetClipRects（含间隙碎片）。
+            // target 成员可以从零面积渐显至完整目标，补全被裁掉的区域。
             motionGlyphWindows.push({
               sourceKind: 'new',
               utf16Start: newSourceUtf16Start,
               utf16End: newSourceUtf16End,
-              clipLeft: islandBboxLeft,
-              clipRight: islandBboxRight,
-              clipTop: islandBboxTop,
-              clipBottom: islandBboxBottom,
-              clipRects: islandClipRects,
+              clipLeft: targetBboxLeft,
+              clipRight: targetBboxRight,
+              clipTop: targetBboxTop,
+              clipBottom: targetBboxBottom,
+              clipRects: targetClipRects,
               glyphX: newSourceGlyphX,
               glyphY: newSourceGlyphY,
               glyphWidth: newSourceGlyphWidth,
@@ -2498,8 +2691,8 @@ export class EditorMotionCoordinator {
               windowId: move.windowId,
               windowInstanceId: islandWindowInstanceId,
               renderNodeKey: `new-${newRevision}-${islandWindowInstanceId}`,
-              currentClipLeft: islandBboxLeft,
-              currentClipRight: islandBboxRight,
+              currentClipLeft: targetBboxLeft,
+              currentClipRight: targetBboxRight,
               currentPositionX: islandCurrentX,
               currentPositionY: islandCurrentY,
               motionOwnerKind: 'reflow',

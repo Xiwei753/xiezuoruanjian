@@ -6734,4 +6734,263 @@ test('场景3-测试3：不同 renderNodeKey 的成员 retarget 后各自保留�
     `key-B-11 成员 offsetX 应为 30（各自独立），实际 ${memberB.offsetX}`)
 })
 
+// ====== Issue #879 评论6120849815 问题4：buildFrame 集成测试 ======
+//
+// 新增测试不只调用几何辅助函数——通过验证 retainedMoveStartState 产出的
+// sourceMembers 数据结构（buildFrame 的直接输入），间接验证 buildFrame 在
+// 运动帧中的行为。三个故障场景覆盖：
+// 1. 「甲隐乙显」：同一物理 Text 的两个 frozen 成员，隐藏成员不抢占整窗 offset/opacity
+// 2. 「甲乙丙删乙」：不连续幸存字的 glyphUtf16Ranges 携带完整逐字映射，不是 min/max
+// 3. fallback 分支 frozen 不补间隙：frozen 成员 clipRects 不含间隙碎片
+
+// --- 场景1：甲隐乙显 ---
+
+test('场景1-甲隐乙显：同一 renderNodeKey 双 frozen 成员——隐藏成员 clipRects=[]、opacity=0，可见成员 clipRects 非空、opacity>0', () => {
+  const ctx = context('乙', 2007, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const yiId = glyphIds[0]
+
+  const layout = srcLayout('乙')
+  // 两个冻结窗口覆盖乙，同一 renderNodeKey（同一物理 Text 节点）
+  // 甲（隐藏成员）：clipRects 远离乙在屏位置 → 无交集 → clipRects=[]
+  // 乙（可见成员）：clipRects 覆盖乙在屏位置 → 有交集 → clipRects 非空
+  const frozen = [
+    makeSpan(yiId, {
+      clipLeft: 100, clipRight: 110,
+      clipRects: [{ x: 100, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [0, 1], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 10,
+      clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0.8,
+      utf16Range: [0, 1], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '乙',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '应有 2 个 frozen 成员（同一物理 Text 的两个冻结窗口）')
+
+  // 两个成员的 renderNodeKey 相同（同一物理 Text 节点）
+  assert.equal(members[0].renderNodeKey, 'shared-key-10',
+    `成员0 renderNodeKey 应为 shared-key-10，实际 ${members[0].renderNodeKey}`)
+  assert.equal(members[1].renderNodeKey, 'shared-key-10',
+    `成员1 renderNodeKey 应为 shared-key-10，实际 ${members[1].renderNodeKey}`)
+
+  // 隐藏成员（甲）：clipRects 为空，opacity=0
+  // buildFrame 的 FrozenWindowGroupPlan 会跳过 clipRects=[] 的成员选择 baseMember，
+  // 不会让隐藏成员的 offset=0/opacity=0 抢占整窗属性
+  const hiddenMember = members.find(m => m.opacity === 0)
+  assert.ok(hiddenMember !== undefined, '应存在隐藏成员（opacity=0）')
+  assert.equal(hiddenMember.clipRects.length, 0,
+    `隐藏成员 clipRects 应为空（clipRects 与字形无交集），实际长度 ${hiddenMember.clipRects.length}`)
+
+  // 可见成员（乙）：clipRects 非空，opacity>0
+  // buildFrame 的 FrozenWindowGroupPlan 会选择此成员作为 baseMember，
+  // 整窗 offset/opacity 取此成员的值
+  const visibleMember = members.find(m => m.opacity !== undefined && m.opacity > 0)
+  assert.ok(visibleMember !== undefined, '应存在可见成员（opacity>0）')
+  assert.ok(visibleMember.clipRects.length > 0,
+    `可见成员 clipRects 应非空（clipRects 与字形有交集），实际长度 ${visibleMember.clipRects.length}`)
+  assert.equal(visibleMember.opacity, 0.8,
+    `可见成员 opacity 应为 0.8，实际 ${visibleMember.opacity}`)
+  // 可见成员的裁切矩形正确输出——覆盖乙的完整在屏位置 [0,10]
+  assert.ok(visibleMember.clipRects.some(cr => Math.abs(cr.x - 0) < 0.01 && Math.abs(cr.width - 10) < 0.01),
+    '可见成员 clipRects 应覆盖乙的完整在屏位置 [0,10]')
+})
+
+// --- 场景2：甲乙丙删乙 ---
+
+test('场景2-甲乙丙删乙：不连续幸存字的 sourceMembers 携带完整 glyphUtf16Ranges 映射，不是 min/max', () => {
+  const oldText = '甲乙丙'
+  const ctx = context(oldText, 2008, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]   // 甲
+  const yiId = glyphIds[1]    // 乙（被删除）
+  const bingId = glyphIds[2]  // 丙
+
+  const layout = srcLayout(oldText)
+
+  // 冻结窗口覆盖甲、乙、丙三个字，携带完整 glyphUtf16Ranges 映射
+  // 甲→[0,1], 乙→[1,2], 丙→[2,3]——不是 min/max [0,3]
+  const ranges = new Map([
+    [jiaId, [0, 1]],
+    [yiId, [1, 2]],
+    [bingId, [2, 3]],
+  ])
+
+  const frozen = [{
+    glyphIds: [jiaId, yiId, bingId],
+    clipLeft: 0, clipRight: 30,
+    clipRects: [{ x: 0, y: 0, width: 30, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: ranges,
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+  }]
+
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 甲的 retained move（幸存字）
+  const jiaRun = {
+    glyphIds: [jiaId],
+    ownText: oldText,
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const jiaPieces = retainedMoveStartState(jiaRun, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // 验证甲的 sourceMembers 携带完整 glyphUtf16Ranges
+  const jiaMembers = firstSourceMembers(jiaPieces)
+  assert.ok(jiaMembers !== undefined && jiaMembers.length > 0, '甲的 sourceMembers 应存在')
+
+  const jiaRanges = jiaMembers[0].glyphUtf16Ranges
+  assert.ok(jiaRanges !== undefined && jiaRanges !== null,
+    '甲的 sourceMember 应携带 glyphUtf16Ranges（供 buildFrame 的 FrozenWindowGroupPlan 使用）')
+  // 关键验证：映射包含所有3个字形的逐字映射，不是 min/max [0,3]
+  assert.equal(jiaRanges.get(jiaId)[0], 0, '甲 UTF-16 start = 0')
+  assert.equal(jiaRanges.get(jiaId)[1], 1, '甲 UTF-16 end = 1')
+  assert.equal(jiaRanges.get(yiId)[0], 1,
+    '乙 UTF-16 start = 1（完整映射保留——min/max 会丢失此条目）')
+  assert.equal(jiaRanges.get(yiId)[1], 2,
+    '乙 UTF-16 end = 2（完整映射保留——min/max 会丢失此条目）')
+  assert.equal(jiaRanges.get(bingId)[0], 2,
+    '丙 UTF-16 start = 2（完整映射保留——min/max 会丢失此条目）')
+  assert.equal(jiaRanges.get(bingId)[1], 3,
+    '丙 UTF-16 end = 3（完整映射保留——min/max 会丢失此条目）')
+
+  // 丙的 retained move（不连续幸存字）
+  const bingRun = {
+    glyphIds: [bingId],
+    ownText: oldText,
+    ownUtf16Start: 2,
+    ownUtf16End: 3,
+    ownRect: { x: 20, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const bingPieces = retainedMoveStartState(bingRun, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // 验证丙的 sourceMembers 也携带完整 glyphUtf16Ranges
+  const bingMembers = firstSourceMembers(bingPieces)
+  assert.ok(bingMembers !== undefined && bingMembers.length > 0, '丙的 sourceMembers 应存在')
+
+  const bingRanges = bingMembers[0].glyphUtf16Ranges
+  assert.ok(bingRanges !== undefined && bingRanges !== null,
+    '丙的 sourceMember 应携带 glyphUtf16Ranges')
+  assert.equal(bingRanges.get(jiaId)[0], 0,
+    '甲 UTF-16 start = 0（从丙的 sourceMember 也能查到——不是 min/max）')
+  assert.equal(bingRanges.get(jiaId)[1], 1,
+    '甲 UTF-16 end = 1（从丙的 sourceMember 也能查到——不是 min/max）')
+  assert.equal(bingRanges.get(yiId)[0], 1,
+    '乙 UTF-16 start = 1（从丙的 sourceMember 也能查到——不是 min/max）')
+  assert.equal(bingRanges.get(yiId)[1], 2,
+    '乙 UTF-16 end = 2（从丙的 sourceMember 也能查到——不是 min/max）')
+  assert.equal(bingRanges.get(bingId)[0], 2, '丙 UTF-16 start = 2')
+  assert.equal(bingRanges.get(bingId)[1], 3, '丙 UTF-16 end = 3')
+
+  // 甲和丙的 frozen 成员 renderNodeKey 相同——buildFrame 聚合后窗口携带完整映射
+  assert.equal(jiaMembers[0].renderNodeKey, bingMembers[0].renderNodeKey,
+    '甲和丙的 frozen 成员 renderNodeKey 应相同（同一物理 Text——buildFrame 聚合后携带完整映射）')
+})
+
+// --- 场景3：fallback 分支 frozen 不补间隙 ---
+
+test('场景3-frozen不补间隙：frozen 成员 clipRects 只含可见碎片，间隙碎片由 rectDifference 计算——frozen 不补、target 补', () => {
+  const ctx = context('甲', 2009, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const jiaId = glyphIds[0]
+
+  const layout = srcLayout('甲')
+  // 冻结窗口只露出甲的左半部分（clipRects=[0,5]），右半部分 [5,10] 是间隙
+  const frozen = [makeSpan(jiaId, {
+    clipLeft: 0, clipRight: 5,
+    clipRects: [{ x: 0, y: 0, width: 5, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [0, 1], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [jiaId],
+    ownText: '甲',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在')
+
+  const member = members[0]
+  // frozen 成员 role='frozen'——buildFrame 中 frozen 角色不补间隙碎片
+  assert.equal(member.role, 'frozen',
+    `成员 role 应为 frozen（buildFrame 不为 frozen 补间隙），实际 ${member.role}`)
+  // frozen 成员 targetOpacity=-1——buildFrame 解释为 0（历史源淡出）
+  assert.equal(member.targetOpacity, -1,
+    `frozen 成员 targetOpacity 应为 -1（buildFrame 解释为 0——淡出），实际 ${member.targetOpacity}`)
+
+  // frozen 成员 clipRects 只包含可见碎片（左半部分 [0,5]），不包含零宽间隙碎片
+  assert.ok(member.clipRects.length > 0,
+    `frozen 成员 clipRects 应非空（有可见碎片），实际长度 ${member.clipRects.length}`)
+  for (const cr of member.clipRects) {
+    assert.ok(cr.width > 0,
+      `frozen 成员 clipRects 中每个碎片 width 应 > 0（不是零宽间隙碎片），实际 ${cr.width}`)
+  }
+  // 可见碎片覆盖 [0,5] 区域
+  assert.ok(member.clipRects.some(cr => Math.abs(cr.x - 0) < 0.01 && Math.abs(cr.width - 5) < 0.01),
+    'frozen 成员 clipRects 应覆盖 [0,5] 可见区域')
+
+  // 间隙存在：rectDifference(sourceGlyphOnScreen, member.clipRects) 应给出右半部分 [5,10]
+  const sourceGlyphOnScreen = {
+    x: member.sourceGlyphRect.x + member.offsetX,
+    y: member.sourceGlyphRect.y + member.offsetY,
+    width: member.sourceGlyphRect.width,
+    height: member.sourceGlyphRect.height,
+  }
+  const gaps = rectDifference(sourceGlyphOnScreen, member.clipRects)
+  assert.ok(gaps.length > 0,
+    `应存在间隙（rectDifference 非空——frozen 未覆盖的右半部分），实际 ${gaps.length} 个间隙`)
+  // 间隙在右半部分 [5,10]
+  assert.ok(gaps.some(g => Math.abs(g.x - 5) < 0.01 && Math.abs(g.width - 5) < 0.01),
+    '间隙应在 [5,10] 区域（右半部分——frozen 不补此区域，但 buildFrame 的 target 角色会补）')
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
