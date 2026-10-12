@@ -249,10 +249,10 @@ impl SujianEditorItem {
         {
             let mut line_info = String::new();
             if let Some(snapshot) = self.editor_layout.cache() {
-                // Issue #901 第十四轮问题1: 用 resolved_lines 物化绝对坐标，
-                // 再按 id 查找行（id 现为全局行索引）。
-                let resolved = snapshot.resolved_lines();
-                if let Some(line) = resolved.as_ref().iter().find(|l| l.id == visual_line_id) {
+                // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+                // 不物化整章。id 现为全局行索引，直接按 id 物化单行。
+                let line = snapshot.resolve_line(visual_line_id);
+                if line.id == visual_line_id {
                     let font_size = f64::from(snapshot.font_size);
                     let font_family = &snapshot.font_family;
                     let ascent = if line.qt_ascent > 0.0 {
@@ -266,7 +266,7 @@ impl SujianEditorItem {
                         crate::editor::layout::get_font_descent(font_family, snapshot.font_size)
                     };
                     let baseline =
-                        crate::editor::layout::text_baseline_y(line, font_size, font_family);
+                        crate::editor::layout::text_baseline_y(&line, font_size, font_family);
                     // Issue #727 评论 5757225958 问题1: cursor_y 已是文档坐标，
                     // 不需要再加 scroll_y 还原。
                     let cursor_top_doc = cursor_y;

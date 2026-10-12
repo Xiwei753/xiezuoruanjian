@@ -936,28 +936,30 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x / index_at_line_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-        let lines = snapshot.resolved_lines();
+        // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+        // 不物化整章。只需 line_idx ± 1 一行。
         let Some((line_idx, x)) = self.cursor_line_and_x() else {
             return;
         };
+        let total_lines = snapshot.lines.len();
         let target_idx = if down {
-            (line_idx + 1).min(lines.len().saturating_sub(1))
+            (line_idx + 1).min(total_lines.saturating_sub(1))
         } else {
             line_idx.saturating_sub(1)
         };
         if target_idx == line_idx {
             return;
         }
+        let target_line = snapshot.resolve_line(target_idx);
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 target_idx != line_idx 后 bump。
         // Issue #712: 方向键垂直移动设置 CursorMoveSource::KeyboardNavigation，
         // 允许 smooth cursor 开启时跨行 Tween。
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
-        let index = self.index_at_line_x(&lines[target_idx], x);
+        let index = self.index_at_line_x(&target_line, x);
         self.cursor_ctrl.affinity = self
             .editor_layout
-            .affinity_for_index_on_line(&lines[target_idx], index);
+            .affinity_for_index_on_line(&target_line, index);
         if extend {
             let anchor = self.pipeline.selection_anchor();
             let _ = self.pipeline.set_selection(anchor, index);
@@ -980,12 +982,12 @@ impl SujianEditorItem {
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x 同源。
         let snapshot = self.current_render_layout_snapshot();
-        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-        let lines = snapshot.resolved_lines();
+        // Issue #901 第十五轮问题5b: 用 resolve_line 只物化目标行，
+        // 不物化整章。只需 line_idx 一行。
         let Some((line_idx, _)) = self.cursor_line_and_x() else {
             return;
         };
-        let line = &lines[line_idx];
+        let line = snapshot.resolve_line(line_idx);
         let (index, affinity) = if end {
             (line.byte_end, CaretAffinity::Upstream)
         } else {

@@ -19,7 +19,8 @@ impl SujianEditorItem {
         let padding = self.current_padding;
         let font_size = self.current_font_pixel_size;
         let line_spacing = self.current_line_spacing;
-        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        // Issue #901 第十五轮问题5b: 用 resolve_line 只物化最后一行，
+        // 不物化整章。内容高度 = 最后一行底 y + padding。
         let params = self.layout_params(width);
         let snapshot = self
             .editor_layout
@@ -28,12 +29,13 @@ impl SujianEditorItem {
                 params,
                 self.pipeline.text_revision(),
             );
-        let resolved = snapshot.resolved_lines();
-        let lines = resolved.as_ref();
-        let height = lines
-            .last()
-            .map(|line| line.y + line.height + f64::from(padding))
-            .unwrap_or(f64::from(font_size * line_spacing + padding * 2.0));
+        let total_lines = snapshot.lines.len();
+        let height = if total_lines > 0 {
+            let last_line = snapshot.resolve_line(total_lines - 1);
+            last_line.y + last_line.height + f64::from(padding)
+        } else {
+            f64::from(font_size * line_spacing + padding * 2.0)
+        };
         height.max(1.0) as f32
     }
 
@@ -162,6 +164,8 @@ impl SujianEditorItem {
         let text_color = self.current_text_color.to_string();
 
         // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 此处需在物化行上做 partition_point
+        // 二分查找定位 affected range 和视口行范围，难以简单改为按需物化。
         let resolved = doc_snapshot.resolved_visual_lines();
         let resolved_lines = resolved.as_ref();
 
@@ -382,6 +386,8 @@ impl SujianEditorItem {
         );
 
         // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 此处需遍历物化行做 diff 比较
+        // 和 composition range 覆盖检查，难以简单改为按需物化。
         let resolved = doc_snapshot.resolved_visual_lines();
         let resolved_lines = resolved.as_ref();
 
@@ -402,6 +408,8 @@ impl SujianEditorItem {
         if affected_start < affected_end {
             let line_ids: Vec<usize> = {
                 // Issue #901 第十四轮问题1: 用 resolved_lines 物化绝对坐标做 diff。
+                // TODO(issue-901): 后续优化为按需查询 — diff 比较需要旧新完整行列表，
+                // 难以简单改为按需物化。
                 let old_resolved = self.editor_layout.cache().map(|c| c.resolved_lines());
                 let old_lines_opt = old_resolved.as_ref().map(|c| c.as_ref());
                 let mut ids = if let Some(old_lines) = old_lines_opt {
@@ -538,6 +546,7 @@ impl SujianEditorItem {
         let width = self.bounding_width();
         let cursor = self.pipeline.cursor();
         // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 遍历找换行边界可先用二分定位再 resolve_line。
         let params = self.layout_params(width);
         let snapshot = self
             .editor_layout

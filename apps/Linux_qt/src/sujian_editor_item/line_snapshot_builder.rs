@@ -47,6 +47,8 @@ impl LineSnapshotBuilder {
         let mut visual_line_ordinal: u32 = 0;
 
         // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 遍历所有行维护 visual_line_ordinal
+        // （即使视口外行也需递增 ordinal），难以简单改为 resolve_viewport_visual_lines。
         let resolved_lines = doc_snapshot.resolved_visual_lines();
         for line in resolved_lines.as_ref() {
             if line.para_text.is_empty() {
@@ -99,16 +101,26 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            let canonical_para = doc_snapshot
-                .paragraphs
-                .iter()
-                .find(|p| p.paragraph_document_byte_start == line.para_start);
+            // Issue #901 第十五轮问题3: 用 cache_slot 直接索引 paragraphs，
+            // 不再比较 paragraph_document_byte_start（段落编号）与 line.para_start
+            //（物化后的全文绝对 byte）这两种混合坐标。
+            // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
+            let canonical_para = {
+                let slot = line.cache_slot as usize;
+                doc_snapshot.paragraphs.get(slot)
+            };
+            let para_byte_start = canonical_para
+                .map(|p| {
+                    let slot = line.cache_slot as usize;
+                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                })
+                .unwrap_or(0);
 
             let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map))
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -311,23 +323,26 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            // Issue #901 第五轮阻塞2: 用二分查找替代线性 find，因为 paragraphs
-            // 按 paragraph_document_byte_start 递增排列。O(log n) vs O(n)。
+            // Issue #901 第十五轮问题3: 用 cache_slot 直接索引 paragraphs，
+            // 不再用 partition_point 比较 paragraph_document_byte_start（段落编号）
+            // 与 line.para_start（物化后的全文绝对 byte）这两种混合坐标。
+            // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
             let canonical_para = {
-                let idx = doc_snapshot
-                    .paragraphs
-                    .partition_point(|p| p.paragraph_document_byte_start < line.para_start);
-                doc_snapshot
-                    .paragraphs
-                    .get(idx)
-                    .filter(|p| p.paragraph_document_byte_start == line.para_start)
+                let slot = line.cache_slot as usize;
+                doc_snapshot.paragraphs.get(slot)
             };
+            let para_byte_start = canonical_para
+                .map(|_p| {
+                    let slot = line.cache_slot as usize;
+                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                })
+                .unwrap_or(0);
 
             let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map))
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -414,10 +429,14 @@ impl LineSnapshotBuilder {
         Ok((old_layout, new_layout))
     }
 
+    /// Issue #901 第十五轮问题3: 增加 `para_byte_start` 参数，将 cluster 的
+    /// `document_byte_start/end`（段内相对偏移）转换为全文绝对 byte 坐标。
+    /// LineSnapshot 外层 `byte_start/end` 是全文绝对值，cluster 也必须一致。
     fn build_clusters_from_canonical(
         canonical_line: &CanonicalLineSnapshot,
         _line: &VisualLine,
         _index_map: &ParagraphIndexMap,
+        para_byte_start: usize,
     ) -> Vec<LineClusterSnapshot> {
         canonical_line
             .clusters
@@ -433,8 +452,8 @@ impl LineSnapshotBuilder {
                 };
 
                 LineClusterSnapshot {
-                    byte_start: cc.document_byte_start,
-                    byte_end: cc.document_byte_end,
+                    byte_start: cc.document_byte_start + para_byte_start,
+                    byte_end: cc.document_byte_end + para_byte_start,
                     source_rect: SourceRect {
                         x: cc.source_rect_x,
                         y: cc.source_rect_y,

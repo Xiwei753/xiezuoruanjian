@@ -125,7 +125,10 @@ pub struct CanonicalDocumentVisualSnapshot {
 
 impl CanonicalDocumentVisualSnapshot {
     /// Issue #901 第十四轮问题1: 将段内相对坐标物化为文档级绝对坐标。
-    fn materialize_line(&self, line: &VisualLine) -> VisualLine {
+    /// Issue #901 第十五轮问题5a: `global_id` 参数保证行 ID 全局唯一。
+    /// 物化时用 visual_lines 中的索引作为全局 id，不再依赖段内 ordinal，
+    /// 避免受影响段新行与后缀未改行 id 冲突。
+    fn materialize_line(&self, line: &VisualLine, global_id: usize) -> VisualLine {
         let slot = line.cache_slot as usize;
         let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
         let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
@@ -137,7 +140,7 @@ impl CanonicalDocumentVisualSnapshot {
             qchar_end: line.qchar_end + para_qchar_start,
             y: line.y + para_top_y,
             para_start: para_byte_start,
-            id: line.id,
+            id: global_id,
             hard_break: line.hard_break,
             x: line.x,
             width: line.width,
@@ -159,9 +162,10 @@ impl CanonicalDocumentVisualSnapshot {
     /// Issue #901 第十四轮问题1: 获取单行绝对坐标。
     ///
     /// `visual_lines` 存储段内相对坐标，本方法物化为文档级绝对坐标后返回。
+    /// Issue #901 第十五轮问题5a: 行 id 用 visual_lines 中的索引（全局唯一）。
     pub fn resolve_visual_line(&self, idx: usize) -> VisualLine {
         match self.visual_lines.get(idx) {
-            Some(vl) => self.materialize_line(vl),
+            Some(vl) => self.materialize_line(vl, idx),
             None => VisualLine {
                 id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
                 hard_break: true, x: 0.0, y: 0.0, width: 0.0,
@@ -183,6 +187,7 @@ impl CanonicalDocumentVisualSnapshot {
     ///
     /// `visual_lines` 存储段内相对坐标，本方法通过 `paragraph_offset_index` + `height_index`
     /// 物化为文档级绝对坐标。消费方（cursor_rect 等）直接使用返回的绝对坐标。
+    /// Issue #901 第十五轮问题5a: 行 id 用 visual_lines 中的索引（全局唯一）。
     pub fn resolved_visual_lines(&self) -> Cow<'_, [VisualLine]> {
         if self.visual_lines.is_empty() {
             return Cow::Borrowed(self.visual_lines.as_slice());
@@ -190,9 +195,89 @@ impl CanonicalDocumentVisualSnapshot {
         let materialized: Vec<VisualLine> = self
             .visual_lines
             .iter()
-            .map(|line| self.materialize_line(line))
+            .enumerate()
+            .map(|(idx, line)| self.materialize_line(line, idx))
             .collect();
         Cow::Owned(materialized)
+    }
+
+    /// Issue #901 第十五轮问题5b: 物化 `[start, end)` 范围内的行为绝对坐标。
+    ///
+    /// 与 `resolved_visual_lines` 的区别：只物化指定范围的行，不物化整章，
+    /// 避免每帧 O(整章) 物化。`start`/`end` 是 `visual_lines` 中的索引（半开区间）。
+    /// 越界索引被 clamp 到 `visual_lines.len()`，`start >= end` 返回空 Vec。
+    pub fn resolve_visual_line_range(&self, start: usize, end: usize) -> Vec<VisualLine> {
+        if start >= end || start >= self.visual_lines.len() {
+            return Vec::new();
+        }
+        let end = end.min(self.visual_lines.len());
+        (start..end)
+            .map(|idx| self.materialize_line(&self.visual_lines[idx], idx))
+            .collect()
+    }
+
+    /// Issue #901 第十五轮问题5b: 物化视口内可见行的绝对坐标。
+    ///
+    /// 用 `ParagraphHeightIndex` 二分找到可见段范围 `[first_para, last_para_excl)`，
+    /// 再用 `cache_slot` 在未物化的 `visual_lines` 上二分查找定位行索引范围，
+    /// 只物化可见段内的行（加 `viewport_h.max(100.0)` 边距）。
+    ///
+    /// 与 `resolved_visual_lines` 的区别：只物化视口附近行，不物化整章。
+    /// 返回的行可能包含少量视口外的边缘行（首尾段落的边缘行），
+    /// 消费方需自行跳过视口外的行（与原 `resolved_visual_lines` 消费方一致）。
+    ///
+    /// 无 `height_index` 时退化为物化所有行（与 `resolved_visual_lines` 行为一致）。
+    pub fn resolve_viewport_visual_lines(
+        &self,
+        scroll_y: f64,
+        viewport_h: f64,
+    ) -> Vec<VisualLine> {
+        if self.visual_lines.is_empty() {
+            return Vec::new();
+        }
+        let margin = viewport_h.max(100.0);
+        let visible_top = scroll_y - margin;
+        let visible_bottom = scroll_y + viewport_h + margin;
+
+        if !self.height_index.is_empty() {
+            let (first_para, last_para_excl) =
+                self.height_index.paragraphs_in_y_range(visible_top, visible_bottom);
+            if first_para < last_para_excl {
+                // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行范围。
+                // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
+                let start_idx = self
+                    .visual_lines
+                    .partition_point(|l| l.cache_slot < first_para as i32);
+                let end_idx = self
+                    .visual_lines
+                    .partition_point(|l| l.cache_slot < last_para_excl as i32);
+                return self.resolve_visual_line_range(start_idx, end_idx);
+            }
+            return Vec::new();
+        }
+
+        // 无 height_index：退化为物化所有行。
+        self.resolved_visual_lines().into_owned()
+    }
+
+    /// Issue #901 第十五轮问题5b: 物化指定段落的所有行为绝对坐标。
+    ///
+    /// 用 `cache_slot` 在未物化的 `visual_lines` 上二分查找定位段落行范围，
+    /// 只物化该段落的行。`para_slot` 是段落在 `height_index` 中的索引
+    ///（= `VisualLine.cache_slot`）。
+    pub fn resolve_paragraph_visual_lines(&self, para_slot: usize) -> Vec<VisualLine> {
+        if self.visual_lines.is_empty() {
+            return Vec::new();
+        }
+        // 用 cache_slot 二分查找定位段落行范围。
+        // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
+        let start_idx = self
+            .visual_lines
+            .partition_point(|l| l.cache_slot < para_slot as i32);
+        let end_idx = self
+            .visual_lines
+            .partition_point(|l| l.cache_slot <= para_slot as i32);
+        self.resolve_visual_line_range(start_idx, end_idx)
     }
 
     pub fn cursor_rect(
@@ -203,6 +288,7 @@ impl CanonicalDocumentVisualSnapshot {
         viewport_h: f64,
     ) -> CaretRect {
         // Issue #901 第十轮问题5: 用 resolved_visual_lines 按需物化后缀段绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 遍历找光标所在行可先用二分定位再 resolve_visual_line。
         let resolved = self.resolved_visual_lines();
         let lines_slice = resolved.as_ref();
         let line = lines_slice
@@ -279,6 +365,7 @@ impl CanonicalDocumentVisualSnapshot {
     /// AnimatedSlice/StaticPatch 文档坐标系一致。
     pub fn cursor_rect_doc(&self, cursor_byte: usize, affinity: CaretAffinity) -> CaretRect {
         // Issue #901 第十轮问题5: 用 resolved_visual_lines 按需物化后缀段绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 遍历找光标所在行可先用二分定位再 resolve_visual_line。
         let resolved = self.resolved_visual_lines();
         let lines_slice = resolved.as_ref();
         let line = lines_slice

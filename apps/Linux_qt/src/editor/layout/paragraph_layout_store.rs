@@ -837,52 +837,27 @@ impl ParagraphLayoutStore {
             return;
         }
 
-        // Issue #901 第十一轮问题5: 对每个受影响段用二分查找定位行范围，
-        // 不建全章 HashMap。lines 按 para_start 非降序排列（段落顺序 = 行顺序），
-        // 同一段落的所有行 para_start 相同且连续。
+        // Issue #901 第十五轮问题4: 改成以受影响段索引 + 基础 VisualLine.cache_slot
+        // 定位段内行范围。lines 中的行坐标已经是段内相对的（y/byte/qchar 相对于段首），
+        // 直接复制为 relative_lines，不再二次归零（删除旧的 saturating_sub 逻辑）。
+        // 不再用 entry.document_byte_start 二分查 lines[].para_start（混合坐标）。
         for &idx in affected_indices {
-            let Some(entry) = self.entries.get(idx) else {
-                continue;
+            // 遍历 lines，按 cache_slot == idx 分组，找到该段的所有行
+            // lines 按 cache_slot 非降序排列（段落顺序 = 行顺序），同一段落的行连续
+            let (line_start, line_end) = match find_line_range_by_cache_slot(lines, idx) {
+                Some(range) => range,
+                None => continue,
             };
-            let para_start = entry.document_byte_start;
 
-            // 二分查找在 lines 中定位 para_start 对应的行范围 [line_start, line_end)
-            let (line_start, line_end) =
-                match find_line_range_by_para_start_in_lines(lines, para_start) {
-                    Some(range) => range,
-                    None => continue,
-                };
-
-            // line_count = line_end - line_start，首行（line_start）正确计入，
-            // 不会出现旧实现单行段 visual_line_count=0 的 bug。
             let line_count = line_end - line_start;
             let height: f64 = lines[line_start..line_end].iter().map(|l| l.height).sum();
 
-            // Issue #901 第十一轮问题5: 更新 relative_lines — 从 lines 提取段内
-            // 相对坐标的视觉行。段内相对坐标：
-            // - y 从段顶 0 起累加行高
-            // - byte_start/byte_end 相对段落文本开头（0-based）
-            // - qchar_start/qchar_end 相对段落文本开头（0-based）
-            // - para_start = 0
-            // - id = 段内行索引（0-based）
-            let segment_top_y = lines[line_start].y;
-            let segment_first_qchar = lines[line_start]
-                .qchar_start
-                .saturating_sub(lines[line_start].para_qchar_start);
+            // Issue #901 第十五轮问题4: lines 中的行坐标已经是段内相对坐标
+            //（y 从段顶 0 起、byte/qchar 相对段首、para_start = 段落编号、id = 段内行索引）。
+            // 直接 clone 为 relative_lines，不再二次归零。
             let relative_lines: Vec<VisualLine> = lines[line_start..line_end]
                 .iter()
-                .enumerate()
-                .map(|(rel_idx, vl)| {
-                    let mut rel = vl.clone();
-                    rel.y = vl.y - segment_top_y;
-                    rel.byte_start = vl.byte_start.saturating_sub(para_start);
-                    rel.byte_end = vl.byte_end.saturating_sub(para_start);
-                    rel.qchar_start = vl.qchar_start.saturating_sub(segment_first_qchar);
-                    rel.qchar_end = vl.qchar_end.saturating_sub(segment_first_qchar);
-                    rel.para_start = 0;
-                    rel.id = rel_idx;
-                    rel
-                })
+                .cloned()
                 .collect();
 
             if let Some(entry) = self.entries.get_mut(idx) {
@@ -1091,26 +1066,28 @@ impl ParagraphLayoutStore {
     }
 }
 
-/// Issue #901 第十一轮问题5: 用二分查找在已排序的 visual_lines 中定位
-/// `para_start` 对应的行范围，O(log n)。
+/// Issue #901 第十五轮问题4: 用二分查找在已排序的 visual_lines 中定位
+/// `cache_slot` 对应的行范围，O(log n)。
 ///
-/// `lines` 按 `para_start` 非降序排列（段落顺序 = 行顺序），
-/// 同一段落的所有行 `para_start` 相同且连续。
+/// `lines` 按 `cache_slot` 非降序排列（段落顺序 = 行顺序），
+/// 同一段落的所有行 `cache_slot` 相同且连续。
 /// 返回 `(line_start, line_end)` 半开区间，未找到返回 `None`。
-fn find_line_range_by_para_start_in_lines(
+fn find_line_range_by_cache_slot(
     lines: &[VisualLine],
-    para_start: usize,
+    cache_slot: usize,
 ) -> Option<(usize, usize)> {
     if lines.is_empty() {
         return None;
     }
-    // 二分查找第一个 para_start >= target 的行
-    let start = lines.partition_point(|vl| vl.para_start < para_start);
-    if start >= lines.len() || lines[start].para_start != para_start {
+    // 二分查找第一个 cache_slot >= target 的行
+    let start = lines.partition_point(|vl| (vl.cache_slot as usize) < cache_slot);
+    if start >= lines.len() || (lines[start].cache_slot as usize) != cache_slot {
         return None;
     }
-    // 二分查找段落后第一个 para_start != target 的行
-    let end = lines[start..].partition_point(|vl| vl.para_start == para_start) + start;
+    // 二分查找段落后第一个 cache_slot != target 的行
+    let end = lines[start..]
+        .partition_point(|vl| (vl.cache_slot as usize) == cache_slot)
+        + start;
     Some((start, end))
 }
 

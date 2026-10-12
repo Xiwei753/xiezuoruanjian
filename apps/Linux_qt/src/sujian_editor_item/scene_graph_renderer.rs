@@ -326,6 +326,8 @@ fn paragraph_top_document_y(
     // Fallback: lines 二分查找段落第一行。谓词 `para_start < ps` 为 true 前缀
     // （更早段落）、false 后缀（本段及之后），返回首个 false = 本段第一行索引。
     // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    // TODO(issue-901): 后续优化为按需查询 — 此处是 fallback 路径（无 height_index），
+    // 需在物化行上做 partition_point，难以简单改为按需物化。正常路径有 height_index 不会走到这里。
     let resolved_lines = snapshot.resolved_lines();
     let lines_slice = resolved_lines.as_ref();
     let first_idx = lines_slice
@@ -436,9 +438,11 @@ pub(crate) fn render_frame(
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
         if let Some(snapshot) = static_text.layout_snapshot {
-            // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-            let resolved_lines = snapshot.resolved_lines();
-            let lines_slice = resolved_lines.as_ref();
+            // Issue #901 第十五轮问题5b: 用 resolve_viewport_lines 只物化视口附近行，
+            // 不物化整章。原实现用 resolved_lines() 物化整章再 partition_point 定位
+            // 视口行范围，每帧 O(整章) 物化。现改为用 height_index 段落级视口枚举 +
+            // cache_slot 二分定位行范围，只物化可见段内行，O(视口内行数) 物化。
+            //
             // Issue #901 第五轮阻塞5：只遍历视口内的行，不全文重建。
             // 长章中只有视口附近的行需要处理，成本与视口大小相关，
             // 而不是和全章长度相关。扩展一个视口高度的 margin 避免滚动时
@@ -449,51 +453,17 @@ pub(crate) fn render_frame(
             let visible_top = viewport_top - margin;
             let visible_bottom = viewport_bottom + margin;
 
-            // Issue #901 第六轮阻塞5: 用 height_index O(log n) 定位视口内首末可见段落，
-            // 再用段落 y 范围在 lines 中二分查找定位行索引范围 [start_idx, end_idx)。
-            // 这样只遍历视口附近的行，不三遍扫描全章 lines。
-            // lines 按 y 升序排列（文档顺序，y 递增），可安全用 partition_point 二分查找。
-            let (start_idx, end_idx) =
-                if let Some(hi) = static_text.height_index {
-                    // 用 height_index 的段落级视口枚举（O(log n)）得到首末段落索引。
-                    let (first_para, last_para_excl) =
-                        hi.paragraphs_in_y_range(visible_top, visible_bottom);
-                    if first_para >= last_para_excl {
-                        (0usize, 0usize)
-                    } else {
-                        // 用段落顶/底 y 在 lines 中二分查找定位行范围。
-                        // 段落粒度比行粗，首尾段落可能包含视口外的行，
-                        // 后续的逐行视口检查会跳过它们。
-                        let first_para_top = hi.paragraph_top_y(first_para);
-                        let last_para_bottom =
-                            hi.paragraph_bottom_y(last_para_excl - 1);
-                        let s = lines_slice
-                            .partition_point(|l| l.y + l.height < first_para_top);
-                        // Issue #901 第七轮复核问题1: partition_point 要求
-                        // true 前缀、false 后缀。lines 按 y 升序，`y > bottom`
-                        // 是 false 前缀、true 后缀，方向相反，会使 end_idx 错误
-                        // （轻则空白，重则 start>end 切片 panic）。正确谓词
-                        // `y <= bottom`：true 前缀，返回首个超过 bottom 的行索引。
-                        let e = lines_slice
-                            .partition_point(|l| l.y <= last_para_bottom);
-                        // 防御性 clamp：保证 start_idx <= end_idx <= lines.len()，
-                        // 越界时退化为空区间而非 panic。
-                        (s, e.max(s))
-                    }
-                } else {
-                    // 无 height_index：直接用 lines 的 y 二分查找定位视口行范围。
-                    // 仍是 O(log n)，不遍历全章。
-                    let s = lines_slice
-                        .partition_point(|l| l.y + l.height < visible_top);
-                    // Issue #901 第七轮复核问题1: 同上，谓词方向修正为 `y <= bottom`。
-                    let e = lines_slice
-                        .partition_point(|l| l.y <= visible_bottom);
-                    (s, e.max(s))
-                };
+            // Issue #901 第十五轮问题5b: resolve_viewport_lines 内部用
+            // height_index.paragraphs_in_y_range 做 O(log n) 段落枚举，
+            // 再用 cache_slot 二分定位行范围，只物化可见段内行。
+            // 无 height_index 时退化为物化所有行（与原 resolved_lines 一致）。
+            let resolved_lines: Vec<crate::editor::layout::VisualLine> =
+                snapshot.resolve_viewport_lines(static_text.scroll_y, static_text.viewport_height);
+            let lines_slice = &resolved_lines[..];
 
             // Issue #901 第六轮阻塞5: 合并原三遍 for 循环为一遍。
             // 原实现分别遍历 lines 构建 paragraphs、para_y_map、visual_line_clips，
-            // 每遍都是 O(全章行数)。现在只遍历 [start_idx, end_idx) 一次，
+            // 每遍都是 O(全章行数)。现在只遍历视口附近行一次，
             // 同时构建三个集合，成本 O(视口内行数)。
             //
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。
@@ -509,7 +479,7 @@ pub(crate) fn render_frame(
             // 供 visual_line_clips 填入 paragraph_id 字段。
             let mut current_paragraph_id: u64 = 0;
 
-            for line in &lines_slice[start_idx..end_idx] {
+            for line in lines_slice {
                 // 跳过完全在扩展视口外的行（首尾段落可能含视口外行）。
                 if line.y + line.height < visible_top || line.y > visible_bottom {
                     continue;

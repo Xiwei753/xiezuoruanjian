@@ -43,6 +43,7 @@ impl SujianEditorItem {
         let snapshot = self.layout_snapshot(width);
 
         // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+        // TODO(issue-901): 后续优化为按需查询 — 遍历找光标所在行可先用二分定位再 resolve_line。
         let resolved_lines = snapshot.resolved_lines();
         let cursor_line = resolved_lines
             .as_ref()

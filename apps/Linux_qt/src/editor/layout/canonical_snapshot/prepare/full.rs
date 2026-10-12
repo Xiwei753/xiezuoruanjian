@@ -521,13 +521,13 @@ pub fn assemble_document_visual_snapshot_from_lines(
 ///
 /// Issue #901: 用 HashMap 索引代替 Vec `contains/position` 线性查找，
 /// 避免 O(行数 × 段数) 最坏复杂度。
-fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<f64> {
+fn extract_paragraph_heights(visual_lines: &[VisualLine]) -> Vec<f64> {
     use std::collections::HashMap;
 
     // 用 HashMap 按 para_start 去重并记录段落顺序索引
     let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
     let mut para_starts: Vec<usize> = Vec::new();
-    for vl in &*snapshot.visual_lines {
+    for vl in visual_lines {
         if !para_start_to_idx.contains_key(&vl.para_start) {
             para_start_to_idx.insert(vl.para_start, para_starts.len());
             para_starts.push(vl.para_start);
@@ -536,7 +536,7 @@ fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<
 
     let mut heights = vec![0.0f64; para_starts.len()];
     // 用 HashMap 直接索引，O(1) 查找
-    for vl in &*snapshot.visual_lines {
+    for vl in visual_lines {
         if let Some(&idx) = para_start_to_idx.get(&vl.para_start) {
             heights[idx] += vl.height;
         }
@@ -552,7 +552,7 @@ fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<
 /// Issue #901 第二轮复核问题 3: 一次构建 para_start → 段落顺序索引 和
 /// para_start → 累计高度 的 HashMap，不在循环内每次重建全部 para_starts + Vec::contains。
 fn extract_affected_height_updates(
-    snapshot: &CanonicalDocumentVisualSnapshot,
+    visual_lines: &[VisualLine],
     affected_indices: &[usize],
 ) -> Vec<(usize, f64)> {
     use std::collections::HashMap;
@@ -566,7 +566,7 @@ fn extract_affected_height_updates(
     // - para_start → 累计高度
     let mut para_start_to_order: HashMap<usize, usize> = HashMap::new();
     let mut para_start_to_height: HashMap<usize, f64> = HashMap::new();
-    for vl in &*snapshot.visual_lines {
+    for vl in visual_lines {
         // 先取当前长度再插入，避免 entry 借用与 len 借用冲突
         let order = para_start_to_order.len();
         para_start_to_order.entry(vl.para_start).or_insert(order);
@@ -753,7 +753,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         );
 
         // 从 snapshot 提取段落高度，重建 height_index
-        let heights = extract_paragraph_heights(&snapshot);
+        let heights = extract_paragraph_heights(&snapshot.visual_lines);
         height_index.rebuild(heights);
 
         // 同步 paragraph_store 的排版结果
@@ -1281,6 +1281,41 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         idx
     };
 
+    // Issue #901 第十五轮问题2: 先完成本次受影响段落的新高度计算并更新/重建
+    // height_index，再构造 canonical snapshot，把同一份已更新的高度索引交给 snapshot。
+    // 此前 snapshot 内是旧高度，而 LayoutSnapshot/渲染侧用新高度，导致换行后 y 错位。
+
+    // Issue #901 第三轮复核问题 4: 用实际重排的段落索引驱动后续更新。
+    // Issue #901 第五轮阻塞2: 用 new_layout 范围替代 affected byte range 范围，
+    // 因为 new_layout 范围精确反映了新段中需要重排的段落。
+    let affected_indices: Vec<usize> = if affected.full_relayout {
+        (0..paragraphs.len()).collect()
+    } else {
+        // 合并 new_layout range 和实际重排的段落
+        let mut indices: Vec<usize> = (new_layout_start..new_layout_end)
+            .chain(relayouted_indices.iter().copied())
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+    };
+
+    // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致
+    // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
+    // 段落数变化时用 rebuild 从 visual_lines 提取全部高度（O(n) 但不涉及 QTextLayout），
+    // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
+    // prev_para_count 已在 take 之前定义（line 683），此处直接复用。
+    let curr_para_count = paragraphs.len();
+    if curr_para_count != prev_para_count {
+        // 段落数变化（Enter 拆段/Backspace 合段），重建高度索引
+        let heights = extract_paragraph_heights(&visual_lines);
+        height_index.rebuild(heights);
+    } else {
+        // 段落数不变，只更新受影响段落的高度（O(k log n)）
+        let height_updates = extract_affected_height_updates(&visual_lines, &affected_indices);
+        height_index.update_heights_incremental(&height_updates, curr_para_count, line_height);
+    }
+
     let snapshot = CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -1295,44 +1330,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         visual_lines: Arc::new(visual_lines),
         // Issue #901 第十四轮问题1: 段落前缀偏移索引 — 增量更新，不扫全文。
         paragraph_offset_index,
-        // Issue #901 第十四轮问题1: 段落高度索引 — 增量更新，不扫全文。
+        // Issue #901 第十五轮问题2: 段落高度索引 — 已在上面更新/重建，
+        // 此处 clone 的是更新后的高度索引，保证 snapshot 内高度与渲染侧一致。
         height_index: height_index.clone(),
     };
-
-    // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
-    // 只对受影响段落调用 update_height（O(k log n)），不 rebuild（O(n)）。
-    // 只对受影响段落同步排版结果，不 sync_from_visual_lines（O(n)）。
-
-    // Issue #901 第三轮复核问题 4: 用实际重排的段落索引驱动后续更新。
-    // Issue #901 第五轮阻塞2: 用 new_layout 范围替代 affected byte range 范围，
-    // 因为 new_layout 范围精确反映了新段中需要重排的段落。
-    let affected_indices: Vec<usize> = if affected.full_relayout {
-        (0..snapshot.paragraphs.len()).collect()
-    } else {
-        // 合并 new_layout range 和实际重排的段落
-        let mut indices: Vec<usize> = (new_layout_start..new_layout_end)
-            .chain(relayouted_indices.iter().copied())
-            .collect();
-        indices.sort_unstable();
-        indices.dedup();
-        indices
-    };
-
-    // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致
-    // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
-    // 段落数变化时用 rebuild 从 snapshot 提取全部高度（O(n) 但不涉及 QTextLayout），
-    // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
-    // prev_para_count 已在 take 之前定义（line 683），此处直接复用。
-    let curr_para_count = snapshot.paragraphs.len();
-    if curr_para_count != prev_para_count {
-        // 段落数变化（Enter 拆段/Backspace 合段），重建高度索引
-        let heights = extract_paragraph_heights(&snapshot);
-        height_index.rebuild(heights);
-    } else {
-        // 段落数不变，只更新受影响段落的高度（O(k log n)）
-        let height_updates = extract_affected_height_updates(&snapshot, &affected_indices);
-        height_index.update_heights_incremental(&height_updates, curr_para_count, line_height);
-    }
 
     // 增量同步 paragraph_store：只更新受影响段落的排版结果
     paragraph_store.sync_from_visual_lines_incremental(

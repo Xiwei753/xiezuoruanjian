@@ -1216,19 +1216,16 @@ fn make_cursor_rect_from_caret_doc(
     doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
     font_family: &str,
 ) -> CursorRect {
-    // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标，
-    // 再按 id 查找行（id 现为全局行索引）。
-    let resolved = doc_snapshot.resolved_visual_lines();
-    let line = resolved
-        .as_ref()
-        .iter()
-        .find(|l| l.id == caret.visual_line_id);
+    // Issue #901 第十五轮问题5b: 用 resolve_visual_line 只物化目标行，
+    // 不物化整章。id 现为全局行索引，直接按 id 物化单行。
+    let line = doc_snapshot.resolve_visual_line(caret.visual_line_id);
     // Issue #722 评论 5748596920 问题1: caret track 保存文档坐标（不减 scroll_y），
     // 与 AnimatedSlice/StaticPatch 文档坐标系一致。scene graph 在渲染时按当前
     // scroll_y 做 viewport transform。
-    let baseline_y = match line {
-        Some(l) => layout::text_baseline_y(l, doc_snapshot.font_size, font_family),
-        None => caret.y + caret.h * 0.8,
+    let baseline_y = if line.id == caret.visual_line_id {
+        layout::text_baseline_y(&line, doc_snapshot.font_size, font_family)
+    } else {
+        caret.y + caret.h * 0.8
     };
     CursorRect {
         x: caret.x,
@@ -1331,6 +1328,8 @@ fn inject_new_animation_visuals_with_diagnostics(
         let ins_end = range.end().value();
         if ins_end > ins_start {
             // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
+            // TODO(issue-901): 后续优化为按需查询 — 遍历找 inserted_range 相交的行
+            // 可先用二分定位再 resolve_visual_line_range，但需保证 byte 坐标单调性。
             let resolved = new_doc_snapshot.resolved_visual_lines();
             for (i, vl) in resolved.as_ref().iter().enumerate() {
                 // 只检查与 inserted_range 相交且含可见字符的行

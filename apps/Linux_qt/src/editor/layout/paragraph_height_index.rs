@@ -486,8 +486,8 @@ impl ParagraphOffsetIndex {
         for i in 0..n {
             byte_total += byte_lengths[i];
             qchar_total += qchar_lengths[i];
-            Self::fenwick_update(&mut byte_bit, i, byte_lengths[i]);
-            Self::fenwick_update(&mut qchar_bit, i, qchar_lengths[i]);
+            Self::fenwick_add(&mut byte_bit, i, byte_lengths[i]);
+            Self::fenwick_add(&mut qchar_bit, i, qchar_lengths[i]);
         }
         self.byte_lengths = byte_lengths;
         self.qchar_lengths = qchar_lengths;
@@ -497,12 +497,27 @@ impl ParagraphOffsetIndex {
         self.qchar_total = qchar_total;
     }
 
-    /// Fenwick 树单点更新：在位置 `i`（0-indexed）增加 `delta`。
-    fn fenwick_update(bit: &mut [usize], i: usize, delta: usize) {
+    /// Fenwick 树单点增加：在位置 `i`（0-indexed）增加 `delta`。
+    ///
+    /// `delta` 必须是非负增量。用于从空树构建或段落变长。
+    fn fenwick_add(bit: &mut [usize], i: usize, delta: usize) {
         let n = bit.len() - 1; // bit[1..=n]
         let mut j = i + 1; // 转为 1-indexed
         while j <= n {
             bit[j] += delta;
+            j += j & (!j).wrapping_add(1); // j += lowbit(j)
+        }
+    }
+
+    /// Fenwick 树单点减少：在位置 `i`（0-indexed）减少 `delta`。
+    ///
+    /// `delta` 必须是非负减量，且各节点当前值不小于对应减量（由调用方保证，
+    /// 即新长度是真实段落长度时 Fenwick 节点不会下溢）。用于段落变短（删除文字）。
+    fn fenwick_sub(bit: &mut [usize], i: usize, delta: usize) {
+        let n = bit.len() - 1; // bit[1..=n]
+        let mut j = i + 1; // 转为 1-indexed
+        while j <= n {
+            bit[j] -= delta;
             j += j & (!j).wrapping_add(1); // j += lowbit(j)
         }
     }
@@ -569,13 +584,27 @@ impl ParagraphOffsetIndex {
         let old_qchar = self.qchar_lengths[index];
         self.byte_lengths[index] = byte_length;
         self.qchar_lengths[index] = qchar_length;
-        // Fenwick 树单点更新：delta = new - old
-        let byte_delta = byte_length.wrapping_sub(old_byte);
-        let qchar_delta = qchar_length.wrapping_sub(old_qchar);
-        Self::fenwick_update(&mut self.byte_bit, index, byte_delta);
-        Self::fenwick_update(&mut self.qchar_bit, index, qchar_delta);
-        self.byte_total = self.byte_total.wrapping_sub(old_byte).wrapping_add(byte_length);
-        self.qchar_total = self.qchar_total.wrapping_sub(old_qchar).wrapping_add(qchar_length);
+        // Fenwick 树单点更新与 total 同步：按 new 与 old 的大小关系分支增减，
+        // 避免 wrapping_sub 在 new < old（删除文字）时产生 usize::MAX 一类极大
+        // 正数导致后续无符号加法溢出 panic。
+        if byte_length >= old_byte {
+            let delta = byte_length - old_byte;
+            Self::fenwick_add(&mut self.byte_bit, index, delta);
+            self.byte_total += delta;
+        } else {
+            let delta = old_byte - byte_length;
+            Self::fenwick_sub(&mut self.byte_bit, index, delta);
+            self.byte_total -= delta;
+        }
+        if qchar_length >= old_qchar {
+            let delta = qchar_length - old_qchar;
+            Self::fenwick_add(&mut self.qchar_bit, index, delta);
+            self.qchar_total += delta;
+        } else {
+            let delta = old_qchar - qchar_length;
+            Self::fenwick_sub(&mut self.qchar_bit, index, delta);
+            self.qchar_total -= delta;
+        }
         true
     }
 
@@ -612,8 +641,8 @@ impl ParagraphOffsetIndex {
         for i in 0..n {
             self.byte_total += self.byte_lengths[i];
             self.qchar_total += self.qchar_lengths[i];
-            Self::fenwick_update(&mut self.byte_bit, i, self.byte_lengths[i]);
-            Self::fenwick_update(&mut self.qchar_bit, i, self.qchar_lengths[i]);
+            Self::fenwick_add(&mut self.byte_bit, i, self.byte_lengths[i]);
+            Self::fenwick_add(&mut self.qchar_bit, i, self.qchar_lengths[i]);
         }
     }
 
@@ -1023,6 +1052,57 @@ mod tests {
         assert_eq!(idx.paragraph_qchar_start(2), 13);
         assert_eq!(idx.total_byte_length(), 20); // 3 + 10 + 7
         assert_eq!(idx.total_qchar_length(), 20);
+    }
+
+    #[test]
+    fn offset_index_update_paragraph_length_shrink() {
+        // 删除文字：new < old，验证 Fenwick 树不会因 wrapping_sub 产生
+        // usize::MAX 而在无符号加法中溢出 panic。
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![3, 5, 7], vec![3, 5, 7]);
+        // 段落 1 从 5 缩短到 2（删除 3 byte / 3 qchar）
+        assert!(idx.update_paragraph_length(1, 2, 2));
+        assert_eq!(idx.byte_length_at(1), 2);
+        assert_eq!(idx.qchar_length_at(1), 2);
+        // 段落 2 的起始偏移应自动反映：3 + 2 = 5
+        assert_eq!(idx.paragraph_byte_start(2), 5);
+        assert_eq!(idx.paragraph_qchar_start(2), 5);
+        // 总长度：3 + 2 + 7 = 12
+        assert_eq!(idx.total_byte_length(), 12);
+        assert_eq!(idx.total_qchar_length(), 12);
+        // 再次缩短到 0（清空该段内容）
+        assert!(idx.update_paragraph_length(1, 0, 0));
+        assert_eq!(idx.paragraph_byte_start(2), 3);
+        assert_eq!(idx.total_byte_length(), 10);
+        // 再变长回来，验证增减分支交替正确
+        assert!(idx.update_paragraph_length(1, 8, 8));
+        assert_eq!(idx.paragraph_byte_start(2), 11);
+        assert_eq!(idx.total_byte_length(), 18);
+    }
+
+    #[test]
+    fn offset_index_update_paragraph_length_shrink_multi() {
+        // 多段交替增减，验证 Fenwick 树在多次 shrink 后仍正确。
+        let mut idx = ParagraphOffsetIndex::new();
+        idx.rebuild(vec![10, 20, 30, 40], vec![10, 20, 30, 40]);
+        // 缩短段落 2：30 -> 5
+        assert!(idx.update_paragraph_length(2, 5, 5));
+        assert_eq!(idx.paragraph_byte_start(3), 35); // 10 + 20 + 5
+        assert_eq!(idx.total_byte_length(), 75); // 10 + 20 + 5 + 40
+        // 缩短段落 0：10 -> 1
+        assert!(idx.update_paragraph_length(0, 1, 1));
+        assert_eq!(idx.paragraph_byte_start(1), 1);
+        assert_eq!(idx.paragraph_byte_start(3), 26); // 1 + 20 + 5
+        assert_eq!(idx.total_byte_length(), 66); // 1 + 20 + 5 + 40
+        // 缩短段落 3：40 -> 3
+        assert!(idx.update_paragraph_length(3, 3, 3));
+        assert_eq!(idx.paragraph_byte_start(3), 26);
+        assert_eq!(idx.total_byte_length(), 29); // 1 + 20 + 5 + 3
+        // 前缀和全量校验
+        assert_eq!(idx.paragraph_byte_start(0), 0);
+        assert_eq!(idx.paragraph_byte_start(1), 1);
+        assert_eq!(idx.paragraph_byte_start(2), 21); // 1 + 20
+        assert_eq!(idx.paragraph_byte_start(4), 29); // 越界返回 total
     }
 
     #[test]

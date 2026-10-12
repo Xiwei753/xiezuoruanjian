@@ -15,6 +15,7 @@ pub fn hit_test(
     scroll_y: f64,
 ) -> (usize, CaretAffinity) {
     // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
     let lines_cow = snapshot.resolved_lines();
     let lines = lines_cow.as_ref();
     if lines.is_empty() {
@@ -80,6 +81,7 @@ pub fn caret_rect(
     viewport_h: f64,
 ) -> CaretRect {
     // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
     let lines_cow = snapshot.resolved_lines();
     let lines_slice = lines_cow.as_ref();
     let line = lines_slice
@@ -179,6 +181,7 @@ pub fn caret_rect_doc(
     affinity: CaretAffinity,
 ) -> CaretRect {
     // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
     let lines_cow = snapshot.resolved_lines();
     let lines_slice = lines_cow.as_ref();
     let line = lines_slice
@@ -262,6 +265,7 @@ pub fn cursor_line_and_x(
     affinity: CaretAffinity,
 ) -> Option<(usize, f64)> {
     // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
+    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
     let lines_cow = snapshot.resolved_lines();
     let lines = lines_cow.as_ref();
     if lines.is_empty() {
