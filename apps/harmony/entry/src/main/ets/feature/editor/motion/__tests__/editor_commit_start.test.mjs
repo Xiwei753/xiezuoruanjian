@@ -6993,4 +6993,129 @@ test('场景3-frozen不补间隙：frozen 成员 clipRects 只含可见碎片，
     '间隙应在 [5,10] 区域（右半部分——frozen 不补此区域，但 buildFrame 的 target 角色会补）')
 })
 
+// ====== Issue #879 复核评论6121854424 问题1：不一致分支不产生重复 renderNodeKey ======
+// frozenWindowAggregator 在 buildFrame 中按 renderNodeKey 聚合 frozen 成员。
+// 当 existing.runId !== memberWindow.runId || existing.sourceRevision !== memberWindow.sourceRevision 时，
+// 旧实现 push memberWindow——但 memberWindow.renderNodeKey 仍等于 existing.renderNodeKey，
+// 导致 motionGlyphWindows 中两个同 key 窗口，buildAllMotionWindowSources 去重时第二张被吞掉。
+// 修复后：不一致时不 push，existing 仍由 frozenWindowAggregator.values() 输出，不产生重复 key。
+
+console.log('\n--- Issue #879 复核评论6121854424 问题1：不一致分支不产生重复 renderNodeKey ---')
+
+test('问题1-6121854424：不一致时不 push 同 key 窗口——motionGlyphWindows 无重复 renderNodeKey', () => {
+  // 模拟 frozenWindowAggregator 的聚合逻辑（修复后）
+  const frozenWindowAggregator = new Map()
+  const motionGlyphWindows = []
+  // 两个同一 renderNodeKey 但 runId 不一致的成员（上游 Planner 分配异常的防御场景）
+  const renderNodeKey = 'old-42-win-3'
+  const existingWindow = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
+  const inconsistentWindow = { renderNodeKey, runId: 'new-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
+
+  // 模拟 buildFrame 中两个成员的聚合处理
+  for (const memberWindow of [existingWindow, inconsistentWindow]) {
+    const existing = frozenWindowAggregator.get(memberWindow.renderNodeKey)
+    if (existing !== undefined) {
+      if (existing.runId !== memberWindow.runId ||
+          existing.sourceRevision !== memberWindow.sourceRevision) {
+        // 修复后：不 push——避免重复 renderNodeKey
+      } else {
+        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+      }
+    } else {
+      frozenWindowAggregator.set(memberWindow.renderNodeKey, memberWindow)
+    }
+  }
+  // 模拟 buildFrame 末尾将 frozenWindowAggregator 的值 push 到 motionGlyphWindows
+  for (const frozenWindow of frozenWindowAggregator.values()) {
+    motionGlyphWindows.push(frozenWindow)
+  }
+
+  // 验证：motionGlyphWindows 中没有重复 renderNodeKey
+  const keys = motionGlyphWindows.map(w => w.renderNodeKey)
+  const uniqueKeys = new Set(keys)
+  assert.equal(keys.length, uniqueKeys.size,
+    `motionGlyphWindows 不应有重复 renderNodeKey，实际 ${keys.length} 个窗口、${uniqueKeys.size} 个唯一 key`)
+  assert.equal(keys.length, 1,
+    `应只有 1 个窗口（existing），实际 ${keys.length}`)
+  assert.equal(keys[0], renderNodeKey,
+    `唯一窗口的 renderNodeKey 应为 ${renderNodeKey}，实际 ${keys[0]}`)
+})
+
+test('问题1-6121854424：旧实现（push 不一致窗口）会产生重复 renderNodeKey——反证修复必要性', () => {
+  // 模拟旧实现的行为（不一致时 push memberWindow）
+  const frozenWindowAggregator = new Map()
+  const motionGlyphWindows = []
+  const renderNodeKey = 'old-42-win-3'
+  const existingWindow = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
+  const inconsistentWindow = { renderNodeKey, runId: 'new-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
+
+  for (const memberWindow of [existingWindow, inconsistentWindow]) {
+    const existing = frozenWindowAggregator.get(memberWindow.renderNodeKey)
+    if (existing !== undefined) {
+      if (existing.runId !== memberWindow.runId ||
+          existing.sourceRevision !== memberWindow.sourceRevision) {
+        // 旧实现：push——产生重复 key
+        motionGlyphWindows.push(memberWindow)
+      } else {
+        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+      }
+    } else {
+      frozenWindowAggregator.set(memberWindow.renderNodeKey, memberWindow)
+    }
+  }
+  for (const frozenWindow of frozenWindowAggregator.values()) {
+    motionGlyphWindows.push(frozenWindow)
+  }
+
+  // 旧实现：motionGlyphWindows 有两个同 key 窗口
+  const keys = motionGlyphWindows.map(w => w.renderNodeKey)
+  const uniqueKeys = new Set(keys)
+  assert.ok(keys.length > uniqueKeys.size,
+    `旧实现应有重复 renderNodeKey（${keys.length} 个窗口 > ${uniqueKeys.size} 个唯一 key）`)
+  assert.equal(keys.length, 2,
+    `旧实现应有 2 个窗口（existing + 不一致 push），实际 ${keys.length}`)
+  // buildAllMotionWindowSources 去重后只留第一张，第二张的 clip/字形被吞掉
+  const seenKeys = new Set()
+  const deduped = []
+  for (const w of motionGlyphWindows) {
+    if (!seenKeys.has(w.renderNodeKey)) {
+      seenKeys.add(w.renderNodeKey)
+      deduped.push(w)
+    }
+  }
+  assert.equal(deduped.length, 1,
+    `buildAllMotionWindowSources 去重后只留 1 张，第二张被吞掉——反证旧实现错误`)
+})
+
+test('问题1-6121854424：一致时正常合并——不丢字', () => {
+  // 一致时应合并 clipRects，不丢字
+  const frozenWindowAggregator = new Map()
+  const motionGlyphWindows = []
+  const renderNodeKey = 'old-42-win-3'
+  const window1 = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 0, y: 0, width: 5, height: 20 }] }
+  const window2 = { renderNodeKey, runId: 'old-42', sourceRevision: 42, clipRects: [{ x: 5, y: 0, width: 5, height: 20 }] }
+
+  for (const memberWindow of [window1, window2]) {
+    const existing = frozenWindowAggregator.get(memberWindow.renderNodeKey)
+    if (existing !== undefined) {
+      if (existing.runId !== memberWindow.runId ||
+          existing.sourceRevision !== memberWindow.sourceRevision) {
+        // 不 push
+      } else {
+        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+      }
+    } else {
+      frozenWindowAggregator.set(memberWindow.renderNodeKey, memberWindow)
+    }
+  }
+  for (const frozenWindow of frozenWindowAggregator.values()) {
+    motionGlyphWindows.push(frozenWindow)
+  }
+
+  const keys = motionGlyphWindows.map(w => w.renderNodeKey)
+  assert.equal(keys.length, 1, '一致时应合并为 1 个窗口')
+  assert.equal(motionGlyphWindows[0].clipRects.length, 2,
+    `一致时应合并 clipRects（2 个碎片），实际 ${motionGlyphWindows[0].clipRects.length}`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

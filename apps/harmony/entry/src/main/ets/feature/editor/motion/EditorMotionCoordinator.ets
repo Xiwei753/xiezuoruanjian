@@ -155,7 +155,19 @@ interface FrozenWindowPiece {
 }
 
 /**
- * Issue #879 复核评论6120195493：同一物理 Text（同一 renderNodeKey）的窗口级组计划。
+ * Issue #879 复核评论6120849815：预计算 FrozenWindowGroupPlan 时的中间条目。
+ * ArkTS 不允许对象字面量作为类型声明（arkts-no-obj-literals-as-types），
+ * 必须用具名接口。
+ */
+interface FrozenMemberEntry {
+  member: FrozenGlyphMember
+  ownTargetX: number
+  ownTargetY: number
+  intervalGlyphIds: string[]
+}
+
+/**
+ * Issue #879 复核评论6120195493：FrozenWindowGroupPlan 替代旧 frozenGroupDelta。
  *
  * 同一 renderNodeKey 的所有 frozen 成员共享一张 ArkUI Text，必须只有一份窗口级
  * offset/alpha/position，不能由各字先计算再保留第一个字的数值。
@@ -1580,12 +1592,7 @@ export class EditorMotionCoordinator {
         // 这避免了按 interval 创建 group plan 时，隐藏成员（clipRects=[]、opacity=0）
         // 抢占整窗 offset/alpha 的问题。
         {
-          const frozenMembersByKey = new Map<string, Array<{
-            member: FrozenGlyphMember
-            ownTargetX: number
-            ownTargetY: number
-            intervalGlyphIds: string[]
-          }>>()
+          const frozenMembersByKey = new Map<string, FrozenMemberEntry[]>()
 
           for (const interval of intervals) {
             if (interval.sourceMembers === undefined) continue
@@ -1626,17 +1633,21 @@ export class EditorMotionCoordinator {
               if (!frozenMembersByKey.has(key)) {
                 frozenMembersByKey.set(key, [])
               }
-              frozenMembersByKey.get(key)!.push({
-                member,
-                ownTargetX,
-                ownTargetY,
+              const entry: FrozenMemberEntry = {
+                member: member,
+                ownTargetX: ownTargetX,
+                ownTargetY: ownTargetY,
                 intervalGlyphIds: interval.glyphIds
-              })
+              }
+              frozenMembersByKey.get(key)!.push(entry)
             }
           }
 
           // 为每个 renderNodeKey 创建统一的 FrozenWindowGroupPlan
-          for (const [renderNodeKey, entries] of frozenMembersByKey) {
+          // ArkTS 不允许解构声明（arkts-no-destruct-decls），用 keys() + get() 显式访问
+          const frozenKeys = Array.from(frozenMembersByKey.keys())
+          for (const renderNodeKey of frozenKeys) {
+            const entries = frozenMembersByKey.get(renderNodeKey)!
             if (frozenGroupPlans.has(renderNodeKey)) continue
 
             // 选择第一个可见成员（clipRects 非空）作为 baseMember
@@ -2186,15 +2197,23 @@ export class EditorMotionCoordinator {
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
-                  // Issue #879 复核评论6119020043 问题4：聚合身份一致性检查。
+                  // Issue #879 复核评论6121854424 问题1：聚合身份一致性检查。
                   // 同一 renderNodeKey = sourceKind-sourceRevision-windowInstanceId 的成员
                   // 在 sourceRevision/runId 上必然一致（runId = sourceKind-sourceRevision）。
-                  // 此处显式校验，若上游分配异常导致不一致，则不合并——将本成员作为独立
-                  // 窗口 push，避免「随手扩展 UTF-16 区间，留下混搭的其他字段」。
+                  // 此处显式校验，若上游分配异常导致不一致，则不合并也不 push——
+                  // memberWindow.renderNodeKey 仍等于 existing.renderNodeKey，
+                  // push 会与下方 frozenWindowAggregator.values() 输出的 existing 产生重复 key，
+                  // buildAllMotionWindowSources 按 renderNodeKey 去重时第二张被吞掉，
+                  // 不能作为独立物理 Text。
+                  // 真正的物理来源身份必须在 EditorMotionPlanner.ets 的准备阶段就确定：
+                  // 一个 key 对应一个不可变 sourceRevision/runId/windowInstanceId。
+                  // 同 key 但身份不一致说明源成员计划有错误，应修正上游身份建立与匹配；
+                  // 确实是不同物理 Text 的，准备阶段分配不同且固定的最终 key。
+                  // 聚合层只能合并经同一物理身份明确归组的成员，不在这里追加冲突 key。
                   // 正常情况下此分支永不触发；它是一道结构约束护栏。
                   if (existing.runId !== memberWindow.runId ||
                       existing.sourceRevision !== memberWindow.sourceRevision) {
-                    motionGlyphWindows.push(memberWindow)
+                    // 不 push——避免重复 renderNodeKey。existing 仍由 frozenWindowAggregator 输出。
                   } else {
                     // Issue #879 复核评论6120195493：只合并裁切和显示片段。
                     // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
