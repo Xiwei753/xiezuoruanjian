@@ -6,6 +6,8 @@
 // - 转换入口：`sujian_editor_item` 中的 `utf8_to_utf16` / `utf16_to_utf8`
 //   在调用本模块函数前完成坐标转换
 
+use std::sync::Arc;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaretAffinity {
     Upstream,
@@ -94,7 +96,12 @@ pub struct LayoutSnapshot {
     pub line_spacing: f32,
     pub text_indent: f32,
     pub padding: f32,
-    pub lines: Vec<VisualLine>,
+    /// Issue #901 第九轮阻塞5: 用 `Arc<Vec<VisualLine>>` 共享视觉行数据，
+    /// 避免每次编辑克隆整章 VisualLine（含字符串数据）。
+    /// `LayoutSnapshot` 和 `CanonicalDocumentVisualSnapshot.visual_lines`
+    /// 通过 `Arc::clone` 共享同一份视觉行数据，编辑时 `Arc::make_mut`
+    /// 原地修改（refcount==1）或 COW（refcount>1）。
+    pub lines: Arc<Vec<VisualLine>>,
     /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
     /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
     pub layout_generation: u64,
@@ -116,7 +123,7 @@ impl LayoutSnapshot {
             line_spacing: 0.0,
             text_indent: 0.0,
             padding: 0.0,
-            lines: Vec::new(),
+            lines: Arc::new(Vec::new()),
             layout_generation: 0,
         }
     }
@@ -135,7 +142,8 @@ impl LayoutSnapshot {
 #[derive(Clone)]
 pub struct PromotedLayout {
     pub generation: u64,
-    pub visual_lines: Vec<VisualLine>,
+    /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免 clone Vec<VisualLine>。
+    pub visual_lines: Arc<Vec<VisualLine>>,
     pub width: f64,
     pub font_size: f32,
     pub font_family: String,

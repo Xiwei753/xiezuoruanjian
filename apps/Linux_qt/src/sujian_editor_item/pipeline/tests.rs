@@ -5,6 +5,7 @@
 //! 本模块在 `pipeline` 内部声明（`#[cfg(test)] mod tests;`），可直接访问其私有条目。
 
 use super::*;
+use std::sync::Arc;
 
 /// Issue #683 复现 6（行为测试版）：验证 set_selection 后 mirror.cursor 正确更新，
 /// 后续 delete_range 能删除旧正文中的字符，而非因光标锁死删除错误位置。
@@ -111,7 +112,7 @@ fn test_doc_snapshot(
                 text, para_start,
             ),
         }],
-        visual_lines: Vec::new(),
+        visual_lines: Arc::new(Vec::new()),
     }
 }
 
@@ -179,7 +180,7 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
         999,
         vec![test_canonical_line(999, 7, 0, 2, Vec::new())],
     );
-    doc.visual_lines = vec![test_visual_line(999, 7, 0, 2, "ab")];
+    doc.visual_lines = Arc::new(vec![test_visual_line(999, 7, 0, 2, "ab")]);
     let prepared = vec![test_raster_visual(999, 7)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -223,7 +224,7 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
 #[test]
 fn issue808_comment5918236360_prepare_miss_line_is_collected_for_retry() {
     let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 0, 0, 2, Vec::new())]);
-    doc.visual_lines = vec![test_visual_line(0, 0, 0, 2, "ab")];
+    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
 
     // prepare 结果为空（该行没有被提取到动画视觉）。
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -263,7 +264,7 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
             vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
         )],
     );
-    doc.visual_lines = vec![test_visual_line(0, 0, 0, 2, "ab")];
+    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
     let prepared = vec![test_raster_visual(0, 0)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -290,7 +291,7 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
 #[test]
 fn issue808_comment5918236360_whitespace_line_is_not_checked() {
     let mut doc = test_doc_snapshot(" ", 0, vec![test_canonical_line(0, 0, 0, 1, Vec::new())]);
-    doc.visual_lines = vec![test_visual_line(0, 0, 0, 1, " ")];
+    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 1, " ")]);
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,

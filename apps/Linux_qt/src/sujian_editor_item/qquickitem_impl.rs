@@ -278,20 +278,17 @@ impl QQuickItem for SujianEditorItem {
                 .initialize_presented_from_target(frame_now_ms);
             let canvas_plan = self.pipeline.visual_canvas().frame(frame_now_ms);
 
-            // Issue #901 问题3/问题6：从 frame_submission_mailbox 的未确认帧
-            // 引用的 snapshot ids + 当前 canvas_plan 引用的 snapshot ids，
-            // 计算真正活跃的 snapshot id 列表，传给 retain_active_snapshot_ids。
-            // 这保证正在动画的纹理和尚未被 afterFrameEnd 确认的帧引用的纹理
-            // 都不会被 texture_cache 回收。
-            {
-                let mut active_ids = self.frame_submission_mailbox.active_snapshot_ids();
-                for cmd in &canvas_plan.commands {
-                    if !cmd.snapshot_id.is_none() && !active_ids.contains(&cmd.snapshot_id) {
-                        active_ids.push(cmd.snapshot_id);
-                    }
-                }
-                self.pipeline.retain_active_snapshot_ids(&active_ids);
-            }
+            // Issue #901 第九轮阻塞3：retain_active_snapshot_ids 移到渲染成功之后。
+            // 旧实现在此处（渲染前）做 retain，收集源只有 canvas_plan.commands 与
+            // mailbox.active_snapshot_ids()，没有当前 PresentedScene 的静态 cluster，
+            // 也没有本帧即将创建的静态贡献。texture_cache.retain 会实际删除所有未列出
+            // 的图像——纯静态首帧或完成动画后、mailbox 已确认的可见字可能没有 Canvas
+            // TextFragment，于是刚准备的纹理即被移除。
+            // 新实现移到 render_frame 成功之后，并扩展 resource roots 覆盖：
+            // (1) 最后确认的 PresentedScene 静态和动画片段
+            // (2) 所有待 afterFrameEnd 的帧
+            // (3) 当前将渲染的实际静态/动画片段
+            // (4) 新 target 中动画尚未出现但即将需要的纹理
 
             let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);
 
@@ -365,6 +362,31 @@ impl QQuickItem for SujianEditorItem {
                 &canvas_plan,
             );
 
+            // Issue #901 第九轮阻塞2：计算本帧静态层实际采用的裁剪矩形。
+            // 与 scene_graph_renderer::render_frame 内部用同一逻辑：
+            // animation_resources_ready=false 时，渲染器画完整 canonical 静态层、
+            // 清空动画层，effective_clip_rects 为空——所有 cluster 都由静态层绘制。
+            // qquickitem_impl 据此用矩形差集计算每个 cluster 的真实可见静态片段，
+            // 不再用"单一矩形是否完全包含"代替矩形并集求补集。
+            let animation_resources_ready_for_static = animated_glyphs
+                .iter()
+                .all(|g| self.pipeline.texture_cache().contains_line(&g.snapshot_id));
+            let effective_clip_rects: Vec<super::qt_text_node::AnimationClipRect> =
+                if animation_resources_ready_for_static {
+                    clip_rects.clone()
+                } else {
+                    Vec::new()
+                };
+            // 转换为 (x, y, w, h) 元组供矩形差集使用。
+            let effective_holes: Vec<(f64, f64, f64, f64)> = effective_clip_rects
+                .iter()
+                .map(|c| (c.x, c.y, c.w, c.h))
+                .collect();
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的命令推导静态层裁剪矩形。
+            let clip_rects = super::scene_graph_renderer::canvas_draw_plan_to_clip_rects(
+                &canvas_plan,
+            );
+
             // Issue #901 第六轮阻塞3 / 第七轮问题3：从静态 QSGTextNode 的有效文本
             // cluster 登记已提交贡献。首帧不能用"没有动画 TextFragment"代表"没有已显示
             // 正文"——静态文本可以由 QSGTextNode 绘制而不需要 overlay，但 PresentedScene
@@ -373,21 +395,19 @@ impl QQuickItem for SujianEditorItem {
             // 填入 RenderPlan.static_text_contributions，供 build_presented_scene_from_frame
             // 登记静态正文的真实像素贡献。
             //
-            // Issue #901 第七轮问题3 修复：
-            // - 旧实现按整行生成一个贡献，document_rect.w = doc_width - line.visual_x
-            //   （直到页面右边缘），source_uv = zero → command_for_deleting 返回 None。
-            // - 新实现按 cluster 拆分，与 transaction.rs::build_target_layout_descriptor
-            //   的 cluster 级 TargetGlyphRun 对称：byte_range 是 cluster 范围，
-            //   document_rect 是 cluster 真实字形几何，source_uv 是 cluster 在行纹理
-            //   中的局部坐标（非零）。过滤 visible_clip.h <= 0 的行（视口外不登记）。
-            // Issue #901 第八轮问题1+2修复：
-            // - 问题1：静态贡献只从本帧 QSG 静态层真正留下的 cluster 可见片段生成，
-            //   排除被动画层（clip_rects）完全接管的 cluster。source_revision 绑定
-            //   target Core revision（canvas_plan.target_revision），不用
-            //   canvas_plan.source_revision（后者往往是历史已提交版）。
-            // - 问题2：验证 cluster 的 snapshot_id 对应的纹理是否存在于 texture_cache
-            //   中。如果不存在，跳过该 cluster 的静态贡献登记（它由 QSGTextNode
-            //   直接绘制，不参与动画吞吐）。
+            // Issue #901 第九轮阻塞2修复：
+            // - 旧实现用 `clip_rects.iter().any(rect_fully_contains(...))` 判断 cluster
+            //   是否被动画接管。被两个 clip 合起来覆盖、或仅部分被 clip 挖掉时，仍把
+            //   完整 cluster 及未裁剪的 source_uv 登记为静态贡献。新实现用矩形差集
+            //   （cluster rect - union(effective_clip_rects)）计算真实可见静态片段，
+            //   每个片段生成独立的 StaticTextContributionInfo。
+            // - 旧实现在 cluster 无纹理时直接不登记，但 QSGTextNode 实际仍画了该字。
+            //   新实现无纹理时也登记"静态已显示"的字形身份（保留 cluster 的 byte_range、
+            //   document_rect、visible_clip、source_uv），后续若需要从它做删除动画，
+            //   纹理须先按本行 QTextLayout 补建，不能让文字从画面历史里消失。
+            // - 旧实现不区分 animation_resources_ready=false 的情况。新实现用
+            //   effective_clip_rects（已根据 animation_resources_ready 过滤），当
+            //   资源未就绪时 effective_clip_rects 为空，所有 cluster 都登记为静态贡献。
             let static_text_contributions: Vec<
                 super::render_plan::StaticTextContributionInfo,
             > = canonical_visual_snapshot
@@ -396,34 +416,24 @@ impl QQuickItem for SujianEditorItem {
                     let viewport_top = scroll_y;
                     let viewport_bottom = scroll_y + vp_h;
                     let texture_cache = self.pipeline.texture_cache();
-                    // Issue #901 第八轮问题1：静态贡献的 source_revision 绑定
-                    // target Core revision。静态贡献来自当前 target canonical，
-                    // byte_range 是 target 的 cluster 坐标，source_revision 必须
-                    // 与 byte_range 来自同一版本。
                     let static_source_revision = canvas_plan.target_revision;
                     snap.line_snapshots
                         .iter()
                         .flat_map(|line| {
                             let line_h = line.visual_line_bottom - line.visual_line_top;
-                            // 跳过零高度行或空 byte range 的退化行。
                             if line_h <= 0.0 || line.byte_start >= line.byte_end {
                                 return Vec::new();
                             }
-                            // dpr 防零除（与 transaction.rs 一致）。
                             let dpr = if line.dpr > 0.0 { line.dpr } else { 1.0 };
-                            // Issue #901 第七轮问题3：按 cluster 拆分，与 target 侧对称。
-                            // 无 cluster 的行（如空行）不产生静态文字贡献。
                             line.clusters
                                 .iter()
-                                .filter_map(|cluster| {
-                                    // 跳过零宽 cluster（无可见字形）。
+                                .flat_map(|cluster| {
                                     if cluster.byte_start >= cluster.byte_end
                                         || cluster.source_rect.w <= 0.0
                                         || cluster.source_rect.h <= 0.0
                                     {
-                                        return None;
+                                        return Vec::new();
                                     }
-                                    // cluster 文档坐标几何，与 transaction.rs:233-249 对称。
                                     let doc_x = line.visual_x + cluster.source_rect.x / dpr;
                                     let doc_w = (cluster.source_rect.w / dpr).max(0.0);
                                     let doc_rect = super::layout_snapshot::SourceRect {
@@ -432,61 +442,119 @@ impl QQuickItem for SujianEditorItem {
                                         w: doc_w,
                                         h: line_h,
                                     };
-                                    // 视口裁剪（文档坐标）：cluster rect 与
-                                    // [0, scroll_y, +inf, scroll_y + vp_h] 求交。
+                                    // 视口裁剪（文档坐标）。
                                     let clip_y = doc_rect.y.max(viewport_top);
                                     let clip_bottom =
                                         (doc_rect.y + doc_rect.h).min(viewport_bottom);
                                     let clip_h = (clip_bottom - clip_y).max(0.0);
-                                    // Issue #901 第七轮问题3 缺陷A：过滤 visible_clip.h <= 0
-                                    // （完全在视口外的 cluster 不登记贡献）。
                                     if clip_h <= 0.0 {
-                                        return None;
+                                        return Vec::new();
                                     }
-                                    // Issue #901 第八轮问题1：排除被动画层（clip_rects）
-                                    // 完全接管的 cluster。动画层在这些区域挖空，静态层
-                                    // 不绘制，不应登记静态贡献。只跳过完全被覆盖的 cluster；
-                                    // 部分重叠的 cluster 仍登记（静态层在未覆盖部分仍绘制）。
-                                    let fully_covered = clip_rects.iter().any(|clip| {
-                                        rect_fully_contains(
-                                            clip.x, clip.y, clip.w, clip.h,
-                                            doc_rect.x, doc_rect.y, doc_rect.w, doc_rect.h,
-                                        )
-                                    });
-                                    if fully_covered {
-                                        return None;
+                                    // Issue #901 第九轮阻塞2：用矩形差集计算
+                                    // cluster 的真实可见静态片段。
+                                    // cluster 的可见区域（视口裁剪后）。
+                                    let visible_rect = (
+                                        doc_rect.x,
+                                        clip_y,
+                                        doc_rect.w,
+                                        clip_h,
+                                    );
+                                    let has_texture = texture_cache.contains_line(&line.id);
+                                    if has_texture {
+                                        // 有纹理：从 visible_rect 中挖掉所有
+                                        // effective_holes，对每个剩余片段生成
+                                        // 一个 StaticTextContributionInfo。
+                                        let fragments = rect_subtract_holes(
+                                            visible_rect,
+                                            &effective_holes,
+                                        );
+                                        fragments
+                                            .iter()
+                                            .filter_map(|frag| {
+                                                let (fx, fy, fw, fh) = *frag;
+                                                if fw <= 0.0 || fh <= 0.0 {
+                                                    return None;
+                                                }
+                                                // 片段的 source_uv：按片段在
+                                                // cluster 中的比例裁剪 source_rect。
+                                                let u_scale = if doc_rect.w > 0.0 {
+                                                    cluster.source_rect.w / doc_rect.w
+                                                } else {
+                                                    0.0
+                                                };
+                                                let v_scale = if doc_rect.h > 0.0 {
+                                                    cluster.source_rect.h / doc_rect.h
+                                                } else {
+                                                    0.0
+                                                };
+                                                let frag_source_uv_x = cluster.source_rect.x
+                                                    + (fx - doc_rect.x) * u_scale;
+                                                let frag_source_uv_y = cluster.source_rect.y
+                                                    + (fy - doc_rect.y) * v_scale;
+                                                let frag_source_uv_w = fw * u_scale;
+                                                let frag_source_uv_h = fh * v_scale;
+                                                Some(super::render_plan::StaticTextContributionInfo {
+                                                    snapshot_id: line.id,
+                                                    byte_range: (
+                                                        cluster.byte_start,
+                                                        cluster.byte_end,
+                                                    ),
+                                                    document_rect: super::layout_snapshot::SourceRect {
+                                                        x: fx,
+                                                        y: fy,
+                                                        w: fw,
+                                                        h: fh,
+                                                    },
+                                                    visible_clip: super::layout_snapshot::SourceRect {
+                                                        x: fx,
+                                                        y: fy,
+                                                        w: fw,
+                                                        h: fh,
+                                                    },
+                                                    source_uv: super::layout_snapshot::SourceRect {
+                                                        x: frag_source_uv_x,
+                                                        y: frag_source_uv_y,
+                                                        w: frag_source_uv_w,
+                                                        h: frag_source_uv_h,
+                                                    },
+                                                    source_revision: static_source_revision,
+                                                })
+                                            })
+                                            .collect()
+                                    } else {
+                                        // Issue #901 第九轮阻塞2：无纹理也登记
+                                        // "静态已显示"的字形身份。用完整可见区域
+                                        //（不减去 effective_holes），保留 cluster 的
+                                        // byte_range、document_rect、source_uv。
+                                        // 后续若需要从它做删除动画，纹理须先按本行
+                                        // QTextLayout 补建，不能让文字从画面历史里消失。
+                                        vec![super::render_plan::StaticTextContributionInfo {
+                                            snapshot_id: line.id,
+                                            byte_range: (
+                                                cluster.byte_start,
+                                                cluster.byte_end,
+                                            ),
+                                            document_rect: super::layout_snapshot::SourceRect {
+                                                x: doc_rect.x,
+                                                y: clip_y,
+                                                w: doc_rect.w,
+                                                h: clip_h,
+                                            },
+                                            visible_clip: super::layout_snapshot::SourceRect {
+                                                x: doc_rect.x,
+                                                y: clip_y,
+                                                w: doc_rect.w,
+                                                h: clip_h,
+                                            },
+                                            source_uv: super::layout_snapshot::SourceRect {
+                                                x: cluster.source_rect.x,
+                                                y: cluster.source_rect.y,
+                                                w: cluster.source_rect.w,
+                                                h: cluster.source_rect.h,
+                                            },
+                                            source_revision: static_source_revision,
+                                        }]
                                     }
-                                    // Issue #901 第八轮问题2：验证 cluster 的 snapshot_id
-                                    // 对应的纹理是否存在于 texture_cache 中。如果不存在，
-                                    // 跳过该 cluster 的静态贡献登记——它由 QSGTextNode
-                                    // 直接绘制，不参与动画吞吐（没有纹理无法做裁剪收回）。
-                                    if !texture_cache.contains_line(&line.id) {
-                                        return None;
-                                    }
-                                    let visible_clip = super::layout_snapshot::SourceRect {
-                                        x: doc_rect.x,
-                                        y: clip_y,
-                                        w: doc_rect.w,
-                                        h: clip_h,
-                                    };
-                                    Some(super::render_plan::StaticTextContributionInfo {
-                                        snapshot_id: line.id,
-                                        byte_range: (cluster.byte_start, cluster.byte_end),
-                                        document_rect: doc_rect,
-                                        visible_clip,
-                                        // Issue #901 第七轮问题3 缺陷B：source_uv 用
-                                        // cluster 的 source_rect（行纹理局部坐标，已乘 DPR），
-                                        // 非零，使 command_for_deleting 的
-                                        // remaining_uv_w > 0。
-                                        source_uv: super::layout_snapshot::SourceRect {
-                                            x: cluster.source_rect.x,
-                                            y: cluster.source_rect.y,
-                                            w: cluster.source_rect.w,
-                                            h: cluster.source_rect.h,
-                                        },
-                                        // Issue #901 第八轮问题1：绑定 target Core revision。
-                                        source_revision: static_source_revision,
-                                    })
                                 })
                                 .collect()
                         })
@@ -534,6 +602,9 @@ impl QQuickItem for SujianEditorItem {
             // height_index 与 prepared_frame.layout_snapshot 都是不可变借用 self，
             // 可安全共存。
             let has_snapshot = prepared_frame_matches_canonical;
+            // Issue #901 第九轮阻塞4: 传入稳定 ParagraphId 列表，
+            // 供 ParagraphLineInfo 填入稳定身份标识。
+            let paragraph_ids = self.editor_layout.paragraph_store().paragraph_ids();
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
@@ -543,6 +614,9 @@ impl QQuickItem for SujianEditorItem {
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
                 needs_relayout: frame_needs_relayout,
+                // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
+                loaded_para_range: self.loaded_para_range,
+                paragraph_ids: Some(&paragraph_ids),
             };
 
             // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
@@ -551,13 +625,75 @@ impl QQuickItem for SujianEditorItem {
             // 处理正确的 snapshot/generation。同时请求下一帧更新，让 GUI 线程
             // prepare_editor_frame 重新排版（snapshot() 会发现
             // cache 无效而分配新 generation 重新排版）。
-            let static_rebuild_ok = scene_graph_renderer::render_frame(
+            //
+            // Issue #901 第九轮阻塞2：render_frame 返回 FrameRenderOutcome，
+            // 包含 static_rebuild_ok 和 effective_clip_rects。
+            let render_outcome = scene_graph_renderer::render_frame(
                 editor_root,
                 item_ptr,
                 &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+            let static_rebuild_ok = render_outcome.static_rebuild_ok;
+
+            // Issue #901 第九轮阻塞4: 更新 per-item loaded_para_range。
+            // rebuild 成功时用新范围，失败时保留旧范围（new_loaded_para_range=None）。
+            if let Some(new_range) = render_outcome.new_loaded_para_range {
+                self.loaded_para_range = Some(new_range);
+            }
+
+            // Issue #901 第九轮阻塞3：渲染成功后生成本帧 resource roots 并 retain。
+            // 旧实现在渲染前做 retain，会 sweep 掉本帧即将创建的静态贡献的纹理。
+            // 新实现移到渲染后，resource roots 覆盖：
+            // (1) 最后确认的 PresentedScene 静态和动画片段
+            // (2) 所有待 afterFrameEnd 的帧（mailbox.active_snapshot_ids）
+            // (3) 当前将渲染的实际静态/动画片段
+            // (4) 新 target 中动画尚未出现但即将需要的纹理（视口内行的 line.id）
+            {
+                let mut active_ids = self.frame_submission_mailbox.active_snapshot_ids();
+                // (3a) 当前将渲染的动画片段（canvas_plan.commands）
+                for cmd in &canvas_plan.commands {
+                    if !cmd.snapshot_id.is_none() && !active_ids.contains(&cmd.snapshot_id) {
+                        active_ids.push(cmd.snapshot_id);
+                    }
+                }
+                // (3b) 当前将渲染的实际静态片段（render_plan.static_text_contributions）
+                for info in &render_plan.static_text_contributions {
+                    if !info.snapshot_id.is_none() && !active_ids.contains(&info.snapshot_id) {
+                        active_ids.push(info.snapshot_id);
+                    }
+                }
+                // (1) 最后确认的 PresentedScene 的像素贡献
+                if let Some(presented) = self.pipeline.visual_canvas().presented_scene() {
+                    for contrib in &presented.pixel_contributions {
+                        if !contrib.snapshot_id.is_none()
+                            && !active_ids.contains(&contrib.snapshot_id)
+                        {
+                            active_ids.push(contrib.snapshot_id);
+                        }
+                    }
+                }
+                // (4) 新 target 中动画尚未出现但即将需要的纹理：
+                // canonical_visual_snapshot 的视口内行的 line.id。
+                // 这些行可能不在 canvas_plan.commands 中（无动画），但下一帧
+                // 编辑时可能需要它们的纹理。
+                if let Some(snap) = canonical_visual_snapshot.as_ref() {
+                    let vp_top = scroll_y - vp_h;
+                    let vp_bottom = scroll_y + vp_h * 2.0;
+                    for line in &snap.line_snapshots {
+                        let line_y = line.visual_line_top;
+                        let line_bottom = line.visual_line_bottom;
+                        if line_bottom < vp_top || line_y > vp_bottom {
+                            continue;
+                        }
+                        if !line.id.is_none() && !active_ids.contains(&line.id) {
+                            active_ids.push(line.id);
+                        }
+                    }
+                }
+                self.pipeline.retain_active_snapshot_ids(&active_ids);
+            }
 
             let ownership_snapshot_matches = canonical_visual_snapshot
                 .as_ref()
@@ -588,16 +724,27 @@ impl QQuickItem for SujianEditorItem {
                 ) {
                     self.next_render_frame_id =
                         self.next_render_frame_id.wrapping_add(1);
-                    // Issue #901 问题3/问题6：从 canvas_plan 的 commands 提取真实
-                    // snapshot_ids，不再传 Vec::new()。帧提交 mailbox 的
-                    // active_snapshot_ids() 依赖此列表决定哪些 QImage 不能释放，
-                    // retain_active_snapshot_ids 也依赖它保持纹理生命周期。
-                    let snapshot_ids: Vec<super::layout_snapshot::LineSnapshotId> = canvas_plan
-                        .commands
-                        .iter()
-                        .filter(|cmd| !cmd.snapshot_id.is_none())
-                        .map(|cmd| cmd.snapshot_id)
-                        .collect();
+                    // Issue #901 问题3/问题6 / 第九轮阻塞3：从 canvas_plan 的 commands
+                    // 提取动画 snapshot_ids + render_plan.static_text_contributions
+                    // 提取静态 snapshot_ids，组合成完整的帧引用列表。
+                    // 帧提交 mailbox 的 active_snapshot_ids() 依赖此列表决定哪些
+                    // QImage 不能释放，retain_active_snapshot_ids 也依赖它保持纹理
+                    // 生命周期。旧实现只传 canvas_plan.commands 的 snapshot_ids，
+                    // 忽略静态贡献——纯静态帧的纹理会在下一帧被 sweep 掉。
+                    let mut snapshot_ids: Vec<super::layout_snapshot::LineSnapshotId> =
+                        canvas_plan
+                            .commands
+                            .iter()
+                            .filter(|cmd| !cmd.snapshot_id.is_none())
+                            .map(|cmd| cmd.snapshot_id)
+                            .collect();
+                    for info in &render_plan.static_text_contributions {
+                        if !info.snapshot_id.is_none()
+                            && !snapshot_ids.contains(&info.snapshot_id)
+                        {
+                            snapshot_ids.push(info.snapshot_id);
+                        }
+                    }
                     // Stage 到 frame_submission，等 afterFrameEnd 回执后才 commit。
                     self.frame_submission_mailbox.stage_rendered_frame(
                         self.document_session,
@@ -663,14 +810,14 @@ impl QQuickItem for SujianEditorItem {
             // （是否有非空 DrawCommand 且几何未到达目标）决定。
             // 存活字 FLIP opacity=1，即使尚在位移也可能不请求后续帧——
             // 现在由 FrameClock 终点决定持续帧调度。
-            let has_active_canvas = !canvas_plan.empty
-                && canvas_plan.commands.iter().any(|cmd| {
-                    cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
-                        && cmd.has_visible_area()
-                });
-            let canvas_not_settled =
-                has_active_canvas && !self.pipeline.visual_canvas().controller().frame_clock().is_settled(frame_now_ms, 0.001);
-            if self.cursor_ctrl.animation.is_some() || canvas_not_settled {
+            //
+            // Issue #901 第九轮阻塞1：用 canvas_plan.needs_next_frame 代替
+            // has_active_canvas（是否有可见 TextFragment）。needs_next_frame 来自
+            // FrameClock 与 target 的未完成状态，覆盖 progress=0 的新过渡第一帧
+            // （静态层已挖空但动画层尚无可见像素）、纯删除临界帧、文字全被裁空
+            // 但仍在过渡的帧。不依赖可见 TextFragment 数量，保证时钟持续推进。
+            let canvas_needs_next_frame = canvas_plan.needs_next_frame;
+            if self.cursor_ctrl.animation.is_some() || canvas_needs_next_frame {
                 self.request_frame_update();
             }
         }
@@ -1217,21 +1364,65 @@ impl SujianEditorItem {
     }
 }
 
-/// Issue #901 第八轮问题1：判断矩形 `outer` 是否完全包含矩形 `inner`。
+/// Issue #901 第九轮阻塞2：从矩形 `rect` 中挖掉所有 `holes`，返回剩余的轴对齐矩形列表。
 ///
-/// 用于静态贡献生成时排除被动画层（clip_rects）完全接管的 cluster。
-/// `outer` 是动画层接管区域（AnimationClipRect 的 x/y/w/h，文档坐标），
-/// `inner` 是 cluster 的 document_rect。当 outer 完全包含 inner 时，
-/// 静态层在该 cluster 区域不绘制，不应登记静态贡献。
+/// 用于计算 cluster 的真实可见静态片段：cluster 的可见区域减去动画层接管的
+/// 区域（`effective_clip_rects` 的并集），得到静态层实际绘制的部分。
 ///
-/// 容忍 0.5 像素误差，避免浮点精度导致边缘 cluster 误判。
-fn rect_fully_contains(
-    outer_x: f64, outer_y: f64, outer_w: f64, outer_h: f64,
-    inner_x: f64, inner_y: f64, inner_w: f64, inner_h: f64,
-) -> bool {
-    const EPS: f64 = 0.5;
-    outer_x <= inner_x + EPS
-        && outer_y <= inner_y + EPS
-        && outer_x + outer_w >= inner_x + inner_w - EPS
-        && outer_y + outer_h >= inner_y + inner_h - EPS
+/// 算法：从 `[rect]` 开始，对每个 hole，对结果中的每个矩形执行单矩形差集
+/// （最多产生 4 个子矩形：上、下、左、右），过滤零面积矩形。
+fn rect_subtract_holes(
+    rect: (f64, f64, f64, f64),
+    holes: &[(f64, f64, f64, f64)],
+) -> Vec<(f64, f64, f64, f64)> {
+    let mut fragments = vec![rect];
+    for &hole in holes {
+        let mut next = Vec::new();
+        for &frag in &fragments {
+            next.extend(rect_subtract_one(frag, hole));
+        }
+        fragments = next;
+    }
+    fragments
+}
+
+/// 单矩形差集：从 `r` 中挖掉 `h`，返回剩余的轴对齐矩形列表（最多 4 个）。
+///
+/// 如果 `r` 和 `h` 无交集，返回 `[r]`。否则返回 `r` 中不被 `h` 覆盖的部分
+/// （上、下、左、右条带），过滤零面积矩形。
+fn rect_subtract_one(
+    r: (f64, f64, f64, f64),
+    h: (f64, f64, f64, f64),
+) -> Vec<(f64, f64, f64, f64)> {
+    let (rx, ry, rw, rh) = r;
+    let (hx, hy, hw, hh) = h;
+    // 交集
+    let ix = rx.max(hx);
+    let iy = ry.max(hy);
+    let ix2 = (rx + rw).min(hx + hw);
+    let iy2 = (ry + rh).min(hy + hh);
+    let iw = ix2 - ix;
+    let ih = iy2 - iy;
+    if iw <= 0.0 || ih <= 0.0 {
+        // 无交集，返回原矩形
+        return vec![r];
+    }
+    let mut result = Vec::new();
+    // top 条带
+    if iy > ry {
+        result.push((rx, ry, rw, iy - ry));
+    }
+    // bottom 条带
+    if iy2 < ry + rh {
+        result.push((rx, iy2, rw, ry + rh - iy2));
+    }
+    // left 条带
+    if ix > rx {
+        result.push((rx, iy, ix - rx, ih));
+    }
+    // right 条带
+    if ix2 < rx + rw {
+        result.push((ix2, iy, rx + rw - ix2, ih));
+    }
+    result
 }

@@ -7,6 +7,8 @@
 use super::*;
 // Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
 use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
+// Issue #901 第九轮阻塞5: Arc 共享视觉行数据。
+use std::sync::Arc;
 
 pub(super) fn prepare_document_visual_snapshot_impl(
     text: &str,
@@ -290,7 +292,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         width,
         dpr,
         paragraphs,
-        visual_lines,
+        visual_lines: Arc::new(visual_lines),
     }
 }
 
@@ -399,7 +401,8 @@ pub fn assemble_document_visual_snapshot_from_lines(
         dpr,
         paragraphs,
         // visual_lines 直接 clone，保持与原 layout 一致的 Rust 几何数据。
-        visual_lines: lines.to_vec(),
+        // Issue #901 第九轮阻塞5: 用 Arc 包装，共享视觉行数据。
+        visual_lines: Arc::new(lines.to_vec()),
     }
 }
 
@@ -417,7 +420,7 @@ fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<
     // 用 HashMap 按 para_start 去重并记录段落顺序索引
     let mut para_start_to_idx: HashMap<usize, usize> = HashMap::new();
     let mut para_starts: Vec<usize> = Vec::new();
-    for vl in &snapshot.visual_lines {
+    for vl in &*snapshot.visual_lines {
         if !para_start_to_idx.contains_key(&vl.para_start) {
             para_start_to_idx.insert(vl.para_start, para_starts.len());
             para_starts.push(vl.para_start);
@@ -426,7 +429,7 @@ fn extract_paragraph_heights(snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<
 
     let mut heights = vec![0.0f64; para_starts.len()];
     // 用 HashMap 直接索引，O(1) 查找
-    for vl in &snapshot.visual_lines {
+    for vl in &*snapshot.visual_lines {
         if let Some(&idx) = para_start_to_idx.get(&vl.para_start) {
             heights[idx] += vl.height;
         }
@@ -456,7 +459,7 @@ fn extract_affected_height_updates(
     // - para_start → 累计高度
     let mut para_start_to_order: HashMap<usize, usize> = HashMap::new();
     let mut para_start_to_height: HashMap<usize, f64> = HashMap::new();
-    for vl in &snapshot.visual_lines {
+    for vl in &*snapshot.visual_lines {
         // 先取当前长度再插入，避免 entry 借用与 len 借用冲突
         let order = para_start_to_order.len();
         para_start_to_order.entry(vl.para_start).or_insert(order);
@@ -605,7 +608,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 width,
                 dpr,
                 paragraphs: prev.paragraphs.clone(),
-                visual_lines: prev.visual_lines.clone(),
+                // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据。
+                visual_lines: Arc::clone(&prev.visual_lines),
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -647,7 +651,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         height_index.rebuild(heights);
 
         // 同步 paragraph_store 的排版结果
-        paragraph_store.sync_from_visual_lines(&snapshot.visual_lines, generation);
+        paragraph_store.sync_from_visual_lines(snapshot.visual_lines.as_slice(), generation);
 
         return snapshot;
     }
@@ -671,7 +675,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 width,
                 dpr,
                 paragraphs: Vec::new(),
-                visual_lines: Vec::new(),
+                // Issue #901 第九轮阻塞5: Arc 包装空 Vec。
+                visual_lines: Arc::new(Vec::new()),
             };
         }
     };
@@ -741,12 +746,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     }
 
     // 构建 para_start → (line_start, line_end) 索引
-    let prev_line_index = build_para_start_to_line_range(&prev.visual_lines);
+    let prev_line_index = build_para_start_to_line_range(prev.visual_lines.as_slice());
 
     // Issue #901 问题5: take prev 的 visual_lines 和 paragraphs（move，不 clone）。
     // 后续只 splice 受影响段落的行和段落，未修改段直接复用 move 出的数据。
-    let mut visual_lines: Vec<VisualLine> = std::mem::take(&mut prev.visual_lines);
+    // Issue #901 第九轮阻塞5: prev.visual_lines 是 Arc<Vec>，用 Arc::make_mut 取 &mut Vec
+    //（refcount==1 原地改，refcount>1 COW），再 mem::take 取出 Vec 做 splice。
+    // prev 从 mem::take(&mut self.last_snapshot) 取走，self.cache 已 None，refcount==1，
+    // Arc::make_mut 原地改不产生 Vec clone。
     let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
+    let mut visual_lines: Vec<VisualLine> =
+        std::mem::take(Arc::make_mut(&mut prev.visual_lines));
 
     // Issue #901 第五轮阻塞2: 用旧段范围找旧视觉行范围，用新段范围建立新段。
     let old_splice_start = splice_ranges.old_splice_start;
@@ -1226,7 +1236,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         width,
         dpr,
         paragraphs,
-        visual_lines,
+        // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
+        visual_lines: Arc::new(visual_lines),
     };
 
     // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
@@ -1266,7 +1277,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // 增量同步 paragraph_store：只更新受影响段落的排版结果
     paragraph_store.sync_from_visual_lines_incremental(
-        &snapshot.visual_lines,
+        snapshot.visual_lines.as_slice(),
         generation,
         &affected_indices,
     );
@@ -1730,6 +1741,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         width,
         dpr,
         paragraphs,
-        visual_lines,
+        // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
+        visual_lines: Arc::new(visual_lines),
     }
 }

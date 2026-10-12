@@ -1606,7 +1606,7 @@ fn retry_failed_animation_visuals(
     let retry_snapshots = {
         let retry_handle = layout::PreparedLayoutHandle {
             generation,
-            lines: &new_doc_snapshot.visual_lines,
+            lines: new_doc_snapshot.visual_lines.as_slice(),
         };
         layout::prepare_animation_visuals_from_layout(
             &retry_handle,

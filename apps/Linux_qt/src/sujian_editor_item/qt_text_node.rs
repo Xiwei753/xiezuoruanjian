@@ -455,8 +455,12 @@ cpp! {{
 pub(crate) struct ParagraphLineInfo {
     /// 段落文本（不含尾部 \n）
     pub paragraph_text: String,
-    /// 段落在文档中的字节偏移（段落身份标识）
+    /// 段落在文档中的字节偏移
     pub para_start: usize,
+    /// Issue #901 第九轮阻塞4: 稳定段落身份标识（不随编辑移动）。
+    /// 由 `ParagraphLayoutStore` 分配，跨编辑保持不变。
+    /// C++ 侧据此定位节点，不依赖 byte offset 或子节点下标。
+    pub paragraph_id: u64,
     /// 该段落在 g_paragraph_layout_cache 中的索引
     pub cache_idx: i32,
     /// 段落第一行在文档中的 y 坐标（文档坐标，即 VisualLine.y）
@@ -855,70 +859,6 @@ pub fn update_affected_text_nodes(
     });
 
     success
-}
-
-/// Issue #901 第八轮问题5（节点部分）：按稳定 ParagraphId 局部更新已加载节点。
-///
-/// 与 `update_affected_text_nodes` 的区别：后者假设"staticLayer 子节点数 ==
-/// 整章段数"，按整章节点下标 `affected_indices` 定位。视口虚拟化后静态层只
-/// 持有视口内段落的节点，子节点数 == 视口内段落数，前提不成立，直接接入会
-/// 导致 `affected_indices` 与实际节点错位。
-///
-/// 本函数改为基于**稳定 ParagraphId → 当前已加载节点**的映射：
-/// - **insert**：新进入视口的段落（ParagraphId 不在已加载集合中）创建新节点。
-/// - **remove**：离开视口的段落（已加载但不在新视口集合中）删除旧节点。
-/// - **update**：内容变化的段落（ParagraphId 在两边都有但文本/几何变了）
-///   替换节点内容。
-///
-/// # 当前实现
-///
-/// 暂时委托给 `rebuild_text_node_from_paragraphs`（全量重建视口内段落），
-/// 接口按 ParagraphId 设计为后续真正的增量 insert/remove/update 优化预留。
-/// 后续优化时 C++ 侧需新增 `update_paragraph_nodes_by_id` 实现，按 ParagraphId
-/// （`ParagraphLineInfo::para_start` 作为稳定身份标识）定位节点而非按子节点
-/// 下标，并区分 insert/remove/update 三条路径。
-///
-/// # 参数
-///
-/// - `paragraphs`：本帧视口内应加载的段落列表（按文档顺序），`para_start`
-///   作为稳定 ParagraphId。
-/// - 其余参数与 `rebuild_text_node_from_paragraphs` 一致。
-///
-/// 返回 `true` 表示更新成功，`false` 表示因 layout 缺失而放弃（调用方应保留
-/// dirty 标志，下一帧继续处理）。
-///
-/// # Safety
-/// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
-pub fn update_paragraph_nodes_by_id(
-    root_raw: *mut std::ffi::c_void,
-    item_ptr: *mut std::ffi::c_void,
-    paragraphs: &[ParagraphLineInfo],
-    visual_line_clips: &[VisualLineClipInfo],
-    scroll_y: f64,
-    color: &str,
-    animation_clip_rects: &[AnimationClipRect],
-    origin_x: f64,
-    generation: u64,
-) -> bool {
-    // Issue #901 第八轮问题5: 当前委托给全量重建。
-    // 后续优化为按 ParagraphId 的增量 insert/remove/update：
-    // 1. 用 paragraphs 的 para_start 构建新视口 ParagraphId 集合。
-    // 2. 与 C++ 侧记录的已加载 ParagraphId → 节点下标映射比较。
-    // 3. insert 新段落节点、remove 离开段落节点、update 内容变化的段落节点。
-    // 4. 更新 C++ 侧的 ParagraphId → 节点下标映射。
-    // C++ 侧需新增按 ParagraphId 定位节点的 API（当前只有按下标定位的
-    // update_affected_paragraph_nodes，前提不成立）。
-    rebuild_text_node_from_paragraphs(
-        root_raw,
-        item_ptr,
-        paragraphs,
-        visual_line_clips,
-        scroll_y,
-        color,
-        animation_clip_rects,
-        origin_x,
-        generation,
-    )
 }
 
 /// 滚动帧：只更新静态正文层的 QSGTransformNode 位移矩阵。

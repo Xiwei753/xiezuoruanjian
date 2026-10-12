@@ -1,6 +1,8 @@
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::*;
+// Issue #901 第九轮阻塞5: Arc 共享视觉行数据。
+use std::sync::Arc;
 
 impl SujianEditorItem {
     pub(crate) fn recalculate_content_height_and_emit(&mut self) {
@@ -198,7 +200,7 @@ impl SujianEditorItem {
         if !affected_line_indices.is_empty() {
             let handle = crate::editor::layout::PreparedLayoutHandle {
                 generation,
-                lines: &doc_snapshot.visual_lines,
+                lines: doc_snapshot.visual_lines.as_slice(),
             };
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
                 &handle,
@@ -385,11 +387,11 @@ impl SujianEditorItem {
         // 只合并 coverage，不改成"每次全文 QImage 栅格化"。
         if affected_start < affected_end {
             let line_ids: Vec<usize> = {
-                let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
+                let old_lines_opt = self.editor_layout.cache().map(|c| c.lines.as_slice());
                 let mut ids = if let Some(old_lines) = old_lines_opt {
                     let diff = crate::editor::layout::compare_old_new_visual_lines(
                         old_lines,
-                        &doc_snapshot.visual_lines,
+                        doc_snapshot.visual_lines.as_slice(),
                         Some((affected_start, affected_end)),
                         None,
                     );
@@ -424,7 +426,7 @@ impl SujianEditorItem {
                 // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
-                    lines: &doc_snapshot.visual_lines,
+                    lines: doc_snapshot.visual_lines.as_slice(),
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &handle, &line_ids, dpr, text_color,
@@ -470,7 +472,8 @@ impl SujianEditorItem {
             // ensure_layout_cached cache hit 不再重新排版同一已提交正文。
             // Issue #658 评论 5624570557 问题 1: composition commit 路径没有 old prepared layout，
             // old_generation 设为 0。
-            let promoted_visual_lines = doc_snapshot.visual_lines.clone();
+            // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据，不 clone Vec。
+            let promoted_visual_lines = Arc::clone(&doc_snapshot.visual_lines);
             self.pipeline.set_pending_promoted_layout(Some(
                 crate::editor::layout::PromotedLayout {
                     generation,
@@ -500,9 +503,11 @@ impl SujianEditorItem {
         Ok((snapshot, doc_snapshot))
     }
 
-    pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
+    pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &[VisualLine] {
         let params = self.layout_params(width);
-        &self
+        // Issue #901 第九轮阻塞5: LayoutSnapshot.lines 现为 Arc<Vec<VisualLine>>，
+        // 返回 as_slice() 得到 &[VisualLine]，不 clone Vec。
+        self
             .editor_layout
             .snapshot(
                 self.pipeline.committed_text(),
@@ -510,12 +515,13 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             )
             .lines
+            .as_slice()
     }
 
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
         let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
         let cursor = self.pipeline.cursor();
+        let lines = self.ensure_layout_cached(width);
 
         let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
             idx + 1 < lines.len() && line.byte_end == cursor && lines[idx + 1].byte_start == cursor

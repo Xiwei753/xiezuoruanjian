@@ -46,7 +46,7 @@ impl LineSnapshotBuilder {
         let mut prev_para_start: Option<usize> = None;
         let mut visual_line_ordinal: u32 = 0;
 
-        for line in &doc_snapshot.visual_lines {
+        for line in &*doc_snapshot.visual_lines {
             if line.para_text.is_empty() {
                 paragraph_id = paragraph_id.wrapping_add(1);
                 visual_line_ordinal = 0;

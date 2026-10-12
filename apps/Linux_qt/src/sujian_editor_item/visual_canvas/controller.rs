@@ -356,13 +356,21 @@ impl CanvasController {
             return SceneTransition::build_draw_plan_presented_only(presented, &pose, now_ms);
         };
 
-        SceneTransition::build_draw_plan(
+        let mut plan = SceneTransition::build_draw_plan(
             presented,
             target,
             &pose,
             &self.revision_chain,
             now_ms,
-        )
+        );
+        // Issue #901 第九轮阻塞1：RevisionChain 有 pending edits 表示画面尚未
+        // 追上 Core（presented revision != latest revision）。即使本帧 progress=1.0
+        //（FrameClock 已 settled），下一帧仍需重新采样以启动新过渡或完成追赶。
+        // 不依赖可见 TextFragment 数量——pending edits 本身就是需要下一帧的事实。
+        if self.revision_chain.has_pending_edits() {
+            plan.needs_next_frame = true;
+        }
+        plan
     }
 
     /// 更新设置。

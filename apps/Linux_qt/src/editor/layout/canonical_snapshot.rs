@@ -1,5 +1,7 @@
 use cpp::cpp;
 
+use std::sync::Arc;
+
 // Issue #810 评论 5932233052 问题1: qchar_offset_to_byte_offset 和 QString 不再在此
 // 模块使用（prepare_animation_visuals_from_layout 改为 raster-only，不再做 QChar→byte
 // 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
@@ -91,7 +93,9 @@ pub struct CanonicalDocumentVisualSnapshot {
     pub width: f64,
     pub dpr: f64,
     pub paragraphs: Vec<CanonicalParagraphSnapshot>,
-    pub visual_lines: Vec<VisualLine>,
+    /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免每键 clone Vec<VisualLine>。
+    /// `LayoutSnapshot.lines` 和本字段通过 `Arc::clone` 共享同一份数据。
+    pub visual_lines: Arc<Vec<VisualLine>>,
 }
 
 impl CanonicalDocumentVisualSnapshot {
@@ -108,7 +112,7 @@ impl CanonicalDocumentVisualSnapshot {
             .enumerate()
             .find(|(idx, _)| {
                 super::hit_test::line_contains_cursor_with_affinity(
-                    &self.visual_lines,
+                    self.visual_lines.as_slice(),
                     *idx,
                     cursor_byte,
                     affinity,
@@ -182,7 +186,7 @@ impl CanonicalDocumentVisualSnapshot {
             .enumerate()
             .find(|(idx, _)| {
                 super::hit_test::line_contains_cursor_with_affinity(
-                    &self.visual_lines,
+                    self.visual_lines.as_slice(),
                     *idx,
                     cursor_byte,
                     affinity,
@@ -338,7 +342,8 @@ impl CanonicalDocumentVisualSnapshot {
             line_spacing: self.line_spacing as f32,
             text_indent: self.text_indent as f32,
             padding: self.padding as f32,
-            lines: self.visual_lines.clone(),
+            // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据，不 clone Vec。
+            lines: Arc::clone(&self.visual_lines),
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,

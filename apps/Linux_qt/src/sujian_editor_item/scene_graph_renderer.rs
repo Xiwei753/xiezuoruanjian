@@ -2,26 +2,51 @@ use super::qt_text_node;
 use super::render_plan::{RenderPlan, TextAnimationGlyphInfo};
 use super::texture_cache::TextureCache;
 use super::visual_canvas::{CanvasDrawPlan, DrawCommandKind};
-use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex};
+use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex, ParagraphId};
 use crate::editor::scene_graph;
 
-/// Issue #901 第八轮问题3：缓存当前 QSG 静态层已加载的稳定段落索引区间。
+/// Issue #901 第九轮阻塞2：`render_frame` 的渲染结果。
 ///
-/// `render_frame` 每次 rebuild 成功后把本帧视口（±一屏边距）对应的段落索引
-/// 范围 `[start, end)` 写入此处。后续纯滚动帧不再无条件只平移 transform：
-/// 先用 `compute_viewport_para_range` 算出新视口段落范围，与此缓存比较，
-/// 若新范围跨出已加载集合（`new_start < loaded_start || new_end > loaded_end`）
-/// 则触发局部 rebuild（insert 新段落节点 + remove 离开段落节点），否则只更新
-/// `QSGTransformNode` 位移矩阵。这修复"从章节顶部滚动几屏后新区域没有段落可画"
-/// 的空白问题。
+/// 渲染器返回本帧实际采用的静态层裁剪矩形（`effective_clip_rects`），
+/// 供 `qquickitem_impl.rs` 据此计算真实静态贡献。当
+/// `animation_resources_ready=false` 时，渲染器选择画完整 canonical 静态层、
+/// 清空动画层，`effective_clip_rects` 为空——所有 cluster 都由静态层绘制。
+/// `qquickitem_impl.rs` 用 `effective_clip_rects` 的矩形并集求补集来决定
+/// 每个 cluster 的真实可见静态片段，不再用"单一矩形是否完全包含"代替。
+#[derive(Clone, Debug)]
+pub(crate) struct FrameRenderOutcome {
+    /// 静态层 rebuild 是否成功。
+    pub static_rebuild_ok: bool,
+    /// 本帧静态层实际采用的裁剪矩形（经过 `animation_resources_ready` 过滤）。
+    /// `animation_resources_ready=false` 时为空（静态层画完整 canonical）。
+    pub effective_clip_rects: Vec<qt_text_node::AnimationClipRect>,
+    /// Issue #901 第九轮阻塞4: 本帧 rebuild 成功后实际加载的段落索引范围。
+    /// 调用方将其保存为 per-item state，下一帧用此范围判断视口是否跨出
+    /// 已加载集合。`None` 表示本帧未 rebuild 或 rebuild 失败，保留旧范围。
+    pub new_loaded_para_range: Option<(usize, usize)>,
+}
+
+impl FrameRenderOutcome {
+    /// 失败时的默认结果：rebuild 失败，无有效裁剪。
+    fn failed() -> Self {
+        Self {
+            static_rebuild_ok: false,
+            effective_clip_rects: Vec::new(),
+            new_loaded_para_range: None,
+        }
+    }
+}
+
+/// Issue #901 第九轮阻塞4: per-item 已加载段落索引区间。
 ///
-/// 用 `Mutex` 保护以满足 `static` 的 `Sync` 要求。`render_frame` 只在 render
-/// thread 执行，锁竞争实际不存在；用 `lock().ok()` 避免 poison panic，poison
-/// 时退化为 `(0, 0)`（空范围），最坏触发一次额外 rebuild，不影响正确性。
+/// 替代原全局 `static LOADED_PARA_RANGE`。`render_frame` 每次 rebuild 成功后
+/// 把本帧视口（±一屏边距）对应的段落索引范围 `[start, end)` 通过
+/// `FrameRenderOutcome::new_loaded_para_range` 返回给调用方。调用方将其保存为
+/// per-item state，下一帧传入 `StaticTextParams::loaded_para_range`。
 ///
-/// 单实例假设：多 `SujianEditorItem` 实例共享此缓存时，最坏情况是段落范围
-/// 混淆触发一次额外全量 rebuild，rebuild 会重建正确视口节点，不破坏正确性。
-static LOADED_PARA_RANGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+/// 纯滚动帧用此范围判断视口是否跨出已加载集合
+/// （`new_start < loaded_start || new_end > loaded_end`），跨出则触发 rebuild，
+/// 否则只更新 `QSGTransformNode` 位移矩阵。
 
 /// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
 /// `TextAnimationGlyphInfo` 列表，供动画层消费。
@@ -135,6 +160,13 @@ pub(crate) struct StaticTextParams<'a> {
     pub viewport_height: f64,
     pub color: &'a str,
     pub needs_relayout: bool,
+    /// Issue #901 第九轮阻塞4: 上次 rebuild 成功后加载的段落索引范围。
+    /// `None` 表示尚未加载任何段落（首次渲染或上次 rebuild 失败）。
+    pub loaded_para_range: Option<(usize, usize)>,
+    /// Issue #901 第九轮阻塞4: 稳定段落身份列表，按段落索引顺序排列。
+    /// `paragraph_ids[i]` 是第 i 个段落的 `ParagraphId`。
+    /// 用于在 `ParagraphLineInfo` 中填入稳定身份标识。
+    pub paragraph_ids: Option<&'a [ParagraphId]>,
 }
 
 /// Issue #901 第七轮复核问题2: 计算段落真实第一行的文档 y 坐标。
@@ -212,15 +244,18 @@ pub(crate) fn render_frame(
     static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
-) -> bool {
+) -> FrameRenderOutcome {
     if root_raw.is_null() || item_ptr.is_null() {
-        return false;
+        return FrameRenderOutcome::failed();
     }
 
     // Issue #668 评论 5646458592 问题 1: 静态正文 rebuild 的成功/失败结果。
     // 默认 true 表示无需 rebuild（如滚动帧）或 rebuild 成功；
     // false 表示 rebuild 因 layout 缺失而放弃，调用方应保留 dirty 标志。
     let mut static_rebuild_ok = true;
+    // Issue #901 第九轮阻塞4: 本帧 rebuild 成功后的新加载段落范围，
+    // 通过 FrameRenderOutcome 返回给调用方。
+    let mut rebuild_new_range: Option<(usize, usize)> = None;
 
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
@@ -242,15 +277,22 @@ pub(crate) fn render_frame(
     // 不能只过滤静态 clip、再让动画层单独跳过缺纹理的 glyph。
     let animation_resources_ready = plan.ownership.has_animation_resources(texture_cache);
 
+    // Issue #901 第九轮阻塞2：计算本帧静态层实际采用的裁剪矩形。
+    // 当 animation_resources_ready=false 时，渲染器选择画完整 canonical 静态层、
+    // 清空动画层，effective_clip_rects 为空——所有 cluster 都由静态层绘制。
+    // qquickitem_impl.rs 据此用矩形差集计算每个 cluster 的真实可见静态片段。
+    let effective_clip_rects: Vec<qt_text_node::AnimationClipRect> = if animation_resources_ready {
+        plan.ownership.clips_for_static_rebuild().to_vec()
+    } else {
+        Vec::new()
+    };
+
     // Issue #901 第八轮问题3：计算新视口对应的段落范围，与已加载范围比较。
     // 跨出已加载集合时触发 rebuild（insert 新段落节点 + remove 离开段落节点），
     // 不只平移旧一屏的 transform。这修复长距离滚动后新区域空白的问题。
     let new_para_range = compute_viewport_para_range(static_text);
-    let loaded_para_range = LOADED_PARA_RANGE
-        .lock()
-        .ok()
-        .map(|g| *g)
-        .unwrap_or((0, 0));
+    // Issue #901 第九轮阻塞4: 使用 per-item state 而非全局 static。
+    let loaded_para_range = static_text.loaded_para_range.unwrap_or((0, 0));
     // 视口跨出已加载段落集合：新范围的下界 < 已加载下界，或新范围上界 > 已加载上界。
     // 无 new_para_range（无 height_index）时不触发跨出检测，退化为旧行为。
     let viewport_exceeds_loaded = match new_para_range {
@@ -359,9 +401,23 @@ pub(crate) fn render_frame(
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
                     last_para_start = Some(line.para_start);
+                    // Issue #901 第九轮阻塞4: 用稳定 ParagraphId 作为段落身份标识。
+                    // cache_slot 是段落索引，通过 paragraph_ids 查表得到 ParagraphId。
+                    // 无 paragraph_ids 时用 0（ParagraphId::INVALID），不影响渲染正确性。
+                    let paragraph_id = static_text
+                        .paragraph_ids
+                        .and_then(|ids| {
+                            if line.cache_slot >= 0 {
+                                ids.get(line.cache_slot as usize).map(|id| id.as_u64())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
                     paragraphs.push(qt_text_node::ParagraphLineInfo {
                         paragraph_text: line.para_text.clone(),
                         para_start: line.para_start,
+                        paragraph_id,
                         cache_idx: line.cache_slot,
                         y: para_y,
                         indent_w: line.para_indent,
@@ -433,11 +489,10 @@ pub(crate) fn render_frame(
             //    虽然仍是一次性重建视口内所有段落节点，但成本与视口大小成正比，
             //    而非与全章长度成正比。
             //
-            // Issue #901 第八轮问题5（节点部分）: 改走 update_paragraph_nodes_by_id
-            // 基于稳定 ParagraphId 的节点更新路径。当前实现委托给
-            // rebuild_text_node_from_paragraphs（全量重建视口内段落），接口按
-            // ParagraphId 设计为后续真正的增量 insert/remove/update 优化预留。
-            static_rebuild_ok = qt_text_node::update_paragraph_nodes_by_id(
+            // Issue #901 第九轮阻塞4: 直接调用 rebuild_text_node_from_paragraphs，
+            // 不再经过 update_paragraph_nodes_by_id 包装。ParagraphLineInfo 携带
+            // 稳定 ParagraphId，供后续真正的增量 insert/remove/update 优化使用。
+            static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
                 &paragraphs,
@@ -449,16 +504,10 @@ pub(crate) fn render_frame(
                 snapshot.layout_generation,
             );
 
-            // Issue #901 第八轮问题3：rebuild 成功后把本帧实际加载的段落范围
-            // 写入 LOADED_PARA_RANGE。后续纯滚动帧用此范围判断视口是否跨出
-            // 已加载集合。rebuild 失败时不更新（保留旧范围，下一帧重试）。
-            if static_rebuild_ok {
-                if let Some(range) = new_para_range {
-                    if let Ok(mut g) = LOADED_PARA_RANGE.lock() {
-                        *g = range;
-                    }
-                }
-            }
+            // Issue #901 第九轮阻塞4: rebuild 成功后记录本帧实际加载的段落范围，
+            // 通过 FrameRenderOutcome 返回给调用方保存为 per-item state。
+            // rebuild 失败时不更新（返回 None，调用方保留旧范围，下一帧重试）。
+            rebuild_new_range = if static_rebuild_ok { new_para_range } else { None };
         } else {
             // 没有与本帧一致的 prepared layout 时不能提交新的 owner 状态。
             static_rebuild_ok = false;
@@ -531,7 +580,11 @@ pub(crate) fn render_frame(
     // cursor layer 的 QSGTransformNode 统一做 translate(0, -scroll_y)。
     render_cursor_layer(root_raw, item_ptr, plan, static_text.scroll_y);
 
-    static_rebuild_ok
+    FrameRenderOutcome {
+        static_rebuild_ok,
+        effective_clip_rects,
+        new_loaded_para_range: rebuild_new_range,
+    }
 }
 
 fn render_text_animation_layer(

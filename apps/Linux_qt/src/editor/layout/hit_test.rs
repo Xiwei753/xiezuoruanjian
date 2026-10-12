@@ -82,7 +82,7 @@ pub fn caret_rect(
         .iter()
         .enumerate()
         .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(&snapshot.lines, *idx, cursor_byte, affinity)
+            line_contains_cursor_with_affinity(snapshot.lines.as_slice(), *idx, cursor_byte, affinity)
         })
         .map(|(_, line)| line)
         .or_else(|| snapshot.lines.last());
@@ -179,7 +179,7 @@ pub fn caret_rect_doc(
         .iter()
         .enumerate()
         .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(&snapshot.lines, *idx, cursor_byte, affinity)
+            line_contains_cursor_with_affinity(snapshot.lines.as_slice(), *idx, cursor_byte, affinity)
         })
         .map(|(_, line)| line)
         .or_else(|| snapshot.lines.last());

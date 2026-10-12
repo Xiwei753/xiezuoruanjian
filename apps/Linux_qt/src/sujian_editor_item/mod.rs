@@ -552,6 +552,10 @@ pub struct SujianEditorItem {
     /// Issue #901 问题3：渲染帧 id 计数器，每次 `update_paint_node` 成功渲染时递增。
     /// `PresentedScene.frame_id` 用此值，`CanvasController` 只接受更新的帧。
     next_render_frame_id: u64,
+    /// Issue #901 第九轮阻塞4: per-item 已加载段落索引范围。
+    /// 替代原全局 `static LOADED_PARA_RANGE`。每次 rebuild 成功后由
+    /// `FrameRenderOutcome::new_loaded_para_range` 更新。
+    loaded_para_range: Option<(usize, usize)>,
 }
 
 impl Default for SujianEditorItem {
@@ -697,6 +701,7 @@ impl Default for SujianEditorItem {
             prev_cursor_blink_suppressed: false,
             document_session: 1,
             next_render_frame_id: 1,
+            loaded_para_range: None,
         }
     }
 }
@@ -897,7 +902,7 @@ impl SujianEditorItem {
             let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
             let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
 
-            for line in &snapshot.lines {
+            for line in &*snapshot.lines {
                 if line.para_text.is_empty() {
                     continue;
                 }

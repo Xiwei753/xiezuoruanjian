@@ -242,6 +242,18 @@ pub(crate) struct CanvasDrawPlan {
     /// 在这些区域挖空，由动画层绘制。动画层的动态 clip 按 `progress` 更新
     /// （在 `commands` 中）。只在接管集合改变时重建静态 QSGTextNode。
     pub static_exclusion_rects: Vec<StaticExclusionRect>,
+    /// Issue #901 第九轮阻塞1：本帧是否需要请求下一帧。
+    ///
+    /// 来自 `FrameClock` 与当前 target 的未完成状态，**不**依赖本帧可见
+    /// `TextFragment` 命令的数量。当 `progress < 1.0`（过渡未完成）或
+    /// `RevisionChain` 有 pending edits 时为 `true`。覆盖以下临界帧：
+    /// - `progress = 0`：新过渡第一帧，静态层已挖空但动画层尚无可见像素。
+    /// - 纯删除临界帧：动画层收回中，可能本帧无新增 TextFragment。
+    /// - 文字恰好全被裁空但仍在过渡的帧。
+    ///
+    /// `qquickitem_impl.rs` 据此字段调度后续帧，不再用"有可见 TextFragment"
+    /// 作为继续动画的条件。
+    pub needs_next_frame: bool,
 }
 
 impl CanvasDrawPlan {
@@ -258,6 +270,7 @@ impl CanvasDrawPlan {
             target_revision: EditorRevision::initial(),
             pose_progress: 0.0,
             static_exclusion_rects: Vec::new(),
+            needs_next_frame: false,
         }
     }
 
@@ -282,6 +295,7 @@ impl CanvasDrawPlan {
             target_revision: EditorRevision::initial(),
             pose_progress: 0.0,
             static_exclusion_rects: Vec::new(),
+            needs_next_frame: false,
         }
     }
 
@@ -297,6 +311,9 @@ impl CanvasDrawPlan {
     ///
     /// Issue #901 问题3：`static_exclusion_rects` 携带动画画布接管的完整目标范围，
     /// 与 `progress` 无关，供静态层挖空。
+    ///
+    /// Issue #901 第九轮阻塞1：`needs_next_frame` 来自 `FrameClock` 与 target
+    /// 的未完成状态，不依赖可见 TextFragment 数量。
     pub(crate) fn from_commands_with_metadata(
         now_ms: f64,
         caret_sample: CanvasVec2,
@@ -307,6 +324,7 @@ impl CanvasDrawPlan {
         target_revision: EditorRevision,
         pose_progress: f64,
         static_exclusion_rects: Vec<StaticExclusionRect>,
+        needs_next_frame: bool,
     ) -> Self {
         let has_visible = commands.iter().any(DrawCommand::has_visible_area);
         Self {
@@ -320,6 +338,7 @@ impl CanvasDrawPlan {
             target_revision,
             pose_progress,
             static_exclusion_rects,
+            needs_next_frame,
         }
     }
 

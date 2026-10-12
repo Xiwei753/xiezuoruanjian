@@ -262,6 +262,11 @@ impl SceneTransition {
         let resolved = Ownership::resolve(&commands);
 
         let caret_sample = pose.caret_position;
+        // Issue #901 第九轮阻塞1：needs_next_frame 来自 FrameClock 与 target 的
+        // 未完成状态（progress < 1.0），不依赖可见 TextFragment 数量。
+        // progress=0 的新过渡第一帧、纯删除临界帧、文字全被裁空但仍在过渡的帧
+        // 都会返回 true，保证时钟继续推进。
+        let needs_next_frame = progress < 1.0 - 0.001;
         CanvasDrawPlan::from_commands_with_metadata(
             now_ms,
             caret_sample,
@@ -273,6 +278,7 @@ impl SceneTransition {
             // Issue #901 问题1：携带本次采样的真实 progress，不硬编码 1.0。
             progress,
             static_exclusion_rects,
+            needs_next_frame,
         )
     }
 
@@ -327,6 +333,8 @@ impl SceneTransition {
             // Issue #901 问题1：携带真实 progress。
             pose.progress.clamp(0.0, 1.0),
             static_exclusion_rects,
+            // Issue #901 第九轮阻塞1：无 target 时无过渡，不需要下一帧。
+            false,
         )
     }
 
@@ -380,6 +388,8 @@ impl SceneTransition {
             // Issue #901 问题1：首帧完整显示，progress=1.0。
             1.0,
             static_exclusion_rects,
+            // Issue #901 第九轮阻塞1：首帧静态，不需要下一帧。
+            false,
         )
     }
 

@@ -64,6 +64,7 @@ pub use types::{
     CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, PreparedLayoutHandle,
     PromotedLayout, VisualLine,
 };
+use std::sync::Arc;
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
 ///
@@ -196,7 +197,7 @@ impl EditorLayout {
     pub fn current_prepared_layout(&self) -> Option<PreparedLayoutHandle<'_>> {
         self.cache.as_ref().map(|c| PreparedLayoutHandle {
             generation: c.layout_generation,
-            lines: &c.lines,
+            lines: c.lines.as_slice(),
         })
     }
 
@@ -248,7 +249,7 @@ impl EditorLayout {
             width,
         );
         self.paragraph_store
-            .sync_from_visual_lines(&promoted.visual_lines, promoted.generation);
+            .sync_from_visual_lines(promoted.visual_lines.as_slice(), promoted.generation);
 
         let heights = self.paragraph_store.paragraph_heights();
         self.height_index.rebuild(heights);
@@ -259,7 +260,7 @@ impl EditorLayout {
         // 不会因为 last_snapshot=None 而退化为全篇重排。
         // promote_prepared_layout 与增量缓存共用同一身份和生命周期。
         self.last_snapshot = Some(assemble_document_visual_snapshot_from_lines(
-            &promoted.visual_lines,
+            promoted.visual_lines.as_slice(),
             text_revision,
             font_size,
             font_family,
@@ -269,14 +270,15 @@ impl EditorLayout {
             width,
             1.0,
         ));
-        // promoted visual_lines 已 move 到 last_snapshot 中，clone 一份给 cache。
-        // Issue #901 第三轮复核: 此 clone 不可避免——cache 和 last_snapshot 各需一份 visual_lines。
-        // 但只在 promote 路径（非每次普通编辑）发生，不影响常规输入性能。
-        let cache_lines = self
-            .last_snapshot
-            .as_ref()
-            .map(|s| s.visual_lines.clone())
-            .unwrap_or_default();
+        // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
+        // cache 和 last_snapshot 通过 Arc 共享同一份视觉行数据。
+        let cache_lines = Arc::clone(
+            &self
+                .last_snapshot
+                .as_ref()
+                .map(|s| &s.visual_lines)
+                .unwrap_or(&Arc::new(Vec::new())),
+        );
 
         self.cache = Some(LayoutSnapshot {
             text_revision,
@@ -416,23 +418,12 @@ impl EditorLayout {
             // 把整个 doc_snapshot move 到 last_snapshot（避免 clone paragraphs/images）。
             // 此前是 clone 整个 doc_snapshot 再 move visual_lines，多 clone 了 paragraphs。
             //
-            // Issue #901 第八轮问题5性能优化: 已验证增量路径正确接通——
-            // prev_snapshot 经 std::mem::take 取走所有权（不 clone 整个 snapshot），
-            // prepare_incremental_visual_snapshot 内部对 prev visual_lines 做 splice
-            // 原地修改后 move 返回，不产生额外 clone。此处 visual_lines.clone() 是
-            // 所有权模型的必要 clone：LayoutSnapshot.lines（Vec<VisualLine>）和
-            // last_snapshot（CanonicalDocumentVisualSnapshot.visual_lines）各需一份
-            // visual_lines 的所有权，当前类型为 Vec 无法共享。
-            //
-            // 完整方案：将 LayoutSnapshot.lines 和 CanonicalDocumentVisualSnapshot
-            // .visual_lines 改为 Arc<Vec<VisualLine>>，构造时 Arc::clone（仅增引用计数），
-            // last_snapshot 下次 splice 时 Arc::make_mut（refcount==1 原地改，否则 COW）。
-            // 本轮未采用，原因：layout_ops.rs:388 `&c.lines` 把 LayoutSnapshot.lines 作
-            // `&Vec`/`&[T]` 传给 compare_old_new_visual_lines，scene_graph_renderer.rs
-            // 亦直接索引 snapshot.lines；改 Arc<Vec> 会使这些消费方编译失败，而上述文件
-            // 由其他 Task 维护，不在本 Task 修改范围。故本轮保留此最小 clone，待跨文件
-            // 统一迁移 Arc 时消除。
-            let lines = doc_snapshot.visual_lines.clone();
+            // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
+            // LayoutSnapshot.lines 和 last_snapshot.visual_lines 通过 Arc 共享同一份数据。
+            // 下次 snapshot() 时 self.cache=None 释放 Arc 引用，mem::take 取走 last_snapshot
+            // 的 Arc（refcount==1），prepare_incremental_visual_snapshot 内部 Arc::make_mut
+            // 原地修改，不产生 Vec clone。
+            let lines = Arc::clone(&doc_snapshot.visual_lines);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -482,9 +473,8 @@ impl EditorLayout {
 
             // Issue #901 第二轮复核: 保存全篇重排结果供下次增量排版复用。
             // Issue #901 第三轮复核: 只 clone visual_lines，move 整个 doc_snapshot 到 last_snapshot。
-            // Issue #901 第五轮阻塞5: 同增量路径，visual_lines.clone() 是所有权必要 clone，
-            // 详见增量路径注释。未来可用 Arc<Vec<VisualLine>> 共享所有权消除。
-            let lines = doc_snapshot.visual_lines.clone();
+            // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
+            let lines = Arc::clone(&doc_snapshot.visual_lines);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
