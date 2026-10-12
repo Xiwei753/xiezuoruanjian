@@ -437,18 +437,20 @@ pub fn assemble_document_visual_snapshot_from_lines(
             continue;
         }
 
-        // 按 para_start 找到或创建对应 CanonicalParagraphSnapshot。
-        // paragraphs 顺序按首次出现的 para_start，与 prepare_document_visual_snapshot_impl
+        // 按 cache_slot 找到或创建对应 CanonicalParagraphSnapshot。
+        // Issue #901 第十七轮问题3: 用 cache_slot（段落编号）作段落身份，
+        // 不用 para_start（可能是全文 byte offset），与主路径语义一致。
+        // paragraphs 顺序按首次出现的 cache_slot，与 prepare_document_visual_snapshot_impl
         // 按文档顺序遍历段落一致。
         let para_idx = if let Some(idx) = paragraphs
             .iter()
-            .position(|p| p.paragraph_document_byte_start == line.para_start)
+            .position(|p| p.paragraph_document_byte_start == line.cache_slot as usize)
         {
             idx
         } else {
             paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: line.para_text.clone(),
-                paragraph_document_byte_start: line.para_start,
+                paragraph_document_byte_start: line.cache_slot as usize,
                 lines: Vec::new(),
                 // Issue #901 第十四轮问题1: 段内相对存储 — index map 用 0 构建。
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
@@ -602,26 +604,30 @@ fn prev_snapshot_text_matches(prev: &CanonicalDocumentVisualSnapshot, text: &str
     reconstructed == text
 }
 
-/// Issue #901 第十轮问题5: 用二分查找在已排序的 visual_lines 中定位
-/// `para_start` 对应的行范围，O(log n)，代替 `build_para_start_to_line_range`
-/// 的 O(all_lines) HashMap 建图。
+/// Issue #901 第十七轮问题1: 用二分查找在已排序的 visual_lines 中定位
+/// `cache_slot`（段落编号/slot）对应的行范围，O(log n)。
 ///
-/// `visual_lines` 按 `para_start` 非降序排列（段落顺序 = 行顺序），
-/// 同一段落的所有行 `para_start` 相同且连续。
-fn find_line_range_by_para_start(
+/// `visual_lines` 按 `cache_slot` 非降序排列（段落顺序 = 行顺序），
+/// 同一段落的所有行 `cache_slot` 相同且连续。
+///
+/// 与 `find_line_range_by_para_start` 的区别：用 `cache_slot`（段落编号）
+/// 而非 `para_start`（全文 byte offset）做匹配。`CanonicalParagraphSnapshot
+/// .paragraph_document_byte_start` 现已是段落编号（slot index）语义，
+/// 不再是全文 byte offset，因此主路径应改用本函数。
+fn find_line_range_by_cache_slot(
     visual_lines: &[VisualLine],
-    para_start: usize,
+    cache_slot: i32,
 ) -> Option<(usize, usize)> {
     if visual_lines.is_empty() {
         return None;
     }
-    // 二分查找第一个 para_start >= target 的行
-    let start = visual_lines.partition_point(|vl| vl.para_start < para_start);
-    if start >= visual_lines.len() || visual_lines[start].para_start != para_start {
+    // 二分查找第一个 cache_slot >= target 的行
+    let start = visual_lines.partition_point(|vl| vl.cache_slot < cache_slot);
+    if start >= visual_lines.len() || visual_lines[start].cache_slot != cache_slot {
         return None;
     }
-    // 二分查找段落后第一个 para_start != target 的行
-    let end = visual_lines[start..].partition_point(|vl| vl.para_start == para_start) + start;
+    // 二分查找段落后第一个 cache_slot != target 的行
+    let end = visual_lines[start..].partition_point(|vl| vl.cache_slot == cache_slot) + start;
     Some((start, end))
 }
 
@@ -877,17 +883,20 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let prev_vls_len = prev.visual_lines.len();
     let mut vl_start_idx: usize = prev_vls_len;
     let mut vl_end_idx: usize = prev_vls_len;
+    // Issue #901 第十七轮问题1: 改用 find_line_range_by_cache_slot 按 cache_slot
+    // （段落编号/slot）查找，而非 find_line_range_by_para_start 按 para_start
+    // （全文 byte offset）查找。prev.paragraphs[*].paragraph_document_byte_start
+    // 现已是段落编号（slot index）语义，与 visual_lines[i].cache_slot 同语义。
     if old_splice_start < prev.paragraphs.len() {
-        let new_para_start = prev.paragraphs[old_splice_start].paragraph_document_byte_start;
-        // Issue #901 第十三轮问题1: 用 find_line_range_by_para_start 一次匹配。
-        // prev.visual_lines 全部是物化的绝对坐标，para_start 是正确值，不会误匹配。
-        if let Some((s, _)) = find_line_range_by_para_start(&prev.visual_lines, new_para_start) {
+        let new_para_slot =
+            prev.paragraphs[old_splice_start].paragraph_document_byte_start as i32;
+        if let Some((s, _)) = find_line_range_by_cache_slot(&prev.visual_lines, new_para_slot) {
             vl_start_idx = s;
         }
     }
     if old_splice_end < prev.paragraphs.len() {
-        let new_para_start = prev.paragraphs[old_splice_end].paragraph_document_byte_start;
-        if let Some((s, _)) = find_line_range_by_para_start(&prev.visual_lines, new_para_start) {
+        let new_para_slot = prev.paragraphs[old_splice_end].paragraph_document_byte_start as i32;
+        if let Some((s, _)) = find_line_range_by_cache_slot(&prev.visual_lines, new_para_slot) {
             vl_end_idx = s;
         }
     }
@@ -1146,14 +1155,19 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 旧 cache_slot 会查错段。此处更新后缀行 cache_slot 为新段落索引。
     // 同时更新后缀 canonical paragraph 的 paragraph_document_byte_start
     //（现被用作段落序号）为新段落序号。
+    // Issue #901 第十七轮问题1: 同步更新后缀行 para_start，保持与 cache_slot 一致。
+    // 主路径已改用 find_line_range_by_cache_slot 按 cache_slot 查找，但 para_start
+    // 仍需保持与 cache_slot 同步（其他代码可能仍在用 para_start），否则下一笔
+    // 编辑的坐标匹配会出错。
     let old_splice_para_count = splice_para_end - splice_para_start;
     let new_splice_para_count = new_layout_end - new_layout_start;
     let para_delta: i64 = new_splice_para_count as i64 - old_splice_para_count as i64;
     if para_delta != 0 {
-        // 更新后缀行的 cache_slot：加上段落数变化差量
+        // 更新后缀行的 cache_slot 和 para_start：加上段落数变化差量
         let suffix_line_start = vl_start_idx + new_affected_line_count;
         for vl in &mut visual_lines[suffix_line_start..] {
             vl.cache_slot = (vl.cache_slot as i64 + para_delta) as i32;
+            vl.para_start = (vl.para_start as i64 + para_delta) as usize;
         }
         // 更新后缀 canonical paragraph 的 paragraph_document_byte_start（段落序号）
         let suffix_para_start = splice_para_start + new_splice_para_count;
@@ -1456,11 +1470,13 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                     None
                 };
                 let prev_lines: Vec<VisualLine> = if let Some(pidx) = prev_para_idx {
-                    let prev_p = &prev.paragraphs[pidx];
-                    let prev_para_byte_start = prev_p.paragraph_document_byte_start;
+                    // Issue #901 第十七轮问题1: 用 cache_slot（段落编号）匹配，
+                    // 不用 para_start（全文 byte offset），与 paragraph_document_byte_start
+                    // 现已是段落编号语义一致。
+                    let prev_para_slot = prev.paragraphs[pidx].paragraph_document_byte_start;
                     prev.visual_lines
                         .iter()
-                        .filter(|l| l.para_start == prev_para_byte_start)
+                        .filter(|l| l.cache_slot as usize == prev_para_slot)
                         .cloned()
                         .collect()
                 } else {
@@ -1470,7 +1486,21 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 if !prev_lines.is_empty() {
                     if let Some(first_prev) = prev_lines.first() {
                         let y_offset = y - first_prev.y;
-                        let byte_offset = paragraph_start as i64 - first_prev.para_start as i64;
+                        // Issue #901 第十七轮问题1: byte_offset 用于更新复用行的
+                        // para_start/byte_start/byte_end（全文 byte offset），
+                        // 需要全文 byte offset 差量。用 paragraph_offset_index 获取
+                        // prev 该段的全文 byte start（权威来源），不用 first_prev.para_start
+                        //（可能是段落编号而非全文 byte offset）。
+                        // prev_lines 非空意味着 prev_para_idx 为 Some（prev_lines 只在
+                        // prev_para_idx=Some 分支才可能非空），用 if let 安全解构。
+                        let prev_para_byte_start_actual = match prev_para_idx {
+                            Some(pidx) if !prev.paragraph_offset_index.is_empty() => {
+                                prev.paragraph_offset_index.paragraph_byte_start(pidx)
+                            }
+                            _ => first_prev.para_start,
+                        };
+                        let byte_offset =
+                            paragraph_start as i64 - prev_para_byte_start_actual as i64;
                         let qchar_offset = paragraph_qchar_start as i64
                             - first_prev.qchar_start as i64
                             + first_prev.para_qchar_start as i64;
@@ -1501,10 +1531,22 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
                 if let Some(pidx) = prev_para_idx {
                     let mut para = prev.paragraphs[pidx].clone();
+                    // Issue #901 第十七轮问题1: byte_offset 用于更新 lines/clusters
+                    // 的 document_byte_start/end（全文 byte offset），需要全文 byte offset
+                    // 差量。用 paragraph_offset_index 获取 prev 该段的全文 byte start。
+                    // paragraph_document_byte_start 现是段落编号，不能直接用于 byte offset 计算。
+                    let prev_para_byte_start_actual =
+                        if !prev.paragraph_offset_index.is_empty() {
+                            prev.paragraph_offset_index.paragraph_byte_start(pidx)
+                        } else {
+                            paragraph_start
+                        };
                     let byte_offset =
-                        paragraph_start as i64 - para.paragraph_document_byte_start as i64;
+                        paragraph_start as i64 - prev_para_byte_start_actual as i64;
+                    // Issue #901 第十七轮问题1: paragraph_document_byte_start 现是段落编号，
+                    // 直接赋值 current_para_idx，不用 paragraph_start（全文 byte offset）。
+                    para.paragraph_document_byte_start = current_para_idx;
                     if byte_offset != 0 {
-                        para.paragraph_document_byte_start = paragraph_start;
                         para.index_map =
                             crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                                 &para.paragraph_text,
@@ -1527,7 +1569,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 } else {
                     paragraphs.push(CanonicalParagraphSnapshot {
                         paragraph_text: paragraph_text.to_string(),
-                        paragraph_document_byte_start: paragraph_start,
+                        // Issue #901 第十七轮问题1: paragraph_document_byte_start
+                        // 现是段落编号（slot），不是全文 byte offset。
+                        paragraph_document_byte_start: current_para_idx,
                         lines: Vec::new(),
                         index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                             paragraph_text,
@@ -1691,7 +1735,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
             paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
-                paragraph_document_byte_start: paragraph_start,
+                // Issue #901 第十七轮问题1: paragraph_document_byte_start
+                // 现是段落编号（slot），不是全文 byte offset。
+                paragraph_document_byte_start: current_para_idx,
                 lines: Vec::new(),
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                     "",

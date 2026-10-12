@@ -295,21 +295,23 @@ impl SujianEditorItem {
                 &text_color,
             );
 
-            // 构建 (para_start, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
+            // 构建 (paragraph_slot, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
+            // Issue #901 第十七轮问题3: 用 cache_slot（段落编号）作 key，
+            // 与 AnimationRasterVisual.paragraph_slot 同语义。
             use std::collections::HashMap;
             let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
                 HashMap::with_capacity(affected_line_indices.len());
             for &idx in &affected_line_indices {
                 let vl = &resolved_lines[idx];
                 para_qtextline_to_byte_start
-                    .insert((vl.para_start, vl.qtextline_idx), vl.byte_start);
+                    .insert((vl.cache_slot as usize, vl.qtextline_idx), vl.byte_start);
             }
 
             // 把 QImage 填充到对应的 PreparedLineSnapshot。
             for anim_line in anim_visuals {
                 if let Some(image) = anim_line.image {
                     if let Some(&byte_start) = para_qtextline_to_byte_start
-                        .get(&(anim_line.paragraph_document_byte_start, anim_line.qtextline_idx))
+                        .get(&(anim_line.paragraph_slot, anim_line.qtextline_idx))
                     {
                         if let Some(prep_line) =
                             snapshot.line_snapshots.iter_mut().find(|pl| pl.byte_start == byte_start)

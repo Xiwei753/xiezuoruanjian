@@ -11,16 +11,14 @@ use super::*;
 ///
 /// Issue #810 评论 5933167246 问题1: 本函数现在是 **raster-only** 提取，
 /// 返回 `Vec<AnimationRasterVisual>`，只携带 QImage 和稳定行身份
-///（paragraph_document_byte_start + qtextline_idx），**不携带 cluster**。
+///（paragraph_slot + qtextline_idx），**不携带 cluster**。
 ///
 /// cluster 几何由基础 canonical 排版直接产出（engine.rs 中 cluster 提取始终执行），
 /// 本函数不再承担"给 canonical 补 cluster"的职责。
 /// `inject_animation_visuals_into_snapshot` 也只注入 image，不再覆盖 cluster。
 ///
-/// Issue #658 评论 5625515748 问题 1: 移除统一的 `paragraph_text` / `paragraph_document_byte_start`
-/// 参数，改为从每个 VisualLine 自身的 `para_text` / `para_start` 取段落级文本与文档起点。
-/// qchar_start/qchar_end 来自各段落自己的 QTextLayout，是段落内 QChar offset，
-/// 必须用对应段落的 para_text 做 QChar→byte 转换，再加该段落的 para_start 得到文档级 byte range。
+/// Issue #901 第十七轮问题3: 用 `line.cache_slot`（段落编号）作为 `paragraph_slot`，
+/// 不再用 `line.para_start`（全文 byte offset）。inject 时直接索引 paragraphs[slot]。
 /// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
 pub fn prepare_animation_visuals_from_layout(
     handle: &super::super::types::PreparedLayoutHandle<'_>,
@@ -39,10 +37,9 @@ pub fn prepare_animation_visuals_from_layout(
         let slot = line.cache_slot;
         let qtextline_idx = line.qtextline_idx;
         let gen = handle.generation;
-        // Issue #658 评论 5625515748 问题 1: 每行用自己的 para_text/para_start 做
-        // QChar→byte 转换。qchar_start/qchar_end 是段落内 QChar offset，
-        // 必须对应该段落的 para_text，再加 para_start 得到文档级 byte offset。
-        let para_start = line.para_start;
+        // Issue #901 第十七轮问题3: paragraph_slot 用 cache_slot（段落编号），
+        // 不用 para_start（全文 byte offset）。
+        let paragraph_slot = line.cache_slot as usize;
 
         // SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
         let success = cpp::cpp!(unsafe [
@@ -87,7 +84,7 @@ pub fn prepare_animation_visuals_from_layout(
 
         snapshots.push(super::AnimationRasterVisual {
             image,
-            paragraph_document_byte_start: para_start,
+            paragraph_slot,
             qtextline_idx,
         });
     }
@@ -263,25 +260,24 @@ pub fn prepare_incremental_visual_snapshot(
 /// doc_snapshot 在调用本函数前已自带完整 clusters。本函数只把可延迟的 QImage/纹理
 /// 注入到对应行，使动画纹理可用。
 ///
-/// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_document_byte_start, qtextline_idx)
+/// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_slot, qtextline_idx)
 /// 稳定行身份匹配目标行，不再只按 document_byte_start 猜。返回成功注入的行数，
 /// 找不到目标行时通过 debug_warn 明确报告，不静默跳过，让调用方知道注入失败。
+///
+/// Issue #901 第十七轮问题3: 用 `anim_line.paragraph_slot` 直接索引
+/// `doc_snapshot.paragraphs`，不做遍历比较。paragraph_slot 是段落编号（cache_slot），
+/// 与 paragraphs 数组索引一一对应。
 pub fn inject_animation_visuals_into_snapshot(
     doc_snapshot: &mut CanonicalDocumentVisualSnapshot,
     animation_visuals: Vec<super::AnimationRasterVisual>,
 ) -> usize {
     let mut injected_count: usize = 0;
     for anim_line in animation_visuals {
-        // Issue #785 评论 5857873894 修改 2b: 优先按稳定行身份
-        // (paragraph_document_byte_start, qtextline_idx) 精确匹配。
-        // 这是 prepare_animation_visuals_from_layout 提取时记录的段落起点 + 段落内
-        // 视觉行索引，与 doc_snapshot.paragraphs[].lines[].qtextline_idx 同源，
-        // 不会因 document_byte_start 在 reflow 后漂移而误匹配。
+        // Issue #901 第十七轮问题3: 用 paragraph_slot 直接索引 paragraphs，
+        // 不再遍历比较 paragraph_document_byte_start。
+        // paragraph_slot 是段落编号（cache_slot），与 paragraphs 数组索引一一对应。
         let mut matched = false;
-        for para in &mut doc_snapshot.paragraphs {
-            if para.paragraph_document_byte_start != anim_line.paragraph_document_byte_start {
-                continue;
-            }
+        if let Some(para) = doc_snapshot.paragraphs.get_mut(anim_line.paragraph_slot) {
             // 段落匹配，按 qtextline_idx 精确匹配行。
             // qtextline_idx 是段落内视觉行索引，与 para.lines 的索引一致。
             let line_idx = anim_line.qtextline_idx as usize;
@@ -292,16 +288,15 @@ pub fn inject_animation_visuals_into_snapshot(
                 injected_count += 1;
                 matched = true;
             }
-            break;
         }
         if !matched {
             crate::backend::app_backend::debug_warn_static(
                 "canonical_snapshot",
                 "inject_animation_visuals_line_not_found",
                 &format!(
-                    "paragraph_document_byte_start={} qtextline_idx={} — \
+                    "paragraph_slot={} qtextline_idx={} — \
                      target line not found in doc_snapshot, animation raster visual dropped",
-                    anim_line.paragraph_document_byte_start, anim_line.qtextline_idx,
+                    anim_line.paragraph_slot, anim_line.qtextline_idx,
                 ),
             );
         }

@@ -235,24 +235,26 @@ impl LineSnapshotBuilder {
         let last_para_idx = height_index.y_to_paragraph(viewport_bottom);
 
         // 在 visual_lines 中用二分查找定位这些段落的行范围
-        // visual_lines 按段落顺序排列，同一段落的所有行连续且 para_start 相同
+        // visual_lines 按段落顺序排列，同一段落的所有行连续且 cache_slot 相同
+        // Issue #901 第十七轮问题1: paragraph_document_byte_start 现是段落编号（slot），
+        // 用 cache_slot 比较而非 para_start（可能是全文 byte offset）。
         let start_idx = if first_para_idx < doc_snapshot.paragraphs.len() {
-            let target_para_start =
+            let target_para_slot =
                 doc_snapshot.paragraphs[first_para_idx].paragraph_document_byte_start;
             doc_snapshot
                 .visual_lines
-                .partition_point(|vl| vl.para_start < target_para_start)
+                .partition_point(|vl| (vl.cache_slot as usize) < target_para_slot)
         } else {
             doc_snapshot.visual_lines.len()
         };
 
         // 找视口底部段落之后第一个行的索引
         let end_idx = if last_para_idx + 1 < doc_snapshot.paragraphs.len() {
-            let target_para_start =
+            let target_para_slot =
                 doc_snapshot.paragraphs[last_para_idx + 1].paragraph_document_byte_start;
             doc_snapshot
                 .visual_lines
-                .partition_point(|vl| vl.para_start < target_para_start)
+                .partition_point(|vl| (vl.cache_slot as usize) < target_para_slot)
         } else {
             doc_snapshot.visual_lines.len()
         };

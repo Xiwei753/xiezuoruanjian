@@ -1260,7 +1260,7 @@ pub(crate) struct AnimationVisualsInjectStatus {
     pub has_unavailable_lines: bool,
     /// Issue #808 评论 5917296533 问题1: 具体失败的行集合。
     ///
-    /// 返回每个失败 inserted visible line 的 `visual_line_id / para_start / qtextline_idx`，
+    /// 返回每个失败 inserted visible line 的 `visual_line_id / paragraph_slot / qtextline_idx`，
     /// 让上游可以精确重取失败行，而不是只拿到一个计数。
     pub failed_lines: Vec<AnimationVisualsFailedLine>,
 }
@@ -1269,10 +1269,13 @@ pub(crate) struct AnimationVisualsInjectStatus {
 ///
 /// 上游据此用当前 `new_generation` + 准确 line id 再调用一次
 /// `prepare_animation_visuals_from_layout`，只重取失败行。
+///
+/// Issue #901 第十七轮问题3: `paragraph_slot` 是段落编号（cache_slot），
+/// 不再用 `para_start`（全文 byte offset）。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimationVisualsFailedLine {
     pub visual_line_idx: usize,
-    pub para_start: usize,
+    pub paragraph_slot: usize,
     pub qtextline_idx: i32,
     pub byte_start: usize,
     pub byte_end: usize,
@@ -1316,7 +1319,7 @@ fn inject_new_animation_visuals_with_diagnostics(
     // Issue #808 评论 5918236360 问题1: 收集 prepare 成功且 clusters 非空的行身份，
     // inject 后用于检测 inject miss（prepare 成功但 inject 未命中目标行）。
     let mut prepared_ok_lines: Vec<(usize, usize, i32, usize, usize)> = Vec::new();
-    // (visual_line_idx, para_start, qtextline_idx, byte_start, byte_end)
+    // (visual_line_idx, paragraph_slot, qtextline_idx, byte_start, byte_end)
 
     // 修改 3: 在 prepare 返回后、inject 之前，针对 inserted_range 检查
     // new_line_snapshots 中是否有对应行、clusters 是否非空。
@@ -1379,8 +1382,10 @@ fn inject_new_animation_visuals_with_diagnostics(
                 }
                 checked_line_count += 1;
                 // 在 new_line_snapshots 中找该行（按稳定行身份）
+                // Issue #901 第十七轮问题3: 用 paragraph_slot（cache_slot）匹配，
+                // 不用 paragraph_document_byte_start / para_start。
                 let snap = new_line_snapshots.iter().find(|s| {
-                    s.paragraph_document_byte_start == vl.para_start
+                    s.paragraph_slot == vl.cache_slot as usize
                         && s.qtextline_idx == vl.qtextline_idx
                 });
                 match snap {
@@ -1388,7 +1393,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                         prepare_miss_count += 1;
                         failed_lines.push(AnimationVisualsFailedLine {
                             visual_line_idx: *i,
-                            para_start: vl.para_start,
+                            paragraph_slot: vl.cache_slot as usize,
                             qtextline_idx: vl.qtextline_idx,
                             byte_start: vl.byte_start,
                             byte_end: vl.byte_end,
@@ -1399,14 +1404,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                             "prepare_animation_visuals_missing_for_inserted_line",
                             &format!(
                                 "inserted_range=[{}..{}) visual_line_idx={} \
-                                 para_start={} qtextline_idx={} byte_start={} \
+                                 paragraph_slot={} qtextline_idx={} byte_start={} \
                                  byte_end={} — prepare_animation_visuals_from_layout \
                                  did not return a snapshot for this inserted line, \
                                  animation visuals extraction missed this line",
                                 ins_start,
                                 ins_end,
                                 i,
-                                vl.para_start,
+                                vl.cache_slot as usize,
                                 vl.qtextline_idx,
                                 vl.byte_start,
                                 vl.byte_end,
@@ -1419,14 +1424,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                         // 直接读回 new_doc_snapshot 中该行的 clusters 判断是否非空。
                         let has_clusters = canonical_line_has_clusters(
                             new_doc_snapshot,
-                            vl.para_start,
+                            vl.cache_slot as usize,
                             vl.qtextline_idx,
                         );
                         if !has_clusters {
                             clusters_empty_count += 1;
                             failed_lines.push(AnimationVisualsFailedLine {
                                 visual_line_idx: *i,
-                                para_start: vl.para_start,
+                                paragraph_slot: vl.cache_slot as usize,
                                 qtextline_idx: vl.qtextline_idx,
                                 byte_start: vl.byte_start,
                                 byte_end: vl.byte_end,
@@ -1437,14 +1442,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                                 "prepare_animation_visuals_clusters_empty_for_inserted_line",
                                 &format!(
                                     "inserted_range=[{}..{}) visual_line_idx={} \
-                                     para_start={} qtextline_idx={} byte_start={} \
+                                     paragraph_slot={} qtextline_idx={} byte_start={} \
                                      byte_end={} — canonical line clusters empty, \
                                      animation visuals incomplete, \
                                      this line's InsertReveal will be skipped",
                                     ins_start,
                                     ins_end,
                                     i,
-                                    vl.para_start,
+                                    vl.cache_slot as usize,
                                     vl.qtextline_idx,
                                     vl.byte_start,
                                     vl.byte_end,
@@ -1456,7 +1461,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                             // clusters 非空的行身份，inject 后用于检测 inject miss。
                             prepared_ok_lines.push((
                                 *i,
-                                vl.para_start,
+                                vl.cache_slot as usize,
                                 vl.qtextline_idx,
                                 vl.byte_start,
                                 vl.byte_end,
@@ -1489,15 +1494,15 @@ fn inject_new_animation_visuals_with_diagnostics(
     // 如果仍为空，说明 inject 未命中目标行（稳定行身份在目标 snapshot 中找不到匹配），
     // 把该行加入 failed_lines，让上游做第二次精确重取。
     let mut inject_miss_count = 0usize;
-    for (vidx, para_start, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
+    for (vidx, paragraph_slot, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
         // Issue #808 评论 5918236360 问题1: 直接读回 canonical 行的真实 clusters，
         // 不用 inject 计数推断（inject 计数只说明行身份被命中，不说明 clusters 非空）。
-        let injected = canonical_line_has_clusters(new_doc_snapshot, *para_start, *qtextline_idx);
+        let injected = canonical_line_has_clusters(new_doc_snapshot, *paragraph_slot, *qtextline_idx);
         if !injected {
             inject_miss_count += 1;
             failed_lines.push(AnimationVisualsFailedLine {
                 visual_line_idx: *vidx,
-                para_start: *para_start,
+                paragraph_slot: *paragraph_slot,
                 qtextline_idx: *qtextline_idx,
                 byte_start: *byte_start,
                 byte_end: *byte_end,
@@ -1507,12 +1512,12 @@ fn inject_new_animation_visuals_with_diagnostics(
                 "pipeline",
                 "inject_animation_visuals_inject_miss_for_inserted_line",
                 &format!(
-                    "visual_line_idx={} para_start={} qtextline_idx={} \
+                    "visual_line_idx={} paragraph_slot={} qtextline_idx={} \
                      byte_start={} byte_end={} — prepare succeeded with non-empty \
                      clusters but inject_animation_visuals_into_snapshot did not \
                      inject this line (stable line identity not found in target \
                      snapshot), animation visuals injection missed this line",
-                    vidx, para_start, qtextline_idx, byte_start, byte_end,
+                    vidx, paragraph_slot, qtextline_idx, byte_start, byte_end,
                 ),
             );
         }
@@ -1593,21 +1598,18 @@ fn animation_visuals_status_summary(status: &AnimationVisualsInjectStatus) -> St
 ///（`inject_animation_visuals_into_snapshot` 命中目标行即计数，clusters 为空时不清屏也不报错）。
 /// 第一次 prepare/inject 的 inject miss 判定和第二次重取后的再次验证都必须用这个
 /// helper 直接读回 canonical line 的真实 clusters，而不是拿注入计数代替。
+///
+/// Issue #901 第十七轮问题3: 用 `paragraph_slot` 直接索引 `doc_snapshot.paragraphs`，
+/// 不再遍历比较 `paragraph_document_byte_start`。
 fn canonical_line_has_clusters(
     doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
-    para_start: usize,
+    paragraph_slot: usize,
     qtextline_idx: i32,
 ) -> bool {
     doc_snapshot
         .paragraphs
-        .iter()
-        .find_map(|para| {
-            if para.paragraph_document_byte_start == para_start {
-                para.lines.get(qtextline_idx as usize)
-            } else {
-                None
-            }
-        })
+        .get(paragraph_slot)
+        .and_then(|para| para.lines.get(qtextline_idx as usize))
         .map(|line| !line.clusters.is_empty())
         .unwrap_or(false)
 }
@@ -1617,7 +1619,7 @@ fn canonical_line_has_clusters(
 /// 流程（对应评论要求 1-6）：
 /// 1. 第一次 prepare/inject 后，`status.failed_lines` 已确定每个 inserted visible line
 ///    的最终注入结果（prepare miss / clusters empty / inject miss 都带准确
-///    `visual_line_idx / para_start / qtextline_idx`）；
+///    `visual_line_idx / paragraph_slot / qtextline_idx`）；
 /// 2. 用当前 `new_generation` 对失败行的 `visual_line_idx` 再做一次
 ///    `prepare_animation_visuals_from_layout`；
 /// 3. 只 inject 这些重取行；
@@ -1662,7 +1664,7 @@ fn retry_failed_animation_visuals(
         .failed_lines
         .iter()
         .filter(|fl| {
-            !canonical_line_has_clusters(new_doc_snapshot, fl.para_start, fl.qtextline_idx)
+            !canonical_line_has_clusters(new_doc_snapshot, fl.paragraph_slot, fl.qtextline_idx)
         })
         .collect();
     if still_unavailable.is_empty() {
@@ -1683,7 +1685,7 @@ fn retry_failed_animation_visuals(
             format!(
                 "vidx={} para={} qtline={} bytes=[{}..{}) reason={:?}",
                 fl.visual_line_idx,
-                fl.para_start,
+                fl.paragraph_slot,
                 fl.qtextline_idx,
                 fl.byte_start,
                 fl.byte_end,

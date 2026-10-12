@@ -75,12 +75,14 @@ pub struct CanonicalParagraphSnapshot {
 /// `prepare_animation_visuals_from_layout` 只负责提取可延迟的 QImage/纹理，
 /// `inject_animation_visuals_into_snapshot` 只注入 image，不再覆盖 cluster。
 ///
-/// `paragraph_document_byte_start` + `qtextline_idx` 是稳定行身份，用于 inject 时
-/// 精确匹配目标行（与 `CanonicalLineSnapshot` 同源）。
+/// Issue #901 第十七轮问题3: `paragraph_slot` 是段落编号（cache_slot），
+/// 用于 inject 时直接索引 `doc_snapshot.paragraphs[paragraph_slot]` 精确匹配目标行。
+/// 不再用 `paragraph_document_byte_start`（现已是段落编号语义，但字段名易误用为全文 byte）。
+/// `paragraph_slot` + `qtextline_idx` 是稳定行身份。
 #[derive(Clone)]
 pub struct AnimationRasterVisual {
     pub image: Option<qmetaobject::QImage>,
-    pub paragraph_document_byte_start: usize,
+    pub paragraph_slot: usize,
     pub qtextline_idx: i32,
 }
 
@@ -432,14 +434,26 @@ impl CanonicalDocumentVisualSnapshot {
             return line.x;
         }
 
-        let cursor_in_para = cursor_byte.saturating_sub(line.para_start);
-        let para = match self.paragraphs.iter().find(|p| {
-            p.paragraph_document_byte_start <= cursor_byte
-                && cursor_byte <= p.paragraph_document_byte_start + p.paragraph_text.len()
-        }) {
+        // Issue #901 第十七轮问题2: 用 line.cache_slot 直接索引 paragraphs，
+        // 不再用 paragraph_document_byte_start 与全文 byte 交叉比较。
+        // paragraph_document_byte_start 现已是段落编号（slot），不是全文 byte offset，
+        // 旧的 `p.paragraph_document_byte_start <= cursor_byte` 比较会因单位不匹配
+        // 导致第二段以后找不到段落，函数直接 return line.x，造成光标定位行首。
+        let slot = line.cache_slot as usize;
+        let para = match self.paragraphs.get(slot) {
             Some(p) => p,
             None => return line.x,
         };
+
+        // 用 paragraph_offset_index 计算段首 byte offset（全文坐标）。
+        // line 是物化后的视觉行，line.para_start 也是段首全文 byte offset，
+        // 但优先用 paragraph_offset_index 作为权威来源；index 为空时回退到 line.para_start。
+        let para_byte_start = if !self.paragraph_offset_index.is_empty() {
+            self.paragraph_offset_index.paragraph_byte_start(slot)
+        } else {
+            line.para_start
+        };
+        let cursor_in_para = cursor_byte.saturating_sub(para_byte_start);
 
         let cursor_qchar =
             super::engine::byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);

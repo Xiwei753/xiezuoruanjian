@@ -155,13 +155,14 @@ fn test_visual_line(
 
 /// Issue #810 评论 5932233052 问题1: 构造 AnimationRasterVisual（raster-only，
 /// 不携带 cluster）。
+/// Issue #901 第十七轮问题3: 字段改为 paragraph_slot（段落编号）。
 fn test_raster_visual(
     para_start: usize,
     qtextline_idx: i32,
 ) -> crate::editor::layout::AnimationRasterVisual {
     crate::editor::layout::AnimationRasterVisual {
         image: None,
-        paragraph_document_byte_start: para_start,
+        paragraph_slot: para_start,
         qtextline_idx,
     }
 }
@@ -215,7 +216,7 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
     );
     let fl = &status.failed_lines[0];
     assert_eq!(fl.visual_line_idx, 0);
-    assert_eq!(fl.para_start, 0);
+    assert_eq!(fl.paragraph_slot, 0);
     assert_eq!(fl.qtextline_idx, 7);
     assert_eq!(fl.reason, AnimationVisualsFailedReason::ClustersEmpty);
     assert!(
@@ -243,7 +244,7 @@ fn issue808_comment5918236360_prepare_miss_line_is_collected_for_retry() {
     assert_eq!(status.failed_lines.len(), 1);
     let fl = &status.failed_lines[0];
     assert_eq!(fl.visual_line_idx, 0);
-    assert_eq!(fl.para_start, 0);
+    assert_eq!(fl.paragraph_slot, 0);
     assert_eq!(fl.qtextline_idx, 0);
     assert_eq!(fl.byte_start, 0);
     assert_eq!(fl.byte_end, 2);
