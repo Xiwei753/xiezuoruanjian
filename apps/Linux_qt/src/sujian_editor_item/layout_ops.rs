@@ -116,11 +116,17 @@ impl SujianEditorItem {
         let revision = LayoutRevision::next();
 
         // 4. 构建 EditorLayoutSnapshot（此时 image 可能为 None，下面填充）。
-        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+        // Issue #901 第六轮阻塞5: 改用 build_from_canonical_document_with_height_index，
+        // 通过 ParagraphHeightIndex O(log n) 定位视口内段落范围，只遍历视口内的行
+        // 构建 cluster，不扫描全章 visual_lines。height_index 与 doc_snapshot 都是不可变
+        // 借用 self.editor_layout，可安全共存。
+        let height_index = self.editor_layout.height_index();
+        let mut snapshot = match super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document_with_height_index(
             revision,
             doc_snapshot,
             scroll_y,
             viewport_h,
+            height_index,
         ) {
             Ok(s) => s,
             Err(err) => return Err(err),

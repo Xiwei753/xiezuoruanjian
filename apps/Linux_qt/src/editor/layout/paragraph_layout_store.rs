@@ -693,6 +693,19 @@ impl ParagraphLayoutStore {
     /// 3. `old_splice = [prefix, old_count - suffix)`
     ///    `new_layout = [prefix, new_count - suffix)`
     ///
+    /// # 与 ParagraphId / Core patch 的关系
+    ///
+    /// 本方法按"去掉 `'\n'` 后文本相同即视为同一段"判断公共段，这与
+    /// [`rebuild_from_text`] 的 ParagraphId 保留策略（内容相同保留原 Id）
+    /// 语义一致：内容相同的段复用 prev 排版，仅 hard_break 可能因前后有无
+    /// `'\n'` 而变化（由 full.rs 增量路径同步重建）。
+    ///
+    /// 当前 Core 仅提供 `affected_byte_start/end`（字节级 patch），不提供段落级
+    /// 结构化 patch（哪些段被拆/合/改）。在 Core 提供段落级 patch 前，文本比较
+    /// 是当前可得信息下的合理近似。未来若 Core 暴露段落级结构变更，可改为直接
+    /// 用稳定 ParagraphId 匹配新旧段，省去全段文本扫描并消除"中间段内容恰好
+    /// 与前后段相同"时的误判可能。
+    ///
     /// # 复杂度
     ///
     /// O(n)（n 为段落数），但只在段落数变化或内容变化时调用，

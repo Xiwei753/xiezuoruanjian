@@ -68,6 +68,14 @@ impl SujianEditorItem {
         // document can become the source for this chapter's canonical layout.
         self.reset_document_visual_state();
         let _ = self.pipeline.load_text(normalized, 0);
+        // Issue #901 第六轮阻塞1: load_document_text 不走 record_transaction，
+        // 必须在此显式把 pipeline.text_revision 绑定到新文档的 Core revision
+        //（load_text 已把 mirror.revision 同步到 kernel.revision）。
+        // emit_content_changed 不再 bump_text_revision，若不在此绑定，排版版本
+        // 会停在上一章的 revision，EditorLayout::snapshot 的 cache 有效性检查、
+        // canonical_needs_rebuild 判断都会用过期 revision。
+        self.pipeline
+            .set_text_revision(self.pipeline.mirror().revision());
         self.pipeline.composition_mut().clear();
         // `load_text(..., 0)` collapses the Core selection at the new document's start.
         self.cursor_ctrl.animation = None;
@@ -771,7 +779,16 @@ impl SujianEditorItem {
         // emit_content_changed 和普通刷新不能再把动画清掉。
         // Issue #853: movement source and force-snap intent come from each caller;
         // this shared notification only refreshes canonical layout and cursor target.
-        self.pipeline.bump_text_revision();
+        //
+        // Issue #901 第六轮阻塞1: 不再在此处 bump_text_revision。
+        // text_revision 由编辑入口（record_transaction / IME commit / Load）通过
+        // pipeline.set_text_revision(core_new_revision) 唯一绑定 Core Applied 的
+        // new_revision。emit_content_changed 只做 UI 通知与 prepared frame/caret
+        // 刷新，不因通知来了才造新正文版本。否则一次 Core 编辑会推进两次
+        // text_revision（record_transaction set 一次 + emit bump 一次），破坏
+        // Core/排版版本一致性：target layout 是 revision N，UI 随后变成 N+1，
+        // canonical_needs_rebuild 与 EditorLayout::snapshot 都会因 revision 不符
+        // 再次排版，刚构造的 frame/target 还可能被当作过期。
         // Issue #658 评论 5622829886 问题 1: 把 record_visual_transaction 产生的
         // pending promoted layout 提升为 EditorLayout current，避免后续
         // recalculate_content_height_and_emit / request_static_repaint 中的
@@ -786,12 +803,15 @@ impl SujianEditorItem {
         // Issue #705 评论 5716919024 问题 1: 正文 revision 一变化就无条件清
         // prepared_frame，不能只在"有 pending promoted layout"时才清。普通输入
         // (打字动画关闭 / 滚动期间抑制动画等没有 promoted layout 的路径)
-        // 也会 bump_text_revision，若此时 prepared_frame 仍是旧正文，
+        // 也会通过 record_transaction 的 set_text_revision 改变 revision，
+        // 若此时 prepared_frame 仍是旧正文，
         // 后续 adjust_affinity_at_wrap_boundary -> update_cursor_visual_position
         // -> editor_layout_cursor_rect -> current_render_layout_snapshot 会优先
         // 拿旧 prepared_frame，造成"正文已经变了，光标几何还按上一帧正文算"的错位。
         // 无条件清后，current_render_layout_snapshot 在正文刚变化、还没 prepare 新
         // frame 的时间窗口会 fallback 到当前 EditorLayout，不再读旧 frame。
+        // Issue #901 第六轮阻塞1: revision 变化由编辑入口 set_text_revision 产生，
+        // emit_content_changed 自身不再 bump_text_revision。
         self.prepared_frame = None;
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(
@@ -800,12 +820,12 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
-        // Issue #810 评论 5934060933 问题1: bump text revision 后，判断 canonical
-        // 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表有效；
-        // 必须同时满足 canonical.text_revision == pipeline.text_revision() 且描述当前
-        // committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径不会走
-        // prepare_edit_motion，正文仍会修改并 bump revision，但 canonical 停在上一版，
-        // 此处必须按当前 EditorLayout/current text 重建并替换。
+        // Issue #810 评论 5934060933 问题1: 编辑入口 set_text_revision 后，判断
+        // canonical 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表
+        // 有效；必须同时满足 canonical.text_revision == pipeline.text_revision() 且
+        // 描述当前 committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径
+        // 不会走 prepare_edit_motion，正文仍会修改并 set_text_revision 推进 revision，
+        // 但 canonical 停在上一版，此处必须按当前 EditorLayout/current text 重建并替换。
         // 不在 reconcile_after_layout_change 中重复——它已通过
         // reconcile_active_transactions_with_new_canonical 设置了 current_canonical_snapshot。
         let canonical_needs_rebuild = match self.pipeline.current_canonical_snapshot() {

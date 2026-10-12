@@ -365,6 +365,61 @@ impl QQuickItem for SujianEditorItem {
                 &canvas_plan,
             );
 
+            // Issue #901 第六轮阻塞3：从静态 QSGTextNode 的有效文本行登记已提交贡献。
+            // 首帧不能用"没有动画 TextFragment"代表"没有已显示正文"——静态文本
+            // 可以由 QSGTextNode 绘制而不需要 overlay，但 PresentedScene 必须知道
+            // 它的身份。从 EditorLayoutSnapshot.line_snapshots 提取每行的
+            // LineSnapshotId、byte range 和文档坐标几何，与视口求交后填入
+            // RenderPlan.static_text_contributions，供 build_presented_scene_from_frame
+            // 登记静态正文的真实像素贡献。
+            let static_text_contributions: Vec<
+                super::render_plan::StaticTextContributionInfo,
+            > = canonical_visual_snapshot
+                .as_ref()
+                .map(|snap| {
+                    // 文档宽度来自 prepared_frame.layout_snapshot.width，
+                    // 用于推导每行 document_rect 的宽度上界。
+                    let doc_width = prepared_frame
+                        .map(|f| f.layout_snapshot.width)
+                        .unwrap_or(0.0);
+                    let viewport_top = scroll_y;
+                    let viewport_bottom = scroll_y + vp_h;
+                    snap.line_snapshots
+                        .iter()
+                        .filter_map(|line| {
+                            let line_h = line.visual_line_bottom - line.visual_line_top;
+                            // 跳过零高度行或空 byte range 的退化行。
+                            if line_h <= 0.0 || line.byte_start >= line.byte_end {
+                                return None;
+                            }
+                            let doc_rect = super::layout_snapshot::SourceRect {
+                                x: line.visual_x,
+                                y: line.visual_line_top,
+                                w: (doc_width - line.visual_x).max(0.0),
+                                h: line_h,
+                            };
+                            // 视口裁剪（文档坐标）：行 rect 与
+                            // [0, scroll_y, doc_width, scroll_y + vp_h] 求交。
+                            let clip_y = doc_rect.y.max(viewport_top);
+                            let clip_bottom = (doc_rect.y + doc_rect.h).min(viewport_bottom);
+                            let clip_h = (clip_bottom - clip_y).max(0.0);
+                            let visible_clip = super::layout_snapshot::SourceRect {
+                                x: doc_rect.x,
+                                y: clip_y,
+                                w: doc_rect.w,
+                                h: clip_h,
+                            };
+                            Some(super::render_plan::StaticTextContributionInfo {
+                                snapshot_id: line.id,
+                                byte_range: (line.byte_start, line.byte_end),
+                                document_rect: doc_rect,
+                                visible_clip,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
             let render_plan = super::render_plan::RenderPlan {
                 ownership: super::render_plan::RenderOwnership {
                     animated_glyphs,
@@ -380,6 +435,7 @@ impl QQuickItem for SujianEditorItem {
                 cursor: cursor_render_state,
                 cursor_style,
                 selection_preedit_style,
+                static_text_contributions,
                 drawn_caret_rect,
             };
 
@@ -399,11 +455,16 @@ impl QQuickItem for SujianEditorItem {
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
             // `prepared_frame = None` 时不排版，请求下一次 GUI 侧准备。
+            // Issue #901 第六轮阻塞5: 传入 height_index 让 scene_graph_renderer
+            // 能 O(log n) 定位视口内首末可见段落，不遍历全章 lines。
+            // height_index 与 prepared_frame.layout_snapshot 都是不可变借用 self，
+            // 可安全共存。
             let has_snapshot = prepared_frame_matches_canonical;
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
                     .map(|f| &f.layout_snapshot),
+                height_index: Some(self.editor_layout.height_index()),
                 scroll_y,
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
@@ -793,7 +854,7 @@ impl SujianEditorItem {
         // PixelContribution.source_revision，不通过 OwnershipRule 猜来源。
         // 旧实现把 StaticText 一律给 plan_source_revision（旧 revision），
         // 但存活字的 byte_range 用的是 target 的（新坐标），导致混搭。
-        let pixel_contributions: Vec<PixelContribution> = canvas_plan
+        let animated_contributions: Vec<PixelContribution> = canvas_plan
             .commands
             .iter()
             .filter(|cmd| cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment)
@@ -809,6 +870,51 @@ impl SujianEditorItem {
                 }
             })
             .collect();
+
+        // Issue #901 第六轮阻塞3：从静态 QSGTextNode 的有效文本 cluster 登记已提交贡献。
+        // build_presented_scene_from_frame 之前只从 CanvasDrawPlan 的 TextFragment
+        // 命令建立 PixelContribution，完全不读取本帧静态 QSGTextNode 的有效文本 cluster。
+        // 所以静态已提交正文的 PresentedScene.pixel_contributions 是空列表，
+        // 下一次编辑会把整个目标正文都判为"新增字"并触发全屏文字重暴露。
+        //
+        // 静态正文属于已提交的旧帧，source_revision 用 canvas_plan.source_revision
+        // （plan_source_revision）。每条静态贡献携带：
+        // - byte_range：从 PreparedLineSnapshot.byte_start/byte_end 获取
+        // - snapshot_id：完整 LineSnapshotId
+        // - document_rect：从 PreparedLineSnapshot 的 visual_x/visual_line_top/bottom 获取
+        // - visible_clip：视口裁剪后的可见区域
+        // - opacity=1.0：静态正文完全不透明
+        // - source_uv=zero：静态文本由 QSGTextNode 绘制，不走纹理切片路径
+        //
+        // 两份贡献（动画 TextFragment + 静态文本）合并到同一个 pixel_contributions 列表。
+        let static_contributions: Vec<PixelContribution> = render_plan
+            .static_text_contributions
+            .iter()
+            .map(|info| PixelContribution {
+                snapshot_id: info.snapshot_id,
+                // 静态文本由 QSGTextNode 绘制，不走纹理切片路径，source_uv 为 zero。
+                source_uv: CanvasRect::zero(),
+                document_rect: CanvasRect::new(
+                    info.document_rect.x,
+                    info.document_rect.y,
+                    info.document_rect.w,
+                    info.document_rect.h,
+                ),
+                visible_clip: CanvasRect::new(
+                    info.visible_clip.x,
+                    info.visible_clip.y,
+                    info.visible_clip.w,
+                    info.visible_clip.h,
+                ),
+                opacity: 1.0,
+                byte_range: info.byte_range,
+                source_revision: plan_source_revision,
+            })
+            .collect();
+
+        // 合并动画 TextFragment 贡献和静态正文贡献到同一列表。
+        let mut pixel_contributions = animated_contributions;
+        pixel_contributions.extend(static_contributions);
 
         // 从 cursor_render_state 转换为 PresentedCaret。
         let caret = if render_plan.cursor.visible {

@@ -29,8 +29,12 @@ fn default_layout_params() -> LayoutParams {
 
 /// `emit_content_changed()` 必须使旧 `prepared_frame` 失效：
 /// 内部先 `prepared_frame = None`，再 `request_static_repaint` →
-/// `prepare_editor_frame` 用新 text_revision 重新准备 frame。
-/// 验证旧 frame 的 revision 与新 frame 不同（旧 frame 已被替换）。
+/// `prepare_editor_frame` 用当前 text_revision 重新准备 frame。
+///
+/// Issue #901 第六轮阻塞1: emit_content_changed 不再 bump_text_revision。
+/// text_revision 由编辑入口（record_transaction / IME commit / Load）通过
+/// set_text_revision 绑定 Core new_revision。此测试验证 emit_content_changed
+/// 仍刷新 prepared_frame（layout_generation 变化），但 text_revision 保持不变。
 #[test]
 fn emit_content_changed_invalidates_old_prepared_frame() {
     run_on_qt_thread(|| {
@@ -59,18 +63,18 @@ fn emit_content_changed_invalidates_old_prepared_frame() {
             "emit_content_changed 后 prepared_frame 应为 Some（新 frame 已准备）"
         );
         let new_frame = item.prepared_frame.as_ref().expect("new frame");
-        // text_revision 必须 bump（旧 frame 失效）
-        assert_ne!(
+        // Issue #901 阻塞1: text_revision 不 bump（由编辑入口绑定 Core revision）
+        assert_eq!(
             new_frame.layout_snapshot.text_revision, revision,
-            "emit_content_changed 后 text_revision 必须 bump（旧 frame 失效）"
+            "emit_content_changed 不 bump text_revision（由编辑入口绑定 Core revision）"
         );
-        // layout_generation 也应变化（旧 generation 释放，新 generation 分配）
+        // layout_generation 仍应变化（旧 generation 释放，新 generation 分配）
         assert_ne!(
             new_frame.layout_snapshot.layout_generation, old_generation,
             "emit_content_changed 后 layout_generation 必须变化（旧 frame 失效）"
         );
         println!(
-            "[BEHAVIOR_VERIFY] emit_content_changed: old frame invalidated (revision {} -> {}, generation {} -> {})",
+            "[BEHAVIOR_VERIFY] emit_content_changed: old frame invalidated (revision {} == {}, generation {} -> {})",
             revision,
             new_frame.layout_snapshot.text_revision,
             old_generation,
@@ -79,14 +83,17 @@ fn emit_content_changed_invalidates_old_prepared_frame() {
     });
 }
 
-/// 连续两次 emit_content_changed，每次 text_revision 都增加，
+/// 连续两次 emit_content_changed 不再 bump text_revision（Issue #901 第六轮阻塞1）。
+/// text_revision 由编辑入口绑定 Core new_revision，emit_content_changed 只做
+/// UI 通知与 prepared frame 刷新。此测试验证连续 emit 不额外推进正文版本，
 /// prepared_frame 始终为 Some（新 frame）。
 #[test]
-fn emit_content_changed_twice_bumps_revision_each_time() {
+fn emit_content_changed_twice_does_not_bump_revision() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
         item.set_plain_text(QString::from("测试文本"));
 
+        let rev_before = item.pipeline.text_revision();
         item.emit_content_changed();
         let rev1 = item
             .prepared_frame
@@ -106,13 +113,17 @@ fn emit_content_changed_twice_bumps_revision_each_time() {
             .expect("second frame")
             .layout_snapshot
             .text_revision;
-        assert_ne!(
+        assert_eq!(
+            rev1, rev_before,
+            "emit_content_changed 不 bump text_revision（由编辑入口绑定）"
+        );
+        assert_eq!(
             rev2, rev1,
-            "第二次 emit_content_changed 后 text_revision 必须再次增加"
+            "连续 emit_content_changed 不额外推进 text_revision"
         );
         println!(
-            "[BEHAVIOR_VERIFY] emit_content_changed twice: revision {} -> {}",
-            rev1, rev2
+            "[BEHAVIOR_VERIFY] emit_content_changed twice: revision {} == {} == {}",
+            rev_before, rev1, rev2
         );
     });
 }

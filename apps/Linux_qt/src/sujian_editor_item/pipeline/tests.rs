@@ -431,9 +431,10 @@ where
     let _ = (&old, &new);
     pipeline.visual_canvas_mut().apply_edit_result(&result);
     let prepared = VisualPrepareOutcome::Created;
-    // 生产由 `emit_content_changed` 做同一件事：先 bump text_revision
-    //（使 new canonical 的 text_revision == pipeline.text_revision()），再提升 pending layout。
-    pipeline.bump_text_revision();
+    // Issue #901 第六轮阻塞1: 生产由 record_transaction 做同一件事——用 Core
+    // EditorEditResult.new_revision 通过 set_text_revision 唯一绑定 pipeline
+    // text_revision，再提升 pending layout。emit_content_changed 不再 bump。
+    pipeline.set_text_revision(result.new_revision.value());
     if let Some(promoted) = pipeline.take_pending_promoted_layout() {
         let text = pipeline.committed_text().to_string();
         layout.promote_prepared_layout(promoted, &text, pipeline.text_revision());

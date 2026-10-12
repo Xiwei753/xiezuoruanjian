@@ -118,15 +118,26 @@ impl RevisionChain {
         }
     }
 
-    /// Issue #901 第五轮阻塞1：将任意源 revision 的 byte offset 映射到 latest revision 坐标。
+    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4：将任意源 revision 的 byte offset
+    /// 映射到 latest revision 坐标。
     ///
     /// - 如果 `source_revision == latest_revision`，直接返回原 offset（已经是 latest 坐标）。
     /// - 如果 `source_revision == presented_revision`，用累计映射映射。
-    /// - 否则返回 `None`（无法精确映射中间 revision，调用方应视为删除）。
+    /// - 如果 `presented_revision < source_revision < latest_revision`（中间 revision），
+    ///   用累计映射映射。这是连续快速编辑中产生的贡献：帧未完全 settle 时
+    ///   `presented_revision` 保持不变，但帧中可见贡献的 `source_revision` 可能是
+    ///   中间编辑的 revision。`accumulated_map` 是 presented→latest 的完整映射，
+    ///   能正确判断这些字符在 latest 中存活还是删除。
+    /// - 如果 `source_revision < presented_revision`，返回 `None`（旧 session 的贡献，
+    ///   无法精确映射）。
     ///
     /// 这解决了旧实现中"一律用 `map_presented_to_latest` 映射"的问题：
     /// 存活字的 `source_revision` 是 target revision（latest），`byte_range` 已经是
     /// latest 坐标，不应再被当作 presented 坐标映射一次。
+    ///
+    /// Issue #901 第六轮阻塞4：旧实现对中间 revision 直接返回 None，导致连续快速编辑
+    /// 中"中间 revision"的存活字被误判删除，出现消失/重复吐字。现在用 accumulated_map
+    /// 映射中间 revision，避免误判。
     pub(crate) fn map_to_latest(
         &self,
         source_revision: EditorRevision,
@@ -138,15 +149,30 @@ impl RevisionChain {
         if source_revision == self.presented_revision {
             return self.map_presented_to_latest(offset);
         }
-        // 其他 revision：无法精确映射，视为删除。
+        // Issue #901 第六轮阻塞4：中间 revision（presented < source < latest）是
+        // 连续快速编辑中产生的。用 accumulated_map（presented→latest）映射：
+        // 存活的字符映射到 latest 坐标，删除的字符返回 None。
+        // 旧实现直接返回 None，导致存活字被误判删除。
+        if source_revision > self.presented_revision
+            && source_revision < self.latest_revision
+        {
+            return self.map_presented_to_latest(offset);
+        }
+        // source_revision < presented_revision：旧 session 的贡献，无法精确映射。
         None
     }
 
-    /// Issue #901 第五轮阻塞1：将任意源 revision 的半开 byte range 映射到 latest revision 坐标。
+    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4：将任意源 revision 的半开 byte range
+    /// 映射到 latest revision 坐标。
     ///
     /// - 如果 `source_revision == latest_revision`，直接返回原 range。
     /// - 如果 `source_revision == presented_revision`，用累计映射映射。
-    /// - 否则返回 `None`（无法精确映射中间 revision，调用方应视为删除）。
+    /// - 如果 `presented_revision < source_revision < latest_revision`（中间 revision），
+    ///   用累计映射映射（同 `map_to_latest` 的中间 revision 处理）。
+    /// - 如果 `source_revision < presented_revision`，返回 `None`（旧 session 的贡献）。
+    ///
+    /// Issue #901 第六轮阻塞4：旧实现对中间 revision 直接返回 None，导致连续快速编辑
+    /// 中"中间 revision"的存活字被误判删除。现在用 accumulated_map 映射中间 revision。
     pub(crate) fn map_range_to_latest(
         &self,
         source_revision: EditorRevision,
@@ -159,7 +185,13 @@ impl RevisionChain {
         if source_revision == self.presented_revision {
             return self.map_presented_range_to_latest(start, end);
         }
-        // 其他 revision：无法精确映射，视为删除。
+        // Issue #901 第六轮阻塞4：中间 revision 用 accumulated_map 映射。
+        if source_revision > self.presented_revision
+            && source_revision < self.latest_revision
+        {
+            return self.map_presented_range_to_latest(start, end);
+        }
+        // source_revision < presented_revision：旧 session 的贡献，无法精确映射。
         None
     }
 

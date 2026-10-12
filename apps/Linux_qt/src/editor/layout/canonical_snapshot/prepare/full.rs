@@ -755,8 +755,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let new_layout_end = splice_ranges.new_layout_end;
 
     // 找到旧段 splice 范围在 visual_lines 中的行范围（用旧段落 byte_start 匹配）
-    let mut vl_start_idx: usize = 0;
-    let mut vl_end_idx: usize = visual_lines.len();
+    // Issue #901 第六轮阻塞2: 纯尾部插入（old_splice_start == prev_paragraphs.len()）
+    // 时 vl_start_idx/vl_end_idx 必须是 visual_lines.len()..visual_lines.len()，
+    // 在末尾追加不删除任何旧行。绝不能用默认 0..len，否则 splice 会把全文视觉行
+    // 全部删掉，而 prev_paragraphs.splice(old_count..old_count, ...) 又保留旧段，
+    // 导致 visual_lines 与 paragraphs 两份数据直接不一致。
+    // 例：旧文 `甲`，结尾插入 `\n乙`，old_splice=[1,1)，new_layout=[1,2)，
+    // 此时 vl 范围必须是 len..len（在末尾追加新段 `乙` 的行），而非 0..len。
+    let vl_total = visual_lines.len();
+    let mut vl_start_idx: usize = vl_total;
+    let mut vl_end_idx: usize = vl_total;
     if old_splice_start < prev_paragraphs.len() {
         let para_start = prev_paragraphs[old_splice_start].paragraph_document_byte_start;
         if let Some(&(s, _)) = prev_line_index.get(&para_start) {
@@ -778,6 +786,20 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let old_affected_byte_start: usize = visual_lines.get(vl_start_idx)
         .map(|vl| vl.byte_start)
         .unwrap_or(0);
+
+    // Issue #901 第六轮阻塞2: Enter 在文末加段时，前缀公共段最后一段的末行
+    // hard_break 需要从 false→true 同步重建。前缀公共段（0..new_layout_start）
+    // 复用 prev 视觉行，但其末行 hard_break 可能因新段加入而变化：旧段原为
+    // 文档末尾无 \n（hard_break=false），新段加入后该段以 \n 结尾（hard_break=true）。
+    // 只有紧邻差异段的前缀公共段最后一段（index = new_layout_start - 1）可能受影响；
+    // 更前面的段若文本相同且都以 \n 结尾，hard_break 不变。
+    // 该行位于 visual_lines[vl_start_idx - 1]，不在 splice 范围
+    // [vl_start_idx, vl_end_idx) 内，可安全就地更新。
+    if new_layout_start > 0 && vl_start_idx > 0 && new_layout_start <= new_paras.len() {
+        let prev_seg_idx = new_layout_start - 1;
+        let new_hard_break = new_paras[prev_seg_idx].ends_with('\n');
+        visual_lines[vl_start_idx - 1].hard_break = new_hard_break;
+    }
 
     // 重新排版受影响段落
     let mut new_visual_lines: Vec<VisualLine> = Vec::new();

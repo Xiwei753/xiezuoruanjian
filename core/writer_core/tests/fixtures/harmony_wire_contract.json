@@ -2881,10 +2881,6 @@
       }
     }
   },
-  "processWritingEvent": {
-    "kind": "scalar",
-    "ty": "boolean"
-  },
   "renameChapter": {
     "kind": "scalar",
     "ty": "boolean"

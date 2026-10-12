@@ -192,6 +192,38 @@ impl RenderOwnership {
     }
 }
 
+/// Issue #901 第六轮阻塞3：静态正文已提交贡献的轻量纯数据信息。
+///
+/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）提取，
+/// 供 `build_presented_scene_from_frame` 登记静态 QSGTextNode 的真实像素贡献。
+///
+/// **背景**：`build_presented_scene_from_frame` 之前只从 `CanvasDrawPlan` 的
+/// `TextFragment` 命令建立 `PixelContribution`，完全不读取本帧静态 QSGTextNode
+/// 的有效文本 cluster。所以静态已提交正文的 `PresentedScene.pixel_contributions`
+/// 是空列表。下一次编辑时 `controller.rs::frame` 把空贡献的 `PresentedScene` 与
+/// 完整 `target.glyph_runs` 比较，会把整个目标正文都判为"新增字"，触发全屏重暴露。
+///
+/// 此结构携带每行静态文本的 `LineSnapshotId`、byte range 和文档坐标几何，
+/// 让 `PresentedScene` 知道静态正文的身份，下一次编辑只让 Core patches 真正
+/// 影响的可见 cluster 交给动画 owner。
+///
+/// `document_rect` / `visible_clip` 使用 `SourceRect`（与 `render_plan` 模块
+/// 已有的几何载体一致），在 `build_presented_scene_from_frame` 中转换为
+/// `CanvasRect` 填入 `PixelContribution`。
+#[derive(Clone, Debug)]
+pub(crate) struct StaticTextContributionInfo {
+    /// 源纹理的完整行快照 id（来自 `PreparedLineSnapshot.id`）。
+    pub snapshot_id: LineSnapshotId,
+    /// 该贡献对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间），
+    /// 来自 `PreparedLineSnapshot.byte_start / byte_end`。
+    pub byte_range: (usize, usize),
+    /// 文档坐标系中的目标矩形（不含滚动偏移），来自
+    /// `PreparedLineSnapshot.visual_x / visual_line_top / visual_line_bottom`。
+    pub document_rect: SourceRect,
+    /// 实际可见的裁剪区域（文档坐标，已与视口 `[scroll_y, scroll_y + viewport_h]` 求交）。
+    pub visible_clip: SourceRect,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VisualCaretGeometry {
     /// 文档坐标，与动画 glyph rect 使用同一坐标系。
@@ -227,6 +259,15 @@ pub struct RenderPlan {
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
+    /// Issue #901 第六轮阻塞3：静态 QSGTextNode 已提交的正文行贡献信息。
+    ///
+    /// 从 `EditorLayoutSnapshot.line_snapshots` 提取，供
+    /// `build_presented_scene_from_frame` 登记静态正文的真实像素贡献。
+    /// 首帧不能用"没有动画 TextFragment"代表"没有已显示正文"——静态文本
+    /// 可以由 QSGTextNode 绘制而不需要 overlay，但 `PresentedScene` 必须知道
+    /// 它的身份。下一次编辑只让 Core patches 真正影响的可见 cluster 交给动画
+    /// owner；终点从动画 owner 归还静态。
+    pub(crate) static_text_contributions: Vec<StaticTextContributionInfo>,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
     /// 该 rect 是 CursorController 本帧采样后的实际光标位置；Snap 时就是目标位置。

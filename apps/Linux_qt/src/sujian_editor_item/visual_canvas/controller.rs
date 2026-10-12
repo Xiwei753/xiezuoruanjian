@@ -173,6 +173,16 @@ impl CanvasController {
         // 混合 old/new 的半成品帧中，旧贡献标旧 revision、新贡献标 target revision，
         // 只要还有任何旧贡献可见，就不能 reset——画面还在过渡中。
         // 空贡献列表（无可见内容）且 progress >= 1.0 也视为已追上 Core。
+        //
+        // Issue #901 第六轮阻塞4：连续快速编辑中，帧可能包含中间 revision 的贡献
+        //（source_revision 介于 presented_revision 和 latest_revision 之间）。
+        // 这些贡献是存活的但来自中间编辑，`all_contributions_from_latest` 为 false，
+        // 不会 reset——这是正确的，画面还没完全追上 Core。
+        // 此时 `presented_revision` 保持不变，但中间 revision 的贡献通过
+        // `RevisionChain::map_to_latest` 用 accumulated_map 映射到 latest 坐标
+        //（见 revision_chain.rs 第六轮阻塞4修复），不会被误判删除。
+        // 中间版本未经显示就直接跳过，不制造它的幽灵字——`build_draw_plan` 只从
+        // `presented.pixel_contributions`（已提交帧的可见贡献）生成命令。
         let all_contributions_from_latest = scene
             .pixel_contributions
             .iter()

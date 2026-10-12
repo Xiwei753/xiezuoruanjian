@@ -192,13 +192,15 @@ impl SceneTransition {
                         commands.push(cmd);
                     }
                 } else {
-                    // 未找到匹配 target run：按存活字原地保持（无位移）。
-                    if let Some(cmd) = Self::command_from_contribution(
-                        contrib,
-                        1.0,
-                        presented,
-                        super::ownership::OwnershipRule::StaticText,
-                    ) {
+                    // Issue #901 第六轮阻塞4：未找到匹配 target run 表示该贡献不可存活。
+                    // 可能原因：
+                    // 1. `map_range_to_latest` 返回 None（deleted/reshaped）——
+                    //    `find_matching_target_run` 通过 `?` 传播 None。
+                    // 2. target 布局中无包含该 latest range 的 glyph run——
+                    //    字符在最新正文中已不存在或不在当前视口。
+                    // 两种情况都按删除收回处理，不原地保持——原地保持会制造幽灵字
+                    // （已不存在的字符继续显示在旧位置）。
+                    if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
                         static_exclusion_rects
                             .push(super::draw_plan::StaticExclusionRect {
                                 rect: contrib.document_rect,
@@ -390,6 +392,12 @@ impl SceneTransition {
     /// Issue #901 问题4：使用 `map_presented_range_to_latest` 精确判断整个区间
     /// 身份，而非仅凭 `map_presented_to_latest(old_end)` 的起点是 `Some` 就宣告
     /// 整条 run 存活。`OffsetMap` 是半开范围，映射条目末端本来就可能返回 `None`。
+    ///
+    /// Issue #901 第六轮阻塞4：当 `map_range_to_latest` 返回 `None` 时，明确返回
+    /// `None`（表示该贡献不可存活，应判为 deleted/reshaped）。**绝不**回退到
+    /// `(latest_offset, latest_offset)` 的零宽逻辑区间——那会把真正删掉或部分
+    /// 替换的区间错配到包含 `latest_offset` 的相邻 cluster，导致消失/重复吐字。
+    /// 失败应表示不可存活，不是降级成一个可匹配的点。
     fn find_matching_target_run<'a>(
         target: &'a TargetLayoutDescriptor,
         latest_offset: usize,
@@ -401,13 +409,20 @@ impl SceneTransition {
         // 仅当整个 range 落在同一个映射条目内时才视为存活。
         // Issue #901 第五轮阻塞1：根据 source_revision 判断是否需要映射。
         // 如果 source_revision == latest_revision，byte_range 已经是 latest 坐标。
-        let (latest_start, latest_end) = revision_chain
-            .map_range_to_latest(
-                source_revision,
-                presented_byte_range.0,
-                presented_byte_range.1,
-            )
-            .unwrap_or((latest_offset, latest_offset));
+        //
+        // Issue #901 第六轮阻塞4：map_range_to_latest 返回 None 表示该贡献不可
+        // 存活（deleted/reshaped）。用 `?` 直接传播 None，不回退到零宽区间。
+        let (latest_start, latest_end) = revision_chain.map_range_to_latest(
+            source_revision,
+            presented_byte_range.0,
+            presented_byte_range.1,
+        )?;
+        // latest_offset 由 map_to_latest（起点映射）计算，此处仅用于断言一致性。
+        // 不用 latest_offset 回退零宽——见上文注释。
+        debug_assert_eq!(
+            latest_start, latest_offset,
+            "range 映射起点应与 offset 映射一致"
+        );
 
         for (idx, run) in target.glyph_runs.iter().enumerate() {
             // target run 的 byte_range 包含映射后的 range。

@@ -115,10 +115,16 @@ impl SujianEditorItem {
 
         let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
 
-        // Issue #810 评论 5934658350: composition commit 在 Core 已提交 new text 后调用，
-        // 此时 pipeline.text_revision() 仍是 emit 前的 old revision。new canonical 必须带
-        // next text revision，与即将 emit_content_changed bump 后的正文 revision 对齐。
-        let canonical_text_revision = self.pipeline.text_revision().wrapping_add(1);
+        // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
+        // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
+        // 不再预测 text_revision().wrapping_add(1)——那依赖 emit_content_changed 事后
+        // bump，而 emit_content_changed 中的 bump_text_revision 已删除。canonical
+        // text_revision 与 pipeline.text_revision() 共享同一个 Core new_revision，
+        // 确保 EditorLayout cache、current_canonical_snapshot、TargetLayoutDescriptor
+        // 同一次编辑全部绑定同一 Core revision。
+        let core_new_revision = result.new_revision.value();
+        self.pipeline.set_text_revision(core_new_revision);
+        let canonical_text_revision = core_new_revision;
         let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,

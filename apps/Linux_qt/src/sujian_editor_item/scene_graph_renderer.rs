@@ -2,7 +2,7 @@ use super::qt_text_node;
 use super::render_plan::{RenderPlan, TextAnimationGlyphInfo};
 use super::texture_cache::TextureCache;
 use super::visual_canvas::{CanvasDrawPlan, DrawCommandKind};
-use crate::editor::layout::LayoutSnapshot;
+use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex};
 use crate::editor::scene_graph;
 
 /// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
@@ -106,8 +106,13 @@ pub(crate) fn canvas_draw_plan_to_clip_rects(
 ///
 /// `layout_snapshot` 提供已排好的 VisualLine 数据（唯一 canonical 排版源）；
 /// `needs_relayout` 控制是否重新排版（正文/字体/宽度变更时为 true，滚动时为 false）。
+///
+/// Issue #901 第六轮阻塞5: `height_index` 提供段落高度索引，用于 O(log n) 定位
+/// 视口内首末可见段落，避免遍历全章 lines。`None` 表示无可用索引（fallback 到
+/// lines 的 y 二分查找，仍为 O(log n)）。
 pub(crate) struct StaticTextParams<'a> {
     pub layout_snapshot: Option<&'a LayoutSnapshot>,
+    pub height_index: Option<&'a ParagraphHeightIndex>,
     pub scroll_y: f64,
     pub viewport_height: f64,
     pub color: &'a str,
@@ -165,17 +170,70 @@ pub(crate) fn render_frame(
             let visible_top = viewport_top - margin;
             let visible_bottom = viewport_bottom + margin;
 
+            // Issue #901 第六轮阻塞5: 用 height_index O(log n) 定位视口内首末可见段落，
+            // 再用段落 y 范围在 lines 中二分查找定位行索引范围 [start_idx, end_idx)。
+            // 这样只遍历视口附近的行，不三遍扫描全章 lines。
+            // lines 按 y 升序排列（文档顺序，y 递增），可安全用 partition_point 二分查找。
+            let (start_idx, end_idx) =
+                if let Some(hi) = static_text.height_index {
+                    // 用 height_index 的段落级视口枚举（O(log n)）得到首末段落索引。
+                    let (first_para, last_para_excl) =
+                        hi.paragraphs_in_y_range(visible_top, visible_bottom);
+                    if first_para >= last_para_excl {
+                        (0usize, 0usize)
+                    } else {
+                        // 用段落顶/底 y 在 lines 中二分查找定位行范围。
+                        // 段落粒度比行粗，首尾段落可能包含视口外的行，
+                        // 后续的逐行视口检查会跳过它们。
+                        let first_para_top = hi.paragraph_top_y(first_para);
+                        let last_para_bottom =
+                            hi.paragraph_bottom_y(last_para_excl - 1);
+                        let s = snapshot
+                            .lines
+                            .partition_point(|l| l.y + l.height < first_para_top);
+                        let e = snapshot
+                            .lines
+                            .partition_point(|l| l.y > last_para_bottom);
+                        (s, e)
+                    }
+                } else {
+                    // 无 height_index：直接用 lines 的 y 二分查找定位视口行范围。
+                    // 仍是 O(log n)，不遍历全章。
+                    let s = snapshot
+                        .lines
+                        .partition_point(|l| l.y + l.height < visible_top);
+                    let e = snapshot
+                        .lines
+                        .partition_point(|l| l.y > visible_bottom);
+                    (s, e)
+                };
+
+            // Issue #901 第六轮阻塞5: 合并原三遍 for 循环为一遍。
+            // 原实现分别遍历 lines 构建 paragraphs、para_y_map、visual_line_clips，
+            // 每遍都是 O(全章行数)。现在只遍历 [start_idx, end_idx) 一次，
+            // 同时构建三个集合，成本 O(视口内行数)。
+            //
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。
             // cache_idx 直接从 VisualLine.cache_slot 读取（由 layout 阶段按段落出现顺序
             // 分配的稳定 slot），不再自行计数。
             let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
+            let mut visual_line_clips: Vec<qt_text_node::VisualLineClipInfo> = Vec::new();
+            // 段落第一行 y 的映射：para_start -> para_y
+            let mut para_y_map: std::collections::HashMap<usize, f64> =
+                std::collections::HashMap::new();
             let mut last_para_start: Option<usize> = None;
 
-            for line in &snapshot.lines {
-                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
+            for line in &snapshot.lines[start_idx..end_idx] {
+                // 跳过完全在扩展视口外的行（首尾段落可能含视口外行）。
                 if line.y + line.height < visible_top || line.y > visible_bottom {
                     continue;
                 }
+
+                // 段落第一行 y 记入 para_y_map（同段落只记第一次遇到的 y）。
+                let para_y = *para_y_map
+                    .entry(line.para_start)
+                    .or_insert(line.y);
+
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
                     last_para_start = Some(line.para_start);
@@ -190,28 +248,10 @@ pub(crate) fn render_frame(
                         doc_width: snapshot.width,
                     });
                 }
-            }
 
-            // Issue #658: 构建 per-visual-line 裁剪数据，用于按视觉行裁剪动画接管区域。
-            // 每个视觉行携带自己的 cache_slot、qtextline_idx、y、height、x、width，
-            // 以及所属段落的 para_y（addTextLayout 偏移）。
-            let mut visual_line_clips: Vec<qt_text_node::VisualLineClipInfo> = Vec::new();
-            // 段落第一行 y 的映射：para_start -> para_y
-            let mut para_y_map: std::collections::HashMap<usize, f64> =
-                std::collections::HashMap::new();
-            for line in &snapshot.lines {
-                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
-                if line.y + line.height < visible_top || line.y > visible_bottom {
-                    continue;
-                }
-                para_y_map.entry(line.para_start).or_insert(line.y);
-            }
-            for line in &snapshot.lines {
-                // Issue #901 第五轮阻塞5：跳过完全在扩展视口外的行。
-                if line.y + line.height < visible_top || line.y > visible_bottom {
-                    continue;
-                }
-                let para_y = *para_y_map.get(&line.para_start).unwrap_or(&line.y);
+                // Issue #658: 构建 per-visual-line 裁剪数据，用于按视觉行裁剪动画接管区域。
+                // 每个视觉行携带自己的 cache_slot、qtextline_idx、y、height、x、width，
+                // 以及所属段落的 para_y（addTextLayout 偏移）。
                 visual_line_clips.push(qt_text_node::VisualLineClipInfo {
                     cache_idx: line.cache_slot,
                     qtextline_idx: line.qtextline_idx,
@@ -245,6 +285,22 @@ pub(crate) fn render_frame(
             // Issue #658 评论 5620035970 问题 2: 传 snapshot.layout_generation，
             // 用 (generation, cache_slot) 查找 layout，与动画/IME 路径互不干扰。
             // Issue #668: 接住 rebuild 的成功/失败结果，透传给 qquickitem_impl。
+            //
+            // Issue #901 第六轮阻塞5: 此处仍调用 rebuild_text_node_from_paragraphs
+            // 全量重建静态 QSGTextNode，而非 update_affected_text_nodes 局部更新。
+            // 原因：update_affected_text_nodes 的前提是"静态子节点数 == 整章段数"，
+            // 但视口虚拟化后静态层只持有视口内段落的节点，子节点数 == 视口内段落数，
+            // 前提不成立。直接接入会导致 affected_indices 与实际节点错位。
+            //
+            // 接入计划（后续 Issue）：
+            // 1. update_affected_text_nodes 需改为基于"当前视口可见节点数 + 稳定 ParagraphId"
+            //    的对应表，而非"子节点数 == 整章段数"的全量假设。
+            // 2. C++ 侧 update_affected_paragraph_nodes 需按 ParagraphId 定位节点，
+            //    而非按子节点下标定位。
+            // 3. 滚动导致的视口段落进出需走 insert/remove 节点路径，编辑导致的段落内容
+            //    变化走 update 节点路径，两者分开处理。
+            // 当前已实现：合并三遍扫描为一遍 + height_index 限定遍历范围，
+            // 使 paragraphs/visual_line_clips 的构建成本从 O(全章行数) 降为 O(视口内行数)。
             static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
