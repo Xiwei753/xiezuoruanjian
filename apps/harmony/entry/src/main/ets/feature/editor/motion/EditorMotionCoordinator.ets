@@ -441,7 +441,13 @@ export class EditorMotionCoordinator {
           if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
             const winId = this.windowIdAllocator.allocate(interval.glyphIds)
             for (const member of interval.sourceMembers) {
-              keys.push(`${member.renderNodeKey}-${winId}`)
+              if (member.role === 'frozen') {
+                // frozen 成员的 renderNodeKey 已包含 windowInstanceId，原样输出
+                keys.push(member.renderNodeKey)
+              } else {
+                // target 成员需要追加新分配的 windowInstanceId
+                keys.push(`${member.renderNodeKey}-${winId}`)
+              }
             }
             // 问题5：如果没有 newRevision 目标成员，额外输出 new key
             // buildFrame 会为没有 newRevision 成员的 interval 创建新目标成员，
@@ -1783,7 +1789,9 @@ export class EditorMotionCoordinator {
             for (let mi = 0; mi < effectiveMembers.length; mi++) {
               const member = effectiveMembers[mi]
               const memberClipRects = memberClipRectsList[mi]
-              const memberRenderNodeKey = `${member.renderNodeKey}-${islandWindowInstanceId}`
+              const memberRenderNodeKey = member.role === 'frozen'
+                ? member.renderNodeKey
+                : `${member.renderNodeKey}-${islandWindowInstanceId}`
 
               // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
               const memberGlyphX = member.sourceGlyphRect.x
@@ -1861,7 +1869,9 @@ export class EditorMotionCoordinator {
                 sourceRevision: member.sourceRevision,
                 glyphIds: interval.glyphIds,
                 windowId: move.windowId,
-                windowInstanceId: islandWindowInstanceId,
+                windowInstanceId: member.role === 'frozen' && member.windowInstanceId !== undefined
+                  ? member.windowInstanceId
+                  : islandWindowInstanceId,
                 renderNodeKey: memberRenderNodeKey,
                 currentClipLeft: islandBboxLeft,
                 currentClipRight: islandBboxRight,
@@ -3447,7 +3457,8 @@ export class EditorMotionCoordinator {
         sourceKind: w.sourceKind,
         runId: w.runId,
         renderNodeKey: w.renderNodeKey,
-        opacity: w.opacity
+        opacity: w.opacity,
+        windowInstanceId: w.windowInstanceId
       })
     }
     return {

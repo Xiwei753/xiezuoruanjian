@@ -5504,4 +5504,466 @@ test('问题1-6112219514：尾字形 sourceGlyphX1 从首个可见成员取，�
     `sourceGlyphX0(${piece.sourceGlyphX0}) 应小于 sourceGlyphX1(${piece.sourceGlyphX1})——内部几何不自相矛盾`)
 })
 
+// ====== Issue #879 新增测试：mergeMemberUpdates targetOpacity 保留 + windowInstanceId 字段 ======
+
+// 辅助：构造带 windowInstanceId 的冻结窗口 span
+const makeSpan = (glyphId, opts, ctx) => ({
+  glyphIds: [glyphId],
+  clipLeft: opts.clipLeft,
+  clipRight: opts.clipRight,
+  clipRects: opts.clipRects ?? [{ x: opts.clipLeft, y: 0, width: opts.clipRight - opts.clipLeft, height: 20 }],
+  offsetX: opts.offsetX ?? 0,
+  offsetY: opts.offsetY ?? 0,
+  sourceRevision: opts.sourceRevision,
+  glyphUtf16Ranges: new Map([[glyphId, opts.utf16Range]]),
+  sourceLayout: opts.sourceLayout,
+  sourceKind: opts.sourceKind ?? 'old',
+  runId: opts.runId ?? `${opts.sourceKind ?? 'old'}-${opts.sourceRevision}`,
+  renderNodeKey: opts.renderNodeKey ?? `${opts.sourceKind ?? 'old'}-node-${opts.sourceRevision}`,
+  opacity: opts.opacity ?? 1,
+  windowInstanceId: opts.windowInstanceId ?? `win-${opts.sourceRevision}`,
+})
+
+// 辅助：从 pieces 中提取第一个 interval 的 sourceMembers
+const firstSourceMembers = (pieces) => {
+  if (pieces[0].intervals !== undefined && pieces[0].intervals.length > 0) {
+    return pieces[0].intervals[0].sourceMembers
+  }
+  return undefined
+}
+
+// 辅助：构造一行源布局
+const srcLayout = (text) => [{
+  startUtf16: 0, endUtf16: text.length, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+  caretStops: Array.from({ length: text.length + 1 }, (_v, i) => ({ utf16Offset: i, x: i * 10 })),
+}]
+
+// --- 修复1：targetOpacity 保留 ---
+
+test('修复1-测试1：target 成员没匹配到 newMembers 时保留 targetOpacity=1、opacity=0、clipRects=[]', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // 提取 sourceMembers 并修改为 target 角色
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 修改成员为 target 角色，设置特定值，并改 renderNodeKey 使其不匹配
+  const targetMember = { ...members[0] }
+  targetMember.role = 'target'
+  targetMember.targetOpacity = 1
+  targetMember.opacity = 0
+  targetMember.clipRects = []
+  targetMember.renderNodeKey = 'target-node-999'
+  pieces[0].intervals[0].sourceMembers = [targetMember]
+
+  // retarget——使用相同的 frozenWindows，newMembers 会有原始 renderNodeKey
+  const result = retargetRunStarts(run, pieces, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // 找到 target 成员（不匹配的那个，renderNodeKey='target-node-999'）
+  const targetResult = resultMembers.find(m => m.renderNodeKey === 'target-node-999')
+  assert.ok(targetResult !== undefined, '应存在未匹配的 target 成员')
+  assert.equal(targetResult.targetOpacity, 1,
+    `target 成员应保留 targetOpacity=1，实际 ${targetResult.targetOpacity}`)
+  assert.equal(targetResult.opacity, 0,
+    `target 成员应保留 opacity=0，实际 ${targetResult.opacity}`)
+  assert.equal(targetResult.clipRects.length, 0,
+    `target 成员应保留 clipRects=[]，实际长度 ${targetResult.clipRects.length}`)
+})
+
+test('修复1-测试2：frozen 成员没匹配到 newMembers 时 targetOpacity=0、opacity=0、clipRects=[]', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 修改成员为 frozen 角色，设置非零值，并改 renderNodeKey 使其不匹配
+  const frozenMember = { ...members[0] }
+  frozenMember.role = 'frozen'
+  frozenMember.targetOpacity = 0.5
+  frozenMember.opacity = 0.8
+  frozenMember.clipRects = [{ x: 10, y: 0, width: 5, height: 20 }]
+  frozenMember.renderNodeKey = 'frozen-node-888'
+  pieces[0].intervals[0].sourceMembers = [frozenMember]
+
+  const result = retargetRunStarts(run, pieces, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // 找到 frozen 成员（不匹配的那个，renderNodeKey='frozen-node-888'）
+  const frozenResult = resultMembers.find(m => m.renderNodeKey === 'frozen-node-888')
+  assert.ok(frozenResult !== undefined, '应存在未匹配的 frozen 成员')
+  assert.equal(frozenResult.targetOpacity, 0,
+    `frozen 成员应被设为 targetOpacity=0，实际 ${frozenResult.targetOpacity}`)
+  assert.equal(frozenResult.opacity, 0,
+    `frozen 成员应被设为 opacity=0，实际 ${frozenResult.opacity}`)
+  assert.equal(frozenResult.clipRects.length, 0,
+    `frozen 成员应被设为 clipRects=[]，实际长度 ${frozenResult.clipRects.length}`)
+})
+
+test('修复1-测试3：target 成员匹配到 newMembers 时正常更新（targetOpacity=1 来自 prev，opacity 来自 new，clipRects 来自 new）', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 初始冻结窗口：opacity=1, clipRects=[{x:10,y:0,width:10,height:20}]
+  const frozen1 = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow1 = { ...ctx, frozenWindows: frozen1 }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow1, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 修改成员为 target 角色，设置 targetOpacity=1，保持 renderNodeKey 不变（会匹配）
+  const targetMember = { ...members[0] }
+  targetMember.role = 'target'
+  targetMember.targetOpacity = 1
+  targetMember.opacity = 0
+  targetMember.clipRects = []
+  pieces[0].intervals[0].sourceMembers = [targetMember]
+
+  // retarget——使用不同的冻结窗口（opacity=0.5, clipRects 不同），但 renderNodeKey 相同
+  const frozen2 = [makeSpan(yiId, {
+    clipLeft: 12, clipRight: 18,
+    sourceRevision: 10, opacity: 0.5,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+    renderNodeKey: 'old-node-10',  // 与原始相同，确保匹配
+  })]
+  const withWindow2 = { ...ctx, frozenWindows: frozen2 }
+
+  const result = retargetRunStarts(run, pieces, withWindow2, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // 找到匹配的成员（renderNodeKey='old-node-10'）
+  const matchedResult = resultMembers.find(m => m.renderNodeKey === 'old-node-10')
+  assert.ok(matchedResult !== undefined, '应存在匹配的成员')
+  // targetOpacity 应来自 prev（=1），不被 newMembers 的默认值 -1 覆盖
+  assert.equal(matchedResult.targetOpacity, 1,
+    `matched 成员应保留 prev.targetOpacity=1，实际 ${matchedResult.targetOpacity}`)
+  // opacity 应来自 new（=0.5）
+  assert.equal(matchedResult.opacity, 0.5,
+    `matched 成员应取 new.opacity=0.5，实际 ${matchedResult.opacity}`)
+  // clipRects 应来自 new
+  assert.ok(matchedResult.clipRects.length > 0,
+    `matched 成员应有 new 的 clipRects，实际长度 ${matchedResult.clipRects.length}`)
+  assert.equal(matchedResult.clipRects[0].x, 12,
+    `matched 成员 clipRects[0].x 应为 12（来自 new），实际 ${matchedResult.clipRects[0].x}`)
+  assert.equal(matchedResult.clipRects[0].width, 6,
+    `matched 成员 clipRects[0].width 应为 6（来自 new），实际 ${matchedResult.clipRects[0].width}`)
+  // role 应保留 prev 的
+  assert.equal(matchedResult.role, 'target',
+    `matched 成员应保留 prev.role='target'，实际 ${matchedResult.role}`)
+})
+
+// --- 修复2：windowInstanceId 字段 ---
+
+test('修复2-测试4：buildSourceMembers 返回的 FrozenGlyphMember 包含 windowInstanceId', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-abc-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+  assert.equal(members[0].windowInstanceId, 'win-abc-10',
+    `buildSourceMembers 应传递 windowInstanceId='win-abc-10'，实际 ${members[0].windowInstanceId}`)
+})
+
+test('修复2-测试5：deepCloneSourceMembers 正确拷贝 windowInstanceId', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-clone-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+  assert.equal(members[0].windowInstanceId, 'win-clone-10',
+    `初始 sourceMembers 应有 windowInstanceId='win-clone-10'`)
+
+  // retarget 时字形不可见 → 触发 deepCloneSourceMembers（不可见分支）
+  // 使用空 frozenWindows 使字形不可见
+  const withEmptyWindow = { ...ctx, frozenWindows: [] }
+  const result = retargetRunStarts(run, pieces, withEmptyWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在（不可见分支保留 sourceMembers）')
+  // deepCloneSourceMembers 应正确拷贝 windowInstanceId
+  assert.equal(resultMembers[0].windowInstanceId, 'win-clone-10',
+    `deepCloneSourceMembers 应拷贝 windowInstanceId='win-clone-10'，实际 ${resultMembers[0].windowInstanceId}`)
+})
+
+test('修复2-测试6：mergeMemberUpdates matched 分支正确传递 windowInstanceId（使用 newMembers 的）', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 初始冻结窗口
+  const frozen1 = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-initial-10',
+  })]
+  const withWindow1 = { ...ctx, frozenWindows: frozen1 }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow1, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // retarget——使用相同 renderNodeKey 但不同 windowInstanceId 的冻结窗口
+  const frozen2 = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-updated-10',
+    renderNodeKey: 'old-node-10',  // 与原始相同，确保匹配
+  })]
+  const withWindow2 = { ...ctx, frozenWindows: frozen2 }
+
+  const result = retargetRunStarts(run, pieces, withWindow2, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // matched 分支应使用 newMembers 的 windowInstanceId
+  const matchedResult = resultMembers.find(m => m.renderNodeKey === 'old-node-10')
+  assert.ok(matchedResult !== undefined, '应存在匹配的成员')
+  assert.equal(matchedResult.windowInstanceId, 'win-updated-10',
+    `matched 成员应取 newMembers 的 windowInstanceId='win-updated-10'，实际 ${matchedResult.windowInstanceId}`)
+})
+
+test('修复2-测试7：target 成员没匹配时保留 prev.windowInstanceId（undefined）', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 修改成员为 target 角色，windowInstanceId=undefined（target 成员的特征），不匹配的 renderNodeKey
+  const targetMember = { ...members[0] }
+  targetMember.role = 'target'
+  targetMember.targetOpacity = 1
+  targetMember.opacity = 0
+  targetMember.clipRects = []
+  targetMember.renderNodeKey = 'target-node-777'
+  targetMember.windowInstanceId = undefined
+  pieces[0].intervals[0].sourceMembers = [targetMember]
+
+  const result = retargetRunStarts(run, pieces, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // target 成员没匹配时应保留 prev.windowInstanceId=undefined
+  const targetResult = resultMembers.find(m => m.renderNodeKey === 'target-node-777')
+  assert.ok(targetResult !== undefined, '应存在未匹配的 target 成员')
+  assert.equal(targetResult.windowInstanceId, undefined,
+    `target 成员应保留 prev.windowInstanceId=undefined，实际 ${targetResult.windowInstanceId}`)
+})
+
+test('修复2-测试8：frozen 成员没匹配时保留 prev.windowInstanceId', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 修改成员为 frozen 角色，设置 windowInstanceId，不匹配的 renderNodeKey
+  const frozenMember = { ...members[0] }
+  frozenMember.role = 'frozen'
+  frozenMember.targetOpacity = 0.5
+  frozenMember.opacity = 0.8
+  frozenMember.clipRects = [{ x: 10, y: 0, width: 5, height: 20 }]
+  frozenMember.renderNodeKey = 'frozen-node-666'
+  frozenMember.windowInstanceId = 'win-frozen-666'
+  pieces[0].intervals[0].sourceMembers = [frozenMember]
+
+  const result = retargetRunStarts(run, pieces, withWindow, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+
+  // frozen 成员没匹配时应保留 prev.windowInstanceId
+  const frozenResult = resultMembers.find(m => m.renderNodeKey === 'frozen-node-666')
+  assert.ok(frozenResult !== undefined, '应存在未匹配的 frozen 成员')
+  assert.equal(frozenResult.windowInstanceId, 'win-frozen-666',
+    `frozen 成员应保留 prev.windowInstanceId='win-frozen-666'，实际 ${frozenResult.windowInstanceId}`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

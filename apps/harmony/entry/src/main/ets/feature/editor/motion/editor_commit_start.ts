@@ -97,6 +97,15 @@ export interface FrozenWindowSpan {
    * undefined 表示完全不透明（非交叉淡入淡出窗口）。
    */
   opacity: number | undefined
+  /**
+   * Issue #879 评论6116388578 问题2：该窗口的 windowInstanceId。
+   *
+   * commitDisplayedContext 冻结时从 MotionGlyphWindow.windowInstanceId 读取。
+   * 用于区分冻结成员和新建目标成员的 renderNodeKey 拼接逻辑——
+   * frozen 成员的 renderNodeKey 已包含 windowInstanceId，原样输出；
+   * target 成员的 renderNodeKey 不包含 windowInstanceId，需追加新分配的 ID。
+   */
+  windowInstanceId: string
 }
 
 /** 计算起始状态时的「在屏」上下文。 */
@@ -198,6 +207,14 @@ export interface FrozenGlyphMember {
    * -1 表示未设置，buildFrame 会根据 sourceRevision 与 newRevision 的关系推断。
    */
   targetOpacity: number
+  /**
+   * Issue #879 评论6116388578 问题2：该成员的原始 windowInstanceId。
+   *
+   * frozen 成员：从 FrozenWindowSpan.windowInstanceId 读取，用于 buildFrame 输出
+   * MotionGlyphWindow 时保持与原始物理 Text 节点一致的 windowInstanceId。
+   * target 成员：undefined——由 buildFrame 分配新的 windowInstanceId。
+   */
+  windowInstanceId: string | undefined
 }
 
 /** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
@@ -1999,6 +2016,7 @@ function buildSourceMembers(
       sourceUtf16Start: utf16Range[0],
       sourceUtf16End: utf16Range[1],
       targetOpacity: -1,
+      windowInstanceId: span.windowInstanceId,
     })
   }
   return members
@@ -2119,12 +2137,14 @@ function intervalForIsland(
         let opacity: number | undefined = undefined
         let sourceUtf16Start = 0
         let sourceUtf16End = 0
+        let windowInstanceId: string | undefined = undefined
         if (allSpans !== undefined) {
           for (const sp of allSpans) {
             if (sp.renderNodeKey === g.renderNodeKey &&
                 sp.sourceRevision === g.sourceRevision) {
               sourceRevision = sp.sourceRevision
               opacity = sp.opacity
+              windowInstanceId = sp.windowInstanceId
               const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
               if (utf16Range !== undefined) {
                 sourceUtf16Start = utf16Range[0]
@@ -2168,6 +2188,7 @@ function intervalForIsland(
           sourceUtf16Start: sourceUtf16Start,
           sourceUtf16End: sourceUtf16End,
           targetOpacity: -1,
+          windowInstanceId: windowInstanceId,
         }
       })
     }
@@ -2228,6 +2249,7 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
     sourceUtf16Start: m.sourceUtf16Start,
     sourceUtf16End: m.sourceUtf16End,
     targetOpacity: m.targetOpacity,
+    windowInstanceId: m.windowInstanceId,
   }))
 }
 
@@ -2281,7 +2303,10 @@ function mergeMemberUpdates(
             opacity: nw.opacity,
             sourceUtf16Start: nw.sourceUtf16Start,
             sourceUtf16End: nw.sourceUtf16End,
-            targetOpacity: nw.targetOpacity,
+            // Issue #879：matched 分支保留 prev.targetOpacity——Planner 设置的目标透明度
+            // 在 retarget 时不应被 newMembers 的默认值 -1 覆盖。
+            targetOpacity: prev.targetOpacity,
+            windowInstanceId: nw.windowInstanceId,
           })
           consumedNew.add(ni)
           matched = true
@@ -2290,25 +2315,52 @@ function mergeMemberUpdates(
       }
     }
     if (!matched) {
-      // 没匹配上：源已离屏，保持身份但 clipRects 清空、opacity=0
-      result.push({
-        sourceKind: prev.sourceKind,
-        sourceRevision: prev.sourceRevision,
-        role: prev.role,
-        runId: prev.runId,
-        renderNodeKey: prev.renderNodeKey,
-        sourceGlyphRect: {
-          x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
-          width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
-        },
-        offsetX: prev.offsetX,
-        offsetY: prev.offsetY,
-        clipRects: [],
-        opacity: 0,
-        sourceUtf16Start: prev.sourceUtf16Start,
-        sourceUtf16End: prev.sourceUtf16End,
-        targetOpacity: 0,
-      })
+      // 没匹配上：源已离屏
+      // target 角色：保留原始 targetOpacity/clipRects/opacity——目标成员还没出现在冻结窗口是正常的
+      // frozen 角色：clipRects 清空、opacity=0、targetOpacity=0——历史源已离屏应淡出
+      if (prev.role === 'target') {
+        result.push({
+          sourceKind: prev.sourceKind,
+          sourceRevision: prev.sourceRevision,
+          role: prev.role,
+          runId: prev.runId,
+          renderNodeKey: prev.renderNodeKey,
+          sourceGlyphRect: {
+            x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
+            width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
+          },
+          offsetX: prev.offsetX,
+          offsetY: prev.offsetY,
+          clipRects: prev.clipRects.map((cr: RectLike): RectLike => ({
+            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
+          })),
+          opacity: prev.opacity,
+          sourceUtf16Start: prev.sourceUtf16Start,
+          sourceUtf16End: prev.sourceUtf16End,
+          targetOpacity: prev.targetOpacity,
+          windowInstanceId: prev.windowInstanceId,
+        })
+      } else {
+        result.push({
+          sourceKind: prev.sourceKind,
+          sourceRevision: prev.sourceRevision,
+          role: prev.role,
+          runId: prev.runId,
+          renderNodeKey: prev.renderNodeKey,
+          sourceGlyphRect: {
+            x: prev.sourceGlyphRect.x, y: prev.sourceGlyphRect.y,
+            width: prev.sourceGlyphRect.width, height: prev.sourceGlyphRect.height,
+          },
+          offsetX: prev.offsetX,
+          offsetY: prev.offsetY,
+          clipRects: [],
+          opacity: 0,
+          sourceUtf16Start: prev.sourceUtf16Start,
+          sourceUtf16End: prev.sourceUtf16End,
+          targetOpacity: 0,
+          windowInstanceId: prev.windowInstanceId,
+        })
+      }
     }
   }
   // 追加 newMembers 中多出的成员（prevMembers 没有的新源成员）
@@ -2335,6 +2387,7 @@ function mergeMemberUpdates(
           sourceUtf16Start: nw.sourceUtf16Start,
           sourceUtf16End: nw.sourceUtf16End,
           targetOpacity: nw.targetOpacity,
+          windowInstanceId: nw.windowInstanceId,
         })
       }
     }
