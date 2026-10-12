@@ -288,7 +288,7 @@ impl ParagraphLayoutStore {
     /// 从全文文本重建段落身份和缓存 key。
     ///
     /// 用于初始化、文档加载或全局参数变化（宽度/字体/字号/行距）。
-    /// 已有段落的 `ParagraphId` 尽量保留（按文档顺序对齐），
+    /// 已有段落的 `ParagraphId` 尽量保留（按内容前缀+后缀匹配对齐），
     /// 新段落分配新 Id，多余段落的 Id 丢弃。
     ///
     /// Issue #901 第二轮复核: 保留未变化段的排版结果
@@ -296,6 +296,16 @@ impl ParagraphLayoutStore {
     /// 只有 cache_key 变化的段落（内容或参数变了）才重置排版结果，
     /// 需要重新走 QTextLayout。内容相同的段落保留旧 shaping/行数据/纹理，
     /// 不重建全部 QTextLayout/静态 QSGTextNode。
+    ///
+    /// Issue #901 第十六轮问题1: 以 ParagraphId 作为稳定身份，按旧/新段落
+    /// 内容 diff 做 Id 的 splice（前缀匹配 + 后缀匹配），而非按下标对齐。
+    /// 中间插段时，后缀相同内容段继承**对应旧 entry** 的 ParagraphId，
+    /// 不再把后缀段的身份给新插入的段。
+    /// 反例：正文"甲\n乙"在"甲"前插入回车 → "\n甲\n乙"（3 段）。
+    /// 旧 entries = [甲, 乙]。按下标对齐会把"甲"的 Id 给新段[0]（空行），
+    /// 把"乙"的 Id 给新段[1]（"甲"），新段[2]（"乙"）分配新 Id —— 身份错位。
+    /// 按前缀+后缀匹配：前缀 0（空行 ≠ 甲），后缀 2（甲==甲, 乙==乙），
+    /// 新段[0] 分配新 Id，新段[1] 继承旧[0] 的 Id，新段[2] 继承旧[1] 的 Id。
     pub fn rebuild_from_text(
         &mut self,
         text: &str,
@@ -307,10 +317,14 @@ impl ParagraphLayoutStore {
         width: f64,
     ) {
         let paragraphs: Vec<&str> = text.split_inclusive('\n').collect();
-        let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(paragraphs.len());
-        let mut byte_offset = 0usize;
+        let new_count = paragraphs.len();
+        let old_count = self.entries.len();
 
-        for (i, paragraph) in paragraphs.iter().enumerate() {
+        // Issue #901 第十六轮问题1: 计算新段 cache_key 和 text_hash，
+        // 用 text_hash 做前缀+后缀内容匹配（text_hash 冲突概率极低，可接受）。
+        let mut new_keys: Vec<ParagraphLayoutCacheKey> = Vec::with_capacity(new_count);
+        let mut new_text_hashes: Vec<u64> = Vec::with_capacity(new_count);
+        for paragraph in &paragraphs {
             let paragraph_text = paragraph.trim_end_matches('\n');
             let cache_key = ParagraphLayoutCacheKey::build(
                 paragraph_text,
@@ -321,16 +335,58 @@ impl ParagraphLayoutStore {
                 padding,
                 width,
             );
+            new_text_hashes.push(cache_key.text_hash());
+            new_keys.push(cache_key);
+        }
 
-            // Issue #901 第二轮复核: 尽量保留已有 Id 和排版结果。
-            // 如果旧 entry 的 cache_key 与新 cache_key 相同（内容+参数没变），
-            // 保留 layout_generation/cache_slot/height/visual_line_count/line_start，
-            // 该段落不需要重新走 QTextLayout。
-            // 只有内容变化的段落才重置排版结果。
+        // 旧段的 text_hash
+        let old_text_hashes: Vec<u64> =
+            self.entries.iter().map(|e| e.cache_key.text_hash()).collect();
+
+        // 前缀匹配：从前往后找 text_hash 相同的段
+        let mut prefix_common = 0usize;
+        let min_len = old_count.min(new_count);
+        for i in 0..min_len {
+            if old_text_hashes[i] == new_text_hashes[i] {
+                prefix_common = i + 1;
+            } else {
+                break;
+            }
+        }
+
+        // 后缀匹配：从后往前找 text_hash 相同的段（在前缀之后的部分中找）
+        let mut suffix_common = 0usize;
+        let remaining_old = old_count - prefix_common;
+        let remaining_new = new_count - prefix_common;
+        let max_suffix = remaining_old.min(remaining_new);
+        while suffix_common < max_suffix {
+            let old_idx = old_count - 1 - suffix_common;
+            let new_idx = new_count - 1 - suffix_common;
+            if old_text_hashes[old_idx] == new_text_hashes[new_idx] {
+                suffix_common += 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(new_count);
+        let mut byte_offset = 0usize;
+
+        for (i, paragraph) in paragraphs.iter().enumerate() {
+            let paragraph_text = paragraph.trim_end_matches('\n');
+            let cache_key = new_keys[i].clone();
+
+            // Issue #901 第十六轮问题1: 按前缀/后缀/中间段分别处理 Id 继承。
+            // - 前缀段（i < prefix_common）：继承旧 entry[i] 的 Id。
+            // - 后缀段（i >= new_count - suffix_common）：继承对应旧 entry
+            //   （old_count - (new_count - i)）的 Id。
+            // - 中间段：分配新 Id。
             //
-            // Issue #901 第十轮问题5: relative_lines 同样保留/重置。
-            // 内容相同的段落保留旧 relative_lines（段内相对坐标不变），
-            // 内容变化的段落重置为空（待重排后回填）。
+            // 排版结果保留逻辑（Issue #901 第二轮复核）：
+            // - cache_key 完全相同（内容+参数没变）→ 保留 layout_generation/
+            //   cache_slot/height/visual_line_count/line_start/relative_lines。
+            // - cache_key 不同（内容或参数变了）→ 重置排版结果，但保留 Id。
+            //   （参数变化时 Id 保留但需重排，内容变化时 Id 保留但需重排。）
             let (
                 id,
                 layout_generation,
@@ -339,10 +395,10 @@ impl ParagraphLayoutStore {
                 visual_line_count,
                 line_start,
                 relative_lines,
-            ) = if i < self.entries.len() {
+            ) = if i < prefix_common {
+                // 前缀段：继承旧 entry[i]
                 let old = &self.entries[i];
                 if old.cache_key == cache_key {
-                    // 内容相同，保留 Id 和排版结果
                     (
                         old.id,
                         old.layout_generation,
@@ -353,11 +409,27 @@ impl ParagraphLayoutStore {
                         old.relative_lines.clone(),
                     )
                 } else {
-                    // 内容不同，保留 Id 但重置排版结果
+                    (old.id, 0u64, -1, 0.0f64, 0usize, 0usize, Vec::new())
+                }
+            } else if suffix_common > 0 && i >= new_count - suffix_common {
+                // 后缀段：继承对应旧 entry（从后往前对齐）
+                let old_idx = old_count - (new_count - i);
+                let old = &self.entries[old_idx];
+                if old.cache_key == cache_key {
+                    (
+                        old.id,
+                        old.layout_generation,
+                        old.cache_slot,
+                        old.height,
+                        old.visual_line_count,
+                        old.line_start,
+                        old.relative_lines.clone(),
+                    )
+                } else {
                     (old.id, 0u64, -1, 0.0f64, 0usize, 0usize, Vec::new())
                 }
             } else {
-                // 新段落，分配新 Id
+                // 中间段：分配新 Id
                 (self.allocate_id(), 0u64, -1, 0.0f64, 0usize, 0usize, Vec::new())
             };
 
@@ -378,6 +450,19 @@ impl ParagraphLayoutStore {
         }
 
         self.entries = new_entries;
+    }
+
+    /// Issue #901 第十六轮问题1: 按 `ParagraphId` 查找当前段落 slot（段落索引）。
+    ///
+    /// 建立 ParagraphId → 当前 paragraph slot 映射，用于消费方查询。
+    /// 与 [`paragraph_index_by_id`] 的区别：语义更明确——返回的是当前
+    /// 段落在文档中的 slot 索引（即 `entries` 中的下标）。
+    ///
+    /// 当前实现为 O(n) 线性查找。段落数远小于行数，可接受。
+    /// 若未来需要 O(1) 查询，可在 `ParagraphLayoutStore` 中维护
+    /// `HashMap<ParagraphId, usize>` 缓存，在 rebuild/splice 时同步更新。
+    pub fn paragraph_id_to_slot(&self, id: ParagraphId) -> Option<usize> {
+        self.entries.iter().position(|e| e.id == id)
     }
 
     // ── 增量更新：换行拆段 ──
@@ -1311,6 +1396,52 @@ mod tests {
         store.rebuild_from_text("aaa\nbbb", 16.0, "Sans", 1.2, 0.0, 0.0, 800.0);
         assert_eq!(store.paragraph_id_at(0), Some(id0));
         assert_eq!(store.paragraph_id_at(1), Some(id1));
+    }
+
+    /// Issue #901 第十六轮问题1: 验证中间插段时后缀段正确继承原 ParagraphId。
+    ///
+    /// 反例：正文"甲\n乙"在"甲"前插入回车 → "\n甲\n乙"（3 段）。
+    /// 旧 entries = [甲, 乙]。按下标对齐会把"甲"的 Id 给新段[0]（空行），
+    /// 把"乙"的 Id 给新段[1]（"甲"），新段[2]（"乙"）分配新 Id —— 身份错位。
+    /// 按前缀+后缀匹配：前缀 0，后缀 2（甲==甲, 乙==乙），
+    /// 新段[0] 分配新 Id，新段[1] 继承旧[0] 的 Id，新段[2] 继承旧[1] 的 Id。
+    #[test]
+    fn rebuild_prefix_suffix_match_preserves_suffix_ids() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("甲\n乙", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id_jia = store.paragraph_id_at(0).unwrap();
+        let id_yi = store.paragraph_id_at(1).unwrap();
+
+        // 在"甲"前插入回车 → "\n甲\n乙"（3段）
+        store.rebuild_from_text("\n甲\n乙", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        assert_eq!(store.paragraph_count(), 3);
+
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+        let id2 = store.paragraph_id_at(2).unwrap();
+
+        // 空行段分配新 Id，不继承甲或乙的 Id
+        assert_ne!(id0, id_jia, "空行段不应继承甲的Id");
+        assert_ne!(id0, id_yi, "空行段不应继承乙的Id");
+        // 甲段继承旧甲的 Id
+        assert_eq!(id1, id_jia, "甲段应继承旧甲的Id");
+        // 乙段继承旧乙的 Id
+        assert_eq!(id2, id_yi, "乙段应继承旧乙的Id");
+    }
+
+    /// Issue #901 第十六轮问题1: 验证 paragraph_id_to_slot 映射方法。
+    #[test]
+    fn paragraph_id_to_slot_mapping() {
+        let mut store = ParagraphLayoutStore::new();
+        store.rebuild_from_text("aaa\nbbb\nccc", 16.0, "Sans", 1.2, 0.0, 0.0, 600.0);
+        let id0 = store.paragraph_id_at(0).unwrap();
+        let id1 = store.paragraph_id_at(1).unwrap();
+        let id2 = store.paragraph_id_at(2).unwrap();
+
+        assert_eq!(store.paragraph_id_to_slot(id0), Some(0));
+        assert_eq!(store.paragraph_id_to_slot(id1), Some(1));
+        assert_eq!(store.paragraph_id_to_slot(id2), Some(2));
+        assert_eq!(store.paragraph_id_to_slot(ParagraphId::INVALID), None);
     }
 
     #[test]

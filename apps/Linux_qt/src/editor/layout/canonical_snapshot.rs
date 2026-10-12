@@ -287,65 +287,19 @@ impl CanonicalDocumentVisualSnapshot {
         scroll_y: f64,
         viewport_h: f64,
     ) -> CaretRect {
-        // Issue #901 第十轮问题5: 用 resolved_visual_lines 按需物化后缀段绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 遍历找光标所在行可先用二分定位再 resolve_visual_line。
-        let resolved = self.resolved_visual_lines();
-        let lines_slice = resolved.as_ref();
-        let line = lines_slice
-            .iter()
-            .enumerate()
-            .find(|(idx, _)| {
-                super::hit_test::line_contains_cursor_with_affinity(
-                    lines_slice,
-                    *idx,
-                    cursor_byte,
-                    affinity,
-                )
-            })
-            .map(|(_, line)| line)
-            .or_else(|| lines_slice.last());
+        // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+        // 只物化该段和前一段的视觉行，不遍历全章 resolved_visual_lines。
+        let line = self.find_caret_line(cursor_byte, affinity);
 
-        let fallback;
-        let line = match line {
-            Some(line) => line,
-            None => {
-                fallback = VisualLine {
-                    id: 0,
-                    byte_start: 0,
-                    byte_end: 0,
-                    qchar_start: 0,
-                    qchar_end: 0,
-                    hard_break: true,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: self.font_size * self.line_spacing,
-                    para_text: String::new(),
-                    para_start: 0,
-                    qtextline_idx: 0,
-                    para_qchar_start: 0,
-                    para_qchar_end: 0,
-                    line_wrap_width: 0.0,
-                    line_indent_x: 0.0,
-                    para_indent: 0.0,
-                    x_end_trailing: 0.0,
-                    qt_ascent: 0.0,
-                    qt_descent: 0.0,
-                    cache_slot: 0,
-                };
-                &fallback
-            }
-        };
-
-        let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
+        let cursor_x = self.cursor_x_from_canonical(&line, cursor_byte, affinity);
         let (cursor_y_doc, cursor_h) =
-            super::engine::cursor_rect_for_line(line, self.font_size, &self.font_family);
+            super::engine::cursor_rect_for_line(&line, self.font_size, &self.font_family);
         let cursor_y = cursor_y_doc - scroll_y;
         let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
         // Issue #712: baseline_y 从 QTextLine 的真实 ascent/descent 计算。
         let baseline_y_doc =
-            super::engine::text_baseline_y(line, self.font_size, &self.font_family);
+            super::engine::text_baseline_y(&line, self.font_size, &self.font_family);
         let baseline_y = baseline_y_doc - scroll_y;
 
         CaretRect {
@@ -358,67 +312,102 @@ impl CanonicalDocumentVisualSnapshot {
         }
     }
 
+    /// Issue #901 第十六轮问题2: 在 CanonicalDocumentVisualSnapshot 中按需物化找到光标所在行。
+    ///
+    /// 用 `paragraph_offset_index.byte_to_paragraph` O(log n) 定位段落，
+    /// 只物化该段和前一段的视觉行（处理段边界光标），不遍历全章。
+    /// `paragraph_offset_index` 为空时退化为全章物化。
+    fn find_caret_line(
+        &self,
+        cursor_byte: usize,
+        affinity: CaretAffinity,
+    ) -> VisualLine {
+        let fallback = || VisualLine {
+            id: 0,
+            byte_start: 0,
+            byte_end: 0,
+            qchar_start: 0,
+            qchar_end: 0,
+            hard_break: true,
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: self.font_size * self.line_spacing,
+            para_text: String::new(),
+            para_start: 0,
+            qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: 0.0,
+            line_indent_x: 0.0,
+            para_indent: 0.0,
+            x_end_trailing: 0.0,
+            qt_ascent: 0.0,
+            qt_descent: 0.0,
+            cache_slot: 0,
+        };
+
+        if self.visual_lines.is_empty() {
+            return fallback();
+        }
+
+        if !self.paragraph_offset_index.is_empty() {
+            let para_slot = self.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+            // 物化 para_slot-1 和 para_slot 两个段的行（处理段边界光标）
+            let start_slot = para_slot.saturating_sub(1);
+            let end_slot = para_slot + 1;
+            let start_idx = self
+                .visual_lines
+                .partition_point(|l| l.cache_slot < start_slot as i32);
+            let end_idx = self
+                .visual_lines
+                .partition_point(|l| l.cache_slot < end_slot as i32);
+            let lines = self.resolve_visual_line_range(start_idx, end_idx);
+
+            for (local_idx, line) in lines.iter().enumerate() {
+                if super::hit_test::line_contains_cursor_with_affinity(
+                    &lines,
+                    local_idx,
+                    cursor_byte,
+                    affinity,
+                ) {
+                    return line.clone();
+                }
+            }
+            return lines.last().cloned().unwrap_or_else(fallback);
+        }
+
+        // paragraph_offset_index 为空，退化为全章物化
+        let resolved = self.resolved_visual_lines();
+        let lines_slice = resolved.as_ref();
+        for (idx, line) in lines_slice.iter().enumerate() {
+            if super::hit_test::line_contains_cursor_with_affinity(
+                lines_slice,
+                idx,
+                cursor_byte,
+                affinity,
+            ) {
+                return line.clone();
+            }
+        }
+        lines_slice.last().cloned().unwrap_or_else(fallback)
+    }
+
     /// Issue #722 评论 5748596920 问题1: canonical caret 文档坐标入口。
     ///
     /// 与 `cursor_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
     /// `visible` 始终为 true。供正文事务 caret track 使用，使 caret track 与
     /// AnimatedSlice/StaticPatch 文档坐标系一致。
     pub fn cursor_rect_doc(&self, cursor_byte: usize, affinity: CaretAffinity) -> CaretRect {
-        // Issue #901 第十轮问题5: 用 resolved_visual_lines 按需物化后缀段绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 遍历找光标所在行可先用二分定位再 resolve_visual_line。
-        let resolved = self.resolved_visual_lines();
-        let lines_slice = resolved.as_ref();
-        let line = lines_slice
-            .iter()
-            .enumerate()
-            .find(|(idx, _)| {
-                super::hit_test::line_contains_cursor_with_affinity(
-                    lines_slice,
-                    *idx,
-                    cursor_byte,
-                    affinity,
-                )
-            })
-            .map(|(_, line)| line)
-            .or_else(|| lines_slice.last());
+        // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+        // 只物化该段和前一段的视觉行，不遍历全章 resolved_visual_lines。
+        let line = self.find_caret_line(cursor_byte, affinity);
 
-        let fallback;
-        let line = match line {
-            Some(line) => line,
-            None => {
-                fallback = VisualLine {
-                    id: 0,
-                    byte_start: 0,
-                    byte_end: 0,
-                    qchar_start: 0,
-                    qchar_end: 0,
-                    hard_break: true,
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: self.font_size * self.line_spacing,
-                    para_text: String::new(),
-                    para_start: 0,
-                    qtextline_idx: 0,
-                    para_qchar_start: 0,
-                    para_qchar_end: 0,
-                    line_wrap_width: 0.0,
-                    line_indent_x: 0.0,
-                    para_indent: 0.0,
-                    x_end_trailing: 0.0,
-                    qt_ascent: 0.0,
-                    qt_descent: 0.0,
-                    cache_slot: 0,
-                };
-                &fallback
-            }
-        };
-
-        let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
+        let cursor_x = self.cursor_x_from_canonical(&line, cursor_byte, affinity);
         let (cursor_y_doc, cursor_h) =
-            super::engine::cursor_rect_for_line(line, self.font_size, &self.font_family);
+            super::engine::cursor_rect_for_line(&line, self.font_size, &self.font_family);
         let baseline_y_doc =
-            super::engine::text_baseline_y(line, self.font_size, &self.font_family);
+            super::engine::text_baseline_y(&line, self.font_size, &self.font_family);
 
         CaretRect {
             x: cursor_x,

@@ -544,48 +544,41 @@ fn extract_paragraph_heights(visual_lines: &[VisualLine]) -> Vec<f64> {
     heights
 }
 
-/// Issue #901: 从 snapshot 提取受影响段落的高度更新列表。
+/// Issue #901: 从本轮新排版的视觉行按段索引聚合受影响段落的高度更新列表。
 ///
 /// 只对 `affected_indices` 中列出的段落提取 `(段落索引, 新高度)`，
 /// 用于 `ParagraphHeightIndex::update_heights_incremental`。
 ///
 /// Issue #901 第二轮复核问题 3: 一次构建 para_start → 段落顺序索引 和
 /// para_start → 累计高度 的 HashMap，不在循环内每次重建全部 para_starts + Vec::contains。
+///
+/// Issue #901 第十六轮问题3: 不再遍历全章 `visual_lines`，改为只遍历
+/// `new_lines`（本轮新排版的受影响段视觉行）。`new_lines` 只包含受影响段
+/// 的新行，按 `cache_slot` 聚合高度是 O(k)（k=受影响段行数），
+/// 不随全章行数线性增长。调用方传入 splice 范围内的新行切片。
 fn extract_affected_height_updates(
-    visual_lines: &[VisualLine],
+    new_lines: &[VisualLine],
     affected_indices: &[usize],
 ) -> Vec<(usize, f64)> {
     use std::collections::HashMap;
 
-    if affected_indices.is_empty() {
+    if affected_indices.is_empty() || new_lines.is_empty() {
         return Vec::new();
     }
 
-    // 一次遍历 visual_lines，构建：
-    // - para_start → 段落顺序索引（按首次出现顺序编号）
-    // - para_start → 累计高度
-    let mut para_start_to_order: HashMap<usize, usize> = HashMap::new();
-    let mut para_start_to_height: HashMap<usize, f64> = HashMap::new();
-    for vl in visual_lines {
-        // 先取当前长度再插入，避免 entry 借用与 len 借用冲突
-        let order = para_start_to_order.len();
-        para_start_to_order.entry(vl.para_start).or_insert(order);
-        *para_start_to_height.entry(vl.para_start).or_insert(0.0) += vl.height;
-    }
-
-    // 反转 order → para_start，用于按段落顺序索引查找
-    let mut order_to_para_start: HashMap<usize, usize> = HashMap::new();
-    for (&para_start, &order) in &para_start_to_order {
-        order_to_para_start.insert(order, para_start);
+    // Issue #901 第十六轮问题3: 只遍历 new_lines，按 cache_slot 聚合高度，O(k)。
+    // new_lines 中的行 cache_slot 是新段索引（段落序号），
+    // 同一段落的所有行 cache_slot 相同。
+    let mut slot_to_height: HashMap<i32, f64> = HashMap::new();
+    for vl in new_lines {
+        *slot_to_height.entry(vl.cache_slot).or_insert(0.0) += vl.height;
     }
 
     // 对每个受影响段落，O(1) 查表获取高度
     let mut updates: Vec<(usize, f64)> = Vec::new();
     for &idx in affected_indices {
-        if let Some(&para_start) = order_to_para_start.get(&idx) {
-            if let Some(&height) = para_start_to_height.get(&para_start) {
-                updates.push((idx, height));
-            }
+        if let Some(&height) = slot_to_height.get(&(idx as i32)) {
+            updates.push((idx, height));
         }
     }
     updates
@@ -1145,6 +1138,29 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 不随编辑变化，不需要更新。绝对坐标由消费方通过偏移索引按需计算。
     // 同理，后缀段的 paragraph_document_byte_start（现为段落索引）和内部行/cluster
     // 的 document_byte_start/end（现为段内相对偏移）也不需要更新。
+    //
+    // Issue #901 第十六轮问题1: 后缀段的 cache_slot（段落索引）需要更新。
+    // 拆段/合段后，后缀段在新文档中的段落索引发生了变化（中间段落数变化），
+    // 但后缀行作为复用数据未被 splice 修改，其 cache_slot 仍是旧段落索引。
+    // materialize_line 用 cache_slot 查 paragraph_offset_index/height_index，
+    // 旧 cache_slot 会查错段。此处更新后缀行 cache_slot 为新段落索引。
+    // 同时更新后缀 canonical paragraph 的 paragraph_document_byte_start
+    //（现被用作段落序号）为新段落序号。
+    let old_splice_para_count = splice_para_end - splice_para_start;
+    let new_splice_para_count = new_layout_end - new_layout_start;
+    let para_delta: i64 = new_splice_para_count as i64 - old_splice_para_count as i64;
+    if para_delta != 0 {
+        // 更新后缀行的 cache_slot：加上段落数变化差量
+        let suffix_line_start = vl_start_idx + new_affected_line_count;
+        for vl in &mut visual_lines[suffix_line_start..] {
+            vl.cache_slot = (vl.cache_slot as i64 + para_delta) as i32;
+        }
+        // 更新后缀 canonical paragraph 的 paragraph_document_byte_start（段落序号）
+        let suffix_para_start = splice_para_start + new_splice_para_count;
+        for (i, para) in paragraphs[suffix_para_start..].iter_mut().enumerate() {
+            para.paragraph_document_byte_start = suffix_para_start + i;
+        }
+    }
 
     // Issue #901 第十四轮问题1: 段内相对存储 — line_id/y 不再需要绝对值。
     // 尾部换行处理使用相对坐标（id=0, y=0.0）。
@@ -1312,7 +1328,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         height_index.rebuild(heights);
     } else {
         // 段落数不变，只更新受影响段落的高度（O(k log n)）
-        let height_updates = extract_affected_height_updates(&visual_lines, &affected_indices);
+        // Issue #901 第十六轮问题3: 从新行范围聚合高度，不遍历全章 visual_lines。
+        // splice 后新行在 [vl_start_idx, vl_start_idx + new_affected_line_count) 范围内，
+        // 这些行的 cache_slot 是新段索引，从中按段聚合高度是 O(k)。
+        let new_lines_range = vl_start_idx..(vl_start_idx + new_affected_line_count);
+        let height_updates =
+            extract_affected_height_updates(&visual_lines[new_lines_range], &affected_indices);
         height_index.update_heights_incremental(&height_updates, curr_para_count, line_height);
     }
 

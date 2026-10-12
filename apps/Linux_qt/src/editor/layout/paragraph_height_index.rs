@@ -655,6 +655,39 @@ impl ParagraphOffsetIndex {
     pub fn total_qchar_length(&self) -> usize {
         self.qchar_total
     }
+
+    /// Issue #901 第十六轮问题2: 查 byte→段落 — 找到包含 byte offset 的段落索引。
+    ///
+    /// 段落 `i` 的 byte 范围：`[paragraph_byte_start(i), paragraph_byte_start(i+1))`。
+    /// - `byte_offset >= total` → 返回最后一个段落
+    /// - 空索引 → 返回 0
+    ///
+    /// 使用 Fenwick 树上的二分搜索，O(log n)。
+    /// 用于 caret_rect / ime_visual 按需物化：先用 byte offset 定位段落，
+    /// 再只物化该段的视觉行，不遍历全章。
+    pub fn byte_to_paragraph(&self, byte_offset: usize) -> usize {
+        let n = self.byte_lengths.len();
+        if n == 0 {
+            return 0;
+        }
+        if byte_offset >= self.byte_total {
+            return n - 1;
+        }
+
+        // BIT 上的二分搜索：找最大的 pos 使得 prefix_sum(pos) <= byte_offset
+        let mut pos = 0usize;
+        let mut remaining = byte_offset;
+        let mut bit_mask = n.next_power_of_two() >> 1;
+        while bit_mask > 0 {
+            let next = pos + bit_mask;
+            if next <= n && self.byte_bit[next] <= remaining {
+                remaining -= self.byte_bit[next];
+                pos = next;
+            }
+            bit_mask >>= 1;
+        }
+        pos.min(n.saturating_sub(1))
+    }
 }
 
 #[cfg(test)]

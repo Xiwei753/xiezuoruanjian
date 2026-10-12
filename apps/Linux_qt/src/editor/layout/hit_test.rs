@@ -14,29 +14,38 @@ pub fn hit_test(
     y: f64,
     scroll_y: f64,
 ) -> (usize, CaretAffinity) {
-    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
-    let lines_cow = snapshot.resolved_lines();
-    let lines = lines_cow.as_ref();
-    if lines.is_empty() {
+    if snapshot.lines.is_empty() {
         return (0, CaretAffinity::Downstream);
     }
 
     let doc_y = y + scroll_y;
-    let line_opt = lines
-        .iter()
-        .enumerate()
-        .find(|(_, line)| doc_y < line.y + line.height);
-    let (_line_idx, line) = match line_opt {
-        Some((idx, l)) => (idx, l),
-        None => {
-            let Some(l) = lines.last() else {
-                return (0, CaretAffinity::Downstream);
-            };
-            (lines.len() - 1, l)
-        }
+
+    // Issue #901 第十六轮问题2: 用 height_index O(log n) 定位段落，
+    // 只物化该段的视觉行，不遍历全章 resolved_lines。
+    // height_index 为空时退化为全章物化（兼容 to_layout_snapshot 产生的空索引）。
+    let line_opt: Option<VisualLine> = if !snapshot.height_index.is_empty() {
+        let para_y = doc_y - f64::from(snapshot.padding);
+        let para_slot = snapshot.height_index.y_to_paragraph(para_y);
+        let para_lines = snapshot.resolve_paragraph_lines(para_slot);
+        para_lines
+            .iter()
+            .find(|l| doc_y < l.y + l.height)
+            .or_else(|| para_lines.last())
+            .cloned()
+    } else {
+        let lines_cow = snapshot.resolved_lines();
+        let lines = lines_cow.as_ref();
+        lines
+            .iter()
+            .find(|l| doc_y < l.y + l.height)
+            .or_else(|| lines.last())
+            .cloned()
     };
-    let raw_index = index_at_line_x(snapshot, line, x);
+
+    let Some(line) = line_opt else {
+        return (0, CaretAffinity::Downstream);
+    };
+    let raw_index = index_at_line_x(snapshot, &line, x);
     let index = raw_index.max(line.byte_start).min(line.byte_end);
     debug_assert!(
         index >= line.byte_start && index <= line.byte_end,
@@ -45,7 +54,7 @@ pub fn hit_test(
         line.byte_start,
         line.byte_end
     );
-    let affinity = affinity_for_index_on_line(line, index);
+    let affinity = affinity_for_index_on_line(&line, index);
 
     #[cfg(debug_assertions)]
     {
@@ -80,54 +89,14 @@ pub fn caret_rect(
     scroll_y: f64,
     viewport_h: f64,
 ) -> CaretRect {
-    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
-    let lines_cow = snapshot.resolved_lines();
-    let lines_slice = lines_cow.as_ref();
-    let line = lines_slice
-        .iter()
-        .enumerate()
-        .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(lines_slice, *idx, cursor_byte, affinity)
-        })
-        .map(|(_, line)| line)
-        .or_else(|| lines_slice.last());
+    // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+    // 只物化该段和前一段的视觉行，不遍历全章 resolved_lines。
+    // 物化前一段是为了正确处理段边界光标（光标在段尾 = 下一段首）。
+    let line = find_caret_line_in_layout_snapshot(snapshot, cursor_byte, affinity);
 
-    let fallback;
-    let line = match line {
-        Some(line) => line,
-        None => {
-            fallback = VisualLine {
-                id: 0,
-                byte_start: 0,
-                byte_end: 0,
-                qchar_start: 0,
-                qchar_end: 0,
-                hard_break: true,
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: f64::from(snapshot.font_size) * f64::from(snapshot.line_spacing),
-                para_text: String::new(),
-                para_start: 0,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 0,
-                line_wrap_width: 0.0,
-                line_indent_x: 0.0,
-                para_indent: 0.0,
-                x_end_trailing: 0.0,
-                qt_ascent: 0.0,
-                qt_descent: 0.0,
-                cache_slot: 0,
-            };
-            &fallback
-        }
-    };
-
-    let cursor_x = calculate_cursor_x_for_line(line, cursor_byte, affinity, snapshot);
+    let cursor_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, snapshot);
     let (cursor_y_doc, cursor_h) =
-        cursor_rect_for_line(line, f64::from(snapshot.font_size), &snapshot.font_family);
+        cursor_rect_for_line(&line, f64::from(snapshot.font_size), &snapshot.font_family);
     let cursor_y = cursor_y_doc - scroll_y;
     let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
@@ -143,7 +112,7 @@ pub fn caret_rect(
             get_font_descent(&snapshot.font_family, snapshot.font_size)
         };
         let text_baseline =
-            text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+            text_baseline_y(&line, f64::from(snapshot.font_size), &snapshot.font_family);
         let cursor_top_to_baseline = text_baseline - cursor_y_doc;
         let cursor_bottom_to_baseline = cursor_y_doc + cursor_h - text_baseline;
         eprintln!(
@@ -157,7 +126,7 @@ pub fn caret_rect(
     // Issue #712: baseline_y 从 QTextLine 的真实 ascent/descent 计算，
     // 不使用 `top + h * 0.8` 估算。text_baseline_y 返回文档坐标系 baseline。
     let baseline_y_doc =
-        text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+        text_baseline_y(&line, f64::from(snapshot.font_size), &snapshot.font_family);
     let baseline_y = baseline_y_doc - scroll_y;
 
     CaretRect {
@@ -170,6 +139,77 @@ pub fn caret_rect(
     }
 }
 
+/// Issue #901 第十六轮问题2: 在 LayoutSnapshot 中按需物化找到光标所在行。
+///
+/// 用 `paragraph_offset_index.byte_to_paragraph` O(log n) 定位段落，
+/// 只物化该段和前一段的视觉行（处理段边界光标），不遍历全章。
+/// `paragraph_offset_index` 为空时退化为全章物化。
+fn find_caret_line_in_layout_snapshot(
+    snapshot: &LayoutSnapshot,
+    cursor_byte: usize,
+    affinity: CaretAffinity,
+) -> VisualLine {
+    let fallback = || VisualLine {
+        id: 0,
+        byte_start: 0,
+        byte_end: 0,
+        qchar_start: 0,
+        qchar_end: 0,
+        hard_break: true,
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: f64::from(snapshot.font_size) * f64::from(snapshot.line_spacing),
+        para_text: String::new(),
+        para_start: 0,
+        qtextline_idx: 0,
+        para_qchar_start: 0,
+        para_qchar_end: 0,
+        line_wrap_width: 0.0,
+        line_indent_x: 0.0,
+        para_indent: 0.0,
+        x_end_trailing: 0.0,
+        qt_ascent: 0.0,
+        qt_descent: 0.0,
+        cache_slot: 0,
+    };
+
+    if snapshot.lines.is_empty() {
+        return fallback();
+    }
+
+    if !snapshot.paragraph_offset_index.is_empty() {
+        let para_slot = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+        // 物化 para_slot-1 和 para_slot 两个段的行（处理段边界光标）
+        let start_slot = para_slot.saturating_sub(1);
+        let end_slot = para_slot + 1;
+        let start_idx = snapshot
+            .lines
+            .partition_point(|l| l.cache_slot < start_slot as i32);
+        let end_idx = snapshot
+            .lines
+            .partition_point(|l| l.cache_slot < end_slot as i32);
+        let lines = snapshot.resolve_line_range(start_idx, end_idx);
+
+        for (local_idx, line) in lines.iter().enumerate() {
+            if line_contains_cursor_with_affinity(&lines, local_idx, cursor_byte, affinity) {
+                return line.clone();
+            }
+        }
+        return lines.last().cloned().unwrap_or_else(fallback);
+    }
+
+    // paragraph_offset_index 为空，退化为全章物化
+    let lines_cow = snapshot.resolved_lines();
+    let lines_slice = lines_cow.as_ref();
+    for (idx, line) in lines_slice.iter().enumerate() {
+        if line_contains_cursor_with_affinity(lines_slice, idx, cursor_byte, affinity) {
+            return line.clone();
+        }
+    }
+    lines_slice.last().cloned().unwrap_or_else(fallback)
+}
+
 /// Issue #722 评论 5748596920 问题1: canonical caret 文档坐标入口（自由函数版）。
 ///
 /// 与 `caret_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
@@ -180,56 +220,15 @@ pub fn caret_rect_doc(
     cursor_byte: usize,
     affinity: CaretAffinity,
 ) -> CaretRect {
-    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
-    let lines_cow = snapshot.resolved_lines();
-    let lines_slice = lines_cow.as_ref();
-    let line = lines_slice
-        .iter()
-        .enumerate()
-        .find(|(idx, _)| {
-            line_contains_cursor_with_affinity(lines_slice, *idx, cursor_byte, affinity)
-        })
-        .map(|(_, line)| line)
-        .or_else(|| lines_slice.last());
+    // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+    // 只物化该段和前一段的视觉行，不遍历全章 resolved_lines。
+    let line = find_caret_line_in_layout_snapshot(snapshot, cursor_byte, affinity);
 
-    let fallback;
-    let line = match line {
-        Some(line) => line,
-        None => {
-            fallback = VisualLine {
-                id: 0,
-                byte_start: 0,
-                byte_end: 0,
-                qchar_start: 0,
-                qchar_end: 0,
-                hard_break: true,
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: f64::from(snapshot.font_size) * f64::from(snapshot.line_spacing),
-                para_text: String::new(),
-                para_start: 0,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 0,
-                line_wrap_width: 0.0,
-                line_indent_x: 0.0,
-                para_indent: 0.0,
-                x_end_trailing: 0.0,
-                qt_ascent: 0.0,
-                qt_descent: 0.0,
-                cache_slot: 0,
-            };
-            &fallback
-        }
-    };
-
-    let cursor_x = calculate_cursor_x_for_line(line, cursor_byte, affinity, snapshot);
+    let cursor_x = calculate_cursor_x_for_line(&line, cursor_byte, affinity, snapshot);
     let (cursor_y_doc, cursor_h) =
-        cursor_rect_for_line(line, f64::from(snapshot.font_size), &snapshot.font_family);
+        cursor_rect_for_line(&line, f64::from(snapshot.font_size), &snapshot.font_family);
     let baseline_y_doc =
-        text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+        text_baseline_y(&line, f64::from(snapshot.font_size), &snapshot.font_family);
 
     CaretRect {
         x: cursor_x,
@@ -264,13 +263,40 @@ pub fn cursor_line_and_x(
     cursor: usize,
     affinity: CaretAffinity,
 ) -> Option<(usize, f64)> {
-    // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-    // TODO(issue-901): 后续优化为按需查询 — 命中测试遍历找行可先用二分定位再 resolve_line。
-    let lines_cow = snapshot.resolved_lines();
-    let lines = lines_cow.as_ref();
-    if lines.is_empty() {
+    if snapshot.lines.is_empty() {
         return None;
     }
+
+    // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+    // 只物化该段和前一段的视觉行，不遍历全章 resolved_lines。
+    // 返回全章行索引（start_idx + local_idx），供消费方用 resolve_line 查询。
+    if !snapshot.paragraph_offset_index.is_empty() {
+        let para_slot = snapshot.paragraph_offset_index.byte_to_paragraph(cursor);
+        let start_slot = para_slot.saturating_sub(1);
+        let end_slot = para_slot + 1;
+        let start_idx = snapshot
+            .lines
+            .partition_point(|l| l.cache_slot < start_slot as i32);
+        let end_idx = snapshot
+            .lines
+            .partition_point(|l| l.cache_slot < end_slot as i32);
+        let lines = snapshot.resolve_line_range(start_idx, end_idx);
+
+        for (local_idx, line) in lines.iter().enumerate() {
+            if line_contains_cursor_with_affinity(&lines, local_idx, cursor, affinity) {
+                let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
+                return Some((start_idx + local_idx, cursor_x));
+            }
+        }
+        return lines.last().map(|line| {
+            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
+            (end_idx.saturating_sub(1), cursor_x)
+        });
+    }
+
+    // paragraph_offset_index 为空，退化为全章物化
+    let lines_cow = snapshot.resolved_lines();
+    let lines = lines_cow.as_ref();
     for (idx, line) in lines.iter().enumerate() {
         if line_contains_cursor_with_affinity(lines, idx, cursor, affinity) {
             let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);

@@ -190,15 +190,30 @@ fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
     // Issue #748: layout.rs 拆分为 layout/ 子目录，caret_rect 在 hit_test.rs。
     let src = read_src("src/editor/layout/hit_test.rs");
     // `EditorLayout::caret_rect` 是薄封装转发；要断言的是自由函数实现。
-    let start = src
+    let caret_start = src
         .find("pub fn caret_rect(\n    snapshot")
         .expect("步骤4: 必须存在 caret_rect 实现");
-    let rest = &src[start..];
-    let end = rest.find("\n}\n").expect("步骤4: caret_rect 实现结束位置") + 3;
-    let body = &rest[..end];
+    let caret_rest = &src[caret_start..];
+    let caret_end = caret_rest.find("\n}\n").expect("步骤4: caret_rect 实现结束位置") + 3;
+    let caret_body = &caret_rest[..caret_end];
+    // Issue #901 第十六轮: caret_rect 重构为薄封装，兜底逻辑移到
+    // find_caret_line_in_layout_snapshot 辅助函数。验证调用关系 + 兜底逻辑仍在。
     assert!(
-        body.contains("or_else(|| lines_slice.last())"),
-        "步骤4: 空正文要靠 caret_rect 兜底行，不靠注入假字符"
+        caret_body.contains("find_caret_line_in_layout_snapshot"),
+        "步骤4: caret_rect 必须委托给 find_caret_line_in_layout_snapshot 定位光标行"
+    );
+    let helper_start = src
+        .find("fn find_caret_line_in_layout_snapshot(")
+        .expect("步骤4: 兜底辅助函数 find_caret_line_in_layout_snapshot 必须存在");
+    let helper_rest = &src[helper_start..];
+    let helper_end = helper_rest
+        .find("\n}\n")
+        .expect("步骤4: find_caret_line_in_layout_snapshot 实现结束位置")
+        + 3;
+    let helper_body = &helper_rest[..helper_end];
+    assert!(
+        helper_body.contains("lines_slice.last()"),
+        "步骤4: 空正文要靠 lines_slice.last() 兜底行，不靠注入假字符"
     );
     assert!(
         !src.contains("\\u{200b}") && !src.contains('\u{200b}'),
