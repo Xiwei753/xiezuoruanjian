@@ -1647,6 +1647,9 @@ export class EditorMotionCoordinator {
                 sourceUtf16Start: newSourceUtf16Start,
                 sourceUtf16End: newSourceUtf16End,
                 targetOpacity: 1,
+                // Issue #879 评论6116388578 问题2：target 成员的 windowInstanceId
+                // 为 undefined——由 buildFrame 分配新的 windowInstanceId。
+                windowInstanceId: undefined,
               })
             }
 

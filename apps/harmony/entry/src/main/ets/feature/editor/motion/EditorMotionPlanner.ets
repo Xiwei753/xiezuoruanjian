@@ -583,6 +583,9 @@ export class EditorMotionPlanner {
                         sourceUtf16Start: newMoveBoundaries[giStart],
                         sourceUtf16End: newMoveBoundaries[giEnd],
                         targetOpacity: 1,
+                        // Issue #879 评论6116388578 问题2：target 成员的 windowInstanceId
+                        // 为 undefined——由 buildFrame 分配新的 windowInstanceId。
+                        windowInstanceId: undefined,
                       }
                       interval.sourceMembers.push(newMember)
                     }
@@ -748,7 +751,10 @@ export class EditorMotionPlanner {
         sourceKind: w.sourceKind,
         runId: w.runId,
         renderNodeKey: w.renderNodeKey,
-        opacity: w.opacity
+        opacity: w.opacity,
+        // Issue #879 评论6116388578 问题2：从 MotionGlyphWindow 保存原始 windowInstanceId，
+        // 供 frozen 成员在 buildFrame 中原样输出 renderNodeKey。
+        windowInstanceId: w.windowInstanceId
       })
     }
     return spans
