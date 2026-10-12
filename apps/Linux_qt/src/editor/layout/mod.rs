@@ -416,14 +416,22 @@ impl EditorLayout {
             // 把整个 doc_snapshot move 到 last_snapshot（避免 clone paragraphs/images）。
             // 此前是 clone 整个 doc_snapshot 再 move visual_lines，多 clone 了 paragraphs。
             //
-            // Issue #901 第五轮阻塞5: 此处 visual_lines.clone() 是所有权模型的必要 clone：
-            // LayoutSnapshot.lines（Vec<VisualLine>）和 last_snapshot
-            //（CanonicalDocumentVisualSnapshot.visual_lines）各需一份 visual_lines 的
-            // 所有权。当前类型为 Vec，无法共享所有权。未来可将 LayoutSnapshot.lines 和
-            // CanonicalDocumentVisualSnapshot.visual_lines 改为 Arc<Vec<VisualLine>>，
-            // 用 Arc::clone（仅增引用计数）消除此深拷贝。该改动涉及 types.rs /
-            // canonical_snapshot.rs / full.rs / scene_graph_renderer.rs 等多文件，
-            // 需统一协调，不在本轮阻塞修复范围。
+            // Issue #901 第八轮问题5性能优化: 已验证增量路径正确接通——
+            // prev_snapshot 经 std::mem::take 取走所有权（不 clone 整个 snapshot），
+            // prepare_incremental_visual_snapshot 内部对 prev visual_lines 做 splice
+            // 原地修改后 move 返回，不产生额外 clone。此处 visual_lines.clone() 是
+            // 所有权模型的必要 clone：LayoutSnapshot.lines（Vec<VisualLine>）和
+            // last_snapshot（CanonicalDocumentVisualSnapshot.visual_lines）各需一份
+            // visual_lines 的所有权，当前类型为 Vec 无法共享。
+            //
+            // 完整方案：将 LayoutSnapshot.lines 和 CanonicalDocumentVisualSnapshot
+            // .visual_lines 改为 Arc<Vec<VisualLine>>，构造时 Arc::clone（仅增引用计数），
+            // last_snapshot 下次 splice 时 Arc::make_mut（refcount==1 原地改，否则 COW）。
+            // 本轮未采用，原因：layout_ops.rs:388 `&c.lines` 把 LayoutSnapshot.lines 作
+            // `&Vec`/`&[T]` 传给 compare_old_new_visual_lines，scene_graph_renderer.rs
+            // 亦直接索引 snapshot.lines；改 Arc<Vec> 会使这些消费方编译失败，而上述文件
+            // 由其他 Task 维护，不在本 Task 修改范围。故本轮保留此最小 clone，待跨文件
+            // 统一迁移 Arc 时消除。
             let lines = doc_snapshot.visual_lines.clone();
             self.last_snapshot = Some(doc_snapshot);
 

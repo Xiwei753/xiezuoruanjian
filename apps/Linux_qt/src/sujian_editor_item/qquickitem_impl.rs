@@ -380,6 +380,14 @@ impl QQuickItem for SujianEditorItem {
             //   的 cluster 级 TargetGlyphRun 对称：byte_range 是 cluster 范围，
             //   document_rect 是 cluster 真实字形几何，source_uv 是 cluster 在行纹理
             //   中的局部坐标（非零）。过滤 visible_clip.h <= 0 的行（视口外不登记）。
+            // Issue #901 第八轮问题1+2修复：
+            // - 问题1：静态贡献只从本帧 QSG 静态层真正留下的 cluster 可见片段生成，
+            //   排除被动画层（clip_rects）完全接管的 cluster。source_revision 绑定
+            //   target Core revision（canvas_plan.target_revision），不用
+            //   canvas_plan.source_revision（后者往往是历史已提交版）。
+            // - 问题2：验证 cluster 的 snapshot_id 对应的纹理是否存在于 texture_cache
+            //   中。如果不存在，跳过该 cluster 的静态贡献登记（它由 QSGTextNode
+            //   直接绘制，不参与动画吞吐）。
             let static_text_contributions: Vec<
                 super::render_plan::StaticTextContributionInfo,
             > = canonical_visual_snapshot
@@ -387,6 +395,12 @@ impl QQuickItem for SujianEditorItem {
                 .map(|snap| {
                     let viewport_top = scroll_y;
                     let viewport_bottom = scroll_y + vp_h;
+                    let texture_cache = self.pipeline.texture_cache();
+                    // Issue #901 第八轮问题1：静态贡献的 source_revision 绑定
+                    // target Core revision。静态贡献来自当前 target canonical，
+                    // byte_range 是 target 的 cluster 坐标，source_revision 必须
+                    // 与 byte_range 来自同一版本。
+                    let static_source_revision = canvas_plan.target_revision;
                     snap.line_snapshots
                         .iter()
                         .flat_map(|line| {
@@ -429,6 +443,26 @@ impl QQuickItem for SujianEditorItem {
                                     if clip_h <= 0.0 {
                                         return None;
                                     }
+                                    // Issue #901 第八轮问题1：排除被动画层（clip_rects）
+                                    // 完全接管的 cluster。动画层在这些区域挖空，静态层
+                                    // 不绘制，不应登记静态贡献。只跳过完全被覆盖的 cluster；
+                                    // 部分重叠的 cluster 仍登记（静态层在未覆盖部分仍绘制）。
+                                    let fully_covered = clip_rects.iter().any(|clip| {
+                                        rect_fully_contains(
+                                            clip.x, clip.y, clip.w, clip.h,
+                                            doc_rect.x, doc_rect.y, doc_rect.w, doc_rect.h,
+                                        )
+                                    });
+                                    if fully_covered {
+                                        return None;
+                                    }
+                                    // Issue #901 第八轮问题2：验证 cluster 的 snapshot_id
+                                    // 对应的纹理是否存在于 texture_cache 中。如果不存在，
+                                    // 跳过该 cluster 的静态贡献登记——它由 QSGTextNode
+                                    // 直接绘制，不参与动画吞吐（没有纹理无法做裁剪收回）。
+                                    if !texture_cache.contains_line(&line.id) {
+                                        return None;
+                                    }
                                     let visible_clip = super::layout_snapshot::SourceRect {
                                         x: doc_rect.x,
                                         y: clip_y,
@@ -450,6 +484,8 @@ impl QQuickItem for SujianEditorItem {
                                             w: cluster.source_rect.w,
                                             h: cluster.source_rect.h,
                                         },
+                                        // Issue #901 第八轮问题1：绑定 target Core revision。
+                                        source_revision: static_source_revision,
                                     })
                                 })
                                 .collect()
@@ -915,8 +951,13 @@ impl SujianEditorItem {
         // 有效文本 cluster。所以静态已提交正文的 PresentedScene.pixel_contributions
         // 是空列表，下一次编辑会把整个目标正文都判为"新增字"并触发全屏文字重暴露。
         //
-        // 静态正文属于已提交的旧帧，source_revision 用 canvas_plan.source_revision
-        // （plan_source_revision）。每条静态贡献携带：
+        // 静态正文属于当前 target canonical，source_revision 用 info.source_revision
+        //（在 render_plan 构造时绑定到 canvas_plan.target_revision）。
+        // Issue #901 第八轮问题1修复：旧实现把所有静态贡献的 source_revision 一律设为
+        // plan_source_revision（canvas_plan.source_revision，往往是历史已提交版），
+        // 但 byte_range 用的是当前 target 的 cluster 坐标，造成「最新 byte_range +
+        // 旧 source revision」混搭。现改为用 info.source_revision（绑定 target revision）。
+        // 每条静态贡献携带：
         // - byte_range：从 LineClusterSnapshot.byte_start/byte_end 获取（cluster 级）
         // - snapshot_id：完整 LineSnapshotId
         // - document_rect：从 cluster 的 source_rect 经 visual_x/visual_line_top 换算
@@ -929,6 +970,8 @@ impl SujianEditorItem {
         //   使 remaining_uv_w > 0，能正确生成裁剪收回命令。
         //
         // 两份贡献（动画 TextFragment + 静态文本）合并到同一个 pixel_contributions 列表。
+        // Issue #901 第八轮问题1：静态贡献已在 render_plan 构造时排除了被动画层
+        // 完全接管的 cluster 和缺纹理的 cluster，不与动画贡献重叠。
         let static_contributions: Vec<PixelContribution> = render_plan
             .static_text_contributions
             .iter()
@@ -956,7 +999,9 @@ impl SujianEditorItem {
                 ),
                 opacity: 1.0,
                 byte_range: info.byte_range,
-                source_revision: plan_source_revision,
+                // Issue #901 第八轮问题1：用 info.source_revision（绑定 target
+                // Core revision），不用 plan_source_revision（旧已提交版）。
+                source_revision: info.source_revision,
             })
             .collect();
 
@@ -1170,4 +1215,23 @@ impl SujianEditorItem {
         // 选区收起后从此位置恢复 Tween。
         self.cursor_ctrl.record_selection_head_rect();
     }
+}
+
+/// Issue #901 第八轮问题1：判断矩形 `outer` 是否完全包含矩形 `inner`。
+///
+/// 用于静态贡献生成时排除被动画层（clip_rects）完全接管的 cluster。
+/// `outer` 是动画层接管区域（AnimationClipRect 的 x/y/w/h，文档坐标），
+/// `inner` 是 cluster 的 document_rect。当 outer 完全包含 inner 时，
+/// 静态层在该 cluster 区域不绘制，不应登记静态贡献。
+///
+/// 容忍 0.5 像素误差，避免浮点精度导致边缘 cluster 误判。
+fn rect_fully_contains(
+    outer_x: f64, outer_y: f64, outer_w: f64, outer_h: f64,
+    inner_x: f64, inner_y: f64, inner_w: f64, inner_h: f64,
+) -> bool {
+    const EPS: f64 = 0.5;
+    outer_x <= inner_x + EPS
+        && outer_y <= inner_y + EPS
+        && outer_x + outer_w >= inner_x + inner_w - EPS
+        && outer_y + outer_h >= inner_y + inner_h - EPS
 }

@@ -981,6 +981,27 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let new_affected_height: f64 = new_visual_lines.iter().map(|vl| vl.height).sum();
     let delta_height = new_affected_height - old_affected_height;
 
+    // Issue #901 第八轮问题4: 在 splice 之前保存旧后缀边界。
+    // splice 后旧 visual_lines 已被改写，不能用旧下标 vl_end_idx 访问新数组
+    // 反推旧边界——若删除长段使新数组比 vl_end_idx 短，条件判 false 会令
+    // byte_delta/qchar_delta 归零，后续段落坐标停留在旧值，导致换行/混排/光标错乱。
+    // old_suffix_byte_start: 旧文档中受影响段落后的 byte offset（后缀段落起点）
+    let old_suffix_byte_start: usize = if old_splice_end < prev_paragraphs.len() {
+        prev_paragraphs[old_splice_end].paragraph_document_byte_start
+    } else if vl_end_idx < visual_lines.len() {
+        visual_lines[vl_end_idx].byte_start
+    } else {
+        visual_lines.last().map(|vl| vl.byte_end).unwrap_or(0)
+    };
+    // old_suffix_qchar_start: 旧文档中受影响段落后的 qchar offset（后缀段落起点）
+    // qchar_start 是文档绝对 qchar，para_qchar_start 是行内段落相对 qchar 起点，
+    // 两者之差即该行所在段落的文档 qchar 起点。
+    let old_suffix_qchar_start: usize = if vl_end_idx < visual_lines.len() {
+        visual_lines[vl_end_idx].qchar_start - visual_lines[vl_end_idx].para_qchar_start
+    } else {
+        visual_lines.last().map(|vl| vl.qchar_end).unwrap_or(0)
+    };
+
     // splice visual_lines：替换受影响段落的行
     let new_affected_line_count = new_visual_lines.len();
     visual_lines.splice(vl_start_idx..vl_end_idx, new_visual_lines);
@@ -996,50 +1017,53 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
-    // Issue #901 问题5缺陷C: 更新后续段的 y 和 byte offset。
-    // 只在高度变化或 byte offset 变化时更新，避免不必要的遍历。
-    // 对长章非结构性编辑（高度不变、byte 不变），此处跳过，成本 O(1)。
-    //
-    // 架构限制: 当 delta_height != 0 或 byte_delta != 0 时，仍需 O(后续行数) 遍历
-    // 物化 visual_lines 中每个行的绝对 y/byte 字段。完整方案应改为不物化绝对坐标，
-    // 而是通过 ParagraphHeightIndex::paragraph_top_y(para_idx) 按需计算段落顶 y，
-    // 行内相对 y 存储在段落布局中，绝对 y = paragraph_top_y + relative_y。
-    // 这属于架构级改动（影响 visual_lines 消费方、cursor_rect、hit test 等），
-    // 超出本轮范围。当前已在"无变化时跳过"这一前置条件上做到最优。
-    if delta_height.abs() > 0.001 {
-        let update_start = vl_start_idx + new_affected_line_count;
+    // Issue #901 问题5缺陷C + 第八轮问题5性能优化:
+    // 合并 y/byte/qchar 三个独立遍历为单次遍历，减少缓存未命中。
+    // 完整架构方案（未改段落不物化绝对坐标，通过 ParagraphHeightIndex 按需计算
+    // paragraph_top_y(para_idx) + relative_y，byte/qchar 用段落相对偏移 + 段落起点）
+    // 涉及 visual_lines 消费方、cursor_rect、hit test 等多处改动，超出本轮范围。
+    // 当前在"无变化时跳过"前置条件下已最优，此处进一步把多趟 O(后续行数) 合并为单趟。
+    let new_affected_byte_end = paragraph_start;
+    // 旧受影响段落的 byte end = splice 前保存的旧后缀起点
+    // Issue #901 第八轮问题4: 不再用旧下标 vl_end_idx 访问 splice 后的新数组反推旧边界
+    let old_affected_byte_end: usize = old_suffix_byte_start;
+    let byte_delta = new_affected_byte_end as i64 - old_affected_byte_end as i64;
+
+    let new_affected_qchar_end = paragraph_qchar_start;
+    // 旧受影响段落的 qchar end = splice 前保存的旧后缀起点
+    // Issue #901 第八轮问题4: 不再用旧下标访问 splice 后的新数组反推旧边界
+    let old_affected_qchar_end: usize = old_suffix_qchar_start;
+    let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
+
+    let update_start = vl_start_idx + new_affected_line_count;
+    let need_y = delta_height.abs() > 0.001;
+    let need_byte = byte_delta != 0;
+    let need_qchar = qchar_delta != 0;
+
+    // 合并的单次遍历：同时更新 y / byte / qchar 偏移。
+    // 原实现为三个独立循环各遍历 visual_lines[update_start..] 一次（最多 3 趟），
+    // 此处合并为最多 1 趟，仅在对应 delta != 0 时更新对应字段。
+    if need_y || need_byte || need_qchar {
         for vl in &mut visual_lines[update_start..] {
-            vl.y += delta_height;
+            if need_y {
+                vl.y += delta_height;
+            }
+            if need_byte {
+                vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
+                vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
+                vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
+            }
+            if need_qchar {
+                vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
+                vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
+            }
         }
     }
 
-    // 更新后续段的 byte offset 和 line_id
-    // byte offset 变化 = 新文本中受影响段落后的 byte offset - 旧文本中对应的 byte offset
-    // 用新文本的 paragraph_start（已累加到受影响段落后）和旧文本的 old_affected_byte_start 比较
-    let new_affected_byte_end = paragraph_start;
-    // 旧受影响段落的 byte end = vl_end_idx 对应行的 byte_end
-    let old_affected_byte_end: usize = if vl_end_idx > 0 && vl_end_idx <= visual_lines.len() {
-        // vl_end_idx 可能已经因为 splice 变化，用 splice 后的位置
-        let after_splice_end = vl_start_idx + new_affected_line_count;
-        if after_splice_end < visual_lines.len() {
-            visual_lines[after_splice_end].byte_start
-        } else {
-            new_affected_byte_end
-        }
-    } else {
-        new_affected_byte_end
-    };
-    let byte_delta = new_affected_byte_end as i64 - old_affected_byte_end as i64;
-
+    // 更新后续段落的 paragraph_document_byte_start 及其内部行/cluster 的 byte offset。
+    // paragraphs 数组独立于 visual_lines，无法并入上面的遍历。
+    // Issue #901 第五轮阻塞2: 用新段范围 new_layout_end 定位后续段
     if byte_delta != 0 {
-        let update_start = vl_start_idx + new_affected_line_count;
-        for vl in &mut visual_lines[update_start..] {
-            vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
-            vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
-            vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
-        }
-        // 更新后续段落的 paragraph_document_byte_start
-        // Issue #901 第五轮阻塞2: 用新段范围 new_layout_end 定位后续段
         let para_update_start = new_layout_end.min(paragraphs.len());
         for para in &mut paragraphs[para_update_start..] {
             para.paragraph_document_byte_start =
@@ -1073,30 +1097,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 改变受影响行数（new != old）时才会因行索引漂移而失配；行数不变时
     // （如纯字符替换不增删行）后续行索引不变，id 仍 == 行索引，可跳过 O(后续行数) 遍历。
     // 这对长章非结构性编辑（高度不变、行数不变、byte 不变）将此步从 O(后续行数) 降为 O(1)。
+    // line_id 更新需维护 next_id 状态变量，无法并入上面的无状态偏移遍历，保留独立循环。
     let old_affected_line_count = vl_end_idx - vl_start_idx;
-    let line_id_update_start = vl_start_idx + new_affected_line_count;
     if new_affected_line_count != old_affected_line_count {
-        let mut next_id = line_id_update_start;
-        for vl in &mut visual_lines[line_id_update_start..] {
+        let mut next_id = update_start;
+        for vl in &mut visual_lines[update_start..] {
             vl.id = next_id;
             next_id += 1;
-        }
-    }
-
-    // 更新后续段的 qchar_start/qchar_end
-    // qchar offset 变化 = 新文本中受影响段落后的 qchar offset - 旧文本中对应的 qchar offset
-    let new_affected_qchar_end = paragraph_qchar_start;
-    let old_affected_qchar_end: usize = if vl_start_idx + new_affected_line_count < visual_lines.len() {
-        let after = vl_start_idx + new_affected_line_count;
-        visual_lines[after].qchar_start - visual_lines[after].para_qchar_start
-    } else {
-        new_affected_qchar_end
-    };
-    let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
-    if qchar_delta != 0 {
-        for vl in &mut visual_lines[vl_start_idx + new_affected_line_count..] {
-            vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
-            vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
         }
     }
     // Issue #901 问题5: 增量路径只遍历了受影响段落，line_id/y/paragraph_idx

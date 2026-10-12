@@ -469,6 +469,13 @@ impl SujianEditorItem {
         // 矩阵做 translate(0, -scroll_y)）。
         self.update_cursor_visual_position();
         // Issue #658: 滚动不重新排版 QSGTextNode，只请求帧更新（位移由 QSGTransformNode 矩阵处理）。
+        // Issue #901 第八轮问题3: request_frame_update 触发下一帧 update_paint_node →
+        // scene_graph_renderer::render_frame。render_frame 内部用
+        // compute_viewport_para_range 计算新视口段落范围，与模块级 LOADED_PARA_RANGE
+        // 缓存比较：视口跨出已加载段落集合时触发 rebuild（insert 新段落节点 +
+        // remove 离开段落节点），未跨出时只平移 transform。此处的
+        // request_frame_update 即为"把 scroll viewport range 变化传给真实更新路径"
+        // 的通知机制——不需要额外标志字段，render_frame 每帧自主检测跨出。
         self.request_frame_update();
     }
 

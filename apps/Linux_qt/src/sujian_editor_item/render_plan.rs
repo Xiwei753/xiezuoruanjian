@@ -5,6 +5,7 @@ use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::DeleteEdge;
+use writer_core::editor::EditorRevision;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
@@ -240,6 +241,19 @@ pub(crate) struct StaticTextContributionInfo {
     /// `LineClusterSnapshot.source_rect`。非零，使 `command_for_deleting`
     /// 的 `remaining_uv_w = source_uv.w * fade_out > 0`，能生成裁剪收回命令。
     pub source_uv: SourceRect,
+    /// Issue #901 第八轮问题1：该静态贡献对应的 Core source revision。
+    ///
+    /// 静态贡献来自当前 target canonical（`canonical_visual_snapshot`），
+    /// `source_revision` 绑定该 canonical 对应的 **target Core revision**
+    ///（`canvas_plan.target_revision`），不用 `canvas_plan.source_revision`
+    ///（后者往往是历史已提交版）。
+    ///
+    /// 旧实现把所有静态贡献的 `source_revision` 一律设为 `plan_source_revision`
+    ///（`canvas_plan.source_revision`），但 `byte_range` 用的是当前 target
+    /// 的 cluster 坐标，造成「最新 byte_range + 旧 source revision」混搭，
+    /// 使 `controller.rs` 的 reset 条件永远无法满足（每帧重复登记旧 revision
+    /// 的静态贡献，动画到 progress=1 后也无法完成归还/清理）。
+    pub source_revision: EditorRevision,
 }
 
 #[derive(Clone, Copy, Debug)]

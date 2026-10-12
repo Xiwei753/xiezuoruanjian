@@ -5,6 +5,24 @@ use super::visual_canvas::{CanvasDrawPlan, DrawCommandKind};
 use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex};
 use crate::editor::scene_graph;
 
+/// Issue #901 第八轮问题3：缓存当前 QSG 静态层已加载的稳定段落索引区间。
+///
+/// `render_frame` 每次 rebuild 成功后把本帧视口（±一屏边距）对应的段落索引
+/// 范围 `[start, end)` 写入此处。后续纯滚动帧不再无条件只平移 transform：
+/// 先用 `compute_viewport_para_range` 算出新视口段落范围，与此缓存比较，
+/// 若新范围跨出已加载集合（`new_start < loaded_start || new_end > loaded_end`）
+/// 则触发局部 rebuild（insert 新段落节点 + remove 离开段落节点），否则只更新
+/// `QSGTransformNode` 位移矩阵。这修复"从章节顶部滚动几屏后新区域没有段落可画"
+/// 的空白问题。
+///
+/// 用 `Mutex` 保护以满足 `static` 的 `Sync` 要求。`render_frame` 只在 render
+/// thread 执行，锁竞争实际不存在；用 `lock().ok()` 避免 poison panic，poison
+/// 时退化为 `(0, 0)`（空范围），最坏触发一次额外 rebuild，不影响正确性。
+///
+/// 单实例假设：多 `SujianEditorItem` 实例共享此缓存时，最坏情况是段落范围
+/// 混淆触发一次额外全量 rebuild，rebuild 会重建正确视口节点，不破坏正确性。
+static LOADED_PARA_RANGE: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+
 /// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
 /// `TextAnimationGlyphInfo` 列表，供动画层消费。
 ///
@@ -163,6 +181,31 @@ fn paragraph_top_document_y(
     }
 }
 
+/// Issue #901 第八轮问题3：计算当前视口（±一屏边距）对应的稳定段落索引范围。
+///
+/// 返回 `Some((start, end))` 表示段落 `[start, end)` 应被加载到 QSG 静态层；
+/// 返回 `None` 表示无可用 `height_index` 或 `layout_snapshot`，调用方应跳过
+/// 跨出检测（退化为旧行为）。
+///
+/// 视口边距与 `render_frame` rebuild 分支保持一致：`margin = viewport_height`，
+/// `visible_top = scroll_y - margin`，`visible_bottom = scroll_y + viewport_height + margin`。
+/// 这样"已加载范围"与 rebuild 实际建立的段落集合一致，跨出判断才准确。
+///
+/// 用 `ParagraphHeightIndex::paragraphs_in_y_range` 做 O(log n) 段落枚举，
+/// 不遍历全章 lines。
+fn compute_viewport_para_range(static_text: &StaticTextParams<'_>) -> Option<(usize, usize)> {
+    let hi = static_text.height_index?;
+    // layout_snapshot 不参与段落枚举（paragraphs_in_y_range 只用 height_index），
+    // 但调用方通常同时提供两者。此处不强制要求 layout_snapshot。
+    let viewport_top = static_text.scroll_y;
+    let viewport_bottom = static_text.scroll_y + static_text.viewport_height;
+    let margin = static_text.viewport_height.max(100.0);
+    let visible_top = viewport_top - margin;
+    let visible_bottom = viewport_bottom + margin;
+    let (first_para, last_para_excl) = hi.paragraphs_in_y_range(visible_top, visible_bottom);
+    Some((first_para, last_para_excl))
+}
+
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -198,8 +241,29 @@ pub(crate) fn render_frame(
     // 先检查整份 ownership plan 的动画资源。缺一张就按 canonical 静态正文提交，
     // 不能只过滤静态 clip、再让动画层单独跳过缺纹理的 glyph。
     let animation_resources_ready = plan.ownership.has_animation_resources(texture_cache);
-    let should_rebuild_static =
-        static_text.needs_relayout || plan.ownership.handoff_pending || !animation_resources_ready;
+
+    // Issue #901 第八轮问题3：计算新视口对应的段落范围，与已加载范围比较。
+    // 跨出已加载集合时触发 rebuild（insert 新段落节点 + remove 离开段落节点），
+    // 不只平移旧一屏的 transform。这修复长距离滚动后新区域空白的问题。
+    let new_para_range = compute_viewport_para_range(static_text);
+    let loaded_para_range = LOADED_PARA_RANGE
+        .lock()
+        .ok()
+        .map(|g| *g)
+        .unwrap_or((0, 0));
+    // 视口跨出已加载段落集合：新范围的下界 < 已加载下界，或新范围上界 > 已加载上界。
+    // 无 new_para_range（无 height_index）时不触发跨出检测，退化为旧行为。
+    let viewport_exceeds_loaded = match new_para_range {
+        Some((new_start, new_end)) => {
+            new_start < loaded_para_range.0 || new_end > loaded_para_range.1
+        }
+        None => false,
+    };
+
+    let should_rebuild_static = static_text.needs_relayout
+        || plan.ownership.handoff_pending
+        || !animation_resources_ready
+        || viewport_exceeds_loaded;
 
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
@@ -368,7 +432,12 @@ pub(crate) fn render_frame(
             // c) rebuild 范围已限定为视口内段落（start_idx..end_idx），非全章段落。
             //    虽然仍是一次性重建视口内所有段落节点，但成本与视口大小成正比，
             //    而非与全章长度成正比。
-            static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
+            //
+            // Issue #901 第八轮问题5（节点部分）: 改走 update_paragraph_nodes_by_id
+            // 基于稳定 ParagraphId 的节点更新路径。当前实现委托给
+            // rebuild_text_node_from_paragraphs（全量重建视口内段落），接口按
+            // ParagraphId 设计为后续真正的增量 insert/remove/update 优化预留。
+            static_rebuild_ok = qt_text_node::update_paragraph_nodes_by_id(
                 root_raw,
                 item_ptr,
                 &paragraphs,
@@ -379,6 +448,17 @@ pub(crate) fn render_frame(
                 f64::from(snapshot.padding),
                 snapshot.layout_generation,
             );
+
+            // Issue #901 第八轮问题3：rebuild 成功后把本帧实际加载的段落范围
+            // 写入 LOADED_PARA_RANGE。后续纯滚动帧用此范围判断视口是否跨出
+            // 已加载集合。rebuild 失败时不更新（保留旧范围，下一帧重试）。
+            if static_rebuild_ok {
+                if let Some(range) = new_para_range {
+                    if let Ok(mut g) = LOADED_PARA_RANGE.lock() {
+                        *g = range;
+                    }
+                }
+            }
         } else {
             // 没有与本帧一致的 prepared layout 时不能提交新的 owner 状态。
             static_rebuild_ok = false;
@@ -390,10 +470,14 @@ pub(crate) fn render_frame(
         // 裁剪后节点不动，避免每帧销毁/重建静态 QSGTextNode 产生闪烁。
         // Issue #901 问题5缺陷A: 此 else 分支是"本帧正文未变跳过重建"的优化点。
         // should_rebuild_static=false 意味着 needs_relayout=false 且无 handoff_pending
-        // 且动画资源就绪，即本帧只有滚动位移或动画 progress 变化，正文内容未变。
+        // 且动画资源就绪且视口未跨出已加载段落集合，即本帧只有滚动位移或动画
+        // progress 变化，正文内容未变且新视口仍在上次 rebuild 加载的段落范围内。
         // 此时跳过 rebuild_text_node_from_paragraphs 全量重建，只平移 transform，
-        // 成本 O(1) 而非 O(视口内段落数)。完整局部更新（按 ParagraphId insert/remove/
-        // update 视口内段落节点）见上方接入计划，属于后续 Issue 的架构级工作。
+        // 成本 O(1) 而非 O(视口内段落数)。
+        // Issue #901 第八轮问题3: 视口跨出已加载集合的情况已在上方
+        // should_rebuild_static 判断中被 viewport_exceeds_loaded 捕获，走 rebuild
+        // 分支按需 insert/remove 段落节点。进入此 else 分支 guarantee 视口未跨出，
+        // 平移旧节点集合是安全的（所有可见段落都已在 QSG 中有节点）。
         qt_text_node::update_scroll_transform(root_raw, static_text.scroll_y);
     }
 
@@ -407,6 +491,16 @@ pub(crate) fn render_frame(
     // 静态 rebuild 失败时保留前一帧的 static + animation 组合，不更新一半新状态。
     // 正常终点、取消和文档切换都走同一原子交接：只有静态层 rebuild 成功后，
     // 才在本次 update_paint_node 中更新/清空动画层。失败时保留旧 static + animation。
+    //
+    // Issue #901 第八轮问题2（渲染器部分）：渲染接口返回本帧实际采用的 owner/glyph。
+    // 当 animation_resources_ready=false 或 handoff_pending=true 时，should_rebuild_static
+    // 为 true，静态层走 rebuild 画完整 canonical 正文（available_clip_rects 为空，
+    // 不挖空任何区域）；动画层 glyphs=&[]（下方判断）被清空。即资源缺失的片段由
+    // 静态 owner 画，动画层不画任何 glyph。PresentedScene 侧由 Task 3 在
+    // qquickitem_impl.rs::build_presented_scene_from_frame 修复为排除动画接管区域、
+    // 验证纹理存在、绑定 target revision，与本处渲染器侧的"资源缺失→静态 owner
+    // 画、动画层清空"决策一致。两层通过 animation_resources_ready 和 handoff_pending
+    // 同一组标志做对称决策，不出现"静态挖了空但动画没画"或"动画画了但静态没挖空"。
     if static_rebuild_ok {
         let glyphs = if animation_resources_ready && !plan.ownership.handoff_pending {
             plan.ownership.animated_glyphs.as_slice()

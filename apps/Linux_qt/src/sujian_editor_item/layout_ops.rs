@@ -132,20 +132,29 @@ impl SujianEditorItem {
             Err(err) => return Err(err),
         };
 
-        // 5. 为受影响行提取 QImage 纹理，填充到 PreparedLineSnapshot.image。
-        // 普通输入也走此路径，不再只在 composition_range 非空时才提取。
+        // 5. 为受影响行 + 视口内所有可见行提取 QImage 纹理，填充到
+        // PreparedLineSnapshot.image。
+        //
+        // Issue #901 第八轮问题2修复：旧实现仅为 affected byte range 的行提取 QImage，
+        // 导致不在 affected range 的视口内行只有 image=None。当静态 cluster 被选作
+        // 动画来源时，缺纹理会被跳过（qquickitem_impl.rs 静态贡献生成时验证纹理存在）。
+        // 现扩展到视口内所有可见行，确保静态 cluster 有纹理路径。
+        let dpr = {
+            let item_ptr = self.get_cpp_object();
+            if !item_ptr.is_null() {
+                crate::editor::renderer::sujian_item_dpr(item_ptr)
+            } else {
+                1.0
+            }
+        };
+        let text_color = self.current_text_color.to_string();
+
+        // 合并 affected range 行索引和视口内可见行索引。
+        use std::collections::HashSet;
+        let mut line_indices_set: HashSet<usize> = HashSet::new();
+
         let (affected_start, affected_end) = affected_range.unwrap_or((0, 0));
         if affected_start < affected_end {
-            let dpr = {
-                let item_ptr = self.get_cpp_object();
-                if !item_ptr.is_null() {
-                    crate::editor::renderer::sujian_item_dpr(item_ptr)
-                } else {
-                    1.0
-                }
-            };
-            let text_color = self.current_text_color.to_string();
-
             // Issue #901 问题5缺陷B修复: 不遍历全章 visual_lines 找受影响行。
             // visual_lines 按文档顺序排列，byte_start 和 byte_end 均非递减
             // （相邻行 byte_start 不递减，行不重叠且按序）。用 partition_point
@@ -165,41 +174,59 @@ impl SujianEditorItem {
             let end = doc_snapshot
                 .visual_lines
                 .partition_point(|vl| vl.byte_start < affected_end);
-            let affected_line_indices: Vec<usize> = (start..end).collect();
+            line_indices_set.extend(start..end);
+        }
 
-            if !affected_line_indices.is_empty() {
-                let handle = crate::editor::layout::PreparedLayoutHandle {
-                    generation,
-                    lines: &doc_snapshot.visual_lines,
-                };
-                let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
-                    &handle,
-                    &affected_line_indices,
-                    dpr,
-                    &text_color,
-                );
+        // Issue #901 第八轮问题2：视口内所有可见行也提取 QImage。
+        // visual_lines 按文档 y 坐标递增排列，用二分查找定位视口内行范围。
+        // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
+        // 加边距确保边缘行不被遗漏（与 line_snapshot_builder.rs 一致）。
+        let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
+        let vp_top = scroll_y - max_line_h;
+        let vp_bottom = scroll_y + viewport_h + max_line_h;
+        let viewport_start = doc_snapshot
+            .visual_lines
+            .partition_point(|vl| vl.y + vl.height <= vp_top);
+        let viewport_end = doc_snapshot
+            .visual_lines
+            .partition_point(|vl| vl.y < vp_bottom);
+        line_indices_set.extend(viewport_start..viewport_end);
 
-                // 构建 (para_start, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
-                use std::collections::HashMap;
-                let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
-                    HashMap::with_capacity(affected_line_indices.len());
-                for &idx in &affected_line_indices {
-                    let vl = &doc_snapshot.visual_lines[idx];
-                    para_qtextline_to_byte_start
-                        .insert((vl.para_start, vl.qtextline_idx), vl.byte_start);
-                }
+        let mut affected_line_indices: Vec<usize> = line_indices_set.into_iter().collect();
+        affected_line_indices.sort_unstable();
 
-                // 把 QImage 填充到对应的 PreparedLineSnapshot。
-                for anim_line in anim_visuals {
-                    if let Some(image) = anim_line.image {
-                        if let Some(&byte_start) = para_qtextline_to_byte_start
-                            .get(&(anim_line.paragraph_document_byte_start, anim_line.qtextline_idx))
+        if !affected_line_indices.is_empty() {
+            let handle = crate::editor::layout::PreparedLayoutHandle {
+                generation,
+                lines: &doc_snapshot.visual_lines,
+            };
+            let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
+                &handle,
+                &affected_line_indices,
+                dpr,
+                &text_color,
+            );
+
+            // 构建 (para_start, qtextline_idx) → byte_start 映射，用于匹配 PreparedLineSnapshot。
+            use std::collections::HashMap;
+            let mut para_qtextline_to_byte_start: HashMap<(usize, i32), usize> =
+                HashMap::with_capacity(affected_line_indices.len());
+            for &idx in &affected_line_indices {
+                let vl = &doc_snapshot.visual_lines[idx];
+                para_qtextline_to_byte_start
+                    .insert((vl.para_start, vl.qtextline_idx), vl.byte_start);
+            }
+
+            // 把 QImage 填充到对应的 PreparedLineSnapshot。
+            for anim_line in anim_visuals {
+                if let Some(image) = anim_line.image {
+                    if let Some(&byte_start) = para_qtextline_to_byte_start
+                        .get(&(anim_line.paragraph_document_byte_start, anim_line.qtextline_idx))
+                    {
+                        if let Some(prep_line) =
+                            snapshot.line_snapshots.iter_mut().find(|pl| pl.byte_start == byte_start)
                         {
-                            if let Some(prep_line) =
-                                snapshot.line_snapshots.iter_mut().find(|pl| pl.byte_start == byte_start)
-                            {
-                                prep_line.image = Some(image);
-                            }
+                            prep_line.image = Some(image);
                         }
                     }
                 }
