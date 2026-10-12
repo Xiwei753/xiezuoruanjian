@@ -163,17 +163,92 @@ impl SujianEditorItem {
         };
         let text_color = self.current_text_color.to_string();
 
-        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 此处需在物化行上做 partition_point
-        // 二分查找定位 affected range 和视口行范围，难以简单改为按需物化。
-        let resolved = doc_snapshot.resolved_visual_lines();
+        // Issue #901 第十八轮: 将全章物化改为只物化受影响段落 + 视口段落的行。
+        //
+        // 旧实现（第十四轮问题1）调用 resolved_visual_lines() 物化整章所有视觉行，
+        // 然后在物化后的行上用 partition_point 定位 affected range 和视口行范围。
+        // 对于大文档（数千行），每帧 O(整章) 物化是性能瓶颈。
+        //
+        // 新实现：
+        // 1. 用 paragraph_offset_index.byte_to_paragraph() 定位 affected range 的段落范围
+        // 2. 用 height_index.paragraphs_in_y_range() 定位视口段落范围
+        // 3. 合并段落范围，用 cache_slot 在未物化的 visual_lines 上二分查找行索引范围
+        // 4. 只物化这些行（resolve_visual_line_range）
+        // 5. 在物化后的子集上做 partition_point 定位 affected range 行和视口行
+        // 当 paragraph_offset_index 或 height_index 为空时，退化到全章物化逻辑。
+        let (affected_start, affected_end) = affected_range.unwrap_or((0, 0));
+
+        let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
+        let vp_top = scroll_y - max_line_h;
+        let vp_bottom = scroll_y + viewport_h + max_line_h;
+
+        // 计算需要物化的段落范围 [para_start, para_end)。
+        // 合并 affected range 段落范围和视口段落范围的并集。
+        let has_indices = !doc_snapshot.paragraph_offset_index.is_empty()
+            && !doc_snapshot.height_index.is_empty();
+
+        let resolved: std::borrow::Cow<'_, [VisualLine]> = if has_indices {
+            // 定位 affected range 的段落范围。
+            let (aff_para_start, aff_para_end) = if affected_start < affected_end {
+                let p_start = doc_snapshot
+                    .paragraph_offset_index
+                    .byte_to_paragraph(affected_start);
+                let p_end = doc_snapshot
+                    .paragraph_offset_index
+                    .byte_to_paragraph(affected_end.saturating_sub(1));
+                (p_start, p_end + 1)
+            } else {
+                (0, 0)
+            };
+
+            // 定位视口段落范围。
+            let (vp_para_start, vp_para_end) = doc_snapshot
+                .height_index
+                .paragraphs_in_y_range(vp_top, vp_bottom);
+
+            // 合并段落范围并集。
+            let para_start = if aff_para_start < aff_para_end {
+                aff_para_start.min(vp_para_start)
+            } else {
+                vp_para_start
+            };
+            let para_end = if aff_para_start < aff_para_end {
+                aff_para_end.max(vp_para_end)
+            } else {
+                vp_para_end
+            };
+
+            if para_start < para_end {
+                // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行索引范围。
+                // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
+                let line_start_idx = doc_snapshot
+                    .visual_lines
+                    .partition_point(|l| l.cache_slot < para_start as i32);
+                let line_end_idx = doc_snapshot
+                    .visual_lines
+                    .partition_point(|l| l.cache_slot < para_end as i32);
+
+                if line_start_idx < line_end_idx {
+                    // 只物化需要的行，不物化整章。
+                    let materialized = doc_snapshot
+                        .resolve_visual_line_range(line_start_idx, line_end_idx);
+                    std::borrow::Cow::Owned(materialized)
+                } else {
+                    doc_snapshot.resolved_visual_lines()
+                }
+            } else {
+                doc_snapshot.resolved_visual_lines()
+            }
+        } else {
+            // paragraph_offset_index 或 height_index 为空，退化到全章物化。
+            doc_snapshot.resolved_visual_lines()
+        };
         let resolved_lines = resolved.as_ref();
 
         // 合并 affected range 行索引和视口内可见行索引。
         use std::collections::HashSet;
         let mut line_indices_set: HashSet<usize> = HashSet::new();
 
-        let (affected_start, affected_end) = affected_range.unwrap_or((0, 0));
         if affected_start < affected_end {
             // Issue #901 问题5缺陷B修复: 不遍历全章 visual_lines 找受影响行。
             // visual_lines 按文档顺序排列，byte_start 和 byte_end 均非递减
@@ -199,9 +274,6 @@ impl SujianEditorItem {
         // visual_lines 按文档 y 坐标递增排列，用二分查找定位视口内行范围。
         // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
         // 加边距确保边缘行不被遗漏（与 line_snapshot_builder.rs 一致）。
-        let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
-        let vp_top = scroll_y - max_line_h;
-        let vp_bottom = scroll_y + viewport_h + max_line_h;
         let viewport_start = resolved_lines
             .partition_point(|vl| vl.y + vl.height <= vp_top);
         let viewport_end = resolved_lines

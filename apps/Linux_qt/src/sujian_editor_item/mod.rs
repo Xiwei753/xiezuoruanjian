@@ -926,8 +926,44 @@ impl SujianEditorItem {
 
         let mut plan = render_plan::SelectionPreeditPlan::default();
 
-        // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
-        let resolved_lines = snapshot.resolved_lines();
+        // Issue #901: 用 paragraph_offset_index 定位选区/预编辑段落范围，
+        // 只物化相关段落的视觉行，不遍历全章 resolved_lines。
+        // paragraph_offset_index 为空时退化为全章物化。
+        let resolved_lines: Vec<VisualLine> = if !snapshot.paragraph_offset_index.is_empty() {
+            let mut start_slot = usize::MAX;
+            let mut end_slot = 0usize;
+
+            if self.pipeline.has_selection() {
+                let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
+                let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
+                let anchor_para = snapshot.paragraph_offset_index.byte_to_paragraph(anchor);
+                let head_para = snapshot.paragraph_offset_index.byte_to_paragraph(head);
+                start_slot = start_slot.min(anchor_para);
+                end_slot = end_slot.max(head_para + 1);
+            }
+
+            if !self.pipeline.composition().preedit_text.is_empty() {
+                let cursor_byte = self.pipeline.cursor();
+                let cursor_para = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+                // 物化前一段以处理段边界光标
+                start_slot = start_slot.min(cursor_para.saturating_sub(1));
+                end_slot = end_slot.max(cursor_para + 1);
+            }
+
+            if start_slot <= end_slot {
+                let start_idx = snapshot
+                    .lines
+                    .partition_point(|l| l.cache_slot < start_slot as i32);
+                let end_idx = snapshot
+                    .lines
+                    .partition_point(|l| l.cache_slot < end_slot as i32);
+                snapshot.resolve_line_range(start_idx, end_idx)
+            } else {
+                Vec::new()
+            }
+        } else {
+            snapshot.resolved_lines().into_owned()
+        };
 
         if self.pipeline.has_selection() {
             plan.has_selection = true;
@@ -935,7 +971,7 @@ impl SujianEditorItem {
             let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
             let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
 
-            for line in resolved_lines.as_ref() {
+            for line in &resolved_lines {
                 if line.para_text.is_empty() {
                     continue;
                 }
@@ -981,7 +1017,6 @@ impl SujianEditorItem {
                 let cursor_byte = self.pipeline.cursor();
 
                 if let Some(line) = resolved_lines
-                    .as_ref()
                     .iter()
                     .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
                 {

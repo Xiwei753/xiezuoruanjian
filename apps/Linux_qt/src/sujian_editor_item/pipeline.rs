@@ -1327,11 +1327,45 @@ fn inject_new_animation_visuals_with_diagnostics(
         let ins_start = range.start().value();
         let ins_end = range.end().value();
         if ins_end > ins_start {
-            // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
-            // TODO(issue-901): 后续优化为按需查询 — 遍历找 inserted_range 相交的行
-            // 可先用二分定位再 resolve_visual_line_range，但需保证 byte 坐标单调性。
-            let resolved = new_doc_snapshot.resolved_visual_lines();
-            for (i, vl) in resolved.as_ref().iter().enumerate() {
+            // Issue #901 第十六轮问题2: 用 paragraph_offset_index O(log n) 定位段落，
+            // 只物化 inserted_range 覆盖的段落行，不遍历全章 resolved_visual_lines。
+            // paragraph_offset_index 为空时退化为全章物化。
+            // 统一构建 (global_visual_line_idx, VisualLine) 列表，后续检查逻辑只写一份。
+            let resolved_lines: Vec<(usize, layout::VisualLine)> =
+                if !new_doc_snapshot.paragraph_offset_index.is_empty() {
+                    let start_para = new_doc_snapshot
+                        .paragraph_offset_index
+                        .byte_to_paragraph(ins_start);
+                    // ins_end 可能恰好落在段边界，+1 确保覆盖下一段首行。
+                    let end_para_excl = new_doc_snapshot
+                        .paragraph_offset_index
+                        .byte_to_paragraph(ins_end)
+                        + 1;
+                    // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行范围。
+                    // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
+                    let start_idx = new_doc_snapshot
+                        .visual_lines
+                        .partition_point(|l| l.cache_slot < start_para as i32);
+                    let end_idx = new_doc_snapshot
+                        .visual_lines
+                        .partition_point(|l| l.cache_slot < end_para_excl as i32);
+                    new_doc_snapshot
+                        .resolve_visual_line_range(start_idx, end_idx)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(local_idx, vl)| (start_idx + local_idx, vl))
+                        .collect()
+                } else {
+                    // paragraph_offset_index 为空，退化为全章物化。
+                    new_doc_snapshot
+                        .resolved_visual_lines()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, vl)| (i, vl.clone()))
+                        .collect()
+                };
+
+            for (i, vl) in &resolved_lines {
                 // 只检查与 inserted_range 相交且含可见字符的行
                 if vl.byte_start >= ins_end || vl.byte_end <= ins_start {
                     continue;
@@ -1353,7 +1387,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                     None => {
                         prepare_miss_count += 1;
                         failed_lines.push(AnimationVisualsFailedLine {
-                            visual_line_idx: i,
+                            visual_line_idx: *i,
                             para_start: vl.para_start,
                             qtextline_idx: vl.qtextline_idx,
                             byte_start: vl.byte_start,
@@ -1391,7 +1425,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                         if !has_clusters {
                             clusters_empty_count += 1;
                             failed_lines.push(AnimationVisualsFailedLine {
-                                visual_line_idx: i,
+                                visual_line_idx: *i,
                                 para_start: vl.para_start,
                                 qtextline_idx: vl.qtextline_idx,
                                 byte_start: vl.byte_start,
@@ -1421,7 +1455,7 @@ fn inject_new_animation_visuals_with_diagnostics(
                             // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
                             // clusters 非空的行身份，inject 后用于检测 inject miss。
                             prepared_ok_lines.push((
-                                i,
+                                *i,
                                 vl.para_start,
                                 vl.qtextline_idx,
                                 vl.byte_start,

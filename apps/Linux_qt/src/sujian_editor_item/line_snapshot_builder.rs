@@ -42,20 +42,23 @@ impl LineSnapshotBuilder {
         viewport_h: f64,
     ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
-        let mut paragraph_id: u64 = 0;
-        let mut prev_para_start: Option<usize> = None;
+        let mut prev_cache_slot: Option<i32> = None;
         let mut visual_line_ordinal: u32 = 0;
 
-        // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
-        // TODO(issue-901): 后续优化为按需查询 — 遍历所有行维护 visual_line_ordinal
-        // （即使视口外行也需递增 ordinal），难以简单改为 resolve_viewport_visual_lines。
-        let resolved_lines = doc_snapshot.resolved_visual_lines();
-        for line in resolved_lines.as_ref() {
-            if line.para_text.is_empty() {
-                paragraph_id = paragraph_id.wrapping_add(1);
+        // Issue #901: 用 resolve_viewport_visual_lines 只物化视口内行（加边距），
+        // 避免对长篇文档物化整章所有视觉行。返回的行已是物化后的绝对坐标。
+        // 当 height_index 为空时退化为物化所有行（与原 resolved_visual_lines 一致）。
+        let resolved_lines = doc_snapshot.resolve_viewport_visual_lines(scroll_y, viewport_h);
+        for line in &resolved_lines {
+            // Issue #901: 用 cache_slot 作为 paragraph_id（段落索引），
+            // 遇到新 cache_slot 时重置 visual_line_ordinal 为 0。
+            let paragraph_id = line.cache_slot as u64;
+            if prev_cache_slot != Some(line.cache_slot) {
                 visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
+                prev_cache_slot = Some(line.cache_slot);
+            }
 
+            if line.para_text.is_empty() {
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
                 if line_bottom < -line.height || line_top > viewport_h + line.height {
@@ -86,12 +89,6 @@ impl LineSnapshotBuilder {
 
                 visual_line_ordinal += 1;
                 continue;
-            }
-
-            if prev_para_start != Some(line.para_start) {
-                paragraph_id = paragraph_id.wrapping_add(1);
-                visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
             }
 
             let line_top = line.y - scroll_y;
