@@ -814,9 +814,13 @@ impl ParagraphLayoutStore {
     /// 与 [`sync_from_visual_lines`] 的区别：只更新 `affected_indices` 中列出的段落，
     /// 不扫描全部视觉行。用于增量排版路径，避免 O(n) 全章扫描。
     ///
-    /// Issue #901 第三轮复核: 用 para_start → (line_start, line_end, height) 索引
-    /// 一次遍历 lines（O(all_lines)），代替每个受影响段落都扫描全部 lines
-    ///（O(affected × all_lines)）。
+    /// Issue #901 第十一轮问题5: 不再全章枚举 `lines` 组装 HashMap。
+    /// 用已有稳定 `ParagraphId → document_byte_start` 索引，对每个受影响段
+    /// 用二分查找在 `lines` 中定位 `para_start` 对应的行范围，
+    /// O(affected × log(all_lines))，不随全章行数线性增长。
+    /// 同时修正了旧实现首行累计计数初始为 0、循环从第二条开始导致单行段
+    /// 误统计 `visual_line_count=0` 的 bug。
+    /// 并将 `relative_lines` 接入主流程：排版后回填段内相对坐标视觉行。
     ///
     /// # 参数
     ///
@@ -833,42 +837,53 @@ impl ParagraphLayoutStore {
             return;
         }
 
-        // Issue #901 第三轮复核: 一次遍历 lines，构建 para_start → 统计信息索引。
-        // visual_lines 按段落顺序排列，para_start 变化时切换段落。
-        use std::collections::HashMap;
-        let mut para_stats: HashMap<usize, (usize, usize, f64)> = HashMap::new();
-        // (first_line_index, line_count, total_height)
-        if !lines.is_empty() {
-            let mut current_para_start = lines[0].para_start;
-            let mut first_idx = 0usize;
-            let mut count = 0usize;
-            let mut height = 0.0f64;
-            for (i, line) in lines.iter().enumerate().skip(1) {
-                if line.para_start != current_para_start {
-                    para_stats.insert(current_para_start, (first_idx, count, height));
-                    current_para_start = line.para_start;
-                    first_idx = i;
-                    count = 0;
-                    height = 0.0;
-                }
-                count += 1;
-                height += line.height;
-            }
-            para_stats.insert(current_para_start, (first_idx, count, height));
-        }
-
-        // 对每个受影响段落，O(1) 查表获取统计信息
+        // Issue #901 第十一轮问题5: 对每个受影响段用二分查找定位行范围，
+        // 不建全章 HashMap。lines 按 para_start 非降序排列（段落顺序 = 行顺序），
+        // 同一段落的所有行 para_start 相同且连续。
         for &idx in affected_indices {
             let Some(entry) = self.entries.get(idx) else {
                 continue;
             };
             let para_start = entry.document_byte_start;
 
-            let (line_count, height, line_start) = if let Some(&(fs, cnt, h)) = para_stats.get(&para_start) {
-                (cnt, h, fs)
-            } else {
-                (0usize, 0.0f64, 0usize)
-            };
+            // 二分查找在 lines 中定位 para_start 对应的行范围 [line_start, line_end)
+            let (line_start, line_end) =
+                match find_line_range_by_para_start_in_lines(lines, para_start) {
+                    Some(range) => range,
+                    None => continue,
+                };
+
+            // line_count = line_end - line_start，首行（line_start）正确计入，
+            // 不会出现旧实现单行段 visual_line_count=0 的 bug。
+            let line_count = line_end - line_start;
+            let height: f64 = lines[line_start..line_end].iter().map(|l| l.height).sum();
+
+            // Issue #901 第十一轮问题5: 更新 relative_lines — 从 lines 提取段内
+            // 相对坐标的视觉行。段内相对坐标：
+            // - y 从段顶 0 起累加行高
+            // - byte_start/byte_end 相对段落文本开头（0-based）
+            // - qchar_start/qchar_end 相对段落文本开头（0-based）
+            // - para_start = 0
+            // - id = 段内行索引（0-based）
+            let segment_top_y = lines[line_start].y;
+            let segment_first_qchar = lines[line_start]
+                .qchar_start
+                .saturating_sub(lines[line_start].para_qchar_start);
+            let relative_lines: Vec<VisualLine> = lines[line_start..line_end]
+                .iter()
+                .enumerate()
+                .map(|(rel_idx, vl)| {
+                    let mut rel = vl.clone();
+                    rel.y = vl.y - segment_top_y;
+                    rel.byte_start = vl.byte_start.saturating_sub(para_start);
+                    rel.byte_end = vl.byte_end.saturating_sub(para_start);
+                    rel.qchar_start = vl.qchar_start.saturating_sub(segment_first_qchar);
+                    rel.qchar_end = vl.qchar_end.saturating_sub(segment_first_qchar);
+                    rel.para_start = 0;
+                    rel.id = rel_idx;
+                    rel
+                })
+                .collect();
 
             if let Some(entry) = self.entries.get_mut(idx) {
                 entry.layout_generation = layout_generation;
@@ -876,6 +891,7 @@ impl ParagraphLayoutStore {
                 entry.visual_line_count = line_count;
                 entry.height = height;
                 entry.line_start = line_start;
+                entry.relative_lines = relative_lines;
             }
         }
     }
@@ -1073,6 +1089,29 @@ impl ParagraphLayoutStore {
             entry.document_byte_start = (entry.document_byte_start as i64 + delta) as usize;
         }
     }
+}
+
+/// Issue #901 第十一轮问题5: 用二分查找在已排序的 visual_lines 中定位
+/// `para_start` 对应的行范围，O(log n)。
+///
+/// `lines` 按 `para_start` 非降序排列（段落顺序 = 行顺序），
+/// 同一段落的所有行 `para_start` 相同且连续。
+/// 返回 `(line_start, line_end)` 半开区间，未找到返回 `None`。
+fn find_line_range_by_para_start_in_lines(
+    lines: &[VisualLine],
+    para_start: usize,
+) -> Option<(usize, usize)> {
+    if lines.is_empty() {
+        return None;
+    }
+    // 二分查找第一个 para_start >= target 的行
+    let start = lines.partition_point(|vl| vl.para_start < para_start);
+    if start >= lines.len() || lines[start].para_start != para_start {
+        return None;
+    }
+    // 二分查找段落后第一个 para_start != target 的行
+    let end = lines[start..].partition_point(|vl| vl.para_start == para_start) + start;
+    Some((start, end))
 }
 
 #[cfg(test)]

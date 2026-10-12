@@ -165,13 +165,71 @@ impl LayoutSnapshot {
         }
     }
 
+    /// Issue #901 第十一轮问题2: 就地物化后缀段平移变换到 lines，
+    /// 然后清除 suffix_transform。
+    ///
+    /// 消费方在需要直接访问 lines 基础数组的原始字段前调用此方法，
+    /// 确保绝对坐标已物化，不会读到未应用 delta 的旧值。
+    /// 仅对受影响范围就地更新，物化后 `suffix_transform = None`，
+    /// 后续 `resolved_lines` 走零分配借用路径。
+    pub fn materialize_suffix_in_place(&mut self) {
+        if let Some(t) = self.suffix_transform {
+            if !t.is_identity() {
+                let vls = Arc::make_mut(&mut self.lines);
+                let apply_start = t.start_line_idx.min(vls.len());
+                let apply_end = t.end_line_idx.min(vls.len());
+                for i in apply_start..apply_end {
+                    let vl = &mut vls[i];
+                    vl.y += t.y_delta;
+                    if t.byte_delta != 0 {
+                        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
+                        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
+                        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
+                    }
+                    if t.qchar_delta != 0 {
+                        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
+                        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
+                    }
+                    if t.line_id_delta != 0 {
+                        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
+                    }
+                }
+            }
+            self.suffix_transform = None;
+        }
+    }
+
     /// Issue #901 第十轮问题5: 物化全部视觉行为绝对坐标的 Cow 视图。
+    ///
+    /// Issue #901 第十一轮问题2: 优化物化路径——只对受影响范围
+    /// `[start_line_idx, end_line_idx)` 的行应用平移变换，
+    /// 其余行直接 clone 基础值（已是正确绝对坐标），
+    /// 避免逐行调用 `resolve_line` 的 match 分支开销。
+    /// 消费方若持有 `&mut self`，建议先调用 `materialize_suffix_in_place`
+    /// 就地物化并清除 transform，后续 `resolved_lines` 即走零分配借用路径。
     pub fn resolved_lines(&self) -> Cow<'_, [VisualLine]> {
         match self.suffix_transform {
             Some(t) if !t.is_identity() => {
-                let resolved: Vec<VisualLine> = (0..self.lines.len())
-                    .map(|i| self.resolve_line(i))
-                    .collect();
+                let total = self.lines.len();
+                let mut resolved: Vec<VisualLine> = self.lines.as_slice().to_vec();
+                let apply_start = t.start_line_idx.min(total);
+                let apply_end = t.end_line_idx.min(total);
+                for i in apply_start..apply_end {
+                    let vl = &mut resolved[i];
+                    vl.y += t.y_delta;
+                    if t.byte_delta != 0 {
+                        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
+                        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
+                        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
+                    }
+                    if t.qchar_delta != 0 {
+                        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
+                        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
+                    }
+                    if t.line_id_delta != 0 {
+                        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
+                    }
+                }
                 Cow::Owned(resolved)
             }
             _ => Cow::Borrowed(self.lines.as_slice()),

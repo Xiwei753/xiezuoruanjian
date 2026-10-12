@@ -111,6 +111,17 @@ pub(crate) struct DrawCommand {
     /// `PixelContribution.source_revision`，不通过 `OwnershipRule` 猜来源。
     /// 非文字命令（光标/选区/preedit）使用 `EditorRevision::initial()`。
     pub source_revision: EditorRevision,
+    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
+    ///
+    /// `target_rect` 可能是按 progress 裁剪/插值后的子矩形，`original_glyph_rect`
+    /// 保存该命令对应字形的**完整**文档坐标矩形，供 `PixelContribution` 记录、
+    /// 下一帧 `commands_for_surviving_group` 用它做 FLIP 变换的 `old_rect`。
+    ///
+    /// - 存活字 FLIP：等于 presented 的完整字形位置（`old_rect`）。
+    /// - 新增字：等于 `TargetGlyphRun.document_rect`（target 完整字形）。
+    /// - 删除字：等于 presented 贡献的 `original_glyph_rect`（经 transform）。
+    /// - 非文字命令（光标/选区/preedit）使用 `CanvasRect::zero()`。
+    pub original_glyph_rect: CanvasRect,
 }
 
 impl DrawCommand {
@@ -124,6 +135,7 @@ impl DrawCommand {
         ownership: OwnershipRule,
         byte_range: (usize, usize),
         source_revision: EditorRevision,
+        original_glyph_rect: CanvasRect,
     ) -> Self {
         Self {
             kind: DrawCommandKind::TextFragment,
@@ -135,6 +147,7 @@ impl DrawCommand {
             ownership,
             byte_range,
             source_revision,
+            original_glyph_rect,
         }
     }
 
@@ -150,6 +163,7 @@ impl DrawCommand {
             ownership: OwnershipRule::Cursor,
             byte_range: (0, 0),
             source_revision: EditorRevision::initial(),
+            original_glyph_rect: CanvasRect::zero(),
         }
     }
 
@@ -169,6 +183,7 @@ impl DrawCommand {
             ownership: OwnershipRule::Selection,
             byte_range: (0, 0),
             source_revision: EditorRevision::initial(),
+            original_glyph_rect: CanvasRect::zero(),
         }
     }
 
@@ -190,6 +205,7 @@ impl DrawCommand {
             ownership: OwnershipRule::Preedit,
             byte_range: (0, 0),
             source_revision: EditorRevision::initial(),
+            original_glyph_rect: CanvasRect::zero(),
         }
     }
 
@@ -374,6 +390,7 @@ mod tests {
             OwnershipRule::StaticText,
             (0, 5),
             EditorRevision::initial(),
+            sample_rect(0.0, 0.0, 10.0, 10.0),
         );
         assert_eq!(cmd.kind, DrawCommandKind::TextFragment);
         assert_eq!(cmd.snapshot_id, sample_snapshot_id());
@@ -430,6 +447,7 @@ mod tests {
             OwnershipRule::StaticText,
             (0, 5),
             EditorRevision::initial(),
+            sample_rect(0.0, 0.0, 10.0, 10.0),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -445,6 +463,7 @@ mod tests {
             OwnershipRule::StaticText,
             (0, 5),
             EditorRevision::initial(),
+            sample_rect(0.0, 0.0, 10.0, 10.0),
         );
         assert!(!cmd.has_visible_area());
     }
@@ -468,6 +487,7 @@ mod tests {
             OwnershipRule::StaticText,
             (0, 5),
             EditorRevision::initial(),
+            sample_rect(0.0, 0.0, 10.0, 10.0),
         );
         let plan = CanvasDrawPlan::from_commands(
             16.0,

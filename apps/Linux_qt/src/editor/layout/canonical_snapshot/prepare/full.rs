@@ -755,6 +755,41 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     //（refcount==1 原地改，refcount>1 COW），再 mem::take 取出 Vec 做 splice。
     // prev 从 mem::take(&mut self.last_snapshot) 取走，self.cache 已 None，refcount==1，
     // Arc::make_mut 原地改不产生 Vec clone。
+
+    // Issue #901 第十一轮问题2: 下一笔编辑前，先应用 prev.suffix_transform
+    // 到 visual_lines 的绝对坐标。上一笔增量编辑可能留下了未物化的后缀段平移
+    // 变换（SuffixTransform），直接取走 prev.visual_lines 的基础数组会用旧绝对
+    // 坐标（para_start/y/byte_start），导致 find_line_range_by_para_start 匹配
+    // 失败和新段起点 y 计算错误——旧 prev.paragraphs 的后缀
+    // paragraph_document_byte_start 在上一笔已更新到新偏移，于是旧段落起点与
+    // 旧行的 para_start 不匹配。这里就地物化受影响范围
+    // [start_line_idx, end_line_idx) 的行，然后清除 suffix_transform，
+    // 确保下一笔编辑拿到的是正确的绝对坐标。
+    if let Some(t) = prev.suffix_transform {
+        if !t.is_identity() {
+            let prev_vls = Arc::make_mut(&mut prev.visual_lines);
+            let apply_start = t.start_line_idx.min(prev_vls.len());
+            let apply_end = t.end_line_idx.min(prev_vls.len());
+            for i in apply_start..apply_end {
+                let vl = &mut prev_vls[i];
+                vl.y += t.y_delta;
+                if t.byte_delta != 0 {
+                    vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
+                    vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
+                    vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
+                }
+                if t.qchar_delta != 0 {
+                    vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
+                    vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
+                }
+                if t.line_id_delta != 0 {
+                    vl.id = (vl.id as i64 + t.line_id_delta) as usize;
+                }
+            }
+        }
+        prev.suffix_transform = None;
+    }
+
     let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
     let mut visual_lines: Vec<VisualLine> =
         std::mem::take(Arc::make_mut(&mut prev.visual_lines));

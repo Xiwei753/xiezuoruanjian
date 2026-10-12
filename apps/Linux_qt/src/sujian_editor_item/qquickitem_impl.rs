@@ -1003,7 +1003,8 @@ impl SujianEditorItem {
         // Issue #901 第十轮问题1：从 drawn_animation_fragments 构造动画贡献。
         // 只登记 render_frame 实际绘制的 fragment（纹理已就绪、裁剪后非零面积），
         // 不再无条件遍历 canvas_plan.commands。资源缺失或 handoff 时此列表为空。
-        // source_revision 用 target revision（动画 glyph 来自 target canonical）。
+        // Issue #901 第十一轮问题1：source_revision 直接用 frag.source_revision
+        //（从 DrawCommand.source_revision 一路传递），不统一覆盖成 target revision。
         let animated_contributions: Vec<PixelContribution> = drawn_animation_fragments
             .iter()
             .map(|frag| {
@@ -1029,10 +1030,18 @@ impl SujianEditorItem {
                     ),
                     opacity: frag.opacity,
                     byte_range: frag.byte_range,
-                    // 动画 fragment 来自 target canonical，用 target revision。
-                    source_revision: plan_target_revision,
+                    // Issue #901 第十一轮问题1：用 frag.source_revision，
+                    // 不再统一覆盖成 plan_target_revision。
+                    source_revision: frag.source_revision,
                     glyph_id: frag.glyph_id,
                     fragment_index: frag.fragment_index,
+                    // Issue #901 第十一轮问题4：从 frag.original_glyph_rect 传递。
+                    original_glyph_rect: CanvasRect::new(
+                        frag.original_glyph_rect.x,
+                        frag.original_glyph_rect.y,
+                        frag.original_glyph_rect.w,
+                        frag.original_glyph_rect.h,
+                    ),
                 }
             })
             .collect();
@@ -1069,6 +1078,14 @@ impl SujianEditorItem {
                 source_revision: plan_target_revision,
                 glyph_id: frag.glyph_id,
                 fragment_index: frag.fragment_index,
+                // Issue #901 第十一轮问题4: 从 DrawnStaticFragment 传递完整字形矩形，
+                // 供下一帧 FLIP 变换使用（而非用裁剪后的 document_rect）。
+                original_glyph_rect: CanvasRect::new(
+                    frag.original_glyph_rect.x,
+                    frag.original_glyph_rect.y,
+                    frag.original_glyph_rect.w,
+                    frag.original_glyph_rect.h,
+                ),
             })
             .collect();
 

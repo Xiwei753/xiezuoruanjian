@@ -277,6 +277,7 @@ mod tests {
             ownership,
             byte_range: (0, 0),
             source_revision: writer_core::editor::EditorRevision::initial(),
+            original_glyph_rect: CanvasRect::new(x, y, w, h),
         }
     }
 

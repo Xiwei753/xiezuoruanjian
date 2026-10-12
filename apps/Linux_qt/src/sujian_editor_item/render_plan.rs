@@ -37,6 +37,26 @@ pub(crate) struct TextAnimationGlyphInfo {
     /// 删除 glyph 的 caret 边缘；其他动画 glyph 为 None。
     pub delete_edge: Option<DeleteEdge>,
     pub shaping_identity: ShapingIdentity,
+    /// Issue #901 第十一轮问题1：该动画 glyph 对应的 Core source revision。
+    ///
+    /// 从 `DrawCommand.source_revision` 原样传递，`render_text_animation_layer`
+    /// 据此填写 `DrawnAnimationFragment.source_revision`，不再用
+    /// `EditorRevision::initial()` 占位。`build_presented_scene_from_frame`
+    /// 直接用 `frag.source_revision`，不统一覆盖成 target revision。
+    pub source_revision: EditorRevision,
+    /// Issue #901 第十一轮问题1：字形逻辑身份。
+    ///
+    /// 从 `DrawCommand` 由 `PixelContribution::derive_glyph_id` 派生，
+    /// `render_text_animation_layer` 据此填写 `DrawnAnimationFragment.glyph_id`。
+    pub glyph_id: u64,
+    /// Issue #901 第十一轮问题1：同一字形内的碎片序号。
+    pub fragment_index: u32,
+    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
+    ///
+    /// 从 `DrawCommand.original_glyph_rect` 传递，`render_text_animation_layer`
+    /// 据此填写 `DrawnAnimationFragment.original_glyph_rect`，最终填入
+    /// `PixelContribution.original_glyph_rect`，供下一帧 FLIP 变换使用。
+    pub original_glyph_rect: SourceRect,
 }
 
 #[derive(Clone, Debug, Default)]

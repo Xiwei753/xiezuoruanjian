@@ -182,6 +182,18 @@ pub(crate) struct PixelContribution {
     /// 同一 `glyph_id` 的多个碎片按 `fragment_index` 升序聚合，保证帧间
     /// 稳定顺序。单一 cluster 未被裁剪时 `fragment_index = 0`。
     pub fragment_index: u32,
+    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
+    ///
+    /// `document_rect` 可能是按视口/clip 裁剪后的子矩形，`original_glyph_rect`
+    /// 保存该贡献对应字形的**完整**文档坐标矩形。`scene_transition.rs` 的
+    /// `commands_for_surviving_group` 用它（而非 `document_rect`）作为 FLIP
+    /// 变换的 `old_rect`，避免用第一个碎片的半字矩形当整字导致后续碎片取得
+    /// >1 的相对偏移映射到 target 字外。
+    ///
+    /// - 静态贡献：等于 cluster 的完整 `document_rect`（未裁剪前的值）。
+    /// - 动画贡献：从 `DrawCommand.original_glyph_rect` 一路传递，始终是
+    ///   原始 presented 字形位置（FLIP 递归不变量）。
+    pub original_glyph_rect: CanvasRect,
 }
 
 impl PixelContribution {
@@ -333,6 +345,7 @@ mod tests {
             opacity,
             byte_range,
             source_revision: EditorRevision::initial(),
+            original_glyph_rect: CanvasRect::new(10.0, 10.0, 100.0, 100.0),
         }
     }
 

@@ -32,6 +32,11 @@ pub(crate) struct DrawnAnimationFragment {
     pub glyph_id: u64,
     /// Issue #901 第十轮问题2：同一字形内的碎片序号。
     pub fragment_index: u32,
+    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
+    ///
+    /// 从 `TextAnimationGlyphInfo.original_glyph_rect` 传递，最终填入
+    /// `PixelContribution.original_glyph_rect`，供下一帧 FLIP 变换使用。
+    pub original_glyph_rect: super::layout_snapshot::SourceRect,
 }
 
 /// Issue #901 第十轮问题1：静态 owner 本帧实际可见的片段。
@@ -62,6 +67,12 @@ pub(crate) struct DrawnStaticFragment {
     pub glyph_id: u64,
     /// Issue #901 第十轮问题2：同一字形内的碎片序号。
     pub fragment_index: u32,
+    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
+    ///
+    /// 等于 `StaticTextContributionInfo.document_rect`（cluster 的完整字形几何，
+    /// 未被视口/holes 裁剪）。`build_presented_scene_from_frame` 据此填入
+    /// `PixelContribution.original_glyph_rect`。
+    pub original_glyph_rect: super::layout_snapshot::SourceRect,
 }
 
 /// Issue #901 第九轮阻塞2：`render_frame` 的渲染结果。
@@ -175,8 +186,12 @@ pub(crate) fn canvas_draw_plan_to_glyph_infos(
                     w: cmd.clip_rect.w,
                     h: cmd.clip_rect.h,
                 },
-                logical_range: (0, 0),
-                canonical_range: None,
+                // Issue #901 第十一轮问题1：从 DrawCommand 原样复制 byte_range，
+                // 不再硬编码 (0, 0)。render_text_animation_layer 据此填写
+                // DrawnAnimationFragment.byte_range，build_presented_scene_from_frame
+                // 据此填写 PixelContribution.byte_range。
+                logical_range: cmd.byte_range,
+                canonical_range: Some(cmd.byte_range),
                 delete_edge: None,
                 shaping_identity: ShapingIdentity {
                     text_content_hash: 0,
@@ -185,6 +200,23 @@ pub(crate) fn canvas_draw_plan_to_glyph_infos(
                     cluster_glyph_count: 0,
                     direction_rtl: false,
                     format_fingerprint: 0,
+                },
+                // Issue #901 第十一轮问题1：从 DrawCommand 原样复制 source_revision，
+                // 不再用 EditorRevision::initial() 占位。
+                source_revision: cmd.source_revision,
+                // Issue #901 第十一轮问题1：从 (snapshot_id, byte_range) 派生 glyph_id。
+                glyph_id: super::visual_canvas::PixelContribution::derive_glyph_id(
+                    &cmd.snapshot_id,
+                    cmd.byte_range,
+                ),
+                // fragment_index 暂用 0（DrawCommand 不携带 fragment 级序号）。
+                fragment_index: 0,
+                // Issue #901 第十一轮问题4：从 DrawCommand 传递完整字形矩形。
+                original_glyph_rect: SourceRect {
+                    x: cmd.original_glyph_rect.x,
+                    y: cmd.original_glyph_rect.y,
+                    w: cmd.original_glyph_rect.w,
+                    h: cmd.original_glyph_rect.h,
                 },
             }
         })
@@ -553,12 +585,18 @@ pub(crate) fn render_frame(
             //
             // force_full_update 判断：
             // - needs_relayout: 正文/字体/宽度变化，段落内容可能变了 → update 所有已有段落
-            // - handoff_pending: 动画交接，clip 集合变化 → update 所有已有段落的 clip 子节点
+            // - handoff_pending: 动画交接，clip 集合变化 → 只需更新 clip 子节点，不需重建段落内容
             // - !animation_resources_ready: 资源缺失，从有 clip 到无 clip 或反之 → update 所有
             // - viewport_exceeds_loaded（纯滚动跨出）: 段落内容不变 → 只 insert/remove，
             //   force_full_update=false，已有段落保持不动
+            //
+            // Issue #901 第十一轮问题5：handoff_pending 只影响 clip 集合，不影响段落
+            // 内容/布局。不再因 handoff_pending 就 force_full_update=true 无差别重建所有
+            // 已有段落节点。clip 子节点的更新由 update_text_nodes_incremental 内部根据
+            // animation_clip_rects 参数独立完成，不依赖 force_full_update。
+            // needs_relayout 的进一步优化（按段落比较内容 hash/layout_generation 只重建
+            // 变更段落）需要 update_text_nodes_incremental 内部支持，此处暂保持整体重建。
             let force_full_update = static_text.needs_relayout
-                || plan.ownership.handoff_pending
                 || !animation_resources_ready;
 
             static_rebuild_ok = qt_text_node::update_text_nodes_incremental(
@@ -577,7 +615,13 @@ pub(crate) fn render_frame(
             // Issue #901 第十轮问题4: 增量更新失败时（paragraph_id == 0 或 layout 缺失），
             // 回退到全量 rebuild。全量 rebuild 不依赖 ParagraphId 映射，能正确处理
             // paragraph_id == 0 的情况（ParagraphId::INVALID）。
+            //
+            // Issue #901 第十一轮问题3（渲染部分）：全量 rebuild 会删掉所有子节点，
+            // g_incremental_para_map 中的 container 指针变成悬空。在全量 rebuild
+            // **之前**清除该 item 的增量映射，避免悬空指针。
+            // clear_incremental_para_map 由 qt_text_node.rs 实现（task 3）。
             if !static_rebuild_ok {
+                qt_text_node::clear_incremental_para_map(item_ptr);
                 static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                     root_raw,
                     item_ptr,
@@ -826,6 +870,15 @@ fn compute_drawn_static_fragments(
                 source_revision: static_source_revision,
                 glyph_id,
                 fragment_index: frag_idx as u32,
+                // Issue #901 第十一轮问题4：完整 cluster 几何（未裁剪前的值）。
+                // info.document_rect 是 cluster 的真实字形几何，sub_fragments 是
+                // 它被视口/holes 裁剪后的子片段。original_glyph_rect 保存完整值。
+                original_glyph_rect: SourceRect {
+                    x: info.document_rect.x,
+                    y: info.document_rect.y,
+                    w: info.document_rect.w,
+                    h: info.document_rect.h,
+                },
             });
         }
     }
@@ -979,10 +1032,9 @@ fn render_text_animation_layer(
         snapshot_ids.push(cache_key);
         glyph_images.push(texture.clone());
 
-        // Issue #901 第十轮问题1：记录本帧真正绘制的 fragment。
-        // byte_range 用 glyph.logical_range（动画 glyph 的逻辑范围）；
-        // 若 logical_range 为 (0,0)（canvas_draw_plan_to_glyph_infos 未填），
-        // 回退到 canonical_range 或 (0,0)。
+        // Issue #901 第十一轮问题1：记录本帧真正绘制的 fragment。
+        // byte_range/source_revision/glyph_id/fragment_index 全部从 glyph 原样传递，
+        // 不再用 EditorRevision::initial() 占位、不重新计算 glyph_id。
         let byte_range = if glyph.logical_range.1 > glyph.logical_range.0 {
             glyph.logical_range
         } else if let Some(cr) = glyph.canonical_range {
@@ -990,14 +1042,6 @@ fn render_text_animation_layer(
         } else {
             glyph.logical_range
         };
-        // source_revision：动画 glyph 来自 target canonical，用 latest revision。
-        // 此处无法直接获取 latest revision，用 EditorRevision::initial() 作为
-        // 占位，调用方在构造 PresentedScene 时会用 canvas_plan.target_revision
-        // 覆盖（见 qquickitem_impl.rs::build_presented_scene_from_frame）。
-        let glyph_id = super::visual_canvas::PixelContribution::derive_glyph_id(
-            &glyph.snapshot_id,
-            byte_range,
-        );
         drawn_fragments.push(DrawnAnimationFragment {
             snapshot_id: glyph.snapshot_id,
             target_rect: super::layout_snapshot::SourceRect {
@@ -1014,9 +1058,18 @@ fn render_text_animation_layer(
             },
             opacity: glyph.opacity,
             byte_range,
-            source_revision: EditorRevision::initial(),
-            glyph_id,
-            fragment_index: glyph_idx as u32,
+            // Issue #901 第十一轮问题1：用 glyph.source_revision，不再占位。
+            source_revision: glyph.source_revision,
+            // Issue #901 第十一轮问题1：用 glyph.glyph_id，不再重新计算。
+            glyph_id: glyph.glyph_id,
+            fragment_index: glyph.fragment_index,
+            // Issue #901 第十一轮问题4：传递完整字形矩形。
+            original_glyph_rect: super::layout_snapshot::SourceRect {
+                x: glyph.original_glyph_rect.x,
+                y: glyph.original_glyph_rect.y,
+                w: glyph.original_glyph_rect.w,
+                h: glyph.original_glyph_rect.h,
+            },
         });
     }
 

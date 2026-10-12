@@ -350,6 +350,14 @@ cpp! {{
         // 会残留；删 child[0] 后原 child[1] 顶到 child[0]，新 text node append
         // 到末尾，下一次重建 child[0] 甚至可能不是主 text node，出现重复字、
         // 幽灵字和节点顺序错乱。整棵子树原子替换消除这一类问题。
+        //
+        // Issue #901 第十一轮问题3: 全量 rebuild 会删除 staticLayer 的所有旧子节点，
+        // 旧 g_incremental_para_map 条目中的 container 指针在删除后变悬空。
+        // 必须在删除子节点**之前**清空该 item 的增量映射条目，否则下一次增量
+        // 路径会通过旧 container 指针访问已释放的内存（removeChildNode/delete/
+        // childCount），导致崩溃。全量 rebuild 后 map 为空，下一次增量路径从头
+        // 建立节点身份表。erase 不会解引用 item_ptr，仅按指针值移除 map 条目，安全。
+        g_incremental_para_map.erase(item_ptr);
         while (staticLayer->childCount() > 0) {
             QSGNode *oldChild = staticLayer->childAtIndex(staticLayer->childCount() - 1);
             staticLayer->removeChildNode(oldChild);
@@ -665,6 +673,21 @@ cpp! {{
             item_map.static_layer = staticLayer;
         }
         auto& node_map = item_map.para_map;
+
+        // Issue #901 第十一轮问题3: 增量第一次接管已有旧树。
+        // node_map 为空但 staticLayer 已有子节点，说明之前走的是全量 rebuild
+        // 路径（rebuild_text_node_from_paragraphs 已清空 map），旧子节点没有
+        // 对应的增量映射。若直接 insert 新容器节点会 append 到旧子节点旁，
+        // 造成双层文字。必须先清除 staticLayer 的所有旧子节点，再建立增量映射。
+        // 此处删除旧子节点是安全的：它们由全量 rebuild 创建，无人通过 map 持有
+        // 悬空引用（map 已为空）。
+        if (node_map.empty() && staticLayer->childCount() > 0) {
+            while (staticLayer->childCount() > 0) {
+                QSGNode* oldChild = staticLayer->childAtIndex(staticLayer->childCount() - 1);
+                staticLayer->removeChildNode(oldChild);
+                delete oldChild;
+            }
+        }
 
         // 构建 needed_ids 集合
         std::unordered_set<uint64_t> needed_ids;

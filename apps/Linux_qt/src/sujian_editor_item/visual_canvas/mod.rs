@@ -391,6 +391,7 @@ mod tests {
                 opacity: 1.0,
                 byte_range,
                 source_revision: EditorRevision::new(1),
+                original_glyph_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
             }],
             caret: None,
             scroll: PresentedScroll::default(),

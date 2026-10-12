@@ -552,8 +552,11 @@ impl SceneTransition {
             );
         }
 
-        // old_rect：presented 的 document_rect 经过 transform 映射到文档坐标。
-        let old_transformed = Self::transform_rect(first.document_rect, presented.transform);
+        // Issue #901 第十一轮问题4：用 original_glyph_rect（完整字形矩形）而非
+        // document_rect（可能只是被裁后的部分 fragment）作为 old_rect 做 FLIP 变换。
+        // 一个字被裁成左半和右半时，第一个片段只有半个字宽，若用 document_rect 当
+        // old_rect，第二个片段会取得 >1 的相对偏移，映射到 target 字外。
+        let old_transformed = Self::transform_rect(first.original_glyph_rect, presented.transform);
         let old_rect = CanvasRect::new(
             old_transformed.x + presented.position.x,
             old_transformed.y + presented.position.y,
@@ -592,9 +595,11 @@ impl SceneTransition {
             let frag_target_rect = if group.len() == 1 {
                 interpolated
             } else {
-                // 按碎片在 old_rect 中的相对偏移和尺寸，映射到 interpolated。
+                // 按碎片在 original_glyph_rect 中的相对偏移和尺寸，映射到 interpolated。
+                // 用 original_glyph_rect（完整字形）而非 document_rect（子矩形），
+                // 保证相对偏移在 [0,1] 范围内，不会映射到 target 字外。
                 let frag_transformed =
-                    Self::transform_rect(contrib.document_rect, presented.transform);
+                    Self::transform_rect(contrib.original_glyph_rect, presented.transform);
                 let frag_old = CanvasRect::new(
                     frag_transformed.x + presented.position.x,
                     frag_transformed.y + presented.position.y,
@@ -646,6 +651,10 @@ impl SceneTransition {
                 super::ownership::OwnershipRule::StaticText,
                 run.byte_range,
                 latest_revision,
+                // Issue #901 第十一轮问题4：original_glyph_rect 传递完整 presented
+                // 字形位置（old_rect），保持 FLIP 递归不变量：无论经过多少帧，
+                // original_glyph_rect 始终是原始 presented 字形位置。
+                old_rect,
             ));
         }
 
@@ -693,8 +702,9 @@ impl SceneTransition {
             return None;
         }
 
-        // old_rect：presented 的 document_rect 经过 transform 映射到文档坐标。
-        let old_transformed = Self::transform_rect(contrib.document_rect, presented.transform);
+        // Issue #901 第十一轮问题4：用 original_glyph_rect（完整字形矩形）而非
+        // document_rect（可能只是子矩形）计算 old_rect。
+        let old_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
         let old_rect = CanvasRect::new(
             old_transformed.x + presented.position.x,
             old_transformed.y + presented.position.y,
@@ -740,6 +750,8 @@ impl SceneTransition {
             // byte_range 用 target 的（新坐标），source_revision 也必须是
             // target revision（latest_revision），不能标 presented 的旧 revision。
             latest_revision,
+            // Issue #901 第十一轮问题4：传递完整 presented 字形位置。
+            old_rect,
         ))
     }
 
@@ -780,6 +792,14 @@ impl SceneTransition {
             target_rect.w,
             target_rect.h,
         );
+        // Issue #901 第十一轮问题4：original_glyph_rect 经 transform 映射到文档坐标。
+        let orig_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
+        let original_glyph_rect = CanvasRect::new(
+            orig_transformed.x + presented.position.x,
+            orig_transformed.y + presented.position.y,
+            orig_transformed.w,
+            orig_transformed.h,
+        );
         Some(DrawCommand::text_fragment(
             contrib.snapshot_id,
             contrib.source_uv,
@@ -793,6 +813,7 @@ impl SceneTransition {
             // byte_range 用 contrib 的（presented 坐标），source_revision 也用
             // contrib 的（presented revision），不通过 ownership 猜来源。
             contrib.source_revision,
+            original_glyph_rect,
         ))
     }
 
@@ -849,6 +870,8 @@ impl SceneTransition {
             // byte_range 用 target run 的（新坐标），source_revision 也是
             // target revision（latest_revision）。
             latest_revision,
+            // Issue #901 第十一轮问题4：新增字的完整字形矩形 = target run 的 document_rect。
+            run.document_rect,
         ))
     }
 
@@ -889,6 +912,14 @@ impl SceneTransition {
             remaining_doc_w,
             transformed.h,
         );
+        // Issue #901 第十一轮问题4：original_glyph_rect 经 transform 映射到文档坐标。
+        let orig_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
+        let original_glyph_rect = CanvasRect::new(
+            orig_transformed.x + presented.position.x,
+            orig_transformed.y + presented.position.y,
+            orig_transformed.w,
+            orig_transformed.h,
+        );
         let opacity = contrib.opacity * presented.opacity;
         if opacity <= 0.0 {
             return None;
@@ -905,6 +936,7 @@ impl SceneTransition {
             // byte_range 用 contrib 的（presented 坐标），source_revision 也用
             // contrib 的（presented revision），不通过 ownership 猜来源。
             contrib.source_revision,
+            original_glyph_rect,
         ))
     }
 
@@ -997,6 +1029,7 @@ mod tests {
                 opacity: 1.0,
                 byte_range,
                 source_revision: EditorRevision::initial(),
+                original_glyph_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
             }],
             caret: None,
             scroll: PresentedScroll::default(),

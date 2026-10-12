@@ -708,6 +708,15 @@ impl Default for SujianEditorItem {
 
 impl Drop for SujianEditorItem {
     fn drop(&mut self) {
+        // Issue #901 第十一轮问题3: item 销毁时清除增量段落节点映射，
+        // 避免全局 g_incremental_para_map 中残留悬空指针条目。
+        // get_cpp_object() 在 Drop 时可能返回 null（C++ 对象已析构），
+        // clear_incremental_para_map 内部有 null 检查，双重保护。
+        // erase 仅按指针值移除 map 条目，不解引用 item_ptr，安全。
+        let item_ptr = self.get_cpp_object();
+        if !item_ptr.is_null() {
+            qt_text_node::clear_incremental_para_map(item_ptr);
+        }
         if let Some(connection) = self.window_changed_connection.as_mut() {
             connection();
         }
@@ -817,6 +826,15 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
+        // Issue #901 第十一轮问题3: 切章/清文档时清除本 item 的增量段落节点映射，
+        // 避免旧章的 QSG 节点身份表跨章残留导致悬空指针或双层文字。
+        // 旧章的 QSG 节点由 Qt 场景图管理，此处只清理 map 条目，不 delete 节点。
+        // 同时把 loaded_para_range 置空，下一帧按新章从头加载段落范围。
+        let item_ptr = self.get_cpp_object();
+        if !item_ptr.is_null() {
+            qt_text_node::clear_incremental_para_map(item_ptr);
+        }
+        self.loaded_para_range = None;
         // Issue #901 问题3：切章/清文档时递增 document_session，
         // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。
         self.document_session = self.document_session.wrapping_add(1);
