@@ -5809,7 +5809,7 @@ test('修复2-测试5：deepCloneSourceMembers 正确拷贝 windowInstanceId', (
     `deepCloneSourceMembers 应拷贝 windowInstanceId='win-clone-10'，实际 ${resultMembers[0].windowInstanceId}`)
 })
 
-test('修复2-测试6：mergeMemberUpdates matched 分支正确传递 windowInstanceId（使用 newMembers 的）', () => {
+test('修复2-测试6：mergeMemberUpdates matched 分支保留 prev.windowInstanceId（同一物理 Text 租约一致）', () => {
   const ctx = context('甲乙', 1000, [])
   const glyphIds = idsOf(ctx, 0, 2)
   const yiId = glyphIds[1]
@@ -5853,11 +5853,12 @@ test('修复2-测试6：mergeMemberUpdates matched 分支正确传递 windowInst
   const resultMembers = firstSourceMembers(result)
   assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
 
-  // matched 分支应使用 newMembers 的 windowInstanceId
+  // matched 分支应保留 prev 的 windowInstanceId——同一完整 render key 的 ID 若采样出不同值，
+  // 候选实际上声明同一物理 Text 对应新租约；后续 onAppear/onDisAppear 和 releaseRenderNodeLease 会用不一致的 ID。
   const matchedResult = resultMembers.find(m => m.renderNodeKey === 'old-node-10')
   assert.ok(matchedResult !== undefined, '应存在匹配的成员')
-  assert.equal(matchedResult.windowInstanceId, 'win-updated-10',
-    `matched 成员应取 newMembers 的 windowInstanceId='win-updated-10'，实际 ${matchedResult.windowInstanceId}`)
+  assert.equal(matchedResult.windowInstanceId, 'win-initial-10',
+    `matched 成员应保留 prev.windowInstanceId='win-initial-10'，实际 ${matchedResult.windowInstanceId}`)
 })
 
 test('修复2-测试7：target 成员没匹配时保留 prev.windowInstanceId（undefined）', () => {
@@ -5964,6 +5965,180 @@ test('修复2-测试8：frozen 成员没匹配时保留 prev.windowInstanceId', 
   assert.ok(frozenResult !== undefined, '应存在未匹配的 frozen 成员')
   assert.equal(frozenResult.windowInstanceId, 'win-frozen-666',
     `frozen 成员应保留 prev.windowInstanceId='win-frozen-666'，实际 ${frozenResult.windowInstanceId}`)
+})
+
+// ====== Issue #879 评论6117867260 新增测试：不可见分支 role 区分 + mergeMemberUpdates 不追加陌生成员 ======
+
+// 修复3-测试1：reInterval===null 时 target 成员保留 targetOpacity=1，frozen 成员 targetOpacity=0
+// 验证不可见分支（deepCloneSourceMembers + map）正确区分 role：
+// - target 成员：targetOpacity=1、opacity=0、clipRects=[]（待显露起点）
+// - frozen 成员：targetOpacity=0、opacity=0、clipRects=[]（历史源淡出）
+test('修复3-测试1：reInterval===null 时 target 成员保留 targetOpacity=1，frozen 成员 targetOpacity=0', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  const frozen = [makeSpan(yiId, {
+    clipLeft: 10, clipRight: 20,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [1, 2], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在且有成员')
+
+  // 构造两个成员：一个 target，一个 frozen
+  const targetMember = { ...members[0] }
+  targetMember.role = 'target'
+  targetMember.targetOpacity = 1
+  targetMember.opacity = 0.5
+  targetMember.clipRects = [{ x: 10, y: 0, width: 5, height: 20 }]
+
+  const frozenMember = { ...members[0] }
+  frozenMember.role = 'frozen'
+  frozenMember.targetOpacity = 0.5
+  frozenMember.opacity = 0.8
+  frozenMember.clipRects = [{ x: 10, y: 0, width: 5, height: 20 }]
+  frozenMember.renderNodeKey = 'frozen-node-888'
+
+  pieces[0].intervals[0].sourceMembers = [targetMember, frozenMember]
+
+  // retarget——使用零宽度 clip 的冻结窗口使字形不可见（reInterval===null）
+  const hiddenFrozen = [{
+    ...frozen[0],
+    clipLeft: 200, clipRight: 200,
+    clipRects: [{ x: 200, y: 0, width: 0, height: 20 }],
+  }]
+  const hiddenCtx = { ...ctx, frozenWindows: hiddenFrozen }
+
+  const result = retargetRunStarts(run, pieces, hiddenCtx, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+  assert.equal(resultMembers.length, 2, '应有 2 个成员')
+
+  // target 成员：targetOpacity=1, opacity=0, clipRects=[]
+  const targetResult = resultMembers.find(m => m.role === 'target')
+  assert.ok(targetResult !== undefined, '应存在 target 成员')
+  assert.equal(targetResult.targetOpacity, 1,
+    `target 成员应保留 targetOpacity=1，实际 ${targetResult.targetOpacity}`)
+  assert.equal(targetResult.opacity, 0,
+    `target 成员应被设为 opacity=0，实际 ${targetResult.opacity}`)
+  assert.equal(targetResult.clipRects.length, 0,
+    `target 成员应被设为 clipRects=[]，实际长度 ${targetResult.clipRects.length}`)
+
+  // frozen 成员：targetOpacity=0, opacity=0, clipRects=[]
+  const frozenResult = resultMembers.find(m => m.role === 'frozen')
+  assert.ok(frozenResult !== undefined, '应存在 frozen 成员')
+  assert.equal(frozenResult.targetOpacity, 0,
+    `frozen 成员应被设为 targetOpacity=0，实际 ${frozenResult.targetOpacity}`)
+  assert.equal(frozenResult.opacity, 0,
+    `frozen 成员应被设为 opacity=0，实际 ${frozenResult.opacity}`)
+  assert.equal(frozenResult.clipRects.length, 0,
+    `frozen 成员应被设为 clipRects=[]，实际长度 ${frozenResult.clipRects.length}`)
+})
+
+// 修复3-测试2：mergeMemberUpdates 不追加 newMembers 中多出的陌生成员
+// prevMembers 有 2 个成员（keyA, keyB），newMembers 有 3 个成员（keyA, keyB, keyC）
+// 结果应只有 2 个成员（keyA, keyB），不包含 keyC
+test('修复3-测试2：mergeMemberUpdates 不追加 newMembers 中多出的陌生成员', () => {
+  const ctx = context('甲乙', 1000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+
+  // 准备阶段：2 个冻结窗口 → 2 个 sourceMembers
+  const frozenPrepare = [
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      sourceRevision: 11, opacity: 0.5,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-11',
+      sourceKind: 'new',
+    }),
+  ]
+  const withWindowPrepare = { ...ctx, frozenWindows: frozenPrepare }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindowPrepare, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '准备阶段应有 2 个成员')
+
+  // retarget 阶段：3 个冻结窗口 → reInterval.sourceMembers 有 3 个成员
+  // 第三个窗口有不同的 renderNodeKey，不会匹配任何 prevMember
+  const frozenRetarget = [
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      sourceRevision: 11, opacity: 0.5,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-11',
+      sourceKind: 'new',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      sourceRevision: 12, opacity: 0.3,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-12',
+      sourceKind: 'new',
+      renderNodeKey: 'extra-node-12',
+    }),
+  ]
+  const withWindowRetarget = { ...ctx, frozenWindows: frozenRetarget }
+
+  const result = retargetRunStarts(run, pieces, withWindowRetarget, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, '结果 sourceMembers 应存在')
+  // 结果应只有 2 个成员（prevMembers 的数量），不包含第三个陌生成员
+  assert.equal(resultMembers.length, 2,
+    `结果应有 2 个成员（不追加陌生成员），实际 ${resultMembers.length}`)
+  // 验证不包含 renderNodeKey='extra-node-12' 的成员
+  const extraMember = resultMembers.find(m => m.renderNodeKey === 'extra-node-12')
+  assert.equal(extraMember, undefined,
+    '结果不应包含 renderNodeKey=extra-node-12 的陌生成员')
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

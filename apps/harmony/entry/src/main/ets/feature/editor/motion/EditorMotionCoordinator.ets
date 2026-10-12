@@ -429,6 +429,9 @@ export class EditorMotionCoordinator {
         keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
       }
     }
+    // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
+    // 跨多个 interval 只输出一次 key，buildFrame 会按 renderNodeKey 聚合合并 clipRects。
+    const frozenKeysSeen: Set<string> = new Set()
     for (const move of plan.retainedMoves) {
       for (const piece of move.pieces) {
         // Issue #879 复核评论6099070438 问题1：retained 按 interval 分配 key，
@@ -442,8 +445,12 @@ export class EditorMotionCoordinator {
             const winId = this.windowIdAllocator.allocate(interval.glyphIds)
             for (const member of interval.sourceMembers) {
               if (member.role === 'frozen') {
-                // frozen 成员的 renderNodeKey 已包含 windowInstanceId，原样输出
-                keys.push(member.renderNodeKey)
+                // 问题2：同一 renderNodeKey 只输出一次——多个 interval 的 frozen 成员
+                // 共享同一物理 Text 节点，buildFrame 按 renderNodeKey 聚合合并 clipRects。
+                if (!frozenKeysSeen.has(member.renderNodeKey)) {
+                  frozenKeysSeen.add(member.renderNodeKey)
+                  keys.push(member.renderNodeKey)
+                }
               } else {
                 // target 成员需要追加新分配的 windowInstanceId
                 keys.push(`${member.renderNodeKey}-${winId}`)
@@ -1470,6 +1477,9 @@ export class EditorMotionCoordinator {
     //    offsetX/offsetY 是 piece 级统一值——裁切框位置变了，Text 内字形却没有随之独立移动。
     //    现在每个岛各自创建独立的 MotionGlyphWindow，拥有自己的 offset/clipRect/glyphIds，
     //    clipRect 和 Text 内字形位置一致。单岛 piece 行为与原来相同。
+    // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
+    // 跨多个 interval 只输出一个聚合 MotionGlyphWindow，合并 clipRects 和 UTF-16 范围。
+    const frozenWindowAggregator = new Map<string, MotionGlyphWindow>()
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
@@ -1653,8 +1663,15 @@ export class EditorMotionCoordinator {
               })
             }
 
-            // 逐成员计算 clipRects——每个成员只用自己的 sourceGlyphRect+offset、clipRects
+            // 问题5：逐成员计算位置插值和 clipRects——先求成员真实屏幕 Text 矩形，
+            // 再以它为坐标基准生成 clip，不再独立映射到 newRevision 的不同宽高。
+            // 形态变化由真正 newRevision 的目标 Text 淡入接管，历史源只移动、
+            // 按自己实际几何裁切并淡出。
             const memberClipRectsList: ClipRect[][] = []
+            const memberCurrentXList: number[] = []
+            const memberCurrentYList: number[] = []
+            const memberOffsetXList: number[] = []
+            const memberOffsetYList: number[] = []
             for (const member of effectiveMembers) {
               // 成员的源字形在屏矩形 = 成员的 sourceGlyphRect + 成员的 offset
               const memberSourceGlyphOnScreen: RectLike = {
@@ -1664,17 +1681,48 @@ export class EditorMotionCoordinator {
                 height: member.sourceGlyphRect.height
               }
 
-              // 成员的目标字形几何
-              let memberNewGlyphRect: RectLike
+              // 问题5：先计算位置插值——每帧成员的真实屏幕位置
+              const memberStartScreenX = member.sourceGlyphRect.x + member.offsetX
+              const memberStartScreenY = member.sourceGlyphRect.y + member.offsetY
+              let memberTargetScreenX: number
+              let memberTargetScreenY: number
               if (intervalNewGlyphRect !== null) {
-                memberNewGlyphRect = intervalNewGlyphRect
+                memberTargetScreenX = intervalNewGlyphRect.x
+                memberTargetScreenY = intervalNewGlyphRect.y
               } else {
-                memberNewGlyphRect = {
-                  x: islandNewX + (member.sourceGlyphRect.x - islandOldLeft),
-                  y: islandNewY,
-                  width: Math.max(0, member.sourceGlyphRect.width),
-                  height: Math.max(0, member.sourceGlyphRect.height)
-                }
+                memberTargetScreenX = islandNewX
+                memberTargetScreenY = islandNewY
+              }
+              const memberRole = member.role !== undefined
+                ? member.role
+                : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+              let memberCurrentX: number
+              let memberCurrentY: number
+              if (memberRole === 'frozen' && member.clipRects.length === 0) {
+                memberCurrentX = memberStartScreenX
+                memberCurrentY = memberStartScreenY
+              } else {
+                memberCurrentX = memberStartScreenX + (memberTargetScreenX - memberStartScreenX) * p
+                memberCurrentY = memberStartScreenY + (memberTargetScreenY - memberStartScreenY) * p
+              }
+              const memberOffsetX = memberCurrentX - member.sourceGlyphRect.x
+              const memberOffsetY = memberCurrentY - member.sourceGlyphRect.y
+              memberCurrentXList.push(memberCurrentX)
+              memberCurrentYList.push(memberCurrentY)
+              memberOffsetXList.push(memberOffsetX)
+              memberOffsetYList.push(memberOffsetY)
+
+              // 问题5：p=1 时的真实屏幕 Text 矩形 = sourceGlyphRect + targetOffset
+              // clip 以此为坐标基准（目标值），不再独立映射到 newRevision 的不同宽高。
+              // 使用 p=1 时的值（而非当前帧 memberCurrentX/Y）确保 clip 插值是线性的，
+              // 与 Text 位置插值同步——若用当前帧值，clip 插值变成 p 的二次函数，会滞后于 Text。
+              // 形态变化由真正 newRevision 的目标 Text 淡入接管，
+              // 历史源只移动、按自己实际几何裁切并淡出。
+              const memberFinalScreenRect: RectLike = {
+                x: memberTargetScreenX,
+                y: memberTargetScreenY,
+                width: member.sourceGlyphRect.width,
+                height: member.sourceGlyphRect.height
               }
 
               // 用成员自己的 clipRects 求间隙
@@ -1687,11 +1735,8 @@ export class EditorMotionCoordinator {
                 // Issue #879 复核评论6111437799 问题1：空 clip 有两种本质不同的语义：
                 // ① target 角色（本次 newRevision 目标新源）——从零宽度逐渐扩展到完整字形
                 // ② frozen 角色（历史源已被上一笔吞没/裁出屏幕）——保持不可见并淡出
-                const memberRole = member.role !== undefined
-                  ? member.role
-                  : (member.sourceRevision === newRevision ? 'target' : 'frozen')
                 if (memberRole === 'target') {
-                  // target：起始零面积，目标完整字形矩形
+                  // target：起始零面积，目标 = p=1 时真实屏幕 Text 矩形
                   startRects.push({
                     x: memberSourceGlyphOnScreen.x,
                     y: memberSourceGlyphOnScreen.y,
@@ -1699,10 +1744,10 @@ export class EditorMotionCoordinator {
                     height: memberSourceGlyphOnScreen.height,
                   })
                   targetRects.push({
-                    x: memberNewGlyphRect.x,
-                    y: memberNewGlyphRect.y,
-                    width: memberNewGlyphRect.width,
-                    height: memberNewGlyphRect.height,
+                    x: memberFinalScreenRect.x,
+                    y: memberFinalScreenRect.y,
+                    width: memberFinalScreenRect.width,
+                    height: memberFinalScreenRect.height,
                   })
                 } else {
                   // frozen：保持空 clip（startRects 和 targetRects 都是零面积），
@@ -1721,26 +1766,27 @@ export class EditorMotionCoordinator {
                   })
                 }
               } else {
-                // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标），目标 = mapRectByRatio 映射到新布局
+                // 已可见碎片：起始 = 成员的 clipRects（屏幕坐标）
+                // 问题5：目标 = mapRectByRatio 映射到 p=1 时真实屏幕 Text 矩形（而非 newRevision 目标几何）
                 for (const scr of member.clipRects) {
                   startRects.push({
                     x: scr.x, y: scr.y,
                     width: Math.max(0, scr.width), height: Math.max(0, scr.height)
                   })
-                  const mapped = mapRectByRatio(scr, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                  const mapped = mapRectByRatio(scr, memberSourceGlyphOnScreen, memberFinalScreenRect)
                   targetRects.push({
                     x: mapped.x, y: mapped.y,
                     width: mapped.width, height: mapped.height
                   })
                 }
 
-                // 间隙碎片：零面积起点 + 按比例映射到新布局的间隙目标
+                // 间隙碎片：零面积起点 + 按比例映射到 p=1 时真实屏幕 Text 矩形的间隙目标
                 for (const gap of remaining) {
                   startRects.push({
                     x: gap.x, y: gap.y,
                     width: 0, height: Math.max(0, gap.height)
                   })
-                  const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberNewGlyphRect)
+                  const mappedGap = mapRectByRatio(gap, memberSourceGlyphOnScreen, memberFinalScreenRect)
                   targetRects.push({
                     x: mappedGap.x, y: mappedGap.y,
                     width: mappedGap.width, height: mappedGap.height
@@ -1804,40 +1850,14 @@ export class EditorMotionCoordinator {
               const memberUtf16Start = member.sourceUtf16Start
               const memberUtf16End = member.sourceUtf16End
 
-              // Issue #879 复核评论6111437799 问题4：每个成员有独立的位置插值轨迹。
-              // 历史源成员的起始屏幕位置 = sourceGlyphRect.x + offsetX, sourceGlyphRect.y + offsetY
-              // 目标屏幕位置 = intervalNewGlyphRect.x/y（或 fallback islandNewX/Y）
-              // 每帧 currentX = startScreenX + (targetScreenX - startScreenX) * p
-              // offsetX = currentX - member.sourceGlyphRect.x
-              const memberStartScreenX = member.sourceGlyphRect.x + member.offsetX
-              const memberStartScreenY = member.sourceGlyphRect.y + member.offsetY
-              let memberTargetScreenX: number
-              let memberTargetScreenY: number
-              if (intervalNewGlyphRect !== null) {
-                memberTargetScreenX = intervalNewGlyphRect.x
-                memberTargetScreenY = intervalNewGlyphRect.y
-              } else {
-                // fallback：目标位置与 island 级别的目标一致
-                memberTargetScreenX = islandNewX
-                memberTargetScreenY = islandNewY
-              }
-              // Issue #879 复核评论6111437799 问题1：frozen 角色且空 clip 的成员保持不可见——
-              // 位置不插值到目标，保持在起始位置（透明度降到0让它消失）
+              // 问题5：位置插值已在 Loop 1 中预计算，直接复用
+              const memberCurrentX = memberCurrentXList[mi]
+              const memberCurrentY = memberCurrentYList[mi]
+              const memberOffsetX = memberOffsetXList[mi]
+              const memberOffsetY = memberOffsetYList[mi]
               const memberRole = member.role !== undefined
                 ? member.role
                 : (member.sourceRevision === newRevision ? 'target' : 'frozen')
-              let memberCurrentX: number
-              let memberCurrentY: number
-              if (memberRole === 'frozen' && member.clipRects.length === 0) {
-                // frozen + 空 clip：保持起始位置不动，由 opacity 淡出
-                memberCurrentX = memberStartScreenX
-                memberCurrentY = memberStartScreenY
-              } else {
-                memberCurrentX = memberStartScreenX + (memberTargetScreenX - memberStartScreenX) * p
-                memberCurrentY = memberStartScreenY + (memberTargetScreenY - memberStartScreenY) * p
-              }
-              const memberOffsetX = memberCurrentX - member.sourceGlyphRect.x
-              const memberOffsetY = memberCurrentY - member.sourceGlyphRect.y
 
               // 问题3：透明度用 startOpacity→targetOpacity 插值
               let memberOpacity: number | undefined
@@ -1853,7 +1873,7 @@ export class EditorMotionCoordinator {
                 memberOpacity = undefined
               }
 
-              motionGlyphWindows.push({
+              const memberWindow: MotionGlyphWindow = {
                 sourceKind: member.sourceKind,
                 utf16Start: memberUtf16Start,
                 utf16End: memberUtf16End,
@@ -1882,7 +1902,35 @@ export class EditorMotionCoordinator {
                 currentPositionY: memberCurrentY,
                 motionOwnerKind: 'reflow',
                 opacity: memberOpacity
-              })
+              }
+              // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
+              // 合并各字的 clipRects 和 UTF-16 范围到一个 MotionGlyphWindow，避免重复 key 丢字。
+              // target 成员仍按 interval 独立分配 windowInstanceId，直接 push。
+              if (memberRole === 'frozen') {
+                const existing = frozenWindowAggregator.get(memberRenderNodeKey)
+                if (existing !== undefined) {
+                  // 合并：扩展 UTF-16 范围、合并 clipRects、扩展包围盒
+                  existing.utf16Start = Math.min(existing.utf16Start, memberWindow.utf16Start)
+                  existing.utf16End = Math.max(existing.utf16End, memberWindow.utf16End)
+                  existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+                  existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
+                  existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
+                  existing.clipTop = Math.min(existing.clipTop, memberWindow.clipTop)
+                  existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
+                  existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
+                  existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
+                  // glyphIds 合并去重
+                  for (const gid of memberWindow.glyphIds) {
+                    if (!existing.glyphIds.includes(gid)) {
+                      existing.glyphIds.push(gid)
+                    }
+                  }
+                } else {
+                  frozenWindowAggregator.set(memberRenderNodeKey, memberWindow)
+                }
+              } else {
+                motionGlyphWindows.push(memberWindow)
+              }
             }
             // sourceMembers 分支已处理 bbox 和窗口输出，跳过旧逻辑
             continue
@@ -2276,6 +2324,13 @@ export class EditorMotionCoordinator {
           }
         }
       }
+    }
+
+    // 问题2：将按 renderNodeKey 聚合的 frozen 成员窗口推送到 motionGlyphWindows。
+    // 每个 renderNodeKey 只输出一个 MotionGlyphWindow，合并了所有共享该物理 Text 节点的
+    // frozen 成员的 clipRects 和 UTF-16 范围，避免 buildAllMotionWindowSources 去重时丢字。
+    for (const frozenWindow of frozenWindowAggregator.values()) {
+      motionGlyphWindows.push(frozenWindow)
     }
 
     // Issue #879 复核评论6078682695 问题2：carryOver ghost 残影采样。

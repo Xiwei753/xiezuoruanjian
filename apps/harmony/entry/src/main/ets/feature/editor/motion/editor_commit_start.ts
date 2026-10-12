@@ -1711,14 +1711,27 @@ export function retargetRunStarts(
             // Issue #879 评论6108900966 问题1+2：传递 needsCrossfade 和 sourceMembers。
             needsCrossfade: prevInterval.needsCrossfade,
             sourceMembers: prevInterval.sourceMembers !== undefined
-              ? deepCloneSourceMembers(prevInterval.sourceMembers).map(m => ({
-                  ...m,
-                  clipRects: [],  // 不可见时清空 clipRects，避免回闪
-                  // Issue #879 评论6110293866 问题3：不可见时 opacity 和 targetOpacity 都设为 0，
-                  // 确保 buildFrame 中 memberOpacity 始终为 0，避免动画过程中不可见成员变得可见。
-                  opacity: 0,
-                  targetOpacity: 0,
-                }))
+              ? deepCloneSourceMembers(prevInterval.sourceMembers).map(m => {
+                  // Issue #879：reInterval===null 时不可见，但必须区分 role：
+                  // - target 成员：保留 targetOpacity=1 及身份字段，仅 opacity=0 + clipRects=[] 作为待显露起点
+                  // - frozen 成员：clipRects=[]、opacity=0、targetOpacity=0（历史源已离屏应淡出）
+                  if (m.role === 'target') {
+                    return {
+                      ...m,
+                      clipRects: [],
+                      opacity: 0,
+                      // target 成员保留 targetOpacity=1，确保整轮动画正常显露
+                      targetOpacity: 1,
+                    }
+                  } else {
+                    return {
+                      ...m,
+                      clipRects: [],
+                      opacity: 0,
+                      targetOpacity: 0,
+                    }
+                  }
+                })
               : undefined,
           })
         }
@@ -2306,7 +2319,10 @@ function mergeMemberUpdates(
             // Issue #879：matched 分支保留 prev.targetOpacity——Planner 设置的目标透明度
             // 在 retarget 时不应被 newMembers 的默认值 -1 覆盖。
             targetOpacity: prev.targetOpacity,
-            windowInstanceId: nw.windowInstanceId,
+            // Issue #879：matched 冻结成员始终保留 prev.windowInstanceId。
+            // 同一完整 render key 的 ID 若采样出不同值，候选实际上声明同一物理 Text 对应新租约；
+            // 后续 onAppear/onDisAppear 和 releaseRenderNodeLease 会用不一致的 ID。
+            windowInstanceId: prev.windowInstanceId,
           })
           consumedNew.add(ni)
           matched = true
@@ -2363,35 +2379,10 @@ function mergeMemberUpdates(
       }
     }
   }
-  // 追加 newMembers 中多出的成员（prevMembers 没有的新源成员）
-  if (newMembers !== undefined) {
-    for (let ni = 0; ni < newMembers.length; ni++) {
-      if (!consumedNew.has(ni)) {
-        const nw = newMembers[ni]
-        result.push({
-          sourceKind: nw.sourceKind,
-          sourceRevision: nw.sourceRevision,
-          role: nw.role,
-          runId: nw.runId,
-          renderNodeKey: nw.renderNodeKey,
-          sourceGlyphRect: {
-            x: nw.sourceGlyphRect.x, y: nw.sourceGlyphRect.y,
-            width: nw.sourceGlyphRect.width, height: nw.sourceGlyphRect.height,
-          },
-          offsetX: nw.offsetX,
-          offsetY: nw.offsetY,
-          clipRects: nw.clipRects.map((cr: RectLike): RectLike => ({
-            x: cr.x, y: cr.y, width: cr.width, height: cr.height,
-          })),
-          opacity: nw.opacity,
-          sourceUtf16Start: nw.sourceUtf16Start,
-          sourceUtf16End: nw.sourceUtf16End,
-          targetOpacity: nw.targetOpacity,
-          windowInstanceId: nw.windowInstanceId,
-        })
-      }
-    }
-  }
+  // Issue #879：不再追加 newMembers 中多出的新成员。
+  // 从 prepare 阶段就固定 MemberPlan[]，retarget 只按 key 更新 clip/offset/startOpacity，不增删。
+  // 候选等待布局时旧 animator 继续运动、sourceWindows 变化，准备阶段没有的历史 key 若突然加入
+  // retarget 后的候选，会破坏两阶段预挂载/同 key 交棒。
   return result
 }
 
