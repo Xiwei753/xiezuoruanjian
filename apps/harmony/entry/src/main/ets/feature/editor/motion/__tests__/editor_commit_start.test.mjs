@@ -5059,7 +5059,7 @@ test('问题5：retargetRunStarts 不可见分支——保留成员身份字段�
   assert.equal(oldMember.sourceKind, 'old', '不可见分支保留 sourceKind')
   assert.equal(oldMember.sourceRevision, 10, '不可见分支保留 sourceRevision')
   assert.equal(oldMember.runId, 'old-10', '不可见分支保留 runId')
-  assert.equal(oldMember.renderNodeKey, 'old-10', '不可见分支保留 renderNodeKey')
+  assert.equal(oldMember.renderNodeKey, 'old-node-10', '不可见分支保留 renderNodeKey')
   assert.equal(oldMember.sourceGlyphRect.x, 50, '不可见分支保留 sourceGlyphRect.x')
   assert.equal(oldMember.sourceGlyphRect.width, 12, '不可见分支保留 sourceGlyphRect.width')
   assert.equal(oldMember.offsetX, 3, '不可见分支保留 offsetX')
@@ -5077,7 +5077,7 @@ test('问题5：retargetRunStarts 不可见分支——保留成员身份字段�
   assert.equal(newMember.sourceKind, 'new', '不可见分支保留 sourceKind')
   assert.equal(newMember.sourceRevision, 11, '不可见分支保留 sourceRevision')
   assert.equal(newMember.runId, 'new-11', '不可见分支保留 runId')
-  assert.equal(newMember.renderNodeKey, 'new-11', '不可见分支保留 renderNodeKey')
+  assert.equal(newMember.renderNodeKey, 'new-node-11', '不可见分支保留 renderNodeKey')
   assert.equal(newMember.sourceGlyphRect.x, 70, '不可见分支保留 sourceGlyphRect.x')
   assert.equal(newMember.sourceGlyphRect.width, 10, '不可见分支保留 sourceGlyphRect.width')
   assert.equal(newMember.offsetX, 5, '不可见分支保留 offsetX')
@@ -5294,6 +5294,148 @@ test('问题4-6110293866：双源成员场景——glyphId 同时在 displayed �
     `startPositionX 应来自冻结窗口源字形几何（x=100），实际 ${iv.startPositionX}`)
   assert.notEqual(iv.startPositionX, 0,
     'startPositionX 不应来自 displayed.layout（x=0）')
+})
+
+// ====== Issue #879 评论6110857105 问题2/6：buildSourceMembers 保留原始 renderNodeKey/runId ======
+
+test('问题2-6110857105：buildSourceMembers 保留原始 renderNodeKey/runId——不重新构造为 sourceKind-revision 格式', () => {
+  const ctx = context('甲乙', 1100, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  // 构造冻结窗口，runId 和 renderNodeKey 包含物理节点唯一标识
+  // 使用非格式化的值，确保不会被重新构造覆盖
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 20 }],
+  }]
+  const frozen = [{
+    glyphIds: [yiId],
+    clipLeft: 10, clipRight: 20,
+    clipRects: [{ x: 10, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1099,
+    glyphUtf16Ranges: new Map([[yiId, [1, 2]]]),
+    sourceLayout: oldSourceLayout,
+    sourceKind: 'old',
+    runId: 'old-1099-winA',
+    renderNodeKey: 'old-node-1099-winA',
+    opacity: 1,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 1, 2, { x: 10, y: 0, width: 10, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 10, startClipRight: 20, startPositionX: 10, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined && iv.sourceMembers.length > 0,
+    '应有 sourceMembers')
+  const member = iv.sourceMembers[0]
+  // runId 应保留原始值 'old-1099-winA'，不是重新构造的 'old-1099'
+  assert.equal(member.runId, 'old-1099-winA',
+    `runId 应保留原始物理节点身份，实际 ${member.runId}`)
+  // renderNodeKey 应保留原始值 'old-node-1099-winA'，不是重新构造的 'old-1099'
+  assert.equal(member.renderNodeKey, 'old-node-1099-winA',
+    `renderNodeKey 应保留原始物理节点身份，实际 ${member.renderNodeKey}`)
+})
+
+test('问题6-6110857105：双源场景 buildSourceMembers 按 renderNodeKey+sourceRevision 唯一匹配——不按 sourceKind+offset', () => {
+  const ctx = context('甲乙', 1101, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  // 两个 old 源，相同 sourceKind='old'，相同 offset=0，但不同 sourceRevision 和 renderNodeKey
+  const oldLayoutA = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 20 }],
+  }]
+  const oldLayoutB = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 20 }],
+  }]
+  // 两个 span 都是 sourceKind='old', offsetX=0, offsetY=0，但 sourceRevision 和 renderNodeKey 不同
+  const frozen = [
+    {
+      glyphIds: [yiId],
+      clipLeft: 10, clipRight: 15,
+      clipRects: [{ x: 10, y: 0, width: 5, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 1098,
+      glyphUtf16Ranges: new Map([[yiId, [1, 2]]]),
+      sourceLayout: oldLayoutA,
+      sourceKind: 'old',
+      runId: 'old-1098-winA',
+      renderNodeKey: 'old-node-1098-winA',
+      opacity: 0.6,
+    },
+    {
+      glyphIds: [yiId],
+      clipLeft: 15, clipRight: 20,
+      clipRects: [{ x: 15, y: 0, width: 5, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 1099,
+      glyphUtf16Ranges: new Map([[yiId, [1, 2]]]),
+      sourceLayout: oldLayoutB,
+      sourceKind: 'old',
+      runId: 'old-1099-winB',
+      renderNodeKey: 'old-node-1099-winB',
+      opacity: 0.4,
+    },
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 1, 2, { x: 10, y: 0, width: 10, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 10, startClipRight: 20, startPositionX: 10, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined && iv.sourceMembers.length === 2,
+    `应有 2 个 sourceMembers（两个 old 源），实际 ${iv.sourceMembers?.length}`)
+  // 两个成员的 renderNodeKey 应不同，保留各自的物理节点身份
+  const keys = iv.sourceMembers.map(m => m.renderNodeKey)
+  assert.ok(keys.includes('old-node-1098-winA'), `应包含 old-node-1098-winA，实际 ${keys}`)
+  assert.ok(keys.includes('old-node-1099-winB'), `应包含 old-node-1099-winB，实际 ${keys}`)
+  // 两个成员的 runId 也应不同
+  const runIds = iv.sourceMembers.map(m => m.runId)
+  assert.ok(runIds.includes('old-1098-winA'), `应包含 old-1098-winA，实际 ${runIds}`)
+  assert.ok(runIds.includes('old-1099-winB'), `应包含 old-1099-winB，实际 ${runIds}`)
+})
+
+// ====== Issue #879 评论6110857105 问题1：targetOpacity 设置验证 ======
+
+test('问题1-6110857105：buildSourceMembers 中 targetOpacity 初始为 -1（未设置），由 Planner 设置', () => {
+  const ctx = context('甲乙', 1102, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 0 }, { utf16Offset: 1, x: 10 }, { utf16Offset: 2, x: 20 }],
+  }]
+  const frozen = [{
+    glyphIds: [yiId],
+    clipLeft: 10, clipRight: 20,
+    clipRects: [{ x: 10, y: 0, width: 10, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 1100,
+    glyphUtf16Ranges: new Map([[yiId, [1, 2]]]),
+    sourceLayout: oldSourceLayout,
+    sourceKind: 'old',
+    runId: 'old-1100',
+    renderNodeKey: 'old-node-1100',
+    opacity: 1,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+  const run = runGeometry(withWindow, 1, 2, { x: 10, y: 0, width: 10, height: 20 })
+  const start = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 10, startClipRight: 20, startPositionX: 10, startPositionY: 0,
+  })
+  const iv = start[0].intervals.find(iv => iv.firstIndex === 0)
+  assert.ok(iv !== undefined, '应找到乙的 interval')
+  assert.ok(iv.sourceMembers !== undefined && iv.sourceMembers.length > 0,
+    '应有 sourceMembers')
+  // buildSourceMembers 创建的成员 targetOpacity 应为 -1（未设置）
+  // Planner 会后续设置为 0（历史源）或 1（新源）
+  assert.equal(iv.sourceMembers[0].targetOpacity, -1,
+    `buildSourceMembers 创建的成员 targetOpacity 应为 -1（未设置），实际 ${iv.sourceMembers[0].targetOpacity}`)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

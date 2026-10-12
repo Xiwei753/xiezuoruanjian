@@ -1957,12 +1957,11 @@ function buildSourceMembers(
         }
       }
     }
-    const runId = `${span.sourceKind}-${span.sourceRevision}`
     members.push({
       sourceKind: span.sourceKind,
       sourceRevision: span.sourceRevision,
-      runId: runId,
-      renderNodeKey: runId,
+      runId: span.runId,
+      renderNodeKey: span.renderNodeKey,
       sourceGlyphRect: {
         x: rect.x, y: rect.y,
         width: rect.width, height: rect.height,

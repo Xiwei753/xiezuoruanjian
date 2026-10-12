@@ -35,6 +35,7 @@ import { LineLayout, glyphRectForRange } from '../render/editor_render_geometry'
 import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece, RectLike,
+  FrozenGlyphMember,
   deletedRunStartState, insertRunStartState, retainedMoveStartState
 } from './editor_commit_start'
 
@@ -529,6 +530,67 @@ export class EditorMotionPlanner {
         const needsCrossfade = anyIntervalNeedsCrossfade ||
           Math.abs(move.oldRect.width - move.newRect.width) > 0.5 ||
           Math.abs(move.oldRect.height - move.newRect.height) > 0.5
+
+        // Issue #879 评论6110857105 问题1：为每个成员规划 startOpacity/targetOpacity，
+        // 并确保 newRevision 目标成员在 Planner 阶段就创建，不在 Coordinator 中临时创建。
+        // 历史源（sourceRevision < newRevision）最终应退出（targetOpacity=0），
+        // 本次新源（sourceRevision === newRevision）最终应完全可见（targetOpacity=1）。
+        const newRevision = newSnapshot.revision
+        for (const piece of pieces) {
+          if (piece.intervals !== undefined) {
+            for (const interval of piece.intervals) {
+              if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
+                // 为每个已有成员设置 targetOpacity
+                for (const member of interval.sourceMembers) {
+                  if (member.sourceRevision < newRevision) {
+                    member.targetOpacity = 0
+                  } else if (member.sourceRevision === newRevision) {
+                    member.targetOpacity = 1
+                  }
+                }
+                // 如果没有 newRevision 目标成员，创建一个
+                const hasNewRevisionMember = interval.sourceMembers.some(
+                  m => m.sourceRevision === newRevision
+                )
+                if (!hasNewRevisionMember &&
+                    newMoveBoundaries.length === glyphIds.length + 1) {
+                  // 与 buildFrame 一致：覆盖整个 interval（firstIndex 到 lastIndex + 1），
+                  // 而不是只覆盖第一个 glyph
+                  const giStart = interval.firstIndex
+                  const giEnd = interval.lastIndex + 1
+                  if (giStart >= 0 && giEnd < newMoveBoundaries.length) {
+                    const newGlyphRect = glyphRectForRange(
+                      newLayout, newMoveBoundaries[giStart], newMoveBoundaries[giEnd]
+                    )
+                    if (newGlyphRect !== null) {
+                      const newMemberRunId = `new-${newRevision}`
+                      const newMember: FrozenGlyphMember = {
+                        sourceKind: 'new',
+                        sourceRevision: newRevision,
+                        runId: newMemberRunId,
+                        renderNodeKey: newMemberRunId,
+                        sourceGlyphRect: {
+                          x: newGlyphRect.x, y: newGlyphRect.y,
+                          width: newGlyphRect.width, height: newGlyphRect.height,
+                        },
+                        // 起始位置与历史源对齐，让字形从旧位置淡入
+                        offsetX: interval.startPositionX - newGlyphRect.x,
+                        offsetY: interval.startPositionY - newGlyphRect.y,
+                        clipRects: [],
+                        opacity: 0,
+                        sourceUtf16Start: newMoveBoundaries[giStart],
+                        sourceUtf16End: newMoveBoundaries[giEnd],
+                        targetOpacity: 1,
+                      }
+                      interval.sourceMembers.push(newMember)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
         retainedMoves.push({
           oldUtf16Start: move.oldUtf16Start,
           oldUtf16End: move.oldUtf16End,
