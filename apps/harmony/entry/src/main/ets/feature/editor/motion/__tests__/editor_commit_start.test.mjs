@@ -5438,4 +5438,70 @@ test('问题1-6110857105：buildSourceMembers 中 targetOpacity 初始为 -1（�
     `buildSourceMembers 创建的成员 targetOpacity 应为 -1（未设置），实际 ${iv.sourceMembers[0].targetOpacity}`)
 })
 
+// ====== Issue #879 评论6112219514 问题1：尾字形 sourceGlyphX1 从首个可见成员取 ======
+
+test('问题1-6112219514：尾字形 sourceGlyphX1 从首个可见成员取，不从 lastVisible[0]（可能 opacity=0）取', () => {
+  // 场景：乙被两个冻结窗口覆盖——旧源 opacity=0、x=50..60；新源 opacity=1、x=70..80。
+  // 首字形 sourceGlyphX0/X1 已用 firstVisibleInterval 修复（L932-934），
+  // 但尾字形 sourceGlyphX1 仍取 lastVisible[0]（首个物理成员，可能是 opacity=0）。
+  // 旧逻辑：sourceGlyphX0=70（首字形已修）、sourceGlyphX1=60（尾字形未修）→ 内部自相矛盾。
+  // 修复后：sourceGlyphX1=80（取自首个可见成员，与首字形对称）。
+  const ctx = context('甲乙', 1500, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const oldSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 40 }, { utf16Offset: 1, x: 50 }, { utf16Offset: 2, x: 60 }],
+  }]
+  const newSourceLayout = [{
+    startUtf16: 0, endUtf16: 2, left: 0, y: 0, height: 20, breakKind: 'endOfText',
+    caretStops: [{ utf16Offset: 0, x: 60 }, { utf16Offset: 1, x: 70 }, { utf16Offset: 2, x: 80 }],
+  }]
+
+  const frozen = dualSourceFrozen(yiId,
+    {
+      clipLeft: 50, clipRight: 60,
+      clipRects: [{ x: 50, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [1, 2], sourceLayout: oldSourceLayout,
+    },
+    {
+      clipLeft: 70, clipRight: 80,
+      clipRects: [{ x: 70, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 11, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: newSourceLayout,
+    },
+    ctx
+  )
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // run 只包含乙——乙既是首字形也是尾字形
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: [line('甲乙', 0)],
+  }
+  const pieces = visibleGlyphPieces(run, withWindow)
+  assert.equal(pieces.length, 1, 'visibleGlyphPieces 应返回 1 个可见段')
+  const piece = pieces[0]
+  // sourceGlyphX0 应取自可见成员（new 源 x=70）——首字形已修复
+  assert.equal(piece.sourceGlyphX0, 70,
+    `sourceGlyphX0 应取自首个可见成员（new 源 x=70），实际 ${piece.sourceGlyphX0}`)
+  // sourceGlyphX1 也应取自可见成员（new 源 x=80）——尾字形修复后
+  assert.equal(piece.sourceGlyphX1, 80,
+    `sourceGlyphX1 应取自首个可见成员（new 源 x=80），实际 ${piece.sourceGlyphX1}`)
+  // 不应取自旧源（x=50..60）
+  assert.notEqual(piece.sourceGlyphX1, 60,
+    'sourceGlyphX1 不应取自 opacity=0 的旧源（x=60）')
+  // sourceGlyphX0 < sourceGlyphX1（内部几何不自相矛盾）
+  assert.ok(piece.sourceGlyphX0 < piece.sourceGlyphX1,
+    `sourceGlyphX0(${piece.sourceGlyphX0}) 应小于 sourceGlyphX1(${piece.sourceGlyphX1})——内部几何不自相矛盾`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

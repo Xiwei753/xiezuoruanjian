@@ -1023,8 +1023,13 @@ function buildPiece(
         // 不 push lastSourceGlyphRects
       } else {
         ownRight = maxProjectedRight
-        // 尾字形的 sourceGlyphX1 从 lastVisible[0] 获取
-        sourceGlyphX1 = lastVisible[0].sourceGlyphX1 ?? ownFullRight
+        // Issue #879 评论6112219514 问题1：尾字形的 sourceGlyphX1 从首个**可见**成员获取，
+        // 不再从 lastVisible[0]（首个物理成员，可能是 opacity=0 的不可见成员）取。
+        // 与首字形 L932 的 firstVisibleInterval(firstVisible) 修复对称。
+        // 旧源透明 x50..60、新源可见 x70..80 时，sourceGlyphX0=70（首字形已修），
+        // 但尾部 sourceGlyphX1=60（旧逻辑取 lastVisible[0]），内部源几何自相矛盾。
+        const lastVis = firstVisibleInterval(lastVisible) ?? lastVisible[0]
+        sourceGlyphX1 = lastVis.sourceGlyphX1 ?? ownFullRight
         visiblePixelRight = maxVisRight
       }
       // 缺口2修复：onScreenRight 从 lastVisible.rects 中取最右边的 x+width
