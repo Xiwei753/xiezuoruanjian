@@ -365,56 +365,94 @@ impl QQuickItem for SujianEditorItem {
                 &canvas_plan,
             );
 
-            // Issue #901 第六轮阻塞3：从静态 QSGTextNode 的有效文本行登记已提交贡献。
-            // 首帧不能用"没有动画 TextFragment"代表"没有已显示正文"——静态文本
-            // 可以由 QSGTextNode 绘制而不需要 overlay，但 PresentedScene 必须知道
-            // 它的身份。从 EditorLayoutSnapshot.line_snapshots 提取每行的
-            // LineSnapshotId、byte range 和文档坐标几何，与视口求交后填入
-            // RenderPlan.static_text_contributions，供 build_presented_scene_from_frame
+            // Issue #901 第六轮阻塞3 / 第七轮问题3：从静态 QSGTextNode 的有效文本
+            // cluster 登记已提交贡献。首帧不能用"没有动画 TextFragment"代表"没有已显示
+            // 正文"——静态文本可以由 QSGTextNode 绘制而不需要 overlay，但 PresentedScene
+            // 必须知道它的身份。从 EditorLayoutSnapshot.line_snapshots 的 **cluster**
+            // 提取 LineSnapshotId、byte range、文档坐标几何和源纹理 UV，与视口求交后
+            // 填入 RenderPlan.static_text_contributions，供 build_presented_scene_from_frame
             // 登记静态正文的真实像素贡献。
+            //
+            // Issue #901 第七轮问题3 修复：
+            // - 旧实现按整行生成一个贡献，document_rect.w = doc_width - line.visual_x
+            //   （直到页面右边缘），source_uv = zero → command_for_deleting 返回 None。
+            // - 新实现按 cluster 拆分，与 transaction.rs::build_target_layout_descriptor
+            //   的 cluster 级 TargetGlyphRun 对称：byte_range 是 cluster 范围，
+            //   document_rect 是 cluster 真实字形几何，source_uv 是 cluster 在行纹理
+            //   中的局部坐标（非零）。过滤 visible_clip.h <= 0 的行（视口外不登记）。
             let static_text_contributions: Vec<
                 super::render_plan::StaticTextContributionInfo,
             > = canonical_visual_snapshot
                 .as_ref()
                 .map(|snap| {
-                    // 文档宽度来自 prepared_frame.layout_snapshot.width，
-                    // 用于推导每行 document_rect 的宽度上界。
-                    let doc_width = prepared_frame
-                        .map(|f| f.layout_snapshot.width)
-                        .unwrap_or(0.0);
                     let viewport_top = scroll_y;
                     let viewport_bottom = scroll_y + vp_h;
                     snap.line_snapshots
                         .iter()
-                        .filter_map(|line| {
+                        .flat_map(|line| {
                             let line_h = line.visual_line_bottom - line.visual_line_top;
                             // 跳过零高度行或空 byte range 的退化行。
                             if line_h <= 0.0 || line.byte_start >= line.byte_end {
-                                return None;
+                                return Vec::new();
                             }
-                            let doc_rect = super::layout_snapshot::SourceRect {
-                                x: line.visual_x,
-                                y: line.visual_line_top,
-                                w: (doc_width - line.visual_x).max(0.0),
-                                h: line_h,
-                            };
-                            // 视口裁剪（文档坐标）：行 rect 与
-                            // [0, scroll_y, doc_width, scroll_y + vp_h] 求交。
-                            let clip_y = doc_rect.y.max(viewport_top);
-                            let clip_bottom = (doc_rect.y + doc_rect.h).min(viewport_bottom);
-                            let clip_h = (clip_bottom - clip_y).max(0.0);
-                            let visible_clip = super::layout_snapshot::SourceRect {
-                                x: doc_rect.x,
-                                y: clip_y,
-                                w: doc_rect.w,
-                                h: clip_h,
-                            };
-                            Some(super::render_plan::StaticTextContributionInfo {
-                                snapshot_id: line.id,
-                                byte_range: (line.byte_start, line.byte_end),
-                                document_rect: doc_rect,
-                                visible_clip,
-                            })
+                            // dpr 防零除（与 transaction.rs 一致）。
+                            let dpr = if line.dpr > 0.0 { line.dpr } else { 1.0 };
+                            // Issue #901 第七轮问题3：按 cluster 拆分，与 target 侧对称。
+                            // 无 cluster 的行（如空行）不产生静态文字贡献。
+                            line.clusters
+                                .iter()
+                                .filter_map(|cluster| {
+                                    // 跳过零宽 cluster（无可见字形）。
+                                    if cluster.byte_start >= cluster.byte_end
+                                        || cluster.source_rect.w <= 0.0
+                                        || cluster.source_rect.h <= 0.0
+                                    {
+                                        return None;
+                                    }
+                                    // cluster 文档坐标几何，与 transaction.rs:233-249 对称。
+                                    let doc_x = line.visual_x + cluster.source_rect.x / dpr;
+                                    let doc_w = (cluster.source_rect.w / dpr).max(0.0);
+                                    let doc_rect = super::layout_snapshot::SourceRect {
+                                        x: doc_x,
+                                        y: line.visual_line_top,
+                                        w: doc_w,
+                                        h: line_h,
+                                    };
+                                    // 视口裁剪（文档坐标）：cluster rect 与
+                                    // [0, scroll_y, +inf, scroll_y + vp_h] 求交。
+                                    let clip_y = doc_rect.y.max(viewport_top);
+                                    let clip_bottom =
+                                        (doc_rect.y + doc_rect.h).min(viewport_bottom);
+                                    let clip_h = (clip_bottom - clip_y).max(0.0);
+                                    // Issue #901 第七轮问题3 缺陷A：过滤 visible_clip.h <= 0
+                                    // （完全在视口外的 cluster 不登记贡献）。
+                                    if clip_h <= 0.0 {
+                                        return None;
+                                    }
+                                    let visible_clip = super::layout_snapshot::SourceRect {
+                                        x: doc_rect.x,
+                                        y: clip_y,
+                                        w: doc_rect.w,
+                                        h: clip_h,
+                                    };
+                                    Some(super::render_plan::StaticTextContributionInfo {
+                                        snapshot_id: line.id,
+                                        byte_range: (cluster.byte_start, cluster.byte_end),
+                                        document_rect: doc_rect,
+                                        visible_clip,
+                                        // Issue #901 第七轮问题3 缺陷B：source_uv 用
+                                        // cluster 的 source_rect（行纹理局部坐标，已乘 DPR），
+                                        // 非零，使 command_for_deleting 的
+                                        // remaining_uv_w > 0。
+                                        source_uv: super::layout_snapshot::SourceRect {
+                                            x: cluster.source_rect.x,
+                                            y: cluster.source_rect.y,
+                                            w: cluster.source_rect.w,
+                                            h: cluster.source_rect.h,
+                                        },
+                                    })
+                                })
+                                .collect()
                         })
                         .collect()
                 })
@@ -871,20 +909,24 @@ impl SujianEditorItem {
             })
             .collect();
 
-        // Issue #901 第六轮阻塞3：从静态 QSGTextNode 的有效文本 cluster 登记已提交贡献。
-        // build_presented_scene_from_frame 之前只从 CanvasDrawPlan 的 TextFragment
-        // 命令建立 PixelContribution，完全不读取本帧静态 QSGTextNode 的有效文本 cluster。
-        // 所以静态已提交正文的 PresentedScene.pixel_contributions 是空列表，
-        // 下一次编辑会把整个目标正文都判为"新增字"并触发全屏文字重暴露。
+        // Issue #901 第六轮阻塞3 / 第七轮问题3：从静态 QSGTextNode 的有效文本 cluster
+        // 登记已提交贡献。build_presented_scene_from_frame 之前只从 CanvasDrawPlan 的
+        // TextFragment 命令建立 PixelContribution，完全不读取本帧静态 QSGTextNode 的
+        // 有效文本 cluster。所以静态已提交正文的 PresentedScene.pixel_contributions
+        // 是空列表，下一次编辑会把整个目标正文都判为"新增字"并触发全屏文字重暴露。
         //
         // 静态正文属于已提交的旧帧，source_revision 用 canvas_plan.source_revision
         // （plan_source_revision）。每条静态贡献携带：
-        // - byte_range：从 PreparedLineSnapshot.byte_start/byte_end 获取
+        // - byte_range：从 LineClusterSnapshot.byte_start/byte_end 获取（cluster 级）
         // - snapshot_id：完整 LineSnapshotId
-        // - document_rect：从 PreparedLineSnapshot 的 visual_x/visual_line_top/bottom 获取
+        // - document_rect：从 cluster 的 source_rect 经 visual_x/visual_line_top 换算
         // - visible_clip：视口裁剪后的可见区域
         // - opacity=1.0：静态正文完全不透明
-        // - source_uv=zero：静态文本由 QSGTextNode 绘制，不走纹理切片路径
+        // - source_uv：cluster 在行纹理中的局部坐标（已乘 DPR，非零）
+        //   Issue #901 第七轮问题3 缺陷B修复：旧实现用 CanvasRect::zero()，导致
+        //   command_for_deleting 的 remaining_uv_w = 0 → 返回 None，无法对已显示
+        //   静态文字执行吞字动画。现改为用 info.source_uv（cluster 的 source_rect），
+        //   使 remaining_uv_w > 0，能正确生成裁剪收回命令。
         //
         // 两份贡献（动画 TextFragment + 静态文本）合并到同一个 pixel_contributions 列表。
         let static_contributions: Vec<PixelContribution> = render_plan
@@ -892,8 +934,14 @@ impl SujianEditorItem {
             .iter()
             .map(|info| PixelContribution {
                 snapshot_id: info.snapshot_id,
-                // 静态文本由 QSGTextNode 绘制，不走纹理切片路径，source_uv 为 zero。
-                source_uv: CanvasRect::zero(),
+                // Issue #901 第七轮问题3 缺陷B：用 cluster 的 source_uv（非零），
+                // 使 command_for_deleting 的 remaining_uv_w > 0。
+                source_uv: CanvasRect::new(
+                    info.source_uv.x,
+                    info.source_uv.y,
+                    info.source_uv.w,
+                    info.source_uv.h,
+                ),
                 document_rect: CanvasRect::new(
                     info.document_rect.x,
                     info.document_rect.y,

@@ -996,9 +996,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
-    // Issue #901 问题5: 更新后续段的 y 和 byte offset。
+    // Issue #901 问题5缺陷C: 更新后续段的 y 和 byte offset。
     // 只在高度变化或 byte offset 变化时更新，避免不必要的遍历。
-    // 对长章非结构性编辑（高度不变），此处跳过，成本 O(1)。
+    // 对长章非结构性编辑（高度不变、byte 不变），此处跳过，成本 O(1)。
+    //
+    // 架构限制: 当 delta_height != 0 或 byte_delta != 0 时，仍需 O(后续行数) 遍历
+    // 物化 visual_lines 中每个行的绝对 y/byte 字段。完整方案应改为不物化绝对坐标，
+    // 而是通过 ParagraphHeightIndex::paragraph_top_y(para_idx) 按需计算段落顶 y，
+    // 行内相对 y 存储在段落布局中，绝对 y = paragraph_top_y + relative_y。
+    // 这属于架构级改动（影响 visual_lines 消费方、cursor_rect、hit test 等），
+    // 超出本轮范围。当前已在"无变化时跳过"这一前置条件上做到最优。
     if delta_height.abs() > 0.001 {
         let update_start = vl_start_idx + new_affected_line_count;
         for vl in &mut visual_lines[update_start..] {
@@ -1060,10 +1067,20 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     }
 
     // 更新后续段的 line_id（确保连续）
-    let mut next_id = vl_start_idx + new_affected_line_count;
-    for vl in &mut visual_lines[vl_start_idx + new_affected_line_count..] {
-        vl.id = next_id;
-        next_id += 1;
+    // Issue #901 问题5缺陷C修复: line_id 在构建时赋值为连续整数（line_id == 行索引）。
+    // splice 替换了 [vl_start_idx, vl_end_idx) 的旧行，新行 id 已在构建
+    // new_visual_lines 时从 vl_start_idx 起连续赋值。后续行的 id 只有在 splice
+    // 改变受影响行数（new != old）时才会因行索引漂移而失配；行数不变时
+    // （如纯字符替换不增删行）后续行索引不变，id 仍 == 行索引，可跳过 O(后续行数) 遍历。
+    // 这对长章非结构性编辑（高度不变、行数不变、byte 不变）将此步从 O(后续行数) 降为 O(1)。
+    let old_affected_line_count = vl_end_idx - vl_start_idx;
+    let line_id_update_start = vl_start_idx + new_affected_line_count;
+    if new_affected_line_count != old_affected_line_count {
+        let mut next_id = line_id_update_start;
+        for vl in &mut visual_lines[line_id_update_start..] {
+            vl.id = next_id;
+            next_id += 1;
+        }
     }
 
     // 更新后续段的 qchar_start/qchar_end

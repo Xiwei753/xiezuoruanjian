@@ -146,13 +146,26 @@ impl SujianEditorItem {
             };
             let text_color = self.current_text_color.to_string();
 
-            // 找到受影响行在 visual_lines 中的索引。
-            let mut affected_line_indices: Vec<usize> = Vec::new();
-            for (i, vl) in doc_snapshot.visual_lines.iter().enumerate() {
-                if vl.byte_start < affected_end && vl.byte_end > affected_start {
-                    affected_line_indices.push(i);
-                }
-            }
+            // Issue #901 问题5缺陷B修复: 不遍历全章 visual_lines 找受影响行。
+            // visual_lines 按文档顺序排列，byte_start 和 byte_end 均非递减
+            // （相邻行 byte_start 不递减，行不重叠且按序）。用 partition_point
+            // 二分定位受影响行范围 [start, end)，从 O(全章行数) 降为
+            // O(log n + 受影响行数)。
+            //
+            // 原线性条件: vl.byte_start < affected_end && vl.byte_end > affected_start
+            // 等价于: vl.byte_end > affected_start && vl.byte_start < affected_end
+            // - start = 第一个 byte_end > affected_start 的索引
+            //   （partition_point 返回第一个不满足 byte_end <= affected_start 的位置）
+            // - end   = 第一个 byte_start >= affected_end 的索引
+            //   （partition_point 返回第一个不满足 byte_start < affected_end 的位置）
+            // [start, end) 即所有满足原条件的行，与线性扫描结果完全一致。
+            let start = doc_snapshot
+                .visual_lines
+                .partition_point(|vl| vl.byte_end <= affected_start);
+            let end = doc_snapshot
+                .visual_lines
+                .partition_point(|vl| vl.byte_start < affected_end);
+            let affected_line_indices: Vec<usize> = (start..end).collect();
 
             if !affected_line_indices.is_empty() {
                 let handle = crate::editor::layout::PreparedLayoutHandle {

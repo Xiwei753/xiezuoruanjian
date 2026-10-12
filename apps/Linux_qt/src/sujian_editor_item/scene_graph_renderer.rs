@@ -119,6 +119,50 @@ pub(crate) struct StaticTextParams<'a> {
     pub needs_relayout: bool,
 }
 
+/// Issue #901 第七轮复核问题2: 计算段落真实第一行的文档 y 坐标。
+///
+/// `QSGTextNode::addTextLayout(QPointF(origin_x, y), cachedLayout)` 消费完整段落的
+/// QTextLayout，布局内每条 QTextLine 已相对段落第一行定位。视口裁剪只决定哪些
+/// QTextLine 参与绘制，绝不能用"第一条可见行"的 y 冒充整个段落的起点。
+///
+/// # 实现策略
+///
+/// - 有 `ParagraphHeightIndex` 且 `cache_slot >= 0`：用 `paragraph_top_y(cache_slot)`
+///   （O(log n) 前缀和）。`cache_slot` 与 heights 数组索引一致：
+///   `extract_paragraph_heights` 按 `para_start` 首次出现顺序（= 文档段落顺序）构建，
+///   `full.rs` 按 `paragraph_idx` 递增分配 `cache_slot`（含空段落），两者一致。
+///   `paragraph_top_y` 不含 padding，需补 `snapshot.padding`（`VisualLine.y` 从
+///   padding 起累加，见 `full.rs`）。
+/// - 无 height_index 或 `cache_slot < 0`：fallback 到 lines 二分查找段落第一行。
+///   lines 按 y 升序且同段落行连续（文档顺序），`partition_point(|l| l.para_start < ps)`
+///   返回首个 `para_start >= ps` 的行 = 该段落第一行，其 y 已含 padding。
+///
+/// 不用 `unwrap`/`expect`：所有越界路径回退到 `line.y`，保证不 panic。
+fn paragraph_top_document_y(
+    line: &crate::editor::layout::VisualLine,
+    snapshot: &LayoutSnapshot,
+    height_index: Option<&ParagraphHeightIndex>,
+) -> f64 {
+    if let Some(hi) = height_index {
+        if line.cache_slot >= 0 {
+            // paragraph_top_y 越界返回总高度（不 panic），加 padding 仍是合法文档 y。
+            return hi.paragraph_top_y(line.cache_slot as usize) + f64::from(snapshot.padding);
+        }
+    }
+    // Fallback: lines 二分查找段落第一行。谓词 `para_start < ps` 为 true 前缀
+    // （更早段落）、false 后缀（本段及之后），返回首个 false = 本段第一行索引。
+    let first_idx = snapshot
+        .lines
+        .partition_point(|l| l.para_start < line.para_start);
+    if first_idx < snapshot.lines.len() {
+        snapshot.lines[first_idx].y
+    } else {
+        // 防御性回退：line 自身应在 lines 中，first_idx 应 < len；
+        // 仅在 lines 为空或异常时回退到 line.y，避免越界。
+        line.y
+    }
+}
+
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -191,10 +235,17 @@ pub(crate) fn render_frame(
                         let s = snapshot
                             .lines
                             .partition_point(|l| l.y + l.height < first_para_top);
+                        // Issue #901 第七轮复核问题1: partition_point 要求
+                        // true 前缀、false 后缀。lines 按 y 升序，`y > bottom`
+                        // 是 false 前缀、true 后缀，方向相反，会使 end_idx 错误
+                        // （轻则空白，重则 start>end 切片 panic）。正确谓词
+                        // `y <= bottom`：true 前缀，返回首个超过 bottom 的行索引。
                         let e = snapshot
                             .lines
-                            .partition_point(|l| l.y > last_para_bottom);
-                        (s, e)
+                            .partition_point(|l| l.y <= last_para_bottom);
+                        // 防御性 clamp：保证 start_idx <= end_idx <= lines.len()，
+                        // 越界时退化为空区间而非 panic。
+                        (s, e.max(s))
                     }
                 } else {
                     // 无 height_index：直接用 lines 的 y 二分查找定位视口行范围。
@@ -202,10 +253,11 @@ pub(crate) fn render_frame(
                     let s = snapshot
                         .lines
                         .partition_point(|l| l.y + l.height < visible_top);
+                    // Issue #901 第七轮复核问题1: 同上，谓词方向修正为 `y <= bottom`。
                     let e = snapshot
                         .lines
-                        .partition_point(|l| l.y > visible_bottom);
-                    (s, e)
+                        .partition_point(|l| l.y <= visible_bottom);
+                    (s, e.max(s))
                 };
 
             // Issue #901 第六轮阻塞5: 合并原三遍 for 循环为一遍。
@@ -229,10 +281,16 @@ pub(crate) fn render_frame(
                     continue;
                 }
 
-                // 段落第一行 y 记入 para_y_map（同段落只记第一次遇到的 y）。
+                // Issue #901 第七轮复核问题2: para_y 必须是段落真实第一行文档 y，
+                // 不能用"第一条可见行"的 y 冒充。QSGTextNode::addTextLayout 消费
+                // 完整段落的 QTextLayout，布局内每条 QTextLine 已相对段落第一行定位；
+                // 若视口从段落中间开始，用可见首行 y 会使前面被裁掉行的本地偏移
+                // 重复累加，导致文字与命中/光标错位。同段落只计算一次并缓存。
                 let para_y = *para_y_map
                     .entry(line.para_start)
-                    .or_insert(line.y);
+                    .or_insert_with(|| {
+                        paragraph_top_document_y(line, snapshot, static_text.height_index)
+                    });
 
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
@@ -241,7 +299,7 @@ pub(crate) fn render_frame(
                         paragraph_text: line.para_text.clone(),
                         para_start: line.para_start,
                         cache_idx: line.cache_slot,
-                        y: line.y,
+                        y: para_y,
                         indent_w: line.para_indent,
                         font_size: snapshot.font_size,
                         font_family: snapshot.font_family.clone(),
@@ -299,8 +357,17 @@ pub(crate) fn render_frame(
             //    而非按子节点下标定位。
             // 3. 滚动导致的视口段落进出需走 insert/remove 节点路径，编辑导致的段落内容
             //    变化走 update 节点路径，两者分开处理。
-            // 当前已实现：合并三遍扫描为一遍 + height_index 限定遍历范围，
-            // 使 paragraphs/visual_line_clips 的构建成本从 O(全章行数) 降为 O(视口内行数)。
+            //
+            // 当前已实现的优化（第七轮复核确认）：
+            // a) 合并三遍扫描为一遍 + height_index 限定遍历范围，
+            //    使 paragraphs/visual_line_clips 的构建成本从 O(全章行数) 降为 O(视口内行数)。
+            // b) should_rebuild_static 为 false 时（纯滚动帧 / 动画 progress 变化帧，
+            //    即本帧正文未变），走 else 分支只更新 QSGTransformNode 位移矩阵，
+            //    不调用 rebuild_text_node_from_paragraphs，跳过全量重建。
+            //    这是缺陷A"本帧正文未变跳过重建"的优化点，已正确实现。
+            // c) rebuild 范围已限定为视口内段落（start_idx..end_idx），非全章段落。
+            //    虽然仍是一次性重建视口内所有段落节点，但成本与视口大小成正比，
+            //    而非与全章长度成正比。
             static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
@@ -321,6 +388,12 @@ pub(crate) fn render_frame(
         // 不重建静态节点。不出现 clear()、QTextLayout、createLine()、addTextLayout()。
         // Issue #714 评论 5740007764: 动画期间静态层保持上一帧（事务开始时重建的）
         // 裁剪后节点不动，避免每帧销毁/重建静态 QSGTextNode 产生闪烁。
+        // Issue #901 问题5缺陷A: 此 else 分支是"本帧正文未变跳过重建"的优化点。
+        // should_rebuild_static=false 意味着 needs_relayout=false 且无 handoff_pending
+        // 且动画资源就绪，即本帧只有滚动位移或动画 progress 变化，正文内容未变。
+        // 此时跳过 rebuild_text_node_from_paragraphs 全量重建，只平移 transform，
+        // 成本 O(1) 而非 O(视口内段落数)。完整局部更新（按 ParagraphId insert/remove/
+        // update 视口内段落节点）见上方接入计划，属于后续 Issue 的架构级工作。
         qt_text_node::update_scroll_transform(root_raw, static_text.scroll_y);
     }
 

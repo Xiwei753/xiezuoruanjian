@@ -12,6 +12,7 @@
 //! - 新帧提交后调用 `reset_to_committed` 把 presented_revision 前进到该帧的
 //!   revision，累计映射归零。
 
+use std::collections::HashMap;
 use writer_core::editor::{EditorRevision, OffsetMap};
 
 /// 从 `presented_revision` 到 `latest_revision` 的累计 offset map 组合。
@@ -19,6 +20,10 @@ use writer_core::editor::{EditorRevision, OffsetMap};
 /// `accumulated_map` 为 `None` 表示 presented_revision == latest_revision
 /// （identity，无需映射）。每次 `compose` 用 `OffsetMap::compose` 精确组合，
 /// 保留多 patch 中间的 unchanged islands。
+///
+/// Issue #901 第七轮：同时维护 `intermediate_maps`，为每个中间 revision
+/// （`presented < rev < latest`）保留该 revision → latest 的后缀 OffsetMap 组合，
+/// 避免把中间 revision 的坐标误用 `accumulated_map`（presented→latest）映射。
 #[derive(Clone, Debug)]
 pub(crate) struct RevisionChain {
     /// 最后已提交帧对应的 canonical revision。
@@ -29,6 +34,18 @@ pub(crate) struct RevisionChain {
     ///
     /// `None` 表示 identity（两者相同或尚无编辑）。
     accumulated_map: Option<OffsetMap>,
+    /// 中间 revision → latest_revision 的后缀映射链。
+    ///
+    /// key = 中间 revision（`presented_revision < rev < latest_revision`），
+    /// value = 该 revision → latest_revision 的映射：
+    /// - `None` 表示 identity（该 revision 与 latest 间只有纯选区/光标操作）。
+    /// - `Some(map)` 表示用 `map` 映射。
+    ///
+    /// 每次 `compose` 时，为新产生的中间 revision 记录从该 revision 到 latest 的映射，
+    /// 并把已有映射与新的 `next_offset_map` 精确组合。`reset_to_committed` 时清空。
+    /// 这避免旧实现把中间 revision 的坐标误用 `accumulated_map`（presented→latest）
+    /// 映射：不同 revision 的 offset 属于不同坐标系，不能混用。
+    intermediate_maps: HashMap<EditorRevision, Option<OffsetMap>>,
 }
 
 impl RevisionChain {
@@ -38,6 +55,7 @@ impl RevisionChain {
             presented_revision,
             latest_revision: presented_revision,
             accumulated_map: None,
+            intermediate_maps: HashMap::new(),
         }
     }
 
@@ -64,7 +82,40 @@ impl RevisionChain {
     ///
     /// 连续中间编辑没有已提交帧时只累计映射，不从中间未显示状态生成 glyph。
     pub(crate) fn compose(&mut self, next_offset_map: &OffsetMap, new_revision: EditorRevision) {
-        if next_offset_map.entries.is_empty() {
+        // Issue #901 第七轮：维护中间 revision → latest 的后缀映射链。
+        //
+        // `next_offset_map` 是 `latest_revision → new_revision` 的映射。
+        // 1. 已有的中间映射都要与 `next_offset_map` 精确组合（latest 前进了）。
+        // 2. 旧的 `latest_revision` 若不等于 `presented_revision`，它变成新的中间
+        //    revision，其到新 latest 的映射就是 `next_offset_map` 本身。
+        // 3. 推进 `accumulated_map` 和 `latest_revision`。
+        let next_is_empty = next_offset_map.entries.is_empty();
+
+        // 1. 已有中间映射与 next_offset_map 精确组合（latest 前进了）
+        for map_opt in self.intermediate_maps.values_mut() {
+            let new_map = if next_is_empty {
+                // next 为空：该 revision 的所有字符在 latest 中已不存在
+                OffsetMap {
+                    entries: Vec::new(),
+                }
+            } else {
+                match map_opt.as_ref() {
+                    None => next_offset_map.clone(),
+                    Some(map) => map.compose(next_offset_map),
+                }
+            };
+            *map_opt = Some(new_map);
+        }
+
+        // 2. 旧的 latest_revision 变成中间 revision（若它不等于 presented_revision）。
+        //    其到新 latest 的映射 = next_offset_map（空 map 时 clone 也是空）。
+        if self.latest_revision != self.presented_revision {
+            self.intermediate_maps
+                .insert(self.latest_revision, Some(next_offset_map.clone()));
+        }
+
+        // 3. 推进累计映射
+        if next_is_empty {
             // 编辑后正文为空或无静态映射：累计映射变为空（所有旧字符都被删除）。
             self.accumulated_map = Some(OffsetMap {
                 entries: Vec::new(),
@@ -118,26 +169,21 @@ impl RevisionChain {
         }
     }
 
-    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4：将任意源 revision 的 byte offset
+    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4 / 第七轮：将任意源 revision 的 byte offset
     /// 映射到 latest revision 坐标。
     ///
     /// - 如果 `source_revision == latest_revision`，直接返回原 offset（已经是 latest 坐标）。
     /// - 如果 `source_revision == presented_revision`，用累计映射映射。
     /// - 如果 `presented_revision < source_revision < latest_revision`（中间 revision），
-    ///   用累计映射映射。这是连续快速编辑中产生的贡献：帧未完全 settle 时
-    ///   `presented_revision` 保持不变，但帧中可见贡献的 `source_revision` 可能是
-    ///   中间编辑的 revision。`accumulated_map` 是 presented→latest 的完整映射，
-    ///   能正确判断这些字符在 latest 中存活还是删除。
-    /// - 如果 `source_revision < presented_revision`，返回 `None`（旧 session 的贡献，
-    ///   无法精确映射）。
+    ///   用 `intermediate_maps` 中为该 revision 保留的「该 revision → latest」后缀映射。
+    ///   旧实现误用 `accumulated_map`（presented→latest），把中间 revision 的坐标当作
+    ///   presented 坐标映射，导致字符身份错位（如把新插入的 X 错认成旧的 a）。
+    /// - 如果 `source_revision < presented_revision` 或未知 revision，返回 `None`
+    ///   （旧 session 的贡献，无法精确映射）。
     ///
-    /// 这解决了旧实现中"一律用 `map_presented_to_latest` 映射"的问题：
-    /// 存活字的 `source_revision` 是 target revision（latest），`byte_range` 已经是
-    /// latest 坐标，不应再被当作 presented 坐标映射一次。
-    ///
-    /// Issue #901 第六轮阻塞4：旧实现对中间 revision 直接返回 None，导致连续快速编辑
-    /// 中"中间 revision"的存活字被误判删除，出现消失/重复吐字。现在用 accumulated_map
-    /// 映射中间 revision，避免误判。
+    /// Issue #901 第七轮反例：presented=`ab`(rev0)，前插 `X` 得 `Xab`(rev1)，再前插 `Y`
+    /// 得 `YXab`(rev2)。rev1 中 `X` 的偏移 0 必须用 rev1→rev2 的映射映到 1，而不是用
+    /// accumulated_map（rev0→rev2）映到 2（那是 `a` 的位置）。
     pub(crate) fn map_to_latest(
         &self,
         source_revision: EditorRevision,
@@ -149,30 +195,31 @@ impl RevisionChain {
         if source_revision == self.presented_revision {
             return self.map_presented_to_latest(offset);
         }
-        // Issue #901 第六轮阻塞4：中间 revision（presented < source < latest）是
-        // 连续快速编辑中产生的。用 accumulated_map（presented→latest）映射：
-        // 存活的字符映射到 latest 坐标，删除的字符返回 None。
-        // 旧实现直接返回 None，导致存活字被误判删除。
-        if source_revision > self.presented_revision
-            && source_revision < self.latest_revision
-        {
-            return self.map_presented_to_latest(offset);
+        // Issue #901 第七轮：中间 revision 用 intermediate_maps 中保留的
+        // 「该 revision → latest」后缀映射，不用 accumulated_map（presented→latest）。
+        if let Some(map_opt) = self.intermediate_maps.get(&source_revision) {
+            return match map_opt {
+                None => Some(offset), // identity（该 revision 与 latest 间只有选区操作）
+                Some(map) => map.map_old_to_new(offset),
+            };
         }
-        // source_revision < presented_revision：旧 session 的贡献，无法精确映射。
+        // source_revision < presented_revision 或未知 revision：无法精确映射。
         None
     }
 
-    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4：将任意源 revision 的半开 byte range
+    /// Issue #901 第五轮阻塞1 / 第六轮阻塞4 / 第七轮：将任意源 revision 的半开 byte range
     /// 映射到 latest revision 坐标。
     ///
     /// - 如果 `source_revision == latest_revision`，直接返回原 range。
     /// - 如果 `source_revision == presented_revision`，用累计映射映射。
     /// - 如果 `presented_revision < source_revision < latest_revision`（中间 revision），
-    ///   用累计映射映射（同 `map_to_latest` 的中间 revision 处理）。
-    /// - 如果 `source_revision < presented_revision`，返回 `None`（旧 session 的贡献）。
+    ///   用 `intermediate_maps` 中保留的「该 revision → latest」后缀映射（同
+    ///   `map_to_latest` 的中间 revision 处理）。
+    /// - 如果 `source_revision < presented_revision` 或未知 revision，返回 `None`
+    ///   （旧 session 的贡献，无法精确映射）。
     ///
-    /// Issue #901 第六轮阻塞4：旧实现对中间 revision 直接返回 None，导致连续快速编辑
-    /// 中"中间 revision"的存活字被误判删除。现在用 accumulated_map 映射中间 revision。
+    /// Issue #901 第七轮：旧实现把中间 revision 的 range 误用 `accumulated_map`
+    /// （presented→latest）映射，导致字符身份错位。现在用 intermediate_maps 精确映射。
     pub(crate) fn map_range_to_latest(
         &self,
         source_revision: EditorRevision,
@@ -185,13 +232,14 @@ impl RevisionChain {
         if source_revision == self.presented_revision {
             return self.map_presented_range_to_latest(start, end);
         }
-        // Issue #901 第六轮阻塞4：中间 revision 用 accumulated_map 映射。
-        if source_revision > self.presented_revision
-            && source_revision < self.latest_revision
-        {
-            return self.map_presented_range_to_latest(start, end);
+        // Issue #901 第七轮：中间 revision 用 intermediate_maps 中保留的后缀映射。
+        if let Some(map_opt) = self.intermediate_maps.get(&source_revision) {
+            return match map_opt {
+                None => Some((start, end)), // identity
+                Some(map) => map.map_old_range_to_new(start, end),
+            };
         }
-        // source_revision < presented_revision：旧 session 的贡献，无法精确映射。
+        // source_revision < presented_revision 或未知 revision：无法精确映射。
         None
     }
 
@@ -203,6 +251,8 @@ impl RevisionChain {
         self.presented_revision = committed_revision;
         self.latest_revision = committed_revision;
         self.accumulated_map = None;
+        // Issue #901 第七轮：清空中间映射链，所有中间 revision 不再有效。
+        self.intermediate_maps.clear();
     }
 
     /// 推进 latest revision 而不改变累计映射。
@@ -210,6 +260,14 @@ impl RevisionChain {
     /// 用于纯选区/光标操作（正文不变、`offset_map` 为 `None`）：
     /// revision 前进了但字符身份映射仍然有效，不需要 compose。
     pub(crate) fn advance_revision(&mut self, new_revision: EditorRevision) {
+        // Issue #901 第七轮：纯选区/光标操作，正文不变。旧的 latest_revision
+        // 若不等于 presented_revision，它变成中间 revision，其到新 latest 的映射
+        // 是 identity（None）。已有中间映射不变（正文没变，无需 compose）。
+        if self.latest_revision != self.presented_revision
+            && self.latest_revision != new_revision
+        {
+            self.intermediate_maps.insert(self.latest_revision, None);
+        }
         self.latest_revision = new_revision;
     }
 
@@ -381,5 +439,254 @@ mod tests {
 
         assert_eq!(chain.map_presented_to_latest(5), Some(5));
         assert_eq!(chain.map_latest_to_presented(7), Some(7));
+    }
+
+    /// Issue #901 第七轮：中间 revision 的 offset 必须用该 revision → latest
+    /// 的后缀映射，不能用 accumulated_map（presented→latest）。
+    ///
+    /// 反例：presented=`ab`(rev0)，前插 `X` 得 `Xab`(rev1)，再前插 `Y` 得 `YXab`(rev2)。
+    /// rev1 中 `X` 的偏移 0 必须映射到 rev2 的偏移 1（X 的正确位置），
+    /// 而不是 accumulated_map（rev0→rev2）的偏移 2（那是 `a` 的位置）。
+    #[test]
+    fn intermediate_revision_uses_suffix_map_not_accumulated() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+
+        // 第一笔："ab" → "Xab"：前插 X。
+        // rev0 → rev1: a(0)→1, b(1)→2
+        let map1 = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(1),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(1),
+                    new_byte_offset: Utf8ByteOffset::unchecked(2),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        chain.compose(&map1, EditorRevision::new(1));
+
+        // 第二笔："Xab" → "YXab"：前插 Y。
+        // rev1 → rev2: X(0)→1, a(1)→2, b(2)→3
+        let map2 = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(1),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(1),
+                    new_byte_offset: Utf8ByteOffset::unchecked(2),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(2),
+                    new_byte_offset: Utf8ByteOffset::unchecked(3),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        chain.compose(&map2, EditorRevision::new(2));
+
+        // rev1 中 X 的偏移 0 必须映射到 rev2 的偏移 1（X 的正确位置）。
+        // 旧实现误用 accumulated_map（rev0→rev2）：a(0)→2，把 X 错认成 a。
+        assert_eq!(
+            chain.map_to_latest(EditorRevision::new(1), 0),
+            Some(1),
+            "intermediate rev1 的 X(0) 必须映射到 rev2 的 1，不是 accumulated_map 的 2"
+        );
+        // rev1 中 a 的偏移 1 映射到 rev2 的偏移 2
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), Some(2));
+        // rev1 中 b 的偏移 2 映射到 rev2 的偏移 3
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 2), Some(3));
+
+        // range 映射也必须用 intermediate_maps
+        assert_eq!(
+            chain.map_range_to_latest(EditorRevision::new(1), 0, 1),
+            Some((1, 2)),
+            "intermediate rev1 的 X range [0,1) 必须映射到 rev2 的 [1,2)"
+        );
+        assert_eq!(
+            chain.map_range_to_latest(EditorRevision::new(1), 1, 2),
+            Some((2, 3)),
+        );
+
+        // presented (rev0) 的映射仍然正确：a(0)→2, b(1)→3
+        assert_eq!(chain.map_to_latest(rev0, 0), Some(2));
+        assert_eq!(chain.map_to_latest(rev0, 1), Some(3));
+
+        // latest (rev2) 的映射是 identity
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 1), Some(1));
+        assert_eq!(
+            chain.map_range_to_latest(EditorRevision::new(2), 1, 2),
+            Some((1, 2))
+        );
+    }
+
+    /// Issue #901 第七轮：三笔连续前插，验证每个中间 revision 都有独立正确的后缀映射。
+    #[test]
+    fn three_edits_each_intermediate_rev_maps_correctly() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+
+        // "b" → "Xb" → "YXb" → "ZYXb"：连续三次前插
+        // rev0→rev1: b(0)→1
+        let map1 = shifted_map(0, 1, 1);
+        chain.compose(&map1, EditorRevision::new(1));
+        // rev1→rev2: X(0)→1, b(1)→2
+        let map2 = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(1),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(1),
+                    new_byte_offset: Utf8ByteOffset::unchecked(2),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        chain.compose(&map2, EditorRevision::new(2));
+        // rev2→rev3: Y(0)→1, X(1)→2, b(2)→3
+        let map3 = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(1),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(1),
+                    new_byte_offset: Utf8ByteOffset::unchecked(2),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(2),
+                    new_byte_offset: Utf8ByteOffset::unchecked(3),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        chain.compose(&map3, EditorRevision::new(3));
+
+        // rev1 中 X(0) → rev3 的 2（YXb 中 X 在偏移 2）
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 0), Some(2));
+        // rev1 中 b(1) → rev3 的 3
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), Some(3));
+        // rev2 中 Y(0) → rev3 的 1
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 0), Some(1));
+        // rev2 中 X(1) → rev3 的 2
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 1), Some(2));
+        // rev2 中 b(2) → rev3 的 3
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 2), Some(3));
+        // rev0 中 b(0) → rev3 的 3
+        assert_eq!(chain.map_to_latest(rev0, 0), Some(3));
+    }
+
+    /// Issue #901 第七轮：reset_to_committed 清空 intermediate_maps，
+    /// 旧中间 revision 不再有效。
+    #[test]
+    fn reset_clears_intermediate_maps() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        chain.compose(&shifted_map(1, 1, 1), EditorRevision::new(1));
+        chain.compose(&shifted_map(1, 1, 1), EditorRevision::new(2));
+        // 有中间 revision rev1，能映射
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), Some(1));
+
+        chain.reset_to_committed(EditorRevision::new(2));
+        // reset 后 rev1 不再是有效中间 revision
+        assert_eq!(
+            chain.map_to_latest(EditorRevision::new(1), 1),
+            None,
+            "reset 后旧中间 revision 应无法映射"
+        );
+    }
+
+    /// Issue #901 第七轮：advance_revision（纯选区操作）把旧 latest 记为
+    /// identity 中间 revision，其 offset 在新 latest 中不变。
+    #[test]
+    fn advance_revision_records_identity_intermediate() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        // 一笔编辑产生 rev1
+        chain.compose(&shifted_map(1, 1, 1), EditorRevision::new(1));
+        // 纯选区操作推进到 rev2，正文不变
+        chain.advance_revision(EditorRevision::new(2));
+
+        // rev1 是中间 revision，正文没变（advance 是 identity），offset 不变
+        assert_eq!(
+            chain.map_to_latest(EditorRevision::new(1), 1),
+            Some(1),
+            "advance_revision 后旧 latest 的 offset 应 identity 映射"
+        );
+        assert_eq!(
+            chain.map_range_to_latest(EditorRevision::new(1), 1, 2),
+            Some((1, 2)),
+        );
+        // rev0（presented）仍用 accumulated_map
+        assert_eq!(chain.map_to_latest(rev0, 1), Some(1));
+    }
+
+    /// Issue #901 第七轮：中间 revision 的字符被后续编辑删除时返回 None。
+    #[test]
+    fn intermediate_revision_deleted_chars_return_none() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+
+        // "ab" → "Xab"：前插 X（rev0→rev1）
+        let map1 = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(1),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(1),
+                    new_byte_offset: Utf8ByteOffset::unchecked(2),
+                    length: 1,
+                    kind: writer_core::editor::OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        chain.compose(&map1, EditorRevision::new(1));
+
+        // "Xab" → "b"：删除 X 和 a，只保留 b（rev1→rev2）
+        // rev1 中 b 在偏移 2，rev2 中 b 在偏移 0
+        let map2 = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(2),
+                new_byte_offset: Utf8ByteOffset::unchecked(0),
+                length: 1,
+                kind: writer_core::editor::OffsetMapKind::Shifted,
+            }],
+        };
+        chain.compose(&map2, EditorRevision::new(2));
+
+        // rev1 中 X(0) 被删除 → None
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 0), None);
+        // rev1 中 a(1) 被删除 → None
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), None);
+        // rev1 中 b(2) 存活 → rev2 的 0
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 2), Some(0));
     }
 }

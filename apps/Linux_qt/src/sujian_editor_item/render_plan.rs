@@ -192,10 +192,11 @@ impl RenderOwnership {
     }
 }
 
-/// Issue #901 第六轮阻塞3：静态正文已提交贡献的轻量纯数据信息。
+/// Issue #901 第六轮阻塞3 / 第七轮问题3：静态正文已提交贡献的轻量纯数据信息。
 ///
-/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）提取，
-/// 供 `build_presented_scene_from_frame` 登记静态 QSGTextNode 的真实像素贡献。
+/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）的
+/// **cluster** 提取，供 `build_presented_scene_from_frame` 登记静态 QSGTextNode
+/// 的真实像素贡献。
 ///
 /// **背景**：`build_presented_scene_from_frame` 之前只从 `CanvasDrawPlan` 的
 /// `TextFragment` 命令建立 `PixelContribution`，完全不读取本帧静态 QSGTextNode
@@ -203,25 +204,42 @@ impl RenderOwnership {
 /// 是空列表。下一次编辑时 `controller.rs::frame` 把空贡献的 `PresentedScene` 与
 /// 完整 `target.glyph_runs` 比较，会把整个目标正文都判为"新增字"，触发全屏重暴露。
 ///
-/// 此结构携带每行静态文本的 `LineSnapshotId`、byte range 和文档坐标几何，
-/// 让 `PresentedScene` 知道静态正文的身份，下一次编辑只让 Core patches 真正
-/// 影响的可见 cluster 交给动画 owner。
+/// 此结构携带每个 **cluster** 的 `LineSnapshotId`、byte range、文档坐标几何和
+/// 源纹理 UV，让 `PresentedScene` 知道静态正文的身份，下一次编辑只让 Core patches
+/// 真正影响的可见 cluster 交给动画 owner。
 ///
-/// `document_rect` / `visible_clip` 使用 `SourceRect`（与 `render_plan` 模块
-/// 已有的几何载体一致），在 `build_presented_scene_from_frame` 中转换为
-/// `CanvasRect` 填入 `PixelContribution`。
+/// Issue #901 第七轮问题3 修复：
+/// - 旧实现按**整行**生成一个贡献，`byte_range` 是整行范围，`document_rect.w`
+///   取 `doc_width - line.visual_x`（直到页面右边缘），`source_uv = zero`。
+///   这导致 `command_for_deleting` 的 `remaining_uv_w = 0` → 返回 None，
+///   无法对已显示静态文字执行吞字动画；且整行 byte_range 无法匹配 target 侧
+///   按 cluster 建立的 `TargetGlyphRun`（缺陷C）。
+/// - 新实现按 **cluster** 生成贡献，与 `transaction.rs::build_target_layout_descriptor`
+///   的 cluster 级 `TargetGlyphRun` 完全对称：`byte_range` 是 cluster 范围，
+///   `document_rect` 是 cluster 的真实字形几何，`source_uv` 是 cluster 在行纹理
+///   中的局部坐标（已乘 DPR，非零），使 `command_for_deleting` 的
+///   `remaining_uv_w > 0`，能正确生成裁剪收回命令。
+///
+/// `document_rect` / `visible_clip` / `source_uv` 使用 `SourceRect`（与
+/// `render_plan` 模块已有的几何载体一致），在 `build_presented_scene_from_frame`
+/// 中转换为 `CanvasRect` 填入 `PixelContribution`。
 #[derive(Clone, Debug)]
 pub(crate) struct StaticTextContributionInfo {
     /// 源纹理的完整行快照 id（来自 `PreparedLineSnapshot.id`）。
     pub snapshot_id: LineSnapshotId,
     /// 该贡献对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间），
-    /// 来自 `PreparedLineSnapshot.byte_start / byte_end`。
+    /// 来自 `LineClusterSnapshot.byte_start / byte_end`（cluster 级，非整行）。
     pub byte_range: (usize, usize),
-    /// 文档坐标系中的目标矩形（不含滚动偏移），来自
-    /// `PreparedLineSnapshot.visual_x / visual_line_top / visual_line_bottom`。
+    /// 文档坐标系中的目标矩形（不含滚动偏移），来自 cluster 的
+    /// `source_rect` 经 `visual_x / visual_line_top` 换算后的真实字形几何。
     pub document_rect: SourceRect,
     /// 实际可见的裁剪区域（文档坐标，已与视口 `[scroll_y, scroll_y + viewport_h]` 求交）。
+    /// `visible_clip.h <= 0` 的行（完全在视口外）不登记贡献。
     pub visible_clip: SourceRect,
+    /// 源纹理中的 UV 区域（行纹理局部坐标，已乘 DPR），来自
+    /// `LineClusterSnapshot.source_rect`。非零，使 `command_for_deleting`
+    /// 的 `remaining_uv_w = source_uv.w * fade_out > 0`，能生成裁剪收回命令。
+    pub source_uv: SourceRect,
 }
 
 #[derive(Clone, Copy, Debug)]
