@@ -166,6 +166,12 @@ interface FrozenMemberEntry {
   intervalGlyphIds: string[]
 }
 
+/** Issue #879 评论6128121842 问题3：成员身份键——用于检测同 renderNodeKey 的身份冲突。 */
+interface MemberIdentityKey {
+  runId: string
+  sourceRevision: number
+}
+
 /**
  * Issue #879 复核评论6120195493：FrozenWindowGroupPlan 替代旧 frozenGroupDelta。
  *
@@ -513,7 +519,15 @@ export class EditorMotionCoordinator {
     }
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一次 key，buildFrame 会按 renderNodeKey 聚合合并 clipRects。
+    // Issue #879 评论6128121842 问题3：与 buildFrame 预扫描阶段使用相同的冲突检测逻辑，
+    // 为身份冲突的成员分配 -conflict-N 后缀的 key，确保 plannedWindowKeys 和帧输出 key 集合一致。
     const frozenKeysSeen: Set<string> = new Set()
+    // Issue #879 评论6128121842 问题3：plannedWindowKeys 的冲突计数器——
+    // 必须与 buildFrame 的 conflictCounter 使用相同的递增顺序，确保冲突 key 一致。
+    let plannedConflictCounter = 0
+    // Issue #879 评论6128121842 问题3：记录每个原始 renderNodeKey 首次出现的 runId/sourceRevision，
+    // 用于检测后续同 key 成员的身份冲突。
+    const firstIdentityByKey = new Map<string, MemberIdentityKey>()
     for (const move of plan.retainedMoves) {
       for (const piece of move.pieces) {
         // Issue #879 复核评论6099070438 问题1：retained 按 interval 分配 key，
@@ -527,11 +541,34 @@ export class EditorMotionCoordinator {
             const winId = this.windowIdAllocator.allocate(interval.glyphIds)
             for (const member of interval.sourceMembers) {
               if (member.role === 'frozen') {
-                // 问题2：同一 renderNodeKey 只输出一次——多个 interval 的 frozen 成员
-                // 共享同一物理 Text 节点，buildFrame 按 renderNodeKey 聚合合并 clipRects。
-                if (!frozenKeysSeen.has(member.renderNodeKey)) {
-                  frozenKeysSeen.add(member.renderNodeKey)
-                  keys.push(member.renderNodeKey)
+                // Issue #879 评论6128121842 问题3：检测身份冲突——同 renderNodeKey 但不同
+                // runId/sourceRevision 的成员分配 -conflict-N 后缀的 key。
+                // 与 buildFrame 预扫描阶段的逻辑保持一致，确保 sameKeySet 检查通过。
+                const firstIdentity = firstIdentityByKey.get(member.renderNodeKey)
+                if (firstIdentity !== undefined &&
+                    (firstIdentity.runId !== member.runId ||
+                     firstIdentity.sourceRevision !== member.sourceRevision)) {
+                  // 身份冲突——分配冲突 key
+                  const conflictKey = `${member.renderNodeKey}-conflict-${plannedConflictCounter}`
+                  plannedConflictCounter++
+                  if (!frozenKeysSeen.has(conflictKey)) {
+                    frozenKeysSeen.add(conflictKey)
+                    keys.push(conflictKey)
+                  }
+                } else {
+                  // 首次出现或身份一致——记录身份并输出原始 key
+                  if (firstIdentity === undefined) {
+                    firstIdentityByKey.set(member.renderNodeKey, {
+                      runId: member.runId,
+                      sourceRevision: member.sourceRevision,
+                    })
+                  }
+                  // 问题2：同一 renderNodeKey 只输出一次——多个 interval 的 frozen 成员
+                  // 共享同一物理 Text 节点，buildFrame 按 renderNodeKey 聚合合并 clipRects。
+                  if (!frozenKeysSeen.has(member.renderNodeKey)) {
+                    frozenKeysSeen.add(member.renderNodeKey)
+                    keys.push(member.renderNodeKey)
+                  }
                 }
               } else {
                 // target 成员需要追加新分配的 windowInstanceId
@@ -1572,8 +1609,18 @@ export class EditorMotionCoordinator {
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一个聚合 MotionGlyphWindow，合并 clipRects 和 UTF-16 范围。
     const frozenWindowAggregator = new Map<string, MotionGlyphWindow>()
-    // Issue #879 评论6126357273 问题1：冲突计数器——为身份冲突的成员分配唯一 renderNodeKey。
+    // Issue #879 评论6128121842 问题3：冲突计数器——在预扫描阶段为身份冲突的成员分配
+    // 唯一 renderNodeKey（添加 -conflict-N 后缀），使 plannedWindowKeys 和帧输出使用相同计划。
+    // 旧实现（评论6126357273 问题1）：在聚合层检测到冲突时才分配 -conflict-N 后缀，
+    //   但 plannedWindowKeys 不包含冲突 key，sameKeySet 检查失败，候选无法提交。
+    // 新实现：在预扫描阶段就检测身份冲突并分配冲突 key，保存映射供 Loop 2 和
+    //   plannedWindowKeys 共同使用，确保两者输出相同的 key 集合。
     let conflictCounter = 0
+    // Issue #879 评论6128121842 问题3：冲突 key 映射——原始 renderNodeKey → 冲突成员的最终 key。
+    // key = `${member.renderNodeKey}:${member.runId}:${member.sourceRevision}`，
+    // value = 冲突成员的最终 renderNodeKey（带 -conflict-N 后缀）。
+    // Loop 2 中通过此映射查找冲突成员的最终 key，不再在聚合层动态分配。
+    const conflictKeyMap = new Map<string, string>()
     // Issue #879 复核评论6120195493：用 FrozenWindowGroupPlan 替代 frozenGroupDelta，
     // 窗口级属性从原始 FrozenWindowSpan/MotionGlyphWindow 选取，不由首成员抢占。
     const frozenGroupPlans = new Map<string, FrozenWindowGroupPlan>()
@@ -1640,7 +1687,39 @@ export class EditorMotionCoordinator {
                 : (member.sourceRevision === newRevision ? 'target' : 'frozen')
               if (memberRoleScan !== 'frozen') continue
 
+              // Issue #879 评论6128121842 问题3：在预扫描阶段检测身份冲突。
+              // 同一 renderNodeKey 但不同 runId/sourceRevision 的成员必须在准备阶段
+              // 就分配不同的最终 key，而不是在聚合层才补救。
+              // 第一个成员保留原始 key，后续冲突成员分配 -conflict-N 后缀。
               const keyScan = member.renderNodeKey
+              const entries = frozenMembersByKeyGlobal.get(keyScan)
+              if (entries !== undefined && entries.length > 0) {
+                // 已有同 key 成员——检查身份是否冲突
+                const firstEntry = entries[0]
+                const firstMember = firstEntry.member
+                if (firstMember.runId !== member.runId ||
+                    firstMember.sourceRevision !== member.sourceRevision) {
+                  // 身份冲突——为当前成员分配新的冲突 key
+                  const conflictKey = `${keyScan}-conflict-${conflictCounter}`
+                  conflictCounter++
+                  // 保存映射：原始 key + runId + sourceRevision → 冲突 key
+                  const mapKey = `${keyScan}:${member.runId}:${member.sourceRevision}`
+                  conflictKeyMap.set(mapKey, conflictKey)
+                  // 用冲突 key 作为分组 key，而非原始 key
+                  if (!frozenMembersByKeyGlobal.has(conflictKey)) {
+                    frozenMembersByKeyGlobal.set(conflictKey, [])
+                  }
+                  const conflictEntry: FrozenMemberEntry = {
+                    member: member,
+                    ownTargetX: ownTargetXScan,
+                    ownTargetY: ownTargetYScan,
+                    intervalGlyphIds: interval.glyphIds
+                  }
+                  frozenMembersByKeyGlobal.get(conflictKey)!.push(conflictEntry)
+                  continue
+                }
+              }
+              // 无冲突或首个成员——正常分组
               if (!frozenMembersByKeyGlobal.has(keyScan)) {
                 frozenMembersByKeyGlobal.set(keyScan, [])
               }
@@ -1936,6 +2015,9 @@ export class EditorMotionCoordinator {
             // 再以它为坐标基准生成 clip，不再独立映射到 newRevision 的不同宽高。
             // 形态变化由真正 newRevision 的目标 Text 淡入接管，历史源只移动、
             // 按自己实际几何裁切并淡出。
+            // Issue #879 评论6128121842 问题3：提前分配 islandWindowInstanceId，
+            // 供第一个 for 循环的回退逻辑和第二个 for 循环的窗口输出共同使用。
+            const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
             const memberClipRectsList: ClipRect[][] = []
             const memberCurrentXList: number[] = []
             const memberCurrentYList: number[] = []
@@ -1961,6 +2043,12 @@ export class EditorMotionCoordinator {
               const ownTargetY = intervalNewGlyphRect !== null ? intervalNewGlyphRect.y : islandNewY
               let memberTargetScreenX: number = ownTargetX
               let memberTargetScreenY: number = ownTargetY
+              // Issue #879 评论6128121842 问题3：提前计算 memberRenderNodeKey，
+              // 供回退逻辑和第二个 for 循环的窗口输出共同使用。
+              const memberRenderNodeKey = member.role === 'frozen'
+                ? (conflictKeyMap.get(`${member.renderNodeKey}:${member.runId}:${member.sourceRevision}`)
+                   ?? member.renderNodeKey)
+                : `${member.renderNodeKey}-${islandWindowInstanceId}`
               // Issue #879 复核评论6120195493：frozen 成员共享同一物理 Text 的窗口级属性。
               // 同 renderNodeKey 的所有成员用同一份窗口级 offset/alpha/position，
               // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
@@ -1969,13 +2057,21 @@ export class EditorMotionCoordinator {
                   // Issue #879 第32轮复核问题1：group plan 已在 retainedMoves 循环之前
                   // 全局预计算完成（跨所有 pieces/intervals 选可见 baseMember），此处直接使用。
                   // 仅当预计算遗漏时才回退到按当前 interval 的 effectiveMembers 创建。
-                  let groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                  // Issue #879 评论6128121842 问题3：使用 memberRenderNodeKey（可能包含冲突后缀）
+                  // 而非 member.renderNodeKey（原始 key），确保冲突成员使用自己独立的 groupPlan。
+                  let groupPlan = frozenGroupPlans.get(memberRenderNodeKey)
                   if (groupPlan === undefined) {
                     // 回退：按当前 interval 的 effectiveMembers 创建 group plan。
                     // 注意：此回退只在当前 interval 内搜索可见成员，可能不如预计算准确。
+                    // Issue #879 评论6128121842 问题3：使用 memberRenderNodeKey 搜索同 key 成员，
+                    // 确保冲突成员只搜索同冲突 key 的成员。
                     let baseMember = member
                     for (const m of effectiveMembers) {
-                      if (m.renderNodeKey === member.renderNodeKey &&
+                      const mKey = m.role === 'frozen'
+                        ? (conflictKeyMap.get(`${m.renderNodeKey}:${m.runId}:${m.sourceRevision}`)
+                           ?? m.renderNodeKey)
+                        : `${m.renderNodeKey}-${islandWindowInstanceId}`
+                      if (mKey === memberRenderNodeKey &&
                           m.clipRects.length > 0) {
                         baseMember = m
                         break
@@ -2014,7 +2110,7 @@ export class EditorMotionCoordinator {
                       currentX: gpCurrentX,
                       currentY: gpCurrentY,
                       currentAlpha: gpCurrentAlpha,
-                      renderNodeKey: member.renderNodeKey,
+                      renderNodeKey: memberRenderNodeKey,
                       runId: member.runId,
                       sourceRevision: member.sourceRevision,
                       sourceKind: member.sourceKind,
@@ -2030,7 +2126,7 @@ export class EditorMotionCoordinator {
                       fullWindowUtf16End: fullWindowUtf16EndFallback,
                       fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16RangesFallback,
                     }
-                    frozenGroupPlans.set(member.renderNodeKey, groupPlan)
+                    frozenGroupPlans.set(memberRenderNodeKey, groupPlan)
                   }
                 // frozen 成员的目标位置 = sourceGlyphRect + groupPlan.targetOffset
                 memberTargetScreenX = member.sourceGlyphRect.x + groupPlan.targetOffsetX
@@ -2178,15 +2274,18 @@ export class EditorMotionCoordinator {
               islandBboxBottom = islandCurrentY
             }
 
-            // 为该岛独立分配 windowInstanceId（所有成员共用，WindowInstanceIdAllocator 通过 lease 机制安全管理多引用）
-            const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
-
             // 逐成员输出独立的 MotionGlyphWindow
+            // Issue #879 评论6128121842 问题3：islandWindowInstanceId 已在第一个 for 循环之前提前分配。
             for (let mi = 0; mi < effectiveMembers.length; mi++) {
               const member = effectiveMembers[mi]
               const memberClipRects = memberClipRectsList[mi]
+              // Issue #879 评论6128121842 问题3：frozen 成员的 renderNodeKey 从预扫描阶段的
+              // conflictKeyMap 查找最终 key。如果该成员在预扫描中被检测到身份冲突，
+              // 其最终 key 是带 -conflict-N 后缀的冲突 key；否则保持原始 key。
+              // target 成员的 key 仍追加 islandWindowInstanceId。
               const memberRenderNodeKey = member.role === 'frozen'
-                ? member.renderNodeKey
+                ? (conflictKeyMap.get(`${member.renderNodeKey}:${member.runId}:${member.sourceRevision}`)
+                   ?? member.renderNodeKey)
                 : `${member.renderNodeKey}-${islandWindowInstanceId}`
 
               // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
@@ -2212,7 +2311,8 @@ export class EditorMotionCoordinator {
               // opacity=0 抢占整张 Text 的 alpha。target 成员仍各自计算。
               let memberOpacity: number
               if (memberRole === 'frozen') {
-                const groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                // Issue #879 评论6128121842 问题3：使用 memberRenderNodeKey（可能包含冲突后缀）
+                const groupPlan = frozenGroupPlans.get(memberRenderNodeKey)
                 if (groupPlan !== undefined) {
                   memberOpacity = groupPlan.currentAlpha
                 } else {
@@ -2251,7 +2351,8 @@ export class EditorMotionCoordinator {
               let windowFullWindowUtf16End: number | undefined = undefined
               let windowFullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
               if (memberRole === 'frozen') {
-                const groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                // Issue #879 评论6128121842 问题3：使用 memberRenderNodeKey（可能包含冲突后缀）
+                const groupPlan = frozenGroupPlans.get(memberRenderNodeKey)
                 if (groupPlan !== undefined) {
                   // 窗口级 offset = groupPlan 的插值 offset
                   windowOffsetX = groupPlan.startOffsetX +
@@ -2324,21 +2425,17 @@ export class EditorMotionCoordinator {
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
-                  // Issue #879 评论6126357273 问题1：身份冲突时不再丢掉成员。
-                  // 旧实现：同 renderNodeKey 但 runId/sourceRevision 不一致时执行空分支，
-                  //         冲突成员直接消失——"直接丢掉源成员"不是正确的来源管理。
-                  // 新实现：为冲突成员分配新的唯一 renderNodeKey（添加冲突后缀），
-                  //         作为独立物理 Text 输出到 motionGlyphWindows。
-                  //         同 key 但身份不一致说明上游分配了重复的 renderNodeKey——
-                  //         两个不同物理来源从准备阶段就应该分配两个最终 renderNodeKey。
-                  //         聚合层在检测到冲突时为第二个成员分配新 key，确保不丢字。
+                  // Issue #879 评论6128121842 问题3：身份冲突已在预扫描阶段解决。
+                  // 冲突成员的 renderNodeKey 已在预扫描阶段被替换为 -conflict-N 后缀的 key，
+                  // 因此聚合层不会再遇到同 key 但不同 runId/sourceRevision 的冲突。
+                  // 此处保留防御性检查：如果仍检测到冲突（上游 bug），为冲突成员分配新 key，
+                  // 确保不丢字。但这种情况不应在正常流程中发生。
                   if (existing.runId !== memberWindow.runId ||
                       existing.sourceRevision !== memberWindow.sourceRevision) {
-                    // Issue #879 评论6126357273 问题1：为冲突成员分配新的 renderNodeKey。
-                    // 使用冲突计数器确保唯一性，避免与 frozenWindowAggregator 中的 existing 产生重复 key。
-                    const conflictKey = `${memberRenderNodeKey}-conflict-${conflictCounter}`
+                    // 防御性兜底：预扫描阶段遗漏的冲突——为冲突成员分配新的 renderNodeKey。
+                    const defensiveConflictKey = `${memberRenderNodeKey}-defensive-${conflictCounter}`
                     conflictCounter++
-                    memberWindow.renderNodeKey = conflictKey
+                    memberWindow.renderNodeKey = defensiveConflictKey
                     motionGlyphWindows.push(memberWindow)
                   } else {
                     // Issue #879 复核评论6120195493：只合并裁切和显示片段。
@@ -4050,13 +4147,13 @@ export class EditorMotionCoordinator {
 
       // Issue #879 复核评论6120195493：优先使用窗口已携带的 glyphUtf16Ranges（原始映射），
       // 避免 buildGlyphUtf16Ranges 用 min/max + 不连续幸存列表重新猜导致 null。
-      let glyphUtf16Ranges: Map<string, [number, number]> | null = null
+      let localGlyphUtf16Ranges: Map<string, [number, number]> | null = null
       if (w.glyphUtf16Ranges !== undefined && w.glyphUtf16Ranges !== null) {
         // 窗口已携带原始映射——直接复制
-        glyphUtf16Ranges = new Map(w.glyphUtf16Ranges)
+        localGlyphUtf16Ranges = new Map(w.glyphUtf16Ranges)
       } else {
         // fallback：用 buildGlyphUtf16Ranges 重新计算
-        glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
+        localGlyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
           w.glyphIds, w.utf16Start, w.utf16End, sourceText
         )
       }
@@ -4071,16 +4168,21 @@ export class EditorMotionCoordinator {
       const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
         ? w.fullWindowUtf16End : w.utf16End
       // 优先使用 fullWindowGlyphUtf16Ranges（物理源窗口首次创建时的完整映射），
-      // fallback 到 glyphUtf16Ranges（用当前 glyphIds/utf16Start/End 重新计算的映射）。
+      // fallback 到 localGlyphUtf16Ranges（窗口携带或重新计算的映射）。
       let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
       if (w.fullWindowGlyphUtf16Ranges !== undefined && w.fullWindowGlyphUtf16Ranges !== null) {
         fullWindowGlyphUtf16Ranges = new Map(w.fullWindowGlyphUtf16Ranges)
       } else {
-        fullWindowGlyphUtf16Ranges = glyphUtf16Ranges
+        fullWindowGlyphUtf16Ranges = localGlyphUtf16Ranges
       }
 
+      // Issue #879 评论6128121842：glyphUtf16Ranges 直接使用完整窗口映射，
+      // 消除 glyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 两套来源的矛盾。
+      const glyphUtf16Ranges = fullWindowGlyphUtf16Ranges
+
       frozenWindows.push({
-        glyphIds: w.glyphIds,
+        // Issue #879 评论6128121842：glyphIds 也优先使用完整窗口数据，保持语义一致
+        glyphIds: fullWindowGlyphIds,
         clipLeft: w.currentClipLeft,
         clipRight: w.currentClipRight,
         offsetX: w.offsetX,

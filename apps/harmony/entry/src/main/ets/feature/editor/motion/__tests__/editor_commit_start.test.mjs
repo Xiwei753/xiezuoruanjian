@@ -7776,4 +7776,210 @@ test('问题3-6126357273：simulateFrozenGroupPlan 的 originalGlyphIds 从 full
     `originalGlyphIds 应包含丙——从 fullWindowGlyphIds 取值，不是 intervalGlyphIds`)
 })
 
+// --- Issue #879 评论6128121842 问题4：跨帧完整链路测试 ---
+// 场景：同一物理 Text 甲乙丙，当前仅甲的 interval 在运动、第二笔继续操作乙/丙。
+// 验证完整 Map 经 buildFrame → commitDisplayedContext → frozenIndex → clusterVisible
+// 后仍能恢复乙、丙的可见区间。
+//
+// 关键修复点（问题1）：frozenIndex 使用 fullWindowGlyphIds 建索引（甲乙丙都登记），
+// 但旧实现中 clusterVisible/buildSourceMembers/sourceGlyphGeometryAll 仍查局部 glyphUtf16Ranges，
+// 导致乙/丙命中 span 却取不到 UTF-16 范围，直接跳过——丢字。
+// 修复后 lookupGlyphUtf16Range 优先使用 fullWindowGlyphUtf16Ranges，乙/丙能正确恢复。
+
+// 情况A：乙、丙仍在正文中（displayed.identities 包含乙、丙），有冻结窗口覆盖
+test('跨帧问题4-A：乙丙在正文中+冻结窗口覆盖——clusterVisible 第一个分支恢复乙丙', () => {
+  const oldText = '甲乙丙'
+  const ctx = context(oldText, 3010, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]   // 甲
+  const yiId = glyphIds[1]    // 乙
+  const bingId = glyphIds[2]  // 丙
+
+  const layout = srcLayout(oldText)
+  // 完整窗口映射：甲=[0,1], 乙=[1,2], 丙=[2,3]
+  const fullRanges = new Map([
+    [jiaId, [0, 1]],
+    [yiId, [1, 2]],
+    [bingId, [2, 3]],
+  ])
+
+  // 冻结窗口覆盖甲乙丙，glyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 都使用完整映射
+  // （本轮修复的核心：glyphUtf16Ranges 不再用局部 interval 重建，而是使用完整窗口数据）
+  const frozen = [{
+    glyphIds: [jiaId, yiId, bingId],        // 完整窗口字形列表
+    clipLeft: 0, clipRight: 30,
+    clipRects: [{ x: 0, y: 0, width: 30, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: fullRanges,           // 本轮修复：使用完整映射而非局部
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+    fullWindowGlyphIds: [jiaId, yiId, bingId],
+    fullWindowUtf16Start: 0,
+    fullWindowUtf16End: 3,
+    fullWindowGlyphUtf16Ranges: fullRanges,
+  }]
+  const displayed = { text: oldText, layout: layout, identities: ctx.identities, frozenWindows: frozen }
+
+  // 步骤1：frozenIndex 使用 fullWindowGlyphIds 建索引
+  const index = frozenIndex(displayed)
+  assert.ok(index.has(jiaId), 'frozenIndex 应包含甲')
+  assert.ok(index.has(yiId), 'frozenIndex 应包含乙')
+  assert.ok(index.has(bingId), 'frozenIndex 应包含丙')
+
+  // 步骤2：clusterVisible 恢复乙的可见区间
+  // 乙在 displayed.identities 中存在，且有冻结窗口覆盖 → 第一个分支
+  const yiIntervals = clusterVisible(displayed, index, yiId)
+  assert.ok(yiIntervals.length > 0,
+    `clusterVisible(乙) 应返回非空区间——通过 lookupGlyphUtf16Range 从 fullWindowGlyphUtf16Ranges 恢复，实际 ${yiIntervals.length}`)
+  // 验证乙的几何正确：x=10（第二个字），width=10
+  const yiRect = yiIntervals[0].rects[0]
+  assert.ok(yiRect !== undefined, '乙应有可见矩形')
+  assert.ok(Math.abs(yiRect.x - 10) < 0.01,
+    `乙的 x 应为 10（第二个字位置），实际 ${yiRect.x}`)
+  assert.ok(Math.abs(yiRect.width - 10) < 0.01,
+    `乙的 width 应为 10，实际 ${yiRect.width}`)
+
+  // 步骤3：clusterVisible 恢复丙的可见区间
+  const bingIntervals = clusterVisible(displayed, index, bingId)
+  assert.ok(bingIntervals.length > 0,
+    `clusterVisible(丙) 应返回非空区间——通过 lookupGlyphUtf16Range 从 fullWindowGlyphUtf16Ranges 恢复，实际 ${bingIntervals.length}`)
+  const bingRect = bingIntervals[0].rects[0]
+  assert.ok(bingRect !== undefined, '丙应有可见矩形')
+  assert.ok(Math.abs(bingRect.x - 20) < 0.01,
+    `丙的 x 应为 20（第三个字位置），实际 ${bingRect.x}`)
+  assert.ok(Math.abs(bingRect.width - 10) < 0.01,
+    `丙的 width 应为 10，实际 ${bingRect.width}`)
+})
+
+// 情况B：乙、丙已从正文中删除（ghost字形），只在冻结窗口中
+test('跨帧问题4-B：乙丙已删除(ghost)+仅冻结窗口持有——clusterVisible 第二个分支恢复乙丙', () => {
+  // 第二笔删除了乙丙，正文只剩甲
+  const newText = '甲'
+  const ctx = context(newText, 3011, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const jiaId = glyphIds[0]   // 甲（新正文中的）
+
+  // 旧正文的字形身份表——乙、丙在这里
+  const oldCtx = context('甲乙丙', 3010, [])
+  const oldGlyphIds = idsOf(oldCtx, 0, 3)
+  const oldJiaId = oldGlyphIds[0]
+  const yiId = oldGlyphIds[1]    // 乙（已删除，ghost）
+  const bingId = oldGlyphIds[2]  // 丙（已删除，ghost）
+
+  const layout = srcLayout('甲乙丙')
+  const fullRanges = new Map([
+    [oldJiaId, [0, 1]],
+    [yiId, [1, 2]],
+    [bingId, [2, 3]],
+  ])
+
+  // 冻结窗口仍持有旧版甲乙丙的完整字形源
+  const frozen = [{
+    glyphIds: [oldJiaId, yiId, bingId],
+    clipLeft: 0, clipRight: 30,
+    clipRects: [{ x: 0, y: 0, width: 30, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: fullRanges,           // 本轮修复：使用完整映射
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+    fullWindowGlyphIds: [oldJiaId, yiId, bingId],
+    fullWindowUtf16Start: 0,
+    fullWindowUtf16End: 3,
+    fullWindowGlyphUtf16Ranges: fullRanges,
+  }]
+  // displayed 的 identities 只包含甲（新正文），不包含乙、丙
+  const displayed = { text: newText, layout: srcLayout(newText), identities: ctx.identities, frozenWindows: frozen }
+
+  // frozenIndex 使用 fullWindowGlyphIds 建索引——乙、丙都登记
+  const index = frozenIndex(displayed)
+  assert.ok(index.has(yiId), 'frozenIndex 应包含乙（ghost）——使用 fullWindowGlyphIds 建索引')
+  assert.ok(index.has(bingId), 'frozenIndex 应包含丙（ghost）——使用 fullWindowGlyphIds 建索引')
+
+  // clusterVisible 恢复乙的可见区间——乙不在 displayed.identities 中 → 第二个分支（ghost）
+  const yiIntervals = clusterVisible(displayed, index, yiId)
+  assert.ok(yiIntervals.length > 0,
+    `clusterVisible(乙-ghost) 应返回非空区间——通过 lookupGlyphUtf16Range 从 fullWindowGlyphUtf16Ranges 恢复，实际 ${yiIntervals.length}`)
+  const yiRect = yiIntervals[0].rects[0]
+  assert.ok(yiRect !== undefined, '乙(ghost)应有可见矩形')
+  assert.ok(Math.abs(yiRect.x - 10) < 0.01,
+    `乙(ghost)的 x 应为 10（旧正文第二个字位置），实际 ${yiRect.x}`)
+  assert.ok(Math.abs(yiRect.width - 10) < 0.01,
+    `乙(ghost)的 width 应为 10，实际 ${yiRect.width}`)
+
+  // clusterVisible 恢复丙的可见区间
+  const bingIntervals = clusterVisible(displayed, index, bingId)
+  assert.ok(bingIntervals.length > 0,
+    `clusterVisible(丙-ghost) 应返回非空区间——通过 lookupGlyphUtf16Range 从 fullWindowGlyphUtf16Ranges 恢复，实际 ${bingIntervals.length}`)
+  const bingRect = bingIntervals[0].rects[0]
+  assert.ok(bingRect !== undefined, '丙(ghost)应有可见矩形')
+  assert.ok(Math.abs(bingRect.x - 20) < 0.01,
+    `丙(ghost)的 x 应为 20（旧正文第三个字位置），实际 ${bingRect.x}`)
+  assert.ok(Math.abs(bingRect.width - 10) < 0.01,
+    `丙(ghost)的 width 应为 10，实际 ${bingRect.width}`)
+})
+
+// 情况C：旧实现反证——glyphUtf16Ranges 只含局部 interval 的甲，乙丙查不到
+test('跨帧问题4-C：旧实现(glyphUtf16Ranges只含局部甲)会丢乙丙——反证修复必要性', () => {
+  const oldText = '甲乙丙'
+  const ctx = context(oldText, 3012, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]
+  const yiId = glyphIds[1]
+  const bingId = glyphIds[2]
+
+  const layout = srcLayout(oldText)
+  const fullRanges = new Map([
+    [jiaId, [0, 1]],
+    [yiId, [1, 2]],
+    [bingId, [2, 3]],
+  ])
+  // 旧实现的 bug：glyphUtf16Ranges 只包含当前 interval 的甲（局部映射）
+  const localRanges = new Map([[jiaId, [0, 1]]])
+
+  const frozen = [{
+    glyphIds: [jiaId],              // 旧实现：只含当前 interval 的 glyphIds
+    clipLeft: 0, clipRight: 30,
+    clipRects: [{ x: 0, y: 0, width: 30, height: 20 }],  // 窗口覆盖整个甲乙丙
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: localRanges,  // 旧实现：只有局部映射（仅含甲）
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+    fullWindowGlyphIds: [jiaId, yiId, bingId],  // fullWindowGlyphIds 仍完整
+    fullWindowUtf16Start: 0,
+    fullWindowUtf16End: 3,
+    fullWindowGlyphUtf16Ranges: fullRanges,     // fullWindowGlyphUtf16Ranges 仍完整
+  }]
+  const displayed = { text: oldText, layout: layout, identities: ctx.identities, frozenWindows: frozen }
+
+  // frozenIndex 使用 fullWindowGlyphIds 建索引——乙、丙都登记
+  const index = frozenIndex(displayed)
+  assert.ok(index.has(yiId), 'frozenIndex 应包含乙——使用 fullWindowGlyphIds 建索引')
+  assert.ok(index.has(bingId), 'frozenIndex 应包含丙——使用 fullWindowGlyphIds 建索引')
+
+  // 修复后：clusterVisible 通过 lookupGlyphUtf16Range 优先使用 fullWindowGlyphUtf16Ranges
+  // 即使 glyphUtf16Ranges 不含乙/丙，也能从 fullWindowGlyphUtf16Ranges 恢复
+  const yiIntervals = clusterVisible(displayed, index, yiId)
+  assert.ok(yiIntervals.length > 0,
+    `修复后 clusterVisible(乙) 应返回非空区间——lookupGlyphUtf16Range 优先使用 fullWindowGlyphUtf16Ranges，实际 ${yiIntervals.length}`)
+
+  const bingIntervals = clusterVisible(displayed, index, bingId)
+  assert.ok(bingIntervals.length > 0,
+    `修复后 clusterVisible(丙) 应返回非空区间——lookupGlyphUtf16Range 优先使用 fullWindowGlyphUtf16Ranges，实际 ${bingIntervals.length}`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)

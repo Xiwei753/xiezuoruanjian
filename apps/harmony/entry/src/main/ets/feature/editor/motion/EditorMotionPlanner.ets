@@ -736,8 +736,8 @@ export class EditorMotionPlanner {
       }
 
       // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
-      // 再与 glyphIds 一一对应，构建 glyphUtf16Ranges。
-      const glyphUtf16Ranges = EditorMotionPlanner.buildGlyphUtf16Ranges(
+      // 再与 glyphIds 一一对应，构建局部 glyphUtf16Ranges（作为 fallback）。
+      const localGlyphUtf16Ranges = EditorMotionPlanner.buildGlyphUtf16Ranges(
         w.glyphIds, w.utf16Start, w.utf16End, sourceText
       )
 
@@ -751,12 +751,17 @@ export class EditorMotionPlanner {
       const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
         ? w.fullWindowUtf16End : w.utf16End
       // 优先使用 fullWindowGlyphUtf16Ranges（物理源窗口首次创建时的完整映射），
-      // fallback 到 glyphUtf16Ranges（用当前 glyphIds/utf16Start/End 重新计算的映射）。
+      // fallback 到局部构建的映射。
       const fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges !== undefined
-        ? w.fullWindowGlyphUtf16Ranges : glyphUtf16Ranges
+        ? w.fullWindowGlyphUtf16Ranges : localGlyphUtf16Ranges
+
+      // Issue #879 评论6128121842：glyphUtf16Ranges 直接使用完整窗口映射，
+      // 消除 glyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 两套来源的矛盾。
+      const glyphUtf16Ranges = fullWindowGlyphUtf16Ranges
 
       spans.push({
-        glyphIds: w.glyphIds,
+        // Issue #879 评论6128121842：glyphIds 也优先使用完整窗口数据，保持语义一致
+        glyphIds: fullWindowGlyphIds,
         clipLeft: w.currentClipLeft,
         clipRight: w.currentClipRight,
         // 吐字/吞字窗口 offsetX 为 0（clip 只表达可见范围）；

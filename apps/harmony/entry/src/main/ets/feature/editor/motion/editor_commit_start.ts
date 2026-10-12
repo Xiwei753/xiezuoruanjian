@@ -127,6 +127,30 @@ export interface FrozenWindowSpan {
   fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
 }
 
+/**
+ * Issue #879 评论6128121842：统一查询字形 UTF-16 范围的辅助函数。
+ *
+ * 优先使用 fullWindowGlyphUtf16Ranges（包含物理 Text 窗口所有字形的完整映射），
+ * fallback 到 glyphUtf16Ranges（仅包含当前 interval 的局部映射）。
+ *
+ * frozenIndex 使用 fullWindowGlyphIds 为窗口内所有字形建立索引，
+ * 但 glyphUtf16Ranges 只包含当前 interval 的局部映射，导致通过 frozenIndex 找到 span
+ * 但取不到 UTF-16 范围的字形被 continue 跳过——丢字。
+ * 优先使用完整窗口映射可解决此问题。
+ */
+function lookupGlyphUtf16Range(span: FrozenWindowSpan, glyphId: string): [number, number] | undefined {
+  // 优先使用完整窗口映射
+  if (span.fullWindowGlyphUtf16Ranges !== null && span.fullWindowGlyphUtf16Ranges !== undefined) {
+    const r = span.fullWindowGlyphUtf16Ranges.get(glyphId)
+    if (r !== undefined) return r
+  }
+  // fallback 到局部映射
+  if (span.glyphUtf16Ranges !== null && span.glyphUtf16Ranges !== undefined) {
+    return span.glyphUtf16Ranges.get(glyphId)
+  }
+  return undefined
+}
+
 /** 计算起始状态时的「在屏」上下文。 */
 export interface DisplayedContext {
   /** 在屏正文（displayed revision 的 text） */
@@ -1363,19 +1387,24 @@ function sourceGlyphGeometryAll(
   const spans = frozenByGlyphId.get(glyphId)
   if (spans !== undefined) {
     for (const span of spans) {
-      if (span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
-        const utf16Range = span.glyphUtf16Ranges.get(glyphId)
-        if (utf16Range !== undefined) {
-          const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
-          if (rect !== null) {
-            results.push({
-              x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
-              offsetX: span.offsetX, offsetY: span.offsetY, sourceKind: span.sourceKind,
-              // Issue #879 评论6110857105 问题6：携带 renderNodeKey 和 sourceRevision，
-              // 供 fallback 分支按唯一身份标识匹配 OnScreenInterval 和 FrozenWindowSpan
-              renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
-            })
-          }
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
+        continue
+      }
+      if (span.sourceLayout === null) {
+        continue
+      }
+      const utf16Range = lookupGlyphUtf16Range(span, glyphId)
+      if (utf16Range !== undefined) {
+        const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
+        if (rect !== null) {
+          results.push({
+            x0: rect.x, x1: rect.x + rect.width, y0: rect.y, height: rect.height,
+            offsetX: span.offsetX, offsetY: span.offsetY, sourceKind: span.sourceKind,
+            // Issue #879 评论6110857105 问题6：携带 renderNodeKey 和 sourceRevision，
+            // 供 fallback 分支按唯一身份标识匹配 OnScreenInterval 和 FrozenWindowSpan
+            renderNodeKey: span.renderNodeKey, sourceRevision: span.sourceRevision,
+          })
         }
       }
     }
@@ -2029,10 +2058,14 @@ function buildSourceMembers(
   // 相同 offset 的不同 sourceRevision/renderNodeKey 会发生错误匹配。改为按唯一身份标识匹配。
   const consumed = new Set<number>()
   for (const span of spans) {
-    if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
+    // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+    if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
       continue
     }
-    const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+    if (span.sourceLayout === null) {
+      continue
+    }
+    const utf16Range = lookupGlyphUtf16Range(span, glyphId)
     if (utf16Range === undefined) {
       continue
     }
@@ -2793,10 +2826,14 @@ export function clusterVisible(
     // 不混用 displayed.layout 坐标和冻结源 offset（坐标系不一致会导致跳字）。
     const intervals: OnScreenInterval[] = []
     for (const span of spans) {
-      if (span.glyphUtf16Ranges === null || span.sourceLayout === null) {
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges == null && span.glyphUtf16Ranges == null) {
         continue  // 跳过无法提供字形几何的 span
       }
-      const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+      if (span.sourceLayout === null) {
+        continue
+      }
+      const utf16Range = lookupGlyphUtf16Range(span, glyphId)
       if (utf16Range === undefined) {
         continue
       }
@@ -2853,9 +2890,13 @@ export function clusterVisible(
   if (spans !== undefined) {
     const intervals: OnScreenInterval[] = []
     for (const span of spans) {
-      if (span.glyphUtf16Ranges !== null && span.sourceLayout !== null) {
+      // Issue #879 评论6128121842：两者都为 null 才跳过，优先使用 fullWindowGlyphUtf16Ranges
+      if (span.fullWindowGlyphUtf16Ranges != null || span.glyphUtf16Ranges != null) {
+        if (span.sourceLayout === null) {
+          continue
+        }
         // ghost字形：该 glyphId 已从 displayed 正文删除，但冻结窗口仍在绘制它
-        const utf16Range = span.glyphUtf16Ranges.get(glyphId)
+        const utf16Range = lookupGlyphUtf16Range(span, glyphId)
         if (utf16Range !== undefined) {
           const rect = glyphRectForRange(span.sourceLayout, utf16Range[0], utf16Range[1])
           if (rect === null) {
