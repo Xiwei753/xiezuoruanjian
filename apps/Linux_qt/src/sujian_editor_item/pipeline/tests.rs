@@ -113,7 +113,8 @@ fn test_doc_snapshot(
             ),
         }],
         visual_lines: Arc::new(Vec::new()),
-        suffix_transform: None,
+        paragraph_offset_index:
+            crate::editor::layout::ParagraphOffsetIndex::new(),
     }
 }
 

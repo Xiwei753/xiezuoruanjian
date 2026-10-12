@@ -594,10 +594,14 @@ pub(crate) fn render_frame(
             // 已有段落节点。clip 子节点的更新由 update_text_nodes_incremental 内部根据
             // animation_clip_rects 参数独立完成，不依赖 force_full_update。
             //
-            // Issue #901 第十二轮问题5：force_full_update=false 时不再无差别 continue，
-            // 而是由 update_text_nodes_incremental 内部按 per-paragraph content_generation
-            // 与当前 generation 比较驱动：generation 不同则重建该段落，相同则跳过或只
-            // 更新 para_y。这样即使 force_full_update=false，内容变了的段落也会被重建。
+            // Issue #901 第十三轮问题3+4：force_full_update=false 时不再无差别 continue，
+            // 而是由 update_text_nodes_incremental 内部按 per-paragraph 内容版本签名
+            // (generation, cache_idx) 和 clip signature 比较驱动：
+            // - para_y 变化 → 只更新 transform_node 矩阵（不重建子节点）
+            // - (generation, cache_idx) 变化 → 重建子节点（内容变了）
+            // - clip signature 变化 → 重建子节点（裁剪变了）
+            // - 都不变 → 真正跳过
+            // 这样即使 force_full_update=false，内容/裁剪变了的段落也会被重建。
             let force_full_update = static_text.needs_relayout
                 || !animation_resources_ready;
 

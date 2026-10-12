@@ -7,8 +7,74 @@
 use super::*;
 // Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
 use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
+// Issue #901 第十三轮问题1+2+6: 引入 ParagraphOffsetIndex 作为段首坐标权威来源。
+use super::super::super::paragraph_height_index::ParagraphOffsetIndex;
 // Issue #901 第九轮阻塞5: Arc 共享视觉行数据。
 use std::sync::Arc;
+
+/// Issue #901 第十三轮问题1+2+6: 从全文文本构建段落前缀偏移索引。
+///
+/// 每段 byte/qchar 长度含尾部 `'\n'`。段首绝对坐标由前缀和按需计算，
+/// 不逐段存储 `document_byte_start`，也不再用 SuffixTransform 记录平移量。
+fn build_offset_index_from_text(text: &str) -> ParagraphOffsetIndex {
+    let mut byte_lengths = Vec::new();
+    let mut qchar_lengths = Vec::new();
+    for para in text.split_inclusive('\n') {
+        byte_lengths.push(para.len());
+        qchar_lengths.push(para.chars().map(|c| c.len_utf16()).sum::<usize>());
+    }
+    let mut idx = ParagraphOffsetIndex::new();
+    idx.rebuild(byte_lengths, qchar_lengths);
+    idx
+}
+
+/// Issue #901 第十三轮问题1+2+6: 从视觉行数组构建段落前缀偏移索引。
+///
+/// 按 `para_start` 分组，每段 byte/qchar 长度 = 最后一行 end - 第一行 start
+/// + (if hard_break { 1 } else { 0 })（尾部 `'\n'`）。
+/// 用于 `assemble_document_visual_snapshot_from_lines`（无全文 text 参数）。
+fn build_offset_index_from_lines(lines: &[VisualLine]) -> ParagraphOffsetIndex {
+    if lines.is_empty() {
+        return ParagraphOffsetIndex::new();
+    }
+    let mut byte_lengths = Vec::new();
+    let mut qchar_lengths = Vec::new();
+    let mut seg_start_byte = lines[0].byte_start;
+    let mut seg_start_qchar = lines[0].qchar_start;
+    let mut seg_last_byte_end = lines[0].byte_end;
+    let mut seg_last_qchar_end = lines[0].qchar_end;
+    let mut seg_hard_break = lines[0].hard_break;
+    let mut current_para_start = lines[0].para_start;
+    for vl in &lines[1..] {
+        if vl.para_start != current_para_start {
+            // 段落切换，记录上一段长度
+            let byte_len = seg_last_byte_end.saturating_sub(seg_start_byte)
+                + if seg_hard_break { 1 } else { 0 };
+            let qchar_len = seg_last_qchar_end.saturating_sub(seg_start_qchar)
+                + if seg_hard_break { 1 } else { 0 };
+            byte_lengths.push(byte_len);
+            qchar_lengths.push(qchar_len);
+            // 开始新段
+            current_para_start = vl.para_start;
+            seg_start_byte = vl.byte_start;
+            seg_start_qchar = vl.qchar_start;
+        }
+        seg_last_byte_end = vl.byte_end;
+        seg_last_qchar_end = vl.qchar_end;
+        seg_hard_break = vl.hard_break;
+    }
+    // 记算最后一段
+    let byte_len = seg_last_byte_end.saturating_sub(seg_start_byte)
+        + if seg_hard_break { 1 } else { 0 };
+    let qchar_len = seg_last_qchar_end.saturating_sub(seg_start_qchar)
+        + if seg_hard_break { 1 } else { 0 };
+    byte_lengths.push(byte_len);
+    qchar_lengths.push(qchar_len);
+
+    let mut idx = ParagraphOffsetIndex::new();
+    idx.rebuild(byte_lengths, qchar_lengths);
+    idx
+}
 
 pub(super) fn prepare_document_visual_snapshot_impl(
     text: &str,
@@ -293,7 +359,7 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         dpr,
         paragraphs,
         visual_lines: Arc::new(visual_lines),
-        suffix_transform: None,
+        paragraph_offset_index: build_offset_index_from_text(text),
     }
 }
 
@@ -404,7 +470,7 @@ pub fn assemble_document_visual_snapshot_from_lines(
         // visual_lines 直接 clone，保持与原 layout 一致的 Rust 几何数据。
         // Issue #901 第九轮阻塞5: 用 Arc 包装，共享视觉行数据。
         visual_lines: Arc::new(lines.to_vec()),
-        suffix_transform: None,
+        paragraph_offset_index: build_offset_index_from_lines(lines),
     }
 }
 
@@ -527,87 +593,6 @@ fn find_line_range_by_para_start(
     Some((start, end))
 }
 
-/// Issue #901 第十二轮问题3: 在 suffix_transform 未物化的 visual_lines 中
-/// 按段落 byte 起始查找行索引。
-///
-/// `suffix_transform` 未物化时，后缀段的 `para_start` 是旧值（基础值），
-/// 需要用旧的 `paragraph_document_byte_start`（新值 - byte_delta）匹配。
-/// 前缀段和受影响段的 `para_start` 已物化（是新值），用新值匹配。
-///
-/// 先尝试用新值匹配（已物化行），失败再用旧值匹配（未物化行）。
-/// 返回匹配到的行起始索引。
-fn find_vl_idx_with_suffix(
-    visual_lines: &[VisualLine],
-    new_para_start: usize,
-    suffix_transform: Option<super::super::SuffixTransform>,
-) -> Option<usize> {
-    // 先尝试用新 para_start 匹配（行在 suffix_transform 范围外，已物化）
-    if let Some((s, _)) = find_line_range_by_para_start(visual_lines, new_para_start) {
-        return Some(s);
-    }
-    // 再尝试用旧 para_start 匹配（行在 suffix_transform 范围内，未物化）
-    if let Some(t) = suffix_transform {
-        if t.byte_delta != 0 {
-            // 旧 para_start = 新 para_start - byte_delta
-            //（suffix_transform 的 byte_delta 是旧→新的平移量，未物化行 para_start 是旧值）
-            let old_para_start = (new_para_start as i64 - t.byte_delta) as usize;
-            if let Some((s, _)) = find_line_range_by_para_start(visual_lines, old_para_start) {
-                return Some(s);
-            }
-        }
-    }
-    None
-}
-
-/// Issue #901 第十二轮问题3: 如果行在 suffix_transform 未物化范围内，
-/// 对基础 byte 值应用 byte_delta，否则返回基础值。
-/// 用于后续代码访问未物化行时手动解析绝对坐标。
-#[inline]
-fn resolve_byte_with_suffix(
-    base: usize,
-    idx: usize,
-    transform: Option<super::super::SuffixTransform>,
-) -> usize {
-    if let Some(t) = transform {
-        if t.byte_delta != 0 && idx >= t.start_line_idx && idx < t.end_line_idx {
-            return (base as i64 + t.byte_delta) as usize;
-        }
-    }
-    base
-}
-
-/// Issue #901 第十二轮问题3: 如果行在 suffix_transform 未物化范围内，
-/// 对基础 qchar 值应用 qchar_delta，否则返回基础值。
-#[inline]
-fn resolve_qchar_with_suffix(
-    base: usize,
-    idx: usize,
-    transform: Option<super::super::SuffixTransform>,
-) -> usize {
-    if let Some(t) = transform {
-        if t.qchar_delta != 0 && idx >= t.start_line_idx && idx < t.end_line_idx {
-            return (base as i64 + t.qchar_delta) as usize;
-        }
-    }
-    base
-}
-
-/// Issue #901 第十二轮问题3: 如果行在 suffix_transform 未物化范围内，
-/// 对基础 y 值应用 y_delta，否则返回基础值。
-#[inline]
-fn resolve_y_with_suffix(
-    base: f64,
-    idx: usize,
-    transform: Option<super::super::SuffixTransform>,
-) -> f64 {
-    if let Some(t) = transform {
-        if idx >= t.start_line_idx && idx < t.end_line_idx {
-            return base + t.y_delta;
-        }
-    }
-    base
-}
-
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
 ///
 /// # 核心逻辑
@@ -689,8 +674,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraphs: prev.paragraphs.clone(),
                 // Issue #901 第九轮阻塞5: Arc::clone 共享视觉行数据。
                 visual_lines: Arc::clone(&prev.visual_lines),
-                // Issue #901 第十轮问题5: 无正文变化，沿用 prev 的 suffix_transform。
-                suffix_transform: prev.suffix_transform,
+                // Issue #901 第十三轮问题1+2+6: 沿用 prev 的 paragraph_offset_index。
+                paragraph_offset_index: prev.paragraph_offset_index.clone(),
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -758,7 +743,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraphs: Vec::new(),
                 // Issue #901 第九轮阻塞5: Arc 包装空 Vec。
                 visual_lines: Arc::new(Vec::new()),
-                suffix_transform: None,
+                paragraph_offset_index: ParagraphOffsetIndex::new(),
             };
         }
     };
@@ -843,104 +828,45 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let new_layout_start = splice_ranges.new_layout_start;
     let new_layout_end = splice_ranges.new_layout_end;
 
-    // Issue #901 第十二轮问题3: 先计算下一笔编辑实际受影响的行范围
-    // [vl_start_idx, vl_end_idx)，只物化这个范围与 suffix_transform 的交集，
-    // 不物化整个 suffix_transform 范围（避免 O(全文后续行) 的物化成本）。
+    // Issue #901 第十三轮问题1+2+6: 移除 SuffixTransform 机制。
+    // prev.visual_lines 全部是已物化的绝对坐标，用 find_line_range_by_para_start
+    // 一次匹配即可正确定位段落行范围，不需要"先试新值失败试旧值"。
     //
-    // suffix_transform 未物化时，后缀段的 para_start 是旧值（基础值），
-    // prev.paragraphs 的 paragraph_document_byte_start 是上一笔编辑后已更新的新值。
-    // 用 find_vl_idx_with_suffix 同时尝试新值和旧值匹配，正确定位行索引。
+    // 修复问题1：find_vl_idx_with_suffix 的"先试新值，失败试旧值"逻辑会
+    // 把"第二段"误认成"第三段"——一个段落的新起点完全可能恰好等于后面另一段的
+    // 旧起点。移除 SuffixTransform 后，prev.visual_lines 全部是物化的正确值，
+    // 一次匹配即可，不会误认。
     //
     // Issue #901 第六轮阻塞2: 纯尾部插入（old_splice_start == prev.paragraphs.len()）
     // 时 vl_start_idx/vl_end_idx 必须是 visual_lines.len()..visual_lines.len()，
-    // 在末尾追加不删除任何旧行。绝不能用默认 0..len，否则 splice 会把全文视觉行
-    // 全部删掉，而 prev_paragraphs.splice(old_count..old_count, ...) 又保留旧段，
-    // 导致 visual_lines 与 paragraphs 两份数据直接不一致。
-    // 例：旧文 `甲`，结尾插入 `\n乙`，old_splice=[1,1)，new_layout=[1,2)，
-    // 此时 vl 范围必须是 len..len（在末尾追加新段 `乙` 的行），而非 0..len。
+    // 在末尾追加不删除任何旧行。
     let prev_vls_len = prev.visual_lines.len();
     let mut vl_start_idx: usize = prev_vls_len;
     let mut vl_end_idx: usize = prev_vls_len;
     if old_splice_start < prev.paragraphs.len() {
         let new_para_start = prev.paragraphs[old_splice_start].paragraph_document_byte_start;
-        if let Some(s) = find_vl_idx_with_suffix(
-            &prev.visual_lines,
-            new_para_start,
-            prev.suffix_transform,
-        ) {
+        // Issue #901 第十三轮问题1: 用 find_line_range_by_para_start 一次匹配。
+        // prev.visual_lines 全部是物化的绝对坐标，para_start 是正确值，不会误匹配。
+        if let Some((s, _)) = find_line_range_by_para_start(&prev.visual_lines, new_para_start) {
             vl_start_idx = s;
         }
     }
     if old_splice_end < prev.paragraphs.len() {
         let new_para_start = prev.paragraphs[old_splice_end].paragraph_document_byte_start;
-        if let Some(s) = find_vl_idx_with_suffix(
-            &prev.visual_lines,
-            new_para_start,
-            prev.suffix_transform,
-        ) {
+        if let Some((s, _)) = find_line_range_by_para_start(&prev.visual_lines, new_para_start) {
             vl_end_idx = s;
         }
     }
 
-    // Issue #901 第十二轮问题3: 只物化 [t.start_line_idx, vl_end_idx) 范围的行，
-    // 保留 [vl_end_idx, t.end_line_idx) 范围的 suffix_transform。
-    //
-    // 下一笔编辑只 splice [vl_start_idx, vl_end_idx) 范围的行，只有这些行的
-    // 绝对坐标需要在物化后是正确的。t.start_line_idx 之前的行已物化（前缀段），
-    // [t.start_line_idx, vl_end_idx) 是需要物化的范围（前缀未物化段 + 受影响段），
-    // [vl_end_idx, t.end_line_idx) 保留未物化，消费方通过 resolve_visual_line 按需应用。
-    //
-    // 这把物化成本从 O(t.end_line_idx - t.start_line_idx)（几乎全文后续行）
-    // 降为 O(vl_end_idx - t.start_line_idx)（受影响段附近行数），
-    // 连续打字时 vl_end_idx ≈ t.start_line_idx，物化成本趋近 0。
-    if let Some(t) = prev.suffix_transform {
-        if !t.is_identity() {
-            let prev_vls = Arc::make_mut(&mut prev.visual_lines);
-            // 只物化 [t.start_line_idx, vl_end_idx) 范围的行
-            let apply_start = t.start_line_idx.min(prev_vls.len());
-            let apply_end = vl_end_idx.min(t.end_line_idx).min(prev_vls.len());
-            for i in apply_start..apply_end {
-                let vl = &mut prev_vls[i];
-                vl.y += t.y_delta;
-                if t.byte_delta != 0 {
-                    vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
-                    vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
-                    vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
-                }
-                if t.qchar_delta != 0 {
-                    vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
-                    vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
-                }
-                if t.line_id_delta != 0 {
-                    vl.id = (vl.id as i64 + t.line_id_delta) as usize;
-                }
-            }
-            // 调整 suffix_transform 的范围为 [vl_end_idx, t.end_line_idx)，
-            // 保留未物化部分，消费方通过 resolve_visual_line 按需应用。
-            if vl_end_idx < t.end_line_idx {
-                prev.suffix_transform = Some(super::super::SuffixTransform {
-                    start_line_idx: vl_end_idx,
-                    end_line_idx: t.end_line_idx,
-                    y_delta: t.y_delta,
-                    byte_delta: t.byte_delta,
-                    qchar_delta: t.qchar_delta,
-                    line_id_delta: t.line_id_delta,
-                });
-            } else {
-                // vl_end_idx >= t.end_line_idx，全部物化，清除变换。
-                prev.suffix_transform = None;
-            }
-        } else {
-            // 恒等变换，无需物化，直接清除。
-            prev.suffix_transform = None;
-        }
-    }
+    // Issue #901 第十三轮问题1+2+6: SuffixTransform 物化逻辑已移除。
+    // prev.visual_lines 全部是已物化的绝对坐标，直接 take 使用。
 
     let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
     let mut visual_lines: Vec<VisualLine> =
         std::mem::take(Arc::make_mut(&mut prev.visual_lines));
 
-    // vl_start_idx 和 vl_end_idx 已在物化之前计算好（用 find_vl_idx_with_suffix），
+    // Issue #901 第十三轮问题1+2+6: vl_start_idx 和 vl_end_idx 用
+    // find_line_range_by_para_start 一次匹配计算（prev.visual_lines 全部物化）。
     // 不需要重新计算。物化后 [t.start_line_idx, vl_end_idx) 范围的行已更新为
     // 正确绝对坐标，find_line_range_by_para_start 用新 para_start 能匹配到同样的索引。
 
@@ -1153,33 +1079,22 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // byte_delta/qchar_delta 归零，后续段落坐标停留在旧值，导致换行/混排/光标错乱。
     // old_suffix_byte_start: 旧文档中受影响段落后的 byte offset（后缀段落起点）
     //
-    // Issue #901 第十二轮问题3: visual_lines[vl_end_idx] 和 visual_lines.last()
-    // 可能在保留的 suffix_transform 未物化范围内，需要手动应用 delta 解析绝对坐标。
-    // prev.suffix_transform 已调整为 [vl_end_idx, t.end_line_idx) 范围。
+    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
+    // 已物化的绝对坐标，直接读取即可，不需要 resolve_byte_with_suffix。
     let old_suffix_byte_start: usize = if old_splice_end < prev_paragraphs.len() {
         prev_paragraphs[old_splice_end].paragraph_document_byte_start
     } else if vl_end_idx < visual_lines.len() {
-        resolve_byte_with_suffix(visual_lines[vl_end_idx].byte_start, vl_end_idx, prev.suffix_transform)
+        visual_lines[vl_end_idx].byte_start
     } else {
-        let last_idx = visual_lines.len().saturating_sub(1);
-        let base = visual_lines.last().map(|vl| vl.byte_end).unwrap_or(0);
-        resolve_byte_with_suffix(base, last_idx, prev.suffix_transform)
+        visual_lines.last().map(|vl| vl.byte_end).unwrap_or(0)
     };
     // old_suffix_qchar_start: 旧文档中受影响段落后的 qchar offset（后缀段落起点）
     // qchar_start 是文档绝对 qchar，para_qchar_start 是行内段落相对 qchar 起点，
     // 两者之差即该行所在段落的文档 qchar 起点。
-    // para_qchar_start 不受 suffix_transform 影响（suffix_transform 只平移 qchar_start/qchar_end）。
     let old_suffix_qchar_start: usize = if vl_end_idx < visual_lines.len() {
-        let qchar_start = resolve_qchar_with_suffix(
-            visual_lines[vl_end_idx].qchar_start,
-            vl_end_idx,
-            prev.suffix_transform,
-        );
-        qchar_start - visual_lines[vl_end_idx].para_qchar_start
+        visual_lines[vl_end_idx].qchar_start - visual_lines[vl_end_idx].para_qchar_start
     } else {
-        let last_idx = visual_lines.len().saturating_sub(1);
-        let base = visual_lines.last().map(|vl| vl.qchar_end).unwrap_or(0);
-        resolve_qchar_with_suffix(base, last_idx, prev.suffix_transform)
+        visual_lines.last().map(|vl| vl.qchar_end).unwrap_or(0)
     };
 
     // splice visual_lines：替换受影响段落的行
@@ -1197,18 +1112,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     prev_paragraphs.splice(splice_para_start..splice_para_end, new_paragraphs);
     let mut paragraphs = prev_paragraphs;
 
-    // Issue #901 第十轮问题5: 不再逐行物化后缀段绝对坐标。
-    // 记算后缀段平移变换（SuffixTransform），消费方通过 resolve_visual_line 按需应用。
-    // 这把 O(后续行数) 的热路径降为 O(1)，纯字符替换（等长同高同行数）suffix_transform=None。
+    // Issue #901 第十三轮问题1+2+6: 移除 SuffixTransform 机制。
+    // 后缀段的绝对坐标就地更新（O(后缀行数)），不再用延迟物化的 delta 变换。
+    // 这修复了问题2（连续编辑覆盖未物化 delta）——不再有 delta 机制被覆盖。
     let new_affected_byte_end = paragraph_start;
-    // 旧受影响段落的 byte end = splice 前保存的旧后缀起点
-    // Issue #901 第八轮问题4: 不再用旧下标 vl_end_idx 访问 splice 后的新数组反推旧边界
     let old_affected_byte_end: usize = old_suffix_byte_start;
     let byte_delta = new_affected_byte_end as i64 - old_affected_byte_end as i64;
 
     let new_affected_qchar_end = paragraph_qchar_start;
-    // 旧受影响段落的 qchar end = splice 前保存的旧后缀起点
-    // Issue #901 第八轮问题4: 不再用旧下标访问 splice 后的新数组反推旧边界
     let old_affected_qchar_end: usize = old_suffix_qchar_start;
     let qchar_delta = new_affected_qchar_end as i64 - old_affected_qchar_end as i64;
 
@@ -1216,38 +1127,39 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let old_affected_line_count = vl_end_idx - vl_start_idx;
     let line_id_delta = new_affected_line_count as i64 - old_affected_line_count as i64;
 
-    // 后缀段范围 [update_start, suffix_end_line_idx)。
-    // splice 后、尾部空行追加前的 visual_lines.len() 是后缀段的末尾。
-    // 尾部空行（空文本/尾部换行）是新构造的行，绝对坐标已正确，不在变换范围内。
-    let suffix_end_line_idx = visual_lines.len();
-
-    // 构造 SuffixTransform：仅在非恒等时记录。
-    // y_delta = delta_height（段落高度变化导致后续段 y 漂移）
-    // byte_delta / qchar_delta / line_id_delta 如上计算。
-    let suffix_transform: Option<super::super::SuffixTransform> = {
+    // Issue #901 第十三轮问题1+2+6: 就地更新后缀段 visual_lines 的绝对坐标。
+    // 移除 SuffixTransform 后，后缀段的 y/byte/qchar/line_id 直接就地更新，
+    // 确保消费方读到正确绝对坐标。这是 O(后缀行数) 的操作，
+    // 但保证了正确性——不再有未物化的 delta 被连续编辑覆盖。
+    if update_start < visual_lines.len()
+        && (delta_height.abs() > 0.001 || byte_delta != 0 || qchar_delta != 0 || line_id_delta != 0)
+    {
         let need_y = delta_height.abs() > 0.001;
-        let need_byte = byte_delta != 0;
-        let need_qchar = qchar_delta != 0;
-        let need_line_id = line_id_delta != 0;
-        if update_start < suffix_end_line_idx
-            && (need_y || need_byte || need_qchar || need_line_id)
-        {
-            Some(super::super::SuffixTransform {
-                start_line_idx: update_start,
-                end_line_idx: suffix_end_line_idx,
-                y_delta: if need_y { delta_height } else { 0.0 },
-                byte_delta,
-                qchar_delta,
-                line_id_delta,
-            })
-        } else {
-            None
+        for i in update_start..visual_lines.len() {
+            let vl = &mut visual_lines[i];
+            if need_y {
+                vl.y += delta_height;
+            }
+            if byte_delta != 0 {
+                vl.byte_start = (vl.byte_start as i64 + byte_delta) as usize;
+                vl.byte_end = (vl.byte_end as i64 + byte_delta) as usize;
+                vl.para_start = (vl.para_start as i64 + byte_delta) as usize;
+            }
+            if qchar_delta != 0 {
+                vl.qchar_start = (vl.qchar_start as i64 + qchar_delta) as usize;
+                vl.qchar_end = (vl.qchar_end as i64 + qchar_delta) as usize;
+            }
+            if line_id_delta != 0 {
+                vl.id = (vl.id as i64 + line_id_delta) as usize;
+            }
         }
-    };
+    }
 
     // 更新后续段落的 paragraph_document_byte_start 及其内部行/cluster 的 byte offset。
-    // paragraphs 数组独立于 visual_lines，无法用 SuffixTransform 懒记录。
-    // Issue #901 第五轮阻塞2: 用新段范围 new_layout_end 定位后续段
+    // Issue #901 第十三轮问题1+2+6: 用 ParagraphOffsetIndex 作为段首 byte 坐标权威来源。
+    // paragraphs 数组的 paragraph_document_byte_start 仍就地更新（消费方直接读），
+    // 但 paragraph_offset_index 通过 build_offset_index_from_text 重建，
+    // 为未来迁移到"消费方通过偏移索引获取段首坐标"做准备。
     if byte_delta != 0 {
         let para_update_start = new_layout_end.min(paragraphs.len());
         for para in &mut paragraphs[para_update_start..] {
@@ -1278,22 +1190,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 问题5: 增量路径只遍历了受影响段落，line_id/y/paragraph_idx
     // 是受影响段落结束后的值。空文本/尾部换行处理需要文档末尾的值。
     // 更新到 splice 后的文档末尾。
-    // Issue #901 第十轮问题5: 后缀段 y 未物化，需用 SuffixTransform 解析最后一行的 y。
-    // Issue #901 第十二轮问题3: visual_lines.last() 可能是保留的未物化行
-    //（在 prev.suffix_transform 范围内），需要用 resolve_y_with_suffix 解析 y。
-    // splice 后 last() 对应 splice 前的索引是 prev_vls_len - 1
-    //（如果受影响段不是最后一段），或新行（已物化，不在 transform 范围内）。
-    // prev.suffix_transform 的 start_line_idx = vl_end_idx，
-    // 若 vl_end_idx == prev_vls_len（受影响段是最后一段），prev_vls_len - 1 < start_line_idx，
-    // resolve_y_with_suffix 返回基础值，对新行正确。
+    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
+    // 已物化的绝对坐标，直接读取最后一行的 y 即可。
     line_id = visual_lines.len();
-    let last_idx_in_prev = prev_vls_len.saturating_sub(1);
     y = visual_lines.last().map(|vl| {
-        let resolved_y_base = resolve_y_with_suffix(vl.y, last_idx_in_prev, prev.suffix_transform);
         let resolved_y = if update_start < visual_lines.len() {
-            resolved_y_base + delta_height
+            vl.y + delta_height
         } else {
-            resolved_y_base
+            vl.y
         };
         resolved_y + vl.height
     }).unwrap_or(padding);
@@ -1355,17 +1259,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 创建节点，不允许沿用的 prev 哨兵再复制。
     // 检查 splice 后的最后一个视觉行是否已经是末尾空行（para_text 为空且
     // byte_start == text.len()），如果是则不再追加。
+    // Issue #901 第十三轮问题1+2+6: SuffixTransform 已移除，visual_lines 全部是
+    // 已物化的绝对坐标，直接读取 byte_start 即可。
     if text.ends_with('\n') {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
-        // Issue #901 第十二轮问题3: visual_lines.last().byte_start 可能未物化，
-        // 需要用 resolve_byte_with_suffix 解析。用 prev_vls_len - 1 作为 splice 前索引。
         let already_has_trailing_empty = visual_lines.last().map_or(false, |vl| {
-            let resolved_byte_start = resolve_byte_with_suffix(
-                vl.byte_start,
-                last_idx_in_prev,
-                prev.suffix_transform,
-            );
-            vl.para_text.is_empty() && resolved_byte_start == text.len()
+            vl.para_text.is_empty() && vl.byte_start == text.len()
         });
         if !already_has_trailing_empty {
             let _empty_canonical = prepare_paragraph_visual_snapshot(
@@ -1421,8 +1320,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraphs,
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
-        // Issue #901 第十轮问题5: 后缀段平移变换，消费方按需解析。
-        suffix_transform,
+        // Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引 — 段首 byte/qchar 坐标权威来源。
+        paragraph_offset_index: build_offset_index_from_text(text),
     };
 
     // Issue #901: 增量更新 height_index 和 paragraph_store，不扫描全章。
@@ -1928,7 +1827,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         paragraphs,
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
-        // Issue #901 第十轮问题5: 全篇重排无后缀段平移变换。
-        suffix_transform: None,
+        // Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引。
+        paragraph_offset_index: build_offset_index_from_text(text),
     }
 }

@@ -34,6 +34,7 @@ use cpp::cpp;
 cpp! {{
     #include <QtQuick/QSGTextNode>
     #include <QtQuick/QSGClipNode>
+    #include <QtQuick/QSGTransformNode>
     #include <QtQuick/QQuickWindow>
     #include <QtQuick/QQuickItem>
     #include <QtGui/QTextLayout>
@@ -43,6 +44,7 @@ cpp! {{
     #include <QtGui/QMatrix4x4>
     #include <QtCore/QPointF>
     #include <QtCore/QMetaObject>
+    #include <QtCore/QRunnable>
     #include <QDebug>
     #include <vector>
     #include <algorithm>
@@ -52,20 +54,29 @@ cpp! {{
     // Issue #901 第十轮问题4: per-item ParagraphId → 段落容器节点 映射。
     //
     // C++ 静态层持久维护每个 item/session、ParagraphId 对应的 QSG 节点。
-    // staticLayer (QSGTransformNode) 下挂 per-paragraph 的容器节点 (QSGNode)，
-    // 容器节点下挂该段落的 QSGTextNode 或 QSGClipNode 集合。
+    // staticLayer (QSGTransformNode) 下挂 per-paragraph 的段落位置层
+    //（QSGTransformNode，矩阵 translate(0, para_y)），段落位置层下挂该段落的
+    // QSGTextNode 或 QSGClipNode 集合（段内 y=0 构建）。
     // 增量更新时按 ParagraphId 做 insert/remove/update，不全量重建。
     //
     // key: item_ptr (QQuickItem*), value: ItemNodeMap
     struct IncrementalParaNodeInfo {
-        QSGNode* container;  // 挂在 staticLayer 下的容器节点
-        double para_y;       // 段落第一行文档 y（用于排序）
-        // Issue #901 第十二轮问题5: 该段落上次构建子节点时的 layout generation。
-        // 用于按段落 generation 签名驱动增量更新：
-        // - content_generation == 当前 generation 且 para_y 相同 → 跳过（内容未变且位置未变）
-        // - content_generation == 当前 generation 但 para_y 不同 → 只更新 para_y（位置变了但内容未变）
-        // - content_generation != 当前 generation → 重建子节点（内容可能变了）
-        uint64_t content_generation;
+        // Issue #901 第十三轮问题3: 段落位置层 QSGTransformNode。
+        // 矩阵为 translate(0, para_y)，把段内 y=0 的子节点平移到文档坐标。
+        // para_y 变化时只更新此矩阵和 markDirty(DirtyMatrix)，不重建子节点。
+        QSGTransformNode* transform_node;
+        double para_y;       // 段落第一行文档 y（用于排序和 transform 矩阵）
+        // Issue #901 第十三轮问题3: per-paragraph 内容版本签名 (generation, cache_idx)。
+        // 不用全局 content_generation，加上 cache_idx 区分同 generation 下不同段的
+        // 重新排版。两者任一变化 → 重建子节点。
+        uint64_t applied_generation;
+        int applied_cache_idx;
+        // Issue #901 第十三轮问题4: 该段实际应用的 static exclusion/clip signature。
+        // clip signature 变化时重建裁剪子节点，内容 QSGTextNode 不动。
+        std::vector<std::pair<double,double>> applied_clip_xy;
+        std::vector<std::pair<double,double>> applied_clip_wh;
+        // 该段实际应用的 visual line qtextline 索引集合。
+        std::vector<int> applied_vl_qtextline_idxs;
     };
     // per-item 的映射表 + 所属 staticLayer 指针。
     // static_layer 用于检测 QSG 树变更（item 销毁后重建会生成新 staticLayer），
@@ -517,10 +528,11 @@ cpp! {{
 
         if (clip_rects_xy.empty()) {
             // 无 clip：创建一个完整 QSGTextNode，整段 addTextLayout
+            // Issue #901 第十三轮问题3: 段内 y=0 构建，由 transform_node 平移到文档坐标。
             QSGTextNode* textNode = window->createTextNode();
             if (!textNode) return;
             textNode->setColor(textColor);
-            textNode->addTextLayout(QPointF(origin_x, para_y), layout);
+            textNode->addTextLayout(QPointF(origin_x, 0.0), layout);
             textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
             container->appendChildNode(textNode);
         } else {
@@ -531,7 +543,9 @@ cpp! {{
                 double lh = vl_height_arr[vl_idx];
                 if (lh < 1.0) lh = 1.0;
                 double dw = vl_doc_width_arr[vl_idx];
-                double paraY = vl_para_y_arr[vl_idx];
+                // Issue #901 第十三轮问题3: paraY 不再用于 addTextLayout（段内 y=0），
+                // 保留 paraY 仅供文档参考。clip rect 的 y 已改为段内坐标 (ly - para_y)。
+                (void)vl_para_y_arr[vl_idx];
 
                 double contentLeft = origin_x;
                 double contentRight = dw - origin_x;
@@ -587,14 +601,17 @@ cpp! {{
 
                     auto* clipNode = new QSGClipNode;
                     clipNode->setIsRectangular(true);
-                    clipNode->setClipRect(QRectF(comp.left, ly, clipW, lh));
+                    // Issue #901 第十三轮问题3: clip rect 转为段内坐标（ly - para_y），
+                    // 由 transform_node 平移回文档坐标。
+                    clipNode->setClipRect(QRectF(comp.left, ly - para_y, clipW, lh));
 
                     QSGTextNode* clipTextNode = window->createTextNode();
                     if (clipTextNode) {
                         clipTextNode->setColor(textColor);
                         clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         clipNode->appendChildNode(clipTextNode);
-                        clipTextNode->addTextLayout(QPointF(origin_x, paraY), layout, -1, -1, qline, 1);
+                        // Issue #901 第十三轮问题3: 段内 y=0 构建。
+                        clipTextNode->addTextLayout(QPointF(origin_x, 0.0), layout, -1, -1, qline, 1);
                         clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         container->appendChildNode(clipNode);
                     } else {
@@ -714,9 +731,9 @@ cpp! {{
         for (uint64_t id : to_remove) {
             auto it = node_map.find(id);
             if (it != node_map.end()) {
-                QSGNode* container = it->second.container;
-                staticLayer->removeChildNode(container);
-                delete container;
+                QSGTransformNode* transform_node = it->second.transform_node;
+                staticLayer->removeChildNode(transform_node);
+                delete transform_node;
                 node_map.erase(it);
             }
         }
@@ -740,51 +757,66 @@ cpp! {{
         }
 
         // ── Insert / Update ──
-        // Issue #901 第十二轮问题5: 按 per-paragraph generation 签名驱动增量更新，
-        // 而非 force_full_update 全量重建。
+        // Issue #901 第十三轮问题3+4: 按 per-paragraph 内容版本签名和 clip signature
+        // 驱动增量更新，而非 force_full_update 全量重建。
         // - force_full_update=true: 无条件重建所有已有段落子节点（全局变化如 needs_relayout）。
         // - force_full_update=false:
-        //     - content_generation == generation 且 para_y 相同 → 跳过（内容未变且位置未变）
-        //     - content_generation == generation 但 para_y 不同 → 只更新 para_y（位置变了但内容未变）
-        //     - content_generation != generation → 重建子节点（内容可能变了）
+        //     - para_y 变化 → 只更新 transform_node 矩阵（问题3：不重建子节点）
+        //     - (generation, cache_idx) 变化 → 重建子节点（内容变了）
+        //     - clip signature 变化 → 重建子节点（裁剪变了，问题4）
+        //     - 都不变 → 真正跳过
         for (int i = 0; i < para_count; i++) {
             uint64_t id = paragraph_id_arr[i];
             double para_y = para_y_arr[i];
             int cacheIdx = cache_idx_arr[i];
             bool is_empty = (text_lens[i] == 0);
 
+            // 计算该段的 visual line qtextline 索引集合（clip signature 的一部分）
+            auto vl_it = vl_for_para.find(id);
+            std::vector<int> empty_vl;
+            const std::vector<int>& vl_indices = (vl_it != vl_for_para.end()) ? vl_it->second : empty_vl;
+            std::vector<int> para_vl_qtextline_idxs;
+            para_vl_qtextline_idxs.reserve(vl_indices.size());
+            for (int vl_idx : vl_indices) {
+                para_vl_qtextline_idxs.push_back(vl_qtextline_idx_arr[vl_idx]);
+            }
+
             auto it = node_map.find(id);
             if (it != node_map.end()) {
-                // 已有节点：按 generation 签名决定是否重建
-                bool need_rebuild = force_full_update;
-                if (!force_full_update) {
-                    if (it->second.content_generation != generation) {
-                        // generation 不同：段落内容可能变了，重建子节点
-                        need_rebuild = true;
-                    } else if (it->second.para_y != para_y) {
-                        // generation 相同但 para_y 不同：只更新位置，不重建子节点
-                        it->second.para_y = para_y;
-                    }
-                    // else: generation 相同且 para_y 相同，真正跳过
+                // 已有节点
+                // 问题3: para_y 变化只更新 transform_node 矩阵，不重建子节点
+                if (it->second.para_y != para_y) {
+                    QMatrix4x4 para_mat;
+                    para_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                    it->second.transform_node->setMatrix(para_mat);
+                    it->second.transform_node->markDirty(QSGNode::DirtyMatrix);
+                    it->second.para_y = para_y;
                 }
+
+                // 问题3+4: 内容版本签名和 clip signature 决定是否重建
+                bool content_changed = (it->second.applied_generation != generation) ||
+                                       (it->second.applied_cache_idx != cacheIdx);
+                bool clip_changed = (it->second.applied_clip_xy != clip_rects_xy) ||
+                                    (it->second.applied_clip_wh != clip_rects_wh) ||
+                                    (it->second.applied_vl_qtextline_idxs != para_vl_qtextline_idxs);
+                bool need_rebuild = force_full_update || content_changed || clip_changed;
+
                 if (!need_rebuild) {
                     continue;
                 }
-                // 重建子节点（force_full_update 或 generation 不同）
-                QSGNode* container = it->second.container;
-                while (container->childCount() > 0) {
-                    QSGNode* child = container->childAtIndex(container->childCount() - 1);
-                    container->removeChildNode(child);
+
+                // 重建子节点（force_full_update 或内容/clip 变化）
+                QSGTransformNode* transform_node = it->second.transform_node;
+                while (transform_node->childCount() > 0) {
+                    QSGNode* child = transform_node->childAtIndex(transform_node->childCount() - 1);
+                    transform_node->removeChildNode(child);
                     delete child;
                 }
                 if (!is_empty) {
                     const char* text_ptr = text_ptrs[i];
                     int text_len = text_lens[i];
-                    auto vl_it = vl_for_para.find(id);
-                    std::vector<int> empty_vl;
-                    const std::vector<int>& vl_indices = (vl_it != vl_for_para.end()) ? vl_it->second : empty_vl;
                     build_paragraph_subtree(
-                        container, window,
+                        transform_node, window,
                         text_ptr, text_len,
                         cacheIdx, para_y,
                         vl_cache_idx_arr, vl_qtextline_idx_arr,
@@ -796,19 +828,22 @@ cpp! {{
                         textColor, origin_x, generation
                     );
                 }
-                it->second.para_y = para_y;
-                it->second.content_generation = generation;
+                it->second.applied_generation = generation;
+                it->second.applied_cache_idx = cacheIdx;
+                it->second.applied_clip_xy = clip_rects_xy;
+                it->second.applied_clip_wh = clip_rects_wh;
+                it->second.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
             } else {
-                // 新节点
-                QSGNode* container = new QSGNode;
+                // 新节点：创建段落位置层 QSGTransformNode
+                QSGTransformNode* transform_node = new QSGTransformNode;
+                QMatrix4x4 para_mat;
+                para_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                transform_node->setMatrix(para_mat);
                 if (!is_empty) {
                     const char* text_ptr = text_ptrs[i];
                     int text_len = text_lens[i];
-                    auto vl_it = vl_for_para.find(id);
-                    std::vector<int> empty_vl;
-                    const std::vector<int>& vl_indices = (vl_it != vl_for_para.end()) ? vl_it->second : empty_vl;
                     build_paragraph_subtree(
-                        container, window,
+                        transform_node, window,
                         text_ptr, text_len,
                         cacheIdx, para_y,
                         vl_cache_idx_arr, vl_qtextline_idx_arr,
@@ -820,19 +855,27 @@ cpp! {{
                         textColor, origin_x, generation
                     );
                 }
-                staticLayer->appendChildNode(container);
-                node_map[id] = {container, para_y, generation};
+                staticLayer->appendChildNode(transform_node);
+                IncrementalParaNodeInfo info;
+                info.transform_node = transform_node;
+                info.para_y = para_y;
+                info.applied_generation = generation;
+                info.applied_cache_idx = cacheIdx;
+                info.applied_clip_xy = clip_rects_xy;
+                info.applied_clip_wh = clip_rects_wh;
+                info.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
+                node_map[id] = info;
             }
         }
 
         // ── 按 para_y 排序 staticLayer 的子节点（保证绘制顺序正确） ──
-        std::vector<std::pair<QSGNode*, double>> children_with_y;
+        std::vector<std::pair<QSGTransformNode*, double>> children_with_y;
         children_with_y.reserve(node_map.size());
         for (auto& kv : node_map) {
-            children_with_y.push_back({kv.second.container, kv.second.para_y});
+            children_with_y.push_back({kv.second.transform_node, kv.second.para_y});
         }
         std::sort(children_with_y.begin(), children_with_y.end(),
-            [](const std::pair<QSGNode*, double>& a, const std::pair<QSGNode*, double>& b) {
+            [](const std::pair<QSGTransformNode*, double>& a, const std::pair<QSGTransformNode*, double>& b) {
                 return a.second < b.second;
             });
         for (auto& entry : children_with_y) {
@@ -853,9 +896,61 @@ cpp! {{
 
     /// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
     ///
-    /// 在 item 销毁时调用，避免全局 map 中残留悬空指针。
+    /// 在渲染线程调用（如 sceneGraphInvalidated 回调），避免全局 map 中残留悬空指针。
     /// 不删除 QSGNode（由 Qt 场景图自行管理），只清理 map 条目。
     void clear_incremental_para_map(QQuickItem* item_ptr) {
+        if (!item_ptr) return;
+        g_incremental_para_map.erase(item_ptr);
+    }
+
+    // Issue #901 第十三轮问题5: 通过 QQuickWindow::scheduleRenderJob 在渲染线程
+    // 安全清理 g_incremental_para_map[item_ptr]。
+    //
+    // Qt 官方文档：releaseResources() 在 GUI 线程触发，涉及 render 资源的清理
+    // 需使用 QQuickWindow::scheduleRenderJob()，在渲染线程执行 job。
+    // g_incremental_para_map 被 update_paint_node（渲染线程）读写，
+    // GUI 线程直接 erase 是跨线程数据竞争。scheduleRenderJob 保证 job 在渲染线程执行，
+    // 与同在渲染线程的 update_text_nodes_incremental 读写互斥安全。
+    //
+    // erase 只按指针值移除 map 条目，不解引用 item_ptr，所以即使 job 执行时
+    // item 已被销毁，item_ptr 仍可安全用作 map key。
+    class ClearIncrementalParaMapJob : public QRunnable {
+    public:
+        ClearIncrementalParaMapJob(void* key) : m_key(key) {}
+        void run() override {
+            g_incremental_para_map.erase(m_key);
+        }
+    private:
+        void* m_key;
+    };
+
+    /// Issue #901 第十三轮问题5: 在 GUI 线程调用，通过 scheduleRenderJob
+    /// 调度渲染线程清理 g_incremental_para_map[item_ptr]。
+    /// 用于 QQuickItem::releaseResources() 和切章/清文档场景。
+    void schedule_clear_incremental_para_map(QQuickItem* item_ptr) {
+        if (!item_ptr) return;
+        QQuickWindow* window = item_ptr->window();
+        if (!window) {
+            // 没有 window 时无法调度 render job。
+            // 此时渲染线程不会为该 item 调用 update_paint_node（item 已脱离 window），
+            // 但其他 item 的渲染可能正在读写 g_incremental_para_map。
+            // std::unordered_map 的 erase 不是线程安全的（即使不同 key），
+            // 所以不能在 GUI 线程直接 erase。保留条目（按 item_ptr 索引，
+            // 不影响其他 item），等 sceneGraphInvalidated 时统一清理。
+            return;
+        }
+        // AfterSynchronizingStage: 在 GUI↔render 同步之后、下一帧渲染之前执行，
+        // 此时渲染线程空闲，与 update_paint_node 互斥安全。
+        window->scheduleRenderJob(
+            new ClearIncrementalParaMapJob(item_ptr),
+            QQuickWindow::AfterSynchronizingStage
+        );
+    }
+
+    /// Issue #901 第十三轮问题5: 在渲染线程直接清理（用于 sceneGraphInvalidated 回调）。
+    /// sceneGraphInvalidated 在渲染线程触发，回调直接在渲染线程执行，
+    /// 与 update_paint_node 互斥安全。
+    void clear_incremental_para_map_render_thread(void* item_ptr) {
         if (!item_ptr) return;
         g_incremental_para_map.erase(item_ptr);
     }
@@ -1463,7 +1558,7 @@ pub fn update_text_nodes_incremental(
 
 /// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
 ///
-/// 在 item 销毁时调用，避免全局 map 中残留悬空指针。
+/// 在渲染线程调用（如 sceneGraphInvalidated 回调），避免全局 map 中残留悬空指针。
 /// 不删除 QSGNode（由 Qt 场景图自行管理），只清理 map 条目。
 ///
 /// # Safety
@@ -1476,5 +1571,44 @@ pub fn clear_incremental_para_map(item_ptr: *mut std::ffi::c_void) {
         item_ptr as "QQuickItem*"
     ] {
         clear_incremental_para_map(item_ptr);
+    });
+}
+
+/// Issue #901 第十三轮问题5: 在 GUI 线程调用，通过 QQuickWindow::scheduleRenderJob
+/// 调度渲染线程清理 `g_incremental_para_map[item_ptr]`。
+///
+/// 用于 `QQuickItem::release_resources()` 和切章/清文档场景。
+/// GUI 线程不能直接 erase 全局 map（与渲染线程的 `update_paint_node` 数据竞争），
+/// `scheduleRenderJob` 保证 job 在渲染线程执行，与同在渲染线程的
+/// `update_text_nodes_incremental` 读写互斥安全。
+///
+/// # Safety
+/// `item_ptr` 必须是有效的 QQuickItem 指针或 null（null 时无操作）。
+pub fn schedule_clear_incremental_para_map(item_ptr: *mut std::ffi::c_void) {
+    if item_ptr.is_null() {
+        return;
+    }
+    cpp!(unsafe [
+        item_ptr as "QQuickItem*"
+    ] {
+        schedule_clear_incremental_para_map(item_ptr);
+    });
+}
+
+/// Issue #901 第十三轮问题5: 在渲染线程直接清理（用于 sceneGraphInvalidated 回调）。
+///
+/// `sceneGraphInvalidated` 在渲染线程触发，回调直接在渲染线程执行，
+/// 与 `update_paint_node` 互斥安全。
+///
+/// # Safety
+/// `item_ptr` 是任意指针值（用作 map key，不解引用），可为 null（null 时无操作）。
+pub fn clear_incremental_para_map_render_thread(item_ptr: *mut std::ffi::c_void) {
+    if item_ptr.is_null() {
+        return;
+    }
+    cpp!(unsafe [
+        item_ptr as "void*"
+    ] {
+        clear_incremental_para_map_render_thread(item_ptr);
     });
 }

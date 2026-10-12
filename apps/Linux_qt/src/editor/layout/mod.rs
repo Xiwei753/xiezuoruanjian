@@ -41,7 +41,7 @@ pub use canonical_snapshot::{
 };
 pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff};
 // Issue #901: 增量排版子系统 — 稳定段落身份 + 布局缓存 + Fenwick 树高度索引
-pub use paragraph_height_index::ParagraphHeightIndex;
+pub use paragraph_height_index::{ParagraphHeightIndex, ParagraphOffsetIndex};
 pub use paragraph_layout_store::{
     AffectedParagraphRanges, ParagraphId, ParagraphLayoutCacheKey, ParagraphLayoutEntry,
     ParagraphLayoutStore,
@@ -292,7 +292,6 @@ impl EditorLayout {
             padding: promoted.padding,
             lines: cache_lines,
             layout_generation: promoted.generation,
-            suffix_transform: None,
         });
     }
 
@@ -425,7 +424,6 @@ impl EditorLayout {
             // 的 Arc（refcount==1），prepare_incremental_visual_snapshot 内部 Arc::make_mut
             // 原地修改，不产生 Vec clone。
             let lines = Arc::clone(&doc_snapshot.visual_lines);
-            let suffix_transform = doc_snapshot.suffix_transform;
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -440,7 +438,6 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 layout_generation: current_gen,
-                suffix_transform,
             }
         } else {
             // 全篇重排路径（初始化/参数变化后 invalidate 清空了 store）
@@ -492,7 +489,6 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 layout_generation: current_gen,
-                suffix_transform: None,
             }
         };
 

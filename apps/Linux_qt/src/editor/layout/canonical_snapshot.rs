@@ -7,6 +7,7 @@ use std::sync::Arc;
 // 模块使用（prepare_animation_visuals_from_layout 改为 raster-only，不再做 QChar→byte
 // 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
 use super::engine::{get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot};
+use super::paragraph_height_index::ParagraphOffsetIndex;
 use super::types::{CaretAffinity, CaretRect, VisualLine};
 
 // ── Qt 文本布局模块：Canonical document visual snapshot ──
@@ -83,46 +84,14 @@ pub struct AnimationRasterVisual {
     pub qtextline_idx: i32,
 }
 
-/// Issue #901 第十轮问题5: 后缀段平移变换 — 记录未改后缀段的坐标平移量，
-/// 避免每笔编辑逐行写绝对位置。
+/// Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引 — 维护段落文本长度（byte 和 qchar）
+/// 的前缀和，作为段首绝对坐标的权威来源。
 ///
-/// 增量编辑时，受影响段 splice 后，后续未改段的 y / byte / qchar / line_id
-/// 需要平移一个常量 delta。此结构记录该平移量，消费方通过
-/// [`CanonicalDocumentVisualSnapshot::resolve_visual_line`] 按需应用，
-/// 不在编辑路径逐行物化。
+/// 增量编辑时只更新受影响段的长度，后续段的起始偏移由前缀和自动反映，
+/// 不逐段写 `document_byte_start`，也不再用 SuffixTransform 记录平移量。
 ///
-/// # 不变量
-///
-/// - `start_line_idx` 是 `visual_lines` 中第一个受平移影响的行索引。
-/// - `end_line_idx` 是 `visual_lines` 中最后一个受平移影响的行索引（ exclusive）。
-/// - `visual_lines[0..start_line_idx]` 是已物化的绝对坐标（前缀段 + 受影响段）。
-/// - `visual_lines[start_line_idx..end_line_idx]` 是**旧绝对坐标**（基础值），消费时加 delta。
-/// - `visual_lines[end_line_idx..]` 是已物化的绝对坐标（空文本/尾部换行追加的新行）。
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SuffixTransform {
-    /// 后缀段起始行索引（`visual_lines[start_line_idx..end_line_idx]` 受平移影响）。
-    pub start_line_idx: usize,
-    /// 后缀段结束行索引（exclusive）。
-    pub end_line_idx: usize,
-    /// y 坐标平移量（段落高度变化导致后续段 y 漂移）。
-    pub y_delta: f64,
-    /// byte 坐标平移量（段前插入/删除导致后续段 byte 起点漂移）。
-    pub byte_delta: i64,
-    /// qchar 坐标平移量（段前插入/删除导致后续段 qchar 起点漂移）。
-    pub qchar_delta: i64,
-    /// line_id 平移量（受影响行数变化导致后续行 id 漂移）。
-    pub line_id_delta: i64,
-}
-
-impl SuffixTransform {
-    /// 是否为恒等变换（无平移）。
-    pub fn is_identity(&self) -> bool {
-        self.y_delta.abs() < 1e-9
-            && self.byte_delta == 0
-            && self.qchar_delta == 0
-            && self.line_id_delta == 0
-    }
-}
+/// 消费方（hit_test、scene renderer 等）通过 `paragraph_offset_index` 获取段首
+/// byte/qchar 坐标，通过 `ParagraphHeightIndex` 获取段首 y 坐标。
 
 #[derive(Clone)]
 pub struct CanonicalDocumentVisualSnapshot {
@@ -137,28 +106,28 @@ pub struct CanonicalDocumentVisualSnapshot {
     pub paragraphs: Vec<CanonicalParagraphSnapshot>,
     /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免每键 clone Vec<VisualLine>。
     /// `LayoutSnapshot.lines` 和本字段通过 `Arc::clone` 共享同一份数据。
-    pub visual_lines: Arc<Vec<VisualLine>>,
-    /// Issue #901 第十轮问题5: 后缀段平移变换。
     ///
-    /// `None` 表示 `visual_lines` 全部是已物化的绝对坐标。
-    /// `Some(t)` 表示 `visual_lines[t.start_line_idx..]` 是旧绝对坐标（基础值），
-    /// 消费方通过 [`resolve_visual_line`] 按需加 delta 得到正确绝对坐标。
-    /// 增量编辑路径不逐行写后缀段绝对位置，只记录此变换。
-    pub suffix_transform: Option<SuffixTransform>,
+    /// Issue #901 第十三轮问题1+2+6: `visual_lines` 全部是已物化的绝对坐标。
+    /// 移除了 SuffixTransform 机制——增量编辑时后缀段的绝对坐标就地更新，
+    /// 不再依赖延迟物化的 delta 变换。这修复了连续编辑覆盖未物化 delta 的问题（问题2），
+    /// 也消除了 find_vl_idx_with_suffix "先试新值失败试旧值"导致的段落误认（问题1）。
+    pub visual_lines: Arc<Vec<VisualLine>>,
+    /// Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引 — 段首 byte/qchar 坐标的权威来源。
+    ///
+    /// 维护每段 byte/qchar 长度的前缀和。段首绝对坐标 = `paragraph_offset_index.paragraph_byte_start(idx)`。
+    /// 增量编辑时只更新受影响段的长度（O(k log n)），后续段的起始偏移由前缀和自动反映。
+    pub paragraph_offset_index: ParagraphOffsetIndex,
 }
 
 impl CanonicalDocumentVisualSnapshot {
-    /// Issue #901 第十轮问题5: 按需解析单行绝对坐标。
+    /// Issue #901 第十三轮问题1+2+6: 获取单行绝对坐标。
     ///
-    /// 如果 `suffix_transform` 为 None 或 `idx < start_line_idx`，返回基础值 clone。
-    /// 否则返回基础值 + delta（y/byte/qchar/line_id 平移）。
-    ///
-    /// 消费方用此方法代替直接访问 `self.visual_lines[idx]`，
-    /// 以正确处理增量编辑后未物化的后缀段。
+    /// 移除 SuffixTransform 后，`visual_lines` 全部是已物化的绝对坐标，
+    /// 直接返回 clone 即可。保留方法签名以兼容消费方。
     pub fn resolve_visual_line(&self, idx: usize) -> VisualLine {
-        let base = match self.visual_lines.get(idx) {
+        match self.visual_lines.get(idx) {
             Some(vl) => vl.clone(),
-            None => return VisualLine {
+            None => VisualLine {
                 id: 0, byte_start: 0, byte_end: 0, qchar_start: 0, qchar_end: 0,
                 hard_break: true, x: 0.0, y: 0.0, width: 0.0,
                 height: self.font_size * self.line_spacing,
@@ -167,95 +136,21 @@ impl CanonicalDocumentVisualSnapshot {
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0,
             },
-        };
-        match self.suffix_transform {
-            Some(t) if idx >= t.start_line_idx && idx < t.end_line_idx => {
-                apply_suffix_transform(base, t)
-            }
-            _ => base,
         }
     }
 
-    /// Issue #901 第十一轮问题2: 就地物化后缀段平移变换到 visual_lines，
-    /// 然后清除 suffix_transform。
-    ///
-    /// 消费方在需要直接访问 visual_lines 基础数组的原始字段
-    ///（如增量排版下一笔编辑用 `find_line_range_by_para_start` 定位段落）
-    /// 前调用此方法，确保绝对坐标已物化，不会读到未应用 delta 的旧值。
-    ///
-    /// 仅对 `suffix_transform` 受影响范围 `[start_line_idx, end_line_idx)` 的行
-    /// 就地更新 y/byte/qchar/line_id，其余行已是正确绝对坐标不动。
-    /// 物化后 `suffix_transform = None`，后续 `resolved_visual_lines` 走零分配借用路径。
+    /// Issue #901 第十三轮问题1+2+6: 空操作 — SuffixTransform 已移除，
+    /// `visual_lines` 全部是已物化的绝对坐标，无需物化。保留方法签名以兼容消费方。
     pub fn materialize_suffix_in_place(&mut self) {
-        if let Some(t) = self.suffix_transform {
-            if !t.is_identity() {
-                let vls = Arc::make_mut(&mut self.visual_lines);
-                let apply_start = t.start_line_idx.min(vls.len());
-                let apply_end = t.end_line_idx.min(vls.len());
-                for i in apply_start..apply_end {
-                    let vl = &mut vls[i];
-                    vl.y += t.y_delta;
-                    if t.byte_delta != 0 {
-                        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
-                        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
-                        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
-                    }
-                    if t.qchar_delta != 0 {
-                        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
-                        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
-                    }
-                    if t.line_id_delta != 0 {
-                        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
-                    }
-                }
-            }
-            self.suffix_transform = None;
-        }
+        // SuffixTransform 已移除，visual_lines 全部是已物化的绝对坐标。
     }
 
-    /// Issue #901 第十轮问题5: 物化全部视觉行为绝对坐标的 Cow 视图。
+    /// Issue #901 第十三轮问题1+2+6: 返回 visual_lines 的 Cow 视图。
     ///
-    /// - `suffix_transform` 为 None → `Cow::Borrowed(&visual_lines)`，零分配。
-    /// - `suffix_transform` 为 Some → `Cow::Owned(物化后的 Vec)`，O(n) 物化。
-    ///
-    /// 消费方用此方法代替直接访问 `&self.visual_lines`，
-    /// 以正确处理增量编辑后未物化的后缀段。
-    /// 物化只在 `suffix_transform` 非空时发生（段前插入/删除），
-    /// 纯字符替换（等长同高）不物化。
-    ///
-    /// Issue #901 第十一轮问题2: 优化物化路径——只对受影响范围
-    /// `[start_line_idx, end_line_idx)` 的行应用平移变换，
-    /// 其余行直接 clone 基础值（已是正确绝对坐标），
-    /// 避免逐行调用 `resolve_visual_line` 的 match 分支开销。
-    /// 消费方若持有 `&mut self`，建议先调用 `materialize_suffix_in_place`
-    /// 就地物化并清除 transform，后续 `resolved_visual_lines` 即走零分配借用路径。
+    /// 移除 SuffixTransform 后，`visual_lines` 全部是已物化的绝对坐标，
+    /// 直接返回 `Cow::Borrowed`，零分配。保留方法签名以兼容消费方。
     pub fn resolved_visual_lines(&self) -> Cow<'_, [VisualLine]> {
-        match self.suffix_transform {
-            Some(t) if !t.is_identity() => {
-                let total = self.visual_lines.len();
-                let mut resolved: Vec<VisualLine> = self.visual_lines.as_slice().to_vec();
-                let apply_start = t.start_line_idx.min(total);
-                let apply_end = t.end_line_idx.min(total);
-                for i in apply_start..apply_end {
-                    let vl = &mut resolved[i];
-                    vl.y += t.y_delta;
-                    if t.byte_delta != 0 {
-                        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
-                        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
-                        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
-                    }
-                    if t.qchar_delta != 0 {
-                        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
-                        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
-                    }
-                    if t.line_id_delta != 0 {
-                        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
-                    }
-                }
-                Cow::Owned(resolved)
-            }
-            _ => Cow::Borrowed(self.visual_lines.as_slice()),
-        }
+        Cow::Borrowed(self.visual_lines.as_slice())
     }
 
     pub fn cursor_rect(
@@ -510,31 +405,8 @@ impl CanonicalDocumentVisualSnapshot {
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,
-            // Issue #901 第十轮问题5: 传递后缀段平移变换，消费方按需解析。
-            suffix_transform: self.suffix_transform,
         }
     }
-}
-
-/// Issue #901 第十轮问题5: 对单行应用后缀段平移变换，返回绝对坐标。
-///
-/// `base` 是旧绝对坐标（基础值），`t` 是平移变换。
-/// 返回 `base` 的 y/byte/qchar/line_id 加上对应 delta。
-fn apply_suffix_transform(mut vl: VisualLine, t: SuffixTransform) -> VisualLine {
-    vl.y += t.y_delta;
-    if t.byte_delta != 0 {
-        vl.byte_start = (vl.byte_start as i64 + t.byte_delta) as usize;
-        vl.byte_end = (vl.byte_end as i64 + t.byte_delta) as usize;
-        vl.para_start = (vl.para_start as i64 + t.byte_delta) as usize;
-    }
-    if t.qchar_delta != 0 {
-        vl.qchar_start = (vl.qchar_start as i64 + t.qchar_delta) as usize;
-        vl.qchar_end = (vl.qchar_end as i64 + t.qchar_delta) as usize;
-    }
-    if t.line_id_delta != 0 {
-        vl.id = (vl.id as i64 + t.line_id_delta) as usize;
-    }
-    vl
 }
 
 // 本文件只留 snapshot 的数据结构与其构造方法；

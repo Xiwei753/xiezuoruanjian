@@ -38,6 +38,18 @@ fn qquickwindow_after_frame_end_signal() -> qmetaobject::Signal<fn()> {
     }
 }
 
+/// Issue #901 第十三轮问题5: QQuickWindow::sceneGraphInvalidated 信号。
+/// 在渲染线程触发，场景图被销毁/重建时 emit。用于在渲染线程安全清理
+/// g_incremental_para_map 中该 item 的映射条目。
+fn qquickwindow_scene_graph_invalidated_signal() -> qmetaobject::Signal<fn()> {
+    // SAFETY: QQuickWindow::sceneGraphInvalidated has the exact signature void().
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickWindow::sceneGraphInvalidated;
+        }))
+    }
+}
+
 fn bind_frame_submission_window(
     window_ptr: *mut std::ffi::c_void,
     item_context_ptr: *mut std::ffi::c_void,
@@ -78,6 +90,27 @@ fn bind_frame_submission_window(
     };
     connections.push(Box::new(move || after_synchronizing.disconnect()));
     connections.push(Box::new(move || after_frame_end.disconnect()));
+
+    // Issue #901 第十三轮问题5: 连接 sceneGraphInvalidated 信号。
+    // 该信号在渲染线程触发（场景图被销毁/重建时），回调直接在渲染线程执行。
+    // 在回调中清理 g_incremental_para_map[item_context_ptr]，与同在渲染线程的
+    // update_paint_node 读写互斥安全。
+    // item_context_ptr 是 C++ QQuickItem* 指针，用作 g_incremental_para_map 的 key。
+    // clear_incremental_para_map_render_thread 只按指针值 erase，不解引用，安全。
+    let scene_graph_item_key = item_context_ptr;
+    // SAFETY: window_ptr is a live QQuickWindow pointer; sceneGraphInvalidated has
+    // void() signature; the callback captures only a raw pointer value (Copy type)
+    // and passes it to a C++ function that only uses it as an unordered_map key.
+    let mut scene_graph_invalidated = unsafe {
+        qmetaobject::connect(
+            window_ptr,
+            qquickwindow_scene_graph_invalidated_signal(),
+            move || {
+                qt_text_node::clear_incremental_para_map_render_thread(scene_graph_item_key);
+            },
+        )
+    };
+    connections.push(Box::new(move || scene_graph_invalidated.disconnect()));
 
     // SAFETY: These live Qt pointers come from this item/window binding. The C++ wrapper
     // stores the item as the queued connection context and captures this generation.
@@ -163,6 +196,22 @@ impl QQuickItem for SujianEditorItem {
         self.request_static_repaint();
     }
 
+    /// Issue #901 第十三轮问题5: Qt 官方 `QQuickItem::releaseResources()` 在 GUI 线程触发。
+    ///
+    /// 涉及 render 资源的清理需使用 `QQuickWindow::scheduleRenderJob()`，在渲染线程
+    /// 执行清理 job。`g_incremental_para_map` 被 `update_paint_node`（渲染线程）读写，
+    /// GUI 线程不能直接 erase（跨线程数据竞争）。
+    ///
+    /// `schedule_clear_incremental_para_map` 通过 `scheduleRenderJob` 在渲染线程
+    /// 安全清理 `g_incremental_para_map[item_ptr]`。erase 只按指针值移除 map 条目，
+    /// 不解引用 item_ptr，即使 job 执行时 item 已被销毁也安全。
+    fn release_resources(&mut self) {
+        let item_ptr = self.get_cpp_object();
+        if !item_ptr.is_null() {
+            qt_text_node::schedule_clear_incremental_para_map(item_ptr);
+        }
+    }
+
     fn update_paint_node(
         &mut self,
         mut node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
@@ -220,15 +269,10 @@ impl QQuickItem for SujianEditorItem {
             1.0
         };
 
-        // Issue #901 第十二轮问题4: 检查延迟清理标记。
-        // Drop/切章时在 GUI 线程设置标记，此处渲染线程检查并执行清理，
-        // 避免 GUI 线程与渲染线程对全局 g_incremental_para_map 的数据竞争。
-        // update_paint_node 在 Qt Scene Graph 渲染线程执行，GUI 线程此时被阻塞，
-        // 此处清理 map 与同在渲染线程的 update_text_nodes_incremental 读写互斥安全。
-        if self.pending_clear_incremental_map.get() && !item_ptr.is_null() {
-            qt_text_node::clear_incremental_para_map(item_ptr);
-            self.pending_clear_incremental_map.set(false);
-        }
+        // Issue #901 第十三轮问题5: 移除 pending_clear_incremental_map 延迟清理机制。
+        // 旧机制在 Drop/切章时设置标记，依赖下一次 update_paint_node 消费，
+        // 但 Drop 后 item 不再有下一帧，标记永远不会被消费。
+        // 新机制通过 release_resources() + sceneGraphInvalidated 在渲染线程安全清理。
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
