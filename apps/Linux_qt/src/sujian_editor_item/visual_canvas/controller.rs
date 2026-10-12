@@ -197,6 +197,27 @@ impl CanvasController {
             && (has_visible_contributions || scene.pixel_contributions.is_empty());
         if frame_settled {
             self.revision_chain.reset_to_committed(latest);
+        } else {
+            // Issue #901 问题5：画面还在过渡中（有旧/中间 revision 的可见贡献），
+            // 不 reset。但按本帧像素贡献精确清理 `intermediate_maps` 中不再被
+            // 任何贡献引用的旧 revision，避免 `intermediate_maps` 随历史编辑次数
+            // 无限增长。
+            //
+            // 每笔 `compose` 都向 `intermediate_maps` 插入新中间 revision，若从不
+            // 清理，`compose()` 每笔对所有旧 revision 逐条 `OffsetMap::compose`，
+            // 单笔成本 O(历史编辑数)——连续写作会让处理越来越慢，违背"长章只改
+            // 当前段落"。此处按当前 `PresentedScene.pixel_contributions` 实际引用
+            // 的 `source_revision` 精确 retain，使 `intermediate_maps` 规模受当前
+            // 画面可见贡献数约束。
+            //
+            // `presented_revision` / `latest_revision` 不在 `intermediate_maps` 中，
+            // 传入它们也无害。`reset_to_committed` 已彻底清空，settled 分支无需再调。
+            let referenced_revisions: Vec<EditorRevision> = scene
+                .pixel_contributions
+                .iter()
+                .map(|c| c.source_revision)
+                .collect();
+            self.revision_chain.retain_revisions(&referenced_revisions);
         }
 
         // 更新 TextFrontier 的可见范围为已提交帧的可见范围。

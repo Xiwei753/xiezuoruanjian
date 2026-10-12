@@ -12,7 +12,7 @@
 //! - 新帧提交后调用 `reset_to_committed` 把 presented_revision 前进到该帧的
 //!   revision，累计映射归零。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use writer_core::editor::{EditorRevision, OffsetMap};
 
 /// 从 `presented_revision` 到 `latest_revision` 的累计 offset map 组合。
@@ -81,6 +81,14 @@ impl RevisionChain {
     /// `OffsetMap::compose` 精确组合，保留中间 unchanged islands。
     ///
     /// 连续中间编辑没有已提交帧时只累计映射，不从中间未显示状态生成 glyph。
+    ///
+    /// Issue #901 问题5：每次 `compose` 都会向 `intermediate_maps` 插入一个新
+    /// 中间 revision（第 2 步），且第 1 步对所有已有中间映射逐条 `compose`。
+    /// 若不清理，`intermediate_maps` 随历史编辑次数线性增长，单笔 `compose`
+    /// 成本 O(n)。调用方应在帧 commit 后用 `retain_revisions` 按当前
+    /// `PresentedScene.pixel_contributions` 精确清理不再引用的旧 revision，
+    /// 使 `intermediate_maps` 只保留当前画面实际引用的后缀映射，单笔成本
+    /// 退化为 O(可见贡献数) 而非 O(历史编辑数)。
     pub(crate) fn compose(&mut self, next_offset_map: &OffsetMap, new_revision: EditorRevision) {
         // Issue #901 第七轮：维护中间 revision → latest 的后缀映射链。
         //
@@ -89,6 +97,11 @@ impl RevisionChain {
         // 2. 旧的 `latest_revision` 若不等于 `presented_revision`，它变成新的中间
         //    revision，其到新 latest 的映射就是 `next_offset_map` 本身。
         // 3. 推进 `accumulated_map` 和 `latest_revision`。
+        //
+        // Issue #901 问题5：第 1 步只遍历 `intermediate_maps` 中实际存在的条目
+        //（`values_mut()`），不遍历所有历史 revision。配合调用方在帧 commit 后
+        // 调用 `retain_revisions` 清理不再引用的旧 revision，使本步规模受当前
+        // 画面可见贡献数约束，不随历史编辑次数增长。
         let next_is_empty = next_offset_map.entries.is_empty();
 
         // 1. 已有中间映射与 next_offset_map 精确组合（latest 前进了）
@@ -251,8 +264,42 @@ impl RevisionChain {
         self.presented_revision = committed_revision;
         self.latest_revision = committed_revision;
         self.accumulated_map = None;
-        // Issue #901 第七轮：清空中间映射链，所有中间 revision 不再有效。
+        // Issue #901 第七轮 / 问题5：彻底清空中间映射链，所有中间 revision 不再有效。
+        // clear() 移除所有条目，HashMap 变为空（len == 0，capacity 可能保留但
+        // 不影响正确性）。配合 retain_revisions 在帧 commit 后按像素贡献精确清理，
+        // 确保 intermediate_maps 不会随历史编辑次数无限增长。
         self.intermediate_maps.clear();
+        debug_assert!(self.intermediate_maps.is_empty());
+    }
+
+    /// Issue #901 问题5：清理 `intermediate_maps` 中不在 `referenced_revisions`
+    /// 列表中的条目，只保留当前 PresentedScene 实际引用的源 revision 的后缀映射。
+    ///
+    /// 帧 commit 后按像素贡献精确清理：调用方从 `scene.pixel_contributions`
+    /// 提取所有唯一的 `source_revision`，传给此方法。这避免 `intermediate_maps`
+    /// 随历史编辑次数无限增长——连续写作中每笔 `compose` 都会插入新中间 revision，
+    /// 若不清理，`compose()` 每笔都要对所有旧 revision 逐条 `OffsetMap::compose`，
+    /// 单笔处理成本随历史编辑次数增加，违背"长章只改当前段落"。
+    ///
+    /// `presented_revision` 和 `latest_revision` 不在 `intermediate_maps` 中
+    ///（它们不是中间 revision），不受此方法影响。`referenced_revisions` 中
+    /// 包含这两个 revision 也无害（`retain` 只作用于 `intermediate_maps` 的 key）。
+    ///
+    /// 传入的 slice 允许有重复条目，内部用 `HashSet` 去重后 O(1) 查找。
+    pub(crate) fn retain_revisions(&mut self, referenced_revisions: &[EditorRevision]) {
+        // Issue #901 问题5：用 HashSet 做保留集合，retain 回调 O(1) 查找。
+        // EditorRevision: Copy + Hash + Eq，迭代收集引用即可。
+        let keep: HashSet<&EditorRevision> = referenced_revisions.iter().collect();
+        self.intermediate_maps.retain(|rev, _| keep.contains(rev));
+    }
+
+    /// Issue #901 问题5：返回当前 `intermediate_maps` 中保留的 revision 数量，
+    /// 供调试和验证 `retain_revisions` / `reset_to_committed` 清理是否生效。
+    ///
+    /// 期望：帧 commit 且 `frame_settled` 后为 0（`reset_to_committed` 清空）；
+    /// 未 settled 但已 `retain_revisions` 后等于本帧可见贡献引用的中间 revision 数。
+    pub(crate) fn intermediate_map_count(&self) -> usize {
+        self.intermediate_maps.len()
     }
 
     /// 推进 latest revision 而不改变累计映射。
@@ -688,5 +735,207 @@ mod tests {
         assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), None);
         // rev1 中 b(2) 存活 → rev2 的 0
         assert_eq!(chain.map_to_latest(EditorRevision::new(1), 2), Some(0));
+    }
+
+    /// Issue #901 问题5：`retain_revisions` 清理不再引用的中间 revision，
+    /// `intermediate_map_count` 反映清理后的数量。
+    #[test]
+    fn retain_revisions_removes_unreferenced_intermediate_maps() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+
+        // 三笔连续前插，产生中间 revision rev1、rev2
+        // rev0→rev1: b(0)→1
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        // rev1→rev2: X(0)→1, b(1)→2
+        chain.compose(
+            &OffsetMap {
+                entries: vec![
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(0),
+                        new_byte_offset: Utf8ByteOffset::unchecked(1),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(1),
+                        new_byte_offset: Utf8ByteOffset::unchecked(2),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                ],
+            },
+            EditorRevision::new(2),
+        );
+        // rev2→rev3: Y(0)→1, X(1)→2, b(2)→3
+        chain.compose(
+            &OffsetMap {
+                entries: vec![
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(0),
+                        new_byte_offset: Utf8ByteOffset::unchecked(1),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(1),
+                        new_byte_offset: Utf8ByteOffset::unchecked(2),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(2),
+                        new_byte_offset: Utf8ByteOffset::unchecked(3),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                ],
+            },
+            EditorRevision::new(3),
+        );
+
+        // 三笔编辑后有两个中间 revision（rev1、rev2），rev0 是 presented、rev3 是 latest
+        assert_eq!(
+            chain.intermediate_map_count(),
+            2,
+            "三笔编辑后应有 rev1、rev2 两个中间 revision"
+        );
+
+        // 当前画面只引用 rev2 的贡献（rev1 的字已被 rev2 覆盖不再可见）
+        chain.retain_revisions(&[EditorRevision::new(2)]);
+        assert_eq!(
+            chain.intermediate_map_count(),
+            1,
+            "retain 后只保留 rev2 的后缀映射"
+        );
+        // rev2 仍能正确映射
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 0), Some(1));
+        // rev1 已被清理，无法映射（返回 None，与未知 revision 同语义）
+        assert_eq!(
+            chain.map_to_latest(EditorRevision::new(1), 0),
+            None,
+            "rev1 被 retain 清理后应无法映射"
+        );
+        // presented (rev0) 和 latest (rev3) 不受 retain 影响
+        assert_eq!(chain.map_to_latest(rev0, 0), Some(3));
+        assert_eq!(chain.map_to_latest(EditorRevision::new(3), 1), Some(1));
+    }
+
+    /// Issue #901 问题5：`retain_revisions` 传入空列表清空所有中间映射
+    ///（画面无任何可见贡献引用中间 revision 时）。
+    #[test]
+    fn retain_revisions_empty_list_clears_all() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(2));
+        assert_eq!(chain.intermediate_map_count(), 1);
+
+        chain.retain_revisions(&[]);
+        assert_eq!(chain.intermediate_map_count(), 0);
+    }
+
+    /// Issue #901 问题5：`retain_revisions` 传入含重复条目的 slice 仍正确清理。
+    #[test]
+    fn retain_revisions_handles_duplicate_entries() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(2));
+        // rev1 是中间 revision
+        assert_eq!(chain.intermediate_map_count(), 1);
+
+        // 重复传入 rev1，仍保留
+        chain.retain_revisions(&[EditorRevision::new(1), EditorRevision::new(1)]);
+        assert_eq!(chain.intermediate_map_count(), 1);
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 0), Some(1));
+    }
+
+    /// Issue #901 问题5：`retain_revisions` 保留 presented/latest revision
+    /// 无害（它们不在 intermediate_maps 中）。
+    #[test]
+    fn retain_revisions_with_presented_and_latest_is_noop_on_intermediates() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        // 两笔前插：rev0 的字符从 offset 0 → rev1 offset 1 → rev2 offset 2
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        chain.compose(&shifted_map(1, 2, 1), EditorRevision::new(2));
+        // rev1 是中间 revision
+        assert_eq!(chain.intermediate_map_count(), 1);
+
+        // 只传 presented(rev0) 和 latest(rev2)，不传中间 rev1 → rev1 被清理
+        chain.retain_revisions(&[rev0, EditorRevision::new(2)]);
+        assert_eq!(
+            chain.intermediate_map_count(),
+            0,
+            "中间 rev1 不在保留列表中，应被清理"
+        );
+        // presented 和 latest 仍能映射（它们不走 intermediate_maps）
+        // rev0 offset 0 → rev1 offset 1 → rev2 offset 2（两笔前推）
+        assert_eq!(chain.map_to_latest(rev0, 0), Some(2));
+        // latest rev2 的映射是 identity
+        assert_eq!(chain.map_to_latest(EditorRevision::new(2), 0), Some(0));
+    }
+
+    /// Issue #901 问题5：`reset_to_committed` 后 `intermediate_map_count` 为 0。
+    #[test]
+    fn reset_to_committed_clears_intermediate_map_count() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(2));
+        assert!(chain.intermediate_map_count() > 0);
+
+        chain.reset_to_committed(EditorRevision::new(2));
+        assert_eq!(
+            chain.intermediate_map_count(),
+            0,
+            "reset_to_committed 后中间映射应彻底清空"
+        );
+    }
+
+    /// Issue #901 问题5：retain 后保留的 revision 的映射仍然精确正确，
+    /// 不会因清理其他 revision 而受影响。
+    #[test]
+    fn retain_revisions_preserves_correctness_of_kept_revisions() {
+        let rev0 = EditorRevision::new(0);
+        let mut chain = RevisionChain::new(rev0);
+
+        // "b" → "Xb" → "YXb"
+        chain.compose(&shifted_map(0, 1, 1), EditorRevision::new(1));
+        chain.compose(
+            &OffsetMap {
+                entries: vec![
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(0),
+                        new_byte_offset: Utf8ByteOffset::unchecked(1),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                    OffsetMapEntry {
+                        old_byte_offset: Utf8ByteOffset::unchecked(1),
+                        new_byte_offset: Utf8ByteOffset::unchecked(2),
+                        length: 1,
+                        kind: writer_core::editor::OffsetMapKind::Shifted,
+                    },
+                ],
+            },
+            EditorRevision::new(2),
+        );
+
+        // 保留 rev1，清理其他（此处只有 rev1 一个中间）
+        chain.retain_revisions(&[EditorRevision::new(1)]);
+        // rev1 中 X(0) → rev2 的 1，retain 后仍正确
+        assert_eq!(
+            chain.map_to_latest(EditorRevision::new(1), 0),
+            Some(1),
+            "retain 后保留的 rev1 映射仍正确"
+        );
+        assert_eq!(chain.map_to_latest(EditorRevision::new(1), 1), Some(2));
+        // range 映射也仍正确
+        assert_eq!(
+            chain.map_range_to_latest(EditorRevision::new(1), 0, 1),
+            Some((1, 2))
+        );
     }
 }
