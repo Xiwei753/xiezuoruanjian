@@ -210,6 +210,30 @@ interface FrozenWindowGroupPlan {
   originalGlyphUtf16Ranges: Map<string, [number, number]> | null
   /** 原始完整 glyphIds 列表（包含范围内全部字形，不只是幸存的） */
   originalGlyphIds: string[]
+  /**
+   * Issue #879 第32轮复核问题2：物理源窗口的完整 glyphIds 列表。
+   *
+   * 从 baseMember.fullWindowGlyphIds 取值，而非 baseEntry.intervalGlyphIds（只是单个 interval 的 glyphIds）。
+   * 确保 MotionGlyphWindow.fullWindowGlyphIds 携带完整字形列表，
+   * commitDisplayedContext 冻结时 frozenIndex 能为窗口内所有字形建立索引。
+   */
+  fullWindowGlyphIds: string[]
+  /**
+   * Issue #879 第32轮复核问题2：物理源窗口的完整源 UTF-16 起始位置。
+   *
+   * 从 baseMember.fullWindowUtf16Start 取值，而非 baseMember.sourceUtf16Start（只是单个成员的起始）。
+   */
+  fullWindowUtf16Start: number
+  /**
+   * Issue #879 第32轮复核问题2：物理源窗口的完整源 UTF-16 结束位置。
+   */
+  fullWindowUtf16End: number
+  /**
+   * Issue #879 第32轮复核问题2：物理源窗口的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 从 baseMember.fullWindowGlyphUtf16Ranges 取值，而非 baseMember.glyphUtf16Ranges。
+   */
+  fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
 }
 
 /**
@@ -1446,7 +1470,12 @@ export class EditorMotionCoordinator {
           currentClipRight: bboxRight,
           currentPositionX: pieceGlyphX,
           currentPositionY: pieceGlyphY,
-          motionOwnerKind: 'insert'
+          motionOwnerKind: 'insert',
+          // Issue #879 第32轮复核问题2：insert 通道的完整窗口数据就是当前 piece 的数据
+          fullWindowGlyphIds: piece.glyphIds,
+          fullWindowUtf16Start: pieceUtf16Start,
+          fullWindowUtf16End: pieceUtf16End,
+          fullWindowGlyphUtf16Ranges: undefined,
         })
       }
     }
@@ -1517,7 +1546,12 @@ export class EditorMotionCoordinator {
           currentClipRight: bboxRight,
           currentPositionX: run.rect.x,
           currentPositionY: run.rect.y,
-          motionOwnerKind: 'deleted'
+          motionOwnerKind: 'deleted',
+          // Issue #879 第32轮复核问题2：deleted 通道的完整窗口数据就是当前 piece 的数据
+          fullWindowGlyphIds: piece.glyphIds,
+          fullWindowUtf16Start: pieceUtf16Start,
+          fullWindowUtf16End: pieceUtf16End,
+          fullWindowGlyphUtf16Ranges: undefined,
         })
       }
     }
@@ -1541,6 +1575,164 @@ export class EditorMotionCoordinator {
     // Issue #879 复核评论6120195493：用 FrozenWindowGroupPlan 替代 frozenGroupDelta，
     // 窗口级属性从原始 FrozenWindowSpan/MotionGlyphWindow 选取，不由首成员抢占。
     const frozenGroupPlans = new Map<string, FrozenWindowGroupPlan>()
+
+    // Issue #879 第32轮复核问题1：把 frozenMembersByKey 分组扫描提前到
+    // retainedMoves 全部 pieces/intervals 之外。
+    // 旧代码在 for(piece) 循环内新建 frozenMembersByKey，导致每个 piece 只看到自己的
+    // frozen 成员。第一个 piece 可能只有隐藏成员（clipRects=[]、opacity=0），
+    // 而第二个 piece 有可见成员，但 frozenGroupPlans.has(renderNodeKey) continue
+    // 使得第二个 piece 的可见成员被跳过，group plan 用了隐藏成员的值。
+    // 修复：在所有 retainedMoves 之前做一遍全局预扫描，收集所有 frozen 成员，
+    // 为每个 renderNodeKey 选择第一个真正可见的成员（clipRects 有正面积且 opacity>0）。
+    {
+      const frozenMembersByKeyGlobal = new Map<string, FrozenMemberEntry[]>()
+
+      for (const move of plan.retainedMoves) {
+        const moveBoundariesScan = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
+        const newMoveBoundariesScan = clusterBoundaries(newText, move.newUtf16Start, move.newUtf16End)
+        for (const piece of move.pieces) {
+          // 计算 pieceNewX/Y（与循环内逻辑一致）
+          let pieceNewXScan = move.newRect.x
+          let pieceNewYScan = move.newRect.y
+          if (newMoveBoundariesScan.length === move.glyphIds.length + 1 &&
+              piece.firstIndex >= 0 && piece.lastIndex + 1 < newMoveBoundariesScan.length) {
+            const pieceNewUtf16StartScan = newMoveBoundariesScan[piece.firstIndex]
+            pieceNewXScan = EditorMotionCoordinator.xAtOffsetLocal(
+              newLayout, pieceNewUtf16StartScan, move.newRect.x)
+            pieceNewYScan = EditorMotionCoordinator.yAtOffsetLocal(
+              newLayout, pieceNewUtf16StartScan, move.newRect.y)
+          }
+          const intervalsScan = EditorMotionCoordinator.pieceIntervals(piece)
+          for (const interval of intervalsScan) {
+            if (interval.sourceMembers === undefined) continue
+
+            // 计算 interval 级别的目标位置（与循环内逻辑一致）
+            let intervalNewGlyphRectScan: RectLike | null = null
+            if (newMoveBoundariesScan.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundariesScan.length) {
+              const newIslandUtf16StartScan = newMoveBoundariesScan[interval.firstIndex]
+              const newIslandUtf16EndScan = newMoveBoundariesScan[interval.lastIndex + 1]
+              const newRectScan = glyphRectForRange(newLayout, newIslandUtf16StartScan, newIslandUtf16EndScan)
+              if (newRectScan !== null) {
+                intervalNewGlyphRectScan = newRectScan
+              }
+            }
+            let intervalIslandNewXScan = pieceNewXScan
+            let intervalIslandNewYScan = pieceNewYScan
+            if (newMoveBoundariesScan.length === move.glyphIds.length + 1 &&
+                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundariesScan.length) {
+              const islandNewUtf16StartScan = newMoveBoundariesScan[interval.firstIndex]
+              intervalIslandNewXScan = EditorMotionCoordinator.xAtOffsetLocal(
+                newLayout, islandNewUtf16StartScan, move.newRect.x)
+              intervalIslandNewYScan = EditorMotionCoordinator.yAtOffsetLocal(
+                newLayout, islandNewUtf16StartScan, move.newRect.y)
+            }
+            const ownTargetXScan = intervalNewGlyphRectScan !== null
+              ? intervalNewGlyphRectScan.x : intervalIslandNewXScan
+            const ownTargetYScan = intervalNewGlyphRectScan !== null
+              ? intervalNewGlyphRectScan.y : intervalIslandNewYScan
+
+            for (const member of interval.sourceMembers) {
+              const memberRoleScan = member.role !== undefined
+                ? member.role
+                : (member.sourceRevision === newRevision ? 'target' : 'frozen')
+              if (memberRoleScan !== 'frozen') continue
+
+              const keyScan = member.renderNodeKey
+              if (!frozenMembersByKeyGlobal.has(keyScan)) {
+                frozenMembersByKeyGlobal.set(keyScan, [])
+              }
+              const entryScan: FrozenMemberEntry = {
+                member: member,
+                ownTargetX: ownTargetXScan,
+                ownTargetY: ownTargetYScan,
+                intervalGlyphIds: interval.glyphIds
+              }
+              frozenMembersByKeyGlobal.get(keyScan)!.push(entryScan)
+            }
+          }
+        }
+      }
+
+      // 为每个 renderNodeKey 创建统一的 FrozenWindowGroupPlan
+      // Issue #879 第32轮复核问题1：选择第一个真正可见的成员（clipRects 有正面积且 opacity>0）
+      // 作为 baseMember。如果所有成员都隐藏，才用第一个成员的值。
+      // Issue #879 第32轮复核问题2：originalGlyphIds/utf16Start/End/glyphUtf16Ranges
+      // 从 baseMember 的 fullWindow* 字段取值，而不是从 intervalGlyphIds/sourceUtf16Start/End 取值。
+      const frozenKeysGlobal = Array.from(frozenMembersByKeyGlobal.keys())
+      for (const renderNodeKey of frozenKeysGlobal) {
+        const entries = frozenMembersByKeyGlobal.get(renderNodeKey)!
+
+        // 选择第一个真正可见的成员（clipRects 有正面积且 opacity>0）作为 baseMember
+        let baseEntry = entries[0]
+        for (const entry of entries) {
+          const memberOpacity = entry.member.opacity !== undefined ? entry.member.opacity : 1
+          const hasVisibleClip = entry.member.clipRects.some(
+            (cr: RectLike): boolean => cr.width > 0 && cr.height > 0
+          )
+          if (hasVisibleClip && memberOpacity > 0) {
+            baseEntry = entry
+            break
+          }
+        }
+        const baseMember = baseEntry.member
+
+        const gpStartOffsetX = baseMember.offsetX
+        const gpStartOffsetY = baseMember.offsetY
+        const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
+        const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
+        const gpTargetOffsetX = baseEntry.ownTargetX - baseMember.sourceGlyphRect.x
+        const gpTargetOffsetY = baseEntry.ownTargetY - baseMember.sourceGlyphRect.y
+        const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
+          (gpTargetOffsetX - gpStartOffsetX) * p
+        const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
+          (gpTargetOffsetY - gpStartOffsetY) * p
+        const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
+
+        // Issue #879 第32轮复核问题2：从 baseMember 的 fullWindow* 字段取值，
+        // 而不是从 intervalGlyphIds/sourceUtf16Start/End/glyphUtf16Ranges 取值。
+        // fullWindow* 字段保存了物理源窗口首次创建时的完整数据，
+        // 确保 MotionGlyphWindow 携带完整字形列表和逐字映射。
+        const fullWindowGlyphIds = baseMember.fullWindowGlyphIds !== undefined
+          ? baseMember.fullWindowGlyphIds : baseEntry.intervalGlyphIds
+        const fullWindowUtf16Start = baseMember.fullWindowUtf16Start !== undefined
+          ? baseMember.fullWindowUtf16Start : baseMember.sourceUtf16Start
+        const fullWindowUtf16End = baseMember.fullWindowUtf16End !== undefined
+          ? baseMember.fullWindowUtf16End : baseMember.sourceUtf16End
+        const fullWindowGlyphUtf16Ranges = baseMember.fullWindowGlyphUtf16Ranges !== undefined
+          ? baseMember.fullWindowGlyphUtf16Ranges
+          : (baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null)
+
+        frozenGroupPlans.set(renderNodeKey, {
+          startOffsetX: gpStartOffsetX,
+          startOffsetY: gpStartOffsetY,
+          startAlpha: gpStartAlpha,
+          endAlpha: gpEndAlpha,
+          targetOffsetX: gpTargetOffsetX,
+          targetOffsetY: gpTargetOffsetY,
+          currentX: gpCurrentX,
+          currentY: gpCurrentY,
+          currentAlpha: gpCurrentAlpha,
+          renderNodeKey: renderNodeKey,
+          runId: baseMember.runId,
+          sourceRevision: baseMember.sourceRevision,
+          sourceKind: baseMember.sourceKind,
+          windowInstanceId: baseMember.windowInstanceId !== undefined
+            ? baseMember.windowInstanceId : '',
+          originalUtf16Start: baseMember.sourceUtf16Start,
+          originalUtf16End: baseMember.sourceUtf16End,
+          originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
+            ? baseMember.glyphUtf16Ranges : null,
+          originalGlyphIds: baseEntry.intervalGlyphIds,
+          // Issue #879 第32轮复核问题2：完整窗口数据
+          fullWindowGlyphIds: fullWindowGlyphIds,
+          fullWindowUtf16Start: fullWindowUtf16Start,
+          fullWindowUtf16End: fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
+        })
+      }
+    }
+
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
@@ -1584,118 +1776,9 @@ export class EditorMotionCoordinator {
         // 每个窗口有自己的 offset/clipRect/glyphIds，clipRect 和字形位置一致。
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
 
-        // Issue #879 复核评论6120849815 问题1：预计算 FrozenWindowGroupPlan。
-        // 在处理任何 interval 之前，为每个 renderNodeKey 预计算统一的 group plan。
-        // 预计算考虑所有 interval 中共享该 renderNodeKey 的所有 frozen 成员，
-        // 选择第一个可见成员（clipRects 非空）作为 baseMember。
-        // 如果所有成员都隐藏，才用第一个成员的值。
-        // 这避免了按 interval 创建 group plan 时，隐藏成员（clipRects=[]、opacity=0）
-        // 抢占整窗 offset/alpha 的问题。
-        {
-          const frozenMembersByKey = new Map<string, FrozenMemberEntry[]>()
-
-          for (const interval of intervals) {
-            if (interval.sourceMembers === undefined) continue
-
-            // 计算 interval 级别的目标位置（与循环内逻辑一致）
-            let intervalNewGlyphRect: RectLike | null = null
-            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
-                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
-              const newIslandUtf16Start = newMoveBoundaries[interval.firstIndex]
-              const newIslandUtf16End = newMoveBoundaries[interval.lastIndex + 1]
-              const newRect = glyphRectForRange(newLayout, newIslandUtf16Start, newIslandUtf16End)
-              if (newRect !== null) {
-                intervalNewGlyphRect = newRect
-              }
-            }
-            let intervalIslandNewX = pieceNewX
-            let intervalIslandNewY = pieceNewY
-            if (newMoveBoundaries.length === move.glyphIds.length + 1 &&
-                interval.firstIndex >= 0 && interval.lastIndex + 1 < newMoveBoundaries.length) {
-              const islandNewUtf16Start = newMoveBoundaries[interval.firstIndex]
-              intervalIslandNewX = EditorMotionCoordinator.xAtOffsetLocal(
-                newLayout, islandNewUtf16Start, move.newRect.x)
-              intervalIslandNewY = EditorMotionCoordinator.yAtOffsetLocal(
-                newLayout, islandNewUtf16Start, move.newRect.y)
-            }
-            const ownTargetX = intervalNewGlyphRect !== null
-              ? intervalNewGlyphRect.x : intervalIslandNewX
-            const ownTargetY = intervalNewGlyphRect !== null
-              ? intervalNewGlyphRect.y : intervalIslandNewY
-
-            for (const member of interval.sourceMembers) {
-              const memberRole = member.role !== undefined
-                ? member.role
-                : (member.sourceRevision === newRevision ? 'target' : 'frozen')
-              if (memberRole !== 'frozen') continue
-
-              const key = member.renderNodeKey
-              if (!frozenMembersByKey.has(key)) {
-                frozenMembersByKey.set(key, [])
-              }
-              const entry: FrozenMemberEntry = {
-                member: member,
-                ownTargetX: ownTargetX,
-                ownTargetY: ownTargetY,
-                intervalGlyphIds: interval.glyphIds
-              }
-              frozenMembersByKey.get(key)!.push(entry)
-            }
-          }
-
-          // 为每个 renderNodeKey 创建统一的 FrozenWindowGroupPlan
-          // ArkTS 不允许解构声明（arkts-no-destruct-decls），用 keys() + get() 显式访问
-          const frozenKeys = Array.from(frozenMembersByKey.keys())
-          for (const renderNodeKey of frozenKeys) {
-            const entries = frozenMembersByKey.get(renderNodeKey)!
-            if (frozenGroupPlans.has(renderNodeKey)) continue
-
-            // 选择第一个可见成员（clipRects 非空）作为 baseMember
-            let baseEntry = entries[0]
-            for (const entry of entries) {
-              if (entry.member.clipRects.length > 0) {
-                baseEntry = entry
-                break
-              }
-            }
-            const baseMember = baseEntry.member
-
-            const gpStartOffsetX = baseMember.offsetX
-            const gpStartOffsetY = baseMember.offsetY
-            const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
-            const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
-            const gpTargetOffsetX = baseEntry.ownTargetX - baseMember.sourceGlyphRect.x
-            const gpTargetOffsetY = baseEntry.ownTargetY - baseMember.sourceGlyphRect.y
-            const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
-              (gpTargetOffsetX - gpStartOffsetX) * p
-            const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
-              (gpTargetOffsetY - gpStartOffsetY) * p
-            const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
-
-            frozenGroupPlans.set(renderNodeKey, {
-              startOffsetX: gpStartOffsetX,
-              startOffsetY: gpStartOffsetY,
-              startAlpha: gpStartAlpha,
-              endAlpha: gpEndAlpha,
-              targetOffsetX: gpTargetOffsetX,
-              targetOffsetY: gpTargetOffsetY,
-              currentX: gpCurrentX,
-              currentY: gpCurrentY,
-              currentAlpha: gpCurrentAlpha,
-              renderNodeKey: renderNodeKey,
-              runId: baseMember.runId,
-              sourceRevision: baseMember.sourceRevision,
-              sourceKind: baseMember.sourceKind,
-              windowInstanceId: baseMember.windowInstanceId !== undefined
-                ? baseMember.windowInstanceId : '',
-              originalUtf16Start: baseMember.sourceUtf16Start,
-              originalUtf16End: baseMember.sourceUtf16End,
-              originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
-                ? baseMember.glyphUtf16Ranges : null,
-              originalGlyphIds: baseEntry.intervalGlyphIds,
-            })
-          }
-        }
+        // Issue #879 第32轮复核问题1：frozenMembersByKey 分组扫描已提前到
+        // retainedMoves 全部 pieces/intervals 之外，此处不再重新创建 group plan。
+        // frozenGroupPlans 已在 for (const move) 循环之前预计算完成。
 
         for (const interval of intervals) {
           // 该岛在旧布局中的 utf16 范围
@@ -1877,57 +1960,73 @@ export class EditorMotionCoordinator {
               // 同 renderNodeKey 的所有成员用同一份窗口级 offset/alpha/position，
               // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
               // offsetX/offsetY/opacity 等字段）选取，确保隐藏成员不影响整张窗口位置/alpha。
-              if (memberRole === 'frozen') {
-                // Issue #879 复核评论6120849815 问题1：group plan 已在 interval 循环之前
-                // 预计算完成（跨所有 interval 选可见 baseMember），此处直接使用。
-                // 仅当预计算遗漏时才回退到按当前 interval 的 effectiveMembers 创建。
-                let groupPlan = frozenGroupPlans.get(member.renderNodeKey)
-                if (groupPlan === undefined) {
-                  // 回退：按当前 interval 的 effectiveMembers 创建 group plan。
-                  // 注意：此回退只在当前 interval 内搜索可见成员，可能不如预计算准确。
-                  let baseMember = member
-                  for (const m of effectiveMembers) {
-                    if (m.renderNodeKey === member.renderNodeKey &&
-                        m.clipRects.length > 0) {
-                      baseMember = m
-                      break
+                if (memberRole === 'frozen') {
+                  // Issue #879 第32轮复核问题1：group plan 已在 retainedMoves 循环之前
+                  // 全局预计算完成（跨所有 pieces/intervals 选可见 baseMember），此处直接使用。
+                  // 仅当预计算遗漏时才回退到按当前 interval 的 effectiveMembers 创建。
+                  let groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                  if (groupPlan === undefined) {
+                    // 回退：按当前 interval 的 effectiveMembers 创建 group plan。
+                    // 注意：此回退只在当前 interval 内搜索可见成员，可能不如预计算准确。
+                    let baseMember = member
+                    for (const m of effectiveMembers) {
+                      if (m.renderNodeKey === member.renderNodeKey &&
+                          m.clipRects.length > 0) {
+                        baseMember = m
+                        break
+                      }
                     }
+                    const gpStartOffsetX = baseMember.offsetX
+                    const gpStartOffsetY = baseMember.offsetY
+                    const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
+                    const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
+                    const gpTargetOffsetX = ownTargetX - baseMember.sourceGlyphRect.x
+                    const gpTargetOffsetY = ownTargetY - baseMember.sourceGlyphRect.y
+                    const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
+                      (gpTargetOffsetX - gpStartOffsetX) * p
+                    const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
+                      (gpTargetOffsetY - gpStartOffsetY) * p
+                    const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
+
+                    // Issue #879 第32轮复核问题2：从 baseMember 的 fullWindow* 字段取值
+                    const fullWindowGlyphIdsFallback = baseMember.fullWindowGlyphIds !== undefined
+                      ? baseMember.fullWindowGlyphIds : interval.glyphIds
+                    const fullWindowUtf16StartFallback = baseMember.fullWindowUtf16Start !== undefined
+                      ? baseMember.fullWindowUtf16Start : baseMember.sourceUtf16Start
+                    const fullWindowUtf16EndFallback = baseMember.fullWindowUtf16End !== undefined
+                      ? baseMember.fullWindowUtf16End : baseMember.sourceUtf16End
+                    const fullWindowGlyphUtf16RangesFallback = baseMember.fullWindowGlyphUtf16Ranges !== undefined
+                      ? baseMember.fullWindowGlyphUtf16Ranges
+                      : (baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null)
+
+                    groupPlan = {
+                      startOffsetX: gpStartOffsetX,
+                      startOffsetY: gpStartOffsetY,
+                      startAlpha: gpStartAlpha,
+                      endAlpha: gpEndAlpha,
+                      targetOffsetX: gpTargetOffsetX,
+                      targetOffsetY: gpTargetOffsetY,
+                      currentX: gpCurrentX,
+                      currentY: gpCurrentY,
+                      currentAlpha: gpCurrentAlpha,
+                      renderNodeKey: member.renderNodeKey,
+                      runId: member.runId,
+                      sourceRevision: member.sourceRevision,
+                      sourceKind: member.sourceKind,
+                      windowInstanceId: member.windowInstanceId !== undefined
+                        ? member.windowInstanceId : '',
+                      originalUtf16Start: member.sourceUtf16Start,
+                      originalUtf16End: member.sourceUtf16End,
+                      originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
+                        ? baseMember.glyphUtf16Ranges : null,
+                      originalGlyphIds: interval.glyphIds,
+                      fullWindowGlyphIds: fullWindowGlyphIdsFallback,
+                      fullWindowUtf16Start: fullWindowUtf16StartFallback,
+                      fullWindowUtf16End: fullWindowUtf16EndFallback,
+                      fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16RangesFallback,
+                    }
+                    frozenGroupPlans.set(member.renderNodeKey, groupPlan)
                   }
-                  const gpStartOffsetX = baseMember.offsetX
-                  const gpStartOffsetY = baseMember.offsetY
-                  const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
-                  const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
-                  const gpTargetOffsetX = ownTargetX - baseMember.sourceGlyphRect.x
-                  const gpTargetOffsetY = ownTargetY - baseMember.sourceGlyphRect.y
-                  const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
-                    (gpTargetOffsetX - gpStartOffsetX) * p
-                  const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
-                    (gpTargetOffsetY - gpStartOffsetY) * p
-                  const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
-                  groupPlan = {
-                    startOffsetX: gpStartOffsetX,
-                    startOffsetY: gpStartOffsetY,
-                    startAlpha: gpStartAlpha,
-                    endAlpha: gpEndAlpha,
-                    targetOffsetX: gpTargetOffsetX,
-                    targetOffsetY: gpTargetOffsetY,
-                    currentX: gpCurrentX,
-                    currentY: gpCurrentY,
-                    currentAlpha: gpCurrentAlpha,
-                    renderNodeKey: member.renderNodeKey,
-                    runId: member.runId,
-                    sourceRevision: member.sourceRevision,
-                    sourceKind: member.sourceKind,
-                    windowInstanceId: member.windowInstanceId !== undefined
-                      ? member.windowInstanceId : '',
-                    originalUtf16Start: member.sourceUtf16Start,
-                    originalUtf16End: member.sourceUtf16End,
-                    originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
-                      ? baseMember.glyphUtf16Ranges : null,
-                    originalGlyphIds: interval.glyphIds,
-                  }
-                  frozenGroupPlans.set(member.renderNodeKey, groupPlan)
-                }
                 // frozen 成员的目标位置 = sourceGlyphRect + groupPlan.targetOffset
                 memberTargetScreenX = member.sourceGlyphRect.x + groupPlan.targetOffsetX
                 memberTargetScreenY = member.sourceGlyphRect.y + groupPlan.targetOffsetY
@@ -2141,6 +2240,11 @@ export class EditorMotionCoordinator {
               let windowUtf16End = memberUtf16End
               let windowGlyphIds = interval.glyphIds
               let windowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
+              // Issue #879 第32轮复核问题2：fullWindow* 字段——物理源窗口的完整数据
+              let windowFullWindowGlyphIds: string[] | undefined = undefined
+              let windowFullWindowUtf16Start: number | undefined = undefined
+              let windowFullWindowUtf16End: number | undefined = undefined
+              let windowFullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
               if (memberRole === 'frozen') {
                 const groupPlan = frozenGroupPlans.get(member.renderNodeKey)
                 if (groupPlan !== undefined) {
@@ -2157,7 +2261,20 @@ export class EditorMotionCoordinator {
                   windowUtf16End = groupPlan.originalUtf16End
                   windowGlyphIds = groupPlan.originalGlyphIds
                   windowGlyphUtf16Ranges = groupPlan.originalGlyphUtf16Ranges
+                  // Issue #879 第32轮复核问题2：从 groupPlan 的 fullWindow* 字段取值
+                  windowFullWindowGlyphIds = groupPlan.fullWindowGlyphIds
+                  windowFullWindowUtf16Start = groupPlan.fullWindowUtf16Start
+                  windowFullWindowUtf16End = groupPlan.fullWindowUtf16End
+                  windowFullWindowGlyphUtf16Ranges = groupPlan.fullWindowGlyphUtf16Ranges
                 }
+              } else {
+                // Issue #879 第32轮复核问题2：target 成员的完整窗口数据就是当前 interval 的数据
+                // target 成员本来就是新源窗口，interval 级别的数据就是完整的
+                windowFullWindowGlyphIds = interval.glyphIds
+                windowFullWindowUtf16Start = newSourceUtf16Start
+                windowFullWindowUtf16End = newSourceUtf16End
+                // target 成员的 glyphUtf16Ranges 尚未计算，用 undefined 表示由下游 buildGlyphUtf16Ranges 计算
+                windowFullWindowGlyphUtf16Ranges = undefined
               }
 
               const memberWindow: MotionGlyphWindow = {
@@ -2189,7 +2306,12 @@ export class EditorMotionCoordinator {
                 currentPositionY: windowCurrentY,
                 motionOwnerKind: 'reflow',
                 opacity: memberOpacity,
-                glyphUtf16Ranges: windowGlyphUtf16Ranges
+                glyphUtf16Ranges: windowGlyphUtf16Ranges,
+                // Issue #879 第32轮复核问题2：物理源窗口的完整数据
+                fullWindowGlyphIds: windowFullWindowGlyphIds,
+                fullWindowUtf16Start: windowFullWindowUtf16Start,
+                fullWindowUtf16End: windowFullWindowUtf16End,
+                fullWindowGlyphUtf16Ranges: windowFullWindowGlyphUtf16Ranges,
               }
               // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
               // 合并各字的 clipRects 到一个 MotionGlyphWindow，避免重复 key 丢字。
@@ -2234,6 +2356,12 @@ export class EditorMotionCoordinator {
                       existing.utf16Start = gp.originalUtf16Start
                       existing.utf16End = gp.originalUtf16End
                       existing.glyphIds = gp.originalGlyphIds
+                      // Issue #879 第32轮复核问题2：聚合时也更新 fullWindow* 字段，
+                      // 确保聚合窗口携带完整窗口数据供冻结索引使用。
+                      existing.fullWindowGlyphIds = gp.fullWindowGlyphIds
+                      existing.fullWindowUtf16Start = gp.fullWindowUtf16Start
+                      existing.fullWindowUtf16End = gp.fullWindowUtf16End
+                      existing.fullWindowGlyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
                     }
                   }
                 } else {
@@ -2669,7 +2797,13 @@ export class EditorMotionCoordinator {
             currentPositionY: islandCurrentY,
             motionOwnerKind: 'reflow',
             // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出时旧源 opacity=1-p
-            opacity: needsSourceCrossfade ? 1 - p : undefined
+            opacity: needsSourceCrossfade ? 1 - p : undefined,
+            // Issue #879 第32轮复核问题2：fallback 分支 frozen 窗口的完整窗口数据
+            // 此分支没有 group plan，fullWindow* 就是当前 interval 的数据
+            fullWindowGlyphIds: interval.glyphIds,
+            fullWindowUtf16Start: iStart,
+            fullWindowUtf16End: iEnd,
+            fullWindowGlyphUtf16Ranges: undefined,
           })
           // Issue #879 复核评论6103606574 缺口1：新旧源交叉淡入淡出。
           // 当新旧字宽/高不同时，额外输出新源窗口(opacity=p)，与旧源互补。
@@ -2715,7 +2849,12 @@ export class EditorMotionCoordinator {
               currentPositionX: islandCurrentX,
               currentPositionY: islandCurrentY,
               motionOwnerKind: 'reflow',
-              opacity: p
+              opacity: p,
+              // Issue #879 第32轮复核问题2：fallback 分支 target 窗口的完整窗口数据
+              fullWindowGlyphIds: interval.glyphIds,
+              fullWindowUtf16Start: newSourceUtf16Start,
+              fullWindowUtf16End: newSourceUtf16End,
+              fullWindowGlyphUtf16Ranges: undefined,
             })
           }
         }
@@ -2779,7 +2918,12 @@ export class EditorMotionCoordinator {
         currentClipRight: currentRight,
         currentPositionX: ghost.glyphX + ghost.offsetX,
         currentPositionY: ghost.glyphY + ghost.offsetY,
-        motionOwnerKind: 'carryGhost'
+        motionOwnerKind: 'carryGhost',
+        // Issue #879 第32轮复核问题2：carryOver ghost 的完整窗口数据就是 ghost 自身的数据
+        fullWindowGlyphIds: ghost.glyphIds,
+        fullWindowUtf16Start: ghost.utf16Start,
+        fullWindowUtf16End: ghost.utf16End,
+        fullWindowGlyphUtf16Ranges: undefined,
         })
       }
 
@@ -2848,7 +2992,12 @@ export class EditorMotionCoordinator {
           // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到 targetOpacity。
           opacity: motionRun.opacity === undefined
             ? undefined
-            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p
+            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
+          // Issue #879 第32轮复核问题2：carryOver motion reflow 的完整窗口数据
+          fullWindowGlyphIds: motionRun.glyphIds,
+          fullWindowUtf16Start: motionRun.sourceUtf16Start,
+          fullWindowUtf16End: motionRun.sourceUtf16End,
+          fullWindowGlyphUtf16Ranges: undefined,
         })
       } else {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
@@ -2900,7 +3049,12 @@ export class EditorMotionCoordinator {
           // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到 targetOpacity。
           opacity: motionRun.opacity === undefined
             ? undefined
-            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p
+            : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
+          // Issue #879 第32轮复核问题2：carryOver motion insert 的完整窗口数据
+          fullWindowGlyphIds: motionRun.glyphIds,
+          fullWindowUtf16Start: motionRun.sourceUtf16Start,
+          fullWindowUtf16End: motionRun.sourceUtf16End,
+          fullWindowGlyphUtf16Ranges: undefined,
         })
       }
     }
@@ -3903,6 +4057,24 @@ export class EditorMotionCoordinator {
         )
       }
 
+      // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据。
+      // 优先使用 fullWindow* 字段（物理源窗口首次创建时保存的完整数据），
+      // fallback 到当前窗口的 glyphIds/utf16Start/End/glyphUtf16Ranges（legacy 语义）。
+      const fullWindowGlyphIds = w.fullWindowGlyphIds !== undefined
+        ? w.fullWindowGlyphIds : w.glyphIds
+      const fullWindowUtf16Start = w.fullWindowUtf16Start !== undefined
+        ? w.fullWindowUtf16Start : w.utf16Start
+      const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
+        ? w.fullWindowUtf16End : w.utf16End
+      // 优先使用 fullWindowGlyphUtf16Ranges（物理源窗口首次创建时的完整映射），
+      // fallback 到 glyphUtf16Ranges（用当前 glyphIds/utf16Start/End 重新计算的映射）。
+      let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
+      if (w.fullWindowGlyphUtf16Ranges !== undefined && w.fullWindowGlyphUtf16Ranges !== null) {
+        fullWindowGlyphUtf16Ranges = new Map(w.fullWindowGlyphUtf16Ranges)
+      } else {
+        fullWindowGlyphUtf16Ranges = glyphUtf16Ranges
+      }
+
       frozenWindows.push({
         glyphIds: w.glyphIds,
         clipLeft: w.currentClipLeft,
@@ -3919,7 +4091,12 @@ export class EditorMotionCoordinator {
         runId: w.runId,
         renderNodeKey: w.renderNodeKey,
         opacity: w.opacity,
-        windowInstanceId: w.windowInstanceId
+        windowInstanceId: w.windowInstanceId,
+        // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据
+        fullWindowGlyphIds: fullWindowGlyphIds,
+        fullWindowUtf16Start: fullWindowUtf16Start,
+        fullWindowUtf16End: fullWindowUtf16End,
+        fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
       })
     }
     return {

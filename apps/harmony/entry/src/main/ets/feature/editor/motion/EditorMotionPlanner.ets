@@ -488,6 +488,13 @@ export class EditorMotionPlanner {
           if (piece.intervals !== undefined && piece.intervals.length > 0) {
             for (const interval of piece.intervals) {
               let intervalNeedsCrossfade = false
+              // Issue #879 第32轮复核问题3：如果 frozen 成员的可见区域不完整（有 gap），
+              // 即使新旧字宽高相同，也需要创建 target 窗口来补全被裁掉的区域。
+              // 否则 p=1 时旧 clip 只平移不扩大（mapRectByRatio 在宽高相同时映射结果等于原值），
+              // 目标 Text 又不创建（needsSourceCrossfade=false），静态全文接管时其余笔画突然出现。
+              if (interval.hasVisibleGap === true) {
+                intervalNeedsCrossfade = true
+              }
               // 逐 glyph 比较：一个 interval 可能包含多个 glyph，
               // 整段比较会掩盖单个 glyph 的宽高变化。
               for (let gi = interval.firstIndex; gi <= interval.lastIndex; gi++) {
@@ -734,6 +741,20 @@ export class EditorMotionPlanner {
         w.glyphIds, w.utf16Start, w.utf16End, sourceText
       )
 
+      // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据。
+      // 优先使用 fullWindow* 字段（物理源窗口首次创建时保存的完整数据），
+      // fallback 到当前窗口的 glyphIds/utf16Start/End/glyphUtf16Ranges（legacy 语义）。
+      const fullWindowGlyphIds = w.fullWindowGlyphIds !== undefined
+        ? w.fullWindowGlyphIds : w.glyphIds
+      const fullWindowUtf16Start = w.fullWindowUtf16Start !== undefined
+        ? w.fullWindowUtf16Start : w.utf16Start
+      const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
+        ? w.fullWindowUtf16End : w.utf16End
+      // 优先使用 fullWindowGlyphUtf16Ranges（物理源窗口首次创建时的完整映射），
+      // fallback 到 glyphUtf16Ranges（用当前 glyphIds/utf16Start/End 重新计算的映射）。
+      const fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges !== undefined
+        ? w.fullWindowGlyphUtf16Ranges : glyphUtf16Ranges
+
       spans.push({
         glyphIds: w.glyphIds,
         clipLeft: w.currentClipLeft,
@@ -754,7 +775,12 @@ export class EditorMotionPlanner {
         opacity: w.opacity,
         // Issue #879 评论6116388578 问题2：从 MotionGlyphWindow 保存原始 windowInstanceId，
         // 供 frozen 成员在 buildFrame 中原样输出 renderNodeKey。
-        windowInstanceId: w.windowInstanceId
+        windowInstanceId: w.windowInstanceId,
+        // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据
+        fullWindowGlyphIds: fullWindowGlyphIds,
+        fullWindowUtf16Start: fullWindowUtf16Start,
+        fullWindowUtf16End: fullWindowUtf16End,
+        fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
       })
     }
     return spans

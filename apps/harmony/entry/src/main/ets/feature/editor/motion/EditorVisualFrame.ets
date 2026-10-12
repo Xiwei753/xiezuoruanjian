@@ -587,7 +587,36 @@ export interface MotionGlyphWindow {
    * 重新猜（buildGlyphUtf16Ranges）。commitDisplayedContext 冻结时优先使用此字段，
    * 避免 UTF-16 范围与 glyphIds 数量不匹配导致返回 null。
    */
-  glyphUtf16Ranges?: Map<string, [number, number]> | null
+   glyphUtf16Ranges?: Map<string, [number, number]> | null
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口覆盖的完整有序 glyphIds 列表。
+   *
+   * frozen 成员的窗口可能只包含部分 interval 的 glyphIds（如首 interval 只有甲，
+   * 但完整窗口包含甲乙丙）。此字段保存物理源窗口首次创建时的完整 glyphIds，
+   * 确保 commitDisplayedContext 冻结时 frozenIndex 能为窗口内所有字形建立索引，
+   * 连续删除时不会因 glyphIds 不完整而断源。
+   * target 成员的完整窗口数据就是当前 interval 的 glyphIds（target 本来就是新源窗口）。
+   */
+   fullWindowGlyphIds?: string[]
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 起始位置。
+   *
+   * 从物理源窗口首次创建时保存，不是单个 interval/member 的 sourceUtf16Start。
+   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整源 UTF-16 区间。
+   */
+   fullWindowUtf16Start?: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 结束位置。
+   */
+   fullWindowUtf16End?: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 从物理源窗口首次创建时保存，不是单个 interval/member 的 glyphUtf16Ranges。
+   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整逐字映射，
+   * frozenIndex 建索引时使用此字段而不是 glyphIds，确保窗口内所有字形都能被找到。
+   */
+   fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /**

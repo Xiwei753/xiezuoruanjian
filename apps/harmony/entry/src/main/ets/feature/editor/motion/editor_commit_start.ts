@@ -106,6 +106,25 @@ export interface FrozenWindowSpan {
    * target 成员的 renderNodeKey 不包含 windowInstanceId，需追加新分配的 ID。
    */
   windowInstanceId: string
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口覆盖的完整有序 glyphIds 列表。
+   *
+   * 从 MotionGlyphWindow.fullWindowGlyphIds 读取，保存物理源窗口首次创建时的完整 glyphIds。
+   * frozenIndex 建索引时使用此字段而不是 glyphIds，确保窗口内所有字形都能被找到。
+   */
+  fullWindowGlyphIds: string[]
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 起始位置。
+   */
+  fullWindowUtf16Start: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 结束位置。
+   */
+  fullWindowUtf16End: number
+  /**
+   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
+   */
+  fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
 }
 
 /** 计算起始状态时的「在屏」上下文。 */
@@ -225,6 +244,33 @@ export interface FrozenGlyphMember {
    * target 成员（新建的 newRevision 目标）没有原始窗口映射，为 undefined。
    */
   glyphUtf16Ranges?: Map<string, [number, number]> | null
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整 glyphIds 列表。
+   *
+   * 从 FrozenWindowSpan.fullWindowGlyphIds 读取，保存物理源窗口首次创建时的完整 glyphIds。
+   * buildFrame 的 FrozenWindowGroupPlan 用它填充 originalGlyphIds，
+   * 确保 MotionGlyphWindow.glyphIds 携带完整字形列表而非单个 interval 的子集。
+   * target 成员没有原始窗口数据，为 undefined。
+   */
+  fullWindowGlyphIds?: string[]
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整源 UTF-16 起始位置。
+   */
+  fullWindowUtf16Start?: number
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整源 UTF-16 结束位置。
+   */
+  fullWindowUtf16End?: number
+  /**
+   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 与 glyphUtf16Ranges 不同——glyphUtf16Ranges 是 FrozenWindowSpan.glyphUtf16Ranges 的直接复制，
+   * 而 fullWindowGlyphUtf16Ranges 是 FrozenWindowSpan.fullWindowGlyphUtf16Ranges 的直接复制。
+   * 在旧代码中两者可能相同（都来自 buildGlyphUtf16Ranges），但在新代码中
+   * fullWindowGlyphUtf16Ranges 保证是物理源窗口首次创建时的完整映射，
+   * 而 glyphUtf16Ranges 可能只是冻结时的映射（可能因 glyphIds 不完整而返回 null）。
+   */
+  fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
@@ -431,7 +477,20 @@ export interface RunStartInterval {
    * buildFrame 逐成员独立插值，不做笛卡尔混合。
    * 缺省时 buildFrame 回落到旧字段（frozenSourceGlyphRects/frozenDrawOffsetX/Y/startScreenClipRects）。
    */
-  sourceMembers?: FrozenGlyphMember[]
+   sourceMembers?: FrozenGlyphMember[]
+  /**
+   * Issue #879 第32轮复核问题3：该 interval 的 frozen 成员可见区域是否不完整（有 gap）。
+   *
+   * 当 frozen 成员的 clipRects 不能完全覆盖其在屏完整字形矩形时，hasVisibleGap=true。
+   * 即使新旧字宽高相同（needsCrossfade 按宽高判断为 false），有 gap 也需要创建 target
+   * 窗口来补全被裁掉的区域——否则 p=1 时旧 clip 只平移不扩大（mapRectByRatio 在宽高
+   * 相同时映射结果等于原值），目标 Text 又不创建（needsSourceCrossfade=false），
+   * 静态全文接管时其余笔画突然出现。
+   *
+   * Planner 依据此标志设置 intervalNeedsCrossfade=true，确保 target 窗口从准备期就有
+   * 固定 key，负责补齐 retained 字形直到 p=1 完整显示。
+   */
+  hasVisibleGap?: boolean
 }
 
 /** 可见性判定用的微小容差（vp）——避免浮点误差把零宽度可见判成不可见。 */
@@ -1743,6 +1802,9 @@ export function retargetRunStarts(
                   }
                 })
               : undefined,
+            // Issue #879 第32轮复核问题3：不可见时继承 prevInterval 的 hasVisibleGap。
+            // 不可见字形没有可见区域，不构成新的 gap，但保留 prevInterval 的值以保持数据一致性。
+            hasVisibleGap: prevInterval.hasVisibleGap,
           })
         }
       }
@@ -2043,6 +2105,12 @@ function buildSourceMembers(
       // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射，
       // 供 buildFrame 的 FrozenWindowGroupPlan.originalGlyphUtf16Ranges 使用。
       glyphUtf16Ranges: span.glyphUtf16Ranges,
+      // Issue #879 第32轮复核问题2：携带物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射，
+      // 供 buildFrame 的 FrozenWindowGroupPlan.fullWindow* 使用。
+      fullWindowGlyphIds: span.fullWindowGlyphIds,
+      fullWindowUtf16Start: span.fullWindowUtf16Start,
+      fullWindowUtf16End: span.fullWindowUtf16End,
+      fullWindowGlyphUtf16Ranges: span.fullWindowGlyphUtf16Ranges,
     })
   }
   return members
@@ -2165,6 +2233,11 @@ function intervalForIsland(
         let sourceUtf16End = 0
         let windowInstanceId: string | undefined = undefined
         let glyphUtf16Ranges: Map<string, [number, number]> | null = null
+        // Issue #879 第32轮复核问题2：从匹配的 span 中读取完整窗口数据
+        let fullWindowGlyphIds: string[] | undefined = undefined
+        let fullWindowUtf16Start: number | undefined = undefined
+        let fullWindowUtf16End: number | undefined = undefined
+        let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
         if (allSpans !== undefined) {
           for (const sp of allSpans) {
             if (sp.renderNodeKey === g.renderNodeKey &&
@@ -2173,6 +2246,10 @@ function intervalForIsland(
               opacity = sp.opacity
               windowInstanceId = sp.windowInstanceId
               glyphUtf16Ranges = sp.glyphUtf16Ranges
+              fullWindowGlyphIds = sp.fullWindowGlyphIds
+              fullWindowUtf16Start = sp.fullWindowUtf16Start
+              fullWindowUtf16End = sp.fullWindowUtf16End
+              fullWindowGlyphUtf16Ranges = sp.fullWindowGlyphUtf16Ranges
               const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
               if (utf16Range !== undefined) {
                 sourceUtf16Start = utf16Range[0]
@@ -2219,8 +2296,38 @@ function intervalForIsland(
           windowInstanceId: windowInstanceId,
           // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射。
           glyphUtf16Ranges: glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：携带物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: fullWindowGlyphIds,
+          fullWindowUtf16Start: fullWindowUtf16Start,
+          fullWindowUtf16End: fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
         }
       })
+    }
+  }
+  // Issue #879 第32轮复核问题3：检测 frozen 成员的可见区域是否不完整（有 gap）。
+  // 当 frozen 成员的 clipRects 不能完全覆盖其在屏完整字形矩形时，hasVisibleGap=true。
+  // 这会触发 Planner 设置 intervalNeedsCrossfade=true，确保创建 target 窗口补全被裁掉的区域。
+  let hasVisibleGap = false
+  if (kind === 'retained' && sourceMembers !== undefined) {
+    for (const member of sourceMembers) {
+      // 只检查有像素贡献的 frozen 成员（opacity>0 或 undefined）
+      // target 成员的 clipRects 为空是正常的（从零面积渐显），不构成 gap
+      // opacity=0 的成员没有像素贡献，不构成 gap
+      if (member.role === 'frozen' &&
+          member.clipRects.length > 0 &&
+          (member.opacity === undefined || member.opacity > 0)) {
+        const glyphOnScreen: RectLike = {
+          x: member.sourceGlyphRect.x + member.offsetX,
+          y: member.sourceGlyphRect.y + member.offsetY,
+          width: member.sourceGlyphRect.width,
+          height: member.sourceGlyphRect.height,
+        }
+        if (!isFullyCovered(glyphOnScreen, member.clipRects)) {
+          hasVisibleGap = true
+          break
+        }
+      }
     }
   }
   return {
@@ -2249,6 +2356,8 @@ function intervalForIsland(
     frozenSourceGlyphRects: frozenSourceGlyphRects,
     // Issue #879 评论6108900966 问题1：该 interval 的所有源字形成员绑定列表。
     sourceMembers: sourceMembers,
+    // Issue #879 第32轮复核问题3：frozen 成员可见区域是否不完整。
+    hasVisibleGap: hasVisibleGap,
   }
 }
 
@@ -2284,6 +2393,13 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
     // tuple [number, number] 不可变）。保留原始窗口的完整映射。
     glyphUtf16Ranges: m.glyphUtf16Ranges !== undefined && m.glyphUtf16Ranges !== null
       ? new Map(m.glyphUtf16Ranges) : m.glyphUtf16Ranges,
+    // Issue #879 第32轮复核问题2：深拷贝 fullWindow* 字段
+    fullWindowGlyphIds: m.fullWindowGlyphIds !== undefined
+      ? [...m.fullWindowGlyphIds] : m.fullWindowGlyphIds,
+    fullWindowUtf16Start: m.fullWindowUtf16Start,
+    fullWindowUtf16End: m.fullWindowUtf16End,
+    fullWindowGlyphUtf16Ranges: m.fullWindowGlyphUtf16Ranges !== undefined && m.fullWindowGlyphUtf16Ranges !== null
+      ? new Map(m.fullWindowGlyphUtf16Ranges) : m.fullWindowGlyphUtf16Ranges,
   }))
 }
 
@@ -2373,6 +2489,16 @@ function mergeMemberUpdates(
             // 优先用 nw 的（retarget 时新 frozenWindows 已正确传递），fallback 到 prev。
             glyphUtf16Ranges: nw.glyphUtf16Ranges !== undefined
               ? nw.glyphUtf16Ranges : prev.glyphUtf16Ranges,
+            // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+            // 优先用 nw 的，fallback 到 prev。
+            fullWindowGlyphIds: nw.fullWindowGlyphIds !== undefined
+              ? nw.fullWindowGlyphIds : prev.fullWindowGlyphIds,
+            fullWindowUtf16Start: nw.fullWindowUtf16Start !== undefined
+              ? nw.fullWindowUtf16Start : prev.fullWindowUtf16Start,
+            fullWindowUtf16End: nw.fullWindowUtf16End !== undefined
+              ? nw.fullWindowUtf16End : prev.fullWindowUtf16End,
+            fullWindowGlyphUtf16Ranges: nw.fullWindowGlyphUtf16Ranges !== undefined
+              ? nw.fullWindowGlyphUtf16Ranges : prev.fullWindowGlyphUtf16Ranges,
           })
           consumedNew.add(ni)
           matched = true
@@ -2407,6 +2533,11 @@ function mergeMemberUpdates(
           windowInstanceId: prev.windowInstanceId,
           // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
           glyphUtf16Ranges: prev.glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: prev.fullWindowGlyphIds,
+          fullWindowUtf16Start: prev.fullWindowUtf16Start,
+          fullWindowUtf16End: prev.fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: prev.fullWindowGlyphUtf16Ranges,
         })
       } else {
         result.push({
@@ -2429,6 +2560,11 @@ function mergeMemberUpdates(
           windowInstanceId: prev.windowInstanceId,
           // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
           glyphUtf16Ranges: prev.glyphUtf16Ranges,
+          // Issue #879 第32轮复核问题2：保留物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射。
+          fullWindowGlyphIds: prev.fullWindowGlyphIds,
+          fullWindowUtf16Start: prev.fullWindowUtf16Start,
+          fullWindowUtf16End: prev.fullWindowUtf16End,
+          fullWindowGlyphUtf16Ranges: prev.fullWindowGlyphUtf16Ranges,
         })
       }
     }
@@ -2493,6 +2629,8 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
         sourceMembers: iv.sourceMembers === undefined
           ? undefined
           : deepCloneSourceMembers(iv.sourceMembers),
+        // Issue #879 第32轮复核问题3：深拷贝 hasVisibleGap。
+        hasVisibleGap: iv.hasVisibleGap,
       })),
   }))
 }
@@ -2574,7 +2712,15 @@ interface OnScreenInterval {
 export function frozenIndex(displayed: DisplayedContext): Map<string, FrozenWindowSpan[]> {
   const index: Map<string, FrozenWindowSpan[]> = new Map()
   for (const span of displayed.frozenWindows) {
-    for (const glyphId of span.glyphIds) {
+    // Issue #879 第32轮复核问题2：使用 fullWindowGlyphIds 而不是 glyphIds 来建索引，
+    // 确保窗口内所有字形都能被找到，而不只是当前 interval 的子集。
+    // fullWindowGlyphIds 在 FrozenWindowSpan 中是必填字段，由 frozenWindowSpans/commitDisplayedContext
+    // 从 MotionGlyphWindow.fullWindowGlyphIds 读取（fallback 到 glyphIds）。
+    // 安全 fallback：如果 fullWindowGlyphIds 未设置（如旧测试数据），退回 glyphIds。
+    const fullIds = span.fullWindowGlyphIds
+    const glyphIdsToIndex = fullIds !== undefined && fullIds.length > 0
+      ? fullIds : span.glyphIds
+    for (const glyphId of glyphIdsToIndex) {
       const list = index.get(glyphId)
       if (list !== undefined) {
         list.push(span)

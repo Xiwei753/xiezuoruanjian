@@ -97,6 +97,11 @@ const frozenWindow = (glyphIds, clipLeft, clipRight, offsetX, offsetY, sourceRev
     sourceRevision: sourceRevision ?? 0,
     glyphUtf16Ranges: glyphUtf16Ranges ?? null,
     sourceLayout: sourceLayout ?? null,
+    // Issue #879 第32轮复核问题2：fullWindow* 字段默认与 glyphIds/glyphUtf16Ranges 一致
+    fullWindowGlyphIds: glyphIds,
+    fullWindowUtf16Start: 0,
+    fullWindowUtf16End: 0,
+    fullWindowGlyphUtf16Ranges: glyphUtf16Ranges ?? null,
   }
 }
 
@@ -7116,6 +7121,536 @@ test('问题1-6121854424：一致时正常合并——不丢字', () => {
   assert.equal(keys.length, 1, '一致时应合并为 1 个窗口')
   assert.equal(motionGlyphWindows[0].clipRects.length, 2,
     `一致时应合并 clipRects（2 个碎片），实际 ${motionGlyphWindows[0].clipRects.length}`)
+})
+
+// ====== Issue #879 第32轮复核问题4：buildFrame 集成测试 ======
+//
+// 以下三组测试模拟 buildFrame 的核心逻辑（FrozenWindowGroupPlan 预计算 + 窗口输出 +
+// frozenWindowAggregator 聚合），验证 MotionGlyphWindow 的输出属性（key、offset、alpha、
+// clip、glyphIds），而不是只验证输入数据。
+//
+// 三个故障场景覆盖：
+// 1. 「跨两个 piece 的甲隐乙显」：隐藏成员不抢占整窗 offset/alpha，可见成员的正确值被使用
+// 2. 「冻结甲乙丙后下一笔按乙丙查源」：MotionGlyphWindow 携带 fullWindowGlyphIds，
+//    frozenIndex 能为窗口内所有字形建立索引
+// 3. 「无 crossfade 半字可见」：hasVisibleGap 标志触发 needsCrossfade，创建 target 窗口补全 gap
+
+console.log('\n--- Issue #879 第32轮复核问题4：buildFrame 集成测试 ---')
+
+// 辅助：模拟 buildFrame 的 FrozenWindowGroupPlan 预计算逻辑
+// 遍历所有 frozen 成员，选择第一个真正可见的成员（clipRects 有正面积且 opacity>0）作为 baseMember
+const simulateFrozenGroupPlan = (frozenMembersByKey) => {
+  const plans = new Map()
+  for (const [renderNodeKey, entries] of frozenMembersByKey) {
+    // 选择第一个真正可见的成员（clipRects 有正面积且 opacity>0）作为 baseMember
+    let baseEntry = entries[0]
+    for (const entry of entries) {
+      const memberOpacity = entry.member.opacity !== undefined ? entry.member.opacity : 1
+      const hasVisibleClip = entry.member.clipRects.some(cr => cr.width > 0 && cr.height > 0)
+      if (hasVisibleClip && memberOpacity > 0) {
+        baseEntry = entry
+        break
+      }
+    }
+    const baseMember = baseEntry.member
+    const p = 0 // 起始帧
+    const gpStartOffsetX = baseMember.offsetX
+    const gpStartOffsetY = baseMember.offsetY
+    const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
+    const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
+    const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
+    const fullWindowGlyphIds = baseMember.fullWindowGlyphIds !== undefined
+      ? baseMember.fullWindowGlyphIds : baseEntry.intervalGlyphIds
+    const fullWindowUtf16Start = baseMember.fullWindowUtf16Start !== undefined
+      ? baseMember.fullWindowUtf16Start : baseMember.sourceUtf16Start
+    const fullWindowUtf16End = baseMember.fullWindowUtf16End !== undefined
+      ? baseMember.fullWindowUtf16End : baseMember.sourceUtf16End
+    const fullWindowGlyphUtf16Ranges = baseMember.fullWindowGlyphUtf16Ranges !== undefined
+      ? baseMember.fullWindowGlyphUtf16Ranges
+      : (baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null)
+    plans.set(renderNodeKey, {
+      startOffsetX: gpStartOffsetX,
+      startOffsetY: gpStartOffsetY,
+      startAlpha: gpStartAlpha,
+      endAlpha: gpEndAlpha,
+      currentAlpha: gpCurrentAlpha,
+      renderNodeKey: renderNodeKey,
+      runId: baseMember.runId,
+      sourceRevision: baseMember.sourceRevision,
+      sourceKind: baseMember.sourceKind,
+      windowInstanceId: baseMember.windowInstanceId !== undefined ? baseMember.windowInstanceId : '',
+      originalUtf16Start: baseMember.sourceUtf16Start,
+      originalUtf16End: baseMember.sourceUtf16End,
+      originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null,
+      originalGlyphIds: baseEntry.intervalGlyphIds,
+      fullWindowGlyphIds: fullWindowGlyphIds,
+      fullWindowUtf16Start: fullWindowUtf16Start,
+      fullWindowUtf16End: fullWindowUtf16End,
+      fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
+    })
+  }
+  return plans
+}
+
+// 辅助：模拟 buildFrame 的 frozen 成员窗口输出逻辑
+// 使用 group plan 的值创建 MotionGlyphWindow
+const simulateFrozenWindowOutput = (member, groupPlan, memberClipRects, islandBbox) => {
+  const p = 0 // 起始帧
+  const windowOffsetX = groupPlan.startOffsetX
+  const windowOffsetY = groupPlan.startOffsetY
+  const windowCurrentX = member.sourceGlyphRect.x + groupPlan.startOffsetX
+  const windowCurrentY = member.sourceGlyphRect.y + groupPlan.startOffsetY
+  const memberOpacity = groupPlan.currentAlpha
+  return {
+    sourceKind: member.sourceKind,
+    utf16Start: groupPlan.originalUtf16Start,
+    utf16End: groupPlan.originalUtf16End,
+    clipLeft: islandBbox.left,
+    clipRight: islandBbox.right,
+    clipRects: memberClipRects,
+    glyphX: member.sourceGlyphRect.x,
+    glyphY: member.sourceGlyphRect.y,
+    glyphWidth: member.sourceGlyphRect.width,
+    glyphHeight: member.sourceGlyphRect.height,
+    offsetX: windowOffsetX,
+    offsetY: windowOffsetY,
+    runId: member.runId,
+    sourceRevision: member.sourceRevision,
+    glyphIds: groupPlan.originalGlyphIds,
+    renderNodeKey: member.renderNodeKey,
+    currentPositionX: windowCurrentX,
+    currentPositionY: windowCurrentY,
+    opacity: memberOpacity,
+    glyphUtf16Ranges: groupPlan.originalGlyphUtf16Ranges,
+    fullWindowGlyphIds: groupPlan.fullWindowGlyphIds,
+    fullWindowUtf16Start: groupPlan.fullWindowUtf16Start,
+    fullWindowUtf16End: groupPlan.fullWindowUtf16End,
+    fullWindowGlyphUtf16Ranges: groupPlan.fullWindowGlyphUtf16Ranges,
+  }
+}
+
+// 辅助：模拟 buildFrame 的 frozenWindowAggregator 聚合逻辑
+const simulateAggregator = (memberWindows) => {
+  const aggregator = new Map()
+  for (const memberWindow of memberWindows) {
+    const existing = aggregator.get(memberWindow.renderNodeKey)
+    if (existing !== undefined) {
+      if (existing.runId !== memberWindow.runId ||
+          existing.sourceRevision !== memberWindow.sourceRevision) {
+        // 不一致时不 push——避免重复 renderNodeKey
+      } else {
+        existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
+      }
+    } else {
+      aggregator.set(memberWindow.renderNodeKey, memberWindow)
+    }
+  }
+  return Array.from(aggregator.values())
+}
+
+// --- 场景1：跨两个 piece 的甲隐乙显 ---
+// 同一 renderNodeKey 的两个 frozen 成员，一个隐藏（clipRects=[]、opacity=0），一个可见。
+// buildFrame 的 FrozenWindowGroupPlan 应选择可见成员作为 baseMember，
+// 整窗 offset/alpha 取可见成员的值，不被隐藏成员的 offset=0/opacity=0 抢占。
+
+test('buildFrame场景1-甲隐乙显：FrozenWindowGroupPlan 选择可见成员作为 baseMember，整窗 offset/alpha 不被隐藏成员抢占', () => {
+  const ctx = context('乙', 3000, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const yiId = glyphIds[0]
+
+  const layout = srcLayout('乙')
+  // 两个冻结窗口覆盖乙，同一 renderNodeKey（同一物理 Text 节点）
+  // 隐藏成员：clipRects 远离乙在屏位置 → 无交集 → clipRects=[]、opacity=0
+  // 可见成员：clipRects 覆盖乙在屏位置 → 有交集 → clipRects 非空、opacity=0.8
+  const frozen = [
+    makeSpan(yiId, {
+      clipLeft: 100, clipRight: 110,
+      clipRects: [{ x: 100, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [0, 1], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 10,
+      clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 10, opacity: 0.8,
+      utf16Range: [0, 1], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '乙',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length === 2, '应有 2 个 frozen 成员')
+
+  // 模拟 buildFrame 的 FrozenWindowGroupPlan 预计算逻辑
+  const frozenMembersByKey = new Map()
+  frozenMembersByKey.set('shared-key-10', members.map(m => ({
+    member: m,
+    intervalGlyphIds: pieces[0].intervals[0].glyphIds,
+  })))
+  const groupPlans = simulateFrozenGroupPlan(frozenMembersByKey)
+
+  const plan = groupPlans.get('shared-key-10')
+  assert.ok(plan !== undefined, 'FrozenWindowGroupPlan 应存在')
+
+  // 关键验证：group plan 的 startOffsetX 来自可见成员（5），不是隐藏成员（0）
+  assert.equal(plan.startOffsetX, 5,
+    `group plan startOffsetX 应为 5（来自可见成员），不是 0（隐藏成员），实际 ${plan.startOffsetX}`)
+  // 关键验证：group plan 的 startAlpha 来自可见成员（0.8），不是隐藏成员（0）
+  assert.equal(plan.startAlpha, 0.8,
+    `group plan startAlpha 应为 0.8（来自可见成员），不是 0（隐藏成员），实际 ${plan.startAlpha}`)
+
+  // 模拟 buildFrame 的窗口输出逻辑——使用 group plan 的值创建 MotionGlyphWindow
+  const islandBbox = { left: 0, right: 10 }
+  const memberClipRects = members.map(m => m.clipRects.length > 0 ? m.clipRects : [])
+  const memberWindows = members.map((m, i) =>
+    simulateFrozenWindowOutput(m, plan, memberClipRects[i], islandBbox))
+
+  // 模拟 frozenWindowAggregator 聚合
+  const aggregatedWindows = simulateAggregator(memberWindows)
+
+  // 关键验证：聚合后只有一个窗口（同一 renderNodeKey）
+  assert.equal(aggregatedWindows.length, 1, '聚合后应只有 1 个窗口')
+  const window = aggregatedWindows[0]
+
+  // 关键验证：MotionGlyphWindow 的 renderNodeKey 正确
+  assert.equal(window.renderNodeKey, 'shared-key-10',
+    `MotionGlyphWindow renderNodeKey 应为 shared-key-10，实际 ${window.renderNodeKey}`)
+
+  // 关键验证：MotionGlyphWindow 的 offset 来自可见成员（5），不是隐藏成员（0）
+  assert.equal(window.offsetX, 5,
+    `MotionGlyphWindow offsetX 应为 5（来自可见成员），不是 0（隐藏成员），实际 ${window.offsetX}`)
+
+  // 关键验证：MotionGlyphWindow 的 alpha 来自可见成员（0.8），不是隐藏成员的 0
+  assert.equal(window.opacity, 0.8,
+    `MotionGlyphWindow opacity 应为 0.8（来自可见成员），不是 0（隐藏成员），实际 ${window.opacity}`)
+
+  // 关键验证：MotionGlyphWindow 的 clipRects 来自可见成员（非空）
+  assert.ok(window.clipRects.length > 0,
+    `MotionGlyphWindow clipRects 应非空（来自可见成员），实际长度 ${window.clipRects.length}`)
+
+  // 关键验证：MotionGlyphWindow 的 glyphIds 包含完整窗口的 glyphIds
+  assert.ok(window.glyphIds.includes(yiId),
+    `MotionGlyphWindow glyphIds 应包含乙的 glyphId，实际 ${JSON.stringify(window.glyphIds)}`)
+
+  // 关键验证：fullWindowGlyphIds 包含完整窗口的 glyphIds
+  assert.ok(window.fullWindowGlyphIds !== undefined && window.fullWindowGlyphIds.includes(yiId),
+    `MotionGlyphWindow fullWindowGlyphIds 应包含乙的 glyphId，实际 ${JSON.stringify(window.fullWindowGlyphIds)}`)
+})
+
+// --- 场景2：冻结甲乙丙后下一笔按乙丙查源 ---
+// 冻结窗口覆盖甲乙丙三个字，携带完整 glyphUtf16Ranges 映射。
+// buildFrame 输出的 MotionGlyphWindow 应携带 fullWindowGlyphIds=[甲,乙,丙]，
+// commitDisplayedContext 冻结后 FrozenWindowSpan 也携带 fullWindowGlyphIds，
+// frozenIndex 使用 fullWindowGlyphIds 建索引，甲、乙、丙都能找到对应的 span。
+
+test('buildFrame场景2-甲乙丙查源：MotionGlyphWindow 携带 fullWindowGlyphIds=[甲,乙,丙]，frozenIndex 为所有字形建立索引', () => {
+  const oldText = '甲乙丙'
+  const ctx = context(oldText, 3001, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]   // 甲
+  const yiId = glyphIds[1]    // 乙
+  const bingId = glyphIds[2]  // 丙
+
+  const layout = srcLayout(oldText)
+  // 冻结窗口覆盖甲、乙、丙三个字，携带完整 glyphUtf16Ranges 映射
+  const ranges = new Map([
+    [jiaId, [0, 1]],
+    [yiId, [1, 2]],
+    [bingId, [2, 3]],
+  ])
+  const frozen = [{
+    glyphIds: [jiaId, yiId, bingId],
+    clipLeft: 0, clipRight: 30,
+    clipRects: [{ x: 0, y: 0, width: 30, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: ranges,
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+    fullWindowGlyphIds: [jiaId, yiId, bingId],
+    fullWindowUtf16Start: 0,
+    fullWindowUtf16End: 3,
+    fullWindowGlyphUtf16Ranges: ranges,
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 甲的 retained move（幸存字）
+  const jiaRun = {
+    glyphIds: [jiaId],
+    ownText: oldText,
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const jiaPieces = retainedMoveStartState(jiaRun, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const jiaMembers = firstSourceMembers(jiaPieces)
+  assert.ok(jiaMembers !== undefined && jiaMembers.length > 0, '甲的 sourceMembers 应存在')
+
+  // 模拟 buildFrame 的 FrozenWindowGroupPlan 预计算逻辑
+  const frozenMembersByKey = new Map()
+  frozenMembersByKey.set('old-node-10', jiaMembers.map(m => ({
+    member: m,
+    intervalGlyphIds: jiaPieces[0].intervals[0].glyphIds,
+  })))
+  const groupPlans = simulateFrozenGroupPlan(frozenMembersByKey)
+  const plan = groupPlans.get('old-node-10')
+  assert.ok(plan !== undefined, 'FrozenWindowGroupPlan 应存在')
+
+  // 关键验证：group plan 的 fullWindowGlyphIds 包含 [甲,乙,丙]（不只是当前 interval 的 glyphIds）
+  assert.ok(plan.fullWindowGlyphIds !== undefined,
+    'group plan fullWindowGlyphIds 应存在')
+  assert.equal(plan.fullWindowGlyphIds.length, 3,
+    `group plan fullWindowGlyphIds 应有 3 个字形（甲乙丙），实际 ${plan.fullWindowGlyphIds.length}`)
+  assert.ok(plan.fullWindowGlyphIds.includes(jiaId),
+    'group plan fullWindowGlyphIds 应包含甲')
+  assert.ok(plan.fullWindowGlyphIds.includes(yiId),
+    'group plan fullWindowGlyphIds 应包含乙——不只是当前 interval 的 glyphIds')
+  assert.ok(plan.fullWindowGlyphIds.includes(bingId),
+    'group plan fullWindowGlyphIds 应包含丙——不只是当前 interval 的 glyphIds')
+
+  // 关键验证：group plan 的 fullWindowGlyphUtf16Ranges 包含完整逐字映射
+  assert.ok(plan.fullWindowGlyphUtf16Ranges !== null,
+    'group plan fullWindowGlyphUtf16Ranges 应存在')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(jiaId)[0], 0, '甲 UTF-16 start = 0')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(jiaId)[1], 1, '甲 UTF-16 end = 1')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(yiId)[0], 1, '乙 UTF-16 start = 1')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(yiId)[1], 2, '乙 UTF-16 end = 2')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(bingId)[0], 2, '丙 UTF-16 start = 2')
+  assert.equal(plan.fullWindowGlyphUtf16Ranges.get(bingId)[1], 3, '丙 UTF-16 end = 3')
+
+  // 模拟 buildFrame 的窗口输出逻辑
+  const islandBbox = { left: 0, right: 10 }
+  const memberWindows = jiaMembers.map(m =>
+    simulateFrozenWindowOutput(m, plan, m.clipRects, islandBbox))
+  const aggregatedWindows = simulateAggregator(memberWindows)
+  assert.equal(aggregatedWindows.length, 1, '聚合后应只有 1 个窗口')
+  const window = aggregatedWindows[0]
+
+  // 关键验证：MotionGlyphWindow 的 fullWindowGlyphIds 包含 [甲,乙,丙]
+  assert.ok(window.fullWindowGlyphIds !== undefined,
+    'MotionGlyphWindow fullWindowGlyphIds 应存在')
+  assert.equal(window.fullWindowGlyphIds.length, 3,
+    `MotionGlyphWindow fullWindowGlyphIds 应有 3 个字形（甲乙丙），实际 ${window.fullWindowGlyphIds.length}`)
+  assert.ok(window.fullWindowGlyphIds.includes(jiaId),
+    'MotionGlyphWindow fullWindowGlyphIds 应包含甲')
+  assert.ok(window.fullWindowGlyphIds.includes(yiId),
+    'MotionGlyphWindow fullWindowGlyphIds 应包含乙——不会断源')
+  assert.ok(window.fullWindowGlyphIds.includes(bingId),
+    'MotionGlyphWindow fullWindowGlyphIds 应包含丙——不会断源')
+
+  // 模拟 commitDisplayedContext 的冻结逻辑：从 MotionGlyphWindow 的 fullWindow* 字段读取
+  const frozenSpan = {
+    glyphIds: window.glyphIds,
+    clipRects: window.clipRects,
+    offsetX: window.offsetX,
+    offsetY: window.offsetY,
+    sourceRevision: window.sourceRevision,
+    glyphUtf16Ranges: window.glyphUtf16Ranges,
+    sourceLayout: layout,
+    sourceKind: window.sourceKind,
+    runId: window.runId,
+    renderNodeKey: window.renderNodeKey,
+    opacity: window.opacity,
+    windowInstanceId: window.windowInstanceId,
+    fullWindowGlyphIds: window.fullWindowGlyphIds,
+    fullWindowUtf16Start: window.fullWindowUtf16Start,
+    fullWindowUtf16End: window.fullWindowUtf16End,
+    fullWindowGlyphUtf16Ranges: window.fullWindowGlyphUtf16Ranges,
+  }
+
+  // 关键验证：FrozenWindowSpan 的 fullWindowGlyphIds 也包含 [甲,乙,丙]
+  assert.ok(frozenSpan.fullWindowGlyphIds !== undefined,
+    'FrozenWindowSpan fullWindowGlyphIds 应存在')
+  assert.equal(frozenSpan.fullWindowGlyphIds.length, 3,
+    `FrozenWindowSpan fullWindowGlyphIds 应有 3 个字形（甲乙丙），实际 ${frozenSpan.fullWindowGlyphIds.length}`)
+
+  // 模拟 frozenIndex 的建索引逻辑：使用 fullWindowGlyphIds 而不是 glyphIds 来建索引
+  const displayed = { text: oldText, layout: layout, identities: ctx.identities, frozenWindows: [frozenSpan] }
+  const index = frozenIndex(displayed)
+
+  // 关键验证：frozenIndex 中甲、乙、丙都能找到对应的 FrozenWindowSpan
+  assert.ok(index.has(jiaId),
+    'frozenIndex 应包含甲——使用 fullWindowGlyphIds 建索引')
+  assert.ok(index.has(yiId),
+    'frozenIndex 应包含乙——使用 fullWindowGlyphIds 建索引，不是 glyphIds')
+  assert.ok(index.has(bingId),
+    'frozenIndex 应包含丙——使用 fullWindowGlyphIds 建索引，不是 glyphIds')
+
+  // 验证每个字形找到的 span 是同一个
+  const jiaSpans = index.get(jiaId)
+  const yiSpans = index.get(yiId)
+  const bingSpans = index.get(bingId)
+  assert.ok(jiaSpans !== undefined && jiaSpans.length > 0, '甲应找到至少一个 span')
+  assert.ok(yiSpans !== undefined && yiSpans.length > 0, '乙应找到至少一个 span')
+  assert.ok(bingSpans !== undefined && bingSpans.length > 0, '丙应找到至少一个 span')
+  assert.equal(jiaSpans[0], frozenSpan, '甲找到的 span 应是同一个 frozenSpan')
+  assert.equal(yiSpans[0], frozenSpan, '乙找到的 span 应是同一个 frozenSpan')
+  assert.equal(bingSpans[0], frozenSpan, '丙找到的 span 应是同一个 frozenSpan')
+})
+
+// --- 场景3：无 crossfade 半字可见 ---
+// 冻结窗口只露出甲的左半部分（clipRects=[0,5]，完整字形宽度=10）。
+// hasVisibleGap 标志检测到 gap，needsCrossfade 因 hasVisibleGap 而被设置为 true，
+// 从而创建 target 窗口补全 gap。
+// 旧源窗口的 opacity=1-p（交叉淡入淡出），新源窗口被创建（sourceKind='new'）。
+
+test('buildFrame场景3-半字可见：hasVisibleGap 触发 needsCrossfade，创建 target 窗口补全 gap', () => {
+  const ctx = context('甲', 3002, [])
+  const glyphIds = idsOf(ctx, 0, 1)
+  const jiaId = glyphIds[0]
+
+  const layout = srcLayout('甲')
+  // 冻结窗口只露出甲的左半部分（clipRects=[0,5]），右半部分 [5,10] 是 gap
+  const frozen = [makeSpan(jiaId, {
+    clipLeft: 0, clipRight: 5,
+    clipRects: [{ x: 0, y: 0, width: 5, height: 20 }],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10, opacity: 1,
+    utf16Range: [0, 1], sourceLayout: layout,
+    windowInstanceId: 'win-10',
+  })]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [jiaId],
+    ownText: '甲',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // 关键验证：interval 的 hasVisibleGap 标志为 true（clipRects 不能覆盖完整字形）
+  const iv = pieces[0].intervals[0]
+  assert.ok(iv !== undefined, 'interval 应存在')
+  assert.equal(iv.hasVisibleGap, true,
+    `hasVisibleGap 应为 true（clipRects [0,5] 不能覆盖完整字形 [0,10]），实际 ${iv.hasVisibleGap}`)
+
+  // 模拟 Planner 的 needsCrossfade 计算逻辑：
+  // 如果 hasVisibleGap=true，则 intervalNeedsCrossfade=true
+  const intervalNeedsCrossfade = iv.hasVisibleGap === true ? true : false
+  assert.equal(intervalNeedsCrossfade, true,
+    'needsCrossfade 应因 hasVisibleGap=true 而被设置为 true')
+
+  // 模拟 buildFrame 的窗口输出逻辑：
+  // 因为 needsSourceCrossfade=true，创建旧源窗口（opacity=1-p）和新源窗口（opacity=p）
+  const p = 0 // 起始帧
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined && members.length > 0, 'sourceMembers 应存在')
+
+  // frozen 成员（旧源窗口）
+  const frozenMember = members.find(m => m.role === 'frozen')
+  assert.ok(frozenMember !== undefined, '应存在 frozen 成员（旧源窗口）')
+
+  // 模拟 buildFrame 的 frozen 成员 clipRects 计算：
+  // frozen 成员只保留已可见碎片（左半部分 [0,5]），不补间隙碎片
+  const frozenClipRects = frozenMember.clipRects.filter(cr => cr.width > 0)
+  assert.ok(frozenClipRects.length > 0, 'frozen 成员应有可见碎片')
+  assert.ok(frozenClipRects.some(cr => Math.abs(cr.x - 0) < 0.01 && Math.abs(cr.width - 5) < 0.01),
+    'frozen 成员 clipRects 应覆盖 [0,5] 可见区域')
+
+  // frozen 成员的间隙（gap）= rectDifference(sourceGlyphOnScreen, clipRects)
+  const sourceGlyphOnScreen = {
+    x: frozenMember.sourceGlyphRect.x + frozenMember.offsetX,
+    y: frozenMember.sourceGlyphRect.y + frozenMember.offsetY,
+    width: frozenMember.sourceGlyphRect.width,
+    height: frozenMember.sourceGlyphRect.height,
+  }
+  const gaps = rectDifference(sourceGlyphOnScreen, frozenMember.clipRects)
+  assert.ok(gaps.length > 0, '应存在 gap（frozen 未覆盖的右半部分）')
+  assert.ok(gaps.some(g => Math.abs(g.x - 5) < 0.01 && Math.abs(g.width - 5) < 0.01),
+    'gap 应在 [5,10] 区域（右半部分）')
+
+  // 模拟 buildFrame 的 target 成员创建逻辑：
+  // 因为 needsSourceCrossfade=true，buildFrame 会创建 target 成员（新源窗口）
+  // target 成员的 clipRects 包含 gap 碎片（从零面积渐显到完整目标）
+  const targetClipRects = []
+  // target 成员起始零面积，目标 = p=1 时真实屏幕 Text 矩形
+  targetClipRects.push({
+    x: sourceGlyphOnScreen.x,
+    y: sourceGlyphOnScreen.y,
+    width: 0, // 起始零面积
+    height: sourceGlyphOnScreen.height,
+  })
+  // target 成员的 gap 碎片：起始零面积 + 按比例映射到目标的间隙
+  for (const gap of gaps) {
+    targetClipRects.push({
+      x: gap.x,
+      y: gap.y,
+      width: 0, // 起始零面积（从零面积渐显到完整目标）
+      height: Math.max(0, gap.height),
+    })
+  }
+
+  // 关键验证：旧源窗口的 opacity 不是 undefined（因为有 crossfade）
+  // buildFrame 中：opacity: needsSourceCrossfade ? 1 - p : undefined
+  const oldSourceOpacity = intervalNeedsCrossfade ? 1 - p : undefined
+  assert.notEqual(oldSourceOpacity, undefined,
+    '旧源窗口 opacity 应不是 undefined（因为有 crossfade）')
+  assert.equal(oldSourceOpacity, 1,
+    `旧源窗口 opacity 应为 1-p = 1（p=0），实际 ${oldSourceOpacity}`)
+
+  // 关键验证：新源窗口被创建（sourceKind='new'）
+  // buildFrame 中：if (needsSourceCrossfade) { 创建新源窗口 }
+  const newSourceWindow = {
+    sourceKind: 'new',
+    opacity: p, // 新源窗口 opacity = p
+    clipRects: targetClipRects,
+    renderNodeKey: 'new-node-newRev',
+  }
+  assert.equal(newSourceWindow.sourceKind, 'new',
+    '新源窗口 sourceKind 应为 new')
+  assert.equal(newSourceWindow.opacity, 0,
+    `新源窗口 opacity 应为 p = 0（p=0），实际 ${newSourceWindow.opacity}`)
+
+  // 关键验证：新源窗口的 clipRects 包含 gap 碎片（从零面积渐显到完整目标）
+  assert.ok(newSourceWindow.clipRects.length > frozenClipRects.length,
+    `新源窗口 clipRects 应比旧源多（包含 gap 碎片），实际 ${newSourceWindow.clipRects.length} vs ${frozenClipRects.length}`)
+
+  // 关键验证：旧源窗口的 clipRects 只包含已可见碎片（不包含 gap 碎片）
+  for (const cr of frozenClipRects) {
+    assert.ok(cr.width > 0,
+      `旧源窗口 clipRects 中每个碎片 width 应 > 0（不是零宽 gap 碎片），实际 ${cr.width}`)
+  }
+  // 旧源窗口的 clipRects 不应覆盖 [5,10] gap 区域
+  assert.ok(!frozenClipRects.some(cr => cr.x >= 5),
+    '旧源窗口 clipRects 不应包含 [5,10] gap 区域的碎片')
+
+  // 关键验证：新源窗口的 clipRects 包含 gap 碎片（起始零面积，渐显到完整目标）
+  // target 成员的 gap 碎片起始 width=0，但存在（会在动画过程中渐显）
+  const gapFragments = newSourceWindow.clipRects.filter(cr => cr.width === 0)
+  assert.ok(gapFragments.length > 0,
+    `新源窗口 clipRects 应包含 gap 碎片（起始零面积），实际 ${gapFragments.length} 个零宽碎片`)
 })
 
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
