@@ -580,6 +580,14 @@ export interface MotionGlyphWindow {
    * 缺省时为 1（完全不透明）——不影响其他通道（insert/deleted/carryGhost）。
    */
   opacity?: number
+  /**
+   * Issue #879 复核评论6120195493：窗口携带的原始 glyphId→UTF-16 身份映射。
+   *
+   * frozen 成员聚合时直接复制原始窗口的映射，不用 min/max + 不连续幸存列表
+   * 重新猜（buildGlyphUtf16Ranges）。commitDisplayedContext 冻结时优先使用此字段，
+   * 避免 UTF-16 范围与 glyphIds 数量不匹配导致返回 null。
+   */
+  glyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /**

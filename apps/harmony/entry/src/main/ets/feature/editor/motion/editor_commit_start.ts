@@ -215,6 +215,16 @@ export interface FrozenGlyphMember {
    * target 成员：undefined——由 buildFrame 分配新的 windowInstanceId。
    */
   windowInstanceId: string | undefined
+  /**
+   * Issue #879 复核评论6120195493：该成员所属原始冻结窗口的完整 glyphId→UTF-16 身份映射。
+   *
+   * 从 FrozenWindowSpan.glyphUtf16Ranges 直接复制（非 null 时是整个窗口的映射，不只是该成员
+   * 对应的单个字形）。buildFrame 的 FrozenWindowGroupPlan 用它填充 originalGlyphUtf16Ranges，
+   * 传递给 MotionGlyphWindow.glyphUtf16Ranges，避免下游 buildGlyphUtf16Ranges 在不连续幸存字
+   * 场景用 min/max 重新猜导致返回 null。
+   * target 成员（新建的 newRevision 目标）没有原始窗口映射，为 undefined。
+   */
+  glyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /** 可见字形段——run 簇序里的一个连续可见区间（可能有多段）。 */
@@ -1971,8 +1981,10 @@ function buildSourceMembers(
     // 该 span 有有效几何——构建 FrozenGlyphMember
     // Issue #879 评论6110857105 问题6：按 renderNodeKey + sourceRevision 在 firstVisible 中
     // 查找匹配的 OnScreenInterval（唯一身份标识匹配，避免同源同 offset 的不同成员错误匹配）
-    let clipRects: RectLike[] = []
-    let matched = false
+    // Issue #879 复核评论6120195493：matched 分支只用于标记 consumed（避免同 key 多 span 重复
+    // 匹配 interval），不再直接复制 interval.rects 作为 clipRects。clipRects 的计算统一用
+    // span.clipRects 与字形在屏矩形求交。这样隐藏 span（clipRects 与字形无交集）即使匹配上
+    // interval，也会得到空 clipRects，而不是错误地复制 interval.rects（可见 span 的裁切矩形）。
     for (let vi = 0; vi < firstVisible.length; vi++) {
       if (consumed.has(vi)) {
         continue
@@ -1980,34 +1992,32 @@ function buildSourceMembers(
       const interval = firstVisible[vi]
       if (interval.renderNodeKey === span.renderNodeKey &&
           interval.sourceRevision === span.sourceRevision) {
-        clipRects = interval.rects.map((r: RectLike): RectLike => ({
-          x: r.x, y: r.y, width: r.width, height: r.height,
-        }))
         consumed.add(vi)
-        matched = true
         break
       }
     }
-    // 匹配不上时：从 span.clipRects 与字形在屏矩形求交，自行计算 clipRects
-    if (!matched) {
-      const glyphOnScreenLeft = rect.x + span.offsetX
-      const glyphOnScreenRight = rect.x + rect.width + span.offsetX
-      const glyphOnScreenTop = rect.y + span.offsetY
-      const glyphOnScreenBottom = rect.y + rect.height + span.offsetY
-      for (const cr of span.clipRects) {
-        const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
-        const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
-        const intersectTop = Math.max(glyphOnScreenTop, cr.y)
-        const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
-        if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
-            intersectBottom - intersectTop > VISIBLE_EPSILON) {
-          clipRects.push({
-            x: intersectLeft,
-            y: intersectTop,
-            width: intersectRight - intersectLeft,
-            height: intersectBottom - intersectTop,
-          })
-        }
+    // 无论是否匹配 interval，clipRects 都用 span.clipRects 与字形在屏矩形求交计算。
+    // 隐藏 span（clipRects 与字形无交集）得到空 clipRects；可见 span 得到非空 clipRects。
+    // 这与 clusterVisible 的求交逻辑一致，保证 buildSourceMembers 的 clipRects 与
+    // OnScreenInterval 的可见性语义同源。
+    const clipRects: RectLike[] = []
+    const glyphOnScreenLeft = rect.x + span.offsetX
+    const glyphOnScreenRight = rect.x + rect.width + span.offsetX
+    const glyphOnScreenTop = rect.y + span.offsetY
+    const glyphOnScreenBottom = rect.y + rect.height + span.offsetY
+    for (const cr of span.clipRects) {
+      const intersectLeft = Math.max(glyphOnScreenLeft, cr.x)
+      const intersectRight = Math.min(glyphOnScreenRight, cr.x + cr.width)
+      const intersectTop = Math.max(glyphOnScreenTop, cr.y)
+      const intersectBottom = Math.min(glyphOnScreenBottom, cr.y + cr.height)
+      if (intersectRight - intersectLeft > VISIBLE_EPSILON &&
+          intersectBottom - intersectTop > VISIBLE_EPSILON) {
+        clipRects.push({
+          x: intersectLeft,
+          y: intersectTop,
+          width: intersectRight - intersectLeft,
+          height: intersectBottom - intersectTop,
+        })
       }
     }
     members.push({
@@ -2030,6 +2040,9 @@ function buildSourceMembers(
       sourceUtf16End: utf16Range[1],
       targetOpacity: -1,
       windowInstanceId: span.windowInstanceId,
+      // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射，
+      // 供 buildFrame 的 FrozenWindowGroupPlan.originalGlyphUtf16Ranges 使用。
+      glyphUtf16Ranges: span.glyphUtf16Ranges,
     })
   }
   return members
@@ -2151,6 +2164,7 @@ function intervalForIsland(
         let sourceUtf16Start = 0
         let sourceUtf16End = 0
         let windowInstanceId: string | undefined = undefined
+        let glyphUtf16Ranges: Map<string, [number, number]> | null = null
         if (allSpans !== undefined) {
           for (const sp of allSpans) {
             if (sp.renderNodeKey === g.renderNodeKey &&
@@ -2158,6 +2172,7 @@ function intervalForIsland(
               sourceRevision = sp.sourceRevision
               opacity = sp.opacity
               windowInstanceId = sp.windowInstanceId
+              glyphUtf16Ranges = sp.glyphUtf16Ranges
               const utf16Range = sp.glyphUtf16Ranges?.get(glyphId)
               if (utf16Range !== undefined) {
                 sourceUtf16Start = utf16Range[0]
@@ -2202,6 +2217,8 @@ function intervalForIsland(
           sourceUtf16End: sourceUtf16End,
           targetOpacity: -1,
           windowInstanceId: windowInstanceId,
+          // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: glyphUtf16Ranges,
         }
       })
     }
@@ -2263,6 +2280,10 @@ function deepCloneSourceMembers(members: FrozenGlyphMember[]): FrozenGlyphMember
     sourceUtf16End: m.sourceUtf16End,
     targetOpacity: m.targetOpacity,
     windowInstanceId: m.windowInstanceId,
+    // Issue #879 复核评论6120195493：深拷贝 glyphUtf16Ranges（Map 浅拷贝足够，
+    // tuple [number, number] 不可变）。保留原始窗口的完整映射。
+    glyphUtf16Ranges: m.glyphUtf16Ranges !== undefined && m.glyphUtf16Ranges !== null
+      ? new Map(m.glyphUtf16Ranges) : m.glyphUtf16Ranges,
   }))
 }
 
@@ -2285,6 +2306,27 @@ function mergeMemberUpdates(
   prevMembers: FrozenGlyphMember[],
   newMembers: FrozenGlyphMember[] | undefined
 ): FrozenGlyphMember[] {
+  // Issue #879 复核评论6120195493 问题3：同 key 的 offset/opacity 在组级别统一更新。
+  // 同一 renderNodeKey 的成员共享一张物理 Text，不能含有互相矛盾的窗口级位移或 alpha。
+  // 先按 renderNodeKey 从 newMembers 中提取窗口级属性，再统一应用到该 key 的所有成员。
+
+  // 步骤1：按 renderNodeKey 从 newMembers 提取窗口级属性
+  const windowLevelUpdates = new Map<string, { offsetX: number, offsetY: number, opacity: number | undefined }>()
+  if (newMembers !== undefined) {
+    for (const nw of newMembers) {
+      const key = nw.renderNodeKey
+      // 同 key 的第一个匹配成员的 offset/opacity 作为窗口级值
+      // （同 key 成员的 offset/opacity 应该一致，取任意一个即可）
+      if (!windowLevelUpdates.has(key)) {
+        windowLevelUpdates.set(key, {
+          offsetX: nw.offsetX,
+          offsetY: nw.offsetY,
+          opacity: nw.opacity,
+        })
+      }
+    }
+  }
+
   const result: FrozenGlyphMember[] = []
   const consumedNew = new Set<number>()
   for (const prev of prevMembers) {
@@ -2297,7 +2339,9 @@ function mergeMemberUpdates(
         const nw = newMembers[ni]
         if (nw.renderNodeKey === prev.renderNodeKey &&
             nw.sourceRevision === prev.sourceRevision) {
-          // 匹配上：保持 prev 的身份字段，更新 clipRects/opacity/offset
+          // 匹配上：保持 prev 的身份字段，更新 clipRects/sourceGlyphRect/sourceUtf16
+          // 但 offset/opacity 从窗口级更新取值（同 key 统一）
+          const windowUpdate = windowLevelUpdates.get(prev.renderNodeKey)
           result.push({
             sourceKind: prev.sourceKind,
             sourceRevision: prev.sourceRevision,
@@ -2308,12 +2352,14 @@ function mergeMemberUpdates(
               x: nw.sourceGlyphRect.x, y: nw.sourceGlyphRect.y,
               width: nw.sourceGlyphRect.width, height: nw.sourceGlyphRect.height,
             },
-            offsetX: nw.offsetX,
-            offsetY: nw.offsetY,
+            // Issue #879 复核评论6120195493 问题3：offset 从窗口级更新取值，不由各字独立刷新
+            offsetX: windowUpdate !== undefined ? windowUpdate.offsetX : nw.offsetX,
+            offsetY: windowUpdate !== undefined ? windowUpdate.offsetY : nw.offsetY,
             clipRects: nw.clipRects.map((cr: RectLike): RectLike => ({
               x: cr.x, y: cr.y, width: cr.width, height: cr.height,
             })),
-            opacity: nw.opacity,
+            // opacity 从窗口级更新取值
+            opacity: windowUpdate !== undefined ? windowUpdate.opacity : nw.opacity,
             sourceUtf16Start: nw.sourceUtf16Start,
             sourceUtf16End: nw.sourceUtf16End,
             // Issue #879：matched 分支保留 prev.targetOpacity——Planner 设置的目标透明度
@@ -2323,6 +2369,10 @@ function mergeMemberUpdates(
             // 同一完整 render key 的 ID 若采样出不同值，候选实际上声明同一物理 Text 对应新租约；
             // 后续 onAppear/onDisAppear 和 releaseRenderNodeLease 会用不一致的 ID。
             windowInstanceId: prev.windowInstanceId,
+            // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+            // 优先用 nw 的（retarget 时新 frozenWindows 已正确传递），fallback 到 prev。
+            glyphUtf16Ranges: nw.glyphUtf16Ranges !== undefined
+              ? nw.glyphUtf16Ranges : prev.glyphUtf16Ranges,
           })
           consumedNew.add(ni)
           matched = true
@@ -2355,6 +2405,8 @@ function mergeMemberUpdates(
           sourceUtf16End: prev.sourceUtf16End,
           targetOpacity: prev.targetOpacity,
           windowInstanceId: prev.windowInstanceId,
+          // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: prev.glyphUtf16Ranges,
         })
       } else {
         result.push({
@@ -2375,6 +2427,8 @@ function mergeMemberUpdates(
           sourceUtf16End: prev.sourceUtf16End,
           targetOpacity: 0,
           windowInstanceId: prev.windowInstanceId,
+          // Issue #879 复核评论6120195493：保留原始窗口的完整 glyphUtf16Ranges 映射。
+          glyphUtf16Ranges: prev.glyphUtf16Ranges,
         })
       }
     }

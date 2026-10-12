@@ -155,13 +155,49 @@ interface FrozenWindowPiece {
 }
 
 /**
- * Issue #879 复核评论6119020043 问题1：同一物理 Text（同一 renderNodeKey）的冻结成员
- * 共用的位移增量。一个物理 Text 只有一个位移轨迹，聚合多个成员时必须用同一份增量，
- * 否则会出现「裁切框移动、字形不动」的丢字/重影。
+ * Issue #879 复核评论6120195493：同一物理 Text（同一 renderNodeKey）的窗口级组计划。
+ *
+ * 同一 renderNodeKey 的所有 frozen 成员共享一张 ArkUI Text，必须只有一份窗口级
+ * offset/alpha/position，不能由各字先计算再保留第一个字的数值。
+ * 各字只保留自己的裁切矩形和源 UTF-16 子区间。
  */
-interface FrozenGroupDelta {
-  dx: number
-  dy: number
+interface FrozenWindowGroupPlan {
+  /** 窗口级起始 offsetX（来自原始 FrozenWindowSpan/MotionGlyphWindow，不是第一成员的值） */
+  startOffsetX: number
+  /** 窗口级起始 offsetY */
+  startOffsetY: number
+  /** 窗口级起始 alpha（来自原始窗口的 opacity） */
+  startAlpha: number
+  /** 窗口级目标 alpha */
+  endAlpha: number
+  /** 窗口级目标 offsetX */
+  targetOffsetX: number
+  /** 窗口级目标 offsetY */
+  targetOffsetY: number
+  /** 窗口级当前位置 X */
+  currentX: number
+  /** 窗口级当前位置 Y */
+  currentY: number
+  /** 窗口级当前 alpha（插值后的值） */
+  currentAlpha: number
+  /** 该组的 renderNodeKey */
+  renderNodeKey: string
+  /** 该组的 runId */
+  runId: string
+  /** 该组的 sourceRevision */
+  sourceRevision: number
+  /** 该组的 sourceKind */
+  sourceKind: 'old' | 'new'
+  /** 该组的 windowInstanceId */
+  windowInstanceId: string
+  /** 原始完整源 UTF-16 起始位置（不是 min，而是原始窗口的 utf16Start） */
+  originalUtf16Start: number
+  /** 原始完整源 UTF-16 结束位置（不是 max，而是原始窗口的 utf16End） */
+  originalUtf16End: number
+  /** 原始完整 glyphId→UTF-16 身份映射（直接复制原窗口的映射，不用 min/max 重新猜） */
+  originalGlyphUtf16Ranges: Map<string, [number, number]> | null
+  /** 原始完整 glyphIds 列表（包含范围内全部字形，不只是幸存的） */
+  originalGlyphIds: string[]
 }
 
 /**
@@ -1490,12 +1526,9 @@ export class EditorMotionCoordinator {
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一个聚合 MotionGlyphWindow，合并 clipRects 和 UTF-16 范围。
     const frozenWindowAggregator = new Map<string, MotionGlyphWindow>()
-    // Issue #879 复核评论6119020043 问题1：同一物理 Text（同一 renderNodeKey）只有一份
-    // 位移轨迹。一个冻结窗口可能在多个 interval 里出现，但它们的成员共享同一个物理 Text
-    // 节点，Text 无法同时按多个不同的目标分别平移。这里以该 key 首次出现的成员算出
-    // 平移增量，所有同 key 成员共用这一个增量，保证聚合后 Text 的 offset 与每个 clipRect
-    // 位于同一坐标系——不出现「裁切框移动到新行、字形却停在本行」的丢字。
-    const frozenGroupDelta = new Map<string, FrozenGroupDelta>()
+    // Issue #879 复核评论6120195493：用 FrozenWindowGroupPlan 替代 frozenGroupDelta，
+    // 窗口级属性从原始 FrozenWindowSpan/MotionGlyphWindow 选取，不由首成员抢占。
+    const frozenGroupPlans = new Map<string, FrozenWindowGroupPlan>()
     for (const move of plan.retainedMoves) {
       const moveBoundaries = clusterBoundaries(oldText, move.oldUtf16Start, move.oldUtf16End)
       // 同时计算新正文的 clusterBoundaries——用于查出每个 piece 在新布局中的位置
@@ -1708,21 +1741,75 @@ export class EditorMotionCoordinator {
               const ownTargetY = intervalNewGlyphRect !== null ? intervalNewGlyphRect.y : islandNewY
               let memberTargetScreenX: number = ownTargetX
               let memberTargetScreenY: number = ownTargetY
-              // Issue #879 复核评论6119020043 问题1：frozen 成员共享同一物理 Text 的位移轨迹。
-              // 同 renderNodeKey 的成员用首次出现成员算出的平移增量统一移动，避免「每个字一条
-              // 轨迹、却只有一张 Text」——聚合后 clipRects 与 Text offset 同处一个坐标系。
+              // Issue #879 复核评论6120195493：frozen 成员共享同一物理 Text 的窗口级属性。
+              // 同 renderNodeKey 的所有成员用同一份窗口级 offset/alpha/position，
+              // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
+              // offsetX/offsetY/opacity 等字段）选取，确保隐藏成员不影响整张窗口位置/alpha。
               if (memberRole === 'frozen') {
-                let groupDelta = frozenGroupDelta.get(member.renderNodeKey)
-                if (groupDelta === undefined) {
-                  groupDelta = { dx: ownTargetX - memberStartScreenX, dy: ownTargetY - memberStartScreenY }
-                  frozenGroupDelta.set(member.renderNodeKey, groupDelta)
+                let groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                if (groupPlan === undefined) {
+                  // Issue #879 复核评论6120195493：窗口级属性优先从可见成员（clipRects 非空）
+                  // 选取，不由首成员（可能隐藏 opacity=0/clipRects=[]）抢占。先遍历同 key 的
+                  // 所有 frozen 成员，选取第一个可见成员的 offset/opacity/glyphUtf16Ranges
+                  // 作为窗口级值；如果全部隐藏，才用当前成员的值。
+                  let baseMember = member
+                  for (const m of effectiveMembers) {
+                    if (m.renderNodeKey === member.renderNodeKey &&
+                        m.clipRects.length > 0) {
+                      baseMember = m
+                      break
+                    }
+                  }
+                  // 窗口级起始 offset = baseMember.offsetX/Y（来自原始 FrozenWindowSpan）
+                  const gpStartOffsetX = baseMember.offsetX
+                  const gpStartOffsetY = baseMember.offsetY
+                  const gpStartAlpha = baseMember.opacity !== undefined ? baseMember.opacity : 1
+                  const gpEndAlpha = baseMember.targetOpacity >= 0 ? baseMember.targetOpacity : 0
+                  // 窗口级目标 offset = 目标位置 - sourceGlyphRect.x/y
+                  const gpTargetOffsetX = ownTargetX - baseMember.sourceGlyphRect.x
+                  const gpTargetOffsetY = ownTargetY - baseMember.sourceGlyphRect.y
+                  // 窗口级当前位置 = startOffset + (targetOffset - startOffset) * p
+                  const gpCurrentX = baseMember.sourceGlyphRect.x + gpStartOffsetX +
+                    (gpTargetOffsetX - gpStartOffsetX) * p
+                  const gpCurrentY = baseMember.sourceGlyphRect.y + gpStartOffsetY +
+                    (gpTargetOffsetY - gpStartOffsetY) * p
+                  const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
+                  groupPlan = {
+                    startOffsetX: gpStartOffsetX,
+                    startOffsetY: gpStartOffsetY,
+                    startAlpha: gpStartAlpha,
+                    endAlpha: gpEndAlpha,
+                    targetOffsetX: gpTargetOffsetX,
+                    targetOffsetY: gpTargetOffsetY,
+                    currentX: gpCurrentX,
+                    currentY: gpCurrentY,
+                    currentAlpha: gpCurrentAlpha,
+                    renderNodeKey: member.renderNodeKey,
+                    runId: member.runId,
+                    sourceRevision: member.sourceRevision,
+                    sourceKind: member.sourceKind,
+                    windowInstanceId: member.windowInstanceId !== undefined
+                      ? member.windowInstanceId : '',
+                    originalUtf16Start: member.sourceUtf16Start,
+                    originalUtf16End: member.sourceUtf16End,
+                    // Issue #879 复核评论6120195493：从可见成员携带原始窗口的完整
+                    // glyphUtf16Ranges 映射，避免下游 buildGlyphUtf16Ranges 在不连续
+                    // 幸存字场景用 min/max 重新猜导致返回 null。
+                    originalGlyphUtf16Ranges: baseMember.glyphUtf16Ranges !== undefined
+                      ? baseMember.glyphUtf16Ranges : null,
+                    originalGlyphIds: interval.glyphIds,
+                  }
+                  frozenGroupPlans.set(member.renderNodeKey, groupPlan)
                 }
-                memberTargetScreenX = memberStartScreenX + groupDelta.dx
-                memberTargetScreenY = memberStartScreenY + groupDelta.dy
+                // frozen 成员的目标位置 = sourceGlyphRect + groupPlan.targetOffset
+                memberTargetScreenX = member.sourceGlyphRect.x + groupPlan.targetOffsetX
+                memberTargetScreenY = member.sourceGlyphRect.y + groupPlan.targetOffsetY
               }
               let memberCurrentX: number
               let memberCurrentY: number
               if (memberRole === 'frozen' && member.clipRects.length === 0) {
+                // Issue #879 复核评论6120195493：隐藏 frozen 成员保持起始屏幕位置，
+                // 但 opacity 从 groupPlan.currentAlpha 取值，不由成员自己计算。
                 memberCurrentX = memberStartScreenX
                 memberCurrentY = memberStartScreenY
               } else {
@@ -1889,24 +1976,67 @@ export class EditorMotionCoordinator {
                 : (member.sourceRevision === newRevision ? 'target' : 'frozen')
 
               // 问题3：透明度用 startOpacity→targetOpacity 插值。
-              // Issue #879 复核评论6119020043 问题2：不再让「来源 opacity 是否定义」控制是否
-              // 采用 Planner 给出的目标 alpha。opacity===undefined 在语义上就是「当前完全不
-              // 透明」（普通非交叉淡变源的合法输入），frozen 源若因此被当作始终不透明，就会
-              // 整轮盖住正在淡入的新目标字。统一成显式数值：
-              //   frozen 起始 alpha = opacity ?? 1；target 起始 alpha = opacity ?? 0；
-              //   终点 alpha = targetOpacity>=0 ? targetOpacity : (target ? 1 : 0)。
-              const memberEndOpacity = member.targetOpacity >= 0
-                ? member.targetOpacity
-                : (memberRole === 'target' ? 1 : 0)
-              const memberStartOpacity = member.opacity !== undefined
-                ? member.opacity
-                : (memberRole === 'target' ? 0 : 1)
-              const memberOpacity: number = memberStartOpacity + (memberEndOpacity - memberStartOpacity) * p
+              // Issue #879 复核评论6120195493：frozen 成员的 opacity 从 groupPlan.currentAlpha 取值，
+              // 不由成员自己计算——同一物理 Text 只有一份窗口级 alpha，隐藏成员不得用自身
+              // opacity=0 抢占整张 Text 的 alpha。target 成员仍各自计算。
+              let memberOpacity: number
+              if (memberRole === 'frozen') {
+                const groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                if (groupPlan !== undefined) {
+                  memberOpacity = groupPlan.currentAlpha
+                } else {
+                  const memberEndOpacity = member.targetOpacity >= 0
+                    ? member.targetOpacity
+                    : 0
+                  const memberStartOpacity = member.opacity !== undefined
+                    ? member.opacity
+                    : 1
+                  memberOpacity = memberStartOpacity + (memberEndOpacity - memberStartOpacity) * p
+                }
+              } else {
+                const memberEndOpacity = member.targetOpacity >= 0
+                  ? member.targetOpacity
+                  : 1
+                const memberStartOpacity = member.opacity !== undefined
+                  ? member.opacity
+                  : 0
+                memberOpacity = memberStartOpacity + (memberEndOpacity - memberStartOpacity) * p
+              }
+
+              // Issue #879 复核评论6120195493：frozen 成员的窗口级属性从 groupPlan 取值，
+              // 不从成员自己计算。同一物理 Text 只有一份 offset/position/alpha。
+              // target 成员仍使用各自的值。
+              let windowOffsetX = memberOffsetX
+              let windowOffsetY = memberOffsetY
+              let windowCurrentX = memberCurrentX
+              let windowCurrentY = memberCurrentY
+              let windowUtf16Start = memberUtf16Start
+              let windowUtf16End = memberUtf16End
+              let windowGlyphIds = interval.glyphIds
+              let windowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
+              if (memberRole === 'frozen') {
+                const groupPlan = frozenGroupPlans.get(member.renderNodeKey)
+                if (groupPlan !== undefined) {
+                  // 窗口级 offset = groupPlan 的插值 offset
+                  windowOffsetX = groupPlan.startOffsetX +
+                    (groupPlan.targetOffsetX - groupPlan.startOffsetX) * p
+                  windowOffsetY = groupPlan.startOffsetY +
+                    (groupPlan.targetOffsetY - groupPlan.startOffsetY) * p
+                  // 窗口级当前位置 = groupPlan 的插值位置
+                  windowCurrentX = groupPlan.currentX
+                  windowCurrentY = groupPlan.currentY
+                  // 保留原始完整 UTF-16 范围和 glyphIds，不用 min/max 和去重追加
+                  windowUtf16Start = groupPlan.originalUtf16Start
+                  windowUtf16End = groupPlan.originalUtf16End
+                  windowGlyphIds = groupPlan.originalGlyphIds
+                  windowGlyphUtf16Ranges = groupPlan.originalGlyphUtf16Ranges
+                }
+              }
 
               const memberWindow: MotionGlyphWindow = {
                 sourceKind: member.sourceKind,
-                utf16Start: memberUtf16Start,
-                utf16End: memberUtf16End,
+                utf16Start: windowUtf16Start,
+                utf16End: windowUtf16End,
                 clipLeft: islandBboxLeft,
                 clipRight: islandBboxRight,
                 clipTop: islandBboxTop,
@@ -1916,11 +2046,11 @@ export class EditorMotionCoordinator {
                 glyphY: memberGlyphY,
                 glyphWidth: memberGlyphWidth,
                 glyphHeight: memberGlyphHeight,
-                offsetX: memberOffsetX,
-                offsetY: memberOffsetY,
+                offsetX: windowOffsetX,
+                offsetY: windowOffsetY,
                 runId: member.runId,
                 sourceRevision: member.sourceRevision,
-                glyphIds: interval.glyphIds,
+                glyphIds: windowGlyphIds,
                 windowId: move.windowId,
                 windowInstanceId: member.role === 'frozen' && member.windowInstanceId !== undefined
                   ? member.windowInstanceId
@@ -1928,13 +2058,14 @@ export class EditorMotionCoordinator {
                 renderNodeKey: memberRenderNodeKey,
                 currentClipLeft: islandBboxLeft,
                 currentClipRight: islandBboxRight,
-                currentPositionX: memberCurrentX,
-                currentPositionY: memberCurrentY,
+                currentPositionX: windowCurrentX,
+                currentPositionY: windowCurrentY,
                 motionOwnerKind: 'reflow',
-                opacity: memberOpacity
+                opacity: memberOpacity,
+                glyphUtf16Ranges: windowGlyphUtf16Ranges
               }
               // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
-              // 合并各字的 clipRects 和 UTF-16 范围到一个 MotionGlyphWindow，避免重复 key 丢字。
+              // 合并各字的 clipRects 到一个 MotionGlyphWindow，避免重复 key 丢字。
               // target 成员仍按 interval 独立分配 windowInstanceId，直接 push。
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
@@ -1949,9 +2080,9 @@ export class EditorMotionCoordinator {
                       existing.sourceRevision !== memberWindow.sourceRevision) {
                     motionGlyphWindows.push(memberWindow)
                   } else {
-                    // 合并：扩展 UTF-16 范围、合并 clipRects、扩展包围盒
-                    existing.utf16Start = Math.min(existing.utf16Start, memberWindow.utf16Start)
-                    existing.utf16End = Math.max(existing.utf16End, memberWindow.utf16End)
+                    // Issue #879 复核评论6120195493：只合并裁切和显示片段。
+                    // 不合并 glyphIds 和 UTF-16 范围——保留原始完整映射。
+                    // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
                     existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
                     existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
                     existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
@@ -1959,12 +2090,6 @@ export class EditorMotionCoordinator {
                     existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
                     existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
                     existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
-                    // glyphIds 合并去重
-                    for (const gid of memberWindow.glyphIds) {
-                      if (!existing.glyphIds.includes(gid)) {
-                        existing.glyphIds.push(gid)
-                      }
-                    }
                   }
                 } else {
                   frozenWindowAggregator.set(memberRenderNodeKey, memberWindow)
@@ -3553,11 +3678,18 @@ export class EditorMotionCoordinator {
         sourceLayout = w.sourceKind === 'old' ? displayed.layout : prepared.state.newLayout
       }
 
-      // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
-      // 再与 glyphIds 一一对应，构建 glyphUtf16Ranges。
-      const glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
-        w.glyphIds, w.utf16Start, w.utf16End, sourceText
-      )
+      // Issue #879 复核评论6120195493：优先使用窗口已携带的 glyphUtf16Ranges（原始映射），
+      // 避免 buildGlyphUtf16Ranges 用 min/max + 不连续幸存列表重新猜导致 null。
+      let glyphUtf16Ranges: Map<string, [number, number]> | null = null
+      if (w.glyphUtf16Ranges !== undefined && w.glyphUtf16Ranges !== null) {
+        // 窗口已携带原始映射——直接复制
+        glyphUtf16Ranges = new Map(w.glyphUtf16Ranges)
+      } else {
+        // fallback：用 buildGlyphUtf16Ranges 重新计算
+        glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
+          w.glyphIds, w.utf16Start, w.utf16End, sourceText
+        )
+      }
 
       frozenWindows.push({
         glyphIds: w.glyphIds,

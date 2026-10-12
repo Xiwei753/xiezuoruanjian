@@ -6262,4 +6262,476 @@ test('问题4-6119020043：聚合一致性检查——runId/sourceRevision 不�
   assert(shouldMerge3 === false, 'sourceRevision 不一致时不合并——避免混搭字段')
 })
 
+// ====== Issue #879 复核评论6120195493：三个新修复场景测试 ======
+// 场景1：隐藏的首成员不抢占整张 Text 的 offset/alpha（FrozenWindowGroupPlan 窗口级统一管理）
+// 场景2：不连续幸存字保留 glyphUtf16Ranges（聚合时保留原始完整 UTF-16 范围和 glyphIds）
+// 场景3：同 key 窗口级属性统一（mergeMemberUpdates 的 windowLevelUpdates）
+
+console.log('\n--- Issue #879 复核评论6120195493：三个新修复场景 ---')
+
+// --- 场景1：隐藏的首成员不抢占整张 Text 的 offset/alpha ---
+// FrozenWindowGroupPlan 在 EditorMotionCoordinator.ets 中，无法直接导入测试。
+// 通过 retainedMoveStartState + retargetRunStarts 间接验证：
+// 构造同一 renderNodeKey 的两个 frozen 成员（一个隐藏 opacity=0/clipRects=[]，一个可见），
+// 验证 sourceMembers 中各成员保留各自的 offset/opacity——隐藏成员的 opacity=0 不影响可见成员。
+
+test('场景1-测试1：同 renderNodeKey 双成员（隐藏+可见）——buildSourceMembers 各自保留独立 offset/opacity', () => {
+  const ctx = context('甲乙', 2000, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 两个 span 覆盖同一个 glyphId（乙），同一 renderNodeKey，但一个隐藏一个可见
+  // 隐藏 span：clipRects 与乙的屏幕矩形无交集 → opacity=0
+  // 可见 span：clipRects 与乙的屏幕矩形有交集 → opacity=1
+  const frozen = [
+    makeSpan(yiId, {
+      clipLeft: 200, clipRight: 210,  // 远离乙的位置，无交集
+      clipRects: [{ x: 200, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'old-node-10',  // 同一 renderNodeKey
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,  // 与乙的屏幕矩形有交集
+      clipRects: [{ x: 10, y: 0, width: 10, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'old-node-10',  // 同一 renderNodeKey
+    }),
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '应有 2 个成员（隐藏 + 可见）')
+
+  // 两个成员同一 renderNodeKey
+  assert.equal(members[0].renderNodeKey, 'old-node-10', '成员0 renderNodeKey')
+  assert.equal(members[1].renderNodeKey, 'old-node-10', '成员1 renderNodeKey')
+
+  // 隐藏成员：opacity=0、clipRects=[]
+  const hiddenMember = members.find(m => m.opacity === 0)
+  assert.ok(hiddenMember !== undefined, '应存在隐藏成员（opacity=0）')
+  assert.equal(hiddenMember.opacity, 0, '隐藏成员 opacity 应为 0')
+  assert.equal(hiddenMember.clipRects.length, 0, '隐藏成员 clipRects 应为空')
+
+  // 可见成员：opacity=1、clipRects 非空、offsetX=5
+  const visibleMember = members.find(m => m.opacity === 1)
+  assert.ok(visibleMember !== undefined, '应存在可见成员（opacity=1）')
+  assert.equal(visibleMember.opacity, 1, '可见成员 opacity 应为 1——不被隐藏成员抢占')
+  assert.equal(visibleMember.offsetX, 5, '可见成员 offsetX 应为 5——不被隐藏成员抢占')
+  assert.ok(visibleMember.clipRects.length > 0, '可见成员 clipRects 应非空')
+})
+
+test('场景1-测试2：同 renderNodeKey 双成员——可见成员的 startPositionX 不被隐藏成员影响', () => {
+  const ctx = context('甲乙', 2001, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 隐藏成员：offsetX=0, opacity=0
+  // 可见成员：offsetX=5, opacity=1
+  // 验证 startPositionX 来自可见成员的 offset（5），不是隐藏成员的 offset（0）
+  const frozen = [
+    makeSpan(yiId, {
+      clipLeft: 200, clipRight: 210,
+      clipRects: [{ x: 200, y: 0, width: 10, height: 20 }],
+      offsetX: 0, offsetY: 0,
+      sourceRevision: 10, opacity: 0,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'old-node-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      clipRects: [{ x: 10, y: 0, width: 10, height: 20 }],
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'old-node-10',
+    }),
+  ]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  // interval 的 frozenDrawOffsetX 应来自首个可见成员（offsetX=5），不是隐藏成员（offsetX=0）
+  const iv = pieces[0].intervals[0]
+  assert.ok(iv !== undefined, 'interval 应存在')
+  assert.equal(iv.frozenDrawOffsetX, 5,
+    `frozenDrawOffsetX 应为 5（来自可见成员），实际 ${iv.frozenDrawOffsetX}`)
+  // startPositionX = sourceGlyphX0 + frozenDrawOffsetX = 10 + 5 = 15
+  assert.equal(iv.startPositionX, 15,
+    `startPositionX 应为 15（10+5），不被隐藏成员的 offsetX=0 抢占，实际 ${iv.startPositionX}`)
+})
+
+// --- 场景2：不连续幸存字保留 glyphUtf16Ranges ---
+// 构造覆盖甲乙丙三字形的冻结窗口，乙被删除（clipRects 与乙无交集），
+// 验证 sourceMembers 中甲和丙的 sourceUtf16Start/End 仍保留原始完整映射。
+
+test('场景2-测试1：不连续幸存字（甲丙）保留各自原始完整 UTF-16 范围', () => {
+  const ctx = context('甲乙丙', 2002, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]  // 甲
+  const yiId = glyphIds[1]   // 乙
+  const bingId = glyphIds[2] // 丙
+
+  const layout = srcLayout('甲乙丙')
+  // 一个冻结窗口覆盖甲乙丙三个字形，clipRects 只露出甲和丙（乙被裁掉）
+  // 甲在屏 [0,10]，乙在屏 [10,20]，丙在屏 [20,30]
+  // clipRects: [0,10] 和 [20,30] —— 甲和丙可见，乙不可见
+  const frozen = [{
+    glyphIds: [jiaId, yiId, bingId],
+    clipLeft: 0, clipRight: 30,
+    clipRects: [
+      { x: 0, y: 0, width: 10, height: 20 },   // 甲可见
+      { x: 20, y: 0, width: 10, height: 20 },   // 丙可见（乙在 [10,20] 不可见）
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: new Map([
+      [jiaId, [0, 1]],
+      [yiId, [1, 2]],
+      [bingId, [2, 3]],
+    ]),
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 为甲构造 run（甲是幸存字）
+  const runJia = {
+    glyphIds: [jiaId],
+    ownText: '甲丙',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: srcLayout('甲丙'),
+  }
+  const piecesJia = retainedMoveStartState(runJia, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const membersJia = firstSourceMembers(piecesJia)
+  assert.ok(membersJia !== undefined, '甲的 sourceMembers 应存在')
+  assert.ok(membersJia.length > 0, '甲的 sourceMembers 应有成员')
+  // 甲的 sourceUtf16Start/End 应保留原始完整映射 [0,1]
+  assert.equal(membersJia[0].sourceUtf16Start, 0,
+    `甲 sourceUtf16Start 应为 0（原始完整映射），实际 ${membersJia[0].sourceUtf16Start}`)
+  assert.equal(membersJia[0].sourceUtf16End, 1,
+    `甲 sourceUtf16End 应为 1（原始完整映射），实际 ${membersJia[0].sourceUtf16End}`)
+
+  // 为丙构造 run（丙是幸存字）
+  const runBing = {
+    glyphIds: [bingId],
+    ownText: '甲丙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: srcLayout('甲丙'),
+  }
+  const piecesBing = retainedMoveStartState(runBing, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const membersBing = firstSourceMembers(piecesBing)
+  assert.ok(membersBing !== undefined, '丙的 sourceMembers 应存在')
+  assert.ok(membersBing.length > 0, '丙的 sourceMembers 应有成员')
+  // 丙的 sourceUtf16Start/End 应保留原始完整映射 [2,3]
+  assert.equal(membersBing[0].sourceUtf16Start, 2,
+    `丙 sourceUtf16Start 应为 2（原始完整映射），实际 ${membersBing[0].sourceUtf16Start}`)
+  assert.equal(membersBing[0].sourceUtf16End, 3,
+    `丙 sourceUtf16End 应为 3（原始完整映射），实际 ${membersBing[0].sourceUtf16End}`)
+})
+
+test('场景2-测试2：不连续幸存字——interval 的 glyphIds 保留完整列表', () => {
+  const ctx = context('甲乙丙', 2003, [])
+  const glyphIds = idsOf(ctx, 0, 3)
+  const jiaId = glyphIds[0]
+  const yiId = glyphIds[1]
+  const bingId = glyphIds[2]
+
+  const layout = srcLayout('甲乙丙')
+  // 冻结窗口覆盖甲乙丙，clipRects 只露出甲和丙
+  const frozen = [{
+    glyphIds: [jiaId, yiId, bingId],
+    clipLeft: 0, clipRight: 30,
+    clipRects: [
+      { x: 0, y: 0, width: 10, height: 20 },
+      { x: 20, y: 0, width: 10, height: 20 },
+    ],
+    offsetX: 0, offsetY: 0,
+    sourceRevision: 10,
+    glyphUtf16Ranges: new Map([
+      [jiaId, [0, 1]],
+      [yiId, [1, 2]],
+      [bingId, [2, 3]],
+    ]),
+    sourceLayout: layout,
+    sourceKind: 'old',
+    runId: 'old-10',
+    renderNodeKey: 'old-node-10',
+    opacity: 1,
+    windowInstanceId: 'win-10',
+  }]
+  const withWindow = { ...ctx, frozenWindows: frozen }
+
+  // 为甲构造 run
+  const runJia = {
+    glyphIds: [jiaId],
+    ownText: '甲丙',
+    ownUtf16Start: 0,
+    ownUtf16End: 1,
+    ownRect: { x: 0, y: 0, width: 10, height: 20 },
+    ownLayout: srcLayout('甲丙'),
+  }
+  const piecesJia = retainedMoveStartState(runJia, withWindow, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const iv = piecesJia[0].intervals[0]
+  assert.ok(iv !== undefined, '甲的 interval 应存在')
+  // interval 的 glyphIds 应包含甲（只有甲一个 glyphId，因为 run 只覆盖甲）
+  assert.ok(iv.glyphIds.includes(jiaId), 'interval glyphIds 应包含甲')
+  // sourceMembers 应存在
+  assert.ok(iv.sourceMembers !== undefined, 'sourceMembers 应存在')
+  assert.ok(iv.sourceMembers.length > 0, 'sourceMembers 应有成员')
+  // 甲的成员应保留原始 UTF-16 范围
+  const jiaMember = iv.sourceMembers[0]
+  assert.equal(jiaMember.sourceUtf16Start, 0, '甲成员 sourceUtf16Start 应为 0')
+  assert.equal(jiaMember.sourceUtf16End, 1, '甲成员 sourceUtf16End 应为 1')
+})
+
+// --- 场景3：同 key 窗口级属性统一（mergeMemberUpdates 的 windowLevelUpdates） ---
+// mergeMemberUpdates 是内部函数，通过 retargetRunStarts 间接测试。
+// 构造 prevMembers 中同 renderNodeKey 的两个成员有不同 offsetX，
+// 验证 retarget 后两个成员的 offsetX 统一为窗口级值（取第一个匹配成员的值）。
+
+test('场景3-测试1：同 renderNodeKey 双成员 retarget 后 offsetX 统一为窗口级值', () => {
+  const ctx = context('甲乙', 2004, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 准备阶段：两个冻结窗口覆盖乙，同一 renderNodeKey
+  // Issue #879 复核评论6120195493：clipRects 必须覆盖字形在屏位置（sourceRect.x + offsetX）。
+  // 乙在 sourceLayout 中 x=10-20；offsetX=20 → 在屏 x=30-40；offsetX=25 → 在屏 x=35-45。
+  // 用宽 clipRects 覆盖两者，保证两个 span 都可见，从而产生 sourceMembers。
+  const frozenPrepare = [
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 100,
+      clipRects: [{ x: 0, y: 0, width: 100, height: 20 }],
+      offsetX: 20, offsetY: 0,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 100,
+      clipRects: [{ x: 0, y: 0, width: 100, height: 20 }],
+      offsetX: 25, offsetY: 0,
+      sourceRevision: 10, opacity: 0.5,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+  ]
+  const withWindowPrepare = { ...ctx, frozenWindows: frozenPrepare }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindowPrepare, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '应有 2 个成员')
+  // 准备阶段两个成员的 offsetX 不同（20 vs 25）
+  assert.equal(members[0].offsetX, 20, '准备阶段成员0 offsetX 应为 20')
+  assert.equal(members[1].offsetX, 25, '准备阶段成员1 offsetX 应为 25')
+
+  // retarget 阶段：使用相同的冻结窗口
+  const result = retargetRunStarts(run, pieces, withWindowPrepare, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(resultMembers.length, 2, 'retarget 后应有 2 个成员')
+
+  // windowLevelUpdates 取第一个匹配成员的 offsetX（=20）
+  // 两个成员的 offsetX 都应统一为 20
+  assert.equal(resultMembers[0].offsetX, 20,
+    `retarget 后成员0 offsetX 应统一为 20（窗口级值），实际 ${resultMembers[0].offsetX}`)
+  assert.equal(resultMembers[1].offsetX, 20,
+    `retarget 后成员1 offsetX 应统一为 20（窗口级值），实际 ${resultMembers[1].offsetX}`)
+})
+
+test('场景3-测试2：同 renderNodeKey 双成员 retarget 后 opacity 统一为窗口级值', () => {
+  const ctx = context('甲乙', 2005, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 准备阶段：两个冻结窗口覆盖乙，同一 renderNodeKey，不同 opacity
+  const frozenPrepare = [
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      offsetX: 3, offsetY: 0,
+      sourceRevision: 10, opacity: 0.8,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 10, clipRight: 20,
+      offsetX: 5, offsetY: 0,
+      sourceRevision: 10, opacity: 0.3,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'shared-key-10',
+    }),
+  ]
+  const withWindowPrepare = { ...ctx, frozenWindows: frozenPrepare }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindowPrepare, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '应有 2 个成员')
+  // 准备阶段两个成员的 opacity 不同（0.8 vs 0.3）
+  assert.equal(members[0].opacity, 0.8, '准备阶段成员0 opacity 应为 0.8')
+  assert.equal(members[1].opacity, 0.3, '准备阶段成员1 opacity 应为 0.3')
+
+  // retarget 阶段：使用相同的冻结窗口
+  const result = retargetRunStarts(run, pieces, withWindowPrepare, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(resultMembers.length, 2, 'retarget 后应有 2 个成员')
+
+  // windowLevelUpdates 取第一个匹配成员的 opacity（=0.8）
+  // 两个成员的 opacity 都应统一为 0.8
+  assert.equal(resultMembers[0].opacity, 0.8,
+    `retarget 后成员0 opacity 应统一为 0.8（窗口级值），实际 ${resultMembers[0].opacity}`)
+  assert.equal(resultMembers[1].opacity, 0.8,
+    `retarget 后成员1 opacity 应统一为 0.8（窗口级值），实际 ${resultMembers[1].opacity}`)
+})
+
+test('场景3-测试3：不同 renderNodeKey 的成员 retarget 后各自保留独立 offset——不受其他 key 影响', () => {
+  const ctx = context('甲乙', 2006, [])
+  const glyphIds = idsOf(ctx, 0, 2)
+  const yiId = glyphIds[1]
+
+  const layout = srcLayout('甲乙')
+  // 两个不同 renderNodeKey 的冻结窗口
+  // Issue #879 复核评论6120195493：clipRects 必须覆盖字形在屏位置（sourceRect.x + offsetX）。
+  // 乙在 sourceLayout 中 x=10-20；offsetX=20 → 在屏 x=30-40；offsetX=30 → 在屏 x=40-50。
+  // 用宽 clipRects 覆盖两者，保证两个 span 都可见，从而产生 sourceMembers。
+  const frozenPrepare = [
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 100,
+      clipRects: [{ x: 0, y: 0, width: 100, height: 20 }],
+      offsetX: 20, offsetY: 0,
+      sourceRevision: 10, opacity: 1,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-10',
+      renderNodeKey: 'key-A-10',
+    }),
+    makeSpan(yiId, {
+      clipLeft: 0, clipRight: 100,
+      clipRects: [{ x: 0, y: 0, width: 100, height: 20 }],
+      offsetX: 30, offsetY: 0,
+      sourceRevision: 11, opacity: 0.5,
+      utf16Range: [1, 2], sourceLayout: layout,
+      windowInstanceId: 'win-11',
+      sourceKind: 'new',
+      renderNodeKey: 'key-B-11',
+    }),
+  ]
+  const withWindowPrepare = { ...ctx, frozenWindows: frozenPrepare }
+
+  const run = {
+    glyphIds: [yiId],
+    ownText: '甲乙',
+    ownUtf16Start: 1,
+    ownUtf16End: 2,
+    ownRect: { x: 10, y: 0, width: 10, height: 20 },
+    ownLayout: layout,
+  }
+  const pieces = retainedMoveStartState(run, withWindowPrepare, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+
+  const members = firstSourceMembers(pieces)
+  assert.ok(members !== undefined, 'sourceMembers 应存在')
+  assert.equal(members.length, 2, '应有 2 个成员')
+
+  // retarget 阶段
+  const result = retargetRunStarts(run, pieces, withWindowPrepare, 'retained', 0, {
+    startClipLeft: 0, startClipRight: 0, startPositionX: 0, startPositionY: 0,
+  })
+  const resultMembers = firstSourceMembers(result)
+  assert.ok(resultMembers !== undefined, 'retarget 后 sourceMembers 应存在')
+  assert.equal(resultMembers.length, 2, 'retarget 后应有 2 个成员')
+
+  // 不同 key 的成员各自保留独立 offset——不受其他 key 的 windowLevelUpdates 影响
+  const memberA = resultMembers.find(m => m.renderNodeKey === 'key-A-10')
+  assert.ok(memberA !== undefined, '应存在 key-A-10 成员')
+  assert.equal(memberA.offsetX, 20,
+    `key-A-10 成员 offsetX 应为 20（各自独立），实际 ${memberA.offsetX}`)
+
+  const memberB = resultMembers.find(m => m.renderNodeKey === 'key-B-11')
+  assert.ok(memberB !== undefined, '应存在 key-B-11 成员')
+  assert.equal(memberB.offsetX, 30,
+    `key-B-11 成员 offsetX 应为 30（各自独立），实际 ${memberB.offsetX}`)
+})
+
 console.log(`\n✅ editor_commit_start: ${passed} tests passed`)
