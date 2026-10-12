@@ -287,6 +287,13 @@ impl EditorLayout {
                 .unwrap_or_default(),
             height_index: self.height_index.clone(),
             layout_generation: promoted.generation,
+            // Issue #901 第十九轮问题1: 从 canonical snapshot 继承 ParagraphId → slot 映射。
+            // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
+            paragraph_id_to_slot: self
+                .last_snapshot
+                .as_ref()
+                .map(|s| std::sync::Arc::clone(&s.paragraph_id_to_slot))
+                .unwrap_or_default(),
         });
     }
 
@@ -420,6 +427,9 @@ impl EditorLayout {
             // 原地修改，不产生 Vec clone。
             let lines = Arc::clone(&doc_snapshot.visual_lines);
             let paragraph_offset_index = doc_snapshot.paragraph_offset_index.clone();
+            // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
+            // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
+            let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -436,6 +446,7 @@ impl EditorLayout {
                 paragraph_offset_index,
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
+                paragraph_id_to_slot,
             }
         } else {
             // 全篇重排路径（初始化/参数变化后 invalidate 清空了 store）
@@ -474,6 +485,9 @@ impl EditorLayout {
             // Issue #901 第九轮阻塞5: Arc::clone 共享 visual_lines，不 clone Vec<VisualLine>。
             let lines = Arc::clone(&doc_snapshot.visual_lines);
             let paragraph_offset_index = doc_snapshot.paragraph_offset_index.clone();
+            // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
+            // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
+            let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -490,6 +504,7 @@ impl EditorLayout {
                 paragraph_offset_index,
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
+                paragraph_id_to_slot,
             }
         };
 

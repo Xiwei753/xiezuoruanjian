@@ -1435,13 +1435,10 @@ fn inject_new_animation_visuals_with_diagnostics(
                             vl.cache_slot as usize,
                             vl.qtextline_idx,
                         );
-                        // Issue #901 第十八轮问题3: 同时检查 image 是否已注入。
-                        // clusters 非空不证明 image 已注入，必须分开检查。
-                        let has_image = canonical_line_has_image(
-                            new_doc_snapshot,
-                            vl.cache_slot as usize,
-                            vl.qtextline_idx,
-                        );
+                        // Issue #901 第十九轮问题4: 不在注入前检查 image。
+                        // 基砆 canonical 走 prepare_document_visual_snapshot_scoped 时
+                        // 本来就是延迟准备 QImage，尚未注入的行 image 为 None 是正常状态。
+                        // image 缺失检查移到 inject_animation_visuals_into_snapshot 之后。
                         if !has_clusters {
                             clusters_empty_count += 1;
                             failed_lines.push(AnimationVisualsFailedLine {
@@ -1470,36 +1467,11 @@ fn inject_new_animation_visuals_with_diagnostics(
                                     vl.byte_end,
                                 ),
                             );
-                        } else if !has_image {
-                            // Issue #901 第十八轮问题3: clusters 非空但 image 缺失。
-                            // 动画纹理未成功准备或注入，需要重试注入纹理。
-                            image_missing_count += 1;
-                            failed_lines.push(AnimationVisualsFailedLine {
-                                visual_line_idx: *i,
-                                paragraph_slot: vl.cache_slot as usize,
-                                qtextline_idx: vl.qtextline_idx,
-                                byte_start: vl.byte_start,
-                                byte_end: vl.byte_end,
-                                reason: AnimationVisualsFailedReason::ImageMissing,
-                            });
-                            crate::backend::app_backend::debug_warn_static(
-                                "pipeline",
-                                "prepare_animation_visuals_image_missing_for_inserted_line",
-                                &format!(
-                                    "inserted_range=[{}..{}) visual_line_idx={} \
-                                     paragraph_slot={} qtextline_idx={} byte_start={} \
-                                     byte_end={} — canonical line has clusters but image \
-                                     is None, animation texture not injected, retry needed",
-                                    ins_start,
-                                    ins_end,
-                                    i,
-                                    vl.cache_slot as usize,
-                                    vl.qtextline_idx,
-                                    vl.byte_start,
-                                    vl.byte_end,
-                                ),
-                            );
                         } else {
+                            // Issue #901 第十九轮问题4: clusters 非空的行先记为
+                            // prepared_ok_lines，不管 image 状态。image 缺失检查
+                            // 移到 inject 之后，避免对延迟准备 QImage 的正常 raster
+                            // 误判为缺失。
                             ok_count += 1;
                             // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
                             // clusters 非空的行身份，inject 后用于检测 inject miss。
@@ -1531,6 +1503,39 @@ fn inject_new_animation_visuals_with_diagnostics(
                 expected_inject_count, actual_inject_count,
             ),
         );
+    }
+    // Issue #901 第十九轮问题4: 注入后检查 image 缺失。
+    // 基砆 canonical 走 prepare_document_visual_snapshot_scoped 时本来就是延迟准备
+    // QImage，注入前 image 为 None 是正常状态。只有在 inject_animation_visuals_into_snapshot
+    // 之后 image 仍为 None 才算真正的缺失，需要重试注入纹理。
+    // 遍历 prepared_ok_lines（clusters 非空的行），对每行检查 canonical_line_has_image。
+    for (vidx, paragraph_slot, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
+        let has_image = canonical_line_has_image(
+            new_doc_snapshot,
+            *paragraph_slot,
+            *qtextline_idx,
+        );
+        if !has_image {
+            image_missing_count += 1;
+            failed_lines.push(AnimationVisualsFailedLine {
+                visual_line_idx: *vidx,
+                paragraph_slot: *paragraph_slot,
+                qtextline_idx: *qtextline_idx,
+                byte_start: *byte_start,
+                byte_end: *byte_end,
+                reason: AnimationVisualsFailedReason::ImageMissing,
+            });
+            crate::backend::app_backend::debug_warn_static(
+                "pipeline",
+                "inject_animation_visuals_image_missing_for_inserted_line",
+                &format!(
+                    "visual_line_idx={} paragraph_slot={} qtextline_idx={} \
+                     byte_start={} byte_end={} — canonical line has clusters but image \
+                     is None after inject, animation texture not injected, retry needed",
+                    vidx, paragraph_slot, qtextline_idx, byte_start, byte_end,
+                ),
+            );
+        }
     }
     // Issue #808 评论 5918236360 问题1: 检测 inject miss。
     // prepare 成功且 clusters 非空的行，inject 后应在 new_doc_snapshot.paragraphs 中

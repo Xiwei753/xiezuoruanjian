@@ -128,7 +128,8 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// 增量编辑拆段/合段后，后缀行的 `cache_slot` 可能过时，但 `paragraph_id` 不变，
     /// 通过此映射查到新 slot。`ParagraphId::INVALID` 不存入映射，
     /// `materialize_line` 遇到 INVALID 回退到 `cache_slot`。
-    pub paragraph_id_to_slot: std::collections::HashMap<ParagraphId, usize>,
+    /// Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
+    pub paragraph_id_to_slot: std::sync::Arc<std::collections::HashMap<ParagraphId, usize>>,
 }
 
 impl CanonicalDocumentVisualSnapshot {
@@ -172,7 +173,8 @@ impl CanonicalDocumentVisualSnapshot {
             x_end_trailing: line.x_end_trailing,
             qt_ascent: line.qt_ascent,
             qt_descent: line.qt_descent,
-            cache_slot: line.cache_slot,
+            // Issue #901 第十九轮问题1: 返回修正后的 slot，而非旧 cache_slot。
+            cache_slot: slot as i32,
             // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
             paragraph_id: line.paragraph_id,
         }
@@ -559,6 +561,9 @@ impl CanonicalDocumentVisualSnapshot {
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,
+            // Issue #901 第十九轮问题1: 从 canonical snapshot 继承 ParagraphId → slot 映射。
+            // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
+            paragraph_id_to_slot: std::sync::Arc::clone(&self.paragraph_id_to_slot),
         }
     }
 }

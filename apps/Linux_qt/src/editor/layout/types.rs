@@ -156,6 +156,10 @@ pub struct LayoutSnapshot {
     /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
     /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
     pub layout_generation: u64,
+    /// Issue #901 第十九轮问题1: ParagraphId → 当前段落 slot 映射。
+    /// materialize_line 用此映射解析 slot，不依赖需要遍历后缀行更新的 cache_slot。
+    /// Issue #901 第十九轮问题5: Arc 共享，避免 clone O(段落数)。
+    pub paragraph_id_to_slot: std::sync::Arc<std::collections::HashMap<ParagraphId, usize>>,
 }
 
 #[cfg(test)]
@@ -178,6 +182,7 @@ impl LayoutSnapshot {
             paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex::new(),
             height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
             layout_generation: 0,
+            paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -191,7 +196,16 @@ impl LayoutSnapshot {
     /// Issue #901 第十五轮问题5a: `global_id` 参数保证行 ID 全局唯一。
     /// 物化时用 visual_lines 中的索引作为全局 id，不再依赖段内 ordinal。
     fn materialize_line(&self, line: &VisualLine, global_id: usize) -> VisualLine {
-        let slot = line.cache_slot as usize;
+        // Issue #901 第十九轮问题1: 优先用 paragraph_id_to_slot 映射解析 slot，
+        // 不依赖需要遍历后缀行更新的 cache_slot。fallback 到 cache_slot 保证兼容。
+        let slot = if line.paragraph_id != ParagraphId::INVALID {
+            self.paragraph_id_to_slot
+                .get(&line.paragraph_id)
+                .copied()
+                .unwrap_or(line.cache_slot as usize)
+        } else {
+            line.cache_slot as usize
+        };
         let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
         let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
         let para_top_y = f64::from(self.padding) + self.height_index.paragraph_top_y(slot);
@@ -219,10 +233,9 @@ impl LayoutSnapshot {
             x_end_trailing: line.x_end_trailing,
             qt_ascent: line.qt_ascent,
             qt_descent: line.qt_descent,
-            cache_slot: line.cache_slot,
+            // Issue #901 第十九轮问题1: 返回修正后的 slot，而非旧 cache_slot。
+            cache_slot: slot as i32,
             // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
-            // LayoutSnapshot 没有 paragraph_id_to_slot 映射，materialize_line 仍用
-            // cache_slot 解析 slot，但 paragraph_id 透传给消费方（如 canonical snapshot）。
             paragraph_id: line.paragraph_id,
         }
     }

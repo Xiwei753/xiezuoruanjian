@@ -117,7 +117,7 @@ fn test_doc_snapshot(
             crate::editor::layout::ParagraphOffsetIndex::new(),
         height_index:
             crate::editor::layout::ParagraphHeightIndex::new(),
-        paragraph_id_to_slot: std::collections::HashMap::new(),
+        paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
     }
 }
 

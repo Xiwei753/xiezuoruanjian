@@ -184,9 +184,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
                 cache_slot: paragraph_idx,
-                // Issue #901 第十八轮问题4: 全篇排版路径无 paragraph_store，
-                // 用 INVALID；paragraph_id_to_slot 映射从 visual_lines 构建。
-                paragraph_id: ParagraphId::INVALID,
+                // Issue #901 第十九轮问题2: 全篇排版路径无 paragraph_store，
+                // 用段落索引分配稳定 ParagraphId（0 是 INVALID，所以 +1）。
+                paragraph_id: ParagraphId::from_u64(paragraph_idx as u64 + 1),
             });
             line_id += 1;
             y += line_height;
@@ -267,9 +267,10 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 qt_ascent: canonical_line.ascent,
                 qt_descent: canonical_line.descent,
                 cache_slot: paragraph_idx - 1,
-                // Issue #901 第十八轮问题4: 全篇排版路径无 paragraph_store，
-                // 用 INVALID；paragraph_id_to_slot 映射从 visual_lines 构建。
-                paragraph_id: ParagraphId::INVALID,
+                // Issue #901 第十九轮问题2: 全篇排版路径无 paragraph_store，
+                // 用段落索引分配稳定 ParagraphId（0 是 INVALID，所以 +1）。
+                // paragraph_idx 已递增，当前段索引为 paragraph_idx - 1。
+                paragraph_id: ParagraphId::from_u64((paragraph_idx - 1) as u64 + 1),
             });
             line_id += 1;
             y += actual_line_h;
@@ -324,7 +325,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             qt_ascent: empty_ascent,
             qt_descent: empty_descent,
             cache_slot: 0,
-            paragraph_id: ParagraphId::INVALID,
+            // Issue #901 第十九轮问题2: 空文本只有 1 段（索引 0），赋真实 ParagraphId。
+            paragraph_id: ParagraphId::from_u64(1),
         });
         paragraphs.push(CanonicalParagraphSnapshot {
             paragraph_text: String::new(),
@@ -375,7 +377,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             qt_ascent: 0.0,
             qt_descent: 0.0,
             cache_slot: paragraph_idx,
-            paragraph_id: ParagraphId::INVALID,
+            // Issue #901 第十九轮问题2: 尾部换行空段，赋真实 ParagraphId。
+            paragraph_id: ParagraphId::from_u64(paragraph_idx as u64 + 1),
         });
         // paragraph_idx 递增省略：尾部换行分支后不再使用。
     }
@@ -383,7 +386,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     let height_index = build_height_index_from_lines(&visual_lines);
     // Issue #901 第十八轮问题4: 构建 paragraph_id → slot 映射。
     // 全篇排版路径无 paragraph_store，从 visual_lines 的 paragraph_id 构建。
-    let paragraph_id_to_slot = build_paragraph_id_to_slot_from_lines(&visual_lines);
+    // Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
+    let paragraph_id_to_slot =
+        std::sync::Arc::new(build_paragraph_id_to_slot_from_lines(&visual_lines));
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -602,7 +607,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraph_offset_index: prev.paragraph_offset_index.clone(),
                 height_index: prev.height_index.clone(),
                 // Issue #901 第十八轮问题4: 沿用 prev 的 paragraph_id_to_slot 映射。
-                paragraph_id_to_slot: prev.paragraph_id_to_slot.clone(),
+                // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
+                paragraph_id_to_slot: std::sync::Arc::clone(&prev.paragraph_id_to_slot),
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -673,7 +679,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraph_offset_index: ParagraphOffsetIndex::new(),
                 height_index: ParagraphHeightIndex::new(),
                 // Issue #901 第十八轮问题4: 空映射。
-                paragraph_id_to_slot: std::collections::HashMap::new(),
+                // Issue #901 第十九轮问题5: Arc 共享空映射。
+                paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
             };
         }
     };
@@ -1245,8 +1252,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第十八轮问题4: 构建 paragraph_id → slot 映射。
     // 增量排版路径有 paragraph_store，从 store 获取最新 ParagraphId → slot 关系。
     // paragraph_store 在拆段/合段后已更新 ParagraphId 分配，反映当前文档结构。
-    let paragraph_id_to_slot =
-        build_paragraph_id_to_slot_from_store(paragraph_store, paragraphs.len());
+    // Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
+    let paragraph_id_to_slot = std::sync::Arc::new(build_paragraph_id_to_slot_from_store(
+        paragraph_store,
+        paragraphs.len(),
+    ));
 
     let snapshot = CanonicalDocumentVisualSnapshot {
         text_revision,
@@ -1769,7 +1779,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     let height_index = build_height_index_from_lines(&visual_lines);
     // Issue #901 第十八轮问题4: 构建 paragraph_id → slot 映射。
     // 此路径无 paragraph_store，从 visual_lines 的 paragraph_id 构建。
-    let paragraph_id_to_slot = build_paragraph_id_to_slot_from_lines(&visual_lines);
+    // Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
+    let paragraph_id_to_slot =
+        std::sync::Arc::new(build_paragraph_id_to_slot_from_lines(&visual_lines));
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
