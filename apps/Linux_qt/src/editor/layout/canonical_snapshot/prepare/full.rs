@@ -799,19 +799,31 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     //   的完整前后半段，不再吞掉原正文，不切到 UTF-8 字符中间）
     // - 扩展区域之后的未改段（后缀段）从 entries 累计长度 + delta 定位切片获取
     // 当 affected_text_range 不存在、范围不合理或边界检查失败时，回退全文切分。
-    let new_paras: Vec<(&str, bool)> = {
+    // Issue #901 第二十八轮复核问题4: build_new_paras_from_affected_range 额外返回
+    // (prefix_count, suffix_count)，供直接构造 ParagraphSpliceRanges，避免全篇
+    // old_paras 构造和逐段比较。splice_info 为 None 时回退到全篇比较。
+    let (new_paras, splice_info): (Vec<(&str, bool)>, Option<(usize, usize)>) = {
         let store = &*paragraph_store;
         if let Some((aff_start, aff_end)) = affected_text_range {
             if aff_start < aff_end && aff_end <= text.len() && !store.is_empty() {
-                build_new_paras_from_affected_range(text, store, aff_start, aff_end)
-                    .unwrap_or_else(|| {
-                        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
-                    })
+                match build_new_paras_from_affected_range(text, store, aff_start, aff_end) {
+                    Some((paras, pc, sc)) => (paras, Some((pc, sc))),
+                    None => (
+                        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
+                        None,
+                    ),
+                }
             } else {
-                super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+                (
+                    super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
+                    None,
+                )
             }
         } else {
-            super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+            (
+                super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
+                None,
+            )
         }
     };
     let new_para_count = new_paras.len();
@@ -827,22 +839,6 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // new_paras 已含 hard_break（来自 split_paragraphs_with_hard_break）。
     // old_paras 从 prev.paragraphs 获取 content，从 prev.visual_lines 获取 hard_break。
     let new_para_texts: Vec<&str> = new_paras.iter().map(|(p, _)| *p).collect();
-    let old_paras: Vec<(&str, bool)> = (0..prev_para_count)
-        .map(|i| {
-            let content = prev.paragraphs[i].paragraph_text.as_str();
-            let (line_start, line_end) = prev
-                .paragraph_line_count_index
-                .paragraph_line_range(i);
-            let hard_break = if line_start < line_end
-                && line_end <= prev.visual_lines.len()
-            {
-                prev.visual_lines[line_end - 1].hard_break
-            } else {
-                false
-            };
-            (content, hard_break)
-        })
-        .collect();
 
     let splice_ranges = if affected.full_relayout {
         ParagraphSpliceRanges {
@@ -851,7 +847,39 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             new_layout_start: 0,
             new_layout_end: new_para_count,
         }
+    } else if let Some((prefix_count, suffix_count)) = splice_info
+        .filter(|_| paragraph_store.paragraph_count() == prev_para_count)
+    {
+        // Issue #901 第二十八轮复核问题4: 直接从 prefix_count/suffix_count 计算
+        // splice 范围，避免构造全篇 old_paras 和逐段比较。
+        // 前缀段和后缀段内容不变，old_splice_start == new_layout_start == prefix_count，
+        // old_splice_end = prev_para_count - suffix_count，
+        // new_layout_end = new_para_count - suffix_count。
+        // 仅当 store.paragraph_count() == prev_para_count 时使用（确保旧段数一致）。
+        ParagraphSpliceRanges {
+            old_splice_start: prefix_count,
+            old_splice_end: prev_para_count - suffix_count,
+            new_layout_start: prefix_count,
+            new_layout_end: new_para_count - suffix_count,
+        }
     } else {
+        // 回退到全篇比较：构造 old_paras 并用 compute_old_new_paragraph_ranges。
+        let old_paras: Vec<(&str, bool)> = (0..prev_para_count)
+            .map(|i| {
+                let content = prev.paragraphs[i].paragraph_text.as_str();
+                let (line_start, line_end) = prev
+                    .paragraph_line_count_index
+                    .paragraph_line_range(i);
+                let hard_break = if line_start < line_end
+                    && line_end <= prev.visual_lines.len()
+                {
+                    prev.visual_lines[line_end - 1].hard_break
+                } else {
+                    false
+                };
+                (content, hard_break)
+            })
+            .collect();
         ParagraphLayoutStore::compute_old_new_paragraph_ranges(
             &old_paras,
             &new_paras,
@@ -896,7 +924,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十四轮问题4: 取走 prev 的 line_count_index Arc 并显式释放，
     // 使 paragraph_store.line_count_index 的 strong_count 降为 1。
     // prev.paragraph_line_count_index 已在上方 vl_start_idx/vl_end_idx 计算和
-    // old_paras 构建中使用完毕，后续不再直接消费（新 snapshot 从
+    // splice_ranges 回退分支的 old_paras 构建中使用完毕，后续不再直接消费（新 snapshot 从
     // paragraph_store.line_count_index_arc() 获取）。
     // 必须在 store 更新之前 drop，否则 store 更新中的 Arc::make_mut 因 strong_count=2 深复制。
     let prev_line_count_index = std::mem::take(&mut prev.paragraph_line_count_index);
@@ -1462,12 +1490,26 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 /// 到末尾（只读 entry 元数据，不重新切分/排版）。
 ///
 /// 返回 `None` 表示边界检查失败（UTF-8 边界/越界等），调用方应回退到全文切分。
+///
+/// # 第二十八轮复核问题1+4 修复
+///
+/// **Bug 1a（尾空段）**：步骤3不再调用 `split_paragraphs_with_hard_break`（它会在
+/// 输入以 `\n` 结尾时无条件产生尾空段 `("", false)`）。局部切片 `expanded_start..expanded_end`
+/// 以 `\n` 结尾但后面还有正文时，尾空段应由后缀段处理，不应在此产生。改为直接按真实
+/// 换行边界切分，只有 `expanded_end == text_len`（全文末尾）时才产生尾空段。
+///
+/// **Bug 1b（前缀循环条件）**：前缀段条件从 `seg_end_cumulative <= expanded_start` 改为
+/// `cumulative < expanded_start && seg_end_cumulative <= expanded_start`。旧条件在
+/// `cumulative == expanded_start`（空段）时仍可能成立，导致空段被误当前缀段。
+///
+/// **Bug 2（性能）**：返回 `(new_paras, prefix_count, suffix_count)`，调用方可直接
+/// 构造 `ParagraphSpliceRanges`，避免构造全篇 `old_paras` 和逐段比较。
 fn build_new_paras_from_affected_range<'a>(
     text: &'a str,
     store: &super::super::super::paragraph_layout_store::ParagraphLayoutStore,
     aff_start: usize,
     aff_end: usize,
-) -> Option<Vec<(&'a str, bool)>> {
+) -> Option<(Vec<(&'a str, bool)>, usize, usize)> {
     let text_len = text.len();
     let n = store.paragraph_count();
 
@@ -1511,6 +1553,10 @@ fn build_new_paras_from_affected_range<'a>(
     // 2. 前缀段：旧累计到段末（含 '\n'）<= expanded_start。
     //    这些段在 expanded_start 之前，新旧文本位置和内容都不变（编辑发生在之后）。
     //    用累计长度定位（不依赖 document_byte_start）。
+    //    Issue #901 第二十八轮复核问题1: 条件改为 cumulative < expanded_start（严格小于）
+    //    且 seg_end_cumulative <= expanded_start。旧条件 seg_end_cumulative <= expanded_start
+    //    在 cumulative == expanded_start（空段，paragraph_text_len==0 && !hard_break）时
+    //    仍成立，导致空段被误当前缀段（反例2：旧文 a\n，末尾空段输入 X）。
     let mut cumulative = 0usize; // 旧文本中累计到当前段首
     let mut prefix_count = 0usize;
     for i in 0..n {
@@ -1518,7 +1564,8 @@ fn build_new_paras_from_affected_range<'a>(
         let seg_len_with_break =
             entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
         let seg_end_cumulative = cumulative + seg_len_with_break;
-        if seg_end_cumulative <= expanded_start {
+        // 前缀段条件：段首在 expanded_start 之前（严格小于），且段末 <= expanded_start。
+        if cumulative < expanded_start && seg_end_cumulative <= expanded_start {
             // 前缀段在新文本中位置 = 旧累计（位置不变）。
             let seg_start = cumulative;
             let seg_end = cumulative + entry.paragraph_text_len;
@@ -1538,47 +1585,83 @@ fn build_new_paras_from_affected_range<'a>(
         cumulative = seg_end_cumulative;
     }
 
-    // 3. 受影响段：从新文本 expanded_start..expanded_end 用统一切分器切分。
+    // 3. 受影响段：从新文本 expanded_start..expanded_end 按真实换行边界切分。
     //    expanded_start/expanded_end 是 '\n' 边界或文档边界，是有效 UTF-8 边界。
-    let affected_text = &text[expanded_start..expanded_end];
-    let affected_paras =
-        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(affected_text);
+    //    Issue #901 第二十八轮复核问题1: 不使用 split_paragraphs_with_hard_break，
+    //    因为它会在输入以 \n 结尾时无条件产生尾空段 ("", false)。局部切片以 \n 结尾
+    //    但后面还有正文时，尾空段应由后缀段处理，不应在此产生。
+    //    反例1：旧文 a\nb，第一段插入 X → 新文 aX\nb，切片 aX\n 不应产生尾空段。
+    //    只有 expanded_end == text_len（全文末尾）时才产生尾空段。
+    let mut affected_paras: Vec<(&str, bool)> = Vec::new();
+    let mut seg_start = expanded_start;
+    let affected_bytes = &text.as_bytes()[expanded_start..expanded_end];
+    for (i, &b) in affected_bytes.iter().enumerate() {
+        if b == b'\n' {
+            let seg_end = expanded_start + i;
+            // SAFETY: '\n' 是单字节 ASCII，seg_start..seg_end 是有效 UTF-8 边界
+            //（不会切割多字节字符）。seg_start 是 expanded_start 或某个 \n+1，都是边界。
+            affected_paras.push((&text[seg_start..seg_end], true));
+            seg_start = seg_end + 1;
+        }
+    }
+    // 最后一段处理
+    if seg_start < expanded_end {
+        // 有剩余内容（不以 \n 结尾）
+        // SAFETY: seg_start 是 expanded_start 或某个 \n+1，expanded_end 是 UTF-8 边界。
+        affected_paras.push((&text[seg_start..expanded_end], false));
+    } else if expanded_end == text_len {
+        // 以 \n 结尾且是全文末尾 → 产生尾空段
+        // SAFETY: seg_start == expanded_end == text_len, 空字符串切片。
+        affected_paras.push((&text[seg_start..expanded_end], false));
+    }
+    // 如果 seg_start == expanded_end 且 expanded_end < text_len，
+    // 不产生尾空段（后面还有正文，尾空段由后缀段处理）。
     new_paras.extend(affected_paras);
 
     // 4. 后缀段：新位置 = 旧累计 + delta >= expanded_end。
     //    这些段内容不变，但在新文本中位置偏移了 delta。从 prefix_count 开始遍历，
     //    跳过受影响段（不满足条件的），收集后缀段。只读 entry 元数据，不重新切分。
+    //    Issue #901 第二十八轮复核问题4: 同时计数 suffix_count，供调用方直接构造
+    //    ParagraphSpliceRanges，避免全篇 old_paras 构造和逐段比较。
+    //    Issue #901 第二十八轮复核问题1: 后缀段判断条件从 new_seg_start >= expanded_end
+    //    改为 new_seg_end_with_break > expanded_end（段末含 \n 严格超过 expanded_end）。
+    //    旧条件在空段（seg_len_with_break=0）时，new_seg_start == expanded_end 会误判
+    //    受影响段的尾空段为后缀段（反例2：旧文 a\n，新文 a\nX，空段新位置=3=expanded_end）。
+    //    新条件确保空段只有在新位置 > expanded_end 时才被收集。
     let mut cumulative = 0usize;
     for i in 0..prefix_count {
         let entry = store.entry(i)?;
         cumulative += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
     }
+    let mut suffix_count = 0usize;
     for i in prefix_count..n {
         let entry = store.entry(i)?;
         let seg_len_with_break =
             entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
         // 新文本中该段起始位置 = 旧累计 + delta。
         let new_seg_start_i64 = cumulative as i64 + delta;
-        if new_seg_start_i64 >= 0 {
+        // 后缀段条件：段末（含 \n）在新文本中严格超过 expanded_end。
+        // 等价于 new_seg_start + seg_len_with_break > expanded_end。
+        let new_seg_end_with_break_i64 = new_seg_start_i64 + seg_len_with_break as i64;
+        if new_seg_end_with_break_i64 > expanded_end as i64 && new_seg_start_i64 >= 0 {
             let new_seg_start = new_seg_start_i64 as usize;
             let new_seg_end = new_seg_start + entry.paragraph_text_len;
-            if new_seg_start >= expanded_end {
-                // 后缀段。
-                if new_seg_end > text_len
-                    || !text.is_char_boundary(new_seg_start)
-                    || !text.is_char_boundary(new_seg_end)
-                {
-                    return None; // 越界或 UTF-8 边界检查失败，回退全文切分
-                }
-                // SAFETY: new_seg_start/new_seg_end 已通过 is_char_boundary 检查。
-                let seg_text = &text[new_seg_start..new_seg_end];
-                new_paras.push((seg_text, entry.hard_break));
+            // 后缀段。
+            if new_seg_end > text_len
+                || !text.is_char_boundary(new_seg_start)
+                || !text.is_char_boundary(new_seg_end)
+            {
+                return None; // 越界或 UTF-8 边界检查失败，回退全文切分
             }
+            // SAFETY: new_seg_start/new_seg_end 已通过 is_char_boundary 检查。
+            let seg_text = &text[new_seg_start..new_seg_end];
+            new_paras.push((seg_text, entry.hard_break));
+            suffix_count += 1;
         }
         cumulative += seg_len_with_break;
     }
 
-    Some(new_paras)
+    Some((new_paras, prefix_count, suffix_count))
 }
 
 /// 检查排版参数是否变化。

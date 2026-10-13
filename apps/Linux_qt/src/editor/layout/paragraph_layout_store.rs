@@ -114,6 +114,13 @@ pub struct ParagraphLayoutEntry {
     /// 该段落在 generation cache 中的 slot 索引。
     /// -1 表示尚未分配 slot。
     pub cache_slot: i32,
+    /// Issue #901 第二十八轮复核问题3: 该段落 layout 的 epoch。
+    ///
+    /// 分配物理槽（`acquire_physical_slot_for_generation`）时由 C++ 设置，
+    /// Store 通过 `add_layout_ref` 获取并记录于此。retire 时连同 generation/slot
+    /// 一起传给 `release_layout_ref(gen, slot, epoch)`，epoch 不匹配则忽略释放，
+    /// 防止旧帧误释新 layout。
+    pub layout_epoch: u64,
     /// 段落文档 byte 起始偏移（随编辑移动，**不作为 identity**）。
     pub document_byte_start: usize,
     /// 段落文本长度（UTF-8 byte，不含尾部 `'\n'`）。
@@ -291,19 +298,6 @@ pub struct ParagraphLayoutStore {
     /// snapshot 通过 `line_count_index_arc()` 获取 `Arc::clone`（O(1)），
     /// store 更新时用 `Arc::make_mut`（COW：refcount==1 原地改，refcount>1 clone 新副本）。
     line_count_index: Arc<ParagraphLineCountIndex>,
-    /// Issue #901 第二十一轮问题1: 下一个可分配的 Qt 物理槽号。
-    ///
-    /// physical_slot 与文档段序（logical_slot）无关，由 store 内部分配。
-    /// 新段（split/insert/rebuild 中间段）分配新 physical_slot，
-    /// 复用段保持原有 physical_slot 不变。
-    ///
-    /// 关键不变量：同一 generation 下，不同 ParagraphId 的 physical_slot 互不相同。
-    /// 新段不会覆盖仍存活段的 QTextLayout（C++ `set_paragraph_layout_slot_gen`
-    /// 在该槽已有 QTextLayout 时先 `delete` 旧对象再写入）。
-    ///
-    /// 物理槽只分配不回收（删回车合段时不回收被合并段的 physical_slot），
-    /// 避免回收复杂性。未来可优化为回收。
-    next_physical_slot: i32,
     /// Issue #901 第二十五轮复核问题1: 已无持有者可回收的 (generation, physical_slot) 对。
     ///
     /// 增量编辑（普通改段/拆段/合段）使旧 `cache_slot` 被置 -1 后，对应的
@@ -315,11 +309,18 @@ pub struct ParagraphLayoutStore {
     ///（见 `qt_cache::acquire_physical_slot_for_generation`），释放后回收到同一
     /// generation 的 free_slots，跨 generation 槽号互不影响。
     ///
+    /// Issue #901 第二十八轮复核问题2: 完全移除 Rust 端的 `next_physical_slot` 高水位
+    /// 门槛。同一 generation 物理 slot 的占用/回收/分配全部由 C++ `LayoutGeneration`
+    /// 的 freelist 一个 owner 管理，旧槽可被真正复用，不再随编辑次数单调增长。
+    ///
     /// Issue #901 第二十七轮复核问题3: 不再延迟一轮释放。retired slots 在
     /// `release_retired_layouts` 中立即释放。这比延迟一轮更安全，因为 retired_slots
     /// 只在确认旧 layout 不再被任何 snapshot 引用时才被收集。完整的基于引用计数的
     /// 资源所有权（QtLayoutHandle with epoch/version）留作后续优化。
-    retired_slots: Vec<(u64, i32)>,
+    ///
+    /// Issue #901 第二十八轮复核问题3: retired_slots 改为 `(generation, slot, epoch)` 3-tuple，
+    /// 释放时带 epoch 校验。epoch 不匹配（slot 已被复用）则忽略释放，不误减新 layout 的 refcount。
+    retired_slots: Vec<(u64, i32, u64)>,
 }
 
 impl ParagraphLayoutStore {
@@ -330,7 +331,6 @@ impl ParagraphLayoutStore {
             next_id: 1,
             id_to_slot_cache: Arc::new(HashMap::new()),
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
-            next_physical_slot: 0,
             retired_slots: Vec::new(),
         }
     }
@@ -356,7 +356,10 @@ impl ParagraphLayoutStore {
     pub fn clear(&mut self) {
         // Issue #901 第二十七轮复核问题3: 不再延迟一轮释放。clear 是全局失效，
         // 立即释放当前 retired_slots 和 entries 中所有有效 handle。
-        for (gen, slot) in std::mem::take(&mut self.retired_slots) {
+        // Issue #901 第二十八轮复核问题3: clear 是全局失效（字体变化等），
+        // 所有旧引用都无效，直接用 release_paragraph_layout_slot_gen 立即释放
+        //（C++ 端用当前 epoch 调 release_layout_ref，全局失效语义下安全）。
+        for (gen, slot, _epoch) in std::mem::take(&mut self.retired_slots) {
             super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
         }
         // 释放当前 entries 的有效 handle。
@@ -372,34 +375,36 @@ impl ParagraphLayoutStore {
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
         Arc::make_mut(&mut self.line_count_index).clear();
-        // Issue #901 第二十一轮问题1: next_physical_slot 不重置，避免新分配的
-        // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。
-        // Issue #901 第二十七轮复核问题2: 槽号通过按 generation 隔离的 freelist 复用，
-        // next_physical_slot 仍不重置以避免与 C++ 端可能仍存活的槽冲突。
+        // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
+        // C++ LayoutGeneration 的 freelist 按 generation 隔离管理，clear 后旧 generation
+        // 的槽号自然失效，无需 Rust 端维护高水位。
     }
 
     /// Issue #901 第二十五轮复核问题1: 取出并清空 retired slots 列表。
     ///
-    /// 返回所有已无持有者可回收的 `(generation, physical_slot)` 对。
-    /// 调用方应对每个 `(gen, slot)` 调用 `qt_cache::release_paragraph_layout_slot_gen`
+    /// 返回所有已无持有者可回收的 `(generation, physical_slot, epoch)` 三元组。
+    /// 调用方应对每个 `(gen, slot, epoch)` 调用 `qt_cache::release_layout_ref`
     /// 释放对应的 QTextLayout。
-    pub fn drain_retired_slots(&mut self) -> Vec<(u64, i32)> {
+    pub fn drain_retired_slots(&mut self) -> Vec<(u64, i32, u64)> {
         std::mem::take(&mut self.retired_slots)
     }
 
-    /// Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题3: 释放 retired slots 对应的 QTextLayout。
+    /// Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题3 + 第二十八轮复核问题3:
+    /// 释放 retired slots 对应的 QTextLayout。
     ///
     /// 立即释放机制：retired slots 在此直接释放，不再延迟一轮。
     /// retired_slots 只在确认旧 layout 不再被任何 snapshot 引用时才被收集
     ///（旧 cache_slot 被置 -1 后收集），因此立即释放是安全的。
     ///
-    /// 完整的基于引用计数的资源所有权（QtLayoutHandle with epoch/version）
-    /// 留作后续优化。当前方案是立即释放 retired slots，比延迟一轮更安全。
+    /// Issue #901 第二十八轮复核问题3: 基于 epoch 校验的引用计数释放。
+    /// 每个 retired slot 携带收集时的 epoch，调用 `release_layout_ref(gen, slot, epoch)`。
+    /// epoch 不匹配（slot 已被复用）则忽略，不误减新 layout 的 refcount。
+    /// epoch 匹配则减 refcount，归零时才 delete layout 并回收 slot。
     ///
     /// 在增量排版完成后（snapshot 构建后）调用。
     pub fn release_retired_layouts(&mut self) {
-        for (gen, slot) in std::mem::take(&mut self.retired_slots) {
-            super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
+        for (gen, slot, epoch) in std::mem::take(&mut self.retired_slots) {
+            super::qt_cache::release_layout_ref(gen, slot, epoch);
         }
     }
 
@@ -543,6 +548,7 @@ impl ParagraphLayoutStore {
                 id,
                 layout_generation,
                 cache_slot,
+                layout_epoch,
                 height,
                 visual_line_count,
                 relative_lines,
@@ -560,12 +566,13 @@ impl ParagraphLayoutStore {
                         old.id,
                         old.layout_generation,
                         old.cache_slot,
+                        old.layout_epoch,
                         old.height,
                         old.visual_line_count,
                         old.relative_lines.clone(),
                     )
                 } else {
-                    (old.id, 0u64, -1, 0.0f64, 0usize, Vec::new())
+                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
                 }
             } else if suffix_common > 0 && i >= new_count - suffix_common {
                 // 后缀段：继承对应旧 entry（从后往前对齐）
@@ -582,16 +589,17 @@ impl ParagraphLayoutStore {
                         old.id,
                         old.layout_generation,
                         old.cache_slot,
+                        old.layout_epoch,
                         old.height,
                         old.visual_line_count,
                         old.relative_lines.clone(),
                     )
                 } else {
-                    (old.id, 0u64, -1, 0.0f64, 0usize, Vec::new())
+                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
                 }
             } else {
                 // 中间段：分配新 Id
-                (self.allocate_id(), 0u64, -1, 0.0f64, 0usize, Vec::new())
+                (self.allocate_id(), 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
             };
 
             new_entries.push(ParagraphLayoutEntry {
@@ -599,6 +607,7 @@ impl ParagraphLayoutStore {
                 cache_key,
                 layout_generation,
                 cache_slot,
+                layout_epoch,
                 document_byte_start: byte_offset,
                 paragraph_text_len: paragraph_text.len(),
                 height,
@@ -626,13 +635,14 @@ impl ParagraphLayoutStore {
         //
         // 先收集到局部 Vec 再 extend，避免同时借用 self.entries（不可变）和
         // self.retired_slots（可变）的借用冲突。
-        let mut newly_retired: Vec<(u64, i32)> = Vec::new();
+        // Issue #901 第二十八轮复核问题3: retired_slots 改为 3-tuple，记录旧 entry 的 epoch。
+        let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
         for old in &self.entries {
             if old.layout_generation != 0
                 && old.cache_slot >= 0
                 && !inherited_handles.contains(&(old.layout_generation, old.cache_slot))
             {
-                newly_retired.push((old.layout_generation, old.cache_slot));
+                newly_retired.push((old.layout_generation, old.cache_slot, old.layout_epoch));
             }
         }
         self.retired_slots.extend(newly_retired);
@@ -648,13 +658,8 @@ impl ParagraphLayoutStore {
         // resolve_viewport_lines / paragraph_line_range 找错行。
         let counts: Vec<usize> = self.entries.iter().map(|e| e.visual_line_count).collect();
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
-        // Issue #901 第二十一轮问题1: 更新 next_physical_slot，确保复用段保留的
-        // old.cache_slot 不会与后续新段分配的 physical_slot 冲突。
-        for entry in &self.entries {
-            if entry.cache_slot >= self.next_physical_slot {
-                self.next_physical_slot = entry.cache_slot + 1;
-            }
-        }
+        // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
+        // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
     }
 
     /// Issue #901 第十六轮问题1: 按 `ParagraphId` 查找当前段落 slot（段落索引）。
@@ -802,6 +807,8 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十五轮复核问题1: 收集原段旧 (generation, slot) 供后续释放。
         let old_gen = original_entry.layout_generation;
         let old_slot = original_entry.cache_slot;
+        // Issue #901 第二十八轮复核问题3: 记录旧 epoch 供 release_layout_ref 校验。
+        let old_epoch = original_entry.layout_epoch;
         original_entry.cache_key = ParagraphLayoutCacheKey::build(
             original_text_before_split,
             font_size,
@@ -813,6 +820,7 @@ impl ParagraphLayoutStore {
         );
         original_entry.layout_generation = 0;
         original_entry.cache_slot = -1;
+        original_entry.layout_epoch = 0;
         original_entry.paragraph_text_len = original_text_before_split.len();
         original_entry.height = 0.0;
         original_entry.visual_line_count = 0;
@@ -834,6 +842,7 @@ impl ParagraphLayoutStore {
             ),
             layout_generation: 0,
             cache_slot: -1,
+            layout_epoch: 0,
             document_byte_start: new_doc_start,
             paragraph_text_len: original_text_after_split.len(),
             height: 0.0,
@@ -849,8 +858,9 @@ impl ParagraphLayoutStore {
         self.entries.insert(index + 1, new_entry);
         // Issue #901 第二十五轮复核问题1: 原段旧 QTextLayout 进入 retired 集合，
         // 后续 release_retired_layouts 释放，避免内存随拆段次数持续增长。
+        // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
         if old_slot >= 0 && old_gen != 0 {
-            self.retired_slots.push((old_gen, old_slot));
+            self.retired_slots.push((old_gen, old_slot, old_epoch));
         }
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         // 新段插入在 index+1，原 slot >= index+1 的段全部 +1。
@@ -886,10 +896,12 @@ impl ParagraphLayoutStore {
 
         // Issue #901 第二十五轮复核问题1: 先在 entry 借用块内读出旧 layout 信息，
         // 块结束后再访问 self.entries.remove 和 self.retired_slots。
-        let (old_gen, old_slot) = {
+        let (old_gen, old_slot, old_epoch) = {
             let entry = &mut self.entries[index];
             let old_gen = entry.layout_generation;
             let old_slot = entry.cache_slot;
+            // Issue #901 第二十八轮复核问题3: 记录旧 epoch 供 release_layout_ref 校验。
+            let old_epoch = entry.layout_epoch;
             entry.cache_key = ParagraphLayoutCacheKey::build(
                 merged_text,
                 font_size,
@@ -901,24 +913,26 @@ impl ParagraphLayoutStore {
             );
             entry.layout_generation = 0;
             entry.cache_slot = -1;
+            entry.layout_epoch = 0;
             entry.paragraph_text_len = merged_text.len();
             entry.height = 0.0;
             entry.visual_line_count = 0;
-            (old_gen, old_slot)
+            (old_gen, old_slot, old_epoch)
         };
 
         // 移除被合并的段落（index + 1）
-        // Issue #901 第二十一轮问题1: 被合并段的 physical_slot 不回收（只分配不回收），
-        // 避免回收复杂性。next_physical_slot 持续递增，未来可优化为回收。
+        // Issue #901 第二十八轮复核问题2: 被合并段的 physical_slot 通过 retired_slots
+        // 回收到 C++ LayoutGeneration 的 freelist 供后续复用，不再单调增长。
         let removed_entry = self.entries.remove(index + 1);
         // Issue #901 第二十五轮复核问题1: 原段和被合并段的旧 QTextLayout 进入 retired 集合，
         // 后续 release_retired_layouts 释放，避免内存随合段次数持续增长。
+        // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
         if old_slot >= 0 && old_gen != 0 {
-            self.retired_slots.push((old_gen, old_slot));
+            self.retired_slots.push((old_gen, old_slot, old_epoch));
         }
         if removed_entry.cache_slot >= 0 && removed_entry.layout_generation != 0 {
             self.retired_slots
-                .push((removed_entry.layout_generation, removed_entry.cache_slot));
+                .push((removed_entry.layout_generation, removed_entry.cache_slot, removed_entry.layout_epoch));
         }
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         // 被删段在 index+1，原 slot > index+1 的段全部 -1。
@@ -957,7 +971,7 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十五轮复核问题1: 先在 entry 借用块内读出旧 layout 信息，
         // 块结束后再 push 到 retired_slots，避免同时 &mut self.entries 和
         // &mut self.retired_slots 的借用冲突。
-        let (changed, old_gen, old_slot) = {
+        let (changed, old_gen, old_slot, old_epoch) = {
             let Some(entry) = self.entries.get_mut(index) else {
                 return false;
             };
@@ -966,20 +980,24 @@ impl ParagraphLayoutStore {
             if changed {
                 let old_gen = entry.layout_generation;
                 let old_slot = entry.cache_slot;
+                // Issue #901 第二十八轮复核问题3: 记录旧 epoch 供 release_layout_ref 校验。
+                let old_epoch = entry.layout_epoch;
                 entry.layout_generation = 0;
                 entry.cache_slot = -1;
+                entry.layout_epoch = 0;
                 entry.paragraph_text_len = new_text.len();
                 entry.height = 0.0;
                 entry.visual_line_count = 0;
-                (true, old_gen, old_slot)
+                (true, old_gen, old_slot, old_epoch)
             } else {
-                (false, 0u64, -1i32)
+                (false, 0u64, -1i32, 0u64)
             }
         };
         // 旧 QTextLayout 进入 retired 集合，后续 release_retired_layouts 释放，
         // 避免内存随编辑次数持续增长。
+        // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
         if changed && old_slot >= 0 && old_gen != 0 {
-            self.retired_slots.push((old_gen, old_slot));
+            self.retired_slots.push((old_gen, old_slot, old_epoch));
         }
         changed
     }
@@ -1025,6 +1043,7 @@ impl ParagraphLayoutStore {
             ),
             layout_generation: 0,
             cache_slot: -1,
+            layout_epoch: 0,
             document_byte_start,
             paragraph_text_len: text.len(),
             height: 0.0,
@@ -1048,9 +1067,10 @@ impl ParagraphLayoutStore {
             let removed = self.entries.remove(index);
             // Issue #901 第二十六轮复核缺口2a: 回收被删除段落的旧 handle。
             // removed 是 owned 值，读取其字段不借用 self，无借用冲突。
+            // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
             if removed.layout_generation != 0 && removed.cache_slot >= 0 {
                 self.retired_slots
-                    .push((removed.layout_generation, removed.cache_slot));
+                    .push((removed.layout_generation, removed.cache_slot, removed.layout_epoch));
             }
             // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
             self.id_to_slot_cache_remove(removed.id, index);
@@ -1087,17 +1107,17 @@ impl ParagraphLayoutStore {
         if self.entries[index].cache_slot >= 0 {
             return self.entries[index].cache_slot;
         }
-        // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配槽号。
-        // min_slot = next_physical_slot 确保新分配的槽不与同 generation 中
-        // 复用段保留的旧 cache_slot 冲突。实际分配由 C++ 统一负责。
-        let slot = super::qt_cache::acquire_physical_slot_for_generation(
-            layout_generation,
-            self.next_physical_slot,
-        );
-        if slot >= self.next_physical_slot {
-            self.next_physical_slot = slot + 1;
-        }
+        // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配槽号。
+        // 不再传 min_slot 高水位门槛，C++ freelist 取任意空闲槽复用。
+        // 同一代内不会有两个段落同时使用同一 slot：复用段已在上方返回，此处仅新段分配。
+        let slot = super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
         self.entries[index].cache_slot = slot;
+        // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
+        // set_paragraph_layout_slot_gen 会设 refcount=1（Store 初始引用），
+        // 此处 add_layout_ref 再加 1 并获取 epoch 存入 entry，供 retire 时校验。
+        // 注意：此时 layout 尚未写入（set 在 engine.rs 排版后调用），但 epoch 已确定。
+        let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+        self.entries[index].layout_epoch = epoch;
         slot
     }
 
@@ -1123,16 +1143,14 @@ impl ParagraphLayoutStore {
         }
         // Issue #901 第二十一轮问题1: physical_slot 由 store 内部分配，
         // 忽略传入的 _cache_slot。复用段保持已有值，新段分配新槽。
-        // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配槽号。
+        // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配槽号，
+        // 不再传 min_slot 高水位门槛，C++ freelist 取任意空闲槽复用。
         if self.entries[index].cache_slot < 0 {
-            let slot = super::qt_cache::acquire_physical_slot_for_generation(
-                layout_generation,
-                self.next_physical_slot,
-            );
-            if slot >= self.next_physical_slot {
-                self.next_physical_slot = slot + 1;
-            }
+            let slot = super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
             self.entries[index].cache_slot = slot;
+            // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
+            let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+            self.entries[index].layout_epoch = epoch;
         }
         let entry = &mut self.entries[index];
         entry.layout_generation = layout_generation;
@@ -1405,18 +1423,24 @@ impl ParagraphLayoutStore {
                 // 旧实现用 idx as i32 会导致新段覆盖存活段的 QTextLayout。
                 let physical_slot = lines[line_start].cache_slot;
                 if physical_slot >= 0 {
-                    entry.cache_slot = physical_slot;
+                    // Issue #901 第二十八轮复核问题3: physical_slot 来自
+                    // paragraph_physical_slot 预分配，entry.layout_epoch 已在该方法中设置。
+                    // 若 entry.cache_slot 与 physical_slot 不同（异常情况），更新并补记 epoch。
+                    if entry.cache_slot != physical_slot {
+                        entry.cache_slot = physical_slot;
+                        let epoch = super::qt_cache::add_layout_ref(layout_generation, physical_slot);
+                        entry.layout_epoch = epoch;
+                    }
                 } else if entry.cache_slot < 0 {
                     // 防御性：lines 中 cache_slot 无效时由 store 分配新槽。
-                    // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配。
-                    let slot = super::qt_cache::acquire_physical_slot_for_generation(
-                        layout_generation,
-                        self.next_physical_slot,
-                    );
-                    if slot >= self.next_physical_slot {
-                        self.next_physical_slot = slot + 1;
-                    }
+                    // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配，
+                    // 不再传 min_slot 高水位门槛。
+                    let slot =
+                        super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
                     entry.cache_slot = slot;
+                    // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
+                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+                    entry.layout_epoch = epoch;
                 }
                 entry.visual_line_count = line_count;
                 entry.height = height;
@@ -1477,16 +1501,18 @@ impl ParagraphLayoutStore {
     pub fn invalidate_all(&mut self) {
         // Issue #901 第二十六轮复核缺口2a: 先收集所有有效 handle 到局部 Vec，
         // 再 extend 到 retired_slots，避免同时借用 self.entries 和 self.retired_slots。
-        let newly_retired: Vec<(u64, i32)> = self
+        // Issue #901 第二十八轮复核问题3: retired_slots 改为 3-tuple，记录 epoch。
+        let newly_retired: Vec<(u64, i32, u64)> = self
             .entries
             .iter()
             .filter(|e| e.layout_generation != 0 && e.cache_slot >= 0)
-            .map(|e| (e.layout_generation, e.cache_slot))
+            .map(|e| (e.layout_generation, e.cache_slot, e.layout_epoch))
             .collect();
         self.retired_slots.extend(newly_retired);
         for entry in &mut self.entries {
             entry.layout_generation = 0;
             entry.cache_slot = -1;
+            entry.layout_epoch = 0;
             entry.height = 0.0;
             entry.visual_line_count = 0;
         }
@@ -1499,12 +1525,13 @@ impl ParagraphLayoutStore {
     pub fn invalidate_paragraph(&mut self, index: usize) -> bool {
         // Issue #901 第二十六轮复核缺口2a: 先取出旧 handle 再修改，
         // 避免同时借用 self.entries（get_mut）和 self.retired_slots（push）。
+        // Issue #901 第二十八轮复核问题3: retired_slots 改为 3-tuple，记录 epoch。
         let old_handle = {
             let Some(entry) = self.entries.get(index) else {
                 return false;
             };
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
-                Some((entry.layout_generation, entry.cache_slot))
+                Some((entry.layout_generation, entry.cache_slot, entry.layout_epoch))
             } else {
                 None
             }
@@ -1517,6 +1544,7 @@ impl ParagraphLayoutStore {
         };
         entry.layout_generation = 0;
         entry.cache_slot = -1;
+        entry.layout_epoch = 0;
         entry.height = 0.0;
         entry.visual_line_count = 0;
         true
@@ -1582,7 +1610,18 @@ impl ParagraphLayoutStore {
                 // physical_slot = logical_slot 不会覆盖旧 generation 的 QTextLayout。
                 // VisualLine.cache_slot = paragraph_idx = slot，三者一致。
                 // 增量排版路径（sync_from_visual_lines_incremental）改用独立 physical_slot。
-                entry.cache_slot = slot;
+                // Issue #901 第二十八轮复核问题3: 全篇排版路径中 slot 可能已由
+                // paragraph_physical_slot 预分配（entry.cache_slot 已 >= 0 且 epoch 已记录），
+                // 也可能是首次设置。若 cache_slot 与 slot 不同或未设置，更新并补记 epoch。
+                if entry.cache_slot != slot {
+                    entry.cache_slot = slot;
+                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+                    entry.layout_epoch = epoch;
+                } else if entry.layout_epoch == 0 && entry.cache_slot >= 0 {
+                    // cache_slot 已一致但 epoch 未记录（异常防御），补记。
+                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+                    entry.layout_epoch = epoch;
+                }
                 entry.visual_line_count = line_count;
                 entry.height = total_height;
             }
@@ -1598,15 +1637,8 @@ impl ParagraphLayoutStore {
             .collect();
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
 
-        // Issue #901 第二十一轮问题1: 更新 next_physical_slot，确保下次增量排版
-        // 新段分配的 physical_slot 不与全篇排版后已有的 cache_slot 冲突。
-        // 全篇排版路径中 entry.cache_slot = logical_slot = paragraph_idx，
-        // next_physical_slot 必须大于所有已有 cache_slot。
-        for entry in &self.entries {
-            if entry.cache_slot >= self.next_physical_slot {
-                self.next_physical_slot = entry.cache_slot + 1;
-            }
-        }
+        // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
+        // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
     }
 
     /// 获取所有段落的 `ParagraphId` 列表（按文档顺序）。

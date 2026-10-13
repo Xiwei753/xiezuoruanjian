@@ -31,6 +31,15 @@ cpp! {{
         // 否则用 next_slot 分配新槽。跨 generation 的槽号互不影响，不会互相覆盖。
         std::vector<int> free_slots;
         int next_slot;
+        // Issue #901 第二十八轮复核问题3: 引用计数 — 与 layouts 一一对应。
+        // set_paragraph_layout_slot_gen 写入 layout 时 refcount=1（Store 持有初始引用）。
+        // 消费者（snapshot/动画帧）通过 add_layout_ref 增加引用，
+        // release_layout_ref 减少引用，refcount 归零时 delete layout 并回收 slot。
+        std::vector<int> refcounts;
+        // Issue #901 第二十八轮复核问题3: epoch — 与 layouts 一一对应。
+        // 同一物理槽被复用时 epoch 递增，旧帧持有的旧 epoch 不匹配，
+        // release_layout_ref 时不会误减新 layout 的 refcount。
+        std::vector<uint64_t> epochs;
     };
     static std::vector<LayoutGeneration> g_layout_generations;
     static uint64_t g_next_generation = 1;
@@ -54,7 +63,7 @@ cpp! {{
     static LayoutGeneration* ensure_layout_generation(uint64_t gen) {
         auto* existing = find_layout_generation(gen);
         if (existing) return existing;
-        g_layout_generations.push_back(LayoutGeneration{gen, {}, {}, 0});
+        g_layout_generations.push_back(LayoutGeneration{gen, {}, {}, 0, {}, {}});
         return &g_layout_generations.back();
     }
 
@@ -130,28 +139,88 @@ cpp! {{
     // Issue #658 评论 5620035970 问题 1+2: 按 generation + cache_slot 写指定位置，
     // 不再 push_back。空段落也占一个明确的 null slot，
     // 保持 cache_slot 与文档段落一一对应，避免越界访问。
+    // Issue #901 第二十八轮复核问题3: 写入 layout 时设置 refcount=1（Store 持有初始引用），
+    // epoch 保持 acquire 时已设的值（freelist 复用时已递增，新槽时为 0）。
     void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout) {
         auto* lg = ensure_layout_generation(gen);
         auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
         while ((int)layouts.size() <= cache_slot) {
             layouts.push_back(nullptr);
+            refcounts.push_back(0);
+            epochs.push_back(0);
         }
         if (layouts[cache_slot]) {
             delete layouts[cache_slot];
         }
         layouts[cache_slot] = layout;
+        // Store 持有初始引用。
+        refcounts[cache_slot] = 1;
     }
 
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot) {
         auto* lg = ensure_layout_generation(gen);
         auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
         while ((int)layouts.size() <= cache_slot) {
             layouts.push_back(nullptr);
+            refcounts.push_back(0);
+            epochs.push_back(0);
         }
         if (layouts[cache_slot]) {
             delete layouts[cache_slot];
         }
         layouts[cache_slot] = nullptr;
+        // Issue #901 第二十八轮复核问题3: null slot 无 layout，refcount 置 0。
+        refcounts[cache_slot] = 0;
+    }
+
+    // Issue #901 第二十八轮复核问题3: 增加布局引用计数，返回当前 epoch。
+    // 用于 snapshot/动画帧持有额外引用。调用方应保存返回的 epoch，
+    // 释放时传给 release_layout_ref(gen, slot, epoch)。
+    uint64_t add_layout_ref(uint64_t gen, int slot) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return 0;
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
+        if (slot < 0 || slot >= (int)layouts.size()) return 0;
+        refcounts[slot] += 1;
+        return epochs[slot];
+    }
+
+    // Issue #901 第二十八轮复核问题3: 减少布局引用计数，带 epoch 校验。
+    // - epoch 不匹配：旧帧释放旧 handle（slot 已被复用，epoch 递增），直接忽略，
+    //   不减 refcount，不 delete。
+    // - epoch 匹配：减 refcount。refcount 归零时 delete layout、置 nullptr、回收 slot。
+    void release_layout_ref(uint64_t gen, int slot, uint64_t epoch) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return;
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
+        if (slot < 0 || slot >= (int)layouts.size()) return;
+        // epoch 不匹配：旧帧释放旧 handle，忽略。
+        if (epochs[slot] != epoch) return;
+        // epoch 匹配，减 refcount。
+        if (refcounts[slot] > 0) {
+            refcounts[slot] -= 1;
+        }
+        if (refcounts[slot] == 0 && layouts[slot]) {
+            delete layouts[slot];
+            layouts[slot] = nullptr;
+            // 把 slot 回收到同一 generation 的 free_slots。
+            // 防重复回收：检查该 slot 不已在 free_slots 中。
+            bool already_free = false;
+            for (int s : lg->free_slots) {
+                if (s == slot) { already_free = true; break; }
+            }
+            if (!already_free) {
+                lg->free_slots.push_back(slot);
+            }
+        }
     }
 
     // Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。
@@ -162,47 +231,54 @@ cpp! {{
     //
     // Issue #901 第二十七轮复核问题2: freelist 按 generation 隔离，不再用全局 g_slot_freelist。
     // 释放的 slot 回收到同一 generation 的 free_slots，跨 generation 的槽号互不影响。
-
+    //
+    // Issue #901 第二十八轮复核问题3: 改为基于引用计数释放。用当前 epoch 调用
+    // release_layout_ref，减 refcount，归零时才 delete + 回收 slot。
     void release_paragraph_layout_slot_gen(uint64_t gen, int slot) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return;
         auto& layouts = lg->layouts;
         if (slot < 0 || slot >= (int)layouts.size()) return;
-        if (layouts[slot]) {
-            delete layouts[slot];
-            layouts[slot] = nullptr;
-        }
-        // Issue #901 第二十七轮复核问题2: 把 slot 回收到同一 generation 的 free_slots。
-        // 防重复回收：检查该 slot 不已在 free_slots 中。
-        bool already_free = false;
-        for (int s : lg->free_slots) {
-            if (s == slot) { already_free = true; break; }
-        }
-        if (!already_free) {
-            lg->free_slots.push_back(slot);
-        }
+        // 用当前 epoch 释放 Store 的引用。
+        uint64_t cur_epoch = lg->epochs[slot];
+        release_layout_ref(gen, slot, cur_epoch);
     }
 
-    // Issue #901 第二十七轮复核问题2: 为指定 generation 分配一个物理槽号。
-    // 优先从该 generation 的 free_slots 复用已释放的槽（要求 >= min_slot，
-    // 避免与同 generation 中复用段保留的 cache_slot 冲突）；
-    // 否则用 next_slot 分配新槽（确保 next_slot >= min_slot）。
-    int acquire_physical_slot_for_generation(uint64_t gen, int min_slot) {
+    // Issue #901 第二十八轮复核问题2: 为指定 generation 分配一个物理槽号。
+    // 优先从该 generation 的 free_slots 复用任意一个已释放的槽（不再要求 >= min_slot，
+    // 同一代内不会有两个段落同时使用同一 slot，因为 Rust 端只在 cache_slot < 0 新段时调用分配，
+    // 复用段保持已有 cache_slot）；
+    // 否则用 next_slot 分配新槽。
+    // Issue #901 第二十八轮复核问题3: 从 freelist 复用时递增 epoch，旧帧持有的旧 epoch
+    // 不匹配，release_layout_ref 时不会误减新 layout 的 refcount。新槽时 epoch=0, refcount=0。
+    int acquire_physical_slot_for_generation(uint64_t gen) {
         auto* lg = ensure_layout_generation(gen);
-        // 先从 free_slots 找一个 >= min_slot 的槽。
-        for (auto it = lg->free_slots.begin(); it != lg->free_slots.end(); ++it) {
-            if (*it >= min_slot) {
-                int slot = *it;
-                lg->free_slots.erase(it);
-                return slot;
-            }
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
+        // 优先从 free_slots 复用任意一个已释放的槽。用 back()/pop_back() O(1) 取出。
+        if (!lg->free_slots.empty()) {
+            int slot = lg->free_slots.back();
+            lg->free_slots.pop_back();
+            // epoch 递增：旧帧持有的旧 epoch 不匹配，不会误取/误释新布局。
+            epochs[slot] += 1;
+            // freelist 中的 slot refcount 应已为 0，复用时保持 0，
+            // 后续 set_paragraph_layout_slot_gen 会设为 1。
+            refcounts[slot] = 0;
+            return slot;
         }
-        // free_slots 中没有合适的，用 next_slot 分配新槽。
-        if (lg->next_slot < min_slot) {
-            lg->next_slot = min_slot;
-        }
+        // free_slots 为空，用 next_slot 分配新槽。
         int slot = lg->next_slot;
         lg->next_slot += 1;
+        // 扩展 layouts/refcounts/epochs 向量到新槽位置。
+        while ((int)layouts.size() <= slot) {
+            layouts.push_back(nullptr);
+            refcounts.push_back(0);
+            epochs.push_back(0);
+        }
+        // 新槽 epoch=0, refcount=0（set 时会设 refcount=1）。
+        epochs[slot] = 0;
+        refcounts[slot] = 0;
         return slot;
     }
 
@@ -293,19 +369,47 @@ pub fn release_paragraph_layout_slot_gen(gen: u64, slot: i32) {
     });
 }
 
-/// Issue #901 第二十七轮复核问题2: 为指定 generation 分配一个物理槽号。
+/// Issue #901 第二十八轮复核问题2: 为指定 generation 分配一个物理槽号。
 ///
 /// freelist 按 generation 隔离管理（存储在 C++ `LayoutGeneration` 结构体中）。
-/// 优先从该 generation 的 `free_slots` 复用已释放的槽（要求 `>= min_slot`，
-/// 避免与同 generation 中复用段保留的 `cache_slot` 冲突）；
-/// 否则用该 generation 的 `next_slot` 分配新槽。
-///
-/// `min_slot` 是调用方已知的最小安全槽号（通常为 `next_physical_slot`），
-/// 确保新分配的槽不与同 generation 中复用段保留的旧 `cache_slot` 冲突。
+/// 优先从该 generation 的 `free_slots` 复用任意一个已释放的槽（不再要求 `>= min_slot`，
+/// 同一代内不会有两个段落同时使用同一 slot，因为 Rust 端只在 `cache_slot < 0` 新段时
+/// 调用分配，复用段保持已有 `cache_slot`）；否则用该 generation 的 `next_slot` 分配新槽。
 ///
 /// SAFETY: GUI thread only; gen 应是之前 begin_layout_generation 分配的。
-pub fn acquire_physical_slot_for_generation(gen: u64, min_slot: i32) -> i32 {
-    cpp!(unsafe [gen as "uint64_t", min_slot as "int"] -> i32 as "int" {
-        return acquire_physical_slot_for_generation(gen, min_slot);
+pub fn acquire_physical_slot_for_generation(gen: u64) -> i32 {
+    cpp!(unsafe [gen as "uint64_t"] -> i32 as "int" {
+        return acquire_physical_slot_for_generation(gen);
     })
+}
+
+/// Issue #901 第二十八轮复核问题3: 增加布局引用计数，返回当前 epoch。
+///
+/// 用于 snapshot/动画帧/Store 持有额外引用。调用方应保存返回的 `epoch`，
+/// 释放时传给 [`release_layout_ref`]`(gen, slot, epoch)`。
+/// 若 generation/slot 不存在则返回 0。
+///
+/// SAFETY: GUI thread only; gen/slot 应是之前 set_paragraph_layout_slot_gen 写入的。
+pub fn add_layout_ref(gen: u64, slot: i32) -> u64 {
+    cpp!(unsafe [gen as "uint64_t", slot as "int"] -> u64 as "uint64_t" {
+        return add_layout_ref(gen, slot);
+    })
+}
+
+/// Issue #901 第二十八轮复核问题3: 减少布局引用计数，带 epoch 校验。
+///
+/// - `epoch` 不匹配：旧帧释放旧 handle（slot 已被复用，epoch 递增），直接忽略，
+///   不减 refcount，不 delete。
+/// - `epoch` 匹配：减 refcount。refcount 归零时 delete layout、置 nullptr、回收 slot
+///   到同一 generation 的 freelist 供后续复用。
+///
+/// 核心安全保证：同一物理槽被复用后 epoch 递增，旧帧持有的旧 epoch 不匹配，
+/// 不会误减新 layout 的 refcount，也不会误 delete 新 layout。
+///
+/// SAFETY: GUI thread only; gen/slot/epoch 应是之前 add_layout_ref 或
+/// set_paragraph_layout_slot_gen（隐含 refcount=1, epoch 由 acquire 设置）返回的。
+pub fn release_layout_ref(gen: u64, slot: i32, epoch: u64) {
+    cpp!(unsafe [gen as "uint64_t", slot as "int", epoch as "uint64_t"] {
+        release_layout_ref(gen, slot, epoch);
+    });
 }
