@@ -354,9 +354,26 @@ impl EditorLayout {
     /// 不因按需 lease 分支增长而超出静态守卫测试的函数窗口。
     pub fn current_prepared_layout_for_affected(&self) -> Option<PreparedLayoutHandle<'_>> {
         if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
-            let ranges = self
-                .paragraph_store
-                .compute_affected_paragraphs(byte_start, byte_end);
+            // Issue #901 第三十三轮优化: 优先用 last_snapshot.paragraph_offset_index
+            // 的 O(log n) byte_to_paragraph 二分定位，与 invalidate_affected 一致。
+            // 修复 compute_affected_paragraphs 的 hard_break 边界误判（仅改变换行符
+            // 的编辑可能误判为全章重排）。无 last_snapshot 时回退到全文遍历。
+            let ranges = {
+                let offset_index = self
+                    .last_snapshot
+                    .as_ref()
+                    .map(|s| &*s.paragraph_offset_index);
+                match offset_index {
+                    Some(idx) => self.paragraph_store.compute_affected_paragraphs_via_index(
+                        byte_start,
+                        byte_end,
+                        idx,
+                    ),
+                    None => self
+                        .paragraph_store
+                        .compute_affected_paragraphs(byte_start, byte_end),
+                }
+            };
             if !ranges.full_relayout && ranges.relayout_start < ranges.relayout_end {
                 let indices: Vec<usize> = (ranges.relayout_start..ranges.relayout_end).collect();
                 self.current_prepared_layout_for_paragraphs(&indices)
@@ -395,9 +412,25 @@ impl EditorLayout {
     /// 不需要提取 raster），调用方对此自然跳过，不回退全量。
     pub fn affected_visual_line_indices(&self, lines: &[VisualLine]) -> Vec<usize> {
         if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
-            let ranges = self
-                .paragraph_store
-                .compute_affected_paragraphs(byte_start, byte_end);
+            // Issue #901 第三十三轮优化: 与 current_prepared_layout_for_affected 使用
+            // 同一 compute_affected_paragraphs_via_index 路径，保证 lease 范围与查询范围
+            // 严格一致，同时获得 O(log n) 定位和 hard_break 边界正确性。
+            let ranges = {
+                let offset_index = self
+                    .last_snapshot
+                    .as_ref()
+                    .map(|s| &*s.paragraph_offset_index);
+                match offset_index {
+                    Some(idx) => self.paragraph_store.compute_affected_paragraphs_via_index(
+                        byte_start,
+                        byte_end,
+                        idx,
+                    ),
+                    None => self
+                        .paragraph_store
+                        .compute_affected_paragraphs(byte_start, byte_end),
+                }
+            };
             if !ranges.full_relayout && ranges.relayout_start < ranges.relayout_end {
                 // 只收集受影响段 [relayout_start, relayout_end) 的行索引。
                 let mut ids = Vec::new();
