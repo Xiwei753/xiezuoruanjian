@@ -3130,6 +3130,58 @@ export class EditorMotionCoordinator {
     // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
     const staticVisibleRanges = EditorMotionCoordinator.computeStaticRangesMultiChannel(plan, newLayout)
 
+    // Issue #879 评论6138480563 问题1：跨通道物理 key 合并。
+    // plannedWindowKeys 用 Set 去重了规划名单，但 buildFrame 各通道（insert/deleted/
+    // retained/carryGhost/carryMotion）独立 push motionGlyphWindows，末尾不存在跨所有
+    // 通道的统一合并。同一物理 key 若被两个通道产出，extractWindowKeys 返回的数组有
+    // 重复 key，SujianEditor.sameKeySet 要求 rightSet.size === right.length，有重复时
+    // 返回 false，候选不提交。即便绕过判定，UI 的 buildAllMotionWindowSources 也只
+    // 显示第一张，第二张裁切/字符直接丢失。
+    //
+    // 修复：在 buildFrame 末尾按 renderNodeKey 做跨通道合并。同一 renderNodeKey 的
+    // 多个窗口合并为一个——合并 clipRects、包围盒、currentClip 范围。
+    // 不同 sourceKind/sourceRevision 的同 key 窗口不应出现（上游 buildSourceMembers
+    // 已保证一致性），防御性地跳过身份不一致的重复窗口。
+    const mergedWindows: MotionGlyphWindow[] = []
+    const windowByKey = new Map<string, MotionGlyphWindow>()
+    for (const w of motionGlyphWindows) {
+      const existing = windowByKey.get(w.renderNodeKey)
+      if (existing !== undefined) {
+        // 防御性检查：同 key 不同身份不应发生（上游已保证一致）
+        if (existing.sourceKind !== w.sourceKind ||
+            existing.sourceRevision !== w.sourceRevision) {
+          // 身份不一致——跳过该重复窗口，不合并，避免破坏 sameKeySet
+          continue
+        }
+        // 合并 clipRects
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        // 合并包围盒
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        // 合并 fullWindowGlyphUtf16Ranges（取并集）
+        if (existing.fullWindowGlyphUtf16Ranges !== undefined &&
+            w.fullWindowGlyphUtf16Ranges !== undefined &&
+            existing.fullWindowGlyphUtf16Ranges !== null &&
+            w.fullWindowGlyphUtf16Ranges !== null) {
+          const mergedRanges = new Map(existing.fullWindowGlyphUtf16Ranges)
+          for (const entry of w.fullWindowGlyphUtf16Ranges) {
+            mergedRanges.set(entry[0], entry[1])
+          }
+          existing.fullWindowGlyphUtf16Ranges = mergedRanges
+        } else if (existing.fullWindowGlyphUtf16Ranges === undefined &&
+                   w.fullWindowGlyphUtf16Ranges !== undefined) {
+          existing.fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges
+        }
+      } else {
+        windowByKey.set(w.renderNodeKey, w)
+        mergedWindows.push(w)
+      }
+    }
+
     // Issue #879 复核评论问题4：buildFrame 不再登记 lease——
     // lease 在 Text.onAppear 后才 acquire（由 SujianEditor 调 acquireRenderNodeLease）。
     // 候选被更高 revision 作废时 ArkUI 可能从未创建那个 Text，
@@ -3141,7 +3193,7 @@ export class EditorMotionCoordinator {
       caretY,
       caretHeight,
       staticVisibleRanges,
-      motionGlyphWindows,
+      motionGlyphWindows: mergedWindows,
       isAnimating: progress < 1,
       motionKind: plan.motionKind
     }
@@ -3588,9 +3640,13 @@ export class EditorMotionCoordinator {
             offsetY: piece.offsetY,
             clipRects: piece.clipRects,
             islandTargetRects: islandTargetRects,
-            // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
-            // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
-            fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
+            // Issue #879 评论6138480563 问题2：按 piece.glyphIds 过滤父窗口映射，
+            // 子片段只携带属于自己的 glyph 身份所有权，不再复制原父窗口全表。
+            // 否则下轮聚合（FrozenWindowGroupPlan）会用 Array.from(map.keys())
+            // 回填 glyphIds，把已交给其它通道的字错误带回。
+            fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.filterGlyphUtf16Ranges(
+              w.fullWindowGlyphUtf16Ranges, piece.glyphIds
+            ),
           })
         }
         continue
@@ -3660,9 +3716,11 @@ export class EditorMotionCoordinator {
           offsetY: piece.offsetY,
           clipRects: piece.clipRects,
           islandTargetRects: islandTargetRects,
-          // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
-          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
-          fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
+          // Issue #879 评论6138480563 问题2：按 piece.glyphIds 过滤父窗口映射，
+          // 子片段只携带属于自己的 glyph 身份所有权，不再复制原父窗口全表。
+          fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.filterGlyphUtf16Ranges(
+            w.fullWindowGlyphUtf16Ranges, piece.glyphIds
+          ),
         })
       }
     }
@@ -4051,9 +4109,13 @@ export class EditorMotionCoordinator {
           targetOpacity: w.opacity === undefined
             ? undefined
             : (sourceKind === 'old' ? 0 : 1),
-          // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
-          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
-          fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
+          // Issue #879 评论6138480563 问题2：按 piece.glyphIds 过滤父窗口映射，
+          // 子片段只携带属于自己的 glyph 身份所有权，不再复制原父窗口全表。
+          // 否则下轮聚合（FrozenWindowGroupPlan）会用 Array.from(map.keys())
+          // 回填 glyphIds，把已交给其它通道的字错误带回。
+          fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.filterGlyphUtf16Ranges(
+            w.fullWindowGlyphUtf16Ranges, piece.glyphIds
+          ),
         })
       }
     }
@@ -4154,6 +4216,33 @@ export class EditorMotionCoordinator {
       identities: displayed.identities,
       frozenWindows: frozenWindows
     }
+  }
+
+  /**
+   * Issue #879 评论6138480563 问题2：从父窗口的 fullWindowGlyphUtf16Ranges 中
+   * 只选取属于本子片段 glyphIds 的映射条目。
+   *
+   * splitFrozenWindowByGlyphOwnership 产生子片段时，每个 piece 只拥有部分 glyphIds。
+   * 如果直接继承父窗口的全量映射，下轮聚合（FrozenWindowGroupPlan）会用
+   * Array.from(map.keys()) 回填 glyphIds，把已交给其它通道的字错误带回。
+   *
+   * 本方法按 piece.glyphIds 过滤父映射，确保子片段只携带属于自己的 glyph 身份所有权。
+   */
+  private static filterGlyphUtf16Ranges(
+    sourceRanges: Map<string, [number, number]> | null | undefined,
+    pieceGlyphIds: string[]
+  ): Map<string, [number, number]> | null {
+    if (sourceRanges === null || sourceRanges === undefined) {
+      return null
+    }
+    const filtered: Map<string, [number, number]> = new Map()
+    for (const gid of pieceGlyphIds) {
+      const range = sourceRanges.get(gid)
+      if (range !== undefined) {
+        filtered.set(gid, range)
+      }
+    }
+    return filtered.size > 0 ? filtered : null
   }
 
   /**
