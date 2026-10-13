@@ -475,53 +475,56 @@ export class EditorMotionCoordinator {
     if (plan.durationMs <= 0) {
       return []
     }
+    // Issue #879 评论6138007192 问题2：全局统一按物理身份归并。
+    // 所有通道（insert/deleted/retained/carryOverGhost/carryOverMotion）的 key
+    // 通过同一个 Set 去重，避免连续快速编辑时同一物理 Text key 被多通道重复输出，
+    // 导致 UI 的 buildAllMotionWindowSources 只保留最后一张而丢字。
+    const allKeysSeen: Set<string> = new Set()
     const keys: string[] = []
     // Issue #879 评论6129701697 问题1：plannedWindowKeys 只读取预分配的 renderNodeKey，
     // 不各自重跑分配逻辑。所有 key 在 Planner 的 planFromPatches 中一次性分配。
     for (const run of plan.insertRuns) {
       for (const piece of run.pieces) {
-        if (piece.renderNodeKey !== undefined) {
+        if (piece.renderNodeKey !== undefined && !allKeysSeen.has(piece.renderNodeKey)) {
+          allKeysSeen.add(piece.renderNodeKey)
           keys.push(piece.renderNodeKey)
         }
       }
     }
     for (const run of plan.deletedRuns) {
       for (const piece of run.pieces) {
-        if (piece.renderNodeKey !== undefined) {
+        if (piece.renderNodeKey !== undefined && !allKeysSeen.has(piece.renderNodeKey)) {
+          allKeysSeen.add(piece.renderNodeKey)
           keys.push(piece.renderNodeKey)
         }
       }
     }
-    // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
-    // 跨多个 interval 只输出一次 key，buildFrame 会按 renderNodeKey 聚合合并 clipRects。
-    const frozenKeysSeen: Set<string> = new Set()
+    // Issue #879 评论6138007192 问题2：retained 通道也使用全局 allKeysSeen 去重，
+    // 不再单独维护 frozenKeysSeen——同一物理 key 跨通道只输出一次。
     for (const move of plan.retainedMoves) {
       for (const piece of move.pieces) {
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
         for (const interval of intervals) {
           if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
             for (const member of interval.sourceMembers) {
-              if (member.role === 'frozen') {
-                if (!frozenKeysSeen.has(member.renderNodeKey)) {
-                  frozenKeysSeen.add(member.renderNodeKey)
-                  keys.push(member.renderNodeKey)
-                }
-              } else {
-                // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey
-                // 已在 Planner 中预分配（包含 windowInstanceId），直接读取。
+              if (!allKeysSeen.has(member.renderNodeKey)) {
+                allKeysSeen.add(member.renderNodeKey)
                 keys.push(member.renderNodeKey)
               }
             }
           } else {
             // Issue #879 评论6129701697 问题1：fallback 分支读取预分配的 interval.renderNodeKey。
-            if (interval.renderNodeKey !== undefined) {
+            if (interval.renderNodeKey !== undefined && !allKeysSeen.has(interval.renderNodeKey)) {
+              allKeysSeen.add(interval.renderNodeKey)
               keys.push(interval.renderNodeKey)
             }
             // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade。
             const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
               ? interval.needsCrossfade
               : move.needsCrossfade
-            if (intervalNeedsCrossfade && interval.crossfadeRenderNodeKey !== undefined) {
+            if (intervalNeedsCrossfade && interval.crossfadeRenderNodeKey !== undefined &&
+                !allKeysSeen.has(interval.crossfadeRenderNodeKey)) {
+              allKeysSeen.add(interval.crossfadeRenderNodeKey)
               keys.push(interval.crossfadeRenderNodeKey)
             }
           }
@@ -529,10 +532,16 @@ export class EditorMotionCoordinator {
       }
     }
     for (const ghost of plan.carryOverGhostRuns) {
-      keys.push(ghost.renderNodeKey)
+      if (!allKeysSeen.has(ghost.renderNodeKey)) {
+        allKeysSeen.add(ghost.renderNodeKey)
+        keys.push(ghost.renderNodeKey)
+      }
     }
     for (const motionRun of plan.carryOverMotionRuns) {
-      keys.push(motionRun.renderNodeKey)
+      if (!allKeysSeen.has(motionRun.renderNodeKey)) {
+        allKeysSeen.add(motionRun.renderNodeKey)
+        keys.push(motionRun.renderNodeKey)
+      }
     }
     return keys
   }
@@ -2916,34 +2925,35 @@ export class EditorMotionCoordinator {
       // Issue #879 复核评论修复：直接读取 ghost.windowInstanceId，不再从 renderNodeKey 截取。
       const ghostRenderNodeKey = ghost.renderNodeKey
       const ghostWindowInstanceId = ghost.windowInstanceId
-      motionGlyphWindows.push({
-        sourceKind: ghost.sourceKind,
-        utf16Start: ghost.utf16Start,
-        utf16End: ghost.utf16End,
-        clipLeft: currentLeft,
-        clipRight: currentRight,
-        clipTop: ghost.clipTop,
-        clipBottom: ghost.clipBottom,
-        clipRects: ghostClipRects,
-        glyphX: ghost.glyphX,
-        glyphY: ghost.glyphY,
-        glyphWidth: ghost.glyphWidth,
-        glyphHeight: ghost.glyphHeight,
-        offsetX: ghost.offsetX,
-        offsetY: ghost.offsetY,
-        runId: ghost.sourceRunId,
-        sourceRevision: ghost.sourceRevision,
-        glyphIds: ghost.glyphIds,
-        windowId: ghost.windowId,
-        windowInstanceId: ghostWindowInstanceId,
-        renderNodeKey: ghostRenderNodeKey,
-        currentClipLeft: currentLeft,
-        currentClipRight: currentRight,
-        currentPositionX: ghost.glyphX + ghost.offsetX,
-        currentPositionY: ghost.glyphY + ghost.offsetY,
-        motionOwnerKind: 'carryGhost',
-        // Issue #879 评论6128658045 问题3：carryOver ghost 的完整窗口数据就是 ghost 自身的数据，
-        // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
+        motionGlyphWindows.push({
+          sourceKind: ghost.sourceKind,
+          utf16Start: ghost.utf16Start,
+          utf16End: ghost.utf16End,
+          clipLeft: currentLeft,
+          clipRight: currentRight,
+          clipTop: ghost.clipTop,
+          clipBottom: ghost.clipBottom,
+          clipRects: ghostClipRects,
+          glyphX: ghost.glyphX,
+          glyphY: ghost.glyphY,
+          glyphWidth: ghost.glyphWidth,
+          glyphHeight: ghost.glyphHeight,
+          offsetX: ghost.offsetX,
+          offsetY: ghost.offsetY,
+          runId: ghost.sourceRunId,
+          sourceRevision: ghost.sourceRevision,
+          glyphIds: ghost.glyphIds,
+          windowId: ghost.windowId,
+          windowInstanceId: ghostWindowInstanceId,
+          renderNodeKey: ghostRenderNodeKey,
+          currentClipLeft: currentLeft,
+          currentClipRight: currentRight,
+          currentPositionX: ghost.glyphX + ghost.offsetX,
+          currentPositionY: ghost.glyphY + ghost.offsetY,
+          motionOwnerKind: 'carryGhost',
+          // Issue #879 评论6138007192 问题3：从 ghost 继承完整映射，
+          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+          fullWindowGlyphUtf16Ranges: ghost.fullWindowGlyphUtf16Ranges,
         })
       }
 
@@ -3014,8 +3024,9 @@ export class EditorMotionCoordinator {
           opacity: motionRun.opacity === undefined
             ? undefined
             : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
-          // Issue #879 评论6128658045 问题3：carryOver motion reflow 的完整窗口数据，
-          // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
+          // Issue #879 评论6138007192 问题3：从 motionRun 继承完整映射，
+          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+          fullWindowGlyphUtf16Ranges: motionRun.fullWindowGlyphUtf16Ranges,
         })
       } else {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
@@ -3068,8 +3079,9 @@ export class EditorMotionCoordinator {
           opacity: motionRun.opacity === undefined
             ? undefined
             : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
-          // Issue #879 评论6128658045 问题3：carryOver motion insert 的完整窗口数据，
-          // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
+          // Issue #879 评论6138007192 问题3：从 motionRun 继承完整映射，
+          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+          fullWindowGlyphUtf16Ranges: motionRun.fullWindowGlyphUtf16Ranges,
         })
       }
     }
@@ -3575,7 +3587,10 @@ export class EditorMotionCoordinator {
             offsetX: piece.offsetX,
             offsetY: piece.offsetY,
             clipRects: piece.clipRects,
-            islandTargetRects: islandTargetRects
+            islandTargetRects: islandTargetRects,
+            // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
+            // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+            fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
           })
         }
         continue
@@ -3644,7 +3659,10 @@ export class EditorMotionCoordinator {
           offsetX: piece.offsetX,
           offsetY: piece.offsetY,
           clipRects: piece.clipRects,
-          islandTargetRects: islandTargetRects
+          islandTargetRects: islandTargetRects,
+          // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
+          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+          fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
         })
       }
     }
@@ -4032,7 +4050,10 @@ export class EditorMotionCoordinator {
           // 否则两源会停在冻结时的半透明，动画结束时静态正文接管会闪烁/双字。
           targetOpacity: w.opacity === undefined
             ? undefined
-            : (sourceKind === 'old' ? 0 : 1)
+            : (sourceKind === 'old' ? 0 : 1),
+          // Issue #879 评论6138007192 问题3：从原始窗口继承完整映射，
+          // 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射。
+          fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges,
         })
       }
     }

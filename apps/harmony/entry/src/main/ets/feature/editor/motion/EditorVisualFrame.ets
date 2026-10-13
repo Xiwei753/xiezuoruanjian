@@ -318,6 +318,16 @@ export interface CarryOverGhostRun {
    * buildFrame 中每岛从 clipRects[i] 插值到 islandTargetRects[i]。
    */
   islandTargetRects: ClipRect[]
+  /**
+   * Issue #879 评论6138007192 问题3：该残影的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 从原始 MotionGlyphWindow.fullWindowGlyphUtf16Ranges 继承，
+   * buildFrame 将其写入 MotionGlyphWindow.fullWindowGlyphUtf16Ranges，
+   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射，
+   * 下一次冻结仍能用完整映射建 frozenIndex。
+   * undefined 时 buildFrame 用 buildGlyphUtf16Ranges 计算 fallback。
+   */
+  fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /**
@@ -460,6 +470,16 @@ export interface CarryOverMotionRun {
    * 非交叉淡入淡出窗口（opacity 未定义）不设置本字段，保持完全不透明。
    */
   targetOpacity?: number
+  /**
+   * Issue #879 评论6138007192 问题3：该窗口的完整逐字 glyphId→UTF-16 映射。
+   *
+   * 从原始 MotionGlyphWindow.fullWindowGlyphUtf16Ranges 继承，
+   * buildFrame 将其写入 MotionGlyphWindow.fullWindowGlyphUtf16Ranges，
+   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整映射，
+   * 下一次冻结仍能用完整映射建 frozenIndex。
+   * undefined 时 buildFrame 用 buildGlyphUtf16Ranges 计算 fallback。
+   */
+  fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /**

@@ -1805,6 +1805,13 @@ export function retargetRunStarts(
           // needsCrossfade 在 plan 阶段由 planFromPatches 逐 interval 计算，
           // retarget 时不应重新计算——直接继承 prevInterval 的值。
           reInterval.needsCrossfade = prevInterval.needsCrossfade
+          // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份字段。
+          // intervalForIsland 不分配身份——身份在 Planner 的 planFromPatches 中一次性分配。
+          // retarget 只改现时裁切、起始位置和起始透明度，不改变物理节点身份。
+          reInterval.renderNodeKey = prevInterval.renderNodeKey
+          reInterval.windowInstanceId = prevInterval.windowInstanceId
+          reInterval.crossfadeRenderNodeKey = prevInterval.crossfadeRenderNodeKey
+          reInterval.crossfadeWindowInstanceId = prevInterval.crossfadeWindowInstanceId
           // Issue #879 复核评论6111437799 问题5：源窗口集合固定为 PreparedCandidate 不可变成员身份。
           // retarget 只刷新已固定成员的 clip、位置、alpha，源已离屏则 clip/alpha 归零但成员物理 key 不变。
           // 不使用 intervalForIsland 重新构建的 sourceMembers——那会因 frozenWindows 变化而引入/丢失成员。
@@ -1837,6 +1844,12 @@ export function retargetRunStarts(
             startPositionY: prevInterval.startPositionY,
             utf16Start: prevInterval.utf16Start,
             utf16End: prevInterval.utf16End,
+            // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份字段。
+            // 不可见时仍需保留身份，否则 plannedWindowKeys 漏 key、buildFrame 走 fallback 分配。
+            renderNodeKey: prevInterval.renderNodeKey,
+            windowInstanceId: prevInterval.windowInstanceId,
+            crossfadeRenderNodeKey: prevInterval.crossfadeRenderNodeKey,
+            crossfadeWindowInstanceId: prevInterval.crossfadeWindowInstanceId,
             // Issue #879 复核评论6100665268 问题3：不可见时 clipRects 设为零宽度，
             // 保留分区但不露出任何可见区域。
             clipRects: [{
@@ -2035,6 +2048,11 @@ export function retargetRunStarts(
       startPositionY: startPositionY,
       glyphIds: [...piece.glyphIds],
       intervals: intervals.length > 0 ? intervals : undefined,
+      // Issue #879 评论6138007192 问题1：保留 prepare 预分配的物理窗口身份。
+      // retarget 只改现时裁切、起始位置和起始透明度，不改变物理节点身份。
+      // prepare 一次分配，全链路不再改变 key 和 ID。
+      renderNodeKey: piece.renderNodeKey,
+      windowInstanceId: piece.windowInstanceId,
     })
   }
   return result
@@ -2672,6 +2690,11 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
     startPositionX: p.startPositionX,
     startPositionY: p.startPositionY,
     glyphIds: [...p.glyphIds],
+    // Issue #879 评论6138007192 问题1：复制物理窗口身份字段。
+    // clonePieces 用于 retargetRunStarts 的 fallback 分支（簇数不匹配时），
+    // 必须保留预分配的 renderNodeKey/windowInstanceId，否则 fallback 路径也会丢身份。
+    renderNodeKey: p.renderNodeKey,
+    windowInstanceId: p.windowInstanceId,
     intervals: p.intervals === undefined
       ? undefined
       : p.intervals.map((iv: RunStartInterval): RunStartInterval => ({
@@ -2684,6 +2707,11 @@ function clonePieces(pieces: RunStartPiece[]): RunStartPiece[] {
         startPositionY: iv.startPositionY,
         utf16Start: iv.utf16Start,
         utf16End: iv.utf16End,
+        // Issue #879 评论6138007192 问题1：复制 interval 级别的物理窗口身份字段。
+        renderNodeKey: iv.renderNodeKey,
+        windowInstanceId: iv.windowInstanceId,
+        crossfadeRenderNodeKey: iv.crossfadeRenderNodeKey,
+        crossfadeWindowInstanceId: iv.crossfadeWindowInstanceId,
         // Issue #879 复核评论6099070438 问题4：深拷贝 clipRects，避免共享引用。
         clipRects: iv.clipRects === undefined
           ? undefined
