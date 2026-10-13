@@ -1,8 +1,8 @@
 // editor_physical_window_identity.test.mjs — 物理窗口身份唯一化纯逻辑单测。
 //
 // Issue #879 物理窗口身份唯一化修复（3 个关联问题）：
-// 1. buildFrame 同 key 不同绘制属性合并时不再 push 第二条窗口（跳过 instead of push）
-// 2. buildFrame fallback 改用 WindowInstanceIdAllocator.allocateFresh() 代替 windowIdForGlyphIds()
+// 1. buildFrame 同 key 不同绘制属性合并时跳过第二个窗口（不创建 -dup key）
+// 2. buildFrame 直接读取预分配值（用 `!` 断言），不再有 -unplanned fallback key
 // 3. PhysicalWindowKeyAllocator.allocate 加入 motionChannel 参数，
 //    frozen 通道用 allocate（复用），其他通道用 allocateFresh（独立实例）
 //
@@ -835,13 +835,13 @@ test('场景7b：plannedWindowKeys 不调用 allocateFresh（只读取预分配 
   assert.ok(keys.has('old-10-win-5'))
 })
 
-// ── 场景8：不同来源同 key 冲突不丢字 ──
+// ── 场景8：同 key 不同属性时跳过第二个窗口 ──
 //
-// buildFrame 合并逻辑：同 renderNodeKey 不同绘制属性时，
-// 旧逻辑：直接 continue 丢掉第二个窗口（文字丢失）
-// 新逻辑：给第二个窗口分配 `-dup` 后缀 key，保留两个窗口
+// buildFrame 合并逻辑：同 renderNodeKey 不同绘制属性时（Planner bug），
+// 跳过第二个窗口（不创建 -dup key），保持 plannedWindowKeys 与 buildFrame 输出 key 集合一致。
+// 同 key 同属性时只合并 clip（正常聚合行为）。
 
-test('场景8a：同 key 不同绘制属性时给第二个窗口分配 -dup 后缀 key', () => {
+test('场景8a：同 key 不同绘制属性时跳过第二个窗口（不创建 -dup key）', () => {
   // 模拟 buildFrame 的合并逻辑（物理身份校验合并）
   const motionGlyphWindows = [
     {
@@ -876,7 +876,7 @@ test('场景8a：同 key 不同绘制属性时给第二个窗口分配 -dup 后�
     },
   ]
 
-  // 模拟合并逻辑
+  // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
   const mergedWindows = []
   const windowByKey = new Map()
   for (const w of motionGlyphWindows) {
@@ -895,16 +895,12 @@ test('场景8a：同 key 不同绘制属性时给第二个窗口分配 -dup 后�
         existing.windowInstanceId === w.windowInstanceId &&
         existing.motionOwnerKind === w.motionOwnerKind
       if (sameIdentity) {
+        // 同 key 同属性 → 合并 clip
         existing.clipRects = [...existing.clipRects, ...w.clipRects]
         continue
       } else {
-        // 同 key 不同绘制属性 → 分配 -dup 后缀 key
-        const dupKey = `${w.renderNodeKey}-dup`
-        if (!windowByKey.has(dupKey)) {
-          w.renderNodeKey = dupKey
-          windowByKey.set(dupKey, w)
-          mergedWindows.push(w)
-        }
+        // 同 key 不同属性 → 跳过第二个窗口（不创建 -dup key）
+        continue
       }
     } else {
       windowByKey.set(w.renderNodeKey, w)
@@ -912,17 +908,17 @@ test('场景8a：同 key 不同绘制属性时给第二个窗口分配 -dup 后�
     }
   }
 
-  // 两个窗口都出现在输出中（不丢字）
-  assert.equal(mergedWindows.length, 2)
+  // 只有第一个窗口出现在输出中，第二个窗口被跳过
+  assert.equal(mergedWindows.length, 1)
   // 第一个窗口的 key 不变
   assert.equal(mergedWindows[0].renderNodeKey, 'old-10-win-0')
-  // 第二个窗口的 key 有 -dup 后缀
-  assert.equal(mergedWindows[1].renderNodeKey, 'old-10-win-0-dup')
-  // 两个窗口的 renderNodeKey 不同
-  assert.notEqual(mergedWindows[0].renderNodeKey, mergedWindows[1].renderNodeKey)
+  // 没有任何 -dup 后缀的 key
+  for (const w of mergedWindows) {
+    assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
+  }
 })
 
-test('场景8b：同 key 同绘制属性时只合并 clip（不分配 -dup）', () => {
+test('场景8b：同 key 同绘制属性时只合并 clip', () => {
   const motionGlyphWindows = [
     {
       renderNodeKey: 'old-10-win-0',
@@ -974,15 +970,12 @@ test('场景8b：同 key 同绘制属性时只合并 clip（不分配 -dup）', 
         existing.windowInstanceId === w.windowInstanceId &&
         existing.motionOwnerKind === w.motionOwnerKind
       if (sameIdentity) {
+        // 同 key 同属性 → 合并 clip
         existing.clipRects = [...existing.clipRects, ...w.clipRects]
         continue
       } else {
-        const dupKey = `${w.renderNodeKey}-dup`
-        if (!windowByKey.has(dupKey)) {
-          w.renderNodeKey = dupKey
-          windowByKey.set(dupKey, w)
-          mergedWindows.push(w)
-        }
+        // 同 key 不同属性 → 跳过
+        continue
       }
     } else {
       windowByKey.set(w.renderNodeKey, w)
@@ -990,42 +983,63 @@ test('场景8b：同 key 同绘制属性时只合并 clip（不分配 -dup）', 
     }
   }
 
-  // 只有一个窗口（合并了 clip），没有 -dup
+  // 只有一个窗口（合并了 clip）
   assert.equal(mergedWindows.length, 1)
   assert.equal(mergedWindows[0].renderNodeKey, 'old-10-win-0')
   // clipRects 合并了两段
   assert.equal(mergedWindows[0].clipRects.length, 2)
 })
 
-test('场景8c：旧逻辑（continue 丢字）vs 新逻辑（-dup 保留）对比', () => {
-  // 模拟旧逻辑：同 key 不同属性 → continue（丢字）
+test('场景8c：旧逻辑（-dup 保留）vs 新逻辑（跳过第二个窗口）对比', () => {
+  // 模拟旧逻辑：同 key 不同属性 → 分配 -dup 后缀 key，两个窗口都保留
   const windows = [
     { renderNodeKey: 'shared-key', offsetX: 0, clipRects: [{ x: 0, y: 0, width: 10, height: 20 }] },
     { renderNodeKey: 'shared-key', offsetX: 5, clipRects: [{ x: 20, y: 0, width: 10, height: 20 }] },
   ]
 
-  // 旧逻辑：直接 continue → 只保留第一个窗口
-  const oldResult = [windows[0]] // 第二个被 continue 丢弃
-  assert.equal(oldResult.length, 1) // 丢了一个窗口！
-
-  // 新逻辑：分配 -dup 后缀 → 两个窗口都保留
-  const newResult = []
-  const windowByKey = new Map()
+  // 旧逻辑：分配 -dup 后缀 → 两个窗口都保留
+  const oldResult = []
+  const oldWindowByKey = new Map()
   for (const w of windows) {
-    const existing = windowByKey.get(w.renderNodeKey)
+    const existing = oldWindowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
       // 不同属性 → 分配 -dup
       const dupKey = `${w.renderNodeKey}-dup`
       w.renderNodeKey = dupKey
-      windowByKey.set(dupKey, w)
-      newResult.push(w)
+      oldWindowByKey.set(dupKey, w)
+      oldResult.push(w)
     } else {
-      windowByKey.set(w.renderNodeKey, w)
+      oldWindowByKey.set(w.renderNodeKey, w)
+      oldResult.push(w)
+    }
+  }
+  assert.equal(oldResult.length, 2) // 旧逻辑：两个窗口都保留
+  assert.notEqual(oldResult[0].renderNodeKey, oldResult[1].renderNodeKey)
+
+  // 新逻辑：跳过第二个窗口 → 只有第一个窗口保留
+  const newResult = []
+  const newWindowByKey = new Map()
+  // 重置 windows 数据（因为旧逻辑修改了 renderNodeKey）
+  const newWindows = [
+    { renderNodeKey: 'shared-key', offsetX: 0, clipRects: [{ x: 0, y: 0, width: 10, height: 20 }] },
+    { renderNodeKey: 'shared-key', offsetX: 5, clipRects: [{ x: 20, y: 0, width: 10, height: 20 }] },
+  ]
+  for (const w of newWindows) {
+    const existing = newWindowByKey.get(w.renderNodeKey)
+    if (existing !== undefined) {
+      // 同 key 不同属性 → 跳过第二个窗口（不创建 -dup key）
+      continue
+    } else {
+      newWindowByKey.set(w.renderNodeKey, w)
       newResult.push(w)
     }
   }
-  assert.equal(newResult.length, 2) // 两个窗口都保留
-  assert.notEqual(newResult[0].renderNodeKey, newResult[1].renderNodeKey)
+  assert.equal(newResult.length, 1) // 新逻辑：只有第一个窗口
+  assert.equal(newResult[0].renderNodeKey, 'shared-key')
+  // 新逻辑下第二个窗口不出现在 mergedWindows 中
+  for (const w of newResult) {
+    assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
+  }
 })
 
 // ── 场景9：buildFrame 不再调用 allocateFresh ──
@@ -1094,14 +1108,19 @@ test('场景9c：buildFrame 不接收 windowIdAllocator 参数', () => {
   // 这意味着 buildFrame 无法调用 allocateFresh（它没有 allocator 引用）。
 
   // 模拟 buildFrame 的调用签名（不含 windowIdAllocator）
+  // 与真实代码一致：直接读取预分配值，不做 fallback
   function simulatedBuildFrame(plan, progress) {
-    // 只从 plan 中读取预分配的 key
+    // 只从 plan 中读取预分配的 key（用 `!` 断言，模拟 ArkTS 的非空断言）
     const windows = []
     for (const run of plan.insertRuns) {
       for (const piece of run.pieces) {
+        // buildFrame 直接读取 piece.renderNodeKey! / piece.windowInstanceId!
+        // 不再有 `?? new-${revision}-unplanned` fallback
+        assert.ok(piece.renderNodeKey !== undefined, 'piece.renderNodeKey must be pre-allocated')
+        assert.ok(piece.windowInstanceId !== undefined, 'piece.windowInstanceId must be pre-allocated')
         windows.push({
-          renderNodeKey: piece.renderNodeKey ?? `new-${plan.newRevision}-unplanned`,
-          windowInstanceId: piece.windowInstanceId ?? `new-${plan.newRevision}-unplanned`,
+          renderNodeKey: piece.renderNodeKey,
+          windowInstanceId: piece.windowInstanceId,
         })
       }
     }
@@ -1121,131 +1140,133 @@ test('场景9c：buildFrame 不接收 windowIdAllocator 参数', () => {
     const windows = simulatedBuildFrame(plan, p)
     assert.equal(windows[0].renderNodeKey, 'new-11-win-0')
     assert.equal(windows[0].windowInstanceId, 'win-0')
+    // 不包含 -unplanned 后缀
+    assert.ok(!windows[0].renderNodeKey.includes('-unplanned'))
+    assert.ok(!windows[0].windowInstanceId.includes('-unplanned'))
   }
 })
 
-// ── 场景10：确定性 fallback key ──
+// ── 场景10：buildFrame 直接读取预分配值（不使用 fallback） ──
 //
-// buildFrame 中动态创建的 target 成员（windowInstanceId 为 undefined 时）
-// 使用确定性 fallback key：
-// - fallback key 格式为 `${member.renderNodeKey}-unplanned`
-// - 不调用 allocateFresh
-// - 同一成员在连续帧中使用相同的 fallback key
+// buildFrame 中所有通道（insert/deleted/retainedMoves/carryOver）直接读取
+// Planner 预分配的 renderNodeKey 和 windowInstanceId（用 `!` 断言），
+// 不再有 `new-${revision}-unplanned` 或 `old-${revision}-unplanned` 格式的 fallback key。
+// 如果 piece/interval/member 的预分配值缺失（Planner bug），`!` 断言会直接报错，
+// 而不是静默生成 fallback key。
 
-test('场景10a：windowInstanceId 为 undefined 时使用确定性 fallback key', () => {
-  // 模拟 buildFrame 中 target 成员的 fallback 逻辑
-  const member = {
-    renderNodeKey: 'new-11-win-3',
-    windowInstanceId: undefined, // Planner bug：未预分配
-    role: 'target',
-    sourceKind: 'new',
-    sourceRevision: 11,
+test('场景10a：insert 通道直接读取 piece 预分配的 renderNodeKey/windowInstanceId', () => {
+  // 模拟 buildFrame 中 insert 通道的逻辑：
+  // const insertRenderNodeKey = piece.renderNodeKey!
+  // const insertWindowInstanceId = piece.windowInstanceId!
+  const piece = {
+    renderNodeKey: 'new-11-win-0',
+    windowInstanceId: 'win-0',
+    glyphIds: ['ins-11-0'],
   }
 
-  // buildFrame 的 fallback 逻辑：
-  // memberRenderNodeKey = member.windowInstanceId !== undefined
-  //   ? member.renderNodeKey
-  //   : `${member.renderNodeKey}-unplanned`
-  const memberRenderNodeKey = member.windowInstanceId !== undefined
-    ? member.renderNodeKey
-    : `${member.renderNodeKey}-unplanned`
+  // 直接读取预分配值（模拟 `!` 断言行为）
+  const insertRenderNodeKey = piece.renderNodeKey
+  const insertWindowInstanceId = piece.windowInstanceId
 
-  // fallback key 格式为 `${member.renderNodeKey}-unplanned`
-  assert.equal(memberRenderNodeKey, 'new-11-win-3-unplanned')
-  // 不调用 allocateFresh（fallback key 是确定性的字符串拼接）
-  assert.match(memberRenderNodeKey, /-unplanned$/)
+  // 使用预分配的值，不是 fallback
+  assert.equal(insertRenderNodeKey, 'new-11-win-0')
+  assert.equal(insertWindowInstanceId, 'win-0')
+  // 不包含 -unplanned 后缀
+  assert.ok(!insertRenderNodeKey.includes('-unplanned'))
+  assert.ok(!insertWindowInstanceId.includes('-unplanned'))
 })
 
-test('场景10b：fallback key 不调用 allocateFresh', () => {
-  // 验证 fallback key 是纯字符串拼接，不依赖 allocator
-  // 即使没有 allocator 实例，fallback key 也能正确生成
-  const member = {
+test('场景10b：deleted 通道直接读取 piece 预分配的 renderNodeKey/windowInstanceId', () => {
+  // 模拟 buildFrame 中 deleted 通道的逻辑：
+  // const deletedRenderNodeKey = piece.renderNodeKey!
+  // const deletedWindowInstanceId = piece.windowInstanceId!
+  const piece = {
+    renderNodeKey: 'old-10-win-1',
+    windowInstanceId: 'win-1',
+    glyphIds: ['orig-10-0'],
+  }
+
+  const deletedRenderNodeKey = piece.renderNodeKey
+  const deletedWindowInstanceId = piece.windowInstanceId
+
+  assert.equal(deletedRenderNodeKey, 'old-10-win-1')
+  assert.equal(deletedWindowInstanceId, 'win-1')
+  assert.ok(!deletedRenderNodeKey.includes('-unplanned'))
+  assert.ok(!deletedWindowInstanceId.includes('-unplanned'))
+})
+
+test('场景10c：retainedMoves 通道直接读取 interval 预分配的 renderNodeKey/windowInstanceId', () => {
+  // 模拟 buildFrame 中 retainedMoves 通道的逻辑：
+  // const fallbackRenderNodeKey = interval.renderNodeKey!
+  // const fallbackWindowInstanceId = interval.windowInstanceId!
+  const interval = {
     renderNodeKey: 'old-10-win-2',
-    windowInstanceId: undefined,
+    windowInstanceId: 'win-2',
+    glyphIds: ['orig-10-1', 'orig-10-2'],
+  }
+
+  const intervalRenderNodeKey = interval.renderNodeKey
+  const intervalWindowInstanceId = interval.windowInstanceId
+
+  assert.equal(intervalRenderNodeKey, 'old-10-win-2')
+  assert.equal(intervalWindowInstanceId, 'win-2')
+  assert.ok(!intervalRenderNodeKey.includes('-unplanned'))
+  assert.ok(!intervalWindowInstanceId.includes('-unplanned'))
+})
+
+test('场景10d：member 直接读取预分配的 renderNodeKey（frozen/target 成员）', () => {
+  // 模拟 buildFrame 中 member 的逻辑：
+  // const memberRenderNodeKey = member.renderNodeKey
+  const frozenMember = {
+    renderNodeKey: 'old-10-win-3',
+    windowInstanceId: 'win-3',
     role: 'frozen',
   }
-
-  // buildFrame 中 frozen 成员的 fallback：
-  // memberRenderNodeKey = member.renderNodeKey（frozen 成员直接使用 member.renderNodeKey）
-  // 但 windowInstanceId 为 undefined 时：
-  // windowInstanceId = `${member.renderNodeKey}-unplanned`
-  const frozenRenderNodeKey = member.renderNodeKey
-  const frozenWindowInstanceId = member.windowInstanceId !== undefined
-    ? member.windowInstanceId
-    : `${member.renderNodeKey}-unplanned`
-
-  assert.equal(frozenRenderNodeKey, 'old-10-win-2')
-  assert.equal(frozenWindowInstanceId, 'old-10-win-2-unplanned')
-  // 不需要 allocator 实例
-})
-
-test('场景10c：同一成员在连续帧中使用相同的 fallback key', () => {
-  // 模拟一个 windowInstanceId 为 undefined 的 target 成员
-  const member = {
-    renderNodeKey: 'new-11-win-5',
-    windowInstanceId: undefined,
+  const targetMember = {
+    renderNodeKey: 'new-11-win-4',
+    windowInstanceId: 'win-4',
     role: 'target',
   }
 
-  // 连续帧采样
+  // frozen 成员直接读取 member.renderNodeKey
+  const frozenKey = frozenMember.renderNodeKey
+  assert.equal(frozenKey, 'old-10-win-3')
+  assert.ok(!frozenKey.includes('-unplanned'))
+
+  // target 成员也直接读取 member.renderNodeKey
+  const targetKey = targetMember.renderNodeKey
+  assert.equal(targetKey, 'new-11-win-4')
+  assert.ok(!targetKey.includes('-unplanned'))
+})
+
+test('场景10e：连续帧采样时预分配值保持不变（确定性）', () => {
+  // buildFrame 直接读取预分配值，连续帧采样时所有帧使用相同的 key
+  const piece = {
+    renderNodeKey: 'new-11-win-5',
+    windowInstanceId: 'win-5',
+    glyphIds: ['ins-11-2'],
+  }
+
+  // 模拟连续帧采样：p=0, 0.25, 0.5, 1
   const frameKeys = []
   const frameWinIds = []
   for (const p of [0, 0.25, 0.5, 1]) {
-    // buildFrame 每帧都用相同的确定性 fallback 逻辑
-    const key = member.windowInstanceId !== undefined
-      ? member.renderNodeKey
-      : `${member.renderNodeKey}-unplanned`
-    const winId = member.windowInstanceId !== undefined
-      ? member.windowInstanceId
-      : `${member.renderNodeKey}-unplanned`
-    frameKeys.push(key)
-    frameWinIds.push(winId)
+    // buildFrame 每帧都直接读取预分配值
+    frameKeys.push(piece.renderNodeKey)
+    frameWinIds.push(piece.windowInstanceId)
   }
 
-  // 所有帧的 fallback key 相同（确定性）
+  // 所有帧的 key 相同（确定性）
   for (const key of frameKeys) {
-    assert.equal(key, 'new-11-win-5-unplanned')
+    assert.equal(key, 'new-11-win-5')
+    assert.ok(!key.includes('-unplanned'))
   }
   for (const winId of frameWinIds) {
-    assert.equal(winId, 'new-11-win-5-unplanned')
+    assert.equal(winId, 'win-5')
+    assert.ok(!winId.includes('-unplanned'))
   }
-  // 验证一致性
   assert.equal(new Set(frameKeys).size, 1)
   assert.equal(new Set(frameWinIds).size, 1)
-})
-
-test('场景10d：insert 通道的 fallback key 格式为 new-{revision}-unplanned', () => {
-  // buildFrame 中 insert 通道的 fallback：
-  // insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-unplanned`
-  // insertWindowInstanceId = piece.windowInstanceId ?? `new-${newRevision}-unplanned`
-  const newRevision = 11
-  const piece = {
-    renderNodeKey: undefined, // Planner bug
-    windowInstanceId: undefined,
-  }
-
-  const insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-unplanned`
-  const insertWindowInstanceId = piece.windowInstanceId ?? `new-${newRevision}-unplanned`
-
-  assert.equal(insertRenderNodeKey, 'new-11-unplanned')
-  assert.equal(insertWindowInstanceId, 'new-11-unplanned')
-})
-
-test('场景10e：deleted 通道的 fallback key 格式为 old-{revision}-unplanned', () => {
-  // buildFrame 中 deleted 通道的 fallback：
-  // deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-unplanned`
-  // deletedWindowInstanceId = piece.windowInstanceId ?? `old-${oldRevision}-unplanned`
-  const oldRevision = 10
-  const piece = {
-    renderNodeKey: undefined,
-    windowInstanceId: undefined,
-  }
-
-  const deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-unplanned`
-  const deletedWindowInstanceId = piece.windowInstanceId ?? `old-${oldRevision}-unplanned`
-
-  assert.equal(deletedRenderNodeKey, 'old-10-unplanned')
-  assert.equal(deletedWindowInstanceId, 'old-10-unplanned')
 })
 
 console.log('---')
