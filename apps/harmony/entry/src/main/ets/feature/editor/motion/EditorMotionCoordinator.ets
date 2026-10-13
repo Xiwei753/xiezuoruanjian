@@ -793,7 +793,8 @@ export class EditorMotionCoordinator {
       prepared.state.newSnapshot,
       prepared.state.newLayout,
       latestDisplayedFrame,
-      0
+      0,
+      this.windowIdAllocator
     )
 
     // 创建新的 state（复制旧 state，替换 plan 和 frame）
@@ -1018,7 +1019,8 @@ export class EditorMotionCoordinator {
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
-          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0
+          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0,
+          this.windowIdAllocator
         )
       : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
 
@@ -1278,7 +1280,8 @@ export class EditorMotionCoordinator {
       this.newSnapshot,
       this.newLayout,
       this.currentFrame,
-      progress
+      progress,
+      this.windowIdAllocator
     )
   }
 
@@ -1331,7 +1334,8 @@ export class EditorMotionCoordinator {
     newSnapshot: EditorLayoutSnapshot | null,
     newLayout: LineLayout[],
     caretBase: EditorVisualFrame,
-    progress: number
+    progress: number,
+    windowIdAllocator: WindowInstanceIdAllocator
   ): EditorVisualFrame {
     const newRevision = newSnapshot?.revision ?? 0
     const newText = newSnapshot?.text ?? ''
@@ -1432,7 +1436,9 @@ export class EditorMotionCoordinator {
           insertRenderNodeKey = piece.renderNodeKey
           insertWindowInstanceId = piece.windowInstanceId
         } else {
-          const fallbackId = windowIdForGlyphIds(piece.glyphIds)
+          // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator，
+          // 不再用 windowIdForGlyphIds() 作为 windowInstanceId。
+          const fallbackId = windowIdAllocator.allocateFresh(piece.glyphIds)
           insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${fallbackId}`
           insertWindowInstanceId = piece.windowInstanceId ?? fallbackId
         }
@@ -1520,7 +1526,8 @@ export class EditorMotionCoordinator {
           deletedRenderNodeKey = piece.renderNodeKey
           deletedWindowInstanceId = piece.windowInstanceId
         } else {
-          const fallbackId = windowIdForGlyphIds(piece.glyphIds)
+          // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
+          const fallbackId = windowIdAllocator.allocateFresh(piece.glyphIds)
           deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
           deletedWindowInstanceId = piece.windowInstanceId ?? fallbackId
         }
@@ -1930,7 +1937,8 @@ export class EditorMotionCoordinator {
             // 按自己实际几何裁切并淡出。
             // Issue #879 评论6128121842 问题3：islandWindowInstanceId 作为 fallback
             // 供未预分配 windowInstanceId 的成员使用。
-            const islandWindowInstanceId = windowIdForGlyphIds(interval.glyphIds)
+            // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
+            const islandWindowInstanceId = windowIdAllocator.allocateFresh(interval.glyphIds)
             const memberClipRectsList: ClipRect[][] = []
             const memberCurrentXList: number[] = []
             const memberCurrentYList: number[] = []
@@ -2787,7 +2795,8 @@ export class EditorMotionCoordinator {
             fallbackRenderNodeKey = interval.renderNodeKey
             fallbackWindowInstanceId = interval.windowInstanceId
           } else {
-            const fallbackId = windowIdForGlyphIds(interval.glyphIds)
+            // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
+            const fallbackId = windowIdAllocator.allocateFresh(interval.glyphIds)
             fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
             fallbackWindowInstanceId = interval.windowInstanceId ?? fallbackId
           }
@@ -2852,7 +2861,8 @@ export class EditorMotionCoordinator {
               crossfadeKey = interval.crossfadeRenderNodeKey
               crossfadeWinId = interval.crossfadeWindowInstanceId
             } else {
-              const fallbackId = windowIdForGlyphIds(interval.glyphIds)
+              // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
+              const fallbackId = windowIdAllocator.allocateFresh(interval.glyphIds)
               crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${fallbackId}`
               crossfadeWinId = interval.crossfadeWindowInstanceId ?? fallbackId
             }
@@ -3167,10 +3177,12 @@ export class EditorMotionCoordinator {
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
           continue
         } else {
-          // 不同物理属性——不能丢弃第二张的文字像素
-          // Issue #879 复核评论问题2：使用预分配的 key（准备阶段已通过 allocateFresh 确保不同 key）
-          windowByKey.set(w.renderNodeKey, w)
-          mergedWindows.push(w)
+          // Issue #879 评论6138838190 问题1：同 key 不同绘制属性表示 Planner 分配出了问题。
+          // 准备阶段已通过 allocateFresh + motionChannel 确保不同轨迹的窗口有不同 key。
+          // 此处不应出现同 key 不同属性的窗口——防御性地跳过第二条，不 push 也不覆盖。
+          // 旧代码同时 set+push 导致 mergedWindows 有两条同 key 的 Text，
+          // UI 的 buildAllMotionWindowSources 用 seenKeys 去重只画一个，另一个文字像素被吞掉。
+          continue
         }
       } else {
         windowByKey.set(w.renderNodeKey, w)
