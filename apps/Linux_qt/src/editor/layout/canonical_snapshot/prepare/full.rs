@@ -221,6 +221,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                     .unwrap_or(ParagraphId::INVALID),
                 // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+                // has_qt_layout = false，渲染路径跳过 layout 查询。
+                has_qt_layout: false,
             });
             line_id += 1;
             y += line_height;
@@ -320,6 +323,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                     .unwrap_or(ParagraphId::INVALID),
                 // Issue #901 第三十轮问题1: layout_epoch 供光标/命中/渲染校验。
                 layout_epoch,
+                // Issue #901 第三十一轮问题1: 非空段有 QTextLayout，
+                // has_qt_layout = true，走 get_paragraph_layout_checked。
+                has_qt_layout: true,
             });
             line_id += 1;
             y += actual_line_h;
@@ -371,6 +377,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 .unwrap_or(ParagraphId::INVALID),
             // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
             layout_epoch: 0,
+            // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+            // has_qt_layout = false，渲染路径跳过 layout 查询。
+            has_qt_layout: false,
         });
         paragraphs.push(CanonicalParagraphSnapshot {
             paragraph_text: String::new(),
@@ -417,6 +426,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 .unwrap_or(ParagraphId::INVALID),
             // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
             layout_epoch: 0,
+            // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+            // has_qt_layout = false，渲染路径跳过 layout 查询。
+            has_qt_layout: false,
         });
         // Issue #901 第二十三轮问题1: 为尾空段创建对应的 CanonicalParagraphSnapshot，
         // 保证 store entries、canonical paragraphs、VisualLine、ParagraphId 逐段一一对应。
@@ -1161,6 +1173,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                     .unwrap_or(ParagraphId::INVALID),
                 // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+                // has_qt_layout = false，渲染路径跳过 layout 查询。
+                has_qt_layout: false,
             });
             line_id += 1;
             y += line_height;
@@ -1266,6 +1281,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                     .unwrap_or(ParagraphId::INVALID),
                 // Issue #901 第三十轮问题1: layout_epoch 供光标/命中/渲染校验。
                 layout_epoch,
+                // Issue #901 第三十一轮问题1: 非空段有 QTextLayout，
+                // has_qt_layout = true，走 get_paragraph_layout_checked。
+                has_qt_layout: true,
             });
             line_id += 1;
             y += actual_line_h;
@@ -2169,9 +2187,12 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         logical_slot: current_para_idx as i32,
                         // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                         paragraph_id: ParagraphId::INVALID,
-                        // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
-                        layout_epoch: 0,
-                    });
+                // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+                layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+                // has_qt_layout = false，渲染路径跳过 layout 查询。
+                has_qt_layout: false,
+            });
                     line_id += 1;
                     y += line_height;
                 } else {
@@ -2228,6 +2249,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                             // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                             paragraph_id: ParagraphId::INVALID,
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 非空段有 QTextLayout，
+                // has_qt_layout = true，走 get_paragraph_layout_checked。
+                has_qt_layout: true,
                         });
                         line_id += 1;
                         y += actual_line_h;
@@ -2275,6 +2299,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 paragraph_id: ParagraphId::INVALID,
                 // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 空段无 QTextLayout，
+                // has_qt_layout = false，渲染路径跳过 layout 查询。
+                has_qt_layout: false,
         });
             line_id += 1;
             y += line_height;
@@ -2354,6 +2381,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                 paragraph_id: ParagraphId::INVALID,
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 非空段有 QTextLayout，
+                // has_qt_layout = true，走 get_paragraph_layout_checked。
+                has_qt_layout: true,
             });
             line_id += 1;
             y += actual_line_h;
@@ -2411,6 +2441,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             // Issue #901 第十八轮问题4: 尾部换行新空段，用 INVALID。
             paragraph_id: ParagraphId::INVALID,
                 layout_epoch: 0,
+                // Issue #901 第三十一轮问题1: 尾部换行新空段无 QTextLayout，
+                // has_qt_layout = false，渲染路径跳过 layout 查询。
+                has_qt_layout: false,
         });
     }
 

@@ -618,9 +618,16 @@ impl LinuxEditorPipeline {
         let visuals_lines: &[crate::editor::layout::VisualLine] =
             prepared_handle.as_ref().map(|h| h.lines).unwrap_or(&[]);
         if !visuals_lines.is_empty() {
+            // Issue #901 第三十一轮问题3: 从 prepared_handle clone lease，
+            // 动画帧持有引用，防止提取动画视觉期间旧 layout 被释放。
+            // clone 调用 retain_layout_ref 增引用，visuals_handle drop 时退引用。
             let visuals_handle = layout::PreparedLayoutHandle {
                 generation: visuals_gen,
                 lines: visuals_lines,
+                leases: prepared_handle
+                    .as_ref()
+                    .map(|h| h.leases.clone())
+                    .unwrap_or_default(),
             };
             // 布局变化后任意行位置都可能改变，提取所有行，不漏 anchor 覆盖的行。
             let all_line_ids: Vec<usize> = (0..visuals_lines.len()).collect();
@@ -1747,9 +1754,13 @@ fn retry_failed_animation_visuals(
     // prepare 需要不可变借用 visual_lines，inject 需要可变借用 new_doc_snapshot。
     // 用内层块隔离 retry_handle 的借用生命周期，块结束时借用释放，随后可以 &mut。
     let retry_snapshots = {
+        // Issue #901 第三十一轮问题3: retry_handle 是同帧内临时使用，
+        // generation 是 new_generation，layout 刚排版完成，当前帧内不会被
+        // release_retired_layouts 释放，不需要持有 lease。
         let retry_handle = layout::PreparedLayoutHandle {
             generation,
             lines: new_doc_snapshot.visual_lines.as_slice(),
+            leases: Vec::new(),
         };
         layout::prepare_animation_visuals_from_layout(
             &retry_handle,

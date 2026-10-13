@@ -200,10 +200,30 @@ impl EditorLayout {
     /// 用于动画 old 帧从已有 QTextLine 提取视觉资源，不再重新排版。
     /// 返回的句柄包含 generation 和 VisualLine 数组引用，
     /// 调用方可用 `prepare_animation_visuals_from_layout` 按需提取动画资源。
+    ///
+    /// Issue #901 第三十一轮问题3: 同时为每个有 Qt layout 的行创建 `QtLayoutLease`，
+    /// 持有 C++ 引用计数。旧帧持有 lease 防止 Store 在新 snapshot 完成时
+    /// `release_retired_layouts` 释放旧 layout，旧帧结束（handle Drop）才退引用。
     pub fn current_prepared_layout(&self) -> Option<PreparedLayoutHandle<'_>> {
-        self.cache.as_ref().map(|c| PreparedLayoutHandle {
-            generation: c.layout_generation,
-            lines: c.lines.as_slice(),
+        self.cache.as_ref().map(|c| {
+            let generation = c.layout_generation;
+            // Issue #901 第三十一轮问题3: 为每个有 Qt layout 的行创建 lease，
+            // 接通所有权链。retain 成功才收集；失败（layout 已释放/epoch 不匹配）
+            // 跳过该行 lease，不阻塞 handle 创建。
+            let mut leases = Vec::new();
+            for line in c.lines.iter() {
+                if line.has_qt_layout && line.cache_slot >= 0 {
+                    let id = QtLayoutId::new(generation, line.cache_slot, line.layout_epoch);
+                    if let Some(lease) = QtLayoutLease::try_from_id(id) {
+                        leases.push(lease);
+                    }
+                }
+            }
+            PreparedLayoutHandle {
+                generation,
+                lines: c.lines.as_slice(),
+                leases,
+            }
         })
     }
 

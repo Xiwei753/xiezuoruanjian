@@ -157,6 +157,7 @@ fn test_visual_line(
         logical_slot: 0,
         paragraph_id: crate::editor::layout::ParagraphId::INVALID,
                 layout_epoch: 0,
+                has_qt_layout: true,
     }
 }
 

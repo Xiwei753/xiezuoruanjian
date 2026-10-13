@@ -567,6 +567,10 @@ pub(crate) fn render_frame(
                     para_y,
                     doc_width: snapshot.width,
                     paragraph_id: current_paragraph_id,
+                    // Issue #901 第三十一轮问题1: 空段（cache_slot < 0）无 QTextLayout，
+                    // has_qt_layout = false，C++ 渲染路径跳过 layout 查询。
+                    // 非空段 has_qt_layout = true，走 get_paragraph_layout_checked。
+                    has_qt_layout: line.cache_slot >= 0,
                 });
             }
 

@@ -111,8 +111,21 @@ pub struct VisualLine {
     /// 旧帧持有的旧 epoch 不匹配，查询返回默认值（0.0 / 0），防止旧帧误取
     /// 同槽新对象。
     ///
-    /// 0 表示未排版或未记录 epoch（兼容旧路径，checked 查询退化为不校验）。
+    /// Issue #901 第三十一轮问题2: 0 是合法的第一版 epoch（C++
+    /// `acquire_physical_slot_for_generation` 为每个新槽赋 `epochs[slot]=0`）。
+    /// checked 查询一律走 `get_paragraph_layout_checked`，不再因 epoch==0 退化
+    /// 为不校验。空段用 `has_qt_layout == false` 跳过 layout 查询，不参与
+    /// checked 校验。
     pub layout_epoch: u64,
+    /// Issue #901 第三十一轮问题1: 该视觉行所属段落是否有 QTextLayout。
+    ///
+    /// - `true`：非空段，有 QTextLayout，渲染/光标/命中查询走
+    ///   `get_paragraph_layout_checked(gen, cache_slot, epoch)`。
+    /// - `false`：空段，无 QTextLayout（`cache_slot == -1`），渲染路径跳过
+    ///   layout 查询（不 `return false`），但其高度、段落范围和占位必须保留。
+    ///
+    /// 不用 `epoch == 0` 判断空段（epoch=0 是合法第一版），用此字段显式区分。
+    pub has_qt_layout: bool,
 }
 
 /// 光标矩形 — 文档坐标系（不含 scroll offset）。
@@ -287,6 +300,8 @@ impl LayoutSnapshot {
             // Issue #901 第三十轮问题1+3: 保留原行 layout epoch，
             // 供光标/命中/渲染查询校验。
             layout_epoch: line.layout_epoch,
+            // Issue #901 第三十一轮问题1: 保留原行 has_qt_layout 标志。
+            has_qt_layout: line.has_qt_layout,
         }
     }
 
@@ -306,6 +321,7 @@ impl LayoutSnapshot {
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
                 paragraph_id: ParagraphId::INVALID, layout_epoch: 0,
+                has_qt_layout: false,
             },
         }
     }
@@ -614,26 +630,40 @@ impl QtLayoutLease {
 impl Clone for QtLayoutLease {
     /// Clone 必须增加引用计数 — 调用 `retain_layout_ref`。
     ///
-    /// 如果 `retain_layout_ref` 失败（layout 已被释放，epoch 不匹配），
-    /// 仍返回一个持有相同 id 的 lease，但后续 `is_valid` 会返回 `false`。
-    /// 正常情况下不应发生（持有有效 lease 时 layout 不应已被释放）。
+    /// Issue #901 第三十一轮问题3: `retain_layout_ref` 失败（layout 已被释放，
+    /// epoch 不匹配）作为**硬前提** — 不返回持有相同 id 的伪 lease。
+    /// 伪 lease 的 `Drop` 仍会调用 `release_layout_ref` 误减引用计数，
+    /// 导致正常持有者的 layout 被提前 delete。
+    /// 失败时返回一个**无效 lease**（`is_invalid() == true`），
+    /// `Drop` 不调用 `release_layout_ref`，不误减引用计数。
+    /// 调用方应通过 `is_valid()` / `is_invalid()` 检查 clone 是否真正获得引用。
     ///
     /// SAFETY: GUI thread only.
     fn clone(&self) -> Self {
-        if !self.is_invalid() {
-            let ok = super::qt_cache::retain_layout_ref(
-                self.id.generation,
-                self.id.physical_slot,
-                self.id.epoch,
-            );
-            // 持有有效 lease 时 retain 应成功。失败说明 layout 已被异常释放。
+        if self.is_invalid() {
+            // 源 lease 已无效，clone 结果也无效，不增引用。
+            return Self { id: self.id };
+        }
+        let ok = super::qt_cache::retain_layout_ref(
+            self.id.generation,
+            self.id.physical_slot,
+            self.id.epoch,
+        );
+        if ok {
+            Self { id: self.id }
+        } else {
+            // Issue #901 第三十一轮问题3: retain 失败时返回无效 lease，
+            // 不持有引用，Drop 不释放。避免伪 lease 误减引用计数。
+            // 持有有效 lease 时 retain 应成功；失败说明 layout 已被异常释放。
             debug_assert!(
-                ok,
+                false,
                 "QtLayoutLease::clone: retain_layout_ref failed for lease {:?}",
                 self.id
             );
+            Self {
+                id: QtLayoutId::new(0, -1, 0),
+            }
         }
-        Self { id: self.id }
     }
 }
 
@@ -677,7 +707,17 @@ impl std::fmt::Debug for QtLayoutLease {
 /// 消费方可用 `(generation, cache_slot, layout_epoch)` 通过
 /// `get_paragraph_layout_checked` 校验 epoch 后查询布局，
 /// 防止旧帧误取同槽新对象。
+///
+/// Issue #901 第三十一轮问题3: `leases` 持有跨帧 Qt 布局租约。
+/// 旧帧持有 lease 防止 Store 在新 snapshot 完成时 `release_retired_layouts`
+/// 释放旧 layout，旧帧结束（handle Drop）才释放引用，
+/// 最后一个持有者负责 C++ delete。`current_prepared_layout` 创建 lease，
+/// 动画帧 clone lease，形成一条所有权链。
 pub struct PreparedLayoutHandle<'a> {
     pub generation: u64,
     pub lines: &'a [VisualLine],
+    /// Issue #901 第三十一轮问题3: 跨帧持有的 Qt 布局租约集合。
+    /// 每个对应一个 `(generation, cache_slot, epoch)` 的 QTextLayout 引用。
+    /// handle Drop 时所有 lease Drop，退引用；最后一个持有者负责 C++ delete。
+    pub leases: Vec<QtLayoutLease>,
 }

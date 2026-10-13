@@ -203,6 +203,8 @@ impl CanonicalDocumentVisualSnapshot {
             paragraph_id: line.paragraph_id,
             // Issue #901 第三十轮问题1: 保留原行 layout epoch。
             layout_epoch: line.layout_epoch,
+            // Issue #901 第三十一轮问题1: 保留原行 has_qt_layout 标志。
+            has_qt_layout: line.has_qt_layout,
         }
     }
 
@@ -223,6 +225,7 @@ impl CanonicalDocumentVisualSnapshot {
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
                 paragraph_id: super::types::ParagraphId::INVALID,
                 layout_epoch: 0,
+                has_qt_layout: false,
             },
         }
     }
@@ -408,6 +411,7 @@ impl CanonicalDocumentVisualSnapshot {
             logical_slot: 0,
             paragraph_id: super::types::ParagraphId::INVALID,
                 layout_epoch: 0,
+                has_qt_layout: false,
         };
 
         if self.visual_lines.is_empty() {

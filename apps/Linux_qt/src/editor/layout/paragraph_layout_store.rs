@@ -806,30 +806,40 @@ impl ParagraphLayoutStore {
             byte_offset += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
         }
 
-        // 5. 增量更新 id_to_slot_cache。
-        //    被删除段的 Id 移除，新段的 Id 加入，后缀段的 slot 平移。
+        // 5. 增量更新 id_to_slot_cache — 只处理受影响范围，后缀段 slot 用 delta 批量平移。
+        //    Issue #901 第三十一轮问题4: 不再 remove 所有 slot >= old_splice_start 的条目
+        //    再重新 insert 新段 + 后缀段（O(n) HashMap remove+insert）。
+        //    改为：只移除被删除段 [old_splice_start, old_splice_end) 的 Id，
+        //    后缀段 slot 用 delta 批量平移（简单整数加法），再插入新段 Id → slot，
+        //    无 HashMap remove+insert 后缀段，与整章规模脱钩。
         {
             let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-            // 移除被删除段的 Id（old_splice_start..old_splice_end 已被 splice 删除，
-            // 但它们的 Id 在 splice 前已收集不到，需要从 cache 中移除）。
-            // 由于 entries 已 splice，被删除段的 Id 不在 entries 中，
-            // 但 cache 可能仍有旧映射。用 entries 重建受影响范围的映射。
-            //
-            // 策略：移除 cache 中 slot 在 [old_splice_start, old_splice_end) 的条目，
-            //       插入新段的映射，后缀段 slot 平移。
-            // 但 splice 后 entries 已更新，直接从 entries 重建受影响范围 + 后缀的映射更安全。
-            //
-            // 简化：移除所有 slot >= old_splice_start 的条目，重新插入新段 + 后缀段。
-            let to_remove: Vec<ParagraphId> = cache
+            // 移除被删除段的 Id（splice 前其 slot 在 [old_splice_start, old_splice_end)）。
+            let ids_to_remove: Vec<ParagraphId> = cache
                 .iter()
-                .filter(|(_, &slot)| slot >= old_splice_start)
+                .filter(|(_, &slot)| slot >= old_splice_start && slot < old_splice_end)
                 .map(|(&id, _)| id)
                 .collect();
-            for id in to_remove {
+            for id in ids_to_remove {
                 cache.remove(&id);
             }
-            // 插入新段 + 后缀段的映射
-            for i in old_splice_start..self.entries.len() {
+            // 后缀段 slot 平移：splice 前后缀段 slot 在 [old_splice_end, old_count)，
+            // splice 后新 slot = 旧 slot + slot_delta，
+            // 其中 slot_delta = new_affected_count - old_affected_count。
+            // 此时 cache 中只有前缀段（slot < old_splice_start）和后缀段
+            //（slot >= old_splice_end），还未插入新段，所以 slot >= old_splice_end
+            // 的都是后缀段，不会误平移新段。
+            // 后缀段新 slot >= new_layout_end >= 0，i64 运算不会下溢。
+            let slot_delta = new_affected_count as i64 - old_affected_count as i64;
+            if slot_delta != 0 {
+                for slot in cache.values_mut() {
+                    if *slot >= old_splice_end {
+                        *slot = (*slot as i64 + slot_delta) as usize;
+                    }
+                }
+            }
+            // 插入新段的 Id → slot 映射。
+            for i in old_splice_start..new_layout_end {
                 cache.insert(self.entries[i].id, i);
             }
         }
@@ -2357,6 +2367,7 @@ mod tests {
                 logical_slot: 0,
                 paragraph_id: ParagraphId::INVALID,
                 layout_epoch: 0,
+                has_qt_layout: true,
             },
             VisualLine {
                 id: 1,
@@ -2384,6 +2395,7 @@ mod tests {
                 logical_slot: 1,
                 paragraph_id: ParagraphId::INVALID,
                 layout_epoch: 0,
+                has_qt_layout: true,
             },
         ];
 

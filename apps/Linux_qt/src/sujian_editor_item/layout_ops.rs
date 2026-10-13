@@ -283,9 +283,13 @@ impl SujianEditorItem {
         affected_line_indices.sort_unstable();
 
         if !affected_line_indices.is_empty() {
+            // Issue #901 第三十一轮问题3: handle 是同帧内临时使用，
+            // generation 是当前 layout_generation，layout 存活，
+            // 当前帧内不会被 release_retired_layouts 释放，不需要持有 lease。
             let handle = crate::editor::layout::PreparedLayoutHandle {
                 generation,
                 lines: resolved_lines,
+                leases: Vec::new(),
             };
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
                 &handle,
@@ -546,9 +550,13 @@ impl SujianEditorItem {
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
                 // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
                 // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
+                // Issue #901 第三十一轮问题3: handle 是同帧内临时使用，
+                // generation 由 allocate_animation_layout_generation 分配，
+                // layout 刚排版完成，当前帧内不会被释放，不需要持有 lease。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: resolved_lines,
+                    leases: Vec::new(),
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
                     &handle, &line_ids, dpr, text_color,

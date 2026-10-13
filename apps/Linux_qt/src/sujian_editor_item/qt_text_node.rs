@@ -141,6 +141,7 @@ cpp! {{
         const double* vl_width_arr,
         const double* vl_para_y_arr,
         const double* vl_doc_width_arr,
+        const bool* vl_has_qt_layout_arr,
         int vl_count,
         float font_size, const QString& font_family,
         double scroll_y, const QString& color_q,
@@ -162,27 +163,27 @@ cpp! {{
         // (generation, cache_slot) 都能取到 QTextLayout*。任意缺失立即返回 false，
         // 不动当前正在显示的旧节点，不留下一个已经 clear() 过的空节点。
         // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch，
-        // 防止旧帧误取同槽新对象。epoch 为 0 时退化为不校验（兼容旧路径）。
+        // 防止旧帧误取同槽新对象。
+        // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
         for (int i = 0; i < para_count; i++) {
             int cacheIdx = cache_idx_arr[i];
             // 空段落（text_lens[i] == 0）不需要 layout，跳过。
             if (text_lens[i] == 0) continue;
             uint64_t epoch = para_epoch_arr[i];
-            QTextLayout* cachedLayout = (epoch == 0)
-                ? get_paragraph_layout(generation, cacheIdx)
-                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+            QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) {
                 return false;
             }
         }
         // 动画裁剪分支也需要检查所有视觉行的 layout 可用性。
+        // Issue #901 第三十一轮问题1: 空段视觉行（has_qt_layout == false）跳过
+        // layout 查询，不 return false。其高度、段落范围和占位保留。
         if (clip_count > 0 && vl_count > 0) {
             for (int i = 0; i < vl_count; i++) {
+                if (!vl_has_qt_layout_arr[i]) continue;
                 int cacheIdx = vl_cache_idx_arr[i];
                 uint64_t epoch = vl_epoch_arr[i];
-                QTextLayout* cachedLayout = (epoch == 0)
-                    ? get_paragraph_layout(generation, cacheIdx)
-                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+                QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (!cachedLayout) {
                     return false;
                 }
@@ -249,10 +250,9 @@ cpp! {{
                 // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
                 // Issue #668: 前面已检查所有非空段落 layout 可用，此处 cachedLayout 必非 null。
                 // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+                // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
                 uint64_t epoch = para_epoch_arr[i];
-                QTextLayout* cachedLayout = (epoch == 0)
-                    ? get_paragraph_layout(generation, cacheIdx)
-                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+                QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (cachedLayout) {
                     newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
                 }
@@ -286,6 +286,10 @@ cpp! {{
             }
             if (!clipRects.empty()) {
                 for (int i = 0; i < vl_count; i++) {
+                    // Issue #901 第三十一轮问题1: 空段视觉行（has_qt_layout == false）
+                    // 跳过 layout 查询，不 continue 整行放弃——此处 continue 只是
+                    // 不为该行创建 clip+text 节点，其高度和段落占位由段落容器节点保留。
+                    if (!vl_has_qt_layout_arr[i]) continue;
                     int cacheIdx = vl_cache_idx_arr[i];
                     int qline = vl_qtextline_idx_arr[i];
                     double ly = vl_y_arr[i];
@@ -297,10 +301,9 @@ cpp! {{
                     // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout。
                     // Issue #668: 前面已检查所有视觉行 layout 可用，此处必非 null。
                     // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+                    // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
                     uint64_t epoch = vl_epoch_arr[i];
-                    QTextLayout* cachedLayout = (epoch == 0)
-                        ? get_paragraph_layout(generation, cacheIdx)
-                        : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+                    QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
                     if (!cachedLayout) {
                         continue;
                     }
@@ -495,11 +498,10 @@ cpp! {{
 
             // 检查 layout 可用性
             // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+            // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
             int cacheIdx = cache_idx_arr[i];
             uint64_t epoch = para_epoch_arr[i];
-            QTextLayout* cachedLayout = (epoch == 0)
-                ? get_paragraph_layout(generation, cacheIdx)
-                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+            QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) {
                 return false;
             }
@@ -548,6 +550,7 @@ cpp! {{
         const double* vl_y_arr, const double* vl_height_arr,
         const double* vl_doc_width_arr,
         const double* vl_para_y_arr,
+        const bool* vl_has_qt_layout_arr,
         const std::vector<int>& vl_indices,
         const std::vector<std::pair<double,double>>& clip_rects_xy,
         const std::vector<std::pair<double,double>>& clip_rects_wh,
@@ -562,9 +565,8 @@ cpp! {{
         if (text_len == 0) return;
 
         // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
-        QTextLayout* layout = (epoch == 0)
-            ? get_paragraph_layout(generation, cacheIdx)
-            : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+        // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
+        QTextLayout* layout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
         if (!layout) return;
 
         if (clip_rects_xy.empty()) {
@@ -586,6 +588,10 @@ cpp! {{
             // 二维差集算法：rect_subtract_holes(rect, holes) 返回 rect 减去所有 holes
             // 后的非重叠矩形集合。每个结果矩形创建一个 QSGClipNode + QSGTextNode。
             for (int vl_idx : vl_indices) {
+                // Issue #901 第三十一轮问题1: 空段视觉行（has_qt_layout == false）
+                // 跳过 layout 查询。build_paragraph_subtree 只在非空段调用，
+                // 此处防御性检查保证不会误处理空段视觉行。
+                if (!vl_has_qt_layout_arr[vl_idx]) continue;
                 int qline = vl_qtextline_idx_arr[vl_idx];
                 double ly = vl_y_arr[vl_idx];
                 double lh = vl_height_arr[vl_idx];
@@ -729,6 +735,7 @@ cpp! {{
         const double* vl_doc_width_arr,
         const double* vl_para_y_arr,
         const uint64_t* vl_paragraph_id_arr,
+        const bool* vl_has_qt_layout_arr,
         int vl_count,
         float font_size, const QString& font_family,
         double scroll_y, const QString& color_q,
@@ -750,23 +757,23 @@ cpp! {{
 
         // 检查所有非空段落的 layout 可用性
         // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+        // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
         for (int i = 0; i < para_count; i++) {
             if (text_lens[i] == 0) continue;
             int cacheIdx = cache_idx_arr[i];
             uint64_t epoch = para_epoch_arr[i];
-            QTextLayout* cachedLayout = (epoch == 0)
-                ? get_paragraph_layout(generation, cacheIdx)
-                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+            QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) return false;
         }
         // 检查 visual line layout 可用性
+        // Issue #901 第三十一轮问题1: 空段视觉行（has_qt_layout == false）跳过
+        // layout 查询，不 return false。
         if (clip_count > 0 && vl_count > 0) {
             for (int i = 0; i < vl_count; i++) {
+                if (!vl_has_qt_layout_arr[i]) continue;
                 int cacheIdx = vl_cache_idx_arr[i];
                 uint64_t epoch = vl_epoch_arr[i];
-                QTextLayout* cachedLayout = (epoch == 0)
-                    ? get_paragraph_layout(generation, cacheIdx)
-                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
+                QTextLayout* cachedLayout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (!cachedLayout) return false;
             }
         }
@@ -941,6 +948,7 @@ cpp! {{
                         vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
+                        vl_has_qt_layout_arr,
                         vl_indices,
                         para_clip_xy, para_clip_wh,
                         font_size, font_family,
@@ -968,6 +976,7 @@ cpp! {{
                         vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
+                        vl_has_qt_layout_arr,
                         vl_indices,
                         para_clip_xy, para_clip_wh,
                         font_size, font_family,
@@ -1117,7 +1126,8 @@ pub(crate) struct ParagraphLineInfo {
     /// Issue #901 第三十轮问题1: 该段落 layout 的 epoch。
     /// C++ 侧用 (generation, cache_idx, layout_epoch) 通过
     /// get_paragraph_layout_checked 校验 epoch 后查布局，
-    /// 防止旧帧误取同槽新对象。0 表示不校验（兼容旧路径）。
+    /// 防止旧帧误取同槽新对象。
+    /// Issue #901 第三十一轮问题2: 0 是合法的第一版 epoch，一律走 checked 校验。
     pub layout_epoch: u64,
     /// 段落第一行在文档中的 y 坐标（文档坐标，即 VisualLine.y）
     pub y: f64,
@@ -1153,7 +1163,8 @@ pub(crate) struct VisualLineClipInfo {
     /// Issue #901 第三十轮问题1: 该视觉行所属段落 layout 的 epoch。
     /// C++ 侧用 (generation, cache_idx, layout_epoch) 通过
     /// get_paragraph_layout_checked 校验 epoch 后查布局，
-    /// 防止旧帧误取同槽新对象。0 表示不校验（兼容旧路径）。
+    /// 防止旧帧误取同槽新对象。
+    /// Issue #901 第三十一轮问题2: 0 是合法的第一版 epoch，一律走 checked 校验。
     pub layout_epoch: u64,
     /// 该视觉行在 QTextLayout 中的行索引（lineStart 参数）
     pub qtextline_idx: i32,
@@ -1173,6 +1184,11 @@ pub(crate) struct VisualLineClipInfo {
     /// C++ 侧据此把 visual line 归组到正确的段落容器节点，
     /// 实现按 ParagraphId 的增量 insert/remove/update。
     pub paragraph_id: u64,
+    /// Issue #901 第三十一轮问题1: 该视觉行所属段落是否有 QTextLayout。
+    /// - true：非空段，C++ 渲染路径用 get_paragraph_layout_checked 查 layout。
+    /// - false：空段（cache_idx < 0），C++ 渲染路径跳过 layout 查询
+    ///   （不 return false），但其高度、段落范围和占位保留。
+    pub has_qt_layout: bool,
 }
 
 /// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
@@ -1343,6 +1359,9 @@ pub fn rebuild_text_node_from_paragraphs(
     let vl_width: Vec<f64> = visual_line_clips.iter().map(|v| v.width).collect();
     let vl_para_y: Vec<f64> = visual_line_clips.iter().map(|v| v.para_y).collect();
     let vl_doc_width: Vec<f64> = visual_line_clips.iter().map(|v| v.doc_width).collect();
+    // Issue #901 第三十一轮问题1: 构造 visual line has_qt_layout 数组，
+    // 传给 C++ 侧跳过空段视觉行的 layout 查询。
+    let vl_has_qt_layout: Vec<bool> = visual_line_clips.iter().map(|v| v.has_qt_layout).collect();
 
     let clip_x: Vec<f64> = animation_clip_rects.iter().map(|c| c.x).collect();
     let clip_y: Vec<f64> = animation_clip_rects.iter().map(|c| c.y).collect();
@@ -1370,6 +1389,7 @@ pub fn rebuild_text_node_from_paragraphs(
     let vl_width_ptr = vl_width.as_ptr();
     let vl_para_y_ptr = vl_para_y.as_ptr();
     let vl_doc_width_ptr = vl_doc_width.as_ptr();
+    let vl_has_qt_layout_ptr = vl_has_qt_layout.as_ptr();
     let clip_x_ptr = clip_x.as_ptr();
     let clip_y_ptr = clip_y.as_ptr();
     let clip_w_ptr = clip_w.as_ptr();
@@ -1396,6 +1416,7 @@ pub fn rebuild_text_node_from_paragraphs(
         vl_width_ptr as "const double*",
         vl_para_y_ptr as "const double*",
         vl_doc_width_ptr as "const double*",
+        vl_has_qt_layout_ptr as "const bool*",
         vl_count as "int",
         font_size as "float",
         font_family_q as "QString",
@@ -1426,6 +1447,7 @@ pub fn rebuild_text_node_from_paragraphs(
             vl_width_ptr,
             vl_para_y_ptr,
             vl_doc_width_ptr,
+            vl_has_qt_layout_ptr,
             vl_count,
             font_size, font_family_q,
             scroll_y, color_q,
@@ -1656,6 +1678,9 @@ pub fn update_text_nodes_incremental(
     let vl_doc_width: Vec<f64> = visual_line_clips.iter().map(|v| v.doc_width).collect();
     let vl_para_y: Vec<f64> = visual_line_clips.iter().map(|v| v.para_y).collect();
     let vl_paragraph_ids: Vec<u64> = visual_line_clips.iter().map(|v| v.paragraph_id).collect();
+    // Issue #901 第三十一轮问题1: 构造 visual line has_qt_layout 数组，
+    // 传给 C++ 侧跳过空段视觉行的 layout 查询。
+    let vl_has_qt_layout: Vec<bool> = visual_line_clips.iter().map(|v| v.has_qt_layout).collect();
 
     let clip_x: Vec<f64> = animation_clip_rects.iter().map(|c| c.x).collect();
     let clip_y: Vec<f64> = animation_clip_rects.iter().map(|c| c.y).collect();
@@ -1682,6 +1707,7 @@ pub fn update_text_nodes_incremental(
     let vl_doc_width_ptr = vl_doc_width.as_ptr();
     let vl_para_y_ptr = vl_para_y.as_ptr();
     let vl_paragraph_ids_ptr = vl_paragraph_ids.as_ptr();
+    let vl_has_qt_layout_ptr = vl_has_qt_layout.as_ptr();
     let clip_x_ptr = clip_x.as_ptr();
     let clip_y_ptr = clip_y.as_ptr();
     let clip_w_ptr = clip_w.as_ptr();
@@ -1707,6 +1733,7 @@ pub fn update_text_nodes_incremental(
         vl_doc_width_ptr as "const double*",
         vl_para_y_ptr as "const double*",
         vl_paragraph_ids_ptr as "const uint64_t*",
+        vl_has_qt_layout_ptr as "const bool*",
         vl_count as "int",
         font_size as "float",
         font_family_q as "QString",
@@ -1739,6 +1766,7 @@ pub fn update_text_nodes_incremental(
             vl_doc_width_ptr,
             vl_para_y_ptr,
             vl_paragraph_ids_ptr,
+            vl_has_qt_layout_ptr,
             vl_count,
             font_size, font_family_q,
             scroll_y, color_q,

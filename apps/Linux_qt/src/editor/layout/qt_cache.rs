@@ -493,7 +493,9 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
 /// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
 /// 防止旧帧误取同槽新对象。epoch 不匹配或 layout 不存在时返回 0.0。
 ///
-/// `epoch` 为 0 时不校验（退化为旧行为，兼容未记录 epoch 的旧路径）。
+/// Issue #901 第三十一轮问题2: epoch=0 是合法的第一版布局，一律走 checked
+/// 校验（C++ 端检查 `epochs[slot] != epoch`，新槽第一版 epoch=0 时匹配）。
+/// 不再因 epoch==0 退化为不校验。
 ///
 /// SAFETY: GUI thread only; 查询不修改 cache 状态。
 pub fn get_paragraph_layout_cursor_to_x_on_line_checked(
@@ -504,10 +506,6 @@ pub fn get_paragraph_layout_cursor_to_x_on_line_checked(
     cursor_qchar: i32,
     use_trailing: bool,
 ) -> f64 {
-    if epoch == 0 {
-        // 兼容旧路径：epoch 未记录，退化为不校验。
-        return get_paragraph_layout_cursor_to_x_on_line(gen, slot, qline, cursor_qchar, use_trailing);
-    }
     cpp!(unsafe [
         gen as "uint64_t",
         slot as "int",
@@ -525,7 +523,8 @@ pub fn get_paragraph_layout_cursor_to_x_on_line_checked(
 /// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
 /// 防止旧帧误取同槽新对象。epoch 不匹配或 layout 不存在时返回 0。
 ///
-/// `epoch` 为 0 时不校验（退化为旧行为，兼容未记录 epoch 的旧路径）。
+/// Issue #901 第三十一轮问题2: epoch=0 是合法的第一版布局，一律走 checked
+/// 校验。不再因 epoch==0 退化为不校验。
 ///
 /// SAFETY: GUI thread only; 查询不修改 cache 状态。
 pub fn get_paragraph_layout_x_to_cursor_on_line_checked(
@@ -535,10 +534,6 @@ pub fn get_paragraph_layout_x_to_cursor_on_line_checked(
     qline: i32,
     x: f64,
 ) -> i32 {
-    if epoch == 0 {
-        // 兼容旧路径：epoch 未记录，退化为不校验。
-        return get_paragraph_layout_x_to_cursor_on_line(gen, slot, qline, x);
-    }
     cpp!(unsafe [
         gen as "uint64_t",
         slot as "int",

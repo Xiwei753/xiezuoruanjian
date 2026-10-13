@@ -258,13 +258,27 @@ impl ParagraphHeightIndex {
     /// 在 `start` 处插入新段落高度 `new_heights`。
     ///
     /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的高度数据保留不动，
-    /// 只替换中间段。O(k) 数据移动 + O(n) BIT 重建（k = new_heights.len()）。
-    /// 比 `rebuild` 的 O(n) 全量数据准备更高效（k << n 时）。
+    /// 只替换中间段。
+    ///
+    /// Issue #901 第三十一轮问题4: 段落数不变（`new_heights.len() == end - start`）时
+    /// 走 O(k log n) 逐点 `update_height` 路径，不全量 `rebuild_bit`（O(n)），
+    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_bit`。
     pub fn splice(&mut self, start: usize, end: usize, new_heights: Vec<f64>) {
         let splice_start = start.min(self.heights.len());
         let splice_end = end.min(self.heights.len());
-        self.heights.splice(splice_start..splice_end, new_heights);
-        self.rebuild_bit();
+        let old_count = splice_end - splice_start;
+        let new_count = new_heights.len();
+        if old_count == new_count {
+            // 段落数不变：逐点更新受影响段高度，O(k log n)，不全量重建 BIT。
+            // update_height 内部同时改 heights[index] 与 BIT 单点路径。
+            for (i, &h) in new_heights.iter().enumerate() {
+                self.update_height(splice_start + i, h);
+            }
+        } else {
+            // 段落数变化：Vec::splice + rebuild_bit，O(n)。
+            self.heights.splice(splice_start..splice_end, new_heights);
+            self.rebuild_bit();
+        }
     }
 
     /// 批量更新单个段落高度（不重建 BIT，逐个 `update_height`）。
@@ -661,12 +675,26 @@ impl ParagraphLineCountIndex {
     /// 在 `start` 处插入新段落行数 `new_counts`。
     ///
     /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的行数保留不动。
-    /// O(k) 数据移动 + O(n) BIT 重建。
+    ///
+    /// Issue #901 第三十一轮问题4: 段落数不变（`new_counts.len() == end - start`）时
+    /// 走 O(k log n) 逐点 `update_count` 路径，不全量 `rebuild_bit`（O(n)），
+    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_bit`。
     pub fn splice(&mut self, start: usize, end: usize, new_counts: Vec<usize>) {
         let splice_start = start.min(self.counts.len());
         let splice_end = end.min(self.counts.len());
-        self.counts.splice(splice_start..splice_end, new_counts);
-        self.rebuild_bit();
+        let old_count = splice_end - splice_start;
+        let new_count = new_counts.len();
+        if old_count == new_count {
+            // 段落数不变：逐点更新受影响段行数，O(k log n)，不全量重建 BIT。
+            // update_count 内部同时改 counts[index] 与 BIT 单点路径。
+            for (i, &c) in new_counts.iter().enumerate() {
+                self.update_count(splice_start + i, c);
+            }
+        } else {
+            // 段落数变化：Vec::splice + rebuild_bit，O(n)。
+            self.counts.splice(splice_start..splice_end, new_counts);
+            self.rebuild_bit();
+        }
     }
 
     /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
@@ -931,8 +959,11 @@ impl ParagraphOffsetIndex {
     /// 在 `start` 处插入新段落长度 `(new_byte_lengths, new_qchar_lengths)`。
     ///
     /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的长度数据保留不动，
-    /// 只替换中间段。O(k) 数据移动 + O(n) Fenwick 重建（k = new_byte_lengths.len()）。
-    /// 比 `rebuild` 的 O(n) 全量数据准备更高效（k << n 时）。
+    /// 只替换中间段。
+    ///
+    /// Issue #901 第三十一轮问题4: 段落数不变（`new_byte_lengths.len() == end - start`）时
+    /// 走 O(k log n) 逐点 `update_paragraph_length` 路径，不全量 `rebuild_fenwick`（O(n)），
+    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_fenwick`。
     pub fn splice(
         &mut self,
         start: usize,
@@ -947,11 +978,26 @@ impl ParagraphOffsetIndex {
         );
         let splice_start = start.min(self.byte_lengths.len());
         let splice_end = end.min(self.byte_lengths.len());
-        self.byte_lengths
-            .splice(splice_start..splice_end, new_byte_lengths);
-        self.qchar_lengths
-            .splice(splice_start..splice_end, new_qchar_lengths);
-        self.rebuild_fenwick();
+        let old_count = splice_end - splice_start;
+        let new_count = new_byte_lengths.len();
+        if old_count == new_count {
+            // 段落数不变：逐点更新受影响段长度，O(k log n)，不全量重建 Fenwick。
+            // update_paragraph_length 内部同时改 byte/qchar lengths 与 Fenwick 单点路径。
+            for i in 0..new_count {
+                self.update_paragraph_length(
+                    splice_start + i,
+                    new_byte_lengths[i],
+                    new_qchar_lengths[i],
+                );
+            }
+        } else {
+            // 段落数变化：Vec::splice + rebuild_fenwick，O(n)。
+            self.byte_lengths
+                .splice(splice_start..splice_end, new_byte_lengths);
+            self.qchar_lengths
+                .splice(splice_start..splice_end, new_qchar_lengths);
+            self.rebuild_fenwick();
+        }
     }
 
     /// 重建 Fenwick 树数组（内部辅助，O(n)）。
