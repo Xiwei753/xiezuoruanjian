@@ -103,6 +103,66 @@ cpp! {{
         }
     }
 
+    // Issue #901 第三十二轮复核问题1: retire_temporary_generation — 临时 generation 的清理。
+    // 与 clear_layout_generation（纯 retired 标记，给 Store 用）不同，此函数释放
+    // 创建者持有的初始引用（install_layout_slot_gen 时设的 refcount=1）。
+    //
+    // 临时 generation（layout_ops.rs / pipeline.rs 中 begin_layout_generation 创建）
+    // 安装 QTextLayout 时 refcount=1，但结束后不进入 ParagraphLayoutStore 所有权登记，
+    // 没有后续 release_layout_ref，refcount 永远是 1，layout 永远不被 delete，
+    // generation 永远不被 erase。
+    //
+    // 此函数：
+    // - 标记 retired=true
+    // - 遍历所有 slot，对 refcount > 0 的 layout 减 1（释放创建者初始引用）
+    // - refcount 归零时 delete layout、置 nullptr、回收 slot 到 free_slots
+    // - 全 nullptr 时 erase generation（复用 release_layout_ref 末尾的 erase 逻辑）
+    //
+    // 额外的 QtLayoutLease 持有的引用（通过 retain_layout_ref 增加）不受影响：
+    // 此函数只减 1（创建者初始引用），lease Drop 时会继续 release_layout_ref 减引用。
+    // retired 标记使新业务不再获取该 generation 的 layout，但已持有 lease 的旧帧
+    // 仍能通过 get_paragraph_layout_checked（带 epoch 校验）读取仍存活的布局。
+    void retire_temporary_generation(uint64_t gen) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return;
+        lg->retired = true;
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        // 遍历所有 slot，释放创建者初始引用（install 时设的 refcount=1）。
+        // layouts/refcounts 大小在循环中不变（只改元素值，不增删），引用保持有效。
+        for (int slot = 0; slot < (int)layouts.size(); ++slot) {
+            if (refcounts[slot] > 0) {
+                refcounts[slot] -= 1;
+            }
+            if (refcounts[slot] == 0 && layouts[slot]) {
+                delete layouts[slot];
+                layouts[slot] = nullptr;
+                // 回收 slot 到 free_slots，防重复回收。
+                bool already_free = false;
+                for (int s : lg->free_slots) {
+                    if (s == slot) { already_free = true; break; }
+                }
+                if (!already_free) {
+                    lg->free_slots.push_back(slot);
+                }
+            }
+        }
+        // 全 nullptr 时 erase generation（复用 release_layout_ref 末尾的 erase 逻辑）。
+        // 注意：erase 会使 lg 指针失效，所以先完成所有对 lg 的访问，最后 erase。
+        bool all_deleted = true;
+        for (auto* l : lg->layouts) {
+            if (l) { all_deleted = false; break; }
+        }
+        if (all_deleted) {
+            for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
+                if (it->generation == gen) {
+                    g_layout_generations.erase(it);
+                    break;
+                }
+            }
+        }
+    }
+
     void clear_all_layout_generations() {
         for (auto& lg : g_layout_generations) {
             for (auto* l : lg.layouts) {
@@ -486,6 +546,31 @@ pub fn begin_layout_generation() -> u64 {
 pub fn clear_layout_generation(gen: u64) {
     cpp!(unsafe [gen as "uint64_t"] {
         clear_layout_generation(gen);
+    });
+}
+
+/// Issue #901 第三十二轮复核问题1: 临时 generation 的清理。
+///
+/// 与 [`clear_layout_generation`]（纯 retired 标记，给 Store 用）不同，此函数
+/// 释放创建者持有的初始引用（`install_layout_slot_gen` 时设的 refcount=1）。
+///
+/// 临时 generation（`layout_ops.rs` / `pipeline.rs` 中 `begin_layout_generation`
+/// 创建）安装 QTextLayout 时 refcount=1，但结束后不进入 `ParagraphLayoutStore`
+/// 所有权登记，没有后续 `release_layout_ref`，refcount 永远是 1，layout 永远不被 delete。
+///
+/// 此函数：
+/// - 标记 `retired=true`
+/// - 遍历所有 slot，对 refcount > 0 的 layout 减 1（释放创建者初始引用）
+/// - refcount 归零时 delete layout、置 nullptr、回收 slot 到 free_slots
+/// - 全 nullptr 时 erase generation
+///
+/// 额外的 `QtLayoutLease` 持有的引用（通过 `retain_layout_ref` 增加）不受影响，
+/// lease Drop 时会继续 `release_layout_ref` 减引用。
+///
+/// SAFETY: GUI thread only; gen 应是之前 begin_layout_generation 分配的临时 generation。
+pub fn retire_temporary_generation(gen: u64) {
+    cpp!(unsafe [gen as "uint64_t"] {
+        retire_temporary_generation(gen);
     });
 }
 

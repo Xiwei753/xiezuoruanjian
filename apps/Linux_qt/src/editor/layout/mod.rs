@@ -55,7 +55,7 @@ pub use hit_test::{
     cursor_line_and_x, hit_test, index_at_line_x, line_contains_cursor_with_affinity,
 };
 pub use qt_cache::{
-    begin_layout_generation, clear_layout_generation,
+    begin_layout_generation, clear_layout_generation, retire_temporary_generation,
     get_paragraph_layout_cursor_to_x_on_line, get_paragraph_layout_cursor_to_x_on_line_checked,
     get_paragraph_layout_x_to_cursor_on_line, get_paragraph_layout_x_to_cursor_on_line_checked,
     retain_layout_ref,
@@ -236,19 +236,23 @@ impl EditorLayout {
             // (generation, physical_slot, epoch)，现在只 retain 同一 QTextLayout 一次，
             // 不按视觉行重复 retain。lease 的 try_from_id 调用 C++ retain_layout_ref
             // 是有成本的 FFI 调用，去重后从 O(视觉行数) 降到 O(唯一 layout 数)。
+            //
+            // Issue #901 第三十二轮复核缺口3: 从 paragraph_store 获取有 Qt layout 的段列表，
+            // 而非遍历所有视觉行。一段可能有多行，遍历所有行是 O(视觉行数)，
+            // 从 paragraph_store 获取段列表是 O(段落数)，且段落数通常远小于视觉行数。
+            // paragraph_store 的每个段只有一个 (cache_slot, layout_epoch)，
+            // 天然去重，无需 HashSet。只对 layout_generation == generation 且
+            // cache_slot >= 0 的段创建 lease，确保与视觉行的 layout 一致。
+            // lines: c.lines.as_slice() 保持不变，调用方仍可通过 handle.lines 访问所有视觉行。
             let mut leases = Vec::new();
-            let mut seen: std::collections::HashSet<(u64, i32, u64)> =
-                std::collections::HashSet::new();
-            for line in c.lines.iter() {
-                if line.has_qt_layout && line.cache_slot >= 0 {
-                    let key = (generation, line.cache_slot, line.layout_epoch);
-                    if !seen.insert(key) {
-                        // 同一 (generation, slot, epoch) 已 retain 过，跳过。
-                        continue;
-                    }
-                    let id = QtLayoutId::new(generation, line.cache_slot, line.layout_epoch);
-                    if let Some(lease) = QtLayoutLease::try_from_id(id) {
-                        leases.push(lease);
+            let store = &self.paragraph_store;
+            for i in 0..store.len() {
+                if let Some(entry) = store.entry(i) {
+                    if entry.layout_generation == generation && entry.cache_slot >= 0 {
+                        let id = QtLayoutId::new(generation, entry.cache_slot, entry.layout_epoch);
+                        if let Some(lease) = QtLayoutLease::try_from_id(id) {
+                            leases.push(lease);
+                        }
                     }
                 }
             }

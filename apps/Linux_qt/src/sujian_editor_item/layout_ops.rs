@@ -587,7 +587,10 @@ impl SujianEditorItem {
             ) {
                 Ok(s) => s,
                 Err(err) => {
-                    crate::editor::layout::clear_layout_generation(generation);
+                    // Issue #901 第三十二轮复核问题1: 临时 generation 释放创建者初始引用，
+                    // 避免 QTextLayout 泄漏（retire_temporary_generation 标记 retired
+                    // 并减 refcount，归零时 delete layout、erase generation）。
+                    crate::editor::layout::retire_temporary_generation(generation);
                     return Err(err);
                 }
             };
@@ -631,7 +634,10 @@ impl SujianEditorItem {
             // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
             // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
             // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
-            crate::editor::layout::clear_layout_generation(generation);
+            // Issue #901 第三十二轮复核问题1: 用 retire_temporary_generation 释放创建者
+            // 初始引用（clear_layout_generation 只标记 retired 不减 refcount，临时
+            // generation 不进 Store 所有权登记，无后续 release_layout_ref，会泄漏）。
+            crate::editor::layout::retire_temporary_generation(generation);
         }
 
         // Issue #738 评论 5797637204: 同时返回 doc_snapshot，供 composition commit 路径

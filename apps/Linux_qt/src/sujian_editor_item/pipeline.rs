@@ -653,8 +653,11 @@ impl LinuxEditorPipeline {
         }
 
         // fallback 路径释放临时 generation，不泄漏。
+        // Issue #901 第三十二轮复核问题1: 用 retire_temporary_generation 释放创建者初始引用
+        //（clear_layout_generation 只标记 retired 不减 refcount，临时 generation 不进
+        // Store 所有权登记，无后续 release_layout_ref，会泄漏 QTextLayout）。
         if let Some(gen) = fallback_gen {
-            layout::clear_layout_generation(gen);
+            layout::retire_temporary_generation(gen);
         }
         doc_snap
     }

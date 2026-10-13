@@ -290,6 +290,12 @@ impl ParagraphHeightIndex {
             // 完整 O(log n) 中间插入/删除需要平衡树前缀和结构（如 BTree 或 Treap），
             // 是未来优化方向。当前 O(n) rebuild 在长篇（~10^4 段）下约 10μs，
             // 远小于排版本身的开销。
+            //
+            // Issue #901 第三十二轮复核缺口3: BIT 中间插入/删除的 O(n) 重建是数组 BIT 的固有限制。
+            // 当前路径仅在 Enter/Backspace 拆段/合段（段落数变化）时触发，不是每笔字键的热路径。
+            // 完整 O(log n) 中间插入/删除需要平衡树前缀和结构（如 BTree/Treap），是未来优化方向。
+            // 本轮优化了 current_prepared_layout 从 O(视觉行数) 降到 O(段落数)，
+            // 以及 splice_affected_entries 后缀槽号平移从 O(所有段) 降到 O(后缀段)。
             self.heights.splice(splice_start..splice_end, new_heights);
             self.rebuild_bit();
         }
