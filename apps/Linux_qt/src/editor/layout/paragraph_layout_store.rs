@@ -1112,11 +1112,11 @@ impl ParagraphLayoutStore {
         // 同一代内不会有两个段落同时使用同一 slot：复用段已在上方返回，此处仅新段分配。
         let slot = super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
         self.entries[index].cache_slot = slot;
-        // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
-        // set_paragraph_layout_slot_gen 会设 refcount=1（Store 初始引用），
-        // 此处 add_layout_ref 再加 1 并获取 epoch 存入 entry，供 retire 时校验。
-        // 注意：此时 layout 尚未写入（set 在 engine.rs 排版后调用），但 epoch 已确定。
-        let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+        // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 尚未写入，
+        // 不应增加引用）。acquire 时 epoch 已设，用 get_layout_epoch 读取并记录到 entry。
+        // layout 写入由 install_layout_slot_gen 设 refcount=1（Store 初始引用）。
+        // 全篇和增量路径统一：acquire(分配槽,refcount=0) → install(写入layout,refcount=1) → Store 记录 epoch。
+        let epoch = super::qt_cache::get_layout_epoch(layout_generation, slot);
         self.entries[index].layout_epoch = epoch;
         slot
     }
@@ -1148,8 +1148,9 @@ impl ParagraphLayoutStore {
         if self.entries[index].cache_slot < 0 {
             let slot = super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
             self.entries[index].cache_slot = slot;
-            // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
-            let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+            // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 尚未写入）。
+            // 用 get_layout_epoch 读取 acquire 时设的 epoch。
+            let epoch = super::qt_cache::get_layout_epoch(layout_generation, slot);
             self.entries[index].layout_epoch = epoch;
         }
         let entry = &mut self.entries[index];
@@ -1423,14 +1424,13 @@ impl ParagraphLayoutStore {
                 // 旧实现用 idx as i32 会导致新段覆盖存活段的 QTextLayout。
                 let physical_slot = lines[line_start].cache_slot;
                 if physical_slot >= 0 {
-                    // Issue #901 第二十八轮复核问题3: physical_slot 来自
-                    // paragraph_physical_slot 预分配，entry.layout_epoch 已在该方法中设置。
-                    // 若 entry.cache_slot 与 physical_slot 不同（异常情况），更新并补记 epoch。
-                    if entry.cache_slot != physical_slot {
-                        entry.cache_slot = physical_slot;
-                        let epoch = super::qt_cache::add_layout_ref(layout_generation, physical_slot);
-                        entry.layout_epoch = epoch;
-                    }
+                    // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
+                    // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
+                    // physical_slot 来自 paragraph_physical_slot 预分配，
+                    // entry.layout_epoch 已在该方法中设置，此处刷新以防 slot 变化。
+                    entry.cache_slot = physical_slot;
+                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
+                    entry.layout_epoch = epoch;
                 } else if entry.cache_slot < 0 {
                     // 防御性：lines 中 cache_slot 无效时由 store 分配新槽。
                     // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配，
@@ -1438,8 +1438,9 @@ impl ParagraphLayoutStore {
                     let slot =
                         super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
                     entry.cache_slot = slot;
-                    // Issue #901 第二十八轮复核问题3: 分配新槽后增加引用计数并记录 epoch。
-                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
+                    // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 尚未写入）。
+                    // 用 get_layout_epoch 读取 acquire 时设的 epoch。
+                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, slot);
                     entry.layout_epoch = epoch;
                 }
                 entry.visual_line_count = line_count;
@@ -1579,18 +1580,22 @@ impl ParagraphLayoutStore {
         }
 
         // 按 logical_slot 分组统计
-        let mut slot_stats: Vec<(i32, usize, f64, usize)> = Vec::new();
-        // (logical_slot, line_count, total_height, first_line_index)
+        // Issue #901 第二十九轮复核阻塞1: 同时记录 physical_slot（从 VisualLine.cache_slot 读取），
+        // 不再用 logical_slot 当 physical_slot。全篇排版路径已通过 acquire 分配物理槽。
+        let mut slot_stats: Vec<(i32, i32, usize, f64, usize)> = Vec::new();
+        // (logical_slot, physical_slot, line_count, total_height, first_line_index)
 
         let mut current_slot: i32 = lines[0].logical_slot;
+        let mut current_physical_slot: i32 = lines[0].cache_slot;
         let mut count = 0usize;
         let mut height = 0.0f64;
         let mut first_idx = 0usize;
 
         for (i, line) in lines.iter().enumerate() {
             if line.logical_slot != current_slot {
-                slot_stats.push((current_slot, count, height, first_idx));
+                slot_stats.push((current_slot, current_physical_slot, count, height, first_idx));
                 current_slot = line.logical_slot;
+                current_physical_slot = line.cache_slot;
                 count = 0;
                 height = 0.0;
                 first_idx = i;
@@ -1598,30 +1603,21 @@ impl ParagraphLayoutStore {
             count += 1;
             height += line.height;
         }
-        slot_stats.push((current_slot, count, height, first_idx));
+        slot_stats.push((current_slot, current_physical_slot, count, height, first_idx));
 
         // 更新对应段落
-        for (slot, line_count, total_height, line_start) in slot_stats {
+        for (slot, physical_slot, line_count, total_height, _line_start) in slot_stats {
             if slot >= 0 && (slot as usize) < self.entries.len() {
                 let entry = &mut self.entries[slot as usize];
                 entry.layout_generation = layout_generation;
-                // Issue #901 第二十一轮问题1: 全篇排版路径用新 generation，
-                // C++ 端 ensure_layout_generation 创建全新 layouts 数组，
-                // physical_slot = logical_slot 不会覆盖旧 generation 的 QTextLayout。
-                // VisualLine.cache_slot = paragraph_idx = slot，三者一致。
-                // 增量排版路径（sync_from_visual_lines_incremental）改用独立 physical_slot。
-                // Issue #901 第二十八轮复核问题3: 全篇排版路径中 slot 可能已由
-                // paragraph_physical_slot 预分配（entry.cache_slot 已 >= 0 且 epoch 已记录），
-                // 也可能是首次设置。若 cache_slot 与 slot 不同或未设置，更新并补记 epoch。
-                if entry.cache_slot != slot {
-                    entry.cache_slot = slot;
-                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
-                    entry.layout_epoch = epoch;
-                } else if entry.layout_epoch == 0 && entry.cache_slot >= 0 {
-                    // cache_slot 已一致但 epoch 未记录（异常防御），补记。
-                    let epoch = super::qt_cache::add_layout_ref(layout_generation, slot);
-                    entry.layout_epoch = epoch;
-                }
+                // Issue #901 第二十九轮复核阻塞1+2: 从 VisualLine.cache_slot 读取物理槽，
+                // 不再用 logical_slot 当物理槽。全篇排版路径已通过 acquire 分配物理槽
+                // 并传给 VisualLine.cache_slot。
+                // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
+                // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
+                entry.cache_slot = physical_slot;
+                let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
+                entry.layout_epoch = epoch;
                 entry.visual_line_count = line_count;
                 entry.height = total_height;
             }

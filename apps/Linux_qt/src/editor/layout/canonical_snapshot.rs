@@ -126,7 +126,8 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// Issue #901 第十四轮问题1: 段落高度索引 — 段首 y 坐标权威来源。
     /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
     /// 计算文档级绝对 y 坐标。
-    pub height_index: ParagraphHeightIndex,
+    /// Issue #901 第二十九轮复核阻塞4: 用 Arc 共享，避免每笔 clone O(段落数)。
+    pub height_index: std::sync::Arc<ParagraphHeightIndex>,
     /// Issue #901 第十八轮问题4: ParagraphId → 当前段落 slot 映射。
     /// `materialize_line` 优先用此映射解析 slot，不依赖需要遍历后缀行更新的 `cache_slot`。
     /// 增量编辑拆段/合段后，后缀行的 `cache_slot` 可能过时，但 `paragraph_id` 不变，
@@ -591,7 +592,7 @@ impl CanonicalDocumentVisualSnapshot {
             // Issue #901 第十四轮问题1: 段落偏移和高度索引。
             // Issue #901 第二十一轮问题5: Arc 共享偏移索引。
             paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
-            height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
+            height_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphHeightIndex::new()),
             // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
             // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
             layout_generation: 0,

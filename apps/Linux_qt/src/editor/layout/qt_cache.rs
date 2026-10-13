@@ -100,6 +100,30 @@ cpp! {{
         return layouts[slot];
     }
 
+    // Issue #901 第二十九轮复核阻塞3: 带 epoch 校验的 get。
+    // epoch 不匹配（slot 已被复用，epoch 递增）返回 nullptr，
+    // 防止旧帧误取同槽新对象。epoch 匹配则返回 layouts[slot]。
+    QTextLayout* get_paragraph_layout_checked(uint64_t gen, int slot, uint64_t epoch) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return nullptr;
+        auto& layouts = lg->layouts;
+        auto& epochs = lg->epochs;
+        if (slot < 0 || slot >= (int)layouts.size()) return nullptr;
+        if (epochs[slot] != epoch) return nullptr;
+        return layouts[slot];
+    }
+
+    // Issue #901 第二十九轮复核阻塞2+3: 读取指定 (gen, slot) 的当前 epoch。
+    // 用于 acquire 后 Store 记录 epoch 到 entry.layout_epoch，
+    // 使后续 release_layout_ref(gen, slot, epoch) 能正确校验。
+    uint64_t get_layout_epoch(uint64_t gen, int slot) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return 0;
+        auto& epochs = lg->epochs;
+        if (slot < 0 || slot >= (int)epochs.size()) return 0;
+        return epochs[slot];
+    }
+
     // Issue #658 评论 5621512329 问题 2: 光标/命中不再重新 new QTextLayout 重新排版，
     // 直接从已排好的 generation cache 中取 QTextLine 调用 cursorToX / xToCursor。
     // gen/slot 对应的 layout 由 EditorLayout 生命周期管理（invalidate 时 clear），
@@ -141,6 +165,10 @@ cpp! {{
     // 保持 cache_slot 与文档段落一一对应，避免越界访问。
     // Issue #901 第二十八轮复核问题3: 写入 layout 时设置 refcount=1（Store 持有初始引用），
     // epoch 保持 acquire 时已设的值（freelist 复用时已递增，新槽时为 0）。
+    // Issue #901 第二十九轮复核阻塞2: 不再无条件覆盖已有其他持有者的槽。
+    // 如果 refcount>0（有其他持有者），不 delete 旧 layout、不重置 refcount，
+    // 删除传入的新 layout 避免泄漏，保留旧 layout。调用方应改用
+    // install_layout_slot_gen（唯一允许写入 layout 的入口）。
     void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout) {
         auto* lg = ensure_layout_generation(gen);
         auto& layouts = lg->layouts;
@@ -151,12 +179,53 @@ cpp! {{
             refcounts.push_back(0);
             epochs.push_back(0);
         }
+        // 槽被其他持有者占用，不覆盖，删除新 layout 避免泄漏。
+        if (refcounts[cache_slot] > 0) {
+            delete layout;
+            return;
+        }
         if (layouts[cache_slot]) {
             delete layouts[cache_slot];
         }
         layouts[cache_slot] = layout;
         // Store 持有初始引用。
         refcounts[cache_slot] = 1;
+    }
+
+    // Issue #901 第二十九轮复核阻塞1+2: 在 acquire 已分配的槽上安装 layout。
+    // 这是唯一允许写入 layout 的入口。要求槽已由 acquire_physical_slot_for_generation
+    // 分配（refcount==0, epoch 已设）。
+    // - refcount==0：安全安装，写入 layout，设 refcount=1（Store 初始引用），
+    //   保留 acquire 时设的 epoch。
+    // - refcount>0：槽被其他持有者占用，不安装，删除新 layout 避免泄漏。
+    //   调用方应先 release 再 install。
+    void install_layout_slot_gen(uint64_t gen, int slot, QTextLayout* layout) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) {
+            // generation 不存在不应发生（acquire 应已 ensure）。
+            // 为安全起见 ensure 并继续。
+            lg = ensure_layout_generation(gen);
+        }
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
+        while ((int)layouts.size() <= slot) {
+            layouts.push_back(nullptr);
+            refcounts.push_back(0);
+            epochs.push_back(0);
+        }
+        // 槽被其他持有者占用，不安装，删除新 layout 避免泄漏。
+        if (refcounts[slot] > 0) {
+            delete layout;
+            return;
+        }
+        // refcount==0，安全安装。
+        if (layouts[slot]) {
+            delete layouts[slot];
+        }
+        layouts[slot] = layout;
+        refcounts[slot] = 1;  // Store 持有初始引用
+        // epoch 保持 acquire 时设的值（freelist 复用时已递增，新槽时为 0）。
     }
 
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot) {
@@ -412,4 +481,30 @@ pub fn release_layout_ref(gen: u64, slot: i32, epoch: u64) {
     cpp!(unsafe [gen as "uint64_t", slot as "int", epoch as "uint64_t"] {
         release_layout_ref(gen, slot, epoch);
     });
+}
+
+/// Issue #901 第二十九轮复核阻塞3: 读取指定 (gen, slot) 的当前 epoch。
+///
+/// 用于 acquire 后 Store 记录 epoch 到 `entry.layout_epoch`，
+/// 使后续 [`release_layout_ref`]`(gen, slot, epoch)` 能正确校验。
+/// 若 generation/slot 不存在则返回 0。
+///
+/// SAFETY: GUI thread only; gen/slot 应是之前 acquire_physical_slot_for_generation
+/// 分配的。
+pub fn get_layout_epoch(gen: u64, slot: i32) -> u64 {
+    cpp!(unsafe [gen as "uint64_t", slot as "int"] -> u64 as "uint64_t" {
+        return get_layout_epoch(gen, slot);
+    })
+}
+
+/// Issue #901 第二十九轮复核阻塞3: 校验 epoch 并查询 layout 是否存在。
+///
+/// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
+/// 防止旧帧误取同槽新对象。返回 `true` 表示 layout 存在且 epoch 匹配。
+///
+/// SAFETY: GUI thread only; 查询不修改 cache 状态。
+pub fn is_layout_valid(gen: u64, slot: i32, epoch: u64) -> bool {
+    cpp!(unsafe [gen as "uint64_t", slot as "int", epoch as "uint64_t"] -> bool as "bool" {
+        return get_paragraph_layout_checked(gen, slot, epoch) != nullptr;
+    })
 }

@@ -62,7 +62,7 @@ pub use qt_cache::{
 pub use test_support::run_on_qt_thread;
 pub use types::{
     CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, ParagraphId,
-    PreparedLayoutHandle, PromotedLayout, VisualLine,
+    PreparedLayoutHandle, PromotedLayout, QtLayoutHandle, VisualLine,
 };
 use std::sync::Arc;
 
@@ -83,7 +83,10 @@ pub struct EditorLayout {
     /// Issue #901: 段落布局存储 — 稳定段落身份 + 布局缓存。
     paragraph_store: ParagraphLayoutStore,
     /// Issue #901: 段落高度索引 — Fenwick 树前缀高度。
-    height_index: ParagraphHeightIndex,
+    /// Issue #901 第二十九轮复核阻塞4: 用 Arc 共享，避免每笔 snapshot() clone O(段落数)。
+    /// EditorLayout 是可变权威源，snapshot 通过 Arc::clone O(1) 共享。
+    /// 修改时用 Arc::make_mut（refcount==1 原地改，refcount>1 COW）。
+    height_index: Arc<ParagraphHeightIndex>,
     /// Issue #901 第二轮复核: 上一版 immutable canonical snapshot，
     /// 传给 `prepare_incremental_visual_snapshot` 的 `previous_snapshot` 参数，
     /// 使增量排版路径能复用不受影响段落的 VisualLine/shaping/纹理。
@@ -111,7 +114,7 @@ impl EditorLayout {
         self.cache = None;
         // Issue #901: 同步清空增量排版子系统（全局失效）。
         self.paragraph_store.clear();
-        self.height_index.clear();
+        Arc::make_mut(&mut self.height_index).clear();
         // Issue #901 第二轮复核: 参数变化全局失效，旧 snapshot 不再可复用。
         self.last_snapshot = None;
         // Issue #901 第三轮复核: 清空编辑范围缓存。
@@ -149,7 +152,7 @@ impl EditorLayout {
         } else {
             // store 为空或全局失效
             self.paragraph_store.clear();
-            self.height_index.clear();
+            Arc::make_mut(&mut self.height_index).clear();
         }
     }
 
@@ -185,8 +188,9 @@ impl EditorLayout {
     }
 
     /// Issue #901: 获取段落高度索引的可变引用。
+    /// Issue #901 第二十九轮复核阻塞4: Arc::make_mut 获取可变引用（COW 语义）。
     pub fn height_index_mut(&mut self) -> &mut ParagraphHeightIndex {
-        &mut self.height_index
+        Arc::make_mut(&mut self.height_index)
     }
 
     /// Issue #658 评论 5624570557 问题 1: 获取当前有效的 prepared layout 句柄（如果存在）。
@@ -252,7 +256,7 @@ impl EditorLayout {
             .sync_from_visual_lines(promoted.visual_lines.as_slice(), promoted.generation);
 
         let heights = self.paragraph_store.paragraph_heights();
-        self.height_index.rebuild(heights);
+        Arc::make_mut(&mut self.height_index).rebuild(heights);
 
         // Issue #901 第三轮复核问题 5: 不再把 last_snapshot 设为 None。
         // Issue #901 第十八轮问题1+2: 直接使用 promoted 携带的完整 canonical snapshot，
@@ -285,7 +289,7 @@ impl EditorLayout {
             paragraph_offset_index: self.last_snapshot.as_ref()
                 .map(|s| s.paragraph_offset_index.clone())
                 .unwrap_or_default(),
-            height_index: self.height_index.clone(),
+            height_index: Arc::clone(&self.height_index),
             layout_generation: promoted.generation,
             // Issue #901 第十九轮问题1: 从 canonical snapshot 继承 ParagraphId → slot 映射。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
@@ -461,11 +465,8 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 paragraph_offset_index,
-                // Issue #901 第二十五轮复核问题2: 保留 clone 而非 Arc 共享。
-                // self.height_index 是可变权威源（每笔编辑原地修改），LayoutSnapshot 需要
-                // owned 副本以隔离后续编辑。改 Arc 需同步改 EditorLayout/两个 snapshot 结构
-                // 字段类型及多消费方，涉及面广，留作后续优化。
-                height_index: self.height_index.clone(),
+                // Issue #901 第二十九轮复核阻塞4: Arc::clone 共享，O(1) 而非 O(段落数)。
+                height_index: Arc::clone(&self.height_index),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
                 paragraph_line_count_index,
@@ -504,7 +505,7 @@ impl EditorLayout {
             self.paragraph_store
                 .sync_from_visual_lines(&doc_snapshot.visual_lines, current_gen);
             let heights = self.paragraph_store.paragraph_heights();
-            self.height_index.rebuild(heights);
+            Arc::make_mut(&mut self.height_index).rebuild(heights);
 
             // Issue #901 第二轮复核: 保存全篇重排结果供下次增量排版复用。
             // Issue #901 第三轮复核: 只 clone visual_lines，move 整个 doc_snapshot 到 last_snapshot。
@@ -530,11 +531,8 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 paragraph_offset_index,
-                // Issue #901 第二十五轮复核问题2: 保留 clone 而非 Arc 共享。
-                // self.height_index 是可变权威源（每笔编辑原地修改），LayoutSnapshot 需要
-                // owned 副本以隔离后续编辑。改 Arc 需同步改 EditorLayout/两个 snapshot 结构
-                // 字段类型及多消费方，涉及面广，留作后续优化。
-                height_index: self.height_index.clone(),
+                // Issue #901 第二十九轮复核阻塞4: Arc::clone 共享，O(1) 而非 O(段落数)。
+                height_index: Arc::clone(&self.height_index),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
                 paragraph_line_count_index,

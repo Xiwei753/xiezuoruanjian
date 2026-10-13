@@ -238,7 +238,7 @@ pub fn prepare_incremental_visual_snapshot(
     // 取走 last_snapshot 的所有权后传入。
     previous_snapshot: Option<CanonicalDocumentVisualSnapshot>,
     paragraph_store: &mut super::super::paragraph_layout_store::ParagraphLayoutStore,
-    height_index: &mut super::super::paragraph_height_index::ParagraphHeightIndex,
+    height_index: &mut std::sync::Arc<super::super::paragraph_height_index::ParagraphHeightIndex>,
 ) -> CanonicalDocumentVisualSnapshot {
     full::prepare_incremental_visual_snapshot_impl(
         text,

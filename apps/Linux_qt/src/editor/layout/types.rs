@@ -164,7 +164,8 @@ pub struct LayoutSnapshot {
     /// Issue #901 第十四轮问题1: 段落高度索引 — 段首 y 坐标权威来源。
     /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
     /// 计算文档级绝对 y 坐标。
-    pub height_index: super::paragraph_height_index::ParagraphHeightIndex,
+    /// Issue #901 第二十九轮复核阻塞4: 用 Arc 共享，避免每笔 clone O(段落数)。
+    pub height_index: std::sync::Arc<super::paragraph_height_index::ParagraphHeightIndex>,
     /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
     /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
     pub layout_generation: u64,
@@ -207,7 +208,7 @@ impl LayoutSnapshot {
             padding: 0.0,
             lines: Arc::new(Vec::new()),
             paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
-            height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
+            height_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphHeightIndex::new()),
             layout_generation: 0,
             paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
             paragraph_line_count_index: std::sync::Arc::new(
@@ -473,6 +474,89 @@ pub struct PromotedLayout {
     /// Issue #658 评论 5624570557 问题 1: 旧的 generation，在 promote 完成后释放。
     /// old 动画纹理提取完成后，等 new prepared layout 真正成为 current，再释放旧 generation。
     pub old_generation: u64,
+}
+
+/// Issue #901 第二十九轮复核阻塞3: 可查询排版句柄 — 统一 Qt 槽分配和引用计数所有权模型。
+///
+/// 封装 `(generation, physical_slot, epoch)` 三元组，提供引用计数操作和 epoch 校验查询。
+/// Store entry、VisualLine 关联的可查询排版句柄共享此类型。
+///
+/// # 所有权模型
+///
+/// - `acquire_physical_slot_for_generation(gen)` 分配物理槽（refcount=0, epoch 已设）。
+/// - `install_layout_slot_gen(gen, slot, layout)` 在已分配的槽上安装 layout（refcount=1，Store 初始引用）。
+/// - `retain()` 增加引用计数（snapshot/动画帧持有额外引用），更新 epoch 为当前值。
+/// - `release()` 减少引用计数，带 epoch 校验。refcount 归零时 delete layout 并回收槽。
+/// - `is_valid()` 通过 `get_paragraph_layout_checked` 校验 epoch，防止旧帧误取同槽新对象。
+///
+/// # 线程安全
+///
+/// 仅在 GUI 线程中使用，不跨线程共享。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QtLayoutHandle {
+    /// QTextLayout 所在的 generation cache 代。
+    pub generation: u64,
+    /// QTextLayout 在 `g_layout_generations[generation]` 中的物理数组下标。
+    pub physical_slot: i32,
+    /// 该槽的 epoch — 同一物理槽被复用时递增，旧帧持有的旧 epoch 不匹配。
+    pub epoch: u64,
+}
+
+impl QtLayoutHandle {
+    /// 创建一个新的 `QtLayoutHandle`。
+    pub fn new(generation: u64, physical_slot: i32, epoch: u64) -> Self {
+        Self {
+            generation,
+            physical_slot,
+            epoch,
+        }
+    }
+
+    /// 是否表示无效/未分配的句柄。
+    pub fn is_invalid(&self) -> bool {
+        self.generation == 0 || self.physical_slot < 0
+    }
+
+    /// Issue #901 第二十九轮复核阻塞3: 增加布局引用计数，更新 epoch 为当前值。
+    ///
+    /// 用于 snapshot/动画帧持有额外引用。调用后 `self.epoch` 更新为 C++ 端当前 epoch，
+    /// 供后续 [`release`] 校验。
+    ///
+    /// SAFETY: GUI thread only; generation/physical_slot 应是之前
+    /// acquire_physical_slot_for_generation 分配的。
+    pub fn retain(&mut self) {
+        if self.is_invalid() {
+            return;
+        }
+        self.epoch = super::qt_cache::add_layout_ref(self.generation, self.physical_slot);
+    }
+
+    /// Issue #901 第二十九轮复核阻塞3: 减少布局引用计数，带 epoch 校验。
+    ///
+    /// - epoch 不匹配：旧帧释放旧 handle（slot 已被复用，epoch 递增），直接忽略。
+    /// - epoch 匹配：减 refcount。refcount 归零时 delete layout 并回收槽。
+    ///
+    /// SAFETY: GUI thread only; generation/physical_slot/epoch 应是之前
+    /// acquire + install 或 retain 返回的。
+    pub fn release(&self) {
+        if self.is_invalid() {
+            return;
+        }
+        super::qt_cache::release_layout_ref(self.generation, self.physical_slot, self.epoch);
+    }
+
+    /// Issue #901 第二十九轮复核阻塞3: 校验 epoch 并查询 layout 是否存在。
+    ///
+    /// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
+    /// 防止旧帧误取同槽新对象。返回 `true` 表示 layout 存在且 epoch 匹配。
+    ///
+    /// SAFETY: GUI thread only.
+    pub fn is_valid(&self) -> bool {
+        if self.is_invalid() {
+            return false;
+        }
+        super::qt_cache::is_layout_valid(self.generation, self.physical_slot, self.epoch)
+    }
 }
 
 /// Issue #658 评论 5624570557 问题 1: 已准备布局的只读句柄。
