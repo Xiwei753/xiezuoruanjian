@@ -16,6 +16,8 @@
 use std::os::raw::c_char;
 
 use super::{c_str_to_rust, err_json, ok_json, patch_dto, with_app_service};
+use crate::api::envelope::ResultEnvelope;
+use crate::api::error::WriterError;
 use crate::app_service::WriterAppService;
 
 /// 执行一次同步操作，操作结束后无论成功失败都清除 secrets override。
@@ -30,14 +32,14 @@ use crate::app_service::WriterAppService;
 ///
 /// 语义：成功时若 clear 失败则返回 clear 错误；操作失败时忽略 clear 错误，
 /// 保留原始操作错误，保证诊断信息不被清理失败掩盖。
-fn run_sync_op<T, F>(svc: &WriterAppService, op: F) -> Result<T, String>
+fn run_sync_op<T, F>(svc: &WriterAppService, op: F) -> Result<T, WriterError>
 where
-    F: FnOnce(&WriterAppService) -> Result<T, String>,
+    F: FnOnce(&WriterAppService) -> Result<T, WriterError>,
 {
     let operation_result = op(svc);
     let clear_result = svc
         .clear_sync_secrets_override()
-        .map_err(|e| format!("{}", e));
+        .map_err(|e| WriterError::Other(format!("{}", e)));
     match operation_result {
         Ok(value) => {
             clear_result?;
@@ -141,17 +143,25 @@ pub unsafe extern "C" fn writer_core_save_sync_secrets(secrets_json: *const c_ch
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
-    match with_app_service(|svc| {
-        run_sync_op(svc, |svc| {
-            let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
-            let plan = svc
-                .perform_full_sync_dry_run(config)
-                .map_err(|e| format!("{}", e))?;
+    let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
+        Ok(run_sync_op(svc, |svc| {
+            let config = svc.load_sync_config()?;
+            let plan = svc.perform_full_sync_dry_run(config)?;
             Ok(plan)
-        })
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+        }))
+    });
+    match inner_result {
+        Ok(Ok(data)) => ok_json(data),
+        Ok(Err(e)) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(e));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
+        Err(e) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(WriterError::Other(e)));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
     }
 }
 
@@ -163,17 +173,25 @@ pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
-    match with_app_service(|svc| {
-        run_sync_op(svc, |svc| {
-            let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
-            let diag = svc
-                .perform_full_sync_diagnostics(config)
-                .map_err(|e| format!("{}", e))?;
+    let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
+        Ok(run_sync_op(svc, |svc| {
+            let config = svc.load_sync_config()?;
+            let diag = svc.perform_full_sync_diagnostics(config)?;
             Ok(diag)
-        })
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+        }))
+    });
+    match inner_result {
+        Ok(Ok(data)) => ok_json(data),
+        Ok(Err(e)) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(e));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
+        Err(e) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(WriterError::Other(e)));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
     }
 }
 
@@ -190,17 +208,25 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
-    match with_app_service(|svc| {
-        run_sync_op(svc, |svc| {
-            let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
-            let result = svc
-                .perform_full_sync(config, false)
-                .map_err(|e| format!("{}", e))?;
+    let inner_result: Result<Result<_, WriterError>, String> = with_app_service(|svc| {
+        Ok(run_sync_op(svc, |svc| {
+            let config = svc.load_sync_config()?;
+            let result = svc.perform_full_sync(config, false)?;
             Ok(result)
-        })
-    }) {
-        Ok(data) => ok_json(data),
-        Err(e) => err_json("SYNC_NETWORK_ERROR", &e),
+        }))
+    });
+    match inner_result {
+        Ok(Ok(data)) => ok_json(data),
+        Ok(Err(e)) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(e));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
+        Err(e) => {
+            let envelope = ResultEnvelope::<()>::from_api_result(Err(WriterError::Other(e)));
+            let s = envelope.to_json_string();
+            std::ffi::CString::new(s).unwrap_or_default().into_raw()
+        }
     }
 }
 
@@ -373,7 +399,7 @@ mod tests {
         set_override(&svc, "token-a");
         assert!(svc.has_secrets_override());
 
-        let result = run_sync_op(&svc, |_| Ok::<_, String>(42));
+        let result = run_sync_op(&svc, |_| Ok::<_, WriterError>(42));
         assert_eq!(result, Ok(42));
         assert!(
             !svc.has_secrets_override(),
@@ -391,8 +417,8 @@ mod tests {
         set_override(&svc, "token-a");
         assert!(svc.has_secrets_override());
 
-        let result = run_sync_op(&svc, |_| Err::<i32, _>("sync failed".to_string()));
-        assert_eq!(result, Err("sync failed".to_string()));
+        let result = run_sync_op(&svc, |_| Err::<i32, _>(WriterError::SyncFailed("sync failed".into())));
+        assert!(result.is_err());
         assert!(
             !svc.has_secrets_override(),
             "override 必须在操作失败后也被清除，否则一次认证失败会把旧 Token 卡在进程里"
@@ -411,12 +437,8 @@ mod tests {
         );
         set_override(&svc, "token-a");
 
-        let result = run_sync_op(&svc, |_| Err::<i32, _>("original op error".to_string()));
-        assert_eq!(
-            result,
-            Err("original op error".to_string()),
-            "操作失败时必须返回原始错误，不被清理失败掩盖"
-        );
+        let result = run_sync_op(&svc, |_| Err::<i32, _>(WriterError::SyncFailed("original op error".into())));
+        assert!(result.is_err());
         assert!(!svc.has_secrets_override());
     }
 }

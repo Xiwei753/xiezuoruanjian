@@ -5,10 +5,11 @@
 // Issue #784 评论 5856805657：同步行为由全局 dispatcher 持有，不再各页面各写一份。
 
 import hilog from '@ohos.hilog'
+import promptAction from '@ohos.promptAction'
 import { ActionRole } from '../../corebridge/dto/PlatformDtos'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
-import { NativeWriterCoreBridge } from '../../corebridge/NativeWriterCoreBridge'
+import { SyncOperationController } from '../../feature/settings/presentation/SyncOperationController'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
 
 const TAG = 'NavigationHeaderActionDispatcher'
@@ -36,13 +37,27 @@ export class NavigationHeaderActionDispatcher {
     }
   }
 
-  /** 同步 — 调共享 bridge 的 performSync() */
+  /** 同步 — 使用 SyncOperationController 共用同步事务 */
   private handleSync(): void {
-    const bridge = NativeWriterCoreBridge.getInstance()
-    bridge.performSync().then(() => {
-      hilog.info(DOMAIN, TAG, 'performSync completed')
+    const controller = SyncOperationController.getInstance()
+    if (controller.isSyncing()) {
+      hilog.info(DOMAIN, TAG, 'sync already in progress')
+      promptAction.showToast({ message: '同步正在进行中…' })
+      return
+    }
+    promptAction.showToast({ message: '同步开始…' })
+    controller.performSync().then((outcome) => {
+      if (outcome.phase === 'success') {
+        hilog.info(DOMAIN, TAG, 'sync success: %{public}s', outcome.message)
+        promptAction.showToast({ message: outcome.message })
+      } else {
+        hilog.error(DOMAIN, TAG, 'sync failed: errorCode=%{public}s message=%{public}s rawError=%{public}s',
+          outcome.errorCode ?? '', outcome.message, outcome.rawError ?? '')
+        promptAction.showToast({ message: outcome.message })
+      }
     }).catch((e: Error) => {
-      hilog.error(DOMAIN, TAG, 'performSync failed: %{public}s', String(e))
+      hilog.error(DOMAIN, TAG, 'sync exception: %{public}s', String(e))
+      promptAction.showToast({ message: `同步异常: ${e}` })
     })
   }
 

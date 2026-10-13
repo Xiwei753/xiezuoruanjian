@@ -18,6 +18,7 @@ import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } fr
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import { FloatingPageHeader } from '../../../ui/components/FloatingPageHeader'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -47,6 +48,11 @@ const WIDE_PROJECT_CARD_GAP: number = 16
 // 标题区底线只画到折角之前，正文从标题区下面开始。
 const WIDE_PROJECT_CARD_HEADER_HEIGHT: number = 40
 const WIDE_PROJECT_CARD_FOLD_SIZE: number = 16
+
+// Issue #888：悬浮标题栏高度（vp），用于内容区顶部留白计算。
+const FLOATING_HEADER_HEIGHT_VP: number = 48
+// 悬浮标题栏与内容区之间的间距（vp）。
+const FLOATING_HEADER_BOTTOM_GAP_VP: number = 8
 
 @ComponentV2
 export struct HomeScreen {
@@ -91,11 +97,11 @@ export struct HomeScreen {
     this.viewModel.loadData()
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
-    if (!this.useHdsNav) {
-      const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectList)
-      if (policy !== null) {
-        this.headerActions = policy.actionSlots
-      }
+    // Issue #888：无论 API 23 与否都取同一份 policy，
+    // 窄屏悬浮标题栏（FloatingPageHeader）需要 headerActions 来渲染右上动作胶囊。
+    const policy = await ScreenPolicyBridge.getInstance().resolveScreenPolicy(ScreenRole.ProjectList)
+    if (policy !== null) {
+      this.headerActions = policy.actionSlots
     }
   }
 
@@ -326,6 +332,18 @@ export struct HomeScreen {
       .width('100%')
       .height('100%')
 
+      // ── 悬浮标题栏（窄屏） ──
+      // Issue #888：窄屏不再使用 HDS 原生标题栏，改用 FloatingPageHeader 悬浮在内容流。
+      // 标题和卡片背后透出的都是同一个 background_secondary 页面底色。
+      if (!this.adaptiveState.prefersWideLayout) {
+        FloatingPageHeader({
+          title: $r('app.string.app_title'),
+          showBackButton: false,
+          actionSlots: this.headerActions
+        })
+        .position({ x: 0, y: this.adaptiveState.safeTopVp })
+      }
+
       // ── 对话框层 ──
       if (this.viewModel.showCreateDialog) {
         this.CreateDialog()
@@ -357,14 +375,16 @@ export struct HomeScreen {
 
   build() {
     if (this.useHdsNav) {
+      // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
+      // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
+      // 就会在内容上方留出一条整宽空白。
+      // Issue #888：窄屏也不再使用 HDS 原生标题栏，改用 FloatingPageHeader 悬浮在内容流，
+      // 消除标题栏整条白底。所以 showTitleBar 始终为 false。
       HdsAppDestinationApi23({
         title: $r('app.string.app_title'),
         screenRole: ScreenRole.ProjectList,
         screenTabIndex: 0,
-        // Issue #827 评论 1 第 6 点：宽屏顶部由 PrimaryTabShell 的 WidePrimaryShell
-        // 统一提供（同步 / 搜索 / 设置 常驻右上），页面再画一条 HDS 标题栏
-        // 就会在内容上方留出一条整宽空白。
-        showTitleBar: !this.adaptiveState.prefersWideLayout
+        showTitleBar: false
       }) {
         this.HomeContent()
       }
@@ -559,9 +579,8 @@ export struct HomeScreen {
   SinglePaneLayout() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        // 不再自绘窄屏顶栏：页面标题已由 HdsAppDestinationApi23 的 HDS 标题栏承载，
-        // 页内再画一份会出现两个"素笺"。窄屏/宽屏一律只保留顶栏那一个。
-        // 内容区域
+        // Issue #888：窄屏标题栏改为 FloatingPageHeader 悬浮在 HomeContent 的 Stack 上层，
+        // 不再由 HDS 原生标题栏承载。内容区域从安全区 + Header 高度之后开始。
         if (this.viewModel.isLoading) {
           this.LoadingView()
         } else if (this.viewModel.errorMessage) {
@@ -645,7 +664,14 @@ export struct HomeScreen {
       }
       .width('100%')
       .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
-      .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 8, bottom: 16 })
+      .padding({
+        left: this.adaptiveState.pagePadding,
+        right: this.adaptiveState.pagePadding,
+        // Issue #888：窄屏悬浮标题栏后，列表首项从安全区 + Header 高度之后开始，
+        // 不挡状态栏，也不让列表第一张卡压到标题上。
+        top: this.adaptiveState.safeTopVp + FLOATING_HEADER_HEIGHT_VP + FLOATING_HEADER_BOTTOM_GAP_VP,
+        bottom: 16
+      })
     }
     .layoutWeight(1)
     .scrollBar(BarState.Off)

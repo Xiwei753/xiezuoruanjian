@@ -4,7 +4,7 @@ import { NativeCoreModule } from './NativeCoreModule'
 import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets } from '../codec/CoreWireDecoders'
 
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e)}
+  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), rawError: String(e) }
 }
 
 export class NativeSyncBridge {
@@ -48,24 +48,24 @@ export class NativeSyncBridge {
 
   async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSyncDryRun()
+      const jsonStr: string = await this.core.getNativeModule().nativeSyncDryRun()
       return this.core.decodeEnvelope<FullSyncDryRunResult>(jsonStr, decodeFullSyncDryRunResult)
     } catch (e) { return nativeError<FullSyncDryRunResult>(e) }
   }
 
   async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativePerformSync()
+      const jsonStr: string = await this.core.getNativeModule().nativePerformSync()
       return this.core.decodeEnvelope<FullSyncResult>(jsonStr, decodeFullSyncResult)
     } catch (e) { return nativeError<FullSyncResult>(e) }
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeSyncDiagnostics()
+      const jsonStr: string = await this.core.getNativeModule().nativeSyncDiagnostics()
       return this.core.decodeEnvelope<FullSyncDiagnosticsResult>(jsonStr, decodeFullSyncDiagnosticsResult)
     } catch (err) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`}
+      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`, rawError: String(err) }
     }
   }
 

@@ -1,10 +1,8 @@
 // ─── Envelope DTOs ───
-// Issue #753：envelope 的唯一来源是 Core `ffi/mod.rs` 的 `ok_json` / `err_json`：
-//   成功 → {"success":true,"data":<Core DTO>}
-//   失败 → {"success":false,"errorCode":<string>,"userMessage":<string>}
-// 平台端不得再发明 Core 从不发出的字段（原先的 messageKey / messageArgs /
-// warnings / changedPaths / changedEntities / rawError 全部删除——它们运行时
-// 恒为 undefined，UI 读出来的就是空提示）。
+// 与 Core `core/writer_core/src/api/envelope.rs` 的 `ResultEnvelope<T>` 对齐。
+// Core 使用 `#[serde(rename_all = "camelCase")]` 序列化，JSON 字段为 camelCase。
+// 成功 → {"success":true,"data":<Core DTO>,"warnings":[],"changedPaths":[],"changedEntities":[]}
+// 失败 → {"success":false,"errorCode":<string>,"messageKey":<string>,"messageArgs":{...},"rawError":<string>,...}
 // `data` 只在成功时出现，且必须是各域 decoder 校验过的强类型；
 // decoder 不通过时 Bridge 返回 SCHEMA_MISMATCH，绝不让 undefined 流到 UI。
 
@@ -15,6 +13,20 @@ export interface ResultEnvelope<T> {
   data?: T
   errorCode?: string
   userMessage?: string
+  // Core 标准错误字段（与 core/writer_core/src/api/envelope.rs 的 camelCase 序列化对齐）
+  messageKey?: string
+  messageArgs?: Map<string, string>
+  rawError?: string
+  warnings?: string[]
+  changedPaths?: string[]
+  changedEntities?: ChangedEntity[]
+}
+
+// 变更实体 DTO — 标识一次 API 调用导致的实体变更。
+// 与 Core ChangedEntityDto 对齐（camelCase 序列化）。
+export interface ChangedEntity {
+  entityType: string
+  entityId?: string
 }
 
 // ─── Error Codes ───
@@ -53,6 +65,14 @@ export type ErrorCode =
   | 'STARMAP_NOT_FOUND'
   | 'SYNC_NETWORK_ERROR'
   | 'SYNC_STATE_ERROR'
+  | 'SYNC_AUTH_FAILED'
+  | 'SYNC_PERMISSION_DENIED'
+  | 'SYNC_REPO_NOT_FOUND'
+  | 'SYNC_CONFLICT'
+  | 'SYNC_CONFIG_INVALID'
+  | 'SYNC_DISK_ERROR'
+  | 'SYNC_TRANSPORT_ERROR'
+  | 'SYNC_PROVIDER_ERROR'
   | 'UNKNOWN_ERROR'
   | 'VOLUME_ALREADY_EXISTS'
   | 'VOLUME_NOT_FOUND'
