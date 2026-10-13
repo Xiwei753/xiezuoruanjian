@@ -783,6 +783,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
     // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
     // 按去掉 \n 后的段落正文比较误判"无变化"。
+    // Issue #901 第二十五轮复核问题3: 增量路径中仍需全文切分来获取段落文本（重排段
+    // 需要段落文本内容）。这是剩余优化点 — 未来可用 Core DisplayPatch 的旧/新 byte
+    // 区间和 paragraph_store 的 byte 前缀索引定位受影响段，不每笔生成新全文 Vec。
+    // 本轮保留全文切分，因 split_paragraphs_with_hard_break 的 O(全文 byte) 常数小
+    //（单字节 memchr），且重排段需要段落文本内容。
     let new_paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
     let new_para_count = new_paras.len();
 
@@ -859,11 +864,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let vl_start_idx = vl_start_idx.min(prev_vls_len);
     let vl_end_idx = vl_end_idx.min(prev_vls_len);
 
-    // Issue #901 第二十四轮问题3: 在 take prev 数据之前保存 prev height_index 的 clone。
-    // 段落数变化时（Enter 拆段/Backspace 合段）不从 raw visual_lines.para_start 提取高度，
-    // 改为从权威段序构造：前缀未改段 + 新排版段 + 后缀未改段，均从 prev height_index 取未改段高度。
-    // 增量路径保留了复用后缀的旧 para_start/logical_slot，raw 段号可能重复/错乱。
-    let prev_height_index = prev.height_index.clone();
+    // Issue #901 第二十五轮复核问题2: prev_height_index 的 clone 已延迟到
+    // curr_para_count != prev_para_count 结构变化分支内（见下方），普通编辑（无回车）
+    // 不再每笔 clone 整章高度索引 O(段落数)。
 
     // Issue #901 第二十四轮问题4: 取走 prev 的 line_count_index Arc 并显式释放，
     // 使 paragraph_store.line_count_index 的 strong_count 降为 1。
@@ -1285,12 +1288,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // O(段落数) 构造但不涉及 QTextLayout。
     let curr_para_count = paragraphs.len();
     if curr_para_count != prev_para_count {
+        // Issue #901 第二十五轮复核问题2: prev_height_index 的 clone 延迟到结构变化分支内，
+        // 普通编辑（无回车，curr_para_count == prev_para_count）不 clone 整章高度索引 O(段落数)。
+        // 仅在拆段/合段（Enter/Backspace 换行符）时才 clone，这类操作不频繁。
         // Issue #901 第二十四轮问题3: 不从 raw visual_lines.para_start 提取高度，
         // 改为从权威段序构造：前缀未改段从 prev height_index + 新排版段从 new_visual_lines
         // + 后缀未改段从 prev height_index。
         // 增量路径保留了复用后缀的旧 para_start/logical_slot，raw 段号可能重复/错乱
         //（如 甲\n乙 → \n甲\n乙 后 raw logical_slot = [0,0,1]），
         // extract_paragraph_heights 用 raw para_start 去重会把不同段的高度误合并。
+        let prev_height_index = prev.height_index.clone();
         let mut heights = vec![0.0f64; curr_para_count];
 
         // 前缀未改段 [0, new_layout_start)：从 prev height_index 获取
@@ -1379,10 +1386,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraph_offset_index,
         // Issue #901 第十五轮问题2: 段落高度索引 — 已在上面更新/重建，
         // 此处 clone 的是更新后的高度索引，保证 snapshot 内高度与渲染侧一致。
+        // Issue #901 第二十五轮复核问题2: 保留 clone 而非 Arc 共享。
+        // height_index 是 EditorLayout 的可变权威源（每笔编辑 rebuild/update_heights_incremental
+        // 原地修改），snapshot 需要 owned 副本以隔离后续编辑。改 Arc 需把 EditorLayout.height_index
+        // 和两个 snapshot 结构字段都改 Arc<ParagraphHeightIndex>，并在本函数增加 take/drop
+        // prev.height_index Arc 的 COW 管理（类似 line_count_index），涉及多消费方，留作后续优化。
         height_index: height_index.clone(),
         paragraph_id_to_slot,
         paragraph_line_count_index,
     };
+
+    // Issue #901 第二十五轮复核问题1: 增量排版完成后释放已无持有者的旧 QTextLayout。
+    // retired slots 在 update_paragraph_text/split_paragraph/merge_paragraphs 中收集，
+    // 此时新 snapshot 已构建，旧 layout 不再被任何 snapshot 引用，可安全释放。
+    // 槽号本身不复用（next_physical_slot 持续递增），但 QTextLayout 对象内存不再泄漏。
+    paragraph_store.release_retired_layouts();
 
     snapshot
 }

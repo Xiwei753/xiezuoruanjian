@@ -304,6 +304,16 @@ pub struct ParagraphLayoutStore {
     /// 物理槽只分配不回收（删回车合段时不回收被合并段的 physical_slot），
     /// 避免回收复杂性。未来可优化为回收。
     next_physical_slot: i32,
+    /// Issue #901 第二十五轮复核问题1: 已无持有者可回收的 (generation, physical_slot) 对。
+    ///
+    /// 增量编辑（普通改段/拆段/合段）使旧 `cache_slot` 被置 -1 后，对应的
+    /// QTextLayout 不再被任何 snapshot 引用。将旧 `(layout_generation, cache_slot)`
+    /// 收集到此列表，由 `release_retired_layouts` 在增量排版完成后统一释放，
+    /// 避免 QTextLayout 内存随编辑次数持续增长。
+    ///
+    /// 槽号本身不复用（`next_physical_slot` 持续递增），但 QTextLayout 对象
+    /// 被 C++ `delete` 释放，不再泄漏。
+    retired_slots: Vec<(u64, i32)>,
 }
 
 impl ParagraphLayoutStore {
@@ -315,6 +325,7 @@ impl ParagraphLayoutStore {
             id_to_slot_cache: Arc::new(HashMap::new()),
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
             next_physical_slot: 0,
+            retired_slots: Vec::new(),
         }
     }
 
@@ -337,12 +348,38 @@ impl ParagraphLayoutStore {
 
     /// 清空所有缓存（全局失效）。
     pub fn clear(&mut self) {
+        // Issue #901 第二十五轮复核问题1: 先释放 retired slots 中的 QTextLayout，
+        // 避免全局失效后 retired 列表中的旧 layout 泄漏。
+        self.release_retired_layouts();
         self.entries.clear();
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
         Arc::make_mut(&mut self.line_count_index).clear();
         // Issue #901 第二十一轮问题1: next_physical_slot 不重置，避免新分配的
         // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。物理槽只分配不回收。
+    }
+
+    /// Issue #901 第二十五轮复核问题1: 取出并清空 retired slots 列表。
+    ///
+    /// 返回所有已无持有者可回收的 `(generation, physical_slot)` 对。
+    /// 调用方应对每个 `(gen, slot)` 调用 `qt_cache::release_paragraph_layout_slot_gen`
+    /// 释放对应的 QTextLayout。
+    pub fn drain_retired_slots(&mut self) -> Vec<(u64, i32)> {
+        std::mem::take(&mut self.retired_slots)
+    }
+
+    /// Issue #901 第二十五轮复核问题1: 释放所有 retired slots 对应的 QTextLayout。
+    ///
+    /// 取出 retired 列表，对每个 `(gen, slot)` 调用 C++ `release_paragraph_layout_slot_gen`
+    /// 删除该槽的 QTextLayout 并置 nullptr。槽号本身不复用（`next_physical_slot`
+    /// 持续递增），但 QTextLayout 对象内存不再泄漏。
+    ///
+    /// 在增量排版完成后（snapshot 构建后）调用，确保旧 layout 不再被任何 snapshot 引用。
+    pub fn release_retired_layouts(&mut self) {
+        let retired = self.drain_retired_slots();
+        for (gen, slot) in retired {
+            super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
+        }
     }
 
     /// 获取指定索引处段落的只读引用。
@@ -695,6 +732,9 @@ impl ParagraphLayoutStore {
 
         // 更新原段（split 点之前的部分）
         let original_doc_start = original_entry.document_byte_start;
+        // Issue #901 第二十五轮复核问题1: 收集原段旧 (generation, slot) 供后续释放。
+        let old_gen = original_entry.layout_generation;
+        let old_slot = original_entry.cache_slot;
         original_entry.cache_key = ParagraphLayoutCacheKey::build(
             original_text_before_split,
             font_size,
@@ -740,6 +780,11 @@ impl ParagraphLayoutStore {
         };
 
         self.entries.insert(index + 1, new_entry);
+        // Issue #901 第二十五轮复核问题1: 原段旧 QTextLayout 进入 retired 集合，
+        // 后续 release_retired_layouts 释放，避免内存随拆段次数持续增长。
+        if old_slot >= 0 && old_gen != 0 {
+            self.retired_slots.push((old_gen, old_slot));
+        }
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         // 新段插入在 index+1，原 slot >= index+1 的段全部 +1。
         self.id_to_slot_cache_insert(new_id, index + 1);
@@ -772,26 +817,42 @@ impl ParagraphLayoutStore {
             return None;
         }
 
-        let entry = &mut self.entries[index];
-        entry.cache_key = ParagraphLayoutCacheKey::build(
-            merged_text,
-            font_size,
-            font_family,
-            line_spacing,
-            text_indent,
-            padding,
-            width,
-        );
-        entry.layout_generation = 0;
-        entry.cache_slot = -1;
-        entry.paragraph_text_len = merged_text.len();
-        entry.height = 0.0;
-        entry.visual_line_count = 0;
+        // Issue #901 第二十五轮复核问题1: 先在 entry 借用块内读出旧 layout 信息，
+        // 块结束后再访问 self.entries.remove 和 self.retired_slots。
+        let (old_gen, old_slot) = {
+            let entry = &mut self.entries[index];
+            let old_gen = entry.layout_generation;
+            let old_slot = entry.cache_slot;
+            entry.cache_key = ParagraphLayoutCacheKey::build(
+                merged_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+            entry.layout_generation = 0;
+            entry.cache_slot = -1;
+            entry.paragraph_text_len = merged_text.len();
+            entry.height = 0.0;
+            entry.visual_line_count = 0;
+            (old_gen, old_slot)
+        };
 
         // 移除被合并的段落（index + 1）
         // Issue #901 第二十一轮问题1: 被合并段的 physical_slot 不回收（只分配不回收），
         // 避免回收复杂性。next_physical_slot 持续递增，未来可优化为回收。
         let removed_entry = self.entries.remove(index + 1);
+        // Issue #901 第二十五轮复核问题1: 原段和被合并段的旧 QTextLayout 进入 retired 集合，
+        // 后续 release_retired_layouts 释放，避免内存随合段次数持续增长。
+        if old_slot >= 0 && old_gen != 0 {
+            self.retired_slots.push((old_gen, old_slot));
+        }
+        if removed_entry.cache_slot >= 0 && removed_entry.layout_generation != 0 {
+            self.retired_slots
+                .push((removed_entry.layout_generation, removed_entry.cache_slot));
+        }
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         // 被删段在 index+1，原 slot > index+1 的段全部 -1。
         self.id_to_slot_cache_remove(removed_entry.id, index + 1);
@@ -817,9 +878,6 @@ impl ParagraphLayoutStore {
         padding: f64,
         width: f64,
     ) -> bool {
-        let Some(entry) = self.entries.get_mut(index) else {
-            return false;
-        };
         let new_key = ParagraphLayoutCacheKey::build(
             new_text,
             font_size,
@@ -829,14 +887,32 @@ impl ParagraphLayoutStore {
             padding,
             width,
         );
-        let changed = entry.cache_key != new_key;
-        entry.cache_key = new_key;
-        if changed {
-            entry.layout_generation = 0;
-            entry.cache_slot = -1;
-            entry.paragraph_text_len = new_text.len();
-            entry.height = 0.0;
-            entry.visual_line_count = 0;
+        // Issue #901 第二十五轮复核问题1: 先在 entry 借用块内读出旧 layout 信息，
+        // 块结束后再 push 到 retired_slots，避免同时 &mut self.entries 和
+        // &mut self.retired_slots 的借用冲突。
+        let (changed, old_gen, old_slot) = {
+            let Some(entry) = self.entries.get_mut(index) else {
+                return false;
+            };
+            let changed = entry.cache_key != new_key;
+            entry.cache_key = new_key;
+            if changed {
+                let old_gen = entry.layout_generation;
+                let old_slot = entry.cache_slot;
+                entry.layout_generation = 0;
+                entry.cache_slot = -1;
+                entry.paragraph_text_len = new_text.len();
+                entry.height = 0.0;
+                entry.visual_line_count = 0;
+                (true, old_gen, old_slot)
+            } else {
+                (false, 0u64, -1i32)
+            }
+        };
+        // 旧 QTextLayout 进入 retired 集合，后续 release_retired_layouts 释放，
+        // 避免内存随编辑次数持续增长。
+        if changed && old_slot >= 0 && old_gen != 0 {
+            self.retired_slots.push((old_gen, old_slot));
         }
         changed
     }

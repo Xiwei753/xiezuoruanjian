@@ -146,6 +146,21 @@ cpp! {{
         (*layouts)[cache_slot] = nullptr;
     }
 
+    // Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。
+    // 删除该槽的 QTextLayout 并置 nullptr，槽号本身不复用（next_physical_slot 持续递增），
+    // 但 QTextLayout 对象内存不再泄漏。与 set_null_paragraph_layout_slot_gen 的区别：
+    // set_null 会 ensure_layout_generation 创建空数组（用于占位），release 只在
+    // generation 已存在时释放，不创建新数组（用于回收已无持有者的旧 layout）。
+    void release_paragraph_layout_slot_gen(uint64_t gen, int slot) {
+        auto* layouts = find_layout_generation(gen);
+        if (!layouts) return;
+        if (slot < 0 || slot >= (int)layouts->size()) return;
+        if ((*layouts)[slot]) {
+            delete (*layouts)[slot];
+            (*layouts)[slot] = nullptr;
+        }
+    }
+
     // 兼容旧调用：clear_paragraph_layout_cache 清全部 generation。
     void clear_paragraph_layout_cache() {
         clear_all_layout_generations();
@@ -218,4 +233,17 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
     ] -> i32 as "int" {
         return get_paragraph_layout_x_to_cursor_on_line(gen, slot, qline, x);
     })
+}
+
+/// Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。
+///
+/// 删除该槽的 QTextLayout 并将槽置 nullptr。槽号本身不复用
+///（`next_physical_slot` 持续递增），但 QTextLayout 对象内存不再泄漏。
+/// 用于回收增量编辑中已无持有者的旧 layout（普通编辑改段、拆段、合段后
+/// 旧 `cache_slot` 被置 -1，对应的 QTextLayout 不再被任何 snapshot 引用）。
+/// SAFETY: GUI thread only; gen/slot 应是之前 set_paragraph_layout_slot_gen 写入的。
+pub fn release_paragraph_layout_slot_gen(gen: u64, slot: i32) {
+    cpp!(unsafe [gen as "uint64_t", slot as "int"] {
+        release_paragraph_layout_slot_gen(gen, slot);
+    });
 }

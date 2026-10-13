@@ -385,16 +385,20 @@ impl EditorLayout {
 
         let new_snapshot = if store_has_cache {
             // Issue #901: 增量排版路径
-            let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
             let old_para_count = self.paragraph_store.paragraph_count();
 
             // Issue #901 第三轮复核: 优先消费 Core display_patches 提供的受影响范围。
             // 消费后清空，避免下次无编辑信息时误用旧范围。
+            // Issue #901 第二十五轮复核问题3: 当 last_edit_affected_range 存在时，
+            // 不需要 text.split_inclusive('\n').collect() 全文切分来计算 affected range，
+            // 直接用 Core 提供的范围，省去 O(全文) 切分。只有无 display_patches 时
+            // 才全文切分并按段落 hash 比较。
             let (affected_start, affected_end) =
                 if let Some(range) = self.last_edit_affected_range.take() {
                     range
                 } else {
-                    // 无 display_patches 时回退到按段落 hash 比较
+                    // 无 display_patches 时回退到按段落 hash 比较，需要全文切分
+                    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
                     self.compute_affected_byte_range(text, &new_paras, old_para_count)
                 };
 
@@ -452,6 +456,10 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 paragraph_offset_index,
+                // Issue #901 第二十五轮复核问题2: 保留 clone 而非 Arc 共享。
+                // self.height_index 是可变权威源（每笔编辑原地修改），LayoutSnapshot 需要
+                // owned 副本以隔离后续编辑。改 Arc 需同步改 EditorLayout/两个 snapshot 结构
+                // 字段类型及多消费方，涉及面广，留作后续优化。
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
@@ -517,6 +525,10 @@ impl EditorLayout {
                 padding: params.padding,
                 lines,
                 paragraph_offset_index,
+                // Issue #901 第二十五轮复核问题2: 保留 clone 而非 Arc 共享。
+                // self.height_index 是可变权威源（每笔编辑原地修改），LayoutSnapshot 需要
+                // owned 副本以隔离后续编辑。改 Arc 需同步改 EditorLayout/两个 snapshot 结构
+                // 字段类型及多消费方，涉及面广，留作后续优化。
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
