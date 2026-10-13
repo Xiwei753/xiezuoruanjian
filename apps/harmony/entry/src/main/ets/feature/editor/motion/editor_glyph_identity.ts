@@ -220,6 +220,31 @@ export class WindowInstanceIdAllocator {
   }
 
   /**
+   * Issue #879 评论6138838190：强制分配全新的 windowInstanceId，不复用 allocate 缓存。
+   *
+   * 当不同通道（如 carry-over ghost 和 carry-over motion）引用同一组 glyphIds 但需要
+   * 不同的运动状态（不同 offset/opacity/clip）时，它们需要不同的 Text 节点（不同 renderNodeKey）。
+   * allocate(glyphIds) 对同一 glyphIds 返回同一 ID，无法满足此需求。
+   * allocateFresh 分配全新 ID，确保不同通道的窗口拥有独立的物理身份。
+   *
+   * @param glyphIds 字形身份列表（非空）
+   * @returns `win-<number>` 格式的全新 ID
+   */
+  allocateFresh(glyphIds: string[]): string {
+    let instanceId: string
+    if (this.releasedIds.length > 0) {
+      instanceId = this.releasedIds.pop()!
+    } else {
+      instanceId = `win-${this.nextId++}`
+    }
+    const windowId = windowIdForGlyphIds(glyphIds)
+    // 注册反向映射（用于 resolve/release），但不覆盖 windowIdToInstanceId 的已有映射
+    this.instanceIdToWindowId.set(instanceId, windowId)
+    this.instanceIdToGlyphIds.set(instanceId, glyphIds)
+    return instanceId
+  }
+
+  /**
    * 给定 instanceId，返回对应的 glyphIds（调试/日志用）。
    *
    * @param windowInstanceId `win-<number>` 格式 ID
