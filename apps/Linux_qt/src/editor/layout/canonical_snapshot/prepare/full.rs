@@ -21,11 +21,16 @@ use std::sync::Arc;
 /// 每段 byte/qchar 长度含尾部 `'\n'`。段首绝对坐标由前缀和按需计算，
 /// 不逐段存储 `document_byte_start`，也不再用 SuffixTransform 记录平移量。
 fn build_offset_index_from_text(text: &str) -> ParagraphOffsetIndex {
-    let mut byte_lengths = Vec::new();
-    let mut qchar_lengths = Vec::new();
-    for para in text.split_inclusive('\n') {
-        byte_lengths.push(para.len());
-        qchar_lengths.push(para.chars().map(|c| c.len_utf16()).sum::<usize>());
+    // Issue #901 第二十四轮问题1: 用统一切分器生成段落序列，
+    // 为尾空段也生成长度 0 的 offset entry，与 canonical/store/line-count/height 段数一致。
+    let paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
+    let mut byte_lengths = Vec::with_capacity(paras.len());
+    let mut qchar_lengths = Vec::with_capacity(paras.len());
+    for (content, hard_break) in &paras {
+        byte_lengths.push(content.len() + if *hard_break { 1 } else { 0 });
+        qchar_lengths.push(
+            content.chars().map(|c| c.len_utf16()).sum::<usize>() + if *hard_break { 1 } else { 0 },
+        );
     }
     let mut idx = ParagraphOffsetIndex::new();
     idx.rebuild(byte_lengths, qchar_lengths);
@@ -823,7 +828,55 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         )
     };
 
+    // Issue #901 第五轮阻塞2: 用旧段范围找旧视觉行范围，用新段范围建立新段。
+    let old_splice_start = splice_ranges.old_splice_start;
+    let old_splice_end = splice_ranges.old_splice_end;
+    let new_layout_start = splice_ranges.new_layout_start;
+    let new_layout_end = splice_ranges.new_layout_end;
+
+    // Issue #901 第二十四轮问题4: 提前计算 vl_start_idx/vl_end_idx，
+    // 在 store 更新之前取走并 drop prev.paragraph_line_count_index，
+    // 使 paragraph_store.line_count_index 的 strong_count 降为 1，消除 COW 深复制。
+    // 此前 store 更新（rebuild_from_text/update_affected_paragraph_texts）在 take 之前执行，
+    // 此时 prev 仍持有旧 Arc 的 clone，strong_count=2，Arc::make_mut 必须深复制。
+    //
+    // Issue #901 第二十一轮问题3: vl_start_idx/vl_end_idx 改用 prev snapshot 的
+    // 段落行数前缀索引（Fenwick 树）查询，而非对 prev.visual_lines 做
+    // `find_line_range_by_logical_slot` 二分查找。
+    // 前缀和由段内行数维护，不依赖 raw `logical_slot`，且后缀段范围自动平移。
+    //
+    // Issue #901 第六轮阻塞2: 纯尾部插入（old_splice_start == prev.paragraphs.len()）
+    // 时 vl_start_idx/vl_end_idx 必须是 visual_lines.len()..visual_lines.len()，
+    // 在末尾追加不删除任何旧行。paragraph_line_start 越界返回 total_lines，正好满足。
+    let prev_vls_len = prev.visual_lines.len();
+    let vl_start_idx: usize = prev
+        .paragraph_line_count_index
+        .paragraph_line_start(old_splice_start);
+    let vl_end_idx: usize = prev
+        .paragraph_line_count_index
+        .paragraph_line_start(old_splice_end);
+    // 安全 clamp：前缀和不应超过 visual_lines 长度（防御性，保证不越界）。
+    let vl_start_idx = vl_start_idx.min(prev_vls_len);
+    let vl_end_idx = vl_end_idx.min(prev_vls_len);
+
+    // Issue #901 第二十四轮问题3: 在 take prev 数据之前保存 prev height_index 的 clone。
+    // 段落数变化时（Enter 拆段/Backspace 合段）不从 raw visual_lines.para_start 提取高度，
+    // 改为从权威段序构造：前缀未改段 + 新排版段 + 后缀未改段，均从 prev height_index 取未改段高度。
+    // 增量路径保留了复用后缀的旧 para_start/logical_slot，raw 段号可能重复/错乱。
+    let prev_height_index = prev.height_index.clone();
+
+    // Issue #901 第二十四轮问题4: 取走 prev 的 line_count_index Arc 并显式释放，
+    // 使 paragraph_store.line_count_index 的 strong_count 降为 1。
+    // prev.paragraph_line_count_index 已在上方 vl_start_idx/vl_end_idx 计算和
+    // old_paras 构建中使用完毕，后续不再直接消费（新 snapshot 从
+    // paragraph_store.line_count_index_arc() 获取）。
+    // 必须在 store 更新之前 drop，否则 store 更新中的 Arc::make_mut 因 strong_count=2 深复制。
+    let prev_line_count_index = std::mem::take(&mut prev.paragraph_line_count_index);
+    drop(prev_line_count_index);
+
     // 增量更新 store 的文本信息
+    // Issue #901 第二十四轮问题4: 移到 take/drop prev.paragraph_line_count_index 之后，
+    // 此时 paragraph_store.line_count_index 的 strong_count=1，Arc::make_mut 原地改不 COW 深复制。
     {
         let store_needs_rebuild = paragraph_store.paragraph_count() != new_paras.len()
             || prev_para_count != new_paras.len();
@@ -842,8 +895,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             // Issue #901 第五轮阻塞2: 用新段范围更新 store，不用 affected byte range。
             paragraph_store.update_affected_paragraph_texts(
                 &new_para_texts,
-                splice_ranges.new_layout_start,
-                splice_ranges.new_layout_end,
+                new_layout_start,
+                new_layout_end,
                 font_size,
                 font_family,
                 line_spacing,
@@ -864,62 +917,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // prev 从 mem::take(&mut self.last_snapshot) 取走，self.cache 已 None，refcount==1，
     // Arc::make_mut 原地改不产生 Vec clone。
 
-    // Issue #901 第五轮阻塞2: 用旧段范围找旧视觉行范围，用新段范围建立新段。
-    let old_splice_start = splice_ranges.old_splice_start;
-    let old_splice_end = splice_ranges.old_splice_end;
-    let new_layout_start = splice_ranges.new_layout_start;
-    let new_layout_end = splice_ranges.new_layout_end;
-
-    // Issue #901 第十三轮问题1+2+6: 移除 SuffixTransform 机制。
-    // prev.visual_lines 全部是已物化的绝对坐标，用 find_line_range_by_para_start
-    // 一次匹配即可正确定位段落行范围，不需要"先试新值失败试旧值"。
-    //
-    // 修复问题1：find_vl_idx_with_suffix 的"先试新值，失败试旧值"逻辑会
-    // 把"第二段"误认成"第三段"——一个段落的新起点完全可能恰好等于后面另一段的
-    // 旧起点。移除 SuffixTransform 后，prev.visual_lines 全部是物化的正确值，
-    // 一次匹配即可，不会误认。
-    //
-    // Issue #901 第二十一轮问题3: vl_start_idx/vl_end_idx 改用 prev snapshot 的
-    // 段落行数前缀索引（Fenwick 树）查询，而非对 prev.visual_lines 做
-    // `find_line_range_by_logical_slot` 二分查找。
-    //
-    // 旧实现用 raw `logical_slot` 二分 prev.visual_lines，但 full.rs 在 splice 后
-    // 明确不更新复用后缀的 raw `logical_slot`，一旦前面拆段/合段，下一笔编辑后面
-    // 段时 raw `logical_slot` 仍是旧序号，二分找错甚至失败默认到 visual_lines.len()。
-    //
-    // 改用 prev 的 `paragraph_line_count_index.paragraph_line_start(slot)`：
-    // - `vl_start_idx = prev.paragraph_line_count_index.paragraph_line_start(old_splice_start)`
-    // - `vl_end_idx = prev.paragraph_line_count_index.paragraph_line_start(old_splice_end)`
-    // 前缀和由段内行数维护，不依赖 raw `logical_slot`，且后缀段范围自动平移。
-    //
-    // Issue #901 第六轮阻塞2: 纯尾部插入（old_splice_start == prev.paragraphs.len()）
-    // 时 vl_start_idx/vl_end_idx 必须是 visual_lines.len()..visual_lines.len()，
-    // 在末尾追加不删除任何旧行。paragraph_line_start 越界返回 total_lines，正好满足。
-    let prev_vls_len = prev.visual_lines.len();
-    let vl_start_idx: usize = prev
-        .paragraph_line_count_index
-        .paragraph_line_start(old_splice_start);
-    let vl_end_idx: usize = prev
-        .paragraph_line_count_index
-        .paragraph_line_start(old_splice_end);
-    // 安全 clamp：前缀和不应超过 visual_lines 长度（防御性，保证不越界）。
-    let vl_start_idx = vl_start_idx.min(prev_vls_len);
-    let vl_end_idx = vl_end_idx.min(prev_vls_len);
-
     // Issue #901 第十三轮问题1+2+6: SuffixTransform 物化逻辑已移除。
     // prev.visual_lines 全部是已物化的绝对坐标，直接 take 使用。
 
     let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
     let mut visual_lines: Vec<VisualLine> =
         std::mem::take(Arc::make_mut(&mut prev.visual_lines));
-
-    // Issue #901 第二十三轮问题3: 取走 prev_snapshot 的 line_count_index Arc，
-    // 减少 paragraph_store.line_count_index 的 refcount 到 1，
-    // 使 sync_from_visual_lines_incremental 中 Arc::make_mut 可以原地修改（不 COW 深复制）。
-    // prev.paragraph_line_count_index 已在上方 vl_start_idx/vl_end_idx 计算和
-    // old_paras 构建中使用完毕，后续不再直接消费（新 snapshot 从
-    // paragraph_store.line_count_index_arc() 获取）。
-    let _prev_line_count_index = std::mem::take(&mut prev.paragraph_line_count_index);
 
     // Issue #901 第十三轮问题1+2+6: vl_start_idx 和 vl_end_idx 用
     // find_line_range_by_para_start 一次匹配计算（prev.visual_lines 全部物化）。
@@ -1204,128 +1207,15 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     }
 
-    // Issue #901 第十四轮问题1: 段内相对存储 — line_id/y 不再需要绝对值。
-    // 尾部换行处理使用相对坐标（id=0, y=0.0）。
-    paragraph_idx = paragraphs.len() as i32;
-
-    // 空文本处理
-    if text.is_empty() {
-        let empty_ascent = get_font_ascent(font_family, font_size as f32);
-        let empty_descent = get_font_descent(font_family, font_size as f32);
-        let _empty_canonical = prepare_paragraph_visual_snapshot(
-            "",
-            0,
-            font_size,
-            font_family,
-            available,
-            indent,
-            dpr,
-            text_color,
-            0,
-            line_spacing,
-            generation,
-            false,
-        );
-        visual_lines.push(VisualLine {
-            id: line_id,
-            byte_start: 0,
-            byte_end: 0,
-            qchar_start: 0,
-            qchar_end: 0,
-            hard_break: false,
-            x: padding + indent,
-            y: 0.0,
-            width: 0.0,
-            height: line_height,
-            para_text: String::new(),
-            para_start: 0,
-            qtextline_idx: 0,
-            para_qchar_start: 0,
-            para_qchar_end: 0,
-            line_wrap_width: available - indent,
-            line_indent_x: indent,
-            para_indent: indent,
-            x_end_trailing: 0.0,
-            qt_ascent: empty_ascent,
-            qt_descent: empty_descent,
-            cache_slot: 0,
-            logical_slot: 0,
-            paragraph_id: ParagraphId::INVALID,
-        });
-        paragraphs.push(CanonicalParagraphSnapshot {
-            paragraph_text: String::new(),
-            paragraph_document_byte_start: 0,
-            lines: Vec::new(),
-            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
-        });
-    }
-
-    // 尾部换行处理
-    // Issue #901 第五轮阻塞2: 增量路径已搬运 prev 的尾部空行（如果 prev 也有尾部 \n），
-    // 修改前面段落时可能重复插入末尾空视觉行。只对**确实需要新增**的末尾空视觉行
-    // 创建节点，不允许沿用的 prev 哨兵再复制。
-    // Issue #901 第十四轮问题1: 段内相对存储 — 检查最后一个视觉行是否是末尾空行
-    //（para_text 为空且 logical_slot == paragraph_idx - 1）。
-    if text.ends_with('\n') {
-        let already_has_trailing_empty = visual_lines.last().map_or(false, |vl| {
-            vl.para_text.is_empty() && vl.logical_slot == paragraph_idx - 1
-        });
-        if !already_has_trailing_empty {
-            // Issue #901 第二十三轮问题1: 从 paragraph_store 获取尾空段的正确 ParagraphId，
-            // 不再用 INVALID。rebuild_from_text 已用统一切分器为尾空段创建 entry。
-            let trailing_paragraph_id = paragraph_store
-                .paragraph_id_at(paragraph_idx as usize)
-                .unwrap_or(ParagraphId::INVALID);
-            let _empty_canonical = prepare_paragraph_visual_snapshot(
-                "",
-                paragraph_idx as usize,
-                font_size,
-                font_family,
-                available,
-                indent,
-                dpr,
-                text_color,
-                paragraph_idx,
-                line_spacing,
-                generation,
-                false,
-            );
-            visual_lines.push(VisualLine {
-                id: line_id,
-                byte_start: 0,
-                byte_end: 0,
-                qchar_start: 0,
-                qchar_end: 0,
-                hard_break: false,
-                x: padding + indent,
-                y: 0.0,
-                width: 0.0,
-                height: line_height,
-                para_text: String::new(),
-                para_start: paragraph_idx as usize,
-                qtextline_idx: 0,
-                para_qchar_start: 0,
-                para_qchar_end: 0,
-                line_wrap_width: available - indent,
-                line_indent_x: indent,
-                para_indent: indent,
-                x_end_trailing: 0.0,
-                qt_ascent: 0.0,
-                qt_descent: 0.0,
-                cache_slot: paragraph_idx,
-                logical_slot: paragraph_idx,
-                paragraph_id: trailing_paragraph_id,
-            });
-            // Issue #901 第二十三轮问题1: 为尾空段创建对应的 CanonicalParagraphSnapshot，
-            // 保证 store entries、canonical paragraphs、VisualLine、ParagraphId 逐段一一对应。
-            paragraphs.push(CanonicalParagraphSnapshot {
-                paragraph_text: String::new(),
-                paragraph_document_byte_start: paragraph_idx as usize,
-                lines: Vec::new(),
-                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
-            });
-        }
-    }
+    // Issue #901 第二十四轮问题2: 删除循环外的空文本处理分支和尾部换行处理分支。
+    // 主重排循环 `for para_idx in new_layout_start..new_layout_end` 已用 new_paras
+    //（来自 split_paragraphs_with_hard_break，含尾空段和空文本段）统一处理所有段。
+    // 循环外的两个独立追加分支会重复创建尾空段/空文本段：
+    // - 旧文 甲\n乙\n，开头新插回车变成 \n甲\n乙\n。后缀复用旧尾空段（logical_slot=2），
+    //   新 canonical 有 4 段，检查 2 == 4-1 得 false，错误追加第 5 段。
+    // - 清空文档：new_paras=[("",false)]，主循环已创建 1 个空段，
+    //   if text.is_empty() 又 push 第二个。
+    // paragraph_idx 在主循环中已正确递增，此处不再需要重新赋值和追加逻辑。
 
     // Issue #901 第十四轮问题1: 增量更新 paragraph_offset_index，不扫全文。
     // Issue #901 第二十一轮问题5: 用 Arc 共享 + Arc::make_mut COW。
@@ -1387,19 +1277,52 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致
     // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
-    // 段落数变化时用 rebuild 从 visual_lines 提取全部高度（O(n) 但不涉及 QTextLayout），
+    // 段落数变化时用 rebuild 从权威段序构造高度（O(n) 但不涉及 QTextLayout），
     // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
     // prev_para_count 已在 take 之前定义（line 683），此处直接复用。
     //
-    // Issue #901 第二十一轮问题5: extract_paragraph_heights 在段落数变化时调用
-    //（Enter 拆段/Backspace 合段，不频繁），O(行数) 但不涉及 QTextLayout。
-    // 可优化为 update_for_structural_change（insert/remove 段 + 受影响段高度更新），
-    // 但需精确计算拆段/合段的 insert/remove 位置和受影响段新高度，正确性风险高，
-    // 当前保留全量 rebuild 并标注优化方向。
+    // Issue #901 第二十一轮问题5: 段落数变化时（Enter 拆段/Backspace 合段，不频繁），
+    // O(段落数) 构造但不涉及 QTextLayout。
     let curr_para_count = paragraphs.len();
     if curr_para_count != prev_para_count {
-        // 段落数变化（Enter 拆段/Backspace 合段），重建高度索引
-        let heights = extract_paragraph_heights(&visual_lines);
+        // Issue #901 第二十四轮问题3: 不从 raw visual_lines.para_start 提取高度，
+        // 改为从权威段序构造：前缀未改段从 prev height_index + 新排版段从 new_visual_lines
+        // + 后缀未改段从 prev height_index。
+        // 增量路径保留了复用后缀的旧 para_start/logical_slot，raw 段号可能重复/错乱
+        //（如 甲\n乙 → \n甲\n乙 后 raw logical_slot = [0,0,1]），
+        // extract_paragraph_heights 用 raw para_start 去重会把不同段的高度误合并。
+        let mut heights = vec![0.0f64; curr_para_count];
+
+        // 前缀未改段 [0, new_layout_start)：从 prev height_index 获取
+        for i in 0..new_layout_start {
+            heights[i] = prev_height_index.height_at(i);
+        }
+
+        // 新排版段 [new_layout_start, new_layout_end)：从 splice 后的新行按段聚合。
+        // splice 后新行在 [vl_start_idx, vl_start_idx + new_affected_line_count) 范围内，
+        // 这些行的 para_start 是主循环中设置的正确新段索引（paragraph_idx）。
+        {
+            use std::collections::HashMap;
+            let mut para_heights: HashMap<usize, f64> = HashMap::new();
+            let new_lines_range = vl_start_idx..(vl_start_idx + new_affected_line_count);
+            for vl in &visual_lines[new_lines_range] {
+                *para_heights.entry(vl.para_start).or_insert(0.0) += vl.height;
+            }
+            for i in new_layout_start..new_layout_end {
+                heights[i] = para_heights.get(&i).copied().unwrap_or(0.0);
+            }
+        }
+
+        // 后缀未改段 [new_layout_end, curr_para_count)：从 prev height_index 获取。
+        // 旧段对应 [old_splice_end, prev_para_count)。
+        let suffix_new_start = new_layout_end;
+        let suffix_old_start = old_splice_end;
+        for (new_i, old_i) in
+            (suffix_new_start..curr_para_count).zip(suffix_old_start..prev_para_count)
+        {
+            heights[new_i] = prev_height_index.height_at(old_i);
+        }
+
         height_index.rebuild(heights);
     } else {
         // 段落数不变，只更新受影响段落的高度（O(k log n)）
