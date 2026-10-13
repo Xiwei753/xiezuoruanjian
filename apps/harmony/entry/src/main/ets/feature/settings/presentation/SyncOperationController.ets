@@ -9,6 +9,8 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { FullSyncResult, FullSyncDiagnosticsResult, FullSyncDryRunResult } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
+import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
+import { NetworkStatusService, NetworkSnapshot } from '../../../platform/network/NetworkStatusService'
 
 // 同步完成事件 ID
 export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
@@ -70,6 +72,8 @@ export class SyncOperationController {
 
   private async executeSync(): Promise<SyncOutcome> {
     hilog.info(DOMAIN, TAG, 'performSync: starting')
+    // 同步前刷新网络状态，让 Core 使用当前而非启动时的网络快照。
+    await this.refreshNetworkState()
     try {
       const result = await this.syncBridge.performSync()
       if (!result.success) {
@@ -77,7 +81,7 @@ export class SyncOperationController {
           result.errorCode ?? '', result.rawError ?? '')
         return {
           phase: 'failed',
-          message: this.errorMessage(result),
+          message: result.rawError ?? result.userMessage ?? result.errorCode ?? '同步失败',
           messageKey: result.messageKey,
           messageArgs: this.mapToRecord(result.messageArgs),
           errorCode: result.errorCode,
@@ -95,13 +99,19 @@ export class SyncOperationController {
       const status = syncResult.overallStatus
       if (status === 'success' || status === 'no_changes' || status === 'latest_wins_applied') {
         hilog.info(DOMAIN, TAG, 'performSync: success, status=%{public}s', status)
-        // 同步成功（包括有变更和无变更）时发送内容更新通知
-        this.notifyContentChanged()
+        // 只有本地可见内容（下载/覆盖/删除）实际发生变化时才通知页面刷新，
+        // no_changes 不再空刷新导致卡片闪动。判断依据是 FullSyncResult 的真实变更计数。
+        const contentChanged: boolean =
+          syncResult.totalDownloaded > 0 ||
+          syncResult.totalOverwritten > 0 ||
+          syncResult.totalLocalDeletes > 0 ||
+          syncResult.totalRemoteDeletes > 0
+        if (contentChanged) {
+          this.notifyContentChanged()
+        }
         return {
           phase: 'success',
-          message: status === 'no_changes' ? '同步完成，无变更' :
-            status === 'latest_wins_applied' ? '同步完成，最新版本已应用' :
-            `同步完成，下载 ${syncResult.totalDownloaded} 项`,
+          message: `sync success: ${status}`,
           totalDownloaded: syncResult.totalDownloaded,
           totalUploaded: syncResult.totalUploaded,
           overallStatus: status
@@ -113,63 +123,65 @@ export class SyncOperationController {
         return {
           phase: 'failed',
           message: '同步冲突，需要手动解决',
+          messageKey: 'sync.result.conflict_summary',
           errorCode: 'SYNC_CONFLICT',
           overallStatus: status
         }
       }
       if (status === 'recoverable_error' || status === 'fatal_error' || status === 'error') {
-        // 优先使用 Core 返回的类型化字段，不再手写映射
-        // 缺失/不识别的 category 明确回退 messageKey 和 error
+        // 直接透传 Core 的类型化字段，由 MessageKeyMapper 统一映射，不再手写中文字典。
         const messageKey = syncResult.messageKey ?? ''
         const errorCategory = syncResult.errorCategory ?? ''
         const errorMsg = syncResult.error ?? ''
 
-        // 技术细节写日志，用户给对应中文原因
         if (messageKey.length === 0 && errorCategory.length === 0) {
           hilog.warn(DOMAIN, TAG,
             'performSync: missing typed error fields, status=%{public}s, fallback to raw error',
             status)
         }
 
-        let userMessage: string
-        if (messageKey.length > 0) {
-          // 有 messageKey 时，由 i18n 系统处理，这里只透传 key
-          // 暂时用 fallback 映射作为临时中文显示（后续应接入 i18n）
-          userMessage = this.errorKeyToChinese(messageKey) || errorMsg || '同步失败'
-        } else if (errorCategory.length > 0) {
-          userMessage = this.errorCategoryToChinese(errorCategory) || errorMsg || '同步失败'
-        } else {
-          userMessage = errorMsg || '同步失败'
-        }
-
         return {
           phase: 'failed',
-          message: userMessage,
+          message: errorMsg.length > 0 ? errorMsg : (messageKey.length > 0 ? messageKey : errorCategory),
           messageKey: messageKey.length > 0 ? messageKey : undefined,
           errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
-          errorCode: errorCategory || 'SYNC_ERROR',
+          errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
           rawError: errorMsg.length > 0 ? errorMsg : undefined,
           overallStatus: status
         }
       }
       if (status === 'syncing') {
-        return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
+        return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
       }
       if (status === 'idle' || status === 'configured_not_tested') {
-        return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
+        return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
       }
 
       // 未知值是协议错误
       hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
-      return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH' }
+      return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH', overallStatus: status }
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s', String(e))
-      return { phase: 'failed', message: `同步异常: ${e}`, rawError: String(e) }
+      return { phase: 'failed', message: `同步异常: ${e}`, errorCode: 'NATIVE_ERROR', rawError: String(e) }
+    }
+  }
+
+  /** 同步操作前刷新 Core 的网络状态（三态；未知时不伪造在线）。 */
+  private async refreshNetworkState(): Promise<void> {
+    try {
+      const snapshot: NetworkSnapshot = await NetworkStatusService.getInstance().query()
+      NativeWriterCoreBridge.getInstance().updateNetworkState(
+        snapshot.known, snapshot.isConnected, snapshot.isMetered
+      )
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'refreshNetworkState failed: %{public}s', String(e))
     }
   }
 
   /** 执行同步诊断 */
   async runDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
+    // 诊断结果应反映当前网络状态，而不是启动时的旧快照。
+    await this.refreshNetworkState()
     return await this.syncBridge.syncDiagnostics()
   }
 
@@ -209,112 +221,5 @@ export class SyncOperationController {
       record[key] = value
     })
     return record
-  }
-
-  /** 从 ResultEnvelope 提取用户可读的错误消息 */
-  private errorMessage(result: ResultEnvelope<Object>): string {
-    // 直接透传 Core 类型化值，不再手写映射
-    // messageKey 是 i18n key，由上层 UI 做本地化
-    if (result.messageKey && result.messageKey.length > 0) {
-      // 暂时用 fallback 映射作为临时中文显示（后续应接入 i18n）
-      return this.errorKeyToChinese(result.messageKey) || result.messageKey
-    }
-    if (result.userMessage && result.userMessage.length > 0) {
-      return result.userMessage
-    }
-    if (result.errorCode) {
-      return this.errorCodeToChinese(result.errorCode) || result.errorCode
-    }
-    return '同步失败'
-  }
-
-  /** messageKey → 中文临时映射（后续应接入 i18n 系统） */
-  private errorKeyToChinese(key: string): string {
-    const messageMap: Record<string, string> = {
-      'error.sync_auth_failed': '认证失败，请检查 Token',
-      'error.sync_permission_denied': '权限不足，仓库不可访问',
-      'error.sync_repo_not_found': '仓库不存在',
-      'error.sync_network_error': '网络连接失败',
-      'error.sync_conflict': '同步冲突',
-      'error.sync_config_invalid': '同步配置无效',
-      'error.sync_disk_error': '磁盘读写错误',
-      'error.sync_transport_error': '传输层错误',
-      'error.sync_provider_error': '同步提供者错误',
-      'error.not_implemented': '同步功能未启用',
-      'error.sync_timeout': '同步超时',
-      'error.sync_dns_failed': 'DNS 解析失败',
-      'error.sync_retryable_network': '网络连接失败，可重试',
-      'error.sync_retryable_io': '磁盘读写错误，可重试',
-      'error.sync_failed': '同步失败',
-      'error.sync_fatal': '同步失败',
-      'error.sync_dirty_repository': '本地仓库有未提交的修改',
-      'error.sync_protocol_error': '同步协议错误',
-      'error.io': 'IO 错误',
-      'error.json': 'JSON 解析错误',
-      'error.project_not_found': '项目不存在',
-      'error.volume_not_found': '卷不存在',
-      'error.chapter_not_found': '章节不存在',
-      'error.empty_overwrite_blocked': '空内容覆盖被阻止',
-      'error.refuse_delete_root': '拒绝删除根目录',
-      'error.invalid_delete_target': '无效的删除目标',
-      'error.other': '未知错误'
-    }
-    return messageMap[key] ?? ''
-  }
-
-  /** errorCategory → 中文临时映射（后续应接入 i18n 系统） */
-  private errorCategoryToChinese(category: string): string {
-    const messageMap: Record<string, string> = {
-      'auth_failed': '认证失败，请检查 Token',
-      'permission_denied': '权限不足，仓库不可访问',
-      'repo_not_found': '仓库不存在',
-      'network_error': '网络连接失败',
-      'timeout': '同步超时',
-      'dns_failed': 'DNS 解析失败',
-      'config_invalid': '同步配置无效',
-      'disk_error': '磁盘读写错误',
-      'conflict': '同步冲突',
-      'not_implemented': '同步功能未启用',
-      'transport_error': '传输层错误',
-      'provider_error': '同步提供者错误'
-    }
-    return messageMap[category] ?? ''
-  }
-
-  /** errorCode → 中文临时映射（后续应接入 i18n 系统） */
-  private errorCodeToChinese(code: string): string {
-    const messageMap: Record<string, string> = {
-      'NOT_IMPLEMENTED': '同步功能未启用',
-      'SYNC_NETWORK_ERROR': '网络连接失败',
-      'SYNC_AUTH_FAILED': '认证失败，请检查 Token',
-      'SYNC_PERMISSION_DENIED': '权限不足，仓库不可访问',
-      'SYNC_REPO_NOT_FOUND': '仓库不存在',
-      'SYNC_CONFLICT': '同步冲突',
-      'SYNC_CONFIG_INVALID': '同步配置无效',
-      'SYNC_DISK_ERROR': '磁盘读写错误',
-      'SYNC_TRANSPORT_ERROR': '传输层错误',
-      'SYNC_PROVIDER_ERROR': '同步提供者错误',
-      'SYNC_STATE_ERROR': '同步状态异常',
-      'SCHEMA_MISMATCH': '同步结果数据格式错误',
-      'NATIVE_ERROR': '原生调用异常',
-      'RETRYABLE_NETWORK': '网络连接失败，可重试',
-      'RETRYABLE_IO': '磁盘读写错误，可重试',
-      'AUTHENTICATION': '认证失败，请检查 Token',
-      'CONFLICT': '同步冲突',
-      'DIRTY_REPOSITORY': '本地仓库有未提交的修改',
-      'PROTOCOL': '同步协议错误',
-      'FATAL': '同步失败',
-      'SYNC_FAILED': '同步失败',
-      'IO_ERROR': 'IO 错误',
-      'JSON_ERROR': 'JSON 解析错误',
-      'PROJECT_NOT_FOUND': '项目不存在',
-      'VOLUME_NOT_FOUND': '卷不存在',
-      'CHAPTER_NOT_FOUND': '章节不存在',
-      'EMPTY_OVERWRITE_BLOCKED': '空内容覆盖被阻止',
-      'REFUSE_DELETE_ROOT': '拒绝删除根目录',
-      'INVALID_DELETE_TARGET': '无效的删除目标',
-      'OTHER': '未知错误'
-    }
-    return messageMap[code] ?? ''
   }
 }

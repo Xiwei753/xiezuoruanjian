@@ -851,6 +851,10 @@
     {
       "name": "sync_result_network_failed",
       "value": "网络连接失败，请检查网络设置"
+    },
+    {
+      "name": "error_sync_task_failed",
+      "value": "同步任务启动失败，请重试"
     }
   ]
 }

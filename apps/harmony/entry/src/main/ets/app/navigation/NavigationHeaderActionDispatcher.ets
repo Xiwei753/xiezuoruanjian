@@ -9,8 +9,10 @@ import promptAction from '@ohos.promptAction'
 import { ActionRole } from '../../corebridge/dto/PlatformDtos'
 import { Routes } from './Routes'
 import { NavigationTransactionCoordinator } from './NavigationTransactionCoordinator'
-import { SyncOperationController } from '../../feature/settings/presentation/SyncOperationController'
+import { SyncOperationController, SyncOutcome } from '../../feature/settings/presentation/SyncOperationController'
+import { SyncOutcomePresenter } from '../../feature/settings/presentation/SyncOutcomePresenter'
 import { SettingsOverlayController } from '../../feature/settings/presentation/SettingsOverlayController'
+import { getAppContext } from '../AppContext'
 
 const TAG = 'NavigationHeaderActionDispatcher'
 const DOMAIN = 0x0000
@@ -46,14 +48,19 @@ export class NavigationHeaderActionDispatcher {
       return
     }
     promptAction.showToast({ message: '同步开始…' })
-    controller.performSync().then((outcome) => {
+    controller.performSync().then((outcome: SyncOutcome) => {
+      // 顶栏与设置页共用同一展示映射（MessageKeyMapper），不各自维护中文错误字典。
+      const context = getAppContext().getAbilityContext()
+      const message: string = context !== null
+        ? SyncOutcomePresenter.present(context, outcome)
+        : outcome.message
       if (outcome.phase === 'success') {
         hilog.info(DOMAIN, TAG, 'sync success: %{public}s', outcome.message)
-        promptAction.showToast({ message: outcome.message })
+        promptAction.showToast({ message: message })
       } else {
         hilog.error(DOMAIN, TAG, 'sync failed: errorCode=%{public}s message=%{public}s rawError=%{public}s',
           outcome.errorCode ?? '', outcome.message, outcome.rawError ?? '')
-        promptAction.showToast({ message: outcome.message })
+        promptAction.showToast({ message: message })
       }
     }).catch((e: Error) => {
       hilog.error(DOMAIN, TAG, 'sync exception: %{public}s', String(e))

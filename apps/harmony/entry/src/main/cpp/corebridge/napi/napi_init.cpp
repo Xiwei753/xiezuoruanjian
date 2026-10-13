@@ -169,8 +169,8 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     const char* p_app_version = nullptr;
     const char* p_locale = nullptr;
     const char* p_timezone = nullptr;
-    int32_t is_connected = 1;  // 默认在线
-    int32_t is_metered = 0;    // 默认非计费
+    int32_t is_connected = -1;  // 未知（未提供时不得伪造成在线）
+    int32_t is_metered = -1;    // 未知
 
     if (argc >= 2) {
         napi_get_value_string_utf8(env, args[1], files_dir, sizeof(files_dir), &len);
@@ -213,6 +213,33 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (app_data_root='%{public}s')", result, app_data_root);
     }
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
+// NativeUpdateNetworkState: Update the Core's cached network state from the platform's
+//   current query result. Three-state ints: 1 = yes, 0 = no, -1 = unknown (clears the
+//   cached state, never fabricates online). Returns the Core status code (0 on success).
+static napi_value NativeUpdateNetworkState(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t is_connected = -1;
+    int32_t is_metered = -1;
+    if (argc >= 1) {
+        napi_get_value_int32(env, args[0], &is_connected);
+    }
+    if (argc >= 2) {
+        napi_get_value_int32(env, args[1], &is_metered);
+    }
+
+    int32_t result = writer_core_update_network_state(is_connected, is_metered);
+    OH_LOG_INFO(LOG_APP,
+                "NativeUpdateNetworkState: is_connected=%{public}d is_metered=%{public}d returned %{public}d",
+                is_connected, is_metered, result);
 
     napi_value ret;
     napi_create_int32(env, result, &ret);
@@ -573,6 +600,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     // Core lifecycle + layout + misc descriptors
     napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeUpdateNetworkState", nullptr, NativeUpdateNetworkState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeInitDiagnostics", nullptr, NativeInitDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSetDiagnosticsConfig", nullptr, NativeSetDiagnosticsConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeFlushDiagnostics", nullptr, NativeFlushDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},

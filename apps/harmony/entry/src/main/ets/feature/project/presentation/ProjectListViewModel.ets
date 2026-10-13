@@ -75,7 +75,14 @@ export class ProjectListViewModel {
       if (ctx.isNativeEnvironment()) {
         const nativeBridge = NativeWriterCoreBridge.getInstance()
         const appDataRoot = getAppDataRoot()
-        const initOk = await nativeBridge.initialize(appDataRoot)
+        const initParams = await ctx.buildNativeInitParams()
+        if (initParams === null) {
+          ctx.markNativeInitFailed()
+          this.errorMessage = `Native core init failed: UIAbilityContext unavailable\nPath: ${appDataRoot}`
+          this.isLoading = false
+          return
+        }
+        const initOk = await nativeBridge.initialize(initParams)
         if (!initOk) {
           ctx.markNativeInitFailed()
           const errCode = nativeBridge.getLastInitErrorCode()
@@ -85,6 +92,7 @@ export class ProjectListViewModel {
           else if (errCode === -2) { errDesc = 'Invalid path encoding' }
           else if (errCode === -3) { errDesc = 'Internal state error' }
           else if (errCode === -4) { errDesc = 'Workspace dir creation failed' }
+          else if (errCode === -5) { errDesc = 'App data root path is empty' }
           else if (errCode === -999) { errDesc = 'NAPI exception (SO load failed?)' }
         this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${appDataRoot}\nDetail: ${rustError}`
         return

@@ -111,7 +111,15 @@ export class MessageKeyMapper {
 
   private static fallbackMessage(context: Context, errorCode: string | undefined): string {
     if (errorCode && errorCode.trim().length > 0) {
-      return context.resourceManager.getStringSync($r('app.string.error_internal').id)
+      // 原生同步任务启动/排队失败，或 Core 未返回结果：给系统任务失败提示。
+      switch (errorCode) {
+        case 'ASYNC_CREATE_FAILED':
+        case 'ASYNC_QUEUE_FAILED':
+        case 'NULL_RESULT':
+          return context.resourceManager.getStringSync($r('app.string.error_sync_task_failed').id)
+        default:
+          return context.resourceManager.getStringSync($r('app.string.error_internal').id)
+      }
     }
     return context.resourceManager.getStringSync($r('app.string.error_other').id)
   }

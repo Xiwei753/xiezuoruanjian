@@ -116,6 +116,13 @@ impl WriterAppService {
         }
     }
 
+    /// 清除网络状态 — 平台查询失败/未知时调用，不保留伪造的在线状态。
+    pub fn clear_network_state(&self) {
+        if let Ok(mut guard) = self.network_state.lock() {
+            *guard = None;
+        }
+    }
+
     pub fn set_platform_init(&mut self, init: writer_platform_api::PlatformInit) {
         self.platform_init = Some(init);
     }

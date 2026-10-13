@@ -19,21 +19,30 @@ struct SyncAsyncData {
 };
 
 // SyncCompleteCb: 通用 complete callback — 把 result_json 包装为 NAPI string，
-//   通过 napi_resolve_deferred 返回；如果 result_json 为 null，reject 一个错误 JSON。
-//   无论成功或失败，都会释放 result_json（writer_core_free_string）、删除 async work、
-//   释放 SyncAsyncData。
+//   通过 napi_resolve_deferred 返回；如果 result_json 为 null，resolve 一个标准
+//   ResultEnvelope（success:false,errorCode:NULL_RESULT,userMessage），让 ArkTS 的
+//   decodeEnvelope 正常解析错误码，而不是 reject 成 JSON 字符串后在 catch 里丢成 NATIVE_ERROR。
+//   只有真正的工作线程/JS runtime 异常（status != napi_ok）才走 reject。
+//   无论成功或失败，都会删除 async work、释放 SyncAsyncData。
 static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
     SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
 
-    if (asyncData->result_json != nullptr) {
+    if (status != napi_ok) {
+        // 工作线程执行本身失败：这是真正的 runtime 异常，reject。
+        napi_value error;
+        napi_create_string_utf8(env, "async sync work failed", NAPI_AUTO_LENGTH, &error);
+        napi_reject_deferred(env, asyncData->deferred, error);
+    } else if (asyncData->result_json != nullptr) {
         napi_value result;
         napi_create_string_utf8(env, asyncData->result_json, strlen(asyncData->result_json), &result);
         writer_core_free_string(asyncData->result_json);
         napi_resolve_deferred(env, asyncData->deferred, result);
     } else {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, asyncData->deferred, error);
+        // Rust 返回 nullptr：作为标准 ResultEnvelope resolve（业务失败），
+        // 保留 NULL_RESULT 错误码供 UI/log 追溯，不再 reject 后丢失。
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\",\"userMessage\":\"Sync operation returned no result\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, asyncData->deferred, result);
     }
 
     napi_delete_async_work(env, asyncData->work);

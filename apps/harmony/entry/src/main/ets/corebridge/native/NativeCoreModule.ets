@@ -74,9 +74,13 @@ export class NativeCoreModule {
         rawError: obj.rawError,
         warnings: obj.warnings,
         changedPaths: obj.changedPaths,
-        changedEntities: obj.changedEntities?.map((e: Object) => {
+        changedEntities: obj.changedEntities?.map((e: Object): ChangedEntity => {
           const entity = e as Record<string, Object>
-          return { entityType: entity['entityType'] as string, entityId: entity['entityId'] as string | undefined }
+          const changed: ChangedEntity = {
+            entityType: entity['entityType'] as string,
+            entityId: entity['entityId'] as string | undefined
+          }
+          return changed
         })
       }
       return result

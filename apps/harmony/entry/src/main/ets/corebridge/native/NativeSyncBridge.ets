@@ -63,7 +63,7 @@ export class NativeSyncBridge {
 
   async syncDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
     try {
-      const jsonStr: string = await this.core.getNativeModule().nativeSyncDryRun()
+      const jsonStr: string = await (this.core.getNativeModule().nativeSyncDryRun() as Promise<string>)
       // nativeSyncDryRun() 现在 resolve 标准错误信封，decodeEnvelope 会正确解析。
       // catch 只处理真正的 JS 异常。
       return this.core.decodeEnvelope<FullSyncDryRunResult>(jsonStr, decodeFullSyncDryRunResult)
@@ -72,7 +72,7 @@ export class NativeSyncBridge {
 
   async performSync(): Promise<ResultEnvelope<FullSyncResult>> {
     try {
-      const jsonStr: string = await this.core.getNativeModule().nativePerformSync()
+      const jsonStr: string = await (this.core.getNativeModule().nativePerformSync() as Promise<string>)
       // nativePerformSync() 现在 resolve 标准错误信封（包括 success:false），
       // decodeEnvelope 会正确解析并透传 errorCode/userMessage（如 ASYNC_QUEUE_FAILED）。
       // catch 只处理真正的 JS 异常（如 native 模块不存在）。
@@ -82,7 +82,7 @@ export class NativeSyncBridge {
 
   async syncDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
     try {
-      const jsonStr: string = await this.core.getNativeModule().nativeSyncDiagnostics()
+      const jsonStr: string = await (this.core.getNativeModule().nativeSyncDiagnostics() as Promise<string>)
       return this.core.decodeEnvelope<FullSyncDiagnosticsResult>(jsonStr, decodeFullSyncDiagnosticsResult)
     } catch (err) {
       return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`, rawError: String(err) }

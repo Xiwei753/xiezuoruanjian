@@ -264,6 +264,46 @@ pub unsafe fn writer_core_init_with_services(
     0
 }
 
+/// 用平台查询到的当前网络状态更新全局 `WriterAppService`。
+///
+/// `is_connected` / `is_metered` 为三态：`1` = 是，`0` = 否，`-1` = 未知。
+/// 连通性未知时清除 `network_state`，不保留伪造的在线状态。
+///
+/// 由平台端在系统网络事件或同步操作前调用，避免 Core 永远沿用启动时的旧快照。
+///
+/// # Safety
+/// 本函数不访问调用方内存，只更新全局 `WriterAppService` 的内部状态；可从任意线程调用。
+///
+/// ## 返回码
+///
+/// - `0` 成功
+/// - `-3` 服务未初始化或锁中毒
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_update_network_state(
+    is_connected: i32,
+    is_metered: i32,
+) -> i32 {
+    let connected = match is_connected {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    };
+    match with_app_service(|svc| {
+        match connected {
+            Some(is_connected) => {
+                svc.update_network_state(is_connected, is_metered == 1, None, None);
+            }
+            None => {
+                svc.clear_network_state();
+            }
+        }
+        Ok(())
+    }) {
+        Ok(()) => 0,
+        Err(_) => -3,
+    }
+}
+
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 /// Thread-safe: only touches the dedicated `LAST_ERROR` mutex.

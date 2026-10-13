@@ -324,25 +324,30 @@ export struct HomeScreen {
 
   // ─── 同步完成事件监听 ───
 
-  /** 同步完成事件订阅 ID */
-  private syncEventSubscriberId: number = -1
+  // emitter.on(event, callback) 返回 void，没有订阅 ID 可保存。
+  // 保存回调函数本身，才能用 emitter.off(eventId, callback) 精确解绑本页面，
+  // 不会像 emitter.off(eventId) 那样一次取消所有页面（首页 / 工作区）的订阅。
+  private syncChangedHandler: ((data: emitter.EventData) => void) | null = null
 
   /**
    * 注册同步完成事件监听
    * 收到通知后刷新项目列表
    */
   private subscribeSyncEvent(): void {
+    if (this.syncChangedHandler !== null) {
+      return
+    }
+    const handler = (_data: emitter.EventData): void => {
+      hilog.info(0x0000, 'HomeScreen', 'received sync content changed event, refreshing data')
+      // 同步完成后刷新项目列表
+      this.viewModel.loadData()
+    }
+    this.syncChangedHandler = handler
     try {
-      const event: emitter.InnerEvent = {
-        eventId: SYNC_CONTENT_CHANGED_EVENT_ID
-      }
-      this.syncEventSubscriberId = emitter.on(event, (eventData: emitter.EventData) => {
-        hilog.info(0x0000, 'HomeScreen', 'received sync content changed event, refreshing data')
-        // 同步完成后刷新项目列表
-        this.viewModel.loadData()
-      })
+      emitter.on({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID }, handler)
       hilog.info(0x0000, 'HomeScreen', 'subscribed to sync content changed event')
     } catch (e) {
+      this.syncChangedHandler = null
       hilog.error(0x0000, 'HomeScreen', 'failed to subscribe sync event: %{public}s', String(e))
     }
   }
@@ -351,14 +356,15 @@ export struct HomeScreen {
    * 取消同步完成事件监听
    */
   private unsubscribeSyncEvent(): void {
-    if (this.syncEventSubscriberId >= 0) {
+    const handler = this.syncChangedHandler
+    if (handler !== null) {
       try {
-        emitter.off(this.syncEventSubscriberId)
+        emitter.off(SYNC_CONTENT_CHANGED_EVENT_ID, handler)
         hilog.info(0x0000, 'HomeScreen', 'unsubscribed from sync content changed event')
       } catch (e) {
         hilog.error(0x0000, 'HomeScreen', 'failed to unsubscribe sync event: %{public}s', String(e))
       }
-      this.syncEventSubscriberId = -1
+      this.syncChangedHandler = null
     }
   }
 

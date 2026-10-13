@@ -1,6 +1,8 @@
 import { common } from '@kit.AbilityKit'
 import { IWriterCoreBridge } from '../corebridge/IWriterCoreBridge'
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
+import { NativeInitParams, collectNativeInitParams } from '../platform/init/NativeInitParams'
+import { NetworkStatusService, NetworkSnapshot } from '../platform/network/NetworkStatusService'
 
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
@@ -65,6 +67,19 @@ export class AppContext {
     // 启动各平台 service 真实监听，并刷新 CapabilityRegistry 真实探测。
     // 不靠默认 bool 假装能力存在；各 service 报告真实 support 状态。
     this.startPlatformServices()
+  }
+
+  /**
+   * 构造 Core 初始化参数：真实目录 + 设备信息 + 当前网络三态。
+   * 缺少 UIAbilityContext 时返回 null（真正的初始化前置失败，不伪造目录）。
+   */
+  async buildNativeInitParams(): Promise<NativeInitParams | null> {
+    const context = this.abilityContext
+    if (context === null) {
+      return null
+    }
+    const network: NetworkSnapshot = await NetworkStatusService.getInstance().query()
+    return collectNativeInitParams(context, this.config.appDataRoot, network)
   }
 
   // 启动平台系统能力 service 并刷新 CapabilityRegistry。
