@@ -1044,6 +1044,35 @@ export class EditorMotionCoordinator {
       plan.carryOverMotionRuns = this.identifyCarryOverMotionRuns(
         startFrame, newSnapshot.revision, newLayout, planGlyphIds, identities.newTable, existingKeys
       )
+      // Issue #879 评论6148478104：将 carry-over 的物理身份加入统一计划，
+      // 让 plannedWindowKeys、buildFrame 与 ArkUI Text 使用同一份身份计划。
+      const carryOverIdentityByKey = new Map<string, PhysicalWindowIdentity>()
+      for (const id of plan.physicalWindowIdentities) {
+        carryOverIdentityByKey.set(id.renderNodeKey, id)
+      }
+      for (const ghost of plan.carryOverGhostRuns) {
+        if (!carryOverIdentityByKey.has(ghost.renderNodeKey)) {
+          carryOverIdentityByKey.set(ghost.renderNodeKey, {
+            sourceKind: ghost.sourceKind,
+            sourceRevision: ghost.sourceRevision,
+            runId: ghost.sourceRunId,
+            windowInstanceId: ghost.windowInstanceId,
+            renderNodeKey: ghost.renderNodeKey
+          })
+        }
+      }
+      for (const motionRun of plan.carryOverMotionRuns) {
+        if (!carryOverIdentityByKey.has(motionRun.renderNodeKey)) {
+          carryOverIdentityByKey.set(motionRun.renderNodeKey, {
+            sourceKind: motionRun.sourceKind,
+            sourceRevision: motionRun.sourceRevision,
+            runId: motionRun.sourceRunId,
+            windowInstanceId: motionRun.windowInstanceId,
+            renderNodeKey: motionRun.renderNodeKey
+          })
+        }
+      }
+      plan.physicalWindowIdentities = Array.from(carryOverIdentityByKey.values())
     }
 
     const frame = durationMs > 0
