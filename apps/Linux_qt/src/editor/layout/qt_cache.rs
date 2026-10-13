@@ -77,6 +77,37 @@ cpp! {{
         return &g_layout_generations.back();
     }
 
+    // Issue #901 第三十二轮复核问题1: 公共 erase 函数 — 检查 generation 是否 retired 且
+    // 所有 layouts 都是 nullptr（无存活 Qt 对象），如果是则从 g_layout_generations 中 erase。
+    // 用于 clear_layout_generation / release_layout_ref / retire_temporary_generation
+    // 三处统一回收 retired 且无对象的 generation，避免 g_layout_generations 拋积
+    // 无对象的 retired generation（find_layout_generation 线性遍历，残留越多越慢）。
+    //
+    // 问题场景：先在仍 active 的一代里删除了最后一个正文段（Store 已正常退引用、
+    // QTextLayout 已全数 delete），LayoutGeneration 为了复用槽仍留在 g_layout_generations；
+    // 接着字号/窗口宽度变化调用 clear_layout_generation，此时没有任何 Qt 对象需要再次
+    // release，永远不会触发 erase。提取此公共函数并在 clear_layout_generation 标记退役时
+    // 立即调用，使无对象的 retired generation 被及时回收。
+    //
+    // 如果 generation 不存在、未 retired 或仍有存活 layout，不做任何操作。
+    static void erase_generation_if_retired_and_unreferenced(uint64_t gen) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return;
+        if (!lg->retired) return;
+        // 检查所有 layouts 是否都是 nullptr。有任一存活 layout 则不 erase。
+        for (auto* l : lg->layouts) {
+            if (l) return;
+        }
+        // 全 nullptr 且 retired，erase 该 generation。
+        // 注意：erase 会使 lg 指针失效，但此处已不再访问 lg，直接用 gen 查找 erase。
+        for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
+            if (it->generation == gen) {
+                g_layout_generations.erase(it);
+                return;
+            }
+        }
+    }
+
     uint64_t begin_layout_generation() {
         return g_next_generation++;
     }
@@ -98,6 +129,11 @@ cpp! {{
         for (auto& lg : g_layout_generations) {
             if (lg.generation == gen) {
                 lg.retired = true;
+                // Issue #901 第三十二轮复核问题1: 标记 retired 后立即尝试 erase。
+                // 如果该 generation 已无存活 layout（例如 Store 已退引用、QTextLayout
+                // 已全数 delete），立即回收，避免 g_layout_generations 拋积无对象的
+                // retired generation。调用后立即 return，不再访问循环迭代器，安全。
+                erase_generation_if_retired_and_unreferenced(gen);
                 return;
             }
         }
@@ -147,20 +183,10 @@ cpp! {{
                 }
             }
         }
-        // 全 nullptr 时 erase generation（复用 release_layout_ref 末尾的 erase 逻辑）。
-        // 注意：erase 会使 lg 指针失效，所以先完成所有对 lg 的访问，最后 erase。
-        bool all_deleted = true;
-        for (auto* l : lg->layouts) {
-            if (l) { all_deleted = false; break; }
-        }
-        if (all_deleted) {
-            for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
-                if (it->generation == gen) {
-                    g_layout_generations.erase(it);
-                    break;
-                }
-            }
-        }
+        // Issue #901 第三十二轮复核问题1: 释放初始引用后用公共函数尝试 erase。
+        // 复用 erase_generation_if_retired_and_unreferenced 统一三处 erase 逻辑。
+        // 注意：erase 会使 lg 指针失效，此处已不再访问 lg，安全。
+        erase_generation_if_retired_and_unreferenced(gen);
     }
 
     void clear_all_layout_generations() {
@@ -443,24 +469,11 @@ cpp! {{
                 lg->free_slots.push_back(slot);
             }
         }
-        // Issue #901 第三十二轮复核问题2: retired generation 在所有 layout 都被 delete
-        //（全 nullptr，含空段 null slot）后从 g_layout_generations 中 erase。
-        // 这保证最后一个 lease Drop 后 retired generation 的资源被正确释放。
-        // 注意：erase 会使 lg 指针失效，所以先完成所有对 lg 的访问，最后 erase。
-        if (lg->retired) {
-            bool all_deleted = true;
-            for (auto* l : lg->layouts) {
-                if (l) { all_deleted = false; break; }
-            }
-            if (all_deleted) {
-                for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
-                    if (it->generation == gen) {
-                        g_layout_generations.erase(it);
-                        break;
-                    }
-                }
-            }
-        }
+        // Issue #901 第三十二轮复核问题1: 最后一次退引用后用公共函数尝试 erase。
+        // 复用 erase_generation_if_retired_and_unreferenced 统一三处 erase 逻辑，
+        // 替代原先内联的 retired + 全 nullptr 检查 + erase 代码。
+        // 注意：erase 会使 lg 指针失效，此处已不再访问 lg，安全。
+        erase_generation_if_retired_and_unreferenced(gen);
     }
 
     // Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。

@@ -835,11 +835,11 @@ impl ParagraphLayoutStore {
         //    分配新 Id，构造 cache_key，layout_generation=0/cache_slot=-1（待排版）。
         let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(new_affected_count);
         // 前缀段的累计 byte offset（用于新段的 document_byte_start）
-        let mut byte_offset = 0usize;
-        for i in 0..old_splice_start {
-            let entry = &self.entries[i];
-            byte_offset += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
-        }
+        // Issue #901 第三十二轮问题3: 用 O(log n) Fenwick 前缀和替换 O(n) 前缀扫描。
+        // compute_document_byte_start 优先用 byte_offset_index 的 Fenwick 查询，
+        // 异常状态（index 为空或段落数不一致）回退到 O(index) 逐段累加。
+        // byte_offset 保持 mut：后续循环会按新段长度累加更新。
+        let mut byte_offset = self.compute_document_byte_start(old_splice_start);
         for (para_text, hard_break) in affected_paras {
             let cache_key = ParagraphLayoutCacheKey::build(
                 para_text,

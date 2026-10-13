@@ -194,6 +194,16 @@ impl EditorLayout {
         self.last_edit_affected_range = Some((byte_start, byte_end));
     }
 
+    /// Issue #901 第三十二轮复核问题2: 查询当前未消费的受影响字节范围（非消费只读）。
+    ///
+    /// 与 [`set_last_edit_affected_range`] 对应的只读查询。[`snapshot`] 会消费此范围
+    ///（`take`），消费后返回 `None`。`build_canonical_snapshot_for_current_layout`
+    /// 用此方法判断是否能按需 lease：有范围则只对受影响段获取 lease，
+    /// 无则回退到全量 [`current_prepared_layout`]。
+    pub fn last_edit_affected_range(&self) -> Option<(usize, usize)> {
+        self.last_edit_affected_range
+    }
+
     /// Issue #901: 获取段落布局存储的只读引用。
     pub fn paragraph_store(&self) -> &ParagraphLayoutStore {
         &self.paragraph_store
@@ -262,6 +272,97 @@ impl EditorLayout {
                 leases,
             }
         })
+    }
+
+    /// Issue #901 第三十二轮复核问题2: 按需 lease API — 只对指定段落索引获取 lease。
+    ///
+    /// 与 [`current_prepared_layout`] 逻辑相同，但只对 `paragraph_indices` 中
+    /// 指定的段落创建 `QtLayoutLease`，不遍历所有段。对于几万字、很多段落的章节，
+    /// 动画准备不应每笔接触所有 Qt layout；只在受影响段获取 lease 即可。
+    ///
+    /// `lines` 字段仍保持 `c.lines.as_slice()`（所有视觉行），因为 handle 调用方
+    /// 可能需要访问所有行（如 `prepare_animation_visuals_from_layout` 提取所有行
+    /// 的 QImage/clusters）。lease 只限制"持有哪些段的 C++ layout 引用"，
+    /// 不限制"能读取哪些视觉行"。
+    ///
+    /// # 参数
+    ///
+    /// - `paragraph_indices`：需要获取 lease 的段落索引列表。越界索引静默跳过。
+    ///
+    /// # 返回
+    ///
+    /// - `Some(handle)`：cache 存在时返回 handle（即使 `paragraph_indices` 为空，
+    ///   handle 的 `leases` 为空 Vec，不持有任何 lease）。
+    /// - `None`：cache 不存在（首帧/invalidate 后尚未排版）。
+    ///
+    /// # 复杂度
+    ///
+    /// O(`paragraph_indices.len()`) 次 `QtLayoutLease::try_from_id`（FFI retain），
+    /// 而非 [`current_prepared_layout`] 的 O(段落数)。对于只编辑一段的常见场景，
+    /// `paragraph_indices` 只含 1 个段，lease 成本从 O(全章段数) 降到 O(1)。
+    pub fn current_prepared_layout_for_paragraphs(
+        &self,
+        paragraph_indices: &[usize],
+    ) -> Option<PreparedLayoutHandle<'_>> {
+        self.cache.as_ref().map(|c| {
+            let generation = c.layout_generation;
+            // Issue #901 第三十二轮复核问题2: 只遍历 paragraph_indices，
+            // 不遍历 0..store.len()。对每个索引检查越界，越界跳过。
+            // lease 创建逻辑与 current_prepared_layout 完全相同：
+            // 只对 layout_generation == generation 且 cache_slot >= 0 的段
+            // 创建 lease，retain 成功才收集；失败跳过不阻塞 handle 创建。
+            let mut leases = Vec::new();
+            let store = &self.paragraph_store;
+            let store_len = store.len();
+            for &i in paragraph_indices {
+                if i >= store_len {
+                    continue;
+                }
+                if let Some(entry) = store.entry(i) {
+                    if entry.layout_generation == generation && entry.cache_slot >= 0 {
+                        let id = QtLayoutId::new(
+                            generation,
+                            entry.cache_slot,
+                            entry.layout_epoch,
+                        );
+                        if let Some(lease) = QtLayoutLease::try_from_id(id) {
+                            leases.push(lease);
+                        }
+                    }
+                }
+            }
+            PreparedLayoutHandle {
+                generation,
+                lines: c.lines.as_slice(),
+                leases,
+            }
+        })
+    }
+
+    /// Issue #901 第三十二轮复核问题2: 按需 lease — 优先只对受影响段获取 lease。
+    ///
+    /// 从 `last_edit_affected_range` 获取受影响字节范围，用 `paragraph_store` 计算段落
+    /// 索引范围，再调 [`current_prepared_layout_for_paragraphs`] 只对受影响段 retain。
+    /// 无法确定受影响段范围（已被 [`snapshot`] 消费 / 首帧 / 全量重建 / full_relayout）
+    /// 时回退到 [`current_prepared_layout`]（全量），保持原语义。
+    ///
+    /// 将此逻辑封装在 `EditorLayout` 方法中（而非 pipeline.rs 内联），使
+    /// `build_canonical_snapshot_for_current_layout` 函数体保持简洁，
+    /// 不因按需 lease 分支增长而超出静态守卫测试的函数窗口。
+    pub fn current_prepared_layout_for_affected(&self) -> Option<PreparedLayoutHandle<'_>> {
+        if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
+            let ranges = self
+                .paragraph_store
+                .compute_affected_paragraphs(byte_start, byte_end);
+            if !ranges.full_relayout && ranges.relayout_start < ranges.relayout_end {
+                let indices: Vec<usize> = (ranges.relayout_start..ranges.relayout_end).collect();
+                self.current_prepared_layout_for_paragraphs(&indices)
+            } else {
+                self.current_prepared_layout()
+            }
+        } else {
+            self.current_prepared_layout()
+        }
     }
 
     /// Issue #658 评论 5622829886 问题 1: 把外部已排好的 prepared layout 提升为 current。

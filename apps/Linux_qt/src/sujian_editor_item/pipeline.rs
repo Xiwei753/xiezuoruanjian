@@ -547,9 +547,9 @@ impl LinuxEditorPipeline {
         ctx: &VisualTransactionContext,
         editor_layout: &crate::editor::layout::EditorLayout,
     ) -> crate::editor::layout::CanonicalDocumentVisualSnapshot {
-        // Issue #738 评论 5792244119 问题 1: 优先复用 EditorLayout 当前 prepared layout
-        // 的 generation，不再分配临时 generation（避免泄漏）。
-        let mut prepared_handle = editor_layout.current_prepared_layout();
+        // Issue #738 评论 5792244119 问题 1: 复用 EditorLayout 当前 prepared layout generation。
+        // Issue #901 第三十二轮复核问题2: 按需 lease 封装在 current_prepared_layout_for_affected()。
+        let mut prepared_handle = editor_layout.current_prepared_layout_for_affected();
         // Issue #901 第二十轮阻塞2: 从 paragraph_store 获取 ParagraphId 序列，
         // 不再用 slot+1 伪造 Id。
         let paragraph_ids: Vec<layout::ParagraphId> =
