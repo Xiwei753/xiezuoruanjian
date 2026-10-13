@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::chunked_vec::ChunkedSlotMap;
 use super::paragraph_height_index::{ParagraphLineCountIndex, ParagraphOffsetIndex};
 use super::types::{ParagraphId, VisualLine};
 
@@ -288,16 +289,20 @@ pub struct ParagraphLayoutStore {
     next_id: u64,
     /// Issue #901 第二十一轮阻塞5+问题4: ParagraphId → slot 持久映射缓存。
     ///
-    /// 与 `entries` 同步维护：`id_to_slot_cache[entries[i].id] == i`。
-    /// 普通编辑（不涉及换行）时 slot 不变，映射不变，O(1) 获取。
-    /// 拆段/合段时增量更新（新段加入/被删段移除 + 后续段 slot 平移），
-    /// 不每笔遍历整章重建。
+    /// 与 `entries` 同步维护：`slot(id) == i` 当且仅当 `entries[i].id == id`。
+    /// 普通编辑（不涉及换行）时 slot 不变，映射不变，O(块数) 获取。
+    /// 拆段/合段时增量更新（新段加入/被删段移除），不每笔遍历整章重建。
     ///
-    /// Issue #901 第二十一轮问题4: 用 `Arc<HashMap>` 持久维护，
-    /// `paragraph_id_to_slot_arc` 返回 `Arc::clone`（O(1)）而非
-    /// `Arc::new(map.clone())`（O(段落数) 深复制）。更新时用 `Arc::make_mut`
-    ///（refcount==1 原地改，refcount>1 COW）。
-    id_to_slot_cache: Arc<HashMap<ParagraphId, usize>>,
+    /// Issue #901 第三十三轮问题3: 从 `Arc<HashMap<ParagraphId, usize>>` 改为
+    /// `Arc<ChunkedSlotMap>`。ChunkedSlotMap 的 splice/insert/remove 只影响
+    /// 受影响块 O(块数 + B)，不遍历后缀所有段。旧 HashMap 的 splice 需遍历
+    /// 后缀段逐个平移 slot O(后缀段数)，分块映射的后缀块 id_to_local 不变
+    ///（块内 ID 和块内索引不变，全局 slot 由块前缀 len + 块内索引动态计算）。
+    ///
+    /// `paragraph_id_to_slot_arc()` 返回 `Arc<HashMap>`（通过 `to_hash_map`
+    /// 构建，O(段落数)），供 snapshot 消费方共享。snapshot 构建本身 O(段落数)，
+    /// 此构建不增加渐近复杂度。
+    id_to_slot_cache: Arc<ChunkedSlotMap>,
     /// Issue #901 第二十一轮问题2: 段落行数前缀索引（Fenwick 树）。
     ///
     /// 替代旧的 `id_to_line_range: HashMap<ParagraphId, (usize, usize)>`。
@@ -364,7 +369,7 @@ impl ParagraphLayoutStore {
         Self {
             entries: Vec::new(),
             next_id: 1,
-            id_to_slot_cache: Arc::new(HashMap::new()),
+            id_to_slot_cache: Arc::new(ChunkedSlotMap::new()),
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
             byte_offset_index: Arc::new(ParagraphOffsetIndex::new()),
             retired_slots: Vec::new(),
@@ -814,13 +819,11 @@ impl ParagraphLayoutStore {
 
         // 1. 收集被删除旧 entries 的 handle 到 retired_slots。
         //    前缀/后缀段的 handle 保留（entries 原地保留），不回收。
-        //    Issue #901 第三十二轮问题3: 同时收集被删除段的 ParagraphId，
-        //    供 id_to_slot_cache 增量更新使用（O(k) 从 entries 取，不遍历全 HashMap）。
+        //    Issue #901 第三十三轮问题3: ChunkedSlotMap::splice 按 slot 范围删除，
+        //    不需要收集 removed_ids 供 HashMap 遍历。
         let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
-        let mut removed_ids: Vec<ParagraphId> = Vec::with_capacity(old_affected_count);
         for i in old_splice_start..old_splice_end {
             let entry = &self.entries[i];
-            removed_ids.push(entry.id);
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
                 newly_retired.push((
                     entry.layout_generation,
@@ -890,58 +893,17 @@ impl ParagraphLayoutStore {
         //    新段的 document_byte_start 在构造时已正确设置（基于前缀累加）。
         let _ = byte_offset;
 
-        // 5. 增量更新 id_to_slot_cache — 只处理受影响范围，后缀段 slot 用 delta 批量平移。
-        //    Issue #901 第三十二轮问题3: 删除受影响 ID 从 removed_ids（O(k)）取，
-        //    不遍历全 HashMap 找 slot 在 [old_splice_start, old_splice_end) 的条目。
-        //    后缀段 slot 平移保留（O(段落数)），但只在段数变化（Enter/Backspace）时触发，
-        //    普通字键（段数不变）不走 splice 路径，不受影响。
-        //
-        //    Issue #901 第三十二轮问题4 复核: 此处 values_mut 全量遍历是 O(段落数)。
-        //    调查消费方 `paragraph_id_to_slot_arc()` 的调用链：
-        //    - `canonical_snapshot/prepare/full.rs:1513` 将 Arc<HashMap> 存入 snapshot；
-        //    - `types.rs:258` / `canonical_snapshot.rs:166` 的 `materialize_line` 用
-        //      `paragraph_id_to_slot.get(&id).copied().unwrap_or(line.logical_slot)` 查询。
-        //    消费方依赖 cache 非空解析 logical_slot：miss 时 fallback 到 `line.logical_slot`
-        //    （可能过时的旧值），会导致物化坐标错位。因此**不能清空 cache**。
-        //    延迟平移标记（SlotAdjustment { boundary, delta }）方案需要改变
-        //    `paragraph_id_to_slot_arc` 的返回类型（包装 adjustments），侵入消费方 API，
-        //    正确性风险高。完整消除 O(n) 需持久树前缀和结构，是未来优化方向。
-        //    当前保留 values_mut 遍历，仅在段落数变化（Enter/Backspace）时触发，
-        //    不是每笔字键的热路径。
+        // 5. Issue #901 第三十三轮问题3: 用 ChunkedSlotMap::splice 原子更新 id_to_slot_cache。
+        //    splice 删除 [old_splice_start, old_splice_end) 的旧 ID，
+        //    插入新段 ID（从 entries[old_splice_start..new_layout_end] 收集），
+        //    后缀段 slot 自动平移（O(B + n/B)，B=256），不遍历后缀所有段。
         {
-            let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-            // 移除被删除段的 Id — 从 removed_ids（splice 前收集）取，O(k)。
-            for id in &removed_ids {
-                cache.remove(id);
-            }
-            // 后缀段 slot 平移：splice 前后缀段 slot 在 [old_splice_end, old_count)，
-            // splice 后新 slot = 旧 slot + slot_delta，
-            // 其中 slot_delta = new_affected_count - old_affected_count。
-            // 此时 cache 中只有前缀段（slot < old_splice_start）和后缀段
-            //（slot >= old_splice_end），还未插入新段，所以 slot >= old_splice_end
-            // 的都是后缀段，不会误平移新段。
-            // 后缀段新 slot >= new_layout_end >= 0，i64 运算不会下溢。
-            //
-            // Issue #901 第三十二轮复核缺口3: 后缀段 slot 平移 — 从 entries 获取后缀段 ID，
-            // 只更新这些 ID 对应的 cache 条目，从 O(所有段) 降到 O(后缀段)。
-            // 后缀段在 entries 中的索引范围：[new_layout_end, self.entries.len())。
-            // 先收集后缀段 ID 到局部 Vec，避免同时借用 self.entries 和 self.id_to_slot_cache。
-            let slot_delta = new_affected_count as i64 - old_affected_count as i64;
-            if slot_delta != 0 {
-                let suffix_ids: Vec<ParagraphId> = self.entries[new_layout_end..]
-                    .iter()
-                    .map(|e| e.id)
-                    .collect();
-                for id in suffix_ids {
-                    if let Some(slot) = cache.get_mut(&id) {
-                        *slot = (*slot as i64 + slot_delta) as usize;
-                    }
-                }
-            }
-            // 插入新段的 Id → slot 映射。
-            for i in old_splice_start..new_layout_end {
-                cache.insert(self.entries[i].id, i);
-            }
+            let new_ids: Vec<ParagraphId> = self.entries[old_splice_start..new_layout_end]
+                .iter()
+                .map(|e| e.id)
+                .collect();
+            Arc::make_mut(&mut self.id_to_slot_cache)
+                .splice(old_splice_start, old_splice_end, new_ids);
         }
 
         // 6. 增量更新 line_count_index。
@@ -983,7 +945,7 @@ impl ParagraphLayoutStore {
     /// Issue #901 第二十一轮阻塞5: 优先从 `id_to_slot_cache` 查询（O(1)），
     /// 缓存未命中时回退到 O(n) 线性查找（仅在缓存失效的异常情况下触发）。
     pub fn paragraph_id_to_slot(&self, id: ParagraphId) -> Option<usize> {
-        if let Some(&slot) = self.id_to_slot_cache.get(&id) {
+        if let Some(slot) = self.id_to_slot_cache.slot(id) {
             // 验证缓存一致性（debug 模式下断言）
             debug_assert!(
                 self.entries.get(slot).map_or(true, |e| e.id == id),
@@ -999,12 +961,13 @@ impl ParagraphLayoutStore {
 
     /// Issue #901 第二十一轮问题4: 获取 `ParagraphId → slot` 映射的 Arc 共享引用。
     ///
-    /// 返回内部持久维护的 `id_to_slot_cache` 的 Arc 克隆（O(1)），
+    /// 返回内部持久维护的 `id_to_slot_cache` 对应的 `HashMap` 快照（O(n)），
     /// 供消费方共享，不每笔遍历整章重建 HashMap。
-    /// 映射在 `rebuild_from_text` / splice 操作后已同步更新，
-    /// 调用方直接 `Arc::clone` 即可，不再深复制全章 HashMap。
+    /// 映射在 `rebuild_from_text` / splice 操作后已同步更新。
+    /// Issue #901 第三十三轮问题3: 内部存储改为 ChunkedSlotMap，此处构建 HashMap 快照。
+    /// 调用方仅在 snapshot 构建时调用一次（已 O(n)），不增加渐近复杂度。
     pub fn paragraph_id_to_slot_arc(&self) -> Arc<HashMap<ParagraphId, usize>> {
-        Arc::clone(&self.id_to_slot_cache)
+        Arc::new(self.id_to_slot_cache.to_hash_map())
     }
 
     /// Issue #901 第二十一轮问题2: 获取段落行数前缀索引的只读引用。
@@ -1040,14 +1003,10 @@ impl ParagraphLayoutStore {
     /// Issue #901 第二十一轮阻塞5+问题4: 内部方法 — 从 `entries` 全量重建 `id_to_slot_cache`。
     ///
     /// 在 `rebuild_from_text` 等全量替换 entries 的操作后调用。
-    /// 用 `Arc::make_mut` 原地改（refcount==1）或 COW（refcount>1）。
+    /// Issue #901 第三十三轮问题3: 用 ChunkedSlotMap::from_ids 替换旧 HashMap 逐条插入。
     fn rebuild_id_to_slot_cache(&mut self) {
-        let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-        cache.clear();
-        cache.reserve(self.entries.len());
-        for (i, entry) in self.entries.iter().enumerate() {
-            cache.insert(entry.id, i);
-        }
+        let ids: Vec<ParagraphId> = self.entries.iter().map(|e| e.id).collect();
+        *Arc::make_mut(&mut self.id_to_slot_cache) = ChunkedSlotMap::from_ids(ids);
     }
 
     /// Issue #901 第三十二轮问题4: 内部方法 — 从 `entries` 全量重建 `byte_offset_index`。
@@ -1072,42 +1031,23 @@ impl ParagraphLayoutStore {
     /// 增量更新 `id_to_slot_cache`。
     ///
     /// `new_id` 是新段的 ParagraphId，`index` 是新段的 slot。
-    /// 原 slot >= index 的段全部 +1。
-    /// 用 `Arc::make_mut` 原地改或 COW，保证已发出的 Arc 引用不受影响。
-    ///
-    /// Issue #901 第三十二轮问题4 复核: values_mut 遍历是 O(段落数)，仅在段落数变化
-    ///（split_paragraph / insert_paragraph）时触发。消费方依赖 cache 非空（见
-    /// splice_affected_entries 注释），不能清空。完整消除需持久树结构，是未来优化方向。
+    /// 原 slot >= index 的段全部 +1（由 ChunkedSlotMap::insert 内部处理）。
+    /// Issue #901 第三十三轮问题3: ChunkedSlotMap::insert 自动平移后缀 slot，
+    /// 不再遍历 values_mut。
     fn id_to_slot_cache_insert(&mut self, new_id: ParagraphId, index: usize) {
-        let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-        // 后续段 slot +1
-        for slot in cache.values_mut() {
-            if *slot >= index {
-                *slot += 1;
-            }
-        }
-        cache.insert(new_id, index);
+        Arc::make_mut(&mut self.id_to_slot_cache).insert(index, new_id);
     }
 
     /// Issue #901 第二十一轮阻塞5+问题4: 内部方法 — 删除 `index` 处的段后
     /// 增量更新 `id_to_slot_cache`。
     ///
     /// `removed_id` 是被删段的 ParagraphId，`index` 是被删段的 slot。
-    /// 原 slot > index 的段全部 -1。
-    /// 用 `Arc::make_mut` 原地改或 COW，保证已发出的 Arc 引用不受影响。
-    ///
-    /// Issue #901 第三十二轮问题4 复核: values_mut 遍历是 O(段落数)，仅在段落数变化
-    ///（merge_paragraphs / remove_paragraph）时触发。消费方依赖 cache 非空（见
-    /// splice_affected_entries 注释），不能清空。完整消除需持久树结构，是未来优化方向。
+    /// 原 slot > index 的段全部 -1（由 ChunkedSlotMap::remove 内部处理）。
+    /// Issue #901 第三十三轮问题3: ChunkedSlotMap::remove 自动平移后缀 slot，
+    /// 不再遍历 values_mut。
     fn id_to_slot_cache_remove(&mut self, removed_id: ParagraphId, index: usize) {
-        let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-        cache.remove(&removed_id);
-        // 后续段 slot -1
-        for slot in cache.values_mut() {
-            if *slot > index {
-                *slot -= 1;
-            }
-        }
+        let _ = removed_id; // ChunkedSlotMap::remove 按 slot 索引删除，不需要 ID。
+        Arc::make_mut(&mut self.id_to_slot_cache).remove(index);
     }
 
     // ── 增量更新：换行拆段 ──

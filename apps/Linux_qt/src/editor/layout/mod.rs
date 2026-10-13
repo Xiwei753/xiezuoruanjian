@@ -19,8 +19,10 @@
 // - test_support: 测试线程 helper (run_on_qt_thread)，仅 test/test-helpers feature 下编译
 // - paragraph_layout_store: Issue #901 稳定段落身份 + 布局缓存
 // - paragraph_height_index: Issue #901 Fenwick 树段落前缀高度索引
+// - chunked_vec: Issue #901 第三十三轮问题3 分块前缀和 + 分块 slot 映射
 
 mod canonical_snapshot;
+mod chunked_vec;
 mod diff;
 mod engine;
 mod hit_test;
@@ -35,7 +37,8 @@ pub use canonical_snapshot::{
     inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    prepare_incremental_visual_snapshot, AnimationRasterVisual, CanonicalClusterSnapshot,
+    prepare_incremental_visual_snapshot, build_snapshot_from_prepared_lines,
+    AnimationRasterVisual, CanonicalClusterSnapshot,
     CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot,
     CursorXMapEntry,
 };
@@ -362,6 +365,56 @@ impl EditorLayout {
             }
         } else {
             self.current_prepared_layout()
+        }
+    }
+
+    /// Issue #901 第三十三轮问题2: 返回本次动画实际需要查询的视觉行索引，
+    /// 与 [`current_prepared_layout_for_affected`] 的 lease 范围**严格一致**。
+    ///
+    /// 从 `last_edit_affected_range` 获取受影响字节范围，用 `paragraph_store` 计算段落
+    /// 索引范围，再从 `lines` 中筛选属于受影响段落的行索引（按 `logical_slot` 判断）。
+    /// 无法确定受影响范围（首帧 / 全量重建 / `full_relayout`）时回退到全量，
+    /// 与 [`current_prepared_layout_for_affected`] 回退到 [`current_prepared_layout`] 对称。
+    ///
+    /// # 为什么 lease 范围与查询范围必须一致
+    ///
+    /// `current_prepared_layout_for_affected` 只对受影响段创建 `QtLayoutLease`（retain
+    /// C++ 引用）。若 `all_line_ids` 用 `0..lines.len()`（全量），会对未 retain 的段
+    /// 调 `extract_animation_raster_from_existing_line`。虽然 `EditorLayout` 自身持有
+    /// 这些 layout（generation 活跃），通常不会访问无效，但 lease 范围与查询范围不一致
+    /// 是语义缺陷：一旦旧 generation 被 invalidate，未 retain 的段 layout 被释放，
+    /// 全量查询会访问无效 `QTextLayout`。本方法保证查询范围 ⊆ lease 范围。
+    ///
+    /// # 参数
+    ///
+    /// - `lines`：`PreparedLayoutHandle.lines`（`EditorLayout` 当前已排版的视觉行切片）。
+    ///
+    /// # 返回
+    ///
+    /// 需要查询的视觉行索引列表。受影响段为空段时返回空 `Vec`（空段无 `QTextLayout`，
+    /// 不需要提取 raster），调用方对此自然跳过，不回退全量。
+    pub fn affected_visual_line_indices(&self, lines: &[VisualLine]) -> Vec<usize> {
+        if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
+            let ranges = self
+                .paragraph_store
+                .compute_affected_paragraphs(byte_start, byte_end);
+            if !ranges.full_relayout && ranges.relayout_start < ranges.relayout_end {
+                // 只收集受影响段 [relayout_start, relayout_end) 的行索引。
+                let mut ids = Vec::new();
+                for (i, line) in lines.iter().enumerate() {
+                    let slot = line.logical_slot as usize;
+                    if slot >= ranges.relayout_start && slot < ranges.relayout_end {
+                        ids.push(i);
+                    }
+                }
+                ids
+            } else {
+                // full_relayout 或无效范围 → 全量，与 lease 全量对称。
+                (0..lines.len()).collect()
+            }
+        } else {
+            // 无受影响范围（首帧 / 全量重建）→ 全量，与 lease 全量对称。
+            (0..lines.len()).collect()
         }
     }
 

@@ -1,153 +1,85 @@
-//! 段落高度索引 — Fenwick 树（Binary Indexed Tree）保存段落前缀高度。
+//! 段落高度索引 — 分块前缀和保存段落前缀高度。
 //!
 //! Issue #901: 增量排版子系统。
 //!
 //! # 核心设计
 //!
-//! - 用 Fenwick 树维护段落高度的前缀和，支持 O(log n) 查询和单点更新。
+//! - 用分块前缀和（[`ChunkedPrefixSum`]）维护段落高度的前缀和，
+//!   支持 O(B + n/B) 的局部 splice 和前缀和查询。
 //! - **整章纵向平移不需要遍历全文改每段 y** — y 由前缀和计算，不逐段存储。
-//! - **段落高度变化只改受影响段的数据** — Fenwick 树单点更新 O(log n)。
-//! - 段落插入/删除时重建 BIT（O(n)），这在实际场景中可接受：
-//!   段落级插入/删除不频繁（只在 Enter/Backspace 换行符时发生），
-//!   而高度更新和 y→段落查询频繁（每次排版/滚动/命中测试）。
+//! - **段落高度变化只改受影响段的数据** — 分块前缀和单点更新 O(B + n/B)。
+//! - **段落插入/删除只 splice 受影响块** — O(B + n/B)，不再 O(n) 重建 BIT。
+//!
+//! Issue #901 第三十三轮问题3: 从 Fenwick BIT（数组）改为分块前缀和。
+//! BIT 的中间插删需 O(n) 重建（索引编码子树区间），分块前缀和的中间插删
+//! 只影响受影响块 O(B + n/B)。splice 从 O(n) 降到 O(sqrt(n))，
+//! prefix_sum 从 O(log n) 升到 O(sqrt(n))，整体编辑体验显著改善。
 //!
 //! # 操作复杂度
 //!
 //! | 操作 | 复杂度 |
 //! |------|--------|
-//! | `insert` | O(n) 重建 |
-//! | `remove` | O(n) 重建 |
-//! | `update_height` | O(log n) |
-//! | `y_to_paragraph` | O(log n) |
-//! | `paragraph_top_y` | O(log n) |
+//! | `insert` | O(B + n/B) |
+//! | `remove` | O(B + n/B) |
+//! | `splice` | O(B + n/B) |
+//! | `update_height` | O(B + n/B) |
+//! | `y_to_paragraph` | O(B + n/B) |
+//! | `paragraph_top_y` | O(n/B) |
 //! | `total_height` | O(1) |
-//! | `height_at` | O(1) |
+//! | `height_at` | O(n/B) |
 
-/// 段落高度索引 — Fenwick 树保存段落前缀高度。
+use super::chunked_vec::ChunkedPrefixSum;
+
+/// 段落高度索引 — 分块前缀和保存段落前缀高度。
 ///
-/// 维护一个高度数组 `heights[0..n]` 和对应的 Fenwick 树 `bit[1..=n]`。
+/// 维护一个高度数组的分块前缀和。
 /// `prefix_sum(k)` = `heights[0] + heights[1] + ... + heights[k-1]`（前 k 个段落的高度和）。
 ///
 /// 段落 `i`（0-indexed）的 y 范围：`[paragraph_top_y(i), paragraph_top_y(i) + heights[i])`。
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphHeightIndex {
-    /// Fenwick 树数组（1-indexed，`bit[1..=n]`）。
-    bit: Vec<f64>,
-    /// 原始高度数组（0-indexed），用于直接访问和重建。
-    heights: Vec<f64>,
-    /// 段落数量。
-    len: usize,
-    /// 缓存的总高度（`bit` 的根和），O(1) 查询。
-    total: f64,
+    /// 分块前缀和（f64 高度）。
+    cps: ChunkedPrefixSum<f64>,
 }
 
 impl ParagraphHeightIndex {
     /// 创建空的高度索引。
     pub fn new() -> Self {
         Self {
-            bit: Vec::new(),
-            heights: Vec::new(),
-            len: 0,
-            total: 0.0,
+            cps: ChunkedPrefixSum::new(),
         }
     }
 
     /// 从高度数组创建高度索引。
     pub fn from_heights(heights: Vec<f64>) -> Self {
-        let len = heights.len();
-        let total: f64 = heights.iter().sum();
-        let mut bit = vec![0.0; len + 1];
-        // 构建 Fenwick 树
-        for i in 0..len {
-            let val = heights[i];
-            let mut j = i + 1;
-            while j <= len {
-                bit[j] += val;
-                j += lowbit(j);
-            }
-        }
         Self {
-            bit,
-            heights,
-            len,
-            total,
+            cps: ChunkedPrefixSum::from_values(heights),
         }
     }
 
     /// 段落数量。
     pub fn len(&self) -> usize {
-        self.len
+        self.cps.len()
     }
 
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.cps.is_empty()
     }
 
     /// 清空所有数据。
     pub fn clear(&mut self) {
-        self.bit.clear();
-        self.heights.clear();
-        self.len = 0;
-        self.total = 0.0;
+        self.cps.clear();
     }
 
     /// 总高度（所有段落高度之和）。
     pub fn total_height(&self) -> f64 {
-        self.total
+        self.cps.total_sum()
     }
 
     /// 获取段落 `index` 的高度。越界返回 0.0。
     pub fn height_at(&self, index: usize) -> f64 {
-        self.heights.get(index).copied().unwrap_or(0.0)
-    }
-
-    // ── Fenwick 树核心操作 ──
-
-    /// 前缀和：`heights[0] + heights[1] + ... + heights[k-1]`。
-    ///
-    /// `k` 为段落数量（0-indexed 的半开区间右端）。
-    /// `k == 0` 返回 0.0，`k >= len` 返回总高度。
-    fn prefix_sum(&self, k: usize) -> f64 {
-        let k = k.min(self.len);
-        let mut sum = 0.0;
-        let mut j = k;
-        while j > 0 {
-            sum += self.bit[j];
-            j -= lowbit(j);
-        }
-        sum
-    }
-
-    /// Fenwick 树单点加：`heights[index] += delta`，同步更新 BIT。
-    fn bit_add(&mut self, index: usize, delta: f64) {
-        let mut j = index + 1; // 转 1-indexed
-        while j <= self.len {
-            self.bit[j] += delta;
-            j += lowbit(j);
-        }
-    }
-
-    /// 重建整个 Fenwick 树（从 `heights` 数组）。
-    ///
-    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点累加。
-    /// 先将每个元素直接放入 BIT 叶节点，再单次前向传播：每个节点向唯一父节点贡献。
-    fn rebuild_bit(&mut self) {
-        let n = self.heights.len();
-        self.bit = vec![0.0; n + 1];
-        // Step 1: 叶节点直接赋值
-        for i in 0..n {
-            self.bit[i + 1] = self.heights[i];
-        }
-        // Step 2: 前向传播，每个节点向父节点 j = i + lowbit(i) 贡献一次
-        for i in 1..=n {
-            let j = i + lowbit(i);
-            if j <= n {
-                self.bit[j] += self.bit[i];
-            }
-        }
-        self.len = n;
-        self.total = self.heights.iter().sum();
+        self.cps.get(index).unwrap_or(0.0)
     }
 
     // ── 查询操作 ──
@@ -157,10 +89,10 @@ impl ParagraphHeightIndex {
     /// 即 `heights[0] + heights[1] + ... + heights[index-1]`。
     /// `index == 0` 返回 0.0（文档顶部）。越界返回总高度。
     pub fn paragraph_top_y(&self, index: usize) -> f64 {
-        if index >= self.len {
-            return self.total;
+        if index >= self.cps.len() {
+            return self.cps.total_sum();
         }
-        self.prefix_sum(index)
+        self.cps.prefix_sum(index)
     }
 
     /// 查段底 — 段落 `index` 的底部 y 坐标（文档坐标系）。
@@ -177,87 +109,54 @@ impl ParagraphHeightIndex {
     /// - `y >= total_height` → 返回最后一个段落
     /// - 空索引 → 返回 0
     ///
-    /// 使用 Fenwick 树上的二分搜索，O(log n)。
+    /// 使用分块前缀和上的累积查找，O(B + n/B)。
     pub fn y_to_paragraph(&self, y: f64) -> usize {
-        if self.len == 0 {
+        if self.cps.is_empty() {
             return 0;
         }
         if y < 0.0 {
             return 0;
         }
-        if y >= self.total {
-            return self.len - 1;
+        let total = self.cps.total_sum();
+        if y >= total {
+            return self.cps.len() - 1;
         }
-
-        // BIT 上的二分搜索：找最大的 pos 使得 prefix_sum(pos) <= y
-        // pos 是 1-indexed 计数（0 <= pos <= len）
-        // 段落索引 = pos（0-indexed）
-        let mut pos = 0usize;
-        let mut remaining = y;
-
-        // 找最高位 2^k <= len
-        let mut bit_mask = self.len.next_power_of_two() >> 1;
-        while bit_mask > 0 {
-            let next = pos + bit_mask;
-            if next <= self.len && self.bit[next] <= remaining {
-                remaining -= self.bit[next];
-                pos = next;
-            }
-            bit_mask >>= 1;
-        }
-
-        // pos 是最大的满足 prefix_sum(pos) <= y 的值
-        // 段落 pos（0-indexed）包含 y
-        pos.min(self.len.saturating_sub(1))
+        // find_by_accumulated 返回最大 index 使得 prefix_sum(index) <= y。
+        let pos = self.cps.find_by_accumulated(y);
+        pos.min(self.cps.len().saturating_sub(1))
     }
 
     // ── 更新操作 ──
 
     /// 改段高 — 更新段落 `index` 的高度为 `new_height`。
     ///
-    /// O(log n)。只改受影响段的数据，不影响其他段落的相对位置。
+    /// O(B + n/B)。只改受影响段的数据，不影响其他段落的相对位置。
     /// 返回旧高度，越界返回 `None`。
     pub fn update_height(&mut self, index: usize, new_height: f64) -> Option<f64> {
-        if index >= self.len {
-            return None;
-        }
-        let old_height = self.heights[index];
-        let delta = new_height - old_height;
-        self.heights[index] = new_height;
-        self.bit_add(index, delta);
-        self.total += delta;
-        Some(old_height)
+        self.cps.update(index, new_height)
     }
 
     /// 段落插入 — 在 `index` 处插入高度为 `height` 的新段落。
     ///
-    /// O(n) 重建 BIT。后续段落的 y 坐标自动右移（由前缀和计算），
-    /// 不需要遍历改每段 y。
+    /// O(B + n/B)。后续段落的 y 坐标自动右移（由前缀和计算）。
     pub fn insert(&mut self, index: usize, height: f64) {
-        let insert_pos = index.min(self.len);
-        self.heights.insert(insert_pos, height);
-        self.rebuild_bit();
+        let insert_pos = index.min(self.cps.len());
+        self.cps.insert(insert_pos, height);
     }
 
     /// 段落删除 — 删除段落 `index`。
     ///
-    /// O(n) 重建 BIT。后续段落的 y 坐标自动左移。
+    /// O(B + n/B)。后续段落的 y 坐标自动左移。
     /// 返回被删除段落的高度，越界返回 `None`。
     pub fn remove(&mut self, index: usize) -> Option<f64> {
-        if index >= self.len {
-            return None;
-        }
-        let height = self.heights.remove(index);
-        self.rebuild_bit();
-        Some(height)
+        self.cps.remove(index)
     }
 
     /// 批量更新高度 — 从高度数组重建整个索引。
     ///
     /// 用于全篇重排后一次性更新所有段落高度。
     pub fn rebuild(&mut self, heights: Vec<f64>) {
-        self.heights = heights;
-        self.rebuild_bit();
+        self.cps.rebuild(heights);
     }
 
     /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落高度，
@@ -266,85 +165,33 @@ impl ParagraphHeightIndex {
     /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的高度数据保留不动，
     /// 只替换中间段。
     ///
-    /// Issue #901 第三十一轮问题4: 段落数不变（`new_heights.len() == end - start`）时
-    /// 走 O(k log n) 逐点 `update_height` 路径，不全量 `rebuild_bit`（O(n)），
-    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_bit`。
+    /// Issue #901 第三十三轮问题3: 用分块前缀和的局部 splice 替代
+    /// `Vec::splice + rebuild_bit`（O(n)）。分块前缀和的 splice 只影响
+    /// 受影响块 O(B + n/B)，不再全量重建 BIT。
     pub fn splice(&mut self, start: usize, end: usize, new_heights: Vec<f64>) {
-        let splice_start = start.min(self.heights.len());
-        let splice_end = end.min(self.heights.len());
-        let old_count = splice_end - splice_start;
-        let new_count = new_heights.len();
-        if old_count == new_count {
-            // 段落数不变：逐点更新受影响段高度，O(k log n)，不全量重建 BIT。
-            // update_height 内部同时改 heights[index] 与 BIT 单点路径。
-            for (i, &h) in new_heights.iter().enumerate() {
-                self.update_height(splice_start + i, h);
-            }
-        } else {
-            // 段落数变化：Vec::splice + rebuild_bit，O(n)。
-            //
-            // Issue #901 第三十二轮问题4 复核: 数组 BIT 在中间插入/删除是固有限制 —
-            // BIT 的索引编码了子树区间，中间插入/删除会打乱所有后缀节点的区间编码，
-            // 必须 O(n) 重建。此路径仅在 Enter/Backspace 拆段/合段（段落数变化）时触发，
-            // 不是每笔字键的热路径（段落数不变时走上方 O(k log n) 逐点更新）。
-            // 完整 O(log n) 中间插入/删除需要平衡树前缀和结构（如 BTree 或 Treap），
-            // 是未来优化方向。当前 O(n) rebuild 在长篇（~10^4 段）下约 10μs，
-            // 远小于排版本身的开销。
-            //
-            // Issue #901 第三十二轮复核缺口3: BIT 中间插入/删除的 O(n) 重建是数组 BIT 的固有限制。
-            // 当前路径仅在 Enter/Backspace 拆段/合段（段落数变化）时触发，不是每笔字键的热路径。
-            // 完整 O(log n) 中间插入/删除需要平衡树前缀和结构（如 BTree/Treap），是未来优化方向。
-            // 本轮优化了 current_prepared_layout 从 O(视觉行数) 降到 O(段落数)，
-            // 以及 splice_affected_entries 后缀槽号平移从 O(所有段) 降到 O(后缀段)。
-            self.heights.splice(splice_start..splice_end, new_heights);
-            self.rebuild_bit();
-        }
+        self.cps.splice(start, end, new_heights);
     }
 
-    /// 批量更新单个段落高度（不重建 BIT，逐个 `update_height`）。
+    /// 批量更新单个段落高度（不重建，逐个 `update_height`）。
     ///
-    /// 当多个段落高度变化时，逐个调用 `update_height` 比 `rebuild` 更高效
-    /// （O(k log n) vs O(n)，k 为变化段落数）。
+    /// 当多个段落高度变化时，逐个调用 `update_height`。
     pub fn update_heights(&mut self, updates: &[(usize, f64)]) {
         for &(index, new_height) in updates {
-            self.update_height(index, new_height);
+            self.cps.update(index, new_height);
         }
     }
 
     /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
     ///
-    /// 用于增量排版路径：当段落数量没变时，不需要 `rebuild`（O(n)），
-    /// 只需对受影响段落调用 `update_height`（O(k log n)）。
-    /// 当段落数量变化（换行拆段/删回车合段）时，才需要重建。
-    ///
-    /// # 参数
-    ///
-    /// - `expected_len`：期望的段落数量。
-    /// - `default_height`：新增段落的默认高度。
-    ///
-    /// # 返回
-    ///
     /// 返回 `true` 表示发生了重建（段落数变化），`false` 表示长度已匹配无需重建。
     pub fn ensure_len(&mut self, expected_len: usize, default_height: f64) -> bool {
-        if self.len == expected_len {
-            return false;
-        }
-        // 段落数变化，重建
-        self.heights.resize(expected_len, default_height);
-        self.rebuild_bit();
-        true
+        self.cps.ensure_len(expected_len, default_height)
     }
 
     /// Issue #901: 增量更新受影响段落的高度。
     ///
-    /// 对 `updates` 中列出的段落逐个调用 `update_height`（O(k log n)），
+    /// 对 `updates` 中列出的段落逐个调用 `update_height`，
     /// 不扫描全章。只在段落数量不匹配时才调用 `ensure_len` 重建。
-    ///
-    /// # 参数
-    ///
-    /// - `updates`：`(段落索引, 新高度)` 列表。
-    /// - `expected_len`：期望的段落数量。不匹配时先重建。
-    /// - `default_height`：新增段落的默认高度。
     pub fn update_heights_incremental(
         &mut self,
         updates: &[(usize, f64)],
@@ -352,25 +199,15 @@ impl ParagraphHeightIndex {
         default_height: f64,
     ) {
         // 先确保长度匹配
-        self.ensure_len(expected_len, default_height);
+        self.cps.ensure_len(expected_len, default_height);
         // 逐个更新受影响段落
         for &(index, new_height) in updates {
-            self.update_height(index, new_height);
+            self.cps.update(index, new_height);
         }
     }
 
     /// Issue #901 第二轮复核: 段落数变化时增量更新 — 只在结构变化位置插入/删除高度，
     /// 保留未变化段的高度数据。
-    ///
-    /// 与 `ensure_len` + `rebuild_bit` 的区别：`ensure_len` 用 `resize` 在末尾
-    /// 添加/截断，但 Enter 拆段/Backspace 合段的变化在中间位置，resize 会导致
-    /// 高度错位。此方法用 `insert`/`remove` 在正确位置操作，保留未变化段高度。
-    ///
-    /// # 参数
-    ///
-    /// - `insert_at`：插入位置和高度（`Some` 表示插入新段落）。
-    /// - `remove_at`：删除位置（`Some` 表示删除段落）。
-    /// - `height_updates`：受影响段落的 `(索引, 新高度)` 列表。
     pub fn update_for_structural_change(
         &mut self,
         insert_at: Option<(usize, f64)>,
@@ -386,24 +223,19 @@ impl ParagraphHeightIndex {
         }
         // 再更新受影响段落的高度
         for &(index, new_height) in height_updates {
-            self.update_height(index, new_height);
+            self.cps.update(index, new_height);
         }
-    }
-
-    /// 获取所有段落高度（按文档顺序）。
-    pub fn heights(&self) -> &[f64] {
-        &self.heights
     }
 
     /// 获取段落 `index` 的 y 范围 `(top_y, bottom_y)`。
     ///
     /// 越界返回 `None`。
     pub fn paragraph_y_range(&self, index: usize) -> Option<(f64, f64)> {
-        if index >= self.len {
+        if index >= self.cps.len() {
             return None;
         }
         let top = self.paragraph_top_y(index);
-        let bottom = top + self.heights[index];
+        let bottom = top + self.height_at(index);
         Some((top, bottom))
     }
 
@@ -411,30 +243,18 @@ impl ParagraphHeightIndex {
     ///
     /// 返回 `[start, end)`，使得段落 `start` 是第一个与 `[y_start, y_end]`
     /// 相交的段落，段落 `end - 1` 是最后一个相交的段落。
-    ///
-    /// 用于视口枚举：`y_start = scroll_y`，`y_end = scroll_y + viewport_h`。
-    /// O(log n) 用 Fenwick 树二分搜索，不遍历全部段落。
-    ///
-    /// # 边界
-    ///
-    /// - 空索引 → 返回 `(0, 0)`
-    /// - `y_start < 0` → 从段落 0 开始
-    /// - `y_end >= total_height` → 到最后一个段落
     pub fn paragraphs_in_y_range(&self, y_start: f64, y_end: f64) -> (usize, usize) {
-        if self.len == 0 || y_end < 0.0 {
+        if self.cps.is_empty() || y_end < 0.0 {
             return (0, 0);
         }
-        // Issue #901 第五轮阻塞2: 防御性处理 y_start > y_end 的调用，
-        // 自动交换以保证 start <= end，避免返回空范围或越界。
+        // Issue #901 第五轮阻塞2: 防御性处理 y_start > y_end。
         let (y_start, y_end) = if y_start > y_end {
             (y_end, y_start)
         } else {
             (y_start, y_end)
         };
         let start = self.y_to_paragraph(y_start);
-        // y_end 对应的段落 +1（因为 y_to_paragraph 返回包含 y 的段落，
-        // 我们要的是最后一个相交段落的下一个）
-        let end = (self.y_to_paragraph(y_end) + 1).min(self.len);
+        let end = (self.y_to_paragraph(y_end) + 1).min(self.cps.len());
         if start >= end {
             return (start, start);
         }
@@ -442,168 +262,67 @@ impl ParagraphHeightIndex {
     }
 }
 
-/// 计算 `x` 的最低位（lowest set bit），即 `x & (-x)`。
-///
-/// 对于 `x > 0`，返回 `x` 的二进制表示中最低位的 1 所代表的值。
-fn lowbit(x: usize) -> usize {
-    x & x.wrapping_neg()
-}
-
 // ── Issue #901 第二十一轮问题2: 段落行数前缀索引 ──
 
-/// 段落行数索引 — Fenwick 树保存段落前缀视觉行数。
+/// 段落行数索引 — 分块前缀和保存段落前缀视觉行数。
 ///
-/// Issue #901 第二十一轮问题2: 替代 `id_to_line_range: HashMap<ParagraphId, (usize, usize)>`。
-/// 旧 `id_to_line_range` 以全局 `visual_lines` 数组下标为绝对值，却只对改动段更新，
-/// 换行造成行数变化时全部后缀段范围仍指向旧下标。
-///
-/// 改用 Fenwick 树维护每段 `visual_line_count` 的前缀和：
-/// - 段落 `i` 的行范围 `[paragraph_line_start(i), paragraph_line_end(i))`。
-/// - `paragraph_line_start(i) = prefix_sum(i)`（前 i 段行数和）。
-/// - `paragraph_line_end(i) = prefix_sum(i + 1)`。
-/// - 前面段行数变化时，后缀段的 `paragraph_line_start` 由前缀和自动平移，
-///   不需要逐段更新绝对行下标。
+/// Issue #901 第三十三轮问题3: 从 Fenwick BIT 改为分块前缀和。
 ///
 /// # 操作复杂度
 ///
 /// | 操作 | 复杂度 |
 /// |------|--------|
-/// | `insert` | O(n) 重建 |
-/// | `remove` | O(n) 重建 |
-/// | `update_count` | O(log n) |
-/// | `paragraph_line_start` | O(log n) |
-/// | `paragraph_line_end` | O(log n) |
+/// | `insert` | O(B + n/B) |
+/// | `remove` | O(B + n/B) |
+/// | `splice` | O(B + n/B) |
+/// | `update_count` | O(B + n/B) |
+/// | `paragraph_line_start` | O(n/B) |
 /// | `total_lines` | O(1) |
-/// | `count_at` | O(1) |
+/// | `count_at` | O(n/B) |
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphLineCountIndex {
-    /// Fenwick 树数组（1-indexed，`bit[1..=n]`）。
-    bit: Vec<usize>,
-    /// 原始行数数组（0-indexed），用于直接访问和重建。
-    counts: Vec<usize>,
-    /// 段落数量。
-    len: usize,
-    /// 缓存的总行数（`bit` 的根和），O(1) 查询。
-    total: usize,
+    /// 分块前缀和（usize 行数）。
+    cps: ChunkedPrefixSum<usize>,
 }
 
 impl ParagraphLineCountIndex {
     /// 创建空的行数索引。
     pub fn new() -> Self {
         Self {
-            bit: Vec::new(),
-            counts: Vec::new(),
-            len: 0,
-            total: 0,
+            cps: ChunkedPrefixSum::new(),
         }
     }
 
     /// 从行数数组创建行数索引。
     pub fn from_counts(counts: Vec<usize>) -> Self {
-        let len = counts.len();
-        let total: usize = counts.iter().sum();
-        let mut bit = vec![0usize; len + 1];
-        for i in 0..len {
-            let val = counts[i];
-            let mut j = i + 1;
-            while j <= len {
-                bit[j] += val;
-                j += lowbit(j);
-            }
-        }
         Self {
-            bit,
-            counts,
-            len,
-            total,
+            cps: ChunkedPrefixSum::from_values(counts),
         }
     }
 
     /// 段落数量。
     pub fn len(&self) -> usize {
-        self.len
+        self.cps.len()
     }
 
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.cps.is_empty()
     }
 
     /// 清空所有数据。
     pub fn clear(&mut self) {
-        self.bit.clear();
-        self.counts.clear();
-        self.len = 0;
-        self.total = 0;
+        self.cps.clear();
     }
 
     /// 总行数（所有段落行数之和）。
     pub fn total_lines(&self) -> usize {
-        self.total
+        self.cps.total_sum()
     }
 
     /// 获取段落 `index` 的行数。越界返回 0。
     pub fn count_at(&self, index: usize) -> usize {
-        self.counts.get(index).copied().unwrap_or(0)
-    }
-
-    // ── Fenwick 树核心操作 ──
-
-    /// 前缀和：`counts[0] + counts[1] + ... + counts[k-1]`。
-    ///
-    /// `k` 为段落数量（0-indexed 的半开区间右端）。
-    /// `k == 0` 返回 0，`k >= len` 返回总行数。
-    fn prefix_sum(&self, k: usize) -> usize {
-        let k = k.min(self.len);
-        let mut sum = 0usize;
-        let mut j = k;
-        while j > 0 {
-            sum += self.bit[j];
-            j -= lowbit(j);
-        }
-        sum
-    }
-
-    /// Fenwick 树单点加：`counts[index] += delta`，同步更新 BIT。
-    fn bit_add(&mut self, index: usize, delta: usize) {
-        let mut j = index + 1; // 转 1-indexed
-        while j <= self.len {
-            self.bit[j] += delta;
-            j += lowbit(j);
-        }
-    }
-
-    /// Issue #901 第二十二轮问题3: Fenwick 树单点减：`counts[index] -= delta`，同步更新 BIT。
-    ///
-    /// O(log n)。沿 Fenwick 单点路径执行 `self.bit[j] -= delta`。
-    /// SAFETY: 调用方需保证 `bit[j] >= delta`（即该段旧行数 >= 新行数）。
-    /// 在正常索引状态下，BIT 每个节点存一段区间的和且该区间包含 index，
-    /// 所以 `bit[j] >= old_count >= delta`，减法不会下溢。
-    fn bit_sub(&mut self, index: usize, delta: usize) {
-        let mut j = index + 1; // 转 1-indexed
-        while j <= self.len {
-            self.bit[j] -= delta;
-            j += lowbit(j);
-        }
-    }
-
-    /// 重建整个 Fenwick 树（从 `counts` 数组）。
-    ///
-    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点累加。
-    fn rebuild_bit(&mut self) {
-        let n = self.counts.len();
-        self.bit = vec![0usize; n + 1];
-        for i in 0..n {
-            self.bit[i + 1] = self.counts[i];
-        }
-        for i in 1..=n {
-            let j = i + lowbit(i);
-            if j <= n {
-                self.bit[j] += self.bit[i];
-            }
-        }
-        self.len = n;
-        self.total = self.counts.iter().sum();
+        self.cps.get(index).unwrap_or(0)
     }
 
     // ── 查询操作 ──
@@ -613,16 +332,15 @@ impl ParagraphLineCountIndex {
     /// 即 `counts[0] + counts[1] + ... + counts[index-1]`。
     /// `index == 0` 返回 0（首段首行）。越界返回总行数。
     pub fn paragraph_line_start(&self, index: usize) -> usize {
-        if index >= self.len {
-            return self.total;
+        if index >= self.cps.len() {
+            return self.cps.total_sum();
         }
-        self.prefix_sum(index)
+        self.cps.prefix_sum(index)
     }
 
     /// 查段尾行索引 — 段落 `index` 的尾后行在扁平 `visual_lines` 数组中的下标。
     ///
     /// 即 `paragraph_line_start(index) + counts[index]`。
-    /// 等价于 `paragraph_line_start(index + 1)`。
     pub fn paragraph_line_end(&self, index: usize) -> usize {
         self.paragraph_line_start(index) + self.count_at(index)
     }
@@ -640,58 +358,31 @@ impl ParagraphLineCountIndex {
 
     /// 改段行数 — 更新段落 `index` 的行数为 `new_count`。
     ///
-    /// O(log n)。只改受影响段的数据，不影响其他段落的相对行范围。
+    /// O(B + n/B)。只改受影响段的数据，不影响其他段落的相对行范围。
     /// 返回旧行数，越界返回 `None`。
     pub fn update_count(&mut self, index: usize, new_count: usize) -> Option<usize> {
-        if index >= self.len {
-            return None;
-        }
-        let old_count = self.counts[index];
-        // Issue #901 第二十二轮问题3: 增加与下降都用 O(log n) 单点更新。
-        // 旧实现在新行数 < 旧行数时调用 rebuild_bit()（O(n)），快速删除/缩行
-        // 时频繁触发。改为 bit_sub 沿 Fenwick 单点路径做减法。
-        // SAFETY: BIT 每个节点 bit[j] 存一段区间的和，该区间包含 index，
-        // 所以 bit[j] >= delta = old_count - new_count，减法不会下溢。
-        if new_count >= old_count {
-            let delta = new_count - old_count;
-            self.counts[index] = new_count;
-            self.bit_add(index, delta);
-            self.total += delta;
-        } else {
-            let delta = old_count - new_count;
-            self.counts[index] = new_count;
-            self.bit_sub(index, delta);
-            self.total -= delta;
-        }
-        Some(old_count)
+        self.cps.update(index, new_count)
     }
 
     /// 段落插入 — 在 `index` 处插入行数为 `count` 的新段落。
     ///
-    /// O(n) 重建 BIT。后续段落的行范围自动右移（由前缀和计算）。
+    /// O(B + n/B)。后续段落的行范围自动右移。
     pub fn insert(&mut self, index: usize, count: usize) {
-        let insert_pos = index.min(self.len);
-        self.counts.insert(insert_pos, count);
-        self.rebuild_bit();
+        let insert_pos = index.min(self.cps.len());
+        self.cps.insert(insert_pos, count);
     }
 
     /// 段落删除 — 删除段落 `index`。
     ///
-    /// O(n) 重建 BIT。后续段落的行范围自动左移。
+    /// O(B + n/B)。后续段落的行范围自动左移。
     /// 返回被删除段落的行数，越界返回 `None`。
     pub fn remove(&mut self, index: usize) -> Option<usize> {
-        if index >= self.len {
-            return None;
-        }
-        let count = self.counts.remove(index);
-        self.rebuild_bit();
-        Some(count)
+        self.cps.remove(index)
     }
 
     /// 批量更新行数 — 从行数数组重建整个索引。
     pub fn rebuild(&mut self, counts: Vec<usize>) {
-        self.counts = counts;
-        self.rebuild_bit();
+        self.cps.rebuild(counts);
     }
 
     /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落行数，
@@ -699,42 +390,22 @@ impl ParagraphLineCountIndex {
     ///
     /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的行数保留不动。
     ///
-    /// Issue #901 第三十一轮问题4: 段落数不变（`new_counts.len() == end - start`）时
-    /// 走 O(k log n) 逐点 `update_count` 路径，不全量 `rebuild_bit`（O(n)），
-    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_bit`。
+    /// Issue #901 第三十三轮问题3: 用分块前缀和的局部 splice 替代
+    /// `Vec::splice + rebuild_bit`（O(n)）。
     pub fn splice(&mut self, start: usize, end: usize, new_counts: Vec<usize>) {
-        let splice_start = start.min(self.counts.len());
-        let splice_end = end.min(self.counts.len());
-        let old_count = splice_end - splice_start;
-        let new_count = new_counts.len();
-        if old_count == new_count {
-            // 段落数不变：逐点更新受影响段行数，O(k log n)，不全量重建 BIT。
-            // update_count 内部同时改 counts[index] 与 BIT 单点路径。
-            for (i, &c) in new_counts.iter().enumerate() {
-                self.update_count(splice_start + i, c);
-            }
-        } else {
-            // 段落数变化：Vec::splice + rebuild_bit，O(n)。
-            self.counts.splice(splice_start..splice_end, new_counts);
-            self.rebuild_bit();
-        }
+        self.cps.splice(start, end, new_counts);
     }
 
     /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
     ///
     /// 返回 `true` 表示发生了重建，`false` 表示长度已匹配无需重建。
     pub fn ensure_len(&mut self, expected_len: usize, default_count: usize) -> bool {
-        if self.len == expected_len {
-            return false;
-        }
-        self.counts.resize(expected_len, default_count);
-        self.rebuild_bit();
-        true
+        self.cps.ensure_len(expected_len, default_count)
     }
 
     /// Issue #901: 增量更新受影响段落的行数。
     ///
-    /// 对 `updates` 中列出的段落逐个调用 `update_count`（O(k log n)）。
+    /// 对 `updates` 中列出的段落逐个调用 `update_count`。
     /// 只在段落数量不匹配时才调用 `ensure_len` 重建。
     pub fn update_counts_incremental(
         &mut self,
@@ -742,9 +413,9 @@ impl ParagraphLineCountIndex {
         expected_len: usize,
         default_count: usize,
     ) {
-        self.ensure_len(expected_len, default_count);
+        self.cps.ensure_len(expected_len, default_count);
         for &(index, new_count) in updates {
-            self.update_count(index, new_count);
+            self.cps.update(index, new_count);
         }
     }
 }
@@ -753,39 +424,26 @@ impl ParagraphLineCountIndex {
 
 /// 段落前缀偏移索引 — 维护段落文本长度（byte 和 qchar）的前缀和。
 ///
-/// 段落 `i` 的文档 byte 起始 = `byte_lengths[0] + ... + byte_lengths[i-1]`（前缀和）。
-/// 段落 `i` 的文档 qchar 起始 = `qchar_lengths[0] + ... + qchar_lengths[i-1]`（前缀和）。
+/// Issue #901 第三十三轮问题3: 从 Fenwick BIT 改为分块前缀和。
+/// byte 和 qchar 各用一个 `ChunkedPrefixSum<usize>`。
 ///
-/// # 核心设计
+/// # 操作复杂度
 ///
-/// - 段前插入/删除只改受影响段的 `byte_length` / `qchar_length`，
-///   后续段的起始偏移由前缀和**自动反映**，不逐段写 `document_byte_start`。
-/// - 查询段落起始偏移 O(1)（前缀和数组直接访问）。
-/// - 单段长度更新 O(n) 重建前缀和（n = 段落数，远小于行数）。
-/// - 段落数变化（Enter/Backspace）时 `rebuild` O(n)。
-///
-/// # 与 ParagraphHeightIndex 的关系
-///
-/// `ParagraphHeightIndex` 维护段落**高度**前缀和（用于 y 坐标）。
-/// `ParagraphOffsetIndex` 维护段落**文本长度**前缀和（用于 byte/qchar 坐标）。
-/// 两者独立，分别支持 y→段落和 byte→段落查询。
-///
-/// Issue #901 第十四轮问题1: 改用 Fenwick 树（Binary Indexed Tree）维护前缀和，
-/// `update_paragraph_length` 为 O(log n) 单点更新，不再 O(n) 重建前缀和数组。
+/// | 操作 | 复杂度 |
+/// |------|--------|
+/// | `insert` | O(B + n/B) |
+/// | `remove` | O(B + n/B) |
+/// | `splice` | O(B + n/B) |
+/// | `update_paragraph_length` | O(B + n/B) |
+/// | `paragraph_byte_start` | O(n/B) |
+/// | `byte_to_paragraph` | O(B + n/B) |
+/// | `total_byte_length` | O(1) |
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphOffsetIndex {
-    /// 每段 byte 长度（含尾部 `'\n'`）。
-    byte_lengths: Vec<usize>,
-    /// 每段 qchar (UTF-16) 长度（含尾部 `'\n'`）。
-    qchar_lengths: Vec<usize>,
-    /// byte Fenwick 树数组（1-indexed，`byte_bit[1..=n]`）。
-    byte_bit: Vec<usize>,
-    /// qchar Fenwick 树数组（1-indexed，`qchar_bit[1..=n]`）。
-    qchar_bit: Vec<usize>,
-    /// 缓存的总 byte 长度（O(1) 查询）。
-    byte_total: usize,
-    /// 缓存的总 qchar 长度（O(1) 查询）。
-    qchar_total: usize,
+    /// byte 长度的分块前缀和。
+    byte_cps: ChunkedPrefixSum<usize>,
+    /// qchar (UTF-16) 长度的分块前缀和。
+    qchar_cps: ChunkedPrefixSum<usize>,
 }
 
 impl ParagraphOffsetIndex {
@@ -796,127 +454,67 @@ impl ParagraphOffsetIndex {
 
     /// 段落数量。
     pub fn len(&self) -> usize {
-        self.byte_lengths.len()
+        self.byte_cps.len()
     }
 
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
-        self.byte_lengths.is_empty()
+        self.byte_cps.is_empty()
     }
 
     /// 清空所有数据。
     pub fn clear(&mut self) {
-        self.byte_lengths.clear();
-        self.qchar_lengths.clear();
-        self.byte_bit.clear();
-        self.qchar_bit.clear();
-        self.byte_total = 0;
-        self.qchar_total = 0;
+        self.byte_cps.clear();
+        self.qchar_cps.clear();
     }
 
     /// 从段落长度数组重建偏移索引。
     ///
     /// `byte_lengths[i]` / `qchar_lengths[i]` 是段落 `i` 的文本长度（含尾部 `'\n'`）。
-    /// O(n)。
     pub fn rebuild(&mut self, byte_lengths: Vec<usize>, qchar_lengths: Vec<usize>) {
         debug_assert_eq!(
             byte_lengths.len(),
             qchar_lengths.len(),
             "byte_lengths 和 qchar_lengths 长度必须一致"
         );
-        let n = byte_lengths.len();
-        // 构建 Fenwick 树
-        let mut byte_bit = vec![0usize; n + 1];
-        let mut qchar_bit = vec![0usize; n + 1];
-        let mut byte_total = 0usize;
-        let mut qchar_total = 0usize;
-        for i in 0..n {
-            byte_total += byte_lengths[i];
-            qchar_total += qchar_lengths[i];
-            Self::fenwick_add(&mut byte_bit, i, byte_lengths[i]);
-            Self::fenwick_add(&mut qchar_bit, i, qchar_lengths[i]);
-        }
-        self.byte_lengths = byte_lengths;
-        self.qchar_lengths = qchar_lengths;
-        self.byte_bit = byte_bit;
-        self.qchar_bit = qchar_bit;
-        self.byte_total = byte_total;
-        self.qchar_total = qchar_total;
-    }
-
-    /// Fenwick 树单点增加：在位置 `i`（0-indexed）增加 `delta`。
-    ///
-    /// `delta` 必须是非负增量。用于从空树构建或段落变长。
-    fn fenwick_add(bit: &mut [usize], i: usize, delta: usize) {
-        let n = bit.len() - 1; // bit[1..=n]
-        let mut j = i + 1; // 转为 1-indexed
-        while j <= n {
-            bit[j] += delta;
-            j += j & (!j).wrapping_add(1); // j += lowbit(j)
-        }
-    }
-
-    /// Fenwick 树单点减少：在位置 `i`（0-indexed）减少 `delta`。
-    ///
-    /// `delta` 必须是非负减量，且各节点当前值不小于对应减量（由调用方保证，
-    /// 即新长度是真实段落长度时 Fenwick 节点不会下溢）。用于段落变短（删除文字）。
-    fn fenwick_sub(bit: &mut [usize], i: usize, delta: usize) {
-        let n = bit.len() - 1; // bit[1..=n]
-        let mut j = i + 1; // 转为 1-indexed
-        while j <= n {
-            bit[j] -= delta;
-            j += j & (!j).wrapping_add(1); // j += lowbit(j)
-        }
-    }
-
-    /// Fenwick 树前缀查询：`bit[0] + ... + bit[i-1]`（前 `i` 个元素之和）。
-    fn fenwick_query(bit: &[usize], i: usize) -> usize {
-        let mut j = i; // 查询前 i 个元素（1-indexed count = i）
-        let mut sum = 0usize;
-        while j > 0 {
-            sum += bit[j];
-            j -= j & (!j).wrapping_add(1); // j -= lowbit(j)
-        }
-        sum
+        self.byte_cps.rebuild(byte_lengths);
+        self.qchar_cps.rebuild(qchar_lengths);
     }
 
     /// 查询段落 `index` 的文档 byte 起始偏移（前缀和）。
     ///
     /// 即 `byte_lengths[0] + ... + byte_lengths[index-1]`。
     /// `index == 0` 返回 0。越界返回总 byte 长度。
-    /// O(log n)。
     pub fn paragraph_byte_start(&self, index: usize) -> usize {
-        if index >= self.byte_lengths.len() {
-            self.byte_total
+        if index >= self.byte_cps.len() {
+            self.byte_cps.total_sum()
         } else {
-            Self::fenwick_query(&self.byte_bit, index)
+            self.byte_cps.prefix_sum(index)
         }
     }
 
     /// 查询段落 `index` 的文档 qchar 起始偏移（前缀和）。
-    /// O(log n)。
     pub fn paragraph_qchar_start(&self, index: usize) -> usize {
-        if index >= self.qchar_lengths.len() {
-            self.qchar_total
+        if index >= self.qchar_cps.len() {
+            self.qchar_cps.total_sum()
         } else {
-            Self::fenwick_query(&self.qchar_bit, index)
+            self.qchar_cps.prefix_sum(index)
         }
     }
 
     /// 获取段落 `index` 的 byte 长度。越界返回 0。
     pub fn byte_length_at(&self, index: usize) -> usize {
-        self.byte_lengths.get(index).copied().unwrap_or(0)
+        self.byte_cps.get(index).unwrap_or(0)
     }
 
     /// 获取段落 `index` 的 qchar 长度。越界返回 0。
     pub fn qchar_length_at(&self, index: usize) -> usize {
-        self.qchar_lengths.get(index).copied().unwrap_or(0)
+        self.qchar_cps.get(index).unwrap_or(0)
     }
 
     /// 更新段落 `index` 的 byte 和 qchar 长度。
     ///
-    /// 段前插入/删除只改受影响段的长度，后续段的起始偏移由 Fenwick 树前缀和自动反映。
-    /// O(log n) 单点更新（Fenwick 树），不再 O(n) 重建前缀和数组。
+    /// 段前插入/删除只改受影响段的长度，后续段的起始偏移由前缀和自动反映。
     /// 返回 false 表示越界未更新。
     pub fn update_paragraph_length(
         &mut self,
@@ -924,69 +522,42 @@ impl ParagraphOffsetIndex {
         byte_length: usize,
         qchar_length: usize,
     ) -> bool {
-        if index >= self.byte_lengths.len() {
+        if index >= self.byte_cps.len() {
             return false;
         }
-        let old_byte = self.byte_lengths[index];
-        let old_qchar = self.qchar_lengths[index];
-        self.byte_lengths[index] = byte_length;
-        self.qchar_lengths[index] = qchar_length;
-        // Fenwick 树单点更新与 total 同步：按 new 与 old 的大小关系分支增减，
-        // 避免 wrapping_sub 在 new < old（删除文字）时产生 usize::MAX 一类极大
-        // 正数导致后续无符号加法溢出 panic。
-        if byte_length >= old_byte {
-            let delta = byte_length - old_byte;
-            Self::fenwick_add(&mut self.byte_bit, index, delta);
-            self.byte_total += delta;
-        } else {
-            let delta = old_byte - byte_length;
-            Self::fenwick_sub(&mut self.byte_bit, index, delta);
-            self.byte_total -= delta;
-        }
-        if qchar_length >= old_qchar {
-            let delta = qchar_length - old_qchar;
-            Self::fenwick_add(&mut self.qchar_bit, index, delta);
-            self.qchar_total += delta;
-        } else {
-            let delta = old_qchar - qchar_length;
-            Self::fenwick_sub(&mut self.qchar_bit, index, delta);
-            self.qchar_total -= delta;
-        }
+        self.byte_cps.update(index, byte_length);
+        self.qchar_cps.update(index, qchar_length);
         true
     }
 
     /// 段落插入 — 在 `index` 处插入长度为 `(byte_length, qchar_length)` 的新段落。
     ///
-    /// O(n) 重建 Fenwick 树。后续段落的起始偏移自动右移。
+    /// O(B + n/B)。后续段落的起始偏移自动右移。
     pub fn insert(&mut self, index: usize, byte_length: usize, qchar_length: usize) {
-        let pos = index.min(self.byte_lengths.len());
-        self.byte_lengths.insert(pos, byte_length);
-        self.qchar_lengths.insert(pos, qchar_length);
-        self.rebuild_fenwick();
+        let pos = index.min(self.byte_cps.len());
+        self.byte_cps.insert(pos, byte_length);
+        self.qchar_cps.insert(pos, qchar_length);
     }
 
     /// 段落删除 — 删除段落 `index`。
     ///
-    /// O(n) 重建 Fenwick 树。后续段落的起始偏移自动左移。
+    /// O(B + n/B)。后续段落的起始偏移自动左移。
     pub fn remove(&mut self, index: usize) -> bool {
-        if index >= self.byte_lengths.len() {
+        if index >= self.byte_cps.len() {
             return false;
         }
-        self.byte_lengths.remove(index);
-        self.qchar_lengths.remove(index);
-        self.rebuild_fenwick();
+        self.byte_cps.remove(index);
+        self.qchar_cps.remove(index);
         true
     }
 
     /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落长度，
     /// 在 `start` 处插入新段落长度 `(new_byte_lengths, new_qchar_lengths)`。
     ///
-    /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的长度数据保留不动，
-    /// 只替换中间段。
+    /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的长度数据保留不动。
     ///
-    /// Issue #901 第三十一轮问题4: 段落数不变（`new_byte_lengths.len() == end - start`）时
-    /// 走 O(k log n) 逐点 `update_paragraph_length` 路径，不全量 `rebuild_fenwick`（O(n)），
-    /// 与整章规模脱钩；仅段落数变化时才 `Vec::splice + rebuild_fenwick`。
+    /// Issue #901 第三十三轮问题3: 用分块前缀和的局部 splice 替代
+    /// `Vec::splice + rebuild_fenwick`（O(n)）。
     pub fn splice(
         &mut self,
         start: usize,
@@ -999,67 +570,18 @@ impl ParagraphOffsetIndex {
             new_qchar_lengths.len(),
             "new_byte_lengths 和 new_qchar_lengths 长度必须一致"
         );
-        let splice_start = start.min(self.byte_lengths.len());
-        let splice_end = end.min(self.byte_lengths.len());
-        let old_count = splice_end - splice_start;
-        let new_count = new_byte_lengths.len();
-        if old_count == new_count {
-            // 段落数不变：逐点更新受影响段长度，O(k log n)，不全量重建 Fenwick。
-            // update_paragraph_length 内部同时改 byte/qchar lengths 与 Fenwick 单点路径。
-            for i in 0..new_count {
-                self.update_paragraph_length(
-                    splice_start + i,
-                    new_byte_lengths[i],
-                    new_qchar_lengths[i],
-                );
-            }
-        } else {
-            // 段落数变化：Vec::splice + rebuild_fenwick，O(n)。
-            //
-            // Issue #901 第三十二轮问题4 复核: 与 ParagraphHeightIndex::splice 同理，
-            // 数组 Fenwick 树在中间插入/删除需 O(n) 重建。此路径仅在段落数变化
-            //（Enter/Backspace）时触发，不是每笔字键的热路径。完整 O(log n) 中间
-            // 插入/删除需平衡树前缀和结构，是未来优化方向。
-            self.byte_lengths
-                .splice(splice_start..splice_end, new_byte_lengths);
-            self.qchar_lengths
-                .splice(splice_start..splice_end, new_qchar_lengths);
-            self.rebuild_fenwick();
-        }
-    }
-
-    /// 重建 Fenwick 树数组（内部辅助）。
-    ///
-    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点 fenwick_add。
-    fn rebuild_fenwick(&mut self) {
-        let n = self.byte_lengths.len();
-        self.byte_bit = vec![0usize; n + 1];
-        self.qchar_bit = vec![0usize; n + 1];
-        // Step 1: 叶节点直接赋值
-        for i in 0..n {
-            self.byte_bit[i + 1] = self.byte_lengths[i];
-            self.qchar_bit[i + 1] = self.qchar_lengths[i];
-        }
-        // Step 2: 前向传播，每个节点向唯一父节点贡献一次
-        for i in 1..=n {
-            let j = i + lowbit(i);
-            if j <= n {
-                self.byte_bit[j] += self.byte_bit[i];
-                self.qchar_bit[j] += self.qchar_bit[i];
-            }
-        }
-        self.byte_total = self.byte_lengths.iter().sum();
-        self.qchar_total = self.qchar_lengths.iter().sum();
+        self.byte_cps.splice(start, end, new_byte_lengths);
+        self.qchar_cps.splice(start, end, new_qchar_lengths);
     }
 
     /// 总 byte 长度（所有段落之和）。O(1)。
     pub fn total_byte_length(&self) -> usize {
-        self.byte_total
+        self.byte_cps.total_sum()
     }
 
     /// 总 qchar 长度（所有段落之和）。O(1)。
     pub fn total_qchar_length(&self) -> usize {
-        self.qchar_total
+        self.qchar_cps.total_sum()
     }
 
     /// Issue #901 第十六轮问题2: 查 byte→段落 — 找到包含 byte offset 的段落索引。
@@ -1068,34 +590,19 @@ impl ParagraphOffsetIndex {
     /// - `byte_offset >= total` → 返回最后一个段落
     /// - 空索引 → 返回 0
     ///
-    /// 使用 Fenwick 树上的二分搜索，O(log n)。
-    /// 用于 caret_rect / ime_visual 按需物化：先用 byte offset 定位段落，
-    /// 再只物化该段的视觉行，不遍历全章。
+    /// 使用分块前缀和上的累积查找，O(B + n/B)。
     pub fn byte_to_paragraph(&self, byte_offset: usize) -> usize {
-        let n = self.byte_lengths.len();
+        let n = self.byte_cps.len();
         if n == 0 {
             return 0;
         }
-        if byte_offset >= self.byte_total {
+        if byte_offset >= self.byte_cps.total_sum() {
             return n - 1;
         }
-
-        // BIT 上的二分搜索：找最大的 pos 使得 prefix_sum(pos) <= byte_offset
-        let mut pos = 0usize;
-        let mut remaining = byte_offset;
-        let mut bit_mask = n.next_power_of_two() >> 1;
-        while bit_mask > 0 {
-            let next = pos + bit_mask;
-            if next <= n && self.byte_bit[next] <= remaining {
-                remaining -= self.byte_bit[next];
-                pos = next;
-            }
-            bit_mask >>= 1;
-        }
+        let pos = self.byte_cps.find_by_accumulated(byte_offset);
         pos.min(n.saturating_sub(1))
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1371,17 +878,8 @@ mod tests {
         assert_eq!(idx.y_to_paragraph(1224.9), 48);
     }
 
-    #[test]
-    fn lowbit_function() {
-        assert_eq!(lowbit(1), 1);
-        assert_eq!(lowbit(2), 2);
-        assert_eq!(lowbit(3), 1);
-        assert_eq!(lowbit(4), 4);
-        assert_eq!(lowbit(6), 2);
-        assert_eq!(lowbit(8), 8);
-        assert_eq!(lowbit(12), 4);
-        assert_eq!(lowbit(16), 16);
-    }
+    // Issue #901 第三十三轮问题3: lowbit 函数已随 Fenwick BIT 移除，
+    // lowbit_function 测试相应删除。
 
     // ── Issue #901: 增量更新测试 ──
 

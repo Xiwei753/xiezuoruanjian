@@ -559,8 +559,10 @@ impl LinuxEditorPipeline {
             Option<u64>,
         ) = match prepared_handle.as_ref() {
             Some(handle) => {
-                // 复用当前 generation 做基础 snapshot（不持有 generation，不释放）。
-                let snap = layout::prepare_document_visual_snapshot_scoped(
+                // Issue #901 第三十三轮问题1: 从 EditorLayout 已排版的 VisualLine 直接
+                // 组装 snapshot，不调 prepare_document_visual_snapshot_scoped（那会在
+                // handle.generation 上整章 install 无 owner 的新 QTextLayout，泄漏）。
+                let snap = layout::build_snapshot_from_prepared_lines(
                     self.mirror.text(),
                     self.text_revision,
                     ctx.font_pixel_size,
@@ -570,11 +572,7 @@ impl LinuxEditorPipeline {
                     ctx.text_indent,
                     ctx.bounding_width,
                     ctx.dpr,
-                    Some(&ctx.text_color),
-                    handle.generation,
-                    0,
-                    0,
-                    &paragraph_ids,
+                    handle.lines,
                 );
                 (snap, None)
             }
@@ -638,8 +636,9 @@ impl LinuxEditorPipeline {
                 lines: visuals_lines,
                 leases,
             };
-            // 布局变化后任意行位置都可能改变，提取所有行，不漏 anchor 覆盖的行。
-            let all_line_ids: Vec<usize> = (0..visuals_lines.len()).collect();
+            // Issue #901 第三十三轮问题2: 只查询受影响段的行，与 lease 范围一致。
+            let all_line_ids: Vec<usize> =
+                editor_layout.affected_visual_line_indices(visuals_lines);
             let animation_visuals = layout::prepare_animation_visuals_from_layout(
                 &visuals_handle,
                 &all_line_ids,

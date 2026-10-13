@@ -186,7 +186,7 @@ pub fn prepare_document_visual_snapshot_scoped(
 mod full;
 
 use full::prepare_document_visual_snapshot_impl;
-pub use full::{prepare_affected_paragraphs_visual_snapshot};
+pub use full::{build_snapshot_from_prepared_lines, prepare_affected_paragraphs_visual_snapshot};
 
 /// Issue #901: 增量排版入口 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
 ///

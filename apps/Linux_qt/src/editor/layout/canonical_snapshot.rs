@@ -627,7 +627,7 @@ mod ffi;
 mod prepare;
 
 pub use prepare::{
-    inject_animation_visuals_into_snapshot,
+    build_snapshot_from_prepared_lines, inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
     prepare_incremental_visual_snapshot,

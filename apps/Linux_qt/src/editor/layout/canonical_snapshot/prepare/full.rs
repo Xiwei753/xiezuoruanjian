@@ -469,6 +469,154 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     }
 }
 
+/// Issue #901 第三十三轮问题1: 从已有 `VisualLine` 数组直接组装
+/// `CanonicalDocumentVisualSnapshot`，**不调用任何
+/// `acquire_physical_slot_for_generation` 或 `install_layout_slot_gen`**。
+///
+/// `build_canonical_snapshot_for_current_layout` 的正常路径（有 prepared_handle 时）
+/// 改用本函数，复用 `EditorLayout` 当前已排版的 `VisualLine` 几何，不再在
+/// `handle.generation` 上整章安装独立 `QTextLayout`。
+///
+/// # 为什么不调用 acquire/install
+///
+/// `prepare_document_visual_snapshot_scoped` 进入 `prepare_document_visual_snapshot_impl`，
+/// 对整章每个非空段调 `acquire_physical_slot_for_generation(generation)` +
+/// `prepare_paragraph_visual_snapshot`（C++ `install_layout_slot_gen` 创建每段
+/// refcount=1 的新 `QTextLayout`）。这些新槽与 `EditorLayout.paragraph_store`
+/// 原本保存的物理槽不同，且正常路径 `fallback_gen` 为 `None` 不会
+/// `retire_temporary_generation`，新布局无 owner，随事务次数增长泄漏 Qt 内存及槽数组。
+///
+/// 本函数直接从 `PreparedLayoutHandle.lines`（`EditorLayout` 已排版的视觉行，
+/// 其 `cache_slot` 指向 `paragraph_store` 已登记的物理槽，有正确 owner）读取几何，
+/// 不创建任何新 `QTextLayout`，不泄漏。
+///
+/// # clusters / cursor_x_map
+///
+/// `VisualLine` 不携带 cluster / cursor_x_map 信息，本函数产出的
+/// `CanonicalLineSnapshot.clusters` / `cursor_x_map` 为空 `Vec`。
+/// - cluster 由基础 canonical 排版（`EditorLayout.snapshot`）直接产出并存储在
+///   `EditorLayout` 的 canonical snapshot 中；本函数产出的 snapshot 用于
+///   `reconcile_active_transactions_with_new_canonical`，cluster 缺失时 rebind
+///   回退到 Snap（正确性降级，非错误），不会崩溃。
+/// - `image` 由调用方后续 `inject_animation_visuals_into_snapshot` 注入。
+/// - 几何字段（x/y/width/height/ascent/descent/byte/qchar offset）从 `VisualLine`
+///   直接读取，与 `EditorLayout` 已排版结果一致。
+///
+/// # 参数
+///
+/// - `text`：全文文本，用于构建 `paragraph_offset_index`（段首 byte/qchar 前缀和）。
+/// - `visual_lines`：`EditorLayout` 当前已排版的视觉行切片（`PreparedLayoutHandle.lines`）。
+/// - 其余排版参数用于填充 `CanonicalDocumentVisualSnapshot` 的元数据字段。
+pub fn build_snapshot_from_prepared_lines(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    visual_lines: &[VisualLine],
+) -> CanonicalDocumentVisualSnapshot {
+    let mut paragraphs: Vec<CanonicalParagraphSnapshot> = Vec::new();
+
+    // 按 logical_slot 分组（同段连续，与 build_line_count_index_from_lines 一致）。
+    // 每组对应一个段落，构建一个 CanonicalParagraphSnapshot。
+    let mut idx = 0usize;
+    while idx < visual_lines.len() {
+        let first = &visual_lines[idx];
+        let slot = first.logical_slot;
+        let para_text = first.para_text.clone();
+        let para_start = first.para_start;
+        // 收集同段所有行的索引范围 [idx, end)。
+        let mut end = idx + 1;
+        while end < visual_lines.len() && visual_lines[end].logical_slot == slot {
+            end += 1;
+        }
+
+        // 构建 CanonicalLineSnapshot 列表。
+        // 空段（para_text 为空）lines 为空 Vec，与 prepare_document_visual_snapshot_impl
+        // 一致（空段 VisualLine 存在但 CanonicalParagraphSnapshot.lines 为空）。
+        let mut lines: Vec<CanonicalLineSnapshot> = Vec::new();
+        if !para_text.is_empty() {
+            lines.reserve(end - idx);
+            for vl in &visual_lines[idx..end] {
+                // VisualLine.x = padding + canonical_line.x_pos → x_pos = x - padding。
+                // 排版时 x_pos >= 0，所以 vl.x >= padding；max(0.0) 防浮点误差。
+                let x_pos = (vl.x - padding).max(0.0);
+                lines.push(CanonicalLineSnapshot {
+                    qchar_start: vl.qchar_start,
+                    qchar_end: vl.qchar_end,
+                    document_byte_start: vl.byte_start,
+                    document_byte_end: vl.byte_end,
+                    x_pos,
+                    width: vl.width,
+                    ascent: vl.qt_ascent,
+                    descent: vl.qt_descent,
+                    x_end_trailing: vl.x_end_trailing,
+                    image: None,
+                    clusters: Vec::new(),
+                    cursor_x_map: Vec::new(),
+                    // paragraph_document_byte_start 存段落索引（与 full.rs 历史语义一致）。
+                    paragraph_document_byte_start: para_start,
+                    qtextline_idx: vl.qtextline_idx,
+                });
+            }
+        }
+
+        let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+            &para_text,
+            0,
+        );
+        paragraphs.push(CanonicalParagraphSnapshot {
+            paragraph_text: para_text,
+            paragraph_document_byte_start: para_start,
+            lines,
+            index_map,
+        });
+        idx = end;
+    }
+
+    // 边界：visual_lines 为空（极端情况，正常路径 prepared_handle.lines 应非空）。
+    // 确保 paragraphs 至少有一个空段，使 snapshot 结构有效。
+    if paragraphs.is_empty() {
+        paragraphs.push(CanonicalParagraphSnapshot {
+            paragraph_text: String::new(),
+            paragraph_document_byte_start: 0,
+            lines: Vec::new(),
+            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
+        });
+    }
+
+    // 复用 full.rs 已有 helper 构建索引，保证与 prepare_document_visual_snapshot_impl
+    // 产出的索引语义一致。
+    let visual_lines_vec: Vec<VisualLine> = visual_lines.to_vec();
+    let height_index = std::sync::Arc::new(build_height_index_from_lines(&visual_lines_vec));
+    let paragraph_id_to_slot = std::sync::Arc::new(build_paragraph_id_to_slot_from_lines(
+        &visual_lines_vec,
+    ));
+    let paragraph_line_count_index = std::sync::Arc::new(build_line_count_index_from_lines(
+        &visual_lines_vec,
+    ));
+    CanonicalDocumentVisualSnapshot {
+        text_revision,
+        font_size,
+        font_family: font_family.to_string(),
+        line_spacing,
+        text_indent: indent,
+        padding,
+        width,
+        dpr,
+        paragraphs,
+        visual_lines: Arc::new(visual_lines_vec),
+        paragraph_offset_index: Arc::new(build_offset_index_from_text(text)),
+        height_index,
+        paragraph_id_to_slot,
+        paragraph_line_count_index,
+    }
+}
+
 // ── Issue #901: 增量排版实现 ──
 
 /// 从 `CanonicalDocumentVisualSnapshot` 的 `visual_lines` 提取每段高度。
