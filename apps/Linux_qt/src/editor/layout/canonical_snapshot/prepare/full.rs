@@ -795,8 +795,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // new_paras，避免每笔全文切分：
     // - 受影响范围扩展到完整段落边界，之前的未改段（前缀段）从 entries 累计长度
     //   定位切片获取（不重新切分，不依赖可能过时的 document_byte_start）
-    // - 扩展后的完整段落区域调用 split_paragraphs_with_hard_break（保留编辑所在段
-    //   的完整前后半段，不再吞掉原正文，不切到 UTF-8 字符中间）
+    // - 扩展后的完整段落区域按真实换行边界切分（第二十八轮复核问题1修复：
+    //   不再调用 split_paragraphs_with_hard_break，避免局部切片以 \n 结尾时
+    //   产生不存在的尾空段；只有 expanded_end == text_len 时才产生尾空段）
     // - 扩展区域之后的未改段（后缀段）从 entries 累计长度 + delta 定位切片获取
     // 当 affected_text_range 不存在、范围不合理或边界检查失败时，回退全文切分。
     // Issue #901 第二十八轮复核问题4: build_new_paras_from_affected_range 额外返回
