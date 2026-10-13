@@ -393,13 +393,17 @@ impl EditorLayout {
             // 不需要 text.split_inclusive('\n').collect() 全文切分来计算 affected range，
             // 直接用 Core 提供的范围，省去 O(全文) 切分。只有无 display_patches 时
             // 才全文切分并按段落 hash 比较。
-            let (affected_start, affected_end) =
+            let (affected_start, affected_end, affected_text_range) =
                 if let Some(range) = self.last_edit_affected_range.take() {
-                    range
+                    // Issue #901 第二十六轮复核缺口4: Core 提供的受影响范围同时
+                    // 传给 prepare_incremental_visual_snapshot 用于增量拼接 new_paras。
+                    let (s, e) = range;
+                    (s, e, Some((s, e)))
                 } else {
                     // 无 display_patches 时回退到按段落 hash 比较，需要全文切分
                     let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
-                    self.compute_affected_byte_range(text, &new_paras, old_para_count)
+                    let (s, e) = self.compute_affected_byte_range(text, &new_paras, old_para_count);
+                    (s, e, None)
                 };
 
             // Issue #901 第三轮复核问题 1: 用 mem::take 取走 last_snapshot 的所有权，
@@ -421,6 +425,7 @@ impl EditorLayout {
                 current_gen,
                 affected_start,
                 affected_end,
+                affected_text_range,
                 prev_snapshot,
                 &mut self.paragraph_store,
                 &mut self.height_index,

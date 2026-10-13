@@ -230,6 +230,9 @@ pub fn prepare_incremental_visual_snapshot(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
+    // Issue #901 第二十六轮复核缺口4: Core 提供的受影响文本字节范围，
+    // 传给 prepare_incremental_visual_snapshot_impl 用于增量拼接 new_paras。
+    affected_text_range: Option<(usize, usize)>,
     // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
     // visual_lines/paragraphs，避免全章 clone。调用方在 mod.rs 用 mem::take
     // 取走 last_snapshot 的所有权后传入。
@@ -251,6 +254,7 @@ pub fn prepare_incremental_visual_snapshot(
         generation,
         affected_byte_start,
         affected_byte_end,
+        affected_text_range,
         previous_snapshot,
         paragraph_store,
         height_index,

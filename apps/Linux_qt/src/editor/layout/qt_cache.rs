@@ -151,6 +151,14 @@ cpp! {{
     // 但 QTextLayout 对象内存不再泄漏。与 set_null_paragraph_layout_slot_gen 的区别：
     // set_null 会 ensure_layout_generation 创建空数组（用于占位），release 只在
     // generation 已存在时释放，不创建新数组（用于回收已无持有者的旧 layout）。
+    //
+    // Issue #901 第二十六轮复核缺口2b: 释放后把 slot 加入 g_slot_freelist 供复用，
+    // 避免 C++ 槽位数组按历史编辑次数增长。
+
+    // Issue #901 第二十六轮复核缺口2b: 物理槽 freelist — 释放的槽号可复用，
+    // 避免 next_physical_slot 每笔递增导致 C++ 槽位数组无限增长。
+    static std::vector<int> g_slot_freelist;
+
     void release_paragraph_layout_slot_gen(uint64_t gen, int slot) {
         auto* layouts = find_layout_generation(gen);
         if (!layouts) return;
@@ -159,6 +167,16 @@ cpp! {{
             delete (*layouts)[slot];
             (*layouts)[slot] = nullptr;
         }
+        // 缺口2b: 释放后把 slot 加入 freelist 供复用。
+        g_slot_freelist.push_back(slot);
+    }
+
+    // 从 freelist 取一个可复用的槽号。freelist 为空时返回 -1，调用方应分配新槽。
+    int acquire_physical_slot_from_freelist() {
+        if (g_slot_freelist.empty()) return -1;
+        int slot = g_slot_freelist.back();
+        g_slot_freelist.pop_back();
+        return slot;
     }
 
     // 兼容旧调用：clear_paragraph_layout_cache 清全部 generation。
@@ -246,4 +264,18 @@ pub fn release_paragraph_layout_slot_gen(gen: u64, slot: i32) {
     cpp!(unsafe [gen as "uint64_t", slot as "int"] {
         release_paragraph_layout_slot_gen(gen, slot);
     });
+}
+
+/// Issue #901 第二十六轮复核缺口2b: 从 C++ freelist 取一个可复用的物理槽号。
+///
+/// 释放 QTextLayout 时对应槽号被加入 freelist（见 `release_paragraph_layout_slot_gen`）。
+/// 本函数从 freelist pop 一个槽号供新段复用，避免 `next_physical_slot` 每笔递增
+/// 导致 C++ 槽位数组按历史编辑次数增长。
+///
+/// 返回 >= 0 表示复用的槽号；返回 -1 表示 freelist 为空，调用方应分配新槽。
+/// SAFETY: GUI thread only; freelist 为进程级 static，仅在 GUI 线程中使用。
+pub fn acquire_physical_slot_from_freelist() -> i32 {
+    cpp!(unsafe [] -> i32 as "int" {
+        return acquire_physical_slot_from_freelist();
+    })
 }

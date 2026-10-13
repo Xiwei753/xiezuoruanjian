@@ -616,6 +616,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
+    // Issue #901 第二十六轮复核缺口4: Core 提供的受影响文本字节范围，
+    // 用于增量拼接 new_paras，避免每笔 split_paragraphs_with_hard_break 全文切分。
+    // None 或范围不合理时回退到全文切分。
+    affected_text_range: Option<(usize, usize)>,
     // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
     // visual_lines/paragraphs，避免全章 clone。
     previous_snapshot: Option<CanonicalDocumentVisualSnapshot>,
@@ -783,12 +787,30 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
     // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
     // 按去掉 \n 后的段落正文比较误判"无变化"。
-    // Issue #901 第二十五轮复核问题3: 增量路径中仍需全文切分来获取段落文本（重排段
-    // 需要段落文本内容）。这是剩余优化点 — 未来可用 Core DisplayPatch 的旧/新 byte
-    // 区间和 paragraph_store 的 byte 前缀索引定位受影响段，不每笔生成新全文 Vec。
-    // 本轮保留全文切分，因 split_paragraphs_with_hard_break 的 O(全文 byte) 常数小
-    //（单字节 memchr），且重排段需要段落文本内容。
-    let new_paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
+    // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
+    // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
+    // 按去掉 \n 后的段落正文比较误判"无变化"。
+    // Issue #901 第二十六轮复核缺口4: 当有 Core 提供的受影响范围（affected_text_range）
+    // 且 paragraph_store 非空时，用增量拼接构建 new_paras，避免每笔全文切分：
+    // - 受影响范围之前的未改段从 paragraph_store entries 切片获取（不重新切分）
+    // - 受影响区域的新文本只对这部分调用 split_paragraphs_with_hard_break
+    // - 受影响范围之后的未改段从 entries 切片获取
+    // 当 affected_text_range 不存在、范围不合理或边界检查失败时，回退全文切分。
+    let new_paras: Vec<(&str, bool)> = {
+        let store = &*paragraph_store;
+        if let Some((aff_start, aff_end)) = affected_text_range {
+            if aff_start < aff_end && aff_end <= text.len() && !store.is_empty() {
+                build_new_paras_from_affected_range(text, store, aff_start, aff_end)
+                    .unwrap_or_else(|| {
+                        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+                    })
+            } else {
+                super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+            }
+        } else {
+            super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+        }
+    };
     let new_para_count = new_paras.len();
 
     // Issue #901 第五轮阻塞2: 用段落文本比较计算旧段 splice 范围和新段建立范围。
@@ -1403,6 +1425,69 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     paragraph_store.release_retired_layouts();
 
     snapshot
+}
+
+/// Issue #901 第二十六轮复核缺口4: 从受影响范围增量拼接 new_paras，避免全文切分。
+///
+/// 当 Core 提供了受影响文本字节范围 `(aff_start, aff_end)` 时，用 paragraph_store
+/// entries 中的未改段（受影响范围之前和之后）加上受影响区域的新切分段，拼接构成
+/// 完整的 `new_paras`。未改段的文本从 `text` 切片获取（用 entry 的 document_byte_start
+/// 和 paragraph_text_len），不重新切分。只有受影响区域调用 `split_paragraphs_with_hard_break`。
+///
+/// 返回 `None` 表示边界检查失败（entry 偏移越界等），调用方应回退到全文切分。
+fn build_new_paras_from_affected_range<'a>(
+    text: &'a str,
+    store: &super::super::super::paragraph_layout_store::ParagraphLayoutStore,
+    aff_start: usize,
+    aff_end: usize,
+) -> Option<Vec<(&'a str, bool)>> {
+    let text_len = text.len();
+    let mut new_paras: Vec<(&str, bool)> = Vec::new();
+
+    // 1. 受影响范围之前的未改段：entry.document_byte_start + paragraph_text_len <= aff_start
+    let mut before_count = 0usize;
+    for i in 0..store.paragraph_count() {
+        let entry = store.entry(i)?;
+        let seg_start = entry.document_byte_start;
+        let seg_end = entry.document_byte_start + entry.paragraph_text_len;
+        if seg_end <= aff_start {
+            if seg_start > text_len || seg_end > text_len {
+                return None; // 越界，回退全文切分
+            }
+            // SAFETY: seg_start..seg_end 对应 entry 的段落文本边界，
+            // 是 text 中的有效 UTF-8 边界（段落文本不含跨字符切割）。
+            let seg_text = &text[seg_start..seg_end];
+            new_paras.push((seg_text, entry.hard_break));
+            before_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    // 2. 受影响区域的新文本：只对这部分调用 split_paragraphs_with_hard_break
+    if aff_start > text_len || aff_end > text_len {
+        return None;
+    }
+    let affected_text = &text[aff_start..aff_end];
+    let affected_paras =
+        super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(affected_text);
+    new_paras.extend(affected_paras);
+
+    // 3. 受影响范围之后的未改段：entry.document_byte_start >= aff_end
+    for i in before_count..store.paragraph_count() {
+        let entry = store.entry(i)?;
+        let seg_start = entry.document_byte_start;
+        let seg_end = entry.document_byte_start + entry.paragraph_text_len;
+        if seg_start >= aff_end {
+            if seg_start > text_len || seg_end > text_len {
+                return None; // 越界，回退全文切分
+            }
+            let seg_text = &text[seg_start..seg_end];
+            new_paras.push((seg_text, entry.hard_break));
+        }
+    }
+
+    Some(new_paras)
 }
 
 /// 检查排版参数是否变化。

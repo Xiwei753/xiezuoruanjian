@@ -313,7 +313,19 @@ pub struct ParagraphLayoutStore {
     ///
     /// 槽号本身不复用（`next_physical_slot` 持续递增），但 QTextLayout 对象
     /// 被 C++ `delete` 释放，不再泄漏。
+    ///
+    /// Issue #901 第二十六轮复核缺口2b: 槽号现在通过 C++ freelist 复用，
+    /// `next_physical_slot` 不再每笔递增，详见 `acquire_physical_slot_from_freelist`。
     retired_slots: Vec<(u64, i32)>,
+    /// Issue #901 第二十六轮复核缺口3: 上一轮 retired slots，延迟一轮释放。
+    ///
+    /// 为建立所有权联系而引入的延迟释放机制。retired slots 标记后不立即释放，
+    /// 延迟到下一轮 snapshot 构建时才真正释放 C++ QTextLayout，确保旧帧动画/
+    /// Qt 消费者在新 snapshot 构建期间仍可安全访问旧 layout。
+    ///
+    /// `release_retired_layouts` 先释放 `prev_retired_slots`（上一轮延迟的），
+    /// 再把当前 `retired_slots` 移到 `prev_retired_slots`，实现延迟一轮语义。
+    prev_retired_slots: Vec<(u64, i32)>,
 }
 
 impl ParagraphLayoutStore {
@@ -326,6 +338,7 @@ impl ParagraphLayoutStore {
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
             next_physical_slot: 0,
             retired_slots: Vec::new(),
+            prev_retired_slots: Vec::new(),
         }
     }
 
@@ -348,15 +361,29 @@ impl ParagraphLayoutStore {
 
     /// 清空所有缓存（全局失效）。
     pub fn clear(&mut self) {
-        // Issue #901 第二十五轮复核问题1: 先释放 retired slots 中的 QTextLayout，
-        // 避免全局失效后 retired 列表中的旧 layout 泄漏。
-        self.release_retired_layouts();
+        // Issue #901 第二十六轮复核缺口3: 先释放 prev_retired_slots（上一轮延迟的）。
+        // clear 是全局失效，立即释放延迟队列中的旧 layout。
+        for (gen, slot) in std::mem::take(&mut self.prev_retired_slots) {
+            super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
+        }
+        // Issue #901 第二十六轮复核缺口2a: 把当前 entries 的有效 handle 推入 retired_slots，
+        // 由后续 release_retired_layouts 延迟释放。clear 后 entries 为空，
+        // 这些 handle 在下次 snapshot 构建时通过 release_retired_layouts 释放。
+        let mut newly_retired: Vec<(u64, i32)> = Vec::new();
+        for entry in &self.entries {
+            if entry.layout_generation != 0 && entry.cache_slot >= 0 {
+                newly_retired.push((entry.layout_generation, entry.cache_slot));
+            }
+        }
+        self.retired_slots.extend(newly_retired);
         self.entries.clear();
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
         Arc::make_mut(&mut self.line_count_index).clear();
         // Issue #901 第二十一轮问题1: next_physical_slot 不重置，避免新分配的
-        // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。物理槽只分配不回收。
+        // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。
+        // Issue #901 第二十六轮复核缺口2b: 槽号通过 C++ freelist 复用，
+        // next_physical_slot 仍不重置以避免与 C++ 端可能仍存活的槽冲突。
     }
 
     /// Issue #901 第二十五轮复核问题1: 取出并清空 retired slots 列表。
@@ -368,18 +395,26 @@ impl ParagraphLayoutStore {
         std::mem::take(&mut self.retired_slots)
     }
 
-    /// Issue #901 第二十五轮复核问题1: 释放所有 retired slots 对应的 QTextLayout。
+    /// Issue #901 第二十五轮复核问题1 + 第二十六轮复核缺口3: 释放 retired slots 对应的 QTextLayout。
     ///
-    /// 取出 retired 列表，对每个 `(gen, slot)` 调用 C++ `release_paragraph_layout_slot_gen`
-    /// 删除该槽的 QTextLayout 并置 nullptr。槽号本身不复用（`next_physical_slot`
-    /// 持续递增），但 QTextLayout 对象内存不再泄漏。
+    /// 延迟释放机制：retired slots 标记后不立即释放，延迟到下一轮 snapshot 构建时
+    /// 才真正释放 C++ QTextLayout，确保旧帧动画/Qt 消费者在新 snapshot 构建期间
+    /// 仍可安全访问旧 layout。
     ///
-    /// 在增量排版完成后（snapshot 构建后）调用，确保旧 layout 不再被任何 snapshot 引用。
+    /// 具体步骤：
+    /// 1. 先释放 `prev_retired_slots`（上一轮延迟的 handle）— 这些 handle 在上一轮
+    ///    snapshot 构建后已无持有者，本轮新 snapshot 已构建，可安全释放。
+    /// 2. 把当前 `retired_slots` 移到 `prev_retired_slots` — 本轮标记的 handle 延迟到
+    ///    下一轮释放。
+    ///
+    /// 在增量排版完成后（snapshot 构建后）调用。
     pub fn release_retired_layouts(&mut self) {
-        let retired = self.drain_retired_slots();
-        for (gen, slot) in retired {
+        // 步骤1: 释放上一轮延迟的 prev_retired_slots。
+        for (gen, slot) in std::mem::take(&mut self.prev_retired_slots) {
             super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
         }
+        // 步骤2: 当前 retired_slots 移到 prev_retired_slots，延迟一轮释放。
+        self.prev_retired_slots = std::mem::take(&mut self.retired_slots);
     }
 
     /// 获取指定索引处段落的只读引用。
@@ -496,6 +531,14 @@ impl ParagraphLayoutStore {
         let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(new_count);
         let mut byte_offset = 0usize;
 
+        // Issue #901 第二十六轮复核缺口1: 记录被新 entries 继承的旧
+        // (layout_generation, cache_slot) handle。前缀/后缀段在 cache_key
+        // 完全相同时继承旧 entry 的排版结果（含 Qt 槽），这些 handle 仍存活
+        // 不能回收。只有未被继承的旧 handle（被丢弃的旧 entry、cache_key 变化
+        // 导致重置的段、中间段对应的旧 entry）才推入 retired_slots。
+        let mut inherited_handles: std::collections::HashSet<(u64, i32)> =
+            std::collections::HashSet::new();
+
         for (i, (paragraph_text, hard_break)) in paragraphs.iter().enumerate() {
             let cache_key = new_keys[i].clone();
 
@@ -521,6 +564,12 @@ impl ParagraphLayoutStore {
                 // 前缀段：继承旧 entry[i]
                 let old = &self.entries[i];
                 if old.cache_key == cache_key {
+                    // Issue #901 第二十六轮复核缺口1: cache_key 完全相同，
+                    // 新 entry 继承了旧 entry 的 (layout_generation, cache_slot)，
+                    // 该 Qt 槽仍存活，记录到 inherited_handles 避免被回收。
+                    if old.layout_generation != 0 && old.cache_slot >= 0 {
+                        inherited_handles.insert((old.layout_generation, old.cache_slot));
+                    }
                     (
                         old.id,
                         old.layout_generation,
@@ -537,6 +586,12 @@ impl ParagraphLayoutStore {
                 let old_idx = old_count - (new_count - i);
                 let old = &self.entries[old_idx];
                 if old.cache_key == cache_key {
+                    // Issue #901 第二十六轮复核缺口1: cache_key 完全相同，
+                    // 新 entry 继承了旧 entry 的 (layout_generation, cache_slot)，
+                    // 该 Qt 槽仍存活，记录到 inherited_handles 避免被回收。
+                    if old.layout_generation != 0 && old.cache_slot >= 0 {
+                        inherited_handles.insert((old.layout_generation, old.cache_slot));
+                    }
                     (
                         old.id,
                         old.layout_generation,
@@ -569,6 +624,32 @@ impl ParagraphLayoutStore {
             // byte_offset 推进：content 长度 + '\n' 长度（如果 hard_break）
             byte_offset += paragraph_text.len() + if *hard_break { 1 } else { 0 };
         }
+
+        // Issue #901 第二十六轮复核缺口1: 回收未被新 entries 继承的旧 Qt 槽。
+        //
+        // rebuild_from_text 在 self.entries = new_entries 之前没有遍历被删除或被替换的
+        // 旧 entry，连续 Enter、删回车合段会积累不可回收的 QTextLayout 对象。此处遍历
+        // 所有旧 entries，把没有被 inherited_handles 包含且有效（layout_generation != 0
+        // && cache_slot >= 0）的 (layout_generation, cache_slot) 推入 retired_slots，
+        // 由 release_retired_layouts 在增量排版完成后统一释放 C++ QTextLayout。
+        //
+        // 前缀/后缀段 cache_key 相同时继承了旧 handle（已记入 inherited_handles），
+        // 不回收。cache_key 不同（内容或参数变了）的段新 entry 的
+        // layout_generation=0/cache_slot=-1，旧 handle 未被继承，需回收。
+        // 中间段全部分配新 Id，对应旧 entry 的 handle 未被继承，需回收。
+        //
+        // 先收集到局部 Vec 再 extend，避免同时借用 self.entries（不可变）和
+        // self.retired_slots（可变）的借用冲突。
+        let mut newly_retired: Vec<(u64, i32)> = Vec::new();
+        for old in &self.entries {
+            if old.layout_generation != 0
+                && old.cache_slot >= 0
+                && !inherited_handles.contains(&(old.layout_generation, old.cache_slot))
+            {
+                newly_retired.push((old.layout_generation, old.cache_slot));
+            }
+        }
+        self.retired_slots.extend(newly_retired);
 
         self.entries = new_entries;
         // Issue #901 第二十一轮阻塞5: 同步重建 id_to_slot_cache。
@@ -979,6 +1060,12 @@ impl ParagraphLayoutStore {
     pub fn remove_paragraph(&mut self, index: usize) -> Option<ParagraphLayoutEntry> {
         if index < self.entries.len() {
             let removed = self.entries.remove(index);
+            // Issue #901 第二十六轮复核缺口2a: 回收被删除段落的旧 handle。
+            // removed 是 owned 值，读取其字段不借用 self，无借用冲突。
+            if removed.layout_generation != 0 && removed.cache_slot >= 0 {
+                self.retired_slots
+                    .push((removed.layout_generation, removed.cache_slot));
+            }
             // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
             self.id_to_slot_cache_remove(removed.id, index);
             // Issue #901 第二十一轮问题2: 同步删除行数索引槽位。
@@ -1004,14 +1091,27 @@ impl ParagraphLayoutStore {
     ///
     /// 越界返回 -1。
     pub fn paragraph_physical_slot(&mut self, index: usize) -> i32 {
-        let Some(entry) = self.entries.get_mut(index) else {
+        if index >= self.entries.len() {
             return -1;
-        };
-        if entry.cache_slot < 0 {
-            entry.cache_slot = self.next_physical_slot;
-            self.next_physical_slot += 1;
         }
-        entry.cache_slot
+        // 已有有效 cache_slot，直接复用。
+        if self.entries[index].cache_slot >= 0 {
+            return self.entries[index].cache_slot;
+        }
+        // Issue #901 第二十六轮复核缺口2b: 优先从 freelist 复用已释放的槽，
+        // 避免 next_physical_slot 每笔递增导致 C++ 槽位数组无限增长。
+        // 先计算 slot 值（可能修改 next_physical_slot），再写回 entries，
+        // 避免同时借用 self.entries 和 self.next_physical_slot。
+        let freed = super::qt_cache::acquire_physical_slot_from_freelist();
+        let slot = if freed >= 0 {
+            freed
+        } else {
+            let s = self.next_physical_slot;
+            self.next_physical_slot += 1;
+            s
+        };
+        self.entries[index].cache_slot = slot;
+        slot
     }
 
     /// 更新段落 `index` 的排版结果。
@@ -1031,15 +1131,25 @@ impl ParagraphLayoutStore {
         height: f64,
         visual_line_count: usize,
     ) -> bool {
-        let Some(entry) = self.entries.get_mut(index) else {
+        if index >= self.entries.len() {
             return false;
-        };
+        }
         // Issue #901 第二十一轮问题1: physical_slot 由 store 内部分配，
         // 忽略传入的 _cache_slot。复用段保持已有值，新段分配新槽。
-        if entry.cache_slot < 0 {
-            entry.cache_slot = self.next_physical_slot;
-            self.next_physical_slot += 1;
+        // Issue #901 第二十六轮复核缺口2b: 优先从 freelist 复用已释放的槽。
+        // 先计算 slot（可能修改 next_physical_slot），再写回 entries，避免借用冲突。
+        if self.entries[index].cache_slot < 0 {
+            let freed = super::qt_cache::acquire_physical_slot_from_freelist();
+            let slot = if freed >= 0 {
+                freed
+            } else {
+                let s = self.next_physical_slot;
+                self.next_physical_slot += 1;
+                s
+            };
+            self.entries[index].cache_slot = slot;
         }
+        let entry = &mut self.entries[index];
         entry.layout_generation = layout_generation;
         entry.height = height;
         entry.visual_line_count = visual_line_count;
@@ -1373,6 +1483,15 @@ impl ParagraphLayoutStore {
 
     /// 全局失效 — 标记所有段落需要重排。
     pub fn invalidate_all(&mut self) {
+        // Issue #901 第二十六轮复核缺口2a: 先收集所有有效 handle 到局部 Vec，
+        // 再 extend 到 retired_slots，避免同时借用 self.entries 和 self.retired_slots。
+        let newly_retired: Vec<(u64, i32)> = self
+            .entries
+            .iter()
+            .filter(|e| e.layout_generation != 0 && e.cache_slot >= 0)
+            .map(|e| (e.layout_generation, e.cache_slot))
+            .collect();
+        self.retired_slots.extend(newly_retired);
         for entry in &mut self.entries {
             entry.layout_generation = 0;
             entry.cache_slot = -1;
@@ -1386,6 +1505,21 @@ impl ParagraphLayoutStore {
 
     /// 使段落 `index` 的布局缓存失效。
     pub fn invalidate_paragraph(&mut self, index: usize) -> bool {
+        // Issue #901 第二十六轮复核缺口2a: 先取出旧 handle 再修改，
+        // 避免同时借用 self.entries（get_mut）和 self.retired_slots（push）。
+        let old_handle = {
+            let Some(entry) = self.entries.get(index) else {
+                return false;
+            };
+            if entry.layout_generation != 0 && entry.cache_slot >= 0 {
+                Some((entry.layout_generation, entry.cache_slot))
+            } else {
+                None
+            }
+        };
+        if let Some(h) = old_handle {
+            self.retired_slots.push(h);
+        }
         let Some(entry) = self.entries.get_mut(index) else {
             return false;
         };
