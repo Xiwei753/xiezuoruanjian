@@ -10,7 +10,14 @@ import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSync
  * 不要在这里改写，否则会丢失原始 errorCode（如 ASYNC_QUEUE_FAILED）。
  */
 function nativeError<T>(e: Object): ResultEnvelope<T> {
-  return { success: false, errorCode: 'NATIVE_ERROR', userMessage: String(e), rawError: String(e) }
+  return {
+    success: false,
+    errorCode: 'NATIVE_ERROR',
+    userMessage: String(e),
+    rawError: String(e),
+    messageKey: undefined,
+    messageArgs: undefined
+  }
 }
 
 export class NativeSyncBridge {
@@ -85,7 +92,7 @@ export class NativeSyncBridge {
       const jsonStr: string = await (this.core.getNativeModule().nativeSyncDiagnostics() as Promise<string>)
       return this.core.decodeEnvelope<FullSyncDiagnosticsResult>(jsonStr, decodeFullSyncDiagnosticsResult)
     } catch (err) {
-      return { success: false, errorCode: 'NATIVE_ERROR', userMessage: `syncDiagnostics failed: ${err}`, rawError: String(err) }
+      return nativeError<FullSyncDiagnosticsResult>(err)
     }
   }
 

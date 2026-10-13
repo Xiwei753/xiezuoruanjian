@@ -17,6 +17,7 @@ export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
 
 const TAG = 'SyncOperationController'
 const DOMAIN = 0x0000
+const SYNC_TIMEOUT_MS = 60000 // 同步超时时间：60秒
 
 export type SyncPhase = 'idle' | 'in_progress' | 'success' | 'failed'
 
@@ -38,6 +39,7 @@ export class SyncOperationController {
   private static instance: SyncOperationController
   private syncBridge: NativeSyncBridge
   private currentOperation: Promise<SyncOutcome> | null = null
+  private abortController: AbortController | null = null
 
   private constructor() {
     this.syncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -62,11 +64,83 @@ export class SyncOperationController {
       return this.currentOperation
     }
 
-    this.currentOperation = this.executeSync()
+    // 创建新的 AbortController 用于取消操作
+    this.abortController = new AbortController()
+    this.currentOperation = this.executeSyncWithTimeout(this.abortController.signal)
     try {
       return await this.currentOperation
     } finally {
       this.currentOperation = null
+      this.abortController = null
+    }
+  }
+
+  /** 取消当前正在进行的同步操作 */
+  cancelSync(): void {
+    if (this.abortController !== null) {
+      hilog.info(DOMAIN, TAG, 'cancelSync: cancelling current sync operation')
+      this.abortController.abort()
+    } else {
+      hilog.warn(DOMAIN, TAG, 'cancelSync: no active sync operation to cancel')
+    }
+  }
+
+  /** 带超时的同步执行 */
+  private async executeSyncWithTimeout(signal: AbortSignal): Promise<SyncOutcome> {
+    let timeoutId: number = -1
+    
+    const timeoutPromise = new Promise<SyncOutcome>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error('SYNC_TIMEOUT'))
+      }, SYNC_TIMEOUT_MS)
+      
+      // 监听取消信号
+      signal.addEventListener('abort', () => {
+        if (timeoutId !== -1) {
+          clearTimeout(timeoutId)
+          timeoutId = -1
+        }
+        reject(new Error('SYNC_CANCELLED'))
+      })
+    })
+
+    try {
+      // 使用 Promise.race 实现超时控制
+      const result = await Promise.race([
+        this.executeSync(),
+        timeoutPromise
+      ])
+      // 成功完成，清理超时定时器
+      if (timeoutId !== -1) {
+        clearTimeout(timeoutId)
+        timeoutId = -1
+      }
+      return result
+    } catch (error) {
+      // 确保超时定时器被清理
+      if (timeoutId !== -1) {
+        clearTimeout(timeoutId)
+        timeoutId = -1
+      }
+      
+      const errorMsg = String(error)
+      if (errorMsg === 'SYNC_TIMEOUT') {
+        hilog.error(DOMAIN, TAG, 'performSync: timeout after %{public}d ms', SYNC_TIMEOUT_MS)
+        return {
+          phase: 'failed',
+          message: '同步操作超时，请检查网络连接后重试',
+          errorCode: 'SYNC_TIMEOUT'
+        }
+      }
+      if (errorMsg === 'SYNC_CANCELLED') {
+        hilog.info(DOMAIN, TAG, 'performSync: operation cancelled by user')
+        return {
+          phase: 'failed',
+          message: '同步操作已取消',
+          errorCode: 'SYNC_CANCELLED'
+        }
+      }
+      throw error
     }
   }
 
