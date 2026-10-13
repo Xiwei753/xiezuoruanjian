@@ -431,6 +431,15 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 .copied()
                 .unwrap_or(ParagraphId::INVALID),
         });
+        // Issue #901 第二十三轮问题1: 为尾空段创建对应的 CanonicalParagraphSnapshot，
+        // 保证 store entries、canonical paragraphs、VisualLine、ParagraphId 逐段一一对应。
+        // 尾空段是结构事实，不是游离视觉行。
+        paragraphs.push(CanonicalParagraphSnapshot {
+            paragraph_text: String::new(),
+            paragraph_document_byte_start: paragraph_idx as usize,
+            lines: Vec::new(),
+            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
+        });
         // paragraph_idx 递增省略：尾部换行分支后不再使用。
     }
 
@@ -532,22 +541,40 @@ fn extract_affected_height_updates(
     updates
 }
 
-/// Issue #901 第三轮复核问题 4: 检查 previous_snapshot 的段落文本是否与 new text 完全一致。
+/// Issue #901 第三轮复核问题 4 + 第二十三轮问题2: 检查 previous_snapshot 的段落结构
+/// 是否与 new text 完全一致（含 hard_break）。
 ///
-/// 用于区分"真正无正文变化"和"换行结构变化/空行插删"。
-/// 从 prev snapshot 的 `paragraphs` 重建文本，与 `text` 比较。
+/// 用 `split_paragraphs_with_hard_break(text)` 切分新文本，与 prev 的段落结构
+///（`paragraphs[i].paragraph_text` + 从 `visual_lines` 获取的 `hard_break`）逐段比较。
+/// 段落数、每段 content 和 hard_break 都相同才返回 true。
 /// O(n) 但只在 `no_affected_range` 边界情况调用，不影响常规编辑性能。
 fn prev_snapshot_text_matches(prev: &CanonicalDocumentVisualSnapshot, text: &str) -> bool {
-    let mut reconstructed = String::with_capacity(text.len());
-    for para in &prev.paragraphs {
-        reconstructed.push_str(&para.paragraph_text);
-        reconstructed.push('\n');
+    let new_paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
+    let prev_para_count = prev.paragraphs.len();
+    if new_paras.len() != prev_para_count {
+        return false;
     }
-    // 如果 text 不以 '\n' 结尾，reconstructed 会多一个尾部 '\n'，去掉。
-    if !text.ends_with('\n') && reconstructed.ends_with('\n') {
-        reconstructed.pop();
+    for i in 0..prev_para_count {
+        let prev_content = &prev.paragraphs[i].paragraph_text;
+        let (new_content, new_hard_break) = new_paras[i];
+        if prev_content.as_str() != new_content {
+            return false;
+        }
+        // 从 visual_lines 获取 prev 段 i 最后一行的 hard_break。
+        // paragraph_line_count_index 的行范围基于段内行数前缀和，不依赖 logical_slot。
+        let (line_start, line_end) = prev
+            .paragraph_line_count_index
+            .paragraph_line_range(i);
+        let prev_hard_break = if line_start < line_end && line_end <= prev.visual_lines.len() {
+            prev.visual_lines[line_end - 1].hard_break
+        } else {
+            false
+        };
+        if prev_hard_break != new_hard_break {
+            return false;
+        }
     }
-    reconstructed == text
+    true
 }
 
 /// Issue #901: 增量排版实现 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
@@ -748,7 +775,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Arc + mem::take + Arc::make_mut（O(1) COW），消除了每笔 O(段落数) 深拷。
     // split_inclusive 的 O(全文 byte) 常数小（单字节 memchr），且局部化需协调
     // 多处 new_paras 使用点，正确性风险高于性能收益，保留标注。
-    let new_paras: Vec<&str> = text.split_inclusive('\n').collect();
+    // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
+    // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
+    // 按去掉 \n 后的段落正文比较误判"无变化"。
+    let new_paras = super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text);
     let new_para_count = new_paras.len();
 
     // Issue #901 第五轮阻塞2: 用段落文本比较计算旧段 splice 范围和新段建立范围。
@@ -757,8 +787,27 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 同时 splice 旧段数组和新段数组。分别用两套独立范围：
     // - old_splice_start..old_splice_end：在旧段数组中删除的范围
     // - new_layout_start..new_layout_end：在新段数组中建立（重排版）的范围
-    let new_para_texts: Vec<&str> = new_paras.iter().map(|p| p.trim_end_matches('\n')).collect();
-    let old_para_texts: Vec<&str> = prev.paragraphs.iter().map(|p| p.paragraph_text.as_str()).collect();
+    //
+    // Issue #901 第二十三轮问题2: 段落身份比较包含 hard_break。
+    // new_paras 已含 hard_break（来自 split_paragraphs_with_hard_break）。
+    // old_paras 从 prev.paragraphs 获取 content，从 prev.visual_lines 获取 hard_break。
+    let new_para_texts: Vec<&str> = new_paras.iter().map(|(p, _)| *p).collect();
+    let old_paras: Vec<(&str, bool)> = (0..prev_para_count)
+        .map(|i| {
+            let content = prev.paragraphs[i].paragraph_text.as_str();
+            let (line_start, line_end) = prev
+                .paragraph_line_count_index
+                .paragraph_line_range(i);
+            let hard_break = if line_start < line_end
+                && line_end <= prev.visual_lines.len()
+            {
+                prev.visual_lines[line_end - 1].hard_break
+            } else {
+                false
+            };
+            (content, hard_break)
+        })
+        .collect();
 
     let splice_ranges = if affected.full_relayout {
         ParagraphSpliceRanges {
@@ -769,8 +818,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     } else {
         ParagraphLayoutStore::compute_old_new_paragraph_ranges(
-            &old_para_texts,
-            &new_para_texts,
+            &old_paras,
+            &new_paras,
         )
     };
 
@@ -864,6 +913,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut visual_lines: Vec<VisualLine> =
         std::mem::take(Arc::make_mut(&mut prev.visual_lines));
 
+    // Issue #901 第二十三轮问题3: 取走 prev_snapshot 的 line_count_index Arc，
+    // 减少 paragraph_store.line_count_index 的 refcount 到 1，
+    // 使 sync_from_visual_lines_incremental 中 Arc::make_mut 可以原地修改（不 COW 深复制）。
+    // prev.paragraph_line_count_index 已在上方 vl_start_idx/vl_end_idx 计算和
+    // old_paras 构建中使用完毕，后续不再直接消费（新 snapshot 从
+    // paragraph_store.line_count_index_arc() 获取）。
+    let _prev_line_count_index = std::mem::take(&mut prev.paragraph_line_count_index);
+
     // Issue #901 第十三轮问题1+2+6: vl_start_idx 和 vl_end_idx 用
     // find_line_range_by_para_start 一次匹配计算（prev.visual_lines 全部物化）。
     // 不需要重新计算。物化后 [t.start_line_idx, vl_end_idx) 范围的行已更新为
@@ -888,7 +945,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // [vl_start_idx, vl_end_idx) 内，可安全就地更新。
     if new_layout_start > 0 && vl_start_idx > 0 && new_layout_start <= new_paras.len() {
         let prev_seg_idx = new_layout_start - 1;
-        let new_hard_break = new_paras[prev_seg_idx].ends_with('\n');
+        let new_hard_break = new_paras[prev_seg_idx].1;
         visual_lines[vl_start_idx - 1].hard_break = new_hard_break;
     }
 
@@ -929,9 +986,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start..new_layout_end 建立新段
     for para_idx in new_layout_start..new_layout_end {
-        let paragraph = new_paras[para_idx];
-        let hard_break = paragraph.ends_with('\n');
-        let paragraph_text = paragraph.trim_end_matches('\n');
+        let (paragraph_text, hard_break) = new_paras[para_idx];
 
         // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
         paragraph_top_y = y;
@@ -1011,11 +1066,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 physical_slot,
                 line_height,
                 1,
-                line_id - 1,
             );
 
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_start += paragraph_text.len() + if hard_break { 1 } else { 0 };
+            paragraph_qchar_start += paragraph_text.chars().map(|c| c.len_utf16()).sum::<usize>()
+                + if hard_break { 1 } else { 0 };
             paragraph_idx += 1;
             continue;
         }
@@ -1092,11 +1147,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             physical_slot,
             para_height,
             line_count,
-            line_start_for_store,
         );
 
-        paragraph_start += paragraph.len();
-        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+        paragraph_start += paragraph_text.len() + if hard_break { 1 } else { 0 };
+        paragraph_qchar_start += paragraph_text.chars().map(|c| c.len_utf16()).sum::<usize>()
+            + if hard_break { 1 } else { 0 };
 
         new_paragraphs.push(canonical);
         paragraph_idx += 1;
@@ -1216,6 +1271,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             vl.para_text.is_empty() && vl.logical_slot == paragraph_idx - 1
         });
         if !already_has_trailing_empty {
+            // Issue #901 第二十三轮问题1: 从 paragraph_store 获取尾空段的正确 ParagraphId，
+            // 不再用 INVALID。rebuild_from_text 已用统一切分器为尾空段创建 entry。
+            let trailing_paragraph_id = paragraph_store
+                .paragraph_id_at(paragraph_idx as usize)
+                .unwrap_or(ParagraphId::INVALID);
             let _empty_canonical = prepare_paragraph_visual_snapshot(
                 "",
                 paragraph_idx as usize,
@@ -1254,8 +1314,15 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 qt_descent: 0.0,
                 cache_slot: paragraph_idx,
                 logical_slot: paragraph_idx,
-                // Issue #901 第十八轮问题4: 尾部换行新空段，paragraph_store 可能未收录，用 INVALID。
-                paragraph_id: ParagraphId::INVALID,
+                paragraph_id: trailing_paragraph_id,
+            });
+            // Issue #901 第二十三轮问题1: 为尾空段创建对应的 CanonicalParagraphSnapshot，
+            // 保证 store entries、canonical paragraphs、VisualLine、ParagraphId 逐段一一对应。
+            paragraphs.push(CanonicalParagraphSnapshot {
+                paragraph_text: String::new(),
+                paragraph_document_byte_start: paragraph_idx as usize,
+                lines: Vec::new(),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
             });
         }
     }
@@ -1273,9 +1340,13 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             let mut new_idx = ParagraphOffsetIndex::new();
             let mut byte_lengths = Vec::with_capacity(curr_count);
             let mut qchar_lengths = Vec::with_capacity(curr_count);
-            for para_text in new_paras.iter() {
-                byte_lengths.push(para_text.len());
-                qchar_lengths.push(para_text.chars().map(|c| c.len_utf16()).sum::<usize>());
+            for (para_text, hard_break) in new_paras.iter() {
+                // 段落 byte/qchar 长度含尾部 '\n'（如果 hard_break）
+                byte_lengths.push(para_text.len() + if *hard_break { 1 } else { 0 });
+                qchar_lengths.push(
+                    para_text.chars().map(|c| c.len_utf16()).sum::<usize>()
+                        + if *hard_break { 1 } else { 0 },
+                );
             }
             new_idx.rebuild(byte_lengths, qchar_lengths);
             Arc::new(new_idx)
@@ -1284,9 +1355,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             let idx = Arc::make_mut(&mut idx_arc);
             for para_idx in new_layout_start..new_layout_end {
                 if para_idx < new_paras.len() {
-                    let para = new_paras[para_idx];
-                    let byte_len = para.len();
-                    let qchar_len = para.chars().map(|c| c.len_utf16()).sum::<usize>();
+                    let (para, hard_break) = new_paras[para_idx];
+                    let byte_len = para.len() + if hard_break { 1 } else { 0 };
+                    let qchar_len = para.chars().map(|c| c.len_utf16()).sum::<usize>()
+                        + if hard_break { 1 } else { 0 };
                     idx.update_paragraph_length(para_idx, byte_len, qchar_len);
                 }
             }
