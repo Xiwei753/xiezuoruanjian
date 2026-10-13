@@ -793,8 +793,7 @@ export class EditorMotionCoordinator {
       prepared.state.newSnapshot,
       prepared.state.newLayout,
       latestDisplayedFrame,
-      0,
-      this.windowIdAllocator
+      0
     )
 
     // 创建新的 state（复制旧 state，替换 plan 和 frame）
@@ -1019,8 +1018,7 @@ export class EditorMotionCoordinator {
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
-          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0,
-          this.windowIdAllocator
+          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0
         )
       : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
 
@@ -1280,8 +1278,7 @@ export class EditorMotionCoordinator {
       this.newSnapshot,
       this.newLayout,
       this.currentFrame,
-      progress,
-      this.windowIdAllocator
+      progress
     )
   }
 
@@ -1334,8 +1331,7 @@ export class EditorMotionCoordinator {
     newSnapshot: EditorLayoutSnapshot | null,
     newLayout: LineLayout[],
     caretBase: EditorVisualFrame,
-    progress: number,
-    windowIdAllocator: WindowInstanceIdAllocator
+    progress: number
   ): EditorVisualFrame {
     const newRevision = newSnapshot?.revision ?? 0
     const newText = newSnapshot?.text ?? ''
@@ -1430,18 +1426,11 @@ export class EditorMotionCoordinator {
         // 不在 buildFrame 中调用 allocator.allocate()。
         // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
         // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
-        let insertRenderNodeKey: string
-        let insertWindowInstanceId: string
-        if (piece.renderNodeKey !== undefined && piece.windowInstanceId !== undefined) {
-          insertRenderNodeKey = piece.renderNodeKey
-          insertWindowInstanceId = piece.windowInstanceId
-        } else {
-          // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator，
-          // 不再用 windowIdForGlyphIds() 作为 windowInstanceId。
-          const fallbackId = windowIdAllocator.allocateFresh(piece.glyphIds)
-          insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${fallbackId}`
-          insertWindowInstanceId = piece.windowInstanceId ?? fallbackId
-        }
+        // Issue #879 评论6142418499 问题1：buildFrame 不再调用 allocateFresh。
+        // Planner 应在准备阶段预分配所有成员的 renderNodeKey + windowInstanceId。
+        // 如果 piece 未预分配（Planner bug），用确定性 fallback key 而不是 allocateFresh。
+        const insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-unplanned`
+        const insertWindowInstanceId = piece.windowInstanceId ?? `new-${newRevision}-unplanned`
         motionGlyphWindows.push({
           sourceKind: 'new',
           utf16Start: pieceUtf16Start,
@@ -1520,17 +1509,11 @@ export class EditorMotionCoordinator {
         // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey。
         // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
         // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
-        let deletedRenderNodeKey: string
-        let deletedWindowInstanceId: string
-        if (piece.renderNodeKey !== undefined && piece.windowInstanceId !== undefined) {
-          deletedRenderNodeKey = piece.renderNodeKey
-          deletedWindowInstanceId = piece.windowInstanceId
-        } else {
-          // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
-          const fallbackId = windowIdAllocator.allocateFresh(piece.glyphIds)
-          deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
-          deletedWindowInstanceId = piece.windowInstanceId ?? fallbackId
-        }
+        // Issue #879 评论6142418499 问题1：buildFrame 不再调用 allocateFresh。
+        // Planner 应在准备阶段预分配所有成员的 renderNodeKey + windowInstanceId。
+        // 如果 piece 未预分配（Planner bug），用确定性 fallback key 而不是 allocateFresh。
+        const deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-unplanned`
+        const deletedWindowInstanceId = piece.windowInstanceId ?? `old-${oldRevision}-unplanned`
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: pieceUtf16Start,
@@ -1904,6 +1887,10 @@ export class EditorMotionCoordinator {
                     width: 0,
                     height: islandOldHeight,
                   }
+              // Issue #879 评论6142418499 问题1+2：buildFrame 不再调用 allocateFresh。
+              // Planner 应在准备阶段为所有 interval 预分配 target 成员（含 renderNodeKey + windowInstanceId）。
+              // 如果走到这里（Planner bug），用确定性 fallback key 而不是 allocateFresh。
+              const fallbackTargetKey = `new-${newRevision}-unplanned`
               effectiveMembers.push({
                 sourceKind: 'new',
                 sourceRevision: newRevision,
@@ -1911,7 +1898,7 @@ export class EditorMotionCoordinator {
                 // 空clip时从零宽展开到完整字形。
                 role: 'target',
                 runId: `new-${newRevision}`,
-                renderNodeKey: `new-${newRevision}`,
+                renderNodeKey: fallbackTargetKey,
                 sourceGlyphRect: {
                   x: targetGlyphRect.x,
                   y: targetGlyphRect.y,
@@ -1925,9 +1912,8 @@ export class EditorMotionCoordinator {
                 sourceUtf16Start: newSourceUtf16Start,
                 sourceUtf16End: newSourceUtf16End,
                 targetOpacity: 1,
-                // Issue #879 评论6116388578 问题2：target 成员的 windowInstanceId
-                // 为 undefined——由 buildFrame 分配新的 windowInstanceId。
-                windowInstanceId: undefined,
+                // Issue #879 评论6142418499 问题1：用确定性 fallback 而不是 undefined。
+                windowInstanceId: fallbackTargetKey,
               })
             }
 
@@ -1935,10 +1921,9 @@ export class EditorMotionCoordinator {
             // 再以它为坐标基准生成 clip，不再独立映射到 newRevision 的不同宽高。
             // 形态变化由真正 newRevision 的目标 Text 淡入接管，历史源只移动、
             // 按自己实际几何裁切并淡出。
-            // Issue #879 评论6128121842 问题3：islandWindowInstanceId 作为 fallback
-            // 供未预分配 windowInstanceId 的成员使用。
-            // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
-            const islandWindowInstanceId = windowIdAllocator.allocateFresh(interval.glyphIds)
+            // Issue #879 评论6142418499 问题1：buildFrame 不再调用 allocateFresh。
+            // 所有成员应在 Planner 阶段预分配 windowInstanceId。
+            // 如果 member.windowInstanceId 为 undefined（Planner bug），用确定性 fallback。
             const memberClipRectsList: ClipRect[][] = []
             const memberCurrentXList: number[] = []
             const memberCurrentYList: number[] = []
@@ -1966,11 +1951,13 @@ export class EditorMotionCoordinator {
               let memberTargetScreenY: number = ownTargetY
               // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey 已在 Planner 中
               // 预分配（包含 windowInstanceId），直接读取。frozen 成员也直接使用 member.renderNodeKey。
+              // Issue #879 评论6142418499 问题1：不再用 islandWindowInstanceId（已删除 allocateFresh）。
+              // 如果 member.windowInstanceId 为 undefined（Planner bug），用确定性 fallback key。
               const memberRenderNodeKey = member.role === 'frozen'
                 ? member.renderNodeKey
                 : (member.windowInstanceId !== undefined
                     ? member.renderNodeKey
-                    : `${member.renderNodeKey}-${islandWindowInstanceId}`)
+                    : `${member.renderNodeKey}-unplanned`)
               // Issue #879 复核评论6120195493：frozen 成员共享同一物理 Text 的窗口级属性。
               // 同 renderNodeKey 的所有成员用同一份窗口级 offset/alpha/position，
               // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
@@ -1989,7 +1976,7 @@ export class EditorMotionCoordinator {
                         ? m.renderNodeKey
                         : (m.windowInstanceId !== undefined
                             ? m.renderNodeKey
-                            : `${m.renderNodeKey}-${islandWindowInstanceId}`)
+                            : `${m.renderNodeKey}-unplanned`)
                       if (mKey === memberRenderNodeKey &&
                           m.clipRects.length > 0) {
                         baseMember = m
@@ -2182,17 +2169,18 @@ export class EditorMotionCoordinator {
             }
 
             // 逐成员输出独立的 MotionGlyphWindow
-            // Issue #879 评论6128121842 问题3：islandWindowInstanceId 已在第一个 for 循环之前提前分配。
+            // Issue #879 评论6142418499 问题1：islandWindowInstanceId 已删除（不再 allocateFresh）。
             for (let mi = 0; mi < effectiveMembers.length; mi++) {
               const member = effectiveMembers[mi]
               const memberClipRects = memberClipRectsList[mi]
               // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey 已在 Planner 中
               // 预分配（包含 windowInstanceId），直接读取。
+              // Issue #879 评论6142418499 问题1：不再用 islandWindowInstanceId（已删除 allocateFresh）。
               const memberRenderNodeKey = member.role === 'frozen'
                 ? member.renderNodeKey
                 : (member.windowInstanceId !== undefined
                     ? member.renderNodeKey
-                    : `${member.renderNodeKey}-${islandWindowInstanceId}`)
+                    : `${member.renderNodeKey}-unplanned`)
 
               // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
               const memberGlyphX = member.sourceGlyphRect.x
@@ -2324,7 +2312,7 @@ export class EditorMotionCoordinator {
                 windowId: move.windowId,
                 windowInstanceId: member.windowInstanceId !== undefined
                   ? member.windowInstanceId
-                  : islandWindowInstanceId,
+                  : `${member.renderNodeKey}-unplanned`,
                 renderNodeKey: memberRenderNodeKey,
                 currentClipLeft: islandBboxLeft,
                 currentClipRight: islandBboxRight,
@@ -2786,20 +2774,11 @@ export class EditorMotionCoordinator {
             targetBboxBottom = islandBboxBottom
           }
 
-          // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey（fallback 分支）。
-          // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
-          // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
-          let fallbackRenderNodeKey: string
-          let fallbackWindowInstanceId: string
-          if (interval.renderNodeKey !== undefined && interval.windowInstanceId !== undefined) {
-            fallbackRenderNodeKey = interval.renderNodeKey
-            fallbackWindowInstanceId = interval.windowInstanceId
-          } else {
-            // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
-            const fallbackId = windowIdAllocator.allocateFresh(interval.glyphIds)
-            fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
-            fallbackWindowInstanceId = interval.windowInstanceId ?? fallbackId
-          }
+          // Issue #879 评论6142418499 问题1：buildFrame 不再调用 allocateFresh。
+          // Planner 应在准备阶段预分配 interval 的 renderNodeKey + windowInstanceId。
+          // 如果 interval 未预分配（Planner bug），用确定性 fallback key。
+          const fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-unplanned`
+          const fallbackWindowInstanceId = interval.windowInstanceId ?? `old-${oldRevision}-unplanned`
           // Issue #879 评论6120849815 问题3：旧源窗口（frozen 角色）使用 islandClipRects（不含间隙碎片）。
           motionGlyphWindows.push({
             sourceKind: 'old',
@@ -2852,20 +2831,11 @@ export class EditorMotionCoordinator {
           // offsetX/Y = islandCurrentX/Y - newSourceGlyphX/Y，
           // 使新源与旧源在屏幕上的 glyph 锚点相同，clipRects 可继续共用（屏幕坐标系）。
           if (needsSourceCrossfade) {
-            // Issue #879 评论6129701697 问题1：读取预分配的 crossfadeRenderNodeKey。
-            // Issue #879 复核评论修复：同时读取预分配的 crossfadeWindowInstanceId，
-            // 不再从 crossfadeKey 截取字符串。fallback 分支同时分配两个字段。
-            let crossfadeKey: string
-            let crossfadeWinId: string
-            if (interval.crossfadeRenderNodeKey !== undefined && interval.crossfadeWindowInstanceId !== undefined) {
-              crossfadeKey = interval.crossfadeRenderNodeKey
-              crossfadeWinId = interval.crossfadeWindowInstanceId
-            } else {
-              // Issue #879 评论6138838190 问题2：fallback 改用 WindowInstanceIdAllocator。
-              const fallbackId = windowIdAllocator.allocateFresh(interval.glyphIds)
-              crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${fallbackId}`
-              crossfadeWinId = interval.crossfadeWindowInstanceId ?? fallbackId
-            }
+            // Issue #879 评论6142418499 问题1：buildFrame 不再调用 allocateFresh。
+            // Planner 应在准备阶段预分配 crossfadeRenderNodeKey + crossfadeWindowInstanceId。
+            // 如果 interval 未预分配（Planner bug），用确定性 fallback key。
+            const crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-unplanned`
+            const crossfadeWinId = interval.crossfadeWindowInstanceId ?? `new-${newRevision}-unplanned`
             // Issue #879 评论6120849815 问题3：新源窗口（target 角色）使用 targetClipRects（含间隙碎片）。
             motionGlyphWindows.push({
               sourceKind: 'new',
@@ -3142,10 +3112,10 @@ export class EditorMotionCoordinator {
     // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
     const staticVisibleRanges = EditorMotionCoordinator.computeStaticRangesMultiChannel(plan, newLayout)
 
-    // Issue #879 评论6138838190：物理身份校验合并。
+    // Issue #879 评论6142418499：物理身份校验合并。
     // 只有所有绘制属性完全一致的窗口才合并 clip（同一物理 Text 的不同裁切区域）。
-    // 不同物理属性的窗口保留各自——准备期已通过 allocateFresh 确保它们有不同 key，
-    // 此处不应出现同 key 不同属性的窗口。防御性地处理意外冲突：保留第一张，跳过第二张。
+    // 不同物理属性的窗口保留各自——Planner 应通过 motionChannel 为不同轨迹分配不同 key。
+    // 如果仍出现同 key 不同属性（Planner bug），给第二个窗口分配 -dup 后缀 key，不丢字。
     const mergedWindows: MotionGlyphWindow[] = []
     const windowByKey = new Map<string, MotionGlyphWindow>()
     for (const w of motionGlyphWindows) {
@@ -3177,12 +3147,16 @@ export class EditorMotionCoordinator {
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
           continue
         } else {
-          // Issue #879 评论6138838190 问题1：同 key 不同绘制属性表示 Planner 分配出了问题。
-          // 准备阶段已通过 allocateFresh + motionChannel 确保不同轨迹的窗口有不同 key。
-          // 此处不应出现同 key 不同属性的窗口——防御性地跳过第二条，不 push 也不覆盖。
-          // 旧代码同时 set+push 导致 mergedWindows 有两条同 key 的 Text，
-          // UI 的 buildAllMotionWindowSources 用 seenKeys 去重只画一个，另一个文字像素被吞掉。
-          continue
+          // Issue #879 评论6142418499 问题3：同 key 不同绘制属性不应静默跳过（会丢字）。
+          // Planner 应通过 motionChannel 为不同轨迹分配不同 renderNodeKey。
+          // 如果仍出现冲突（Planner bug），给第二个窗口分配带后缀的确定性 key，
+          // 保留两个窗口，不丢字。
+          const dupKey = `${w.renderNodeKey}-dup`
+          if (!windowByKey.has(dupKey)) {
+            w.renderNodeKey = dupKey
+            windowByKey.set(dupKey, w)
+            mergedWindows.push(w)
+          }
         }
       } else {
         windowByKey.set(w.renderNodeKey, w)
