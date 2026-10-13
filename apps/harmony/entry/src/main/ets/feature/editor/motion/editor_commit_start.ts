@@ -382,6 +382,14 @@ export interface RunStartPiece {
   /** 该片段覆盖的 glyphId 子序列 */
   glyphIds: string[]
   /**
+   * Issue #879 评论6129701697 问题1：预分配的最终 renderNodeKey。
+   *
+   * 由 Planner 在 planFromPatches 中使用 PhysicalWindowKeyAllocator 一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  renderNodeKey?: string
+  /**
    * Issue #879 本轮复核评论（高优先级）：该 piece 内所有不连续可见岛的起始裁切区间列表。
    *
    * 固定 piece 分区下，交棒瞬间某字形可能被冻结窗口局部裁切而断开成多段；
@@ -407,6 +415,22 @@ export interface RunStartInterval {
   lastIndex: number
   /** 该岛覆盖的 glyphId 子序列 */
   glyphIds: string[]
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的旧源 renderNodeKey（fallback 分支用）。
+   *
+   * 由 Planner 在 planFromPatches 中使用 PhysicalWindowKeyAllocator 一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  renderNodeKey?: string
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的新源交叉淡入淡出 renderNodeKey（fallback 分支用）。
+   *
+   * 仅当 needsCrossfade=true 时有意义。由 Planner 在 planFromPatches 中预分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  crossfadeRenderNodeKey?: string
   /** 该岛起始裁切左边界（vp，在 run 自己布局里） */
   startClipLeft: number
   /** 该岛起始裁切右边界（vp，在 run 自己布局里） */

@@ -203,32 +203,11 @@ interface FrozenWindowGroupPlan {
   /** 该组的 windowInstanceId */
   windowInstanceId: string
   /**
-   * Issue #879 评论6128658045 问题1+3：物理源窗口的完整 glyphIds 列表。
-   *
-   * 合并 originalGlyphIds 和 fullWindowGlyphIds 为唯一字段。
-   * 从 baseMember.fullWindowGlyphIds 取值，而非 baseEntry.intervalGlyphIds（只是单个 interval 的 glyphIds）。
-   * 确保 MotionGlyphWindow.fullWindowGlyphIds 携带完整字形列表，
-   * commitDisplayedContext 冻结时 frozenIndex 能为窗口内所有字形建立索引。
-   */
-  fullWindowGlyphIds: string[]
-  /**
-   * Issue #879 评论6128658045 问题1+3：物理源窗口的完整源 UTF-16 起始位置。
-   *
-   * 合并 originalUtf16Start 和 fullWindowUtf16Start 为唯一字段。
-   * 从 baseMember.fullWindowUtf16Start 取值，而非 baseMember.sourceUtf16Start（只是单个成员的起始）。
-   */
-  fullWindowUtf16Start: number
-  /**
-   * Issue #879 评论6128658045 问题1+3：物理源窗口的完整源 UTF-16 结束位置。
-   *
-   * 合并 originalUtf16End 和 fullWindowUtf16End 为唯一字段。
-   */
-  fullWindowUtf16End: number
-  /**
-   * Issue #879 评论6128658045 问题1+3：物理源窗口的完整逐字 glyphId→UTF-16 映射。
+   * Issue #879 评论6129701697 问题4：物理源窗口的完整逐字 glyphId→UTF-16 映射。
    *
    * 合并 originalGlyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 为唯一字段。
    * 从 baseMember.fullWindowGlyphUtf16Ranges 取值，而非 baseMember.glyphUtf16Ranges。
+   * glyphIds 和 utf16 范围从该映射派生，不再单独存储 fullWindowGlyphIds/Utf16Start/End。
    */
   fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
 }
@@ -415,7 +394,8 @@ export class EditorMotionCoordinator {
       durationMs: 0,
       motionKind: MotionKind.None,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: []
     }
   }
 
@@ -496,80 +476,63 @@ export class EditorMotionCoordinator {
       return []
     }
     const keys: string[] = []
-    const newRevision = prepared.state.newSnapshot?.revision ?? 0
-    const oldRevision = prepared.state.oldSnapshot?.revision ?? 0
+    // Issue #879 评论6129701697 问题1：plannedWindowKeys 只读取预分配的 renderNodeKey，
+    // 不各自重跑分配逻辑。所有 key 在 Planner 的 planFromPatches 中一次性分配。
     for (const run of plan.insertRuns) {
       for (const piece of run.pieces) {
-        keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
+        if (piece.renderNodeKey !== undefined) {
+          keys.push(piece.renderNodeKey)
+        }
       }
     }
     for (const run of plan.deletedRuns) {
       for (const piece of run.pieces) {
-        keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`)
+        if (piece.renderNodeKey !== undefined) {
+          keys.push(piece.renderNodeKey)
+        }
       }
     }
     // 问题2：冻结多字窗口重复 key 丢字——同一 renderNodeKey 的 frozen 成员
     // 跨多个 interval 只输出一次 key，buildFrame 会按 renderNodeKey 聚合合并 clipRects。
-    // Issue #879 评论6128658045 问题2：buildSourceMembers 已确保 renderNodeKey 与 sourceRevision
-    // 一致（从 sourceKind + sourceRevision + windowInstanceId 重建），不再需要冲突检测和
-    // -conflict-N 后缀。plannedWindowKeys 和 buildFrame 都直接使用 member.renderNodeKey。
     const frozenKeysSeen: Set<string> = new Set()
     for (const move of plan.retainedMoves) {
       for (const piece of move.pieces) {
-        // Issue #879 复核评论6099070438 问题1：retained 按 interval 分配 key，
-        // 与 buildFrame retainedMoves 一致——多岛时 plannedWindowKeys 和帧输出 key 集合相等，
-        // sameKeySet 不再恒 false，候选不再持续滞留，屏幕能切换到新版正文。
         const intervals = EditorMotionCoordinator.pieceIntervals(piece)
         for (const interval of intervals) {
-          // Issue #879 评论6108900966 问题1：优先检查 sourceMembers，
-          // 为每个成员输出对应的 renderNodeKey。
           if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
-            const winId = this.windowIdAllocator.allocate(interval.glyphIds)
             for (const member of interval.sourceMembers) {
               if (member.role === 'frozen') {
-                // 问题2：同一 renderNodeKey 只输出一次——多个 interval 的 frozen 成员
-                // 共享同一物理 Text 节点，buildFrame 按 renderNodeKey 聚合合并 clipRects。
-                // Issue #879 评论6128658045 问题2：不再检测身份冲突或分配 -conflict-N 后缀。
-                // buildSourceMembers 已从源头保证 renderNodeKey 与 sourceRevision 一致。
                 if (!frozenKeysSeen.has(member.renderNodeKey)) {
                   frozenKeysSeen.add(member.renderNodeKey)
                   keys.push(member.renderNodeKey)
                 }
               } else {
-                // target 成员需要追加新分配的 windowInstanceId
-                keys.push(`${member.renderNodeKey}-${winId}`)
+                // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey
+                // 已在 Planner 中预分配（包含 windowInstanceId），直接读取。
+                keys.push(member.renderNodeKey)
               }
             }
-            // 问题5：如果没有 newRevision 目标成员，额外输出 new key
-            // buildFrame 会为没有 newRevision 成员的 interval 创建新目标成员，
-            // plannedWindowKeys 必须同时输出对应的 key，否则 sameKeySet 检查失败
-            const hasNewRevisionMember = interval.sourceMembers.some(
-              m => m.sourceRevision === newRevision
-            )
-            if (!hasNewRevisionMember) {
-              keys.push(`new-${newRevision}-${winId}`)
-            }
           } else {
-            keys.push(`old-${oldRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
-            // Issue #879 复核评论6104619192 问题1：交叉淡入淡出时，buildFrame 会额外输出新源窗口，
-            // plannedWindowKeys 必须同时输出 new key，否则 sameKeySet 检查失败，候选无法提交。
-            // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade，
-            // 整段总宽可能不变但单个字形宽高变化，needsCrossfade 必须按 interval 判断。
+            // Issue #879 评论6129701697 问题1：fallback 分支读取预分配的 interval.renderNodeKey。
+            if (interval.renderNodeKey !== undefined) {
+              keys.push(interval.renderNodeKey)
+            }
+            // Issue #879 复核评论6105482207 问题3：优先读取 per-interval needsCrossfade。
             const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
               ? interval.needsCrossfade
               : move.needsCrossfade
-            if (intervalNeedsCrossfade) {
-              keys.push(`new-${newRevision}-${this.windowIdAllocator.allocate(interval.glyphIds)}`)
+            if (intervalNeedsCrossfade && interval.crossfadeRenderNodeKey !== undefined) {
+              keys.push(interval.crossfadeRenderNodeKey)
             }
           }
         }
       }
     }
     for (const ghost of plan.carryOverGhostRuns) {
-      keys.push(`${ghost.sourceKind}-${ghost.sourceRevision}-${this.windowIdAllocator.allocate(ghost.glyphIds)}`)
+      keys.push(ghost.renderNodeKey)
     }
     for (const motionRun of plan.carryOverMotionRuns) {
-      keys.push(`${motionRun.sourceKind}-${motionRun.sourceRevision}-${this.windowIdAllocator.allocate(motionRun.glyphIds)}`)
+      keys.push(motionRun.renderNodeKey)
     }
     return keys
   }
@@ -806,7 +769,8 @@ export class EditorMotionCoordinator {
       durationMs: prepared.plan.durationMs,
       motionKind: prepared.plan.motionKind,
       carryOverGhostRuns: carryOverGhostRuns,
-      carryOverMotionRuns: carryOverMotionRuns
+      carryOverMotionRuns: carryOverMotionRuns,
+      physicalWindowIdentities: prepared.plan.physicalWindowIdentities
     }
 
     // 用更新后的 plan 和冻结帧构建新的起始帧（progress=0）
@@ -994,7 +958,7 @@ export class EditorMotionCoordinator {
     // 用 Planner 生成新 plan（传入 oldSnapshot + oldLayout + newSnapshot + newLayout）
     const plan = EditorMotionPlanner.plan(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, startFrame,
-      identities.oldTable, identities.newTable
+      identities.oldTable, identities.newTable, this.windowIdAllocator
     )
 
     // 确定动画时长
@@ -1128,7 +1092,8 @@ export class EditorMotionCoordinator {
       durationMs: 0,
       motionKind: MotionKind.None,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: []
     }
   }
 
@@ -1446,7 +1411,10 @@ export class EditorMotionCoordinator {
             bboxBottom = Math.max(bboxBottom, top + height)
           }
         }
-        const windowInstanceId = allocator.allocate(piece.glyphIds)
+        // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey，
+        // 不在 buildFrame 中调用 allocator.allocate()。
+        const insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${allocator.allocate(piece.glyphIds)}`
+        const insertWindowInstanceId = insertRenderNodeKey.substring(insertRenderNodeKey.lastIndexOf('-') + 1)
         motionGlyphWindows.push({
           sourceKind: 'new',
           utf16Start: pieceUtf16Start,
@@ -1466,8 +1434,8 @@ export class EditorMotionCoordinator {
           sourceRevision: newRevision,
           glyphIds: piece.glyphIds,
           windowId: run.windowId,
-          windowInstanceId: windowInstanceId,
-          renderNodeKey: `new-${newRevision}-${windowInstanceId}`,
+          windowInstanceId: insertWindowInstanceId,
+          renderNodeKey: insertRenderNodeKey,
           currentClipLeft: bboxLeft,
           currentClipRight: bboxRight,
           currentPositionX: pieceGlyphX,
@@ -1475,9 +1443,6 @@ export class EditorMotionCoordinator {
           motionOwnerKind: 'insert',
           // Issue #879 评论6128658045 问题3：insert 通道的完整窗口数据就是当前 piece 的数据，
           // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-          fullWindowGlyphIds: piece.glyphIds,
-          fullWindowUtf16Start: pieceUtf16Start,
-          fullWindowUtf16End: pieceUtf16End,
           fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
             piece.glyphIds, pieceUtf16Start, pieceUtf16End, newText
           ),
@@ -1525,7 +1490,9 @@ export class EditorMotionCoordinator {
             bboxRight = Math.max(bboxRight, currentRight)
           }
         }
-        const windowInstanceId = allocator.allocate(piece.glyphIds)
+        // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey。
+        const deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${allocator.allocate(piece.glyphIds)}`
+        const deletedWindowInstanceId = deletedRenderNodeKey.substring(deletedRenderNodeKey.lastIndexOf('-') + 1)
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: pieceUtf16Start,
@@ -1545,8 +1512,8 @@ export class EditorMotionCoordinator {
           sourceRevision: oldRevision,
           glyphIds: piece.glyphIds,
           windowId: run.windowId,
-          windowInstanceId: windowInstanceId,
-          renderNodeKey: `old-${oldRevision}-${windowInstanceId}`,
+          windowInstanceId: deletedWindowInstanceId,
+          renderNodeKey: deletedRenderNodeKey,
           currentClipLeft: bboxLeft,
           currentClipRight: bboxRight,
           currentPositionX: run.rect.x,
@@ -1554,9 +1521,6 @@ export class EditorMotionCoordinator {
           motionOwnerKind: 'deleted',
           // Issue #879 评论6128658045 问题3：deleted 通道的完整窗口数据就是当前 piece 的数据，
           // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-          fullWindowGlyphIds: piece.glyphIds,
-          fullWindowUtf16Start: pieceUtf16Start,
-          fullWindowUtf16End: pieceUtf16End,
           fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
             piece.glyphIds, pieceUtf16Start, pieceUtf16End, oldText
           ),
@@ -1708,12 +1672,6 @@ export class EditorMotionCoordinator {
         // 而不是从 intervalGlyphIds/sourceUtf16Start/End/glyphUtf16Ranges 取值。
         // fullWindow* 字段保存了物理源窗口首次创建时的完整数据，
         // 确保 MotionGlyphWindow 携带完整字形列表和逐字映射。
-        const fullWindowGlyphIds = baseMember.fullWindowGlyphIds !== undefined
-          ? baseMember.fullWindowGlyphIds : baseEntry.intervalGlyphIds
-        const fullWindowUtf16Start = baseMember.fullWindowUtf16Start !== undefined
-          ? baseMember.fullWindowUtf16Start : baseMember.sourceUtf16Start
-        const fullWindowUtf16End = baseMember.fullWindowUtf16End !== undefined
-          ? baseMember.fullWindowUtf16End : baseMember.sourceUtf16End
         const fullWindowGlyphUtf16Ranges = baseMember.fullWindowGlyphUtf16Ranges !== undefined
           ? baseMember.fullWindowGlyphUtf16Ranges
           : (baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null)
@@ -1736,9 +1694,6 @@ export class EditorMotionCoordinator {
             ? baseMember.windowInstanceId : '',
           // Issue #879 评论6128658045 问题1+3：合并 original* 和 fullWindow* 为唯一字段，
           // 统一使用 fullWindow* 字段，不再保留冗余的 original* 字段。
-          fullWindowGlyphIds: fullWindowGlyphIds,
-          fullWindowUtf16Start: fullWindowUtf16Start,
-          fullWindowUtf16End: fullWindowUtf16End,
           fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16Ranges,
         })
       }
@@ -1942,8 +1897,8 @@ export class EditorMotionCoordinator {
             // 再以它为坐标基准生成 clip，不再独立映射到 newRevision 的不同宽高。
             // 形态变化由真正 newRevision 的目标 Text 淡入接管，历史源只移动、
             // 按自己实际几何裁切并淡出。
-            // Issue #879 评论6128121842 问题3：提前分配 islandWindowInstanceId，
-            // 供第一个 for 循环的回退逻辑和第二个 for 循环的窗口输出共同使用。
+            // Issue #879 评论6128121842 问题3：islandWindowInstanceId 作为 fallback
+            // 供未预分配 windowInstanceId 的成员使用。
             const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
             const memberClipRectsList: ClipRect[][] = []
             const memberCurrentXList: number[] = []
@@ -1970,12 +1925,13 @@ export class EditorMotionCoordinator {
               const ownTargetY = intervalNewGlyphRect !== null ? intervalNewGlyphRect.y : islandNewY
               let memberTargetScreenX: number = ownTargetX
               let memberTargetScreenY: number = ownTargetY
-              // Issue #879 评论6128658045 问题2：不再通过 conflictKeyMap 查找冲突 key。
-              // buildSourceMembers 已保证 renderNodeKey 与 sourceRevision 一致，
-              // frozen 成员直接使用 member.renderNodeKey。
+              // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey 已在 Planner 中
+              // 预分配（包含 windowInstanceId），直接读取。frozen 成员也直接使用 member.renderNodeKey。
               const memberRenderNodeKey = member.role === 'frozen'
                 ? member.renderNodeKey
-                : `${member.renderNodeKey}-${islandWindowInstanceId}`
+                : (member.windowInstanceId !== undefined
+                    ? member.renderNodeKey
+                    : `${member.renderNodeKey}-${islandWindowInstanceId}`)
               // Issue #879 复核评论6120195493：frozen 成员共享同一物理 Text 的窗口级属性。
               // 同 renderNodeKey 的所有成员用同一份窗口级 offset/alpha/position，
               // 不由首成员抢占。窗口级属性从原始 FrozenWindowSpan（通过 member 的
@@ -1992,7 +1948,9 @@ export class EditorMotionCoordinator {
                     for (const m of effectiveMembers) {
                       const mKey = m.role === 'frozen'
                         ? m.renderNodeKey
-                        : `${m.renderNodeKey}-${islandWindowInstanceId}`
+                        : (m.windowInstanceId !== undefined
+                            ? m.renderNodeKey
+                            : `${m.renderNodeKey}-${islandWindowInstanceId}`)
                       if (mKey === memberRenderNodeKey &&
                           m.clipRects.length > 0) {
                         baseMember = m
@@ -2012,12 +1970,6 @@ export class EditorMotionCoordinator {
                     const gpCurrentAlpha = gpStartAlpha + (gpEndAlpha - gpStartAlpha) * p
 
                     // Issue #879 第32轮复核问题2：从 baseMember 的 fullWindow* 字段取值
-                    const fullWindowGlyphIdsFallback = baseMember.fullWindowGlyphIds !== undefined
-                      ? baseMember.fullWindowGlyphIds : interval.glyphIds
-                    const fullWindowUtf16StartFallback = baseMember.fullWindowUtf16Start !== undefined
-                      ? baseMember.fullWindowUtf16Start : baseMember.sourceUtf16Start
-                    const fullWindowUtf16EndFallback = baseMember.fullWindowUtf16End !== undefined
-                      ? baseMember.fullWindowUtf16End : baseMember.sourceUtf16End
                     const fullWindowGlyphUtf16RangesFallback = baseMember.fullWindowGlyphUtf16Ranges !== undefined
                       ? baseMember.fullWindowGlyphUtf16Ranges
                       : (baseMember.glyphUtf16Ranges !== undefined ? baseMember.glyphUtf16Ranges : null)
@@ -2040,9 +1992,6 @@ export class EditorMotionCoordinator {
                         ? member.windowInstanceId : '',
                       // Issue #879 评论6128658045 问题1+3：合并 original* 和 fullWindow* 为唯一字段，
                       // 统一使用 fullWindow* 字段，不再保留冗余的 original* 字段。
-                      fullWindowGlyphIds: fullWindowGlyphIdsFallback,
-                      fullWindowUtf16Start: fullWindowUtf16StartFallback,
-                      fullWindowUtf16End: fullWindowUtf16EndFallback,
                       fullWindowGlyphUtf16Ranges: fullWindowGlyphUtf16RangesFallback,
                     }
                     frozenGroupPlans.set(memberRenderNodeKey, groupPlan)
@@ -2198,11 +2147,13 @@ export class EditorMotionCoordinator {
             for (let mi = 0; mi < effectiveMembers.length; mi++) {
               const member = effectiveMembers[mi]
               const memberClipRects = memberClipRectsList[mi]
-              // Issue #879 评论6128658045 问题2：不再通过 conflictKeyMap 查找冲突 key。
-              // frozen 成员直接使用 member.renderNodeKey，target 成员追加 islandWindowInstanceId。
+              // Issue #879 评论6129701697 问题1：target 成员的 renderNodeKey 已在 Planner 中
+              // 预分配（包含 windowInstanceId），直接读取。
               const memberRenderNodeKey = member.role === 'frozen'
                 ? member.renderNodeKey
-                : `${member.renderNodeKey}-${islandWindowInstanceId}`
+                : (member.windowInstanceId !== undefined
+                    ? member.renderNodeKey
+                    : `${member.renderNodeKey}-${islandWindowInstanceId}`)
 
               // 问题1：直接使用成员自己的冻结数据，不用 isOldSource 推导
               const memberGlyphX = member.sourceGlyphRect.x
@@ -2262,9 +2213,6 @@ export class EditorMotionCoordinator {
               let windowGlyphIds = interval.glyphIds
               let windowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
               // Issue #879 第32轮复核问题2：fullWindow* 字段——物理源窗口的完整数据
-              let windowFullWindowGlyphIds: string[] | undefined = undefined
-              let windowFullWindowUtf16Start: number | undefined = undefined
-              let windowFullWindowUtf16End: number | undefined = undefined
               let windowFullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null | undefined = undefined
               if (memberRole === 'frozen') {
                 // Issue #879 评论6128121842 问题3：使用 memberRenderNodeKey（可能包含冲突后缀）
@@ -2280,15 +2228,22 @@ export class EditorMotionCoordinator {
                   windowCurrentY = groupPlan.currentY
                   // Issue #879 评论6128658045 问题1：保留原始完整 UTF-16 范围和 glyphIds，
                   // 使用 fullWindow* 字段（合并后的唯一可信来源），不用 min/max 和去重追加
-                  windowUtf16Start = groupPlan.fullWindowUtf16Start
-                  windowUtf16End = groupPlan.fullWindowUtf16End
-                  windowGlyphIds = groupPlan.fullWindowGlyphIds
                   windowGlyphUtf16Ranges = groupPlan.fullWindowGlyphUtf16Ranges
-                  // Issue #879 第32轮复核问题2：从 groupPlan 的 fullWindow* 字段取值
-                  windowFullWindowGlyphIds = groupPlan.fullWindowGlyphIds
-                  windowFullWindowUtf16Start = groupPlan.fullWindowUtf16Start
-                  windowFullWindowUtf16End = groupPlan.fullWindowUtf16End
                   windowFullWindowGlyphUtf16Ranges = groupPlan.fullWindowGlyphUtf16Ranges
+                  // Issue #879 评论6129701697 问题4：从 fullWindowGlyphUtf16Ranges 派生
+                  // glyphIds 和 utf16 范围，不再依赖已删除的 fullWindowGlyphIds/Utf16Start/End
+                  if (groupPlan.fullWindowGlyphUtf16Ranges !== null &&
+                      groupPlan.fullWindowGlyphUtf16Ranges.size > 0) {
+                    windowGlyphIds = Array.from(groupPlan.fullWindowGlyphUtf16Ranges.keys())
+                    let minStart = Infinity
+                    let maxEnd = 0
+                    for (const range of groupPlan.fullWindowGlyphUtf16Ranges.values()) {
+                      if (range[0] < minStart) { minStart = range[0] }
+                      if (range[1] > maxEnd) { maxEnd = range[1] }
+                    }
+                    windowUtf16Start = minStart
+                    windowUtf16End = maxEnd
+                  }
                 }
               } else {
                 // Issue #879 评论6128658045 问题1+3：target 成员的完整窗口数据就是当前 interval 的数据
@@ -2297,9 +2252,6 @@ export class EditorMotionCoordinator {
                 // 同时将 windowUtf16Start/End/glyphIds/glyphUtf16Ranges 也设置为完整窗口值，
                 // 确保 MotionGlyphWindow.utf16Start/End 与 fullWindowUtf16Start/End 一致，
                 // 下游 buildFrozenWindowPieces 不再因局部范围与完整 glyphIds 不匹配而返回 null。
-                windowFullWindowGlyphIds = interval.glyphIds
-                windowFullWindowUtf16Start = newSourceUtf16Start
-                windowFullWindowUtf16End = newSourceUtf16End
                 windowFullWindowGlyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
                   interval.glyphIds, newSourceUtf16Start, newSourceUtf16End, newText
                 )
@@ -2331,7 +2283,7 @@ export class EditorMotionCoordinator {
                 sourceRevision: member.sourceRevision,
                 glyphIds: windowGlyphIds,
                 windowId: move.windowId,
-                windowInstanceId: member.role === 'frozen' && member.windowInstanceId !== undefined
+                windowInstanceId: member.windowInstanceId !== undefined
                   ? member.windowInstanceId
                   : islandWindowInstanceId,
                 renderNodeKey: memberRenderNodeKey,
@@ -2343,9 +2295,6 @@ export class EditorMotionCoordinator {
                 opacity: memberOpacity,
                 glyphUtf16Ranges: windowGlyphUtf16Ranges,
                 // Issue #879 第32轮复核问题2：物理源窗口的完整数据
-                fullWindowGlyphIds: windowFullWindowGlyphIds,
-                fullWindowUtf16Start: windowFullWindowUtf16Start,
-                fullWindowUtf16End: windowFullWindowUtf16End,
                 fullWindowGlyphUtf16Ranges: windowFullWindowGlyphUtf16Ranges,
               }
               // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
@@ -2379,15 +2328,21 @@ export class EditorMotionCoordinator {
                     const gp = frozenGroupPlans.get(memberRenderNodeKey)
                     if (gp !== undefined) {
                       existing.glyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
-                      existing.utf16Start = gp.fullWindowUtf16Start
-                      existing.utf16End = gp.fullWindowUtf16End
-                      existing.glyphIds = gp.fullWindowGlyphIds
-                      // Issue #879 评论6128658045 问题1+3：聚合时也更新 fullWindow* 字段，
-                      // 确保聚合窗口携带完整窗口数据供冻结索引使用。
-                      existing.fullWindowGlyphIds = gp.fullWindowGlyphIds
-                      existing.fullWindowUtf16Start = gp.fullWindowUtf16Start
-                      existing.fullWindowUtf16End = gp.fullWindowUtf16End
                       existing.fullWindowGlyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
+                      // Issue #879 评论6129701697 问题4：从 fullWindowGlyphUtf16Ranges 派生
+                      // glyphIds 和 utf16 范围，不再依赖已删除的 fullWindowGlyphIds/Utf16Start/End
+                      if (gp.fullWindowGlyphUtf16Ranges !== null &&
+                          gp.fullWindowGlyphUtf16Ranges.size > 0) {
+                        existing.glyphIds = Array.from(gp.fullWindowGlyphUtf16Ranges.keys())
+                        let minStart = Infinity
+                        let maxEnd = 0
+                        for (const range of gp.fullWindowGlyphUtf16Ranges.values()) {
+                          if (range[0] < minStart) { minStart = range[0] }
+                          if (range[1] > maxEnd) { maxEnd = range[1] }
+                        }
+                        existing.utf16Start = minStart
+                        existing.utf16End = maxEnd
+                      }
                     }
                   }
                 } else {
@@ -2792,10 +2747,10 @@ export class EditorMotionCoordinator {
             targetBboxBottom = islandBboxBottom
           }
 
-          // 为该岛独立分配 windowInstanceId（用岛的 glyphIds 子序列）
-          const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
+          // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey（fallback 分支）。
+          const fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${allocator.allocate(interval.glyphIds)}`
+          const fallbackWindowInstanceId = fallbackRenderNodeKey.substring(fallbackRenderNodeKey.lastIndexOf('-') + 1)
           // Issue #879 评论6120849815 问题3：旧源窗口（frozen 角色）使用 islandClipRects（不含间隙碎片）。
-          // frozen 成员不补间隙——被裁掉的旧笔画不能重新长出来。
           motionGlyphWindows.push({
             sourceKind: 'old',
             utf16Start: iStart,
@@ -2815,8 +2770,8 @@ export class EditorMotionCoordinator {
             sourceRevision: oldRevision,
             glyphIds: interval.glyphIds,
             windowId: move.windowId,
-            windowInstanceId: islandWindowInstanceId,
-            renderNodeKey: `old-${oldRevision}-${islandWindowInstanceId}`,
+            windowInstanceId: fallbackWindowInstanceId,
+            renderNodeKey: fallbackRenderNodeKey,
             currentClipLeft: islandBboxLeft,
             currentClipRight: islandBboxRight,
             currentPositionX: islandCurrentX,
@@ -2827,9 +2782,6 @@ export class EditorMotionCoordinator {
             // Issue #879 评论6128658045 问题3：fallback 分支 frozen 窗口的完整窗口数据
             // 此分支没有 group plan，fullWindow* 就是当前 interval 的数据，
             // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-            fullWindowGlyphIds: interval.glyphIds,
-            fullWindowUtf16Start: iStart,
-            fullWindowUtf16End: iEnd,
             fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
               interval.glyphIds, iStart, iEnd, oldText
             ),
@@ -2850,8 +2802,10 @@ export class EditorMotionCoordinator {
           // offsetX/Y = islandCurrentX/Y - newSourceGlyphX/Y，
           // 使新源与旧源在屏幕上的 glyph 锚点相同，clipRects 可继续共用（屏幕坐标系）。
           if (needsSourceCrossfade) {
+            // Issue #879 评论6129701697 问题1：读取预分配的 crossfadeRenderNodeKey。
+            const crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${allocator.allocate(interval.glyphIds)}`
+            const crossfadeWinId = crossfadeKey.substring(crossfadeKey.lastIndexOf('-') + 1)
             // Issue #879 评论6120849815 问题3：新源窗口（target 角色）使用 targetClipRects（含间隙碎片）。
-            // target 成员可以从零面积渐显至完整目标，补全被裁掉的区域。
             motionGlyphWindows.push({
               sourceKind: 'new',
               utf16Start: newSourceUtf16Start,
@@ -2871,8 +2825,8 @@ export class EditorMotionCoordinator {
               sourceRevision: newRevision,
               glyphIds: interval.glyphIds,
               windowId: move.windowId,
-              windowInstanceId: islandWindowInstanceId,
-              renderNodeKey: `new-${newRevision}-${islandWindowInstanceId}`,
+              windowInstanceId: crossfadeWinId,
+              renderNodeKey: crossfadeKey,
               currentClipLeft: targetBboxLeft,
               currentClipRight: targetBboxRight,
               currentPositionX: islandCurrentX,
@@ -2881,9 +2835,6 @@ export class EditorMotionCoordinator {
               opacity: p,
               // Issue #879 评论6128658045 问题3：fallback 分支 target 窗口的完整窗口数据，
               // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-              fullWindowGlyphIds: interval.glyphIds,
-              fullWindowUtf16Start: newSourceUtf16Start,
-              fullWindowUtf16End: newSourceUtf16End,
               fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
                 interval.glyphIds, newSourceUtf16Start, newSourceUtf16End, newText
               ),
@@ -2921,9 +2872,10 @@ export class EditorMotionCoordinator {
           height: cr.height + (tr.height - cr.height) * p
         })
       }
-      const windowInstanceId = allocator.allocate(ghost.glyphIds)
+      // Issue #879 评论6129701697 问题1：读取预分配的 ghost.renderNodeKey。
+      const ghostRenderNodeKey = ghost.renderNodeKey
+      const ghostWindowInstanceId = ghostRenderNodeKey.substring(ghostRenderNodeKey.lastIndexOf('-') + 1)
       motionGlyphWindows.push({
-        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceKind 替代硬编码 'old'
         sourceKind: ghost.sourceKind,
         utf16Start: ghost.utf16Start,
         utf16End: ghost.utf16End,
@@ -2938,14 +2890,12 @@ export class EditorMotionCoordinator {
         glyphHeight: ghost.glyphHeight,
         offsetX: ghost.offsetX,
         offsetY: ghost.offsetY,
-        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceRunId 替代硬编码 `old-${ghost.sourceRevision}`
         runId: ghost.sourceRunId,
         sourceRevision: ghost.sourceRevision,
         glyphIds: ghost.glyphIds,
         windowId: ghost.windowId,
-        windowInstanceId: windowInstanceId,
-        // Issue #879 复核评论6084803105 问题1：使用 ghost.sourceKind 替代硬编码 'old'
-        renderNodeKey: `${ghost.sourceKind}-${ghost.sourceRevision}-${windowInstanceId}`,
+        windowInstanceId: ghostWindowInstanceId,
+        renderNodeKey: ghostRenderNodeKey,
         currentClipLeft: currentLeft,
         currentClipRight: currentRight,
         currentPositionX: ghost.glyphX + ghost.offsetX,
@@ -2953,13 +2903,6 @@ export class EditorMotionCoordinator {
         motionOwnerKind: 'carryGhost',
         // Issue #879 评论6128658045 问题3：carryOver ghost 的完整窗口数据就是 ghost 自身的数据，
         // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-        fullWindowGlyphIds: ghost.glyphIds,
-        fullWindowUtf16Start: ghost.utf16Start,
-        fullWindowUtf16End: ghost.utf16End,
-        fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
-          ghost.glyphIds, ghost.utf16Start, ghost.utf16End,
-          ghost.sourceKind === 'old' ? oldText : newText
-        ),
         })
       }
 
@@ -2970,7 +2913,9 @@ export class EditorMotionCoordinator {
     // - 问题2：reflow 每帧插值 currentPositionX/Y，并相应更新 offsetX/Y 和 clipLeft/Right/Top/Bottom
     // - 问题3：utf16Start/End 用 sourceUtf16Start/End（给旧 TextController 绘制的源范围）
     for (const motionRun of plan.carryOverMotionRuns) {
-      const windowInstanceId = allocator.allocate(motionRun.glyphIds)
+      // Issue #879 评论6129701697 问题1：读取预分配的 motionRun.renderNodeKey。
+      const motionRenderNodeKey = motionRun.renderNodeKey
+      const motionWindowInstanceId = motionRenderNodeKey.substring(motionRenderNodeKey.lastIndexOf('-') + 1)
       if (motionRun.motionOwnerKind === 'reflow') {
         // reflow：每帧插值 currentPositionX/Y，并相应更新 offset/clip
         const currentX = motionRun.startX + (motionRun.targetX - motionRun.startX) * p
@@ -3017,27 +2962,18 @@ export class EditorMotionCoordinator {
           sourceRevision: motionRun.sourceRevision,
           glyphIds: motionRun.glyphIds,
           windowId: motionRun.windowId,
-          windowInstanceId: windowInstanceId,
-          renderNodeKey: `${motionRun.sourceKind}-${motionRun.sourceRevision}-${windowInstanceId}`,
+          windowInstanceId: motionWindowInstanceId,
+          renderNodeKey: motionRenderNodeKey,
           currentClipLeft: clipLeft,
           currentClipRight: clipRight,
           currentPositionX: currentX,
           currentPositionY: currentY,
           motionOwnerKind: motionRun.motionOwnerKind,
-          // Issue #879 复核评论6104619192 问题3：继承源窗口的 opacity
-          // Issue #879 复核评论6104942471 问题3：从冻结透明度继续插值到 targetOpacity。
           opacity: motionRun.opacity === undefined
             ? undefined
             : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
           // Issue #879 评论6128658045 问题3：carryOver motion reflow 的完整窗口数据，
           // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-          fullWindowGlyphIds: motionRun.glyphIds,
-          fullWindowUtf16Start: motionRun.sourceUtf16Start,
-          fullWindowUtf16End: motionRun.sourceUtf16End,
-          fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
-            motionRun.glyphIds, motionRun.sourceUtf16Start, motionRun.sourceUtf16End,
-            motionRun.sourceKind === 'old' ? oldText : newText
-          ),
         })
       } else {
         // insert：保持原来的 clip 插值逻辑（从 currentClipLeft/Right 插值到 targetClipLeft/Right）
@@ -3078,8 +3014,8 @@ export class EditorMotionCoordinator {
           sourceRevision: motionRun.sourceRevision,
           glyphIds: motionRun.glyphIds,
           windowId: motionRun.windowId,
-          windowInstanceId: windowInstanceId,
-          renderNodeKey: `${motionRun.sourceKind}-${motionRun.sourceRevision}-${windowInstanceId}`,
+          windowInstanceId: motionWindowInstanceId,
+          renderNodeKey: motionRenderNodeKey,
           currentClipLeft: currentLeft,
           currentClipRight: currentRight,
           currentPositionX: motionRun.currentPositionX,
@@ -3092,13 +3028,6 @@ export class EditorMotionCoordinator {
             : motionRun.opacity + ((motionRun.targetOpacity ?? motionRun.opacity) - motionRun.opacity) * p,
           // Issue #879 评论6128658045 问题3：carryOver motion insert 的完整窗口数据，
           // fullWindowGlyphUtf16Ranges 必须计算实际值，不再写 undefined。
-          fullWindowGlyphIds: motionRun.glyphIds,
-          fullWindowUtf16Start: motionRun.sourceUtf16Start,
-          fullWindowUtf16End: motionRun.sourceUtf16End,
-          fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.buildGlyphUtf16Ranges(
-            motionRun.glyphIds, motionRun.sourceUtf16Start, motionRun.sourceUtf16End,
-            motionRun.sourceKind === 'old' ? oldText : newText
-          ),
         })
       }
     }
@@ -3208,32 +3137,21 @@ export class EditorMotionCoordinator {
       sourceLayout = w.sourceKind === 'old' ? this.oldLayout : this.newLayout
     }
 
-    // Issue #879 评论6128658045 问题1：优先使用窗口已携带的 fullWindowGlyphUtf16Ranges（完整映射），
-    // 避免 buildGlyphUtf16Ranges 用局部范围 w.utf16Start/End + w.glyphIds 重算导致 null。
-    // 上游 buildFrame 已保证 MotionGlyphWindow.utf16Start/End 与 fullWindowUtf16Start/End 一致，
-    // 但仍优先使用完整映射以防遗漏。
+    // Issue #879 评论6129701697 问题4：合并双轨字段后，
+    // MotionGlyphWindow.utf16Start/End/glyphIds/glyphUtf16Ranges 始终包含完整窗口数据。
     let glyphUtf16Ranges: Map<string, [number, number]> | null = null
-    if (w.fullWindowGlyphUtf16Ranges !== undefined && w.fullWindowGlyphUtf16Ranges !== null) {
-      glyphUtf16Ranges = new Map(w.fullWindowGlyphUtf16Ranges)
-    } else if (w.glyphUtf16Ranges !== undefined && w.glyphUtf16Ranges !== null) {
+    if (w.glyphUtf16Ranges !== undefined && w.glyphUtf16Ranges !== null) {
       glyphUtf16Ranges = new Map(w.glyphUtf16Ranges)
     } else {
-      // fallback：用 buildGlyphUtf16Ranges 重新计算
-      const fwGlyphIds = w.fullWindowGlyphIds !== undefined ? w.fullWindowGlyphIds : w.glyphIds
-      const fwStart = w.fullWindowUtf16Start !== undefined ? w.fullWindowUtf16Start : w.utf16Start
-      const fwEnd = w.fullWindowUtf16End !== undefined ? w.fullWindowUtf16End : w.utf16End
       glyphUtf16Ranges = EditorMotionCoordinator.buildGlyphUtf16Ranges(
-        fwGlyphIds, fwStart, fwEnd, sourceText
+        w.glyphIds, w.utf16Start, w.utf16End, sourceText
       )
     }
 
-    // 如果 glyphUtf16Ranges 仍为 null（簇数不匹配），用 fullWindowUtf16Start/End 作为 fallback
-    // 整个 uncoveredIds 作为一个组
+    // 如果 glyphUtf16Ranges 仍为 null（簇数不匹配），用 utf16Start/End 作为 fallback
     if (glyphUtf16Ranges === null) {
-      const fwStart = w.fullWindowUtf16Start !== undefined ? w.fullWindowUtf16Start : w.utf16Start
-      const fwEnd = w.fullWindowUtf16End !== undefined ? w.fullWindowUtf16End : w.utf16End
       return [this.buildFrozenWindowPiece(
-        w, uncoveredIds, fwStart, fwEnd,
+        w, uncoveredIds, w.utf16Start, w.utf16End,
         sourceLayout, newIdentityTable, newLayout
       )]
     }
@@ -3593,9 +3511,9 @@ export class EditorMotionCoordinator {
             glyphIds: piece.glyphIds,
             windowId: w.windowId,
             sourceRevision: w.sourceRevision,
-            // Issue #879 复核评论6084803105 问题1：从原窗口继承 sourceKind/sourceRunId
             sourceKind: w.sourceKind,
             sourceRunId: w.runId,
+            renderNodeKey: `${w.sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
             utf16Start: piece.sourceUtf16Start,
             utf16End: piece.sourceUtf16End,
             currentClipLeft: piece.clipLeft,
@@ -3658,9 +3576,9 @@ export class EditorMotionCoordinator {
           glyphIds: piece.glyphIds,
           windowId: w.windowId,
           sourceRevision: w.sourceRevision,
-          // Issue #879 复核评论6084803105 问题1：从原窗口继承 sourceKind/sourceRunId
           sourceKind: w.sourceKind,
           sourceRunId: w.runId,
+          renderNodeKey: `${w.sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
           utf16Start: piece.sourceUtf16Start,
           utf16End: piece.sourceUtf16End,
           currentClipLeft: piece.clipLeft,
@@ -4026,6 +3944,7 @@ export class EditorMotionCoordinator {
           sourceRevision: w.sourceRevision,
           sourceKind: sourceKind,
           sourceRunId: sourceRunId,
+          renderNodeKey: `${sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
           sourceUtf16Start: piece.sourceUtf16Start,
           sourceUtf16End: piece.sourceUtf16End,
           targetUtf16Start: piece.targetUtf16Start,
@@ -4107,12 +4026,11 @@ export class EditorMotionCoordinator {
       // Issue #879 评论6128658045 问题1+3：合并 original* 和 fullWindow* 为唯一字段。
       // 上游已保证 fullWindowGlyphUtf16Ranges 不为 undefined（所有创建 MotionGlyphWindow 的地方
       // 都计算了实际值），不再 fallback 到 localGlyphUtf16Ranges。
-      const fullWindowGlyphIds = w.fullWindowGlyphIds !== undefined
-        ? w.fullWindowGlyphIds : w.glyphIds
-      const fullWindowUtf16Start = w.fullWindowUtf16Start !== undefined
-        ? w.fullWindowUtf16Start : w.utf16Start
-      const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
-        ? w.fullWindowUtf16End : w.utf16End
+      // Issue #879 评论6129701697 问题4：MotionGlyphWindow 已删除 fullWindowGlyphIds/Utf16Start/End，
+      // 直接使用 glyphIds/utf16Start/utf16End（它们已是完整窗口的值）。
+      const fullWindowGlyphIds = w.glyphIds
+      const fullWindowUtf16Start = w.utf16Start
+      const fullWindowUtf16End = w.utf16End
       // Issue #879 评论6128658045 问题3：fullWindowGlyphUtf16Ranges 直接使用完整窗口映射，
       // 不再 fallback 到 localGlyphUtf16Ranges（上游已保证不为 undefined）。
       let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
@@ -4147,7 +4065,8 @@ export class EditorMotionCoordinator {
         renderNodeKey: w.renderNodeKey,
         opacity: w.opacity,
         windowInstanceId: w.windowInstanceId,
-        // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据
+        // Issue #879 评论6129701697 问题4：FrozenWindowSpan 必填字段，
+        // 从 MotionGlyphWindow 的现有字段派生（fullWindowGlyphIds/Utf16Start/End 已删除）。
         fullWindowGlyphIds: fullWindowGlyphIds,
         fullWindowUtf16Start: fullWindowUtf16Start,
         fullWindowUtf16End: fullWindowUtf16End,
@@ -4281,7 +4200,8 @@ export class EditorMotionCoordinator {
       durationMs: 0,
       motionKind: MotionKind.None,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: []
     }
     this.motionDurationMs = 0
     return this.currentFrame

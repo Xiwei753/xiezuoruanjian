@@ -1372,11 +1372,17 @@ export struct SujianEditor {
    * 于是每次正常交棒都会走「不匹配」分支而拒绝提交。
    */
   private static sameKeySet(left: string[], right: string[]): boolean {
-    if (left.length !== right.length) {
+    const leftSet = new Set<string>(left)
+    const rightSet = new Set<string>(right)
+    // 任一边有重复 key 即判为物理窗口计划错误
+    if (leftSet.size !== left.length || rightSet.size !== right.length) {
       return false
     }
-    const rightSet = new Set<string>(right)
-    for (const key of left) {
+    // 两边都唯一后，比较集合大小和每个 key 的归属（双向比对）
+    if (leftSet.size !== rightSet.size) {
+      return false
+    }
+    for (const key of leftSet) {
       if (!rightSet.has(key)) {
         return false
       }

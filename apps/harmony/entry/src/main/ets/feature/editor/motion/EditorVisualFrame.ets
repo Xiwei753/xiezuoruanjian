@@ -265,6 +265,13 @@ export interface CarryOverGhostRun {
    * 不再硬编码 `old-${ghost.sourceRevision}`。
    */
   sourceRunId: string
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的最终 renderNodeKey。
+   *
+   * 由 Coordinator 在创建 carryOver runs 时一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   */
+  renderNodeKey: string
   /** 该残影在源正文中的 UTF-16 起始 offset */
   utf16Start: number
   /** 该残影在源正文中的 UTF-16 结束 offset（exclusive） */
@@ -339,6 +346,13 @@ export interface CarryOverMotionRun {
    * 而非用最新 revision 构造新的 runId。
    */
   sourceRunId: string
+  /**
+   * Issue #879 评论6129701697 问题1：预分配的最终 renderNodeKey。
+   *
+   * 由 Coordinator 在创建 carryOver runs 时一次性分配，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   */
+  renderNodeKey: string
   /**
    * Issue #879 复核评论6082616112 问题3：旧源 UTF-16 范围——给旧 TextController 绘制用。
    * 这是字形在源正文中的范围，buildFrame 中 utf16Start/End 用此值。
@@ -589,34 +603,12 @@ export interface MotionGlyphWindow {
    */
    glyphUtf16Ranges?: Map<string, [number, number]> | null
   /**
-   * Issue #879 第32轮复核问题2：该物理 Text 窗口覆盖的完整有序 glyphIds 列表。
+   * Issue #879 评论6129701697 问题4：物理源窗口的完整逐字 glyphId→UTF-16 映射。
    *
-   * frozen 成员的窗口可能只包含部分 interval 的 glyphIds（如首 interval 只有甲，
-   * 但完整窗口包含甲乙丙）。此字段保存物理源窗口首次创建时的完整 glyphIds，
-   * 确保 commitDisplayedContext 冻结时 frozenIndex 能为窗口内所有字形建立索引，
-   * 连续删除时不会因 glyphIds 不完整而断源。
-   * target 成员的完整窗口数据就是当前 interval 的 glyphIds（target 本来就是新源窗口）。
+   * 合并 originalGlyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 为唯一字段。
+   * glyphIds 和 utf16 范围从该映射派生，不再单独存储 fullWindowGlyphIds/Utf16Start/End。
    */
-   fullWindowGlyphIds?: string[]
-  /**
-   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 起始位置。
-   *
-   * 从物理源窗口首次创建时保存，不是单个 interval/member 的 sourceUtf16Start。
-   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整源 UTF-16 区间。
-   */
-   fullWindowUtf16Start?: number
-  /**
-   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整源 UTF-16 结束位置。
-   */
-   fullWindowUtf16End?: number
-  /**
-   * Issue #879 第32轮复核问题2：该物理 Text 窗口的完整逐字 glyphId→UTF-16 映射。
-   *
-   * 从物理源窗口首次创建时保存，不是单个 interval/member 的 glyphUtf16Ranges。
-   * 确保 commitDisplayedContext 冻结时 FrozenWindowSpan 携带完整逐字映射，
-   * frozenIndex 建索引时使用此字段而不是 glyphIds，确保窗口内所有字形都能被找到。
-   */
-   fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
+  fullWindowGlyphUtf16Ranges?: Map<string, [number, number]> | null
 }
 
 /**

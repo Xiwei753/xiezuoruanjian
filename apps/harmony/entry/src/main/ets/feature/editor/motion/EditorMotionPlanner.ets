@@ -32,7 +32,7 @@ import { EditorVisualFrame, MotionKind, MotionSegment, InsertRun, DeletedRun, Re
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { TextOffsetMapper } from '../input/TextOffsetMapper'
 import { LineLayout, glyphRectForRange } from '../render/editor_render_geometry'
-import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry, windowIdForGlyphIds, clusterBoundaries, WindowInstanceIdAllocator } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartPiece, RectLike,
   FrozenGlyphMember,
@@ -55,6 +55,88 @@ interface RetainedMoveSpan {
   newRect: GlyphRect
   startPositionX: number
   startPositionY: number
+}
+
+/**
+ * Issue #879 评论6129701697 问题1：物理窗口身份——一次性分配的不可变 renderNodeKey。
+ *
+ * 同一物理 Text 跨多个 glyph interval 时，所有成员复用这一条 key。
+ * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+ */
+export interface PhysicalWindowIdentity {
+  /** 源类型：'old' 或 'new' */
+  sourceKind: 'old' | 'new'
+  /** 源修订号 */
+  sourceRevision: number
+  /** 源 runId（如 'old-10' 或 'new-11'） */
+  runId: string
+  /** 窗口实例 ID（'win-<number>' 格式） */
+  windowInstanceId: string
+  /** 一次性分配的最终 renderNodeKey = `${sourceKind}-${sourceRevision}-${windowInstanceId}` */
+  renderNodeKey: string
+}
+
+/**
+ * Issue #879 评论6129701697 问题1：物理窗口 key 分配器。
+ *
+ * 在 Planner 的 plan() 函数中为每个不同的物理来源分配一次 PhysicalWindowIdentity，
+ * 同一物理来源（sourceKind + sourceRevision + windowInstanceId）跨多个 glyph interval
+ * 时复用同一条 key。确保 plannedWindowKeys 和 buildFrame 读取相同字段。
+ */
+export class PhysicalWindowKeyAllocator {
+  private allocator: WindowInstanceIdAllocator
+  private identities: Map<string, PhysicalWindowIdentity> = new Map()
+
+  constructor(allocator: WindowInstanceIdAllocator) {
+    this.allocator = allocator
+  }
+
+  /**
+   * 为指定物理来源分配或获取已有的 PhysicalWindowIdentity。
+   *
+   * 同一 sourceKind + sourceRevision + windowInstanceId 组合只分配一次。
+   * windowInstanceId 为 undefined 时（如 target 成员），分配新的 ID。
+   */
+  allocate(
+    sourceKind: 'old' | 'new',
+    sourceRevision: number,
+    glyphIds: string[],
+    windowInstanceId?: string
+  ): PhysicalWindowIdentity {
+    const existingId = windowInstanceId ?? ''
+    const cacheKey = `${sourceKind}-${sourceRevision}-${existingId}`
+    const existing = this.identities.get(cacheKey)
+    if (existing !== undefined) {
+      return existing
+    }
+    const allocatedWinId = windowInstanceId ?? this.allocator.allocate(glyphIds)
+    const identity: PhysicalWindowIdentity = {
+      sourceKind: sourceKind,
+      sourceRevision: sourceRevision,
+      runId: `${sourceKind}-${sourceRevision}`,
+      windowInstanceId: allocatedWinId,
+      renderNodeKey: `${sourceKind}-${sourceRevision}-${allocatedWinId}`
+    }
+    this.identities.set(cacheKey, identity)
+    return identity
+  }
+
+  /**
+   * 为 target 成员（新源、无已有 windowInstanceId）分配 PhysicalWindowIdentity。
+   */
+  allocateTarget(
+    sourceRevision: number,
+    glyphIds: string[]
+  ): PhysicalWindowIdentity {
+    return this.allocate('new', sourceRevision, glyphIds)
+  }
+
+  /**
+   * 获取所有已分配的 PhysicalWindowIdentity 列表。
+   */
+  getIdentities(): PhysicalWindowIdentity[] {
+    return Array.from(this.identities.values())
+  }
 }
 
 /**
@@ -121,6 +203,14 @@ export interface EditorMotionPlan {
    * 但 plan 接口需要容纳此字段。
    */
   carryOverMotionRuns: CarryOverMotionRun[]
+  /**
+   * Issue #879 评论6129701697 问题1：物理窗口身份列表。
+   *
+   * Planner 在 plan() 中为每个不同的物理来源分配一次 PhysicalWindowIdentity，
+   * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+   * 空数组表示无运动窗口（静态帧）。
+   */
+  physicalWindowIdentities: PhysicalWindowIdentity[]
 }
 
 /**
@@ -159,7 +249,7 @@ export class EditorMotionPlanner {
    * @param lastVisibleFrame 上一帧的视觉状态
    * @returns 运动规划结果（多通道结构）
    */
-  static plan(
+   static plan(
     oldSnapshot: EditorLayoutSnapshot,
     oldLayout: LineLayout[],
     newSnapshot: EditorLayoutSnapshot,
@@ -167,7 +257,8 @@ export class EditorMotionPlanner {
     editResult: EditorEditResult | null,
     lastVisibleFrame: EditorVisualFrame,
     oldIdentities: GlyphIdentityTable | null,
-    newIdentities: GlyphIdentityTable | null
+    newIdentities: GlyphIdentityTable | null,
+    windowIdAllocator: WindowInstanceIdAllocator
   ): EditorMotionPlan {
     // 无 editResult（初始加载/切换章节/字号变更）→ 无运动
     if (editResult === null) {
@@ -197,7 +288,7 @@ export class EditorMotionPlanner {
     // 从 displayPatches 分析正文增删
     return EditorMotionPlanner.planFromPatches(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResult, lastVisibleFrame,
-      oldIdentities, newIdentities
+      oldIdentities, newIdentities, windowIdAllocator
     )
   }
 
@@ -213,7 +304,8 @@ export class EditorMotionPlanner {
       durationMs: 0,
       motionKind: MotionKind.None,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: []
     }
   }
 
@@ -313,7 +405,8 @@ export class EditorMotionPlanner {
       durationMs: 0, // 由 policy 决定实际时长
       motionKind: MotionKind.CaretMove,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: []
     }
   }
 
@@ -338,16 +431,24 @@ export class EditorMotionPlanner {
     editResult: EditorEditResult,
     lastVisibleFrame: EditorVisualFrame,
     oldIdentities: GlyphIdentityTable | null,
-    newIdentities: GlyphIdentityTable | null
+    newIdentities: GlyphIdentityTable | null,
+    windowIdAllocator: WindowInstanceIdAllocator
   ): EditorMotionPlan {
     const patches: DisplayPatch[] = editResult.displayPatches
     const oldText = oldSnapshot.text
     const newText = newSnapshot.text
+    const oldRevision = oldSnapshot.revision
+    const newRevision = newSnapshot.revision
 
     // 无 patches → 无运动
     if (patches.length === 0) {
       return EditorMotionPlanner.emptyPlan()
     }
+
+    // Issue #879 评论6129701697 问题1：创建 PhysicalWindowKeyAllocator，
+    // 一次性为每个不同的物理来源分配 PhysicalWindowIdentity，
+    // plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+    const keyAllocator = new PhysicalWindowKeyAllocator(windowIdAllocator)
 
     // 判断 Forward Delete（用于 DeletedRun.isForward 标记）
     const isForwardDelete: boolean = EditorMotionPlanner.isForwardDelete(editResult)
@@ -398,6 +499,11 @@ export class EditorMotionPlanner {
             displayedContext,
             isForwardDelete ? lastVisibleFrame.caretX : rect.rect.x
           )
+          // Issue #879 评论6129701697 问题1：预分配 renderNodeKey，
+          // plannedWindowKeys 和 buildFrame 只读取此字段。
+          for (const piece of pieces) {
+            piece.renderNodeKey = keyAllocator.allocate('old', oldRevision, piece.glyphIds).renderNodeKey
+          }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
           deletedRuns.push({
@@ -433,6 +539,11 @@ export class EditorMotionPlanner {
             EditorMotionPlanner.runGeometry(glyphIds, newText, rect.utf16Start, rect.utf16End, rect.rect, newLayout),
             displayedContext
           )
+          // Issue #879 评论6129701697 问题1：预分配 renderNodeKey，
+          // plannedWindowKeys 和 buildFrame 只读取此字段。
+          for (const piece of pieces) {
+            piece.renderNodeKey = keyAllocator.allocate('new', newRevision, piece.glyphIds).renderNodeKey
+          }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
           insertRuns.push({
@@ -546,6 +657,16 @@ export class EditorMotionPlanner {
         for (const piece of pieces) {
           if (piece.intervals !== undefined) {
             for (const interval of piece.intervals) {
+              // Issue #879 评论6129701697 问题1：预分配 interval 的 renderNodeKey
+              // （fallback 分支用，当 sourceMembers 不存在时）。
+              interval.renderNodeKey = keyAllocator.allocate('old', oldRevision, interval.glyphIds).renderNodeKey
+              const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
+                ? interval.needsCrossfade
+                : needsCrossfade
+              if (intervalNeedsCrossfade) {
+                interval.crossfadeRenderNodeKey = keyAllocator.allocate('new', newRevision, interval.glyphIds).renderNodeKey
+              }
+
               if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {
                 // 为每个已有成员设置 targetOpacity
                 for (const member of interval.sourceMembers) {
@@ -559,44 +680,60 @@ export class EditorMotionPlanner {
                 const hasNewRevisionMember = interval.sourceMembers.some(
                   m => m.sourceRevision === newRevision
                 )
-                if (!hasNewRevisionMember &&
-                    newMoveBoundaries.length === glyphIds.length + 1) {
+                if (!hasNewRevisionMember) {
+                  // Issue #879 评论6129701697 问题1+2：预分配 target 成员的完整 renderNodeKey
+                  // （包含 windowInstanceId），plannedWindowKeys 和 buildFrame 只读取此字段。
+                  // 不再由 buildFrame 运行时分配 windowInstanceId。
+                  const targetIdentity = keyAllocator.allocateTarget(newRevision, interval.glyphIds)
                   // 与 buildFrame 一致：覆盖整个 interval（firstIndex 到 lastIndex + 1），
                   // 而不是只覆盖第一个 glyph
                   const giStart = interval.firstIndex
                   const giEnd = interval.lastIndex + 1
-                  if (giStart >= 0 && giEnd < newMoveBoundaries.length) {
-                    const newGlyphRect = glyphRectForRange(
+                  let newGlyphRect: RectLike | null = null
+                  if (newMoveBoundaries.length === glyphIds.length + 1 &&
+                      giStart >= 0 && giEnd < newMoveBoundaries.length) {
+                    newGlyphRect = glyphRectForRange(
                       newLayout, newMoveBoundaries[giStart], newMoveBoundaries[giEnd]
                     )
-                    if (newGlyphRect !== null) {
-                      const newMemberRunId = `new-${newRevision}`
-                      const newMember: FrozenGlyphMember = {
-                        sourceKind: 'new',
-                        sourceRevision: newRevision,
-                        // Issue #879 复核评论6111437799 问题1：新建目标成员 role='target'
-                        role: 'target',
-                        runId: newMemberRunId,
-                        renderNodeKey: newMemberRunId,
-                        sourceGlyphRect: {
-                          x: newGlyphRect.x, y: newGlyphRect.y,
-                          width: newGlyphRect.width, height: newGlyphRect.height,
-                        },
-                        // 起始位置与历史源对齐，让字形从旧位置淡入
-                        offsetX: interval.startPositionX - newGlyphRect.x,
-                        offsetY: interval.startPositionY - newGlyphRect.y,
-                        clipRects: [],
-                        opacity: 0,
-                        sourceUtf16Start: newMoveBoundaries[giStart],
-                        sourceUtf16End: newMoveBoundaries[giEnd],
-                        targetOpacity: 1,
-                        // Issue #879 评论6116388578 问题2：target 成员的 windowInstanceId
-                        // 为 undefined——由 buildFrame 分配新的 windowInstanceId。
-                        windowInstanceId: undefined,
-                      }
-                      interval.sourceMembers.push(newMember)
-                    }
                   }
+                  // Issue #879 评论6129701697 问题2：即使 newGlyphRect === null 也创建目标成员，
+                  // 用零面积 fallback 几何——与 buildFrame 的 defensive 创建对齐，
+                  // 但 key 在 Planner 阶段就预分配，不在 buildFrame 中临时创建。
+                  const targetGlyphRect: RectLike = newGlyphRect !== null
+                    ? newGlyphRect
+                    : {
+                        x: interval.startPositionX,
+                        y: interval.startPositionY,
+                        width: 0,
+                        height: 0,
+                      }
+                  const newMemberRunId = `new-${newRevision}`
+                  const newMember: FrozenGlyphMember = {
+                    sourceKind: 'new',
+                    sourceRevision: newRevision,
+                    role: 'target',
+                    runId: newMemberRunId,
+                    renderNodeKey: targetIdentity.renderNodeKey,
+                    sourceGlyphRect: {
+                      x: targetGlyphRect.x, y: targetGlyphRect.y,
+                      width: targetGlyphRect.width, height: targetGlyphRect.height,
+                    },
+                    offsetX: interval.startPositionX - targetGlyphRect.x,
+                    offsetY: interval.startPositionY - targetGlyphRect.y,
+                    clipRects: [],
+                    opacity: 0,
+                    sourceUtf16Start: newMoveBoundaries.length === glyphIds.length + 1 &&
+                      giStart >= 0 && giEnd < newMoveBoundaries.length
+                        ? newMoveBoundaries[giStart]
+                        : interval.utf16Start ?? 0,
+                    sourceUtf16End: newMoveBoundaries.length === glyphIds.length + 1 &&
+                      giStart >= 0 && giEnd < newMoveBoundaries.length
+                        ? newMoveBoundaries[giEnd]
+                        : interval.utf16End ?? 0,
+                    targetOpacity: 1,
+                    windowInstanceId: targetIdentity.windowInstanceId,
+                  }
+                  interval.sourceMembers.push(newMember)
                 }
               }
             }
@@ -632,7 +769,8 @@ export class EditorMotionPlanner {
       durationMs: 0, // 由 policy 决定实际时长
       motionKind,
       carryOverGhostRuns: [],
-      carryOverMotionRuns: []
+      carryOverMotionRuns: [],
+      physicalWindowIdentities: keyAllocator.getIdentities()
     }
   }
 
@@ -735,15 +873,11 @@ export class EditorMotionPlanner {
         sourceLayout = w.sourceKind === 'old' ? oldLayout : newLayout
       }
 
-      // Issue #879 评论6128658045 问题1+3：合并 original* 和 fullWindow* 为唯一字段。
-      // 上游已保证 fullWindowGlyphUtf16Ranges 不为 undefined（所有创建 MotionGlyphWindow 的地方
-      // 都计算了实际值），不再 fallback 到 localGlyphUtf16Ranges。
-      const fullWindowGlyphIds = w.fullWindowGlyphIds !== undefined
-        ? w.fullWindowGlyphIds : w.glyphIds
-      const fullWindowUtf16Start = w.fullWindowUtf16Start !== undefined
-        ? w.fullWindowUtf16Start : w.utf16Start
-      const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
-        ? w.fullWindowUtf16End : w.utf16End
+      // Issue #879 评论6129701697 问题4：MotionGlyphWindow 已删除 fullWindowGlyphIds/Utf16Start/End，
+      // 直接使用 glyphIds/utf16Start/utf16End（它们已是完整窗口的值）。
+      const fullWindowGlyphIds = w.glyphIds
+      const fullWindowUtf16Start = w.utf16Start
+      const fullWindowUtf16End = w.utf16End
       // Issue #879 评论6128658045 问题3：fullWindowGlyphUtf16Ranges 直接使用完整窗口映射，
       // 不再 fallback 到 localGlyphUtf16Ranges（上游已保证不为 undefined）。
       let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
