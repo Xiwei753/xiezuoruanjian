@@ -184,7 +184,9 @@ pub struct LayoutSnapshot {
     /// - 前面段行数变化时，后缀段的行范围由前缀和自动平移，
     ///   不需要逐段更新绝对行下标。
     /// - 查视口时 O(log n) 前缀和查询，不需要反向扫描整个 HashMap。
-    pub paragraph_line_count_index: super::paragraph_height_index::ParagraphLineCountIndex,
+    /// Issue #901 第二十二轮问题4: Arc 共享行数前缀索引，O(1) clone。
+    pub paragraph_line_count_index:
+        std::sync::Arc<super::paragraph_height_index::ParagraphLineCountIndex>,
 }
 
 #[cfg(test)]
@@ -208,8 +210,9 @@ impl LayoutSnapshot {
             height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
             layout_generation: 0,
             paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
-            paragraph_line_count_index:
+            paragraph_line_count_index: std::sync::Arc::new(
                 super::paragraph_height_index::ParagraphLineCountIndex::new(),
+            ),
         }
     }
 }

@@ -294,11 +294,11 @@ impl EditorLayout {
                 .as_ref()
                 .map(|s| std::sync::Arc::clone(&s.paragraph_id_to_slot))
                 .unwrap_or_default(),
-            // Issue #901 第二十一轮问题2: 从 canonical snapshot 继承段落行数前缀索引。
+            // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
             paragraph_line_count_index: self
                 .last_snapshot
                 .as_ref()
-                .map(|s| s.paragraph_line_count_index.clone())
+                .map(|s| std::sync::Arc::clone(&s.paragraph_line_count_index))
                 .unwrap_or_default(),
         });
     }
@@ -436,8 +436,8 @@ impl EditorLayout {
             // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
-            // Issue #901 第二十一轮问题2: 从 canonical snapshot 继承段落行数前缀索引。
-            let paragraph_line_count_index = doc_snapshot.paragraph_line_count_index.clone();
+            // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
+            let paragraph_line_count_index = std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -501,8 +501,8 @@ impl EditorLayout {
             // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
-            // Issue #901 第二十一轮问题2: 从 canonical snapshot 继承段落行数前缀索引。
-            let paragraph_line_count_index = doc_snapshot.paragraph_line_count_index.clone();
+            // Issue #901 第二十二轮问题4: Arc::clone 共享，O(1)。
+            let paragraph_line_count_index = std::sync::Arc::clone(&doc_snapshot.paragraph_line_count_index);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {

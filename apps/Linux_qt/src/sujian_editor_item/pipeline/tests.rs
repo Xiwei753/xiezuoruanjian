@@ -118,8 +118,9 @@ fn test_doc_snapshot(
         height_index:
             crate::editor::layout::ParagraphHeightIndex::new(),
         paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
-        paragraph_line_count_index:
+        paragraph_line_count_index: std::sync::Arc::new(
             crate::editor::layout::ParagraphLineCountIndex::new(),
+        ),
     }
 }
 

@@ -440,8 +440,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     // Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
     let paragraph_id_to_slot =
         std::sync::Arc::new(build_paragraph_id_to_slot_from_lines(&visual_lines));
-    // Issue #901 第二十一轮问题2: 构建段落行数前缀索引（Fenwick 树）。
-    let paragraph_line_count_index = build_line_count_index_from_lines(&visual_lines);
+    // Issue #901 第二十二轮问题4: Arc 包装行数前缀索引，O(1) 共享。
+    let paragraph_line_count_index = std::sync::Arc::new(build_line_count_index_from_lines(&visual_lines));
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,
@@ -638,7 +638,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
                 paragraph_id_to_slot: std::sync::Arc::clone(&prev.paragraph_id_to_slot),
                 // Issue #901 第二十一轮问题2: 沿用 prev 的段落行数前缀索引。
-                paragraph_line_count_index: prev.paragraph_line_count_index.clone(),
+                paragraph_line_count_index: std::sync::Arc::clone(
+                    &prev.paragraph_line_count_index,
+                ),
             };
         }
         // prev 与 new text 不一致但 affected_range 为空：
@@ -718,7 +720,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
                 // Issue #901 第二十轮阻塞1: 空映射。
                 // Issue #901 第二十一轮问题2: 空行数索引。
-                paragraph_line_count_index: ParagraphLineCountIndex::new(),
+                paragraph_line_count_index: std::sync::Arc::new(
+                    ParagraphLineCountIndex::new(),
+                ),
             };
         }
     };
@@ -1343,8 +1347,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     //
     // 先调用 sync_from_visual_lines_incremental 更新 store 的排版结果和 id_to_line_range，
     // 再从 store 获取两个映射，保证映射反映最新排版结果。
+    // Issue #901 第二十二轮问题2: 只传本次新排版的行给 sync_from_visual_lines_incremental，
+    // 不传全量 visual_lines。splice 后的全量 visual_lines 中，复用后缀段的 raw logical_slot
+    // 可能过期/重复（如 甲\n乙 → \n甲\n乙 后 raw logical_slot = [0,0,1]），
+    // find_line_range_by_logical_slot 在全量行上二分 idx=0 会把新空段和复用旧"甲"
+    // 的行合为一个段。新排版的行（splice 后 [vl_start_idx, vl_start_idx+new_affected_line_count)
+    // 范围内）的 logical_slot 是正确的新段索引，只包含受影响段的行，不会有复用后缀行干扰。
+    let new_lines_for_sync: &[VisualLine] =
+        &visual_lines[vl_start_idx..(vl_start_idx + new_affected_line_count)];
     paragraph_store.sync_from_visual_lines_incremental(
-        visual_lines.as_slice(),
+        new_lines_for_sync,
         generation,
         &affected_indices,
     );
@@ -1353,7 +1365,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十一轮问题2: 从 paragraph_store 获取段落行数前缀索引。
     // sync_from_visual_lines_incremental 已更新受影响段的 visual_line_count
     // 和 line_count_index，后缀段行范围由前缀和自动平移。
-    let paragraph_line_count_index = paragraph_store.line_count_index_clone();
+    // Issue #901 第二十二轮问题4: Arc 共享行数前缀索引，O(1)。
+    let paragraph_line_count_index = paragraph_store.line_count_index_arc();
 
     let snapshot = CanonicalDocumentVisualSnapshot {
         text_revision,
@@ -1881,8 +1894,8 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     // Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
     let paragraph_id_to_slot =
         std::sync::Arc::new(build_paragraph_id_to_slot_from_lines(&visual_lines));
-    // Issue #901 第二十一轮问题2: 构建段落行数前缀索引（Fenwick 树）。
-    let paragraph_line_count_index = build_line_count_index_from_lines(&visual_lines);
+    // Issue #901 第二十二轮问题4: Arc 包装行数前缀索引，O(1) 共享。
+    let paragraph_line_count_index = std::sync::Arc::new(build_line_count_index_from_lines(&visual_lines));
     CanonicalDocumentVisualSnapshot {
         text_revision,
         font_size,

@@ -526,6 +526,20 @@ impl ParagraphLineCountIndex {
         }
     }
 
+    /// Issue #901 第二十二轮问题3: Fenwick 树单点减：`counts[index] -= delta`，同步更新 BIT。
+    ///
+    /// O(log n)。沿 Fenwick 单点路径执行 `self.bit[j] -= delta`。
+    /// SAFETY: 调用方需保证 `bit[j] >= delta`（即该段旧行数 >= 新行数）。
+    /// 在正常索引状态下，BIT 每个节点存一段区间的和且该区间包含 index，
+    /// 所以 `bit[j] >= old_count >= delta`，减法不会下溢。
+    fn bit_sub(&mut self, index: usize, delta: usize) {
+        let mut j = index + 1; // 转 1-indexed
+        while j <= self.len {
+            self.bit[j] -= delta;
+            j += lowbit(j);
+        }
+    }
+
     /// 重建整个 Fenwick 树（从 `counts` 数组）。
     fn rebuild_bit(&mut self) {
         let n = self.counts.len();
@@ -583,7 +597,11 @@ impl ParagraphLineCountIndex {
             return None;
         }
         let old_count = self.counts[index];
-        // usize delta 需处理新值可能小于旧值的情况。
+        // Issue #901 第二十二轮问题3: 增加与下降都用 O(log n) 单点更新。
+        // 旧实现在新行数 < 旧行数时调用 rebuild_bit()（O(n)），快速删除/缩行
+        // 时频繁触发。改为 bit_sub 沿 Fenwick 单点路径做减法。
+        // SAFETY: BIT 每个节点 bit[j] 存一段区间的和，该区间包含 index，
+        // 所以 bit[j] >= delta = old_count - new_count，减法不会下溢。
         if new_count >= old_count {
             let delta = new_count - old_count;
             self.counts[index] = new_count;
@@ -592,10 +610,8 @@ impl ParagraphLineCountIndex {
         } else {
             let delta = old_count - new_count;
             self.counts[index] = new_count;
-            // BIT 只支持加法，减法用 wrapping_add 配合补码语义不可靠，
-            // 这里通过重建保证正确性（减法场景在段落数不变时罕见）。
-            // 实际上 BIT 存 usize，减法会下溢。改为重建。
-            self.rebuild_bit();
+            self.bit_sub(index, delta);
+            self.total -= delta;
         }
         Some(old_count)
     }

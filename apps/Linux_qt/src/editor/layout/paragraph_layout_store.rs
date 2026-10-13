@@ -245,7 +245,10 @@ pub struct ParagraphLayoutStore {
     /// - `line_start = line_count_index.paragraph_line_start(i)`（前 i 段行数和）。
     /// - 前面段行数变化时，后缀段的 `line_start` 由前缀和自动平移，
     ///   不需要逐段更新绝对行下标。
-    line_count_index: ParagraphLineCountIndex,
+    /// Issue #901 第二十二轮问题4: Arc 包装实现版本化共享。
+    /// snapshot 通过 `line_count_index_arc()` 获取 `Arc::clone`（O(1)），
+    /// store 更新时用 `Arc::make_mut`（COW：refcount==1 原地改，refcount>1 clone 新副本）。
+    line_count_index: Arc<ParagraphLineCountIndex>,
     /// Issue #901 第二十一轮问题1: 下一个可分配的 Qt 物理槽号。
     ///
     /// physical_slot 与文档段序（logical_slot）无关，由 store 内部分配。
@@ -268,7 +271,7 @@ impl ParagraphLayoutStore {
             entries: Vec::new(),
             next_id: 1,
             id_to_slot_cache: Arc::new(HashMap::new()),
-            line_count_index: ParagraphLineCountIndex::new(),
+            line_count_index: Arc::new(ParagraphLineCountIndex::new()),
             next_physical_slot: 0,
         }
     }
@@ -295,7 +298,7 @@ impl ParagraphLayoutStore {
         self.entries.clear();
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
-        self.line_count_index.clear();
+        Arc::make_mut(&mut self.line_count_index).clear();
         // Issue #901 第二十一轮问题1: next_physical_slot 不重置，避免新分配的
         // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。物理槽只分配不回收。
     }
@@ -489,11 +492,14 @@ impl ParagraphLayoutStore {
         self.entries = new_entries;
         // Issue #901 第二十一轮阻塞5: 同步重建 id_to_slot_cache。
         self.rebuild_id_to_slot_cache();
-        // Issue #901 第二十一轮问题2: 重建 line_count_index。
-        // rebuild_from_text 重置排版结果（visual_line_count=0），
-        // 行数索引全量重建为 0，后续 sync_from_visual_lines 会更新实际行数。
-        let counts = vec![0usize; self.entries.len()];
-        self.line_count_index.rebuild(counts);
+        // Issue #901 第二十二轮问题1: 从新 entries 已继承的 visual_line_count
+        // 初始化行数索引，而不是全部置零。rebuild_from_text 的前缀/后缀匹配已
+        // 把复用段的 visual_line_count 正确继承到 new_entries（见上方 435-471 行），
+        // 行数索引必须与 entries 保持一致。若全部置零，后续 sync_from_visual_lines_incremental
+        // 只更新 affected_indices，未改的后缀段行数再也恢复不了，导致
+        // resolve_viewport_lines / paragraph_line_range 找错行。
+        let counts: Vec<usize> = self.entries.iter().map(|e| e.visual_line_count).collect();
+        Arc::make_mut(&mut self.line_count_index).rebuild(counts);
         // Issue #901 第二十一轮问题1: 更新 next_physical_slot，确保复用段保留的
         // old.cache_slot 不会与后续新段分配的 physical_slot 冲突。
         for entry in &self.entries {
@@ -545,12 +551,14 @@ impl ParagraphLayoutStore {
         &self.line_count_index
     }
 
-    /// Issue #901 第二十一轮问题2: 获取段落行数前缀索引的克隆。
+    /// Issue #901 第二十二轮问题4: 获取段落行数前缀索引的 Arc 共享引用。
     ///
-    /// 用于构造 snapshot 时传递一份行数索引（Fenwick 树 Clone 是 O(n) 段落数，
-    /// 远小于 O(行数)）。
-    pub fn line_count_index_clone(&self) -> ParagraphLineCountIndex {
-        self.line_count_index.clone()
+    /// 用于构造 snapshot 时传递一份行数索引。`Arc::clone` 是 O(1)，
+    /// 不再每笔 clone 整个 Fenwick 树（O(段落数)）。
+    /// store 后续更新时通过 `Arc::make_mut` COW，snapshot 持有的旧 Arc
+    /// 仍指向不可变旧版本。
+    pub fn line_count_index_arc(&self) -> Arc<ParagraphLineCountIndex> {
+        Arc::clone(&self.line_count_index)
     }
 
     /// Issue #901 第二十一轮问题2: 按段落索引（slot）查询视觉行范围。
@@ -688,7 +696,7 @@ impl ParagraphLayoutStore {
         // 新段插入在 index+1，原 slot >= index+1 的段全部 +1。
         self.id_to_slot_cache_insert(new_id, index + 1);
         // Issue #901 第二十一轮问题2: 同步插入行数索引槽位（初始行数 0）。
-        self.line_count_index.insert(index + 1, 0);
+        Arc::make_mut(&mut self.line_count_index).insert(index + 1, 0);
         Some((index, index + 1))
     }
 
@@ -740,7 +748,7 @@ impl ParagraphLayoutStore {
         // 被删段在 index+1，原 slot > index+1 的段全部 -1。
         self.id_to_slot_cache_remove(removed_entry.id, index + 1);
         // Issue #901 第二十一轮问题2: 同步删除行数索引槽位。
-        self.line_count_index.remove(index + 1);
+        Arc::make_mut(&mut self.line_count_index).remove(index + 1);
         Some(index)
     }
 
@@ -838,7 +846,7 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
         self.id_to_slot_cache_insert(id, insert_idx);
         // Issue #901 第二十一轮问题2: 同步插入行数索引槽位（初始行数 0）。
-        self.line_count_index.insert(insert_idx, 0);
+        Arc::make_mut(&mut self.line_count_index).insert(insert_idx, 0);
     }
 
     /// 删除段落 `index`（丢弃其 Id）。
@@ -848,7 +856,7 @@ impl ParagraphLayoutStore {
             // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
             self.id_to_slot_cache_remove(removed.id, index);
             // Issue #901 第二十一轮问题2: 同步删除行数索引槽位。
-            self.line_count_index.remove(index);
+            Arc::make_mut(&mut self.line_count_index).remove(index);
             Some(removed)
         } else {
             None
@@ -1119,7 +1127,10 @@ impl ParagraphLayoutStore {
     ///
     /// # 参数
     ///
-    /// - `lines`：本次排版产生的全部视觉行（含复用 + 重排段落的行）。
+    /// - `lines`：**本次新排版产生的视觉行**（仅受影响段落的行，非全量 visual_lines）。
+    ///   Issue #901 第二十二轮问题2: 调用方必须只传新排版的行，不能传 splice 后的
+    ///   全量 visual_lines——复用后缀段的 raw logical_slot 可能过期/重复，在全量行上
+    ///   二分会把新段和复用旧段的行合为一个段。
     /// - `layout_generation`：本次排版的 generation。
     /// - `affected_indices`：受影响段落索引列表（由 [`affected_paragraphs`] 计算）。
     pub fn sync_from_visual_lines_incremental(
@@ -1135,7 +1146,7 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十一轮问题2: 先确保 line_count_index 长度匹配段落数。
         // 段落数变化（拆段/合段）时 line_count_index 已在 split/merge 中 insert/remove，
         // 此处 ensure_len 仅在异常情况下补齐。
-        self.line_count_index
+        Arc::make_mut(&mut self.line_count_index)
             .ensure_len(self.entries.len(), 0);
 
         // Issue #901 第十五轮问题4: 改成以受影响段索引 + 基礎 VisualLine.logical_slot
@@ -1185,7 +1196,7 @@ impl ParagraphLayoutStore {
             }
             // Issue #901 第二十一轮问题2: 更新行数前缀索引。
             // 后缀段的行范围由前缀和自动平移，不需要逐段更新绝对行下标。
-            self.line_count_index.update_count(idx, line_count);
+            Arc::make_mut(&mut self.line_count_index).update_count(idx, line_count);
         }
     }
 
@@ -1244,7 +1255,7 @@ impl ParagraphLayoutStore {
         }
         // Issue #901 第二十一轮问题2: 行数索引失效（全 0）。
         let counts = vec![0usize; self.entries.len()];
-        self.line_count_index.rebuild(counts);
+        Arc::make_mut(&mut self.line_count_index).rebuild(counts);
     }
 
     /// 使段落 `index` 的布局缓存失效。
@@ -1283,7 +1294,7 @@ impl ParagraphLayoutStore {
             }
             // Issue #901 第二十一轮问题2: 重建行数索引（全 0）。
             let counts = vec![0usize; self.entries.len()];
-            self.line_count_index.rebuild(counts);
+            Arc::make_mut(&mut self.line_count_index).rebuild(counts);
             return;
         }
 
@@ -1334,7 +1345,7 @@ impl ParagraphLayoutStore {
             .iter()
             .map(|e| e.visual_line_count)
             .collect();
-        self.line_count_index.rebuild(counts);
+        Arc::make_mut(&mut self.line_count_index).rebuild(counts);
 
         // Issue #901 第二十一轮问题1: 更新 next_physical_slot，确保下次增量排版
         // 新段分配的 physical_slot 不与全篇排版后已有的 cache_slot 冲突。
