@@ -76,6 +76,26 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.sync_network_failed').id)
       case 'error.dirty_repo_blocked':
         return context.resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
+      case 'error.sync_retryable_network':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_retryable_network').id)
+      case 'error.sync_retryable_io':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_retryable_io').id)
+      case 'error.sync_dirty_repository':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_dirty_repository').id)
+      case 'error.sync_protocol_error':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_protocol_error').id)
+      case 'error.sync_fatal':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_fatal').id)
+      case 'sync.result.generic_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      case 'sync.result.auth_failed':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'sync.result.token_permission_denied':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
+      case 'sync.result.conflict_summary':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'sync.result.network_failed':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
       case 'error.other':
         return context.resourceManager.getStringSync($r('app.string.error_other').id)
       case 'error.native_error':

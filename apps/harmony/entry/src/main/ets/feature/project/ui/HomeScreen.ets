@@ -12,9 +12,11 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
@@ -93,6 +95,9 @@ export struct HomeScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
+    // 注册同步完成事件监听
+    this.subscribeSyncEvent()
+
     AppContinuationService.getInstance().clear()
     this.viewModel.loadData()
 
@@ -114,6 +119,8 @@ export struct HomeScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // 取消同步完成事件监听
+    this.unsubscribeSyncEvent()
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
@@ -312,6 +319,46 @@ export struct HomeScreen {
       return `${days}天前`
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+  }
+
+  // ─── 同步完成事件监听 ───
+
+  /** 同步完成事件订阅 ID */
+  private syncEventSubscriberId: number = -1
+
+  /**
+   * 注册同步完成事件监听
+   * 收到通知后刷新项目列表
+   */
+  private subscribeSyncEvent(): void {
+    try {
+      const event: emitter.InnerEvent = {
+        eventId: SYNC_CONTENT_CHANGED_EVENT_ID
+      }
+      this.syncEventSubscriberId = emitter.on(event, (eventData: emitter.EventData) => {
+        hilog.info(0x0000, 'HomeScreen', 'received sync content changed event, refreshing data')
+        // 同步完成后刷新项目列表
+        this.viewModel.loadData()
+      })
+      hilog.info(0x0000, 'HomeScreen', 'subscribed to sync content changed event')
+    } catch (e) {
+      hilog.error(0x0000, 'HomeScreen', 'failed to subscribe sync event: %{public}s', String(e))
+    }
+  }
+
+  /**
+   * 取消同步完成事件监听
+   */
+  private unsubscribeSyncEvent(): void {
+    if (this.syncEventSubscriberId >= 0) {
+      try {
+        emitter.off(this.syncEventSubscriberId)
+        hilog.info(0x0000, 'HomeScreen', 'unsubscribed from sync content changed event')
+      } catch (e) {
+        hilog.error(0x0000, 'HomeScreen', 'failed to unsubscribe sync event: %{public}s', String(e))
+      }
+      this.syncEventSubscriberId = -1
     }
   }
 

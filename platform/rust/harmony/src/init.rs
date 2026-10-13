@@ -167,6 +167,9 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 ///
 /// 所有 `*const c_char` 参数均为 NUL-terminated UTF-8 C 字符串。`app_data_root`
 /// 为 null 时返回 `-1`。其余参数为 null 时使用空字符串默认值。
+/// `is_connected` 和 `is_metered` 来自 ArkTS 网络状态查询：
+/// - `is_connected`: 0 = 离线, 1 = 在线
+/// - `is_metered`: 0 = 非计费网络 (WiFi/以太网), 1 = 计费网络 (蜂窝/个人热点)
 ///
 /// ## 返回码
 ///
@@ -187,6 +190,8 @@ pub unsafe extern "C" fn writer_core_init_harmony(
     app_version: *const c_char,
     locale: *const c_char,
     timezone: *const c_char,
+    is_connected: i32,
+    is_metered: i32,
 ) -> i32 {
     let app_data_root_str = match c_str_to_rust(app_data_root) {
         Ok(s) => s,
@@ -227,7 +232,11 @@ pub unsafe extern "C" fn writer_core_init_harmony(
         timezone_str,
     );
 
-    let services = super::services::create_platform_services(platform_init, true, false);
+    // 将 C ABI 的 int32 网络状态转换为 Rust bool
+    let is_connected = is_connected != 0;
+    let is_metered = is_metered != 0;
+
+    let services = super::services::create_platform_services(platform_init, is_connected, is_metered);
 
     // SAFETY: app_data_root_str 是有效的 NUL-terminated UTF-8 C string 的 Rust 拷贝。
     let path_c = std::ffi::CString::new(app_data_root_str).unwrap_or_default();

@@ -1,6 +1,8 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
@@ -79,6 +81,9 @@ export struct WorkspaceScreen {
       AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }
 
+    // 注册同步完成事件监听
+    this.subscribeSyncEvent()
+
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
@@ -99,6 +104,8 @@ export struct WorkspaceScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // 取消同步完成事件监听
+    this.unsubscribeSyncEvent()
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
@@ -212,6 +219,48 @@ export struct WorkspaceScreen {
       return getContext(this).resourceManager.getStringSync($r('app.string.days_ago_format').id).replace('%s', `${days}`)
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+  }
+
+  // ─── 同步完成事件监听 ───
+
+  /** 同步完成事件订阅 ID */
+  private syncEventSubscriberId: number = -1
+
+  /**
+   * 注册同步完成事件监听
+   * 收到通知后刷新工作区数据
+   */
+  private subscribeSyncEvent(): void {
+    try {
+      const event: emitter.InnerEvent = {
+        eventId: SYNC_CONTENT_CHANGED_EVENT_ID
+      }
+      this.syncEventSubscriberId = emitter.on(event, (eventData: emitter.EventData) => {
+        hilog.info(0x0000, 'WorkspaceScreen', 'received sync content changed event, refreshing data')
+        // 同步完成后刷新工作区数据
+        if (this.viewModel.projectId) {
+          this.viewModel.loadData(this.viewModel.projectId)
+        }
+      })
+      hilog.info(0x0000, 'WorkspaceScreen', 'subscribed to sync content changed event')
+    } catch (e) {
+      hilog.error(0x0000, 'WorkspaceScreen', 'failed to subscribe sync event: %{public}s', String(e))
+    }
+  }
+
+  /**
+   * 取消同步完成事件监听
+   */
+  private unsubscribeSyncEvent(): void {
+    if (this.syncEventSubscriberId >= 0) {
+      try {
+        emitter.off(this.syncEventSubscriberId)
+        hilog.info(0x0000, 'WorkspaceScreen', 'unsubscribed from sync content changed event')
+      } catch (e) {
+        hilog.error(0x0000, 'WorkspaceScreen', 'failed to unsubscribe sync event: %{public}s', String(e))
+      }
+      this.syncEventSubscriberId = -1
     }
   }
 

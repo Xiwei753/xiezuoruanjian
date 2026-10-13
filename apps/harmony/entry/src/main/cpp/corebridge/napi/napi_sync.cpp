@@ -105,18 +105,18 @@ static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
     napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
         SyncDryRunExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
     if (asyncStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_WORK_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         delete asyncData;
         return promise;
     }
 
     napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
     if (queueStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         napi_delete_async_work(env, asyncData->work);
         delete asyncData;
         return promise;
@@ -142,18 +142,18 @@ static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
     napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
         SyncDiagnosticsExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
     if (asyncStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_WORK_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         delete asyncData;
         return promise;
     }
 
     napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
     if (queueStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         napi_delete_async_work(env, asyncData->work);
         delete asyncData;
         return promise;
@@ -179,18 +179,18 @@ static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
     napi_status asyncStatus = napi_create_async_work(env, nullptr, name,
         PerformSyncExecuteCb, SyncCompleteCb, asyncData, &asyncData->work);
     if (asyncStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_WORK_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         delete asyncData;
         return promise;
     }
 
     napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
     if (queueStatus != napi_ok) {
-        napi_value error;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\"}", NAPI_AUTO_LENGTH, &error);
-        napi_reject_deferred(env, deferred, error);
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
         napi_delete_async_work(env, asyncData->work);
         delete asyncData;
         return promise;

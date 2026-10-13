@@ -15,7 +15,9 @@ int32_t writer_core_init(const char* path);
 // writer_core_init_harmony: Harmony-specific init with PlatformServices injection.
 //   Injects SyncTransportFactory for GitHub API sync support.
 //   Returns 0 on success, -1 if app_data_root is null, -2 if invalid UTF-8, -4 if bootstrap failed.
-int32_t writer_core_init_harmony(const char* app_data_root, const char* files_dir, const char* cache_dir, const char* device_id, const char* app_version, const char* locale, const char* timezone);
+//   is_connected: 0 = offline, 1 = online.
+//   is_metered: 0 = unmetered (WiFi/ethernet), 1 = metered (cellular/personal hotspot).
+int32_t writer_core_init_harmony(const char* app_data_root, const char* files_dir, const char* cache_dir, const char* device_id, const char* app_version, const char* locale, const char* timezone, int32_t is_connected, int32_t is_metered);
 char*  writer_core_get_load_status(void);
 char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);

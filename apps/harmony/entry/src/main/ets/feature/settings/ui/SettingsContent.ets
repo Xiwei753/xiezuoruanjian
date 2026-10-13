@@ -23,6 +23,20 @@ import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
 
+// ── 同步消息结构化载荷（与 ViewModel 端 SyncMessagePayload 对齐） ──
+// 替代旧的 "sync_complete:${n}" / "error:${code}" 机械字符串，
+// 原样传递 outcome.messageKey + errorCode + messageArgs + errorCategory + rawError + overallStatus。
+interface SyncMessagePayload {
+  phase: 'success' | 'error'
+  messageKey?: string
+  messageArgs?: Record<string, string>
+  errorCode?: string
+  errorCategory?: string
+  rawError?: string
+  totalDownloaded?: number
+  overallStatus?: string
+}
+
 // ── 分组与分类的映射关系（对齐 Android SettingsRoute.kt 信息架构） ──
 interface GroupDefinition {
   id: SettingsGroupId
@@ -169,24 +183,59 @@ export struct SettingsContent {
   }
 
   // ── 同步后的消息解析 ──
+  // 直接使用 outcome.messageKey 而不是机械构造 error.${errorKey}，
+  // 避免 Core 返回的 RETRYABLE_NETWORK 变成不存在的 error.RETRYABLE_NETWORK 后落到「内部错误」。
   private resolveSyncMessage(): string {
     const msg = this.viewModel.syncMessage
-    if (msg.startsWith('sync_complete:')) {
-      const count = msg.substring('sync_complete:'.length)
-      return getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', count)
-    } else if (msg.startsWith('error:')) {
-      const errorKey = msg.substring(6)
-      if (errorKey === 'sync_conflict') {
-        return getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
-      } else if (errorKey === 'dirty_repo_blocked') {
-        return getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
-      } else if (errorKey === 'sync_error') {
+    if (!msg || msg.length === 0) {
+      return ''
+    }
+
+    // 解析 ViewModel 传递的 JSON 载荷
+    try {
+      const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
+      if (payload.phase === 'success') {
+        const count = payload.totalDownloaded ?? 0
+        const format = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id)
+        return format.replace('%s', count.toString())
+      } else if (payload.phase === 'error') {
+        // 优先使用 messageKey（Core 类型化错误），不再构造 error.${errorKey}
+        if (payload.messageKey && payload.messageKey.trim().length > 0) {
+          const args = payload.messageArgs ? this.convertMessageArgs(payload.messageArgs) : undefined
+          return MessageKeyMapper.resolveMessage(getContext(this), payload.messageKey, args, payload.errorCode)
+        }
+        // 回退到 errorCode
+        if (payload.errorCode && payload.errorCode.trim().length > 0) {
+          return MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, payload.errorCode)
+        }
         return getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
-      } else {
-        return MessageKeyMapper.resolveMessage(getContext(this), `error.${errorKey}`, undefined, undefined)
+      }
+    } catch (_e) {
+      // 兼容旧格式：sync_complete:${n} 或 error:${code}
+      if (msg.startsWith('sync_complete:')) {
+        const count = msg.substring('sync_complete:'.length)
+        const format = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id)
+        return format.replace('%s', count)
+      } else if (msg.startsWith('error:')) {
+        const errorKey = msg.substring(6)
+        // 兼容旧的特殊 key
+        if (errorKey === 'sync_conflict') {
+          return getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
+        } else if (errorKey === 'dirty_repo_blocked') {
+          return getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
+        } else if (errorKey === 'sync_error') {
+          return getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+        }
+        // 旧格式：error.${errorKey} 仍然保留 fallback
+        return MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, errorKey)
       }
     }
     return ''
+  }
+
+  // 将 messageArgs（Record<string, string> 或 undefined）转换为 Record<string, string>
+  private convertMessageArgs(args: Record<string, string>): Record<string, string> {
+    return args
   }
 
   // Issue #825：设置内容的唯一根 Builder。

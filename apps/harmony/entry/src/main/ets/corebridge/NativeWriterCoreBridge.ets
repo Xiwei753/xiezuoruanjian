@@ -16,6 +16,7 @@ import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
 import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
 import { decodeLayoutContract, decodeScreenPolicy, decodeWorkbenchLayoutPlan } from './codec/CoreWireDecoders'
+import { connection } from '@kit.NetworkKit'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
@@ -46,7 +47,34 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return true
     }
     try {
-      const result: number = this.core.getNativeModule().nativeInit(appDataRoot) as number
+      // 获取真实网络状态
+      let isConnected = 1 // 默认在线
+      let isMetered = 0 // 默认非计费
+      try {
+        // 查询是否有默认激活的数据网络
+        const hasNet = await connection.hasDefaultNet()
+        isConnected = hasNet ? 1 : 0
+        // 查询默认网络是否按流量计费
+        if (hasNet) {
+          const metered = await connection.isDefaultNetMetered()
+          isMetered = metered ? 1 : 0
+        }
+      } catch (netErr) {
+        console.error(`Network state query failed: ${netErr}`)
+        // 查询失败时保持默认值（在线、非计费），不阻塞初始化
+      }
+
+      const result: number = this.core.getNativeModule().nativeInit(
+        appDataRoot,
+        '', // files_dir - 默认与 app_data_root 相同
+        '', // cache_dir - 默认与 app_data_root 相同
+        '', // device_id
+        '', // app_version
+        '', // locale
+        '', // timezone
+        isConnected,
+        isMetered
+      ) as number
       if (result === 0) {
         this.isInitialized = true
         this.appDataRoot = appDataRoot
