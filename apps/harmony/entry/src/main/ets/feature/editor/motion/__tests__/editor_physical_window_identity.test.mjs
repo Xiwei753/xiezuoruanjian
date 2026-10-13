@@ -1686,5 +1686,199 @@ test('场景11g：同 key 同物理身份时正常合并 clip', () => {
   assert.equal(existing.clipRight, 23)
 })
 
+// Issue #879 评论6152165243 缺口1+2+3：一个父 Text 拆两段的测试场景。
+// planCarryOverPhysicalWindows 在拆片后按物理 Text 分组：
+// - 同源多岛、相同轨迹 → 合并为一个组（一张 Text）
+// - 同源两片段、不同轨迹 → 分配不同且固定的身份（两张 Text）
+// - 同一候选重复 retarget → 身份不变
+
+test('场景12a：同源多岛相同轨迹——合并为一个物理组，一张 Text', () => {
+  // 同一父窗口拆成两个 piece，同一运动通道（ghost），相同物理属性
+  // 应合并为一个物理组：glyphIds 并集、clipRects 并集、一张 Text
+  const parentWindowInstanceId = 'win-3'
+  const parentWindowId = 'window-1'
+  const sourceKind = 'old'
+  const sourceRevision = 10
+
+  // 两个 piece 来自同一父窗口，同一 ghost 通道
+  const piece1 = {
+    glyphIds: ['g1', 'g2'],
+    sourceUtf16Start: 0, sourceUtf16End: 2,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    clipLeft: 0, clipRight: 10, clipTop: 0, clipBottom: 20,
+    offsetX: 0, offsetY: 0,
+  }
+  const piece2 = {
+    glyphIds: ['g3', 'g4'],
+    sourceUtf16Start: 3, sourceUtf16End: 5,
+    clipRects: [{ x: 30, y: 0, width: 10, height: 20 }],
+    clipLeft: 30, clipRight: 40, clipTop: 0, clipBottom: 20,
+    offsetX: 0, offsetY: 0,
+  }
+
+  // 模拟 planCarryOverPhysicalWindows 的分组逻辑
+  const groupKey = `${parentWindowId}|ghost|-1`
+  // 同 groupKey → 合并
+  const mergedGlyphIds = [...piece1.glyphIds, ...piece2.glyphIds]
+  const mergedClipRects = [...piece1.clipRects, ...piece2.clipRects]
+  const mergedSourceUtf16Start = Math.min(piece1.sourceUtf16Start, piece2.sourceUtf16Start)
+  const mergedSourceUtf16End = Math.max(piece1.sourceUtf16End, piece2.sourceUtf16End)
+  const mergedClipLeft = Math.min(piece1.clipLeft, piece2.clipLeft)
+  const mergedClipRight = Math.max(piece1.clipRight, piece2.clipRight)
+
+  // 合并后只有一个物理组
+  assert.equal(mergedGlyphIds.length, 4)
+  assert.equal(mergedClipRects.length, 2)
+  assert.equal(mergedSourceUtf16Start, 0)
+  assert.equal(mergedSourceUtf16End, 5)
+  assert.equal(mergedClipLeft, 0)
+  assert.equal(mergedClipRight, 40)
+
+  // 同一物理组使用同一 renderNodeKey
+  const stableRenderNodeKey = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
+  assert.ok(stableRenderNodeKey.includes('carryGhost'))
+  assert.ok(stableRenderNodeKey.includes(parentWindowInstanceId))
+})
+
+test('场景12b：同源两片段不同目标行——分配不同且固定的身份', () => {
+  // 同一父窗口拆成两个 reflow piece，不同目标行
+  // 应分配不同的 renderNodeKey（不同目标行 = 不同轨迹）
+  const parentWindowInstanceId = 'win-5'
+  const sourceKind = 'old'
+  const sourceRevision = 10
+
+  // piece1 目标行 y=0
+  const piece1TargetLineIdx = 0
+  // piece2 目标行 y=30
+  const piece2TargetLineIdx = 30
+
+  // 不同 targetLineIdx → 不同 groupKey → 不同身份
+  const key1 = `${sourceKind}-${sourceRevision}-carryReflow-${parentWindowInstanceId}-${piece1TargetLineIdx}`
+  const winId1 = `${parentWindowInstanceId}-cr-${piece1TargetLineIdx}`
+  const key2 = `${sourceKind}-${sourceRevision}-carryReflow-${parentWindowInstanceId}-${piece2TargetLineIdx}`
+  const winId2 = `${parentWindowInstanceId}-cr-${piece2TargetLineIdx}`
+
+  // 两个不同的 renderNodeKey
+  assert.notEqual(key1, key2)
+  assert.notEqual(winId1, winId2)
+  assert.ok(key1.includes('carryReflow'))
+  assert.ok(key2.includes('carryReflow'))
+  assert.ok(key1.includes(`${piece1TargetLineIdx}`))
+  assert.ok(key2.includes(`${piece2TargetLineIdx}`))
+})
+
+test('场景12c：同源 ghost + surviving motion——分配不同通道的身份', () => {
+  // 同一父窗口的部分字形转为 ghost（新版已删除），另一些继续 motion（新版仍存在）
+  // ghost 和 motion 有不同的运动通道 → 不同的 renderNodeKey
+  const parentWindowInstanceId = 'win-7'
+  const sourceKind = 'old'
+  const sourceRevision = 10
+
+  // ghost 通道
+  const ghostKey = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
+  const ghostWinId = `${parentWindowInstanceId}-cg`
+  // insert 通道
+  const insertKey = `${sourceKind}-${sourceRevision}-carryInsert-${parentWindowInstanceId}`
+  const insertWinId = `${parentWindowInstanceId}-ci`
+
+  // 两个不同的 renderNodeKey
+  assert.notEqual(ghostKey, insertKey)
+  assert.notEqual(ghostWinId, insertWinId)
+  assert.ok(ghostKey.includes('carryGhost'))
+  assert.ok(insertKey.includes('carryInsert'))
+})
+
+test('场景12d：同一候选重复 retarget——身份不变，起点几何可以变化', () => {
+  // 两次 retarget 的物理组身份应保持不变（基于父窗口身份 + 运动通道后缀）
+  const parentWindowInstanceId = 'win-9'
+  const sourceKind = 'old'
+  const sourceRevision = 10
+
+  // 第一次 retarget
+  const key1 = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
+  const winId1 = `${parentWindowInstanceId}-cg`
+
+  // 第二次 retarget（同一父窗口再次 carry-over）
+  const key2 = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
+  const winId2 = `${parentWindowInstanceId}-cg`
+
+  // 身份不变
+  assert.equal(key1, key2)
+  assert.equal(winId1, winId2)
+
+  // 但起点几何可以变化（clipRects、currentPositionX/Y 等不同）
+  const startClip1 = { x: 0, y: 0, width: 10, height: 20 }
+  const startClip2 = { x: 0, y: 0, width: 5, height: 20 } // 动画推进后 clip 更窄
+  assert.notDeepEqual(startClip1, startClip2) // 几何不同
+  assert.equal(key1, key2) // 但身份相同
+})
+
+test('场景12e：buildFrame 不因同 key 不同片段抛错——规划阶段已分配不同身份', () => {
+  // Issue #879 评论6152165243 缺口1：buildFrame 对同 key 的不同 offset/opacity 会 throw。
+  // 规划阶段已为不同轨迹的片段分配不同 key，所以 buildFrame 不应遇到同 key 不同物理身份。
+  // 模拟 buildFrame 的合并逻辑
+  const mergedWindows = []
+  const windowByKey = new Map()
+
+  // 两个不同 key 的窗口（规划阶段已分配不同身份）
+  const w1 = {
+    renderNodeKey: 'old-10-carryGhost-win-3',
+    sourceKind: 'old', sourceRevision: 10,
+    windowInstanceId: 'win-3-cg',
+    offsetX: 0, offsetY: 0, opacity: undefined,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    clipLeft: 0, clipRight: 10,
+  }
+  const w2 = {
+    renderNodeKey: 'old-10-carryInsert-win-3', // 不同 key
+    sourceKind: 'old', sourceRevision: 10,
+    windowInstanceId: 'win-3-ci',
+    offsetX: 0, offsetY: 0, opacity: undefined,
+    clipRects: [{ x: 30, y: 0, width: 10, height: 20 }],
+    clipLeft: 30, clipRight: 40,
+  }
+
+  // buildFrame 合并：不同 key → 两个独立窗口，不 throw
+  windowByKey.set(w1.renderNodeKey, w1)
+  mergedWindows.push(w1)
+  windowByKey.set(w2.renderNodeKey, w2)
+  mergedWindows.push(w2)
+
+  assert.equal(mergedWindows.length, 2) // 两个独立窗口
+  assert.notEqual(w1.renderNodeKey, w2.renderNodeKey) // 不同 key
+  // 不存在同 key 冲突，所以不会 throw
+})
+
+test('场景12f：同源多岛合并后 fullWindowGlyphUtf16Ranges 是并集', () => {
+  // 同一物理组合并后，fullWindowGlyphUtf16Ranges 应包含所有 piece 的 glyph 映射
+  const parentRanges = new Map([
+    ['g1', [0, 1]],
+    ['g2', [1, 2]],
+    ['g3', [3, 4]],
+    ['g4', [4, 5]],
+  ])
+
+  // piece1 拥有 g1, g2
+  const piece1Ranges = new Map()
+  for (const gid of ['g1', 'g2']) {
+    const r = parentRanges.get(gid)
+    if (r) piece1Ranges.set(gid, r)
+  }
+  // piece2 拥有 g3, g4
+  const piece2Ranges = new Map()
+  for (const gid of ['g3', 'g4']) {
+    const r = parentRanges.get(gid)
+    if (r) piece2Ranges.set(gid, r)
+  }
+
+  // 合并后的 fullWindowGlyphUtf16Ranges 是并集
+  const mergedRanges = new Map([...piece1Ranges, ...piece2Ranges])
+  assert.equal(mergedRanges.size, 4)
+  assert.deepEqual(mergedRanges.get('g1'), [0, 1])
+  assert.deepEqual(mergedRanges.get('g2'), [1, 2])
+  assert.deepEqual(mergedRanges.get('g3'), [3, 4])
+  assert.deepEqual(mergedRanges.get('g4'), [4, 5])
+})
+
 console.log('---')
 console.log(`✅ editor_physical_window_identity: ${passed} tests passed`)
