@@ -835,17 +835,18 @@ test('场景7b：plannedWindowKeys 不调用 allocateFresh（只读取预分配 
   assert.ok(keys.has('old-10-win-5'))
 })
 
-// ── 场景8：同 key 不同属性时跳过第二个窗口 ──
+// ── 场景8：不同绘制状态窗口的合并行为 ──
 //
-// buildFrame 合并逻辑：同 renderNodeKey 不同绘制属性时（Planner bug），
-// 跳过第二个窗口（不创建 -dup key），保持 plannedWindowKeys 与 buildFrame 输出 key 集合一致。
+// buildFrame 合并逻辑：同 renderNodeKey 只合并 clip（不跳过、不创建 -dup key）。
+// 不同绘制状态的窗口在 Planner 阶段已有不同 key，两张窗口均保留。
 // 同 key 同属性时只合并 clip（正常聚合行为）。
+// 同 key 不同属性时也只合并 clip（不丢字、不跳过、不创建 -dup key）。
 
-test('场景8a：同 key 不同绘制属性时跳过第二个窗口（不创建 -dup key）', () => {
-  // 模拟 buildFrame 的合并逻辑（物理身份校验合并）
+test('场景8a：不同绘制状态的窗口在 Planner 阶段已有不同 key，两张窗口均保留', () => {
+  // 模拟 buildFrame 的合并逻辑（同 key 只合并 clip）
   const motionGlyphWindows = [
     {
-      renderNodeKey: 'old-10-win-0',
+      renderNodeKey: 'old-10-win-0',  // 不同 key
       sourceKind: 'old',
       sourceRevision: 10,
       offsetX: 0,
@@ -860,17 +861,17 @@ test('场景8a：同 key 不同绘制属性时跳过第二个窗口（不创建 
       clipRects: [{ x: 100, y: 50, width: 20, height: 30 }],
     },
     {
-      renderNodeKey: 'old-10-win-0', // 同 key
+      renderNodeKey: 'old-10-win-1',  // 不同 key（Planner 为不同绘制状态分配了不同 key）
       sourceKind: 'old',
       sourceRevision: 10,
-      offsetX: 5,  // 不同 offsetX！
+      offsetX: 5,  // 不同 offsetX
       offsetY: 0,
-      opacity: 0.5, // 不同 opacity！
+      opacity: 0.5, // 不同 opacity
       utf16Start: 2,
       utf16End: 4,
       glyphX: 100,
       glyphY: 50,
-      windowInstanceId: 'win-0',
+      windowInstanceId: 'win-1',
       motionOwnerKind: 'reflow',
       clipRects: [{ x: 120, y: 50, width: 20, height: 30 }],
     },
@@ -882,36 +883,25 @@ test('场景8a：同 key 不同绘制属性时跳过第二个窗口（不创建 
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      const sameIdentity =
-        existing.sourceKind === w.sourceKind &&
-        existing.sourceRevision === w.sourceRevision &&
-        existing.offsetX === w.offsetX &&
-        existing.offsetY === w.offsetY &&
-        existing.opacity === w.opacity &&
-        existing.utf16Start === w.utf16Start &&
-        existing.utf16End === w.utf16End &&
-        existing.glyphX === w.glyphX &&
-        existing.glyphY === w.glyphY &&
-        existing.windowInstanceId === w.windowInstanceId &&
-        existing.motionOwnerKind === w.motionOwnerKind
-      if (sameIdentity) {
-        // 同 key 同属性 → 合并 clip
-        existing.clipRects = [...existing.clipRects, ...w.clipRects]
-        continue
-      } else {
-        // 同 key 不同属性 → 跳过第二个窗口（不创建 -dup key）
-        continue
-      }
+      // 同 key → 只合并 clip
+      existing.clipRects = [...existing.clipRects, ...w.clipRects]
+      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+      continue
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
     }
   }
 
-  // 只有第一个窗口出现在输出中，第二个窗口被跳过
-  assert.equal(mergedWindows.length, 1)
-  // 第一个窗口的 key 不变
+  // 两张窗口均保留（不丢字）
+  assert.equal(mergedWindows.length, 2)
   assert.equal(mergedWindows[0].renderNodeKey, 'old-10-win-0')
+  assert.equal(mergedWindows[1].renderNodeKey, 'old-10-win-1')
   // 没有任何 -dup 后缀的 key
   for (const w of mergedWindows) {
     assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
@@ -952,31 +942,21 @@ test('场景8b：同 key 同绘制属性时只合并 clip', () => {
     },
   ]
 
+  // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
   const mergedWindows = []
   const windowByKey = new Map()
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      const sameIdentity =
-        existing.sourceKind === w.sourceKind &&
-        existing.sourceRevision === w.sourceRevision &&
-        existing.offsetX === w.offsetX &&
-        existing.offsetY === w.offsetY &&
-        existing.opacity === w.opacity &&
-        existing.utf16Start === w.utf16Start &&
-        existing.utf16End === w.utf16End &&
-        existing.glyphX === w.glyphX &&
-        existing.glyphY === w.glyphY &&
-        existing.windowInstanceId === w.windowInstanceId &&
-        existing.motionOwnerKind === w.motionOwnerKind
-      if (sameIdentity) {
-        // 同 key 同属性 → 合并 clip
-        existing.clipRects = [...existing.clipRects, ...w.clipRects]
-        continue
-      } else {
-        // 同 key 不同属性 → 跳过
-        continue
-      }
+      // 同 key → 只合并 clip
+      existing.clipRects = [...existing.clipRects, ...w.clipRects]
+      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+      continue
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
@@ -990,54 +970,70 @@ test('场景8b：同 key 同绘制属性时只合并 clip', () => {
   assert.equal(mergedWindows[0].clipRects.length, 2)
 })
 
-test('场景8c：旧逻辑（-dup 保留）vs 新逻辑（跳过第二个窗口）对比', () => {
-  // 模拟旧逻辑：同 key 不同属性 → 分配 -dup 后缀 key，两个窗口都保留
-  const windows = [
-    { renderNodeKey: 'shared-key', offsetX: 0, clipRects: [{ x: 0, y: 0, width: 10, height: 20 }] },
-    { renderNodeKey: 'shared-key', offsetX: 5, clipRects: [{ x: 20, y: 0, width: 10, height: 20 }] },
+test('场景8c：同 key 不同属性时只合并 clip（不丢字、不跳过、不创建 -dup key）', () => {
+  // 模拟 Planner bug：同 key 但不同绘制属性
+  // Coordinator 的合并逻辑：同 key 只合并 clip，不跳过、不创建 -dup key
+  const motionGlyphWindows = [
+    {
+      renderNodeKey: 'shared-key',
+      sourceKind: 'old',
+      sourceRevision: 10,
+      offsetX: 0,
+      offsetY: 0,
+      opacity: 1,
+      utf16Start: 0,
+      utf16End: 2,
+      glyphX: 100,
+      glyphY: 50,
+      windowInstanceId: 'win-0',
+      motionOwnerKind: 'reflow',
+      clipRects: [{ x: 100, y: 50, width: 20, height: 30 }],
+    },
+    {
+      renderNodeKey: 'shared-key', // 同 key（Planner bug）
+      sourceKind: 'old',
+      sourceRevision: 10,
+      offsetX: 5,  // 不同 offsetX
+      offsetY: 0,
+      opacity: 0.5, // 不同 opacity
+      utf16Start: 2,
+      utf16End: 4,
+      glyphX: 100,
+      glyphY: 50,
+      windowInstanceId: 'win-0',
+      motionOwnerKind: 'reflow',
+      clipRects: [{ x: 120, y: 50, width: 20, height: 30 }],
+    },
   ]
 
-  // 旧逻辑：分配 -dup 后缀 → 两个窗口都保留
-  const oldResult = []
-  const oldWindowByKey = new Map()
-  for (const w of windows) {
-    const existing = oldWindowByKey.get(w.renderNodeKey)
+  // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
+  const mergedWindows = []
+  const windowByKey = new Map()
+  for (const w of motionGlyphWindows) {
+    const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      // 不同属性 → 分配 -dup
-      const dupKey = `${w.renderNodeKey}-dup`
-      w.renderNodeKey = dupKey
-      oldWindowByKey.set(dupKey, w)
-      oldResult.push(w)
-    } else {
-      oldWindowByKey.set(w.renderNodeKey, w)
-      oldResult.push(w)
-    }
-  }
-  assert.equal(oldResult.length, 2) // 旧逻辑：两个窗口都保留
-  assert.notEqual(oldResult[0].renderNodeKey, oldResult[1].renderNodeKey)
-
-  // 新逻辑：跳过第二个窗口 → 只有第一个窗口保留
-  const newResult = []
-  const newWindowByKey = new Map()
-  // 重置 windows 数据（因为旧逻辑修改了 renderNodeKey）
-  const newWindows = [
-    { renderNodeKey: 'shared-key', offsetX: 0, clipRects: [{ x: 0, y: 0, width: 10, height: 20 }] },
-    { renderNodeKey: 'shared-key', offsetX: 5, clipRects: [{ x: 20, y: 0, width: 10, height: 20 }] },
-  ]
-  for (const w of newWindows) {
-    const existing = newWindowByKey.get(w.renderNodeKey)
-    if (existing !== undefined) {
-      // 同 key 不同属性 → 跳过第二个窗口（不创建 -dup key）
+      // 同 key → 只合并 clip（不跳过、不创建 -dup key）
+      existing.clipRects = [...existing.clipRects, ...w.clipRects]
+      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
       continue
     } else {
-      newWindowByKey.set(w.renderNodeKey, w)
-      newResult.push(w)
+      windowByKey.set(w.renderNodeKey, w)
+      mergedWindows.push(w)
     }
   }
-  assert.equal(newResult.length, 1) // 新逻辑：只有第一个窗口
-  assert.equal(newResult[0].renderNodeKey, 'shared-key')
-  // 新逻辑下第二个窗口不出现在 mergedWindows 中
-  for (const w of newResult) {
+
+  // 合并为一个窗口（同 key 只合并 clip），不丢字
+  assert.equal(mergedWindows.length, 1)
+  assert.equal(mergedWindows[0].renderNodeKey, 'shared-key')
+  // clipRects 合并了两段
+  assert.equal(mergedWindows[0].clipRects.length, 2)
+  // 没有任何 -dup 后缀的 key
+  for (const w of mergedWindows) {
     assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
   }
 })

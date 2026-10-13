@@ -1317,6 +1317,8 @@ export class EditorMotionCoordinator {
       firstIndex: piece.firstIndex,
       lastIndex: piece.lastIndex,
       glyphIds: piece.glyphIds,
+      renderNodeKey: piece.renderNodeKey,
+      windowInstanceId: piece.windowInstanceId,
       startClipLeft: piece.startClipLeft,
       startClipRight: piece.startClipRight,
       startPositionX: piece.startPositionX,
@@ -3054,42 +3056,21 @@ export class EditorMotionCoordinator {
 
     // Issue #879 评论6143345701：buildFrame 不改写 key。
     // Planner 应通过 motionChannel 为不同轨迹分配不同 renderNodeKey。
-    // 同 key 同属性：合并 clip；同 key 不同属性（Planner bug）：跳过第二个窗口。
+    // 同 key → 只合并 clip（Planner 应确保同 key 的窗口有相同物理身份，Coordinator 不解决身份冲突）
     const mergedWindows: MotionGlyphWindow[] = []
     const windowByKey = new Map<string, MotionGlyphWindow>()
     for (const w of motionGlyphWindows) {
       const existing = windowByKey.get(w.renderNodeKey)
       if (existing !== undefined) {
-        // 物理身份校验：检查所有影响绘制的字段是否完全一致
-        const sameIdentity =
-          existing.sourceKind === w.sourceKind &&
-          existing.sourceRevision === w.sourceRevision &&
-          existing.offsetX === w.offsetX &&
-          existing.offsetY === w.offsetY &&
-          existing.opacity === w.opacity &&
-          existing.utf16Start === w.utf16Start &&
-          existing.utf16End === w.utf16End &&
-          existing.glyphX === w.glyphX &&
-          existing.glyphY === w.glyphY &&
-          existing.windowInstanceId === w.windowInstanceId &&
-          existing.motionOwnerKind === w.motionOwnerKind
-        if (sameIdentity) {
-          // 完全同一物理 Text、相同运动状态——只并 clip
-          // Issue #879 复核评论问题3：不再扩展 utf16Start/End、不再合并 glyphIds、不再合并 fullWindowGlyphUtf16Ranges。
-          // 同一物理窗口的源范围和 glyphIds 是固定属性，不应因 clip 合并而改变。
-          existing.clipRects = [...existing.clipRects, ...w.clipRects]
-          existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-          existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-          existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-          existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-          existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-          existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-          continue
-        } else {
-          // 同 key 不同属性：Planner bug，跳过第二个窗口。
-          // 不创建 -dup key，保持 plannedWindowKeys 与 buildFrame 输出 key 集合一致。
-          continue
-        }
+        // 同 key → 只合并 clip（Planner 应确保同 key 的窗口有相同物理身份）
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        continue
       } else {
         windowByKey.set(w.renderNodeKey, w)
         mergedWindows.push(w)

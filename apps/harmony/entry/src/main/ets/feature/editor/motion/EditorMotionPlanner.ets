@@ -520,6 +520,20 @@ export class EditorMotionPlanner {
             const identity = keyAllocator.allocate('old', oldRevision, piece.glyphIds, 'deleted')
             piece.renderNodeKey = identity.renderNodeKey
             piece.windowInstanceId = identity.windowInstanceId
+            // Issue #879 复核评论问题2：为 deleted piece 构建带身份的固定 interval，
+            // 确保 piece.intervals 不为 undefined——Coordinator 的 pieceIntervals fallback
+            // 路径不会构造缺失 renderNodeKey/windowInstanceId 的临时 interval。
+            piece.intervals = [{
+              firstIndex: piece.firstIndex,
+              lastIndex: piece.lastIndex,
+              glyphIds: piece.glyphIds,
+              renderNodeKey: identity.renderNodeKey,
+              windowInstanceId: identity.windowInstanceId,
+              startClipLeft: piece.startClipLeft,
+              startClipRight: piece.startClipRight,
+              startPositionX: piece.startPositionX,
+              startPositionY: piece.startPositionY,
+            }]
           }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
@@ -563,6 +577,20 @@ export class EditorMotionPlanner {
             const identity = keyAllocator.allocate('new', newRevision, piece.glyphIds, 'insert')
             piece.renderNodeKey = identity.renderNodeKey
             piece.windowInstanceId = identity.windowInstanceId
+            // Issue #879 复核评论问题2：为 insert piece 构建带身份的固定 interval，
+            // 确保 piece.intervals 不为 undefined——Coordinator 的 pieceIntervals fallback
+            // 路径不会构造缺失 renderNodeKey/windowInstanceId 的临时 interval。
+            piece.intervals = [{
+              firstIndex: piece.firstIndex,
+              lastIndex: piece.lastIndex,
+              glyphIds: piece.glyphIds,
+              renderNodeKey: identity.renderNodeKey,
+              windowInstanceId: identity.windowInstanceId,
+              startClipLeft: piece.startClipLeft,
+              startClipRight: piece.startClipRight,
+              startPositionX: piece.startPositionX,
+              startPositionY: piece.startPositionY,
+            }]
           }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
