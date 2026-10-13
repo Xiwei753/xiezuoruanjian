@@ -36,7 +36,7 @@
 
 import { EditorVisualFrame, MotionKind, MotionGlyphWindow, MotionSegment, StaticVisibleRange, InsertRun, DeletedRun, RetainedMove, GlyphRect, CarryOverGhostRun, CarryOverMotionRun, ClipRect } from './EditorVisualFrame'
 import { EditorMotionPolicy } from './EditorMotionPolicy'
-import { EditorMotionPlan, EditorMotionPlanner } from './EditorMotionPlanner'
+import { EditorMotionPlan, EditorMotionPlanner, PhysicalWindowIdentity } from './EditorMotionPlanner'
 import { EditorLayoutSnapshot } from '../render/EditorLayoutSnapshot'
 import { LineLayout, CaretRect, glyphRectForRange } from '../render/editor_render_geometry'
 import { resolveVisualLineIndex, CaretAffinity } from '../render/editor_layout_math'
@@ -759,7 +759,7 @@ export class EditorMotionCoordinator {
     }
     // Issue #879 评论6138838190：ghost 和 motion 共享同一个 existingKeys Set，
     // 这样 ghost 分配的 key 也会被 motion 检测到，避免跨通道冲突。
-    const existingKeys = this.collectPlannedKeys(prepared.plan, latestDisplayedFrame)
+    const existingKeys = this.collectPlannedKeys(prepared.plan)
     const carryOverGhostRuns = this.identifyCarryOverGhosts(
       latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds,
       prepared.state.glyphIdentities, existingKeys
@@ -773,6 +773,36 @@ export class EditorMotionCoordinator {
       prepared.state.glyphIdentities, existingKeys
     )
 
+    // Issue #879 评论6148478104：将 carry-over 的物理身份加入统一计划，
+    // 让 plannedWindowKeys、buildFrame 与 ArkUI Text 使用同一份身份计划。
+    const carryOverIdentityByKey = new Map<string, PhysicalWindowIdentity>()
+    for (const id of prepared.plan.physicalWindowIdentities) {
+      carryOverIdentityByKey.set(id.renderNodeKey, id)
+    }
+    for (const ghost of carryOverGhostRuns) {
+      if (!carryOverIdentityByKey.has(ghost.renderNodeKey)) {
+        carryOverIdentityByKey.set(ghost.renderNodeKey, {
+          sourceKind: ghost.sourceKind,
+          sourceRevision: ghost.sourceRevision,
+          runId: ghost.sourceRunId,
+          windowInstanceId: ghost.windowInstanceId,
+          renderNodeKey: ghost.renderNodeKey
+        })
+      }
+    }
+    for (const motionRun of carryOverMotionRuns) {
+      if (!carryOverIdentityByKey.has(motionRun.renderNodeKey)) {
+        carryOverIdentityByKey.set(motionRun.renderNodeKey, {
+          sourceKind: motionRun.sourceKind,
+          sourceRevision: motionRun.sourceRevision,
+          runId: motionRun.sourceRunId,
+          windowInstanceId: motionRun.windowInstanceId,
+          renderNodeKey: motionRun.renderNodeKey
+        })
+      }
+    }
+    const newPhysicalWindowIdentities = Array.from(carryOverIdentityByKey.values())
+
     const newPlan: EditorMotionPlan = {
       insertRuns: newInsertRuns,
       deletedRuns: newDeletedRuns,
@@ -782,7 +812,7 @@ export class EditorMotionCoordinator {
       motionKind: prepared.plan.motionKind,
       carryOverGhostRuns: carryOverGhostRuns,
       carryOverMotionRuns: carryOverMotionRuns,
-      physicalWindowIdentities: prepared.plan.physicalWindowIdentities
+      physicalWindowIdentities: newPhysicalWindowIdentities
     }
 
     // 用更新后的 plan 和冻结帧构建新的起始帧（progress=0）
@@ -1007,7 +1037,7 @@ export class EditorMotionCoordinator {
       }
       // Issue #879 评论6138838190：ghost 和 motion 共享同一个 existingKeys Set，
       // 这样 ghost 分配的 key 也会被 motion 检测到，避免跨通道冲突。
-      const existingKeys = this.collectPlannedKeys(plan, startFrame)
+      const existingKeys = this.collectPlannedKeys(plan)
       plan.carryOverGhostRuns = this.identifyCarryOverGhosts(
         startFrame, newSnapshot.revision, planGlyphIds, identities.newTable, existingKeys
       )
@@ -3067,22 +3097,19 @@ export class EditorMotionCoordinator {
     for (const w of motionGlyphWindows) {
       const existing = windowByKey.get(w.renderNodeKey)
       if (existing !== undefined) {
-        // 检查物理身份是否一致：sourceKind, sourceRevision, utf16Start, utf16End,
-        // glyphX, glyphY, offsetX, offsetY, opacity, windowInstanceId, motionOwnerKind
+        // Issue #879 评论6148478104：同 key 的窗口是同一物理 Text 的不同片段。
+        // samePhysicalIdentity 只检查物理 Text 属性（sourceKind/sourceRevision/windowInstanceId/
+        // offsetX/offsetY/opacity），不检查片段属性（utf16Start/End/glyphX/glyphY/motionOwnerKind）。
+        // 不同片段合并 clip 是正常行为；只有物理 Text 属性不一致时才 throw。
         const samePhysicalIdentity =
           existing.sourceKind === w.sourceKind &&
           existing.sourceRevision === w.sourceRevision &&
-          existing.utf16Start === w.utf16Start &&
-          existing.utf16End === w.utf16End &&
-          existing.glyphX === w.glyphX &&
-          existing.glyphY === w.glyphY &&
           existing.offsetX === w.offsetX &&
           existing.offsetY === w.offsetY &&
           existing.opacity === w.opacity &&
-          existing.windowInstanceId === w.windowInstanceId &&
-          existing.motionOwnerKind === w.motionOwnerKind
+          existing.windowInstanceId === w.windowInstanceId
         if (samePhysicalIdentity) {
-          // 同 key 且物理身份一致 → 合并 clip
+          // 同 key 且物理 Text 属性一致 → 合并 clip（同一物理 Text 的不同片段）
           existing.clipRects = [...existing.clipRects, ...w.clipRects]
           existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
           existing.clipRight = Math.max(existing.clipRight, w.clipRight)
@@ -3092,12 +3119,11 @@ export class EditorMotionCoordinator {
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
           continue
         } else {
-          // 同 key 但物理身份不一致 → 这是 Planner 规划 bug，不能通过 push 同 key 的第二张 Text 来掩盖。
-          // SujianEditor 按 key 去重，同 key 的两张 Text 只会保留一张，另一张丢失。
+          // 同 key 但物理 Text 属性不一致 → Planner 规划 bug
           throw new Error(
             `Planner bug: same renderNodeKey '${w.renderNodeKey}' but different physical identity. ` +
-            `existing: ${existing.sourceKind}-${existing.sourceRevision} (${existing.utf16Start}-${existing.utf16End}), ` +
-            `new: ${w.sourceKind}-${w.sourceRevision} (${w.utf16Start}-${w.utf16End})`
+            `existing: ${existing.sourceKind}-${existing.sourceRevision}-${existing.windowInstanceId}, ` +
+            `new: ${w.sourceKind}-${w.sourceRevision}-${w.windowInstanceId}`
           )
         }
       } else {
@@ -3538,17 +3564,11 @@ export class EditorMotionCoordinator {
           const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
             x: cr.x, y: cr.y, width: 0, height: cr.height
           }))
-          // carry-over 是同一物理 Text 的延续，保留原始身份
-          let carryOverRenderNodeKey = w.renderNodeKey
-          let carryOverWinId = w.windowInstanceId
-          // 仅当原始 key 与已有窗口冲突时，才分配新 key
-          if (existingKeys.has(carryOverRenderNodeKey)) {
-            carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-            // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
-            // carry 作为 motionChannel 标识 carry-over 新分配的窗口
-            carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
-          }
-          existingKeys.add(carryOverRenderNodeKey)
+          // Issue #879 评论6148478104：carry-over 是同一物理 Text 的合法接续，
+          // 直接保留原始 renderNodeKey 和 windowInstanceId，不现场 allocateFresh。
+          // 身份冲突由 Planner 在计划建立时处理（给不同源的窗口分配不同 key）。
+          const carryOverRenderNodeKey = w.renderNodeKey
+          const carryOverWinId = w.windowInstanceId
           ghosts.push({
             glyphIds: piece.glyphIds,
             windowId: w.windowId,
@@ -3622,17 +3642,10 @@ export class EditorMotionCoordinator {
         const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
           x: cr.x, y: cr.y, width: 0, height: cr.height
         }))
-        // carry-over 是同一物理 Text 的延续，保留原始身份
-        let carryOverRenderNodeKey = w.renderNodeKey
-        let carryOverWinId = w.windowInstanceId
-        // 仅当原始 key 与已有窗口冲突时，才分配新 key
-        if (existingKeys.has(carryOverRenderNodeKey)) {
-          carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-          // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
-          // carry 作为 motionChannel 标识 carry-over 新分配的窗口
-          carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
-        }
-        existingKeys.add(carryOverRenderNodeKey)
+        // Issue #879 评论6148478104：carry-over 是同一物理 Text 的合法接续，
+        // 直接保留原始 renderNodeKey 和 windowInstanceId，不现场 allocateFresh。
+        const carryOverRenderNodeKey = w.renderNodeKey
+        const carryOverWinId = w.windowInstanceId
         ghosts.push({
           glyphIds: piece.glyphIds,
           windowId: w.windowId,
@@ -3671,8 +3684,12 @@ export class EditorMotionCoordinator {
   /**
    * Issue #879 评论6138838190：从 plan 的所有 runs 提取已分配的 renderNodeKey 集合。
    * 用于 identifyCarryOverGhosts/identifyCarryOverMotionRuns 分配 key 时检测冲突。
+   *
+   * Issue #879 评论6148478104：不再收集 displayed frame 的 key。
+   * carry-over 是显示帧窗口的合法接续，保留原始物理身份（renderNodeKey/windowInstanceId），
+   * 不应把显示帧的 key 当作冲突源而强制 allocateFresh 生成新 key。
    */
-  private collectPlannedKeys(plan: EditorMotionPlan, latestDisplayedFrame: EditorVisualFrame | null): Set<string> {
+  private collectPlannedKeys(plan: EditorMotionPlan): Set<string> {
     const keys = new Set<string>()
     for (const run of plan.insertRuns) {
       for (const piece of run.pieces) {
@@ -3704,15 +3721,6 @@ export class EditorMotionCoordinator {
               keys.add(interval.crossfadeRenderNodeKey)
             }
           }
-        }
-      }
-    }
-    // Issue #879 复核评论问题4：加入仍在显示的旧窗口的物理 key，
-    // 防止旧窗口与 carry-over 共享 key 但需要不同 Text 状态时发生碰撞。
-    if (latestDisplayedFrame !== null) {
-      for (const w of latestDisplayedFrame.motionGlyphWindows) {
-        if (w.renderNodeKey !== undefined) {
-          keys.add(w.renderNodeKey)
         }
       }
     }
@@ -4056,17 +4064,10 @@ export class EditorMotionCoordinator {
             runClipRects = islandStartRects
           }
         }
-        // carry-over 是同一物理 Text 的延续，保留原始身份
-        let carryOverRenderNodeKey = w.renderNodeKey
-        let carryOverWinId = w.windowInstanceId
-        // 仅当原始 key 与已有窗口冲突时，才分配新 key
-        if (existingKeys.has(carryOverRenderNodeKey)) {
-          carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-          // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
-          // carry 作为 motionChannel 标识 carry-over 新分配的窗口
-          carryOverRenderNodeKey = `${sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
-        }
-        existingKeys.add(carryOverRenderNodeKey)
+        // Issue #879 评论6148478104：carry-over 是同一物理 Text 的合法接续，
+        // 直接保留原始 renderNodeKey 和 windowInstanceId，不现场 allocateFresh。
+        const carryOverRenderNodeKey = w.renderNodeKey
+        const carryOverWinId = w.windowInstanceId
         runs.push({
           motionOwnerKind: w.motionOwnerKind,
           glyphIds: piece.glyphIds,
