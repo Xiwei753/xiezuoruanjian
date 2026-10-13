@@ -135,6 +135,17 @@ pub struct ParagraphLayoutEntry {
     /// 尾空段 `hard_break=false`。`甲`（无换行）只有一段 `hard_break=false`。
     /// 用于段落身份比较（问题2）和尾空段结构对齐（问题1）。
     pub hard_break: bool,
+    /// Issue #901 第三十轮问题2: 该段落是否是"已排版的空段"。
+    ///
+    /// 空段不分配 QTextLayout physical_slot（`cache_slot = -1`），
+    /// 也不持有 layout_epoch。但空段仍需要 VisualLine（有高度、光标几何），
+    /// 且 `is_laid_out()` 应对已排版空段返回 true，避免每次增量排版
+    /// 都把空段标记为需要重排。
+    ///
+    /// - `is_empty_laid_out = true`：已排版的空段，`is_laid_out()` 返回 true。
+    /// - `is_empty_laid_out = false`：未排版的空段或非空段，
+    ///   `is_laid_out()` 由 `layout_generation != 0 && cache_slot >= 0` 判定。
+    pub is_empty_laid_out: bool,
     /// Issue #901 第十轮问题5: 段内相对视觉行 — 按 ParagraphId 持久分块储存。
     ///
     /// 每行的坐标是**段内相对值**：
@@ -153,9 +164,13 @@ pub struct ParagraphLayoutEntry {
 }
 
 impl ParagraphLayoutEntry {
-    /// 该段落是否已排版（有有效的 generation 和 slot）。
+    /// 该段落是否已排版（有有效的 generation 和 slot，或是已排版的空段）。
+    ///
+    /// Issue #901 第三十轮问题2: 空段不分配物理槽（`cache_slot = -1`），
+    /// 用 `is_empty_laid_out` 标记已排版空段。非空段仍用
+    /// `layout_generation != 0 && cache_slot >= 0` 判定。
     pub fn is_laid_out(&self) -> bool {
-        self.layout_generation != 0 && self.cache_slot >= 0
+        self.is_empty_laid_out || (self.layout_generation != 0 && self.cache_slot >= 0)
     }
 }
 
@@ -316,7 +331,7 @@ pub struct ParagraphLayoutStore {
     /// Issue #901 第二十七轮复核问题3: 不再延迟一轮释放。retired slots 在
     /// `release_retired_layouts` 中立即释放。这比延迟一轮更安全，因为 retired_slots
     /// 只在确认旧 layout 不再被任何 snapshot 引用时才被收集。完整的基于引用计数的
-    /// 资源所有权（QtLayoutHandle with epoch/version）留作后续优化。
+    /// 资源所有权（QtLayoutId + QtLayoutLease with epoch/version）已实现。
     ///
     /// Issue #901 第二十八轮复核问题3: retired_slots 改为 `(generation, slot, epoch)` 3-tuple，
     /// 释放时带 epoch 校验。epoch 不匹配（slot 已被复用）则忽略释放，不误减新 layout 的 refcount。
@@ -552,6 +567,7 @@ impl ParagraphLayoutStore {
                 height,
                 visual_line_count,
                 relative_lines,
+                is_empty_laid_out,
             ) = if i < prefix_common {
                 // 前缀段：继承旧 entry[i]
                 let old = &self.entries[i];
@@ -570,9 +586,10 @@ impl ParagraphLayoutStore {
                         old.height,
                         old.visual_line_count,
                         old.relative_lines.clone(),
+                        old.is_empty_laid_out,
                     )
                 } else {
-                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
+                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new(), false)
                 }
             } else if suffix_common > 0 && i >= new_count - suffix_common {
                 // 后缀段：继承对应旧 entry（从后往前对齐）
@@ -593,13 +610,14 @@ impl ParagraphLayoutStore {
                         old.height,
                         old.visual_line_count,
                         old.relative_lines.clone(),
+                        old.is_empty_laid_out,
                     )
                 } else {
-                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
+                    (old.id, 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new(), false)
                 }
             } else {
                 // 中间段：分配新 Id
-                (self.allocate_id(), 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new())
+                (self.allocate_id(), 0u64, -1, 0u64, 0.0f64, 0usize, Vec::new(), false)
             };
 
             new_entries.push(ParagraphLayoutEntry {
@@ -613,6 +631,7 @@ impl ParagraphLayoutStore {
                 height,
                 visual_line_count,
                 hard_break: *hard_break,
+                is_empty_laid_out,
                 relative_lines,
             });
 
@@ -660,6 +679,172 @@ impl ParagraphLayoutStore {
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
         // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
         // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
+    }
+
+    /// Issue #901 第三十轮问题4: 局部 splice — 只删除/插入受影响的 entries，
+    /// 前缀/后缀 entries 直接保留（含 Qt layout lease 和排版结果）。
+    ///
+    /// 与 [`rebuild_from_text`] 的区别：不构造整篇 `new_entries` Vec，
+    /// 不全量重建 `id_to_slot_cache` 和 `line_count_index`。前缀段和后缀段
+    /// 的 entries 原地保留，只有中间受影响段被 splice。
+    ///
+    /// # 参数
+    ///
+    /// - `old_splice_start..old_splice_end`：旧 entries 中要删除的范围。
+    /// - `new_layout_start..new_layout_end`：新段中受影响的范围（用于验证）。
+    /// - `affected_paras`：受影响段的 `(text, hard_break)` 列表，长度 =
+    ///   `new_layout_end - new_layout_start`。
+    ///
+    /// # 返回
+    ///
+    /// `true` 表示 splice 成功；`false` 表示参数不合法（范围越界等），
+    /// 调用方应回退到 `rebuild_from_text`。
+    ///
+    /// # 前缀/后缀段保留策略
+    ///
+    /// - 前缀段 `[0, old_splice_start)`：entries 原地保留（Id、排版结果、Qt lease）。
+    /// - 新受影响段：分配新 Id，`layout_generation=0/cache_slot=-1`（待排版）。
+    /// - 后缀段 `[old_splice_end, old_count)`：entries 原地保留（Id、排版结果、Qt lease），
+    ///   但 `document_byte_start` 需要更新（前文长度变化）。
+    pub fn splice_affected_entries(
+        &mut self,
+        old_splice_start: usize,
+        old_splice_end: usize,
+        new_layout_start: usize,
+        new_layout_end: usize,
+        affected_paras: &[(&str, bool)],
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) -> bool {
+        let old_count = self.entries.len();
+        let new_affected_count = affected_paras.len();
+
+        // 参数合法性检查
+        if old_splice_start > old_count
+            || old_splice_end > old_count
+            || old_splice_start > old_splice_end
+        {
+            return false;
+        }
+        if new_layout_start != old_splice_start {
+            // 前缀段数不变，new_layout_start 应等于 old_splice_start
+            return false;
+        }
+        if new_affected_count != new_layout_end.saturating_sub(new_layout_start) {
+            return false;
+        }
+
+        let old_affected_count = old_splice_end - old_splice_start;
+        let new_count = old_count - old_affected_count + new_affected_count;
+
+        // 1. 收集被删除旧 entries 的 handle 到 retired_slots。
+        //    前缀/后缀段的 handle 保留（entries 原地保留），不回收。
+        let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
+        for i in old_splice_start..old_splice_end {
+            let entry = &self.entries[i];
+            if entry.layout_generation != 0 && entry.cache_slot >= 0 {
+                newly_retired.push((
+                    entry.layout_generation,
+                    entry.cache_slot,
+                    entry.layout_epoch,
+                ));
+            }
+        }
+        self.retired_slots.extend(newly_retired);
+
+        // 2. 构造新 entries（受影响段）。
+        //    分配新 Id，构造 cache_key，layout_generation=0/cache_slot=-1（待排版）。
+        let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(new_affected_count);
+        // 前缀段的累计 byte offset（用于新段的 document_byte_start）
+        let mut byte_offset = 0usize;
+        for i in 0..old_splice_start {
+            let entry = &self.entries[i];
+            byte_offset += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+        }
+        for (para_text, hard_break) in affected_paras {
+            let cache_key = ParagraphLayoutCacheKey::build(
+                para_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+            let new_id = self.allocate_id();
+            new_entries.push(ParagraphLayoutEntry {
+                id: new_id,
+                cache_key,
+                layout_generation: 0,
+                cache_slot: -1,
+                layout_epoch: 0,
+                document_byte_start: byte_offset,
+                paragraph_text_len: para_text.len(),
+                height: 0.0,
+                visual_line_count: 0,
+                hard_break: *hard_break,
+                is_empty_laid_out: false,
+                relative_lines: Vec::new(),
+            });
+            byte_offset += para_text.len() + if *hard_break { 1 } else { 0 };
+        }
+
+        // 3. splice self.entries：删除 [old_splice_start, old_splice_end)，插入新 entries。
+        //    前缀段 [0, old_splice_start) 和后缀段 [old_splice_end, old_count) 原地保留。
+        self.entries
+            .splice(old_splice_start..old_splice_end, new_entries);
+
+        // 4. 更新后缀 entries 的 document_byte_start。
+        //    后缀段从 new_layout_end 开始，document_byte_start 从 byte_offset 继续。
+        for i in new_layout_end..new_count.min(self.entries.len()) {
+            let entry = &mut self.entries[i];
+            entry.document_byte_start = byte_offset;
+            byte_offset += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+        }
+
+        // 5. 增量更新 id_to_slot_cache。
+        //    被删除段的 Id 移除，新段的 Id 加入，后缀段的 slot 平移。
+        {
+            let cache = Arc::make_mut(&mut self.id_to_slot_cache);
+            // 移除被删除段的 Id（old_splice_start..old_splice_end 已被 splice 删除，
+            // 但它们的 Id 在 splice 前已收集不到，需要从 cache 中移除）。
+            // 由于 entries 已 splice，被删除段的 Id 不在 entries 中，
+            // 但 cache 可能仍有旧映射。用 entries 重建受影响范围的映射。
+            //
+            // 策略：移除 cache 中 slot 在 [old_splice_start, old_splice_end) 的条目，
+            //       插入新段的映射，后缀段 slot 平移。
+            // 但 splice 后 entries 已更新，直接从 entries 重建受影响范围 + 后缀的映射更安全。
+            //
+            // 简化：移除所有 slot >= old_splice_start 的条目，重新插入新段 + 后缀段。
+            let to_remove: Vec<ParagraphId> = cache
+                .iter()
+                .filter(|(_, &slot)| slot >= old_splice_start)
+                .map(|(&id, _)| id)
+                .collect();
+            for id in to_remove {
+                cache.remove(&id);
+            }
+            // 插入新段 + 后缀段的映射
+            for i in old_splice_start..self.entries.len() {
+                cache.insert(self.entries[i].id, i);
+            }
+        }
+
+        // 6. 增量更新 line_count_index。
+        //    删除旧 [old_splice_start, old_splice_end) 的行数，插入新段的行数（初始 0）。
+        //    前缀/后缀段的行数保留。
+        {
+            let lci = Arc::make_mut(&mut self.line_count_index);
+            // splice: 删除旧 [old_splice_start, old_splice_end)，插入 new_affected_count 个 0。
+            let new_counts: Vec<usize> = vec![0usize; new_affected_count];
+            lci.splice(old_splice_start, old_splice_end, new_counts);
+        }
+
+        true
     }
 
     /// Issue #901 第十六轮问题1: 按 `ParagraphId` 查找当前段落 slot（段落索引）。
@@ -821,6 +1006,7 @@ impl ParagraphLayoutStore {
         original_entry.layout_generation = 0;
         original_entry.cache_slot = -1;
         original_entry.layout_epoch = 0;
+        original_entry.is_empty_laid_out = false;
         original_entry.paragraph_text_len = original_text_before_split.len();
         original_entry.height = 0.0;
         original_entry.visual_line_count = 0;
@@ -852,6 +1038,7 @@ impl ParagraphLayoutStore {
             // 会正确设置；此处 split_paragraph 增量路径中新段 hard_break 未知，
             // 默认 false，由后续 sync 同步。
             hard_break: false,
+            is_empty_laid_out: false,
             relative_lines: Vec::new(),
         };
 
@@ -914,6 +1101,7 @@ impl ParagraphLayoutStore {
             entry.layout_generation = 0;
             entry.cache_slot = -1;
             entry.layout_epoch = 0;
+            entry.is_empty_laid_out = false;
             entry.paragraph_text_len = merged_text.len();
             entry.height = 0.0;
             entry.visual_line_count = 0;
@@ -985,6 +1173,7 @@ impl ParagraphLayoutStore {
                 entry.layout_generation = 0;
                 entry.cache_slot = -1;
                 entry.layout_epoch = 0;
+                entry.is_empty_laid_out = false;
                 entry.paragraph_text_len = new_text.len();
                 entry.height = 0.0;
                 entry.visual_line_count = 0;
@@ -1051,6 +1240,7 @@ impl ParagraphLayoutStore {
             // Issue #901 第二十三轮问题1: insert_paragraph 增量路径中新段
             // hard_break 未知，默认 false，由后续 sync 同步。
             hard_break: false,
+            is_empty_laid_out: false,
             relative_lines: Vec::new(),
         };
         let insert_idx = index.min(self.entries.len());
@@ -1103,6 +1293,12 @@ impl ParagraphLayoutStore {
         if index >= self.entries.len() {
             return -1;
         }
+        // Issue #901 第三十轮问题2: 空段不分配物理槽。
+        // 空段没有 QTextLayout，不需要 cache_slot >= 0。
+        // 防御性检查：即使调用方误传空段，也不分配物理槽。
+        if self.entries[index].paragraph_text_len == 0 {
+            return -1;
+        }
         // 已有有效 cache_slot，直接复用。
         if self.entries[index].cache_slot >= 0 {
             return self.entries[index].cache_slot;
@@ -1140,6 +1336,17 @@ impl ParagraphLayoutStore {
     ) -> bool {
         if index >= self.entries.len() {
             return false;
+        }
+        // Issue #901 第三十轮问题2: 空段不分配物理槽。
+        // 空段没有 QTextLayout，不需要 cache_slot >= 0。
+        // 用 is_empty_laid_out 标记已排版空段，is_laid_out() 对空段返回 true。
+        if self.entries[index].paragraph_text_len == 0 {
+            let entry = &mut self.entries[index];
+            entry.is_empty_laid_out = true;
+            entry.layout_generation = layout_generation;
+            entry.height = height;
+            entry.visual_line_count = visual_line_count;
+            return true;
         }
         // Issue #901 第二十一轮问题1: physical_slot 由 store 内部分配，
         // 忽略传入的 _cache_slot。复用段保持已有值，新段分配新槽。
@@ -1319,6 +1526,9 @@ impl ParagraphLayoutStore {
     /// 用于 `prepare_incremental_visual_snapshot_impl` 中段落数不变但内容变化的场景。
     /// 对 `new_layout_start..new_layout_end` 范围内的段落调用 `update_paragraph_text`，
     /// 其他段落不变。
+    ///
+    /// Issue #901 第三十轮问题4: `new_para_texts` 只含受影响段文本（从 new_layout_start 起），
+    /// 用 `local_i = i - new_layout_start` 索引，不再用 `i` 直接索引整章数组。
     pub fn update_affected_paragraph_texts(
         &mut self,
         new_para_texts: &[&str],
@@ -1331,19 +1541,21 @@ impl ParagraphLayoutStore {
         padding: f64,
         width: f64,
     ) {
-        for i in new_layout_start..new_layout_end.min(new_para_texts.len()) {
-            if i < self.entries.len() {
-                self.update_paragraph_text(
-                    i,
-                    new_para_texts[i],
-                    font_size,
-                    font_family,
-                    line_spacing,
-                    text_indent,
-                    padding,
-                    width,
-                );
+        for local_i in 0..new_para_texts.len() {
+            let i = new_layout_start + local_i;
+            if i >= new_layout_end || i >= self.entries.len() {
+                break;
             }
+            self.update_paragraph_text(
+                i,
+                new_para_texts[local_i],
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
         }
     }
 
@@ -1418,34 +1630,43 @@ impl ParagraphLayoutStore {
 
             if let Some(entry) = self.entries.get_mut(idx) {
                 entry.layout_generation = layout_generation;
-                // Issue #901 第二十一轮问题1: physical_slot 从 VisualLine.cache_slot 读取。
-                // full.rs 增量路径已改为用独立 physical_slot（由 paragraph_physical_slot
-                // 分配），不再用 idx as i32（logical_slot）当 physical_slot。
-                // 旧实现用 idx as i32 会导致新段覆盖存活段的 QTextLayout。
-                let physical_slot = lines[line_start].cache_slot;
-                if physical_slot >= 0 {
-                    // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
-                    // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
-                    // physical_slot 来自 paragraph_physical_slot 预分配，
-                    // entry.layout_epoch 已在该方法中设置，此处刷新以防 slot 变化。
-                    entry.cache_slot = physical_slot;
-                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
-                    entry.layout_epoch = epoch;
-                } else if entry.cache_slot < 0 {
-                    // 防御性：lines 中 cache_slot 无效时由 store 分配新槽。
-                    // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配，
-                    // 不再传 min_slot 高水位门槛。
-                    let slot =
-                        super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
-                    entry.cache_slot = slot;
-                    // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 尚未写入）。
-                    // 用 get_layout_epoch 读取 acquire 时设的 epoch。
-                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, slot);
-                    entry.layout_epoch = epoch;
+                // Issue #901 第三十轮问题2: 空段不分配物理槽。
+                // 空段用 is_empty_laid_out 标记，不设 cache_slot/epoch。
+                if entry.paragraph_text_len == 0 {
+                    entry.is_empty_laid_out = true;
+                    entry.visual_line_count = line_count;
+                    entry.height = height;
+                    entry.relative_lines = relative_lines;
+                } else {
+                    // Issue #901 第二十一轮问题1: physical_slot 从 VisualLine.cache_slot 读取。
+                    // full.rs 增量路径已改为用独立 physical_slot（由 paragraph_physical_slot
+                    // 分配），不再用 idx as i32（logical_slot）当 physical_slot。
+                    // 旧实现用 idx as i32 会导致新段覆盖存活段的 QTextLayout。
+                    let physical_slot = lines[line_start].cache_slot;
+                    if physical_slot >= 0 {
+                        // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
+                        // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
+                        // physical_slot 来自 paragraph_physical_slot 预分配，
+                        // entry.layout_epoch 已在该方法中设置，此处刷新以防 slot 变化。
+                        entry.cache_slot = physical_slot;
+                        let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
+                        entry.layout_epoch = epoch;
+                    } else if entry.cache_slot < 0 {
+                        // 防御性：lines 中 cache_slot 无效时由 store 分配新槽。
+                        // Issue #901 第二十八轮复核问题2: 从按 generation 隔离的 freelist 分配，
+                        // 不再传 min_slot 高水位门槛。
+                        let slot =
+                            super::qt_cache::acquire_physical_slot_for_generation(layout_generation);
+                        entry.cache_slot = slot;
+                        // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 尚未写入）。
+                        // 用 get_layout_epoch 读取 acquire 时设的 epoch。
+                        let epoch = super::qt_cache::get_layout_epoch(layout_generation, slot);
+                        entry.layout_epoch = epoch;
+                    }
+                    entry.visual_line_count = line_count;
+                    entry.height = height;
+                    entry.relative_lines = relative_lines;
                 }
-                entry.visual_line_count = line_count;
-                entry.height = height;
-                entry.relative_lines = relative_lines;
             }
             // Issue #901 第二十一轮问题2: 更新行数前缀索引。
             // 后缀段的行范围由前缀和自动平移，不需要逐段更新绝对行下标。
@@ -1514,6 +1735,7 @@ impl ParagraphLayoutStore {
             entry.layout_generation = 0;
             entry.cache_slot = -1;
             entry.layout_epoch = 0;
+            entry.is_empty_laid_out = false;
             entry.height = 0.0;
             entry.visual_line_count = 0;
         }
@@ -1546,6 +1768,7 @@ impl ParagraphLayoutStore {
         entry.layout_generation = 0;
         entry.cache_slot = -1;
         entry.layout_epoch = 0;
+        entry.is_empty_laid_out = false;
         entry.height = 0.0;
         entry.visual_line_count = 0;
         true
@@ -1610,14 +1833,20 @@ impl ParagraphLayoutStore {
             if slot >= 0 && (slot as usize) < self.entries.len() {
                 let entry = &mut self.entries[slot as usize];
                 entry.layout_generation = layout_generation;
-                // Issue #901 第二十九轮复核阻塞1+2: 从 VisualLine.cache_slot 读取物理槽，
-                // 不再用 logical_slot 当物理槽。全篇排版路径已通过 acquire 分配物理槽
-                // 并传给 VisualLine.cache_slot。
-                // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
-                // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
-                entry.cache_slot = physical_slot;
-                let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
-                entry.layout_epoch = epoch;
+                // Issue #901 第三十轮问题2: 空段不分配物理槽。
+                // 空段用 is_empty_laid_out 标记，不设 cache_slot/epoch。
+                if entry.paragraph_text_len == 0 {
+                    entry.is_empty_laid_out = true;
+                } else {
+                    // Issue #901 第二十九轮复核阻塞1+2: 从 VisualLine.cache_slot 读取物理槽，
+                    // 不再用 logical_slot 当物理槽。全篇排版路径已通过 acquire 分配物理槽
+                    // 并传给 VisualLine.cache_slot。
+                    // Issue #901 第二十九轮复核阻塞2: 不再 add_layout_ref（layout 已由
+                    // install_layout_slot_gen 设 refcount=1）。用 get_layout_epoch 读取 epoch。
+                    entry.cache_slot = physical_slot;
+                    let epoch = super::qt_cache::get_layout_epoch(layout_generation, physical_slot);
+                    entry.layout_epoch = epoch;
+                }
                 entry.visual_line_count = line_count;
                 entry.height = total_height;
             }
@@ -2127,6 +2356,7 @@ mod tests {
                 cache_slot: 0,
                 logical_slot: 0,
                 paragraph_id: ParagraphId::INVALID,
+                layout_epoch: 0,
             },
             VisualLine {
                 id: 1,
@@ -2153,6 +2383,7 @@ mod tests {
                 cache_slot: 1,
                 logical_slot: 1,
                 paragraph_id: ParagraphId::INVALID,
+                layout_epoch: 0,
             },
         ];
 

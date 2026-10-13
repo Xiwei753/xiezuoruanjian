@@ -156,6 +156,7 @@ fn test_visual_line(
         cache_slot: 0,
         logical_slot: 0,
         paragraph_id: crate::editor::layout::ParagraphId::INVALID,
+                layout_epoch: 0,
     }
 }
 

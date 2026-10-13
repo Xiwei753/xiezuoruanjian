@@ -104,6 +104,15 @@ pub struct VisualLine {
     /// `materialize_line` 用 `paragraph_id` 查 `paragraph_id_to_slot` 得到新 slot。
     /// `ParagraphId::INVALID` 时回退到 `cache_slot`（兼容旧路径/fallback）。
     pub paragraph_id: ParagraphId,
+    /// Issue #901 第三十轮问题1+3: 该行所属 Qt layout 的 epoch。
+    ///
+    /// 与 `(layout_generation, cache_slot)` 配合，供光标/命中/渲染查询 API
+    /// 校验 layout 是否仍有效（slot 未被复用）。同一物理槽被复用时 epoch 递增，
+    /// 旧帧持有的旧 epoch 不匹配，查询返回默认值（0.0 / 0），防止旧帧误取
+    /// 同槽新对象。
+    ///
+    /// 0 表示未排版或未记录 epoch（兼容旧路径，checked 查询退化为不校验）。
+    pub layout_epoch: u64,
 }
 
 /// 光标矩形 — 文档坐标系（不含 scroll offset）。
@@ -275,6 +284,9 @@ impl LayoutSnapshot {
             logical_slot: logical_slot as i32,
             // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
             paragraph_id: line.paragraph_id,
+            // Issue #901 第三十轮问题1+3: 保留原行 layout epoch，
+            // 供光标/命中/渲染查询校验。
+            layout_epoch: line.layout_epoch,
         }
     }
 
@@ -293,7 +305,7 @@ impl LayoutSnapshot {
                 para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
-                paragraph_id: ParagraphId::INVALID,
+                paragraph_id: ParagraphId::INVALID, layout_epoch: 0,
             },
         }
     }
@@ -476,24 +488,19 @@ pub struct PromotedLayout {
     pub old_generation: u64,
 }
 
-/// Issue #901 第二十九轮复核阻塞3: 可查询排版句柄 — 统一 Qt 槽分配和引用计数所有权模型。
+/// Issue #901 第三十轮问题1+3: Qt 布局不可变标识 — `(generation, physical_slot, epoch)` 三元组。
 ///
-/// 封装 `(generation, physical_slot, epoch)` 三元组，提供引用计数操作和 epoch 校验查询。
-/// Store entry、VisualLine 关联的可查询排版句柄共享此类型。
+/// 纯标识，不持有引用计数。可以 `Clone + Copy`，在帧间传递不会改变引用计数。
+/// 用于标识"我指的是哪个 generation 的哪个物理槽的哪个 epoch 版本"。
 ///
-/// # 所有权模型
-///
-/// - `acquire_physical_slot_for_generation(gen)` 分配物理槽（refcount=0, epoch 已设）。
-/// - `install_layout_slot_gen(gen, slot, layout)` 在已分配的槽上安装 layout（refcount=1，Store 初始引用）。
-/// - `retain()` 增加引用计数（snapshot/动画帧持有额外引用），更新 epoch 为当前值。
-/// - `release()` 减少引用计数，带 epoch 校验。refcount 归零时 delete layout 并回收槽。
-/// - `is_valid()` 通过 `get_paragraph_layout_checked` 校验 epoch，防止旧帧误取同槽新对象。
+/// 要真正持有一份引用（阻止 layout 被释放），需通过 [`QtLayoutLease::try_from_id`]
+/// 创建 [`QtLayoutLease`]。
 ///
 /// # 线程安全
 ///
 /// 仅在 GUI 线程中使用，不跨线程共享。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct QtLayoutHandle {
+pub struct QtLayoutId {
     /// QTextLayout 所在的 generation cache 代。
     pub generation: u64,
     /// QTextLayout 在 `g_layout_generations[generation]` 中的物理数组下标。
@@ -502,8 +509,8 @@ pub struct QtLayoutHandle {
     pub epoch: u64,
 }
 
-impl QtLayoutHandle {
-    /// 创建一个新的 `QtLayoutHandle`。
+impl QtLayoutId {
+    /// 创建一个新的 `QtLayoutId`。
     pub fn new(generation: u64, physical_slot: i32, epoch: u64) -> Self {
         Self {
             generation,
@@ -512,40 +519,85 @@ impl QtLayoutHandle {
         }
     }
 
-    /// 是否表示无效/未分配的句柄。
+    /// 是否表示无效/未分配的标识。
     pub fn is_invalid(&self) -> bool {
         self.generation == 0 || self.physical_slot < 0
     }
+}
 
-    /// Issue #901 第二十九轮复核阻塞3: 增加布局引用计数，更新 epoch 为当前值。
+/// Issue #901 第三十轮问题1+3: Qt 布局租约 — 拥有一份引用计数的布局引用。
+///
+/// 创建时通过 `retain_layout_ref(gen, slot, expected_epoch)` 增加引用计数，
+/// 只有 **epoch 完全一致且 slot 有有效布局** 才成功。
+/// `Drop` 时通过 `release_layout_ref(gen, slot, epoch)` 退引用。
+/// `Clone` 必须增加引用计数（调用 `retain_layout_ref`），**不能 `Copy`**
+///（`Copy` 不会增加引用计数，会导致 double-free 或 use-after-free）。
+///
+/// # 所有权模型
+///
+/// - `QtLayoutId` 是不可变标识，可以随意复制。
+/// - `QtLayoutLease` 拥有一份引用：创建时增引用，`Drop` 退引用。
+/// - `retain` 不会修改原 ID 的 epoch — 与旧 `QtLayoutHandle::retain` 不同，
+///   旧实现会把 `self.epoch` 覆盖为 C++ 端当前 epoch，导致旧帧误绑定到新文字。
+///   新实现中 `QtLayoutLease` 的 epoch 在创建时固定，不会被覆盖。
+///
+/// # 线程安全
+///
+/// 仅在 GUI 线程中使用，不跨线程共享。
+pub struct QtLayoutLease {
+    /// 底层不可变标识。
+    id: QtLayoutId,
+}
+
+impl QtLayoutLease {
+    /// 从 [`QtLayoutId`] 尝试创建租约 — 调用 `retain_layout_ref(gen, slot, expected_epoch)`。
     ///
-    /// 用于 snapshot/动画帧持有额外引用。调用后 `self.epoch` 更新为 C++ 端当前 epoch，
-    /// 供后续 [`release`] 校验。
+    /// 只有 **epoch 完全一致且 slot 有有效布局** 才增加引用并返回 `Some(lease)`。
+    /// epoch 不匹配（slot 已被复用）或 slot 无有效布局时返回 `None`，不增加引用。
     ///
-    /// SAFETY: GUI thread only; generation/physical_slot 应是之前
-    /// acquire_physical_slot_for_generation 分配的。
-    pub fn retain(&mut self) {
-        if self.is_invalid() {
-            return;
+    /// 这取代了旧 `QtLayoutHandle::retain` 的行为：旧实现无条件 `add_layout_ref` 并
+    /// 把返回的当前 epoch 覆盖 `self.epoch`，导致旧帧误绑定到新文字。新实现要求
+    /// epoch 匹配才增引用，且不修改原 ID。
+    ///
+    /// SAFETY: GUI thread only; `id` 应是之前 `acquire_physical_slot_for_generation`
+    /// 分配并 `install_layout_slot_gen` 安装 layout 的。
+    pub fn try_from_id(id: QtLayoutId) -> Option<Self> {
+        if id.is_invalid() {
+            return None;
         }
-        self.epoch = super::qt_cache::add_layout_ref(self.generation, self.physical_slot);
+        if super::qt_cache::retain_layout_ref(id.generation, id.physical_slot, id.epoch) {
+            Some(Self { id })
+        } else {
+            None
+        }
     }
 
-    /// Issue #901 第二十九轮复核阻塞3: 减少布局引用计数，带 epoch 校验。
-    ///
-    /// - epoch 不匹配：旧帧释放旧 handle（slot 已被复用，epoch 递增），直接忽略。
-    /// - epoch 匹配：减 refcount。refcount 归零时 delete layout 并回收槽。
-    ///
-    /// SAFETY: GUI thread only; generation/physical_slot/epoch 应是之前
-    /// acquire + install 或 retain 返回的。
-    pub fn release(&self) {
-        if self.is_invalid() {
-            return;
-        }
-        super::qt_cache::release_layout_ref(self.generation, self.physical_slot, self.epoch);
+    /// 返回底层不可变标识（只读拷贝，不转移所有权）。
+    pub fn id(&self) -> QtLayoutId {
+        self.id
     }
 
-    /// Issue #901 第二十九轮复核阻塞3: 校验 epoch 并查询 layout 是否存在。
+    /// 返回 generation。
+    pub fn generation(&self) -> u64 {
+        self.id.generation
+    }
+
+    /// 返回物理槽号。
+    pub fn physical_slot(&self) -> i32 {
+        self.id.physical_slot
+    }
+
+    /// 返回 epoch。
+    pub fn epoch(&self) -> u64 {
+        self.id.epoch
+    }
+
+    /// 是否表示无效/未分配的租约。
+    pub fn is_invalid(&self) -> bool {
+        self.id.is_invalid()
+    }
+
+    /// Issue #901 第三十轮问题1+3: 校验 epoch 并查询 layout 是否存在。
     ///
     /// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
     /// 防止旧帧误取同槽新对象。返回 `true` 表示 layout 存在且 epoch 匹配。
@@ -555,15 +607,76 @@ impl QtLayoutHandle {
         if self.is_invalid() {
             return false;
         }
-        super::qt_cache::is_layout_valid(self.generation, self.physical_slot, self.epoch)
+        super::qt_cache::is_layout_valid(self.id.generation, self.id.physical_slot, self.id.epoch)
     }
 }
+
+impl Clone for QtLayoutLease {
+    /// Clone 必须增加引用计数 — 调用 `retain_layout_ref`。
+    ///
+    /// 如果 `retain_layout_ref` 失败（layout 已被释放，epoch 不匹配），
+    /// 仍返回一个持有相同 id 的 lease，但后续 `is_valid` 会返回 `false`。
+    /// 正常情况下不应发生（持有有效 lease 时 layout 不应已被释放）。
+    ///
+    /// SAFETY: GUI thread only.
+    fn clone(&self) -> Self {
+        if !self.is_invalid() {
+            let ok = super::qt_cache::retain_layout_ref(
+                self.id.generation,
+                self.id.physical_slot,
+                self.id.epoch,
+            );
+            // 持有有效 lease 时 retain 应成功。失败说明 layout 已被异常释放。
+            debug_assert!(
+                ok,
+                "QtLayoutLease::clone: retain_layout_ref failed for lease {:?}",
+                self.id
+            );
+        }
+        Self { id: self.id }
+    }
+}
+
+impl Drop for QtLayoutLease {
+    /// Drop 时退引用 — 调用 `release_layout_ref(gen, slot, epoch)`。
+    ///
+    /// epoch 不匹配（slot 已被复用）时 C++ 端忽略释放，不误减新 layout 的 refcount。
+    /// epoch 匹配时减 refcount，归零时 delete layout 并回收 slot。
+    ///
+    /// SAFETY: GUI thread only.
+    fn drop(&mut self) {
+        if !self.is_invalid() {
+            super::qt_cache::release_layout_ref(
+                self.id.generation,
+                self.id.physical_slot,
+                self.id.epoch,
+            );
+        }
+    }
+}
+
+impl std::fmt::Debug for QtLayoutLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QtLayoutLease")
+            .field("id", &self.id)
+            .finish()
+    }
+}
+
+// Issue #901 第三十轮问题1+3: QtLayoutLease 不能 Copy ——
+// Copy 不会增加引用计数，会导致 double-free 或 use-after-free。
+// 编译器会拒绝任何试图 Copy QtLayoutLease 的代码。
 
 /// Issue #658 评论 5624570557 问题 1: 已准备布局的只读句柄。
 ///
 /// 暴露当前有效 `layout_generation + LayoutSnapshot` 的只读句柄，
 /// 用于动画 old 帧从已有 QTextLine 提取视觉资源，不再重新排版。
 /// 句柄持有者必须保证 generation 在句柄使用期间有效（不被 clear_layout_generation 释放）。
+///
+/// Issue #901 第三十轮问题1+3: `lines` 中每个 `VisualLine` 携带 `layout_epoch`，
+/// 消费方可用 `(generation, cache_slot, layout_epoch)` 通过
+/// `get_paragraph_layout_checked` 校验 epoch 后查询布局，
+/// 防止旧帧误取同槽新对象。
 pub struct PreparedLayoutHandle<'a> {
     pub generation: u64,
     pub lines: &'a [VisualLine],

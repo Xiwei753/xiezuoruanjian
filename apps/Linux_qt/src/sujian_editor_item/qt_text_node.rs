@@ -103,6 +103,8 @@ cpp! {{
     // 此处通过 extern 引用同一链接单元中的定义。
     // Issue #658 评论 5620035970 问题 2: 用 generation 隔离，通过 get_paragraph_layout(gen, slot) 查找。
     extern QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
+    // Issue #901 第三十轮问题1: 带 epoch 校验的 get，防止旧帧误取同槽新对象。
+    extern QTextLayout* get_paragraph_layout_checked(uint64_t gen, int slot, uint64_t epoch);
 
     /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
     ///
@@ -126,10 +128,12 @@ cpp! {{
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
         const int* para_start_arr, const int* cache_idx_arr,
+        const uint64_t* para_epoch_arr,
         const double* para_y_arr, const double* indent_w_arr,
         const double* doc_width_arr,
         int para_count,
         const int* vl_cache_idx_arr,
+        const uint64_t* vl_epoch_arr,
         const int* vl_qtextline_idx_arr,
         const double* vl_y_arr,
         const double* vl_height_arr,
@@ -157,11 +161,16 @@ cpp! {{
         // Issue #668 评论 5646458592 问题 1: 先检查所有非空段落的
         // (generation, cache_slot) 都能取到 QTextLayout*。任意缺失立即返回 false，
         // 不动当前正在显示的旧节点，不留下一个已经 clear() 过的空节点。
+        // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch，
+        // 防止旧帧误取同槽新对象。epoch 为 0 时退化为不校验（兼容旧路径）。
         for (int i = 0; i < para_count; i++) {
             int cacheIdx = cache_idx_arr[i];
             // 空段落（text_lens[i] == 0）不需要 layout，跳过。
             if (text_lens[i] == 0) continue;
-            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            uint64_t epoch = para_epoch_arr[i];
+            QTextLayout* cachedLayout = (epoch == 0)
+                ? get_paragraph_layout(generation, cacheIdx)
+                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) {
                 return false;
             }
@@ -170,7 +179,10 @@ cpp! {{
         if (clip_count > 0 && vl_count > 0) {
             for (int i = 0; i < vl_count; i++) {
                 int cacheIdx = vl_cache_idx_arr[i];
-                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                uint64_t epoch = vl_epoch_arr[i];
+                QTextLayout* cachedLayout = (epoch == 0)
+                    ? get_paragraph_layout(generation, cacheIdx)
+                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (!cachedLayout) {
                     return false;
                 }
@@ -236,7 +248,11 @@ cpp! {{
                 // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout，
                 // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
                 // Issue #668: 前面已检查所有非空段落 layout 可用，此处 cachedLayout 必非 null。
-                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+                uint64_t epoch = para_epoch_arr[i];
+                QTextLayout* cachedLayout = (epoch == 0)
+                    ? get_paragraph_layout(generation, cacheIdx)
+                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (cachedLayout) {
                     newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
                 }
@@ -280,7 +296,11 @@ cpp! {{
 
                     // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout。
                     // Issue #668: 前面已检查所有视觉行 layout 可用，此处必非 null。
-                    QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                    // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+                    uint64_t epoch = vl_epoch_arr[i];
+                    QTextLayout* cachedLayout = (epoch == 0)
+                        ? get_paragraph_layout(generation, cacheIdx)
+                        : get_paragraph_layout_checked(generation, cacheIdx, epoch);
                     if (!cachedLayout) {
                         continue;
                     }
@@ -441,6 +461,7 @@ cpp! {{
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
         const int* cache_idx_arr,
+        const uint64_t* para_epoch_arr,
         const double* para_y_arr,
         int para_count,
         const int* affected_indices, int affected_count,
@@ -473,8 +494,12 @@ cpp! {{
             if (text_lens[i] == 0) continue;
 
             // 检查 layout 可用性
+            // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
             int cacheIdx = cache_idx_arr[i];
-            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            uint64_t epoch = para_epoch_arr[i];
+            QTextLayout* cachedLayout = (epoch == 0)
+                ? get_paragraph_layout(generation, cacheIdx)
+                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) {
                 return false;
             }
@@ -516,8 +541,9 @@ cpp! {{
     static void build_paragraph_subtree(
         QSGNode* container, QQuickWindow* window,
         const char* text_ptr, int text_len,
-        int cacheIdx, double para_y,
+        int cacheIdx, uint64_t epoch, double para_y,
         const int* vl_cache_idx_arr,
+        const uint64_t* vl_epoch_arr,
         const int* vl_qtextline_idx_arr,
         const double* vl_y_arr, const double* vl_height_arr,
         const double* vl_doc_width_arr,
@@ -535,7 +561,10 @@ cpp! {{
         if (!container || !window) return;
         if (text_len == 0) return;
 
-        QTextLayout* layout = get_paragraph_layout(generation, cacheIdx);
+        // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
+        QTextLayout* layout = (epoch == 0)
+            ? get_paragraph_layout(generation, cacheIdx)
+            : get_paragraph_layout_checked(generation, cacheIdx, epoch);
         if (!layout) return;
 
         if (clip_rects_xy.empty()) {
@@ -687,12 +716,14 @@ cpp! {{
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
         const int* cache_idx_arr,
+        const uint64_t* para_epoch_arr,
         const double* para_y_arr,
         const uint64_t* paragraph_id_arr,
         const uint64_t* content_revision_arr,
         const double* paragraph_height_arr,
         int para_count,
         const int* vl_cache_idx_arr,
+        const uint64_t* vl_epoch_arr,
         const int* vl_qtextline_idx_arr,
         const double* vl_y_arr, const double* vl_height_arr,
         const double* vl_doc_width_arr,
@@ -718,17 +749,24 @@ cpp! {{
         if (!staticLayer) return false;
 
         // 检查所有非空段落的 layout 可用性
+        // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
         for (int i = 0; i < para_count; i++) {
             if (text_lens[i] == 0) continue;
             int cacheIdx = cache_idx_arr[i];
-            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            uint64_t epoch = para_epoch_arr[i];
+            QTextLayout* cachedLayout = (epoch == 0)
+                ? get_paragraph_layout(generation, cacheIdx)
+                : get_paragraph_layout_checked(generation, cacheIdx, epoch);
             if (!cachedLayout) return false;
         }
         // 检查 visual line layout 可用性
         if (clip_count > 0 && vl_count > 0) {
             for (int i = 0; i < vl_count; i++) {
                 int cacheIdx = vl_cache_idx_arr[i];
-                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                uint64_t epoch = vl_epoch_arr[i];
+                QTextLayout* cachedLayout = (epoch == 0)
+                    ? get_paragraph_layout(generation, cacheIdx)
+                    : get_paragraph_layout_checked(generation, cacheIdx, epoch);
                 if (!cachedLayout) return false;
             }
         }
@@ -899,8 +937,8 @@ cpp! {{
                     build_paragraph_subtree(
                         transform_node, window,
                         text_ptr, text_len,
-                        cacheIdx, para_y,
-                        vl_cache_idx_arr, vl_qtextline_idx_arr,
+                        cacheIdx, para_epoch_arr[i], para_y,
+                        vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
                         vl_indices,
@@ -926,8 +964,8 @@ cpp! {{
                     build_paragraph_subtree(
                         transform_node, window,
                         text_ptr, text_len,
-                        cacheIdx, para_y,
-                        vl_cache_idx_arr, vl_qtextline_idx_arr,
+                        cacheIdx, para_epoch_arr[i], para_y,
+                        vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
                         vl_doc_width_arr, vl_para_y_arr,
                         vl_indices,
@@ -1076,6 +1114,11 @@ pub(crate) struct ParagraphLineInfo {
     pub paragraph_id: u64,
     /// 该段落在 g_paragraph_layout_cache 中的索引
     pub cache_idx: i32,
+    /// Issue #901 第三十轮问题1: 该段落 layout 的 epoch。
+    /// C++ 侧用 (generation, cache_idx, layout_epoch) 通过
+    /// get_paragraph_layout_checked 校验 epoch 后查布局，
+    /// 防止旧帧误取同槽新对象。0 表示不校验（兼容旧路径）。
+    pub layout_epoch: u64,
     /// 段落第一行在文档中的 y 坐标（文档坐标，即 VisualLine.y）
     pub y: f64,
     /// 段落第一行的缩进宽度
@@ -1107,6 +1150,11 @@ pub(crate) struct ParagraphLineInfo {
 pub(crate) struct VisualLineClipInfo {
     /// 该视觉行所属段落在 g_paragraph_layout_cache 中的索引
     pub cache_idx: i32,
+    /// Issue #901 第三十轮问题1: 该视觉行所属段落 layout 的 epoch。
+    /// C++ 侧用 (generation, cache_idx, layout_epoch) 通过
+    /// get_paragraph_layout_checked 校验 epoch 后查布局，
+    /// 防止旧帧误取同槽新对象。0 表示不校验（兼容旧路径）。
+    pub layout_epoch: u64,
     /// 该视觉行在 QTextLayout 中的行索引（lineStart 参数）
     pub qtextline_idx: i32,
     /// 该视觉行在文档中的 y 坐标
@@ -1279,11 +1327,15 @@ pub fn rebuild_text_node_from_paragraphs(
         .collect();
     let para_starts: Vec<i32> = paragraphs.iter().map(|p| p.para_start as i32).collect();
     let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
+    // Issue #901 第三十轮问题1: 构造 epoch 数组，传给 C++ 校验 layout。
+    let para_epochs: Vec<u64> = paragraphs.iter().map(|p| p.layout_epoch).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
     let indent_ws: Vec<f64> = paragraphs.iter().map(|p| p.indent_w).collect();
     let doc_widths: Vec<f64> = paragraphs.iter().map(|p| p.doc_width).collect();
 
     let vl_cache_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.cache_idx).collect();
+    // Issue #901 第三十轮问题1: 构造 visual line epoch 数组。
+    let vl_epochs: Vec<u64> = visual_line_clips.iter().map(|v| v.layout_epoch).collect();
     let vl_qtextline_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.qtextline_idx).collect();
     let vl_y: Vec<f64> = visual_line_clips.iter().map(|v| v.y).collect();
     let vl_height: Vec<f64> = visual_line_clips.iter().map(|v| v.height).collect();
@@ -1305,10 +1357,12 @@ pub fn rebuild_text_node_from_paragraphs(
     let text_lens_ptr = text_lens.as_ptr();
     let para_starts_ptr = para_starts.as_ptr();
     let cache_idxs_ptr = cache_idxs.as_ptr();
+    let para_epochs_ptr = para_epochs.as_ptr();
     let para_y_ptr = para_y.as_ptr();
     let indent_ws_ptr = indent_ws.as_ptr();
     let doc_widths_ptr = doc_widths.as_ptr();
     let vl_cache_idxs_ptr = vl_cache_idxs.as_ptr();
+    let vl_epochs_ptr = vl_epochs.as_ptr();
     let vl_qtextline_idxs_ptr = vl_qtextline_idxs.as_ptr();
     let vl_y_ptr = vl_y.as_ptr();
     let vl_height_ptr = vl_height.as_ptr();
@@ -1328,11 +1382,13 @@ pub fn rebuild_text_node_from_paragraphs(
         text_lens_ptr as "const int*",
         para_starts_ptr as "const int*",
         cache_idxs_ptr as "const int*",
+        para_epochs_ptr as "const uint64_t*",
         para_y_ptr as "const double*",
         indent_ws_ptr as "const double*",
         doc_widths_ptr as "const double*",
         para_count as "int",
         vl_cache_idxs_ptr as "const int*",
+        vl_epochs_ptr as "const uint64_t*",
         vl_qtextline_idxs_ptr as "const int*",
         vl_y_ptr as "const double*",
         vl_height_ptr as "const double*",
@@ -1357,10 +1413,12 @@ pub fn rebuild_text_node_from_paragraphs(
             root_raw, item_ptr,
             text_ptrs_ptr, text_lens_ptr,
             para_starts_ptr, cache_idxs_ptr,
+            para_epochs_ptr,
             para_y_ptr, indent_ws_ptr,
             doc_widths_ptr,
             para_count,
             vl_cache_idxs_ptr,
+            vl_epochs_ptr,
             vl_qtextline_idxs_ptr,
             vl_y_ptr,
             vl_height_ptr,
@@ -1442,6 +1500,8 @@ pub fn update_affected_text_nodes(
         .map(|p| p.paragraph_text.len() as i32)
         .collect();
     let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
+    // Issue #901 第三十轮问题1: 构造 epoch 数组，传给 C++ 校验 layout。
+    let para_epochs: Vec<u64> = paragraphs.iter().map(|p| p.layout_epoch).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
 
     let affected_idxs: Vec<i32> = affected_indices.iter().map(|&i| i as i32).collect();
@@ -1452,6 +1512,7 @@ pub fn update_affected_text_nodes(
     let text_ptrs_ptr = text_ptrs.as_ptr();
     let text_lens_ptr = text_lens.as_ptr();
     let cache_idxs_ptr = cache_idxs.as_ptr();
+    let para_epochs_ptr = para_epochs.as_ptr();
     let para_y_ptr = para_y.as_ptr();
     let affected_idxs_ptr = affected_idxs.as_ptr();
 
@@ -1461,6 +1522,7 @@ pub fn update_affected_text_nodes(
         text_ptrs_ptr as "const char**",
         text_lens_ptr as "const int*",
         cache_idxs_ptr as "const int*",
+        para_epochs_ptr as "const uint64_t*",
         para_y_ptr as "const double*",
         para_count as "int",
         affected_idxs_ptr as "const int*",
@@ -1476,6 +1538,7 @@ pub fn update_affected_text_nodes(
             root_raw, item_ptr,
             text_ptrs_ptr, text_lens_ptr,
             cache_idxs_ptr,
+            para_epochs_ptr,
             para_y_ptr,
             para_count,
             affected_idxs_ptr, affected_count,
@@ -1577,12 +1640,16 @@ pub fn update_text_nodes_incremental(
         .map(|p| p.paragraph_text.len() as i32)
         .collect();
     let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
+    // Issue #901 第三十轮问题1: 构造 epoch 数组，传给 C++ 校验 layout。
+    let para_epochs: Vec<u64> = paragraphs.iter().map(|p| p.layout_epoch).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
     let paragraph_ids: Vec<u64> = paragraphs.iter().map(|p| p.paragraph_id).collect();
     let content_revisions: Vec<u64> = paragraphs.iter().map(|p| p.content_revision).collect();
     let paragraph_heights: Vec<f64> = paragraphs.iter().map(|p| p.paragraph_height).collect();
 
     let vl_cache_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.cache_idx).collect();
+    // Issue #901 第三十轮问题1: 构造 visual line epoch 数组。
+    let vl_epochs: Vec<u64> = visual_line_clips.iter().map(|v| v.layout_epoch).collect();
     let vl_qtextline_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.qtextline_idx).collect();
     let vl_y: Vec<f64> = visual_line_clips.iter().map(|v| v.y).collect();
     let vl_height: Vec<f64> = visual_line_clips.iter().map(|v| v.height).collect();
@@ -1602,11 +1669,13 @@ pub fn update_text_nodes_incremental(
     let text_ptrs_ptr = text_ptrs.as_ptr();
     let text_lens_ptr = text_lens.as_ptr();
     let cache_idxs_ptr = cache_idxs.as_ptr();
+    let para_epochs_ptr = para_epochs.as_ptr();
     let para_y_ptr = para_y.as_ptr();
     let paragraph_ids_ptr = paragraph_ids.as_ptr();
     let content_revisions_ptr = content_revisions.as_ptr();
     let paragraph_heights_ptr = paragraph_heights.as_ptr();
     let vl_cache_idxs_ptr = vl_cache_idxs.as_ptr();
+    let vl_epochs_ptr = vl_epochs.as_ptr();
     let vl_qtextline_idxs_ptr = vl_qtextline_idxs.as_ptr();
     let vl_y_ptr = vl_y.as_ptr();
     let vl_height_ptr = vl_height.as_ptr();
@@ -1624,12 +1693,14 @@ pub fn update_text_nodes_incremental(
         text_ptrs_ptr as "const char**",
         text_lens_ptr as "const int*",
         cache_idxs_ptr as "const int*",
+        para_epochs_ptr as "const uint64_t*",
         para_y_ptr as "const double*",
         paragraph_ids_ptr as "const uint64_t*",
         content_revisions_ptr as "const uint64_t*",
         paragraph_heights_ptr as "const double*",
         para_count as "int",
         vl_cache_idxs_ptr as "const int*",
+        vl_epochs_ptr as "const uint64_t*",
         vl_qtextline_idxs_ptr as "const int*",
         vl_y_ptr as "const double*",
         vl_height_ptr as "const double*",
@@ -1655,12 +1726,14 @@ pub fn update_text_nodes_incremental(
             root_raw, item_ptr,
             text_ptrs_ptr, text_lens_ptr,
             cache_idxs_ptr,
+            para_epochs_ptr,
             para_y_ptr,
             paragraph_ids_ptr,
             content_revisions_ptr,
             paragraph_heights_ptr,
             para_count,
             vl_cache_idxs_ptr,
+            vl_epochs_ptr,
             vl_qtextline_idxs_ptr,
             vl_y_ptr, vl_height_ptr,
             vl_doc_width_ptr,

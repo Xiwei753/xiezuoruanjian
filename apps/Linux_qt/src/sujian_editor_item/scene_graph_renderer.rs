@@ -536,6 +536,9 @@ pub(crate) fn render_frame(
                         para_start: line.para_start,
                         paragraph_id,
                         cache_idx: line.cache_slot,
+                        // Issue #901 第三十轮问题1: 传入 layout_epoch，
+                        // 供 C++ 侧用 get_paragraph_layout_checked 校验 epoch。
+                        layout_epoch: line.layout_epoch,
                         y: para_y,
                         indent_w: line.para_indent,
                         font_size: snapshot.font_size,
@@ -553,6 +556,9 @@ pub(crate) fn render_frame(
                 // 分组 visual lines 到正确的段落容器节点。
                 visual_line_clips.push(qt_text_node::VisualLineClipInfo {
                     cache_idx: line.cache_slot,
+                    // Issue #901 第三十轮问题1: 传入 layout_epoch，
+                    // 供 C++ 侧用 get_paragraph_layout_checked 校验 epoch。
+                    layout_epoch: line.layout_epoch,
                     qtextline_idx: line.qtextline_idx,
                     y: line.y,
                     height: line.height,

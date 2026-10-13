@@ -55,14 +55,16 @@ pub use hit_test::{
     cursor_line_and_x, hit_test, index_at_line_x, line_contains_cursor_with_affinity,
 };
 pub use qt_cache::{
-    begin_layout_generation, clear_layout_generation, get_paragraph_layout_cursor_to_x_on_line,
-    get_paragraph_layout_x_to_cursor_on_line,
+    begin_layout_generation, clear_layout_generation,
+    get_paragraph_layout_cursor_to_x_on_line, get_paragraph_layout_cursor_to_x_on_line_checked,
+    get_paragraph_layout_x_to_cursor_on_line, get_paragraph_layout_x_to_cursor_on_line_checked,
+    retain_layout_ref,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_support::run_on_qt_thread;
 pub use types::{
     CaretAffinity, CaretRect, CursorLayoutRect, LayoutParams, LayoutSnapshot, ParagraphId,
-    PreparedLayoutHandle, PromotedLayout, QtLayoutHandle, VisualLine,
+    PreparedLayoutHandle, PromotedLayout, QtLayoutId, QtLayoutLease, VisualLine,
 };
 use std::sync::Arc;
 

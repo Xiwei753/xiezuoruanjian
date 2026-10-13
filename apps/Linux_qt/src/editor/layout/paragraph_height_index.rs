@@ -254,6 +254,19 @@ impl ParagraphHeightIndex {
         self.rebuild_bit();
     }
 
+    /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落高度，
+    /// 在 `start` 处插入新段落高度 `new_heights`。
+    ///
+    /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的高度数据保留不动，
+    /// 只替换中间段。O(k) 数据移动 + O(n) BIT 重建（k = new_heights.len()）。
+    /// 比 `rebuild` 的 O(n) 全量数据准备更高效（k << n 时）。
+    pub fn splice(&mut self, start: usize, end: usize, new_heights: Vec<f64>) {
+        let splice_start = start.min(self.heights.len());
+        let splice_end = end.min(self.heights.len());
+        self.heights.splice(splice_start..splice_end, new_heights);
+        self.rebuild_bit();
+    }
+
     /// 批量更新单个段落高度（不重建 BIT，逐个 `update_height`）。
     ///
     /// 当多个段落高度变化时，逐个调用 `update_height` 比 `rebuild` 更高效
@@ -644,6 +657,18 @@ impl ParagraphLineCountIndex {
         self.rebuild_bit();
     }
 
+    /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落行数，
+    /// 在 `start` 处插入新段落行数 `new_counts`。
+    ///
+    /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的行数保留不动。
+    /// O(k) 数据移动 + O(n) BIT 重建。
+    pub fn splice(&mut self, start: usize, end: usize, new_counts: Vec<usize>) {
+        let splice_start = start.min(self.counts.len());
+        let splice_end = end.min(self.counts.len());
+        self.counts.splice(splice_start..splice_end, new_counts);
+        self.rebuild_bit();
+    }
+
     /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
     ///
     /// 返回 `true` 表示发生了重建，`false` 表示长度已匹配无需重建。
@@ -900,6 +925,33 @@ impl ParagraphOffsetIndex {
         self.qchar_lengths.remove(index);
         self.rebuild_fenwick();
         true
+    }
+
+    /// Issue #901 第三十轮问题4: 局部 splice — 删除 `[start, end)` 范围的段落长度，
+    /// 在 `start` 处插入新段落长度 `(new_byte_lengths, new_qchar_lengths)`。
+    ///
+    /// 前缀段 `[0, start)` 和后缀段 `[end, len)` 的长度数据保留不动，
+    /// 只替换中间段。O(k) 数据移动 + O(n) Fenwick 重建（k = new_byte_lengths.len()）。
+    /// 比 `rebuild` 的 O(n) 全量数据准备更高效（k << n 时）。
+    pub fn splice(
+        &mut self,
+        start: usize,
+        end: usize,
+        new_byte_lengths: Vec<usize>,
+        new_qchar_lengths: Vec<usize>,
+    ) {
+        debug_assert_eq!(
+            new_byte_lengths.len(),
+            new_qchar_lengths.len(),
+            "new_byte_lengths 和 new_qchar_lengths 长度必须一致"
+        );
+        let splice_start = start.min(self.byte_lengths.len());
+        let splice_end = end.min(self.byte_lengths.len());
+        self.byte_lengths
+            .splice(splice_start..splice_end, new_byte_lengths);
+        self.qchar_lengths
+            .splice(splice_start..splice_end, new_qchar_lengths);
+        self.rebuild_fenwick();
     }
 
     /// 重建 Fenwick 树数组（内部辅助，O(n)）。

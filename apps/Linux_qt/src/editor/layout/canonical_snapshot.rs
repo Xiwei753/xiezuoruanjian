@@ -201,6 +201,8 @@ impl CanonicalDocumentVisualSnapshot {
             logical_slot: logical_slot as i32,
             // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
             paragraph_id: line.paragraph_id,
+            // Issue #901 第三十轮问题1: 保留原行 layout epoch。
+            layout_epoch: line.layout_epoch,
         }
     }
 
@@ -220,6 +222,7 @@ impl CanonicalDocumentVisualSnapshot {
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
                 qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
                 paragraph_id: super::types::ParagraphId::INVALID,
+                layout_epoch: 0,
             },
         }
     }
@@ -404,6 +407,7 @@ impl CanonicalDocumentVisualSnapshot {
             cache_slot: 0,
             logical_slot: 0,
             paragraph_id: super::types::ParagraphId::INVALID,
+                layout_epoch: 0,
         };
 
         if self.visual_lines.is_empty() {

@@ -24,6 +24,7 @@ cpp! {{
     // engine 在 qt_cache 之前，需前向声明 qt_cache 定义的 generation cache helper。
     QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
     void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout);
+    // Issue #901 第三十轮问题2: deprecated — 空段不再分配物理槽，此函数保留兼容。
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot);
     // Issue #901 第二十九轮复核阻塞1+2: install 是唯一允许写入 layout 的入口。
     void install_layout_slot_gen(uint64_t gen, int slot, QTextLayout* layout);
@@ -264,6 +265,9 @@ cpp! {{
         // 对空段落 push_back(nullptr) 的处理一致。这样 cache_slot 与文档段落一一对应，
         // scene_graph_renderer 直接消费 snapshot 中稳定的 slot 不再自行计数。
         // Issue #658 评论 5620035970 问题 2: 用 generation 隔离。
+        // Issue #901 第三十轮问题2: deprecated — 空段不再分配物理槽。
+        // full.rs 中空段不再调用 prepare_paragraph_visual_snapshot（cache_slot 传 -1），
+        // 此分支保留兼容但不应再被触发。set_null_paragraph_layout_slot_gen 也已标注 deprecated。
         if (paraText.isEmpty()) {
             if (cache_slot >= 0) {
                 set_null_paragraph_layout_slot_gen(generation, cache_slot);

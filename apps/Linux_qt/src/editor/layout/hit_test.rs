@@ -174,6 +174,7 @@ fn find_caret_line_in_layout_snapshot(
         cache_slot: 0,
         logical_slot: 0,
         paragraph_id: super::types::ParagraphId::INVALID,
+                layout_epoch: 0,
     };
 
     if snapshot.lines.is_empty() {
@@ -250,9 +251,12 @@ pub fn index_at_line_x(snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> 
     // Issue #658 评论 5621512329 问题 2: 不再 new QTextLayout 重新排版，
     // 直接从 snapshot.layout_generation + line.cache_slot 取已排好的 QTextLine，
     // 调用 xToCursor。para_text 仅用于 QChar↔byte offset 转换，不用于重新排版。
-    let qchar_off = super::qt_cache::get_paragraph_layout_x_to_cursor_on_line(
+    // Issue #901 第三十轮问题1: 使用带 epoch 校验的 checked 版本，
+    // 防止旧帧误取同槽新对象。line.layout_epoch 为 0 时退化为不校验（兼容旧路径）。
+    let qchar_off = super::qt_cache::get_paragraph_layout_x_to_cursor_on_line_checked(
         snapshot.layout_generation,
         line.cache_slot,
+        line.layout_epoch,
         line.qtextline_idx,
         relative,
     );
@@ -327,13 +331,16 @@ pub fn calculate_cursor_x_for_line(
         // Issue #658 评论 5621512329 问题 2: 不再 new QTextLayout 重新排版，
         // 直接从 snapshot.layout_generation + line.cache_slot 取已排好的 QTextLine，
         // 调用 cursorToX。para_text 仅用于 QChar↔byte offset 转换，不用于重新排版。
+        // Issue #901 第三十轮问题1: 使用带 epoch 校验的 checked 版本，
+        // 防止旧帧误取同槽新对象。line.layout_epoch 为 0 时退化为不校验（兼容旧路径）。
         let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.byte_end;
         let cursor_in_para = cursor.saturating_sub(line.para_start);
         let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para) as i32;
         let x = line.x
-            + super::qt_cache::get_paragraph_layout_cursor_to_x_on_line(
+            + super::qt_cache::get_paragraph_layout_cursor_to_x_on_line_checked(
                 snapshot.layout_generation,
                 line.cache_slot,
+                line.layout_epoch,
                 line.qtextline_idx,
                 cursor_qchar,
                 use_trailing,

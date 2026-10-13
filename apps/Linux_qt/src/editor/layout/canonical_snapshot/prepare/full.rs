@@ -181,26 +181,12 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
-            // Issue #658: 空段落也调用 prepare_paragraph_visual_snapshot 占 null slot，
-            // 保持 cache_slot 与文档段落一一对应。
-            // Issue #901 第二十九轮复核阻塞1: 全篇排版也通过 acquire_physical_slot_for_generation
-            // 分配物理槽（不再直接用 paragraph_idx），next_slot 正确递增。
-            let physical_slot =
-                super::super::super::qt_cache::acquire_physical_slot_for_generation(generation);
-            let _empty_canonical = prepare_paragraph_visual_snapshot(
-                paragraph_text,
-                paragraph_idx as usize,
-                font_size,
-                font_family,
-                available,
-                indent,
-                dpr,
-                text_color,
-                physical_slot,
-                line_spacing,
-                generation,
-                generate_animation_visuals,
-            );
+            // Issue #901 第三十轮问题2: 空段不分配 QTextLayout physical_slot。
+            // 空段没有 QTextLayout 对象，不需要 cache_slot >= 0，也不需要 layout_epoch。
+            // VisualLine 仍创建（有高度、光标几何），但 cache_slot = -1, layout_epoch = 0。
+            // hit-test 通过 para_text.is_empty() 跳过 Qt layout 查询，
+            // 渲染通过 text_lens[i] == 0 跳过 layout 检查，get_paragraph_layout(gen, -1) 返回 nullptr。
+            // 这样没有对象就没有需要登记、回收的物理槽，消除空段物理槽泄漏。
             visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: 0,
@@ -223,9 +209,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                 x_end_trailing: 0.0,
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
-                // Issue #901 第二十九轮复核阻塞1: cache_slot 是 acquire 分配的物理槽，
-                // 不再用 paragraph_idx，next_slot 正确递增。
-                cache_slot: physical_slot,
+                // Issue #901 第三十轮问题2: 空段不分配物理槽，cache_slot = -1。
+                cache_slot: -1,
                 // Issue #901 第二十轮阻塞1+3: logical_slot 是当前文档次序。
                 logical_slot: paragraph_idx,
                 // Issue #901 第二十轮阻塞2: 从 paragraph_ids 获取稳定 ParagraphId，
@@ -234,6 +219,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                     .get(paragraph_idx as usize)
                     .copied()
                     .unwrap_or(ParagraphId::INVALID),
+                // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+                layout_epoch: 0,
             });
             line_id += 1;
             y += line_height;
@@ -258,6 +245,9 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         // 分配物理槽（不再直接用 paragraph_idx），next_slot 正确递增。
         let physical_slot =
             super::super::super::qt_cache::acquire_physical_slot_for_generation(generation);
+        // Issue #901 第三十轮问题1: 获取 epoch，供 VisualLine.layout_epoch 校验。
+        let layout_epoch =
+            super::super::super::qt_cache::get_layout_epoch(generation, physical_slot);
         let canonical = prepare_paragraph_visual_snapshot(
             paragraph_text,
             paragraph_idx as usize,
@@ -328,6 +318,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
                     .get((paragraph_idx - 1) as usize)
                     .copied()
                     .unwrap_or(ParagraphId::INVALID),
+                // Issue #901 第三十轮问题1: layout_epoch 供光标/命中/渲染校验。
+                layout_epoch,
             });
             line_id += 1;
             y += actual_line_h;
@@ -345,23 +337,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     if text.is_empty() {
         let empty_ascent = get_font_ascent(font_family, font_size as f32);
         let empty_descent = get_font_descent(font_family, font_size as f32);
-        // Issue #901 第二十九轮复核阻塞1: 空文本也通过 acquire 分配物理槽。
-        let physical_slot =
-            super::super::super::qt_cache::acquire_physical_slot_for_generation(generation);
-        let _empty_canonical = prepare_paragraph_visual_snapshot(
-            "",
-            0,
-            font_size,
-            font_family,
-            available,
-            indent,
-            dpr,
-            text_color,
-            physical_slot,
-            line_spacing,
-            generation,
-            generate_animation_visuals,
-        );
+        // Issue #901 第三十轮问题2: 空文本不分配 QTextLayout physical_slot。
+        // 空段 cache_slot = -1, layout_epoch = 0，不调用 prepare_paragraph_visual_snapshot。
         visual_lines.push(VisualLine {
             id: line_id,
             byte_start: 0,
@@ -384,13 +361,16 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             x_end_trailing: 0.0,
             qt_ascent: empty_ascent,
             qt_descent: empty_descent,
-            cache_slot: physical_slot,
+            // Issue #901 第三十轮问题2: 空段不分配物理槽。
+            cache_slot: -1,
             logical_slot: 0,
             // Issue #901 第二十轮阻塞2: 从 paragraph_ids 获取稳定 ParagraphId。
             paragraph_id: paragraph_ids
                 .get(0)
                 .copied()
                 .unwrap_or(ParagraphId::INVALID),
+            // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+            layout_epoch: 0,
         });
         paragraphs.push(CanonicalParagraphSnapshot {
             paragraph_text: String::new(),
@@ -403,24 +383,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
     if text.ends_with('\n') {
         // Issue #901 第十四轮问题1: 段内相对存储 — 尾部换行空段的段顶 y。
         paragraph_top_y = y;
-        // Issue #658: 尾部换行产生的空段也占 null slot。
-        // Issue #901 第二十九轮复核阻塞1: 尾空段也通过 acquire 分配物理槽。
-        let physical_slot =
-            super::super::super::qt_cache::acquire_physical_slot_for_generation(generation);
-        let _empty_canonical = prepare_paragraph_visual_snapshot(
-            "",
-            paragraph_idx as usize,
-            font_size,
-            font_family,
-            available,
-            indent,
-            dpr,
-            text_color,
-            physical_slot,
-            line_spacing,
-            generation,
-            generate_animation_visuals,
-        );
+        // Issue #901 第三十轮问题2: 尾空段不分配 QTextLayout physical_slot。
+        // 空段 cache_slot = -1, layout_epoch = 0，不调用 prepare_paragraph_visual_snapshot。
         visual_lines.push(VisualLine {
             id: line_id,
             byte_start: 0,
@@ -443,13 +407,16 @@ pub(super) fn prepare_document_visual_snapshot_impl(
             x_end_trailing: 0.0,
             qt_ascent: 0.0,
             qt_descent: 0.0,
-            cache_slot: physical_slot,
+            // Issue #901 第三十轮问题2: 空段不分配物理槽。
+            cache_slot: -1,
             logical_slot: paragraph_idx,
             // Issue #901 第二十轮阻塞2: 从 paragraph_ids 获取稳定 ParagraphId。
             paragraph_id: paragraph_ids
                 .get(paragraph_idx as usize)
                 .copied()
                 .unwrap_or(ParagraphId::INVALID),
+            // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+            layout_epoch: 0,
         });
         // Issue #901 第二十三轮问题1: 为尾空段创建对应的 CanonicalParagraphSnapshot，
         // 保证 store entries、canonical paragraphs、VisualLine、ParagraphId 逐段一一对应。
@@ -822,7 +789,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // old_paras 构造和逐段比较。splice_info 为 None 时回退到全篇比较。
     // Issue #901 第二十九轮复核阻塞4: 传入 prev.paragraph_offset_index 供 O(1)/O(log n)
     // 查询旧文总长度和前缀/后缀段定位，避免遍历全体 store entries。
-    let (new_paras, splice_info): (Vec<(&str, bool)>, Option<(usize, usize)>) = {
+    // Issue #901 第三十轮问题4: 增量路径只含受影响段（ParasSource::Incremental），
+    // 不构造整章 new_paras/new_para_texts。前缀/后缀段由调用方从 prev 复用。
+    // 回退路径（边界情况）仍用整章切分（ParasSource::Full）。
+    let paras_source = {
         let store = &*paragraph_store;
         let offset_index = &*prev.paragraph_offset_index;
         if let Some((aff_start, aff_end)) = affected_text_range {
@@ -834,26 +804,27 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                     aff_start,
                     aff_end,
                 ) {
-                    Some((paras, pc, sc)) => (paras, Some((pc, sc))),
-                    None => (
+                    Some((pc, sc, affected)) => ParasSource::Incremental {
+                        prefix_count: pc,
+                        suffix_count: sc,
+                        affected,
+                    },
+                    None => ParasSource::Full(
                         super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
-                        None,
                     ),
                 }
             } else {
-                (
+                ParasSource::Full(
                     super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
-                    None,
                 )
             }
         } else {
-            (
+            ParasSource::Full(
                 super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text),
-                None,
             )
         }
     };
-    let new_para_count = new_paras.len();
+    let new_para_count = paras_source.para_count();
 
     // Issue #901 第五轮阻塞2: 用段落文本比较计算旧段 splice 范围和新段建立范围。
     // Enter 拆段（旧1段→新2段）和 Backspace 合段（旧2段→新1段）时，
@@ -865,7 +836,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十三轮问题2: 段落身份比较包含 hard_break。
     // new_paras 已含 hard_break（来自 split_paragraphs_with_hard_break）。
     // old_paras 从 prev.paragraphs 获取 content，从 prev.visual_lines 获取 hard_break。
-    let new_para_texts: Vec<&str> = new_paras.iter().map(|(p, _)| *p).collect();
+    // Issue #901 第三十轮问题4: 不构造整章 new_para_texts。增量路径只含受影响段文本。
+    let splice_info = paras_source.splice_info();
 
     let splice_ranges = if affected.full_relayout {
         ParagraphSpliceRanges {
@@ -891,6 +863,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         }
     } else {
         // 回退到全篇比较：构造 old_paras 并用 compute_old_new_paragraph_ranges。
+        // Issue #901 第三十轮问题4: Full 路径才有整章 new_paras；Incremental 路径
+        // 走 splice_info 分支，不会到达这里。如果到达这里（理论上不应发生），
+        // 从 store entries 构造 old_paras，new_paras 从 text 全文切分。
         let old_paras: Vec<(&str, bool)> = (0..prev_para_count)
             .map(|i| {
                 let content = prev.paragraphs[i].paragraph_text.as_str();
@@ -907,9 +882,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 (content, hard_break)
             })
             .collect();
+        let new_paras_full: Vec<(&str, bool)> = paras_source.full_paras().cloned().unwrap_or_else(|| {
+            super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(text)
+        });
         ParagraphLayoutStore::compute_old_new_paragraph_ranges(
             &old_paras,
-            &new_paras,
+            &new_paras_full,
         )
     };
 
@@ -918,6 +896,15 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let old_splice_end = splice_ranges.old_splice_end;
     let new_layout_start = splice_ranges.new_layout_start;
     let new_layout_end = splice_ranges.new_layout_end;
+
+    // Issue #901 第三十轮问题4: 只构造受影响段文本（不构造整章 new_para_texts）。
+    // update_affected_paragraph_texts 只访问 new_layout_start..new_layout_end 范围。
+    // affected_paras_list 含 (text, hard_break)，供 splice_affected_entries 和
+    // offset_index splice 使用。
+    let affected_paras_list: Vec<(&str, bool)> =
+        paras_source.affected_paras(new_layout_start, new_layout_end);
+    let new_para_texts: Vec<&str> =
+        affected_paras_list.iter().map(|(p, _)| *p).collect();
 
     // Issue #901 第二十四轮问题4: 提前计算 vl_start_idx/vl_end_idx，
     // 在 store 更新之前取走并 drop prev.paragraph_line_count_index，
@@ -960,13 +947,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 增量更新 store 的文本信息
     // Issue #901 第二十四轮问题4: 移到 take/drop prev.paragraph_line_count_index 之后，
     // 此时 paragraph_store.line_count_index 的 strong_count=1，Arc::make_mut 原地改不 COW 深复制。
+    // Issue #901 第三十轮问题4: 段落数变化时优先走局部 splice（splice_affected_entries），
+    // 只 splice 受影响 entries，前缀/后缀 entries 直接保留。失败时回退到 rebuild_from_text。
     {
-        let store_needs_rebuild = paragraph_store.paragraph_count() != new_paras.len()
-            || prev_para_count != new_paras.len();
+        let store_needs_rebuild = paragraph_store.paragraph_count() != new_para_count
+            || prev_para_count != new_para_count;
 
         if store_needs_rebuild {
-            paragraph_store.rebuild_from_text(
-                text,
+            // Issue #901 第三十轮问题4: 尝试局部 splice — 只删除/插入受影响的 entries，
+            // 前缀/后缀 entries 直接保留（含 Qt layout lease）。失败时回退到全篇重建。
+            let spliced = paragraph_store.splice_affected_entries(
+                old_splice_start,
+                old_splice_end,
+                new_layout_start,
+                new_layout_end,
+                &affected_paras_list,
                 font_size,
                 font_family,
                 line_spacing,
@@ -974,8 +969,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 padding,
                 width,
             );
+            if !spliced {
+                // 回退：全篇重建（正确性优先，边界情况不频繁）。
+                paragraph_store.rebuild_from_text(
+                    text,
+                    font_size,
+                    font_family,
+                    line_spacing,
+                    indent,
+                    padding,
+                    width,
+                );
+            }
         } else {
             // Issue #901 第五轮阻塞2: 用新段范围更新 store，不用 affected byte range。
+            // Issue #901 第三十轮问题4: new_para_texts 只含受影响段文本（从 new_layout_start 起）。
             paragraph_store.update_affected_paragraph_texts(
                 &new_para_texts,
                 new_layout_start,
@@ -1029,9 +1037,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 更前面的段若文本相同且都以 \n 结尾，hard_break 不变。
     // 该行位于 visual_lines[vl_start_idx - 1]，不在 splice 范围
     // [vl_start_idx, vl_end_idx) 内，可安全就地更新。
-    if new_layout_start > 0 && vl_start_idx > 0 && new_layout_start <= new_paras.len() {
+    // Issue #901 第三十轮问题4: 从 paras_source 获取前缀段末段 hard_break。
+    // Incremental 路径前缀段不在 affected 中，从 store entry 获取（store 已更新）；
+    // Full 路径从整章 Vec 获取。
+    if new_layout_start > 0 && vl_start_idx > 0 && new_layout_start <= new_para_count {
         let prev_seg_idx = new_layout_start - 1;
-        let new_hard_break = new_paras[prev_seg_idx].1;
+        let new_hard_break = paras_source
+            .get_para(prev_seg_idx, new_layout_start)
+            .map(|(_, hb)| hb)
+            .unwrap_or_else(|| {
+                // Incremental 路径前缀段不在 affected 中，从 store entry 获取。
+                paragraph_store
+                    .entry(prev_seg_idx)
+                    .map(|e| e.hard_break)
+                    .unwrap_or(false)
+            });
         visual_lines[vl_start_idx - 1].hard_break = new_hard_break;
     }
 
@@ -1071,36 +1091,44 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     let mut paragraph_top_y: f64 = y_start;
 
     // Issue #901 第五轮阻塞2: 用新段范围 new_layout_start..new_layout_end 建立新段
+    // Issue #901 第三十轮问题4: 从 paras_source 获取受影响段，不索引整章 new_paras。
     for para_idx in new_layout_start..new_layout_end {
-        let (paragraph_text, hard_break) = new_paras[para_idx];
+        let (paragraph_text, hard_break) = match paras_source.get_para(para_idx, new_layout_start) {
+            Some(para) => para,
+            None => {
+                // 防御性：get_para 返回 None 时从 store entry 获取文本。
+                // 正常路径不应触发，splice_ranges 保证 para_idx 在受影响范围内。
+                let entry = match paragraph_store.entry(para_idx) {
+                    Some(e) => e,
+                    None => break,
+                };
+                let seg_start = paragraph_start;
+                let seg_end = seg_start + entry.paragraph_text_len;
+                let text_ref = if seg_start <= seg_end && seg_end <= text.len() {
+                    // SAFETY: seg_start/seg_end 来自 store entry 的累计偏移，
+                    // 上一轮排版时已验证为 UTF-8 边界。
+                    &text[seg_start..seg_end]
+                } else {
+                    ""
+                };
+                (text_ref, entry.hard_break)
+            }
+        };
 
         // Issue #901 第十四轮问题1: 每段开始时记录段顶 y。
         paragraph_top_y = y;
 
         relayouted_indices.push(para_idx);
 
-        // Issue #901 第二十一轮问题1: 获取或分配该段的 Qt 物理槽号。
-        // physical_slot 与文档段序（logical_slot）无关，新段分配新槽，
-        // 复用段保持已有槽。避免新段覆盖存活段的 QTextLayout。
-        let physical_slot = paragraph_store.paragraph_physical_slot(para_idx, generation);
+        // Issue #901 第三十轮问题2: 空段不分配 QTextLayout physical_slot。
+        // 空段在下方单独处理，不调用 paragraph_physical_slot / prepare_paragraph_visual_snapshot。
+        // 非空段的 physical_slot / layout_epoch 在空段分支之后计算。
 
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
-            let _empty_canonical = prepare_paragraph_visual_snapshot(
-                paragraph_text,
-                paragraph_idx as usize,
-                font_size,
-                font_family,
-                available,
-                indent,
-                dpr,
-                text_color,
-                physical_slot,
-                line_spacing,
-                generation,
-                false,
-            );
+            // Issue #901 第三十轮问题2: 空段不分配物理槽，不调用 prepare_paragraph_visual_snapshot。
+            // VisualLine 仍创建（有高度、光标几何），但 cache_slot = -1, layout_epoch = 0。
             new_visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: 0,
@@ -1123,15 +1151,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 x_end_trailing: 0.0,
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
-                // Issue #901 第二十一轮问题1: cache_slot 是独立分配的 Qt 物理槽号，
-                // 与文档段序（logical_slot）无关，避免新段覆盖存活段的 QTextLayout。
-                cache_slot: physical_slot,
+                // Issue #901 第三十轮问题2: 空段不分配物理槽，cache_slot = -1。
+                cache_slot: -1,
                 // Issue #901 第二十轮阻塞1+3: logical_slot 是当前文档次序。
                 logical_slot: paragraph_idx,
                 // Issue #901 第十八轮问题4: 增量排版路径从 paragraph_store 获取稳定段落身份。
                 paragraph_id: paragraph_store
                     .paragraph_id_at(para_idx)
                     .unwrap_or(ParagraphId::INVALID),
+                // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+                layout_epoch: 0,
             });
             line_id += 1;
             y += line_height;
@@ -1146,10 +1175,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 ),
             });
 
+            // Issue #901 第三十轮问题2: update_layout_result 对空段设置 is_empty_laid_out = true，
+            // 不分配物理槽（cache_slot 保持 -1）。
             paragraph_store.update_layout_result(
                 para_idx,
                 generation,
-                physical_slot,
+                -1,
                 line_height,
                 1,
             );
@@ -1160,6 +1191,18 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             paragraph_idx += 1;
             continue;
         }
+
+        // Issue #901 第二十一轮问题1: 获取或分配该段的 Qt 物理槽号。
+        // physical_slot 与文档段序（logical_slot）无关，新段分配新槽，
+        // 复用段保持已有槽。避免新段覆盖存活段的 QTextLayout。
+        // Issue #901 第三十轮问题2: 仅非空段才分配物理槽。
+        let physical_slot = paragraph_store.paragraph_physical_slot(para_idx, generation);
+        // Issue #901 第三十轮问题1: 获取 epoch，供 VisualLine.layout_epoch 校验。
+        // 从 paragraph_store entry 获取（paragraph_physical_slot 已设置 entry.layout_epoch）。
+        let layout_epoch = paragraph_store
+            .entry(para_idx)
+            .map(|e| e.layout_epoch)
+            .unwrap_or(0);
 
         let canonical = prepare_paragraph_visual_snapshot(
             paragraph_text,
@@ -1221,6 +1264,8 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 paragraph_id: paragraph_store
                     .paragraph_id_at(para_idx)
                     .unwrap_or(ParagraphId::INVALID),
+                // Issue #901 第三十轮问题1: layout_epoch 供光标/命中/渲染校验。
+                layout_epoch,
             });
             line_id += 1;
             y += actual_line_h;
@@ -1304,31 +1349,35 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十一轮问题5: 用 Arc 共享 + Arc::make_mut COW。
     // prev 是 move 进来的，prev.paragraph_offset_index 用 mem::take 取出（refcount==1），
     // Arc::make_mut 原地改（O(1)），不深拷 Fenwick 底层数组。
-    // 段落数变化时用 rebuild（O(n)），段落数不变时用 update_paragraph_length（O(log n)）。
+    // 段落数变化时用局部 splice（O(k) 数据准备 + O(n) Fenwick 重建），
+    // 段落数不变时用 update_paragraph_length（O(k log n)）。
+    // Issue #901 第三十轮问题4: 段落数变化时不再遍历整章 new_paras 构造全量
+    // byte_lengths/qchar_lengths，改为只构造受影响段数据 + splice。
     let paragraph_offset_index = {
         let mut idx_arc = std::mem::take(&mut prev.paragraph_offset_index);
         let curr_count = paragraphs.len();
         if curr_count != prev_para_count {
-            // 段落数变化（Enter 拆段/Backspace 合段），重建偏移索引
-            let mut new_idx = ParagraphOffsetIndex::new();
-            let mut byte_lengths = Vec::with_capacity(curr_count);
-            let mut qchar_lengths = Vec::with_capacity(curr_count);
-            for (para_text, hard_break) in new_paras.iter() {
-                // 段落 byte/qchar 长度含尾部 '\n'（如果 hard_break）
-                byte_lengths.push(para_text.len() + if *hard_break { 1 } else { 0 });
-                qchar_lengths.push(
+            // 段落数变化（Enter 拆段/Backspace 合段），局部 splice 偏移索引。
+            // 只构造受影响段的 byte/qchar lengths，前缀/后缀段从旧索引保留。
+            // Issue #901 第三十轮问题4: 复用已构造的 affected_paras_list。
+            let mut new_byte_lengths = Vec::with_capacity(affected_paras_list.len());
+            let mut new_qchar_lengths = Vec::with_capacity(affected_paras_list.len());
+            for (para_text, hard_break) in &affected_paras_list {
+                new_byte_lengths.push(para_text.len() + if *hard_break { 1 } else { 0 });
+                new_qchar_lengths.push(
                     para_text.chars().map(|c| c.len_utf16()).sum::<usize>()
                         + if *hard_break { 1 } else { 0 },
                 );
             }
-            new_idx.rebuild(byte_lengths, qchar_lengths);
-            Arc::new(new_idx)
+            let idx = Arc::make_mut(&mut idx_arc);
+            // splice: 删除旧 [old_splice_start, old_splice_end)，插入新段。
+            idx.splice(old_splice_start, old_splice_end, new_byte_lengths, new_qchar_lengths);
+            idx_arc
         } else {
             // 段落数不变，COW 增量更新受影响段落的长度（O(k log n)）
             let idx = Arc::make_mut(&mut idx_arc);
             for para_idx in new_layout_start..new_layout_end {
-                if para_idx < new_paras.len() {
-                    let (para, hard_break) = new_paras[para_idx];
+                if let Some((para, hard_break)) = paras_source.get_para(para_idx, new_layout_start) {
                     let byte_len = para.len() + if hard_break { 1 } else { 0 };
                     let qchar_len = para.chars().map(|c| c.len_utf16()).sum::<usize>()
                         + if hard_break { 1 } else { 0 };
@@ -1360,12 +1409,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 
     // Issue #901 第二轮复核: 段落数变化时 height_index 的 ensure_len 用 resize 会导致
     // 高度错位（resize 只在末尾添加/截断，但拆段/合段变化在中间位置）。
-    // 段落数变化时用 rebuild 从权威段序构造高度（O(n) 但不涉及 QTextLayout），
+    // 段落数变化时用局部 splice（O(k) 数据准备 + O(n) BIT 重建，不涉及 QTextLayout），
     // 段落数不变时用 update_heights_incremental 只更新受影响段（O(k log n)）。
     // prev_para_count 已在 take 之前定义（line 683），此处直接复用。
     //
-    // Issue #901 第二十一轮问题5: 段落数变化时（Enter 拆段/Backspace 合段，不频繁），
-    // O(段落数) 构造但不涉及 QTextLayout。
+    // Issue #901 第三十轮问题4: 段落数变化时不再构造全量 heights 数组，
+    // 改为只构造受影响段高度 + splice。前缀/后缀段高度从旧索引保留。
     let curr_para_count = paragraphs.len();
     // Issue #901 第二十九轮阻塞4: 取走 prev 的 height_index Arc 并显式释放，
     // 使 EditorLayout.height_index 的 strong_count 降为 1，Arc::make_mut 原地改不 COW 深复制。
@@ -1383,16 +1432,11 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         // 增量路径保留了复用后缀的旧 para_start/logical_slot，raw 段号可能重复/错乱
         //（如 甲\n乙 → \n甲\n乙 后 raw logical_slot = [0,0,1]），
         // extract_paragraph_heights 用 raw para_start 去重会把不同段的高度误合并。
-        let mut heights = vec![0.0f64; curr_para_count];
 
-        // 前缀未改段 [0, new_layout_start)：从 prev height_index 获取
-        for i in 0..new_layout_start {
-            heights[i] = prev_height_index.height_at(i);
-        }
-
-        // 新排版段 [new_layout_start, new_layout_end)：从 splice 后的新行按段聚合。
+        // 新排版段高度：从 splice 后的新行按段聚合。
         // splice 后新行在 [vl_start_idx, vl_start_idx + new_affected_line_count) 范围内，
         // 这些行的 para_start 是主循环中设置的正确新段索引（paragraph_idx）。
+        let mut new_heights: Vec<f64> = Vec::with_capacity(new_layout_end - new_layout_start);
         {
             use std::collections::HashMap;
             let mut para_heights: HashMap<usize, f64> = HashMap::new();
@@ -1401,24 +1445,17 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 *para_heights.entry(vl.para_start).or_insert(0.0) += vl.height;
             }
             for i in new_layout_start..new_layout_end {
-                heights[i] = para_heights.get(&i).copied().unwrap_or(0.0);
+                new_heights.push(para_heights.get(&i).copied().unwrap_or(0.0));
             }
-        }
-
-        // 后缀未改段 [new_layout_end, curr_para_count)：从 prev height_index 获取。
-        // 旧段对应 [old_splice_end, prev_para_count)。
-        let suffix_new_start = new_layout_end;
-        let suffix_old_start = old_splice_end;
-        for (new_i, old_i) in
-            (suffix_new_start..curr_para_count).zip(suffix_old_start..prev_para_count)
-        {
-            heights[new_i] = prev_height_index.height_at(old_i);
         }
 
         // Issue #901 第二十九轮阻塞4: 释放 prev_height_index Arc，
         // 使 EditorLayout.height_index 的 strong_count=1，Arc::make_mut 不 COW。
         drop(prev_height_index);
-        std::sync::Arc::make_mut(height_index).rebuild(heights);
+        // Issue #901 第三十轮问题4: 局部 splice — 删除旧 [old_splice_start, old_splice_end)，
+        // 插入新受影响段高度。前缀/后缀段高度从旧索引保留。
+        std::sync::Arc::make_mut(height_index)
+            .splice(old_splice_start, old_splice_end, new_heights);
     } else {
         // 段落数不变，只更新受影响段落的高度（O(k log n)）
         // Issue #901 第十六轮问题3: 从新行范围聚合高度，不遍历全章 visual_lines。
@@ -1494,6 +1531,102 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     snapshot
 }
 
+/// Issue #901 第三十轮问题4: 段落来源 — 区分增量路径和回退路径。
+///
+/// - `Incremental`：只含受影响段 + prefix/suffix 计数，不构造整章 new_paras。
+///   `new_para_count = prefix_count + affected.len() + suffix_count`。
+///   前缀/后缀段由调用方从 prev 的 VisualLine/store entry 复用。
+/// - `Full`：整章切分（回退路径，边界情况，不频繁）。
+enum ParasSource<'a> {
+    Incremental {
+        prefix_count: usize,
+        suffix_count: usize,
+        affected: Vec<(&'a str, bool)>,
+    },
+    Full(Vec<(&'a str, bool)>),
+}
+
+impl<'a> ParasSource<'a> {
+    /// 返回总段落数。
+    fn para_count(&self) -> usize {
+        match self {
+            ParasSource::Incremental {
+                prefix_count,
+                suffix_count,
+                affected,
+            } => *prefix_count + affected.len() + *suffix_count,
+            ParasSource::Full(paras) => paras.len(),
+        }
+    }
+
+    /// 返回 splice_info：(prefix_count, suffix_count)。
+    /// Incremental 路径返回 Some，Full 路径返回 None（走全篇比较）。
+    fn splice_info(&self) -> Option<(usize, usize)> {
+        match self {
+            ParasSource::Incremental {
+                prefix_count,
+                suffix_count,
+                ..
+            } => Some((*prefix_count, *suffix_count)),
+            ParasSource::Full(_) => None,
+        }
+    }
+
+    /// 获取受影响段文本切片，用于 `update_affected_paragraph_texts`。
+    /// Incremental 路径返回 `affected` 的文本（只含受影响段）；
+    /// Full 路径返回 `paras[new_layout_start..new_layout_end]` 的文本。
+    fn affected_texts(&self, new_layout_start: usize, new_layout_end: usize) -> Vec<&str> {
+        match self {
+            ParasSource::Incremental { affected, .. } => {
+                affected.iter().map(|(p, _)| *p).collect()
+            }
+            ParasSource::Full(paras) => {
+                let start = new_layout_start.min(paras.len());
+                let end = new_layout_end.min(paras.len());
+                paras[start..end].iter().map(|(p, _)| *p).collect()
+            }
+        }
+    }
+
+    /// 获取段 `para_idx` 的 `(text, hard_break)`。
+    /// Incremental 路径：受影响段从 `affected` 获取（用 local index），
+    ///   前缀/后缀段返回 None（调用方应从 store entry 获取）。
+    /// Full 路径：直接从整章 Vec 获取。
+    fn get_para(&self, para_idx: usize, new_layout_start: usize) -> Option<(&str, bool)> {
+        match self {
+            ParasSource::Incremental {
+                affected, ..
+            } => {
+                let local_idx = para_idx.checked_sub(new_layout_start)?;
+                affected.get(local_idx).copied()
+            }
+            ParasSource::Full(paras) => paras.get(para_idx).copied(),
+        }
+    }
+
+    /// 获取整章段落引用（仅 Full 路径有）。
+    /// Incremental 路径返回 None（不构造整章 Vec）。
+    fn full_paras(&self) -> Option<&Vec<(&str, bool)>> {
+        match self {
+            ParasSource::Incremental { .. } => None,
+            ParasSource::Full(paras) => Some(paras),
+        }
+    }
+
+    /// 获取受影响段的 `(text, hard_break)` 列表。
+    /// Incremental 路径返回 `affected`；Full 路径返回 `paras[new_layout_start..new_layout_end]`。
+    fn affected_paras(&self, new_layout_start: usize, new_layout_end: usize) -> Vec<(&str, bool)> {
+        match self {
+            ParasSource::Incremental { affected, .. } => affected.clone(),
+            ParasSource::Full(paras) => {
+                let start = new_layout_start.min(paras.len());
+                let end = new_layout_end.min(paras.len());
+                paras[start..end].to_vec()
+            }
+        }
+    }
+}
+
 /// Issue #901 第二十六轮复核缺口4 + 第二十七轮复核问题1+4: 从受影响范围增量拼接
 /// new_paras，避免全文切分。
 ///
@@ -1537,7 +1670,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 /// `cumulative < expanded_start && seg_end_cumulative <= expanded_start`。旧条件在
 /// `cumulative == expanded_start`（空段）时仍可能成立，导致空段被误当前缀段。
 ///
-/// **Bug 2（性能）**：返回 `(new_paras, prefix_count, suffix_count)`，调用方可直接
+/// **Bug 2（性能）**：返回 `(prefix_count, suffix_count, affected_paras)`，调用方可直接
 /// 构造 `ParagraphSpliceRanges`，避免构造全篇 `old_paras` 和逐段比较。
 ///
 /// # 第二十九轮复核阻塞4 修复
@@ -1553,13 +1686,21 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
 /// 起始索引，后缀段直接从该索引切片构造，不再从 `prefix_count` 逐段扫描到末尾。
 ///
 /// 当 `offset_index` 为空或长度与 store 不一致时，回退到线性扫描（O(n)），保证正确性。
+///
+/// # 第三十轮问题4 修复 — 消除整章临时数组
+///
+/// 返回 `(prefix_count, suffix_count, affected_paras)`，**只包含受影响段**。
+/// 前缀段和后缀段只计数（`prefix_count`/`suffix_count`），不复制文本切片到 Vec。
+/// 调用方（`prepare_incremental_visual_snapshot_impl`）直接从 prev 的 VisualLine/
+/// store entry 复用未改段，不拼出另一份整章 `new_paras`。
+/// 前缀/后缀段仍做 UTF-8 边界检查（防御性），失败返回 None 回退全文切分。
 fn build_new_paras_from_affected_range<'a>(
     text: &'a str,
     store: &super::super::super::paragraph_layout_store::ParagraphLayoutStore,
     offset_index: &super::super::super::paragraph_height_index::ParagraphOffsetIndex,
     aff_start: usize,
     aff_end: usize,
-) -> Option<(Vec<(&'a str, bool)>, usize, usize)> {
+) -> Option<(usize, usize, Vec<(&'a str, bool)>)> {
     let text_len = text.len();
     let n = store.paragraph_count();
 
@@ -1607,7 +1748,11 @@ fn build_new_paras_from_affected_range<'a>(
         }
     };
 
-    let mut new_paras: Vec<(&str, bool)> = Vec::new();
+    // Issue #901 第三十轮问题4: 只收集受影响段，前缀/后缀段只计数不复制。
+    // 前缀/后缀段内容不变，调用方（full.rs）直接从 prev 的 VisualLine/store entry
+    // 复用未改段，不拼出另一份整章 new_paras。仍做 UTF-8 边界检查（防御性），
+    // 失败返回 None 回退全文切分。
+    let mut affected_paras: Vec<(&str, bool)> = Vec::new();
 
     // Issue #901 第二十九轮复核阻塞4: 当 offset_index 非空且长度匹配 store 时，
     // 用 O(log n) 二分查找定位前缀/后缀段，避免 O(n) 线性扫描。
@@ -1615,7 +1760,7 @@ fn build_new_paras_from_affected_range<'a>(
 
     // 2. 前缀段：旧累计到段末（含 '\n'）<= expanded_start。
     //    这些段在 expanded_start 之前，新旧文本位置和内容都不变（编辑发生在之后）。
-    //    用累计长度定位（不依赖 document_byte_start）。
+    //    Issue #901 第三十轮问题4: 只计数不复制。前缀段文本由调用方从 prev 复用。
     //    Issue #901 第二十八轮复核问题1: 条件改为 cumulative < expanded_start（严格小于）
     //    且 seg_end_cumulative <= expanded_start。旧条件 seg_end_cumulative <= expanded_start
     //    在 cumulative == expanded_start（空段，paragraph_text_len==0 && !hard_break）时
@@ -1635,7 +1780,7 @@ fn build_new_paras_from_affected_range<'a>(
         while pc > 0 && offset_index.paragraph_byte_start(pc - 1) >= expanded_start {
             pc -= 1;
         }
-        // 构造前缀段并做 UTF-8 边界检查。
+        // UTF-8 边界检查（防御性），不切片 push。
         for i in 0..pc {
             let entry = store.entry(i)?;
             let seg_start = offset_index.paragraph_byte_start(i);
@@ -1646,13 +1791,10 @@ fn build_new_paras_from_affected_range<'a>(
             {
                 return None; // 越界或 UTF-8 边界检查失败，回退全文切分
             }
-            // SAFETY: seg_start/seg_end 已通过 is_char_boundary 检查。
-            let seg_text = &text[seg_start..seg_end];
-            new_paras.push((seg_text, entry.hard_break));
         }
         prefix_count = pc;
     } else {
-        // 回退：线性扫描前缀段。
+        // 回退：线性扫描前缀段（只计数，不切片）。
         let mut cumulative = 0usize;
         for i in 0..n {
             let entry = store.entry(i)?;
@@ -1668,9 +1810,6 @@ fn build_new_paras_from_affected_range<'a>(
                 {
                     return None;
                 }
-                // SAFETY: seg_start/seg_end 已通过 is_char_boundary 检查。
-                let seg_text = &text[seg_start..seg_end];
-                new_paras.push((seg_text, entry.hard_break));
                 prefix_count += 1;
             } else {
                 break;
@@ -1710,11 +1849,13 @@ fn build_new_paras_from_affected_range<'a>(
     }
     // 如果 seg_start == expanded_end 且 expanded_end < text_len，
     // 不产生尾空段（后面还有正文，尾空段由后缀段处理）。
-    new_paras.extend(affected_paras);
+    // Issue #901 第三十轮问题4: affected_paras 只含受影响段，不 extend 到 new_paras。
 
     // 4. 后缀段：新位置 = 旧累计 + delta >= expanded_end。
     //    这些段内容不变，但在新文本中位置偏移了 delta。从 prefix_count 开始遍历，
     //    跳过受影响段（不满足条件的），收集后缀段。只读 entry 元数据，不重新切分。
+    //    Issue #901 第三十轮问题4: 只计数 suffix_count，不切片 push。后缀段文本由
+    //    调用方从 prev 复用。仍做 UTF-8 边界检查（防御性），失败返回 None。
     //    Issue #901 第二十八轮复核问题4: 同时计数 suffix_count，供调用方直接构造
     //    ParagraphSpliceRanges，避免全篇 old_paras 构造和逐段比较。
     //    Issue #901 第二十八轮复核问题1: 后缀段判断条件从 new_seg_start >= expanded_end
@@ -1742,7 +1883,7 @@ fn build_new_paras_from_affected_range<'a>(
             // paragraph_byte_start(j+1) > threshold，是第一个后缀段候选。
             offset_index.byte_to_paragraph(threshold).max(prefix_count)
         };
-        // 从 suffix_start 开始遍历后缀段。
+        // 从 suffix_start 开始遍历后缀段（只计数，不切片 push）。
         // 用 offset_index.paragraph_byte_start(i) O(log n) 获取累计长度，
         // 不需要从 0 重新累加到 suffix_start。
         for i in suffix_start..n {
@@ -1761,15 +1902,12 @@ fn build_new_paras_from_affected_range<'a>(
                 {
                     return None; // 越界或 UTF-8 边界检查失败，回退全文切分
                 }
-                // SAFETY: new_seg_start/new_seg_end 已通过 is_char_boundary 检查。
-                let seg_text = &text[new_seg_start..new_seg_end];
-                new_paras.push((seg_text, entry.hard_break));
                 suffix_count += 1;
             }
             // 不满足条件的段（空段在 expanded_end 边界）跳过，与原实现行为一致。
         }
     } else {
-        // 回退：线性扫描后缀段。
+        // 回退：线性扫描后缀段（只计数，不切片 push）。
         let mut cumulative = 0usize;
         for i in 0..prefix_count {
             let entry = store.entry(i)?;
@@ -1790,16 +1928,13 @@ fn build_new_paras_from_affected_range<'a>(
                 {
                     return None; // 越界或 UTF-8 边界检查失败，回退全文切分
                 }
-                // SAFETY: new_seg_start/new_seg_end 已通过 is_char_boundary 检查。
-                let seg_text = &text[new_seg_start..new_seg_end];
-                new_paras.push((seg_text, entry.hard_break));
                 suffix_count += 1;
             }
             cumulative += seg_len_with_break;
         }
     }
 
-    Some((new_paras, prefix_count, suffix_count))
+    Some((prefix_count, suffix_count, affected_paras))
 }
 
 /// 检查排版参数是否变化。
@@ -2006,21 +2141,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
             if !reused_from_prev {
                 if paragraph_text.is_empty() {
-                    // Issue #658: 空段落也占 null slot。
-                    let _empty_canonical = prepare_paragraph_visual_snapshot(
-                        paragraph_text,
-                        paragraph_start,
-                        font_size,
-                        font_family,
-                        available,
-                        indent,
-                        dpr,
-                        Some(text_color),
-                        current_para_idx as i32,
-                        line_spacing,
-                        generation,
-                        generate_animation_visuals,
-                    );
+                    // Issue #901 第三十轮问题2: 空段不分配物理槽，不调用 prepare_paragraph_visual_snapshot。
                     visual_lines.push(VisualLine {
                         id: line_id,
                         byte_start: paragraph_start,
@@ -2043,10 +2164,13 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         x_end_trailing: 0.0,
                         qt_ascent: get_font_ascent(font_family, font_size as f32),
                         qt_descent: get_font_descent(font_family, font_size as f32),
-                        cache_slot: current_para_idx as i32,
+                        // Issue #901 第三十轮问题2: 空段不分配物理槽。
+                        cache_slot: -1,
                         logical_slot: current_para_idx as i32,
                         // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                         paragraph_id: ParagraphId::INVALID,
+                        // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+                        layout_epoch: 0,
                     });
                     line_id += 1;
                     y += line_height;
@@ -2103,6 +2227,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                             logical_slot: current_para_idx as i32,
                             // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                             paragraph_id: ParagraphId::INVALID,
+                layout_epoch: 0,
                         });
                         line_id += 1;
                         y += actual_line_h;
@@ -2120,47 +2245,36 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
-            // Issue #658: 空段落也占 null slot。
-            let _empty_canonical = prepare_paragraph_visual_snapshot(
-                paragraph_text,
-                paragraph_start,
-                font_size,
-                font_family,
-                available,
-                indent,
-                dpr,
-                Some(text_color),
-                current_para_idx as i32,
-                line_spacing,
-                generation,
-                generate_animation_visuals,
-            );
-        visual_lines.push(VisualLine {
-            id: line_id,
-            byte_start: paragraph_start,
-            byte_end: paragraph_start,
-            qchar_start: paragraph_qchar_start,
-            qchar_end: paragraph_qchar_start,
-            hard_break,
-            x: padding + indent,
-            y,
-            width: 0.0,
-            height: line_height,
-            para_text: String::new(),
-            para_start: paragraph_start,
-            qtextline_idx: 0,
-            para_qchar_start: 0,
-            para_qchar_end: 0,
-            line_wrap_width: available - indent,
-            line_indent_x: indent,
-            para_indent: indent,
-            x_end_trailing: 0.0,
-            qt_ascent: empty_ascent,
-            qt_descent: empty_descent,
-            cache_slot: current_para_idx as i32,
-            logical_slot: current_para_idx as i32,
-            // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
-            paragraph_id: ParagraphId::INVALID,
+            // Issue #901 第三十轮问题2: 空段不分配物理槽，不调用 prepare_paragraph_visual_snapshot。
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: paragraph_start,
+                byte_end: paragraph_start,
+                qchar_start: paragraph_qchar_start,
+                qchar_end: paragraph_qchar_start,
+                hard_break,
+                x: padding + indent,
+                y,
+                width: 0.0,
+                height: line_height,
+                para_text: String::new(),
+                para_start: paragraph_start,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: available - indent,
+                line_indent_x: indent,
+                para_indent: indent,
+                x_end_trailing: 0.0,
+                qt_ascent: empty_ascent,
+                qt_descent: empty_descent,
+                // Issue #901 第三十轮问题2: 空段不分配物理槽。
+                cache_slot: -1,
+                logical_slot: current_para_idx as i32,
+                // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
+                paragraph_id: ParagraphId::INVALID,
+                // Issue #901 第三十轮问题2: 空段无 layout，layout_epoch = 0。
+                layout_epoch: 0,
         });
             line_id += 1;
             y += line_height;
@@ -2239,6 +2353,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 logical_slot: current_para_idx as i32,
                 // Issue #901 第十八轮问题4: 此路径无 paragraph_store，用 INVALID。
                 paragraph_id: ParagraphId::INVALID,
+                layout_epoch: 0,
             });
             line_id += 1;
             y += actual_line_h;
@@ -2295,6 +2410,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             logical_slot: current_para_idx as i32,
             // Issue #901 第十八轮问题4: 尾部换行新空段，用 INVALID。
             paragraph_id: ParagraphId::INVALID,
+                layout_epoch: 0,
         });
     }
 

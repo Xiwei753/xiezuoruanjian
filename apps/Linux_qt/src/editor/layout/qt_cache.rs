@@ -160,6 +160,44 @@ cpp! {{
         return pos;
     }
 
+    // Issue #901 第三十轮问题1: 带 epoch 校验的 cursorToX。
+    // 通过 get_paragraph_layout_checked 校验 epoch，防止旧帧误取同槽新对象。
+    // epoch 不匹配或 layout 不存在时返回 0.0。
+    double get_paragraph_layout_cursor_to_x_on_line_checked(
+        uint64_t gen, int slot, uint64_t epoch, int qline, int cursor_qchar, bool use_trailing
+    ) {
+        QTextLayout* layout = get_paragraph_layout_checked(gen, slot, epoch);
+        if (!layout) return 0.0;
+        if (qline < 0 || qline >= layout->lineCount()) return 0.0;
+        QTextLine line = layout->lineAt(qline);
+        if (!line.isValid()) return 0.0;
+        int line_start = line.textStart();
+        int line_end = line_start + line.textLength();
+        int pos = cursor_qchar;
+        if (pos < line_start) pos = line_start;
+        if (pos > line_end) pos = line_end;
+        return line.cursorToX(pos, use_trailing ? QTextLine::Trailing : QTextLine::Leading) - line.x();
+    }
+
+    // Issue #901 第三十轮问题1: 带 epoch 校验的 xToCursor。
+    // 通过 get_paragraph_layout_checked 校验 epoch，防止旧帧误取同槽新对象。
+    // epoch 不匹配或 layout 不存在时返回 0。
+    int get_paragraph_layout_x_to_cursor_on_line_checked(
+        uint64_t gen, int slot, uint64_t epoch, int qline, double x
+    ) {
+        QTextLayout* layout = get_paragraph_layout_checked(gen, slot, epoch);
+        if (!layout) return 0;
+        if (qline < 0 || qline >= layout->lineCount()) return 0;
+        QTextLine line = layout->lineAt(qline);
+        if (!line.isValid()) return 0;
+        int line_start = line.textStart();
+        int line_end = line_start + line.textLength();
+        int pos = line.xToCursor(x + line.x());
+        if (pos < line_start) pos = line_start;
+        if (pos > line_end) pos = line_end;
+        return pos;
+    }
+
     // Issue #658 评论 5620035970 问题 1+2: 按 generation + cache_slot 写指定位置，
     // 不再 push_back。空段落也占一个明确的 null slot，
     // 保持 cache_slot 与文档段落一一对应，避免越界访问。
@@ -228,6 +266,9 @@ cpp! {{
         // epoch 保持 acquire 时设的值（freelist 复用时已递增，新槽时为 0）。
     }
 
+    // Issue #901 第三十轮问题2: deprecated — 空段不再分配物理槽。
+    // full.rs 中空段不再调用 prepare_paragraph_visual_snapshot（cache_slot 传 -1），
+    // 此函数保留兼容但不应再被触发。空段没有 QTextLayout 对象，不需要占位 null slot。
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot) {
         auto* lg = ensure_layout_generation(gen);
         auto& layouts = lg->layouts;
@@ -249,6 +290,8 @@ cpp! {{
     // Issue #901 第二十八轮复核问题3: 增加布局引用计数，返回当前 epoch。
     // 用于 snapshot/动画帧持有额外引用。调用方应保存返回的 epoch，
     // 释放时传给 release_layout_ref(gen, slot, epoch)。
+    // Issue #901 第三十轮问题3: 此函数不校验传入 epoch，也不验证 slot 有有效布局，
+    // 已被 retain_layout_ref 替代。保留仅供 deprecated 兼容。
     uint64_t add_layout_ref(uint64_t gen, int slot) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return 0;
@@ -258,6 +301,26 @@ cpp! {{
         if (slot < 0 || slot >= (int)layouts.size()) return 0;
         refcounts[slot] += 1;
         return epochs[slot];
+    }
+
+    // Issue #901 第三十轮问题3: 安全的引用计数增加 — 校验 epoch 且要求 slot 有有效布局。
+    // 只有 epoch 完全一致且 layouts[slot] 非空才增加引用，返回 true。
+    // epoch 不匹配（slot 已被复用，epoch 递增）或 slot 无有效布局时返回 false，不增加引用。
+    // 这取代了 add_layout_ref 的不安全行为：add_layout_ref 只根据裸 gen/slot 加引用，
+    // 既不验证传入的旧 epoch，也不要求 layouts[slot] 非空，导致旧帧误绑定到新文字。
+    bool retain_layout_ref(uint64_t gen, int slot, uint64_t expected_epoch) {
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return false;
+        auto& layouts = lg->layouts;
+        auto& refcounts = lg->refcounts;
+        auto& epochs = lg->epochs;
+        if (slot < 0 || slot >= (int)layouts.size()) return false;
+        // epoch 不匹配：旧帧试图 retain 已被复用的槽，拒绝。
+        if (epochs[slot] != expected_epoch) return false;
+        // slot 无有效布局：拒绝。
+        if (!layouts[slot]) return false;
+        refcounts[slot] += 1;
+        return true;
     }
 
     // Issue #901 第二十八轮复核问题3: 减少布局引用计数，带 epoch 校验。
@@ -425,6 +488,68 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
     })
 }
 
+/// Issue #901 第三十轮问题1: 带 epoch 校验的 cursorToX 查询。
+///
+/// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
+/// 防止旧帧误取同槽新对象。epoch 不匹配或 layout 不存在时返回 0.0。
+///
+/// `epoch` 为 0 时不校验（退化为旧行为，兼容未记录 epoch 的旧路径）。
+///
+/// SAFETY: GUI thread only; 查询不修改 cache 状态。
+pub fn get_paragraph_layout_cursor_to_x_on_line_checked(
+    gen: u64,
+    slot: i32,
+    epoch: u64,
+    qline: i32,
+    cursor_qchar: i32,
+    use_trailing: bool,
+) -> f64 {
+    if epoch == 0 {
+        // 兼容旧路径：epoch 未记录，退化为不校验。
+        return get_paragraph_layout_cursor_to_x_on_line(gen, slot, qline, cursor_qchar, use_trailing);
+    }
+    cpp!(unsafe [
+        gen as "uint64_t",
+        slot as "int",
+        epoch as "uint64_t",
+        qline as "int",
+        cursor_qchar as "int",
+        use_trailing as "bool"
+    ] -> f64 as "double" {
+        return get_paragraph_layout_cursor_to_x_on_line_checked(gen, slot, epoch, qline, cursor_qchar, use_trailing);
+    })
+}
+
+/// Issue #901 第三十轮问题1: 带 epoch 校验的 xToCursor 查询。
+///
+/// 通过 C++ `get_paragraph_layout_checked(gen, slot, epoch)` 校验 epoch，
+/// 防止旧帧误取同槽新对象。epoch 不匹配或 layout 不存在时返回 0。
+///
+/// `epoch` 为 0 时不校验（退化为旧行为，兼容未记录 epoch 的旧路径）。
+///
+/// SAFETY: GUI thread only; 查询不修改 cache 状态。
+pub fn get_paragraph_layout_x_to_cursor_on_line_checked(
+    gen: u64,
+    slot: i32,
+    epoch: u64,
+    qline: i32,
+    x: f64,
+) -> i32 {
+    if epoch == 0 {
+        // 兼容旧路径：epoch 未记录，退化为不校验。
+        return get_paragraph_layout_x_to_cursor_on_line(gen, slot, qline, x);
+    }
+    cpp!(unsafe [
+        gen as "uint64_t",
+        slot as "int",
+        epoch as "uint64_t",
+        qline as "int",
+        x as "double"
+    ] -> i32 as "int" {
+        return get_paragraph_layout_x_to_cursor_on_line_checked(gen, slot, epoch, qline, x);
+    })
+}
+
 /// Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题2: 释放指定 (generation, slot) 的 QTextLayout。
 ///
 /// 删除该槽的 QTextLayout 并将槽置 nullptr，同时把 slot 回收到**同一 generation**
@@ -458,10 +583,41 @@ pub fn acquire_physical_slot_for_generation(gen: u64) -> i32 {
 /// 释放时传给 [`release_layout_ref`]`(gen, slot, epoch)`。
 /// 若 generation/slot 不存在则返回 0。
 ///
+/// # Deprecated
+///
+/// 此函数不校验传入 epoch，也不验证 slot 有有效布局。
+/// 新代码应使用 [`retain_layout_ref`] 替代 — 后者要求 epoch 匹配且 slot 有有效布局
+/// 才增加引用，防止旧帧误绑定到新文字。
+///
 /// SAFETY: GUI thread only; gen/slot 应是之前 set_paragraph_layout_slot_gen 写入的。
+#[deprecated(note = "使用 retain_layout_ref 替代，后者校验 epoch 且要求 slot 有有效布局")]
 pub fn add_layout_ref(gen: u64, slot: i32) -> u64 {
     cpp!(unsafe [gen as "uint64_t", slot as "int"] -> u64 as "uint64_t" {
         return add_layout_ref(gen, slot);
+    })
+}
+
+/// Issue #901 第三十轮问题3: 安全的引用计数增加 — 校验 epoch 且要求 slot 有有效布局。
+///
+/// 只有 **epoch 完全一致且 slot 有有效布局** 才增加引用，返回 `true`。
+/// epoch 不匹配（slot 已被复用，epoch 递增）或 slot 无有效布局时返回 `false`，
+/// 不增加引用。
+///
+/// 这取代了 [`add_layout_ref`] 的不安全行为：`add_layout_ref` 只根据裸 gen/slot
+/// 加引用，既不验证传入的旧 epoch，也不要求 layouts[slot] 非空，导致旧帧误绑定
+/// 到新文字。
+///
+/// # 安全保证
+///
+/// 旧帧拿 `(gen=1, slot=0, epoch=0)`，Store 将旧对象释放并回收 slot0，
+/// 随后新段复用该槽 epoch 变成 1；旧帧这时调用 `retain_layout_ref(1, 0, 0)`，
+/// epoch 不匹配（0 != 1），返回 `false`，**不给新文字的布局加引用**。
+///
+/// SAFETY: GUI thread only; gen/slot/expected_epoch 应是之前
+/// acquire_physical_slot_for_generation 分配并 install_layout_slot_gen 安装 layout 的。
+pub fn retain_layout_ref(gen: u64, slot: i32, expected_epoch: u64) -> bool {
+    cpp!(unsafe [gen as "uint64_t", slot as "int", expected_epoch as "uint64_t"] -> bool as "bool" {
+        return retain_layout_ref(gen, slot, expected_epoch);
     })
 }
 
