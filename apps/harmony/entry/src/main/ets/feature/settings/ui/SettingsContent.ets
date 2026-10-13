@@ -17,6 +17,8 @@ import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
+import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
+import { SyncOutcome } from '../presentation/SyncOperationController'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
@@ -183,8 +185,8 @@ export struct SettingsContent {
   }
 
   // ── 同步后的消息解析 ──
-  // 直接使用 outcome.messageKey 而不是机械构造 error.${errorKey}，
-  // 避免 Core 返回的 RETRYABLE_NETWORK 变成不存在的 error.RETRYABLE_NETWORK 后落到「内部错误」。
+  // 把解析出的 SyncOutcome/统一展示数据交给 SyncOutcomePresenter.present，
+  // 使顶栏 Toast 与设置页显示完全一致的结果，复用同一份 MessageKeyMapper 映射。
   private resolveSyncMessage(): string {
     const msg = this.viewModel.syncMessage
     if (!msg || msg.length === 0) {
@@ -194,22 +196,19 @@ export struct SettingsContent {
     // 解析 ViewModel 传递的 JSON 载荷
     try {
       const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
-      if (payload.phase === 'success') {
-        const count = payload.totalDownloaded ?? 0
-        const format = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id)
-        return format.replace('%s', count.toString())
-      } else if (payload.phase === 'error') {
-        // 优先使用 messageKey（Core 类型化错误），不再构造 error.${errorKey}
-        if (payload.messageKey && payload.messageKey.trim().length > 0) {
-          const args = payload.messageArgs ? this.convertMessageArgs(payload.messageArgs) : undefined
-          return MessageKeyMapper.resolveMessage(getContext(this), payload.messageKey, args, payload.errorCode)
-        }
-        // 回退到 errorCode
-        if (payload.errorCode && payload.errorCode.trim().length > 0) {
-          return MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, payload.errorCode)
-        }
-        return getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+      // 构造 SyncOutcome，交给 SyncOutcomePresenter 统一展示
+      const outcome: SyncOutcome = {
+        phase: payload.phase,
+        message: '',
+        messageKey: payload.messageKey,
+        messageArgs: payload.messageArgs,
+        errorCategory: payload.errorCategory,
+        errorCode: payload.errorCode,
+        rawError: payload.rawError,
+        totalDownloaded: payload.totalDownloaded,
+        overallStatus: payload.overallStatus
       }
+      return SyncOutcomePresenter.present(getContext(this), outcome)
     } catch (_e) {
       // 兼容旧格式：sync_complete:${n} 或 error:${code}
       if (msg.startsWith('sync_complete:')) {
@@ -218,24 +217,20 @@ export struct SettingsContent {
         return format.replace('%s', count)
       } else if (msg.startsWith('error:')) {
         const errorKey = msg.substring(6)
-        // 兼容旧的特殊 key
-        if (errorKey === 'sync_conflict') {
-          return getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
-        } else if (errorKey === 'dirty_repo_blocked') {
-          return getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
-        } else if (errorKey === 'sync_error') {
-          return getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+        // 兼容旧的特殊 key：构造 SyncOutcome 走统一展示路径
+        const outcome: SyncOutcome = {
+          phase: 'error',
+          message: '',
+          messageKey: undefined,
+          messageArgs: undefined,
+          errorCategory: undefined,
+          errorCode: errorKey,
+          rawError: msg
         }
-        // 旧格式：error.${errorKey} 仍然保留 fallback
-        return MessageKeyMapper.resolveMessage(getContext(this), undefined, undefined, errorKey)
+        return SyncOutcomePresenter.present(getContext(this), outcome)
       }
     }
     return ''
-  }
-
-  // 将 messageArgs（Record<string, string> 或 undefined）转换为 Record<string, string>
-  private convertMessageArgs(args: Record<string, string>): Record<string, string> {
-    return args
   }
 
   // Issue #825：设置内容的唯一根 Builder。

@@ -96,6 +96,33 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
       case 'sync.result.network_failed':
         return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      // SyncErrorCategory 官方线格式码（core/writer_core/src/sync/types.rs::SyncErrorCategory::from_code）
+      // 这些是 Core 可能直接返回的 errorCategory 值，用于缺少 messageKey 时的回退映射。
+      case 'auth_failed':
+      case 'auth_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'permission_denied':
+      case 'token_permission_denied':
+      case 'missing_permission':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
+      case 'not_found':
+        // NotFound 在 Core to_message_key() 中映射到 auth_failed，因为 UI 文案是"认证失败/请检查 token"
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'precondition_failed':
+      case 'remote_sha_conflict':
+      case 'conflict':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'rate_limited':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      case 'network':
+      case 'network_failed':
+      case 'network_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'temporary_unavailable':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'local_io':
+      case 'local_io_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
       case 'error.other':
         return context.resourceManager.getStringSync($r('app.string.error_other').id)
       case 'error.native_error':

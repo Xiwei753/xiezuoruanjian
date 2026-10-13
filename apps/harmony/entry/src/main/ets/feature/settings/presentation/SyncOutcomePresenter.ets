@@ -17,9 +17,20 @@ export class SyncOutcomePresenter {
       const format: string = context.resourceManager.getStringSync($r('app.string.sync_complete_format').id)
       return format.replace('%s', count.toString())
     }
-    // 失败：优先使用 Core 的真实 messageKey，其次回退 errorCode，均由 MessageKeyMapper 统一映射。
+    // 失败：优先使用 Core 的真实 messageKey，缺失时按 errorCategory 判定用户可读原因，
+    // 最后回退 errorCode。errorCategory 是 provider-neutral 分类（SyncErrorCategory 线格式码），
+    // MessageKeyMapper 已支持这些码到系统字符串资源的映射。
     if (outcome.messageKey !== undefined && outcome.messageKey.trim().length > 0) {
       return MessageKeyMapper.resolveMessage(context, outcome.messageKey, outcome.messageArgs, outcome.errorCode)
+    }
+    // messageKey 缺失：尝试用 errorCategory 推断用户可读原因
+    if (outcome.errorCategory !== undefined && outcome.errorCategory.trim().length > 0) {
+      const mapped: string = MessageKeyMapper.resolveMessage(
+        context, outcome.errorCategory, outcome.messageArgs, outcome.errorCategory)
+      // 如果映射结果不是兜底文案，说明 errorCategory 已命中；否则继续回退 errorCode
+      if (mapped !== context.resourceManager.getStringSync($r('app.string.error_other').id)) {
+        return mapped
+      }
     }
     return MessageKeyMapper.resolveMessage(context, undefined, undefined, outcome.errorCode)
   }

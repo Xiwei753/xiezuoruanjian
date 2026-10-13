@@ -99,13 +99,13 @@ export class SyncOperationController {
       const status = syncResult.overallStatus
       if (status === 'success' || status === 'no_changes' || status === 'latest_wins_applied') {
         hilog.info(DOMAIN, TAG, 'performSync: success, status=%{public}s', status)
-        // 只有本地可见内容（下载/覆盖/删除）实际发生变化时才通知页面刷新，
-        // no_changes 不再空刷新导致卡片闪动。判断依据是 FullSyncResult 的真实变更计数。
+        // 只有本地可见内容（下载/覆盖/本地删除）实际发生变化时才通知页面刷新，
+        // no_changes 不再空刷新导致卡片闪动。远端删除（totalRemoteDeletes）不代表当前
+        // 本地作品/卷章变化，不应触发两页重载。判断依据是 FullSyncResult 的真实变更计数。
         const contentChanged: boolean =
           syncResult.totalDownloaded > 0 ||
           syncResult.totalOverwritten > 0 ||
-          syncResult.totalLocalDeletes > 0 ||
-          syncResult.totalRemoteDeletes > 0
+          syncResult.totalLocalDeletes > 0
         if (contentChanged) {
           this.notifyContentChanged()
         }
@@ -170,11 +170,34 @@ export class SyncOperationController {
   private async refreshNetworkState(): Promise<void> {
     try {
       const snapshot: NetworkSnapshot = await NetworkStatusService.getInstance().query()
-      NativeWriterCoreBridge.getInstance().updateNetworkState(
+      if (snapshot.queryFailed) {
+        // 查询失败：记录诊断链，不伪造在线状态
+        hilog.warn(DOMAIN, TAG,
+          'refreshNetworkState: network query failed, skip Core update: %{public}s',
+          snapshot.error)
+        return
+      }
+      const result: number = NativeWriterCoreBridge.getInstance().updateNetworkState(
         snapshot.known, snapshot.isConnected, snapshot.isMetered
       )
+      if (result !== 0) {
+        // 写入 Core 失败：明确记录 NETWORK_STATE_UPDATE_FAILED + 原生返回码
+        // -3: Core 未初始化/服务获取失败；-999: ArkTS 包装层原生异常
+        hilog.error(DOMAIN, TAG,
+          'NETWORK_STATE_UPDATE_FAILED: updateNetworkState returned %{public}s, ' +
+          'stage=write_core, known=%{public}s connected=%{public}s metered=%{public}s',
+          result.toString(), snapshot.known.toString(), snapshot.isConnected.toString(),
+          snapshot.isMetered.toString())
+      } else {
+        hilog.info(DOMAIN, TAG,
+          'refreshNetworkState: Core updated, known=%{public}s connected=%{public}s metered=%{public}s',
+          snapshot.known.toString(), snapshot.isConnected.toString(), snapshot.isMetered.toString())
+      }
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'refreshNetworkState failed: %{public}s', String(e))
+      // ArkTS 包装层异常：记录为查询失败
+      hilog.error(DOMAIN, TAG,
+        'NETWORK_STATE_UPDATE_FAILED: native bridge exception, stage=query_bridge, error=%{public}s',
+        String(e))
     }
   }
 
