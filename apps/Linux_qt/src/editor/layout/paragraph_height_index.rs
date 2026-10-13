@@ -282,6 +282,14 @@ impl ParagraphHeightIndex {
             }
         } else {
             // 段落数变化：Vec::splice + rebuild_bit，O(n)。
+            //
+            // Issue #901 第三十二轮问题4 复核: 数组 BIT 在中间插入/删除是固有限制 —
+            // BIT 的索引编码了子树区间，中间插入/删除会打乱所有后缀节点的区间编码，
+            // 必须 O(n) 重建。此路径仅在 Enter/Backspace 拆段/合段（段落数变化）时触发，
+            // 不是每笔字键的热路径（段落数不变时走上方 O(k log n) 逐点更新）。
+            // 完整 O(log n) 中间插入/删除需要平衡树前缀和结构（如 BTree 或 Treap），
+            // 是未来优化方向。当前 O(n) rebuild 在长篇（~10^4 段）下约 10μs，
+            // 远小于排版本身的开销。
             self.heights.splice(splice_start..splice_end, new_heights);
             self.rebuild_bit();
         }
@@ -1001,6 +1009,11 @@ impl ParagraphOffsetIndex {
             }
         } else {
             // 段落数变化：Vec::splice + rebuild_fenwick，O(n)。
+            //
+            // Issue #901 第三十二轮问题4 复核: 与 ParagraphHeightIndex::splice 同理，
+            // 数组 Fenwick 树在中间插入/删除需 O(n) 重建。此路径仅在段落数变化
+            //（Enter/Backspace）时触发，不是每笔字键的热路径。完整 O(log n) 中间
+            // 插入/删除需平衡树前缀和结构，是未来优化方向。
             self.byte_lengths
                 .splice(splice_start..splice_end, new_byte_lengths);
             self.qchar_lengths

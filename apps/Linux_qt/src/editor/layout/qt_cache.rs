@@ -81,34 +81,23 @@ cpp! {{
         return g_next_generation++;
     }
 
-    // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义。
-    // 不再无条件 delete 所有 layout 并 erase generation — 这会破坏存活 lease 的引用。
-    // 改为：检查是否有存活 lease（refcount > 1，即除 Store 初始引用外有消费者 lease）。
-    // - 无存活 lease：所有 refcount <= 1（只有 Store 初始引用或空 slot），
-    //   Store 后续 clear/rebuild 不会再访问这些 slot，直接 delete + erase（与旧语义一致，高效）。
-    // - 有存活 lease：标记 retired=true，不立即 delete。retired generation 中的 layout
-    //   不再被新消费者获取（get 返回 nullptr）。已存活的 lease 仍持有引用，
-    //   release_layout_ref 减 refcount 归零时 delete layout，全空时 erase generation。
+    // Issue #901 第三十二轮复核问题1+2: clear_layout_generation 改为纯 retired 标记语义。
+    // 不检查 refcount、不 delete layout、不 erase generation。
+    // 只标记 retired=true，拒绝该 generation 继续分配新布局（get_paragraph_layout
+    // 非 checked 版本对 retired 返回 nullptr）。已有 lease 通过 get_paragraph_layout_checked
+    //（带 epoch 校验）仍能读取其仍存活的 Qt 对象。
+    // 引用计数自然管理生命周期：Store/lease release 时 refcount 递减，
+    // 归零时 release_layout_ref delete layout 并回收 slot，
+    // retired generation 全 nullptr 时 erase generation。
+    //
+    // 问题2 根因：旧实现用 refcount > 1 判定"有存活 lease"，但合法演变为
+    // refcount 1(Store) → 2(Store+lease) → 1(仅 lease)（Store 退役释放自己的初始引用后），
+    // 此时 refcount > 1 为 false，旧实现会直接 delete 仍被唯一 lease 持有的 layout。
+    // 纯标记语义把生命周期完全交给引用计数，消除该误判。
     void clear_layout_generation(uint64_t gen) {
-        for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
-            if (it->generation == gen) {
-                // 检查是否有存活 lease：refcount > 1 表示除 Store 初始引用外有消费者 lease。
-                bool has_live_lease = false;
-                for (size_t i = 0; i < it->refcounts.size(); ++i) {
-                    if (it->refcounts[i] > 1) { has_live_lease = true; break; }
-                }
-                if (!has_live_lease) {
-                    // 无存活 lease，直接 delete + erase（Store 初始引用由后续
-                    // paragraph_store.clear 的 release 处理，找不到 generation 时安全 return）。
-                    for (auto* l : it->layouts) {
-                        delete l;
-                    }
-                    g_layout_generations.erase(it);
-                } else {
-                    // 有存活 lease，标记 retired，不立即 delete。
-                    // lease Drop 时 release_layout_ref 逐个 delete，全空时 erase。
-                    it->retired = true;
-                }
+        for (auto& lg : g_layout_generations) {
+            if (lg.generation == gen) {
+                lg.retired = true;
                 return;
             }
         }
@@ -126,7 +115,10 @@ cpp! {{
     QTextLayout* get_paragraph_layout(uint64_t gen, int slot) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return nullptr;
-        // Issue #901 第三十二轮复核问题2: retired generation 不再被新消费者获取。
+        // Issue #901 第三十二轮复核问题1: retired generation 不被新业务获取。
+        // 这是新业务入口（无 epoch 校验）：retired generation 不应再分配/读取新布局。
+        // 已持有 lease 的旧帧查询应走 get_paragraph_layout_checked（带 epoch 校验），
+        // 后者不对 retired 返回 nullptr，使持有正确 epoch 的 lease 能读取仍存活的布局。
         if (lg->retired) return nullptr;
         auto& layouts = lg->layouts;
         if (slot < 0 || slot >= (int)layouts.size()) return nullptr;
@@ -136,11 +128,14 @@ cpp! {{
     // Issue #901 第二十九轮复核阻塞3: 带 epoch 校验的 get。
     // epoch 不匹配（slot 已被复用，epoch 递增）返回 nullptr，
     // 防止旧帧误取同槽新对象。epoch 匹配则返回 layouts[slot]。
+    // Issue #901 第三十二轮复核问题1: 不对 retired generation 返回 nullptr。
+    // retired generation 中的 layout 仍可能被持有正确 epoch 的 lease 读取（旧帧
+    // 提取吞字旧字、光标/动画旧帧查字）。epoch 校验本身足以防止旧帧误取同槽新对象
+    //（epoch 不匹配返回 nullptr），无需额外用 retired 拒绝已持有 lease 的合法读取。
+    // 新业务入口应使用 get_paragraph_layout（非 checked），它对 retired 返回 nullptr。
     QTextLayout* get_paragraph_layout_checked(uint64_t gen, int slot, uint64_t epoch) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return nullptr;
-        // Issue #901 第三十二轮复核问题2: retired generation 不再被新消费者获取。
-        if (lg->retired) return nullptr;
         auto& layouts = lg->layouts;
         auto& epochs = lg->epochs;
         if (slot < 0 || slot >= (int)layouts.size()) return nullptr;

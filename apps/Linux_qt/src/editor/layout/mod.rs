@@ -145,9 +145,29 @@ impl EditorLayout {
             return;
         }
         // 只失效受影响段落的布局缓存，不清空整个 store
-        let affected = self
-            .paragraph_store
-            .compute_affected_paragraphs(affected_byte_start, affected_byte_end);
+        // Issue #901 第三十二轮问题3: 优先用 last_snapshot.paragraph_offset_index
+        // 的 O(log n) byte_to_paragraph 二分定位替换全文遍历。invalidate_affected
+        // 在编辑前调用，last_snapshot 与 paragraph_store 描述同一编辑前段落结构。
+        // 无 last_snapshot 时回退到 compute_affected_paragraphs 全文遍历。
+        // 用 block 限制 offset_index 借用作用域，确保后续 invalidate_range 的
+        // 可变借用不冲突。
+        let affected = {
+            let offset_index = self
+                .last_snapshot
+                .as_ref()
+                .map(|s| &*s.paragraph_offset_index);
+            match offset_index {
+                Some(idx) => self.paragraph_store.compute_affected_paragraphs_via_index(
+                    affected_byte_start,
+                    affected_byte_end,
+                    idx,
+                ),
+                None => self.paragraph_store.compute_affected_paragraphs(
+                    affected_byte_start,
+                    affected_byte_end,
+                ),
+            }
+        };
         if !affected.full_relayout {
             self.paragraph_store
                 .invalidate_range(affected.relayout_start, affected.relayout_end);

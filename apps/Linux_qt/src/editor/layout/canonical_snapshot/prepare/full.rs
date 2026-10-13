@@ -760,7 +760,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     };
 
     // 用 store 计算受影响段落范围（用于 full_relayout 判断）
-    let affected = paragraph_store.compute_affected_paragraphs(affected_byte_start, affected_byte_end);
+    // Issue #901 第三十二轮问题3: 用 prev.paragraph_offset_index 的 O(log n)
+    // byte_to_paragraph 二分定位替换 compute_affected_paragraphs 的全文遍历。
+    // 此处处于增量路径，paragraph_store 与 prev 描述同一编辑前段落结构，
+    // 段落数一致。prev 已于上方 move 出来，此处不可变借用其 paragraph_offset_index
+    // 不影响后续 mem::take。offset_index 为空/不一致时 via_index 内部回退旧逻辑。
+    let affected = paragraph_store.compute_affected_paragraphs_via_index(
+        affected_byte_start,
+        affected_byte_end,
+        &*prev.paragraph_offset_index,
+    );
 
     // Issue #901 问题5: 段落身份用 paragraph_store 的 ParagraphId 匹配，
     // 不按 prev.paragraphs[current_idx] 下标匹配。

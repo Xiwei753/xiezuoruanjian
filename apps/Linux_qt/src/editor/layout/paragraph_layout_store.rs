@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::paragraph_height_index::ParagraphLineCountIndex;
+use super::paragraph_height_index::{ParagraphLineCountIndex, ParagraphOffsetIndex};
 use super::types::{ParagraphId, VisualLine};
 
 // ── 稳定段落身份 ──
@@ -313,6 +313,26 @@ pub struct ParagraphLayoutStore {
     /// snapshot 通过 `line_count_index_arc()` 获取 `Arc::clone`（O(1)），
     /// store 更新时用 `Arc::make_mut`（COW：refcount==1 原地改，refcount>1 clone 新副本）。
     line_count_index: Arc<ParagraphLineCountIndex>,
+    /// Issue #901 第三十二轮问题4: 段落 byte 偏移前缀索引（Fenwick 树）。
+    ///
+    /// 维护每段 byte 长度（含尾部 `'\n'`）的前缀和，供
+    /// [`compute_document_byte_start`] 以 O(log n) 查询段落文档 byte 起始偏移，
+    /// 替代旧 O(index) 逐段累加。
+    ///
+    /// # qchar 占位说明
+    ///
+    /// `ParagraphOffsetIndex` 同时维护 byte 和 qchar (UTF-16) 前缀和，但 store
+    /// 的 entries 只存 `paragraph_text_len`（byte 长度），不存 qchar 长度。
+    /// 此处 qchar_lengths 用 byte_lengths 同值占位填充（**不保证 qchar 正确**）。
+    /// `compute_document_byte_start` 只查 byte 前缀和，不受占位影响。
+    /// 完整的 byte+qchar 索引由 snapshot 的 `paragraph_offset_index` 维护
+    ///（见 `canonical_snapshot/prepare/full.rs`）。
+    ///
+    /// # 正确性保证
+    ///
+    /// 若 `byte_offset_index` 与 `entries` 不同步（段落数不一致），
+    /// [`compute_document_byte_start`] 回退到 O(index) 逐段累加，结果仍正确。
+    byte_offset_index: Arc<ParagraphOffsetIndex>,
     /// Issue #901 第二十五轮复核问题1: 已无持有者可回收的 (generation, physical_slot) 对。
     ///
     /// 增量编辑（普通改段/拆段/合段）使旧 `cache_slot` 被置 -1 后，对应的
@@ -346,6 +366,7 @@ impl ParagraphLayoutStore {
             next_id: 1,
             id_to_slot_cache: Arc::new(HashMap::new()),
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
+            byte_offset_index: Arc::new(ParagraphOffsetIndex::new()),
             retired_slots: Vec::new(),
         }
     }
@@ -390,6 +411,8 @@ impl ParagraphLayoutStore {
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
         Arc::make_mut(&mut self.line_count_index).clear();
+        // Issue #901 第三十二轮问题4: 清空 byte 偏移前缀索引。
+        Arc::make_mut(&mut self.byte_offset_index).clear();
         // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
         // C++ LayoutGeneration 的 freelist 按 generation 隔离管理，clear 后旧 generation
         // 的槽号自然失效，无需 Rust 端维护高水位。
@@ -677,6 +700,9 @@ impl ParagraphLayoutStore {
         // resolve_viewport_lines / paragraph_line_range 找错行。
         let counts: Vec<usize> = self.entries.iter().map(|e| e.visual_line_count).collect();
         Arc::make_mut(&mut self.line_count_index).rebuild(counts);
+        // Issue #901 第三十二轮问题4: 全量重建 byte 偏移前缀索引。
+        // byte_lengths = paragraph_text_len + hard_break(1/0)，qchar 用 byte 占位。
+        self.rebuild_byte_offset_index();
         // Issue #901 第二十八轮复核问题2: next_physical_slot 已移除，槽号复用完全由
         // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
     }
@@ -799,6 +825,14 @@ impl ParagraphLayoutStore {
 
         // 3. splice self.entries：删除 [old_splice_start, old_splice_end)，插入新 entries。
         //    前缀段 [0, old_splice_start) 和后缀段 [old_splice_end, old_count) 原地保留。
+        //
+        //    Issue #901 第三十二轮问题4 复核: Vec::splice 物理移动后缀段是 Vec 的固有限制
+        //    （连续内存布局，中间插入/删除需 memmove 后缀元素），O(suffix_count)。
+        //    此处后缀段的 ParagraphId、cache_key、Qt layout lease、排版结果全部保留
+        //    （只 memmove ParagraphLayoutEntry 结构体本身，不深复制 relative_lines 等 Vec），
+        //    消除了旧实现遍历后缀重写 document_byte_start 的 O(suffix_count) 逻辑开销。
+        //    完整消除 memmove 需持久向量（如 im::Vector）或分块数组结构，是未来优化方向。
+        //    当前 memmove 仅在段落数变化（Enter/Backspace）时触发，不是每笔字键的热路径。
         self.entries
             .splice(old_splice_start..old_splice_end, new_entries);
 
@@ -816,6 +850,19 @@ impl ParagraphLayoutStore {
         //    不遍历全 HashMap 找 slot 在 [old_splice_start, old_splice_end) 的条目。
         //    后缀段 slot 平移保留（O(段落数)），但只在段数变化（Enter/Backspace）时触发，
         //    普通字键（段数不变）不走 splice 路径，不受影响。
+        //
+        //    Issue #901 第三十二轮问题4 复核: 此处 values_mut 全量遍历是 O(段落数)。
+        //    调查消费方 `paragraph_id_to_slot_arc()` 的调用链：
+        //    - `canonical_snapshot/prepare/full.rs:1513` 将 Arc<HashMap> 存入 snapshot；
+        //    - `types.rs:258` / `canonical_snapshot.rs:166` 的 `materialize_line` 用
+        //      `paragraph_id_to_slot.get(&id).copied().unwrap_or(line.logical_slot)` 查询。
+        //    消费方依赖 cache 非空解析 logical_slot：miss 时 fallback 到 `line.logical_slot`
+        //    （可能过时的旧值），会导致物化坐标错位。因此**不能清空 cache**。
+        //    延迟平移标记（SlotAdjustment { boundary, delta }）方案需要改变
+        //    `paragraph_id_to_slot_arc` 的返回类型（包装 adjustments），侵入消费方 API，
+        //    正确性风险高。完整消除 O(n) 需持久树前缀和结构，是未来优化方向。
+        //    当前保留 values_mut 遍历，仅在段落数变化（Enter/Backspace）时触发，
+        //    不是每笔字键的热路径。
         {
             let cache = Arc::make_mut(&mut self.id_to_slot_cache);
             // 移除被删除段的 Id — 从 removed_ids（splice 前收集）取，O(k)。
@@ -851,6 +898,23 @@ impl ParagraphLayoutStore {
             // splice: 删除旧 [old_splice_start, old_splice_end)，插入 new_affected_count 个 0。
             let new_counts: Vec<usize> = vec![0usize; new_affected_count];
             lci.splice(old_splice_start, old_splice_end, new_counts);
+        }
+
+        // 7. Issue #901 第三十二轮问题4: 增量更新 byte_offset_index。
+        //    删除旧 [old_splice_start, old_splice_end) 的 byte/qchar 长度，
+        //    插入新段的 byte/qchar 长度。前缀/后缀段保留。
+        //    byte_len = para_text.len() + hard_break(1/0)，qchar 用 byte 占位。
+        {
+            let idx = Arc::make_mut(&mut self.byte_offset_index);
+            let mut new_byte_lengths = Vec::with_capacity(new_affected_count);
+            let mut new_qchar_lengths = Vec::with_capacity(new_affected_count);
+            for (para_text, hard_break) in affected_paras {
+                let byte_len = para_text.len() + if *hard_break { 1 } else { 0 };
+                new_byte_lengths.push(byte_len);
+                // qchar 占位：用 byte_len 同值（store 不存 qchar，见字段注释）。
+                new_qchar_lengths.push(byte_len);
+            }
+            idx.splice(old_splice_start, old_splice_end, new_byte_lengths, new_qchar_lengths);
         }
 
         true
@@ -932,12 +996,34 @@ impl ParagraphLayoutStore {
         }
     }
 
+    /// Issue #901 第三十二轮问题4: 内部方法 — 从 `entries` 全量重建 `byte_offset_index`。
+    ///
+    /// `byte_lengths[i] = entries[i].paragraph_text_len + hard_break(1/0)`。
+    /// `qchar_lengths` 用 `byte_lengths` 同值占位（store 不存 qchar 长度，
+    /// `compute_document_byte_start` 只查 byte 前缀和，不受占位影响）。
+    fn rebuild_byte_offset_index(&mut self) {
+        let byte_lengths: Vec<usize> = self
+            .entries
+            .iter()
+            .map(|e| e.paragraph_text_len + if e.hard_break { 1 } else { 0 })
+            .collect();
+        // qchar 占位：用 byte_lengths 同值。ParagraphOffsetIndex 的 rebuild 要求
+        // 两个数组长度一致（debug_assert），但不要求 qchar 值正确。
+        // compute_document_byte_start 只查 paragraph_byte_start（byte_bit），不查 qchar。
+        let qchar_lengths = byte_lengths.clone();
+        Arc::make_mut(&mut self.byte_offset_index).rebuild(byte_lengths, qchar_lengths);
+    }
+
     /// Issue #901 第二十一轮阻塞5+问题4: 内部方法 — 在 `index` 处插入新段后
     /// 增量更新 `id_to_slot_cache`。
     ///
     /// `new_id` 是新段的 ParagraphId，`index` 是新段的 slot。
     /// 原 slot >= index 的段全部 +1。
     /// 用 `Arc::make_mut` 原地改或 COW，保证已发出的 Arc 引用不受影响。
+    ///
+    /// Issue #901 第三十二轮问题4 复核: values_mut 遍历是 O(段落数)，仅在段落数变化
+    ///（split_paragraph / insert_paragraph）时触发。消费方依赖 cache 非空（见
+    /// splice_affected_entries 注释），不能清空。完整消除需持久树结构，是未来优化方向。
     fn id_to_slot_cache_insert(&mut self, new_id: ParagraphId, index: usize) {
         let cache = Arc::make_mut(&mut self.id_to_slot_cache);
         // 后续段 slot +1
@@ -955,6 +1041,10 @@ impl ParagraphLayoutStore {
     /// `removed_id` 是被删段的 ParagraphId，`index` 是被删段的 slot。
     /// 原 slot > index 的段全部 -1。
     /// 用 `Arc::make_mut` 原地改或 COW，保证已发出的 Arc 引用不受影响。
+    ///
+    /// Issue #901 第三十二轮问题4 复核: values_mut 遍历是 O(段落数)，仅在段落数变化
+    ///（merge_paragraphs / remove_paragraph）时触发。消费方依赖 cache 非空（见
+    /// splice_affected_entries 注释），不能清空。完整消除需持久树结构，是未来优化方向。
     fn id_to_slot_cache_remove(&mut self, removed_id: ParagraphId, index: usize) {
         let cache = Arc::make_mut(&mut self.id_to_slot_cache);
         cache.remove(&removed_id);
@@ -1063,6 +1153,19 @@ impl ParagraphLayoutStore {
         self.id_to_slot_cache_insert(new_id, index + 1);
         // Issue #901 第二十一轮问题2: 同步插入行数索引槽位（初始行数 0）。
         Arc::make_mut(&mut self.line_count_index).insert(index + 1, 0);
+        // Issue #901 第三十二轮问题4: 同步更新 byte 偏移前缀索引。
+        // 原段 byte_len 变化（text 变为 before_split），新段插入在 index+1。
+        {
+            let idx = Arc::make_mut(&mut self.byte_offset_index);
+            // 新段 byte_len = after_split.len() + hard_break(默认 false → 0)。
+            let new_byte_len = self.entries[index + 1].paragraph_text_len
+                + if self.entries[index + 1].hard_break { 1 } else { 0 };
+            idx.insert(index + 1, new_byte_len, new_byte_len);
+            // 原段 byte_len 更新（text 变为 before_split，hard_break 保持原值）。
+            let orig_byte_len = self.entries[index].paragraph_text_len
+                + if self.entries[index].hard_break { 1 } else { 0 };
+            idx.update_paragraph_length(index, orig_byte_len, orig_byte_len);
+        }
         Some((index, index + 1))
     }
 
@@ -1136,6 +1239,16 @@ impl ParagraphLayoutStore {
         self.id_to_slot_cache_remove(removed_entry.id, index + 1);
         // Issue #901 第二十一轮问题2: 同步删除行数索引槽位。
         Arc::make_mut(&mut self.line_count_index).remove(index + 1);
+        // Issue #901 第三十二轮问题4: 同步更新 byte 偏移前缀索引。
+        // 删除被合并段（index+1），更新合并后段（index）的 byte_len。
+        {
+            let idx = Arc::make_mut(&mut self.byte_offset_index);
+            idx.remove(index + 1);
+            // 合并后段 byte_len = merged_text.len() + hard_break。
+            let merged_byte_len = self.entries[index].paragraph_text_len
+                + if self.entries[index].hard_break { 1 } else { 0 };
+            idx.update_paragraph_length(index, merged_byte_len, merged_byte_len);
+        }
         Some(index)
     }
 
@@ -1196,6 +1309,15 @@ impl ParagraphLayoutStore {
         // Issue #901 第二十八轮复核问题3: 携带 epoch 供 release_layout_ref 校验。
         if changed && old_slot >= 0 && old_gen != 0 {
             self.retired_slots.push((old_gen, old_slot, old_epoch));
+        }
+        // Issue #901 第三十二轮问题4: 普通编辑改变段落文本长度，
+        // 同步更新 byte 偏移前缀索引（O(log n) 单点更新）。
+        // hard_break 不变（普通编辑不涉及 '\n'），byte_len = text_len + hard_break。
+        if changed {
+            let byte_len = self.entries[index].paragraph_text_len
+                + if self.entries[index].hard_break { 1 } else { 0 };
+            Arc::make_mut(&mut self.byte_offset_index)
+                .update_paragraph_length(index, byte_len, byte_len);
         }
         changed
     }
@@ -1258,6 +1380,12 @@ impl ParagraphLayoutStore {
         self.id_to_slot_cache_insert(id, insert_idx);
         // Issue #901 第二十一轮问题2: 同步插入行数索引槽位（初始行数 0）。
         Arc::make_mut(&mut self.line_count_index).insert(insert_idx, 0);
+        // Issue #901 第三十二轮问题4: 同步插入 byte 偏移前缀索引槽位。
+        {
+            let byte_len = self.entries[insert_idx].paragraph_text_len
+                + if self.entries[insert_idx].hard_break { 1 } else { 0 };
+            Arc::make_mut(&mut self.byte_offset_index).insert(insert_idx, byte_len, byte_len);
+        }
     }
 
     /// 删除段落 `index`（丢弃其 Id）。
@@ -1275,6 +1403,8 @@ impl ParagraphLayoutStore {
             self.id_to_slot_cache_remove(removed.id, index);
             // Issue #901 第二十一轮问题2: 同步删除行数索引槽位。
             Arc::make_mut(&mut self.line_count_index).remove(index);
+            // Issue #901 第三十二轮问题4: 同步删除 byte 偏移前缀索引槽位。
+            Arc::make_mut(&mut self.byte_offset_index).remove(index);
             Some(removed)
         } else {
             None
@@ -1729,12 +1859,96 @@ impl ParagraphLayoutStore {
         }
     }
 
+    /// 计算受影响段落范围 — O(log n) 索引路径。
+    ///
+    /// Issue #901 第三十二轮问题3: [`compute_affected_paragraphs`] 用 `for` 全文遍历
+    /// 定位受影响段，O(全章段落数)；且只用段落**正文**范围 `[offset, offset+text_len)`
+    /// 判断相交，把 `hard_break` 所占 1 字节排除在外，导致仅改变换行（如在末尾空行
+    /// 再输入 `\n`）时没有任何非空段正文与插入范围相交，`start=None/end=None`，
+    /// 默认返回全章重排。
+    ///
+    /// 本方法用 [`ParagraphOffsetIndex::byte_to_paragraph`] 的 Fenwick 前缀和二分
+    /// （O(log n)）定位受影响段。`ParagraphOffsetIndex` 的 `byte_lengths[i]` 含尾部
+    /// `'\n'`，因此 `byte_to_paragraph` 返回的段落范围**包含** `hard_break` 字节
+    /// 边界与尾空段正式结构边界，换行编辑不再误判为全章重排。
+    ///
+    /// # 参数
+    ///
+    /// - `affected_byte_start` / `affected_byte_end`：受影响字节范围，半开区间
+    ///   `[start, end)`。
+    /// - `offset_index`：与 `self.entries` 描述同一段落结构的偏移索引
+    ///   （调用方保证，如 `prev.paragraph_offset_index`）。
+    ///
+    /// # 回退
+    ///
+    /// `offset_index` 为空或段落数与 `self.entries` 不一致时，回退到
+    /// [`compute_affected_paragraphs`] 的全文遍历逻辑，保证正确性。
+    pub fn compute_affected_paragraphs_via_index(
+        &self,
+        affected_byte_start: usize,
+        affected_byte_end: usize,
+        offset_index: &ParagraphOffsetIndex,
+    ) -> AffectedParagraphRanges {
+        if self.entries.is_empty() {
+            return AffectedParagraphRanges {
+                relayout_start: 0,
+                relayout_end: 0,
+                full_relayout: true,
+            };
+        }
+
+        // Issue #901 第三十二轮问题3: offset_index 为空（初始状态）或段萂数与
+        // entries 不一致（结构不同步）时回退到全文遍历，保证正确性。
+        if offset_index.is_empty() || offset_index.len() != self.entries.len() {
+            return self.compute_affected_paragraphs(affected_byte_start, affected_byte_end);
+        }
+
+        // O(log n) 定位。byte_to_paragraph 返回最大段落索引 k 使得
+        // paragraph_byte_start(k) <= byte_offset；段落 k 的完整 byte 范围
+        // [paragraph_byte_start(k), paragraph_byte_start(k+1)) 包含 hard_break 字节。
+        let n = self.entries.len();
+
+        // 起始段：包含 affected_byte_start 的段落。若 affected_byte_start 恰为某段
+        // 首，返回该段；若落在段中，返回该段。这正是第一个与受影响范围相交的段。
+        let start = offset_index.byte_to_paragraph(affected_byte_start);
+
+        // 结束段：包含最后一个受影响字节 affected_byte_end - 1 的段落。
+        // relayout_end 取该段 + 1（半开区间）。affected_byte_end == 0 时
+        // saturating_sub(1) = 0；但调用方保证 affected_byte_start < affected_byte_end，
+        // 故 affected_byte_end > 0，此处的 saturating_sub 仅为防御。
+        let end = offset_index
+            .byte_to_paragraph(affected_byte_end.saturating_sub(1))
+            .saturating_add(1);
+
+        // 钳制到 entries 范围并保证 start <= end（半开区间不变量）。
+        let end = end.min(n);
+        let start = start.min(end);
+
+        AffectedParagraphRanges {
+            relayout_start: start,
+            relayout_end: end,
+            full_relayout: false,
+        }
+    }
+
     /// 计算段落 `index` 的文档 byte 起始偏移（前缀和）。
     ///
     /// Issue #901 第三十二轮问题3: splice 后后缀 entries 的 `document_byte_start` 字段
     /// 可能过时（不再遍历后缀重写）。消费方应通过此方法获取准确值，不直接读字段。
-    /// O(index)，但不依赖字段正确性。
+    ///
+    /// Issue #901 第三十二轮问题4: 优先用 `byte_offset_index` 的 Fenwick 前缀和
+    /// O(log n) 查询。若 `byte_offset_index` 为空或段萂数与 `entries` 不一致
+    ///（异常状态），回退到 O(index) 逐段累加（保留旧逻辑作 fallback，保证正确性）。
     pub fn compute_document_byte_start(&self, index: usize) -> usize {
+        // Issue #901 第三十二轮问题4: O(log n) 前缀和路径。
+        // byte_offset_index 与 entries 同步维护（rebuild_from_text / splice /
+        // split / merge / insert / remove / update_paragraph_text 均已同步更新）。
+        // 若段落数一致，用 Fenwick O(log n) 查询；否则回退到 O(index) 累加。
+        let idx = &*self.byte_offset_index;
+        if !idx.is_empty() && idx.len() == self.entries.len() {
+            return idx.paragraph_byte_start(index);
+        }
+        // Fallback: O(index) 逐段累加（不依赖 byte_offset_index 的正确性）。
         let end = index.min(self.entries.len());
         let mut offset = 0usize;
         for e in &self.entries[..end] {
