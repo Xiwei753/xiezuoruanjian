@@ -269,7 +269,11 @@ export class WindowInstanceIdAllocator {
   release(windowInstanceId: string): void {
     const windowId = this.instanceIdToWindowId.get(windowInstanceId)
     if (windowId !== undefined) {
-      this.windowIdToInstanceId.delete(windowId)
+      // Issue #879 复核评论问题1：只有当前 instanceId 是正向映射中该 windowId 的持有者时才删除正向映射。
+      // allocateFresh 不写正向映射（windowIdToInstanceId），所以释放 fresh 实例时不会误删 allocate 的缓存。
+      if (this.windowIdToInstanceId.get(windowId) === windowInstanceId) {
+        this.windowIdToInstanceId.delete(windowId)
+      }
       this.instanceIdToWindowId.delete(windowInstanceId)
       this.instanceIdToGlyphIds.delete(windowInstanceId)
       this.releasedIds.push(windowInstanceId)

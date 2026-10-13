@@ -759,7 +759,7 @@ export class EditorMotionCoordinator {
     }
     // Issue #879 评论6138838190：ghost 和 motion 共享同一个 existingKeys Set，
     // 这样 ghost 分配的 key 也会被 motion 检测到，避免跨通道冲突。
-    const existingKeys = this.collectPlannedKeys(prepared.plan)
+    const existingKeys = this.collectPlannedKeys(prepared.plan, latestDisplayedFrame)
     const carryOverGhostRuns = this.identifyCarryOverGhosts(
       latestDisplayedFrame, prepared.state.newSnapshot.revision, planGlyphIds,
       prepared.state.glyphIdentities, existingKeys
@@ -1008,7 +1008,7 @@ export class EditorMotionCoordinator {
       }
       // Issue #879 评论6138838190：ghost 和 motion 共享同一个 existingKeys Set，
       // 这样 ghost 分配的 key 也会被 motion 检测到，避免跨通道冲突。
-      const existingKeys = this.collectPlannedKeys(plan)
+      const existingKeys = this.collectPlannedKeys(plan, startFrame)
       plan.carryOverGhostRuns = this.identifyCarryOverGhosts(
         startFrame, newSnapshot.revision, planGlyphIds, identities.newTable, existingKeys
       )
@@ -3160,6 +3160,8 @@ export class EditorMotionCoordinator {
           existing.motionOwnerKind === w.motionOwnerKind
         if (sameIdentity) {
           // 完全同一物理 Text、相同运动状态——只并 clip
+          // Issue #879 复核评论问题3：不再扩展 utf16Start/End、不再合并 glyphIds、不再合并 fullWindowGlyphUtf16Ranges。
+          // 同一物理窗口的源范围和 glyphIds 是固定属性，不应因 clip 合并而改变。
           existing.clipRects = [...existing.clipRects, ...w.clipRects]
           existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
           existing.clipRight = Math.max(existing.clipRight, w.clipRight)
@@ -3167,34 +3169,15 @@ export class EditorMotionCoordinator {
           existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
           existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-          // Issue #879 评论6138838190 问题2：同步合并 glyphIds、UTF-16 区间、
-          // fullWindowGlyphUtf16Ranges——不能只在 Map 里添加字而不更新 glyphIds/utf16 范围。
-          const mergedGlyphIds = [...existing.glyphIds]
-          for (const gid of w.glyphIds) {
-            if (!mergedGlyphIds.includes(gid)) {
-              mergedGlyphIds.push(gid)
-            }
-          }
-          existing.glyphIds = mergedGlyphIds
-          existing.utf16Start = Math.min(existing.utf16Start, w.utf16Start)
-          existing.utf16End = Math.max(existing.utf16End, w.utf16End)
-          // 合并 fullWindowGlyphUtf16Ranges（取并集）
-          if (existing.fullWindowGlyphUtf16Ranges !== undefined &&
-              existing.fullWindowGlyphUtf16Ranges !== null &&
-              w.fullWindowGlyphUtf16Ranges !== undefined &&
-              w.fullWindowGlyphUtf16Ranges !== null) {
-            const mergedRanges = new Map(existing.fullWindowGlyphUtf16Ranges)
-            for (const entry of w.fullWindowGlyphUtf16Ranges) {
-              mergedRanges.set(entry[0], entry[1])
-            }
-            existing.fullWindowGlyphUtf16Ranges = mergedRanges
-          } else if (existing.fullWindowGlyphUtf16Ranges === undefined &&
-                     w.fullWindowGlyphUtf16Ranges !== undefined) {
-            existing.fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges
-          }
         }
-        // else: 不同物理属性——不应出现（准备期已通过 allocateFresh 确保不同 key）
-        // 防御性处理：保留第一张(existing)，跳过第二张(w)，不合并不丢弃
+        // else: 不同物理属性——不能丢弃第二张的文字像素
+        // Issue #879 复核评论问题2：给冲突窗口分配新的 key，确保两张都能渲染
+        const freshWinId = allocator.allocateFresh(w.glyphIds)
+        const freshKey = `${w.sourceKind}-${w.sourceRevision}-${freshWinId}`
+        w.renderNodeKey = freshKey
+        w.windowInstanceId = freshWinId
+        windowByKey.set(freshKey, w)
+        mergedWindows.push(w)
       } else {
         windowByKey.set(w.renderNodeKey, w)
         mergedWindows.push(w)
@@ -3763,7 +3746,7 @@ export class EditorMotionCoordinator {
    * Issue #879 评论6138838190：从 plan 的所有 runs 提取已分配的 renderNodeKey 集合。
    * 用于 identifyCarryOverGhosts/identifyCarryOverMotionRuns 分配 key 时检测冲突。
    */
-  private collectPlannedKeys(plan: EditorMotionPlan): Set<string> {
+  private collectPlannedKeys(plan: EditorMotionPlan, latestDisplayedFrame: EditorVisualFrame | null): Set<string> {
     const keys = new Set<string>()
     for (const run of plan.insertRuns) {
       for (const piece of run.pieces) {
@@ -3795,6 +3778,15 @@ export class EditorMotionCoordinator {
               keys.add(interval.crossfadeRenderNodeKey)
             }
           }
+        }
+      }
+    }
+    // Issue #879 复核评论问题4：加入仍在显示的旧窗口的物理 key，
+    // 防止旧窗口与 carry-over 共享 key 但需要不同 Text 状态时发生碰撞。
+    if (latestDisplayedFrame !== null) {
+      for (const w of latestDisplayedFrame.motionGlyphWindows) {
+        if (w.renderNodeKey !== undefined) {
+          keys.add(w.renderNodeKey)
         }
       }
     }
