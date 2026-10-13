@@ -402,6 +402,261 @@ fn lowbit(x: usize) -> usize {
     x & x.wrapping_neg()
 }
 
+// ── Issue #901 第二十一轮问题2: 段落行数前缀索引 ──
+
+/// 段落行数索引 — Fenwick 树保存段落前缀视觉行数。
+///
+/// Issue #901 第二十一轮问题2: 替代 `id_to_line_range: HashMap<ParagraphId, (usize, usize)>`。
+/// 旧 `id_to_line_range` 以全局 `visual_lines` 数组下标为绝对值，却只对改动段更新，
+/// 换行造成行数变化时全部后缀段范围仍指向旧下标。
+///
+/// 改用 Fenwick 树维护每段 `visual_line_count` 的前缀和：
+/// - 段落 `i` 的行范围 `[paragraph_line_start(i), paragraph_line_end(i))`。
+/// - `paragraph_line_start(i) = prefix_sum(i)`（前 i 段行数和）。
+/// - `paragraph_line_end(i) = prefix_sum(i + 1)`。
+/// - 前面段行数变化时，后缀段的 `paragraph_line_start` 由前缀和自动平移，
+///   不需要逐段更新绝对行下标。
+///
+/// # 操作复杂度
+///
+/// | 操作 | 复杂度 |
+/// |------|--------|
+/// | `insert` | O(n) 重建 |
+/// | `remove` | O(n) 重建 |
+/// | `update_count` | O(log n) |
+/// | `paragraph_line_start` | O(log n) |
+/// | `paragraph_line_end` | O(log n) |
+/// | `total_lines` | O(1) |
+/// | `count_at` | O(1) |
+#[derive(Clone, Debug, Default)]
+pub struct ParagraphLineCountIndex {
+    /// Fenwick 树数组（1-indexed，`bit[1..=n]`）。
+    bit: Vec<usize>,
+    /// 原始行数数组（0-indexed），用于直接访问和重建。
+    counts: Vec<usize>,
+    /// 段落数量。
+    len: usize,
+    /// 缓存的总行数（`bit` 的根和），O(1) 查询。
+    total: usize,
+}
+
+impl ParagraphLineCountIndex {
+    /// 创建空的行数索引。
+    pub fn new() -> Self {
+        Self {
+            bit: Vec::new(),
+            counts: Vec::new(),
+            len: 0,
+            total: 0,
+        }
+    }
+
+    /// 从行数数组创建行数索引。
+    pub fn from_counts(counts: Vec<usize>) -> Self {
+        let len = counts.len();
+        let total: usize = counts.iter().sum();
+        let mut bit = vec![0usize; len + 1];
+        for i in 0..len {
+            let val = counts[i];
+            let mut j = i + 1;
+            while j <= len {
+                bit[j] += val;
+                j += lowbit(j);
+            }
+        }
+        Self {
+            bit,
+            counts,
+            len,
+            total,
+        }
+    }
+
+    /// 段落数量。
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// 是否为空。
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// 清空所有数据。
+    pub fn clear(&mut self) {
+        self.bit.clear();
+        self.counts.clear();
+        self.len = 0;
+        self.total = 0;
+    }
+
+    /// 总行数（所有段落行数之和）。
+    pub fn total_lines(&self) -> usize {
+        self.total
+    }
+
+    /// 获取段落 `index` 的行数。越界返回 0。
+    pub fn count_at(&self, index: usize) -> usize {
+        self.counts.get(index).copied().unwrap_or(0)
+    }
+
+    // ── Fenwick 树核心操作 ──
+
+    /// 前缀和：`counts[0] + counts[1] + ... + counts[k-1]`。
+    ///
+    /// `k` 为段落数量（0-indexed 的半开区间右端）。
+    /// `k == 0` 返回 0，`k >= len` 返回总行数。
+    fn prefix_sum(&self, k: usize) -> usize {
+        let k = k.min(self.len);
+        let mut sum = 0usize;
+        let mut j = k;
+        while j > 0 {
+            sum += self.bit[j];
+            j -= lowbit(j);
+        }
+        sum
+    }
+
+    /// Fenwick 树单点加：`counts[index] += delta`，同步更新 BIT。
+    fn bit_add(&mut self, index: usize, delta: usize) {
+        let mut j = index + 1; // 转 1-indexed
+        while j <= self.len {
+            self.bit[j] += delta;
+            j += lowbit(j);
+        }
+    }
+
+    /// 重建整个 Fenwick 树（从 `counts` 数组）。
+    fn rebuild_bit(&mut self) {
+        let n = self.counts.len();
+        self.bit = vec![0usize; n + 1];
+        for i in 0..n {
+            let val = self.counts[i];
+            let mut j = i + 1;
+            while j <= n {
+                self.bit[j] += val;
+                j += lowbit(j);
+            }
+        }
+        self.len = n;
+        self.total = self.counts.iter().sum();
+    }
+
+    // ── 查询操作 ──
+
+    /// 查段首行索引 — 段落 `index` 的首行在扁平 `visual_lines` 数组中的下标。
+    ///
+    /// 即 `counts[0] + counts[1] + ... + counts[index-1]`。
+    /// `index == 0` 返回 0（首段首行）。越界返回总行数。
+    pub fn paragraph_line_start(&self, index: usize) -> usize {
+        if index >= self.len {
+            return self.total;
+        }
+        self.prefix_sum(index)
+    }
+
+    /// 查段尾行索引 — 段落 `index` 的尾后行在扁平 `visual_lines` 数组中的下标。
+    ///
+    /// 即 `paragraph_line_start(index) + counts[index]`。
+    /// 等价于 `paragraph_line_start(index + 1)`。
+    pub fn paragraph_line_end(&self, index: usize) -> usize {
+        self.paragraph_line_start(index) + self.count_at(index)
+    }
+
+    /// 段落 `index` 的行范围 `[start, end)`。
+    ///
+    /// 越界返回 `(total, total)`。
+    pub fn paragraph_line_range(&self, index: usize) -> (usize, usize) {
+        let start = self.paragraph_line_start(index);
+        let end = start + self.count_at(index);
+        (start, end)
+    }
+
+    // ── 更新操作 ──
+
+    /// 改段行数 — 更新段落 `index` 的行数为 `new_count`。
+    ///
+    /// O(log n)。只改受影响段的数据，不影响其他段落的相对行范围。
+    /// 返回旧行数，越界返回 `None`。
+    pub fn update_count(&mut self, index: usize, new_count: usize) -> Option<usize> {
+        if index >= self.len {
+            return None;
+        }
+        let old_count = self.counts[index];
+        // usize delta 需处理新值可能小于旧值的情况。
+        if new_count >= old_count {
+            let delta = new_count - old_count;
+            self.counts[index] = new_count;
+            self.bit_add(index, delta);
+            self.total += delta;
+        } else {
+            let delta = old_count - new_count;
+            self.counts[index] = new_count;
+            // BIT 只支持加法，减法用 wrapping_add 配合补码语义不可靠，
+            // 这里通过重建保证正确性（减法场景在段落数不变时罕见）。
+            // 实际上 BIT 存 usize，减法会下溢。改为重建。
+            self.rebuild_bit();
+        }
+        Some(old_count)
+    }
+
+    /// 段落插入 — 在 `index` 处插入行数为 `count` 的新段落。
+    ///
+    /// O(n) 重建 BIT。后续段落的行范围自动右移（由前缀和计算）。
+    pub fn insert(&mut self, index: usize, count: usize) {
+        let insert_pos = index.min(self.len);
+        self.counts.insert(insert_pos, count);
+        self.rebuild_bit();
+    }
+
+    /// 段落删除 — 删除段落 `index`。
+    ///
+    /// O(n) 重建 BIT。后续段落的行范围自动左移。
+    /// 返回被删除段落的行数，越界返回 `None`。
+    pub fn remove(&mut self, index: usize) -> Option<usize> {
+        if index >= self.len {
+            return None;
+        }
+        let count = self.counts.remove(index);
+        self.rebuild_bit();
+        Some(count)
+    }
+
+    /// 批量更新行数 — 从行数数组重建整个索引。
+    pub fn rebuild(&mut self, counts: Vec<usize>) {
+        self.counts = counts;
+        self.rebuild_bit();
+    }
+
+    /// Issue #901: 确保索引长度匹配段落数，只在段落数变化时才重建。
+    ///
+    /// 返回 `true` 表示发生了重建，`false` 表示长度已匹配无需重建。
+    pub fn ensure_len(&mut self, expected_len: usize, default_count: usize) -> bool {
+        if self.len == expected_len {
+            return false;
+        }
+        self.counts.resize(expected_len, default_count);
+        self.rebuild_bit();
+        true
+    }
+
+    /// Issue #901: 增量更新受影响段落的行数。
+    ///
+    /// 对 `updates` 中列出的段落逐个调用 `update_count`（O(k log n)）。
+    /// 只在段落数量不匹配时才调用 `ensure_len` 重建。
+    pub fn update_counts_incremental(
+        &mut self,
+        updates: &[(usize, usize)],
+        expected_len: usize,
+        default_count: usize,
+    ) {
+        self.ensure_len(expected_len, default_count);
+        for &(index, new_count) in updates {
+            self.update_count(index, new_count);
+        }
+    }
+}
+
 // ── Issue #901 第十轮问题5: 段落前缀偏移索引 ──
 
 /// 段落前缀偏移索引 — 维护段落文本长度（byte 和 qchar）的前缀和。
@@ -693,6 +948,82 @@ impl ParagraphOffsetIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Issue #901 第二十一轮问题2: ParagraphLineCountIndex 测试 ──
+
+    #[test]
+    fn line_count_index_empty() {
+        let idx = ParagraphLineCountIndex::new();
+        assert_eq!(idx.len(), 0);
+        assert!(idx.is_empty());
+        assert_eq!(idx.total_lines(), 0);
+        assert_eq!(idx.paragraph_line_start(0), 0);
+    }
+
+    #[test]
+    fn line_count_index_from_counts_basic() {
+        let idx = ParagraphLineCountIndex::from_counts(vec![1, 2, 3]);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.total_lines(), 6);
+        assert_eq!(idx.count_at(0), 1);
+        assert_eq!(idx.count_at(1), 2);
+        assert_eq!(idx.count_at(2), 3);
+    }
+
+    #[test]
+    fn line_count_index_paragraph_line_range() {
+        // 三段各 1,2,3 行 → 行范围 [0,1),[1,3),[3,6)
+        let idx = ParagraphLineCountIndex::from_counts(vec![1, 2, 3]);
+        assert_eq!(idx.paragraph_line_range(0), (0, 1));
+        assert_eq!(idx.paragraph_line_range(1), (1, 3));
+        assert_eq!(idx.paragraph_line_range(2), (3, 6));
+    }
+
+    #[test]
+    fn line_count_index_update_count_prefix_shifts() {
+        // Issue #901 第二十一轮问题2 核心场景：
+        // 三段各 1 行 → [0,1),[1,2),[2,3)。第一段变成 2 行后，
+        // 后缀段范围应自动平移为 [2,3),[3,4)，不需要逐段更新。
+        let mut idx = ParagraphLineCountIndex::from_counts(vec![1, 1, 1]);
+        assert_eq!(idx.paragraph_line_range(0), (0, 1));
+        assert_eq!(idx.paragraph_line_range(1), (1, 2));
+        assert_eq!(idx.paragraph_line_range(2), (2, 3));
+
+        idx.update_count(0, 2);
+        // 后缀段范围由前缀和自动平移
+        assert_eq!(idx.paragraph_line_range(0), (0, 2));
+        assert_eq!(idx.paragraph_line_range(1), (2, 3));
+        assert_eq!(idx.paragraph_line_range(2), (3, 4));
+        assert_eq!(idx.total_lines(), 4);
+    }
+
+    #[test]
+    fn line_count_index_update_count_decrease() {
+        let mut idx = ParagraphLineCountIndex::from_counts(vec![3, 2]);
+        assert_eq!(idx.paragraph_line_range(0), (0, 3));
+        assert_eq!(idx.paragraph_line_range(1), (3, 5));
+        idx.update_count(0, 1);
+        assert_eq!(idx.paragraph_line_range(0), (0, 1));
+        assert_eq!(idx.paragraph_line_range(1), (1, 3));
+    }
+
+    #[test]
+    fn line_count_index_insert_remove() {
+        let mut idx = ParagraphLineCountIndex::from_counts(vec![1, 3]);
+        idx.insert(1, 2);
+        assert_eq!(idx.len(), 3);
+        assert_eq!(idx.paragraph_line_range(1), (1, 3));
+        assert_eq!(idx.paragraph_line_range(2), (3, 6));
+        idx.remove(1);
+        assert_eq!(idx.paragraph_line_range(1), (1, 4));
+    }
+
+    #[test]
+    fn line_count_index_out_of_bounds() {
+        let idx = ParagraphLineCountIndex::from_counts(vec![1, 2]);
+        assert_eq!(idx.paragraph_line_start(5), 3); // 越界返回 total
+        assert_eq!(idx.count_at(5), 0);
+    }
 
     #[test]
     fn empty_index() {

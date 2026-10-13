@@ -158,7 +158,9 @@ pub struct LayoutSnapshot {
     /// Issue #901 第十四轮问题1: 段落前缀偏移索引 — 段首 byte/qchar 坐标权威来源。
     /// 消费方通过 `paragraph_offset_index.paragraph_byte_start(cache_slot) + line.byte_start`
     /// 计算文档级绝对 byte offset。
-    pub paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex,
+    ///
+    /// Issue #901 第二十一轮问题5: 用 `Arc` 共享，避免 clone O(段落数)。
+    pub paragraph_offset_index: std::sync::Arc<super::paragraph_height_index::ParagraphOffsetIndex>,
     /// Issue #901 第十四轮问题1: 段落高度索引 — 段首 y 坐标权威来源。
     /// 消费方通过 `padding + height_index.paragraph_top_y(cache_slot) + line.y`
     /// 计算文档级绝对 y 坐标。
@@ -169,16 +171,20 @@ pub struct LayoutSnapshot {
     /// Issue #901 第十九轮问题1: ParagraphId → 当前段落 slot 映射。
     /// materialize_line 用此映射解析 slot，不依赖需要遍历后缀行更新的 cache_slot。
     /// Issue #901 第十九轮问题5: Arc 共享，避免 clone O(段落数)。
+    /// Issue #901 第二十一轮问题4: Arc::clone 共享持久维护的映射，O(1)。
     pub paragraph_id_to_slot: std::sync::Arc<std::collections::HashMap<ParagraphId, usize>>,
-    /// Issue #901 第二十轮阻塞1: ParagraphId → 视觉行范围索引。
-    /// `visual_lines` 中 ParagraphId 对应的行范围 `[start, end)`。
-    /// 用于 `resolve_viewport_lines` / `resolve_paragraph_lines` 替换
-    /// raw `partition_point(cache_slot)` 二分查找，避免插段后复用后缀行
-    /// cache_slot 过期导致二分找不到正确行。
-    /// 按 visual_lines 中实际行顺序构建，同段落行连续。
-    /// Issue #901 第二十轮阻塞1: Arc 共享，避免 clone O(段落数)。
-    pub paragraph_id_to_line_range:
-        std::sync::Arc<std::collections::HashMap<ParagraphId, (usize, usize)>>,
+    /// Issue #901 第二十一轮问题2: 段落行数前缀索引（Fenwick 树）。
+    ///
+    /// 替代旧的 `paragraph_id_to_line_range: Arc<HashMap<ParagraphId, (usize, usize)>>`。
+    /// 旧 HashMap 以全局 visual_lines 数组下标为绝对值，却只对改动段更新，
+    /// 换行造成行数变化时全部后缀段范围仍指向旧下标。
+    ///
+    /// 改用 Fenwick 树维护每段 `visual_line_count` 的前缀和：
+    /// - 段落 `i` 的行范围 `[paragraph_line_start(i), paragraph_line_end(i))`。
+    /// - 前面段行数变化时，后缀段的行范围由前缀和自动平移，
+    ///   不需要逐段更新绝对行下标。
+    /// - 查视口时 O(log n) 前缀和查询，不需要反向扫描整个 HashMap。
+    pub paragraph_line_count_index: super::paragraph_height_index::ParagraphLineCountIndex,
 }
 
 #[cfg(test)]
@@ -198,11 +204,12 @@ impl LayoutSnapshot {
             text_indent: 0.0,
             padding: 0.0,
             lines: Arc::new(Vec::new()),
-            paragraph_offset_index: super::paragraph_height_index::ParagraphOffsetIndex::new(),
+            paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
             height_index: super::paragraph_height_index::ParagraphHeightIndex::new(),
             layout_generation: 0,
             paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
-            paragraph_id_to_line_range: std::sync::Arc::new(std::collections::HashMap::new()),
+            paragraph_line_count_index:
+                super::paragraph_height_index::ParagraphLineCountIndex::new(),
         }
     }
 }
@@ -398,42 +405,30 @@ impl LayoutSnapshot {
     }
 }
 
-/// Issue #901 第二十轮阻塞1: 通过 logical_slot 范围计算 visual_lines 行范围。
+/// Issue #901 第二十一轮问题2: 通过 logical_slot 范围计算 visual_lines 行范围。
 ///
 /// `first_logical_slot..last_logical_slot_excl` 是文档次序段落范围。
-/// 对每个 logical_slot，通过 `paragraph_id_to_slot` 反查 ParagraphId
-///（需要 slot → id 反向映射，此处通过遍历 paragraph_id_to_slot 实现），
-/// 再从 `paragraph_id_to_line_range` 查行范围 `[start, end)`。
+/// 用 `paragraph_line_count_index`（Fenwick 树）的前缀和 O(log n) 查询：
+/// - `start_idx = paragraph_line_count_index.paragraph_line_start(first_logical_slot)`
+/// - `end_idx = paragraph_line_count_index.paragraph_line_start(last_logical_slot_excl)`
 ///
-/// 由于 `paragraph_id_to_slot` 是 id → slot 映射，需要反向查找。
-/// 段落数远小于行数，O(段落数) 反向查找可接受。
-/// 若 `paragraph_id_to_line_range` 为空（旧路径/fallback），退化为
-/// `partition_point(logical_slot)` 二分查找。
+/// 前面段行数变化时，后缀段的行范围由前缀和自动平移，不需要逐段更新绝对行下标，
+/// 也不需要反向扫描整个 `paragraph_id_to_slot` HashMap 找 slot 在区间内的 ID。
+/// 若索引为空（旧路径/fallback），退化为 `partition_point(logical_slot)`。
 fn compute_line_range_from_logical_slots(
     snapshot: &LayoutSnapshot,
     first_logical_slot: usize,
     last_logical_slot_excl: usize,
 ) -> (usize, usize) {
-    // Issue #901 第二十轮阻塞1: 优先用 paragraph_id_to_line_range 索引。
-    if !snapshot.paragraph_id_to_line_range.is_empty() {
-        // 反向查找：对每个 logical_slot，找对应的 ParagraphId。
-        // paragraph_id_to_slot 是 id → slot，需要遍历找 slot == logical_slot 的 id。
-        let id_to_slot = &snapshot.paragraph_id_to_slot;
-        let id_to_range = &snapshot.paragraph_id_to_line_range;
-
-        let mut start_idx = snapshot.lines.len();
-        let mut end_idx = 0usize;
-        for (id, &slot) in id_to_slot.iter() {
-            if slot >= first_logical_slot && slot < last_logical_slot_excl {
-                if let Some(&(s, e)) = id_to_range.get(id) {
-                    start_idx = start_idx.min(s);
-                    end_idx = end_idx.max(e);
-                }
-            }
-        }
-        if start_idx <= end_idx && end_idx > 0 {
-            return (start_idx, end_idx);
-        }
+    // Issue #901 第二十一轮问题2: 优先用 paragraph_line_count_index 前缀和。
+    if !snapshot.paragraph_line_count_index.is_empty() {
+        let start_idx = snapshot
+            .paragraph_line_count_index
+            .paragraph_line_start(first_logical_slot);
+        let end_idx = snapshot
+            .paragraph_line_count_index
+            .paragraph_line_start(last_logical_slot_excl);
+        return (start_idx, end_idx);
     }
 
     // Fallback: 用 logical_slot 二分查找。

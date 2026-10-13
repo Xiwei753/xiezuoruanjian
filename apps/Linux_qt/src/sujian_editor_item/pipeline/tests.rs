@@ -114,11 +114,12 @@ fn test_doc_snapshot(
         }],
         visual_lines: Arc::new(Vec::new()),
         paragraph_offset_index:
-            crate::editor::layout::ParagraphOffsetIndex::new(),
+            std::sync::Arc::new(crate::editor::layout::ParagraphOffsetIndex::new()),
         height_index:
             crate::editor::layout::ParagraphHeightIndex::new(),
         paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
-        paragraph_id_to_line_range: std::sync::Arc::new(std::collections::HashMap::new()),
+        paragraph_line_count_index:
+            crate::editor::layout::ParagraphLineCountIndex::new(),
     }
 }
 

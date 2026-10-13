@@ -481,6 +481,11 @@ impl SujianEditorItem {
         // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。
         // TODO(issue-901): 后续优化为按需查询 — 此处需遍历物化行做 diff 比较
         // 和 composition range 覆盖检查，难以简单改为按需物化。
+        //
+        // Issue #901 第二十一轮问题5: 本轮复核确认保留。此处 resolved_visual_lines
+        // 用于 IME composition 的 old/new visual line diff 比较和 animation visual 提取，
+        // 需要完整的物化行列表做逐行比较。改为按需物化需要重构 diff 算法，
+        // 正确性风险高，保留标注。此路径仅在 IME composition 时触发，非每笔普通输入热路径。
         let resolved = doc_snapshot.resolved_visual_lines();
         let resolved_lines = resolved.as_ref();
 
