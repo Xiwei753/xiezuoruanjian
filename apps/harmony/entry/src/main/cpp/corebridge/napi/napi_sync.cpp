@@ -24,19 +24,22 @@ struct SyncAsyncData {
 //   decodeEnvelope 正常解析错误码，而不是 reject 成 JSON 字符串后在 catch 里丢成 NATIVE_ERROR。
 //   只有真正的工作线程/JS runtime 异常（status != napi_ok）才走 reject。
 //   无论成功或失败，都会删除 async work、释放 SyncAsyncData。
+//   注意：result_json 的释放统一在函数末尾，避免任何分支遗漏导致内存泄漏。
 static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
     SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    bool shouldResolve = true;
 
     if (status != napi_ok) {
         // 工作线程执行本身失败：这是真正的 runtime 异常，reject。
+        shouldResolve = false;
         napi_value error;
         napi_create_string_utf8(env, "async sync work failed", NAPI_AUTO_LENGTH, &error);
         napi_reject_deferred(env, asyncData->deferred, error);
     } else if (asyncData->result_json != nullptr) {
         napi_value result;
         napi_create_string_utf8(env, asyncData->result_json, strlen(asyncData->result_json), &result);
-        writer_core_free_string(asyncData->result_json);
         napi_resolve_deferred(env, asyncData->deferred, result);
+        // result_json 释放统一在末尾
     } else {
         // Rust 返回 nullptr：作为标准 ResultEnvelope resolve（业务失败），
         // 保留 NULL_RESULT 错误码供 UI/log 追溯，不再 reject 后丢失。
@@ -45,6 +48,10 @@ static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
         napi_resolve_deferred(env, asyncData->deferred, result);
     }
 
+    // 统一释放：只要 result_json 不为 nullptr，就调用 writer_core_free_string
+    if (asyncData->result_json != nullptr) {
+        writer_core_free_string(asyncData->result_json);
+    }
     napi_delete_async_work(env, asyncData->work);
     delete asyncData;
 }
