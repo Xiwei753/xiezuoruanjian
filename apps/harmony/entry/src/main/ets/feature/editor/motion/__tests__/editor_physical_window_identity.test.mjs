@@ -837,13 +837,13 @@ test('场景7b：plannedWindowKeys 不调用 allocateFresh（只读取预分配 
 
 // ── 场景8：不同绘制状态窗口的合并行为 ──
 //
-// buildFrame 合并逻辑：同 renderNodeKey 只合并 clip（不跳过、不创建 -dup key）。
+// Issue #879 评论6145308014：buildFrame 合并逻辑——同 renderNodeKey 且物理身份一致才合并 clip。
 // 不同绘制状态的窗口在 Planner 阶段已有不同 key，两张窗口均保留。
-// 同 key 同属性时只合并 clip（正常聚合行为）。
-// 同 key 不同属性时也只合并 clip（不丢字、不跳过、不创建 -dup key）。
+// 同 key 同物理身份时只合并 clip（正常聚合行为）。
+// 同 key 不同物理身份时不合并，保留独立窗口（暴露 Planner 规划问题）。
 
 test('场景8a：不同绘制状态的窗口在 Planner 阶段已有不同 key，两张窗口均保留', () => {
-  // 模拟 buildFrame 的合并逻辑（同 key 只合并 clip）
+  // 模拟 buildFrame 的合并逻辑（同 key 且物理身份一致才合并 clip）
   const motionGlyphWindows = [
     {
       renderNodeKey: 'old-10-win-0',  // 不同 key
@@ -883,15 +883,30 @@ test('场景8a：不同绘制状态的窗口在 Planner 阶段已有不同 key�
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      // 同 key → 只合并 clip
-      existing.clipRects = [...existing.clipRects, ...w.clipRects]
-      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-      continue
+      const samePhysicalIdentity =
+        existing.sourceKind === w.sourceKind &&
+        existing.sourceRevision === w.sourceRevision &&
+        existing.utf16Start === w.utf16Start &&
+        existing.utf16End === w.utf16End &&
+        existing.glyphX === w.glyphX &&
+        existing.glyphY === w.glyphY &&
+        existing.offsetX === w.offsetX &&
+        existing.offsetY === w.offsetY &&
+        existing.opacity === w.opacity &&
+        existing.windowInstanceId === w.windowInstanceId &&
+        existing.motionOwnerKind === w.motionOwnerKind
+      if (samePhysicalIdentity) {
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        continue
+      } else {
+        mergedWindows.push(w)
+      }
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
@@ -908,7 +923,7 @@ test('场景8a：不同绘制状态的窗口在 Planner 阶段已有不同 key�
   }
 })
 
-test('场景8b：同 key 同绘制属性时只合并 clip', () => {
+test('场景8b：同 key 同物理身份时只合并 clip', () => {
   const motionGlyphWindows = [
     {
       renderNodeKey: 'old-10-win-0',
@@ -948,15 +963,30 @@ test('场景8b：同 key 同绘制属性时只合并 clip', () => {
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      // 同 key → 只合并 clip
-      existing.clipRects = [...existing.clipRects, ...w.clipRects]
-      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-      continue
+      const samePhysicalIdentity =
+        existing.sourceKind === w.sourceKind &&
+        existing.sourceRevision === w.sourceRevision &&
+        existing.utf16Start === w.utf16Start &&
+        existing.utf16End === w.utf16End &&
+        existing.glyphX === w.glyphX &&
+        existing.glyphY === w.glyphY &&
+        existing.offsetX === w.offsetX &&
+        existing.offsetY === w.offsetY &&
+        existing.opacity === w.opacity &&
+        existing.windowInstanceId === w.windowInstanceId &&
+        existing.motionOwnerKind === w.motionOwnerKind
+      if (samePhysicalIdentity) {
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        continue
+      } else {
+        mergedWindows.push(w)
+      }
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
@@ -970,9 +1000,12 @@ test('场景8b：同 key 同绘制属性时只合并 clip', () => {
   assert.equal(mergedWindows[0].clipRects.length, 2)
 })
 
-test('场景8c：同 key 不同属性时只合并 clip（不丢字、不跳过、不创建 -dup key）', () => {
-  // 模拟 Planner bug：同 key 但不同绘制属性
-  // Coordinator 的合并逻辑：同 key 只合并 clip，不跳过、不创建 -dup key
+test('场景8c：同 key 不同属性时不合并——保留两个独立窗口，暴露 Planner 规划问题', () => {
+  // Issue #879 评论6145308014 问题3：同 key 不同属性（不同 offsetX/opacity/UTF-16 源范围）
+  // 不应合并为一个窗口。合并后只保留 A 的文本切片、位置与透明度，B 的实际文字不可能
+  // 按自己的源范围/位置绘制，会被错误裁掉或画成 A 的内容。
+  // 正确预期：Planner 应从两个不同物理来源/轨迹生成不同固定 key；
+  // 如果同 key 不同属性出现在 buildFrame，应保留两个独立窗口，暴露规划问题。
   const motionGlyphWindows = [
     {
       renderNodeKey: 'shared-key',
@@ -990,13 +1023,13 @@ test('场景8c：同 key 不同属性时只合并 clip（不丢字、不跳过�
       clipRects: [{ x: 100, y: 50, width: 20, height: 30 }],
     },
     {
-      renderNodeKey: 'shared-key', // 同 key（Planner bug）
+      renderNodeKey: 'shared-key', // 同 key 但不同物理身份
       sourceKind: 'old',
       sourceRevision: 10,
       offsetX: 5,  // 不同 offsetX
       offsetY: 0,
       opacity: 0.5, // 不同 opacity
-      utf16Start: 2,
+      utf16Start: 2, // 不同 UTF-16 源范围
       utf16End: 4,
       glyphX: 100,
       glyphY: 50,
@@ -1007,35 +1040,143 @@ test('场景8c：同 key 不同属性时只合并 clip（不丢字、不跳过�
   ]
 
   // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
+  // 同 key 且物理身份一致 → 合并 clip；同 key 但物理身份不一致 → 不合并
   const mergedWindows = []
   const windowByKey = new Map()
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      // 同 key → 只合并 clip（不跳过、不创建 -dup key）
-      existing.clipRects = [...existing.clipRects, ...w.clipRects]
-      existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-      existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-      existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-      existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-      existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-      existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-      continue
+      const samePhysicalIdentity =
+        existing.sourceKind === w.sourceKind &&
+        existing.sourceRevision === w.sourceRevision &&
+        existing.utf16Start === w.utf16Start &&
+        existing.utf16End === w.utf16End &&
+        existing.glyphX === w.glyphX &&
+        existing.glyphY === w.glyphY &&
+        existing.offsetX === w.offsetX &&
+        existing.offsetY === w.offsetY &&
+        existing.opacity === w.opacity &&
+        existing.windowInstanceId === w.windowInstanceId &&
+        existing.motionOwnerKind === w.motionOwnerKind
+      if (samePhysicalIdentity) {
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        continue
+      } else {
+        // 同 key 但物理身份不一致 → 不合并，保留独立窗口
+        mergedWindows.push(w)
+      }
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
     }
   }
 
-  // 合并为一个窗口（同 key 只合并 clip），不丢字
-  assert.equal(mergedWindows.length, 1)
-  assert.equal(mergedWindows[0].renderNodeKey, 'shared-key')
-  // clipRects 合并了两段
-  assert.equal(mergedWindows[0].clipRects.length, 2)
+  // 两个窗口均保留（不合并），暴露 Planner 规划问题
+  assert.equal(mergedWindows.length, 2)
+  // 两个窗口各自保留自己的源范围和属性
+  assert.equal(mergedWindows[0].utf16Start, 0)
+  assert.equal(mergedWindows[0].utf16End, 2)
+  assert.equal(mergedWindows[0].offsetX, 0)
+  assert.equal(mergedWindows[0].opacity, 1)
+  assert.equal(mergedWindows[1].utf16Start, 2)
+  assert.equal(mergedWindows[1].utf16End, 4)
+  assert.equal(mergedWindows[1].offsetX, 5)
+  assert.equal(mergedWindows[1].opacity, 0.5)
   // 没有任何 -dup 后缀的 key
   for (const w of mergedWindows) {
     assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
   }
+})
+
+test('场景8d：同 key 同物理身份不同 clip 时合并为一个窗口', () => {
+  // Issue #879 评论6145308014 问题3：另一条用例输入真正同一源 Text、
+  // 相同 offset/alpha/UTF-16 源范围、不同可见 clip，断言它们能合并为一个窗口。
+  // 这才是合法的同 key 合并场景：同一物理 Text 的多块 clip 共享一组 key。
+  const motionGlyphWindows = [
+    {
+      renderNodeKey: 'old-10-win-0',
+      sourceKind: 'old',
+      sourceRevision: 10,
+      offsetX: 0,
+      offsetY: 0,
+      opacity: 1,
+      utf16Start: 0,
+      utf16End: 4,
+      glyphX: 100,
+      glyphY: 50,
+      windowInstanceId: 'win-0',
+      motionOwnerKind: 'reflow',
+      clipRects: [{ x: 100, y: 50, width: 20, height: 30 }],
+    },
+    {
+      renderNodeKey: 'old-10-win-0', // 同 key
+      sourceKind: 'old',
+      sourceRevision: 10,
+      offsetX: 0,   // 同 offsetX
+      offsetY: 0,   // 同 offsetY
+      opacity: 1,   // 同 opacity
+      utf16Start: 0, // 同 UTF-16 源范围
+      utf16End: 4,
+      glyphX: 100,   // 同 glyphX
+      glyphY: 50,    // 同 glyphY
+      windowInstanceId: 'win-0', // 同 windowInstanceId
+      motionOwnerKind: 'reflow', // 同 motionOwnerKind
+      clipRects: [{ x: 120, y: 50, width: 20, height: 30 }], // 不同 clip
+    },
+  ]
+
+  // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
+  const mergedWindows = []
+  const windowByKey = new Map()
+  for (const w of motionGlyphWindows) {
+    const existing = windowByKey.get(w.renderNodeKey)
+    if (existing !== undefined) {
+      const samePhysicalIdentity =
+        existing.sourceKind === w.sourceKind &&
+        existing.sourceRevision === w.sourceRevision &&
+        existing.utf16Start === w.utf16Start &&
+        existing.utf16End === w.utf16End &&
+        existing.glyphX === w.glyphX &&
+        existing.glyphY === w.glyphY &&
+        existing.offsetX === w.offsetX &&
+        existing.offsetY === w.offsetY &&
+        existing.opacity === w.opacity &&
+        existing.windowInstanceId === w.windowInstanceId &&
+        existing.motionOwnerKind === w.motionOwnerKind
+      if (samePhysicalIdentity) {
+        existing.clipRects = [...existing.clipRects, ...w.clipRects]
+        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+        continue
+      } else {
+        mergedWindows.push(w)
+      }
+    } else {
+      windowByKey.set(w.renderNodeKey, w)
+      mergedWindows.push(w)
+    }
+  }
+
+  // 合并为一个窗口（同 key 且物理身份一致，只合并 clip）
+  assert.equal(mergedWindows.length, 1)
+  assert.equal(mergedWindows[0].renderNodeKey, 'old-10-win-0')
+  // clipRects 合并了两段
+  assert.equal(mergedWindows[0].clipRects.length, 2)
+  // 源范围保持不变
+  assert.equal(mergedWindows[0].utf16Start, 0)
+  assert.equal(mergedWindows[0].utf16End, 4)
+  assert.equal(mergedWindows[0].offsetX, 0)
+  assert.equal(mergedWindows[0].opacity, 1)
 })
 
 // ── 场景9：buildFrame 不再调用 allocateFresh ──

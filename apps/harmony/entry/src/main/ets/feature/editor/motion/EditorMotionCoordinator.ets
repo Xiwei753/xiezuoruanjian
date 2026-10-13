@@ -2271,18 +2271,17 @@ export class EditorMotionCoordinator {
               // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
               // 合并各字的 clipRects 到一个 MotionGlyphWindow，避免重复 key 丢字。
               // target 成员仍按 interval 独立分配 windowInstanceId，直接 push。
+              // Issue #879 评论6145308014 问题2：frozen 聚合层不再静默丢冲突成员。
+              // 同 key 且身份一致 → 合并 clip；同 key 但身份不一致 → 不跳过、不合并，
+              // 保留为独立窗口 push 到 motionGlyphWindows，暴露 Planner 规划问题。
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
-                  // Issue #879 评论6128658045 问题2：buildSourceMembers 已从源头保证
-                  // renderNodeKey 与 sourceRevision 一致，不再需要 -conflict-N 后缀或
-                  // defensiveConflictKey。如果仍检测到同 key 但不同 runId/sourceRevision
-                  // 的成员（不应发生），跳过该成员——不分配新 key，避免破坏 sameKeySet。
                   if (existing.runId !== memberWindow.runId ||
                       existing.sourceRevision !== memberWindow.sourceRevision) {
-                    // 防御性检查：同 key 不同身份不应发生（上游 buildSourceMembers 已保证一致）。
-                    // 跳过此成员，不分配新 key。
-                    continue
+                    // 同 key 不同身份：不跳过(continue)，保留为独立窗口
+                    // 这暴露了 Planner/交棒对窗口所有权的规划问题，不应通过跳过掩盖
+                    motionGlyphWindows.push(memberWindow)
                   } else {
                     // Issue #879 复核评论6120195493：只合并裁切和显示片段。
                     // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
@@ -3054,23 +3053,46 @@ export class EditorMotionCoordinator {
     // 5. 静态可见区：完整扣除所有被 motion 接管的目标 glyph 身份
     const staticVisibleRanges = EditorMotionCoordinator.computeStaticRangesMultiChannel(plan, newLayout)
 
-    // Issue #879 评论6143345701：buildFrame 不改写 key。
-    // Planner 应通过 motionChannel 为不同轨迹分配不同 renderNodeKey。
-    // 同 key → 只合并 clip（Planner 应确保同 key 的窗口有相同物理身份，Coordinator 不解决身份冲突）
+    // Issue #879 评论6145308014 问题1：同 key 合并前检查物理身份是否一致。
+    // 同一物理 Text 的多块 clip 才可共享一组 key。
+    // 如果 same key 但源范围、位置、alpha 不一致，说明 Planner/交棒对窗口所有权的规划不对，
+    // 应从计划源头消除冲突，而不能通过"无条件合并 clip"把异常伪装成成功。
+    // 同 key 且物理身份一致 → 合并 clip（正常聚合）；
+    // 同 key 但物理身份不一致 → 不合并，保留两个独立窗口（暴露 Planner 规划问题）。
     const mergedWindows: MotionGlyphWindow[] = []
     const windowByKey = new Map<string, MotionGlyphWindow>()
     for (const w of motionGlyphWindows) {
       const existing = windowByKey.get(w.renderNodeKey)
       if (existing !== undefined) {
-        // 同 key → 只合并 clip（Planner 应确保同 key 的窗口有相同物理身份）
-        existing.clipRects = [...existing.clipRects, ...w.clipRects]
-        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-        continue
+        // 检查物理身份是否一致：sourceKind, sourceRevision, utf16Start, utf16End,
+        // glyphX, glyphY, offsetX, offsetY, opacity, windowInstanceId, motionOwnerKind
+        const samePhysicalIdentity =
+          existing.sourceKind === w.sourceKind &&
+          existing.sourceRevision === w.sourceRevision &&
+          existing.utf16Start === w.utf16Start &&
+          existing.utf16End === w.utf16End &&
+          existing.glyphX === w.glyphX &&
+          existing.glyphY === w.glyphY &&
+          existing.offsetX === w.offsetX &&
+          existing.offsetY === w.offsetY &&
+          existing.opacity === w.opacity &&
+          existing.windowInstanceId === w.windowInstanceId &&
+          existing.motionOwnerKind === w.motionOwnerKind
+        if (samePhysicalIdentity) {
+          // 同 key 且物理身份一致 → 合并 clip
+          existing.clipRects = [...existing.clipRects, ...w.clipRects]
+          existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
+          existing.clipRight = Math.max(existing.clipRight, w.clipRight)
+          existing.clipTop = Math.min(existing.clipTop, w.clipTop)
+          existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
+          existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
+          existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+          continue
+        } else {
+          // 同 key 但物理身份不一致 → 不合并，保留独立窗口
+          // 这暴露了 Planner 规划问题（同 key 不同物理来源），不应通过合并掩盖
+          mergedWindows.push(w)
+        }
       } else {
         windowByKey.set(w.renderNodeKey, w)
         mergedWindows.push(w)
