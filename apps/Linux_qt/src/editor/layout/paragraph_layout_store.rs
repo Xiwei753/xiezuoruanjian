@@ -743,9 +743,13 @@ impl ParagraphLayoutStore {
 
         // 1. 收集被删除旧 entries 的 handle 到 retired_slots。
         //    前缀/后缀段的 handle 保留（entries 原地保留），不回收。
+        //    Issue #901 第三十二轮问题3: 同时收集被删除段的 ParagraphId，
+        //    供 id_to_slot_cache 增量更新使用（O(k) 从 entries 取，不遍历全 HashMap）。
         let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
+        let mut removed_ids: Vec<ParagraphId> = Vec::with_capacity(old_affected_count);
         for i in old_splice_start..old_splice_end {
             let entry = &self.entries[i];
+            removed_ids.push(entry.id);
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
                 newly_retired.push((
                     entry.layout_generation,
@@ -798,30 +802,25 @@ impl ParagraphLayoutStore {
         self.entries
             .splice(old_splice_start..old_splice_end, new_entries);
 
-        // 4. 更新后缀 entries 的 document_byte_start。
-        //    后缀段从 new_layout_end 开始，document_byte_start 从 byte_offset 继续。
-        for i in new_layout_end..new_count.min(self.entries.len()) {
-            let entry = &mut self.entries[i];
-            entry.document_byte_start = byte_offset;
-            byte_offset += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
-        }
+        // 4. Issue #901 第三十二轮问题3: 不再遍历后缀 entries 重写 document_byte_start。
+        //    后缀的 document_byte_start 字段保持旧值（可能过时），消费方应通过
+        //    compute_document_byte_start(index) 获取准确值（前缀和 O(index)）。
+        //    compute_affected_paragraphs 已改为 running offset 累加，不读此字段。
+        //    这消除了 O(suffix_count) 的后缀遍历，与 split_paragraph/merge_paragraphs
+        //    （不更新后缀 document_byte_start）的做法一致。
+        //    新段的 document_byte_start 在构造时已正确设置（基于前缀累加）。
+        let _ = byte_offset;
 
         // 5. 增量更新 id_to_slot_cache — 只处理受影响范围，后缀段 slot 用 delta 批量平移。
-        //    Issue #901 第三十一轮问题4: 不再 remove 所有 slot >= old_splice_start 的条目
-        //    再重新 insert 新段 + 后缀段（O(n) HashMap remove+insert）。
-        //    改为：只移除被删除段 [old_splice_start, old_splice_end) 的 Id，
-        //    后缀段 slot 用 delta 批量平移（简单整数加法），再插入新段 Id → slot，
-        //    无 HashMap remove+insert 后缀段，与整章规模脱钩。
+        //    Issue #901 第三十二轮问题3: 删除受影响 ID 从 removed_ids（O(k)）取，
+        //    不遍历全 HashMap 找 slot 在 [old_splice_start, old_splice_end) 的条目。
+        //    后缀段 slot 平移保留（O(段落数)），但只在段数变化（Enter/Backspace）时触发，
+        //    普通字键（段数不变）不走 splice 路径，不受影响。
         {
             let cache = Arc::make_mut(&mut self.id_to_slot_cache);
-            // 移除被删除段的 Id（splice 前其 slot 在 [old_splice_start, old_splice_end)）。
-            let ids_to_remove: Vec<ParagraphId> = cache
-                .iter()
-                .filter(|(_, &slot)| slot >= old_splice_start && slot < old_splice_end)
-                .map(|(&id, _)| id)
-                .collect();
-            for id in ids_to_remove {
-                cache.remove(&id);
+            // 移除被删除段的 Id — 从 removed_ids（splice 前收集）取，O(k)。
+            for id in &removed_ids {
+                cache.remove(id);
             }
             // 后缀段 slot 平移：splice 前后缀段 slot 在 [old_splice_end, old_count)，
             // splice 后新 slot = 旧 slot + slot_delta，
@@ -1702,31 +1701,46 @@ impl ParagraphLayoutStore {
         }
 
         // 找到第一个与受影响范围相交的段落
-        let start = self
-            .entries
-            .iter()
-            .position(|e| {
-                let seg_end = e.document_byte_start + e.paragraph_text_len;
-                seg_end >= affected_byte_start && e.document_byte_start < affected_byte_end
-            })
-            .unwrap_or(0);
+        // Issue #901 第三十二轮问题3: 用 running offset 累加段落长度计算 document_byte_start，
+        // 不读 entry.document_byte_start 字段（splice 后后缀该字段可能过时）。
+        // O(n) 单次遍历，同时找 start 和 end。
+        let mut start = None;
+        let mut end = None;
+        let mut offset = 0usize;
+        for (i, e) in self.entries.iter().enumerate() {
+            let seg_start = offset;
+            let seg_end = offset + e.paragraph_text_len;
+            if seg_end > affected_byte_start && seg_start < affected_byte_end {
+                if start.is_none() {
+                    start = Some(i);
+                }
+                end = Some(i + 1);
+            }
+            offset += e.paragraph_text_len + if e.hard_break { 1 } else { 0 };
+        }
 
-        // 找到最后一个与受影响范围相交的段落
-        let end = self
-            .entries
-            .iter()
-            .rposition(|e| {
-                let seg_end = e.document_byte_start + e.paragraph_text_len;
-                seg_end >= affected_byte_start && e.document_byte_start < affected_byte_end
-            })
-            .map(|i| i + 1)
-            .unwrap_or(self.entries.len());
+        let start = start.unwrap_or(0);
+        let end = end.unwrap_or(self.entries.len());
 
         AffectedParagraphRanges {
             relayout_start: start,
             relayout_end: end,
             full_relayout: false,
         }
+    }
+
+    /// 计算段落 `index` 的文档 byte 起始偏移（前缀和）。
+    ///
+    /// Issue #901 第三十二轮问题3: splice 后后缀 entries 的 `document_byte_start` 字段
+    /// 可能过时（不再遍历后缀重写）。消费方应通过此方法获取准确值，不直接读字段。
+    /// O(index)，但不依赖字段正确性。
+    pub fn compute_document_byte_start(&self, index: usize) -> usize {
+        let end = index.min(self.entries.len());
+        let mut offset = 0usize;
+        for e in &self.entries[..end] {
+            offset += e.paragraph_text_len + if e.hard_break { 1 } else { 0 };
+        }
+        offset
     }
 
     /// 全局失效 — 标记所有段落需要重排。

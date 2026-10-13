@@ -40,6 +40,14 @@ cpp! {{
         // 同一物理槽被复用时 epoch 递增，旧帧持有的旧 epoch 不匹配，
         // release_layout_ref 时不会误减新 layout 的 refcount。
         std::vector<uint64_t> epochs;
+        // Issue #901 第三十二轮复核问题2: retired 标记 — clear_layout_generation
+        // 不再立即 delete 所有 layout，而是标记 retired=true。retired generation
+        // 中的 layout 不再被新消费者获取（get_paragraph_layout / checked 返回 nullptr）。
+        // 已存活的 lease 仍持有引用（refcount > 0），layout 不会被 delete。
+        // 最后一个 lease Drop 时 release_layout_ref 减 refcount 归零，delete layout。
+        // 当 retired generation 中所有 layout 都被 delete（全 nullptr）时，
+        // 从 g_layout_generations 中 erase 该 generation。
+        bool retired;
     };
     static std::vector<LayoutGeneration> g_layout_generations;
     static uint64_t g_next_generation = 1;
@@ -63,7 +71,9 @@ cpp! {{
     static LayoutGeneration* ensure_layout_generation(uint64_t gen) {
         auto* existing = find_layout_generation(gen);
         if (existing) return existing;
-        g_layout_generations.push_back(LayoutGeneration{gen, {}, {}, 0, {}, {}});
+        // Issue #901 第三十二轮复核问题2: 新创建的 generation retired=false。
+        // 不修改已有 generation 的 retired 标记（clear 后再 ensure 不应复活 retired generation）。
+        g_layout_generations.push_back(LayoutGeneration{gen, {}, {}, 0, {}, {}, false});
         return &g_layout_generations.back();
     }
 
@@ -71,13 +81,34 @@ cpp! {{
         return g_next_generation++;
     }
 
+    // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义。
+    // 不再无条件 delete 所有 layout 并 erase generation — 这会破坏存活 lease 的引用。
+    // 改为：检查是否有存活 lease（refcount > 1，即除 Store 初始引用外有消费者 lease）。
+    // - 无存活 lease：所有 refcount <= 1（只有 Store 初始引用或空 slot），
+    //   Store 后续 clear/rebuild 不会再访问这些 slot，直接 delete + erase（与旧语义一致，高效）。
+    // - 有存活 lease：标记 retired=true，不立即 delete。retired generation 中的 layout
+    //   不再被新消费者获取（get 返回 nullptr）。已存活的 lease 仍持有引用，
+    //   release_layout_ref 减 refcount 归零时 delete layout，全空时 erase generation。
     void clear_layout_generation(uint64_t gen) {
         for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
             if (it->generation == gen) {
-                for (auto* l : it->layouts) {
-                    delete l;
+                // 检查是否有存活 lease：refcount > 1 表示除 Store 初始引用外有消费者 lease。
+                bool has_live_lease = false;
+                for (size_t i = 0; i < it->refcounts.size(); ++i) {
+                    if (it->refcounts[i] > 1) { has_live_lease = true; break; }
                 }
-                g_layout_generations.erase(it);
+                if (!has_live_lease) {
+                    // 无存活 lease，直接 delete + erase（Store 初始引用由后续
+                    // paragraph_store.clear 的 release 处理，找不到 generation 时安全 return）。
+                    for (auto* l : it->layouts) {
+                        delete l;
+                    }
+                    g_layout_generations.erase(it);
+                } else {
+                    // 有存活 lease，标记 retired，不立即 delete。
+                    // lease Drop 时 release_layout_ref 逐个 delete，全空时 erase。
+                    it->retired = true;
+                }
                 return;
             }
         }
@@ -95,6 +126,8 @@ cpp! {{
     QTextLayout* get_paragraph_layout(uint64_t gen, int slot) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return nullptr;
+        // Issue #901 第三十二轮复核问题2: retired generation 不再被新消费者获取。
+        if (lg->retired) return nullptr;
         auto& layouts = lg->layouts;
         if (slot < 0 || slot >= (int)layouts.size()) return nullptr;
         return layouts[slot];
@@ -106,6 +139,8 @@ cpp! {{
     QTextLayout* get_paragraph_layout_checked(uint64_t gen, int slot, uint64_t epoch) {
         auto* lg = find_layout_generation(gen);
         if (!lg) return nullptr;
+        // Issue #901 第三十二轮复核问题2: retired generation 不再被新消费者获取。
+        if (lg->retired) return nullptr;
         auto& layouts = lg->layouts;
         auto& epochs = lg->epochs;
         if (slot < 0 || slot >= (int)layouts.size()) return nullptr;
@@ -351,6 +386,24 @@ cpp! {{
             }
             if (!already_free) {
                 lg->free_slots.push_back(slot);
+            }
+        }
+        // Issue #901 第三十二轮复核问题2: retired generation 在所有 layout 都被 delete
+        //（全 nullptr，含空段 null slot）后从 g_layout_generations 中 erase。
+        // 这保证最后一个 lease Drop 后 retired generation 的资源被正确释放。
+        // 注意：erase 会使 lg 指针失效，所以先完成所有对 lg 的访问，最后 erase。
+        if (lg->retired) {
+            bool all_deleted = true;
+            for (auto* l : lg->layouts) {
+                if (l) { all_deleted = false; break; }
+            }
+            if (all_deleted) {
+                for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
+                    if (it->generation == gen) {
+                        g_layout_generations.erase(it);
+                        break;
+                    }
+                }
             }
         }
     }

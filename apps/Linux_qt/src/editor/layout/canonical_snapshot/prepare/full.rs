@@ -1339,19 +1339,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // materialize_line 通过 paragraph_id_to_slot 映射在读取时解析 slot，
     // 不需要在编辑时遍历后缀行更新 cache_slot/para_start。
     // 后缀行的 cache_slot 可能过时，但 materialize_line 优先用 paragraph_id 解析。
-    // 仍需更新后缀 canonical paragraph 的 paragraph_document_byte_start（段落序号），
-    // 因为它被用作段落索引（非 paragraph_id），cursor_x_from_canonical 等消费方按
-    // paragraphs[slot] 索引。
-    let old_splice_para_count = splice_para_end - splice_para_start;
-    let new_splice_para_count = new_layout_end - new_layout_start;
-    let para_delta: i64 = new_splice_para_count as i64 - old_splice_para_count as i64;
-    if para_delta != 0 {
-        // 更新后缀 canonical paragraph 的 paragraph_document_byte_start（段落序号）
-        let suffix_para_start = splice_para_start + new_splice_para_count;
-        for (i, para) in paragraphs[suffix_para_start..].iter_mut().enumerate() {
-            para.paragraph_document_byte_start = suffix_para_start + i;
-        }
-    }
+    //
+    // Issue #901 第三十二轮问题3: 不再遍历后缀 canonical paragraph 更新
+    // paragraph_document_byte_start（段落序号）。该字段始终等于数组索引，
+    // 唯一读取方（全篇重排路径 line ~2052）已改为直接用数组索引 pidx，
+    // 不依赖此字段。后缀段该字段可能过时（仍为旧序号），但无消费方读取。
+    // 这消除了 O(suffix_count) 的后缀遍历。
 
     // Issue #901 第二十四轮问题2: 删除循环外的空文本处理分支和尾部换行处理分支。
     // 主重排循环 `for para_idx in new_layout_start..new_layout_end` 已用 new_paras
@@ -2049,7 +2042,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                     // 不用 para_start（全文 byte offset），与 paragraph_document_byte_start
                     // 现已是段落编号语义一致。
                     // Issue #901 第二十轮阻塞1+3: 改用 logical_slot 而非 cache_slot。
-                    let prev_para_slot = prev.paragraphs[pidx].paragraph_document_byte_start;
+                    // Issue #901 第三十二轮问题3: paragraph_document_byte_start 始终等于
+                    // 数组索引，直接用 pidx 替代字段读取，消除增量路径中后缀遍历更新该字段的需要。
+                    let prev_para_slot = pidx;
                     prev.visual_lines
                         .iter()
                         .filter(|l| l.logical_slot as usize == prev_para_slot)

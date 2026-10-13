@@ -549,7 +549,7 @@ impl LinuxEditorPipeline {
     ) -> crate::editor::layout::CanonicalDocumentVisualSnapshot {
         // Issue #738 评论 5792244119 问题 1: 优先复用 EditorLayout 当前 prepared layout
         // 的 generation，不再分配临时 generation（避免泄漏）。
-        let prepared_handle = editor_layout.current_prepared_layout();
+        let mut prepared_handle = editor_layout.current_prepared_layout();
         // Issue #901 第二十轮阻塞2: 从 paragraph_store 获取 ParagraphId 序列，
         // 不再用 slot+1 伪造 Id。
         let paragraph_ids: Vec<layout::ParagraphId> =
@@ -618,16 +618,25 @@ impl LinuxEditorPipeline {
         let visuals_lines: &[crate::editor::layout::VisualLine] =
             prepared_handle.as_ref().map(|h| h.lines).unwrap_or(&[]);
         if !visuals_lines.is_empty() {
-            // Issue #901 第三十一轮问题3: 从 prepared_handle clone lease，
+            // Issue #901 第三十一轮问题3: 从 prepared_handle 取 lease，
             // 动画帧持有引用，防止提取动画视觉期间旧 layout 被释放。
-            // clone 调用 retain_layout_ref 增引用，visuals_handle drop 时退引用。
+            //
+            // Issue #901 第三十二轮复核问题1: 不整份 clone lease Vec（h.leases.clone()）。
+            // clone 会对每个 lease 调用 retain_layout_ref（FFI retain），随后
+            // visuals_handle drop 又 release，一次 retain / 一次 Drop 变成两次 FFI
+            // 往返。改用 std::mem::take 转移 leases 所有权 — 一次 retain（lease 创建时）/
+            // 一次 Drop（visuals_handle drop），不按 lease 数量翻倍。
+            // prepared_handle 在此之后不再使用 leases（generation 和 lines 已取出到
+            // visuals_gen / visuals_lines），take 后 prepared_handle.leases 为空 Vec，
+            // drop 时不退引用。
+            let leases = prepared_handle
+                .as_mut()
+                .map(|h| std::mem::take(&mut h.leases))
+                .unwrap_or_default();
             let visuals_handle = layout::PreparedLayoutHandle {
                 generation: visuals_gen,
                 lines: visuals_lines,
-                leases: prepared_handle
-                    .as_ref()
-                    .map(|h| h.leases.clone())
-                    .unwrap_or_default(),
+                leases,
             };
             // 布局变化后任意行位置都可能改变，提取所有行，不漏 anchor 覆盖的行。
             let all_line_ids: Vec<usize> = (0..visuals_lines.len()).collect();

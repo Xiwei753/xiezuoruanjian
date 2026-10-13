@@ -129,15 +129,21 @@ impl ParagraphHeightIndex {
     }
 
     /// 重建整个 Fenwick 树（从 `heights` 数组）。
+    ///
+    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点累加。
+    /// 先将每个元素直接放入 BIT 叶节点，再单次前向传播：每个节点向唯一父节点贡献。
     fn rebuild_bit(&mut self) {
         let n = self.heights.len();
         self.bit = vec![0.0; n + 1];
+        // Step 1: 叶节点直接赋值
         for i in 0..n {
-            let val = self.heights[i];
-            let mut j = i + 1;
-            while j <= n {
-                self.bit[j] += val;
-                j += lowbit(j);
+            self.bit[i + 1] = self.heights[i];
+        }
+        // Step 2: 前向传播，每个节点向父节点 j = i + lowbit(i) 贡献一次
+        for i in 1..=n {
+            let j = i + lowbit(i);
+            if j <= n {
+                self.bit[j] += self.bit[i];
             }
         }
         self.len = n;
@@ -568,15 +574,18 @@ impl ParagraphLineCountIndex {
     }
 
     /// 重建整个 Fenwick 树（从 `counts` 数组）。
+    ///
+    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点累加。
     fn rebuild_bit(&mut self) {
         let n = self.counts.len();
         self.bit = vec![0usize; n + 1];
         for i in 0..n {
-            let val = self.counts[i];
-            let mut j = i + 1;
-            while j <= n {
-                self.bit[j] += val;
-                j += lowbit(j);
+            self.bit[i + 1] = self.counts[i];
+        }
+        for i in 1..=n {
+            let j = i + lowbit(i);
+            if j <= n {
+                self.bit[j] += self.bit[i];
             }
         }
         self.len = n;
@@ -1000,19 +1009,28 @@ impl ParagraphOffsetIndex {
         }
     }
 
-    /// 重建 Fenwick 树数组（内部辅助，O(n)）。
+    /// 重建 Fenwick 树数组（内部辅助）。
+    ///
+    /// Issue #901 第三十二轮问题3: 用 O(n) 线性构建替代 O(n log n) 逐点 fenwick_add。
     fn rebuild_fenwick(&mut self) {
         let n = self.byte_lengths.len();
         self.byte_bit = vec![0usize; n + 1];
         self.qchar_bit = vec![0usize; n + 1];
-        self.byte_total = 0;
-        self.qchar_total = 0;
+        // Step 1: 叶节点直接赋值
         for i in 0..n {
-            self.byte_total += self.byte_lengths[i];
-            self.qchar_total += self.qchar_lengths[i];
-            Self::fenwick_add(&mut self.byte_bit, i, self.byte_lengths[i]);
-            Self::fenwick_add(&mut self.qchar_bit, i, self.qchar_lengths[i]);
+            self.byte_bit[i + 1] = self.byte_lengths[i];
+            self.qchar_bit[i + 1] = self.qchar_lengths[i];
         }
+        // Step 2: 前向传播，每个节点向唯一父节点贡献一次
+        for i in 1..=n {
+            let j = i + lowbit(i);
+            if j <= n {
+                self.byte_bit[j] += self.byte_bit[i];
+                self.qchar_bit[j] += self.qchar_bit[i];
+            }
+        }
+        self.byte_total = self.byte_lengths.iter().sum();
+        self.qchar_total = self.qchar_lengths.iter().sum();
     }
 
     /// 总 byte 长度（所有段落之和）。O(1)。

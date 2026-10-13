@@ -210,9 +210,22 @@ impl EditorLayout {
             // Issue #901 第三十一轮问题3: 为每个有 Qt layout 的行创建 lease，
             // 接通所有权链。retain 成功才收集；失败（layout 已释放/epoch 不匹配）
             // 跳过该行 lease，不阻塞 handle 创建。
+            //
+            // Issue #901 第三十二轮复核问题1: 按 (generation, cache_slot, layout_epoch)
+            // 三元组去重。一个长段自动折为多条视觉行，其实只对应同一个
+            // (generation, physical_slot, epoch)，现在只 retain 同一 QTextLayout 一次，
+            // 不按视觉行重复 retain。lease 的 try_from_id 调用 C++ retain_layout_ref
+            // 是有成本的 FFI 调用，去重后从 O(视觉行数) 降到 O(唯一 layout 数)。
             let mut leases = Vec::new();
+            let mut seen: std::collections::HashSet<(u64, i32, u64)> =
+                std::collections::HashSet::new();
             for line in c.lines.iter() {
                 if line.has_qt_layout && line.cache_slot >= 0 {
+                    let key = (generation, line.cache_slot, line.layout_epoch);
+                    if !seen.insert(key) {
+                        // 同一 (generation, slot, epoch) 已 retain 过，跳过。
+                        continue;
+                    }
                     let id = QtLayoutId::new(generation, line.cache_slot, line.layout_epoch);
                     if let Some(lease) = QtLayoutLease::try_from_id(id) {
                         leases.push(lease);
@@ -276,6 +289,15 @@ impl EditorLayout {
         );
         self.paragraph_store
             .sync_from_visual_lines(promoted.visual_lines.as_slice(), promoted.generation);
+
+        // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义后，
+        // 旧 generation 的 Store 初始引用（refcount=1）不再被 clear 暴力 delete 释放，
+        // 需要由 release_retired_layouts 显式退引用。rebuild_from_text 和 sync_from_visual_lines
+        // 把未被继承的旧 handle 推入 retired_slots，此处统一释放。
+        // - 无存活 lease（clear 已 delete+erase）：release 找不到 generation，安全 return。
+        // - 有存活 lease（clear 标记 retired）：release 减 Store 的 refcount，lease 仍持有引用，
+        //   layout 不被 delete；最后一个 lease Drop 时才 delete + erase generation。
+        self.paragraph_store.release_retired_layouts();
 
         let heights = self.paragraph_store.paragraph_heights();
         Arc::make_mut(&mut self.height_index).rebuild(heights);
