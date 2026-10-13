@@ -790,11 +790,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第二十三轮问题1+2: 用统一切分器生成 (content, hard_break) 序列，
     // 包括末尾换行产生的尾空段。段落比较保留 hard_break，避免仅插入/删除末尾回车时
     // 按去掉 \n 后的段落正文比较误判"无变化"。
-    // Issue #901 第二十六轮复核缺口4: 当有 Core 提供的受影响范围（affected_text_range）
-    // 且 paragraph_store 非空时，用增量拼接构建 new_paras，避免每笔全文切分：
-    // - 受影响范围之前的未改段从 paragraph_store entries 切片获取（不重新切分）
-    // - 受影响区域的新文本只对这部分调用 split_paragraphs_with_hard_break
-    // - 受影响范围之后的未改段从 entries 切片获取
+    // Issue #901 第二十六轮复核缺口4 + 第二十七轮复核问题1+4: 当有 Core 提供的
+    // 受影响范围（affected_text_range）且 paragraph_store 非空时，用增量拼接构建
+    // new_paras，避免每笔全文切分：
+    // - 受影响范围扩展到完整段落边界，之前的未改段（前缀段）从 entries 累计长度
+    //   定位切片获取（不重新切分，不依赖可能过时的 document_byte_start）
+    // - 扩展后的完整段落区域调用 split_paragraphs_with_hard_break（保留编辑所在段
+    //   的完整前后半段，不再吞掉原正文，不切到 UTF-8 字符中间）
+    // - 扩展区域之后的未改段（后缀段）从 entries 累计长度 + delta 定位切片获取
     // 当 affected_text_range 不存在、范围不合理或边界检查失败时，回退全文切分。
     let new_paras: Vec<(&str, bool)> = {
         let store = &*paragraph_store;
@@ -1024,7 +1027,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         // Issue #901 第二十一轮问题1: 获取或分配该段的 Qt 物理槽号。
         // physical_slot 与文档段序（logical_slot）无关，新段分配新槽，
         // 复用段保持已有槽。避免新段覆盖存活段的 QTextLayout。
-        let physical_slot = paragraph_store.paragraph_physical_slot(para_idx);
+        let physical_slot = paragraph_store.paragraph_physical_slot(para_idx, generation);
 
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
@@ -1418,23 +1421,47 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         paragraph_line_count_index,
     };
 
-    // Issue #901 第二十五轮复核问题1: 增量排版完成后释放已无持有者的旧 QTextLayout。
-    // retired slots 在 update_paragraph_text/split_paragraph/merge_paragraphs 中收集，
+    // Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题3: 增量排版完成后
+    // 立即释放已无持有者的旧 QTextLayout。retired slots 在
+    // update_paragraph_text/split_paragraph/merge_paragraphs 中收集，
     // 此时新 snapshot 已构建，旧 layout 不再被任何 snapshot 引用，可安全释放。
-    // 槽号本身不复用（next_physical_slot 持续递增），但 QTextLayout 对象内存不再泄漏。
+    // 槽号通过按 generation 隔离的 freelist 复用，QTextLayout 对象内存不再泄漏。
     paragraph_store.release_retired_layouts();
 
     snapshot
 }
 
-/// Issue #901 第二十六轮复核缺口4: 从受影响范围增量拼接 new_paras，避免全文切分。
+/// Issue #901 第二十六轮复核缺口4 + 第二十七轮复核问题1+4: 从受影响范围增量拼接
+/// new_paras，避免全文切分。
 ///
 /// 当 Core 提供了受影响文本字节范围 `(aff_start, aff_end)` 时，用 paragraph_store
 /// entries 中的未改段（受影响范围之前和之后）加上受影响区域的新切分段，拼接构成
-/// 完整的 `new_paras`。未改段的文本从 `text` 切片获取（用 entry 的 document_byte_start
-/// 和 paragraph_text_len），不重新切分。只有受影响区域调用 `split_paragraphs_with_hard_break`。
+/// 完整的 `new_paras`。
 ///
-/// 返回 `None` 表示边界检查失败（entry 偏移越界等），调用方应回退到全文切分。
+/// # 第二十七轮复核问题1 修复
+///
+/// 旧实现把 `aff_start..aff_end`（修改字节范围）当成完整段落范围，只切
+/// `&text[aff_start..aff_end]` 作为新段落，会吞掉编辑所在段的未改变前半段和后半段
+///（反例：`hello` 替换第二字符 → `hAllo`，旧实现只返回 `[("A", false)]`，丢失
+/// `h`/`llo`），且在中文里可能切到 UTF-8 字符中间 panic。
+///
+/// 新实现把 `aff_start..aff_end` **扩展到新文本中的完整段落边界**
+/// `expanded_start..expanded_end`，切出包含编辑所在段的完整段落文本。前缀段和后缀段
+/// 从旧 store entries 获取（后缀段修正位置偏移 `delta = text.len() - old_text_len`）。
+///
+/// # 不依赖 `document_byte_start`（问题3 规避）
+///
+/// 旧 entries 的 `document_byte_start` 在增量路径中不随前文编辑平移
+///（`shift_suffix_document_byte_starts` 未被调用），可能过时。本函数改用旧 entries
+/// 的**累计长度**（`paragraph_text_len + hard_break`）定位段在新文本中的位置，
+/// 不依赖 `document_byte_start`，天然规避问题3。
+///
+/// # 问题4 减少全篇扫描
+///
+/// 前缀段遍历到第一个不满足条件的 entry 即 break；后缀段从 `prefix_count` 开始遍历
+/// 到末尾（只读 entry 元数据，不重新切分/排版）。
+///
+/// 返回 `None` 表示边界检查失败（UTF-8 边界/越界等），调用方应回退到全文切分。
 fn build_new_paras_from_affected_range<'a>(
     text: &'a str,
     store: &super::super::super::paragraph_layout_store::ParagraphLayoutStore,
@@ -1442,49 +1469,113 @@ fn build_new_paras_from_affected_range<'a>(
     aff_end: usize,
 ) -> Option<Vec<(&'a str, bool)>> {
     let text_len = text.len();
+    let n = store.paragraph_count();
+
+    // aff_start/aff_end 必须是 UTF-8 边界，否则后续切片 panic。
+    if !text.is_char_boundary(aff_start) || !text.is_char_boundary(aff_end) {
+        return None;
+    }
+
+    // 用旧 entries 累计长度计算旧文本总长度（准确，不依赖 document_byte_start）。
+    let mut old_text_len = 0usize;
+    for i in 0..n {
+        let entry = store.entry(i)?;
+        old_text_len += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+    }
+    // delta = 新文本长度 - 旧文本长度（后缀段在新文本中的位置偏移）。
+    let delta: i64 = text_len as i64 - old_text_len as i64;
+
+    // 1. 扩展 aff_start..aff_end 到新文本中的完整段落边界 expanded_start..expanded_end。
+    //    expanded_start: 从 aff_start 向前找上一个 '\n' 之后的位置（或文档开头 0）。
+    //    expanded_end:   从 aff_end 向后找下一个 '\n' 的位置（含该 '\n'，或文档末尾）。
+    //    '\n' 是单字节 ASCII，不切割多字节字符，故 expanded_start/expanded_end 是 UTF-8 边界。
+    let expanded_start = if aff_start == 0 {
+        0
+    } else {
+        match text[..aff_start].rfind('\n') {
+            Some(pos) => pos + 1,
+            None => 0,
+        }
+    };
+    let expanded_end = if aff_end >= text_len {
+        text_len
+    } else {
+        match text[aff_end..].find('\n') {
+            Some(pos) => aff_end + pos + 1,
+            None => text_len,
+        }
+    };
+
     let mut new_paras: Vec<(&str, bool)> = Vec::new();
 
-    // 1. 受影响范围之前的未改段：entry.document_byte_start + paragraph_text_len <= aff_start
-    let mut before_count = 0usize;
-    for i in 0..store.paragraph_count() {
+    // 2. 前缀段：旧累计到段末（含 '\n'）<= expanded_start。
+    //    这些段在 expanded_start 之前，新旧文本位置和内容都不变（编辑发生在之后）。
+    //    用累计长度定位（不依赖 document_byte_start）。
+    let mut cumulative = 0usize; // 旧文本中累计到当前段首
+    let mut prefix_count = 0usize;
+    for i in 0..n {
         let entry = store.entry(i)?;
-        let seg_start = entry.document_byte_start;
-        let seg_end = entry.document_byte_start + entry.paragraph_text_len;
-        if seg_end <= aff_start {
-            if seg_start > text_len || seg_end > text_len {
-                return None; // 越界，回退全文切分
+        let seg_len_with_break =
+            entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+        let seg_end_cumulative = cumulative + seg_len_with_break;
+        if seg_end_cumulative <= expanded_start {
+            // 前缀段在新文本中位置 = 旧累计（位置不变）。
+            let seg_start = cumulative;
+            let seg_end = cumulative + entry.paragraph_text_len;
+            if seg_end > text_len
+                || !text.is_char_boundary(seg_start)
+                || !text.is_char_boundary(seg_end)
+            {
+                return None; // 越界或 UTF-8 边界检查失败，回退全文切分
             }
-            // SAFETY: seg_start..seg_end 对应 entry 的段落文本边界，
-            // 是 text 中的有效 UTF-8 边界（段落文本不含跨字符切割）。
+            // SAFETY: seg_start/seg_end 已通过 is_char_boundary 检查。
             let seg_text = &text[seg_start..seg_end];
             new_paras.push((seg_text, entry.hard_break));
-            before_count += 1;
+            prefix_count += 1;
         } else {
             break;
         }
+        cumulative = seg_end_cumulative;
     }
 
-    // 2. 受影响区域的新文本：只对这部分调用 split_paragraphs_with_hard_break
-    if aff_start > text_len || aff_end > text_len {
-        return None;
-    }
-    let affected_text = &text[aff_start..aff_end];
+    // 3. 受影响段：从新文本 expanded_start..expanded_end 用统一切分器切分。
+    //    expanded_start/expanded_end 是 '\n' 边界或文档边界，是有效 UTF-8 边界。
+    let affected_text = &text[expanded_start..expanded_end];
     let affected_paras =
         super::super::super::paragraph_layout_store::split_paragraphs_with_hard_break(affected_text);
     new_paras.extend(affected_paras);
 
-    // 3. 受影响范围之后的未改段：entry.document_byte_start >= aff_end
-    for i in before_count..store.paragraph_count() {
+    // 4. 后缀段：新位置 = 旧累计 + delta >= expanded_end。
+    //    这些段内容不变，但在新文本中位置偏移了 delta。从 prefix_count 开始遍历，
+    //    跳过受影响段（不满足条件的），收集后缀段。只读 entry 元数据，不重新切分。
+    let mut cumulative = 0usize;
+    for i in 0..prefix_count {
         let entry = store.entry(i)?;
-        let seg_start = entry.document_byte_start;
-        let seg_end = entry.document_byte_start + entry.paragraph_text_len;
-        if seg_start >= aff_end {
-            if seg_start > text_len || seg_end > text_len {
-                return None; // 越界，回退全文切分
+        cumulative += entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+    }
+    for i in prefix_count..n {
+        let entry = store.entry(i)?;
+        let seg_len_with_break =
+            entry.paragraph_text_len + if entry.hard_break { 1 } else { 0 };
+        // 新文本中该段起始位置 = 旧累计 + delta。
+        let new_seg_start_i64 = cumulative as i64 + delta;
+        if new_seg_start_i64 >= 0 {
+            let new_seg_start = new_seg_start_i64 as usize;
+            let new_seg_end = new_seg_start + entry.paragraph_text_len;
+            if new_seg_start >= expanded_end {
+                // 后缀段。
+                if new_seg_end > text_len
+                    || !text.is_char_boundary(new_seg_start)
+                    || !text.is_char_boundary(new_seg_end)
+                {
+                    return None; // 越界或 UTF-8 边界检查失败，回退全文切分
+                }
+                // SAFETY: new_seg_start/new_seg_end 已通过 is_char_boundary 检查。
+                let seg_text = &text[new_seg_start..new_seg_end];
+                new_paras.push((seg_text, entry.hard_break));
             }
-            let seg_text = &text[seg_start..seg_end];
-            new_paras.push((seg_text, entry.hard_break));
         }
+        cumulative += seg_len_with_break;
     }
 
     Some(new_paras)

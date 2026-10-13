@@ -26,6 +26,11 @@ cpp! {{
     struct LayoutGeneration {
         uint64_t generation;
         std::vector<QTextLayout*> layouts;
+        // Issue #901 第二十七轮复核问题2: 按 generation 隔离的 freelist 和槽计数器。
+        // 释放的槽号回收到本 generation 的 free_slots，新段优先从 free_slots 复用，
+        // 否则用 next_slot 分配新槽。跨 generation 的槽号互不影响，不会互相覆盖。
+        std::vector<int> free_slots;
+        int next_slot;
     };
     static std::vector<LayoutGeneration> g_layout_generations;
     static uint64_t g_next_generation = 1;
@@ -37,20 +42,20 @@ cpp! {{
     //   canonical line/image/cursor 数据后显式 clear_layout_generation 释放。
     // 这样避免仍被静态正文引用的 QTextLayout 被提前删掉。
 
-    static std::vector<QTextLayout*>* find_layout_generation(uint64_t gen) {
+    static LayoutGeneration* find_layout_generation(uint64_t gen) {
         for (auto& lg : g_layout_generations) {
             if (lg.generation == gen) {
-                return &lg.layouts;
+                return &lg;
             }
         }
         return nullptr;
     }
 
-    static std::vector<QTextLayout*>* ensure_layout_generation(uint64_t gen) {
+    static LayoutGeneration* ensure_layout_generation(uint64_t gen) {
         auto* existing = find_layout_generation(gen);
         if (existing) return existing;
-        g_layout_generations.push_back(LayoutGeneration{gen, {}});
-        return &g_layout_generations.back().layouts;
+        g_layout_generations.push_back(LayoutGeneration{gen, {}, {}, 0});
+        return &g_layout_generations.back();
     }
 
     uint64_t begin_layout_generation() {
@@ -79,10 +84,11 @@ cpp! {{
     }
 
     QTextLayout* get_paragraph_layout(uint64_t gen, int slot) {
-        auto* layouts = find_layout_generation(gen);
-        if (!layouts) return nullptr;
-        if (slot < 0 || slot >= (int)layouts->size()) return nullptr;
-        return (*layouts)[slot];
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return nullptr;
+        auto& layouts = lg->layouts;
+        if (slot < 0 || slot >= (int)layouts.size()) return nullptr;
+        return layouts[slot];
     }
 
     // Issue #658 评论 5621512329 问题 2: 光标/命中不再重新 new QTextLayout 重新排版，
@@ -125,57 +131,78 @@ cpp! {{
     // 不再 push_back。空段落也占一个明确的 null slot，
     // 保持 cache_slot 与文档段落一一对应，避免越界访问。
     void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout) {
-        auto* layouts = ensure_layout_generation(gen);
-        while ((int)layouts->size() <= cache_slot) {
-            layouts->push_back(nullptr);
+        auto* lg = ensure_layout_generation(gen);
+        auto& layouts = lg->layouts;
+        while ((int)layouts.size() <= cache_slot) {
+            layouts.push_back(nullptr);
         }
-        if ((*layouts)[cache_slot]) {
-            delete (*layouts)[cache_slot];
+        if (layouts[cache_slot]) {
+            delete layouts[cache_slot];
         }
-        (*layouts)[cache_slot] = layout;
+        layouts[cache_slot] = layout;
     }
 
     void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot) {
-        auto* layouts = ensure_layout_generation(gen);
-        while ((int)layouts->size() <= cache_slot) {
-            layouts->push_back(nullptr);
+        auto* lg = ensure_layout_generation(gen);
+        auto& layouts = lg->layouts;
+        while ((int)layouts.size() <= cache_slot) {
+            layouts.push_back(nullptr);
         }
-        if ((*layouts)[cache_slot]) {
-            delete (*layouts)[cache_slot];
+        if (layouts[cache_slot]) {
+            delete layouts[cache_slot];
         }
-        (*layouts)[cache_slot] = nullptr;
+        layouts[cache_slot] = nullptr;
     }
 
     // Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。
-    // 删除该槽的 QTextLayout 并置 nullptr，槽号本身不复用（next_physical_slot 持续递增），
-    // 但 QTextLayout 对象内存不再泄漏。与 set_null_paragraph_layout_slot_gen 的区别：
-    // set_null 会 ensure_layout_generation 创建空数组（用于占位），release 只在
-    // generation 已存在时释放，不创建新数组（用于回收已无持有者的旧 layout）。
+    // 删除该槽的 QTextLayout 并置 nullptr，并把 slot 回收到同一 generation 的 free_slots
+    // 供复用。与 set_null_paragraph_layout_slot_gen 的区别：set_null 会 ensure_layout_generation
+    // 创建空数组（用于占位），release 只在 generation 已存在时释放，不创建新数组
+    //（用于回收已无持有者的旧 layout）。
     //
-    // Issue #901 第二十六轮复核缺口2b: 释放后把 slot 加入 g_slot_freelist 供复用，
-    // 避免 C++ 槽位数组按历史编辑次数增长。
-
-    // Issue #901 第二十六轮复核缺口2b: 物理槽 freelist — 释放的槽号可复用，
-    // 避免 next_physical_slot 每笔递增导致 C++ 槽位数组无限增长。
-    static std::vector<int> g_slot_freelist;
+    // Issue #901 第二十七轮复核问题2: freelist 按 generation 隔离，不再用全局 g_slot_freelist。
+    // 释放的 slot 回收到同一 generation 的 free_slots，跨 generation 的槽号互不影响。
 
     void release_paragraph_layout_slot_gen(uint64_t gen, int slot) {
-        auto* layouts = find_layout_generation(gen);
-        if (!layouts) return;
-        if (slot < 0 || slot >= (int)layouts->size()) return;
-        if ((*layouts)[slot]) {
-            delete (*layouts)[slot];
-            (*layouts)[slot] = nullptr;
+        auto* lg = find_layout_generation(gen);
+        if (!lg) return;
+        auto& layouts = lg->layouts;
+        if (slot < 0 || slot >= (int)layouts.size()) return;
+        if (layouts[slot]) {
+            delete layouts[slot];
+            layouts[slot] = nullptr;
         }
-        // 缺口2b: 释放后把 slot 加入 freelist 供复用。
-        g_slot_freelist.push_back(slot);
+        // Issue #901 第二十七轮复核问题2: 把 slot 回收到同一 generation 的 free_slots。
+        // 防重复回收：检查该 slot 不已在 free_slots 中。
+        bool already_free = false;
+        for (int s : lg->free_slots) {
+            if (s == slot) { already_free = true; break; }
+        }
+        if (!already_free) {
+            lg->free_slots.push_back(slot);
+        }
     }
 
-    // 从 freelist 取一个可复用的槽号。freelist 为空时返回 -1，调用方应分配新槽。
-    int acquire_physical_slot_from_freelist() {
-        if (g_slot_freelist.empty()) return -1;
-        int slot = g_slot_freelist.back();
-        g_slot_freelist.pop_back();
+    // Issue #901 第二十七轮复核问题2: 为指定 generation 分配一个物理槽号。
+    // 优先从该 generation 的 free_slots 复用已释放的槽（要求 >= min_slot，
+    // 避免与同 generation 中复用段保留的 cache_slot 冲突）；
+    // 否则用 next_slot 分配新槽（确保 next_slot >= min_slot）。
+    int acquire_physical_slot_for_generation(uint64_t gen, int min_slot) {
+        auto* lg = ensure_layout_generation(gen);
+        // 先从 free_slots 找一个 >= min_slot 的槽。
+        for (auto it = lg->free_slots.begin(); it != lg->free_slots.end(); ++it) {
+            if (*it >= min_slot) {
+                int slot = *it;
+                lg->free_slots.erase(it);
+                return slot;
+            }
+        }
+        // free_slots 中没有合适的，用 next_slot 分配新槽。
+        if (lg->next_slot < min_slot) {
+            lg->next_slot = min_slot;
+        }
+        int slot = lg->next_slot;
+        lg->next_slot += 1;
         return slot;
     }
 
@@ -253,10 +280,10 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
     })
 }
 
-/// Issue #901 第二十五轮复核问题1: 释放指定 (generation, slot) 的 QTextLayout。
+/// Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题2: 释放指定 (generation, slot) 的 QTextLayout。
 ///
-/// 删除该槽的 QTextLayout 并将槽置 nullptr。槽号本身不复用
-///（`next_physical_slot` 持续递增），但 QTextLayout 对象内存不再泄漏。
+/// 删除该槽的 QTextLayout 并将槽置 nullptr，同时把 slot 回收到**同一 generation**
+/// 的 free_slots 供后续复用。跨 generation 的槽号互不影响，不会互相覆盖。
 /// 用于回收增量编辑中已无持有者的旧 layout（普通编辑改段、拆段、合段后
 /// 旧 `cache_slot` 被置 -1，对应的 QTextLayout 不再被任何 snapshot 引用）。
 /// SAFETY: GUI thread only; gen/slot 应是之前 set_paragraph_layout_slot_gen 写入的。
@@ -266,16 +293,19 @@ pub fn release_paragraph_layout_slot_gen(gen: u64, slot: i32) {
     });
 }
 
-/// Issue #901 第二十六轮复核缺口2b: 从 C++ freelist 取一个可复用的物理槽号。
+/// Issue #901 第二十七轮复核问题2: 为指定 generation 分配一个物理槽号。
 ///
-/// 释放 QTextLayout 时对应槽号被加入 freelist（见 `release_paragraph_layout_slot_gen`）。
-/// 本函数从 freelist pop 一个槽号供新段复用，避免 `next_physical_slot` 每笔递增
-/// 导致 C++ 槽位数组按历史编辑次数增长。
+/// freelist 按 generation 隔离管理（存储在 C++ `LayoutGeneration` 结构体中）。
+/// 优先从该 generation 的 `free_slots` 复用已释放的槽（要求 `>= min_slot`，
+/// 避免与同 generation 中复用段保留的 `cache_slot` 冲突）；
+/// 否则用该 generation 的 `next_slot` 分配新槽。
 ///
-/// 返回 >= 0 表示复用的槽号；返回 -1 表示 freelist 为空，调用方应分配新槽。
-/// SAFETY: GUI thread only; freelist 为进程级 static，仅在 GUI 线程中使用。
-pub fn acquire_physical_slot_from_freelist() -> i32 {
-    cpp!(unsafe [] -> i32 as "int" {
-        return acquire_physical_slot_from_freelist();
+/// `min_slot` 是调用方已知的最小安全槽号（通常为 `next_physical_slot`），
+/// 确保新分配的槽不与同 generation 中复用段保留的旧 `cache_slot` 冲突。
+///
+/// SAFETY: GUI thread only; gen 应是之前 begin_layout_generation 分配的。
+pub fn acquire_physical_slot_for_generation(gen: u64, min_slot: i32) -> i32 {
+    cpp!(unsafe [gen as "uint64_t", min_slot as "int"] -> i32 as "int" {
+        return acquire_physical_slot_for_generation(gen, min_slot);
     })
 }

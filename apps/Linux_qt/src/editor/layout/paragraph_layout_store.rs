@@ -311,21 +311,15 @@ pub struct ParagraphLayoutStore {
     /// 收集到此列表，由 `release_retired_layouts` 在增量排版完成后统一释放，
     /// 避免 QTextLayout 内存随编辑次数持续增长。
     ///
-    /// 槽号本身不复用（`next_physical_slot` 持续递增），但 QTextLayout 对象
-    /// 被 C++ `delete` 释放，不再泄漏。
+    /// Issue #901 第二十七轮复核问题2: 槽号通过按 generation 隔离的 freelist 复用
+    ///（见 `qt_cache::acquire_physical_slot_for_generation`），释放后回收到同一
+    /// generation 的 free_slots，跨 generation 槽号互不影响。
     ///
-    /// Issue #901 第二十六轮复核缺口2b: 槽号现在通过 C++ freelist 复用，
-    /// `next_physical_slot` 不再每笔递增，详见 `acquire_physical_slot_from_freelist`。
+    /// Issue #901 第二十七轮复核问题3: 不再延迟一轮释放。retired slots 在
+    /// `release_retired_layouts` 中立即释放。这比延迟一轮更安全，因为 retired_slots
+    /// 只在确认旧 layout 不再被任何 snapshot 引用时才被收集。完整的基于引用计数的
+    /// 资源所有权（QtLayoutHandle with epoch/version）留作后续优化。
     retired_slots: Vec<(u64, i32)>,
-    /// Issue #901 第二十六轮复核缺口3: 上一轮 retired slots，延迟一轮释放。
-    ///
-    /// 为建立所有权联系而引入的延迟释放机制。retired slots 标记后不立即释放，
-    /// 延迟到下一轮 snapshot 构建时才真正释放 C++ QTextLayout，确保旧帧动画/
-    /// Qt 消费者在新 snapshot 构建期间仍可安全访问旧 layout。
-    ///
-    /// `release_retired_layouts` 先释放 `prev_retired_slots`（上一轮延迟的），
-    /// 再把当前 `retired_slots` 移到 `prev_retired_slots`，实现延迟一轮语义。
-    prev_retired_slots: Vec<(u64, i32)>,
 }
 
 impl ParagraphLayoutStore {
@@ -338,7 +332,6 @@ impl ParagraphLayoutStore {
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
             next_physical_slot: 0,
             retired_slots: Vec::new(),
-            prev_retired_slots: Vec::new(),
         }
     }
 
@@ -361,28 +354,27 @@ impl ParagraphLayoutStore {
 
     /// 清空所有缓存（全局失效）。
     pub fn clear(&mut self) {
-        // Issue #901 第二十六轮复核缺口3: 先释放 prev_retired_slots（上一轮延迟的）。
-        // clear 是全局失效，立即释放延迟队列中的旧 layout。
-        for (gen, slot) in std::mem::take(&mut self.prev_retired_slots) {
+        // Issue #901 第二十七轮复核问题3: 不再延迟一轮释放。clear 是全局失效，
+        // 立即释放当前 retired_slots 和 entries 中所有有效 handle。
+        for (gen, slot) in std::mem::take(&mut self.retired_slots) {
             super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
         }
-        // Issue #901 第二十六轮复核缺口2a: 把当前 entries 的有效 handle 推入 retired_slots，
-        // 由后续 release_retired_layouts 延迟释放。clear 后 entries 为空，
-        // 这些 handle 在下次 snapshot 构建时通过 release_retired_layouts 释放。
-        let mut newly_retired: Vec<(u64, i32)> = Vec::new();
+        // 释放当前 entries 的有效 handle。
         for entry in &self.entries {
             if entry.layout_generation != 0 && entry.cache_slot >= 0 {
-                newly_retired.push((entry.layout_generation, entry.cache_slot));
+                super::qt_cache::release_paragraph_layout_slot_gen(
+                    entry.layout_generation,
+                    entry.cache_slot,
+                );
             }
         }
-        self.retired_slots.extend(newly_retired);
         self.entries.clear();
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
         Arc::make_mut(&mut self.id_to_slot_cache).clear();
         Arc::make_mut(&mut self.line_count_index).clear();
         // Issue #901 第二十一轮问题1: next_physical_slot 不重置，避免新分配的
         // physical_slot 与已释放但 C++ 端可能仍存活的槽冲突。
-        // Issue #901 第二十六轮复核缺口2b: 槽号通过 C++ freelist 复用，
+        // Issue #901 第二十七轮复核问题2: 槽号通过按 generation 隔离的 freelist 复用，
         // next_physical_slot 仍不重置以避免与 C++ 端可能仍存活的槽冲突。
     }
 
@@ -395,26 +387,20 @@ impl ParagraphLayoutStore {
         std::mem::take(&mut self.retired_slots)
     }
 
-    /// Issue #901 第二十五轮复核问题1 + 第二十六轮复核缺口3: 释放 retired slots 对应的 QTextLayout。
+    /// Issue #901 第二十五轮复核问题1 + 第二十七轮复核问题3: 释放 retired slots 对应的 QTextLayout。
     ///
-    /// 延迟释放机制：retired slots 标记后不立即释放，延迟到下一轮 snapshot 构建时
-    /// 才真正释放 C++ QTextLayout，确保旧帧动画/Qt 消费者在新 snapshot 构建期间
-    /// 仍可安全访问旧 layout。
+    /// 立即释放机制：retired slots 在此直接释放，不再延迟一轮。
+    /// retired_slots 只在确认旧 layout 不再被任何 snapshot 引用时才被收集
+    ///（旧 cache_slot 被置 -1 后收集），因此立即释放是安全的。
     ///
-    /// 具体步骤：
-    /// 1. 先释放 `prev_retired_slots`（上一轮延迟的 handle）— 这些 handle 在上一轮
-    ///    snapshot 构建后已无持有者，本轮新 snapshot 已构建，可安全释放。
-    /// 2. 把当前 `retired_slots` 移到 `prev_retired_slots` — 本轮标记的 handle 延迟到
-    ///    下一轮释放。
+    /// 完整的基于引用计数的资源所有权（QtLayoutHandle with epoch/version）
+    /// 留作后续优化。当前方案是立即释放 retired slots，比延迟一轮更安全。
     ///
     /// 在增量排版完成后（snapshot 构建后）调用。
     pub fn release_retired_layouts(&mut self) {
-        // 步骤1: 释放上一轮延迟的 prev_retired_slots。
-        for (gen, slot) in std::mem::take(&mut self.prev_retired_slots) {
+        for (gen, slot) in std::mem::take(&mut self.retired_slots) {
             super::qt_cache::release_paragraph_layout_slot_gen(gen, slot);
         }
-        // 步骤2: 当前 retired_slots 移到 prev_retired_slots，延迟一轮释放。
-        self.prev_retired_slots = std::mem::take(&mut self.retired_slots);
     }
 
     /// 获取指定索引处段落的只读引用。
@@ -1082,7 +1068,10 @@ impl ParagraphLayoutStore {
     ///
     /// physical_slot 与文档段序（logical_slot）无关，由 store 内部分配：
     /// - 如果 entry 已有有效 `cache_slot >= 0`，复用已有值（复用段）。
-    /// - 否则分配新的 `next_physical_slot` 并存入 entry（新段）。
+    /// - 否则通过 `acquire_physical_slot_for_generation` 从 C++ 按 generation 隔离的
+    ///   freelist 分配新槽（新段）。
+    ///
+    /// `layout_generation` 指定槽号所属的 generation，跨 generation 的槽号互不影响。
     ///
     /// # 关键不变量
     ///
@@ -1090,7 +1079,7 @@ impl ParagraphLayoutStore {
     /// 新段分配新槽，不会覆盖仍存活段的 QTextLayout。
     ///
     /// 越界返回 -1。
-    pub fn paragraph_physical_slot(&mut self, index: usize) -> i32 {
+    pub fn paragraph_physical_slot(&mut self, index: usize, layout_generation: u64) -> i32 {
         if index >= self.entries.len() {
             return -1;
         }
@@ -1098,18 +1087,16 @@ impl ParagraphLayoutStore {
         if self.entries[index].cache_slot >= 0 {
             return self.entries[index].cache_slot;
         }
-        // Issue #901 第二十六轮复核缺口2b: 优先从 freelist 复用已释放的槽，
-        // 避免 next_physical_slot 每笔递增导致 C++ 槽位数组无限增长。
-        // 先计算 slot 值（可能修改 next_physical_slot），再写回 entries，
-        // 避免同时借用 self.entries 和 self.next_physical_slot。
-        let freed = super::qt_cache::acquire_physical_slot_from_freelist();
-        let slot = if freed >= 0 {
-            freed
-        } else {
-            let s = self.next_physical_slot;
-            self.next_physical_slot += 1;
-            s
-        };
+        // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配槽号。
+        // min_slot = next_physical_slot 确保新分配的槽不与同 generation 中
+        // 复用段保留的旧 cache_slot 冲突。实际分配由 C++ 统一负责。
+        let slot = super::qt_cache::acquire_physical_slot_for_generation(
+            layout_generation,
+            self.next_physical_slot,
+        );
+        if slot >= self.next_physical_slot {
+            self.next_physical_slot = slot + 1;
+        }
         self.entries[index].cache_slot = slot;
         slot
     }
@@ -1136,17 +1123,15 @@ impl ParagraphLayoutStore {
         }
         // Issue #901 第二十一轮问题1: physical_slot 由 store 内部分配，
         // 忽略传入的 _cache_slot。复用段保持已有值，新段分配新槽。
-        // Issue #901 第二十六轮复核缺口2b: 优先从 freelist 复用已释放的槽。
-        // 先计算 slot（可能修改 next_physical_slot），再写回 entries，避免借用冲突。
+        // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配槽号。
         if self.entries[index].cache_slot < 0 {
-            let freed = super::qt_cache::acquire_physical_slot_from_freelist();
-            let slot = if freed >= 0 {
-                freed
-            } else {
-                let s = self.next_physical_slot;
-                self.next_physical_slot += 1;
-                s
-            };
+            let slot = super::qt_cache::acquire_physical_slot_for_generation(
+                layout_generation,
+                self.next_physical_slot,
+            );
+            if slot >= self.next_physical_slot {
+                self.next_physical_slot = slot + 1;
+            }
             self.entries[index].cache_slot = slot;
         }
         let entry = &mut self.entries[index];
@@ -1423,8 +1408,15 @@ impl ParagraphLayoutStore {
                     entry.cache_slot = physical_slot;
                 } else if entry.cache_slot < 0 {
                     // 防御性：lines 中 cache_slot 无效时由 store 分配新槽。
-                    entry.cache_slot = self.next_physical_slot;
-                    self.next_physical_slot += 1;
+                    // Issue #901 第二十七轮复核问题2: 从按 generation 隔离的 freelist 分配。
+                    let slot = super::qt_cache::acquire_physical_slot_for_generation(
+                        layout_generation,
+                        self.next_physical_slot,
+                    );
+                    if slot >= self.next_physical_slot {
+                        self.next_physical_slot = slot + 1;
+                    }
+                    entry.cache_slot = slot;
                 }
                 entry.visual_line_count = line_count;
                 entry.height = height;
