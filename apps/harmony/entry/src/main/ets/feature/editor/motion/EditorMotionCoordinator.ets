@@ -46,7 +46,7 @@ import { EditorEditResult, DisplayPatch, OffsetMap } from '../../../corebridge/d
 import { EditorMotionTransactionComposer, ComposedTransaction } from './EditorMotionTransactionComposer'
 import type { GlyphCarryPatch } from './editor_patch_carry'
 import { applyPatchesToText } from './editor_patch_carry'
-import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, clusterBoundaries } from './editor_glyph_identity'
+import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
   RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, FrozenGlyphMember
@@ -793,8 +793,7 @@ export class EditorMotionCoordinator {
       prepared.state.newSnapshot,
       prepared.state.newLayout,
       latestDisplayedFrame,
-      0,
-      this.windowIdAllocator
+      0
     )
 
     // 创建新的 state（复制旧 state，替换 plan 和 frame）
@@ -1019,8 +1018,7 @@ export class EditorMotionCoordinator {
 
     const frame = durationMs > 0
       ? EditorMotionCoordinator.buildFrame(
-          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0,
-          this.windowIdAllocator
+          plan, oldSnapshot, oldLayout, newSnapshot, newLayout, startFrame, 0
         )
       : EditorMotionCoordinator.computeStaticFrame(newSnapshot, newLayout, firstCaretRect)
 
@@ -1280,8 +1278,7 @@ export class EditorMotionCoordinator {
       this.newSnapshot,
       this.newLayout,
       this.currentFrame,
-      progress,
-      this.windowIdAllocator
+      progress
     )
   }
 
@@ -1334,8 +1331,7 @@ export class EditorMotionCoordinator {
     newSnapshot: EditorLayoutSnapshot | null,
     newLayout: LineLayout[],
     caretBase: EditorVisualFrame,
-    progress: number,
-    allocator: WindowInstanceIdAllocator
+    progress: number
   ): EditorVisualFrame {
     const newRevision = newSnapshot?.revision ?? 0
     const newText = newSnapshot?.text ?? ''
@@ -1436,7 +1432,7 @@ export class EditorMotionCoordinator {
           insertRenderNodeKey = piece.renderNodeKey
           insertWindowInstanceId = piece.windowInstanceId
         } else {
-          const fallbackId = allocator.allocate(piece.glyphIds)
+          const fallbackId = windowIdForGlyphIds(piece.glyphIds)
           insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${fallbackId}`
           insertWindowInstanceId = piece.windowInstanceId ?? fallbackId
         }
@@ -1524,7 +1520,7 @@ export class EditorMotionCoordinator {
           deletedRenderNodeKey = piece.renderNodeKey
           deletedWindowInstanceId = piece.windowInstanceId
         } else {
-          const fallbackId = allocator.allocate(piece.glyphIds)
+          const fallbackId = windowIdForGlyphIds(piece.glyphIds)
           deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
           deletedWindowInstanceId = piece.windowInstanceId ?? fallbackId
         }
@@ -1934,7 +1930,7 @@ export class EditorMotionCoordinator {
             // 按自己实际几何裁切并淡出。
             // Issue #879 评论6128121842 问题3：islandWindowInstanceId 作为 fallback
             // 供未预分配 windowInstanceId 的成员使用。
-            const islandWindowInstanceId = allocator.allocate(interval.glyphIds)
+            const islandWindowInstanceId = windowIdForGlyphIds(interval.glyphIds)
             const memberClipRectsList: ClipRect[][] = []
             const memberCurrentXList: number[] = []
             const memberCurrentYList: number[] = []
@@ -2791,7 +2787,7 @@ export class EditorMotionCoordinator {
             fallbackRenderNodeKey = interval.renderNodeKey
             fallbackWindowInstanceId = interval.windowInstanceId
           } else {
-            const fallbackId = allocator.allocate(interval.glyphIds)
+            const fallbackId = windowIdForGlyphIds(interval.glyphIds)
             fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
             fallbackWindowInstanceId = interval.windowInstanceId ?? fallbackId
           }
@@ -2856,7 +2852,7 @@ export class EditorMotionCoordinator {
               crossfadeKey = interval.crossfadeRenderNodeKey
               crossfadeWinId = interval.crossfadeWindowInstanceId
             } else {
-              const fallbackId = allocator.allocate(interval.glyphIds)
+              const fallbackId = windowIdForGlyphIds(interval.glyphIds)
               crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${fallbackId}`
               crossfadeWinId = interval.crossfadeWindowInstanceId ?? fallbackId
             }
@@ -3169,15 +3165,13 @@ export class EditorMotionCoordinator {
           existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
           existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
+          continue
+        } else {
+          // 不同物理属性——不能丢弃第二张的文字像素
+          // Issue #879 复核评论问题2：使用预分配的 key（准备阶段已通过 allocateFresh 确保不同 key）
+          windowByKey.set(w.renderNodeKey, w)
+          mergedWindows.push(w)
         }
-        // else: 不同物理属性——不能丢弃第二张的文字像素
-        // Issue #879 复核评论问题2：给冲突窗口分配新的 key，确保两张都能渲染
-        const freshWinId = allocator.allocateFresh(w.glyphIds)
-        const freshKey = `${w.sourceKind}-${w.sourceRevision}-${freshWinId}`
-        w.renderNodeKey = freshKey
-        w.windowInstanceId = freshWinId
-        windowByKey.set(freshKey, w)
-        mergedWindows.push(w)
       } else {
         windowByKey.set(w.renderNodeKey, w)
         mergedWindows.push(w)
