@@ -32,6 +32,8 @@ console.log('---')
 // - 缓存键 = `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}`
 // - renderNodeKey = `${sourceKind}-${sourceRevision}-${allocatedWinId}`
 
+// 模拟 PhysicalWindowKeyAllocator 的核心行为——renderNodeKey 包含 motionChannel。
+// Issue #879 评论6146031468：确保不同运动轨迹/来源生成不同的 renderNodeKey。
 class SimulatedPhysicalWindowKeyAllocator {
   constructor(allocator) {
     this.allocator = allocator
@@ -46,12 +48,14 @@ class SimulatedPhysicalWindowKeyAllocator {
     if (existing !== undefined) {
       return existing
     }
+    // Issue #879 评论6146031468：renderNodeKey 包含 motionChannel，
+    // 同一物理 Text 的多块 clip 共享一组 key；物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
     const identity = {
       sourceKind,
       sourceRevision,
       runId: `${sourceKind}-${sourceRevision}`,
       windowInstanceId: allocatedWinId,
-      renderNodeKey: `${sourceKind}-${sourceRevision}-${allocatedWinId}`,
+      renderNodeKey: `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}`,
     }
     this.identities.set(cacheKey, identity)
     return identity
@@ -126,6 +130,55 @@ test('场景1e：同一 glyphIds + 同一 motionChannel=default → 不同 rende
   // allocateFresh 每次返回不同 ID → 不同 renderNodeKey
   assert.notEqual(id1.renderNodeKey, id2.renderNodeKey)
   assert.notEqual(id1.windowInstanceId, id2.windowInstanceId)
+})
+
+// ── 场景1f：Issue #879 评论6146031468 验证 ──
+//
+// Planner 为不同运动轨迹/来源生成不同的 renderNodeKey（包含 motionChannel），
+// 确保同一物理 Text 的多块 clip 共享一组 key；物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
+
+test('场景1f：同一 glyphIds + 相同 windowInstanceId + 不同 motionChannel → 不同 renderNodeKey', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const keyAlloc = new SimulatedPhysicalWindowKeyAllocator(allocator)
+  const glyphIds = ['orig-10-0', 'orig-10-1']
+
+  // 分配一个 windowInstanceId（模拟 Planner 预分配）
+  const winId = allocator.allocate(glyphIds)
+
+  // 用相同的 windowInstanceId 但不同的 motionChannel 分配
+  // 注意：frozen 通道用 allocate（复用），deleted 通道用 allocateFresh（独立实例）
+  // 但当我们显式传入 windowInstanceId 时，两者都使用传入的 winId
+  const deletedId = keyAlloc.allocate('old', 10, glyphIds, 'deleted', winId)
+  const frozenId = keyAlloc.allocate('old', 10, glyphIds, 'frozen', winId)
+
+  // 虽然 windowInstanceId 相同，但 renderNodeKey 不同（因为包含 motionChannel）
+  assert.notEqual(deletedId.renderNodeKey, frozenId.renderNodeKey)
+  assert.equal(deletedId.windowInstanceId, frozenId.windowInstanceId)
+  assert.equal(deletedId.windowInstanceId, winId)
+
+  // renderNodeKey 格式：${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}
+  assert.equal(deletedId.renderNodeKey, `old-10-deleted-${winId}`)
+  assert.equal(frozenId.renderNodeKey, `old-10-frozen-${winId}`)
+})
+
+test('场景1f-2：同一 glyphIds + 不传 windowInstanceId + 不同 motionChannel → 不同 renderNodeKey 和 windowInstanceId', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const keyAlloc = new SimulatedPhysicalWindowKeyAllocator(allocator)
+  const glyphIds = ['orig-10-0', 'orig-10-1']
+
+  // 不传 windowInstanceId，让分配器自行分配
+  // frozen 通道用 allocate（复用同一 ID），deleted 通道用 allocateFresh（每次新建）
+  const frozenId = keyAlloc.allocate('old', 10, glyphIds, 'frozen')
+  const deletedId = keyAlloc.allocate('old', 10, glyphIds, 'deleted')
+
+  // renderNodeKey 不同（因为包含 motionChannel）
+  assert.notEqual(deletedId.renderNodeKey, frozenId.renderNodeKey)
+  // windowInstanceId 也不同（因为 allocate vs allocateFresh）
+  assert.notEqual(deletedId.windowInstanceId, frozenId.windowInstanceId)
+
+  // renderNodeKey 格式正确
+  assert.match(frozenId.renderNodeKey, /^old-10-frozen-win-\d+$/)
+  assert.match(deletedId.renderNodeKey, /^old-10-deleted-win-\d+$/)
 })
 
 // ── 场景2：WindowInstanceIdAllocator.allocate vs allocateFresh ──
@@ -539,8 +592,8 @@ test('补充3：PhysicalWindowKeyAllocator 的 renderNodeKey 格式正确', () =
 
   const id = keyAlloc.allocate('old', 10, glyphIds, 'frozen')
 
-  // renderNodeKey = `${sourceKind}-${sourceRevision}-${windowInstanceId}`
-  assert.equal(id.renderNodeKey, `old-10-${id.windowInstanceId}`)
+  // Issue #879 评论6146031468：renderNodeKey = `${sourceKind}-${sourceRevision}-${motionChannel}-${windowInstanceId}`
+  assert.equal(id.renderNodeKey, `old-10-frozen-${id.windowInstanceId}`)
   // windowInstanceId 是 win-<number> 格式
   assert.match(id.windowInstanceId, /^win-\d+$/)
   // runId 是 `${sourceKind}-${sourceRevision}`
@@ -1000,98 +1053,55 @@ test('场景8b：同 key 同物理身份时只合并 clip', () => {
   assert.equal(mergedWindows[0].clipRects.length, 2)
 })
 
-test('场景8c：同 key 不同属性时不合并——保留两个独立窗口，暴露 Planner 规划问题', () => {
-  // Issue #879 评论6145308014 问题3：同 key 不同属性（不同 offsetX/opacity/UTF-16 源范围）
-  // 不应合并为一个窗口。合并后只保留 A 的文本切片、位置与透明度，B 的实际文字不可能
-  // 按自己的源范围/位置绘制，会被错误裁掉或画成 A 的内容。
-  // 正确预期：Planner 应从两个不同物理来源/轨迹生成不同固定 key；
-  // 如果同 key 不同属性出现在 buildFrame，应保留两个独立窗口，暴露规划问题。
+test('场景8c：不同 motionChannel 生成不同的 renderNodeKey，Planner 为不同物理来源分配不同 key', () => {
+  // Issue #879 评论6146031468：Planner 已为每个物理来源分配唯一的 renderNodeKey（包含 motionChannel），
+  // 不同运动轨迹/来源生成不同的 key。同一物理 Text 的多块 clip 共享一组 key；
+  // 物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
+  // 模拟两个不同运动轨迹（如 'deleted' 和 'frozen'）有相同的 sourceKind/sourceRevision，
+  // 但现在它们的 renderNodeKey 不同（因为包含 motionChannel）。
+  const allocator = new WindowInstanceIdAllocator()
+  const keyAlloc = new SimulatedPhysicalWindowKeyAllocator(allocator)
+  const glyphIds = ['orig-10-0', 'orig-10-1']
+
+  // 两个不同运动轨迹，相同 glyphIds
+  // frozen 通道用 allocate（复用），deleted 通道用 allocateFresh（每次新建）
+  const frozenId = keyAlloc.allocate('old', 10, glyphIds, 'frozen')
+  const deletedId = keyAlloc.allocate('old', 10, glyphIds, 'deleted')
+
+  // renderNodeKey 不同（因为包含 motionChannel）
+  assert.notEqual(deletedId.renderNodeKey, frozenId.renderNodeKey)
+  // windowInstanceId 也不同（因为 allocate vs allocateFresh）
+  assert.notEqual(deletedId.windowInstanceId, frozenId.windowInstanceId)
+
+  // renderNodeKey 格式：${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}
+  assert.match(frozenId.renderNodeKey, /^old-10-frozen-win-\d+$/)
+  assert.match(deletedId.renderNodeKey, /^old-10-deleted-win-\d+$/)
+
+  // 由于 renderNodeKey 不同，buildFrame 不会合并它们，输出两个独立窗口
   const motionGlyphWindows = [
-    {
-      renderNodeKey: 'shared-key',
-      sourceKind: 'old',
-      sourceRevision: 10,
-      offsetX: 0,
-      offsetY: 0,
-      opacity: 1,
-      utf16Start: 0,
-      utf16End: 2,
-      glyphX: 100,
-      glyphY: 50,
-      windowInstanceId: 'win-0',
-      motionOwnerKind: 'reflow',
-      clipRects: [{ x: 100, y: 50, width: 20, height: 30 }],
-    },
-    {
-      renderNodeKey: 'shared-key', // 同 key 但不同物理身份
-      sourceKind: 'old',
-      sourceRevision: 10,
-      offsetX: 5,  // 不同 offsetX
-      offsetY: 0,
-      opacity: 0.5, // 不同 opacity
-      utf16Start: 2, // 不同 UTF-16 源范围
-      utf16End: 4,
-      glyphX: 100,
-      glyphY: 50,
-      windowInstanceId: 'win-0',
-      motionOwnerKind: 'reflow',
-      clipRects: [{ x: 120, y: 50, width: 20, height: 30 }],
-    },
+    { renderNodeKey: deletedId.renderNodeKey, sourceKind: 'old', sourceRevision: 10, windowInstanceId: deletedId.windowInstanceId, utf16Start: 0, utf16End: 2, offsetX: 0, opacity: 1 },
+    { renderNodeKey: frozenId.renderNodeKey, sourceKind: 'old', sourceRevision: 10, windowInstanceId: frozenId.windowInstanceId, utf16Start: 2, utf16End: 4, offsetX: 5, opacity: 0.5 },
   ]
 
-  // 模拟合并逻辑（与 EditorMotionCoordinator.buildFrame 一致）
-  // 同 key 且物理身份一致 → 合并 clip；同 key 但物理身份不一致 → 不合并
+  // 模拟 buildFrame 的合并逻辑：不同 key 各自独立输出
   const mergedWindows = []
   const windowByKey = new Map()
   for (const w of motionGlyphWindows) {
     const existing = windowByKey.get(w.renderNodeKey)
     if (existing !== undefined) {
-      const samePhysicalIdentity =
-        existing.sourceKind === w.sourceKind &&
-        existing.sourceRevision === w.sourceRevision &&
-        existing.utf16Start === w.utf16Start &&
-        existing.utf16End === w.utf16End &&
-        existing.glyphX === w.glyphX &&
-        existing.glyphY === w.glyphY &&
-        existing.offsetX === w.offsetX &&
-        existing.offsetY === w.offsetY &&
-        existing.opacity === w.opacity &&
-        existing.windowInstanceId === w.windowInstanceId &&
-        existing.motionOwnerKind === w.motionOwnerKind
-      if (samePhysicalIdentity) {
-        existing.clipRects = [...existing.clipRects, ...w.clipRects]
-        existing.clipLeft = Math.min(existing.clipLeft, w.clipLeft)
-        existing.clipRight = Math.max(existing.clipRight, w.clipRight)
-        existing.clipTop = Math.min(existing.clipTop, w.clipTop)
-        existing.clipBottom = Math.max(existing.clipBottom, w.clipBottom)
-        existing.currentClipLeft = Math.min(existing.currentClipLeft, w.currentClipLeft)
-        existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
-        continue
-      } else {
-        // 同 key 但物理身份不一致 → 不合并，保留独立窗口
-        mergedWindows.push(w)
-      }
+      // 同 key 且身份一致 → 合并 clip
+      existing.clipRects = [...existing.clipRects, ...w.clipRects]
+      continue
     } else {
       windowByKey.set(w.renderNodeKey, w)
       mergedWindows.push(w)
     }
   }
 
-  // 两个窗口均保留（不合并），暴露 Planner 规划问题
+  // 两个窗口均保留（因为 renderNodeKey 不同）
   assert.equal(mergedWindows.length, 2)
-  // 两个窗口各自保留自己的源范围和属性
-  assert.equal(mergedWindows[0].utf16Start, 0)
-  assert.equal(mergedWindows[0].utf16End, 2)
-  assert.equal(mergedWindows[0].offsetX, 0)
-  assert.equal(mergedWindows[0].opacity, 1)
-  assert.equal(mergedWindows[1].utf16Start, 2)
-  assert.equal(mergedWindows[1].utf16End, 4)
-  assert.equal(mergedWindows[1].offsetX, 5)
-  assert.equal(mergedWindows[1].opacity, 0.5)
-  // 没有任何 -dup 后缀的 key
-  for (const w of mergedWindows) {
-    assert.ok(!w.renderNodeKey.includes('-dup'), `不应有 -dup key: ${w.renderNodeKey}`)
-  }
+  assert.equal(mergedWindows[0].renderNodeKey, deletedId.renderNodeKey)
+  assert.equal(mergedWindows[1].renderNodeKey, frozenId.renderNodeKey)
 })
 
 test('场景8d：同 key 同物理身份不同 clip 时合并为一个窗口', () => {

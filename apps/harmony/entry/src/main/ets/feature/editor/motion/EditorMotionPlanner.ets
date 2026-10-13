@@ -62,6 +62,10 @@ interface RetainedMoveSpan {
  *
  * 同一物理 Text 跨多个 glyph interval 时，所有成员复用这一条 key。
  * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
+ *
+ * Issue #879 评论6146031468：renderNodeKey 包含 motionChannel，
+ * 确保不同运动轨迹/来源生成不同的 renderNodeKey。
+ * 同一物理 Text 的多块 clip 共享一组 key；物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
  */
 export interface PhysicalWindowIdentity {
   /** 源类型：'old' 或 'new' */
@@ -72,7 +76,7 @@ export interface PhysicalWindowIdentity {
   runId: string
   /** 窗口实例 ID（'win-<number>' 格式） */
   windowInstanceId: string
-  /** 一次性分配的最终 renderNodeKey = `${sourceKind}-${sourceRevision}-${windowInstanceId}` */
+  /** 一次性分配的最终 renderNodeKey = `${sourceKind}-${sourceRevision}-${motionChannel}-${windowInstanceId}` */
   renderNodeKey: string
 }
 
@@ -121,12 +125,15 @@ export class PhysicalWindowKeyAllocator {
     if (existing !== undefined) {
       return existing
     }
+    // Issue #879 评论6146031468：renderNodeKey 包含 motionChannel，
+    // 确保不同运动轨迹/来源生成不同的 renderNodeKey。
+    // 同一物理 Text 的多块 clip 共享一组 key；物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
     const identity: PhysicalWindowIdentity = {
       sourceKind: sourceKind,
       sourceRevision: sourceRevision,
       runId: `${sourceKind}-${sourceRevision}`,
       windowInstanceId: allocatedWinId,
-      renderNodeKey: `${sourceKind}-${sourceRevision}-${allocatedWinId}`
+      renderNodeKey: `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}`
     }
     this.identities.set(cacheKey, identity)
     return identity

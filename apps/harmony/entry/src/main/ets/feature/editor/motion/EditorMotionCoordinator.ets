@@ -2268,51 +2268,54 @@ export class EditorMotionCoordinator {
                 // Issue #879 第32轮复核问题2：物理源窗口的完整数据
                 fullWindowGlyphUtf16Ranges: windowFullWindowGlyphUtf16Ranges,
               }
-              // 问题2：frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
+              // Issue #879 评论6146031468：Planner 已为每个物理来源分配唯一的 renderNodeKey
+              // （包含 motionChannel），不同运动轨迹/来源生成不同的 key。
+              // frozen 成员按 renderNodeKey 聚合——同一物理 Text 节点覆盖多个字时，
               // 合并各字的 clipRects 到一个 MotionGlyphWindow，避免重复 key 丢字。
               // target 成员仍按 interval 独立分配 windowInstanceId，直接 push。
-              // Issue #879 评论6145308014 问题2：frozen 聚合层不再静默丢冲突成员。
-              // 同 key 且身份一致 → 合并 clip；同 key 但身份不一致 → 不跳过、不合并，
-              // 保留为独立窗口 push 到 motionGlyphWindows，暴露 Planner 规划问题。
+              // 由于 Planner 保证同 key 的物理身份一致，这里不再做"同 key 不同身份"的跳过逻辑。
               if (memberRole === 'frozen') {
                 const existing = frozenWindowAggregator.get(memberRenderNodeKey)
                 if (existing !== undefined) {
+                  // Issue #879 评论6146031468：Planner 已保证同 key 的物理身份一致。
+                  // 如果出现同 key 但不同身份的情况，说明 Planner 有 bug，应该抛出错误。
                   if (existing.runId !== memberWindow.runId ||
                       existing.sourceRevision !== memberWindow.sourceRevision) {
-                    // 同 key 不同身份：不跳过(continue)，保留为独立窗口
-                    // 这暴露了 Planner/交棒对窗口所有权的规划问题，不应通过跳过掩盖
-                    motionGlyphWindows.push(memberWindow)
-                  } else {
-                    // Issue #879 复核评论6120195493：只合并裁切和显示片段。
-                    // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
-                    existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
-                    existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
-                    existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
-                    existing.clipTop = Math.min(existing.clipTop, memberWindow.clipTop)
-                    existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
-                    existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
-                    existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
-                    // Issue #879 评论6128658045 问题1+3：从 group plan 更新 glyphUtf16Ranges、
-                    // utf16Start/End 和 glyphIds，确保聚合后的窗口携带完整的逐字映射。
-                    // 使用 fullWindow* 字段（合并后的唯一可信来源）。
-                    const gp = frozenGroupPlans.get(memberRenderNodeKey)
-                    if (gp !== undefined) {
-                      existing.glyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
-                      existing.fullWindowGlyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
-                      // Issue #879 评论6129701697 问题4：从 fullWindowGlyphUtf16Ranges 派生
-                      // glyphIds 和 utf16 范围，不再依赖已删除的 fullWindowGlyphIds/Utf16Start/End
-                      if (gp.fullWindowGlyphUtf16Ranges !== null &&
-                          gp.fullWindowGlyphUtf16Ranges.size > 0) {
-                        existing.glyphIds = Array.from(gp.fullWindowGlyphUtf16Ranges.keys())
-                        let minStart = Infinity
-                        let maxEnd = 0
-                        for (const range of gp.fullWindowGlyphUtf16Ranges.values()) {
-                          if (range[0] < minStart) { minStart = range[0] }
-                          if (range[1] > maxEnd) { maxEnd = range[1] }
-                        }
-                        existing.utf16Start = minStart
-                        existing.utf16End = maxEnd
+                    throw new Error(
+                      `Planner bug: same renderNodeKey '${memberRenderNodeKey}' but different physical identity. ` +
+                      `existing: ${existing.sourceKind}-${existing.sourceRevision}, ` +
+                      `member: ${memberWindow.sourceKind}-${memberWindow.sourceRevision}`
+                    )
+                  }
+                  // 同 key 且身份一致：只合并裁切和显示片段。
+                  // offsetX/offsetY/opacity/currentPositionX/Y 已从 groupPlan 取值，不需要合并。
+                  existing.clipRects = [...existing.clipRects, ...memberWindow.clipRects]
+                  existing.clipLeft = Math.min(existing.clipLeft, memberWindow.clipLeft)
+                  existing.clipRight = Math.max(existing.clipRight, memberWindow.clipRight)
+                  existing.clipTop = Math.min(existing.clipTop, memberWindow.clipTop)
+                  existing.clipBottom = Math.max(existing.clipBottom, memberWindow.clipBottom)
+                  existing.currentClipLeft = Math.min(existing.currentClipLeft, memberWindow.currentClipLeft)
+                  existing.currentClipRight = Math.max(existing.currentClipRight, memberWindow.currentClipRight)
+                  // Issue #879 评论6128658045 问题1+3：从 group plan 更新 glyphUtf16Ranges、
+                  // utf16Start/End 和 glyphIds，确保聚合后的窗口携带完整的逐字映射。
+                  // 使用 fullWindow* 字段（合并后的唯一可信来源）。
+                  const gp = frozenGroupPlans.get(memberRenderNodeKey)
+                  if (gp !== undefined) {
+                    existing.glyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
+                    existing.fullWindowGlyphUtf16Ranges = gp.fullWindowGlyphUtf16Ranges
+                    // Issue #879 评论6129701697 问题4：从 fullWindowGlyphUtf16Ranges 派生
+                    // glyphIds 和 utf16 范围，不再依赖已删除的 fullWindowGlyphIds/Utf16Start/End
+                    if (gp.fullWindowGlyphUtf16Ranges !== null &&
+                        gp.fullWindowGlyphUtf16Ranges.size > 0) {
+                      existing.glyphIds = Array.from(gp.fullWindowGlyphUtf16Ranges.keys())
+                      let minStart = Infinity
+                      let maxEnd = 0
+                      for (const range of gp.fullWindowGlyphUtf16Ranges.values()) {
+                        if (range[0] < minStart) { minStart = range[0] }
+                        if (range[1] > maxEnd) { maxEnd = range[1] }
                       }
+                      existing.utf16Start = minStart
+                      existing.utf16End = maxEnd
                     }
                   }
                 } else {
