@@ -3092,9 +3092,13 @@ export class EditorMotionCoordinator {
           existing.currentClipRight = Math.max(existing.currentClipRight, w.currentClipRight)
           continue
         } else {
-          // 同 key 但物理身份不一致 → 不合并，保留独立窗口
-          // 这暴露了 Planner 规划问题（同 key 不同物理来源），不应通过合并掩盖
-          mergedWindows.push(w)
+          // 同 key 但物理身份不一致 → 这是 Planner 规划 bug，不能通过 push 同 key 的第二张 Text 来掩盖。
+          // SujianEditor 按 key 去重，同 key 的两张 Text 只会保留一张，另一张丢失。
+          throw new Error(
+            `Planner bug: same renderNodeKey '${w.renderNodeKey}' but different physical identity. ` +
+            `existing: ${existing.sourceKind}-${existing.sourceRevision} (${existing.utf16Start}-${existing.utf16End}), ` +
+            `new: ${w.sourceKind}-${w.sourceRevision} (${w.utf16Start}-${w.utf16End})`
+          )
         }
       } else {
         windowByKey.set(w.renderNodeKey, w)
@@ -3534,13 +3538,15 @@ export class EditorMotionCoordinator {
           const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
             x: cr.x, y: cr.y, width: 0, height: cr.height
           }))
-          // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
-          let carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
-          let carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
-          // Issue #879 评论6138838190：如果 key 与已有窗口冲突，用 allocateFresh 分配新 ID
+          // carry-over 是同一物理 Text 的延续，保留原始身份
+          let carryOverRenderNodeKey = w.renderNodeKey
+          let carryOverWinId = w.windowInstanceId
+          // 仅当原始 key 与已有窗口冲突时，才分配新 key
           if (existingKeys.has(carryOverRenderNodeKey)) {
             carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-            carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
+            // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
+            // carry 作为 motionChannel 标识 carry-over 新分配的窗口
+            carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
           }
           existingKeys.add(carryOverRenderNodeKey)
           ghosts.push({
@@ -3616,13 +3622,15 @@ export class EditorMotionCoordinator {
         const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
           x: cr.x, y: cr.y, width: 0, height: cr.height
         }))
-        // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
-        let carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
-        let carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
-        // Issue #879 评论6138838190：如果 key 与已有窗口冲突，用 allocateFresh 分配新 ID
+        // carry-over 是同一物理 Text 的延续，保留原始身份
+        let carryOverRenderNodeKey = w.renderNodeKey
+        let carryOverWinId = w.windowInstanceId
+        // 仅当原始 key 与已有窗口冲突时，才分配新 key
         if (existingKeys.has(carryOverRenderNodeKey)) {
           carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-          carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
+          // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
+          // carry 作为 motionChannel 标识 carry-over 新分配的窗口
+          carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
         }
         existingKeys.add(carryOverRenderNodeKey)
         ghosts.push({
@@ -4048,13 +4056,15 @@ export class EditorMotionCoordinator {
             runClipRects = islandStartRects
           }
         }
-        // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
-        let carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
-        let carryOverRenderNodeKey = `${sourceKind}-${w.sourceRevision}-${carryOverWinId}`
-        // Issue #879 评论6138838190：如果 key 与已有窗口冲突，用 allocateFresh 分配新 ID
+        // carry-over 是同一物理 Text 的延续，保留原始身份
+        let carryOverRenderNodeKey = w.renderNodeKey
+        let carryOverWinId = w.windowInstanceId
+        // 仅当原始 key 与已有窗口冲突时，才分配新 key
         if (existingKeys.has(carryOverRenderNodeKey)) {
           carryOverWinId = this.windowIdAllocator.allocateFresh(piece.glyphIds)
-          carryOverRenderNodeKey = `${sourceKind}-${w.sourceRevision}-${carryOverWinId}`
+          // 使用包含 motionChannel 的格式：sourceKind-sourceRevision-motionChannel-winId
+          // carry 作为 motionChannel 标识 carry-over 新分配的窗口
+          carryOverRenderNodeKey = `${sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
         }
         existingKeys.add(carryOverRenderNodeKey)
         runs.push({

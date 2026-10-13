@@ -2188,12 +2188,7 @@ function buildSourceMembers(
       // 空clip时应保持不可见并淡出，而不是从零宽恢复到完整字。
       role: 'frozen',
       runId: span.runId,
-      // Issue #879 评论6128658045 问题2：从 sourceKind + sourceRevision + windowInstanceId
-      // 重新构建 renderNodeKey，确保与 sourceRevision 一致。如果 span.renderNodeKey
-      // 包含的 sourceRevision 与 span.sourceRevision 不匹配（跨修订残影），修正它。
-      // 这从源头消除了同 renderNodeKey 但不同 sourceRevision 的冲突，
-      // buildFrame/plannedWindowKeys 不再需要 conflictCounter/-conflict-N 后缀。
-      renderNodeKey: `${span.sourceKind}-${span.sourceRevision}-${span.windowInstanceId}`,
+      renderNodeKey: span.renderNodeKey,
       sourceGlyphRect: {
         x: rect.x, y: rect.y,
         width: rect.width, height: rect.height,

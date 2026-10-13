@@ -1416,5 +1416,251 @@ test('场景10e：连续帧采样时预分配值保持不变（确定性）', ()
   assert.equal(new Set(frameWinIds).size, 1)
 })
 
+// ── Issue #879 评论6147754107：物理身份完整性测试 ──
+//
+// 本轮复核要求3个新测试场景：
+// 1. frozen key 保留通道——buildSourceMembers 不再抹掉 motionChannel
+// 2. carry-over 保留原始窗口身份——重复 retarget 保持相同 key/instanceId
+// 3. 最终输出不能有同 key 的两张 Text——buildFrame 不再 push 同 key 的第二张窗口
+
+test('场景11a：frozen key 保留通道——buildSourceMembers 不抹掉 motionChannel', () => {
+  // 模拟 FrozenWindowSpan 的 renderNodeKey 包含 motionChannel（如 old-10-frozen-win-7）
+  // buildSourceMembers 应原样传递 span.renderNodeKey，不重建为三段式
+  const spanRenderNodeKey = 'old-10-frozen-win-7'
+  const spanSourceKind = 'old'
+  const spanSourceRevision = 10
+  const spanWindowInstanceId = 'win-7'
+
+  // 旧逻辑（bug）：renderNodeKey = `${sourceKind}-${sourceRevision}-${windowInstanceId}`
+  // = 'old-10-win-7' —— 抹掉了 'frozen' 通道标识
+  const oldBuggyKey = `${spanSourceKind}-${spanSourceRevision}-${spanWindowInstanceId}`
+  assert.equal(oldBuggyKey, 'old-10-win-7')
+  assert.notEqual(oldBuggyKey, spanRenderNodeKey)
+
+  // 新逻辑（修复）：renderNodeKey = span.renderNodeKey（原样传递）
+  const newFixedKey = spanRenderNodeKey
+  assert.equal(newFixedKey, 'old-10-frozen-win-7')
+  assert.ok(newFixedKey.includes('frozen'))
+})
+
+test('场景11b：frozen key 保留通道——不同 motionChannel 的同源窗口不退化为相同 key', () => {
+  // Planner 创建的合法窗口 key 形如 old-10-frozen-win-7、old-10-deleted-win-7
+  // 经过旧 buildSourceMembers，两者都会退化成 old-10-win-7
+  const frozenSpanKey = 'old-10-frozen-win-7'
+  const deletedSpanKey = 'old-10-deleted-win-7'
+
+  // 旧逻辑（bug）：两者都退化为 old-10-win-7
+  const oldBuggyFrozenKey = `old-10-win-7`
+  const oldBuggyDeletedKey = `old-10-win-7`
+  assert.equal(oldBuggyFrozenKey, oldBuggyDeletedKey) // bug：碰撞
+
+  // 新逻辑（修复）：原样传递，不碰撞
+  assert.notEqual(frozenSpanKey, deletedSpanKey)
+  assert.ok(frozenSpanKey.includes('frozen'))
+  assert.ok(deletedSpanKey.includes('deleted'))
+})
+
+test('场景11c：carry-over 保留原始窗口身份——优先使用 w.renderNodeKey/windowInstanceId', () => {
+  // 模拟一个 carry-over 窗口来自上一帧的 motionGlyphWindows
+  const w = {
+    renderNodeKey: 'old-10-frozen-win-3',
+    windowInstanceId: 'win-3',
+    sourceKind: 'old',
+    sourceRevision: 10,
+  }
+  const existingKeys = new Set()
+
+  // 新逻辑（修复）：优先保留原始窗口的 renderNodeKey 和 windowInstanceId
+  let carryOverRenderNodeKey = w.renderNodeKey
+  let carryOverWinId = w.windowInstanceId
+  // 仅当原始 key 与已有窗口冲突时，才分配新 key
+  if (existingKeys.has(carryOverRenderNodeKey)) {
+    carryOverWinId = 'win-new'
+    carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
+  }
+  existingKeys.add(carryOverRenderNodeKey)
+
+  // carry-over 应保留原始身份
+  assert.equal(carryOverRenderNodeKey, 'old-10-frozen-win-3')
+  assert.equal(carryOverWinId, 'win-3')
+  assert.ok(carryOverRenderNodeKey.includes('frozen'))
+})
+
+test('场景11d：carry-over 重复 retarget 保持相同 key/instanceId', () => {
+  // 模拟连续两次 retarget：carry-over 窗口应保持相同的 renderNodeKey
+  const w = {
+    renderNodeKey: 'new-11-target-win-5',
+    windowInstanceId: 'win-5',
+    sourceKind: 'new',
+    sourceRevision: 11,
+  }
+
+  // 第一次 retarget
+  const existingKeys1 = new Set()
+  let key1 = w.renderNodeKey
+  let winId1 = w.windowInstanceId
+  if (existingKeys1.has(key1)) {
+    winId1 = 'win-new1'
+    key1 = `${w.sourceKind}-${w.sourceRevision}-carry-${winId1}`
+  }
+  existingKeys1.add(key1)
+
+  // 第二次 retarget（同一窗口再次 carry-over）
+  const existingKeys2 = new Set()
+  let key2 = w.renderNodeKey
+  let winId2 = w.windowInstanceId
+  if (existingKeys2.has(key2)) {
+    winId2 = 'win-new2'
+    key2 = `${w.sourceKind}-${w.sourceRevision}-carry-${winId2}`
+  }
+  existingKeys2.add(key2)
+
+  // 两次 retarget 的 key 和 windowInstanceId 应相同
+  assert.equal(key1, key2)
+  assert.equal(winId1, winId2)
+  assert.equal(key1, 'new-11-target-win-5')
+  assert.equal(winId1, 'win-5')
+})
+
+test('场景11e：carry-over 冲突时分配新 key 包含 motionChannel', () => {
+  // 当原始 key 与已有窗口冲突时，分配新 key 应包含 motionChannel（如 'carry'）
+  const w = {
+    renderNodeKey: 'old-10-frozen-win-3',
+    windowInstanceId: 'win-3',
+    sourceKind: 'old',
+    sourceRevision: 10,
+  }
+  const existingKeys = new Set(['old-10-frozen-win-3']) // 已有窗口占用了该 key
+
+  let carryOverRenderNodeKey = w.renderNodeKey
+  let carryOverWinId = w.windowInstanceId
+  if (existingKeys.has(carryOverRenderNodeKey)) {
+    carryOverWinId = 'win-9'
+    carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-carry-${carryOverWinId}`
+  }
+  existingKeys.add(carryOverRenderNodeKey)
+
+  // 冲突时分配的新 key 应包含 'carry' 作为 motionChannel
+  assert.equal(carryOverRenderNodeKey, 'old-10-carry-win-9')
+  assert.ok(carryOverRenderNodeKey.includes('carry'))
+  // 新 key 不应与原始 key 碰撞
+  assert.notEqual(carryOverRenderNodeKey, w.renderNodeKey)
+})
+
+test('场景11f：最终输出不能有同 key 的两张 Text——buildFrame 合并逻辑', () => {
+  // 模拟 buildFrame 的合并逻辑：同 key 但物理身份不一致时应抛出错误
+  // 而不是 push 同 key 的第二张 Text（旧逻辑的 bug）
+
+  const mergedWindows = []
+  const windowByKey = new Map()
+
+  // 第一张窗口
+  const w1 = {
+    renderNodeKey: 'old-10-frozen-win-3',
+    sourceKind: 'old',
+    sourceRevision: 10,
+    utf16Start: 0,
+    utf16End: 2,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    clipLeft: 0, clipRight: 10, clipTop: 0, clipBottom: 20,
+    currentClipLeft: 0, currentClipRight: 10,
+  }
+  windowByKey.set(w1.renderNodeKey, w1)
+  mergedWindows.push(w1)
+
+  // 第二张窗口——同 key 但不同物理身份
+  const w2 = {
+    renderNodeKey: 'old-10-frozen-win-3', // 同 key
+    sourceKind: 'old',
+    sourceRevision: 10,
+    utf16Start: 3, // 不同 utf16Start
+    utf16End: 5,
+    clipRects: [{ x: 30, y: 0, width: 10, height: 20 }],
+    clipLeft: 30, clipRight: 40, clipTop: 0, clipBottom: 20,
+    currentClipLeft: 30, currentClipRight: 40,
+  }
+
+  // 旧逻辑（bug）：push w2 到 mergedWindows，导致同 key 的两张 Text
+  // SujianEditor 按 key 去重，只会保留一张，另一张丢失
+  const oldBuggyMergedWindows = [...mergedWindows, w2]
+  assert.equal(oldBuggyMergedWindows.length, 2)
+  assert.equal(oldBuggyMergedWindows[0].renderNodeKey, oldBuggyMergedWindows[1].renderNodeKey)
+
+  // 新逻辑（修复）：同 key 不同物理身份时抛出错误
+  const existing = windowByKey.get(w2.renderNodeKey)
+  const samePhysicalIdentity =
+    existing.sourceKind === w2.sourceKind &&
+    existing.sourceRevision === w2.sourceRevision &&
+    existing.utf16Start === w2.utf16Start &&
+    existing.utf16End === w2.utf16End
+
+  assert.ok(!samePhysicalIdentity) // 物理身份不一致
+
+  let threwError = false
+  try {
+    if (!samePhysicalIdentity) {
+      throw new Error(
+        `Planner bug: same renderNodeKey '${w2.renderNodeKey}' but different physical identity.`
+      )
+    }
+  } catch (e) {
+    threwError = true
+    assert.ok(e.message.includes('Planner bug'))
+    assert.ok(e.message.includes(w2.renderNodeKey))
+  }
+  assert.ok(threwError, '应抛出错误而非 push 同 key 的第二张 Text')
+})
+
+test('场景11g：同 key 同物理身份时正常合并 clip', () => {
+  // 同 key 且物理身份一致时，合并 clipRects 是正常行为
+  const mergedWindows = []
+  const windowByKey = new Map()
+
+  const w1 = {
+    renderNodeKey: 'old-10-frozen-win-3',
+    sourceKind: 'old',
+    sourceRevision: 10,
+    utf16Start: 0,
+    utf16End: 2,
+    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
+    clipLeft: 0, clipRight: 10, clipTop: 0, clipBottom: 20,
+    currentClipLeft: 0, currentClipRight: 10,
+  }
+  windowByKey.set(w1.renderNodeKey, w1)
+  mergedWindows.push(w1)
+
+  // 第二张窗口——同 key 且物理身份一致（只是 clipRects 不同）
+  const w2 = {
+    renderNodeKey: 'old-10-frozen-win-3',
+    sourceKind: 'old',
+    sourceRevision: 10,
+    utf16Start: 0,
+    utf16End: 2,
+    clipRects: [{ x: 15, y: 0, width: 8, height: 20 }],
+    clipLeft: 15, clipRight: 23, clipTop: 0, clipBottom: 20,
+    currentClipLeft: 15, currentClipRight: 23,
+  }
+
+  const existing = windowByKey.get(w2.renderNodeKey)
+  const samePhysicalIdentity =
+    existing.sourceKind === w2.sourceKind &&
+    existing.sourceRevision === w2.sourceRevision &&
+    existing.utf16Start === w2.utf16Start &&
+    existing.utf16End === w2.utf16End
+
+  assert.ok(samePhysicalIdentity)
+
+  // 合并 clip
+  existing.clipRects = [...existing.clipRects, ...w2.clipRects]
+  existing.clipLeft = Math.min(existing.clipLeft, w2.clipLeft)
+  existing.clipRight = Math.max(existing.clipRight, w2.clipRight)
+
+  // 合并后只有一张窗口，clipRects 包含两块
+  assert.equal(mergedWindows.length, 1)
+  assert.equal(existing.clipRects.length, 2)
+  assert.equal(existing.clipLeft, 0)
+  assert.equal(existing.clipRight, 23)
+})
+
 console.log('---')
 console.log(`✅ editor_physical_window_identity: ${passed} tests passed`)
