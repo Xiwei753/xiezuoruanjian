@@ -1413,8 +1413,18 @@ export class EditorMotionCoordinator {
         }
         // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey，
         // 不在 buildFrame 中调用 allocator.allocate()。
-        const insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${allocator.allocate(piece.glyphIds)}`
-        const insertWindowInstanceId = insertRenderNodeKey.substring(insertRenderNodeKey.lastIndexOf('-') + 1)
+        // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
+        // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
+        let insertRenderNodeKey: string
+        let insertWindowInstanceId: string
+        if (piece.renderNodeKey !== undefined && piece.windowInstanceId !== undefined) {
+          insertRenderNodeKey = piece.renderNodeKey
+          insertWindowInstanceId = piece.windowInstanceId
+        } else {
+          const fallbackId = allocator.allocate(piece.glyphIds)
+          insertRenderNodeKey = piece.renderNodeKey ?? `new-${newRevision}-${fallbackId}`
+          insertWindowInstanceId = piece.windowInstanceId ?? fallbackId
+        }
         motionGlyphWindows.push({
           sourceKind: 'new',
           utf16Start: pieceUtf16Start,
@@ -1491,8 +1501,18 @@ export class EditorMotionCoordinator {
           }
         }
         // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey。
-        const deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${allocator.allocate(piece.glyphIds)}`
-        const deletedWindowInstanceId = deletedRenderNodeKey.substring(deletedRenderNodeKey.lastIndexOf('-') + 1)
+        // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
+        // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
+        let deletedRenderNodeKey: string
+        let deletedWindowInstanceId: string
+        if (piece.renderNodeKey !== undefined && piece.windowInstanceId !== undefined) {
+          deletedRenderNodeKey = piece.renderNodeKey
+          deletedWindowInstanceId = piece.windowInstanceId
+        } else {
+          const fallbackId = allocator.allocate(piece.glyphIds)
+          deletedRenderNodeKey = piece.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
+          deletedWindowInstanceId = piece.windowInstanceId ?? fallbackId
+        }
         motionGlyphWindows.push({
           sourceKind: 'old',
           utf16Start: pieceUtf16Start,
@@ -2748,8 +2768,18 @@ export class EditorMotionCoordinator {
           }
 
           // Issue #879 评论6129701697 问题1：读取预分配的 renderNodeKey（fallback 分支）。
-          const fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${allocator.allocate(interval.glyphIds)}`
-          const fallbackWindowInstanceId = fallbackRenderNodeKey.substring(fallbackRenderNodeKey.lastIndexOf('-') + 1)
+          // Issue #879 复核评论修复：同时读取预分配的 windowInstanceId，
+          // 不再从 renderNodeKey 截取字符串。fallback 分支同时分配两个字段。
+          let fallbackRenderNodeKey: string
+          let fallbackWindowInstanceId: string
+          if (interval.renderNodeKey !== undefined && interval.windowInstanceId !== undefined) {
+            fallbackRenderNodeKey = interval.renderNodeKey
+            fallbackWindowInstanceId = interval.windowInstanceId
+          } else {
+            const fallbackId = allocator.allocate(interval.glyphIds)
+            fallbackRenderNodeKey = interval.renderNodeKey ?? `old-${oldRevision}-${fallbackId}`
+            fallbackWindowInstanceId = interval.windowInstanceId ?? fallbackId
+          }
           // Issue #879 评论6120849815 问题3：旧源窗口（frozen 角色）使用 islandClipRects（不含间隙碎片）。
           motionGlyphWindows.push({
             sourceKind: 'old',
@@ -2803,8 +2833,18 @@ export class EditorMotionCoordinator {
           // 使新源与旧源在屏幕上的 glyph 锚点相同，clipRects 可继续共用（屏幕坐标系）。
           if (needsSourceCrossfade) {
             // Issue #879 评论6129701697 问题1：读取预分配的 crossfadeRenderNodeKey。
-            const crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${allocator.allocate(interval.glyphIds)}`
-            const crossfadeWinId = crossfadeKey.substring(crossfadeKey.lastIndexOf('-') + 1)
+            // Issue #879 复核评论修复：同时读取预分配的 crossfadeWindowInstanceId，
+            // 不再从 crossfadeKey 截取字符串。fallback 分支同时分配两个字段。
+            let crossfadeKey: string
+            let crossfadeWinId: string
+            if (interval.crossfadeRenderNodeKey !== undefined && interval.crossfadeWindowInstanceId !== undefined) {
+              crossfadeKey = interval.crossfadeRenderNodeKey
+              crossfadeWinId = interval.crossfadeWindowInstanceId
+            } else {
+              const fallbackId = allocator.allocate(interval.glyphIds)
+              crossfadeKey = interval.crossfadeRenderNodeKey ?? `new-${newRevision}-${fallbackId}`
+              crossfadeWinId = interval.crossfadeWindowInstanceId ?? fallbackId
+            }
             // Issue #879 评论6120849815 问题3：新源窗口（target 角色）使用 targetClipRects（含间隙碎片）。
             motionGlyphWindows.push({
               sourceKind: 'new',
@@ -2873,8 +2913,9 @@ export class EditorMotionCoordinator {
         })
       }
       // Issue #879 评论6129701697 问题1：读取预分配的 ghost.renderNodeKey。
+      // Issue #879 复核评论修复：直接读取 ghost.windowInstanceId，不再从 renderNodeKey 截取。
       const ghostRenderNodeKey = ghost.renderNodeKey
-      const ghostWindowInstanceId = ghostRenderNodeKey.substring(ghostRenderNodeKey.lastIndexOf('-') + 1)
+      const ghostWindowInstanceId = ghost.windowInstanceId
       motionGlyphWindows.push({
         sourceKind: ghost.sourceKind,
         utf16Start: ghost.utf16Start,
@@ -2914,8 +2955,9 @@ export class EditorMotionCoordinator {
     // - 问题3：utf16Start/End 用 sourceUtf16Start/End（给旧 TextController 绘制的源范围）
     for (const motionRun of plan.carryOverMotionRuns) {
       // Issue #879 评论6129701697 问题1：读取预分配的 motionRun.renderNodeKey。
+      // Issue #879 复核评论修复：直接读取 motionRun.windowInstanceId，不再从 renderNodeKey 截取。
       const motionRenderNodeKey = motionRun.renderNodeKey
-      const motionWindowInstanceId = motionRenderNodeKey.substring(motionRenderNodeKey.lastIndexOf('-') + 1)
+      const motionWindowInstanceId = motionRun.windowInstanceId
       if (motionRun.motionOwnerKind === 'reflow') {
         // reflow：每帧插值 currentPositionX/Y，并相应更新 offset/clip
         const currentX = motionRun.startX + (motionRun.targetX - motionRun.startX) * p
@@ -3507,13 +3549,17 @@ export class EditorMotionCoordinator {
           const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
             x: cr.x, y: cr.y, width: 0, height: cr.height
           }))
+          // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
+          const carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
+          const carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
           ghosts.push({
             glyphIds: piece.glyphIds,
             windowId: w.windowId,
             sourceRevision: w.sourceRevision,
             sourceKind: w.sourceKind,
             sourceRunId: w.runId,
-            renderNodeKey: `${w.sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
+            renderNodeKey: carryOverRenderNodeKey,
+            windowInstanceId: carryOverWinId,
             utf16Start: piece.sourceUtf16Start,
             utf16End: piece.sourceUtf16End,
             currentClipLeft: piece.clipLeft,
@@ -3572,13 +3618,17 @@ export class EditorMotionCoordinator {
         const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
           x: cr.x, y: cr.y, width: 0, height: cr.height
         }))
+        // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
+        const carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
+        const carryOverRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${carryOverWinId}`
         ghosts.push({
           glyphIds: piece.glyphIds,
           windowId: w.windowId,
           sourceRevision: w.sourceRevision,
           sourceKind: w.sourceKind,
           sourceRunId: w.runId,
-          renderNodeKey: `${w.sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
+          renderNodeKey: carryOverRenderNodeKey,
+          windowInstanceId: carryOverWinId,
           utf16Start: piece.sourceUtf16Start,
           utf16End: piece.sourceUtf16End,
           currentClipLeft: piece.clipLeft,
@@ -3937,6 +3987,9 @@ export class EditorMotionCoordinator {
             runClipRects = islandStartRects
           }
         }
+        // Issue #879 复核评论修复：同时保存 windowInstanceId，不再从 renderNodeKey 截取。
+        const carryOverWinId = this.windowIdAllocator.allocate(piece.glyphIds)
+        const carryOverRenderNodeKey = `${sourceKind}-${w.sourceRevision}-${carryOverWinId}`
         runs.push({
           motionOwnerKind: w.motionOwnerKind,
           glyphIds: piece.glyphIds,
@@ -3944,7 +3997,8 @@ export class EditorMotionCoordinator {
           sourceRevision: w.sourceRevision,
           sourceKind: sourceKind,
           sourceRunId: sourceRunId,
-          renderNodeKey: `${sourceKind}-${w.sourceRevision}-${this.windowIdAllocator.allocate(piece.glyphIds)}`,
+          renderNodeKey: carryOverRenderNodeKey,
+          windowInstanceId: carryOverWinId,
           sourceUtf16Start: piece.sourceUtf16Start,
           sourceUtf16End: piece.sourceUtf16End,
           targetUtf16Start: piece.targetUtf16Start,

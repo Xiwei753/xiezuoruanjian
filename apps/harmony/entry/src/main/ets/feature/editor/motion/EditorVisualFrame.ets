@@ -272,6 +272,12 @@ export interface CarryOverGhostRun {
    * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
    */
   renderNodeKey: string
+  /**
+   * Issue #879 复核评论修复：预分配的 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时分配，buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   */
+  windowInstanceId: string
   /** 该残影在源正文中的 UTF-16 起始 offset */
   utf16Start: number
   /** 该残影在源正文中的 UTF-16 结束 offset（exclusive） */
@@ -353,6 +359,12 @@ export interface CarryOverMotionRun {
    * plannedWindowKeys 和 buildFrame 只读取此字段，不各自重跑分配逻辑。
    */
   renderNodeKey: string
+  /**
+   * Issue #879 复核评论修复：预分配的 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时分配，buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   */
+  windowInstanceId: string
   /**
    * Issue #879 复核评论6082616112 问题3：旧源 UTF-16 范围——给旧 TextController 绘制用。
    * 这是字形在源正文中的范围，buildFrame 中 utf16Start/End 用此值。

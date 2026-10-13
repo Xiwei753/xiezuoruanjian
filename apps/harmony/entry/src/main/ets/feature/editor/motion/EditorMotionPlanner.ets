@@ -103,13 +103,16 @@ export class PhysicalWindowKeyAllocator {
     glyphIds: string[],
     windowInstanceId?: string
   ): PhysicalWindowIdentity {
-    const existingId = windowInstanceId ?? ''
-    const cacheKey = `${sourceKind}-${sourceRevision}-${existingId}`
+    // Issue #879 复核评论修复：先分配真实 ID 再用作缓存键。
+    // 旧代码在分配真实 ID 之前就用 windowInstanceId ?? '' 命中 Map，
+    // 导致 windowInstanceId 为 undefined 时不同 glyphIds 的两次调用缓存键相同，
+    // 第二次直接复用第一次的 identity 而不运行 allocator.allocate()。
+    const allocatedWinId = windowInstanceId ?? this.allocator.allocate(glyphIds)
+    const cacheKey = `${sourceKind}-${sourceRevision}-${allocatedWinId}`
     const existing = this.identities.get(cacheKey)
     if (existing !== undefined) {
       return existing
     }
-    const allocatedWinId = windowInstanceId ?? this.allocator.allocate(glyphIds)
     const identity: PhysicalWindowIdentity = {
       sourceKind: sourceKind,
       sourceRevision: sourceRevision,
@@ -501,8 +504,11 @@ export class EditorMotionPlanner {
           )
           // Issue #879 评论6129701697 问题1：预分配 renderNodeKey，
           // plannedWindowKeys 和 buildFrame 只读取此字段。
+          // Issue #879 复核评论修复：同时保存 windowInstanceId，避免从 renderNodeKey 截取。
           for (const piece of pieces) {
-            piece.renderNodeKey = keyAllocator.allocate('old', oldRevision, piece.glyphIds).renderNodeKey
+            const identity = keyAllocator.allocate('old', oldRevision, piece.glyphIds)
+            piece.renderNodeKey = identity.renderNodeKey
+            piece.windowInstanceId = identity.windowInstanceId
           }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
@@ -541,8 +547,11 @@ export class EditorMotionPlanner {
           )
           // Issue #879 评论6129701697 问题1：预分配 renderNodeKey，
           // plannedWindowKeys 和 buildFrame 只读取此字段。
+          // Issue #879 复核评论修复：同时保存 windowInstanceId，避免从 renderNodeKey 截取。
           for (const piece of pieces) {
-            piece.renderNodeKey = keyAllocator.allocate('new', newRevision, piece.glyphIds).renderNodeKey
+            const identity = keyAllocator.allocate('new', newRevision, piece.glyphIds)
+            piece.renderNodeKey = identity.renderNodeKey
+            piece.windowInstanceId = identity.windowInstanceId
           }
           const compatLeft = pieces.length > 0 ? pieces[0].startClipLeft : rect.rect.x
           const compatRight = pieces.length > 0 ? pieces[pieces.length - 1].startClipRight : rect.rect.x
@@ -659,12 +668,17 @@ export class EditorMotionPlanner {
             for (const interval of piece.intervals) {
               // Issue #879 评论6129701697 问题1：预分配 interval 的 renderNodeKey
               // （fallback 分支用，当 sourceMembers 不存在时）。
-              interval.renderNodeKey = keyAllocator.allocate('old', oldRevision, interval.glyphIds).renderNodeKey
+              // Issue #879 复核评论修复：同时保存 windowInstanceId，避免从 renderNodeKey 截取。
+              const intervalIdentity = keyAllocator.allocate('old', oldRevision, interval.glyphIds)
+              interval.renderNodeKey = intervalIdentity.renderNodeKey
+              interval.windowInstanceId = intervalIdentity.windowInstanceId
               const intervalNeedsCrossfade = interval.needsCrossfade !== undefined
                 ? interval.needsCrossfade
                 : needsCrossfade
               if (intervalNeedsCrossfade) {
-                interval.crossfadeRenderNodeKey = keyAllocator.allocate('new', newRevision, interval.glyphIds).renderNodeKey
+                const crossfadeIdentity = keyAllocator.allocate('new', newRevision, interval.glyphIds)
+                interval.crossfadeRenderNodeKey = crossfadeIdentity.renderNodeKey
+                interval.crossfadeWindowInstanceId = crossfadeIdentity.windowInstanceId
               }
 
               if (interval.sourceMembers !== undefined && interval.sourceMembers.length > 0) {

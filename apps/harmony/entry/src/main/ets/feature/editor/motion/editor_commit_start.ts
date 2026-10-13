@@ -390,6 +390,14 @@ export interface RunStartPiece {
    */
   renderNodeKey?: string
   /**
+   * Issue #879 复核评论修复：预分配的 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  windowInstanceId?: string
+  /**
    * Issue #879 本轮复核评论（高优先级）：该 piece 内所有不连续可见岛的起始裁切区间列表。
    *
    * 固定 piece 分区下，交棒瞬间某字形可能被冻结窗口局部裁切而断开成多段；
@@ -424,6 +432,14 @@ export interface RunStartInterval {
    */
   renderNodeKey?: string
   /**
+   * Issue #879 复核评论修复：预分配的旧源 windowInstanceId。
+   *
+   * 与 renderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 renderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  windowInstanceId?: string
+  /**
    * Issue #879 评论6129701697 问题1：预分配的新源交叉淡入淡出 renderNodeKey（fallback 分支用）。
    *
    * 仅当 needsCrossfade=true 时有意义。由 Planner 在 planFromPatches 中预分配，
@@ -431,6 +447,14 @@ export interface RunStartInterval {
    * 缺省时（legacy/未填充）回落到运行时分配。
    */
   crossfadeRenderNodeKey?: string
+  /**
+   * Issue #879 复核评论修复：预分配的新源交叉淡入淡出 windowInstanceId。
+   *
+   * 与 crossfadeRenderNodeKey 同时由 PhysicalWindowKeyAllocator 分配，
+   * buildFrame 直接读取此字段而非从 crossfadeRenderNodeKey 截取字符串。
+   * 缺省时（legacy/未填充）回落到运行时分配。
+   */
+  crossfadeWindowInstanceId?: string
   /** 该岛起始裁切左边界（vp，在 run 自己布局里） */
   startClipLeft: number
   /** 该岛起始裁切右边界（vp，在 run 自己布局里） */
