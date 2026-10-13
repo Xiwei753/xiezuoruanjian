@@ -735,27 +735,28 @@ export class EditorMotionPlanner {
         sourceLayout = w.sourceKind === 'old' ? oldLayout : newLayout
       }
 
-      // 用 clusterBoundaries 把窗口的 UTF-16 范围拆成字符簇边界，
-      // 再与 glyphIds 一一对应，构建局部 glyphUtf16Ranges（作为 fallback）。
-      const localGlyphUtf16Ranges = EditorMotionPlanner.buildGlyphUtf16Ranges(
-        w.glyphIds, w.utf16Start, w.utf16End, sourceText
-      )
-
-      // Issue #879 第32轮复核问题2：从 MotionGlyphWindow 的 fullWindow* 字段读取完整窗口数据。
-      // 优先使用 fullWindow* 字段（物理源窗口首次创建时保存的完整数据），
-      // fallback 到当前窗口的 glyphIds/utf16Start/End/glyphUtf16Ranges（legacy 语义）。
+      // Issue #879 评论6128658045 问题1+3：合并 original* 和 fullWindow* 为唯一字段。
+      // 上游已保证 fullWindowGlyphUtf16Ranges 不为 undefined（所有创建 MotionGlyphWindow 的地方
+      // 都计算了实际值），不再 fallback 到 localGlyphUtf16Ranges。
       const fullWindowGlyphIds = w.fullWindowGlyphIds !== undefined
         ? w.fullWindowGlyphIds : w.glyphIds
       const fullWindowUtf16Start = w.fullWindowUtf16Start !== undefined
         ? w.fullWindowUtf16Start : w.utf16Start
       const fullWindowUtf16End = w.fullWindowUtf16End !== undefined
         ? w.fullWindowUtf16End : w.utf16End
-      // 优先使用 fullWindowGlyphUtf16Ranges（物理源窗口首次创建时的完整映射），
-      // fallback 到局部构建的映射。
-      const fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges !== undefined
-        ? w.fullWindowGlyphUtf16Ranges : localGlyphUtf16Ranges
+      // Issue #879 评论6128658045 问题3：fullWindowGlyphUtf16Ranges 直接使用完整窗口映射，
+      // 不再 fallback 到 localGlyphUtf16Ranges（上游已保证不为 undefined）。
+      let fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null = null
+      if (w.fullWindowGlyphUtf16Ranges !== undefined && w.fullWindowGlyphUtf16Ranges !== null) {
+        fullWindowGlyphUtf16Ranges = w.fullWindowGlyphUtf16Ranges
+      } else {
+        // 防御性 fallback：上游应保证不为 undefined，但此处仍保留计算以防遗漏
+        fullWindowGlyphUtf16Ranges = EditorMotionPlanner.buildGlyphUtf16Ranges(
+          fullWindowGlyphIds, fullWindowUtf16Start, fullWindowUtf16End, sourceText
+        )
+      }
 
-      // Issue #879 评论6128121842：glyphUtf16Ranges 直接使用完整窗口映射，
+      // Issue #879 评论6128658045 问题1+3：glyphUtf16Ranges 直接使用完整窗口映射，
       // 消除 glyphUtf16Ranges 和 fullWindowGlyphUtf16Ranges 两套来源的矛盾。
       const glyphUtf16Ranges = fullWindowGlyphUtf16Ranges
 

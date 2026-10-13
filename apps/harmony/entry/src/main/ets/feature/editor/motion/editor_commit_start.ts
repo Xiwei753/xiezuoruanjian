@@ -259,20 +259,20 @@ export interface FrozenGlyphMember {
    */
   windowInstanceId: string | undefined
   /**
-   * Issue #879 复核评论6120195493：该成员所属原始冻结窗口的完整 glyphId→UTF-16 身份映射。
+   * Issue #879 评论6128658045 问题1+3：该成员所属原始冻结窗口的完整 glyphId→UTF-16 身份映射。
    *
    * 从 FrozenWindowSpan.glyphUtf16Ranges 直接复制（非 null 时是整个窗口的映射，不只是该成员
-   * 对应的单个字形）。buildFrame 的 FrozenWindowGroupPlan 用它填充 originalGlyphUtf16Ranges，
+   * 对应的单个字形）。buildFrame 的 FrozenWindowGroupPlan 用它填充 glyphUtf16Ranges，
    * 传递给 MotionGlyphWindow.glyphUtf16Ranges，避免下游 buildGlyphUtf16Ranges 在不连续幸存字
    * 场景用 min/max 重新猜导致返回 null。
    * target 成员（新建的 newRevision 目标）没有原始窗口映射，为 undefined。
    */
   glyphUtf16Ranges?: Map<string, [number, number]> | null
   /**
-   * Issue #879 第32轮复核问题2：该成员所属原始物理 Text 窗口的完整 glyphIds 列表。
+   * Issue #879 评论6128658045 问题1+3：该成员所属原始物理 Text 窗口的完整 glyphIds 列表。
    *
    * 从 FrozenWindowSpan.fullWindowGlyphIds 读取，保存物理源窗口首次创建时的完整 glyphIds。
-   * buildFrame 的 FrozenWindowGroupPlan 用它填充 originalGlyphIds，
+   * buildFrame 的 FrozenWindowGroupPlan 用它填充 fullWindowGlyphIds，
    * 确保 MotionGlyphWindow.glyphIds 携带完整字形列表而非单个 interval 的子集。
    * target 成员没有原始窗口数据，为 undefined。
    */
@@ -2122,7 +2122,12 @@ function buildSourceMembers(
       // 空clip时应保持不可见并淡出，而不是从零宽恢复到完整字。
       role: 'frozen',
       runId: span.runId,
-      renderNodeKey: span.renderNodeKey,
+      // Issue #879 评论6128658045 问题2：从 sourceKind + sourceRevision + windowInstanceId
+      // 重新构建 renderNodeKey，确保与 sourceRevision 一致。如果 span.renderNodeKey
+      // 包含的 sourceRevision 与 span.sourceRevision 不匹配（跨修订残影），修正它。
+      // 这从源头消除了同 renderNodeKey 但不同 sourceRevision 的冲突，
+      // buildFrame/plannedWindowKeys 不再需要 conflictCounter/-conflict-N 后缀。
+      renderNodeKey: `${span.sourceKind}-${span.sourceRevision}-${span.windowInstanceId}`,
       sourceGlyphRect: {
         x: rect.x, y: rect.y,
         width: rect.width, height: rect.height,
@@ -2135,8 +2140,8 @@ function buildSourceMembers(
       sourceUtf16End: utf16Range[1],
       targetOpacity: -1,
       windowInstanceId: span.windowInstanceId,
-      // Issue #879 复核评论6120195493：携带原始窗口的完整 glyphUtf16Ranges 映射，
-      // 供 buildFrame 的 FrozenWindowGroupPlan.originalGlyphUtf16Ranges 使用。
+      // Issue #879 评论6128658045 问题1+3：携带原始窗口的完整 glyphUtf16Ranges 映射，
+      // 供 buildFrame 的 FrozenWindowGroupPlan.glyphUtf16Ranges 使用。
       glyphUtf16Ranges: span.glyphUtf16Ranges,
       // Issue #879 第32轮复核问题2：携带物理源窗口的完整 glyphIds/UTF-16 范围/逐字映射，
       // 供 buildFrame 的 FrozenWindowGroupPlan.fullWindow* 使用。
