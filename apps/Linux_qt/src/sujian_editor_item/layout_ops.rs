@@ -219,14 +219,13 @@ impl SujianEditorItem {
             };
 
             if para_start < para_end {
-                // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行索引范围。
-                // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
-                let line_start_idx = doc_snapshot
-                    .visual_lines
-                    .partition_point(|l| l.cache_slot < para_start as i32);
-                let line_end_idx = doc_snapshot
-                    .visual_lines
-                    .partition_point(|l| l.cache_slot < para_end as i32);
+                // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+                // 替换 raw partition_point(logical_slot)。
+                // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+                // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，
+                // 索引为空时退化为 partition_point(logical_slot)。
+                let (line_start_idx, line_end_idx) =
+                    doc_snapshot.paragraph_visual_line_range(para_start, para_end);
 
                 if line_start_idx < line_end_idx {
                     // 只物化需要的行，不物化整章。
@@ -443,6 +442,25 @@ impl SujianEditorItem {
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
         // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
         let committed_text = self.pipeline.committed_text();
+        // Issue #901 第二十轮阻塞2: 先确保 paragraph_store 与 committed_text 同步，
+        // 再获取 ParagraphId 序列。rebuild_from_text 保持未变化段落的 ID
+        //（前缀+后缀内容匹配），对已同步 store 是幂等的；对未同步 store
+        //（IME commit 改变了段落数）分配正确 ID，使 canonical_snapshot 中的
+        // paragraph_id 与后续 promote_prepared_layout 重建的 store ID 一致
+        //（两次 rebuild 对相同 text 产生相同 ID）。
+        self.editor_layout
+            .paragraph_store_mut()
+            .rebuild_from_text(
+                committed_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+        let paragraph_ids: Vec<crate::editor::layout::ParagraphId> =
+            self.editor_layout.paragraph_store().paragraph_ids();
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             committed_text,
             canonical_text_revision,
@@ -457,6 +475,7 @@ impl SujianEditorItem {
             generation,
             affected_start,
             affected_end,
+            &paragraph_ids,
         );
 
         // Issue #901 第十四轮问题1: 用 resolved_visual_lines 物化绝对坐标。

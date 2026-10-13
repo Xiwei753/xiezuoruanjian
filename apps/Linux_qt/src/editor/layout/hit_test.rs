@@ -172,6 +172,7 @@ fn find_caret_line_in_layout_snapshot(
         qt_ascent: 0.0,
         qt_descent: 0.0,
         cache_slot: 0,
+        logical_slot: 0,
         paragraph_id: super::types::ParagraphId::INVALID,
     };
 
@@ -184,12 +185,12 @@ fn find_caret_line_in_layout_snapshot(
         // 物化 para_slot-1 和 para_slot 两个段的行（处理段边界光标）
         let start_slot = para_slot.saturating_sub(1);
         let end_slot = para_slot + 1;
-        let start_idx = snapshot
-            .lines
-            .partition_point(|l| l.cache_slot < start_slot as i32);
-        let end_idx = snapshot
-            .lines
-            .partition_point(|l| l.cache_slot < end_slot as i32);
+        // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+        // 替换 raw partition_point(logical_slot)。
+        // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+        // paragraph_id_to_line_range 按 lines 实际行顺序构建，
+        // 索引为空时退化为 partition_point(logical_slot)。
+        let (start_idx, end_idx) = snapshot.paragraph_line_range(start_slot, end_slot);
         let lines = snapshot.resolve_line_range(start_idx, end_idx);
 
         for (local_idx, line) in lines.iter().enumerate() {
@@ -275,12 +276,12 @@ pub fn cursor_line_and_x(
         let para_slot = snapshot.paragraph_offset_index.byte_to_paragraph(cursor);
         let start_slot = para_slot.saturating_sub(1);
         let end_slot = para_slot + 1;
-        let start_idx = snapshot
-            .lines
-            .partition_point(|l| l.cache_slot < start_slot as i32);
-        let end_idx = snapshot
-            .lines
-            .partition_point(|l| l.cache_slot < end_slot as i32);
+        // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+        // 替换 raw partition_point(logical_slot)。
+        // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+        // paragraph_id_to_line_range 按 lines 实际行顺序构建，
+        // 索引为空时退化为 partition_point(logical_slot)。
+        let (start_idx, end_idx) = snapshot.paragraph_line_range(start_slot, end_slot);
         let lines = snapshot.resolve_line_range(start_idx, end_idx);
 
         for (local_idx, line) in lines.iter().enumerate() {

@@ -550,6 +550,10 @@ impl LinuxEditorPipeline {
         // Issue #738 评论 5792244119 问题 1: 优先复用 EditorLayout 当前 prepared layout
         // 的 generation，不再分配临时 generation（避免泄漏）。
         let prepared_handle = editor_layout.current_prepared_layout();
+        // Issue #901 第二十轮阻塞2: 从 paragraph_store 获取 ParagraphId 序列，
+        // 不再用 slot+1 伪造 Id。
+        let paragraph_ids: Vec<layout::ParagraphId> =
+            editor_layout.paragraph_store().paragraph_ids();
         let (snapshot, fallback_gen): (
             crate::editor::layout::CanonicalDocumentVisualSnapshot,
             Option<u64>,
@@ -570,6 +574,7 @@ impl LinuxEditorPipeline {
                     handle.generation,
                     0,
                     0,
+                    &paragraph_ids,
                 );
                 (snap, None)
             }
@@ -591,6 +596,7 @@ impl LinuxEditorPipeline {
                     gen,
                     0,
                     0,
+                    &paragraph_ids,
                 );
                 (snap, Some(gen))
             }
@@ -1352,14 +1358,14 @@ fn inject_new_animation_visuals_with_diagnostics(
                         .paragraph_offset_index
                         .byte_to_paragraph(ins_end)
                         + 1;
-                    // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行范围。
-                    // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
-                    let start_idx = new_doc_snapshot
-                        .visual_lines
-                        .partition_point(|l| l.cache_slot < start_para as i32);
-                    let end_idx = new_doc_snapshot
-                        .visual_lines
-                        .partition_point(|l| l.cache_slot < end_para_excl as i32);
+                    // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+                    // 替换 raw partition_point(logical_slot)。
+                    // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+                    // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，
+                    // 通过 ParagraphId → (start, end) 直接定位行范围，
+                    // 索引为空时退化为 partition_point(logical_slot)。
+                    let (start_idx, end_idx) =
+                        new_doc_snapshot.paragraph_visual_line_range(start_para, end_para_excl);
                     new_doc_snapshot
                         .resolve_visual_line_range(start_idx, end_idx)
                         .into_iter()
@@ -1430,9 +1436,11 @@ fn inject_new_animation_visuals_with_diagnostics(
                         // Issue #810 评论 5932233052 问题1: cluster 由基础 canonical 排版
                         // 直接产出，AnimationRasterVisual 不携带 clusters。
                         // 直接读回 new_doc_snapshot 中该行的 clusters 判断是否非空。
+                        // Issue #901 第二十轮阻塞3: 用 logical_slot 索引 paragraphs 数组，
+                        // 不用 cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
                         let has_clusters = canonical_line_has_clusters(
                             new_doc_snapshot,
-                            vl.cache_slot as usize,
+                            vl.logical_slot as usize,
                             vl.qtextline_idx,
                         );
                         // Issue #901 第十九轮问题4: 不在注入前检查 image。
@@ -1472,7 +1480,9 @@ fn inject_new_animation_visuals_with_diagnostics(
                             // prepared_ok_lines，不管 image 状态。image 缺失检查
                             // 移到 inject 之后，避免对延迟准备 QImage 的正常 raster
                             // 误判为缺失。
-                            ok_count += 1;
+                            // Issue #901 第二十轮阻塞4: ok_count 不在这里统计，移到
+                            // inject 后的合并遍历，只有 clusters 且 image 都就绪的行
+                            // 才算最终成功，避免对仅有 clusters 的行误计成功指标。
                             // Issue #808 评论 5918236360 问题1: 记录 prepare 成功且
                             // clusters 非空的行身份，inject 后用于检测 inject miss。
                             prepared_ok_lines.push((
@@ -1504,50 +1514,24 @@ fn inject_new_animation_visuals_with_diagnostics(
             ),
         );
     }
-    // Issue #901 第十九轮问题4: 注入后检查 image 缺失。
-    // 基砆 canonical 走 prepare_document_visual_snapshot_scoped 时本来就是延迟准备
-    // QImage，注入前 image 为 None 是正常状态。只有在 inject_animation_visuals_into_snapshot
-    // 之后 image 仍为 None 才算真正的缺失，需要重试注入纹理。
-    // 遍历 prepared_ok_lines（clusters 非空的行），对每行检查 canonical_line_has_image。
-    for (vidx, paragraph_slot, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
-        let has_image = canonical_line_has_image(
-            new_doc_snapshot,
-            *paragraph_slot,
-            *qtextline_idx,
-        );
-        if !has_image {
-            image_missing_count += 1;
-            failed_lines.push(AnimationVisualsFailedLine {
-                visual_line_idx: *vidx,
-                paragraph_slot: *paragraph_slot,
-                qtextline_idx: *qtextline_idx,
-                byte_start: *byte_start,
-                byte_end: *byte_end,
-                reason: AnimationVisualsFailedReason::ImageMissing,
-            });
-            crate::backend::app_backend::debug_warn_static(
-                "pipeline",
-                "inject_animation_visuals_image_missing_for_inserted_line",
-                &format!(
-                    "visual_line_idx={} paragraph_slot={} qtextline_idx={} \
-                     byte_start={} byte_end={} — canonical line has clusters but image \
-                     is None after inject, animation texture not injected, retry needed",
-                    vidx, paragraph_slot, qtextline_idx, byte_start, byte_end,
-                ),
-            );
-        }
-    }
-    // Issue #808 评论 5918236360 问题1: 检测 inject miss。
-    // prepare 成功且 clusters 非空的行，inject 后应在 new_doc_snapshot.paragraphs 中
-    // 对应行（按 paragraph_document_byte_start + qtextline_idx 匹配）有非空 clusters。
-    // 如果仍为空，说明 inject 未命中目标行（稳定行身份在目标 snapshot 中找不到匹配），
-    // 把该行加入 failed_lines，让上游做第二次精确重取。
+    // Issue #901 第二十轮阻塞4: 合并 ImageMissing 和 InjectMiss 两遍遍历为一遍。
+    // 原实现分别遍历 prepared_ok_lines 两次：第一遍 !has_image 推入 ImageMissing，
+    // 第二遍 !has_clusters || !has_image 推入 InjectMiss。对同一缺图行会被记两次，
+    // 导致 failed_lines 有重复 visual_line_idx，retry 对同一行重复执行 raster
+    // 提取/注入。合并后每行只决定一个最终状态：
+    //   - !has_clusters → InjectMiss（inject 未命中目标行，clusters 丢失）
+    //   - has_clusters && !has_image → ImageMissing（clusters 在但纹理未注入）
+    //   - has_clusters && has_image → 成功（ok_count + 1，不加入 failed_lines）
+    // 这样 failed_lines 按 (paragraph_slot, qtextline_idx) 自然去重，retry 只处理
+    // 每个缺图行一回。ok_count 只统计最终成功行。
+    // Issue #901 第十九轮问题4: image 缺失检查在 inject 之后，因为基砆 canonical 走
+    // prepare_document_visual_snapshot_scoped 时本来就是延迟准备 QImage，注入前 image
+    // 为 None 是正常状态，只有在 inject 之后 image 仍为 None 才算真正缺失。
     let mut inject_miss_count = 0usize;
     for (vidx, paragraph_slot, qtextline_idx, byte_start, byte_end) in &prepared_ok_lines {
         // Issue #808 评论 5918236360 问题1: 直接读回 canonical 行的真实 clusters，
         // 不用 inject 计数推断（inject 计数只说明行身份被命中，不说明 clusters 非空）。
-        // Issue #901 第十八轮问题3: 同时检查 image 是否已注入。
-        // clusters 非空不证明 image 已注入，必须分开检查。
+        // Issue #901 第十八轮问题3: clusters 非空不证明 image 已注入，必须分开检查。
         let has_clusters = canonical_line_has_clusters(
             new_doc_snapshot,
             *paragraph_slot,
@@ -1558,7 +1542,9 @@ fn inject_new_animation_visuals_with_diagnostics(
             *paragraph_slot,
             *qtextline_idx,
         );
-        if !has_clusters || !has_image {
+        if !has_clusters {
+            // inject 未命中目标行：prepare 时 clusters 非空，inject 后 canonical
+            // 行 clusters 为空，说明稳定行身份在目标 snapshot 中找不到匹配。
             inject_miss_count += 1;
             failed_lines.push(AnimationVisualsFailedLine {
                 visual_line_idx: *vidx,
@@ -1580,6 +1566,35 @@ fn inject_new_animation_visuals_with_diagnostics(
                     vidx, paragraph_slot, qtextline_idx, byte_start, byte_end,
                 ),
             );
+        } else if !has_image {
+            // clusters 在但 image 为 None：纹理未注入，需要重试注入纹理。
+            image_missing_count += 1;
+            failed_lines.push(AnimationVisualsFailedLine {
+                visual_line_idx: *vidx,
+                paragraph_slot: *paragraph_slot,
+                qtextline_idx: *qtextline_idx,
+                byte_start: *byte_start,
+                byte_end: *byte_end,
+                reason: AnimationVisualsFailedReason::ImageMissing,
+            });
+            crate::backend::app_backend::debug_warn_static(
+                "pipeline",
+                "inject_animation_visuals_image_missing_for_inserted_line",
+                &format!(
+                    "visual_line_idx={} paragraph_slot={} qtextline_idx={} \
+                     byte_start={} byte_end={} — canonical line has clusters but image \
+                     is None after inject, animation texture not injected, retry needed",
+                    vidx, paragraph_slot, qtextline_idx, byte_start, byte_end,
+                ),
+            );
+        } else {
+            // clusters 且 image 都就绪：最终成功，计入 ok_count。
+            // Issue #901 第二十轮阻塞4 复核确认: 此 else 分支只在 has_clusters && has_image
+            // 时进入，ok_count 只统计最终成功行，不包含缺图行（ImageMissing）或漏注行
+            //（InjectMiss）。failed_lines 因 if/else if/else 互斥分支每行最多推入一次，
+            // 不会出现重复 visual_line_idx。retry_failed_animation_visuals 另有
+            // sort+dedup 防御性去重（见 1740-1741 行）。阻塞4 验证通过，无需修改。
+            ok_count += 1;
         }
     }
     // Issue #808 评论 5918236360 问题1: inject miss 汇总日志，让上游明确知道
@@ -1718,11 +1733,17 @@ fn retry_failed_animation_visuals(
     if !status.has_unavailable_lines || status.failed_lines.is_empty() {
         return;
     }
-    let failed_indices: Vec<usize> = status
+    // Issue #901 第二十轮阻塞4: 按 visual_line_idx 去重，保险防止 failed_lines
+    // 有重复行导致 prepare 对同一行重复执行 raster 提取/注入。合并遍历后
+    // failed_lines 已按 (paragraph_slot, qtextline_idx) 自然去重，这里再做一层
+    // 防御，确保 retry 只处理每个缺图行一回。
+    let mut failed_indices: Vec<usize> = status
         .failed_lines
         .iter()
         .map(|fl| fl.visual_line_idx)
         .collect();
+    failed_indices.sort_unstable();
+    failed_indices.dedup();
     // prepare 需要不可变借用 visual_lines，inject 需要可变借用 new_doc_snapshot。
     // 用内层块隔离 retry_handle 的借用生命周期，块结束时借用释放，随后可以 &mut。
     let retry_snapshots = {

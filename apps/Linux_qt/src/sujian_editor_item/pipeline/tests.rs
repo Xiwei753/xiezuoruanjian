@@ -118,6 +118,7 @@ fn test_doc_snapshot(
         height_index:
             crate::editor::layout::ParagraphHeightIndex::new(),
         paragraph_id_to_slot: std::sync::Arc::new(std::collections::HashMap::new()),
+        paragraph_id_to_line_range: std::sync::Arc::new(std::collections::HashMap::new()),
     }
 }
 
@@ -151,6 +152,7 @@ fn test_visual_line(
         qt_ascent: 16.0,
         qt_descent: 4.0,
         cache_slot: 0,
+        logical_slot: 0,
         paragraph_id: crate::editor::layout::ParagraphId::INVALID,
     }
 }
@@ -325,6 +327,75 @@ fn issue808_comment5918236360_whitespace_line_is_not_checked() {
     assert_eq!(status.checked_line_count, 0, "纯空白行不检查");
     assert!(status.failed_lines.is_empty());
     assert!(!status.has_unavailable_lines);
+}
+
+/// Issue #901 第二十轮阻塞4: clusters 非空但 image 缺失时，该行只被记一次
+///（ImageMissing），不会同时记 ImageMissing + InjectMiss 两次。
+///
+/// 原实现分别遍历 prepared_ok_lines 两遍：第一遍 `!has_image` 推入 ImageMissing，
+/// 第二遍 `!has_clusters || !has_image` 推入 InjectMiss，对同一缺图行重复记录，
+/// 导致 failed_lines 有重复 visual_line_idx，retry 对同一行重复执行 raster
+/// 提取/注入。修复后合并为一遍，每行只决定一个最终状态：
+///   - `!has_clusters` → InjectMiss
+///   - `has_clusters && !has_image` → ImageMissing
+///   - `has_clusters && has_image` → 成功
+#[test]
+fn issue901_round20_blocker4_image_missing_not_duplicated_with_inject_miss() {
+    // canonical line 有 clusters（非空）但 image 为 None；
+    // prepared raster visual 的 image 也为 None，inject 不会注入 image。
+    let mut doc = test_doc_snapshot(
+        "ab",
+        0,
+        vec![test_canonical_line(
+            0,
+            0,
+            0,
+            2,
+            vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
+        )],
+    );
+    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
+    // prepared raster visual 的 image 为 None（test_raster_visual 默认 image: None）。
+    let prepared = vec![test_raster_visual(0, 0)];
+
+    let status = inject_new_animation_visuals_with_diagnostics(
+        &mut doc,
+        prepared,
+        Some(Utf8ByteRange::from_ordered(0, 2)),
+    );
+
+    // clusters 非空但 image 缺失 → ImageMissing，只记一次。
+    assert_eq!(
+        status.image_missing_count, 1,
+        "clusters 非空但 image 缺失 → ImageMissing"
+    );
+    assert_eq!(
+        status.failed_lines.len(),
+        1,
+        "缺图行只记一次，不应同时记 ImageMissing + InjectMiss"
+    );
+    let fl = &status.failed_lines[0];
+    assert_eq!(fl.visual_line_idx, 0);
+    assert_eq!(fl.paragraph_slot, 0);
+    assert_eq!(fl.qtextline_idx, 0);
+    assert_eq!(fl.reason, AnimationVisualsFailedReason::ImageMissing);
+    // 确认没有 InjectMiss 重复记录。
+    assert!(
+        status
+            .failed_lines
+            .iter()
+            .all(|f| f.reason != AnimationVisualsFailedReason::InjectMiss),
+        "has_clusters 为 true 不应记 InjectMiss，避免与 ImageMissing 重复"
+    );
+    // ok_count 只统计最终成功行（clusters 且 image 都就绪），此处为 0。
+    assert_eq!(
+        status.ok_count, 0,
+        "image 缺失行不算最终成功，ok_count 应为 0"
+    );
+    assert!(
+        status.has_unavailable_lines,
+        "image 缺失行必须让 has_unavailable_lines=true，否则上游不会重取"
+    );
 }
 
 /// Issue #826 评论 15：同 burst 第二笔 Delete 新建的 ConcealTrack，其

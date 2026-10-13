@@ -951,12 +951,13 @@ impl SujianEditorItem {
             }
 
             if start_slot <= end_slot {
-                let start_idx = snapshot
-                    .lines
-                    .partition_point(|l| l.cache_slot < start_slot as i32);
-                let end_idx = snapshot
-                    .lines
-                    .partition_point(|l| l.cache_slot < end_slot as i32);
+                // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+                // 替换 raw partition_point(logical_slot)。
+                // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+                // paragraph_id_to_line_range 按 lines 实际行顺序构建，
+                // 索引为空时退化为 partition_point(logical_slot)。
+                let (start_idx, end_idx) =
+                    snapshot.paragraph_line_range(start_slot, end_slot);
                 snapshot.resolve_line_range(start_idx, end_idx)
             } else {
                 Vec::new()

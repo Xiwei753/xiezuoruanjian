@@ -50,12 +50,13 @@ impl LineSnapshotBuilder {
         // 当 height_index 为空时退化为物化所有行（与原 resolved_visual_lines 一致）。
         let resolved_lines = doc_snapshot.resolve_viewport_visual_lines(scroll_y, viewport_h);
         for line in &resolved_lines {
-            // Issue #901: 用 cache_slot 作为 paragraph_id（段落索引），
-            // 遇到新 cache_slot 时重置 visual_line_ordinal 为 0。
-            let paragraph_id = line.cache_slot as u64;
-            if prev_cache_slot != Some(line.cache_slot) {
+            // Issue #901: 用 logical_slot 作为 paragraph_id（段落索引），
+            // 遇到新 logical_slot 时重置 visual_line_ordinal 为 0。
+            // Issue #901 第二十轮阻塞3: 用 logical_slot（文档次序）而非 cache_slot（Qt 物理槽）。
+            let paragraph_id = line.logical_slot as u64;
+            if prev_cache_slot != Some(line.logical_slot) {
                 visual_line_ordinal = 0;
-                prev_cache_slot = Some(line.cache_slot);
+                prev_cache_slot = Some(line.logical_slot);
             }
 
             if line.para_text.is_empty() {
@@ -98,17 +99,16 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            // Issue #901 第十五轮问题3: 用 cache_slot 直接索引 paragraphs，
-            // 不再比较 paragraph_document_byte_start（段落编号）与 line.para_start
-            //（物化后的全文绝对 byte）这两种混合坐标。
+            // Issue #901 第二十轮阻塞3: 用 logical_slot 直接索引 paragraphs，
+            // 不再用 cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
             // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
             let canonical_para = {
-                let slot = line.cache_slot as usize;
+                let slot = line.logical_slot as usize;
                 doc_snapshot.paragraphs.get(slot)
             };
             let para_byte_start = canonical_para
-                .map(|p| {
-                    let slot = line.cache_slot as usize;
+                .map(|_p| {
+                    let slot = line.logical_slot as usize;
                     doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
                 })
                 .unwrap_or(0);
@@ -234,30 +234,20 @@ impl LineSnapshotBuilder {
         let first_para_idx = height_index.y_to_paragraph(viewport_top.max(0.0));
         let last_para_idx = height_index.y_to_paragraph(viewport_bottom);
 
-        // 在 visual_lines 中用二分查找定位这些段落的行范围
-        // visual_lines 按段落顺序排列，同一段落的所有行连续且 cache_slot 相同
-        // Issue #901 第十七轮问题1: paragraph_document_byte_start 现是段落编号（slot），
-        // 用 cache_slot 比较而非 para_start（可能是全文 byte offset）。
-        let start_idx = if first_para_idx < doc_snapshot.paragraphs.len() {
-            let target_para_slot =
-                doc_snapshot.paragraphs[first_para_idx].paragraph_document_byte_start;
-            doc_snapshot
-                .visual_lines
-                .partition_point(|vl| (vl.cache_slot as usize) < target_para_slot)
-        } else {
-            doc_snapshot.visual_lines.len()
-        };
-
-        // 找视口底部段落之后第一个行的索引
-        let end_idx = if last_para_idx + 1 < doc_snapshot.paragraphs.len() {
-            let target_para_slot =
-                doc_snapshot.paragraphs[last_para_idx + 1].paragraph_document_byte_start;
-            doc_snapshot
-                .visual_lines
-                .partition_point(|vl| (vl.cache_slot as usize) < target_para_slot)
-        } else {
-            doc_snapshot.visual_lines.len()
-        };
+        // 在 visual_lines 中定位视口段落范围的行索引。
+        // visual_lines 按段落顺序排列，同一段落的所有行连续。
+        // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+        // 替换 raw partition_point(logical_slot)。
+        // 插段后复用后缀行的 raw logical_slot 没有更新，partition_point 二分仍会找错；
+        // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，通过 ParagraphId
+        // → (start, end) 直接定位行范围，索引为空时退化为 partition_point(logical_slot)。
+        let (start_idx, end_idx) =
+            if first_para_idx < doc_snapshot.paragraphs.len() && last_para_idx >= first_para_idx {
+                let last_excl = (last_para_idx + 1).min(doc_snapshot.paragraphs.len());
+                doc_snapshot.paragraph_visual_line_range(first_para_idx, last_excl)
+            } else {
+                (doc_snapshot.visual_lines.len(), doc_snapshot.visual_lines.len())
+            };
 
         // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
         // 不遍历前面的行。visual_line_ordinal 在段落内从 0 递增。
@@ -322,17 +312,16 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            // Issue #901 第十五轮问题3: 用 cache_slot 直接索引 paragraphs，
-            // 不再用 partition_point 比较 paragraph_document_byte_start（段落编号）
-            // 与 line.para_start（物化后的全文绝对 byte）这两种混合坐标。
+            // Issue #901 第二十轮阻塞3: 用 logical_slot 直接索引 paragraphs，
+            // 不再用 cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
             // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
             let canonical_para = {
-                let slot = line.cache_slot as usize;
+                let slot = line.logical_slot as usize;
                 doc_snapshot.paragraphs.get(slot)
             };
             let para_byte_start = canonical_para
                 .map(|_p| {
-                    let slot = line.cache_slot as usize;
+                    let slot = line.logical_slot as usize;
                     doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
                 })
                 .unwrap_or(0);

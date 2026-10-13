@@ -301,13 +301,13 @@ pub(crate) struct StaticTextParams<'a> {
 ///
 /// # 实现策略
 ///
-/// - 有 `ParagraphHeightIndex` 且 `cache_slot >= 0`：用 `paragraph_top_y(cache_slot)`
-///   （O(log n) 前缀和）。`cache_slot` 与 heights 数组索引一致：
+/// - 有 `ParagraphHeightIndex` 且 `logical_slot >= 0`：用 `paragraph_top_y(logical_slot)`
+///   （O(log n) 前缀和）。`logical_slot` 与 heights 数组索引一致：
 ///   `extract_paragraph_heights` 按 `para_start` 首次出现顺序（= 文档段落顺序）构建，
-///   `full.rs` 按 `paragraph_idx` 递增分配 `cache_slot`（含空段落），两者一致。
+///   `full.rs` 按 `paragraph_idx` 递增分配 `logical_slot`（含空段落），两者一致。
 ///   `paragraph_top_y` 不含 padding，需补 `snapshot.padding`（`VisualLine.y` 从
 ///   padding 起累加，见 `full.rs`）。
-/// - 无 height_index 或 `cache_slot < 0`：fallback 到 lines 二分查找段落第一行。
+/// - 无 height_index 或 `logical_slot < 0`：fallback 到 lines 二分查找段落第一行。
 ///   lines 按 y 升序且同段落行连续（文档顺序），`partition_point(|l| l.para_start < ps)`
 ///   返回首个 `para_start >= ps` 的行 = 该段落第一行，其 y 已含 padding。
 ///
@@ -318,9 +318,9 @@ fn paragraph_top_document_y(
     height_index: Option<&ParagraphHeightIndex>,
 ) -> f64 {
     if let Some(hi) = height_index {
-        if line.cache_slot >= 0 {
+        if line.logical_slot >= 0 {
             // paragraph_top_y 越界返回总高度（不 panic），加 padding 仍是合法文档 y。
-            return hi.paragraph_top_y(line.cache_slot as usize) + f64::from(snapshot.padding);
+            return hi.paragraph_top_y(line.logical_slot as usize) + f64::from(snapshot.padding);
         }
     }
     // Fallback: lines 二分查找段落第一行。谓词 `para_start < ps` 为 true 前缀
@@ -499,19 +499,14 @@ pub(crate) fn render_frame(
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
                     last_para_start = Some(line.para_start);
-                    // Issue #901 第九轮阻塞4: 用稳定 ParagraphId 作为段落身份标识。
-                    // cache_slot 是段落索引，通过 paragraph_ids 查表得到 ParagraphId。
-                    // 无 paragraph_ids 时用 0（ParagraphId::INVALID），不影响渲染正确性。
-                    let paragraph_id = static_text
-                        .paragraph_ids
-                        .and_then(|ids| {
-                            if line.cache_slot >= 0 {
-                                ids.get(line.cache_slot as usize).map(|id| id.as_u64())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
+                    // Issue #901 第二十轮阻塞3: 用 line.paragraph_id 直接获取稳定身份，
+                    // 不再通过 cache_slot 查 paragraph_ids 表。
+                    // 无 paragraph_id（INVALID）时用 0，不影响渲染正确性。
+                    let paragraph_id = if line.paragraph_id != crate::editor::layout::ParagraphId::INVALID {
+                        line.paragraph_id.as_u64()
+                    } else {
+                        0
+                    };
                     current_paragraph_id = paragraph_id;
                     // Issue #901 第十四轮问题2: 计算 per-paragraph content_revision。
                     // 用 paragraph_text 的哈希值作为内容版本签名，
@@ -524,9 +519,11 @@ pub(crate) fn render_frame(
                     };
                     // Issue #901 第十四轮问题2: 计算段落总高度，供 C++ 侧过滤 clip。
                     // 有 height_index 时用 O(1) 前缀和差，否则用单行高度作 fallback。
+                    // Issue #901 第二十轮阻塞3: 用 logical_slot 查 height_index，
+                    // 不用 cache_slot（Qt 物理槽，与 height_index 索引不对应）。
                     let paragraph_height = if let Some(hi) = static_text.height_index {
-                        if line.cache_slot >= 0 {
-                            let slot = line.cache_slot as usize;
+                        if line.logical_slot >= 0 {
+                            let slot = line.logical_slot as usize;
                             hi.paragraph_bottom_y(slot) - hi.paragraph_top_y(slot)
                         } else {
                             line.height

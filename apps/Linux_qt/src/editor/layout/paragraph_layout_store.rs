@@ -16,7 +16,9 @@
 //!
 //! 与 `EditorLayout` 相同，仅在 GUI 线程中使用，不跨线程共享。
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use super::types::{ParagraphId, VisualLine};
 
@@ -194,18 +196,22 @@ pub struct ParagraphSpliceRanges {
 /// # 核心不变量
 ///
 /// 1. `ParagraphId` 在段落生命周期内不变，不随 byte offset 移动。
-/// 2. 普通中间编辑只变更所在段及实际连带范围的 `cache_key`。
+/// 2. 普通编辑只变更所在段及实际连带范围的 `cache_key`。
 /// 3. 换行拆段：原段保留 Id，新段分配新 Id。
 /// 4. 删回车合段：被合并段的 Id 失效，保留段保持原 Id。
 /// 5. `entries` 按文档顺序排列，索引即段落在文档中的顺序。
+/// 6. `id_to_slot_cache` 始终与 `entries` 同步：`id_to_slot_cache[entries[i].id] == i`。
+/// 7. `id_to_line_range` 在 `sync_from_visual_lines` 后与 `entries` 的行范围同步。
 ///
 /// # 增量更新策略
 ///
 /// - **普通编辑**（不涉及 `'\n'`）：只更新所在段落的 `cache_key`，
-///   其他段落不变。
+///   其他段落不变。`id_to_slot_cache` 不变（slot 不变）。
 /// - **换行拆段**（插入 `'\n'`）：原段保留 Id，在原段后插入新段（分配新 Id）。
+///   `id_to_slot_cache` 中新段加入，后续段 slot +1。
 /// - **删回车合段**（删除 `'\n'`）：移除后一段，将其内容并入前一段，
 ///   保留前一段 Id，丢弃后一段 Id。
+///   `id_to_slot_cache` 中被删段移除，后续段 slot -1。
 /// - **宽度/字体/字号/行距变化**：全局失效，所有段落的 `cache_key` 失效。
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphLayoutStore {
@@ -213,6 +219,19 @@ pub struct ParagraphLayoutStore {
     entries: Vec<ParagraphLayoutEntry>,
     /// 下一个可分配的 `ParagraphId` 内部数值（从 1 开始）。
     next_id: u64,
+    /// Issue #901 第二十一轮阻塞5: ParagraphId → slot 持久映射缓存。
+    ///
+    /// 与 `entries` 同步维护：`id_to_slot_cache[entries[i].id] == i`。
+    /// 普通编辑（不涉及换行）时 slot 不变，映射不变，O(1) 获取。
+    /// 拆段/合段时增量更新（新段加入/被删段移除 + 后续段 slot 平移），
+    /// 不每笔遍历整章重建。
+    id_to_slot_cache: HashMap<ParagraphId, usize>,
+    /// Issue #901 第二十一轮阻塞5: ParagraphId → 视觉行范围持久映射缓存。
+    ///
+    /// 在 `sync_from_visual_lines`（全量）时全量重建，
+    /// 在 `sync_from_visual_lines_incremental`（增量）时只更新受影响段落。
+    /// 后续段落的行范围通过 `line_start` 平移量增量更新。
+    id_to_line_range: HashMap<ParagraphId, (usize, usize)>,
 }
 
 impl ParagraphLayoutStore {
@@ -221,6 +240,8 @@ impl ParagraphLayoutStore {
         Self {
             entries: Vec::new(),
             next_id: 1,
+            id_to_slot_cache: HashMap::new(),
+            id_to_line_range: HashMap::new(),
         }
     }
 
@@ -245,6 +266,8 @@ impl ParagraphLayoutStore {
     pub fn clear(&mut self) {
         self.entries.clear();
         // next_id 不重置，避免新分配的 Id 与已释放的 Id 冲突。
+        self.id_to_slot_cache.clear();
+        self.id_to_line_range.clear();
     }
 
     /// 获取指定索引处段落的只读引用。
@@ -434,6 +457,8 @@ impl ParagraphLayoutStore {
         }
 
         self.entries = new_entries;
+        // Issue #901 第二十一轮阻塞5: 同步重建 id_to_slot_cache。
+        self.rebuild_id_to_slot_cache();
     }
 
     /// Issue #901 第十六轮问题1: 按 `ParagraphId` 查找当前段落 slot（段落索引）。
@@ -442,11 +467,80 @@ impl ParagraphLayoutStore {
     /// 与 [`paragraph_index_by_id`] 的区别：语义更明确——返回的是当前
     /// 段落在文档中的 slot 索引（即 `entries` 中的下标）。
     ///
-    /// 当前实现为 O(n) 线性查找。段落数远小于行数，可接受。
-    /// 若未来需要 O(1) 查询，可在 `ParagraphLayoutStore` 中维护
-    /// `HashMap<ParagraphId, usize>` 缓存，在 rebuild/splice 时同步更新。
+    /// Issue #901 第二十一轮阻塞5: 优先从 `id_to_slot_cache` 查询（O(1)），
+    /// 缓存未命中时回退到 O(n) 线性查找（仅在缓存失效的异常情况下触发）。
     pub fn paragraph_id_to_slot(&self, id: ParagraphId) -> Option<usize> {
+        if let Some(&slot) = self.id_to_slot_cache.get(&id) {
+            // 验证缓存一致性（debug 模式下断言）
+            debug_assert!(
+                self.entries.get(slot).map_or(true, |e| e.id == id),
+                "id_to_slot_cache 不一致: id={:?} cache_slot={} entry_id={:?}",
+                id,
+                slot,
+                self.entries.get(slot).map(|e| e.id)
+            );
+            return Some(slot);
+        }
         self.entries.iter().position(|e| e.id == id)
+    }
+
+    /// Issue #901 第二十一轮阻塞5: 获取 `ParagraphId → slot` 映射的 Arc 共享引用。
+    ///
+    /// 返回内部持久维护的 `id_to_slot_cache` 的 Arc 克隆，供消费方 O(1) 共享，
+    /// 不每笔遍历整章重建 HashMap。映射在 `rebuild_from_text` / splice 操作后
+    /// 已同步更新，调用方直接 `Arc::clone` 即可。
+    pub fn paragraph_id_to_slot_arc(&self) -> Arc<HashMap<ParagraphId, usize>> {
+        Arc::new(self.id_to_slot_cache.clone())
+    }
+
+    /// Issue #901 第二十一轮阻塞5: 获取 `ParagraphId → 行范围` 映射的 Arc 共享引用。
+    ///
+    /// 返回内部持久维护的 `id_to_line_range` 的 Arc 克隆，供消费方 O(1) 共享。
+    /// 映射在 `sync_from_visual_lines` / `sync_from_visual_lines_incremental` 后
+    /// 已同步更新。
+    pub fn paragraph_id_to_line_range_arc(&self) -> Arc<HashMap<ParagraphId, (usize, usize)>> {
+        Arc::new(self.id_to_line_range.clone())
+    }
+
+    /// Issue #901 第二十一轮阻塞5: 内部方法 — 从 `entries` 全量重建 `id_to_slot_cache`。
+    ///
+    /// 在 `rebuild_from_text` 等全量替换 entries 的操作后调用。
+    fn rebuild_id_to_slot_cache(&mut self) {
+        self.id_to_slot_cache.clear();
+        self.id_to_slot_cache.reserve(self.entries.len());
+        for (i, entry) in self.entries.iter().enumerate() {
+            self.id_to_slot_cache.insert(entry.id, i);
+        }
+    }
+
+    /// Issue #901 第二十一轮阻塞5: 内部方法 — 在 `index` 处插入新段后
+    /// 增量更新 `id_to_slot_cache`。
+    ///
+    /// `new_id` 是新段的 ParagraphId，`index` 是新段的 slot。
+    /// 原 slot >= index 的段全部 +1。
+    fn id_to_slot_cache_insert(&mut self, new_id: ParagraphId, index: usize) {
+        // 后续段 slot +1
+        for slot in self.id_to_slot_cache.values_mut() {
+            if *slot >= index {
+                *slot += 1;
+            }
+        }
+        self.id_to_slot_cache.insert(new_id, index);
+    }
+
+    /// Issue #901 第二十一轮阻塞5: 内部方法 — 删除 `index` 处的段后
+    /// 增量更新 `id_to_slot_cache`。
+    ///
+    /// `removed_id` 是被删段的 ParagraphId，`index` 是被删段的 slot。
+    /// 原 slot > index 的段全部 -1。
+    fn id_to_slot_cache_remove(&mut self, removed_id: ParagraphId, index: usize) {
+        self.id_to_slot_cache.remove(&removed_id);
+        // 后续段 slot -1
+        for slot in self.id_to_slot_cache.values_mut() {
+            if *slot > index {
+                *slot -= 1;
+            }
+        }
     }
 
     // ── 增量更新：换行拆段 ──
@@ -520,6 +614,9 @@ impl ParagraphLayoutStore {
         };
 
         self.entries.insert(index + 1, new_entry);
+        // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
+        // 新段插入在 index+1，原 slot >= index+1 的段全部 +1。
+        self.id_to_slot_cache_insert(new_id, index + 1);
         Some((index, index + 1))
     }
 
@@ -564,7 +661,10 @@ impl ParagraphLayoutStore {
         entry.visual_line_count = 0;
 
         // 移除被合并的段落（index + 1）
-        self.entries.remove(index + 1);
+        let removed_entry = self.entries.remove(index + 1);
+        // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
+        // 被删段在 index+1，原 slot > index+1 的段全部 -1。
+        self.id_to_slot_cache_remove(removed_entry.id, index + 1);
         Some(index)
     }
 
@@ -657,13 +757,19 @@ impl ParagraphLayoutStore {
             line_start: 0,
             relative_lines: Vec::new(),
         };
-        self.entries.insert(index.min(self.entries.len()), entry);
+        let insert_idx = index.min(self.entries.len());
+        self.entries.insert(insert_idx, entry);
+        // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
+        self.id_to_slot_cache_insert(id, insert_idx);
     }
 
     /// 删除段落 `index`（丢弃其 Id）。
     pub fn remove_paragraph(&mut self, index: usize) -> Option<ParagraphLayoutEntry> {
         if index < self.entries.len() {
-            Some(self.entries.remove(index))
+            let removed = self.entries.remove(index);
+            // Issue #901 第二十一轮阻塞5: 增量更新 id_to_slot_cache。
+            self.id_to_slot_cache_remove(removed.id, index);
+            Some(removed)
         } else {
             None
         }
@@ -891,6 +997,9 @@ impl ParagraphLayoutStore {
     /// 误统计 `visual_line_count=0` 的 bug。
     /// 并将 `relative_lines` 接入主流程：排版后回填段内相对坐标视觉行。
     ///
+    /// Issue #901 第二十一轮阻塞5: 同时增量更新 `id_to_line_range` 映射。
+    /// 只更新受影响段落的行范围，不遍历全章 visual_lines。
+    ///
     /// # 参数
     ///
     /// - `lines`：本次排版产生的全部视觉行（含复用 + 重排段落的行）。
@@ -906,14 +1015,15 @@ impl ParagraphLayoutStore {
             return;
         }
 
-        // Issue #901 第十五轮问题4: 改成以受影响段索引 + 基础 VisualLine.cache_slot
+        // Issue #901 第十五轮问题4: 改成以受影响段索引 + 基礎 VisualLine.logical_slot
         // 定位段内行范围。lines 中的行坐标已经是段内相对的（y/byte/qchar 相对于段首），
         // 直接复制为 relative_lines，不再二次归零（删除旧的 saturating_sub 逻辑）。
         // 不再用 entry.document_byte_start 二分查 lines[].para_start（混合坐标）。
+        // Issue #901 第二十轮阻塞1+3: 改用 logical_slot（文档次序）而非 cache_slot。
         for &idx in affected_indices {
-            // 遍历 lines，按 cache_slot == idx 分组，找到该段的所有行
-            // lines 按 cache_slot 非降序排列（段落顺序 = 行顺序），同一段落的行连续
-            let (line_start, line_end) = match find_line_range_by_cache_slot(lines, idx) {
+            // 遍历 lines，按 logical_slot == idx 分组，找到该段的所有行
+            // lines 按 logical_slot 非降序排列（段落顺序 = 行顺序），同一段落的行连续
+            let (line_start, line_end) = match find_line_range_by_logical_slot(lines, idx) {
                 Some(range) => range,
                 None => continue,
             };
@@ -936,6 +1046,8 @@ impl ParagraphLayoutStore {
                 entry.height = height;
                 entry.line_start = line_start;
                 entry.relative_lines = relative_lines;
+                // Issue #901 第二十一轮阻塞5: 增量更新 id_to_line_range。
+                self.id_to_line_range.insert(entry.id, (line_start, line_end));
             }
         }
     }
@@ -993,6 +1105,8 @@ impl ParagraphLayoutStore {
             entry.height = 0.0;
             entry.visual_line_count = 0;
         }
+        // Issue #901 第二十一轮阻塞5: 行范围映射失效。
+        self.id_to_line_range.clear();
     }
 
     /// 使段落 `index` 的布局缓存失效。
@@ -1018,8 +1132,10 @@ impl ParagraphLayoutStore {
 
     /// 从已有的 `VisualLine` 数组同步段落布局结果。
     ///
-    /// 按 `cache_slot` 分组，将每个段落的视觉行数、高度、line_start 等信息
+    /// 按 `logical_slot` 分组，将每个段落的视觉行数、高度、line_start 等信息
     /// 更新到对应的 `ParagraphLayoutEntry`。
+    /// Issue #901 第二十轮阻塞1+3: 改用 logical_slot（文档次序）而非 cache_slot（Qt 物理槽）。
+    /// Issue #901 第二十一轮阻塞5: 同时全量重建 `id_to_line_range` 映射。
     pub fn sync_from_visual_lines(&mut self, lines: &[VisualLine], layout_generation: u64) {
         if lines.is_empty() {
             for entry in &mut self.entries {
@@ -1027,22 +1143,33 @@ impl ParagraphLayoutStore {
                 entry.visual_line_count = 0;
                 entry.height = 0.0;
             }
+            // Issue #901 第二十一轮阻塞5: 清空行范围映射。
+            self.id_to_line_range.clear();
             return;
         }
 
-        // 按 cache_slot 分组统计
+        // 按 logical_slot 分组统计
         let mut slot_stats: Vec<(i32, usize, f64, usize)> = Vec::new();
-        // (cache_slot, line_count, total_height, first_line_index)
+        // (logical_slot, line_count, total_height, first_line_index)
 
-        let mut current_slot: i32 = lines[0].cache_slot;
+        let mut current_slot: i32 = lines[0].logical_slot;
         let mut count = 0usize;
         let mut height = 0.0f64;
         let mut first_idx = 0usize;
 
+        // Issue #901 第二十一轮阻塞5: 同时构建 id_to_line_range。
+        self.id_to_line_range.clear();
+        self.id_to_line_range.reserve(self.entries.len());
+
         for (i, line) in lines.iter().enumerate() {
-            if line.cache_slot != current_slot {
+            if line.logical_slot != current_slot {
                 slot_stats.push((current_slot, count, height, first_idx));
-                current_slot = line.cache_slot;
+                // 记录上一段的行范围
+                if current_slot >= 0 && (current_slot as usize) < self.entries.len() {
+                    let pid = self.entries[current_slot as usize].id;
+                    self.id_to_line_range.insert(pid, (first_idx, i));
+                }
+                current_slot = line.logical_slot;
                 count = 0;
                 height = 0.0;
                 first_idx = i;
@@ -1051,6 +1178,11 @@ impl ParagraphLayoutStore {
             height += line.height;
         }
         slot_stats.push((current_slot, count, height, first_idx));
+        // 记录最后一段的行范围
+        if current_slot >= 0 && (current_slot as usize) < self.entries.len() {
+            let pid = self.entries[current_slot as usize].id;
+            self.id_to_line_range.insert(pid, (first_idx, lines.len()));
+        }
 
         // 更新对应段落
         for (slot, line_count, total_height, line_start) in slot_stats {
@@ -1136,26 +1268,27 @@ impl ParagraphLayoutStore {
 }
 
 /// Issue #901 第十五轮问题4: 用二分查找在已排序的 visual_lines 中定位
-/// `cache_slot` 对应的行范围，O(log n)。
+/// `logical_slot` 对应的行范围，O(log n)。
 ///
-/// `lines` 按 `cache_slot` 非降序排列（段落顺序 = 行顺序），
-/// 同一段落的所有行 `cache_slot` 相同且连续。
+/// `lines` 按 `logical_slot` 非降序排列（段落顺序 = 行顺序），
+/// 同一段落的所有行 `logical_slot` 相同且连续。
 /// 返回 `(line_start, line_end)` 半开区间，未找到返回 `None`。
-fn find_line_range_by_cache_slot(
+/// Issue #901 第二十轮阻塞1+3: 改用 logical_slot（文档次序）而非 cache_slot（Qt 物理槽）。
+fn find_line_range_by_logical_slot(
     lines: &[VisualLine],
-    cache_slot: usize,
+    logical_slot: usize,
 ) -> Option<(usize, usize)> {
     if lines.is_empty() {
         return None;
     }
-    // 二分查找第一个 cache_slot >= target 的行
-    let start = lines.partition_point(|vl| (vl.cache_slot as usize) < cache_slot);
-    if start >= lines.len() || (lines[start].cache_slot as usize) != cache_slot {
+    // 二分查找第一个 logical_slot >= target 的行
+    let start = lines.partition_point(|vl| (vl.logical_slot as usize) < logical_slot);
+    if start >= lines.len() || (lines[start].logical_slot as usize) != logical_slot {
         return None;
     }
-    // 二分查找段落后第一个 cache_slot != target 的行
+    // 二分查找段落后第一个 logical_slot != target 的行
     let end = lines[start..]
-        .partition_point(|vl| (vl.cache_slot as usize) == cache_slot)
+        .partition_point(|vl| (vl.logical_slot as usize) == logical_slot)
         + start;
     Some((start, end))
 }
@@ -1554,6 +1687,7 @@ mod tests {
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
                 cache_slot: 0,
+                logical_slot: 0,
                 paragraph_id: ParagraphId::INVALID,
             },
             VisualLine {
@@ -1579,6 +1713,7 @@ mod tests {
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
                 cache_slot: 1,
+                logical_slot: 1,
                 paragraph_id: ParagraphId::INVALID,
             },
         ];

@@ -294,6 +294,12 @@ impl EditorLayout {
                 .as_ref()
                 .map(|s| std::sync::Arc::clone(&s.paragraph_id_to_slot))
                 .unwrap_or_default(),
+            // Issue #901 第二十轮阻塞1: 从 canonical snapshot 继承行范围索引。
+            paragraph_id_to_line_range: self
+                .last_snapshot
+                .as_ref()
+                .map(|s| std::sync::Arc::clone(&s.paragraph_id_to_line_range))
+                .unwrap_or_default(),
         });
     }
 
@@ -430,6 +436,9 @@ impl EditorLayout {
             // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
+            // Issue #901 第二十轮阻塞1: Arc 共享行范围索引。
+            let paragraph_id_to_line_range =
+                std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_line_range);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -447,10 +456,23 @@ impl EditorLayout {
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
+                paragraph_id_to_line_range,
             }
         } else {
             // 全篇重排路径（初始化/参数变化后 invalidate 清空了 store）
             // Issue #658 评论 5622829886 问题 2: 静态正文只做基础排版。
+            // Issue #901 第二十轮阻塞2: 先重建 paragraph_store 获取 ParagraphId 序列，
+            // 再传入 prepare_document_visual_snapshot，不再用 slot+1 伪造 Id。
+            self.paragraph_store.rebuild_from_text(
+                text,
+                f64::from(params.font_size),
+                &params.font_family,
+                f64::from(params.line_spacing),
+                f64::from(params.text_indent),
+                f64::from(params.padding),
+                params.width,
+            );
+            let paragraph_ids: Vec<ParagraphId> = self.paragraph_store.paragraph_ids();
             let doc_snapshot = prepare_document_visual_snapshot(
                 text,
                 text_revision,
@@ -463,18 +485,10 @@ impl EditorLayout {
                 1.0,
                 current_gen,
                 false,
+                &paragraph_ids,
             );
 
             // Issue #901: 全篇重排后同步 paragraph_store 和 height_index
-            self.paragraph_store.rebuild_from_text(
-                text,
-                f64::from(params.font_size),
-                &params.font_family,
-                f64::from(params.line_spacing),
-                f64::from(params.text_indent),
-                f64::from(params.padding),
-                params.width,
-            );
             self.paragraph_store
                 .sync_from_visual_lines(&doc_snapshot.visual_lines, current_gen);
             let heights = self.paragraph_store.paragraph_heights();
@@ -488,6 +502,9 @@ impl EditorLayout {
             // Issue #901 第十九轮问题1: Arc 共享映射供 LayoutSnapshot 使用。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             let paragraph_id_to_slot = std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot);
+            // Issue #901 第二十轮阻塞1: Arc 共享行范围索引。
+            let paragraph_id_to_line_range =
+                std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_line_range);
             self.last_snapshot = Some(doc_snapshot);
 
             LayoutSnapshot {
@@ -505,6 +522,7 @@ impl EditorLayout {
                 height_index: self.height_index.clone(),
                 layout_generation: current_gen,
                 paragraph_id_to_slot,
+                paragraph_id_to_line_range,
             }
         };
 

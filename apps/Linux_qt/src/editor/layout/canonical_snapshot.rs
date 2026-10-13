@@ -130,6 +130,15 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// `materialize_line` 遇到 INVALID 回退到 `cache_slot`。
     /// Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
     pub paragraph_id_to_slot: std::sync::Arc<std::collections::HashMap<ParagraphId, usize>>,
+    /// Issue #901 第二十轮阻塞1: ParagraphId → 视觉行范围索引。
+    /// `visual_lines` 中 ParagraphId 对应的行范围 `[start, end)`。
+    /// 用于 `resolve_viewport_visual_lines` / `resolve_paragraph_visual_lines`
+    /// 替换 raw `partition_point(cache_slot)` 二分查找，避免插段后复用后缀行
+    /// cache_slot 过期导致二分找不到正确行。
+    /// 按 visual_lines 中实际行顺序构建，同段落行连续。
+    /// Issue #901 第二十轮阻塞1: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
+    pub paragraph_id_to_line_range:
+        std::sync::Arc<std::collections::HashMap<ParagraphId, (usize, usize)>>,
 }
 
 impl CanonicalDocumentVisualSnapshot {
@@ -138,19 +147,22 @@ impl CanonicalDocumentVisualSnapshot {
     /// 物化时用 visual_lines 中的索引作为全局 id，不再依赖段内 ordinal，
     /// 避免受影响段新行与后缀未改行 id 冲突。
     fn materialize_line(&self, line: &VisualLine, global_id: usize) -> VisualLine {
-        // Issue #901 第十八轮问题4: 优先用 paragraph_id_to_slot 映射解析 slot，
-        // 不依赖需要遍历后缀行更新的 cache_slot。fallback 到 cache_slot 保证兼容。
-        let slot = if line.paragraph_id != ParagraphId::INVALID {
+        // Issue #901 第二十轮阻塞1+3: 用 logical_slot 查前缀索引得到段首绝对坐标。
+        // logical_slot 是当前文档次序，与 paragraph_offset_index / height_index 的
+        // 索引一致。cache_slot 保持原值（Qt 物理槽），传给 C++ qt_cache。
+        // 优先用 paragraph_id_to_slot 映射解析 logical_slot（插段后后缀行 logical_slot
+        // 可能过时，但 paragraph_id 不变，通过映射查到新 logical_slot）。
+        let logical_slot = if line.paragraph_id != ParagraphId::INVALID {
             self.paragraph_id_to_slot
                 .get(&line.paragraph_id)
                 .copied()
-                .unwrap_or(line.cache_slot as usize)
+                .unwrap_or(line.logical_slot as usize)
         } else {
-            line.cache_slot as usize
+            line.logical_slot as usize
         };
-        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(slot);
-        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(slot);
-        let para_top_y = self.padding + self.height_index.paragraph_top_y(slot);
+        let para_byte_start = self.paragraph_offset_index.paragraph_byte_start(logical_slot);
+        let para_qchar_start = self.paragraph_offset_index.paragraph_qchar_start(logical_slot);
+        let para_top_y = self.padding + self.height_index.paragraph_top_y(logical_slot);
         VisualLine {
             byte_start: line.byte_start + para_byte_start,
             byte_end: line.byte_end + para_byte_start,
@@ -173,8 +185,10 @@ impl CanonicalDocumentVisualSnapshot {
             x_end_trailing: line.x_end_trailing,
             qt_ascent: line.qt_ascent,
             qt_descent: line.qt_descent,
-            // Issue #901 第十九轮问题1: 返回修正后的 slot，而非旧 cache_slot。
-            cache_slot: slot as i32,
+            // Issue #901 第二十轮阻塞3: cache_slot 保持原值（Qt 物理槽）。
+            cache_slot: line.cache_slot,
+            // Issue #901 第二十轮阻塞1+3: logical_slot 用解析后的当前文档次序。
+            logical_slot: logical_slot as i32,
             // Issue #901 第十八轮问题4: 保留原行稳定段落身份。
             paragraph_id: line.paragraph_id,
         }
@@ -194,7 +208,7 @@ impl CanonicalDocumentVisualSnapshot {
                 para_text: String::new(), para_start: 0, qtextline_idx: 0,
                 para_qchar_start: 0, para_qchar_end: 0, line_wrap_width: 0.0,
                 line_indent_x: 0.0, para_indent: 0.0, x_end_trailing: 0.0,
-                qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0,
+                qt_ascent: 0.0, qt_descent: 0.0, cache_slot: 0, logical_slot: 0,
                 paragraph_id: super::types::ParagraphId::INVALID,
             },
         }
@@ -265,14 +279,10 @@ impl CanonicalDocumentVisualSnapshot {
             let (first_para, last_para_excl) =
                 self.height_index.paragraphs_in_y_range(visible_top, visible_bottom);
             if first_para < last_para_excl {
-                // 用 cache_slot 在未物化的 visual_lines 上二分查找定位行范围。
-                // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
-                let start_idx = self
-                    .visual_lines
-                    .partition_point(|l| l.cache_slot < first_para as i32);
-                let end_idx = self
-                    .visual_lines
-                    .partition_point(|l| l.cache_slot < last_para_excl as i32);
+                // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 查行范围，
+                // 替换 raw partition_point(cache_slot)。
+                let (start_idx, end_idx) =
+                    compute_line_range_from_logical_slots_canonical(self, first_para, last_para_excl);
                 return self.resolve_visual_line_range(start_idx, end_idx);
             }
             return Vec::new();
@@ -284,22 +294,37 @@ impl CanonicalDocumentVisualSnapshot {
 
     /// Issue #901 第十五轮问题5b: 物化指定段落的所有行为绝对坐标。
     ///
-    /// 用 `cache_slot` 在未物化的 `visual_lines` 上二分查找定位段落行范围，
-    /// 只物化该段落的行。`para_slot` 是段落在 `height_index` 中的索引
-    ///（= `VisualLine.cache_slot`）。
+    /// 用 `paragraph_id_to_line_range` 查行范围，只物化该段落的行。
+    /// `para_slot` 是段落在 `height_index` 中的索引（= `VisualLine.logical_slot`）。
     pub fn resolve_paragraph_visual_lines(&self, para_slot: usize) -> Vec<VisualLine> {
         if self.visual_lines.is_empty() {
             return Vec::new();
         }
-        // 用 cache_slot 二分查找定位段落行范围。
-        // visual_lines 按文档顺序排列，同段落行连续，cache_slot 按段落递增。
-        let start_idx = self
-            .visual_lines
-            .partition_point(|l| l.cache_slot < para_slot as i32);
-        let end_idx = self
-            .visual_lines
-            .partition_point(|l| l.cache_slot <= para_slot as i32);
+        // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 查行范围，
+        // 替换 raw partition_point(cache_slot)。
+        let (start_idx, end_idx) =
+            compute_line_range_from_logical_slots_canonical(self, para_slot, para_slot + 1);
         self.resolve_visual_line_range(start_idx, end_idx)
+    }
+
+    /// Issue #901 第二十轮阻塞1: 返回 `[first_logical_slot, last_logical_slot_excl)`
+    /// 段落范围对应的 `visual_lines` 行索引范围 `[start_idx, end_idx)`。
+    ///
+    /// 优先用 `paragraph_id_to_line_range` 索引定位行范围，避免在插段/合段后
+    /// 复用后缀行的 raw `logical_slot` 上做 `partition_point` 二分查找找错。
+    /// 若索引为空（旧路径/fallback），退化为 `partition_point(logical_slot)`。
+    ///
+    /// 调用方拿到 `(start_idx, end_idx)` 后可用 `resolve_visual_line(idx)` 逐行物化。
+    pub fn paragraph_visual_line_range(
+        &self,
+        first_logical_slot: usize,
+        last_logical_slot_excl: usize,
+    ) -> (usize, usize) {
+        compute_line_range_from_logical_slots_canonical(
+            self,
+            first_logical_slot,
+            last_logical_slot_excl,
+        )
     }
 
     pub fn cursor_rect(
@@ -367,6 +392,7 @@ impl CanonicalDocumentVisualSnapshot {
             qt_ascent: 0.0,
             qt_descent: 0.0,
             cache_slot: 0,
+            logical_slot: 0,
             paragraph_id: super::types::ParagraphId::INVALID,
         };
 
@@ -379,12 +405,10 @@ impl CanonicalDocumentVisualSnapshot {
             // 物化 para_slot-1 和 para_slot 两个段的行（处理段边界光标）
             let start_slot = para_slot.saturating_sub(1);
             let end_slot = para_slot + 1;
-            let start_idx = self
-                .visual_lines
-                .partition_point(|l| l.cache_slot < start_slot as i32);
-            let end_idx = self
-                .visual_lines
-                .partition_point(|l| l.cache_slot < end_slot as i32);
+            // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 查行范围，
+            // 替换 raw partition_point(cache_slot)。
+            let (start_idx, end_idx) =
+                compute_line_range_from_logical_slots_canonical(self, start_slot, end_slot);
             let lines = self.resolve_visual_line_range(start_idx, end_idx);
 
             for (local_idx, line) in lines.iter().enumerate() {
@@ -455,12 +479,12 @@ impl CanonicalDocumentVisualSnapshot {
             return line.x;
         }
 
-        // Issue #901 第十七轮问题2: 用 line.cache_slot 直接索引 paragraphs，
-        // 不再用 paragraph_document_byte_start 与全文 byte 交叉比较。
+        // Issue #901 第二十轮阻塞3: 用 line.logical_slot 直接索引 paragraphs，
+        // 不再用 line.cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
         // paragraph_document_byte_start 现已是段落编号（slot），不是全文 byte offset，
         // 旧的 `p.paragraph_document_byte_start <= cursor_byte` 比较会因单位不匹配
         // 导致第二段以后找不到段落，函数直接 return line.x，造成光标定位行首。
-        let slot = line.cache_slot as usize;
+        let slot = line.logical_slot as usize;
         let para = match self.paragraphs.get(slot) {
             Some(p) => p,
             None => return line.x,
@@ -564,6 +588,8 @@ impl CanonicalDocumentVisualSnapshot {
             // Issue #901 第十九轮问题1: 从 canonical snapshot 继承 ParagraphId → slot 映射。
             // Issue #901 第十九轮问题5: Arc 共享，O(1) clone 而非 O(段落数)。
             paragraph_id_to_slot: std::sync::Arc::clone(&self.paragraph_id_to_slot),
+            // Issue #901 第二十轮阻塞1: 从 canonical snapshot 继承 ParagraphId → 行范围映射。
+            paragraph_id_to_line_range: std::sync::Arc::clone(&self.paragraph_id_to_line_range),
         }
     }
 }
@@ -586,3 +612,48 @@ pub use prepare::{
 };
 // Issue #810 评论 5932233052 问题1: AnimationRasterVisual 定义在本模块（pub struct），
 // 外部通过 canonical_snapshot::AnimationRasterVisual 访问，无需额外 re-export。
+
+/// Issue #901 第二十轮阻塞1: 通过 logical_slot 范围计算 visual_lines 行范围。
+///
+/// `first_logical_slot..last_logical_slot_excl` 是文档次序段落范围。
+/// 对每个 logical_slot，通过 `paragraph_id_to_slot` 反查 ParagraphId，
+/// 再从 `paragraph_id_to_line_range` 查行范围 `[start, end)`。
+///
+/// 由于 `paragraph_id_to_slot` 是 id → slot 映射，需要反向查找。
+/// 段落数远小于行数，O(段落数) 反向查找可接受。
+/// 若 `paragraph_id_to_line_range` 为空（旧路径/fallback），退化为
+/// `partition_point(logical_slot)` 二分查找。
+fn compute_line_range_from_logical_slots_canonical(
+    snapshot: &CanonicalDocumentVisualSnapshot,
+    first_logical_slot: usize,
+    last_logical_slot_excl: usize,
+) -> (usize, usize) {
+    // Issue #901 第二十轮阻塞1: 优先用 paragraph_id_to_line_range 索引。
+    if !snapshot.paragraph_id_to_line_range.is_empty() {
+        let id_to_slot = &snapshot.paragraph_id_to_slot;
+        let id_to_range = &snapshot.paragraph_id_to_line_range;
+
+        let mut start_idx = snapshot.visual_lines.len();
+        let mut end_idx = 0usize;
+        for (id, &slot) in id_to_slot.iter() {
+            if slot >= first_logical_slot && slot < last_logical_slot_excl {
+                if let Some(&(s, e)) = id_to_range.get(id) {
+                    start_idx = start_idx.min(s);
+                    end_idx = end_idx.max(e);
+                }
+            }
+        }
+        if start_idx <= end_idx && end_idx > 0 {
+            return (start_idx, end_idx);
+        }
+    }
+
+    // Fallback: 用 logical_slot 二分查找。
+    let start_idx = snapshot
+        .visual_lines
+        .partition_point(|l| l.logical_slot < first_logical_slot as i32);
+    let end_idx = snapshot
+        .visual_lines
+        .partition_point(|l| l.logical_slot < last_logical_slot_excl as i32);
+    (start_idx, end_idx)
+}

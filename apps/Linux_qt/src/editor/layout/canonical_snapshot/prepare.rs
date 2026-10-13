@@ -37,9 +37,9 @@ pub fn prepare_animation_visuals_from_layout(
         let slot = line.cache_slot;
         let qtextline_idx = line.qtextline_idx;
         let gen = handle.generation;
-        // Issue #901 第十七轮问题3: paragraph_slot 用 cache_slot（段落编号），
-        // 不用 para_start（全文 byte offset）。
-        let paragraph_slot = line.cache_slot as usize;
+        // Issue #901 第二十轮阻塞3: paragraph_slot 用 logical_slot（文档次序），
+        // 用于 inject 时索引 paragraphs 数组。cache_slot（Qt 物理槽）只传给 C++。
+        let paragraph_slot = line.logical_slot as usize;
 
         // SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
         let success = cpp::cpp!(unsafe [
@@ -104,6 +104,9 @@ pub fn prepare_document_visual_snapshot(
     dpr: f64,
     generation: u64,
     generate_animation_visuals: bool,
+    // Issue #901 第二十轮阻塞2: 由调用方传入 ParagraphId 序列，
+    // 不再用 slot+1 伪造 Id。
+    paragraph_ids: &[super::super::types::ParagraphId],
 ) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5623746506 问题 2a: 收口到受影响范围生成动画视觉。
     // affected_byte_start >= affected_byte_end 表示全篇生成（保持原语义）。
@@ -123,6 +126,7 @@ pub fn prepare_document_visual_snapshot(
         generate_animation_visuals,
         0,
         0,
+        paragraph_ids,
     )
 }
 
@@ -151,6 +155,9 @@ pub fn prepare_document_visual_snapshot_scoped(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
+    // Issue #901 第二十轮阻塞2: 由调用方传入 ParagraphId 序列，
+    // 不再用 slot+1 伪造 Id。
+    paragraph_ids: &[super::super::types::ParagraphId],
 ) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5624570557 问题 2: 基础排版不生成动画视觉，
     // 只得到 QTextLayout/VisualLine/cursor 几何。
@@ -171,6 +178,7 @@ pub fn prepare_document_visual_snapshot_scoped(
         false,
         affected_byte_start,
         affected_byte_end,
+        paragraph_ids,
     )
 }
 
