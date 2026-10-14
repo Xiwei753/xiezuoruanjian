@@ -322,58 +322,10 @@ fn delete_node_blocked_by_cross_canvas_link_reference() {
 }
 
 // ---------------------------------------------------------------------------
-// evict_starmap_store / remove_starmap_store 行为差异测试（问题2）
+// remove_starmap_store 索引失效测试（问题2）
 // ---------------------------------------------------------------------------
 
 use crate::starmap::store::PathDependencyIndex;
-
-/// `evict_starmap_store` 只移除 Store，不失效路径依赖索引。
-///
-/// 对比 `remove_starmap_store`：后者同时失效索引。同步后批量协调用
-/// `evict_starmap_store` 避免每个 target 都失效一次（问题2）。
-#[test]
-fn evict_starmap_store_removes_store_but_keeps_index() {
-    let temp = tempdir().unwrap();
-    let core = new_core(temp.path());
-
-    let root = create_starmap(&core, "根图");
-    add_node(&core, &root, "n_root");
-
-    // 访问 graph 会把 Store 加载进 starmap_stores 缓存。
-    let _ = core.get_starmap_graph(&root).unwrap();
-    assert!(
-        core.starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&root),
-        "访问 graph 后 Store 应在缓存中"
-    );
-
-    // 模拟已初始化的路径依赖索引（Some）。
-    *core
-        .path_dependency_index
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(PathDependencyIndex::default());
-
-    // evict 只移除 Store，不失效索引。
-    core.evict_starmap_store(&root);
-
-    assert!(
-        !core
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&root),
-        "evict 后 Store 应从缓存移除"
-    );
-    assert!(
-        core.path_dependency_index
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some(),
-        "evict 不应失效路径依赖索引（由调用方统一失效）"
-    );
-}
 
 /// `remove_starmap_store` 同时移除 Store 并失效索引（整图删除场景）。
 #[test]

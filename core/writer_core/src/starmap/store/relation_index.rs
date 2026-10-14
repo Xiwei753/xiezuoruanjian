@@ -1151,24 +1151,34 @@ impl PathDependencyIndex {
     ///
     /// 这些图持有路径穿越/指向当前画布对象的边，是唯一可能与当前画布相关
     /// 的祖先图；不在候选集合中的祖先图无需加载边文件。
+    ///
+    /// 实现用 `CanvasEndpoint` 定点查询（`query_dependents`）做 O(1) 命中，
+    /// 不再遍历 `self.entries` 全表。`CanvasEndpoint` 事实由
+    /// `extract_path_dependency_facts` 在路径成功到达终点画布时产出，
+    /// `host_starmap_id` 和 `object_id` 均为最终画布 ID，覆盖
+    /// Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
     fn collect_candidate_edge_owners(&self, current_starmap_id: &str) -> HashSet<String> {
         let mut owners: HashSet<String> = HashSet::new();
-        for ((host_starmap_id, _, _), sources) in &self.entries {
-            if host_starmap_id != current_starmap_id {
-                continue;
-            }
-            owners.extend(
-                sources
-                    .iter()
-                    .filter(|s| {
-                        matches!(
-                            s.source_kind,
-                            CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
-                        )
-                    })
-                    .map(|s| s.owner_starmap_id.clone()),
-            );
-        }
+        // 用 CanvasEndpoint 定点查询，O(1) 命中，不遍历全表（问题3）。
+        // CanvasEndpoint 事实由 extract_path_dependency_facts 在路径成功到达终点画布时产出，
+        // host_starmap_id 和 object_id 均为最终画布 ID。
+        // 覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
+        let sources = self.query_dependents(
+            current_starmap_id,
+            &crate::starmap::graph::resolve::PathDependencyKind::CanvasEndpoint,
+            current_starmap_id,
+        );
+        owners.extend(
+            sources
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.source_kind,
+                        CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
+                    )
+                })
+                .map(|s| s.owner_starmap_id.clone()),
+        );
         owners
     }
 

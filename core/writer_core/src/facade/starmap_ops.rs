@@ -96,20 +96,26 @@ impl super::WriterCore {
         self.invalidate_path_dependency_index();
     }
 
-    /// 从 Store 缓存中移除指定星图的已加载 Store，不失效路径依赖索引。
+    /// 同步后协调 Store：先持久化未保存的 dirty/删除事实，再从缓存移除。
     ///
-    /// 同步后磁盘数据已更新，内存中的旧 Store 需要被移除，
-    /// 下次访问时从磁盘重新加载。索引失效由调用方统一执行，
-    /// 避免每个 target 都失效一次（问题2）。
+    /// 直接 remove 会丢弃 Store 的 dirty_nodes/edges/embeds/links/hyperlinks、
+    /// deleted_*_ids、save_queue 等未持久化状态。本方法先 flush 这些状态到磁盘，
+    /// 保证用户在同步期间产生的编辑不会丢失，然后再 remove（问题1）。
     ///
-    /// 与 [`remove_starmap_store`] 的区别：后者同时失效索引，
-    /// 适用于整图删除场景；本方法只移除 Store，适用于同步后批量协调。
-    pub(crate) fn evict_starmap_store(&self, starmap_id: &str) {
+    /// flush 失败时返回 Err，调用方应传播错误，不能丢弃未持久化的修改。
+    /// 索引失效由调用方统一执行，与 [`remove_starmap_store`] 一致。
+    pub(crate) fn flush_and_evict_starmap_store(&self, starmap_id: &str) -> Result<()> {
         let mut stores = self
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        if let Some(store) = stores.get_mut(starmap_id) {
+            if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
+                store.flush()?;
+            }
+        }
         stores.remove(starmap_id);
+        Ok(())
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {

@@ -485,6 +485,18 @@ impl WriterCoreApi {
                 return make_noop_result();
             }
         }
+        // staging seed 前 flush 所有 Store 的 dirty/删除状态，
+        // 保证 staging seed 能看到本地最新修改（问题1）。
+        // flush 失败则终止同步——不能让 staging seed 基于过时数据做三方合并。
+        if let Err(e) = self.core_write().flush_all_starmap_stores() {
+            let msg = format!("flush_all_starmap_stores before staging seed failed: {e}");
+            log::warn!("[sync] prepare: {msg}");
+            let _ = self.record_full_sync_preflight_failure(
+                "recoverable_error".to_string(),
+                "staging_seed".to_string(),
+            );
+            return Err(crate::api::error::WriterError::from(e));
+        }
         let staging_runs = match crate::sync::staging::prepare_staging_runs(&mut plan) {
             Ok(runs) => runs,
             Err(err) => {
@@ -629,16 +641,8 @@ impl WriterCoreApi {
                     }
                 };
 
-            // 同步该 target 的 committed_paths 可能修改了 starmaps/<id>/... 文件。
-            // 移除已加载的旧 Store，下次访问时从磁盘重新加载（问题2）。
-            // 不 flush——磁盘已是同步后的最新数据，内存中的旧 Store 应被丢弃。
-            let changed_starmap_ids: std::collections::HashSet<String> = target_committed_paths
-                .iter()
-                .filter_map(|p| extract_starmap_id_from_committed_path(p))
-                .collect();
-            for starmap_id in &changed_starmap_ids {
-                self.core_write().evict_starmap_store(starmap_id);
-            }
+            // Store 协调与索引失效已在 commit_target_after_transfer 内的
+            // 同一写锁持有期完成（问题1+2），不再在循环体中单独执行。
 
             // 5. sink.update_target_finish — 标记该 target 已完成（phase 清空）。
             if let Some(ref sink) = progress_sink {
@@ -678,8 +682,8 @@ impl WriterCoreApi {
             all_committed_paths.extend(target_committed_paths);
         }
 
-        // per-target 循环中已移除变化的旧 Store，统一失效路径依赖索引，
-        // 下次查询时从真实数据重建（问题2）。
+        // 每个 target 的 commit 已在同一写锁内完成 Store 协调与索引失效（问题2）。
+        // 此处再失效一次是冗余但安全的兜底，覆盖部分 target 成功、后续取消的场景。
         self.core_write().invalidate_path_dependency_index();
 
         // Issue #779 评论 5853718466：generation GC 不再在用户同步阻塞路径内执行。
@@ -791,7 +795,7 @@ impl WriterCoreApi {
         // record_staging_conflicts）持有该 project root 的共享锁，防止 UI resolve
         // 在 Commit 过程中写入后被旧 merged state 覆盖。
         crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
-            let _core = self.core_write();
+            let core = self.core_write();
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
             let mut target_with_conflicts = target_sync_result.clone();
@@ -812,8 +816,38 @@ impl WriterCoreApi {
                     Some(format!("staging commit failed: {}", msg));
             }
 
+            // 同一写锁持有期内完成 Store 协调与索引失效（问题2）：
+            // 先 flush 有 dirty 的 Store 再 evict（问题1），然后失效路径依赖索引。
+            // 完成后才释放写锁，progress/callback 在锁外触发，
+            // 调用方不会在 Commit 和 evict 间隙读到不一致状态。
+            Self::coordinate_stores_after_commit(&core, &committed_paths);
+
             (target_with_conflicts, committed_paths)
         })
+    }
+
+    /// 在已持有 Core 写锁时，按 `committed_paths` 协调 Store 并失效派生索引。
+    ///
+    /// 对每个变化的星图 ID，先 flush 有 dirty/删除事实的 Store 再 evict（问题1），
+    /// 然后失效路径依赖索引（问题2）。提取为独立方法以降低
+    /// [`commit_target_after_transfer`] 闭包内的嵌套深度。
+    fn coordinate_stores_after_commit(
+        core: &crate::facade::WriterCore,
+        committed_paths: &[std::path::PathBuf],
+    ) {
+        let changed_starmap_ids: std::collections::HashSet<String> = committed_paths
+            .iter()
+            .filter_map(|p| extract_starmap_id_from_committed_path(p))
+            .collect();
+        for starmap_id in &changed_starmap_ids {
+            if let Err(e) = core.flush_and_evict_starmap_store(starmap_id) {
+                log::warn!(
+                    "[sync] commit: flush_and_evict_starmap_store({}) failed: {e}",
+                    starmap_id
+                );
+            }
+        }
+        core.invalidate_path_dependency_index();
     }
 
     /// Issue #779 评论 5854082763：generation GC maintenance 独立入口。
