@@ -51,6 +51,10 @@ import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
   RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, FrozenGlyphMember
 } from './editor_commit_start'
+import {
+  planCarryOverPhysicalGroups, determineMotionChannel,
+  type CarryOverPieceWithContext, type IdentityCache
+} from './editor_carry_over_physical_plan'
 
 /**
  * Issue #879 最新复核评论问题4：prepareCandidate 的返回类型。
@@ -394,6 +398,16 @@ export class EditorMotionCoordinator {
    */
   private windowIdAllocator: WindowInstanceIdAllocator
   /**
+   * Issue #879 评论6153434157 问题3：carry-over 组级身份缓存。
+   *
+   * 从 groupKey 到 {renderNodeKey, windowInstanceId} 的映射，跨 retarget 保持稳定：
+   * - 同一组跨帧/retarget → 复用已有身份，不漂移
+   * - 新组 → 通过 WindowInstanceIdAllocator.allocateFresh 分配新身份
+   *
+   * 会话切换时清空（与 windowIdAllocator 一起 reset）。
+   */
+  private carryOverIdentityCache: IdentityCache
+  /**
    * Issue #879 复核评论6078682695 问题2：按 sourceRevision 标识的不可变源排版记录缓存。
    *
    * 每个冻结窗口按 w.sourceRevision 查它自己的布局，不能按 sourceKind 猜 displayed/newSnapshot。
@@ -439,6 +453,7 @@ export class EditorMotionCoordinator {
     this.firstCaretRect = null
     this.glyphIdentities = null
     this.windowIdAllocator = new WindowInstanceIdAllocator()
+    this.carryOverIdentityCache = new Map()
     this.sourceLayoutRecords = new Map()
     this.currentPlan = {
       insertRuns: [],
@@ -3396,21 +3411,22 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 评论6152165243 缺口1+2：carry-over 物理窗口规划入口。
+   * Issue #879 评论6152165243 缺口1+2 + 评论6153434157 问题2+3+4：
+   * carry-over 物理窗口规划入口。
    *
    * 在拆片后、创建 carryOverGhostRuns/carryOverMotionRuns 前，按真正物理 Text 分组：
-   * - sourceKind/revision + 原窗口来源 + 相同位移/透明度轨迹 + 运动通道 + 目标行
+   * - sourceKind/revision + 原窗口来源 + 相同位移/透明度轨迹 + 运动通道 + 目标位置
    * - 能由同一个 Text、同一条轨迹绘制的片段 → 合并完整 glyphIds、utf16Start/End、
    *   fullWindowGlyphUtf16Ranges 和 clip 的并集
    * - 必须独立运动的片段 → 分配不同且固定的 PhysicalWindowIdentity
    *
-   * 身份生成基于父窗口身份 + 运动通道后缀，保证 retarget 时身份不变：
-   * - ghost:  `${sourceKind}-${sourceRevision}-carryGhost-${parentWinId}`
-   * - insert: `${sourceKind}-${sourceRevision}-carryInsert-${parentWinId}`
-   * - reflow: `${sourceKind}-${sourceRevision}-carryReflow-${parentWinId}-${targetLineIdx}`
+   * Issue #879 评论6153434157 修复：
+   * - 问题2：renderNodeKey 包含目标位置信息，不同目标行的 reflow 组不会碰撞
+   * - 问题3：windowInstanceId 通过 WindowInstanceIdAllocator 分配，登记进反向映射
+   * - 问题4：groupKey 包含 sourceKind/sourceRevision/parentRenderNodeKey/轨迹信息
    *
-   * 之后 identifyCarryOverGhosts/identifyCarryOverMotionRuns 只消费规划结果，
-   * 不再每片无条件复用父 key，也不是最终采样阶段靠 throw 来决定能不能画。
+   * 分组和身份分配逻辑由 editor_carry_over_physical_plan.ts 的 planCarryOverPhysicalGroups 实现，
+   * 生产与测试共用同一份纯逻辑。
    */
   private planCarryOverPhysicalWindows(
     latestDisplayedFrame: EditorVisualFrame,
@@ -3419,13 +3435,12 @@ export class EditorMotionCoordinator {
     planGlyphIds: Set<string>,
     newIdentityTable: GlyphIdentityTable | null
   ): CarryOverPhysicalGroup[] {
-    const groups: CarryOverPhysicalGroup[] = []
     if (!latestDisplayedFrame.isAnimating) {
-      return groups
+      return []
     }
 
-    // 按 groupKey 聚合 piece
-    const groupMap = new Map<string, CarryOverPhysicalGroup>()
+    // 收集所有需要 carry-over 的片段（带父窗口上下文和运动通道）
+    const piecesWithContext: CarryOverPieceWithContext[] = []
 
     for (const w of latestDisplayedFrame.motionGlyphWindows) {
       // 仍有非零 clip 宽度
@@ -3433,7 +3448,7 @@ export class EditorMotionCoordinator {
         continue
       }
 
-      // 确定 uncoveredIds 和运动通道
+      // 确定 uncoveredIds
       const uncoveredIds: string[] = []
       for (const gid of w.glyphIds) {
         if (!planGlyphIds.has(gid)) {
@@ -3449,106 +3464,33 @@ export class EditorMotionCoordinator {
         w, uncoveredIds, newIdentityTable, newLayout
       )
 
-      // 为每个 piece 确定运动通道和目标行
+      // 为每个 piece 确定运动通道
       for (const piece of pieces) {
         if (piece.clipRects.length === 0) {
           continue
         }
 
-        // 确定运动通道
-        let motionChannel: 'ghost' | 'insert' | 'reflow'
-        if (w.motionOwnerKind === 'deleted' || w.motionOwnerKind === 'carryGhost') {
-          motionChannel = 'ghost'
-        } else if (w.motionOwnerKind === 'insert') {
-          // insert 窗口中，新版已删除的字形转为 ghost
-          if (newIdentityTable === null || newIdentityTable.entryByGlyphId(piece.glyphIds[0]) === null) {
-            motionChannel = 'ghost'
-          } else {
-            motionChannel = 'insert'
-          }
-        } else if (w.motionOwnerKind === 'reflow') {
-          // reflow 窗口中，新版已删除的字形转为 ghost
-          if (!piece.targetResolved) {
-            motionChannel = 'ghost'
-          } else {
-            motionChannel = 'reflow'
-          }
-        } else {
-          motionChannel = 'ghost'
-        }
+        const motionChannel = determineMotionChannel(
+          w.motionOwnerKind,
+          piece.targetResolved,
+          piece.glyphIds,
+          newIdentityTable
+        )
 
-        // 确定目标行索引（reflow 用实际行号区分不同轨迹）
-        let targetLineIdx = -1
-        if (motionChannel === 'reflow' && piece.targetResolved && piece.targetRect !== null) {
-          // 用目标矩形的 y 坐标区分不同目标行
-          targetLineIdx = Math.round(piece.targetRect.y)
-        }
-
-        // 构造分组键
-        const groupKey = `${w.windowId}|${motionChannel}|${targetLineIdx}`
-
-        // 构造稳定身份
-        const channelSuffix = motionChannel === 'ghost' ? 'cg'
-          : motionChannel === 'insert' ? 'ci'
-          : `cr-${targetLineIdx}`
-        const stableRenderNodeKey = `${w.sourceKind}-${w.sourceRevision}-${motionChannel === 'ghost' ? 'carryGhost' : motionChannel === 'insert' ? 'carryInsert' : 'carryReflow'}-${w.windowInstanceId}`
-        const stableWindowInstanceId = `${w.windowInstanceId}-${channelSuffix}`
-
-        // 合并到已有组或创建新组
-        const existing = groupMap.get(groupKey)
-        if (existing !== undefined) {
-          // 合并：glyphIds 并集
-          existing.glyphIds = [...existing.glyphIds, ...piece.glyphIds]
-          // sourceUtf16Start/End 取 min/max
-          existing.sourceUtf16Start = Math.min(existing.sourceUtf16Start, piece.sourceUtf16Start)
-          existing.sourceUtf16End = Math.max(existing.sourceUtf16End, piece.sourceUtf16End)
-          // clipRects 并集
-          existing.clipRects = [...existing.clipRects, ...piece.clipRects]
-          // clipLeft/Right/Top/Bottom 取 min/max
-          existing.clipLeft = Math.min(existing.clipLeft, piece.clipLeft)
-          existing.clipRight = Math.max(existing.clipRight, piece.clipRight)
-          existing.clipTop = Math.min(existing.clipTop, piece.clipTop)
-          existing.clipBottom = Math.max(existing.clipBottom, piece.clipBottom)
-          // fullWindowGlyphUtf16Ranges 并集
-          if (piece.fullWindowGlyphUtf16Ranges !== null) {
-            if (existing.fullWindowGlyphUtf16Ranges === null) {
-              existing.fullWindowGlyphUtf16Ranges = new Map(piece.fullWindowGlyphUtf16Ranges)
-            } else {
-              for (const [k, v] of piece.fullWindowGlyphUtf16Ranges) {
-                existing.fullWindowGlyphUtf16Ranges.set(k, v)
-              }
-            }
-          }
-          // 目标信息：如果新 piece 有目标信息，更新
-          if (piece.targetResolved && !existing.targetResolved) {
-            existing.targetUtf16Start = piece.targetUtf16Start
-            existing.targetUtf16End = piece.targetUtf16End
-            existing.targetResolved = true
-            existing.targetRect = piece.targetRect
-          }
-        } else {
-          // 创建新组
-          // 获取 piece 的 fullWindowGlyphUtf16Ranges
-          let pieceFullRanges: Map<string, [number, number]> | null = null
-          if (w.fullWindowGlyphUtf16Ranges !== undefined && w.fullWindowGlyphUtf16Ranges !== null) {
-            pieceFullRanges = EditorMotionCoordinator.filterGlyphUtf16Ranges(
-              w.fullWindowGlyphUtf16Ranges, piece.glyphIds
-            )
-          }
-
-          groupMap.set(groupKey, {
-            renderNodeKey: stableRenderNodeKey,
-            windowInstanceId: stableWindowInstanceId,
-            sourceKind: w.sourceKind,
-            sourceRevision: w.sourceRevision,
-            motionChannel: motionChannel,
-            parentWindowId: w.windowId,
-            sourceRunId: `${w.sourceKind}-${w.sourceRevision}`,
-            glyphIds: [...piece.glyphIds],
+        piecesWithContext.push({
+          piece: {
+            glyphIds: piece.glyphIds,
             sourceUtf16Start: piece.sourceUtf16Start,
             sourceUtf16End: piece.sourceUtf16End,
-            clipRects: [...piece.clipRects],
-            fullWindowGlyphUtf16Ranges: pieceFullRanges,
+            clipRects: piece.clipRects,
+            clipLeft: piece.clipLeft,
+            clipRight: piece.clipRight,
+            clipTop: piece.clipTop,
+            clipBottom: piece.clipBottom,
+            offsetX: piece.offsetX,
+            offsetY: piece.offsetY,
+            currentPositionX: piece.currentPositionX,
+            currentPositionY: piece.currentPositionY,
             targetUtf16Start: piece.targetUtf16Start,
             targetUtf16End: piece.targetUtf16End,
             targetResolved: piece.targetResolved,
@@ -3557,24 +3499,61 @@ export class EditorMotionCoordinator {
             glyphY: piece.glyphY,
             glyphWidth: piece.glyphWidth,
             glyphHeight: piece.glyphHeight,
-            clipLeft: piece.clipLeft,
-            clipRight: piece.clipRight,
-            clipTop: piece.clipTop,
-            clipBottom: piece.clipBottom,
-            currentPositionX: piece.currentPositionX,
-            currentPositionY: piece.currentPositionY,
-            offsetX: piece.offsetX,
-            offsetY: piece.offsetY,
+          },
+          parent: {
+            windowId: w.windowId,
+            renderNodeKey: w.renderNodeKey,
+            windowInstanceId: w.windowInstanceId,
+            sourceKind: w.sourceKind,
+            sourceRevision: w.sourceRevision,
+            motionOwnerKind: w.motionOwnerKind,
             opacity: w.opacity,
-          })
-        }
+            fullWindowGlyphUtf16Ranges: w.fullWindowGlyphUtf16Ranges ?? null,
+          },
+          motionChannel: motionChannel,
+        })
       }
     }
 
-    for (const group of groupMap.values()) {
-      groups.push(group)
-    }
-    return groups
+    // 调用共享纯逻辑模块进行分组和身份分配
+    const results = planCarryOverPhysicalGroups(
+      piecesWithContext,
+      this.windowIdAllocator,
+      this.carryOverIdentityCache
+    )
+
+    // 将共享模块的输出类型转换为 Coordinator 内部的 CarryOverPhysicalGroup
+    return results.map((r): CarryOverPhysicalGroup => ({
+      renderNodeKey: r.renderNodeKey,
+      windowInstanceId: r.windowInstanceId,
+      sourceKind: r.sourceKind,
+      sourceRevision: r.sourceRevision,
+      motionChannel: r.motionChannel,
+      parentWindowId: r.parentWindowId,
+      sourceRunId: r.sourceRunId,
+      glyphIds: r.glyphIds,
+      sourceUtf16Start: r.sourceUtf16Start,
+      sourceUtf16End: r.sourceUtf16End,
+      clipRects: r.clipRects,
+      fullWindowGlyphUtf16Ranges: r.fullWindowGlyphUtf16Ranges,
+      targetUtf16Start: r.targetUtf16Start,
+      targetUtf16End: r.targetUtf16End,
+      targetResolved: r.targetResolved,
+      targetRect: r.targetRect,
+      glyphX: r.glyphX,
+      glyphY: r.glyphY,
+      glyphWidth: r.glyphWidth,
+      glyphHeight: r.glyphHeight,
+      clipLeft: r.clipLeft,
+      clipRight: r.clipRight,
+      clipTop: r.clipTop,
+      clipBottom: r.clipBottom,
+      currentPositionX: r.currentPositionX,
+      currentPositionY: r.currentPositionY,
+      offsetX: r.offsetX,
+      offsetY: r.offsetY,
+      opacity: r.opacity,
+    }))
   }
 
   /**
@@ -3767,169 +3746,6 @@ export class EditorMotionCoordinator {
         islandTargetRects: islandTargetRects,
         fullWindowGlyphUtf16Ranges: group.fullWindowGlyphUtf16Ranges,
       })
-    }
-    return ghosts
-  }
-    for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      // 仍有非零 clip 宽度
-      if (w.currentClipRight - w.currentClipLeft <= 0.01) {
-        continue
-      }
-
-      // Issue #879 复核评论6084020082 问题2：接受 insert/reflow 转来的 ghost。
-      // 当 insert/reflow 窗口的字形在新版不存在时（newIdentityTable 查不到），
-      // 将其转为 ghost 消退，不再直接丢弃导致文字突然消失。
-      if (w.motionOwnerKind === 'insert' || w.motionOwnerKind === 'reflow') {
-        // 检查 uncoveredIds 是否在新版正文中存在
-        const uncoveredIds: string[] = []
-        for (const gid of w.glyphIds) {
-          if (!planGlyphIds.has(gid)) {
-            uncoveredIds.push(gid)
-          }
-        }
-        if (uncoveredIds.length === 0) {
-          continue
-        }
-        // 用 newIdentityTable 检查哪些字形在新版正文中不存在
-        const ghostIds: string[] = []
-        for (const gid of uncoveredIds) {
-          if (newIdentityTable === null || newIdentityTable.entryByGlyphId(gid) === null) {
-            ghostIds.push(gid)
-          }
-        }
-        if (ghostIds.length === 0) {
-          continue  // 所有 uncoveredIds 都在新版正文中存在——不转为 ghost
-        }
-        // Issue #879 复核评论6084020082 问题1+3：用 splitFrozenWindowByGlyphOwnership 拆分
-        const pieces = this.splitFrozenWindowByGlyphOwnership(
-          w, ghostIds, newIdentityTable, this.newLayout
-        )
-        for (const piece of pieces) {
-          // Issue #879 复核评论6097927249 问题1：已不可见的 ghost 不得反向生成残影。
-          // piece.clipRects 为空数组表示该 piece 在冻结帧完全不可见，跳过不生成 ghost。
-          if (piece.clipRects.length === 0) {
-            continue
-          }
-          // 目标 clip = 零宽度（继续消退到完全隐藏）
-          const targetClipLeft = piece.clipLeft
-          const targetClipRight = piece.clipLeft
-          // Issue #879 缺口1：每岛目标裁切矩形——缩到自己的零宽度位置
-          const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
-            x: cr.x, y: cr.y, width: 0, height: cr.height
-          }))
-          // Issue #879 评论6148478104：carry-over 是同一物理 Text 的合法接续，
-          // 直接保留原始 renderNodeKey 和 windowInstanceId，不现场 allocateFresh。
-          // 身份冲突由 Planner 在计划建立时处理（给不同源的窗口分配不同 key）。
-          const carryOverRenderNodeKey = w.renderNodeKey
-          const carryOverWinId = w.windowInstanceId
-          ghosts.push({
-            glyphIds: piece.glyphIds,
-            windowId: w.windowId,
-            sourceRevision: w.sourceRevision,
-            sourceKind: w.sourceKind,
-            sourceRunId: w.runId,
-            renderNodeKey: carryOverRenderNodeKey,
-            windowInstanceId: carryOverWinId,
-            utf16Start: piece.sourceUtf16Start,
-            utf16End: piece.sourceUtf16End,
-            currentClipLeft: piece.clipLeft,
-            currentClipRight: piece.clipRight,
-            targetClipLeft: targetClipLeft,
-            targetClipRight: targetClipRight,
-            clipTop: piece.clipTop,
-            clipBottom: piece.clipBottom,
-            glyphX: piece.glyphX,
-            glyphY: piece.glyphY,
-            glyphWidth: piece.glyphWidth,
-            glyphHeight: piece.glyphHeight,
-            offsetX: piece.offsetX,
-            offsetY: piece.offsetY,
-            clipRects: piece.clipRects,
-            islandTargetRects: islandTargetRects,
-            // Issue #879 评论6138480563 问题2：按 piece.glyphIds 过滤父窗口映射，
-            // 子片段只携带属于自己的 glyph 身份所有权，不再复制原父窗口全表。
-            // 否则下轮聚合（FrozenWindowGroupPlan）会用 Array.from(map.keys())
-            // 回填 glyphIds，把已交给其它通道的字错误带回。
-            fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.filterGlyphUtf16Ranges(
-              w.fullWindowGlyphUtf16Ranges, piece.glyphIds
-            ),
-          })
-        }
-        continue
-      }
-
-      // 只处理 deleted 和 carryGhost——insert/reflow 已在上面处理
-      if (w.motionOwnerKind !== 'deleted' && w.motionOwnerKind !== 'carryGhost') {
-        continue
-      }
-      if (w.sourceRevision === newRevision) {
-        continue
-      }
-
-      // 按 glyphId 分区
-      const uncoveredIds: string[] = []
-      for (const gid of w.glyphIds) {
-        if (!planGlyphIds.has(gid)) {
-          uncoveredIds.push(gid)
-        }
-      }
-      // 全部被新 plan 接管——不需要继承残影
-      if (uncoveredIds.length === 0) {
-        continue
-      }
-
-      // Issue #879 复核评论6084020082 问题1+3：用 splitFrozenWindowByGlyphOwnership 拆分
-      const pieces = this.splitFrozenWindowByGlyphOwnership(
-        w, uncoveredIds, newIdentityTable, this.newLayout
-      )
-      for (const piece of pieces) {
-        // Issue #879 复核评论6097927249 问题1：已不可见的 ghost 不得反向生成残影。
-        // piece.clipRects 为空数组表示该 piece 在冻结帧完全不可见，跳过不生成 ghost。
-        if (piece.clipRects.length === 0) {
-          continue
-        }
-        // 目标 clip = 零宽度（继续消退到完全隐藏）
-        const targetClipLeft = piece.clipLeft
-        const targetClipRight = piece.clipLeft
-        // Issue #879 缺口1：每岛目标裁切矩形——缩到自己的零宽度位置
-        const islandTargetRects: ClipRect[] = piece.clipRects.map((cr: ClipRect): ClipRect => ({
-          x: cr.x, y: cr.y, width: 0, height: cr.height
-        }))
-        // Issue #879 评论6148478104：carry-over 是同一物理 Text 的合法接续，
-        // 直接保留原始 renderNodeKey 和 windowInstanceId，不现场 allocateFresh。
-        const carryOverRenderNodeKey = w.renderNodeKey
-        const carryOverWinId = w.windowInstanceId
-        ghosts.push({
-          glyphIds: piece.glyphIds,
-          windowId: w.windowId,
-          sourceRevision: w.sourceRevision,
-          sourceKind: w.sourceKind,
-          sourceRunId: w.runId,
-          renderNodeKey: carryOverRenderNodeKey,
-          windowInstanceId: carryOverWinId,
-          utf16Start: piece.sourceUtf16Start,
-          utf16End: piece.sourceUtf16End,
-          currentClipLeft: piece.clipLeft,
-          currentClipRight: piece.clipRight,
-          targetClipLeft: targetClipLeft,
-          targetClipRight: targetClipRight,
-          clipTop: piece.clipTop,
-          clipBottom: piece.clipBottom,
-          glyphX: piece.glyphX,
-          glyphY: piece.glyphY,
-          glyphWidth: piece.glyphWidth,
-          glyphHeight: piece.glyphHeight,
-          offsetX: piece.offsetX,
-          offsetY: piece.offsetY,
-          clipRects: piece.clipRects,
-          islandTargetRects: islandTargetRects,
-          // Issue #879 评论6138480563 问题2：按 piece.glyphIds 过滤父窗口映射，
-          // 子片段只携带属于自己的 glyph 身份所有权，不再复制原父窗口全表。
-          fullWindowGlyphUtf16Ranges: EditorMotionCoordinator.filterGlyphUtf16Ranges(
-            w.fullWindowGlyphUtf16Ranges, piece.glyphIds
-          ),
-        })
-      }
     }
     return ghosts
   }
@@ -4738,6 +4554,7 @@ export class EditorMotionCoordinator {
    */
   clearWindowInstances(): void {
     this.windowIdAllocator.clear()
+    this.carryOverIdentityCache.clear()
   }
 
   /**
@@ -4767,6 +4584,7 @@ export class EditorMotionCoordinator {
     this.glyphIdentities = GlyphIdentityTable.create(snapshot.text, snapshot.revision)
     this.sourceLayoutRecords.clear()
     this.windowIdAllocator.clear()
+    this.carryOverIdentityCache.clear()
     this.currentSessionId = sessionId
     // 保存新会话的源排版记录
     this.sourceLayoutRecords.set(`${sessionId}-${snapshot.revision}`, {

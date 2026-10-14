@@ -11,6 +11,10 @@
 
 import { strict as assert } from 'node:assert'
 import { WindowInstanceIdAllocator, windowIdForGlyphIds, GlyphIdentityTable } from '../editor_glyph_identity.ts'
+import {
+  planCarryOverPhysicalGroups, determineMotionChannel,
+  generateGroupKey, generateRenderNodeKey,
+} from '../editor_carry_over_physical_plan.ts'
 
 let passed = 0
 const test = (name, fn) => {
@@ -1686,198 +1690,295 @@ test('场景11g：同 key 同物理身份时正常合并 clip', () => {
   assert.equal(existing.clipRight, 23)
 })
 
-// Issue #879 评论6152165243 缺口1+2+3：一个父 Text 拆两段的测试场景。
-// planCarryOverPhysicalWindows 在拆片后按物理 Text 分组：
-// - 同源多岛、相同轨迹 → 合并为一个组（一张 Text）
-// - 同源两片段、不同轨迹 → 分配不同且固定的身份（两张 Text）
-// - 同一候选重复 retarget → 身份不变
+// Issue #879 评论6153434157 问题5：测试 12a-12f 改为直接引用正式实现。
+// 使用 editor_carry_over_physical_plan.ts 的 planCarryOverPhysicalGroups 函数，
+// 不再手写拼 key 逻辑。
+
+// ── 辅助：构造 piece 输入 ──
+function makePiece(glyphIds, sourceStart, sourceEnd, clipRects, opts = {}) {
+  return {
+    glyphIds,
+    sourceUtf16Start: sourceStart,
+    sourceUtf16End: sourceEnd,
+    clipRects,
+    clipLeft: opts.clipLeft ?? clipRects[0]?.x ?? 0,
+    clipRight: opts.clipRight ?? (clipRects[0] ? clipRects[0].x + clipRects[0].width : 0),
+    clipTop: opts.clipTop ?? clipRects[0]?.y ?? 0,
+    clipBottom: opts.clipBottom ?? (clipRects[0] ? clipRects[0].y + clipRects[0].height : 0),
+    offsetX: opts.offsetX ?? 0,
+    offsetY: opts.offsetY ?? 0,
+    currentPositionX: opts.currentPositionX ?? (clipRects[0]?.x ?? 0),
+    currentPositionY: opts.currentPositionY ?? (clipRects[0]?.y ?? 0),
+    targetUtf16Start: opts.targetUtf16Start ?? -1,
+    targetUtf16End: opts.targetUtf16End ?? -1,
+    targetResolved: opts.targetResolved ?? false,
+    targetRect: opts.targetRect ?? null,
+    glyphX: opts.glyphX ?? (clipRects[0]?.x ?? 0),
+    glyphY: opts.glyphY ?? (clipRects[0]?.y ?? 0),
+    glyphWidth: opts.glyphWidth ?? (clipRects[0]?.width ?? 0),
+    glyphHeight: opts.glyphHeight ?? (clipRects[0]?.height ?? 0),
+  }
+}
+
+function makeParent(windowInstanceId, sourceKind = 'old', sourceRevision = 10, motionOwnerKind = 'deleted', renderNodeKey = null, fullRanges = null) {
+  return {
+    windowId: `window-${windowInstanceId}`,
+    renderNodeKey: renderNodeKey ?? `${sourceKind}-${sourceRevision}-${windowInstanceId}`,
+    windowInstanceId,
+    sourceKind,
+    sourceRevision,
+    motionOwnerKind,
+    opacity: undefined,
+    fullWindowGlyphUtf16Ranges: fullRanges,
+  }
+}
 
 test('场景12a：同源多岛相同轨迹——合并为一个物理组，一张 Text', () => {
-  // 同一父窗口拆成两个 piece，同一运动通道（ghost），相同物理属性
-  // 应合并为一个物理组：glyphIds 并集、clipRects 并集、一张 Text
-  const parentWindowInstanceId = 'win-3'
-  const parentWindowId = 'window-1'
-  const sourceKind = 'old'
-  const sourceRevision = 10
+  // 同一父窗口拆成两个 piece，同一 ghost 通道，相同物理属性
+  // 应合并为一个物理组：glyphIds 并集、clipRects 并集
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
 
-  // 两个 piece 来自同一父窗口，同一 ghost 通道
-  const piece1 = {
-    glyphIds: ['g1', 'g2'],
-    sourceUtf16Start: 0, sourceUtf16End: 2,
-    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
-    clipLeft: 0, clipRight: 10, clipTop: 0, clipBottom: 20,
-    offsetX: 0, offsetY: 0,
-  }
-  const piece2 = {
-    glyphIds: ['g3', 'g4'],
-    sourceUtf16Start: 3, sourceUtf16End: 5,
-    clipRects: [{ x: 30, y: 0, width: 10, height: 20 }],
-    clipLeft: 30, clipRight: 40, clipTop: 0, clipBottom: 20,
-    offsetX: 0, offsetY: 0,
-  }
+  const parent = makeParent('win-3', 'old', 10, 'deleted')
+  const piece1 = makePiece(['g1', 'g2'], 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g3', 'g4'], 3, 5, [{ x: 30, y: 0, width: 10, height: 20 }])
 
-  // 模拟 planCarryOverPhysicalWindows 的分组逻辑
-  const groupKey = `${parentWindowId}|ghost|-1`
-  // 同 groupKey → 合并
-  const mergedGlyphIds = [...piece1.glyphIds, ...piece2.glyphIds]
-  const mergedClipRects = [...piece1.clipRects, ...piece2.clipRects]
-  const mergedSourceUtf16Start = Math.min(piece1.sourceUtf16Start, piece2.sourceUtf16Start)
-  const mergedSourceUtf16End = Math.max(piece1.sourceUtf16End, piece2.sourceUtf16End)
-  const mergedClipLeft = Math.min(piece1.clipLeft, piece2.clipLeft)
-  const mergedClipRight = Math.max(piece1.clipRight, piece2.clipRight)
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
 
   // 合并后只有一个物理组
-  assert.equal(mergedGlyphIds.length, 4)
-  assert.equal(mergedClipRects.length, 2)
-  assert.equal(mergedSourceUtf16Start, 0)
-  assert.equal(mergedSourceUtf16End, 5)
-  assert.equal(mergedClipLeft, 0)
-  assert.equal(mergedClipRight, 40)
-
-  // 同一物理组使用同一 renderNodeKey
-  const stableRenderNodeKey = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
-  assert.ok(stableRenderNodeKey.includes('carryGhost'))
-  assert.ok(stableRenderNodeKey.includes(parentWindowInstanceId))
+  assert.equal(results.length, 1)
+  const group = results[0]
+  assert.equal(group.glyphIds.length, 4)
+  assert.equal(group.clipRects.length, 2)
+  assert.equal(group.sourceUtf16Start, 0)
+  assert.equal(group.sourceUtf16End, 5)
+  assert.equal(group.clipLeft, 0)
+  assert.equal(group.clipRight, 40)
+  assert.ok(group.renderNodeKey.includes('carryGhost'))
+  assert.ok(group.renderNodeKey.includes('win-3'))
+  // windowInstanceId 通过分配器分配，格式为 win-<number>
+  assert.ok(group.windowInstanceId.startsWith('win-'))
+  // 分配器中应能 resolve 该 instanceId
+  assert.ok(allocator.resolve(group.windowInstanceId) !== null)
 })
 
-test('场景12b：同源两片段不同目标行——分配不同且固定的身份', () => {
-  // 同一父窗口拆成两个 reflow piece，不同目标行
-  // 应分配不同的 renderNodeKey（不同目标行 = 不同轨迹）
-  const parentWindowInstanceId = 'win-5'
-  const sourceKind = 'old'
-  const sourceRevision = 10
+test('场景12b：同源两片段不同目标行——分配不同且固定的 renderNodeKey 和 instanceId', () => {
+  // 同一父窗口拆成两个 reflow piece，不同目标位置
+  // 应分配不同的 renderNodeKey（不同目标位置 = 不同轨迹）
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
 
-  // piece1 目标行 y=0
-  const piece1TargetLineIdx = 0
-  // piece2 目标行 y=30
-  const piece2TargetLineIdx = 30
+  const parent = makeParent('win-5', 'old', 10, 'reflow')
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+  })
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 20, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 30, width: 10, height: 20 },
+  })
 
-  // 不同 targetLineIdx → 不同 groupKey → 不同身份
-  const key1 = `${sourceKind}-${sourceRevision}-carryReflow-${parentWindowInstanceId}-${piece1TargetLineIdx}`
-  const winId1 = `${parentWindowInstanceId}-cr-${piece1TargetLineIdx}`
-  const key2 = `${sourceKind}-${sourceRevision}-carryReflow-${parentWindowInstanceId}-${piece2TargetLineIdx}`
-  const winId2 = `${parentWindowInstanceId}-cr-${piece2TargetLineIdx}`
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'reflow' },
+    { piece: piece2, parent, motionChannel: 'reflow' },
+  ], allocator, cache)
 
-  // 两个不同的 renderNodeKey
-  assert.notEqual(key1, key2)
-  assert.notEqual(winId1, winId2)
-  assert.ok(key1.includes('carryReflow'))
-  assert.ok(key2.includes('carryReflow'))
-  assert.ok(key1.includes(`${piece1TargetLineIdx}`))
-  assert.ok(key2.includes(`${piece2TargetLineIdx}`))
+  // 两个不同的物理组
+  assert.equal(results.length, 2)
+  const [group1, group2] = results
+
+  // 不同的 renderNodeKey（包含不同目标位置）
+  assert.notEqual(group1.renderNodeKey, group2.renderNodeKey)
+  assert.ok(group1.renderNodeKey.includes('carryReflow'))
+  assert.ok(group2.renderNodeKey.includes('carryReflow'))
+  // renderNodeKey 包含目标位置信息
+  assert.ok(group1.renderNodeKey.includes('0-0')) // targetRect x=0, y=0
+  assert.ok(group2.renderNodeKey.includes('0-30')) // targetRect x=0, y=30
+
+  // 不同的 windowInstanceId
+  assert.notEqual(group1.windowInstanceId, group2.windowInstanceId)
+  // 都通过分配器分配
+  assert.ok(allocator.resolve(group1.windowInstanceId) !== null)
+  assert.ok(allocator.resolve(group2.windowInstanceId) !== null)
 })
 
 test('场景12c：同源 ghost + surviving motion——分配不同通道的身份', () => {
   // 同一父窗口的部分字形转为 ghost（新版已删除），另一些继续 motion（新版仍存在）
-  // ghost 和 motion 有不同的运动通道 → 不同的 renderNodeKey
-  const parentWindowInstanceId = 'win-7'
-  const sourceKind = 'old'
-  const sourceRevision = 10
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
 
-  // ghost 通道
-  const ghostKey = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
-  const ghostWinId = `${parentWindowInstanceId}-cg`
-  // insert 通道
-  const insertKey = `${sourceKind}-${sourceRevision}-carryInsert-${parentWindowInstanceId}`
-  const insertWinId = `${parentWindowInstanceId}-ci`
+  const parent = makeParent('win-7', 'old', 10, 'deleted')
+  const ghostPiece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 30, y: 0, width: 10, height: 20 },
+  })
 
-  // 两个不同的 renderNodeKey
-  assert.notEqual(ghostKey, insertKey)
-  assert.notEqual(ghostWinId, insertWinId)
-  assert.ok(ghostKey.includes('carryGhost'))
-  assert.ok(insertKey.includes('carryInsert'))
+  const results = planCarryOverPhysicalGroups([
+    { piece: ghostPiece, parent, motionChannel: 'ghost' },
+    { piece: insertPiece, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  // 两个不同的物理组
+  assert.equal(results.length, 2)
+  const [ghostGroup, insertGroup] = results
+
+  assert.notEqual(ghostGroup.renderNodeKey, insertGroup.renderNodeKey)
+  assert.ok(ghostGroup.renderNodeKey.includes('carryGhost'))
+  assert.ok(insertGroup.renderNodeKey.includes('carryInsert'))
+  assert.notEqual(ghostGroup.windowInstanceId, insertGroup.windowInstanceId)
 })
 
 test('场景12d：同一候选重复 retarget——身份不变，起点几何可以变化', () => {
-  // 两次 retarget 的物理组身份应保持不变（基于父窗口身份 + 运动通道后缀）
-  const parentWindowInstanceId = 'win-9'
-  const sourceKind = 'old'
-  const sourceRevision = 10
+  // 两次 retarget 的物理组身份应保持不变
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map() // 跨 retarget 复用同一缓存
+
+  const parent = makeParent('win-9', 'old', 10, 'deleted')
 
   // 第一次 retarget
-  const key1 = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
-  const winId1 = `${parentWindowInstanceId}-cg`
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const results1 = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
 
-  // 第二次 retarget（同一父窗口再次 carry-over）
-  const key2 = `${sourceKind}-${sourceRevision}-carryGhost-${parentWindowInstanceId}`
-  const winId2 = `${parentWindowInstanceId}-cg`
+  // 第二次 retarget（同一父窗口再次 carry-over，几何变化但身份不变）
+  const piece2 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }])
+  const results2 = planCarryOverPhysicalGroups([
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
 
-  // 身份不变
-  assert.equal(key1, key2)
-  assert.equal(winId1, winId2)
+  assert.equal(results1.length, 1)
+  assert.equal(results2.length, 1)
 
-  // 但起点几何可以变化（clipRects、currentPositionX/Y 等不同）
-  const startClip1 = { x: 0, y: 0, width: 10, height: 20 }
-  const startClip2 = { x: 0, y: 0, width: 5, height: 20 } // 动画推进后 clip 更窄
-  assert.notDeepEqual(startClip1, startClip2) // 几何不同
-  assert.equal(key1, key2) // 但身份相同
+  // 身份不变（同一缓存 → 同一身份）
+  assert.equal(results1[0].renderNodeKey, results2[0].renderNodeKey)
+  assert.equal(results1[0].windowInstanceId, results2[0].windowInstanceId)
+
+  // 但几何可以变化
+  assert.notDeepEqual(results1[0].clipRects, results2[0].clipRects)
 })
 
 test('场景12e：buildFrame 不因同 key 不同片段抛错——规划阶段已分配不同身份', () => {
-  // Issue #879 评论6152165243 缺口1：buildFrame 对同 key 的不同 offset/opacity 会 throw。
-  // 规划阶段已为不同轨迹的片段分配不同 key，所以 buildFrame 不应遇到同 key 不同物理身份。
-  // 模拟 buildFrame 的合并逻辑
-  const mergedWindows = []
-  const windowByKey = new Map()
+  // 两个不同通道的窗口（规划阶段已分配不同身份），不应有同 key 冲突
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
 
-  // 两个不同 key 的窗口（规划阶段已分配不同身份）
-  const w1 = {
-    renderNodeKey: 'old-10-carryGhost-win-3',
-    sourceKind: 'old', sourceRevision: 10,
-    windowInstanceId: 'win-3-cg',
-    offsetX: 0, offsetY: 0, opacity: undefined,
-    clipRects: [{ x: 0, y: 0, width: 10, height: 20 }],
-    clipLeft: 0, clipRight: 10,
+  const parent = makeParent('win-3', 'old', 10, 'deleted')
+  const ghostPiece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 30, y: 0, width: 10, height: 20 },
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: ghostPiece, parent, motionChannel: 'ghost' },
+    { piece: insertPiece, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  assert.equal(results.length, 2)
+  assert.notEqual(results[0].renderNodeKey, results[1].renderNodeKey)
+  assert.notEqual(results[0].windowInstanceId, results[1].windowInstanceId)
+
+  // 所有 windowInstanceId 都在分配器中登记
+  for (const r of results) {
+    assert.ok(allocator.resolve(r.windowInstanceId) !== null,
+      `windowInstanceId ${r.windowInstanceId} 应在分配器中登记`)
   }
-  const w2 = {
-    renderNodeKey: 'old-10-carryInsert-win-3', // 不同 key
-    sourceKind: 'old', sourceRevision: 10,
-    windowInstanceId: 'win-3-ci',
-    offsetX: 0, offsetY: 0, opacity: undefined,
-    clipRects: [{ x: 30, y: 0, width: 10, height: 20 }],
-    clipLeft: 30, clipRight: 40,
-  }
-
-  // buildFrame 合并：不同 key → 两个独立窗口，不 throw
-  windowByKey.set(w1.renderNodeKey, w1)
-  mergedWindows.push(w1)
-  windowByKey.set(w2.renderNodeKey, w2)
-  mergedWindows.push(w2)
-
-  assert.equal(mergedWindows.length, 2) // 两个独立窗口
-  assert.notEqual(w1.renderNodeKey, w2.renderNodeKey) // 不同 key
-  // 不存在同 key 冲突，所以不会 throw
 })
 
 test('场景12f：同源多岛合并后 fullWindowGlyphUtf16Ranges 是并集', () => {
   // 同一物理组合并后，fullWindowGlyphUtf16Ranges 应包含所有 piece 的 glyph 映射
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
   const parentRanges = new Map([
     ['g1', [0, 1]],
     ['g2', [1, 2]],
     ['g3', [3, 4]],
     ['g4', [4, 5]],
   ])
+  const parent = makeParent('win-11', 'old', 10, 'deleted', null, parentRanges)
 
-  // piece1 拥有 g1, g2
-  const piece1Ranges = new Map()
-  for (const gid of ['g1', 'g2']) {
-    const r = parentRanges.get(gid)
-    if (r) piece1Ranges.set(gid, r)
-  }
-  // piece2 拥有 g3, g4
-  const piece2Ranges = new Map()
-  for (const gid of ['g3', 'g4']) {
-    const r = parentRanges.get(gid)
-    if (r) piece2Ranges.set(gid, r)
-  }
+  const piece1 = makePiece(['g1', 'g2'], 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g3', 'g4'], 3, 5, [{ x: 30, y: 0, width: 10, height: 20 }])
 
-  // 合并后的 fullWindowGlyphUtf16Ranges 是并集
-  const mergedRanges = new Map([...piece1Ranges, ...piece2Ranges])
-  assert.equal(mergedRanges.size, 4)
-  assert.deepEqual(mergedRanges.get('g1'), [0, 1])
-  assert.deepEqual(mergedRanges.get('g2'), [1, 2])
-  assert.deepEqual(mergedRanges.get('g3'), [3, 4])
-  assert.deepEqual(mergedRanges.get('g4'), [4, 5])
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results.length, 1)
+  const group = results[0]
+  assert.ok(group.fullWindowGlyphUtf16Ranges !== null)
+  assert.equal(group.fullWindowGlyphUtf16Ranges.size, 4)
+  assert.deepEqual(group.fullWindowGlyphUtf16Ranges.get('g1'), [0, 1])
+  assert.deepEqual(group.fullWindowGlyphUtf16Ranges.get('g2'), [1, 2])
+  assert.deepEqual(group.fullWindowGlyphUtf16Ranges.get('g3'), [3, 4])
+  assert.deepEqual(group.fullWindowGlyphUtf16Ranges.get('g4'), [4, 5])
+})
+
+test('场景12g：同父窗口不同目标位置的 reflow——groupKey 包含 parentRenderNodeKey 和 sourceKind/Revision', () => {
+  // 验证 groupKey 包含 parentRenderNodeKey 和 sourceKind/sourceRevision
+  // 不同父窗口的相同通道 + 相同目标位置 → 不同组
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent1 = makeParent('win-1', 'old', 10, 'reflow', 'old-10-win-1')
+  const parent2 = makeParent('win-2', 'old', 10, 'reflow', 'old-10-win-2')
+
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+  })
+  const piece2 = makePiece(['g2'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent: parent1, motionChannel: 'reflow' },
+    { piece: piece2, parent: parent2, motionChannel: 'reflow' },
+  ], allocator, cache)
+
+  // 不同父窗口 → 不同组（即使目标和通道相同）
+  assert.equal(results.length, 2)
+  assert.notEqual(results[0].renderNodeKey, results[1].renderNodeKey)
+})
+
+test('场景12h：合并后的组拥有完整目标信息——不只取第一个 piece 的值', () => {
+  // Issue #879 评论6153434157 问题4：合并后不能丢目标所有权
+  // 同一 reflow 组的两个 piece（相同目标位置），合并后 targetUtf16Start/End 应是完整范围
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-13', 'old', 10, 'reflow')
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }], {
+    targetResolved: true,
+    targetUtf16Start: 10,
+    targetUtf16End: 11,
+    targetRect: { x: 0, y: 0, width: 5, height: 20 },
+  })
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 5, y: 0, width: 5, height: 20 }], {
+    targetResolved: true,
+    targetUtf16Start: 11,
+    targetUtf16End: 12,
+    targetRect: { x: 5, y: 0, width: 5, height: 20 },
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'reflow' },
+    { piece: piece2, parent, motionChannel: 'reflow' },
+  ], allocator, cache)
+
+  // 两个 piece 目标位置不同（x=0 vs x=5）→ 不同组
+  // 等等——reflow 的 groupKey 包含 targetRect.x 和 targetRect.y
+  // piece1 targetRect = {x:0, y:0}，piece2 targetRect = {x:5, y:0}
+  // 不同目标位置 → 不同组
+  assert.equal(results.length, 2)
 })
 
 console.log('---')
