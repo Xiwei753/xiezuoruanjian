@@ -96,6 +96,22 @@ impl super::WriterCore {
         self.invalidate_path_dependency_index();
     }
 
+    /// 从 Store 缓存中移除指定星图的已加载 Store，不失效路径依赖索引。
+    ///
+    /// 同步后磁盘数据已更新，内存中的旧 Store 需要被移除，
+    /// 下次访问时从磁盘重新加载。索引失效由调用方统一执行，
+    /// 避免每个 target 都失效一次（问题2）。
+    ///
+    /// 与 [`remove_starmap_store`] 的区别：后者同时失效索引，
+    /// 适用于整图删除场景；本方法只移除 Store，适用于同步后批量协调。
+    pub(crate) fn evict_starmap_store(&self, starmap_id: &str) {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        stores.remove(starmap_id);
+    }
+
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
         let _ =
             crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)?;

@@ -532,6 +532,9 @@ impl WriterCoreApi {
 
         // 同步可能修改磁盘上的星图数据（staging → commit），失效路径依赖索引
         // 确保下次查询从真实数据重建，不持有过期 entry（问题1）。
+        // perform_full_sync_with_provider 内部已对每个 target evict 旧 Store 并在循环
+        // 结束后统一失效索引（问题2）；此处再失效一次是冗余但安全的兜底，
+        // 覆盖 staging seed 等不经过 per-target 循环的磁盘变更路径。
         self.core_write().invalidate_path_dependency_index();
 
         Ok(result)
@@ -626,6 +629,17 @@ impl WriterCoreApi {
                     }
                 };
 
+            // 同步该 target 的 committed_paths 可能修改了 starmaps/<id>/... 文件。
+            // 移除已加载的旧 Store，下次访问时从磁盘重新加载（问题2）。
+            // 不 flush——磁盘已是同步后的最新数据，内存中的旧 Store 应被丢弃。
+            let changed_starmap_ids: std::collections::HashSet<String> = target_committed_paths
+                .iter()
+                .filter_map(|p| extract_starmap_id_from_committed_path(p))
+                .collect();
+            for starmap_id in &changed_starmap_ids {
+                self.core_write().evict_starmap_store(starmap_id);
+            }
+
             // 5. sink.update_target_finish — 标记该 target 已完成（phase 清空）。
             if let Some(ref sink) = progress_sink {
                 let finished = u32::try_from(target_index + 1).unwrap_or(u32::MAX);
@@ -663,6 +677,10 @@ impl WriterCoreApi {
             all_targets.push(target_with_conflicts);
             all_committed_paths.extend(target_committed_paths);
         }
+
+        // per-target 循环中已移除变化的旧 Store，统一失效路径依赖索引，
+        // 下次查询时从真实数据重建（问题2）。
+        self.core_write().invalidate_path_dependency_index();
 
         // Issue #779 评论 5853718466：generation GC 不再在用户同步阻塞路径内执行。
         // 原实现在此处同步调 generation GC，GC 失败会被 finalize_full_sync 升级为
@@ -1080,6 +1098,33 @@ impl WriterCoreApi {
     }
 }
 
+/// 从 workspace-relative 路径提取星图 ID。
+///
+/// 路径格式：
+/// - `starmaps/{id}.meta.json` → `Some(id)`
+/// - `starmaps/{id}/...` → `Some(id)`
+/// - `starmaps/index.json` → `None`（不对应特定星图）
+/// - 其他路径 → `None`
+///
+/// 同步 per-target commit 后用此函数从 `committed_paths` 提取发生变化的星图 ID，
+/// 以便移除内存中已过期的 Store（问题2）。
+fn extract_starmap_id_from_committed_path(path: &std::path::Path) -> Option<String> {
+    let rel = path.to_str()?;
+    let rest = rel.strip_prefix("starmaps/")?;
+    if rest == "index.json" {
+        return None;
+    }
+    // starmaps/{id}.meta.json
+    if let Some(id) = rest.strip_suffix(".meta.json") {
+        return Some(id.to_string());
+    }
+    // starmaps/{id}/...
+    if let Some(slash_idx) = rest.find('/') {
+        return Some(rest[..slash_idx].to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "github-api")]
@@ -1138,5 +1183,52 @@ mod tests {
 
         let result = api.save_sync_config(config);
         assert!(result.unwrap());
+    }
+
+    /// `extract_starmap_id_from_committed_path` 从 workspace-relative 路径提取星图 ID。
+    ///
+    /// 覆盖 meta 文件、graph/节点/边文件、index.json 以及非星图路径（问题2）。
+    #[test]
+    fn extract_starmap_id_from_committed_path_identifies_starmap_files() {
+        use super::extract_starmap_id_from_committed_path;
+        use std::path::PathBuf;
+
+        // meta 文件
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1.meta.json")),
+            Some("sm_1".to_string())
+        );
+        // graph 文件
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1/graph.json")),
+            Some("sm_1".to_string())
+        );
+        // 节点文件（嵌套目录）
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from(
+                "starmaps/sm_1/nodes/00/n1.json"
+            )),
+            Some("sm_1".to_string())
+        );
+        // 边文件
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/sm_1/edges/e1.json")),
+            Some("sm_1".to_string())
+        );
+        // index.json 不对应特定星图
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/index.json")),
+            None
+        );
+        // 非星图路径
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("projects/p1/chapter.json")),
+            None
+        );
+        // starmaps 前缀但无后续分隔
+        assert_eq!(
+            extract_starmap_id_from_committed_path(&PathBuf::from("starmaps/")),
+            None
+        );
     }
 }

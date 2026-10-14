@@ -958,6 +958,9 @@ impl PathDependencyIndex {
     /// 返回的切片借用 `self`。删除节点时同时查 `NodeTarget`、`AnchorTarget`、
     /// `PortalTraversal`；删除 Embed 时查 `EmbedTraversal`；修改 Portal 时查
     /// `PortalTraversal`；删除单个 Anchor 时查 `AnchorTarget` 并按 `target_anchor_id` 过滤。
+    /// `CanvasEndpoint` 用于 `collect_candidate_edge_owners` 按最终画布 ID 收集
+    /// Edge 来源，覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor
+    /// 终点（问题1）。
     pub fn query_dependents(
         &self,
         host_starmap_id: &str,
@@ -992,7 +995,8 @@ impl PathDependencyIndex {
     /// 的 entry（见 [`add_or_replace_source`]）。避免每次从零扫描全库重建索引。
     ///
     /// 通过 [`source_to_keys`] 反查表精准定位受影响的倒排表 key，只在这些 key
-    /// 的 Vec 中 retain 移除该来源，不再遍历整个 `entries`（问题4）。
+    /// 的 Vec 中 retain 移除该来源，不再遍历整个 `entries`（问题4）。retain 后
+    /// 变空的 key 在循环中即时 `remove`，不扫全表（问题3）。
     pub fn remove_source(
         &mut self,
         owner_starmap_id: &str,
@@ -1008,12 +1012,19 @@ impl PathDependencyIndex {
             return;
         };
         for dep_key in affected_keys {
-            if let Some(sources) = self.entries.get_mut(&dep_key) {
+            // 先在借用作用域内 retain，记录是否变空；释放借用后再 remove，
+            // 避免 `get_mut` 的可变借用与 `entries.remove` 冲突。
+            let should_remove = if let Some(sources) = self.entries.get_mut(&dep_key) {
                 sources.retain(|s| !is_same_source(s, owner_starmap_id, source_kind, source_id));
+                sources.is_empty()
+            } else {
+                false
+            };
+            // 即时删除已空的 key，不扫全表（问题3）。
+            if should_remove {
+                self.entries.remove(&dep_key);
             }
         }
-        // 清理空的 Vec，保持索引紧凑。
-        self.entries.retain(|_, v| !v.is_empty());
     }
 
     /// 两阶段更新的第一阶段：纯计算新路径产生的依赖事实，不修改索引。
@@ -1211,5 +1222,269 @@ impl PathDependencyIndex {
             kind: edge.kind.clone(),
             label: edge.label.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::starmap::graph::resolve::{PathDependencyFact, PathDependencyKind};
+    use crate::starmap::navigation::StarMapNavigationRoute;
+    use crate::starmap::semantic::{StarMapProvenance, StarMapTargetDetail};
+    use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
+    use crate::starmap::types::{
+        StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapGraph, StarMapPoint,
+    };
+
+    /// 问题1：CanvasEndpoint 漏线修复。
+    ///
+    /// 路径 `A/[EnterEmbed(e→B)]/Starmap` 的终点是 Starmap（非 Node/Anchor），
+    /// 修复前 `extract_path_dependency_facts` 不产出 CanvasEndpoint 事实，
+    /// `collect_candidate_edge_owners(B)` 找不到图 A 的 Edge 来源，edge1 被漏掉。
+    /// 修复后产出 CanvasEndpoint(host=B)，候选集合包含 A，edge1 被正确收集。
+    #[test]
+    fn canvas_endpoint_fixes_missed_edge_to_starmap_target() {
+        // 图 A：一个 Edge（to 端穿越 embed e 到图 B 的 Starmap 终点）+ embed e
+        let edge_to = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e".to_string(),
+            }],
+            target: StarMapTargetDetail::Starmap,
+        };
+        let edge_from = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        };
+        let edge = StarMapEdge {
+            id: "edge1".to_string(),
+            from: edge_from,
+            to: edge_to,
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let embed = StarMapEmbed {
+            instance_id: "e".to_string(),
+            target_starmap_id: "B".to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: "A".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let graph_a = StarMapGraph {
+            starmap_id: "A".to_string(),
+            nodes: vec![],
+            edges: vec![edge],
+            embeds: vec![embed],
+            links: vec![],
+            hyperlinks: vec![],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "B".to_string(),
+            ..Default::default()
+        };
+
+        let mut overlays = std::collections::HashMap::new();
+        overlays.insert("A".to_string(), graph_a);
+        overlays.insert("B".to_string(), graph_b);
+        let context = GraphResolverContext {
+            app_data_root: std::path::PathBuf::new(),
+            overlays,
+        };
+
+        // 构建反向依赖索引
+        let index = PathDependencyIndex::build(&context, &["A".to_string(), "B".to_string()])
+            .expect("build index should succeed");
+
+        // 导航路由：A → EnterEmbed(e) → B
+        let route = StarMapNavigationRoute {
+            root_starmap_id: "A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e".to_string(),
+            }],
+        };
+
+        // 查询画布 B 的连接：应包含图 A 的 edge1
+        let connections = index
+            .query_connections_for_canvas(&route, &context)
+            .expect("query should succeed");
+
+        assert!(
+            connections.iter().any(|c| c.edge_id == "edge1"),
+            "CanvasEndpoint 修复后，to 端为 Starmap 终点的 Edge 不应被漏掉；\
+             实际得到 {:?}",
+            connections
+                .iter()
+                .map(|c| c.edge_id.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// 问题1 补充：CanvasEndpoint 也覆盖 ChapterRange 终点。
+    ///
+    /// 路径 `A/[EnterEmbed(e→B)]/ChapterRange` 的终点是 ChapterRange（非 Node/Anchor），
+    /// 同样依赖 CanvasEndpoint 事实让 `collect_candidate_edge_owners` 找到图 A。
+    #[test]
+    fn canvas_endpoint_covers_chapter_range_target() {
+        let edge_to = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e".to_string(),
+            }],
+            target: StarMapTargetDetail::ChapterRange {
+                project_id: None,
+                volume_id: None,
+                chapter_id: "ch1".to_string(),
+                range_start: Some(0),
+                range_end: Some(10),
+            },
+        };
+        let edge_from = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        };
+        let edge = StarMapEdge {
+            id: "edge-cr".to_string(),
+            from: edge_from,
+            to: edge_to,
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let embed = StarMapEmbed {
+            instance_id: "e".to_string(),
+            target_starmap_id: "B".to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: "A".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let graph_a = StarMapGraph {
+            starmap_id: "A".to_string(),
+            nodes: vec![],
+            edges: vec![edge],
+            embeds: vec![embed],
+            links: vec![],
+            hyperlinks: vec![],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "B".to_string(),
+            ..Default::default()
+        };
+
+        let mut overlays = std::collections::HashMap::new();
+        overlays.insert("A".to_string(), graph_a);
+        overlays.insert("B".to_string(), graph_b);
+        let context = GraphResolverContext {
+            app_data_root: std::path::PathBuf::new(),
+            overlays,
+        };
+
+        let index = PathDependencyIndex::build(&context, &["A".to_string(), "B".to_string()])
+            .expect("build index should succeed");
+
+        let route = StarMapNavigationRoute {
+            root_starmap_id: "A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e".to_string(),
+            }],
+        };
+
+        let connections = index
+            .query_connections_for_canvas(&route, &context)
+            .expect("query should succeed");
+
+        assert!(
+            connections.iter().any(|c| c.edge_id == "edge-cr"),
+            "CanvasEndpoint 应覆盖 ChapterRange 终点，edge-cr 不应被漏掉"
+        );
+    }
+
+    /// 问题3：remove_source 即时删除空 key，不扫全表。
+    ///
+    /// 两个来源（edge1/edge2）指向同一个 dep_key。移除 edge1 后 dep_key 仍在
+    /// （edge2 还在）；移除 edge2 后 dep_key 应被即时删除，entries 不残留空 Vec。
+    #[test]
+    fn remove_source_immediately_deletes_empty_key() {
+        let path = StarMapTargetPath {
+            starmap_id: "A".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Starmap,
+        };
+        let facts = vec![PathDependencyFact {
+            host_starmap_id: "A".to_string(),
+            kind: PathDependencyKind::CanvasEndpoint,
+            object_id: "A".to_string(),
+            anchor_id: None,
+        }];
+
+        let mut index = PathDependencyIndex::default();
+        // 两个来源指向同一个 dep_key (A, CanvasEndpoint, A)
+        index.insert_facts(
+            "A",
+            CrossCanvasRefSourceKind::EdgeFrom,
+            "edge1",
+            &path,
+            &None,
+            facts.clone(),
+        );
+        index.insert_facts(
+            "A",
+            CrossCanvasRefSourceKind::EdgeTo,
+            "edge2",
+            &path,
+            &None,
+            facts,
+        );
+
+        let dep_key = (
+            "A".to_string(),
+            PathDependencyKind::CanvasEndpoint,
+            "A".to_string(),
+        );
+
+        // 移除 edge1：dep_key 还在（edge2 仍在）
+        index.remove_source("A", &CrossCanvasRefSourceKind::EdgeFrom, "edge1");
+        assert!(
+            index.entries.contains_key(&dep_key),
+            "移除一个来源后，仍有其他来源的 dep_key 不应被删除"
+        );
+        assert_eq!(
+            index.entries.get(&dep_key).map(|v| v.len()),
+            Some(1),
+            "移除 edge1 后应只剩 edge2 的来源"
+        );
+
+        // 移除 edge2：dep_key 应被即时删除
+        index.remove_source("A", &CrossCanvasRefSourceKind::EdgeTo, "edge2");
+        assert!(
+            !index.entries.contains_key(&dep_key),
+            "移除最后一个来源后，空 dep_key 应被即时删除，不残留空 Vec"
+        );
+        assert!(
+            index.entries.iter().all(|(_, v)| !v.is_empty()),
+            "entries 中不应残留任何空 Vec"
+        );
     }
 }

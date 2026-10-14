@@ -457,15 +457,21 @@ pub(crate) fn resolve_status_to_error(
 ///
 /// - `NodeTarget`：路径终点落在某图的 Node（`object_id` = node_id）
 /// - `AnchorTarget`：路径终点落在某图的 Anchor（`object_id` = node_id，
-///   `anchor_id` 记入依赖事实；删除节点连带删除其所有锚点，故以 node_id 为主键）
+///   `anchor_id` 计入依赖事实；删除节点连带删除其所有锚点，故以 node_id 为主键）
 /// - `PortalTraversal`：路径途中穿越某图的 Portal 节点（`object_id` = node_id）
 /// - `EmbedTraversal`：路径途中穿越某图的 Embed 实例（`object_id` = instance_id）
+/// - `CanvasEndpoint`：路径已成功到达终点画布，记录最终 canvas ID。
+///   用于 [`crate::starmap::store::relation_index::PathDependencyIndex`]
+///   的 `collect_candidate_edge_owners` 按最终画布找 Edge 来源，
+///   覆盖 Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点。
+///   `object_id` = 最终 canvas ID（即 `host_starmap_id`）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PathDependencyKind {
     NodeTarget,
     AnchorTarget,
     PortalTraversal,
     EmbedTraversal,
+    CanvasEndpoint,
 }
 
 /// 单条路径解析产生的单个依赖事实。
@@ -575,6 +581,12 @@ pub fn extract_path_dependency_facts(
 ///
 /// 读取错误返回 `Err`；终点对象不存在（`MissingNode`/`MissingAnchor`）则不追加、
 /// 不报错（路径悬空，但途中穿越依赖已由调用方收集）。
+///
+/// 路径**已成功到达终点画布**时，额外产出一条 `CanvasEndpoint` 事实
+/// （`host_starmap_id` 和 `object_id` 均为最终画布 ID），供
+/// [`crate::starmap::store::relation_index::PathDependencyIndex`] 的
+/// `collect_candidate_edge_owners` 按最终画布收集 Edge 来源，覆盖
+/// Starmap / ChapterRange / Entity / External 等非 Node/Anchor 终点（问题1）。
 fn push_terminal_dependency_facts(
     context: &GraphResolverContext,
     current_starmap_id: &str,
@@ -583,15 +595,22 @@ fn push_terminal_dependency_facts(
 ) -> Result<(), crate::error::Error> {
     use crate::starmap::semantic::StarMapTargetResolveStatus as Status;
 
+    // 路径是否已成功到达终点画布。只有成功到达才产出 CanvasEndpoint 事实，
+    // 悬空路径（MissingNode/MissingAnchor 等）不记录成有效终点。
+    let mut reached_canvas = false;
+
     match target {
         StarMapTargetDetail::Node { node_id } => {
             match lookup_node(context, current_starmap_id, node_id) {
-                Ok(Some(_)) => facts.push(PathDependencyFact {
-                    host_starmap_id: current_starmap_id.to_string(),
-                    kind: PathDependencyKind::NodeTarget,
-                    object_id: node_id.clone(),
-                    anchor_id: None,
-                }),
+                Ok(Some(_)) => {
+                    facts.push(PathDependencyFact {
+                        host_starmap_id: current_starmap_id.to_string(),
+                        kind: PathDependencyKind::NodeTarget,
+                        object_id: node_id.clone(),
+                        anchor_id: None,
+                    });
+                    reached_canvas = true;
+                }
                 Ok(None) => {}
                 Err(status) => return Err(resolve_status_to_error(status)),
             }
@@ -606,6 +625,7 @@ fn push_terminal_dependency_facts(
                             object_id: node_id.clone(),
                             anchor_id: Some(anchor_id.clone()),
                         });
+                        reached_canvas = true;
                     }
                 }
                 Ok(None) => {}
@@ -622,11 +642,25 @@ fn push_terminal_dependency_facts(
                     return Err(resolve_status_to_error(Status::InvalidRange));
                 }
             }
+            reached_canvas = true;
         }
         StarMapTargetDetail::Starmap => {
             check_starmap_readable(context, current_starmap_id).map_err(resolve_status_to_error)?;
+            reached_canvas = true;
         }
-        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {}
+        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {
+            reached_canvas = true;
+        }
     }
+
+    if reached_canvas {
+        facts.push(PathDependencyFact {
+            host_starmap_id: current_starmap_id.to_string(),
+            kind: PathDependencyKind::CanvasEndpoint,
+            object_id: current_starmap_id.to_string(),
+            anchor_id: None,
+        });
+    }
+
     Ok(())
 }
