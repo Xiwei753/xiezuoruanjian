@@ -459,17 +459,24 @@ impl SujianEditorItem {
         //（IME commit 改变了段落数）分配正确 ID，使 canonical_snapshot 中的
         // paragraph_id 与后续 promote_prepared_layout 重建的 store ID 一致
         //（两次 rebuild 对相同 text 产生相同 ID）。
-        self.editor_layout
-            .paragraph_store_mut()
-            .rebuild_from_text(
-                committed_text,
-                font_size,
-                font_family,
-                line_spacing,
-                text_indent,
-                padding,
-                width,
-            );
+        // Issue #901 第三十八轮缺口3: 不再无条件 rebuild_from_text。
+        // 检查 store 段落数是否与 committed_text 段落数匹配。匹配则跳过 rebuild
+        //（store 已通过增量排版同步，ID 序列有效），不匹配才 rebuild。
+        let committed_para_count = committed_text.split('\n').count();
+        let store_para_count = self.editor_layout.paragraph_store().paragraph_count();
+        if store_para_count != committed_para_count {
+            self.editor_layout
+                .paragraph_store_mut()
+                .rebuild_from_text(
+                    committed_text,
+                    font_size,
+                    font_family,
+                    line_spacing,
+                    text_indent,
+                    padding,
+                    width,
+                );
+        }
         let paragraph_ids: Vec<crate::editor::layout::ParagraphId> =
             self.editor_layout.paragraph_store().paragraph_ids();
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
