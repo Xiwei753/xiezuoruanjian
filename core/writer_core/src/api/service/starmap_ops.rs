@@ -1255,7 +1255,7 @@ impl WriterCoreApi {
     fn build_resolver_context(
         &self,
         root_starmap_id: &str,
-    ) -> Result<crate::starmap::graph::resolve::GraphResolverContext, String> {
+    ) -> Result<crate::starmap::graph::resolve::GraphResolverContext, WriterError> {
         let core = self.core_write();
         let mut stores = core
             .starmap_stores
@@ -1269,9 +1269,11 @@ impl WriterCoreApi {
                 .or_insert_with(|| {
                     crate::starmap::store::StarMapStore::new(&core.app_data_root, root_starmap_id)
                 });
-            store
-                .ensure_fully_loaded()
-                .map_err(|e| format!("build_resolver_context: ensure_fully_loaded failed: {e:?}"))?;
+            store.ensure_fully_loaded().map_err(|e| {
+                WriterError::Other(format!(
+                    "build_resolver_context: ensure_fully_loaded failed: {e:?}"
+                ))
+            })?;
         }
 
         // 只放入已完成后台全量加载的 Store 的图快照
@@ -1299,14 +1301,18 @@ impl WriterCoreApi {
         &self,
         root_starmap_id: String,
         segments: Vec<crate::api::types::StarMapPathSegmentDto>,
-    ) -> Result<crate::api::types::StarMapNavigationLocationDto, String> {
+    ) -> Result<crate::api::types::StarMapNavigationLocationDto, WriterError> {
         let context = self.build_resolver_context(&root_starmap_id)?;
 
         let core_segments = segments
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, crate::error::Error>>()
-            .map_err(|e| format!("resolve_starmap_navigation: segment conversion failed: {e:?}"))?;
+            .map_err(|e| {
+                WriterError::Other(format!(
+                    "resolve_starmap_navigation: segment conversion failed: {e:?}"
+                ))
+            })?;
 
         let route = crate::starmap::navigation::StarMapNavigationRoute {
             root_starmap_id,
@@ -1314,7 +1320,9 @@ impl WriterCoreApi {
         };
 
         let location = crate::starmap::navigation::resolve_navigation_route(&context, &route)
-            .map_err(|e| format!("resolve_starmap_navigation: resolve failed: {e:?}"))?;
+            .map_err(|e| {
+                WriterError::Other(format!("resolve_starmap_navigation: resolve failed: {e:?}"))
+            })?;
 
         Ok(location.into())
     }
@@ -1323,26 +1331,24 @@ impl WriterCoreApi {
     ///
     /// 先解析当前 route 确认当前位置有效，再追加 `EnterEmbed` 段，
     /// 最后重新解析新 route 验证整体有效性。
-    /// 返回更新后的 `(StarMapNavigationRoute, StarMapNavigationLocation)`。
+    /// 返回 `EnterStarmapResultDto`（更新后的 route + location）。
     pub fn enter_starmap_embed(
         &self,
         root_starmap_id: String,
         segments: Vec<crate::api::types::StarMapPathSegmentDto>,
         instance_id: String,
-    ) -> Result<
-        (
-            crate::api::types::StarMapNavigationRouteDto,
-            crate::api::types::StarMapNavigationLocationDto,
-        ),
-        String,
-    > {
+    ) -> Result<crate::api::types::EnterStarmapResultDto, WriterError> {
         let context = self.build_resolver_context(&root_starmap_id)?;
 
         let core_segments = segments
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, crate::error::Error>>()
-            .map_err(|e| format!("enter_starmap_embed: segment conversion failed: {e:?}"))?;
+            .map_err(|e| {
+                WriterError::Other(format!(
+                    "enter_starmap_embed: segment conversion failed: {e:?}"
+                ))
+            })?;
 
         let route = crate::starmap::navigation::StarMapNavigationRoute {
             root_starmap_id,
@@ -1350,36 +1356,38 @@ impl WriterCoreApi {
         };
 
         let (new_route, new_location) =
-            crate::starmap::navigation::enter_embed(&context, &route, &instance_id)
-                .map_err(|e| format!("enter_starmap_embed: enter failed: {e:?}"))?;
+            crate::starmap::navigation::enter_embed(&context, &route, &instance_id).map_err(
+                |e| WriterError::Other(format!("enter_starmap_embed: enter failed: {e:?}")),
+            )?;
 
-        Ok((new_route.into(), new_location.into()))
+        Ok(crate::api::types::EnterStarmapResultDto {
+            route: new_route.into(),
+            location: new_location.into(),
+        })
     }
 
     /// 通过 Portal 节点进入子画布。
     ///
     /// 先解析当前 route 确认当前位置有效，再追加 `EnterPortal` 段，
     /// 最后重新解析新 route 验证整体有效性。
-    /// 返回更新后的 `(StarMapNavigationRoute, StarMapNavigationLocation)`。
+    /// 返回 `EnterStarmapResultDto`（更新后的 route + location）。
     pub fn enter_starmap_portal(
         &self,
         root_starmap_id: String,
         segments: Vec<crate::api::types::StarMapPathSegmentDto>,
         node_id: String,
-    ) -> Result<
-        (
-            crate::api::types::StarMapNavigationRouteDto,
-            crate::api::types::StarMapNavigationLocationDto,
-        ),
-        String,
-    > {
+    ) -> Result<crate::api::types::EnterStarmapResultDto, WriterError> {
         let context = self.build_resolver_context(&root_starmap_id)?;
 
         let core_segments = segments
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>, crate::error::Error>>()
-            .map_err(|e| format!("enter_starmap_portal: segment conversion failed: {e:?}"))?;
+            .map_err(|e| {
+                WriterError::Other(format!(
+                    "enter_starmap_portal: segment conversion failed: {e:?}"
+                ))
+            })?;
 
         let route = crate::starmap::navigation::StarMapNavigationRoute {
             root_starmap_id,
@@ -1387,46 +1395,65 @@ impl WriterCoreApi {
         };
 
         let (new_route, new_location) =
-            crate::starmap::navigation::enter_portal(&context, &route, &node_id)
-                .map_err(|e| format!("enter_starmap_portal: enter failed: {e:?}"))?;
+            crate::starmap::navigation::enter_portal(&context, &route, &node_id).map_err(|e| {
+                WriterError::Other(format!("enter_starmap_portal: enter failed: {e:?}"))
+            })?;
 
-        Ok((new_route.into(), new_location.into()))
+        Ok(crate::api::types::EnterStarmapResultDto {
+            route: new_route.into(),
+            location: new_location.into(),
+        })
     }
 
-    /// 规划跨画布边：计算宿主图 ID、from/to 路径和 edge_id。
+    /// 创建跨画布边并真正写入宿主图 Store（事务操作）。
     ///
-    /// 两个端点通过 `StarMapEndpointSelection`（route + target）描述，
-    /// 函数找到最长公共前缀对应的宿主图，生成 edge_id 和两条 `StarMapTargetPath`。
-    /// 不同根星图无共同宿主时返回错误。
+    /// 转发到 facade 的 [`WriterCore::create_cross_canvas_edge`]，后者在同一次
+    /// 写操作内完成 plan + 构造 Edge + 写入 Store + validate。返回
+    /// `CreateCrossCanvasEdgeResultDto`（`ownerStarmapId` + 完整 `edge`），
+    /// 供平台端后续修改/删除原始边。
     pub fn create_cross_canvas_edge(
         &self,
         from: crate::api::types::StarMapEndpointSelectionDto,
         to: crate::api::types::StarMapEndpointSelectionDto,
-    ) -> Result<
-        (
-            String,
-            crate::api::types::StarMapTargetPathDto,
-            crate::api::types::StarMapTargetPathDto,
-        ),
-        String,
-    > {
-        let root_starmap_id = from.route.root_starmap_id.clone();
-        let context = self.build_resolver_context(&root_starmap_id)?;
-
+        kind: crate::api::types::StarMapEdgeKindDto,
+        label: Option<String>,
+        payload: Option<String>,
+    ) -> Result<crate::api::types::CreateCrossCanvasEdgeResultDto, WriterError> {
         let from_core: crate::starmap::connections::StarMapEndpointSelection =
             from.try_into().map_err(|e: crate::error::Error| {
-                format!("create_cross_canvas_edge: from conversion failed: {e:?}")
+                WriterError::Other(format!(
+                    "create_cross_canvas_edge: from conversion failed: {e:?}"
+                ))
             })?;
         let to_core: crate::starmap::connections::StarMapEndpointSelection =
             to.try_into().map_err(|e: crate::error::Error| {
-                format!("create_cross_canvas_edge: to conversion failed: {e:?}")
+                WriterError::Other(format!(
+                    "create_cross_canvas_edge: to conversion failed: {e:?}"
+                ))
             })?;
 
-        let (edge_id, from_path, to_path) =
-            crate::starmap::connections::plan_cross_canvas_edge(&context, &from_core, &to_core)
-                .map_err(|e| format!("create_cross_canvas_edge: plan failed: {e:?}"))?;
+        let payload_core = payload
+            .map(|s| {
+                serde_json::from_str::<serde_json::Value>(&s).map_err(crate::error::Error::from)
+            })
+            .transpose()
+            .map_err(|e| {
+                WriterError::Other(format!(
+                    "create_cross_canvas_edge: payload parse failed: {e:?}"
+                ))
+            })?;
 
-        Ok((edge_id, from_path.into(), to_path.into()))
+        let result = self
+            .core_write()
+            .create_cross_canvas_edge(from_core, to_core, kind.into(), label, payload_core)
+            .map_err(|e| {
+                WriterError::Other(format!("create_cross_canvas_edge: write failed: {e:?}"))
+            })?;
+
+        Ok(crate::api::types::CreateCrossCanvasEdgeResultDto {
+            owner_starmap_id: result.owner_starmap_id,
+            edge: result.edge.into(),
+        })
     }
 
     /// 列出与特定画布或目标相关的所有连接。
@@ -1438,19 +1465,23 @@ impl WriterCoreApi {
         &self,
         route: crate::api::types::StarMapNavigationRouteDto,
         target: Option<crate::api::types::StarMapTargetDetailDto>,
-    ) -> Result<Vec<crate::api::types::StarMapConnectionInfoDto>, String> {
+    ) -> Result<Vec<crate::api::types::StarMapConnectionInfoDto>, WriterError> {
         let root_starmap_id = route.root_starmap_id.clone();
         let context = self.build_resolver_context(&root_starmap_id)?;
 
         let core_route: crate::starmap::navigation::StarMapNavigationRoute =
             route.try_into().map_err(|e: crate::error::Error| {
-                format!("list_starmap_connections: route conversion failed: {e:?}")
+                WriterError::Other(format!(
+                    "list_starmap_connections: route conversion failed: {e:?}"
+                ))
             })?;
 
         let connections = if let Some(target_dto) = target {
             let core_target: crate::starmap::semantic::StarMapTargetDetail =
                 target_dto.try_into().map_err(|e: crate::error::Error| {
-                    format!("list_starmap_connections: target conversion failed: {e:?}")
+                    WriterError::Other(format!(
+                        "list_starmap_connections: target conversion failed: {e:?}"
+                    ))
                 })?;
             crate::starmap::connections::list_connections_for_target(
                 &context,
@@ -1459,7 +1490,10 @@ impl WriterCoreApi {
             )
         } else {
             crate::starmap::connections::list_connections_for_canvas(&context, &core_route)
-        };
+        }
+        .map_err(|e| {
+            WriterError::Other(format!("list_starmap_connections: query failed: {e:?}"))
+        })?;
 
         Ok(connections.into_iter().map(Into::into).collect())
     }

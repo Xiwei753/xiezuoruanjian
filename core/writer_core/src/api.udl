@@ -892,6 +892,42 @@ dictionary StarMapEdgePatchInputDto {
     StarMapTargetPathDto? to;
 };
 
+// ── 星图导航与跨画布连线 DTO ──
+
+dictionary StarMapNavigationRouteDto {
+    string root_starmap_id;
+    sequence<StarMapPathSegmentDto> segments;
+};
+
+dictionary StarMapNavigationLocationDto {
+    string current_starmap_id;
+    sequence<string> traversed_starmap_ids;
+};
+
+dictionary EnterStarmapResultDto {
+    StarMapNavigationRouteDto route;
+    StarMapNavigationLocationDto location;
+};
+
+dictionary StarMapEndpointSelectionDto {
+    StarMapNavigationRouteDto route;
+    StarMapTargetDetailDto target;
+};
+
+dictionary StarMapConnectionInfoDto {
+    string owner_starmap_id;
+    string edge_id;
+    StarMapTargetPathDto from;
+    StarMapTargetPathDto to;
+    StarMapEdgeKindDto kind;
+    string? label;
+};
+
+dictionary CreateCrossCanvasEdgeResultDto {
+    string owner_starmap_id;
+    StarMapEdgeDto edge;
+};
+
 enum StarMapNodeKindDto {
     "Character",
     "Event",
@@ -1302,6 +1338,23 @@ interface WriterAppService {
 
     [Throws=WriterError]
     StarMapPhasedSnapshotDto get_starmap_phased_snapshot(string starmap_id, PhasedSnapshotRequestDto request);
+
+    // ── 星图导航与跨画布连线 ──
+
+    [Throws=WriterError]
+    StarMapNavigationLocationDto resolve_starmap_navigation(string root_starmap_id, sequence<StarMapPathSegmentDto> segments);
+
+    [Throws=WriterError]
+    EnterStarmapResultDto enter_starmap_embed(string root_starmap_id, sequence<StarMapPathSegmentDto> segments, string instance_id);
+
+    [Throws=WriterError]
+    EnterStarmapResultDto enter_starmap_portal(string root_starmap_id, sequence<StarMapPathSegmentDto> segments, string node_id);
+
+    [Throws=WriterError]
+    CreateCrossCanvasEdgeResultDto create_cross_canvas_edge(StarMapEndpointSelectionDto from, StarMapEndpointSelectionDto to, StarMapEdgeKindDto kind, string? label, string? payload);
+
+    [Throws=WriterError]
+    sequence<StarMapConnectionInfoDto> list_starmap_connections(StarMapNavigationRouteDto route, StarMapTargetDetailDto? target);
 
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();

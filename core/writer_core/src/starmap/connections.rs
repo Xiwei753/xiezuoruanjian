@@ -18,13 +18,16 @@
 
 use std::path::Path;
 
-use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext, ResolvedTarget};
+use crate::error::Error;
+use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
 use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::{StarMapTargetDetail, StarMapTargetResolveStatus};
-use crate::starmap::store::meta::GraphMeta;
+use crate::starmap::store::load::phased::load_current_graph_meta;
 use crate::starmap::types::reference::{StarMapPathSegment, StarMapTargetPath};
-use crate::starmap::types::{StarMapEdge, StarMapEdgeKind};
+use crate::starmap::types::{
+    StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapHyperlink, StarMapLink,
+};
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -161,34 +164,45 @@ fn longest_common_prefix_len(a: &[StarMapPathSegment], b: &[StarMapPathSegment])
 
 /// 列出指向特定目标的所有连接。
 ///
-/// 查找当前画布和所有祖先图中的 Edge，其中至少一端解析后指向
-/// `(current_starmap_id, target)`。前端不应为了看当前层连线，
+/// 查找当前画布和所有祖先图中的 Edge，其中至少一端通过 route-aware 匹配
+/// 指向 `(current_starmap_id, target)`。前端不应为了看当前层连线，
 /// 自己递归读取所有祖先 graph 再猜路径。
+///
+/// **route-aware 匹配**：Edge 端点的 `segments` 必须与从该祖先进入当前画布的
+/// 完整实例路径后缀完全一致，而非仅比较 `final_starmap_id`。这确保同一星图的
+/// 两个不同 Embed 实例（如 `e1→B`、`e2→B`）具有可区分的访问上下文。
 ///
 /// 返回的每条 `StarMapConnectionInfo` 包含 Edge 所在的宿主星图 ID、
 /// Edge ID、from/to 路径、类型和标签。
+///
+/// 读取失败（磁盘 IO、JSON 解析、schema 版本不兼容）时返回 `Err`，
+/// 不把读取失败伪装成"没有连接"。
 pub fn list_connections_for_target(
     context: &GraphResolverContext,
     route: &StarMapNavigationRoute,
     target: &StarMapTargetDetail,
-) -> Vec<StarMapConnectionInfo> {
-    let location = match resolve_navigation_route(context, route) {
-        Ok(loc) => loc,
-        Err(_) => return Vec::new(),
-    };
+) -> crate::error::Result<Vec<StarMapConnectionInfo>> {
+    let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
 
-    let current_starmap_id = &location.current_starmap_id;
     let mut results = Vec::new();
 
-    for ancestor_starmap_id in &location.traversed_starmap_ids {
-        let edges = load_graph_edges(context, ancestor_starmap_id);
+    for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
+        let route_from_ancestor = &route.segments[i..];
+        let edges = load_graph_edges(context, ancestor_starmap_id)?;
 
         for edge in &edges {
-            let from_resolved = resolve_target(context, &edge.from);
-            let to_resolved = resolve_target(context, &edge.to);
-
-            let from_matches = matches_target(&from_resolved, current_starmap_id, target);
-            let to_matches = matches_target(&to_resolved, current_starmap_id, target);
+            let from_matches = route_aware_endpoint_matches(
+                &edge.from,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                Some(target),
+            );
+            let to_matches = route_aware_endpoint_matches(
+                &edge.to,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                Some(target),
+            );
 
             if from_matches || to_matches {
                 results.push(StarMapConnectionInfo {
@@ -203,7 +217,7 @@ pub fn list_connections_for_target(
         }
     }
 
-    results
+    Ok(results)
 }
 
 // ---------------------------------------------------------------------------
@@ -212,27 +226,28 @@ pub fn list_connections_for_target(
 
 /// 列出与特定画布相关的所有连接。
 ///
-/// 返回当前画布中的所有 Edge，以及存于祖先图但至少一端解析后落在当前画布的 Edge。
-/// 前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
+/// 返回当前画布中的所有 Edge，以及存于祖先图但至少一端通过 route-aware 匹配
+/// 落在当前画布的 Edge。前端不应为了看当前层连线，自己递归读取所有祖先 graph
+/// 再猜路径。
 ///
-/// 返回的每条 `StarMapConnectionInfo` 包含 Edge 所在的宿主星图 ID、
-/// Edge ID、from/to 路径、类型和标签。
+/// **route-aware 匹配**：Edge 端点的 `segments` 必须与从该祖先进入当前画布的
+/// 完整实例路径后缀完全一致，而非仅比较 `final_starmap_id`。
+///
+/// 读取失败（磁盘 IO、JSON 解析、schema 版本不兼容）时返回 `Err`，
+/// 不把读取失败伪装成"没有连接"。
+#[allow(clippy::excessive_nesting)]
 pub fn list_connections_for_canvas(
     context: &GraphResolverContext,
     route: &StarMapNavigationRoute,
-) -> Vec<StarMapConnectionInfo> {
-    let location = match resolve_navigation_route(context, route) {
-        Ok(loc) => loc,
-        Err(_) => return Vec::new(),
-    };
+) -> crate::error::Result<Vec<StarMapConnectionInfo>> {
+    let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
 
-    let current_starmap_id = &location.current_starmap_id;
     let mut results = Vec::new();
 
     let last_idx = location.traversed_starmap_ids.len().saturating_sub(1);
 
     for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
-        let edges = load_graph_edges(context, ancestor_starmap_id);
+        let edges = load_graph_edges(context, ancestor_starmap_id)?;
         let is_current_canvas = i == last_idx;
 
         for edge in &edges {
@@ -247,12 +262,20 @@ pub fn list_connections_for_canvas(
                     label: edge.label.clone(),
                 });
             } else {
-                // 祖先图：只包含至少一端解析后落在当前画布的边
-                let from_resolved = resolve_target(context, &edge.from);
-                let to_resolved = resolve_target(context, &edge.to);
-
-                let from_in_canvas = matches_canvas(&from_resolved, current_starmap_id);
-                let to_in_canvas = matches_canvas(&to_resolved, current_starmap_id);
+                // 祖先图：只包含至少一端 route-aware 落在当前画布的边
+                let route_from_ancestor = &route.segments[i..];
+                let from_in_canvas = route_aware_endpoint_matches(
+                    &edge.from,
+                    ancestor_starmap_id,
+                    route_from_ancestor,
+                    None,
+                );
+                let to_in_canvas = route_aware_endpoint_matches(
+                    &edge.to,
+                    ancestor_starmap_id,
+                    route_from_ancestor,
+                    None,
+                );
 
                 if from_in_canvas || to_in_canvas {
                     results.push(StarMapConnectionInfo {
@@ -268,71 +291,136 @@ pub fn list_connections_for_canvas(
         }
     }
 
-    results
+    Ok(results)
 }
 
 // ---------------------------------------------------------------------------
-// 内部辅助函数
+// route-aware 端点匹配（共用函数）
 // ---------------------------------------------------------------------------
 
-/// 检查解析后的目标是否匹配特定画布和目标详情。
+/// Route-aware 端点匹配：检查 Edge/Link/Hyperlink/Embed 端点路径是否
+/// 从指定祖先图出发、经过与实例路径后缀完全一致的穿越路径、落在当前画布。
 ///
-/// 匹配条件：`final_starmap_id == current_starmap_id` 且 `target` 完全相等。
-fn matches_target(
-    resolved: &Result<ResolvedTarget, StarMapTargetResolveStatus>,
-    current_starmap_id: &str,
-    target: &StarMapTargetDetail,
+/// 这是 `connections.rs` 与 `relation_index.rs` 共用的唯一端点匹配规则，
+/// 不再两处重复实现。
+///
+/// ## 参数
+///
+/// - `edge_endpoint`：被检查的端点路径（`StarMapTargetPath`）
+/// - `ancestor_starmap_id`：端点所在的宿主星图 ID
+/// - `route_from_ancestor_to_current`：从该祖先进入当前画布的**完整实例路径后缀**
+///   （即 `route.segments[ancestor_index..]`）
+/// - `target`：`Some(t)` 表示还需匹配终点对象（用于 target 查询）；
+///   `None` 表示只检查是否落在当前画布（用于 canvas 查询）
+///
+/// ## 匹配条件
+///
+/// 1. `edge_endpoint.starmap_id == ancestor_starmap_id`（端点从该祖先出发）
+/// 2. `edge_endpoint.segments == route_from_ancestor_to_current`（实例路径后缀完全一致）
+/// 3. 若 `target` 为 `Some`，则 `edge_endpoint.target == target`（终点对象匹配）
+///
+/// ## 为什么比较 segments 而非 `final_starmap_id`
+///
+/// 同一星图 B 可能被同一父图 A 的两个 Embed `e1→B`、`e2→B` 同时嵌入。
+/// 一条边 `A/[e1]/Node(b)` 只属于经 `e1` 进入 B 的访问上下文。
+/// 仅比较 `final_starmap_id == B` 会让经 `e2` 进入 B 的用户也看到这条边，
+/// 这是错误的。比较完整 segments 后缀能区分不同 Embed 实例的访问上下文。
+pub fn route_aware_endpoint_matches(
+    edge_endpoint: &StarMapTargetPath,
+    ancestor_starmap_id: &str,
+    route_from_ancestor_to_current: &[StarMapPathSegment],
+    target: Option<&StarMapTargetDetail>,
 ) -> bool {
-    match resolved {
-        Ok(r) => r.final_starmap_id == current_starmap_id && &r.target == target,
-        Err(_) => false,
+    // 1. 端点必须从该祖先图出发
+    if edge_endpoint.starmap_id != ancestor_starmap_id {
+        return false;
     }
+    // 2. 端点的穿越路径必须与从该祖先到当前画布的实例路径后缀完全一致
+    if edge_endpoint.segments.as_slice() != route_from_ancestor_to_current {
+        return false;
+    }
+    // 3. 若指定了 target，终点对象必须匹配
+    if let Some(t) = target {
+        if &edge_endpoint.target != t {
+            return false;
+        }
+    }
+    true
 }
 
-/// 检查解析后的目标是否落在特定画布。
-///
-/// 匹配条件：`final_starmap_id == current_starmap_id`。
-fn matches_canvas(
-    resolved: &Result<ResolvedTarget, StarMapTargetResolveStatus>,
-    current_starmap_id: &str,
-) -> bool {
-    match resolved {
-        Ok(r) => r.final_starmap_id == current_starmap_id,
-        Err(_) => false,
-    }
-}
+// ---------------------------------------------------------------------------
+// 统一数据访问入口（可靠对象读取）
+// ---------------------------------------------------------------------------
 
-/// 加载星图的边列表。
+/// 加载星图的边列表（可靠对象读取）。
 ///
 /// 先从 `context.overlays` 查找（内存中的图数据），找不到再从磁盘读取。
-fn load_graph_edges(context: &GraphResolverContext, starmap_id: &str) -> Vec<StarMapEdge> {
+///
+/// 读取失败（磁盘 IO、JSON 解析、schema 版本不兼容）时返回 `Err`，
+/// **不**返回空 Vec 把读取失败伪装成"没有连接"。
+///
+/// `connections.rs` 与 `relation_index.rs` 共用此函数，不重复实现磁盘扫描。
+pub fn load_graph_edges(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapEdge>> {
     if let Some(graph) = context.overlays.get(starmap_id) {
-        return graph.edges.clone();
+        return Ok(graph.edges.clone());
     }
     load_graph_edges_from_disk(&context.app_data_root, starmap_id)
 }
 
-/// 从磁盘加载星图的边列表。
+/// 加载星图的链接列表（可靠对象读取）。
+///
+/// 先从 `context.overlays` 查找，找不到再从磁盘读取。
+pub fn load_graph_links(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapLink>> {
+    if let Some(graph) = context.overlays.get(starmap_id) {
+        return Ok(graph.links.clone());
+    }
+    load_graph_links_from_disk(&context.app_data_root, starmap_id)
+}
+
+/// 加载星图的超链接列表（可靠对象读取）。
+pub fn load_graph_hyperlinks(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapHyperlink>> {
+    if let Some(graph) = context.overlays.get(starmap_id) {
+        return Ok(graph.hyperlinks.clone());
+    }
+    load_graph_hyperlinks_from_disk(&context.app_data_root, starmap_id)
+}
+
+/// 加载星图的嵌入列表（可靠对象读取）。
+pub fn load_graph_embeds(
+    context: &GraphResolverContext,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapEmbed>> {
+    if let Some(graph) = context.overlays.get(starmap_id) {
+        return Ok(graph.embeds.clone());
+    }
+    load_graph_embeds_from_disk(&context.app_data_root, starmap_id)
+}
+
+/// 从磁盘加载星图的边列表（可靠对象读取）。
 ///
 /// 读取 `graph.json` 获取 `GraphMeta`（含 `edge_ids`），再逐个读取边对象文件。
-/// 读取失败（文件不存在、JSON 解析失败等）时跳过该边，不中断整体加载。
-fn load_graph_edges_from_disk(app_data_root: &Path, starmap_id: &str) -> Vec<StarMapEdge> {
+/// 任何一步失败（文件不存在、IO 错误、JSON 解析失败、schema 版本不兼容）
+/// 都返回 `Err`，不跳过、不返回空 Vec。
+fn load_graph_edges_from_disk(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapEdge>> {
     let graph_json_path = app_data_root
         .join("starmaps")
         .join(starmap_id)
         .join("graph.json");
-    if !graph_json_path.exists() {
-        return Vec::new();
-    }
-
-    let content = match std::fs::read_to_string(&graph_json_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    let meta: GraphMeta = match serde_json::from_str(&content) {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
+    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
+        Some(m) => m,
+        None => return Ok(Vec::new()),
     };
 
     let mut edges = Vec::new();
@@ -343,14 +431,112 @@ fn load_graph_edges_from_disk(app_data_root: &Path, starmap_id: &str) -> Vec<Sta
             .join("edges")
             .join(bucket_for_id(edge_id));
         let edge_path = bucket_dir.join(format!("{}.json", edge_id));
-        if let Ok(edge_content) = std::fs::read_to_string(&edge_path) {
-            if let Ok(edge) = serde_json::from_str::<StarMapEdge>(&edge_content) {
-                edges.push(edge);
-            }
-        }
+        let edge_content = std::fs::read_to_string(&edge_path)?;
+        let edge: StarMapEdge = serde_json::from_str(&edge_content)?;
+        edges.push(edge);
     }
+    Ok(edges)
+}
 
-    edges
+/// 从磁盘加载星图的链接列表（可靠对象读取）。
+fn load_graph_links_from_disk(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapLink>> {
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
+        Some(m) => m,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut links = Vec::new();
+    for link_id in &meta.link_ids {
+        let bucket_dir = app_data_root
+            .join("starmaps")
+            .join(starmap_id)
+            .join("links")
+            .join(bucket_for_id(link_id));
+        let path = bucket_dir.join(format!("{}.json", link_id));
+        let content = std::fs::read_to_string(&path)?;
+        let link: StarMapLink = serde_json::from_str(&content)?;
+        links.push(link);
+    }
+    Ok(links)
+}
+
+/// 从磁盘加载星图的超链接列表（可靠对象读取）。
+fn load_graph_hyperlinks_from_disk(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapHyperlink>> {
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
+        Some(m) => m,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut hyperlinks = Vec::new();
+    for hl_id in &meta.hyperlink_ids {
+        let bucket_dir = app_data_root
+            .join("starmaps")
+            .join(starmap_id)
+            .join("hyperlinks")
+            .join(bucket_for_id(hl_id));
+        let path = bucket_dir.join(format!("{}.json", hl_id));
+        let content = std::fs::read_to_string(&path)?;
+        let hl: StarMapHyperlink = serde_json::from_str(&content)?;
+        hyperlinks.push(hl);
+    }
+    Ok(hyperlinks)
+}
+
+/// 从磁盘加载星图的嵌入列表（可靠对象读取）。
+fn load_graph_embeds_from_disk(
+    app_data_root: &Path,
+    starmap_id: &str,
+) -> crate::error::Result<Vec<StarMapEmbed>> {
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    let meta = match load_current_graph_meta(&graph_json_path, starmap_id)? {
+        Some(m) => m,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut embeds = Vec::new();
+    for instance_id in &meta.embed_instance_ids {
+        let bucket_dir = app_data_root
+            .join("starmaps")
+            .join(starmap_id)
+            .join("embeds")
+            .join(bucket_for_id(instance_id));
+        let path = bucket_dir.join(format!("{}.json", instance_id));
+        let content = std::fs::read_to_string(&path)?;
+        let embed: StarMapEmbed = serde_json::from_str(&content)?;
+        embeds.push(embed);
+    }
+    Ok(embeds)
+}
+
+/// 把 `StarMapTargetResolveStatus` 映射成 `Error`。
+///
+/// 导航路由解析失败不是"没有连接"，而是路径本身不可达或读取错误。
+/// `UnsupportedVersion`/`CorruptStarmap`/`ReadFailed` 映射成对应的 `Error`，
+/// 其余映射成 `Error::Other`。
+fn resolve_status_to_error(status: StarMapTargetResolveStatus) -> Error {
+    match status {
+        StarMapTargetResolveStatus::UnsupportedVersion => Error::UnsupportedVersion {
+            version: String::new(),
+        },
+        other => Error::Other(format!("navigation route resolve failed: {other:?}")),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -917,7 +1103,8 @@ mod tests {
             &StarMapTargetDetail::Node {
                 node_id: "b1".to_string(),
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(connections.len(), 1);
         assert_eq!(connections[0].edge_id, "edge_local");
@@ -970,7 +1157,8 @@ mod tests {
             &StarMapTargetDetail::Node {
                 node_id: "b".to_string(),
             },
-        );
+        )
+        .unwrap();
 
         // 应该找到祖先图 A 中的边
         assert_eq!(connections.len(), 1);
@@ -1004,7 +1192,8 @@ mod tests {
             &StarMapTargetDetail::Node {
                 node_id: "b".to_string(),
             },
-        );
+        )
+        .unwrap();
 
         assert!(connections.is_empty());
     }
@@ -1069,7 +1258,7 @@ mod tests {
             }],
         };
 
-        let connections = list_connections_for_canvas(&context, &route);
+        let connections = list_connections_for_canvas(&context, &route).unwrap();
 
         // 当前画布 B 的两条边都应返回
         assert_eq!(connections.len(), 2);
@@ -1135,7 +1324,7 @@ mod tests {
             }],
         };
 
-        let connections = list_connections_for_canvas(&context, &route);
+        let connections = list_connections_for_canvas(&context, &route).unwrap();
 
         // 应包含祖先图 A 中指向当前画布的边 + 当前画布 B 的本地边
         assert_eq!(connections.len(), 2);
@@ -1183,92 +1372,223 @@ mod tests {
             }],
         };
 
-        let connections = list_connections_for_canvas(&context, &route);
+        let connections = list_connections_for_canvas(&context, &route).unwrap();
 
         // 祖先图 A 中 a→a2 边与 B 无关，不应返回
         assert!(connections.is_empty());
     }
 
     // -----------------------------------------------------------------------
-    // matches_target / matches_canvas
+    // route_aware_endpoint_matches
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_matches_target_ok() {
-        let resolved = Ok(ResolvedTarget {
-            final_starmap_id: "sm_B".to_string(),
+    fn test_route_aware_endpoint_matches_exact_path() {
+        // 端点路径与 route 后缀完全一致 → 匹配
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e1".to_string(),
+            }],
             target: StarMapTargetDetail::Node {
-                node_id: "b1".to_string(),
+                node_id: "b".to_string(),
             },
-            traversed_starmap_ids: vec!["sm_A".to_string(), "sm_B".to_string()],
-        });
-        let target = StarMapTargetDetail::Node {
-            node_id: "b1".to_string(),
         };
-        assert!(matches_target(&resolved, "sm_B", &target));
+        let route_suffix = vec![StarMapPathSegment::EnterEmbed {
+            instance_id: "e1".to_string(),
+        }];
+        let target = StarMapTargetDetail::Node {
+            node_id: "b".to_string(),
+        };
+        assert!(route_aware_endpoint_matches(
+            &endpoint,
+            "sm_A",
+            &route_suffix,
+            Some(&target),
+        ));
     }
 
     #[test]
-    fn test_matches_target_wrong_starmap() {
-        let resolved = Ok(ResolvedTarget {
-            final_starmap_id: "sm_C".to_string(),
+    fn test_route_aware_endpoint_matches_different_embed_instance() {
+        // 同一星图 B 被两个 Embed e1→B、e2→B 嵌入
+        // 边端点路径用 e1，route 后缀用 e2 → 不匹配（实例路径不同）
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e1".to_string(),
+            }],
             target: StarMapTargetDetail::Node {
-                node_id: "b1".to_string(),
+                node_id: "b".to_string(),
             },
-            traversed_starmap_ids: vec!["sm_A".to_string(), "sm_C".to_string()],
-        });
-        let target = StarMapTargetDetail::Node {
-            node_id: "b1".to_string(),
         };
-        assert!(!matches_target(&resolved, "sm_B", &target));
+        let route_suffix = vec![StarMapPathSegment::EnterEmbed {
+            instance_id: "e2".to_string(),
+        }];
+        let target = StarMapTargetDetail::Node {
+            node_id: "b".to_string(),
+        };
+        assert!(!route_aware_endpoint_matches(
+            &endpoint,
+            "sm_A",
+            &route_suffix,
+            Some(&target),
+        ));
     }
 
     #[test]
-    fn test_matches_target_wrong_target() {
-        let resolved = Ok(ResolvedTarget {
-            final_starmap_id: "sm_B".to_string(),
+    fn test_route_aware_endpoint_matches_wrong_ancestor() {
+        // 端点 starmap_id 与祖先不匹配 → 不匹配
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_C".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "b".to_string(),
+            },
+        };
+        let target = StarMapTargetDetail::Node {
+            node_id: "b".to_string(),
+        };
+        assert!(!route_aware_endpoint_matches(
+            &endpoint,
+            "sm_A",
+            &[],
+            Some(&target),
+        ));
+    }
+
+    #[test]
+    fn test_route_aware_endpoint_matches_wrong_target() {
+        // 路径匹配但 target 不同 → 不匹配
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_A".to_string(),
+            segments: vec![],
             target: StarMapTargetDetail::Node {
                 node_id: "b2".to_string(),
             },
-            traversed_starmap_ids: vec!["sm_A".to_string(), "sm_B".to_string()],
-        });
+        };
         let target = StarMapTargetDetail::Node {
             node_id: "b1".to_string(),
         };
-        assert!(!matches_target(&resolved, "sm_B", &target));
+        assert!(!route_aware_endpoint_matches(
+            &endpoint,
+            "sm_A",
+            &[],
+            Some(&target),
+        ));
     }
 
     #[test]
-    fn test_matches_target_resolve_failed() {
-        let resolved = Err(StarMapTargetResolveStatus::MissingNode);
-        let target = StarMapTargetDetail::Node {
-            node_id: "b1".to_string(),
+    fn test_route_aware_endpoint_matches_no_target_check() {
+        // target=None 时只检查路径，不检查终点对象
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_A".to_string(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "anything".to_string(),
+            },
         };
-        assert!(!matches_target(&resolved, "sm_B", &target));
+        assert!(route_aware_endpoint_matches(&endpoint, "sm_A", &[], None));
     }
 
     #[test]
-    fn test_matches_canvas_ok() {
-        let resolved = Ok(ResolvedTarget {
-            final_starmap_id: "sm_B".to_string(),
+    fn test_route_aware_endpoint_matches_empty_segments() {
+        // 当前画布（空 segments）匹配
+        let endpoint = StarMapTargetPath {
+            starmap_id: "sm_B".to_string(),
+            segments: vec![],
             target: StarMapTargetDetail::Node {
-                node_id: "b1".to_string(),
+                node_id: "b".to_string(),
             },
-            traversed_starmap_ids: vec!["sm_A".to_string(), "sm_B".to_string()],
-        });
-        assert!(matches_canvas(&resolved, "sm_B"));
+        };
+        let target = StarMapTargetDetail::Node {
+            node_id: "b".to_string(),
+        };
+        assert!(route_aware_endpoint_matches(
+            &endpoint,
+            "sm_B",
+            &[],
+            Some(&target),
+        ));
     }
 
+    // -----------------------------------------------------------------------
+    // list_connections_for_target: route-aware 区分不同 Embed 实例
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_matches_canvas_wrong_starmap() {
-        let resolved = Ok(ResolvedTarget {
-            final_starmap_id: "sm_C".to_string(),
-            target: StarMapTargetDetail::Node {
-                node_id: "b1".to_string(),
+    fn test_list_connections_for_target_distinguishes_embed_instances() {
+        // 父图 A 有 e1→B、e2→B 两个 Embed，边只连 A/[e1]/Node(b)
+        // 经 e2 进入 B 查找 b 的连接 → 不应找到这条边
+        let mut graph_a = make_empty_graph("sm_A");
+        graph_a.nodes.push(make_node("a"));
+        graph_a.embeds.push(make_embed("e1", "sm_B"));
+        graph_a.embeds.push(make_embed("e2", "sm_B"));
+        graph_a.edges.push(make_edge(
+            "edge_via_e1",
+            StarMapTargetPath {
+                starmap_id: "sm_A".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Node {
+                    node_id: "a".to_string(),
+                },
             },
-            traversed_starmap_ids: vec!["sm_A".to_string(), "sm_C".to_string()],
-        });
-        assert!(!matches_canvas(&resolved, "sm_B"));
+            StarMapTargetPath {
+                starmap_id: "sm_A".to_string(),
+                segments: vec![StarMapPathSegment::EnterEmbed {
+                    instance_id: "e1".to_string(),
+                }],
+                target: StarMapTargetDetail::Node {
+                    node_id: "b".to_string(),
+                },
+            },
+        ));
+
+        let mut graph_b = make_empty_graph("sm_B");
+        graph_b.nodes.push(make_node("b"));
+
+        let overlays =
+            HashMap::from([("sm_A".to_string(), graph_a), ("sm_B".to_string(), graph_b)]);
+        let context = make_overlay_context(overlays);
+
+        // 经 e2 进入 B
+        let route_via_e2 = StarMapNavigationRoute {
+            root_starmap_id: "sm_A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e2".to_string(),
+            }],
+        };
+
+        let connections = list_connections_for_target(
+            &context,
+            &route_via_e2,
+            &StarMapTargetDetail::Node {
+                node_id: "b".to_string(),
+            },
+        )
+        .unwrap();
+
+        // 边 edge_via_e1 只属于 e1 的访问上下文，经 e2 进入不应看到
+        assert!(connections.is_empty());
+
+        // 经 e1 进入 B → 应找到
+        let route_via_e1 = StarMapNavigationRoute {
+            root_starmap_id: "sm_A".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "e1".to_string(),
+            }],
+        };
+
+        let connections = list_connections_for_target(
+            &context,
+            &route_via_e1,
+            &StarMapTargetDetail::Node {
+                node_id: "b".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].edge_id, "edge_via_e1");
     }
 
     // -----------------------------------------------------------------------
@@ -1287,7 +1607,7 @@ mod tests {
         let overlays = HashMap::from([("sm_A".to_string(), graph)]);
         let context = make_overlay_context(overlays);
 
-        let edges = load_graph_edges(&context, "sm_A");
+        let edges = load_graph_edges(&context, "sm_A").unwrap();
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].id, "e1");
     }
@@ -1295,7 +1615,7 @@ mod tests {
     #[test]
     fn test_load_graph_edges_no_overlay_no_disk() {
         let context = make_overlay_context(HashMap::new());
-        let edges = load_graph_edges(&context, "sm_nonexistent");
+        let edges = load_graph_edges(&context, "sm_nonexistent").unwrap();
         assert!(edges.is_empty());
     }
 

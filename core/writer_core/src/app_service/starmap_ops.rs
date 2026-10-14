@@ -1,11 +1,11 @@
 use crate::api::{
     CreateStarMapChildEmbedResultDto, StarMapConnectionInfoDto, StarMapEdgeDto,
-    StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapEndpointSelectionDto,
-    StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto, StarMapLinkDto,
-    StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNavigationLocationDto, StarMapNavigationRouteDto,
-    StarMapNodeDto, StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto,
-    StarMapPointDto, StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto,
-    StarMapTargetPathDto, WriterError,
+    StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto,
+    StarMapEndpointSelectionDto, StarMapGraphDto, StarMapHyperlinkDto,
+    StarMapHyperlinkPatchInputDto, StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto,
+    StarMapNavigationLocationDto, StarMapNavigationRouteDto, StarMapNodeDto,
+    StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
+    StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -240,8 +240,9 @@ impl super::WriterAppService {
         &self,
         root_starmap_id: String,
         segments: Vec<StarMapPathSegmentDto>,
-    ) -> Result<StarMapNavigationLocationDto, String> {
-        self.api.resolve_starmap_navigation(root_starmap_id, segments)
+    ) -> Result<StarMapNavigationLocationDto, WriterError> {
+        self.api
+            .resolve_starmap_navigation(root_starmap_id, segments)
     }
 
     /// 通过 Embed 实例进入子画布。转发到 Core API。
@@ -250,7 +251,7 @@ impl super::WriterAppService {
         root_starmap_id: String,
         segments: Vec<StarMapPathSegmentDto>,
         instance_id: String,
-    ) -> Result<(StarMapNavigationRouteDto, StarMapNavigationLocationDto), String> {
+    ) -> Result<crate::api::types::EnterStarmapResultDto, WriterError> {
         self.api
             .enter_starmap_embed(root_starmap_id, segments, instance_id)
     }
@@ -261,18 +262,25 @@ impl super::WriterAppService {
         root_starmap_id: String,
         segments: Vec<StarMapPathSegmentDto>,
         node_id: String,
-    ) -> Result<(StarMapNavigationRouteDto, StarMapNavigationLocationDto), String> {
+    ) -> Result<crate::api::types::EnterStarmapResultDto, WriterError> {
         self.api
             .enter_starmap_portal(root_starmap_id, segments, node_id)
     }
 
-    /// 规划跨画布边：计算宿主图 ID、from/to 路径和 edge_id。转发到 Core API。
+    /// 创建跨画布边并真正写入宿主图 Store（事务操作）。转发到 Core API。
+    ///
+    /// 返回 `CreateCrossCanvasEdgeResultDto`（`ownerStarmapId` + 完整 `edge`），
+    /// 供平台端后续修改/删除原始边。
     pub fn create_cross_canvas_edge(
         &self,
         from: StarMapEndpointSelectionDto,
         to: StarMapEndpointSelectionDto,
-    ) -> Result<(String, StarMapTargetPathDto, StarMapTargetPathDto), String> {
-        self.api.create_cross_canvas_edge(from, to)
+        kind: crate::api::types::StarMapEdgeKindDto,
+        label: Option<String>,
+        payload: Option<String>,
+    ) -> Result<crate::api::types::CreateCrossCanvasEdgeResultDto, WriterError> {
+        self.api
+            .create_cross_canvas_edge(from, to, kind, label, payload)
     }
 
     /// 列出与特定画布或目标相关的所有连接。转发到 Core API。
@@ -280,7 +288,7 @@ impl super::WriterAppService {
         &self,
         route: StarMapNavigationRouteDto,
         target: Option<StarMapTargetDetailDto>,
-    ) -> Result<Vec<StarMapConnectionInfoDto>, String> {
+    ) -> Result<Vec<StarMapConnectionInfoDto>, WriterError> {
         self.api.list_starmap_connections(route, target)
     }
 }

@@ -4,7 +4,7 @@
 //! Core 层的 `StarMapNavigationRoute` 和 `StarMapNavigationLocation`，
 //! 为跨语言接口提供稳定的序列化/反序列化类型。
 
-use super::{StarMapPathSegmentDto};
+use super::StarMapPathSegmentDto;
 
 /// 导航路由 DTO：从根星图到当前画布的语义路径。
 ///
@@ -63,7 +63,9 @@ impl From<crate::starmap::navigation::StarMapNavigationLocation> for StarMapNavi
     }
 }
 
-impl TryFrom<StarMapNavigationLocationDto> for crate::starmap::navigation::StarMapNavigationLocation {
+impl TryFrom<StarMapNavigationLocationDto>
+    for crate::starmap::navigation::StarMapNavigationLocation
+{
     type Error = crate::error::Error;
 
     fn try_from(d: StarMapNavigationLocationDto) -> Result<Self, Self::Error> {
@@ -72,4 +74,15 @@ impl TryFrom<StarMapNavigationLocationDto> for crate::starmap::navigation::StarM
             traversed_starmap_ids: d.traversed_starmap_ids,
         })
     }
+}
+
+/// 进入子画布的结果 DTO：更新后的路由和当前位置。
+///
+/// `enter_starmap_embed` / `enter_starmap_portal` 返回此类型，
+/// 供 UniFFI 暴露（UniFFI 不支持 tuple 返回值，故包装为单个 DTO）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnterStarmapResultDto {
+    pub route: StarMapNavigationRouteDto,
+    pub location: StarMapNavigationLocationDto,
 }

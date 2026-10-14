@@ -149,3 +149,174 @@ fn resolve_starmap_path_rejects_missing_embed() {
         .unwrap();
     assert_eq!(resolved.final_starmap_id, child);
 }
+
+// ---------------------------------------------------------------------------
+// create_cross_canvas_edge 和跨图删除保护测试
+// ---------------------------------------------------------------------------
+
+use crate::starmap::connections::StarMapEndpointSelection;
+use crate::starmap::navigation::StarMapNavigationRoute;
+use crate::starmap::types::StarMapEdgeKind;
+
+fn add_node(core: &WriterCore, starmap_id: &str, node_id: &str) {
+    let node = crate::starmap::types::StarMapNode {
+        id: node_id.to_string(),
+        title: node_id.to_string(),
+        kind: crate::starmap::types::StarMapNodeKind::Character,
+        payload: None,
+        tags: vec![],
+        content: crate::starmap::semantic::StarMapNodeContent::Empty,
+        anchors: vec![],
+        portal: None,
+        position: StarMapPoint { x: 0.0, y: 0.0 },
+        style: crate::starmap::types::StarMapNodeStyle::default(),
+        provenance: StarMapProvenance::default(),
+        created_at: 0,
+        updated_at: 0,
+    };
+    core.add_starmap_node(starmap_id, node, 0.0, 0.0).unwrap();
+}
+
+/// `create_cross_canvas_edge` 真正写入宿主图 Store：创建后重新读 graph 能看到这条边。
+#[test]
+fn create_cross_canvas_edge_writes_to_store() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let root = create_starmap(&core, "根图");
+    let child = create_starmap(&core, "子图");
+    embed_child(&core, &root, &child, "em_root_child");
+    add_node(&core, &root, "n_root");
+    add_node(&core, &child, "n_child");
+
+    // from = 根图的 n_root，to = 子图的 n_child（经 em_root_child 进入）
+    let from = StarMapEndpointSelection {
+        route: StarMapNavigationRoute {
+            root_starmap_id: root.clone(),
+            segments: vec![],
+        },
+        target: StarMapTargetDetail::Node {
+            node_id: "n_root".to_string(),
+        },
+    };
+    let to = StarMapEndpointSelection {
+        route: StarMapNavigationRoute {
+            root_starmap_id: root.clone(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "em_root_child".to_string(),
+            }],
+        },
+        target: StarMapTargetDetail::Node {
+            node_id: "n_child".to_string(),
+        },
+    };
+
+    let result = core
+        .create_cross_canvas_edge(
+            from,
+            to,
+            StarMapEdgeKind::References,
+            Some("test edge".to_string()),
+            None,
+        )
+        .unwrap();
+
+    // 宿主图是根图（最长公共前缀对应的图）
+    assert_eq!(result.owner_starmap_id, root);
+
+    // 重新读 graph，应该能看到这条边
+    let graph = core.get_starmap_graph(&root).unwrap();
+    assert!(
+        graph.edges.iter().any(|e| e.id == result.edge.id),
+        "创建的边必须出现在宿主图 Store 中"
+    );
+    assert_eq!(result.edge.label.as_deref(), Some("test edge"));
+}
+
+/// 有跨图 Edge 引用时拒绝删除被引用的 Node。
+#[test]
+fn delete_node_blocked_by_cross_canvas_edge_reference() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let root = create_starmap(&core, "根图");
+    let child = create_starmap(&core, "子图");
+    embed_child(&core, &root, &child, "em_root_child");
+    add_node(&core, &root, "n_root");
+    add_node(&core, &child, "n_child");
+
+    // 创建跨画布边：根图 n_root → 子图 n_child
+    let from = StarMapEndpointSelection {
+        route: StarMapNavigationRoute {
+            root_starmap_id: root.clone(),
+            segments: vec![],
+        },
+        target: StarMapTargetDetail::Node {
+            node_id: "n_root".to_string(),
+        },
+    };
+    let to = StarMapEndpointSelection {
+        route: StarMapNavigationRoute {
+            root_starmap_id: root.clone(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "em_root_child".to_string(),
+            }],
+        },
+        target: StarMapTargetDetail::Node {
+            node_id: "n_child".to_string(),
+        },
+    };
+    core.create_cross_canvas_edge(from, to, StarMapEdgeKind::References, None, None)
+        .unwrap();
+
+    // 删除子图的 n_child 应该失败（根图的边引用了它）
+    let err = core.delete_starmap_node(&child, "n_child");
+    assert!(err.is_err(), "有跨图边引用时必须拒绝删除被引用的节点");
+    let err_msg = format!("{:?}", err.unwrap_err());
+    assert!(
+        err_msg.contains("cross-canvas references"),
+        "错误消息应说明跨图引用存在: {err_msg}"
+    );
+}
+
+/// 有跨图 Link 引用时拒绝删除被引用的 Node（全类型扫描）。
+#[test]
+fn delete_node_blocked_by_cross_canvas_link_reference() {
+    let temp = tempdir().unwrap();
+    let core = new_core(temp.path());
+
+    let root = create_starmap(&core, "根图");
+    let child = create_starmap(&core, "子图");
+    embed_child(&core, &root, &child, "em_root_child");
+    add_node(&core, &root, "n_root");
+    add_node(&core, &child, "n_child");
+
+    // 在根图创建 Link，source 指向子图的 n_child
+    let link = crate::starmap::types::StarMapLink {
+        link_id: "lk_test".to_string(),
+        source: StarMapTargetPath {
+            starmap_id: root.clone(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "em_root_child".to_string(),
+            }],
+            target: StarMapTargetDetail::Node {
+                node_id: "n_child".to_string(),
+            },
+        },
+        target: StarMapTargetPath {
+            starmap_id: root.clone(),
+            segments: vec![],
+            target: StarMapTargetDetail::Node {
+                node_id: "n_root".to_string(),
+            },
+        },
+        label: None,
+        created_at: 0,
+        updated_at: 0,
+    };
+    core.add_starmap_link(&root, link).unwrap();
+
+    // 删除子图的 n_child 应该失败（根图的 Link 引用了它）
+    let err = core.delete_starmap_node(&child, "n_child");
+    assert!(err.is_err(), "有跨图 Link 引用时必须拒绝删除被引用的节点");
+}

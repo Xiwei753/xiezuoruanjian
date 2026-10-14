@@ -5,7 +5,8 @@
 //! - `CrossCanvasEdgeErrorDto`：跨画布边规划错误（使用 `error_type` 字符串判别）
 
 use super::{
-    StarMapEdgeKindDto, StarMapNavigationRouteDto, StarMapTargetDetailDto, StarMapTargetPathDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapNavigationRouteDto, StarMapTargetDetailDto,
+    StarMapTargetPathDto,
 };
 
 /// 端点选择 DTO：导航路由 + 本地目标。
@@ -28,7 +29,9 @@ impl From<crate::starmap::connections::StarMapEndpointSelection> for StarMapEndp
     }
 }
 
-impl TryFrom<StarMapEndpointSelectionDto> for crate::starmap::connections::StarMapEndpointSelection {
+impl TryFrom<StarMapEndpointSelectionDto>
+    for crate::starmap::connections::StarMapEndpointSelection
+{
     type Error = crate::error::Error;
 
     fn try_from(d: StarMapEndpointSelectionDto) -> Result<Self, Self::Error> {
@@ -165,4 +168,16 @@ fn resolve_status_from_string(
         serde_json::Value::String(s),
     )
     .map_err(crate::error::Error::from)
+}
+
+/// 跨画布连线创建结果 DTO：宿主星图 ID 和真正写入 Store 的 Edge。
+///
+/// 由 AppService 的 `create_cross_canvas_edge` 返回，`ownerStarmapId` 是 Edge
+/// 实际持久化所在的宿主星图，`edge` 是完整写入的 `StarMapEdgeDto`。
+/// 平台端可直接用返回的 `edge.id` 对原始边做后续修改/删除。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCrossCanvasEdgeResultDto {
+    pub owner_starmap_id: String,
+    pub edge: StarMapEdgeDto,
 }

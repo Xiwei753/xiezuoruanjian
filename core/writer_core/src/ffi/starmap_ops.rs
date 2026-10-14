@@ -620,21 +620,11 @@ pub unsafe extern "C" fn writer_core_resolve_starmap_navigation(
 ) -> *mut c_char {
     let input_str = match c_str_to_rust(json) {
         Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid json: error {}", e),
-            )
-        }
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
     };
     let route = match serde_json::from_str::<StarMapNavigationRouteDto>(&input_str) {
         Ok(r) => r,
-        Err(e) => {
-            return err_json(
-                "PARSE_ERROR",
-                &format!("Failed to parse json: {}", e),
-            )
-        }
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
     };
     match with_app_service(|svc| {
         let location = svc
@@ -652,35 +642,20 @@ pub unsafe extern "C" fn writer_core_resolve_starmap_navigation(
 ///
 /// The caller must ensure `json` points to a valid, null-terminated C string.
 /// Passing a null pointer or an invalid pointer is undefined behavior.
-pub unsafe extern "C" fn writer_core_enter_starmap_embed(
-    json: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_enter_starmap_embed(json: *const c_char) -> *mut c_char {
     let input_str = match c_str_to_rust(json) {
         Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid json: error {}", e),
-            )
-        }
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
     };
     let input = match serde_json::from_str::<EnterEmbedInput>(&input_str) {
         Ok(i) => i,
-        Err(e) => {
-            return err_json(
-                "PARSE_ERROR",
-                &format!("Failed to parse json: {}", e),
-            )
-        }
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
     };
     match with_app_service(|svc| {
-        let (route, location) = svc
+        let result = svc
             .enter_starmap_embed(input.root_starmap_id, input.segments, input.instance_id)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "route": route,
-            "location": location,
-        }))
+        Ok(result)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NAVIGATION_ERROR", &e),
@@ -692,35 +667,20 @@ pub unsafe extern "C" fn writer_core_enter_starmap_embed(
 ///
 /// The caller must ensure `json` points to a valid, null-terminated C string.
 /// Passing a null pointer or an invalid pointer is undefined behavior.
-pub unsafe extern "C" fn writer_core_enter_starmap_portal(
-    json: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_enter_starmap_portal(json: *const c_char) -> *mut c_char {
     let input_str = match c_str_to_rust(json) {
         Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid json: error {}", e),
-            )
-        }
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
     };
     let input = match serde_json::from_str::<EnterPortalInput>(&input_str) {
         Ok(i) => i,
-        Err(e) => {
-            return err_json(
-                "PARSE_ERROR",
-                &format!("Failed to parse json: {}", e),
-            )
-        }
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
     };
     match with_app_service(|svc| {
-        let (route, location) = svc
+        let result = svc
             .enter_starmap_portal(input.root_starmap_id, input.segments, input.node_id)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "route": route,
-            "location": location,
-        }))
+        Ok(result)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_NAVIGATION_ERROR", &e),
@@ -732,36 +692,20 @@ pub unsafe extern "C" fn writer_core_enter_starmap_portal(
 ///
 /// The caller must ensure `json` points to a valid, null-terminated C string.
 /// Passing a null pointer or an invalid pointer is undefined behavior.
-pub unsafe extern "C" fn writer_core_create_cross_canvas_edge(
-    json: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_create_cross_canvas_edge(json: *const c_char) -> *mut c_char {
     let input_str = match c_str_to_rust(json) {
         Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid json: error {}", e),
-            )
-        }
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
     };
     let input = match serde_json::from_str::<CrossCanvasEdgeInput>(&input_str) {
         Ok(i) => i,
-        Err(e) => {
-            return err_json(
-                "PARSE_ERROR",
-                &format!("Failed to parse json: {}", e),
-            )
-        }
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
     };
     match with_app_service(|svc| {
-        let (edge_id, from_path, to_path) = svc
-            .create_cross_canvas_edge(input.from, input.to)
+        let result = svc
+            .create_cross_canvas_edge(input.from, input.to, input.kind, input.label, input.payload)
             .map_err(|e| format!("{}", e))?;
-        Ok(serde_json::json!({
-            "edge_id": edge_id,
-            "from_path": from_path,
-            "to_path": to_path,
-        }))
+        Ok(result)
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("STARMAP_CONNECTION_ERROR", &e),
@@ -773,26 +717,14 @@ pub unsafe extern "C" fn writer_core_create_cross_canvas_edge(
 ///
 /// The caller must ensure `json` points to a valid, null-terminated C string.
 /// Passing a null pointer or an invalid pointer is undefined behavior.
-pub unsafe extern "C" fn writer_core_list_starmap_connections(
-    json: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn writer_core_list_starmap_connections(json: *const c_char) -> *mut c_char {
     let input_str = match c_str_to_rust(json) {
         Ok(s) => s,
-        Err(e) => {
-            return err_json(
-                "INVALID_ARGUMENT",
-                &format!("Invalid json: error {}", e),
-            )
-        }
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
     };
     let input = match serde_json::from_str::<ListConnectionsInput>(&input_str) {
         Ok(i) => i,
-        Err(e) => {
-            return err_json(
-                "PARSE_ERROR",
-                &format!("Failed to parse json: {}", e),
-            )
-        }
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
     };
     match with_app_service(|svc| {
         let connections = svc
@@ -806,8 +738,10 @@ pub unsafe extern "C" fn writer_core_list_starmap_connections(
 }
 
 // --- FFI 内部输入 DTO ---
+// 统一采用 camelCase 字段命名，与 route DTO（StarMapNavigationRouteDto 等）一致。
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EnterEmbedInput {
     root_starmap_id: String,
     #[serde(default)]
@@ -816,6 +750,7 @@ struct EnterEmbedInput {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EnterPortalInput {
     root_starmap_id: String,
     #[serde(default)]
@@ -824,12 +759,19 @@ struct EnterPortalInput {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CrossCanvasEdgeInput {
     from: StarMapEndpointSelectionDto,
     to: StarMapEndpointSelectionDto,
+    kind: crate::api::types::StarMapEdgeKindDto,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    payload: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ListConnectionsInput {
     route: StarMapNavigationRouteDto,
     #[serde(default)]
