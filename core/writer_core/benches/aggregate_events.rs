@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::path::PathBuf;
 use writer_core::writing_stats::{store::StatsStore, EventSource, Platform, WritingInputEvent};
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -23,13 +22,26 @@ fn criterion_benchmark(c: &mut Criterion) {
             ai_inserted_chars: 0,
             net_delta_chars: 10,
             duration_seconds: 0,
+            local_date: "2024-06-08".to_string(),
         });
     }
 
-    let store = StatsStore::new(&PathBuf::from("/tmp/dummy_stats"));
+    let tmp = std::env::temp_dir().join(format!(
+        "bench_stats_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = StatsStore::new(&tmp);
 
-    c.bench_function("aggregate_events", |b| {
-        b.iter(|| store.aggregate_events(black_box(&events)).unwrap())
+    c.bench_function("record_event", |b| {
+        b.iter(|| {
+            for event in black_box(&events) {
+                store.record_event(event.clone()).unwrap();
+            }
+        })
     });
 }
 

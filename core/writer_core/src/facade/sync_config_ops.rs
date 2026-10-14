@@ -426,6 +426,7 @@ fn migrate_legacy_sync_config(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "github-api")]
     use super::*;
 
     #[test]

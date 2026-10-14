@@ -212,32 +212,7 @@ impl OffsetMap {
             if left.length == 0 {
                 continue;
             }
-            let left_old = left.old_byte_offset.value();
-            let left_new_start = left.new_byte_offset.value();
-            let left_new_end = left_new_start + left.length;
-            for right in &next.entries {
-                if right.length == 0 {
-                    continue;
-                }
-                // `self` 是 A -> B（left.old 是 A 坐标、left.new 是 B 坐标），
-                // `next` 是 B -> C（right.old 是 B 坐标、right.new 是 C 坐标），
-                // 所以交集必须在 **B 坐标**里求。
-                let right_b_start = right.old_byte_offset.value();
-                let right_b_end = right_b_start + right.length;
-                let lo = left_new_start.max(right_b_start);
-                let hi = left_new_end.min(right_b_end);
-                if lo >= hi {
-                    continue;
-                }
-                candidates.push(OffsetMapEntry {
-                    old_byte_offset: Utf8ByteOffset::unchecked(left_old + (lo - left_new_start)),
-                    new_byte_offset: Utf8ByteOffset::unchecked(
-                        right.new_byte_offset.value() + (lo - right_b_start),
-                    ),
-                    length: hi - lo,
-                    kind: OffsetMapKind::Shifted,
-                });
-            }
+            Self::collect_compose_candidates(left, &next.entries, &mut candidates);
         }
 
         // 2. 按 old byte offset 排序。
@@ -252,17 +227,52 @@ impl OffsetMap {
         // 按错条件合成 `old[0,2) -> new[1,3)` 会让 `b` 映到 Y 上，
         // 直接污染 base_to_target_map，后续 Delete/Replace 会把 changed range
         // 映回错误字符。
+        let composed = Self::merge_compose_candidates(candidates);
+        OffsetMap { entries: composed }
+    }
+
+    /// `compose` 的内层循环：对单个 `left` 条目，在 `right_entries` 中找 B 坐标
+    /// 交集并 push 到 `candidates`。
+    fn collect_compose_candidates(
+        left: &OffsetMapEntry,
+        right_entries: &[OffsetMapEntry],
+        candidates: &mut Vec<OffsetMapEntry>,
+    ) {
+        let left_old = left.old_byte_offset.value();
+        let left_new_start = left.new_byte_offset.value();
+        let left_new_end = left_new_start + left.length;
+        for right in right_entries {
+            if right.length == 0 {
+                continue;
+            }
+            // `self` 是 A -> B（left.old 是 A 坐标、left.new 是 B 坐标），
+            // `next` 是 B -> C（right.old 是 B 坐标、right.new 是 C 坐标），
+            // 所以交集必须在 **B 坐标**里求。
+            let right_b_start = right.old_byte_offset.value();
+            let right_b_end = right_b_start + right.length;
+            let lo = left_new_start.max(right_b_start);
+            let hi = left_new_end.min(right_b_end);
+            if lo >= hi {
+                continue;
+            }
+            candidates.push(OffsetMapEntry {
+                old_byte_offset: Utf8ByteOffset::unchecked(left_old + (lo - left_new_start)),
+                new_byte_offset: Utf8ByteOffset::unchecked(
+                    right.new_byte_offset.value() + (lo - right_b_start),
+                ),
+                length: hi - lo,
+                kind: OffsetMapKind::Shifted,
+            });
+        }
+    }
+
+    /// `compose` 的合并阶段：按 old byte offset 排序后合并 old 与 new 双侧
+    /// 都连续的相邻条目。
+    fn merge_compose_candidates(candidates: Vec<OffsetMapEntry>) -> Vec<OffsetMapEntry> {
         let mut composed: Vec<OffsetMapEntry> = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            if let Some(last) = composed.last_mut() {
-                let last_old_end = last.old_byte_offset.value() + last.length;
-                let last_new_end = last.new_byte_offset.value() + last.length;
-                if last_old_end == candidate.old_byte_offset.value()
-                    && last_new_end == candidate.new_byte_offset.value()
-                {
-                    last.length += candidate.length;
-                    continue;
-                }
+            if Self::try_merge_last(&mut composed, &candidate) {
+                continue;
             }
             // kind 只是描述信息：位移为 0 才是 Identity。
             let mut fresh = candidate;
@@ -273,7 +283,25 @@ impl OffsetMap {
             };
             composed.push(fresh);
         }
-        OffsetMap { entries: composed }
+        composed
+    }
+
+    /// 尝试将 `candidate` 合并到 `composed` 的最后一个条目。
+    /// 返回 `true` 表示已合并（old 与 new 双侧都连续），`false` 表示需要 push 新条目。
+    fn try_merge_last(composed: &mut [OffsetMapEntry], candidate: &OffsetMapEntry) -> bool {
+        let Some(last) = composed.last_mut() else {
+            return false;
+        };
+        let last_old_end = last.old_byte_offset.value() + last.length;
+        let last_new_end = last.new_byte_offset.value() + last.length;
+        if last_old_end == candidate.old_byte_offset.value()
+            && last_new_end == candidate.new_byte_offset.value()
+        {
+            last.length += candidate.length;
+            true
+        } else {
+            false
+        }
     }
 
     /// 查找 old byte offset 在 new text 中的对应位置。

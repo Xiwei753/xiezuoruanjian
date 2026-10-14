@@ -47,7 +47,6 @@ pub fn local_date_at(timestamp_ms: i64) -> Result<String> {
 
 /// 本机当前时区的 UTC 偏移（秒）。
 pub fn local_utc_offset_seconds() -> i32 {
-    use chrono::Offset;
     chrono::Local::now().offset().local_minus_utc()
 }
 

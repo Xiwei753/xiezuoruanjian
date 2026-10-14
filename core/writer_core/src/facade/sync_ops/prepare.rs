@@ -192,9 +192,10 @@ impl crate::facade::WriterCore {
         secrets: &crate::sync::SyncSecrets,
         persist_preflight_failure: bool,
     ) -> crate::error::Result<Box<dyn crate::sync::provider::SyncProvider>> {
-        // secrets 仅在 github-api feature 下使用；非 github-api 时消费以避免 unused。
+        // secrets / persist_preflight_failure 仅在 github-api feature 下使用；
+        // 非 github-api 时消费以避免 unused。
         #[cfg(not(feature = "github-api"))]
-        let _ = secrets;
+        let _ = (secrets, persist_preflight_failure);
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
             "github_api" => {
@@ -228,6 +229,7 @@ impl crate::facade::WriterCore {
     /// `persist_preflight_failure = true`（用户同步路径）：失败时调
     /// `persist_full_sync_early_failure(status, "preflight")` 持久化失败状态；
     /// `false`（维护路径）：只返回 Err，不触碰 `FullSyncState`。
+    #[cfg(feature = "github-api")]
     fn init_sync_transport_with_optional_persist(
         &self,
         persist_preflight_failure: bool,

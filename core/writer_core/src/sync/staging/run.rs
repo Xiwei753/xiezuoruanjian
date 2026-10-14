@@ -635,13 +635,19 @@ fn walk_starmap_json_files(live_root: &Path, dir: &Path, out: &mut Vec<PathBuf>)
         if path.is_dir() {
             walk_starmap_json_files(live_root, &path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            if let Ok(rel) = path.strip_prefix(live_root) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
-                if super::starmap_merge::is_starmap_content_path(&rel_str) {
-                    out.push(rel.to_path_buf());
-                }
-            }
+            collect_starmap_json(live_root, &path, out);
         }
     }
     Ok(())
+}
+
+/// 检查单个 `.json` 文件是否为星图内容路径，是则收集到 `out`。
+fn collect_starmap_json(live_root: &Path, path: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rel) = path.strip_prefix(live_root) else {
+        return;
+    };
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    if super::starmap_merge::is_starmap_content_path(&rel_str) {
+        out.push(rel.to_path_buf());
+    }
 }

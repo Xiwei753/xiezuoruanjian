@@ -533,7 +533,7 @@ fn load_graph_embeds_from_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::starmap::semantic::{StarMapNodeContent, StarMapPortal, StarMapProvenance};
+    use crate::starmap::semantic::{StarMapNodeContent, StarMapProvenance};
     use crate::starmap::types::{
         StarMapEmbed, StarMapGraph, StarMapNode, StarMapNodeKind, StarMapPoint,
     };
@@ -581,27 +581,6 @@ mod tests {
             content: StarMapNodeContent::Empty,
             anchors: vec![],
             portal: None,
-            position: StarMapPoint::default(),
-            style: Default::default(),
-            provenance: StarMapProvenance::default(),
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-
-    fn make_portal_node(node_id: &str, destination_starmap_id: &str) -> StarMapNode {
-        StarMapNode {
-            id: node_id.to_string(),
-            title: node_id.to_string(),
-            kind: StarMapNodeKind::Note,
-            payload: None,
-            tags: vec![],
-            content: StarMapNodeContent::Empty,
-            anchors: vec![],
-            portal: Some(StarMapPortal {
-                destination_starmap_id: destination_starmap_id.to_string(),
-                destination_target: None,
-            }),
             position: StarMapPoint::default(),
             style: Default::default(),
             provenance: StarMapProvenance::default(),
