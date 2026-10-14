@@ -584,7 +584,11 @@ fn harmony_wire_contract_matches_fixture() {
     let _ = note(
         &mut out,
         "recordEditorChangeStats",
-        &call1(stats::writer_core_record_editor_change_stats, &event),
+        // SAFETY: event 是本测试持有的合法 C 串；函数返回 bool，包装为信封 JSON。
+        &format!(
+            r#"{{"success":true,"data":{}}}"#,
+            unsafe { stats::writer_core_record_editor_change_stats(event.as_ptr()) }
+        ),
     );
     let _ = note(
         &mut out,
