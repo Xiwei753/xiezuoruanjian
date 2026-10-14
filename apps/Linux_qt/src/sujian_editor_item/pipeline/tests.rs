@@ -104,15 +104,15 @@ fn test_doc_snapshot(
         padding: 0.0,
         width: 800.0,
         dpr: 1.0,
-        paragraphs: vec![crate::editor::layout::CanonicalParagraphSnapshot {
+        paragraphs: std::sync::Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![crate::editor::layout::CanonicalParagraphSnapshot {
             paragraph_text: text.to_string(),
             paragraph_document_byte_start: para_start,
             lines,
             index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
                 text, para_start,
             ),
-        }],
-        visual_lines: Arc::new(Vec::new()),
+        }])),
+        visual_lines: Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::new()),
         paragraph_offset_index:
             std::sync::Arc::new(crate::editor::layout::ParagraphOffsetIndex::new()),
         height_index:
@@ -196,7 +196,7 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
         0,
         vec![test_canonical_line(0, 7, 0, 2, Vec::new())],
     );
-    doc.visual_lines = Arc::new(vec![test_visual_line(0, 7, 0, 2, "ab")]);
+    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 7, 0, 2, "ab")]));
     let prepared = vec![test_raster_visual(0, 7)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -240,7 +240,7 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
 #[test]
 fn issue808_comment5918236360_prepare_miss_line_is_collected_for_retry() {
     let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 0, 0, 2, Vec::new())]);
-    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
+    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
 
     // prepare 结果为空（该行没有被提取到动画视觉）。
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -280,7 +280,7 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
             vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
         )],
     );
-    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
+    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
     // Issue #901 第十八轮问题3: has_image 检查要求 canonical line 已有 image，
     // 且 inject 只在 image.is_some() 时计为成功注入。
     // 给 canonical line 和 prepared raster visual 都设置 1x1 image。
@@ -291,7 +291,7 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
         },
         qmetaobject::ImageFormat::ARGB32_Premultiplied,
     );
-    doc.paragraphs[0].lines[0].image = Some(test_image.clone());
+    std::sync::Arc::make_mut(&mut doc.paragraphs)[0].lines[0].image = Some(test_image.clone());
     let prepared = vec![crate::editor::layout::AnimationRasterVisual {
         image: Some(test_image),
         paragraph_slot: 0,
@@ -322,7 +322,7 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
 #[test]
 fn issue808_comment5918236360_whitespace_line_is_not_checked() {
     let mut doc = test_doc_snapshot(" ", 0, vec![test_canonical_line(0, 0, 0, 1, Vec::new())]);
-    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 1, " ")]);
+    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 1, " ")]));
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,
@@ -360,7 +360,7 @@ fn issue901_round20_blocker4_image_missing_not_duplicated_with_inject_miss() {
             vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
         )],
     );
-    doc.visual_lines = Arc::new(vec![test_visual_line(0, 0, 0, 2, "ab")]);
+    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
     // prepared raster visual 的 image 为 None（test_raster_visual 默认 image: None）。
     let prepared = vec![test_raster_visual(0, 0)];
 

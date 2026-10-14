@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::chunked_vec::ChunkedSlotMap;
+use super::chunked_vec::{ChunkedSlotMap, PersistentChunkedVec};
 use super::paragraph_height_index::{ParagraphLineCountIndex, ParagraphOffsetIndex};
 use super::types::{ParagraphId, VisualLine};
 
@@ -284,7 +284,10 @@ pub struct ParagraphSpliceRanges {
 #[derive(Clone, Debug, Default)]
 pub struct ParagraphLayoutStore {
     /// 按文档顺序排列的段落缓存条目。
-    entries: Vec<ParagraphLayoutEntry>,
+    ///
+    /// Issue #901 第三十六轮问题3: 用 `PersistentChunkedVec` 替代 `Vec`，
+    /// splice 只重建受影响块 O(B + n/B)，不 memmove 后缀全部元素。
+    entries: PersistentChunkedVec<ParagraphLayoutEntry>,
     /// 下一个可分配的 `ParagraphId` 内部数值（从 1 开始）。
     next_id: u64,
     /// Issue #901 第二十一轮阻塞5+问题4: ParagraphId → slot 持久映射缓存。
@@ -367,7 +370,7 @@ impl ParagraphLayoutStore {
     /// 创建空的段落布局存储。
     pub fn new() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: PersistentChunkedVec::new(),
             next_id: 1,
             id_to_slot_cache: Arc::new(ChunkedSlotMap::new()),
             line_count_index: Arc::new(ParagraphLineCountIndex::new()),
@@ -739,7 +742,7 @@ impl ParagraphLayoutStore {
         }
         self.retired_slots.extend(newly_retired);
 
-        self.entries = new_entries;
+        self.entries = PersistentChunkedVec::from_vec(new_entries);
         // Issue #901 第二十一轮阻塞5: 同步重建 id_to_slot_cache。
         self.rebuild_id_to_slot_cache();
         // Issue #901 第二十二轮问题1: 从新 entries 已继承的 visual_line_count
@@ -874,13 +877,9 @@ impl ParagraphLayoutStore {
         // 3. splice self.entries：删除 [old_splice_start, old_splice_end)，插入新 entries。
         //    前缀段 [0, old_splice_start) 和后缀段 [old_splice_end, old_count) 原地保留。
         //
-        //    Issue #901 第三十二轮问题4 复核: Vec::splice 物理移动后缀段是 Vec 的固有限制
-        //    （连续内存布局，中间插入/删除需 memmove 后缀元素），O(suffix_count)。
-        //    此处后缀段的 ParagraphId、cache_key、Qt layout lease、排版结果全部保留
-        //    （只 memmove ParagraphLayoutEntry 结构体本身，不深复制 relative_lines 等 Vec），
-        //    消除了旧实现遍历后缀重写 document_byte_start 的 O(suffix_count) 逻辑开销。
-        //    完整消除 memmove 需持久向量（如 im::Vector）或分块数组结构，是未来优化方向。
-        //    当前 memmove 仅在段落数变化（Enter/Backspace）时触发，不是每笔字键的热路径。
+        //    Issue #901 第三十六轮问题3: PersistentChunkedVec::splice 只重建受影响块，
+        //    前缀/后缀块 Arc::clone 共享，O(B + n/B)，不 memmove 后缀全部元素。
+        //    后缀段的 ParagraphId、cache_key、Qt layout lease、排版结果全部保留。
         self.entries
             .splice(old_splice_start..old_splice_end, new_entries);
 
@@ -898,8 +897,10 @@ impl ParagraphLayoutStore {
         //    插入新段 ID（从 entries[old_splice_start..new_layout_end] 收集），
         //    后缀段 slot 自动平移（O(B + n/B)，B=256），不遍历后缀所有段。
         {
-            let new_ids: Vec<ParagraphId> = self.entries[old_splice_start..new_layout_end]
+            let new_ids: Vec<ParagraphId> = self.entries
                 .iter()
+                .skip(old_splice_start)
+                .take(new_layout_end.saturating_sub(old_splice_start))
                 .map(|e| e.id)
                 .collect();
             Arc::make_mut(&mut self.id_to_slot_cache)
@@ -1965,7 +1966,7 @@ impl ParagraphLayoutStore {
         // Fallback: O(index) 逐段累加（不依赖 byte_offset_index 的正确性）。
         let end = index.min(self.entries.len());
         let mut offset = 0usize;
-        for e in &self.entries[..end] {
+        for e in self.entries.iter().take(end) {
             offset += e.paragraph_text_len + if e.hard_break { 1 } else { 0 };
         }
         offset
@@ -1983,7 +1984,7 @@ impl ParagraphLayoutStore {
             .map(|e| (e.layout_generation, e.cache_slot, e.layout_epoch))
             .collect();
         self.retired_slots.extend(newly_retired);
-        for entry in &mut self.entries {
+        for entry in self.entries.iter_mut() {
             entry.layout_generation = 0;
             entry.cache_slot = -1;
             entry.layout_epoch = 0;
@@ -2043,7 +2044,7 @@ impl ParagraphLayoutStore {
     /// Issue #901 第二十一轮问题2: 同时全量重建 `line_count_index`（Fenwick 树）。
     pub fn sync_from_visual_lines(&mut self, lines: &[VisualLine], layout_generation: u64) {
         if lines.is_empty() {
-            for entry in &mut self.entries {
+            for entry in self.entries.iter_mut() {
                 entry.layout_generation = layout_generation;
                 entry.visual_line_count = 0;
                 entry.height = 0.0;
@@ -2187,7 +2188,7 @@ impl ParagraphLayoutStore {
     /// 绝对坐标在消费时由偏移索引按需解析。
     pub fn shift_suffix_document_byte_starts(&mut self, start_index: usize, delta: i64) {
         let len = self.entries.len();
-        for entry in &mut self.entries[start_index.min(len)..] {
+        for entry in self.entries.iter_mut().skip(start_index.min(len)) {
             entry.document_byte_start = (entry.document_byte_start as i64 + delta) as usize;
         }
     }

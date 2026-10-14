@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use super::types::ParagraphId;
 
@@ -494,27 +495,66 @@ struct SlotBlock {
     id_to_local: HashMap<ParagraphId, usize>,
 }
 
-/// 分块 ParagraphId → slot（逻辑序号）映射。
+/// 分块 ParagraphId → slot（逻辑序号）映射 — 结构共享持久分块树。
 ///
-/// 替代旧的 `HashMap<ParagraphId, usize>` + splice 时遍历后缀段平移。
+/// Issue #901 第三十六轮问题1+2: 消除 `Arc::make_mut` 触发的全图深拷和 slot() 线性扫块。
 ///
-/// # 核心改进
+/// # 核心设计
 ///
-/// 旧实现 splice 时遍历所有后缀段的 cache 条目逐个平移 slot，O(后缀段数)。
-/// 分块映射的 splice 只在受影响块内操作，后缀块的 `id_to_local` 不变
-///（块内 ID 和块内索引不变，全局 slot = 块前缀 len + 块内索引动态计算），
-/// O(后缀块数 + B)。
+/// `blocks` / `block_starts` / `id_to_block` 均用 `Arc` 包装，`Clone` 仅 `Arc::clone`
+/// O(1)，不深拷任何块内容。`Arc::make_mut` 在 COW 时 clone `ChunkedSlotMap` 也是 O(1)，
+/// 消除了旧实现 `#[derive(Clone)]` 深拷所有 blocks（每块 `ids: Vec` + `id_to_local: HashMap`）
+/// 的 O(全章段数) 全图深拷。
+///
+/// `slot(id)` 通过 `id_to_block` O(1) 定位块索引，`block_starts[block_idx]` O(1) 取块起始
+/// slot，`block.id_to_local[id]` O(1) 取块内偏移，总 O(1)。消除了旧实现遍历所有块的
+/// O(块数) = O(n/256) 线性扫描。
+///
+/// `splice` 重组受影响块（新块深建 O(B + new_ids)，未改块 `Arc::clone` 共享 O(1)），
+/// 重建 `block_starts` O(块数) 和 `id_to_block` O(段落数)。splice 仅在段落数变化
+///（Enter/Backspace）时触发，不是每笔字键热路径。
 ///
 /// # 不变量
 ///
-/// - `ids` 和 `id_to_local` 一致：`id_to_local[ids[i]] == i`。
+/// - `blocks[i]` 的 `ids` 和 `id_to_local` 一致：`id_to_local[ids[j]] == j`。
+/// - `block_starts[i] == blocks[0..i] 的 ids.len() 之和`，`block_starts[0] == 0`。
+/// - `id_to_block[id] == i` 当且仅当 `blocks[i].id_to_local` 含 `id`。
 /// - 每块 `ids.len()` 在 `[1, 2*chunk_capacity]` 范围内。
-/// - `total_len = 所有块 ids.len() 之和`。
-#[derive(Clone, Debug)]
+/// - `total_len == 所有块 ids.len() 之和`。
 pub struct ChunkedSlotMap {
-    blocks: Vec<SlotBlock>,
+    /// 结构共享的块列表。`Arc<Vec<Arc<SlotBlock>>>`：外层 Arc 共享块列表，
+    /// 内层 Arc 共享单个块。Clone O(1)，splice 时未改块 Arc::clone 共享。
+    blocks: std::sync::Arc<Vec<std::sync::Arc<SlotBlock>>>,
+    /// 块起始 slot 前缀和：`block_starts[i]` = 前 i 块的 ids 总 len。
+    /// 长度 = `blocks.len() + 1`，`block_starts[0] == 0`。
+    block_starts: std::sync::Arc<Vec<usize>>,
+    /// ID → 块索引定位。O(1) 查询直达叶块。
+    id_to_block: std::sync::Arc<HashMap<ParagraphId, usize>>,
     chunk_capacity: usize,
     total_len: usize,
+}
+
+impl Clone for ChunkedSlotMap {
+    /// O(1) 结构共享 clone — 三个 `Arc::clone`，不深拷任何块内容。
+    fn clone(&self) -> Self {
+        Self {
+            blocks: std::sync::Arc::clone(&self.blocks),
+            block_starts: std::sync::Arc::clone(&self.block_starts),
+            id_to_block: std::sync::Arc::clone(&self.id_to_block),
+            chunk_capacity: self.chunk_capacity,
+            total_len: self.total_len,
+        }
+    }
+}
+
+impl Debug for ChunkedSlotMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChunkedSlotMap")
+            .field("block_count", &self.blocks.len())
+            .field("chunk_capacity", &self.chunk_capacity)
+            .field("total_len", &self.total_len)
+            .finish()
+    }
 }
 
 impl Default for ChunkedSlotMap {
@@ -527,7 +567,9 @@ impl ChunkedSlotMap {
     /// 创建空的分块 slot 映射。
     pub fn new() -> Self {
         Self {
-            blocks: Vec::new(),
+            blocks: std::sync::Arc::new(Vec::new()),
+            block_starts: std::sync::Arc::new(vec![0]),
+            id_to_block: std::sync::Arc::new(HashMap::new()),
             chunk_capacity: DEFAULT_CHUNK_CAPACITY,
             total_len: 0,
         }
@@ -535,11 +577,23 @@ impl ChunkedSlotMap {
 
     /// 从 ID 数组创建（slot = 数组索引）。
     pub fn from_ids(ids: Vec<ParagraphId>) -> Self {
+        Self::from_ids_with_capacity(ids, DEFAULT_CHUNK_CAPACITY)
+    }
+
+    /// 从 ID 数组创建，指定块容量。
+    pub fn from_ids_with_capacity(ids: Vec<ParagraphId>, chunk_capacity: usize) -> Self {
+        let cap = chunk_capacity.max(1);
         let total_len = ids.len();
-        let blocks = Self::split_into_blocks(ids, DEFAULT_CHUNK_CAPACITY);
+        let slot_blocks = Self::split_into_blocks(ids, cap);
+        let blocks: Vec<std::sync::Arc<SlotBlock>> =
+            slot_blocks.into_iter().map(std::sync::Arc::new).collect();
+        let block_starts = Self::compute_block_starts(&blocks);
+        let id_to_block = Self::compute_id_to_block(&blocks);
         Self {
-            blocks,
-            chunk_capacity: DEFAULT_CHUNK_CAPACITY,
+            blocks: std::sync::Arc::new(blocks),
+            block_starts: std::sync::Arc::new(block_starts),
+            id_to_block: std::sync::Arc::new(id_to_block),
+            chunk_capacity: cap,
             total_len,
         }
     }
@@ -571,27 +625,27 @@ impl ChunkedSlotMap {
 
     /// 清空所有数据。
     pub fn clear(&mut self) {
-        self.blocks.clear();
+        self.blocks = std::sync::Arc::new(Vec::new());
+        self.block_starts = std::sync::Arc::new(vec![0]);
+        self.id_to_block = std::sync::Arc::new(HashMap::new());
         self.total_len = 0;
     }
 
     /// 查询 `id` 对应的 slot（逻辑序号）。
     ///
-    /// 遍历块查 `id_to_local`，O(块数)。
+    /// Issue #901 第三十六轮问题2: 通过 `id_to_block` O(1) 定位块索引，
+    /// `block_starts[block_idx]` O(1) 取块起始 slot，`id_to_local` O(1) 取块内偏移。
+    /// 总 O(1)，消除旧实现遍历所有块的 O(块数) 线性扫描。
     pub fn slot(&self, id: ParagraphId) -> Option<usize> {
-        let mut offset = 0usize;
-        for b in &self.blocks {
-            if let Some(&local) = b.id_to_local.get(&id) {
-                return Some(offset + local);
-            }
-            offset += b.ids.len();
-        }
-        None
+        let &block_idx = self.id_to_block.get(&id)?;
+        let block = &self.blocks[block_idx];
+        let &local = block.id_to_local.get(&id)?;
+        Some(self.block_starts[block_idx] + local)
     }
 
-    /// 是否包含 `id`。O(块数)。
+    /// 是否包含 `id`。O(1)。
     pub fn contains(&self, id: ParagraphId) -> bool {
-        self.slot(id).is_some()
+        self.id_to_block.contains_key(&id)
     }
 
     /// 在 `index` 处插入 `id`。
@@ -617,9 +671,11 @@ impl ChunkedSlotMap {
 
     /// 局部 splice — 删除 `[start, end)` 范围的 ID，插入 `new_ids`。
     ///
-    /// 后缀块的 `id_to_local` 不变（块内 ID 和块内索引不变），
-    /// 全局 slot 由块前缀 len + 块内索引动态计算。
-    /// O(块数 + B + new_ids.len())。
+    /// Issue #901 第三十六轮问题1: 结构共享 splice — 未改块由旧/新快照 `Arc::clone` 共享，
+    /// 只复制受影响叶块（新块深建 O(B + new_ids)）。`Arc::make_mut` 在 COW 时
+    /// clone `Vec<Arc<SlotBlock>>` 是 O(块数) 浅拷（每块 Arc::clone O(1)），
+    /// 不是旧实现的 O(全章段数) 深拷所有块的 ids + HashMap。
+    /// 重建 `block_starts` O(块数) 和 `id_to_block` O(段落数) 仅在 splice 时。
     pub fn splice(&mut self, start: usize, end: usize, new_ids: Vec<ParagraphId>) {
         let splice_start = start.min(self.total_len);
         let splice_end = end.min(self.total_len);
@@ -632,15 +688,19 @@ impl ChunkedSlotMap {
             return;
         }
 
-        // 空根插入/删除：blocks 为空时 find_chunk 返回 (0,0)，self.blocks[0] 越界。
-        // 把空根插入作为合法基础操作，不调用 find_chunk。
+        // 空根插入/删除。
         if self.blocks.is_empty() {
             if new_count == 0 {
-                // 空根删除保持空根。
                 return;
             }
-            // 从 new_ids 直接创建首块。
-            self.blocks = Self::split_into_blocks(new_ids, self.chunk_capacity);
+            let slot_blocks = Self::split_into_blocks(new_ids, self.chunk_capacity);
+            let blocks: Vec<std::sync::Arc<SlotBlock>> =
+                slot_blocks.into_iter().map(std::sync::Arc::new).collect();
+            let block_starts = Self::compute_block_starts(&blocks);
+            let id_to_block = Self::compute_id_to_block(&blocks);
+            self.blocks = std::sync::Arc::new(blocks);
+            self.block_starts = std::sync::Arc::new(block_starts);
+            self.id_to_block = std::sync::Arc::new(id_to_block);
             self.total_len = new_count;
             return;
         }
@@ -657,32 +717,42 @@ impl ChunkedSlotMap {
         all_new.extend(new_ids);
         all_new.extend(suffix);
 
-        // 重新分块，替换 blocks[sc..=ec]。
-        let new_blocks = Self::split_into_blocks(all_new, self.chunk_capacity);
-        self.blocks.splice(sc..=ec, new_blocks);
+        // 重新分块受影响区域。
+        let new_slot_blocks = Self::split_into_blocks(all_new, self.chunk_capacity);
+        let new_blocks: Vec<std::sync::Arc<SlotBlock>> =
+            new_slot_blocks.into_iter().map(std::sync::Arc::new).collect();
+
+        // 结构共享 splice：make_mut blocks（refcount==1 原地改，refcount>1 O(块数) 浅拷），
+        // 替换受影响块。未改块（前缀块 [0,sc) 和后缀块 [ec+1, len)）Arc::clone 共享。
+        let blocks_mut = std::sync::Arc::make_mut(&mut self.blocks);
+        blocks_mut.splice(sc..=ec, new_blocks);
+
+        // 重建 block_starts 和 id_to_block。
+        let block_starts = Self::compute_block_starts(blocks_mut);
+        let id_to_block = Self::compute_id_to_block(blocks_mut);
+        self.block_starts = std::sync::Arc::new(block_starts);
+        self.id_to_block = std::sync::Arc::new(id_to_block);
 
         self.total_len = self.total_len - (splice_end - splice_start) + new_count;
     }
 
     /// 构建完整 `HashMap<ParagraphId, usize>`。
     ///
-    /// O(段落数)。用于 `paragraph_id_to_slot_arc()` 返回 `Arc<HashMap>`
-    /// 供消费方共享。snapshot 构建本身是 O(段落数)，此构建不增加渐近复杂度。
+    /// O(段落数)。
     pub fn to_hash_map(&self) -> HashMap<ParagraphId, usize> {
         let mut map = HashMap::with_capacity(self.total_len);
-        let mut offset = 0usize;
-        for b in &self.blocks {
+        for (i, b) in self.blocks.iter().enumerate() {
+            let offset = self.block_starts[i];
             for (local, &id) in b.ids.iter().enumerate() {
                 map.insert(id, offset + local);
             }
-            offset += b.ids.len();
         }
         map
     }
 
     /// 从 entries 重建（entries 按 slot 顺序提供 ID）。
     ///
-    /// `id_at_slot: Fn(usize) -> Option<ParagraphId>`，对每个 slot 返回 ID。
+    /// `id_at_slot: Fn(usize) -> ParagraphId`，对每个 slot 返回 ID。
     pub fn rebuild_from<F>(&mut self, len: usize, id_at_slot: F)
     where
         F: Fn(usize) -> ParagraphId,
@@ -691,26 +761,62 @@ impl ChunkedSlotMap {
         for i in 0..len {
             ids.push(id_at_slot(i));
         }
-        let blocks = Self::split_into_blocks(ids, self.chunk_capacity);
-        self.blocks = blocks;
-        self.total_len = len;
+        *self = Self::from_ids_with_capacity(ids, self.chunk_capacity);
     }
 
     // ── 内部辅助方法 ──
 
-    /// 找到 `index` 所在块号和块内偏移。
+    /// 找到 `index` 所在块号和块内偏移。用 `block_starts` 二分 O(log 块数)。
     fn find_chunk(&self, index: usize) -> (usize, usize) {
-        let mut offset = 0usize;
-        for (i, b) in self.blocks.iter().enumerate() {
-            let blen = b.ids.len();
-            if index < offset + blen {
-                return (i, index - offset);
-            }
-            offset += blen;
+        if self.blocks.is_empty() {
+            return (0, 0);
         }
-        let last_idx = self.blocks.len().saturating_sub(1);
-        let last_len = self.blocks.last().map_or(0, |b| b.ids.len());
-        (last_idx, last_len)
+        if index >= self.total_len {
+            let last_idx = self.blocks.len() - 1;
+            let last_len = self.blocks[last_idx].ids.len();
+            return (last_idx, last_len);
+        }
+        // block_starts[i] = 前 i 块总 len，递增。
+        // 找最大 i 使得 block_starts[i] <= index。
+        let starts = &*self.block_starts;
+        let n = self.blocks.len();
+        let mut lo = 0usize;
+        let mut hi = n;
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if starts[mid] <= index {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let chunk_idx = lo;
+        let local_idx = index - starts[chunk_idx];
+        (chunk_idx, local_idx)
+    }
+
+    /// 计算块起始 slot 前缀和。`block_starts[i]` = 前 i 块 ids 总 len。
+    fn compute_block_starts(blocks: &[std::sync::Arc<SlotBlock>]) -> Vec<usize> {
+        let mut starts = Vec::with_capacity(blocks.len() + 1);
+        let mut acc = 0usize;
+        starts.push(acc);
+        for b in blocks {
+            acc += b.ids.len();
+            starts.push(acc);
+        }
+        starts
+    }
+
+    /// 计算 ID → 块索引定位映射。
+    fn compute_id_to_block(blocks: &[std::sync::Arc<SlotBlock>]) -> HashMap<ParagraphId, usize> {
+        let total: usize = blocks.iter().map(|b| b.ids.len()).sum();
+        let mut map = HashMap::with_capacity(total);
+        for (i, b) in blocks.iter().enumerate() {
+            for &id in &b.ids {
+                map.insert(id, i);
+            }
+        }
+        map
     }
 
     /// 构建一个 slot 块。
@@ -722,7 +828,7 @@ impl ChunkedSlotMap {
         SlotBlock { ids, id_to_local }
     }
 
-    /// 将 Vec 分成多个块。
+    /// 将 Vec 分成多个块（返回裸 SlotBlock，供 from_ids 等包装 Arc）。
     fn split_into_blocks(
         ids: Vec<ParagraphId>,
         capacity: usize,
@@ -740,6 +846,524 @@ impl ChunkedSlotMap {
             start = end;
         }
         blocks
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── PersistentChunkedVec：结构共享分块向量 ──
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 持久化分块向量 — O(1) clone、O(B + n/B) splice、O(log(n/B)) 随机访问。
+///
+/// Issue #901 第三十六轮问题3: 消除 entries/visual_lines/prev_paragraphs
+/// 的 Vec::splice 后缀 memmove。
+///
+/// # 核心设计
+///
+/// 将元素按固定块大小 B 分块存储，每块 `Arc<Vec<T>>`。
+/// clone 仅 Arc::clone 块列表和前缀和数组，O(1)。
+/// splice 只重建受影响块（1-2 块），前缀/后缀块 Arc::clone 共享，O(B + n/B)。
+///
+/// # 复杂度
+///
+/// | 操作 | Vec | PersistentChunkedVec |
+/// |------|-----|---------------------|
+/// | clone | O(n) | O(1) |
+/// | splice | O(n) memmove | O(n/B + k*B) |
+/// | get/get_mut | O(1) | O(log(n/B)) |
+/// | iter | O(1) | O(1) per element |
+/// | push | O(1) amortized | O(1) amortized |
+pub struct PersistentChunkedVec<T: Clone> {
+    /// 分块列表，每块 `Arc<Vec<T>>`，clone 时 Arc 共享。
+    chunks: Arc<Vec<Arc<Vec<T>>>>,
+    /// 块起始索引前缀和：`chunk_starts[i]` = 前 i 块的元素总数。
+    /// `chunk_starts[0] == 0`，`chunk_starts[len] == total_len`。
+    chunk_starts: Arc<Vec<usize>>,
+    /// 每块最大容量 B。
+    chunk_capacity: usize,
+    /// 元素总数。
+    total_len: usize,
+}
+
+impl<T: Clone> PersistentChunkedVec<T> {
+    /// 创建空向量，使用默认块容量。
+    pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_CHUNK_CAPACITY)
+    }
+
+    /// 创建空向量，指定块容量。
+    pub fn with_capacity(chunk_capacity: usize) -> Self {
+        let cap = chunk_capacity.max(1);
+        Self {
+            chunks: Arc::new(Vec::new()),
+            chunk_starts: Arc::new(vec![0]),
+            chunk_capacity: cap,
+            total_len: 0,
+        }
+    }
+
+    /// 元素总数。
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.total_len
+    }
+
+    /// 是否为空。
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.total_len == 0
+    }
+
+    /// 块容量 B。
+    #[inline]
+    pub fn chunk_capacity(&self) -> usize {
+        self.chunk_capacity
+    }
+
+    /// 清空向量。
+    pub fn clear(&mut self) {
+        let chunks = Arc::make_mut(&mut self.chunks);
+        chunks.clear();
+        let starts = Arc::make_mut(&mut self.chunk_starts);
+        starts.clear();
+        starts.push(0);
+        self.total_len = 0;
+    }
+
+    /// 从 `Vec<T>` 构造，将元素按块容量分块。元素 move，不 clone。
+    pub fn from_vec(vec: Vec<T>) -> Self {
+        Self::from_vec_with_capacity(vec, DEFAULT_CHUNK_CAPACITY)
+    }
+
+    /// 从 `Vec<T>` 构造，指定块容量。元素 move，不 clone。
+    pub fn from_vec_with_capacity(vec: Vec<T>, chunk_capacity: usize) -> Self {
+        let cap = chunk_capacity.max(1);
+        let total_len = vec.len();
+        if total_len == 0 {
+            return Self::with_capacity(cap);
+        }
+        let num_chunks = (total_len + cap - 1) / cap;
+        let mut chunks: Vec<Arc<Vec<T>>> = Vec::with_capacity(num_chunks);
+        let mut chunk_starts: Vec<usize> = Vec::with_capacity(num_chunks + 1);
+        chunk_starts.push(0);
+        let mut remaining = vec;
+        while !remaining.is_empty() {
+            let take = cap.min(remaining.len());
+            // drain moves elements out without cloning.
+            let chunk: Vec<T> = remaining.drain(..take).collect();
+            chunk_starts.push(chunk_starts.last().unwrap() + chunk.len());
+            chunks.push(Arc::new(chunk));
+        }
+        Self {
+            chunks: Arc::new(chunks),
+            chunk_starts: Arc::new(chunk_starts),
+            chunk_capacity: cap,
+            total_len,
+        }
+    }
+
+    /// 消费 self，将所有元素收集到 `Vec<T>`。元素 move，不 clone。
+    pub fn into_vec(self) -> Vec<T> {
+        let total_len = self.total_len;
+        let mut result: Vec<T> = Vec::with_capacity(total_len);
+        // Arc::try_unwrap 优先 move，若共享则 clone。
+        let chunks = match Arc::try_unwrap(self.chunks) {
+            Ok(v) => v,
+            Err(arc) => (*arc).clone(),
+        };
+        for chunk in chunks {
+            match Arc::try_unwrap(chunk) {
+                Ok(mut owned) => result.append(&mut owned),
+                Err(arc) => {
+                    for item in arc.iter().cloned() {
+                        result.push(item);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// 克隆所有元素到 `Vec<T>`。需要 T: Clone。
+    pub fn to_vec(&self) -> Vec<T> {
+        let mut result: Vec<T> = Vec::with_capacity(self.total_len);
+        for chunk in self.chunks.iter() {
+            for item in chunk.iter() {
+                result.push(item.clone());
+            }
+        }
+        result
+    }
+
+    /// 二分查找块索引：返回 `chunk_idx` 使得 `chunk_starts[chunk_idx] <= index < chunk_starts[chunk_idx+1]`。
+    /// 若 `index >= total_len`，返回最后一个块索引。
+    #[inline]
+    fn find_chunk(&self, index: usize) -> usize {
+        // chunk_starts 是单调递增的，用 partition_point 找第一个 > index 的位置。
+        let starts = &*self.chunk_starts;
+        if index >= self.total_len {
+            return starts.len().saturating_sub(2); // 最后一个块
+        }
+        // partition_point 返回第一个 > index 的位置，减 1 得到块索引。
+        starts.partition_point(|&s| s <= index).saturating_sub(1)
+    }
+
+    /// 按索引获取只读引用。
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index >= self.total_len {
+            return None;
+        }
+        let chunk_idx = self.find_chunk(index);
+        let local = index - self.chunk_starts[chunk_idx];
+        self.chunks[chunk_idx].get(local)
+    }
+
+    /// 按索引获取可变引用。若块被共享（Arc refcount > 1），COW clone 该块。
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index >= self.total_len {
+            return None;
+        }
+        let chunk_idx = self.find_chunk(index);
+        let local = index - self.chunk_starts[chunk_idx];
+        let chunks = Arc::make_mut(&mut self.chunks);
+        let chunk = Arc::make_mut(&mut chunks[chunk_idx]);
+        chunk.get_mut(local)
+    }
+
+    /// 末尾追加元素。
+    pub fn push(&mut self, value: T) {
+        let chunks = Arc::make_mut(&mut self.chunks);
+        let starts = Arc::make_mut(&mut self.chunk_starts);
+        // 若最后一块未满，追加到最后一块；否则新建一块。
+        let need_new_chunk = chunks
+            .last()
+            .map_or(true, |c| c.len() >= self.chunk_capacity);
+        if need_new_chunk {
+            chunks.push(Arc::new(vec![value]));
+        } else {
+            let last_chunk = chunks.last_mut().unwrap();
+            Arc::make_mut(last_chunk).push(value);
+        }
+        self.total_len += 1;
+        // 更新前缀和：最后一位 += 1
+        if *starts.last().unwrap() < self.total_len {
+            *starts.last_mut().unwrap() = self.total_len;
+        } else {
+            starts.push(self.total_len);
+        }
+    }
+
+    /// 迭代所有元素的只读引用。
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            chunks: self.chunks.iter(),
+            current: [].iter(),
+        }
+    }
+
+    /// 迭代所有元素的可变引用。被共享的块会被 COW clone。
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        let chunks = Arc::make_mut(&mut self.chunks);
+        IterMut {
+            chunks: chunks.iter_mut(),
+            current: [].iter_mut(),
+        }
+    }
+
+    /// 最后一个元素的只读引用。
+    pub fn last(&self) -> Option<&T> {
+        if self.total_len == 0 {
+            return None;
+        }
+        let last_chunk = self.chunks.last()?;
+        last_chunk.last()
+    }
+
+    /// 截断到指定长度。多余元素被丢弃。
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.total_len {
+            return;
+        }
+        if len == 0 {
+            self.clear();
+            return;
+        }
+        // 先计算截断点所在块（不可变借用），再取可变借用。
+        let keep_chunk_idx = self.find_chunk(len);
+        let local = len - self.chunk_starts[keep_chunk_idx];
+        let chunks = Arc::make_mut(&mut self.chunks);
+        let starts = Arc::make_mut(&mut self.chunk_starts);
+        // 截断该块
+        if local > 0 {
+            let chunk = Arc::make_mut(&mut chunks[keep_chunk_idx]);
+            chunk.truncate(local);
+        }
+        // 移除后续块
+        chunks.truncate(keep_chunk_idx + 1);
+        // 重建前缀和
+        starts.truncate(keep_chunk_idx + 1);
+        if local == 0 {
+            // 整块被移除，starts 已正确
+        } else {
+            starts.push(len);
+        }
+        // 确保 starts 以 len 结尾
+        if *starts.last().unwrap() != len {
+            *starts.last_mut().unwrap() = len;
+        }
+        self.total_len = len;
+    }
+
+    /// 局部 splice — 删除 `[start, end)` 范围的元素，插入 `replacement`。
+    ///
+    /// 前缀块 `[0, start)` 和后缀块 `[end, total_len)` 通过 Arc::clone 共享，
+    /// 只重建受影响块。复杂度 O(n/B + k*B)，k 为受影响块数（通常 1-2）。
+    pub fn splice<R>(&mut self, range: R, replacement: Vec<T>)
+    where
+        R: std::ops::RangeBounds<usize>,
+    {
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(&s) => s,
+            std::ops::Bound::Excluded(&s) => s + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(&e) => e + 1,
+            std::ops::Bound::Excluded(&e) => e,
+            std::ops::Bound::Unbounded => self.total_len,
+        };
+        let start = start.min(self.total_len);
+        let end = end.min(self.total_len);
+        if start > end {
+            return;
+        }
+        if start == 0 && end == self.total_len && replacement.is_empty() {
+            self.clear();
+            return;
+        }
+
+        // 收集前缀元素（start 之前的元素）和后缀元素（end 之后的元素）。
+        // 前缀/后缀块通过 Arc::clone 共享，不 clone 元素。
+        let old_chunks = &*self.chunks;
+        let old_starts = &*self.chunk_starts;
+
+        // 构建新块列表
+        let mut new_chunks: Vec<Arc<Vec<T>>> = Vec::new();
+        let mut new_starts: Vec<usize> = vec![0];
+        let mut new_len = 0usize;
+
+        // 1. 前缀块：完整块直接 Arc::clone，部分块截取
+        if start > 0 {
+            let first_affected_chunk = self.find_chunk(start);
+            // 完整前缀块 [0, first_affected_chunk)
+            for i in 0..first_affected_chunk {
+                new_chunks.push(Arc::clone(&old_chunks[i]));
+                new_len += old_chunks[i].len();
+                new_starts.push(new_len);
+            }
+            // 部分前缀块（first_affected_chunk 中 start 之前的部分）
+            let local_start = start - old_starts[first_affected_chunk];
+            if local_start > 0 {
+                let prefix: Vec<T> = old_chunks[first_affected_chunk]
+                    [..local_start]
+                    .to_vec();
+                new_len += prefix.len();
+                new_chunks.push(Arc::new(prefix));
+                new_starts.push(new_len);
+            }
+        }
+
+        // 2. 插入替换元素，按块容量分块
+        if !replacement.is_empty() {
+            let mut remaining = replacement;
+            while !remaining.is_empty() {
+                let take = self.chunk_capacity.min(remaining.len());
+                let chunk: Vec<T> = remaining.drain(..take).collect();
+                new_len += chunk.len();
+                new_chunks.push(Arc::new(chunk));
+                new_starts.push(new_len);
+            }
+        }
+
+        // 3. 后缀块：完整块直接 Arc::clone，部分块截取
+        if end < self.total_len {
+            let last_affected_chunk = self.find_chunk(end);
+            let local_end = end - old_starts[last_affected_chunk];
+            // 部分后缀块（last_affected_chunk 中 end 之后的部分）
+            if local_end < old_chunks[last_affected_chunk].len() {
+                let suffix: Vec<T> = old_chunks[last_affected_chunk]
+                    [local_end..]
+                    .to_vec();
+                new_len += suffix.len();
+                new_chunks.push(Arc::new(suffix));
+                new_starts.push(new_len);
+            }
+            // 完整后缀块 (last_affected_chunk+1, end)
+            for i in (last_affected_chunk + 1)..old_chunks.len() {
+                new_chunks.push(Arc::clone(&old_chunks[i]));
+                new_len += old_chunks[i].len();
+                new_starts.push(new_len);
+            }
+        }
+
+        self.chunks = Arc::new(new_chunks);
+        self.chunk_starts = Arc::new(new_starts);
+        self.total_len = new_len;
+    }
+
+    /// 扩展向量。
+    pub fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.push(item);
+        }
+    }
+
+    /// 在 `index` 处插入一个元素。后续元素右移。
+    /// 用 splice 实现，O(B + n/B)。
+    pub fn insert(&mut self, index: usize, value: T) {
+        let idx = index.min(self.total_len);
+        self.splice(idx..idx, vec![value]);
+    }
+
+    /// 移除并返回 `index` 处的元素。后续元素左移。
+    /// 用 splice 实现，O(B + n/B)。需要 clone 取出元素。
+    pub fn remove(&mut self, index: usize) -> T {
+        let value = self[index].clone();
+        self.splice(index..index + 1, Vec::new());
+        value
+    }
+
+    /// 二分分区点 — 返回第一个使 `pred` 返回 false 的位置。
+    /// 等价于 `[T]::partition_point`，逐块查找，O(n/B + B)。
+    pub fn partition_point<P: Fn(&T) -> bool>(&self, pred: P) -> usize {
+        let mut count = 0usize;
+        for chunk in self.chunks.iter() {
+            let p = chunk.partition_point(&pred);
+            count += p;
+            if p < chunk.len() {
+                break;
+            }
+        }
+        count
+    }
+}
+
+// ── 具名迭代器类型 ──
+
+/// `PersistentChunkedVec` 的只读迭代器。
+pub struct Iter<'a, T: Clone> {
+    chunks: std::slice::Iter<'a, Arc<Vec<T>>>,
+    current: std::slice::Iter<'a, T>,
+}
+
+impl<'a, T: Clone> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        loop {
+            if let Some(item) = self.current.next() {
+                return Some(item);
+            }
+            match self.chunks.next() {
+                Some(chunk) => self.current = chunk.iter(),
+                None => return None,
+            }
+        }
+    }
+}
+
+/// `PersistentChunkedVec` 的可变迭代器。共享块会被 COW clone。
+pub struct IterMut<'a, T: Clone> {
+    chunks: std::slice::IterMut<'a, Arc<Vec<T>>>,
+    current: std::slice::IterMut<'a, T>,
+}
+
+impl<'a, T: Clone> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<&'a mut T> {
+        loop {
+            if let Some(item) = self.current.next() {
+                return Some(item);
+            }
+            match self.chunks.next() {
+                Some(chunk) => self.current = Arc::make_mut(chunk).iter_mut(),
+                None => return None,
+            }
+        }
+    }
+}
+
+// ── trait 实现 ──
+
+impl<T: Clone> Default for PersistentChunkedVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Clone> Clone for PersistentChunkedVec<T> {
+    fn clone(&self) -> Self {
+        Self {
+            chunks: Arc::clone(&self.chunks),
+            chunk_starts: Arc::clone(&self.chunk_starts),
+            chunk_capacity: self.chunk_capacity,
+            total_len: self.total_len,
+        }
+    }
+}
+
+impl<T: Clone + Debug> Debug for PersistentChunkedVec<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<T: Clone> std::ops::Index<usize> for PersistentChunkedVec<T> {
+    type Output = T;
+    #[inline]
+    fn index(&self, index: usize) -> &T {
+        self.get(index).expect("PersistentChunkedVec index out of bounds")
+    }
+}
+
+impl<T: Clone> std::ops::IndexMut<usize> for PersistentChunkedVec<T> {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        self.get_mut(index).expect("PersistentChunkedVec index out of bounds")
+    }
+}
+
+impl<T: Clone> From<Vec<T>> for PersistentChunkedVec<T> {
+    fn from(vec: Vec<T>) -> Self {
+        Self::from_vec(vec)
+    }
+}
+
+impl<T: Clone + PartialEq> PartialEq for PersistentChunkedVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.total_len != other.total_len {
+            return false;
+        }
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<T: Clone + Eq> Eq for PersistentChunkedVec<T> {}
+
+impl<'a, T: Clone> IntoIterator for &'a PersistentChunkedVec<T> {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T: Clone> IntoIterator for &'a mut PersistentChunkedVec<T> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 
@@ -1086,11 +1710,7 @@ mod tests {
     fn slot_map_splice_cross_chunk_correct() {
         // 跨块 splice：B=4，8 个 ID 跨 2 块。
         let ids: Vec<ParagraphId> = (1..=8).map(ParagraphId::from_u64).collect();
-        let mut sm = ChunkedSlotMap {
-            blocks: ChunkedSlotMap::split_into_blocks(ids, 4),
-            chunk_capacity: 4,
-            total_len: 8,
-        };
+        let mut sm = ChunkedSlotMap::from_ids_with_capacity(ids, 4);
         // splice [2, 6) 删除 ids[2..6] = [3,4,5,6]，插入 [id_new]。
         // 保留 ids[0,1]（前缀）+ ids[6,7]（后缀）= [1,2,7,8]。
         // 重组后：[1, 2, 99, 7, 8]，len=5。
@@ -1204,5 +1824,161 @@ mod tests {
         sm.splice(0, 0, vec![]);
         assert_eq!(sm.len(), 0);
         assert!(sm.is_empty());
+    }
+
+    // ── PersistentChunkedVec 测试 ──
+
+    #[test]
+    fn pcv_empty() {
+        let v: PersistentChunkedVec<i32> = PersistentChunkedVec::new();
+        assert!(v.is_empty());
+        assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn pcv_from_vec_and_access() {
+        let v = PersistentChunkedVec::from_vec_with_capacity(vec![10, 20, 30, 40, 50], 2);
+        assert_eq!(v.len(), 5);
+        assert!(!v.is_empty());
+        assert_eq!(v[0], 10);
+        assert_eq!(v[4], 50);
+        assert_eq!(v.get(5), None);
+        assert_eq!(v.get(2), Some(&30));
+    }
+
+    #[test]
+    fn pcv_clone_is_o1() {
+        let v = PersistentChunkedVec::from_vec_with_capacity((0..1000).collect(), 10);
+        let c = v.clone();
+        assert_eq!(v.len(), c.len());
+        assert_eq!(v[500], c[500]);
+    }
+
+    #[test]
+    fn pcv_splice_replace_middle() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7, 8], 3);
+        v.splice(2..5, vec![100, 200]);
+        assert_eq!(v.to_vec(), vec![1, 2, 100, 200, 6, 7, 8]);
+    }
+
+    #[test]
+    fn pcv_splice_insert_at_start() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3], 2);
+        v.splice(0..0, vec![10, 20]);
+        assert_eq!(v.to_vec(), vec![10, 20, 1, 2, 3]);
+    }
+
+    #[test]
+    fn pcv_splice_insert_at_end() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3], 2);
+        v.splice(3..3, vec![10, 20]);
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 10, 20]);
+    }
+
+    #[test]
+    fn pcv_splice_delete_all() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5], 2);
+        v.splice(0..5, vec![]);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn pcv_splice_cross_chunk() {
+        // 块容量 3，8 个元素分成 [0,1,2],[3,4,5],[6,7]
+        // splice 1..7 替换为 [100,200]
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![0, 1, 2, 3, 4, 5, 6, 7], 3);
+        v.splice(1..7, vec![100, 200]);
+        assert_eq!(v.to_vec(), vec![0, 100, 200, 7]);
+    }
+
+    #[test]
+    fn pcv_get_mut() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5], 2);
+        *v.get_mut(2).unwrap() = 30;
+        assert_eq!(v[2], 30);
+    }
+
+    #[test]
+    fn pcv_iter() {
+        let v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5], 2);
+        let collected: Vec<i32> = v.iter().copied().collect();
+        assert_eq!(collected, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn pcv_iter_mut() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4], 2);
+        for x in v.iter_mut() {
+            *x *= 10;
+        }
+        assert_eq!(v.to_vec(), vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn pcv_push() {
+        let mut v = PersistentChunkedVec::with_capacity(3);
+        for i in 0..10 {
+            v.push(i);
+        }
+        assert_eq!(v.len(), 10);
+        assert_eq!(v.to_vec(), (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn pcv_truncate() {
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7], 3);
+        v.truncate(4);
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn pcv_into_vec() {
+        let v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5], 2);
+        assert_eq!(v.into_vec(), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn pcv_partition_point() {
+        let v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 3, 5, 7, 9, 11], 2);
+        // 找第一个 >= 6 的位置
+        let pp = v.partition_point(|x| *x < 6);
+        assert_eq!(pp, 3); // [1,3,5] < 6, [7,...] >= 6
+        assert_eq!(v[pp], 7);
+    }
+
+    #[test]
+    fn pcv_last() {
+        let v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3], 2);
+        assert_eq!(v.last(), Some(&3));
+    }
+
+    #[test]
+    fn pcv_clear() {
+        let mut v = PersistentChunkedVec::from_vec(vec![1, 2, 3]);
+        v.clear();
+        assert!(v.is_empty());
+        assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn pcv_splice_preserves_suffix_sharing() {
+        // splice 后前缀/后缀块应通过 Arc 共享，不深拷。
+        let v = PersistentChunkedVec::from_vec_with_capacity(
+            (0..100).collect::<Vec<_>>(),
+            10,
+        );
+        let mut v2 = v.clone();
+        // splice 中间一小段：删除 [40,42)（2 个元素），插入 1 个。
+        // 净变化 -1，后缀左移 1。
+        v2.splice(40..42, vec![999]);
+        // 前缀不变
+        assert_eq!(v[0], v2[0]);
+        assert_eq!(v[39], v2[39]);
+        // splice 点
+        assert_eq!(v2[40], 999);
+        // 后缀值保留（原 index 42 现在在 index 41）
+        assert_eq!(v[42], v2[41]);
+        assert_eq!(v[50], v2[49]);
+        assert_eq!(v2.len(), 99);
     }
 }

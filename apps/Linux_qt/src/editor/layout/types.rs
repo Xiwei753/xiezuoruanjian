@@ -168,15 +168,15 @@ pub struct LayoutSnapshot {
     pub line_spacing: f32,
     pub text_indent: f32,
     pub padding: f32,
-    /// Issue #901 第九轮阻塞5: 用 `Arc<Vec<VisualLine>>` 共享视觉行数据，
-    /// 避免每次编辑克隆整章 VisualLine（含字符串数据）。
+    /// Issue #901 第三十六轮问题3: 用 `Arc<PersistentChunkedVec<VisualLine>>` 共享视觉行数据，
+    /// splice 只重建受影响块 O(B + n/B)，不 memmove 后缀全部行。
     /// `LayoutSnapshot` 和 `CanonicalDocumentVisualSnapshot.visual_lines`
-    /// 通过 `Arc::clone` 共享同一份视觉行数据，编辑时 `Arc::make_mut`
+    /// 通过 `Arc::clone` 共享同一份数据，编辑时 `Arc::make_mut`
     /// 原地修改（refcount==1）或 COW（refcount>1）。
     ///
     /// Issue #901 第十四轮问题1: `lines` 存储段内相对坐标（y/byte/qchar 相对于段首）。
     /// 绝对坐标由消费方通过 `paragraph_offset_index` + `height_index` 按需计算。
-    pub lines: Arc<Vec<VisualLine>>,
+    pub lines: Arc<super::chunked_vec::PersistentChunkedVec<VisualLine>>,
     /// Issue #901 第十四轮问题1: 段落前缀偏移索引 — 段首 byte/qchar 坐标权威来源。
     /// 消费方通过 `paragraph_offset_index.paragraph_byte_start(cache_slot) + line.byte_start`
     /// 计算文档级绝对 byte offset。
@@ -229,7 +229,7 @@ impl LayoutSnapshot {
             line_spacing: 0.0,
             text_indent: 0.0,
             padding: 0.0,
-            lines: Arc::new(Vec::new()),
+            lines: Arc::new(super::chunked_vec::PersistentChunkedVec::new()),
             paragraph_offset_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphOffsetIndex::new()),
             height_index: std::sync::Arc::new(super::paragraph_height_index::ParagraphHeightIndex::new()),
             layout_generation: 0,
@@ -338,7 +338,7 @@ impl LayoutSnapshot {
     /// Issue #901 第十五轮问题5a: 行 id 用 lines 中的索引（全局唯一）。
     pub fn resolved_lines(&self) -> Cow<'_, [VisualLine]> {
         if self.lines.is_empty() {
-            return Cow::Borrowed(self.lines.as_slice());
+            return Cow::Owned(Vec::new());
         }
         let materialized: Vec<VisualLine> = self
             .lines
@@ -487,8 +487,8 @@ fn compute_line_range_from_logical_slots(
 #[derive(Clone)]
 pub struct PromotedLayout {
     pub generation: u64,
-    /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免 clone Vec<VisualLine>。
-    pub visual_lines: Arc<Vec<VisualLine>>,
+    /// Issue #901 第三十六轮问题3: 用 Arc<PersistentChunkedVec> 共享视觉行数据。
+    pub visual_lines: Arc<super::chunked_vec::PersistentChunkedVec<VisualLine>>,
     /// Issue #901 第十八轮问题1+2: 完整 canonical snapshot，包含所有空段、
     /// clusters、cursor_x_map、image、index map 等。promotion 直接转交，
     /// 不再从 visual_lines 重建（重建会丢空段和已绘制字形数据）。
@@ -713,9 +713,11 @@ impl std::fmt::Debug for QtLayoutLease {
 /// 释放旧 layout，旧帧结束（handle Drop）才释放引用，
 /// 最后一个持有者负责 C++ delete。`current_prepared_layout` 创建 lease，
 /// 动画帧 clone lease，形成一条所有权链。
-pub struct PreparedLayoutHandle<'a> {
+pub struct PreparedLayoutHandle {
     pub generation: u64,
-    pub lines: &'a [VisualLine],
+    /// Issue #901 第三十六轮问题3: 改为 owned Vec，从 PersistentChunkedVec::to_vec() 收集。
+    /// 原 `&'a [VisualLine]` 无法引用 PersistentChunkedVec 内部分块数据。
+    pub lines: Vec<VisualLine>,
     /// Issue #901 第三十一轮问题3: 跨帧持有的 Qt 布局租约集合。
     /// 每个对应一个 `(generation, cache_slot, epoch)` 的 QTextLayout 引用。
     /// handle Drop 时所有 lease Drop，退引用；最后一个持有者负责 C++ delete。

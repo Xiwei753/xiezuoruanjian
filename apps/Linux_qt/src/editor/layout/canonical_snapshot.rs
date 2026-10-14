@@ -6,6 +6,7 @@ use std::sync::Arc;
 // Issue #810 评论 5932233052 问题1: qchar_offset_to_byte_offset 和 QString 不再在此
 // 模块使用（prepare_animation_visuals_from_layout 改为 raster-only，不再做 QChar→byte
 // 转换，也不再从 C++ buffer 读取 cluster raw_font_fingerprint 返回 QString）。
+use super::chunked_vec::PersistentChunkedVec;
 use super::engine::{get_font_ascent, get_font_descent, prepare_paragraph_visual_snapshot};
 use super::paragraph_height_index::{ParagraphHeightIndex, ParagraphOffsetIndex};
 use super::types::{CaretAffinity, CaretRect, ParagraphId, VisualLine};
@@ -105,15 +106,19 @@ pub struct CanonicalDocumentVisualSnapshot {
     pub padding: f64,
     pub width: f64,
     pub dpr: f64,
-    pub paragraphs: Vec<CanonicalParagraphSnapshot>,
-    /// Issue #901 第九轮阻塞5: 用 Arc 共享视觉行数据，避免每键 clone Vec<VisualLine>。
+    /// Issue #901 第三十六轮问题3+4: 用 `Arc<PersistentChunkedVec>` 共享段落根，
+    /// `Clone` 通过 `Arc::clone` O(1) 共享，splice 只重建受影响块 O(B + n/B)。
+    /// 需要修改时用 `Arc::make_mut` COW（refcount==1 原地改，refcount>1 clone 新副本）。
+    pub paragraphs: std::sync::Arc<PersistentChunkedVec<CanonicalParagraphSnapshot>>,
+    /// Issue #901 第三十六轮问题3: 用 `Arc<PersistentChunkedVec>` 共享视觉行数据，
+    /// splice 只重建受影响块 O(B + n/B)，不 memmove 后缀全部行。
     /// `LayoutSnapshot.lines` 和本字段通过 `Arc::clone` 共享同一份数据。
     ///
     /// Issue #901 第十三轮问题1+2+6: `visual_lines` 全部是已物化的绝对坐标。
     /// 移除了 SuffixTransform 机制——增量编辑时后缀段的绝对坐标就地更新，
     /// 不再依赖延迟物化的 delta 变换。这修复了连续编辑覆盖未物化 delta 的问题（问题2），
     /// 也消除了 find_vl_idx_with_suffix "先试新值失败试旧值"导致的段落误认（问题1）。
-    pub visual_lines: Arc<Vec<VisualLine>>,
+    pub visual_lines: Arc<PersistentChunkedVec<VisualLine>>,
     /// Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引 — 段首 byte/qchar 坐标的权威来源。
     ///
     /// 维护每段 byte/qchar 长度的前缀和。段首绝对坐标 = `paragraph_offset_index.paragraph_byte_start(idx)`。
@@ -243,7 +248,7 @@ impl CanonicalDocumentVisualSnapshot {
     /// Issue #901 第十五轮问题5a: 行 id 用 visual_lines 中的索引（全局唯一）。
     pub fn resolved_visual_lines(&self) -> Cow<'_, [VisualLine]> {
         if self.visual_lines.is_empty() {
-            return Cow::Borrowed(self.visual_lines.as_slice());
+            return Cow::Owned(Vec::new());
         }
         let materialized: Vec<VisualLine> = self
             .visual_lines

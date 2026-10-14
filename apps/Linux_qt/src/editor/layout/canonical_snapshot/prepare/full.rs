@@ -8,7 +8,7 @@ use super::*;
 // Issue #901 第五轮阻塞2: 简化 paragraph_layout_store 全路径引用。
 use super::super::super::paragraph_layout_store::{ParagraphLayoutStore, ParagraphSpliceRanges};
 // Issue #901 第三十四轮缺口2: ChunkedSlotMap 替代 HashMap<ParagraphId, usize>。
-use super::super::super::chunked_vec::ChunkedSlotMap;
+use super::super::super::chunked_vec::{ChunkedSlotMap, PersistentChunkedVec};
 // Issue #901 第十三轮问题1+2+6: 引入 ParagraphOffsetIndex 作为段首坐标权威来源。
 use super::super::super::paragraph_height_index::ParagraphOffsetIndex;
 use super::super::super::paragraph_height_index::ParagraphHeightIndex;
@@ -470,8 +470,8 @@ pub(super) fn prepare_document_visual_snapshot_impl(
         padding,
         width,
         dpr,
-        paragraphs,
-        visual_lines: Arc::new(visual_lines),
+        paragraphs: Arc::new(PersistentChunkedVec::from_vec(paragraphs)),
+        visual_lines: Arc::new(PersistentChunkedVec::from_vec(visual_lines)),
         paragraph_offset_index: Arc::new(build_offset_index_from_text(text)),
         height_index,
         paragraph_id_to_slot,
@@ -726,11 +726,12 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         );
 
         // 从 snapshot 提取段落高度，重建 height_index
-        let heights = extract_paragraph_heights(&snapshot.visual_lines);
+        let snapshot_vls = snapshot.visual_lines.to_vec();
+        let heights = extract_paragraph_heights(&snapshot_vls);
         std::sync::Arc::make_mut(height_index).rebuild(heights);
 
         // 同步 paragraph_store 的排版结果
-        paragraph_store.sync_from_visual_lines(snapshot.visual_lines.as_slice(), generation);
+        paragraph_store.sync_from_visual_lines(&snapshot_vls, generation);
 
         return snapshot;
     }
@@ -753,9 +754,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
                 padding,
                 width,
                 dpr,
-                paragraphs: Vec::new(),
+                paragraphs: Arc::new(PersistentChunkedVec::new()),
                 // Issue #901 第九轮阻塞5: Arc 包装空 Vec。
-                visual_lines: Arc::new(Vec::new()),
+                visual_lines: Arc::new(PersistentChunkedVec::new()),
                 paragraph_offset_index: Arc::new(ParagraphOffsetIndex::new()),
                 height_index: std::sync::Arc::new(ParagraphHeightIndex::new()),
                 // Issue #901 第十八轮问题4: 空映射。
@@ -1044,8 +1045,9 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // Issue #901 第十三轮问题1+2+6: SuffixTransform 物化逻辑已移除。
     // prev.visual_lines 全部是已物化的绝对坐标，直接 take 使用。
 
-    let mut prev_paragraphs: Vec<CanonicalParagraphSnapshot> = std::mem::take(&mut prev.paragraphs);
-    let mut visual_lines: Vec<VisualLine> =
+    let mut prev_paragraphs: PersistentChunkedVec<CanonicalParagraphSnapshot> =
+        std::mem::take(std::sync::Arc::make_mut(&mut prev.paragraphs));
+    let mut visual_lines: PersistentChunkedVec<VisualLine> =
         std::mem::take(Arc::make_mut(&mut prev.visual_lines));
 
     // Issue #901 第十三轮问题1+2+6: vl_start_idx 和 vl_end_idx 用
@@ -1054,8 +1056,10 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 正确绝对坐标，find_line_range_by_para_start 用新 para_start 能匹配到同样的索引。
 
     // 计算受影响段落的旧高度和旧 byte 范围
-    let old_affected_height: f64 = visual_lines[vl_start_idx..vl_end_idx]
+    let old_affected_height: f64 = visual_lines
         .iter()
+        .skip(vl_start_idx)
+        .take(vl_end_idx.saturating_sub(vl_start_idx))
         .map(|vl| vl.height)
         .sum();
     let old_affected_byte_start: usize = visual_lines.get(vl_start_idx)
@@ -1473,7 +1477,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
             use std::collections::HashMap;
             let mut para_heights: HashMap<usize, f64> = HashMap::new();
             let new_lines_range = vl_start_idx..(vl_start_idx + new_affected_line_count);
-            for vl in &visual_lines[new_lines_range] {
+            for vl in visual_lines.iter().skip(new_lines_range.start).take(new_lines_range.end - new_lines_range.start) {
                 *para_heights.entry(vl.para_start).or_insert(0.0) += vl.height;
             }
             for i in new_layout_start..new_layout_end {
@@ -1496,8 +1500,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         // Issue #901 第二十九轮阻塞4: 释放 prev_height_index Arc，避免 COW。
         drop(prev_height_index);
         let new_lines_range = vl_start_idx..(vl_start_idx + new_affected_line_count);
+        let new_lines_vec: Vec<VisualLine> = visual_lines
+            .iter()
+            .skip(new_lines_range.start)
+            .take(new_lines_range.end - new_lines_range.start)
+            .cloned()
+            .collect();
         let height_updates =
-            extract_affected_height_updates(&visual_lines[new_lines_range], &affected_indices);
+            extract_affected_height_updates(&new_lines_vec, &affected_indices);
         std::sync::Arc::make_mut(height_index).update_heights_incremental(&height_updates, curr_para_count, line_height);
     }
 
@@ -1514,10 +1524,14 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // find_line_range_by_logical_slot 在全量行上二分 idx=0 会把新空段和复用旧"甲"
     // 的行合为一个段。新排版的行（splice 后 [vl_start_idx, vl_start_idx+new_affected_line_count)
     // 范围内）的 logical_slot 是正确的新段索引，只包含受影响段的行，不会有复用后缀行干扰。
-    let new_lines_for_sync: &[VisualLine] =
-        &visual_lines[vl_start_idx..(vl_start_idx + new_affected_line_count)];
+    let new_lines_for_sync: Vec<VisualLine> = visual_lines
+        .iter()
+        .skip(vl_start_idx)
+        .take(new_affected_line_count)
+        .cloned()
+        .collect();
     paragraph_store.sync_from_visual_lines_incremental(
-        new_lines_for_sync,
+        &new_lines_for_sync,
         generation,
         &affected_indices,
     );
@@ -1538,7 +1552,7 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
         padding,
         width,
         dpr,
-        paragraphs,
+        paragraphs: Arc::new(paragraphs),
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
         visual_lines: Arc::new(visual_lines),
         // Issue #901 第十四轮问题1: 段落前缀偏移索引 — 增量更新，不扫全文。
@@ -2481,9 +2495,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         padding,
         width,
         dpr,
-        paragraphs,
+        paragraphs: Arc::new(PersistentChunkedVec::from_vec(paragraphs)),
         // Issue #901 第九轮阻塞5: Arc 包装视觉行数据。
-        visual_lines: Arc::new(visual_lines),
+        visual_lines: Arc::new(PersistentChunkedVec::from_vec(visual_lines)),
         // Issue #901 第十三轮问题1+2+6: 段落前缀偏移索引。
         paragraph_offset_index: Arc::new(build_offset_index_from_text(text)),
         height_index,

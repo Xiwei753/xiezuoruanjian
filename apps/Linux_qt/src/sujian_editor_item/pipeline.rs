@@ -627,8 +627,9 @@ impl LinuxEditorPipeline {
             .as_ref()
             .map(|h| h.generation)
             .unwrap_or_else(|| fallback_gen.unwrap_or(0));
-        let visuals_lines: &[crate::editor::layout::VisualLine] =
-            prepared_handle.as_ref().map(|h| h.lines).unwrap_or(&[]);
+        let visuals_lines: Vec<crate::editor::layout::VisualLine> =
+            prepared_handle.as_ref().map(|h| h.lines.clone()).unwrap_or_default();
+        let visuals_lines: &[crate::editor::layout::VisualLine] = &visuals_lines;
         if !visuals_lines.is_empty() {
             // Issue #901 第三十一轮问题3: 从 prepared_handle 取 lease，
             // 动画帧持有引用，防止提取动画视觉期间旧 layout 被释放。
@@ -647,7 +648,7 @@ impl LinuxEditorPipeline {
                 .unwrap_or_default();
             let visuals_handle = layout::PreparedLayoutHandle {
                 generation: visuals_gen,
-                lines: visuals_lines,
+                lines: visuals_lines.to_vec(),
                 leases,
             };
             // Issue #901 第三十三轮问题2: 只查询受影响段的行，与 lease 范围一致。
@@ -1784,7 +1785,7 @@ fn retry_failed_animation_visuals(
         // release_retired_layouts 释放，不需要持有 lease。
         let retry_handle = layout::PreparedLayoutHandle {
             generation,
-            lines: new_doc_snapshot.visual_lines.as_slice(),
+            lines: new_doc_snapshot.visual_lines.to_vec(),
             leases: Vec::new(),
         };
         layout::prepare_animation_visuals_from_layout(

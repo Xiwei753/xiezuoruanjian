@@ -71,6 +71,7 @@ pub use types::{
     PreparedLayoutHandle, PromotedLayout, QtLayoutId, QtLayoutLease, VisualLine,
 };
 use std::sync::Arc;
+use chunked_vec::PersistentChunkedVec;
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
 ///
@@ -238,7 +239,7 @@ impl EditorLayout {
     /// Issue #901 第三十一轮问题3: 同时为每个有 Qt layout 的行创建 `QtLayoutLease`，
     /// 持有 C++ 引用计数。旧帧持有 lease 防止 Store 在新 snapshot 完成时
     /// `release_retired_layouts` 释放旧 layout，旧帧结束（handle Drop）才退引用。
-    pub fn current_prepared_layout(&self) -> Option<PreparedLayoutHandle<'_>> {
+    pub fn current_prepared_layout(&self) -> Option<PreparedLayoutHandle> {
         self.cache.as_ref().map(|c| {
             let generation = c.layout_generation;
             // Issue #901 第三十一轮问题3: 为每个有 Qt layout 的行创建 lease，
@@ -272,7 +273,7 @@ impl EditorLayout {
             }
             PreparedLayoutHandle {
                 generation,
-                lines: c.lines.as_slice(),
+                lines: c.lines.to_vec(),
                 leases,
             }
         })
@@ -307,7 +308,7 @@ impl EditorLayout {
     pub fn current_prepared_layout_for_paragraphs(
         &self,
         paragraph_indices: &[usize],
-    ) -> Option<PreparedLayoutHandle<'_>> {
+    ) -> Option<PreparedLayoutHandle> {
         self.cache.as_ref().map(|c| {
             let generation = c.layout_generation;
             // Issue #901 第三十二轮复核问题2: 只遍历 paragraph_indices，
@@ -337,7 +338,7 @@ impl EditorLayout {
             }
             PreparedLayoutHandle {
                 generation,
-                lines: c.lines.as_slice(),
+                lines: c.lines.to_vec(),
                 leases,
             }
         })
@@ -353,7 +354,7 @@ impl EditorLayout {
     /// 将此逻辑封装在 `EditorLayout` 方法中（而非 pipeline.rs 内联），使
     /// `build_canonical_snapshot_for_current_layout` 函数体保持简洁，
     /// 不因按需 lease 分支增长而超出静态守卫测试的函数窗口。
-    pub fn current_prepared_layout_for_affected(&self) -> Option<PreparedLayoutHandle<'_>> {
+    pub fn current_prepared_layout_for_affected(&self) -> Option<PreparedLayoutHandle> {
         if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
             // Issue #901 第三十三轮优化: 优先用 last_snapshot.paragraph_offset_index
             // 的 O(log n) byte_to_paragraph 二分定位，与 invalidate_affected 一致。
@@ -499,8 +500,9 @@ impl EditorLayout {
             padding,
             width,
         );
+        let promoted_vls = promoted.visual_lines.to_vec();
         self.paragraph_store
-            .sync_from_visual_lines(promoted.visual_lines.as_slice(), promoted.generation);
+            .sync_from_visual_lines(&promoted_vls, promoted.generation);
 
         // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义后，
         // 旧 generation 的 Store 初始引用（refcount=1）不再被 clear 暴力 delete 释放，
@@ -528,7 +530,7 @@ impl EditorLayout {
                 .last_snapshot
                 .as_ref()
                 .map(|s| &s.visual_lines)
-                .unwrap_or(&Arc::new(Vec::new())),
+                .unwrap_or(&Arc::new(PersistentChunkedVec::new())),
         );
 
         self.cache = Some(LayoutSnapshot {
@@ -758,8 +760,9 @@ impl EditorLayout {
             );
 
             // Issue #901: 全篇重排后同步 paragraph_store 和 height_index
+            let doc_vls = doc_snapshot.visual_lines.to_vec();
             self.paragraph_store
-                .sync_from_visual_lines(&doc_snapshot.visual_lines, current_gen);
+                .sync_from_visual_lines(&doc_vls, current_gen);
             let heights = self.paragraph_store.paragraph_heights();
             Arc::make_mut(&mut self.height_index).rebuild(heights);
 

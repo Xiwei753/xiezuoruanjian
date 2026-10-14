@@ -21,7 +21,7 @@ use super::*;
 /// 不再用 `line.para_start`（全文 byte offset）。inject 时直接索引 paragraphs[slot]。
 /// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
 pub fn prepare_animation_visuals_from_layout(
-    handle: &super::super::types::PreparedLayoutHandle<'_>,
+    handle: &super::super::types::PreparedLayoutHandle,
     line_ids: &[usize],
     dpr: f64,
     text_color: &str,
@@ -287,7 +287,9 @@ pub fn inject_animation_visuals_into_snapshot(
         // 不再遍历比较 paragraph_document_byte_start。
         // paragraph_slot 是段落编号（cache_slot），与 paragraphs 数组索引一一对应。
         let mut matched = false;
-        if let Some(para) = doc_snapshot.paragraphs.get_mut(anim_line.paragraph_slot) {
+        if let Some(para) =
+            std::sync::Arc::make_mut(&mut doc_snapshot.paragraphs).get_mut(anim_line.paragraph_slot)
+        {
             // 段落匹配，按 qtextline_idx 精确匹配行。
             // qtextline_idx 是段落内视觉行索引，与 para.lines 的索引一致。
             let line_idx = anim_line.qtextline_idx as usize;

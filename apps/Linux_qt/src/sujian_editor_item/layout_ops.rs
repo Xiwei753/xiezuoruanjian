@@ -288,7 +288,7 @@ impl SujianEditorItem {
             // 当前帧内不会被 release_retired_layouts 释放，不需要持有 lease。
             let handle = crate::editor::layout::PreparedLayoutHandle {
                 generation,
-                lines: resolved_lines,
+                lines: resolved_lines.to_vec(),
                 leases: Vec::new(),
             };
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
@@ -555,7 +555,7 @@ impl SujianEditorItem {
                 // layout 刚排版完成，当前帧内不会被释放，不需要持有 lease。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
-                    lines: resolved_lines,
+                lines: resolved_lines.to_vec(),
                     leases: Vec::new(),
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
@@ -647,10 +647,10 @@ impl SujianEditorItem {
         Ok((snapshot, doc_snapshot))
     }
 
-    pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &[VisualLine] {
+    pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> Vec<VisualLine> {
         let params = self.layout_params(width);
-        // Issue #901 第九轮阻塞5: LayoutSnapshot.lines 现为 Arc<Vec<VisualLine>>，
-        // 返回 as_slice() 得到 &[VisualLine]，不 clone Vec。
+        // Issue #901 第三十六轮问题3: LayoutSnapshot.lines 现为 Arc<PersistentChunkedVec<VisualLine>>，
+        // to_vec() 收集为 Vec<VisualLine>。
         self
             .editor_layout
             .snapshot(
@@ -659,7 +659,7 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             )
             .lines
-            .as_slice()
+            .to_vec()
     }
 
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
