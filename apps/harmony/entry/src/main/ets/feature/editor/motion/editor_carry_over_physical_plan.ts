@@ -189,28 +189,28 @@ export interface CarryOverPhysicalGroupResult {
 // ── 身份缓存 ──
 
 /**
- * Issue #879 评论6159166760 问题1+3：组级身份缓存条目。
+ * Issue #879 评论6159920940：组级身份缓存条目。
  *
  * 在 EditorMotionCoordinator 实例上维护，跨 retarget 保持稳定：
  * - 同一组跨帧/retarget → 查到已有身份，复用同一 renderNodeKey 和 windowInstanceId
  * - 新组 → 通过 WindowInstanceIdAllocator.allocateFresh 分配新身份
  *
- * owner 字段标识身份的生命周期归属（'candidate' 或 'displayed'）：
- * - 候选作废时按 owner='candidate' 释放从未挂载的实例和 cache 关联
- * - cache hit 时校验 owner 一致性，不同 owner 不能复用同一身份
- * - 已挂载的身份随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收
+ * Issue #879 评论6159920940：owner 不再作为 entry 字段，而是作为内层 Map 的 key。
+ * 多 owner 并存结构允许同一 groupKey 下不同 owner 的身份条目同时存在，
+ * 避免 owner 切换时覆盖旧条目导致孤儿 instanceId。
  */
 export interface IdentityCacheEntry {
   renderNodeKey: string
   windowInstanceId: string
-  /** Issue #879 评论6159166760：身份的生命周期归属 */
-  owner: string
 }
 
 /**
- * 组级身份缓存——从 groupKey 到 IdentityCacheEntry 的映射。
+ * Issue #879 评论6159920940：组级身份缓存——多 owner 并存结构。
+ *
+ * 外层 key 是 groupKey，内层 key 是 owner（如 'candidate' 或 'displayed'）。
+ * 同一 groupKey 下不同 owner 的条目可以并存，避免 owner 切换时覆盖旧条目。
  */
-export type IdentityCache = Map<string, IdentityCacheEntry>
+export type IdentityCache = Map<string, Map<string, IdentityCacheEntry>>
 
 // ── 岛几何/完成判定共享逻辑 ──
 
@@ -292,29 +292,45 @@ export function isReflowGroupComplete(
 }
 
 /**
- * Issue #879 评论6158702656 缺口3：释放 carry-over 身份缓存中的条目。
+ * Issue #879 评论6158702656 缺口3 + 评论6159920940：释放 carry-over 身份缓存中的条目。
  *
  * 当物理窗口最后租约被释放时，同步解除 groupKey→instanceId 关联，
  * 防止已释放的 instanceId 被后续 cache hit 错误复用。
  *
- * @param identityCache 组级身份缓存
+ * Issue #879 评论6159920940：适配多 owner 并存结构——删除内层 Map 中所有 owner 的条目，
+ * 并释放对应的 allocator 实例。
+ *
+ * @param identityCache 组级身份缓存（groupKey→owner→entry）
+ * @param allocator 窗口实例 ID 分配器
  * @param groupKey 要释放的组键
  */
 export function releaseCarryOverIdentity(
   identityCache: IdentityCache,
+  allocator: WindowInstanceIdAllocator,
   groupKey: string
 ): void {
-  identityCache.delete(groupKey)
+  const ownerMap = identityCache.get(groupKey)
+  if (ownerMap !== undefined) {
+    // 释放所有 owner 的 allocator 实例
+    for (const [, entry] of ownerMap) {
+      allocator.release(entry.windowInstanceId)
+    }
+    identityCache.delete(groupKey)
+  }
 }
 
 /**
- * Issue #879 评论6159166760 问题1+3：按 owner 释放 carry-over 身份。
+ * Issue #879 评论6159166760 问题1+3 + 评论6159920940：按 owner 释放 carry-over 身份。
  *
  * 候选作废时调用——释放属于该 owner 且从未挂载（无租约）的实例，
  * 并删除对应的 cache 关联。已挂载（有租约）的身份不在此释放——
  * 它们随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收。
  *
- * @param identityCache 组级身份缓存
+ * Issue #879 评论6159920940：适配多 owner 并存结构——遍历外层 Map 的每个 groupKey，
+ * 再遍历内层 Map 找到匹配 owner 的条目。同时考虑逻辑 owner 引用——
+ * 只有既无逻辑 owner 也无 lease 的实例才真正释放。
+ *
+ * @param identityCache 组级身份缓存（groupKey→owner→entry）
  * @param allocator 窗口实例 ID 分配器
  * @param owner 要释放的身份生命周期归属（如 'candidate'）
  */
@@ -323,19 +339,116 @@ export function releaseCarryOverIdentitiesByOwner(
   allocator: WindowInstanceIdAllocator,
   owner: string
 ): void {
-  const keysToDelete: string[] = []
-  for (const [groupKey, cached] of identityCache) {
-    if (cached.owner !== owner) {
+  // Issue #879 评论6159920940：遍历外层 Map 的每个 groupKey，
+  // 再遍历内层 Map 找到匹配 owner 的条目。
+  const groupKeysToDelete: string[] = []
+  for (const [groupKey, ownerMap] of identityCache) {
+    const entry = ownerMap.get(owner)
+    if (entry === undefined) {
       continue
     }
-    // 只有从未挂载（无租约）的实例才在此释放
-    // 已挂载的实例由 ArkUI onDisAppear → releaseLease 路径释放
-    if (!allocator.hasLeases(cached.windowInstanceId)) {
-      allocator.release(cached.windowInstanceId)
+    // Issue #879 评论6159920940：只有既没有逻辑 owner 也没有 lease 的实例才真正释放。
+    // hasLeases=false 不能证明实例不被有效显示计划引用——未挂载的实例可能仍被逻辑引用。
+    if (!allocator.hasLogicalOwners(entry.windowInstanceId) &&
+        !allocator.hasLeases(entry.windowInstanceId)) {
+      allocator.release(entry.windowInstanceId)
     }
-    keysToDelete.push(groupKey)
+    // 删除内层 Map 中该 owner 的条目
+    ownerMap.delete(owner)
+    // 如果内层 Map 为空，删除整个 groupKey 的条目
+    if (ownerMap.size === 0) {
+      groupKeysToDelete.push(groupKey)
+    }
   }
-  for (const key of keysToDelete) {
+  for (const key of groupKeysToDelete) {
+    identityCache.delete(key)
+  }
+}
+
+/**
+ * Issue #879 评论6159920940：将 groupKey 下属于 fromOwner 的身份条目转交给 toOwner。
+ *
+ * 候选提交后调用——把 carry-over 物理身份从 candidate owner 转交到 displayed owner，
+ * 保持 renderNodeKey 和 windowInstanceId 不变，只更新逻辑 owner 引用。
+ *
+ * - 在内层 Map 中用 toOwner 创建新条目（保持 renderNodeKey 和 windowInstanceId 不变）
+ * - 删除 fromOwner 的条目
+ * - 在 allocator 中更新逻辑 owner 引用（addLogicalOwner(toOwner, instanceId),
+ *   removeLogicalOwner(fromOwner, instanceId)）
+ * - 如果 fromOwner 条目不存在，无副作用返回
+ *
+ * @param identityCache 组级身份缓存（groupKey→owner→entry）
+ * @param allocator 窗口实例 ID 分配器
+ * @param groupKey 组键
+ * @param fromOwner 源 owner（如 'candidate'）
+ * @param toOwner 目标 owner（如 'displayed'）
+ */
+export function transferIdentityOwner(
+  identityCache: IdentityCache,
+  allocator: WindowInstanceIdAllocator,
+  groupKey: string,
+  fromOwner: string,
+  toOwner: string
+): void {
+  const ownerMap = identityCache.get(groupKey)
+  if (ownerMap === undefined) {
+    return
+  }
+  const entry = ownerMap.get(fromOwner)
+  if (entry === undefined) {
+    // fromOwner 条目不存在——无副作用返回
+    return
+  }
+  // 在内层 Map 中用 toOwner 创建新条目（保持 renderNodeKey 和 windowInstanceId 不变）
+  ownerMap.set(toOwner, {
+    renderNodeKey: entry.renderNodeKey,
+    windowInstanceId: entry.windowInstanceId
+  })
+  // 删除 fromOwner 的条目
+  ownerMap.delete(fromOwner)
+  // 在 allocator 中更新逻辑 owner 引用
+  allocator.addLogicalOwner(toOwner, entry.windowInstanceId)
+  allocator.removeLogicalOwner(fromOwner, entry.windowInstanceId)
+}
+
+/**
+ * Issue #879 评论6159920940：释放属于特定 owner 的所有身份条目。
+ *
+ * 遍历所有 groupKey 的内层 Map，删除该 owner 的条目。
+ * 在 allocator 中移除该 owner 的逻辑引用（removeLogicalOwner）。
+ * 只有既没有逻辑 owner（hasLogicalOwners 返回 false）也没有 lease
+ * （hasLeases 返回 false）的实例才真正 allocator.release。
+ *
+ * @param identityCache 组级身份缓存（groupKey→owner→entry）
+ * @param allocator 窗口实例 ID 分配器
+ * @param owner 要释放的 owner
+ */
+export function releaseOwner(
+  identityCache: IdentityCache,
+  allocator: WindowInstanceIdAllocator,
+  owner: string
+): void {
+  const groupKeysToDelete: string[] = []
+  for (const [groupKey, ownerMap] of identityCache) {
+    const entry = ownerMap.get(owner)
+    if (entry === undefined) {
+      continue
+    }
+    // 在 allocator 中移除该 owner 的逻辑引用
+    allocator.removeLogicalOwner(owner, entry.windowInstanceId)
+    // 只有既没有逻辑 owner 也没有 lease 的实例才真正释放
+    if (!allocator.hasLogicalOwners(entry.windowInstanceId) &&
+        !allocator.hasLeases(entry.windowInstanceId)) {
+      allocator.release(entry.windowInstanceId)
+    }
+    // 删除内层 Map 中该 owner 的条目
+    ownerMap.delete(owner)
+    // 如果内层 Map 为空，删除整个 groupKey 的条目
+    if (ownerMap.size === 0) {
+      groupKeysToDelete.push(groupKey)
+    }
+  }
+  for (const key of groupKeysToDelete) {
     identityCache.delete(key)
   }
 }
@@ -686,26 +799,27 @@ export function planCarryOverPhysicalGroups(
     let renderNodeKey: string
     let windowInstanceId: string
 
-    const cached = identityCache.get(assembly.groupKey)
+    // Issue #879 评论6159920940：IdentityCache 改为 groupKey→owner→entry 多 owner 并存结构。
+    // cache hit 时先查内层 Map 中当前 owner 的条目；如果当前 owner 有条目且有效（glyphIds 一致），
+    // 复用；如果当前 owner 没有条目但其他 owner 有，不能覆盖——需要为新 owner 分配新实例，
+    // 两个条目并存。这修复了旧逻辑中 owner 不同直接覆盖 groupKey 导致旧 instanceId 成为孤儿的问题。
+    let ownerMap = identityCache.get(assembly.groupKey)
+    const cached = ownerMap?.get(owner)
     if (cached !== undefined) {
       // Issue #879 评论6158702656 缺口3：cache hit 时验证实例仍有效。
       // 分配器是唯一的活跃实例真相，cache hit 不能单靠字符串存在就宣称实例仍有效。
       // 检查 allocator.resolve(cached.windowInstanceId) 返回的 glyphIds
       // 是否与当前组的 glyphIds 一致；不一致说明实例已被释放并重新分配给其他组，
       // 必须重新规划身份。
-      //
-      // Issue #879 评论6159166760 问题3：cache hit 同时校验 owner 一致性。
-      // 不同 owner 即使拥有完全相同的 glyphIds，也不代表有权复用同一个已回收/重分配的实例。
       const resolvedGlyphIds = allocator.resolve(cached.windowInstanceId)
       if (resolvedGlyphIds !== null &&
           resolvedGlyphIds.length === assembly.glyphIds.length &&
-          resolvedGlyphIds.every((gid, i) => gid === assembly.glyphIds[i]) &&
-          cached.owner === owner) {
-        // 实例仍有效、glyphIds 一致且 owner 匹配 → 复用
+          resolvedGlyphIds.every((gid, i) => gid === assembly.glyphIds[i])) {
+        // 实例仍有效、glyphIds 一致 → 复用
         renderNodeKey = cached.renderNodeKey
         windowInstanceId = cached.windowInstanceId
       } else {
-        // 实例已释放、glyphIds 不一致或 owner 不匹配 → 重新分配
+        // 实例已释放或 glyphIds 不一致 → 重新分配
         windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
         renderNodeKey = generateRenderNodeKey(
           assembly.sourceKind,
@@ -713,11 +827,12 @@ export function planCarryOverPhysicalGroups(
           assembly.motionChannel,
           windowInstanceId
         )
-        identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId, owner })
+        ownerMap!.set(owner, { renderNodeKey, windowInstanceId })
       }
     } else {
-      // Issue #879 评论6158702656 缺口2：cache miss 时用完整组 glyphIds 做 allocateFresh。
-      // 不再用首片段的 piece.glyphIds——那会导致分配器反向映射永远只有首片段的 glyphIds。
+      // Issue #879 评论6159920940：当前 owner 没有条目（可能是 cache miss，
+      // 也可能是其他 owner 有条目）。不能覆盖其他 owner 的条目——需要为新 owner
+      // 分配新实例，两个条目并存。
       windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
       renderNodeKey = generateRenderNodeKey(
         assembly.sourceKind,
@@ -725,7 +840,12 @@ export function planCarryOverPhysicalGroups(
         assembly.motionChannel,
         windowInstanceId
       )
-      identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId, owner })
+      if (ownerMap === undefined) {
+        // cache miss → 创建新的内层 Map
+        ownerMap = new Map<string, IdentityCacheEntry>()
+        identityCache.set(assembly.groupKey, ownerMap)
+      }
+      ownerMap.set(owner, { renderNodeKey, windowInstanceId })
     }
 
     // 输出完整物理组

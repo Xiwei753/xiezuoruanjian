@@ -55,6 +55,7 @@ import {
   planCarryOverPhysicalGroups, determineMotionChannel,
   isInsertGroupComplete, isReflowGroupComplete,
   releaseCarryOverIdentity, releaseCarryOverIdentitiesByOwner,
+  transferIdentityOwner,
   type CarryOverPieceWithContext, type IdentityCache
 } from './editor_carry_over_physical_plan'
 
@@ -72,6 +73,8 @@ export interface PreparedCandidate {
   readonly startFrame: EditorVisualFrame
   /** 候选提交状态——commitCandidate 一次性安装（内部数据，UI 不要读） */
   readonly state: MotionCommittedState
+  /** Issue #879 评论6159920940：候选身份的逻辑 owner 标识，commitCandidate 时转交到 'displayed' */
+  readonly candidateOwnerId: string
 }
 
 /**
@@ -502,17 +505,19 @@ export class EditorMotionCoordinator {
     policy: EditorMotionPolicy,
     firstCaretRect: CaretRect | null,
     displayedFrame: EditorVisualFrame,
-    sessionId: number
+    sessionId: number,
+    candidateOwnerId: string
   ): PreparedCandidate {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
       contentWidth, policy, displayedFrame, firstCaretRect,
-      sessionId, 'candidate'
+      sessionId, candidateOwnerId
     )
     return {
       plan: state.plan,
       startFrame: state.frame,
-      state: state
+      state: state,
+      candidateOwnerId: candidateOwnerId
     }
   }
 
@@ -528,7 +533,28 @@ export class EditorMotionCoordinator {
    */
   commitCandidate(prepared: PreparedCandidate): EditorVisualFrame {
     this.applyCommittedState(prepared.state)
+    this.transferCandidateIdentitiesToDisplayed(prepared.candidateOwnerId)
     return this.currentFrame
+  }
+
+  /**
+   * Issue #879 评论6159920940：将候选身份从 candidateOwnerId 转交到 'displayed' owner。
+   *
+   * commitCandidate 后候选身份变为已提交状态，逻辑 owner 从候选标识切换为 'displayed'，
+   * 确保后续 releaseCandidateOwnedIdentities 不会误回收已提交的窗口实例。
+   */
+  private transferCandidateIdentitiesToDisplayed(candidateOwnerId: string): void {
+    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+      if (ownerMap.has(candidateOwnerId)) {
+        transferIdentityOwner(
+          this.carryOverIdentityCache,
+          this.windowIdAllocator,
+          groupKey,
+          candidateOwnerId,
+          'displayed'
+        )
+      }
+    }
   }
 
   /**
@@ -651,7 +677,8 @@ export class EditorMotionCoordinator {
   retargetCandidate(
     prepared: PreparedCandidate,
     latestDisplayedFrame: EditorVisualFrame,
-    displayed: DisplayedSnapshotContext | null
+    displayed: DisplayedSnapshotContext | null,
+    candidateOwnerId: string
   ): PreparedCandidate {
     if (prepared.plan.durationMs <= 0) {
       // 无动画（动效关闭 / 时长为 0）：候选起始帧已经是静态终态帧。
@@ -837,7 +864,7 @@ export class EditorMotionCoordinator {
     const physicalGroups = this.planCarryOverPhysicalWindows(
       latestDisplayedFrame, prepared.state.newSnapshot.revision,
       prepared.state.newLayout, planGlyphIds, prepared.state.glyphIdentities,
-      'candidate'
+      candidateOwnerId
     )
     const carryOverGhostRuns = this.identifyCarryOverGhosts(physicalGroups)
     const carryOverMotionRuns = this.identifyCarryOverMotionRuns(
@@ -906,7 +933,8 @@ export class EditorMotionCoordinator {
     return {
       plan: newPlan,
       startFrame: newStartFrame,
-      state: newState
+      state: newState,
+      candidateOwnerId: candidateOwnerId
     }
   }
 
@@ -3539,6 +3567,12 @@ export class EditorMotionCoordinator {
       owner
     )
 
+    // Issue #879 评论6159920940：为新分配的物理组登记逻辑 owner 引用，
+    // 确保未挂载的实例不会被其他 owner 的释放操作误回收
+    for (const group of results) {
+      this.windowIdAllocator.addLogicalOwner(owner, group.windowInstanceId)
+    }
+
     // 将共享模块的输出类型转换为 Coordinator 内部的 CarryOverPhysicalGroup
     return results.map((r): CarryOverPhysicalGroup => ({
       renderNodeKey: r.renderNodeKey,
@@ -4583,11 +4617,11 @@ export class EditorMotionCoordinator {
    * - purgeStaleCarryOverIdentities 只清理 resolve===null 的条目（实例已被释放）
    * - releaseCandidateOwnedIdentities 主动释放从未挂载的候选实例（resolve 仍非 null）
    */
-  releaseCandidateOwnedIdentities(): void {
+  releaseCandidateOwnedIdentities(owner: string = 'candidate'): void {
     releaseCarryOverIdentitiesByOwner(
       this.carryOverIdentityCache,
       this.windowIdAllocator,
-      'candidate'
+      owner
     )
   }
 

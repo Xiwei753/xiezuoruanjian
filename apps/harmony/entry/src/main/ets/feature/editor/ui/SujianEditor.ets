@@ -808,6 +808,9 @@ export struct SujianEditor {
     // 旧候选的窗口布局回调不再携带 token；候选帧被丢弃后它对不上任何窗口，
     // tryCommitCandidate 也会因 candidateToken/pendingDisplayData 为空而拒绝提交。
     if (this.pendingCandidate !== null && this.candidateToken !== null) {
+      // Issue #879 评论6159920940：在作废前取出候选的 candidateOwnerId，
+      // 用于精确释放该候选拥有的物理身份，不影响已提交的 displayed 身份。
+      const invalidatedCandidateOwnerId = this.pendingCandidate.candidateOwnerId
       this.pendingCandidate = null
       this.pendingRetargetedCandidate = null
       this.candidateVisualFrame = null
@@ -818,13 +821,11 @@ export struct SujianEditor {
       // Issue #879 复核评论6088787701 问题2：候选被新版替换是真实状态转移——
       // 候选 owner 退出，与 displayed 共享的 key 保留，只属于旧候选的窗口在物理卸载后清掉。
       this.syncMotionWindowOwners()
-      // Issue #879 评论6159166760 问题1：候选作废时释放候选拥有的 carry-over 身份。
-      // 旧候选的物理窗口可能从未挂载（没有 ArkUI onAppear/lease），
-      // purgeStaleCarryOverIdentities 只清理 resolve===null 的条目，
-      // 无法释放刚被 allocateFresh 注册但还没挂载过的实例。
-      // releaseCandidateOwnedIdentities 按 owner='candidate' 释放从未挂载的实例和 cache 关联；
+      // Issue #879 评论6159920940：候选作废时释放该候选拥有的 carry-over 身份。
+      // 使用具体的 candidateOwnerId 而非通用 'candidate'，确保只释放本次被作废的候选身份，
+      // 不影响已提交到 displayed 的身份或其他候选的身份。
       // 已挂载的身份随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收。
-      this.motionCoordinator.releaseCandidateOwnedIdentities()
+      this.motionCoordinator.releaseCandidateOwnedIdentities(invalidatedCandidateOwnerId)
       // 同时清理已失效的条目（实例已被释放或被重新分配给其他组）
       this.motionCoordinator.purgeStaleCarryOverIdentities()
     }
@@ -1004,6 +1005,10 @@ export struct SujianEditor {
     // 不修改 Coordinator 的 currentPlan/currentFrame——旧动画在交棒期间仍能正确使用旧状态。
     // displayedVisualFrame 作为起始状态传给 prepareCandidate。
     const displayedFrameForCandidate = this.displayedVisualFrame ?? this.motionCoordinator.getCurrentFrame()
+    // Issue #879 评论6159920940：先生成 candidateOwnerId，再传给 prepareCandidate。
+    // candidateGeneration 递增后构造唯一 owner 标识，commitCandidate 时转交到 'displayed'。
+    this.candidateGeneration++
+    const candidateOwnerId = `candidate-${this.candidateGeneration}`
     const prepared = this.motionCoordinator.prepareCandidate(
       oldSnapshot,
       this.previousLayout,
@@ -1014,7 +1019,8 @@ export struct SujianEditor {
       this.motionPolicy,
       this.pendingFirstCaretRect,
       displayedFrameForCandidate,
-      latestUpdate.sessionId
+      latestUpdate.sessionId,
+      candidateOwnerId
     )
     // 旧候选（若有）被本次更高 revision 的候选取代：直接丢弃即可，
     // Coordinator 的已提交计划/帧从未被候选改动，旧动画仍按旧 plan 采样。
@@ -1025,7 +1031,7 @@ export struct SujianEditor {
 
     // Issue #879 复核评论修复（问题1）：创建 candidateToken 标识本次候选身份，
     // 提交前由 executeDisplaySwitch 核对 generation/session/revision/layoutToken。
-    this.candidateGeneration++
+    // Issue #879 评论6159920940：candidateGeneration 已在 prepareCandidate 前递增。
     // Issue #879 复核评论6075662695问题2：等启动时长挂在候选自己身上（token.durationMs），
     // 不再写全局 pendingAnimationDurationMs——旧窗口回调无法吞掉新候选的启动时长。
     // 注意：prepareCandidate 不修改 Coordinator 的 currentPlan，所以不能用
@@ -1140,7 +1146,8 @@ export struct SujianEditor {
     let retargeted: PreparedCandidate | null = null
     if (this.pendingCandidate !== null) {
       retargeted = this.motionCoordinator.retargetCandidate(
-        this.pendingCandidate, currentDisplayedFrame, currentDisplayed
+        this.pendingCandidate, currentDisplayedFrame, currentDisplayed,
+        this.pendingCandidate.candidateOwnerId
       )
     } else if (this.pendingRetargetedCandidate !== null) {
       // pendingCandidate 已被消费（不应该发生），用暂存的 fallback。
@@ -1222,7 +1229,8 @@ export struct SujianEditor {
     let finalRetargeted: PreparedCandidate = retargeted
     if (this.pendingCandidate !== null) {
       finalRetargeted = this.motionCoordinator.retargetCandidate(
-        this.pendingCandidate, frozenDisplayedFrame, frozenDisplayed
+        this.pendingCandidate, frozenDisplayedFrame, frozenDisplayed,
+        this.pendingCandidate.candidateOwnerId
       )
     }
 

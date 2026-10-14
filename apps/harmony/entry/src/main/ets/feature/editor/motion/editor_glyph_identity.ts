@@ -320,9 +320,13 @@ export class WindowInstanceIdAllocator {
     }
     leases.delete(renderNodeKey)
     if (leases.size === 0) {
-      // 所有租约已归还——真正释放 instanceId
+      // 所有租约已归还——检查是否还有逻辑 owner 引用
       this.instanceIdToLeases.delete(windowInstanceId)
-      this.release(windowInstanceId)
+      // Issue #879 评论6159920940：lease 清空时也检查逻辑 owner，
+      // 只有既无逻辑 owner 也无 lease 时才 release。
+      if (!this.hasLogicalOwners(windowInstanceId)) {
+        this.release(windowInstanceId)
+      }
     }
   }
 
@@ -338,6 +342,70 @@ export class WindowInstanceIdAllocator {
   hasLeases(windowInstanceId: string): boolean {
     const leases = this.instanceIdToLeases.get(windowInstanceId)
     return leases !== undefined && leases.size > 0
+  }
+
+  /**
+   * Issue #879 评论6159920940：instanceId → 逻辑 owner 集合的映射。
+   *
+   * 逻辑 owner 是身份生命周期归属（如 'candidate' 或 'displayed'）。
+   * 与 lease（物理租约）不同，逻辑 owner 在身份分配时就登记，
+   * 即使实例尚未挂载（没有 lease）也能追踪其逻辑引用关系。
+   *
+   * 这解决了 hasLeases=false 不能证明实例不被有效显示计划引用的问题——
+   * 未挂载的实例可能仍被逻辑引用，只有逻辑 owner 也全部清除后才真正释放。
+   */
+  private instanceIdToLogicalOwners: Map<string, Set<string>> = new Map()
+
+  /**
+   * Issue #879 评论6159920940：为 instanceId 添加逻辑 owner 引用。
+   *
+   * 身份分配或 owner 转交时调用——登记逻辑 owner 引用关系。
+   * 使用 Set 确保幂等：同一 owner 多次调用不会创建重复引用。
+   *
+   * @param owner 逻辑 owner 标识（如 'candidate' 或 'displayed'）
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  addLogicalOwner(owner: string, windowInstanceId: string): void {
+    let owners = this.instanceIdToLogicalOwners.get(windowInstanceId)
+    if (owners === undefined) {
+      owners = new Set<string>()
+      this.instanceIdToLogicalOwners.set(windowInstanceId, owners)
+    }
+    owners.add(owner)
+  }
+
+  /**
+   * Issue #879 评论6159920940：移除 instanceId 的逻辑 owner 引用。
+   *
+   * owner 释放或转交时调用——移除逻辑 owner 引用关系。
+   * 当所有逻辑 owner 都被移除后，实例不再被任何显示计划逻辑引用。
+   *
+   * @param owner 逻辑 owner 标识
+   * @param windowInstanceId `win-<number>` 格式 ID
+   */
+  removeLogicalOwner(owner: string, windowInstanceId: string): void {
+    const owners = this.instanceIdToLogicalOwners.get(windowInstanceId)
+    if (owners !== undefined) {
+      owners.delete(owner)
+      if (owners.size === 0) {
+        this.instanceIdToLogicalOwners.delete(windowInstanceId)
+      }
+    }
+  }
+
+  /**
+   * Issue #879 评论6159920940：检查 instanceId 是否仍有逻辑 owner 引用。
+   *
+   * 释放实例前调用——只有既没有逻辑 owner 也没有 lease 的实例才真正释放。
+   * hasLeases=false 不能证明实例不被有效显示计划引用——
+   * 未挂载的实例可能仍被逻辑引用。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   * @returns true 表示仍有逻辑 owner 引用，false 表示无逻辑 owner 引用
+   */
+  hasLogicalOwners(windowInstanceId: string): boolean {
+    const owners = this.instanceIdToLogicalOwners.get(windowInstanceId)
+    return owners !== undefined && owners.size > 0
   }
 
   /**
@@ -362,6 +430,7 @@ export class WindowInstanceIdAllocator {
     this.instanceIdToGlyphIds.clear()
     this.releasedIds = []
     this.instanceIdToLeases.clear()
+    this.instanceIdToLogicalOwners.clear()
   }
 }
 

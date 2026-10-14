@@ -16,6 +16,7 @@ import {
   generateGroupKey, generateRenderNodeKey,
   isInsertGroupComplete, isReflowGroupComplete,
   releaseCarryOverIdentity, releaseCarryOverIdentitiesByOwner,
+  transferIdentityOwner, releaseOwner,
 } from '../editor_carry_over_physical_plan.ts'
 import { rectDifference, isFullyCovered } from '../editor_commit_start.ts'
 
@@ -2455,17 +2456,23 @@ test('缺口3-6158702656：releaseCarryOverIdentity 清除缓存条目', () => {
   const groupKey = cache.keys().next().value
 
   // 释放缓存条目
-  releaseCarryOverIdentity(cache, groupKey)
+  releaseCarryOverIdentity(cache, allocator, groupKey)
   assert.equal(cache.size, 0, 'releaseCarryOverIdentity 应清除指定条目')
 
   // 再次规划时应分配新身份（cache miss）
+  // Issue #879 评论6159920940：releaseCarryOverIdentity 现在会释放 allocator 实例，
+  // 所以 allocateFresh 可能复用已释放的 ID。关键验证是 cache miss 后重新分配了身份，
+  // 而不是 windowInstanceId 必须不同。
   const results2 = planCarryOverPhysicalGroups([
     { piece, parent, motionChannel: 'ghost' },
   ], allocator, cache, 'displayed')
 
   assert.equal(results2.length, 1)
-  assert.notEqual(results2[0].windowInstanceId, results[0].windowInstanceId,
-    'cache 清除后应分配新身份')
+  // cache 中应有新的条目（cache miss 后重新分配）
+  assert.equal(cache.size, 1, 'cache 清除后再次规划应重新分配身份并写入 cache')
+  // 新组的 windowInstanceId 在分配器中有效
+  assert.ok(allocator.resolve(results2[0].windowInstanceId) !== null,
+    '新组的 windowInstanceId 应在分配器中有效')
 })
 
 test('缺口3-6158702656：已完成的 insert 组不持有未挂载的实例', () => {
@@ -2523,9 +2530,10 @@ test('场景13a：候选作废→从未挂载的实例和缓存全部释放', ()
   assert.ok(results.length > 0, '候选规划应产生物理组')
 
   // 确认 identityCache 中有 owner='candidate' 的条目
+  // Issue #879 评论6159920940：IdentityCache 改为 groupKey→owner→entry 多 owner 并存结构
   let candidateEntries = 0
-  for (const [, entry] of cache) {
-    if (entry.owner === 'candidate') candidateEntries++
+  for (const [, ownerMap] of cache) {
+    if (ownerMap.has('candidate')) candidateEntries++
   }
   assert.ok(candidateEntries > 0, 'cache 中应有 owner=candidate 的条目')
 
@@ -2540,8 +2548,9 @@ test('场景13a：候选作废→从未挂载的实例和缓存全部释放', ()
   releaseCarryOverIdentitiesByOwner(cache, allocator, 'candidate')
 
   // 确认 identityCache 中 owner='candidate' 的条目已全部删除
-  for (const [, entry] of cache) {
-    assert.notEqual(entry.owner, 'candidate',
+  // Issue #879 评论6159920940：遍历内层 Map 检查 owner key
+  for (const [, ownerMap] of cache) {
+    assert.ok(!ownerMap.has('candidate'),
       '候选作废后 cache 中不应再有 owner=candidate 的条目')
   }
 
@@ -2670,8 +2679,9 @@ test('场景15：释放后相同 glyphIds 复用编号→旧 owner 不能命中�
 
   // 确认 cache 中有条目
   assert.equal(cache.size, 1)
-  for (const [, entry] of cache) {
-    assert.equal(entry.owner, 'candidate')
+  // Issue #879 评论6159920940：遍历内层 Map 检查 owner key
+  for (const [, ownerMap] of cache) {
+    assert.ok(ownerMap.has('candidate'))
   }
 
   // 释放候选身份
@@ -2703,8 +2713,9 @@ test('场景15：释放后相同 glyphIds 复用编号→旧 owner 不能命中�
 
   // cache 中新条目的 owner='displayed'——旧 owner='candidate' 不能命中原 cache
   assert.equal(cache.size, 1)
-  for (const [, entry] of cache) {
-    assert.equal(entry.owner, 'displayed',
+  // Issue #879 评论6159920940：遍历内层 Map 检查 owner key
+  for (const [, ownerMap] of cache) {
+    assert.ok(ownerMap.has('displayed'),
       '新 cache 条目的 owner 应为 displayed，旧 candidate 不能命中')
   }
 
@@ -2715,15 +2726,16 @@ test('场景15：释放后相同 glyphIds 复用编号→旧 owner 不能命中�
   ], allocator, cache, 'candidate')
 
   assert.equal(results3.length, 1)
-  // cache 条目更新为 owner='candidate'（不再是 'displayed'）
+  // Issue #879 评论6159920940：多 owner 并存——candidate 和 displayed 条目同时存在
+  // 旧逻辑中 displayed 条目会被覆盖，新逻辑中两个条目并存
   let hasCandidate = false
   let hasDisplayed = false
-  for (const [, entry] of cache) {
-    if (entry.owner === 'candidate') hasCandidate = true
-    if (entry.owner === 'displayed') hasDisplayed = true
+  for (const [, ownerMap] of cache) {
+    if (ownerMap.has('candidate')) hasCandidate = true
+    if (ownerMap.has('displayed')) hasDisplayed = true
   }
-  assert.ok(hasCandidate && !hasDisplayed,
-    'candidate 规划后 cache 条目 owner 应为 candidate，displayed 条目被覆盖')
+  assert.ok(hasCandidate && hasDisplayed,
+    'candidate 规划后 cache 中 candidate 和 displayed 条目并存，不再覆盖')
 })
 
 // 场景16：isReflowGroupComplete 函数测试
@@ -2832,8 +2844,9 @@ test('场景18：cache hit 时 owner 不匹配→重新分配新身份', () => {
 
   // 确认 cache 中有 owner='candidate' 的条目
   assert.equal(cache.size, 1)
-  for (const [, entry] of cache) {
-    assert.equal(entry.owner, 'candidate')
+  // Issue #879 评论6159920940：遍历内层 Map 检查 owner key
+  for (const [, ownerMap] of cache) {
+    assert.ok(ownerMap.has('candidate'))
   }
 
   // 第二次：用 owner='displayed' 规划相同 groupKey 的组
@@ -2854,11 +2867,341 @@ test('场景18：cache hit 时 owner 不匹配→重新分配新身份', () => {
   assert.ok(allocator.resolve(results2[0].windowInstanceId) !== null,
     '新身份应在分配器中登记')
 
-  // cache 中条目的 owner 更新为 'displayed'
-  for (const [, entry] of cache) {
-    assert.equal(entry.owner, 'displayed',
-      'cache 条目的 owner 应更新为 displayed')
+  // Issue #879 评论6159920940：多 owner 并存——cache 中同时有 candidate 和 displayed 条目
+  // 新逻辑中不同 owner 的条目并存，不再覆盖
+  for (const [, ownerMap] of cache) {
+    assert.ok(ownerMap.has('displayed'),
+      'cache 中应有 displayed 的条目')
   }
+})
+
+// ── Issue #879 评论6159920940：物理身份生命周期管理测试 ──
+//
+// 验证三个关键修复：
+// A. 候选提交→身份转交 displayed→后续候选作废只释放自己的身份
+// B. 同 groupKey、不同并存 owner——无孤儿实例
+// C. 逻辑 owner + lease 双重引用保护
+// D. addLogicalOwner + hasLeases 双重保护——未挂载实例不被误回收
+
+// 场景A：候选提交→身份转交 displayed→后续候选作废只释放自己的身份
+test('场景A：候选提交→身份转交 displayed→后续候选作废只释放自己的身份', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'old', 10, 'deleted')
+  const glyphIds = ['g1', 'g2']
+  const piece = makePiece(glyphIds, 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  // 1. A 候选规划 carry-over group，缓存 owner='candidate-A'
+  const resultsA = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate-A')
+
+  assert.equal(resultsA.length, 1)
+  const winIdA = resultsA[0].windowInstanceId
+  const renderKeyA = resultsA[0].renderNodeKey
+
+  // 确认 cache 中有 owner='candidate-A' 的条目
+  let groupKeyA = null
+  for (const [gk, ownerMap] of cache) {
+    if (ownerMap.has('candidate-A')) {
+      groupKeyA = gk
+      break
+    }
+  }
+  assert.ok(groupKeyA !== null, 'cache 中应有 owner=candidate-A 的条目')
+
+  // 2. A 候选提交，调用 transferIdentityOwner 将身份从 candidate-A 转交到 displayed
+  transferIdentityOwner(cache, allocator, groupKeyA, 'candidate-A', 'displayed')
+
+  // 验证：candidate-A 的条目消失，displayed 的条目出现
+  const ownerMapAfterTransfer = cache.get(groupKeyA)
+  assert.ok(!ownerMapAfterTransfer.has('candidate-A'),
+    'transferIdentityOwner 后 candidate-A 条目应消失')
+  assert.ok(ownerMapAfterTransfer.has('displayed'),
+    'transferIdentityOwner 后 displayed 条目应出现')
+
+  // 验证：displayed 条目的 renderNodeKey 和 windowInstanceId 与原 candidate-A 条目相同（身份不变）
+  const displayedEntry = ownerMapAfterTransfer.get('displayed')
+  assert.equal(displayedEntry.windowInstanceId, winIdA,
+    'displayed 条目的 windowInstanceId 应与原 candidate-A 相同')
+  assert.equal(displayedEntry.renderNodeKey, renderKeyA,
+    'displayed 条目的 renderNodeKey 应与原 candidate-A 相同')
+
+  // 3. B 候选生成（owner='candidate-B'），规划相同 groupKey
+  const resultsB = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate-B')
+
+  assert.equal(resultsB.length, 1)
+  const winIdB = resultsB[0].windowInstanceId
+  const renderKeyB = resultsB[0].renderNodeKey
+
+  // B 的身份应与 A 不同（不同 owner → 不同 instanceId）
+  assert.notEqual(winIdB, winIdA,
+    'candidate-B 的 windowInstanceId 应与 candidate-A 不同')
+  assert.notEqual(renderKeyB, renderKeyA,
+    'candidate-B 的 renderNodeKey 应与 candidate-A 不同')
+
+  // 确认 cache 中同时有 displayed 和 candidate-B 的条目
+  const ownerMapB = cache.get(groupKeyA)
+  assert.ok(ownerMapB.has('displayed'),
+    'cache 中 displayed 条目仍存在')
+  assert.ok(ownerMapB.has('candidate-B'),
+    'cache 中有 candidate-B 条目')
+
+  // 4. B 候选作废，调用 releaseOwner(identityCache, allocator, 'candidate-B')
+  releaseOwner(cache, allocator, 'candidate-B')
+
+  // 5. 验证：A 的实例与 renderNodeKey 不变（displayed 条目仍存在）
+  const ownerMapAfterRelease = cache.get(groupKeyA)
+  assert.ok(ownerMapAfterRelease.has('displayed'),
+    'releaseOwner(candidate-B) 后 displayed 条目仍存在')
+  const displayedEntryAfter = ownerMapAfterRelease.get('displayed')
+  assert.equal(displayedEntryAfter.windowInstanceId, winIdA,
+    'displayed 条目的 windowInstanceId 不变')
+  assert.equal(displayedEntryAfter.renderNodeKey, renderKeyA,
+    'displayed 条目的 renderNodeKey 不变')
+
+  // B 的身份被释放
+  assert.ok(!ownerMapAfterRelease.has('candidate-B'),
+    'releaseOwner(candidate-B) 后 candidate-B 条目应消失')
+  assert.ok(allocator.resolve(winIdB) === null,
+    'candidate-B 的 instanceId 应被释放')
+  // A 的身份仍有效
+  assert.ok(allocator.resolve(winIdA) !== null,
+    'displayed 的 instanceId 应仍有效')
+})
+
+// 场景B：同 groupKey、不同并存 owner——无孤儿实例
+test('场景B：同 groupKey、不同并存 owner——无孤儿实例', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-2', 'old', 10, 'deleted')
+  const glyphIds = ['g1', 'g2']
+  const piece = makePiece(glyphIds, 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  // 1. owner='candidate-A' 规划 groupKey G，分配 instanceId win-0
+  const resultsA = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate-A')
+
+  assert.equal(resultsA.length, 1)
+  const winIdA = resultsA[0].windowInstanceId
+
+  // 2. owner='displayed' 规划相同 groupKey G，分配 instanceId win-1（不能复用 win-0）
+  const resultsD = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'displayed')
+
+  assert.equal(resultsD.length, 1)
+  const winIdD = resultsD[0].windowInstanceId
+
+  // 3. 验证 cache 中 G 下有两个 owner 条目：candidate-A→win-0 和 displayed→win-1
+  assert.notEqual(winIdA, winIdD,
+    '两个 owner 的 instanceId 应不同（不复用）')
+
+  let groupKey = null
+  for (const [gk, ownerMap] of cache) {
+    if (ownerMap.has('candidate-A') && ownerMap.has('displayed')) {
+      groupKey = gk
+      break
+    }
+  }
+  assert.ok(groupKey !== null,
+    'cache 中同一 groupKey 下应有两个 owner 条目并存')
+
+  const ownerMap = cache.get(groupKey)
+  assert.equal(ownerMap.size, 2,
+    '内层 Map 应有 2 个 owner 条目')
+  assert.equal(ownerMap.get('candidate-A').windowInstanceId, winIdA,
+    'candidate-A 条目的 windowInstanceId 正确')
+  assert.equal(ownerMap.get('displayed').windowInstanceId, winIdD,
+    'displayed 条目的 windowInstanceId 正确')
+
+  // 4. releaseOwner('candidate-A') 释放 win-0
+  releaseOwner(cache, allocator, 'candidate-A')
+
+  // 5. 验证 displayed 条目仍存在，win-1 不受影响
+  const ownerMapAfter = cache.get(groupKey)
+  assert.ok(ownerMapAfter.has('displayed'),
+    'releaseOwner(candidate-A) 后 displayed 条目仍存在')
+  assert.equal(ownerMapAfter.get('displayed').windowInstanceId, winIdD,
+    'displayed 的 winId 不变')
+  assert.ok(!ownerMapAfter.has('candidate-A'),
+    'candidate-A 条目应被删除')
+
+  // win-0 被真正释放（allocator.resolve(win-0) 返回 null）
+  assert.ok(allocator.resolve(winIdA) === null,
+    'candidate-A 的 instanceId 应被释放（resolve 返回 null）')
+  // win-1 不受影响
+  assert.ok(allocator.resolve(winIdD) !== null,
+    'displayed 的 instanceId 应仍有效')
+})
+
+// 场景C：逻辑 owner + lease 双重引用保护
+test('场景C：逻辑 owner + lease 双重引用保护', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  // ── 子场景1：单一逻辑 owner，releaseOwner 后可以释放 ──
+  // 1. 分配 instanceId win-0，添加逻辑 owner 'candidate-A'
+  const winId0 = allocator.allocateFresh(['g1'])
+  const groupKey0 = 'test-group-key-0'
+  const renderNodeKey0 = 'old-10-carryGhost-' + winId0
+
+  cache.set(groupKey0, new Map([
+    ['candidate-A', { renderNodeKey: renderNodeKey0, windowInstanceId: winId0 }]
+  ]))
+  allocator.addLogicalOwner('candidate-A', winId0)
+
+  // 2. win-0 尚未挂载（无 lease），但有逻辑 owner 引用
+  assert.ok(!allocator.hasLeases(winId0),
+    'win-0 无 lease')
+  assert.ok(allocator.hasLogicalOwners(winId0),
+    'win-0 有逻辑 owner 引用')
+
+  // 3. releaseOwner('candidate-A')——应移除逻辑 owner，由于没有其他 owner 也没有 lease，可以释放
+  releaseOwner(cache, allocator, 'candidate-A')
+
+  assert.ok(allocator.resolve(winId0) === null,
+    'releaseOwner(candidate-A) 后 win-0 应被释放（无其他 owner 也无 lease）')
+  assert.ok(!allocator.hasLogicalOwners(winId0),
+    'releaseOwner(candidate-A) 后 win-0 无逻辑 owner')
+
+  // ── 子场景2：多个逻辑 owner，releaseOwner 只移除一个 ──
+  // 4. 分配 win-1，添加逻辑 owner 'candidate-A' 和 'displayed'
+  const winId1 = allocator.allocateFresh(['g2'])
+  const groupKey1 = 'test-group-key-1'
+  const renderNodeKey1 = 'old-10-carryGhost-' + winId1
+
+  cache.set(groupKey1, new Map([
+    ['candidate-A', { renderNodeKey: renderNodeKey1, windowInstanceId: winId1 }],
+    ['displayed', { renderNodeKey: renderNodeKey1, windowInstanceId: winId1 }]
+  ]))
+  allocator.addLogicalOwner('candidate-A', winId1)
+  allocator.addLogicalOwner('displayed', winId1)
+
+  // 5. releaseOwner('candidate-A')——只移除 candidate-A 的逻辑 owner，displayed 仍引用 win-1
+  releaseOwner(cache, allocator, 'candidate-A')
+
+  // 6. 验证 win-1 不被释放（仍有 displayed 逻辑 owner）
+  assert.ok(allocator.hasLogicalOwners(winId1),
+    'releaseOwner(candidate-A) 后 win-1 仍有逻辑 owner（displayed）')
+  assert.ok(allocator.resolve(winId1) !== null,
+    'releaseOwner(candidate-A) 后 win-1 不应被释放')
+
+  // cache 中 candidate-A 条目被删除，displayed 条目仍存在
+  const ownerMap1 = cache.get(groupKey1)
+  assert.ok(!ownerMap1.has('candidate-A'),
+    'candidate-A 条目应被删除')
+  assert.ok(ownerMap1.has('displayed'),
+    'displayed 条目仍存在')
+
+  // 7. releaseOwner('displayed')——移除 displayed 的逻辑 owner，win-1 现在可以释放
+  releaseOwner(cache, allocator, 'displayed')
+
+  assert.ok(allocator.resolve(winId1) === null,
+    'releaseOwner(displayed) 后 win-1 应被释放')
+  assert.ok(!allocator.hasLogicalOwners(winId1),
+    'releaseOwner(displayed) 后 win-1 无逻辑 owner')
+})
+
+// 场景D：addLogicalOwner + hasLeases 双重保护——未挂载实例不被误回收
+test('场景D：addLogicalOwner + hasLeases 双重保护——未挂载实例不被误回收', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-3', 'old', 10, 'deleted')
+  const glyphIds = ['g1']
+  const piece = makePiece(glyphIds, 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  // 1. 候选 A 规划，分配 win-0，addLogicalOwner('candidate-A', win-0)
+  const resultsA = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate-A')
+
+  assert.equal(resultsA.length, 1)
+  const winId0 = resultsA[0].windowInstanceId
+  const renderKey0 = resultsA[0].renderNodeKey
+
+  // 模拟 Coordinator 行为：为候选身份添加逻辑 owner
+  allocator.addLogicalOwner('candidate-A', winId0)
+
+  // 2. win-0 尚未 onAppear（无 lease）
+  assert.ok(!allocator.hasLeases(winId0),
+    'win-0 尚未挂载，无 lease')
+  assert.ok(allocator.hasLogicalOwners(winId0),
+    'win-0 有逻辑 owner 引用')
+
+  // 3. 候选 B 作废，releaseOwner('candidate-B')——不影响 win-0
+  // 先为 candidate-B 创建一个条目
+  const pieceB = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }])
+  const parentB = makeParent('win-4', 'old', 10, 'deleted')
+  const resultsB = planCarryOverPhysicalGroups([
+    { piece: pieceB, parent: parentB, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate-B')
+
+  assert.equal(resultsB.length, 1)
+  const winIdB = resultsB[0].windowInstanceId
+  allocator.addLogicalOwner('candidate-B', winIdB)
+
+  // 候选 B 作废
+  releaseOwner(cache, allocator, 'candidate-B')
+
+  // 4. 验证 win-0 仍有效（allocator.resolve(win-0) 返回非 null）
+  assert.ok(allocator.resolve(winId0) !== null,
+    'releaseOwner(candidate-B) 不应影响 win-0')
+  assert.ok(allocator.hasLogicalOwners(winId0),
+    'win-0 仍有逻辑 owner 引用')
+
+  // 5. 候选 A 提交，transferIdentityOwner 从 candidate-A 转交到 displayed
+  let groupKeyA = null
+  for (const [gk, ownerMap] of cache) {
+    if (ownerMap.has('candidate-A')) {
+      groupKeyA = gk
+      break
+    }
+  }
+  assert.ok(groupKeyA !== null,
+    'cache 中应有 candidate-A 条目')
+
+  transferIdentityOwner(cache, allocator, groupKeyA, 'candidate-A', 'displayed')
+
+  // 6. 验证 win-0 仍有效（displayed 逻辑 owner 引用）
+  assert.ok(allocator.resolve(winId0) !== null,
+    'transferIdentityOwner 后 win-0 应仍有效')
+  assert.ok(allocator.hasLogicalOwners(winId0),
+    'transferIdentityOwner 后 win-0 有 displayed 逻辑 owner')
+  assert.ok(!allocator.hasLeases(winId0),
+    'win-0 仍无 lease')
+
+  // 7. win-0 onAppear → addLease
+  allocator.addLease(renderKey0, winId0)
+  assert.ok(allocator.hasLeases(winId0),
+    'addLease 后 win-0 有 lease')
+
+  // 8. win-0 onDisAppear → releaseLease——lease 清空，但 displayed 逻辑 owner 仍引用
+  allocator.releaseLease(renderKey0, winId0)
+  assert.ok(!allocator.hasLeases(winId0),
+    'releaseLease 后 win-0 无 lease')
+  assert.ok(allocator.hasLogicalOwners(winId0),
+    'releaseLease 后 win-0 仍有 displayed 逻辑 owner')
+
+  // 9. 验证 win-0 仍有效（有逻辑 owner 保护，不被误回收）
+  assert.ok(allocator.resolve(winId0) !== null,
+    'lease 清空但有逻辑 owner 时 win-0 应仍有效')
+
+  // 10. releaseOwner('displayed')——现在 win-0 无逻辑 owner 也无 lease，真正释放
+  releaseOwner(cache, allocator, 'displayed')
+
+  assert.ok(allocator.resolve(winId0) === null,
+    'releaseOwner(displayed) 后 win-0 应被真正释放')
+  assert.ok(!allocator.hasLogicalOwners(winId0),
+    'win-0 无逻辑 owner')
+  assert.ok(!allocator.hasLeases(winId0),
+    'win-0 无 lease')
 })
 
 console.log('---')
