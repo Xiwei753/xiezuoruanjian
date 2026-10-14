@@ -1147,6 +1147,88 @@ impl PathDependencyIndex {
         Ok(results)
     }
 
+    /// 按终点 target 查询指向该 target 的所有连接（索引版）。
+    ///
+    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_target`。
+    ///
+    /// 先解析 route 得到当前画布与祖先链，再从索引收集候选祖先图
+    ///（CanvasEndpoint + 按 target 类型的 NodeTarget/AnchorTarget），
+    /// 只加载当前图与候选祖先图的边文件，对每条边做 route-aware 匹配
+    ///（复用 [`route_aware_endpoint_matches`]，带 `Some(target)` 精确过滤）。
+    ///
+    /// 候选集合是保守上界——索引只表示路径经过/指向当前画布对象，
+    /// 不保证 segments 后缀与 route 一致；route-aware 匹配做精确过滤。
+    ///
+    /// 读取错误通过 `?` 向上传播，不吞成"没有连接"。
+    pub fn query_connections_for_target(
+        &self,
+        route: &StarMapNavigationRoute,
+        target: &StarMapTargetDetail,
+        context: &GraphResolverContext,
+    ) -> crate::error::Result<Vec<StarMapConnectionInfo>> {
+        let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
+        let current_starmap_id = &location.current_starmap_id;
+        let last_idx = location.traversed_starmap_ids.len().saturating_sub(1);
+
+        // 从索引收集候选祖先图：CanvasEndpoint + 按 target 类型的 NodeTarget/AnchorTarget
+        let candidate_owners =
+            self.collect_candidate_edge_owners_for_target(current_starmap_id, target);
+
+        let mut results = Vec::new();
+
+        for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
+            let is_current_canvas = i == last_idx;
+            // 当前图：总是加载。祖先图：仅当索引表明它有边指向/穿越当前画布才加载。
+            if !is_current_canvas && !candidate_owners.contains(ancestor_starmap_id) {
+                continue;
+            }
+
+            let edges = load_graph_edges(context, ancestor_starmap_id)?;
+            results.extend(Self::collect_connections_from_edges_for_target(
+                &edges,
+                ancestor_starmap_id,
+                route,
+                i,
+                target,
+            ));
+        }
+
+        Ok(results)
+    }
+
+    /// 从一组边收集连接信息（target 查询版）。
+    ///
+    /// 对每条边做 route-aware 匹配（带 `Some(target)` 精确过滤），
+    /// from 或 to 匹配的加入结果。
+    fn collect_connections_from_edges_for_target(
+        edges: &[StarMapEdge],
+        ancestor_starmap_id: &str,
+        route: &StarMapNavigationRoute,
+        route_start_idx: usize,
+        target: &StarMapTargetDetail,
+    ) -> Vec<StarMapConnectionInfo> {
+        let route_from_ancestor = &route.segments[route_start_idx..];
+        let mut results = Vec::new();
+        for edge in edges {
+            let from_matches = route_aware_endpoint_matches(
+                &edge.from,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                Some(target),
+            );
+            let to_matches = route_aware_endpoint_matches(
+                &edge.to,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                Some(target),
+            );
+            if from_matches || to_matches {
+                results.push(Self::edge_to_connection_info(edge, ancestor_starmap_id));
+            }
+        }
+        results
+    }
+
     /// 从倒排表收集候选祖先图：`host_starmap_id == current` 的 Edge 来源所在图。
     ///
     /// 这些图持有路径穿越/指向当前画布对象的边，是唯一可能与当前画布相关
@@ -1168,6 +1250,45 @@ impl PathDependencyIndex {
             &crate::starmap::graph::resolve::PathDependencyKind::CanvasEndpoint,
             current_starmap_id,
         );
+        owners.extend(
+            sources
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.source_kind,
+                        CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
+                    )
+                })
+                .map(|s| s.owner_starmap_id.clone()),
+        );
+        owners
+    }
+
+    /// 从倒排表收集候选祖先图（target 查询版）：CanvasEndpoint + 按 target 类型的 NodeTarget/AnchorTarget。
+    ///
+    /// `query_connections_for_target` 使用。候选集合是保守上界——
+    /// route-aware 匹配做精确过滤，不漏线。
+    fn collect_candidate_edge_owners_for_target(
+        &self,
+        current_starmap_id: &str,
+        target: &crate::starmap::semantic::StarMapTargetDetail,
+    ) -> HashSet<String> {
+        // CanvasEndpoint 候选（终点落在当前画布的边）
+        let mut owners = self.collect_candidate_edge_owners(current_starmap_id);
+
+        // 按 target 类型额外查询 NodeTarget/AnchorTarget
+        use crate::starmap::graph::resolve::PathDependencyKind;
+        let (kind, object_id) = match target {
+            StarMapTargetDetail::Node { node_id } => {
+                (PathDependencyKind::NodeTarget, node_id.as_str())
+            }
+            StarMapTargetDetail::Anchor { node_id, .. } => {
+                (PathDependencyKind::AnchorTarget, node_id.as_str())
+            }
+            // Starmap / ChapterRange / Entity / External 已被 CanvasEndpoint 覆盖
+            _ => return owners,
+        };
+        let sources = self.query_dependents(current_starmap_id, &kind, object_id);
         owners.extend(
             sources
                 .iter()

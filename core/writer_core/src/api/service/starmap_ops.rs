@@ -1481,21 +1481,21 @@ impl WriterCoreApi {
             })?;
 
         let connections = if let Some(target_dto) = target {
-            let context = self.build_resolver_context(&root_starmap_id)?;
             let core_target: crate::starmap::semantic::StarMapTargetDetail =
                 target_dto.try_into().map_err(|e: crate::error::Error| {
                     WriterError::Other(format!(
                         "list_starmap_connections: target conversion failed: {e:?}"
                     ))
                 })?;
-            crate::starmap::connections::list_connections_for_target(
-                &context,
-                &core_route,
-                &core_target,
-            )
-            .map_err(|e| {
-                WriterError::Other(format!("list_starmap_connections: query failed: {e:?}"))
-            })?
+            // target=Some：走索引查询，从反向依赖索引获取候选 Edge 来源，
+            // 只加载相关祖先图的边文件，而非遍历所有祖先图。
+            self.core_write()
+                .query_starmap_connections_for_target(&core_route, &core_target, &root_starmap_id)
+                .map_err(|e| {
+                    WriterError::Other(format!(
+                        "list_starmap_connections: index query failed: {e:?}"
+                    ))
+                })?
         } else {
             // target=None：走索引查询，从反向依赖索引获取候选 Edge 来源，
             // 只加载相关祖先图的边文件，而非遍历所有祖先图（问题4）。

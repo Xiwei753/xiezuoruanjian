@@ -796,6 +796,20 @@ impl WriterCoreApi {
         // 在 Commit 过程中写入后被旧 merged state 覆盖。
         crate::sync::state_lock::with_sync_state_lock(run.target_live_root(), || {
             let core = self.core_write();
+
+            // 问题1：commit 前 flush 所有 Store dirty 到 live 磁盘，
+            // 保证三方合并的 ours（live）包含用户在 Transfer 期间的编辑。
+            // flush 失败则注入 target 错误状态，不继续 commit（避免基于过时 live 做合并）。
+            if let Err(e) = core.flush_all_starmap_stores() {
+                let mut target_with_conflicts = target_sync_result.clone();
+                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                    format!("pre_commit_flush_failed: {}", e),
+                );
+                target_with_conflicts.result.error =
+                    Some(format!("flush_all_starmap_stores before commit failed: {}", e));
+                return (target_with_conflicts, Vec::new());
+            }
+
             let (commit_result, conflicts, committed_paths) =
                 crate::sync::commit_helpers::commit_single_target_staging(run, target_sync_result);
             let mut target_with_conflicts = target_sync_result.clone();
@@ -816,11 +830,16 @@ impl WriterCoreApi {
                     Some(format!("staging commit failed: {}", msg));
             }
 
-            // 同一写锁持有期内完成 Store 协调与索引失效（问题2）：
-            // 先 flush 有 dirty 的 Store 再 evict（问题1），然后失效路径依赖索引。
-            // 完成后才释放写锁，progress/callback 在锁外触发，
-            // 调用方不会在 Commit 和 evict 间隙读到不一致状态。
-            Self::coordinate_stores_after_commit(&core, &committed_paths);
+            // 同一写锁持有期内完成 Store 协调与索引失效（问题1+2）：
+            // commit 前已 flush Store dirty 到 live，此处只 evict 变化的星图 Store 并失效索引。
+            // 协调失败注入 target 错误状态（问题2），不假装成功。
+            if let Err(e) = Self::coordinate_stores_after_commit(&core, &committed_paths) {
+                target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
+                    format!("store_coordination_failed: {}", e),
+                );
+                target_with_conflicts.result.error =
+                    Some(format!("store coordination after commit failed: {}", e));
+            }
 
             (target_with_conflicts, committed_paths)
         })
@@ -828,26 +847,24 @@ impl WriterCoreApi {
 
     /// 在已持有 Core 写锁时，按 `committed_paths` 协调 Store 并失效派生索引。
     ///
-    /// 对每个变化的星图 ID，先 flush 有 dirty/删除事实的 Store 再 evict（问题1），
-    /// 然后失效路径依赖索引（问题2）。提取为独立方法以降低
-    /// [`commit_target_after_transfer`] 闭包内的嵌套深度。
+    /// commit 前已 flush 所有 Store dirty（问题1），此处只需 evict 变化的星图 Store
+    ///（移除缓存，下次访问从 live 磁盘重新加载合并后的结果）并失效路径依赖索引。
+    /// 返回 Result，失败时传播错误到 target 终态（问题2），不吞成 warn 后假装成功。
     fn coordinate_stores_after_commit(
         core: &crate::facade::WriterCore,
         committed_paths: &[std::path::PathBuf],
-    ) {
+    ) -> crate::error::Result<()> {
         let changed_starmap_ids: std::collections::HashSet<String> = committed_paths
             .iter()
             .filter_map(|p| extract_starmap_id_from_committed_path(p))
             .collect();
         for starmap_id in &changed_starmap_ids {
-            if let Err(e) = core.flush_and_evict_starmap_store(starmap_id) {
-                log::warn!(
-                    "[sync] commit: flush_and_evict_starmap_store({}) failed: {e}",
-                    starmap_id
-                );
-            }
+            // 问题1：不再 flush dirty（已在 commit 前 flush），只 evict Store。
+            // 问题2：evict 失败传播错误，不 log::warn 后继续。
+            core.evict_starmap_store_after_commit(starmap_id)?;
         }
         core.invalidate_path_dependency_index();
+        Ok(())
     }
 
     /// Issue #779 评论 5854082763：generation GC maintenance 独立入口。

@@ -96,24 +96,16 @@ impl super::WriterCore {
         self.invalidate_path_dependency_index();
     }
 
-    /// 同步后协调 Store：先持久化未保存的 dirty/删除事实，再从缓存移除。
+    /// 同步 commit 后 evict Store：只移除缓存，不 flush dirty。
     ///
-    /// 直接 remove 会丢弃 Store 的 dirty_nodes/edges/embeds/links/hyperlinks、
-    /// deleted_*_ids、save_queue 等未持久化状态。本方法先 flush 这些状态到磁盘，
-    /// 保证用户在同步期间产生的编辑不会丢失，然后再 remove（问题1）。
-    ///
-    /// flush 失败时返回 Err，调用方应传播错误，不能丢弃未持久化的修改。
-    /// 索引失效由调用方统一执行，与 [`remove_starmap_store`] 一致。
-    pub(crate) fn flush_and_evict_starmap_store(&self, starmap_id: &str) -> Result<()> {
+    /// commit 前已通过 `flush_all_starmap_stores` 把 dirty 写入 live 磁盘，
+    /// 此处只需移除 Store 缓存，下次访问从 live 磁盘重新加载合并后的结果。
+    /// 不再 flush dirty 避免覆盖刚提交的远端内容（问题1）。
+    pub(crate) fn evict_starmap_store_after_commit(&self, starmap_id: &str) -> Result<()> {
         let mut stores = self
             .starmap_stores
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(store) = stores.get_mut(starmap_id) {
-            if store.is_dirty() || store.has_pending_deletes() || store.save_queue_len() > 0 {
-                store.flush()?;
-            }
-        }
         stores.remove(starmap_id);
         Ok(())
     }
@@ -465,6 +457,38 @@ impl super::WriterCore {
             crate::error::Error::Other("path dependency index initialization failed".to_string())
         })?;
         index.query_connections_for_canvas(route, &context)
+    }
+
+    /// 按终点 target 查询指向该 target 的所有连接（持久化索引版）。
+    ///
+    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_target`。
+    /// 先确保 root starmap 完全加载，再构建 resolver context 并获取/初始化索引，
+    /// 最后调用 [`PathDependencyIndex::query_connections_for_target`] 从索引获取
+    /// 候选 Edge 来源，只加载相关祖先图的边文件。
+    ///
+    /// 读取错误通过 `?` 向上传播，不吞成"没有连接"。
+    pub(crate) fn query_starmap_connections_for_target(
+        &self,
+        route: &crate::starmap::navigation::StarMapNavigationRoute,
+        target: &crate::starmap::semantic::StarMapTargetDetail,
+        root_starmap_id: &str,
+    ) -> crate::error::Result<Vec<crate::starmap::connections::StarMapConnectionInfo>> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        {
+            let store = stores
+                .entry(root_starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
+            store.ensure_fully_loaded()?;
+        }
+        let context = self.build_resolver_context(&stores);
+        let index_guard = self.get_or_init_path_dependency_index(&stores)?;
+        let index = index_guard.as_ref().ok_or_else(|| {
+            crate::error::Error::Other("path dependency index initialization failed".to_string())
+        })?;
+        index.query_connections_for_target(route, target, &context)
     }
 }
 
