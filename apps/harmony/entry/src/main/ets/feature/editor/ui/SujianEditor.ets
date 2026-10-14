@@ -818,6 +818,10 @@ export struct SujianEditor {
       // Issue #879 复核评论6088787701 问题2：候选被新版替换是真实状态转移——
       // 候选 owner 退出，与 displayed 共享的 key 保留，只属于旧候选的窗口在物理卸载后清掉。
       this.syncMotionWindowOwners()
+      // Issue #879 评论6158702656 缺口3：候选作废时清理 carry-over 身份缓存中已失效的条目。
+      // 旧候选的物理窗口可能已被释放，对应的 instanceId 可能已被分配器回收，
+      // 缓存中残留的 groupKey→instanceId 映射会让后续 cache hit 错误复用旧身份。
+      this.motionCoordinator.purgeStaleCarryOverIdentities()
     }
 
     // Issue #879 复核评论修复（问题3）：不立即切换 currentSnapshot——
@@ -1447,6 +1451,9 @@ export struct SujianEditor {
             // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
             // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
             this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
+            // Issue #879 评论6158702656 缺口3：窗口释放后清理 carry-over 身份缓存中
+            // 已失效的条目，防止已回收的 instanceId 被后续 cache hit 错误复用。
+            this.motionCoordinator.purgeStaleCarryOverIdentities()
           }
         })
       }
@@ -1497,6 +1504,9 @@ export struct SujianEditor {
             // Issue #879 复核评论6078682695 问题3：按 renderNodeKey 释放租约，
             // 同一 instanceId 被多个节点共享时只有最后一个 onDisAppear 才真正释放。
             this.motionCoordinator.releaseRenderNodeLease(rnKey, winInstanceId)
+            // Issue #879 评论6158702656 缺口3：窗口释放后清理 carry-over 身份缓存中
+            // 已失效的条目，防止已回收的 instanceId 被后续 cache hit 错误复用。
+            this.motionCoordinator.purgeStaleCarryOverIdentities()
           }
         })
       }

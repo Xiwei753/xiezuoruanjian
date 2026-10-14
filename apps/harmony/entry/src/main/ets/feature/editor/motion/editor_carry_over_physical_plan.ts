@@ -15,6 +15,7 @@
 
 import { WindowInstanceIdAllocator } from './editor_glyph_identity.ts'
 import type { GlyphIdentityTable } from './editor_glyph_identity.ts'
+import { isFullyCovered } from './editor_commit_start.ts'
 
 // ── 最小类型定义（与 .ets 中的 ClipRect/GlyphRect 兼容） ──
 
@@ -201,6 +202,61 @@ export interface CarryOverPhysicalGroupResult {
  */
 export type IdentityCache = Map<string, { renderNodeKey: string; windowInstanceId: string }>
 
+// ── 岛几何/完成判定共享逻辑 ──
+
+/**
+ * Issue #879 评论6158702656 缺口1：多岛 insert 的完成判定。
+ *
+ * 逐一检查每个岛的源完整矩形（加 offset 后）是否被对应的 clip 矩形完全覆盖。
+ * 只有**所有岛**都完整覆盖才返回 true；任何一个岛有未覆盖区域就返回 false。
+ *
+ * 这解决了旧逻辑只看第一个岛的 glyphX/Y/Width/Height 做 isFullyCovered，
+ * 导致后面的字没吐完也跳过整组的问题。
+ *
+ * @param islandSourceRects 每个岛的源完整字形矩形列表
+ * @param islandClipRects 每个岛对应的起始 clip 矩形列表（与 islandSourceRects 一一对应）
+ * @param offsetX 绘制偏移 x
+ * @param offsetY 绘制偏移 y
+ * @returns true 表示所有岛都已完全覆盖（组已完成），false 表示至少有一个岛未完成
+ */
+export function isInsertGroupComplete(
+  islandSourceRects: GlyphRect[],
+  islandClipRects: ClipRect[][],
+  offsetX: number,
+  offsetY: number
+): boolean {
+  for (let i = 0; i < islandSourceRects.length; i++) {
+    const islandRect = islandSourceRects[i]
+    const islandClip = islandClipRects[i] ?? []
+    const fullRect: ClipRect = {
+      x: islandRect.x + offsetX,
+      y: islandRect.y + offsetY,
+      width: islandRect.width,
+      height: islandRect.height
+    }
+    if (!isFullyCovered(fullRect, islandClip)) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Issue #879 评论6158702656 缺口3：释放 carry-over 身份缓存中的条目。
+ *
+ * 当物理窗口最后租约被释放时，同步解除 groupKey→instanceId 关联，
+ * 防止已释放的 instanceId 被后续 cache hit 错误复用。
+ *
+ * @param identityCache 组级身份缓存
+ * @param groupKey 要释放的组键
+ */
+export function releaseCarryOverIdentity(
+  identityCache: IdentityCache,
+  groupKey: string
+): void {
+  identityCache.delete(groupKey)
+}
+
 // ── 核心函数 ──
 
 /**
@@ -302,29 +358,69 @@ export function generateRenderNodeKey(
 }
 
 /**
- * Issue #879 评论6153434157 问题3+4：carry-over 物理窗口规划入口。
+ * Issue #879 评论6158702656 缺口2+3：carry-over 物理窗口规划入口（两阶段组装）。
  *
- * 将拆片后的片段按物理 Text 分组，为每组分配唯一且固定的身份：
- * - 同源、同运动通道、同轨迹 → 合并为一个组（一张 Text）
- * - 不同轨迹 → 分配不同且固定的 PhysicalWindowIdentity
+ * **阶段1**：按 groupKey 完整收集并合并所有片段的 glyphIds、clip、源/目标映射与每岛几何。
+ *   组确定后才按完整 glyph 集合 allocateFresh(group.glyphIds)、生成 key、填入缓存。
+ *   这修复了旧逻辑在组还没聚合完就 allocateFresh(piece.glyphIds)，
+ *   导致分配器反向映射永远只有首片段 glyphIds 的问题。
  *
- * 身份分配通过 WindowInstanceIdAllocator 进行：
- * - 新组 → allocateFresh 分配新 windowInstanceId
- * - 同一组 retarget → 从 identityCache 查到已有身份，复用
- *
- * 合并后的组拥有完整的目标信息（所有 piece 的并集），不只取第一个 piece 的值。
+ * **阶段2**：对完整组装后的组做 cache hit 验证和身份分配。
+ *   - cache hit 时验证 allocator.resolve(cached.windowInstanceId) 与组 glyphIds 一致；
+ *     不一致则按规范重新规划身份，而非让 Map 与 allocator 各说各话。
+ *   - 已完成的 insert 组在规划阶段就被筛除，不分配/注册身份，
+ *     避免未挂载的实例被长驻缓存持有。
  *
  * @param piecesWithContext 带有父窗口上下文和运动通道的片段列表
  * @param allocator 窗口实例 ID 分配器
  * @param identityCache 组级身份缓存（跨 retarget 保持稳定）
- * @returns 物理组列表
+ * @returns 物理组列表（已完成的 insert 组被筛除）
  */
 export function planCarryOverPhysicalGroups(
   piecesWithContext: CarryOverPieceWithContext[],
   allocator: WindowInstanceIdAllocator,
   identityCache: IdentityCache
 ): CarryOverPhysicalGroupResult[] {
-  const groupMap = new Map<string, CarryOverPhysicalGroupResult>()
+  // ── 阶段1：按 groupKey 完整收集并合并所有片段 ──
+  //
+  // 不在此阶段分配身份——先完整收集所有片段，合并 glyphIds/clip/岛几何等，
+  // 组确定后才在阶段2用完整 glyph 集合做 allocateFresh。
+
+  /** 阶段1的中间组装结果——不含身份信息 */
+  interface GroupAssembly {
+    groupKey: string
+    sourceKind: 'old' | 'new'
+    sourceRevision: number
+    motionChannel: 'ghost' | 'insert' | 'reflow'
+    parentWindowId: string
+    parentRenderNodeKey: string
+    glyphIds: string[]
+    sourceUtf16Start: number
+    sourceUtf16End: number
+    clipRects: ClipRect[]
+    fullWindowGlyphUtf16Ranges: Map<string, [number, number]> | null
+    targetUtf16Start: number
+    targetUtf16End: number
+    targetResolved: boolean
+    targetRect: GlyphRect | null
+    glyphX: number
+    glyphY: number
+    glyphWidth: number
+    glyphHeight: number
+    clipLeft: number
+    clipRight: number
+    clipTop: number
+    clipBottom: number
+    currentPositionX: number
+    currentPositionY: number
+    offsetX: number
+    offsetY: number
+    opacity: number | undefined
+    islandSourceRects: GlyphRect[]
+    islandClipRects: ClipRect[][]
+  }
+
+  const assemblyMap = new Map<string, GroupAssembly>()
 
   for (const { piece, parent, motionChannel } of piecesWithContext) {
     // 跳过完全不可见的片段
@@ -347,28 +443,6 @@ export function planCarryOverPhysicalGroups(
       targetRectForGrouping
     )
 
-    // 生成或复用稳定身份
-    let renderNodeKey: string
-    let windowInstanceId: string
-    const cached = identityCache.get(groupKey)
-    if (cached !== undefined) {
-      // 同一组 retarget → 复用已有身份
-      renderNodeKey = cached.renderNodeKey
-      windowInstanceId = cached.windowInstanceId
-    } else {
-      // Issue #879 评论6158342861 问题2：cache miss 时先调用 allocator.allocateFresh
-      // 得到真正的子窗口实例 ID，再用它生成 renderNodeKey。
-      // 不把没有全局唯一性的父 windowInstanceId 当子节点 key 的唯一依据。
-      windowInstanceId = allocator.allocateFresh(piece.glyphIds)
-      renderNodeKey = generateRenderNodeKey(
-        parent.sourceKind,
-        parent.sourceRevision,
-        motionChannel,
-        windowInstanceId
-      )
-      identityCache.set(groupKey, { renderNodeKey, windowInstanceId })
-    }
-
     // 获取 piece 的 fullWindowGlyphUtf16Ranges（按 piece.glyphIds 过滤父窗口映射）
     let pieceFullRanges: Map<string, [number, number]> | null = null
     if (parent.fullWindowGlyphUtf16Ranges !== null) {
@@ -377,8 +451,8 @@ export function planCarryOverPhysicalGroups(
       )
     }
 
-    // 合并到已有组或创建新组
-    const existing = groupMap.get(groupKey)
+    // 合并到已有组装结果或创建新组装结果（不分配身份）
+    const existing = assemblyMap.get(groupKey)
     if (existing !== undefined) {
       // 合并：glyphIds 并集
       existing.glyphIds = [...existing.glyphIds, ...piece.glyphIds]
@@ -402,7 +476,7 @@ export function planCarryOverPhysicalGroups(
           }
         }
       }
-      // Issue #879 评论6158342861 问题3：合并时保留每个岛的源完整矩形和起始 clip
+      // 保留每个岛的源完整矩形和起始 clip
       existing.islandSourceRects.push({
         x: piece.glyphX,
         y: piece.glyphY,
@@ -410,20 +484,16 @@ export function planCarryOverPhysicalGroups(
         height: piece.glyphHeight
       })
       existing.islandClipRects.push([...piece.clipRects])
-      // Issue #879 评论6153434157 问题4：合并目标信息时形成完整、连续的组级目标
-      // 不只取第一个 piece 的目标值，也不只在 targetResolved=false 时替换
+      // 合并目标信息时形成完整、连续的组级目标
       if (piece.targetResolved) {
         if (!existing.targetResolved) {
-          // 之前未解析，现在有了解析结果——直接采用
           existing.targetUtf16Start = piece.targetUtf16Start
           existing.targetUtf16End = piece.targetUtf16End
           existing.targetResolved = true
           existing.targetRect = piece.targetRect
         } else {
-          // 之前已有解析结果——合并为完整连续范围
           existing.targetUtf16Start = Math.min(existing.targetUtf16Start, piece.targetUtf16Start)
           existing.targetUtf16End = Math.max(existing.targetUtf16End, piece.targetUtf16End)
-          // targetRect 取包围盒（同组 reflow 片段目标位置相同，包围盒 = 并集）
           if (existing.targetRect !== null && piece.targetRect !== null) {
             const minX = Math.min(existing.targetRect.x, piece.targetRect.x)
             const minY = Math.min(existing.targetRect.y, piece.targetRect.y)
@@ -445,15 +515,14 @@ export function planCarryOverPhysicalGroups(
         }
       }
     } else {
-      // 创建新组
-      groupMap.set(groupKey, {
-        renderNodeKey: renderNodeKey,
-        windowInstanceId: windowInstanceId,
+      // 创建新组装结果（不含身份信息）
+      assemblyMap.set(groupKey, {
+        groupKey: groupKey,
         sourceKind: parent.sourceKind,
         sourceRevision: parent.sourceRevision,
         motionChannel: motionChannel,
         parentWindowId: parent.windowId,
-        sourceRunId: `${parent.sourceKind}-${parent.sourceRevision}`,
+        parentRenderNodeKey: parent.renderNodeKey,
         glyphIds: [...piece.glyphIds],
         sourceUtf16Start: piece.sourceUtf16Start,
         sourceUtf16End: piece.sourceUtf16End,
@@ -476,7 +545,6 @@ export function planCarryOverPhysicalGroups(
         offsetX: piece.offsetX,
         offsetY: piece.offsetY,
         opacity: parent.opacity,
-        // Issue #879 评论6158342861 问题3：保留每个视觉岛的源完整矩形和起始 clip
         islandSourceRects: [{
           x: piece.glyphX,
           y: piece.glyphY,
@@ -488,7 +556,106 @@ export function planCarryOverPhysicalGroups(
     }
   }
 
-  return Array.from(groupMap.values())
+  // ── 阶段2：筛除已完成的 insert 组，为剩余组分配身份 ──
+  //
+  // Issue #879 评论6158702656 缺口3：规划阶段先筛除确实已完成、不会输出的组，
+  // 再分配/注册身份。避免从未进入输出 run、没有 ArkUI onAppear 租约的实例
+  // 被长驻缓存持有，无明确释放路径。
+
+  const results: CarryOverPhysicalGroupResult[] = []
+
+  for (const assembly of assemblyMap.values()) {
+    // 筛除已完成的 insert 组——它们的 clipRects 已完全覆盖所有岛的源完整矩形
+    if (assembly.motionChannel === 'insert' &&
+        isInsertGroupComplete(
+          assembly.islandSourceRects,
+          assembly.islandClipRects,
+          assembly.offsetX,
+          assembly.offsetY
+        )) {
+      // 已完成的 insert 组不分配身份、不输出——静态正文已接管这些字形
+      continue
+    }
+
+    // 为剩余组分配/复用稳定身份
+    let renderNodeKey: string
+    let windowInstanceId: string
+
+    const cached = identityCache.get(assembly.groupKey)
+    if (cached !== undefined) {
+      // Issue #879 评论6158702656 缺口3：cache hit 时验证实例仍有效。
+      // 分配器是唯一的活跃实例真相，cache hit 不能单靠字符串存在就宣称实例仍有效。
+      // 检查 allocator.resolve(cached.windowInstanceId) 返回的 glyphIds
+      // 是否与当前组的 glyphIds 一致；不一致说明实例已被释放并重新分配给其他组，
+      // 必须重新规划身份。
+      const resolvedGlyphIds = allocator.resolve(cached.windowInstanceId)
+      if (resolvedGlyphIds !== null &&
+          resolvedGlyphIds.length === assembly.glyphIds.length &&
+          resolvedGlyphIds.every((gid, i) => gid === assembly.glyphIds[i])) {
+        // 实例仍有效且 glyphIds 一致 → 复用
+        renderNodeKey = cached.renderNodeKey
+        windowInstanceId = cached.windowInstanceId
+      } else {
+        // 实例已释放或 glyphIds 不一致 → 重新分配
+        windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
+        renderNodeKey = generateRenderNodeKey(
+          assembly.sourceKind,
+          assembly.sourceRevision,
+          assembly.motionChannel,
+          windowInstanceId
+        )
+        identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId })
+      }
+    } else {
+      // Issue #879 评论6158702656 缺口2：cache miss 时用完整组 glyphIds 做 allocateFresh。
+      // 不再用首片段的 piece.glyphIds——那会导致分配器反向映射永远只有首片段的 glyphIds。
+      windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
+      renderNodeKey = generateRenderNodeKey(
+        assembly.sourceKind,
+        assembly.sourceRevision,
+        assembly.motionChannel,
+        windowInstanceId
+      )
+      identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId })
+    }
+
+    // 输出完整物理组
+    results.push({
+      renderNodeKey: renderNodeKey,
+      windowInstanceId: windowInstanceId,
+      sourceKind: assembly.sourceKind,
+      sourceRevision: assembly.sourceRevision,
+      motionChannel: assembly.motionChannel,
+      parentWindowId: assembly.parentWindowId,
+      sourceRunId: `${assembly.sourceKind}-${assembly.sourceRevision}`,
+      glyphIds: assembly.glyphIds,
+      sourceUtf16Start: assembly.sourceUtf16Start,
+      sourceUtf16End: assembly.sourceUtf16End,
+      clipRects: assembly.clipRects,
+      fullWindowGlyphUtf16Ranges: assembly.fullWindowGlyphUtf16Ranges,
+      targetUtf16Start: assembly.targetUtf16Start,
+      targetUtf16End: assembly.targetUtf16End,
+      targetResolved: assembly.targetResolved,
+      targetRect: assembly.targetRect,
+      glyphX: assembly.glyphX,
+      glyphY: assembly.glyphY,
+      glyphWidth: assembly.glyphWidth,
+      glyphHeight: assembly.glyphHeight,
+      clipLeft: assembly.clipLeft,
+      clipRight: assembly.clipRight,
+      clipTop: assembly.clipTop,
+      clipBottom: assembly.clipBottom,
+      currentPositionX: assembly.currentPositionX,
+      currentPositionY: assembly.currentPositionY,
+      offsetX: assembly.offsetX,
+      offsetY: assembly.offsetY,
+      opacity: assembly.opacity,
+      islandSourceRects: assembly.islandSourceRects,
+      islandClipRects: assembly.islandClipRects,
+    })
+  }
+
+  return results
 }
 
 // ── 辅助函数 ──

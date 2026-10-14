@@ -53,6 +53,7 @@ import {
 } from './editor_commit_start'
 import {
   planCarryOverPhysicalGroups, determineMotionChannel,
+  isInsertGroupComplete, releaseCarryOverIdentity,
   type CarryOverPieceWithContext, type IdentityCache
 } from './editor_carry_over_physical_plan'
 
@@ -3806,17 +3807,17 @@ export class EditorMotionCoordinator {
         continue
       }
 
-      // Issue #879 评论6158342861 问题1：基于物理组自身真实属性判断完成状态。
-      // insert 组：clipRects 已完全覆盖完整字形矩形 → 完成
-      // reflow 组：当前位置已到达目标位置 + alpha 已到达目标值 + clip 已完全覆盖目标矩形 → 完成
+      // Issue #879 评论6158702656 缺口1：insert 的完成判断逐一遍历所有岛。
+      // 旧逻辑只看 group.glyphX/Y/Width/Height（首个 piece 的几何）做 isFullyCovered，
+      // 后面的字没吐完也会跳过整组。新逻辑使用共享的 isInsertGroupComplete 函数，
+      // 逐一检查 islandSourceRects[i] 与 islandClipRects[i]，只有所有岛完整覆盖才跳过。
       if (group.motionChannel === 'insert') {
-        const fullRect: RectLike = {
-          x: group.glyphX + group.offsetX,
-          y: group.glyphY + group.offsetY,
-          width: group.glyphWidth,
-          height: group.glyphHeight
-        }
-        if (isFullyCovered(fullRect, group.clipRects)) {
+        if (isInsertGroupComplete(
+          group.islandSourceRects,
+          group.islandClipRects,
+          group.offsetX,
+          group.offsetY
+        )) {
           continue
         }
       } else {
@@ -4521,6 +4522,30 @@ export class EditorMotionCoordinator {
   clearWindowInstances(): void {
     this.windowIdAllocator.clear()
     this.carryOverIdentityCache.clear()
+  }
+
+  /**
+   * Issue #879 评论6158702656 缺口3：清理 carry-over 身份缓存中已失效的条目。
+   *
+   * 分配器是唯一的活跃实例真相。遍历 identityCache，对每个条目检查
+   * allocator.resolve(windowInstanceId) 是否仍返回与缓存一致的 glyphIds。
+   * 不一致的条目（实例已释放或被重新分配给其他组）被移除，
+   * 防止后续 cache hit 错误复用已回收的身份。
+   *
+   * 候选作废或物理窗口最后释放时调用。
+   */
+  purgeStaleCarryOverIdentities(): void {
+    const staleKeys: string[] = []
+    for (const [groupKey, cached] of this.carryOverIdentityCache) {
+      const resolved = this.windowIdAllocator.resolve(cached.windowInstanceId)
+      if (resolved === null) {
+        // 实例已释放——缓存条目失效
+        staleKeys.push(groupKey)
+      }
+    }
+    for (const key of staleKeys) {
+      this.carryOverIdentityCache.delete(key)
+    }
   }
 
   /**

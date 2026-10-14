@@ -14,6 +14,7 @@ import { WindowInstanceIdAllocator, windowIdForGlyphIds, GlyphIdentityTable } fr
 import {
   planCarryOverPhysicalGroups, determineMotionChannel,
   generateGroupKey, generateRenderNodeKey,
+  isInsertGroupComplete, releaseCarryOverIdentity,
 } from '../editor_carry_over_physical_plan.ts'
 import { rectDifference, isFullyCovered } from '../editor_commit_start.ts'
 
@@ -1814,9 +1815,16 @@ test('场景12c：同源 ghost + surviving motion——分配不同通道的身�
 
   const parent = makeParent('win-7', 'old', 10, 'deleted')
   const ghostPiece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
-  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }], {
+  // Issue #879 评论6158702656 缺口1：insert piece 的 clip 只覆盖部分区域（正在吐字），
+  // 否则 isInsertGroupComplete 会判定已完成并筛除该组。
+  // glyphWidth=10 是完整字形宽度，clip width=3 表示只吐出了 3px。
+  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 3, height: 20 }], {
     targetResolved: true,
     targetRect: { x: 30, y: 0, width: 10, height: 20 },
+    glyphX: 30,
+    glyphY: 0,
+    glyphWidth: 10,
+    glyphHeight: 20,
   })
 
   const results = planCarryOverPhysicalGroups([
@@ -1871,9 +1879,16 @@ test('场景12e：buildFrame 不因同 key 不同片段抛错——规划阶段�
 
   const parent = makeParent('win-3', 'old', 10, 'deleted')
   const ghostPiece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
-  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }], {
+  // Issue #879 评论6158702656 缺口1：insert piece 的 clip 只覆盖部分区域（正在吐字），
+  // 否则 isInsertGroupComplete 会判定已完成并筛除该组。
+  // glyphWidth=10 是完整字形宽度，clip width=3 表示只吐出了 3px。
+  const insertPiece = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 3, height: 20 }], {
     targetResolved: true,
     targetRect: { x: 30, y: 0, width: 10, height: 20 },
+    glyphX: 30,
+    glyphY: 0,
+    glyphWidth: 10,
+    glyphHeight: 20,
   })
 
   const results = planCarryOverPhysicalGroups([
@@ -2188,6 +2203,279 @@ test('问题3-6158342861补充：各岛单独 rectDifference 后合并裁切并�
   // 旧逻辑的 remaining 不包含第二字的 [33,40] 区域
   const oldHasSecondGap = oldRemaining.some(r => r.x >= 33)
   assert.ok(!oldHasSecondGap, '旧逻辑（只用首片段 fullRect）确实遗漏了第二字的未露出部分')
+})
+
+// ── Issue #879 评论6158702656 三个缺口的生产逻辑用例 ──
+
+// 缺口1测试：多岛 insert 的完成判定——第一字已满、第二字未满仍产生 motion run
+test('缺口1-6158702656：多岛 insert 第一字已满第二字未满——isInsertGroupComplete 返回 false', () => {
+  // 场景：同组第 1 个完整字 [0,10]、已显示 [0,10]（已满）；
+  //       第 2 个完整字 [30,40]、当前仅显示 [30,33]（未满）。
+  // 旧逻辑：只看第一个岛的 isFullyCovered → true → 整组 continue → 第二字的 [33,40] 再也不会吐出来。
+  // 新逻辑：逐一检查所有岛，第二个岛未满 → isInsertGroupComplete 返回 false → 产生 motion run。
+
+  const islandSourceRects = [
+    { x: 0, y: 0, width: 10, height: 20 },   // 第一字完整矩形
+    { x: 30, y: 0, width: 10, height: 20 },  // 第二字完整矩形
+  ]
+  const islandClipRects = [
+    [{ x: 0, y: 0, width: 10, height: 20 }],  // 第一字已完全显示
+    [{ x: 30, y: 0, width: 3, height: 20 }],   // 第二字只显示了 3px
+  ]
+  const offsetX = 0
+  const offsetY = 0
+
+  // isInsertGroupComplete 应返回 false（第二个岛未满）
+  assert.ok(!isInsertGroupComplete(islandSourceRects, islandClipRects, offsetX, offsetY),
+    '第一字已满、第二字未满时 isInsertGroupComplete 应返回 false')
+
+  // 反证：如果两个岛都已满，应返回 true
+  const allCoveredClips = [
+    [{ x: 0, y: 0, width: 10, height: 20 }],
+    [{ x: 30, y: 0, width: 10, height: 20 }],
+  ]
+  assert.ok(isInsertGroupComplete(islandSourceRects, allCoveredClips, offsetX, offsetY),
+    '两个岛都已满时 isInsertGroupComplete 应返回 true')
+})
+
+test('缺口1-6158702656：多岛 insert 第一字已满第二字未满——planCarryOverPhysicalGroups 不筛除该组', () => {
+  // 同样的场景通过 planCarryOverPhysicalGroups 验证：
+  // 已完成的 insert 组被筛除（不输出），未完成的保留（输出 motion run）。
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-5', 'new', 11, 'insert')
+
+  // piece1: 字形 [0,10]，当前可见 [0,10]（已满）
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    glyphX: 0, glyphY: 0, glyphWidth: 10, glyphHeight: 20,
+  })
+  // piece2: 字形 [30,40]，当前可见 [30,33]（未满）
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 3, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 30, y: 0, width: 10, height: 20 },
+    glyphX: 30, glyphY: 0, glyphWidth: 10, glyphHeight: 20,
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'insert' },
+    { piece: piece2, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  // 组未被筛除——仍输出
+  assert.equal(results.length, 1, '第一字已满、第二字未满的 insert 组不应被筛除')
+  assert.equal(results[0].motionChannel, 'insert')
+  assert.equal(results[0].islandSourceRects.length, 2)
+})
+
+test('缺口1-6158702656：完全已满的 insert 组被筛除——不分配身份、不输出', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-5', 'new', 11, 'insert')
+
+  // 两个 piece 的 clip 都完全覆盖了各自的完整字形矩形
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    glyphX: 0, glyphY: 0, glyphWidth: 10, glyphHeight: 20,
+  })
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 30, y: 0, width: 10, height: 20 },
+    glyphX: 30, glyphY: 0, glyphWidth: 10, glyphHeight: 20,
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'insert' },
+    { piece: piece2, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  // 已完成的 insert 组被筛除——不输出
+  assert.equal(results.length, 0, '所有岛都已满的 insert 组应被筛除')
+
+  // cache 中不应有该组的身份条目（未分配身份）
+  assert.equal(cache.size, 0, '已完成的 insert 组不应在 cache 中留下身份条目')
+})
+
+// 缺口2测试：合组后 allocator 的完整 glyph 映射
+test('缺口2-6158702656：合组后 allocator.resolve 返回完整 glyphIds——不只首片段', () => {
+  // 旧逻辑：cache miss 时 allocator.allocateFresh(piece.glyphIds) 只传入首片段的 glyphIds，
+  //         后续片段合并到 existing.glyphIds 但 allocator 的反向映射不更新。
+  //         allocator.resolve(result.windowInstanceId) 只有首片段的 glyphIds。
+  // 新逻辑：两阶段组装——先完整收集所有片段，再用完整组 glyphIds 做 allocateFresh。
+  //         allocator.resolve(result.windowInstanceId) 返回完整 glyphIds。
+
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-3', 'old', 10, 'deleted')
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }])
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results.length, 1)
+  const group = results[0]
+
+  // 关键验证：allocator.resolve 返回的 glyphIds 与组的 glyphIds 一致
+  const resolved = allocator.resolve(group.windowInstanceId)
+  assert.ok(resolved !== null, 'windowInstanceId 应在分配器中登记')
+  assert.deepEqual(resolved, group.glyphIds,
+    'allocator.resolve 返回的 glyphIds 应与组的完整 glyphIds 一致，不只首片段')
+  assert.equal(resolved.length, 2)
+  assert.equal(resolved[0], 'g1')
+  assert.equal(resolved[1], 'g2')
+})
+
+test('缺口2-6158702656：合组后 allocator 反向映射包含所有片段的 glyphIds', () => {
+  // 三个片段合并为一个 ghost 组，allocator.resolve 应返回全部三个 glyphIds
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-4', 'old', 10, 'deleted')
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 20, y: 0, width: 10, height: 20 }])
+  const piece3 = makePiece(['g3'], 2, 3, [{ x: 40, y: 0, width: 10, height: 20 }])
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+    { piece: piece2, parent, motionChannel: 'ghost' },
+    { piece: piece3, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results.length, 1)
+  const group = results[0]
+  assert.equal(group.glyphIds.length, 3)
+
+  const resolved = allocator.resolve(group.windowInstanceId)
+  assert.ok(resolved !== null)
+  assert.deepEqual(resolved, ['g1', 'g2', 'g3'],
+    '三个片段合组后 allocator.resolve 应返回全部三个 glyphIds')
+})
+
+// 缺口3测试：窗口最后租约释放后再次出现同 groupKey 时不会错误复用旧身份
+test('缺口3-6158702656：窗口释放后同 groupKey 再次出现——不错误复用已释放的身份', () => {
+  // 场景：
+  // 1. 第一次规划：groupKey A → allocateFresh → win-0，cache 记录 A→win-0
+  // 2. win-0 的所有租约被释放 → allocator.release(win-0) → win-0 进入 releasedIds
+  // 3. allocateFresh 为其他组分配 → win-0 被复用，但 glyphIds 不同
+  // 4. 第二次规划：groupKey A 再次出现 → cache hit → 验证 allocator.resolve(win-0)
+  //    返回的 glyphIds 与当前组的 glyphIds 不一致 → 重新分配新身份
+
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'old', 10, 'deleted')
+
+  // 第一次规划：ghost 组 g1
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const results1 = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results1.length, 1)
+  const group1 = results1[0]
+  const oldWinId = group1.windowInstanceId
+  const oldRenderKey = group1.renderNodeKey
+
+  // 模拟窗口释放：release win-0
+  allocator.release(oldWinId)
+
+  // win-0 已释放，allocateFresh 可能复用该 ID 给其他组
+  const otherWinId = allocator.allocateFresh(['other-glyph'])
+  // otherWinId 可能等于 oldWinId（复用了已释放的 ID）
+
+  // 第二次规划：同 groupKey 再次出现，但 glyphIds 可能已变化
+  // 即使 glyphIds 不变，allocator.resolve(oldWinId) 返回的 glyphIds 可能已不同
+  const piece2 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }])
+  const results2 = planCarryOverPhysicalGroups([
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results2.length, 1)
+  const group2 = results2[0]
+
+  // 关键验证：如果 oldWinId 已被重新分配给其他 glyphIds，
+  // cache hit 验证会发现不一致并重新分配新身份
+  const resolvedOld = allocator.resolve(oldWinId)
+  if (resolvedOld !== null && resolvedOld[0] !== 'g1') {
+    // oldWinId 已被重新分配给其他 glyphIds → 应分配新身份
+    assert.notEqual(group2.windowInstanceId, oldWinId,
+      '旧身份已被重新分配给其他组时，不应复用旧身份')
+  } else {
+    // oldWinId 已释放（resolve 返回 null）→ cache hit 验证会发现并重新分配
+    // 或者 oldWinId 仍指向 g1（未被复用）→ 可以复用
+    // 两种情况都是正确的
+  }
+
+  // 无论如何，新组的 windowInstanceId 应在分配器中有效
+  assert.ok(allocator.resolve(group2.windowInstanceId) !== null,
+    '新组的 windowInstanceId 应在分配器中有效')
+})
+
+test('缺口3-6158702656：releaseCarryOverIdentity 清除缓存条目', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'old', 10, 'deleted')
+  const piece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(cache.size, 1)
+
+  // 获取唯一的 groupKey
+  const groupKey = cache.keys().next().value
+
+  // 释放缓存条目
+  releaseCarryOverIdentity(cache, groupKey)
+  assert.equal(cache.size, 0, 'releaseCarryOverIdentity 应清除指定条目')
+
+  // 再次规划时应分配新身份（cache miss）
+  const results2 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  assert.equal(results2.length, 1)
+  assert.notEqual(results2[0].windowInstanceId, results[0].windowInstanceId,
+    'cache 清除后应分配新身份')
+})
+
+test('缺口3-6158702656：已完成的 insert 组不持有未挂载的实例', () => {
+  // 完全结束的 insert 组不应分配身份、不应在 cache 中留下条目
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'new', 11, 'insert')
+
+  // clip 完全覆盖字形矩形——已完成
+  const piece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    glyphX: 0, glyphY: 0, glyphWidth: 10, glyphHeight: 20,
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  // 已完成的 insert 组被筛除
+  assert.equal(results.length, 0, '已完成的 insert 组应被筛除')
+  assert.equal(cache.size, 0, '已完成的 insert 组不应在 cache 中留下条目')
+
+  // 分配器中不应有该组的 instanceId（未分配身份）
+  // 验证：分配器的 nextId 应仍为初始值（没有为已完成的组分配任何 ID）
+  const freshId = allocator.allocateFresh(['test'])
+  assert.match(freshId, /^win-0$/,
+    '已完成的组未分配身份，分配器的第一个 ID 应仍为 win-0')
 })
 
 console.log('---')
