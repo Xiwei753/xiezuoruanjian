@@ -49,11 +49,12 @@ import { applyPatchesToText } from './editor_patch_carry'
 import { GlyphIdentityTable, GlyphIdentityEntry, WindowInstanceIdAllocator, windowIdForGlyphIds, clusterBoundaries } from './editor_glyph_identity'
 import {
   DisplayedContext, FrozenWindowSpan, RunGeometry, RunStartState, RunStartPiece, RunStartInterval,
-  RectLike, retargetRunStarts, rectDifference, isFullyCovered, mapRectByRatio, FrozenGlyphMember
+  RectLike, retargetRunStarts, rectDifference, mapRectByRatio, FrozenGlyphMember
 } from './editor_commit_start'
 import {
   planCarryOverPhysicalGroups, determineMotionChannel,
-  isInsertGroupComplete, releaseCarryOverIdentity,
+  isInsertGroupComplete, isReflowGroupComplete,
+  releaseCarryOverIdentity, releaseCarryOverIdentitiesByOwner,
   type CarryOverPieceWithContext, type IdentityCache
 } from './editor_carry_over_physical_plan'
 
@@ -506,7 +507,7 @@ export class EditorMotionCoordinator {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
       contentWidth, policy, displayedFrame, firstCaretRect,
-      sessionId
+      sessionId, 'candidate'
     )
     return {
       plan: state.plan,
@@ -835,7 +836,8 @@ export class EditorMotionCoordinator {
     }
     const physicalGroups = this.planCarryOverPhysicalWindows(
       latestDisplayedFrame, prepared.state.newSnapshot.revision,
-      prepared.state.newLayout, planGlyphIds, prepared.state.glyphIdentities
+      prepared.state.newLayout, planGlyphIds, prepared.state.glyphIdentities,
+      'candidate'
     )
     const carryOverGhostRuns = this.identifyCarryOverGhosts(physicalGroups)
     const carryOverMotionRuns = this.identifyCarryOverMotionRuns(
@@ -949,7 +951,7 @@ export class EditorMotionCoordinator {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, editResults,
       contentWidth, policy, this.currentFrame, firstCaretRect ?? null,
-      sessionId ?? this.currentSessionId
+      sessionId ?? this.currentSessionId, 'displayed'
     )
     this.applyCommittedState(state)
     return this.currentFrame
@@ -979,7 +981,7 @@ export class EditorMotionCoordinator {
     const state = this.computeUpdateState(
       oldSnapshot, oldLayout, newSnapshot, newLayout, chain,
       contentWidth, policy, this.currentFrame, firstCaretRect ?? null,
-      sessionId ?? this.currentSessionId
+      sessionId ?? this.currentSessionId, 'displayed'
     )
     this.applyCommittedState(state)
     return this.currentFrame
@@ -1005,7 +1007,8 @@ export class EditorMotionCoordinator {
     policy: EditorMotionPolicy,
     startFrame: EditorVisualFrame,
     firstCaretRect: CaretRect | null,
-    sessionId: number
+    sessionId: number,
+    owner: string
   ): MotionCommittedState {
     const newGeometryKey: GeometryKey = {
       fontSize: newSnapshot.fontSize,
@@ -1093,7 +1096,8 @@ export class EditorMotionCoordinator {
         }
       }
       const physicalGroups = this.planCarryOverPhysicalWindows(
-        startFrame, newSnapshot.revision, newLayout, planGlyphIds, identities.newTable
+        startFrame, newSnapshot.revision, newLayout, planGlyphIds, identities.newTable,
+        owner
       )
       plan.carryOverGhostRuns = this.identifyCarryOverGhosts(physicalGroups)
       plan.carryOverMotionRuns = this.identifyCarryOverMotionRuns(
@@ -3444,7 +3448,8 @@ export class EditorMotionCoordinator {
     newRevision: number,
     newLayout: LineLayout[],
     planGlyphIds: Set<string>,
-    newIdentityTable: GlyphIdentityTable | null
+    newIdentityTable: GlyphIdentityTable | null,
+    owner: string
   ): CarryOverPhysicalGroup[] {
     if (!latestDisplayedFrame.isAnimating) {
       return []
@@ -3530,7 +3535,8 @@ export class EditorMotionCoordinator {
     const results = planCarryOverPhysicalGroups(
       piecesWithContext,
       this.windowIdAllocator,
-      this.carryOverIdentityCache
+      this.carryOverIdentityCache,
+      owner
     )
 
     // 将共享模块的输出类型转换为 Coordinator 内部的 CarryOverPhysicalGroup
@@ -3822,21 +3828,18 @@ export class EditorMotionCoordinator {
         }
       } else {
         // reflow
-        if (group.targetRect !== null) {
-          const positionDone = Math.abs(group.currentPositionX - group.targetRect.x) < 0.01 &&
-              Math.abs(group.currentPositionY - group.targetRect.y) < 0.01
-          const opacityDone = group.opacity === undefined ||
-              (group.sourceKind === 'old' ? group.opacity < 0.01 : group.opacity > 0.99)
-          const targetFullRect: RectLike = {
-            x: group.targetRect.x,
-            y: group.targetRect.y,
-            width: group.targetRect.width,
-            height: group.targetRect.height
-          }
-          const clipDone = isFullyCovered(targetFullRect, group.clipRects)
-          if (positionDone && opacityDone && clipDone) {
-            continue
-          }
+        // Issue #879 评论6159166760 问题2：使用与规划阶段共用的 isReflowGroupComplete 函数。
+        // 规划阶段已筛除已完成的 reflow 组，此处为防御性冗余检查——
+        // 如果规划阶段漏掉了某个已完成组，这里仍会跳过它，不生成 motion run。
+        if (isReflowGroupComplete(
+          group.currentPositionX,
+          group.currentPositionY,
+          group.targetRect,
+          group.opacity,
+          group.sourceKind,
+          group.clipRects
+        )) {
+          continue
         }
       }
 
@@ -4503,6 +4506,23 @@ export class EditorMotionCoordinator {
    */
   releaseRenderNodeLease(renderNodeKey: string, windowInstanceId: string): void {
     this.windowIdAllocator.releaseLease(renderNodeKey, windowInstanceId)
+    // Issue #879 评论6159166760 问题3：实例被释放后（最后一个 lease 归还），
+    // 同步清理 carry-over 身份缓存中对应的条目。
+    // releaseLease 内部在最后一个 lease 归还时调用 release(instanceId)，
+    // 此时 resolve(instanceId) 返回 null，cache 条目应被移除。
+    // 通过 releaseCarryOverIdentity 按 groupKey 找到并删除关联——
+    // 将缓存清理接成闭环，而非留下一个未调用的删除辅助函数。
+    if (this.windowIdAllocator.resolve(windowInstanceId) === null) {
+      const groupKeyToDelete: string[] = []
+      for (const [groupKey, cached] of this.carryOverIdentityCache) {
+        if (cached.windowInstanceId === windowInstanceId) {
+          groupKeyToDelete.push(groupKey)
+        }
+      }
+      for (const key of groupKeyToDelete) {
+        releaseCarryOverIdentity(this.carryOverIdentityCache, key)
+      }
+    }
   }
 
   /**
@@ -4525,12 +4545,16 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 评论6158702656 缺口3：清理 carry-over 身份缓存中已失效的条目。
+   * Issue #879 评论6158702656 缺口3 + 评论6159166760 问题3：清理 carry-over 身份缓存中已失效的条目。
    *
    * 分配器是唯一的活跃实例真相。遍历 identityCache，对每个条目检查
    * allocator.resolve(windowInstanceId) 是否仍返回与缓存一致的 glyphIds。
    * 不一致的条目（实例已释放或被重新分配给其他组）被移除，
    * 防止后续 cache hit 错误复用已回收的身份。
+   *
+   * Issue #879 评论6159166760 问题3：同时检查 owner 一致性——
+   * 如果缓存条目的 owner 与当前活跃 owner 不匹配（如旧候选残留），
+   * 也应清理，防止不同 owner 错误复用同一身份。
    *
    * 候选作废或物理窗口最后释放时调用。
    */
@@ -4546,6 +4570,25 @@ export class EditorMotionCoordinator {
     for (const key of staleKeys) {
       this.carryOverIdentityCache.delete(key)
     }
+  }
+
+  /**
+   * Issue #879 评论6159166760 问题1：释放候选拥有的 carry-over 身份。
+   *
+   * 候选作废时调用——释放属于候选（owner='candidate'）且从未挂载（无租约）的实例，
+   * 并删除对应的 cache 关联。已挂载（有租约）的身份不在此释放——
+   * 它们随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收。
+   *
+   * 与 purgeStaleCarryOverIdentities 的区别：
+   * - purgeStaleCarryOverIdentities 只清理 resolve===null 的条目（实例已被释放）
+   * - releaseCandidateOwnedIdentities 主动释放从未挂载的候选实例（resolve 仍非 null）
+   */
+  releaseCandidateOwnedIdentities(): void {
+    releaseCarryOverIdentitiesByOwner(
+      this.carryOverIdentityCache,
+      this.windowIdAllocator,
+      'candidate'
+    )
   }
 
   /**

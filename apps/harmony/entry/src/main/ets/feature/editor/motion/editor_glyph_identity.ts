@@ -327,6 +327,20 @@ export class WindowInstanceIdAllocator {
   }
 
   /**
+   * Issue #879 评论6159166760 问题1：检查 instanceId 是否仍有活跃租约。
+   *
+   * 候选作废时需要区分"从未挂载的实例"（无租约，可安全释放）和
+   * "已挂载的实例"（有租约，须随 ArkUI 卸载释放）。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   * @returns true 表示仍有活跃租约（已挂载），false 表示无租约（从未挂载或已全部释放）
+   */
+  hasLeases(windowInstanceId: string): boolean {
+    const leases = this.instanceIdToLeases.get(windowInstanceId)
+    return leases !== undefined && leases.size > 0
+  }
+
+  /**
    * 通过算法身份（windowIdForGlyphIds() 的结果）释放。
    *
    * @param windowId `windowIdForGlyphIds()` 的输出

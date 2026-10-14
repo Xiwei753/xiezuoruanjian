@@ -14,7 +14,8 @@ import { WindowInstanceIdAllocator, windowIdForGlyphIds, GlyphIdentityTable } fr
 import {
   planCarryOverPhysicalGroups, determineMotionChannel,
   generateGroupKey, generateRenderNodeKey,
-  isInsertGroupComplete, releaseCarryOverIdentity,
+  isInsertGroupComplete, isReflowGroupComplete,
+  releaseCarryOverIdentity, releaseCarryOverIdentitiesByOwner,
 } from '../editor_carry_over_physical_plan.ts'
 import { rectDifference, isFullyCovered } from '../editor_commit_start.ts'
 
@@ -1748,7 +1749,7 @@ test('场景12a：同源多岛相同轨迹——合并为一个物理组，一�
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'ghost' },
     { piece: piece2, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 合并后只有一个物理组
   assert.equal(results.length, 1)
@@ -1776,19 +1777,25 @@ test('场景12b：同源两片段不同目标行——分配不同且固定的 r
   const cache = new Map()
 
   const parent = makeParent('win-5', 'old', 10, 'reflow')
+  // Issue #879 评论6159166760：currentPosition 不等于 targetPosition，
+  // 否则 isReflowGroupComplete 会判定为已完成并在规划阶段筛除。
   const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
     targetResolved: true,
-    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    targetRect: { x: 0, y: 100, width: 10, height: 20 },
+    currentPositionX: 0,
+    currentPositionY: 0,
   })
   const piece2 = makePiece(['g2'], 1, 2, [{ x: 20, y: 0, width: 10, height: 20 }], {
     targetResolved: true,
-    targetRect: { x: 0, y: 30, width: 10, height: 20 },
+    targetRect: { x: 0, y: 130, width: 10, height: 20 },
+    currentPositionX: 20,
+    currentPositionY: 0,
   })
 
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'reflow' },
     { piece: piece2, parent, motionChannel: 'reflow' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 两个不同的物理组
   assert.equal(results.length, 2)
@@ -1830,7 +1837,7 @@ test('场景12c：同源 ghost + surviving motion——分配不同通道的身�
   const results = planCarryOverPhysicalGroups([
     { piece: ghostPiece, parent, motionChannel: 'ghost' },
     { piece: insertPiece, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 两个不同的物理组
   assert.equal(results.length, 2)
@@ -1853,13 +1860,13 @@ test('场景12d：同一候选重复 retarget——身份不变，起点几何�
   const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
   const results1 = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 第二次 retarget（同一父窗口再次 carry-over，几何变化但身份不变）
   const piece2 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }])
   const results2 = planCarryOverPhysicalGroups([
     { piece: piece2, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results1.length, 1)
   assert.equal(results2.length, 1)
@@ -1894,7 +1901,7 @@ test('场景12e：buildFrame 不因同 key 不同片段抛错——规划阶段�
   const results = planCarryOverPhysicalGroups([
     { piece: ghostPiece, parent, motionChannel: 'ghost' },
     { piece: insertPiece, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results.length, 2)
   assert.notEqual(results[0].renderNodeKey, results[1].renderNodeKey)
@@ -1926,7 +1933,7 @@ test('场景12f：同源多岛合并后 fullWindowGlyphUtf16Ranges 是并集', (
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'ghost' },
     { piece: piece2, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results.length, 1)
   const group = results[0]
@@ -1947,19 +1954,25 @@ test('场景12g：同父窗口不同目标位置的 reflow——groupKey 包含 
   const parent1 = makeParent('win-1', 'old', 10, 'reflow', 'old-10-win-1')
   const parent2 = makeParent('win-2', 'old', 10, 'reflow', 'old-10-win-2')
 
+  // Issue #879 评论6159166760：currentPosition 不等于 targetPosition，
+  // 否则 isReflowGroupComplete 会判定为已完成并在规划阶段筛除。
   const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
     targetResolved: true,
-    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    targetRect: { x: 0, y: 100, width: 10, height: 20 },
+    currentPositionX: 0,
+    currentPositionY: 0,
   })
   const piece2 = makePiece(['g2'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }], {
     targetResolved: true,
-    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+    targetRect: { x: 0, y: 100, width: 10, height: 20 },
+    currentPositionX: 0,
+    currentPositionY: 0,
   })
 
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent: parent1, motionChannel: 'reflow' },
     { piece: piece2, parent: parent2, motionChannel: 'reflow' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 不同父窗口 → 不同组（即使目标和通道相同）
   assert.equal(results.length, 2)
@@ -1973,23 +1986,29 @@ test('场景12h：合并后的组拥有完整目标信息——不只取第一�
   const cache = new Map()
 
   const parent = makeParent('win-13', 'old', 10, 'reflow')
+  // Issue #879 评论6159166760：currentPosition 不等于 targetPosition，
+  // 否则 isReflowGroupComplete 会判定为已完成并在规划阶段筛除。
   const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }], {
     targetResolved: true,
     targetUtf16Start: 10,
     targetUtf16End: 11,
-    targetRect: { x: 0, y: 0, width: 5, height: 20 },
+    targetRect: { x: 0, y: 100, width: 5, height: 20 },
+    currentPositionX: 0,
+    currentPositionY: 0,
   })
   const piece2 = makePiece(['g2'], 1, 2, [{ x: 5, y: 0, width: 5, height: 20 }], {
     targetResolved: true,
     targetUtf16Start: 11,
     targetUtf16End: 12,
-    targetRect: { x: 5, y: 0, width: 5, height: 20 },
+    targetRect: { x: 5, y: 100, width: 5, height: 20 },
+    currentPositionX: 5,
+    currentPositionY: 0,
   })
 
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'reflow' },
     { piece: piece2, parent, motionChannel: 'reflow' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 两个 piece 目标位置不同（x=0 vs x=5）→ 不同组
   // 等等——reflow 的 groupKey 包含 targetRect.x 和 targetRect.y
@@ -2025,7 +2044,7 @@ test('问题1-6158342861：未吐完字的窗口在其他位置编辑——inser
 
   const results = planCarryOverPhysicalGroups([
     { piece, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results.length, 1)
   const group = results[0]
@@ -2055,7 +2074,7 @@ test('问题2-6158342861：同 sourceKind/revision/windowInstanceId 但不同 pa
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent: parent1, motionChannel: 'ghost' },
     { piece: piece2, parent: parent2, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 两个不同的物理组（因为 parentRenderNodeKey 不同 → groupKey 不同）
   assert.equal(results.length, 2)
@@ -2116,7 +2135,7 @@ test('问题3-6158342861：同父 insert 窗口两个不连续可见岛——各
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'insert' },
     { piece: piece2, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 合并为一个物理组（同一父窗口、同一 insert 通道）
   assert.equal(results.length, 1)
@@ -2262,7 +2281,7 @@ test('缺口1-6158702656：多岛 insert 第一字已满第二字未满——pla
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'insert' },
     { piece: piece2, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 组未被筛除——仍输出
   assert.equal(results.length, 1, '第一字已满、第二字未满的 insert 组不应被筛除')
@@ -2291,7 +2310,7 @@ test('缺口1-6158702656：完全已满的 insert 组被筛除——不分配身
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'insert' },
     { piece: piece2, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 已完成的 insert 组被筛除——不输出
   assert.equal(results.length, 0, '所有岛都已满的 insert 组应被筛除')
@@ -2318,7 +2337,7 @@ test('缺口2-6158702656：合组后 allocator.resolve 返回完整 glyphIds—�
   const results = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'ghost' },
     { piece: piece2, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results.length, 1)
   const group = results[0]
@@ -2347,7 +2366,7 @@ test('缺口2-6158702656：合组后 allocator 反向映射包含所有片段的
     { piece: piece1, parent, motionChannel: 'ghost' },
     { piece: piece2, parent, motionChannel: 'ghost' },
     { piece: piece3, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results.length, 1)
   const group = results[0]
@@ -2377,7 +2396,7 @@ test('缺口3-6158702656：窗口释放后同 groupKey 再次出现——不错�
   const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
   const results1 = planCarryOverPhysicalGroups([
     { piece: piece1, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results1.length, 1)
   const group1 = results1[0]
@@ -2396,7 +2415,7 @@ test('缺口3-6158702656：窗口释放后同 groupKey 再次出现——不错�
   const piece2 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 5, height: 20 }])
   const results2 = planCarryOverPhysicalGroups([
     { piece: piece2, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results2.length, 1)
   const group2 = results2[0]
@@ -2428,7 +2447,7 @@ test('缺口3-6158702656：releaseCarryOverIdentity 清除缓存条目', () => {
 
   const results = planCarryOverPhysicalGroups([
     { piece, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(cache.size, 1)
 
@@ -2442,7 +2461,7 @@ test('缺口3-6158702656：releaseCarryOverIdentity 清除缓存条目', () => {
   // 再次规划时应分配新身份（cache miss）
   const results2 = planCarryOverPhysicalGroups([
     { piece, parent, motionChannel: 'ghost' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   assert.equal(results2.length, 1)
   assert.notEqual(results2[0].windowInstanceId, results[0].windowInstanceId,
@@ -2465,7 +2484,7 @@ test('缺口3-6158702656：已完成的 insert 组不持有未挂载的实例', 
 
   const results = planCarryOverPhysicalGroups([
     { piece, parent, motionChannel: 'insert' },
-  ], allocator, cache)
+  ], allocator, cache, 'displayed')
 
   // 已完成的 insert 组被筛除
   assert.equal(results.length, 0, '已完成的 insert 组应被筛除')
@@ -2476,6 +2495,370 @@ test('缺口3-6158702656：已完成的 insert 组不持有未挂载的实例', 
   const freshId = allocator.allocateFresh(['test'])
   assert.match(freshId, /^win-0$/,
     '已完成的组未分配身份，分配器的第一个 ID 应仍为 win-0')
+})
+
+// ── Issue #879 评论6159166760：carry-over 物理实例生命周期测试 ──
+//
+// 本轮修复三个 carry-over 物理实例生命周期问题：
+// 1. 候选只完成 prepare 而从未触发 onAppear→被更新取代→旧分配器实例和缓存全部释放
+// 2. 同帧其他字仍在动画、某个 reflow 组已到终点→不得分配实例
+// 3. 释放一个组、再让另一个含相同 glyphIds 的组复用编号→旧 owner 不能命中原 cache
+
+// 场景13a：候选作废→从未挂载的实例和缓存全部释放
+test('场景13a：候选作废→从未挂载的实例和缓存全部释放', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'old', 10, 'deleted')
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }])
+
+  // 候选规划：owner='candidate'
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate')
+
+  // 确认有结果
+  assert.ok(results.length > 0, '候选规划应产生物理组')
+
+  // 确认 identityCache 中有 owner='candidate' 的条目
+  let candidateEntries = 0
+  for (const [, entry] of cache) {
+    if (entry.owner === 'candidate') candidateEntries++
+  }
+  assert.ok(candidateEntries > 0, 'cache 中应有 owner=candidate 的条目')
+
+  // 确认 allocator 中有对应的实例（resolve 返回非 null）
+  const winIds = results.map(r => r.windowInstanceId)
+  for (const winId of winIds) {
+    assert.ok(allocator.resolve(winId) !== null,
+      `windowInstanceId ${winId} 应在分配器中登记`)
+  }
+
+  // 候选作废：释放所有 owner='candidate' 的身份
+  releaseCarryOverIdentitiesByOwner(cache, allocator, 'candidate')
+
+  // 确认 identityCache 中 owner='candidate' 的条目已全部删除
+  for (const [, entry] of cache) {
+    assert.notEqual(entry.owner, 'candidate',
+      '候选作废后 cache 中不应再有 owner=candidate 的条目')
+  }
+
+  // 确认 allocator 中对应的实例已释放（resolve 返回 null）
+  for (const winId of winIds) {
+    assert.ok(allocator.resolve(winId) === null,
+      `windowInstanceId ${winId} 应已被释放（resolve 返回 null）`)
+  }
+})
+
+// 场景13b：候选作废——有租约的实例不被释放（已挂载的实例随 ArkUI 卸载释放）
+test('场景13b：候选作废——有租约的实例不被 releaseCarryOverIdentitiesByOwner 释放', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-2', 'old', 10, 'deleted')
+  const piece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate')
+
+  assert.equal(results.length, 1)
+  const winId = results[0].windowInstanceId
+
+  // 模拟已挂载：添加租约
+  allocator.addLease(results[0].renderNodeKey, winId)
+  assert.ok(allocator.hasLeases(winId), '添加租约后 hasLeases 应为 true')
+
+  // 候选作废：释放所有 owner='candidate' 的身份
+  releaseCarryOverIdentitiesByOwner(cache, allocator, 'candidate')
+
+  // 有租约的实例不应被释放——仍可在分配器中 resolve
+  assert.ok(allocator.resolve(winId) !== null,
+    '有租约的实例不应被 releaseCarryOverIdentitiesByOwner 释放')
+
+  // 但 cache 条目仍被删除（cache 关联被清除，实例由 ArkUI onDisAppear 路径释放）
+  assert.equal(cache.size, 0, 'cache 条目应被删除')
+})
+
+// 场景14：同帧其他字仍在动画、reflow 已到终点→不得分配实例
+test('场景14：reflow 组已到终点——planCarryOverPhysicalGroups 不分配身份', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-3', 'old', 10, 'reflow')
+
+  // reflow 片段：currentPosition 已等于 targetRect 位置，clipRects 完全覆盖 targetRect，opacity 已到终态
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const piece = makePiece(['g1'], 0, 1, [
+    { x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }
+  ], {
+    targetResolved: true,
+    targetRect: targetRect,
+    currentPositionX: targetRect.x, // 当前位置已到达目标位置
+    currentPositionY: targetRect.y,
+  })
+  // opacity undefined → opacityDone=true（sourceKind='old' 时 undefined 算终态）
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'reflow' },
+  ], allocator, cache, 'displayed')
+
+  // 结果列表中不包含该 reflow 组（已被筛除）
+  assert.equal(results.length, 0, '已完成的 reflow 组应被筛除，不输出')
+
+  // identityCache 中没有该组的条目（未分配身份）
+  assert.equal(cache.size, 0, '已完成的 reflow 组不应在 cache 中留下条目')
+
+  // allocator 中没有为该组分配实例
+  // 验证：分配器的第一个 allocateFresh 应返回 win-0（没有为已完成的组分配任何 ID）
+  const freshId = allocator.allocateFresh(['test'])
+  assert.match(freshId, /^win-0$/,
+    '已完成的 reflow 组未分配身份，分配器的第一个 ID 应仍为 win-0')
+})
+
+// 场景14b：reflow 组未到终点——正常分配身份
+test('场景14b：reflow 组未到终点——planCarryOverPhysicalGroups 正常分配身份', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-4', 'old', 10, 'reflow')
+
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const piece = makePiece(['g1'], 0, 1, [
+    { x: 0, y: 0, width: 5, height: 20 } // clipRects 只覆盖部分（未到终点）
+  ], {
+    targetResolved: true,
+    targetRect: targetRect,
+    currentPositionX: 0, // 当前位置未到达目标位置
+    currentPositionY: 0,
+  })
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'reflow' },
+  ], allocator, cache, 'displayed')
+
+  // 未完成的 reflow 组应正常输出
+  assert.equal(results.length, 1, '未完成的 reflow 组应正常输出')
+  assert.ok(results[0].renderNodeKey.includes('carryReflow'))
+
+  // cache 中有该组的条目
+  assert.equal(cache.size, 1, '未完成的 reflow 组应在 cache 中留下条目')
+
+  // allocator 中有对应的实例
+  assert.ok(allocator.resolve(results[0].windowInstanceId) !== null,
+    '未完成的 reflow 组应在分配器中登记实例')
+})
+
+// 场景15：释放后相同 glyphIds 复用编号→旧 owner 不能命中原 cache
+test('场景15：释放后相同 glyphIds 复用编号→旧 owner 不能命中原 cache', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-5', 'old', 10, 'deleted')
+  const glyphIds = ['g1', 'g2']
+  const piece = makePiece(glyphIds, 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  // 第一次：用 owner='candidate' 规划
+  const results1 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate')
+
+  assert.equal(results1.length, 1)
+  const candidateWinId = results1[0].windowInstanceId
+
+  // 确认 cache 中有条目
+  assert.equal(cache.size, 1)
+  for (const [, entry] of cache) {
+    assert.equal(entry.owner, 'candidate')
+  }
+
+  // 释放候选身份
+  releaseCarryOverIdentitiesByOwner(cache, allocator, 'candidate')
+
+  // 确认 cache 为空
+  assert.equal(cache.size, 0, '释放后 cache 应为空')
+
+  // 确认候选实例已释放
+  assert.ok(allocator.resolve(candidateWinId) === null,
+    '候选实例应已被释放')
+
+  // 第二次：用 owner='displayed' 规划相同 glyphIds
+  // 分配器可能复用已释放的编号（win-0），但关键是 cache 条目的 owner 必须正确
+  const results2 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'displayed')
+
+  assert.equal(results2.length, 1)
+
+  // 新组的 windowInstanceId 在分配器中有效
+  assert.ok(allocator.resolve(results2[0].windowInstanceId) !== null,
+    '新组的 windowInstanceId 应在分配器中有效')
+
+  // allocator.resolve 返回的 glyphIds 与组的 glyphIds 一致
+  const resolved = allocator.resolve(results2[0].windowInstanceId)
+  assert.deepEqual(resolved, glyphIds,
+    'allocator.resolve 返回的 glyphIds 应与组的 glyphIds 一致')
+
+  // cache 中新条目的 owner='displayed'——旧 owner='candidate' 不能命中原 cache
+  assert.equal(cache.size, 1)
+  for (const [, entry] of cache) {
+    assert.equal(entry.owner, 'displayed',
+      '新 cache 条目的 owner 应为 displayed，旧 candidate 不能命中')
+  }
+
+  // 关键验证：如果旧 owner='candidate' 再次规划，不会复用 displayed 的 cache 条目
+  // 因为 owner 不匹配 → 重新分配新身份
+  const results3 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate')
+
+  assert.equal(results3.length, 1)
+  // cache 条目更新为 owner='candidate'（不再是 'displayed'）
+  let hasCandidate = false
+  let hasDisplayed = false
+  for (const [, entry] of cache) {
+    if (entry.owner === 'candidate') hasCandidate = true
+    if (entry.owner === 'displayed') hasDisplayed = true
+  }
+  assert.ok(hasCandidate && !hasDisplayed,
+    'candidate 规划后 cache 条目 owner 应为 candidate，displayed 条目被覆盖')
+})
+
+// 场景16：isReflowGroupComplete 函数测试
+test('场景16a：isReflowGroupComplete——targetRect=null → false', () => {
+  assert.ok(!isReflowGroupComplete(0, 0, null, undefined, 'old', []),
+    'targetRect=null 时应返回 false')
+})
+
+test('场景16b：isReflowGroupComplete——positionDone=false → false', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  // currentPosition 不等于 targetRect 位置
+  assert.ok(!isReflowGroupComplete(0, 0, targetRect, undefined, 'old',
+    [{ x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }]),
+    'positionDone=false 时应返回 false')
+})
+
+test('场景16c：isReflowGroupComplete——opacityDone=false → false', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const clipRects = [{ x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }]
+  // sourceKind='old' + opacity=0.5 → opacityDone=false（old 需要 opacity < 0.01）
+  assert.ok(!isReflowGroupComplete(targetRect.x, targetRect.y, targetRect, 0.5, 'old', clipRects),
+    'sourceKind=old + opacity=0.5 时 opacityDone=false，应返回 false')
+})
+
+test('场景16d：isReflowGroupComplete——clipDone=false → false', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  // clipRects 不完全覆盖 targetRect
+  assert.ok(!isReflowGroupComplete(targetRect.x, targetRect.y, targetRect, undefined, 'old',
+    [{ x: targetRect.x, y: targetRect.y, width: 5, height: 20 }]),
+    'clipDone=false 时应返回 false')
+})
+
+test('场景16e：isReflowGroupComplete——全部 done → true', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const clipRects = [{ x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }]
+  // positionDone=true + opacityDone=true (undefined) + clipDone=true
+  assert.ok(isReflowGroupComplete(targetRect.x, targetRect.y, targetRect, undefined, 'old', clipRects),
+    '全部 done 时应返回 true')
+})
+
+test('场景16f：isReflowGroupComplete——sourceKind=old + opacity=0.005 → opacityDone=true', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const clipRects = [{ x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }]
+  // sourceKind='old' + opacity=0.005 < 0.01 → opacityDone=true
+  assert.ok(isReflowGroupComplete(targetRect.x, targetRect.y, targetRect, 0.005, 'old', clipRects),
+    'sourceKind=old + opacity=0.005 < 0.01 时 opacityDone=true，应返回 true')
+})
+
+test('场景16g：isReflowGroupComplete——sourceKind=new + opacity=0.995 → opacityDone=true', () => {
+  const targetRect = { x: 100, y: 200, width: 10, height: 20 }
+  const clipRects = [{ x: targetRect.x, y: targetRect.y, width: targetRect.width, height: targetRect.height }]
+  // sourceKind='new' + opacity=0.995 > 0.99 → opacityDone=true
+  assert.ok(isReflowGroupComplete(targetRect.x, targetRect.y, targetRect, 0.995, 'new', clipRects),
+    'sourceKind=new + opacity=0.995 > 0.99 时 opacityDone=true，应返回 true')
+})
+
+// 场景17：hasLeases 方法测试
+test('场景17a：新分配的实例 hasLeases=false', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const winId = allocator.allocateFresh(['g1'])
+
+  assert.ok(!allocator.hasLeases(winId),
+    '新分配的实例没有租约，hasLeases 应为 false')
+})
+
+test('场景17b：addLease 后 hasLeases=true', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const winId = allocator.allocateFresh(['g1'])
+
+  allocator.addLease('old-10-carryGhost-win-0', winId)
+
+  assert.ok(allocator.hasLeases(winId),
+    'addLease 后 hasLeases 应为 true')
+})
+
+test('场景17c：releaseLease 后 hasLeases=false', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const winId = allocator.allocateFresh(['g1'])
+  const renderNodeKey = 'old-10-carryGhost-win-0'
+
+  allocator.addLease(renderNodeKey, winId)
+  assert.ok(allocator.hasLeases(winId), 'addLease 后 hasLeases 应为 true')
+
+  allocator.releaseLease(renderNodeKey, winId)
+  assert.ok(!allocator.hasLeases(winId),
+    'releaseLease 后 hasLeases 应为 false')
+})
+
+// 场景18：cache hit 时 owner 不匹配→重新分配
+test('场景18：cache hit 时 owner 不匹配→重新分配新身份', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-6', 'old', 10, 'deleted')
+  const glyphIds = ['g1', 'g2']
+  const piece = makePiece(glyphIds, 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+
+  // 第一次：用 owner='candidate' 规划
+  const results1 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'candidate')
+
+  assert.equal(results1.length, 1)
+  const candidateWinId = results1[0].windowInstanceId
+  const candidateRenderKey = results1[0].renderNodeKey
+
+  // 确认 cache 中有 owner='candidate' 的条目
+  assert.equal(cache.size, 1)
+  for (const [, entry] of cache) {
+    assert.equal(entry.owner, 'candidate')
+  }
+
+  // 第二次：用 owner='displayed' 规划相同 groupKey 的组
+  // cache hit 时 owner 不匹配 → 应重新分配新身份
+  const results2 = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'ghost' },
+  ], allocator, cache, 'displayed')
+
+  assert.equal(results2.length, 1)
+
+  // 不会复用 candidate 的身份（owner 不匹配）
+  assert.notEqual(results2[0].windowInstanceId, candidateWinId,
+    'owner 不匹配时不应复用 candidate 的 windowInstanceId')
+  assert.notEqual(results2[0].renderNodeKey, candidateRenderKey,
+    'owner 不匹配时不应复用 candidate 的 renderNodeKey')
+
+  // 分配了新的身份
+  assert.ok(allocator.resolve(results2[0].windowInstanceId) !== null,
+    '新身份应在分配器中登记')
+
+  // cache 中条目的 owner 更新为 'displayed'
+  for (const [, entry] of cache) {
+    assert.equal(entry.owner, 'displayed',
+      'cache 条目的 owner 应更新为 displayed')
+  }
 })
 
 console.log('---')

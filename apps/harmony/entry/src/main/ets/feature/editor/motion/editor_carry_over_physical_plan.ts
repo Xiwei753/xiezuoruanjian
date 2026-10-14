@@ -189,18 +189,28 @@ export interface CarryOverPhysicalGroupResult {
 // ── 身份缓存 ──
 
 /**
- * 组级身份缓存——从 groupKey 到 {renderNodeKey, windowInstanceId} 的映射。
+ * Issue #879 评论6159166760 问题1+3：组级身份缓存条目。
  *
  * 在 EditorMotionCoordinator 实例上维护，跨 retarget 保持稳定：
  * - 同一组跨帧/retarget → 查到已有身份，复用同一 renderNodeKey 和 windowInstanceId
  * - 新组 → 通过 WindowInstanceIdAllocator.allocateFresh 分配新身份
  *
- * 这确保了：
- * - 同一候选多次 retarget 不漂移（身份不变）
- * - 不同物理组拥有不同且固定的身份
- * - windowInstanceId 在分配器中登记，支持正确的租约管理
+ * owner 字段标识身份的生命周期归属（'candidate' 或 'displayed'）：
+ * - 候选作废时按 owner='candidate' 释放从未挂载的实例和 cache 关联
+ * - cache hit 时校验 owner 一致性，不同 owner 不能复用同一身份
+ * - 已挂载的身份随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收
  */
-export type IdentityCache = Map<string, { renderNodeKey: string; windowInstanceId: string }>
+export interface IdentityCacheEntry {
+  renderNodeKey: string
+  windowInstanceId: string
+  /** Issue #879 评论6159166760：身份的生命周期归属 */
+  owner: string
+}
+
+/**
+ * 组级身份缓存——从 groupKey 到 IdentityCacheEntry 的映射。
+ */
+export type IdentityCache = Map<string, IdentityCacheEntry>
 
 // ── 岛几何/完成判定共享逻辑 ──
 
@@ -242,6 +252,46 @@ export function isInsertGroupComplete(
 }
 
 /**
+ * Issue #879 评论6159166760 问题2：reflow 组的完成判定。
+ *
+ * reflow 组已完成 = 当前位置已到达目标位置 + 透明度已到达终态 + clip 已完全覆盖目标矩形。
+ * 此函数是规划阶段与 Coordinator 采样阶段共用的生产逻辑——
+ * 规划阶段用它筛除已完成组（不分配身份），Coordinator 用它跳过已完成组（不生成 motion run）。
+ *
+ * @param currentPositionX 当前位置 x
+ * @param currentPositionY 当前位置 y
+ * @param targetRect 目标矩形（null 表示未解析，不算完成）
+ * @param opacity 当前透明度
+ * @param sourceKind 源类型（影响透明度终态判定）
+ * @param clipRects 当前裁切矩形列表
+ * @returns true 表示 reflow 组已完成，false 表示未完成
+ */
+export function isReflowGroupComplete(
+  currentPositionX: number,
+  currentPositionY: number,
+  targetRect: GlyphRect | null,
+  opacity: number | undefined,
+  sourceKind: 'old' | 'new',
+  clipRects: ClipRect[]
+): boolean {
+  if (targetRect === null) {
+    return false
+  }
+  const positionDone = Math.abs(currentPositionX - targetRect.x) < 0.01 &&
+      Math.abs(currentPositionY - targetRect.y) < 0.01
+  const opacityDone = opacity === undefined ||
+      (sourceKind === 'old' ? opacity < 0.01 : opacity > 0.99)
+  const targetFullRect: ClipRect = {
+    x: targetRect.x,
+    y: targetRect.y,
+    width: targetRect.width,
+    height: targetRect.height
+  }
+  const clipDone = isFullyCovered(targetFullRect, clipRects)
+  return positionDone && opacityDone && clipDone
+}
+
+/**
  * Issue #879 评论6158702656 缺口3：释放 carry-over 身份缓存中的条目。
  *
  * 当物理窗口最后租约被释放时，同步解除 groupKey→instanceId 关联，
@@ -255,6 +305,39 @@ export function releaseCarryOverIdentity(
   groupKey: string
 ): void {
   identityCache.delete(groupKey)
+}
+
+/**
+ * Issue #879 评论6159166760 问题1+3：按 owner 释放 carry-over 身份。
+ *
+ * 候选作废时调用——释放属于该 owner 且从未挂载（无租约）的实例，
+ * 并删除对应的 cache 关联。已挂载（有租约）的身份不在此释放——
+ * 它们随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收。
+ *
+ * @param identityCache 组级身份缓存
+ * @param allocator 窗口实例 ID 分配器
+ * @param owner 要释放的身份生命周期归属（如 'candidate'）
+ */
+export function releaseCarryOverIdentitiesByOwner(
+  identityCache: IdentityCache,
+  allocator: WindowInstanceIdAllocator,
+  owner: string
+): void {
+  const keysToDelete: string[] = []
+  for (const [groupKey, cached] of identityCache) {
+    if (cached.owner !== owner) {
+      continue
+    }
+    // 只有从未挂载（无租约）的实例才在此释放
+    // 已挂载的实例由 ArkUI onDisAppear → releaseLease 路径释放
+    if (!allocator.hasLeases(cached.windowInstanceId)) {
+      allocator.release(cached.windowInstanceId)
+    }
+    keysToDelete.push(groupKey)
+  }
+  for (const key of keysToDelete) {
+    identityCache.delete(key)
+  }
 }
 
 // ── 核心函数 ──
@@ -374,12 +457,14 @@ export function generateRenderNodeKey(
  * @param piecesWithContext 带有父窗口上下文和运动通道的片段列表
  * @param allocator 窗口实例 ID 分配器
  * @param identityCache 组级身份缓存（跨 retarget 保持稳定）
- * @returns 物理组列表（已完成的 insert 组被筛除）
+ * @param owner 身份的生命周期归属（'candidate' 或 'displayed'）
+ * @returns 物理组列表（已完成的 insert/reflow 组被筛除）
  */
 export function planCarryOverPhysicalGroups(
   piecesWithContext: CarryOverPieceWithContext[],
   allocator: WindowInstanceIdAllocator,
-  identityCache: IdentityCache
+  identityCache: IdentityCache,
+  owner: string
 ): CarryOverPhysicalGroupResult[] {
   // ── 阶段1：按 groupKey 完整收集并合并所有片段 ──
   //
@@ -556,11 +641,15 @@ export function planCarryOverPhysicalGroups(
     }
   }
 
-  // ── 阶段2：筛除已完成的 insert 组，为剩余组分配身份 ──
+  // ── 阶段2：筛除已完成的 insert/reflow 组，为剩余组分配身份 ──
   //
   // Issue #879 评论6158702656 缺口3：规划阶段先筛除确实已完成、不会输出的组，
   // 再分配/注册身份。避免从未进入输出 run、没有 ArkUI onAppear 租约的实例
   // 被长驻缓存持有，无明确释放路径。
+  //
+  // Issue #879 评论6159166760 问题2：reflow 完成判定也移到身份分配前。
+  // 旧逻辑只筛除已完成的 insert 组，reflow 组无论是否完成都先分配身份，
+  // 然后 Coordinator 又跳过已完成的 reflow 组，留下从未挂载的实例。
 
   const results: CarryOverPhysicalGroupResult[] = []
 
@@ -577,6 +666,22 @@ export function planCarryOverPhysicalGroups(
       continue
     }
 
+    // Issue #879 评论6159166760 问题2：筛除已完成的 reflow 组——
+    // 当前位置已到达目标、透明度已到终态、clip 已完全覆盖。
+    // 使用与 Coordinator 共用的 isReflowGroupComplete 函数，确保判定一致。
+    if (assembly.motionChannel === 'reflow' &&
+        isReflowGroupComplete(
+          assembly.currentPositionX,
+          assembly.currentPositionY,
+          assembly.targetRect,
+          assembly.opacity,
+          assembly.sourceKind,
+          assembly.clipRects
+        )) {
+      // 已完成的 reflow 组不分配身份、不输出——静态正文已接管这些字形
+      continue
+    }
+
     // 为剩余组分配/复用稳定身份
     let renderNodeKey: string
     let windowInstanceId: string
@@ -588,15 +693,19 @@ export function planCarryOverPhysicalGroups(
       // 检查 allocator.resolve(cached.windowInstanceId) 返回的 glyphIds
       // 是否与当前组的 glyphIds 一致；不一致说明实例已被释放并重新分配给其他组，
       // 必须重新规划身份。
+      //
+      // Issue #879 评论6159166760 问题3：cache hit 同时校验 owner 一致性。
+      // 不同 owner 即使拥有完全相同的 glyphIds，也不代表有权复用同一个已回收/重分配的实例。
       const resolvedGlyphIds = allocator.resolve(cached.windowInstanceId)
       if (resolvedGlyphIds !== null &&
           resolvedGlyphIds.length === assembly.glyphIds.length &&
-          resolvedGlyphIds.every((gid, i) => gid === assembly.glyphIds[i])) {
-        // 实例仍有效且 glyphIds 一致 → 复用
+          resolvedGlyphIds.every((gid, i) => gid === assembly.glyphIds[i]) &&
+          cached.owner === owner) {
+        // 实例仍有效、glyphIds 一致且 owner 匹配 → 复用
         renderNodeKey = cached.renderNodeKey
         windowInstanceId = cached.windowInstanceId
       } else {
-        // 实例已释放或 glyphIds 不一致 → 重新分配
+        // 实例已释放、glyphIds 不一致或 owner 不匹配 → 重新分配
         windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
         renderNodeKey = generateRenderNodeKey(
           assembly.sourceKind,
@@ -604,7 +713,7 @@ export function planCarryOverPhysicalGroups(
           assembly.motionChannel,
           windowInstanceId
         )
-        identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId })
+        identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId, owner })
       }
     } else {
       // Issue #879 评论6158702656 缺口2：cache miss 时用完整组 glyphIds 做 allocateFresh。
@@ -616,7 +725,7 @@ export function planCarryOverPhysicalGroups(
         assembly.motionChannel,
         windowInstanceId
       )
-      identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId })
+      identityCache.set(assembly.groupKey, { renderNodeKey, windowInstanceId, owner })
     }
 
     // 输出完整物理组

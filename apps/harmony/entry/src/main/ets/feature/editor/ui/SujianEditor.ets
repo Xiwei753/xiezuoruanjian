@@ -818,9 +818,14 @@ export struct SujianEditor {
       // Issue #879 复核评论6088787701 问题2：候选被新版替换是真实状态转移——
       // 候选 owner 退出，与 displayed 共享的 key 保留，只属于旧候选的窗口在物理卸载后清掉。
       this.syncMotionWindowOwners()
-      // Issue #879 评论6158702656 缺口3：候选作废时清理 carry-over 身份缓存中已失效的条目。
-      // 旧候选的物理窗口可能已被释放，对应的 instanceId 可能已被分配器回收，
-      // 缓存中残留的 groupKey→instanceId 映射会让后续 cache hit 错误复用旧身份。
+      // Issue #879 评论6159166760 问题1：候选作废时释放候选拥有的 carry-over 身份。
+      // 旧候选的物理窗口可能从未挂载（没有 ArkUI onAppear/lease），
+      // purgeStaleCarryOverIdentities 只清理 resolve===null 的条目，
+      // 无法释放刚被 allocateFresh 注册但还没挂载过的实例。
+      // releaseCandidateOwnedIdentities 按 owner='candidate' 释放从未挂载的实例和 cache 关联；
+      // 已挂载的身份随真实 ArkUI 卸载及最后一个 lease 释放，避免提早回收。
+      this.motionCoordinator.releaseCandidateOwnedIdentities()
+      // 同时清理已失效的条目（实例已被释放或被重新分配给其他组）
       this.motionCoordinator.purgeStaleCarryOverIdentities()
     }
 
