@@ -42,6 +42,7 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.error_sync_failed_message').id)
       case 'error.token_missing':
         return context.resourceManager.getStringSync($r('app.string.sync_token_missing').id)
+      case 'error.sync_auth_failed':
       case 'error.token_invalid':
       case 'error.token_permission_denied':
       case 'error.auth_error':
