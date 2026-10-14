@@ -17,11 +17,6 @@
 //!
 //! 合并器是纯计算（不读磁盘、不写磁盘），只接受 bytes 输入，返回 bytes 输出。
 //! 错误显式返回，不静默吞错。
-//!
-//! 本模块的 `pub(crate)` API 待 commit_plan 集成后才会被 lib 调用，
-//! 在集成完成前允许 dead_code 以避免 clippy 误报。
-
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 

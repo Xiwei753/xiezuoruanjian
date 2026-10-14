@@ -586,7 +586,10 @@ fn list_starmap_content_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// 递归遍历 starmaps/ 目录，收集 .json 文件相对 live_root 的路径。
+/// 递归遍历 starmaps/ 目录，收集符合星图内容路径模式的 .json 文件。
+///
+/// 只收集 [`starmap_merge::is_starmap_content_path`] 认可的文件，
+/// 跳过不符合预期布局的临时文件或异常文件。
 fn walk_starmap_json_files(live_root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -595,7 +598,10 @@ fn walk_starmap_json_files(live_root: &Path, dir: &Path, out: &mut Vec<PathBuf>)
             walk_starmap_json_files(live_root, &path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
             if let Ok(rel) = path.strip_prefix(live_root) {
-                out.push(rel.to_path_buf());
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                if super::starmap_merge::is_starmap_content_path(&rel_str) {
+                    out.push(rel.to_path_buf());
+                }
             }
         }
     }
