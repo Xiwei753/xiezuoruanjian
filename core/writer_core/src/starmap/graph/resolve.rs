@@ -424,3 +424,209 @@ pub fn resolve_target_with_context(
         .ok()
         .map(|r| (r.final_starmap_id, r.target))
 }
+
+// ---------------------------------------------------------------------------
+// 逐段路径依赖提取
+// ---------------------------------------------------------------------------
+
+/// 把 `StarMapTargetResolveStatus` 映射成 `crate::error::Error`。
+///
+/// 导航路由/目标解析失败不是"没有连接"，而是路径本身不可达或读取错误。
+/// `UnsupportedVersion`/`CorruptStarmap`/`ReadFailed` 映射成对应的 `Error`，
+/// 其余映射成 `Error::Other`。
+///
+/// 这是全 crate 唯一的解析状态→错误映射，`connections.rs`、
+/// `relation_index.rs` 和本模块都复用此函数，不重复实现。
+pub(crate) fn resolve_status_to_error(
+    status: crate::starmap::semantic::StarMapTargetResolveStatus,
+) -> crate::error::Error {
+    match status {
+        crate::starmap::semantic::StarMapTargetResolveStatus::UnsupportedVersion => {
+            crate::error::Error::UnsupportedVersion {
+                version: String::new(),
+            }
+        }
+        other => crate::error::Error::Other(format!("navigation route resolve failed: {other:?}")),
+    }
+}
+
+/// 路径依赖种类：路径终点或途中穿越产生的依赖类型。
+///
+/// 用于反向依赖索引 [`crate::starmap::store::relation_index::PathDependencyIndex`]
+/// 按 `(host_starmap_id, kind, object_id)` 建立倒排表。
+///
+/// - `NodeTarget`：路径终点落在某图的 Node（`object_id` = node_id）
+/// - `AnchorTarget`：路径终点落在某图的 Anchor（`object_id` = node_id，
+///   `anchor_id` 记入依赖事实；删除节点连带删除其所有锚点，故以 node_id 为主键）
+/// - `PortalTraversal`：路径途中穿越某图的 Portal 节点（`object_id` = node_id）
+/// - `EmbedTraversal`：路径途中穿越某图的 Embed 实例（`object_id` = instance_id）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PathDependencyKind {
+    NodeTarget,
+    AnchorTarget,
+    PortalTraversal,
+    EmbedTraversal,
+}
+
+/// 单条路径解析产生的单个依赖事实。
+///
+/// 一条 `StarMapTargetPath` 可产生多个事实：每段成功穿越产生一个
+/// `EmbedTraversal`/`PortalTraversal` 事实，终点成功解析产生一个
+/// `NodeTarget`/`AnchorTarget` 事实。
+#[derive(Debug, Clone)]
+pub struct PathDependencyFact {
+    /// 依赖所寄宿的星图 ID（穿越段寄宿在穿越前的图，终点寄宿在最终图）。
+    pub host_starmap_id: String,
+    pub kind: PathDependencyKind,
+    /// 被依赖对象的 ID（node_id 或 instance_id）。
+    pub object_id: String,
+    /// 仅 `AnchorTarget` 有值，标识具体 anchor_id。
+    pub anchor_id: Option<String>,
+}
+
+/// 逐段提取一条路径产生的全部依赖事实。
+///
+/// 与 [`resolve_target`] 的关键区别：**不要求终点成功解析才能知道此前的入口依赖**。
+/// 沿 `segments` 逐段穿越，每段成功即记录对应的 `EmbedTraversal`/`PortalTraversal`
+/// 事实；终点成功解析则记录 `NodeTarget`/`AnchorTarget` 事实。
+///
+/// ## 错误传播（修改3核心）
+///
+/// - 读取错误（`UnsupportedVersion`/`CorruptStarmap`/`ReadFailed`）立即返回 `Err`，
+///   **不**吞成"无依赖"。
+/// - 对象不存在（`MissingNode`/`MissingEmbed`/`MissingPortal`/`MissingAnchor` 等）
+///   视为路径已悬空：停止收集后续事实，**保留已成功收集的事实**并返回 `Ok`。
+///   已穿越的 Embed/Portal 依赖仍然有效，即使最终目标读取出错。
+///
+/// 这样删除保护既能传播磁盘错误，又不会因为路径终点恰好被删而漏报途中穿越依赖。
+pub fn extract_path_dependency_facts(
+    context: &GraphResolverContext,
+    path: &StarMapTargetPath,
+) -> Result<Vec<PathDependencyFact>, crate::error::Error> {
+    use crate::starmap::semantic::StarMapTargetResolveStatus as Status;
+
+    let mut facts = Vec::new();
+
+    if path.segments.len() > 32 {
+        return Err(resolve_status_to_error(Status::TooDeep));
+    }
+
+    // 起点检查
+    check_starmap_readable(context, &path.starmap_id).map_err(resolve_status_to_error)?;
+
+    let mut current_starmap_id = path.starmap_id.clone();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(current_starmap_id.clone());
+
+    for segment in &path.segments {
+        match segment {
+            StarMapPathSegment::EnterEmbed { instance_id } => {
+                let embed = match lookup_embed(context, &current_starmap_id, instance_id) {
+                    Ok(Some(e)) => e,
+                    Ok(None) => return Ok(facts),
+                    Err(status) => return Err(resolve_status_to_error(status)),
+                };
+                facts.push(PathDependencyFact {
+                    host_starmap_id: current_starmap_id.clone(),
+                    kind: PathDependencyKind::EmbedTraversal,
+                    object_id: instance_id.clone(),
+                    anchor_id: None,
+                });
+                current_starmap_id = embed.target_starmap_id.clone();
+                if !visited.insert(current_starmap_id.clone()) {
+                    return Err(resolve_status_to_error(Status::CycleDetected));
+                }
+                check_starmap_readable(context, &current_starmap_id)
+                    .map_err(resolve_status_to_error)?;
+            }
+            StarMapPathSegment::EnterPortal { node_id } => {
+                let node = match lookup_node(context, &current_starmap_id, node_id) {
+                    Ok(Some(n)) => n,
+                    Ok(None) => return Ok(facts),
+                    Err(status) => return Err(resolve_status_to_error(status)),
+                };
+                let portal = match &node.portal {
+                    Some(p) => p,
+                    None => return Ok(facts),
+                };
+                facts.push(PathDependencyFact {
+                    host_starmap_id: current_starmap_id.clone(),
+                    kind: PathDependencyKind::PortalTraversal,
+                    object_id: node_id.clone(),
+                    anchor_id: None,
+                });
+                current_starmap_id = portal.destination_starmap_id.clone();
+                if !visited.insert(current_starmap_id.clone()) {
+                    return Err(resolve_status_to_error(Status::CycleDetected));
+                }
+                check_starmap_readable(context, &current_starmap_id)
+                    .map_err(resolve_status_to_error)?;
+            }
+        }
+    }
+
+    // 终点依赖
+    push_terminal_dependency_facts(context, &current_starmap_id, &path.target, &mut facts)?;
+
+    Ok(facts)
+}
+
+/// 提取路径终点的依赖事实，追加到 `facts`。
+///
+/// 读取错误返回 `Err`；终点对象不存在（`MissingNode`/`MissingAnchor`）则不追加、
+/// 不报错（路径悬空，但途中穿越依赖已由调用方收集）。
+fn push_terminal_dependency_facts(
+    context: &GraphResolverContext,
+    current_starmap_id: &str,
+    target: &StarMapTargetDetail,
+    facts: &mut Vec<PathDependencyFact>,
+) -> Result<(), crate::error::Error> {
+    use crate::starmap::semantic::StarMapTargetResolveStatus as Status;
+
+    match target {
+        StarMapTargetDetail::Node { node_id } => {
+            match lookup_node(context, current_starmap_id, node_id) {
+                Ok(Some(_)) => facts.push(PathDependencyFact {
+                    host_starmap_id: current_starmap_id.to_string(),
+                    kind: PathDependencyKind::NodeTarget,
+                    object_id: node_id.clone(),
+                    anchor_id: None,
+                }),
+                Ok(None) => {}
+                Err(status) => return Err(resolve_status_to_error(status)),
+            }
+        }
+        StarMapTargetDetail::Anchor { node_id, anchor_id } => {
+            match lookup_node(context, current_starmap_id, node_id) {
+                Ok(Some(n)) => {
+                    if n.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                        facts.push(PathDependencyFact {
+                            host_starmap_id: current_starmap_id.to_string(),
+                            kind: PathDependencyKind::AnchorTarget,
+                            object_id: node_id.clone(),
+                            anchor_id: Some(anchor_id.clone()),
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(status) => return Err(resolve_status_to_error(status)),
+            }
+        }
+        StarMapTargetDetail::ChapterRange {
+            range_start,
+            range_end,
+            ..
+        } => {
+            if let (Some(s), Some(e)) = (range_start, range_end) {
+                if s > e {
+                    return Err(resolve_status_to_error(Status::InvalidRange));
+                }
+            }
+        }
+        StarMapTargetDetail::Starmap => {
+            check_starmap_readable(context, current_starmap_id).map_err(resolve_status_to_error)?;
+        }
+        StarMapTargetDetail::Entity { .. } | StarMapTargetDetail::External { .. } => {}
+    }
+    Ok(())
+}

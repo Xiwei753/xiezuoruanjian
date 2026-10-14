@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::Error;
 use crate::starmap::connections::{
     load_graph_edges, load_graph_embeds, load_graph_hyperlinks, load_graph_links,
     route_aware_endpoint_matches,
 };
-use crate::starmap::graph::resolve::GraphResolverContext;
+use crate::starmap::graph::resolve::{resolve_status_to_error, GraphResolverContext};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::types::reference::StarMapTargetPath;
@@ -477,20 +476,6 @@ pub struct AllCrossCanvasReferenceInfo {
     pub label: Option<String>,
 }
 
-/// 把 `StarMapTargetResolveStatus` 映射成 `Error`。
-///
-/// 导航路由解析失败不是"没有引用"，而是路径本身不可达或读取错误。
-fn resolve_status_to_error(status: crate::starmap::semantic::StarMapTargetResolveStatus) -> Error {
-    match status {
-        crate::starmap::semantic::StarMapTargetResolveStatus::UnsupportedVersion => {
-            Error::UnsupportedVersion {
-                version: String::new(),
-            }
-        }
-        other => Error::Other(format!("navigation route resolve failed: {other:?}")),
-    }
-}
-
 /// 查找指向特定目标的**全类型**跨画布引用。
 ///
 /// 遍历当前 route 的所有祖先图（不含当前图本身），扫描每种路径引用来源：
@@ -632,4 +617,184 @@ pub fn find_all_cross_canvas_references(
     }
 
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// 反向依赖索引（修改4：派生倒排表）
+// ---------------------------------------------------------------------------
+
+/// 路径依赖来源：产生某条依赖事实的具体引用对象。
+///
+/// 记入 [`PathDependencyIndex`] 的每条 entry 都携带完整来源信息，
+/// 删除保护据此返回"具体宿主、引用类型、引用 ID"，而不只是布尔拒绝。
+#[derive(Debug, Clone)]
+pub struct PathDependencySource {
+    /// 引用所在的宿主星图 ID（Edge/Link/Hyperlink/Embed 所属图）。
+    pub owner_starmap_id: String,
+    /// 引用来源类型（Edge/Link/Hyperlink/Embed 的哪个端点）。
+    pub source_kind: CrossCanvasRefSourceKind,
+    /// 引用来源对象 ID（edge_id / link_id / hyperlink_id / instance_id）。
+    pub source_id: String,
+    /// 被引用的路径。
+    pub referenced_path: StarMapTargetPath,
+    pub label: Option<String>,
+    /// 仅当该来源路径终点为 `Anchor` 时有值，用于精确删除单个 anchor 的依赖检查。
+    pub target_anchor_id: Option<String>,
+}
+
+/// 反向依赖索引：按 `(host_starmap_id, kind, object_id)` 查询依赖该对象的路径来源。
+///
+/// 这是从星图真实数据派生的可重建查询结构，图对象仍是唯一事实来源。
+/// 删除保护（节点/Embed/Portal/Anchor）与关联查询都走这**同一个**查询入口，
+/// 不保留 facade/connections/relation_index 三套各自遍历全图的业务扫描。
+///
+/// 建索引用 [`PathDependencyIndex::build`]，查询用 [`PathDependencyIndex::query_dependents`]。
+#[derive(Debug, Clone, Default)]
+pub struct PathDependencyIndex {
+    entries: std::collections::HashMap<
+        (
+            String,
+            crate::starmap::graph::resolve::PathDependencyKind,
+            String,
+        ),
+        Vec<PathDependencySource>,
+    >,
+}
+
+impl PathDependencyIndex {
+    /// 从所有星图数据重建反向依赖索引。
+    ///
+    /// 遍历每张星图的 Edge 两端、Link 两端、Hyperlink source、Embed host_path，
+    /// 对每条路径调用 [`extract_path_dependency_facts`] 提取全部依赖事实
+    /// （途中穿越 + 终点），按 `(host_starmap_id, kind, object_id)` 入倒排表。
+    ///
+    /// 读取错误（磁盘 IO、JSON 解析、schema 版本不兼容）逐层用 `?` 传播，
+    /// 不把读取失败伪装成"无依赖"。
+    pub fn build(
+        context: &GraphResolverContext,
+        starmap_ids: &[String],
+    ) -> crate::error::Result<PathDependencyIndex> {
+        let mut index = PathDependencyIndex::default();
+
+        for starmap_id in starmap_ids {
+            // Edge 两端
+            for edge in load_graph_edges(context, starmap_id)? {
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::EdgeFrom,
+                    &edge.id,
+                    &edge.from,
+                    &edge.label,
+                    context,
+                )?;
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::EdgeTo,
+                    &edge.id,
+                    &edge.to,
+                    &edge.label,
+                    context,
+                )?;
+            }
+
+            // Link 两端
+            for link in load_graph_links(context, starmap_id)? {
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::LinkSource,
+                    &link.link_id,
+                    &link.source,
+                    &link.label,
+                    context,
+                )?;
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::LinkTarget,
+                    &link.link_id,
+                    &link.target,
+                    &link.label,
+                    context,
+                )?;
+            }
+
+            // Hyperlink source
+            for hl in load_graph_hyperlinks(context, starmap_id)? {
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::HyperlinkSource,
+                    &hl.hyperlink_id,
+                    &hl.source,
+                    &hl.label,
+                    context,
+                )?;
+            }
+
+            // Embed host_path
+            for embed in load_graph_embeds(context, starmap_id)? {
+                index.add_path(
+                    starmap_id,
+                    CrossCanvasRefSourceKind::EmbedHostPath,
+                    &embed.instance_id,
+                    &embed.host_path,
+                    &embed.label,
+                    context,
+                )?;
+            }
+        }
+
+        Ok(index)
+    }
+
+    /// 把单条路径的依赖事实加入倒排表。
+    fn add_path(
+        &mut self,
+        owner_starmap_id: &str,
+        source_kind: CrossCanvasRefSourceKind,
+        source_id: &str,
+        path: &StarMapTargetPath,
+        label: &Option<String>,
+        context: &GraphResolverContext,
+    ) -> crate::error::Result<()> {
+        let facts = crate::starmap::graph::resolve::extract_path_dependency_facts(context, path)?;
+        for fact in facts {
+            let key = (
+                fact.host_starmap_id.clone(),
+                fact.kind.clone(),
+                fact.object_id.clone(),
+            );
+            self.entries
+                .entry(key)
+                .or_default()
+                .push(PathDependencySource {
+                    owner_starmap_id: owner_starmap_id.to_string(),
+                    source_kind: source_kind.clone(),
+                    source_id: source_id.to_string(),
+                    referenced_path: path.clone(),
+                    label: label.clone(),
+                    target_anchor_id: fact.anchor_id.clone(),
+                });
+        }
+        Ok(())
+    }
+
+    /// 查询依赖指定对象的所有路径来源。
+    ///
+    /// 返回的切片借用 `self`。删除节点时同时查 `NodeTarget`、`AnchorTarget`、
+    /// `PortalTraversal`；删除 Embed 时查 `EmbedTraversal`；修改 Portal 时查
+    /// `PortalTraversal`；删除单个 Anchor 时查 `AnchorTarget` 并按 `target_anchor_id` 过滤。
+    pub fn query_dependents(
+        &self,
+        host_starmap_id: &str,
+        kind: &crate::starmap::graph::resolve::PathDependencyKind,
+        object_id: &str,
+    ) -> &[PathDependencySource] {
+        match self.entries.get(&(
+            host_starmap_id.to_string(),
+            kind.clone(),
+            object_id.to_string(),
+        )) {
+            Some(v) => v.as_slice(),
+            None => &[],
+        }
+    }
 }

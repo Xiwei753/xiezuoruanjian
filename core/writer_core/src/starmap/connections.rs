@@ -18,8 +18,9 @@
 
 use std::path::Path;
 
-use crate::error::Error;
-use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext};
+use crate::starmap::graph::resolve::{
+    resolve_status_to_error, resolve_target, GraphResolverContext,
+};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
 use crate::starmap::package_storage::bucket_for_id;
 use crate::starmap::semantic::{StarMapTargetDetail, StarMapTargetResolveStatus};
@@ -523,20 +524,6 @@ fn load_graph_embeds_from_disk(
         embeds.push(embed);
     }
     Ok(embeds)
-}
-
-/// 把 `StarMapTargetResolveStatus` 映射成 `Error`。
-///
-/// 导航路由解析失败不是"没有连接"，而是路径本身不可达或读取错误。
-/// `UnsupportedVersion`/`CorruptStarmap`/`ReadFailed` 映射成对应的 `Error`，
-/// 其余映射成 `Error::Other`。
-fn resolve_status_to_error(status: StarMapTargetResolveStatus) -> Error {
-    match status {
-        StarMapTargetResolveStatus::UnsupportedVersion => Error::UnsupportedVersion {
-            version: String::new(),
-        },
-        other => Error::Other(format!("navigation route resolve failed: {other:?}")),
-    }
 }
 
 // ---------------------------------------------------------------------------

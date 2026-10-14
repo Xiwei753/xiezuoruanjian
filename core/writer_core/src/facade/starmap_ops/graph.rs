@@ -110,6 +110,36 @@ impl super::super::WriterCore {
             apply_node_patch_to_graph(&mut g, node_id, &patch)?;
             g
         };
+
+        // 修改1：Portal/Anchor 身份变更前检查外部图持有的路径依赖。
+        // 只在 Portal destination 改变或 Anchor 被删除时检查；title/position/style
+        // 等不影响目标身份的变更不触发。存在外部依赖则拒绝，不允许先改再让外部路径悬空。
+        {
+            let store = Self::get_store_or_err(&stores, starmap_id)?;
+            let old_node = store
+                .get_node(node_id)
+                .ok_or_else(|| {
+                    crate::error::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Node not found",
+                    ))
+                })?
+                .clone();
+            let new_node = candidate
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .ok_or_else(|| {
+                    crate::error::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Node not found",
+                    ))
+                })?;
+            self.check_external_dependencies_for_node_update(
+                &stores, starmap_id, node_id, &old_node, new_node,
+            )?;
+        }
+
         validation::validate_graph(
             &self.build_resolver_context_from_stores(&stores, &candidate),
             &candidate,
@@ -826,138 +856,44 @@ impl super::super::WriterCore {
 
     // -----------------------------------------------------------------------
     // 跨图引用检查（删除保护）
+    //
+    // 修改4：两个检查函数都走同一个 PathDependencyIndex 查询入口，
+    // 不再各自遍历全图、手写匹配逻辑。
     // -----------------------------------------------------------------------
 
     /// 检查删除节点前是否存在跨图引用。
     ///
-    /// 遍历所有星图（不含当前图）的全类型路径引用（Edge from/to、Link source/target、
-    /// Hyperlink source、Embed host_path），解析每条引用路径，检查是否最终落在
-    /// 当前图的该 Node（含 `Node { node_id }` 和 `Anchor { node_id, .. }`）。
-    /// 有跨图关联时拒绝删除并返回引用列表。
+    /// 通过 [`PathDependencyIndex`] 查询所有外部图对本图该节点的依赖：
+    /// - `NodeTarget`：路径终点落在该节点
+    /// - `AnchorTarget`：路径终点落在该节点的某个锚点（删节点连带删锚点）
+    /// - `PortalTraversal`：路径途中穿越该节点（作为 Portal 入口，修改2）
     ///
-    /// **不能只扫描 Edge**：Link/Hyperlink/Embed 的路径也可能指向当前图的节点，
-    /// 删除该节点会使这些引用变悬空。**不能只匹配 `Node`**：`Anchor { node_id, .. }`
-    /// 也属于该节点，删除节点会连带删除锚点。
-    #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+    /// 本图自身的引用由本地级联删除（`node_cascade_ids`）处理，只拦截外部跨图依赖。
+    /// 读取错误（磁盘 IO、schema 不兼容等）通过 `?` 向上传播，不吞成"无引用"。
     fn check_cross_canvas_references_for_node_delete(
         &self,
         stores: &std::collections::HashMap<String, StarMapStore>,
         starmap_id: &str,
         node_id: &str,
     ) -> Result<()> {
-        use crate::starmap::store::relation_index::{
-            AllCrossCanvasReferenceInfo, CrossCanvasRefSourceKind,
-        };
+        use crate::starmap::graph::resolve::PathDependencyKind;
+        use crate::starmap::store::relation_index::PathDependencyIndex;
 
         let context = self.build_resolver_context(stores);
         let idx = crate::starmap::load_index(&self.app_data_root)?;
+        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
 
+        // 删除节点连带删除其所有锚点，且节点本身可能是 Portal 入口（修改2），
+        // 因此同时检查 NodeTarget、AnchorTarget、PortalTraversal 三类外部依赖。
         let mut refs = Vec::new();
-
-        for other_starmap_id in &idx.starmap_ids {
-            if other_starmap_id == starmap_id {
-                continue;
-            }
-
-            // Edge 两端
-            let edges = crate::starmap::connections::load_graph_edges(&context, other_starmap_id)?;
-            for edge in &edges {
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &edge.from),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EdgeFrom,
-                        source_id: edge.id.clone(),
-                        referenced_path: edge.from.clone(),
-                        label: edge.label.clone(),
-                    });
-                }
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &edge.to),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EdgeTo,
-                        source_id: edge.id.clone(),
-                        referenced_path: edge.to.clone(),
-                        label: edge.label.clone(),
-                    });
-                }
-            }
-
-            // Link 两端
-            let links = crate::starmap::connections::load_graph_links(&context, other_starmap_id)?;
-            for link in &links {
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &link.source),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::LinkSource,
-                        source_id: link.link_id.clone(),
-                        referenced_path: link.source.clone(),
-                        label: link.label.clone(),
-                    });
-                }
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &link.target),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::LinkTarget,
-                        source_id: link.link_id.clone(),
-                        referenced_path: link.target.clone(),
-                        label: link.label.clone(),
-                    });
-                }
-            }
-
-            // Hyperlink source
-            let hyperlinks =
-                crate::starmap::connections::load_graph_hyperlinks(&context, other_starmap_id)?;
-            for hl in &hyperlinks {
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &hl.source),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::HyperlinkSource,
-                        source_id: hl.hyperlink_id.clone(),
-                        referenced_path: hl.source.clone(),
-                        label: hl.label.clone(),
-                    });
-                }
-            }
-
-            // Embed host_path
-            let embeds =
-                crate::starmap::connections::load_graph_embeds(&context, other_starmap_id)?;
-            for embed in &embeds {
-                if resolved_target_belongs_to_node(
-                    &crate::starmap::graph::resolve::resolve_target(&context, &embed.host_path),
-                    starmap_id,
-                    node_id,
-                ) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EmbedHostPath,
-                        source_id: embed.instance_id.clone(),
-                        referenced_path: embed.host_path.clone(),
-                        label: embed.label.clone(),
-                    });
-                }
-            }
+        for kind in [
+            PathDependencyKind::NodeTarget,
+            PathDependencyKind::AnchorTarget,
+            PathDependencyKind::PortalTraversal,
+        ] {
+            refs.extend(collect_external_refs(
+                &dep_index, starmap_id, &kind, node_id,
+            ));
         }
 
         if !refs.is_empty() {
@@ -978,109 +914,30 @@ impl super::super::WriterCore {
 
     /// 检查删除 Embed 入口前是否存在跨图引用。
     ///
-    /// 遍历所有星图（不含当前图）的全类型路径引用（Edge from/to、Link source/target、
-    /// Hyperlink source、Embed host_path），检查是否有路径穿越了当前图的该 Embed 实例。
-    /// 有跨图关联时拒绝删除并返回引用列表。
+    /// 通过 [`PathDependencyIndex`] 查询所有外部图路径对本图该 Embed 实例的
+    /// `EmbedTraversal` 依赖（路径途中穿越该 Embed 入口）。
     ///
-    /// **不能只扫描 Edge**：Link/Hyperlink/Embed 的路径也可能穿越当前图的 Embed 入口，
-    /// 删除该 Embed 会使这些引用变悬空。
-    #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+    /// 本图自身的引用由本地级联删除（`embed_cascade_ids`）处理，只拦截外部跨图依赖。
+    /// 读取错误通过 `?` 向上传播，不吞成"无引用"。
     fn check_cross_canvas_references_for_embed_delete(
         &self,
         stores: &std::collections::HashMap<String, StarMapStore>,
         starmap_id: &str,
         instance_id: &str,
     ) -> Result<()> {
-        use crate::starmap::store::relation_index::{
-            AllCrossCanvasReferenceInfo, CrossCanvasRefSourceKind,
-        };
+        use crate::starmap::graph::resolve::PathDependencyKind;
+        use crate::starmap::store::relation_index::PathDependencyIndex;
 
         let context = self.build_resolver_context(stores);
         let idx = crate::starmap::load_index(&self.app_data_root)?;
+        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
 
-        let mut refs = Vec::new();
-
-        for other_starmap_id in &idx.starmap_ids {
-            if other_starmap_id == starmap_id {
-                continue;
-            }
-
-            // Edge 两端
-            let edges = crate::starmap::connections::load_graph_edges(&context, other_starmap_id)?;
-            for edge in &edges {
-                if path_traverses_embed(&context, &edge.from, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EdgeFrom,
-                        source_id: edge.id.clone(),
-                        referenced_path: edge.from.clone(),
-                        label: edge.label.clone(),
-                    });
-                }
-                if path_traverses_embed(&context, &edge.to, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EdgeTo,
-                        source_id: edge.id.clone(),
-                        referenced_path: edge.to.clone(),
-                        label: edge.label.clone(),
-                    });
-                }
-            }
-
-            // Link 两端
-            let links = crate::starmap::connections::load_graph_links(&context, other_starmap_id)?;
-            for link in &links {
-                if path_traverses_embed(&context, &link.source, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::LinkSource,
-                        source_id: link.link_id.clone(),
-                        referenced_path: link.source.clone(),
-                        label: link.label.clone(),
-                    });
-                }
-                if path_traverses_embed(&context, &link.target, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::LinkTarget,
-                        source_id: link.link_id.clone(),
-                        referenced_path: link.target.clone(),
-                        label: link.label.clone(),
-                    });
-                }
-            }
-
-            // Hyperlink source
-            let hyperlinks =
-                crate::starmap::connections::load_graph_hyperlinks(&context, other_starmap_id)?;
-            for hl in &hyperlinks {
-                if path_traverses_embed(&context, &hl.source, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::HyperlinkSource,
-                        source_id: hl.hyperlink_id.clone(),
-                        referenced_path: hl.source.clone(),
-                        label: hl.label.clone(),
-                    });
-                }
-            }
-
-            // Embed host_path
-            let embeds =
-                crate::starmap::connections::load_graph_embeds(&context, other_starmap_id)?;
-            for embed in &embeds {
-                if path_traverses_embed(&context, &embed.host_path, starmap_id, instance_id) {
-                    refs.push(AllCrossCanvasReferenceInfo {
-                        owner_starmap_id: other_starmap_id.clone(),
-                        source_kind: CrossCanvasRefSourceKind::EmbedHostPath,
-                        source_id: embed.instance_id.clone(),
-                        referenced_path: embed.host_path.clone(),
-                        label: embed.label.clone(),
-                    });
-                }
-            }
-        }
+        let refs = collect_external_refs(
+            &dep_index,
+            starmap_id,
+            &PathDependencyKind::EmbedTraversal,
+            instance_id,
+        );
 
         if !refs.is_empty() {
             return Err(crate::error::Error::Other(format!(
@@ -1097,70 +954,122 @@ impl super::super::WriterCore {
 
         Ok(())
     }
+
+    /// 检查更新节点时是否破坏了外部图持有的路径依赖（修改1）。
+    ///
+    /// 只在 Portal 身份（destination）改变或 Anchor 被删除时检查：
+    /// - Portal 删除/目标改变：查询所有穿越该 Portal 的外部路径（`PortalTraversal`）
+    /// - Anchor 删除：查询所有终点落在该 anchor 的外部路径（`AnchorTarget`）
+    ///
+    /// title/position/style 等不影响目标身份的变更不触发检查。
+    /// 存在依赖时返回具体宿主、引用类型、引用 ID，不允许先改再让外部路径悬空。
+    fn check_external_dependencies_for_node_update(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+        starmap_id: &str,
+        node_id: &str,
+        old_node: &crate::starmap::types::StarMapNode,
+        new_node: &crate::starmap::types::StarMapNode,
+    ) -> Result<()> {
+        use crate::starmap::graph::resolve::PathDependencyKind;
+        use crate::starmap::store::relation_index::PathDependencyIndex;
+
+        // Portal 身份改变 = destination_starmap_id 或 destination_target 变化。
+        // 新增 Portal（None→Some）不破坏既有外部路径，无需检查。
+        let portal_changed = match (&old_node.portal, &new_node.portal) {
+            (None, None) | (None, Some(_)) => false,
+            (Some(_), None) => true,
+            (Some(o), Some(n)) => {
+                o.destination_starmap_id != n.destination_starmap_id
+                    || o.destination_target != n.destination_target
+            }
+        };
+
+        // 被删除的 anchor：旧有新无。anchor_id 改变即视为删除旧 anchor。
+        let removed_anchor_ids: Vec<String> = old_node
+            .anchors
+            .iter()
+            .filter(|a| {
+                !new_node
+                    .anchors
+                    .iter()
+                    .any(|na| na.anchor_id == a.anchor_id)
+            })
+            .map(|a| a.anchor_id.clone())
+            .collect();
+
+        if !portal_changed && removed_anchor_ids.is_empty() {
+            return Ok(());
+        }
+
+        let context = self.build_resolver_context(stores);
+        let idx = crate::starmap::load_index(&self.app_data_root)?;
+        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
+
+        let mut refs = Vec::new();
+        if portal_changed {
+            for dep in dep_index
+                .query_dependents(starmap_id, &PathDependencyKind::PortalTraversal, node_id)
+                .iter()
+                .filter(|dep| dep.owner_starmap_id != starmap_id)
+            {
+                refs.push(format!(
+                    "(owner={}, kind=PortalTraversal, source={}, path={:?})",
+                    dep.owner_starmap_id, dep.source_id, dep.referenced_path
+                ));
+            }
+        }
+        for removed_anchor_id in &removed_anchor_ids {
+            for dep in dep_index
+                .query_dependents(starmap_id, &PathDependencyKind::AnchorTarget, node_id)
+                .iter()
+                .filter(|dep| dep.owner_starmap_id != starmap_id)
+                .filter(|dep| dep.target_anchor_id.as_deref() == Some(removed_anchor_id.as_str()))
+            {
+                refs.push(format!(
+                    "(owner={}, kind=AnchorTarget(anchor={}), source={}, path={:?})",
+                    dep.owner_starmap_id, removed_anchor_id, dep.source_id, dep.referenced_path
+                ));
+            }
+        }
+
+        if !refs.is_empty() {
+            return Err(crate::error::Error::Other(format!(
+                "Cannot update node '{}': external dependencies would dangle: {:?}",
+                node_id, refs
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
 // 跨图引用检查 - 模块级辅助函数
 // ---------------------------------------------------------------------------
 
-/// 检查解析后的目标是否属于指定画布的该节点（含 Node 本身和其 Anchor）。
+/// 收集依赖指定对象的外部（非本图）路径引用。
 ///
-/// 删除节点会连带删除其所有锚点，因此 `Node { node_id }` 和
-/// `Anchor { node_id, .. }` 都属于该节点，必须一起检查。
-fn resolved_target_belongs_to_node(
-    resolved: &std::result::Result<
-        crate::starmap::graph::resolve::ResolvedTarget,
-        crate::starmap::semantic::StarMapTargetResolveStatus,
-    >,
+/// 查询 `PathDependencyIndex` 并过滤掉宿主图等于 `starmap_id` 的本图自引用
+/// （本图级联删除/validate_graph 已处理），只返回外部跨图依赖。
+fn collect_external_refs(
+    dep_index: &crate::starmap::store::relation_index::PathDependencyIndex,
     starmap_id: &str,
-    node_id: &str,
-) -> bool {
-    use crate::starmap::semantic::StarMapTargetDetail;
-    match resolved {
-        Ok(r) => {
-            r.final_starmap_id == starmap_id
-                && matches!(
-                    &r.target,
-                    StarMapTargetDetail::Node { node_id: ref nid }
-                    | StarMapTargetDetail::Anchor { node_id: ref nid, .. }
-                        if nid == node_id
-                )
-        }
-        Err(_) => false,
-    }
-}
+    kind: &crate::starmap::graph::resolve::PathDependencyKind,
+    object_id: &str,
+) -> Vec<crate::starmap::store::relation_index::AllCrossCanvasReferenceInfo> {
+    use crate::starmap::store::relation_index::AllCrossCanvasReferenceInfo;
 
-/// 检查路径是否穿越了指定星图中的指定 Embed 实例。
-///
-/// 通过解析路径获取 `traversed_starmap_ids`，找到 `starmap_id` 在穿越链中的
-/// 位置，检查对应的路径段是否为 `EnterEmbed { instance_id }`。
-fn path_traverses_embed(
-    context: &crate::starmap::graph::resolve::GraphResolverContext,
-    path: &crate::starmap::types::reference::StarMapTargetPath,
-    starmap_id: &str,
-    instance_id: &str,
-) -> bool {
-    use crate::starmap::types::reference::StarMapPathSegment;
-
-    let resolved = match crate::starmap::graph::resolve::resolve_target(context, path) {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
-
-    // traversed_starmap_ids[i] 是 segments[i] 之前的星图
-    // segments[i] 从 traversed_starmap_ids[i] 穿越到 traversed_starmap_ids[i+1]
-    // 所以如果 traversed_starmap_ids[i] == starmap_id 且 segments[i] 是
-    // EnterEmbed { instance_id }，则路径穿越了该 Embed
-    resolved
-        .traversed_starmap_ids
+    dep_index
+        .query_dependents(starmap_id, kind, object_id)
         .iter()
-        .enumerate()
-        .any(|(i, sid)| {
-            sid == starmap_id
-                && matches!(
-                    path.segments.get(i),
-                    Some(StarMapPathSegment::EnterEmbed { instance_id: ref eid })
-                        if eid == instance_id
-                )
+        .filter(|dep| dep.owner_starmap_id != starmap_id)
+        .map(|dep| AllCrossCanvasReferenceInfo {
+            owner_starmap_id: dep.owner_starmap_id.clone(),
+            source_kind: dep.source_kind.clone(),
+            source_id: dep.source_id.clone(),
+            referenced_path: dep.referenced_path.clone(),
+            label: dep.label.clone(),
         })
+        .collect()
 }
