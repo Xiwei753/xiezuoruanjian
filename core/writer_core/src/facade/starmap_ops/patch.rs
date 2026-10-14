@@ -192,7 +192,9 @@ pub(super) fn apply_deletion_to_graph(
             graph.nodes.retain(|n| n.id != node_id.as_str());
         }
         CascadeOrigin::Embed(instance_id) => {
-            graph.embeds.retain(|em| em.instance_id != instance_id.as_str());
+            graph
+                .embeds
+                .retain(|em| em.instance_id != instance_id.as_str());
         }
     }
     graph.edges.retain(|e| !cascade.edge_ids.contains(&e.id));

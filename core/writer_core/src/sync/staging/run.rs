@@ -8,6 +8,16 @@ use uuid::Uuid;
 use super::commit_plan::*;
 use super::resolve::*;
 
+/// 星图 graph.json 和对象文件路径分组。
+///
+/// 在 `compute_commit_plan` 中收集每个星图的 graph.json 和对象文件路径，
+/// 确保 graph.json 成员表合并与对象文件决策一致（issue #902 第九轮复核）。
+#[derive(Default)]
+pub(crate) struct StarmapFilePaths {
+    pub graph_meta_path: Option<PathBuf>,
+    pub object_paths: Vec<PathBuf>,
+}
+
 const BASE_SUBDIR: &str = "base";
 const STAGING_SUBDIR: &str = "staging";
 
@@ -223,6 +233,41 @@ impl StagingRun {
         for p in &live_starmap_paths {
             all_paths.insert(p.clone());
         }
+
+        // 收集星图 graph.json 和对象文件路径，按 starmap_id 分组。
+        // 这些文件需要在循环后统一处理，确保 graph.json 成员表合并与
+        // 对象文件决策一致（issue #902 第九轮复核）。
+        let mut starmap_groups: std::collections::HashMap<String, StarmapFilePaths> =
+            std::collections::HashMap::new();
+        for rel in &all_paths {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if is_starmap_graph_meta_path(&rel_str) {
+                let parts: Vec<&str> = rel_str.split('/').collect();
+                let starmap_id = parts[1].to_string();
+                starmap_groups
+                    .entry(starmap_id)
+                    .or_default()
+                    .graph_meta_path = Some(rel.clone());
+            } else if is_starmap_object_file_path(&rel_str) {
+                let parts: Vec<&str> = rel_str.split('/').collect();
+                let starmap_id = parts[1].to_string();
+                starmap_groups
+                    .entry(starmap_id)
+                    .or_default()
+                    .object_paths
+                    .push(rel.clone());
+            }
+        }
+        let _starmap_file_set: std::collections::HashSet<PathBuf> = starmap_groups
+            .values()
+            .flat_map(|g| {
+                let mut paths = g.object_paths.clone();
+                if let Some(p) = &g.graph_meta_path {
+                    paths.push(p.clone());
+                }
+                paths
+            })
+            .collect();
 
         for rel in all_paths {
             let rel_str = rel.to_string_lossy().to_string();

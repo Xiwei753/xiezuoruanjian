@@ -805,8 +805,10 @@ impl WriterCoreApi {
                 target_with_conflicts.result.status = crate::sync::SyncStatus::RecoverableError(
                     format!("pre_commit_flush_failed: {}", e),
                 );
-                target_with_conflicts.result.error =
-                    Some(format!("flush_all_starmap_stores before commit failed: {}", e));
+                target_with_conflicts.result.error = Some(format!(
+                    "flush_all_starmap_stores before commit failed: {}",
+                    e
+                ));
                 return (target_with_conflicts, Vec::new());
             }
 

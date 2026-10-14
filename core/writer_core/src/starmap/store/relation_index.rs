@@ -52,7 +52,7 @@ pub struct HyperlinkRelationIndex {
 /// 跨层路径（`segments` 非空或 `starmap_id` 与宿主图不同）的终点 node_id
 /// **绝不**返回——它属于另一张星图，把它当成本地 node_id 会破坏 relation_index
 /// 的本地引用不变量，导致 `delete_node` 误删跨层引用、prefetch 错误加载等。
-pub(super) fn target_path_node_id<'a>(
+pub(crate) fn target_path_node_id<'a>(
     path: &'a StarMapTargetPath,
     host_starmap_id: &str,
 ) -> Option<&'a str> {

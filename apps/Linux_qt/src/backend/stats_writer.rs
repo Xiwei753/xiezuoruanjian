@@ -61,11 +61,7 @@ pub(crate) struct StatsWriterHandle {
 
 impl StatsWriterHandle {
     /// 创建新 writer：启动 worker thread，worker 持有自己的 WriterCoreApi。
-    pub(crate) fn start(
-        data_root: String,
-        projects_root: String,
-        layout: GitRepoLayout,
-    ) -> Self {
+    pub(crate) fn start(data_root: String, projects_root: String, layout: GitRepoLayout) -> Self {
         let (sender, receiver) = mpsc::channel::<StatsWriterMessage>();
         let worker = std::thread::Builder::new()
             .name("stats-writer".to_string())

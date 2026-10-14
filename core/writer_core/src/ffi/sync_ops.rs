@@ -418,7 +418,9 @@ mod tests {
         set_override(&svc, "token-a");
         assert!(svc.has_secrets_override());
 
-        let result = run_sync_op(&svc, |_| Err::<i32, _>(WriterError::SyncFailed("sync failed".into())));
+        let result = run_sync_op(&svc, |_| {
+            Err::<i32, _>(WriterError::SyncFailed("sync failed".into()))
+        });
         assert!(result.is_err());
         assert!(
             !svc.has_secrets_override(),
@@ -438,7 +440,9 @@ mod tests {
         );
         set_override(&svc, "token-a");
 
-        let result = run_sync_op(&svc, |_| Err::<i32, _>(WriterError::SyncFailed("original op error".into())));
+        let result = run_sync_op(&svc, |_| {
+            Err::<i32, _>(WriterError::SyncFailed("original op error".into()))
+        });
         assert!(result.is_err());
         assert!(!svc.has_secrets_override());
     }
