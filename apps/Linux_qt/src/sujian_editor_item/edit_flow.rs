@@ -70,7 +70,7 @@ pub(crate) enum EditOp {
 /// 区间收进、candidate 揭示、committed replace range、pending preedit cursor rect
 /// 作为 old caret 起点等 composition 专属语义。
 ///
-/// Composition 与普通编辑最终都使用同一个 visual_canvas；preedit 自身不进入正文过渡。
+/// Composition 与普通编辑最终都走同一个局部动画入口；preedit 自身不进入正文过渡。
 pub(crate) struct CompositionCommitParams {
     pub preedit_byte_start: usize,
     pub preedit_byte_end: usize,
@@ -104,7 +104,7 @@ pub(crate) enum EditVisualSkipReason {
 /// Issue #819 评论 5956495850 第 1 节：视觉事务的明确结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EditVisualOutcome {
-    /// 正文由 visual_canvas 创建了视觉过渡。
+    /// 正文由唯一的局部动画计划（`text_motion`）创建了视觉过渡。
     ///
     /// 新模型没有 prepared transaction 队列，所以不再携带事务 key。
     Created,
@@ -156,8 +156,7 @@ impl SujianEditorItem {
     /// 7. 明确返回 `Created` / `Skipped(reason)` / `AnimationDisabled`。
     ///
     /// - `composition` 不带 composition commit 参数（`None`）时走
-    ///   `record_transaction`，由 `pipeline.visual_canvas` 内部
-    ///   排版 old/new 并 `process_transaction`。
+    ///   `record_transaction`，由 `text_motion` 内部排版 old/new 并建立局部动画计划。
     /// - 带 `Some` 时走 `record_composition_commit_transaction`，
     ///   处理 preedit 区间收进、candidate 提示、committed replace range 等
     ///   composition 专属语义。

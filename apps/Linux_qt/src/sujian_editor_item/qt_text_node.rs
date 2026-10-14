@@ -1605,7 +1605,7 @@ pub fn update_scroll_transform(root_raw: *mut std::ffi::c_void, scroll_y: f64) {
 /// - **已存在且 `force_full_update=true`** → update（删除旧子节点，创建新子节点）
 /// - **已存在且 `force_full_update=false`** → 保持不动
 ///
-/// `force_full_update=true` 用于 `needs_relayout` / `handoff_pending` / clip 模式切换
+/// `force_full_update=true` 用于 `needs_relayout` / clip 模式切换
 /// 等需要重建所有已有段落子节点的场景。
 /// `force_full_update=false` 用于纯滚动跨出（`viewport_exceeds_loaded`），
 /// 只 insert 新进入视口的段落、remove 离开视口的段落，已有段落保持不动。

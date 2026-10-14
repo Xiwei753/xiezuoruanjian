@@ -204,11 +204,19 @@ fn issue702_cursor_transition_tween_has_duration_ms() {
 #[test]
 fn issue702_render_plan_has_clip_rects() {
     let src = read_src("src/sujian_editor_item/render_plan.rs");
-    // Issue #901: 旧 RenderOwnershipPlan（来自已删除的 render_ownership 模块）已由
-    // RenderOwnership 替代。RenderPlan 携带统一的 ownership 字段。
+    // Issue #904: 旧 #901 RenderOwnership 已随 visual_canvas 状态机删除。RenderPlan
+    // 现在只携带一份局部 text 计划：overlays（遮罩/位移）与 static_holes（静态排除）。
     assert!(
-        src.contains("ownership: RenderOwnership"),
-        "RenderPlan 应只携带统一的 RenderOwnership"
+        src.contains("local_text: LocalTextPlan"),
+        "RenderPlan 应只携带统一的 LocalTextPlan"
+    );
+    assert!(
+        src.contains("struct LocalTextPlan"),
+        "应有 LocalTextPlan 结构承载局部动画计划"
+    );
+    assert!(
+        !src.contains("ownership: RenderOwnership"),
+        "旧 RenderOwnership 字段不得复活"
     );
 }
 
@@ -227,19 +235,19 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
         !src.contains("needs_relayout || has_animation_clip"),
         "Issue #714 评论 5740007764: 不应再保留 needs_relayout || has_animation_clip 旧条件"
     );
-    // Issue #853: 资源缺失时按 canonical 静态正文恢复；静态 clip 与动画 glyph
-    // 都从同一份 ownership plan 读取。
+    // Issue #853: 资源缺失时按 canonical 静态正文恢复；静态 holes 与动画 glyph
+    // 都从同一份局部 text 计划读取。
     assert!(
         src.contains("should_rebuild_static"),
         "应使用 should_rebuild_static 作为重建条件"
     );
     assert!(
-        src.contains("plan.ownership.has_animation_resources(texture_cache)"),
-        "应先确认 ownership plan 所需动画资源齐备"
+        src.contains("plan.local_text.has_animation_resources(texture_cache)"),
+        "应先确认局部 text 计划所需动画资源齐备"
     );
     assert!(
-        src.contains("plan.ownership.clips_for_static_rebuild()"),
-        "静态 exclusions 应由统一 ownership plan 提供"
+        src.contains("plan.local_text.static_holes"),
+        "静态 exclusions 应由统一的局部 text 计划提供"
     );
 }
 
@@ -263,18 +271,21 @@ fn issue702_delete_conceal_has_same_frame_progress() {
             rel
         );
     }
-    // Issue #901: composition.rs 已改为纯文档模块，DeleteConceal / InsertReveal
-    // 的视觉过渡统一由 visual_canvas 模块处理。检查 visual_canvas 模块存在且
-    // draw_plan 有 DrawCommandKind 枚举（新架构的绘制命令体系）。
-    let visual_canvas_mod = root.join("src/sujian_editor_item/visual_canvas/mod.rs");
+    // Issue #904: 旧 #901 visual_canvas 状态机已整体删除。InsertReveal / DeleteConceal
+    // 的视觉过渡统一由单一局部 text_motion 计划处理（遮罩 + 位移共用同一 progress）。
+    let text_motion = root.join("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_mod.exists(),
-        "visual_canvas 模块应存在（替代旧 composition 层的视觉过渡）"
+        text_motion.exists(),
+        "text_motion 模块应存在（替代旧 composition/visual_canvas 层的视觉过渡）"
     );
-    let draw_plan = read_src("src/sujian_editor_item/visual_canvas/draw_plan.rs");
+    let text_motion_src = read_src("src/sujian_editor_item/text_motion.rs");
     assert!(
-        draw_plan.contains("enum DrawCommandKind"),
-        "visual_canvas/draw_plan.rs 应存在 DrawCommandKind 枚举（新绘制命令体系）"
+        text_motion_src.contains("enum TextPiece"),
+        "text_motion.rs 应含 TextPiece 枚举（Reveal/Conceal/Move 局部计划）"
+    );
+    assert!(
+        !root.join("src/sujian_editor_item/visual_canvas").exists(),
+        "旧 visual_canvas 状态机不得复活"
     );
 }
 

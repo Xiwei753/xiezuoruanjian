@@ -86,12 +86,13 @@ fn issue701_user_scroll_suppression_still_in_is_scrolling_path() {
     let src = read_src("src/sujian_editor_item/properties.rs");
     let body = method_body(&src, "fn set_is_scrolling(");
     assert!(
-        body.contains("pause_all"),
-        "Issue #701: 用户滚动动画抑制必须仍在 set_is_scrolling(true) 路径（pause_all）"
+        body.contains("clear_active_text_animations"),
+        "Issue #701/#904: 用户滚动抑制仍在 set_is_scrolling(true) 路径\
+         （清空唯一的局部动画计划）"
     );
     assert!(
-        body.contains("resume_all"),
-        "Issue #701: 用户滚动恢复必须仍在 set_is_scrolling(false) 路径（resume_all）"
+        body.contains("force_snap_next = true"),
+        "Issue #701/#904: 用户滚动/恢复在 set_is_scrolling 路径强制光标 Snap"
     );
     println!("[BUGFIX_701_VERIFY] 用户滚动抑制仍在 set_is_scrolling 独立路径 (OK)");
 }

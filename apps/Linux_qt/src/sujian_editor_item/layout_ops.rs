@@ -22,13 +22,11 @@ impl SujianEditorItem {
         // Issue #901 第十五轮问题5b: 用 resolve_line 只物化最后一行，
         // 不物化整章。内容高度 = 最后一行底 y + padding。
         let params = self.layout_params(width);
-        let snapshot = self
-            .editor_layout
-            .snapshot(
-                self.pipeline.committed_text(),
-                params,
-                self.pipeline.text_revision(),
-            );
+        let snapshot = self.editor_layout.snapshot(
+            self.pipeline.committed_text(),
+            params,
+            self.pipeline.text_revision(),
+        );
         let total_lines = snapshot.lines.len();
         let height = if total_lines > 0 {
             let last_line = snapshot.resolve_line(total_lines - 1);
@@ -120,7 +118,8 @@ impl SujianEditorItem {
             Some(s) => s,
             None => {
                 return Err(
-                    "build_incremental_layout_snapshot: no canonical snapshot after layout".to_string(),
+                    "build_incremental_layout_snapshot: no canonical snapshot after layout"
+                        .to_string(),
                 );
             }
         };
@@ -229,8 +228,8 @@ impl SujianEditorItem {
 
                 if line_start_idx < line_end_idx {
                     // 只物化需要的行，不物化整章。
-                    let materialized = doc_snapshot
-                        .resolve_visual_line_range(line_start_idx, line_end_idx);
+                    let materialized =
+                        doc_snapshot.resolve_visual_line_range(line_start_idx, line_end_idx);
                     std::borrow::Cow::Owned(materialized)
                 } else {
                     doc_snapshot.resolved_visual_lines()
@@ -262,10 +261,8 @@ impl SujianEditorItem {
             // - end   = 第一个 byte_start >= affected_end 的索引
             //   （partition_point 返回第一个不满足 byte_start < affected_end 的位置）
             // [start, end) 即所有满足原条件的行，与线性扫描结果完全一致。
-            let start = resolved_lines
-                .partition_point(|vl| vl.byte_end <= affected_start);
-            let end = resolved_lines
-                .partition_point(|vl| vl.byte_start < affected_end);
+            let start = resolved_lines.partition_point(|vl| vl.byte_end <= affected_start);
+            let end = resolved_lines.partition_point(|vl| vl.byte_start < affected_end);
             line_indices_set.extend(start..end);
         }
 
@@ -273,10 +270,8 @@ impl SujianEditorItem {
         // visual_lines 按文档 y 坐标递增排列，用二分查找定位视口内行范围。
         // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
         // 加边距确保边缘行不被遗漏（与 line_snapshot_builder.rs 一致）。
-        let viewport_start = resolved_lines
-            .partition_point(|vl| vl.y + vl.height <= vp_top);
-        let viewport_end = resolved_lines
-            .partition_point(|vl| vl.y < vp_bottom);
+        let viewport_start = resolved_lines.partition_point(|vl| vl.y + vl.height <= vp_top);
+        let viewport_end = resolved_lines.partition_point(|vl| vl.y < vp_bottom);
         line_indices_set.extend(viewport_start..viewport_end);
 
         let mut affected_line_indices: Vec<usize> = line_indices_set.into_iter().collect();
@@ -323,8 +318,10 @@ impl SujianEditorItem {
                     if let Some(&byte_start) = para_qtextline_to_byte_start
                         .get(&(anim_line.paragraph_slot, anim_line.qtextline_idx))
                     {
-                        if let Some(prep_line) =
-                            snapshot.line_snapshots.iter_mut().find(|pl| pl.byte_start == byte_start)
+                        if let Some(prep_line) = snapshot
+                            .line_snapshots
+                            .iter_mut()
+                            .find(|pl| pl.byte_start == byte_start)
                         {
                             prep_line.image = Some(image);
                         }
@@ -335,7 +332,8 @@ impl SujianEditorItem {
 
         // 6. 计算 caret（视口坐标 + 文档坐标）。
         let cursor_byte = self.pipeline.cursor();
-        let caret = doc_snapshot.cursor_rect(cursor_byte, self.cursor_ctrl.affinity, scroll_y, viewport_h);
+        let caret =
+            doc_snapshot.cursor_rect(cursor_byte, self.cursor_ctrl.affinity, scroll_y, viewport_h);
         let caret_doc = doc_snapshot.cursor_rect_doc(cursor_byte, self.cursor_ctrl.affinity);
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
@@ -465,17 +463,15 @@ impl SujianEditorItem {
         let committed_para_count = committed_text.split('\n').count();
         let store_para_count = self.editor_layout.paragraph_store().paragraph_count();
         if store_para_count != committed_para_count {
-            self.editor_layout
-                .paragraph_store_mut()
-                .rebuild_from_text(
-                    committed_text,
-                    font_size,
-                    font_family,
-                    line_spacing,
-                    text_indent,
-                    padding,
-                    width,
-                );
+            self.editor_layout.paragraph_store_mut().rebuild_from_text(
+                committed_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
         }
         let paragraph_ids: Vec<crate::editor::layout::ParagraphId> =
             self.editor_layout.paragraph_store().paragraph_ids();
@@ -695,13 +691,11 @@ impl SujianEditorItem {
         // Issue #901 第十轮问题5: 用 resolved_lines 按需物化后缀段绝对坐标。
         // TODO(issue-901): 后续优化为按需查询 — 遍历找换行边界可先用二分定位再 resolve_line。
         let params = self.layout_params(width);
-        let snapshot = self
-            .editor_layout
-            .snapshot(
-                self.pipeline.committed_text(),
-                params,
-                self.pipeline.text_revision(),
-            );
+        let snapshot = self.editor_layout.snapshot(
+            self.pipeline.committed_text(),
+            params,
+            self.pipeline.text_revision(),
+        );
         let resolved = snapshot.resolved_lines();
         let lines = resolved.as_ref();
 

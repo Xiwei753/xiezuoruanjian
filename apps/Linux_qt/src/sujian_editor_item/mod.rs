@@ -45,7 +45,6 @@ pub(crate) mod pointer_gesture;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod qt_text_node;
-// Issue #901: render_ownership 已删除，由 visual_canvas::Ownership 替代。
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `RenderPlan`。
 pub mod render_plan;
 pub(crate) mod rendering;
@@ -54,11 +53,10 @@ pub(crate) mod rendering;
 mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
+pub(crate) mod text_motion;
 pub(crate) mod text_utils;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
-/// Issue #901：视觉画布基础模块。
-pub(crate) mod visual_canvas;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
@@ -524,8 +522,6 @@ pub struct SujianEditorItem {
     /// `force_full_relayout_pending=true` 时 render_frame 传 force_full_relayout=true，
     /// C++ 侧无条件重建所有已有段落子节点。
     force_full_relayout_pending: bool,
-    /// 最后一次成功提交的动画 owner 集合版本。render 失败时保留旧值，下一帧重试。
-    last_committed_ownership_revision: u64,
     /// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
     /// 包含同一次排版得到的 `LayoutSnapshot` 和从该 snapshot 派生的选区/preedit 几何。
     /// 不变性：
@@ -553,13 +549,9 @@ pub struct SujianEditorItem {
     /// 之前只跟踪 has_active_insert（只认 Insert），CursorOnly Tween 的起止不触发边沿重置。
     /// 现在跟踪 current_cursor_blink_mode() == Suppressed，覆盖 CursorOnly Tween。
     prev_cursor_blink_suppressed: bool,
-    /// Issue #901 问题3：document session generation，每次文档内容根本性变更
-    /// （load/clear 等）时递增。`PresentedScene.document_session` 用此值，
-    /// `CanvasController` 只接受同 session 的帧。
+    /// document session generation，每次文档内容根本性变更（load/clear 等）时递增。
+    /// 局部动画（`text_motion`）与帧回执都只接受同 session 的数据。
     document_session: u64,
-    /// Issue #901 问题3：渲染帧 id 计数器，每次 `update_paint_node` 成功渲染时递增。
-    /// `PresentedScene.frame_id` 用此值，`CanvasController` 只接受更新的帧。
-    next_render_frame_id: u64,
     /// Issue #901 第九轮阻塞4: per-item 已加载段落索引范围。
     /// 替代原全局 `static LOADED_PARA_RANGE`。每次 rebuild 成功后由
     /// `FrameRenderOutcome::new_loaded_para_range` 更新。
@@ -571,7 +563,8 @@ impl Default for SujianEditorItem {
         let pipeline = pipeline::LinuxEditorPipeline::new();
         // Issue #901: 旧 animation_coordinator.frame_submission_mailbox() 已删除。
         // 帧提交 mailbox 现在独立创建，不再从 animation_coordinator 获取。
-        let frame_submission_mailbox = std::sync::Arc::new(frame_submission::FrameSubmissionMailbox::default());
+        let frame_submission_mailbox =
+            std::sync::Arc::new(frame_submission::FrameSubmissionMailbox::default());
         Self {
             base: Default::default(),
             plain_text: Default::default(),
@@ -700,7 +693,6 @@ impl Default for SujianEditorItem {
             layout_dirty: true,
             scene_dirty: true,
             force_full_relayout_pending: true,
-            last_committed_ownership_revision: 0,
             prepared_frame: None,
             frame_submission_mailbox,
             frame_window_connections: Rc::default(),
@@ -709,7 +701,6 @@ impl Default for SujianEditorItem {
             last_frame_now: None,
             prev_cursor_blink_suppressed: false,
             document_session: 1,
-            next_render_frame_id: 1,
             loaded_para_range: None,
         }
     }
@@ -814,9 +805,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {
-        // Issue #901: 旧 animation_coordinator.suppress_all() 已删除。
-        // TODO(issue-901): integrate with visual_canvas to suppress active text animations.
-        // 暂时直接请求 scene rebuild，让静态正文从 canonical 重新渲染。
+        // Issue #904：丢掉唯一的局部动画，静态层立即从 canonical 完整显示。
+        *self.pipeline.text_motion_mut() = None;
         self.request_scene_rebuild();
     }
 
@@ -848,23 +838,10 @@ impl SujianEditorItem {
         }
         self.loaded_para_range = None;
         // Issue #901 问题3：切章/清文档时递增 document_session，
-        // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。
+        // 使唯一的局部动画与帧回执只接受新 session 的数据，忽略旧 session 的迟到帧。
         self.document_session = self.document_session.wrapping_add(1);
-        // Issue #901 问题6：向画布传入新 session/revision/caret/scroll，
-        // 完全重新初始化 RevisionChain / FrameClock / TextFrontier，
-        // 不继承旧章的字节映射、动画时间和文字前沿。
-        let core_revision = EditorRevision::new(self.pipeline.mirror().revision());
-        let initial_caret = self.pipeline.cursor();
-        let initial_scroll = 0.0; // 切章后回到顶部
-        self.pipeline
-            .visual_canvas_mut()
-            .reset_for_new_document(
-                self.document_session,
-                core_revision,
-                initial_caret,
-                initial_scroll,
-                0.0,
-            );
+        // Issue #904：丢弃旧章唯一的局部动画与纹理租约。
+        *self.pipeline.text_motion_mut() = None;
         // Issue #901 问题3/问题6：清 frame_submission_mailbox，
         // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
         self.frame_submission_mailbox.discard_all_frames();
@@ -944,7 +921,9 @@ impl SujianEditorItem {
 
             if !self.pipeline.composition().preedit_text.is_empty() {
                 let cursor_byte = self.pipeline.cursor();
-                let cursor_para = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+                let cursor_para = snapshot
+                    .paragraph_offset_index
+                    .byte_to_paragraph(cursor_byte);
                 // 物化前一段以处理段边界光标
                 start_slot = start_slot.min(cursor_para.saturating_sub(1));
                 end_slot = end_slot.max(cursor_para + 1);
@@ -956,8 +935,7 @@ impl SujianEditorItem {
                 // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
                 // paragraph_id_to_line_range 按 lines 实际行顺序构建，
                 // 索引为空时退化为 partition_point(logical_slot)。
-                let (start_idx, end_idx) =
-                    snapshot.paragraph_line_range(start_slot, end_slot);
+                let (start_idx, end_idx) = snapshot.paragraph_line_range(start_slot, end_slot);
                 snapshot.resolve_line_range(start_idx, end_idx)
             } else {
                 Vec::new()

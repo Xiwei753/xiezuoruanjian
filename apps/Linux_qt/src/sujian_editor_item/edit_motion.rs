@@ -151,8 +151,7 @@ impl EditorAnimationKind {
 /// Linux 私有编辑运动 — 替代已删除的 Core `EditorVisualTransaction`。
 ///
 /// 由 `pipeline::prepare_edit_motion()` 从 `EditorEditResult` + old/new `EditorSnapshot`
-/// 直接构造，不经过 `EditorEngine`。`animation_coordinator::process_transaction`
-/// 消费此结构创建 `PreparedTextVisualTransaction`。
+/// 直接构造，不经过 `EditorEngine`，供唯一的 `text_motion` 计划消费。
 ///
 /// 字段语义与旧 `EditorVisualTransaction` 对应字段一致：
 /// - `kind`：动画类别（Insert / Delete / Replace / CursorOnly），只从
@@ -345,8 +344,8 @@ pub(crate) fn ranges_from_display_patches(
 /// 找出 old_text → new_text 的最小编辑序列（Insert / Delete），按 byte offset 返回。
 /// 算法：公共前缀 + 公共后缀，中间段为一次 Replace（拆成 Delete + Insert）。
 ///
-/// 供 `animation_coordinator::handle_composition_update` 使用——composition update
-/// 不经过 `EditorEditResult`，需要独立 diff 找 inserted/deleted range。
+/// 供 composition update 使用——composition update 不经过 `EditorEditResult`，
+/// 需要独立 diff 找 inserted/deleted range。
 pub(crate) fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
     let old_bytes = old_text.as_bytes();
     let new_bytes = new_text.as_bytes();

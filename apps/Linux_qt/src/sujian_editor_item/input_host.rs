@@ -202,8 +202,7 @@ impl EditorInputHost for SujianEditorItem {
             session.update_preedit(&text);
         }
 
-        // TODO(issue-901): migrate to visual_canvas — composition update 只更新
-        // preedit 临时层，正文无动画，旧 handle_composition_update 已删除。
+        // Issue #904：composition update 只更新 preedit 临时层，正文无吞吐动画。
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
@@ -240,8 +239,7 @@ impl EditorInputHost for SujianEditorItem {
             }
         }
 
-        // TODO(issue-901): migrate to visual_canvas — composition update 只更新
-        // preedit 临时层，正文无动画，旧 handle_composition_update 已删除。
+        // Issue #904：composition update 只更新 preedit 临时层，正文无吞吐动画。
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();

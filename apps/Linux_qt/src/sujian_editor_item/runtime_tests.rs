@@ -134,7 +134,8 @@ fn emit_content_changed_twice_does_not_bump_revision() {
 
 /// `build_render_plan_full()` 必须产出 `drawn_caret_rect: Some((x, y, h))`，
 /// 不接受 None。这是本帧真正绘制出去的 caret rect。
-// TODO(issue-901): migrate to visual_canvas — 旧 animation_coordinator 已删除。
+// TODO(issue-904): 旧 animation_coordinator 已删除；正文/光标动画由唯一的
+// text_motion 计划与 cursor_ctrl 驱动。
 #[cfg(any())]
 fn build_render_plan_full_produces_drawn_caret_rect() {
     run_on_qt_thread(|| {
@@ -176,7 +177,8 @@ fn build_render_plan_full_produces_drawn_caret_rect() {
 
 /// `build_render_plan_full` 传入不同 cursor_render_state 时，
 /// drawn_caret_rect 反映传入的 cursor 位置。
-// TODO(issue-901): migrate to visual_canvas — 旧 animation_coordinator 已删除。
+// TODO(issue-904): 旧 animation_coordinator 已删除；正文/光标动画由唯一的
+// text_motion 计划与 cursor_ctrl 驱动。
 #[cfg(any())]
 fn build_render_plan_full_drawn_caret_reflects_cursor_state() {
     run_on_qt_thread(|| {
@@ -332,7 +334,7 @@ fn render_state_uses_sampled_cursor_position_not_stale_visual() {
             .tick_animation(t0 + Duration::from_millis(50));
 
         let state = item.build_cursor_render_state_for_frame(
-            &crate::sujian_editor_item::visual_canvas::CanvasDrawPlan::empty(0.0),
+            &crate::sujian_editor_item::text_motion::TextMotionFrame::default(),
         );
         assert!(
             (state.x - item.cursor_ctrl.visual_x).abs() < 1e-9,
@@ -357,7 +359,7 @@ fn render_state_uses_sampled_cursor_position_not_stale_visual() {
 
 /// 评论 36 要求③：真实 `click_at` 路径 —— 逻辑 caret 立即变，视觉 caret 随之追上。
 #[test]
-#[ignore = "TODO(issue-901): migrate to visual_canvas — 协同模式下 PointerClick 暂时 Snap，待 CanvasController 集成后恢复 Tween"]
+#[ignore = "TODO(issue-904): 协同模式下 PointerClick 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -419,7 +421,7 @@ fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
 
 /// 评论 36 要求④：方向键走**同一条** cursor timeline（不为鼠标/键盘造两套）。
 #[test]
-#[ignore = "TODO(issue-901): migrate to visual_canvas — 协同模式下 KeyboardNavigation 暂时 Snap，待 CanvasController 集成后恢复 Tween"]
+#[ignore = "TODO(issue-904): 协同模式下 KeyboardNavigation 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn keyboard_cursor_move_uses_same_timeline() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -493,7 +495,7 @@ fn scene_graph_frame_is_the_only_production_cursor_timeline_sample_point() {
         .find(CALL)
         .expect("update_paint_node 必须调用 cursor_ctrl.tick_animation(frame_now)");
     let state_pos = src
-        .find("let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);")
+        .find("let cursor_render_state = self.build_cursor_render_state_for_frame(&motion_frame);")
         .expect("build_cursor_render_state_for_frame 必须存在");
     assert!(
         frame_now_pos < tick_pos && tick_pos < state_pos,
@@ -582,7 +584,8 @@ fn cursor_tween_rebase_midway_restarts_timeline_from_current_visual() {
 /// 补充（未覆盖位置：要求的 4 条只断「Tween 推到 target」，没断**渲染循环契约** ——
 /// 动画没结束时尾部条件必须继续 `request_frame_update()`，结束后必须不再空转；
 /// 且 `build_cursor_render_state_for_frame()` 最终读到的仍是 target 而非被回写拉回旧值）。
-// TODO(issue-901): migrate to visual_canvas — 旧 animation_coordinator 已删除。
+// TODO(issue-904): 旧 animation_coordinator 已删除；帧请求由唯一的
+// text_motion 计划的 needs_next_frame 与 cursor_ctrl.animation 驱动。
 #[cfg(any())]
 fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
     run_on_qt_thread(|| {
@@ -625,7 +628,7 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
         );
 
         let state = item.build_cursor_render_state_for_frame(
-            &crate::sujian_editor_item::visual_canvas::CanvasDrawPlan::empty(0.0),
+            &crate::sujian_editor_item::text_motion::TextMotionFrame::default(),
         );
         assert!(
             (state.x - 100.0).abs() < 1e-9,

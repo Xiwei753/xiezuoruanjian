@@ -65,7 +65,11 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 #[test]
 fn issue1_fix_build_canonical_reuses_editor_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn build_canonical_snapshot_for_current_layout", 6000);
+    let window = function_window(
+        &src,
+        "fn build_canonical_snapshot_for_current_layout",
+        14000,
+    );
     assert!(
         window.contains("editor_layout: &crate::editor::layout::EditorLayout"),
         "修复后 build_canonical_snapshot_for_current_layout 应接收 editor_layout 参数，\
@@ -92,7 +96,11 @@ fn issue1_fix_build_canonical_reuses_editor_layout_generation() {
 #[test]
 fn issue1_fix_fallback_path_clears_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(&src, "fn build_canonical_snapshot_for_current_layout", 6000);
+    let window = function_window(
+        &src,
+        "fn build_canonical_snapshot_for_current_layout",
+        14000,
+    );
     assert!(
         window.contains("begin_layout_generation"),
         "fallback 路径（无 prepared layout）应 begin_layout_generation 分配临时 generation。"

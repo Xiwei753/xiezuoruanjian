@@ -338,9 +338,9 @@ impl SujianEditorItem {
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
-        // Issue #901 阻塞 5：把光标动画开关同步到 visual_canvas 的 CanvasSettings，
+        // Issue #904：把动画开关同步到唯一的 text_motion 计划，
         // 不留第二套硬编码状态。
-        self.sync_animation_settings_to_visual_canvas();
+        self.sync_animation_settings_to_text_motion();
         self.visual_settings_changed();
     }
 
@@ -379,8 +379,8 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
-        // Issue #901 阻塞 5：把文字动画开关同步到 visual_canvas 的 CanvasSettings。
-        self.sync_animation_settings_to_visual_canvas();
+        // Issue #904：把文字动画开关同步到唯一的 text_motion 计划。
+        self.sync_animation_settings_to_text_motion();
         editor_animation_debug_log(&format!("typing_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
@@ -404,26 +404,24 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
-    /// Issue #901 阻塞 5：把当前动画开关/时长同步到 `visual_canvas` 的 `CanvasSettings`。
+    /// Issue #904：设置变更直接作用到唯一的局部动画计划。
     ///
-    /// 确保设置变更通过 `pipeline.rs` 正确传递到 `visual_canvas.apply_settings`，
-    /// 不留第二套硬编码速度。`typing_animation_duration_ms` 控制新 `CanvasTransition`
-    /// 的唯一正文视觉时长；鼠标点击保留 `cursor_animation_duration_ms`。
-    /// 开关控制动画启用，不能默默改成另一套硬编码速度。
-    pub(crate) fn sync_animation_settings_to_visual_canvas(&mut self) {
+    /// - 关闭正文吞吐动画：立即清空局部动画片段与孔洞，静态层完整显示。
+    /// - 调整时长：只更新下一帧采样的基准时长，不新建第二条时间线。
+    /// - 协调开关只影响协同跟踪，不覆盖两个个人开关
+    ///   （见 `animation::text_animation_enabled` / `cursor_animation_enabled`）。
+    pub(crate) fn sync_animation_settings_to_text_motion(&mut self) {
         let text_enabled = super::animation::text_animation_enabled(
             self.current_typing_animation_enabled,
             self.current_coordinated_animation_enabled,
         );
-        let cursor_enabled = super::animation::cursor_animation_enabled(
-            self.current_smooth_cursor_enabled,
-            self.current_coordinated_animation_enabled,
-        );
-        let mut settings = self.pipeline.visual_canvas().settings().clone();
-        settings.text_animation_enabled = text_enabled;
-        settings.cursor_animation_enabled = cursor_enabled;
-        settings.response_duration_ms = f64::from(self.current_typing_animation_duration_ms);
-        self.pipeline.visual_canvas_mut().apply_settings(settings);
+        if text_enabled {
+            if let Some(motion) = self.pipeline.text_motion_mut() {
+                motion.set_duration_ms(self.current_typing_animation_duration_ms);
+            }
+        } else {
+            *self.pipeline.text_motion_mut() = None;
+        }
     }
 
     // Issue #756: 协同动画显式模式开关 getter/setter。
@@ -444,8 +442,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.request_static_repaint();
-        // Issue #901 阻塞 5：协同模式切换也同步到 visual_canvas。
-        self.sync_animation_settings_to_visual_canvas();
+        // Issue #904：协同模式只决定两个动画是否共享采样时间，不覆盖各自的开关。
+        self.sync_animation_settings_to_text_motion();
         editor_animation_debug_log(&format!("coordinated_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
@@ -512,9 +510,8 @@ impl SujianEditorItem {
             // Issue #826 评论 34：pause 是**时间轴级**的——只记 pause 瞬间，
             // resume 时把暂停时长平移回三层 `started_at`，所以滚动期间 progress
             // 真正停住，恢复后仍从 pause 那一刻继续，而不是按墙钟直接跳终态。
-            // Issue #901: 旧 animation_coordinator.pause_all / resume_all 已删除。
-            // TODO(issue-901): integrate with visual_canvas FrameClock pause/resume.
-            // 滚动期间暂时直接清动画状态，恢复时从 canonical 重新开始。
+            // Issue #904: 滚动期间直接清空唯一的局部动画状态，
+            // 恢复时从 canonical 静态层重新开始。
             self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
@@ -525,8 +522,7 @@ impl SujianEditorItem {
         if !value {
             // Issue #826 评论 34：resume 把暂停时长平移回各层 started_at，
             // 让时间轴从中断处继续（滚动期间没有编辑时才是这条路径）。
-            // Issue #901: 旧 animation_coordinator.resume_all 已删除。
-            // TODO(issue-901): integrate with visual_canvas FrameClock resume.
+            // Issue #904: 恢复时从 canonical 静态层重新开始。
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
@@ -720,13 +716,11 @@ impl SujianEditorItem {
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
     /// - idle → Normal
     ///
-    /// Issue #901: 旧 `blink_mode_for_text_animation` / `animation_coordinator`
-    /// 已删除。正文动画活跃性暂由 `cursor_ctrl.animation` 判断（光标 Tween 活跃
-    /// 即 suppressed）。TODO(issue-901): integrate with visual_canvas FrameClock
-    /// to query active text animation.
+    /// Issue #904：正文动画活跃性由唯一的局部动画计划（`pipeline.text_motion()`）
+    /// 与光标 Tween（`cursor_ctrl.animation`）共同判断；任一活跃即 suppressed。
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
         use super::cursor_animation::CursorBlinkMode;
-        if self.cursor_ctrl.animation.is_some() {
+        if self.cursor_ctrl.animation.is_some() || self.pipeline.text_motion().is_some() {
             return CursorBlinkMode::Suppressed;
         }
         CursorBlinkMode::Normal

@@ -1,17 +1,17 @@
 // Issue #815 评论 6042062633 修改 8: 输入路径"编辑发生了但没有动画"的正式跳过事件。
 use super::edit_motion::{CompositionSession, CursorRect};
-use super::visual_canvas::{CanvasSettings, VisualCanvas};
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
+use super::text_motion::TextMotion;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use writer_core::editor::{
-    DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
-    EditorRevision, EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
+    DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorRevision,
+    EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
 };
 
 /// Qt 侧已确认正文镜像 — 持有与 Rust EditorKernel revision 对应的纯文本快照。
@@ -366,7 +366,11 @@ pub(crate) struct LinuxEditorPipeline {
     /// IME 组合输入状态——跟踪 preedit 到 commit/cancel 的完整生命周期
     composition: CompositionState,
     /// 视觉画布——统一接收 Core 编辑结果，产出整体绘制计划（Issue #901）。
-    visual_canvas: VisualCanvas,
+    /// Issue #904：本帧唯一需要动画的局部文字片段（吐字/吞字/位移）。
+    ///
+    /// 取代 #901 的整章 `visual_canvas`。只有一个 owner，只有一个进度；
+    /// 没有 FrameClock/RevisionChain/Ownership/PresentedScene 第二套状态机。
+    text_motion: Option<TextMotion>,
     /// 纹理缓存——行快照到 QSGTexture 的映射
     texture_cache: TextureCache,
     /// 剪贴板适配器——处理复制/剪切/粘贴
@@ -446,12 +450,7 @@ impl LinuxEditorPipeline {
             kernel: EditorKernel::new(),
             mirror: CommittedTextMirror::new(),
             composition: CompositionState::new(),
-            visual_canvas: VisualCanvas::new(
-                CanvasSettings::default(),
-                EditorRevision::initial(),
-                1, // initial_session：与 SujianEditorItem::document_session 初始值 1 对齐
-                0.0,
-            ),
+            text_motion: None,
             texture_cache: TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             text_revision: 0,
@@ -506,8 +505,7 @@ impl LinuxEditorPipeline {
         new_snapshot: crate::editor::layout::CanonicalDocumentVisualSnapshot,
     ) -> LayoutRevision {
         let new_revision = self.bump_layout_revision();
-        // Issue #901: 旧 animation_coordinator.clear_visual_edit() 已删除，
-        // 视觉过渡由 visual_canvas 的 RevisionChain 管理。
+        // Issue #904: 视觉过渡由唯一的 text_motion 计划管理。
         // 把新 canonical 保存为当前 canonical。
         self.current_canonical_snapshot = Some(new_snapshot);
         // Issue #901 问题6：不再传空 active ids。
@@ -661,8 +659,10 @@ impl LinuxEditorPipeline {
                 );
                 // Issue #785 评论 5857873894 修改 2b: inject 现在返回成功注入行数；
                 // 此处为全量提取路径，忽略返回值（全量注入，失败由 inject 内部诊断记录）。
-                let _ =
-                    layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+                let _ = layout::inject_animation_visuals_into_snapshot(
+                    &mut doc_snap,
+                    animation_visuals,
+                );
             }
         }
 
@@ -735,12 +735,22 @@ impl LinuxEditorPipeline {
         &mut self.composition
     }
 
-    pub fn visual_canvas(&self) -> &VisualCanvas {
-        &self.visual_canvas
+    pub fn text_motion(&self) -> Option<&TextMotion> {
+        self.text_motion.as_ref()
     }
 
-    pub fn visual_canvas_mut(&mut self) -> &mut VisualCanvas {
-        &mut self.visual_canvas
+    pub fn text_motion_mut(&mut self) -> &mut Option<TextMotion> {
+        &mut self.text_motion
+    }
+
+    /// 取出本帧动画，若已完成或不存在则返回 `None`。
+    pub fn take_finished_text_motion(&mut self, now_ms: f64) -> Option<TextMotion> {
+        if let Some(motion) = self.text_motion.as_ref() {
+            if motion.sample(now_ms).finished {
+                return self.text_motion.take();
+            }
+        }
+        None
     }
 
     pub fn texture_cache(&self) -> &TextureCache {
@@ -759,7 +769,7 @@ impl LinuxEditorPipeline {
         self.text_revision
     }
 
-    /// Issue #901 阻塞 1：返回当前 visual revision，供 RenderOwnership 的 ownership_revision 使用。
+    /// 视觉帧序号（诊断/订阅用）；正文动画由唯一的 `text_motion` 计划管理。
     pub fn visual_revision(&self) -> u64 {
         self.visual_revision
     }
@@ -800,24 +810,25 @@ impl LinuxEditorPipeline {
         self.texture_cache.retain_active_snapshot_ids(active_ids);
     }
 
-    /// Issue #901 阻塞 5：typing 动画时长是正文视觉过渡的唯一响应时长。
-    /// 通过 `VisualCanvas::apply_settings` 传入 `CanvasSettings.response_duration_ms`，
-    /// 不再留第二套硬编码速度。
+    /// Issue #904：typing 动画时长是正文局部吞吐动画的唯一响应时长。
+    /// 直接写进本地唯一 `TextMotion` 的时长，不再有第二套硬编码速度。
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
-        let mut settings = self.visual_canvas.settings().clone();
-        settings.response_duration_ms = f64::from(ms);
-        self.visual_canvas.apply_settings(settings);
     }
 
-    /// Issue #901 阻塞 5：cursor 动画时长控制光标 Tween 的响应速度。
-    /// 鼠标/方向键光标 Tween 仍由 `CursorController` 独立推进，但画布设置
-    /// 同步更新，保证 `CanvasSettings` 不留第二套硬编码速度。
+    /// Issue #904：cursor 动画时长控制光标 Tween 的响应速度。
+    /// 光标动画由 `CursorController` 独立推进；这里只保存用户设置，
+    /// 不再错误地用 `ms > 0` 覆写正文光标开关。
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
         self.cursor_animation_duration_ms = ms;
-        let mut settings = self.visual_canvas.settings().clone();
-        settings.cursor_animation_enabled = ms > 0;
-        self.visual_canvas.apply_settings(settings);
+    }
+
+    pub fn typing_animation_duration_ms(&self) -> u32 {
+        self.typing_animation_duration_ms
+    }
+
+    pub fn cursor_animation_duration_ms(&self) -> u32 {
+        self.cursor_animation_duration_ms
     }
 
     /// 从 kernel snapshot 完整重建 mirror。
@@ -937,8 +948,7 @@ impl LinuxEditorPipeline {
                     self.kernel.selection_anchor(),
                 );
                 self.composition.clear();
-                // Issue #901: 旧 animation_coordinator.clear_visual_edit() 已删除，
-                // 视觉过渡由 visual_canvas 的 RevisionChain 管理。
+                // Issue #904：正文动画由唯一的 `text_motion` 计划管理，无第二套状态机。
                 true
             }
             Err(_) => false,
@@ -1146,9 +1156,12 @@ impl LinuxEditorPipeline {
     /// 所以两个 snapshot 的行 id 都必须保留。去重后返回。
     pub fn collect_active_snapshot_ids_from_layout(&self) -> Vec<LineSnapshotId> {
         let mut ids: Vec<LineSnapshotId> = Vec::new();
-        for snap in [self.current_layout_snapshot.as_ref(), self.previous_layout_snapshot.as_ref()]
-            .into_iter()
-            .flatten()
+        for snap in [
+            self.current_layout_snapshot.as_ref(),
+            self.previous_layout_snapshot.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
         {
             for line in &snap.line_snapshots {
                 if !line.id.is_none() && !ids.contains(&line.id) {
@@ -1203,12 +1216,24 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout = layout;
     }
 
-    /// Issue #901：为当前编辑准备行纹理。
+    /// Issue #904：只为本帧真正要参与局部动画的片段补齐行纹理。
     ///
-    /// 旧动画 owner 计划已删除，纹理准备改为只从 base_snapshot 补齐可用 QImage。
-    /// 后续由 visual_canvas 的 `CanvasDrawPlan` 决定实际需要哪些纹理。
-    pub fn prepare_visual_edit_textures(&mut self, base_snapshot: &EditorLayoutSnapshot) {
+    /// 不再无差别遍历整份 `base_snapshot.line_snapshots`；只取变化 byte range
+    /// 所在行的源图片。其余段落由静态 QSGTextNode 直接绘制，不需要纹理租约。
+    pub fn prepare_local_text_textures(
+        &mut self,
+        base_snapshot: &EditorLayoutSnapshot,
+        byte_range: (usize, usize),
+    ) {
+        let affected: Vec<LineSnapshotId> = base_snapshot
+            .lines_in_byte_range(byte_range.0, byte_range.1.max(byte_range.0 + 1))
+            .iter()
+            .map(|line| line.id)
+            .collect();
         for line in &base_snapshot.line_snapshots {
+            if !affected.contains(&line.id) {
+                continue;
+            }
             if self.texture_cache.contains_line(&line.id) {
                 continue;
             }
@@ -1565,16 +1590,9 @@ fn inject_new_animation_visuals_with_diagnostics(
         // Issue #808 评论 5918236360 问题1: 直接读回 canonical 行的真实 clusters，
         // 不用 inject 计数推断（inject 计数只说明行身份被命中，不说明 clusters 非空）。
         // Issue #901 第十八轮问题3: clusters 非空不证明 image 已注入，必须分开检查。
-        let has_clusters = canonical_line_has_clusters(
-            new_doc_snapshot,
-            *paragraph_slot,
-            *qtextline_idx,
-        );
-        let has_image = canonical_line_has_image(
-            new_doc_snapshot,
-            *paragraph_slot,
-            *qtextline_idx,
-        );
+        let has_clusters =
+            canonical_line_has_clusters(new_doc_snapshot, *paragraph_slot, *qtextline_idx);
+        let has_image = canonical_line_has_image(new_doc_snapshot, *paragraph_slot, *qtextline_idx);
         if !has_clusters {
             // inject 未命中目标行：prepare 时 clusters 非空，inject 后 canonical
             // 行 clusters 为空，说明稳定行身份在目标 snapshot 中找不到匹配。
@@ -1809,11 +1827,7 @@ fn retry_failed_animation_visuals(
         .iter()
         .filter(|fl| {
             !canonical_line_has_clusters(new_doc_snapshot, fl.paragraph_slot, fl.qtextline_idx)
-                || !canonical_line_has_image(
-                    new_doc_snapshot,
-                    fl.paragraph_slot,
-                    fl.qtextline_idx,
-                )
+                || !canonical_line_has_image(new_doc_snapshot, fl.paragraph_slot, fl.qtextline_idx)
         })
         .collect();
     if still_unavailable.is_empty() {

@@ -56,7 +56,7 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 const COMMIT_STMT: &str = "\n            self.layout_revision = new_revision;";
 
 fn prepare_edit_motion_window() -> String {
-    // #901 重写后 prepare_edit_motion 已删除，编辑结果通过 visual_canvas.apply_edit_result
+    // #901 重写后 prepare_edit_motion 已删除，编辑结果通过 text_motion.begin_or_retarget
     // 统一处理。layout revision 在 editing.rs 的 record_composition_commit_transaction 中提交。
     let src = read_src("src/sujian_editor_item/editing.rs");
     function_window(&src, "fn record_composition_commit_transaction", 16_000)
@@ -69,16 +69,16 @@ fn prepare_edit_motion_window() -> String {
 /// 评论 33 要求③：`build_old_new_from_canonical 成功 -> self.layout_revision = new_revision
 /// -> coordinator / canonical promotion` 的顺序守卫。
 ///
-/// #901 重写后 prepare_edit_motion 已删除，编辑结果通过 visual_canvas.apply_edit_result
+/// #901 重写后 prepare_edit_motion 已删除，编辑结果通过 text_motion.begin_or_retarget
 /// 统一处理。layout revision 在 editing.rs 的 record_composition_commit_transaction 中
 /// 通过 set_layout_revision + set_current_canonical_snapshot 提交。
 #[test]
 fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion() {
     let window = prepare_edit_motion_window();
 
-    let apply_pos = window
-        .find("apply_edit_result")
-        .expect("record_composition_commit_transaction 必须调 apply_edit_result 处理编辑结果");
+    let apply_pos = window.find("TextMotion::begin_or_retarget").expect(
+        "record_composition_commit_transaction 必须调 TextMotion::begin_or_retarget 处理编辑结果",
+    );
     let next_pos = window
         .find("let new_revision = LayoutRevision::next();")
         .expect("record_composition_commit_transaction 必须采样 new_revision");

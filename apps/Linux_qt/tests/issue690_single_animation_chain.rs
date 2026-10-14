@@ -78,8 +78,7 @@ fn issue690_single_collaborative_easing_function() {
     );
     // Issue #826 评论 36: coordinator.rs 已随旧动画架构删除。
     // 若文件不存在则无需检查内联 easing；若存在则不得内联 easing 公式。
-    let coord_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
+    let coord_path = linux_qt_root().join("src/sujian_editor_item/animation/coordinator.rs");
     if coord_path.exists() {
         let coord_src = read_src("src/sujian_editor_item/animation/coordinator.rs");
         assert!(
@@ -194,7 +193,10 @@ fn issue690_empty_document_uses_layout_fallback_not_fake_glyph() {
         .find("pub fn caret_rect(\n    snapshot")
         .expect("步骤4: 必须存在 caret_rect 实现");
     let caret_rest = &src[caret_start..];
-    let caret_end = caret_rest.find("\n}\n").expect("步骤4: caret_rect 实现结束位置") + 3;
+    let caret_end = caret_rest
+        .find("\n}\n")
+        .expect("步骤4: caret_rect 实现结束位置")
+        + 3;
     let caret_body = &caret_rest[..caret_end];
     // Issue #901 第十六轮: caret_rect 重构为薄封装，兜底逻辑移到
     // find_caret_line_in_layout_snapshot 辅助函数。验证调用关系 + 兜底逻辑仍在。
@@ -231,9 +233,9 @@ fn issue690_no_unconditional_stderr_animation_spam() {
     // 逐帧/无条件 eprintln 会淹没诊断包；只允许 env 控制的 debug log。
     // Issue #826 评论 36: 旧 transaction/ / cursor_motion.rs / rebase.rs /
     // transaction_builder.rs 已删除，改为只扫描仍然存在的动画文件，跳过已删文件。
-    // Issue #826 评论 36: 旧动画模块（coordinator.rs / cursor_motion.rs / rebase.rs /
-    // transaction_builder.rs 等）已删除。新增 visual_canvas/ 和重构后的生产文件，
-    // 一并纳入扫描范围，确保新架构也不刷 eprintln。
+    // Issue #826 评论 36 / Issue #904: 旧动画模块（coordinator.rs / cursor_motion.rs /
+    // rebase.rs / transaction_builder.rs 等）与 #901 visual_canvas 状态机均已删除。
+    // 扫描仍存在的动画相关生产文件（含 #904 的 text_motion.rs），确保不刷 eprintln。
     let animation_files = [
         // 旧动画模块（已被 #826 删除，保留用于防止复活）
         "src/sujian_editor_item/animation/coordinator.rs",
@@ -255,10 +257,7 @@ fn issue690_no_unconditional_stderr_animation_spam() {
         "src/sujian_editor_item/transaction.rs",
         "src/sujian_editor_item/qquickitem_impl.rs",
         "src/sujian_editor_item/pipeline.rs",
-        "src/sujian_editor_item/visual_canvas/mod.rs",
-        "src/sujian_editor_item/visual_canvas/controller.rs",
-        "src/sujian_editor_item/visual_canvas/scene_transition.rs",
-        "src/sujian_editor_item/visual_canvas/presented_scene.rs",
+        "src/sujian_editor_item/text_motion.rs",
     ];
     let mut checked = 0usize;
     for file in &animation_files {

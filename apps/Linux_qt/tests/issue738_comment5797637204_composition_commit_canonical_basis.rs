@@ -75,16 +75,16 @@ fn fix1a_record_composition_commit_has_layout_revision_next() {
     );
 }
 
-/// 守卫1b: `record_composition_commit_transaction` 内通过 visual_canvas 处理编辑结果。
+/// 守卫1b: `record_composition_commit_transaction` 内通过唯一的 text_motion 计划处理编辑结果。
 /// #826/#901 重写后旧 reconcile_active_transactions_with_canonical 已删除，
-/// 编辑结果收口到 visual_canvas 由 RevisionChain 精确消费。
+/// 编辑结果收口到唯一的 text_motion 计划，不再有整章 RevisionChain。
 #[test]
 fn fix1b_record_composition_commit_has_reconcile() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("apply_edit_result"),
-        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 处理编辑结果。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 处理编辑结果。"
     );
 }
 
@@ -215,13 +215,13 @@ fn fix3a_pipeline_has_set_layout_revision_setter() {
 /// 守卫4a: `record_composition_commit_transaction` 中编辑结果处理（apply_edit_result）
 /// 在 `set_layout_revision` 之前（先处理编辑结果再提升 canonical revision）。
 /// #826/#901 重写后旧 reconcile/handle_composition_commit_or_cancel 已删除，
-/// 由 visual_canvas.apply_edit_result 统一处理。
+/// 由 text_motion.begin_or_retarget 统一处理。
 #[test]
 fn fix4a_reconcile_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
-    let apply_marker = "apply_edit_result";
+    let apply_marker = "TextMotion::begin_or_retarget";
     let set_rev_marker = ".set_layout_revision(";
 
     assert!(
@@ -243,8 +243,9 @@ fn fix4a_reconcile_before_handle_composition_commit() {
     assert!(
         apply_pos < set_rev_pos,
         "修复后 apply_edit_result 调用 ({}) 必须在 .set_layout_revision( 调用 ({}) 之前，\
-         保证编辑结果先被 visual_canvas 消费，再提升 canonical revision。",
-        apply_pos, set_rev_pos
+         保证编辑结果先被 text_motion 消费，再提升 canonical revision。",
+        apply_pos,
+        set_rev_pos
     );
 }
 
@@ -257,7 +258,7 @@ fn fix4b_set_layout_revision_after_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
 
-    let apply_marker = "apply_edit_result";
+    let apply_marker = "TextMotion::begin_or_retarget";
     let set_rev_marker = ".set_layout_revision(";
     let set_canonical_marker = ".set_current_canonical_snapshot(";
 
@@ -275,7 +276,8 @@ fn fix4b_set_layout_revision_after_handle_composition_commit() {
         apply_pos < set_rev_pos,
         "修复后 .set_layout_revision( 调用 ({}) 必须在 apply_edit_result 调用 ({}) 之后，\
          先处理编辑结果再提升 canonical revision。",
-        set_rev_pos, apply_pos
+        set_rev_pos,
+        apply_pos
     );
     assert!(
         apply_pos < set_canonical_pos,
@@ -285,16 +287,16 @@ fn fix4b_set_layout_revision_after_handle_composition_commit() {
     );
 }
 
-/// 守卫4c: `record_composition_commit_transaction` 通过 visual_canvas 统一处理编辑结果。
+/// 守卫4c: `record_composition_commit_transaction` 通过唯一的 text_motion 计划统一处理编辑结果。
 /// #826/#901 重写后旧 edit_now / reconcile 时间采样已删除，
-/// 编辑结果由 visual_canvas.apply_edit_result 统一消费，不再需要手动时间采样。
+/// 编辑结果由 text_motion.begin_or_retarget 统一消费，不再需要手动时间采样。
 #[test]
 fn fix4c_unified_edit_now_in_record_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("apply_edit_result"),
-        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 统一处理编辑结果。"
     );
     assert!(
         window.contains("LayoutRevision::next()"),

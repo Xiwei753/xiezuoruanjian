@@ -21,10 +21,10 @@ use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
     ShapingIdentity, SourceRect,
 };
+use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::layout::{
     cursor_rect_for_line, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine,
 };
-use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
@@ -109,7 +109,9 @@ impl LineSnapshotBuilder {
             let para_byte_start = canonical_para
                 .map(|_p| {
                     let slot = line.logical_slot as usize;
-                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                    doc_snapshot
+                        .paragraph_offset_index
+                        .paragraph_byte_start(slot)
                 })
                 .unwrap_or(0);
 
@@ -117,7 +119,14 @@ impl LineSnapshotBuilder {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
+                    .map(|cl| {
+                        Self::build_clusters_from_canonical(
+                            cl,
+                            &line,
+                            &canonical.index_map,
+                            para_byte_start,
+                        )
+                    })
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -246,7 +255,10 @@ impl LineSnapshotBuilder {
                 let last_excl = (last_para_idx + 1).min(doc_snapshot.paragraphs.len());
                 doc_snapshot.paragraph_visual_line_range(first_para_idx, last_excl)
             } else {
-                (doc_snapshot.visual_lines.len(), doc_snapshot.visual_lines.len())
+                (
+                    doc_snapshot.visual_lines.len(),
+                    doc_snapshot.visual_lines.len(),
+                )
             };
 
         // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
@@ -322,7 +334,9 @@ impl LineSnapshotBuilder {
             let para_byte_start = canonical_para
                 .map(|_p| {
                     let slot = line.logical_slot as usize;
-                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                    doc_snapshot
+                        .paragraph_offset_index
+                        .paragraph_byte_start(slot)
                 })
                 .unwrap_or(0);
 
@@ -330,7 +344,14 @@ impl LineSnapshotBuilder {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
+                    .map(|cl| {
+                        Self::build_clusters_from_canonical(
+                            cl,
+                            &line,
+                            &canonical.index_map,
+                            para_byte_start,
+                        )
+                    })
                     .unwrap_or_default();
                 (img, cls)
             } else {

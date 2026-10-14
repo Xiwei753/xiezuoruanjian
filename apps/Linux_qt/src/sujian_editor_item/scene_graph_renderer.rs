@@ -1,114 +1,22 @@
 use super::qt_text_node;
-use super::render_plan::{RenderPlan, TextAnimationGlyphInfo};
+use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
-use super::visual_canvas::{CanvasDrawPlan, DrawCommandKind};
 use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex, ParagraphId};
 use crate::editor::scene_graph;
-use writer_core::editor::EditorRevision;
 
-/// Issue #901 第十轮问题1：本帧真正完成绘制的动画 fragment。
+/// Issue #904：`render_frame` 的渲染结果。
 ///
-/// `render_frame` 在 `render_text_animation_layer` 实际 push 到 glyph_data
-/// 后才产生此记录。调用方据此构造 `PresentedScene`，不再无条件把原始
-/// `canvas_plan.commands` 中每条 TextFragment 作为"已经显示"记录。
-///
-/// 资源缺失或 handoff 时渲染器传 `glyphs=&[]`，此列表为空——只有静态 owner
-/// 画的片段进入 `drawn_static_fragments`。
-#[derive(Clone, Debug)]
-pub(crate) struct DrawnAnimationFragment {
-    /// 源纹理的完整行快照 id。
-    pub snapshot_id: super::layout_snapshot::LineSnapshotId,
-    /// 实际绘制的目标矩形（已与 clip_rect 求交，文档坐标）。
-    pub target_rect: super::layout_snapshot::SourceRect,
-    /// 实际绘制的 source UV（已按裁剪比例调整，纹理局部坐标）。
-    pub source_uv: super::layout_snapshot::SourceRect,
-    /// 该 fragment 的透明度。
-    pub opacity: f64,
-    /// 该 fragment 对应的 Core 逻辑 UTF-8 byte range。
-    pub byte_range: (usize, usize),
-    /// 该 fragment 对应的 Core source revision。
-    pub source_revision: EditorRevision,
-    /// Issue #901 第十轮问题2：字形逻辑身份。
-    pub glyph_id: u64,
-    /// Issue #901 第十轮问题2：同一字形内的碎片序号。
-    pub fragment_index: u32,
-    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
-    ///
-    /// 从 `TextAnimationGlyphInfo.original_glyph_rect` 传递，最终填入
-    /// `PixelContribution.original_glyph_rect`，供下一帧 FLIP 变换使用。
-    pub original_glyph_rect: super::layout_snapshot::SourceRect,
-}
-
-/// Issue #901 第十轮问题1：静态 owner 本帧实际可见的片段。
-///
-/// 静态 QSGTextNode 在 `clip_rects` 挖空后实际绘制的 cluster 片段。
-/// 调用方据此构造 `RenderPlan.static_text_contributions`，不再用前置的
-/// `animation_resources_ready_for_static` 平行推测。
-///
-/// `animation_resources_ready=false` 时（渲染器画完整 canonical 静态层、
-/// 清空动画层），此列表包含所有视口内 cluster 的完整可见片段；
-/// `animation_resources_ready=true` 时，每个 cluster 已减去 effective_holes，
-/// 可能产生多个碎片（同一 cluster 共享 glyph_id，不同 fragment_index）。
-#[derive(Clone, Debug)]
-pub(crate) struct DrawnStaticFragment {
-    /// 源纹理的完整行快照 id。
-    pub snapshot_id: super::layout_snapshot::LineSnapshotId,
-    /// 该片段对应的 Core 逻辑 UTF-8 byte range（cluster 级）。
-    pub byte_range: (usize, usize),
-    /// 文档坐标系中的目标矩形（不含滚动偏移）。
-    pub document_rect: super::layout_snapshot::SourceRect,
-    /// 实际可见的裁剪区域（文档坐标，已与视口求交、已减去 effective_holes）。
-    pub visible_clip: super::layout_snapshot::SourceRect,
-    /// 源纹理中的 UV 区域（行纹理局部坐标，已乘 DPR）。
-    pub source_uv: super::layout_snapshot::SourceRect,
-    /// 该片段对应的 Core source revision（绑定 target revision）。
-    pub source_revision: EditorRevision,
-    /// Issue #901 第十轮问题2：字形逻辑身份。
-    pub glyph_id: u64,
-    /// Issue #901 第十轮问题2：同一字形内的碎片序号。
-    pub fragment_index: u32,
-    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
-    ///
-    /// 等于 `StaticTextContributionInfo.document_rect`（cluster 的完整字形几何，
-    /// 未被视口/holes 裁剪）。`build_presented_scene_from_frame` 据此填入
-    /// `PixelContribution.original_glyph_rect`。
-    pub original_glyph_rect: super::layout_snapshot::SourceRect,
-}
-
-/// Issue #901 第九轮阻塞2：`render_frame` 的渲染结果。
-///
-/// 渲染器返回本帧实际采用的静态层裁剪矩形（`effective_clip_rects`），
-/// 供 `qquickitem_impl.rs` 据此计算真实静态贡献。当
-/// `animation_resources_ready=false` 时，渲染器选择画完整 canonical 静态层、
-/// 清空动画层，`effective_clip_rects` 为空——所有 cluster 都由静态层绘制。
-/// `qquickitem_impl.rs` 用 `effective_clip_rects` 的矩形并集求补集来决定
-/// 每个 cluster 的真实可见静态片段，不再用"单一矩形是否完全包含"代替。
-///
-/// Issue #901 第十轮问题1：新增 `drawn_animation_fragments` 和
-/// `drawn_static_fragments`，让调用方据此构造 `PresentedScene`，彻底删掉
-/// 前置的 `animation_resources_ready_for_static` 平行推测逻辑。
+/// 静态 QSGTextNode 负责正文的常驻绘制，本地 `static_holes`（动画覆盖层的孔洞）
+/// 决定挖空哪些局部区域；动画覆盖层与光标/选区在本帧原子叠加。
+/// 不记录整屏像素贡献——没有 PresentedScene 式第二套状态。
 #[derive(Clone, Debug)]
 pub(crate) struct FrameRenderOutcome {
     /// 静态层 rebuild 是否成功。
     pub static_rebuild_ok: bool,
-    /// 本帧静态层实际采用的裁剪矩形（经过 `animation_resources_ready` 过滤）。
-    /// `animation_resources_ready=false` 时为空（静态层画完整 canonical）。
-    pub effective_clip_rects: Vec<qt_text_node::AnimationClipRect>,
     /// Issue #901 第九轮阻塞4: 本帧 rebuild 成功后实际加载的段落索引范围。
     /// 调用方将其保存为 per-item state，下一帧用此范围判断视口是否跨出
     /// 已加载集合。`None` 表示本帧未 rebuild 或 rebuild 失败，保留旧范围。
     pub new_loaded_para_range: Option<(usize, usize)>,
-    /// Issue #901 第十轮问题1：本帧真正完成绘制的动画 fragment 列表。
-    ///
-    /// 只包含 `render_text_animation_layer` 实际 push 到 glyph_data 的 fragment
-    ///（纹理已就绪、裁剪后非零面积）。资源缺失或 handoff 时为空。
-    pub drawn_animation_fragments: Vec<DrawnAnimationFragment>,
-    /// Issue #901 第十轮问题1：静态 owner 本帧实际可见的片段列表。
-    ///
-    /// 每个 cluster 已减去 `effective_clip_rects` 的矩形并集，可能产生多个
-    /// 碎片（同一 cluster 共享 glyph_id，不同 fragment_index）。
-    /// `static_rebuild_ok=false` 时为空（调用方应保留旧 PresentedScene）。
-    pub drawn_static_fragments: Vec<DrawnStaticFragment>,
 }
 
 impl FrameRenderOutcome {
@@ -116,10 +24,7 @@ impl FrameRenderOutcome {
     fn failed() -> Self {
         Self {
             static_rebuild_ok: false,
-            effective_clip_rects: Vec::new(),
             new_loaded_para_range: None,
-            drawn_animation_fragments: Vec::new(),
-            drawn_static_fragments: Vec::new(),
         }
     }
 }
@@ -135,123 +40,10 @@ impl FrameRenderOutcome {
 /// （`new_start < loaded_start || new_end > loaded_end`），跨出则触发 rebuild，
 /// 否则只更新 `QSGTransformNode` 位移矩阵。
 
-/// Issue #901 阻塞 1：从 `CanvasDrawPlan` 的 `TextFragment` 命令转换为
-/// `TextAnimationGlyphInfo` 列表，供动画层消费。
-///
-/// Issue #901 问题4：不再按 `opacity < 1.0` 过滤。存活字 FLIP 的 opacity=1
-/// 也要被绘制。按 `DrawCommandKind::TextFragment` 和真正 owner/几何变化来绘制，
-/// 不根据 alpha<1 决定"是否属于动画"。
-///
-/// Issue #901 问题2：`DrawCommand.target_rect` 和 `clip_rect` 始终使用文档坐标。
-/// C++ 动画层（`AnimationLayerNode`）统一施加一次 `translate(0, -scroll_y)`
-/// 变换（通过 `update_animation_layer` 的 `scroll_y` 参数）。
-///
-/// Issue #901 问题3：动画层的动态 clip 按 `progress` 更新（通过
-/// `DrawCommand.target_rect` 和 `DrawCommand.clip_rect`），与静态层排除区
-/// （`static_exclusion_rects`）是不同的两个概念。
-pub(crate) fn canvas_draw_plan_to_glyph_infos(
-    canvas_plan: &CanvasDrawPlan,
-    _texture_cache: &TextureCache,
-) -> Vec<TextAnimationGlyphInfo> {
-    use super::layout_snapshot::{ShapingIdentity, SourceRect};
-    use super::edit_motion::DeleteEdge;
-
-    canvas_plan
-        .commands
-        .iter()
-        .filter(|cmd| cmd.kind == DrawCommandKind::TextFragment && cmd.opacity > 0.0)
-        .map(|cmd| {
-            // Issue #901 问题2：直接使用 DrawCommand 携带的完整 LineSnapshotId，
-            // 不再从 u64 hash 反解。动画层通过完整 LineSnapshotId 查询 texture_cache。
-            let snapshot_id = cmd.snapshot_id;
-            TextAnimationGlyphInfo {
-                x: cmd.target_rect.x,
-                y: cmd.target_rect.y,
-                w: cmd.target_rect.w,
-                h: cmd.target_rect.h,
-                opacity: cmd.opacity,
-                snapshot_id,
-                source_rect: SourceRect {
-                    x: cmd.source_uv.x,
-                    y: cmd.source_uv.y,
-                    w: cmd.source_uv.w,
-                    h: cmd.source_uv.h,
-                },
-                // Issue #901 问题4：把 DrawCommand.clip_rect 传给动画 glyph，
-                // 让 render_text_animation_layer 对 target_rect 和 source_uv
-                // 做预裁剪，使吞字/吐字的 reveal/conceal 裁剪真正作用到 Qt 图形层。
-                clip_rect: SourceRect {
-                    x: cmd.clip_rect.x,
-                    y: cmd.clip_rect.y,
-                    w: cmd.clip_rect.w,
-                    h: cmd.clip_rect.h,
-                },
-                // Issue #901 第十一轮问题1：从 DrawCommand 原样复制 byte_range，
-                // 不再硬编码 (0, 0)。render_text_animation_layer 据此填写
-                // DrawnAnimationFragment.byte_range，build_presented_scene_from_frame
-                // 据此填写 PixelContribution.byte_range。
-                logical_range: cmd.byte_range,
-                canonical_range: Some(cmd.byte_range),
-                delete_edge: None,
-                shaping_identity: ShapingIdentity {
-                    text_content_hash: 0,
-                    raw_font_fingerprint: String::new(),
-                    glyph_indexes_hash: 0,
-                    cluster_glyph_count: 0,
-                    direction_rtl: false,
-                    format_fingerprint: 0,
-                },
-                // Issue #901 第十一轮问题1：从 DrawCommand 原样复制 source_revision，
-                // 不再用 EditorRevision::initial() 占位。
-                source_revision: cmd.source_revision,
-                // Issue #901 第十一轮问题1：从 (snapshot_id, byte_range) 派生 glyph_id。
-                glyph_id: super::visual_canvas::PixelContribution::derive_glyph_id(
-                    &cmd.snapshot_id,
-                    cmd.byte_range,
-                ),
-                // fragment_index 暂用 0（DrawCommand 不携带 fragment 级序号）。
-                fragment_index: 0,
-                // Issue #901 第十一轮问题4：从 DrawCommand 传递完整字形矩形。
-                original_glyph_rect: SourceRect {
-                    x: cmd.original_glyph_rect.x,
-                    y: cmd.original_glyph_rect.y,
-                    w: cmd.original_glyph_rect.w,
-                    h: cmd.original_glyph_rect.h,
-                },
-            }
-        })
-        .collect()
-}
-
-/// Issue #901 问题3：从 `CanvasDrawPlan` 的 `static_exclusion_rects` 推导
-/// 静态层裁剪矩形。
-///
-/// 静态层的 **target 字形排除区**覆盖本次由动画画布接管的**完整目标范围**，
-/// 整个过渡期间与 `progress` 无关。只在接管集合改变时重建静态 QSGTextNode，
-/// 不在每帧改变挖空矩形。
-///
-/// 动画层的动态 clip/UV 才按 `progress` 更新（在 `canvas_draw_plan_to_glyph_infos`
-/// 中用 `DrawCommand.target_rect` 和 `DrawCommand.clip_rect`）。
-///
-/// Issue #901 问题2：`static_exclusion_rects` 使用文档坐标，与 `AnimationClipRect`
-/// 的文档坐标契约一致。C++ 静态层（`QSGTransformNode`）统一施加一次
-/// `translate(0, -scroll_y)` 变换。
-pub(crate) fn canvas_draw_plan_to_clip_rects(
-    canvas_plan: &CanvasDrawPlan,
-) -> Vec<qt_text_node::AnimationClipRect> {
-    canvas_plan
-        .static_exclusion_rects
-        .iter()
-        .map(|excl| qt_text_node::AnimationClipRect {
-            x: excl.rect.x,
-            y: excl.rect.y,
-            w: excl.rect.w,
-            h: excl.rect.h,
-            // Issue #901 问题2：直接使用完整 LineSnapshotId。
-            snapshot_id: excl.snapshot_id,
-        })
-        .collect()
-}
+/// Issue #904：动画覆盖层不再从整章 `CanvasDrawPlan` 推导，而是由
+/// `text_motion::TextMotion::sample()` 直接产出局部 `TextAnimationGlyphInfo`。
+/// 静态排除孔洞同样由 `TextMotionFrame.static_holes` 提供，不再有整屏
+/// pixel-contribution 归属表。
 
 /// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
 ///
@@ -330,8 +122,7 @@ fn paragraph_top_document_y(
     // 需在物化行上做 partition_point，难以简单改为按需物化。正常路径有 height_index 不会走到这里。
     let resolved_lines = snapshot.resolved_lines();
     let lines_slice = resolved_lines.as_ref();
-    let first_idx = lines_slice
-        .partition_point(|l| l.para_start < line.para_start);
+    let first_idx = lines_slice.partition_point(|l| l.para_start < line.para_start);
     if first_idx < lines_slice.len() {
         lines_slice[first_idx].y
     } else {
@@ -403,17 +194,7 @@ pub(crate) fn render_frame(
     //
     // 先检查整份 ownership plan 的动画资源。缺一张就按 canonical 静态正文提交，
     // 不能只过滤静态 clip、再让动画层单独跳过缺纹理的 glyph。
-    let animation_resources_ready = plan.ownership.has_animation_resources(texture_cache);
-
-    // Issue #901 第九轮阻塞2：计算本帧静态层实际采用的裁剪矩形。
-    // 当 animation_resources_ready=false 时，渲染器选择画完整 canonical 静态层、
-    // 清空动画层，effective_clip_rects 为空——所有 cluster 都由静态层绘制。
-    // qquickitem_impl.rs 据此用矩形差集计算每个 cluster 的真实可见静态片段。
-    let effective_clip_rects: Vec<qt_text_node::AnimationClipRect> = if animation_resources_ready {
-        plan.ownership.clips_for_static_rebuild().to_vec()
-    } else {
-        Vec::new()
-    };
+    let animation_resources_ready = plan.local_text.has_animation_resources(texture_cache);
 
     // Issue #901 第八轮问题3：计算新视口对应的段落范围，与已加载范围比较。
     // 跨出已加载集合时触发 rebuild（insert 新段落节点 + remove 离开段落节点），
@@ -430,10 +211,8 @@ pub(crate) fn render_frame(
         None => false,
     };
 
-    let should_rebuild_static = static_text.needs_relayout
-        || plan.ownership.handoff_pending
-        || !animation_resources_ready
-        || viewport_exceeds_loaded;
+    let should_rebuild_static =
+        static_text.needs_relayout || !animation_resources_ready || viewport_exceeds_loaded;
 
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
@@ -490,11 +269,9 @@ pub(crate) fn render_frame(
                 // 完整段落的 QTextLayout，布局内每条 QTextLine 已相对段落第一行定位；
                 // 若视口从段落中间开始，用可见首行 y 会使前面被裁掉行的本地偏移
                 // 重复累加，导致文字与命中/光标错位。同段落只计算一次并缓存。
-                let para_y = *para_y_map
-                    .entry(line.para_start)
-                    .or_insert_with(|| {
-                        paragraph_top_document_y(line, snapshot, static_text.height_index)
-                    });
+                let para_y = *para_y_map.entry(line.para_start).or_insert_with(|| {
+                    paragraph_top_document_y(line, snapshot, static_text.height_index)
+                });
 
                 if last_para_start != Some(line.para_start) {
                     // 新段落开始
@@ -502,11 +279,12 @@ pub(crate) fn render_frame(
                     // Issue #901 第二十轮阻塞3: 用 line.paragraph_id 直接获取稳定身份，
                     // 不再通过 cache_slot 查 paragraph_ids 表。
                     // 无 paragraph_id（INVALID）时用 0，不影响渲染正确性。
-                    let paragraph_id = if line.paragraph_id != crate::editor::layout::ParagraphId::INVALID {
-                        line.paragraph_id.as_u64()
-                    } else {
-                        0
-                    };
+                    let paragraph_id =
+                        if line.paragraph_id != crate::editor::layout::ParagraphId::INVALID {
+                            line.paragraph_id.as_u64()
+                        } else {
+                            0
+                        };
                     current_paragraph_id = paragraph_id;
                     // Issue #901 第十四轮问题2: 计算 per-paragraph content_revision。
                     // 用 paragraph_text 的哈希值作为内容版本签名，
@@ -583,7 +361,7 @@ pub(crate) fn render_frame(
             // 恢复 canonical。两边是一条原子规则。
             // Issue #853: 只让资源已准备好的动画 owner 接管 target cluster。
             let available_clip_rects = if animation_resources_ready {
-                plan.ownership.clips_for_static_rebuild().to_vec()
+                plan.local_text.static_holes.clone()
             } else {
                 Vec::new()
             };
@@ -606,9 +384,8 @@ pub(crate) fn render_frame(
             //   由 C++ 侧 per-paragraph content_revision 独立判断哪些段变化
             // - viewport_exceeds_loaded（纯滚动跨出）: 段落内容不变 → 只 insert/remove
             //
-            // Issue #901 第十一轮问题5：handoff_pending 只影响 clip 集合，不影响段落
-            // 内容/布局。不再因 handoff_pending 就 force_full_update=true 无差别重建所有
-            // 已有段落节点。clip 子节点的更新由 update_text_nodes_incremental 内部根据
+            // Issue #904：clip 集合只影响静态层的挖孔，不影响段内容/布局。
+            // clip 子节点的更新由 update_text_nodes_incremental 内部根据
             // animation_clip_rects 参数独立完成，不依赖 force_full_update。
             //
             // Issue #901 第十三轮问题3+4：force_full_update=false 时不再无差别 continue，
@@ -619,8 +396,7 @@ pub(crate) fn render_frame(
             // - clip signature 变化 → 重建子节点（裁剪变了）
             // - 都不变 → 真正跳过
             // 这样即使 force_full_update=false，内容/裁剪变了的段落也会被重建。
-            let force_full_update = static_text.force_full_relayout
-                || !animation_resources_ready;
+            let force_full_update = static_text.force_full_relayout || !animation_resources_ready;
 
             static_rebuild_ok = qt_text_node::update_text_nodes_incremental(
                 root_raw,
@@ -662,7 +438,11 @@ pub(crate) fn render_frame(
             // Issue #901 第九轮阻塞4: rebuild 成功后记录本帧实际加载的段落范围，
             // 通过 FrameRenderOutcome 返回给调用方保存为 per-item state。
             // rebuild 失败时不更新（返回 None，调用方保留旧范围，下一帧重试）。
-            rebuild_new_range = if static_rebuild_ok { new_para_range } else { None };
+            rebuild_new_range = if static_rebuild_ok {
+                new_para_range
+            } else {
+                None
+            };
         } else {
             // 没有与本帧一致的 prepared layout 时不能提交新的 owner 状态。
             static_rebuild_ok = false;
@@ -673,8 +453,8 @@ pub(crate) fn render_frame(
         // Issue #714 评论 5740007764: 动画期间静态层保持上一帧（事务开始时重建的）
         // 裁剪后节点不动，避免每帧销毁/重建静态 QSGTextNode 产生闪烁。
         // Issue #901 问题5缺陷A: 此 else 分支是"本帧正文未变跳过重建"的优化点。
-        // should_rebuild_static=false 意味着 needs_relayout=false 且无 handoff_pending
-        // 且动画资源就绪且视口未跨出已加载段落集合，即本帧只有滚动位移或动画
+        // should_rebuild_static=false 意味着 needs_relayout=false 且动画资源就绪
+        // 且视口未跨出已加载段落集合，即本帧只有滚动位移或动画
         // progress 变化，正文内容未变且新视口仍在上次 rebuild 加载的段落范围内。
         // 此时跳过 rebuild_text_node_from_paragraphs 全量重建，只平移 transform，
         // 成本 O(1) 而非 O(视口内段落数)。
@@ -696,26 +476,23 @@ pub(crate) fn render_frame(
     // 正常终点、取消和文档切换都走同一原子交接：只有静态层 rebuild 成功后，
     // 才在本次 update_paint_node 中更新/清空动画层。失败时保留旧 static + animation。
     //
-    // Issue #901 第八轮问题2（渲染器部分）：渲染接口返回本帧实际采用的 owner/glyph。
-    // 当 animation_resources_ready=false 或 handoff_pending=true 时，should_rebuild_static
-    // 为 true，静态层走 rebuild 画完整 canonical 正文（available_clip_rects 为空，
-    // 不挖空任何区域）；动画层 glyphs=&[]（下方判断）被清空。即资源缺失的片段由
-    // 静态 owner 画，动画层不画任何 glyph。PresentedScene 侧由 Task 3 在
-    // qquickitem_impl.rs::build_presented_scene_from_frame 修复为排除动画接管区域、
-    // 验证纹理存在、绑定 target revision，与本处渲染器侧的"资源缺失→静态 owner
-    // 画、动画层清空"决策一致。两层通过 animation_resources_ready 和 handoff_pending
-    // 同一组标志做对称决策，不出现"静态挖了空但动画没画"或"动画画了但静态没挖空"。
+    // Issue #904：渲染接口按本帧的局部动画计划返回实际绘制的 glyph/孔洞。
+    // 当 animation_resources_ready=false 时，should_rebuild_static 为 true，静态层走
+    // rebuild 画完整 canonical 正文（available_clip_rects 为空，不挖空任何区域）；
+    // 动画层 glyphs=&[]（下方判断）被清空。即资源缺失的片段由静态层画，动画层不画。
+    // 两层用 animation_resources_ready 同一组标志做对称决策，不出现"静态挖了空但
+    // 动画没画"或"动画画了但静态没挖空"。
     //
-    // Issue #901 第十轮问题1：render_text_animation_layer 返回本帧真正绘制的
-    // fragment 列表，供 FrameRenderOutcome.drawn_animation_fragments 使用。
-    let mut drawn_animation_fragments: Vec<DrawnAnimationFragment> = Vec::new();
+    // Issue #904：静态层 rebuild 成功后，用唯一的局部动画计划画本帧覆盖层。
+    // 资源未就绪时覆盖层为空——该片段由静态层完整绘制，两层用
+    // animation_resources_ready 同一标志做对称决策。
     if static_rebuild_ok {
-        let glyphs = if animation_resources_ready && !plan.ownership.handoff_pending {
-            plan.ownership.animated_glyphs.as_slice()
+        let glyphs = if animation_resources_ready {
+            plan.local_text.overlays.as_slice()
         } else {
             &[]
         };
-        drawn_animation_fragments = render_text_animation_layer(
+        render_text_animation_layer(
             root_raw,
             item_ptr,
             glyphs,
@@ -739,249 +516,10 @@ pub(crate) fn render_frame(
     // cursor layer 的 QSGTransformNode 统一做 translate(0, -scroll_y)。
     render_cursor_layer(root_raw, item_ptr, plan, static_text.scroll_y);
 
-    // Issue #901 第十轮问题1+问题3：计算静态 owner 本帧实际可见的片段。
-    //
-    // 静态 QSGTextNode 在 `effective_clip_rects` 挖空后实际绘制的 cluster 片段。
-    // 这里在渲染器内部完成计算，让调用方不再用前置的
-    // `animation_resources_ready_for_static` 平行推测。
-    //
-    // 关键修复（问题3）：无论 cluster 是否有纹理，都统一减去 effective_holes。
-    // 旧实现无纹理时直接登记整个 visible_rect 不减 holes，导致缺纹理静态字
-    // 在动画排除区内仍被记录为完整静态字。现统一用 rect_subtract_holes
-    // 计算真实可见静态片段，无纹理时也减 holes。
-    //
-    // static_rebuild_ok=false 时不计算（调用方应保留旧 PresentedScene）。
-    let drawn_static_fragments: Vec<DrawnStaticFragment> = if static_rebuild_ok {
-        compute_drawn_static_fragments(
-            static_text,
-            &effective_clip_rects,
-            plan,
-        )
-    } else {
-        Vec::new()
-    };
-
     FrameRenderOutcome {
         static_rebuild_ok,
-        effective_clip_rects,
         new_loaded_para_range: rebuild_new_range,
-        drawn_animation_fragments,
-        drawn_static_fragments,
     }
-}
-
-/// Issue #901 第十轮问题1+问题3：计算静态 owner 本帧实际可见的片段。
-///
-/// 从 `layout_snapshot` 的 cluster 提取，每个 cluster 用 `rect_subtract_holes`
-/// 减去 `effective_clip_rects` 的矩形并集，得到静态层实际绘制的部分。
-/// 无论 cluster 是否有纹理，都统一减去 effective_holes（问题3 修复）。
-///
-/// 此函数是 `qquickitem_impl.rs` 中 `static_text_contributions` 构造逻辑的
-/// 渲染器侧镜像，让调用方可以直接用 `drawn_static_fragments` 构造
-/// `RenderPlan.static_text_contributions`，不再自行推测。
-fn compute_drawn_static_fragments(
-    static_text: &StaticTextParams<'_>,
-    effective_clip_rects: &[qt_text_node::AnimationClipRect],
-    plan: &RenderPlan,
-) -> Vec<DrawnStaticFragment> {
-    use super::layout_snapshot::SourceRect;
-    use super::visual_canvas::PixelContribution;
-
-    let snapshot = match static_text.layout_snapshot {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-
-    // Issue #901 第十轮问题1：source_revision 用 RenderPlan 携带的 target
-    // revision。RenderPlan.ownership.target_layout_revision 是 Option<LayoutRevision>，
-    // 但我们需要 EditorRevision。此处用 EditorRevision::initial() 作为占位，
-    // 调用方在构造 PresentedScene 时会用 canvas_plan.target_revision 覆盖。
-    let static_source_revision = EditorRevision::initial();
-
-    // effective_holes 转换为 (x, y, w, h) 元组供矩形差集使用。
-    let effective_holes: Vec<(f64, f64, f64, f64)> = effective_clip_rects
-        .iter()
-        .map(|c| (c.x, c.y, c.w, c.h))
-        .collect();
-
-    let viewport_top = static_text.scroll_y;
-    let viewport_bottom = static_text.scroll_y + static_text.viewport_height;
-    // Issue #901 第十二轮问题1补充: viewport_top/viewport_bottom 保留供
-    // 诊断和断言使用，视口裁剪已由上游 qquickitem_impl 写入 info.visible_clip，
-    // 本函数不再重复做视口求交，直接消费 visible_clip。
-    let _ = (viewport_top, viewport_bottom);
-
-    let mut fragments = Vec::new();
-
-    // Issue #901 第十轮问题3：用 prepared_frame 的 line_snapshots 而非
-    // layout_snapshot.lines。layout_snapshot.lines 是 VisualLine（排版行），
-    // 没有 cluster 信息。cluster 信息在 EditorLayoutSnapshot.line_snapshots
-    // 中，由 qquickitem_impl 的 canonical_visual_snapshot 提供。
-    // 但 render_frame 的 StaticTextParams 只有 LayoutSnapshot，没有
-    // EditorLayoutSnapshot。因此此处用 plan.static_text_contributions
-    //（由调用方从 canonical_visual_snapshot 构造）作为输入，减去 effective_holes
-    // 后输出 DrawnStaticFragment。
-    //
-    // 这样设计的原因：
-    // 1. cluster 信息（byte_range, source_rect）只在 EditorLayoutSnapshot 中，
-    //    LayoutSnapshot（VisualLine 列表）没有。
-    // 2. 调用方已经从 canonical_visual_snapshot 构造了 static_text_contributions，
-    //    包含完整的 cluster 信息。
-    // 3. 渲染器只需在此基础上减去 effective_holes，得到真实可见静态片段。
-    //
-    // 问题3 修复：无论有无纹理，都统一减去 effective_holes。
-    // 旧实现（qquickitem_impl.rs:462-556）有纹理时减 holes、无纹理时不减，
-    // 现统一为减 holes。
-    for info in &plan.static_text_contributions {
-        // Issue #901 第十二轮问题1补充:
-        // doc_rect 是裁剪前的完整字形几何（cluster 真实高度），
-        // 用于 UV 比例计算和 original_glyph_rect，避免视口边缘"半字高度"
-        // 冒充完整字形高度导致 FLIP 变换基准错误。
-        // visible_rect 直接采用上游已与视口求交的 info.visible_clip，
-        // 不再在本函数重复做视口裁剪。
-        let doc_rect = (
-            info.document_rect.x,
-            info.document_rect.y,
-            info.document_rect.w,
-            info.document_rect.h,
-        );
-        let visible_rect = (
-            info.visible_clip.x,
-            info.visible_clip.y,
-            info.visible_clip.w,
-            info.visible_clip.h,
-        );
-        if visible_rect.3 <= 0.0 {
-            continue;
-        }
-        // Issue #901 第十轮问题3：统一减去 effective_holes，无论有无纹理。
-        let sub_fragments = rect_subtract_holes(visible_rect, &effective_holes);
-        for (frag_idx, frag) in sub_fragments.iter().enumerate() {
-            let (fx, fy, fw, fh) = *frag;
-            if fw <= 0.0 || fh <= 0.0 {
-                continue;
-            }
-            // 片段的 source_uv：按片段在 cluster 中的比例裁剪 source_rect。
-            let u_scale = if doc_rect.2 > 0.0 {
-                info.source_uv.w / doc_rect.2
-            } else {
-                0.0
-            };
-            let v_scale = if doc_rect.3 > 0.0 {
-                info.source_uv.h / doc_rect.3
-            } else {
-                0.0
-            };
-            let frag_source_uv_x = info.source_uv.x + (fx - doc_rect.0) * u_scale;
-            let frag_source_uv_y = info.source_uv.y + (fy - doc_rect.1) * v_scale;
-            let frag_source_uv_w = fw * u_scale;
-            let frag_source_uv_h = fh * v_scale;
-            let glyph_id = if info.glyph_id != 0 {
-                info.glyph_id
-            } else {
-                PixelContribution::derive_glyph_id(&info.snapshot_id, info.byte_range)
-            };
-            fragments.push(DrawnStaticFragment {
-                snapshot_id: info.snapshot_id,
-                byte_range: info.byte_range,
-                document_rect: SourceRect {
-                    x: fx,
-                    y: fy,
-                    w: fw,
-                    h: fh,
-                },
-                visible_clip: SourceRect {
-                    x: fx,
-                    y: fy,
-                    w: fw,
-                    h: fh,
-                },
-                source_uv: SourceRect {
-                    x: frag_source_uv_x,
-                    y: frag_source_uv_y,
-                    w: frag_source_uv_w,
-                    h: frag_source_uv_h,
-                },
-                source_revision: static_source_revision,
-                glyph_id,
-                fragment_index: frag_idx as u32,
-                // Issue #901 第十一轮问题4：完整 cluster 几何（未裁剪前的值）。
-                // info.document_rect 是 cluster 的真实字形几何，sub_fragments 是
-                // 它被视口/holes 裁剪后的子片段。original_glyph_rect 保存完整值。
-                original_glyph_rect: SourceRect {
-                    x: info.document_rect.x,
-                    y: info.document_rect.y,
-                    w: info.document_rect.w,
-                    h: info.document_rect.h,
-                },
-            });
-        }
-    }
-
-    fragments
-}
-
-/// Issue #901 第十轮问题2：从矩形 `rect` 中挖掉所有 `holes`，返回剩余的轴对齐矩形列表。
-///
-/// 用于计算 cluster 的真实可见静态片段：cluster 的可见区域减去动画层接管的
-/// 区域（`effective_clip_rects` 的并集），得到静态层实际绘制的部分。
-///
-/// 算法：从 `[rect]` 开始，对每个 hole，对结果中的每个矩形执行单矩形差集
-/// （最多产生 4 个子矩形：上、下、左、右），过滤零面积矩形。
-fn rect_subtract_holes(
-    rect: (f64, f64, f64, f64),
-    holes: &[(f64, f64, f64, f64)],
-) -> Vec<(f64, f64, f64, f64)> {
-    let mut fragments = vec![rect];
-    for &hole in holes {
-        let mut next = Vec::new();
-        for &frag in &fragments {
-            next.extend(rect_subtract_one(frag, hole));
-        }
-        fragments = next;
-    }
-    fragments
-}
-
-/// 单矩形差集：从 `r` 中挖掉 `h`，返回剩余的轴对齐矩形列表（最多 4 个）。
-///
-/// 如果 `r` 和 `h` 无交集，返回 `[r]`。否则返回 `r` 中不被 `h` 覆盖的部分
-/// （上、下、左、右条带），过滤零面积矩形。
-fn rect_subtract_one(
-    r: (f64, f64, f64, f64),
-    h: (f64, f64, f64, f64),
-) -> Vec<(f64, f64, f64, f64)> {
-    let (rx, ry, rw, rh) = r;
-    let (hx, hy, hw, hh) = h;
-    // 交集
-    let ix = rx.max(hx);
-    let iy = ry.max(hy);
-    let ix2 = (rx + rw).min(hx + hw);
-    let iy2 = (ry + rh).min(hy + hh);
-    let iw = ix2 - ix;
-    let ih = iy2 - iy;
-    if iw <= 0.0 || ih <= 0.0 {
-        // 无交集，返回原矩形
-        return vec![r];
-    }
-    let mut result = Vec::new();
-    // top 条带
-    if iy > ry {
-        result.push((rx, ry, rw, iy - ry));
-    }
-    // bottom 条带
-    if iy2 < ry + rh {
-        result.push((rx, iy2, rw, ry + rh - iy2));
-    }
-    // left 条带
-    if ix > rx {
-        result.push((rx, iy, ix - rx, ih));
-    }
-    // right 条带
-    if ix2 < rx + rw {
-        result.push((ix2, iy, rx + rw - ix2, ih));
-    }
-    result
 }
 
 fn render_text_animation_layer(
@@ -990,7 +528,7 @@ fn render_text_animation_layer(
     glyphs: &[super::render_plan::TextAnimationGlyphInfo],
     texture_cache: &TextureCache,
     scroll_y: f64,
-) -> Vec<DrawnAnimationFragment> {
+) {
     // Issue #658 评论 5630650436: 空动画帧也进入 update_animation_layer，让 AnimationLayerNode
     // 自己把 node 和 texture 一次清干净。不要在这里提前 return，否则
     // update_animation_layer() 根本不调用，activeSet sweep 根本没运行，
@@ -999,10 +537,8 @@ fn render_text_animation_layer(
     let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
     let mut source_rects: Vec<f64> = Vec::new();
     let mut snapshot_ids: Vec<u64> = Vec::new();
-    // Issue #901 第十轮问题1：收集本帧真正绘制的 fragment。
-    let mut drawn_fragments: Vec<DrawnAnimationFragment> = Vec::new();
 
-    for (glyph_idx, glyph) in glyphs.iter().enumerate() {
+    for glyph in glyphs.iter() {
         // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
         // 文字动画 frame 不进入 glyph_data。缺纹理直接 continue 跳过整个
         // glyph，不再塞 1×1 空图把"DeleteConceal 已生成但纹理没拿到"伪装成
@@ -1066,46 +602,6 @@ fn render_text_animation_layer(
         let cache_key = glyph.snapshot_id.to_cache_key();
         snapshot_ids.push(cache_key);
         glyph_images.push(texture.clone());
-
-        // Issue #901 第十一轮问题1：记录本帧真正绘制的 fragment。
-        // byte_range/source_revision/glyph_id/fragment_index 全部从 glyph 原样传递，
-        // 不再用 EditorRevision::initial() 占位、不重新计算 glyph_id。
-        let byte_range = if glyph.logical_range.1 > glyph.logical_range.0 {
-            glyph.logical_range
-        } else if let Some(cr) = glyph.canonical_range {
-            cr
-        } else {
-            glyph.logical_range
-        };
-        drawn_fragments.push(DrawnAnimationFragment {
-            snapshot_id: glyph.snapshot_id,
-            target_rect: super::layout_snapshot::SourceRect {
-                x: ix,
-                y: iy,
-                w: iw,
-                h: ih,
-            },
-            source_uv: super::layout_snapshot::SourceRect {
-                x: new_sx,
-                y: new_sy,
-                w: new_sw,
-                h: new_sh,
-            },
-            opacity: glyph.opacity,
-            byte_range,
-            // Issue #901 第十一轮问题1：用 glyph.source_revision，不再占位。
-            source_revision: glyph.source_revision,
-            // Issue #901 第十一轮问题1：用 glyph.glyph_id，不再重新计算。
-            glyph_id: glyph.glyph_id,
-            fragment_index: glyph.fragment_index,
-            // Issue #901 第十一轮问题4：传递完整字形矩形。
-            original_glyph_rect: super::layout_snapshot::SourceRect {
-                x: glyph.original_glyph_rect.x,
-                y: glyph.original_glyph_rect.y,
-                w: glyph.original_glyph_rect.w,
-                h: glyph.original_glyph_rect.h,
-            },
-        });
     }
 
     let glyph_count = glyph_data.len() / 5;
@@ -1132,8 +628,6 @@ fn render_text_animation_layer(
     } else {
         scene_graph::clear_animation_layer(root_raw, item_ptr);
     }
-
-    drawn_fragments
 }
 
 fn render_cursor_layer(

@@ -70,8 +70,8 @@ impl CursorAnimationState {
 ///
 /// 供 `CursorController::tick_animation` 推进光标 Tween 使用
 ///（Issue #826 评论 36：生产只留这一个推进入口），
-/// 避免在 `animation_coordinator.rs` 内联 easing 公式（Issue #690 步骤 2 要求
-/// 协调器内不得内联各自的 easing 公式）。CursorOnly 的三次曲线保持独立，
+/// 避免在动画模块内联 easing 公式（Issue #690 步骤 2 要求）。
+/// CursorOnly 的三次曲线保持独立，
 /// 不并入协同曲线（`AnimatedSlice::ease_out_quad`）。
 pub fn ease_out_cubic(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
@@ -132,16 +132,13 @@ impl SujianEditorItem {
         let selection_gesture_active = self.selection_gesture_active;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
-        // Issue #901: 旧 animation_coordinator.detach_caret_driven_transition 已删除。
-        // TODO(issue-901): integrate with visual_canvas to detach caret-driven transitions.
-        // 协同模式下非 TextTransaction 的移动暂时直接清光标动画，下一帧从 canonical 重新开始。
-        if self.current_coordinated_animation_enabled
+        // Issue #904：协同模式下，正文编辑（TextTransaction）的光标推进由同一个
+        // `text_motion` 进度经 `caret_sample` 驱动（见
+        // `qquickitem_impl::build_cursor_render_state_for_frame`），这里不再为它另起
+        // 第二条光标 tween。纯点击 / 键盘导航仍按 smooth cursor 独立 Tween。
+        let coordinated_text_cursor = self.current_coordinated_animation_enabled
             && self.cursor_ctrl.last_move_source
-                != super::cursor_controller::CursorMoveSource::TextTransaction
-        {
-            self.cursor_ctrl.animation = None;
-            self.cursor_ctrl.force_snap_next = true;
-        }
+                == super::cursor_controller::CursorMoveSource::TextTransaction;
 
         // Issue #853：用户编辑只更新 canonical selection；caret 由唯一的
         // cursor controller 立即跟到最新位置。正文过渡不拥有也不 retarget caret。
@@ -152,24 +149,24 @@ impl SujianEditorItem {
             .map(|snapshot| snapshot.revision);
         // Issue #901: 旧 animation_coordinator.build_cursor_plan + CursorMoveInputs 已删除。
         // 直接构造 CursorAnimationPlan，保留 Snap/Tween 决策的核心逻辑。
-        // TODO(issue-901): integrate with visual_canvas CanvasController for coordinated cursor.
         let cursor_animation_enabled = super::animation::cursor_animation_enabled(
             self.current_smooth_cursor_enabled,
             self.current_coordinated_animation_enabled,
         );
-        let should_be_visible =
-            self.current_editor_enabled && !has_selection && !is_preediting;
+        let should_be_visible = self.current_editor_enabled && !has_selection && !is_preediting;
         let hidden_by_selection = has_selection && !should_be_visible;
 
         // Snap/Tween 决策：
         // - force_snap_next → Snap
         // - DragSelection / LayoutChange / Scroll → Snap
         // - PointerClick / KeyboardNavigation → smooth cursor 开启时 Tween，否则 Snap
-        // - TextTransaction → 协同模式 Snap（由 visual_canvas 采样），独立模式按 smooth cursor
+        // - 协同模式下的 TextTransaction → Snap（由 text_motion 的同一进度推进）
+        // - 独立模式下的 TextTransaction → 按 smooth cursor
         let force_snap = self.cursor_ctrl.force_snap_next;
         let movement_source = self.cursor_ctrl.last_move_source;
         let allow_tween = cursor_animation_enabled
             && !force_snap
+            && !coordinated_text_cursor
             && !selection_gesture_active
             && !self.current_is_scrolling
             && matches!(
@@ -192,7 +189,9 @@ impl SujianEditorItem {
             baseline_y: layout_res.baseline_y,
         };
 
-        let transition = if allow_tween && (old_rect.x - new_rect.x).abs() + (old_rect.top - new_rect.top).abs() > 0.01 {
+        let transition = if allow_tween
+            && (old_rect.x - new_rect.x).abs() + (old_rect.top - new_rect.top).abs() > 0.01
+        {
             super::cursor_animation::CursorTransition::Tween {
                 old_rect,
                 new_rect,
@@ -202,12 +201,12 @@ impl SujianEditorItem {
             super::cursor_animation::CursorTransition::Snap
         };
 
-        // Issue #901 阻塞 5：driver_session 和 driver_transition_id 从 visual_canvas
-        // 获取真实的 session 和 transition id，不再固定为 0。
-        // visual_canvas 的 revision_chain 提供 latest_revision 作为 session 标识，
-        // text_revision 作为 transition id。
-        let driver_session = self.pipeline.text_revision();
-        let driver_transition_id = self.pipeline.visual_revision();
+        // Issue #904：driver_session / driver_transition_id 标识这次光标推进来自哪一轮
+        // 正文编辑（唯一的 text_motion），不再从已删除的 visual_canvas revision_chain 取。
+        let (driver_session, driver_transition_id) = match self.pipeline.text_motion() {
+            Some(motion) => (motion.session, motion.target_revision),
+            None => (self.document_session, self.pipeline.text_revision()),
+        };
         let cursor_plan = super::cursor_animation::CursorAnimationPlan {
             should_be_visible,
             transition,

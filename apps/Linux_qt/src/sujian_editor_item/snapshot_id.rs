@@ -30,9 +30,7 @@ impl LineSnapshotId {
 
     /// 是否为无纹理哨兵值。
     pub fn is_none(&self) -> bool {
-        self.layout_revision == 0
-            && self.paragraph_id == 0
-            && self.visual_line_ordinal == 0
+        self.layout_revision == 0 && self.paragraph_id == 0 && self.visual_line_ordinal == 0
     }
 
     /// 修复点 3 (Issue #658 评论 5627327573): 把 LineSnapshotId 映射为稳定的 u64，

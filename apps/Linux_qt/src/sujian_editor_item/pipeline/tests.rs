@@ -104,19 +104,23 @@ fn test_doc_snapshot(
         padding: 0.0,
         width: 800.0,
         dpr: 1.0,
-        paragraphs: std::sync::Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![crate::editor::layout::CanonicalParagraphSnapshot {
-            paragraph_text: text.to_string(),
-            paragraph_document_byte_start: para_start,
-            lines,
-            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
-                text, para_start,
-            ),
-        }])),
+        paragraphs: std::sync::Arc::new(
+            crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![
+                crate::editor::layout::CanonicalParagraphSnapshot {
+                    paragraph_text: text.to_string(),
+                    paragraph_document_byte_start: para_start,
+                    lines,
+                    index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                        text, para_start,
+                    ),
+                },
+            ]),
+        ),
         visual_lines: Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::new()),
-        paragraph_offset_index:
-            std::sync::Arc::new(crate::editor::layout::ParagraphOffsetIndex::new()),
-        height_index:
-            std::sync::Arc::new(crate::editor::layout::ParagraphHeightIndex::new()),
+        paragraph_offset_index: std::sync::Arc::new(
+            crate::editor::layout::ParagraphOffsetIndex::new(),
+        ),
+        height_index: std::sync::Arc::new(crate::editor::layout::ParagraphHeightIndex::new()),
         paragraph_id_to_slot: std::sync::Arc::new(
             crate::editor::layout::chunked_vec::ChunkedSlotMap::new(),
         ),
@@ -158,8 +162,8 @@ fn test_visual_line(
         cache_slot: 0,
         logical_slot: 0,
         paragraph_id: crate::editor::layout::ParagraphId::INVALID,
-                layout_epoch: 0,
-                has_qt_layout: true,
+        layout_epoch: 0,
+        has_qt_layout: true,
     }
 }
 
@@ -191,12 +195,12 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
     // inserted visible line 的稳定身份也是 (para_start=0, qtextline_idx=7)，
     // prepare 命中但 canonical_line_has_clusters 返回 false → ClustersEmpty。
     // Issue #901 第十四轮问题1: para_start 现为段落索引（0），不再是绝对 byte offset。
-    let mut doc = test_doc_snapshot(
-        "ab",
-        0,
-        vec![test_canonical_line(0, 7, 0, 2, Vec::new())],
+    let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 7, 0, 2, Vec::new())]);
+    doc.visual_lines = Arc::new(
+        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(
+            0, 7, 0, 2, "ab",
+        )]),
     );
-    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 7, 0, 2, "ab")]));
     let prepared = vec![test_raster_visual(0, 7)];
 
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -240,7 +244,11 @@ fn issue808_comment5918236360_inject_miss_line_is_collected_for_retry() {
 #[test]
 fn issue808_comment5918236360_prepare_miss_line_is_collected_for_retry() {
     let mut doc = test_doc_snapshot("ab", 0, vec![test_canonical_line(0, 0, 0, 2, Vec::new())]);
-    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
+    doc.visual_lines = Arc::new(
+        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(
+            0, 0, 0, 2, "ab",
+        )]),
+    );
 
     // prepare 结果为空（该行没有被提取到动画视觉）。
     let status = inject_new_animation_visuals_with_diagnostics(
@@ -280,7 +288,11 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
             vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
         )],
     );
-    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
+    doc.visual_lines = Arc::new(
+        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(
+            0, 0, 0, 2, "ab",
+        )]),
+    );
     // Issue #901 第十八轮问题3: has_image 检查要求 canonical line 已有 image，
     // 且 inject 只在 image.is_some() 时计为成功注入。
     // 给 canonical line 和 prepared raster visual 都设置 1x1 image。
@@ -322,7 +334,11 @@ fn issue808_comment5918236360_successful_inject_has_no_failed_lines() {
 #[test]
 fn issue808_comment5918236360_whitespace_line_is_not_checked() {
     let mut doc = test_doc_snapshot(" ", 0, vec![test_canonical_line(0, 0, 0, 1, Vec::new())]);
-    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 1, " ")]));
+    doc.visual_lines = Arc::new(
+        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(
+            0, 0, 0, 1, " ",
+        )]),
+    );
 
     let status = inject_new_animation_visuals_with_diagnostics(
         &mut doc,
@@ -360,7 +376,11 @@ fn issue901_round20_blocker4_image_missing_not_duplicated_with_inject_miss() {
             vec![test_cluster(0, 1, "a"), test_cluster(1, 2, "b")],
         )],
     );
-    doc.visual_lines = Arc::new(crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(0, 0, 0, 2, "ab")]));
+    doc.visual_lines = Arc::new(
+        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(vec![test_visual_line(
+            0, 0, 0, 2, "ab",
+        )]),
+    );
     // prepared raster visual 的 image 为 None（test_raster_visual 默认 image: None）。
     let prepared = vec![test_raster_visual(0, 0)];
 
@@ -527,10 +547,9 @@ where
         }
     };
     let new = pipeline.snapshot();
-    // TODO(issue-901): migrate to visual_canvas — 旧 prepare_edit_motion 已删除，
-    // 编辑结果收口到 visual_canvas::apply_edit_result。
+    // Issue #904：编辑结果不再收口到整章 visual_canvas；正文动画由唯一的
+    // 局部 `TextMotion` 在 record_transaction 侧建立。这里只绑定 revision。
     let _ = (&old, &new);
-    pipeline.visual_canvas_mut().apply_edit_result(&result);
     let prepared = VisualPrepareOutcome::Created;
     // Issue #901 第六轮阻塞1: 生产由 record_transaction 做同一件事——用 Core
     // EditorEditResult.new_revision 通过 set_text_revision 唯一绑定 pipeline
@@ -572,7 +591,7 @@ fn first_line_of(snapshot: &EditorLayoutSnapshot) -> LineSnapshotId {
 /// 第二笔 Delete 的 Conceal overlay 行资源直接取自 `request.base_snapshot`，
 /// 所以 active snapshot ids 包含第二笔 base 的行身份。
 #[test]
-#[ignore = "TODO(issue-901): migrate to visual_canvas — 普通编辑路径不再安装 current_layout_snapshot，由 visual_canvas RevisionChain 管理"]
+#[ignore = "TODO(issue-904): 普通编辑路径改走唯一的 text_motion 计划，不再安装整章 current_layout_snapshot"]
 fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision() {
     crate::editor::layout::run_on_qt_thread(|| {
         let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(true);
@@ -619,14 +638,8 @@ fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revisi
         );
         assert_ne!(r1, r2, "第二笔必须再把 Pipeline revision 推进到 R2");
 
-        // TODO(issue-901): migrate to visual_canvas — 旧 animation_coordinator 已删除，
-        // active snapshot ids 由 visual_canvas 的绘制计划决定。
-        // let base_lines: Vec<_> = pipeline
-        //     .animation_coordinator()
-        //     .active_snapshot_ids()
-        //     .into_iter()
-        //     .filter(|id| id.layout_revision == first_target_line.layout_revision)
-        //     .collect();
+        // TODO(issue-904): active snapshot ids 现在由唯一的 text_motion 计划决定
+        //（pipeline.text_motion().source_snapshot_ids()）。
         // assert!(
         //     !base_lines.is_empty(),
         //     "第二笔 Delete 必须保留上一帧 source 行纹理"
@@ -659,7 +672,7 @@ fn consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revisi
 /// `build_old_new_from_canonical`，只是不创建正文动画
 ///（`VisualPrepareOutcome::Created` 不成立），revision 仍必须提交。
 #[test]
-#[ignore = "TODO(issue-901): migrate to visual_canvas — 普通编辑路径不再安装 current_layout_snapshot，由 visual_canvas RevisionChain 管理"]
+#[ignore = "TODO(issue-904): 普通编辑路径改走唯一的 text_motion 计划，不再安装整章 current_layout_snapshot"]
 fn layout_revision_commits_even_when_text_animation_is_disabled() {
     crate::editor::layout::run_on_qt_thread(|| {
         let (mut pipeline, mut layout, ctx) = chain_pipeline_ready(false);

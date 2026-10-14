@@ -46,7 +46,9 @@ impl SujianEditorItem {
         // 只物化该段和前一段的视觉行，不遍历全章 resolved_lines。
         // paragraph_offset_index 为空时退化为全章物化。
         let cursor_line: Option<VisualLine> = if !snapshot.paragraph_offset_index.is_empty() {
-            let para_slot = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+            let para_slot = snapshot
+                .paragraph_offset_index
+                .byte_to_paragraph(cursor_byte);
             let start_slot = para_slot.saturating_sub(1);
             let end_slot = para_slot + 1;
             // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
@@ -54,8 +56,7 @@ impl SujianEditorItem {
             // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
             // paragraph_id_to_line_range 按 lines 实际行顺序构建，
             // 索引为空时退化为 partition_point(logical_slot)。
-            let (start_idx, end_idx) =
-                snapshot.paragraph_line_range(start_slot, end_slot);
+            let (start_idx, end_idx) = snapshot.paragraph_line_range(start_slot, end_slot);
             let lines = snapshot.resolve_line_range(start_idx, end_idx);
             lines
                 .iter()

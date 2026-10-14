@@ -7,55 +7,41 @@ use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
 use crate::sujian_editor_item::edit_motion::DeleteEdge;
 use writer_core::editor::EditorRevision;
 
+/// Issue #904：动画层本帧要画的一个局部文字覆盖层。
+///
+/// 由 `text_motion::TextMotionFrame.overlays` 生成，位置 / 源 UV / clip 都已算好。
+/// 与静态层同一坐标系（文档坐标，不含滚动偏移），C++ 动画层统一施加一次
+/// `translate(0, -scroll_y)`。
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
-    /// Issue #901 问题2：文档坐标 x（不含滚动偏移）。
-    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
+    /// 文档坐标 x（不含滚动偏移）。
     pub x: f64,
-    /// Issue #901 问题2：文档坐标 y（不含滚动偏移）。
+    /// 文档坐标 y（不含滚动偏移）。
     pub y: f64,
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
-    /// Issue #901 问题4：裁剪矩形（文档坐标）。
+    /// 动态裁剪矩形（文档坐标）：渲染时只绘制 `target_rect ∩ clip_rect`。
     ///
-    /// 渲染时只绘制 `target_rect ∩ clip_rect`。由 `canvas_draw_plan_to_glyph_infos`
-    /// 从 `DrawCommand.clip_rect` 填充。`render_text_animation_layer` 用它对
-    /// target_rect 和 source_uv 做预裁剪，使动画纹理的 reveal/conceal 裁剪
-    /// 真正作用到 Qt 图形层，不再只靠静态层排除。
-    ///
-    /// Issue #901 问题3：这是动画层的**动态 clip**，按 `progress` 更新。
-    /// 与静态层排除区（`static_exclusion_rects`）是不同的两个概念：
-    /// 静态排除区覆盖完整目标范围（与 progress 无关），动态 clip 随 progress 变化。
+    /// 按同一个 `progress` 更新（吐字/吞字据此推进），与静态层孔洞是两个概念：
+    /// 静态孔洞覆盖目标字形完整范围（与 progress 无关），动态 clip 随 progress 变化。
     pub clip_rect: SourceRect,
-    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围和 shaping。
+    /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围。
     pub logical_range: (usize, usize),
     /// 此 glyph 在当前 canonical revision 中对应的范围。纯删除旧字没有该身份。
     pub canonical_range: Option<(usize, usize)>,
     /// 删除 glyph 的 caret 边缘；其他动画 glyph 为 None。
     pub delete_edge: Option<DeleteEdge>,
     pub shaping_identity: ShapingIdentity,
-    /// Issue #901 第十一轮问题1：该动画 glyph 对应的 Core source revision。
-    ///
-    /// 从 `DrawCommand.source_revision` 原样传递，`render_text_animation_layer`
-    /// 据此填写 `DrawnAnimationFragment.source_revision`，不再用
-    /// `EditorRevision::initial()` 占位。`build_presented_scene_from_frame`
-    /// 直接用 `frag.source_revision`，不统一覆盖成 target revision。
+    /// 该动画 glyph 对应的 Core source revision（旧字为编辑前，新字为编辑后）。
     pub source_revision: EditorRevision,
-    /// Issue #901 第十一轮问题1：字形逻辑身份。
-    ///
-    /// 从 `DrawCommand` 由 `PixelContribution::derive_glyph_id` 派生，
-    /// `render_text_animation_layer` 据此填写 `DrawnAnimationFragment.glyph_id`。
+    /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
     pub glyph_id: u64,
-    /// Issue #901 第十一轮问题1：同一字形内的碎片序号。
+    /// 同一字形内的碎片序号。
     pub fragment_index: u32,
-    /// Issue #901 第十一轮问题4：原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
-    ///
-    /// 从 `DrawCommand.original_glyph_rect` 传递，`render_text_animation_layer`
-    /// 据此填写 `DrawnAnimationFragment.original_glyph_rect`，最终填入
-    /// `PixelContribution.original_glyph_rect`，供下一帧 FLIP 变换使用。
+    /// 原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
     pub original_glyph_rect: SourceRect,
 }
 
@@ -165,91 +151,37 @@ pub(crate) struct CursorRenderState {
     pub path_start_y: f64,
 }
 
-/// Issue #901：简化的渲染归属计划。
+/// Issue #904：本帧要画的局部文字覆盖层 + 静态层要挖掉的局部孔洞。
 ///
-/// 旧 `RenderOwnershipPlan`（来自已删除的 `render_ownership` 模块）已由
-/// `visual_canvas::Ownership` + `visual_canvas::CanvasDrawPlan` 替代。
-/// 本结构保留 `scene_graph_renderer` / `qquickitem_impl` 需要的最小接口，
-/// 让四层渲染（静态正文/动画/选区/光标）在过渡期间继续工作。
-///
-/// 新的 `visual_canvas::CanvasDrawPlan` 最终会完全接管本结构，但在接线
-/// 阶段保留此薄层避免一次性改太多渲染热路径。
+/// 取代 #901 的 `RenderOwnership`：不再有整屏 ownership/revision/handoff
+/// 状态机，只有「这一帧动画层画哪些局部片段」和「静态层排除哪些局部矩形」。
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RenderOwnership {
-    /// 动画 glyph 列表（吐字/吞字/重排动画的纹理切片）。
-    pub animated_glyphs: Vec<TextAnimationGlyphInfo>,
-    /// 静态层重建时需要裁剪掉的矩形（让给动画 owner 的 target cluster）。
-    pub clip_rects: Vec<AnimationClipRect>,
-    /// 是否有未完成的 ownership 交接。
-    pub handoff_pending: bool,
-    /// ownership 版本号——变化时触发静态 rebuild。
-    pub ownership_revision: u64,
-    /// 目标 layout revision（用于判断 ownership 是否匹配当前 canonical）。
-    pub target_layout_revision: Option<LayoutRevision>,
+pub(crate) struct LocalTextPlan {
+    /// 动画层本帧的局部文字覆盖层（吐字/吞字/位移）。
+    pub overlays: Vec<TextAnimationGlyphInfo>,
+    /// 静态层本帧需要排除的局部矩形，与 `overlays` 原子提交。
+    pub static_holes: Vec<AnimationClipRect>,
 }
 
-impl RenderOwnership {
-    /// 检查所有动画 glyph 的纹理是否已在 `texture_cache` 中就绪。
+impl LocalTextPlan {
+    /// 检查所有覆盖层的纹理是否已在 `texture_cache` 中就绪。
     pub(crate) fn has_animation_resources(&self, texture_cache: &TextureCache) -> bool {
-        self.animated_glyphs
+        self.overlays
             .iter()
             .all(|glyph| texture_cache.contains_line(&glyph.snapshot_id))
     }
-
-    /// 返回静态层重建用的裁剪矩形列表。
-    pub(crate) fn clips_for_static_rebuild(&self) -> &[AnimationClipRect] {
-        &self.clip_rects
-    }
-
-    /// 返回本帧提交后的 ownership revision。
-    ///
-    /// `resources_ready` 为 false 时返回旧 revision，触发下一帧重试。
-    pub(crate) fn committed_revision(&self, resources_ready: bool) -> u64 {
-        if resources_ready {
-            self.ownership_revision
-        } else {
-            self.ownership_revision.wrapping_sub(1)
-        }
-    }
 }
 
-/// Issue #901 第六轮阻塞3 / 第七轮问题3：静态正文已提交贡献的轻量纯数据信息。
+/// Issue #904：静态正文（QSGTextNode）本帧实际绘制的轻量纯数据信息。
 ///
-/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）的
-/// **cluster** 提取，供 `build_presented_scene_from_frame` 登记静态 QSGTextNode
-/// 的真实像素贡献。
+/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）按 **cluster**
+/// 提取每个可见字形的 `LineSnapshotId`、Core UTF-8 byte range、文档坐标几何和源
+/// 纹理 UV。`RenderPlan` 用它登记静态层已画出的正文身份，供帧回执
+/// （`frame_submission`）保留本帧活跃纹理。
 ///
-/// **背景**：`build_presented_scene_from_frame` 之前只从 `CanvasDrawPlan` 的
-/// `TextFragment` 命令建立 `PixelContribution`，完全不读取本帧静态 QSGTextNode
-/// 的有效文本 cluster。所以静态已提交正文的 `PresentedScene.pixel_contributions`
-/// 是空列表。下一次编辑时 `controller.rs::frame` 把空贡献的 `PresentedScene` 与
-/// 完整 `target.glyph_runs` 比较，会把整个目标正文都判为"新增字"，触发全屏重暴露。
-///
-/// 此结构携带每个 **cluster** 的 `LineSnapshotId`、byte range、文档坐标几何和
-/// 源纹理 UV，让 `PresentedScene` 知道静态正文的身份，下一次编辑只让 Core patches
-/// 真正影响的可见 cluster 交给动画 owner。
-///
-/// Issue #901 第七轮问题3 修复：
-/// - 旧实现按**整行**生成一个贡献，`byte_range` 是整行范围，`document_rect.w`
-///   取 `doc_width - line.visual_x`（直到页面右边缘），`source_uv = zero`。
-///   这导致 `command_for_deleting` 的 `remaining_uv_w = 0` → 返回 None，
-///   无法对已显示静态文字执行吞字动画；且整行 byte_range 无法匹配 target 侧
-///   按 cluster 建立的 `TargetGlyphRun`（缺陷C）。
-/// - 新实现按 **cluster** 生成贡献，与 `transaction.rs::build_target_layout_descriptor`
-///   的 cluster 级 `TargetGlyphRun` 完全对称：`byte_range` 是 cluster 范围，
-///   `document_rect` 是 cluster 的真实字形几何，`source_uv` 是 cluster 在行纹理
-///   中的局部坐标（已乘 DPR，非零），使 `command_for_deleting` 的
-///   `remaining_uv_w > 0`，能正确生成裁剪收回命令。
-///
-/// `document_rect` / `visible_clip` / `source_uv` 使用 `SourceRect`（与
-/// `render_plan` 模块已有的几何载体一致），在 `build_presented_scene_from_frame`
-/// 中转换为 `CanvasRect` 填入 `PixelContribution`。
-///
-/// Issue #901 第十轮问题2：添加 `glyph_id` / `fragment_index` 字段，与
-/// `PixelContribution` 的字形身份/碎片序号对齐。同一 cluster 被裁成多个
-/// 静态片段时，每块共享同一 `glyph_id`、不同 `fragment_index`，
-/// `scene_transition.rs` 据此聚合同一 glyph 的所有碎片，对同一个 glyph 的
-/// 同一个 target 只计算一次几何变换。
+/// `document_rect` / `visible_clip` / `source_uv` 使用 `SourceRect`（本模块统一的
+/// 几何载体）。`glyph_id` 由 `text_motion::derive_fragment_id` 派生；同一 cluster
+/// 被裁成多块时共享同一 `glyph_id`、不同 `fragment_index`。
 #[derive(Clone, Debug)]
 pub(crate) struct StaticTextContributionInfo {
     /// 源纹理的完整行快照 id（来自 `PreparedLineSnapshot.id`）。
@@ -257,69 +189,33 @@ pub(crate) struct StaticTextContributionInfo {
     /// 该贡献对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间），
     /// 来自 `LineClusterSnapshot.byte_start / byte_end`（cluster 级，非整行）。
     pub byte_range: (usize, usize),
-    /// 文档坐标系中的目标矩形（不含滚动偏移），来自 cluster 的
-    /// `source_rect` 经 `visual_x / visual_line_top` 换算后的真实字形几何。
+    /// 文档坐标系中的目标矩形（不含滚动偏移）。
     pub document_rect: SourceRect,
-    /// 实际可见的裁剪区域（文档坐标，已与视口 `[scroll_y, scroll_y + viewport_h]` 求交）。
+    /// 实际可见的裁剪区域（文档坐标，已与视口求交）；
     /// `visible_clip.h <= 0` 的行（完全在视口外）不登记贡献。
     pub visible_clip: SourceRect,
-    /// 源纹理中的 UV 区域（行纹理局部坐标，已乘 DPR），来自
-    /// `LineClusterSnapshot.source_rect`。非零，使 `command_for_deleting`
-    /// 的 `remaining_uv_w = source_uv.w * fade_out > 0`，能生成裁剪收回命令。
+    /// 源纹理中的 UV 区域（行纹理局部坐标，已乘 DPR）。
     pub source_uv: SourceRect,
-    /// Issue #901 第八轮问题1：该静态贡献对应的 Core source revision。
-    ///
-    /// 静态贡献来自当前 target canonical（`canonical_visual_snapshot`），
-    /// `source_revision` 绑定该 canonical 对应的 **target Core revision**
-    ///（`canvas_plan.target_revision`），不用 `canvas_plan.source_revision`
-    ///（后者往往是历史已提交版）。
-    ///
-    /// 旧实现把所有静态贡献的 `source_revision` 一律设为 `plan_source_revision`
-    ///（`canvas_plan.source_revision`），但 `byte_range` 用的是当前 target
-    /// 的 cluster 坐标，造成「最新 byte_range + 旧 source revision」混搭，
-    /// 使 `controller.rs` 的 reset 条件永远无法满足（每帧重复登记旧 revision
-    /// 的静态贡献，动画到 progress=1 后也无法完成归还/清理）。
+    /// 该静态贡献对应的 Core source revision（当前 canonical 的 target revision）。
     pub source_revision: EditorRevision,
-    /// Issue #901 第十轮问题2：字形逻辑身份。
-    ///
-    /// 同一 cluster 的所有静态碎片共享同一 `glyph_id`。由
-    /// `PixelContribution::derive_glyph_id(&snapshot_id, byte_range)` 派生。
+    /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
     pub glyph_id: u64,
-    /// Issue #901 第十轮问题2：同一字形内的碎片序号。
-    ///
-    /// 同一 `glyph_id` 的多个碎片按 `fragment_index` 升序聚合。
-    /// 单一 cluster 未被裁剪时 `fragment_index = 0`。
+    /// 同一字形内的碎片序号；单一 cluster 未被裁剪时为 0。
     pub fragment_index: u32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct VisualCaretGeometry {
-    /// 文档坐标，与动画 glyph rect 使用同一坐标系。
-    pub x: f64,
-    pub y: f64,
-    pub h: f64,
-    pub movement_source: CursorMoveSource,
-    pub transition_id: u64,
-    pub target_x: f64,
-    pub target_y: f64,
-    pub path_start_x: f64,
-    pub path_start_y: f64,
-    pub layout_revision: Option<LayoutRevision>,
-    pub document_session: u64,
 }
 
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
-/// 一个 immutable RenderPlan 汇总本帧 owner table、selection/preedit 和唯一 caret。
+/// 一个 immutable RenderPlan 汇总本帧的局部文字效果、selection/preedit 和唯一 caret。
 /// renderer 不读取动画状态，也不重新决定 owner。
 pub struct RenderPlan {
     // 除 drawn_caret_rect 外全部收回 pub(crate)：字段类型都是平台端内部渲染
-    // 状态（RenderOwnership / CursorRenderState / FrameContext 等），
-    // 集成测试只需要 drawn_caret_rect 这个 (x, y, h) 裸元组。
+    // 状态（LocalTextPlan / CursorRenderState 等），集成测试只需要
+    // drawn_caret_rect 这个 (x, y, h) 裸元组。
     //
     // 光标采样在 CursorController 内完成，RenderPlan 只保存最终要显示的位置。
-    pub(crate) ownership: RenderOwnership,
+    pub(crate) local_text: LocalTextPlan,
     pub(crate) selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
     /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
@@ -327,14 +223,11 @@ pub struct RenderPlan {
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
-    /// Issue #901 第六轮阻塞3：静态 QSGTextNode 已提交的正文行贡献信息。
+    /// Issue #904：静态 QSGTextNode 本帧绘制的正文行贡献信息。
     ///
-    /// 从 `EditorLayoutSnapshot.line_snapshots` 提取，供
-    /// `build_presented_scene_from_frame` 登记静态正文的真实像素贡献。
-    /// 首帧不能用"没有动画 TextFragment"代表"没有已显示正文"——静态文本
-    /// 可以由 QSGTextNode 绘制而不需要 overlay，但 `PresentedScene` 必须知道
-    /// 它的身份。下一次编辑只让 Core patches 真正影响的可见 cluster 交给动画
-    /// owner；终点从动画 owner 归还静态。
+    /// 从 `EditorLayoutSnapshot.line_snapshots` 提取，登记静态正文身份，
+    /// 供帧回执保留本帧活跃纹理。未变化的段落沿用已有 QSGTextNode，
+    /// 只有局部动画接管的小块由动画层绘制。
     pub(crate) static_text_contributions: Vec<StaticTextContributionInfo>,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///

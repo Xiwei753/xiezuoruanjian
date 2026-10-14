@@ -125,11 +125,9 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
 
 #[test]
 fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
-    // Issue #826/#901: 旧 composition 坐标契约（session_replace_range →
-    // compute_affected_paragraph_ranges → handle_composition_commit_or_cancel）
-    // 已随光标与正文动画彻底解耦而删除。cancel 现在只撤掉 preedit 临时显示层，
-    // 正文没有 Core edit，当前过渡继续独立运行。坐标分离由 visual_canvas 模块的
-    // RevisionChain 精确消费 Core 提交的 offset map 保证。
+    // Issue #904: cancel 只撤掉 preedit 临时显示层，正文没有 Core edit。坐标分离
+    // 由单一局部 text_motion 计划消费 Core 提交的 offset map 保证；旧 #901
+    // visual_canvas / RevisionChain 状态机已整体删除。
     let src = read_src("src/sujian_editor_item/input_host.rs");
     let body = method_body(&src, "fn input_clear_preedit(");
     // 新架构：cancel 只清 composition + 更新 preedit visual + 请求重绘
@@ -137,14 +135,13 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
         body.contains("clear()") && body.contains("update_preedit_visual_state"),
         "cancel: input_clear_preedit 清 composition 并更新 preedit visual"
     );
-    // visual_canvas 模块存在，负责视觉过渡的坐标分离
-    let visual_canvas_mod =
-        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
+    // text_motion 模块存在，负责局部视觉过渡
+    let text_motion = linux_qt_root().join("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_mod.exists(),
-        "cancel: visual_canvas 模块应存在（负责视觉过渡坐标分离）"
+        text_motion.exists(),
+        "cancel: text_motion 模块应存在（负责局部视觉过渡）"
     );
-    println!("[ISSUE710_COMMENT5734666497] cancel 由 visual_canvas 处理坐标分离 (FIXED)");
+    println!("[ISSUE710_COMMENT5734666497] cancel 由 text_motion 处理坐标分离 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -153,30 +150,29 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
 
 #[test]
 fn issue710_caller_snapshot_coordinator_coordinate_contract_documented() {
-    // Issue #826/#901: 旧 composition 坐标契约（editing.rs commit 路径 old=preedit/new=candidate,
+    // Issue #904: 旧 composition 坐标契约（editing.rs commit 路径 old=preedit/new=candidate,
     // input_host.rs cancel 路径 old=preedit/new=committed_replace, composition.rs
     // handle_composition_commit_or_cancel）已随光标与正文动画彻底解耦而删除。
-    // 坐标分离现在由 visual_canvas 模块的 RevisionChain 精确消费 Core 提交的
-    // offset map 保证，不再需要 caller 层手动分离 old/new 坐标系。
+    // 坐标分离现在由单一局部 text_motion 计划消费 Core 提交的 offset map 保证，
+    // 不再需要 caller 层手动分离 old/new 坐标系。
 
-    // visual_canvas 模块存在，负责视觉过渡的坐标分离
-    let visual_canvas_mod =
-        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
+    // text_motion 模块存在，负责局部视觉过渡
+    let text_motion = linux_qt_root().join("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_mod.exists(),
-        "visual_canvas 模块应存在（负责视觉过渡坐标分离）"
+        text_motion.exists(),
+        "text_motion 模块应存在（负责局部视觉过渡坐标分离）"
     );
-    // RevisionChain 是坐标分离的核心机制
-    let visual_canvas_src = read_src("src/sujian_editor_item/visual_canvas/mod.rs");
+    // 单一局部计划消费 Core 提交的 offset map
+    let text_motion_src = read_src("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_src.contains("RevisionChain") || visual_canvas_src.contains("revision_chain"),
-        "visual_canvas 应有 RevisionChain 机制（精确消费 Core offset map）"
+        text_motion_src.contains("begin_or_retarget"),
+        "text_motion 应有 begin_or_retarget 机制（消费 Core display patch 坐标）"
     );
-    // composition.rs 现在是纯文档模块
-    let comp = read_src("src/sujian_editor_item/animation/composition.rs");
+    // composition.rs 已随 #901 架构整体删除
+    let comp = linux_qt_root().join("src/sujian_editor_item/animation/composition.rs");
     assert!(
-        !comp.contains("pub fn handle_composition_commit_or_cancel("),
-        "composition.rs: handle_composition_commit_or_cancel 已删除（旧坐标契约已由 visual_canvas 替代）"
+        !comp.exists(),
+        "composition.rs 已随 #901 架构删除，不得复活第二套动画引擎"
     );
-    println!("[ISSUE710_COMMENT5734666497] caller→visual_canvas 坐标契约一致 (GUARDED)");
+    println!("[ISSUE710_COMMENT5734666497] caller→text_motion 坐标契约一致 (GUARDED)");
 }

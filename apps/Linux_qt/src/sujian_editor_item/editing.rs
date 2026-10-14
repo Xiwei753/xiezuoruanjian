@@ -152,46 +152,59 @@ impl SujianEditorItem {
             }
         };
 
-        // Issue #901: 编辑结果收口到 visual_canvas，由 RevisionChain 精确消费 offset map。
-        // 旧 PreparedEditMotion / handle_composition_commit_or_cancel 已删除。
-        self.pipeline.visual_canvas_mut().apply_edit_result(result);
+        // Issue #904：IME commit 与普通编辑走同一个局部动画入口。
+        // old_snapshot / new_snapshot 分别给出编辑前后的局部 cluster 几何，
+        // 只对受影响片段建立唯一的局部动画计划。
+        let animations_requested = super::animation::any_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        let suppressed =
+            self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+        let now_ms = Self::frame_now_ms(&self.last_frame_now);
 
-        // Issue #901 问题2：IME commit 专属路径原子收口。
-        // 原顺序是先 build_target_layout_descriptor（读旧 current_layout_snapshot），
-        // 后 set_current_layout_snapshot(Some(new_snapshot))——target 读到的是旧布局。
-        // 修复：先设置 new/previous layout snapshot，再 build target，
-        // 让 build_target_layout_descriptor 读到本次 Core edit 后的新排版。
-        //
-        // 原子收口顺序：Core edit → 新文本排版(new_snapshot) →
-        // set_current_layout_snapshot → TargetLayoutDescriptor →
-        // visual_canvas.apply_target_layout。
         self.pipeline
             .set_previous_layout_snapshot(Some(old_snapshot.clone()));
         self.pipeline
             .set_current_layout_snapshot(Some(new_snapshot.clone()));
 
-        // Issue #901 问题5：IME composition commit 专属路径除了调用
-        // visual_canvas.apply_edit_result，还要像 transaction.rs::record_transaction
-        // 一样调用 build_target_layout_descriptor + visual_canvas.apply_target_layout，
-        // 把这份真正的 new snapshot 转换成并提交到 CanvasController.target_layout。
-        // 与普通 record_transaction 的新接线一致。
-        // Issue #901 问题2：此时 current_layout_snapshot 已是本次 Core edit 后的新布局。
-        let now_ms = Self::frame_now_ms(&self.last_frame_now);
-        if let Some(target) = self.build_target_layout_descriptor() {
+        let motion = if animations_requested && !suppressed {
             self.pipeline
-                .visual_canvas_mut()
-                .apply_target_layout(target, now_ms);
-        }
+                .prepare_local_text_textures(&new_snapshot, (new_affected_start, new_affected_end));
+            let viewport = super::layout_snapshot::SourceRect {
+                x: 0.0,
+                y: f64::from(self.current_scroll_y),
+                w: width,
+                h: f64::from(self.current_viewport_height).max(1.0),
+            };
+            super::text_motion::TextMotion::begin_or_retarget(
+                result,
+                Some(&old_snapshot),
+                &new_snapshot,
+                self.pipeline.text_motion(),
+                now_ms,
+                self.current_typing_animation_duration_ms,
+                self.document_session,
+                viewport,
+            )
+        } else {
+            None
+        };
+        *self.pipeline.text_motion_mut() = motion;
+        self.request_scene_rebuild();
 
         let new_revision = LayoutRevision::next();
 
-        let visual_outcome = super::pipeline::VisualPrepareOutcome::Created;
-        // Issue #901 问题6：active ids 不再传空列表。
+        let visual_outcome = if animations_requested && !suppressed {
+            super::pipeline::VisualPrepareOutcome::Created
+        } else {
+            super::pipeline::VisualPrepareOutcome::AnimationDisabled
+        };
         // 从当前 layout snapshot 和 previous layout snapshot 的 line_snapshots
         // 提取所有 LineSnapshotId，保证动画过渡期间新旧行纹理都被保留。
         let active_ids = self.collect_active_snapshot_ids_from_layout();
         self.pipeline.retain_active_snapshot_ids(&active_ids);
-        self.prepare_visual_edit_textures(&old_snapshot);
 
         // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
         // current_canonical_snapshot。new_canonical 一旦成为当前 canonical，

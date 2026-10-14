@@ -77,23 +77,19 @@ fn issue710_comment5735006606_build_snapshot_skips_visual_when_zero_length_range
 
 #[test]
 fn issue710_comment5735006606_build_virtual_snapshot_skips_visual_when_zero_length_range() {
-    // Issue #826/#901: build_virtual_layout_snapshot 已删除。视觉 snapshot 构建
-    // 统一由 visual_canvas 模块处理，零长度 range 的段落扩展由 RevisionChain
-    // 精确消费 Core offset map 保证。
+    // Issue #904: build_virtual_layout_snapshot 已删除。视觉 snapshot 构建改由单一
+    // 局部 text_motion 计划处理，零长度 range 的段落扩展由 Core display patch 坐标
+    // 直接消费保证。
     let layout_ops = linux_qt_root().join("src/sujian_editor_item/layout_ops.rs");
-    let visual_canvas_mod =
-        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
+    let text_motion = linux_qt_root().join("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_mod.exists(),
-        "visual_canvas 模块应存在（替代 build_virtual_layout_snapshot 处理视觉范围）"
+        text_motion.exists(),
+        "text_motion 模块应存在（替代 build_virtual_layout_snapshot 处理视觉范围）"
     );
     // layout_ops.rs 仍应存在（包含 build_editor_layout_snapshot_with_canonical）
-    assert!(
-        layout_ops.exists(),
-        "layout_ops.rs 应存在"
-    );
+    assert!(layout_ops.exists(), "layout_ops.rs 应存在");
     println!(
-        "[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 已由 visual_canvas 替代 (GUARDED)"
+        "[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 已由 text_motion 替代 (GUARDED)"
     );
 }
 
@@ -143,26 +139,29 @@ fn issue710_comment5735006606_commit_expands_candidate_range_before_new_snapshot
 
 #[test]
 fn issue710_comment5735006606_cancel_expands_session_replace_range_before_new_snapshot() {
-    // Issue #826/#901: input_clear_preedit 已简化为只清 composition + 更新 preedit visual。
-    // 旧 session_replace_range → compute_affected_paragraph_ranges 扩展已由 visual_canvas
-    // 模块的 RevisionChain 精确消费 Core offset map 替代。cancel 不再产生 Core edit，
+    // Issue #904: input_clear_preedit 已简化为只清 composition + 更新 preedit visual。
+    // 旧 session_replace_range → compute_affected_paragraph_ranges 扩展改由单一局部
+    // text_motion 计划消费 Core display patch 坐标替代。cancel 不再产生 Core edit，
     // 当前过渡继续独立运行。
     let src = read_src("src/sujian_editor_item/input_host.rs");
-    let start = src.find("fn input_clear_preedit(").expect("input_clear_preedit 必须存在");
+    let start = src
+        .find("fn input_clear_preedit(")
+        .expect("input_clear_preedit 必须存在");
     let rest = &src[start..];
-    let end = rest.find("\n    }\n").expect("input_clear_preedit body end not found");
+    let end = rest
+        .find("\n    }\n")
+        .expect("input_clear_preedit body end not found");
     let body = &rest[..end];
     assert!(
         body.contains("clear()") && body.contains("update_preedit_visual_state"),
         "cancel: input_clear_preedit 清 composition 并更新 preedit visual"
     );
-    let visual_canvas_mod =
-        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
+    let text_motion = linux_qt_root().join("src/sujian_editor_item/text_motion.rs");
     assert!(
-        visual_canvas_mod.exists(),
-        "cancel: visual_canvas 模块应存在（负责视觉范围扩展）"
+        text_motion.exists(),
+        "cancel: text_motion 模块应存在（负责局部视觉范围扩展）"
     );
-    println!("[ISSUE710_COMMENT5735006606] cancel 视觉范围由 visual_canvas 处理 (FIXED)");
+    println!("[ISSUE710_COMMENT5735006606] cancel 视觉范围由 text_motion 处理 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

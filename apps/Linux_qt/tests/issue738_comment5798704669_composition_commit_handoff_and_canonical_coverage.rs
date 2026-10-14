@@ -93,7 +93,7 @@ fn defect1a_record_composition_commit_calls_cancel_active_composition() {
 /// defect1b: 修复后 `record_composition_commit_transaction` 内不应在
 /// `handle_composition_commit_or_cancel` 之前调 `cancel_active_composition`。
 /// #826/#901 重写后 handle_composition_commit_or_cancel 已删除，
-/// 编辑结果由 visual_canvas.apply_edit_result 统一处理，cancel 不在 commit 路径。
+/// 编辑结果由 text_motion.begin_or_retarget 统一处理，cancel 不在 commit 路径。
 /// 此测试 PASS。
 #[test]
 fn defect1b_cancel_before_handle_composition_commit() {
@@ -124,16 +124,16 @@ fn defect1c_handle_composition_commit_uses_local_instant_now() {
     );
 }
 
-/// defect1d: 修复后 composition.rs 应通过 visual_canvas 统一处理 composition commit。
+/// defect1d: 修复后 composition.rs 应通过唯一的 text_motion 计划统一处理 composition commit。
 /// #826/#901 重写后旧 prepare_composition_commit_handoff / PreparedCompositionCommitHandoff
-/// 已删除，编辑结果由 visual_canvas.apply_edit_result 统一消费。
+/// 已删除，编辑结果由 text_motion.begin_or_retarget 统一消费。
 #[test]
 fn defect1d_prepared_composition_commit_handoff_not_introduced() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("apply_edit_result"),
-        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 统一处理编辑结果。"
     );
 }
 
@@ -148,7 +148,11 @@ fn defect1d_prepared_composition_commit_handoff_not_introduced() {
 #[test]
 fn defect2a_helper_only_injects_within_affected_guard() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
+    let window = function_window(
+        &src,
+        "fn build_editor_layout_snapshot_with_canonical",
+        12000,
+    );
     assert!(
         window.contains("if affected_start < affected_end"),
         "缺陷2a: build_editor_layout_snapshot_with_canonical 应含 `if affected_start < affected_end` 守卫，\
@@ -160,13 +164,17 @@ fn defect2a_helper_only_injects_within_affected_guard() {
     );
 }
 
-/// defect2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过 visual_canvas
+/// defect2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过唯一的 text_motion 计划
 /// 统一处理编辑结果，不再需要 collect_active_rebind_ranges 合并 active rebind ranges。
-/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 RevisionChain 精确消费。
+/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 text_motion 消费。
 #[test]
 fn defect2b_helper_does_not_merge_active_rebind_ranges() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
+    let window = function_window(
+        &src,
+        "fn build_editor_layout_snapshot_with_canonical",
+        12000,
+    );
     assert!(
         window.contains("prepare_animation_visuals_from_layout"),
         "修复后 build_editor_layout_snapshot_with_canonical 应调 prepare_animation_visuals_from_layout 提取动画视觉。"
@@ -270,7 +278,7 @@ fn defect2f_reconcile_iterates_all_active_transactions() {
 /// fix1a: 修复后 `record_composition_commit_transaction` 内不应在
 /// handle 之前调 cancel_active_composition。
 /// #826/#901 重写后 handle_composition_commit_or_cancel 已删除，
-/// 编辑结果由 visual_canvas.apply_edit_result 统一处理，cancel 不在 commit 路径。
+/// 编辑结果由 text_motion.begin_or_retarget 统一处理，cancel 不在 commit 路径。
 #[test]
 fn fix1a_no_cancel_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
@@ -281,29 +289,29 @@ fn fix1a_no_cancel_before_handle_composition_commit() {
     );
 }
 
-/// fix1b: 修复后 editing.rs 通过 visual_canvas 统一处理 composition commit handoff。
+/// fix1b: 修复后 editing.rs 通过唯一的 text_motion 计划统一处理 composition commit handoff。
 /// #826/#901 重写后旧 PreparedCompositionCommitHandoff 已删除，
-/// 编辑结果由 visual_canvas.apply_edit_result 统一消费。
+/// 编辑结果由 text_motion.begin_or_retarget 统一消费。
 #[test]
 fn fix1b_prepared_composition_commit_handoff_introduced() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("apply_edit_result"),
-        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 统一处理编辑结果。"
     );
 }
 
-/// fix1c: 修复后 editing.rs 通过 visual_canvas 统一处理 composition commit。
+/// fix1c: 修复后 editing.rs 通过唯一的 text_motion 计划统一处理 composition commit。
 /// #826/#901 重写后旧 prepare_composition_commit_handoff 已删除，
-/// 编辑结果由 visual_canvas.apply_edit_result 统一消费。
+/// 编辑结果由 text_motion.begin_or_retarget 统一消费。
 #[test]
 fn fix1c_prepare_composition_commit_handoff_introduced() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        window.contains("apply_edit_result"),
-        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
+        window.contains("TextMotion::begin_or_retarget"),
+        "修复后 record_composition_commit_transaction 应通过 text_motion.begin_or_retarget 统一处理编辑结果。"
     );
 }
 
@@ -326,13 +334,17 @@ fn fix2a_collect_active_rebind_ranges_introduced() {
     );
 }
 
-/// fix2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过 visual_canvas
+/// fix2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过唯一的 text_motion 计划
 /// 统一处理编辑结果，不再需要 collect_active_rebind_ranges 合并 active rebind ranges。
-/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 RevisionChain 精确消费。
+/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 text_motion 消费。
 #[test]
 fn fix2b_helper_merges_active_rebind_ranges() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
+    let window = function_window(
+        &src,
+        "fn build_editor_layout_snapshot_with_canonical",
+        12000,
+    );
     assert!(
         window.contains("prepare_animation_visuals_from_layout"),
         "修复后 build_editor_layout_snapshot_with_canonical 应调 prepare_animation_visuals_from_layout 提取动画视觉。"

@@ -39,7 +39,7 @@ pub(crate) struct LineClusterSnapshot {
 /// 在 cluster 快照中 `source_rect` 使用行视觉资源局部坐标（已乘 DPR）；
 /// 在动画切片中 `from_document_rect`/`to_document_rect` 使用文档坐标（不含滚动偏移）。
 /// 不得仅凭此类型假设是文档坐标。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SourceRect {
     pub x: f64,
     pub y: f64,
@@ -52,7 +52,7 @@ pub(crate) struct SourceRect {
 /// 这不是文字逻辑 identity，而是"当前平台 shaping 结果是否可视为同一视觉对象"的判断依据。
 /// 字体、glyph 索引、方向、格式任一变化都应视为不同 shaping，此时旧视觉不能直接移动，
 /// 必须走 CrossFade（旧视觉淡出 + 新视觉淡入）。
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub(crate) struct ShapingIdentity {
     pub text_content_hash: u64,
     pub raw_font_fingerprint: String,
