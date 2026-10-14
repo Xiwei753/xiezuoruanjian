@@ -16,6 +16,25 @@ impl LineSnapshotId {
         }
     }
 
+    /// Issue #901 问题2：无纹理哨兵值，用于光标/选区背景等纯色填充命令。
+    ///
+    /// 这些命令不引用任何行纹理，用 `(0, 0, 0)` 表示"无纹理"。
+    /// 渲染层根据 `DrawCommandKind` 判断是否为纯色填充，不通过此值查找纹理。
+    pub fn none() -> Self {
+        Self {
+            layout_revision: 0,
+            paragraph_id: 0,
+            visual_line_ordinal: 0,
+        }
+    }
+
+    /// 是否为无纹理哨兵值。
+    pub fn is_none(&self) -> bool {
+        self.layout_revision == 0
+            && self.paragraph_id == 0
+            && self.visual_line_ordinal == 0
+    }
+
     /// 修复点 3 (Issue #658 评论 5627327573): 把 LineSnapshotId 映射为稳定的 u64，
     /// 用作 C++ 侧 GPU texture cache (QHash<quint64, QSGTexture*>) 的 key。
     ///

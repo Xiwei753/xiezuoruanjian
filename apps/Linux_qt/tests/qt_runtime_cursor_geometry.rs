@@ -29,7 +29,9 @@ use sujian_linux_qt::editor::layout::{
     byte_offset_to_qchar_offset, qchar_offset_to_byte_offset, CaretAffinity, EditorLayout,
     LayoutParams,
 };
-use sujian_linux_qt::sujian_editor_item::cursor_controller::CursorController;
+use sujian_linux_qt::sujian_editor_item::cursor_controller::{
+    CursorController, CursorVisibilityState,
+};
 use sujian_linux_qt::sujian_editor_item::render_plan::RenderPlan;
 
 /// 构造默认 LayoutParams（宽 400px，足够排一行）。
@@ -348,47 +350,56 @@ fn qt_cursor_editor_layout_snapshot_and_geometry() {
 }
 
 // =========================================================================
-// 5e. #705 状态交接 — CursorController epoch 机制
+// 5e. #705 状态交接 — CursorController epoch 机制（已删除）
 // =========================================================================
 
-/// `CursorController::new()` 初始 epoch=0，`bump_cursor_owner_epoch()` 后 epoch=1。
-#[test]
-fn qt_cursor_controller_epoch_bump() {
-    run_on_qt_thread(|| {
-        let mut ctrl = CursorController::new();
-        assert_eq!(ctrl.cursor_owner_epoch, 0, "初始 epoch 必须为 0");
-        ctrl.bump_cursor_owner_epoch();
-        assert_eq!(ctrl.cursor_owner_epoch, 1, "bump 后 epoch 必须为 1");
-        ctrl.bump_cursor_owner_epoch();
-        assert_eq!(ctrl.cursor_owner_epoch, 2, "第二次 bump 后 epoch 必须为 2");
-        println!("[BEHAVIOR_VERIFY] CursorController epoch: 0 → 1 → 2");
-    });
-}
+// Issue #826/#901: cursor_owner_epoch 机制已随光标与正文动画彻底解耦而删除。
+// 光标由独立的 CursorController timeline 推进，不再需要"哪笔事务拥有这条 caret"的判定。
+// 旧测试已移除，保留以下行为守卫验证光标独立性。
 
-/// no-op 不 bump epoch — 直接构造 CursorController，不调用 bump，epoch 保持 0。
+/// 光标控制器初始状态验证 — 光标与正文动画解耦后独立工作。
 #[test]
-fn qt_cursor_controller_noop_does_not_bump_epoch() {
+fn qt_cursor_controller_initial_state() {
     run_on_qt_thread(|| {
         let ctrl = CursorController::new();
+        assert_eq!(ctrl.target_x, 0.0, "初始 target_x 必须为 0");
+        assert_eq!(ctrl.target_y, 0.0, "初始 target_y 必须为 0");
+        assert_eq!(ctrl.visual_x, 0.0, "初始 visual_x 必须为 0");
+        assert_eq!(ctrl.visual_y, 0.0, "初始 visual_y 必须为 0");
+        assert!(!ctrl.visible, "初始 visible 必须为 false");
         assert_eq!(
-            ctrl.cursor_owner_epoch, 0,
-            "不调用 bump 的 CursorController epoch 必须保持 0"
+            ctrl.visibility_state,
+            CursorVisibilityState::Uninitialized,
+            "初始 visibility_state 必须为 Uninitialized"
         );
-        println!("[BEHAVIOR_VERIFY] no-op: epoch stays 0");
+        println!("[BEHAVIOR_VERIFY] CursorController: initial state valid");
     });
 }
 
-/// epoch 使用 wrapping_add，不会 overflow panic。
+/// 光标控制器可见性状态转换 — 验证 Uninitialized → Visible → HiddenBySelection 转换。
 #[test]
-fn qt_cursor_controller_epoch_wrapping_no_overflow() {
+fn qt_cursor_controller_visibility_state_transitions() {
     run_on_qt_thread(|| {
         let mut ctrl = CursorController::new();
-        // 模拟大量 bump（不会 panic）
-        for _ in 0..100 {
-            ctrl.bump_cursor_owner_epoch();
-        }
-        assert_eq!(ctrl.cursor_owner_epoch, 100, "100 次 bump 后 epoch=100");
-        println!("[BEHAVIOR_VERIFY] epoch wrapping: 100 bumps, no overflow");
+        // 初始状态
+        assert_eq!(
+            ctrl.visibility_state,
+            CursorVisibilityState::Uninitialized
+        );
+        
+        // 模拟光标变为可见
+        ctrl.visible = true;
+        ctrl.visibility_state = CursorVisibilityState::Visible;
+        assert_eq!(ctrl.visibility_state, CursorVisibilityState::Visible);
+        
+        // 模拟因选区隐藏
+        ctrl.visibility_state = CursorVisibilityState::HiddenBySelection;
+        assert_eq!(
+            ctrl.visibility_state,
+            CursorVisibilityState::HiddenBySelection
+        );
+        
+        println!("[BEHAVIOR_VERIFY] CursorController: visibility state transitions work");
     });
 }
 

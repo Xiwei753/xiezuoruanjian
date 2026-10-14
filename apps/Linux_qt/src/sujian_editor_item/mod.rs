@@ -45,7 +45,7 @@ pub(crate) mod pointer_gesture;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod qt_text_node;
-pub(crate) mod render_ownership;
+// Issue #901: render_ownership 已删除，由 visual_canvas::Ownership 替代。
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `RenderPlan`。
 pub mod render_plan;
 pub(crate) mod rendering;
@@ -57,11 +57,13 @@ pub(crate) mod snapshot_id;
 pub(crate) mod text_utils;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
+/// Issue #901：视觉画布基础模块。
+pub(crate) mod visual_canvas;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
-    VisualLine,
+    ParagraphId, VisualLine,
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
@@ -77,7 +79,7 @@ use text_utils::{
     prev_char_boundary,
 };
 
-use writer_core::editor::EditorTransactionCause;
+use writer_core::editor::{EditorRevision, EditorTransactionCause};
 
 // Issue #735: 重新导出 Linux 私有视觉类型，供 `use super::*` 的子模块使用。
 pub(crate) use edit_motion::CursorRect;
@@ -514,6 +516,14 @@ pub struct SujianEditorItem {
     layout_dirty: bool,
     /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
     scene_dirty: bool,
+    /// Issue #901 第十四轮问题2: 真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度）
+    /// 时为 true，update_paint_node 消费后置为 false。
+    ///
+    /// 与 `layout_dirty` 区分：`layout_dirty` 在普通正文输入时也为 true，
+    /// 但普通正文输入只影响个别段落，不应 force_full_update=true。
+    /// `force_full_relayout_pending=true` 时 render_frame 传 force_full_relayout=true，
+    /// C++ 侧无条件重建所有已有段落子节点。
+    force_full_relayout_pending: bool,
     /// 最后一次成功提交的动画 owner 集合版本。render 失败时保留旧值，下一帧重试。
     last_committed_ownership_revision: u64,
     /// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
@@ -543,12 +553,25 @@ pub struct SujianEditorItem {
     /// 之前只跟踪 has_active_insert（只认 Insert），CursorOnly Tween 的起止不触发边沿重置。
     /// 现在跟踪 current_cursor_blink_mode() == Suppressed，覆盖 CursorOnly Tween。
     prev_cursor_blink_suppressed: bool,
+    /// Issue #901 问题3：document session generation，每次文档内容根本性变更
+    /// （load/clear 等）时递增。`PresentedScene.document_session` 用此值，
+    /// `CanvasController` 只接受同 session 的帧。
+    document_session: u64,
+    /// Issue #901 问题3：渲染帧 id 计数器，每次 `update_paint_node` 成功渲染时递增。
+    /// `PresentedScene.frame_id` 用此值，`CanvasController` 只接受更新的帧。
+    next_render_frame_id: u64,
+    /// Issue #901 第九轮阻塞4: per-item 已加载段落索引范围。
+    /// 替代原全局 `static LOADED_PARA_RANGE`。每次 rebuild 成功后由
+    /// `FrameRenderOutcome::new_loaded_para_range` 更新。
+    loaded_para_range: Option<(usize, usize)>,
 }
 
 impl Default for SujianEditorItem {
     fn default() -> Self {
         let pipeline = pipeline::LinuxEditorPipeline::new();
-        let frame_submission_mailbox = pipeline.animation_coordinator().frame_submission_mailbox();
+        // Issue #901: 旧 animation_coordinator.frame_submission_mailbox() 已删除。
+        // 帧提交 mailbox 现在独立创建，不再从 animation_coordinator 获取。
+        let frame_submission_mailbox = std::sync::Arc::new(frame_submission::FrameSubmissionMailbox::default());
         Self {
             base: Default::default(),
             plain_text: Default::default(),
@@ -676,6 +699,7 @@ impl Default for SujianEditorItem {
             editor_layout: EditorLayout::default(),
             layout_dirty: true,
             scene_dirty: true,
+            force_full_relayout_pending: true,
             last_committed_ownership_revision: 0,
             prepared_frame: None,
             frame_submission_mailbox,
@@ -684,12 +708,25 @@ impl Default for SujianEditorItem {
             cursor_ctrl: cursor_controller::CursorController::new(),
             last_frame_now: None,
             prev_cursor_blink_suppressed: false,
+            document_session: 1,
+            next_render_frame_id: 1,
+            loaded_para_range: None,
         }
     }
 }
 
 impl Drop for SujianEditorItem {
     fn drop(&mut self) {
+        // Issue #901 第十三轮问题5: 不在 Drop 中设置延迟清理标记。
+        // 旧机制（pending_clear_incremental_map）依赖"下一次 update_paint_node"
+        // 消费标记，但 Drop 后 item 不再有下一帧，标记永远不会被消费，
+        // g_incremental_para_map 中残留悬空 item_ptr 条目。
+        //
+        // 新机制：通过 Qt 合法的 render-thread cleanup 清理：
+        // - release_resources()（由 Qt 在 GUI 线程调用）通过 scheduleRenderJob
+        //   在渲染线程清理 g_incremental_para_map[item_ptr]
+        // - sceneGraphInvalidated 信号（在渲染线程触发）直接清理
+        // Drop 本身不做 map 清理，由 Qt 生命周期回调负责。
         if let Some(connection) = self.window_changed_connection.as_mut() {
             connection();
         }
@@ -777,11 +814,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {
-        if self.pipeline.animation_coordinator_mut().suppress_all() {
-            // 只请求 canonical ownership handoff。旧静态层、动画 glyph 和纹理
-            // 必须保留到 renderer 成功构建完整 canonical static layer 之后。
-            self.request_scene_rebuild();
-        }
+        // Issue #901: 旧 animation_coordinator.suppress_all() 已删除。
+        // TODO(issue-901): integrate with visual_canvas to suppress active text animations.
+        // 暂时直接请求 scene rebuild，让静态正文从 canonical 重新渲染。
+        self.request_scene_rebuild();
     }
 
     /// Issue #715: 章节 Load 的完整视觉状态边界。
@@ -800,9 +836,39 @@ impl SujianEditorItem {
     /// - invalidate editor_layout：清旧排版 generation
     /// - request_scene_rebuild()：触发 Scene Graph 重建
     pub(crate) fn reset_document_visual_state(&mut self) {
+        // Issue #901 第十三轮问题5: 切章/清文档时通过 Qt 合法的 render-thread cleanup
+        // 清理增量映射，不再使用 pending_clear_incremental_map 延迟标记机制。
+        // schedule_clear_incremental_para_map 通过 QQuickWindow::scheduleRenderJob
+        // 在渲染线程安全清理 g_incremental_para_map[item_ptr]。
+        // 旧章的 QSG 节点由 Qt 场景图管理，清理 map 条目不 delete 节点。
+        // 同时把 loaded_para_range 置空，下一帧按新章从头加载段落范围。
+        let item_cpp_ptr = self.get_cpp_object();
+        if !item_cpp_ptr.is_null() {
+            qt_text_node::schedule_clear_incremental_para_map(item_cpp_ptr);
+        }
+        self.loaded_para_range = None;
+        // Issue #901 问题3：切章/清文档时递增 document_session，
+        // 使 CanvasController 只接受新 session 的帧，忽略旧 session 的迟到帧。
+        self.document_session = self.document_session.wrapping_add(1);
+        // Issue #901 问题6：向画布传入新 session/revision/caret/scroll，
+        // 完全重新初始化 RevisionChain / FrameClock / TextFrontier，
+        // 不继承旧章的字节映射、动画时间和文字前沿。
+        let core_revision = EditorRevision::new(self.pipeline.mirror().revision());
+        let initial_caret = self.pipeline.cursor();
+        let initial_scroll = 0.0; // 切章后回到顶部
         self.pipeline
-            .animation_coordinator_mut()
-            .reset_document_visual_session();
+            .visual_canvas_mut()
+            .reset_for_new_document(
+                self.document_session,
+                core_revision,
+                initial_caret,
+                initial_scroll,
+                0.0,
+            );
+        // Issue #901 问题3/问题6：清 frame_submission_mailbox，
+        // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
+        self.frame_submission_mailbox.discard_all_frames();
+        // Issue #901: 旧 animation_coordinator.reset_document_visual_session() 已删除。
         self.pipeline.set_current_layout_snapshot(None);
         self.pipeline.set_previous_layout_snapshot(None);
         self.pipeline.set_current_canonical_snapshot(None);
@@ -860,13 +926,53 @@ impl SujianEditorItem {
 
         let mut plan = render_plan::SelectionPreeditPlan::default();
 
+        // Issue #901: 用 paragraph_offset_index 定位选区/预编辑段落范围，
+        // 只物化相关段落的视觉行，不遍历全章 resolved_lines。
+        // paragraph_offset_index 为空时退化为全章物化。
+        let resolved_lines: Vec<VisualLine> = if !snapshot.paragraph_offset_index.is_empty() {
+            let mut start_slot = usize::MAX;
+            let mut end_slot = 0usize;
+
+            if self.pipeline.has_selection() {
+                let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
+                let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
+                let anchor_para = snapshot.paragraph_offset_index.byte_to_paragraph(anchor);
+                let head_para = snapshot.paragraph_offset_index.byte_to_paragraph(head);
+                start_slot = start_slot.min(anchor_para);
+                end_slot = end_slot.max(head_para + 1);
+            }
+
+            if !self.pipeline.composition().preedit_text.is_empty() {
+                let cursor_byte = self.pipeline.cursor();
+                let cursor_para = snapshot.paragraph_offset_index.byte_to_paragraph(cursor_byte);
+                // 物化前一段以处理段边界光标
+                start_slot = start_slot.min(cursor_para.saturating_sub(1));
+                end_slot = end_slot.max(cursor_para + 1);
+            }
+
+            if start_slot <= end_slot {
+                // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+                // 替换 raw partition_point(logical_slot)。
+                // 插段后复用后缀行的 raw logical_slot 没有更新，二分查找找错；
+                // paragraph_id_to_line_range 按 lines 实际行顺序构建，
+                // 索引为空时退化为 partition_point(logical_slot)。
+                let (start_idx, end_idx) =
+                    snapshot.paragraph_line_range(start_slot, end_slot);
+                snapshot.resolve_line_range(start_idx, end_idx)
+            } else {
+                Vec::new()
+            }
+        } else {
+            snapshot.resolved_lines().into_owned()
+        };
+
         if self.pipeline.has_selection() {
             plan.has_selection = true;
 
             let anchor = self.pipeline.selection_anchor().min(self.pipeline.cursor());
             let head = self.pipeline.selection_anchor().max(self.pipeline.cursor());
 
-            for line in &snapshot.lines {
+            for line in &resolved_lines {
                 if line.para_text.is_empty() {
                     continue;
                 }
@@ -911,8 +1017,7 @@ impl SujianEditorItem {
                 let font_family = &self.current_font_family.to_string();
                 let cursor_byte = self.pipeline.cursor();
 
-                if let Some(line) = snapshot
-                    .lines
+                if let Some(line) = resolved_lines
                     .iter()
                     .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
                 {

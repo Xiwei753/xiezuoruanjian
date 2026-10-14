@@ -24,6 +24,7 @@ use super::layout_snapshot::{
 use crate::editor::layout::{
     cursor_rect_for_line, CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine,
 };
+use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
@@ -41,16 +42,24 @@ impl LineSnapshotBuilder {
         viewport_h: f64,
     ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
-        let mut paragraph_id: u64 = 0;
-        let mut prev_para_start: Option<usize> = None;
+        let mut prev_cache_slot: Option<i32> = None;
         let mut visual_line_ordinal: u32 = 0;
 
-        for line in &doc_snapshot.visual_lines {
-            if line.para_text.is_empty() {
-                paragraph_id = paragraph_id.wrapping_add(1);
+        // Issue #901: 用 resolve_viewport_visual_lines 只物化视口内行（加边距），
+        // 避免对长篇文档物化整章所有视觉行。返回的行已是物化后的绝对坐标。
+        // 当 height_index 为空时退化为物化所有行（与原 resolved_visual_lines 一致）。
+        let resolved_lines = doc_snapshot.resolve_viewport_visual_lines(scroll_y, viewport_h);
+        for line in &resolved_lines {
+            // Issue #901: 用 logical_slot 作为 paragraph_id（段落索引），
+            // 遇到新 logical_slot 时重置 visual_line_ordinal 为 0。
+            // Issue #901 第二十轮阻塞3: 用 logical_slot（文档次序）而非 cache_slot（Qt 物理槽）。
+            let paragraph_id = line.logical_slot as u64;
+            if prev_cache_slot != Some(line.logical_slot) {
                 visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
+                prev_cache_slot = Some(line.logical_slot);
+            }
 
+            if line.para_text.is_empty() {
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
                 if line_bottom < -line.height || line_top > viewport_h + line.height {
@@ -62,7 +71,7 @@ impl LineSnapshotBuilder {
 
                 // Issue #826 评论 42：真实 drawn caret top/height（不贴行顶）。
                 let (caret_top, caret_height) =
-                    cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
+                    cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
@@ -83,12 +92,6 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            if prev_para_start != Some(line.para_start) {
-                paragraph_id = paragraph_id.wrapping_add(1);
-                visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
-            }
-
             let line_top = line.y - scroll_y;
             let line_bottom = line_top + line.height;
             if line_bottom < -line.height || line_top > viewport_h + line.height {
@@ -96,16 +99,25 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            let canonical_para = doc_snapshot
-                .paragraphs
-                .iter()
-                .find(|p| p.paragraph_document_byte_start == line.para_start);
+            // Issue #901 第二十轮阻塞3: 用 logical_slot 直接索引 paragraphs，
+            // 不再用 cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
+            // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
+            let canonical_para = {
+                let slot = line.logical_slot as usize;
+                doc_snapshot.paragraphs.get(slot)
+            };
+            let para_byte_start = canonical_para
+                .map(|_p| {
+                    let slot = line.logical_slot as usize;
+                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                })
+                .unwrap_or(0);
 
             let (image, clusters) = if let Some(canonical) = canonical_para {
                 let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
                 let img = canonical_line.and_then(|cl| cl.image.clone());
                 let cls = canonical_line
-                    .map(|cl| Self::build_clusters_from_canonical(cl, line, &canonical.index_map))
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
                     .unwrap_or_default();
                 (img, cls)
             } else {
@@ -180,6 +192,212 @@ impl LineSnapshotBuilder {
         })
     }
 
+    /// Issue #901 第五轮阻塞5: 通过段落高度索引直接枚举 viewport+边距内行。
+    ///
+    /// 与 `build_from_canonical_document` 的区别：用 `ParagraphHeightIndex`
+    /// O(log n) 定位视口内的段落范围，再用二分查找在 visual_lines 中定位
+    /// 这些段落的行范围，只遍历视口内的行构建 cluster。
+    /// 不在视口内的行只做轻量 paragraph_id/visual_line_ordinal 推算（用高度索引
+    /// 直接计算，不遍历前面的行）。
+    ///
+    /// # 参数
+    ///
+    /// - `height_index`：段落高度索引，用于 O(log n) 定位视口内段落。
+    ///   必须与 `doc_snapshot` 的段落数一致。
+    pub fn build_from_canonical_document_with_height_index(
+        revision: LayoutRevision,
+        doc_snapshot: &CanonicalDocumentVisualSnapshot,
+        scroll_y: f64,
+        viewport_h: f64,
+        height_index: &ParagraphHeightIndex,
+    ) -> Result<EditorLayoutSnapshot, String> {
+        let mut line_snapshots = Vec::new();
+
+        if doc_snapshot.visual_lines.is_empty() {
+            return Ok(EditorLayoutSnapshot {
+                revision,
+                line_snapshots,
+                caret_rect: None,
+                caret_rect_doc: None,
+                caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+            });
+        }
+
+        // Issue #901 第五轮阻塞5: 用高度索引 O(log n) 定位视口内段落范围。
+        // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
+        // 加边距确保边缘行不被遗漏。
+        let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
+        let viewport_top = scroll_y - max_line_h;
+        let viewport_bottom = scroll_y + viewport_h + max_line_h;
+
+        // 用高度索引找到视口顶部和底部对应的段落索引
+        let first_para_idx = height_index.y_to_paragraph(viewport_top.max(0.0));
+        let last_para_idx = height_index.y_to_paragraph(viewport_bottom);
+
+        // 在 visual_lines 中定位视口段落范围的行索引。
+        // visual_lines 按段落顺序排列，同一段落的所有行连续。
+        // Issue #901 第二十轮阻塞1: 用 paragraph_id_to_line_range 索引查行范围，
+        // 替换 raw partition_point(logical_slot)。
+        // 插段后复用后缀行的 raw logical_slot 没有更新，partition_point 二分仍会找错；
+        // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，通过 ParagraphId
+        // → (start, end) 直接定位行范围，索引为空时退化为 partition_point(logical_slot)。
+        let (start_idx, end_idx) =
+            if first_para_idx < doc_snapshot.paragraphs.len() && last_para_idx >= first_para_idx {
+                let last_excl = (last_para_idx + 1).min(doc_snapshot.paragraphs.len());
+                doc_snapshot.paragraph_visual_line_range(first_para_idx, last_excl)
+            } else {
+                (doc_snapshot.visual_lines.len(), doc_snapshot.visual_lines.len())
+            };
+
+        // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
+        // 不遍历前面的行。visual_line_ordinal 在段落内从 0 递增。
+        let mut prev_para_start: Option<usize> = None;
+        let mut paragraph_id: u64 = first_para_idx as u64;
+        let mut visual_line_ordinal: u32 = 0;
+
+        // Issue #901 第十四轮问题1: 用 resolve_visual_line 物化绝对坐标。
+        // partition_point 仍在 raw visual_lines 上做（para_start 为段落索引，
+        // 与 paragraph_document_byte_start 一致），但行的 y/byte 坐标需物化为绝对。
+        for idx in start_idx..end_idx {
+            let line = doc_snapshot.resolve_visual_line(idx);
+            if line.para_text.is_empty() {
+                if prev_para_start != Some(line.para_start) && prev_para_start.is_some() {
+                    paragraph_id = paragraph_id.wrapping_add(1);
+                }
+                visual_line_ordinal = 0;
+                prev_para_start = Some(line.para_start);
+
+                let line_top = line.y - scroll_y;
+                let line_bottom = line_top + line.height;
+                if line_bottom < -line.height || line_top > viewport_h + line.height {
+                    visual_line_ordinal += 1;
+                    continue;
+                }
+
+                let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
+                let (caret_top, caret_height) =
+                    cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
+                line_snapshots.push(PreparedLineSnapshot {
+                    id,
+                    image: None,
+                    clusters: Vec::new(),
+                    document_origin_y: line.y,
+                    dpr: doc_snapshot.dpr,
+                    byte_start: line.byte_start,
+                    byte_end: line.byte_end,
+                    visual_x: line.x,
+                    visual_line_top: line.y,
+                    visual_line_bottom: line.y + line.height,
+                    caret_top,
+                    caret_height,
+                });
+
+                visual_line_ordinal += 1;
+                continue;
+            }
+
+            if prev_para_start != Some(line.para_start) {
+                if prev_para_start.is_some() {
+                    paragraph_id = paragraph_id.wrapping_add(1);
+                }
+                visual_line_ordinal = 0;
+                prev_para_start = Some(line.para_start);
+            }
+
+            let line_top = line.y - scroll_y;
+            let line_bottom = line_top + line.height;
+            if line_bottom < -line.height || line_top > viewport_h + line.height {
+                visual_line_ordinal += 1;
+                continue;
+            }
+
+            // Issue #901 第二十轮阻塞3: 用 logical_slot 直接索引 paragraphs，
+            // 不再用 cache_slot（Qt 物理槽，与 paragraphs 数组索引不对应）。
+            // cluster 的 byte_start/end 也需加上段首绝对 byte 偏移。
+            let canonical_para = {
+                let slot = line.logical_slot as usize;
+                doc_snapshot.paragraphs.get(slot)
+            };
+            let para_byte_start = canonical_para
+                .map(|_p| {
+                    let slot = line.logical_slot as usize;
+                    doc_snapshot.paragraph_offset_index.paragraph_byte_start(slot)
+                })
+                .unwrap_or(0);
+
+            let (image, clusters) = if let Some(canonical) = canonical_para {
+                let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
+                let img = canonical_line.and_then(|cl| cl.image.clone());
+                let cls = canonical_line
+                    .map(|cl| Self::build_clusters_from_canonical(cl, &line, &canonical.index_map, para_byte_start))
+                    .unwrap_or_default();
+                (img, cls)
+            } else {
+                (None, Vec::new())
+            };
+
+            if clusters.is_empty()
+                && line
+                    .para_text
+                    .chars()
+                    .any(|c| !c.is_whitespace() && !c.is_control())
+            {
+                crate::backend::app_backend::debug_error_static(
+                    "line_snapshot_builder",
+                    "canonical_line_clusters_empty_invariant_failure",
+                    &format!(
+                        "revision={} para_start={} qtextline_idx={} byte_start={} byte_end={} \
+                         image={} — clusters empty and line contains visible chars, \
+                         this is an invariant failure: canonical layout should always produce \
+                         clusters (Issue #810). Returning Err to surface the failure upstream, \
+                         not producing a half-built snapshot.",
+                        revision.0,
+                        line.para_start,
+                        line.qtextline_idx,
+                        line.byte_start,
+                        line.byte_end,
+                        image.is_some(),
+                    ),
+                );
+                return Err(format!(
+                    "canonical_line_clusters_empty_invariant_failure: \
+                     revision={} para_start={} qtextline_idx={} byte_start={} byte_end={}",
+                    revision.0, line.para_start, line.qtextline_idx, line.byte_start, line.byte_end,
+                ));
+            }
+
+            let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
+            let (caret_top, caret_height) =
+                cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
+
+            line_snapshots.push(PreparedLineSnapshot {
+                id,
+                image,
+                clusters,
+                document_origin_y: line.y,
+                dpr: doc_snapshot.dpr,
+                byte_start: line.byte_start,
+                byte_end: line.byte_end,
+                visual_x: line.x,
+                visual_line_top: line.y,
+                visual_line_bottom: line.y + line.height,
+                caret_top,
+                caret_height,
+            });
+
+            visual_line_ordinal += 1;
+        }
+
+        Ok(EditorLayoutSnapshot {
+            revision,
+            line_snapshots,
+            caret_rect: None,
+            caret_rect_doc: None,
+            caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+        })
+    }
+
     /// Issue #810 评论 5932233052 问题2: 返回
     /// `Result<(EditorLayoutSnapshot, EditorLayoutSnapshot), String>`。
     ///
@@ -199,10 +417,14 @@ impl LineSnapshotBuilder {
         Ok((old_layout, new_layout))
     }
 
+    /// Issue #901 第十五轮问题3: 增加 `para_byte_start` 参数，将 cluster 的
+    /// `document_byte_start/end`（段内相对偏移）转换为全文绝对 byte 坐标。
+    /// LineSnapshot 外层 `byte_start/end` 是全文绝对值，cluster 也必须一致。
     fn build_clusters_from_canonical(
         canonical_line: &CanonicalLineSnapshot,
         _line: &VisualLine,
         _index_map: &ParagraphIndexMap,
+        para_byte_start: usize,
     ) -> Vec<LineClusterSnapshot> {
         canonical_line
             .clusters
@@ -218,8 +440,8 @@ impl LineSnapshotBuilder {
                 };
 
                 LineClusterSnapshot {
-                    byte_start: cc.document_byte_start,
-                    byte_end: cc.document_byte_end,
+                    byte_start: cc.document_byte_start + para_byte_start,
+                    byte_end: cc.document_byte_end + para_byte_start,
                     source_rect: SourceRect {
                         x: cc.source_rect_x,
                         y: cc.source_rect_y,

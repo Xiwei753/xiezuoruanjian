@@ -68,6 +68,14 @@ impl SujianEditorItem {
         // document can become the source for this chapter's canonical layout.
         self.reset_document_visual_state();
         let _ = self.pipeline.load_text(normalized, 0);
+        // Issue #901 第六轮阻塞1: load_document_text 不走 record_transaction，
+        // 必须在此显式把 pipeline.text_revision 绑定到新文档的 Core revision
+        //（load_text 已把 mirror.revision 同步到 kernel.revision）。
+        // emit_content_changed 不再 bump_text_revision，若不在此绑定，排版版本
+        // 会停在上一章的 revision，EditorLayout::snapshot 的 cache 有效性检查、
+        // canonical_needs_rebuild 判断都会用过期 revision。
+        self.pipeline
+            .set_text_revision(self.pipeline.mirror().revision());
         self.pipeline.composition_mut().clear();
         // `load_text(..., 0)` collapses the Core selection at the new document's start.
         self.cursor_ctrl.animation = None;
@@ -330,6 +338,9 @@ impl SujianEditorItem {
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
+        // Issue #901 阻塞 5：把光标动画开关同步到 visual_canvas 的 CanvasSettings，
+        // 不留第二套硬编码状态。
+        self.sync_animation_settings_to_visual_canvas();
         self.visual_settings_changed();
     }
 
@@ -368,6 +379,8 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
+        // Issue #901 阻塞 5：把文字动画开关同步到 visual_canvas 的 CanvasSettings。
+        self.sync_animation_settings_to_visual_canvas();
         editor_animation_debug_log(&format!("typing_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
@@ -391,6 +404,28 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
+    /// Issue #901 阻塞 5：把当前动画开关/时长同步到 `visual_canvas` 的 `CanvasSettings`。
+    ///
+    /// 确保设置变更通过 `pipeline.rs` 正确传递到 `visual_canvas.apply_settings`，
+    /// 不留第二套硬编码速度。`typing_animation_duration_ms` 控制新 `CanvasTransition`
+    /// 的唯一正文视觉时长；鼠标点击保留 `cursor_animation_duration_ms`。
+    /// 开关控制动画启用，不能默默改成另一套硬编码速度。
+    pub(crate) fn sync_animation_settings_to_visual_canvas(&mut self) {
+        let text_enabled = super::animation::text_animation_enabled(
+            self.current_typing_animation_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        let cursor_enabled = super::animation::cursor_animation_enabled(
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        );
+        let mut settings = self.pipeline.visual_canvas().settings().clone();
+        settings.text_animation_enabled = text_enabled;
+        settings.cursor_animation_enabled = cursor_enabled;
+        settings.response_duration_ms = f64::from(self.current_typing_animation_duration_ms);
+        self.pipeline.visual_canvas_mut().apply_settings(settings);
+    }
+
     // Issue #756: 协同动画显式模式开关 getter/setter。
     pub(crate) fn coordinated_animation_enabled(&self) -> bool {
         self.current_coordinated_animation_enabled
@@ -409,6 +444,8 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.request_static_repaint();
+        // Issue #901 阻塞 5：协同模式切换也同步到 visual_canvas。
+        self.sync_animation_settings_to_visual_canvas();
         editor_animation_debug_log(&format!("coordinated_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
@@ -432,6 +469,13 @@ impl SujianEditorItem {
         // 矩阵做 translate(0, -scroll_y)）。
         self.update_cursor_visual_position();
         // Issue #658: 滚动不重新排版 QSGTextNode，只请求帧更新（位移由 QSGTransformNode 矩阵处理）。
+        // Issue #901 第八轮问题3: request_frame_update 触发下一帧 update_paint_node →
+        // scene_graph_renderer::render_frame。render_frame 内部用
+        // compute_viewport_para_range 计算新视口段落范围，与 per-item loaded_para_range
+        // 缓存比较：视口跨出已加载段落集合时触发 rebuild（insert 新段落节点 +
+        // remove 离开段落节点），未跨出时只平移 transform。此处的
+        // request_frame_update 即为"把 scroll viewport range 变化传给真实更新路径"
+        // 的通知机制——不需要额外标志字段，render_frame 每帧自主检测跨出。
         self.request_frame_update();
     }
 
@@ -468,29 +512,10 @@ impl SujianEditorItem {
             // Issue #826 评论 34：pause 是**时间轴级**的——只记 pause 瞬间，
             // resume 时把暂停时长平移回三层 `started_at`，所以滚动期间 progress
             // 真正停住，恢复后仍从 pause 那一刻继续，而不是按墙钟直接跳终态。
-            // 这里同时拿回 active ids：若之后正文真的被编辑（记录在
-            // `record_transaction` 的 scrolling suppressed 分支收口），
-            // 这些旧行纹理才有机会被 retain 掉。
-            let freed_snapshot_ids = self
-                .pipeline
-                .animation_coordinator_mut()
-                .pause_all(std::time::Instant::now());
-            // 完成的事务释放了 texture，需要清理对应的 texture cache。
-            if !freed_snapshot_ids.is_empty() {
-                // Issue #736 评论 5786231506: 不再 clear()，改成 retain，避免清掉
-                // pause 的 Timed 事务（Reflow）还在用的纹理。
-                let active_ids = self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .collect_active_snapshot_ids();
-                self.pipeline
-                    .texture_cache_mut()
-                    .retain_active_snapshot_ids(&active_ids);
-                self.pipeline.set_current_layout_snapshot(None);
-                self.pipeline.set_previous_layout_snapshot(None);
-                self.pipeline.set_current_canonical_snapshot(None);
-                self.request_scene_rebuild();
-            }
+            // Issue #901: 旧 animation_coordinator.pause_all / resume_all 已删除。
+            // TODO(issue-901): integrate with visual_canvas FrameClock pause/resume.
+            // 滚动期间暂时直接清动画状态，恢复时从 canonical 重新开始。
+            self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
@@ -500,9 +525,8 @@ impl SujianEditorItem {
         if !value {
             // Issue #826 评论 34：resume 把暂停时长平移回各层 started_at，
             // 让时间轴从中断处继续（滚动期间没有编辑时才是这条路径）。
-            self.pipeline
-                .animation_coordinator_mut()
-                .resume_all(std::time::Instant::now());
+            // Issue #901: 旧 animation_coordinator.resume_all 已删除。
+            // TODO(issue-901): integrate with visual_canvas FrameClock resume.
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
@@ -695,17 +719,17 @@ impl SujianEditorItem {
     /// - 有活跃正文视觉过渡（`has_active_text_animation(frame_now)`）→ Suppressed
     /// - 有视觉光标 Tween（`cursor_ctrl.animation.is_some()`）→ Suppressed
     /// - idle → Normal
+    ///
+    /// Issue #901: 旧 `blink_mode_for_text_animation` / `animation_coordinator`
+    /// 已删除。正文动画活跃性暂由 `cursor_ctrl.animation` 判断（光标 Tween 活跃
+    /// 即 suppressed）。TODO(issue-901): integrate with visual_canvas FrameClock
+    /// to query active text animation.
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
-        use super::animation::blink_mode_for_text_animation;
         use super::cursor_animation::CursorBlinkMode;
         if self.cursor_ctrl.animation.is_some() {
             return CursorBlinkMode::Suppressed;
         }
-        blink_mode_for_text_animation(
-            self.pipeline
-                .animation_coordinator()
-                .has_active_text_animation(std::time::Instant::now()),
-        )
+        CursorBlinkMode::Normal
     }
 
     pub(crate) fn cursor_blink_opacity(&self) -> f32 {
@@ -733,6 +757,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn layout_property_changed(&mut self) {
+        // Issue #901 第十四轮问题2: 标记真正全局排版属性变化，
+        // 供 update_paint_node 传 force_full_relayout=true 给 render_frame。
+        self.force_full_relayout_pending = true;
         self.invalidate_layout_cache();
         self.bump_visual_revision();
         // Issue #738 评论 5789470425 问题1: layout_property_changed 只负责标记 layout dirty。
@@ -762,7 +789,16 @@ impl SujianEditorItem {
         // emit_content_changed 和普通刷新不能再把动画清掉。
         // Issue #853: movement source and force-snap intent come from each caller;
         // this shared notification only refreshes canonical layout and cursor target.
-        self.pipeline.bump_text_revision();
+        //
+        // Issue #901 第六轮阻塞1: 不再在此处 bump_text_revision。
+        // text_revision 由编辑入口（record_transaction / IME commit / Load）通过
+        // pipeline.set_text_revision(core_new_revision) 唯一绑定 Core Applied 的
+        // new_revision。emit_content_changed 只做 UI 通知与 prepared frame/caret
+        // 刷新，不因通知来了才造新正文版本。否则一次 Core 编辑会推进两次
+        // text_revision（record_transaction set 一次 + emit bump 一次），破坏
+        // Core/排版版本一致性：target layout 是 revision N，UI 随后变成 N+1，
+        // canonical_needs_rebuild 与 EditorLayout::snapshot 都会因 revision 不符
+        // 再次排版，刚构造的 frame/target 还可能被当作过期。
         // Issue #658 评论 5622829886 问题 1: 把 record_visual_transaction 产生的
         // pending promoted layout 提升为 EditorLayout current，避免后续
         // recalculate_content_height_and_emit / request_static_repaint 中的
@@ -777,12 +813,15 @@ impl SujianEditorItem {
         // Issue #705 评论 5716919024 问题 1: 正文 revision 一变化就无条件清
         // prepared_frame，不能只在"有 pending promoted layout"时才清。普通输入
         // (打字动画关闭 / 滚动期间抑制动画等没有 promoted layout 的路径)
-        // 也会 bump_text_revision，若此时 prepared_frame 仍是旧正文，
+        // 也会通过 record_transaction 的 set_text_revision 改变 revision，
+        // 若此时 prepared_frame 仍是旧正文，
         // 后续 adjust_affinity_at_wrap_boundary -> update_cursor_visual_position
         // -> editor_layout_cursor_rect -> current_render_layout_snapshot 会优先
         // 拿旧 prepared_frame，造成"正文已经变了，光标几何还按上一帧正文算"的错位。
         // 无条件清后，current_render_layout_snapshot 在正文刚变化、还没 prepare 新
         // frame 的时间窗口会 fallback 到当前 EditorLayout，不再读旧 frame。
+        // Issue #901 第六轮阻塞1: revision 变化由编辑入口 set_text_revision 产生，
+        // emit_content_changed 自身不再 bump_text_revision。
         self.prepared_frame = None;
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(
@@ -791,12 +830,12 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
-        // Issue #810 评论 5934060933 问题1: bump text revision 后，判断 canonical
-        // 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表有效；
-        // 必须同时满足 canonical.text_revision == pipeline.text_revision() 且描述当前
-        // committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径不会走
-        // prepare_edit_motion，正文仍会修改并 bump revision，但 canonical 停在上一版，
-        // 此处必须按当前 EditorLayout/current text 重建并替换。
+        // Issue #810 评论 5934060933 问题1: 编辑入口 set_text_revision 后，判断
+        // canonical 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表
+        // 有效；必须同时满足 canonical.text_revision == pipeline.text_revision() 且
+        // 描述当前 committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径
+        // 不会走 prepare_edit_motion，正文仍会修改并 set_text_revision 推进 revision，
+        // 但 canonical 停在上一版，此处必须按当前 EditorLayout/current text 重建并替换。
         // 不在 reconcile_after_layout_change 中重复——它已通过
         // reconcile_active_transactions_with_new_canonical 设置了 current_canonical_snapshot。
         let canonical_needs_rebuild = match self.pipeline.current_canonical_snapshot() {

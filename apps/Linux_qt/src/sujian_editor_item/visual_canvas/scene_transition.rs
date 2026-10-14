@@ -1,0 +1,1379 @@
+//! Issue #901：场景过渡 —— 从 `PresentedScene` + `TargetLayout` 生成 `CanvasDrawPlan`。
+//!
+//! ## 核心语义
+//!
+//! - `build_draw_plan` 根据 `RevisionChain` 判断每个已显示字形贡献在最终正文里
+//!   的存活/删除/新插入关系，分别做不同处理：
+//!   - **存活字**：只做老→新矩形位移（FLIP），不淡出淡入。
+//!   - **新增字**：做 UV/裁剪揭示（从前沿逐步展开），透明度由 `progress` 控制。
+//!   - **删除字**：从其已显示裁剪收回，透明度由 `(1 - progress)` 控制。
+//!   - **shaping 替换**：字形已改变可用同一次 `progress` 下的旧→新贴图替换。
+//!
+//! ## 连续性
+//!
+//! 连续性从"已提交画面"出发：source 永远来自最新 `PresentedScene`。
+//! 新编辑不从中途未显示状态凭空生成 glyph，只从 presented source 通过
+//! `RevisionChain` 精确映射到最新 revision。
+//!
+//! ## 纯 Rust
+//!
+//! 本模块不依赖 Qt 类型。`TargetLayoutDescriptor` 由调用方从 Qt 排版结果转换而来。
+
+use super::draw_plan::{CanvasDrawPlan, DrawCommand};
+use super::frame_clock::VisualPose;
+use super::ownership::Ownership;
+use super::presented_scene::{
+    CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedScene,
+};
+use super::revision_chain::RevisionChain;
+use crate::sujian_editor_item::layout_revision::LayoutRevision;
+use crate::sujian_editor_item::snapshot_id::LineSnapshotId;
+
+// ── 目标布局描述 ──
+
+/// 目标布局描述 —— 最新正文经过排版后的目标几何（纯 Rust）。
+///
+/// 由调用方从 Qt `QTextLayout` 排版结果转换而来。包含 layout revision、
+/// 段落几何、光标位置和滚动位置。不携带动画状态——动画由 `VisualPose` 统一管理。
+#[derive(Clone, Debug)]
+pub(crate) struct TargetLayoutDescriptor {
+    /// 该布局对应的 layout revision（标识排版版本）。
+    pub layout_revision: LayoutRevision,
+    /// 段落几何列表（每段一个或多个 `TargetGlyphRun`）。
+    pub glyph_runs: Vec<TargetGlyphRun>,
+    /// 目标光标位置（光标不可见时为 `None`）。
+    pub caret: Option<TargetCaret>,
+    /// 目标滚动位置。
+    pub scroll: TargetScroll,
+    /// 整体裁剪区域（视口可见矩形）。
+    pub clip: CanvasRect,
+}
+
+/// 目标布局中的单个 glyph run —— 一段连续的文字片段及其纹理。
+///
+/// Issue #901 问题2：`snapshot_id` 携带完整 `LineSnapshotId`，而非 u64 hash。
+/// 渲染层通过完整 `LineSnapshotId` 查询 `TextureCache`，不再从 u64 反解。
+#[derive(Clone, Debug)]
+pub(crate) struct TargetGlyphRun {
+    /// 源纹理的完整行快照 id。
+    pub snapshot_id: LineSnapshotId,
+    /// 源纹理 UV 区域。
+    pub source_uv: CanvasRect,
+    /// 文档坐标系中的目标矩形。
+    pub document_rect: CanvasRect,
+    /// 该 glyph run 对应的 byte range（用于前沿裁剪和存活判断）。
+    pub byte_range: (usize, usize),
+}
+
+/// 目标光标位置和状态。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TargetCaret {
+    /// 光标左上角位置（视口坐标）。
+    pub position: CanvasVec2,
+    /// 光标是否可见。
+    pub visible: bool,
+    /// 光标宽度（像素）。
+    pub width: f64,
+    /// 光标高度（像素）。
+    pub height: f64,
+}
+
+/// 目标滚动位置。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TargetScroll {
+    /// 水平滚动偏移。
+    pub x: f64,
+    /// 垂直滚动偏移。
+    pub y: f64,
+}
+
+impl Default for TargetScroll {
+    fn default() -> Self {
+        Self { x: 0.0, y: 0.0 }
+    }
+}
+
+// ── 场景过渡 ──
+
+/// 场景过渡 —— 从 `PresentedScene` + `TargetLayoutDescriptor` 生成 `CanvasDrawPlan`。
+///
+/// 核心方法 `build_draw_plan` 根据 `VisualPose.progress` 插值 presented 和 target，
+/// 生成不可变的 `CanvasDrawPlan`，通过 `Ownership::resolve` 解决重叠。
+pub(crate) struct SceneTransition;
+
+impl SceneTransition {
+    /// 从已提交画面和目标布局生成绘制计划。
+    ///
+    /// ## 存活/删除/新插入分类（Issue #901 阻塞 2）
+    ///
+    /// 通过 `RevisionChain` 判断每个已显示字形贡献在最终正文里的关系：
+    /// - **存活字**：`map_presented_to_latest(byte_range)` 返回 `Some`，
+    ///   只做老→新矩形位移（FLIP），不淡出淡入。透明度保持 1.0。
+    ///   clip 从 target 坐标系计算（`target.clip ∩ interpolated_rect`）。
+    /// - **删除字**：`map_presented_to_latest(byte_range)` 返回 `None`，
+    ///   沿相反方向从已显示宽度→0 裁剪收回（`source_uv` 宽度按
+    ///   `displayed_width * (1-progress)` 收缩），不是 opacity=(1-progress)。
+    /// - **新增字**：target glyph run 的 byte_range 在 presented revision 中
+    ///   不存在，沿文字方向从 0→实际字形可见宽度裁剪揭示（`source_uv` 宽度
+    ///   按 `full_width * progress` 展开），不是 opacity=progress。
+    ///
+    /// ## 重叠解决
+    ///
+    /// 生成的命令通过 `Ownership::resolve` 解决重叠。文字层之间用透明度叠加
+    /// （alpha compositing），只有 `Cursor`/`Preedit`/`Selection` 做矩形裁剪。
+    ///
+    /// ## Issue #901 第十轮问题2：按字形身份聚合
+    ///
+    /// 旧实现逐块用整个 byte_range 查 target，同一个原字的两个静态碎片都可
+    /// 匹配同一 target run，各创建一个 `command_for_surviving`，导致同一字被
+    /// "存活"多次，且 fragment 的局部 UV 被拉伸覆盖整字。
+    /// 现先按 `glyph_id` 聚合同一 glyph 的所有碎片，再对**同一个 glyph 的同一个
+    /// target**只计算一次几何变换（FLIP/删除），按每块原 clip/UV 映射出实际
+    /// 可绘制的目标子矩形。fragment 数量不再变成同一字被"存活"多次。
+    pub(crate) fn build_draw_plan(
+        presented: &PresentedScene,
+        target: &TargetLayoutDescriptor,
+        pose: &VisualPose,
+        revision_chain: &RevisionChain,
+        now_ms: f64,
+    ) -> CanvasDrawPlan {
+        let progress = pose.progress.clamp(0.0, 1.0);
+        let fade_out = 1.0 - progress; // 删除字裁剪收回系数
+        let fade_in = progress; // 新增字裁剪揭示系数
+
+        let mut commands = Vec::new();
+        // Issue #901 问题3：静态层排除矩形 —— 动画画布接管的完整目标范围。
+        // 整个过渡期间与 progress 无关，只在接管集合改变时重建静态 QSGTextNode。
+        let mut static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
+
+        // 记算每个 target glyph run 是否是存活字（在 presented revision 中存在）。
+        // 存活字的 target 索引集合 —— 这些 run 由 presented 侧的 FLIP 处理。
+        let mut surviving_target_indices: Vec<bool> = vec![false; target.glyph_runs.len()];
+
+        // Issue #901 第五轮阻塞1：latest revision 用于保证存活字/新增字的
+        // source_revision 与 byte_range 同一版。
+        let latest_revision = revision_chain.latest_revision();
+
+        // Issue #901 第十轮问题2：按 glyph_id 聚合 presented.pixel_contributions。
+        //
+        // 同一 glyph_id 的多个碎片（同一 cluster 被裁成多个静态片段）聚合到一起，
+        // 对同一个 glyph 的同一个 target 只计算一次几何变换。按每块原 clip/UV
+        // 映射出实际可绘制的目标子矩形，不让 fragment 数量变成同一字被"存活"多次，
+        // 也不把 fragment 的局部 UV 拉伸覆盖整字。
+        //
+        // 聚合策略：
+        // 1. 按 glyph_id 分组，每组内按 fragment_index 升序排列。
+        // 2. 对每组用第一个碎片（fragment_index 最小）的 byte_range 做
+        //    RevisionChain 映射，判断存活/删除。同组所有碎片共享同一映射结果。
+        // 3. 存活时：对匹配的 target run 只计算一次 FLIP 几何变换（old_rect →
+        //    new_rect 插值），然后按每块碎片的 clip/UV 映射出目标子矩形。
+        //    不让每个碎片都独立做一次 FLIP 到完整 target run。
+        // 4. 删除时：对每块碎片按其自身 UV/clip 做裁剪收回，但共享同一 fade_out。
+        //
+        // 用 Vec 而非 HashMap 保持顺序稳定（presented.pixel_contributions 已按
+        // 文档顺序排列），且 glyph_id 是 u64，HashMap 开销不必要。
+        let mut grouped_indices: Vec<Vec<usize>> = Vec::new();
+        let mut glyph_id_to_group: std::collections::HashMap<u64, usize> =
+            std::collections::HashMap::new();
+        for (idx, contrib) in presented.pixel_contributions.iter().enumerate() {
+            let group_idx = *glyph_id_to_group
+                .entry(contrib.glyph_id)
+                .or_insert_with(|| {
+                    grouped_indices.push(Vec::new());
+                    grouped_indices.len() - 1
+                });
+            grouped_indices[group_idx].push(idx);
+        }
+        // 每组内按 fragment_index 升序排列，保证帧间稳定顺序。
+        for group in &mut grouped_indices {
+            group.sort_by_key(|&idx| presented.pixel_contributions[idx].fragment_index);
+        }
+
+        // 1. 从 presented 生成文字命令（按 glyph_id 聚合）。
+        for group in &grouped_indices {
+            if group.is_empty() {
+                continue;
+            }
+            // 用第一个碎片做 RevisionChain 映射判断存活/删除。
+            let first_idx = group[0];
+            let first_contrib = &presented.pixel_contributions[first_idx];
+
+            // 跳过完全不可见的组（所有碎片都无可见面积）。
+            let group_has_visible = group
+                .iter()
+                .any(|&idx| presented.pixel_contributions[idx].has_visible_area());
+            if !group_has_visible {
+                continue;
+            }
+
+            // 贡献的实际可见透明度（用第一个碎片代表整组）。
+            let contrib_visible_opacity = first_contrib.opacity * presented.opacity;
+            // Issue #901 第五轮阻塞1：根据 contrib.source_revision 判断是否需要映射。
+            let survived_offset = revision_chain.map_to_latest(
+                first_contrib.source_revision,
+                first_contrib.byte_range.0,
+            );
+            if let Some(latest_offset) = survived_offset {
+                // 存活字：尝试匹配 target glyph run 做 FLIP 位移。
+                let matched = Self::find_matching_target_run(
+                    target,
+                    latest_offset,
+                    first_contrib.byte_range,
+                    first_contrib.source_revision,
+                    revision_chain,
+                );
+                if let Some((run_idx, run)) = matched {
+                    // 只有当贡献实际可见时才标记存活，否则让 target 侧作为新增字。
+                    if contrib_visible_opacity > 0.0 {
+                        surviving_target_indices[run_idx] = true;
+                    }
+                    // Issue #901 第十轮问题2：对同一个 glyph 的同一个 target
+                    // 只计算一次几何变换，按每块碎片的 clip/UV 映射出目标子矩形。
+                    let group_cmds = Self::commands_for_surviving_group(
+                        group,
+                        presented,
+                        run,
+                        progress,
+                        target,
+                        latest_revision,
+                    );
+                    for cmd in group_cmds {
+                        // Issue #901 问题3：存活字接管的完整目标范围（文档坐标，
+                        // 与 progress 无关）加入静态排除列表。
+                        static_exclusion_rects
+                            .push(super::draw_plan::StaticExclusionRect {
+                                rect: run.document_rect,
+                                snapshot_id: run.snapshot_id,
+                            });
+                        commands.push(cmd);
+                    }
+                } else {
+                    // Issue #901 第六轮阻塞4：未找到匹配 target run 表示该贡献不可存活。
+                    let group_cmds = Self::commands_for_deleting_group(
+                        group,
+                        presented,
+                        progress,
+                    );
+                    for cmd in group_cmds {
+                        static_exclusion_rects
+                            .push(super::draw_plan::StaticExclusionRect {
+                                rect: first_contrib.document_rect,
+                                snapshot_id: first_contrib.snapshot_id,
+                            });
+                        commands.push(cmd);
+                    }
+                }
+            } else {
+                // 删除字：沿相反方向从已显示宽度→0 裁剪收回。
+                let group_cmds = Self::commands_for_deleting_group(
+                    group,
+                    presented,
+                    progress,
+                );
+                for cmd in group_cmds {
+                    // Issue #901 问题3：删除字接管的完整目标范围（文档坐标，
+                    // 与 progress 无关）加入静态排除列表。删除字的完整范围是
+                    // presented 的 document_rect（旧位置）。
+                    static_exclusion_rects
+                        .push(super::draw_plan::StaticExclusionRect {
+                            rect: first_contrib.document_rect,
+                            snapshot_id: first_contrib.snapshot_id,
+                        });
+                    commands.push(cmd);
+                }
+            }
+        }
+
+        // 2. 从 target 生成新增字命令（非存活的 glyph run）。
+        for (idx, run) in target.glyph_runs.iter().enumerate() {
+            if surviving_target_indices[idx] {
+                // 存活字已由 presented 侧 FLIP 处理，跳过。
+                continue;
+            }
+            // Issue #901 问题3：无论 progress 为何，新增字的完整目标范围都
+            // 加入静态排除列表。即使 progress=0（command_for_inserting 返回
+            // None），静态层也必须挖空，否则新字会在动画开始前就完整显示。
+            static_exclusion_rects.push(super::draw_plan::StaticExclusionRect {
+                rect: run.document_rect,
+                snapshot_id: run.snapshot_id,
+            });
+            // 新增字：沿文字方向从 0→full_width 裁剪揭示。
+            // Issue #901 问题4：不是 opacity=progress，
+            // 而是 source_uv/target_rect 宽度按 progress 展开。
+            if let Some(cmd) = Self::command_for_inserting(run, progress, target, latest_revision) {
+                commands.push(cmd);
+            }
+        }
+
+        // 3. 光标命令：插值 presented caret 和 target caret。
+        Self::push_caret_commands(
+            &mut commands,
+            presented,
+            target,
+            pose,
+            fade_out,
+            fade_in,
+        );
+
+        // 4. 通过 Ownership 解决重叠。
+        let resolved = Ownership::resolve(&commands);
+
+        let caret_sample = pose.caret_position;
+        // Issue #901 第九轮阻塞1：needs_next_frame 来自 FrameClock 与 target 的
+        // 未完成状态（progress < 1.0），不依赖可见 TextFragment 数量。
+        // progress=0 的新过渡第一帧、纯删除临界帧、文字全被裁空但仍在过渡的帧
+        // 都会返回 true，保证时钟继续推进。
+        let needs_next_frame = progress < 1.0 - 0.001;
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            caret_sample,
+            resolved,
+            presented.frame_id,
+            presented.document_session,
+            presented.source_revision,
+            revision_chain.latest_revision(),
+            // Issue #901 问题1：携带本次采样的真实 progress，不硬编码 1.0。
+            progress,
+            static_exclusion_rects,
+            needs_next_frame,
+        )
+    }
+
+    /// 只从 `PresentedScene` 生成绘制计划（无目标布局时使用）。
+    ///
+    /// 当尚无 `TargetLayoutDescriptor` 但已有已提交画面时，直接从 presented
+    /// 的像素贡献生成绘制命令。`progress` 不影响输出——没有目标可过渡。
+    pub(crate) fn build_draw_plan_presented_only(
+        presented: &PresentedScene,
+        pose: &VisualPose,
+        now_ms: f64,
+    ) -> CanvasDrawPlan {
+        let mut commands = Vec::new();
+        // Issue #901 问题3：静态排除矩形 —— presented only 时所有贡献都是
+        // 静态正文，不需要排除（没有动画接管）。
+        let static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
+
+        // 从 presented 生成文字命令（完整透明度）。
+        for contrib in &presented.pixel_contributions {
+            if let Some(cmd) = Self::command_from_contribution(
+                contrib,
+                1.0,
+                presented,
+                super::ownership::OwnershipRule::StaticText,
+            ) {
+                commands.push(cmd);
+            }
+        }
+
+        // 光标命令。
+        if let Some(pc) = &presented.caret {
+            if pc.visible {
+                let rect = CanvasRect::new(
+                    pose.caret_position.x,
+                    pose.caret_position.y,
+                    pc.width,
+                    pc.height,
+                );
+                commands.push(DrawCommand::caret(rect, presented.clip, 1.0));
+            }
+        }
+
+        let resolved = Ownership::resolve(&commands);
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            pose.caret_position,
+            resolved,
+            presented.frame_id,
+            presented.document_session,
+            presented.source_revision,
+            presented.source_revision, // 无 target，target_revision = source
+            // Issue #901 问题1：携带真实 progress。
+            pose.progress.clamp(0.0, 1.0),
+            static_exclusion_rects,
+            // Issue #901 第九轮阻塞1：无 target 时无过渡，不需要下一帧。
+            false,
+        )
+    }
+
+    /// Issue #901 问题1+3：尚无 `PresentedScene` 时从 target 生成初始静态画面。
+    ///
+    /// 首帧（`presented_scene` 为 None）但有 `TargetLayoutDescriptor` 时，
+    /// 从 target 的 glyph_runs 生成完整静态画面（progress=1.0）。
+    /// **不注册为 `presented_scene`**——`presented_scene` 只在
+    /// `on_frame_committed`（afterFrameEnd 回执）时设置。
+    ///
+    /// Issue #901 第五轮阻塞3：初始帧不创建动画层 TextFragment 命令，让静态层
+    /// 全权绘制正文。旧实现为全部 target glyph_runs 创建 TextFragment 但
+    /// `static_exclusion_rects=[]`，导致静态层画完整正文 + 动画层也画完整正文
+    /// → 双重绘制。新实现只保留光标命令，正文由静态 QSGTextNode 绘制。
+    /// `build_presented_scene_from_frame` 在无 TextFragment 命令时返回 None，
+    /// 不注册 `presented_scene`；`qquickitem_impl.rs` 在静态层成功提交后
+    /// 据真实 rendered snapshot 建立初始 `PresentedScene`。
+    pub(crate) fn build_draw_plan_target_only(
+        target: &TargetLayoutDescriptor,
+        revision_chain: &RevisionChain,
+        now_ms: f64,
+    ) -> CanvasDrawPlan {
+        // Issue #901 第五轮阻塞3：不创建动画层 TextFragment 命令。
+        // 初始帧时静态层刚提交完整正文，动画层不应再 overlay 全文，否则双重绘制。
+        // 只保留光标命令，正文由静态 QSGTextNode 全权绘制。
+        let mut commands = Vec::new();
+        // static_exclusion_rects 为空：动画层不接管任何区域，静态层画完整正文。
+        let static_exclusion_rects: Vec<super::draw_plan::StaticExclusionRect> = Vec::new();
+
+        // 光标命令。
+        if let Some(tc) = &target.caret {
+            if tc.visible {
+                let rect = CanvasRect::new(tc.position.x, tc.position.y, tc.width, tc.height);
+                commands.push(DrawCommand::caret(rect, target.clip, 1.0));
+            }
+        }
+
+        let resolved = Ownership::resolve(&commands);
+        let caret_sample = super::presented_scene::CanvasVec2::new(
+            target.caret.filter(|c| c.visible).map(|c| c.position.x).unwrap_or(0.0),
+            target.caret.filter(|c| c.visible).map(|c| c.position.y).unwrap_or(0.0),
+        );
+        CanvasDrawPlan::from_commands_with_metadata(
+            now_ms,
+            caret_sample,
+            resolved,
+            0, // frame_id: 尚无已提交帧
+            0, // document_session: 尚无
+            revision_chain.presented_revision(),
+            revision_chain.latest_revision(),
+            // Issue #901 问题1：首帧完整显示，progress=1.0。
+            1.0,
+            static_exclusion_rects,
+            // Issue #901 第九轮阻塞1：首帧静态，不需要下一帧。
+            false,
+        )
+    }
+
+    /// 在 target glyph_runs 中查找与存活贡献匹配的 run。
+    ///
+    /// `latest_offset` 是 presented byte_range 起始通过 `RevisionChain` 映射到
+    /// latest revision 的 offset。匹配条件：target run 的 byte_range 包含
+    /// 映射后的整个 range。
+    ///
+    /// Issue #901 问题4：使用 `map_presented_range_to_latest` 精确判断整个区间
+    /// 身份，而非仅凭 `map_presented_to_latest(old_end)` 的起点是 `Some` 就宣告
+    /// 整条 run 存活。`OffsetMap` 是半开范围，映射条目末端本来就可能返回 `None`。
+    ///
+    /// Issue #901 第六轮阻塞4：当 `map_range_to_latest` 返回 `None` 时，明确返回
+    /// `None`（表示该贡献不可存活，应判为 deleted/reshaped）。**绝不**回退到
+    /// `(latest_offset, latest_offset)` 的零宽逻辑区间——那会把真正删掉或部分
+    /// 替换的区间错配到包含 `latest_offset` 的相邻 cluster，导致消失/重复吐字。
+    /// 失败应表示不可存活，不是降级成一个可匹配的点。
+    fn find_matching_target_run<'a>(
+        target: &'a TargetLayoutDescriptor,
+        latest_offset: usize,
+        presented_byte_range: (usize, usize),
+        source_revision: writer_core::editor::EditorRevision,
+        revision_chain: &RevisionChain,
+    ) -> Option<(usize, &'a TargetGlyphRun)> {
+        // 精确映射整个 byte_range 到 latest 坐标。
+        // 仅当整个 range 落在同一个映射条目内时才视为存活。
+        // Issue #901 第五轮阻塞1：根据 source_revision 判断是否需要映射。
+        // 如果 source_revision == latest_revision，byte_range 已经是 latest 坐标。
+        //
+        // Issue #901 第六轮阻塞4：map_range_to_latest 返回 None 表示该贡献不可
+        // 存活（deleted/reshaped）。用 `?` 直接传播 None，不回退到零宽区间。
+        let (latest_start, latest_end) = revision_chain.map_range_to_latest(
+            source_revision,
+            presented_byte_range.0,
+            presented_byte_range.1,
+        )?;
+        // latest_offset 由 map_to_latest（起点映射）计算，此处仅用于断言一致性。
+        // 不用 latest_offset 回退零宽——见上文注释。
+        debug_assert_eq!(
+            latest_start, latest_offset,
+            "range 映射起点应与 offset 映射一致"
+        );
+
+        for (idx, run) in target.glyph_runs.iter().enumerate() {
+            // target run 的 byte_range 包含映射后的 range。
+            if run.byte_range.0 <= latest_start && run.byte_range.1 >= latest_end {
+                return Some((idx, run));
+            }
+        }
+        None
+    }
+
+    /// Issue #901 第十轮问题2：为存活字组生成 FLIP 位移命令（按碎片聚合）。
+    ///
+    /// 对同一个 glyph 的同一个 target run 只计算一次几何变换（old_rect →
+    /// new_rect 插值），然后按每块碎片的 clip/UV 映射出目标子矩形。
+    /// 不让每个碎片都独立做一次 FLIP 到完整 target run，避免 fragment 数量
+    /// 变成同一字被"存活"多次，也避免把 fragment 的局部 UV 拉伸覆盖整字。
+    ///
+    /// **策略**：
+    /// 1. 用第一个碎片的 original_glyph_rect（完整字形矩形）经 transform 得到
+    ///    old_rect，与 target run 的 document_rect 做 FLIP 插值，得到整体的
+    ///    interpolated_rect。
+    /// 2. 对每块碎片，用其 document_rect（碎片实际可见矩形）经 transform 得到
+    ///    frag_old，按 frag_old 在 old_rect 中的相对位置，映射到 interpolated_rect
+    ///    中的子矩形。每块碎片的 source_uv 保持自身值（不拉伸到整字）。
+    /// 3. Issue #901 第十二轮问题1：不再特殊处理 group.len()==1。单个 fragment
+    ///    也可能只是剩下的半个字（另一半已被动画接管），不能以只有一块就认定
+    ///    没有裁剪。所有 fragment 统一走 document_rect 变换路径。
+    fn commands_for_surviving_group(
+        group: &[usize],
+        presented: &PresentedScene,
+        run: &TargetGlyphRun,
+        progress: f64,
+        target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
+    ) -> Vec<DrawCommand> {
+        if group.is_empty() {
+            return Vec::new();
+        }
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return Vec::new();
+        }
+
+        // 用第一个碎片做 FLIP 几何变换。
+        let first = &presented.pixel_contributions[group[0]];
+        if !first.has_visible_area() {
+            // 第一个碎片不可见，但仍可能有其他碎片可见。
+            // 用第一个可见碎片做 FLIP。
+            let visible_idx = group
+                .iter()
+                .copied()
+                .find(|&idx| presented.pixel_contributions[idx].has_visible_area());
+            let visible_idx = match visible_idx {
+                Some(idx) => idx,
+                None => return Vec::new(),
+            };
+            return Self::commands_for_surviving_group(
+                &[visible_idx],
+                presented,
+                run,
+                progress,
+                target,
+                latest_revision,
+            );
+        }
+
+        // Issue #901 第十一轮问题4：用 original_glyph_rect（完整字形矩形）而非
+        // document_rect（可能只是被裁后的部分 fragment）作为 old_rect 做 FLIP 变换。
+        // 一个字被裁成左半和右半时，第一个片段只有半个字宽，若用 document_rect 当
+        // old_rect，第二个片段会取得 >1 的相对偏移，映射到 target 字外。
+        let old_transformed = Self::transform_rect(first.original_glyph_rect, presented.transform);
+        let old_rect = CanvasRect::new(
+            old_transformed.x + presented.position.x,
+            old_transformed.y + presented.position.y,
+            old_transformed.w,
+            old_transformed.h,
+        );
+
+        // Issue #901 问题2：new_rect 直接使用 target 的 document_rect（文档坐标）。
+        let new_rect = run.document_rect;
+
+        // FLIP：在 old_rect 和 new_rect 之间插值。
+        let interpolated = CanvasRect::new(
+            old_rect.x + (new_rect.x - old_rect.x) * progress,
+            old_rect.y + (new_rect.y - old_rect.y) * progress,
+            old_rect.w + (new_rect.w - old_rect.w) * progress,
+            old_rect.h + (new_rect.h - old_rect.h) * progress,
+        );
+
+        let mut result = Vec::new();
+
+        for &idx in group {
+            let contrib = &presented.pixel_contributions[idx];
+            if !contrib.has_visible_area() {
+                continue;
+            }
+            let opacity = contrib.opacity * presented.opacity;
+            if opacity <= 0.0 {
+                continue;
+            }
+
+            // Issue #901 第十二轮问题1：按碎片在 old_rect 中的相对位置映射到
+            // interpolated 中的子矩形。每块碎片的 source_uv 保持自身值。
+            //
+            // 不再特殊处理 group.len()==1：单个 fragment 也可能只是剩下的
+            // 半个字（另一半已被动画接管），不能以只有一块就认定没有裁剪。
+            // 所有 fragment 统一走 document_rect 变换路径。
+            //
+            // 用 contrib.document_rect（碎片实际可见矩形）做变换计算 frag_old，
+            // 而非 original_glyph_rect（完整字形矩形）。同一 glyph 的各个碎片
+            // 拥有相同 original_glyph_rect，用它会让 frag_old == old_rect，导致
+            // rel_x=0, rel_y=0, rel_w=1, rel_h=1，每个碎片都被映射到整个
+            // interpolated glyph 矩形，重影/变形没有解决。
+            // original_glyph_rect 仅作为 old_rect 的归一化基准（完整字形矩形），
+            // 不参与碎片级别的变换。
+            let frag_transformed =
+                Self::transform_rect(contrib.document_rect, presented.transform);
+            let frag_old = CanvasRect::new(
+                frag_transformed.x + presented.position.x,
+                frag_transformed.y + presented.position.y,
+                frag_transformed.w,
+                frag_transformed.h,
+            );
+            // 相对偏移比例（避免除零）。
+            let rel_x = if old_rect.w > 0.0 {
+                (frag_old.x - old_rect.x) / old_rect.w
+            } else {
+                0.0
+            };
+            let rel_y = if old_rect.h > 0.0 {
+                (frag_old.y - old_rect.y) / old_rect.h
+            } else {
+                0.0
+            };
+            let rel_w = if old_rect.w > 0.0 {
+                frag_old.w / old_rect.w
+            } else {
+                1.0
+            };
+            let rel_h = if old_rect.h > 0.0 {
+                frag_old.h / old_rect.h
+            } else {
+                1.0
+            };
+            let frag_target_rect = CanvasRect::new(
+                interpolated.x + rel_x * interpolated.w,
+                interpolated.y + rel_y * interpolated.h,
+                rel_w * interpolated.w,
+                rel_h * interpolated.h,
+            );
+
+            // clip 从 target 坐标系计算（用 target.clip，不是 run.document_rect）。
+            let clip = Self::intersect_clip(target.clip, frag_target_rect);
+            if frag_target_rect.w <= 0.0 || frag_target_rect.h <= 0.0 {
+                continue;
+            }
+
+            // Issue #901 第十二轮问题2：FLIP 显示历史已提交像素时，命令的
+            // snapshot_id 必须与 contrib.source_uv 的源纹理配对。contrib.source_uv
+            // 属于旧 presented 场景的 contrib.snapshot_id 行纹理，而 run.snapshot_id
+            // 是当前目标排版的行纹理 ID。连续输入、换行、字体重排会出现不同的
+            // LineSnapshotId；从新纹理按旧 UV 裁图没有任何身份保证，可能截到
+            // 另一个字甚至越界。因此这里用 contrib.snapshot_id 与 contrib.source_uv
+            // 配对，保证纹理身份一致。
+            result.push(DrawCommand::text_fragment(
+                contrib.snapshot_id,
+                // 每块碎片的 source_uv 保持自身值，不拉伸到整字。
+                contrib.source_uv,
+                frag_target_rect,
+                clip,
+                opacity,
+                super::ownership::OwnershipRule::StaticText,
+                run.byte_range,
+                latest_revision,
+                // Issue #901 第十一轮问题4：original_glyph_rect 传递完整 presented
+                // 字形位置（old_rect），保持 FLIP 递归不变量：无论经过多少帧，
+                // original_glyph_rect 始终是原始 presented 字形位置。
+                old_rect,
+            ));
+        }
+
+        result
+    }
+
+    /// Issue #901 第十轮问题2：为删除字组生成裁剪收回命令（按碎片聚合）。
+    ///
+    /// 对每块碎片按其自身 UV/clip 做裁剪收回，共享同一 fade_out。
+    /// 不把 fragment 的局部 UV 拉伸覆盖整字。
+    fn commands_for_deleting_group(
+        group: &[usize],
+        presented: &PresentedScene,
+        progress: f64,
+    ) -> Vec<DrawCommand> {
+        let mut result = Vec::new();
+        for &idx in group {
+            let contrib = &presented.pixel_contributions[idx];
+            if let Some(cmd) = Self::command_for_deleting(contrib, progress, presented) {
+                result.push(cmd);
+            }
+        }
+        result
+    }
+
+    /// 为存活字生成 FLIP 位移命令。
+    ///
+    /// 在 old_rect（presented 的文档坐标）和 new_rect（target 的文档坐标）之间
+    /// 按 `progress` 插值。透明度保持 1.0（不淡出淡入）。
+    ///
+    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
+    fn command_for_surviving(
+        contrib: &PixelContribution,
+        run: &TargetGlyphRun,
+        progress: f64,
+        presented: &PresentedScene,
+        _target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
+    ) -> Option<DrawCommand> {
+        if !contrib.has_visible_area() {
+            return None;
+        }
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return None;
+        }
+
+        // Issue #901 第十一轮问题4：用 original_glyph_rect（完整字形矩形）而非
+        // document_rect（可能只是子矩形）计算 old_rect。
+        let old_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
+        let old_rect = CanvasRect::new(
+            old_transformed.x + presented.position.x,
+            old_transformed.y + presented.position.y,
+            old_transformed.w,
+            old_transformed.h,
+        );
+
+        // Issue #901 问题2：new_rect 直接使用 target 的 document_rect（文档坐标），
+        // 不减 scroll_y。C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        let new_rect = run.document_rect;
+
+        // FLIP：在 old_rect 和 new_rect 之间插值。
+        let interpolated = CanvasRect::new(
+            old_rect.x + (new_rect.x - old_rect.x) * progress,
+            old_rect.y + (new_rect.y - old_rect.y) * progress,
+            old_rect.w + (new_rect.w - old_rect.w) * progress,
+            old_rect.h + (new_rect.h - old_rect.h) * progress,
+        );
+
+        let opacity = contrib.opacity * presented.opacity;
+        if opacity <= 0.0 {
+            return None;
+        }
+
+        // 存活字用 StaticText 标记（不参与淡入淡出，保持完整透明度）。
+        // Issue #901 问题4：clip 从 target 坐标系计算（字形已移动到新位置），
+        // 用 target.clip 与 interpolated_rect 求交，不是拿旧 visible_clip 与
+        // 新 viewport 求交。旧裁剪是旧帧屏幕坐标，字形已移动后这块裁剪
+        // 不能原地不变。
+        // Issue #901 问题2：clip 使用文档坐标，C++ 动画层统一施加 scroll transform。
+        let clip = Self::intersect_clip(_target.clip, interpolated);
+        Some(DrawCommand::text_fragment(
+            run.snapshot_id,
+            run.source_uv,
+            interpolated,
+            clip,
+            opacity,
+            super::ownership::OwnershipRule::StaticText,
+            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
+            // 存活字用 target run 的 byte_range（映射后的最新坐标）。
+            run.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 target 的（新坐标），source_revision 也必须是
+            // target revision（latest_revision），不能标 presented 的旧 revision。
+            latest_revision,
+            // Issue #901 第十一轮问题4：传递完整 presented 字形位置。
+            old_rect,
+        ))
+    }
+
+    /// 计算两个裁剪矩形的交集（取交集，保证不扩大可见区域）。
+    fn intersect_clip(a: CanvasRect, b: CanvasRect) -> CanvasRect {
+        let left = a.x.max(b.x);
+        let top = a.y.max(b.y);
+        let right = (a.x + a.w).min(b.x + b.w);
+        let bottom = (a.y + a.h).min(b.y + b.h);
+        if right <= left || bottom <= top {
+            CanvasRect::zero()
+        } else {
+            CanvasRect::new(left, top, right - left, bottom - top)
+        }
+    }
+
+    /// 从 `PixelContribution` 生成一条文字绘制命令。
+    ///
+    /// 透明度乘以 `fade` 和 presented 整体透明度。
+    fn command_from_contribution(
+        contrib: &PixelContribution,
+        fade: f64,
+        presented: &PresentedScene,
+        ownership: super::ownership::OwnershipRule,
+    ) -> Option<DrawCommand> {
+        if !contrib.has_visible_area() {
+            return None;
+        }
+        let opacity = contrib.opacity * presented.opacity * fade;
+        if opacity <= 0.0 {
+            return None;
+        }
+        // 将 document_rect 通过 presented 的 transform 映射到画布坐标。
+        let target_rect = Self::transform_rect(contrib.document_rect, presented.transform);
+        let target_rect = CanvasRect::new(
+            target_rect.x + presented.position.x,
+            target_rect.y + presented.position.y,
+            target_rect.w,
+            target_rect.h,
+        );
+        // Issue #901 第十一轮问题4：original_glyph_rect 经 transform 映射到文档坐标。
+        let orig_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
+        let original_glyph_rect = CanvasRect::new(
+            orig_transformed.x + presented.position.x,
+            orig_transformed.y + presented.position.y,
+            orig_transformed.w,
+            orig_transformed.h,
+        );
+        Some(DrawCommand::text_fragment(
+            contrib.snapshot_id,
+            contrib.source_uv,
+            target_rect,
+            contrib.visible_clip,
+            opacity,
+            ownership,
+            // Issue #901 问题3：传递真实 byte_range，不硬编码 (0,0)。
+            contrib.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 contrib 的（presented 坐标），source_revision 也用
+            // contrib 的（presented revision），不通过 ownership 猜来源。
+            contrib.source_revision,
+            original_glyph_rect,
+        ))
+    }
+
+    /// Issue #901 问题4：为新增字生成裁剪揭示命令。
+    ///
+    /// 沿文字视觉方向从 0→实际字形可见宽度逐步揭示。
+    /// `source_uv` 宽度从 `full_width * progress` 计算，
+    /// `target_rect` 宽度也按 `progress` 展开。
+    /// **不是 opacity=progress**——用裁剪揭示而非透明度淡入。
+    ///
+    /// Issue #901 问题2：`target_rect` 始终使用文档坐标，不减 scroll_y。
+    /// C++ 动画层统一施加一次 `translate(0, -scroll_y)` 变换。
+    fn command_for_inserting(
+        run: &TargetGlyphRun,
+        progress: f64,
+        _target: &TargetLayoutDescriptor,
+        latest_revision: writer_core::editor::EditorRevision,
+    ) -> Option<DrawCommand> {
+        if run.document_rect.w <= 0.0 || run.document_rect.h <= 0.0 {
+            return None;
+        }
+        if progress <= 0.0 {
+            return None;
+        }
+        // 沿文字方向从 0→full_width 揭示。
+        let revealed_uv_w = run.source_uv.w * progress;
+        let revealed_doc_w = run.document_rect.w * progress;
+        if revealed_uv_w <= 0.0 || revealed_doc_w <= 0.0 {
+            return None;
+        }
+        let source_uv = CanvasRect::new(
+            run.source_uv.x,
+            run.source_uv.y,
+            revealed_uv_w,
+            run.source_uv.h,
+        );
+        // Issue #901 问题2：直接使用文档坐标，不减滚动偏移。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        let doc_rect = CanvasRect::new(
+            run.document_rect.x,
+            run.document_rect.y,
+            revealed_doc_w,
+            run.document_rect.h,
+        );
+        Some(DrawCommand::text_fragment(
+            run.snapshot_id,
+            source_uv,
+            doc_rect,
+            _target.clip,
+            1.0, // 用裁剪揭示，不用透明度
+            super::ownership::OwnershipRule::AnimatedText,
+            run.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 target run 的（新坐标），source_revision 也是
+            // target revision（latest_revision）。
+            latest_revision,
+            // Issue #901 第十一轮问题4：新增字的完整字形矩形 = target run 的 document_rect。
+            run.document_rect,
+        ))
+    }
+
+    /// Issue #901 问题4：为删除字生成裁剪收回命令。
+    ///
+    /// 沿相反方向从已显示宽度→0 逐步收回。
+    /// `source_uv` 宽度从 `displayed_width * (1-progress)` 计算，
+    /// `target_rect` 宽度也按 `(1-progress)` 收缩。
+    /// **不是 opacity=(1-progress)**——用裁剪收回而非透明度淡出。
+    fn command_for_deleting(
+        contrib: &PixelContribution,
+        progress: f64,
+        presented: &PresentedScene,
+    ) -> Option<DrawCommand> {
+        if !contrib.has_visible_area() {
+            return None;
+        }
+        let fade_out = 1.0 - progress;
+        if fade_out <= 0.0 {
+            return None;
+        }
+        // 沿相反方向从已显示宽度→0 收回。
+        let remaining_uv_w = contrib.source_uv.w * fade_out;
+        let remaining_doc_w = contrib.document_rect.w * fade_out;
+        if remaining_uv_w <= 0.0 || remaining_doc_w <= 0.0 {
+            return None;
+        }
+        let source_uv = CanvasRect::new(
+            contrib.source_uv.x,
+            contrib.source_uv.y,
+            remaining_uv_w,
+            contrib.source_uv.h,
+        );
+        let transformed = Self::transform_rect(contrib.document_rect, presented.transform);
+        let target_rect = CanvasRect::new(
+            transformed.x + presented.position.x,
+            transformed.y + presented.position.y,
+            remaining_doc_w,
+            transformed.h,
+        );
+        // Issue #901 第十一轮问题4：original_glyph_rect 经 transform 映射到文档坐标。
+        let orig_transformed = Self::transform_rect(contrib.original_glyph_rect, presented.transform);
+        let original_glyph_rect = CanvasRect::new(
+            orig_transformed.x + presented.position.x,
+            orig_transformed.y + presented.position.y,
+            orig_transformed.w,
+            orig_transformed.h,
+        );
+        let opacity = contrib.opacity * presented.opacity;
+        if opacity <= 0.0 {
+            return None;
+        }
+        Some(DrawCommand::text_fragment(
+            contrib.snapshot_id,
+            source_uv,
+            target_rect,
+            contrib.visible_clip,
+            opacity,
+            super::ownership::OwnershipRule::StaticText,
+            contrib.byte_range,
+            // Issue #901 第五轮阻塞1：source_revision 与 byte_range 同一版。
+            // byte_range 用 contrib 的（presented 坐标），source_revision 也用
+            // contrib 的（presented revision），不通过 ownership 猜来源。
+            contrib.source_revision,
+            original_glyph_rect,
+        ))
+    }
+
+    /// 生成光标命令：插值 presented caret 和 target caret。
+    ///
+    /// - `progress < 0.5`：显示 presented caret（淡出）。
+    /// - `progress >= 0.5`：显示 target caret（淡入）。
+    /// - 光标位置使用 `VisualPose.caret_position`（已由 FrameClock 插值）。
+    fn push_caret_commands(
+        commands: &mut Vec<DrawCommand>,
+        presented: &PresentedScene,
+        target: &TargetLayoutDescriptor,
+        pose: &VisualPose,
+        fade_out: f64,
+        fade_in: f64,
+    ) {
+        // 使用 pose 的光标位置（FrameClock 已插值）。
+        let caret_pos = pose.caret_position;
+
+        // presented caret（淡出阶段）。
+        if fade_out > 0.0 {
+            if let Some(pc) = &presented.caret {
+                if pc.visible {
+                    let rect = CanvasRect::new(caret_pos.x, caret_pos.y, pc.width, pc.height);
+                    commands.push(DrawCommand::caret(rect, presented.clip, fade_out));
+                }
+            }
+        }
+
+        // target caret（淡入阶段）。
+        if fade_in > 0.0 {
+            if let Some(tc) = &target.caret {
+                if tc.visible {
+                    let rect = CanvasRect::new(caret_pos.x, caret_pos.y, tc.width, tc.height);
+                    commands.push(DrawCommand::caret(rect, target.clip, fade_in));
+                }
+            }
+        }
+    }
+
+    /// 将 `CanvasRect` 通过仿射变换映射。
+    ///
+    /// 对矩形的四个角点做变换后取 AABB（轴对齐包围盒）。
+    fn transform_rect(rect: CanvasRect, transform: CanvasAffine2) -> CanvasRect {
+        let p0 = transform.transform_point(CanvasVec2::new(rect.x, rect.y));
+        let p1 = transform.transform_point(CanvasVec2::new(rect.x + rect.w, rect.y));
+        let p2 = transform.transform_point(CanvasVec2::new(rect.x, rect.y + rect.h));
+        let p3 = transform.transform_point(CanvasVec2::new(rect.x + rect.w, rect.y + rect.h));
+
+        let min_x = p0.x.min(p1.x).min(p2.x).min(p3.x);
+        let max_x = p0.x.max(p1.x).max(p2.x).max(p3.x);
+        let min_y = p0.y.min(p1.y).min(p2.y).min(p3.y);
+        let max_y = p0.y.max(p1.y).max(p2.y).max(p3.y);
+
+        CanvasRect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::ownership::OwnershipRule;
+    use super::super::presented_scene::{PresentedCaret, PresentedScroll};
+    use writer_core::editor::EditorRevision;
+
+    fn identity_chain() -> RevisionChain {
+        RevisionChain::new(EditorRevision::initial())
+    }
+
+    fn sample_presented(opacity: f64) -> PresentedScene {
+        let snapshot_id = LineSnapshotId::new(1, 0, 0);
+        let byte_range = (0, 5);
+        PresentedScene {
+            source_revision: EditorRevision::initial(),
+            document_session: 1,
+            frame_id: 1,
+            geometry_id: 1,
+            pose_progress: 1.0,
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions: vec![PixelContribution {
+                glyph_id: PixelContribution::derive_glyph_id(&snapshot_id, byte_range),
+                fragment_index: 0,
+                snapshot_id,
+                source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                visible_clip: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                opacity: 1.0,
+                byte_range,
+                source_revision: EditorRevision::initial(),
+                original_glyph_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+            }],
+            caret: None,
+            scroll: PresentedScroll::default(),
+        }
+    }
+
+    fn sample_target() -> TargetLayoutDescriptor {
+        TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![TargetGlyphRun {
+                snapshot_id: LineSnapshotId::new(2, 0, 0),
+                source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                document_rect: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                byte_range: (0, 5),
+            }],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        }
+    }
+
+    fn pose(progress: f64) -> VisualPose {
+        VisualPose {
+            progress,
+            caret_position: CanvasVec2::new(0.0, 0.0),
+            scroll_position: CanvasVec2::new(0.0, 0.0),
+        }
+    }
+
+    #[test]
+    fn build_draw_plan_surviving_text_uses_flip() {
+        // identity chain → presented byte_range (0,5) 存活 → FLIP 位移。
+        let presented = sample_presented(1.0);
+        let target = sample_target();
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.0),
+            &chain,
+            16.0,
+        );
+
+        // progress=0 → 存活字显示 old_rect（presented 位置），标记为 StaticText。
+        assert!(!plan.empty);
+        let static_cmds: Vec<_> = plan
+            .commands
+            .iter()
+            .filter(|c| c.ownership == OwnershipRule::StaticText)
+            .collect();
+        assert!(
+            !static_cmds.is_empty(),
+            "surviving text must be visible as StaticText at progress=0"
+        );
+        // 存活字不产生 AnimatedText（不淡入淡出）。
+        let animated_cmds: Vec<_> = plan
+            .commands
+            .iter()
+            .filter(|c| c.ownership == OwnershipRule::AnimatedText)
+            .collect();
+        assert!(
+            animated_cmds.is_empty(),
+            "surviving text must NOT produce AnimatedText (FLIP, not fade)"
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_surviving_text_at_progress_one() {
+        // identity chain → 存活字，progress=1 → 显示 new_rect（target 位置）。
+        let presented = sample_presented(1.0);
+        let target = sample_target();
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(1.0),
+            &chain,
+            16.0,
+        );
+
+        assert!(!plan.empty);
+        // 存活字始终是 StaticText（FLIP），不变成 AnimatedText。
+        let static_cmds: Vec<_> = plan
+            .commands
+            .iter()
+            .filter(|c| c.ownership == OwnershipRule::StaticText)
+            .collect();
+        assert!(
+            !static_cmds.is_empty(),
+            "surviving text must be visible as StaticText at progress=1"
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_surviving_text_flip_interpolates_position() {
+        // 存活字在 progress=0.5 时位置应在 old_rect 和 new_rect 中间。
+        let presented = sample_presented(1.0);
+        // target 在不同位置 (200, 100)。
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![TargetGlyphRun {
+                snapshot_id: LineSnapshotId::new(2, 0, 0),
+                source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                document_rect: CanvasRect::new(200.0, 100.0, 100.0, 20.0),
+                byte_range: (0, 5),
+            }],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+
+        let static_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::StaticText)
+            .expect("surviving text must be present");
+        // old_rect.x=0, new_rect.x=200 → progress=0.5 → x=100。
+        assert!(
+            (static_cmd.target_rect.x - 100.0).abs() < 1e-9,
+            "FLIP must interpolate position: expected x=100, got {}",
+            static_cmd.target_rect.x
+        );
+        // old_rect.y=0, new_rect.y=100 → progress=0.5 → y=50。
+        assert!(
+            (static_cmd.target_rect.y - 50.0).abs() < 1e-9,
+            "FLIP must interpolate position: expected y=50, got {}",
+            static_cmd.target_rect.y
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_deleted_text_fades_out() {
+        // 删除字：RevisionChain 将 byte_range 映射到 None。
+        // Issue #901 问题4：删除字用裁剪收回而非透明度淡出。
+        let presented = sample_presented(1.0);
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        // 构造一个删除映射：空 entries → 所有 offset 映射到 None。
+        let mut chain = identity_chain();
+        let empty_map = writer_core::editor::OffsetMap {
+            entries: Vec::new(),
+        };
+        chain.compose(&empty_map, EditorRevision::new(1));
+
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+
+        // 删除字在 progress=0.5 时用裁剪收回：
+        // source_uv 宽度 = 100 * (1 - 0.5) = 50，opacity 保持 1.0。
+        let static_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::StaticText)
+            .expect("deleted text must be present as StaticText clipping out");
+        assert!(
+            (static_cmd.opacity - 1.0).abs() < 1e-9,
+            "deleted text opacity must be 1.0 (clip-based, not fade), got {}",
+            static_cmd.opacity
+        );
+        assert!(
+            (static_cmd.source_uv.w - 50.0).abs() < 1e-9,
+            "deleted text source_uv width must be 50 (100 * (1-0.5)), got {}",
+            static_cmd.source_uv.w
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_new_text_fades_in() {
+        // 新增字：target 有 glyph run，presented 无对应贡献。
+        // Issue #901 问题4：新增字用裁剪揭示而非透明度淡入。
+        let presented = PresentedScene {
+            source_revision: EditorRevision::initial(),
+            document_session: 1,
+            frame_id: 1,
+            geometry_id: 1,
+            pose_progress: 1.0,
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions: vec![],
+            caret: None,
+            scroll: PresentedScroll::default(),
+        };
+        let target = sample_target();
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+
+        // 新增字在 progress=0.5 时用裁剪揭示：
+        // source_uv 宽度 = 100 * 0.5 = 50，opacity 保持 1.0。
+        let animated_cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::AnimatedText)
+            .expect("new text must be present as AnimatedText clipping in");
+        assert!(
+            (animated_cmd.opacity - 1.0).abs() < 1e-9,
+            "new text opacity must be 1.0 (clip-based, not fade), got {}",
+            animated_cmd.opacity
+        );
+        assert!(
+            (animated_cmd.source_uv.w - 50.0).abs() < 1e-9,
+            "new text source_uv width must be 50 (100 * 0.5), got {}",
+            animated_cmd.source_uv.w
+        );
+    }
+
+    #[test]
+    fn build_draw_plan_empty_presented_and_target() {
+        let presented = PresentedScene {
+            source_revision: EditorRevision::initial(),
+            document_session: 1,
+            frame_id: 1,
+            geometry_id: 1,
+            pose_progress: 1.0,
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions: vec![],
+            caret: None,
+            scroll: PresentedScroll::default(),
+        };
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![],
+            caret: None,
+            scroll: TargetScroll::default(),
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.5),
+            &chain,
+            16.0,
+        );
+        assert!(plan.empty);
+    }
+
+    #[test]
+    fn build_draw_plan_includes_caret() {
+        let mut presented = sample_presented(1.0);
+        presented.caret = Some(PresentedCaret {
+            position: CanvasVec2::new(50.0, 10.0),
+            visible: true,
+            width: 2.0,
+            height: 20.0,
+        });
+        let target = sample_target();
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(0.0),
+            &chain,
+            16.0,
+        );
+
+        let has_caret = plan
+            .commands
+            .iter()
+            .any(|c| c.kind == super::super::draw_plan::DrawCommandKind::Caret);
+        assert!(has_caret, "caret must be included in draw plan");
+    }
+
+    #[test]
+    fn transform_rect_identity() {
+        let rect = CanvasRect::new(10.0, 20.0, 100.0, 50.0);
+        let result = SceneTransition::transform_rect(rect, CanvasAffine2::identity());
+        assert_eq!(result, rect);
+    }
+
+    #[test]
+    fn target_scroll_offsets_glyph_run() {
+        // Issue #901 问题2：target_rect 始终使用文档坐标，不减 scroll_y。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y) 变换。
+        let target = TargetLayoutDescriptor {
+            layout_revision: LayoutRevision::initial(),
+            glyph_runs: vec![TargetGlyphRun {
+                snapshot_id: LineSnapshotId::new(1, 0, 0),
+                source_uv: CanvasRect::new(0.0, 0.0, 100.0, 20.0),
+                document_rect: CanvasRect::new(100.0, 200.0, 100.0, 20.0),
+                byte_range: (0, 5),
+            }],
+            caret: None,
+            scroll: TargetScroll { x: 10.0, y: 50.0 },
+            clip: CanvasRect::new(0.0, 0.0, 800.0, 600.0),
+        };
+        let presented = sample_presented(0.0); // 透明，不产生命令
+        let chain = identity_chain();
+        let plan = SceneTransition::build_draw_plan(
+            &presented,
+            &target,
+            &pose(1.0),
+            &chain,
+            16.0,
+        );
+
+        let cmd = plan
+            .commands
+            .iter()
+            .find(|c| c.ownership == OwnershipRule::AnimatedText)
+            .expect("target glyph run must produce a command");
+        // Issue #901 问题2：target_rect 是文档坐标 (100, 200)，不减 scroll。
+        // C++ 动画层统一施加一次 translate(0, -scroll_y)。
+        assert!((cmd.target_rect.x - 100.0).abs() < 1e-9);
+        assert!((cmd.target_rect.y - 200.0).abs() < 1e-9);
+    }
+}

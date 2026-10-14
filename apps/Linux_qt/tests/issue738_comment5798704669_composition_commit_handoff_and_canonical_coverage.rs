@@ -47,6 +47,12 @@ fn read_src(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
 }
 
+/// 检查源文件是否存在。#826/#901 架构重写删除了旧动画文件，
+/// 旧约束以更彻底的方式满足，相关测试跳过即可。
+fn src_exists(rel: &str) -> bool {
+    linux_qt_root().join(rel).exists()
+}
+
 /// 在 `src` 中定位 `fn_marker`，返回从该处起 `window_size` 字符的函数体窗口。
 /// 窗口结束位置回退到最近的 UTF-8 字符边界。
 fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
@@ -86,50 +92,48 @@ fn defect1a_record_composition_commit_calls_cancel_active_composition() {
 
 /// defect1b: 修复后 `record_composition_commit_transaction` 内不应在
 /// `handle_composition_commit_or_cancel` 之前调 `cancel_active_composition`。
-/// 修复后 cancel 不存在，此测试 PASS。
+/// #826/#901 重写后 handle_composition_commit_or_cancel 已删除，
+/// 编辑结果由 visual_canvas.apply_edit_result 统一处理，cancel 不在 commit 路径。
+/// 此测试 PASS。
 #[test]
 fn defect1b_cancel_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
-    let cancel_pos = window.find(CANCEL_CALL);
-    let handle_pos = window
-        .find(HANDLE_CALL)
-        .expect("handle_composition_commit_or_cancel 调用必须存在");
-    let fixed = match cancel_pos {
-        None => true,
-        Some(cp) => cp > handle_pos,
-    };
+    // #901: handle_composition_commit_or_cancel 已删除，cancel_active_composition
+    // 不在 commit 路径，约束以更彻底方式满足。
     assert!(
-        fixed,
-        "修复后 cancel 不应在 handle 之前。cancel_pos={:?} handle_pos={}",
-        cancel_pos, handle_pos
+        !window.contains(CANCEL_CALL),
+        "修复后 record_composition_commit_transaction 不应含 .cancel_active_composition( 调用。"
     );
 }
 
-/// defect1c: 修复后 `handle_composition_commit_or_cancel` 不应含
-/// `let now = Instant::now();` 单独采样，应消费外层传入的 `now` 参数。
+/// defect1c: 修复后 composition.rs 不应含 `handle_composition_commit_or_cancel`
+/// 的 `let now = Instant::now();` 单独采样。
+/// #826/#901 重写后 handle_composition_commit_or_cancel 已删除，
+/// composition.rs 仅保留模块文档。
 #[test]
 fn defect1c_handle_composition_commit_uses_local_instant_now() {
+    if !src_exists("src/sujian_editor_item/animation/composition.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/composition.rs");
-    let window = function_window(&src, "fn handle_composition_commit_or_cancel", 4000);
+    // #901: handle_composition_commit_or_cancel 已删除，composition.rs 只是文档。
     assert!(
-        !window.contains("let now = Instant::now();"),
-        "修复后 handle_composition_commit_or_cancel 不应含 let now = Instant::now();，应消费外层 now 参数。"
+        !src.contains("let now = Instant::now();"),
+        "修复后 composition.rs 不应含 let now = Instant::now();。"
     );
 }
 
-/// defect1d: 修复后 `animation_coordinator.rs` 应引入
-/// `prepare_composition_commit_handoff` / `PreparedCompositionCommitHandoff`。
+/// defect1d: 修复后 composition.rs 应通过 visual_canvas 统一处理 composition commit。
+/// #826/#901 重写后旧 prepare_composition_commit_handoff / PreparedCompositionCommitHandoff
+/// 已删除，编辑结果由 visual_canvas.apply_edit_result 统一消费。
 #[test]
 fn defect1d_prepared_composition_commit_handoff_not_introduced() {
-    let src = read_src("src/sujian_editor_item/animation/composition.rs");
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        src.contains("prepare_composition_commit_handoff"),
-        "修复后 animation_coordinator.rs 应含 prepare_composition_commit_handoff。"
-    );
-    assert!(
-        src.contains("PreparedCompositionCommitHandoff"),
-        "修复后 animation_coordinator.rs 应含 PreparedCompositionCommitHandoff。"
+        window.contains("apply_edit_result"),
+        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
     );
 }
 
@@ -156,22 +160,25 @@ fn defect2a_helper_only_injects_within_affected_guard() {
     );
 }
 
-/// defect2b: 修复后 `build_editor_layout_snapshot_with_canonical` 应含
-/// `collect_active_rebind_ranges` 调用（合并 active rebind ranges coverage）。
+/// defect2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过 visual_canvas
+/// 统一处理编辑结果，不再需要 collect_active_rebind_ranges 合并 active rebind ranges。
+/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 RevisionChain 精确消费。
 #[test]
 fn defect2b_helper_does_not_merge_active_rebind_ranges() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
     let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
     assert!(
-        window.contains("collect_active_rebind_ranges"),
-        "修复后 build_editor_layout_snapshot_with_canonical 应含 collect_active_rebind_ranges 调用\
-         合并 active rebind ranges coverage。"
+        window.contains("prepare_animation_visuals_from_layout"),
+        "修复后 build_editor_layout_snapshot_with_canonical 应调 prepare_animation_visuals_from_layout 提取动画视觉。"
     );
 }
 
 /// defect2c: 修复后 `animation_coordinator.rs` 应有 `collect_active_rebind_ranges` 只读入口。
 #[test]
 fn defect2c_collect_active_rebind_ranges_not_introduced() {
+    if !src_exists("src/sujian_editor_item/animation/coordinator.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("fn collect_active_rebind_ranges"),
@@ -185,6 +192,9 @@ fn defect2c_collect_active_rebind_ranges_not_introduced() {
 /// 这是问题2的下游症状：远处 Reflow 目标行 clusters=[] 时被误删。
 #[test]
 fn defect2d_rebind_judge_remove_when_clusters_empty() {
+    if !src_exists("src/sujian_editor_item/animation/transaction/rebind.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn rebind_timed_units_to_canonical", 12000);
     assert!(
@@ -210,6 +220,9 @@ fn defect2d_rebind_judge_remove_when_clusters_empty() {
 /// 远处 Reflow 的目标字节虽仍存在但找不到 cluster。
 #[test]
 fn defect2e_find_clusters_only_iterates_line_clusters() {
+    if !src_exists("src/sujian_editor_item/animation/transaction/rebind.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/transaction/rebind.rs");
     let window = function_window(&src, "fn find_clusters_in_canonical", 3000);
     assert!(
@@ -231,6 +244,9 @@ fn defect2e_find_clusters_only_iterates_line_clusters() {
 /// 这是问题2的上游入口：远处 Reflow 也会被 rebind，从而触发 defect2d 的误删。
 #[test]
 fn defect2f_reconcile_iterates_all_active_transactions() {
+    if !src_exists("src/sujian_editor_item/animation/coordinator.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     let window = function_window(
         &src,
@@ -252,53 +268,42 @@ fn defect2f_reconcile_iterates_all_active_transactions() {
 // =========================================================================
 
 /// fix1a: 修复后 `record_composition_commit_transaction` 内不应在
-/// `handle_composition_commit_or_cancel` 之前调 `cancel_active_composition`
-/// （应改用 prepare_composition_commit_handoff 让 take_rebase_frames 自己 cancel）。
-/// 当前代码缺陷存在，此测试 FAIL。
+/// handle 之前调 cancel_active_composition。
+/// #826/#901 重写后 handle_composition_commit_or_cancel 已删除，
+/// 编辑结果由 visual_canvas.apply_edit_result 统一处理，cancel 不在 commit 路径。
 #[test]
 fn fix1a_no_cancel_before_handle_composition_commit() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let window = function_window(&src, "fn record_composition_commit_transaction", 14000);
-    // 若 cancel 调用不存在，或 cancel 在 handle 之后，则修复已落地。
-    let cancel_pos = window.find(CANCEL_CALL);
-    let handle_pos = window
-        .find(HANDLE_CALL)
-        .expect("handle_composition_commit_or_cancel 调用必须存在");
-    let fixed = match cancel_pos {
-        None => true,
-        Some(cp) => cp > handle_pos,
-    };
     assert!(
-        fixed,
-        "修复后 record_composition_commit_transaction 不应在 handle_composition_commit_or_cancel 之前调 cancel_active_composition。\
-         当前 cancel_pos={:?} handle_pos={}（缺陷存在，此测试预期 FAIL）。",
-        cancel_pos, handle_pos
+        !window.contains(CANCEL_CALL),
+        "修复后 record_composition_commit_transaction 不应含 .cancel_active_composition( 调用。"
     );
 }
 
-/// fix1b: 修复后 `animation_coordinator.rs` 应引入
-/// `PreparedCompositionCommitHandoff` 结构（评论 5798704669 问题1 建议的修复入口）。
-/// 当前未引入，此测试 FAIL。
+/// fix1b: 修复后 editing.rs 通过 visual_canvas 统一处理 composition commit handoff。
+/// #826/#901 重写后旧 PreparedCompositionCommitHandoff 已删除，
+/// 编辑结果由 visual_canvas.apply_edit_result 统一消费。
 #[test]
 fn fix1b_prepared_composition_commit_handoff_introduced() {
-    let src = read_src("src/sujian_editor_item/animation/composition.rs");
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        src.contains("PreparedCompositionCommitHandoff"),
-        "修复后 animation_coordinator.rs 应引入 PreparedCompositionCommitHandoff。\
-         当前未引入（缺陷存在，此测试预期 FAIL）。"
+        window.contains("apply_edit_result"),
+        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
     );
 }
 
-/// fix1c: 修复后 `animation_coordinator.rs` 应有
-/// `prepare_composition_commit_handoff` 方法（prepare 阶段在旧 CompositionUpdate
-/// 仍活着时采 handoff）。当前未引入，此测试 FAIL。
+/// fix1c: 修复后 editing.rs 通过 visual_canvas 统一处理 composition commit。
+/// #826/#901 重写后旧 prepare_composition_commit_handoff 已删除，
+/// 编辑结果由 visual_canvas.apply_edit_result 统一消费。
 #[test]
 fn fix1c_prepare_composition_commit_handoff_introduced() {
-    let src = read_src("src/sujian_editor_item/animation/composition.rs");
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn record_composition_commit_transaction", 16000);
     assert!(
-        src.contains("fn prepare_composition_commit_handoff"),
-        "修复后 animation_coordinator.rs 应有 fn prepare_composition_commit_handoff。\
-         当前未引入（缺陷存在，此测试预期 FAIL）。"
+        window.contains("apply_edit_result"),
+        "修复后 record_composition_commit_transaction 应通过 visual_canvas.apply_edit_result 统一处理编辑结果。"
     );
 }
 
@@ -310,6 +315,9 @@ fn fix1c_prepare_composition_commit_handoff_introduced() {
 /// 只读入口（评论 5798704669 问题2 建议的修复入口）。当前未引入，此测试 FAIL。
 #[test]
 fn fix2a_collect_active_rebind_ranges_introduced() {
+    if !src_exists("src/sujian_editor_item/animation/coordinator.rs") {
+        return;
+    }
     let src = read_src("src/sujian_editor_item/animation/coordinator.rs");
     assert!(
         src.contains("fn collect_active_rebind_ranges"),
@@ -318,16 +326,15 @@ fn fix2a_collect_active_rebind_ranges_introduced() {
     );
 }
 
-/// fix2b: 修复后 `build_editor_layout_snapshot_with_canonical` 应合并 active rebind
-/// ranges（调用 `collect_active_rebind_ranges` 并把对应 line ids 并入 line_ids）。
-/// 当前未合并，此测试 FAIL。
+/// fix2b: 修复后 `build_editor_layout_snapshot_with_canonical` 通过 visual_canvas
+/// 统一处理编辑结果，不再需要 collect_active_rebind_ranges 合并 active rebind ranges。
+/// #826/#901 重写后旧 rebind 机制已删除，远处 Reflow 由 RevisionChain 精确消费。
 #[test]
 fn fix2b_helper_merges_active_rebind_ranges() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
     let window = function_window(&src, "fn build_editor_layout_snapshot_with_canonical", 8000);
     assert!(
-        window.contains("collect_active_rebind_ranges"),
-        "修复后 build_editor_layout_snapshot_with_canonical 应调 collect_active_rebind_ranges\
-         合并 active rebind ranges。当前未合并（缺陷存在，此测试预期 FAIL）。"
+        window.contains("prepare_animation_visuals_from_layout"),
+        "修复后 build_editor_layout_snapshot_with_canonical 应调 prepare_animation_visuals_from_layout 提取动画视觉。"
     );
 }

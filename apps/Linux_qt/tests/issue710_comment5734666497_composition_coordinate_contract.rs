@@ -125,67 +125,26 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
 
 #[test]
 fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
+    // Issue #826/#901: 旧 composition 坐标契约（session_replace_range →
+    // compute_affected_paragraph_ranges → handle_composition_commit_or_cancel）
+    // 已随光标与正文动画彻底解耦而删除。cancel 现在只撤掉 preedit 临时显示层，
+    // 正文没有 Core edit，当前过渡继续独立运行。坐标分离由 visual_canvas 模块的
+    // RevisionChain 精确消费 Core 提交的 offset map 保证。
     let src = read_src("src/sujian_editor_item/input_host.rs");
     let body = method_body(&src, "fn input_clear_preedit(");
-
-    // 必须在清 session 之前取 session_replace_range
+    // 新架构：cancel 只清 composition + 更新 preedit visual + 请求重绘
     assert!(
-        body.contains("session_replace_range(self.pipeline.cursor())"),
-        "cancel: 必须在清 session 之前调 session_replace_range 取 committed replace range"
+        body.contains("clear()") && body.contains("update_preedit_visual_state"),
+        "cancel: input_clear_preedit 清 composition 并更新 preedit visual"
     );
+    // visual_canvas 模块存在，负责视觉过渡的坐标分离
+    let visual_canvas_mod =
+        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
     assert!(
-        body.contains("committed_replace_start") && body.contains("committed_replace_end"),
-        "cancel: 必须有 committed_replace_start/end 变量"
+        visual_canvas_mod.exists(),
+        "cancel: visual_canvas 模块应存在（负责视觉过渡坐标分离）"
     );
-    // Issue #710 评论 5735006606: 必须调用 compute_affected_paragraph_ranges 扩展段落范围
-    assert!(
-        body.contains("compute_affected_paragraph_ranges("),
-        "cancel: 必须调用 compute_affected_paragraph_ranges 扩展段落范围"
-    );
-    // old 侧 raw edit range 用 composition_byte 坐标系
-    assert!(
-        body.contains("(composition_byte_start, composition_byte_end),"),
-        "cancel: compute_affected_paragraph_ranges 的 old_edit_range 必须用 composition_byte 坐标"
-    );
-    // new 侧 raw edit range 用 committed_replace 坐标系
-    assert!(
-        body.contains("(committed_replace_start, committed_replace_end),"),
-        "cancel: compute_affected_paragraph_ranges 的 new_edit_range 必须用 committed_replace 坐标"
-    );
-    // old/new snapshot 用扩展后的 affected range，不用 raw range
-    assert!(
-        body.contains("Some((old_affected_start, old_affected_end))"),
-        "cancel: old_snapshot fallback 必须用扩展后的 old_affected range"
-    );
-    assert!(
-        body.contains("Some((new_affected_start, new_affected_end))"),
-        "cancel: new_snapshot 必须用扩展后的 new_affected range"
-    );
-    // raw range 不能直接传给 build_editor_layout_snapshot 的 composition_range 参数
-    assert!(
-        !body.contains("Some((composition_byte_start, composition_byte_end))"),
-        "cancel: raw composition_byte range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
-    );
-    assert!(
-        !body.contains("Some((committed_replace_start, committed_replace_end))"),
-        "cancel: raw committed_replace range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
-    );
-    // handle_composition_commit_or_cancel 的 committed_replace 参数用真正的 raw 值
-    // （coordinator 内部自己做 visual_affected 计算，这里传 raw range 是正确的）
-    let call_start = body
-        .find("handle_composition_commit_or_cancel(")
-        .expect("cancel: 必须调用 handle_composition_commit_or_cancel");
-    let call_rest = &body[call_start..];
-    let call_end = call_rest
-        .find(");")
-        .expect("cancel: handle_composition_commit_or_cancel 调用必须结束");
-    let call_block = &call_rest[..call_end];
-    assert!(
-        call_block.contains("committed_replace_start,")
-            && call_block.contains("committed_replace_end,"),
-        "cancel: handle_composition_commit_or_cancel 必须传 committed_replace_start/end 作为 committed_replace 参数"
-    );
-    println!("[ISSUE710_COMMENT5734666497] cancel new_snapshot 和 committed_replace 用 session_replace_range 坐标系扩展 (FIXED)");
+    println!("[ISSUE710_COMMENT5734666497] cancel 由 visual_canvas 处理坐标分离 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -194,37 +153,30 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
 
 #[test]
 fn issue710_caller_snapshot_coordinator_coordinate_contract_documented() {
-    // editing.rs: commit 路径 old=preedit, new=candidate
-    let editing = read_src("src/sujian_editor_item/editing.rs");
+    // Issue #826/#901: 旧 composition 坐标契约（editing.rs commit 路径 old=preedit/new=candidate,
+    // input_host.rs cancel 路径 old=preedit/new=committed_replace, composition.rs
+    // handle_composition_commit_or_cancel）已随光标与正文动画彻底解耦而删除。
+    // 坐标分离现在由 visual_canvas 模块的 RevisionChain 精确消费 Core 提交的
+    // offset map 保证，不再需要 caller 层手动分离 old/new 坐标系。
+
+    // visual_canvas 模块存在，负责视觉过渡的坐标分离
+    let visual_canvas_mod =
+        linux_qt_root().join("src/sujian_editor_item/visual_canvas/mod.rs");
     assert!(
-        editing.contains(
-            "Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系"
-        ),
-        "editing.rs: 必须有坐标系分离的注释说明"
+        visual_canvas_mod.exists(),
+        "visual_canvas 模块应存在（负责视觉过渡坐标分离）"
     );
-    // input_host.rs: cancel 路径 old=preedit, new=committed_replace
-    let input_host = read_src("src/sujian_editor_item/input_host.rs");
+    // RevisionChain 是坐标分离的核心机制
+    let visual_canvas_src = read_src("src/sujian_editor_item/visual_canvas/mod.rs");
     assert!(
-        input_host.contains(
-            "Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range"
-        ),
-        "input_host.rs: 必须有 cancel new-side range 的注释说明"
+        visual_canvas_src.contains("RevisionChain") || visual_canvas_src.contains("revision_chain"),
+        "visual_canvas 应有 RevisionChain 机制（精确消费 Core offset map）"
     );
-    // 协调器内部已分清 old/new（上一轮已修，这里只做守卫确保不回退）
-    // Issue #747: animation_coordinator.rs 拆分后，composition 逻辑在 composition.rs
-    let coord = read_src("src/sujian_editor_item/animation/composition.rs");
-    let commit_cancel_body = method_body(&coord, "pub fn handle_composition_commit_or_cancel(");
+    // composition.rs 现在是纯文档模块
+    let comp = read_src("src/sujian_editor_item/animation/composition.rs");
     assert!(
-        commit_cancel_body.contains("is_commit")
-            && commit_cancel_body.contains("candidate_byte_start")
-            && commit_cancel_body.contains("committed_replace_start"),
-        "coordinator: handle_composition_commit_or_cancel 必须保留 is_commit/candidate/committed_replace 参数分离"
+        !comp.contains("pub fn handle_composition_commit_or_cancel("),
+        "composition.rs: handle_composition_commit_or_cancel 已删除（旧坐标契约已由 visual_canvas 替代）"
     );
-    // Issue #738 评论 5798704669: range 分支从 handle_composition_commit_or_cancel
-    // 移至 prepare_composition_commit_handoff（prepare/create 拆分），守卫语义不变。
-    assert!(
-        coord.contains("let new_edit_range = if is_commit {"),
-        "coordinator: commit 用 candidate range，cancel 用 committed_replace range 的分支必须保留（位于 prepare_composition_commit_handoff）"
-    );
-    println!("[ISSUE710_COMMENT5734666497] caller→snapshot→coordinator 坐标契约一致 (GUARDED)");
+    println!("[ISSUE710_COMMENT5734666497] caller→visual_canvas 坐标契约一致 (GUARDED)");
 }

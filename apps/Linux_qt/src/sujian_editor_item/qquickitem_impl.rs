@@ -38,6 +38,18 @@ fn qquickwindow_after_frame_end_signal() -> qmetaobject::Signal<fn()> {
     }
 }
 
+/// Issue #901 第十三轮问题5: QQuickWindow::sceneGraphInvalidated 信号。
+/// 在渲染线程触发，场景图被销毁/重建时 emit。用于在渲染线程安全清理
+/// g_incremental_para_map 中该 item 的映射条目。
+fn qquickwindow_scene_graph_invalidated_signal() -> qmetaobject::Signal<fn()> {
+    // SAFETY: QQuickWindow::sceneGraphInvalidated has the exact signature void().
+    unsafe {
+        qmetaobject::Signal::new(cpp::cpp!([] -> qmetaobject::SignalInner as "SignalInner" {
+            return &QQuickWindow::sceneGraphInvalidated;
+        }))
+    }
+}
+
 fn bind_frame_submission_window(
     window_ptr: *mut std::ffi::c_void,
     item_context_ptr: *mut std::ffi::c_void,
@@ -78,6 +90,27 @@ fn bind_frame_submission_window(
     };
     connections.push(Box::new(move || after_synchronizing.disconnect()));
     connections.push(Box::new(move || after_frame_end.disconnect()));
+
+    // Issue #901 第十三轮问题5: 连接 sceneGraphInvalidated 信号。
+    // 该信号在渲染线程触发（场景图被销毁/重建时），回调直接在渲染线程执行。
+    // 在回调中清理 g_incremental_para_map[item_context_ptr]，与同在渲染线程的
+    // update_paint_node 读写互斥安全。
+    // item_context_ptr 是 C++ QQuickItem* 指针，用作 g_incremental_para_map 的 key。
+    // clear_incremental_para_map_render_thread 只按指针值 erase，不解引用，安全。
+    let scene_graph_item_key = item_context_ptr;
+    // SAFETY: window_ptr is a live QQuickWindow pointer; sceneGraphInvalidated has
+    // void() signature; the callback captures only a raw pointer value (Copy type)
+    // and passes it to a C++ function that only uses it as an unordered_map key.
+    let mut scene_graph_invalidated = unsafe {
+        qmetaobject::connect(
+            window_ptr,
+            qquickwindow_scene_graph_invalidated_signal(),
+            move || {
+                qt_text_node::clear_incremental_para_map_render_thread(scene_graph_item_key);
+            },
+        )
+    };
+    connections.push(Box::new(move || scene_graph_invalidated.disconnect()));
 
     // SAFETY: These live Qt pointers come from this item/window binding. The C++ wrapper
     // stores the item as the queued connection context and captures this generation.
@@ -163,6 +196,22 @@ impl QQuickItem for SujianEditorItem {
         self.request_static_repaint();
     }
 
+    /// Issue #901 第十三轮问题5: Qt 官方 `QQuickItem::releaseResources()` 在 GUI 线程触发。
+    ///
+    /// 涉及 render 资源的清理需使用 `QQuickWindow::scheduleRenderJob()`，在渲染线程
+    /// 执行清理 job。`g_incremental_para_map` 被 `update_paint_node`（渲染线程）读写，
+    /// GUI 线程不能直接 erase（跨线程数据竞争）。
+    ///
+    /// `schedule_clear_incremental_para_map` 通过 `scheduleRenderJob` 在渲染线程
+    /// 安全清理 `g_incremental_para_map[item_ptr]`。erase 只按指针值移除 map 条目，
+    /// 不解引用 item_ptr，即使 job 执行时 item 已被销毁也安全。
+    fn release_resources(&mut self) {
+        let item_ptr = self.get_cpp_object();
+        if !item_ptr.is_null() {
+            qt_text_node::schedule_clear_incremental_para_map(item_ptr);
+        }
+    }
+
     fn update_paint_node(
         &mut self,
         mut node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
@@ -178,18 +227,13 @@ impl QQuickItem for SujianEditorItem {
         self.drain_pointer_frame_submissions();
 
         // Qt invokes this method during synchronization. Consume only acknowledgments that
-        // arrived from afterFrameEnd, then let the coordinator reject stale sessions/revisions.
-        let handoff_promoted = self
-            .pipeline
-            .animation_coordinator_mut()
-            .consume_submitted_frames();
-        if handoff_promoted {
-            let active_ids = self
-                .pipeline
-                .animation_coordinator()
-                .collect_active_snapshot_ids();
-            self.pipeline.retain_active_snapshot_ids(&active_ids);
-        }
+        // arrived from afterFrameEnd.
+        // Issue #901: 旧 animation_coordinator.consume_submitted_frames /
+        // collect_active_snapshot_ids 已删除。帧提交 mailbox 的 texture retain
+        // 改由 visual_canvas 的绘制计划决定。
+        // Issue #901 问题3/问题6：retain_active_snapshot_ids 的真实 active ids
+        // 在下方 canvas_plan 采样之后计算（需要 canvas_plan 的 snapshot_ids +
+        // mailbox 的未确认帧 snapshot_ids）。此处的占位已移到 canvas_plan 之后。
 
         // Pure pointer/keyboard routes remain owned by CursorController. In coordinated
         // TextTransaction mode, build_render_plan_full samples the edit timeline once and
@@ -224,6 +268,11 @@ impl QQuickItem for SujianEditorItem {
         } else {
             1.0
         };
+
+        // Issue #901 第十三轮问题5: 移除 pending_clear_incremental_map 延迟清理机制。
+        // 旧机制在 Drop/切章时设置标记，依赖下一次 update_paint_node 消费，
+        // 但 Drop 后 item 不再有下一帧，标记永远不会被消费。
+        // 新机制通过 release_resources() + sceneGraphInvalidated 在渲染线程安全清理。
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
@@ -272,7 +321,30 @@ impl QQuickItem for SujianEditorItem {
             // build_render_plan_full 内部，用同一份 AnimationFrameSample。
             // Issue #707 评论 5725190370: CursorRenderState 构造抽成
             // build_cursor_render_state_for_frame，和 runtime_tests 共用同一份逻辑。
-            let cursor_render_state = self.build_cursor_render_state_for_frame();
+            // Issue #901 阻塞 1+5：先采样 visual_canvas.frame(frame_now) 获取 CanvasDrawPlan，
+            // 再用它构造 cursor_render_state（正文协同输入时光标从 caret_sample 获取）。
+            let frame_now_ms = Self::frame_now_ms(&self.last_frame_now);
+            // Issue #901 问题3：首帧静态 canonical 初始化。
+            // 如果 presented_scene 为 None 但有 target_layout，从 target 构造
+            // 首张 PresentedScene，使第一帧静态画面被正确注册为 scene。
+            self.pipeline
+                .visual_canvas_mut()
+                .initialize_presented_from_target(frame_now_ms);
+            let canvas_plan = self.pipeline.visual_canvas().frame(frame_now_ms);
+
+            // Issue #901 第九轮阻塞3：retain_active_snapshot_ids 移到渲染成功之后。
+            // 旧实现在此处（渲染前）做 retain，收集源只有 canvas_plan.commands 与
+            // mailbox.active_snapshot_ids()，没有当前 PresentedScene 的静态 cluster，
+            // 也没有本帧即将创建的静态贡献。texture_cache.retain 会实际删除所有未列出
+            // 的图像——纯静态首帧或完成动画后、mailbox 已确认的可见字可能没有 Canvas
+            // TextFragment，于是刚准备的纹理即被移除。
+            // 新实现移到 render_frame 成功之后，并扩展 resource roots 覆盖：
+            // (1) 最后确认的 PresentedScene 静态和动画片段
+            // (2) 所有待 afterFrameEnd 的帧
+            // (3) 当前将渲染的实际静态/动画片段
+            // (4) 新 target 中动画尚未出现但即将需要的纹理
+
+            let cursor_render_state = self.build_cursor_render_state_for_frame(&canvas_plan);
 
             // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
             // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
@@ -319,18 +391,165 @@ impl QQuickItem for SujianEditorItem {
                     _ => false,
                 };
 
-            let render_plan = self
-                .pipeline
-                .animation_coordinator_mut()
-                .build_render_plan_full(
-                    cursor_render_state,
-                    selection_preedit,
-                    cursor_style,
-                    selection_preedit_style,
-                    self.current_coordinated_animation_enabled,
-                    frame_now,
-                    canonical_visual_snapshot.as_ref(),
-                );
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的 TextFragment 命令转换为
+            // TextAnimationGlyphInfo 列表，供动画层消费。
+            // canvas_plan 已在上方采样（供 cursor_render_state 使用）。
+
+            let drawn_caret_rect = if cursor_render_state.visible {
+                Some((
+                    cursor_render_state.x,
+                    cursor_render_state.y,
+                    cursor_render_state.h,
+                ))
+            } else {
+                None
+            };
+
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的 TextFragment 命令转换为
+            // TextAnimationGlyphInfo 列表，供动画层消费。
+            let animated_glyphs = super::scene_graph_renderer::canvas_draw_plan_to_glyph_infos(
+                &canvas_plan,
+                self.pipeline.texture_cache(),
+            );
+            // Issue #901 阻塞 1：从 CanvasDrawPlan 的命令推导静态层裁剪矩形。
+            let clip_rects = super::scene_graph_renderer::canvas_draw_plan_to_clip_rects(
+                &canvas_plan,
+            );
+
+            // Issue #901 第十轮问题1：删除前置的 animation_resources_ready_for_static
+            // 平行推测逻辑。旧实现在调用渲染器之前自行用 animated_glyphs 是否有纹理
+            // 猜 effective_clip_rects，据此生成 static_text_contributions。
+            // 但渲染器内部才真正决定 static clip（见 scene_graph_renderer.rs:277-288），
+            // 前置推测与渲染器决策可能不一致。
+            // 现改为：static_text_contributions 传入"未减 holes 的原始 cluster 信息"
+            //（作为渲染器的输入），渲染器在 compute_drawn_static_fragments 中减 holes
+            // 后返回 drawn_static_fragments。build_presented_scene_from_frame 用
+            // drawn_static_fragments（而非 render_plan.static_text_contributions）
+            // 构造 PresentedScene。
+
+            // Issue #901 第六轮阻塞3 / 第七轮问题3：从静态 QSGTextNode 的有效文本
+            // cluster 登记已提交贡献。首帧不能用"没有动画 TextFragment"代表"没有已显示
+            // 正文"——静态文本可以由 QSGTextNode 绘制而不需要 overlay，但 PresentedScene
+            // 必须知道它的身份。从 EditorLayoutSnapshot.line_snapshots 的 **cluster**
+            // 提取 LineSnapshotId、byte range、文档坐标几何和源纹理 UV，与视口求交后
+            // 填入 RenderPlan.static_text_contributions，供 build_presented_scene_from_frame
+            // 登记静态正文的真实像素贡献。
+            //
+            // Issue #901 第十轮问题1+问题3 修复：
+            // - 旧实现用 `clip_rects.iter().any(rect_fully_contains(...))` 判断 cluster
+            //   是否被动画接管。新实现把原始 cluster 信息（未减 holes）传给渲染器，
+            //   渲染器在 compute_drawn_static_fragments 中用矩形差集计算真实可见静态片段。
+            // - 旧实现在 cluster 无纹理时直接不登记，但 QSGTextNode 实际仍画了该字。
+            //   新实现无纹理时也登记"静态已显示"的字形身份。
+            // - 旧实现无纹理时不减 effective_holes（问题3）。新实现统一在渲染器侧减 holes，
+            //   无论有无纹理。
+            // - 此处构造的 static_text_contributions 是"原始 cluster 信息"（未减 holes），
+            //   渲染器返回的 drawn_static_fragments 才是"真实可见静态片段"（已减 holes）。
+            let static_text_contributions: Vec<
+                super::render_plan::StaticTextContributionInfo,
+            > = canonical_visual_snapshot
+                .as_ref()
+                .map(|snap| {
+                    let viewport_top = scroll_y;
+                    let viewport_bottom = scroll_y + vp_h;
+                    let static_source_revision = canvas_plan.target_revision;
+                    snap.line_snapshots
+                        .iter()
+                        .flat_map(|line| {
+                            let line_h = line.visual_line_bottom - line.visual_line_top;
+                            if line_h <= 0.0 || line.byte_start >= line.byte_end {
+                                return Vec::new();
+                            }
+                            let dpr = if line.dpr > 0.0 { line.dpr } else { 1.0 };
+                            line.clusters
+                                .iter()
+                                .flat_map(|cluster| {
+                                    if cluster.byte_start >= cluster.byte_end
+                                        || cluster.source_rect.w <= 0.0
+                                        || cluster.source_rect.h <= 0.0
+                                    {
+                                        return Vec::new();
+                                    }
+                                    let doc_x = line.visual_x + cluster.source_rect.x / dpr;
+                                    let doc_w = (cluster.source_rect.w / dpr).max(0.0);
+                                    let doc_rect = super::layout_snapshot::SourceRect {
+                                        x: doc_x,
+                                        y: line.visual_line_top,
+                                        w: doc_w,
+                                        h: line_h,
+                                    };
+                                    // 视口裁剪（文档坐标）。
+                                    let clip_y = doc_rect.y.max(viewport_top);
+                                    let clip_bottom =
+                                        (doc_rect.y + doc_rect.h).min(viewport_bottom);
+                                    let clip_h = (clip_bottom - clip_y).max(0.0);
+                                    if clip_h <= 0.0 {
+                                        return Vec::new();
+                                    }
+                                    let byte_range = (cluster.byte_start, cluster.byte_end);
+                                    let glyph_id = super::visual_canvas::PixelContribution::derive_glyph_id(&line.id, byte_range);
+                                    // Issue #901 第十轮问题1：此处构造的是"原始 cluster 信息"
+                                    //（未减 holes），作为渲染器的输入。渲染器在
+                                    // compute_drawn_static_fragments 中减 holes 后返回
+                                    // drawn_static_fragments。
+                                    // Issue #901 第十轮问题3：无论有无纹理，都登记。
+                                    // 渲染器侧统一减 holes。
+                                    vec![super::render_plan::StaticTextContributionInfo {
+                                        snapshot_id: line.id,
+                                        byte_range,
+                                        // Issue #901 第十二轮问题1补充:
+                                        // document_rect 保存裁剪前的完整字形几何
+                                        //（doc_rect.y = line.visual_line_top, h = line_h），
+                                        // 供下游 original_glyph_rect 使用完整字形高度，
+                                        // 避免 FLIP 变换基准被视口边缘的"半字高度"冒充。
+                                        // 视口裁剪后的可见区域由 visible_clip 承载。
+                                        document_rect: super::layout_snapshot::SourceRect {
+                                            x: doc_rect.x,
+                                            y: doc_rect.y,
+                                            w: doc_rect.w,
+                                            h: doc_rect.h,
+                                        },
+                                        visible_clip: super::layout_snapshot::SourceRect {
+                                            x: doc_rect.x,
+                                            y: clip_y,
+                                            w: doc_rect.w,
+                                            h: clip_h,
+                                        },
+                                        source_uv: super::layout_snapshot::SourceRect {
+                                            x: cluster.source_rect.x,
+                                            y: cluster.source_rect.y,
+                                            w: cluster.source_rect.w,
+                                            h: cluster.source_rect.h,
+                                        },
+                                        source_revision: static_source_revision,
+                                        glyph_id,
+                                        fragment_index: 0,
+                                    }]
+                                })
+                                .collect()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let render_plan = super::render_plan::RenderPlan {
+                ownership: super::render_plan::RenderOwnership {
+                    animated_glyphs,
+                    clip_rects,
+                    handoff_pending: false,
+                    ownership_revision: self.pipeline.visual_revision(),
+                    target_layout_revision: self
+                        .pipeline
+                        .visual_canvas()
+                        .target_layout_revision(),
+                },
+                selection_preedit,
+                cursor: cursor_render_state,
+                cursor_style,
+                selection_preedit_style,
+                static_text_contributions,
+                drawn_caret_rect,
+            };
 
             // owner revision 来自完整 cluster owner set，A→A+B 也会触发静态 rebuild。
             // 只在 static + animation 整帧成功后提交 revision；失败时下一帧仍会重试。
@@ -348,15 +567,40 @@ impl QQuickItem for SujianEditorItem {
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
             // `prepared_frame = None` 时不排版，请求下一次 GUI 侧准备。
+            // Issue #901 第六轮阻塞5: 传入 height_index 让 scene_graph_renderer
+            // 能 O(log n) 定位视口内首末可见段落，不遍历全章 lines。
+            // height_index 与 prepared_frame.layout_snapshot 都是不可变借用 self，
+            // 可安全共存。
             let has_snapshot = prepared_frame_matches_canonical;
+            // Issue #901 第九轮阻塞4: 传入稳定 ParagraphId 列表，
+            // 供 ParagraphLineInfo 填入稳定身份标识。
+            let paragraph_ids = self.editor_layout.paragraph_store().paragraph_ids();
+            // Issue #901 第十四轮问题2: 消费 force_full_relayout_pending。
+            // true 表示真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度），
+            // render_frame 传 force_full_relayout=true，C++ 侧无条件重建所有段落。
+            // 普通正文输入不设此标志，由 per-paragraph content_revision 独立判断。
+            let force_full_relayout = self.force_full_relayout_pending;
+            self.force_full_relayout_pending = false;
+            // Issue #901 第十四轮问题2: changed_paragraph_ids 来自 layout 层增量排版结果。
+            // 目前传空集：C++ 侧通过 per-paragraph content_revision 独立判断哪些段变化，
+            // 不依赖此集合。此字段供 Rust 侧做日志/调试参考。
+            let changed_paragraph_ids: std::collections::HashSet<ParagraphId> =
+                std::collections::HashSet::new();
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
                     .map(|f| &f.layout_snapshot),
+                height_index: Some(self.editor_layout.height_index()),
                 scroll_y,
                 viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
                 needs_relayout: frame_needs_relayout,
+                force_full_relayout,
+                changed_paragraph_ids: &changed_paragraph_ids,
+                session_id: self.document_session,
+                // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
+                loaded_para_range: self.loaded_para_range,
+                paragraph_ids: Some(&paragraph_ids),
             };
 
             // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
@@ -365,13 +609,75 @@ impl QQuickItem for SujianEditorItem {
             // 处理正确的 snapshot/generation。同时请求下一帧更新，让 GUI 线程
             // prepare_editor_frame 重新排版（snapshot() 会发现
             // cache 无效而分配新 generation 重新排版）。
-            let static_rebuild_ok = scene_graph_renderer::render_frame(
+            //
+            // Issue #901 第九轮阻塞2：render_frame 返回 FrameRenderOutcome，
+            // 包含 static_rebuild_ok 和 effective_clip_rects。
+            let render_outcome = scene_graph_renderer::render_frame(
                 editor_root,
                 item_ptr,
                 &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+            let static_rebuild_ok = render_outcome.static_rebuild_ok;
+
+            // Issue #901 第九轮阻塞4: 更新 per-item loaded_para_range。
+            // rebuild 成功时用新范围，失败时保留旧范围（new_loaded_para_range=None）。
+            if let Some(new_range) = render_outcome.new_loaded_para_range {
+                self.loaded_para_range = Some(new_range);
+            }
+
+            // Issue #901 第九轮阻塞3：渲染成功后生成本帧 resource roots 并 retain。
+            // 旧实现在渲染前做 retain，会 sweep 掉本帧即将创建的静态贡献的纹理。
+            // 新实现移到渲染后，resource roots 覆盖：
+            // (1) 最后确认的 PresentedScene 静态和动画片段
+            // (2) 所有待 afterFrameEnd 的帧（mailbox.active_snapshot_ids）
+            // (3) 当前将渲染的实际静态/动画片段
+            // (4) 新 target 中动画尚未出现但即将需要的纹理（视口内行的 line.id）
+            {
+                let mut active_ids = self.frame_submission_mailbox.active_snapshot_ids();
+                // (3a) 当前将渲染的动画片段（canvas_plan.commands）
+                for cmd in &canvas_plan.commands {
+                    if !cmd.snapshot_id.is_none() && !active_ids.contains(&cmd.snapshot_id) {
+                        active_ids.push(cmd.snapshot_id);
+                    }
+                }
+                // (3b) 当前将渲染的实际静态片段（render_plan.static_text_contributions）
+                for info in &render_plan.static_text_contributions {
+                    if !info.snapshot_id.is_none() && !active_ids.contains(&info.snapshot_id) {
+                        active_ids.push(info.snapshot_id);
+                    }
+                }
+                // (1) 最后确认的 PresentedScene 的像素贡献
+                if let Some(presented) = self.pipeline.visual_canvas().presented_scene() {
+                    for contrib in &presented.pixel_contributions {
+                        if !contrib.snapshot_id.is_none()
+                            && !active_ids.contains(&contrib.snapshot_id)
+                        {
+                            active_ids.push(contrib.snapshot_id);
+                        }
+                    }
+                }
+                // (4) 新 target 中动画尚未出现但即将需要的纹理：
+                // canonical_visual_snapshot 的视口内行的 line.id。
+                // 这些行可能不在 canvas_plan.commands 中（无动画），但下一帧
+                // 编辑时可能需要它们的纹理。
+                if let Some(snap) = canonical_visual_snapshot.as_ref() {
+                    let vp_top = scroll_y - vp_h;
+                    let vp_bottom = scroll_y + vp_h * 2.0;
+                    for line in &snap.line_snapshots {
+                        let line_y = line.visual_line_top;
+                        let line_bottom = line.visual_line_bottom;
+                        if line_bottom < vp_top || line_y > vp_bottom {
+                            continue;
+                        }
+                        if !line.id.is_none() && !active_ids.contains(&line.id) {
+                            active_ids.push(line.id);
+                        }
+                    }
+                }
+                self.pipeline.retain_active_snapshot_ids(&active_ids);
+            }
 
             let ownership_snapshot_matches = canonical_visual_snapshot
                 .as_ref()
@@ -383,21 +689,78 @@ impl QQuickItem for SujianEditorItem {
                 self.last_committed_ownership_revision = render_plan
                     .ownership
                     .committed_revision(animation_resources_ready);
-                self.pipeline
-                    .animation_coordinator_mut()
-                    .commit_rendered_plan(
-                        &render_plan.ownership,
-                        render_plan
-                            .cursor
-                            .visible
-                            .then_some(super::edit_motion::CursorRect {
-                                x: render_plan.cursor.x,
-                                top: render_plan.cursor.y,
-                                bottom: render_plan.cursor.y + render_plan.cursor.h,
-                                baseline_y: render_plan.cursor.baseline_y,
-                            }),
-                        animation_resources_ready,
+                // Issue #901 问题3：不在 update_paint_node 中直接调用
+                // commit_presented_scene。改为只构造 SubmittedVisualFrame（包含
+                // presented_scene 字段）并 stage 到 frame_submission。
+                // afterFrameEnd 的 mailbox 回执消费后才调用 commit_presented_scene。
+                //
+                // Issue #901 第十轮问题1：传入 render_outcome.drawn_animation_fragments
+                // 和 render_outcome.drawn_static_fragments，让 build_presented_scene_from_frame
+                // 只登记实际绘制的 fragment，不无条件登记原始 canvas_plan.commands。
+                if let Some(scene) = self.build_presented_scene_from_frame(
+                    &canvas_plan,
+                    &render_plan,
+                    &render_outcome.drawn_animation_fragments,
+                    &render_outcome.drawn_static_fragments,
+                    scroll_y,
+                    vp_h,
+                    // Issue #901 问题1：不再传 bound_revision（pipeline.text_revision()）。
+                    // build_presented_scene_from_frame 从 canvas_plan.source_revision /
+                    // target_revision / pose_progress 读取真实值，不硬编码 1.0，
+                    // 也不在绘制尾部重新读取正文 revision 冒充计划版本。
+                    self.next_render_frame_id,
+                    // geometry_id 用 visual_revision 标识排版几何版本。
+                    self.pipeline.visual_revision(),
+                ) {
+                    self.next_render_frame_id =
+                        self.next_render_frame_id.wrapping_add(1);
+                    // Issue #901 问题3/问题6 / 第九轮阻塞3：从 canvas_plan 的 commands
+                    // 提取动画 snapshot_ids + render_plan.static_text_contributions
+                    // 提取静态 snapshot_ids，组合成完整的帧引用列表。
+                    // 帧提交 mailbox 的 active_snapshot_ids() 依赖此列表决定哪些
+                    // QImage 不能释放，retain_active_snapshot_ids 也依赖它保持纹理
+                    // 生命周期。旧实现只传 canvas_plan.commands 的 snapshot_ids，
+                    // 忽略静态贡献——纯静态帧的纹理会在下一帧被 sweep 掉。
+                    //
+                    // Issue #901 第十轮问题1：用 drawn_animation_fragments 和
+                    // drawn_static_fragments 代替原始 canvas_plan.commands 和
+                    // render_plan.static_text_contributions，只引用实际绘制的 fragment。
+                    let mut snapshot_ids: Vec<super::layout_snapshot::LineSnapshotId> =
+                        render_outcome
+                            .drawn_animation_fragments
+                            .iter()
+                            .filter(|f| !f.snapshot_id.is_none())
+                            .map(|f| f.snapshot_id)
+                            .collect();
+                    for frag in &render_outcome.drawn_static_fragments {
+                        if !frag.snapshot_id.is_none()
+                            && !snapshot_ids.contains(&frag.snapshot_id)
+                        {
+                            snapshot_ids.push(frag.snapshot_id);
+                        }
+                    }
+                    // Stage 到 frame_submission，等 afterFrameEnd 回执后才 commit。
+                    self.frame_submission_mailbox.stage_rendered_frame(
+                        self.document_session,
+                        self.pipeline
+                            .current_layout_snapshot()
+                            .as_ref()
+                            .map(|s| s.revision)
+                            .unwrap_or_else(super::layout_revision::LayoutRevision::initial),
+                        0, // transition_id
+                        render_plan.ownership.ownership_revision,
+                        snapshot_ids, // 真实 snapshot_ids
+                        Vec::new(), // terminal_motion_indices
+                        Vec::new(), // visible_width_updates
+                        false,      // terminal_frame
+                        false,      // handoff_pending
+                        0.0,        // shared_progress
+                        0.0,        // timeline_progress
+                        0,          // ownership_conflict_count
+                        Some(scene),
+                        frame_now_ms,
                     );
+                }
             }
 
             // Issue #707 评论 5725190370: drawn_caret_rect 回写抽成
@@ -436,13 +799,19 @@ impl QQuickItem for SujianEditorItem {
 
             // Issue #701 评论 5699573227 第三阶段 (F6): 有活跃正文动画或光标动画
             // 未结束就持续请求下一帧，直到文字和光标一起结束。
-            // 正文过渡与光标 tween 各自未结束时都继续请求下一帧.
-            if self
-                .pipeline
-                .animation_coordinator()
-                .has_active_text_animation(frame_now)
-                || self.cursor_ctrl.animation.is_some()
-            {
+            // Issue #901 问题5：不再仅用 `opacity<1` 判断是否需要下一帧。
+            // 改为由 FrameClock 是否到达终点（is_settled）和真实活动绘制几何
+            // （是否有非空 DrawCommand 且几何未到达目标）决定。
+            // 存活字 FLIP opacity=1，即使尚在位移也可能不请求后续帧——
+            // 现在由 FrameClock 终点决定持续帧调度。
+            //
+            // Issue #901 第九轮阻塞1：用 canvas_plan.needs_next_frame 代替
+            // has_active_canvas（是否有可见 TextFragment）。needs_next_frame 来自
+            // FrameClock 与 target 的未完成状态，覆盖 progress=0 的新过渡第一帧
+            // （静态层已挖空但动画层尚无可见像素）、纯删除临界帧、文字全被裁空
+            // 但仍在过渡的帧。不依赖可见 TextFragment 数量，保证时钟持续推进。
+            let canvas_needs_next_frame = canvas_plan.needs_next_frame;
+            if self.cursor_ctrl.animation.is_some() || canvas_needs_next_frame {
                 self.request_frame_update();
             }
         }
@@ -613,16 +982,33 @@ impl SujianEditorItem {
     /// 边沿检测中处理，确保光标从可见状态开始、事务结束后重新开始正常 blink。
     pub(crate) fn build_cursor_render_state_for_frame(
         &self,
+        canvas_plan: &super::visual_canvas::CanvasDrawPlan,
     ) -> super::render_plan::CursorRenderState {
         // Issue #679 评论 5657313927 / #701 评论 5699573227 第三阶段 (F5):
         // 每帧只采样一次 frame state。blink mode 由 current_cursor_blink_mode()
         // 统一决定（Issue #710 评论 5732160521 问题 2），保证 tick/render/opacity/
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
+
+        // Issue #901 问题5：光标显示位置按**是否为正文事务的唯一画布 owner**决定，
+        // 不用 `caret_sample` 是否为 `(0,0)` 判断。
+        // 如果 CanvasDrawPlan 非空（有活跃的正文文字动画/绘制），光标位置从
+        // `canvas_plan.caret_sample` 获取；否则从 `cursor_ctrl` 获取。
+        // 这避免合法的零坐标被误判为"无画布 owner"而回退独立光标。
+        let canvas_is_owner = !canvas_plan.empty
+            && canvas_plan.commands.iter().any(|cmd| {
+                cmd.kind == super::visual_canvas::DrawCommandKind::TextFragment
+            });
+        let (caret_x, caret_y) = if canvas_is_owner {
+            (canvas_plan.caret_sample.x, canvas_plan.caret_sample.y)
+        } else {
+            (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y)
+        };
+
         super::render_plan::CursorRenderState {
             visible: self.cursor_ctrl.visible,
-            x: self.cursor_ctrl.visual_x,
-            y: self.cursor_ctrl.visual_y,
+            x: caret_x,
+            y: caret_y,
             h: self.cursor_ctrl.visual_h,
             baseline_y: self.cursor_ctrl.visual_baseline_y,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
@@ -635,6 +1021,186 @@ impl SujianEditorItem {
             path_start_x: self.cursor_ctrl.motion_start_x,
             path_start_y: self.cursor_ctrl.motion_start_y,
         }
+    }
+
+    /// Issue #901 阻塞 1：从当前帧构造 `PresentedScene`。
+    ///
+    /// 从 `CanvasDrawPlan` 的命令转换为 `PixelContribution` 列表，
+    /// 从 `CursorRenderState` 转换为 `PresentedCaret`，
+    /// 从 scroll_y 转换为 `PresentedScroll`。
+    ///
+    /// Issue #901 问题1：
+    /// - `pose_progress` 从 `canvas_plan.pose_progress` 读取（本次采样的真实
+    ///   `VisualPose.progress`），不再硬编码 1.0。
+    /// - `source_revision` 从 `canvas_plan.source_revision` 读取（产生计划时
+    ///   绑定的旧贡献来源 revision），不再取外部 `pipeline.text_revision()`。
+    /// - 每条 `PixelContribution` 携带自己的 `source_revision`：
+    ///   `StaticText`（存活字/删除字）→ `canvas_plan.source_revision`，
+    ///   `AnimatedText`（新增字）→ `canvas_plan.target_revision`。
+    ///   混合 old/new 的半成品帧中，旧贡献标旧 revision、新贡献标 target revision。
+    ///
+    /// Issue #901 问题3：
+    /// - `document_session`、`frame_id`、`geometry_id` 使用真实值而非常量。
+    /// - 每个 `PixelContribution` 的 `byte_range` 从 `DrawCommand.byte_range` 获取，
+    ///   不硬编码 `(0, 0)`。
+    ///
+    /// Issue #901 第十轮问题1：只登记实际绘制的 fragment。
+    /// - 动画贡献从 `drawn_animation_fragments`（render_frame 返回的真正绘制的
+    ///   动画 fragment 列表）构造，不再无条件遍历 `canvas_plan.commands`。
+    ///   资源缺失或 handoff 时 `drawn_animation_fragments` 为空，只登记静态事实。
+    /// - 静态贡献从 `drawn_static_fragments`（render_frame 返回的静态 owner 实际
+    ///   可见片段）构造，不再用 `render_plan.static_text_contributions`（原始
+    ///   cluster 信息，未减 holes）。
+    /// - afterFrameEnd 确认的才进入 Controller。
+    pub(crate) fn build_presented_scene_from_frame(
+        &self,
+        canvas_plan: &super::visual_canvas::CanvasDrawPlan,
+        render_plan: &super::render_plan::RenderPlan,
+        drawn_animation_fragments: &[super::scene_graph_renderer::DrawnAnimationFragment],
+        drawn_static_fragments: &[super::scene_graph_renderer::DrawnStaticFragment],
+        scroll_y: f64,
+        viewport_h: f64,
+        frame_id: u64,
+        geometry_id: u64,
+    ) -> Option<super::visual_canvas::PresentedScene> {
+        use super::visual_canvas::{
+            CanvasAffine2, CanvasRect, CanvasVec2, PixelContribution, PresentedCaret,
+            PresentedScene, PresentedScroll,
+        };
+
+        // Issue #901 问题1：从 canvas_plan 读取真实的 source/target revision 和
+        // pose_progress，不硬编码 1.0，不取外部 pipeline.text_revision()。
+        let plan_source_revision = canvas_plan.source_revision;
+        let plan_target_revision = canvas_plan.target_revision;
+        let pose_progress = canvas_plan.pose_progress.clamp(0.0, 1.0);
+
+        // Issue #901 第十轮问题1：从 drawn_animation_fragments 构造动画贡献。
+        // 只登记 render_frame 实际绘制的 fragment（纹理已就绪、裁剪后非零面积），
+        // 不再无条件遍历 canvas_plan.commands。资源缺失或 handoff 时此列表为空。
+        // Issue #901 第十一轮问题1：source_revision 直接用 frag.source_revision
+        //（从 DrawCommand.source_revision 一路传递），不统一覆盖成 target revision。
+        let animated_contributions: Vec<PixelContribution> = drawn_animation_fragments
+            .iter()
+            .map(|frag| {
+                PixelContribution {
+                    snapshot_id: frag.snapshot_id,
+                    source_uv: CanvasRect::new(
+                        frag.source_uv.x,
+                        frag.source_uv.y,
+                        frag.source_uv.w,
+                        frag.source_uv.h,
+                    ),
+                    document_rect: CanvasRect::new(
+                        frag.target_rect.x,
+                        frag.target_rect.y,
+                        frag.target_rect.w,
+                        frag.target_rect.h,
+                    ),
+                    visible_clip: CanvasRect::new(
+                        frag.target_rect.x,
+                        frag.target_rect.y,
+                        frag.target_rect.w,
+                        frag.target_rect.h,
+                    ),
+                    opacity: frag.opacity,
+                    byte_range: frag.byte_range,
+                    // Issue #901 第十一轮问题1：用 frag.source_revision，
+                    // 不再统一覆盖成 plan_target_revision。
+                    source_revision: frag.source_revision,
+                    glyph_id: frag.glyph_id,
+                    fragment_index: frag.fragment_index,
+                    // Issue #901 第十一轮问题4：从 frag.original_glyph_rect 传递。
+                    original_glyph_rect: CanvasRect::new(
+                        frag.original_glyph_rect.x,
+                        frag.original_glyph_rect.y,
+                        frag.original_glyph_rect.w,
+                        frag.original_glyph_rect.h,
+                    ),
+                }
+            })
+            .collect();
+
+        // Issue #901 第十轮问题1：从 drawn_static_fragments 构造静态贡献。
+        // 只登记 render_frame 实际绘制的静态片段（已减去 effective_holes），
+        // 不再用 render_plan.static_text_contributions（原始 cluster 信息，未减 holes）。
+        // source_revision 用 target revision（静态贡献来自当前 target canonical）。
+        let static_contributions: Vec<PixelContribution> = drawn_static_fragments
+            .iter()
+            .map(|frag| PixelContribution {
+                snapshot_id: frag.snapshot_id,
+                source_uv: CanvasRect::new(
+                    frag.source_uv.x,
+                    frag.source_uv.y,
+                    frag.source_uv.w,
+                    frag.source_uv.h,
+                ),
+                document_rect: CanvasRect::new(
+                    frag.document_rect.x,
+                    frag.document_rect.y,
+                    frag.document_rect.w,
+                    frag.document_rect.h,
+                ),
+                visible_clip: CanvasRect::new(
+                    frag.visible_clip.x,
+                    frag.visible_clip.y,
+                    frag.visible_clip.w,
+                    frag.visible_clip.h,
+                ),
+                opacity: 1.0,
+                byte_range: frag.byte_range,
+                // Issue #901 第八轮问题1：用 target revision（绑定 target Core revision）。
+                source_revision: plan_target_revision,
+                glyph_id: frag.glyph_id,
+                fragment_index: frag.fragment_index,
+                // Issue #901 第十一轮问题4: 从 DrawnStaticFragment 传递完整字形矩形，
+                // 供下一帧 FLIP 变换使用（而非用裁剪后的 document_rect）。
+                original_glyph_rect: CanvasRect::new(
+                    frag.original_glyph_rect.x,
+                    frag.original_glyph_rect.y,
+                    frag.original_glyph_rect.w,
+                    frag.original_glyph_rect.h,
+                ),
+            })
+            .collect();
+
+        // 合并动画 TextFragment 贡献和静态正文贡献到同一列表。
+        let mut pixel_contributions = animated_contributions;
+        pixel_contributions.extend(static_contributions);
+
+        // 从 cursor_render_state 转换为 PresentedCaret。
+        let caret = if render_plan.cursor.visible {
+            Some(PresentedCaret {
+                position: CanvasVec2::new(render_plan.cursor.x, render_plan.cursor.y),
+                visible: render_plan.cursor.visible,
+                width: render_plan.cursor_style.width,
+                height: render_plan.cursor.h,
+            })
+        } else {
+            None
+        };
+
+        // 从 scroll_y 转换为 PresentedScroll。
+        let scroll = PresentedScroll {
+            x: 0.0,
+            y: scroll_y,
+        };
+
+        Some(PresentedScene {
+            // Issue #901 问题1：使用计划绑定的 source_revision，不取外部 revision。
+            source_revision: plan_source_revision,
+            document_session: self.document_session,
+            frame_id,
+            geometry_id,
+            // Issue #901 问题1：使用真实的 pose_progress，不硬编码 1.0。
+            pose_progress,
+            clip: CanvasRect::new(0.0, 0.0, self.bounding_width(), viewport_h),
+            position: CanvasVec2::new(0.0, 0.0),
+            opacity: 1.0,
+            transform: CanvasAffine2::identity(),
+            pixel_contributions,
+            caret,
+            scroll,
+        })
     }
 
     /// Issue #707 评论 5725190370: 把 `update_paint_node` 里"根据 RenderPlan 更新
@@ -712,6 +1278,18 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drain_pointer_frame_submissions(&mut self) {
+        // Issue #901 阻塞 1：处理已提交的 visual frames，调用 commit_presented_scene。
+        // afterFrameEnd 回调在渲染线程触发，只把帧放入 mailbox；
+        // 这里在 GUI 线程 drain 并提交给 visual_canvas。
+        let submitted_visual = self.frame_submission_mailbox.take_submitted_frames();
+        for frame in submitted_visual {
+            if let Some(scene) = frame.presented_scene {
+                self.pipeline
+                    .visual_canvas_mut()
+                    .commit_presented_scene(scene, frame.frame_now_ms);
+            }
+        }
+
         let submitted = self
             .frame_submission_mailbox
             .take_submitted_pointer_frames();
@@ -796,3 +1374,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.record_selection_head_rect();
     }
 }
+
+// Issue #901 第十轮问题1：rect_subtract_holes / rect_subtract_one 已移到
+// scene_graph_renderer.rs，由 compute_drawn_static_fragments 使用。
+// qquickitem_impl 不再需要前置推测逻辑。

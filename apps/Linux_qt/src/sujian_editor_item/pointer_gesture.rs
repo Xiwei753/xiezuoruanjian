@@ -375,6 +375,8 @@ mod tests {
         // 新 press 应清除上一轮手势。
         s.press((100.0, 100.0), 42, now());
         assert!(!s.pointer_drag_selecting());
-        assert!(s.selection_gesture_active());
+        // selection_gesture_active 只在真正进入拖选/长按后为 true（见模块注释）；
+        // 新 press 尚未 move 超过阈值，不是选择手势。
+        assert!(!s.selection_gesture_active());
     }
 }

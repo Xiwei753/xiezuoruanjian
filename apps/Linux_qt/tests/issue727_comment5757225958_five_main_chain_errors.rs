@@ -46,7 +46,13 @@ fn issue1_rendering_passes_scroll_y_to_cursor_rect() {
     let pos = src
         .find(marker)
         .expect("update_cursor_visual_position 必须存在");
-    let window = &src[pos..pos.saturating_add(2000)];
+    // 安全切片：回退到最近的 char boundary，避免切在多字节字符中间。
+    let target_end = pos.saturating_add(2000);
+    let safe_end = (0..=target_end.min(src.len()))
+        .rev()
+        .find(|&e| src.is_char_boundary(e))
+        .unwrap_or(pos);
+    let window = &src[pos..safe_end];
     // 当前缺陷：传 scroll_y 给 editor_layout_cursor_rect
     let passes_scroll_y = window.contains(
         "editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y)",

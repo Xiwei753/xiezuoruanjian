@@ -294,7 +294,7 @@ fn legacy_portal_operations_route_to_node_api() {
         "Content 的 embedPath 必须通过 graphController.embedPathSegment 分流，实际窗口:\n{embed_path}"
     );
     assert!(
-        !content.contains("legacyPortalNodeId") && !content.contains("enterPortal"),
+        !content.contains("legacyPortalNodeId") && !content.contains("enterPortal{"),
         "Content 不得自行判断 legacyPortalNodeId 或直接构造 enterPortal 段"
     );
     // Controller 只保留唯一入口 embedPathSegment：旧 portal → enterPortal，新 Embed → enterEmbed

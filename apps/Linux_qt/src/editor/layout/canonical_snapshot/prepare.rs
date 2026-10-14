@@ -11,19 +11,17 @@ use super::*;
 ///
 /// Issue #810 评论 5933167246 问题1: 本函数现在是 **raster-only** 提取，
 /// 返回 `Vec<AnimationRasterVisual>`，只携带 QImage 和稳定行身份
-///（paragraph_document_byte_start + qtextline_idx），**不携带 cluster**。
+///（paragraph_slot + qtextline_idx），**不携带 cluster**。
 ///
 /// cluster 几何由基础 canonical 排版直接产出（engine.rs 中 cluster 提取始终执行），
 /// 本函数不再承担"给 canonical 补 cluster"的职责。
 /// `inject_animation_visuals_into_snapshot` 也只注入 image，不再覆盖 cluster。
 ///
-/// Issue #658 评论 5625515748 问题 1: 移除统一的 `paragraph_text` / `paragraph_document_byte_start`
-/// 参数，改为从每个 VisualLine 自身的 `para_text` / `para_start` 取段落级文本与文档起点。
-/// qchar_start/qchar_end 来自各段落自己的 QTextLayout，是段落内 QChar offset，
-/// 必须用对应段落的 para_text 做 QChar→byte 转换，再加该段落的 para_start 得到文档级 byte range。
+/// Issue #901 第十七轮问题3: 用 `line.cache_slot`（段落编号）作为 `paragraph_slot`，
+/// 不再用 `line.para_start`（全文 byte offset）。inject 时直接索引 paragraphs[slot]。
 /// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
 pub fn prepare_animation_visuals_from_layout(
-    handle: &super::super::types::PreparedLayoutHandle<'_>,
+    handle: &super::super::types::PreparedLayoutHandle,
     line_ids: &[usize],
     dpr: f64,
     text_color: &str,
@@ -32,17 +30,18 @@ pub fn prepare_animation_visuals_from_layout(
     let mut snapshots = Vec::new();
 
     for &line_id in line_ids {
-        if line_id >= handle.lines.len() {
-            continue;
-        }
-        let line = &handle.lines[line_id];
+        // Issue #901 第三十六轮问题3: handle.lines 是 Arc<PersistentChunkedVec<VisualLine>>，
+        // 用 get(index) -> Option<&VisualLine> 替代直接索引，避免越界 panic。
+        let line = match handle.lines.get(line_id) {
+            Some(l) => l,
+            None => continue,
+        };
         let slot = line.cache_slot;
         let qtextline_idx = line.qtextline_idx;
         let gen = handle.generation;
-        // Issue #658 评论 5625515748 问题 1: 每行用自己的 para_text/para_start 做
-        // QChar→byte 转换。qchar_start/qchar_end 是段落内 QChar offset，
-        // 必须对应该段落的 para_text，再加 para_start 得到文档级 byte offset。
-        let para_start = line.para_start;
+        // Issue #901 第二十轮阻塞3: paragraph_slot 用 logical_slot（文档次序），
+        // 用于 inject 时索引 paragraphs 数组。cache_slot（Qt 物理槽）只传给 C++。
+        let paragraph_slot = line.logical_slot as usize;
 
         // SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
         let success = cpp::cpp!(unsafe [
@@ -87,7 +86,7 @@ pub fn prepare_animation_visuals_from_layout(
 
         snapshots.push(super::AnimationRasterVisual {
             image,
-            paragraph_document_byte_start: para_start,
+            paragraph_slot,
             qtextline_idx,
         });
     }
@@ -107,6 +106,9 @@ pub fn prepare_document_visual_snapshot(
     dpr: f64,
     generation: u64,
     generate_animation_visuals: bool,
+    // Issue #901 第二十轮阻塞2: 由调用方传入 ParagraphId 序列，
+    // 不再用 slot+1 伪造 Id。
+    paragraph_ids: &[super::super::types::ParagraphId],
 ) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5623746506 问题 2a: 收口到受影响范围生成动画视觉。
     // affected_byte_start >= affected_byte_end 表示全篇生成（保持原语义）。
@@ -126,6 +128,7 @@ pub fn prepare_document_visual_snapshot(
         generate_animation_visuals,
         0,
         0,
+        paragraph_ids,
     )
 }
 
@@ -154,6 +157,9 @@ pub fn prepare_document_visual_snapshot_scoped(
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
+    // Issue #901 第二十轮阻塞2: 由调用方传入 ParagraphId 序列，
+    // 不再用 slot+1 伪造 Id。
+    paragraph_ids: &[super::super::types::ParagraphId],
 ) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5624570557 问题 2: 基础排版不生成动画视觉，
     // 只得到 QTextLayout/VisualLine/cursor 几何。
@@ -174,16 +180,88 @@ pub fn prepare_document_visual_snapshot_scoped(
         false,
         affected_byte_start,
         affected_byte_end,
+        paragraph_ids,
     )
 }
 
-// 实际组装逻辑（整篇 impl / 从 VisualLine 组装 / 局部受影响段落）移到 full.rs。
+// 实际组装逻辑（整篇 impl / 从 VisualLine 组装 / 局部受影响段落 / 增量排版）移到 full.rs。
 mod full;
 
 use full::prepare_document_visual_snapshot_impl;
-pub use full::{
-    assemble_document_visual_snapshot_from_lines, prepare_affected_paragraphs_visual_snapshot,
-};
+pub use full::prepare_affected_paragraphs_visual_snapshot;
+
+/// Issue #901: 增量排版入口 — 只重排受影响段落，其他段落复用已有 shaping/行数据/纹理。
+///
+/// 利用 [`ParagraphLayoutStore`] 判断哪些段落需要重排（cache_key 不匹配或未排版），
+/// 利用 [`ParagraphHeightIndex`] 更新高度索引。
+///
+/// # 参数
+///
+/// - `text` / `text_revision`：新文本和 revision。
+/// - `affected_byte_start/end`：Core 提供的受影响字节范围（DisplayPatch 的 replace_byte_range）。
+///   `affected_byte_start >= affected_byte_end` 表示无受影响范围，走全局重排。
+/// - `previous_snapshot`：上一次排版的 snapshot，用于复用不受影响段落的 VisualLine。
+///   `None` 时走全局重排。
+/// - `paragraph_store`：段落布局存储，判断哪些段落需要重排。
+///   为空时走全局重排（初始化/参数变化后 invalidate 清空）。
+/// - `height_index`：段落高度索引，计算 y 坐标和更新高度。
+///
+/// # 全局重排条件
+///
+/// - `paragraph_store` 为空（初始化/参数变化后 invalidate）
+/// - `affected_byte_start >= affected_byte_end`（无受影响范围）
+/// - `previous_snapshot` 为 None（首次排版）
+///
+/// # 增量重排策略
+///
+/// - 受影响段落（包括手动 Enter 拆段、Backspace 合段）重新走 QTextLayout。
+/// - 其他段落复用 `previous_snapshot` 的 VisualLine（只更新 y 坐标和 byte offset）。
+/// - 段落高度变化只改受影响段的数据（Fenwick 树单点更新）。
+/// - **不能因其高度变化，顺带重新 shaping 后面所有段落。**
+pub fn prepare_incremental_visual_snapshot(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: Option<&str>,
+    generation: u64,
+    affected_byte_start: usize,
+    affected_byte_end: usize,
+    // Issue #901 第二十六轮复核缺口4: Core 提供的受影响文本字节范围，
+    // 传给 prepare_incremental_visual_snapshot_impl 用于增量拼接 new_paras。
+    affected_text_range: Option<(usize, usize)>,
+    // Issue #901 问题5: 接收 previous_snapshot 的所有权，使函数内部能 move
+    // visual_lines/paragraphs，避免全章 clone。调用方在 mod.rs 用 mem::take
+    // 取走 last_snapshot 的所有权后传入。
+    previous_snapshot: Option<CanonicalDocumentVisualSnapshot>,
+    paragraph_store: &mut super::super::paragraph_layout_store::ParagraphLayoutStore,
+    height_index: &mut std::sync::Arc<super::super::paragraph_height_index::ParagraphHeightIndex>,
+) -> CanonicalDocumentVisualSnapshot {
+    full::prepare_incremental_visual_snapshot_impl(
+        text,
+        text_revision,
+        font_size,
+        font_family,
+        line_spacing,
+        padding,
+        indent,
+        width,
+        dpr,
+        text_color,
+        generation,
+        affected_byte_start,
+        affected_byte_end,
+        affected_text_range,
+        previous_snapshot,
+        paragraph_store,
+        height_index,
+    )
+}
 
 /// Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画 raster 视觉注入到 doc snapshot。
 ///
@@ -194,45 +272,50 @@ pub use full::{
 /// doc_snapshot 在调用本函数前已自带完整 clusters。本函数只把可延迟的 QImage/纹理
 /// 注入到对应行，使动画纹理可用。
 ///
-/// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_document_byte_start, qtextline_idx)
+/// Issue #785 评论 5857873894 修改 2b: 按 (paragraph_slot, qtextline_idx)
 /// 稳定行身份匹配目标行，不再只按 document_byte_start 猜。返回成功注入的行数，
 /// 找不到目标行时通过 debug_warn 明确报告，不静默跳过，让调用方知道注入失败。
+///
+/// Issue #901 第十七轮问题3: 用 `anim_line.paragraph_slot` 直接索引
+/// `doc_snapshot.paragraphs`，不做遍历比较。paragraph_slot 是段落编号（cache_slot），
+/// 与 paragraphs 数组索引一一对应。
 pub fn inject_animation_visuals_into_snapshot(
     doc_snapshot: &mut CanonicalDocumentVisualSnapshot,
     animation_visuals: Vec<super::AnimationRasterVisual>,
 ) -> usize {
     let mut injected_count: usize = 0;
     for anim_line in animation_visuals {
-        // Issue #785 评论 5857873894 修改 2b: 优先按稳定行身份
-        // (paragraph_document_byte_start, qtextline_idx) 精确匹配。
-        // 这是 prepare_animation_visuals_from_layout 提取时记录的段落起点 + 段落内
-        // 视觉行索引，与 doc_snapshot.paragraphs[].lines[].qtextline_idx 同源，
-        // 不会因 document_byte_start 在 reflow 后漂移而误匹配。
+        // Issue #901 第十七轮问题3: 用 paragraph_slot 直接索引 paragraphs，
+        // 不再遍历比较 paragraph_document_byte_start。
+        // paragraph_slot 是段落编号（cache_slot），与 paragraphs 数组索引一一对应。
         let mut matched = false;
-        for para in &mut doc_snapshot.paragraphs {
-            if para.paragraph_document_byte_start != anim_line.paragraph_document_byte_start {
-                continue;
-            }
+        if let Some(para) =
+            std::sync::Arc::make_mut(&mut doc_snapshot.paragraphs).get_mut(anim_line.paragraph_slot)
+        {
             // 段落匹配，按 qtextline_idx 精确匹配行。
             // qtextline_idx 是段落内视觉行索引，与 para.lines 的索引一致。
             let line_idx = anim_line.qtextline_idx as usize;
             if let Some(line) = para.lines.get_mut(line_idx) {
                 // Issue #810 评论 5932233052 问题1: 只注入可延迟的 image/texture，
                 // 不覆盖基础 canonical 排版已产出的 cluster。
+                // Issue #901 第十八轮问题3: 只在 image 真正存在时才计为成功注入。
+                // image:None 不计成功注入，避免误报纹理可用。
+                let image_present = anim_line.image.is_some();
                 line.image = anim_line.image.clone();
-                injected_count += 1;
+                if image_present {
+                    injected_count += 1;
+                }
                 matched = true;
             }
-            break;
         }
         if !matched {
             crate::backend::app_backend::debug_warn_static(
                 "canonical_snapshot",
                 "inject_animation_visuals_line_not_found",
                 &format!(
-                    "paragraph_document_byte_start={} qtextline_idx={} — \
+                    "paragraph_slot={} qtextline_idx={} — \
                      target line not found in doc_snapshot, animation raster visual dropped",
-                    anim_line.paragraph_document_byte_start, anim_line.qtextline_idx,
+                    anim_line.paragraph_slot, anim_line.qtextline_idx,
                 ),
             );
         }
