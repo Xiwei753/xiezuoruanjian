@@ -1,7 +1,16 @@
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
+use crate::starmap::graph::resolve::{resolve_target, GraphResolverContext, ResolvedTarget};
+use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
+use crate::starmap::package_storage::bucket_for_id;
+use crate::starmap::semantic::{StarMapTargetDetail, StarMapTargetResolveStatus};
+use crate::starmap::store::meta::GraphMeta;
 use crate::starmap::types::reference::StarMapTargetPath;
-use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+use crate::starmap::types::{
+    StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapHyperlink, StarMapLink,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -267,4 +276,215 @@ pub(super) fn embed_cascade_ids<'a>(
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// 跨画布引用反查
+// ---------------------------------------------------------------------------
+
+/// 跨画布引用信息：其他图中持有的、指向当前图目标的 Edge 引用。
+///
+/// 由 `find_cross_canvas_references` 和 `find_cross_canvas_references_for_canvas`
+/// 返回，用于删除保护——在删除节点/Embed/Portal 之前，检查是否有其他图
+/// 持有的跨层引用指向当前图的目标对象。
+#[derive(Debug, Clone)]
+pub struct CrossCanvasReferenceInfo {
+    /// Edge 所在的宿主星图 ID。
+    pub owner_starmap_id: String,
+    pub edge_id: String,
+    pub from_path: StarMapTargetPath,
+    pub to_path: StarMapTargetPath,
+    pub kind: StarMapEdgeKind,
+    pub label: Option<String>,
+}
+
+/// 查找指向特定目标的跨画布引用。
+///
+/// 遍历当前 route 的所有祖先图（不含当前图本身）的 Edge，解析每条 Edge
+/// 的 from/to 路径，检查是否有一端解析后指向 `(current_starmap_id, target)`。
+///
+/// **不变量**：`relation_index.rs` 的本地引用不变量保持不变——此函数
+/// 不把深层 Node ID 错当作宿主图本地 Node ID，而是通过 `resolve_target`
+/// 解析路径后匹配 `(final_starmap_id, target)`。
+///
+/// 返回的每条 `CrossCanvasReferenceInfo` 包含 Edge 所在的宿主星图 ID、
+/// Edge ID、from/to 路径、类型和标签。
+pub fn find_cross_canvas_references(
+    context: &GraphResolverContext,
+    route: &StarMapNavigationRoute,
+    target: &StarMapTargetDetail,
+) -> Vec<CrossCanvasReferenceInfo> {
+    let location = match resolve_navigation_route(context, route) {
+        Ok(loc) => loc,
+        Err(_) => return Vec::new(),
+    };
+
+    let current_starmap_id = &location.current_starmap_id;
+    let mut results = Vec::new();
+
+    // 只检查祖先图（不含当前图），当前图的边由本地级联删除处理。
+    for ancestor_starmap_id in &location.traversed_starmap_ids {
+        if ancestor_starmap_id == current_starmap_id {
+            continue;
+        }
+        let edges = load_graph_edges(context, ancestor_starmap_id);
+
+        for edge in &edges {
+            let from_resolved = resolve_target(context, &edge.from);
+            let to_resolved = resolve_target(context, &edge.to);
+
+            let from_matches = matches_target(&from_resolved, current_starmap_id, target);
+            let to_matches = matches_target(&to_resolved, current_starmap_id, target);
+
+            if from_matches || to_matches {
+                results.push(CrossCanvasReferenceInfo {
+                    owner_starmap_id: ancestor_starmap_id.clone(),
+                    edge_id: edge.id.clone(),
+                    from_path: edge.from.clone(),
+                    to_path: edge.to.clone(),
+                    kind: edge.kind.clone(),
+                    label: edge.label.clone(),
+                });
+            }
+        }
+    }
+
+    results
+}
+
+/// 查找与特定画布相关的跨画布引用。
+///
+/// 遍历当前图和所有祖先图的 Edge：
+/// - 当前图：包含所有边（本图 Edge）
+/// - 祖先图：只包含至少一端解析后落在当前画布的 Edge
+///
+/// 前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
+#[allow(clippy::excessive_nesting)]
+pub fn find_cross_canvas_references_for_canvas(
+    context: &GraphResolverContext,
+    route: &StarMapNavigationRoute,
+) -> Vec<CrossCanvasReferenceInfo> {
+    let location = match resolve_navigation_route(context, route) {
+        Ok(loc) => loc,
+        Err(_) => return Vec::new(),
+    };
+
+    let current_starmap_id = &location.current_starmap_id;
+    let mut results = Vec::new();
+
+    let last_idx = location.traversed_starmap_ids.len().saturating_sub(1);
+
+    for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
+        let edges = load_graph_edges(context, ancestor_starmap_id);
+        let is_current_canvas = i == last_idx;
+
+        for edge in &edges {
+            if is_current_canvas {
+                // 当前图：包含所有边（本图 Edge）
+                results.push(CrossCanvasReferenceInfo {
+                    owner_starmap_id: ancestor_starmap_id.clone(),
+                    edge_id: edge.id.clone(),
+                    from_path: edge.from.clone(),
+                    to_path: edge.to.clone(),
+                    kind: edge.kind.clone(),
+                    label: edge.label.clone(),
+                });
+            } else {
+                // 祖先图：只包含至少一端解析后落在当前画布的边
+                let from_resolved = resolve_target(context, &edge.from);
+                let to_resolved = resolve_target(context, &edge.to);
+
+                let from_in_canvas = matches_canvas(&from_resolved, current_starmap_id);
+                let to_in_canvas = matches_canvas(&to_resolved, current_starmap_id);
+
+                if from_in_canvas || to_in_canvas {
+                    results.push(CrossCanvasReferenceInfo {
+                        owner_starmap_id: ancestor_starmap_id.clone(),
+                        edge_id: edge.id.clone(),
+                        from_path: edge.from.clone(),
+                        to_path: edge.to.clone(),
+                        kind: edge.kind.clone(),
+                        label: edge.label.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// 跨画布引用反查 - 内部辅助函数
+// ---------------------------------------------------------------------------
+
+/// 检查解析后的目标是否匹配特定画布和目标详情。
+fn matches_target(
+    resolved: &Result<ResolvedTarget, StarMapTargetResolveStatus>,
+    current_starmap_id: &str,
+    target: &StarMapTargetDetail,
+) -> bool {
+    match resolved {
+        Ok(r) => r.final_starmap_id == current_starmap_id && &r.target == target,
+        Err(_) => false,
+    }
+}
+
+/// 检查解析后的目标是否落在特定画布。
+fn matches_canvas(
+    resolved: &Result<ResolvedTarget, StarMapTargetResolveStatus>,
+    current_starmap_id: &str,
+) -> bool {
+    match resolved {
+        Ok(r) => r.final_starmap_id == current_starmap_id,
+        Err(_) => false,
+    }
+}
+
+/// 加载星图的边列表。
+///
+/// 先从 `context.overlays` 查找（内存中的图数据），找不到再从磁盘读取。
+fn load_graph_edges(context: &GraphResolverContext, starmap_id: &str) -> Vec<StarMapEdge> {
+    if let Some(graph) = context.overlays.get(starmap_id) {
+        return graph.edges.clone();
+    }
+    load_graph_edges_from_disk(&context.app_data_root, starmap_id)
+}
+
+/// 从磁盘加载星图的边列表。
+fn load_graph_edges_from_disk(app_data_root: &Path, starmap_id: &str) -> Vec<StarMapEdge> {
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    if !graph_json_path.exists() {
+        return Vec::new();
+    }
+
+    let content = match std::fs::read_to_string(&graph_json_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let meta: GraphMeta = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut edges = Vec::new();
+    for edge_id in &meta.edge_ids {
+        let bucket_dir = app_data_root
+            .join("starmaps")
+            .join(starmap_id)
+            .join("edges")
+            .join(bucket_for_id(edge_id));
+        let edge_path = bucket_dir.join(format!("{}.json", edge_id));
+        if let Ok(edge_content) = std::fs::read_to_string(&edge_path) {
+            if let Ok(edge) = serde_json::from_str::<StarMapEdge>(&edge_content) {
+                edges.push(edge);
+            }
+        }
+    }
+
+    edges
 }

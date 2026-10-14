@@ -1,9 +1,11 @@
 use crate::api::{
-    CreateStarMapChildEmbedResultDto, StarMapEdgeDto, StarMapEdgePatchInputDto, StarMapEmbedDto,
-    StarMapEmbedPatchInputDto, StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto,
-    StarMapLinkDto, StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNodeDto,
-    StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto, StarMapPointDto,
-    StarMapReferenceDto, StarMapResolvedPathDto, WriterError,
+    CreateStarMapChildEmbedResultDto, StarMapConnectionInfoDto, StarMapEdgeDto,
+    StarMapEdgePatchInputDto, StarMapEmbedDto, StarMapEmbedPatchInputDto, StarMapEndpointSelectionDto,
+    StarMapGraphDto, StarMapHyperlinkDto, StarMapHyperlinkPatchInputDto, StarMapLinkDto,
+    StarMapLinkPatchInputDto, StarMapMetaDto, StarMapNavigationLocationDto, StarMapNavigationRouteDto,
+    StarMapNodeDto, StarMapNodePatchInputDto, StarMapPathSegmentDto, StarMapPhasedSnapshotDto,
+    StarMapPointDto, StarMapReferenceDto, StarMapResolvedPathDto, StarMapTargetDetailDto,
+    StarMapTargetPathDto, WriterError,
 };
 
 impl super::WriterAppService {
@@ -43,8 +45,8 @@ impl super::WriterAppService {
         &self,
         starmap_id: String,
         node: StarMapNodeDto,
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
     ) -> Result<StarMapNodeDto, WriterError> {
         self.api.add_starmap_node(&starmap_id, node, x, y)
     }
@@ -231,5 +233,54 @@ impl super::WriterAppService {
         request: crate::api::types::PhasedSnapshotRequestDto,
     ) -> Result<StarMapPhasedSnapshotDto, WriterError> {
         self.api.get_starmap_phased_snapshot(&starmap_id, &request)
+    }
+
+    /// 解析星图导航路由，返回当前画布位置。转发到 Core API。
+    pub fn resolve_starmap_navigation(
+        &self,
+        root_starmap_id: String,
+        segments: Vec<StarMapPathSegmentDto>,
+    ) -> Result<StarMapNavigationLocationDto, String> {
+        self.api.resolve_starmap_navigation(root_starmap_id, segments)
+    }
+
+    /// 通过 Embed 实例进入子画布。转发到 Core API。
+    pub fn enter_starmap_embed(
+        &self,
+        root_starmap_id: String,
+        segments: Vec<StarMapPathSegmentDto>,
+        instance_id: String,
+    ) -> Result<(StarMapNavigationRouteDto, StarMapNavigationLocationDto), String> {
+        self.api
+            .enter_starmap_embed(root_starmap_id, segments, instance_id)
+    }
+
+    /// 通过 Portal 节点进入子画布。转发到 Core API。
+    pub fn enter_starmap_portal(
+        &self,
+        root_starmap_id: String,
+        segments: Vec<StarMapPathSegmentDto>,
+        node_id: String,
+    ) -> Result<(StarMapNavigationRouteDto, StarMapNavigationLocationDto), String> {
+        self.api
+            .enter_starmap_portal(root_starmap_id, segments, node_id)
+    }
+
+    /// 规划跨画布边：计算宿主图 ID、from/to 路径和 edge_id。转发到 Core API。
+    pub fn create_cross_canvas_edge(
+        &self,
+        from: StarMapEndpointSelectionDto,
+        to: StarMapEndpointSelectionDto,
+    ) -> Result<(String, StarMapTargetPathDto, StarMapTargetPathDto), String> {
+        self.api.create_cross_canvas_edge(from, to)
+    }
+
+    /// 列出与特定画布或目标相关的所有连接。转发到 Core API。
+    pub fn list_starmap_connections(
+        &self,
+        route: StarMapNavigationRouteDto,
+        target: Option<StarMapTargetDetailDto>,
+    ) -> Result<Vec<StarMapConnectionInfoDto>, String> {
+        self.api.list_starmap_connections(route, target)
     }
 }

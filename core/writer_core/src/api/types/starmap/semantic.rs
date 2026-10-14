@@ -345,8 +345,8 @@ impl TryFrom<StarMapPortalDto> for crate::starmap::semantic::StarMapPortal {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapPointDto {
-    pub x: f32,
-    pub y: f32,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl From<crate::starmap::types::StarMapPoint> for StarMapPointDto {

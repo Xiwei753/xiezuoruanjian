@@ -61,7 +61,7 @@ fn make_node(id: &str, title: &str) -> StarMapNode {
 }
 
 /// 把 node 的 position 设成 (x, y) 后返回，用于 add_node 调用。
-fn node_at(mut node: StarMapNode, x: f32, y: f32) -> StarMapNode {
+fn node_at(mut node: StarMapNode, x: f64, y: f64) -> StarMapNode {
     node.position = StarMapPoint { x, y };
     node
 }
@@ -77,7 +77,7 @@ fn local_path(host: &str, node_id: &str) -> StarMapTargetPath {
 }
 
 /// 移动 + 换样式的节点补丁（`StarMapNodePatch` 无 `Default`，逐字段显式给出）。
-fn move_and_style_patch(x: f32, y: f32, fill: &str) -> StarMapNodePatch {
+fn move_and_style_patch(x: f64, y: f64, fill: &str) -> StarMapNodePatch {
     StarMapNodePatch {
         title: None,
         kind: None,
@@ -94,7 +94,7 @@ fn move_and_style_patch(x: f32, y: f32, fill: &str) -> StarMapNodePatch {
     }
 }
 
-fn move_embed_patch(x: f32, y: f32) -> StarMapEmbedPatch {
+fn move_embed_patch(x: f64, y: f64) -> StarMapEmbedPatch {
     StarMapEmbedPatch {
         label: None,
         position: Some(StarMapPoint { x, y }),

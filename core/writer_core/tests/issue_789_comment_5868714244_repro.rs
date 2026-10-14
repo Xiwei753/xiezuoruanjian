@@ -85,7 +85,7 @@ fn assert_success(env: &Value, endpoint: &str) {
     );
 }
 
-fn node_at(id: &str, title: &str, x: f32, y: f32) -> StarMapNode {
+fn node_at(id: &str, title: &str, x: f64, y: f64) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
         title: title.to_string(),
@@ -118,8 +118,8 @@ fn embed_at(
     host: &str,
     host_node: &str,
     child: &str,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> StarMapEmbed {
     StarMapEmbed {
         instance_id: instance_id.to_string(),

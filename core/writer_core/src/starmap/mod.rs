@@ -12,8 +12,10 @@
 //! 显示/交互/渲染职责（布局算法、命中测试、运动策略、视口）已全部退出 Core，
 //! 由平台端自行管理。Core 只保留节点/嵌入的 `position` 数据字段。
 
+pub mod connections;
 pub mod graph;
 pub mod migration;
+pub mod navigation;
 pub mod package_storage;
 pub mod semantic;
 pub mod store;
@@ -106,7 +108,7 @@ fn change_set_for_meta_and_index(
         .add_upsert(starmaps_index_rel_path())
 }
 
-fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
+pub(crate) fn load_index(app_data_root: &Path) -> Result<StarMapIndexRecord> {
     // 在读取 index 之前先做一次旧格式迁移（schema 1/2/3 -> 4）。
     // 迁移是幂等的：已经是新格式则跳过；未知版本 fail-closed 返回 Err。
     migration::migrate_index(app_data_root)?;

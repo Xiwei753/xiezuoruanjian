@@ -115,8 +115,10 @@ pub fn migrate_index(app_data_root: &Path) -> Result<()> {
                 .map_err(|e| {
                     Error::Other(format!("index schema 3 deserialization failed: {}", e))
                 })?;
-            let legacy_child_ids = collect_legacy_portal_child_ids(app_data_root, &rec.starmap_ids)?;
-            rec.root_starmap_ids.retain(|id| !legacy_child_ids.contains(id));
+            let legacy_child_ids =
+                collect_legacy_portal_child_ids(app_data_root, &rec.starmap_ids)?;
+            rec.root_starmap_ids
+                .retain(|id| !legacy_child_ids.contains(id));
             rec.schema_version = NEW_INDEX_SCHEMA_VERSION;
             rec.updated_at = super::now_epoch();
             let new_content = serde_json::to_string_pretty(&rec)?;
@@ -504,8 +506,7 @@ fn set_revisions_for_ids(
 ///
 /// layout shard JSON 解析失败必须返回 `Err`：不能把损坏 layout 当成"没有位置"
 /// 然后继续删源数据。
-#[allow(clippy::cast_possible_truncation)]
-fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>> {
+fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f64, f64)>> {
     let mut positions = HashMap::new();
     let nodes_dir = graph_dir.join("layouts").join("default").join("nodes");
     if !nodes_dir.exists() {
@@ -543,11 +544,11 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
                     node_id
                 ))
             })?;
-            let xf = x as f32;
-            let yf = y as f32;
+            let xf = x;
+            let yf = y;
             if !xf.is_finite() || !yf.is_finite() {
                 return Err(Error::Other(format!(
-                    "layout node '{}' x/y not finite after f32 truncation",
+                    "layout node '{}' x/y not finite",
                     node_id
                 )));
             }
@@ -557,8 +558,7 @@ fn read_layout_positions(graph_dir: &Path) -> Result<HashMap<String, (f32, f32)>
     Ok(positions)
 }
 
-/// 判断 JSON `position` 字段是否合法（x、y 都是 finite f32）。
-#[allow(clippy::cast_possible_truncation)]
+/// 判断 JSON `position` 字段是否合法（x、y 都是 finite f64）。
 fn position_is_valid_finite(pos: &Value) -> bool {
     let obj = match pos.as_object() {
         Some(o) => o,
@@ -572,15 +572,13 @@ fn position_is_valid_finite(pos: &Value) -> bool {
         Some(y) => y,
         None => return false,
     };
-    // as f32 截断后也要 finite。
-    let xf = x as f32;
-    let yf = y as f32;
-    xf.is_finite() && yf.is_finite()
+    // x、y 已经是 f64，直接检查 finite。
+    x.is_finite() && y.is_finite()
 }
 
 /// 迁移单个 node JSON 文件。
 ///
-/// 幂等对象迁移：如果 node JSON 已有合法 `position`（x、y 都是 finite f32），
+/// 幂等对象迁移：如果 node JSON 已有合法 `position`（x、y 都是 finite f64），
 /// 保留，不再用 layout 覆盖；只有没有 position 时才从旧 layout 提取；
 /// 没有 layout 也没有 position 时直接 `Err`，不能猜 (0,0) 伪装成用户
 /// authored position——这是数据损坏，必须 fail-closed。
@@ -594,7 +592,7 @@ fn position_is_valid_finite(pos: &Value) -> bool {
 fn migrate_node_json(
     graph_dir: &Path,
     node_id: &str,
-    layout_positions: &HashMap<String, (f32, f32)>,
+    layout_positions: &HashMap<String, (f64, f64)>,
 ) -> Result<bool> {
     let bucket = crate::starmap::package_storage::bucket_for_id(node_id);
     let node_path = graph_dir
@@ -664,11 +662,10 @@ fn migrate_node_json(
 }
 
 /// 从旧 placement JSON 提取 finite (x, y)。placement 不存在或 x/y 不合法 → Err。
-#[allow(clippy::cast_possible_truncation)]
 fn extract_position_from_placement(
     instance_id: &str,
     obj: &serde_json::Map<String, Value>,
-) -> Result<(f32, f32)> {
+) -> Result<(f64, f64)> {
     let placement = obj
         .get("placement")
         .and_then(|v| v.as_object())
@@ -690,8 +687,8 @@ fn extract_position_from_placement(
             instance_id
         ))
     })?;
-    let xf = x as f32;
-    let yf = y as f32;
+    let xf = x;
+    let yf = y;
     if !xf.is_finite() || !yf.is_finite() {
         return Err(Error::Other(format!(
             "embed '{}' placement x/y not finite for migration",

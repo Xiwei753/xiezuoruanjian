@@ -31,8 +31,8 @@ impl super::super::WriterCore {
         &self,
         starmap_id: &str,
         node: crate::starmap::types::StarMapNode,
-        default_x: f32,
-        default_y: f32,
+        default_x: f64,
+        default_y: f64,
     ) -> Result<crate::starmap::types::StarMapNode> {
         let mut stores = self
             .starmap_stores
@@ -123,6 +123,11 @@ impl super::super::WriterCore {
             store.ensure_fully_loaded()?;
             store.ensure_object_loaded(node_id)?;
         }
+
+        // 跨图引用检查：在本地级联检查之后、实际删除之前执行。
+        // 检查是否有其他 graph 持有的跨层引用指向当前图的该节点。
+        // 有跨图关联时拒绝破坏性删除并明确返回引用列表。
+        self.check_cross_canvas_references_for_node_delete(&stores, starmap_id, node_id)?;
 
         // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
         // 级联 ID 复用 store.node_cascade_ids 纯函数，保证 candidate 模拟和 store
@@ -319,6 +324,11 @@ impl super::super::WriterCore {
             store.ensure_fully_loaded()?;
             store.ensure_embed_loaded(instance_id)?;
         }
+
+        // 跨图引用检查：在本地级联检查之后、实际删除之前执行。
+        // 检查是否有其他 graph 持有的跨层引用通过该 Embed 入口穿越。
+        // 有跨图关联时拒绝破坏性删除并明确返回引用列表。
+        self.check_cross_canvas_references_for_embed_delete(&stores, starmap_id, instance_id)?;
 
         // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
         // 级联 ID 复用 store.embed_cascade_ids 纯函数，保证 candidate 模拟和 store
@@ -708,4 +718,255 @@ impl super::super::WriterCore {
     ) -> Result<Vec<crate::starmap::StarMapReference>> {
         crate::starmap::find_starmap_references(&self.app_data_root, target_starmap_id)
     }
+
+    // -----------------------------------------------------------------------
+    // 跨图引用检查（删除保护）
+    // -----------------------------------------------------------------------
+
+    /// 检查删除节点前是否存在跨图引用。
+    ///
+    /// 遍历所有星图（不含当前图）的 Edge，解析每条 Edge 的 from/to 路径，
+    /// 检查是否有一端解析后指向 `(starmap_id, Node { node_id })`。
+    /// 有跨图关联时拒绝删除并返回引用列表。
+    ///
+    /// **不能只扫描本图**：祖先图中的 Edge 可能通过 Embed/Portal 路径
+    /// 指向当前图的节点，删除该节点会使祖先 Edge 变悬空。
+    #[allow(clippy::excessive_nesting)]
+    fn check_cross_canvas_references_for_node_delete(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+        starmap_id: &str,
+        node_id: &str,
+    ) -> Result<()> {
+        use crate::starmap::graph::resolve::resolve_target;
+        use crate::starmap::store::relation_index::CrossCanvasReferenceInfo;
+
+        let context = self.build_resolver_context(stores);
+        let target_detail = crate::starmap::semantic::StarMapTargetDetail::Node {
+            node_id: node_id.to_string(),
+        };
+
+        let mut refs = Vec::new();
+
+        // 遍历所有星图的 Edge，检查是否有跨图引用指向当前图的该节点。
+        // 使用 starmap index 获取所有星图 ID。
+        let idx = crate::starmap::load_index(&self.app_data_root)?;
+        for other_starmap_id in &idx.starmap_ids {
+            if other_starmap_id == starmap_id {
+                continue;
+            }
+
+            // 加载该星图的边列表
+            let edges = if let Some(graph) = context.overlays.get(other_starmap_id) {
+                graph.edges.clone()
+            } else {
+                load_edges_from_disk(&self.app_data_root, other_starmap_id)
+            };
+
+            for edge in &edges {
+                let from_resolved = resolve_target(&context, &edge.from);
+                let to_resolved = resolve_target(&context, &edge.to);
+
+                let from_matches =
+                    matches_resolved_target(&from_resolved, starmap_id, &target_detail);
+                let to_matches = matches_resolved_target(&to_resolved, starmap_id, &target_detail);
+
+                if from_matches || to_matches {
+                    refs.push(CrossCanvasReferenceInfo {
+                        owner_starmap_id: other_starmap_id.clone(),
+                        edge_id: edge.id.clone(),
+                        from_path: edge.from.clone(),
+                        to_path: edge.to.clone(),
+                        kind: edge.kind.clone(),
+                        label: edge.label.clone(),
+                    });
+                }
+            }
+        }
+
+        if !refs.is_empty() {
+            return Err(crate::error::Error::Other(format!(
+                "Cannot delete node '{}': cross-canvas references exist: {:?}",
+                node_id,
+                refs.iter()
+                    .map(|r| format!(
+                        "(owner={}, edge={}, from={:?}, to={:?})",
+                        r.owner_starmap_id, r.edge_id, r.from_path, r.to_path
+                    ))
+                    .collect::<Vec<_>>()
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// 检查删除 Embed 入口前是否存在跨图引用。
+    ///
+    /// 遍历所有星图（不含当前图）的 Edge，解析每条 Edge 的 from/to 路径，
+    /// 检查是否有路径穿越了当前图的该 Embed 实例。有跨图关联时拒绝删除
+    /// 并返回引用列表。
+    ///
+    /// **不能只扫描本图**：祖先图中的 Edge 可能通过当前图的 Embed 入口
+    /// 穿越到子画布，删除该 Embed 会使祖先 Edge 变悬空。
+    #[allow(clippy::excessive_nesting)]
+    fn check_cross_canvas_references_for_embed_delete(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+        starmap_id: &str,
+        instance_id: &str,
+    ) -> Result<()> {
+        use crate::starmap::store::relation_index::CrossCanvasReferenceInfo;
+
+        let context = self.build_resolver_context(stores);
+
+        let mut refs = Vec::new();
+
+        // 遍历所有星图的 Edge，检查是否有路径穿越了当前图的该 Embed 实例。
+        let idx = crate::starmap::load_index(&self.app_data_root)?;
+        for other_starmap_id in &idx.starmap_ids {
+            if other_starmap_id == starmap_id {
+                continue;
+            }
+
+            let edges = if let Some(graph) = context.overlays.get(other_starmap_id) {
+                graph.edges.clone()
+            } else {
+                load_edges_from_disk(&self.app_data_root, other_starmap_id)
+            };
+
+            for edge in &edges {
+                // 检查 from 和 to 路径是否穿越了当前图的该 Embed 实例
+                let from_traverses =
+                    path_traverses_embed(&context, &edge.from, starmap_id, instance_id);
+                let to_traverses =
+                    path_traverses_embed(&context, &edge.to, starmap_id, instance_id);
+
+                if from_traverses || to_traverses {
+                    refs.push(CrossCanvasReferenceInfo {
+                        owner_starmap_id: other_starmap_id.clone(),
+                        edge_id: edge.id.clone(),
+                        from_path: edge.from.clone(),
+                        to_path: edge.to.clone(),
+                        kind: edge.kind.clone(),
+                        label: edge.label.clone(),
+                    });
+                }
+            }
+        }
+
+        if !refs.is_empty() {
+            return Err(crate::error::Error::Other(format!(
+                "Cannot delete embed '{}': cross-canvas references exist: {:?}",
+                instance_id,
+                refs.iter()
+                    .map(|r| format!(
+                        "(owner={}, edge={}, from={:?}, to={:?})",
+                        r.owner_starmap_id, r.edge_id, r.from_path, r.to_path
+                    ))
+                    .collect::<Vec<_>>()
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 跨图引用检查 - 模块级辅助函数
+// ---------------------------------------------------------------------------
+
+/// 检查解析后的目标是否匹配特定画布和目标详情。
+fn matches_resolved_target(
+    resolved: &std::result::Result<
+        crate::starmap::graph::resolve::ResolvedTarget,
+        crate::starmap::semantic::StarMapTargetResolveStatus,
+    >,
+    starmap_id: &str,
+    target: &crate::starmap::semantic::StarMapTargetDetail,
+) -> bool {
+    match resolved {
+        Ok(r) => r.final_starmap_id == starmap_id && &r.target == target,
+        Err(_) => false,
+    }
+}
+
+/// 检查路径是否穿越了指定星图中的指定 Embed 实例。
+///
+/// 通过解析路径获取 `traversed_starmap_ids`，找到 `starmap_id` 在穿越链中的
+/// 位置，检查对应的路径段是否为 `EnterEmbed { instance_id }`。
+fn path_traverses_embed(
+    context: &crate::starmap::graph::resolve::GraphResolverContext,
+    path: &crate::starmap::types::reference::StarMapTargetPath,
+    starmap_id: &str,
+    instance_id: &str,
+) -> bool {
+    use crate::starmap::types::reference::StarMapPathSegment;
+
+    let resolved = match crate::starmap::graph::resolve::resolve_target(context, path) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    // traversed_starmap_ids[i] 是 segments[i] 之前的星图
+    // segments[i] 从 traversed_starmap_ids[i] 穿越到 traversed_starmap_ids[i+1]
+    // 所以如果 traversed_starmap_ids[i] == starmap_id 且 segments[i] 是
+    // EnterEmbed { instance_id }，则路径穿越了该 Embed
+    resolved
+        .traversed_starmap_ids
+        .iter()
+        .enumerate()
+        .any(|(i, sid)| {
+            sid == starmap_id
+                && matches!(
+                    path.segments.get(i),
+                    Some(StarMapPathSegment::EnterEmbed { instance_id: ref eid })
+                        if eid == instance_id
+                )
+        })
+}
+
+/// 从磁盘加载星图的边列表。
+fn load_edges_from_disk(
+    app_data_root: &std::path::Path,
+    starmap_id: &str,
+) -> Vec<crate::starmap::types::StarMapEdge> {
+    use crate::starmap::package_storage::bucket_for_id;
+    use crate::starmap::store::meta::GraphMeta;
+
+    let graph_json_path = app_data_root
+        .join("starmaps")
+        .join(starmap_id)
+        .join("graph.json");
+    if !graph_json_path.exists() {
+        return Vec::new();
+    }
+
+    let content = match std::fs::read_to_string(&graph_json_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let meta: GraphMeta = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut edges = Vec::new();
+    for edge_id in &meta.edge_ids {
+        let bucket_dir = app_data_root
+            .join("starmaps")
+            .join(starmap_id)
+            .join("edges")
+            .join(bucket_for_id(edge_id));
+        let edge_path = bucket_dir.join(format!("{}.json", edge_id));
+        if let Ok(edge_content) = std::fs::read_to_string(&edge_path) {
+            if let Ok(edge) =
+                serde_json::from_str::<crate::starmap::types::StarMapEdge>(&edge_content)
+            {
+                edges.push(edge);
+            }
+        }
+    }
+
+    edges
 }

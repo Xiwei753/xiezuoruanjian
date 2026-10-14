@@ -407,3 +407,20 @@ pub fn resolve_target_path(
         Err(status) => status,
     }
 }
+
+/// 解析目标路径并返回解析后的 `(starmap_id, object_id)` 对。
+///
+/// 用于跨图引用检查时确定 Edge 端点的真实位置。解析失败时返回 `None`。
+///
+/// 与 [`resolve_target`] 的区别：此函数将 `ResolvedTarget` 拆解为
+/// `(final_starmap_id, target)` 元组，方便直接比较。`resolve_target`
+/// 返回完整的 `ResolvedTarget`（含 `traversed_starmap_ids`），适用于
+/// 需要完整穿越链的场景。
+pub fn resolve_target_with_context(
+    context: &GraphResolverContext,
+    path: &StarMapTargetPath,
+) -> Option<(String, StarMapTargetDetail)> {
+    resolve_target(context, path)
+        .ok()
+        .map(|r| (r.final_starmap_id, r.target))
+}

@@ -60,6 +60,8 @@ pub(crate) fn validate_hyperlink_uri(uri: &str) -> Result<()> {
 /// - 超链接的 `hyperlink_id` 全局唯一，source 路径合法，URI 非空且有 scheme
 /// - Portal 的 `destination_starmap_id` 必须存在，可选落点在目标图中存在
 /// - 数值字段 finite（无 NaN/Inf）
+/// - 跨图引用一致性：Edge 的 from/to 路径如果穿越了 Embed/Portal，
+///   目标对象在对应图中必须存在（通过 `resolve_target_path` 覆盖）
 pub(crate) fn validate_graph(context: &GraphResolverContext, graph: &StarMapGraph) -> Result<()> {
     let node_ids = validate_nodes(context, graph)?;
     validate_edges(context, graph, &node_ids)?;
