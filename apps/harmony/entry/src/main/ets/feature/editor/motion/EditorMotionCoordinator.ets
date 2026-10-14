@@ -533,12 +533,16 @@ export class EditorMotionCoordinator {
    */
   commitCandidate(prepared: PreparedCandidate): EditorVisualFrame {
     this.applyCommittedState(prepared.state)
-    // Issue #879 评论6161341265 问题3：只转交当前计划仍引用的身份。
-    // 传入 plan.physicalWindowIdentities 的 renderNodeKey 集合作为有效集合，
-    // 防止已从计划中消失的物理组身份被转交给 displayed owner。
+    // Issue #879 评论6165176815 问题3：使用完整物理窗口计划的 key 集合作为统一权威数据。
+    // 旧代码只从 physicalWindowIdentities 构建 validRenderNodeKeys，
+    // 但 plannedWindowKeys 可能包含额外的 key（来自 insert/deleted/retained runs 的 piece.renderNodeKey）。
+    // 取并集确保 plannedWindowKeys、physicalWindowIdentities、buildFrame 描述的是同一批真实物理节点。
     const validRenderNodeKeys = new Set<string>()
     for (const id of prepared.plan.physicalWindowIdentities) {
       validRenderNodeKeys.add(id.renderNodeKey)
+    }
+    for (const key of this.plannedWindowKeys(prepared)) {
+      validRenderNodeKeys.add(key)
     }
     this.transferCandidateIdentitiesToDisplayed(prepared.candidateOwnerId, validRenderNodeKeys)
     return this.currentFrame
@@ -995,26 +999,33 @@ export class EditorMotionCoordinator {
       prepared.state.newLayout, prepared.state.glyphIdentities
     )
 
-    // Issue #879 评论6152165243 缺口2：从规划结果直接生成 physicalWindowIdentities，
-    // 不再事后补登记。每个物理组的身份在规划阶段已确定。
-    // Issue #879 评论6161341265 问题3：只保留最终计划仍引用的身份。
-    // 旧代码从 prepared.plan.physicalWindowIdentities 起步合并，
-    // 但 retarget 后某些物理组可能已从最终候选计划中消失（被新编辑完全覆盖），
-    // 旧身份残留会导致 transferCandidateIdentitiesToDisplayed 转交已不存在的组。
+    // Issue #879 评论6165176815 问题1：只替换旧 carry-over 身份，保留普通身份。
+    // 旧代码用 newGroupRenderNodeKeys（只含 carry-over key）过滤全量 physicalWindowIdentities，
+    // 导致普通 insert/deleted/retained/frozen/target 身份全部被过滤掉。
+    // 修复：先用旧 plan 的 carryOverGhostRuns/carryOverMotionRuns 的 key 确定旧 carry-over 身份集合，
+    // 从 prepared.plan.physicalWindowIdentities 中只删除这些旧 carry-over 项，
+    // 再附加本轮 physicalGroups 的新身份并按 key 去重。
+    const oldCarryOverKeys = new Set<string>()
+    for (const ghost of prepared.plan.carryOverGhostRuns) {
+      oldCarryOverKeys.add(ghost.renderNodeKey)
+    }
+    for (const motionRun of prepared.plan.carryOverMotionRuns) {
+      oldCarryOverKeys.add(motionRun.renderNodeKey)
+    }
+
+    // 保留所有非旧 carry-over 的身份（普通 insert/deleted/retained/frozen/target）
+    const newIdentityByKey = new Map<string, PhysicalWindowIdentity>()
+    for (const id of prepared.plan.physicalWindowIdentities) {
+      if (!oldCarryOverKeys.has(id.renderNodeKey)) {
+        newIdentityByKey.set(id.renderNodeKey, id)
+      }
+    }
+    // 附加本轮 physicalGroups 的新 carry-over 身份（按 key 去重，不覆盖已有的普通身份）
     const newGroupRenderNodeKeys = new Set<string>()
     for (const group of physicalGroups) {
       newGroupRenderNodeKeys.add(group.renderNodeKey)
-    }
-    const carryOverIdentityByKey = new Map<string, PhysicalWindowIdentity>()
-    for (const id of prepared.plan.physicalWindowIdentities) {
-      // 只保留新 physicalGroups 中仍存在的身份
-      if (newGroupRenderNodeKeys.has(id.renderNodeKey)) {
-        carryOverIdentityByKey.set(id.renderNodeKey, id)
-      }
-    }
-    for (const group of physicalGroups) {
-      if (!carryOverIdentityByKey.has(group.renderNodeKey)) {
-        carryOverIdentityByKey.set(group.renderNodeKey, {
+      if (!newIdentityByKey.has(group.renderNodeKey)) {
+        newIdentityByKey.set(group.renderNodeKey, {
           sourceKind: group.sourceKind,
           sourceRevision: group.sourceRevision,
           runId: group.sourceRunId,
@@ -1023,7 +1034,7 @@ export class EditorMotionCoordinator {
         })
       }
     }
-    const newPhysicalWindowIdentities = Array.from(carryOverIdentityByKey.values())
+    const newPhysicalWindowIdentities = Array.from(newIdentityByKey.values())
 
     // Issue #879 评论6161341265 问题3：释放已消失物理组的候选身份缓存条目。
     // retarget 后某些 groupKey 不再出现在新 physicalGroups 中，

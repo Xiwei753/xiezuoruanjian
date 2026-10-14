@@ -1765,7 +1765,8 @@ test('场景12a：同源多岛相同轨迹——合并为一个物理组，一�
   assert.ok(group.renderNodeKey.includes('carryGhost'))
   // Issue #879 评论6158342861 问题2：renderNodeKey 不再包含父 windowInstanceId，
   // 而是包含通过 allocateFresh 分配的子窗口实例 ID
-  assert.match(group.renderNodeKey, /^old-10-carryGhost-win-\d+$/)
+  // renderNodeKey 格式：${sourceKind}-${sourceRevision}-${channelLabel}-${childWindowInstanceId}-e${epoch}
+  assert.match(group.renderNodeKey, /^old-10-carryGhost-win-\d+-e\d+$/)
   // windowInstanceId 通过分配器分配，格式为 win-<number>
   assert.ok(group.windowInstanceId.startsWith('win-'))
   // 分配器中应能 resolve 该 instanceId
@@ -2094,9 +2095,10 @@ test('问题2-6158342861：同 sourceKind/revision/windowInstanceId 但不同 pa
   assert.ok(allocator.resolve(results[1].windowInstanceId) !== null)
 
   // renderNodeKey 格式正确：包含 carryGhost 和子窗口实例 ID（不是父 win-7）
+  // renderNodeKey 格式：${sourceKind}-${sourceRevision}-${channelLabel}-${childWindowInstanceId}-e${epoch}
   for (const r of results) {
-    assert.match(r.renderNodeKey, /^old-10-carryGhost-win-\d+$/,
-      `renderNodeKey 应为 old-10-carryGhost-win-<number> 格式，got: ${r.renderNodeKey}`)
+    assert.match(r.renderNodeKey, /^old-10-carryGhost-win-\d+-e\d+$/,
+      `renderNodeKey 应为 old-10-carryGhost-win-<number>-e<epoch> 格式，got: ${r.renderNodeKey}`)
     assert.notEqual(r.windowInstanceId, 'win-7',
       '子窗口 instanceId 不应等于父窗口 instanceId win-7')
   }
@@ -3729,6 +3731,7 @@ test('场景P1：mismatch 分支——glyphIds 从 [g1,g2] 变为 [g1]，旧实�
 
   assert.equal(results1.length, 1)
   const oldWinId = results1[0].windowInstanceId
+  const oldRenderNodeKey = results1[0].renderNodeKey
 
   // 模拟 Coordinator 行为：为候选身份添加逻辑 owner
   allocator.addLogicalOwner('candidate', oldWinId)
@@ -3746,6 +3749,11 @@ test('场景P1：mismatch 分支——glyphIds 从 [g1,g2] 变为 [g1]，旧实�
 
   assert.equal(results2.length, 1)
   const newWinId = results2[0].windowInstanceId
+  const newRenderNodeKey = results2[0].renderNodeKey
+
+  // 即使 win-N 复用（newWinId 可能等于 oldWinId），epoch 不同保证 renderNodeKey 唯一
+  assert.notEqual(newRenderNodeKey, oldRenderNodeKey,
+    '即使 winId 复用，epoch 不同应保证 renderNodeKey 唯一')
 
   // mismatch 分支先调用 removeIdentityEntry 撤销旧 owner 引用，再分配新身份。
   // 旧实例被释放后 ID 可能被 allocateFresh 复用（从 releasedIds 中弹出），
@@ -4171,6 +4179,103 @@ test('场景R3：retarget 差集清理——transferIdentityOwner 只转交存�
   transferIdentityOwner(cache, allocator, groupKeyB, 'candidate', 'displayed')
   assert.ok(!cache.has(groupKeyB),
     '已消失的 groupKey B 不应因 transferIdentityOwner 重新出现')
+})
+
+// ═══════════════════════════════════════════════════════════════
+// Issue #879：epoch 碰撞测试 & WindowInstanceIdAllocator epoch 机制测试
+// ═══════════════════════════════════════════════════════════════
+
+console.log('---')
+console.log('Issue #879 epoch 碰撞测试 & epoch 机制测试')
+
+// ── 场景S1：epoch 碰撞——mismatch 分支先 release 又立刻 allocateFresh，renderNodeKey 不碰撞 ──
+//
+// 验证问题2的修复：当 mismatch 分支先 removeIdentityEntry（释放 win-0），
+// 再 allocateFresh（复用 win-0）时，新的 renderNodeKey 与旧的 renderNodeKey 不同
+//（因为 epoch 不同）。
+
+test('场景S1：epoch 碰撞——mismatch 分支先 release 又 allocateFresh，renderNodeKey 不碰撞', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const identityCache = new Map()
+
+  const parent = makeParent('win-S1', 'old', 10, 'deleted')
+
+  // 第一次规划：glyphIds = [g1, g2]
+  const piece1 = makePiece(['g1', 'g2'], 0, 2, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const results1 = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'ghost' },
+  ], allocator, identityCache, 'candidate')
+
+  assert.equal(results1.length, 1)
+  const oldWinId = results1[0].windowInstanceId
+  const oldRenderNodeKey = results1[0].renderNodeKey
+  const oldEpoch = allocator.getEpoch(oldWinId)
+  assert.ok(oldEpoch >= 0, 'oldWinId 应有有效的 epoch')
+
+  // 添加逻辑 owner（模拟 Coordinator 行为）
+  allocator.addLogicalOwner('candidate', oldWinId)
+
+  // 第二次规划：同 groupKey + 同 owner，但 glyphIds = [g1]（mismatch）
+  const piece2 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const results2 = planCarryOverPhysicalGroups([
+    { piece: piece2, parent, motionChannel: 'ghost' },
+  ], allocator, identityCache, 'candidate')
+
+  assert.equal(results2.length, 1)
+  const newWinId = results2[0].windowInstanceId
+  const newRenderNodeKey = results2[0].renderNodeKey
+
+  // 即使 newWinId === oldWinId（ID 复用），renderNodeKey 一定不同（epoch 不同）
+  assert.notEqual(newRenderNodeKey, oldRenderNodeKey,
+    '即使 winId 复用，epoch 不同应保证 renderNodeKey 不碰撞')
+
+  // 验证新实例的 epoch 与旧实例的 epoch 不同
+  // 注意：removeIdentityEntry 可能释放旧实例，allocateFresh 可能复用该 ID，
+  // 但新实例的 epoch 一定大于旧实例的 epoch（因为 allocationEpoch 递增）
+  const newEpoch = allocator.getEpoch(newWinId)
+  assert.ok(newEpoch > oldEpoch,
+    `新实例 epoch (${newEpoch}) 应大于旧实例 epoch (${oldEpoch})`)
+})
+
+// ── 场景S2：WindowInstanceIdAllocator epoch 机制——release 后 allocateFresh 复用 ID 但 epoch 递增 ──
+//
+// 直接测试 WindowInstanceIdAllocator 的 epoch 机制，验证：
+// 1. allocate 和 allocateFresh 都递增 epoch
+// 2. release 后 allocateFresh 可能复用 ID，但 epoch 不同
+// 3. epoch 始终递增，不会回退
+
+test('场景S2：WindowInstanceIdAllocator epoch 机制——release 后复用 ID 但 epoch 递增', () => {
+  const allocator = new WindowInstanceIdAllocator()
+
+  // 第一次分配
+  const winId1 = allocator.allocate(['g1'])
+  const epoch1 = allocator.getEpoch(winId1)
+  assert.ok(epoch1 >= 0, 'winId1 应有有效的 epoch')
+
+  // 第二次分配（allocateFresh）
+  const winId2 = allocator.allocateFresh(['g2'])
+  const epoch2 = allocator.getEpoch(winId2)
+  assert.ok(epoch2 > epoch1, `epoch2 (${epoch2}) 应大于 epoch1 (${epoch1})`)
+
+  // 释放 winId1
+  allocator.release(winId1)
+
+  // 第三次分配（allocateFresh）——可能复用 winId1
+  const winId3 = allocator.allocateFresh(['g3'])
+  const epoch3 = allocator.getEpoch(winId3)
+
+  // epoch3 必须大于 epoch1（即使 ID 复用，epoch 也是新的）
+  assert.ok(epoch3 > epoch1,
+    `epoch3 (${epoch3}) 应大于 epoch1 (${epoch1})，即使 ID 复用`)
+
+  // 如果 winId3 === winId1（ID 复用），epoch3 仍然不同于 epoch1
+  if (winId3 === winId1) {
+    assert.ok(epoch3 > epoch1,
+      `ID 复用时 epoch3 (${epoch3}) 必须大于 epoch1 (${epoch1})`)
+    console.log(`    [INFO] winId 复用: winId3 === winId1 === ${winId1}, epoch ${epoch1} → ${epoch3}`)
+  } else {
+    console.log(`    [INFO] winId 未复用: winId1=${winId1}, winId3=${winId3}`)
+  }
 })
 
 console.log('---')

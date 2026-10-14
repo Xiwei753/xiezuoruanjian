@@ -582,12 +582,14 @@ export function generateGroupKey(
 }
 
 /**
- * Issue #879 评论6158342861 问题2：生成稳定的渲染节点键。
+ * Issue #879 评论6158342861 问题2 + 评论6165176815 问题2：生成稳定的渲染节点键。
  *
  * renderNodeKey 由已分配的唯一物理子窗口实例 ID 决定：
  * - sourceKind/sourceRevision：源版本
  * - 通道类型（carryGhost/carryInsert/carryReflow）
  * - childWindowInstanceId：通过 WindowInstanceIdAllocator.allocateFresh 分配的子窗口实例 ID
+ * - epoch：分配世代号——即使 win-N 数值被复用，新实例的 epoch 也不同，
+ *   保证 renderNodeKey 唯一性，防止旧 Text 的滞后回调误匹配新实例
  *
  * 不再把没有全局唯一性的父 windowInstanceId 当子节点 key 的唯一依据。
  * 目标位置只参与 groupKey 的分组，最终 Text key 应由已分配的唯一物理实例决定。
@@ -596,12 +598,13 @@ export function generateRenderNodeKey(
   sourceKind: string,
   sourceRevision: number,
   motionChannel: 'ghost' | 'insert' | 'reflow',
-  childWindowInstanceId: string
+  childWindowInstanceId: string,
+  epoch: number
 ): string {
   const channelLabel = motionChannel === 'ghost' ? 'carryGhost'
     : motionChannel === 'insert' ? 'carryInsert'
     : 'carryReflow'
-  return `${sourceKind}-${sourceRevision}-${channelLabel}-${childWindowInstanceId}`
+  return `${sourceKind}-${sourceRevision}-${channelLabel}-${childWindowInstanceId}-e${epoch}`
 }
 
 /**
@@ -891,7 +894,8 @@ export function planCarryOverPhysicalGroups(
           assembly.sourceKind,
           assembly.sourceRevision,
           assembly.motionChannel,
-          windowInstanceId
+          windowInstanceId,
+          allocator.getEpoch(windowInstanceId)
         )
         if (ownerMap === undefined) {
           ownerMap = new Map<string, IdentityCacheEntry>()
@@ -908,7 +912,8 @@ export function planCarryOverPhysicalGroups(
         assembly.sourceKind,
         assembly.sourceRevision,
         assembly.motionChannel,
-        windowInstanceId
+        windowInstanceId,
+        allocator.getEpoch(windowInstanceId)
       )
       if (ownerMap === undefined) {
         // cache miss → 创建新的内层 Map

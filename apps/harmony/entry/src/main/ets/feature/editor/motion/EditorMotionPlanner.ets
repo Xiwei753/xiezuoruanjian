@@ -120,20 +120,23 @@ export class PhysicalWindowKeyAllocator {
     // 其他 motionChannel 用 allocateFresh（独立物理实例）。
     const allocatedWinId = windowInstanceId ??
       (motionChannel === 'frozen' ? this.allocator.allocate(glyphIds) : this.allocator.allocateFresh(glyphIds))
-    const cacheKey = `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}`
+    // Issue #879 评论6165176815 问题2：cacheKey 包含 epoch，防止 win-N 复用时缓存错误命中。
+    const allocatedEpoch = this.allocator.getEpoch(allocatedWinId)
+    const cacheKey = `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}-e${allocatedEpoch}`
     const existing = this.identities.get(cacheKey)
     if (existing !== undefined) {
       return existing
     }
     // Issue #879 评论6146031468：renderNodeKey 包含 motionChannel，
     // 确保不同运动轨迹/来源生成不同的 renderNodeKey。
+    // Issue #879 评论6165176815 问题2：renderNodeKey 包含 epoch，防止 win-N 复用时碰撞。
     // 同一物理 Text 的多块 clip 共享一组 key；物理身份不同的来源在 Planner 阶段就分配两个不同的 key。
     const identity: PhysicalWindowIdentity = {
       sourceKind: sourceKind,
       sourceRevision: sourceRevision,
       runId: `${sourceKind}-${sourceRevision}`,
       windowInstanceId: allocatedWinId,
-      renderNodeKey: `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}`
+      renderNodeKey: `${sourceKind}-${sourceRevision}-${motionChannel}-${allocatedWinId}-e${allocatedEpoch}`
     }
     this.identities.set(cacheKey, identity)
     return identity

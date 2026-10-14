@@ -181,6 +181,15 @@ export class WindowInstanceIdAllocator {
   /** 已释放的 instanceId 列表——可复用以避免编号无限增长 */
   private releasedIds: string[] = []
   /**
+   * Issue #879 评论6165176815 问题2：全局分配世代计数器——每次 allocateFresh/allocate 递增。
+   *
+   * 即使 win-N 数值被复用（releasedIds.pop()），新实例的 epoch 也不同，
+   * renderNodeKey 包含 epoch 后保证唯一性，防止旧 Text 的滞后回调误匹配新实例。
+   */
+  private allocationEpoch: number = 0
+  /** Issue #879 评论6165176815 问题2：instanceId → 分配世代的映射 */
+  private instanceIdToEpoch: Map<string, number> = new Map()
+  /**
    * Issue #879 复核评论6078682695 问题3：按 renderNodeKey 管理的引用计数。
    *
    * 同一 glyphIds 序列可以被上一帧 `new-r11` 与候选 `old-r11` 两个不同 Text 节点
@@ -213,9 +222,11 @@ export class WindowInstanceIdAllocator {
     } else {
       instanceId = `win-${this.nextId++}`
     }
+    this.allocationEpoch++
     this.windowIdToInstanceId.set(windowId, instanceId)
     this.instanceIdToWindowId.set(instanceId, windowId)
     this.instanceIdToGlyphIds.set(instanceId, glyphIds)
+    this.instanceIdToEpoch.set(instanceId, this.allocationEpoch)
     return instanceId
   }
 
@@ -237,10 +248,12 @@ export class WindowInstanceIdAllocator {
     } else {
       instanceId = `win-${this.nextId++}`
     }
+    this.allocationEpoch++
     const windowId = windowIdForGlyphIds(glyphIds)
     // 注册反向映射（用于 resolve/release），但不覆盖 windowIdToInstanceId 的已有映射
     this.instanceIdToWindowId.set(instanceId, windowId)
     this.instanceIdToGlyphIds.set(instanceId, glyphIds)
+    this.instanceIdToEpoch.set(instanceId, this.allocationEpoch)
     return instanceId
   }
 
@@ -256,6 +269,23 @@ export class WindowInstanceIdAllocator {
       return glyphIds
     }
     return null
+  }
+
+  /**
+   * Issue #879 评论6165176815 问题2：获取 instanceId 的分配世代。
+   *
+   * 每次 allocateFresh/allocate 分配时递增 epoch，即使 win-N 数值复用，
+   * 新实例的 epoch 也不同。renderNodeKey 包含 epoch 后保证唯一性。
+   *
+   * @param windowInstanceId `win-<number>` 格式 ID
+   * @returns 分配世代号；未找到时返回 -1
+   */
+  getEpoch(windowInstanceId: string): number {
+    const epoch = this.instanceIdToEpoch.get(windowInstanceId)
+    if (epoch !== undefined) {
+      return epoch
+    }
+    return -1
   }
 
   /**
@@ -276,6 +306,7 @@ export class WindowInstanceIdAllocator {
       }
       this.instanceIdToWindowId.delete(windowInstanceId)
       this.instanceIdToGlyphIds.delete(windowInstanceId)
+      this.instanceIdToEpoch.delete(windowInstanceId)
       this.releasedIds.push(windowInstanceId)
     }
   }
@@ -425,9 +456,11 @@ export class WindowInstanceIdAllocator {
    */
   clear(): void {
     this.nextId = 0
+    this.allocationEpoch = 0
     this.windowIdToInstanceId.clear()
     this.instanceIdToWindowId.clear()
     this.instanceIdToGlyphIds.clear()
+    this.instanceIdToEpoch.clear()
     this.releasedIds = []
     this.instanceIdToLeases.clear()
     this.instanceIdToLogicalOwners.clear()
