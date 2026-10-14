@@ -17,7 +17,6 @@ export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
 
 const TAG = 'SyncOperationController'
 const DOMAIN = 0x0000
-const SYNC_TIMEOUT_MS = 60000 // 同步超时时间：60秒
 
 export type SyncPhase = 'idle' | 'in_progress' | 'success' | 'failed'
 
@@ -39,7 +38,6 @@ export class SyncOperationController {
   private static instance: SyncOperationController
   private syncBridge: NativeSyncBridge
   private currentOperation: Promise<SyncOutcome> | null = null
-  private abortController: AbortController | null = null
 
   private constructor() {
     this.syncBridge = new NativeSyncBridge(new NativeCoreModule())
@@ -63,84 +61,11 @@ export class SyncOperationController {
       hilog.warn(DOMAIN, TAG, 'sync already in progress, waiting for existing operation')
       return this.currentOperation
     }
-
-    // 创建新的 AbortController 用于取消操作
-    this.abortController = new AbortController()
-    this.currentOperation = this.executeSyncWithTimeout(this.abortController.signal)
+    this.currentOperation = this.executeSync()
     try {
       return await this.currentOperation
     } finally {
       this.currentOperation = null
-      this.abortController = null
-    }
-  }
-
-  /** 取消当前正在进行的同步操作 */
-  cancelSync(): void {
-    if (this.abortController !== null) {
-      hilog.info(DOMAIN, TAG, 'cancelSync: cancelling current sync operation')
-      this.abortController.abort()
-    } else {
-      hilog.warn(DOMAIN, TAG, 'cancelSync: no active sync operation to cancel')
-    }
-  }
-
-  /** 带超时的同步执行 */
-  private async executeSyncWithTimeout(signal: AbortSignal): Promise<SyncOutcome> {
-    let timeoutId: number = -1
-    
-    const timeoutPromise = new Promise<SyncOutcome>((_, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(new Error('SYNC_TIMEOUT'))
-      }, SYNC_TIMEOUT_MS)
-      
-      // 监听取消信号
-      signal.addEventListener('abort', () => {
-        if (timeoutId !== -1) {
-          clearTimeout(timeoutId)
-          timeoutId = -1
-        }
-        reject(new Error('SYNC_CANCELLED'))
-      })
-    })
-
-    try {
-      // 使用 Promise.race 实现超时控制
-      const result = await Promise.race([
-        this.executeSync(),
-        timeoutPromise
-      ])
-      // 成功完成，清理超时定时器
-      if (timeoutId !== -1) {
-        clearTimeout(timeoutId)
-        timeoutId = -1
-      }
-      return result
-    } catch (error) {
-      // 确保超时定时器被清理
-      if (timeoutId !== -1) {
-        clearTimeout(timeoutId)
-        timeoutId = -1
-      }
-      
-      const errorMsg = String(error)
-      if (errorMsg === 'SYNC_TIMEOUT') {
-        hilog.error(DOMAIN, TAG, 'performSync: timeout after %{public}d ms', SYNC_TIMEOUT_MS)
-        return {
-          phase: 'failed',
-          message: '同步操作超时，请检查网络连接后重试',
-          errorCode: 'SYNC_TIMEOUT'
-        }
-      }
-      if (errorMsg === 'SYNC_CANCELLED') {
-        hilog.info(DOMAIN, TAG, 'performSync: operation cancelled by user')
-        return {
-          phase: 'failed',
-          message: '同步操作已取消',
-          errorCode: 'SYNC_CANCELLED'
-        }
-      }
-      throw error
     }
   }
 
@@ -242,33 +167,39 @@ export class SyncOperationController {
 
   /** 同步操作前刷新 Core 的网络状态（三态；未知时不伪造在线）。 */
   private async refreshNetworkState(): Promise<void> {
+    let known: boolean
+    let isConnected: boolean
+    let isMetered: boolean
+    let queryError: string | null = null
+
     try {
       const snapshot: NetworkSnapshot = await NetworkStatusService.getInstance().query()
       if (snapshot.queryFailed) {
-        // 查询失败：记录诊断链，不伪造在线状态
+        // 查询失败：明确用 known=false 通知 Core 清除旧缓存，不伪造在线
         hilog.warn(DOMAIN, TAG,
-          'refreshNetworkState: network query failed, skip Core update: %{public}s',
+          'refreshNetworkState: network query failed, notifying Core with unknown state: %{public}s',
           snapshot.error)
-        return
+        known = false
+        isConnected = false
+        isMetered = false
+        queryError = snapshot.error
+      } else {
+        known = snapshot.known
+        isConnected = snapshot.isConnected
+        isMetered = snapshot.isMetered
       }
+
+      // 无论查询是否成功，都将三态写给 Core
       const result: number = NativeWriterCoreBridge.getInstance().updateNetworkState(
-        snapshot.known, snapshot.isConnected, snapshot.isMetered
+        known, isConnected, isMetered
       )
       if (result !== 0) {
-        // 写入 Core 失败：明确记录 NETWORK_STATE_UPDATE_FAILED + 原生返回码
-        // -3: Core 未初始化/服务获取失败；-999: ArkTS 包装层原生异常
         hilog.error(DOMAIN, TAG,
           'NETWORK_STATE_UPDATE_FAILED: updateNetworkState returned %{public}s, ' +
-          'stage=write_core, known=%{public}s connected=%{public}s metered=%{public}s',
-          result.toString(), snapshot.known.toString(), snapshot.isConnected.toString(),
-          snapshot.isMetered.toString())
-      } else {
-        hilog.info(DOMAIN, TAG,
-          'refreshNetworkState: Core updated, known=%{public}s connected=%{public}s metered=%{public}s',
-          snapshot.known.toString(), snapshot.isConnected.toString(), snapshot.isMetered.toString())
+          'stage=write_core, known=%{public}s connected=%{public}s queryError=%{public}s',
+          result.toString(), known.toString(), isConnected.toString(), queryError ?? '')
       }
     } catch (e) {
-      // ArkTS 包装层异常：记录为查询失败
       hilog.error(DOMAIN, TAG,
         'NETWORK_STATE_UPDATE_FAILED: native bridge exception, stage=query_bridge, error=%{public}s',
         String(e))
@@ -284,6 +215,7 @@ export class SyncOperationController {
 
   /** 执行 dry-run */
   async runDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
+    await this.refreshNetworkState()
     return await this.syncBridge.syncDryRun()
   }
 

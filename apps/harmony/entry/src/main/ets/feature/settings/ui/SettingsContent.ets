@@ -19,25 +19,12 @@ import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserve
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
 import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
 import { SyncOutcome } from '../presentation/SyncOperationController'
+import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
-
-// ── 同步消息结构化载荷（与 ViewModel 端 SyncMessagePayload 对齐） ──
-// 替代旧的 "sync_complete:${n}" / "error:${code}" 机械字符串，
-// 原样传递 outcome.messageKey + errorCode + messageArgs + errorCategory + rawError + overallStatus。
-interface SyncMessagePayload {
-  phase: 'success' | 'error'
-  messageKey?: string
-  messageArgs?: Record<string, string>
-  errorCode?: string
-  errorCategory?: string
-  rawError?: string
-  totalDownloaded?: number
-  overallStatus?: string
-}
 
 // ── 分组与分类的映射关系（对齐 Android SettingsRoute.kt 信息架构） ──
 interface GroupDefinition {
@@ -219,7 +206,7 @@ export struct SettingsContent {
         const errorKey = msg.substring(6)
         // 兼容旧的特殊 key：构造 SyncOutcome 走统一展示路径
         const outcome: SyncOutcome = {
-          phase: 'error',
+          phase: 'failed',
           message: '',
           messageKey: undefined,
           messageArgs: undefined,

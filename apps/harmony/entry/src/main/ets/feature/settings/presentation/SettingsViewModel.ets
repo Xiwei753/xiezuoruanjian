@@ -21,24 +21,11 @@ import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../plat
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { SyncOperationController, SyncOutcome } from './SyncOperationController'
+import { SyncMessagePayload } from './SyncMessagePayload'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
-
-// ── 同步消息结构化载荷 ──
-// 替代旧的 "sync_complete:${n}" / "error:${code}" 机械字符串，
-// 原样传递 outcome.messageKey + errorCode + messageArgs + errorCategory + rawError + overallStatus。
-interface SyncMessagePayload {
-  phase: 'success' | 'error'
-  messageKey?: string
-  messageArgs?: Record<string, string>
-  errorCode?: string
-  errorCategory?: string
-  rawError?: string
-  totalDownloaded?: number
-  overallStatus?: string
-}
 
 // 设置分类标识 — 供折叠状态管理使用。
 export type SettingsSectionId =
@@ -324,7 +311,7 @@ export class SettingsViewModel {
       } else {
         // 失败：原样传递 Core 类型化字段，不再构造 error.${errorKey}
         const payload: SyncMessagePayload = {
-          phase: 'error',
+          phase: 'failed',
           messageKey: outcome.messageKey,
           messageArgs: outcome.messageArgs,
           errorCode: outcome.errorCode,
@@ -337,7 +324,7 @@ export class SettingsViewModel {
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to perform sync: ${err}`)
       const payload: SyncMessagePayload = {
-        phase: 'error',
+        phase: 'failed',
         errorCode: 'sync_error',
         rawError: String(err)
       }
