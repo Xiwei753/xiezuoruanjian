@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashSet;
+
 use crate::starmap::connections::{
     load_graph_edges, load_graph_embeds, load_graph_hyperlinks, load_graph_links,
-    route_aware_endpoint_matches,
+    route_aware_endpoint_matches, StarMapConnectionInfo,
 };
 use crate::starmap::graph::resolve::{resolve_status_to_error, GraphResolverContext};
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
@@ -563,7 +565,7 @@ pub fn find_cross_canvas_references_for_canvas(
 ///
 /// 标识引用来自哪种对象（Edge/Link/Hyperlink/Embed）的哪个端点，
 /// 用于删除保护时定位具体的外部依赖。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CrossCanvasRefSourceKind {
     /// Edge 的 from 端。
     EdgeFrom,
@@ -766,6 +768,31 @@ pub struct PathDependencySource {
     pub target_anchor_id: Option<String>,
 }
 
+/// 倒排表 key：`(host_starmap_id, kind, object_id)`。
+type DependencyKey = (
+    String,
+    crate::starmap::graph::resolve::PathDependencyKind,
+    String,
+);
+
+/// 来源反查 key：`(owner_starmap_id, source_kind, source_id)`。
+type SourceKey = (String, CrossCanvasRefSourceKind, String);
+
+/// 判断 `source` 是否与给定的 `(owner, kind, id)` 完全匹配。
+///
+/// 供 [`PathDependencyIndex::remove_source`] 的 `retain` 谓词使用，
+/// 提取为独立函数以避免闭包嵌套过深。
+fn is_same_source(
+    s: &PathDependencySource,
+    owner_starmap_id: &str,
+    source_kind: &CrossCanvasRefSourceKind,
+    source_id: &str,
+) -> bool {
+    s.owner_starmap_id == owner_starmap_id
+        && &s.source_kind == source_kind
+        && s.source_id == source_id
+}
+
 /// 反向依赖索引：按 `(host_starmap_id, kind, object_id)` 查询依赖该对象的路径来源。
 ///
 /// 这是从星图真实数据派生的可重建查询结构，图对象仍是唯一事实来源。
@@ -775,14 +802,13 @@ pub struct PathDependencySource {
 /// 建索引用 [`PathDependencyIndex::build`]，查询用 [`PathDependencyIndex::query_dependents`]。
 #[derive(Debug, Clone, Default)]
 pub struct PathDependencyIndex {
-    entries: std::collections::HashMap<
-        (
-            String,
-            crate::starmap::graph::resolve::PathDependencyKind,
-            String,
-        ),
-        Vec<PathDependencySource>,
-    >,
+    entries: std::collections::HashMap<DependencyKey, Vec<PathDependencySource>>,
+    /// 来源反查表：`(owner_starmap_id, source_kind, source_id) → Vec<dependency-key>`。
+    ///
+    /// [`remove_source`] 据此精准定位受影响的倒排表 key，只在这些 key 的 Vec 中
+    /// retain 移除该来源，不再遍历整个 `entries`。`add_path` /
+    /// [`replace_source_facts`] 插入新 entry 时同步维护。
+    source_to_keys: std::collections::HashMap<SourceKey, Vec<DependencyKey>>,
 }
 
 impl PathDependencyIndex {
@@ -880,14 +906,37 @@ impl PathDependencyIndex {
         context: &GraphResolverContext,
     ) -> crate::error::Result<()> {
         let facts = crate::starmap::graph::resolve::extract_path_dependency_facts(context, path)?;
+        self.insert_facts(owner_starmap_id, source_kind, source_id, path, label, facts);
+        Ok(())
+    }
+
+    /// 根据已计算好的依赖事实插入倒排表 entry，同步维护 [`source_to_keys`]。
+    ///
+    /// 纯内存操作，不可失败。由 [`add_path`]（从磁盘提取事实）和
+    /// [`replace_source_facts`]（接收外部预计算事实）复用，保证两条插入路径
+    /// 产生完全相同的索引状态，不漂移成两套逻辑。
+    fn insert_facts(
+        &mut self,
+        owner_starmap_id: &str,
+        source_kind: CrossCanvasRefSourceKind,
+        source_id: &str,
+        path: &StarMapTargetPath,
+        label: &Option<String>,
+        facts: Vec<crate::starmap::graph::resolve::PathDependencyFact>,
+    ) {
+        let source_key = (
+            owner_starmap_id.to_string(),
+            source_kind.clone(),
+            source_id.to_string(),
+        );
         for fact in facts {
-            let key = (
+            let dep_key = (
                 fact.host_starmap_id.clone(),
                 fact.kind.clone(),
                 fact.object_id.clone(),
             );
             self.entries
-                .entry(key)
+                .entry(dep_key.clone())
                 .or_default()
                 .push(PathDependencySource {
                     owner_starmap_id: owner_starmap_id.to_string(),
@@ -897,8 +946,11 @@ impl PathDependencyIndex {
                     label: label.clone(),
                     target_anchor_id: fact.anchor_id.clone(),
                 });
+            self.source_to_keys
+                .entry(source_key.clone())
+                .or_default()
+                .push(dep_key);
         }
-        Ok(())
     }
 
     /// 查询依赖指定对象的所有路径来源。
@@ -938,21 +990,68 @@ impl PathDependencyIndex {
     ///
     /// 增删改操作后增量更新索引：先移除旧来源产生的全部 entry，再插入新来源
     /// 的 entry（见 [`add_or_replace_source`]）。避免每次从零扫描全库重建索引。
+    ///
+    /// 通过 [`source_to_keys`] 反查表精准定位受影响的倒排表 key，只在这些 key
+    /// 的 Vec 中 retain 移除该来源，不再遍历整个 `entries`（问题4）。
     pub fn remove_source(
         &mut self,
         owner_starmap_id: &str,
         source_kind: &CrossCanvasRefSourceKind,
         source_id: &str,
     ) {
-        for sources in self.entries.values_mut() {
-            sources.retain(|s| {
-                !(s.owner_starmap_id == owner_starmap_id
-                    && &s.source_kind == source_kind
-                    && s.source_id == source_id)
-            });
+        let source_key = (
+            owner_starmap_id.to_string(),
+            source_kind.clone(),
+            source_id.to_string(),
+        );
+        let Some(affected_keys) = self.source_to_keys.remove(&source_key) else {
+            return;
+        };
+        for dep_key in affected_keys {
+            if let Some(sources) = self.entries.get_mut(&dep_key) {
+                sources.retain(|s| !is_same_source(s, owner_starmap_id, source_kind, source_id));
+            }
         }
         // 清理空的 Vec，保持索引紧凑。
         self.entries.retain(|_, v| !v.is_empty());
+    }
+
+    /// 两阶段更新的第一阶段：纯计算新路径产生的依赖事实，不修改索引。
+    ///
+    /// 调用 [`extract_path_dependency_facts`] 提取事实。可能失败（路径解析错误、
+    /// 磁盘 IO、schema 不兼容），失败时索引保持不变——这是两阶段接口相对
+    /// [`add_or_replace_source`] 的核心优势：facade 层可以先写 Store 再调
+    /// [`replace_source_facts`]，prepare 失败时 Store 与索引不会分叉（问题2）。
+    ///
+    /// 虽然不读 `self`，但作为方法暴露以保持两阶段接口 `(prepare, replace)` 的
+    /// 对称调用形式。
+    pub fn prepare_source_facts(
+        &self,
+        path: &StarMapTargetPath,
+        context: &GraphResolverContext,
+    ) -> crate::error::Result<Vec<crate::starmap::graph::resolve::PathDependencyFact>> {
+        crate::starmap::graph::resolve::extract_path_dependency_facts(context, path)
+    }
+
+    /// 两阶段更新的第二阶段：用预计算的事实替换该来源的全部依赖事实。
+    ///
+    /// 只更新内存哈希，**不可失败**（返回 `()`）。先移除该来源的所有旧 entry
+    /// （通过 [`remove_source`] + [`source_to_keys`] 精准定位），再根据 `facts`
+    /// 插入新 entry（通过 [`insert_facts`] 同步维护反查表）。
+    ///
+    /// 与 [`prepare_source_facts`] 配合使用：facade 层先 prepare 得到 facts，
+    /// 成功后写 Store，再调本方法更新索引。prepare 失败时索引和 Store 都不变。
+    pub fn replace_source_facts(
+        &mut self,
+        owner_starmap_id: &str,
+        source_kind: CrossCanvasRefSourceKind,
+        source_id: &str,
+        path: &StarMapTargetPath,
+        label: &Option<String>,
+        facts: Vec<crate::starmap::graph::resolve::PathDependencyFact>,
+    ) {
+        self.remove_source(owner_starmap_id, &source_kind, source_id);
+        self.insert_facts(owner_starmap_id, source_kind, source_id, path, label, facts);
     }
 
     /// 先按 `(owner, kind, source_id)` 移除该来源的所有旧依赖事实，再插入新依赖事实。
@@ -961,8 +1060,9 @@ impl PathDependencyIndex {
     /// source/host_path 变更后，先用本方法移除旧路径产生的全部 entry，再插入
     /// 新路径的 entry。避免每次从零扫描全库重建索引。
     ///
-    /// 读取错误（`extract_path_dependency_facts` 内部磁盘 IO/schema 不兼容）
-    /// 通过 `?` 向上传播，不吞成"无依赖"。
+    /// 内部走两阶段 [`prepare_source_facts`] + [`replace_source_facts`]：
+    /// prepare 失败时索引保持不变（旧 entry 不丢失），读取错误通过 `?` 向上
+    /// 传播，不吞成"无依赖"（问题2）。
     pub fn add_or_replace_source(
         &mut self,
         owner_starmap_id: &str,
@@ -972,8 +1072,144 @@ impl PathDependencyIndex {
         label: &Option<String>,
         context: &GraphResolverContext,
     ) -> crate::error::Result<()> {
-        self.remove_source(owner_starmap_id, &source_kind, source_id);
-        self.add_path(owner_starmap_id, source_kind, source_id, path, label, context)?;
+        let facts = self.prepare_source_facts(path, context)?;
+        self.replace_source_facts(owner_starmap_id, source_kind, source_id, path, label, facts);
         Ok(())
+    }
+
+    /// 基于索引查询与特定画布相关的所有连接（问题4）。
+    ///
+    /// 与 [`crate::starmap::connections::list_connections_for_canvas`] 语义一致：
+    /// 返回当前画布的所有 Edge，以及存于祖先图但至少一端 route-aware 落在
+    /// 当前画布的 Edge。区别在于本方法从反向依赖索引获取候选 Edge 来源，
+    /// 只加载索引表明与当前画布相关的祖先图，而非逐 Edge 加载所有祖先图。
+    ///
+    /// ## 算法
+    ///
+    /// 1. 解析 route 得到当前画布与祖先链。
+    /// 2. 从索引收集候选祖先图集合：倒排表中 `host_starmap_id == current`
+    ///    的 entry（路径穿越/指向当前画布对象）的 Edge 来源所在图。
+    /// 3. 当前图：加载全部边并加入结果。
+    /// 4. 祖先图：仅当在候选集合中才加载，对每条边做 route-aware 匹配
+    ///    （复用 [`route_aware_endpoint_matches`]），匹配的加入结果。
+    ///
+    /// 候选集合是保守上界——索引的 `host == current` 只表示路径经过当前画布
+    /// 对象，不保证 segments 后缀与 route 一致；route-aware 匹配做精确过滤。
+    /// 这样既避免遍历所有祖先图，又保证结果与全表扫描完全一致。
+    ///
+    /// 读取失败（磁盘 IO、JSON 解析、schema 版本不兼容）时返回 `Err`，
+    /// 不把读取失败伪装成"没有连接"。
+    pub fn query_connections_for_canvas(
+        &self,
+        route: &StarMapNavigationRoute,
+        context: &GraphResolverContext,
+    ) -> crate::error::Result<Vec<StarMapConnectionInfo>> {
+        let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
+        let current_starmap_id = &location.current_starmap_id;
+        let last_idx = location.traversed_starmap_ids.len().saturating_sub(1);
+
+        // 从索引收集候选祖先图：倒排表中 host == current 的 Edge 来源所在图。
+        // 这些图持有路径穿越/指向当前画布对象的边，是唯一可能与当前画布相关
+        // 的祖先图；不在候选集合中的祖先图无需加载边文件。
+        let candidate_owners = self.collect_candidate_edge_owners(current_starmap_id);
+
+        let mut results = Vec::new();
+
+        for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
+            let is_current_canvas = i == last_idx;
+            // 当前图：总是加载（包含所有边）。祖先图：仅当索引表明它有边
+            // 指向/穿越当前画布才加载，避免遍历所有祖先图。
+            if !is_current_canvas && !candidate_owners.contains(ancestor_starmap_id) {
+                continue;
+            }
+
+            let edges = load_graph_edges(context, ancestor_starmap_id)?;
+            results.extend(Self::collect_connections_from_edges(
+                &edges,
+                ancestor_starmap_id,
+                is_current_canvas,
+                route,
+                i,
+            ));
+        }
+
+        Ok(results)
+    }
+
+    /// 从倒排表收集候选祖先图：`host_starmap_id == current` 的 Edge 来源所在图。
+    ///
+    /// 这些图持有路径穿越/指向当前画布对象的边，是唯一可能与当前画布相关
+    /// 的祖先图；不在候选集合中的祖先图无需加载边文件。
+    fn collect_candidate_edge_owners(&self, current_starmap_id: &str) -> HashSet<String> {
+        let mut owners: HashSet<String> = HashSet::new();
+        for ((host_starmap_id, _, _), sources) in &self.entries {
+            if host_starmap_id != current_starmap_id {
+                continue;
+            }
+            owners.extend(
+                sources
+                    .iter()
+                    .filter(|s| {
+                        matches!(
+                            s.source_kind,
+                            CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
+                        )
+                    })
+                    .map(|s| s.owner_starmap_id.clone()),
+            );
+        }
+        owners
+    }
+
+    /// 从一组边收集连接信息。
+    ///
+    /// 当前画布的边全部加入结果；祖先图的边需通过 route-aware 匹配过滤。
+    fn collect_connections_from_edges(
+        edges: &[StarMapEdge],
+        ancestor_starmap_id: &str,
+        is_current_canvas: bool,
+        route: &StarMapNavigationRoute,
+        route_start_idx: usize,
+    ) -> Vec<StarMapConnectionInfo> {
+        let mut results = Vec::new();
+        for edge in edges {
+            if is_current_canvas {
+                results.push(Self::edge_to_connection_info(edge, ancestor_starmap_id));
+                continue;
+            }
+
+            let route_from_ancestor = &route.segments[route_start_idx..];
+            let from_in_canvas = route_aware_endpoint_matches(
+                &edge.from,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                None,
+            );
+            let to_in_canvas = route_aware_endpoint_matches(
+                &edge.to,
+                ancestor_starmap_id,
+                route_from_ancestor,
+                None,
+            );
+            if from_in_canvas || to_in_canvas {
+                results.push(Self::edge_to_connection_info(edge, ancestor_starmap_id));
+            }
+        }
+        results
+    }
+
+    /// 将一条边转换为 [`StarMapConnectionInfo`]。
+    fn edge_to_connection_info(
+        edge: &StarMapEdge,
+        owner_starmap_id: &str,
+    ) -> StarMapConnectionInfo {
+        StarMapConnectionInfo {
+            owner_starmap_id: owner_starmap_id.to_string(),
+            edge_id: edge.id.clone(),
+            from: edge.from.clone(),
+            to: edge.to.clone(),
+            kind: edge.kind.clone(),
+            label: edge.label.clone(),
+        }
     }
 }

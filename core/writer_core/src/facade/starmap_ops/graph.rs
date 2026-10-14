@@ -150,8 +150,11 @@ impl super::super::WriterCore {
             };
             // Anchor 身份变更 = anchor_id 集合不同。anchor 的 position 等非身份字段
             // 变更不影响路径依赖，只有 anchor_id 新增/删除才改变路径解析结果。
-            let old_anchor_ids: std::collections::HashSet<&str> =
-                old_node.anchors.iter().map(|a| a.anchor_id.as_str()).collect();
+            let old_anchor_ids: std::collections::HashSet<&str> = old_node
+                .anchors
+                .iter()
+                .map(|a| a.anchor_id.as_str())
+                .collect();
             let new_anchor_ids: std::collections::HashSet<&str> = new_node
                 .anchors
                 .iter()
@@ -214,29 +217,37 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare from/to 的事实（可失败，不修改
+        // 任何状态）。成功后才写 Store；写 Store 后 replace（不可失败）。
+        // prepare 失败时 Store 和索引都不变，不会分叉。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let from_facts = extract_path_dependency_facts(&context, &edge.from)?;
+        let to_facts = extract_path_dependency_facts(&context, &edge.to)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：新 Edge 的 from/to 两端路径。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实一次性替换该来源的全部索引 entry。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EdgeFrom,
             &result.id,
             &result.from,
             &result.label,
-        )?;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+            from_facts,
+        );
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EdgeTo,
             &result.id,
             &result.to,
             &result.label,
-        )?;
+            to_facts,
+        );
 
         Ok(result)
     }
@@ -270,29 +281,46 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare from/to 的事实（可失败，不修改状态）。
+        // 用 candidate 中 patch 应用后的 edge 路径，与写 Store 后 result 的路径一致。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let updated_edge = candidate
+            .edges
+            .iter()
+            .find(|e| e.id == edge_id)
+            .ok_or_else(|| {
+                crate::error::Error::Other(format!(
+                    "internal error: updated edge not found in candidate: {}",
+                    edge_id
+                ))
+            })?;
+        let from_facts = extract_path_dependency_facts(&context, &updated_edge.from)?;
+        let to_facts = extract_path_dependency_facts(&context, &updated_edge.to)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.update_edge(edge_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：Edge 的 from/to 可能已变更。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实一次性替换索引 entry。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EdgeFrom,
             &result.id,
             &result.from,
             &result.label,
-        )?;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+            from_facts,
+        );
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EdgeTo,
             &result.id,
             &result.to,
             &result.label,
-        )?;
+            to_facts,
+        );
 
         Ok(result)
     }
@@ -305,7 +333,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
         store.ensure_edge_loaded(edge_id)?;
         store.delete_edge(edge_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
@@ -354,21 +382,26 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare host_path 的事实（可失败，不修改状态）。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let host_path_facts = extract_path_dependency_facts(&context, &embed.host_path)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.add_embed(embed)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：新 Embed 的 host_path。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EmbedHostPath,
             &result.instance_id,
             &result.host_path,
             &result.label,
-        )?;
+            host_path_facts,
+        );
 
         Ok(result)
     }
@@ -402,21 +435,37 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare host_path 的事实（可失败，不修改状态）。
+        // 用 candidate 中 patch 应用后的 embed host_path。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let updated_embed = candidate
+            .embeds
+            .iter()
+            .find(|e| e.instance_id == instance_id)
+            .ok_or_else(|| {
+                crate::error::Error::Other(format!(
+                    "internal error: updated embed not found in candidate: {}",
+                    instance_id
+                ))
+            })?;
+        let host_path_facts = extract_path_dependency_facts(&context, &updated_embed.host_path)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.update_embed(instance_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：Embed 的 host_path 可能已变更。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::EmbedHostPath,
             &result.instance_id,
             &result.host_path,
             &result.label,
-        )?;
+            host_path_facts,
+        );
 
         Ok(result)
     }
@@ -473,9 +522,7 @@ impl super::super::WriterCore {
         // 跨图引用检查：对所有被删对象（Node + 级联删除的 Embed）检查外部依赖。
         // 旧实现只检查被点中的对象本身，不检查级联删除的其他对象——
         // 比如删 node n 级联删 embed e，但不查 e 的 EmbedTraversal，导致外部路径被破坏。
-        self.check_cross_canvas_references_for_delete(
-            &stores, starmap_id, &origin, &cascade,
-        )?;
+        self.check_cross_canvas_references_for_delete(&stores, starmap_id, &origin, &cascade)?;
 
         // 先在 candidate graph 上模拟删除（含传递级联），跑 validate_graph，再真正改 Store。
         let candidate = {
@@ -587,29 +634,35 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare source/target 的事实（可失败，不修改状态）。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let source_facts = extract_path_dependency_facts(&context, &link.source)?;
+        let target_facts = extract_path_dependency_facts(&context, &link.target)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.add_link(link)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：新 Link 的 source/target 两端路径。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::LinkSource,
             &result.link_id,
             &result.source,
             &result.label,
-        )?;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+            source_facts,
+        );
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::LinkTarget,
             &result.link_id,
             &result.target,
             &result.label,
-        )?;
+            target_facts,
+        );
 
         Ok(result)
     }
@@ -643,29 +696,46 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare source/target 的事实（可失败，不修改状态）。
+        // 用 candidate 中 patch 应用后的 link 路径。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let updated_link = candidate
+            .links
+            .iter()
+            .find(|l| l.link_id == link_id)
+            .ok_or_else(|| {
+                crate::error::Error::Other(format!(
+                    "internal error: updated link not found in candidate: {}",
+                    link_id
+                ))
+            })?;
+        let source_facts = extract_path_dependency_facts(&context, &updated_link.source)?;
+        let target_facts = extract_path_dependency_facts(&context, &updated_link.target)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.update_link(link_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：Link 的 source/target 可能已变更。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::LinkSource,
             &result.link_id,
             &result.source,
             &result.label,
-        )?;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+            source_facts,
+        );
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::LinkTarget,
             &result.link_id,
             &result.target,
             &result.label,
-        )?;
+            target_facts,
+        );
 
         Ok(result)
     }
@@ -678,7 +748,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
         store.ensure_link_loaded(link_id)?;
         store.delete_link(link_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteLink);
@@ -743,21 +813,26 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare source 的事实（可失败，不修改状态）。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let source_facts = extract_path_dependency_facts(&context, &hl.source)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.add_hyperlink(hl)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：新 Hyperlink 的 source 路径。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::HyperlinkSource,
             &result.hyperlink_id,
             &result.source,
             &result.label,
-        )?;
+            source_facts,
+        );
 
         Ok(result)
     }
@@ -792,21 +867,37 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare source 的事实（可失败，不修改状态）。
+        // 用 candidate 中 patch 应用后的 hyperlink source。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let updated_hl = candidate
+            .hyperlinks
+            .iter()
+            .find(|h| h.hyperlink_id == hyperlink_id)
+            .ok_or_else(|| {
+                crate::error::Error::Other(format!(
+                    "internal error: updated hyperlink not found in candidate: {}",
+                    hyperlink_id
+                ))
+            })?;
+        let source_facts = extract_path_dependency_facts(&context, &updated_hl.source)?;
+
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
         let result = store.update_hyperlink(hyperlink_id, patch)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：Hyperlink 的 source 可能已变更。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             starmap_id,
             CrossCanvasRefSourceKind::HyperlinkSource,
             &result.hyperlink_id,
             &result.source,
             &result.label,
-        )?;
+            source_facts,
+        );
 
         Ok(result)
     }
@@ -819,7 +910,7 @@ impl super::super::WriterCore {
         let store = stores
             .entry(starmap_id.to_string())
             .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-        store.ensure_loaded()?;
+        store.ensure_fully_loaded()?;
         store.ensure_hyperlink_loaded(hyperlink_id)?;
         store.delete_hyperlink(hyperlink_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
@@ -1092,30 +1183,36 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 两阶段索引更新（问题2）：先 prepare from/to 的事实（可失败，不修改状态）。
+        let context = self.build_resolver_context(&stores);
+        use crate::starmap::graph::resolve::extract_path_dependency_facts;
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        let from_facts = extract_path_dependency_facts(&context, &edge.from)?;
+        let to_facts = extract_path_dependency_facts(&context, &edge.to)?;
+
         // 4. 真正写入宿主图 Store，进入 Edge + GraphMeta 保存链。
         let store = Self::get_store_mut_or_err(&mut stores, &owner_starmap_id)?;
         let written_edge = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
-        // 增量更新持久化路径依赖索引：新跨画布 Edge 的 from/to 两端路径。
-        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+        // replace（不可失败）：用预计算的事实更新索引。
+        self.replace_source_facts_in_path_dependency_index(
             &owner_starmap_id,
             CrossCanvasRefSourceKind::EdgeFrom,
             &written_edge.id,
             &written_edge.from,
             &written_edge.label,
-        )?;
-        self.add_or_replace_source_in_path_dependency_index(
-            &stores,
+            from_facts,
+        );
+        self.replace_source_facts_in_path_dependency_index(
             &owner_starmap_id,
             CrossCanvasRefSourceKind::EdgeTo,
             &written_edge.id,
             &written_edge.to,
             &written_edge.label,
-        )?;
+            to_facts,
+        );
 
         Ok(CreateCrossCanvasEdgeResult {
             owner_starmap_id,
@@ -1156,9 +1253,7 @@ impl super::super::WriterCore {
         // 使用 WriterCore 持有的持久化路径依赖索引，不再每次从零扫描全库 build。
         let index_guard = self.get_or_init_path_dependency_index(stores)?;
         let dep_index = index_guard.as_ref().ok_or_else(|| {
-            crate::error::Error::Other(
-                "path dependency index initialization failed".to_string(),
-            )
+            crate::error::Error::Other("path dependency index initialization failed".to_string())
         })?;
 
         let mut refs = Vec::new();
@@ -1172,9 +1267,7 @@ impl super::super::WriterCore {
                 PathDependencyKind::AnchorTarget,
                 PathDependencyKind::PortalTraversal,
             ] {
-                refs.extend(collect_external_refs(
-                    dep_index, starmap_id, &kind, node_id,
-                ));
+                refs.extend(collect_external_refs(dep_index, starmap_id, &kind, node_id));
             }
         }
 
@@ -1260,9 +1353,7 @@ impl super::super::WriterCore {
         // 使用 WriterCore 持有的持久化路径依赖索引，不再每次从零扫描全库 build。
         let index_guard = self.get_or_init_path_dependency_index(stores)?;
         let dep_index = index_guard.as_ref().ok_or_else(|| {
-            crate::error::Error::Other(
-                "path dependency index initialization failed".to_string(),
-            )
+            crate::error::Error::Other("path dependency index initialization failed".to_string())
         })?;
 
         let mut refs = Vec::new();

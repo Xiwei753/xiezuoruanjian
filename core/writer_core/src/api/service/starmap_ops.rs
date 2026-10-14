@@ -539,6 +539,10 @@ impl WriterCoreApi {
             );
             return Err(e);
         }
+        // 物理删除成功后失效路径依赖索引：remove_starmap_store 已在删除前失效一次，
+        // 但期间可能有其他线程惰性重建了索引。物理删除后磁盘数据已变，再次失效
+        // 确保索引不持有已删除图的 entry（问题1）。
+        self.core_write().invalidate_path_dependency_index();
         // 本地删除已完成，推进到 LocalApplied。
         if let Err(e) = journal.mark_local_applied(&self.app_data_root) {
             log::warn!(
@@ -1459,15 +1463,15 @@ impl WriterCoreApi {
     /// 列出与特定画布或目标相关的所有连接。
     ///
     /// 如果 `target` 是 `Some`，调用 `list_connections_for_target` 查找指向
-    /// 特定目标的连接；如果 `target` 是 `None`，调用 `list_connections_for_canvas`
-    /// 返回当前画布中的所有 Edge 以及存于祖先图但至少一端落在当前画布的 Edge。
+    /// 特定目标的连接；如果 `target` 是 `None`，走持久化路径依赖索引
+    ///（`query_starmap_connections_for_canvas`）返回当前画布中的所有 Edge
+    /// 以及存于祖先图但至少一端落在当前画布的 Edge，而非逐 Edge 加载所有祖先图（问题4）。
     pub fn list_starmap_connections(
         &self,
         route: crate::api::types::StarMapNavigationRouteDto,
         target: Option<crate::api::types::StarMapTargetDetailDto>,
     ) -> Result<Vec<crate::api::types::StarMapConnectionInfoDto>, WriterError> {
         let root_starmap_id = route.root_starmap_id.clone();
-        let context = self.build_resolver_context(&root_starmap_id)?;
 
         let core_route: crate::starmap::navigation::StarMapNavigationRoute =
             route.try_into().map_err(|e: crate::error::Error| {
@@ -1477,6 +1481,7 @@ impl WriterCoreApi {
             })?;
 
         let connections = if let Some(target_dto) = target {
+            let context = self.build_resolver_context(&root_starmap_id)?;
             let core_target: crate::starmap::semantic::StarMapTargetDetail =
                 target_dto.try_into().map_err(|e: crate::error::Error| {
                     WriterError::Other(format!(
@@ -1488,12 +1493,20 @@ impl WriterCoreApi {
                 &core_route,
                 &core_target,
             )
+            .map_err(|e| {
+                WriterError::Other(format!("list_starmap_connections: query failed: {e:?}"))
+            })?
         } else {
-            crate::starmap::connections::list_connections_for_canvas(&context, &core_route)
-        }
-        .map_err(|e| {
-            WriterError::Other(format!("list_starmap_connections: query failed: {e:?}"))
-        })?;
+            // target=None：走索引查询，从反向依赖索引获取候选 Edge 来源，
+            // 只加载相关祖先图的边文件，而非遍历所有祖先图（问题4）。
+            self.core_write()
+                .query_starmap_connections_for_canvas(&core_route, &root_starmap_id)
+                .map_err(|e| {
+                    WriterError::Other(format!(
+                        "list_starmap_connections: index query failed: {e:?}"
+                    ))
+                })?
+        };
 
         Ok(connections.into_iter().map(Into::into).collect())
     }

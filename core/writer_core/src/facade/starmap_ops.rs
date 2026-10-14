@@ -90,6 +90,10 @@ impl super::WriterCore {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         stores.remove(starmap_id);
+        // 整图从缓存移除后，持久化索引可能仍持有该图的依赖事实（owner 或 host
+        // 指向已移除的图）。失效索引以避免下次查询读到过期 entry（问题1）。
+        // 锁顺序：先 starmap_stores 后 path_dependency_index，与全仓库一致。
+        self.invalidate_path_dependency_index();
     }
 
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> Result<()> {
@@ -319,9 +323,7 @@ impl super::WriterCore {
     fn get_or_init_path_dependency_index(
         &self,
         stores: &std::collections::HashMap<String, StarMapStore>,
-    ) -> Result<
-        std::sync::MutexGuard<'_, Option<crate::starmap::store::PathDependencyIndex>>,
-    > {
+    ) -> Result<std::sync::MutexGuard<'_, Option<crate::starmap::store::PathDependencyIndex>>> {
         let mut guard = self
             .path_dependency_index
             .lock()
@@ -364,7 +366,10 @@ impl super::WriterCore {
     /// 的来源并重新计算，复杂度高；此处采用失效重建策略——设为 None，下次查询时
     /// 从真实数据 build。仍避免了"每次查询都 build"的问题：只有 Portal/Anchor
     /// 变更才失效，title/position/style 等不影响路径解析的变更不触发。
-    fn invalidate_path_dependency_index(&self) {
+    ///
+    /// `pub(crate)` 暴露给 api/service 层：整图物理删除（`delete_starmap`）、同步、
+    /// 恢复等批量改变磁盘数据的操作后调用，确保索引不持有已失效的 entry（问题1）。
+    pub(crate) fn invalidate_path_dependency_index(&self) {
         let mut guard = self
             .path_dependency_index
             .lock()
@@ -372,30 +377,72 @@ impl super::WriterCore {
         *guard = None;
     }
 
-    /// 增量更新持久化路径依赖索引：先移除旧来源的依赖事实，再插入新来源的依赖事实。
+    /// 两阶段更新的第二阶段：用预计算的依赖事实替换索引中该来源的全部 entry。
     ///
-    /// 新增/更新 Edge/Link/Hyperlink/Embed 后调用。需要 stores 用于构建 resolver context
-    ///（提取路径依赖事实需要解析路径）。调用方必须在持有 `starmap_stores` 锁的上下文中调用。
-    /// 读取错误通过 `?` 向上传播。
-    fn add_or_replace_source_in_path_dependency_index(
+    /// 接收由 `extract_path_dependency_facts` 预先计算好的 facts，只做不可失败的
+    /// 内存替换（[`PathDependencyIndex::replace_source_facts`]）。调用方在写 Store
+    /// **之前**已 prepare 好事实，写 Store 成功后调本方法；prepare 失败时不写
+    /// Store，索引和 Store 都不变（问题2）。
+    ///
+    /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用。
+    fn replace_source_facts_in_path_dependency_index(
         &self,
-        stores: &std::collections::HashMap<String, StarMapStore>,
         owner_starmap_id: &str,
         source_kind: crate::starmap::store::relation_index::CrossCanvasRefSourceKind,
         source_id: &str,
         path: &crate::starmap::types::reference::StarMapTargetPath,
         label: &Option<String>,
-    ) -> Result<()> {
+        facts: Vec<crate::starmap::graph::resolve::PathDependencyFact>,
+    ) {
         let mut guard = self
             .path_dependency_index
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(ref mut index) = *guard {
-            let context = self.build_resolver_context(stores);
-            index.add_or_replace_source(owner_starmap_id, source_kind, source_id, path, label, &context)?;
+            index.replace_source_facts(
+                owner_starmap_id,
+                source_kind,
+                source_id,
+                path,
+                label,
+                facts,
+            );
         }
         // 如果索引为 None（未初始化），无需更新——下次惰性构建时会从真实数据重建。
-        Ok(())
+    }
+
+    /// 基于持久化路径依赖索引查询与特定画布相关的所有连接（问题4）。
+    ///
+    /// 封装 `get_or_init_path_dependency_index` + `query_connections_for_canvas`，
+    /// 供 api/service 层的 `list_starmap_connections`（target=None 分支）调用，
+    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_canvas`。
+    ///
+    /// 先确保 root starmap 完全加载，再构建 resolver context 并获取/初始化索引，
+    /// 最后调用 [`PathDependencyIndex::query_connections_for_canvas`] 从索引获取
+    /// 候选 Edge 来源，只加载相关祖先图的边文件。
+    ///
+    /// 读取错误通过 `?` 向上传播，不吞成"没有连接"。
+    pub(crate) fn query_starmap_connections_for_canvas(
+        &self,
+        route: &crate::starmap::navigation::StarMapNavigationRoute,
+        root_starmap_id: &str,
+    ) -> crate::error::Result<Vec<crate::starmap::connections::StarMapConnectionInfo>> {
+        let mut stores = self
+            .starmap_stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        {
+            let store = stores
+                .entry(root_starmap_id.to_string())
+                .or_insert_with(|| StarMapStore::new(&self.app_data_root, root_starmap_id));
+            store.ensure_fully_loaded()?;
+        }
+        let context = self.build_resolver_context(&stores);
+        let index_guard = self.get_or_init_path_dependency_index(&stores)?;
+        let index = index_guard.as_ref().ok_or_else(|| {
+            crate::error::Error::Other("path dependency index initialization failed".to_string())
+        })?;
+        index.query_connections_for_canvas(route, &context)
     }
 }
 

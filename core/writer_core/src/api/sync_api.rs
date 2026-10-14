@@ -530,6 +530,10 @@ impl WriterCoreApi {
             target_progress,
         )?;
 
+        // 同步可能修改磁盘上的星图数据（staging → commit），失效路径依赖索引
+        // 确保下次查询从真实数据重建，不持有过期 entry（问题1）。
+        self.core_write().invalidate_path_dependency_index();
+
         Ok(result)
     }
 
