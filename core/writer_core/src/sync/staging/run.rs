@@ -153,7 +153,8 @@ impl StagingRun {
             ContentClass, LwwWinner, ThreeWayResult,
         };
         use crate::sync::staging::starmap_merge::{
-            is_starmap_graph_meta_path, is_starmap_index_path,
+            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_object_file_path,
+            merge_starmap_object, ObjectMergeDecision,
         };
 
         let staging_root = self.staging_root();
@@ -367,12 +368,49 @@ impl StagingRun {
                         });
                     }
                 }
+            } else if is_starmap_object_file_path(&rel_str) {
+                // 星图对象文件（nodes/edges/embeds/links/hyperlinks 下的 .json）：
+                // 按内容三方比较做对象级决策，不走整文件 LWW。
+                // 识别双端同改冲突而非静默覆盖；删除-修改也显式裁决，
+                // 避免与 graph.json 成员表合并脱节（issue #902）。
+                let base_hash = md5_hex(&base);
+                let local_hash = md5_hex(&local);
+                let incoming_hash = md5_hex(&incoming);
+                match merge_starmap_object(base.as_deref(), local.as_deref(), incoming.as_deref()) {
+                    ObjectMergeDecision::NoOp => {
+                        plan.noop.push(rel);
+                    }
+                    ObjectMergeDecision::KeepLocal => {
+                        plan.keep_local.push(rel);
+                    }
+                    ObjectMergeDecision::ApplyIncoming(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content,
+                        });
+                    }
+                    ObjectMergeDecision::Delete => {
+                        // 双侧都删除：文件已不存在，无需操作。
+                        plan.noop.push(rel);
+                    }
+                    ObjectMergeDecision::Conflict(kind) => {
+                        plan.conflict.push(StagingConflict {
+                            rel_path: rel,
+                            base_hash,
+                            local_hash,
+                            incoming_hash,
+                            kind,
+                            // 此处尚未保存快照；由 commit_helpers 在 staging cleanup 前
+                            // 调 save_conflict_snapshots 填入（#757）。
+                            remote_snapshot_path: None,
+                        });
+                    }
+                }
             } else {
-                // Metadata/GeneratedCache/StarMap对象文件 走真正 LWW——
+                // Metadata/GeneratedCache/StarMap meta 文件 走真正 LWW——
                 // 时间戳较大方获胜；同时间 device_id 字典序决胜。不再固定 remote-wins。
-                // 星图对象文件（nodes/edges/embeds/links/hyperlinks 下的 .json）和
-                // meta 文件继续走 LWW：每个对象一个文件，双端创建不同对象 = 不同文件
-                // 不会冲突；双端修改同一对象 = 同一文件，LWW 可接受。
+                // 星图对象文件已在上方 is_starmap_object_file_path 分支走对象级三方决策；
+                // 此分支处理 meta 文件和其他 Metadata/GeneratedCache 文件。
                 let content_class = classify_content_path(&rel_str);
                 debug_assert!(
                     content_class == ContentClass::Metadata
