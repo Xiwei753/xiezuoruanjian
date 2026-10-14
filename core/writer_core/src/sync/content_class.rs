@@ -19,6 +19,8 @@
 ///   BothChanged 时记录冲突，不静默覆盖。
 /// - Metadata：项目/卷/章元数据 JSON，走 LWW 或逐键语义合并。
 /// - LocalOnly：本地专用数据（备份、app-meta 内部文件），不同步。
+/// - StarMap：星图业务对象（index.json、graph.json、meta、对象文件）。
+///   index/graph 走按对象 ID 的三方集合合并；对象文件走 LWW。
 /// - GeneratedCache：生成/缓存数据，LWW 可接受。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentClass {
@@ -29,6 +31,9 @@ pub(crate) enum ContentClass {
     Metadata,
     /// Local-only data (backups, app-meta internals). Never synced.
     LocalOnly,
+    /// StarMap business objects (index.json, graph.json, meta, object files).
+    /// Semantic three-way merge by object ID for index/graph; LWW for object files.
+    StarMap,
     /// Generated or cache data. LWW is acceptable.
     GeneratedCache,
 }
@@ -49,6 +54,14 @@ pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
     // Local-only directories
     if path.starts_with("backups/") || path.starts_with("app-meta/") {
         return ContentClass::LocalOnly;
+    }
+
+    // StarMap business objects: semantic merge for index/graph, LWW for object files.
+    // 覆盖 starmaps/ 下所有 .json 文件（index.json、graph.json、meta.json、
+    // 对象文件、recovery.json）。index.json 和 graph.json 在 compute_commit_plan
+    // 中走按对象 ID 的三方集合合并；其余走 LWW（issue #902 第八轮复核）。
+    if path.starts_with("starmaps/") && path.ends_with(".json") {
+        return ContentClass::StarMap;
     }
 
     // User text documents: any .md file under /chapters/, plus

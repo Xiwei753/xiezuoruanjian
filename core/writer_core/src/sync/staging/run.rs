@@ -152,6 +152,9 @@ impl StagingRun {
             classify_content_path, is_document_content_path, resolve_lww, three_way_resolve,
             ContentClass, LwwWinner, ThreeWayResult,
         };
+        use crate::sync::staging::starmap_merge::{
+            is_starmap_graph_meta_path, is_starmap_index_path,
+        };
 
         let staging_root = self.staging_root();
         let base_root = self.base_root();
@@ -208,6 +211,15 @@ impl StagingRun {
             all_paths.insert(p.clone());
         }
         for p in &staging_paths {
+            all_paths.insert(p.clone());
+        }
+
+        // 收集 live-only 星图文件，确保语义合并能看到 local 完整状态。
+        // compute_commit_plan 原先只枚举 base∪staging；StarMap 语义合并时
+        // 必须同样看到 live-only 新增对象（Transfer 期间新建），否则成员表
+        // 与对象文件仍可能错位（issue #902 第八轮复核）。
+        let live_starmap_paths = list_starmap_content_paths(live_root)?;
+        for p in &live_starmap_paths {
             all_paths.insert(p.clone());
         }
 
@@ -313,14 +325,60 @@ impl StagingRun {
                         });
                     }
                 }
+            } else if is_starmap_index_path(&rel_str) {
+                // 星图全局索引：按星图 ID 三方集合合并，不走整文件 LWW。
+                // 双端并发创建不同星图时，合并后保留双方新增的星图 ID
+                // （issue #902 第八轮复核）。
+                use crate::sync::staging::starmap_merge::{
+                    merge_starmap_index, StarmapMergeResult,
+                };
+                match merge_starmap_index(base.as_deref(), local.as_deref(), incoming.as_deref())? {
+                    StarmapMergeResult::NoOp => {
+                        plan.noop.push(rel);
+                    }
+                    StarmapMergeResult::KeepLocal => {
+                        plan.keep_local.push(rel);
+                    }
+                    StarmapMergeResult::ApplyIncoming(content)
+                    | StarmapMergeResult::ApplyMerged(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content,
+                        });
+                    }
+                }
+            } else if is_starmap_graph_meta_path(&rel_str) {
+                // 星图 graph.json：按对象 ID 三方集合合并，不走整文件 LWW。
+                // 双端并发创建不同节点/边时，合并后保留双方新增的对象 ID
+                // （issue #902 第八轮复核）。
+                use crate::sync::staging::starmap_merge::{merge_graph_meta, StarmapMergeResult};
+                match merge_graph_meta(base.as_deref(), local.as_deref(), incoming.as_deref())? {
+                    StarmapMergeResult::NoOp => {
+                        plan.noop.push(rel);
+                    }
+                    StarmapMergeResult::KeepLocal => {
+                        plan.keep_local.push(rel);
+                    }
+                    StarmapMergeResult::ApplyIncoming(content)
+                    | StarmapMergeResult::ApplyMerged(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: rel,
+                            content,
+                        });
+                    }
+                }
             } else {
-                //   Metadata/GeneratedCache 走真正 LWW——
+                // Metadata/GeneratedCache/StarMap对象文件 走真正 LWW——
                 // 时间戳较大方获胜；同时间 device_id 字典序决胜。不再固定 remote-wins。
+                // 星图对象文件（nodes/edges/embeds/links/hyperlinks 下的 .json）和
+                // meta 文件继续走 LWW：每个对象一个文件，双端创建不同对象 = 不同文件
+                // 不会冲突；双端修改同一对象 = 同一文件，LWW 可接受。
                 let content_class = classify_content_path(&rel_str);
                 debug_assert!(
                     content_class == ContentClass::Metadata
-                        || content_class == ContentClass::GeneratedCache,
-                    "非正文类路径必须是 Metadata 或 GeneratedCache，got {:?} for {}",
+                        || content_class == ContentClass::GeneratedCache
+                        || content_class == ContentClass::StarMap,
+                    "非正文/星图语义合并类路径必须是 Metadata/GeneratedCache/StarMap，got {:?} for {}",
                     content_class,
                     rel_str
                 );
@@ -509,4 +567,37 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// 递归列出 live_root 下 starmaps/ 目录中所有 .json 文件的相对路径。
+///
+/// 用于在 compute_commit_plan 中收集 live-only 星图文件，确保语义合并
+/// 能看到 local 的完整状态。如果 starmaps/ 不存在返回空 Vec。
+///
+/// 与 [`walk_commit_candidates`] 不同，本函数不过滤 workspace 内部路径——
+/// starmaps/ 本身就是业务目录，不会被 `.git/` 等内部路径包含。
+fn list_starmap_content_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
+    let starmaps_dir = live_root.join("starmaps");
+    if !starmaps_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    walk_starmap_json_files(live_root, &starmaps_dir, &mut out)?;
+    Ok(out)
+}
+
+/// 递归遍历 starmaps/ 目录，收集 .json 文件相对 live_root 的路径。
+fn walk_starmap_json_files(live_root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_starmap_json_files(live_root, &path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if let Ok(rel) = path.strip_prefix(live_root) {
+                out.push(rel.to_path_buf());
+            }
+        }
+    }
+    Ok(())
 }

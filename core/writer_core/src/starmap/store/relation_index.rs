@@ -1264,20 +1264,32 @@ impl PathDependencyIndex {
         owners
     }
 
-    /// 从倒排表收集候选祖先图（target 查询版）：CanvasEndpoint + 按 target 类型的 NodeTarget/AnchorTarget。
+    /// 从倒排表收集候选祖先图（target 查询版）：按目标端点来源键精确索引到 Edge ID。
     ///
     /// `query_connections_for_target` 使用。候选集合是保守上界——
     /// route-aware 匹配做精确过滤，不漏线。
+    ///
+    /// ## 精确索引（issue #902 第八轮复核性能优化）
+    ///
+    /// 不再先无条件合并整张画布的所有 `CanvasEndpoint` Edge owners。改为按目标
+    /// 端点来源键定点提取候选：
+    ///
+    /// - `Node` / `Anchor` 终点：`extract_path_dependency_facts` 在对象存在时会
+    ///   同时产出 `NodeTarget`/`AnchorTarget` 与 `CanvasEndpoint` 事实。此处只用
+    ///   `NodeTarget`/`AnchorTarget` 定点查询，候选集合是 `CanvasEndpoint` 候选
+    ///   的子集，后续 route-aware 匹配（带 `Some(target)` 精确过滤）结果完全一致，
+    ///   但避免在大图上读取任何曾经连到该画布的祖先图全部 Edge。
+    /// - `Starmap` / `ChapterRange` / `Entity` / `External` 终点：只产出
+    ///   `CanvasEndpoint` 事实（无对应精确 kind），仍合并该画布的所有
+    ///   `CanvasEndpoint` Edge owners。
     fn collect_candidate_edge_owners_for_target(
         &self,
         current_starmap_id: &str,
         target: &crate::starmap::semantic::StarMapTargetDetail,
     ) -> HashSet<String> {
-        // CanvasEndpoint 候选（终点落在当前画布的边）
-        let mut owners = self.collect_candidate_edge_owners(current_starmap_id);
-
-        // 按 target 类型额外查询 NodeTarget/AnchorTarget
         use crate::starmap::graph::resolve::PathDependencyKind;
+
+        // 按目标端点来源键精确索引到 Edge ID。
         let (kind, object_id) = match target {
             StarMapTargetDetail::Node { node_id } => {
                 (PathDependencyKind::NodeTarget, node_id.as_str())
@@ -1285,22 +1297,24 @@ impl PathDependencyIndex {
             StarMapTargetDetail::Anchor { node_id, .. } => {
                 (PathDependencyKind::AnchorTarget, node_id.as_str())
             }
-            // Starmap / ChapterRange / Entity / External 已被 CanvasEndpoint 覆盖
-            _ => return owners,
+            // Starmap / ChapterRange / Entity / External 终点只产出 CanvasEndpoint
+            // 事实（无对应精确 kind），合并该画布的所有 CanvasEndpoint Edge owners。
+            _ => return self.collect_candidate_edge_owners(current_starmap_id),
         };
+
+        // 精确查询：只收集指向该 Node/Anchor 的边的来源图，
+        // 不读取指向当前画布其他对象的边（大图性能优化）。
         let sources = self.query_dependents(current_starmap_id, &kind, object_id);
-        owners.extend(
-            sources
-                .iter()
-                .filter(|s| {
-                    matches!(
-                        s.source_kind,
-                        CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
-                    )
-                })
-                .map(|s| s.owner_starmap_id.clone()),
-        );
-        owners
+        sources
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.source_kind,
+                    CrossCanvasRefSourceKind::EdgeFrom | CrossCanvasRefSourceKind::EdgeTo
+                )
+            })
+            .map(|s| s.owner_starmap_id.clone())
+            .collect()
     }
 
     /// 从一组边收集连接信息。
@@ -1616,6 +1630,217 @@ mod tests {
         assert!(
             index.entries.iter().all(|(_, v)| !v.is_empty()),
             "entries 中不应残留任何空 Vec"
+        );
+    }
+
+    /// issue #902 第八轮复核精确索引测试的共享夹具。
+    ///
+    /// 构造三张图：
+    /// - 图 A：embed `eA→B`，边 `edge-starmap` 的 to 端穿越 embed 到达画布 B 的
+    ///   `Starmap` 终点（到达 B 但**不**指向 Node X）。
+    /// - 图 M：embed `eM→B`，边 `edge-to-node` 的 to 端穿越 embed 到达画布 B 的
+    ///   `Node(X)`。
+    /// - 图 B：含节点 X（让 `NodeTarget` 事实产出）。
+    ///
+    /// 返回 `(context, index)`。两条边都"到达画布 B"，但只有 `edge-to-node`
+    /// 指向 Node X；这是区分"全画布合并"与"精确索引"的关键。
+    fn build_precise_index_fixture() -> (GraphResolverContext, PathDependencyIndex) {
+        // 图 A：embed eA→B，边 edge-starmap 指向 B 的 Starmap 终点
+        let edge_starmap = StarMapEdge {
+            id: "edge-starmap".to_string(),
+            from: StarMapTargetPath {
+                starmap_id: "A".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            to: StarMapTargetPath {
+                starmap_id: "A".to_string(),
+                segments: vec![StarMapPathSegment::EnterEmbed {
+                    instance_id: "eA".to_string(),
+                }],
+                target: StarMapTargetDetail::Starmap,
+            },
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let embed_a = StarMapEmbed {
+            instance_id: "eA".to_string(),
+            target_starmap_id: "B".to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: "A".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let graph_a = StarMapGraph {
+            starmap_id: "A".to_string(),
+            nodes: vec![],
+            edges: vec![edge_starmap],
+            embeds: vec![embed_a],
+            links: vec![],
+            hyperlinks: vec![],
+            ..Default::default()
+        };
+
+        // 图 M：embed eM→B，边 edge-to-node 指向 B 的 Node(X)
+        let edge_to_node = StarMapEdge {
+            id: "edge-to-node".to_string(),
+            from: StarMapTargetPath {
+                starmap_id: "M".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            to: StarMapTargetPath {
+                starmap_id: "M".to_string(),
+                segments: vec![StarMapPathSegment::EnterEmbed {
+                    instance_id: "eM".to_string(),
+                }],
+                target: StarMapTargetDetail::Node {
+                    node_id: "X".to_string(),
+                },
+            },
+            kind: StarMapEdgeKind::References,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+        let embed_m = StarMapEmbed {
+            instance_id: "eM".to_string(),
+            target_starmap_id: "B".to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: "M".to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let graph_m = StarMapGraph {
+            starmap_id: "M".to_string(),
+            nodes: vec![],
+            edges: vec![edge_to_node],
+            embeds: vec![embed_m],
+            links: vec![],
+            hyperlinks: vec![],
+            ..Default::default()
+        };
+
+        // 图 B：含节点 X（让 NodeTarget 事实产出）
+        let node_x = crate::starmap::types::StarMapNode {
+            id: "X".to_string(),
+            title: "X".to_string(),
+            kind: crate::starmap::types::StarMapNodeKind::Concept,
+            payload: None,
+            tags: vec![],
+            content: crate::starmap::semantic::StarMapNodeContent::Empty,
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint::default(),
+            style: crate::starmap::types::StarMapNodeStyle::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "B".to_string(),
+            nodes: vec![node_x],
+            ..Default::default()
+        };
+
+        let mut overlays = std::collections::HashMap::new();
+        overlays.insert("A".to_string(), graph_a);
+        overlays.insert("M".to_string(), graph_m);
+        overlays.insert("B".to_string(), graph_b);
+        let context = GraphResolverContext {
+            app_data_root: std::path::PathBuf::new(),
+            overlays,
+        };
+
+        let index = PathDependencyIndex::build(
+            &context,
+            &["A".to_string(), "M".to_string(), "B".to_string()],
+        )
+        .expect("build index should succeed");
+        (context, index)
+    }
+
+    /// issue #902 第八轮复核：Node target 精确索引，不无条件合并整张画布的
+    /// CanvasEndpoint Edge owners。
+    ///
+    /// 查询 target=Node(X) 时：
+    /// - 修改前：先合并 CanvasEndpoint(B) 命中 {A, M}，候选含 A（浪费加载
+    ///   图 A 的边文件，即便 A 的边不指向 X）。
+    /// - 修改后：只用 NodeTarget(X) 精确查询，候选 = {M}，不含 A。
+    ///
+    /// route-aware 匹配结果一致（都只返回 edge-to-node），但修改后跳过加载
+    /// 图 A 的边文件——大图性能优化。
+    #[test]
+    fn precise_index_for_node_target_skips_canvas_only_owners() {
+        let (context, index) = build_precise_index_fixture();
+
+        let node_target = StarMapTargetDetail::Node {
+            node_id: "X".to_string(),
+        };
+
+        // 精确索引：Node(X) 候选只含 M（指向 X 的边所在图），不含 A
+        //（A 的边只到达 B 的 Starmap 终点，不指向 X）。
+        let owners = index.collect_candidate_edge_owners_for_target("B", &node_target);
+        assert!(
+            owners.contains("M"),
+            "Node(X) 候选应包含指向 X 的边所在图 M；实际 {:?}",
+            owners
+        );
+        assert!(
+            !owners.contains("A"),
+            "Node(X) 精确索引不应包含只有 CanvasEndpoint 边的图 A；实际 {:?}",
+            owners
+        );
+
+        // route：M → EnterEmbed(eM) → B，查 target=Node(X)
+        let route = StarMapNavigationRoute {
+            root_starmap_id: "M".to_string(),
+            segments: vec![StarMapPathSegment::EnterEmbed {
+                instance_id: "eM".to_string(),
+            }],
+        };
+        let connections = index
+            .query_connections_for_target(&route, &node_target, &context)
+            .expect("query should succeed");
+        let edge_ids: Vec<_> = connections.iter().map(|c| c.edge_id.clone()).collect();
+        assert_eq!(
+            edge_ids,
+            vec!["edge-to-node".to_string()],
+            "Node(X) 查询应只返回 edge-to-node"
+        );
+    }
+
+    /// issue #902 第八轮复核：Starmap target 仍合并整张画布的 CanvasEndpoint
+    /// Edge owners（Starmap/ChapterRange/Entity/External 终点无精确 kind）。
+    ///
+    /// 复用同一夹具，查询 target=Starmap 时候选应同时含 A 和 M——两条边都
+    /// "到达画布 B"，CanvasEndpoint 是这类终点唯一的索引来源。
+    #[test]
+    fn precise_index_for_starmap_target_still_merges_canvas_endpoint() {
+        let (_context, index) = build_precise_index_fixture();
+
+        let owners =
+            index.collect_candidate_edge_owners_for_target("B", &StarMapTargetDetail::Starmap);
+        assert!(
+            owners.contains("A") && owners.contains("M"),
+            "Starmap target 应合并 CanvasEndpoint，候选含 A 和 M；实际 {:?}",
+            owners
         );
     }
 }

@@ -115,3 +115,44 @@ fn lww_record_time_delete_prefers_deleted_at() {
     };
     assert_eq!(lww_record_time(&rec), 2000);
 }
+
+// ── 星图路径分类测试（issue #902 第八轮复核）──
+
+#[test]
+fn classify_starmap_paths() {
+    // starmaps/ 下所有 .json 文件归为 StarMap
+    assert_eq!(
+        classify_content_path("starmaps/index.json"),
+        ContentClass::StarMap
+    );
+    assert_eq!(
+        classify_content_path("starmaps/sm_abc/graph.json"),
+        ContentClass::StarMap
+    );
+    assert_eq!(
+        classify_content_path("starmaps/sm_abc.meta.json"),
+        ContentClass::StarMap
+    );
+    assert_eq!(
+        classify_content_path("starmaps/sm_abc/nodes/00/node1.json"),
+        ContentClass::StarMap
+    );
+    assert_eq!(
+        classify_content_path("starmaps/sm_abc/recovery.json"),
+        ContentClass::StarMap
+    );
+    // 非星图文件仍走原分类
+    assert_eq!(
+        classify_content_path("project.json"),
+        ContentClass::Metadata
+    );
+    assert_eq!(
+        classify_content_path("volumes/v1/chapters/c1/chapter.md"),
+        ContentClass::UserTextDocument
+    );
+    // 根目录 starmap.json（不带 s 的目录前缀）仍走 Metadata
+    assert_eq!(
+        classify_content_path("starmap.json"),
+        ContentClass::Metadata
+    );
+}

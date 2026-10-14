@@ -381,3 +381,165 @@ fn staging_remote_deleted_local_modified_records_remote_deleted_kind() {
     assert!(!state_after.conflicted_files.contains(note_rel));
     assert!(state_after.conflicts.is_empty());
 }
+
+// ── 星图语义合并集成测试（issue #902 第八轮复核）──
+
+/// 构造 StarMapIndexRecord 的 JSON bytes。
+fn make_index_json(starmap_ids: &[&str], updated_at: u64) -> Vec<u8> {
+    let record = serde_json::json!({
+        "schemaVersion": 1,
+        "starmapIds": starmap_ids,
+        "rootStarmapIds": [],
+        "mainStarmapByProject": {},
+        "updatedAt": updated_at,
+    });
+    serde_json::to_vec_pretty(&record).expect("serialize index")
+}
+
+/// 构造 GraphMeta 的 JSON bytes（只填必要字段）。
+fn make_graph_meta_json(starmap_id: &str, node_ids: &[&str], updated_at: u64) -> Vec<u8> {
+    let record = serde_json::json!({
+        "schemaVersion": "4",
+        "starmapId": starmap_id,
+        "nodeIds": node_ids,
+        "edgeIds": [],
+        "embedInstanceIds": [],
+        "linkIds": [],
+        "hyperlinkIds": [],
+        "packageRevision": 0,
+        "updatedAt": updated_at,
+    });
+    serde_json::to_vec_pretty(&record).expect("serialize graph meta")
+}
+
+/// issue #902 第八轮复核：starmaps/index.json 走语义合并而非整文件 LWW。
+/// 双端并发创建不同星图时，合并后应保留双方新增的星图 ID。
+#[test]
+fn starmap_index_semantic_merge_both_add() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    let starmaps_dir = live.join("starmaps");
+    fs::create_dir_all(&starmaps_dir).unwrap();
+
+    let index_rel = "starmaps/index.json";
+    let index_abs = live.join(index_rel);
+
+    // base: index { starmapIds: ["A"] }
+    fs::write(&index_abs, make_index_json(&["A"], 0)).unwrap();
+
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+    run.build_base_snapshot_from_live(&live, &[PathBuf::from(index_rel)])
+        .unwrap();
+
+    // local: index { starmapIds: ["A", "B"] }（本地新增 B）
+    // 用 atomic_write rename 替换，hard-link 的 base 保留旧 inode。
+    let local_bytes = make_index_json(&["A", "B"], 100);
+    crate::storage::atomic_write_bytes(&index_abs, &local_bytes).unwrap();
+
+    // incoming(staging): index { starmapIds: ["A", "C"] }（远端新增 C）
+    let staging_starmaps_dir = run.staging_root().join("starmaps");
+    fs::create_dir_all(&staging_starmaps_dir).unwrap();
+    fs::write(
+        run.staging_root().join(index_rel),
+        make_index_json(&["A", "C"], 200),
+    )
+    .unwrap();
+
+    let plan = run.compute_commit_plan(&live).unwrap();
+
+    // 合并后: index { starmapIds: ["A", "B", "C"] }
+    // 应产生一个 content_action（Apply），不冲突，不 keep_local。
+    assert_eq!(
+        plan.content_actions.len(),
+        1,
+        "semantic merge should produce exactly one content action"
+    );
+    assert!(
+        plan.conflict.is_empty(),
+        "semantic merge should not produce conflicts"
+    );
+
+    // 验证合并后的内容包含 A, B, C。
+    let merged_bytes = match &plan.content_actions[0] {
+        CommitAction::Apply { content, .. } => content,
+        CommitAction::Delete { .. } => panic!("expected Apply, got Delete"),
+    };
+    let merged: serde_json::Value =
+        serde_json::from_slice(merged_bytes).expect("deserialize merged index");
+    let merged_ids: Vec<String> = merged["starmapIds"]
+        .as_array()
+        .expect("starmapIds should be array")
+        .iter()
+        .map(|v| v.as_str().expect("id should be string").to_string())
+        .collect();
+    assert_eq!(
+        merged_ids,
+        vec!["A".to_string(), "B".to_string(), "C".to_string()],
+        "merged starmapIds should contain all three IDs"
+    );
+}
+
+/// issue #902 第八轮复核：starmaps/<id>/graph.json 走语义合并。
+/// 双端并发创建不同节点时，合并后应保留双方新增的节点 ID。
+#[test]
+fn starmap_graph_meta_semantic_merge_both_add_node() {
+    let tmp = TempDir::new().unwrap();
+    let live = tmp.path().join("live");
+    let graph_dir = live.join("starmaps").join("sm_x");
+    fs::create_dir_all(&graph_dir).unwrap();
+
+    let graph_rel = "starmaps/sm_x/graph.json";
+    let graph_abs = live.join(graph_rel);
+
+    // base: graph { nodeIds: ["x"] }
+    fs::write(&graph_abs, make_graph_meta_json("sm_x", &["x"], 0)).unwrap();
+
+    let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
+    run.build_base_snapshot_from_live(&live, &[PathBuf::from(graph_rel)])
+        .unwrap();
+
+    // local: graph { nodeIds: ["x", "n1"] }（本地新增 n1）
+    let local_bytes = make_graph_meta_json("sm_x", &["x", "n1"], 100);
+    crate::storage::atomic_write_bytes(&graph_abs, &local_bytes).unwrap();
+
+    // incoming: graph { nodeIds: ["x", "n2"] }（远端新增 n2）
+    let staging_graph_dir = run.staging_root().join("starmaps").join("sm_x");
+    fs::create_dir_all(&staging_graph_dir).unwrap();
+    fs::write(
+        run.staging_root().join(graph_rel),
+        make_graph_meta_json("sm_x", &["x", "n2"], 200),
+    )
+    .unwrap();
+
+    let plan = run.compute_commit_plan(&live).unwrap();
+
+    // 合并后: graph { nodeIds: ["x", "n1", "n2"] }
+    assert_eq!(
+        plan.content_actions.len(),
+        1,
+        "semantic merge should produce exactly one content action"
+    );
+    assert!(
+        plan.conflict.is_empty(),
+        "semantic merge should not produce conflicts"
+    );
+
+    // 验证合并后的内容包含 x, n1, n2。
+    let merged_bytes = match &plan.content_actions[0] {
+        CommitAction::Apply { content, .. } => content,
+        CommitAction::Delete { .. } => panic!("expected Apply, got Delete"),
+    };
+    let merged: serde_json::Value =
+        serde_json::from_slice(merged_bytes).expect("deserialize merged graph meta");
+    let merged_ids: Vec<String> = merged["nodeIds"]
+        .as_array()
+        .expect("nodeIds should be array")
+        .iter()
+        .map(|v| v.as_str().expect("id should be string").to_string())
+        .collect();
+    assert_eq!(
+        merged_ids,
+        vec!["x".to_string(), "n1".to_string(), "n2".to_string()],
+        "merged nodeIds should contain all three IDs"
+    );
+}
