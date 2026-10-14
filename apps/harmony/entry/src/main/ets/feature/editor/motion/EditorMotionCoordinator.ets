@@ -54,7 +54,7 @@ import {
 import {
   planCarryOverPhysicalGroups, determineMotionChannel,
   isInsertGroupComplete, isReflowGroupComplete,
-  releaseCarryOverIdentity, releaseCarryOverIdentitiesByOwner,
+  removeIdentityEntry, releaseOwner,
   transferIdentityOwner,
   type CarryOverPieceWithContext, type IdentityCache
 } from './editor_carry_over_physical_plan'
@@ -538,12 +538,21 @@ export class EditorMotionCoordinator {
   }
 
   /**
-   * Issue #879 评论6159920940：将候选身份从 candidateOwnerId 转交到 'displayed' owner。
+   * Issue #879 评论6159920940 + 评论6160902258 问题4：将候选身份从 candidateOwnerId 转交到 displayed 代际。
    *
-   * commitCandidate 后候选身份变为已提交状态，逻辑 owner 从候选标识切换为 'displayed'，
+   * commitCandidate 后候选身份变为已提交状态，逻辑 owner 从候选标识切换为 displayed 代际标识，
    * 确保后续 releaseCandidateOwnedIdentities 不会误回收已提交的窗口实例。
+   *
+   * Issue #879 评论6160902258 问题4：使用代际标识 `displayed:<commitGeneration>` 而非固定 'displayed'。
+   * 连续两次提交相同 group key 但实例不同时，旧 'displayed' 会被覆盖，
+   * 旧实例的 displayed 逻辑 owner 仍在 allocator 中无法回收。
+   * 代际标识确保每次提交有独立的 owner key，旧代际可通过 releaseStaleDisplayedGenerations 清理。
    */
+  private commitGeneration: number = 0
+
   private transferCandidateIdentitiesToDisplayed(candidateOwnerId: string): void {
+    this.commitGeneration++
+    const displayedOwner = `displayed:${this.commitGeneration}`
     for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
       if (ownerMap.has(candidateOwnerId)) {
         transferIdentityOwner(
@@ -551,9 +560,40 @@ export class EditorMotionCoordinator {
           this.windowIdAllocator,
           groupKey,
           candidateOwnerId,
-          'displayed'
+          displayedOwner
         )
       }
+    }
+    // Issue #879 评论6160902258 问题4：释放旧代际不再使用的 displayed 实例。
+    // 旧代际的 displayed owner 如果与新代际共用同一物理 Text（相同 instanceId），
+    // transferIdentityOwner 内部已处理旧 toOwner entry 的清理；
+    // 这里清理的是不同 groupKey 下旧代际独占的、不再被任何新代际引用的实例。
+    this.releaseStaleDisplayedGenerations(displayedOwner)
+  }
+
+  /**
+   * Issue #879 评论6160902258 问题4：释放旧代际的 displayed 身份。
+   *
+   * 遍历所有 groupKey，找到 owner 以 'displayed:' 开头但不等于当前代际的条目，
+   * 使用 removeIdentityEntry 精确移除——先 removeLogicalOwner，再检查是否可以释放。
+   */
+  private releaseStaleDisplayedGenerations(currentDisplayedOwner: string): void {
+    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
+    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+      for (const [owner, entry] of ownerMap) {
+        if (owner.startsWith('displayed:') && owner !== currentDisplayedOwner) {
+          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+        }
+      }
+    }
+    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+      removeIdentityEntry(
+        this.carryOverIdentityCache,
+        this.windowIdAllocator,
+        groupKey,
+        owner,
+        instanceId
+      )
     }
   }
 
@@ -4540,21 +4580,30 @@ export class EditorMotionCoordinator {
    */
   releaseRenderNodeLease(renderNodeKey: string, windowInstanceId: string): void {
     this.windowIdAllocator.releaseLease(renderNodeKey, windowInstanceId)
-    // Issue #879 评论6159166760 问题3：实例被释放后（最后一个 lease 归还），
+    // Issue #879 评论6160902258 问题1：实例被释放后（最后一个 lease 归还），
     // 同步清理 carry-over 身份缓存中对应的条目。
-    // releaseLease 内部在最后一个 lease 归还时调用 release(instanceId)，
-    // 此时 resolve(instanceId) 返回 null，cache 条目应被移除。
-    // 通过 releaseCarryOverIdentity 按 groupKey 找到并删除关联——
-    // 将缓存清理接成闭环，而非留下一个未调用的删除辅助函数。
+    // 修复：carryOverIdentityCache 已改为 Map<groupKey, Map<owner, entry>> 双层结构，
+    // 旧代码按单层遍历 cached.windowInstanceId 会类型错误（cached 是内层 Map）。
+    // 改为遍历 groupKey → ownerMap → owner, entry，精确定位匹配的条目。
     if (this.windowIdAllocator.resolve(windowInstanceId) === null) {
-      const groupKeyToDelete: string[] = []
-      for (const [groupKey, cached] of this.carryOverIdentityCache) {
-        if (cached.windowInstanceId === windowInstanceId) {
-          groupKeyToDelete.push(groupKey)
+      const entriesToDelete: Array<{ groupKey: string, owner: string }> = []
+      for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+        for (const [owner, entry] of ownerMap) {
+          if (entry.windowInstanceId === windowInstanceId) {
+            entriesToDelete.push({ groupKey, owner })
+          }
         }
       }
-      for (const key of groupKeyToDelete) {
-        releaseCarryOverIdentity(this.carryOverIdentityCache, key)
+      // Issue #879 评论6160902258 问题3：使用 removeIdentityEntry 精确释放，
+      // 不对同一 groupKey 的其他 owner 实例无条件 release。
+      for (const { groupKey, owner } of entriesToDelete) {
+        removeIdentityEntry(
+          this.carryOverIdentityCache,
+          this.windowIdAllocator,
+          groupKey,
+          owner,
+          windowInstanceId
+        )
       }
     }
   }
@@ -4593,16 +4642,29 @@ export class EditorMotionCoordinator {
    * 候选作废或物理窗口最后释放时调用。
    */
   purgeStaleCarryOverIdentities(): void {
-    const staleKeys: string[] = []
-    for (const [groupKey, cached] of this.carryOverIdentityCache) {
-      const resolved = this.windowIdAllocator.resolve(cached.windowInstanceId)
-      if (resolved === null) {
-        // 实例已释放——缓存条目失效
-        staleKeys.push(groupKey)
+    // Issue #879 评论6160902258 问题1：carryOverIdentityCache 已改为双层 Map，
+    // 旧代码按单层遍历 cached.windowInstanceId 会类型错误。
+    // 改为遍历 groupKey → ownerMap → owner, entry，精确定位失效条目。
+    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
+    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+      for (const [owner, entry] of ownerMap) {
+        const resolved = this.windowIdAllocator.resolve(entry.windowInstanceId)
+        if (resolved === null) {
+          // 实例已释放——缓存条目失效
+          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+        }
       }
     }
-    for (const key of staleKeys) {
-      this.carryOverIdentityCache.delete(key)
+    // Issue #879 评论6160902258 问题3：使用 removeIdentityEntry 精确移除，
+    // 不影响同一 groupKey 下其他 owner 的条目。
+    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+      removeIdentityEntry(
+        this.carryOverIdentityCache,
+        this.windowIdAllocator,
+        groupKey,
+        owner,
+        instanceId
+      )
     }
   }
 
@@ -4618,7 +4680,12 @@ export class EditorMotionCoordinator {
    * - releaseCandidateOwnedIdentities 主动释放从未挂载的候选实例（resolve 仍非 null）
    */
   releaseCandidateOwnedIdentities(owner: string = 'candidate'): void {
-    releaseCarryOverIdentitiesByOwner(
+    // Issue #879 评论6160902258 问题2：改用 releaseOwner 作为唯一正式释放入口。
+    // 旧代码调用 releaseCarryOverIdentitiesByOwner，该函数不调用 removeLogicalOwner，
+    // 而 planCarryOverPhysicalWindows 已对每个候选 ID 调用 addLogicalOwner(owner, id)，
+    // 所以 hasLogicalOwners(id) 恒为 true，实例永远无法释放，造成候选实例泄漏。
+    // releaseOwner 先 removeLogicalOwner 再检查 hasLogicalOwners/hasLeases，确保正确释放。
+    releaseOwner(
       this.carryOverIdentityCache,
       this.windowIdAllocator,
       owner
