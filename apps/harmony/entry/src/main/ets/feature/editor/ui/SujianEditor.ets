@@ -1864,6 +1864,8 @@ export struct SujianEditor {
     if (durationMs <= 0) {
       // 无动画时长，直接跳到终态
       this.displayedVisualFrame = this.motionCoordinator.finishMotion()
+      // Issue #879 评论6161341265 问题2：无动画提交同样需要解除 displayed 逻辑 owner。
+      this.motionCoordinator.reconcileDisplayedOwners()
       this.candidateVisualFrame = null
       this.isMotionAnimating = false
       return
@@ -1922,6 +1924,10 @@ export struct SujianEditor {
       // Issue #879 复核评论6088787701 问题2：运动帧结束是真实状态转移——
       // displayed 帧已静态化（无运动窗口），owner 集合随之收缩。
       this.syncMotionWindowOwners()
+      // Issue #879 评论6161341265 问题2：动画结束后解除 displayed 逻辑 owner，
+      // 释放 carryOverIdentityCache 中 `displayed:*` 条目占用的逻辑引用，
+      // 使无 lease 的实例可被回收。
+      this.motionCoordinator.reconcileDisplayedOwners()
       // Issue #879 复核评论修复（问题3）：动画结束后更新裁切 path 为全尺寸矩形。
       this.updateStaticClipCommands()
       // Issue #879 复核评论修复（问题4）：动画结束后所有运动窗口消失，

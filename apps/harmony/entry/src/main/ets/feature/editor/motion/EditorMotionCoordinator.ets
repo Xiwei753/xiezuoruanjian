@@ -533,7 +533,14 @@ export class EditorMotionCoordinator {
    */
   commitCandidate(prepared: PreparedCandidate): EditorVisualFrame {
     this.applyCommittedState(prepared.state)
-    this.transferCandidateIdentitiesToDisplayed(prepared.candidateOwnerId)
+    // Issue #879 评论6161341265 问题3：只转交当前计划仍引用的身份。
+    // 传入 plan.physicalWindowIdentities 的 renderNodeKey 集合作为有效集合，
+    // 防止已从计划中消失的物理组身份被转交给 displayed owner。
+    const validRenderNodeKeys = new Set<string>()
+    for (const id of prepared.plan.physicalWindowIdentities) {
+      validRenderNodeKeys.add(id.renderNodeKey)
+    }
+    this.transferCandidateIdentitiesToDisplayed(prepared.candidateOwnerId, validRenderNodeKeys)
     return this.currentFrame
   }
 
@@ -550,11 +557,18 @@ export class EditorMotionCoordinator {
    */
   private commitGeneration: number = 0
 
-  private transferCandidateIdentitiesToDisplayed(candidateOwnerId: string): void {
+  private transferCandidateIdentitiesToDisplayed(
+    candidateOwnerId: string,
+    validRenderNodeKeys: Set<string>
+  ): void {
     this.commitGeneration++
     const displayedOwner = `displayed:${this.commitGeneration}`
     for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
-      if (ownerMap.has(candidateOwnerId)) {
+      const entry = ownerMap.get(candidateOwnerId)
+      // Issue #879 评论6161341265 问题3：只转交当前计划仍引用的身份。
+      // renderNodeKey 不在 validRenderNodeKeys 中的条目说明该物理组已从计划中消失，
+      // 不应转交给 displayed owner——否则已不存在的组的实例被长期占用。
+      if (entry !== undefined && validRenderNodeKeys.has(entry.renderNodeKey)) {
         transferIdentityOwner(
           this.carryOverIdentityCache,
           this.windowIdAllocator,
@@ -584,6 +598,75 @@ export class EditorMotionCoordinator {
         if (owner.startsWith('displayed:') && owner !== currentDisplayedOwner) {
           entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
         }
+      }
+    }
+    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+      removeIdentityEntry(
+        this.carryOverIdentityCache,
+        this.windowIdAllocator,
+        groupKey,
+        owner,
+        instanceId
+      )
+    }
+  }
+
+  /**
+   * Issue #879 评论6161341265 问题2：动画结束后解除所有 displayed 逻辑 owner。
+   *
+   * finishMotion() 将 currentFrame 设为静态帧（motionGlyphWindows=[]），
+   * 但 carryOverIdentityCache 中 `displayed:<generation>` 条目仍然存在，
+   * 其逻辑 owner 仍在 allocator 中阻止实例回收。
+   *
+   * 本方法遍历缓存，对所有 `displayed:*` owner 调用 removeIdentityEntry：
+   * - 先 removeLogicalOwner 解除逻辑引用
+   * - 若实例既无逻辑 owner 也无 lease，则真正释放
+   * - 有 lease（窗口仍挂载）的实例不会被释放，仅解除逻辑引用
+   *
+   * 调用时机：动画 onFinish 回调或无动画提交（durationMs <= 0）后，
+   * 在 syncMotionWindowOwners 之后、releaseSourcesAfterMotion 之前。
+   */
+  reconcileDisplayedOwners(): void {
+    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
+    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+      for (const [owner, entry] of ownerMap) {
+        if (owner.startsWith('displayed:')) {
+          entriesToDelete.push({ groupKey, owner, instanceId: entry.windowInstanceId })
+        }
+      }
+    }
+    for (const { groupKey, owner, instanceId } of entriesToDelete) {
+      removeIdentityEntry(
+        this.carryOverIdentityCache,
+        this.windowIdAllocator,
+        groupKey,
+        owner,
+        instanceId
+      )
+    }
+  }
+
+  /**
+   * Issue #879 评论6161341265 问题3：释放已从最终计划中消失的候选身份缓存条目。
+   *
+   * retargetCandidate 后，某些物理组可能不再出现在新的 physicalGroups 中
+   *（被新编辑完全覆盖、或运动已完成转为静态）。这些组在 carryOverIdentityCache
+   * 中仍可能有 candidateOwnerId 下的条目，如果不清理：
+   * - commitCandidate → transferCandidateIdentitiesToDisplayed 会将它们转交给 displayed owner
+   * - 已不存在的物理组的实例被长期占用，无法回收
+   *
+   * 本方法遍历缓存，找到 candidateOwnerId 下 renderNodeKey 不在 validRenderNodeKeys 中的条目，
+   * 使用 removeIdentityEntry 精确移除。
+   */
+  private releaseStaleCandidateIdentities(
+    candidateOwnerId: string,
+    validRenderNodeKeys: Set<string>
+  ): void {
+    const entriesToDelete: Array<{ groupKey: string, owner: string, instanceId: string }> = []
+    for (const [groupKey, ownerMap] of this.carryOverIdentityCache) {
+      const entry = ownerMap.get(candidateOwnerId)
+      if (entry !== undefined && !validRenderNodeKeys.has(entry.renderNodeKey)) {
+        entriesToDelete.push({ groupKey, owner: candidateOwnerId, instanceId: entry.windowInstanceId })
       }
     }
     for (const { groupKey, owner, instanceId } of entriesToDelete) {
@@ -914,9 +997,20 @@ export class EditorMotionCoordinator {
 
     // Issue #879 评论6152165243 缺口2：从规划结果直接生成 physicalWindowIdentities，
     // 不再事后补登记。每个物理组的身份在规划阶段已确定。
+    // Issue #879 评论6161341265 问题3：只保留最终计划仍引用的身份。
+    // 旧代码从 prepared.plan.physicalWindowIdentities 起步合并，
+    // 但 retarget 后某些物理组可能已从最终候选计划中消失（被新编辑完全覆盖），
+    // 旧身份残留会导致 transferCandidateIdentitiesToDisplayed 转交已不存在的组。
+    const newGroupRenderNodeKeys = new Set<string>()
+    for (const group of physicalGroups) {
+      newGroupRenderNodeKeys.add(group.renderNodeKey)
+    }
     const carryOverIdentityByKey = new Map<string, PhysicalWindowIdentity>()
     for (const id of prepared.plan.physicalWindowIdentities) {
-      carryOverIdentityByKey.set(id.renderNodeKey, id)
+      // 只保留新 physicalGroups 中仍存在的身份
+      if (newGroupRenderNodeKeys.has(id.renderNodeKey)) {
+        carryOverIdentityByKey.set(id.renderNodeKey, id)
+      }
     }
     for (const group of physicalGroups) {
       if (!carryOverIdentityByKey.has(group.renderNodeKey)) {
@@ -930,6 +1024,13 @@ export class EditorMotionCoordinator {
       }
     }
     const newPhysicalWindowIdentities = Array.from(carryOverIdentityByKey.values())
+
+    // Issue #879 评论6161341265 问题3：释放已消失物理组的候选身份缓存条目。
+    // retarget 后某些 groupKey 不再出现在新 physicalGroups 中，
+    // 但缓存中 candidateOwnerId 下的条目仍然存在。
+    // 如果不清理，commitCandidate → transferCandidateIdentitiesToDisplayed
+    // 会把这些已不存在的组的身份转交给 displayed owner，导致实例长期占用。
+    this.releaseStaleCandidateIdentities(candidateOwnerId, newGroupRenderNodeKeys)
 
     const newPlan: EditorMotionPlan = {
       insertRuns: newInsertRuns,

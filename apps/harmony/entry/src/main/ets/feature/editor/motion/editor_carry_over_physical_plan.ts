@@ -871,6 +871,21 @@ export function planCarryOverPhysicalGroups(
         windowInstanceId = cached.windowInstanceId
       } else {
         // 实例已释放或 glyphIds 不一致 → 重新分配
+        // Issue #879 评论6161341265 问题1：mismatch 分支先撤销旧 owner 引用再分配新身份。
+        // 旧代码直接 ownerMap.set(owner, ...) 覆盖旧缓存入口，
+        // 旧实例不再能被 releaseOwner 找到，即使没有 mount lease 也不会被回收。
+        // 修复：先调用 removeIdentityEntry 精确移除该 owner 的旧引用，
+        // 根据剩余 owner/lease 决定是否释放；然后重新为新 glyph 集合分配身份并注册。
+        removeIdentityEntry(
+          identityCache,
+          allocator,
+          assembly.groupKey,
+          owner,
+          cached.windowInstanceId
+        )
+        // removeIdentityEntry 可能删除了内层 Map（ownerMap 为空时删除 groupKey），
+        // 重新获取 ownerMap
+        ownerMap = identityCache.get(assembly.groupKey)
         windowInstanceId = allocator.allocateFresh(assembly.glyphIds)
         renderNodeKey = generateRenderNodeKey(
           assembly.sourceKind,
@@ -878,7 +893,11 @@ export function planCarryOverPhysicalGroups(
           assembly.motionChannel,
           windowInstanceId
         )
-        ownerMap!.set(owner, { renderNodeKey, windowInstanceId })
+        if (ownerMap === undefined) {
+          ownerMap = new Map<string, IdentityCacheEntry>()
+          identityCache.set(assembly.groupKey, ownerMap)
+        }
+        ownerMap.set(owner, { renderNodeKey, windowInstanceId })
       }
     } else {
       // Issue #879 评论6159920940：当前 owner 没有条目（可能是 cache miss，
