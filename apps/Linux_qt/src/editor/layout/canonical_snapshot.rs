@@ -135,7 +135,9 @@ pub struct CanonicalDocumentVisualSnapshot {
     /// `materialize_line` 遇到 INVALID 回退到 `cache_slot`。
     /// Issue #901 第十九轮问题5: Arc 共享，避免 to_layout_snapshot 中 clone O(段落数)。
     /// Issue #901 第二十一轮问题4: Arc::clone 共享持久维护的映射，O(1)。
-    pub paragraph_id_to_slot: std::sync::Arc<std::collections::HashMap<ParagraphId, usize>>,
+    /// Issue #901 第三十四轮缺口2: 改用 ChunkedSlotMap，paragraph_id_to_slot_arc()
+    /// 直接 Arc::clone O(1)，不再 to_hash_map() 全章物化。消费方用 `.slot(id)` 查询。
+    pub paragraph_id_to_slot: std::sync::Arc<super::chunked_vec::ChunkedSlotMap>,
     /// Issue #901 第二十一轮问题2: 段落行数前缀索引（Fenwick 树）。
     ///
     /// 替代旧的 `paragraph_id_to_line_range: Arc<HashMap<ParagraphId, (usize, usize)>>`。
@@ -164,8 +166,7 @@ impl CanonicalDocumentVisualSnapshot {
         // 可能过时，但 paragraph_id 不变，通过映射查到新 logical_slot）。
         let logical_slot = if line.paragraph_id != ParagraphId::INVALID {
             self.paragraph_id_to_slot
-                .get(&line.paragraph_id)
-                .copied()
+                .slot(line.paragraph_id)
                 .unwrap_or(line.logical_slot as usize)
         } else {
             line.logical_slot as usize
@@ -627,7 +628,7 @@ mod ffi;
 mod prepare;
 
 pub use prepare::{
-    build_snapshot_from_prepared_lines, inject_animation_visuals_into_snapshot,
+    inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
     prepare_incremental_visual_snapshot,

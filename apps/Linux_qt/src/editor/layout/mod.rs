@@ -22,7 +22,8 @@
 // - chunked_vec: Issue #901 第三十三轮问题3 分块前缀和 + 分块 slot 映射
 
 mod canonical_snapshot;
-mod chunked_vec;
+// Issue #901 第三十四轮缺口2: chunked_vec 对 crate 可见，供 pipeline/tests.rs 等构造 ChunkedSlotMap。
+pub(crate) mod chunked_vec;
 mod diff;
 mod engine;
 mod hit_test;
@@ -37,7 +38,7 @@ pub use canonical_snapshot::{
     inject_animation_visuals_into_snapshot,
     prepare_affected_paragraphs_visual_snapshot, prepare_animation_visuals_from_layout,
     prepare_document_visual_snapshot, prepare_document_visual_snapshot_scoped,
-    prepare_incremental_visual_snapshot, build_snapshot_from_prepared_lines,
+    prepare_incremental_visual_snapshot,
     AnimationRasterVisual, CanonicalClusterSnapshot,
     CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot,
     CursorXMapEntry,
@@ -432,15 +433,15 @@ impl EditorLayout {
                 }
             };
             if !ranges.full_relayout && ranges.relayout_start < ranges.relayout_end {
-                // 只收集受影响段 [relayout_start, relayout_end) 的行索引。
-                let mut ids = Vec::new();
-                for (i, line) in lines.iter().enumerate() {
-                    let slot = line.logical_slot as usize;
-                    if slot >= ranges.relayout_start && slot < ranges.relayout_end {
-                        ids.push(i);
-                    }
-                }
-                ids
+                // 用 ParagraphLineCountIndex 直接计算受影响段的视觉行闭开区间，
+                // 不遍历全部视觉行用 logical_slot 过滤。
+                let line_count_index = self.paragraph_store.line_count_index();
+                let line_start = line_count_index.paragraph_line_start(ranges.relayout_start);
+                let line_end = line_count_index.paragraph_line_start(ranges.relayout_end);
+                // paragraph_line_start 返回的是前缀和（该段首行的全局视觉行索引）。
+                // 受影响段 [relayout_start, relayout_end) 的视觉行范围是 [line_start, line_end)。
+                let end = line_end.min(lines.len());
+                (line_start..end).collect()
             } else {
                 // full_relayout 或无效范围 → 全量，与 lease 全量对称。
                 (0..lines.len()).collect()

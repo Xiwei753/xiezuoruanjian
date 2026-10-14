@@ -558,23 +558,37 @@ impl LinuxEditorPipeline {
             crate::editor::layout::CanonicalDocumentVisualSnapshot,
             Option<u64>,
         ) = match prepared_handle.as_ref() {
-            Some(handle) => {
-                // Issue #901 第三十三轮问题1: 从 EditorLayout 已排版的 VisualLine 直接
-                // 组装 snapshot，不调 prepare_document_visual_snapshot_scoped（那会在
-                // handle.generation 上整章 install 无 owner 的新 QTextLayout，泄漏）。
-                let snap = layout::build_snapshot_from_prepared_lines(
-                    self.mirror.text(),
-                    self.text_revision,
-                    ctx.font_pixel_size,
-                    &ctx.font_family,
-                    ctx.line_spacing,
-                    ctx.padding,
-                    ctx.text_indent,
-                    ctx.bounding_width,
-                    ctx.dpr,
-                    handle.lines,
-                );
-                (snap, None)
+            Some(_) => {
+                // Issue #901 第三十四轮缺口1: 从 EditorLayout 的权威 canonical snapshot
+                // 获取完整 canonical（已有 clusters/cursor_x_map），不从 VisualLine 重新拼。
+                // build_snapshot_from_prepared_lines 会丢 clusters，导致下游
+                // line_snapshot_builder 返回 canonical_line_clusters_empty_invariant_failure。
+                match editor_layout.last_canonical_snapshot() {
+                    Some(canonical) => (canonical.clone(), None),
+                    None => {
+                        // last_canonical_snapshot 为 None 但有 prepared_handle：
+                        // 极端情况（snapshot() 尚未被调用但 prepared_handle 存在）。
+                        // fallback 到 prepare_document_visual_snapshot_scoped。
+                        let gen = layout::begin_layout_generation();
+                        let snap = layout::prepare_document_visual_snapshot_scoped(
+                            self.mirror.text(),
+                            self.text_revision,
+                            ctx.font_pixel_size,
+                            &ctx.font_family,
+                            ctx.line_spacing,
+                            ctx.padding,
+                            ctx.text_indent,
+                            ctx.bounding_width,
+                            ctx.dpr,
+                            Some(&ctx.text_color),
+                            gen,
+                            0,
+                            0,
+                            &paragraph_ids,
+                        );
+                        (snap, Some(gen))
+                    }
+                }
             }
             None => {
                 // fallback: EditorLayout 无当前 prepared layout（首帧/invalidate 后尚未排版）。

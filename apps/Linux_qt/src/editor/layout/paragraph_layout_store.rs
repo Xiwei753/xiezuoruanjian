@@ -966,8 +966,9 @@ impl ParagraphLayoutStore {
     /// 映射在 `rebuild_from_text` / splice 操作后已同步更新。
     /// Issue #901 第三十三轮问题3: 内部存储改为 ChunkedSlotMap，此处构建 HashMap 快照。
     /// 调用方仅在 snapshot 构建时调用一次（已 O(n)），不增加渐近复杂度。
-    pub fn paragraph_id_to_slot_arc(&self) -> Arc<HashMap<ParagraphId, usize>> {
-        Arc::new(self.id_to_slot_cache.to_hash_map())
+    pub fn paragraph_id_to_slot_arc(&self) -> Arc<ChunkedSlotMap> {
+        // Issue #901 第三十四轮缺口2: 直接 Arc::clone，O(1)，不再 to_hash_map() 全章物化。
+        Arc::clone(&self.id_to_slot_cache)
     }
 
     /// Issue #901 第二十一轮问题2: 获取段落行数前缀索引的只读引用。

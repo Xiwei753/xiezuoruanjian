@@ -254,6 +254,20 @@ impl<T: PrefixNum> ChunkedPrefixSum<T> {
             return;
         }
 
+        // 空根插入/删除：chunks 为空时 find_chunk 返回 (0,0)，self.chunks[0] 越界。
+        // 把空根插入作为合法基础操作，不调用 find_chunk。
+        if self.chunks.is_empty() {
+            if new_count == 0 {
+                // 空根删除保持空根。
+                return;
+            }
+            // 从 new_values 直接创建首块。
+            self.chunks = Self::split_into_chunks(new_values, self.chunk_capacity);
+            self.total_len = new_count;
+            self.recompute_total();
+            return;
+        }
+
         let (sc, sl) = self.find_chunk(splice_start);
         let (ec, el) = self.find_chunk(splice_end);
 
@@ -615,6 +629,19 @@ impl ChunkedSlotMap {
         let new_count = new_ids.len();
 
         if splice_start == splice_end && new_count == 0 {
+            return;
+        }
+
+        // 空根插入/删除：blocks 为空时 find_chunk 返回 (0,0)，self.blocks[0] 越界。
+        // 把空根插入作为合法基础操作，不调用 find_chunk。
+        if self.blocks.is_empty() {
+            if new_count == 0 {
+                // 空根删除保持空根。
+                return;
+            }
+            // 从 new_ids 直接创建首块。
+            self.blocks = Self::split_into_blocks(new_ids, self.chunk_capacity);
+            self.total_len = new_count;
             return;
         }
 
@@ -1112,5 +1139,70 @@ mod tests {
         let map = sm.to_hash_map();
         assert_eq!(map.len(), 201);
         assert_eq!(map.get(&id_new), Some(&100));
+    }
+
+    // ── 空集合 splice/insert 回归测试（Issue #901 缺口4）──
+    //
+    // 空根 splice 时 find_chunk 返回 (0,0)，旧实现直接索引 self.chunks[0]/self.blocks[0]
+    // 越界 panic。修复后空根插入作为合法基础操作，直接从 new_values/new_ids 创建首块。
+
+    #[test]
+    fn prefix_sum_f64_splice_empty_insert() {
+        // 空集合 splice(0, 0, vec![10.0]) 不 panic，结果 len=1, get(0)=Some(10.0)。
+        let mut cps = ChunkedPrefixSum::<f64>::new();
+        cps.splice(0, 0, vec![10.0]);
+        assert_eq!(cps.len(), 1);
+        assert_eq!(cps.get(0), Some(10.0));
+        assert_eq!(cps.total_sum(), 10.0);
+        assert_eq!(cps.prefix_sum(1), 10.0);
+    }
+
+    #[test]
+    fn prefix_sum_f64_insert_into_empty() {
+        // 空集合 insert(0, 10.0) 不 panic。
+        let mut cps = ChunkedPrefixSum::<f64>::new();
+        cps.insert(0, 10.0);
+        assert_eq!(cps.len(), 1);
+        assert_eq!(cps.get(0), Some(10.0));
+        assert_eq!(cps.total_sum(), 10.0);
+    }
+
+    #[test]
+    fn prefix_sum_f64_splice_empty_noop() {
+        // 空集合 splice(0, 0, vec![]) 不 panic，仍为空。
+        let mut cps = ChunkedPrefixSum::<f64>::new();
+        cps.splice(0, 0, vec![]);
+        assert_eq!(cps.len(), 0);
+        assert!(cps.is_empty());
+        assert_eq!(cps.total_sum(), 0.0);
+    }
+
+    #[test]
+    fn slot_map_splice_empty_insert() {
+        // 空集合 splice(0, 0, vec![some_id]) 不 panic。
+        let id = ParagraphId::from_u64(1);
+        let mut sm = ChunkedSlotMap::new();
+        sm.splice(0, 0, vec![id]);
+        assert_eq!(sm.len(), 1);
+        assert_eq!(sm.slot(id), Some(0));
+    }
+
+    #[test]
+    fn slot_map_insert_into_empty() {
+        // 空集合 insert(0, some_id) 不 panic。
+        let id = ParagraphId::from_u64(1);
+        let mut sm = ChunkedSlotMap::new();
+        sm.insert(0, id);
+        assert_eq!(sm.len(), 1);
+        assert_eq!(sm.slot(id), Some(0));
+    }
+
+    #[test]
+    fn slot_map_splice_empty_noop() {
+        // 空集合 splice(0, 0, vec![]) 不 panic。
+        let mut sm = ChunkedSlotMap::new();
+        sm.splice(0, 0, vec![]);
+        assert_eq!(sm.len(), 0);
+        assert!(sm.is_empty());
     }
 }
