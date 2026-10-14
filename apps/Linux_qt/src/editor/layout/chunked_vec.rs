@@ -793,6 +793,13 @@ impl ChunkedSlotMap {
             .flat_map(|i| self.blocks[i].ids.iter().copied())
             .collect();
 
+        // 保存旧受影响块 [sc, ec] 的 BlockId，供增量删除 block_id_to_index 映射。
+        // Issue #901 第三十八轮缺口2: next_block_id 单调增长且从不复用，旧 BlockId 必须
+        // 显式 remove，否则 block_id_to_index 会累积已删除块的 key 导致 Map 随编辑次数增长。
+        let old_affected_block_ids: Vec<BlockId> = (sc..=ec)
+            .map(|i| self.blocks[i].block_id)
+            .collect();
+
         // 结构共享 splice：make_mut blocks（refcount==1 原地改，refcount>1 O(块数) 浅拷），
         // 替换受影响块。未改块（前缀块 [0,sc) 和后缀块 [ec+1, len)）Arc::clone 共享。
         let blocks_mut = std::sync::Arc::make_mut(&mut self.blocks);
@@ -816,11 +823,15 @@ impl ChunkedSlotMap {
         // 更新 block_id_to_index：受影响块 + 后缀块索引平移。
         // 键数量是块数 O(n/B)，后缀平移 O(后缀块数) = O(后缀段数/B)。
         let idx_map = std::sync::Arc::make_mut(&mut self.block_id_to_index);
-        // 1. 受影响块：新 BlockId → 新块索引。
+        // 1. 删除旧受影响块的 BlockId 映射（Issue #901 第三十八轮缺口2: 避免长期内存增长）。
+        for &old_bid in &old_affected_block_ids {
+            idx_map.remove(&old_bid);
+        }
+        // 2. 受影响块：新 BlockId → 新块索引。
         for (i, b) in blocks_mut[sc..sc + new_block_count].iter().enumerate() {
             idx_map.insert(b.block_id, sc + i);
         }
-        // 2. 后缀块索引平移：BlockId 不变，但 blocks Vec 中位置变了。
+        // 3. 后缀块索引平移：BlockId 不变，但 blocks Vec 中位置变了。
         let delta = (new_block_count as isize) - (old_block_count as isize);
         if delta != 0 {
             let suffix_start = sc + new_block_count;

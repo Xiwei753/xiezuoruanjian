@@ -2189,17 +2189,6 @@ impl ParagraphLayoutStore {
             let paragraph_text_len = paragraph_text.len();
             let document_byte_start = canon_para.paragraph_document_byte_start;
 
-            // cache_key 从段落文本和排版参数构建。
-            let cache_key = ParagraphLayoutCacheKey::build(
-                paragraph_text,
-                font_size,
-                font_family,
-                line_spacing,
-                text_indent,
-                padding,
-                width,
-            );
-
             // visual_line_count 从 paragraph_line_count_index 查询（O(1)）。
             let (line_start, line_end) =
                 snapshot.paragraph_line_count_index.paragraph_line_range(i);
@@ -2244,16 +2233,35 @@ impl ParagraphLayoutStore {
                     (-1i32, 0u64, ParagraphId::INVALID)
                 };
 
-            // 如果 paragraph_id 是 INVALID，分配新 Id。
-            let id = if paragraph_id == ParagraphId::INVALID {
-                let new_id = ParagraphId::from_u64(self.next_id);
-                self.next_id += 1;
-                if new_id.as_u64() > max_id {
-                    max_id = new_id.as_u64();
-                }
-                new_id
+            // Issue #901 第三十八轮缺口3: 优先复用已有 entry 的 cache_key，
+            // 避免逐段 hash 段内文本 O(整章文本字节数)。
+            // store 已通过增量排版更新，未变段的 cache_key 与 canonical 一致。
+            let cache_key = if i < self.entries.len()
+                && self.entries[i].id == paragraph_id
+                && self.entries[i].paragraph_text_len == paragraph_text_len
+            {
+                self.entries[i].cache_key.clone()
             } else {
+                ParagraphLayoutCacheKey::build(
+                    paragraph_text,
+                    font_size,
+                    font_family,
+                    line_spacing,
+                    text_indent,
+                    padding,
+                    width,
+                )
+            };
+
+            // Issue #901 第三十八轮缺口4: 不自行补发新 Id，避免 Store/snapshot 身份不一致。
+            // 段落稳定 ID 的分配在 canonical 构建之前由权威版本根完成；
+            // adopt 只接管已有 ID。INVALID 时从 store 已有 entry 获取，无则保留 INVALID。
+            let id = if paragraph_id != ParagraphId::INVALID {
                 paragraph_id
+            } else if i < self.entries.len() {
+                self.entries[i].id
+            } else {
+                ParagraphId::INVALID
             };
 
             new_entries.push(ParagraphLayoutEntry {

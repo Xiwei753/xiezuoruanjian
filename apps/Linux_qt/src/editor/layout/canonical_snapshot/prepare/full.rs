@@ -79,15 +79,21 @@ fn build_paragraph_id_to_slot_from_lines(
         return ChunkedSlotMap::new();
     }
     // 收集 (slot, id) 对，按 slot 排序后去重。
+    // Issue #901 第三十八轮缺口4: 不过滤 INVALID，用完整按 slot 排列的 ID 序列
+    // 构建索引，避免过滤后 slot 压缩导致 slot 编号与 logical_slot 不一致。
     let mut pairs: Vec<(usize, ParagraphId)> = Vec::new();
     for vl in visual_lines {
-        if vl.paragraph_id != ParagraphId::INVALID {
-            pairs.push((vl.logical_slot as usize, vl.paragraph_id));
-        }
+        pairs.push((vl.logical_slot as usize, vl.paragraph_id));
     }
     pairs.sort_by_key(|(slot, _)| *slot);
     pairs.dedup_by_key(|(slot, _)| *slot);
-    let ids: Vec<ParagraphId> = pairs.into_iter().map(|(_, id)| id).collect();
+    // 用 logical_slot 作为 slot 索引，不压缩。
+    // 空段（无视觉行或 INVALID ID）的 slot 填充为 INVALID。
+    let max_slot = pairs.last().map(|(s, _)| *s).unwrap_or(0);
+    let mut ids: Vec<ParagraphId> = vec![ParagraphId::INVALID; max_slot + 1];
+    for (slot, id) in &pairs {
+        ids[*slot] = *id;
+    }
     ChunkedSlotMap::from_ids(ids)
 }
 
@@ -977,6 +983,16 @@ pub(super) fn prepare_incremental_visual_snapshot_impl(
     // 必须在 store 更新之前 drop，否则 store 更新中的 Arc::make_mut 因 strong_count=2 深复制。
     let prev_line_count_index = std::mem::take(&mut prev.paragraph_line_count_index);
     drop(prev_line_count_index);
+
+    // Issue #901 第三十八轮缺口1: 释放 prev 的 paragraph_id_to_slot Arc，
+    // 使 paragraph_store.id_to_slot_cache 的 strong_count 降为 1，
+    // splice 内部 Arc::make_mut(&mut self.id_to_block) 原地改不 COW 深复制整张 HashMap。
+    // prev.paragraph_id_to_slot 在 splice 之后不再被使用（新 snapshot 从
+    // paragraph_store.paragraph_id_to_slot_arc() 获取），take/drop 安全。
+    // 682 行的 Arc::clone(&prev.paragraph_id_to_slot) 在早期返回路径
+    // （!needs_full_relayout && no_affected_range），不会走到此 splice 路径。
+    let prev_id_to_slot = std::mem::take(&mut prev.paragraph_id_to_slot);
+    drop(prev_id_to_slot);
 
     // 增量更新 store 的文本信息
     // Issue #901 第二十四轮问题4: 移到 take/drop prev.paragraph_line_count_index 之后，
