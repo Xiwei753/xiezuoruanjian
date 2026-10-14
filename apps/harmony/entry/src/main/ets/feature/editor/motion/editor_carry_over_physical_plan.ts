@@ -168,6 +168,21 @@ export interface CarryOverPhysicalGroupResult {
   offsetX: number
   offsetY: number
   opacity: number | undefined
+  /**
+   * Issue #879 评论6158342861 问题3：每个视觉岛的源完整矩形列表。
+   *
+   * insert 合组时，各岛的源完整矩形必须单独保留，不能只取首个 piece 的 glyphX/Width。
+   * identifyCarryOverMotionRuns 的 insert 分支需要对每个岛单独做 rectDifference，
+   * 再把结果合并为同一个 Text 的裁切并集。
+   */
+  islandSourceRects: GlyphRect[]
+  /**
+   * Issue #879 评论6158342861 问题3：每个视觉岛对应的起始 clip 矩形列表。
+   *
+   * 与 islandSourceRects 一一对应（按 piece 顺序），每个岛有自己的起始裁切状态。
+   * identifyCarryOverMotionRuns 用它和 islandSourceRects 一起计算各岛的显露动画。
+   */
+  islandClipRects: ClipRect[][]
 }
 
 // ── 身份缓存 ──
@@ -264,31 +279,26 @@ export function generateGroupKey(
 }
 
 /**
- * Issue #879 评论6153434157 问题2：生成稳定的渲染节点键。
+ * Issue #879 评论6158342861 问题2：生成稳定的渲染节点键。
  *
- * renderNodeKey 包含所有区分不同物理组的因素：
+ * renderNodeKey 由已分配的唯一物理子窗口实例 ID 决定：
  * - sourceKind/sourceRevision：源版本
  * - 通道类型（carryGhost/carryInsert/carryReflow）
- * - parentWindowInstanceId：父窗口实例
- * - 目标位置（仅 reflow）：不同目标行/位置 = 不同 renderNodeKey
+ * - childWindowInstanceId：通过 WindowInstanceIdAllocator.allocateFresh 分配的子窗口实例 ID
  *
- * 对于同一父窗口、不同目标行的两个 reflow group，renderNodeKey 不同。
- * 对于同一组跨帧/retarget，renderNodeKey 不变（基于不变的源信息确定性地生成）。
+ * 不再把没有全局唯一性的父 windowInstanceId 当子节点 key 的唯一依据。
+ * 目标位置只参与 groupKey 的分组，最终 Text key 应由已分配的唯一物理实例决定。
  */
 export function generateRenderNodeKey(
   sourceKind: string,
   sourceRevision: number,
   motionChannel: 'ghost' | 'insert' | 'reflow',
-  parentWindowInstanceId: string,
-  targetRect: GlyphRect | null
+  childWindowInstanceId: string
 ): string {
   const channelLabel = motionChannel === 'ghost' ? 'carryGhost'
     : motionChannel === 'insert' ? 'carryInsert'
     : 'carryReflow'
-  if (motionChannel === 'reflow' && targetRect !== null) {
-    return `${sourceKind}-${sourceRevision}-${channelLabel}-${parentWindowInstanceId}-${targetRect.x}-${targetRect.y}`
-  }
-  return `${sourceKind}-${sourceRevision}-${channelLabel}-${parentWindowInstanceId}`
+  return `${sourceKind}-${sourceRevision}-${channelLabel}-${childWindowInstanceId}`
 }
 
 /**
@@ -346,15 +356,16 @@ export function planCarryOverPhysicalGroups(
       renderNodeKey = cached.renderNodeKey
       windowInstanceId = cached.windowInstanceId
     } else {
-      // 新组 → 通过分配器分配身份
+      // Issue #879 评论6158342861 问题2：cache miss 时先调用 allocator.allocateFresh
+      // 得到真正的子窗口实例 ID，再用它生成 renderNodeKey。
+      // 不把没有全局唯一性的父 windowInstanceId 当子节点 key 的唯一依据。
+      windowInstanceId = allocator.allocateFresh(piece.glyphIds)
       renderNodeKey = generateRenderNodeKey(
         parent.sourceKind,
         parent.sourceRevision,
         motionChannel,
-        parent.windowInstanceId,
-        targetRectForGrouping
+        windowInstanceId
       )
-      windowInstanceId = allocator.allocateFresh(piece.glyphIds)
       identityCache.set(groupKey, { renderNodeKey, windowInstanceId })
     }
 
@@ -391,6 +402,14 @@ export function planCarryOverPhysicalGroups(
           }
         }
       }
+      // Issue #879 评论6158342861 问题3：合并时保留每个岛的源完整矩形和起始 clip
+      existing.islandSourceRects.push({
+        x: piece.glyphX,
+        y: piece.glyphY,
+        width: piece.glyphWidth,
+        height: piece.glyphHeight
+      })
+      existing.islandClipRects.push([...piece.clipRects])
       // Issue #879 评论6153434157 问题4：合并目标信息时形成完整、连续的组级目标
       // 不只取第一个 piece 的目标值，也不只在 targetResolved=false 时替换
       if (piece.targetResolved) {
@@ -457,6 +476,14 @@ export function planCarryOverPhysicalGroups(
         offsetX: piece.offsetX,
         offsetY: piece.offsetY,
         opacity: parent.opacity,
+        // Issue #879 评论6158342861 问题3：保留每个视觉岛的源完整矩形和起始 clip
+        islandSourceRects: [{
+          x: piece.glyphX,
+          y: piece.glyphY,
+          width: piece.glyphWidth,
+          height: piece.glyphHeight
+        }],
+        islandClipRects: [[...piece.clipRects]],
       })
     }
   }

@@ -210,6 +210,16 @@ interface CarryOverPhysicalGroup {
   offsetX: number
   offsetY: number
   opacity: number | undefined
+  /**
+   * Issue #879 评论6158342861 问题3：每个视觉岛的源完整矩形列表。
+   * insert 合组时各岛的源完整矩形必须单独保留，不能只取首个 piece 的 glyphX/Width。
+   */
+  islandSourceRects: GlyphRect[]
+  /**
+   * Issue #879 评论6158342861 问题3：每个视觉岛对应的起始 clip 矩形列表。
+   * 与 islandSourceRects 一一对应（按 piece 顺序）。
+   */
+  islandClipRects: ClipRect[][]
 }
 
 /**
@@ -3553,6 +3563,8 @@ export class EditorMotionCoordinator {
       offsetX: r.offsetX,
       offsetY: r.offsetY,
       opacity: r.opacity,
+      islandSourceRects: r.islandSourceRects,
+      islandClipRects: r.islandClipRects,
     }))
   }
 
@@ -3775,98 +3787,14 @@ export class EditorMotionCoordinator {
       return runs
     }
 
-    // Issue #879 评论6108900966 问题4：按 windowId 分组计算完成状态。
-    // 同一 glyph 的所有成员（sourceMembers 产生的多窗口）必须全部到达目标才认为该 glyph 运动完成。
-    const windowIdDoneMap = new Map<string, boolean>()
-    for (const w of latestDisplayedFrame.motionGlyphWindows) {
-      if (w.motionOwnerKind !== 'insert' && w.motionOwnerKind !== 'reflow') {
-        continue
-      }
-      // 按 glyphId 分区：coveredIds（由新 plan 接手）和 uncoveredIds（需要 carry-over）
-      const uncoveredIds: string[] = []
-      for (const gid of w.glyphIds) {
-        // 检查是否被任何物理组接管
-        let isCovered = false
-        for (const group of physicalGroups) {
-          if (group.motionChannel !== 'insert' && group.motionChannel !== 'reflow') {
-            continue
-          }
-          for (const ggid of group.glyphIds) {
-            if (ggid === gid) {
-              isCovered = true
-              break
-            }
-          }
-          if (isCovered) {
-            break
-          }
-        }
-        if (!isCovered) {
-          uncoveredIds.push(gid)
-        }
-      }
-      // 全部被新 plan 接管——该窗口不需要延续，视为完成
-      if (uncoveredIds.length === 0) {
-        const prev = windowIdDoneMap.get(w.windowId)
-        windowIdDoneMap.set(w.windowId, prev === undefined ? true : prev)
-        continue
-      }
-      // 计算 pieces 并检查是否所有 piece 都已完成
-      const pieces = this.splitFrozenWindowByGlyphOwnership(
-        w, uncoveredIds, newIdentityTable, newLayout
-      )
-      let allPiecesDone = true
-      for (const piece of pieces) {
-        if (!piece.targetResolved) {
-          allPiecesDone = false
-          break
-        }
-        if (w.motionOwnerKind === 'insert') {
-          const fullRect: RectLike = piece.sourceRect !== null
-            ? {
-              x: piece.sourceRect.x + piece.offsetX,
-              y: piece.sourceRect.y + piece.offsetY,
-              width: piece.sourceRect.width,
-              height: piece.sourceRect.height
-            }
-            : {
-              x: piece.glyphX + piece.offsetX,
-              y: piece.glyphY + piece.offsetY,
-              width: piece.glyphWidth,
-              height: piece.glyphHeight
-            }
-          if (!isFullyCovered(fullRect, piece.clipRects)) {
-            allPiecesDone = false
-            break
-          }
-        } else {
-          if (piece.targetRect !== null) {
-            const targetX = piece.targetRect.x
-            const targetY = piece.targetRect.y
-            const positionDone = Math.abs(piece.currentPositionX - targetX) < 0.01 &&
-                Math.abs(piece.currentPositionY - targetY) < 0.01
-            const opacityDone = w.opacity === undefined ||
-                (w.sourceKind === 'old' ? w.opacity < 0.01 : w.opacity > 0.99)
-            const targetFullRect: RectLike = {
-              x: piece.targetRect.x,
-              y: piece.targetRect.y,
-              width: piece.targetRect.width,
-              height: piece.targetRect.height
-            }
-            const clipDone = isFullyCovered(targetFullRect, piece.clipRects)
-            if (!(positionDone && opacityDone && clipDone)) {
-              allPiecesDone = false
-              break
-            }
-          } else {
-            allPiecesDone = false
-            break
-          }
-        }
-      }
-      const prev = windowIdDoneMap.get(w.windowId)
-      windowIdDoneMap.set(w.windowId, prev === undefined ? allPiecesDone : (prev && allPiecesDone))
-    }
+    // Issue #879 评论6158342861 问题1：删除旧的 windowIdDoneMap 逻辑。
+    // 旧逻辑按 physicalGroups 是否包含 glyphId 判定完成——但 physicalGroups 是
+    // "准备继续播放动画的 carry-over 片段"，不是"已被新 plan 完成接管"的字。
+    // 正在吐字的窗口的 glyphId 出现在 physicalGroups 的 insert 组中，意味着需要继续动画，
+    // 而不是已完成。旧逻辑会把这种窗口错误标记为 done，导致 carry-over motion run 不输出。
+    //
+    // 新逻辑：carry-over 的所有权由 planCarryOverPhysicalWindows 决定；
+    // 完成与否依据物理组自身的真实 clip 覆盖、当前/目标位置与 alpha。
 
     // 从规划结果构造 motion runs
     for (const group of physicalGroups) {
@@ -3878,9 +3806,37 @@ export class EditorMotionCoordinator {
         continue
       }
 
-      // 检查完成状态
-      if (windowIdDoneMap.get(group.parentWindowId) === true) {
-        continue
+      // Issue #879 评论6158342861 问题1：基于物理组自身真实属性判断完成状态。
+      // insert 组：clipRects 已完全覆盖完整字形矩形 → 完成
+      // reflow 组：当前位置已到达目标位置 + alpha 已到达目标值 + clip 已完全覆盖目标矩形 → 完成
+      if (group.motionChannel === 'insert') {
+        const fullRect: RectLike = {
+          x: group.glyphX + group.offsetX,
+          y: group.glyphY + group.offsetY,
+          width: group.glyphWidth,
+          height: group.glyphHeight
+        }
+        if (isFullyCovered(fullRect, group.clipRects)) {
+          continue
+        }
+      } else {
+        // reflow
+        if (group.targetRect !== null) {
+          const positionDone = Math.abs(group.currentPositionX - group.targetRect.x) < 0.01 &&
+              Math.abs(group.currentPositionY - group.targetRect.y) < 0.01
+          const opacityDone = group.opacity === undefined ||
+              (group.sourceKind === 'old' ? group.opacity < 0.01 : group.opacity > 0.99)
+          const targetFullRect: RectLike = {
+            x: group.targetRect.x,
+            y: group.targetRect.y,
+            width: group.targetRect.width,
+            height: group.targetRect.height
+          }
+          const clipDone = isFullyCovered(targetFullRect, group.clipRects)
+          if (positionDone && opacityDone && clipDone) {
+            continue
+          }
+        }
       }
 
       // Issue #879 评论6152165243：使用物理组的稳定身份，不再复用父窗口 key
@@ -3923,29 +3879,39 @@ export class EditorMotionCoordinator {
           }))
         }
       } else {
-        // insert：每岛目标是各自所属字形的完整可见矩形
-        const fullRect: ClipRect = {
-          x: group.glyphX + group.offsetX,
-          y: group.glyphY + group.offsetY,
-          width: group.glyphWidth,
-          height: group.glyphHeight
-        }
-        if (group.clipRects.length > 0) {
-          const startRects: ClipRect[] = []
-          const targetRects: ClipRect[] = []
-          const remaining = rectDifference(fullRect, group.clipRects)
-          for (const cr of group.clipRects) {
+        // Issue #879 评论6158342861 问题3：insert 各岛单独做 rectDifference 后合并裁切并集。
+        // 不再用首个 piece 的 glyphX/Width 构建唯一 fullRect——那会导致其他岛的未露出部分
+        // 从未生成目标裁切，运动结束时仍有笔画缺失或交接闪现。
+        const startRects: ClipRect[] = []
+        const targetRects: ClipRect[] = []
+        for (let i = 0; i < group.islandSourceRects.length; i++) {
+          const islandRect = group.islandSourceRects[i]
+          const islandClip = group.islandClipRects[i] ?? []
+          // 该岛的完整字形矩形（加偏移到屏幕坐标）
+          const islandFullRect: ClipRect = {
+            x: islandRect.x + group.offsetX,
+            y: islandRect.y + group.offsetY,
+            width: islandRect.width,
+            height: islandRect.height
+          }
+          // 已有 clip 保持不变
+          for (const cr of islandClip) {
             startRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
             targetRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
           }
+          // 该岛尚未覆盖的区域——从零面积长成完整区域
+          const remaining = rectDifference(islandFullRect, islandClip)
           for (const gap of remaining) {
             startRects.push({ x: gap.x, y: gap.y, width: 0, height: gap.height })
             targetRects.push({ x: gap.x, y: gap.y, width: gap.width, height: gap.height })
           }
+        }
+        if (startRects.length > 0) {
           islandStartRects = startRects
           islandTargetRects = targetRects
           runClipRects = startRects
         } else {
+          // 所有岛都没有起始 clip——从零开始显露
           islandStartRects = [{
             x: group.glyphX + group.offsetX,
             y: group.glyphY + group.offsetY,
@@ -3953,10 +3919,10 @@ export class EditorMotionCoordinator {
             height: group.glyphHeight
           }]
           islandTargetRects = [{
-            x: fullRect.x,
-            y: fullRect.y,
-            width: fullRect.width,
-            height: fullRect.height
+            x: group.glyphX + group.offsetX,
+            y: group.glyphY + group.offsetY,
+            width: group.glyphWidth,
+            height: group.glyphHeight
           }]
           runClipRects = islandStartRects
         }

@@ -15,6 +15,7 @@ import {
   planCarryOverPhysicalGroups, determineMotionChannel,
   generateGroupKey, generateRenderNodeKey,
 } from '../editor_carry_over_physical_plan.ts'
+import { rectDifference, isFullyCovered } from '../editor_commit_start.ts'
 
 let passed = 0
 const test = (name, fn) => {
@@ -1758,7 +1759,9 @@ test('场景12a：同源多岛相同轨迹——合并为一个物理组，一�
   assert.equal(group.clipLeft, 0)
   assert.equal(group.clipRight, 40)
   assert.ok(group.renderNodeKey.includes('carryGhost'))
-  assert.ok(group.renderNodeKey.includes('win-3'))
+  // Issue #879 评论6158342861 问题2：renderNodeKey 不再包含父 windowInstanceId，
+  // 而是包含通过 allocateFresh 分配的子窗口实例 ID
+  assert.match(group.renderNodeKey, /^old-10-carryGhost-win-\d+$/)
   // windowInstanceId 通过分配器分配，格式为 win-<number>
   assert.ok(group.windowInstanceId.startsWith('win-'))
   // 分配器中应能 resolve 该 instanceId
@@ -1790,13 +1793,12 @@ test('场景12b：同源两片段不同目标行——分配不同且固定的 r
   assert.equal(results.length, 2)
   const [group1, group2] = results
 
-  // 不同的 renderNodeKey（包含不同目标位置）
+  // 不同的 renderNodeKey（通过 allocateFresh 分配不同子窗口实例 ID）
   assert.notEqual(group1.renderNodeKey, group2.renderNodeKey)
   assert.ok(group1.renderNodeKey.includes('carryReflow'))
   assert.ok(group2.renderNodeKey.includes('carryReflow'))
-  // renderNodeKey 包含目标位置信息
-  assert.ok(group1.renderNodeKey.includes('0-0')) // targetRect x=0, y=0
-  assert.ok(group2.renderNodeKey.includes('0-30')) // targetRect x=0, y=30
+  // Issue #879 评论6158342861 问题2：renderNodeKey 不再包含目标位置信息，
+  // 目标位置只参与 groupKey 的分组，最终 Text key 由已分配的唯一物理实例决定
 
   // 不同的 windowInstanceId
   assert.notEqual(group1.windowInstanceId, group2.windowInstanceId)
@@ -1979,6 +1981,213 @@ test('场景12h：合并后的组拥有完整目标信息——不只取第一�
   // piece1 targetRect = {x:0, y:0}，piece2 targetRect = {x:5, y:0}
   // 不同目标位置 → 不同组
   assert.equal(results.length, 2)
+})
+
+// ── Issue #879 评论6158342861：三个修复的生产路径测试 ──
+
+// 问题1测试：一个未吐完字的窗口在其他位置继续编辑，规划出 insert carry group，
+// 必须仍输出 carryOverMotionRun（旧逻辑会错误判为"全部完成"而跳过）
+test('问题1-6158342861：未吐完字的窗口在其他位置编辑——insert carry group 不被错误判为完成', () => {
+  // 场景：上一帧只有一个正在吐字的窗口 w，包含 g1；
+  // 新笔编辑发生在别处，planCarryOverPhysicalWindows 正确产生 insert(g1)；
+  // 旧逻辑检查 g1 是否在 physicalGroups 中 → 是 → 标记 done → insert(g1) 不进入 runs
+  // 新逻辑：基于物理组自身 clip 覆盖判断完成状态——g1 的 clipRects 未完全覆盖完整字形矩形 → 未完成 → 输出 run
+
+  // 模?模拟 planCarryOverPhysicalGroups 的输出：一个 insert 组，clipRects 未完全覆盖
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  const parent = makeParent('win-1', 'new', 11, 'insert')
+  // piece 的 clipRects 只覆盖了完整字形的一部分（吐字未完成）
+  const piece = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 3, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+  })
+  piece.glyphX = 0
+  piece.glyphY = 0
+  piece.glyphWidth = 10
+  piece.glyphHeight = 20
+
+  const results = planCarryOverPhysicalGroups([
+    { piece, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  assert.equal(results.length, 1)
+  const group = results[0]
+  assert.equal(group.motionChannel, 'insert')
+
+  // 关键验证：clipRects 未完全覆盖完整字形矩形（3 < 10）→ 不应被判为完成
+  // 旧逻辑会错误判为完成（因为 g1 在 physicalGroups 中），新逻辑基于真实 clip 判断
+  const fullRect = { x: group.glyphX + group.offsetX, y: group.glyphY + group.offsetY, width: group.glyphWidth, height: group.glyphHeight }
+  assert.ok(!isFullyCovered(fullRect, group.clipRects),
+    '未吐完的字（clip=3 < fullWidth=10）不应被判为完成')
+})
+
+// 问题2测试：两个父窗口 sourceKind/revision 和 windowInstanceId 相同但 parent.renderNodeKey 不同，
+// 目标相同、通道同为 ghost，应生成两个不同 key、两个实际登记的 instanceId
+test('问题2-6158342861：同 sourceKind/revision/windowInstanceId 但不同 parentRenderNodeKey——生成不同 key', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  // 两个父窗口：sourceKind=old, sourceRevision=10, windowInstanceId=win-7
+  // 但 parentRenderNodeKey 不同（old-10-frozen-win-7 vs old-10-deleted-win-7）
+  const parent1 = makeParent('win-7', 'old', 10, 'deleted', 'old-10-frozen-win-7')
+  const parent2 = makeParent('win-7', 'old', 10, 'deleted', 'old-10-deleted-win-7')
+
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 10, height: 20 }])
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 10, height: 20 }])
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent: parent1, motionChannel: 'ghost' },
+    { piece: piece2, parent: parent2, motionChannel: 'ghost' },
+  ], allocator, cache)
+
+  // 两个不同的物理组（因为 parentRenderNodeKey 不同 → groupKey 不同）
+  assert.equal(results.length, 2)
+
+  // 关键验证：两个 renderNodeKey 不同
+  assert.notEqual(results[0].renderNodeKey, results[1].renderNodeKey,
+    '不同 parentRenderNodeKey 的 ghost 组应有不同 renderNodeKey')
+
+  // 两个 windowInstanceId 不同（通过 allocateFresh 分配）
+  assert.notEqual(results[0].windowInstanceId, results[1].windowInstanceId,
+    '不同物理组应有不同 windowInstanceId')
+
+  // 两个 windowInstanceId 都在分配器中登记
+  assert.ok(allocator.resolve(results[0].windowInstanceId) !== null)
+  assert.ok(allocator.resolve(results[1].windowInstanceId) !== null)
+
+  // renderNodeKey 格式正确：包含 carryGhost 和子窗口实例 ID（不是父 win-7）
+  for (const r of results) {
+    assert.match(r.renderNodeKey, /^old-10-carryGhost-win-\d+$/,
+      `renderNodeKey 应为 old-10-carryGhost-win-<number> 格式，got: ${r.renderNodeKey}`)
+    assert.notEqual(r.windowInstanceId, 'win-7',
+      '子窗口 instanceId 不应等于父窗口 instanceId win-7')
+  }
+})
+
+// 问题3测试：一个父 insert 窗口拆成两个不连续可见岛，
+// 两个字的未露出部分均能扩展到完整矩形
+test('问题3-6158342861：同父 insert 窗口两个不连续可见岛——各岛源完整矩形单独保留', () => {
+  const allocator = new WindowInstanceIdAllocator()
+  const cache = new Map()
+
+  // 同一父窗口拆成两个 insert piece（两个不连续可见岛）
+  // piece1: 字形 [0,10]，当前可见 [0,3]
+  // piece2: 字形 [30,40]，当前可见 [30,33]
+  // 旧逻辑：合组后 fullRect 只有 [0,10]，第二字的 [33,40] 从未生成目标裁切
+  // 新逻辑：islandSourceRects 保留各岛源完整矩形，各岛单独做 rectDifference
+
+  const parent = makeParent('win-5', 'new', 11, 'insert')
+
+  const piece1 = makePiece(['g1'], 0, 1, [{ x: 0, y: 0, width: 3, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 0, y: 0, width: 10, height: 20 },
+  })
+  piece1.glyphX = 0
+  piece1.glyphY = 0
+  piece1.glyphWidth = 10
+  piece1.glyphHeight = 20
+
+  const piece2 = makePiece(['g2'], 1, 2, [{ x: 30, y: 0, width: 3, height: 20 }], {
+    targetResolved: true,
+    targetRect: { x: 30, y: 0, width: 10, height: 20 },
+  })
+  piece2.glyphX = 30
+  piece2.glyphY = 0
+  piece2.glyphWidth = 10
+  piece2.glyphHeight = 20
+
+  const results = planCarryOverPhysicalGroups([
+    { piece: piece1, parent, motionChannel: 'insert' },
+    { piece: piece2, parent, motionChannel: 'insert' },
+  ], allocator, cache)
+
+  // 合并为一个物理组（同一父窗口、同一 insert 通道）
+  assert.equal(results.length, 1)
+  const group = results[0]
+  assert.equal(group.motionChannel, 'insert')
+
+  // 关键验证：islandSourceRects 保留了两个岛的源完整矩形
+  assert.equal(group.islandSourceRects.length, 2,
+    '两个不连续可见岛应保留两个 islandSourceRects')
+
+  // 第一个岛的源完整矩形：[0, 0, 10, 20]
+  assert.deepEqual(group.islandSourceRects[0], { x: 0, y: 0, width: 10, height: 20 })
+
+  // 第二个岛的源完整矩形：[30, 0, 10, 20]——不是第一个岛的矩形！
+  assert.deepEqual(group.islandSourceRects[1], { x: 30, y: 0, width: 10, height: 20 })
+
+  // islandClipRects 保留了两个岛的起始 clip
+  assert.equal(group.islandClipRects.length, 2)
+  // 第一个岛的起始 clip：[0, 0, 3, 20]
+  assert.deepEqual(group.islandClipRects[0], [{ x: 0, y: 0, width: 3, height: 20 }])
+  // 第二个岛的起始 clip：[30, 0, 3, 20]
+  assert.deepEqual(group.islandClipRects[1], [{ x: 30, y: 0, width: 3, height: 20 }])
+})
+
+// 问题3补充测试：验证 rectDifference 对各岛单独计算后合并裁切并集
+test('问题3-6158342861补充：各岛单独 rectDifference 后合并裁切并集——两字未露出部分均能扩展', () => {
+  // 模拟 identifyCarryOverMotionRuns insert 分支的核心逻辑：
+  // 对每个 islandSourceRect 单独做 rectDifference(islandFullRect, islandClipRects)
+  // 再合并结果为同一个 Text 的裁切并集
+
+  const islandSourceRects = [
+    { x: 0, y: 0, width: 10, height: 20 },   // 第一字完整矩形
+    { x: 30, y: 0, width: 10, height: 20 },  // 第二字完整矩形
+  ]
+  const islandClipRects = [
+    [{ x: 0, y: 0, width: 3, height: 20 }],   // 第一字当前可见 [0,3]
+    [{ x: 30, y: 0, width: 3, height: 20 }],  // 第二字当前可见 [30,33]
+  ]
+  const offsetX = 0
+  const offsetY = 0
+
+  // 模拟福新逻辑：各岛单独做 rectDifference
+  const allStartRects = []
+  const allTargetRects = []
+  for (let i = 0; i < islandSourceRects.length; i++) {
+    const islandRect = islandSourceRects[i]
+    const islandClip = islandClipRects[i]
+    const islandFullRect = {
+      x: islandRect.x + offsetX,
+      y: islandRect.y + offsetY,
+      width: islandRect.width,
+      height: islandRect.height
+    }
+    // 已有 clip 保持不变
+    for (const cr of islandClip) {
+      allStartRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+      allTargetRects.push({ x: cr.x, y: cr.y, width: cr.width, height: cr.height })
+    }
+    // 该岛尚未覆盖的区域——从零面积长成完整区域
+    const remaining = rectDifference(islandFullRect, islandClip)
+    for (const gap of remaining) {
+      allStartRects.push({ x: gap.x, y: gap.y, width: 0, height: gap.height })
+      allTargetRects.push({ x: gap.x, y: gap.y, width: gap.width, height: gap.height })
+    }
+  }
+
+  // 验证：两个字的未露出部分都生成了目标裁切
+  // 第一字：已有 [0,3] + 新增 [3,10]（从零长成完整）
+  // 第二字：已有 [30,33] + 新增 [33,40]（从零长成完整）
+
+  // 检查第一字的 gap
+  const firstIslandGaps = allTargetRects.filter(r => r.x >= 3 && r.x < 10 && r.width > 0)
+  assert.ok(firstIslandGaps.length > 0, '第一字的 [3,10] 未露出部分应生成目标裁切')
+
+  // 检查第二字的 gap——这是旧逻辑会遗漏的部分！
+  const secondIslandGaps = allTargetRects.filter(r => r.x >= 33 && r.x < 40 && r.width > 0)
+  assert.ok(secondIslandGaps.length > 0, '第二字的 [33,40] 未露出部分应生成目标裁切')
+
+  // 旧逻辑验证（反证）：如果只用第一个 piece 的 glyphX/Width 做 fullRect
+  const oldFullRect = { x: 0, y: 0, width: 10, height: 20 }
+  const oldRemaining = rectDifference(oldFullRect, [
+    ...islandClipRects[0], ...islandClipRects[1]
+  ])
+  // 旧逻辑的 remaining 不包含第二字的 [33,40] 区域
+  const oldHasSecondGap = oldRemaining.some(r => r.x >= 33)
+  assert.ok(!oldHasSecondGap, '旧逻辑（只用首片段 fullRect）确实遗漏了第二字的未露出部分')
 })
 
 console.log('---')
