@@ -45,8 +45,8 @@ pub mod types;
 pub use meta::DeletedSinceLastSync;
 pub use meta::GraphMeta;
 pub use relation_index::{
-    CascadeIds, CrossCanvasReferenceInfo, EdgeRelationIndex, EmbedHostIndex,
-    HyperlinkRelationIndex, LinkRelationIndex,
+    CascadeIds, CascadeOrigin, CrossCanvasReferenceInfo, EdgeRelationIndex, EmbedHostIndex,
+    HyperlinkRelationIndex, LinkRelationIndex, PathDependencyIndex, PathDependencySource,
 };
 pub use snapshot::{PhasedSnapshotRequest, StarMapPhasedSnapshot};
 pub use types::*;

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::starmap::store::relation_index::CascadeIds;
+use crate::starmap::store::relation_index::{CascadeIds, CascadeOrigin};
 use crate::starmap::types::*;
 
 use super::super::StarMapStore;
@@ -96,6 +96,25 @@ impl StarMapStore {
         )
     }
 
+    /// 统一级联闭包规划：计算删除 Node 或 Embed 后，传递级联会删除的全部对象。
+    ///
+    /// 与 `node_cascade_ids` / `embed_cascade_ids` 的区别：本方法循环扩展
+    /// 被删 Embed 的下一层级联，直到不动点，避免遗漏传递级联。
+    /// pub 方法，供 facade 的 candidate 模拟删除和 store 真实删除复用，
+    /// 保证两者产生相同的最终对象集合。内部调用
+    /// `relation_index::cascade_closure_plan` 纯函数。
+    pub fn cascade_closure_plan(&self, origin: &CascadeOrigin) -> CascadeIds {
+        let host = self.starmap_id.as_str();
+        crate::starmap::store::relation_index::cascade_closure_plan(
+            origin,
+            host,
+            self.edges.values(),
+            self.embeds.values(),
+            self.links.values(),
+            self.hyperlinks.values(),
+        )
+    }
+
     pub fn delete_node(&mut self, node_id: &str) -> Result<()> {
         if !self.nodes.contains_key(node_id) {
             self.ensure_object_loaded(node_id)?;
@@ -107,16 +126,13 @@ impl StarMapStore {
             )));
         }
 
-        // Collect IDs of edges, embeds, links, hyperlinks that reference this node
-        // **as a local node reference** (path.starmap_id == host && segments.is_empty())
-        // OR via first-segment EnterPortal (path.starmap_id == host && segments[0]
-        // is EnterPortal { node_id })。跨层路径的终点 node_id 属于另一张星图，
-        // 绝不参与本图的级联删除；但第一段 EnterPortal 引用的 portal 节点属于
-        // 本图，删除 portal 节点必须级联删所有穿越它的路径。
-        //
-        // 级联 ID 计算复用 `node_cascade_ids` 纯函数，candidate 模拟删除也用
-        // 同一函数，避免两套逻辑漂移。
-        let cascade = self.node_cascade_ids(node_id);
+        // 统一级联闭包规划：循环扩展被删 Embed 的下一层级联，直到不动点。
+        // 旧实现只做一次级联（node_cascade_ids），会遗漏传递级联——
+        // 删 node n 级联删 embed e，但 e 的删除又应级联删以其为第一段
+        // EnterEmbed 的其他 embed/edge，旧实现不会继续扩展。
+        // 级联 ID 计算复用 `cascade_closure_plan` 纯函数，candidate 模拟删除
+        // 也用同一函数，避免两套逻辑漂移。
+        let cascade = self.cascade_closure_plan(&CascadeOrigin::Node(node_id.to_string()));
 
         self.remove_node(node_id);
 

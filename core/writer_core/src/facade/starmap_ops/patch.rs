@@ -175,41 +175,27 @@ pub(super) fn apply_hyperlink_update_to_graph(
     Ok(())
 }
 
-/// 在 candidate graph 上模拟 node 删除（含级联）。
+/// 在 candidate graph 上模拟统一删除（含传递级联）。
 ///
-/// `cascade` 由 `store.node_cascade_ids(node_id)` 计算得出，和 store 真实删除
-/// 用同一纯函数，保证 candidate 模拟和 store 真实删除产生相同的最终对象集合。
-pub(super) fn apply_node_deletion_to_graph(
+/// `origin` 标识删除起点（Node 或 Embed），`cascade` 由
+/// `store.cascade_closure_plan` 计算得出（含传递级联闭包），
+/// 和 store 真实删除用同一纯函数，保证 candidate 模拟和 store 真实删除
+/// 产生相同的最终对象集合。
+pub(super) fn apply_deletion_to_graph(
     graph: &mut crate::starmap::types::StarMapGraph,
-    node_id: &str,
+    origin: &crate::starmap::store::CascadeOrigin,
     cascade: &crate::starmap::store::CascadeIds,
 ) {
-    graph.nodes.retain(|n| n.id != node_id);
+    use crate::starmap::store::CascadeOrigin;
+    match origin {
+        CascadeOrigin::Node(node_id) => {
+            graph.nodes.retain(|n| n.id != node_id.as_str());
+        }
+        CascadeOrigin::Embed(instance_id) => {
+            graph.embeds.retain(|em| em.instance_id != instance_id.as_str());
+        }
+    }
     graph.edges.retain(|e| !cascade.edge_ids.contains(&e.id));
-    graph
-        .embeds
-        .retain(|em| !cascade.embed_ids.contains(&em.instance_id));
-    graph
-        .links
-        .retain(|l| !cascade.link_ids.contains(&l.link_id));
-    graph
-        .hyperlinks
-        .retain(|hl| !cascade.hyperlink_ids.contains(&hl.hyperlink_id));
-}
-
-/// 在 candidate graph 上模拟 embed 删除（含级联）。
-///
-/// `cascade` 由 `store.embed_cascade_ids(instance_id)` 计算得出，和 store 真实删除
-/// 用同一纯函数，保证 candidate 模拟和 store 真实删除产生相同的最终对象集合。
-pub(super) fn apply_embed_deletion_to_graph(
-    graph: &mut crate::starmap::types::StarMapGraph,
-    instance_id: &str,
-    cascade: &crate::starmap::store::CascadeIds,
-) {
-    graph.embeds.retain(|em| em.instance_id != instance_id);
-    graph.edges.retain(|e| !cascade.edge_ids.contains(&e.id));
-    // cascade.embed_ids 已排除被删 instance 自己（见 embed_cascade_ids），
-    // 但这里 retain 已经移除了自己，再 retain cascade.embed_ids 安全。
     graph
         .embeds
         .retain(|em| !cascade.embed_ids.contains(&em.instance_id));

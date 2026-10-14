@@ -278,6 +278,130 @@ pub(super) fn embed_cascade_ids<'a>(
     result
 }
 
+/// 统一级联删除起点：待删除的本地 Node 或 Embed 实例。
+///
+/// 由 [`cascade_closure_plan`] 接收，计算传递级联闭包——删除该对象后，
+/// 因路径失效而连带删除的所有 Edge/Embed/Link/Hyperlink。
+#[derive(Debug, Clone)]
+pub enum CascadeOrigin {
+    /// 删除本地节点 `node_id`。
+    Node(String),
+    /// 删除本地嵌入实例 `instance_id`。
+    Embed(String),
+}
+
+/// 统一级联闭包规划：计算删除 Node 或 Embed 后，传递级联会删除的全部对象。
+///
+/// 现有 [`node_cascade_ids`] / [`embed_cascade_ids`] 只做一次级联计算，
+/// 不处理传递级联：删除 node n 会级联删 embed e，但如果 e 的删除又应该
+/// 级联删其他 embed/edge（以其为第一段 `EnterEmbed` 的路径），旧实现不会继续扩展。
+///
+/// 本函数循环扩展直到不动点：对每个被删 Embed，继续计算它的
+/// [`embed_cascade_ids`]，把新增的被删 Embed 加入待处理队列，直到没有新增。
+/// 用 visited 集合防止无限循环。
+///
+/// 只有被删 Embed 会引起下一层级联——删除 Edge/Link/Hyperlink 不会让其他
+/// 对象的路径失效（它们只是路径的载体，不是路径入口）；删除 Embed 会让
+/// 穿越它（第一段 `EnterEmbed`）的路径失效，因此需要继续扩展。
+///
+/// 输出 [`CascadeIds`] 包含本轮会删除的全部 Edge/Embed/Link/Hyperlink ID
+/// （不含 origin 本身）。纯函数：store 真实删除和 candidate 模拟删除都复用，
+/// 保证两者产生相同的最终对象集合。
+pub(super) fn cascade_closure_plan<'a>(
+    origin: &CascadeOrigin,
+    host_starmap_id: &str,
+    edges: impl IntoIterator<Item = &'a StarMapEdge>,
+    embeds: impl IntoIterator<Item = &'a StarMapEmbed>,
+    links: impl IntoIterator<Item = &'a StarMapLink>,
+    hyperlinks: impl IntoIterator<Item = &'a StarMapHyperlink>,
+) -> CascadeIds {
+    use std::collections::HashSet;
+
+    // 收集成 Vec 以支持多次迭代（循环扩展需要反复扫描）。
+    let edges: Vec<&StarMapEdge> = edges.into_iter().collect();
+    let embeds: Vec<&StarMapEmbed> = embeds.into_iter().collect();
+    let links: Vec<&StarMapLink> = links.into_iter().collect();
+    let hyperlinks: Vec<&StarMapHyperlink> = hyperlinks.into_iter().collect();
+
+    let mut edge_ids: HashSet<String> = HashSet::new();
+    let mut embed_ids: HashSet<String> = HashSet::new();
+    let mut link_ids: HashSet<String> = HashSet::new();
+    let mut hyperlink_ids: HashSet<String> = HashSet::new();
+
+    // 已计算过 embed_cascade_ids 的被删 Embed，防止无限循环。
+    let mut visited_embeds: HashSet<String> = HashSet::new();
+    // 待处理的被删 Embed 队列。
+    let mut pending_embeds: Vec<String> = Vec::new();
+
+    // 合并一次级联结果中的 edge/link/hyperlink，返回该级联产生的 embed_ids
+    // （调用方负责 embed_ids 去重和 pending_embeds 入队，避免闭包同时
+    // 可变借用 pending_embeds 导致后续 pop 冲突）。
+    let mut merge_non_embed = |cascade: CascadeIds| {
+        for id in cascade.edge_ids {
+            edge_ids.insert(id);
+        }
+        for id in cascade.link_ids {
+            link_ids.insert(id);
+        }
+        for id in cascade.hyperlink_ids {
+            hyperlink_ids.insert(id);
+        }
+        cascade.embed_ids
+    };
+
+    // 第一步：根据 origin 计算直接级联。
+    let direct = match origin {
+        CascadeOrigin::Node(node_id) => node_cascade_ids(
+            node_id,
+            host_starmap_id,
+            edges.iter().copied(),
+            embeds.iter().copied(),
+            links.iter().copied(),
+            hyperlinks.iter().copied(),
+        ),
+        CascadeOrigin::Embed(instance_id) => embed_cascade_ids(
+            instance_id,
+            host_starmap_id,
+            edges.iter().copied(),
+            embeds.iter().copied(),
+            links.iter().copied(),
+            hyperlinks.iter().copied(),
+        ),
+    };
+    for id in merge_non_embed(direct) {
+        if embed_ids.insert(id.clone()) {
+            pending_embeds.push(id);
+        }
+    }
+
+    // 循环扩展：对每个被删 Embed 继续计算它的级联，直到不动点。
+    while let Some(embed_id) = pending_embeds.pop() {
+        if !visited_embeds.insert(embed_id.clone()) {
+            continue;
+        }
+        let cascade = embed_cascade_ids(
+            &embed_id,
+            host_starmap_id,
+            edges.iter().copied(),
+            embeds.iter().copied(),
+            links.iter().copied(),
+            hyperlinks.iter().copied(),
+        );
+        for id in merge_non_embed(cascade) {
+            if embed_ids.insert(id.clone()) {
+                pending_embeds.push(id);
+            }
+        }
+    }
+
+    CascadeIds {
+        edge_ids: edge_ids.into_iter().collect(),
+        embed_ids: embed_ids.into_iter().collect(),
+        link_ids: link_ids.into_iter().collect(),
+        hyperlink_ids: hyperlink_ids.into_iter().collect(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 跨画布引用反查
 // ---------------------------------------------------------------------------
@@ -796,5 +920,60 @@ impl PathDependencyIndex {
             Some(v) => v.as_slice(),
             None => &[],
         }
+    }
+
+    /// 查询依赖指定对象的所有路径来源（[`query_dependents`] 的语义别名）。
+    ///
+    /// 暴露给 facade 层的持久化索引接口，供删除保护和关联查询使用。
+    pub fn dependents_of(
+        &self,
+        host_starmap_id: &str,
+        kind: &crate::starmap::graph::resolve::PathDependencyKind,
+        object_id: &str,
+    ) -> &[PathDependencySource] {
+        self.query_dependents(host_starmap_id, kind, object_id)
+    }
+
+    /// 按来源对象 `(owner_starmap_id, source_kind, source_id)` 移除该来源的所有依赖事实。
+    ///
+    /// 增删改操作后增量更新索引：先移除旧来源产生的全部 entry，再插入新来源
+    /// 的 entry（见 [`add_or_replace_source`]）。避免每次从零扫描全库重建索引。
+    pub fn remove_source(
+        &mut self,
+        owner_starmap_id: &str,
+        source_kind: &CrossCanvasRefSourceKind,
+        source_id: &str,
+    ) {
+        for sources in self.entries.values_mut() {
+            sources.retain(|s| {
+                !(s.owner_starmap_id == owner_starmap_id
+                    && &s.source_kind == source_kind
+                    && s.source_id == source_id)
+            });
+        }
+        // 清理空的 Vec，保持索引紧凑。
+        self.entries.retain(|_, v| !v.is_empty());
+    }
+
+    /// 先按 `(owner, kind, source_id)` 移除该来源的所有旧依赖事实，再插入新依赖事实。
+    ///
+    /// 增删改操作后增量更新索引的统一入口：Edge/Link/Hyperlink/Embed 的 from/to/
+    /// source/host_path 变更后，先用本方法移除旧路径产生的全部 entry，再插入
+    /// 新路径的 entry。避免每次从零扫描全库重建索引。
+    ///
+    /// 读取错误（`extract_path_dependency_facts` 内部磁盘 IO/schema 不兼容）
+    /// 通过 `?` 向上传播，不吞成"无依赖"。
+    pub fn add_or_replace_source(
+        &mut self,
+        owner_starmap_id: &str,
+        source_kind: CrossCanvasRefSourceKind,
+        source_id: &str,
+        path: &StarMapTargetPath,
+        label: &Option<String>,
+        context: &GraphResolverContext,
+    ) -> crate::error::Result<()> {
+        self.remove_source(owner_starmap_id, &source_kind, source_id);
+        self.add_path(owner_starmap_id, source_kind, source_id, path, label, context)?;
+        Ok(())
     }
 }

@@ -5,9 +5,8 @@
 //! 在这里。Rust 允许同一类型的固有 `impl` 分散在同 crate 的多个模块中。
 
 use super::patch::{
-    apply_edge_patch_to_graph, apply_embed_deletion_to_graph, apply_embed_patch_to_graph,
-    apply_hyperlink_update_to_graph, apply_link_patch_to_graph, apply_node_deletion_to_graph,
-    apply_node_patch_to_graph,
+    apply_deletion_to_graph, apply_edge_patch_to_graph, apply_embed_patch_to_graph,
+    apply_hyperlink_update_to_graph, apply_link_patch_to_graph, apply_node_patch_to_graph,
 };
 use super::*;
 
@@ -114,7 +113,7 @@ impl super::super::WriterCore {
         // 修改1：Portal/Anchor 身份变更前检查外部图持有的路径依赖。
         // 只在 Portal destination 改变或 Anchor 被删除时检查；title/position/style
         // 等不影响目标身份的变更不触发。存在外部依赖则拒绝，不允许先改再让外部路径悬空。
-        {
+        let needs_index_invalidation = {
             let store = Self::get_store_or_err(&stores, starmap_id)?;
             let old_node = store
                 .get_node(node_id)
@@ -138,7 +137,29 @@ impl super::super::WriterCore {
             self.check_external_dependencies_for_node_update(
                 &stores, starmap_id, node_id, &old_node, new_node,
             )?;
-        }
+
+            // Portal destination 变更或 Anchor 集合变更会影响路径解析结果，
+            // 需要失效持久化索引。title/position/style 等不影响路径解析的变更不触发。
+            let portal_changed = match (&old_node.portal, &new_node.portal) {
+                (None, None) | (None, Some(_)) => false,
+                (Some(_), None) => true,
+                (Some(o), Some(n)) => {
+                    o.destination_starmap_id != n.destination_starmap_id
+                        || o.destination_target != n.destination_target
+                }
+            };
+            // Anchor 身份变更 = anchor_id 集合不同。anchor 的 position 等非身份字段
+            // 变更不影响路径依赖，只有 anchor_id 新增/删除才改变路径解析结果。
+            let old_anchor_ids: std::collections::HashSet<&str> =
+                old_node.anchors.iter().map(|a| a.anchor_id.as_str()).collect();
+            let new_anchor_ids: std::collections::HashSet<&str> = new_node
+                .anchors
+                .iter()
+                .map(|a| a.anchor_id.as_str())
+                .collect();
+            let anchors_changed = old_anchor_ids != new_anchor_ids;
+            portal_changed || anchors_changed
+        };
 
         validation::validate_graph(
             &self.build_resolver_context_from_stores(&stores, &candidate),
@@ -149,52 +170,21 @@ impl super::super::WriterCore {
         let result = store.update_node(node_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Node);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // Portal/Anchor 变更会改变路径解析结果，失效持久化索引。
+        // 下次查询时从真实数据惰性重建。
+        if needs_index_invalidation {
+            self.invalidate_path_dependency_index();
+        }
+
         Ok(result)
     }
 
     pub fn delete_starmap_node(&self, starmap_id: &str, node_id: &str) -> Result<()> {
-        let mut stores = self
-            .starmap_stores
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        {
-            let store = stores
-                .entry(starmap_id.to_string())
-                .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
-            // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
-            store.ensure_fully_loaded()?;
-            store.ensure_object_loaded(node_id)?;
-        }
-
-        // 跨图引用检查：在本地级联检查之后、实际删除之前执行。
-        // 检查是否有其他 graph 持有的跨层引用指向当前图的该节点。
-        // 有跨图关联时拒绝破坏性删除并明确返回引用列表。
-        self.check_cross_canvas_references_for_node_delete(&stores, starmap_id, node_id)?;
-
-        // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
-        // 级联 ID 复用 store.node_cascade_ids 纯函数，保证 candidate 模拟和 store
-        // 真实删除产生相同的最终对象集合。
-        let candidate = {
-            let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let cascade = store.node_cascade_ids(node_id);
-            let mut g = store.to_starmap_graph();
-            apply_node_deletion_to_graph(&mut g, node_id, &cascade);
-            g
-        };
-        validation::validate_graph(
-            &self.build_resolver_context_from_stores(&stores, &candidate),
-            &candidate,
-        )?;
-
-        let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        store.delete_node(node_id)?;
-        store.enqueue_save(SaveQueueEntry::DeleteNode);
-        store.enqueue_save(SaveQueueEntry::DeleteEdge);
-        store.enqueue_save(SaveQueueEntry::DeleteEmbed);
-        store.enqueue_save(SaveQueueEntry::DeleteLink);
-        store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
-        store.enqueue_save(SaveQueueEntry::GraphMeta);
-        Ok(())
+        self.delete_starmap_object(
+            starmap_id,
+            crate::starmap::store::CascadeOrigin::Node(node_id.to_string()),
+        )
     }
 
     pub fn add_starmap_edge(
@@ -228,6 +218,26 @@ impl super::super::WriterCore {
         let result = store.add_edge(edge)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：新 Edge 的 from/to 两端路径。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EdgeFrom,
+            &result.id,
+            &result.from,
+            &result.label,
+        )?;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EdgeTo,
+            &result.id,
+            &result.to,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -264,6 +274,26 @@ impl super::super::WriterCore {
         let result = store.update_edge(edge_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：Edge 的 from/to 可能已变更。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EdgeFrom,
+            &result.id,
+            &result.from,
+            &result.label,
+        )?;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EdgeTo,
+            &result.id,
+            &result.to,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -280,6 +310,20 @@ impl super::super::WriterCore {
         store.delete_edge(edge_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：移除被删 Edge 的 from/to 两端依赖事实。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.remove_source_from_path_dependency_index(
+            starmap_id,
+            &CrossCanvasRefSourceKind::EdgeFrom,
+            edge_id,
+        );
+        self.remove_source_from_path_dependency_index(
+            starmap_id,
+            &CrossCanvasRefSourceKind::EdgeTo,
+            edge_id,
+        );
+
         Ok(())
     }
 
@@ -314,6 +358,18 @@ impl super::super::WriterCore {
         let result = store.add_embed(embed)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：新 Embed 的 host_path。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EmbedHostPath,
+            &result.instance_id,
+            &result.host_path,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -350,10 +406,48 @@ impl super::super::WriterCore {
         let result = store.update_embed(instance_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Embed);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：Embed 的 host_path 可能已变更。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::EmbedHostPath,
+            &result.instance_id,
+            &result.host_path,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
     pub fn delete_starmap_embed(&self, starmap_id: &str, instance_id: &str) -> Result<()> {
+        self.delete_starmap_object(
+            starmap_id,
+            crate::starmap::store::CascadeOrigin::Embed(instance_id.to_string()),
+        )
+    }
+
+    /// 统一删除流程：先得到完整删除集合，再做一次依赖检查，最后执行同一份删除计划。
+    ///
+    /// `delete_starmap_node` 和 `delete_starmap_embed` 共享这套规划/检查/执行逻辑，
+    /// 避免一种删除安全、另一种还会留下孤儿路径。
+    ///
+    /// 流程：
+    /// 1. 完整加载 store，确保级联计算看到全部对象。
+    /// 2. 用 `cascade_closure_plan` 计算传递级联闭包（含被删 Embed 引起的下一层级联）。
+    /// 3. 跨图引用检查：对每个被删 Node 查询 NodeTarget/AnchorTarget/PortalTraversal，
+    ///    对每个被删 Embed 查询 EmbedTraversal。只拦截外部跨图依赖
+    ///    （`owner_starmap_id != starmap_id`），本图自引用由本地级联处理。
+    /// 4. candidate 模拟删除（含传递级联）+ `validate_graph`。
+    /// 5. 执行 store 删除（内部复用同一 `cascade_closure_plan`）。
+    fn delete_starmap_object(
+        &self,
+        starmap_id: &str,
+        origin: crate::starmap::store::CascadeOrigin,
+    ) -> Result<()> {
+        use crate::starmap::store::CascadeOrigin;
+
         let mut stores = self
             .starmap_stores
             .lock()
@@ -364,22 +458,30 @@ impl super::super::WriterCore {
                 .or_insert_with(|| StarMapStore::new(&self.app_data_root, starmap_id));
             // 级联删除需要完整加载，否则会漏掉跨对象的引用关系。
             store.ensure_fully_loaded()?;
-            store.ensure_embed_loaded(instance_id)?;
+            match &origin {
+                CascadeOrigin::Node(node_id) => store.ensure_object_loaded(node_id)?,
+                CascadeOrigin::Embed(instance_id) => store.ensure_embed_loaded(instance_id)?,
+            }
         }
 
-        // 跨图引用检查：在本地级联检查之后、实际删除之前执行。
-        // 检查是否有其他 graph 持有的跨层引用通过该 Embed 入口穿越。
-        // 有跨图关联时拒绝破坏性删除并明确返回引用列表。
-        self.check_cross_canvas_references_for_embed_delete(&stores, starmap_id, instance_id)?;
+        // 统一级联闭包规划：循环扩展被删 Embed 的下一层级联，直到不动点。
+        let cascade = {
+            let store = Self::get_store_or_err(&stores, starmap_id)?;
+            store.cascade_closure_plan(&origin)
+        };
 
-        // 先在 candidate graph 上模拟删除（含级联），跑 validate_graph，再真正改 Store。
-        // 级联 ID 复用 store.embed_cascade_ids 纯函数，保证 candidate 模拟和 store
-        // 真实删除产生相同的最终对象集合。
+        // 跨图引用检查：对所有被删对象（Node + 级联删除的 Embed）检查外部依赖。
+        // 旧实现只检查被点中的对象本身，不检查级联删除的其他对象——
+        // 比如删 node n 级联删 embed e，但不查 e 的 EmbedTraversal，导致外部路径被破坏。
+        self.check_cross_canvas_references_for_delete(
+            &stores, starmap_id, &origin, &cascade,
+        )?;
+
+        // 先在 candidate graph 上模拟删除（含传递级联），跑 validate_graph，再真正改 Store。
         let candidate = {
             let store = Self::get_store_or_err(&stores, starmap_id)?;
-            let cascade = store.embed_cascade_ids(instance_id);
             let mut g = store.to_starmap_graph();
-            apply_embed_deletion_to_graph(&mut g, instance_id, &cascade);
+            apply_deletion_to_graph(&mut g, &origin, &cascade);
             g
         };
         validation::validate_graph(
@@ -387,13 +489,74 @@ impl super::super::WriterCore {
             &candidate,
         )?;
 
+        // 执行删除。store.delete_node/delete_embed 内部复用同一 cascade_closure_plan，
+        // 保证与 candidate 模拟产生相同的最终对象集合。
         let store = Self::get_store_mut_or_err(&mut stores, starmap_id)?;
-        store.delete_embed(instance_id)?;
+        match &origin {
+            CascadeOrigin::Node(node_id) => {
+                store.delete_node(node_id)?;
+                store.enqueue_save(SaveQueueEntry::DeleteNode);
+            }
+            CascadeOrigin::Embed(instance_id) => {
+                store.delete_embed(instance_id)?;
+            }
+        }
         store.enqueue_save(SaveQueueEntry::DeleteEmbed);
         store.enqueue_save(SaveQueueEntry::DeleteEdge);
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：移除所有被删来源的依赖事实。
+        // 避免下次查询时从零扫描全库重建索引。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        for eid in &cascade.edge_ids {
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::EdgeFrom,
+                eid,
+            );
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::EdgeTo,
+                eid,
+            );
+        }
+        // 被删 Embed：origin embed + 级联删除的 embed_ids
+        if let CascadeOrigin::Embed(instance_id) = &origin {
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::EmbedHostPath,
+                instance_id,
+            );
+        }
+        for iid in &cascade.embed_ids {
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::EmbedHostPath,
+                iid,
+            );
+        }
+        for lid in &cascade.link_ids {
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::LinkSource,
+                lid,
+            );
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::LinkTarget,
+                lid,
+            );
+        }
+        for hlid in &cascade.hyperlink_ids {
+            self.remove_source_from_path_dependency_index(
+                starmap_id,
+                &CrossCanvasRefSourceKind::HyperlinkSource,
+                hlid,
+            );
+        }
+
         Ok(())
     }
 
@@ -428,6 +591,26 @@ impl super::super::WriterCore {
         let result = store.add_link(link)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：新 Link 的 source/target 两端路径。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::LinkSource,
+            &result.link_id,
+            &result.source,
+            &result.label,
+        )?;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::LinkTarget,
+            &result.link_id,
+            &result.target,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -464,6 +647,26 @@ impl super::super::WriterCore {
         let result = store.update_link(link_id, &patch)?;
         store.enqueue_save(SaveQueueEntry::Link);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：Link 的 source/target 可能已变更。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::LinkSource,
+            &result.link_id,
+            &result.source,
+            &result.label,
+        )?;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::LinkTarget,
+            &result.link_id,
+            &result.target,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -480,6 +683,20 @@ impl super::super::WriterCore {
         store.delete_link(link_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteLink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：移除被删 Link 的 source/target 两端依赖事实。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.remove_source_from_path_dependency_index(
+            starmap_id,
+            &CrossCanvasRefSourceKind::LinkSource,
+            link_id,
+        );
+        self.remove_source_from_path_dependency_index(
+            starmap_id,
+            &CrossCanvasRefSourceKind::LinkTarget,
+            link_id,
+        );
+
         Ok(())
     }
 
@@ -530,6 +747,18 @@ impl super::super::WriterCore {
         let result = store.add_hyperlink(hl)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：新 Hyperlink 的 source 路径。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::HyperlinkSource,
+            &result.hyperlink_id,
+            &result.source,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -567,6 +796,18 @@ impl super::super::WriterCore {
         let result = store.update_hyperlink(hyperlink_id, patch)?;
         store.enqueue_save(SaveQueueEntry::Hyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：Hyperlink 的 source 可能已变更。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            starmap_id,
+            CrossCanvasRefSourceKind::HyperlinkSource,
+            &result.hyperlink_id,
+            &result.source,
+            &result.label,
+        )?;
+
         Ok(result)
     }
 
@@ -583,6 +824,15 @@ impl super::super::WriterCore {
         store.delete_hyperlink(hyperlink_id)?;
         store.enqueue_save(SaveQueueEntry::DeleteHyperlink);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
+
+        // 增量更新持久化路径依赖索引：移除被删 Hyperlink 的 source 依赖事实。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.remove_source_from_path_dependency_index(
+            starmap_id,
+            &CrossCanvasRefSourceKind::HyperlinkSource,
+            hyperlink_id,
+        );
+
         Ok(())
     }
 
@@ -848,6 +1098,25 @@ impl super::super::WriterCore {
         store.enqueue_save(SaveQueueEntry::Edge);
         store.enqueue_save(SaveQueueEntry::GraphMeta);
 
+        // 增量更新持久化路径依赖索引：新跨画布 Edge 的 from/to 两端路径。
+        use crate::starmap::store::relation_index::CrossCanvasRefSourceKind;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            &owner_starmap_id,
+            CrossCanvasRefSourceKind::EdgeFrom,
+            &written_edge.id,
+            &written_edge.from,
+            &written_edge.label,
+        )?;
+        self.add_or_replace_source_in_path_dependency_index(
+            &stores,
+            &owner_starmap_id,
+            CrossCanvasRefSourceKind::EdgeTo,
+            &written_edge.id,
+            &written_edge.to,
+            &written_edge.label,
+        )?;
+
         Ok(CreateCrossCanvasEdgeResult {
             owner_starmap_id,
             edge: written_edge,
@@ -857,92 +1126,79 @@ impl super::super::WriterCore {
     // -----------------------------------------------------------------------
     // 跨图引用检查（删除保护）
     //
-    // 修改4：两个检查函数都走同一个 PathDependencyIndex 查询入口，
-    // 不再各自遍历全图、手写匹配逻辑。
+    // 统一检查函数走同一个 PathDependencyIndex 查询入口，对所有被删对象
+    // （含级联删除的 Embed）做一次完整检查，不再各自遍历全图、手写匹配逻辑。
     // -----------------------------------------------------------------------
 
-    /// 检查删除节点前是否存在跨图引用。
+    /// 检查删除 Node 或 Embed 前是否存在跨图引用（含级联删除的对象）。
     ///
-    /// 通过 [`PathDependencyIndex`] 查询所有外部图对本图该节点的依赖：
-    /// - `NodeTarget`：路径终点落在该节点
-    /// - `AnchorTarget`：路径终点落在该节点的某个锚点（删节点连带删锚点）
-    /// - `PortalTraversal`：路径途中穿越该节点（作为 Portal 入口，修改2）
+    /// 旧实现只检查被点中的对象本身：
+    /// - `check_cross_canvas_references_for_node_delete` 只查被删节点的
+    ///   NodeTarget/AnchorTarget/PortalTraversal，不查级联删除的 Embed。
+    /// - `check_cross_canvas_references_for_embed_delete` 只查被删 Embed 本身。
     ///
-    /// 本图自身的引用由本地级联删除（`node_cascade_ids`）处理，只拦截外部跨图依赖。
+    /// 本方法对完整删除集合做一次检查：
+    /// - 对每个被删 Node 查询 NodeTarget/AnchorTarget/PortalTraversal
+    /// - 对每个被删 Embed（含 origin Embed 和级联删除的 Embed）查询 EmbedTraversal
+    ///
+    /// 只拦截外部跨图依赖（`owner_starmap_id != starmap_id`）；
+    /// 本图自引用（`owner_starmap_id == starmap_id`）由本地级联删除处理，跳过。
     /// 读取错误（磁盘 IO、schema 不兼容等）通过 `?` 向上传播，不吞成"无引用"。
-    fn check_cross_canvas_references_for_node_delete(
+    fn check_cross_canvas_references_for_delete(
         &self,
         stores: &std::collections::HashMap<String, StarMapStore>,
         starmap_id: &str,
-        node_id: &str,
+        origin: &crate::starmap::store::CascadeOrigin,
+        cascade: &crate::starmap::store::CascadeIds,
     ) -> Result<()> {
         use crate::starmap::graph::resolve::PathDependencyKind;
-        use crate::starmap::store::relation_index::PathDependencyIndex;
 
-        let context = self.build_resolver_context(stores);
-        let idx = crate::starmap::load_index(&self.app_data_root)?;
-        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
+        // 使用 WriterCore 持有的持久化路径依赖索引，不再每次从零扫描全库 build。
+        let index_guard = self.get_or_init_path_dependency_index(stores)?;
+        let dep_index = index_guard.as_ref().ok_or_else(|| {
+            crate::error::Error::Other(
+                "path dependency index initialization failed".to_string(),
+            )
+        })?;
 
-        // 删除节点连带删除其所有锚点，且节点本身可能是 Portal 入口（修改2），
-        // 因此同时检查 NodeTarget、AnchorTarget、PortalTraversal 三类外部依赖。
         let mut refs = Vec::new();
-        for kind in [
-            PathDependencyKind::NodeTarget,
-            PathDependencyKind::AnchorTarget,
-            PathDependencyKind::PortalTraversal,
-        ] {
+
+        // 被删 Node：查询 NodeTarget/AnchorTarget/PortalTraversal。
+        // 删除节点连带删除其所有锚点，且节点本身可能是 Portal 入口，
+        // 因此同时检查三类外部依赖。
+        if let crate::starmap::store::CascadeOrigin::Node(node_id) = origin {
+            for kind in [
+                PathDependencyKind::NodeTarget,
+                PathDependencyKind::AnchorTarget,
+                PathDependencyKind::PortalTraversal,
+            ] {
+                refs.extend(collect_external_refs(
+                    dep_index, starmap_id, &kind, node_id,
+                ));
+            }
+        }
+
+        // 被删 Embed：查询 EmbedTraversal。
+        // 包含 origin Embed（如果是删 Embed）和级联删除的所有 Embed。
+        let mut deleted_embed_ids: Vec<String> = Vec::new();
+        if let crate::starmap::store::CascadeOrigin::Embed(instance_id) = origin {
+            deleted_embed_ids.push(instance_id.clone());
+        }
+        deleted_embed_ids.extend(cascade.embed_ids.iter().cloned());
+        for embed_id in &deleted_embed_ids {
             refs.extend(collect_external_refs(
-                &dep_index, starmap_id, &kind, node_id,
+                dep_index,
+                starmap_id,
+                &PathDependencyKind::EmbedTraversal,
+                embed_id,
             ));
         }
 
         if !refs.is_empty() {
             return Err(crate::error::Error::Other(format!(
-                "Cannot delete node '{}': cross-canvas references exist: {:?}",
-                node_id,
-                refs.iter()
-                    .map(|r| format!(
-                        "(owner={}, kind={:?}, source={}, path={:?})",
-                        r.owner_starmap_id, r.source_kind, r.source_id, r.referenced_path
-                    ))
-                    .collect::<Vec<_>>()
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// 检查删除 Embed 入口前是否存在跨图引用。
-    ///
-    /// 通过 [`PathDependencyIndex`] 查询所有外部图路径对本图该 Embed 实例的
-    /// `EmbedTraversal` 依赖（路径途中穿越该 Embed 入口）。
-    ///
-    /// 本图自身的引用由本地级联删除（`embed_cascade_ids`）处理，只拦截外部跨图依赖。
-    /// 读取错误通过 `?` 向上传播，不吞成"无引用"。
-    fn check_cross_canvas_references_for_embed_delete(
-        &self,
-        stores: &std::collections::HashMap<String, StarMapStore>,
-        starmap_id: &str,
-        instance_id: &str,
-    ) -> Result<()> {
-        use crate::starmap::graph::resolve::PathDependencyKind;
-        use crate::starmap::store::relation_index::PathDependencyIndex;
-
-        let context = self.build_resolver_context(stores);
-        let idx = crate::starmap::load_index(&self.app_data_root)?;
-        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
-
-        let refs = collect_external_refs(
-            &dep_index,
-            starmap_id,
-            &PathDependencyKind::EmbedTraversal,
-            instance_id,
-        );
-
-        if !refs.is_empty() {
-            return Err(crate::error::Error::Other(format!(
-                "Cannot delete embed '{}': cross-canvas references exist: {:?}",
-                instance_id,
+                "Cannot delete {:?} in '{}': cross-canvas references exist: {:?}",
+                origin,
+                starmap_id,
                 refs.iter()
                     .map(|r| format!(
                         "(owner={}, kind={:?}, source={}, path={:?})",
@@ -972,7 +1228,6 @@ impl super::super::WriterCore {
         new_node: &crate::starmap::types::StarMapNode,
     ) -> Result<()> {
         use crate::starmap::graph::resolve::PathDependencyKind;
-        use crate::starmap::store::relation_index::PathDependencyIndex;
 
         // Portal 身份改变 = destination_starmap_id 或 destination_target 变化。
         // 新增 Portal（None→Some）不破坏既有外部路径，无需检查。
@@ -1002,9 +1257,13 @@ impl super::super::WriterCore {
             return Ok(());
         }
 
-        let context = self.build_resolver_context(stores);
-        let idx = crate::starmap::load_index(&self.app_data_root)?;
-        let dep_index = PathDependencyIndex::build(&context, &idx.starmap_ids)?;
+        // 使用 WriterCore 持有的持久化路径依赖索引，不再每次从零扫描全库 build。
+        let index_guard = self.get_or_init_path_dependency_index(stores)?;
+        let dep_index = index_guard.as_ref().ok_or_else(|| {
+            crate::error::Error::Other(
+                "path dependency index initialization failed".to_string(),
+            )
+        })?;
 
         let mut refs = Vec::new();
         if portal_changed {

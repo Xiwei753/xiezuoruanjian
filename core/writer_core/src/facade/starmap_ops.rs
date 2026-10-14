@@ -305,6 +305,98 @@ impl super::WriterCore {
             .insert(candidate.starmap_id.clone(), candidate.clone());
         context
     }
+
+    /// 获取或惰性构建持久化路径依赖索引。
+    ///
+    /// 如果索引为 None（未初始化），从真实星图数据 `PathDependencyIndex::build`。
+    /// 首次访问后复用，Edge/Link/Hyperlink/Embed/Portal 增删改后通过
+    /// `add_or_replace_source` / `remove_source` 增量更新，不再每次从零扫描全库。
+    ///
+    /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用此方法，
+    /// 传入已获取的 stores 引用，避免重复 lock 导致死锁。
+    /// 返回的 `MutexGuard` 保证内部为 `Some`（build 成功时）。
+    /// 读取错误（磁盘 IO、schema 不兼容等）通过 `?` 向上传播。
+    fn get_or_init_path_dependency_index(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+    ) -> Result<
+        std::sync::MutexGuard<'_, Option<crate::starmap::store::PathDependencyIndex>>,
+    > {
+        let mut guard = self
+            .path_dependency_index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            let context = self.build_resolver_context(stores);
+            let idx = crate::starmap::load_index(&self.app_data_root)?;
+            *guard = Some(crate::starmap::store::PathDependencyIndex::build(
+                &context,
+                &idx.starmap_ids,
+            )?);
+        }
+        Ok(guard)
+    }
+
+    /// 增量更新持久化路径依赖索引：移除指定来源的旧依赖事实。
+    ///
+    /// 删除 Edge/Link/Hyperlink/Embed 后调用，从索引中移除该来源产生的全部 entry。
+    /// 调用方必须在持有 `starmap_stores` 锁的上下文中调用。
+    fn remove_source_from_path_dependency_index(
+        &self,
+        owner_starmap_id: &str,
+        source_kind: &crate::starmap::store::relation_index::CrossCanvasRefSourceKind,
+        source_id: &str,
+    ) {
+        let mut guard = self
+            .path_dependency_index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut index) = *guard {
+            index.remove_source(owner_starmap_id, source_kind, source_id);
+        }
+        // 如果索引为 None（未初始化），无需移除——下次惰性构建时会从真实数据重建。
+    }
+
+    /// 失效持久化路径依赖索引，下次查询时从真实数据惰性重建。
+    ///
+    /// Node 的 Portal destination 或 Anchor 变更会改变路径解析结果，影响所有穿越
+    /// 该 Portal 或指向该 Anchor 的路径的依赖事实。精确增量更新需要找到所有受影响
+    /// 的来源并重新计算，复杂度高；此处采用失效重建策略——设为 None，下次查询时
+    /// 从真实数据 build。仍避免了"每次查询都 build"的问题：只有 Portal/Anchor
+    /// 变更才失效，title/position/style 等不影响路径解析的变更不触发。
+    fn invalidate_path_dependency_index(&self) {
+        let mut guard = self
+            .path_dependency_index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+
+    /// 增量更新持久化路径依赖索引：先移除旧来源的依赖事实，再插入新来源的依赖事实。
+    ///
+    /// 新增/更新 Edge/Link/Hyperlink/Embed 后调用。需要 stores 用于构建 resolver context
+    ///（提取路径依赖事实需要解析路径）。调用方必须在持有 `starmap_stores` 锁的上下文中调用。
+    /// 读取错误通过 `?` 向上传播。
+    fn add_or_replace_source_in_path_dependency_index(
+        &self,
+        stores: &std::collections::HashMap<String, StarMapStore>,
+        owner_starmap_id: &str,
+        source_kind: crate::starmap::store::relation_index::CrossCanvasRefSourceKind,
+        source_id: &str,
+        path: &crate::starmap::types::reference::StarMapTargetPath,
+        label: &Option<String>,
+    ) -> Result<()> {
+        let mut guard = self
+            .path_dependency_index
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut index) = *guard {
+            let context = self.build_resolver_context(stores);
+            index.add_or_replace_source(owner_starmap_id, source_kind, source_id, path, label, &context)?;
+        }
+        // 如果索引为 None（未初始化），无需更新——下次惰性构建时会从真实数据重建。
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::starmap::store::relation_index::CascadeIds;
+use crate::starmap::store::relation_index::{CascadeIds, CascadeOrigin};
 use crate::starmap::types::*;
 
 use super::super::StarMapStore;
@@ -90,11 +90,13 @@ impl StarMapStore {
             )));
         }
 
-        // 级联删除所有第一段 EnterEmbed 引用命中被删 instance 的 edge/link/hyperlink，
-        // 以及 host_path 第一段 EnterEmbed 命中被删 instance 的其他 embed。
-        // 级联 ID 计算复用 `embed_cascade_ids` 纯函数，candidate 模拟删除也用
-        // 同一函数，避免两套逻辑漂移。
-        let cascade = self.embed_cascade_ids(instance_id);
+        // 统一级联闭包规划：循环扩展被删 Embed 的下一层级联，直到不动点。
+        // 旧实现只做一次级联（embed_cascade_ids），会遗漏传递级联——
+        // 删 embed e 级联删 embed e2，但 e2 的删除又应级联删以其为第一段
+        // EnterEmbed 的其他 embed/edge，旧实现不会继续扩展。
+        // 级联 ID 计算复用 `cascade_closure_plan` 纯函数，candidate 模拟删除
+        // 也用同一函数，避免两套逻辑漂移。
+        let cascade = self.cascade_closure_plan(&CascadeOrigin::Embed(instance_id.to_string()));
 
         self.remove_embed(instance_id);
 
