@@ -30,10 +30,12 @@ pub fn prepare_animation_visuals_from_layout(
     let mut snapshots = Vec::new();
 
     for &line_id in line_ids {
-        if line_id >= handle.lines.len() {
-            continue;
-        }
-        let line = &handle.lines[line_id];
+        // Issue #901 第三十六轮问题3: handle.lines 是 Arc<PersistentChunkedVec<VisualLine>>，
+        // 用 get(index) -> Option<&VisualLine> 替代直接索引，避免越界 panic。
+        let line = match handle.lines.get(line_id) {
+            Some(l) => l,
+            None => continue,
+        };
         let slot = line.cache_slot;
         let qtextline_idx = line.qtextline_idx;
         let gen = handle.generation;

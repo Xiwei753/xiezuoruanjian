@@ -715,9 +715,10 @@ impl std::fmt::Debug for QtLayoutLease {
 /// 动画帧 clone lease，形成一条所有权链。
 pub struct PreparedLayoutHandle {
     pub generation: u64,
-    /// Issue #901 第三十六轮问题3: 改为 owned Vec，从 PersistentChunkedVec::to_vec() 收集。
-    /// 原 `&'a [VisualLine]` 无法引用 PersistentChunkedVec 内部分块数据。
-    pub lines: Vec<VisualLine>,
+    /// Issue #901 第三十六轮问题3: 改为 `Arc<PersistentChunkedVec<VisualLine>>` 共享，
+    /// 只 Arc::clone O(1)，不整章 clone VisualLine（其中有 para_text: String）。
+    /// 与 `LayoutSnapshot.lines` 同类型，构造时直接 `Arc::clone(&snapshot.lines)`。
+    pub lines: Arc<super::chunked_vec::PersistentChunkedVec<VisualLine>>,
     /// Issue #901 第三十一轮问题3: 跨帧持有的 Qt 布局租约集合。
     /// 每个对应一个 `(generation, cache_slot, epoch)` 的 QTextLayout 引用。
     /// handle Drop 时所有 lease Drop，退引用；最后一个持有者负责 C++ delete。

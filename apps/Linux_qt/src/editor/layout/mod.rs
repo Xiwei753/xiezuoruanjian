@@ -271,9 +271,10 @@ impl EditorLayout {
                     }
                 }
             }
+            // Issue #901 第三十六轮问题3: Arc::clone O(1) 共享，不 to_vec() 整章复制。
             PreparedLayoutHandle {
                 generation,
-                lines: c.lines.to_vec(),
+                lines: Arc::clone(&c.lines),
                 leases,
             }
         })
@@ -336,9 +337,10 @@ impl EditorLayout {
                     }
                 }
             }
+            // Issue #901 第三十六轮问题3: Arc::clone O(1) 共享，不 to_vec() 整章复制。
             PreparedLayoutHandle {
                 generation,
-                lines: c.lines.to_vec(),
+                lines: Arc::clone(&c.lines),
                 leases,
             }
         })
@@ -406,13 +408,16 @@ impl EditorLayout {
     ///
     /// # 参数
     ///
-    /// - `lines`：`PreparedLayoutHandle.lines`（`EditorLayout` 当前已排版的视觉行切片）。
+    /// - `lines`：`PreparedLayoutHandle.lines`（`EditorLayout` 当前已排版的视觉行集合）。
     ///
     /// # 返回
     ///
     /// 需要查询的视觉行索引列表。受影响段为空段时返回空 `Vec`（空段无 `QTextLayout`，
     /// 不需要提取 raster），调用方对此自然跳过，不回退全量。
-    pub fn affected_visual_line_indices(&self, lines: &[VisualLine]) -> Vec<usize> {
+    pub fn affected_visual_line_indices(
+        &self,
+        lines: &PersistentChunkedVec<VisualLine>,
+    ) -> Vec<usize> {
         if let Some((byte_start, byte_end)) = self.last_edit_affected_range {
             // Issue #901 第三十三轮优化: 与 current_prepared_layout_for_affected 使用
             // 同一 compute_affected_paragraphs_via_index 路径，保证 lease 范围与查询范围

@@ -721,17 +721,51 @@ impl ChunkedSlotMap {
         let new_slot_blocks = Self::split_into_blocks(all_new, self.chunk_capacity);
         let new_blocks: Vec<std::sync::Arc<SlotBlock>> =
             new_slot_blocks.into_iter().map(std::sync::Arc::new).collect();
+        let new_block_count = new_blocks.len();
+        let old_block_count = ec - sc + 1;
+
+        // 保存旧受影响块 [sc, ec] 的 ID 列表，供增量删除 id_to_block 映射。
+        // 在 make_mut 之前用不可变借用收集，避免借用冲突。
+        let old_affected_ids: Vec<ParagraphId> = (sc..=ec)
+            .flat_map(|i| self.blocks[i].ids.iter().copied())
+            .collect();
 
         // 结构共享 splice：make_mut blocks（refcount==1 原地改，refcount>1 O(块数) 浅拷），
         // 替换受影响块。未改块（前缀块 [0,sc) 和后缀块 [ec+1, len)）Arc::clone 共享。
         let blocks_mut = std::sync::Arc::make_mut(&mut self.blocks);
         blocks_mut.splice(sc..=ec, new_blocks);
 
-        // 重建 block_starts 和 id_to_block。
-        let block_starts = Self::compute_block_starts(blocks_mut);
-        let id_to_block = Self::compute_id_to_block(blocks_mut);
-        self.block_starts = std::sync::Arc::new(block_starts);
-        self.id_to_block = std::sync::Arc::new(id_to_block);
+        // 增量更新 id_to_block：不全量重建，只改受影响块和后缀块偏移。
+        let id_map = std::sync::Arc::make_mut(&mut self.id_to_block);
+        // 1. 删除旧受影响块 [sc, ec] 中所有 ID 的映射。
+        for &id in &old_affected_ids {
+            id_map.remove(&id);
+        }
+        // 2. 添加新受影响块中所有 ID 的映射（块索引 = sc + i）。
+        for (i, b) in blocks_mut[sc..sc + new_block_count].iter().enumerate() {
+            for &id in &b.ids {
+                id_map.insert(id, sc + i);
+            }
+        }
+        // 3. 后缀块偏移：若块数变化（delta != 0），后缀块索引需平移。
+        let delta = (new_block_count as isize) - (old_block_count as isize);
+        if delta != 0 {
+            let suffix_start = sc + new_block_count;
+            for i in suffix_start..blocks_mut.len() {
+                for &id in &blocks_mut[i].ids {
+                    id_map.insert(id, i);
+                }
+            }
+        }
+
+        // 增量更新 block_starts：前缀 [0, sc] 不变，从 sc 开始重新累加后续块。
+        let starts = std::sync::Arc::make_mut(&mut self.block_starts);
+        let total_blocks = blocks_mut.len();
+        starts.truncate(sc + 1);
+        for i in sc..total_blocks {
+            let prev = *starts.last().unwrap();
+            starts.push(prev + blocks_mut[i].ids.len());
+        }
 
         self.total_len = self.total_len - (splice_end - splice_start) + new_count;
     }
@@ -946,11 +980,13 @@ impl<T: Clone> PersistentChunkedVec<T> {
         let mut chunks: Vec<Arc<Vec<T>>> = Vec::with_capacity(num_chunks);
         let mut chunk_starts: Vec<usize> = Vec::with_capacity(num_chunks + 1);
         chunk_starts.push(0);
-        let mut remaining = vec;
-        while !remaining.is_empty() {
-            let take = cap.min(remaining.len());
-            // drain moves elements out without cloning.
-            let chunk: Vec<T> = remaining.drain(..take).collect();
+        // 用 into_iter 线性消费，避免 drain(..take) 从前部移除导致的 O(n²/B) 搬移。
+        let mut iter = vec.into_iter();
+        loop {
+            let chunk: Vec<T> = iter.by_ref().take(cap).collect();
+            if chunk.is_empty() {
+                break;
+            }
             chunk_starts.push(chunk_starts.last().unwrap() + chunk.len());
             chunks.push(Arc::new(chunk));
         }
@@ -1038,18 +1074,17 @@ impl<T: Clone> PersistentChunkedVec<T> {
         let need_new_chunk = chunks
             .last()
             .map_or(true, |c| c.len() >= self.chunk_capacity);
+        self.total_len += 1;
         if need_new_chunk {
             chunks.push(Arc::new(vec![value]));
+            // 新建块：push 新的末端，保持 starts.len() == chunks.len() + 1
+            // 且 starts[0] == 0 不变。
+            starts.push(self.total_len);
         } else {
             let last_chunk = chunks.last_mut().unwrap();
             Arc::make_mut(last_chunk).push(value);
-        }
-        self.total_len += 1;
-        // 更新前缀和：最后一位 += 1
-        if *starts.last().unwrap() < self.total_len {
+            // 追加到已有块：仅更新最后一位前缀和。
             *starts.last_mut().unwrap() = self.total_len;
-        } else {
-            starts.push(self.total_len);
         }
     }
 
@@ -1093,23 +1128,19 @@ impl<T: Clone> PersistentChunkedVec<T> {
         let local = len - self.chunk_starts[keep_chunk_idx];
         let chunks = Arc::make_mut(&mut self.chunks);
         let starts = Arc::make_mut(&mut self.chunk_starts);
-        // 截断该块
-        if local > 0 {
+        if local == 0 {
+            // 块边界截断：len 恰好是 keep_chunk_idx 块的起点，
+            // 该块及其后块全部丢弃，只保留前 keep_chunk_idx 个块。
+            // starts[keep_chunk_idx] == len，保留 starts[0..=keep_chunk_idx]。
+            chunks.truncate(keep_chunk_idx);
+            starts.truncate(keep_chunk_idx + 1);
+        } else {
+            // 块内截断：截短目标块到 local 个元素，保留 keep_chunk_idx+1 个块。
             let chunk = Arc::make_mut(&mut chunks[keep_chunk_idx]);
             chunk.truncate(local);
-        }
-        // 移除后续块
-        chunks.truncate(keep_chunk_idx + 1);
-        // 重建前缀和
-        starts.truncate(keep_chunk_idx + 1);
-        if local == 0 {
-            // 整块被移除，starts 已正确
-        } else {
+            chunks.truncate(keep_chunk_idx + 1);
+            starts.truncate(keep_chunk_idx + 1);
             starts.push(len);
-        }
-        // 确保 starts 以 len 结尾
-        if *starts.last().unwrap() != len {
-            *starts.last_mut().unwrap() = len;
         }
         self.total_len = len;
     }
@@ -1175,10 +1206,13 @@ impl<T: Clone> PersistentChunkedVec<T> {
 
         // 2. 插入替换元素，按块容量分块
         if !replacement.is_empty() {
-            let mut remaining = replacement;
-            while !remaining.is_empty() {
-                let take = self.chunk_capacity.min(remaining.len());
-                let chunk: Vec<T> = remaining.drain(..take).collect();
+            // 用 into_iter 线性消费，避免 drain(..take) 从前部移除导致的 O(n²/B) 搬移。
+            let mut iter = replacement.into_iter();
+            loop {
+                let chunk: Vec<T> = iter.by_ref().take(self.chunk_capacity).collect();
+                if chunk.is_empty() {
+                    break;
+                }
                 new_len += chunk.len();
                 new_chunks.push(Arc::new(chunk));
                 new_starts.push(new_len);
@@ -1980,5 +2014,96 @@ mod tests {
         assert_eq!(v[42], v2[41]);
         assert_eq!(v[50], v2[49]);
         assert_eq!(v2.len(), 99);
+    }
+
+    // ── Issue #901 push/truncate 跨块不变量测试 ──
+
+    #[test]
+    fn pcv_push_cross_chunk() {
+        // 块容量 2：push 3 个元素应跨 2 块，验证 chunk_starts 不变量。
+        let mut v = PersistentChunkedVec::with_capacity(2);
+        v.push(10);
+        assert_eq!(v.get(0), Some(&10));
+        assert_eq!(v.to_vec(), vec![10]);
+        v.push(20);
+        v.push(30); // 跨块：第 2 块
+        assert_eq!(v[0], 10);
+        assert_eq!(v[1], 20);
+        assert_eq!(v[2], 30);
+        assert_eq!(v.to_vec(), vec![10, 20, 30]);
+        assert_eq!(v.last(), Some(&30));
+        // 继续跨块
+        v.push(40);
+        v.push(50); // 第 3 块
+        assert_eq!(v.to_vec(), vec![10, 20, 30, 40, 50]);
+        assert_eq!(v.len(), 5);
+    }
+
+    #[test]
+    fn pcv_push_preserves_starts_invariant() {
+        // 大量 push 验证 chunk_starts[0]==0 且 len==chunks+1。
+        let mut v = PersistentChunkedVec::with_capacity(3);
+        for i in 0..20 {
+            v.push(i);
+        }
+        assert_eq!(v.len(), 20);
+        assert_eq!(v.to_vec(), (0..20).collect::<Vec<_>>());
+        // 随机访问跨块
+        assert_eq!(v[0], 0);
+        assert_eq!(v[3], 3);
+        assert_eq!(v[6], 6);
+        assert_eq!(v[19], 19);
+    }
+
+    #[test]
+    fn pcv_truncate_block_boundary() {
+        // 容量 3：[1,2,3],[4,5,6],[7] → truncate(3) 应只保留 [1,2,3]。
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7], 3);
+        v.truncate(3);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.to_vec(), vec![1, 2, 3]);
+        assert_eq!(v.last(), Some(&3));
+        // get 越界返回 None
+        assert_eq!(v.get(3), None);
+    }
+
+    #[test]
+    fn pcv_truncate_within_block() {
+        // 容量 3：[1,2,3],[4,5,6],[7] → truncate(4) 应保留 [1,2,3,4]。
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7], 3);
+        v.truncate(4);
+        assert_eq!(v.len(), 4);
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4]);
+        assert_eq!(v.last(), Some(&4));
+    }
+
+    #[test]
+    fn pcv_truncate_then_access() {
+        // truncate 后继续 get/get_mut/index 应正确。
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(vec![1, 2, 3, 4, 5, 6, 7, 8, 9], 3);
+        v.truncate(6); // 块边界：保留 [1,2,3],[4,5,6]
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(v[5], 6);
+        *v.get_mut(5).unwrap() = 60;
+        assert_eq!(v[5], 60);
+        // 再 truncate 到块内
+        v.truncate(4);
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn pcv_truncate_block_boundary_multi() {
+        // 多块边界截断：容量 2，10 个元素 5 块。
+        let mut v = PersistentChunkedVec::from_vec_with_capacity(
+            (1..=10).collect::<Vec<_>>(),
+            2,
+        );
+        v.truncate(6); // 块边界：保留前 3 块 [1,2],[3,4],[5,6]
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(v.len(), 6);
+        v.truncate(4); // 块边界：保留前 2 块
+        assert_eq!(v.to_vec(), vec![1, 2, 3, 4]);
+        v.truncate(2); // 块边界：保留前 1 块
+        assert_eq!(v.to_vec(), vec![1, 2]);
     }
 }

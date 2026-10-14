@@ -627,43 +627,43 @@ impl LinuxEditorPipeline {
             .as_ref()
             .map(|h| h.generation)
             .unwrap_or_else(|| fallback_gen.unwrap_or(0));
-        let visuals_lines: Vec<crate::editor::layout::VisualLine> =
-            prepared_handle.as_ref().map(|h| h.lines.clone()).unwrap_or_default();
-        let visuals_lines: &[crate::editor::layout::VisualLine] = &visuals_lines;
-        if !visuals_lines.is_empty() {
-            // Issue #901 第三十一轮问题3: 从 prepared_handle 取 lease，
-            // 动画帧持有引用，防止提取动画视觉期间旧 layout 被释放。
-            //
-            // Issue #901 第三十二轮复核问题1: 不整份 clone lease Vec（h.leases.clone()）。
-            // clone 会对每个 lease 调用 retain_layout_ref（FFI retain），随后
-            // visuals_handle drop 又 release，一次 retain / 一次 Drop 变成两次 FFI
-            // 往返。改用 std::mem::take 转移 leases 所有权 — 一次 retain（lease 创建时）/
-            // 一次 Drop（visuals_handle drop），不按 lease 数量翻倍。
-            // prepared_handle 在此之后不再使用 leases（generation 和 lines 已取出到
-            // visuals_gen / visuals_lines），take 后 prepared_handle.leases 为空 Vec，
-            // drop 时不退引用。
-            let leases = prepared_handle
-                .as_mut()
-                .map(|h| std::mem::take(&mut h.leases))
-                .unwrap_or_default();
-            let visuals_handle = layout::PreparedLayoutHandle {
-                generation: visuals_gen,
-                lines: visuals_lines.to_vec(),
-                leases,
-            };
-            // Issue #901 第三十三轮问题2: 只查询受影响段的行，与 lease 范围一致。
-            let all_line_ids: Vec<usize> =
-                editor_layout.affected_visual_line_indices(visuals_lines);
-            let animation_visuals = layout::prepare_animation_visuals_from_layout(
-                &visuals_handle,
-                &all_line_ids,
-                ctx.dpr,
-                &ctx.text_color,
-            );
-            // Issue #785 评论 5857873894 修改 2b: inject 现在返回成功注入行数；
-            // 此处为全量提取路径，忽略返回值（全量注入，失败由 inject 内部诊断记录）。
-            let _ =
-                layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+        // Issue #901 第三十六轮问题3: 先 take leases（可变借用），再用 as_ref 共享 lines。
+        // handle.lines 是 Arc<PersistentChunkedVec<VisualLine>>，Arc::clone O(1)，
+        // 不再 h.lines.clone() 整章复制第一遍 + visuals_lines.to_vec() 第二遍。
+        // prepared_handle 在此之后不再使用，take leases 即使 lines 为空也不影响正确性。
+        let leases = prepared_handle
+            .as_mut()
+            .map(|h| std::mem::take(&mut h.leases))
+            .unwrap_or_default();
+        if let Some(handle) = prepared_handle.as_ref() {
+            if !handle.lines.is_empty() {
+                // Issue #901 第三十一轮问题3: 从 prepared_handle 取 lease，
+                // 动画帧持有引用，防止提取动画视觉期间旧 layout 被释放。
+                //
+                // Issue #901 第三十二轮复核问题1: 不整份 clone lease Vec（h.leases.clone()）。
+                // clone 会对每个 lease 调用 retain_layout_ref（FFI retain），随后
+                // visuals_handle drop 又 release，一次 retain / 一次 Drop 变成两次 FFI
+                // 往返。改用 std::mem::take 转移 leases 所有权 — 一次 retain（lease 创建时）/
+                // 一次 Drop（visuals_handle drop），不按 lease 数量翻倍。
+                let visuals_handle = layout::PreparedLayoutHandle {
+                    generation: visuals_gen,
+                    lines: std::sync::Arc::clone(&handle.lines),
+                    leases,
+                };
+                // Issue #901 第三十三轮问题2: 只查询受影响段的行，与 lease 范围一致。
+                let all_line_ids: Vec<usize> =
+                    editor_layout.affected_visual_line_indices(&handle.lines);
+                let animation_visuals = layout::prepare_animation_visuals_from_layout(
+                    &visuals_handle,
+                    &all_line_ids,
+                    ctx.dpr,
+                    &ctx.text_color,
+                );
+                // Issue #785 评论 5857873894 修改 2b: inject 现在返回成功注入行数；
+                // 此处为全量提取路径，忽略返回值（全量注入，失败由 inject 内部诊断记录）。
+                let _ =
+                    layout::inject_animation_visuals_into_snapshot(&mut doc_snap, animation_visuals);
+            }
         }
 
         // fallback 路径释放临时 generation，不泄漏。
@@ -1785,7 +1785,9 @@ fn retry_failed_animation_visuals(
         // release_retired_layouts 释放，不需要持有 lease。
         let retry_handle = layout::PreparedLayoutHandle {
             generation,
-            lines: new_doc_snapshot.visual_lines.to_vec(),
+            // Issue #901 第三十六轮问题3: visual_lines 已是 Arc<PersistentChunkedVec>，
+            // Arc::clone O(1) 共享，不 to_vec() 整章复制。
+            lines: std::sync::Arc::clone(&new_doc_snapshot.visual_lines),
             leases: Vec::new(),
         };
         layout::prepare_animation_visuals_from_layout(

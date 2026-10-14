@@ -288,7 +288,14 @@ impl SujianEditorItem {
             // 当前帧内不会被 release_retired_layouts 释放，不需要持有 lease。
             let handle = crate::editor::layout::PreparedLayoutHandle {
                 generation,
-                lines: resolved_lines.to_vec(),
+                // Issue #901 第三十六轮问题3: lines 改为 Arc<PersistentChunkedVec>。
+                // resolved_lines 后续仍需使用，此处 to_vec() clone 一次后 from_vec move，
+                // 不额外 clone。此为同帧临时 handle，非核心热路径。
+                lines: Arc::new(
+                    crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
+                        resolved_lines.to_vec(),
+                    ),
+                ),
                 leases: Vec::new(),
             };
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
@@ -555,7 +562,13 @@ impl SujianEditorItem {
                 // layout 刚排版完成，当前帧内不会被释放，不需要持有 lease。
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
-                lines: resolved_lines.to_vec(),
+                    // Issue #901 第三十六轮问题3: lines 改为 Arc<PersistentChunkedVec>。
+                    // resolved_lines 后续仍需使用，此处 to_vec() clone 一次后 from_vec move。
+                    lines: Arc::new(
+                        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
+                            resolved_lines.to_vec(),
+                        ),
+                    ),
                     leases: Vec::new(),
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
@@ -647,19 +660,23 @@ impl SujianEditorItem {
         Ok((snapshot, doc_snapshot))
     }
 
-    pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> Vec<VisualLine> {
+    pub(crate) fn ensure_layout_cached(
+        &mut self,
+        width: f64,
+    ) -> Arc<crate::editor::layout::chunked_vec::PersistentChunkedVec<VisualLine>> {
         let params = self.layout_params(width);
-        // Issue #901 第三十六轮问题3: LayoutSnapshot.lines 现为 Arc<PersistentChunkedVec<VisualLine>>，
-        // to_vec() 收集为 Vec<VisualLine>。
-        self
-            .editor_layout
-            .snapshot(
-                self.pipeline.committed_text(),
-                params,
-                self.pipeline.text_revision(),
-            )
-            .lines
-            .to_vec()
+        // Issue #901 第三十六轮问题3: Arc::clone 共享 LayoutSnapshot.lines，
+        // 不 to_vec() 整章复制 VisualLine（其中有 para_text: String）。
+        Arc::clone(
+            &self
+                .editor_layout
+                .snapshot(
+                    self.pipeline.committed_text(),
+                    params,
+                    self.pipeline.text_revision(),
+                )
+                .lines,
+        )
     }
 
     pub(crate) fn adjust_affinity_at_wrap_boundary(&mut self) {
