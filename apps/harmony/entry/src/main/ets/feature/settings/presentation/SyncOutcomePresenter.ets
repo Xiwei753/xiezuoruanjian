@@ -25,13 +25,13 @@ export class SyncOutcomePresenter {
     }
     // messageKey 缺失：尝试用 errorCategory 推断用户可读原因
     if (outcome.errorCategory !== undefined && outcome.errorCategory.trim().length > 0) {
-      const mapped: string = MessageKeyMapper.resolveMessage(
-        context, outcome.errorCategory, outcome.messageArgs, outcome.errorCategory)
-      // 如果映射结果不是兜底文案，说明 errorCategory 已命中；否则继续回退 errorCode
-      if (mapped !== context.resourceManager.getStringSync($r('app.string.error_other').id)) {
-        return mapped
+      const categoryMessage: string | undefined = MessageKeyMapper.resolveSyncErrorCategory(
+        context, outcome.errorCategory, outcome.messageArgs)
+      if (categoryMessage !== undefined) {
+        return categoryMessage
       }
     }
+    // errorCategory 未命中或缺失：按 errorCode 回退
     return MessageKeyMapper.resolveMessage(context, undefined, undefined, outcome.errorCode)
   }
 }
