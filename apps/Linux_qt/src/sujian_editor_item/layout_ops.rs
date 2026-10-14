@@ -639,6 +639,9 @@ impl SujianEditorItem {
                     text_indent: text_indent as f32,
                     padding: padding as f32,
                     old_generation: 0,
+                    // Issue #901 第三十七轮问题3: IME commit 是普通文本编辑 promotion，
+                    // 走接管版本根路径（O(段落数)），不走全篇 rebuild。
+                    full_rebuild: false,
                 },
             ));
         } else {

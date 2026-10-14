@@ -2126,6 +2126,167 @@ impl ParagraphLayoutStore {
         // C++ LayoutGeneration 的 freelist 管理，无需在此同步高水位。
     }
 
+    /// Issue #901 第三十七轮问题3: 从 canonical snapshot 接管段落布局数据，
+    /// 不从全文 text 重建 Store，不复制全部 VisualLine，不扫描全部视觉行。
+    ///
+    /// `promote_prepared_layout` 调用此方法直接接管 canonical snapshot 中的
+    /// 段落根、视觉行索引、高度索引和 ParagraphId→slot 映射，替代旧的
+    /// `rebuild_from_text` + `sync_from_visual_lines` 全篇重建路径。
+    ///
+    /// # 复杂度
+    ///
+    /// O(段落数) — 遍历 `snapshot.paragraphs` 构造 entries，每段 O(1) 从索引
+    /// 查询 `visual_line_count`/`height`/`cache_slot`/`layout_epoch`/`paragraph_id`，
+    /// 不遍历全文 text（省去 `split_paragraphs_with_hard_break` 的 O(文本长度)），
+    /// 不复制全部 VisualLine（省去 `to_vec()` 的 O(视觉行数) 深拷贝），
+    /// 不扫描全部视觉行（省去 `sync_from_visual_lines` 的 O(视觉行数) 分组统计）。
+    ///
+    /// # 语义
+    ///
+    /// - 旧 `entries` 中所有有效 Qt handle 推入 `retired_slots`，由
+    ///   `release_retired_layouts` 统一释放。
+    /// - `id_to_slot_cache`/`line_count_index`/`byte_offset_index` 直接 `Arc::clone`
+    ///   接管 snapshot 中的对应索引，O(1) 共享，不重建。
+    /// - `next_id` 更新为已接管 Id 之上的值，避免后续分配冲突。
+    /// - `relative_lines` 设为空 Vec，与旧 `rebuild_from_text` + `sync_from_visual_lines`
+    ///   路径的行为一致（旧路径也不设置 `relative_lines`）。
+    pub fn adopt_from_canonical_snapshot(
+        &mut self,
+        snapshot: &super::CanonicalDocumentVisualSnapshot,
+        layout_generation: u64,
+        font_size: f64,
+        font_family: &str,
+        line_spacing: f64,
+        text_indent: f64,
+        padding: f64,
+        width: f64,
+    ) {
+        let para_count = snapshot.paragraphs.len();
+
+        // 1. 释放旧 entries 中所有有效 handle 到 retired_slots。
+        //    与 `clear` 不同：不清空索引（索引将被 Arc::clone 接管），
+        //    只收集旧 handle 供 release_retired_layouts 释放。
+        let mut newly_retired: Vec<(u64, i32, u64)> = Vec::new();
+        for entry in &self.entries {
+            if entry.layout_generation != 0 && entry.cache_slot >= 0 {
+                newly_retired.push((entry.layout_generation, entry.cache_slot, entry.layout_epoch));
+            }
+        }
+        self.retired_slots.extend(newly_retired);
+
+        // 2. 从 snapshot.paragraphs 构造新 entries（O(段落数)）。
+        //    每段从索引 O(1) 查询 visual_line_count/height/cache_slot/layout_epoch/paragraph_id，
+        //    不遍历全文 text，不复制全部 VisualLine，不扫描全部视觉行。
+        let mut new_entries: Vec<ParagraphLayoutEntry> = Vec::with_capacity(para_count);
+        let mut max_id: u64 = 0;
+
+        for i in 0..para_count {
+            let Some(canon_para) = snapshot.paragraphs.get(i) else {
+                // 防御性处理：paragraphs 与 para_count 应一致，不应触发。
+                break;
+            };
+            let paragraph_text = &canon_para.paragraph_text;
+            let paragraph_text_len = paragraph_text.len();
+            let document_byte_start = canon_para.paragraph_document_byte_start;
+
+            // cache_key 从段落文本和排版参数构建。
+            let cache_key = ParagraphLayoutCacheKey::build(
+                paragraph_text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+
+            // visual_line_count 从 paragraph_line_count_index 查询（O(1)）。
+            let (line_start, line_end) =
+                snapshot.paragraph_line_count_index.paragraph_line_range(i);
+            let visual_line_count = line_end.saturating_sub(line_start);
+
+            // height 从 height_index 查询（O(1)）。
+            let height = snapshot.height_index.height_at(i);
+
+            // hard_break 从 paragraph_offset_index 的 byte_length 推断。
+            // byte_length 含尾部 '\n'，paragraph_text_len 不含。
+            let byte_length = snapshot.paragraph_offset_index.byte_length_at(i);
+            let hard_break = byte_length > paragraph_text_len;
+
+            // 从 visual_lines 首行提取 cache_slot/layout_epoch/paragraph_id（O(1)）。
+            // 同一段所有行的 cache_slot/layout_epoch/paragraph_id 相同，
+            // 只读首行即可，不扫描该段全部行。
+            let is_empty = paragraph_text_len == 0;
+            let (cache_slot, layout_epoch, paragraph_id) =
+                if visual_line_count > 0 && line_start < snapshot.visual_lines.len() {
+                    match snapshot.visual_lines.get(line_start) {
+                        Some(first_line) => {
+                            if first_line.paragraph_id != ParagraphId::INVALID
+                                && first_line.paragraph_id.as_u64() > max_id
+                            {
+                                max_id = first_line.paragraph_id.as_u64();
+                            }
+                            if is_empty {
+                                // 空段不分配物理槽（与 sync_from_visual_lines 语义一致）。
+                                (-1i32, 0u64, first_line.paragraph_id)
+                            } else {
+                                (
+                                    first_line.cache_slot,
+                                    first_line.layout_epoch,
+                                    first_line.paragraph_id,
+                                )
+                            }
+                        }
+                        None => (-1i32, 0u64, ParagraphId::INVALID),
+                    }
+                } else {
+                    // 无视觉行（理论上不应发生，但防御性处理）。
+                    (-1i32, 0u64, ParagraphId::INVALID)
+                };
+
+            // 如果 paragraph_id 是 INVALID，分配新 Id。
+            let id = if paragraph_id == ParagraphId::INVALID {
+                let new_id = ParagraphId::from_u64(self.next_id);
+                self.next_id += 1;
+                if new_id.as_u64() > max_id {
+                    max_id = new_id.as_u64();
+                }
+                new_id
+            } else {
+                paragraph_id
+            };
+
+            new_entries.push(ParagraphLayoutEntry {
+                id,
+                cache_key,
+                layout_generation,
+                cache_slot,
+                layout_epoch,
+                document_byte_start,
+                paragraph_text_len,
+                height,
+                visual_line_count,
+                hard_break,
+                is_empty_laid_out: is_empty,
+                relative_lines: Vec::new(),
+            });
+        }
+
+        self.entries = PersistentChunkedVec::from_vec(new_entries);
+
+        // 3. 直接 Arc::clone 接管索引（O(1) 共享）。
+        //    id_to_slot_cache/line_count_index/byte_offset_index 与 snapshot
+        //    共享同一份底层数据，不重建。
+        self.id_to_slot_cache = Arc::clone(&snapshot.paragraph_id_to_slot);
+        self.line_count_index = Arc::clone(&snapshot.paragraph_line_count_index);
+        self.byte_offset_index = Arc::clone(&snapshot.paragraph_offset_index);
+
+        // 4. 更新 next_id，避免后续分配与已接管 Id 冲突。
+        if max_id >= self.next_id {
+            self.next_id = max_id + 1;
+        }
+    }
+
     /// 获取所有段落的 `ParagraphId` 列表（按文档顺序）。
     pub fn paragraph_ids(&self) -> Vec<ParagraphId> {
         self.entries.iter().map(|e| e.id).collect()

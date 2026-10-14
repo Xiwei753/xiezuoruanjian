@@ -496,30 +496,58 @@ impl EditorLayout {
         let padding = promoted.padding as f64;
         let width = promoted.width;
 
-        self.paragraph_store.rebuild_from_text(
-            text,
-            font_size,
-            font_family,
-            line_spacing,
-            text_indent,
-            padding,
-            width,
-        );
-        let promoted_vls = promoted.visual_lines.to_vec();
-        self.paragraph_store
-            .sync_from_visual_lines(&promoted_vls, promoted.generation);
+        // Issue #901 第三十七轮问题3: promotion 不再无条件全篇重建 Store。
+        // - full_rebuild=true（字体/宽度全局变化、初始化）→ 走全篇 rebuild。
+        // - full_rebuild=false（普通文本编辑 promotion）→ 接管版本根，
+        //   直接从 canonical snapshot 接管段落布局数据和索引（O(段落数)），
+        //   不从 text 重建 Store，不复制全部 VisualLine，不扫描全部视觉行。
+        if promoted.full_rebuild {
+            self.paragraph_store.rebuild_from_text(
+                text,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+            let promoted_vls = promoted.visual_lines.to_vec();
+            self.paragraph_store
+                .sync_from_visual_lines(&promoted_vls, promoted.generation);
 
-        // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义后，
-        // 旧 generation 的 Store 初始引用（refcount=1）不再被 clear 暴力 delete 释放，
-        // 需要由 release_retired_layouts 显式退引用。rebuild_from_text 和 sync_from_visual_lines
-        // 把未被继承的旧 handle 推入 retired_slots，此处统一释放。
-        // - 无存活 lease（clear 已 delete+erase）：release 找不到 generation，安全 return。
-        // - 有存活 lease（clear 标记 retired）：release 减 Store 的 refcount，lease 仍持有引用，
-        //   layout 不被 delete；最后一个 lease Drop 时才 delete + erase generation。
-        self.paragraph_store.release_retired_layouts();
+            // Issue #901 第三十二轮复核问题2: clear_layout_generation 改为 retired 标记语义后，
+            // 旧 generation 的 Store 初始引用（refcount=1）不再被 clear 暴力 delete 释放，
+            // 需要由 release_retired_layouts 显式退引用。rebuild_from_text 和 sync_from_visual_lines
+            // 把未被继承的旧 handle 推入 retired_slots，此处统一释放。
+            self.paragraph_store.release_retired_layouts();
 
-        let heights = self.paragraph_store.paragraph_heights();
-        Arc::make_mut(&mut self.height_index).rebuild(heights);
+            let heights = self.paragraph_store.paragraph_heights();
+            Arc::make_mut(&mut self.height_index).rebuild(heights);
+        } else {
+            // Issue #901 第三十七轮问题3: 接管版本根路径。
+            // adopt_from_canonical_snapshot 从 canonical snapshot 接管段落布局数据：
+            // - entries 从 snapshot.paragraphs 构造（O(段落数)），每段 O(1) 从索引
+            //   查询 visual_line_count/height/cache_slot/layout_epoch/paragraph_id。
+            // - id_to_slot_cache/line_count_index/byte_offset_index 直接 Arc::clone 接管。
+            // 不调用 rebuild_from_text（省去 O(文本长度) 分段），
+            // 不调用 visual_lines.to_vec()（省去 O(视觉行数) 深拷贝），
+            // 不调用 sync_from_visual_lines（省去 O(视觉行数) 分组统计）。
+            self.paragraph_store.adopt_from_canonical_snapshot(
+                &promoted.canonical_snapshot,
+                promoted.generation,
+                font_size,
+                font_family,
+                line_spacing,
+                text_indent,
+                padding,
+                width,
+            );
+            // 旧 handle 推入 retired_slots 后统一释放（与全篇 rebuild 路径对称）。
+            self.paragraph_store.release_retired_layouts();
+            // height_index 直接 Arc::clone 接管 canonical snapshot 的 height_index，
+            // 不调用 paragraph_heights() + rebuild(heights)（省去 O(段落数) 重建）。
+            self.height_index = Arc::clone(&promoted.canonical_snapshot.height_index);
+        }
 
         // Issue #901 第三轮复核问题 5: 不再把 last_snapshot 设为 None。
         // Issue #901 第十八轮问题1+2: 直接使用 promoted 携带的完整 canonical snapshot，

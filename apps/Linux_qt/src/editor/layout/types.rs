@@ -502,6 +502,14 @@ pub struct PromotedLayout {
     /// Issue #658 评论 5624570557 问题 1: 旧的 generation，在 promote 完成后释放。
     /// old 动画纹理提取完成后，等 new prepared layout 真正成为 current，再释放旧 generation。
     pub old_generation: u64,
+    /// Issue #901 第三十七轮问题3: 是否需要全篇 rebuild Store。
+    ///
+    /// - `false`（默认）: 普通文本编辑 promotion，直接从 `canonical_snapshot`
+    ///   接管段落布局数据和索引（O(段落数)），不从 text 重建 Store，
+    ///   不复制全部 VisualLine，不扫描全部视觉行。
+    /// - `true`: 字体/宽度等真正全局变化或初始化，走全篇 rebuild
+    ///   （`rebuild_from_text` + `sync_from_visual_lines`）。
+    pub full_rebuild: bool,
 }
 
 /// Issue #901 第三十轮问题1+3: Qt 布局不可变标识 — `(generation, physical_slot, epoch)` 三元组。
