@@ -46,7 +46,8 @@
 | display.isFoldable | @kit.ArkUI (display) | 10 | SystemCapability.Window.SessionManager | 无 | 否 | window/TabletWindowPolicy.ets |
 | setPreferredOrientation | @kit.ArkUI (window) | 9 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
 | setWindowSystemBarEnable | @kit.ArkUI (window) | 12 | 无独立 SystemCapability | 无 | 否 | window/TabletWindowPolicy.ets |
-| getWindowStatus / windowStatusChange | @kit.ArkUI (window) | 12（getWindowStatus）/ 11（windowStatusChange） | SystemCapability.Window.SessionManager | 无 | 否 | ui/adaptive/AdaptiveContext.ets |
+| getWindowStatus / windowStatusChange | @kit.ArkUI (window) | 12（getWindowStatus）/ 11（windowStatusChange） | SystemCapability.Window.SessionManager | 无 | 否 | window/TabletWindowPolicy.ets, ui/adaptive/AdaptiveContext.ets |
+| 网络状态（hasDefaultNet / isDefaultNetMetered） | @kit.NetworkKit (connection) | 12 | SystemCapability.Communication.NetManager.Core | ohos.permission.GET_NETWORK_INFO | 否 | corebridge/NativeWriterCoreBridge.ets |
 
 > 说明：标"未限定独立 API/SystemCapability"的项，是该能力随所属 Kit/ArkUI 整体可用、官方未为它单独声明起始 API Level 或 SystemCapability。已查 HarmonyOS 官方文档与本机 SDK d.ts 确认无独立声明，不是未核实留空。
 
@@ -606,3 +607,20 @@ shareFiles profile 的路径配置分两层：`scopes` 控制共享文件范围�
   - 官方沉浸式窗口：https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/immersive-window-feature
   - 官方自由窗口：https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/freeform-window
   - 官方折叠判别：https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-purax-12
+
+## 网络状态（hasDefaultNet / isDefaultNetMetered）
+
+- Kit：`@kit.NetworkKit`（`connection` 模块）
+- 接口：
+  - `connection.hasDefaultNet(): Promise<boolean>` — 查询是否有默认激活的数据网络（API12+）
+  - `connection.isDefaultNetMetered(): Promise<boolean>` — 查询默认网络是否按流量计费（API12+）
+- 最低 API：12
+- SystemCapability：`SystemCapability.Communication.NetManager.Core`
+- 权限：`ohos.permission.GET_NETWORK_INFO`（system_grant，normal，`provisionEnable=false`，**不需要 ACL**）
+- fallback：查询失败时保持默认值（在线、非计费），不阻塞初始化；不伪造网络状态
+- 实现文件：`corebridge/NativeWriterCoreBridge.ets`（`initialize()` 方法中查询真实网络状态并传递给 Rust `writer_core_init_harmony`）
+- 语义边界：
+  - `is_connected`：`hasDefaultNet` 返回 `true` = 在线，`false` = 离线
+  - `is_metered`：`isDefaultNetMetered` 返回 `true` = 计费网络（蜂窝/个人热点），`false` = 非计费网络（WiFi/以太网）
+  - 无默认网络时 `isDefaultNetMetered` 不调用，`is_metered` 保持默认 `false`
+- 说明：网络状态用于 Core 侧 `PlatformServices` 的 `NetworkState`，影响同步传输工厂是否允许后台同步（计费网络下可能限制大流量同步）。官方文档：https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/capi-net-connection-h

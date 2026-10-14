@@ -132,8 +132,8 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 // ── Core lifecycle ──
 
 // NativeInit: Initialize core with Harmony-specific PlatformServices injection.
-//   Accepts 7 arguments: app_data_root, files_dir, cache_dir, device_id, app_version, locale, timezone.
-//   For backward compatibility, if only 1 argument is provided (app_data_root), the rest are passed as null
+//   Accepts 9 arguments: app_data_root, files_dir, cache_dir, device_id, app_version, locale, timezone, is_connected, is_metered.
+//   For backward compatibility, if only 1 argument is provided (app_data_root), the rest are passed as null/0
 //   and Rust-side defaults apply.
 //   Returns int32 status code:
 //     0 = success
@@ -141,8 +141,8 @@ static napi_value ReturnJsonString(napi_env env, char* json) {
 //     -2 = invalid UTF-8
 //     -4 = bootstrap failed
 static napi_value NativeInit(napi_env env, napi_callback_info info) {
-    size_t argc = 7;
-    napi_value args[7];
+    size_t argc = 9;
+    napi_value args[9];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     if (argc < 1) {
@@ -162,13 +162,15 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
 
     napi_get_value_string_utf8(env, args[0], app_data_root, sizeof(app_data_root), &len);
 
-    // Optional arguments: only read if provided, otherwise pass null to Rust
+    // Optional arguments: only read if provided, otherwise pass null/0 to Rust
     const char* p_files_dir = nullptr;
     const char* p_cache_dir = nullptr;
     const char* p_device_id = nullptr;
     const char* p_app_version = nullptr;
     const char* p_locale = nullptr;
     const char* p_timezone = nullptr;
+    int32_t is_connected = -1;  // 未知（未提供时不得伪造成在线）
+    int32_t is_metered = -1;    // 未知
 
     if (argc >= 2) {
         napi_get_value_string_utf8(env, args[1], files_dir, sizeof(files_dir), &len);
@@ -194,16 +196,50 @@ static napi_value NativeInit(napi_env env, napi_callback_info info) {
         napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
         p_timezone = timezone;
     }
+    if (argc >= 8) {
+        napi_get_value_int32(env, args[7], &is_connected);
+    }
+    if (argc >= 9) {
+        napi_get_value_int32(env, args[8], &is_metered);
+    }
 
-    OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init_harmony with app_data_root='%{public}s' (argc=%{public}zu)",
-                app_data_root, argc);
+    OH_LOG_INFO(LOG_APP, "NativeInit: calling writer_core_init_harmony with app_data_root='%{public}s' (argc=%{public}zu, is_connected=%{public}d, is_metered=%{public}d)",
+                app_data_root, argc, is_connected, is_metered);
     int32_t result = writer_core_init_harmony(app_data_root, p_files_dir, p_cache_dir,
-                                               p_device_id, p_app_version, p_locale, p_timezone);
+                                               p_device_id, p_app_version, p_locale, p_timezone,
+                                               is_connected, is_metered);
     OH_LOG_INFO(LOG_APP, "NativeInit: writer_core_init_harmony returned %{public}d", result);
 
     if (result != 0) {
         OH_LOG_ERROR(LOG_APP, "NativeInit: FAILED with code %{public}d (app_data_root='%{public}s')", result, app_data_root);
     }
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
+// NativeUpdateNetworkState: Update the Core's cached network state from the platform's
+//   current query result. Three-state ints: 1 = yes, 0 = no, -1 = unknown (clears the
+//   cached state, never fabricates online). Returns the Core status code (0 on success).
+static napi_value NativeUpdateNetworkState(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    int32_t is_connected = -1;
+    int32_t is_metered = -1;
+    if (argc >= 1) {
+        napi_get_value_int32(env, args[0], &is_connected);
+    }
+    if (argc >= 2) {
+        napi_get_value_int32(env, args[1], &is_metered);
+    }
+
+    int32_t result = writer_core_update_network_state(is_connected, is_metered);
+    OH_LOG_INFO(LOG_APP,
+                "NativeUpdateNetworkState: is_connected=%{public}d is_metered=%{public}d returned %{public}d",
+                is_connected, is_metered, result);
 
     napi_value ret;
     napi_create_int32(env, result, &ret);
@@ -564,6 +600,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     // Core lifecycle + layout + misc descriptors
     napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeUpdateNetworkState", nullptr, NativeUpdateNetworkState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeInitDiagnostics", nullptr, NativeInitDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSetDiagnosticsConfig", nullptr, NativeSetDiagnosticsConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeFlushDiagnostics", nullptr, NativeFlushDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},

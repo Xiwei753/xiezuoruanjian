@@ -581,10 +581,13 @@ fn harmony_wire_contract_matches_fixture() {
     let event = cstr(&format!(
         r#"{{"platform":"harmony","projectId":"{project_id}","volumeId":"{volume_id}","chapterId":"{chapter_id}","cause":"Typing","insertedChars":5,"deletedChars":0}}"#
     ));
+    // SAFETY: event 为测试持有的合法 NUL 结尾 C 字符串。
+    let ok = unsafe { stats::writer_core_record_editor_change_stats(event.as_ptr()) };
+    assert!(ok, "recordEditorChangeStats 实际 FFI 调用失败");
     let _ = note(
         &mut out,
         "recordEditorChangeStats",
-        &call1(stats::writer_core_record_editor_change_stats, &event),
+        &serde_json::json!({ "success": ok, "data": ok }).to_string(),
     );
     let _ = note(
         &mut out,

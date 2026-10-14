@@ -1,6 +1,8 @@
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
@@ -79,6 +81,9 @@ export struct WorkspaceScreen {
       AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }
 
+    // 注册同步完成事件监听
+    this.subscribeSyncEvent()
+
     const self = this
     this.themeObserver = new ThemeObserverImpl((theme: ThemeConfig) => {
       self.themeConfig = theme
@@ -99,6 +104,8 @@ export struct WorkspaceScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // 取消同步完成事件监听
+    this.unsubscribeSyncEvent()
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
@@ -212,6 +219,54 @@ export struct WorkspaceScreen {
       return getContext(this).resourceManager.getStringSync($r('app.string.days_ago_format').id).replace('%s', `${days}`)
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+  }
+
+  // ─── 同步完成事件监听 ───
+
+  // emitter.on(event, callback) 返回 void，没有订阅 ID 可保存。
+  // 保存回调函数本身，才能用 emitter.off(eventId, callback) 精确解绑本页面，
+  // 不会像 emitter.off(eventId) 那样一次取消所有页面（首页 / 工作区）的订阅。
+  private syncChangedHandler: ((data: emitter.EventData) => void) | null = null
+
+  /**
+   * 注册同步完成事件监听
+   * 收到通知后刷新工作区数据
+   */
+  private subscribeSyncEvent(): void {
+    if (this.syncChangedHandler !== null) {
+      return
+    }
+    const handler = (_data: emitter.EventData): void => {
+      hilog.info(0x0000, 'WorkspaceScreen', 'received sync content changed event, refreshing data')
+      // 同步完成后刷新工作区数据
+      if (this.viewModel.projectId) {
+        this.viewModel.loadData(this.viewModel.projectId)
+      }
+    }
+    this.syncChangedHandler = handler
+    try {
+      emitter.on({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID }, handler)
+      hilog.info(0x0000, 'WorkspaceScreen', 'subscribed to sync content changed event')
+    } catch (e) {
+      this.syncChangedHandler = null
+      hilog.error(0x0000, 'WorkspaceScreen', 'failed to subscribe sync event: %{public}s', String(e))
+    }
+  }
+
+  /**
+   * 取消同步完成事件监听
+   */
+  private unsubscribeSyncEvent(): void {
+    const handler = this.syncChangedHandler
+    if (handler !== null) {
+      try {
+        emitter.off(SYNC_CONTENT_CHANGED_EVENT_ID, handler)
+        hilog.info(0x0000, 'WorkspaceScreen', 'unsubscribed from sync content changed event')
+      } catch (e) {
+        hilog.error(0x0000, 'WorkspaceScreen', 'failed to unsubscribe sync event: %{public}s', String(e))
+      }
+      this.syncChangedHandler = null
     }
   }
 

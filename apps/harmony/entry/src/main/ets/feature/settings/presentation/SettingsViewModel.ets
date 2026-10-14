@@ -21,6 +21,7 @@ import { HarmonyDiagnosticsExporter, DiagnosticsSaveResult } from '../../../plat
 import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagnosticsBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { SyncOperationController, SyncOutcome } from './SyncOperationController'
+import { SyncMessagePayload } from './SyncMessagePayload'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
 const TAG = 'SettingsViewModel'
@@ -286,6 +287,9 @@ export class SettingsViewModel {
   }
 
   // ── 执行同步 ──
+  // 原样传递 outcome.messageKey + errorCode + messageArgs + errorCategory + rawError + overallStatus，
+  // 不再机械构造 error.${errorKey} 或 sync_complete:${n}。
+  // syncMessage 现在是 JSON 字符串，UI 层解析后调用 MessageKeyMapper.resolveMessage 做本地化。
 
   async performSync(): Promise<void> {
     this.isSyncing = true
@@ -295,13 +299,36 @@ export class SettingsViewModel {
       const controller = SyncOperationController.getInstance()
       const outcome = await controller.performSync()
       if (outcome.phase === 'success') {
-        this.syncMessage = `sync_complete:${outcome.totalDownloaded ?? 0}`
+        // 成功：传递 messageKey / messageArgs / totalDownloaded / overallStatus
+        const payload: SyncMessagePayload = {
+          phase: 'success',
+          messageKey: outcome.messageKey ?? 'sync_complete',
+          messageArgs: outcome.messageArgs,
+          totalDownloaded: outcome.totalDownloaded,
+          overallStatus: outcome.overallStatus
+        }
+        this.syncMessage = JSON.stringify(payload)
       } else {
-        this.syncMessage = `error:${outcome.errorCode ?? 'sync_error'}`
+        // 失败：原样传递 Core 类型化字段，不再构造 error.${errorKey}
+        const payload: SyncMessagePayload = {
+          phase: 'failed',
+          messageKey: outcome.messageKey,
+          messageArgs: outcome.messageArgs,
+          errorCode: outcome.errorCode,
+          errorCategory: outcome.errorCategory,
+          rawError: outcome.rawError,
+          overallStatus: outcome.overallStatus
+        }
+        this.syncMessage = JSON.stringify(payload)
       }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to perform sync: ${err}`)
-      this.syncMessage = 'error:sync_error'
+      const payload: SyncMessagePayload = {
+        phase: 'failed',
+        errorCode: 'sync_error',
+        rawError: String(err)
+      }
+      this.syncMessage = JSON.stringify(payload)
     } finally {
       this.isSyncing = false
     }

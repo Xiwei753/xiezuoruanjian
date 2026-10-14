@@ -166,7 +166,16 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 /// ## 参数
 ///
 /// 所有 `*const c_char` 参数均为 NUL-terminated UTF-8 C 字符串。`app_data_root`
-/// 为 null 时返回 `-1`。其余参数为 null 时使用空字符串默认值。
+/// 为 null 或空串时返回 `-5`（非法路径），不做隐式 cwd 兜底。
+/// `files_dir` 为 null / 空串时回退到 `app_data_root`（两者本应指向同一 WriterCore 数据根）；
+/// `cache_dir` 为 null / 空串时回退到 `app_data_root`。`device_id` / `app_version` /
+/// `locale` / `timezone` 为 null 时使用空字符串。
+/// `is_connected` 和 `is_metered` 来自 ArkTS 网络状态查询，是三态：
+/// - `1` = 在线 / 计费
+/// - `0` = 离线 / 非计费
+/// - `-1` = 未知（查询失败）
+///
+/// 连通性为未知时不注入伪造的在线状态，`network_state` 记为 `None`。
 ///
 /// ## 返回码
 ///
@@ -174,6 +183,7 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 /// - `-1` `app_data_root` 为 null
 /// - `-2` 任一参数含无效 UTF-8
 /// - `-4` bootstrap 失败
+/// - `-5` `app_data_root` 为空串（非法路径）
 ///
 /// ## Safety
 ///
@@ -187,36 +197,35 @@ pub unsafe extern "C" fn writer_core_init_harmony(
     app_version: *const c_char,
     locale: *const c_char,
     timezone: *const c_char,
+    is_connected: i32,
+    is_metered: i32,
 ) -> i32 {
     let app_data_root_str = match c_str_to_rust(app_data_root) {
         Ok(s) => s,
         Err(e) => return e,
     };
-    // files_dir 默认与 app_data_root 相同。
-    let files_dir_str = match c_str_to_rust(files_dir) {
-        Ok(s) => s,
-        Err(_) => app_data_root_str.clone(),
-    };
+    // 明确拒绝空路径：不允许隐式以进程 cwd 作为配置目录。
+    if app_data_root_str.trim().is_empty() {
+        log::error!("writer_core_init_harmony: app_data_root is empty, refusing to init");
+        return -5;
+    }
+    // files_dir 默认与 app_data_root 相同，二者应是同一个 WriterCore 数据根，
+    // 这样 PlatformInit.app_data_dir 与 Core 的 app_data_root 配置契约一致。
+    let files_dir_str = non_empty_or(files_dir, &app_data_root_str);
+    // cache_dir 必须是真实缓存目录；缺失时回退到数据根，但记录警告。
     let cache_dir_str = match c_str_to_rust(cache_dir) {
-        Ok(s) => s,
-        Err(_) => app_data_root_str.clone(),
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => {
+            log::warn!(
+                "writer_core_init_harmony: cache_dir missing, falling back to app_data_root"
+            );
+            app_data_root_str.clone()
+        }
     };
-    let device_id_str = match c_str_to_rust(device_id) {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
-    let app_version_str = match c_str_to_rust(app_version) {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
-    let locale_str = match c_str_to_rust(locale) {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
-    let timezone_str = match c_str_to_rust(timezone) {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
+    let device_id_str = c_str_to_rust(device_id).unwrap_or_default();
+    let app_version_str = c_str_to_rust(app_version).unwrap_or_default();
+    let locale_str = c_str_to_rust(locale).unwrap_or_default();
+    let timezone_str = c_str_to_rust(timezone).unwrap_or_default();
 
     let platform_init = create_platform_init(
         PathBuf::from(files_dir_str),
@@ -227,12 +236,31 @@ pub unsafe extern "C" fn writer_core_init_harmony(
         timezone_str,
     );
 
-    let services = super::services::create_platform_services(platform_init, true, false);
+    // 三态网络状态：-1 = 未知，0 = 否，1 = 是。
+    let connected = tri_state(is_connected);
+    let metered = tri_state(is_metered);
+
+    let services = super::services::create_platform_services(platform_init, connected, metered);
 
     // SAFETY: app_data_root_str 是有效的 NUL-terminated UTF-8 C string 的 Rust 拷贝。
     let path_c = std::ffi::CString::new(app_data_root_str).unwrap_or_default();
     // SAFETY: path_c 是有效的 NUL-terminated UTF-8 C string，services 是 Rust 端构造的合法 PlatformServices。
-    unsafe {
-        writer_core::ffi::writer_core_init_with_services(path_c.as_ptr(), services)
+    unsafe { writer_core::ffi::writer_core_init_with_services(path_c.as_ptr(), services) }
+}
+
+/// 把 C ABI 的三态整数转换为 `Option<bool>`：`-1`（或任意负数）= 未知。
+fn tri_state(value: i32) -> Option<bool> {
+    match value {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
+/// 非空则用提供的路径，否则回退到默认值。
+fn non_empty_or(ptr: *const c_char, default: &str) -> String {
+    match c_str_to_rust(ptr) {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => default.to_string(),
     }
 }

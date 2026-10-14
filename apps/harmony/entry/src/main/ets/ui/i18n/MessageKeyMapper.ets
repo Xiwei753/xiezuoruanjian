@@ -42,6 +42,7 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.error_sync_failed_message').id)
       case 'error.token_missing':
         return context.resourceManager.getStringSync($r('app.string.sync_token_missing').id)
+      case 'error.sync_auth_failed':
       case 'error.token_invalid':
       case 'error.token_permission_denied':
       case 'error.auth_error':
@@ -76,6 +77,53 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.sync_network_failed').id)
       case 'error.dirty_repo_blocked':
         return context.resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
+      case 'error.sync_retryable_network':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_retryable_network').id)
+      case 'error.sync_retryable_io':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_retryable_io').id)
+      case 'error.sync_dirty_repository':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_dirty_repository').id)
+      case 'error.sync_protocol_error':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_protocol_error').id)
+      case 'error.sync_fatal':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_fatal').id)
+      case 'sync.result.generic_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      case 'sync.result.auth_failed':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'sync.result.token_permission_denied':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
+      case 'sync.result.conflict_summary':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'sync.result.network_failed':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      // SyncErrorCategory 官方线格式码（core/writer_core/src/sync/types.rs::SyncErrorCategory::from_code）
+      // 这些是 Core 可能直接返回的 errorCategory 值，用于缺少 messageKey 时的回退映射。
+      case 'auth_failed':
+      case 'auth_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'permission_denied':
+      case 'token_permission_denied':
+      case 'missing_permission':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
+      case 'not_found':
+        // NotFound 在 Core to_message_key() 中映射到 auth_failed，因为 UI 文案是"认证失败/请检查 token"
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'precondition_failed':
+      case 'remote_sha_conflict':
+      case 'conflict':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'rate_limited':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      case 'network':
+      case 'network_failed':
+      case 'network_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'temporary_unavailable':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'local_io':
+      case 'local_io_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
       case 'error.other':
         return context.resourceManager.getStringSync($r('app.string.error_other').id)
       case 'error.native_error':
@@ -89,9 +137,62 @@ export class MessageKeyMapper {
     }
   }
 
+  /**
+   * 解析 SyncErrorCategory 线格式码到本地化字符串。
+   * 只在 category 属于 Core 有效 SyncErrorCategory 时返回对应资源；
+   * 未知返回 undefined，由调用方按 errorCode 回退。
+   *
+   * Core 的 SyncErrorCategory 定义在 core/writer_core/src/sync/types.rs::SyncErrorCategory::from_code，
+   * 有效值包括：auth_failed, auth_error, permission_denied, token_permission_denied,
+   * missing_permission, not_found, precondition_failed, remote_sha_conflict, conflict,
+   * rate_limited, network, network_failed, network_error, temporary_unavailable,
+   * local_io, local_io_error。
+   */
+  static resolveSyncErrorCategory(context: Context, category: string | undefined,
+    messageArgs: Record<string, string> | undefined): string | undefined {
+    if (!category || category.trim().length === 0) {
+      return undefined
+    }
+    switch (category) {
+      case 'auth_failed':
+      case 'auth_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'permission_denied':
+      case 'token_permission_denied':
+      case 'missing_permission':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_token_permission_denied').id)
+      case 'not_found':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_auth_failed').id)
+      case 'precondition_failed':
+      case 'remote_sha_conflict':
+      case 'conflict':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_conflict_summary').id)
+      case 'rate_limited':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      case 'network':
+      case 'network_failed':
+      case 'network_error':
+      case 'temporary_unavailable':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_network_failed').id)
+      case 'local_io':
+      case 'local_io_error':
+        return context.resourceManager.getStringSync($r('app.string.sync_result_generic_error').id)
+      default:
+        return undefined
+    }
+  }
+
   private static fallbackMessage(context: Context, errorCode: string | undefined): string {
     if (errorCode && errorCode.trim().length > 0) {
-      return context.resourceManager.getStringSync($r('app.string.error_internal').id)
+      // 原生同步任务启动/排队失败，或 Core 未返回结果：给系统任务失败提示。
+      switch (errorCode) {
+        case 'ASYNC_CREATE_FAILED':
+        case 'ASYNC_QUEUE_FAILED':
+        case 'NULL_RESULT':
+          return context.resourceManager.getStringSync($r('app.string.error_sync_task_failed').id)
+        default:
+          return context.resourceManager.getStringSync($r('app.string.error_internal').id)
+      }
     }
     return context.resourceManager.getStringSync($r('app.string.error_other').id)
   }

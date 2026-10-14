@@ -811,6 +811,50 @@
     {
       "name": "create_embed",
       "value": "新建子星图"
+    },
+    {
+      "name": "error_sync_retryable_network",
+      "value": "网络连接不稳定，请检查网络后重试"
+    },
+    {
+      "name": "error_sync_retryable_io",
+      "value": "磁盘读写异常，请检查存储空间后重试"
+    },
+    {
+      "name": "error_sync_dirty_repository",
+      "value": "本地仓库存在未提交的变更，请先提交或备份"
+    },
+    {
+      "name": "error_sync_protocol_error",
+      "value": "同步协议错误，请检查远程仓库状态"
+    },
+    {
+      "name": "error_sync_fatal",
+      "value": "同步发生未知错误，请查看日志了解详情"
+    },
+    {
+      "name": "sync_result_generic_error",
+      "value": "同步失败"
+    },
+    {
+      "name": "sync_result_auth_failed",
+      "value": "认证失败，请检查令牌和仓库权限"
+    },
+    {
+      "name": "sync_result_token_permission_denied",
+      "value": "令牌权限不足，请检查仓库访问权限"
+    },
+    {
+      "name": "sync_result_conflict_summary",
+      "value": "存在同步冲突，请手动解决"
+    },
+    {
+      "name": "sync_result_network_failed",
+      "value": "网络连接失败，请检查网络设置"
+    },
+    {
+      "name": "error_sync_task_failed",
+      "value": "同步任务启动失败，请重试"
     }
   ]
 }

@@ -12,9 +12,11 @@
 // Issue #767：FAB 改原生 Button + 去 M3 颜色改系统 token
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { Routes, WorkspaceRouteParams, WritingRouteParams } from '../../../app/navigation/Routes'
 import { ProjectSummary } from '../../../corebridge/dto/ProjectDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../../../ui/theme/HarmonyThemeAdapter'
+import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/presentation/SyncOperationController'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
@@ -93,6 +95,9 @@ export struct HomeScreen {
     })
     AdaptiveContext.getInstance().addObserver(this.adaptiveObserver!)
 
+    // 注册同步完成事件监听
+    this.subscribeSyncEvent()
+
     AppContinuationService.getInstance().clear()
     this.viewModel.loadData()
 
@@ -114,6 +119,8 @@ export struct HomeScreen {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // 取消同步完成事件监听
+    this.unsubscribeSyncEvent()
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
@@ -312,6 +319,52 @@ export struct HomeScreen {
       return `${days}天前`
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+  }
+
+  // ─── 同步完成事件监听 ───
+
+  // emitter.on(event, callback) 返回 void，没有订阅 ID 可保存。
+  // 保存回调函数本身，才能用 emitter.off(eventId, callback) 精确解绑本页面，
+  // 不会像 emitter.off(eventId) 那样一次取消所有页面（首页 / 工作区）的订阅。
+  private syncChangedHandler: ((data: emitter.EventData) => void) | null = null
+
+  /**
+   * 注册同步完成事件监听
+   * 收到通知后刷新项目列表
+   */
+  private subscribeSyncEvent(): void {
+    if (this.syncChangedHandler !== null) {
+      return
+    }
+    const handler = (_data: emitter.EventData): void => {
+      hilog.info(0x0000, 'HomeScreen', 'received sync content changed event, refreshing data')
+      // 同步完成后刷新项目列表
+      this.viewModel.loadData()
+    }
+    this.syncChangedHandler = handler
+    try {
+      emitter.on({ eventId: SYNC_CONTENT_CHANGED_EVENT_ID }, handler)
+      hilog.info(0x0000, 'HomeScreen', 'subscribed to sync content changed event')
+    } catch (e) {
+      this.syncChangedHandler = null
+      hilog.error(0x0000, 'HomeScreen', 'failed to subscribe sync event: %{public}s', String(e))
+    }
+  }
+
+  /**
+   * 取消同步完成事件监听
+   */
+  private unsubscribeSyncEvent(): void {
+    const handler = this.syncChangedHandler
+    if (handler !== null) {
+      try {
+        emitter.off(SYNC_CONTENT_CHANGED_EVENT_ID, handler)
+        hilog.info(0x0000, 'HomeScreen', 'unsubscribed from sync content changed event')
+      } catch (e) {
+        hilog.error(0x0000, 'HomeScreen', 'failed to unsubscribe sync event: %{public}s', String(e))
+      }
+      this.syncChangedHandler = null
     }
   }
 

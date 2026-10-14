@@ -2881,7 +2881,7 @@
       }
     }
   },
-  "processWritingEvent": {
+  "recordEditorChangeStats": {
     "kind": "scalar",
     "ty": "boolean"
   },

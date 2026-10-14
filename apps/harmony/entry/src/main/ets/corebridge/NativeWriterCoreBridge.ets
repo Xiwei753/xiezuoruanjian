@@ -16,6 +16,7 @@ import { NativeStatsBridge } from './native/NativeStatsBridge'
 import { NativeStarMapBridge } from './native/NativeStarMapBridge'
 import { NativeDiagnosticsBridge } from './native/NativeDiagnosticsBridge'
 import { decodeLayoutContract, decodeScreenPolicy, decodeWorkbenchLayoutPlan } from './codec/CoreWireDecoders'
+import { NativeInitParams } from '../platform/init/NativeInitParams'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
@@ -41,26 +42,56 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return NativeWriterCoreBridge.instance
   }
 
-  async initialize(appDataRoot: string): Promise<boolean> {
+  async initialize(params: NativeInitParams): Promise<boolean> {
     if (this.isInitialized) {
       return true
     }
     try {
-      const result: number = this.core.getNativeModule().nativeInit(appDataRoot) as number
+      // 网络状态为三态：查询失败（unknown）传 -1，不得伪造成在线。
+      const isConnected: number = params.networkKnown ? (params.isConnected ? 1 : 0) : -1
+      const isMetered: number = params.networkKnown ? (params.isMetered ? 1 : 0) : -1
+
+      const result: number = this.core.getNativeModule().nativeInit(
+        params.appDataRoot,
+        params.filesDir,   // PlatformInit.app_data_dir，与 appDataRoot 同一数据根
+        params.cacheDir,   // 真实 UIAbilityContext.cacheDir
+        params.deviceId,
+        params.appVersion,
+        params.locale,
+        params.timezone,
+        isConnected,
+        isMetered
+      ) as number
       if (result === 0) {
         this.isInitialized = true
-        this.appDataRoot = appDataRoot
+        this.appDataRoot = params.appDataRoot
         this.statsBridge.setInitialized(true)
         return true
       }
       this.lastInitErrorCode = result
-      console.error(`nativeInit failed with code: ${result}, path: ${appDataRoot}`)
+      console.error(`nativeInit failed with code: ${result}, path: ${params.appDataRoot}`)
       return false
     } catch (e) {
       this.lastInitErrorCode = -999
       this.core.markNativeUnavailable()
       console.error(`nativeInit exception: ${e}`)
       return false
+    }
+  }
+
+  /**
+   * 用平台最新的网络查询结果更新 Core 缓存的 NetworkState。
+   * 三态：known ? 1/0 : -1；未知时 Core 清除缓存状态，不保留伪造的在线快照。
+   * 由系统网络事件或同步操作前的查询调用。
+   */
+  updateNetworkState(known: boolean, isConnected: boolean, isMetered: boolean): number {
+    try {
+      const connected: number = known ? (isConnected ? 1 : 0) : -1
+      const metered: number = known ? (isMetered ? 1 : 0) : -1
+      return this.core.getNativeModule().nativeUpdateNetworkState(connected, metered) as number
+    } catch (e) {
+      console.error(`nativeUpdateNetworkState exception: ${e}`)
+      return -999
     }
   }
 

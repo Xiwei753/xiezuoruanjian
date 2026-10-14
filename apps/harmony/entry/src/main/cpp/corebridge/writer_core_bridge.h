@@ -14,8 +14,17 @@ extern "C" {
 int32_t writer_core_init(const char* path);
 // writer_core_init_harmony: Harmony-specific init with PlatformServices injection.
 //   Injects SyncTransportFactory for GitHub API sync support.
-//   Returns 0 on success, -1 if app_data_root is null, -2 if invalid UTF-8, -4 if bootstrap failed.
-int32_t writer_core_init_harmony(const char* app_data_root, const char* files_dir, const char* cache_dir, const char* device_id, const char* app_version, const char* locale, const char* timezone);
+//   Returns 0 on success, -1 if app_data_root is null, -2 if invalid UTF-8,
+//   -4 if bootstrap failed, -5 if app_data_root is empty.
+//   is_connected: 1 = online, 0 = offline, -1 = unknown (query failed).
+//   is_metered: 1 = metered, 0 = unmetered, -1 = unknown.
+//   未知连通性不会注入伪造的在线状态（network_state 记为 None）。
+int32_t writer_core_init_harmony(const char* app_data_root, const char* files_dir, const char* cache_dir, const char* device_id, const char* app_version, const char* locale, const char* timezone, int32_t is_connected, int32_t is_metered);
+// writer_core_update_network_state: Update the Core's cached network state from the
+//   platform's current query result. Three-state: 1 = yes, 0 = no, -1 = unknown
+//   (clears the cached state, does not fabricate online). Safe to call before init
+//   (returns -3). Returns 0 on success, -3 if the service is not initialized.
+int32_t writer_core_update_network_state(int32_t is_connected, int32_t is_metered);
 char*  writer_core_get_load_status(void);
 char*  writer_core_get_last_error(void);
 int32_t writer_core_calculate_word_count(const char* text);

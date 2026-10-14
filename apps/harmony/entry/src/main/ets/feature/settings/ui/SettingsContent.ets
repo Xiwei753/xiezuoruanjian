@@ -17,6 +17,9 @@ import { ThemeMode } from '../../../ui/theme/HarmonyThemeTypes'
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { MessageKeyMapper } from '../../../ui/i18n/MessageKeyMapper'
+import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
+import { SyncOutcome } from '../presentation/SyncOperationController'
+import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
 import { PrimaryNavigationPlacement, WidthClass } from '../../../corebridge/dto/PlatformDtos'
 
@@ -169,21 +172,49 @@ export struct SettingsContent {
   }
 
   // ── 同步后的消息解析 ──
+  // 把解析出的 SyncOutcome/统一展示数据交给 SyncOutcomePresenter.present，
+  // 使顶栏 Toast 与设置页显示完全一致的结果，复用同一份 MessageKeyMapper 映射。
   private resolveSyncMessage(): string {
     const msg = this.viewModel.syncMessage
-    if (msg.startsWith('sync_complete:')) {
-      const count = msg.substring('sync_complete:'.length)
-      return getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', count)
-    } else if (msg.startsWith('error:')) {
-      const errorKey = msg.substring(6)
-      if (errorKey === 'sync_conflict') {
-        return getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
-      } else if (errorKey === 'dirty_repo_blocked') {
-        return getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
-      } else if (errorKey === 'sync_error') {
-        return getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
-      } else {
-        return MessageKeyMapper.resolveMessage(getContext(this), `error.${errorKey}`, undefined, undefined)
+    if (!msg || msg.length === 0) {
+      return ''
+    }
+
+    // 解析 ViewModel 传递的 JSON 载荷
+    try {
+      const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
+      // 构造 SyncOutcome，交给 SyncOutcomePresenter 统一展示
+      const outcome: SyncOutcome = {
+        phase: payload.phase,
+        message: '',
+        messageKey: payload.messageKey,
+        messageArgs: payload.messageArgs,
+        errorCategory: payload.errorCategory,
+        errorCode: payload.errorCode,
+        rawError: payload.rawError,
+        totalDownloaded: payload.totalDownloaded,
+        overallStatus: payload.overallStatus
+      }
+      return SyncOutcomePresenter.present(getContext(this), outcome)
+    } catch (_e) {
+      // 兼容旧格式：sync_complete:${n} 或 error:${code}
+      if (msg.startsWith('sync_complete:')) {
+        const count = msg.substring('sync_complete:'.length)
+        const format = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id)
+        return format.replace('%s', count)
+      } else if (msg.startsWith('error:')) {
+        const errorKey = msg.substring(6)
+        // 兼容旧的特殊 key：构造 SyncOutcome 走统一展示路径
+        const outcome: SyncOutcome = {
+          phase: 'failed',
+          message: '',
+          messageKey: undefined,
+          messageArgs: undefined,
+          errorCategory: undefined,
+          errorCode: errorKey,
+          rawError: msg
+        }
+        return SyncOutcomePresenter.present(getContext(this), outcome)
       }
     }
     return ''

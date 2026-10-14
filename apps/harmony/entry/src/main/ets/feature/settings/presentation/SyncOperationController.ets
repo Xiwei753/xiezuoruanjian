@@ -4,10 +4,16 @@
 // 且只允许明确的成功终态显示"完成"，未知值是协议错误。
 
 import hilog from '@ohos.hilog'
+import emitter from '@ohos.events.emitter'
 import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { FullSyncResult, FullSyncDiagnosticsResult, FullSyncDryRunResult } from '../../../corebridge/dto/SyncDtos'
 import { NativeSyncBridge } from '../../../corebridge/native/NativeSyncBridge'
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
+import { NativeWriterCoreBridge } from '../../../corebridge/NativeWriterCoreBridge'
+import { NetworkStatusService, NetworkSnapshot } from '../../../platform/network/NetworkStatusService'
+
+// 同步完成事件 ID
+export const SYNC_CONTENT_CHANGED_EVENT_ID: number = 1001
 
 const TAG = 'SyncOperationController'
 const DOMAIN = 0x0000
@@ -17,6 +23,10 @@ export type SyncPhase = 'idle' | 'in_progress' | 'success' | 'failed'
 export interface SyncOutcome {
   phase: SyncPhase
   message: string
+  // Core 类型化错误字段——直接透传，不做手写映射
+  messageKey?: string
+  messageArgs?: Record<string, string>
+  errorCategory?: string
   errorCode?: string
   rawError?: string
   totalDownloaded?: number
@@ -51,7 +61,6 @@ export class SyncOperationController {
       hilog.warn(DOMAIN, TAG, 'sync already in progress, waiting for existing operation')
       return this.currentOperation
     }
-
     this.currentOperation = this.executeSync()
     try {
       return await this.currentOperation
@@ -62,6 +71,8 @@ export class SyncOperationController {
 
   private async executeSync(): Promise<SyncOutcome> {
     hilog.info(DOMAIN, TAG, 'performSync: starting')
+    // 同步前刷新网络状态，让 Core 使用当前而非启动时的网络快照。
+    await this.refreshNetworkState()
     try {
       const result = await this.syncBridge.performSync()
       if (!result.success) {
@@ -69,7 +80,9 @@ export class SyncOperationController {
           result.errorCode ?? '', result.rawError ?? '')
         return {
           phase: 'failed',
-          message: this.errorMessage(result),
+          message: result.rawError ?? result.userMessage ?? result.errorCode ?? '同步失败',
+          messageKey: result.messageKey,
+          messageArgs: this.mapToRecord(result.messageArgs),
           errorCode: result.errorCode,
           rawError: result.rawError
         }
@@ -85,11 +98,19 @@ export class SyncOperationController {
       const status = syncResult.overallStatus
       if (status === 'success' || status === 'no_changes' || status === 'latest_wins_applied') {
         hilog.info(DOMAIN, TAG, 'performSync: success, status=%{public}s', status)
+        // 只有本地可见内容（下载/覆盖/本地删除）实际发生变化时才通知页面刷新，
+        // no_changes 不再空刷新导致卡片闪动。远端删除（totalRemoteDeletes）不代表当前
+        // 本地作品/卷章变化，不应触发两页重载。判断依据是 FullSyncResult 的真实变更计数。
+        const contentChanged: boolean =
+          syncResult.totalDownloaded > 0 ||
+          syncResult.totalOverwritten > 0 ||
+          syncResult.totalLocalDeletes > 0
+        if (contentChanged) {
+          this.notifyContentChanged()
+        }
         return {
           phase: 'success',
-          message: status === 'no_changes' ? '同步完成，无变更' :
-            status === 'latest_wins_applied' ? '同步完成，最新版本已应用' :
-            `同步完成，下载 ${syncResult.totalDownloaded} 项`,
+          message: `sync success: ${status}`,
           totalDownloaded: syncResult.totalDownloaded,
           totalUploaded: syncResult.totalUploaded,
           overallStatus: status
@@ -101,117 +122,133 @@ export class SyncOperationController {
         return {
           phase: 'failed',
           message: '同步冲突，需要手动解决',
+          messageKey: 'sync.result.conflict_summary',
           errorCode: 'SYNC_CONFLICT',
           overallStatus: status
         }
       }
       if (status === 'recoverable_error' || status === 'fatal_error' || status === 'error') {
+        // 直接透传 Core 的类型化字段，由 MessageKeyMapper 统一映射，不再手写中文字典。
+        const messageKey = syncResult.messageKey ?? ''
         const errorCategory = syncResult.errorCategory ?? ''
         const errorMsg = syncResult.error ?? ''
+
+        if (messageKey.length === 0 && errorCategory.length === 0) {
+          hilog.warn(DOMAIN, TAG,
+            'performSync: missing typed error fields, status=%{public}s, fallback to raw error',
+            status)
+        }
+
         return {
           phase: 'failed',
-          message: this.syncErrorMessage(errorCategory) || errorMsg,
-          errorCode: errorCategory || 'SYNC_ERROR',
-          rawError: errorMsg,
+          message: errorMsg.length > 0 ? errorMsg : (messageKey.length > 0 ? messageKey : errorCategory),
+          messageKey: messageKey.length > 0 ? messageKey : undefined,
+          errorCategory: errorCategory.length > 0 ? errorCategory : undefined,
+          errorCode: errorCategory.length > 0 ? errorCategory : 'SYNC_ERROR',
+          rawError: errorMsg.length > 0 ? errorMsg : undefined,
           overallStatus: status
         }
       }
       if (status === 'syncing') {
-        return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
+        return { phase: 'failed', message: '同步仍在进行中（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
       }
       if (status === 'idle' || status === 'configured_not_tested') {
-        return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR' }
+        return { phase: 'failed', message: '同步未执行（状态异常）', errorCode: 'SYNC_STATE_ERROR', overallStatus: status }
       }
 
       // 未知值是协议错误
       hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
-      return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH' }
+      return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH', overallStatus: status }
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s', String(e))
-      return { phase: 'failed', message: `同步异常: ${e}`, rawError: String(e) }
+      return { phase: 'failed', message: `同步异常: ${e}`, errorCode: 'NATIVE_ERROR', rawError: String(e) }
+    }
+  }
+
+  /** 同步操作前刷新 Core 的网络状态（三态；未知时不伪造在线）。 */
+  private async refreshNetworkState(): Promise<void> {
+    let known: boolean
+    let isConnected: boolean
+    let isMetered: boolean
+    let queryError: string | null = null
+
+    try {
+      const snapshot: NetworkSnapshot = await NetworkStatusService.getInstance().query()
+      if (snapshot.queryFailed) {
+        // 查询失败：明确用 known=false 通知 Core 清除旧缓存，不伪造在线
+        hilog.warn(DOMAIN, TAG,
+          'refreshNetworkState: network query failed, notifying Core with unknown state: %{public}s',
+          snapshot.error)
+        known = false
+        isConnected = false
+        isMetered = false
+        queryError = snapshot.error
+      } else {
+        known = snapshot.known
+        isConnected = snapshot.isConnected
+        isMetered = snapshot.isMetered
+      }
+
+      // 无论查询是否成功，都将三态写给 Core
+      const result: number = NativeWriterCoreBridge.getInstance().updateNetworkState(
+        known, isConnected, isMetered
+      )
+      if (result !== 0) {
+        hilog.error(DOMAIN, TAG,
+          'NETWORK_STATE_UPDATE_FAILED: updateNetworkState returned %{public}s, ' +
+          'stage=write_core, known=%{public}s connected=%{public}s queryError=%{public}s',
+          result.toString(), known.toString(), isConnected.toString(), queryError ?? '')
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG,
+        'NETWORK_STATE_UPDATE_FAILED: native bridge exception, stage=query_bridge, error=%{public}s',
+        String(e))
     }
   }
 
   /** 执行同步诊断 */
   async runDiagnostics(): Promise<ResultEnvelope<FullSyncDiagnosticsResult>> {
+    // 诊断结果应反映当前网络状态，而不是启动时的旧快照。
+    await this.refreshNetworkState()
     return await this.syncBridge.syncDiagnostics()
   }
 
   /** 执行 dry-run */
   async runDryRun(): Promise<ResultEnvelope<FullSyncDryRunResult>> {
+    await this.refreshNetworkState()
     return await this.syncBridge.syncDryRun()
   }
 
-  /** 从 ResultEnvelope 提取用户可读的错误消息 */
-  private errorMessage(result: ResultEnvelope<Object>): string {
-    if (result.messageKey && result.messageKey.length > 0) {
-      // 有 i18n message key 时优先使用
-      return this.mapMessageKey(result.messageKey, result.messageArgs)
+  /**
+   * 发送内容更新通知
+   * 同步成功后通知页面刷新数据
+   */
+  private notifyContentChanged(): void {
+    try {
+      const eventData: emitter.EventData = {
+        data: {
+          timestamp: Date.now()
+        }
+      }
+      const event: emitter.InnerEvent = {
+        eventId: SYNC_CONTENT_CHANGED_EVENT_ID
+      }
+      emitter.emit(event, eventData)
+      hilog.info(DOMAIN, TAG, 'notifyContentChanged: content changed event emitted')
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'notifyContentChanged: failed to emit event, %{public}s', String(e))
     }
-    if (result.userMessage && result.userMessage.length > 0) {
-      return result.userMessage
-    }
-    if (result.errorCode) {
-      return this.mapErrorCode(result.errorCode)
-    }
-    return '同步失败'
   }
 
-  /** 从 errorCategory 提取用户可读的错误消息 */
-  private syncErrorMessage(errorCategory: string): string {
-    const messageMap: Record<string, string> = {
-      'auth_failed': '认证失败，请检查 Token',
-      'permission_denied': '权限不足，仓库不可访问',
-      'repo_not_found': '仓库不存在',
-      'network_error': '网络连接失败',
-      'timeout': '同步超时',
-      'dns_failed': 'DNS 解析失败',
-      'config_invalid': '同步配置无效',
-      'disk_error': '磁盘读写错误',
-      'conflict': '同步冲突',
-      'not_implemented': '同步功能未启用',
-      'transport_error': '传输层错误',
-      'provider_error': '同步提供者错误'
+  /** 将 Map<string, string> 转换为 Record<string, string>（JSON.stringify 不支持 Map） */
+  private mapToRecord(map?: Map<string, string>): Record<string, string> | undefined {
+    if (!map || map.size === 0) {
+      return undefined
     }
-    return messageMap[errorCategory] ?? `同步失败: ${errorCategory}`
-  }
-
-  /** messageKey → 中文映射 */
-  private mapMessageKey(key: string, args?: Map<string, string>): string {
-    const messageMap: Record<string, string> = {
-      'error.sync_auth_failed': '认证失败，请检查 Token',
-      'error.sync_permission_denied': '权限不足，仓库不可访问',
-      'error.sync_repo_not_found': '仓库不存在',
-      'error.sync_network_error': '网络连接失败',
-      'error.sync_conflict': '同步冲突',
-      'error.sync_config_invalid': '同步配置无效',
-      'error.sync_disk_error': '磁盘读写错误',
-      'error.sync_transport_error': '传输层错误',
-      'error.sync_provider_error': '同步提供者错误',
-      'error.not_implemented': '同步功能未启用',
-      'error.sync_timeout': '同步超时',
-      'error.sync_dns_failed': 'DNS 解析失败'
-    }
-    return messageMap[key] ?? key
-  }
-
-  /** errorCode → 中文映射 */
-  private mapErrorCode(code: string): string {
-    const messageMap: Record<string, string> = {
-      'NOT_IMPLEMENTED': '同步功能未启用',
-      'SYNC_NETWORK_ERROR': '网络连接失败',
-      'SYNC_AUTH_FAILED': '认证失败，请检查 Token',
-      'SYNC_PERMISSION_DENIED': '权限不足，仓库不可访问',
-      'SYNC_REPO_NOT_FOUND': '仓库不存在',
-      'SYNC_CONFLICT': '同步冲突',
-      'SYNC_CONFIG_INVALID': '同步配置无效',
-      'SYNC_DISK_ERROR': '磁盘读写错误',
-      'SYNC_TRANSPORT_ERROR': '传输层错误',
-      'SYNC_PROVIDER_ERROR': '同步提供者错误',
-      'SYNC_STATE_ERROR': '同步状态异常',
-      'SCHEMA_MISMATCH': '同步结果数据格式错误',
-      'NATIVE_ERROR': '原生调用异常'
-    }
-    return messageMap[code] ?? `同步失败: ${code}`
+    const record: Record<string, string> = {}
+    map.forEach((value: string, key: string) => {
+      record[key] = value
+    })
+    return record
   }
 }

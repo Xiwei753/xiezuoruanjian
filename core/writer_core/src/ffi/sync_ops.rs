@@ -400,7 +400,8 @@ mod tests {
         assert!(svc.has_secrets_override());
 
         let result = run_sync_op(&svc, |_| Ok::<_, WriterError>(42));
-        assert_eq!(result, Ok(42));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
         assert!(
             !svc.has_secrets_override(),
             "override 必须在操作成功后被清除，下一次同步才能从持久化重新读取 Token"
