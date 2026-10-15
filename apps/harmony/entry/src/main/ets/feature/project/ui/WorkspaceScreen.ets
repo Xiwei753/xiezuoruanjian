@@ -6,7 +6,6 @@ import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/present
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
-import { PrimaryActionChannel, isHdsMiniBarHostingPrimaryAction } from '../../../app/navigation/PrimaryActionChannel'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../../../platform/continuity/ContinuationPayload'
@@ -56,9 +55,6 @@ export struct WorkspaceScreen {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
 
-  // Issue #905：本页在 PrimaryActionChannel 的登记 token（-1 表示未登记）。
-  private primaryActionToken: number = -1
-
   async aboutToAppear() {
     hilog.info(0x0000, 'WorkspaceScreen', 'route name=Workspace')
     // Issue #768 评论5835171266 第3项：检测 API Level，决定是否使用 HdsNavDestination。
@@ -69,17 +65,12 @@ export struct WorkspaceScreen {
     if (policy !== null) {
       this.headerActions = policy.actionSlots
     }
-    // Issue #905：把「新建卷」登记到主操作通道；窄屏由底部 HDS MiniBar 承载「+」，
-    // 本页不再自绘内容流 FAB（API<23 / 宽屏版型仍用页内 PrimaryFab）。
-    this.registerPrimaryAction()
     const paramsArr = this.navPathStack.getParamByName(Routes.Workspace) as WorkspaceRouteParams[]
     const params = paramsArr && paramsArr.length > 0 ? paramsArr[paramsArr.length - 1] : null
     if (params) {
       this.viewModel.projectId = params.projectId
       this.viewModel.projectName = params.projectName
-      this.viewModel.loadData(params.projectId).then(() => {
-        this.syncPrimaryActionAvailability()
-      }).catch(() => {})
+      this.viewModel.loadData(params.projectId)
       // Workspace 顶层：更新接续状态为当前 project（不带 chapter），清掉旧章节导航。
       AppContinuationService.getInstance().updateCurrentState({ projectId: params.projectId } as ContinuationPayload)
     }
@@ -109,11 +100,6 @@ export struct WorkspaceScreen {
     }
     // 取消同步完成事件监听
     this.unsubscribeSyncEvent()
-    // Issue #905：注销本页登记的主操作，避免离开后 MiniBar 仍派发到已卸载页面。
-    if (this.primaryActionToken >= 0) {
-      PrimaryActionChannel.getInstance().unregister(ScreenRole.ProjectWorkspace, this.primaryActionToken)
-      this.primaryActionToken = -1
-    }
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
@@ -136,40 +122,12 @@ export struct WorkspaceScreen {
     return false
   }
 
-  /** Issue #905：主操作是否可用（即原来窄屏 FAB 的显示条件）。 */
-  private isCreateVolumePrimaryActionAvailable(): boolean {
-    return !this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()
-  }
-
-  /** Issue #905：把「新建卷」回调登记到主操作通道（窄屏 HDS MiniBar 的「+」用它派发）。 */
-  private registerPrimaryAction(): void {
-    this.primaryActionToken = PrimaryActionChannel.getInstance().register(
-      ScreenRole.ProjectWorkspace,
-      (): void => { this.handleCreateVolume() },
-      this.isCreateVolumePrimaryActionAvailable()
-    )
-  }
-
-  /** Issue #905：加载状态变化后同步主操作可用性，随页面状态更新、离开解绑。 */
-  private syncPrimaryActionAvailability(): void {
-    if (this.primaryActionToken < 0) {
-      return
-    }
-    PrimaryActionChannel.getInstance().updateAvailability(
-      ScreenRole.ProjectWorkspace, this.primaryActionToken, this.isCreateVolumePrimaryActionAvailable())
-  }
-
   handleCreateChapter(volumeId: string) {
     this.viewModel.createChapter(volumeId)
   }
 
   handleRetry() {
-    const retried = this.viewModel.retry()
-    // retry() 已同步把 isLoadingState 置回 true，主操作先同步为不可用。
-    this.syncPrimaryActionAvailability()
-    retried.then(() => {
-      this.syncPrimaryActionAvailability()
-    }).catch(() => {})
+    this.viewModel.retry()
   }
 
   // Issue #629 评论14 第1项：章节点击统一进入 Routes.Writing，不再内联编辑。
@@ -277,9 +235,7 @@ export struct WorkspaceScreen {
       hilog.info(0x0000, 'WorkspaceScreen', 'received sync content changed event, refreshing data')
       // 同步完成后刷新工作区数据
       if (this.viewModel.projectId) {
-        this.viewModel.loadData(this.viewModel.projectId).then(() => {
-          this.syncPrimaryActionAvailability()
-        }).catch(() => {})
+        this.viewModel.loadData(this.viewModel.projectId)
       }
     }
     this.syncChangedHandler = handler
@@ -448,10 +404,7 @@ export struct WorkspaceScreen {
       // ── FAB 层：新建卷浮动按钮 ──
       // Issue #778：FAB 改用 Stack BottomEnd 对齐 + margin 定位，不再用绝对坐标。
       // 配色/材质统一到 PrimaryFab，与作品页、星图页同源。
-      // Issue #905：API23+ 窄屏的「+」改由底部 HdsTabs 原生 MiniBar 承载（透出系统沉浸光感），
-      // 这里不再重复画内容流 FAB，避免两个「+」和双重创建；API<23 / 宽屏版型仍用普通 PrimaryFab。
-      if (this.isCreateVolumePrimaryActionAvailable()
-        && !isHdsMiniBarHostingPrimaryAction(this.useHdsNav, this.adaptiveState)) {
+      if (!this.viewModel.isLoadingState && !this.viewModel.errorMessageState && this.hasCreateVolumePrimaryAction()) {
         PrimaryFab({
           onTap: () => {
             this.handleCreateVolume()

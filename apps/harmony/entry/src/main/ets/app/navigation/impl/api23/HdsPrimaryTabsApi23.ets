@@ -12,8 +12,6 @@
 // 底栏显隐通过 controller.applyHideAnimation/applyShowAnimation 控制，不销毁 TabContent。
 
 import { Routes } from '../../Routes'
-import { ScreenRole } from '../../../../corebridge/dto/PlatformDtos'
-import { PrimaryActionChannel } from '../../PrimaryActionChannel'
 import hilog from '@ohos.hilog'
 import { HomeScreen } from '../../../../feature/project/ui/HomeScreen'
 import { WorkspaceScreen } from '../../../../feature/project/ui/WorkspaceScreen'
@@ -27,9 +25,6 @@ import {
   HdsNavigation,
   HdsTabsFloatingStyle,
   HdsTabsController,
-  HdsBarStyle,
-  HdsTabsBarChangeMode,
-  BarStyleChangeCallback,
   HdsAnimationMode,
   hdsMaterial,
 } from '@kit.UIDesignKit'
@@ -77,60 +72,9 @@ export struct HdsPrimaryTabsApi23 {
   // 与 onChange（只提交 currentTab，程序化切换也会触发）区分，避免把恢复伪装成点击。
   onUserTabClick: (index: number) => void = (): void => {}
 
-  // Issue #905：当前屏幕 ScreenRole（由 PrimaryTabShell 从 NavigationChromeStore 传入）。
-  // 决定原生 MiniBar 这个「+」是不是当前页的主操作，以及点按派发到哪一页的回调。
-  @Prop @Watch('onScreenRoleChange') currentScreenRole: ScreenRole = ScreenRole.ProjectList
-
-  // Issue #905：当前 role 是否登记了可用的主操作（由 PrimaryActionChannel 推送）。
-  // 为 true 且底部 TabBar 可见时，用 HDS 原生 MiniBar 承载「+」。
-  @State currentPrimaryActionAvailable: boolean = false
-
-  private primaryActionObserver: (() => void) | null = null
-
   // Issue #773 评论5844518092 第2项：长期持有的 HdsTabsController，创建 HdsTabs 时经 options 传入，
   // 修复真机日志 "GetHdsTabsController no hdsTabsControllerClass prop"。
   private controller: HdsTabsController = new HdsTabsController()
-
-  // Issue #905 复核（MiniBar 折叠态点击的事件语义）：按官方 d.ts，宽度 <600vp 时首次创建的
-  // MiniBar 默认 COLLAPSE；「点击折叠的 MiniBar 或 TabBar」以 USER_CLICK 模式切换折叠/展开，
-  // 一次点击可能同时改 miniBarStyle 与 tabBarStyle；只有 controller.applyMiniBarStyle()
-  // 触发的切换才是 APP_TRIGGER。
-  // 关键点：点折叠态 MiniBar 是把它从 COLLAPSE 切成 EXPAND，回调拿到的是**变化后**的状态
-  // （miniBarStyle === EXPAND），所以「只在回调里看到 COLLAPSE 才拉回展开」恰好漏掉这次点击，
-  // 也不能声称那一次点按就等于新建。
-  // 本组件把「加号点击」统一收敛到 PrimaryActionChannel，不重复实现新建方法：
-  //   - 展开态 MiniBar 里自绘加号的点击由 primaryActionMiniBar().onClick 派发；
-  //   - 折叠态 MiniBar 被用户点开（USER_CLICK + 前值 COLLAPSE + 现值 EXPAND + tabBarStyle 仍折叠，
-  //     说明用户点的是 MiniBar 而不是底部页签栏）视为同一次「加号点击」，这里派发一次主操作；
-  //   - NORMAL（旋转/开关屏等尺寸变化）与 APP_TRIGGER（代码主动切换）都不是用户点加号，不派发；
-  //   - 不再调 controller.applyMiniBarStyle()：页签栏与 MiniBar 的互斥展开交回官方 HDS 状态管理，
-  //     应用不再和用户展开底栏的动作抢控制权。
-  // previousMiniBarStyle 必须在每次回调最前面更新（含 NORMAL / APP_TRIGGER 提前返回之前），
-  // 否则记录的「前值」会和 HDS 实际状态失步。
-  // 注意：折叠态点击与自绘 Row.onClick 是否会在同一次指针事件里都触发，SDK 文档没有承诺；
-  // 真机若确认双触发，应在唯一主操作入口按同一输入事件去重，不靠延时过滤，也不改成点两下。
-  private previousMiniBarStyle: HdsBarStyle = HdsBarStyle.EXPAND
-
-  private miniBarStyleChange: BarStyleChangeCallback = (
-    miniBarStyle: HdsBarStyle,
-    tabBarStyle: HdsBarStyle,
-    miniBarWidth: number,
-    tabBarWidth: number,
-    mode: HdsTabsBarChangeMode
-  ): void => {
-    const wasCollapsed: boolean = this.previousMiniBarStyle === HdsBarStyle.COLLAPSE
-    this.previousMiniBarStyle = miniBarStyle
-    if (
-      mode === HdsTabsBarChangeMode.USER_CLICK &&
-      wasCollapsed &&
-      miniBarStyle === HdsBarStyle.EXPAND &&
-      tabBarStyle === HdsBarStyle.COLLAPSE &&
-      this.currentPrimaryActionAvailable &&
-      this.currentShowPrimaryNav
-    ) {
-      PrimaryActionChannel.getInstance().dispatch(this.currentScreenRole)
-    }
-  }
 
   // Issue #774 评论5847359998：@Watch 回调——currentShowPrimaryNav 变化时通过 controller 动画控制底栏显隐，
   // 不销毁 TabContent，避免 Settings 进入两次、Home 重新 appear、返回首页 FAB 乱跳。
@@ -140,27 +84,6 @@ export struct HdsPrimaryTabsApi23 {
     } else {
       this.controller.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION)
     }
-  }
-
-  // Issue #905：订阅主操作通道。页面加载完成后登记/更新可用状态会触发这里，
-  // 据此决定是否把「+」交给 HDS 原生 MiniBar 承载。
-  aboutToAppear(): void {
-    const self = this
-    this.primaryActionObserver = (): void => {
-      self.currentPrimaryActionAvailable = PrimaryActionChannel.getInstance().hasPrimaryAction(self.currentScreenRole)
-    }
-    PrimaryActionChannel.getInstance().subscribe(this.primaryActionObserver)
-  }
-
-  aboutToDisappear(): void {
-    if (this.primaryActionObserver) {
-      PrimaryActionChannel.getInstance().unsubscribe(this.primaryActionObserver)
-    }
-  }
-
-  // 当前页面 role 变化时重新判定该页是否有可用的主操作。
-  onScreenRoleChange(): void {
-    this.currentPrimaryActionAvailable = PrimaryActionChannel.getInstance().hasPrimaryAction(this.currentScreenRole)
   }
 
   // Issue #784 评论5857397503 第3点：PageMapForStack 按 ownerStack 传入 navPathStack，
@@ -249,35 +172,11 @@ export struct HdsPrimaryTabsApi23 {
     .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
   }
 
-  // Issue #905：MiniBar 内唯一的触发组件——原生「+」。
-  // 透过 HDS 宿主 MiniBar 的系统材质呈现光感，只派发当前页已登记的主操作，
-  // 业务仍是页面原本的命名框 / 建卷 / 建星图入口，不在通道里另起一套创建逻辑。
-  // 展开态下的加号点击走这里的 onClick；MiniBar 处于折叠态时，用户那次点按按官方语义
-  // 先被 HDS 用来展开 MiniBar，由 miniBarStyleChange 识别为同一次「加号点击」后派发。
-  @Builder
-  primaryActionMiniBar() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.plus'))
-        .fontSize(24)
-        .fontColor([$r('sys.color.icon_primary')])
-    }
-    .width(48)
-    .height(48)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(VerticalAlign.Center)
-    .accessibilityText('新建')
-    .onClick(() => {
-      PrimaryActionChannel.getInstance().dispatch(this.currentScreenRole)
-    })
-  }
-
   // Issue #774 评论5847359998：悬浮页签样式按 SDK d.ts 真实字段结构写，不用 as 强转。
   // barWidth 中/大档调大匹配设计稿；补 gradientMask 实现沉浸光感。
-  // Issue #905 复核（窄屏宽度预算）：smallWidth 用三页签官方小屏标准宽 76*3+8=236vp，
-  // 不再自取 280vp。360vp 窗口下 236(页签) + 48(MiniBar) + 左右各 16vp 默认
-  // barSideMargin = 316vp，给 HDS 自己的两栏间隔留出余量，避免人为挤满整个底栏。
+  // smallWidth 取三页签官方小屏标准宽 76*3+8=236vp（HdsTabs 对 3 个页签的小屏默认宽度）。
   private buildFloatingStyle(): HdsTabsFloatingStyle {
-    const style: HdsTabsFloatingStyle = {
+    return {
       barWidth: {
         smallWidth: 236,
         mediumWidth: 400,
@@ -297,32 +196,6 @@ export struct HdsPrimaryTabsApi23 {
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
       }
     }
-    // Issue #905：当前页确有 Core 主操作、且底部 TabBar 可见时，用 HDS 原生 MiniBar
-    // 承载「+」，由宿主 MiniBar 透出系统沉浸光感。不再对内容流 Button 挂无效的
-    // .systemMaterial，也不用 backgroundBlurStyle + shadow 伪造原生光。
-    // Issue #905 复核：这里只切片 MiniBar 的存在性，不碰 index/onChange，也不改
-    // 三个 TabContent 的选中项，所以 MiniBar 随 role/加载结果出现或消失时，
-    // 原生页签的选中与布局不会被这次改动反复翻转（可用状态也只在真实变化时通知）。
-    if (this.currentPrimaryActionAvailable && this.currentShowPrimaryNav) {
-      style.miniBar = {
-        miniBarBuilder: this.primaryActionMiniBar,
-        enableMiniBarBackground: true,
-        // 主操作「+」的宿主：首次创建首选展开着落；折叠态被用户点开也派发一次，
-        // 具体状态转换与去重边界见 miniBarStyleChange 注释。
-        miniBarStyle: HdsBarStyle.EXPAND,
-        onBarStyleChange: this.miniBarStyleChange,
-        // 宽度钉成一个按钮尺寸，不随屏幕宽度档位（440/600/840vp）改档重排。
-        // 注意：#905 复核已更正上一轮「48vp 就不会重排」的说法——48vp 只保证 MiniBar
-        // 自身不换档；窄屏下页签栏与 MiniBar 是否都能常驻展开由官方 HDS 双栏状态管理决定，
-        // 且 <440vp 时 USER_CLICK 可以展开页签栏并折叠 MiniBar（见 miniBarStyleChange）。
-        miniBarWidth: {
-          smallWidth: 48,
-          mediumWidth: 48,
-          largeWidth: 48,
-        },
-      }
-    }
-    return style
   }
 
   build() {

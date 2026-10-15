@@ -1,25 +1,26 @@
-// PrimaryFab — 全局统一的「主操作」悬浮按钮（圆形 + 号）。
+// PrimaryFab — 全局统一的「主操作」悬浮按钮（圆形 + 号），固定在内容流右下角。
 //
 // 三个页面共用同一个组件：作品页（新建作品）、工作区页（新建卷）、星图页（新建星图）。
 // 之前三处各自写 Button，背景色一个没设（系统蓝）、一个写死 themeConfig.colors.primary（纯黑），
 // 才出现「作品页和星图页加号颜色不一样」。统一到这里以后配色只有一份。
 //
-// Issue #905：删除错误的「内容流启用系统沉浸光感」路线。
-//   #888 把 .systemMaterial() 挂在内容流的 Button 上，系统明确拒绝并打
+// Issue #905：本组件维持**内容流右下角独立主操作按钮**的原始设计位置，不做后退。
+//   #888 给内容流 Button 挂 .systemMaterial() 被系统拒绝，真机日志：
 //   `Material inactive: out of scope. Use component in navigation title bar or Tabbar.`。
-//   华为《开启沉浸光感》明确：普通 Button 的 API 26 材质只在 Navigation/NavDestination
-//   标题栏或合规底部 TabBar 生效，内容流右下 FAB 不属于该范围。
-//   换外层 Row/Stack 或重排 modifier 顺序都不能解锁材质，所以这里不再维护明知失效的材质分支。
-//   API23+ 窄屏的主操作「+」已改由底部 HdsTabs 的原生 MiniBar 承载（见 PrimaryActionChannel
-//   与 HdsPrimaryTabsApi23.primaryActionMiniBar），由宿主透出系统沉浸光感；
-//   本组件的定位因此收窄为「普通主操作按钮」，只用于 API<23 或宽屏/无 HDS 底部 TabBar 的版型。
-//   它的系统卡片底色 + 系统自带按压反馈不等于华为沉浸光感，不要再把它写成光感实现。
+//   华为《开启沉浸光感》的公开生效范围只有 Navigation/NavDestination 标题栏与合规底部
+//   TabBar，内容流右下角 FAB 不在范围内；换外层容器、改 modifier 顺序都不能解锁材质。
+//   第二~五轮试过的「把 + 搬到 HDS 底部 MiniBar 承载光感」分支已按复核意见整体撤销：
+//   不得为了拿不到的原生材质改变用户确定的按钮位置。
+//   因此这里既不挂 systemMaterial，也不用 backgroundBlurStyle + shadow 伪造光效；
+//   系统卡片底色 + stateEffect 原生按压反馈**不等于**华为沉浸光感，不要写成已补回原生光感——
+//   该项在 #905 仍按未完成保留（公开 SDK 下「原位置 + 普通 FAB + 同款原生沉浸光感」无可用实现）。
 //
 // 手势：按住时锁住底栏的横向滑动切页，避免按住加号横向拖动时页面被带走。
 // 锁的实现见 app/navigation/PrimaryTabGestureLock.ets。
 
 import { PRIMARY_FAB_SIZE_VP } from '../theme/LayoutTokens'
 import { PrimaryTabGestureLock } from '../../app/navigation/PrimaryTabGestureLock'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 // 判定「按住又拖动」的位移阈值（vp）。低于它算点击，高于它算拖动。
 const DRAG_SLOP_VP: number = 8
@@ -62,6 +63,10 @@ export struct PrimaryFab {
       return
     }
     if (this.onTap) {
+      // Issue #906：主操作「请求」事件记录在唯一真实点击入口（原 MiniBar 通道已撤销）。
+      // 只在未拖动且确实调用 onTap 时记录；只记请求不记完成，业务成功与否由页面创建入口决定。
+      const fields: DiagnosticField[] = [{ key: 'source', value: 'content_fab' }]
+      HarmonyDiagnosticEvents.record('Info', 'User', 'ui.primary_action_requested', 'PrimaryFab', fields)
       this.onTap()
     }
   }
