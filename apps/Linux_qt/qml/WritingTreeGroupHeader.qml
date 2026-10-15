@@ -62,7 +62,8 @@ Item {
         Label {
             text: root.title
             color: Kirigami.Theme.textColor
-            font: Kirigami.Theme.defaultFont
+            font.family: Kirigami.Theme.defaultFont.family
+            font.pointSize: Kirigami.Theme.defaultFont.pointSize
             font.bold: true
             elide: Text.ElideRight
             Layout.fillWidth: true
