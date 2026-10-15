@@ -850,11 +850,11 @@ fn collect_paragraph_moves(
     };
     let old_tops = paragraph_tops(old_layout);
     let mut moves = Vec::new();
-    for (paragraph_id, to_y) in paragraph_tops(new_layout) {
-        let Some(from_y) = old_tops
+    for (paragraph_id, to_y, to_h) in paragraph_tops(new_layout) {
+        let Some((from_y, from_h)) = old_tops
             .iter()
-            .find(|(id, _)| *id == paragraph_id)
-            .map(|(_, y)| *y)
+            .find(|(id, _, _)| *id == paragraph_id)
+            .map(|(_, y, h)| (*y, *h))
         else {
             continue;
         };
@@ -862,11 +862,16 @@ fn collect_paragraph_moves(
             continue;
         }
         // 屏幕外进/出沿用同一 viewport 裁剪：段落整体路径与视口相交才动画。
+        // Issue #904 复核 9：用**旧/新真实段落矩形（段首 + 段落高度）的移动包络**
+        // 与视口求交。只取段首之间的短竖条会让"段首在屏幕上方、正文延伸到视口内"
+        // 的移动段落完全不与视口相交而被漏掉。
+        let top = from_y.min(to_y);
+        let bottom = (from_y + from_h).max(to_y + to_h);
         let band = LocalRect {
             x: viewport.x,
-            y: from_y.min(to_y),
+            y: top,
             w: viewport.w,
-            h: (to_y - from_y).abs().max(1.0),
+            h: (bottom - top).max(1.0),
         };
         if !rects_intersect(&band, viewport) {
             continue;
@@ -880,16 +885,28 @@ fn collect_paragraph_moves(
     moves
 }
 
-/// 段落 id → 段落顶 y（文档坐标）。
-fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64)> {
-    let mut tops: Vec<(u64, f64)> = Vec::new();
+/// 段落 id → （真实段首 y，段落高度），文档坐标。
+///
+/// Issue #904 复核 9：段首必须取 `paragraph_top_document_y`（该版 canonical 的
+/// 权威 `height_index`），不能取快照里第一条可见行的 `document_origin_y` ——
+/// 构建路线按视口裁行，长段落从屏幕上方延伸进视口时两者并不相等，会让整段位移
+/// 的起点 y 取错（甚至把"没移动"判成移动、把移动判成没移动）。
+fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64, f64)> {
+    let mut tops: Vec<(u64, f64, f64)> = Vec::new();
     for line in &layout.line_snapshots {
         match tops
             .iter_mut()
-            .find(|(id, _)| *id == line.stable_paragraph_id)
+            .find(|(id, _, _)| *id == line.stable_paragraph_id)
         {
-            Some(entry) => entry.1 = entry.1.min(line.document_origin_y),
-            None => tops.push((line.stable_paragraph_id, line.document_origin_y)),
+            Some(entry) => {
+                entry.1 = entry.1.min(line.paragraph_top_document_y);
+                entry.2 = entry.2.max(line.paragraph_height);
+            }
+            None => tops.push((
+                line.stable_paragraph_id,
+                line.paragraph_top_document_y,
+                line.paragraph_height,
+            )),
         }
     }
     tops

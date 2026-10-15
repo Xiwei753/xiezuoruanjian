@@ -88,6 +88,16 @@ pub(crate) struct PreparedLineSnapshot {
     /// `LineSnapshotId.paragraph_id` 是文档中的段落序号（`logical_slot`），两者职责
     /// 不同：前者找纹理，后者才标识"同一个段落"（增删换行后不会漂移）。
     pub stable_paragraph_id: u64,
+    /// Issue #904 复核 9：**真实段首的文档绝对 y**（不是本行 y，也不是视口内
+    /// 第一条可见行的 y）。来源是该版 canonical 的权威 `height_index`。
+    ///
+    /// 两种构建路线都会按视口裁掉屏幕外的行，所以"快照里第一行的
+    /// `document_origin_y`"并不等于段首；长段落从屏幕上方延伸到视口时，
+    /// 拿它当段落锚点会让整段位移的起点 y 取错。
+    pub paragraph_top_document_y: f64,
+    /// Issue #904 复核 9：该段落完整高度（同版 canonical `height_index`）。
+    /// 判断段落是否与视口相交时必须用「段首 + 段高」的矩形，而不是段首之间的短竖条。
+    pub paragraph_height: f64,
     pub image: Option<QImage>,
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
@@ -138,6 +148,8 @@ impl PreparedLineSnapshot {
             id: LineSnapshotId::new(0, 0, visual_line_id as u32),
             // 测试 stub 里没有真实 ParagraphId：与 id 的段落序号保持一致。
             stable_paragraph_id: 0,
+            paragraph_top_document_y: top,
+            paragraph_height: 20.0,
             image: None,
             clusters,
             document_origin_y: top,

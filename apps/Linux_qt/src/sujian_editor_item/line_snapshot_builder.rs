@@ -27,6 +27,22 @@ use crate::editor::layout::{
 };
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
+/// Issue #904 复核 9：真实段首文档 y 与段落高度。
+///
+/// 两种构建路线都按视口裁行，不能用"快照第一条行的 y"反推段首；这里统一从该版
+/// canonical 的权威 `height_index` 取（`logical_slot` 是物化后按稳定 ParagraphId
+/// 映射出的当前逻辑序号，不是物理 cache_slot）。
+fn paragraph_top_and_height(
+    logical_slot: i32,
+    doc_snapshot: &CanonicalDocumentVisualSnapshot,
+) -> (f64, f64) {
+    let slot = logical_slot.max(0) as usize;
+    (
+        f64::from(doc_snapshot.padding) + doc_snapshot.height_index.paragraph_top_y(slot),
+        doc_snapshot.height_index.height_at(slot),
+    )
+}
+
 pub(crate) struct LineSnapshotBuilder;
 
 impl LineSnapshotBuilder {
@@ -73,11 +89,15 @@ impl LineSnapshotBuilder {
                 let (caret_top, caret_height) =
                     cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
+                let (para_top, para_h) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
 
                     // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
                     stable_paragraph_id: line.paragraph_id.as_u64(),
+                    paragraph_top_document_y: para_top,
+                    paragraph_height: para_h,
                     image: None,
                     clusters: Vec::new(),
                     document_origin_y: line.y,
@@ -177,11 +197,15 @@ impl LineSnapshotBuilder {
             let (caret_top, caret_height) =
                 cursor_rect_for_line(line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
+            let (para_top, para_h) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+
             line_snapshots.push(PreparedLineSnapshot {
                 id,
 
                 // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
                 stable_paragraph_id: line.paragraph_id.as_u64(),
+                paragraph_top_document_y: para_top,
+                paragraph_height: para_h,
                 image,
                 clusters,
                 document_origin_y: line.y,
@@ -296,11 +320,15 @@ impl LineSnapshotBuilder {
                 let (caret_top, caret_height) =
                     cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
+                let (para_top, para_h) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
 
                     // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
                     stable_paragraph_id: line.paragraph_id.as_u64(),
+                    paragraph_top_document_y: para_top,
+                    paragraph_height: para_h,
                     image: None,
                     clusters: Vec::new(),
                     document_origin_y: line.y,
@@ -401,11 +429,15 @@ impl LineSnapshotBuilder {
             let (caret_top, caret_height) =
                 cursor_rect_for_line(&line, doc_snapshot.font_size, &doc_snapshot.font_family);
 
+            let (para_top, para_h) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+
             line_snapshots.push(PreparedLineSnapshot {
                 id,
 
                 // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
                 stable_paragraph_id: line.paragraph_id.as_u64(),
+                paragraph_top_document_y: para_top,
+                paragraph_height: para_h,
                 image,
                 clusters,
                 document_origin_y: line.y,
