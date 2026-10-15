@@ -95,13 +95,15 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     }
   }
 
-  // ── Diagnostics Init（Issue #670 评论 5652119660 修复 2d） ──
+  // ── Diagnostics Init（Issue #670 评论 5652119660 修复 2d / #911） ──
   // 把目录/设备/版本/locale/timezone 等信息从 ArkTS 传进 Rust，
-  // 启动统一日志后端。session_id 在 Rust 里生成；enabled/verbose 默认 true。
+  // 启动统一日志后端。session_id 在 Rust 里生成；enabled/verbose 由 Rust
+  // 从 appDataRoot 下的 settings.local.json 读取（不再写死 true）。
   // 必须在第一批诊断事件之前调用，否则事件会被丢弃。
-  // 返回 0 表示成功，非 0 表示失败（-1 参数为 null，-2 无效 UTF-8）。
+  // 返回 0 表示成功，非 0 表示失败（-1 参数为 null，-2 无效 UTF-8，-3 设置读取失败）。
   initDiagnostics(
     logDir: string,
+    appDataRoot: string,
     deviceId: string,
     appVersion: string,
     buildKey: string,
@@ -110,7 +112,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   ): number {
     try {
       const result: number = this.core.getNativeModule().nativeInitDiagnostics(
-        logDir, deviceId, appVersion, buildKey, locale, timezone
+        logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone
       ) as number
       if (result !== 0) {
         console.error(`nativeInitDiagnostics failed with code: ${result}`)
