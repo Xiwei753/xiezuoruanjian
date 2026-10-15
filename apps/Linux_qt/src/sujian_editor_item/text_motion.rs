@@ -19,7 +19,7 @@
 //! - 新旧字形按 `QTextLayout` 的 cluster 边界（Core 的 UTF-8 byte range）
 //!   整体区分，不猜半个字节。
 
-use super::layout_snapshot::{EditorLayoutSnapshot, SourceRect};
+use super::layout_snapshot::{EditorLayoutSnapshot, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::render_plan::TextAnimationGlyphInfo;
 use super::snapshot_id::LineSnapshotId;
@@ -77,6 +77,8 @@ pub(crate) enum SliceMotion {
         direction: ClipDirection,
         start_visible: f64,
         byte_range: (usize, usize),
+        /// 本片段的 shaping 指纹（new 版），用于连续编辑接续时确认同一份字形。
+        shaping_identity: ShapingIdentity,
     },
     /// 旧字逐渐被覆盖（删除）。可见宽度 = `start_visible * (1-p)`。
     ///
@@ -86,6 +88,8 @@ pub(crate) enum SliceMotion {
         direction: ClipDirection,
         start_visible: f64,
         byte_range: (usize, usize),
+        /// 本片段的 shaping 指纹（old 版），用于连续编辑接续时确认同一份字形。
+        shaping_identity: ShapingIdentity,
     },
     /// 未删 cluster 从 `from` 积到 `to`（行内位移/换行/段落回流）。
     /// 坐标 = `(lerp(from.x,to.x,p), lerp(from.y,to.y,p))`，宽高固定为 new 版尺寸，
@@ -95,6 +99,8 @@ pub(crate) enum SliceMotion {
         from: LocalRect,
         to: LocalRect,
         byte_range: (usize, usize),
+        /// 本片段的 shaping 指纹（new 版），用于连续编辑接续时确认同一份字形。
+        shaping_identity: ShapingIdentity,
     },
 }
 
@@ -117,6 +123,24 @@ impl SliceMotion {
         }
     }
 
+    /// 该片段的 shaping 指纹（用于连续编辑接续时确认同一份字形）。
+    fn shaping_identity(&self) -> &ShapingIdentity {
+        match self {
+            SliceMotion::Reveal { shaping_identity, .. } => shaping_identity,
+            SliceMotion::Conceal { shaping_identity, .. } => shaping_identity,
+            SliceMotion::Shift { shaping_identity, .. } => shaping_identity,
+        }
+    }
+
+    /// 该片段的裁剪方向（Shift 无裁剪方向，返回 None）。
+    fn direction(&self) -> Option<ClipDirection> {
+        match self {
+            SliceMotion::Reveal { direction, .. } => Some(*direction),
+            SliceMotion::Conceal { direction, .. } => Some(*direction),
+            SliceMotion::Shift { .. } => None,
+        }
+    }
+
     /// 该片段的运动包络矩形（与视口求交用）。
     fn motion_rect(&self) -> LocalRect {
         match self {
@@ -132,6 +156,16 @@ impl SliceMotion {
             SliceMotion::Reveal { new, .. } => new.source.snapshot_id,
             SliceMotion::Conceal { old, .. } => old.source.snapshot_id,
             SliceMotion::Shift { new, .. } => new.source.snapshot_id,
+        }
+    }
+
+    /// 该片段引用的完整源纹理引用（snapshot_id + source_uv），用于精确区分
+    /// 不同旧视觉源（同 byte_range 但不同 snapshot/UV 的旧图不能互相继承）。
+    fn source_ref(&self) -> &SnapshotRef {
+        match self {
+            SliceMotion::Reveal { new, .. } => &new.source,
+            SliceMotion::Conceal { old, .. } => &old.source,
+            SliceMotion::Shift { new, .. } => &new.source,
         }
     }
 
@@ -172,6 +206,11 @@ pub(crate) struct DrawnSlice {
     pub motion_kind: MotionKind,
     /// 所属字节范围（用于连续编辑时轻量片段关联）。
     pub byte_range: (usize, usize),
+    /// 本片段的 shaping 指纹：接续时确认与本次新片段是同一份内容/字体 shaping，
+    /// 同 byte_range 但字形变了必须保留旧图退场、新图从零露出。
+    pub shaping_identity: ShapingIdentity,
+    /// 本片段的裁剪方向：旧 Conceal 继续吞时沿用原方向，不用本次编辑方向。
+    pub direction: ClipDirection,
 }
 
 /// Issue #919：上一次真正提交显示的局部画面。
@@ -336,18 +375,41 @@ impl TextMotion {
             }
             // 落在某个 patch 的 inserted_byte_range 内 → Reveal（新字露出）。
             if inserted_in_patch(edit, new_span.byte_range) {
-                // Issue #919 复核 1：新插入的字从 last_drawn 查找是否有同
-                // byte_range 的未完成 Reveal（连续输入同一位置），默认 0。
-                let start_visible = last_drawn_map
+                // Issue #919 复核 3：新插入的字从 last_drawn 查找同 byte_range 的
+                // 未完成 Reveal。必须核对 shaping_identity：相同字形才继承已露宽度
+                // （连续输入同一位置继续吐）；不同字形说明是替换/输入法换字，旧图退场
+                // （Conceal 沿用原方向从当前可见宽度继续吞到 0）+ 新图从零露出。
+                // byte_range 只做候选定位，不单独作为接续判据。
+                let last_reveal = last_drawn_map
                     .get(&new_span.byte_range)
-                    .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal))
-                    .map(|ds| ds.visible_width)
-                    .unwrap_or(0.0);
+                    .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal));
+                let start_visible = match last_reveal {
+                    Some(ds)
+                        if ds.shaping_identity
+                            .is_same_shaping(&new_span.shaping_identity) =>
+                    {
+                        // 同一字形：连续输入同一位置，从已露出宽度继续吐。
+                        ds.visible_width
+                    }
+                    Some(ds) if ds.visible_width > 0.01 => {
+                        // 不同字形但旧图仍在途：旧图退场 + 新图从零露出。
+                        slices.push(SliceMotion::Conceal {
+                            old: ds.slice,
+                            direction: ds.direction,
+                            start_visible: ds.visible_width,
+                            byte_range: ds.byte_range,
+                            shaping_identity: ds.shaping_identity.clone(),
+                        });
+                        0.0
+                    }
+                    _ => 0.0,
+                };
                 slices.push(SliceMotion::Reveal {
                     new: new_span.slice,
                     direction: ClipDirection::LeftToRight,
                     start_visible,
                     byte_range: new_span.byte_range,
+                    shaping_identity: new_span.shaping_identity.clone(),
                 });
                 continue;
             }
@@ -365,8 +427,11 @@ impl TextMotion {
             let last_reveal = last_vec
                 .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal).copied());
             if let Some(last) = last_reveal {
-                if last.visible_width < new_span.slice.rect.w - 0.01 {
-                    // 上一笔还在吐，本笔继续吐到满宽。
+                // Issue #919 复核 3：必须核对 shaping_identity，不同字形不能继承。
+                if last.shaping_identity.is_same_shaping(&new_span.shaping_identity)
+                    && last.visible_width < new_span.slice.rect.w - 0.01
+                {
+                    // 上一笔还在吐同一字形，本笔继续吐到满宽。
                     if let Some(idx) =
                         old_spans.iter().position(|s| s.byte_range == old_byte_range)
                     {
@@ -377,6 +442,7 @@ impl TextMotion {
                         direction: ClipDirection::LeftToRight,
                         start_visible: last.visible_width,
                         byte_range: new_span.byte_range,
+                        shaping_identity: new_span.shaping_identity.clone(),
                     });
                     continue;
                 }
@@ -406,6 +472,7 @@ impl TextMotion {
                                 from,
                                 to,
                                 byte_range: new_span.byte_range,
+                                shaping_identity: new_span.shaping_identity.clone(),
                             });
                         }
                     } else {
@@ -414,12 +481,14 @@ impl TextMotion {
                             direction,
                             start_visible: old_span.slice.rect.w,
                             byte_range: old_span.byte_range,
+                            shaping_identity: old_span.shaping_identity.clone(),
                         });
                         slices.push(SliceMotion::Reveal {
                             new: new_span.slice,
                             direction: ClipDirection::LeftToRight,
                             start_visible: 0.0,
                             byte_range: new_span.byte_range,
+                            shaping_identity: new_span.shaping_identity.clone(),
                         });
                     }
                     continue;
@@ -450,12 +519,14 @@ impl TextMotion {
                             direction,
                             start_visible: old_span.slice.rect.w,
                             byte_range: old_span.byte_range,
+                            shaping_identity: old_span.shaping_identity.clone(),
                         });
                         slices.push(SliceMotion::Reveal {
                             new: new_span.slice,
                             direction: ClipDirection::LeftToRight,
                             start_visible: 0.0,
                             byte_range: new_span.byte_range,
+                            shaping_identity: new_span.shaping_identity.clone(),
                         });
                     } else if !rect_approx_eq(&old_span.slice.rect, &new_span.slice.rect) {
                         // shaping 相同、几何不同 → Shift（采样 new 版字形纹理）。
@@ -464,6 +535,7 @@ impl TextMotion {
                             from: old_span.slice.rect,
                             to: new_span.slice.rect,
                             byte_range: new_span.byte_range,
+                            shaping_identity: new_span.shaping_identity.clone(),
                         });
                     }
                     // shaping 相同、几何相同：静态，不产生动画。
@@ -475,6 +547,7 @@ impl TextMotion {
                         direction: ClipDirection::LeftToRight,
                         start_visible: 0.0,
                         byte_range: new_span.byte_range,
+                        shaping_identity: new_span.shaping_identity.clone(),
                     });
                 }
             }
@@ -488,43 +561,62 @@ impl TextMotion {
             {
                 continue;
             }
-            // Issue #919 复核 1：连续删除重定向——从 last_drawn 查找同 byte_range
-            // 的未完成 Conceal，从当前剩余宽度继续吞。
-            let start_visible = last_drawn_map
-                .get(&old_span.byte_range)
-                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Conceal))
-                .map(|ds| ds.visible_width)
-                .unwrap_or(old_span.slice.rect.w);
+            // Issue #919 复核 3：连续删除重定向——只继承相同真实旧视觉源
+            // （snapshot_id + source_uv 相同）的未完成 Conceal 的裁剪起点和方向，
+            // 否则从自身完整旧图开始吞。不用 byte_range 单独作为接续判据：
+            // 同位置但不同旧图（如上一笔删的字和本轮删的字碰巧同 byte_range）
+            // 不能互相继承遮罩宽度。
+            let inherited = last_drawn
+                .filter(|f| f.session == session)
+                .and_then(|frame| {
+                    frame.slices.iter().find(|ds| {
+                        ds.motion_kind == MotionKind::Conceal
+                            && ds.slice.source == old_span.slice.source
+                    })
+                });
+            let (start_visible, conceal_direction) = match inherited {
+                Some(ds) => (ds.visible_width, ds.direction),
+                None => (old_span.slice.rect.w, direction),
+            };
             slices.push(SliceMotion::Conceal {
                 old: old_span.slice,
-                direction,
+                direction: conceal_direction,
                 start_visible,
                 byte_range: old_span.byte_range,
+                shaping_identity: old_span.shaping_identity.clone(),
             });
         }
 
         // Issue #919 复核 2：上一笔删除但仍在途的旧 Conceal——被删字已不在当前 Core
         // 正文，不会进入 old_spans；从 last_drawn 直接沿用其画面继续吞到 0。
+        // 复核 3：每条旧 Conceal 的持有者由实际 source.snapshot_id + source_uv 区分；
+        // 被上一笔删除的旧图是独立在途退出像素，不能因本轮 old_spans 的字节范围
+        // 碰巧相同就跳过。继续使用它原本的 source + clip_rect + direction 从当前
+        // 裁剪形状收至 0，不用本次编辑方向。
         if let Some(frame) = last_drawn.filter(|f| f.session == session) {
             for ds in &frame.slices {
                 if ds.motion_kind != MotionKind::Conceal || ds.visible_width <= 0.01 {
                     continue;
                 }
-                // 已在当前 old_spans 中的由第二遍处理，不重复。
-                if old_spans.iter().any(|s| s.byte_range == ds.byte_range) {
+                // 已被本轮相同真实旧视觉源接管的跳过（第二遍用 source identity 继承）。
+                if old_spans
+                    .iter()
+                    .any(|s| s.slice.source == ds.slice.source)
+                {
                     continue;
                 }
-                // 同 byte_range 已被本计划 Conceal 接管的跳过。
+                // 同 source 已被本计划 Conceal 接管的跳过。
                 if slices.iter().any(|s| {
-                    s.motion_kind() == MotionKind::Conceal && s.byte_range() == ds.byte_range
+                    s.motion_kind() == MotionKind::Conceal && s.source_ref() == &ds.slice.source
                 }) {
                     continue;
                 }
                 slices.push(SliceMotion::Conceal {
                     old: ds.slice,
-                    direction,
+                    direction: ds.direction,
                     start_visible: ds.visible_width,
                     byte_range: ds.byte_range,
+                    shaping_identity: ds.shaping_identity.clone(),
                 });
             }
         }
@@ -964,6 +1056,8 @@ fn glyph_info(
         clip_rect,
         motion_kind: motion.motion_kind(),
         byte_range: motion.byte_range(),
+        shaping_identity: motion.shaping_identity().clone(),
+        direction: motion.direction(),
     }
 }
 

@@ -704,6 +704,10 @@ fn prepare_text_animation_layer(
             },
             motion_kind: glyph.motion_kind,
             byte_range: glyph.byte_range,
+            shaping_identity: glyph.shaping_identity.clone(),
+            direction: glyph
+                .direction
+                .unwrap_or(super::text_motion::ClipDirection::LeftToRight),
         });
     }
 

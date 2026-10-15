@@ -1,6 +1,6 @@
-use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
-use super::text_motion::MotionKind;
+use super::text_motion::{ClipDirection, MotionKind};
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 
@@ -29,6 +29,12 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub motion_kind: MotionKind,
     /// Issue #919 复核 1：所属字节范围，供连续编辑重定向时轻量片段关联。
     pub byte_range: (usize, usize),
+    /// Issue #919 复核 3：本片段的 shaping 指纹，供 `DrawnSlice` 记录后用于
+    /// 连续编辑接续时确认同一份字形，避免同 byte_range 不同字误继承遮罩宽度。
+    pub shaping_identity: ShapingIdentity,
+    /// Issue #919 复核 3：本片段的裁剪方向（Shift 无裁剪方向，为 None），
+    /// 供 `DrawnSlice` 记录后用于旧 Conceal 继续吞时沿用原方向。
+    pub direction: Option<ClipDirection>,
 }
 
 #[derive(Clone, Debug, Default)]
