@@ -578,6 +578,7 @@ fn regression_issue_761_unresolved_conflict_without_remote_blob_returns_partial_
         description: "正文文件双端修改冲突。".to_string(),
         kind: SyncConflictKind::BothChanged,
         remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
     };
     let mut state = SyncState {
         device_id: DEVICE_LOCAL.to_string(),

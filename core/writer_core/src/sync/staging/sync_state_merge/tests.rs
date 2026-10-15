@@ -33,6 +33,7 @@ fn make_conflict(path: &str) -> SyncConflict {
         created_at: 1,
         description: "test".to_string(),
         remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
     }
 }
 

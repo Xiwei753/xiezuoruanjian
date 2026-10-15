@@ -217,6 +217,7 @@ fn build_live_project_with_preexisting_conflict_and_snapshot(
         created_at: 1_000,
         description: "pre-existing conflict with snapshot".to_string(),
         remote_snapshot_path: Some(snapshot_rel.to_string()),
+        remote_graph_snapshot_dir: None,
     };
     SyncService::record_sync_conflict(&live_root, conflict, Some("local existing content"))
         .unwrap();

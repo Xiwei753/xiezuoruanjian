@@ -286,6 +286,9 @@ impl From<SyncConflictDto> for crate::sync::SyncConflict {
             description: c.description,
             kind: sync_conflict_kind_from_wire(&c.kind),
             remote_snapshot_path: c.remote_snapshot_path,
+            // DTO 层不携带内部 graph 快照目录；从 wire 反序列化的冲突
+            // 不会有远端整图快照，设为 None。
+            remote_graph_snapshot_dir: None,
         }
     }
 }

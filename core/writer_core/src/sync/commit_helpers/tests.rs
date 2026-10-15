@@ -59,6 +59,7 @@ fn empty_actions_must_still_persist_merged_sync_state() {
         created_at: 1,
         description: "merged".to_string(),
         remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
     };
     let merged_conflicts = vec![merged_conflict];
 

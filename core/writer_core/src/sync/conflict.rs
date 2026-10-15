@@ -246,6 +246,9 @@ pub fn record_staging_conflicts(
             kind: sc.kind,
             // RemoteDeleted 的 remote_snapshot_path 必须是 None。
             remote_snapshot_path: sc.remote_snapshot_path.clone(),
+            // graph 级 BothChanged 时保存的远端整图快照目录；
+            // 非 graph 级冲突或 RemoteDeleted 时为 None。
+            remote_graph_snapshot_dir: sc.remote_graph_snapshot_dir.clone(),
         };
 
         upsert_conflict(
@@ -613,6 +616,14 @@ impl crate::sync::SyncService {
         // Remove the conflict record from state.conflicts and conflicts.json
         // via the shared in-memory helper.
         remove_conflict_in_memory(&mut state, &mut conflicts_json, path);
+
+        // issue #902 第十四轮复核：整图 graph.json 冲突解决后，防御性清理
+        // conflicts.json 中该星图路径下的子对象冲突记录。整图恢复/删除后，
+        // 子对象冲突不再有意义（graph 已统一处理）。
+        if crate::sync::staging::starmap_merge::is_starmap_graph_meta_path(path) {
+            Self::cleanup_subobject_conflicts(&mut state, &mut conflicts_json, path);
+        }
+
         persist_conflict_state(sync_root, &state, &conflicts_json)?;
         // applied_live = !use_pending_fallback：
         // - use_pending_fallback=false → 已立即应用 live 正文（snapshot 替换/移入 trash）。
@@ -621,6 +632,13 @@ impl crate::sync::SyncService {
     }
 
     /// 根据 conflict kind 决定 take_remote 的具体动作，返回是否需要回退到 pending_take_remote。
+    ///
+    /// **issue #902 第十四轮复核**：在 match conflict.kind 前先判断路径类型：
+    /// - `is_starmap_graph_meta_path(path)` → 整图冲突解决
+    ///   （[`decide_take_remote_starmap_graph`]）
+    /// - 星图对象文件 + RemoteDeleted → 领域级删除事务
+    ///   （[`apply_starmap_object_remote_delete`]）
+    /// - 非星图路径 → 原有 move_to_trash / apply_remote_snapshot 逻辑
     fn decide_take_remote(
         sync_root: &Path,
         path: &str,
@@ -631,9 +649,22 @@ impl crate::sync::SyncService {
             // 无冲突记录：回退 pending_take_remote 行为。
             return Ok(true);
         };
+
+        // 整图 graph.json 冲突：路由到整图冲突解决
+        if crate::sync::staging::starmap_merge::is_starmap_graph_meta_path(path) {
+            return Self::decide_take_remote_starmap_graph(sync_root, path, state, &conflict);
+        }
+
         match conflict.kind {
             SyncConflictKind::RemoteDeleted => {
-                // RemoteDeleted：把本地文件移入 trash，并从 known_files 移除。
+                // 星图对象文件：路由到领域级删除事务
+                if crate::sync::staging::starmap_merge::is_starmap_object_file_path(path) {
+                    Self::apply_starmap_object_remote_delete(sync_root, path)?;
+                    state.known_files.remove(path);
+                    state.known_files_updated_at.remove(path);
+                    return Ok(false);
+                }
+                // 非星图路径：RemoteDeleted 把本地文件移入 trash，并从 known_files 移除。
                 // 不能继续把已删除路径留在 known_files —— 否则下一轮
                 // snapshot_local_records_read_only 会看到"known file missing
                 // without tombstone"直接返回 Err，把已删除文件当成损坏。
@@ -818,9 +849,11 @@ impl crate::sync::SyncService {
     /// 收集 graph 所有成员对象文件内容，用于重建派生索引。
     ///
     /// 被恢复的对象（`restore_type`/`restore_id`）用 `remote_content` 覆盖，
-    /// 因为此时对象文件还未写到磁盘。其他成员对象从磁盘读取；读取失败
-    /// （文件不存在等）则跳过该对象，不放入返回 map——派生索引重建时
-    /// 会跳过缺失的对象。
+    /// 因为此时对象文件还未写到磁盘。其他成员对象从磁盘读取。
+    ///
+    /// **issue #902 第十四轮复核**：`read_member_files` 现在返回 `Result`，
+    /// graph 已登记但磁盘缺失的对象会返回 `Err`，不再静默跳过。调用方必须
+    /// 传播错误，中止冲突解决事务。
     fn collect_member_object_contents(
         sync_root: &Path,
         starmap_id: &str,
@@ -837,10 +870,24 @@ impl crate::sync::SyncService {
             remote_content.to_vec(),
         );
 
-        // 遍历所有成员类型，读磁盘对象文件。读失败跳过：对象可能不存在
-        // （本地删除场景），派生索引重建时会跳过缺失的对象。
-        Self::read_member_files(sync_root, starmap_id, "node", "nodes", &graph.node_ids, &mut map);
-        Self::read_member_files(sync_root, starmap_id, "edge", "edges", &graph.edge_ids, &mut map);
+        // 遍历所有成员类型，读磁盘对象文件。graph 已登记但磁盘缺失的对象
+        // 会返回 Err，中止事务——不写出不完整派生索引。
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "node",
+            "nodes",
+            &graph.node_ids,
+            &mut map,
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "edge",
+            "edges",
+            &graph.edge_ids,
+            &mut map,
+        )?;
         Self::read_member_files(
             sync_root,
             starmap_id,
@@ -848,8 +895,15 @@ impl crate::sync::SyncService {
             "embeds",
             &graph.embed_instance_ids,
             &mut map,
-        );
-        Self::read_member_files(sync_root, starmap_id, "link", "links", &graph.link_ids, &mut map);
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "link",
+            "links",
+            &graph.link_ids,
+            &mut map,
+        )?;
         Self::read_member_files(
             sync_root,
             starmap_id,
@@ -857,12 +911,71 @@ impl crate::sync::SyncService {
             "hyperlinks",
             &graph.hyperlink_ids,
             &mut map,
-        );
+        )?;
 
         Ok(map)
     }
 
-    /// 读取一种成员类型的所有对象文件到 `map`。已存在的 key 跳过，读失败跳过。
+    /// 收集 graph 所有成员对象文件内容（不带 restore 覆盖）。
+    ///
+    /// 用于对象删除 / 整图恢复场景：所有成员对象都从磁盘读取，没有
+    /// "尚未写盘的 restore 对象"。graph 已登记但磁盘缺失的对象返回 `Err`。
+    fn collect_all_member_object_contents(
+        sync_root: &Path,
+        starmap_id: &str,
+        graph: &crate::starmap::store::meta::GraphMeta,
+    ) -> crate::Result<ObjectContentMap> {
+        let mut map: ObjectContentMap = std::collections::HashMap::new();
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "node",
+            "nodes",
+            &graph.node_ids,
+            &mut map,
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "edge",
+            "edges",
+            &graph.edge_ids,
+            &mut map,
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "embed",
+            "embeds",
+            &graph.embed_instance_ids,
+            &mut map,
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "link",
+            "links",
+            &graph.link_ids,
+            &mut map,
+        )?;
+        Self::read_member_files(
+            sync_root,
+            starmap_id,
+            "hyperlink",
+            "hyperlinks",
+            &graph.hyperlink_ids,
+            &mut map,
+        )?;
+        Ok(map)
+    }
+
+    /// 读取一种成员类型的所有对象文件到 `map`。已存在的 key 跳过。
+    ///
+    /// **issue #902 第十四轮复核**：graph 已登记的成员对象必须存在对应文件，
+    /// 缺失或无法读取时返回 `Err`，中止冲突解决事务——不再静默跳过。
+    /// 此前 `if let Ok(bytes) = ...` 会跳过读失败的对象，导致
+    /// `rebuild_derived_indexes_for_graph` 写出不完整派生索引，graph 成员表
+    /// 与磁盘对象文件不一致。
     fn read_member_files(
         sync_root: &Path,
         starmap_id: &str,
@@ -870,7 +983,7 @@ impl crate::sync::SyncService {
         type_dir: &str,
         ids: &[String],
         map: &mut ObjectContentMap,
-    ) {
+    ) -> crate::Result<()> {
         use crate::starmap::package_storage::bucket_for_id;
 
         for id in ids {
@@ -879,11 +992,19 @@ impl crate::sync::SyncService {
                 continue; // 已用 remote_content 覆盖
             }
             let bucket = bucket_for_id(id);
-            let rel = format!("starmaps/{}/{}/{}/{}.json", starmap_id, type_dir, bucket, id);
-            if let Ok(bytes) = std::fs::read(sync_root.join(&rel)) {
-                map.insert(key, bytes);
-            }
+            let rel = format!(
+                "starmaps/{}/{}/{}/{}.json",
+                starmap_id, type_dir, bucket, id
+            );
+            let bytes = std::fs::read(sync_root.join(&rel)).map_err(|e| {
+                crate::Error::Other(format!(
+                    "read_member_files: 已登记的 {} '{}' 对象文件缺失或无法读取 ({}): {}",
+                    otype, id, rel, e
+                ))
+            })?;
+            map.insert(key, bytes);
         }
+        Ok(())
     }
 
     /// 从 `object_contents` 取出并解析单个成员对象。
@@ -913,7 +1034,11 @@ impl crate::sync::SyncService {
     /// 与 [`crate::sync::staging::starmap_merge::rebuild_derived_indexes`] 逻辑等价，
     /// 但直接使用 `GraphMeta` 的公开成员列表，无需构造 `MergedMemberIds`。
     /// `object_contents` 的 key 是 `(object_type, object_id)`，value 是对象 JSON bytes。
-    /// map 中缺失的对象跳过；解析失败返回 `Err`（对象文件损坏是真实不一致）。
+    ///
+    /// **issue #902 第十四轮复核**：`read_member_files` 现在对已登记但磁盘缺失
+    /// 的对象返回 `Err`，因此 `object_contents` 应包含 graph 全部成员。
+    /// `parse_member_object` 返回 `Ok(None)` 的分支理论上不再触发，保留为
+    /// 防御性 `continue`；解析失败（对象文件损坏）仍返回 `Err`。
     fn rebuild_derived_indexes_for_graph(
         starmap_id: &str,
         graph: &crate::starmap::store::meta::GraphMeta,
@@ -967,11 +1092,9 @@ impl crate::sync::SyncService {
 
         let mut hyperlink_relation_index: Vec<HyperlinkRelationIndex> = Vec::new();
         for hl_id in &graph.hyperlink_ids {
-            let Some(hl) = Self::parse_member_object::<StarMapHyperlink>(
-                object_contents,
-                "hyperlink",
-                hl_id,
-            )? else {
+            let Some(hl) =
+                Self::parse_member_object::<StarMapHyperlink>(object_contents, "hyperlink", hl_id)?
+            else {
                 continue;
             };
             let source_node_id =
@@ -991,10 +1114,13 @@ impl crate::sync::SyncService {
                 object_contents,
                 "node",
                 node_id,
-            )? else {
+            )?
+            else {
                 continue;
             };
-            *node_kind_counts.entry(format!("{:?}", node.kind)).or_insert(0) += 1;
+            *node_kind_counts
+                .entry(format!("{:?}", node.kind))
+                .or_insert(0) += 1;
         }
 
         Ok(crate::sync::staging::starmap_merge::DerivedIndexes {
@@ -1065,6 +1191,695 @@ impl crate::sync::SyncService {
                 .remove_entry(object_type, object_id);
         }
         added
+    }
+
+    /// 将对象 ID 从 graph 成员表和 revision 移除，并添加 tombstone
+    /// （issue #902 第十四轮复核，与 [`add_object_to_graph_members`] 对称）。
+    ///
+    /// 返回 true 表示已移除，false 表示未知对象类型或成员表中本就没有该 ID。
+    /// 移除时递增 `package_revision` 并在 `deleted_since_last_sync` 添加 tombstone。
+    fn remove_object_from_graph_members(
+        graph: &mut crate::starmap::store::meta::GraphMeta,
+        object_type: &str,
+        object_id: &str,
+    ) -> bool {
+        let removed = match object_type {
+            "node" => {
+                let before = graph.node_ids.len();
+                graph.node_ids.retain(|x| x != object_id);
+                graph.node_revisions.remove(object_id);
+                graph.node_ids.len() < before
+            }
+            "edge" => {
+                let before = graph.edge_ids.len();
+                graph.edge_ids.retain(|x| x != object_id);
+                graph.edge_revisions.remove(object_id);
+                graph.edge_ids.len() < before
+            }
+            "embed" => {
+                let before = graph.embed_instance_ids.len();
+                graph.embed_instance_ids.retain(|x| x != object_id);
+                graph.embed_revisions.remove(object_id);
+                graph.embed_instance_ids.len() < before
+            }
+            "link" => {
+                let before = graph.link_ids.len();
+                graph.link_ids.retain(|x| x != object_id);
+                graph.link_revisions.remove(object_id);
+                graph.link_ids.len() < before
+            }
+            "hyperlink" => {
+                let before = graph.hyperlink_ids.len();
+                graph.hyperlink_ids.retain(|x| x != object_id);
+                graph.hyperlink_revisions.remove(object_id);
+                graph.hyperlink_ids.len() < before
+            }
+            _ => false,
+        };
+        if removed {
+            graph.package_revision = graph.package_revision.wrapping_add(1);
+            graph
+                .deleted_since_last_sync
+                .add_entry(object_type, object_id, graph.package_revision);
+        }
+        removed
+    }
+
+    /// 检查 `StarMapTargetPath` 是否引用给定 node_id（issue #902 第十四轮复核）。
+    ///
+    /// 用于级联清理：删除 node 时，检查 edge/link/hyperlink/embed 的路径端点
+    /// 是否引用该 node。引用出现在 `target`（Node/Anchor）或 `segments`
+    /// （EnterPortal）中。
+    fn target_path_references_node(
+        path: &crate::starmap::types::StarMapTargetPath,
+        node_id: &str,
+    ) -> bool {
+        use crate::starmap::semantic::StarMapTargetDetail;
+        use crate::starmap::types::StarMapPathSegment;
+
+        let target_ref = match &path.target {
+            StarMapTargetDetail::Node { node_id: nid } => nid == node_id,
+            StarMapTargetDetail::Anchor { node_id: nid, .. } => nid == node_id,
+            _ => false,
+        };
+        target_ref
+            || path.segments.iter().any(|seg| match seg {
+                StarMapPathSegment::EnterPortal { node_id: nid } => nid == node_id,
+                _ => false,
+            })
+    }
+
+    /// 从 graph.json 路径解析 starmap_id。
+    ///
+    /// `path` 格式：`starmaps/<id>/graph.json`。返回 `None` 如果格式不匹配。
+    fn parse_starmap_id_from_graph_path(path: &str) -> Option<String> {
+        let normalized = path.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        if parts.len() == 3 && parts[0] == "starmaps" && parts[2] == "graph.json" {
+            Some(parts[1].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// 构造星图对象文件的相对路径。
+    fn starmap_object_rel(starmap_id: &str, type_dir: &str, object_id: &str) -> String {
+        use crate::starmap::package_storage::bucket_for_id;
+        let bucket = bucket_for_id(object_id);
+        format!(
+            "starmaps/{}/{}/{}/{}.json",
+            starmap_id, type_dir, bucket, object_id
+        )
+    }
+
+    /// 从 state.known_files / known_files_updated_at 移除指定星图前缀下的所有路径。
+    fn cleanup_starmap_known_files(state: &mut crate::sync::types::SyncState, starmap_id: &str) {
+        let prefix = format!("starmaps/{}/", starmap_id);
+        state.known_files.retain(|k, _| !k.starts_with(&prefix));
+        state
+            .known_files_updated_at
+            .retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// 读取 index.json 并移除指定星图 ID，返回序列化后的 bytes（issue #902 第十四轮复核）。
+    ///
+    /// 供 `apply_starmap_graph_remote_delete` 在 SaveTransaction 中原子写入。
+    fn load_index_and_remove_starmap(sync_root: &Path, starmap_id: &str) -> crate::Result<Vec<u8>> {
+        let mut idx = crate::starmap::load_index(sync_root)?;
+        idx.starmap_ids.retain(|x| x != starmap_id);
+        idx.root_starmap_ids.retain(|x| x != starmap_id);
+        idx.main_starmap_by_project.retain(|_, v| v != starmap_id);
+        idx.updated_at = crate::starmap::now_epoch();
+        serde_json::to_vec_pretty(&idx).map_err(|e| {
+            crate::Error::Other(format!("load_index_and_remove_starmap: 序列化失败: {}", e))
+        })
+    }
+
+    /// 读取 index.json 并确保包含指定星图 ID，返回序列化后的 bytes。
+    ///
+    /// 供 `apply_starmap_graph_remote_modify` 在 SaveTransaction 中原子写入。
+    /// 只恢复 `starmap_ids`——`root_starmap_ids` / `main_starmap_by_project`
+    /// 的恢复需要 meta.json，不在 graph.json 冲突范围内。
+    fn load_index_and_ensure_starmap(sync_root: &Path, starmap_id: &str) -> crate::Result<Vec<u8>> {
+        let mut idx = crate::starmap::load_index(sync_root)?;
+        if !idx.starmap_ids.iter().any(|x| x == starmap_id) {
+            idx.starmap_ids.push(starmap_id.to_string());
+        }
+        idx.updated_at = crate::starmap::now_epoch();
+        serde_json::to_vec_pretty(&idx).map_err(|e| {
+            crate::Error::Other(format!("load_index_and_ensure_starmap: 序列化失败: {}", e))
+        })
+    }
+
+    /// 星图对象文件的远端删除事务（issue #902 第十四轮复核，问题 3）。
+    ///
+    /// `sync_root` 是项目数据根目录。`path` 是相对 sync_root 的星图对象文件路径。
+    ///
+    /// RemoteDeleted 冲突（远端删除了对象，本地修改了对象），用户选"采用远端"=
+    /// 接受删除。本函数执行领域级删除：
+    /// 1. 解析路径得到 starmap_id、object_type、object_id
+    /// 2. 读取 graph.json
+    /// 3. 从成员表 / revisions 移除该 ID，添加 tombstone
+    /// 4. 级联清理引用该对象的 edge/embed/link/hyperlink（不允许悬挂成员）
+    /// 5. 重建派生索引
+    /// 6. SaveTransaction 原子提交：删除对象文件 + 更新 graph.json
+    ///
+    /// 任何环节失败返回 `Err`，不部分应用。
+    fn apply_starmap_object_remote_delete(sync_root: &Path, path: &str) -> crate::Result<()> {
+        use crate::starmap::store::meta::GraphMeta;
+        use crate::sync::staging::starmap_merge::{is_starmap_object_file_path, parse_object_path};
+
+        if !is_starmap_object_file_path(path) {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 非星图对象路径 '{}'",
+                path
+            )));
+        }
+
+        let normalized = path.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        let starmap_id = parts[1];
+        let Some((object_type, object_id)) = parse_object_path(std::path::Path::new(path)) else {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 解析对象路径失败 '{}'",
+                path
+            )));
+        };
+
+        let graph_rel = format!("starmaps/{}/graph.json", starmap_id);
+        let graph_path = sync_root.join(&graph_rel);
+
+        // 读取 graph.json
+        let graph_bytes = std::fs::read(&graph_path).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 读取 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+        let mut graph: GraphMeta = serde_json::from_slice(&graph_bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 解析 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        // 收集所有成员对象内容（含被删对象），用于级联引用检查。
+        // 被删对象文件存在（RemoteDeleted 冲突 = 本地修改了对象）。
+        let object_contents =
+            Self::collect_all_member_object_contents(sync_root, starmap_id, &graph)?;
+
+        // 从成员表移除主对象
+        if !Self::remove_object_from_graph_members(&mut graph, &object_type, &object_id) {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 对象 '{}' 不在 graph 成员表中 (type '{}')",
+                object_id, object_type
+            )));
+        }
+
+        // 记算需要删除的对象文件路径列表（含级联删除的）
+        let mut delete_rels: Vec<String> = vec![path.to_string()];
+
+        // 级联清理：删除 node 时，移除引用该 node 的 edge/embed/link/hyperlink
+        if object_type == "node" {
+            Self::cascade_remove_references(
+                &mut graph,
+                &object_id,
+                &object_contents,
+                starmap_id,
+                &mut delete_rels,
+            )?;
+        }
+
+        // 收集剩余成员对象内容（从已读的 object_contents 中取，跳过被移除的）
+        let remaining_contents: ObjectContentMap = object_contents
+            .into_iter()
+            .filter(|((otype, oid), _)| Self::is_object_in_graph_members(&graph, otype, oid))
+            .collect();
+
+        // 重建派生索引
+        let derived =
+            Self::rebuild_derived_indexes_for_graph(starmap_id, &graph, &remaining_contents)?;
+        graph.edge_relation_index = derived.edge_relation_index;
+        graph.embed_host_index = derived.embed_host_index;
+        graph.link_relation_index = derived.link_relation_index;
+        graph.hyperlink_relation_index = derived.hyperlink_relation_index;
+        graph.node_kind_counts = derived.node_kind_counts;
+
+        // 更新 updated_at
+        let now_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        graph.updated_at = std::cmp::max(graph.updated_at, now_ms);
+
+        let new_graph_bytes = serde_json::to_vec_pretty(&graph).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 序列化 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        // SaveTransaction 原子提交：删除对象文件 + 更新 graph.json
+        let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
+        for del_rel in &delete_rels {
+            txn.add_delete(del_rel);
+        }
+        txn.add_bytes(&graph_rel, &new_graph_bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 暂存 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+        txn.commit().map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_object_remote_delete: 提交事务失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// 级联移除引用指定 node 的 edge/embed/link/hyperlink（issue #902 第十四轮复核）。
+    ///
+    /// 不允许留下悬挂成员：删除 node 后，引用该 node 的 edge（from/to）、
+    /// link（source/target）、hyperlink（source）、embed（host_path）也必须移除。
+    fn cascade_remove_references(
+        graph: &mut crate::starmap::store::meta::GraphMeta,
+        node_id: &str,
+        object_contents: &ObjectContentMap,
+        starmap_id: &str,
+        delete_rels: &mut Vec<String>,
+    ) -> crate::Result<()> {
+        use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
+
+        // edge：from/to 引用 node
+        let edges_to_remove: Vec<String> = graph
+            .edge_ids
+            .iter()
+            .filter_map(|eid| {
+                let edge = Self::parse_member_object::<StarMapEdge>(object_contents, "edge", eid)
+                    .ok()
+                    .flatten()?;
+                if Self::target_path_references_node(&edge.from, node_id)
+                    || Self::target_path_references_node(&edge.to, node_id)
+                {
+                    Some(eid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for eid in &edges_to_remove {
+            Self::remove_object_from_graph_members(graph, "edge", eid);
+            delete_rels.push(Self::starmap_object_rel(starmap_id, "edges", eid));
+        }
+
+        // link：source/target 引用 node
+        let links_to_remove: Vec<String> = graph
+            .link_ids
+            .iter()
+            .filter_map(|lid| {
+                let link = Self::parse_member_object::<StarMapLink>(object_contents, "link", lid)
+                    .ok()
+                    .flatten()?;
+                if Self::target_path_references_node(&link.source, node_id)
+                    || Self::target_path_references_node(&link.target, node_id)
+                {
+                    Some(lid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for lid in &links_to_remove {
+            Self::remove_object_from_graph_members(graph, "link", lid);
+            delete_rels.push(Self::starmap_object_rel(starmap_id, "links", lid));
+        }
+
+        // hyperlink：source 引用 node
+        let hyperlinks_to_remove: Vec<String> = graph
+            .hyperlink_ids
+            .iter()
+            .filter_map(|hid| {
+                let hl = Self::parse_member_object::<StarMapHyperlink>(
+                    object_contents,
+                    "hyperlink",
+                    hid,
+                )
+                .ok()
+                .flatten()?;
+                if Self::target_path_references_node(&hl.source, node_id) {
+                    Some(hid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for hid in &hyperlinks_to_remove {
+            Self::remove_object_from_graph_members(graph, "hyperlink", hid);
+            delete_rels.push(Self::starmap_object_rel(starmap_id, "hyperlinks", hid));
+        }
+
+        // embed：host_path 引用 node
+        let embeds_to_remove: Vec<String> = graph
+            .embed_instance_ids
+            .iter()
+            .filter_map(|eid| {
+                let embed =
+                    Self::parse_member_object::<StarMapEmbed>(object_contents, "embed", eid)
+                        .ok()
+                        .flatten()?;
+                if Self::target_path_references_node(&embed.host_path, node_id) {
+                    Some(eid.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for eid in &embeds_to_remove {
+            Self::remove_object_from_graph_members(graph, "embed", eid);
+            delete_rels.push(Self::starmap_object_rel(starmap_id, "embeds", eid));
+        }
+
+        Ok(())
+    }
+
+    /// 检查对象是否在 graph 成员表中。
+    fn is_object_in_graph_members(
+        graph: &crate::starmap::store::meta::GraphMeta,
+        object_type: &str,
+        object_id: &str,
+    ) -> bool {
+        match object_type {
+            "node" => graph.node_ids.iter().any(|x| x == object_id),
+            "edge" => graph.edge_ids.iter().any(|x| x == object_id),
+            "embed" => graph.embed_instance_ids.iter().any(|x| x == object_id),
+            "link" => graph.link_ids.iter().any(|x| x == object_id),
+            "hyperlink" => graph.hyperlink_ids.iter().any(|x| x == object_id),
+            _ => false,
+        }
+    }
+
+    /// 整图远端删除事务（issue #902 第十四轮复核，问题 2a）。
+    ///
+    /// graph.json 的 RemoteDeleted 冲突（远端删除了整图，用户选远端 = 接受删除）。
+    /// 1. 解析路径得到 starmap_id
+    /// 2. 读取 live graph.json 得到成员表
+    /// 3. 收集所有子对象文件路径
+    /// 4. SaveTransaction 原子提交：删除 graph.json + 删除所有子对象文件
+    /// 5. 从 starmaps/index.json 移除该星图 ID
+    fn apply_starmap_graph_remote_delete(sync_root: &Path, path: &str) -> crate::Result<()> {
+        use crate::starmap::store::meta::GraphMeta;
+
+        let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) else {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_graph_remote_delete: 非法 graph.json 路径 '{}'",
+                path
+            )));
+        };
+
+        let graph_rel = format!("starmaps/{}/graph.json", starmap_id);
+        let graph_path = sync_root.join(&graph_rel);
+
+        // 读取 live graph.json 得到成员表（如果 graph.json 不存在，说明本地已删除，
+        // 只需清理 index.json）
+        let member_rels: Vec<String> = if graph_path.exists() {
+            let graph_bytes = std::fs::read(&graph_path).map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_delete: 读取 graph.json 失败 ({}): {}",
+                    starmap_id, e
+                ))
+            })?;
+            let graph: GraphMeta = serde_json::from_slice(&graph_bytes).map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_delete: 解析 graph.json 失败 ({}): {}",
+                    starmap_id, e
+                ))
+            })?;
+            Self::collect_all_member_file_rels(&starmap_id, &graph)
+        } else {
+            Vec::new()
+        };
+
+        // 准备 index.json（移除该星图 ID）
+        let index_bytes = Self::load_index_and_remove_starmap(sync_root, &starmap_id)?;
+
+        // SaveTransaction 原子提交：删除 graph.json + 删除所有子对象文件 + 更新 index.json
+        let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
+        txn.add_delete(&graph_rel);
+        for obj_rel in &member_rels {
+            txn.add_delete(obj_rel);
+        }
+        txn.add_bytes("starmaps/index.json", &index_bytes)
+            .map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_delete: 暂存 index.json 失败: {}",
+                    e
+                ))
+            })?;
+        txn.commit().map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_delete: 提交事务失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// 整图远端修改恢复事务（issue #902 第十四轮复核，问题 2b）。
+    ///
+    /// graph.json 的 BothChanged 冲突（本地删除远端修改，用户选远端 = 恢复远端整图）。
+    /// 1. 从 conflict.remote_snapshot_path 读取远端 graph.json
+    /// 2. 从 conflict.remote_graph_snapshot_dir 读取所有远端子对象文件
+    /// 3. 解析远端 graph.json 得到成员表
+    /// 4. SaveTransaction 原子提交：写入 graph.json + 写入所有远端子对象文件
+    /// 5. 恢复 starmaps/index.json 条目
+    /// 6. 重建派生索引
+    fn apply_starmap_graph_remote_modify(
+        sync_root: &Path,
+        path: &str,
+        conflict: &SyncConflict,
+    ) -> crate::Result<()> {
+        use crate::starmap::store::meta::GraphMeta;
+
+        let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) else {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 非法 graph.json 路径 '{}'",
+                path
+            )));
+        };
+
+        let graph_rel = format!("starmaps/{}/graph.json", starmap_id);
+
+        // 从 remote_snapshot_path 读取远端 graph.json
+        let snapshot_rel = conflict.remote_snapshot_path.as_ref().ok_or_else(|| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 缺少 remote_snapshot_path (graph '{}')",
+                starmap_id
+            ))
+        })?;
+        let remote_graph_bytes = std::fs::read(sync_root.join(snapshot_rel)).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 读取远端 graph snapshot 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        let mut remote_graph: GraphMeta =
+            serde_json::from_slice(&remote_graph_bytes).map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_modify: 解析远端 graph.json 失败 ({}): {}",
+                    starmap_id, e
+                ))
+            })?;
+
+        // 从 remote_graph_snapshot_dir 读取所有远端子对象文件
+        let snapshot_dir_rel = conflict.remote_graph_snapshot_dir.as_ref().ok_or_else(|| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 缺少 remote_graph_snapshot_dir (graph '{}')",
+                starmap_id
+            ))
+        })?;
+
+        let member_rels = Self::collect_all_member_file_rels(&starmap_id, &remote_graph);
+        // 一次读取所有子对象快照：返回 (rel_path, bytes) 列表和 (otype,oid)→bytes 映射
+        let (obj_files, object_contents) =
+            Self::read_remote_graph_snapshot_objects(sync_root, &member_rels, snapshot_dir_rel)?;
+
+        // 重建派生索引
+        let derived =
+            Self::rebuild_derived_indexes_for_graph(&starmap_id, &remote_graph, &object_contents)?;
+        remote_graph.edge_relation_index = derived.edge_relation_index;
+        remote_graph.embed_host_index = derived.embed_host_index;
+        remote_graph.link_relation_index = derived.link_relation_index;
+        remote_graph.hyperlink_relation_index = derived.hyperlink_relation_index;
+        remote_graph.node_kind_counts = derived.node_kind_counts;
+
+        let now_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        remote_graph.updated_at = std::cmp::max(remote_graph.updated_at, now_ms);
+
+        let new_graph_bytes = serde_json::to_vec_pretty(&remote_graph).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 序列化 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        // 准备 index.json（确保包含该星图 ID）
+        let index_bytes = Self::load_index_and_ensure_starmap(sync_root, &starmap_id)?;
+
+        // SaveTransaction 原子提交：写入 graph.json + 写入所有远端子对象文件 + 更新 index.json
+        let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
+        txn.add_bytes(&graph_rel, &new_graph_bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 暂存 graph.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+        for (obj_rel, bytes) in &obj_files {
+            txn.add_bytes(obj_rel, bytes).map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_modify: 暂存子对象 '{}' 失败: {}",
+                    obj_rel, e
+                ))
+            })?;
+        }
+        txn.add_bytes("starmaps/index.json", &index_bytes)
+            .map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_modify: 暂存 index.json 失败: {}",
+                    e
+                ))
+            })?;
+        txn.commit().map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 提交事务失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// 从快照目录读取远端整图子对象（issue #902 第十四轮复核）。
+    ///
+    /// 返回 `(obj_files, object_contents)`：
+    /// - `obj_files`：`(rel_path, bytes)` 列表，供 SaveTransaction 写入
+    /// - `object_contents`：`(object_type, object_id) → bytes` 映射，供派生索引重建
+    #[allow(clippy::type_complexity)]
+    fn read_remote_graph_snapshot_objects(
+        sync_root: &Path,
+        member_rels: &[String],
+        snapshot_dir_rel: &str,
+    ) -> crate::Result<(Vec<(String, Vec<u8>)>, ObjectContentMap)> {
+        let mut obj_files: Vec<(String, Vec<u8>)> = Vec::with_capacity(member_rels.len());
+        let mut object_contents: ObjectContentMap = std::collections::HashMap::new();
+        for obj_rel in member_rels {
+            let snap_obj_rel = format!("{}/{}", snapshot_dir_rel, obj_rel);
+            let snap_obj_path = sync_root.join(&snap_obj_rel);
+            let bytes = std::fs::read(&snap_obj_path).map_err(|e| {
+                crate::Error::Other(format!(
+                    "read_remote_graph_snapshot_objects: 读取远端子对象快照失败 ({}): {}",
+                    obj_rel, e
+                ))
+            })?;
+            if let Some((otype, oid)) = crate::sync::staging::starmap_merge::parse_object_path(
+                std::path::Path::new(obj_rel),
+            ) {
+                object_contents.insert((otype, oid), bytes.clone());
+            }
+            obj_files.push((obj_rel.clone(), bytes));
+        }
+        Ok((obj_files, object_contents))
+    }
+
+    /// 收集 graph 所有成员对象文件的相对路径（用于事务中批量删除/写入）。
+    fn collect_all_member_file_rels(
+        starmap_id: &str,
+        graph: &crate::starmap::store::meta::GraphMeta,
+    ) -> Vec<String> {
+        let mut rels = Vec::new();
+        for id in &graph.node_ids {
+            rels.push(Self::starmap_object_rel(starmap_id, "nodes", id));
+        }
+        for id in &graph.edge_ids {
+            rels.push(Self::starmap_object_rel(starmap_id, "edges", id));
+        }
+        for id in &graph.embed_instance_ids {
+            rels.push(Self::starmap_object_rel(starmap_id, "embeds", id));
+        }
+        for id in &graph.link_ids {
+            rels.push(Self::starmap_object_rel(starmap_id, "links", id));
+        }
+        for id in &graph.hyperlink_ids {
+            rels.push(Self::starmap_object_rel(starmap_id, "hyperlinks", id));
+        }
+        rels
+    }
+
+    /// 整图 graph.json 冲突的路由（issue #902 第十四轮复核，问题 2）。
+    ///
+    /// - RemoteDeleted：远端删除整图，用户选远端 = 接受删除 →
+    ///   [`apply_starmap_graph_remote_delete`]
+    /// - BothChanged：本地删除远端修改，用户选远端 = 恢复远端整图 →
+    ///   [`apply_starmap_graph_remote_modify`]
+    fn decide_take_remote_starmap_graph(
+        sync_root: &Path,
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+        conflict: &SyncConflict,
+    ) -> crate::Result<bool> {
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                Self::apply_starmap_graph_remote_delete(sync_root, path)?;
+                if let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) {
+                    Self::cleanup_starmap_known_files(state, &starmap_id);
+                }
+                Ok(false)
+            }
+            SyncConflictKind::BothChanged => {
+                Self::apply_starmap_graph_remote_modify(sync_root, path, conflict)?;
+                if let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) {
+                    Self::cleanup_starmap_known_files(state, &starmap_id);
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// 清理指定星图前缀下的子对象冲突记录（issue #902 第十四轮复核）。
+    ///
+    /// 整图 graph.json 冲突解决后调用：从 `conflicts_json` / `state.conflicts` /
+    /// `state.conflicted_files` 移除该星图路径下除 `graph_path` 自身外的所有条目。
+    fn cleanup_subobject_conflicts(
+        state: &mut crate::sync::types::SyncState,
+        conflicts_json: &mut Vec<SyncConflict>,
+        graph_path: &str,
+    ) {
+        let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(graph_path) else {
+            return;
+        };
+        let prefix = format!("starmaps/{}/", starmap_id);
+        // 只清理子对象冲突（前缀匹配且不是 graph.json 自身）
+        conflicts_json
+            .retain(|c| !(c.local_path.starts_with(&prefix) && c.local_path != graph_path));
+        state
+            .conflicts
+            .retain(|c| !(c.local_path.starts_with(&prefix) && c.local_path != graph_path));
+        state
+            .conflicted_files
+            .retain(|p| !(p.starts_with(&prefix) && p != graph_path));
     }
 
     /// Resolve a conflict by marking it as manually merged.
@@ -1521,6 +2336,312 @@ mod tests {
             updated.node_revisions.get("node_new"),
             Some(&11u64),
             "node_revisions should be set to new package_revision"
+        );
+    }
+
+    // =========================================================================
+    // issue #902 第十四轮复核：read_member_files 返回 Err on 缺失对象
+    // =========================================================================
+
+    /// 用 bucket_for_id 构造对象文件相对路径。
+    fn object_rel(starmap_id: &str, type_dir: &str, object_id: &str) -> String {
+        use crate::starmap::package_storage::bucket_for_id;
+        let bucket = bucket_for_id(object_id);
+        format!(
+            "starmaps/{}/{}/{}/{}.json",
+            starmap_id, type_dir, bucket, object_id
+        )
+    }
+
+    /// 写对象文件到正确 bucket 路径。
+    fn write_object_file(
+        root: &Path,
+        starmap_id: &str,
+        type_dir: &str,
+        object_id: &str,
+        bytes: &[u8],
+    ) {
+        let rel = object_rel(starmap_id, type_dir, object_id);
+        let path = root.join(&rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, bytes).unwrap();
+    }
+
+    /// 写最小 index.json。
+    fn write_index(root: &Path, starmap_ids: &[&str]) {
+        let idx = crate::starmap::StarMapIndexRecord {
+            schema_version: 4,
+            starmap_ids: starmap_ids.iter().map(|s| s.to_string()).collect(),
+            root_starmap_ids: starmap_ids.iter().map(|s| s.to_string()).collect(),
+            main_starmap_by_project: std::collections::HashMap::new(),
+            updated_at: 0,
+        };
+        let dir = root.join("starmaps");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("index.json"),
+            serde_json::to_string_pretty(&idx).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// 读 index.json。
+    fn read_index(root: &Path) -> crate::starmap::StarMapIndexRecord {
+        let content = std::fs::read_to_string(root.join("starmaps/index.json")).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or_else(|_| crate::starmap::StarMapIndexRecord {
+            schema_version: 4,
+            starmap_ids: vec![],
+            root_starmap_ids: vec![],
+            main_starmap_by_project: std::collections::HashMap::new(),
+            updated_at: 0,
+        })
+    }
+
+    #[test]
+    fn test_read_member_files_err_on_missing_object() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // graph.json 含 node_n1，但不创建 n1 的对象文件
+        let mut graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            ..Default::default()
+        };
+        graph.node_ids.push("n1".to_string());
+        write_graph(root, "sm_1", &serde_json::to_string_pretty(&graph).unwrap());
+
+        // collect_all_member_object_contents 应返回 Err（n1 对象文件缺失）
+        let result = SyncService::collect_all_member_object_contents(root, "sm_1", &graph);
+        assert!(
+            result.is_err(),
+            "collect_all_member_object_contents 应在成员对象缺失时返回 Err"
+        );
+    }
+
+    // =========================================================================
+    // issue #902 第十四轮复核：apply_starmap_object_remote_delete（问题 3）
+    // =========================================================================
+
+    #[test]
+    fn test_apply_starmap_object_remote_delete_removes_member() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // graph.json 含 node_n1
+        let mut graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            package_revision: 5,
+            ..Default::default()
+        };
+        graph.node_ids.push("n1".to_string());
+        graph.node_revisions.insert("n1".to_string(), 5);
+        let json = serde_json::to_string_pretty(&graph).unwrap();
+        write_graph(root, "sm_1", &json);
+
+        // 创建 n1 对象文件
+        let n1_bytes = make_object_bytes("node", "n1");
+        write_object_file(root, "sm_1", "nodes", "n1", &n1_bytes);
+
+        let path = object_rel("sm_1", "nodes", "n1");
+        SyncService::apply_starmap_object_remote_delete(root, &path).unwrap();
+
+        // 验证 n1 从 node_ids 移除
+        let updated = read_graph(root, "sm_1");
+        assert!(
+            !updated.node_ids.iter().any(|x| x == "n1"),
+            "n1 应从 node_ids 移除"
+        );
+        // 验证 tombstone 添加
+        assert!(
+            updated
+                .deleted_since_last_sync
+                .entries
+                .iter()
+                .any(|e| e.object_type == "node" && e.object_id == "n1"),
+            "应在 deleted_since_last_sync 添加 n1 tombstone"
+        );
+        // 验证 package_revision 递增
+        assert_eq!(updated.package_revision, 6);
+        // 验证对象文件已删除
+        assert!(!root.join(&path).exists(), "对象文件应被删除");
+    }
+
+    #[test]
+    fn test_apply_starmap_object_remote_delete_cascade_removes_dangling_edge() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // graph.json 含 node_n1 和 edge_e1（e1 引用 n1）
+        let mut graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            ..Default::default()
+        };
+        graph.node_ids.push("n1".to_string());
+        graph.edge_ids.push("e1".to_string());
+        let json = serde_json::to_string_pretty(&graph).unwrap();
+        write_graph(root, "sm_1", &json);
+
+        // 创建 n1 和 e1 对象文件
+        let n1_bytes = make_object_bytes("node", "n1");
+        write_object_file(root, "sm_1", "nodes", "n1", &n1_bytes);
+
+        // e1 的 from/to 引用 n1
+        let node_path = serde_json::json!({
+            "starmapId": "sm_1",
+            "target": {"type": "node", "node_id": "n1"}
+        });
+        let edge_e1 = serde_json::json!({
+            "id": "e1",
+            "from": node_path,
+            "to": node_path,
+            "kind": "RelatedTo",
+            "createdAt": 0,
+            "updatedAt": 0
+        });
+        write_object_file(
+            root,
+            "sm_1",
+            "edges",
+            "e1",
+            &serde_json::to_vec(&edge_e1).unwrap(),
+        );
+
+        let path = object_rel("sm_1", "nodes", "n1");
+        SyncService::apply_starmap_object_remote_delete(root, &path).unwrap();
+
+        // 验证 n1 和 e1 都从成员表移除（级联清理）
+        let updated = read_graph(root, "sm_1");
+        assert!(!updated.node_ids.iter().any(|x| x == "n1"), "n1 应移除");
+        assert!(
+            !updated.edge_ids.iter().any(|x| x == "e1"),
+            "e1 应级联移除（引用已删 node n1）"
+        );
+        // 验证两个对象文件都删除
+        assert!(!root.join(object_rel("sm_1", "nodes", "n1")).exists());
+        assert!(!root.join(object_rel("sm_1", "edges", "e1")).exists());
+    }
+
+    // =========================================================================
+    // issue #902 第十四轮复核：apply_starmap_graph_remote_delete（问题 2a）
+    // =========================================================================
+
+    #[test]
+    fn test_apply_starmap_graph_remote_delete_removes_graph_and_index() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // 创建 graph.json + 对象文件 + index.json
+        let mut graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            ..Default::default()
+        };
+        graph.node_ids.push("n1".to_string());
+        write_graph(root, "sm_1", &serde_json::to_string_pretty(&graph).unwrap());
+        write_object_file(
+            root,
+            "sm_1",
+            "nodes",
+            "n1",
+            &make_object_bytes("node", "n1"),
+        );
+        write_index(root, &["sm_1", "sm_2"]);
+
+        let graph_path = "starmaps/sm_1/graph.json";
+        SyncService::apply_starmap_graph_remote_delete(root, graph_path).unwrap();
+
+        // 验证 graph.json 删除
+        assert!(!root.join(graph_path).exists(), "graph.json 应删除");
+        // 验证子对象删除
+        assert!(
+            !root.join(object_rel("sm_1", "nodes", "n1")).exists(),
+            "子对象应删除"
+        );
+        // 验证 index.json 移除 sm_1
+        let idx = read_index(root);
+        assert!(
+            !idx.starmap_ids.iter().any(|x| x == "sm_1"),
+            "index 应移除 sm_1"
+        );
+        assert!(
+            idx.starmap_ids.iter().any(|x| x == "sm_2"),
+            "index 应保留 sm_2"
+        );
+    }
+
+    // =========================================================================
+    // issue #902 第十四轮复核：apply_starmap_graph_remote_modify（问题 2b）
+    // =========================================================================
+
+    #[test]
+    fn test_apply_starmap_graph_remote_modify_restores_graph() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // 远端 graph.json 含 node_rn1
+        let mut remote_graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            ..Default::default()
+        };
+        remote_graph.node_ids.push("rn1".to_string());
+        let remote_graph_bytes = serde_json::to_vec_pretty(&remote_graph).unwrap();
+
+        // 保存远端 graph snapshot
+        let snapshot_rel = "starmaps/sm_1/graph.json.remote-conflict-20260101-000000";
+        std::fs::create_dir_all(root.join("starmaps/sm_1")).unwrap();
+        std::fs::write(root.join(snapshot_rel), &remote_graph_bytes).unwrap();
+
+        // 保存远端子对象快照
+        let snapshot_dir = ".conflict-snapshot/starmaps/sm_1/20260101-000000";
+        let rn1_bytes = make_object_bytes("node", "rn1");
+        let snap_obj_rel = format!("{}/{}", snapshot_dir, object_rel("sm_1", "nodes", "rn1"));
+        let snap_obj_path = root.join(&snap_obj_rel);
+        if let Some(parent) = snap_obj_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&snap_obj_path, &rn1_bytes).unwrap();
+
+        // index.json 不含 sm_1（本地已删除）
+        write_index(root, &["sm_2"]);
+
+        let conflict = SyncConflict {
+            local_path: "starmaps/sm_1/graph.json".to_string(),
+            remote_path: "remote/starmaps/sm_1/graph.json".to_string(),
+            local_hash: "local".to_string(),
+            remote_hash: "remote".to_string(),
+            base_hash: "base".to_string(),
+            created_at: 0,
+            description: "graph both changed".to_string(),
+            kind: SyncConflictKind::BothChanged,
+            remote_snapshot_path: Some(snapshot_rel.to_string()),
+            remote_graph_snapshot_dir: Some(snapshot_dir.to_string()),
+        };
+
+        SyncService::apply_starmap_graph_remote_modify(root, "starmaps/sm_1/graph.json", &conflict)
+            .unwrap();
+
+        // 验证 graph.json 恢复
+        let restored = read_graph(root, "sm_1");
+        assert!(
+            restored.node_ids.iter().any(|x| x == "rn1"),
+            "graph.json 应含远端 node rn1"
+        );
+        // 验证子对象恢复
+        assert!(
+            root.join(object_rel("sm_1", "nodes", "rn1")).exists(),
+            "子对象 rn1 应恢复"
+        );
+        // 验证 index.json 含 sm_1
+        let idx = read_index(root);
+        assert!(
+            idx.starmap_ids.iter().any(|x| x == "sm_1"),
+            "index 应恢复 sm_1"
         );
     }
 }

@@ -498,6 +498,14 @@ pub struct SyncConflict {
     /// 旧数据缺少此字段时默认 `None`。
     #[serde(default)]
     pub remote_snapshot_path: Option<String>,
+    /// graph 级 BothChanged 冲突时保存的远端整图快照目录（相对 `sync_root`）。
+    ///
+    /// **issue #902 第十四轮复核**：当 `local_path` 是 `starmaps/<id>/graph.json`
+    /// 且 `kind == BothChanged`，本字段指向保存了远端整图全部子对象文件的
+    /// 快照目录。`resolve_conflict_take_remote` 据此恢复远端整图。
+    /// 旧数据缺少此字段时默认 `None`。
+    #[serde(default)]
+    pub remote_graph_snapshot_dir: Option<String>,
 }
 
 /// 跨作品冲突记录 — 全局冲突查询返回的扁平结构。

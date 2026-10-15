@@ -356,6 +356,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
         created_at: 1,
         description: "test conflict".to_string(),
         remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
     };
     let conflicts_json_content = serde_json::to_string_pretty(&vec![conflict.clone()]).unwrap();
     write_rel(&run.staging_root(), conflicts_json, &conflicts_json_content);
@@ -572,6 +573,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
         description: "both changed".to_string(),
         kind: writer_core::sync::types::SyncConflictKind::BothChanged,
         remote_snapshot_path: None,
+        remote_graph_snapshot_dir: None,
     }];
     let transfer_result = FullSyncTransferResult {
         targets: vec![TargetSyncResult {

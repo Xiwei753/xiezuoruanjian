@@ -60,6 +60,15 @@ pub struct StagingConflict {
     /// 不再靠 remote_snapshot_path 是否存在猜语义。
     pub kind: crate::sync::types::SyncConflictKind,
     pub remote_snapshot_path: Option<String>,
+    /// graph 级 BothChanged 冲突时保存的远端整图快照目录（相对 sync_root）。
+    ///
+    /// **issue #902 第十四轮复核**：当 `rel_path` 是 `starmaps/<id>/graph.json`
+    /// 且 `kind == BothChanged`（本地删除远端修改，用户选远端 = 恢复远端整图），
+    /// `save_conflict_snapshots` 会把 staging_root 下该星图的**所有子对象文件**
+    /// 复制到 `<sync_root>/.conflict-snapshot/starmaps/<id>/` 下，本字段记录该
+    /// 目录相对 sync_root 的路径。`apply_starmap_graph_remote_modify` 据此恢复
+    /// 远端整图。非 graph 级冲突或 `RemoteDeleted` 时为 `None`。
+    pub remote_graph_snapshot_dir: Option<String>,
 }
 
 /// 单个文件的 commit 动作。

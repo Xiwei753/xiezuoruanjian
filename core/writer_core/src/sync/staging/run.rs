@@ -359,6 +359,7 @@ impl StagingRun {
                             // 调 save_conflict_snapshots 填入（#757）。
                             // RemoteDeleted 不保存快照（远端已删除，无 incoming 正文）。
                             remote_snapshot_path: None,
+                            remote_graph_snapshot_dir: None,
                         });
                     }
                 }
@@ -525,6 +526,9 @@ impl StagingRun {
                     incoming_hash: graph_incoming_hash,
                     kind: graph_conflict_kind,
                     remote_snapshot_path: None,
+                    // graph 级冲突的整图远端快照目录由 save_conflict_snapshots
+                    // 在 staging cleanup 前填入（BothChanged 时保存全部子对象）。
+                    remote_graph_snapshot_dir: None,
                 });
             }
 
@@ -594,6 +598,7 @@ impl StagingRun {
                             incoming_hash,
                             kind: *kind,
                             remote_snapshot_path: None,
+                            remote_graph_snapshot_dir: None,
                         });
                     }
                 }

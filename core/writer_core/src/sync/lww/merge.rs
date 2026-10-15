@@ -511,6 +511,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
                                 .to_string(),
                             kind: SyncConflictKind::RemoteDeleted,
                             remote_snapshot_path: None,
+                            remote_graph_snapshot_dir: None,
                         };
                         doc_conflicts.push(conflict.clone());
                         state.conflicted_files.insert(path.clone());
@@ -543,6 +544,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
                                         .to_string(),
                                     kind: SyncConflictKind::BothChanged,
                                     remote_snapshot_path: Some(remote_snapshot_path),
+                                    remote_graph_snapshot_dir: None,
                                 })
                             } else {
                                 None

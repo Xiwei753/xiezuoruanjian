@@ -212,6 +212,13 @@ fn apply_commit_plan_with_optional_merge(
 ///
 /// 必须在 `run.cleanup()` 之前调用——cleanup 会删除 staging_root，之后读不到 incoming。
 /// 已填快照（`remote_snapshot_path.is_some()`）的条目跳过，避免重复保存。
+///
+/// **issue #902 第十四轮复核**：对 graph 级 BothChanged 冲突
+/// （`is_starmap_graph_meta_path(rel_path)` 且 kind == BothChanged），额外从
+/// staging_root 读取该星图的**所有子对象文件**，保存到
+/// `<live_root>/.conflict-snapshot/starmaps/<id>/<timestamp>/` 下保留原相对结构，
+/// 填入 `StagingConflict.remote_graph_snapshot_dir`。`apply_starmap_graph_remote_modify`
+/// 据此恢复远端整图。
 fn save_conflict_snapshots(
     live_root: &Path,
     staging_root: &Path,
@@ -236,8 +243,99 @@ fn save_conflict_snapshots(
         let incoming = std::fs::read(&incoming_path)?;
         let snapshot_rel = crate::sync::lww::save_conflict_copy(live_root, &rel_str, &incoming)?;
         sc.remote_snapshot_path = Some(snapshot_rel);
+
+        // graph 级 BothChanged：额外保存远端整图子对象快照。
+        if crate::sync::staging::starmap_merge::is_starmap_graph_meta_path(&rel_str) {
+            match save_graph_conflict_snapshot(live_root, staging_root, &rel_str, &incoming) {
+                Ok(dir) => sc.remote_graph_snapshot_dir = Some(dir),
+                Err(e) => {
+                    let msg = format!("save_graph_conflict_snapshot failed for {}: {}", rel_str, e);
+                    return Err(crate::error::Error::Other(msg));
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// 为 graph 级 BothChanged 冲突保存远端整图子对象快照（issue #902 第十四轮复核）。
+///
+/// 从 staging_root 读取该星图的 incoming graph.json（`incoming_graph_bytes`），
+/// 解析成员表，把所有子对象文件从 staging_root 复制到
+/// `<live_root>/.conflict-snapshot/starmaps/<id>/<timestamp>/` 下保留原相对结构
+/// （`starmaps/<id>/<type_dir>/<bucket>/<obj_id>.json`）。
+///
+/// 返回快照目录相对 `live_root` 的路径（如
+/// `.conflict-snapshot/starmaps/<id>/<timestamp>`）。
+///
+/// staging_root 中缺失的成员对象返回 `Err`——incoming graph 引用了不存在的对象
+/// 是远端数据不一致，不能静默跳过。
+fn save_graph_conflict_snapshot(
+    live_root: &Path,
+    staging_root: &Path,
+    graph_rel: &str,
+    incoming_graph_bytes: &[u8],
+) -> crate::error::Result<String> {
+    use crate::starmap::package_storage::bucket_for_id;
+    use crate::starmap::store::meta::GraphMeta;
+
+    // 解析 starmap_id：starmaps/<id>/graph.json
+    let normalized = graph_rel.replace('\\', "/");
+    let parts: Vec<&str> = normalized.split('/').collect();
+    // is_starmap_graph_meta_path 已验证 parts.len() == 3
+    let starmap_id = parts[1];
+
+    // 解析 incoming graph.json 得到成员表
+    let graph: GraphMeta = serde_json::from_slice(incoming_graph_bytes).map_err(|e| {
+        crate::error::Error::Other(format!(
+            "save_graph_conflict_snapshot: 解析 incoming graph.json 失败 ({}): {}",
+            graph_rel, e
+        ))
+    })?;
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let snapshot_dir_rel = format!(".conflict-snapshot/starmaps/{}/{}", starmap_id, timestamp);
+
+    // 收集所有成员 (type_dir, id)
+    let members: Vec<(&str, &String)> = graph
+        .node_ids
+        .iter()
+        .map(|id| ("nodes", id))
+        .chain(graph.edge_ids.iter().map(|id| ("edges", id)))
+        .chain(graph.embed_instance_ids.iter().map(|id| ("embeds", id)))
+        .chain(graph.link_ids.iter().map(|id| ("links", id)))
+        .chain(graph.hyperlink_ids.iter().map(|id| ("hyperlinks", id)))
+        .collect();
+
+    for (type_dir, id) in members {
+        let bucket = bucket_for_id(id);
+        let obj_rel = format!(
+            "starmaps/{}/{}/{}/{}.json",
+            starmap_id, type_dir, bucket, id
+        );
+        let staging_obj_path = staging_root.join(&obj_rel);
+        if !staging_obj_path.exists() {
+            return Err(crate::error::Error::Other(format!(
+                "save_graph_conflict_snapshot: incoming graph 成员 {} '{}' 在 staging_root 中不存在 ({})",
+                type_dir, id, obj_rel
+            )));
+        }
+        let obj_bytes = std::fs::read(&staging_obj_path)?;
+        // 保存到快照目录，保留原相对结构
+        let snap_rel = format!("{}/{}", snapshot_dir_rel, obj_rel);
+        let snap_path = live_root.join(&snap_rel);
+        if let Some(parent) = snap_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::storage::transaction::atomic_write_bytes(&snap_path, &obj_bytes).map_err(|e| {
+            crate::error::Error::Io(std::io::Error::other(format!(
+                "save_graph_conflict_snapshot: 写入快照对象 {} 失败: {}",
+                snap_rel, e
+            )))
+        })?;
+    }
+
+    Ok(snapshot_dir_rel)
 }
 
 pub(crate) struct StagingCommitOutcome {
