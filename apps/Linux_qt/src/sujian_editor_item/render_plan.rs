@@ -1,10 +1,7 @@
-use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{LineSnapshotId, ShapingIdentity, SourceRect};
+use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
-use crate::sujian_editor_item::cursor_controller::CursorMoveSource;
-use crate::sujian_editor_item::edit_motion::DeleteEdge;
 use writer_core::editor::EditorRevision;
 
 /// Issue #904：动画层本帧要画的一个局部文字覆盖层。
@@ -30,19 +27,10 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub clip_rect: SourceRect,
     /// 逻辑 cluster identity；旧侧与新侧 glyph 都保留各自的范围。
     pub logical_range: (usize, usize),
-    /// 此 glyph 在当前 canonical revision 中对应的范围。纯删除旧字没有该身份。
-    pub canonical_range: Option<(usize, usize)>,
-    /// 删除 glyph 的 caret 边缘；其他动画 glyph 为 None。
-    pub delete_edge: Option<DeleteEdge>,
-    pub shaping_identity: ShapingIdentity,
     /// 该动画 glyph 对应的 Core source revision（旧字为编辑前，新字为编辑后）。
     pub source_revision: EditorRevision,
     /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
     pub glyph_id: u64,
-    /// 同一字形内的碎片序号。
-    pub fragment_index: u32,
-    /// 原始完整 glyph rectangle（未被裁剪的完整字形矩形）。
-    pub original_glyph_rect: SourceRect,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -140,15 +128,6 @@ pub(crate) struct CursorRenderState {
     pub h: f64,
     pub baseline_y: f64,
     pub opacity: f64,
-    /// The active move intent and the route currently owned by CursorController.
-    pub movement_source: Option<CursorMoveSource>,
-    pub driver_revision: Option<LayoutRevision>,
-    pub driver_transition_id: u64,
-    pub document_session: u64,
-    pub target_x: f64,
-    pub target_y: f64,
-    pub path_start_x: f64,
-    pub path_start_y: f64,
 }
 
 /// Issue #904：本帧要画的局部文字覆盖层 + 静态层要挖掉的局部孔洞。
@@ -186,38 +165,6 @@ impl LocalTextPlan {
     }
 }
 
-/// Issue #904：静态正文（QSGTextNode）本帧实际绘制的轻量纯数据信息。
-///
-/// 从 `EditorLayoutSnapshot.line_snapshots`（`PreparedLineSnapshot`）按 **cluster**
-/// 提取每个可见字形的 `LineSnapshotId`、Core UTF-8 byte range、文档坐标几何和源
-/// 纹理 UV。`RenderPlan` 用它登记静态层已画出的正文身份，供帧回执
-/// （`frame_submission`）保留本帧活跃纹理。
-///
-/// `document_rect` / `visible_clip` / `source_uv` 使用 `SourceRect`（本模块统一的
-/// 几何载体）。`glyph_id` 由 `text_motion::derive_fragment_id` 派生；同一 cluster
-/// 被裁成多块时共享同一 `glyph_id`、不同 `fragment_index`。
-#[derive(Clone, Debug)]
-pub(crate) struct StaticTextContributionInfo {
-    /// 源纹理的完整行快照 id（来自 `PreparedLineSnapshot.id`）。
-    pub snapshot_id: LineSnapshotId,
-    /// 该贡献对应的 Core 逻辑 UTF-8 byte range `(start, end)`（半开区间），
-    /// 来自 `LineClusterSnapshot.byte_start / byte_end`（cluster 级，非整行）。
-    pub byte_range: (usize, usize),
-    /// 文档坐标系中的目标矩形（不含滚动偏移）。
-    pub document_rect: SourceRect,
-    /// 实际可见的裁剪区域（文档坐标，已与视口求交）；
-    /// `visible_clip.h <= 0` 的行（完全在视口外）不登记贡献。
-    pub visible_clip: SourceRect,
-    /// 源纹理中的 UV 区域（行纹理局部坐标，已乘 DPR）。
-    pub source_uv: SourceRect,
-    /// 该静态贡献对应的 Core source revision（当前 canonical 的 target revision）。
-    pub source_revision: EditorRevision,
-    /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
-    pub glyph_id: u64,
-    /// 同一字形内的碎片序号；单一 cluster 未被裁剪时为 0。
-    pub fragment_index: u32,
-}
-
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
@@ -237,12 +184,6 @@ pub struct RenderPlan {
     pub(crate) cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub(crate) selection_preedit_style: SelectionPreeditStyle,
-    /// Issue #904：静态 QSGTextNode 本帧绘制的正文行贡献信息。
-    ///
-    /// 从 `EditorLayoutSnapshot.line_snapshots` 提取，登记静态正文身份，
-    /// 供帧回执保留本帧活跃纹理。未变化的段落沿用已有 QSGTextNode，
-    /// 只有局部动画接管的小块由动画层绘制。
-    pub(crate) static_text_contributions: Vec<StaticTextContributionInfo>,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
     ///
     /// 该 rect 是 CursorController 本帧采样后的实际光标位置；Snap 时就是目标位置。

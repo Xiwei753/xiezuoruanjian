@@ -863,16 +863,8 @@ fn glyph_info(
         source_rect: source_uv,
         clip_rect,
         logical_range: piece.byte_range(),
-        canonical_range: match piece {
-            TextPiece::Reveal { .. } | TextPiece::Move { .. } => Some(piece.byte_range()),
-            TextPiece::Conceal { .. } => None,
-        },
-        delete_edge: None,
-        shaping_identity: super::layout_snapshot::ShapingIdentity::default(),
         source_revision: piece.source_revision(),
         glyph_id: piece.glyph_id(),
-        fragment_index: 0,
-        original_glyph_rect: target_rect,
     }
 }
 

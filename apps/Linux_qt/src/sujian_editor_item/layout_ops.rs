@@ -396,7 +396,6 @@ impl SujianEditorItem {
             composition_range,
             canonical_text_revision,
         )
-        .map(|p| p.0)
     }
 
     /// Issue #738 评论 5797637204: 共用 helper，返回
@@ -415,13 +414,7 @@ impl SujianEditorItem {
         promote: bool,
         composition_range: Option<(usize, usize)>,
         canonical_text_revision: u64,
-    ) -> Result<
-        (
-            EditorLayoutSnapshot,
-            crate::editor::layout::CanonicalDocumentVisualSnapshot,
-        ),
-        String,
-    > {
+    ) -> Result<EditorLayoutSnapshot, String> {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -507,53 +500,19 @@ impl SujianEditorItem {
         // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
         // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
         // 已对全篇 generate_animation_visuals=false，无动画视觉需提取）。
-        // Issue #658 评论 5626002895 问题 2: 不再只按 composition range filter 行，
-        // 改用 compare_old_new_visual_lines 比较 old/new lines 得到 affected line ids，
-        // 再并入 composition range 直接覆盖的行，确保 IME commit 后 downstream reflow 行
-        // 也提取动画视觉（handle_composition_commit_or_cancel 会遍历 candidate_byte_end
-        // 之后的行做 reflow，这些行没有动画视觉会导致 source_rect 缺失甚至 texture_failed）。
-        // Issue #738 评论 5798704669 问题2: 合并 active rebind ranges coverage。
-        // 远处仍存活的 Timed Reflow 的目标行也需要 clusters，否则
-        // reconcile_active_transactions_with_canonical 遍历远处 Reflow 时
-        // find_clusters_in_canonical 返回空 → RebindDecision::Remove 误删。
-        // 只合并 coverage，不改成"每次全文 QImage 栅格化"。
+        // Issue #904 清理: 不再按旧 reflow diff 挑行，也不再合并 active rebind ranges。
+        // IME commit 的纹理提取只取"包含 Core 受影响字节范围的段落所覆盖的行"，
+        // 与普通输入的 `build_incremental_layout_snapshot` 同一范围语义；下游纯 y
+        // 位移段落由 `TextMotion.paragraph_moves` 处理。
         if affected_start < affected_end {
-            let line_ids: Vec<usize> = {
-                // Issue #901 第十四轮问题1: 用 resolved_lines 物化绝对坐标做 diff。
-                // TODO(issue-901): 后续优化为按需查询 — diff 比较需要旧新完整行列表，
-                // 难以简单改为按需物化。
-                let old_resolved = self.editor_layout.cache().map(|c| c.resolved_lines());
-                let old_lines_opt = old_resolved.as_ref().map(|c| c.as_ref());
-                let mut ids = if let Some(old_lines) = old_lines_opt {
-                    let diff = crate::editor::layout::compare_old_new_visual_lines(
-                        old_lines,
-                        resolved_lines,
-                        Some((affected_start, affected_end)),
-                        None,
-                    );
-                    let mut new_ids = diff.new_raster_line_ids;
-                    // Issue #658 评论 5626628570: 合并 reusable_move_pairs 的 new 索引，
-                    // 这些行也需要动画视觉（image/clusters）以走 reflow_move 协同动画。
-                    for &(_, new_idx) in &diff.reusable_move_pairs {
-                        if !new_ids.contains(&new_idx) {
-                            new_ids.push(new_idx);
-                        }
-                    }
-                    new_ids
-                } else {
-                    Vec::new()
-                };
-                // 并入 composition range 直接覆盖的行
-                for (i, l) in resolved_lines.iter().enumerate() {
-                    if l.byte_start < affected_end
-                        && l.byte_end > affected_start
-                        && !ids.contains(&i)
-                    {
-                        ids.push(i);
-                    }
-                }
-                ids
-            };
+            // Issue #904 清理: 不再用旧 reflow diff（`compare_old_new_visual_lines` /
+            // `reusable_move_pairs`），直接按受影响字节范围过滤 resolved 行。
+            let line_ids: Vec<usize> = resolved_lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
+                .map(|(i, _)| i)
+                .collect();
             if !line_ids.is_empty() {
                 // Issue #810 评论 5932233052 问题1: cluster 已由基础 canonical 排版直接产出
                 //（prepare_document_visual_snapshot_scoped 现在始终产出 cluster）。
@@ -659,11 +618,9 @@ impl SujianEditorItem {
             crate::editor::layout::retire_temporary_generation(generation);
         }
 
-        // Issue #738 评论 5797637204: 同时返回 doc_snapshot，供 composition commit 路径
-        // 提交到 Pipeline.current_canonical_snapshot 并 reconcile 旧活动事务。
-        // build_from_canonical_document 接收 &doc_snapshot（借用），此处 doc_snapshot 仍有效。
-        // Issue #810 评论 5933167246 问题3: 包成 Ok，函数改返回 Result。
-        Ok((snapshot, doc_snapshot))
+        // Issue #904 清理: canonical document snapshot 只在本函数内部交给
+        // LineSnapshotBuilder，不再作为第二份 canonical 上交 Pipeline。
+        Ok(snapshot)
     }
 
     pub(crate) fn ensure_layout_cached(
@@ -777,59 +734,5 @@ impl SujianEditorItem {
             .as_ref()
             .map(|pf| pf.layout_snapshot.clone())
             .unwrap_or_else(|| self.layout_snapshot(width))
-    }
-
-    /// Issue #738 评论 5789470425 问题1: 构造当前排版参数的 VisualTransactionContext。
-    /// 供 `reconcile_after_layout_change` 构造新 canonical snapshot 使用。
-    /// Issue #810 评论 5933167246 问题2: 改为 pub(crate)，供 `emit_content_changed`
-    /// 在 promote prepared layout 后构造 canonical snapshot 使用。
-    pub(crate) fn build_visual_transaction_context(
-        &self,
-    ) -> super::pipeline::VisualTransactionContext {
-        super::pipeline::VisualTransactionContext {
-            typing_animation_enabled: self.current_typing_animation_enabled,
-            smooth_cursor_enabled: self.current_smooth_cursor_enabled,
-            coordinated_animation_enabled: self.current_coordinated_animation_enabled,
-            is_scrolling: self.current_is_scrolling,
-            is_loading: self.current_is_loading,
-            is_applying_format: self.current_is_applying_format,
-            bounding_width: self.bounding_width(),
-            font_pixel_size: f64::from(self.current_font_pixel_size),
-            font_family: self.current_font_family.to_string(),
-            scroll_y: f64::from(self.current_scroll_y),
-            viewport_height: f64::from(self.current_viewport_height.max(1.0)),
-            text_indent: f64::from(self.current_text_indent),
-            line_spacing: f64::from(self.current_line_spacing),
-            padding: f64::from(self.current_padding),
-            text_color: self.current_text_color.to_string(),
-            dpr: {
-                let item_ptr = self.get_cpp_object();
-                if !item_ptr.is_null() {
-                    crate::editor::renderer::sujian_item_dpr(item_ptr)
-                } else {
-                    1.0
-                }
-            },
-        }
-    }
-
-    /// Issue #738 评论 5789470425 问题1: 纯布局变化（resize/字号/字体/行距）后，
-    /// 在**新排版已经按新 width/font/line_spacing/padding 算完之后**调此方法。
-    /// 构造新 canonical snapshot，再通过 Pipeline 入口
-    /// `reconcile_active_transactions_with_new_canonical` 把旧活动事务重绑到这份新 canonical，
-    /// 并把它保存为当前 canonical。
-    ///
-    /// 调用方必须先 `invalidate_layout_cache` + `recalculate_content_height_and_emit`
-    ///（确保新排版完成），再调此方法。
-    pub(crate) fn reconcile_after_layout_change(&mut self) {
-        let ctx = self.build_visual_transaction_context();
-        // Issue #738 评论 5792244119 问题 1: 传入 &self.editor_layout，
-        // build_canonical_snapshot_for_current_layout 复用当前 EditorLayout generation
-        // 提取 active anchor cluster，不再分配临时 generation 泄漏。
-        let new_snapshot = self
-            .pipeline
-            .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
-        self.pipeline
-            .reconcile_active_transactions_with_new_canonical(new_snapshot);
     }
 }

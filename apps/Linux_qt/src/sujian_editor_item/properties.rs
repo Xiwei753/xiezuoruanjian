@@ -764,8 +764,9 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.recalculate_content_height_and_emit();
-        // 新 canonical 已按新字号/字体/行距算完，用新 canonical reconcile 旧活动事务。
-        self.reconcile_after_layout_change();
+        // Issue #904 清理: 新字号/字体/行距已由 recalculate_content_height_and_emit()
+        // 重排，canonical 由 EditorLayout 单一持有，无需再从 Pipeline 的第二份
+        // canonical reconcile 旧活动事务。
         self.visual_settings_changed();
         self.request_static_repaint();
     }
@@ -824,25 +825,10 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
-        // Issue #810 评论 5934060933 问题1: 编辑入口 set_text_revision 后，判断
-        // canonical 是否仍属于当前 revision。current_canonical_snapshot == Some 不代表
-        // 有效；必须同时满足 canonical.text_revision == pipeline.text_revision() 且
-        // 描述当前 committed text。动画关闭/滚动抑制/上一笔视觉事务构造失败这些路径
-        // 不会走 prepare_edit_motion，正文仍会修改并 set_text_revision 推进 revision，
-        // 但 canonical 停在上一版，此处必须按当前 EditorLayout/current text 重建并替换。
-        // 不在 reconcile_after_layout_change 中重复——它已通过
-        // reconcile_active_transactions_with_new_canonical 设置了 current_canonical_snapshot。
-        let canonical_needs_rebuild = match self.pipeline.current_canonical_snapshot() {
-            None => true,
-            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
-        };
-        if canonical_needs_rebuild {
-            let ctx = self.build_visual_transaction_context();
-            let snap = self
-                .pipeline
-                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
-            self.pipeline.set_current_canonical_snapshot(Some(snap));
-        }
+        // Issue #904 清理: canonical document snapshot 由 EditorLayout 单一持有。
+        // 上面的 pending_promoted_layout → promote_prepared_layout 已把 IME 提升后的
+        // 布局交给 EditorLayout；其余路径 EditorLayout 的当前排版就是权威 canonical，
+        // 不再往 Pipeline 交第二份 canonical snapshot。
         // Issue #658 评论 5623746506 问题 1: promote 之后 EditorLayout cache 已是
         // new text 的有效 cache，此时调 adjust_affinity_at_wrap_boundary ->
         // ensure_layout_cached -> editor_layout.snapshot cache hit，不再触发排版 A。

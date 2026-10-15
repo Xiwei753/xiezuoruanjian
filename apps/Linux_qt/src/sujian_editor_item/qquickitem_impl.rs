@@ -185,10 +185,10 @@ impl QQuickItem for SujianEditorItem {
         // 先完成新排版（recalculate_content_height_and_emit 内部 ensure_layout_cached
         // 真正按新 width 排版），reconcile 发生在新排版完成之后。
         self.recalculate_content_height_and_emit();
-        if width_changed {
-            // 新 canonical 已按新 width 算完，用新 canonical reconcile 旧活动事务。
-            self.reconcile_after_layout_change();
-        }
+        // Issue #904 清理: 宽度变化已由 recalculate_content_height_and_emit() 按新 width
+        // 重排，canonical 由 EditorLayout 单一持有；活动中的局部动画随排版失效自然结束，
+        // 静态层按新布局绘制，不再有第二份 canonical 需要 reconcile。
+        let _ = width_changed;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         let _ = self.update_cursor_visual_position();
@@ -354,9 +354,10 @@ impl QQuickItem for SujianEditorItem {
                 selection_color: self.current_selection_color.to_string(),
             };
             let canonical_visual_snapshot = self.pipeline.current_layout_snapshot().clone();
-            let canonical_document_snapshot = self.pipeline.current_canonical_snapshot().cloned();
+            // Issue #904 清理: canonical document snapshot 的唯一权威是 EditorLayout。
+            let canonical_document_snapshot = self.editor_layout.last_canonical_snapshot();
             let prepared_frame_matches_canonical =
-                match (prepared_frame, canonical_document_snapshot.as_ref()) {
+                match (prepared_frame, canonical_document_snapshot) {
                     (Some(frame), Some(canonical)) => {
                         let layout = &frame.layout_snapshot;
                         let committed_text = self.pipeline.committed_text();
@@ -385,97 +386,6 @@ impl QQuickItem for SujianEditorItem {
                 None
             };
 
-            // Issue #904：动画覆盖层与静态孔洞直接来自唯一的局部动画计划，
-            // 不再从整章绘制计划推导。
-            //
-            // static_text_contributions 记录视口内静态正文的 cluster 身份
-            //（LineSnapshotId、byte range、文档坐标几何、源纹理 UV），用于帧内
-            // 保留活动纹理。静态正文由常驻 QSGTextNode 绘制，不在此逐字重算。
-            let static_text_contributions: Vec<super::render_plan::StaticTextContributionInfo> =
-                canonical_visual_snapshot
-                    .as_ref()
-                    .map(|snap| {
-                        let viewport_top = scroll_y;
-                        let viewport_bottom = scroll_y + vp_h;
-                        let static_source_revision =
-                            writer_core::editor::EditorRevision::new(self.pipeline.text_revision());
-                        snap.line_snapshots
-                            .iter()
-                            .flat_map(|line| {
-                                let line_h = line.visual_line_bottom - line.visual_line_top;
-                                if line_h <= 0.0 || line.byte_start >= line.byte_end {
-                                    return Vec::new();
-                                }
-                                let dpr = if line.dpr > 0.0 { line.dpr } else { 1.0 };
-                                line.clusters
-                                    .iter()
-                                    .flat_map(|cluster| {
-                                        if cluster.byte_start >= cluster.byte_end
-                                            || cluster.source_rect.w <= 0.0
-                                            || cluster.source_rect.h <= 0.0
-                                        {
-                                            return Vec::new();
-                                        }
-                                        let doc_x = line.visual_x + cluster.source_rect.x / dpr;
-                                        let doc_w = (cluster.source_rect.w / dpr).max(0.0);
-                                        let doc_rect = super::layout_snapshot::SourceRect {
-                                            x: doc_x,
-                                            y: line.visual_line_top,
-                                            w: doc_w,
-                                            h: line_h,
-                                        };
-                                        // 视口裁剪（文档坐标）。
-                                        let clip_y = doc_rect.y.max(viewport_top);
-                                        let clip_bottom =
-                                            (doc_rect.y + doc_rect.h).min(viewport_bottom);
-                                        let clip_h = (clip_bottom - clip_y).max(0.0);
-                                        if clip_h <= 0.0 {
-                                            return Vec::new();
-                                        }
-                                        let byte_range = (cluster.byte_start, cluster.byte_end);
-                                        let glyph_id = super::text_motion::derive_fragment_id(
-                                            &line.id, byte_range,
-                                        );
-                                        // Issue #904：无论有无纹理都登记，静态正文身份
-                                        // 与视口求交后用于帧内保留活动纹理。
-                                        vec![super::render_plan::StaticTextContributionInfo {
-                                            snapshot_id: line.id,
-                                            byte_range,
-                                            // Issue #901 第十二轮问题1补充:
-                                            // document_rect 保存裁剪前的完整字形几何
-                                            //（doc_rect.y = line.visual_line_top, h = line_h），
-                                            // 供下游 original_glyph_rect 使用完整字形高度，
-                                            // 避免 FLIP 变换基准被视口边缘的"半字高度"冒充。
-                                            // 视口裁剪后的可见区域由 visible_clip 承载。
-                                            document_rect: super::layout_snapshot::SourceRect {
-                                                x: doc_rect.x,
-                                                y: doc_rect.y,
-                                                w: doc_rect.w,
-                                                h: doc_rect.h,
-                                            },
-                                            visible_clip: super::layout_snapshot::SourceRect {
-                                                x: doc_rect.x,
-                                                y: clip_y,
-                                                w: doc_rect.w,
-                                                h: clip_h,
-                                            },
-                                            source_uv: super::layout_snapshot::SourceRect {
-                                                x: cluster.source_rect.x,
-                                                y: cluster.source_rect.y,
-                                                w: cluster.source_rect.w,
-                                                h: cluster.source_rect.h,
-                                            },
-                                            source_revision: static_source_revision,
-                                            glyph_id,
-                                            fragment_index: 0,
-                                        }]
-                                    })
-                                    .collect()
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
             // Issue #904 评论 1/3: 本帧局部动画的静态挖孔是否活跃（有需要从
             // canonical 里挖掉的接管目标）。挖孔只在动画 begin/target-change/end
             // 变化，不随 progress 每帧刷新；状态翻转那一帧必须强制刷新静态裁剪：
@@ -491,7 +401,6 @@ impl QQuickItem for SujianEditorItem {
                 cursor: cursor_render_state,
                 cursor_style,
                 selection_preedit_style,
-                static_text_contributions,
                 drawn_caret_rect,
             };
 
@@ -614,12 +523,8 @@ impl QQuickItem for SujianEditorItem {
                         }
                     }
                 }
-                // (3b) 当前将渲染的实际静态片段（render_plan.static_text_contributions）
-                for info in &render_plan.static_text_contributions {
-                    if !info.snapshot_id.is_none() && !active_ids.contains(&info.snapshot_id) {
-                        active_ids.push(info.snapshot_id);
-                    }
-                }
+                // (3b) 静态正文身份由常驻 QSGTextNode 持有；本帧活跃纹理只来自
+                // (3a)/(3c) 局部动画、以及 (4) canonical 视口内行。
                 // (1) 动画计划本身已在上方 (3a)/(3c) 覆盖。
                 // (4) 新 target 中动画尚未出现但即将需要的纹理：
                 // canonical_visual_snapshot 的视口内行的 line.id。
@@ -650,11 +555,6 @@ impl QQuickItem for SujianEditorItem {
                 for glyph in &motion_frame.overlays {
                     if !glyph.snapshot_id.is_none() && !snapshot_ids.contains(&glyph.snapshot_id) {
                         snapshot_ids.push(glyph.snapshot_id);
-                    }
-                }
-                for info in &render_plan.static_text_contributions {
-                    if !info.snapshot_id.is_none() && !snapshot_ids.contains(&info.snapshot_id) {
-                        snapshot_ids.push(info.snapshot_id);
                     }
                 }
                 if let Some(motion) = self.pipeline.text_motion() {
@@ -913,14 +813,6 @@ impl SujianEditorItem {
             h: self.cursor_ctrl.visual_h,
             baseline_y: self.cursor_ctrl.visual_baseline_y,
             opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
-            movement_source: Some(self.cursor_ctrl.motion_source),
-            driver_revision: self.cursor_ctrl.motion_layout_revision,
-            driver_transition_id: self.cursor_ctrl.motion_transition_id,
-            document_session: self.cursor_ctrl.motion_document_session,
-            target_x: self.cursor_ctrl.motion_target_x,
-            target_y: self.cursor_ctrl.motion_target_y,
-            path_start_x: self.cursor_ctrl.motion_start_x,
-            path_start_y: self.cursor_ctrl.motion_start_y,
         }
     }
 

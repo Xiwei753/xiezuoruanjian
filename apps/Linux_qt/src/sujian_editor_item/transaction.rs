@@ -111,6 +111,7 @@ impl SujianEditorItem {
             }
         }
 
+        let has_motion = motion.is_some();
         if let Some(new_snap) = new_snapshot {
             self.pipeline.set_current_layout_snapshot(Some(new_snap));
         }
@@ -148,11 +149,16 @@ impl SujianEditorItem {
             VisualPrepareOutcome::Skipped(
                 super::edit_flow::EditVisualSkipReason::FormatApplyingSuppressed,
             )
-        } else {
+        } else if has_motion {
             VisualPrepareOutcome::Created
+        } else {
+            // Issue #904 复核: 没有真正建立局部动画（begin_or_retarget 返回 None）
+            // 不能报 Created，否则诊断会把"根本没有动画"记成成功。
+            VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            )
         };
 
-        let has_motion = matches!(outcome, VisualPrepareOutcome::Created);
         self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
             "cause={:?};op={:?};motion={};delta_inserted={};delta_deleted={}",

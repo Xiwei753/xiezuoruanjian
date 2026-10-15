@@ -844,7 +844,6 @@ impl SujianEditorItem {
     /// - reset_document_visual_session()：清 source frame/map/timing 并切换会话
     /// - 保留旧 Scene Graph owner 与动画纹理，等新静态层成功提交后再释放
     /// - 清 current/previous layout snapshot：丢弃旧章排版快照
-    /// - 清 current_canonical_snapshot：丢弃旧章 canonical 快照
     /// - 清 pending_promoted_layout：丢弃未消费的 promoted layout
     /// - 清 prepared_frame：丢弃旧帧数据
     /// - invalidate editor_layout：清旧排版 generation
@@ -874,8 +873,6 @@ impl SujianEditorItem {
         self.frame_submission_mailbox.discard_all_frames();
         // Issue #901: 旧 animation_coordinator.reset_document_visual_session() 已删除。
         self.pipeline.set_current_layout_snapshot(None);
-        self.pipeline.set_previous_layout_snapshot(None);
-        self.pipeline.set_current_canonical_snapshot(None);
         let _ = self.pipeline.take_pending_promoted_layout();
         self.prepared_frame = None;
         self.editor_layout.invalidate();

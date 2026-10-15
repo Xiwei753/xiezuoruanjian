@@ -113,7 +113,7 @@ impl SujianEditorItem {
             );
         };
 
-        let change_count = super::edit_motion::diff_plain_text(&old.text, &new.text).len();
+        let change_count = result.display_patches.len();
 
         // Issue #901 第六轮阻塞1: composition commit 与 record_transaction 一样，
         // 用 Core EditorEditResult.new_revision 唯一绑定 pipeline.text_revision。
@@ -125,13 +125,13 @@ impl SujianEditorItem {
         let core_new_revision = result.new_revision.value();
         self.pipeline.set_text_revision(core_new_revision);
         let canonical_text_revision = core_new_revision;
-        let (new_snapshot, new_canonical) = match self.build_editor_layout_snapshot_with_canonical(
+        let new_snapshot = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,
             new_composition_range,
             canonical_text_revision,
         ) {
-            Ok(pair) => pair,
+            Ok(snapshot) => snapshot,
             Err(err) => {
                 crate::backend::app_backend::debug_error_static(
                     "editing",
@@ -161,8 +161,6 @@ impl SujianEditorItem {
         let now_ms = Self::frame_now_ms(&self.last_frame_now);
 
         self.pipeline
-            .set_previous_layout_snapshot(Some(old_snapshot.clone()));
-        self.pipeline
             .set_current_layout_snapshot(Some(new_snapshot.clone()));
 
         let motion = if animations_requested && !suppressed {
@@ -191,13 +189,20 @@ impl SujianEditorItem {
         } else {
             None
         };
+        let has_motion = motion.is_some();
         *self.pipeline.text_motion_mut() = motion;
         self.request_scene_rebuild();
 
         let new_revision = LayoutRevision::next();
 
-        let visual_outcome = if animations_requested && !suppressed {
+        let visual_outcome = if has_motion {
             super::pipeline::VisualPrepareOutcome::Created
+        } else if animations_requested && !suppressed {
+            // Issue #904 复核: begin_or_retarget 返回 None（本次编辑没有可动画
+            // 局部片段）不能报 Created；如实报 BuilderEmptyTransaction。
+            super::pipeline::VisualPrepareOutcome::Skipped(
+                super::edit_flow::EditVisualSkipReason::BuilderEmptyTransaction,
+            )
         } else {
             super::pipeline::VisualPrepareOutcome::AnimationDisabled
         };
@@ -206,14 +211,11 @@ impl SujianEditorItem {
         let active_ids = self.collect_active_snapshot_ids_from_layout();
         self.pipeline.retain_active_snapshot_ids(&active_ids);
 
-        // Issue #738 评论 5797637204: 无条件提交 Pipeline.layout_revision +
-        // current_canonical_snapshot。new_canonical 一旦成为当前 canonical，
-        // layout_revision 就必须无条件一起提交。
+        // Issue #904 清理: 无条件提交 Pipeline.layout_revision。canonical document
+        // snapshot 由 EditorLayout 单一持有，不再往 Pipeline 交第二份。
         self.pipeline.set_layout_revision(new_revision);
-        self.pipeline
-            .set_current_canonical_snapshot(Some(new_canonical));
 
-        self.last_event_count = 1;
+        self.last_event_count = if has_motion { 1 } else { 0 };
         self.last_summary = format!(
             "cause={:?};changes={};visual_edit=1;animate=true",
             cause, change_count,
@@ -258,19 +260,22 @@ impl SujianEditorItem {
     ///
     /// 不变量：`current_canonical_snapshot == Some` 不代表有效；必须同时满足
     /// `canonical.text_revision == pipeline.text_revision()` 且描述当前 committed text。
-    /// 不一致（stale，例如动画关闭路径上一笔没走 prepare_edit_motion 但正文已变）就重建。
+    /// 不一致（stale，例如动画关闭路径上一笔没走布局快照但正文已变）就重建。
+    ///
+    /// Issue #904 清理: 只保证 EditorLayout 的当前 canonical 与
+    /// `pipeline.text_revision()` 一致，为 Core 改动前的「旧几何」提供布局基础；
+    /// 不再在 Pipeline 里保留第二份 canonical document snapshot。
     pub(crate) fn ensure_current_canonical_before_edit(&mut self) {
-        let needs_rebuild = match self.pipeline.current_canonical_snapshot() {
-            None => true,
-            Some(canonical) => canonical.text_revision != self.pipeline.text_revision(),
-        };
-        if needs_rebuild {
-            let ctx = self.build_visual_transaction_context();
-            let snap = self
-                .pipeline
-                .build_canonical_snapshot_for_current_layout(&ctx, &self.editor_layout);
-            self.pipeline.set_current_canonical_snapshot(Some(snap));
+        if self
+            .editor_layout
+            .last_canonical_snapshot()
+            .map(|snapshot| snapshot.text_revision)
+            == Some(self.pipeline.text_revision())
+        {
+            return;
         }
+        let width = self.bounding_width();
+        let _ = self.layout_snapshot(width);
     }
 
     pub(crate) fn insert_text(&mut self, text: QString) {

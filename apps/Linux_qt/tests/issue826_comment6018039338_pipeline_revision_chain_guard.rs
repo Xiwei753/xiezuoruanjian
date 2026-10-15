@@ -85,9 +85,6 @@ fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion()
     let commit_pos = window
         .find(".set_layout_revision(")
         .expect("record_composition_commit_transaction 必须调 set_layout_revision 提交新 revision");
-    let canonical_pos = window
-        .find(".set_current_canonical_snapshot(")
-        .expect("record_composition_commit_transaction 必须提升新 canonical");
 
     assert!(
         apply_pos < next_pos,
@@ -99,10 +96,11 @@ fn issue826_build_success_then_commit_then_coordinator_and_canonical_promotion()
         "commit 必须在 LayoutRevision::next() 之后，\
          实际 next={next_pos} commit={commit_pos}"
     );
+    // Issue #904 清理: canonical document snapshot 由 EditorLayout 单一持有，
+    // 不再往 Pipeline 交第二份。
     assert!(
-        commit_pos < canonical_pos,
-        "commit 必须在 canonical promotion 之前，\
-         实际 commit={commit_pos} canonical={canonical_pos}"
+        !window.contains(".set_current_canonical_snapshot("),
+        "composition commit 不得再提交第二份 canonical"
     );
 }
 

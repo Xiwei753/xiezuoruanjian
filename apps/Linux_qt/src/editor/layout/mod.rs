@@ -43,7 +43,7 @@ pub use canonical_snapshot::{
     CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, CanonicalParagraphSnapshot,
     CursorXMapEntry,
 };
-pub use diff::{compare_old_new_visual_lines, compute_affected_paragraph_ranges, VisualLineDiff};
+pub use diff::compute_affected_paragraph_ranges;
 // Issue #901: 增量排版子系统 — 稳定段落身份 + 布局缓存 + Fenwick 树高度索引
 pub use paragraph_height_index::{ParagraphHeightIndex, ParagraphLineCountIndex, ParagraphOffsetIndex};
 pub use paragraph_layout_store::{

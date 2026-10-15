@@ -1,5 +1,7 @@
-//! Issue #738 评论 5789470425 修复验证测试 — 验证 3 项改法已落实：
-//! 1. reconcile 时序收口到新 canonical（current_canonical_snapshot + 新入口 + 推迟 reconcile）；
+//! Issue #738 评论 5789470425 修复验证测试 — 验证改法已落实：
+//! 1. Issue #904 清理后 canonical document snapshot 由 EditorLayout 单一持有，
+//!    Pipeline 不再有第二份 canonical / reconcile 链（旧 current_canonical_snapshot、
+//!    reconcile_active_transactions_with_new_canonical、reconcile_after_layout_change 均已删除）；
 //! 2. PreparedVisualUnit reflow_anchors 逐 cluster 重绑（merge_two 合并 anchors、find_clusters_in_canonical 逐 cluster）；
 //! 3. ReflowCrossFade crossfade_group_id 成对重绑（以 group 为单位、同 now 采样、整组结束）。
 //!
@@ -37,89 +39,79 @@ fn function_window<'a>(src: &'a str, fn_marker: &str, window_size: usize) -> &'a
 // 问题1: reconcile 时序收口到新 canonical
 // =========================================================================
 
-/// 问题1 守卫1: 旧的 reconcile_active_transactions_with_canonical_on_layout_change
-/// （先 bump 再拿 previous_canonical_snapshot.clone() reconcile）应已删除，
-/// 替换为 reconcile_active_transactions_with_new_canonical(new_snapshot) 接收已完成的新 canonical。
+/// 问题1 守卫1（Issue #904 清理）: 整条 Pipeline 侧的第二份 canonical / reconcile
+/// 链都已删除；canonical document snapshot 由 EditorLayout 单一持有。
 #[test]
 fn issue1_reconcile_uses_new_canonical_not_previous_clone() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    // 旧入口应已删除。
     assert!(
         !src.contains("fn reconcile_active_transactions_with_canonical_on_layout_change"),
-        "旧的 reconcile_active_transactions_with_canonical_on_layout_change 应已删除，\
-         替换为接收新 canonical 的入口。"
+        "旧的 reconcile_active_transactions_with_canonical_on_layout_change 应已删除。"
     );
-    // 新入口应存在且接收 new_snapshot 参数。
     assert!(
-        src.contains("fn reconcile_active_transactions_with_new_canonical"),
-        "应存在 reconcile_active_transactions_with_new_canonical 入口，接收已完成的新 canonical。"
+        !src.contains("fn reconcile_active_transactions_with_new_canonical"),
+        "Issue #904 清理后 Pipeline 不应再有 reconcile_active_transactions_with_new_canonical。"
     );
-    // 不应再用 previous_canonical_snapshot.clone() 做 reconcile。
     assert!(
         !src.contains("self.previous_canonical_snapshot.clone()"),
         "不应再用 previous_canonical_snapshot.clone()（旧 canonical）做 reconcile。"
     );
+    // 单一权威：canonical 由 EditorLayout 持有。
+    let layout_mod = read_src("src/editor/layout/mod.rs");
+    assert!(
+        layout_mod.contains("pub fn last_canonical_snapshot("),
+        "EditorLayout 应提供 last_canonical_snapshot() 作为唯一 canonical 权威。"
+    );
 }
 
-/// 问题1 守卫2: 字段应重命名为 current_canonical_snapshot（语义清晰），
-/// 且新入口把新 canonical 存为 current_canonical_snapshot。
+/// 问题1 守卫2（Issue #904 清理）: Pipeline 不再持有第二份 canonical 字段；
+/// 编辑前的旧几何一致性由 `ensure_current_canonical_before_edit` 直接校验
+/// EditorLayout 的 canonical。
 #[test]
 fn issue1_current_canonical_snapshot_field_and_assignment() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
     assert!(
-        src.contains("current_canonical_snapshot:"),
-        "字段应重命名为 current_canonical_snapshot（语义清晰，不再用 previous_canonical_snapshot）。"
+        !src.contains("current_canonical_snapshot"),
+        "Issue #904 清理后 Pipeline 不得再持有 current_canonical_snapshot 第二份 canonical。"
     );
-    let window = function_window(
-        &src,
-        "fn reconcile_active_transactions_with_new_canonical",
-        1200,
-    );
+    let editing = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&editing, "fn ensure_current_canonical_before_edit", 1200);
     assert!(
-        window.contains("self.current_canonical_snapshot = Some(new_snapshot)"),
-        "reconcile_active_transactions_with_new_canonical 应把新 canonical 存为\
-         current_canonical_snapshot。"
+        window.contains("last_canonical_snapshot()"),
+        "ensure_current_canonical_before_edit 应以 EditorLayout.last_canonical_snapshot() 为准。"
     );
 }
 
-/// 问题1 守卫3: geometry_changed 中 reconcile 应在 recalculate_content_height_and_emit
-/// 之后（新排版完成后再 reconcile），而非之前。
+/// 问题1 守卫3（Issue #904 清理）: geometry_changed 中宽度变化由
+/// recalculate_content_height_and_emit 按新 width 重排即可；不再有第二份 canonical
+/// 需要 reconcile。
 #[test]
 fn issue1_geometry_changed_reconciles_after_new_layout_computed() {
     let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     let window = function_window(&src, "fn geometry_changed", 1600);
-    let reconcile_marker = "reconcile_after_layout_change";
-    let recalc_marker = "recalculate_content_height_and_emit";
-    let recalc_pos = window
-        .find(recalc_marker)
-        .expect("geometry_changed 中 recalculate_content_height_and_emit 调用必须存在");
-    let reconcile_pos = window
-        .find(reconcile_marker)
-        .expect("geometry_changed 中 reconcile_after_layout_change 调用必须存在");
     assert!(
-        reconcile_pos > recalc_pos,
-        "geometry_changed 中 reconcile_after_layout_change（位置 {reconcile_pos}）应在\
-         recalculate_content_height_and_emit（位置 {recalc_pos}）之后，即新排版完成后再 reconcile。"
+        window.contains("recalculate_content_height_and_emit"),
+        "geometry_changed 中 recalculate_content_height_and_emit 调用必须存在"
+    );
+    assert!(
+        !window.contains("reconcile_after_layout_change"),
+        "Issue #904 清理后 geometry_changed 不应再调 reconcile_after_layout_change。"
     );
 }
 
-/// 问题1 守卫4: layout_property_changed 中 reconcile 应在 recalculate 之后。
+/// 问题1 守卫4（Issue #904 清理）: layout_property_changed 只重排，不再 reconcile
+/// 第二份 canonical。
 #[test]
 fn issue1_layout_property_changed_reconciles_after_new_layout_computed() {
     let src = read_src("src/sujian_editor_item/properties.rs");
     let window = function_window(&src, "fn layout_property_changed", 1600);
-    let reconcile_marker = "reconcile_after_layout_change";
-    let recalc_marker = "recalculate_content_height_and_emit";
-    let recalc_pos = window
-        .find(recalc_marker)
-        .expect("layout_property_changed 中 recalculate_content_height_and_emit 调用必须存在");
-    let reconcile_pos = window
-        .find(reconcile_marker)
-        .expect("layout_property_changed 中 reconcile_after_layout_change 调用必须存在");
     assert!(
-        reconcile_pos > recalc_pos,
-        "layout_property_changed 中 reconcile_after_layout_change（位置 {reconcile_pos}）应在\
-         recalculate_content_height_and_emit（位置 {recalc_pos}）之后。"
+        window.contains("recalculate_content_height_and_emit"),
+        "layout_property_changed 中 recalculate_content_height_and_emit 调用必须存在"
+    );
+    assert!(
+        !window.contains("reconcile_after_layout_change"),
+        "Issue #904 清理后 layout_property_changed 不应再调 reconcile_after_layout_change。"
     );
 }
 
@@ -128,8 +120,7 @@ fn issue1_layout_property_changed_reconciles_after_new_layout_computed() {
 #[test]
 fn issue1_find_cursor_transaction_for_target_takes_layout_revision() {
     // Issue #826/#901: cursor_motion.rs 已随旧动画架构删除。
-    let motion_path =
-        linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
+    let motion_path = linux_qt_root().join("src/sujian_editor_item/animation/cursor_motion.rs");
     if !motion_path.exists() {
         println!("[BUGFIX_VERIFY] issue1: cursor_motion.rs 已删除");
         return;

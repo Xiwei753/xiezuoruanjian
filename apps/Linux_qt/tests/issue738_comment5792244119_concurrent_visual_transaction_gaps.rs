@@ -6,9 +6,10 @@
 //! 测试 PASS = 修复后结构正确。
 //!
 //! 3 个问题的修复后正确结构：
-//! 1. build_canonical_snapshot_for_current_layout 复用 EditorLayout 当前 generation
-//!    提取动画视觉（prepare_animation_visuals_from_layout + inject_animation_visuals_into_snapshot），
-//!    fallback 路径才 begin_layout_generation 且用完 clear_layout_generation 释放。
+//! 1. Issue #904 清理后 canonical document snapshot 由 EditorLayout 单一持有：
+//!    Pipeline 不再有 build_canonical_snapshot_for_current_layout / reconcile 链；
+//!    动画视觉提取（prepare_animation_visuals_from_layout）留在 layout_ops 的 IME
+//!    commit 纹理路径中。
 //! 2. rebind_timed_units_to_canonical 对 merged ReflowMove 逐 anchor 计算 movement vector，
 //!    不一致时用 RebindDecision::Split 拆回多个 PreparedVisualUnit
 //!    （build_split_replacement_units），不再用 union_of_hits 合成跨行大矩形。
@@ -56,74 +57,56 @@ fn function_window(src: &str, fn_marker: &str, window_size: usize) -> String {
 }
 
 // =========================================================================
-// 问题 1 修复后守卫: build_canonical_snapshot_for_current_layout 复用 EditorLayout
-// generation 提取动画视觉，fallback 才 begin/clear layout generation
+// 问题 1 修复后守卫（Issue #904 清理）: canonical document snapshot 由 EditorLayout
+// 单一持有；Pipeline 侧第二份 canonical / reconcile 链已删除，动画视觉提取只留在
+// layout_ops 的 IME commit 纹理路径中。
 // =========================================================================
 
-/// 修复后守卫 1: build_canonical_snapshot_for_current_layout 接收 editor_layout 参数，
-/// 复用其 current_prepared_layout() 的 generation 做基础 snapshot。
+/// 修复后守卫 1: Pipeline 不再有 build_canonical_snapshot_for_current_layout；
+/// 动画视觉提取（prepare_animation_visuals_from_layout）仍存在于 layout_ops 的
+/// IME commit 纹理路径（含 inject_animation_visuals_into_snapshot）。
 #[test]
 fn issue1_fix_build_canonical_reuses_editor_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(
-        &src,
-        "fn build_canonical_snapshot_for_current_layout",
-        14000,
+    assert!(
+        !src.contains("fn build_canonical_snapshot_for_current_layout"),
+        "Issue #904 清理后 Pipeline 不应再有 build_canonical_snapshot_for_current_layout。"
+    );
+    let layout_ops = read_src("src/sujian_editor_item/layout_ops.rs");
+    assert!(
+        layout_ops.contains("prepare_animation_visuals_from_layout"),
+        "动画视觉提取 prepare_animation_visuals_from_layout 应留在 layout_ops 的 IME commit 纹理路径。"
     );
     assert!(
-        window.contains("editor_layout: &crate::editor::layout::EditorLayout"),
-        "修复后 build_canonical_snapshot_for_current_layout 应接收 editor_layout 参数，\
-         复用其当前 generation 而非分配临时 generation。"
-    );
-    assert!(
-        window.contains("current_prepared_layout"),
-        "修复后应通过 editor_layout.current_prepared_layout() 复用当前 generation。"
-    );
-    assert!(
-        window.contains("prepare_animation_visuals_from_layout"),
-        "修复后应调 prepare_animation_visuals_from_layout 提取动画视觉（QImage/clusters），\
-         使 rebind 路径 find_clusters_in_canonical 能找到 cluster。"
-    );
-    assert!(
-        window.contains("inject_animation_visuals_into_snapshot"),
-        "修复后应调 inject_animation_visuals_into_snapshot 把提取的动画视觉注入新 canonical。"
+        layout_ops.contains("inject_animation_visuals_into_snapshot"),
+        "应调 inject_animation_visuals_into_snapshot 把提取的动画视觉注入 layout snapshot。"
     );
 }
 
-/// 修复后守卫 2: build_canonical_snapshot_for_current_layout 的 fallback 路径
-///（EditorLayout 无 prepared layout 时）才 begin_layout_generation，
-/// 且用完 clear_layout_generation 释放，不泄漏。
+/// 修复后守卫 2: Pipeline 不再持有第二份 canonical 字段；canonical 由
+/// EditorLayout 单一持有。
 #[test]
 fn issue1_fix_fallback_path_clears_layout_generation() {
     let src = read_src("src/sujian_editor_item/pipeline.rs");
-    let window = function_window(
-        &src,
-        "fn build_canonical_snapshot_for_current_layout",
-        14000,
-    );
     assert!(
-        window.contains("begin_layout_generation"),
-        "fallback 路径（无 prepared layout）应 begin_layout_generation 分配临时 generation。"
+        !src.contains("current_canonical_snapshot"),
+        "Issue #904 清理后 Pipeline 不得再持有 current_canonical_snapshot 第二份 canonical。"
     );
+    let layout_mod = read_src("src/editor/layout/mod.rs");
     assert!(
-        window.contains("retire_temporary_generation"),
-        "修复后 fallback 路径用完临时 generation 应 retire_temporary_generation 释放创建者初始引用，不泄漏。"
-    );
-    assert!(
-        window.contains("fallback_gen"),
-        "修复后应有 fallback_gen 变量追踪临时 generation 的释放。"
+        layout_mod.contains("pub fn last_canonical_snapshot("),
+        "EditorLayout 应提供 last_canonical_snapshot() 作为唯一 canonical 权威。"
     );
 }
 
-/// 修复后守卫 3: reconcile_after_layout_change 传入 &self.editor_layout。
+/// 修复后守卫 3（Issue #904 清理）: layout_ops 不再有
+/// reconcile_after_layout_change；排版变化直接经 EditorLayout 的增量快照。
 #[test]
 fn issue1_fix_reconcile_after_layout_change_passes_editor_layout() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let window = function_window(&src, "fn reconcile_after_layout_change", 800);
     assert!(
-        window.contains("&self.editor_layout"),
-        "修复后 reconcile_after_layout_change 应传入 &self.editor_layout 给\
-         build_canonical_snapshot_for_current_layout。"
+        !src.contains("fn reconcile_after_layout_change"),
+        "Issue #904 清理后 layout_ops 不应再有 reconcile_after_layout_change。"
     );
 }
 
