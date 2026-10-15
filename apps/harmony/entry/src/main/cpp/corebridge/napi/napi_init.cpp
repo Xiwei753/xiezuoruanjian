@@ -381,17 +381,23 @@ static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
     char timezone[64] = {0};
     size_t len = 0;
 
-    // app_data_root 是设置文件所在的数据根路径：完整检查读取状态与长度，
-    // 读失败或截断时立即报错，绝不把半截路径传给 Rust 去读 settings.local.json。
-    napi_status root_status = napi_get_value_string_utf8(env, args[1], app_data_root, sizeof(app_data_root), &len);
-    if (root_status != napi_ok) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: failed to read appDataRoot (status=%{public}d)", static_cast<int>(root_status));
-        napi_throw_error(env, nullptr, "appDataRoot must be a string");
+    // app_data_root 是设置文件所在的数据根路径，绝不能把半截路径传给 Rust 去
+    // 读 settings.local.json。Node-API 契约：buf 非空时 result 返回“实际复制
+    // 的字节数”（不含终止符），缓冲不足只会截断补 NUL，因此复制长度无法检测
+    // 截断。这里先用 buf=nullptr 只查询原字符串字节长度，确认能完整装入缓冲后
+    // 再复制，并校验复制字节数与查询长度一致。
+    size_t root_len = 0;
+    napi_status root_status = napi_get_value_string_utf8(env, args[1], nullptr, 0, &root_len);
+    if (root_status != napi_ok || root_len == 0 || root_len >= sizeof(app_data_root)) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: invalid appDataRoot length/status");
+        napi_throw_error(env, nullptr, "Invalid appDataRoot");
         return nullptr;
     }
-    if (len >= sizeof(app_data_root)) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: appDataRoot truncated (len=%{public}zu)", len);
-        napi_throw_error(env, nullptr, "appDataRoot too long");
+    size_t root_copied = 0;
+    root_status = napi_get_value_string_utf8(env, args[1], app_data_root, sizeof(app_data_root), &root_copied);
+    if (root_status != napi_ok || root_copied != root_len) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: appDataRoot copy failed");
+        napi_throw_error(env, nullptr, "Failed to read appDataRoot");
         return nullptr;
     }
 
