@@ -1409,6 +1409,50 @@ impl WriterCoreApi {
         })
     }
 
+    /// 退出当前画布，返回上一层导航路由。
+    ///
+    /// 纯路径操作：弹出 `route.segments` 最后一个段。已在根图（`segments` 为空）
+    /// 时返回原路由。对同一目标星图的多个 Embed，返回的仍是**原进入实例**，
+    /// 因为路径段记录了具体的 `instance_id`。
+    ///
+    /// 不访问磁盘，不需要 resolver context；与 `enter_starmap_embed` /
+    /// `enter_starmap_portal` 一起构成 #902 要求的"返回层级"统一 Core API。
+    pub fn exit_starmap_canvas(
+        &self,
+        route: crate::api::types::StarMapNavigationRouteDto,
+    ) -> Result<crate::api::types::StarMapNavigationRouteDto, WriterError> {
+        let core_route: crate::starmap::navigation::StarMapNavigationRoute =
+            route.try_into().map_err(|e: crate::error::Error| {
+                WriterError::Other(format!(
+                    "exit_starmap_canvas: route conversion failed: {e:?}"
+                ))
+            })?;
+
+        Ok(crate::starmap::navigation::exit_canvas(&core_route).into())
+    }
+
+    /// 跳到指定祖先层级，返回截断后的导航路由。
+    ///
+    /// `depth` 表示截断后保留的路径段数量：`0` = 根图，`1` = 第一层子图，
+    /// `n` = 保留前 `n` 个 segments。`depth >= segments.len()` 时返回原路由。
+    ///
+    /// 纯路径操作，不访问磁盘；与 `exit_starmap_canvas` 一起补齐
+    /// #902 的"返回层级"对外 API。
+    pub fn jump_starmap_ancestor(
+        &self,
+        route: crate::api::types::StarMapNavigationRouteDto,
+        depth: u32,
+    ) -> Result<crate::api::types::StarMapNavigationRouteDto, WriterError> {
+        let core_route: crate::starmap::navigation::StarMapNavigationRoute =
+            route.try_into().map_err(|e: crate::error::Error| {
+                WriterError::Other(format!(
+                    "jump_starmap_ancestor: route conversion failed: {e:?}"
+                ))
+            })?;
+
+        Ok(crate::starmap::navigation::jump_to_ancestor(&core_route, depth as usize).into())
+    }
+
     /// 创建跨画布边并真正写入宿主图 Store（事务操作）。
     ///
     /// 转发到 facade 的 [`WriterCore::create_cross_canvas_edge`]，后者在同一次

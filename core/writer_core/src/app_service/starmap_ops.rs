@@ -267,6 +267,23 @@ impl super::WriterAppService {
             .enter_starmap_portal(root_starmap_id, segments, node_id)
     }
 
+    /// 退出当前画布，返回上一层导航路由。转发到 Core API。
+    pub fn exit_starmap_canvas(
+        &self,
+        route: StarMapNavigationRouteDto,
+    ) -> Result<StarMapNavigationRouteDto, WriterError> {
+        self.api.exit_starmap_canvas(route)
+    }
+
+    /// 跳到指定祖先层级，返回截断后的导航路由。转发到 Core API。
+    pub fn jump_starmap_ancestor(
+        &self,
+        route: StarMapNavigationRouteDto,
+        depth: u32,
+    ) -> Result<StarMapNavigationRouteDto, WriterError> {
+        self.api.jump_starmap_ancestor(route, depth)
+    }
+
     /// 创建跨画布边并真正写入宿主图 Store（事务操作）。转发到 Core API。
     ///
     /// 返回 `CreateCrossCanvasEdgeResultDto`（`ownerStarmapId` + 完整 `edge`），

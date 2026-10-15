@@ -1359,6 +1359,13 @@ interface WriterAppService {
     [Throws=WriterError]
     sequence<StarMapConnectionInfoDto> list_starmap_connections(StarMapNavigationRouteDto route, StarMapTargetDetailDto? target);
 
+    // 返回层级：弹出当前画布、跳到任意祖先层级。纯路径操作，不改任何 authored 坐标。
+    [Throws=WriterError]
+    StarMapNavigationRouteDto exit_starmap_canvas(StarMapNavigationRouteDto route);
+
+    [Throws=WriterError]
+    StarMapNavigationRouteDto jump_starmap_ancestor(StarMapNavigationRouteDto route, u32 depth);
+
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();
 

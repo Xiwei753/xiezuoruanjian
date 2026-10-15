@@ -60,6 +60,11 @@ StarMapNavigationRoute {
 
 路径环、缺失实例、超过 32 层限制，沿用现有明确错误类型。
 
+上述导航操作通过统一 Core API 导出：`resolve_starmap_navigation` 解析当前画布，
+`enter_starmap_embed` / `enter_starmap_portal` 进入子画布，`exit_starmap_canvas`
+返回上一层，`jump_starmap_ancestor` 跳到任意祖先层级。返回层级同样只在 Core
+内做路径截断，平台端不自行弹段以免丢失原始进入实例。
+
 ## 跨画布连线
 
 ### 端点选择 (StarMapEndpointSelection)

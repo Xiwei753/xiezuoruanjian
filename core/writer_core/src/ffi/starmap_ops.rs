@@ -737,6 +737,49 @@ pub unsafe extern "C" fn writer_core_list_starmap_connections(json: *const c_cha
     }
 }
 
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `json` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
+pub unsafe extern "C" fn writer_core_exit_starmap_canvas(json: *const c_char) -> *mut c_char {
+    let input_str = match c_str_to_rust(json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
+    };
+    let route = match serde_json::from_str::<StarMapNavigationRouteDto>(&input_str) {
+        Ok(r) => r,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
+    };
+    match with_app_service(|svc| svc.exit_starmap_canvas(route).map_err(|e| format!("{}", e))) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NAVIGATION_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// The caller must ensure `json` points to a valid, null-terminated C string.
+/// Passing a null pointer or an invalid pointer is undefined behavior.
+pub unsafe extern "C" fn writer_core_jump_starmap_ancestor(json: *const c_char) -> *mut c_char {
+    let input_str = match c_str_to_rust(json) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid json: error {}", e)),
+    };
+    let input = match serde_json::from_str::<JumpAncestorInput>(&input_str) {
+        Ok(i) => i,
+        Err(e) => return err_json("PARSE_ERROR", &format!("Failed to parse json: {}", e)),
+    };
+    match with_app_service(|svc| {
+        svc.jump_starmap_ancestor(input.route, input.depth)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("STARMAP_NAVIGATION_ERROR", &e),
+    }
+}
+
 // --- FFI 内部输入 DTO ---
 // 统一采用 camelCase 字段命名，与 route DTO（StarMapNavigationRouteDto 等）一致。
 
@@ -776,4 +819,11 @@ struct ListConnectionsInput {
     route: StarMapNavigationRouteDto,
     #[serde(default)]
     target: Option<StarMapTargetDetailDto>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JumpAncestorInput {
+    route: StarMapNavigationRouteDto,
+    depth: u32,
 }
