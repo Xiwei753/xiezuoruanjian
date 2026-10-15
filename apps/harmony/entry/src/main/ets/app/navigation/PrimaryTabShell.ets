@@ -263,16 +263,24 @@ export struct PrimaryTabShell {
 
   // Issue #767：Tabs onChange 切换后只更新 currentTab，由 @Watch 统一触发 syncActiveTab。
   // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
+  // Issue #906：onChange 只管真实状态提交，不在这里记用户意图——程序化恢复（applyContinuation 等）
+  // 也会触发 onChange，记成 User 会把恢复伪装成点击。用户意图由 onTabBarClick 记 nav.tab_requested。
   private onTabChange(index: number): void {
-    // Issue #906：Tabs.onChange 是明确的用户输入入口，先记用户意图再提交状态。
-    this.recordUserTabRequest(index)
+    this.currentTab = index
   }
 
-  // Issue #906：明确的用户切换 Tab 入口。先记 nav.tab_requested（User），再提交 currentTab；
-  // @Watch 只同步实际状态，nav.tab_changed 归为 App，不把程序驱动的状态变化伪装成点击。
-  private recordUserTabRequest(index: number): void {
+  // Issue #906：只记用户 Tab 意图（nav.tab_requested，User），不提交状态。
+  // 真正的切换由 onChange 写 currentTab → @Watch → syncActiveTab 完成，
+  // 避免在点击回调里强行改 index 绕过 onContentWillChange 交互锁。
+  private recordTabIntent(index: number): void {
     const fields: DiagnosticField[] = [{ key: 'targetTab', value: String(index) }]
     HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_requested', 'PrimaryTabShell', fields)
+  }
+
+  // Issue #906：明确的用户切换入口（宽屏左栏点击、作品页「打开星图」）。
+  // 先记用户意图，再提交 currentTab；@Watch 只同步实际状态，nav.tab_changed 归为 App。
+  private recordUserTabRequest(index: number): void {
+    this.recordTabIntent(index)
     this.currentTab = index
   }
 
@@ -499,7 +507,11 @@ export struct PrimaryTabShell {
             // Issue #905：把真实页面 role 传给底部 HdsTabs，由它决定 MiniBar 这个「+」
             // 是不是当前页的主操作、以及点按派发到哪一页的回调。
             currentScreenRole: this.currentScreenRole,
-            currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
+            currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked,
+            // Issue #906：HdsTabs 的用户点击入口，转发到只记用户意图的方法（不改 currentTab）。
+            onUserTabClick: (index: number): void => {
+              this.recordTabIntent(index)
+            }
           })
       } else {
         Tabs({ barPosition: BarPosition.End, index: this.currentTab }) {
@@ -549,7 +561,12 @@ export struct PrimaryTabShell {
           }
           return true
         })
+        .onTabBarClick((index: number) => {
+          // Issue #906：onTabBarClick 是确认的用户点击入口，只记用户意图（nav.tab_requested）。
+          this.recordTabIntent(index)
+        })
         .onChange((index: number) => {
+          // Issue #906：onChange 只管真实状态提交（用户点击与程序化恢复都会走到这里）。
           this.onTabChange(index)
         })
         .width('100%')
