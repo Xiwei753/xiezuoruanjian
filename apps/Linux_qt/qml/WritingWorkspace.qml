@@ -1381,7 +1381,7 @@ Rectangle {
             root.syncConflicts = [];
             return;
         }
-        var raw = sb.list_sync_conflicts(root.workspaceProjectId);
+        var raw = sb.list_sync_conflicts("project", root.workspaceProjectId);
         var resp;
         try { resp = JSON.parse(raw); } catch (e) { resp = null; }
         if (resp && resp.success && resp.data && resp.data.conflicts) {

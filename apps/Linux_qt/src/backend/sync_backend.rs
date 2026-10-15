@@ -146,22 +146,27 @@ pub struct SyncBackend {
     // 全部返回结构化 JSON envelope（ResultEnvelope<serde_json::Value>），
     // QML 端 JSON.parse 后按 success 分支取 data.conflicts / data.preview / data.resolved。
     #[allow(dead_code)]
-    list_sync_conflicts: qt_method!(fn(&mut self, project_id: QString) -> QString),
+    list_sync_conflicts:
+        qt_method!(fn(&mut self, target_kind: QString, project_id: QString) -> QString),
     // Issue #762 评论 5826175490：跨作品全局冲突列表入口。
     #[allow(dead_code)]
     list_all_sync_conflicts: qt_method!(fn(&mut self) -> QString),
     #[allow(dead_code)]
-    load_sync_conflict_preview:
-        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    load_sync_conflict_preview: qt_method!(
+        fn(&mut self, target_kind: QString, project_id: QString, path: QString) -> QString
+    ),
     #[allow(dead_code)]
-    resolve_conflict_keep_local:
-        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    resolve_conflict_keep_local: qt_method!(
+        fn(&mut self, target_kind: QString, project_id: QString, path: QString) -> QString
+    ),
     #[allow(dead_code)]
-    resolve_conflict_take_remote:
-        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    resolve_conflict_take_remote: qt_method!(
+        fn(&mut self, target_kind: QString, project_id: QString, path: QString) -> QString
+    ),
     #[allow(dead_code)]
-    resolve_conflict_mark_merged:
-        qt_method!(fn(&mut self, project_id: QString, path: QString) -> QString),
+    resolve_conflict_mark_merged: qt_method!(
+        fn(&mut self, target_kind: QString, project_id: QString, path: QString) -> QString
+    ),
     // Issue #762 评论 5826175490：全局冲突数缓存，u32 Default 为 0，符合 #[derive(Default)]。
     current_sync_conflict_count: u32,
     // Issue #762 评论 5828791004：冲突列表 fingerprint 缓存。
@@ -417,11 +422,17 @@ impl SyncBackend {
     /// 列出当前项目的所有未解决冲突。
     ///
     /// 返回 `ResultEnvelope<{ conflicts: SyncConflictDto[] }>` JSON 字符串。
-    fn list_sync_conflicts(&mut self, project_id: QString) -> QString {
+    fn list_sync_conflicts(&mut self, target_kind: QString, project_id: QString) -> QString {
+        let tk = target_kind.to_string();
         let pid = project_id.to_string();
+        let pid_opt = if tk == "app" {
+            None
+        } else {
+            Some(pid.as_str())
+        };
         let result = self.with_app(|app| {
             app.core_api()
-                .map(|api| api.list_sync_conflicts("project", Some(&pid)))
+                .map(|api| api.list_sync_conflicts(&tk, pid_opt))
         });
         match result {
             Ok(Some(Ok(conflicts))) => {
@@ -472,13 +483,23 @@ impl SyncBackend {
     /// 加载单个冲突的本地/远端预览。
     ///
     /// 返回 `ResultEnvelope<{ preview: SyncConflictPreviewDto }>` JSON 字符串。
-    fn load_sync_conflict_preview(&mut self, project_id: QString, path: QString) -> QString {
+    fn load_sync_conflict_preview(
+        &mut self,
+        target_kind: QString,
+        project_id: QString,
+        path: QString,
+    ) -> QString {
+        let tk = target_kind.to_string();
         let pid = project_id.to_string();
+        let pid_opt = if tk == "app" {
+            None
+        } else {
+            Some(pid.as_str())
+        };
         let conflict_path = path.to_string();
         let result = self.with_app(|app| {
-            app.core_api().map(|api| {
-                api.load_sync_conflict_preview("project", Some(&pid), &conflict_path)
-            })
+            app.core_api()
+                .map(|api| api.load_sync_conflict_preview(&tk, pid_opt, &conflict_path))
         });
         match result {
             Ok(Some(Ok(preview))) => {
@@ -506,21 +527,24 @@ impl SyncBackend {
     /// `action`：`"keep_local"` / `"take_remote"` / `"mark_merged"`。
     fn resolve_conflict_dispatch(
         &mut self,
+        target_kind: QString,
         project_id: QString,
         path: QString,
         action: &str,
     ) -> QString {
+        let tk = target_kind.to_string();
         let pid = project_id.to_string();
+        let pid_opt = if tk == "app" {
+            None
+        } else {
+            Some(pid.as_str())
+        };
         let conflict_path = path.to_string();
         let result = self.with_app(|app| {
             app.core_api().map(|api| match action {
-                "keep_local" => {
-                    api.resolve_conflict_keep_local("project", Some(&pid), &conflict_path)
-                }
-                "take_remote" => {
-                    api.resolve_conflict_take_remote("project", Some(&pid), &conflict_path)
-                }
-                _ => api.resolve_conflict_mark_merged("project", Some(&pid), &conflict_path),
+                "keep_local" => api.resolve_conflict_keep_local(&tk, pid_opt, &conflict_path),
+                "take_remote" => api.resolve_conflict_take_remote(&tk, pid_opt, &conflict_path),
+                _ => api.resolve_conflict_mark_merged(&tk, pid_opt, &conflict_path),
             })
         });
         // Issue #757 评论 5820327136 第 1 点：take_remote 的 applied_live bool 透传到
@@ -562,16 +586,31 @@ impl SyncBackend {
         json
     }
 
-    fn resolve_conflict_keep_local(&mut self, project_id: QString, path: QString) -> QString {
-        self.resolve_conflict_dispatch(project_id, path, "keep_local")
+    fn resolve_conflict_keep_local(
+        &mut self,
+        target_kind: QString,
+        project_id: QString,
+        path: QString,
+    ) -> QString {
+        self.resolve_conflict_dispatch(target_kind, project_id, path, "keep_local")
     }
 
-    fn resolve_conflict_take_remote(&mut self, project_id: QString, path: QString) -> QString {
-        self.resolve_conflict_dispatch(project_id, path, "take_remote")
+    fn resolve_conflict_take_remote(
+        &mut self,
+        target_kind: QString,
+        project_id: QString,
+        path: QString,
+    ) -> QString {
+        self.resolve_conflict_dispatch(target_kind, project_id, path, "take_remote")
     }
 
-    fn resolve_conflict_mark_merged(&mut self, project_id: QString, path: QString) -> QString {
-        self.resolve_conflict_dispatch(project_id, path, "mark_merged")
+    fn resolve_conflict_mark_merged(
+        &mut self,
+        target_kind: QString,
+        project_id: QString,
+        path: QString,
+    ) -> QString {
+        self.resolve_conflict_dispatch(target_kind, project_id, path, "mark_merged")
     }
 
     // ── Issue #762 评论 5826175490 / 5828791004：全局冲突状态刷新 ──
@@ -1286,14 +1325,20 @@ impl AppBackend {
 /// 例如作品 A 的冲突刚解决、同一轮同步作品 B 新产生一个冲突，总数一直是 1，
 /// count 不变但 WritingWorkspace / SyncPage 必须刷新。
 ///
-/// 收集每个冲突的 `project_id + path + kind + created_at`，排序后拼接：
+/// 收集每个冲突的 `target_kind + project_id + path + kind + created_at`，排序后拼接：
 /// 内容集合一致（含顺序不同）时 fingerprint 相同，集合一变就不同。
+/// Issue #902 第二十轮：纳入 `target_kind`，区分 app 与 project 同路径冲突。
 fn sync_conflict_fingerprint(
     conflicts: &[writer_core::api::types::AllSyncConflictEntryDto],
 ) -> String {
     let mut entries: Vec<String> = conflicts
         .iter()
-        .map(|c| format!("{}|{}|{}|{}", c.project_id, c.path, c.kind, c.created_at))
+        .map(|c| {
+            format!(
+                "{}|{}|{}|{}|{}",
+                c.target_kind, c.project_id, c.path, c.kind, c.created_at
+            )
+        })
         .collect();
     entries.sort();
     entries.join(";")
@@ -1311,6 +1356,7 @@ mod sync_conflict_fingerprint_tests {
             path: path.to_string(),
             kind: "both_changed".to_string(),
             created_at,
+            target_kind: "project".to_string(),
         }
     }
 

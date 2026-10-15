@@ -24,6 +24,9 @@ Rectangle {
     property var syncBackendRef: null
     // 当前项目 ID（由 WritingWorkspace.workspaceProjectId 传入）。
     property string projectId: ""
+    // Issue #902 第二十轮：同步 target 类型（"app"/"project"），决定 Core API 的 target_kind。
+    // App 冲突 projectId 为空字符串，不能靠 projectId 判空禁用面板。
+    property string targetKind: "project"
     // Issue #770 评论 5842877986: 冲突列表由外部（WritingWorkspace.syncConflicts）传入，
     // 面板不再自己调 list_sync_conflicts 维护第二份缓存。
     required property var conflicts
@@ -82,11 +85,11 @@ Rectangle {
     // ── 数据加载 ──
 
     function loadPreview() {
-        if (!root.syncBackendRef || !root.projectId || !root.selectedConflictPath) {
+        if (!root.syncBackendRef || !root.selectedConflictPath) {
             root.preview = null;
             return;
         }
-        var raw = root.syncBackendRef.load_sync_conflict_preview(root.projectId, root.selectedConflictPath);
+        var raw = root.syncBackendRef.load_sync_conflict_preview(root.targetKind, root.projectId, root.selectedConflictPath);
         var resp;
         try { resp = JSON.parse(raw); } catch (e) { resp = null; }
         if (resp && resp.success && resp.data) {
@@ -97,14 +100,14 @@ Rectangle {
     }
 
     function resolveAction(action) {
-        if (!root.syncBackendRef || !root.projectId || !root.selectedConflictPath) return;
+        if (!root.syncBackendRef || !root.selectedConflictPath) return;
         var raw;
         if (action === "keep_local") {
-            raw = root.syncBackendRef.resolve_conflict_keep_local(root.projectId, root.selectedConflictPath);
+            raw = root.syncBackendRef.resolve_conflict_keep_local(root.targetKind, root.projectId, root.selectedConflictPath);
         } else if (action === "take_remote") {
-            raw = root.syncBackendRef.resolve_conflict_take_remote(root.projectId, root.selectedConflictPath);
+            raw = root.syncBackendRef.resolve_conflict_take_remote(root.targetKind, root.projectId, root.selectedConflictPath);
         } else if (action === "mark_merged") {
-            raw = root.syncBackendRef.resolve_conflict_mark_merged(root.projectId, root.selectedConflictPath);
+            raw = root.syncBackendRef.resolve_conflict_mark_merged(root.targetKind, root.projectId, root.selectedConflictPath);
         } else {
             return;
         }

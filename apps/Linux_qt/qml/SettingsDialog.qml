@@ -85,7 +85,7 @@ Dialog {
     property var _saveTimer: null
     signal settingsChanged()
     // Issue #762 评论 5826175490 第 4 点：转发 SyncPage 的 openConflict 信号给主窗口
-    signal openConflict(string projectId, string path)
+    signal openConflict(string targetKind, string projectId, string path)
     // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
     signal switchWorkspaceRequested()
 
@@ -634,8 +634,8 @@ Dialog {
                         }
                         onSettingsChanged: root.settingsChanged()
                         // Issue #762 评论 5826175490 第 4 点：转发 openConflict 信号给主窗口
-                        onOpenConflict: function(projectId, path) {
-                            root.openConflict(projectId, path)
+                        onOpenConflict: function(targetKind, projectId, path) {
+                            root.openConflict(targetKind, projectId, path)
                         }
                     }
                 }

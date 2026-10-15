@@ -161,6 +161,8 @@ ApplicationWindow {
     // 否则项目没切到位就消费 pending，会落到错误作品的冲突列表里。
     property string pendingConflictProjectId: ""
     property string pendingConflictPath: ""
+    // Issue #902 第二十轮：pending 冲突的 target 类型，只处理 project target。
+    property string pendingConflictTargetKind: ""
 
     function projectTitleById(projectId) {
         var treeData = appState ? (appState.tree || []) : []
@@ -184,8 +186,10 @@ ApplicationWindow {
         pendingConflictProjectId = ""
     }
 
-    function openConflictInProject(projectId, path) {
-        if (!projectId) return
+    function openConflictInProject(targetKind, projectId, path) {
+        // Issue #902 第二十轮：App 冲突在 SyncPage 内部处理，不走 openWriting。
+        if (targetKind === "app") return
+        if (!projectId) return  // project target 必须有 projectId
         // 关闭设置页，让写作工作区可见。
         if (settingsDialogLoader.item) settingsDialogLoader.item.close()
         // Issue #770 评论 5842877986: 先写 pending（projectId + path）再切作品，
@@ -897,8 +901,8 @@ ApplicationWindow {
             // Issue #762 评论 5826175490 第 4 点：处理 SyncPage 的 openConflict 信号。
             // 打开对应作品并把目标冲突路径交给 WritingWorkspace/SyncConflictPanel 选中，
             // 不要求这一轮同步先结束。
-            onOpenConflict: function(projectId, path) {
-                window.openConflictInProject(projectId, path)
+            onOpenConflict: function(targetKind, projectId, path) {
+                window.openConflictInProject(targetKind, projectId, path)
             }
             // Issue #790 评论 5875963057: 切换工作区入口收口到设置页
             onSwitchWorkspaceRequested: {

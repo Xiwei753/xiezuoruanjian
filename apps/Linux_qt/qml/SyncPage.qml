@@ -40,7 +40,14 @@ Item {
     property var conflictGroups: []
     property var conflictRows: []
     readonly property int conflictTotalCount: allSyncConflicts.length
-    signal openConflict(string projectId, string path)
+    signal openConflict(string targetKind, string projectId, string path)
+
+    // Issue #902 第二十轮：App 冲突（星图等应用级数据）预览/解决面板。
+    // App 冲突在 SyncPage 内部处理，不走 openWriting 跳转。
+    property bool appConflictPanelVisible: false
+    property string appConflictPath: ""
+    // App 冲突列表（从 allSyncConflicts 筛 targetKind==="app"，path 映射为 localPath）。
+    property var appConflictList: []
 
     // Local reactive sync state
     property string currentSyncStatus: "not_configured"
@@ -215,6 +222,7 @@ Item {
             root.allSyncConflicts = []
             root.conflictGroups = []
             root.conflictRows = []
+            root.appConflictList = []
             return
         }
         var raw = sb.list_all_sync_conflicts()
@@ -224,20 +232,29 @@ Item {
         root.allSyncConflicts = flat
         root.conflictGroups = root.groupConflictsByProject(flat)
         root.conflictRows = root.buildConflictRows(root.conflictGroups)
+        root.appConflictList = root.buildAppConflictList(flat)
     }
 
-    /// 把扁平冲突列表按 projectId 分组，保留 Core 返回的作品标题。
+    /// 把扁平冲突列表按 targetKind + projectId 分组，保留 Core 返回的作品标题。
+    /// Issue #902 第二十轮：app target（projectId 为空）与 project target 互不混组。
     function groupConflictsByProject(flat) {
         var groups = []
         for (var i = 0; i < flat.length; i++) {
             var entry = flat[i]
             if (!entry) continue
+            var groupKey = entry.targetKind + "|" + entry.projectId
             var group = null
             for (var j = 0; j < groups.length; j++) {
-                if (groups[j].projectId === entry.projectId) { group = groups[j]; break }
+                if (groups[j]._groupKey === groupKey) { group = groups[j]; break }
             }
             if (!group) {
-                group = { projectId: entry.projectId, projectTitle: entry.projectTitle, conflicts: [] }
+                group = {
+                    _groupKey: groupKey,
+                    targetKind: entry.targetKind || "project",
+                    projectId: entry.projectId,
+                    projectTitle: entry.projectTitle,
+                    conflicts: []
+                }
                 groups.push(group)
             }
             group.conflicts.push(entry)
@@ -246,12 +263,14 @@ Item {
     }
 
     /// 展平成渲染行：每个作品一行分组头，其下每条冲突一行可点击项。
+    /// Issue #902 第二十轮：行数据携带 targetKind，点击时一路传给 openConflict。
     function buildConflictRows(groups) {
         var rows = []
         for (var i = 0; i < groups.length; i++) {
             var group = groups[i]
             rows.push({
                 kind: "project",
+                targetKind: group.targetKind,
                 projectId: group.projectId,
                 projectTitle: group.projectTitle,
                 conflictCount: group.conflicts.length,
@@ -260,6 +279,7 @@ Item {
             for (var j = 0; j < group.conflicts.length; j++) {
                 rows.push({
                     kind: "conflict",
+                    targetKind: group.targetKind,
                     projectId: group.projectId,
                     projectTitle: group.projectTitle,
                     conflictCount: group.conflicts.length,
@@ -268,6 +288,20 @@ Item {
             }
         }
         return rows
+    }
+
+    /// Issue #902 第二十轮：构造 App 冲突列表，把 AllSyncConflictEntryDto.path
+    /// 映射为 SyncConflictPanel 期望的 localPath。
+    function buildAppConflictList(flat) {
+        var list = []
+        for (var i = 0; i < flat.length; i++) {
+            var entry = flat[i]
+            if (!entry) continue
+            if ((entry.targetKind || "project") === "app") {
+                list.push({ localPath: entry.path || "", kind: entry.kind || "" })
+            }
+        }
+        return list
     }
 
     // Remove color since root is now an Item
@@ -758,7 +792,9 @@ Item {
                             Layout.fillWidth: true
                             visible: modelData.kind === "project"
                             dt: root.resolvedDt
-                            text: qsTr("%1（%2 处）").arg(modelData.projectTitle).arg(modelData.conflictCount)
+                            text: modelData.targetKind === "app"
+                                ? qsTr("应用数据/星图（%1 处）").arg(modelData.conflictCount)
+                                : qsTr("%1（%2 处）").arg(modelData.projectTitle).arg(modelData.conflictCount)
                             color: resolvedDt.onBackground
                             font.pointSize: resolvedDt.bodyPt
                             font.family: resolvedDt.fontFamily
@@ -771,9 +807,43 @@ Item {
                             dt: root.resolvedDt
                             variant: "secondary"
                             text: modelData.localPath
-                            onClicked: root.openConflict(modelData.projectId, modelData.localPath)
+                            onClicked: {
+                                root.openConflict(modelData.targetKind, modelData.projectId, modelData.localPath)
+                                // Issue #902 第二十轮：App 冲突在 SyncPage 内部展示面板，
+                                // 不走 openWriting 跳转（main.qml 对 app target 直接 return）。
+                                if (modelData.targetKind === "app") {
+                                    root.appConflictPath = modelData.localPath
+                                    root.appConflictPanelVisible = true
+                                }
+                            }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Issue #902 第二十轮：App 冲突预览/解决面板（按需加载，覆盖在 SyncPage 上）。
+    // App 冲突（星图等应用级数据）不归属任何作品，在 SyncPage 内部解决，不走 openWriting。
+    // 用 sourceComponent + 声明式绑定，required 属性（dt/conflicts）在创建时即满足。
+    Loader {
+        id: appConflictPanelLoader
+        active: root.appConflictPanelVisible
+        anchors.fill: parent
+        sourceComponent: Component {
+            SyncConflictPanel {
+                anchors.fill: parent
+                dt: root.resolvedDt
+                syncBackendRef: root.syncBackendRef
+                targetKind: "app"
+                projectId: ""
+                conflicts: root.appConflictList
+                requestedConflictPath: root.appConflictPath
+                onCloseRequested: root.appConflictPanelVisible = false
+                onConflictsResolved: {
+                    // 解决一个 App 冲突后刷新全局列表；conflicts 绑定到
+                    // appConflictList，refresh 后自动同步，无需手动赋值。
+                    root.refreshAllSyncConflicts()
                 }
             }
         }
