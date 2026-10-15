@@ -1,0 +1,592 @@
+// EditorMotionLayer — 运动层绘制。
+//
+// Issue #879：使用 clipShape/maskShape 对真实 ArkUI Text 绘制结果做遮罩。
+//
+// 核心原则：
+// 1. 不用透明字色伪装遮罩——用真实像素裁切（clipShape/maskShape）。
+// 2. 不用 Canvas.fillText 临摹——对真实 ArkUI Text 组件做遮罩。
+// 3. 同一字形在每一帧只能由静态正文或运动层绘制一次。
+// 4. 光标位置 = 裁切前沿 front。
+//
+// Issue #879 复核评论修复：
+// - 问题1：添加 computeStaticMaskPath/computeStaticMaskRects 方法，
+//   从 EditorVisualFrame.staticVisibleRanges 和行布局生成静态可见裁切区域。
+//   主 Text 仍完整排版，但其绘制输出按 staticVisibleRanges 用 clipShape 裁切——
+//   只显示未被运动接管的范围。不再用背景色 Rect 遮罩。
+// - 问题2：MotionTextOverlayParams 改为接收 motionSources（MotionSourceEntry[]），
+//   不再接收 TextController 数组 / StyledString / runIdPrefix。
+//   ForEach key 基于 window.runId（稳定身份），而非 `${sourceKind}-${runIdPrefix}-${index}`（自增事务编号）。
+//   同一 runId 的 Text 不会因新事务而重建——只更新 clip 和位置。
+//   TextController 和 StyledString 从 MotionSourceEntry 获取（通过 window.runId 匹配 source）。
+// - 问题4：needsStaticMask 只有确切有 motion owner（motionGlyphWindows 中至少有一个 window
+//   的 runId 非空）时才返回 true。非动画时不裁切。
+//
+// Issue #879 最新复核评论修复（问题3）：
+// - 每个新 Text 的 onAppear 完成本节点自己的绑定（setStyledString），
+//   不再检查 !item.mounted 跳过——避免同版本新窗口从源池读到 mounted=true 而漏字。
+// - 用真实 ComponentObserver('layout') 替代 setTimeout 定时器充当绘制完成证据。
+//   @Builder 函数中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
+//   让父组件（SujianEditor）创建 observer，layout 回调中调用 markWindowLayoutReady。
+// - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
+// - 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份），供父组件创建 ComponentObserver。
+//
+// ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
+// 所以 MotionTextOverlay 以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
+
+import { EditorVisualFrame, MotionKind, MotionGlyphWindow, StaticVisibleRange, ClipRect } from './EditorVisualFrame'
+import { CaretRect, LineLayout } from '../render/editor_render_geometry'
+import { RectShape, PathShape } from '@ohos.arkui.shape'
+import { EditorMotionCoordinator } from './EditorMotionCoordinator'
+import { MotionSourceEntry } from './EditorMotionSourcePool'
+// Issue #879：重新导出 ClipRect，供 SujianEditor 从 EditorMotionLayer 统一导入运动层类型。
+export { ClipRect } from './EditorVisualFrame'
+
+/**
+ * 运动层绘制工具。
+ *
+ * 提供 clipShape/maskShape 所需的裁切矩形计算、静态层可见区域计算、
+ * 光标位置计算等纯函数，以及 MotionTextOverlayBuilder() Builder 函数
+ * 用于在 ArkUI 组件树中渲染运动层 Text + clipShape。
+ *
+ * Issue #879 本轮复核评论修复（问题1）：
+ * 添加 computeStaticMaskPath/computeStaticMaskRects 方法，
+ * 从 staticVisibleRanges 和行布局生成静态可见裁切区域（用 PathShape 组合多矩形）。
+ */
+export class EditorMotionLayer {
+  /**
+   * 构建裁切矩形。
+   *
+   * 从 MotionGlyphWindow 的 clipLeft/clipRight/clipTop/clipBottom
+   * 构建一个 ClipRect，用于 clipShape/maskShape。
+   *
+   * width/height 不允许为负——clipRight < clipLeft 或 clipBottom < clipTop
+   * 时返回零尺寸矩形（该字形在本帧不可见）。
+   */
+  static buildClipRect(window: MotionGlyphWindow): ClipRect {
+    const x = window.clipLeft
+    const y = window.clipTop
+    const width = Math.max(0, window.clipRight - window.clipLeft)
+    const height = Math.max(0, window.clipBottom - window.clipTop)
+    return { x, y, width, height }
+  }
+
+  /**
+   * 取一个运动窗口在本帧的所有可见裁切矩形（多岛并集）。
+   *
+   * Issue #879 本轮复核评论（高优先级）：一个固定 piece 物理 Text 可能覆盖多个不连续可见岛，
+   * 这些岛以「多个不连续 clip 矩形的并集」由一个 Text 节点绘制。返回 window.clipRects；
+   * 若为空（旧数据/未填充），退回由包围盒 clipLeft/Right/Top/Bottom 构造的单个矩形。
+   *
+   * Issue #879 复核评论6097927249 问题1：区分 undefined 与空数组两种语义：
+   * - clipRects === undefined：旧数据缺字段，回退到包围盒（兼容）
+   * - clipRects !== undefined && clipRects.length === 0：显式空数组＝当前完全不可见，
+   *   返回空数组 []（不裁切任何内容，Text 完全不可见）
+   * - clipRects.length > 0：返回 clipRects
+   */
+  static buildWindowClipRects(window: MotionGlyphWindow): ClipRect[] {
+    if (window.clipRects !== undefined) {
+      // 显式空数组＝当前完全不可见，返回 []（不裁切任何内容）
+      return window.clipRects
+    }
+    // clipRects === undefined：旧数据缺字段，回退到包围盒（兼容）
+    const x = window.clipLeft
+    const y = window.clipTop
+    const width = Math.max(0, window.clipRight - window.clipLeft)
+    const height = Math.max(0, window.clipBottom - window.clipTop)
+    return [{ x, y, width, height }]
+  }
+
+  /**
+   * 把若干裁切矩形合并成一个 SVG path 命令字符串（供 PathShape 用 fillRule 组合成并集）。
+   *
+   * 每个矩形生成一段 M...L...L...L...Z 子路径；坐标相对 (originX, originY) 偏移，
+   * 因为外层 Stack 定位在并集包围盒左上角，所以每个矩形要在 Stack 局部坐标系里表达。
+   *
+   * @param rects 裁切矩形列表（编辑器坐标系）
+   * @param originX 并集包围盒左上角 x（Stack 定位点）
+   * @param originY 并集包围盒左上角 y
+   * @returns SVG path 命令字符串；空列表返回不可见 path
+   */
+  static buildClipPath(rects: ClipRect[], originX: number, originY: number): string {
+    if (rects.length === 0) {
+      return 'M0 0 Z'
+    }
+    const parts: string[] = []
+    for (const r of rects) {
+      const x = r.x - originX
+      const y = r.y - originY
+      if (r.width <= 0 || r.height <= 0) {
+        continue
+      }
+      parts.push(`M${x} ${y} L${x + r.width} ${y} L${x + r.width} ${y + r.height} L${x} ${y + r.height} Z`)
+    }
+    if (parts.length === 0) {
+      return 'M0 0 Z'
+    }
+    return parts.join(' ')
+  }
+
+  /**
+   * 计算一组裁切矩形的并集包围盒。
+   *
+   * 外层 Stack 定位在包围盒左上角，PathShape 用相对坐标表达各子矩形，
+   * 这样多个不连续可见岛可以共用一个 Text 节点的裁切。
+   */
+  static clipRectsBBox(rects: ClipRect[]): ClipRect {
+    if (rects.length === 0) {
+      return { x: 0, y: 0, width: 0, height: 0 }
+    }
+    let minX = rects[0].x
+    let minY = rects[0].y
+    let maxX = rects[0].x + rects[0].width
+    let maxY = rects[0].y + rects[0].height
+    for (let i = 1; i < rects.length; i++) {
+      const r = rects[i]
+      if (r.x < minX) { minX = r.x }
+      if (r.y < minY) { minY = r.y }
+      const right = r.x + r.width
+      const bottom = r.y + r.height
+      if (right > maxX) { maxX = right }
+      if (bottom > maxY) { maxY = bottom }
+    }
+    return { x: minX, y: minY, width: Math.max(0, maxX - minX), height: Math.max(0, maxY - minY) }
+  }
+
+  /**
+   * 计算静态层可见区域。
+   *
+   * 从 EditorVisualFrame 的 staticVisibleRanges 和行布局信息出发，
+   * 计算静态正文层在本帧应该绘制的字形范围。
+   *
+   * 运动层负责的字形范围（motionGlyphWindows 中的 utf16Start/utf16End）
+   * 不包含在静态层可见范围内——同一字形每帧只画一次。
+   *
+   * 如果 frame.isAnimating 为 false，所有字形都由静态层绘制。
+   */
+  static computeStaticVisibleRanges(
+    frame: EditorVisualFrame,
+    lineLayouts: LineLayout[]
+  ): StaticVisibleRange[] {
+    // 非动画状态：所有字形归静态层
+    if (!frame.isAnimating) {
+      if (lineLayouts.length === 0) {
+        return []
+      }
+      return [{
+        utf16Start: lineLayouts[0].startUtf16,
+        utf16End: lineLayouts[lineLayouts.length - 1].endUtf16
+      }]
+    }
+
+    // 动画状态：从 staticVisibleRanges 中排除运动层负责的范围
+    const motionRanges: StaticVisibleRange[] = frame.motionGlyphWindows.map(
+      (w: MotionGlyphWindow): StaticVisibleRange => ({
+        utf16Start: w.utf16Start,
+        utf16End: w.utf16End
+      })
+    )
+
+    return EditorMotionCoordinator.subtractRanges(
+      frame.staticVisibleRanges,
+      motionRanges
+    )
+  }
+
+  /**
+   * 计算静态可见区 mask 矩形列表。
+   *
+   * Issue #879 本轮复核评论修复（问题1）：
+   * 从 EditorVisualFrame.staticVisibleRanges 和行布局生成静态可见裁切矩形列表。
+   * 主 Text 仍完整排版，但其绘制输出按这些矩形用 clipShape 裁切——
+   * 只显示未被运动接管的范围。
+   *
+   * 每个 StaticVisibleRange 可能跨多行，按行拆成多个矩形。
+   * 非动画时返回单个全尺寸矩形（不裁切，全显示）。
+   *
+   * @param frame 当前视觉帧
+   * @param lineLayouts 行布局（用于把 UTF-16 offset 范围转成几何矩形）
+   * @param fullWidth 全宽（vp，非动画时用）
+   * @param fullHeight 全高（vp，非动画时用）
+   * @returns 裁切矩形列表（供 buildStaticMaskPath 构造 PathShape）
+   */
+  static computeStaticMaskRects(
+    frame: EditorVisualFrame,
+    lineLayouts: LineLayout[],
+    fullWidth: number,
+    fullHeight: number
+  ): ClipRect[] {
+    // 非动画状态：全显示（单个全尺寸矩形）
+    if (!frame.isAnimating) {
+      return [{ x: 0, y: 0, width: fullWidth, height: fullHeight }]
+    }
+
+    // 动画状态：把每个 staticVisibleRange 按行拆成矩形
+    const rects: ClipRect[] = []
+    for (const range of frame.staticVisibleRanges) {
+      for (const line of lineLayouts) {
+        // 行与区间无交集
+        if (line.endUtf16 <= range.utf16Start || line.startUtf16 >= range.utf16End) {
+          continue
+        }
+        const segStart = Math.max(range.utf16Start, line.startUtf16)
+        const segEnd = Math.min(range.utf16End, line.endUtf16)
+        if (segStart >= segEnd) {
+          continue
+        }
+        // 用 caretStops 找起始 x 和结束 x
+        let x = line.left
+        for (const stop of line.caretStops) {
+          if (stop.utf16Offset <= segStart) {
+            x = stop.x
+          }
+        }
+        let endX = x
+        for (const stop of line.caretStops) {
+          if (stop.utf16Offset <= segEnd) {
+            endX = stop.x
+          }
+        }
+        rects.push({
+          x,
+          y: line.y,
+          width: Math.max(0, endX - x),
+          height: line.height
+        })
+      }
+    }
+    return rects
+  }
+
+  /**
+   * 从矩形列表构建 SVG path 命令字符串（供 PathShape commands 参数）。
+   *
+   * 每个矩形生成一段 M...L...L...L...Z 路径，多矩形用 fillRule=evenodd 组合。
+   *
+   * @param rects 矩形列表
+   * @returns SVG path 命令字符串
+   */
+  static buildStaticMaskPath(rects: ClipRect[]): string {
+    if (rects.length === 0) {
+      // 空路径——不可见
+      return 'M0 0 Z'
+    }
+    const parts: string[] = []
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) {
+        continue
+      }
+      const x = r.x
+      const y = r.y
+      const w = r.width
+      const h = r.height
+      // 矩形路径：M x y L x+w y L x+w y+h L x y+h Z
+      parts.push(`M${x} ${y} L${x + w} ${y} L${x + w} ${y + h} L${x} ${y + h} Z`)
+    }
+    if (parts.length === 0) {
+      return 'M0 0 Z'
+    }
+    return parts.join(' ')
+  }
+
+  /**
+   * 从视觉帧计算光标位置。
+   *
+   * 光标位置 = 裁切前沿 front。
+   * - 吐字：front 在新字右侧（从 x0 推进到 x1）。
+   * - 吞字：front 在旧字左侧（从 x1 退到 x0）。
+   * - Forward Delete：front 在固定 caret 位置（逻辑光标不动）。
+   * - 纯光标移动：front = 光标插值位置。
+   * - 无动画：front = 静态光标位置。
+   *
+   * 返回 CaretRect 供 ArkUI 绘制光标矩形。
+   */
+  static computeCaretFromFrame(frame: EditorVisualFrame): CaretRect {
+    return {
+      x: frame.caretX,
+      y: frame.caretY,
+      width: 2, // CARET_WIDTH_VP
+      height: frame.caretHeight
+    }
+  }
+
+  /**
+   * 判断某字形范围是否在运动层窗口中。
+   *
+   * 用于静态层决定是否跳过某个字形的绘制——
+   * 如果该字形在运动层窗口中，静态层不画（避免同一字形画两次）。
+   */
+  static isGlyphInMotionWindow(
+    utf16Start: number,
+    utf16End: number,
+    frame: EditorVisualFrame
+  ): boolean {
+    for (const window of frame.motionGlyphWindows) {
+      // 范围有交集 → 在运动层窗口中
+      if (utf16Start < window.utf16End && utf16End > window.utf16Start) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * 计算运动层需要绘制的字形窗口的裁切矩形列表（每个窗口一组矩形，多岛并集）。
+   *
+   * 返回与 frame.motionGlyphWindows 等长的数组，每个元素是该窗口的 ClipRect[]，
+   * ArkUI 组件层对每个窗口用 PathShape 组合成并集裁切。
+   */
+  static buildAllClipRects(frame: EditorVisualFrame): ClipRect[][] {
+    return frame.motionGlyphWindows.map(
+      (w: MotionGlyphWindow): ClipRect[] => EditorMotionLayer.buildWindowClipRects(w)
+    )
+  }
+
+  /**
+   * 判断当前帧是否需要运动层绘制。
+   *
+   * isAnimating 且 motionGlyphWindows 非空时才需要运动层。
+   *
+   * Issue #879 复核评论6080604353 问题4修复：
+   * 不再因 motionKind===CaretMove 无条件返回 false——新 plan 可能是纯光标移动，
+   * 但 retarget 时继承了尚未吞完的旧删除 ghost，buildFrame 已创建 ghost windows。
+   * 只要 isAnimating 且有 motionGlyphWindows，就需要运动层绘制这些残影。
+   */
+  static needsMotionLayer(frame: EditorVisualFrame): boolean {
+    if (!frame.isAnimating) {
+      return false
+    }
+    return frame.motionGlyphWindows.length > 0
+  }
+
+  /**
+   * 判断当前帧是否需要单独绘制光标。
+   *
+   * 动画中（isAnimating）时，光标由运动层绘制（绑定裁切前沿）。
+   * 非动画时，光标由静态层绘制。
+   */
+  static needsSeparateCaret(frame: EditorVisualFrame): boolean {
+    return frame.isAnimating
+  }
+
+  /**
+   * 判断当前帧是否需要对主 Text 做静态可见区裁切。
+   *
+   * Issue #879 复核评论修复（问题1/4）：
+   * 动画中且 needsMotionLayer 时，主 Text 需要按 staticVisibleRanges 裁切，
+   * 排除被运动接管的字形。非动画时不裁切（全显示）。
+   *
+   * Issue #879 复核评论修复（问题4）：
+   * 只有确切有 motion owner（motionGlyphWindows 中至少有一个 window 的 runId 非空，
+   * 即有对应的稳定源）时才返回 true。非动画时不裁切——staticClipCommands 默认应为
+   * 全尺寸矩形（不裁切），而非空 path（完全隐藏）。
+   */
+  static needsStaticMask(frame: EditorVisualFrame): boolean {
+    if (!EditorMotionLayer.needsMotionLayer(frame)) {
+      return false
+    }
+    // 确保至少有一个 window 有有效的 runId（确切的 motion owner）
+    for (const window of frame.motionGlyphWindows) {
+      if (window.runId.length > 0) {
+        return true
+      }
+    }
+    return false
+  }
+
+  // ── 私有方法 ──
+}
+
+// ── ArkUI Builder 函数 ──
+
+/**
+ * MotionTextOverlayBuilder 的参数类型。
+ * ArkTS 要求 @Builder 函数的参数类型必须是显式声明的 interface 或 class，
+ * 不能用对象字面量类型。
+ *
+ * Issue #879 最新复核评论修复（问题3）：
+ * - mounted/layoutReady 从窗口级状态读取（MotionWindowState），而非从源池 source 读取。
+ *   避免某一窗口先 mounted 后，后续同版本新窗口从 source 读到 mounted=true，
+ *   导致新 Text 的 onAppear 跳过 setStyledString 而空白。
+ * - onWindowLayoutReady 回调替代旧的 onLayoutReady + setTimeout：
+ *   @Builder 中不能直接创建 ComponentObserver，通过回调让父组件创建 observer，
+ *   layout 回调中调用 markWindowLayoutReady(renderNodeKey)。
+ * - onWindowDisappear 回调：Text.onDisAppear 中通知父组件清理本窗口状态。
+ */
+/** 预匹配的运动窗口+源+裁切矩形三元组——避免在 @Builder 中做匹配（ArkUI 限制） */
+export interface MotionWindowSource {
+  /** 运动字形窗口 */
+  window: MotionGlyphWindow
+  /** 匹配的稳定源（提供可共享的 StyledString） */
+  source: MotionSourceEntry
+  /** 裁切矩形列表（多岛并集——一个固定 piece 物理 Text 可能覆盖多个不连续可见岛） */
+  clipRects: ClipRect[]
+  /** clipRects 的并集包围盒——预计算以避免在 @Builder 中用 const 声明（ArkTS 限制） */
+  clipBBox: ClipRect
+  /** 独立的 TextController——每个窗口有自己的 controller，不共享 */
+  textController: TextController
+  /** 是否已挂载（onAppear 已触发）——从窗口级状态读取，而非从源池 source 读取 */
+  mounted: boolean
+  /** 布局是否已完成——从窗口级状态读取，而非从源池 source 读取 */
+  layoutReady: boolean
+  /**
+   * 窗口是否可见——Issue #879 复核评论修复（问题1）：
+   * displayedVisualFrame 的窗口 visible=true（正常显示），
+   * candidateVisualFrame 的窗口 visible=false（opacity 0，参与布局但不可见）。
+   * 候选窗口 layoutReady 后原子提交时 visible 变为 true。
+   */
+  visible: boolean
+  /**
+   * 窗口布局就绪回调——Text.onAppear 中调用，通知父组件为本窗口创建 ComponentObserver。
+   * 父组件创建 observer 后，在 layout 回调中调用 motionSourcePool.markWindowLayoutReady(renderNodeKey)。
+   * 替代旧的 onLayoutReady + setTimeout——用真实 ComponentObserver('layout') 确认布局完成。
+   */
+  onWindowLayoutReady: ((renderNodeKey: string) => void) | null
+  /**
+   * Issue #879 复核评论问题4：窗口租约获取回调——Text.onAppear 中调用。
+   *
+   * buildFrame 不再登记 lease（lease 在 onAppear 后才 acquire）。
+   * 候选被作废时 ArkUI 可能从未创建那个 Text，此时不存在对应 onDisAppear，
+   * lease 不应被提前登记。只有 Text 真正挂载后才 acquire lease。
+   */
+  onWindowAcquireLease: ((renderNodeKey: string, windowInstanceId: string) => void) | null
+  /**
+   * 窗口消失回调——Text.onDisAppear 中调用，通知父组件清理本窗口状态。
+   * 父组件调用 motionSourcePool.markWindowUnmounted(renderNodeKey) 并销毁对应的 ComponentObserver，
+   * 同时调用 motionCoordinator.releaseWindowInstance(windowInstanceId) 释放窗口实例 ID。
+   *
+   * Issue #879 复核评论6077187962 问题4：新增 windowInstanceId 参数，
+   * 用于释放有限长度的窗口实例 ID（win-<number>），使编号可被重新分配。
+   */
+   onWindowDisappear: ((renderNodeKey: string, windowInstanceId: string) => void) | null
+  /**
+   * Issue #879 复核评论6103606574 缺口1：窗口透明度（0-1）。
+   *
+   * retained 通道新旧源交叉淡入淡出时：
+   * - 旧源窗口 opacity = 1-p
+   * - 新源窗口 opacity = p
+   * 其他通道缺省为 1（完全不透明）。
+   */
+  opacity: number
+}
+
+export interface MotionTextOverlayParams {
+  /** 预匹配的窗口-源-裁切矩形列表 */
+  motionWindowSources: MotionWindowSource[]
+  /** 正文排版宽度（vp）——Text 的 width，确保排版和主 Text 一致，不被 clipRect 约束 */
+  textWidth: number
+}
+
+/**
+ * 运动层文字遮罩 Builder。
+ *
+ * 在 ArkUI 组件树中渲染运动层——对真实 ArkUI Text 组件做 clipShape 裁切，
+ * 实现吐字/吞字的像素级遮罩效果。
+ *
+ * Issue #879 最新复核评论修复（问题3）：
+ * - 每个新 Text 的 onAppear 完成本节点自己的绑定（setStyledString），
+ *   不再检查 !item.mounted 跳过——避免同版本新窗口从源池读到 mounted=true 而漏字。
+ * - 用真实 ComponentObserver('layout') 替代 setTimeout 定时器充当绘制完成证据。
+ *   @Builder 中不能直接创建 ComponentObserver——通过 onWindowLayoutReady 回调
+ *   让父组件创建 observer，layout 回调中调用 markWindowLayoutReady。
+ * - onDisAppear 中调用 onWindowDisappear 回调清理本窗口状态。
+ * - 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份），供父组件创建 ComponentObserver。
+ *
+ * 渲染策略：
+ * - 吐字（Reveal）：新字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+ * - 吞字（Conceal）：旧字源完整排版，clipShape 限制在 [x0, front] 裁切窗口
+ * - Forward Delete：旧字源完整排版，clipShape 限制在 [caret, front] 裁切窗口
+ * - Reflow（RetainedMove）：旧字源完整排版 + offset 平移到当前插值位置
+ * - 非动画：不渲染任何内容（静态层负责）
+ *
+ * ArkTS 限制：@Component struct 不能在非页面 .ets 文件中定义，
+ * 所以以 Builder 函数形式提供，由 SujianEditor 在 build() 中调用。
+ */
+@Builder
+export function MotionTextOverlayBuilder(params: MotionTextOverlayParams) {
+  if (params.motionWindowSources.length > 0) {
+    Stack() {
+      ForEach(
+        params.motionWindowSources,
+        (item: MotionWindowSource, index: number) => {
+          // Issue #879 本轮复核评论（高优先级）：同一物理 Text 可能覆盖多个不连续可见岛，
+          // 用并集包围盒定位外层 Stack，PathShape 用相对坐标表达各岛。
+          // clipBBox 由构建 MotionWindowSource 时预计算（ArkTS @Builder 中不能用 const）。
+          Stack() {
+            Text(undefined, { controller: item.textController })
+              .width(params.textWidth)
+              .textAlign(TextAlign.Start)
+              .wordBreak(WordBreak.BREAK_ALL)
+              // Issue #879 本轮复核评论修复（问题2）：
+              // 每个 Text 添加 .id() 基于 renderNodeKey（窗口身份 windowId），
+              // 供父组件创建 ComponentObserver。renderNodeKey 包含 sourceKind + sourceRevision，
+              // 切源时创建新节点而非复用旧节点。
+              .id(`motion-window-${item.window.renderNodeKey}`)
+              .offset({
+                x: -item.clipBBox.x + item.window.offsetX,
+                y: -item.clipBBox.y + item.window.offsetY
+              })
+              .onAppear(() => {
+                // Issue #879 最新复核评论修复（问题3）：
+                // 每个新 Text 的 onAppear 完成本节点自己的绑定——
+                // 不再检查 !item.mounted 跳过，避免同版本新窗口从源池读到 mounted=true 而漏字。
+                // 每个 Text 都调用自己的 textController.setStyledString(source.styledString)。
+                item.textController.setStyledString(item.source.styledString)
+                // Issue #879 复核评论问题4：在 onAppear 后才 acquire lease——
+                // buildFrame 不再登记 lease，只有 Text 真正挂载后才 acquire。
+                // 候选被作废时 ArkUI 可能从未创建那个 Text，此时不存在对应 onDisAppear，
+                // lease 不应被提前登记。
+                if (item.onWindowAcquireLease !== null) {
+                  item.onWindowAcquireLease(item.window.renderNodeKey, item.window.windowInstanceId)
+                }
+                // 通知父组件本窗口已挂载——父组件创建 ComponentObserver 监听 layout 事件。
+                // ComponentObserver 'layout' 回调确保 ArkUI Text 的 measure/layout 真正完成后
+                // 才调用 markWindowLayoutReady(renderNodeKey)，不再用 setTimeout 充当绘制完成证据。
+                // Issue #879 本轮复核评论修复（问题2）：
+                // 通知父组件本窗口已挂载——用 renderNodeKey 作为窗口身份。
+                // renderNodeKey 包含 sourceKind + sourceRevision，切源时创建新窗口状态。
+                if (item.onWindowLayoutReady !== null) {
+                  item.onWindowLayoutReady(item.window.renderNodeKey)
+                }
+              })
+              .onDisAppear(() => {
+                // Issue #879 最新复核评论修复（问题3）：
+                // Text 从组件树移除时清理本窗口状态——
+                // 父组件调用 markWindowUnmounted(renderNodeKey) 并销毁对应的 ComponentObserver。
+                // Issue #879 本轮复核评论修复（问题2）：
+                // Text 从组件树移除时清理本窗口状态——用 renderNodeKey 作为窗口身份。
+                // Issue #879 复核评论6077187962 问题4：
+                // 同时传递 windowInstanceId，让父组件释放有限长度的窗口实例 ID。
+                if (item.onWindowDisappear !== null) {
+                  item.onWindowDisappear(item.window.renderNodeKey, item.window.windowInstanceId)
+                }
+              })
+          }
+          .width(item.clipBBox.width)
+          .height(item.clipBBox.height)
+          .clipShape(new PathShape({
+            // Issue #879 本轮复核评论（高优先级）：多个不连续可见岛用 PathShape 组合成并集裁切，
+            // 同一 renderNodeKey 对应唯一物理 Text，但其可见区域是多个不连续 clip 矩形的并集。
+            commands: EditorMotionLayer.buildClipPath(item.clipRects, item.clipBBox.x, item.clipBBox.y)
+          }))
+          .position({
+            x: item.clipBBox.x,
+            y: item.clipBBox.y
+          })
+          // Issue #879 复核评论修复（问题1）：候选窗口 opacity 0——参与布局但不可见。
+          // 候选窗口 layoutReady 后原子提交时 visible 变为 true，opacity 变为 1。
+          // Issue #879 复核评论6103606574 缺口1：visible 窗口使用 item.opacity 控制透明度——
+          // retained 通道新旧源交叉淡入淡出时，旧源 opacity=1-p，新源 opacity=p。
+          .opacity(item.visible ? item.opacity : 0)
+        },
+        // Issue #879 复核评论6077187962 问题4：ForEach key 使用 renderNodeKey，
+        // 它 = sourceKind + '-' + sourceRevision + '-' + windowInstanceId。
+        // windowInstanceId 是有限长度的 win-<number>（由 WindowInstanceIdAllocator 分配），
+        // 不随 glyphIds 数量线性增长。windowId（算法身份）仍保留在数据结构中用于匹配/查找。
+        (item: MotionWindowSource, index: number) => `${item.window.renderNodeKey}`
+      )
+    }
+    .width('100%')
+    .height('100%')
+    .alignContent(Alignment.TopStart)
+  }
+}
