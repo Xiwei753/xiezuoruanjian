@@ -363,32 +363,11 @@ impl StagingRun {
                     }
                 }
             } else if is_starmap_index_path(&rel_str) {
-                // 星图全局索引：按星图 ID 三方集合合并，不走整文件 LWW。
-                // 双端并发创建不同星图时，合并后保留双方新增的星图 ID
-                // （issue #902 第八轮复核）。
-                use crate::sync::staging::starmap_merge::{
-                    merge_starmap_index, StarmapMergeResult,
-                };
-                match merge_starmap_index(base.as_deref(), local.as_deref(), incoming.as_deref())? {
-                    StarmapMergeResult::NoOp => {
-                        plan.noop.push(rel);
-                    }
-                    StarmapMergeResult::KeepLocal => {
-                        plan.keep_local.push(rel);
-                    }
-                    StarmapMergeResult::ApplyIncoming(content)
-                    | StarmapMergeResult::ApplyMerged(content) => {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: rel,
-                            content,
-                        });
-                    }
-                    StarmapMergeResult::Delete => {
-                        // index.json 不会走整图删除路径（Delete 变体仅用于
-                        // graph.json 的整图删除）。此处兜底处理，避免漏分支。
-                        plan.noop.push(rel);
-                    }
-                }
+                // 星图全局索引：推迟到循环后处理，需要先收集各星图的
+                // 生命周期决策（issue #902 第十二轮复核）。
+                // 此前在主循环内立即合并 index.json，不感知各图 graph 生命周期
+                // 决策，导致删除-修改冲突的星图从全局索引消失。
+                continue;
             } else if is_starmap_graph_meta_path(&rel_str) {
                 // 星图 graph.json：由循环后的统一合并处理，此处跳过
                 // （issue #902 第十轮复核）。
@@ -476,6 +455,12 @@ impl StagingRun {
         // --- 统一处理星图 graph.json + 对象文件 ---
         // 对每个 starmap_group 执行统一合并，确保 graph.json 成员表与对象文件
         // 决策一致（issue #902 第十轮复核）。graph.json 和对象文件不再逐文件独立裁决。
+        // 收集各星图的生命周期决策，供 index.json 合并使用（第十二轮复核）。
+        let mut graph_lifecycle_decisions: std::collections::HashMap<
+            String,
+            crate::sync::staging::starmap_merge::GraphLifecycleDecision,
+        > = std::collections::HashMap::new();
+
         for (starmap_id, group) in starmap_groups {
             let graph_rel = match &group.graph_meta_path {
                 Some(p) => p.clone(),
@@ -521,6 +506,28 @@ impl StagingRun {
                 graph_incoming.as_deref(),
                 &objects,
             )?;
+
+            // 收集生命周期决策，供 index.json 合并使用（issue #902 第十二轮复核）。
+            // DeleteModifyConflict 的星图不会被 merge_starmap_index 从全局索引移除。
+            graph_lifecycle_decisions
+                .insert(starmap_id.clone(), output.lifecycle_decision.clone());
+
+            // graph 级冲突事实：DeleteModifyConflict 时产生 graph.json 的 StagingConflict
+            // （issue #902 第十二轮复核）。此前只靠对象级 Conflict 隐式传递整图冲突，
+            // 用户无法在 graph.json 层面看到冲突。
+            if let Some(graph_conflict_kind) = output.graph_conflict {
+                let graph_base_hash = md5_hex(&graph_base);
+                let graph_local_hash = md5_hex(&graph_local);
+                let graph_incoming_hash = md5_hex(&graph_incoming);
+                plan.conflict.push(StagingConflict {
+                    rel_path: graph_rel.clone(),
+                    base_hash: graph_base_hash,
+                    local_hash: graph_local_hash,
+                    incoming_hash: graph_incoming_hash,
+                    kind: graph_conflict_kind,
+                    remote_snapshot_path: None,
+                });
+            }
 
             // graph.json 结果装入 CommitPlan
             match output.graph_meta_result {
@@ -589,6 +596,47 @@ impl StagingRun {
                             kind: *kind,
                             remote_snapshot_path: None,
                         });
+                    }
+                }
+            }
+        }
+
+        // --- 处理星图全局索引 index.json（issue #902 第十二轮复核）---
+        // 推迟到所有星图 graph+objects 合并完成后，传入各图生命周期决策。
+        // 删除-修改冲突（DeleteModifyConflict）的星图不会被 merge_starmap_index
+        // 从全局索引移除，避免 graph 成为未登记的孤儿。
+        {
+            use crate::sync::staging::starmap_merge::{merge_starmap_index, StarmapMergeResult};
+            let index_rel = PathBuf::from("starmaps/index.json");
+            let index_base = read_opt_bytes(&base_root.join(&index_rel))?;
+            let index_local = read_opt_bytes(&live_root.join(&index_rel))?;
+            let index_incoming = read_opt_bytes(&staging_root.join(&index_rel))?;
+
+            // 只在三方至少一方存在时处理；三方都不存在则跳过
+            if index_base.is_some() || index_local.is_some() || index_incoming.is_some() {
+                match merge_starmap_index(
+                    index_base.as_deref(),
+                    index_local.as_deref(),
+                    index_incoming.as_deref(),
+                    &graph_lifecycle_decisions,
+                )? {
+                    StarmapMergeResult::NoOp => {
+                        plan.noop.push(index_rel);
+                    }
+                    StarmapMergeResult::KeepLocal => {
+                        plan.keep_local.push(index_rel);
+                    }
+                    StarmapMergeResult::ApplyIncoming(content)
+                    | StarmapMergeResult::ApplyMerged(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: index_rel,
+                            content,
+                        });
+                    }
+                    StarmapMergeResult::Delete => {
+                        // index.json 不会走整图删除路径（Delete 变体仅用于
+                        // graph.json 的整图删除）。此处兜底处理，避免漏分支。
+                        plan.noop.push(index_rel);
                     }
                 }
             }

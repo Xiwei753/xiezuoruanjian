@@ -631,6 +631,11 @@ impl crate::sync::SyncService {
                 Some(snapshot_rel) => {
                     // BothChanged + snapshot：用保存的远端副本原子替换本地正文。
                     Self::apply_remote_snapshot(sync_root, path, snapshot_rel)?;
+                    // 星图对象文件冲突解决后恢复 graph 成员表（issue #902 第十二轮复核）。
+                    // 本地删除、远端修改 Y 时，local Y 不存在，合并后 graph.node_ids 不含 Y。
+                    // 用户点"采用远端"后 apply_remote_snapshot 只写回 Y.json，不会将 Y 重新
+                    // 登记到 graph.json。此处补记：best-effort，失败只 warn 不阻断。
+                    Self::restore_starmap_object_membership(sync_root, path);
                     // 基线更新为被选择的远端 snapshot 的 hash（MD5）。
                     // 写 known_files 前做 MD5 规范化：旧冲突记录的 remote_hash 可能是
                     // 40 位 Git blob SHA，直接写进 known_files 会再次污染基线。
@@ -651,6 +656,165 @@ impl crate::sync::SyncService {
                 }
             },
         }
+    }
+
+    /// 星图对象文件冲突解决后恢复 graph 成员表（issue #902 第十二轮复核）。
+    ///
+    /// `sync_root` 是项目数据根目录（live_root）。`path` 是相对 sync_root 的
+    /// 星图对象文件路径（`starmaps/<id>/<type>/<bucket>/<obj_id>.json`）。
+    ///
+    /// 本地删除、远端修改 Y 时，local Y 不存在，合并后 `graph.node_ids` 不含 Y。
+    /// 用户点"采用远端"后 `apply_remote_snapshot` 只写回 Y.json，不会将 Y 重新
+    /// 登记到 graph.json。此处补记：读取 graph.json，将 object_id 添加到成员表，
+    /// 更新 revision，写回 graph.json。
+    ///
+    /// best-effort：graph.json 读取或更新失败时只 `warn`，不阻断冲突解决
+    /// （对象文件已写回，graph 更新是 best-effort）。
+    fn restore_starmap_object_membership(sync_root: &Path, path: &str) {
+        use crate::sync::staging::starmap_merge::{is_starmap_object_file_path, parse_object_path};
+        use crate::starmap::store::meta::GraphMeta;
+
+        if !is_starmap_object_file_path(path) {
+            return;
+        }
+
+        // 解析路径：starmaps/<id>/<type>/<bucket>/<obj_id>.json
+        let normalized = path.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        // is_starmap_object_file_path 已验证 parts.len() == 5
+        let starmap_id = parts[1];
+        let Some((object_type, object_id)) = parse_object_path(std::path::Path::new(path)) else {
+            log::warn!(
+                "restore_starmap_object_membership: failed to parse object path '{}'",
+                path
+            );
+            return;
+        };
+
+        let graph_rel = format!("starmaps/{}/graph.json", starmap_id);
+        let graph_path = sync_root.join(&graph_rel);
+
+        // 读取 graph.json
+        let graph_bytes = match std::fs::read(&graph_path) {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!(
+                    "restore_starmap_object_membership: failed to read graph.json for \
+                     starmap '{}': {} (object '{}' not re-registered, best-effort)",
+                    starmap_id,
+                    e,
+                    object_id
+                );
+                return;
+            }
+        };
+
+        let mut graph: GraphMeta = match serde_json::from_slice(&graph_bytes) {
+            Ok(g) => g,
+            Err(e) => {
+                log::warn!(
+                    "restore_starmap_object_membership: failed to parse graph.json for \
+                     starmap '{}': {} (object '{}' not re-registered, best-effort)",
+                    starmap_id,
+                    e,
+                    object_id
+                );
+                return;
+            }
+        };
+
+        // 将 object_id 添加到对应成员表和 revision
+        if !Self::add_object_to_graph_members(&mut graph, &object_type, &object_id) {
+            return;
+        }
+
+        // 更新 updated_at
+        let now_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        graph.updated_at = std::cmp::max(graph.updated_at, now_ms);
+
+        // 序列化写回 graph.json
+        match serde_json::to_vec_pretty(&graph) {
+            Ok(bytes) => {
+                if let Err(e) = crate::storage::transaction::atomic_write_bytes(&graph_path, &bytes)
+                {
+                    log::warn!(
+                        "restore_starmap_object_membership: failed to write graph.json for \
+                         starmap '{}': {} (object '{}' not re-registered, best-effort)",
+                        starmap_id,
+                        e,
+                        object_id
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "restore_starmap_object_membership: failed to serialize graph.json for \
+                     starmap '{}': {} (object '{}' not re-registered, best-effort)",
+                    starmap_id,
+                    e,
+                    object_id
+                );
+            }
+        }
+    }
+
+    /// 将对象 ID 添加到 graph 成员表和 revision（issue #902 第十二轮复核）。
+    ///
+    /// 返回 true 表示已添加/更新，false 表示未知对象类型。
+    fn add_object_to_graph_members(
+        graph: &mut crate::starmap::store::meta::GraphMeta,
+        object_type: &str,
+        object_id: &str,
+    ) -> bool {
+        let new_pr = graph.package_revision.wrapping_add(1);
+        let added = match object_type {
+            "node" => {
+                if !graph.node_ids.iter().any(|x| x == object_id) {
+                    graph.node_ids.push(object_id.to_string());
+                }
+                graph.node_revisions.insert(object_id.to_string(), new_pr);
+                true
+            }
+            "edge" => {
+                if !graph.edge_ids.iter().any(|x| x == object_id) {
+                    graph.edge_ids.push(object_id.to_string());
+                }
+                graph.edge_revisions.insert(object_id.to_string(), new_pr);
+                true
+            }
+            "embed" => {
+                if !graph.embed_instance_ids.iter().any(|x| x == object_id) {
+                    graph.embed_instance_ids.push(object_id.to_string());
+                }
+                graph.embed_revisions.insert(object_id.to_string(), new_pr);
+                true
+            }
+            "link" => {
+                if !graph.link_ids.iter().any(|x| x == object_id) {
+                    graph.link_ids.push(object_id.to_string());
+                }
+                graph.link_revisions.insert(object_id.to_string(), new_pr);
+                true
+            }
+            "hyperlink" => {
+                if !graph.hyperlink_ids.iter().any(|x| x == object_id) {
+                    graph.hyperlink_ids.push(object_id.to_string());
+                }
+                graph.hyperlink_revisions.insert(object_id.to_string(), new_pr);
+                true
+            }
+            _ => false,
+        };
+        if added {
+            graph.package_revision = new_pr;
+        }
+        added
     }
 
     /// Resolve a conflict by marking it as manually merged.
