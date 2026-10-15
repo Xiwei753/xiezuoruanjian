@@ -680,6 +680,8 @@ fn prepare_text_animation_layer(
 
         // Issue #904 评论 4：这一片段确实以 (ix, iy, iw, ih) 提交出去了。
         // 当前位置取插值后的 target_rect（Move 会在途），当前可见宽度取裁剪后的 iw。
+        // Issue #919 复核 1：记录有效 clip 矩形、运动类别和所属字节范围，
+        // 供连续编辑重定向时从当前可见画面接续。
         committed_local.push(super::text_motion::DrawnSlice {
             slice: super::text_motion::VisualSlice {
                 source: super::text_motion::SnapshotRef {
@@ -694,6 +696,14 @@ fn prepare_text_animation_layer(
                 },
             },
             visible_width: iw,
+            clip_rect: super::layout_snapshot::SourceRect {
+                x: ix,
+                y: iy,
+                w: iw,
+                h: ih,
+            },
+            motion_kind: glyph.motion_kind,
+            byte_range: glyph.byte_range,
         });
     }
 

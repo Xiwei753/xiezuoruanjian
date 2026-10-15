@@ -1,5 +1,6 @@
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::qt_text_node::AnimationClipRect;
+use super::text_motion::MotionKind;
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 
@@ -24,6 +25,10 @@ pub(crate) struct TextAnimationGlyphInfo {
     /// 按同一个 `progress` 更新（吐字/吞字据此推进），与静态层孔洞是两个概念：
     /// 静态孔洞覆盖目标字形完整范围（与 progress 无关），动态 clip 随 progress 变化。
     pub clip_rect: SourceRect,
+    /// Issue #919 复核 1：运动类别，供 `DrawnSlice` 记录本帧实际显示的运动类型。
+    pub motion_kind: MotionKind,
+    /// Issue #919 复核 1：所属字节范围，供连续编辑重定向时轻量片段关联。
+    pub byte_range: (usize, usize),
 }
 
 #[derive(Clone, Debug, Default)]
