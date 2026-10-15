@@ -22,7 +22,20 @@
   ],
   "targets": [
     {
-      "name": "default"
+      "name": "default",
+      "source": {
+        "sourceRoots": [
+          "./src/standard"
+        ]
+      }
+    },
+    {
+      "name": "acl",
+      "source": {
+        "sourceRoots": [
+          "./src/acl"
+        ]
+      }
     }
   ]
 }

@@ -16,8 +16,9 @@
 
 ## API Level 差异
 
-- 不同 API Level 的接口差异走 `impl/apiXX` 子目录分流，**不创建多个 HAP target / product**。
-- `build-profile.json5` 保持单 product、单 target。`compatibleSdkVersion` 是最低运行版本，`targetSdkVersion` 是编译目标版本，二者不必为同一 API。
+- API Level 差异和 ACL 发行资格是两个独立轴：API Level 差异走 `impl/apiXX` 子目录分流；ACL 资格差异通过多 product + 多 target + sourceRoots 实现构建隔离。
+- `build-profile.json5` 支持多 product（default + acl）和多 target。受限能力（DLP 防窥）属于独立 `privacy_acl` HSP 模块，仅 ACL product 装配；普通包不编译、不声明受限权限。`compatibleSdkVersion` 是最低运行版本，`targetSdkVersion` 是编译目标版本，二者不必为同一 API。
+- 同一逻辑入口通过 packageName + sourcePath import 引用可覆盖实现（sourceRoots 机制），不使用动态 import 或运行时字符串切换。
 - 平台能力层结构：
   - `Service`（稳定 facade，对外暴露同步语义）→ `impl/apiXX`（实际 `@kit.*` 调用）→ `PlatformApiResolver`（按运行时 API Level 分流到具体 impl）。
   - 版本敏感/高版本能力（如 `motion` 握姿、`dlpAntiPeep` 防窥等随 API Level 分流的接口）必须收进 `impl/apiXX` 子目录，由 `PlatformApiResolver` 按运行时 API Level 分流；稳定 facade（`Service`）不暴露平台枚举和版本判断。

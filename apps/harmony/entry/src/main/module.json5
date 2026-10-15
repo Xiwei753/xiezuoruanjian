@@ -58,16 +58,6 @@
           ],
           "when": "always"
         }
-      },
-      {
-        "name": "ohos.permission.DLP_GET_HIDE_STATUS",
-        "reason": "$string:perm_reason_dlp_anti_peep",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "always"
-        }
       }
     ]
   }

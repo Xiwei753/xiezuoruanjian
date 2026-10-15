@@ -1,12 +1,31 @@
 // DlpAntiPeepApi23 — 防窥 API23 facade（单例）。
 // 只放 API23（since 6.1.0(23)）方法：requestAntiPeepOptions / publishAntiPeepInformation。
-// 不把 API23 方法塞进 api20 文件。版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
+//
+// 本模块（privacy_acl HSP）自包含：不依赖 entry 的 PlatformApiResolver，
+// 直接用 @kit.BasicServicesKit 的 deviceInfo 读 API Level，用全局 canIUse 查 SystemCapability。
 import { dlpAntiPeep } from '@kit.DeviceSecurityKit'
 import { common } from '@kit.AbilityKit'
-import { PlatformApiResolver } from '../../../version/PlatformApiResolver'
+import { deviceInfo } from '@kit.BasicServicesKit'
 
 // dlpAntiPeep.AntiPeepOptionsResult.FAIL（since 6.1.0(23)）：SUCCESS=0, FAIL=1, ALREADY_ON=2。
 const ANTI_PEEP_OPTIONS_FAIL: number = 1
+
+// 内联版本判断：privacy_acl 模块不依赖 entry 的 PlatformApiResolver。
+function isApiAtLeast(level: number): boolean {
+  try {
+    return deviceInfo.sdkApiVersion >= level
+  } catch (e) {
+    return false
+  }
+}
+
+function hasSystemCapability(syscap: string): boolean {
+  try {
+    return canIUse(syscap)
+  } catch (e) {
+    return false
+  }
+}
 
 export class DlpAntiPeepApi23 {
   private static instance: DlpAntiPeepApi23
@@ -21,8 +40,7 @@ export class DlpAntiPeepApi23 {
   // 查询系统能力是否支持 API23 防窥设置页。
   // 需同时满足 SystemCapability 和 API>=23。
   isSupported(): boolean {
-    const resolver: PlatformApiResolver = PlatformApiResolver.getInstance()
-    return resolver.hasSystemCapability('SystemCapability.Security.DlpAntiPeep') && resolver.isApiAtLeast(23)
+    return hasSystemCapability('SystemCapability.Security.DlpAntiPeep') && isApiAtLeast(23)
   }
 
   // 打开防窥设置页（since 6.1.0(23)）。

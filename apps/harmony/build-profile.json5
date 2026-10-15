@@ -14,11 +14,43 @@
           certpath: ''
         }
       },
+      {
+        name: 'acl',
+        type: 'HarmonyOS',
+        material: {
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
+          signAlg: 'SHA256withECDSA',
+          profile: '',
+          certpath: ''
+        }
+      },
     ],
     products: [
       {
         name: 'default',
         signingConfig: 'default',
+        compatibleSdkVersion: '5.0.0(12)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+          },
+          // Issue #914：普通包移除依赖模块 privacy_acl 引入的 DLP 受限权限。
+          // removePermissions 只能删除依赖模块引入的权限，entry 自身不声明此权限。
+          removePermissions: [
+            {
+              name: 'ohos.permission.DLP_GET_HIDE_STATUS',
+            },
+          ],
+        },
+        targetSdkVersion: '26.0.0',
+      },
+      {
+        name: 'acl',
+        signingConfig: 'acl',
         compatibleSdkVersion: '5.0.0(12)',
         runtimeOS: 'HarmonyOS',
         buildOption: {
@@ -47,6 +79,25 @@
           name: 'default',
           applyToProducts: [
             'default',
+          ],
+        },
+        {
+          name: 'acl',
+          applyToProducts: [
+            'acl',
+          ],
+        },
+      ],
+    },
+    {
+      name: 'privacy_acl',
+      srcPath: './privacy_acl',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'default',
+            'acl',
           ],
         },
       ],

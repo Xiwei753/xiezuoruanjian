@@ -1,0 +1,8 @@
+{
+  "name": "privacy_acl",
+  "version": "1.0.0",
+  "description": "DLP anti-peep restricted capability module",
+  "main": "src/main/ets/Index.ets",
+  "author": "",
+  "license": "Apache-2.0"
+}

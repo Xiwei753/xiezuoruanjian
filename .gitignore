@@ -110,3 +110,7 @@ WINDOWS_NATIVE_DEPS.md
 .wrangler/
 .commit
 .resultverify/
+
+# HarmonyOS entry module ohpm artifacts
+apps/harmony/entry/oh_modules/
+apps/harmony/entry/oh-package-lock.json5

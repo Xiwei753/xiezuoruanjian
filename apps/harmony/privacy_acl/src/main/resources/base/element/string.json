@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "素笺写作"
+    },
+    {
+      "name": "module_desc",
+      "value": "DLP 防窥受限能力模块"
+    },
+    {
+      "name": "perm_reason_dlp_anti_peep",
+      "value": "用于防窥屏保护，在他人窥视时隐藏内容"
+    }
+  ]
+}
