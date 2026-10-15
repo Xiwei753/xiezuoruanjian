@@ -12,6 +12,8 @@
 // 底栏显隐通过 controller.applyHideAnimation/applyShowAnimation 控制，不销毁 TabContent。
 
 import { Routes } from '../../Routes'
+import { ScreenRole } from '../../../../corebridge/dto/PlatformDtos'
+import { PrimaryActionChannel } from '../../PrimaryActionChannel'
 import hilog from '@ohos.hilog'
 import { HomeScreen } from '../../../../feature/project/ui/HomeScreen'
 import { WorkspaceScreen } from '../../../../feature/project/ui/WorkspaceScreen'
@@ -68,6 +70,16 @@ export struct HdsPrimaryTabsApi23 {
   // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
   @Prop currentPrimaryNavInteractive: boolean = true
 
+  // Issue #905：当前屏幕 ScreenRole（由 PrimaryTabShell 从 NavigationChromeStore 传入）。
+  // 决定原生 MiniBar 这个「+」是不是当前页的主操作，以及点按派发到哪一页的回调。
+  @Prop @Watch('onScreenRoleChange') currentScreenRole: ScreenRole = ScreenRole.ProjectList
+
+  // Issue #905：当前 role 是否登记了可用的主操作（由 PrimaryActionChannel 推送）。
+  // 为 true 且底部 TabBar 可见时，用 HDS 原生 MiniBar 承载「+」。
+  @State currentPrimaryActionAvailable: boolean = false
+
+  private primaryActionObserver: (() => void) | null = null
+
   // Issue #773 评论5844518092 第2项：长期持有的 HdsTabsController，创建 HdsTabs 时经 options 传入，
   // 修复真机日志 "GetHdsTabsController no hdsTabsControllerClass prop"。
   private controller: HdsTabsController = new HdsTabsController()
@@ -80,6 +92,27 @@ export struct HdsPrimaryTabsApi23 {
     } else {
       this.controller.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION)
     }
+  }
+
+  // Issue #905：订阅主操作通道。页面加载完成后登记/更新可用状态会触发这里，
+  // 据此决定是否把「+」交给 HDS 原生 MiniBar 承载。
+  aboutToAppear(): void {
+    const self = this
+    this.primaryActionObserver = (): void => {
+      self.currentPrimaryActionAvailable = PrimaryActionChannel.getInstance().hasPrimaryAction(self.currentScreenRole)
+    }
+    PrimaryActionChannel.getInstance().subscribe(this.primaryActionObserver)
+  }
+
+  aboutToDisappear(): void {
+    if (this.primaryActionObserver) {
+      PrimaryActionChannel.getInstance().unsubscribe(this.primaryActionObserver)
+    }
+  }
+
+  // 当前页面 role 变化时重新判定该页是否有可用的主操作。
+  onScreenRoleChange(): void {
+    this.currentPrimaryActionAvailable = PrimaryActionChannel.getInstance().hasPrimaryAction(this.currentScreenRole)
   }
 
   // Issue #784 评论5857397503 第3点：PageMapForStack 按 ownerStack 传入 navPathStack，
@@ -166,10 +199,30 @@ export struct HdsPrimaryTabsApi23 {
     .tabBar(new BottomTabBarStyle($r('sys.media.ohos_ic_public_more'), '统计'))
   }
 
+  // Issue #905：MiniBar 内唯一的触发组件——原生「+」。
+  // 透过 HDS 宿主 MiniBar 的系统材质呈现光感，只派发当前页已登记的主操作，
+  // 业务仍是页面原本的命名框 / 建卷 / 建星图入口，不在通道里另起一套创建逻辑。
+  @Builder
+  primaryActionMiniBar() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.plus'))
+        .fontSize(24)
+        .fontColor([$r('sys.color.icon_primary')])
+    }
+    .width(48)
+    .height(48)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .accessibilityText('新建')
+    .onClick(() => {
+      PrimaryActionChannel.getInstance().dispatch(this.currentScreenRole)
+    })
+  }
+
   // Issue #774 评论5847359998：悬浮页签样式按 SDK d.ts 真实字段结构写，不用 as 强转。
   // barWidth 宽度调大匹配设计稿；补 gradientMask 实现沉浸光感。
   private buildFloatingStyle(): HdsTabsFloatingStyle {
-    return {
+    const style: HdsTabsFloatingStyle = {
       barWidth: {
         smallWidth: 280,
         mediumWidth: 400,
@@ -189,6 +242,16 @@ export struct HdsPrimaryTabsApi23 {
         materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
       }
     }
+    // Issue #905：当前页确有 Core 主操作、且底部 TabBar 可见时，用 HDS 原生 MiniBar
+    // 承载「+」，由宿主 MiniBar 透出系统沉浸光感。不再对内容流 Button 挂无效的
+    // .systemMaterial，也不用 backgroundBlurStyle + shadow 伪造原生光。
+    if (this.currentPrimaryActionAvailable && this.currentShowPrimaryNav) {
+      style.miniBar = {
+        miniBarBuilder: this.primaryActionMiniBar,
+        enableMiniBarBackground: true,
+      }
+    }
+    return style
   }
 
   build() {

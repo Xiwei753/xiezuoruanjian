@@ -496,6 +496,9 @@ export struct PrimaryTabShell {
             statsStack: this.statsStack,
             safeBottomVp: this.adaptiveState.safeBottomVp,
             currentShowPrimaryNav: this.currentShowPrimaryNav,
+            // Issue #905：把真实页面 role 传给底部 HdsTabs，由它决定 MiniBar 这个「+」
+            // 是不是当前页的主操作、以及点按派发到哪一页的回调。
+            currentScreenRole: this.currentScreenRole,
             currentPrimaryNavInteractive: this.currentPrimaryNavInteractive && !this.primaryTabGestureLocked
           })
       } else {

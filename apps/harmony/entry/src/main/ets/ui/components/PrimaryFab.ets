@@ -10,10 +10,10 @@
 //   华为《开启沉浸光感》明确：普通 Button 的 API 26 材质只在 Navigation/NavDestination
 //   标题栏或合规底部 TabBar 生效，内容流右下 FAB 不属于该范围。
 //   换外层 Row/Stack 或重排 modifier 顺序都不能解锁材质，所以这里不再维护明知失效的材质分支。
-//   设计边界：FAB 固定在屏幕右下时，现有公开 SDK 给不了它与 HDS titleBar/tabBar 同一种
-//   原生跟手光；要真实同款光效必须调整它的 HDS 承载位置（另议）。
-//   现在使用系统表面色 token 的一套 Button + 系统自带按钮按压反馈，
-//   恢复可读的系统按钮外观与操作，不再自绘「假跟手光」。
+//   API23+ 窄屏的主操作「+」已改由底部 HdsTabs 的原生 MiniBar 承载（见 PrimaryActionChannel
+//   与 HdsPrimaryTabsApi23.primaryActionMiniBar），由宿主透出系统沉浸光感；
+//   本组件的定位因此收窄为「普通主操作按钮」，只用于 API<23 或宽屏/无 HDS 底部 TabBar 的版型。
+//   它的系统卡片底色 + 系统自带按压反馈不等于华为沉浸光感，不要再把它写成光感实现。
 //
 // 手势：按住时锁住底栏的横向滑动切页，避免按住加号横向拖动时页面被带走。
 // 锁的实现见 app/navigation/PrimaryTabGestureLock.ets。

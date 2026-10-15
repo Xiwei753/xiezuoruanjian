@@ -260,6 +260,9 @@
   - `HdsTabs` 悬浮页签组件
   - `HdsTabsAttribute.barFloatingStyle(style?: HdsTabsFloatingStyle)` — 悬浮页签样式（since 6.1.0(23)）
   - `HdsTabsFloatingStyle.systemMaterialEffect?: SystemMaterialParams` — 系统材质效果
+  - `HdsTabsFloatingStyle.miniBar?: HdsTabsMiniBar` — 页签栏同排的 MiniBar 区域（since 6.1.0(23)），承载页签之外的主操作
+  - `HdsTabsMiniBar.miniBarBuilder: CustomBuilder | ComponentContent`（必填）— MiniBar 内自绘内容；`enableMiniBarBackground?: boolean`（默认 true，跟随页签栏背景）；`miniBarWidth?: HdsBarWidthRangeOptions`；`miniBarStyle?: HdsBarStyle`；`barLayoutMode?: HdsBarLayoutMode`（since 6.1.1(24)：HORIZONTAL 与页签同排 / VERTICAL 分两排）
+  - `HdsTabsController.applyMiniBarStyle(HdsBarStyle)` — 切换 MiniBar 显示风格（自带默认动画）
   - `hdsMaterial.MaterialType.IMMERSIVE = 101` — 沉浸光感材质类型（since 6.1.0(23)）
 - 最低 API：23
 - SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
@@ -397,6 +400,7 @@
 - **页面内悬浮按钮不能用沉浸材质（Issue #905 定论）**。真机日志：`Ace: Material inactive: out of scope. Use component in navigation title bar or Tabbar.`；官方《开启沉浸光感》明确生效范围只有 Navigation/NavDestination 标题栏与合规底部 TabBar，内容流里的右下角 FAB **不在范围内**。因此 `ui/components/PrimaryFab.ets` 已删除全部 `systemMaterial` 尝试，改为**单个 `Button`**（系统表面色 token + `stateEffect` 原生按压反馈），不再对外宣称「沉浸光感」。下文「让 FAB 在深色模式有可见边界」一节保留当时的实机数据仅供溯源。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
   - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边~~（曾与底栏胶囊观感对齐）：**它本身能正常显示**，实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。废弃原因是没有沉浸材质高光 / 跟手按压光，而且已被独立描边层方案替代。
   - ~~`systemMaterial(floatingMaterial(false))` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)`~~：**这一条才是**「材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见」的原因（材质接管阴影后 `applyShadow` 传 false，改回自定义 shadow 也没有可投实体）。
+- **Issue #905 复核更正：光感不靠内容流补，改把主操作搬到合规宿主**。窄屏主操作「+」不再由内容流 FAB 呈现，而是复用页面上已有的那一个 `HdsTabs`（`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`），在同一个 `barFloatingStyle` 里加 `miniBar: { miniBarBuilder: this.primaryActionMiniBar }`，把「+」放在页签栏同排的 MiniBar 区域，由 HDS 宿主透出系统沉浸光感；点击只派发 `PrimaryActionChannel` 里登记的**页面原有**创建入口（新建作品 / 新建卷 / 新建星图），不另起业务逻辑。内容流 `PrimaryFab.ets` 因此降级为「普通主操作按钮」，只在 API < 23 或宽屏/无 HDS 底部 TabBar 的版型使用。MiniBar 与页签同排，**不保证落在原来的右下角 FAB 位置**——这是官方公开组件的几何限制，不是漏改。
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
   - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)` + `zIndex(1)`）就没有这个冲突，而且不依赖材质是否渲染成功。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
@@ -439,6 +443,8 @@
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
 
 **Issue #905 现行结构（已落地）**：`PrimaryFab.ets` 改为**单个 `Button`**（`ButtonType.Circle`），背景取系统表面色 token `sys.color.ohos_id_color_card_bg`，1vp 边框 `sys.color.icon_secondary`，配 `stateEffect: true` 的原生按压反馈；**不再挂 `systemMaterial`，也不再拆独立描边层**。深色模式可见性由「表面色 token + 边框」保证，不依赖材质渲染是否成功——该 FAB 位于内容流，材质路径本就拿不到光（见上文真机日志与官方生效范围）。上面 `Stack + 独立描边层 + Button(ImmersiveMaterial)` 是 Issue #811 的旧方案，已被 #905 取代。
+
+**#905 复核更正（第二轮）**：这套普通 FAB 现在只服务 API < 23 或宽屏/无 HDS 底部 TabBar 的版型；API 23+ 窄屏的主操作「+」改由底部 `HdsTabs` 的 MiniBar 承载并由宿主透出系统沉浸光感，两者由 `isHdsMiniBarHostingPrimaryAction()` 互斥，不会同屏出现两个「+」。
 
 **Issue #811 里建议的边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 未采纳**：本机 native 层拒收该调用（见上表），加上去只会每次刷一条 `Wrong argument type` 而没有光。
 

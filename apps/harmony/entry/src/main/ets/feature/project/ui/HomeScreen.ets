@@ -20,6 +20,7 @@ import { SYNC_CONTENT_CHANGED_EVENT_ID } from '../../../feature/settings/present
 import { DesignTokens } from '../../../ui/theme/DesignTokens'
 import { PRIMARY_FAB_BOTTOM_INSET_VP } from '../../../ui/theme/LayoutTokens'
 import { PrimaryFab } from '../../../ui/components/PrimaryFab'
+import { PrimaryActionChannel, isHdsMiniBarHostingPrimaryAction } from '../../../app/navigation/PrimaryActionChannel'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../../../ui/adaptive/AdaptiveContext'
 import { ProjectListViewModel, ProjectOpenTarget } from '../presentation/ProjectListViewModel'
 import { AppContinuationService } from '../../../platform/continuity/AppContinuationService'
@@ -76,6 +77,9 @@ export struct HomeScreen {
   // 解决同作品复用 Promise 时两个等待者各执行一次 pushWritingRoute 的问题。
   private openNavigationGeneration: number = 0
 
+  // Issue #905：本页在 PrimaryActionChannel 的登记 token（-1 表示未登记）。
+  private primaryActionToken: number = -1
+
   async aboutToAppear() {
     hilog.info(0x0000, 'HomeScreen', 'route name=Home')
     const self = this
@@ -93,7 +97,12 @@ export struct HomeScreen {
     this.subscribeSyncEvent()
 
     AppContinuationService.getInstance().clear()
-    this.viewModel.loadData()
+    // Issue #905：把「新建作品」登记到主操作通道；窄屏由底部 HDS MiniBar 承载「+」，
+    // 本页不再自绘内容流 FAB（宽屏用「+」卡，API<23 仍用页内 PrimaryFab）。
+    this.registerPrimaryAction()
+    this.viewModel.loadData().then(() => {
+      this.syncPrimaryActionAvailability()
+    }).catch(() => {})
 
     this.useHdsNav = PlatformApiResolver.getInstance().isApiAtLeast(23)
     // Issue #905：窄屏恢复 HDS 原生标题栏，页头动作由 HdsAppDestinationApi23 的
@@ -115,12 +124,22 @@ export struct HomeScreen {
     }
     // 取消同步完成事件监听
     this.unsubscribeSyncEvent()
+    // Issue #905：注销本页登记的主操作，避免离开后 MiniBar 仍派发到已卸载页面。
+    if (this.primaryActionToken >= 0) {
+      PrimaryActionChannel.getInstance().unregister(ScreenRole.ProjectList, this.primaryActionToken)
+      this.primaryActionToken = -1
+    }
   }
 
   // ─── UI 事件处理（只做事件派发，不写业务逻辑） ───
 
   private handleRetry(): void {
-    this.viewModel.retry()
+    const retried = this.viewModel.retry()
+    // retry() 已同步把 isLoading 置回 true，主操作先同步为不可用。
+    this.syncPrimaryActionAvailability()
+    retried.then(() => {
+      this.syncPrimaryActionAvailability()
+    }).catch(() => {})
   }
 
   private navigateToWorkspace(projectId: string, projectName: string): void {
@@ -244,6 +263,29 @@ export struct HomeScreen {
       }
     }
     return false
+  }
+
+  /** Issue #905：主操作是否可用（即原来窄屏 FAB 的显示条件）。 */
+  private isCreateProjectPrimaryActionAvailable(): boolean {
+    return !this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()
+  }
+
+  /** Issue #905：把「新建作品」回调登记到主操作通道（窄屏 HDS MiniBar 的「+」用它派发）。 */
+  private registerPrimaryAction(): void {
+    this.primaryActionToken = PrimaryActionChannel.getInstance().register(
+      ScreenRole.ProjectList,
+      (): void => { this.requestCreateProject() },
+      this.isCreateProjectPrimaryActionAvailable()
+    )
+  }
+
+  /** Issue #905：加载状态变化后同步主操作可用性，随页面状态更新、离开解绑。 */
+  private syncPrimaryActionAvailability(): void {
+    if (this.primaryActionToken < 0) {
+      return
+    }
+    PrimaryActionChannel.getInstance().updateAvailability(
+      ScreenRole.ProjectList, this.primaryActionToken, this.isCreateProjectPrimaryActionAvailable())
   }
 
   private formatWordCount(count: number): string {
@@ -631,7 +673,11 @@ export struct HomeScreen {
       // 配色/材质统一到 PrimaryFab，与工作区页、星图页同源。
       // Issue #827 评论 2：FAB 只在非宽屏出现。宽屏的「+」卡是网格成员，
       // 两边不能同时留着两套新建入口。
-      if (!this.viewModel.isLoading && !this.viewModel.errorMessage && this.hasCreateProjectPrimaryAction()) {
+      // Issue #905：API23+ 窄屏的主操作「+」改由底部 HdsTabs 原生 MiniBar 承载
+      // （透出系统沉浸光感），这里不再重复画内容流 FAB，避免两个「+」和双重创建。
+      // API<23 / 宽屏版型仍用普通 PrimaryFab。
+      if (this.isCreateProjectPrimaryActionAvailable()
+        && !isHdsMiniBarHostingPrimaryAction(this.useHdsNav, this.adaptiveState)) {
         PrimaryFab({
           onTap: () => {
             this.requestCreateProject()
