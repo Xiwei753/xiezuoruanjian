@@ -76,8 +76,9 @@ export class SyncOperationController {
     try {
       const result = await this.syncBridge.performSync()
       if (!result.success) {
-        hilog.error(DOMAIN, TAG, 'performSync: envelope failed: errorCode=%{public}s rawError=%{public}s',
-          result.errorCode ?? '', result.rawError ?? '')
+        // Issue #906：HiLog 只记稳定错误码，不记 rawError（可能含 URL/Token/正文）。
+        hilog.error(DOMAIN, TAG, 'performSync: envelope failed: errorCode=%{public}s',
+          result.errorCode ?? 'UNKNOWN')
         return {
           phase: 'failed',
           message: result.rawError ?? result.userMessage ?? result.errorCode ?? '同步失败',
@@ -160,7 +161,9 @@ export class SyncOperationController {
       hilog.error(DOMAIN, TAG, 'performSync: unknown overallStatus=%{public}s', status)
       return { phase: 'failed', message: `未知的同步状态: ${status}`, errorCode: 'SCHEMA_MISMATCH', overallStatus: status }
     } catch (e) {
-      hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s', String(e))
+      // Issue #906：异常只记类型，不记 String(e)（可能含 URL/Token）。
+      hilog.error(DOMAIN, TAG, 'performSync: exception: %{public}s',
+        e instanceof Error ? e.name : 'Unknown')
       return { phase: 'failed', message: `同步异常: ${e}`, errorCode: 'NATIVE_ERROR', rawError: String(e) }
     }
   }
@@ -170,19 +173,16 @@ export class SyncOperationController {
     let known: boolean
     let isConnected: boolean
     let isMetered: boolean
-    let queryError: string | null = null
 
     try {
       const snapshot: NetworkSnapshot = await NetworkStatusService.getInstance().query()
       if (snapshot.queryFailed) {
         // 查询失败：明确用 known=false 通知 Core 清除旧缓存，不伪造在线
-        hilog.warn(DOMAIN, TAG,
-          'refreshNetworkState: network query failed, notifying Core with unknown state: %{public}s',
-          snapshot.error)
+        // Issue #906：HiLog 只记失败标记，不记 snapshot.error 原文（可能含网络细节）。
+        hilog.warn(DOMAIN, TAG, 'refreshNetworkState: network query failed, queryFailed=true')
         known = false
         isConnected = false
         isMetered = false
-        queryError = snapshot.error
       } else {
         known = snapshot.known
         isConnected = snapshot.isConnected
@@ -194,15 +194,16 @@ export class SyncOperationController {
         known, isConnected, isMetered
       )
       if (result !== 0) {
+        // Issue #906：只记阶段、返回码与三态布尔，不记查询错误原文。
         hilog.error(DOMAIN, TAG,
           'NETWORK_STATE_UPDATE_FAILED: updateNetworkState returned %{public}s, ' +
-          'stage=write_core, known=%{public}s connected=%{public}s queryError=%{public}s',
-          result.toString(), known.toString(), isConnected.toString(), queryError ?? '')
+          'stage=write_core, known=%{public}s connected=%{public}s',
+          result.toString(), known.toString(), isConnected.toString())
       }
     } catch (e) {
       hilog.error(DOMAIN, TAG,
-        'NETWORK_STATE_UPDATE_FAILED: native bridge exception, stage=query_bridge, error=%{public}s',
-        String(e))
+        'NETWORK_STATE_UPDATE_FAILED: native bridge exception, stage=query_bridge, errorType=%{public}s',
+        e instanceof Error ? e.name : 'Unknown')
     }
   }
 
@@ -236,7 +237,9 @@ export class SyncOperationController {
       emitter.emit(event, eventData)
       hilog.info(DOMAIN, TAG, 'notifyContentChanged: content changed event emitted')
     } catch (e) {
-      hilog.error(DOMAIN, TAG, 'notifyContentChanged: failed to emit event, %{public}s', String(e))
+      // Issue #906：只记异常类型，不记 String(e)。
+      hilog.error(DOMAIN, TAG, 'notifyContentChanged: failed to emit event, errorType=%{public}s',
+        e instanceof Error ? e.name : 'Unknown')
     }
   }
 

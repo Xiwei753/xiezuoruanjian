@@ -33,9 +33,8 @@ export class NavigationChromeStore {
 
   // Issue #768 评论5835958606：切 tab 时调用，设置 activeTab 并发布该 tab 的 role。
   // 替代旧的 syncTabRole 方法。
-  // Issue #906：该入口目前只由 PrimaryTabShell.syncActiveTab（用户切 tab）调用，
-  // 按用户操作 origin='User' 记录；PrimaryTabShell 未区分用户手势与程序改 currentTab，
-  // 若后续出现明确的启动/初始化调用方，再为该方法增加 origin 参数并从调用方传 'App'。
+  // Issue #906：这里记录的是实际状态提交（可能来自用户手势，也可能来自接续恢复等程序改 currentTab），
+  // 因此 origin='App'。明确的用户切换意图由 PrimaryTabShell.recordUserTabRequest 记 nav.tab_requested（User）。
   setActiveTab(tabIndex: number): void {
     const previousTab = this.activeTab
     this.activeTab = tabIndex
@@ -44,7 +43,7 @@ export class NavigationChromeStore {
         { key: 'fromTab', value: String(previousTab) },
         { key: 'toTab', value: String(tabIndex) }
       ]
-      HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_changed', 'NavigationChromeStore', fields)
+      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.tab_changed', 'NavigationChromeStore', fields)
     }
     const role = this.tabRoles.get(tabIndex) ?? ScreenRole.ProjectList
     this.publish(role)

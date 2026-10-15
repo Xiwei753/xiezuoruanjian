@@ -36,6 +36,7 @@ import { PrimaryTabGestureLock } from './PrimaryTabGestureLock'
 import { PlatformApiResolver } from '../../platform/version/PlatformApiResolver'
 import { HdsPrimaryTabsApi23 } from './impl/api23/HdsPrimaryTabsApi23'
 import { HeaderActionCapsule } from './impl/api23/HeaderActionCapsule'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 // 一级导航 Tab 索引常量
 const TAB_HOME: number = 0    // 作品
@@ -263,6 +264,15 @@ export struct PrimaryTabShell {
   // Issue #767：Tabs onChange 切换后只更新 currentTab，由 @Watch 统一触发 syncActiveTab。
   // 一级切换只切 tab index，不再 clear() + pushPath() 重建根页面。
   private onTabChange(index: number): void {
+    // Issue #906：Tabs.onChange 是明确的用户输入入口，先记用户意图再提交状态。
+    this.recordUserTabRequest(index)
+  }
+
+  // Issue #906：明确的用户切换 Tab 入口。先记 nav.tab_requested（User），再提交 currentTab；
+  // @Watch 只同步实际状态，nav.tab_changed 归为 App，不把程序驱动的状态变化伪装成点击。
+  private recordUserTabRequest(index: number): void {
+    const fields: DiagnosticField[] = [{ key: 'targetTab', value: String(index) }]
+    HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_requested', 'PrimaryTabShell', fields)
     this.currentTab = index
   }
 
@@ -287,7 +297,8 @@ export struct PrimaryTabShell {
       // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
       HomeScreen({
         onOpenStarMap: (): void => {
-          this.currentTab = TAB_STARMAP
+          // Issue #906：作品页「打开星图」是明确的用户入口，走统一的用户 Tab 请求记录。
+          this.recordUserTabRequest(TAB_STARMAP)
         }
       })
     } else if (name === Routes.Workspace) {
@@ -410,7 +421,8 @@ export struct PrimaryTabShell {
     .borderRadius(DesignTokens.radiusSm)
     .backgroundColor(this.currentTab === entry.index ? $r('sys.color.comp_background_gray') : Color.Transparent)
     .onClick(() => {
-      this.currentTab = entry.index
+      // Issue #906：宽屏左栏点击是明确的用户入口，走统一的用户 Tab 请求记录。
+      this.recordUserTabRequest(entry.index)
     })
   }
 
