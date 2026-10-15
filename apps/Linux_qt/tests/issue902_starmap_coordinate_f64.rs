@@ -67,11 +67,26 @@ fn create_node_preserves_f64_coordinates() {
     let starmap = api.create_starmap("图", "", None).unwrap().starmap_id;
 
     let raw = sujian_linux_qt::starmap_bridge::create_starmap_node(
-        &api, &starmap, "远处节点", "note", FAR_X, FAR_Y,
+        &api,
+        &starmap,
+        "远处节点",
+        "note",
+        FAR_X,
+        FAR_Y,
     );
     let node = data_of(&raw);
-    assert_f64_precision(node["position"]["x"].as_f64(), FAR_X, "节点 position.x", &raw);
-    assert_f64_precision(node["position"]["y"].as_f64(), FAR_Y, "节点 position.y", &raw);
+    assert_f64_precision(
+        node["position"]["x"].as_f64(),
+        FAR_X,
+        "节点 position.x",
+        &raw,
+    );
+    assert_f64_precision(
+        node["position"]["y"].as_f64(),
+        FAR_Y,
+        "节点 position.y",
+        &raw,
+    );
 }
 
 /// 嵌入：桥接层传入的 f64 坐标必须原样进入 Core DTO。
@@ -82,9 +97,49 @@ fn create_embed_preserves_f64_coordinates() {
     let child = api.create_starmap("子图", "", None).unwrap().starmap_id;
 
     let raw = sujian_linux_qt::starmap_bridge::create_starmap_embed(
-        &api, &host, &child, "子图入口", FAR_X, FAR_Y,
+        &api,
+        &host,
+        &child,
+        "子图入口",
+        FAR_X,
+        FAR_Y,
     );
     let embed = data_of(&raw);
-    assert_f64_precision(embed["position"]["x"].as_f64(), FAR_X, "嵌入 position.x", &raw);
-    assert_f64_precision(embed["position"]["y"].as_f64(), FAR_Y, "嵌入 position.y", &raw);
+    assert_f64_precision(
+        embed["position"]["x"].as_f64(),
+        FAR_X,
+        "嵌入 position.x",
+        &raw,
+    );
+    assert_f64_precision(
+        embed["position"]["y"].as_f64(),
+        FAR_Y,
+        "嵌入 position.y",
+        &raw,
+    );
+}
+
+/// 原子创建子星图并嵌入：桥接层直接构造 `StarMapPointDto { x, y }`，
+/// 同样不得把 f64 入参降级。这是 issue #902 修复的第三个写入路径。
+#[test]
+fn create_child_embed_preserves_f64_coordinates() {
+    let (_dir, api) = new_api();
+    let host = api.create_starmap("宿主", "", None).unwrap().starmap_id;
+
+    let raw = sujian_linux_qt::starmap_bridge::create_starmap_child_embed(
+        &api, &host, "子图", FAR_X, FAR_Y,
+    );
+    let embed = data_of(&raw)["embed"].clone();
+    assert_f64_precision(
+        embed["position"]["x"].as_f64(),
+        FAR_X,
+        "子图嵌入 position.x",
+        &raw,
+    );
+    assert_f64_precision(
+        embed["position"]["y"].as_f64(),
+        FAR_Y,
+        "子图嵌入 position.y",
+        &raw,
+    );
 }
