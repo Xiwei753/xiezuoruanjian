@@ -92,6 +92,7 @@ pub(crate) enum TextPiece {
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
+        paragraph_id: u64,
     },
     /// 旧字逐渐被覆盖（删除），仍有旧局部纹理可画。
     Conceal {
@@ -102,6 +103,7 @@ pub(crate) enum TextPiece {
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
+        paragraph_id: u64,
     },
     /// 同一未删 cluster 从 `from` 移到 `to`（行内位移 / 换行 / 段落回流）。
     Move {
@@ -112,6 +114,7 @@ pub(crate) enum TextPiece {
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
+        paragraph_id: u64,
     },
 }
 
@@ -184,6 +187,15 @@ impl TextPiece {
             TextPiece::Reveal { mask, .. }
             | TextPiece::Conceal { mask, .. }
             | TextPiece::Move { mask, .. } => *mask,
+        }
+    }
+
+    /// Issue #904 评论 4：该片段所属段落 id（贯穿到本帧已提交片段记录）。
+    fn paragraph_id(&self) -> u64 {
+        match self {
+            TextPiece::Reveal { paragraph_id, .. }
+            | TextPiece::Conceal { paragraph_id, .. }
+            | TextPiece::Move { paragraph_id, .. } => *paragraph_id,
         }
     }
 }
@@ -345,6 +357,7 @@ impl TextMotion {
                             byte_range: new_frag.byte_range,
                             source_revision: old_revision,
                             glyph_id: new_frag.glyph_id,
+                            paragraph_id: new_frag.paragraph_id,
                         });
                     } else if start_visible + MASK_EPS < new_frag.rect.w {
                         // 位置没变但上一次还没吐完：继续从当前宽度露出，
@@ -360,6 +373,7 @@ impl TextMotion {
                             byte_range: new_frag.byte_range,
                             source_revision: new_revision,
                             glyph_id: new_frag.glyph_id,
+                            paragraph_id: new_frag.paragraph_id,
                         });
                     }
                 }
@@ -376,6 +390,7 @@ impl TextMotion {
                         byte_range: new_frag.byte_range,
                         source_revision: new_revision,
                         glyph_id: new_frag.glyph_id,
+                        paragraph_id: new_frag.paragraph_id,
                     });
                 }
             }
@@ -402,6 +417,7 @@ impl TextMotion {
                 byte_range: old_frag.byte_range,
                 source_revision: old_revision,
                 glyph_id: old_frag.glyph_id,
+                paragraph_id: old_frag.paragraph_id,
             });
         }
 
@@ -575,40 +591,6 @@ impl TextMotion {
             finished: false,
             needs_next_frame: true,
             caret_sample: self.caret_sample_at(progress),
-        }
-    }
-
-    /// Issue #904 评论 3: 由本帧**实际画出去**的覆盖层，快照出「上次真正画出的
-    /// 局部图片」——当前矩形、当前遮罩宽度、源 id。
-    ///
-    /// 快速连续输入/删除时下一次直接从这里重定向，而不是回到静态起点；
-    /// 不含历史帧队列，也不是第二套引擎。
-    pub(crate) fn drawn_local_frame(&self, frame: &TextMotionFrame) -> LocalTextFrame {
-        let fragments = frame
-            .overlays
-            .iter()
-            .map(|glyph| VisibleFragment {
-                snapshot: SnapshotRef {
-                    snapshot_id: glyph.snapshot_id,
-                    source_uv: glyph.source_rect,
-                },
-                byte_range: glyph.logical_range,
-                rect: LocalRect {
-                    x: glyph.x,
-                    y: glyph.y,
-                    w: glyph.w,
-                    h: glyph.h,
-                },
-                mask_width: glyph.clip_rect.w,
-                paragraph_id: 0,
-                source_revision: glyph.source_revision,
-                glyph_id: glyph.glyph_id,
-            })
-            .collect();
-        LocalTextFrame {
-            session: self.session,
-            revision: self.target_revision,
-            fragments,
         }
     }
 
@@ -865,6 +847,7 @@ fn glyph_info(
         logical_range: piece.byte_range(),
         source_revision: piece.source_revision(),
         glyph_id: piece.glyph_id(),
+        paragraph_id: piece.paragraph_id(),
     }
 }
 

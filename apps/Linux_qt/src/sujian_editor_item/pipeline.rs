@@ -2,13 +2,14 @@
 use super::edit_motion::{CompositionSession, CursorRect};
 use super::edit_snapshot::EditorSnapshot;
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::EditorLayoutSnapshot;
+use super::layout_snapshot::{EditorLayoutSnapshot, PreparedLineSnapshot};
 use super::text_motion::TextMotion;
 use super::text_utils::{clamp_to_char_boundary, normalize_plain_text};
 use super::texture_cache::{LineSnapshotId, TextureCache};
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
+use qmetaobject::QObject;
 use writer_core::editor::{
     DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorRevision,
     EditorTransactionCause, Utf8ByteOffset, Utf8ByteRange,
@@ -391,6 +392,40 @@ pub(crate) enum VisualPrepareOutcome {
     Skipped(super::edit_flow::EditVisualSkipReason),
     /// 动画未请求（三个开关全关），Core edit 已应用但无视觉动画。
     AnimationDisabled,
+}
+
+/// Issue #904 评论 4：局部动画源纹理的准备结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalTextTexturePrep {
+    /// 本次准备好（cache 中已存在或刚刚生成/插入）的源行快照 id。
+    pub prepared: Vec<LineSnapshotId>,
+    /// 本计划真正需要、但拿不到 image 的源行快照 id（显式失败，不静默降级）。
+    pub missing: Vec<LineSnapshotId>,
+}
+
+impl LocalTextTexturePrep {
+    pub fn ready(&self) -> bool {
+        self.missing.is_empty()
+    }
+
+    /// Issue #904 评论 4：合并 old/new 两侧的准备结果。
+    ///
+    /// 任一侧 `prepared` 即算准备好；`required_ids` 中两侧都没能准备好的算 missing
+    /// （显式失败，不静默降级）。`required_ids` 决定顺序，保证结果稳定可读。
+    pub fn merge_sides(required_ids: &[LineSnapshotId], sides: &[&Self]) -> Self {
+        let mut merged = Self::default();
+        for &id in required_ids {
+            if merged.prepared.contains(&id) || merged.missing.contains(&id) {
+                continue;
+            }
+            if sides.iter().any(|side| side.prepared.contains(&id)) {
+                merged.prepared.push(id);
+            } else {
+                merged.missing.push(id);
+            }
+        }
+        merged
+    }
 }
 
 impl LinuxEditorPipeline {
@@ -940,32 +975,115 @@ impl LinuxEditorPipeline {
     ) {
         self.pending_promoted_layout = layout;
     }
+}
 
-    /// Issue #904：只为本帧真正要参与局部动画的片段补齐行纹理。
+impl super::SujianEditorItem {
+    /// Issue #904 评论 4：按“本次局部动画真正引用的源 LineSnapshotId”准备纹理。
     ///
-    /// 不再无差别遍历整份 `base_snapshot.line_snapshots`；只取变化 byte range
-    /// 所在行的源图片。其余段落由静态 QSGTextNode 直接绘制，不需要纹理租约。
-    pub fn prepare_local_text_textures(
+    /// 不再用编辑字节范围猜几行：调用方先把 TextMotion 的 pieces 建完，再把它
+    /// 真正引用的源快照 id 交进来。缺 image 的行用现有 Qt
+    /// `prepare_animation_visuals_from_layout` 路径生成局部行图并交给 TextureCache，
+    /// 不能静默略过、随后让 renderer 以为“这次没有动画”。返回显式准备结果。
+    ///
+    /// 注：本方法需要当前 live `EditorLayout` 才能补生成缺图行，故实现挂在
+    /// `SujianEditorItem` 上（`pipeline.rs` 内），而不是只持有纹理缓存的
+    /// `LinuxEditorPipeline`。
+    pub(crate) fn prepare_local_text_textures(
         &mut self,
         base_snapshot: &EditorLayoutSnapshot,
-        byte_range: (usize, usize),
-    ) {
-        let affected: Vec<LineSnapshotId> = base_snapshot
-            .lines_in_byte_range(byte_range.0, byte_range.1.max(byte_range.0 + 1))
-            .iter()
-            .map(|line| line.id)
-            .collect();
-        for line in &base_snapshot.line_snapshots {
-            if !affected.contains(&line.id) {
+        required_ids: &[LineSnapshotId],
+    ) -> LocalTextTexturePrep {
+        let mut prep = LocalTextTexturePrep::default();
+        let mut seen: Vec<LineSnapshotId> = Vec::new();
+        for &id in required_ids {
+            if id.is_none() || seen.contains(&id) {
                 continue;
             }
-            if self.texture_cache.contains_line(&line.id) {
+            seen.push(id);
+
+            if self.pipeline.texture_cache.contains_line(&id) {
+                prep.prepared.push(id);
                 continue;
             }
+
+            // 该快照里没有这个 id：本侧忽略（另一侧可能持有该源行），不伪造、不报错。
+            let Some(line) = base_snapshot.line_snapshots.iter().find(|l| l.id == id) else {
+                continue;
+            };
+
             if let Some(image) = line.image.as_ref() {
-                self.texture_cache.insert_line(line.id, image.clone());
+                self.pipeline.texture_cache.insert_line(id, image.clone());
+                prep.prepared.push(id);
+                continue;
+            }
+
+            // 快照里 image 为 None：用当前 live layout 的既有 Qt 路径生成局部行图。
+            match self.generate_local_line_image(line) {
+                Some(image) => {
+                    self.pipeline.texture_cache.insert_line(id, image);
+                    prep.prepared.push(id);
+                }
+                None => prep.missing.push(id),
             }
         }
+        prep
+    }
+
+    /// Issue #904 评论 4：用 `crate::editor::layout::prepare_animation_visuals_from_layout`
+    /// 从当前 live layout 生成快照行对应的局部行图。
+    ///
+    /// 用 `LineSnapshotId`（`paragraph_id` + `visual_line_ordinal`）在当前
+    /// `EditorLayout` 缓存中定位视觉行（段首行索引 + 段内 ordinal），再用 byte range
+    /// 二次校验确实指向同一行。定位不到、越界或缓存不属于本 id 的 live 布局
+    ///（例如此时缓存是另一版正文）时返回 `None`，由调用方记入 missing，不伪造图片。
+    fn generate_local_line_image(
+        &self,
+        snapshot_line: &PreparedLineSnapshot,
+    ) -> Option<qmetaobject::QImage> {
+        let id = snapshot_line.id;
+        let cache = self.editor_layout.cache()?;
+        let paragraph_index = id.paragraph_id as usize;
+        let ordinal = id.visual_line_ordinal as usize;
+        let line_index = cache
+            .paragraph_line_count_index
+            .paragraph_line_start(paragraph_index)
+            .checked_add(ordinal)?;
+        if line_index >= cache.lines.len() {
+            return None;
+        }
+
+        // byte range 二次校验：确认该视觉行就是快照行，否则说明当前缓存不是本 id
+        // 的 live 布局，不能用它冒充。
+        let resolved = cache.resolve_line(line_index);
+        if resolved.byte_start != snapshot_line.byte_start
+            || resolved.byte_end != snapshot_line.byte_end
+        {
+            return None;
+        }
+
+        let item_ptr = self.get_cpp_object();
+        let dpr = if item_ptr.is_null() {
+            1.0
+        } else {
+            crate::editor::renderer::sujian_item_dpr(item_ptr)
+        };
+        let text_color = self.current_text_color.to_string();
+
+        // 同帧临时 handle：generation 是当前 layout_generation，布局在本帧存活，
+        // 不需要持有 lease（与 layout_ops.rs 的动画提取一致）。
+        let handle = crate::editor::layout::PreparedLayoutHandle {
+            generation: cache.layout_generation,
+            lines: std::sync::Arc::clone(&cache.lines),
+            leases: Vec::new(),
+        };
+        crate::editor::layout::prepare_animation_visuals_from_layout(
+            &handle,
+            &[line_index],
+            dpr,
+            &text_color,
+        )
+        .into_iter()
+        .find_map(|visual| visual.image)
     }
 }
 

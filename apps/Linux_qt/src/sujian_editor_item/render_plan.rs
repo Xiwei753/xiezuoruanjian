@@ -31,6 +31,11 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub source_revision: EditorRevision,
     /// 字形逻辑身份，由 `text_motion::derive_fragment_id` 派生。
     pub glyph_id: u64,
+    /// Issue #904 评论 4：该片段所属段落 id。
+    ///
+    /// 贯穿到"本帧已提交局部片段"记录，供下一次快速输入从当前画面重定向，
+    /// 不再把它写死成 0。
+    pub paragraph_id: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -162,6 +167,19 @@ impl LocalTextPlan {
         self.required_textures
             .iter()
             .all(|id| texture_cache.contains_line(id))
+    }
+
+    /// Issue #904 评论 4：本帧真正缺失的源纹理 id。
+    ///
+    /// 资源缺失不是"正常成功路径"：上游必须生成本计划真正需要的源；这里把缺失
+    /// 的 id 显式列出来，供日志写出具体失败原因，而不是让"已建立 TextMotion 结构"
+    /// 被误报成"已经有动画"。
+    pub(crate) fn missing_textures(&self, texture_cache: &TextureCache) -> Vec<LineSnapshotId> {
+        self.required_textures
+            .iter()
+            .copied()
+            .filter(|id| !texture_cache.contains_line(id))
+            .collect()
     }
 }
 

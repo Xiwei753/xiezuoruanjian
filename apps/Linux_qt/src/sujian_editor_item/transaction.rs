@@ -1,4 +1,5 @@
 use super::*;
+use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 use crate::sujian_editor_item::pipeline::VisualPrepareOutcome;
 use crate::sujian_editor_item::text_motion::TextMotion;
 use writer_core::editor::EditorEditResult;
@@ -56,38 +57,19 @@ impl SujianEditorItem {
         let suppressed =
             self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
 
-        // 旧侧局部范围（base 坐标）：被删除/被移位的旧字也要有行纹理，
-        // 否则 required_textures 缺一张就会整体不接管、整屏静态重建。
-        let mut old_start = usize::MAX;
-        let mut old_end = 0usize;
-        for patch in &result.display_patches {
-            old_start = old_start.min(patch.replace_byte_range.start().value());
-            old_end = old_end.max(patch.replace_byte_range.end().value());
-        }
-        let old_range = if old_start < old_end {
-            Some((old_start, old_end))
-        } else if old_start == usize::MAX {
-            None
-        } else {
-            Some((old_start, old_start + 1))
-        };
-
+        // Issue #904 评论 4：先建立唯一的局部动画计划，再按计划真正引用的源快照 id
+        // 准备纹理；不再用编辑字节范围预判几行，也不在计划之前无差别补图。
         let mut motion: Option<TextMotion> = None;
         if let Some(new_snap) = new_snapshot.as_ref() {
-            // 只为局部变化行补齐行纹理，不再遍历整章。
-            let tex_range = affected_range.unwrap_or((0, 1));
-            self.pipeline
-                .prepare_local_text_textures(new_snap, tex_range);
-            if let Some(old_snap) = old_layout.as_ref() {
-                if let Some(old_range) = old_range {
-                    self.pipeline
-                        .prepare_local_text_textures(old_snap, old_range);
-                }
-            }
+            let session = self.document_session;
+            // Issue #904 评论 3: 有上次真正画出的局部图片（同一 session）才算重定向。
+            let retargeting = self
+                .last_drawn_local_frame
+                .as_ref()
+                .map_or(false, |frame| frame.session == session);
 
             if animations_requested && !suppressed {
                 let now_ms = Self::frame_now_ms(&self.last_frame_now);
-                let session = self.document_session;
                 let viewport = crate::sujian_editor_item::layout_snapshot::SourceRect {
                     x: 0.0,
                     y: f64::from(self.current_scroll_y),
@@ -108,6 +90,43 @@ impl SujianEditorItem {
                     session,
                     viewport,
                 );
+            }
+
+            if let Some(m) = motion.as_ref() {
+                // 计划的源纹理：只用 TextMotion 真正引用的旧/新源行 id，新旧两侧
+                // 都尝试准备（函数会忽略本快照里不存在的 id）。缺任一纹理必须显式
+                // 记入 missing，不能静默降级让 renderer 误以为"这次没有动画"。
+                let required = m.required_textures.clone();
+                let new_prep = self.prepare_local_text_textures(new_snap, &required);
+                let old_prep = old_layout
+                    .as_ref()
+                    .map(|old_snap| self.prepare_local_text_textures(old_snap, &required));
+                let prep = match old_prep.as_ref() {
+                    Some(op) => LocalTextTexturePrep::merge_sides(&required, &[&new_prep, op]),
+                    None => LocalTextTexturePrep::merge_sides(&required, &[&new_prep]),
+                };
+                let missing_ids = if prep.missing.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", missing_ids=[{}]",
+                        prep.missing
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                };
+                editor_animation_debug_log(&format!(
+                    "record_transaction: local_animation kind={}, pieces={}, required={}, prepared={}, missing={}, ready={}{}",
+                    if retargeting { "retarget" } else { "create" },
+                    m.pieces.len(),
+                    required.len(),
+                    prep.prepared.len(),
+                    prep.missing.len(),
+                    prep.ready(),
+                    missing_ids,
+                ));
             }
         }
 

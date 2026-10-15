@@ -2,6 +2,7 @@ use super::edit_flow::{CompositionCommitParams, EditOp};
 use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
+use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 
 impl SujianEditorItem {
     pub(crate) fn flush_content_height(&mut self) {
@@ -163,13 +164,13 @@ impl SujianEditorItem {
         self.pipeline
             .set_current_layout_snapshot(Some(new_snapshot.clone()));
 
+        let session = self.document_session;
+        let retargeting = self
+            .last_drawn_local_frame
+            .as_ref()
+            .map_or(false, |frame| frame.session == session);
+
         let motion = if animations_requested && !suppressed {
-            self.pipeline
-                .prepare_local_text_textures(&new_snapshot, (new_affected_start, new_affected_end));
-            // 旧字（被删/被移位）的行纹理也要先进 cache，否则 required_textures
-            // 缺一张就会整体不接管、整屏静态重建。
-            self.pipeline
-                .prepare_local_text_textures(&old_snapshot, (old_affected_start, old_affected_end));
             let viewport = super::layout_snapshot::SourceRect {
                 x: 0.0,
                 y: f64::from(self.current_scroll_y),
@@ -189,6 +190,38 @@ impl SujianEditorItem {
         } else {
             None
         };
+
+        // Issue #904 评论 4：IME commit 与普通编辑同一顺序——先建计划，再按计划真正
+        // 引用的源快照 id 准备纹理。缺图行显式记入 missing，不静默降级让 renderer
+        // 误以为"这次没有动画"。
+        if let Some(m) = motion.as_ref() {
+            let required = m.required_textures.clone();
+            let new_prep = self.prepare_local_text_textures(&new_snapshot, &required);
+            let old_prep = self.prepare_local_text_textures(&old_snapshot, &required);
+            let prep = LocalTextTexturePrep::merge_sides(&required, &[&new_prep, &old_prep]);
+            let missing_ids = if prep.missing.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", missing_ids=[{}]",
+                    prep.missing
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
+            editor_animation_debug_log(&format!(
+                "record_composition_commit_transaction: local_animation kind={}, pieces={}, required={}, prepared={}, missing={}, ready={}{}",
+                if retargeting { "retarget" } else { "create" },
+                m.pieces.len(),
+                required.len(),
+                prep.prepared.len(),
+                prep.missing.len(),
+                prep.ready(),
+                missing_ids,
+            ));
+        }
         let has_motion = motion.is_some();
         *self.pipeline.text_motion_mut() = motion;
         self.request_scene_rebuild();

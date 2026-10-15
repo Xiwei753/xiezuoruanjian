@@ -487,18 +487,79 @@ impl QQuickItem for SujianEditorItem {
                 self.loaded_para_range = Some(new_range);
             }
 
-            // Issue #904 评论 3: 记录本帧**真正画出去**的局部图片（当前矩形、当前
-            // 遮罩宽度、源 id、session/revision），供快速连续输入/删除从这里重定向，
-            // 而不是从静态起点重来。finished 帧清空（动画已结束，下一笔从新的静态
-            // 起点开始）。无历史队列、无第二套引擎。
-            let drawn_local = if motion_frame.finished {
-                None
-            } else {
-                self.pipeline
-                    .text_motion()
-                    .map(|m| m.drawn_local_frame(&motion_frame))
-            };
-            self.last_drawn_local_frame = drawn_local;
+            // Issue #904 评论 4: 只把**本帧真正提交到 QSG** 的局部片段记为
+            // "上一次真正画出的局部图片"（当前矩形、当前遮罩宽度、源 id、段落 id、
+            // session/revision），供快速连续输入/删除从当前画面重定向。
+            // 计划侧不算数：静态提交失败或源纹理缺失的那一帧没有画出任何动画像素，
+            // 此时保留上一帧已画出的记录；动画结束帧清空。
+            //
+            // 日志只在生命周期关键点各记一次，不逐帧刷屏：
+            // 首次真正提交（holes/overlay/committed 个数）、源纹理缺失（具体 id）、
+            // 静态提交失败、以及完成交接。
+            let motion_identity = self
+                .pipeline
+                .text_motion()
+                .map(|m| (m.session, m.target_revision));
+            if motion_frame.finished {
+                if let Some((session, revision)) = motion_identity {
+                    super::editor_animation_debug_log(&format!(
+                        "text_motion complete: session={session} revision={revision} \
+                         duration_ms={} pieces={} paragraph_moves={}",
+                        self.current_typing_animation_duration_ms,
+                        self.pipeline.text_motion().map_or(0, |m| m.pieces.len()),
+                        self.pipeline
+                            .text_motion()
+                            .map_or(0, |m| m.paragraph_moves.len()),
+                    ));
+                }
+                self.last_drawn_local_frame = None;
+                self.last_commit_log_key = None;
+                self.last_missing_log_key = None;
+            } else if let Some((session, revision)) = motion_identity {
+                if !animation_resources_ready {
+                    // 源纹理缺失：写出具体缺少的 LineSnapshotId，不把它当成
+                    // "这次本来就没有动画"。
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        let missing = render_plan
+                            .local_text
+                            .missing_textures(self.pipeline.texture_cache());
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion source missing: session={session} revision={revision} \
+                             required={} missing={} ids={missing:?}",
+                            render_plan.local_text.required_textures.len(),
+                            missing.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
+                } else if !static_rebuild_ok {
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion static rebuild failed: session={session} revision={revision} \
+                             overlays={} holes={}",
+                            render_plan.local_text.overlays.len(),
+                            render_plan.local_text.static_holes.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
+                } else if !render_outcome.committed_local.is_empty() {
+                    if self.last_commit_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion committed: session={session} revision={revision} \
+                             holes={} overlays={} committed={} paragraph_offsets={}",
+                            render_plan.local_text.static_holes.len(),
+                            render_plan.local_text.overlays.len(),
+                            render_outcome.committed_local.len(),
+                            render_plan.local_text.paragraph_y_offsets.len(),
+                        ));
+                        self.last_commit_log_key = Some((session, revision));
+                    }
+                    self.last_drawn_local_frame = Some(super::text_motion::LocalTextFrame {
+                        session,
+                        revision,
+                        fragments: render_outcome.committed_local.clone(),
+                    });
+                }
+            }
 
             // Issue #901 第九轮阻塞3：渲染成功后生成本帧 resource roots 并 retain。
             // 旧实现在渲染前做 retain，会 sweep 掉本帧即将创建的静态贡献的纹理。

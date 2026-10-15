@@ -17,6 +17,12 @@ pub(crate) struct FrameRenderOutcome {
     /// 调用方将其保存为 per-item state，下一帧用此范围判断视口是否跨出
     /// 已加载集合。`None` 表示本帧未 rebuild 或 rebuild 失败，保留旧范围。
     pub new_loaded_para_range: Option<(usize, usize)>,
+    /// Issue #904 评论 4：本帧**真正提交到 QSG** 的局部动画片段。
+    ///
+    /// 只有静态层提交成功、纹理存在且裁剪后有可见面积的片段才在这里；调用方
+    /// 据此记录"上一次真正画出的局部图片"，供快速连续输入从当前画面重定向。
+    /// 计划侧（`TextMotionFrame`）不算数——它不代表像素真的画出来了。
+    pub committed_local: Vec<super::text_motion::VisibleFragment>,
 }
 
 impl FrameRenderOutcome {
@@ -25,6 +31,7 @@ impl FrameRenderOutcome {
         Self {
             static_rebuild_ok: false,
             new_loaded_para_range: None,
+            committed_local: Vec::new(),
         }
     }
 }
@@ -481,13 +488,14 @@ pub(crate) fn render_frame(
     // Issue #904：静态层 rebuild 成功后，用唯一的局部动画计划画本帧覆盖层。
     // 资源未就绪时覆盖层为空——该片段由静态层完整绘制，两层用
     // animation_resources_ready 同一标志做对称决策。
+    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
     if static_rebuild_ok {
         let glyphs = if animation_resources_ready {
             plan.local_text.overlays.as_slice()
         } else {
             &[]
         };
-        render_text_animation_layer(
+        committed_local = render_text_animation_layer(
             root_raw,
             item_ptr,
             glyphs,
@@ -514,16 +522,21 @@ pub(crate) fn render_frame(
     FrameRenderOutcome {
         static_rebuild_ok,
         new_loaded_para_range: rebuild_new_range,
+        committed_local,
     }
 }
 
+/// Issue #904 评论 4：只返回**本帧真正提交到 QSG** 的局部片段。
+///
+/// 缺纹理（`continue`）或裁剪后无可见面积（`continue`）的片段不在这里：
+/// 它们没有画出任何像素，不能作为"上一次真正画出的局部图片"参与重定向。
 fn render_text_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     glyphs: &[super::render_plan::TextAnimationGlyphInfo],
     texture_cache: &TextureCache,
     scroll_y: f64,
-) {
+) -> Vec<super::text_motion::VisibleFragment> {
     // Issue #658 评论 5630650436: 空动画帧也进入 update_animation_layer，让 AnimationLayerNode
     // 自己把 node 和 texture 一次清干净。不要在这里提前 return，否则
     // update_animation_layer() 根本不调用，activeSet sweep 根本没运行，
@@ -532,6 +545,8 @@ fn render_text_animation_layer(
     let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
     let mut source_rects: Vec<f64> = Vec::new();
     let mut snapshot_ids: Vec<u64> = Vec::new();
+    // Issue #904 评论 4：本帧真正提交出去的局部片段。
+    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
 
     for glyph in glyphs.iter() {
         // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
@@ -597,6 +612,26 @@ fn render_text_animation_layer(
         let cache_key = glyph.snapshot_id.to_cache_key();
         snapshot_ids.push(cache_key);
         glyph_images.push(texture.clone());
+
+        // Issue #904 评论 4：这一片段确实以 (ix, iy, iw, ih) 提交出去了。
+        // 当前位置取插值后的 target_rect（Move 会在途），当前可见宽度取裁剪后的 iw。
+        committed_local.push(super::text_motion::VisibleFragment {
+            snapshot: super::text_motion::SnapshotRef {
+                snapshot_id: glyph.snapshot_id,
+                source_uv: glyph.source_rect,
+            },
+            byte_range: glyph.logical_range,
+            rect: super::layout_snapshot::SourceRect {
+                x: glyph.x,
+                y: glyph.y,
+                w: glyph.w,
+                h: glyph.h,
+            },
+            mask_width: iw,
+            paragraph_id: glyph.paragraph_id,
+            source_revision: glyph.source_revision,
+            glyph_id: glyph.glyph_id,
+        });
     }
 
     let glyph_count = glyph_data.len() / 5;
@@ -620,8 +655,10 @@ fn render_text_animation_layer(
             snapshot_ids_ptr,
             scroll_y,
         );
+        committed_local
     } else {
         scene_graph::clear_animation_layer(root_raw, item_ptr);
+        Vec::new()
     }
 }
 

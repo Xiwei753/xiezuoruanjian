@@ -572,6 +572,15 @@ pub struct SujianEditorItem {
     /// 快速连续输入/删除时直接从这里重定向，而不是从静态起点重来。
     /// 无历史队列、无第二套引擎；跨 session 直接丢弃。
     last_drawn_local_frame: Option<text_motion::LocalTextFrame>,
+    /// Issue #904 评论 4: 已为当前局部动画写过"首次真正提交"日志的 (session, revision)。
+    ///
+    /// 只在首次把局部覆盖层真正提交到 QSG 时记一条，不逐帧刷屏。
+    last_commit_log_key: Option<(u64, u64)>,
+    /// Issue #904 评论 4: 已为当前局部动画写过"源纹理缺失"日志的 (session, revision)。
+    ///
+    /// 资源没就绪不是正常成功路径：记一次具体缺失的 LineSnapshotId，
+    /// 避免把"已建立 TextMotion 结构"误报成"已经有动画"。
+    last_missing_log_key: Option<(u64, u64)>,
 }
 
 impl Default for SujianEditorItem {
@@ -721,6 +730,8 @@ impl Default for SujianEditorItem {
             prev_local_text_holes_active: false,
             prev_paragraph_moves_active: false,
             last_drawn_local_frame: None,
+            last_commit_log_key: None,
+            last_missing_log_key: None,
         }
     }
 }
@@ -831,6 +842,8 @@ impl SujianEditorItem {
         self.last_drawn_local_frame = None;
         self.prev_local_text_holes_active = false;
         self.prev_paragraph_moves_active = false;
+        self.last_commit_log_key = None;
+        self.last_missing_log_key = None;
         self.request_scene_rebuild();
     }
 
@@ -868,6 +881,8 @@ impl SujianEditorItem {
         self.last_drawn_local_frame = None;
         self.prev_local_text_holes_active = false;
         self.prev_paragraph_moves_active = false;
+        self.last_commit_log_key = None;
+        self.last_missing_log_key = None;
         // Issue #901 问题3/问题6：清 frame_submission_mailbox，
         // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
         self.frame_submission_mailbox.discard_all_frames();
