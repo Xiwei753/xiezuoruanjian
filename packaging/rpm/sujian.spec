@@ -52,6 +52,10 @@ Requires:       kf6-kirigami-addons >= 1.0
 # Issue #912：二进制链接 libKF6ColorScheme.so.6（KColorSchemeManager 桥），
 # 需要运行时库；通常随 kf6-kirigami 引入，这里显式声明避免构建环境差异。
 Requires:       kf6-kcolorscheme
+# Issue #912：桥固定使用 BreezeDark/BreezeLight，这两个配色文件由
+# plasma-breeze-common 提供（kf6-kcolorscheme / qqc2-breeze-style 都不含），
+# 否则手动深/浅色查不到方案而失效。
+Requires:       plasma-breeze-common
 Requires:       qqc2-breeze-style
 Requires:       breeze-icon-theme
 
