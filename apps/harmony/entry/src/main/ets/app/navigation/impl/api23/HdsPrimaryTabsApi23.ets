@@ -92,13 +92,17 @@ export struct HdsPrimaryTabsApi23 {
   private controller: HdsTabsController = new HdsTabsController()
 
   // Issue #905 复核（MiniBar 折叠/点击语义）：按官方 d.ts，宽度 <600vp 时首次创建的 MiniBar
-  // 默认 COLLAPSE；「点击折叠的 MiniBar 或 TabBar」会以 USER_CLICK 模式切换折叠/展开；
-  // 只有 controller.applyMiniBarStyle() 触发的切换才是 APP_TRIGGER。
-  // 本项目这个 MiniBar 不是可折叠导航区，而是主操作「+」的宿主：一次点按必须直接落到
-  // primaryActionMiniBar 的 onClick，不能先被系统吃成「展开 MiniBar」。
-  // 处理方式：把它的样式钉死在 EXPAND —— 创建时显式给 miniBarStyle: EXPAND，
-  // 且系统以非 APP_TRIGGER 模式把它变成 COLLAPSE 时立即拉回 EXPAND。
-  // 拉回本身上报 APP_TRIGGER，被下面第一行忽略，不会自激。
+  // 默认 COLLAPSE；「点击折叠的 MiniBar 或 TabBar」会以 USER_CLICK 模式切换折叠/展开，
+  // 且一次点击可能同时改 miniBarStyle 与 tabBarStyle；只有 controller.applyMiniBarStyle()
+  // 触发的切换才是 APP_TRIGGER。
+  // 本项目这个 MiniBar 不是可折叠导航区，而是主操作「+」的宿主：首次创建用
+  // miniBarStyle: EXPAND 让它展开着落，一次点按直接落到 primaryActionMiniBar 的 onClick。
+  // 但应用不能因此和官方 HDS 的双栏状态管理抢控制权：
+  //   - APP_TRIGGER 是自己 applyMiniBarStyle() 的结果，再处理会自激；
+  //   - NORMAL 是旋转/开关屏等尺寸变化，超窄窗口的折叠由官方 HDS 负责，不做强制回调拉扯；
+  //   - USER_CLICK 且 tabBarStyle 展开，说明用户是在点底部页签栏展开它，HDS 顺带折叠 MiniBar，
+  //     此时必须保留用户的展开动作，不能抢回 MiniBar 展开（否则「作品/星图/统计」底栏被反复打断）；
+  //   - 其余 USER_CLICK（点折叠的 MiniBar）才拉回 EXPAND，保证单击即主操作。
   private miniBarStyleChange: BarStyleChangeCallback = (
     miniBarStyle: HdsBarStyle,
     tabBarStyle: HdsBarStyle,
@@ -107,6 +111,12 @@ export struct HdsPrimaryTabsApi23 {
     mode: HdsTabsBarChangeMode
   ): void => {
     if (mode === HdsTabsBarChangeMode.APP_TRIGGER) {
+      return
+    }
+    if (mode === HdsTabsBarChangeMode.NORMAL) {
+      return
+    }
+    if (tabBarStyle === HdsBarStyle.EXPAND) {
       return
     }
     if (miniBarStyle === HdsBarStyle.COLLAPSE) {
@@ -252,11 +262,14 @@ export struct HdsPrimaryTabsApi23 {
   }
 
   // Issue #774 评论5847359998：悬浮页签样式按 SDK d.ts 真实字段结构写，不用 as 强转。
-  // barWidth 宽度调大匹配设计稿；补 gradientMask 实现沉浸光感。
+  // barWidth 中/大档调大匹配设计稿；补 gradientMask 实现沉浸光感。
+  // Issue #905 复核（窄屏宽度预算）：smallWidth 用三页签官方小屏标准宽 76*3+8=236vp，
+  // 不再自取 280vp。360vp 窗口下 236(页签) + 48(MiniBar) + 左右各 16vp 默认
+  // barSideMargin = 316vp，给 HDS 自己的两栏间隔留出余量，避免人为挤满整个底栏。
   private buildFloatingStyle(): HdsTabsFloatingStyle {
     const style: HdsTabsFloatingStyle = {
       barWidth: {
-        smallWidth: 280,
+        smallWidth: 236,
         mediumWidth: 400,
         largeWidth: 500,
       },
@@ -287,8 +300,10 @@ export struct HdsPrimaryTabsApi23 {
         // 主操作「+」的宿主：创建即展开，点按直接触发主操作，见 miniBarStyleChange 注释。
         miniBarStyle: HdsBarStyle.EXPAND,
         onBarStyleChange: this.miniBarStyleChange,
-        // 宽度钉成一个按钮尺寸，不随屏幕宽度档位（440/600/840vp）改档重排；
-        // 这是「MiniBar 与页签同排」这一官方几何下能做的收窄，不代表回到原右下角 FAB 位置。
+        // 宽度钉成一个按钮尺寸，不随屏幕宽度档位（440/600/840vp）改档重排。
+        // 注意：#905 复核已更正上一轮「48vp 就不会重排」的说法——48vp 只保证 MiniBar
+        // 自身不换档；窄屏下页签栏与 MiniBar 是否都能常驻展开由官方 HDS 双栏状态管理决定，
+        // 且 <440vp 时 USER_CLICK 可以展开页签栏并折叠 MiniBar（见 miniBarStyleChange）。
         miniBarWidth: {
           smallWidth: 48,
           mediumWidth: 48,
