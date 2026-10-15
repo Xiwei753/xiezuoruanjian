@@ -69,7 +69,7 @@ use writer_core::starmap::types::{
     StarMapEdge, StarMapEdgeKind, StarMapNode, StarMapNodeKind, StarMapPoint, StarMapTargetDetail,
 };
 
-fn node(id: &str, x: f32) -> StarMapNode {
+fn node(id: &str, x: f64) -> StarMapNode {
     StarMapNode {
         id: id.to_string(),
         title: id.to_string(),

@@ -205,7 +205,7 @@ mod prospective_edge_render_tests {
         StarMapTargetDetail,
     };
 
-    fn node(id: &str, x: f32) -> StarMapNode {
+    fn node(id: &str, x: f64) -> StarMapNode {
         StarMapNode {
             id: id.to_string(),
             title: id.to_string(),

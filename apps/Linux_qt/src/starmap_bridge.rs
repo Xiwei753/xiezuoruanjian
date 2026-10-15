@@ -106,17 +106,14 @@ pub fn create_starmap_node(
         anchors: vec![],
         portal: None,
         // Core 收口后显示策略由平台端自理，DTO 只保留 position 坐标与 style 外观。
-        position: StarMapPointDto {
-            x: x as f32,
-            y: y as f32,
-        },
+        position: StarMapPointDto { x, y },
         style: Default::default(),
         provenance: Default::default(),
         created_at: now,
         updated_at: now,
     };
 
-    envelope(api.add_starmap_node(starmap_id, node, x as f32, y as f32))
+    envelope(api.add_starmap_node(starmap_id, node, x, y))
 }
 
 pub fn update_starmap_node(
@@ -292,10 +289,7 @@ pub fn create_starmap_embed(
         } else {
             Some(label.to_string())
         },
-        position: StarMapPointDto {
-            x: x as f32,
-            y: y as f32,
-        },
+        position: StarMapPointDto { x, y },
         host_path: StarMapTargetPathDto {
             starmap_id: starmap_id.to_string(),
             segments: vec![],
@@ -331,10 +325,7 @@ pub fn create_starmap_child_embed(
     x: f64,
     y: f64,
 ) -> String {
-    let position = StarMapPointDto {
-        x: x as f32,
-        y: y as f32,
-    };
+    let position = StarMapPointDto { x, y };
     envelope(api.create_starmap_child_embed(host_starmap_id, title, position))
 }
 
