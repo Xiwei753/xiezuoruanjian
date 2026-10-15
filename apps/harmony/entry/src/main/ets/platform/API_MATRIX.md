@@ -408,13 +408,15 @@
 - **Issue #905 第四轮：窄屏宽度预算 + `onBarStyleChange` 的双状态语义（更正上一段的两处断言）**。
   - `barWidth.smallWidth` 由自取的 280vp 改回**三页签官方小屏标准宽 236vp**（`76 * 3 + 8`）。宽度预算：360vp 窗口下 `236`(页签栏) + `48`(MiniBar) + 小于 600vp 时 `barSideMargin` 默认左右各 16vp = **316vp**，给 HDS 自己的两栏间隔留出余量；原 280vp 会把整个底部宽度挤满，不能断言两块都能常驻展开。中/大档仍为 400/500，未改。
   - `miniBarWidth` 三档钉 48 只保证 **MiniBar 自身不换档重排**，不代表窄屏下页签栏与 MiniBar 都能常驻展开——这由官方 HDS 双栏状态管理决定，上一段「48vp 就不会重排」的说法不准确，以本段为准。
-  - `onBarStyleChange` 会同时通知 `miniBarStyle` **和** `tabBarStyle`，必须一起判断，不能再只看 MiniBar 一侧无条件 `applyMiniBarStyle(EXPAND)`：
-    - `APP_TRIGGER`：应用自己调 `applyMiniBarStyle()` 的结果，直接返回（否则自激）。
-    - `NORMAL`（旋转/开关屏等尺寸变化）：直接返回，超窄窗口的折叠交给官方 HDS，不做强制回调拉扯。
-    - `USER_CLICK` 且 `tabBarStyle === EXPAND`：用户在点底部页签栏展开它，HDS 顺带折叠 MiniBar；**不得抢回 MiniBar 展开**，否则「作品/星图/统计」底栏会被反复打断。
-    - 其余 `USER_CLICK`（点折叠的 MiniBar）：才 `controller.applyMiniBarStyle(EXPAND)` 拉回，保住「单击即主操作」这一条链。
+  - `onBarStyleChange` 会同时通知 `miniBarStyle` **和** `tabBarStyle`，必须一起判断，不能再只看 MiniBar 一侧无条件 `applyMiniBarStyle(EXPAND)`。**（本段两处旧断言已被第五轮更正，见下一条）**
   - `miniBarStyle: HdsBarStyle.EXPAND` 仍作为**首次创建首选**保留；`primaryActionMiniBar()` → `PrimaryActionChannel.dispatch()` 的单击主操作链未变。
   - **结论不变**：原生光感材质存在于合规宿主上成立，但「原右下角 FAB 位置复刻」做不到，且上述窄屏交互未经真机目视确认（`hdc list targets` 为空）。
+- **Issue #905 第五轮：折叠态点击的真实状态转换（更正上一段「`miniBarStyle === COLLAPSE` 就拉回即可单击」的错误）**。
+  - 点**折叠态** MiniBar 是把它从 `COLLAPSE` 切成 `EXPAND`，`onBarStyleChange` 回调拿到的是**变化后**的 `miniBarStyle === EXPAND`。所以「只在回调里看到 `COLLAPSE` 才 `applyMiniBarStyle(EXPAND)`」恰好漏掉这次点击本身，不能声称一次点按就新建。
+  - 现在**不再调用** `controller.applyMiniBarStyle()`：页签栏与 MiniBar 的互斥展开交回官方 HDS 状态管理，应用不与用户展开底栏的动作抢控制权。
+  - 加号点击统一收敛到 `PrimaryActionChannel`，不重复实现创建方法：展开态加号点击走 `primaryActionMiniBar().onClick`；折叠态被点开（`mode === USER_CLICK` + 前值 `COLLAPSE` + 现值 `EXPAND` + `tabBarStyle` 仍为 `COLLAPSE`，说明用户点的是 MiniBar 而不是底栏）视为同一次加号点击，在回调里派发一次当前页主操作。`NORMAL`（旋转/开关屏）与 `APP_TRIGGER`（代码主动切换）都不派发。
+  - 因此新增非响应式字段 `previousMiniBarStyle`，在**每次**回调最前面「先取前值、再写当前值」（含提前返回的 `NORMAL`/`APP_TRIGGER` 分支），否则记录的前值会和 HDS 实际状态失步。
+  - **未解除的不确定项**：折叠态点击与自绘 `Row.onClick` 是否会在**同一次指针事件**里都触发，SDK 文档没有承诺；真机若确认双触发，应在唯一主操作入口按同一输入事件去重（不靠延时过滤，也不把新建改成点两下）。真机未连接，本条交互仍未经目视确认。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
 - 应用级开关：`entry/src/main/module.json5` 已配 `ohos.arkui.UIMaterial.state = "enable"`；ENABLE 下 Button 不会默认开启，必须显式传 `systemMaterial`。
 - 说明：声明位于本机 SDK `openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`ImmersiveStyle { ULTRA_THIN=0, THIN=1, REGULAR=2 }`）与 `hms/ets/api/@hms.hds.hdsMaterial.d.ets`（`MaterialType { NONE=0, ADAPTIVE=100, IMMERSIVE=101 }`、`MaterialLevel { EXQUISITE=0, GENTLE=1, SMOOTH=2, ADAPTIVE=10 }`）。官方文档 docId：`开发指南/ArkUI_方舟UI框架/UI开发_ArkTS声明式开发范式/沉浸光感/沉浸光感开发指导/组件适配沉浸光感/arkts-immersive-light-sense-component-adaptation`、`…/沉浸光感常见问题/arkts-immersive-light-sense-faq`、`开发指南/UI_Design_Kit_UI设计套件/沉浸光感/ui-design-hds-component-material`、`FAQ/UI框架/UI界面/HarmonyOS下HdsNavigation与HdsTabs实现滚动模糊及沉浸光感材质效果的解决方案/faqs-arkui-1095`
