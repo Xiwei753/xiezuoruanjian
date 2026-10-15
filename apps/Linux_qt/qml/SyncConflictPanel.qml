@@ -527,100 +527,88 @@ Rectangle {
         Rectangle { Layout.fillWidth: true; height: 1; color: root._border }
 
         // ── Footer：三个动作按钮 ──
+        // Issue #902 第二十二轮：窄窗口下三个长文本按钮横排会互相挤压。用 Repeater
+        // + 共享 delegate 复用一份动作处理逻辑（resolveAction 只在一处调用），宽布局
+        // RowLayout 横排，窄布局 ColumnLayout 纵排，Footer 高度随布局变化。预览区域
+        // 用余下高度（Layout.fillHeight），里面两个 ScrollView 各自滚动。
         Rectangle {
+            id: footerRect
             Layout.fillWidth: true
-            Layout.preferredHeight: 56
+            Layout.preferredHeight: root._isNarrow
+                ? (36 * 3 + root._sp8 * 4)  // 3 buttons + 2 spacing + 2 margin
+                : 56
             color: "transparent"
 
+            // 三个动作模型：primary 按钮用实色背景，其余用边框背景。
+            readonly property var _actionModel: [
+                { text: qsTr("保留本地"), action: "keep_local", primary: false },
+                { text: qsTr("采用远端"), action: "take_remote", primary: false },
+                { text: qsTr("手动合并后标记已解决"), action: "mark_merged", primary: true }
+            ]
+
+            // 共享按钮 delegate：视觉与 onClicked 逻辑只定义一次，两种布局共用。
+            Component {
+                id: actionBtnDelegate
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 36
+                    radius: root._radiusSm
+                    color: modelData.primary
+                        ? (btnHover.containsMouse ? root._accentSoft : root._primary)
+                        : (btnHover.containsMouse ? root._surfaceVariant : root._surface)
+                    border.color: modelData.primary ? "transparent" : root._border
+                    border.width: modelData.primary ? 0 : 1
+                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
+
+                    AppText {
+                        anchors.centerIn: parent
+                        text: modelData.text
+                        dt: root.dt
+                        color: modelData.primary
+                            ? (btnHover.containsMouse ? root._accentText : root._onPrimary)
+                            : root._textPrimary
+                        font.pointSize: root._fontSm
+                        font.weight: Font.DemiBold
+                    }
+
+                    MouseArea {
+                        id: btnHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: root.conflicts.length > 0
+                        onClicked: root.resolveAction(modelData.action)
+                    }
+                }
+            }
+
+            // 宽布局：横排三个动作。
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: root._sp8
                 anchors.rightMargin: root._sp8
                 spacing: root._sp8
+                visible: !root._isNarrow
 
-                // 保留本地
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: keepLocalHover.containsMouse ? root._surfaceVariant : root._surface
-                    border.color: root._border
-                    border.width: 1
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
-
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("保留本地")
-                        dt: root.dt
-                        color: root._textPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: keepLocalHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("keep_local")
-                    }
+                Repeater {
+                    model: footerRect._actionModel
+                    delegate: actionBtnDelegate
                 }
+            }
 
-                // 采用远端
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: takeRemoteHover.containsMouse ? root._surfaceVariant : root._surface
-                    border.color: root._border
-                    border.width: 1
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
+            // 窄布局：纵向排列三个动作。
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.leftMargin: root._sp8
+                anchors.rightMargin: root._sp8
+                anchors.topMargin: root._sp8
+                anchors.bottomMargin: root._sp8
+                spacing: root._sp8
+                visible: root._isNarrow
 
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("采用远端")
-                        dt: root.dt
-                        color: root._textPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: takeRemoteHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("take_remote")
-                    }
-                }
-
-                // 手动合并后标记已解决
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: markMergedHover.containsMouse ? root._accentSoft : root._primary
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
-
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("手动合并后标记已解决")
-                        dt: root.dt
-                        color: markMergedHover.containsMouse ? root._accentText : root._onPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: markMergedHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("mark_merged")
-                    }
+                Repeater {
+                    model: footerRect._actionModel
+                    delegate: actionBtnDelegate
                 }
             }
         }

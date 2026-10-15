@@ -835,8 +835,11 @@ Item {
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         parent: Overlay.overlay
-        width: Math.max(400, Math.min(960, (parent ? parent.width : 960) - resolvedDt.sp64))
-        height: Math.max(300, Math.min(720, (parent ? parent.height : 720) - resolvedDt.sp32))
+        // Issue #902 第二十二轮：删除硬最小宽高 400×300，小窗口（如 320×240）下
+        // 居中后 x/y 会变负把面板挤出可见区域。改为不超过 overlay 实际可用尺寸的夹取，
+        // 最小只保留 1 防止退化，绝不让最小高度反过来超过窗口。
+        width: Math.max(1, Math.min(960, (parent ? parent.width : 960) - resolvedDt.sp64))
+        height: Math.max(1, Math.min(720, (parent ? parent.height : 720) - resolvedDt.sp32))
         x: Math.round((parent.width - width) / 2)
         y: Math.round((parent.height - height) / 2)
         Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
