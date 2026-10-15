@@ -339,6 +339,28 @@ fn save_graph_conflict_snapshot(
         })?;
     }
 
+    // issue #902 第十六轮复核：保存远端 meta.json 快照，
+    // 供 apply_starmap_graph_remote_modify 恢复 meta。
+    // meta 不存在时不报错（远端可能没有 meta），只是跳过。
+    let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+    let staging_meta_path = staging_root.join(&meta_rel);
+    if staging_meta_path.exists() {
+        let meta_bytes = std::fs::read(&staging_meta_path)?;
+        let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
+        let snap_meta_path = live_root.join(&snap_meta_rel);
+        if let Some(parent) = snap_meta_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::storage::transaction::atomic_write_bytes(&snap_meta_path, &meta_bytes).map_err(
+            |e| {
+                crate::error::Error::Io(std::io::Error::other(format!(
+                    "save_graph_conflict_snapshot: 写入快照 meta {} 失败: {}",
+                    snap_meta_rel, e
+                )))
+            },
+        )?;
+    }
+
     // issue #902 第十五轮复核：保存远端 index 身份事实（root/main），
     // 供 apply_starmap_graph_remote_modify 恢复 root_starmap_ids 和
     // main_starmap_by_project。staging_root 中没有 index.json 时跳过

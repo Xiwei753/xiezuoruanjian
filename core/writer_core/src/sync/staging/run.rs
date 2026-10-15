@@ -15,6 +15,9 @@ use super::resolve::*;
 #[derive(Default)]
 pub(crate) struct StarmapFilePaths {
     pub graph_meta_path: Option<PathBuf>,
+    /// 星图 meta.json 路径 `starmaps/<id>.meta.json`（issue #902 第十六轮复核）。
+    /// meta 服从整图生命周期决策，不再独立走 LWW。
+    pub meta_path: Option<PathBuf>,
     pub object_paths: Vec<PathBuf>,
 }
 
@@ -163,9 +166,9 @@ impl StagingRun {
             ContentClass, LwwWinner, ThreeWayResult,
         };
         use crate::sync::staging::starmap_merge::{
-            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_object_file_path,
-            merge_starmap_graph_with_objects, parse_object_path, ObjectMergeDecision,
-            StarmapMergeResult,
+            is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_meta_path,
+            is_starmap_object_file_path, merge_starmap_graph_with_objects, parse_object_path,
+            ObjectMergeDecision, StarmapMergeResult,
         };
 
         let staging_root = self.staging_root();
@@ -249,6 +252,14 @@ impl StagingRun {
                     .entry(starmap_id)
                     .or_default()
                     .graph_meta_path = Some(rel.clone());
+            } else if is_starmap_meta_path(&rel_str) {
+                // issue #902 第十六轮复核：收集 starmaps/<id>.meta.json，
+                // 作为整图生命周期的一部分统一处理。
+                let parts: Vec<&str> = rel_str.split('/').collect();
+                if let Some(starmap_id) = parts[1].strip_suffix(".meta.json") {
+                    let starmap_id = starmap_id.to_string();
+                    starmap_groups.entry(starmap_id).or_default().meta_path = Some(rel.clone());
+                }
             } else if is_starmap_object_file_path(&rel_str) {
                 let parts: Vec<&str> = rel_str.split('/').collect();
                 let starmap_id = parts[1].to_string();
@@ -372,6 +383,11 @@ impl StagingRun {
             } else if is_starmap_graph_meta_path(&rel_str) {
                 // 星图 graph.json：由循环后的统一合并处理，此处跳过
                 // （issue #902 第十轮复核）。
+                continue;
+            } else if is_starmap_meta_path(&rel_str) {
+                // 星图 meta.json：由循环后的统一合并处理，作为整图生命周期的一部分
+                // （issue #902 第十六轮复核）。不再独立走 LWW，避免 graph 冲突未裁决时
+                // meta 被独立删除导致 list_starmaps() 失败。
                 continue;
             } else if is_starmap_object_file_path(&rel_str) {
                 // 星图对象文件：由循环后的统一合并处理，此处跳过
@@ -600,6 +616,76 @@ impl StagingRun {
                             remote_snapshot_path: None,
                             remote_graph_snapshot_dir: None,
                         });
+                    }
+                }
+            }
+
+            // issue #902 第十六轮复核：meta.json 作为整图生命周期的一部分
+            // 服从 graph 的生命周期决策，不再独立走 LWW。
+            if let Some(meta_rel) = &group.meta_path {
+                let meta_base = read_opt_bytes(&base_root.join(meta_rel))?;
+                let meta_local = read_opt_bytes(&live_root.join(meta_rel))?;
+                let meta_incoming = read_opt_bytes(&staging_root.join(meta_rel))?;
+
+                use crate::sync::staging::starmap_merge::GraphLifecycleDecision;
+                match &output.lifecycle_decision {
+                    // 整图删除 → meta 也删除
+                    GraphLifecycleDecision::Delete => {
+                        if meta_local.is_some() {
+                            plan.content_actions.push(CommitAction::Delete {
+                                rel_path: meta_rel.clone(),
+                            });
+                        } else {
+                            plan.noop.push(meta_rel.clone());
+                        }
+                    }
+                    // 正常合并 → meta 走正常三方比较
+                    GraphLifecycleDecision::Normal => {
+                        let m_local_eq_base = opt_bytes_eq(&meta_local, &meta_base);
+                        let m_incoming_eq_base = opt_bytes_eq(&meta_incoming, &meta_base);
+                        let m_local_eq_incoming = opt_bytes_eq(&meta_local, &meta_incoming);
+                        if m_incoming_eq_base {
+                            plan.keep_local.push(meta_rel.clone());
+                        } else if m_local_eq_base {
+                            if let Some(content) = meta_incoming.clone() {
+                                plan.content_actions.push(CommitAction::Apply {
+                                    rel_path: meta_rel.clone(),
+                                    content,
+                                });
+                            } else {
+                                plan.content_actions.push(CommitAction::Delete {
+                                    rel_path: meta_rel.clone(),
+                                });
+                            }
+                        } else if m_local_eq_incoming {
+                            plan.noop.push(meta_rel.clone());
+                        } else {
+                            // 双方都改 → 保持 local（meta 不独立走 LWW 删除，
+                            // 服从整图存在性）
+                            if meta_local.is_some() {
+                                plan.keep_local.push(meta_rel.clone());
+                            } else if let Some(content) = meta_incoming.clone() {
+                                plan.content_actions.push(CommitAction::Apply {
+                                    rel_path: meta_rel.clone(),
+                                    content,
+                                });
+                            } else {
+                                plan.noop.push(meta_rel.clone());
+                            }
+                        }
+                    }
+                    // 整图冲突未决 → meta 不独立删除，保持 local
+                    GraphLifecycleDecision::DeleteModifyConflict { .. } => {
+                        if meta_local.is_some() {
+                            plan.keep_local.push(meta_rel.clone());
+                        } else if let Some(content) = meta_incoming.clone() {
+                            plan.content_actions.push(CommitAction::Apply {
+                                rel_path: meta_rel.clone(),
+                                content,
+                            });
+                        } else {
+                            plan.noop.push(meta_rel.clone());
+                        }
                     }
                 }
             }

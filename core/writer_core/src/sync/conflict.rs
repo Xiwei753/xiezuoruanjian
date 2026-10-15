@@ -708,6 +708,9 @@ impl crate::sync::SyncService {
                         // 非星图路径：原子替换本地正文。
                         Self::apply_remote_snapshot(sync_root, path, snapshot_rel)?;
                     }
+                    // issue #902 第十六轮复核：清理已恢复文件的旧 tombstone。
+                    // 文件已恢复（远端副本写入本地），旧 tombstone 不再适用。
+                    state.tombstones.retain(|t| t.original_path != path);
                     // 基线更新为被选择的远端 snapshot 的 hash（MD5）。
                     // 写 known_files 前做 MD5 规范化：旧冲突记录的 remote_hash 可能是
                     // 40 位 Git blob SHA，直接写进 known_files 会再次污染基线。
@@ -1318,6 +1321,19 @@ impl crate::sync::SyncService {
             .retain(|k, _| !k.starts_with(&prefix));
     }
 
+    /// 清理已恢复星图文件的旧 tombstone（issue #902 第十六轮复核）。
+    ///
+    /// 整图恢复（BothChanged）后调用：已恢复文件包括 graph.json、meta.json 和
+    /// 所有子对象文件。`starmaps/<id>/` 前缀覆盖 graph.json 和所有子对象，
+    /// `starmaps/<id>.meta.json` 单独处理。
+    fn cleanup_starmap_tombstones(state: &mut crate::sync::types::SyncState, starmap_id: &str) {
+        let prefix = format!("starmaps/{}/", starmap_id);
+        let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+        state
+            .tombstones
+            .retain(|t| !t.original_path.starts_with(&prefix) && t.original_path != meta_rel);
+    }
+
     /// 为远端删除的文件记录文件级 tombstone（issue #902 第十五轮复核）。
     ///
     /// `apply_starmap_object_remote_delete` / `apply_starmap_graph_remote_delete`
@@ -1717,6 +1733,9 @@ impl crate::sync::SyncService {
         // SaveTransaction 原子提交：删除 graph.json + 删除所有子对象文件 + 更新 index.json
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
         txn.add_delete(&graph_rel);
+        // issue #902 第十六轮复核：删除 meta.json 作为整图生命周期的一部分
+        let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+        txn.add_delete(&meta_rel);
         for obj_rel in &member_rels {
             txn.add_delete(obj_rel);
         }
@@ -1735,10 +1754,11 @@ impl crate::sync::SyncService {
         })?;
 
         // issue #902 第十五轮复核：返回实际删除的所有路径集合
-        // （graph.json + 全部子对象文件），供调用方同步维护
+        // （graph.json + meta.json + 全部子对象文件），供调用方同步维护
         // known_files / known_files_updated_at / tombstones。
-        let mut deleted_paths: Vec<String> = Vec::with_capacity(member_rels.len() + 1);
+        let mut deleted_paths: Vec<String> = Vec::with_capacity(member_rels.len() + 2);
         deleted_paths.push(graph_rel);
+        deleted_paths.push(meta_rel);
         deleted_paths.extend(member_rels);
         Ok(deleted_paths)
     }
@@ -1803,6 +1823,10 @@ impl crate::sync::SyncService {
         let (obj_files, object_contents) =
             Self::read_remote_graph_snapshot_objects(sync_root, &member_rels, snapshot_dir_rel)?;
 
+        // issue #902 第十六轮复核：从快照目录读取远端 meta.json
+        let remote_meta =
+            Self::read_remote_meta_snapshot(sync_root, &starmap_id, snapshot_dir_rel)?;
+
         // 重建派生索引
         let derived =
             Self::rebuild_derived_indexes_for_graph(&starmap_id, &remote_graph, &object_contents)?;
@@ -1852,6 +1876,15 @@ impl crate::sync::SyncService {
                 ))
             })?;
         }
+        // issue #902 第十六轮复核：恢复 meta.json
+        if let Some((meta_rel, meta_bytes)) = &remote_meta {
+            txn.add_bytes(meta_rel, meta_bytes).map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_graph_remote_modify: 暂存 meta.json 失败 ({}): {}",
+                    starmap_id, e
+                ))
+            })?;
+        }
         txn.add_bytes("starmaps/index.json", &index_bytes)
             .map_err(|e| {
                 crate::Error::Other(format!(
@@ -1867,6 +1900,30 @@ impl crate::sync::SyncService {
         })?;
 
         Ok(())
+    }
+
+    /// 从快照目录读取远端 meta.json（issue #902 第十六轮复核）。
+    ///
+    /// 返回 `Some((meta_rel, bytes))` 当快照存在；`None` 当远端无 meta（保持向后兼容）。
+    fn read_remote_meta_snapshot(
+        sync_root: &Path,
+        starmap_id: &str,
+        snapshot_dir_rel: &str,
+    ) -> crate::Result<Option<(String, Vec<u8>)>> {
+        let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+        let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
+        let snap_meta_path = sync_root.join(&snap_meta_rel);
+        if snap_meta_path.exists() {
+            let bytes = std::fs::read(&snap_meta_path).map_err(|e| {
+                crate::Error::Other(format!(
+                    "read_remote_meta_snapshot: 读取远端 meta snapshot 失败 ({}): {}",
+                    starmap_id, e
+                ))
+            })?;
+            Ok(Some((meta_rel, bytes)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// 从快照目录读取远端整图子对象（issue #902 第十四轮复核）。
@@ -1955,6 +2012,8 @@ impl crate::sync::SyncService {
                 Self::apply_starmap_graph_remote_modify(sync_root, path, conflict)?;
                 if let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) {
                     Self::cleanup_starmap_known_files(state, &starmap_id);
+                    // issue #902 第十六轮复核：清理已恢复文件的旧 tombstone。
+                    Self::cleanup_starmap_tombstones(state, &starmap_id);
                 }
                 Ok(false)
             }

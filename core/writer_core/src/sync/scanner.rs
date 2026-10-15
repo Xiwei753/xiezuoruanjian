@@ -230,7 +230,11 @@ pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Resu
     // 墓碑清理/purge：保留 state.tombstones 用于 files_to_delete_local。
     let now = chrono::Utc::now().timestamp();
     for t in &state.tombstones {
-        if t.purge_after <= now {
+        // issue #902 第十六轮复核：跳过空 trash_path 的 tombstone。
+        // record_remote_delete_tombstone 写入 trash_path=String::new() 表示
+        // "已确认远端删除、无回收区实体"，不应投影成 files_to_delete_local
+        // 的空路径。
+        if t.purge_after <= now && !t.trash_path.is_empty() {
             plan.files_to_delete_local.push(t.trash_path.clone());
         }
     }
