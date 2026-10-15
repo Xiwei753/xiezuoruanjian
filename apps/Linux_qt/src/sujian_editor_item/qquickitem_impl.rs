@@ -514,8 +514,17 @@ impl QQuickItem for SujianEditorItem {
                 .pipeline
                 .text_motion()
                 .map(|m| (m.session, m.target_revision));
-            if motion_frame.finished {
-                if let Some((session, revision)) = motion_identity {
+            // Issue #904 复核 7：`motion_frame.finished` 只表示时间采样到了终点，
+            // 不等于"终点这一帧已经真正交接出去"。真正完成的定义是：本帧静态层提交
+            // 成功、动画层提交成功、且本帧**实际**没有挖孔、也没有动态覆盖层
+            // （即静态正文已恢复完整 canonical，旧动态图已清空）。
+            let completed_and_committed = motion_frame.finished
+                && render_outcome.static_rebuild_ok
+                && render_outcome.animation_layer_ok
+                && render_outcome.committed_holes.is_empty()
+                && render_outcome.committed_local.is_empty();
+            if let Some((session, revision)) = motion_identity {
+                if completed_and_committed {
                     super::editor_animation_debug_log(&format!(
                         "text_motion complete: session={session} revision={revision} \
                          duration_ms={} pieces={} paragraph_moves={}",
@@ -525,12 +534,10 @@ impl QQuickItem for SujianEditorItem {
                             .text_motion()
                             .map_or(0, |m| m.paragraph_moves.len()),
                     ));
-                }
-                self.last_drawn_local_frame = None;
-                self.last_commit_log_key = None;
-                self.last_missing_log_key = None;
-            } else if let Some((session, revision)) = motion_identity {
-                if !animation_resources_ready {
+                    self.last_drawn_local_frame = None;
+                    self.last_commit_log_key = None;
+                    self.last_missing_log_key = None;
+                } else if !animation_resources_ready {
                     // 源纹理缺失：写出具体缺少的 LineSnapshotId，不把它当成
                     // "这次本来就没有动画"。
                     if self.last_missing_log_key != Some((session, revision)) {
@@ -699,17 +706,19 @@ impl QQuickItem for SujianEditorItem {
                 self.request_frame_update();
             }
 
-            // Issue #701 评论 5699573227 第三阶段 (F6): 正文动画或光标动画未结束
-            // 就持续请求下一帧，直到文字和光标一起结束。
-            // Issue #904：needs_next_frame 来自唯一的局部动画计划的未完成状态，
-            // 覆盖 progress=0 的新过渡第一帧（静态层已挖空但动画层尚无可见像素）、
-            // 纯删除临界帧、文字全被裁空但仍在过渡的帧。不依赖可见片段数量。
-            // Issue #904：只有一个动画进度。未结束就持续请求下一帧；
-            // 结束后立即清空局部计划，静态层已在本帧完整绘制（finished 时无孔洞）。
+            // Issue #904：只有一个动画进度。未结束就持续请求下一帧。
+            // Issue #904 复核 7：时间到期也不等于终点已交接 —— 只有终点那一帧
+            // 真正提交（静态恢复完整 canonical、旧动态图清空）才取走唯一动画；
+            // 提交失败时保留 TextMotion 与上一实际帧，下一帧继续推进到成功为止，
+            // 不新增第二个完成计时器或兜底动画。
             if motion_frame.needs_next_frame {
                 self.request_frame_update();
-            } else if self.pipeline.text_motion().is_some() && motion_frame.finished {
-                *self.pipeline.text_motion_mut() = None;
+            } else if motion_frame.finished && self.pipeline.text_motion().is_some() {
+                if completed_and_committed {
+                    *self.pipeline.text_motion_mut() = None;
+                } else {
+                    self.request_frame_update();
+                }
             }
             if self.cursor_ctrl.animation.is_some() {
                 self.request_frame_update();
