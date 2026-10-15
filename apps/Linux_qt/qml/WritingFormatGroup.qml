@@ -79,11 +79,11 @@ Rectangle {
         // Font button (triggers popover)
         ToolButton {
             id: fontButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 1.8
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
             text: "A " + Math.round(root.currentFontSize) + " px"
             icon.name: "draw-text"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.TextBesideIcon
             highlighted: fontPopover.visible
             onClicked: {
@@ -96,11 +96,11 @@ Rectangle {
         // Line Spacing button (triggers lineSpacingPopover)
         ToolButton {
             id: spacingButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 1.8
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
             text: Number(root.currentLineSpacing).toFixed(1) + "×"
             icon.name: "format-line-spacing-normal"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.TextBesideIcon
             highlighted: lineSpacingPopover.visible
             onClicked: {
@@ -113,11 +113,11 @@ Rectangle {
         // Paragraph Layout button (triggers layoutPopover)
         ToolButton {
             id: layoutButton
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 1.8
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
             text: qsTr("段落")
             icon.name: "format-justify-left"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.TextBesideIcon
             highlighted: layoutPopover.visible
             onClicked: {
@@ -129,11 +129,11 @@ Rectangle {
 
         // Format button
         ToolButton {
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 1.8
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
             text: qsTr("一键排版")
             icon.name: "format-text-bold"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.TextBesideIcon
             onClicked: root.formatOneClick()
         }

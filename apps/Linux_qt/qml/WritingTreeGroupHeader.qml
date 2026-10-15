@@ -32,9 +32,17 @@ Item {
     signal toggleExpanded()
     signal addRequested()
 
-    readonly property real rowHeight: 36
+    // Issue #912：行高不再用固定 36，改为跟随标题字体实际高度 + KDE 间距派生，
+    // 桌面默认字号下卷头/箭头/「+」入口不再偏小。
+    readonly property real rowHeight: Math.max(Kirigami.Units.gridUnit * 2, titleMetrics.height + Kirigami.Units.smallSpacing * 2)
 
     implicitHeight: rowHeight
+
+    TextMetrics {
+        id: titleMetrics
+        font: Kirigami.Theme.defaultFont
+        text: root.title
+    }
 
     RowLayout {
         anchors.fill: parent
@@ -45,8 +53,8 @@ Item {
         // 折叠箭头。手稿里就是一个细的箭头，不承担选中态。
         Kirigami.Icon {
             source: root.expanded ? "arrow-down" : "arrow-right"
-            implicitWidth: Kirigami.Units.iconSizes.small
-            implicitHeight: Kirigami.Units.iconSizes.small
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
             color: Kirigami.Theme.textColor
             Layout.alignment: Qt.AlignVCenter
         }
@@ -54,6 +62,7 @@ Item {
         Label {
             text: root.title
             color: Kirigami.Theme.textColor
+            font: Kirigami.Theme.defaultFont
             font.bold: true
             elide: Text.ElideRight
             Layout.fillWidth: true
@@ -63,12 +72,13 @@ Item {
         ToolButton {
             visible: root.showAddButton
             icon.name: "list-add"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.IconOnly
             flat: true
-            implicitWidth: Kirigami.Units.gridUnit * 1.4
-            implicitHeight: Kirigami.Units.gridUnit * 1.4
+            // Issue #912：给「+」入口完整的可点区域，不再用偏小的 gridUnit*1.4。
+            implicitWidth: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
+            implicitHeight: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
             Layout.alignment: Qt.AlignVCenter
             onClicked: root.addRequested()
         }

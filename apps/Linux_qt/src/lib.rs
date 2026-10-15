@@ -79,6 +79,7 @@
 pub mod app_main_cpp;
 pub mod backend;
 pub mod editor;
+pub mod native;
 pub mod platform;
 pub mod platform_utils;
 pub mod starmap_bridge;
