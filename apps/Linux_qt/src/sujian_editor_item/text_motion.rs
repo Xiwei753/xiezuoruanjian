@@ -51,6 +51,8 @@ pub(crate) struct VisibleFragment {
     pub rect: LocalRect,
     /// 当前可见宽度（= `rect.w` 时完全可见）。
     pub mask_width: f64,
+    /// 所属段落 id（用于整体段落位移的去重）。
+    pub paragraph_id: u64,
     pub source_revision: EditorRevision,
     pub glyph_id: u64,
 }
@@ -66,6 +68,18 @@ pub(crate) struct LocalTextFrame {
     pub fragments: Vec<VisibleFragment>,
 }
 
+/// Issue #904 复核 2：遮罩相位。
+///
+/// 片段上一次真正画出去时遮罩可能还没走完（吐到一半又继续输入）。新计划必须
+/// 从「当前可见宽度」继续推到终点，而不是因为目标矩形相等就当静态完整字。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MaskPhase {
+    /// 计划开始时该片段已可见的宽度。
+    pub start: f64,
+    /// 计划结束时应达到的宽度（Reveal/Move = 全宽，Conceal = 0）。
+    pub end: f64,
+}
+
 /// Issue #904：三类局部动画，共用同一个 progress。
 #[derive(Clone, Debug)]
 pub(crate) enum TextPiece {
@@ -74,6 +88,7 @@ pub(crate) enum TextPiece {
         new_source: SnapshotRef,
         at: LocalRect,
         direction: ClipDirection,
+        mask: MaskPhase,
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
@@ -83,6 +98,7 @@ pub(crate) enum TextPiece {
         old_source: SnapshotRef,
         at: LocalRect,
         direction: ClipDirection,
+        mask: MaskPhase,
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
@@ -92,10 +108,29 @@ pub(crate) enum TextPiece {
         source: SnapshotRef,
         from: LocalRect,
         to: LocalRect,
+        mask: MaskPhase,
         byte_range: (usize, usize),
         source_revision: EditorRevision,
         glyph_id: u64,
     },
+}
+
+/// Issue #904 复核 1：受影响段落以下的可见段落只做整体 y 位移。
+///
+/// 复用已有 `QSGTransformNode` 从旧 y 插值到新 y，不逐字复制纹理；
+/// 动画结束（progress=1）时偏移回到 0，直接留在目标矩阵。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ParagraphMove {
+    pub paragraph_id: u64,
+    pub from_y: f64,
+    pub to_y: f64,
+}
+
+impl ParagraphMove {
+    /// 当前进度下相对目标位置的额外 y 偏移（结束为 0）。
+    fn offset_at(&self, progress: f64) -> f64 {
+        (self.from_y - self.to_y) * (1.0 - progress)
+    }
 }
 
 impl TextPiece {
@@ -143,6 +178,14 @@ impl TextPiece {
             TextPiece::Move { source, .. } => *source,
         }
     }
+
+    fn mask(&self) -> MaskPhase {
+        match self {
+            TextPiece::Reveal { mask, .. }
+            | TextPiece::Conceal { mask, .. }
+            | TextPiece::Move { mask, .. } => *mask,
+        }
+    }
 }
 
 /// Issue #904：一次编辑产生的唯一动画对象。
@@ -168,6 +211,9 @@ pub(crate) struct TextMotion {
     /// 协同模式下光标在同一 progress 上插值：起点/终点取布局真实 caret 几何。
     pub caret_from: Option<(f64, f64)>,
     pub caret_to: Option<(f64, f64)>,
+    /// 受影响段落以下、仅整体 y 变化的可见段落：按同一 progress 平移其
+    /// 已有 transform，不生成逐字覆盖层。
+    pub paragraph_moves: Vec<ParagraphMove>,
 }
 
 /// Issue #904：`TextMotion::sample()` 的一帧结果。
@@ -179,6 +225,8 @@ pub(crate) struct TextMotionFrame {
     pub overlays: Vec<TextAnimationGlyphInfo>,
     /// 本帧接管所需的动画源纹理 id。
     pub required_textures: Vec<LineSnapshotId>,
+    /// 本帧仍活动的整体段落 y 偏移（progress 未走完时非空）。
+    pub paragraph_y_offsets: Vec<(u64, f64)>,
     pub finished: bool,
     pub needs_next_frame: bool,
     /// 协同模式下正文动画推进到的光标采样点（文档坐标）。
@@ -212,43 +260,62 @@ impl TextMotion {
         let new_revision = edit.new_revision;
         let old_revision = edit.base_revision;
 
-        // 旧侧：优先从“上一次真正画出的局部图片”续接（同一文档会话），
-        // 使快速连输/连删直接在当前显示位置上重定向，而不是回到静态起点。
-        let mut old_frags: Vec<VisibleFragment> = last_drawn
-            .filter(|frame| frame.session == session)
-            .map(|frame| {
-                frame
-                    .fragments
-                    .iter()
-                    .filter(|f| overlaps(f.byte_range, (old_start, old_end)))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        // 再用编辑前布局补上不在已绘制画面里的邻近片段（例如改动点同行后续字）。
-        if let Some(layout) = old_layout {
-            for frag in layout_fragments(layout, (old_start, old_end), old_revision) {
-                if !old_frags
-                    .iter()
-                    .any(|existing| existing.byte_range == frag.byte_range)
-                {
-                    old_frags.push(frag);
-                }
-            }
-        }
-
-        // 新侧：编辑后目标布局的局部片段。这里**不做**视口预过滤——屏幕外进入/
-        // 离开的字只有拿到完整 old/new 几何后才能判成 Move，否则会被误判成
-        // Reveal/Conceal，丢掉了位置动画。
-        let new_frags = layout_fragments(new_layout, (new_start, new_end), new_revision);
-
         let direction = conceal_direction(edit);
         let delta = (new_end as i64 - new_start as i64) - (old_end as i64 - old_start as i64);
+
+        let drawn_frags: &[VisibleFragment] = last_drawn
+            .filter(|frame| frame.session == session)
+            .map(|frame| frame.fragments.as_slice())
+            .unwrap_or(&[]);
+
+        // 新侧：编辑后目标布局受影响段落的**完整**局部片段（含同段后续折行与
+        // 字节范围重新对齐前的后续段落）。这里既不做视口预过滤，也不只取到
+        // 改动行末尾——否则换行/回流后本应 Move 的字会被误判成 Reveal/Conceal。
+        let new_frags = layout_fragments(new_layout, (new_start, new_end), new_revision);
+        let new_span_end = new_frags
+            .iter()
+            .map(|f| f.byte_range.1)
+            .max()
+            .unwrap_or(new_end);
+
+        // 旧侧：用对齐到同一字节范围（旧坐标）抓取完整几何，使“只是移动”的字
+        // 能按字节 offset 配成 Move。同时把上一次真正画出的遮罩宽度带上，
+        // 使吐到一半的字从当前可见宽度继续。
+        let old_span_end = ((new_span_end as i64) - delta).max(old_end as i64) as usize;
+        let mut old_frags: Vec<VisibleFragment> = match old_layout {
+            Some(layout) => layout_fragments(layout, (old_start, old_span_end), old_revision),
+            None => Vec::new(),
+        };
+        for frag in &mut old_frags {
+            if let Some(mask) = drawn_mask_for(drawn_frags, frag) {
+                frag.mask_width = mask;
+            }
+        }
+        // 上一次还在吞、旧布局里已不存在的旧字：保留旧画面继续吞。
+        for frag in drawn_frags {
+            if !overlaps(frag.byte_range, (old_start, old_end))
+                || old_frags.iter().any(|f| f.byte_range == frag.byte_range)
+            {
+                continue;
+            }
+            let mut frag = frag.clone();
+            frag.source_revision = old_revision;
+            old_frags.push(frag);
+        }
+
+        // 受影响段落以下、仅整体 y 变化的段落交给 transform 平移，其文字不再
+        // 逐字生成 Move 覆盖层（避免与 transform 叠加两次位移）。
+        let paragraph_moves = collect_paragraph_moves(old_layout, new_layout, &viewport);
+        let moved_paragraphs: Vec<u64> = paragraph_moves.iter().map(|m| m.paragraph_id).collect();
 
         let mut pieces: Vec<TextPiece> = Vec::new();
         let mut consumed_old: Vec<bool> = vec![false; old_frags.len()];
 
         for new_frag in &new_frags {
+            // 交给整体段落位移的段落，不生成逐字覆盖层。
+            if moved_paragraphs.contains(&new_frag.paragraph_id) {
+                continue;
+            }
             // 把新坐标映回旧坐标以匹配未删 cluster。
             let mapped = map_new_to_old(new_frag.byte_range, new_start, new_end, delta);
             let matched = old_frags
@@ -259,6 +326,9 @@ impl TextMotion {
                 })
                 .map(|(i, _)| i);
 
+            // 复核 2：同 byte range 上一次真正画出的可见宽度；没有则视为全宽。
+            let start_visible = drawn_mask_for(drawn_frags, new_frag).unwrap_or(new_frag.rect.w);
+
             match matched {
                 Some(idx) => {
                     consumed_old[idx] = true;
@@ -268,17 +338,41 @@ impl TextMotion {
                             source: new_frag.snapshot,
                             from: old_frag.rect,
                             to: new_frag.rect,
+                            mask: MaskPhase {
+                                start: start_visible,
+                                end: new_frag.rect.w,
+                            },
                             byte_range: new_frag.byte_range,
                             source_revision: old_revision,
+                            glyph_id: new_frag.glyph_id,
+                        });
+                    } else if start_visible + MASK_EPS < new_frag.rect.w {
+                        // 位置没变但上一次还没吐完：继续从当前宽度露出，
+                        // 不再因为 rect 相等就当作静态完整字（避免闪变）。
+                        pieces.push(TextPiece::Reveal {
+                            new_source: new_frag.snapshot,
+                            at: new_frag.rect,
+                            direction: ClipDirection::LeftToRight,
+                            mask: MaskPhase {
+                                start: start_visible,
+                                end: new_frag.rect.w,
+                            },
+                            byte_range: new_frag.byte_range,
+                            source_revision: new_revision,
                             glyph_id: new_frag.glyph_id,
                         });
                     }
                 }
                 None => {
+                    let start = drawn_mask_for(drawn_frags, new_frag).unwrap_or(0.0);
                     pieces.push(TextPiece::Reveal {
                         new_source: new_frag.snapshot,
                         at: new_frag.rect,
                         direction: ClipDirection::LeftToRight,
+                        mask: MaskPhase {
+                            start,
+                            end: new_frag.rect.w,
+                        },
                         byte_range: new_frag.byte_range,
                         source_revision: new_revision,
                         glyph_id: new_frag.glyph_id,
@@ -288,13 +382,23 @@ impl TextMotion {
         }
 
         for (idx, old_frag) in old_frags.iter().enumerate() {
-            if consumed_old[idx] {
+            // 只为本次编辑**真正删掉/替换**的旧字产生 Conceal；为配 Move 而多抓
+            // 的邻接段落片段不得凭空被吞。
+            if consumed_old[idx]
+                || moved_paragraphs.contains(&old_frag.paragraph_id)
+                || !in_any_old_patch(edit, old_frag.byte_range)
+            {
                 continue;
             }
+            let start_visible = drawn_mask_for(drawn_frags, old_frag).unwrap_or(old_frag.rect.w);
             pieces.push(TextPiece::Conceal {
                 old_source: old_frag.snapshot,
                 at: old_frag.rect,
                 direction,
+                mask: MaskPhase {
+                    start: start_visible,
+                    end: 0.0,
+                },
                 byte_range: old_frag.byte_range,
                 source_revision: old_revision,
                 glyph_id: old_frag.glyph_id,
@@ -304,7 +408,7 @@ impl TextMotion {
         // Move 用“来源与目标矩形的并集”判断是否与视口相交，屏幕外进入/离开的字
         // 只要路径经过视口就保留；Reveal/Conceal 用自身矩形。
         pieces.retain(|piece| rects_intersect(&piece.motion_rect(), &viewport));
-        if pieces.is_empty() {
+        if pieces.is_empty() && paragraph_moves.is_empty() {
             return None;
         }
 
@@ -388,6 +492,7 @@ impl TextMotion {
             required_textures,
             caret_from,
             caret_to,
+            paragraph_moves,
         })
     }
 
@@ -401,12 +506,14 @@ impl TextMotion {
         let progress = ease_out_cubic(raw);
         let finished = raw >= 1.0;
 
-        // 过渡结束：不再挖孔、不再画覆盖层；同一帧静态层恢复完整 canonical。
+        // 过渡结束：不再挖孔、不再画覆盖层、段落位移偏移回到 0（留在目标矩阵）；
+        // 同一帧静态层恢复完整 canonical。
         if finished {
             return TextMotionFrame {
                 static_holes: Vec::new(),
                 overlays: Vec::new(),
                 required_textures: self.required_textures.clone(),
+                paragraph_y_offsets: Vec::new(),
                 finished: true,
                 needs_next_frame: false,
                 caret_sample: self.caret_to,
@@ -415,38 +522,38 @@ impl TextMotion {
 
         let mut overlays = Vec::with_capacity(self.pieces.len());
         for piece in &self.pieces {
+            let mask = piece.mask();
+            let visible = lerp(mask.start, mask.end, progress);
             let (target_rect, source_uv, clip_rect) = match piece {
                 TextPiece::Reveal {
                     new_source,
                     at,
                     direction,
                     ..
-                } => {
-                    let visible = at.w * progress;
-                    (
-                        *at,
-                        new_source.source_uv,
-                        mask_rect(at, *direction, visible),
-                    )
-                }
+                } => (
+                    *at,
+                    new_source.source_uv,
+                    mask_rect(at, *direction, visible),
+                ),
                 TextPiece::Conceal {
                     old_source,
                     at,
                     direction,
                     ..
-                } => {
-                    let visible = at.w * (1.0 - progress);
-                    (
-                        *at,
-                        old_source.source_uv,
-                        mask_rect(at, *direction, visible),
-                    )
-                }
+                } => (
+                    *at,
+                    old_source.source_uv,
+                    mask_rect(at, *direction, visible),
+                ),
                 TextPiece::Move {
                     source, from, to, ..
                 } => {
                     let rect = lerp_rect(from, to, progress);
-                    (rect, source.source_uv, rect)
+                    (
+                        rect,
+                        source.source_uv,
+                        mask_rect(&rect, ClipDirection::LeftToRight, visible),
+                    )
                 }
             };
 
@@ -460,6 +567,11 @@ impl TextMotion {
             static_holes: self.static_exclusions.clone(),
             overlays,
             required_textures: self.required_textures.clone(),
+            paragraph_y_offsets: self
+                .paragraph_moves
+                .iter()
+                .map(|m| (m.paragraph_id, m.offset_at(progress)))
+                .collect(),
             finished: false,
             needs_next_frame: true,
             caret_sample: self.caret_sample_at(progress),
@@ -488,6 +600,7 @@ impl TextMotion {
                     h: glyph.h,
                 },
                 mask_width: glyph.clip_rect.w,
+                paragraph_id: 0,
                 source_revision: glyph.source_revision,
                 glyph_id: glyph.glyph_id,
             })
@@ -532,6 +645,9 @@ impl TextMotion {
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────────
+
+/// 遮罩是否已走完的容差（像素）。
+const MASK_EPS: f64 = 0.05;
 
 /// Issue #904：从 `EditorEditResult.display_patches` 分别取旧/新坐标范围，
 /// 不把两侧并到同一个坐标系里。
@@ -592,9 +708,12 @@ fn map_new_to_old(
     (map(range.0), map(range.1))
 }
 
-/// 从布局快照抓取与 `[start, end]` 相交的局部 cluster 片段。
+/// 从布局快照抓取受影响范围内的局部 cluster 片段。
 ///
-/// 为了覆盖"位移"，范围会扩到受影响行的末尾（这些行的后续字会左右滑动）。
+/// Issue #904 复核 1：范围不只扩到改动行末尾，而是扩到**受影响段落的末尾**
+/// （即改动点所在段落的全部后续折行）。插字挤到下一行、删除换行合并段落、
+/// 插入换行使后续段落下移时，同段后续折行必须拿到完整 old/new 几何，才能在
+/// matching 后按字节 offset 配成 Move，而不是被拆成 Reveal/Conceal。
 ///
 /// Issue #904：这里**不按视口过滤**——屏幕外进入/离开的字必须保留完整几何，
 /// 才能在 matching 之后按 `union(from, to)` 与视口相交，判成位置动画。
@@ -603,13 +722,22 @@ fn layout_fragments(
     range: (usize, usize),
     revision: EditorRevision,
 ) -> Vec<VisibleFragment> {
-    let mut lines_end = range.1;
+    let mut affected: Vec<u64> = Vec::new();
     for line in layout.line_snapshots.iter() {
-        if line.byte_end >= range.0 && line.byte_start <= range.1 {
-            lines_end = lines_end.max(line.byte_end);
+        if line.byte_start <= range.1 && line.byte_end >= range.0 {
+            if !affected.contains(&line.id.paragraph_id) {
+                affected.push(line.id.paragraph_id);
+            }
         }
     }
-    let span = (range.0, lines_end.max(range.1));
+
+    let mut span_end = range.1;
+    for line in layout.line_snapshots.iter() {
+        if affected.contains(&line.id.paragraph_id) {
+            span_end = span_end.max(line.byte_end);
+        }
+    }
+    let span = (range.0, span_end.max(range.1));
 
     let mut frags = Vec::new();
     for line in layout.line_snapshots.iter() {
@@ -630,12 +758,93 @@ fn layout_fragments(
                 byte_range,
                 rect,
                 mask_width: rect.w,
+                paragraph_id: line.id.paragraph_id,
                 source_revision: revision,
                 glyph_id: derive_fragment_id(&line.id, byte_range),
             });
         }
     }
     frags
+}
+
+/// 复核 2：同 byte range 上一次真正画出的可见宽度。
+///
+/// 先找矩形一致的片段（同一字仍在原处），否则退回任意同 byte range 的片段。
+fn drawn_mask_for(drawn: &[VisibleFragment], frag: &VisibleFragment) -> Option<f64> {
+    drawn
+        .iter()
+        .find(|f| f.byte_range == frag.byte_range && rect_approx_eq(&f.rect, &frag.rect))
+        .or_else(|| drawn.iter().find(|f| f.byte_range == frag.byte_range))
+        .map(|f| f.mask_width)
+}
+
+/// 该字节范围是否落在本次编辑真正替换/删除的旧范围内。
+fn in_any_old_patch(edit: &EditorEditResult, byte_range: (usize, usize)) -> bool {
+    edit.display_patches.iter().any(|patch| {
+        overlaps(
+            byte_range,
+            (
+                patch.replace_byte_range.start().value(),
+                patch.replace_byte_range.end().value(),
+            ),
+        )
+    })
+}
+
+/// 复核 1：受影响段落以下、只发生整体 y 变化且在视口气带内的段落。
+///
+/// 只按段落 id 配对（换行插入/删除时下游段落 id 不变）；新出现的段落没有
+/// 旧身份，其文字通过逐字 Move 处理。
+fn collect_paragraph_moves(
+    old_layout: Option<&EditorLayoutSnapshot>,
+    new_layout: &EditorLayoutSnapshot,
+    viewport: &LocalRect,
+) -> Vec<ParagraphMove> {
+    let Some(old_layout) = old_layout else {
+        return Vec::new();
+    };
+    let old_tops = paragraph_tops(old_layout);
+    let mut moves = Vec::new();
+    for (paragraph_id, to_y) in paragraph_tops(new_layout) {
+        let Some(from_y) = old_tops
+            .iter()
+            .find(|(id, _)| *id == paragraph_id)
+            .map(|(_, y)| *y)
+        else {
+            continue;
+        };
+        if (from_y - to_y).abs() < 0.5 {
+            continue;
+        }
+        // 屏幕外进/出沿用同一 viewport 裁剪：段落整体路径与视口相交才动画。
+        let band = LocalRect {
+            x: viewport.x,
+            y: from_y.min(to_y),
+            w: viewport.w,
+            h: (to_y - from_y).abs().max(1.0),
+        };
+        if !rects_intersect(&band, viewport) {
+            continue;
+        }
+        moves.push(ParagraphMove {
+            paragraph_id,
+            from_y,
+            to_y,
+        });
+    }
+    moves
+}
+
+/// 段落 id → 段落顶 y（文档坐标）。
+fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64)> {
+    let mut tops: Vec<(u64, f64)> = Vec::new();
+    for line in &layout.line_snapshots {
+        match tops.iter_mut().find(|(id, _)| *id == line.id.paragraph_id) {
+            Some(entry) => entry.1 = entry.1.min(line.document_origin_y),
+            None => tops.push((line.id.paragraph_id, line.document_origin_y)),
+        }
+    }
+    tops
 }
 
 fn glyph_info(
@@ -697,6 +906,10 @@ fn mask_rect(at: &LocalRect, direction: ClipDirection, visible: f64) -> LocalRec
             h: at.h,
         },
     }
+}
+
+fn lerp(from: f64, to: f64, t: f64) -> f64 {
+    from + (to - from) * t
 }
 
 fn lerp_rect(from: &LocalRect, to: &LocalRect, t: f64) -> LocalRect {

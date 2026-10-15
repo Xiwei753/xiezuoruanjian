@@ -561,6 +561,11 @@ pub struct SujianEditorItem {
     /// 漏掉状态翻转的那一帧会导致：动画结束帧 canonical 不恢复（残留孔洞），
     /// 或动画开始帧不挖孔（新字先整字显示）。用它驱动静态裁剪强制刷新。
     prev_local_text_holes_active: bool,
+    /// Issue #904 复核 1: 上一帧局部动画是否处于"整体段落 y 位移活跃"状态。
+    ///
+    /// 段落位移活跃时静态层每帧都要刷新已有 transform 的插值；结束帧必须再刷新
+    /// 一次把段落留在目标矩阵。翻转那一帧驱动静态层强制刷新。
+    prev_paragraph_moves_active: bool,
     /// Issue #904 评论 3: 上一次**真正画出去**的局部图片（当前矩形、当前遮罩宽度、
     /// 源 id、session/revision）。
     ///
@@ -714,6 +719,7 @@ impl Default for SujianEditorItem {
             document_session: 1,
             loaded_para_range: None,
             prev_local_text_holes_active: false,
+            prev_paragraph_moves_active: false,
             last_drawn_local_frame: None,
         }
     }
@@ -824,6 +830,7 @@ impl SujianEditorItem {
         // 从一段已经不存在的动画继续重定向。
         self.last_drawn_local_frame = None;
         self.prev_local_text_holes_active = false;
+        self.prev_paragraph_moves_active = false;
         self.request_scene_rebuild();
     }
 
@@ -861,6 +868,7 @@ impl SujianEditorItem {
         *self.pipeline.text_motion_mut() = None;
         self.last_drawn_local_frame = None;
         self.prev_local_text_holes_active = false;
+        self.prev_paragraph_moves_active = false;
         // Issue #901 问题3/问题6：清 frame_submission_mailbox，
         // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
         self.frame_submission_mailbox.discard_all_frames();

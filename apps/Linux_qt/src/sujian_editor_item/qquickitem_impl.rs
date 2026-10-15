@@ -485,6 +485,7 @@ impl QQuickItem for SujianEditorItem {
                     overlays: motion_frame.overlays.clone(),
                     static_holes: motion_frame.static_holes.clone(),
                     required_textures: motion_frame.required_textures.clone(),
+                    paragraph_y_offsets: motion_frame.paragraph_y_offsets.clone(),
                 },
                 selection_preedit,
                 cursor: cursor_render_state,
@@ -507,8 +508,17 @@ impl QQuickItem for SujianEditorItem {
             let clip_state_changed = holes_active != self.prev_local_text_holes_active;
             self.prev_local_text_holes_active = holes_active;
 
+            // Issue #904 复核 1: 整体段落位移活跃时静态层每帧都要刷新 transform 插值；
+            // 位移清空那一帧（动画结束）也必须再刷新一次，把段落留在目标矩阵。
+            let paragraph_moves_active = !motion_frame.paragraph_y_offsets.is_empty();
+            let paragraph_moves_changed =
+                paragraph_moves_active != self.prev_paragraph_moves_active;
+            self.prev_paragraph_moves_active = paragraph_moves_active;
+
             let frame_needs_relayout = base_needs_relayout
                 || clip_state_changed
+                || paragraph_moves_active
+                || paragraph_moves_changed
                 || !animation_resources_ready
                 || !prepared_frame_matches_canonical;
 
@@ -538,6 +548,7 @@ impl QQuickItem for SujianEditorItem {
                 needs_relayout: frame_needs_relayout,
                 force_full_relayout,
                 force_static_clip_refresh: clip_state_changed,
+                paragraph_y_offsets: &render_plan.local_text.paragraph_y_offsets,
                 session_id: self.document_session,
                 // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
                 loaded_para_range: self.loaded_para_range,

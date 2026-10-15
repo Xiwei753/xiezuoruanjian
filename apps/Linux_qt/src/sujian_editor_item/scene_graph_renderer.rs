@@ -72,6 +72,11 @@ pub(crate) struct StaticTextParams<'a> {
     /// 让 canonical 在动画结束的同一帧恢复显示、在动画开始的同一帧被挖空。
     /// 静态裁剪只在动画 begin/target-change/end 变化，不随 progress 每帧刷新。
     pub force_static_clip_refresh: bool,
+    /// Issue #904 复核 1: 本帧整体段落 y 偏移 `(paragraph_id, 额外偏移)`。
+    ///
+    /// 换行/回流使下游段落下移时，复用已有 `QSGTransformNode` 从旧 y 插值到新 y；
+    /// progress 走完时为空，段落直接留在目标矩阵。
+    pub paragraph_y_offsets: &'a [(u64, f64)],
     pub session_id: u64,
     /// Issue #901 第九轮阻塞4: 上次 rebuild 成功后加载的段落索引范围。
     /// `None` 表示尚未加载任何段落（首次渲染或上次 rebuild 失败）。
@@ -417,6 +422,7 @@ pub(crate) fn render_frame(
                     static_text.scroll_y,
                     static_text.color,
                     clip_rects,
+                    static_text.paragraph_y_offsets,
                     f64::from(snapshot.padding),
                     snapshot.layout_generation,
                     false,

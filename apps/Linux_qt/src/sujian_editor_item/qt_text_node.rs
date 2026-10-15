@@ -78,6 +78,9 @@ cpp! {{
         // 同槽位可能被新一代 layout 复用，只有 content hash 相同但 epoch 变了
         // 也必须重建，否则会画到旧 layout 的 text node。
         uint64_t applied_epoch;
+        // Issue #904 复核 1: 本段当前实际应用的“整体 y 偏移”。
+        // 矩阵 y 取 para_y + applied_y_offset，偏移变化也要更新矩阵/标记脏。
+        double applied_y_offset;
         // Issue #901 第十三轮问题4+第十四轮问题2: 该段实际相交的 clip signature。
         // 只保存与该段 y 范围相交的 clip（按 visual line y 范围过滤），
         // 而非整页 clip。这样无关 clip 变化不会触发该段重建。
@@ -758,6 +761,10 @@ cpp! {{
         const uint64_t* content_revision_arr,
         const double* paragraph_height_arr,
         int para_count,
+        // Issue #904 复核 1: 整体段落 y 偏移（复用已有 transform 插值）。
+        const uint64_t* offset_id_arr,
+        const double* offset_val_arr,
+        int offset_count,
         const int* vl_cache_idx_arr,
         const uint64_t* vl_epoch_arr,
         const int* vl_qtextline_idx_arr,
@@ -835,6 +842,15 @@ cpp! {{
             item_map.session_id = session_id;
         }
         auto& node_map = item_map.para_map;
+
+        // Issue #904 复核 1: 整体段落 y 偏移查找。换行/回流使下游段落下移时，
+        // 复用已有 QSGTransformNode 从旧 y 插值到新 y，不逐字复制纹理。
+        auto offset_for = [&](uint64_t pid) -> double {
+            for (int k = 0; k < offset_count; k++) {
+                if (offset_id_arr[k] == pid) return offset_val_arr[k];
+            }
+            return 0.0;
+        };
 
         // Issue #901 第十一轮问题3: 增量第一次接管已有旧树。
         // node_map 为空但 staticLayer 已有子节点，说明之前走的是全量 rebuild
@@ -939,12 +955,15 @@ cpp! {{
             if (it != node_map.end()) {
                 // 已有节点
                 // 问题3: para_y 变化只更新 transform_node 矩阵，不重建子节点
-                if (it->second.para_y != para_y) {
+                // Issue #904 复核 1: 整体段落 y 偏移也走同一矩阵插值。
+                double y_offset = offset_for(id);
+                if (it->second.para_y != para_y || it->second.applied_y_offset != y_offset) {
                     QMatrix4x4 para_mat;
-                    para_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                    para_mat.translate(0.0f, static_cast<float>(para_y + y_offset), 0.0f);
                     it->second.transform_node->setMatrix(para_mat);
                     it->second.transform_node->markDirty(QSGNode::DirtyMatrix);
                     it->second.para_y = para_y;
+                    it->second.applied_y_offset = y_offset;
                 }
 
                 // Issue #901 第十四轮问题2: 用 per-paragraph content_revision 判断内容变化。
@@ -968,7 +987,7 @@ cpp! {{
                 QSGTransformNode* old_tn = it->second.transform_node;
                 QSGTransformNode* new_tn = new QSGTransformNode;
                 QMatrix4x4 new_mat;
-                new_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                new_mat.translate(0.0f, static_cast<float>(para_y + y_offset), 0.0f);
                 new_tn->setMatrix(new_mat);
                 bool built = true;
                 if (!is_empty) {
@@ -996,6 +1015,7 @@ cpp! {{
                 delete old_tn;
                 it->second.transform_node = new_tn;
                 it->second.para_y = para_y;
+                it->second.applied_y_offset = y_offset;
                 it->second.applied_content_revision = content_revision;
                 it->second.applied_cache_idx = cacheIdx;
                 it->second.applied_epoch = para_epoch_arr[i];
@@ -1004,9 +1024,11 @@ cpp! {{
                 it->second.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
             } else {
                 // 新节点：创建段落位置层 QSGTransformNode
+                // Issue #904 复核 1: 初始矩阵带本帧整体 y 偏移。
+                double new_y_offset = offset_for(id);
                 QSGTransformNode* transform_node = new QSGTransformNode;
                 QMatrix4x4 para_mat;
-                para_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                para_mat.translate(0.0f, static_cast<float>(para_y + new_y_offset), 0.0f);
                 transform_node->setMatrix(para_mat);
                 bool built = true;
                 if (!is_empty) {
@@ -1045,6 +1067,7 @@ cpp! {{
                 IncrementalParaNodeInfo info;
                 info.transform_node = transform_node;
                 info.para_y = para_y;
+                info.applied_y_offset = new_y_offset;
                 info.applied_content_revision = content_revision;
                 info.applied_cache_idx = cacheIdx;
                 info.applied_epoch = para_epoch_arr[i];
@@ -1672,6 +1695,7 @@ pub fn update_text_nodes_incremental(
     scroll_y: f64,
     color: &str,
     animation_clip_rects: &[AnimationClipRect],
+    paragraph_y_offsets: &[(u64, f64)],
     origin_x: f64,
     generation: u64,
     force_full_update: bool,
@@ -1733,9 +1757,17 @@ pub fn update_text_nodes_incremental(
     let clip_w: Vec<f64> = animation_clip_rects.iter().map(|c| c.w).collect();
     let clip_h: Vec<f64> = animation_clip_rects.iter().map(|c| c.h).collect();
 
+    // Issue #904 复核 1: 整体段落 y 偏移数组（复用已有 transform 插值）。
+    let offset_ids: Vec<u64> = paragraph_y_offsets.iter().map(|(id, _)| *id).collect();
+    let offset_values: Vec<f64> = paragraph_y_offsets
+        .iter()
+        .map(|(_, value)| *value)
+        .collect();
+
     let para_count = paragraphs.len() as i32;
     let vl_count = visual_line_clips.len() as i32;
     let clip_count = animation_clip_rects.len() as i32;
+    let offset_count = paragraph_y_offsets.len() as i32;
 
     let text_ptrs_ptr = text_ptrs.as_ptr();
     let text_lens_ptr = text_lens.as_ptr();
@@ -1758,6 +1790,8 @@ pub fn update_text_nodes_incremental(
     let clip_y_ptr = clip_y.as_ptr();
     let clip_w_ptr = clip_w.as_ptr();
     let clip_h_ptr = clip_h.as_ptr();
+    let offset_id_ptr = offset_ids.as_ptr();
+    let offset_val_ptr = offset_values.as_ptr();
 
     let success = cpp!(unsafe [
         root_raw as "QSGNode*",
@@ -1771,6 +1805,9 @@ pub fn update_text_nodes_incremental(
         content_revisions_ptr as "const uint64_t*",
         paragraph_heights_ptr as "const double*",
         para_count as "int",
+        offset_id_ptr as "const uint64_t*",
+        offset_val_ptr as "const double*",
+        offset_count as "int",
         vl_cache_idxs_ptr as "const int*",
         vl_epochs_ptr as "const uint64_t*",
         vl_qtextline_idxs_ptr as "const int*",
@@ -1805,6 +1842,7 @@ pub fn update_text_nodes_incremental(
             content_revisions_ptr,
             paragraph_heights_ptr,
             para_count,
+            offset_id_ptr, offset_val_ptr, offset_count,
             vl_cache_idxs_ptr,
             vl_epochs_ptr,
             vl_qtextline_idxs_ptr,

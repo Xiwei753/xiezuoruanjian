@@ -167,6 +167,11 @@ pub(crate) struct LocalTextPlan {
     /// 就绪：progress=0 时 Reveal 尚无可见像素，但它的目标字形已被静态孔洞排除，
     /// 若此时漏检纹理，新字会先消失。
     pub required_textures: Vec<LineSnapshotId>,
+    /// 本帧仍活动的整体段落 y 偏移（复用已有 transform，不逐字复制纹理）。
+    ///
+    /// 元素为 `(paragraph_id, 相对目标位置的额外 y 偏移)`；动画结束为空，
+    /// 段落直接留在目标矩阵。
+    pub paragraph_y_offsets: Vec<(u64, f64)>,
 }
 
 impl LocalTextPlan {
