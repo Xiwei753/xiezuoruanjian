@@ -357,38 +357,56 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
 //   0 = success
 //   -1 = any argument is null
 //   -2 = any argument contains invalid UTF-8
-// Arguments: logDir, deviceId, appVersion, buildKey, locale, timezone (all strings).
-// session_id is generated inside Rust; enabled/verbose default to true.
+//   -3 = local settings could not be read/parsed
+// Arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone (all strings).
+// session_id is generated inside Rust; enabled/verbose are read from the Core LocalSettings
+// under appDataRoot (settings.local.json), not hardcoded.
 static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value args[6];
+    size_t argc = 7;
+    napi_value args[7];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    if (argc < 6) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 6 arguments, got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 6 arguments: logDir, deviceId, appVersion, buildKey, locale, timezone");
+    if (argc < 7) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 7 arguments, got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected 7 arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone");
         return nullptr;
     }
 
     char log_dir[2048] = {0};
+    char app_data_root[2048] = {0};
     char device_id[256] = {0};
     char app_version[128] = {0};
     char build_key[256] = {0};
     char locale[64] = {0};
     char timezone[64] = {0};
     size_t len = 0;
+
+    // app_data_root 是设置文件所在的数据根路径：完整检查读取状态与长度，
+    // 读失败或截断时立即报错，绝不把半截路径传给 Rust 去读 settings.local.json。
+    napi_status root_status = napi_get_value_string_utf8(env, args[1], app_data_root, sizeof(app_data_root), &len);
+    if (root_status != napi_ok) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: failed to read appDataRoot (status=%{public}d)", static_cast<int>(root_status));
+        napi_throw_error(env, nullptr, "appDataRoot must be a string");
+        return nullptr;
+    }
+    if (len >= sizeof(app_data_root)) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: appDataRoot truncated (len=%{public}zu)", len);
+        napi_throw_error(env, nullptr, "appDataRoot too long");
+        return nullptr;
+    }
+
     napi_get_value_string_utf8(env, args[0], log_dir, sizeof(log_dir), &len);
-    napi_get_value_string_utf8(env, args[1], device_id, sizeof(device_id), &len);
-    napi_get_value_string_utf8(env, args[2], app_version, sizeof(app_version), &len);
-    napi_get_value_string_utf8(env, args[3], build_key, sizeof(build_key), &len);
-    napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
-    napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
+    napi_get_value_string_utf8(env, args[2], device_id, sizeof(device_id), &len);
+    napi_get_value_string_utf8(env, args[3], app_version, sizeof(app_version), &len);
+    napi_get_value_string_utf8(env, args[4], build_key, sizeof(build_key), &len);
+    napi_get_value_string_utf8(env, args[5], locale, sizeof(locale), &len);
+    napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
 
     // Issue #760 评论 5824787641：RegisterHilogCallback() 已移至 NAPI Init() 开头，
     // 在模块加载时（比 EntryAbility.onCreate 更早）完成注册，此处不再重复调用。
 
-    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
-    int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
+    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s' appDataRoot='%{public}s'", log_dir, app_data_root);
+    int32_t result = writer_core_init_diagnostics(log_dir, app_data_root, device_id, app_version, build_key, locale, timezone);
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: writer_core_init_diagnostics returned %{public}d", result);
 
     if (result != 0) {

@@ -79,7 +79,8 @@ export class HarmonyDiagnosticEvents {
    *
    * 本方法只构造参数并转发给 Rust：脱敏、序号/会话、JSONL 持久化与轮转都由
    * Rust `writer_diagnostics` 负责。可在应用启动极早期（诊断后端尚未初始化）
-   * 调用：本方法永不抛异常，native 不可用时静默丢弃；Rust 在未初始化/关闭时 no-op。
+   * 调用：本方法永不抛异常，native 报错（非零返回码或异常）只在 HiLog 留下可见错误，
+   * 不阻塞主流程；Rust 在未初始化/关闭时 no-op。
    *
    * 调用方必须只记录事件类型、长度、标识、状态码等低频元数据；
    * 严禁记录正文、preedit 内容、token、密钥或 URL 等敏感/高频数据。
@@ -118,10 +119,21 @@ export class HarmonyDiagnosticEvents {
     try {
       const bridge: NativeDiagnosticsBridge = HarmonyDiagnosticEvents.getBridge()
       const payloadJson: string = JSON.stringify(payload)
-      bridge.recordDiagnosticEvent(payloadJson)
+      const status: number = bridge.recordDiagnosticEvent(payloadJson)
+      if (status !== 0) {
+        // Issue #911：非零返回码（-1/-2/-3/-4）此前被丢弃，事件失败无痕。
+        // 这里只记事件名/错误码，不写 payload、正文或敏感字段；HilogCallback 只写内存，
+        // 不调用 HiLog，因此不会形成递归。status 0 只表示调用被接受，不代表已落盘。
+        hilog.error(LOG_DOMAIN, TAG,
+          'structured event rejected: event=%{public}s status=%{public}d',
+          event, status)
+        return
+      }
     } catch (_) {
-      // 诊断上报永远不能影响主流程：native 未加载/未初始化时静默丢弃。
-      // 此处不写 hilog，避免日志失败又触发日志形成回环。
+      // native 未加载/未初始化时抛异常也要留下可见错误，否则 C ABI 失败无从诊断。
+      hilog.error(LOG_DOMAIN, TAG,
+        'structured event bridge exception: event=%{public}s', event)
+      return
     }
 
     // HiLog 仅作为镜像，不是保存通道；失败忽略。默认只镜像 INFO 及以上。
