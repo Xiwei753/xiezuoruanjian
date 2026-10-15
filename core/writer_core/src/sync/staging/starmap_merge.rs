@@ -119,6 +119,11 @@ pub(crate) enum StarmapMergeResult {
     ApplyMerged(Vec<u8>),
     /// 合并后内容与 base 相同且 local/incoming 都未改，无需操作（noop）。
     NoOp,
+    /// 远端删除了整个 graph（incoming 不存在）且 local 未改 → 删除 graph.json。
+    /// 调用方（run.rs）应发出 `CommitAction::Delete` 删除 live 的 graph.json。
+    /// 修复 issue #902 第十一轮复核：此前整图删除会写出空成员列表的 GraphMeta，
+    /// 若 index.json 已删除对应星图 ID，磁盘会保留未登记的空 graph。
+    Delete,
 }
 
 /// 对象级三方合并决策结果。
@@ -157,7 +162,7 @@ pub(crate) enum ObjectMergeDecision {
 /// | Some | Some  | None     | l==b | Delete（远端删除，local 未改 → 接受删除）|
 /// | Some | Some  | None     | l!=b | Conflict(RemoteDeleted)（删除-修改冲突）|
 /// | Some | None  | Some     | i==b | Delete（本地删除，incoming 未改 → 接受删除）|
-/// | Some | None  | Some     | i!=b | Conflict(RemoteDeleted)（删除-修改冲突）|
+/// | Some | None  | Some     | i!=b | Conflict(BothChanged)（本地删除+远端修改，incoming 存在）|
 /// | Some | Some  | Some     | l==i | NoOp |
 /// | Some | Some  | Some     | l==b, i!=b | ApplyIncoming |
 /// | Some | Some  | Some     | l!=b, i==b | KeepLocal |
@@ -194,11 +199,15 @@ pub(crate) fn merge_starmap_object(
         // base 存在、local 不存在、incoming 存在（本地删除）：
         // - incoming == base（incoming 未改）→ 接受本地删除
         // - incoming != base（incoming 修改了）→ 删除-修改冲突
+        //   incoming 实际存在，用 BothChanged 而非 RemoteDeleted：
+        //   save_conflict_snapshots 只给 BothChanged 保存 incoming snapshot，
+        //   take_remote 的 BothChanged 分支会正确写入远端文件。
+        //   修复 issue #902 第十一轮复核。
         (Some(bv), None, Some(iv)) => {
             if iv == bv {
                 ObjectMergeDecision::Delete
             } else {
-                ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted)
+                ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::BothChanged)
             }
         }
         (Some(bv), Some(lv), Some(iv)) => {
@@ -1135,25 +1144,42 @@ fn check_member_object_consistency(
 /// - `KeepLocal`/`NoOp`/`Conflict` → 保留当前 revision
 ///
 /// `decisions` 的 key 是 object_id。
+///
+/// # 最终成员表驱动
+///
+/// 修复 issue #902 第十一轮复核：此前只遍历**现有 `revisions` 的键**提升
+/// ApplyIncoming；如果 GraphMeta 成员列表里有新增对象，却尚无对应的
+/// `node_revisions[id]`，其 ID 根本不进 map。`snapshot.rs` 在增量模式用
+/// `node_revs.get(id).unwrap_or(0) > since_revision`，新增节点会被漏发。
+///
+/// 现在从 `final_member_ids`（最终存在的成员 ID 集合）驱动：
+/// 1. 删除不在最终成员表中的条目
+/// 2. 为最终存在的成员确保有 revision 条目（ApplyIncoming 提升到 new_pr，
+///    其余保留当前 revision 或补记 new_pr）
 fn apply_revision_by_decisions(
     revisions: &mut HashMap<String, u64>,
     decisions: &HashMap<String, &ObjectMergeDecision>,
+    final_member_ids: &HashSet<String>,
     new_pr: u64,
 ) {
-    // 收集需要移除的 ID（Delete 决策）
-    let to_remove: Vec<String> = revisions
-        .keys()
-        .filter(|id| matches!(decisions.get(*id), Some(ObjectMergeDecision::Delete)))
-        .cloned()
-        .collect();
-    for id in to_remove {
-        revisions.remove(&id);
-    }
+    // 1. 删除不在最终成员表中的条目
+    revisions.retain(|id, _| final_member_ids.contains(id));
 
-    // ApplyIncoming → 提升到 new_pr
-    for (id, rev) in revisions.iter_mut() {
-        if let Some(ObjectMergeDecision::ApplyIncoming(_)) = decisions.get(id) {
-            *rev = (*rev).max(new_pr);
+    // 2. 为最终存在的成员确保有 revision 条目
+    for id in final_member_ids {
+        match decisions.get(id) {
+            Some(ObjectMergeDecision::ApplyIncoming(_)) => {
+                // 新增或修改的对象，revision 提升到 new_pr
+                revisions.insert(id.clone(), new_pr);
+            }
+            Some(ObjectMergeDecision::Delete) => {
+                // 已在 retain 中移除，不补记
+            }
+            _ => {
+                // KeepLocal/NoOp/Conflict 或无决策：保留当前 revision，
+                // 如果没有则补记 new_pr（确保最终成员都有 revision 条目）
+                revisions.entry(id.clone()).or_insert(new_pr);
+            }
         }
     }
 }
@@ -1163,6 +1189,71 @@ fn apply_revision_by_decisions(
 pub(crate) struct StarmapGraphMergeOutput {
     pub graph_meta_result: StarmapMergeResult,
     pub object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)>,
+}
+
+/// 检查整图删除场景（issue #902 第十一轮复核）。
+///
+/// 远端删除了整个 graph（incoming 不存在）且 base 有 graph 时：
+/// - local 未改（graph_local == graph_base）→ 接受远端删除，输出 `Delete`，
+///   所有对象也输出 `Delete`
+/// - local 修改了（graph_local != graph_base）→ 删除-修改冲突，
+///   graph 输出 `NoOp`，有实际内容的对象标记为 `Conflict(RemoteDeleted)`
+///
+/// 返回 `Some(output)` 表示命中整图删除场景，调用方应直接返回；
+/// 返回 `None` 表示不命中，继续正常合并流程。
+#[allow(clippy::type_complexity)]
+fn check_entire_graph_delete(
+    graph_base: Option<&[u8]>,
+    graph_local: Option<&[u8]>,
+    graph_incoming: Option<&[u8]>,
+    objects: &[(
+        std::path::PathBuf,
+        String,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    )],
+) -> Option<StarmapGraphMergeOutput> {
+    // 只在远端删除了整个 graph（incoming 不存在）且 base 有 graph 时命中
+    if !graph_incoming.is_none() || graph_base.is_none() {
+        return None;
+    }
+
+    if graph_local == graph_base {
+        // base 有 graph、local 未改、incoming 删除 → 整图删除
+        // 所有对象也输出 Delete（整图已删，对象应一并删除）
+        let decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = objects
+            .iter()
+            .map(|(rel, _, _, _, _, _)| (rel.clone(), ObjectMergeDecision::Delete))
+            .collect();
+        Some(StarmapGraphMergeOutput {
+            graph_meta_result: StarmapMergeResult::Delete,
+            object_decisions: decisions,
+        })
+    } else {
+        // base 有 graph、local 修改了、incoming 删除 → 删除-修改冲突
+        // graph 不写入（NoOp），有实际内容的对象标记为 Conflict(RemoteDeleted)
+        let decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = objects
+            .iter()
+            .map(|(rel, _, _, base, local, _)| {
+                if base.is_some() || local.is_some() {
+                    (
+                        rel.clone(),
+                        ObjectMergeDecision::Conflict(
+                            crate::sync::types::SyncConflictKind::RemoteDeleted,
+                        ),
+                    )
+                } else {
+                    (rel.clone(), ObjectMergeDecision::NoOp)
+                }
+            })
+            .collect();
+        Some(StarmapGraphMergeOutput {
+            graph_meta_result: StarmapMergeResult::NoOp,
+            object_decisions: decisions,
+        })
+    }
 }
 
 /// 统一处理 graph.json 和对象文件的合并，做一致性协调。
@@ -1258,6 +1349,16 @@ pub(crate) fn merge_starmap_graph_with_objects(
             graph_meta_result: StarmapMergeResult::NoOp,
             object_decisions,
         });
+    }
+
+    // --- 整图删除判断（issue #902 第十一轮复核）---
+    // 远端删除了整个 graph（incoming 不存在）且 base 有 graph：
+    // - local 未改（graph_local == graph_base）→ 接受远端删除，输出 Delete
+    // - local 修改了（graph_local != graph_base）→ 删除-修改冲突
+    if let Some(output) =
+        check_entire_graph_delete(graph_base, graph_local, graph_incoming, objects)
+    {
+        return Ok(output);
     }
 
     let (merged_starmap_id, merged_schema_version) = resolve_graph_meta_header(
@@ -1389,11 +1490,36 @@ pub(crate) fn merge_starmap_graph_with_objects(
             .iter()
             .map(|(k, v)| (k.clone(), v))
             .collect();
-        apply_revision_by_decisions(&mut revisions.node, &node_refs, package_revision);
-        apply_revision_by_decisions(&mut revisions.edge, &edge_refs, package_revision);
-        apply_revision_by_decisions(&mut revisions.embed, &embed_refs, package_revision);
-        apply_revision_by_decisions(&mut revisions.link, &link_refs, package_revision);
-        apply_revision_by_decisions(&mut revisions.hyperlink, &hyperlink_refs, package_revision);
+        apply_revision_by_decisions(
+            &mut revisions.node,
+            &node_refs,
+            &member_ids.sets.node_ids,
+            package_revision,
+        );
+        apply_revision_by_decisions(
+            &mut revisions.edge,
+            &edge_refs,
+            &member_ids.sets.edge_ids,
+            package_revision,
+        );
+        apply_revision_by_decisions(
+            &mut revisions.embed,
+            &embed_refs,
+            &member_ids.sets.embed_ids,
+            package_revision,
+        );
+        apply_revision_by_decisions(
+            &mut revisions.link,
+            &link_refs,
+            &member_ids.sets.link_ids,
+            package_revision,
+        );
+        apply_revision_by_decisions(
+            &mut revisions.hyperlink,
+            &hyperlink_refs,
+            &member_ids.sets.hyperlink_ids,
+            package_revision,
+        );
     }
 
     // --- 10. 构造最终 GraphMeta ---
@@ -1523,7 +1649,7 @@ mod tests {
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
-            StarmapMergeResult::NoOp => base,
+            StarmapMergeResult::NoOp | StarmapMergeResult::Delete => base,
         };
         let record: StarMapIndexRecord = serde_json::from_slice(&bytes).expect("deserialize index");
         // incoming.updated_at (200) > local.updated_at (100) → 取 incoming 的值 "C"
@@ -1662,7 +1788,7 @@ mod tests {
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
-            StarmapMergeResult::NoOp => base,
+            StarmapMergeResult::NoOp | StarmapMergeResult::Delete => base,
         };
         let record: StarMapIndexRecord = serde_json::from_slice(&bytes).expect("deserialize index");
         assert_eq!(record.starmap_ids, vec!["A".to_string()]);
@@ -1685,7 +1811,7 @@ mod tests {
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
-            StarmapMergeResult::NoOp => base,
+            StarmapMergeResult::NoOp | StarmapMergeResult::Delete => base,
         };
         let record: StarMapIndexRecord = serde_json::from_slice(&bytes).expect("deserialize index");
         assert_eq!(record.starmap_ids, vec!["A".to_string()]);
@@ -1767,11 +1893,13 @@ mod tests {
 
     #[test]
     fn test_merge_object_local_delete_remote_modify_conflict() {
-        // base 存在、local 不存在、incoming != base（incoming 修改了）→ 删除-修改冲突
+        // base 存在、local 不存在、incoming != base（incoming 修改了）
+        // → 删除-修改冲突。incoming 实际存在，用 BothChanged 而非 RemoteDeleted
+        // （issue #902 第十一轮复核）
         let d = merge_starmap_object(Some(b"base"), None, Some(b"modified"));
         match d {
-            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted) => {}
-            other => panic!("expected Conflict(RemoteDeleted), got {:?}", other),
+            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::BothChanged) => {}
+            other => panic!("expected Conflict(BothChanged), got {:?}", other),
         }
     }
 
@@ -1896,6 +2024,307 @@ mod tests {
         assert!(
             result.contains(&"b".to_string()),
             "both keep should preserve b"
+        );
+    }
+
+    // =========================================================================
+    // issue #902 第十一轮复核回归测试
+    // =========================================================================
+
+    /// 构造 GraphMeta bytes 用于 merge_starmap_graph_with_objects 测试。
+    fn make_graph_meta_bytes(
+        starmap_id: &str,
+        node_ids: &[&str],
+        node_revisions: &[(&str, u64)],
+        package_revision: u64,
+        updated_at: u64,
+    ) -> Vec<u8> {
+        use crate::starmap::store::meta::{DeletedSinceLastSync, GraphMeta};
+        let mut node_revs: HashMap<String, u64> = HashMap::new();
+        for (id, rev) in node_revisions {
+            node_revs.insert(id.to_string(), *rev);
+        }
+        let meta = GraphMeta {
+            schema_version: crate::starmap::store::meta::CURRENT_SCHEMA_VERSION.to_string(),
+            starmap_id: starmap_id.to_string(),
+            node_ids: node_ids.iter().map(|s| s.to_string()).collect(),
+            edge_ids: vec![],
+            embed_instance_ids: vec![],
+            link_ids: vec![],
+            hyperlink_ids: vec![],
+            edge_relation_index: vec![],
+            embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
+            node_revisions: node_revs,
+            edge_revisions: HashMap::new(),
+            embed_revisions: HashMap::new(),
+            link_revisions: HashMap::new(),
+            hyperlink_revisions: HashMap::new(),
+            package_revision,
+            updated_at,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
+        };
+        serde_json::to_vec_pretty(&meta).expect("serialize graph meta")
+    }
+
+    // --- 问题1 回归：对象 Delete 决策（live 仍有文件时 run.rs 应发 Delete 动作）---
+
+    #[test]
+    fn test_graph_merge_object_delete_when_live_present() {
+        // base 有对象 n1，local 仍有 n1（未改），incoming 删除 n1
+        // → object_decisions 中 n1 的决策应为 Delete
+        // run.rs 根据 obj_local.is_some() 发出 CommitAction::Delete
+        let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_local = graph_base.clone();
+        let graph_incoming = make_graph_meta_bytes("sm1", &[], &[], 2, 200);
+
+        let node_base = br#"{"id":"n1","kind":"text"}"#.to_vec();
+        let node_local = node_base.clone();
+
+        let objects = vec![(
+            std::path::PathBuf::from("starmaps/sm1/nodes/00/n1.json"),
+            "node".to_string(),
+            "n1".to_string(),
+            Some(node_base),
+            Some(node_local),
+            None,
+        )];
+
+        let output = merge_starmap_graph_with_objects(
+            "sm1",
+            Some(&graph_base),
+            Some(&graph_local),
+            Some(&graph_incoming),
+            &objects,
+        )
+        .expect("merge should succeed");
+
+        let n1_decision = output
+            .object_decisions
+            .iter()
+            .find(|(rel, _)| rel.to_string_lossy().ends_with("n1.json"))
+            .map(|(_, d)| d)
+            .expect("n1 decision should exist");
+        assert!(
+            matches!(n1_decision, ObjectMergeDecision::Delete),
+            "expected Delete, got {:?}",
+            n1_decision
+        );
+    }
+
+    // --- 问题2 回归：本地删除+远端修改 → BothChanged（非 RemoteDeleted）---
+
+    #[test]
+    fn test_issue902_local_delete_remote_modify_is_both_changed() {
+        // base 存在、local 不存在（本地删除）、incoming != base（远端修改）
+        // → Conflict(BothChanged)，不是 Conflict(RemoteDeleted)
+        let d = merge_starmap_object(Some(b"base"), None, Some(b"modified"));
+        match d {
+            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::BothChanged) => {}
+            other => panic!("expected Conflict(BothChanged), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_issue902_remote_delete_local_modify_is_remote_deleted() {
+        // base 存在、local != base（本地修改）、incoming 不存在（远端删除）
+        // → Conflict(RemoteDeleted)（远端确实不存在文件）
+        let d = merge_starmap_object(Some(b"base"), Some(b"modified"), None);
+        match d {
+            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted) => {}
+            other => panic!("expected Conflict(RemoteDeleted), got {:?}", other),
+        }
+    }
+
+    // --- 问题3 回归：整图删除 → StarmapMergeResult::Delete ---
+
+    #[test]
+    fn test_issue902_entire_graph_delete_local_unchanged() {
+        // base 有 graph，local 未改（graph_local == graph_base），
+        // incoming 删除了整个 graph（graph_incoming = None）
+        // → StarmapMergeResult::Delete，所有对象也是 Delete
+        let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_local = graph_base.clone();
+
+        let node_base = br#"{"id":"n1","kind":"text"}"#.to_vec();
+        let node_local = node_base.clone();
+
+        let objects = vec![(
+            std::path::PathBuf::from("starmaps/sm1/nodes/00/n1.json"),
+            "node".to_string(),
+            "n1".to_string(),
+            Some(node_base),
+            Some(node_local),
+            None,
+        )];
+
+        let output = merge_starmap_graph_with_objects(
+            "sm1",
+            Some(&graph_base),
+            Some(&graph_local),
+            None,
+            &objects,
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            matches!(output.graph_meta_result, StarmapMergeResult::Delete),
+            "expected Delete, got {:?}",
+            output.graph_meta_result
+        );
+        for (_, decision) in &output.object_decisions {
+            assert!(
+                matches!(decision, ObjectMergeDecision::Delete),
+                "expected object Delete, got {:?}",
+                decision
+            );
+        }
+    }
+
+    #[test]
+    fn test_issue902_entire_graph_delete_local_modified_is_conflict() {
+        // base 有 graph，local 修改了（graph_local != graph_base），
+        // incoming 删除了整个 graph（graph_incoming = None）
+        // → 删除-修改冲突：StarmapMergeResult::NoOp，对象标记 Conflict(RemoteDeleted)
+        let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_local =
+            make_graph_meta_bytes("sm1", &["n1", "n2"], &[("n1", 1), ("n2", 2)], 2, 200);
+
+        let node_base = br#"{"id":"n1","kind":"text"}"#.to_vec();
+        let node_local = node_base.clone();
+
+        let objects = vec![(
+            std::path::PathBuf::from("starmaps/sm1/nodes/00/n1.json"),
+            "node".to_string(),
+            "n1".to_string(),
+            Some(node_base),
+            Some(node_local),
+            None,
+        )];
+
+        let output = merge_starmap_graph_with_objects(
+            "sm1",
+            Some(&graph_base),
+            Some(&graph_local),
+            None,
+            &objects,
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            matches!(output.graph_meta_result, StarmapMergeResult::NoOp),
+            "expected NoOp for delete-modify conflict, got {:?}",
+            output.graph_meta_result
+        );
+        for (_, decision) in &output.object_decisions {
+            assert!(
+                matches!(
+                    decision,
+                    ObjectMergeDecision::Conflict(
+                        crate::sync::types::SyncConflictKind::RemoteDeleted
+                    )
+                ),
+                "expected Conflict(RemoteDeleted), got {:?}",
+                decision
+            );
+        }
+    }
+
+    // --- 问题4 回归：新对象缺 revision 时 apply_revision_by_decisions 补记 ---
+
+    #[test]
+    fn test_issue902_apply_revision_new_member_gets_revision() {
+        // node_ids=[n2] 但 revision map 缺 n2
+        // ApplyIncoming 后 revision map 中 n2 的 revision 等于 new_pr
+        let mut revisions: HashMap<String, u64> = HashMap::new();
+        // n2 不在 revisions 中（新增对象缺 revision）
+
+        let incoming_content = br#"{"id":"n2","kind":"text"}"#.to_vec();
+        let decision = ObjectMergeDecision::ApplyIncoming(incoming_content);
+        let decisions: HashMap<String, &ObjectMergeDecision> =
+            HashMap::from([("n2".to_string(), &decision)]);
+
+        let mut final_member_ids: HashSet<String> = HashSet::new();
+        final_member_ids.insert("n2".to_string());
+
+        let new_pr = 10u64;
+        apply_revision_by_decisions(&mut revisions, &decisions, &final_member_ids, new_pr);
+
+        assert_eq!(
+            revisions.get("n2"),
+            Some(&new_pr),
+            "new member n2 should have revision == new_pr"
+        );
+    }
+
+    #[test]
+    fn test_issue902_apply_revision_removes_deleted_members() {
+        // revisions 有 n1 和 n2，n1 被删除（不在 final_member_ids 中）
+        // → n1 的 revision 被移除，n2 保留
+        let mut revisions: HashMap<String, u64> =
+            HashMap::from([("n1".to_string(), 5), ("n2".to_string(), 8)]);
+
+        let decisions: HashMap<String, &ObjectMergeDecision> = HashMap::new();
+
+        let mut final_member_ids: HashSet<String> = HashSet::new();
+        final_member_ids.insert("n2".to_string()); // n1 不在最终成员表中
+
+        apply_revision_by_decisions(&mut revisions, &decisions, &final_member_ids, 10);
+
+        assert!(
+            !revisions.contains_key("n1"),
+            "deleted member n1 should be removed from revisions"
+        );
+        assert!(
+            revisions.contains_key("n2"),
+            "retained member n2 should still have revision"
+        );
+    }
+
+    #[test]
+    fn test_issue902_apply_revision_keep_local_preserves_revision() {
+        // KeepLocal 决策：保留当前 revision，如果没有则补记 new_pr
+        let mut revisions: HashMap<String, u64> = HashMap::from([("n1".to_string(), 7)]);
+
+        let decision = ObjectMergeDecision::KeepLocal;
+        let decisions: HashMap<String, &ObjectMergeDecision> =
+            HashMap::from([("n1".to_string(), &decision)]);
+
+        let mut final_member_ids: HashSet<String> = HashSet::new();
+        final_member_ids.insert("n1".to_string());
+
+        let new_pr = 10u64;
+        apply_revision_by_decisions(&mut revisions, &decisions, &final_member_ids, new_pr);
+
+        // KeepLocal 保留当前 revision（7），不提升到 new_pr
+        assert_eq!(
+            revisions.get("n1"),
+            Some(&7),
+            "KeepLocal should preserve existing revision"
+        );
+    }
+
+    #[test]
+    fn test_issue902_apply_revision_keep_local_missing_gets_new_pr() {
+        // KeepLocal 决策但 revision map 中没有该 ID → 补记 new_pr
+        let mut revisions: HashMap<String, u64> = HashMap::new();
+
+        let decision = ObjectMergeDecision::KeepLocal;
+        let decisions: HashMap<String, &ObjectMergeDecision> =
+            HashMap::from([("n1".to_string(), &decision)]);
+
+        let mut final_member_ids: HashSet<String> = HashSet::new();
+        final_member_ids.insert("n1".to_string());
+
+        let new_pr = 10u64;
+        apply_revision_by_decisions(&mut revisions, &decisions, &final_member_ids, new_pr);
+
+        assert_eq!(
+            revisions.get("n1"),
+            Some(&new_pr),
+            "KeepLocal with missing revision should get new_pr"
         );
     }
 }

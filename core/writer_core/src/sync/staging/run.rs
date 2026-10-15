@@ -383,6 +383,11 @@ impl StagingRun {
                             content,
                         });
                     }
+                    StarmapMergeResult::Delete => {
+                        // index.json 不会走整图删除路径（Delete 变体仅用于
+                        // graph.json 的整图删除）。此处兜底处理，避免漏分支。
+                        plan.noop.push(rel);
+                    }
                 }
             } else if is_starmap_graph_meta_path(&rel_str) {
                 // 星图 graph.json：由循环后的统一合并处理，此处跳过
@@ -532,6 +537,13 @@ impl StagingRun {
                         content,
                     });
                 }
+                StarmapMergeResult::Delete => {
+                    // 远端删除了整个 graph 且 local 未改 → 删除 live 的 graph.json
+                    // 修复 issue #902 第十一轮复核
+                    plan.content_actions.push(CommitAction::Delete {
+                        rel_path: graph_rel,
+                    });
+                }
             }
 
             // 对象决策装入 CommitPlan
@@ -554,8 +566,19 @@ impl StagingRun {
                         });
                     }
                     ObjectMergeDecision::Delete => {
-                        // 双侧都删除或一侧删除一侧未改 → 无需操作
-                        plan.noop.push(obj_rel.clone());
+                        // 按 live 文件是否存在决定动作：
+                        // - live 仍有该对象文件 → 必须发出 Delete 动作真正删除磁盘文件
+                        // - live 已不存在 → 无需操作（noop）
+                        // 修复 issue #902 第十一轮复核：此前一律 noop，导致
+                        // base 有 Y、live 仍有未改的 Y、incoming 删除 Y 时，
+                        // graph 已删成员但磁盘残留 Y 文件。
+                        if obj_local.is_some() {
+                            plan.content_actions.push(CommitAction::Delete {
+                                rel_path: obj_rel.clone(),
+                            });
+                        } else {
+                            plan.noop.push(obj_rel.clone());
+                        }
                     }
                     ObjectMergeDecision::Conflict(kind) => {
                         plan.conflict.push(StagingConflict {
@@ -748,5 +771,167 @@ fn collect_starmap_json(live_root: &Path, path: &Path, out: &mut Vec<PathBuf>) {
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     if super::starmap_merge::is_starmap_content_path(&rel_str) {
         out.push(rel.to_path_buf());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::starmap::store::meta::{DeletedSinceLastSync, GraphMeta};
+    use std::collections::HashMap;
+
+    /// 构造 GraphMeta JSON bytes。
+    fn make_graph_meta_bytes(
+        starmap_id: &str,
+        node_ids: &[&str],
+        node_revisions: &[(&str, u64)],
+        package_revision: u64,
+        updated_at: u64,
+    ) -> Vec<u8> {
+        let mut node_revs: HashMap<String, u64> = HashMap::new();
+        for (id, rev) in node_revisions {
+            node_revs.insert(id.to_string(), *rev);
+        }
+        let meta = GraphMeta {
+            schema_version: crate::starmap::store::meta::CURRENT_SCHEMA_VERSION.to_string(),
+            starmap_id: starmap_id.to_string(),
+            node_ids: node_ids.iter().map(|s| s.to_string()).collect(),
+            edge_ids: vec![],
+            embed_instance_ids: vec![],
+            link_ids: vec![],
+            hyperlink_ids: vec![],
+            edge_relation_index: vec![],
+            embed_host_index: vec![],
+            link_relation_index: vec![],
+            hyperlink_relation_index: vec![],
+            node_kind_counts: HashMap::new(),
+            node_revisions: node_revs,
+            edge_revisions: HashMap::new(),
+            embed_revisions: HashMap::new(),
+            link_revisions: HashMap::new(),
+            hyperlink_revisions: HashMap::new(),
+            package_revision,
+            updated_at,
+            deleted_since_last_sync: DeletedSinceLastSync::default(),
+        };
+        serde_json::to_vec_pretty(&meta).expect("serialize graph meta")
+    }
+
+    /// 写入文件，自动创建父目录。
+    fn write_file(root: &Path, rel: &str, content: &[u8]) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create dirs");
+        }
+        fs::write(&path, content).expect("write file");
+    }
+
+    // --- 问题1 集成回归：live 仍有对象文件时 content_actions 含 Delete ---
+
+    #[test]
+    fn test_issue902_object_delete_emits_commit_action_delete() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let live_root = tmp.path().join("live");
+        fs::create_dir_all(&live_root).expect("create live root");
+
+        let run_parent = tmp.path().join("runs");
+        fs::create_dir_all(&run_parent).expect("create run parent");
+
+        let run = StagingRun::create(&run_parent, live_root.clone()).expect("create run");
+        let base_root = run.base_root();
+        let staging_root = run.staging_root();
+
+        // graph.json：base 和 local 都含 n1，incoming 删除 n1
+        let graph_with_n1 = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_without_n1 = make_graph_meta_bytes("sm1", &[], &[], 2, 200);
+
+        let node_content = br#"{"id":"n1","kind":"text"}"#;
+
+        // live（local）有 graph.json 和 n1.json
+        write_file(&live_root, "starmaps/sm1/graph.json", &graph_with_n1);
+        write_file(&live_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+
+        // base 有相同的文件
+        write_file(&base_root, "starmaps/sm1/graph.json", &graph_with_n1);
+        write_file(&base_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+
+        // staging（incoming）有 graph.json（不含 n1），没有 n1.json
+        write_file(&staging_root, "starmaps/sm1/graph.json", &graph_without_n1);
+
+        let plan = run
+            .compute_commit_plan(&live_root)
+            .expect("compute commit plan");
+
+        // 检查 content_actions 含 Delete { rel_path: "starmaps/sm1/nodes/00/n1.json" }
+        let has_delete = plan.content_actions.iter().any(|action| match action {
+            CommitAction::Delete { rel_path } => {
+                rel_path.to_string_lossy().replace('\\', "/") == "starmaps/sm1/nodes/00/n1.json"
+            }
+            _ => false,
+        });
+        assert!(
+            has_delete,
+            "content_actions should contain Delete for n1.json, got: {:?}",
+            plan.content_actions
+        );
+    }
+
+    // --- 问题3 集成回归：整图删除时 content_actions 含 graph.json Delete ---
+
+    #[test]
+    fn test_issue902_entire_graph_delete_emits_commit_action_delete() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let live_root = tmp.path().join("live");
+        fs::create_dir_all(&live_root).expect("create live root");
+
+        let run_parent = tmp.path().join("runs");
+        fs::create_dir_all(&run_parent).expect("create run parent");
+
+        let run = StagingRun::create(&run_parent, live_root.clone()).expect("create run");
+        let base_root = run.base_root();
+        let _staging_root = run.staging_root();
+
+        let graph_with_n1 = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let node_content = br#"{"id":"n1","kind":"text"}"#;
+
+        // live（local）有 graph.json 和 n1.json（未改）
+        write_file(&live_root, "starmaps/sm1/graph.json", &graph_with_n1);
+        write_file(&live_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+
+        // base 有相同的文件
+        write_file(&base_root, "starmaps/sm1/graph.json", &graph_with_n1);
+        write_file(&base_root, "starmaps/sm1/nodes/00/n1.json", node_content);
+
+        // staging（incoming）没有 graph.json 和 n1.json（整图删除）
+
+        let plan = run
+            .compute_commit_plan(&live_root)
+            .expect("compute commit plan");
+
+        // 检查 content_actions 含 Delete { rel_path: "starmaps/sm1/graph.json" }
+        let has_graph_delete = plan.content_actions.iter().any(|action| match action {
+            CommitAction::Delete { rel_path } => {
+                rel_path.to_string_lossy().replace('\\', "/") == "starmaps/sm1/graph.json"
+            }
+            _ => false,
+        });
+        assert!(
+            has_graph_delete,
+            "content_actions should contain Delete for graph.json, got: {:?}",
+            plan.content_actions
+        );
+
+        // 检查 content_actions 含 Delete { rel_path: "starmaps/sm1/nodes/00/n1.json" }
+        let has_node_delete = plan.content_actions.iter().any(|action| match action {
+            CommitAction::Delete { rel_path } => {
+                rel_path.to_string_lossy().replace('\\', "/") == "starmaps/sm1/nodes/00/n1.json"
+            }
+            _ => false,
+        });
+        assert!(
+            has_node_delete,
+            "content_actions should contain Delete for n1.json, got: {:?}",
+            plan.content_actions
+        );
     }
 }
