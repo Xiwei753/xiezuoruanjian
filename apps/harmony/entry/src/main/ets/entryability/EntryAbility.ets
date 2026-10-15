@@ -13,6 +13,7 @@ import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
 import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeController'
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../platform/diagnostics/HarmonyDiagnosticEvents'
 import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
@@ -29,6 +30,8 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
+    // Issue #906：把应用生命周期接入结构化诊断，事件名保持稳定可检索。
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.created', 'EntryAbility', [])
     getAppContext().setAbilityContext(this.context)
 
     // Issue #767 评论 5831321551：把 UIAbilityContext 注入 HarmonyColorModeController，
@@ -99,6 +102,9 @@ export default class EntryAbility extends UIAbility {
       )
       if (result !== 0) {
         hilog.error(0x0000, 'EntryAbility', 'initDiagnostics failed with code %{public}d', result)
+        // Issue #906：Rust 日志后端初始化失败时，facade 会容忍未初始化状态（不抛异常、不落盘）。
+        const resultField: DiagnosticField = { key: 'result', value: String(result) }
+        HarmonyDiagnosticEvents.record('Error', 'App', 'ability.diagnostics_init_failed', 'EntryAbility', [resultField])
       }
     } catch (e) {
       hilog.error(0x0000, 'EntryAbility', 'initDiagnostics exception: %{public}s', String(e))
@@ -133,6 +139,7 @@ export default class EntryAbility extends UIAbility {
   // 避免同一进程里 UIAbility 重建后重复订阅 observer / 重复开 timer / 重复注册 HiAppEvent watcher。
   onDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onDestroy')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.destroyed', 'EntryAbility', [])
     HarmonyDiagnosticsCheckpoint.getInstance().destroy()
     HarmonyCrashEventWatcher.getInstance().destroy()
     this.lifecycle.notifyDestroy()
@@ -140,6 +147,8 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageCreate')
+    // Issue #906：窗口舞台创建事件，放在异步 loadContent 之前，保证首帧前就有记录。
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.window_stage_created', 'EntryAbility', [])
 
     // Issue #880：在 loadContent 之前应用平板专用横屏窗口政策。
     // applyTabletWindowPolicy 是异步的，必须 await 完成后再 loadContent，
@@ -200,11 +209,13 @@ export default class EntryAbility extends UIAbility {
 
   onForeground() {
     hilog.info(0x0000, 'EntryAbility', 'onForeground')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.foreground', 'EntryAbility', [])
     this.lifecycle.notifyForeground()
   }
 
   onBackground() {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.background', 'EntryAbility', [])
     this.lifecycle.notifyBackground()
   }
 

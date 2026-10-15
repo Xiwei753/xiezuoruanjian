@@ -9,6 +9,7 @@
 // 只有 activeTab 的 role 变化才发布给观察者。
 
 import { ScreenRole } from '../../corebridge/dto/PlatformDtos'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 type ScreenRoleObserver = (role: ScreenRole) => void
 
@@ -32,16 +33,37 @@ export class NavigationChromeStore {
 
   // Issue #768 评论5835958606：切 tab 时调用，设置 activeTab 并发布该 tab 的 role。
   // 替代旧的 syncTabRole 方法。
+  // Issue #906：该入口目前只由 PrimaryTabShell.syncActiveTab（用户切 tab）调用，
+  // 按用户操作 origin='User' 记录；PrimaryTabShell 未区分用户手势与程序改 currentTab，
+  // 若后续出现明确的启动/初始化调用方，再为该方法增加 origin 参数并从调用方传 'App'。
   setActiveTab(tabIndex: number): void {
+    const previousTab = this.activeTab
     this.activeTab = tabIndex
+    if (tabIndex !== previousTab) {
+      const fields: DiagnosticField[] = [
+        { key: 'fromTab', value: String(previousTab) },
+        { key: 'toTab', value: String(tabIndex) }
+      ]
+      HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_changed', 'NavigationChromeStore', fields)
+    }
     const role = this.tabRoles.get(tabIndex) ?? ScreenRole.ProjectList
     this.publish(role)
   }
 
   // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
   // Issue #768 评论5835958606：tabIndex 必选；后台 tab 只更新缓存，不发布全局 role。
+  // Issue #906：只在缓存 role 真正变化时记录 nav.destination_shown，publish/subscribe 不重复记。
   reportScreenRole(role: ScreenRole, tabIndex: number): void {
+    const previousRole: ScreenRole | undefined = this.tabRoles.get(tabIndex)
     this.tabRoles.set(tabIndex, role)
+    if (previousRole !== role) {
+      const fields: DiagnosticField[] = [
+        { key: 'screenRole', value: String(role) },
+        { key: 'tabIndex', value: String(tabIndex) },
+        { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
+      ]
+      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
+    }
     if (tabIndex === this.activeTab) {
       this.publish(role)
     }
