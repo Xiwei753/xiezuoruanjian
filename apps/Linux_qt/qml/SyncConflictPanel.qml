@@ -71,6 +71,19 @@ Rectangle {
     readonly property real _narrowThreshold: 500
     readonly property bool _isNarrow: root.width < _narrowThreshold
 
+    // Issue #902 第二十三轮：窄且矮的窗口里三行纵排 Footer（~140px）会吞掉整个
+    // 预览区。按可用高度判断是否切换到单按钮 + Menu 的紧凑 Footer，而不是只看宽度。
+    readonly property real _threeRowFooterHeight: 36 * 3 + root._sp8 * 4 // 3 按钮 + 2 间距 + 2 边距 ≈ 140
+    readonly property real _oneRowFooterHeight: 44                        // 单按钮 + 上下边距
+    readonly property real _headerHeight: 48
+    readonly property real _dividerHeight: 1
+    // 三行 Footer 模式下 Content 至少需要的高度：窄模式页签(36)+预览(60)；宽模式标签+预览(80)
+    readonly property real _minContentHeightForThreeRow: root._isNarrow ? 96 : 80
+    // 三行 Footer 模式所需的最小面板高度 = Header + 分隔线 + Content + 分隔线 + 三行Footer
+    readonly property real _threeRowModeMinHeight: root._headerHeight + root._dividerHeight + root._minContentHeightForThreeRow + root._dividerHeight + root._threeRowFooterHeight
+    // 矮窗口：可用高度不足以容纳三行 Footer + 可读预览。
+    readonly property bool _isShort: root.height < root._threeRowModeMinHeight
+
     // ── 内部状态 ──
     // load_sync_conflict_preview 返回的预览对象（{ path, kind, createdAt, localContent, remoteContent, remoteDeleted }）。
     property var preview: null
@@ -531,15 +544,20 @@ Rectangle {
         // + 共享 delegate 复用一份动作处理逻辑（resolveAction 只在一处调用），宽布局
         // RowLayout 横排，窄布局 ColumnLayout 纵排，Footer 高度随布局变化。预览区域
         // 用余下高度（Layout.fillHeight），里面两个 ScrollView 各自滚动。
+        // Issue #902 第二十三轮：窄且矮的窗口里三行纵排 Footer 会吞掉整个预览区。
+        // 新增 _isShort 条件：可用高度不足时 Footer 只保留一个"操作"按钮，点击弹出
+        // Menu，菜单复用同一份 _actionModel，统一 onTriggered 调 resolveAction，不复制
+        // 三套业务。三种模式同属一个响应式布局，无新弹窗或状态机。
         Rectangle {
             id: footerRect
             Layout.fillWidth: true
-            Layout.preferredHeight: root._isNarrow
-                ? (36 * 3 + root._sp8 * 4)  // 3 buttons + 2 spacing + 2 margin
-                : 56
+            Layout.preferredHeight: root._isShort
+                ? root._oneRowFooterHeight
+                : (root._isNarrow ? root._threeRowFooterHeight : 56)
             color: "transparent"
 
             // 三个动作模型：primary 按钮用实色背景，其余用边框背景。
+            // 矮布局的 Menu 也复用这一份，不另写三套业务。
             readonly property var _actionModel: [
                 { text: qsTr("保留本地"), action: "keep_local", primary: false },
                 { text: qsTr("采用远端"), action: "take_remote", primary: false },
@@ -582,13 +600,58 @@ Rectangle {
                 }
             }
 
+            // 矮布局：单个"操作"按钮 + Menu（复用同一份 _actionModel）。
+            Item {
+                anchors.fill: parent
+                visible: root._isShort
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: root._sp4
+                    radius: root._radiusSm
+                    color: opBtnHover.containsMouse ? root._surfaceVariant : root._surface
+                    border.color: root._border
+                    border.width: 1
+                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
+
+                    AppText {
+                        anchors.centerIn: parent
+                        text: qsTr("操作")
+                        dt: root.dt
+                        color: root._textPrimary
+                        font.pointSize: root._fontSm
+                        font.weight: Font.DemiBold
+                    }
+
+                    MouseArea {
+                        id: opBtnHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: root.conflicts.length > 0
+                        onClicked: actionMenu.popup()
+                    }
+                }
+
+                Menu {
+                    id: actionMenu
+                    Repeater {
+                        model: footerRect._actionModel
+                        delegate: MenuItem {
+                            text: modelData.text
+                            onTriggered: root.resolveAction(modelData.action)
+                        }
+                    }
+                }
+            }
+
             // 宽布局：横排三个动作。
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: root._sp8
                 anchors.rightMargin: root._sp8
                 spacing: root._sp8
-                visible: !root._isNarrow
+                visible: !root._isNarrow && !root._isShort
 
                 Repeater {
                     model: footerRect._actionModel
@@ -604,7 +667,7 @@ Rectangle {
                 anchors.topMargin: root._sp8
                 anchors.bottomMargin: root._sp8
                 spacing: root._sp8
-                visible: root._isNarrow
+                visible: root._isNarrow && !root._isShort
 
                 Repeater {
                     model: footerRect._actionModel
