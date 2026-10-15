@@ -75,6 +75,9 @@ impl LineSnapshotBuilder {
 
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
+
+                    // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
+                    stable_paragraph_id: line.paragraph_id.as_u64(),
                     image: None,
                     clusters: Vec::new(),
                     document_origin_y: line.y,
@@ -176,6 +179,9 @@ impl LineSnapshotBuilder {
 
             line_snapshots.push(PreparedLineSnapshot {
                 id,
+
+                // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
+                stable_paragraph_id: line.paragraph_id.as_u64(),
                 image,
                 clusters,
                 document_origin_y: line.y,
@@ -292,6 +298,9 @@ impl LineSnapshotBuilder {
 
                 line_snapshots.push(PreparedLineSnapshot {
                     id,
+
+                    // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
+                    stable_paragraph_id: line.paragraph_id.as_u64(),
                     image: None,
                     clusters: Vec::new(),
                     document_origin_y: line.y,
@@ -394,6 +403,9 @@ impl LineSnapshotBuilder {
 
             line_snapshots.push(PreparedLineSnapshot {
                 id,
+
+                // Issue #904 复核 8: 段落位移身份 = 稳定 ParagraphId，与静态 QSG 同源。
+                stable_paragraph_id: line.paragraph_id.as_u64(),
                 image,
                 clusters,
                 document_origin_y: line.y,

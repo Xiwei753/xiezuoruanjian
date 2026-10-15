@@ -775,7 +775,10 @@ fn layout_fragments(
                 byte_range,
                 rect,
                 mask_width: rect.w,
-                paragraph_id: line.id.paragraph_id,
+                // Issue #904 复核 8：整体段落位移的身份必须用**稳定 ParagraphId**
+                // （与静态 QSG 的 ParagraphLineInfo.paragraph_id 同源）；
+                // `id.paragraph_id` 只是文档段落序号，增删换行后会漂移。
+                paragraph_id: line.stable_paragraph_id,
                 shaping: Some(cluster.shaping_identity.clone()),
                 source_revision: revision,
                 glyph_id: derive_fragment_id(&line.id, byte_range),
@@ -881,9 +884,12 @@ fn collect_paragraph_moves(
 fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64)> {
     let mut tops: Vec<(u64, f64)> = Vec::new();
     for line in &layout.line_snapshots {
-        match tops.iter_mut().find(|(id, _)| *id == line.id.paragraph_id) {
+        match tops
+            .iter_mut()
+            .find(|(id, _)| *id == line.stable_paragraph_id)
+        {
             Some(entry) => entry.1 = entry.1.min(line.document_origin_y),
-            None => tops.push((line.id.paragraph_id, line.document_origin_y)),
+            None => tops.push((line.stable_paragraph_id, line.document_origin_y)),
         }
     }
     tops

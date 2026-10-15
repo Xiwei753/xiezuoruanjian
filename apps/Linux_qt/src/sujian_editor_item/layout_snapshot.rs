@@ -81,6 +81,13 @@ impl ShapingIdentity {
 #[derive(Clone)]
 pub(crate) struct PreparedLineSnapshot {
     pub id: LineSnapshotId,
+    /// Issue #904 复核 8：产出该行的 **稳定 ParagraphId**（`VisualLine.paragraph_id`）。
+    ///
+    /// 与静态 QSG 的 `ParagraphLineInfo.paragraph_id`（`line.paragraph_id.as_u64()`）
+    /// 完全同源，也是动画整体段落位移 `paragraph_y_offsets` 用的身份。
+    /// `LineSnapshotId.paragraph_id` 是文档中的段落序号（`logical_slot`），两者职责
+    /// 不同：前者找纹理，后者才标识"同一个段落"（增删换行后不会漂移）。
+    pub stable_paragraph_id: u64,
     pub image: Option<QImage>,
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
@@ -129,6 +136,8 @@ impl PreparedLineSnapshot {
             .fold(f64::MAX, f64::min);
         Self {
             id: LineSnapshotId::new(0, 0, visual_line_id as u32),
+            // 测试 stub 里没有真实 ParagraphId：与 id 的段落序号保持一致。
+            stable_paragraph_id: 0,
             image: None,
             clusters,
             document_origin_y: top,
