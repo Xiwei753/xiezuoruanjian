@@ -48,22 +48,12 @@ Kirigami.ApplicationWindow {
     // Qt.styleHints.colorScheme。壳层底色来自 Kirigami.Theme，因此用它的
     // backgroundColor 与 textColor 亮度对比得到真实深浅；Kirigami.Theme 的
     // colorsChanged 会让这个绑定重新求值，从而驱动纸张与 system_is_dark 收口。
+    //
+    // 注意：显式深色/浅色由 themeController 通过 KDE ColorScheme 入口切换应用
+    // 配色方案（见 sync_kde_color_scheme）。那时 Kirigami.Theme 反映的是应用
+    // 选择而非桌面系统，因此只在「跟随系统」时才把它回写为 system_is_dark，
+    // 避免从手动深色切回跟随系统时拿到错误的“系统深浅”。
     readonly property bool kdePaletteIsDark: colorLuminance(Kirigami.Theme.backgroundColor) < colorLuminance(Kirigami.Theme.textColor)
-
-    // Issue #912：用户显式选择深色/浅色时，themeController.appearance_mode 优先于
-    // 系统。这里把最终主题色（designTokens 已按 is_dark 生成的完整暗/亮方案）同步
-    // 到顶层窗口调色板，让 QQC2 控件（设置页 FormCard、对话框等）与纸张同色，避免
-    // 「纸张已变深、控件还是旧色」。跟随系统时不覆写，保留 KDE Breeze 原生调色板与
-    // 控制样式（不回退 Material）。
-    readonly property bool appThemeExplicit: themeController !== null && themeController.appearance_mode !== "system"
-    palette.window: appThemeExplicit ? designTokens.background : Kirigami.Theme.backgroundColor
-    palette.windowText: appThemeExplicit ? designTokens.onBackground : Kirigami.Theme.textColor
-    palette.base: appThemeExplicit ? designTokens.surfaceContainerLowest : Kirigami.Theme.backgroundColor
-    palette.text: appThemeExplicit ? designTokens.onSurface : Kirigami.Theme.textColor
-    palette.button: appThemeExplicit ? designTokens.surfaceContainer : Kirigami.Theme.backgroundColor
-    palette.buttonText: appThemeExplicit ? designTokens.onSurface : Kirigami.Theme.textColor
-    palette.highlight: appThemeExplicit ? designTokens.primary : Kirigami.Theme.highlightColor
-    palette.highlightedText: appThemeExplicit ? designTokens.onPrimary : Kirigami.Theme.highlightedTextColor
 
     // ── Issue #692 评论 5692612221: 初始窗口尺寸收口（一次性） ──
     // 等窗口真正关联到所属屏幕后，按当前屏幕 availableGeometry 收口默认尺寸。
@@ -384,10 +374,14 @@ Kirigami.ApplicationWindow {
     // Issue #912：只有当实际显示的 KDE/Breeze 调色板深浅变化时才写入
     // system_is_dark，取代原来监听 Qt.styleHints.colorSchemeChanged 的做法
     // （该系统信号在本环境可能与 Breeze 实际渲染不一致，导致跟随系统模式
-    // 与壳层/纸张显示脱节）。这是 system_is_dark 的两个唯一写入点之一
+    // 与壳层/纸张显示脱节）。这是 system_is_dark 的两个写入点之一
     // （另一个是 Component.onCompleted 启动时）。
+    //
+    // 仅「跟随系统」时回写：显式深色/浅色会通过 KDE ColorScheme 入口切换应用
+    // 配色方案，此时 Kirigami.Theme 反映的是应用选择而非桌面系统，回写会污染
+    // 真实的系统深浅（例如手动深色后切回跟随系统时得到错误的深色）。
     onKdePaletteIsDarkChanged: {
-        if (themeController) {
+        if (themeController && themeController.appearance_mode === "system") {
             themeController.set_system_is_dark(window.kdePaletteIsDark);
         }
         window.logThemeDiagnostics("kde_palette_changed");

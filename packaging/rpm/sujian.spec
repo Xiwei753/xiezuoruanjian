@@ -23,6 +23,9 @@ BuildRequires:  qt6-qtbase-devel >= 6.7
 # QML 模块属于运行时资源，无需额外 BuildRequires，见下方 Requires。
 BuildRequires:  qt6-qtdeclarative-devel >= 6.7
 BuildRequires:  qt6-qttools-devel
+# Issue #912：KDE 应用配色方案切换桥（KColorSchemeManager）需要 KF6 ColorScheme
+# 头文件与链接库，该包不提供 pkg-config，构建脚本按头文件目录探测。
+BuildRequires:  kf6-kcolorscheme-devel
 BuildRequires:  rust
 BuildRequires:  cargo
 BuildRequires:  gcc-c++
@@ -46,6 +49,9 @@ Recommends:     fcitx5-qt6
 # Addons 的 QML 模块，控件风格与图标依赖 Breeze。这些是运行硬依赖。
 Requires:       kf6-kirigami >= 6.0
 Requires:       kf6-kirigami-addons >= 1.0
+# Issue #912：二进制链接 libKF6ColorScheme.so.6（KColorSchemeManager 桥），
+# 需要运行时库；通常随 kf6-kirigami 引入，这里显式声明避免构建环境差异。
+Requires:       kf6-kcolorscheme
 Requires:       qqc2-breeze-style
 Requires:       breeze-icon-theme
 
