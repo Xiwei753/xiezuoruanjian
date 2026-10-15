@@ -717,26 +717,7 @@ export struct SettingsContent {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — 按 Issue #629 静态编辑链路有意不做动画，开关禁用
-      Row() {
-        Text($r('app.string.typing_animation'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
 
-      // 平滑光标 — 按 Issue #629 静态编辑链路有意不做光标动画，开关禁用
-      Row() {
-        Text($r('app.string.smooth_cursor'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
     }
     .width('100%')
     .padding(16)
@@ -1374,26 +1355,7 @@ export struct SettingsContent {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — 按 Issue #629 静态编辑链路有意不做动画，开关禁用
-      Row() {
-        Text($r('app.string.typing_animation'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
-      .margin({ bottom: 16 })
 
-      // 平滑光标 — 按 Issue #629 静态编辑链路有意不做光标动画，开关禁用
-      Row() {
-        Text($r('app.string.smooth_cursor'))
-          .fontSize(16)
-          .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: false })
-          .enabled(false)
-      }
-      .width('100%')
     }
   }
 
@@ -1943,9 +1905,7 @@ export struct SettingsContent {
       case 'editor':
         return [
           ctx.resourceManager.getStringSync($r('app.string.auto_indent').id),
-          ctx.resourceManager.getStringSync($r('app.string.indent_width').id),
-          ctx.resourceManager.getStringSync($r('app.string.typing_animation').id),
-          ctx.resourceManager.getStringSync($r('app.string.smooth_cursor').id)
+          ctx.resourceManager.getStringSync($r('app.string.indent_width').id)
         ]
       case 'save':
         return [
