@@ -23,7 +23,7 @@ pub(crate) struct FrameRenderOutcome {
     /// 的片段才在这里；调用方据此记录“上一次真正画出的局部图片”，供快速连续
     /// 输入从当前画面重定向。计划侧（`TextMotionFrame`）不算数——它不代表像素
     /// 真的画出来了。
-    pub committed_local: Vec<super::text_motion::VisibleFragment>,
+    pub committed_local: Vec<super::text_motion::DrawnSlice>,
     /// Issue #904 评论 4：动画层本帧是否与静态层一致成立。
     ///
     /// `true` 表示本帧静态层与动画层来自同一份事实：要么静态层按被接受的
@@ -61,7 +61,7 @@ impl FrameRenderOutcome {
 #[derive(Default)]
 struct AnimationLayerPrep {
     prepared: bool,
-    committed: Vec<super::text_motion::VisibleFragment>,
+    committed: Vec<super::text_motion::DrawnSlice>,
     holes: Vec<qt_text_node::AnimationClipRect>,
 }
 
@@ -541,7 +541,7 @@ pub(crate) fn render_frame(
     // Issue #904 复核 5: 动画层与静态孔洞的真正交接点。
     // 只有静态层也提交成功、或本帧根本不需要重建静态层时，才真正替换动画节点；
     // 静态层失败时丢弃预备结果，保留上一帧的 static + animation 组合。
-    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
+    let mut committed_local: Vec<super::text_motion::DrawnSlice> = Vec::new();
     let mut committed_holes: Vec<qt_text_node::AnimationClipRect> = Vec::new();
     let mut animation_layer_ok = false;
     if prep.prepared && static_rebuild_ok {
@@ -611,7 +611,7 @@ fn prepare_text_animation_layer(
     let mut source_rects: Vec<f64> = Vec::new();
     let mut snapshot_ids: Vec<u64> = Vec::new();
     // Issue #904 评论 4：本帧候选提交出去的局部片段（与 C++ 接受的子集一一对应）。
-    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
+    let mut committed_local: Vec<super::text_motion::DrawnSlice> = Vec::new();
 
     for glyph in glyphs.iter() {
         // Issue #736 评论 5778543593 修改1: 缺该 snapshot_id 的纹理时，这个
@@ -680,23 +680,20 @@ fn prepare_text_animation_layer(
 
         // Issue #904 评论 4：这一片段确实以 (ix, iy, iw, ih) 提交出去了。
         // 当前位置取插值后的 target_rect（Move 会在途），当前可见宽度取裁剪后的 iw。
-        committed_local.push(super::text_motion::VisibleFragment {
-            snapshot: super::text_motion::SnapshotRef {
-                snapshot_id: glyph.snapshot_id,
-                source_uv: glyph.source_rect,
+        committed_local.push(super::text_motion::DrawnSlice {
+            slice: super::text_motion::VisualSlice {
+                source: super::text_motion::SnapshotRef {
+                    snapshot_id: glyph.snapshot_id,
+                    source_uv: glyph.source_rect,
+                },
+                rect: super::layout_snapshot::SourceRect {
+                    x: glyph.x,
+                    y: glyph.y,
+                    w: glyph.w,
+                    h: glyph.h,
+                },
             },
-            byte_range: glyph.logical_range,
-            rect: super::layout_snapshot::SourceRect {
-                x: glyph.x,
-                y: glyph.y,
-                w: glyph.w,
-                h: glyph.h,
-            },
-            mask_width: iw,
-            paragraph_id: glyph.paragraph_id,
-            shaping: glyph.shaping.clone(),
-            source_revision: glyph.source_revision,
-            glyph_id: glyph.glyph_id,
+            visible_width: iw,
         });
     }
 

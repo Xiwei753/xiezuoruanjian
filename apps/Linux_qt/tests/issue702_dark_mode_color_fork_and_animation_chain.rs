@@ -280,8 +280,8 @@ fn issue702_delete_conceal_has_same_frame_progress() {
     );
     let text_motion_src = read_src("src/sujian_editor_item/text_motion.rs");
     assert!(
-        text_motion_src.contains("enum TextPiece"),
-        "text_motion.rs 应含 TextPiece 枚举（Reveal/Conceal/Move 局部计划）"
+        text_motion_src.contains("enum SliceMotion"),
+        "text_motion.rs 应含 SliceMotion 枚举（Reveal/Conceal/Shift 局部计划）"
     );
     assert!(
         !root.join("src/sujian_editor_item/visual_canvas").exists(),

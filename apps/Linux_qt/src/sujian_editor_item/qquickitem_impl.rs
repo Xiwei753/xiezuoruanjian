@@ -530,7 +530,7 @@ impl QQuickItem for SujianEditorItem {
                         "text_motion complete: session={session} revision={revision} \
                          duration_ms={} pieces={} paragraph_moves={}",
                         self.current_typing_animation_duration_ms,
-                        self.pipeline.text_motion().map_or(0, |m| m.pieces.len()),
+                        self.pipeline.text_motion().map_or(0, |m| m.slices.len()),
                         self.pipeline
                             .text_motion()
                             .map_or(0, |m| m.paragraph_moves.len()),
@@ -590,10 +590,10 @@ impl QQuickItem for SujianEditorItem {
                         ));
                         self.last_commit_log_key = Some((session, revision));
                     }
-                    self.last_drawn_local_frame = Some(super::text_motion::LocalTextFrame {
+                    self.last_drawn_local_frame = Some(super::text_motion::LocalDrawnFrame {
                         session,
                         revision,
-                        fragments: render_outcome.committed_local.clone(),
+                        slices: render_outcome.committed_local.clone(),
                     });
                 }
             }
