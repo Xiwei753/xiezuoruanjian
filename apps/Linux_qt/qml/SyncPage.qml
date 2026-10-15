@@ -42,9 +42,8 @@ Item {
     readonly property int conflictTotalCount: allSyncConflicts.length
     signal openConflict(string targetKind, string projectId, string path)
 
-    // Issue #902 第二十轮：App 冲突（星图等应用级数据）预览/解决面板。
-    // App 冲突在 SyncPage 内部处理，不走 openWriting 跳转。
-    property bool appConflictPanelVisible: false
+    // Issue #902 第二十一轮：App 冲突（星图等应用级数据）预览/解决面板。
+    // App 冲突在 SyncPage 内部以窗口级 Popup 展示，不走 openWriting 跳转。
     property string appConflictPath: ""
     // App 冲突列表（从 allSyncConflicts 筛 targetKind==="app"，path 映射为 localPath）。
     property var appConflictList: []
@@ -813,7 +812,7 @@ Item {
                                 // 不走 openWriting 跳转（main.qml 对 app target 直接 return）。
                                 if (modelData.targetKind === "app") {
                                     root.appConflictPath = modelData.localPath
-                                    root.appConflictPanelVisible = true
+                                    appConflictPopup.open()
                                 }
                             }
                         }
@@ -823,28 +822,44 @@ Item {
         }
     }
 
-    // Issue #902 第二十轮：App 冲突预览/解决面板（按需加载，覆盖在 SyncPage 上）。
-    // App 冲突（星图等应用级数据）不归属任何作品，在 SyncPage 内部解决，不走 openWriting。
-    // 用 sourceComponent + 声明式绑定，required 属性（dt/conflicts）在创建时即满足。
-    Loader {
-        id: appConflictPanelLoader
-        active: root.appConflictPanelVisible
-        anchors.fill: parent
-        sourceComponent: Component {
-            SyncConflictPanel {
-                anchors.fill: parent
-                dt: root.resolvedDt
-                syncBackendRef: root.syncBackendRef
-                targetKind: "app"
-                projectId: ""
-                conflicts: root.appConflictList
-                requestedConflictPath: root.appConflictPath
-                onCloseRequested: root.appConflictPanelVisible = false
-                onConflictsResolved: {
-                    // 解决一个 App 冲突后刷新全局列表；conflicts 绑定到
-                    // appConflictList，refresh 后自动同步，无需手动赋值。
-                    root.refreshAllSyncConflicts()
-                }
+    // Issue #902 第二十一轮：App 冲突面板改为窗口级 Popup，挂在 Overlay.overlay 上。
+    // 之前用 Loader { anchors.fill: parent } 铺满 SyncPage，但 SyncPage 是很长的
+    // 设置内容项（implicitHeight = 全部同步设置高度），面板会跟随设置页 ScrollView
+    // 滚动且被裁剪，Header 在顶部、解决按钮在底部都可能在可视区域外；面板根背景
+    // 透明还会让底下设置控件透出来并被误触。改用 Popup 挂窗口级坐标系，模态层阻止
+    // 底下设置项受误触，尺寸由 overlay 可用宽高约束，footer 始终可达。复用同一个
+    // SyncConflictPanel（保持透明根背景供 RightDrawer 复用），背景归 Popup 容器负责。
+    Popup {
+        id: appConflictPopup
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        parent: Overlay.overlay
+        width: Math.max(400, Math.min(960, (parent ? parent.width : 960) - resolvedDt.sp64))
+        height: Math.max(300, Math.min(720, (parent ? parent.height : 720) - resolvedDt.sp32))
+        x: Math.round((parent.width - width) / 2)
+        y: Math.round((parent.height - height) / 2)
+        Overlay.modal: Rectangle { color: Qt.rgba(0, 0, 0, 0.32) }
+        background: Rectangle {
+            color: resolvedDt.surface
+            border.color: resolvedDt.border
+            border.width: 1.5
+            radius: resolvedDt.radiusLg
+        }
+
+        SyncConflictPanel {
+            anchors.fill: parent
+            dt: root.resolvedDt
+            syncBackendRef: root.syncBackendRef
+            targetKind: "app"
+            projectId: ""
+            conflicts: root.appConflictList
+            requestedConflictPath: root.appConflictPath
+            onCloseRequested: appConflictPopup.close()
+            onConflictsResolved: {
+                // 解决一个 App 冲突后刷新全局列表；conflicts 绑定到
+                // appConflictList，refresh 后自动同步，无需手动赋值。
+                root.refreshAllSyncConflicts()
             }
         }
     }
