@@ -52,18 +52,16 @@ export class NavigationChromeStore {
 
   // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
   // Issue #768 评论5835958606：tabIndex 必选；后台 tab 只更新缓存，不发布全局 role。
-  // Issue #906：只在缓存 role 真正变化时记录 nav.destination_shown，publish/subscribe 不重复记。
+  // Issue #906：按实际到达的 onShown 上报 nav.destination_shown。角色缓存相等不代表页面未重新显示
+  // （连续两个同 ScreenRole 页面、或离开后重显同类型页面都是真实显示事件），不能用 previousRole === role 吞掉。
   reportScreenRole(role: ScreenRole, tabIndex: number): void {
-    const previousRole: ScreenRole | undefined = this.tabRoles.get(tabIndex)
     this.tabRoles.set(tabIndex, role)
-    if (previousRole !== role) {
-      const fields: DiagnosticField[] = [
-        { key: 'screenRole', value: String(role) },
-        { key: 'tabIndex', value: String(tabIndex) },
-        { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
-      ]
-      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
-    }
+    const fields: DiagnosticField[] = [
+      { key: 'screenRole', value: String(role) },
+      { key: 'tabIndex', value: String(tabIndex) },
+      { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
     if (tabIndex === this.activeTab) {
       this.publish(role)
     }

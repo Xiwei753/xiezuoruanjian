@@ -30,9 +30,14 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
-    // Issue #906：把应用生命周期接入结构化诊断，事件名保持稳定可检索。
-    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.created', 'EntryAbility', [])
     getAppContext().setAbilityContext(this.context)
+
+    // Issue #906 评论：共享 Rust diagnostics 必须在记录 ability.created 之前初始化。
+    // writer_diagnostics::enqueue 在 initialized=false 时直接丢弃事件，先 init 再记，
+    // 这条启动事件才会真正进入 JSONL；否则 NAPI/Rust 层返回 0 也落不了盘。
+    // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
+    this.initDiagnostics()
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ability.created', 'EntryAbility', [])
 
     // Issue #767 评论 5831321551：把 UIAbilityContext 注入 HarmonyColorModeController，
     // 使其能在页面 loadContent 后调用 setColorMode 下发用户选择的深浅色模式。
@@ -40,11 +45,6 @@ export default class EntryAbility extends UIAbility {
 
     // Issue #767：首次启动注入当前系统 colorMode，避免一直靠默认值 0 先按亮色启动。
     this.initSystemColorMode()
-
-    // Issue #670 评论 5652500781：共享 Rust diagnostics 必须在应用生命周期通知之前初始化，
-    // 否则 lifecycle/observer 链产生的第一批结构化事件会天然漏掉 create。
-    // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
-    this.initDiagnostics()
 
     // Issue #773 评论 5844589231：订阅系统 HiAppEvent 崩溃事件，
     // 在下一次启动时把上一轮 crash fault log 补进 diagnostics/crashes/。
@@ -102,7 +102,8 @@ export default class EntryAbility extends UIAbility {
       )
       if (result !== 0) {
         hilog.error(0x0000, 'EntryAbility', 'initDiagnostics failed with code %{public}d', result)
-        // Issue #906：Rust 日志后端初始化失败时，facade 会容忍未初始化状态（不抛异常、不落盘）。
+        // Issue #906：init 失败时日志后端未就绪，这条事件大概率落不了盘（enqueue 在未初始化时丢弃），
+        // 仅作 best-effort 记录，不视为已持久化。
         const resultField: DiagnosticField = { key: 'result', value: String(result) }
         HarmonyDiagnosticEvents.record('Error', 'App', 'ability.diagnostics_init_failed', 'EntryAbility', [resultField])
       }
