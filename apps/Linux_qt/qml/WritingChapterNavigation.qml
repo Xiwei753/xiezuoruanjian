@@ -164,7 +164,8 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.workspaceProjectTitle
                 color: Kirigami.Theme.textColor
-                font: Kirigami.Theme.defaultFont
+                font.family: Kirigami.Theme.defaultFont.family
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize
                 font.bold: true
                 elide: Text.ElideRight
             }
@@ -261,7 +262,8 @@ Rectangle {
                                 text: model.itemTitle || ""
                                 color: chapterDelegateBg.isSelected ? Kirigami.Theme.highlightedTextColor
                                                                     : Kirigami.Theme.textColor
-                                font: Kirigami.Theme.defaultFont
+                                font.family: Kirigami.Theme.defaultFont.family
+                                font.pointSize: Kirigami.Theme.defaultFont.pointSize
                                 font.bold: chapterDelegateBg.isSelected
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
