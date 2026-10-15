@@ -38,13 +38,6 @@
           strictMode: {
             caseSensitiveCheck: true,
           },
-          // Issue #914：普通包移除依赖模块 privacy_acl 引入的 DLP 受限权限。
-          // removePermissions 只能删除依赖模块引入的权限，entry 自身不声明此权限。
-          removePermissions: [
-            {
-              name: 'ohos.permission.DLP_GET_HIDE_STATUS',
-            },
-          ],
         },
         targetSdkVersion: '26.0.0',
       },
@@ -96,7 +89,6 @@
         {
           name: 'default',
           applyToProducts: [
-            'default',
             'acl',
           ],
         },
