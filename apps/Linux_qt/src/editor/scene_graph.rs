@@ -41,18 +41,36 @@ cpp! {{
         QHash<quint64, QSGTexture*> m_texture_cache;
         QVector<quint64> m_active_snapshot_ids;
 
+        // Issue #904 复核 5: prepare/commit 之间的暂存状态。
+        // m_prepared_created 只放本次新创建、尚未进入 m_texture_cache 的纹理。
+        QHash<quint64, QSGTexture*> m_prepared_created;
+        QVector<QSGTexture*> m_prepared_resolved;
+        QVector<double> m_prepared_glyph_data;
+        QVector<double> m_prepared_source_rects;
+        QVector<quint64> m_prepared_snapshot_ids;
+        bool m_prepared = false;
+        // 本帧“成立但没有可见 glyph”的预备结果（glyph_count == 0，如吐字 progress=0）。
+        bool m_prepared_empty = false;
+
         // 增量更新：标记本帧活跃的 snapshot id，sweep 不再活跃的 texture。
         // cache miss 时 createTextureFromImage 并存入 cache。
         // 顺序：先删多余 child → 重绑/新增 node → 最后 sweep 旧 texture，
         // 保证没有 QSGImageNode 仍引用待删除的 texture。
         //
-        // Issue #904 评论 4: 返回真正建立并绑定有效 QSGTexture 的 glyph 数。
-        // 全有或全无：任一 glyph 拿不到有效纹理（images 为空 / createTextureFromImage
-        // 失败）就整体失败并返回 0，且**不改动任何子节点 / m_texture_cache**。
-        // 这样 Rust 侧「静态孔洞」与「动画纹理」来自同一份事实：要么整层成立、
-        // 孔洞对应动画纹理；要么整层不成立、不挖任何孔洞。绝不留下
-        // “静态挖了空但动画没画”。
-        int updateTextures(
+        // Issue #904 复核 5: 动画层与本帧静态孔洞必须原子交接，所以把原来的
+        // 单次 updateTextures 拆成 prepare / commit / discard 三个阶段，
+        // 全部在同一个 updatePaintNode 内完成：
+        //
+        //   prepareTextures  —— 只检查/预备本帧 QSGTexture（不改动当前子节点、
+        //                       不改动 m_texture_cache）；
+        //   commitPrepared   —— 只有静态层也提交成功后才真正替换本帧子节点与
+        //                       texture cache；
+        //   discardPrepared  —— 丢弃预备结果（释放刚建的纹理），旧动画节点不受影响。
+        //
+        // 全有或全无：任一 glyph 拿不到有效纹理（images 为空 /
+        // createTextureFromImage 失败，item/window 缺失）就整体失败。
+        // 返回 -1 表示“本帧动画层不成立”，>=0 表示预备成功的 glyph 数。
+        int prepareTextures(
             QQuickItem *item,
             int glyph_count,
             const double *glyph_data,
@@ -60,51 +78,72 @@ cpp! {{
             const double *source_rects,
             const quint64 *snapshot_ids
         ) {
-            if (glyph_count <= 0) return 0;
-            if (!item || !item->window()) return 0;
+            discardPrepared();
+            if (glyph_count <= 0) {
+                // 本帧应当没有可见动画像素（如吐字 progress=0）。仍然算“动画层成立”：
+                // commit 时把子节点清空并 sweep，孔洞由调用方按同一事实挖出。
+                m_prepared_empty = true;
+                return 0;
+            }
+            if (!item || !item->window()) return -1;
+            m_item_window = item->window();
 
-            // Phase 1: 解析全部 glyph 的纹理，全部成功才提交。
-            // 新建的纹理先放在 created，成功后才写入 m_texture_cache（失败时释放）。
             QVector<QSGTexture*> resolved(glyph_count, nullptr);
-            QHash<quint64, QSGTexture*> created;
             for (int i = 0; i < glyph_count; i++) {
                 quint64 snapId = snapshot_ids ? snapshot_ids[i] : 0;
                 QSGTexture *tex = m_texture_cache.value(snapId, nullptr);
                 if (!tex) {
-                    tex = created.value(snapId, nullptr);
+                    tex = m_prepared_created.value(snapId, nullptr);
                 }
                 if (!tex) {
                     if (!images || !images[i]) {
-                        for (auto it = created.begin(); it != created.end(); ++it) {
-                            delete it.value();
-                        }
-                        return 0;
+                        discardPrepared();
+                        return -1;
                     }
                     tex = item->window()->createTextureFromImage(*images[i]);
                     if (!tex) {
-                        for (auto it = created.begin(); it != created.end(); ++it) {
-                            delete it.value();
-                        }
-                        return 0;
+                        discardPrepared();
+                        return -1;
                     }
                     tex->setFiltering(QSGTexture::Linear);
-                    created.insert(snapId, tex);
+                    m_prepared_created.insert(snapId, tex);
                 }
                 resolved[i] = tex;
             }
 
-            // Phase 2: 提交纹理到 cache（此后失败不再可能，回滚点已过）。
-            for (auto it = created.begin(); it != created.end(); ++it) {
+            m_prepared_resolved = resolved;
+            m_prepared_glyph_data.clear();
+            for (int i = 0; i < glyph_count * 5; i++) {
+                m_prepared_glyph_data.append(glyph_data[i]);
+            }
+            m_prepared_source_rects.clear();
+            for (int i = 0; i < glyph_count * 4; i++) {
+                m_prepared_source_rects.append(source_rects[i]);
+            }
+            m_prepared_snapshot_ids.clear();
+            for (int i = 0; i < glyph_count; i++) {
+                m_prepared_snapshot_ids.append(snapshot_ids ? snapshot_ids[i] : 0);
+            }
+            m_prepared = true;
+            return glyph_count;
+        }
+
+        // 真正把预备好的本帧动画替换进场景图。只有调用方确认静态层也已提交成功
+        // 时才会调用；此函数不会失败。
+        void commitPrepared() {
+            if (!m_prepared && !m_prepared_empty) return;
+            const int glyph_count = m_prepared_snapshot_ids.size();
+            m_prepared = false;
+            m_prepared_empty = false;
+
+            // 提交纹理到 cache（回滚点已过）。
+            for (auto it = m_prepared_created.begin(); it != m_prepared_created.end(); ++it) {
                 m_texture_cache.insert(it.key(), it.value());
             }
+            m_prepared_created.clear();
 
             // 标记本帧活跃的 snapshot ids
-            m_active_snapshot_ids.clear();
-            if (snapshot_ids) {
-                for (int i = 0; i < glyph_count; i++) {
-                    m_active_snapshot_ids.append(snapshot_ids[i]);
-                }
-            }
+            m_active_snapshot_ids = m_prepared_snapshot_ids;
             QSet<quint64> active_set(m_active_snapshot_ids.begin(), m_active_snapshot_ids.end());
 
             // Step 1: Remove excess child nodes (delete nodes referencing old textures)
@@ -115,13 +154,12 @@ cpp! {{
             }
 
             // Step 2: Update or create glyph nodes — rebind textures before sweep.
-            // resolved[i] 已在 Phase 1 保证非空。
-            int bound = 0;
+            // m_prepared_resolved[i] 已在 prepare 阶段保证非空。
             for (int i = 0; i < glyph_count; i++) {
-                const double *d = glyph_data + i * 5;
+                const double *d = m_prepared_glyph_data.constData() + i * 5;
                 double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
 
-                const double *sr = source_rects + i * 4;
+                const double *sr = m_prepared_source_rects.constData() + i * 4;
                 double sx = sr[0], sy = sr[1], sw = sr[2], sh = sr[3];
 
                 QSGOpacityNode *opNode = nullptr;
@@ -136,7 +174,7 @@ cpp! {{
                     opNode = new QSGOpacityNode;
                     appendChildNode(opNode);
 
-                    imgNode = item->window()->createImageNode();
+                    imgNode = m_item_window->createImageNode();
                     imgNode->setFiltering(QSGTexture::Linear);
                     imgNode->setOwnsTexture(false);
                     opNode->appendChildNode(imgNode);
@@ -156,9 +194,8 @@ cpp! {{
                     imgNode->setSourceRect(0, 0, 0, 0);
                 }
 
-                imgNode->setTexture(resolved[i]);
+                imgNode->setTexture(m_prepared_resolved[i]);
                 imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-                bound++;
             }
 
             // Step 3: Sweep textures not in active_set — safe now, all nodes re/deleted
@@ -172,12 +209,34 @@ cpp! {{
                 }
             }
 
+            m_prepared_resolved.clear();
+            m_prepared_glyph_data.clear();
+            m_prepared_source_rects.clear();
+            m_prepared_snapshot_ids.clear();
+
             markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-            return bound;
         }
+
+        // 丢弃预备结果：释放本次新创建的纹理，不动现有子节点 / m_texture_cache。
+        void discardPrepared() {
+            for (auto it = m_prepared_created.begin(); it != m_prepared_created.end(); ++it) {
+                delete it.value();
+            }
+            m_prepared_created.clear();
+            m_prepared_resolved.clear();
+            m_prepared_glyph_data.clear();
+            m_prepared_source_rects.clear();
+            m_prepared_snapshot_ids.clear();
+            m_prepared = false;
+            m_prepared_empty = false;
+        }
+
+        // commit 阶段需要 window 创建 glyph 节点；由 prepare/commit 入口记录。
+        QQuickWindow *m_item_window = nullptr;
 
         // 清空 texture cache 中所有 GPU texture。
         void clearTextureCache() {
+            discardPrepared();
             for (auto it = m_texture_cache.begin(); it != m_texture_cache.end(); ++it) {
                 delete it.value();
             }
@@ -282,8 +341,8 @@ pub fn ensure_editor_root(root_raw: *mut std::ffi::c_void) -> *mut std::ffi::c_v
 ///
 /// Issue #677 评论 5653315696: 调用方须先通过 `ensure_editor_root` 保证 `root_raw` 非 null，
 /// 本函数不再承担"根节点是否为空的判断"。C++ 内部保留 `if (!root || !item) return;` 仅作
-/// 防御性编程，以保护 update_cursor_node / update_animation_layer /
-/// update_selection_preedit_layer 等内部调用者传入可能为 null 的 root。
+/// 防御性编程，以保护 prepare_animation_layer / commit_animation_layer /
+/// update_cursor_node / update_selection_preedit_layer 等内部调用者传入可能为 null 的 root。
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -387,16 +446,20 @@ pub fn update_cursor_node(
 /// If glyph_count > existing child count, new nodes are appended.
 /// If glyph_count < existing child count, excess nodes are removed.
 ///
-/// Issue #904 评论 4: 返回真正建立并绑定有效 `QSGTexture` 的 glyph 数。
-/// 失败分支（root / 动画层节点缺失、纹理无法创建）显式返回 0，不再 `void`。
-/// 调用方据此判断本帧是否真的产出了可见 GPU glyph，而不是只看“Rust 有参数”。
-/// `AnimationLayerNode::updateTextures` 在 `updatePaintNode` 内同步更新节点后返回结果。
+/// Prepare the animation layer (child[1]) textures for this frame.
+///
+/// Issue #904 复核 5: 两阶段提交的第一阶段。只检查/预备本帧 QSGTexture，
+/// **不改动当前子节点与 texture cache**。返回 -1 表示本帧动画层不成立
+/// （root / 动画层节点缺失、纹理创建失败）；>=0 表示预备成功的 glyph 数
+/// （0 表示“本帧应当没有可见动画像素”，仍是成立的一帧）。
+/// 只有调用方确认静态层也已提交成功时，才调用 [`commit_animation_layer`]；
+/// 否则调用 [`discard_animation_layer`] 丢弃预备结果，旧视觉不受影响。
 ///
 /// Issue #658 评论 5630650436: GPU texture cache 由 AnimationLayerNode 自身持有，
 /// 不再使用全局 static cache。同一 LineSnapshotId 拆成多个 slice 时，
 /// 后一个 node 不会删前一个 node 正在引用的 texture。
 /// 每帧传 active snapshot ids；所有 node rebind 后统一 sweep 未使用的 texture。
-pub fn update_animation_layer(
+pub fn prepare_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     glyph_count: i32,
@@ -404,7 +467,6 @@ pub fn update_animation_layer(
     images: *const *const qmetaobject::QImage,
     source_rects: *const f64,
     snapshot_ids: *const u64,
-    scroll_y: f64,
 ) -> i32 {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -414,19 +476,49 @@ pub fn update_animation_layer(
         glyph_data as "const double*",
         images as "QImage**",
         source_rects as "const double*",
-        snapshot_ids as "const quint64*",
-        scroll_y as "double"
+        snapshot_ids as "const quint64*"
     ] -> i32 as "int" {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
-        if (!root) return 0;
+        if (!root) return -1;
 
         ensure_four_layer_nodes(root, item_ptr);
 
         QSGNode *animNode = child_at(root, LAYER_ANIMATION);
-        if (!animNode) return 0;
+        if (!animNode) return -1;
 
         auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
-        if (!animLayer) return 0;
+        if (!animLayer) return -1;
+
+        return animLayer->prepareTextures(
+            item_ptr, glyph_count, glyph_data, images, source_rects, snapshot_ids
+        );
+    })
+}
+
+/// Commit the prepared animation layer: replace child nodes / texture cache.
+///
+/// Issue #904 复核 5: 只有本帧静态层也提交成功时才调用。`scroll_y` 在这里设置
+/// 动画层矩阵（与静态层相同的 `translate(0, -scroll_y)`，Issue #715）。
+/// 返回 `false` 表示没有可提交的预备结果。
+pub fn commit_animation_layer(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    scroll_y: f64,
+) -> bool {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        scroll_y as "double"
+    ] -> bool as "bool" {
+        auto *root = static_cast<QSGTransformNode*>(root_raw);
+        if (!root) return false;
+
+        QSGNode *animNode = child_at(root, LAYER_ANIMATION);
+        if (!animNode) return false;
+
+        auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
+        if (!animLayer) return false;
 
         // Issue #715: 动画层和静态正文层使用相同的 translate(0, -scroll_y) 矩阵，
         // 动画 glyph 保持文档坐标，由 QSGTransformNode 统一做视口变换。
@@ -437,9 +529,28 @@ pub fn update_animation_layer(
         animLayer->setMatrix(animMatrix);
         animLayer->markDirty(QSGNode::DirtyMatrix);
 
-        return animLayer->updateTextures(
-            item_ptr, glyph_count, glyph_data, images, source_rects, snapshot_ids
-        );
+        animLayer->commitPrepared();
+        return true;
+    })
+}
+
+/// Discard a prepared-but-not-committed animation layer (frees newly created textures).
+pub fn discard_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*"
+    ] {
+        auto *root = static_cast<QSGTransformNode*>(root_raw);
+        if (!root) return;
+
+        QSGNode *animNode = child_at(root, LAYER_ANIMATION);
+        if (!animNode) return;
+
+        auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
+        if (!animLayer) return;
+
+        animLayer->discardPrepared();
     })
 }
 

@@ -24,12 +24,18 @@ pub(crate) struct FrameRenderOutcome {
     /// 输入从当前画面重定向。计划侧（`TextMotionFrame`）不算数——它不代表像素
     /// 真的画出来了。
     pub committed_local: Vec<super::text_motion::VisibleFragment>,
-    /// Issue #904 评论 4：动画层本帧是否成立（成功更新或成功清空）。
+    /// Issue #904 评论 4：动画层本帧是否与静态层一致成立。
     ///
-    /// `false` 表示 C++ 侧 `update_animation_layer` 未能把本帧全部 glyph 绑定到
-    /// 有效纹理（root/动画层缺失或纹理创建失败）。此时调用方不应把“计划里有
-    /// overlays”当成“动画层已成立”，也不能让静态孔洞留在没有动画的位置。
+    /// `true` 表示本帧静态层与动画层来自同一份事实：要么静态层按被接受的
+    /// 孔洞挖空且动画纹理真的绑定成功，要么静态层画完整 canonical 且旧动画层
+    /// 已清掉。`false` 表示两层都没能在本帧更新（保留上一帧的组合）。
     pub animation_layer_ok: bool,
+    /// Issue #904 复核 5：本帧静态层**实际挖出**的孔洞（成功提交的静态 QSG
+    /// 事实），不是计划侧的 `LocalTextPlan::static_holes`。
+    ///
+    /// 调用方据此记录“上一帧真的挖了孔”，用于下一帧判断是否需要强制刷新静态
+    /// 裁剪：Qt 首帧拒绝纹理时这里为空，下一帧纹理可用时必须因此补挖孔。
+    pub committed_holes: Vec<qt_text_node::AnimationClipRect>,
 }
 
 impl FrameRenderOutcome {
@@ -40,19 +46,23 @@ impl FrameRenderOutcome {
             new_loaded_para_range: None,
             committed_local: Vec::new(),
             animation_layer_ok: false,
+            committed_holes: Vec::new(),
         }
     }
 }
 
-/// Issue #904 评论 4：`render_text_animation_layer` 的结果。
+/// Issue #904 复核 5：`prepare_text_animation_layer` 的结果（两阶段提交的第一阶段）。
 ///
-/// - `committed`：C++ 侧真正建立并绑定有效纹理的局部片段（唯一事实来源）。
-/// - `holes`：本帧静态层应挖掉的孔洞。只有动画层成立时才等于计划的
-///   `static_holes`；动画层失败时为空——绝不留下“静态挖了空但动画没画”。
-struct AnimationLayerOutcome {
+/// - `prepared`：本帧动画层是否预备成功（纹理全部就绪，或明确为空层）。
+///   只有它为真时调用方才挖孔；它在 commit 之前不影响场景图。
+/// - `committed`：预备成功时将要提交的局部片段（唯一事实来源）。
+/// - `holes`：预备成功时本帧静态层应挖掉的孔洞。宽高为 0 的吐字首帧
+///   `committed` 为空但 `holes` 仍然成立。
+#[derive(Default)]
+struct AnimationLayerPrep {
+    prepared: bool,
     committed: Vec<super::text_motion::VisibleFragment>,
     holes: Vec<qt_text_node::AnimationClipRect>,
-    layer_ok: bool,
 }
 
 /// Issue #901 第九轮阻塞4: per-item 已加载段落索引区间。
@@ -244,27 +254,23 @@ pub(crate) fn render_frame(
     // 不触碰任何一层，保留上一帧的 static + animation 组合（与旧行为一致）。
     let static_snapshot_missing = should_rebuild_static && static_text.layout_snapshot.is_none();
 
-    // Issue #904 评论 4：**先提交动画层**，拿到 C++ 真正建立并绑定有效 `QSGTexture`
-    // 的结果，再用「被接受的孔洞」重建静态层。两层来自同一份事实（C++ receipt），
-    // 原子交接：动画层失败时不挖任何孔洞，绝不出现“静态挖了空但动画没画”。
+    // Issue #904 复核 5：**先预备动画层**（只建/检查纹理，不改动动画节点），
+    // 拿到 C++ 侧真正可用的纹理结果；随后用它给出的孔洞更新静态层；只有静态层
+    // 也提交成功时才真正 commit 动画层。两层来自同一份事实（C++ receipt），
+    // 原子交接：
+    //   - 预备成功 + 静态成功 → 挖孔 + 动画同帧成立；
+    //   - 预备失败           → 静态层画完整 canonical（不挖孔），再清掉旧动画层；
+    //   - 静态提交失败       → 丢弃预备结果，保留上一帧 static + animation 组合。
     // 这是 render_frame 内部的顺序调整，不是第二套状态机。
-    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
-    let mut accepted_holes: Vec<qt_text_node::AnimationClipRect> = Vec::new();
-    let mut animation_layer_ok = true;
-    let mut animation_submitted = false;
+    let mut prep = AnimationLayerPrep::default();
     if animation_resources_ready && !static_snapshot_missing {
-        let outcome = render_text_animation_layer(
+        prep = prepare_text_animation_layer(
             root_raw,
             item_ptr,
             plan.local_text.overlays.as_slice(),
             plan.local_text.static_holes.as_slice(),
             texture_cache,
-            static_text.scroll_y,
         );
-        committed_local = outcome.committed;
-        accepted_holes = outcome.holes;
-        animation_layer_ok = outcome.layer_ok;
-        animation_submitted = true;
     }
 
     if should_rebuild_static {
@@ -409,15 +415,14 @@ pub(crate) fn render_frame(
             // 不再通过 StaticLinePatch 中间结构换算。
             // Issue #736 评论 5786231506: 静态层开始裁剪之前先检查本帧动画所需的
             // snapshot texture。缺纹理的 snapshot 对应 clip 不进入 static text clip，
-            // canonical 正文直接显示。不能等静态层挖完以后到了 render_text_animation_layer()
-            // 才 continue。overlay 可画 -> static 被接管；overlay 不可画 -> static 同帧
+            // canonical 正文直接显示。不能等静态层挖完以后到了动画层才 continue。
+            // overlay 可画 -> static 被接管；overlay 不可画 -> static 同帧
             // 恢复 canonical。两边是一条原子规则。
             //
-            // Issue #904 评论 4: 孔洞不再直接取计划侧 `static_holes`，而是取
-            // `render_text_animation_layer` 返回的、C++ **真正接受**的孔洞
-            // （`accepted_holes`）。动画层未成立时为空 —— 静态层画完整 canonical，
-            // 与动画层同一份事实原子交接。
-            let available_clip_rects = qt_text_node::merge_static_clip_rects(accepted_holes);
+            // Issue #904 复核 5: 孔洞取「动画层预备成功时才成立」的集合
+            // （`prep.holes`）。预备失败时为空 —— 静态层画完整 canonical，
+            // 随后清掉旧动画层，与动画层同一份事实原子交接。
+            let available_clip_rects = qt_text_node::merge_static_clip_rects(prep.holes.clone());
             let clip_rects = &available_clip_rects;
 
             // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
@@ -520,13 +525,30 @@ pub(crate) fn render_frame(
     // Issue #715: 传 scroll_y 给动画层，让 AnimationLayerNode 设置和静态层一样的
     // translate(0, -scroll_y) 矩阵。动画 glyph 继续保留文档坐标，不在 Rust 侧逐个减 scroll_y。
     //
-    // Issue #904 评论 4: 动画层已在本函数前半段、静态层重建之前提交并拿到 C++ receipt，
-    // 静态孔洞直接取该 receipt 接受的孔洞，两层原子交接。这里只补一个收尾：
-    // 资源未就绪的帧不提交动画层，等静态层重建成功后清空旧动画层（与旧行为一致）。
-    // 静态 rebuild 失败时保留前一帧的 static + animation 组合，不更新一半新状态。
-    if !animation_submitted && static_rebuild_ok && !animation_resources_ready {
+    // Issue #904 复核 5: 动画层与静态孔洞的真正交接点。
+    // 只有静态层也提交成功、或本帧根本不需要重建静态层时，才真正替换动画节点；
+    // 静态层失败时丢弃预备结果，保留上一帧的 static + animation 组合。
+    let mut committed_local: Vec<super::text_motion::VisibleFragment> = Vec::new();
+    let mut committed_holes: Vec<qt_text_node::AnimationClipRect> = Vec::new();
+    let mut animation_layer_ok = false;
+    if prep.prepared && static_rebuild_ok {
+        if scene_graph::commit_animation_layer(root_raw, item_ptr, static_text.scroll_y) {
+            animation_layer_ok = true;
+            committed_holes = qt_text_node::merge_static_clip_rects(prep.holes);
+            committed_local = prep.committed;
+        }
+    } else if prep.prepared {
+        // 静态层提交失败：丢弃本帧预备的动画纹理/节点替换，旧动画节点保持原样，
+        // 与旧静态正文仍属同一帧。绝不留下“新动画 + 旧正文”。
+        scene_graph::discard_animation_layer(root_raw, item_ptr);
+    } else if should_rebuild_static && static_rebuild_ok {
+        // 动画层本帧不成立（资源缺失或纹理创建失败），静态层已按完整 canonical
+        // 提交（无孔洞）。此刻才清掉旧动画层，两层同帧一致：没有孔洞、也没有
+        // 残留在旧孔洞上方的动态图。
         scene_graph::clear_animation_layer(root_raw, item_ptr);
+        animation_layer_ok = true;
     }
+    // 其余情况（既不预备也没重建静态层）保留上一帧的 static + animation 组合。
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
     // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。
@@ -547,27 +569,27 @@ pub(crate) fn render_frame(
         static_rebuild_ok,
         new_loaded_para_range: rebuild_new_range,
         committed_local,
+        committed_holes,
         animation_layer_ok,
     }
 }
 
-/// Issue #904 评论 4：提交动画层，并返回 **C++ 真正接受的结果**。
+/// Issue #904 复核 5：**预备**动画层（两阶段提交的第一阶段，不改动场景图）。
 ///
-/// 返回的 `committed` 只含 C++ 侧真正建立并绑定有效 `QSGTexture` 的局部片段；
-/// 缺纹理（`continue`）或裁剪后无可见面积（`continue`）的片段不算：
-/// 它们没有画出任何像素，不能作为“上一次真正画出的局部图片”参与重定向。
+/// 只把本帧需要的 `QSGTexture` 建好/取出并暂存，返回预备结果。真正的节点替换由
+/// [`crate::editor::scene_graph::commit_animation_layer`] 在静态层也提交成功后执行；
+/// 静态层失败时调用 `discard_animation_layer` 丢弃，旧动画节点不受影响。
 ///
-/// 返回值同时给出本帧静态层应挖的 `holes`：动画层成立时等于计划的
+/// 返回值同时给出本帧静态层应挖的 `holes`：预备成功时等于计划的
 /// `static_holes`（含 progress=0 尚无可见像素、但已接管目标的吐字），
-/// 动画层失败时为空 —— 保证静态孔洞与动画纹理原子交接。
-fn render_text_animation_layer(
+/// 预备失败时为空 —— 保证静态孔洞与动画纹理原子交接。
+fn prepare_text_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     glyphs: &[super::render_plan::TextAnimationGlyphInfo],
     holes: &[qt_text_node::AnimationClipRect],
     texture_cache: &TextureCache,
-    scroll_y: f64,
-) -> AnimationLayerOutcome {
+) -> AnimationLayerPrep {
     // Issue #658 评论 5630650436: 空动画帧也要让 AnimationLayerNode 把旧 node 和
     // texture 一次清干净（走下面的 `glyph_count == 0` 分支 clear_animation_layer），
     // 否则 activeSet sweep 不运行，m_texture_cache 里的 QSGTexture 继续留着。
@@ -666,14 +688,13 @@ fn render_text_animation_layer(
 
     let glyph_count = glyph_data.len() / 5;
     if glyph_count == 0 {
-        // 本帧没有可见 glyph（如吐字 progress=0，裁剪后宽度为 0）：
-        // 清空动画层，但孔洞仍然成立——吐字从 0 宽开始，目标字形必须继续被
-        // 静态层排除，否则新字会在开始帧直接以完整 canonical 显示。
-        scene_graph::clear_animation_layer(root_raw, item_ptr);
-        return AnimationLayerOutcome {
+        // 本帧没有可见 glyph（如吐字 progress=0，裁剪后宽度为 0）：预备结果仍然
+        // “成立”——commit 时把动画层清空，但孔洞照旧成立，吐字从 0 宽开始，
+        // 目标字形必须继续被静态层排除，否则新字会在开始帧直接以完整 canonical 显示。
+        return AnimationLayerPrep {
+            prepared: true,
             committed: Vec::new(),
             holes: holes.to_vec(),
-            layer_ok: true,
         };
     }
 
@@ -684,7 +705,7 @@ fn render_text_animation_layer(
         .map(|img| img as *const qmetaobject::QImage)
         .collect();
 
-    let accepted = scene_graph::update_animation_layer(
+    let accepted = scene_graph::prepare_animation_layer(
         root_raw,
         item_ptr,
         glyph_count as i32,
@@ -692,25 +713,20 @@ fn render_text_animation_layer(
         image_ptrs.as_ptr(),
         source_rects.as_ptr(),
         snapshot_ids.as_ptr(),
-        scroll_y,
     );
 
-    if accepted as usize == glyph_count {
-        AnimationLayerOutcome {
+    if accepted == glyph_count as i32 {
+        AnimationLayerPrep {
+            prepared: true,
             committed: committed_local,
             holes: holes.to_vec(),
-            layer_ok: true,
         }
     } else {
         // C++ 未能把本帧全部 glyph 建立并绑定有效纹理（root/动画层缺失或纹理
-        // 创建失败）。此时动画层不成立：清空它，并返回空孔洞，让静态层画完整
-        // canonical。绝不留下“静态挖了空但动画没画”。
-        scene_graph::clear_animation_layer(root_raw, item_ptr);
-        AnimationLayerOutcome {
-            committed: Vec::new(),
-            holes: Vec::new(),
-            layer_ok: false,
-        }
+        // 创建失败）。丢弃预备结果，动画层本帧不成立：调用方不挖任何孔洞，
+        // 并在静态层画完整 canonical 之后清掉旧动画层。
+        scene_graph::discard_animation_layer(root_raw, item_ptr);
+        AnimationLayerPrep::default()
     }
 }
 

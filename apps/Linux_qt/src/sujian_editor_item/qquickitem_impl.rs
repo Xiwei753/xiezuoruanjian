@@ -410,12 +410,17 @@ impl QQuickItem for SujianEditorItem {
                 .local_text
                 .has_animation_resources(self.pipeline.texture_cache());
 
-            // Issue #904 评论 1: 只有资源就绪、本帧真的会挖孔时才算"孔洞活跃"。
+            // Issue #904 评论 1: 只有资源就绪、本帧真的会挖孔时才算"期望挖孔"。
             // 翻转那一帧强制刷新静态裁剪：开始帧同一帧挖空、结束帧同一帧恢复
-            // canonical、资源就绪帧同一帧补挖。避免"动画画了但静态没挖空"或反之。
-            let holes_active = animation_resources_ready && !motion_frame.static_holes.is_empty();
-            let clip_state_changed = holes_active != self.prev_local_text_holes_active;
-            self.prev_local_text_holes_active = holes_active;
+            // canonical、资源就绪帧同一帧补挖。
+            //
+            // Issue #904 复核 5: 这里比较的是"本帧期望"与"上一次**实际提交成功**的
+            // 孔洞状态"，并且**不在这里提前记账**。Qt 首帧可能拒绝动画纹理，此时
+            // 静态层并未真的挖孔；若提前把期望记成已提交，下一帧就不会补挖孔，
+            // 动态图会和完整静态正文叠画。实际状态在 render_frame 返回后更新。
+            let desired_holes_active =
+                animation_resources_ready && !motion_frame.static_holes.is_empty();
+            let clip_state_changed = desired_holes_active != self.prev_local_text_holes_active;
 
             // Issue #904 复核 1: 整体段落位移活跃时静态层每帧都要刷新 transform 插值；
             // 位移清空那一帧（动画结束）也必须再刷新一次，把段落留在目标矩阵。
@@ -480,6 +485,15 @@ impl QQuickItem for SujianEditorItem {
                 self.pipeline.texture_cache(),
             );
             let static_rebuild_ok = render_outcome.static_rebuild_ok;
+
+            // Issue #904 复核 5: 只有本帧静态孔洞与动画层真正提交成功（两层同帧
+            // 一致）时，才把"上一帧实际挖了孔"记成真实状态；提交失败时保留上次
+            // 真实状态，本帧明确提交无孔洞 canonical 成功时写回 false。下一帧的
+            // `clip_state_changed` 因此由**实际提交结果**驱动：Qt 首帧拒绝纹理、
+            // 次帧可用时会强制补挖孔，动画结束帧同帧恢复完整 canonical。
+            if render_outcome.static_rebuild_ok && render_outcome.animation_layer_ok {
+                self.prev_local_text_holes_active = !render_outcome.committed_holes.is_empty();
+            }
 
             // Issue #901 第九轮阻塞4: 更新 per-item loaded_para_range。
             // rebuild 成功时用新范围，失败时保留旧范围（new_loaded_para_range=None）。
