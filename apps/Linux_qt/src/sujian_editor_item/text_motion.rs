@@ -840,6 +840,10 @@ fn replaced_in_old(edit: &EditorEditResult, byte_range: (usize, usize)) -> bool 
 ///
 /// 只按段落 id 配对（换行插入/删除时下游段落 id 不变）；新出现的段落没有
 /// 旧身份，其文字通过逐字 Move 处理。
+///
+/// Issue #904 复核 10：候选段落来自旧/新两侧**整章段落锚点**（与视口裁剪无关），
+/// 因此"原先整段在屏幕外、这次编辑后移动进视口"（或反向）也能配对成功——不能
+/// 再要求该 id 在两侧 `line_snapshots` 里都出现过。
 fn collect_paragraph_moves(
     old_layout: Option<&EditorLayoutSnapshot>,
     new_layout: &EditorLayoutSnapshot,
@@ -887,29 +891,14 @@ fn collect_paragraph_moves(
 
 /// 段落 id → （真实段首 y，段落高度），文档坐标。
 ///
-/// Issue #904 复核 9：段首必须取 `paragraph_top_document_y`（该版 canonical 的
-/// 权威 `height_index`），不能取快照里第一条可见行的 `document_origin_y` ——
-/// 构建路线按视口裁行，长段落从屏幕上方延伸进视口时两者并不相等，会让整段位移
-/// 的起点 y 取错（甚至把"没移动"判成移动、把移动判成没移动）。
+/// Issue #904 复核 10：直接读该版本的整章 `paragraph_anchors`。锚点与视口裁剪无关，
+/// 屏幕外段落也在其中；旧/新两侧的锚点集合才是跨视口位移的完整候选来源。
 fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64, f64)> {
-    let mut tops: Vec<(u64, f64, f64)> = Vec::new();
-    for line in &layout.line_snapshots {
-        match tops
-            .iter_mut()
-            .find(|(id, _, _)| *id == line.stable_paragraph_id)
-        {
-            Some(entry) => {
-                entry.1 = entry.1.min(line.paragraph_top_document_y);
-                entry.2 = entry.2.max(line.paragraph_height);
-            }
-            None => tops.push((
-                line.stable_paragraph_id,
-                line.paragraph_top_document_y,
-                line.paragraph_height,
-            )),
-        }
-    }
-    tops
+    layout
+        .paragraph_anchors
+        .iter()
+        .map(|anchor| (anchor.paragraph_id, anchor.top_y, anchor.height))
+        .collect()
 }
 
 fn glyph_info(

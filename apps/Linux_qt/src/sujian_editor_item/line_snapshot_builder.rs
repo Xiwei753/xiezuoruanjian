@@ -18,8 +18,8 @@
 
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{
-    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
-    ShapingIdentity, SourceRect,
+    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, ParagraphAnchor,
+    PreparedLineSnapshot, ShapingIdentity, SourceRect,
 };
 use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::layout::{
@@ -43,6 +43,50 @@ fn paragraph_top_and_height(
     )
 }
 
+/// Issue #904 复核 10：本次编辑受影响的**段落 slot** 集合（按真实 byte 范围判定）。
+///
+/// 编辑发生在可见光标处，但一次粘贴/换行/删除多行会把受影响段落的行推到视口之外。
+/// 这些行的 cluster 几何与该版本图片必须一并保留：否则屏幕外进入/离开的字在
+/// `text_motion` 里拿不到完整 old/new 几何，会被误判成 Reveal/Conceal 或整段缺席。
+fn affected_paragraph_slots(
+    doc_snapshot: &CanonicalDocumentVisualSnapshot,
+    affected_range: Option<(usize, usize)>,
+) -> Vec<usize> {
+    let Some((start, end)) = affected_range else {
+        return Vec::new();
+    };
+    let index = doc_snapshot.paragraph_offset_index.as_ref();
+    let paragraph_count = index.len();
+    if paragraph_count == 0 {
+        return Vec::new();
+    }
+    // 零长度的插入（光标处）用 start 自身定位段落。
+    let last_byte = end.saturating_sub(1).max(start);
+    let first = index.byte_to_paragraph(start).min(paragraph_count - 1);
+    let last = index.byte_to_paragraph(last_byte).min(paragraph_count - 1);
+    (first..=last).collect()
+}
+
+/// Issue #904 复核 10：该版本**全部段落**的几何锚点（不含任何 QImage）。
+///
+/// `visual_lines` 按段落顺序排列、同段连续，因此只与上一个锚点比较即可去重，O(行数)。
+fn paragraph_anchors(doc_snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<ParagraphAnchor> {
+    let mut anchors: Vec<ParagraphAnchor> = Vec::new();
+    for line in doc_snapshot.resolved_visual_lines().iter() {
+        let paragraph_id = line.paragraph_id.as_u64();
+        if anchors.last().map(|a| a.paragraph_id) == Some(paragraph_id) {
+            continue;
+        }
+        let (top_y, height) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+        anchors.push(ParagraphAnchor {
+            paragraph_id,
+            top_y,
+            height,
+        });
+    }
+    anchors
+}
+
 pub(crate) struct LineSnapshotBuilder;
 
 impl LineSnapshotBuilder {
@@ -56,15 +100,42 @@ impl LineSnapshotBuilder {
         doc_snapshot: &CanonicalDocumentVisualSnapshot,
         scroll_y: f64,
         viewport_h: f64,
+        affected_range: Option<(usize, usize)>,
     ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
         let mut prev_cache_slot: Option<i32> = None;
         let mut visual_line_ordinal: u32 = 0;
 
-        // Issue #901: 用 resolve_viewport_visual_lines 只物化视口内行（加边距），
+        // Issue #904 复核 10：本次编辑受影响段落 —— 它们的行即使被推到视口外也必须
+        // 保留（屏幕外进入/离开的字要按真实路径生成 Move）。
+        let affected_slots = affected_paragraph_slots(doc_snapshot, affected_range);
+
+        // Issue #901: 只物化视口内行（加边距）∪ 本次编辑受影响段落的行，
         // 避免对长篇文档物化整章所有视觉行。返回的行已是物化后的绝对坐标。
         // 当 height_index 为空时退化为物化所有行（与原 resolved_visual_lines 一致）。
-        let resolved_lines = doc_snapshot.resolve_viewport_visual_lines(scroll_y, viewport_h);
+        let resolved_lines: Vec<VisualLine> = if doc_snapshot.height_index.is_empty() {
+            doc_snapshot.resolved_visual_lines().into_owned()
+        } else {
+            let margin = viewport_h.max(100.0);
+            let (vp_first, vp_last_excl) = doc_snapshot
+                .height_index
+                .paragraphs_in_y_range(scroll_y - margin, scroll_y + viewport_h + margin);
+            let mut first = vp_first;
+            let mut last_excl = vp_last_excl;
+            for &slot in &affected_slots {
+                first = first.min(slot);
+                last_excl = last_excl.max(slot + 1);
+            }
+            let first = first.min(doc_snapshot.paragraphs.len());
+            let last_excl = last_excl.min(doc_snapshot.paragraphs.len());
+            if first < last_excl {
+                let (start_idx, end_idx) =
+                    doc_snapshot.paragraph_visual_line_range(first, last_excl);
+                doc_snapshot.resolve_visual_line_range(start_idx, end_idx)
+            } else {
+                Vec::new()
+            }
+        };
         for line in &resolved_lines {
             // Issue #901: 用 logical_slot 作为 paragraph_id（段落索引），
             // 遇到新 logical_slot 时重置 visual_line_ordinal 为 0。
@@ -78,7 +149,10 @@ impl LineSnapshotBuilder {
             if line.para_text.is_empty() {
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
-                if line_bottom < -line.height || line_top > viewport_h + line.height {
+                // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
+                if (line_bottom < -line.height || line_top > viewport_h + line.height)
+                    && !affected_slots.contains(&(line.logical_slot as usize))
+                {
                     visual_line_ordinal += 1;
                     continue;
                 }
@@ -117,7 +191,10 @@ impl LineSnapshotBuilder {
 
             let line_top = line.y - scroll_y;
             let line_bottom = line_top + line.height;
-            if line_bottom < -line.height || line_top > viewport_h + line.height {
+            // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
+            if (line_bottom < -line.height || line_top > viewport_h + line.height)
+                && !affected_slots.contains(&(line.logical_slot as usize))
+            {
                 visual_line_ordinal += 1;
                 continue;
             }
@@ -225,6 +302,8 @@ impl LineSnapshotBuilder {
         Ok(EditorLayoutSnapshot {
             revision,
             line_snapshots,
+            // Issue #904 复核 10：整章段落锚点（与视口裁剪无关），供跨视口位移使用。
+            paragraph_anchors: paragraph_anchors(doc_snapshot),
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
@@ -249,6 +328,7 @@ impl LineSnapshotBuilder {
         scroll_y: f64,
         viewport_h: f64,
         height_index: &ParagraphHeightIndex,
+        affected_range: Option<(usize, usize)>,
     ) -> Result<EditorLayoutSnapshot, String> {
         let mut line_snapshots = Vec::new();
 
@@ -256,15 +336,17 @@ impl LineSnapshotBuilder {
             return Ok(EditorLayoutSnapshot {
                 revision,
                 line_snapshots,
+                paragraph_anchors: Vec::new(),
                 caret_rect: None,
                 caret_rect_doc: None,
                 caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
             });
         }
 
-        // Issue #901 第五轮阻塞5: 用高度索引 O(log n) 定位视口内段落范围。
+        // Issue #904 复核 10: 用高度索引 O(log n) 定位视口内段落范围。
         // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
         // 加边距确保边缘行不被遗漏。
+        let affected_slots = affected_paragraph_slots(doc_snapshot, affected_range);
         let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
         let viewport_top = scroll_y - max_line_h;
         let viewport_bottom = scroll_y + viewport_h + max_line_h;
@@ -280,16 +362,28 @@ impl LineSnapshotBuilder {
         // 插段后复用后缀行的 raw logical_slot 没有更新，partition_point 二分仍会找错；
         // paragraph_id_to_line_range 按 visual_lines 实际行顺序构建，通过 ParagraphId
         // → (start, end) 直接定位行范围，索引为空时退化为 partition_point(logical_slot)。
-        let (start_idx, end_idx) =
-            if first_para_idx < doc_snapshot.paragraphs.len() && last_para_idx >= first_para_idx {
-                let last_excl = (last_para_idx + 1).min(doc_snapshot.paragraphs.len());
-                doc_snapshot.paragraph_visual_line_range(first_para_idx, last_excl)
+        let (start_idx, end_idx) = {
+            let para_len = doc_snapshot.paragraphs.len();
+            let mut first = first_para_idx.min(para_len);
+            let mut last_excl = if first_para_idx < para_len && last_para_idx >= first_para_idx {
+                (last_para_idx + 1).min(para_len)
+            } else {
+                first
+            };
+            // Issue #904 复核 10：受影响段落的行一并枚举（可能整段被推到视口之外）。
+            for &slot in &affected_slots {
+                first = first.min(slot);
+                last_excl = last_excl.max(slot + 1);
+            }
+            if first < last_excl {
+                doc_snapshot.paragraph_visual_line_range(first, last_excl)
             } else {
                 (
                     doc_snapshot.visual_lines.len(),
                     doc_snapshot.visual_lines.len(),
                 )
-            };
+            }
+        };
 
         // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
         // 不遍历前面的行。visual_line_ordinal 在段落内从 0 递增。
@@ -311,7 +405,10 @@ impl LineSnapshotBuilder {
 
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
-                if line_bottom < -line.height || line_top > viewport_h + line.height {
+                // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
+                if (line_bottom < -line.height || line_top > viewport_h + line.height)
+                    && !affected_slots.contains(&(line.logical_slot as usize))
+                {
                     visual_line_ordinal += 1;
                     continue;
                 }
@@ -356,7 +453,10 @@ impl LineSnapshotBuilder {
 
             let line_top = line.y - scroll_y;
             let line_bottom = line_top + line.height;
-            if line_bottom < -line.height || line_top > viewport_h + line.height {
+            // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
+            if (line_bottom < -line.height || line_top > viewport_h + line.height)
+                && !affected_slots.contains(&(line.logical_slot as usize))
+            {
                 visual_line_ordinal += 1;
                 continue;
             }
@@ -457,6 +557,8 @@ impl LineSnapshotBuilder {
         Ok(EditorLayoutSnapshot {
             revision,
             line_snapshots,
+            // Issue #904 复核 10：整章段落锚点（与视口裁剪无关），供跨视口位移使用。
+            paragraph_anchors: paragraph_anchors(doc_snapshot),
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
@@ -476,9 +578,9 @@ impl LineSnapshotBuilder {
         viewport_h: f64,
     ) -> Result<(EditorLayoutSnapshot, EditorLayoutSnapshot), String> {
         let old_layout =
-            Self::build_from_canonical_document(old_revision, old_doc, scroll_y, viewport_h)?;
+            Self::build_from_canonical_document(old_revision, old_doc, scroll_y, viewport_h, None)?;
         let new_layout =
-            Self::build_from_canonical_document(new_revision, new_doc, scroll_y, viewport_h)?;
+            Self::build_from_canonical_document(new_revision, new_doc, scroll_y, viewport_h, None)?;
         Ok((old_layout, new_layout))
     }
 

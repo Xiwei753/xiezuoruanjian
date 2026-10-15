@@ -239,6 +239,19 @@ impl PreparedLineSnapshot {
     }
 }
 
+/// Issue #904 复核 10：该版本**全部段落**的几何锚点（稳定 ParagraphId → 段首 y、段高）。
+///
+/// 与 `line_snapshots` 分离：`line_snapshots` 只为视口内行（以及本次编辑受影响的段落
+/// 行）准备 QImage 与 cluster，会被按视口裁剪；段落整体位移的候选段落却可能**两端都
+/// 不在** `line_snapshots` 里（屏幕外进入/离开）。锚点不含任何 QImage，只描述该版本
+/// 每个段落的真实位置，因此可以完整保留任意稳定 ParagraphId 的 `(top_y, height)`。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ParagraphAnchor {
+    pub paragraph_id: u64,
+    pub top_y: f64,
+    pub height: f64,
+}
+
 /// 一次完整排版的不可变快照集合。
 ///
 /// `revision` 标识同一批布局视觉结果，不是正文版本号的替代品。
@@ -248,6 +261,12 @@ impl PreparedLineSnapshot {
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
+    /// Issue #904 复核 10：该版本全部段落的几何锚点（按文档顺序）。
+    ///
+    /// 判断"屏幕外段落是否因编辑移动进/出视口"只允许用这份索引。绝不能用
+    /// `line_snapshots` 里出现过的段落反推——那是视口裁剪后的子集，屏幕外段落
+    /// 会整段缺席，导致跨视口的位移被漏掉。
+    pub paragraph_anchors: Vec<ParagraphAnchor>,
     /// Viewport 坐标的 caret（y/baseline_y 已减 scroll_y），给平台/IME query 使用。
     pub caret_rect: Option<CaretRect>,
     /// Issue #722 评论 5749791161: 文档坐标的 caret（y/baseline_y 不减 scroll_y，
@@ -277,10 +296,21 @@ impl EditorLayoutSnapshot {
         EditorLayoutSnapshot {
             revision,
             line_snapshots,
+            paragraph_anchors: Vec::new(),
             caret_rect,
             caret_rect_doc,
             caret_affinity,
         }
+    }
+
+    /// Issue #904 复核 10：该版本某个**稳定 ParagraphId** 的真实 `(段首 y, 段高)`。
+    ///
+    /// 与视口裁剪无关：即使该段落的全部行都在屏幕外，锚点仍然完整。
+    pub fn paragraph_anchor(&self, paragraph_id: u64) -> Option<(f64, f64)> {
+        self.paragraph_anchors
+            .iter()
+            .find(|a| a.paragraph_id == paragraph_id)
+            .map(|a| (a.top_y, a.height))
     }
 
     pub fn lines_in_byte_range(

@@ -150,6 +150,7 @@ impl SujianEditorItem {
             scroll_y,
             viewport_h,
             height_index,
+            affected_range,
         ) {
             Ok(s) => s,
             Err(err) => return Err(err),
@@ -605,6 +606,7 @@ impl SujianEditorItem {
                 &doc_snapshot,
                 scroll_y,
                 viewport_h,
+                composition_range,
             ) {
                 Ok(s) => s,
                 Err(err) => {
