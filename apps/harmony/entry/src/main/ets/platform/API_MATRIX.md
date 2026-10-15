@@ -262,7 +262,8 @@
   - `HdsTabsFloatingStyle.systemMaterialEffect?: SystemMaterialParams` — 系统材质效果
   - `HdsTabsFloatingStyle.miniBar?: HdsTabsMiniBar` — 页签栏同排的 MiniBar 区域（since 6.1.0(23)），承载页签之外的主操作
   - `HdsTabsMiniBar.miniBarBuilder: CustomBuilder | ComponentContent`（必填）— MiniBar 内自绘内容；`enableMiniBarBackground?: boolean`（默认 true，跟随页签栏背景）；`miniBarWidth?: HdsBarWidthRangeOptions`；`miniBarStyle?: HdsBarStyle`；`barLayoutMode?: HdsBarLayoutMode`（since 6.1.1(24)：HORIZONTAL 与页签同排 / VERTICAL 分两排）
-  - `HdsTabsController.applyMiniBarStyle(HdsBarStyle)` — 切换 MiniBar 显示风格（自带默认动画）
+  - `HdsTabsMiniBar.onBarStyleChange?: BarStyleChangeCallback(miniBarStyle, tabBarStyle, miniBarWidth, tabBarWidth, mode)` — MiniBar/页签栏折叠态变化回调；`HdsBarStyle { COLLAPSE = 0, EXPAND = 1 }`；`HdsTabsBarChangeMode { NORMAL = 0 旋转/开关屏, USER_CLICK = 1 点击折叠的 MiniBar 或 TabBar, APP_TRIGGER = 2 由 controller 接口触发 }`
+  - `HdsTabsController.applyMiniBarStyle(HdsBarStyle)` — 切换 MiniBar 显示风格（自带默认动画；此路径发出的变化是 `APP_TRIGGER`）
   - `hdsMaterial.MaterialType.IMMERSIVE = 101` — 沉浸光感材质类型（since 6.1.0(23)）
 - 最低 API：23
 - SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
@@ -401,6 +402,7 @@
   - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边~~（曾与底栏胶囊观感对齐）：**它本身能正常显示**，实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。废弃原因是没有沉浸材质高光 / 跟手按压光，而且已被独立描边层方案替代。
   - ~~`systemMaterial(floatingMaterial(false))` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)`~~：**这一条才是**「材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见」的原因（材质接管阴影后 `applyShadow` 传 false，改回自定义 shadow 也没有可投实体）。
 - **Issue #905 复核更正：光感不靠内容流补，改把主操作搬到合规宿主**。窄屏主操作「+」不再由内容流 FAB 呈现，而是复用页面上已有的那一个 `HdsTabs`（`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`），在同一个 `barFloatingStyle` 里加 `miniBar: { miniBarBuilder: this.primaryActionMiniBar }`，把「+」放在页签栏同排的 MiniBar 区域，由 HDS 宿主透出系统沉浸光感；点击只派发 `PrimaryActionChannel` 里登记的**页面原有**创建入口（新建作品 / 新建卷 / 新建星图），不另起业务逻辑。内容流 `PrimaryFab.ets` 因此降级为「普通主操作按钮」，只在 API < 23 或宽屏/无 HDS 底部 TabBar 的版型使用。MiniBar 与页签同排，**不保证落在原来的右下角 FAB 位置**——这是官方公开组件的几何限制，不是漏改。
+- **Issue #905 第三轮：MiniBar 的折叠/点击语义已按官方 API 处理，但「原右下角位置 + 原生光感 + 加号一次点击新建」三者仍无法同时满足**。官方 d.ts 行为：宽度 < 600vp 时首次创建的 MiniBar 默认 `COLLAPSE`；点击**折叠的** MiniBar 或 TabBar 会以 `USER_CLICK` 模式触发折叠/展开变化；宽度 < 440vp 时 MiniBar 展开与 TabBar 折叠还会重排底部导航。本实现把该 MiniBar 当**主操作宿主**而不是可折叠导航区，因此把它钉在 `EXPAND`：`miniBarStyle: HdsBarStyle.EXPAND` 创建即展开，且 `onBarStyleChange` 里凡非 `APP_TRIGGER` 模式把它变成 `COLLAPSE` 就立刻 `controller.applyMiniBarStyle(EXPAND)` 拉回（拉回自身是 `APP_TRIGGER`，被忽略，不会自激），从而避免「第一次点按被系统吃成展开 MiniBar」。`miniBarWidth` 三档都钉 48（一个按钮尺寸），不随 440/600/840vp 宽度档位改档重排。**未使用** `barLayoutMode`（`HORIZONTAL` 即官方默认同排，`VERTICAL` 分两排且是 since 6.1.1(24)）：VERTICAL 只是把 MiniBar 单独放到另一排，同样不构成右下角独立 FAB 位置，故不引入。**结论：原生光感材质存在于合规宿主上这一点成立，但「位置复刻」和「加号单击即为新建」在公开组件下无法与前者同时保证；真机未连接，上述交互未经目视确认，本条按未完成如实保留。**
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
   - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)` + `zIndex(1)`）就没有这个冲突，而且不依赖材质是否渲染成功。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。

@@ -27,6 +27,9 @@ import {
   HdsNavigation,
   HdsTabsFloatingStyle,
   HdsTabsController,
+  HdsBarStyle,
+  HdsTabsBarChangeMode,
+  BarStyleChangeCallback,
   HdsAnimationMode,
   hdsMaterial,
 } from '@kit.UIDesignKit'
@@ -87,6 +90,29 @@ export struct HdsPrimaryTabsApi23 {
   // Issue #773 评论5844518092 第2项：长期持有的 HdsTabsController，创建 HdsTabs 时经 options 传入，
   // 修复真机日志 "GetHdsTabsController no hdsTabsControllerClass prop"。
   private controller: HdsTabsController = new HdsTabsController()
+
+  // Issue #905 复核（MiniBar 折叠/点击语义）：按官方 d.ts，宽度 <600vp 时首次创建的 MiniBar
+  // 默认 COLLAPSE；「点击折叠的 MiniBar 或 TabBar」会以 USER_CLICK 模式切换折叠/展开；
+  // 只有 controller.applyMiniBarStyle() 触发的切换才是 APP_TRIGGER。
+  // 本项目这个 MiniBar 不是可折叠导航区，而是主操作「+」的宿主：一次点按必须直接落到
+  // primaryActionMiniBar 的 onClick，不能先被系统吃成「展开 MiniBar」。
+  // 处理方式：把它的样式钉死在 EXPAND —— 创建时显式给 miniBarStyle: EXPAND，
+  // 且系统以非 APP_TRIGGER 模式把它变成 COLLAPSE 时立即拉回 EXPAND。
+  // 拉回本身上报 APP_TRIGGER，被下面第一行忽略，不会自激。
+  private miniBarStyleChange: BarStyleChangeCallback = (
+    miniBarStyle: HdsBarStyle,
+    tabBarStyle: HdsBarStyle,
+    miniBarWidth: number,
+    tabBarWidth: number,
+    mode: HdsTabsBarChangeMode
+  ): void => {
+    if (mode === HdsTabsBarChangeMode.APP_TRIGGER) {
+      return
+    }
+    if (miniBarStyle === HdsBarStyle.COLLAPSE) {
+      this.controller.applyMiniBarStyle(HdsBarStyle.EXPAND)
+    }
+  }
 
   // Issue #774 评论5847359998：@Watch 回调——currentShowPrimaryNav 变化时通过 controller 动画控制底栏显隐，
   // 不销毁 TabContent，避免 Settings 进入两次、Home 重新 appear、返回首页 FAB 乱跳。
@@ -251,10 +277,23 @@ export struct HdsPrimaryTabsApi23 {
     // Issue #905：当前页确有 Core 主操作、且底部 TabBar 可见时，用 HDS 原生 MiniBar
     // 承载「+」，由宿主 MiniBar 透出系统沉浸光感。不再对内容流 Button 挂无效的
     // .systemMaterial，也不用 backgroundBlurStyle + shadow 伪造原生光。
+    // Issue #905 复核：这里只切片 MiniBar 的存在性，不碰 index/onChange，也不改
+    // 三个 TabContent 的选中项，所以 MiniBar 随 role/加载结果出现或消失时，
+    // 原生页签的选中与布局不会被这次改动反复翻转（可用状态也只在真实变化时通知）。
     if (this.currentPrimaryActionAvailable && this.currentShowPrimaryNav) {
       style.miniBar = {
         miniBarBuilder: this.primaryActionMiniBar,
         enableMiniBarBackground: true,
+        // 主操作「+」的宿主：创建即展开，点按直接触发主操作，见 miniBarStyleChange 注释。
+        miniBarStyle: HdsBarStyle.EXPAND,
+        onBarStyleChange: this.miniBarStyleChange,
+        // 宽度钉成一个按钮尺寸，不随屏幕宽度档位（440/600/840vp）改档重排；
+        // 这是「MiniBar 与页签同排」这一官方几何下能做的收窄，不代表回到原右下角 FAB 位置。
+        miniBarWidth: {
+          smallWidth: 48,
+          mediumWidth: 48,
+          largeWidth: 48,
+        },
       }
     }
     return style
