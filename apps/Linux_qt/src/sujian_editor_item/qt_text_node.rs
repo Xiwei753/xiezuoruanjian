@@ -1091,6 +1091,45 @@ cpp! {{
         return true;
     }
 
+    /// Issue #904 复核 12：只把已存在段落的 `QSGTransformNode` 移到
+    /// `para_y + offset`（progress 帧的段落整体位移）。
+    ///
+    /// 不重建任何段落子树、不发静态 clip、不动纹理：普通 progress 帧只走这里，
+    /// 直接复用 Qt 官方 `QSGTransformNode::setMatrix()` 移动现有子树。
+    /// 段落 identity 用静态层已登记的稳定 ParagraphId（`node_map` 的 key）。
+    bool update_paragraph_motion_transforms(
+        QSGNode* root_raw,
+        QQuickItem* item_ptr,
+        const uint64_t* id_arr,
+        const double* offset_arr,
+        int count
+    ) {
+        if (!root_raw || !item_ptr) return false;
+        if (root_raw->childCount() == 0) return false;
+        auto* staticLayer = static_cast<QSGTransformNode*>(root_raw->childAtIndex(0));
+        if (!staticLayer) return false;
+        auto map_it = g_incremental_para_map.find(staticLayer);
+        if (map_it == g_incremental_para_map.end()) return false;
+        auto& item_map = map_it->second;
+        if (item_map.item_ptr != item_ptr) return false;
+
+        bool any_applied = false;
+        for (int i = 0; i < count; i++) {
+            uint64_t pid = id_arr[i];
+            double y_offset = offset_arr[i];
+            auto it = item_map.para_map.find(pid);
+            if (it == item_map.para_map.end()) continue;
+            if (it->second.applied_y_offset == y_offset) continue;
+            QMatrix4x4 para_mat;
+            para_mat.translate(0.0f, static_cast<float>(it->second.para_y + y_offset), 0.0f);
+            it->second.transform_node->setMatrix(para_mat);
+            it->second.transform_node->markDirty(QSGNode::DirtyMatrix);
+            it->second.applied_y_offset = y_offset;
+            any_applied = true;
+        }
+        return any_applied;
+    }
+
     /// Issue #901 第十轮问题4+第十四轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。
     ///
     /// 在渲染线程调用（如全量 rebuild 回退前），避免全局 map 中残留悬空指针。
@@ -1865,6 +1904,40 @@ pub fn update_text_nodes_incremental(
     });
 
     success
+}
+
+/// Issue #904 复核 12：progress 帧只更新已有段落的 transform y 偏移。
+///
+/// 直接复用 Qt 官方 `QSGTransformNode::setMatrix()` 移动现有子树，不重建段落、
+/// 不发静态 clip、不动纹理。段落 identity 是静态层已登记的稳定 ParagraphId。
+///
+/// # Safety
+/// `root_raw` 必须是有效的 QSGNode 指针；`item_ptr` 必须是有效的 QQuickItem 指针。
+pub fn update_paragraph_motion_transforms(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    paragraph_y_offsets: &[(u64, f64)],
+) -> bool {
+    if paragraph_y_offsets.is_empty() {
+        return false;
+    }
+    let offset_ids: Vec<u64> = paragraph_y_offsets.iter().map(|(id, _)| *id).collect();
+    let offset_values: Vec<f64> = paragraph_y_offsets
+        .iter()
+        .map(|(_, value)| *value)
+        .collect();
+    let offset_count = offset_ids.len() as i32;
+    let offset_id_ptr = offset_ids.as_ptr();
+    let offset_val_ptr = offset_values.as_ptr();
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        offset_id_ptr as "const uint64_t*",
+        offset_val_ptr as "const double*",
+        offset_count as "int"
+    ] -> bool as "bool" {
+        return update_paragraph_motion_transforms(root_raw, item_ptr, offset_id_ptr, offset_val_ptr, offset_count);
+    })
 }
 
 /// Issue #901 第十轮问题4: 清理指定 item 的 ParagraphId→QSGNode 映射。

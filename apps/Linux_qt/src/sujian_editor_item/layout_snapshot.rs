@@ -5,7 +5,9 @@
 
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
-use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot};
+use crate::editor::layout::chunked_vec::ChunkedSlotMap;
+use crate::editor::layout::ParagraphHeightIndex;
+use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, ParagraphId};
 use cpp::cpp;
 use qmetaobject::QImage;
 
@@ -239,19 +241,6 @@ impl PreparedLineSnapshot {
     }
 }
 
-/// Issue #904 复核 10：该版本**全部段落**的几何锚点（稳定 ParagraphId → 段首 y、段高）。
-///
-/// 与 `line_snapshots` 分离：`line_snapshots` 只为视口内行（以及本次编辑受影响的段落
-/// 行）准备 QImage 与 cluster，会被按视口裁剪；段落整体位移的候选段落却可能**两端都
-/// 不在** `line_snapshots` 里（屏幕外进入/离开）。锚点不含任何 QImage，只描述该版本
-/// 每个段落的真实位置，因此可以完整保留任意稳定 ParagraphId 的 `(top_y, height)`。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ParagraphAnchor {
-    pub paragraph_id: u64,
-    pub top_y: f64,
-    pub height: f64,
-}
-
 /// 一次完整排版的不可变快照集合。
 ///
 /// `revision` 标识同一批布局视觉结果，不是正文版本号的替代品。
@@ -261,12 +250,17 @@ pub(crate) struct ParagraphAnchor {
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
-    /// Issue #904 复核 10：该版本全部段落的几何锚点（按文档顺序）。
+    /// Issue #904 复核 12：与 `line_snapshots` 分离的**段落几何索引**。
     ///
-    /// 判断"屏幕外段落是否因编辑移动进/出视口"只允许用这份索引。绝不能用
-    /// `line_snapshots` 里出现过的段落反推——那是视口裁剪后的子集，屏幕外段落
-    /// 会整段缺席，导致跨视口的位移被漏掉。
-    pub paragraph_anchors: Vec<ParagraphAnchor>,
+    /// 直接复用本版 canonical 已有的 `Arc`（不复制、不物化第三份位置表）。段落整体
+    /// 位移的候选段落可能两端都不在 `line_snapshots`（屏幕外进入/离开），因此按稳定
+    /// ParagraphId 用 `paragraph_slot_map.slot(id)` + `paragraph_height_index` 即时
+    /// 查询该版本的 `(段首 y, 段高)`。
+    pub paragraph_height_index: Option<std::sync::Arc<ParagraphHeightIndex>>,
+    /// 稳定 `ParagraphId` → 本版 slot。与 `paragraph_height_index` 配套。
+    pub paragraph_slot_map: Option<std::sync::Arc<ChunkedSlotMap>>,
+    /// 文档级 padding：段首 y = `paragraph_padding + height_index.paragraph_top_y(slot)`。
+    pub paragraph_padding: f64,
     /// Viewport 坐标的 caret（y/baseline_y 已减 scroll_y），给平台/IME query 使用。
     pub caret_rect: Option<CaretRect>,
     /// Issue #722 评论 5749791161: 文档坐标的 caret（y/baseline_y 不减 scroll_y，
@@ -296,21 +290,47 @@ impl EditorLayoutSnapshot {
         EditorLayoutSnapshot {
             revision,
             line_snapshots,
-            paragraph_anchors: Vec::new(),
+            paragraph_height_index: None,
+            paragraph_slot_map: None,
+            paragraph_padding: 0.0,
             caret_rect,
             caret_rect_doc,
             caret_affinity,
         }
     }
 
-    /// Issue #904 复核 10：该版本某个**稳定 ParagraphId** 的真实 `(段首 y, 段高)`。
+    /// Issue #904 复核 12：该版本某个**稳定 ParagraphId** 的真实 `(段首 y, 段高)`。
     ///
-    /// 与视口裁剪无关：即使该段落的全部行都在屏幕外，锚点仍然完整。
+    /// 与视口裁剪无关：即使该段落的全部行都在屏幕外也能查到。O(1)（slot 映射 + 前缀和）。
     pub fn paragraph_anchor(&self, paragraph_id: u64) -> Option<(f64, f64)> {
-        self.paragraph_anchors
-            .iter()
-            .find(|a| a.paragraph_id == paragraph_id)
-            .map(|a| (a.top_y, a.height))
+        let slot = self
+            .paragraph_slot_map
+            .as_ref()?
+            .slot(ParagraphId::from_u64(paragraph_id))?;
+        let height_index = self.paragraph_height_index.as_ref()?;
+        Some((
+            self.paragraph_padding + height_index.paragraph_top_y(slot),
+            height_index.height_at(slot),
+        ))
+    }
+
+    /// Issue #904 复核 12：与文档坐标 y 区间相交的段落 slot 区间 `[first, last_excl)`。
+    ///
+    /// 供 `text_motion` 定位视口附近的候选段落（O(log n) 前缀查询），
+    /// 避免遍历整章段落。
+    pub fn paragraph_slots_in_y_range(&self, y_start: f64, y_end: f64) -> (usize, usize) {
+        match self.paragraph_height_index.as_ref() {
+            Some(index) => index.paragraphs_in_y_range(y_start, y_end),
+            None => (0, 0),
+        }
+    }
+
+    /// Issue #904 复核 12：按 slot 取稳定 ParagraphId。
+    pub fn paragraph_id_at_slot(&self, slot: usize) -> Option<u64> {
+        self.paragraph_slot_map
+            .as_ref()?
+            .id_at_slot(slot)
+            .map(ParagraphId::as_u64)
     }
 
     pub fn lines_in_byte_range(

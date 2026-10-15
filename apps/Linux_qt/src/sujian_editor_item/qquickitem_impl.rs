@@ -422,8 +422,10 @@ impl QQuickItem for SujianEditorItem {
                 animation_resources_ready && !motion_frame.static_holes.is_empty();
             let clip_state_changed = desired_holes_active != self.prev_local_text_holes_active;
 
-            // Issue #904 复核 1: 整体段落位移活跃时静态层每帧都要刷新 transform 插值；
-            // 位移清空那一帧（动画结束）也必须再刷新一次，把段落留在目标矩阵。
+            // Issue #904 复核 12: 段落整体位移的 progress 帧**不再**走静态层重建 ——
+            // 每帧只调用 `update_paragraph_motion_transforms` 直接 setMatrix 移动已有
+            // QSGTransformNode 子树。只有"位移开始/结束"这一次翻转需要静态层刷新
+            // （开始帧把矩阵落到目标 para_y + offset 基准，结束帧清回 para_y）。
             let paragraph_moves_active = !motion_frame.paragraph_y_offsets.is_empty();
             let paragraph_moves_changed =
                 paragraph_moves_active != self.prev_paragraph_moves_active;
@@ -431,7 +433,6 @@ impl QQuickItem for SujianEditorItem {
 
             let frame_needs_relayout = base_needs_relayout
                 || clip_state_changed
-                || paragraph_moves_active
                 || paragraph_moves_changed
                 || !animation_resources_ready
                 || !prepared_frame_matches_canonical;

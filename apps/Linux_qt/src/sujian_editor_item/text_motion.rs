@@ -14,8 +14,6 @@
 //! - 新旧字形按 `QTextLayout` 的 cluster 边界（Core 的 UTF-8 byte range）
 //!   整体区分，不猜半个字节。
 
-use std::collections::HashMap;
-
 use super::layout_snapshot::{EditorLayoutSnapshot, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::render_plan::TextAnimationGlyphInfo;
@@ -336,7 +334,16 @@ impl TextMotion {
 
         // 受影响段落以下、仅整体 y 变化的段落交给 transform 平移，其文字不再
         // 逐字生成 Move 覆盖层（避免与 transform 叠加两次位移）。
-        let paragraph_moves = collect_paragraph_moves(old_layout, new_layout, &viewport);
+        // Issue #904 复核 12：候选段落只取"编辑影响到的段落 id"，与旧/新视口附近段落
+        // 合并后逐个按稳定 id 即时查位置——不再枚举整章、也不复制整章表。
+        let mut affected_ids: Vec<u64> = Vec::new();
+        for frag in new_frags.iter().chain(old_frags.iter()) {
+            if frag.paragraph_id != 0 {
+                affected_ids.push(frag.paragraph_id);
+            }
+        }
+        let paragraph_moves =
+            collect_paragraph_moves(old_layout, new_layout, &viewport, &affected_ids);
         let moved_paragraphs: Vec<u64> = paragraph_moves.iter().map(|m| m.paragraph_id).collect();
 
         let mut pieces: Vec<TextPiece> = Vec::new();
@@ -838,31 +845,51 @@ fn replaced_in_old(edit: &EditorEditResult, byte_range: (usize, usize)) -> bool 
     })
 }
 
-/// 复核 1：受影响段落以下、只发生整体 y 变化且在视口气带内的段落。
+/// 复核 1：受影响段落以外、只发生整体 y 变化且在视口气带内的段落。
 ///
 /// 只按段落 id 配对（换行插入/删除时下游段落 id 不变）；新出现的段落没有
 /// 旧身份，其文字通过逐字 Move 处理。
 ///
-/// Issue #904 复核 10：候选段落来自旧/新两侧**整章段落锚点**（与视口裁剪无关），
-/// 因此"原先整段在屏幕外、这次编辑后移动进视口"（或反向）也能配对成功——不能
-/// 再要求该 id 在两侧 `line_snapshots` 里都出现过。
+/// Issue #904 复核 12：候选段落**只**来自旧/新视口附近的 slot 区间（由
+/// `height_index.paragraphs_in_y_range` O(log n) 定位，再用 `id_at_slot` 取稳定
+/// id）加上本次编辑真正影响到的段落 id。旧/新版位置按稳定 id 即时查询，
+/// 不遍历整章、也不复制整章 HashMap。最终仍用 `union(旧矩形, 新矩形)` 与视口
+/// 求交，所以屏幕外的段落自然进入/离开。
 fn collect_paragraph_moves(
     old_layout: Option<&EditorLayoutSnapshot>,
     new_layout: &EditorLayoutSnapshot,
     viewport: &LocalRect,
+    affected_ids: &[u64],
 ) -> Vec<ParagraphMove> {
     let Some(old_layout) = old_layout else {
         return Vec::new();
     };
-    // Issue #904 复核 11: 旧锚点建 HashMap，按 id O(1) 查；不再对整章 Vec 逐段
-    // 线性 `find`（上千段会退化成平方级比较，与"动画只影响少量段落"的目标冲突）。
-    let old_tops: HashMap<u64, (f64, f64)> = paragraph_tops(old_layout)
-        .into_iter()
-        .map(|(id, y, h)| (id, (y, h)))
-        .collect();
+
+    let margin = viewport.h.max(100.0);
+    let y_start = viewport.y - margin;
+    let y_end = viewport.y + viewport.h + margin;
+    let mut candidate_ids: Vec<u64> = Vec::new();
+    for layout in [old_layout, new_layout] {
+        let (first, last_excl) = layout.paragraph_slots_in_y_range(y_start, y_end);
+        for slot in first..last_excl {
+            if let Some(paragraph_id) = layout.paragraph_id_at_slot(slot) {
+                candidate_ids.push(paragraph_id);
+            }
+        }
+    }
+    candidate_ids.extend_from_slice(affected_ids);
+    candidate_ids.sort_unstable();
+    candidate_ids.dedup();
+
     let mut moves = Vec::new();
-    for (paragraph_id, to_y, to_h) in paragraph_tops(new_layout) {
-        let Some((from_y, from_h)) = old_tops.get(&paragraph_id).copied() else {
+    for paragraph_id in candidate_ids {
+        if paragraph_id == 0 {
+            continue;
+        }
+        let Some((from_y, from_h)) = old_layout.paragraph_anchor(paragraph_id) else {
+            continue;
+        };
+        let Some((to_y, to_h)) = new_layout.paragraph_anchor(paragraph_id) else {
             continue;
         };
         if (from_y - to_y).abs() < 0.5 {
@@ -890,18 +917,6 @@ fn collect_paragraph_moves(
         });
     }
     moves
-}
-
-/// 段落 id → （真实段首 y，段落高度），文档坐标。
-///
-/// Issue #904 复核 10：直接读该版本的整章 `paragraph_anchors`。锚点与视口裁剪无关，
-/// 屏幕外段落也在其中；旧/新两侧的锚点集合才是跨视口位移的完整候选来源。
-fn paragraph_tops(layout: &EditorLayoutSnapshot) -> Vec<(u64, f64, f64)> {
-    layout
-        .paragraph_anchors
-        .iter()
-        .map(|anchor| (anchor.paragraph_id, anchor.top_y, anchor.height))
-        .collect()
 }
 
 fn glyph_info(

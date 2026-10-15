@@ -517,6 +517,19 @@ pub(crate) fn render_frame(
         qt_text_node::update_scroll_transform(root_raw, static_text.scroll_y);
     }
 
+    // Issue #904 复核 12：段落整体位移的 progress 帧只走这里 —— 按已登记的稳定
+    // ParagraphId 直接 `setMatrix(translate(0, para_y + offset))`，复用现有
+    // QSGTransformNode 子树，不重新组装视口段落、不重建任何静态节点。
+    // 开始/目标变化/结束帧仍由上面的静态层更新（needs_relayout / force_static_clip_refresh）
+    // 与孔洞交接负责，把矩阵落在目标 `para_y`。
+    if static_rebuild_ok && !static_text.paragraph_y_offsets.is_empty() {
+        qt_text_node::update_paragraph_motion_transforms(
+            root_raw,
+            item_ptr,
+            static_text.paragraph_y_offsets,
+        );
+    }
+
     // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）
     // Issue #709 评论 issue-body-709: 动画层单独画 InsertReveal / DeleteConceal / ReflowMove，
     // 不把静态正文重新补回去。静态层在 clip_count > 0 时已通过 complement 区间

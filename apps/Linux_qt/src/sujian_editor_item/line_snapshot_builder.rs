@@ -18,8 +18,8 @@
 
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{
-    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, ParagraphAnchor,
-    PreparedLineSnapshot, ShapingIdentity, SourceRect,
+    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
+    ShapingIdentity, SourceRect,
 };
 use crate::editor::layout::ParagraphHeightIndex;
 use crate::editor::layout::{
@@ -71,30 +71,6 @@ fn affected_paragraph_slot_range(
 /// 段落 slot 是否落在受影响区间内。O(1)。
 fn slot_in_range(range: Option<(usize, usize)>, slot: usize) -> bool {
     matches!(range, Some((first, last)) if slot >= first && slot <= last)
-}
-
-/// Issue #904 复核 10/11：该版本**全部段落**的几何锚点（不含任何 QImage）。
-///
-/// 复核 11 修正性能退化：只遍历高度索引的段落 slot，稳定 `ParagraphId` 从
-/// `paragraph_id_to_slot` 按 slot O(1) 取，`top_y`/`height` 从高度索引取。
-/// 不再调用 `resolved_visual_lines()` —— 那会对整章每条视觉行做 `materialize_line`
-/// 并 clone 段落文本/图片，把普通输入的局部热路径拉回 O(整章视觉行数)。
-fn paragraph_anchors(doc_snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<ParagraphAnchor> {
-    let slot_map = doc_snapshot.paragraph_id_to_slot.as_ref();
-    let paragraph_count = doc_snapshot.height_index.len();
-    let mut anchors: Vec<ParagraphAnchor> = Vec::with_capacity(paragraph_count);
-    for slot in 0..paragraph_count {
-        let Some(paragraph_id) = slot_map.id_at_slot(slot) else {
-            continue;
-        };
-        let (top_y, height) = paragraph_top_and_height(slot as i32, doc_snapshot);
-        anchors.push(ParagraphAnchor {
-            paragraph_id: paragraph_id.as_u64(),
-            top_y,
-            height,
-        });
-    }
-    anchors
 }
 
 pub(crate) struct LineSnapshotBuilder;
@@ -312,8 +288,11 @@ impl LineSnapshotBuilder {
         Ok(EditorLayoutSnapshot {
             revision,
             line_snapshots,
-            // Issue #904 复核 10：整章段落锚点（与视口裁剪无关），供跨视口位移使用。
-            paragraph_anchors: paragraph_anchors(doc_snapshot),
+            // Issue #904 复核 12：直接复用本版 canonical 的段落高度索引 + 稳定 ID→slot
+            // 映射（Arc clone，O(1)），不再每笔编辑复制一份整章锚点表。
+            paragraph_height_index: Some(std::sync::Arc::clone(&doc_snapshot.height_index)),
+            paragraph_slot_map: Some(std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot)),
+            paragraph_padding: f64::from(doc_snapshot.padding),
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
@@ -346,7 +325,9 @@ impl LineSnapshotBuilder {
             return Ok(EditorLayoutSnapshot {
                 revision,
                 line_snapshots,
-                paragraph_anchors: Vec::new(),
+                paragraph_height_index: None,
+                paragraph_slot_map: None,
+                paragraph_padding: 0.0,
                 caret_rect: None,
                 caret_rect_doc: None,
                 caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
@@ -568,8 +549,11 @@ impl LineSnapshotBuilder {
         Ok(EditorLayoutSnapshot {
             revision,
             line_snapshots,
-            // Issue #904 复核 10：整章段落锚点（与视口裁剪无关），供跨视口位移使用。
-            paragraph_anchors: paragraph_anchors(doc_snapshot),
+            // Issue #904 复核 12：直接复用本版 canonical 的段落高度索引 + 稳定 ID→slot
+            // 映射（Arc clone，O(1)），不再每笔编辑复制一份整章锚点表。
+            paragraph_height_index: Some(std::sync::Arc::clone(&doc_snapshot.height_index)),
+            paragraph_slot_map: Some(std::sync::Arc::clone(&doc_snapshot.paragraph_id_to_slot)),
+            paragraph_padding: f64::from(doc_snapshot.padding),
             caret_rect: None,
             caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
