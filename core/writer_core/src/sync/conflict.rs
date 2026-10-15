@@ -1824,7 +1824,8 @@ impl crate::sync::SyncService {
             Self::read_remote_graph_snapshot_objects(sync_root, &member_rels, snapshot_dir_rel)?;
 
         // issue #902 第十六轮复核：从快照目录读取远端 meta.json
-        let remote_meta =
+        // issue #902 第十七轮复核问题4：meta 快照必须存在，缺少时返回错误。
+        let (meta_rel, meta_bytes) =
             Self::read_remote_meta_snapshot(sync_root, &starmap_id, snapshot_dir_rel)?;
 
         // 重建派生索引
@@ -1877,14 +1878,14 @@ impl crate::sync::SyncService {
             })?;
         }
         // issue #902 第十六轮复核：恢复 meta.json
-        if let Some((meta_rel, meta_bytes)) = &remote_meta {
-            txn.add_bytes(meta_rel, meta_bytes).map_err(|e| {
-                crate::Error::Other(format!(
-                    "apply_starmap_graph_remote_modify: 暂存 meta.json 失败 ({}): {}",
-                    starmap_id, e
-                ))
-            })?;
-        }
+        // issue #902 第十七轮复核问题4：meta 必须存在（read_remote_meta_snapshot 已校验），
+        // 直接写入，不再用 if let Some 跳过。
+        txn.add_bytes(&meta_rel, &meta_bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_graph_remote_modify: 暂存 meta.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
         txn.add_bytes("starmaps/index.json", &index_bytes)
             .map_err(|e| {
                 crate::Error::Other(format!(
@@ -1904,26 +1905,31 @@ impl crate::sync::SyncService {
 
     /// 从快照目录读取远端 meta.json（issue #902 第十六轮复核）。
     ///
-    /// 返回 `Some((meta_rel, bytes))` 当快照存在；`None` 当远端无 meta（保持向后兼容）。
+    /// issue #902 第十七轮复核问题4：快照不存在时返回 `Err` 而非 `Ok(None)`。
+    /// "恢复完整远端星图"的快照要求必需的 meta 与 graph 都存在且匹配相同 starmap_id；
+    /// 缺少 meta 时应返回明确错误，不注册该图 ID，也不宣告恢复成功。
     fn read_remote_meta_snapshot(
         sync_root: &Path,
         starmap_id: &str,
         snapshot_dir_rel: &str,
-    ) -> crate::Result<Option<(String, Vec<u8>)>> {
+    ) -> crate::Result<(String, Vec<u8>)> {
         let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
         let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
         let snap_meta_path = sync_root.join(&snap_meta_rel);
-        if snap_meta_path.exists() {
-            let bytes = std::fs::read(&snap_meta_path).map_err(|e| {
-                crate::Error::Other(format!(
-                    "read_remote_meta_snapshot: 读取远端 meta snapshot 失败 ({}): {}",
-                    starmap_id, e
-                ))
-            })?;
-            Ok(Some((meta_rel, bytes)))
-        } else {
-            Ok(None)
+        if !snap_meta_path.exists() {
+            return Err(crate::Error::Other(format!(
+                "read_remote_meta_snapshot: 远端整图恢复快照缺少 meta.json ({})，\
+                 缺少 meta 无法完整恢复远端星图",
+                snap_meta_rel
+            )));
         }
+        let bytes = std::fs::read(&snap_meta_path).map_err(|e| {
+            crate::Error::Other(format!(
+                "read_remote_meta_snapshot: 读取远端 meta snapshot 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+        Ok((meta_rel, bytes))
     }
 
     /// 从快照目录读取远端整图子对象（issue #902 第十四轮复核）。
@@ -2769,6 +2775,28 @@ mod tests {
         }
         std::fs::write(&snap_obj_path, &rn1_bytes).unwrap();
 
+        // issue #902 第十七轮复核问题4：快照必须包含 meta.json，
+        // 否则 read_remote_meta_snapshot 返回 Err。
+        let snap_meta_rel = format!("{}/starmaps/sm_1.meta.json", snapshot_dir);
+        let snap_meta_path = root.join(&snap_meta_rel);
+        if let Some(parent) = snap_meta_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let meta_bytes = serde_json::json!({
+            "starmapId": "sm_1",
+            "title": "remote meta",
+            "description": "",
+            "projectId": null,
+            "accentColor": "#000000",
+            "createdAt": 0,
+            "updatedAt": 0
+        });
+        std::fs::write(
+            &snap_meta_path,
+            serde_json::to_vec_pretty(&meta_bytes).unwrap(),
+        )
+        .unwrap();
+
         // index.json 不含 sm_1（本地已删除）
         write_index(root, &["sm_2"]);
 
@@ -2917,6 +2945,28 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&snap_obj_path, &rn1_bytes).unwrap();
+
+        // issue #902 第十七轮复核问题4：快照必须包含 meta.json，
+        // 否则 read_remote_meta_snapshot 返回 Err。
+        let snap_meta_rel = format!("{}/starmaps/sm_1.meta.json", snapshot_dir);
+        let snap_meta_path = root.join(&snap_meta_rel);
+        if let Some(parent) = snap_meta_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let meta_bytes = serde_json::json!({
+            "starmapId": "sm_1",
+            "title": "remote meta",
+            "description": "",
+            "projectId": null,
+            "accentColor": "#000000",
+            "createdAt": 0,
+            "updatedAt": 0
+        });
+        std::fs::write(
+            &snap_meta_path,
+            serde_json::to_vec_pretty(&meta_bytes).unwrap(),
+        )
+        .unwrap();
 
         // 保存 index_facts.json：sm_1 是 root，且是 proj1 的 main starmap
         let facts = serde_json::json!({

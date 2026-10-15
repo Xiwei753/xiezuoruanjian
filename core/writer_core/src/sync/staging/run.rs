@@ -479,9 +479,53 @@ impl StagingRun {
         > = std::collections::HashMap::new();
 
         for (starmap_id, group) in starmap_groups {
+            // issue #902 第十七轮复核问题1：先读取 meta 三方 bytes，
+            // 无论 graph 是否存在都需要处理 meta。
+            // 刚创建的空星图只有 meta+index、无 graph.json，
+            // 不能因 graph_meta_path 为 None 就跳过整个分组。
+            let meta_rel = group.meta_path.clone();
+            let (meta_base, meta_local, meta_incoming) = if let Some(mr) = &meta_rel {
+                (
+                    read_opt_bytes(&base_root.join(mr))?,
+                    read_opt_bytes(&live_root.join(mr))?,
+                    read_opt_bytes(&staging_root.join(mr))?,
+                )
+            } else {
+                (None, None, None)
+            };
+
             let graph_rel = match &group.graph_meta_path {
                 Some(p) => p.clone(),
-                None => continue,
+                None => {
+                    // issue #902 第十七轮复核问题1：graph 不存在但 meta 可能存在。
+                    // 独立做 meta-only 生命周期处理，不走 merge_starmap_graph_with_objects，
+                    // 不产生 graph/object 的 CommitAction，不制造凭空存在的 graph。
+                    // graph 未创建时通过 meta/index 判断其创建、删除与冲突。
+                    let lifecycle_decision =
+                        crate::sync::staging::starmap_merge::resolve_graph_lifecycle(
+                            None,
+                            None,
+                            None,
+                            meta_base.as_deref(),
+                            meta_local.as_deref(),
+                            meta_incoming.as_deref(),
+                        );
+                    graph_lifecycle_decisions
+                        .insert(starmap_id.clone(), lifecycle_decision.clone());
+
+                    // 处理 meta（复用统一逻辑）
+                    if let Some(mr) = &meta_rel {
+                        apply_meta_lifecycle_decision(
+                            &mut plan,
+                            &lifecycle_decision,
+                            mr,
+                            &meta_base,
+                            &meta_local,
+                            &meta_incoming,
+                        );
+                    }
+                    continue;
+                }
             };
             let graph_base = read_opt_bytes(&base_root.join(&graph_rel))?;
             let graph_local = read_opt_bytes(&live_root.join(&graph_rel))?;
@@ -521,6 +565,9 @@ impl StagingRun {
                 graph_base.as_deref(),
                 graph_local.as_deref(),
                 graph_incoming.as_deref(),
+                meta_base.as_deref(),
+                meta_local.as_deref(),
+                meta_incoming.as_deref(),
                 &objects,
             )?;
 
@@ -622,72 +669,17 @@ impl StagingRun {
 
             // issue #902 第十六轮复核：meta.json 作为整图生命周期的一部分
             // 服从 graph 的生命周期决策，不再独立走 LWW。
-            if let Some(meta_rel) = &group.meta_path {
-                let meta_base = read_opt_bytes(&base_root.join(meta_rel))?;
-                let meta_local = read_opt_bytes(&live_root.join(meta_rel))?;
-                let meta_incoming = read_opt_bytes(&staging_root.join(meta_rel))?;
-
-                use crate::sync::staging::starmap_merge::GraphLifecycleDecision;
-                match &output.lifecycle_decision {
-                    // 整图删除 → meta 也删除
-                    GraphLifecycleDecision::Delete => {
-                        if meta_local.is_some() {
-                            plan.content_actions.push(CommitAction::Delete {
-                                rel_path: meta_rel.clone(),
-                            });
-                        } else {
-                            plan.noop.push(meta_rel.clone());
-                        }
-                    }
-                    // 正常合并 → meta 走正常三方比较
-                    GraphLifecycleDecision::Normal => {
-                        let m_local_eq_base = opt_bytes_eq(&meta_local, &meta_base);
-                        let m_incoming_eq_base = opt_bytes_eq(&meta_incoming, &meta_base);
-                        let m_local_eq_incoming = opt_bytes_eq(&meta_local, &meta_incoming);
-                        if m_incoming_eq_base {
-                            plan.keep_local.push(meta_rel.clone());
-                        } else if m_local_eq_base {
-                            if let Some(content) = meta_incoming.clone() {
-                                plan.content_actions.push(CommitAction::Apply {
-                                    rel_path: meta_rel.clone(),
-                                    content,
-                                });
-                            } else {
-                                plan.content_actions.push(CommitAction::Delete {
-                                    rel_path: meta_rel.clone(),
-                                });
-                            }
-                        } else if m_local_eq_incoming {
-                            plan.noop.push(meta_rel.clone());
-                        } else {
-                            // 双方都改 → 保持 local（meta 不独立走 LWW 删除，
-                            // 服从整图存在性）
-                            if meta_local.is_some() {
-                                plan.keep_local.push(meta_rel.clone());
-                            } else if let Some(content) = meta_incoming.clone() {
-                                plan.content_actions.push(CommitAction::Apply {
-                                    rel_path: meta_rel.clone(),
-                                    content,
-                                });
-                            } else {
-                                plan.noop.push(meta_rel.clone());
-                            }
-                        }
-                    }
-                    // 整图冲突未决 → meta 不独立删除，保持 local
-                    GraphLifecycleDecision::DeleteModifyConflict { .. } => {
-                        if meta_local.is_some() {
-                            plan.keep_local.push(meta_rel.clone());
-                        } else if let Some(content) = meta_incoming.clone() {
-                            plan.content_actions.push(CommitAction::Apply {
-                                rel_path: meta_rel.clone(),
-                                content,
-                            });
-                        } else {
-                            plan.noop.push(meta_rel.clone());
-                        }
-                    }
-                }
+            // issue #902 第十七轮复核：meta 处理逻辑提取为 apply_meta_lifecycle_decision，
+            // 与 graph 不存在时的 meta-only 处理共用同一逻辑。
+            if let Some(mr) = &meta_rel {
+                apply_meta_lifecycle_decision(
+                    &mut plan,
+                    &output.lifecycle_decision,
+                    mr,
+                    &meta_base,
+                    &meta_local,
+                    &meta_incoming,
+                );
             }
         }
 
@@ -781,6 +773,82 @@ impl Drop for StagingRun {
     fn drop(&mut self) {
         // 兜底清理：commit 正常路径会显式 cleanup，这里防止提前 drop 残留。
         let _ = fs::remove_dir_all(&self.run_root);
+    }
+}
+
+/// 根据整图生命周期决策处理 meta.json 的 CommitAction（issue #902 第十七轮复核）。
+///
+/// meta 服从整图生命周期决策，不再独立走 LWW。
+/// **问题3**：DeleteModifyConflict 时 meta 也必须 NoOp/KeepLocal，
+/// 不提前写入 meta_incoming，和 graph、对象、index 维持同一未决状态。
+/// 用户选择采用远端时再从已保存的 meta 快照连同 graph、成员对象和 index 一起写入。
+fn apply_meta_lifecycle_decision(
+    plan: &mut CommitPlan,
+    lifecycle_decision: &crate::sync::staging::starmap_merge::GraphLifecycleDecision,
+    meta_rel: &Path,
+    meta_base: &Option<Vec<u8>>,
+    meta_local: &Option<Vec<u8>>,
+    meta_incoming: &Option<Vec<u8>>,
+) {
+    use crate::sync::staging::starmap_merge::GraphLifecycleDecision;
+    match lifecycle_decision {
+        // 整图删除 → meta 也删除
+        GraphLifecycleDecision::Delete => {
+            if meta_local.is_some() {
+                plan.content_actions.push(CommitAction::Delete {
+                    rel_path: meta_rel.to_path_buf(),
+                });
+            } else {
+                plan.noop.push(meta_rel.to_path_buf());
+            }
+        }
+        // 正常合并 → meta 走正常三方比较
+        GraphLifecycleDecision::Normal => {
+            let m_local_eq_base = opt_bytes_eq(meta_local, meta_base);
+            let m_incoming_eq_base = opt_bytes_eq(meta_incoming, meta_base);
+            let m_local_eq_incoming = opt_bytes_eq(meta_local, meta_incoming);
+            if m_incoming_eq_base {
+                plan.keep_local.push(meta_rel.to_path_buf());
+            } else if m_local_eq_base {
+                if let Some(content) = meta_incoming.clone() {
+                    plan.content_actions.push(CommitAction::Apply {
+                        rel_path: meta_rel.to_path_buf(),
+                        content,
+                    });
+                } else {
+                    plan.content_actions.push(CommitAction::Delete {
+                        rel_path: meta_rel.to_path_buf(),
+                    });
+                }
+            } else if m_local_eq_incoming {
+                plan.noop.push(meta_rel.to_path_buf());
+            } else {
+                // 双方都改 → 保持 local（meta 不独立走 LWW 删除，
+                // 服从整图存在性）
+                if meta_local.is_some() {
+                    plan.keep_local.push(meta_rel.to_path_buf());
+                } else if let Some(content) = meta_incoming.clone() {
+                    plan.content_actions.push(CommitAction::Apply {
+                        rel_path: meta_rel.to_path_buf(),
+                        content,
+                    });
+                } else {
+                    plan.noop.push(meta_rel.to_path_buf());
+                }
+            }
+        }
+        // 整图冲突未决 → meta 也必须 NoOp/KeepLocal，
+        // 和 graph、对象、index 维持同一未决状态。
+        // issue #902 第十七轮复核问题3：不提前写入 meta_incoming，
+        // 等用户选择采用远端时从已保存的 meta 快照连同 graph、
+        // 成员对象和 index 一起写入。
+        GraphLifecycleDecision::DeleteModifyConflict { .. } => {
+            if meta_local.is_some() {
+                plan.keep_local.push(meta_rel.to_path_buf());
+            } else {
+                plan.noop.push(meta_rel.to_path_buf());
+            }
+        }
     }
 }
 

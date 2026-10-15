@@ -1282,53 +1282,76 @@ pub(crate) struct StarmapGraphMergeOutput {
 /// 对称处理 base/local/incoming 三方整图存在性，覆盖所有组合，
 /// 不再只处理"远端删除"单边场景（原 `check_entire_graph_delete` 的局限）。
 ///
+/// **issue #902 第十七轮复核**：整图实体 = graph + meta 的组合。
+/// "整图存在" = graph.is_some() OR meta.is_some()；
+/// "整图未修改" = graph 和 meta 都未改。一侧删除、另一侧对任一组成部分
+/// 有实际变更 → DeleteModifyConflict，避免只改 meta 被误判为"未修改"而删除。
+///
 /// # 决策规则
+///
+/// "存在" 指 graph 或 meta 任一存在。
 ///
 /// | base | local | incoming | 条件 | 决策 |
 /// |------|-------|----------|------|------|
-/// | None | *     | *        | —    | Normal（新建图）|
-/// | Some | Some  | Some     | —    | Normal |
-/// | Some | Some  | None     | l==b | Delete（远端删除，local 未改）|
-/// | Some | Some  | None     | l!=b | DeleteModifyConflict{is_local_deleted:false}|
-/// | Some | None  | Some     | i==b | Delete（本地删除，incoming 未改）|
-/// | Some | None  | Some     | i!=b | DeleteModifyConflict{is_local_deleted:true}|
-/// | Some | None  | None     | —    | Delete（双端删除）|
-fn resolve_graph_lifecycle(
+/// | 否   | *     | *        | —    | Normal（新建图）|
+/// | 是   | 是    | 是       | —    | Normal |
+/// | 是   | 是    | 否       | local 未改(graph+meta都未改) | Delete |
+/// | 是   | 是    | 否       | local 修改了 | DeleteModifyConflict{is_local_deleted:false}|
+/// | 是   | 否    | 是       | incoming 未改 | Delete |
+/// | 是   | 否    | 是       | incoming 修改了 | DeleteModifyConflict{is_local_deleted:true}|
+/// | 是   | 否    | 否       | —    | Delete（双端删除）|
+pub(crate) fn resolve_graph_lifecycle(
     graph_base: Option<&[u8]>,
     graph_local: Option<&[u8]>,
     graph_incoming: Option<&[u8]>,
+    meta_base: Option<&[u8]>,
+    meta_local: Option<&[u8]>,
+    meta_incoming: Option<&[u8]>,
 ) -> GraphLifecycleDecision {
-    match (graph_base, graph_local, graph_incoming) {
-        // base 无 → Normal（新建图，走常规合并）
-        (None, _, _) => GraphLifecycleDecision::Normal,
-        // base 有、local 有、incoming 有 → Normal
-        (Some(_), Some(_), Some(_)) => GraphLifecycleDecision::Normal,
-        // base 有、local 有、incoming 无 → 远端删除
-        (Some(bv), Some(lv), None) => {
-            if lv == bv {
-                // local 未改 → 接受远端删除
-                GraphLifecycleDecision::Delete
-            } else {
-                // local 修改了 → 远端删除本地修改冲突
-                GraphLifecycleDecision::DeleteModifyConflict {
-                    is_local_deleted: false,
-                }
+    // 整图存在性 = graph 或 meta 任一存在
+    let base_exists = graph_base.is_some() || meta_base.is_some();
+    let local_exists = graph_local.is_some() || meta_local.is_some();
+    let incoming_exists = graph_incoming.is_some() || meta_incoming.is_some();
+
+    // base 无 → Normal（新建图，走常规合并）
+    if !base_exists {
+        return GraphLifecycleDecision::Normal;
+    }
+    // base 有、local 有、incoming 有 → Normal
+    if local_exists && incoming_exists {
+        return GraphLifecycleDecision::Normal;
+    }
+    // base 有、local 有、incoming 无 → 远端删除
+    if local_exists && !incoming_exists {
+        // local 未修改 = graph 和 meta 都未改
+        let graph_unchanged = graph_local == graph_base;
+        let meta_unchanged = meta_local == meta_base;
+        if graph_unchanged && meta_unchanged {
+            // local 未改 → 接受远端删除
+            GraphLifecycleDecision::Delete
+        } else {
+            // local 修改了（graph 或 meta 任一改了）→ 远端删除本地修改冲突
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
             }
         }
+    } else if !local_exists && incoming_exists {
         // base 有、local 无、incoming 有 → 本地删除
-        (Some(bv), None, Some(iv)) => {
-            if iv == bv {
-                // incoming 未改 → 接受本地删除
-                GraphLifecycleDecision::Delete
-            } else {
-                // incoming 修改了 → 本地删除远端修改冲突
-                GraphLifecycleDecision::DeleteModifyConflict {
-                    is_local_deleted: true,
-                }
+        // incoming 未修改 = graph 和 meta 都未改
+        let graph_unchanged = graph_incoming == graph_base;
+        let meta_unchanged = meta_incoming == meta_base;
+        if graph_unchanged && meta_unchanged {
+            // incoming 未改 → 接受本地删除
+            GraphLifecycleDecision::Delete
+        } else {
+            // incoming 修改了 → 本地删除远端修改冲突
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: true,
             }
         }
+    } else {
         // base 有、local 无、incoming 无 → 双端删除
-        (Some(_), None, None) => GraphLifecycleDecision::Delete,
+        GraphLifecycleDecision::Delete
     }
 }
 
@@ -1348,15 +1371,24 @@ fn resolve_graph_lifecycle(
 ///
 /// - `starmap_id`：星图 ID（用于派生索引重建）
 /// - `graph_base`/`graph_local`/`graph_incoming`：graph.json 的三方 bytes
+/// - `meta_base`/`meta_local`/`meta_incoming`：meta.json 的三方 bytes
+///   （issue #902 第十七轮复核：纳入整图生命周期判断，避免只改 meta 被误判为"未修改"）
 /// - `objects`：每个对象文件的 `(rel_path, object_type, object_id, base, local, incoming)`
 ///
 /// 纯计算，不读磁盘。调用方（`run.rs`）负责读取文件并组装输入。
-#[allow(clippy::type_complexity, clippy::too_many_lines)]
+#[allow(
+    clippy::type_complexity,
+    clippy::too_many_lines,
+    clippy::too_many_arguments
+)]
 pub(crate) fn merge_starmap_graph_with_objects(
     starmap_id: &str,
     graph_base: Option<&[u8]>,
     graph_local: Option<&[u8]>,
     graph_incoming: Option<&[u8]>,
+    meta_base: Option<&[u8]>,
+    meta_local: Option<&[u8]>,
+    meta_incoming: Option<&[u8]>,
     objects: &[(
         std::path::PathBuf,
         String,
@@ -1423,7 +1455,15 @@ pub(crate) fn merge_starmap_graph_with_objects(
     // --- 整图生命周期决策（issue #902 第十二轮复核）---
     // 对称处理 base/local/incoming 三方整图存在性，覆盖远端删除和本地删除
     // 所有场景。原 check_entire_graph_delete 只处理远端删除单边场景。
-    let lifecycle_decision = resolve_graph_lifecycle(graph_base, graph_local, graph_incoming);
+    // issue #902 第十七轮复核：整图实体 = graph + meta，纳入 meta bytes 判断。
+    let lifecycle_decision = resolve_graph_lifecycle(
+        graph_base,
+        graph_local,
+        graph_incoming,
+        meta_base,
+        meta_local,
+        meta_incoming,
+    );
     match &lifecycle_decision {
         GraphLifecycleDecision::Normal => {
             // 正常合并，继续走常规 graph+对象合并流程。
@@ -2232,6 +2272,9 @@ mod tests {
             Some(&graph_base),
             Some(&graph_local),
             Some(&graph_incoming),
+            None,
+            None,
+            None,
             &objects,
         )
         .expect("merge should succeed");
@@ -2300,6 +2343,9 @@ mod tests {
             Some(&graph_base),
             Some(&graph_local),
             None,
+            None,
+            None,
+            None,
             &objects,
         )
         .expect("merge should succeed");
@@ -2346,6 +2392,9 @@ mod tests {
             "sm1",
             Some(&graph_base),
             Some(&graph_local),
+            None,
+            None,
+            None,
             None,
             &objects,
         )
@@ -2402,6 +2451,9 @@ mod tests {
             Some(&graph_base),
             None,
             Some(&graph_incoming),
+            None,
+            None,
+            None,
             &objects,
         )
         .expect("merge should succeed");
@@ -2466,6 +2518,9 @@ mod tests {
             "sm1",
             Some(&graph_base),
             Some(&graph_local),
+            None,
+            None,
+            None,
             None,
             &objects,
         )
@@ -2552,6 +2607,9 @@ mod tests {
             Some(&graph_base),
             Some(&graph_local),
             None,
+            None,
+            None,
+            None,
             &objects,
         )
         .expect("merge should succeed");
@@ -2621,6 +2679,9 @@ mod tests {
             Some(&graph_base),
             None,
             Some(&graph_incoming),
+            None,
+            None,
+            None,
             &objects,
         )
         .expect("merge should succeed");
@@ -2751,32 +2812,40 @@ mod tests {
     }
 
     // --- resolve_graph_lifecycle 单元测试（issue #902 第十二轮复核）---
+    // issue #902 第十七轮复核：签名扩展纳入 meta bytes，现有测试传 None 保持原语义。
 
     #[test]
     fn test_resolve_graph_lifecycle_base_none_new_graph() {
         // base 不存在 → Normal（新建图，走常规合并）
-        let d = resolve_graph_lifecycle(None, Some(b"local"), Some(b"incoming"));
+        let d = resolve_graph_lifecycle(None, Some(b"local"), Some(b"incoming"), None, None, None);
         assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
     }
 
     #[test]
     fn test_resolve_graph_lifecycle_base_none_local_none() {
         // base 不存在、local 也不存在 → Normal
-        let d = resolve_graph_lifecycle(None, None, Some(b"incoming"));
+        let d = resolve_graph_lifecycle(None, None, Some(b"incoming"), None, None, None);
         assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
     }
 
     #[test]
     fn test_resolve_graph_lifecycle_all_present() {
         // base、local、incoming 都存在 → Normal
-        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"local"), Some(b"incoming"));
+        let d = resolve_graph_lifecycle(
+            Some(b"base"),
+            Some(b"local"),
+            Some(b"incoming"),
+            None,
+            None,
+            None,
+        );
         assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
     }
 
     #[test]
     fn test_resolve_graph_lifecycle_remote_delete_local_unchanged() {
         // base 存在、local == base（未改）、incoming 不存在（远端删除）→ Delete
-        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"base"), None);
+        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"base"), None, None, None, None);
         assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
     }
 
@@ -2784,7 +2853,7 @@ mod tests {
     fn test_resolve_graph_lifecycle_remote_delete_local_modified() {
         // base 存在、local != base（修改了）、incoming 不存在（远端删除）
         // → DeleteModifyConflict{is_local_deleted: false}
-        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"modified"), None);
+        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"modified"), None, None, None, None);
         match d {
             GraphLifecycleDecision::DeleteModifyConflict {
                 is_local_deleted: false,
@@ -2799,7 +2868,7 @@ mod tests {
     #[test]
     fn test_resolve_graph_lifecycle_local_delete_incoming_unchanged() {
         // base 存在、local 不存在（本地删除）、incoming == base（未改）→ Delete
-        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"base"));
+        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"base"), None, None, None);
         assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
     }
 
@@ -2807,7 +2876,7 @@ mod tests {
     fn test_resolve_graph_lifecycle_local_delete_incoming_modified() {
         // base 存在、local 不存在（本地删除）、incoming != base（远端修改）
         // → DeleteModifyConflict{is_local_deleted: true}
-        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"modified"));
+        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"modified"), None, None, None);
         match d {
             GraphLifecycleDecision::DeleteModifyConflict {
                 is_local_deleted: true,
@@ -2822,8 +2891,102 @@ mod tests {
     #[test]
     fn test_resolve_graph_lifecycle_both_delete() {
         // base 存在、local 和 incoming 都不存在（双端删除）→ Delete
-        let d = resolve_graph_lifecycle(Some(b"base"), None, None);
+        let d = resolve_graph_lifecycle(Some(b"base"), None, None, None, None, None);
         assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
+    }
+
+    // --- issue #902 第十七轮复核问题2 新增测试 ---
+    // 整图实体 = graph + meta，只改 meta 也应触发 DeleteModifyConflict。
+
+    #[test]
+    fn test_resolve_graph_lifecycle_remote_delete_local_meta_only_modified() {
+        // base 有 graph+meta、local graph 未改但 meta 改了、incoming 无（远端删除）
+        // → DeleteModifyConflict{is_local_deleted: false}
+        // 此前只看 graph bytes 会误判为"未修改"→ Delete，丢失本地 meta 变更。
+        let d = resolve_graph_lifecycle(
+            Some(b"graph"),
+            Some(b"graph"),
+            None,
+            Some(b"meta_base"),
+            Some(b"meta_modified"),
+            None,
+        );
+        match d {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            } => {}
+            other => panic!(
+                "expected DeleteModifyConflict{{is_local_deleted: false}} (meta modified), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_local_delete_incoming_meta_only_modified() {
+        // base 有 graph+meta、local 无（本地删除）、incoming graph 未改但 meta 改了
+        // → DeleteModifyConflict{is_local_deleted: true}
+        let d = resolve_graph_lifecycle(
+            Some(b"graph"),
+            None,
+            Some(b"graph"),
+            Some(b"meta_base"),
+            None,
+            Some(b"meta_modified"),
+        );
+        match d {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: true,
+            } => {}
+            other => panic!(
+                "expected DeleteModifyConflict{{is_local_deleted: true}} (meta modified), got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_meta_only_no_graph_all_present() {
+        // graph 全 None、meta 三方都存在 → Normal（整图存在）
+        let d = resolve_graph_lifecycle(
+            None,
+            None,
+            None,
+            Some(b"meta_base"),
+            Some(b"meta_local"),
+            Some(b"meta_incoming"),
+        );
+        assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_meta_only_remote_delete_unchanged() {
+        // graph 全 None、base+local 有 meta 且未改、incoming 无 meta → Delete
+        let d = resolve_graph_lifecycle(None, None, None, Some(b"meta"), Some(b"meta"), None);
+        assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_meta_only_remote_delete_modified() {
+        // graph 全 None、base+local 有 meta 且 local 改了、incoming 无 meta
+        // → DeleteModifyConflict{is_local_deleted: false}
+        let d = resolve_graph_lifecycle(
+            None,
+            None,
+            None,
+            Some(b"meta_base"),
+            Some(b"meta_modified"),
+            None,
+        );
+        match d {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            } => {}
+            other => panic!(
+                "expected DeleteModifyConflict{{is_local_deleted: false}} (meta-only), got {:?}",
+                other
+            ),
+        }
     }
 
     // =========================================================================
