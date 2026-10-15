@@ -10,9 +10,7 @@ use crate::starmap::graph::resolve::{resolve_status_to_error, GraphResolverConte
 use crate::starmap::navigation::{resolve_navigation_route, StarMapNavigationRoute};
 use crate::starmap::semantic::StarMapTargetDetail;
 use crate::starmap::types::reference::StarMapTargetPath;
-use crate::starmap::types::{
-    StarMapEdge, StarMapEdgeKind, StarMapEmbed, StarMapHyperlink, StarMapLink,
-};
+use crate::starmap::types::{StarMapEdge, StarMapEmbed, StarMapHyperlink, StarMapLink};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,159 +403,6 @@ pub(super) fn cascade_closure_plan<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// 跨画布引用反查
-// ---------------------------------------------------------------------------
-
-/// 跨画布引用信息：其他图中持有的、指向当前图目标的 Edge 引用。
-///
-/// 由 `find_cross_canvas_references` 和 `find_cross_canvas_references_for_canvas`
-/// 返回，用于删除保护——在删除节点/Embed/Portal 之前，检查是否有其他图
-/// 持有的跨层引用指向当前图的目标对象。
-#[derive(Debug, Clone)]
-pub struct CrossCanvasReferenceInfo {
-    /// Edge 所在的宿主星图 ID。
-    pub owner_starmap_id: String,
-    pub edge_id: String,
-    pub from_path: StarMapTargetPath,
-    pub to_path: StarMapTargetPath,
-    pub kind: StarMapEdgeKind,
-    pub label: Option<String>,
-}
-
-/// 查找指向特定目标的跨画布引用。
-///
-/// 遍历当前 route 的所有祖先图（不含当前图本身）的 Edge，使用 route-aware 匹配
-/// 检查每条 Edge 的 from/to 路径是否指向 `(current_starmap_id, target)`。
-///
-/// **route-aware 匹配**：Edge 端点的 `segments` 必须与从该祖先进入当前画布的
-/// 完整实例路径后缀完全一致，确保同一星图的不同 Embed 实例具有可区分的访问上下文。
-///
-/// **不变量**：`relation_index.rs` 的本地引用不变量保持不变——此函数
-/// 不把深层 Node ID 错当作宿主图本地 Node ID。
-///
-/// 读取失败（磁盘 IO、JSON 解析、schema 版本不兼容）时返回 `Err`，
-/// 不把读取失败伪装成"没有引用"。
-///
-/// 返回的每条 `CrossCanvasReferenceInfo` 包含 Edge 所在的宿主星图 ID、
-/// Edge ID、from/to 路径、类型和标签。
-pub fn find_cross_canvas_references(
-    context: &GraphResolverContext,
-    route: &StarMapNavigationRoute,
-    target: &StarMapTargetDetail,
-) -> crate::error::Result<Vec<CrossCanvasReferenceInfo>> {
-    let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
-
-    let current_starmap_id = &location.current_starmap_id;
-    let mut results = Vec::new();
-
-    // 只检查祖先图（不含当前图），当前图的边由本地级联删除处理。
-    for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
-        if ancestor_starmap_id == current_starmap_id {
-            continue;
-        }
-        let route_from_ancestor = &route.segments[i..];
-        let edges = load_graph_edges(context, ancestor_starmap_id)?;
-
-        for edge in &edges {
-            let from_matches = route_aware_endpoint_matches(
-                &edge.from,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            );
-            let to_matches = route_aware_endpoint_matches(
-                &edge.to,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            );
-
-            if from_matches || to_matches {
-                results.push(CrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    edge_id: edge.id.clone(),
-                    from_path: edge.from.clone(),
-                    to_path: edge.to.clone(),
-                    kind: edge.kind.clone(),
-                    label: edge.label.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-/// 查找与特定画布相关的跨画布引用。
-///
-/// 遍历当前图和所有祖先图的 Edge：
-/// - 当前图：包含所有边（本图 Edge）
-/// - 祖先图：只包含至少一端通过 route-aware 匹配落在当前画布的 Edge
-///
-/// **route-aware 匹配**：Edge 端点的 `segments` 必须与从该祖先进入当前画布的
-/// 完整实例路径后缀完全一致。
-///
-/// 读取失败时返回 `Err`，不把读取失败伪装成"没有引用"。
-#[allow(clippy::excessive_nesting)]
-pub fn find_cross_canvas_references_for_canvas(
-    context: &GraphResolverContext,
-    route: &StarMapNavigationRoute,
-) -> crate::error::Result<Vec<CrossCanvasReferenceInfo>> {
-    let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
-
-    let mut results = Vec::new();
-
-    let last_idx = location.traversed_starmap_ids.len().saturating_sub(1);
-
-    for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
-        let edges = load_graph_edges(context, ancestor_starmap_id)?;
-        let is_current_canvas = i == last_idx;
-
-        for edge in &edges {
-            if is_current_canvas {
-                // 当前图：包含所有边（本图 Edge）
-                results.push(CrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    edge_id: edge.id.clone(),
-                    from_path: edge.from.clone(),
-                    to_path: edge.to.clone(),
-                    kind: edge.kind.clone(),
-                    label: edge.label.clone(),
-                });
-            } else {
-                // 祖先图：只包含至少一端 route-aware 落在当前画布的边
-                let route_from_ancestor = &route.segments[i..];
-                let from_in_canvas = route_aware_endpoint_matches(
-                    &edge.from,
-                    ancestor_starmap_id,
-                    route_from_ancestor,
-                    None,
-                );
-                let to_in_canvas = route_aware_endpoint_matches(
-                    &edge.to,
-                    ancestor_starmap_id,
-                    route_from_ancestor,
-                    None,
-                );
-
-                if from_in_canvas || to_in_canvas {
-                    results.push(CrossCanvasReferenceInfo {
-                        owner_starmap_id: ancestor_starmap_id.clone(),
-                        edge_id: edge.id.clone(),
-                        from_path: edge.from.clone(),
-                        to_path: edge.to.clone(),
-                        kind: edge.kind.clone(),
-                        label: edge.label.clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-// ---------------------------------------------------------------------------
 // 统一全图引用扫描 / 反向依赖索引
 // ---------------------------------------------------------------------------
 
@@ -583,12 +428,11 @@ pub enum CrossCanvasRefSourceKind {
 
 /// 全类型跨画布引用信息：其他图中持有的、指向当前图目标的引用。
 ///
-/// 由 [`find_all_cross_canvas_references`] 返回，收录 Edge 两端、Link 两端、
-/// Hyperlink source、Embed host_path 的路径引用，用于删除 Node（含 Anchor/Portal）、
-/// 删除 Embed 以及修改 Portal/Embed 路由前的外部依赖检查。
-///
-/// 与 [`CrossCanvasReferenceInfo`] 的区别：后者只收录 Edge 引用，
-/// 本类型覆盖所有路径引用来源，确保跨图语义完整。
+/// 由 `PathDependencyIndex::query_dependents` 的删除保护查询产出
+///（见 `facade::starmap_ops::graph::collect_external_refs`），收录 Edge 两端、
+/// Link 两端、Hyperlink source、Embed host_path 的路径引用，用于删除
+/// Node（含 Anchor/Portal）、删除 Embed 以及修改 Portal/Embed 路由前的
+/// 外部依赖检查，覆盖所有路径引用来源，确保跨图语义完整。
 #[derive(Debug, Clone)]
 pub struct AllCrossCanvasReferenceInfo {
     /// 引用所在的宿主星图 ID。
@@ -600,149 +444,6 @@ pub struct AllCrossCanvasReferenceInfo {
     /// 被引用的路径。
     pub referenced_path: StarMapTargetPath,
     pub label: Option<String>,
-}
-
-/// 查找指向特定目标的**全类型**跨画布引用。
-///
-/// 遍历当前 route 的所有祖先图（不含当前图本身），扫描每种路径引用来源：
-/// - Edge 两端（from/to 路径）
-/// - Link 两端（source/target 路径）
-/// - Hyperlink source（source 路径）
-/// - Embed host_path
-///
-/// 对每个引用路径，使用 route-aware 匹配检查是否指向
-/// `(current_starmap_id, target)`。
-///
-/// **route-aware 匹配**：引用路径的 `segments` 必须与从该祖先进入当前画布的
-/// 完整实例路径后缀完全一致，确保同一星图的不同 Embed 实例具有可区分的访问上下文。
-///
-/// 读取失败时返回 `Err`，不把读取失败伪装成"没有引用"。
-///
-/// 返回的每条 `AllCrossCanvasReferenceInfo` 包含宿主星图 ID、来源类型、
-/// 来源对象 ID 和被引用的路径，用于删除保护时定位具体的外部依赖。
-#[allow(clippy::too_many_lines)]
-pub fn find_all_cross_canvas_references(
-    context: &GraphResolverContext,
-    route: &StarMapNavigationRoute,
-    target: &StarMapTargetDetail,
-) -> crate::error::Result<Vec<AllCrossCanvasReferenceInfo>> {
-    let location = resolve_navigation_route(context, route).map_err(resolve_status_to_error)?;
-
-    let current_starmap_id = &location.current_starmap_id;
-    let mut results = Vec::new();
-
-    for (i, ancestor_starmap_id) in location.traversed_starmap_ids.iter().enumerate() {
-        if ancestor_starmap_id == current_starmap_id {
-            continue;
-        }
-        let route_from_ancestor = &route.segments[i..];
-
-        // Edge 两端
-        let edges = load_graph_edges(context, ancestor_starmap_id)?;
-        for edge in &edges {
-            if route_aware_endpoint_matches(
-                &edge.from,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::EdgeFrom,
-                    source_id: edge.id.clone(),
-                    referenced_path: edge.from.clone(),
-                    label: edge.label.clone(),
-                });
-            }
-            if route_aware_endpoint_matches(
-                &edge.to,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::EdgeTo,
-                    source_id: edge.id.clone(),
-                    referenced_path: edge.to.clone(),
-                    label: edge.label.clone(),
-                });
-            }
-        }
-
-        // Link 两端
-        let links = load_graph_links(context, ancestor_starmap_id)?;
-        for link in &links {
-            if route_aware_endpoint_matches(
-                &link.source,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::LinkSource,
-                    source_id: link.link_id.clone(),
-                    referenced_path: link.source.clone(),
-                    label: link.label.clone(),
-                });
-            }
-            if route_aware_endpoint_matches(
-                &link.target,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::LinkTarget,
-                    source_id: link.link_id.clone(),
-                    referenced_path: link.target.clone(),
-                    label: link.label.clone(),
-                });
-            }
-        }
-
-        // Hyperlink source
-        let hyperlinks = load_graph_hyperlinks(context, ancestor_starmap_id)?;
-        for hl in &hyperlinks {
-            if route_aware_endpoint_matches(
-                &hl.source,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::HyperlinkSource,
-                    source_id: hl.hyperlink_id.clone(),
-                    referenced_path: hl.source.clone(),
-                    label: hl.label.clone(),
-                });
-            }
-        }
-
-        // Embed host_path
-        let embeds = load_graph_embeds(context, ancestor_starmap_id)?;
-        for embed in &embeds {
-            if route_aware_endpoint_matches(
-                &embed.host_path,
-                ancestor_starmap_id,
-                route_from_ancestor,
-                Some(target),
-            ) {
-                results.push(AllCrossCanvasReferenceInfo {
-                    owner_starmap_id: ancestor_starmap_id.clone(),
-                    source_kind: CrossCanvasRefSourceKind::EmbedHostPath,
-                    source_id: embed.instance_id.clone(),
-                    referenced_path: embed.host_path.clone(),
-                    label: embed.label.clone(),
-                });
-            }
-        }
-    }
-
-    Ok(results)
 }
 
 // ---------------------------------------------------------------------------
