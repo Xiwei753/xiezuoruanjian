@@ -73,8 +73,10 @@ Dialog {
     }
 
     onOpened: {
-        // Issue #825：每次打开都清掉宽屏搜索词，避免上一次过滤结果留在浮层里。
-        settingsPage.searchText = ""
+        // Issue #825 / #900 复核：每次打开都重置宽屏搜索，避免上一次过滤结果留在浮层里；
+        // 必须同时清空搜索文本框与 searchText，否则关闭再打开会出现
+        // 「框内仍显示旧搜索词、但分组已全部显示」的失配。
+        settingsPage.resetSearch()
         settingsPage.onDialogOpened()
     }
     onClosed: settingsPage.onDialogClosed()

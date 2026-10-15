@@ -186,6 +186,13 @@ ScrollView {
         updatingValues = false
     }
 
+    // Issue #900 复核：Loader 不销毁设置页，仅靠 searchText="" 会留下框内旧文字，
+    // 出现「界面说在搜索、实际没过滤」的失配。重置搜索必须同时清空文本框和过滤状态。
+    function resetSearch() {
+        settingsSearchField.clear()   // 触发 onTextChanged，把 searchText 同步置空
+        root.searchText = ""
+    }
+
     // 由 SettingsDialog.onOpened 调用；不重新加载全局设置（启动时已加载）。
     function onDialogOpened() {
         if (syncBackendRef)
