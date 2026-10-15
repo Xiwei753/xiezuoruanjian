@@ -68,6 +68,35 @@ export struct PrimaryFab {
   @Local downY: number = 0
   /** 按压视效档位：按下点亮，抬起/取消熄灭（默认 NONE 即无按压光） */
   @Local pressShadowType: hdsEffect.PressShadowType = hdsEffect.PressShadowType.NONE
+  /** 上一次记录的实测尺寸（vp），用于只在真实尺寸变化时上报几何事件 */
+  private lastGeometryWidth: number = -1
+  private lastGeometryHeight: number = -1
+
+  // Issue #911：FAB 挂载起点。这是**代码所请求的效果**（透明底 + Thin 模糊 + 反色描边 +
+  // 按压视效），不可命名为"材质渲染成功"——真机渲染结果仍需独立的 hilog.txt 佐证。
+  aboutToAppear(): void {
+    const fields: DiagnosticField[] = [
+      { key: 'source', value: 'content_fab' },
+      { key: 'visualStyle', value: 'blur_thin_difference_fast_press_shadow' }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ui.fab_mounted', 'PrimaryFab', fields)
+  }
+
+  // Issue #911：只在实测尺寸真正变化时上报几何事件，不在 build 每次重算时写。
+  private recordGeometryChange(area: Area): void {
+    const width: number = Number(area.width)
+    const height: number = Number(area.height)
+    if (width === this.lastGeometryWidth && height === this.lastGeometryHeight) {
+      return
+    }
+    this.lastGeometryWidth = width
+    this.lastGeometryHeight = height
+    const fields: DiagnosticField[] = [
+      { key: 'width', value: String(width) },
+      { key: 'height', value: String(height) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ui.fab_geometry_changed', 'PrimaryFab', fields)
+  }
 
   /** 共享触摸处理：按下点亮按压光并锁切页、移动判拖动、抬起/取消熄灭并解锁 */
   private handleTouch(event: TouchEvent): void {
@@ -78,6 +107,12 @@ export struct PrimaryFab {
       this.downY = touch.y
       this.pressShadowType = hdsEffect.PressShadowType.BLEND_WHITE
       PrimaryTabGestureLock.getInstance().setLocked(true)
+      // Issue #911：按压进入预期状态（点亮 BLEND_WHITE）。Move 不记录。
+      const downFields: DiagnosticField[] = [
+        { key: 'state', value: 'down' },
+        { key: 'effect', value: 'blend_white' }
+      ]
+      HarmonyDiagnosticEvents.record('Info', 'App', 'ui.fab_press_state', 'PrimaryFab', downFields)
       event.stopPropagation()
       return
     }
@@ -91,6 +126,12 @@ export struct PrimaryFab {
     // Up 与 Cancel 都走这里：发光和手势锁必须一起解除，否则手指移出后会残留高光。
     this.pressShadowType = hdsEffect.PressShadowType.NONE
     PrimaryTabGestureLock.getInstance().setLocked(false)
+    const upState: string = event.type === TouchType.Cancel ? 'cancel' : 'up'
+    const upFields: DiagnosticField[] = [
+      { key: 'state', value: upState },
+      { key: 'effect', value: 'none' }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'ui.fab_press_state', 'PrimaryFab', upFields)
   }
 
   /** 共享点击处理：拖动过则吞掉，否则执行 onTap */
@@ -146,5 +187,7 @@ export struct PrimaryFab {
     }
     .width(PRIMARY_FAB_SIZE_VP)
     .height(PRIMARY_FAB_SIZE_VP)
+    // Issue #911：根 Stack 实测尺寸变化时记录几何事件（只在真正变化时写）。
+    .onAreaChange((oldArea: Area, newArea: Area) => { this.recordGeometryChange(newArea) })
   }
 }

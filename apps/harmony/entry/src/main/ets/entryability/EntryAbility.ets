@@ -2,7 +2,7 @@ import { AbilityConstant, UIAbility, Want, wantConstant, Configuration, Configur
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
-import { getAppContext } from '../app/AppContext'
+import { getAppContext, getAppDataRoot } from '../app/AppContext'
 import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
@@ -84,10 +84,14 @@ export default class EntryAbility extends UIAbility {
   // 失败只记 hilog，不阻塞应用启动。
   // Issue #773 评论 5844589231：logDir 从 cacheDir/log 改为 filesDir/diagnostics/live/log。
   // cacheDir 属于应用私有缓存，文件管理器看不到且系统可清理；filesDir 是持久化目录，进程崩溃后文件仍然存在。
+  // Issue #911：把 appDataRoot 一并下发，Rust 启动时从同一 Core LocalSettings 决定是否启用日志，
+  // 而不是先强开、等用户打开设置页才补关。appDataRoot 此时已是 filesDir/sujian-data
+  // （setAbilityContext 已设置），调用顺序仍是先 initDiagnostics 再 ability.created。
   private initDiagnostics(): void {
     try {
       const filesDir = this.context.filesDir
       const logDir = `${filesDir}/diagnostics/live/log`
+      const appDataRoot = getAppDataRoot()
       const deviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(this.context)
       const identity = this.getBuildIdentity()
       const appVersion = identity.appVersion
@@ -98,7 +102,7 @@ export default class EntryAbility extends UIAbility {
       const locale = i18n.System.getSystemLanguage()
       const timezone = i18n.getTimeZone().getID()
       const result = NativeWriterCoreBridge.getInstance().initDiagnostics(
-        logDir, deviceId, appVersion, buildKey, locale, timezone
+        logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone
       )
       if (result !== 0) {
         hilog.error(0x0000, 'EntryAbility', 'initDiagnostics failed with code %{public}d', result)

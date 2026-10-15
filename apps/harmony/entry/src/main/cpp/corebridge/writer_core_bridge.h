@@ -34,10 +34,12 @@ void    writer_core_free_string(char* ptr);
 
 // ── Diagnostics Init ──
 // writer_core_init_diagnostics: Initialize diagnostics backend. Returns 0 on success,
-//   -1 if any argument is null, -2 if any argument contains invalid UTF-8.
-//   session_id is generated inside Rust (uuid v4); enabled/verbose default to true.
+//   -1 if any argument is null, -2 if any argument contains invalid UTF-8,
+//   -3 if local settings could not be read/parsed.
+//   session_id is generated inside Rust (uuid v4); enabled/verbose are read from the
+//   Core LocalSettings under app_data_root (settings.local.json), not hardcoded.
 //   Idempotent: repeated calls have no side effect.
-int32_t writer_core_init_diagnostics(const char* log_dir, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
+int32_t writer_core_init_diagnostics(const char* log_dir, const char* app_data_root, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
 
 // ── Diagnostics operations ──
 int32_t writer_core_set_diagnostics_config(int32_t enabled, int32_t verbose);
