@@ -523,13 +523,14 @@ fn linux_qt_backend_no_update_chapter_note() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. SettingsDialog.qml — 宽屏两列 / 窄屏上下单列
+// 6. KdeSettingsPage.qml — 宽屏两列 / 窄屏上下单列
+//    （Issue #900：设置内容自 SettingsDialog.qml 迁入 KdeSettingsPage.qml）
 // ─────────────────────────────────────────────────────────────────────────
 
 /// 两列都常驻：宽屏左右摆，窄屏上下接，不靠隐藏右列模拟单列。
 #[test]
 fn settings_wide_two_columns_narrow_stacked() {
-    let src = read_src("qml/SettingsDialog.qml");
+    let src = read_src("qml/KdeSettingsPage.qml");
 
     let columns = slice_between(&src, "id: settingsColumns", "// Issue #695");
     assert!(

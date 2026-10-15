@@ -152,7 +152,8 @@ fn issue815_modify8_input_path_close_the_loop_with_formal_events() {
 /// 设置里必须有一个真正驱动协同速度的可调项。
 #[test]
 fn issue815_review14_settings_expose_coordinated_duration() {
-    let qml = read_src("qml/SettingsDialog.qml");
+    // Issue #900：设置内容迁入 KdeSettingsPage.qml。
+    let qml = read_src("qml/KdeSettingsPage.qml");
     assert!(
         qml.contains("qsTr(\"协同动画时长\")"),
         "Issue #815 评论 5955090551: 协同开启时必须单独给一个「协同动画时长」，\
@@ -186,7 +187,8 @@ fn issue815_review14_settings_expose_coordinated_duration() {
 /// 隐藏滑块的旧值会被 `onClosed` 写回去，把刚调好的时长覆盖掉。
 #[test]
 fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
-    let src = read_src("qml/SettingsDialog.qml");
+    // Issue #900：设置内容迁入 KdeSettingsPage.qml。
+    let src = read_src("qml/KdeSettingsPage.qml");
 
     assert!(
         src.contains("property real textAnimationDurationValue: 100"),
@@ -213,7 +215,7 @@ fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
     }
 
     // onClosed 只能写这一份共享值，不能再按协同开关二选一。
-    let closed = function_window(&src, "onClosed: {", 2400);
+    let closed = function_window(&src, "function onDialogClosed() {", 2400);
     assert!(
         closed.contains(
             "settingsBackendRef.setting_typing_animation_duration_ms = root.textAnimationDurationValue"
@@ -238,10 +240,9 @@ fn issue815_review15_typing_and_coordinated_duration_share_one_value() {
          唯一允许的直写在共享 setter 内部。"
     );
     assert_eq!(
-        src.matches("onMoved: function() { root.setTextAnimationDuration(value) }")
-            .count(),
+        src.matches("root.setTextAnimationDuration(value)").count(),
         2,
-        "两个时长滑块的 onMoved 都必须收口到共享 setter。"
+        "两个时长控件都必须收口到共享 setter。"
     );
 
     // 旧的「协同不共享 duration」注释与 #815 实际实现相反，必须改掉。

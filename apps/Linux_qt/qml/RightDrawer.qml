@@ -1,5 +1,5 @@
 // =============================================================================
-// RightDrawer.qml — 工作台工具 pane（Core 的 ToolPane 角色）
+// RightDrawer.qml — 工作台工具 pane（Core 的 ToolPane 角色 / Issue #900 KDE）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
@@ -9,34 +9,23 @@
 //     顶部横向 tab 条已删除（工具入口只有 rail 一处，避免第二套导航）。
 //   - 顶部工具条带 ToolbarTrailing 的同步 / 搜索 / 设置不搬到这里。
 //   - 内容全部复用现有真实组件，不新造第二份工具状态。
+//
+// Issue #900：外观迁移到 Breeze + Kirigami 主题色，关闭按钮换成 Breeze
+//   window-close 图标；elevation / appShadow 属性签名保留（不再自绘阴影）。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
     required property var dt
 
-    // Elevation shadow support
+    // 旧的自绘阴影入参，Issue #900 后不再使用，仅保留属性签名。
     property int elevation: 3
     property var appShadow: null
-
-    readonly property color _sidebar: dt.sidebar
-    readonly property color _border: dt.border
-    readonly property color _accentSoft: dt.accentSoft
-    readonly property color _accentText: dt.accentText
-    readonly property color _card: dt.card
-    readonly property color _textPrimary: dt.textPrimary
-    readonly property color _textSecondary: dt.textSecondary
-    readonly property color _textMuted: dt.textMuted
-    readonly property int _sp4: dt.sp4
-    readonly property int _sp8: dt.sp8
-    readonly property int _sp16: dt.sp16
-    readonly property int _radiusSm: dt.radiusSm
-    readonly property real _fontSm: dt.fontSmPt
-    readonly property real _fontLg: dt.fontLgPt
 
     property var editorBackendRef: null
     // Issue #835：星图预览所需后端与全局状态，由 WritingWorkspace 透传，
@@ -89,23 +78,10 @@ Rectangle {
     clip: true
     visible: isOpen
 
-    // Shadow layer (behind the drawer panel)
-    Rectangle {
-        anchors.fill: parent
-        anchors.topMargin: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).verticalOffset : 0
-        radius: 0
-        color: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).color : "transparent"
-        opacity: 0.2
-        visible: root.elevation > 0 && root.appShadow !== null
-        z: -1
-    }
-
     Rectangle {
         id: drawerPanel
         anchors.fill: parent
-        color: _sidebar
-        border.color: _border
-        border.width: 1
+        color: Kirigami.Theme.alternateBackgroundColor
 
         ColumnLayout {
             anchors.fill: parent
@@ -113,62 +89,53 @@ Rectangle {
 
             // Issue #825：pane 头部只留「当前工具标题 + 关闭」。
             // 原来的横向 tab 条已删除，工具切换入口统一在最右 WritingToolRail。
-            Rectangle {
+            Item {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 44
-                color: "transparent"
+                Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: _sp8
-                    anchors.rightMargin: _sp8
-                    spacing: _sp4
+                    anchors.leftMargin: Kirigami.Units.smallSpacing
+                    anchors.rightMargin: Kirigami.Units.smallSpacing
+                    spacing: Kirigami.Units.smallSpacing
 
-                    // Issue #829：手稿在工具面板顶部画了一个 `∨` 折叠钮
+                    // Issue #829：手稿在工具面板顶部画了一个折叠钮
                     // （docs/ui/reference/widescreen/宽屏全打开.png 右侧面板左上角）。
                     // 收起后工具内容去最右 WritingToolRail，rail 本身常驻。
                     PaneFoldButton {
                         dt: root.dt
+                        Layout.alignment: Qt.AlignVCenter
                         onTriggered: root.closeRequested()
                     }
 
-                    AppText {
-                        dt: root.dt
+                    Label {
                         text: root.toolTitle(root.selectedTool)
-                        color: _textPrimary
-                        font.pointSize: _fontLg
-                        font.weight: Font.DemiBold
+                        color: Kirigami.Theme.textColor
+                        font.bold: true
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
 
                     // Close button
-                    Rectangle {
-                        width: 24; height: 24
-                        radius: 12
-                        color: closeHover.containsMouse ? _card : "transparent"
-
-                        AppText {
-                            dt: root.dt
-                            anchors.centerIn: parent
-                            text: "✕"
-                            color: _textMuted
-                            font.pointSize: _fontSm
-                        }
-
-                        MouseArea {
-                            id: closeHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.closeRequested()
-                        }
+                    ToolButton {
+                        icon.name: "window-close"
+                        icon.width: Kirigami.Units.iconSizes.small
+                        icon.height: Kirigami.Units.iconSizes.small
+                        display: AbstractButton.IconOnly
+                        flat: true
+                        Layout.alignment: Qt.AlignVCenter
+                        onClicked: root.closeRequested()
                     }
                 }
             }
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: _border }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
+            }
 
             // Content area
             Item {

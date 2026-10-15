@@ -25,7 +25,9 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
@@ -52,7 +54,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: dt.bg
+        color: Kirigami.Theme.backgroundColor
 
         ColumnLayout {
             anchors.fill: parent
@@ -62,23 +64,23 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 56
-                color: dt.surface
-                border.color: dt.border
+                color: Kirigami.Theme.alternateBackgroundColor
+                border.color: Kirigami.Theme.disabledTextColor
                 border.width: 1
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: dt.sp16
-                    anchors.rightMargin: dt.sp16
-                    spacing: dt.sp12
+                    anchors.leftMargin: Kirigami.Units.largeSpacing
+                    anchors.rightMargin: Kirigami.Units.largeSpacing
+                    spacing: Kirigami.Units.largeSpacing
 
-                    AppButton {
-                        dt: root.dt
-                        variant: "text"
+                    ToolButton {
+                        icon.name: "go-previous"
                         // Issue #832 评论 6013799805 / #373：按焦点链状态分流。
                         // focusIsRoot：退出星图工作区；否则 pop 一层返回父星图。
-                        text: canvas.focusIsRoot ? qsTr("← 返回")
-                                                 : qsTr("← 返回父星图")
+                        text: canvas.focusIsRoot ? qsTr("返回")
+                                                 : qsTr("返回父星图")
+                        display: AbstractButton.TextBesideIcon
                         onClicked: {
                             if (canvas.focusIsRoot)
                                 root.backClicked()
@@ -87,13 +89,10 @@ Item {
                         }
                     }
 
-                    AppText {
-                        dt: root.dt
+                    Kirigami.Heading {
+                        level: 3
                         text: root.starmapTitle
-                        color: dt.onSurface
-                        font.pointSize: dt.fontLgPt
-                        font.family: dt.fontFamily
-                        font.weight: Font.DemiBold
+                        color: Kirigami.Theme.textColor
                         Layout.alignment: Qt.AlignVCenter
                     }
 

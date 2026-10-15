@@ -3,80 +3,69 @@
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML 基础组件）
-// 职责：Material 3 风格状态胶囊，用于展示同步状态等
+// 职责：状态胶囊，用于展示同步状态等
+// Issue #900：迁移到 Breeze/Kirigami 语义色，不再自绘 Material 3 胶囊，
+// 内部只消费 Kirigami.Theme.* / Kirigami.Units.*，不再读 DesignTokens 字段。
 // 约束：
-//   - 纯展示组件，颜色通过 pillColor property 传入
+//   - 公开 API 保持不变：dt / resolvedDt / status / text / pillColor / contentColor。
+//   - dt 仍为 required（Issue #701/#715 语义：漏传就是调用错误），只是内部不再消费。
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: control
-    required property var dt
-    // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
-    // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
-    // Issue #715: 改为 required property，不再允许组件先以 null 创建。
-    readonly property var resolvedDt: dt
 
-    readonly property color _primaryContainer: resolvedDt.primaryContainer
-    readonly property color _onPrimaryContainer: resolvedDt.onPrimaryContainer
-    readonly property color _successContainer: resolvedDt.successContainer
-    readonly property color _onSuccessContainer: resolvedDt.onSuccessContainer
-    readonly property color _warningContainer: resolvedDt.warningContainer
-    readonly property color _onWarningContainer: resolvedDt.onWarningContainer
-    readonly property color _dangerContainer: resolvedDt.dangerContainer
-    readonly property color _onDangerContainer: resolvedDt.onDangerContainer
-    readonly property int _sp6: resolvedDt.sp6
-    readonly property int _sp16: resolvedDt.sp16
-    readonly property int _radiusPill: resolvedDt.radiusPill
-    readonly property real _caption: resolvedDt.captionPt
-    readonly property string _fontFamily: resolvedDt.fontFamily
+    // 调用方仍注入根 dt（保持公开 API 与构建期约定）。
+    required property var dt
+    readonly property var resolvedDt: dt
 
     property string status: "info"
     property string text: ""
-    property color pillColor: {
-        if (control.status === "success") return _successContainer
-        if (control.status === "warning") return _warningContainer
-        if (control.status === "error") return _dangerContainer
-        return _primaryContainer
-    }
-    property color contentColor: {
-        if (control.status === "success") return _onSuccessContainer
-        if (control.status === "warning") return _onWarningContainer
-        if (control.status === "error") return _onDangerContainer
-        return _onPrimaryContainer
+
+    // 状态 → Breeze 语义色（success/warning/error/默认）。
+    readonly property color _statusColor: {
+        if (control.status === "success")
+            return Kirigami.Theme.positiveTextColor
+        if (control.status === "warning")
+            return Kirigami.Theme.neutralTextColor
+        if (control.status === "error")
+            return Kirigami.Theme.negativeTextColor
+        return Kirigami.Theme.highlightColor
     }
 
-    implicitWidth: pillRow.implicitWidth + _sp16
-    implicitHeight: 28
-    radius: _radiusPill
-    color: pillColor
+    // pillColor / contentColor 保持可写的公开属性，默认由 status 派生。
+    property color pillColor: control._statusColor
+    property color contentColor: Kirigami.Theme.backgroundColor
+
+    implicitWidth: pillRow.implicitWidth + Kirigami.Units.largeSpacing * 2
+    implicitHeight: pillRow.implicitHeight + Kirigami.Units.smallSpacing * 2
+    radius: Kirigami.Units.cornerRadius
+    color: control.pillColor
 
     RowLayout {
         id: pillRow
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.horizontalCenter: parent.horizontalCenter
-        spacing: _sp6
+        anchors.centerIn: parent
+        spacing: Kirigami.Units.smallSpacing
 
         Rectangle {
             Layout.alignment: Qt.AlignVCenter
-            width: resolvedDt.statusDotSize
-            height: resolvedDt.statusDotSize
-            radius: resolvedDt.statusDotSize / 2
+            implicitWidth: Math.round(Kirigami.Units.smallSpacing)
+            implicitHeight: Math.round(Kirigami.Units.smallSpacing)
+            radius: width / 2
             color: control.contentColor
             opacity: 0.8
         }
 
-        AppText {
-            dt: control.resolvedDt
+        Controls.Label {
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor
             verticalAlignment: Text.AlignVCenter
-            font.pointSize: _caption
-            font.family: _fontFamily
-            font.weight: Font.Medium
+            font.bold: control.status === "error"
         }
     }
 }

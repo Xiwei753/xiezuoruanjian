@@ -4,16 +4,24 @@
 //
 // 层级：Linux_qt UI 层（QML 页面）
 // 职责：列出所有注册的 Action，支持执行 Query/Mutation 类型操作
+// Issue #900：视觉迁移到 Breeze/Kirigami —— 手绘卡片/按钮改为 Controls.Button +
+// Controls.ListView + Kirigami Addons Delegates.RoundedItemDelegate，颜色/间距走
+// Kirigami.Theme.* / Kirigami.Units.*，不再消费 DesignTokens M3 字段。
 // 约束：
 //   - 调试用途，不面向普通用户
 //   - 通过 editorBackendRef 调用 AppBackend (Rust QObject) 执行 Action
+//   - appTheme 等注入属性保留声明（公开 API 不变），仅内部不再读其 M3 字段
 // =============================================================================
 
-import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
+pragma ComponentBehavior: Bound
 
-ScrollView {
+import QtQuick
+import QtQuick.Controls as Controls
+import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
+import org.kde.kirigamiaddons.delegates as Delegates
+
+Controls.ScrollView {
     id: root
     clip: true
     // Issue #782 评论 5855709706: 桌面鼠标左键不能按住空白处拖页面。
@@ -32,243 +40,209 @@ ScrollView {
     property bool typingAnimCheckChecked: false
     property bool smoothCursorCheckChecked: false
 
+    // 已注册 Action 列表（原 Repeater.model，改用 ListView 后作为页面模型）。
+    property var actionList: []
+
+    /// 列出所有注册的 Action。
+    function listActions() {
+        if (!root.editorBackendRef)
+            return
+        var result = root.editorBackendRef.list_registered_actions()
+        try {
+            var actions = JSON.parse(result)
+            root.actionList = actions
+            actionResultText.text = qsTr("共加载 ") + actions.length + qsTr(" 个 Action")
+        } catch (e) {
+            actionResultText.text = qsTr("解析 Action 列表失败: ") + e
+        }
+    }
+
+    /// 清空列表与结果。
+    function clearResults() {
+        root.actionList = []
+        actionResultText.text = ""
+    }
+
+    /// 执行 Query/Preview 类型 Action。
+    function runQuery(actionId) {
+        if (!root.editorBackendRef)
+            return
+        var result = root.editorBackendRef.execute_action(actionId, "", "")
+        try {
+            var r = JSON.parse(result)
+            if (r.success) {
+                actionResultText.text = qsTr("执行成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
+            } else {
+                actionResultText.text = qsTr("执行失败: ") + (r.message || qsTr("未知错误"))
+            }
+        } catch (e) {
+            actionResultText.text = qsTr("解析结果失败: ") + result
+        }
+    }
+
+    /// 应用 Mutation 类型 Action（危险类由调用处禁用按钮，不在此重复判断）。
+    function applyMutation(actionId) {
+        if (!root.editorBackendRef)
+            return
+        var args = "{}"
+        if (actionId === "settings.editor.font_size.set") {
+            args = JSON.stringify({fontSize: root.fontSizeSpinValue})
+        } else if (actionId === "settings.editor.auto_save.set") {
+            args = JSON.stringify({enabled: root.autoSaveCheckChecked})
+        } else if (actionId === "settings.editor.auto_save_delay.set") {
+            args = JSON.stringify({delayMs: root.autoSaveDelaySpinValue})
+        } else if (actionId === "settings.editor.line_spacing.set") {
+            args = JSON.stringify({multiplier: root.lineSpacingSpinValue / 100.0})
+        } else if (actionId === "settings.editor.auto_indent.set") {
+            args = JSON.stringify({enabled: root.autoIndentCheckChecked, widthChars: root.autoIndentWidthSpinValue / 100.0})
+        } else if (actionId === "settings.editor.typing_animation.set") {
+            args = JSON.stringify({enabled: root.typingAnimCheckChecked})
+        } else if (actionId === "settings.editor.smooth_cursor.set") {
+            args = JSON.stringify({enabled: root.smoothCursorCheckChecked})
+        }
+        var result = root.editorBackendRef.execute_action(actionId, args, "")
+        try {
+            var r = JSON.parse(result)
+            if (r.success) {
+                actionResultText.text = qsTr("应用成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
+            } else {
+                actionResultText.text = qsTr("应用失败: ") + (r.message || qsTr("未知错误"))
+            }
+        } catch (e) {
+            actionResultText.text = qsTr("解析结果失败: ") + result
+        }
+    }
+
     ColumnLayout {
-        width: Math.min(540, root.availableWidth - 16)
-        spacing: root.appTheme.sp12
+        width: Math.min(Kirigami.Units.gridUnit * 30, root.availableWidth - Kirigami.Units.smallSpacing)
+        spacing: Kirigami.Units.largeSpacing
 
         // Header
-        AppText {
-            dt: root.appTheme
+        Kirigami.Heading {
+            Layout.fillWidth: true
+            level: 2
             text: qsTr("Action 调试")
-            font.pointSize: root.appTheme.fontXlPt
-            font.weight: Font.Bold
         }
 
-        AppText {
-            dt: root.appTheme
-            variant: "secondary"
-            text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
-            font.pointSize: root.appTheme.fontSmPt
-            wrapMode: Text.Wrap
+        Controls.Label {
             Layout.fillWidth: true
+            text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
+            color: Kirigami.Theme.disabledTextColor
+            wrapMode: Text.Wrap
         }
 
         // Action buttons
         RowLayout {
             Layout.fillWidth: true
-                    spacing: root.appTheme.sp8
+            spacing: Kirigami.Units.smallSpacing
 
-            Button {
+            Controls.Button {
                 text: qsTr("列出所有 Action")
-                implicitHeight: 32; implicitWidth: 130
-                onClicked: {
-                    var result = root.editorBackendRef.list_registered_actions()
-                    try {
-                        var actions = JSON.parse(result)
-                        actionListRepeater.model = actions
-                        actionResultText.text = qsTr("共加载 ") + actions.length + qsTr(" 个 Action")
-                    } catch(e) {
-                        actionResultText.text = qsTr("解析 Action 列表失败: ") + e
-                    }
-                }
-                contentItem: AppText {
-                    dt: root.appTheme
-                    text: parent.text
-                    color: root.appTheme.textPrimary
-                    font.pointSize: root.appTheme.fontSmPt
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: parent.hovered
-                        ? root.appTheme.accentHover
-                        : root.appTheme.primary
-                    radius: root.appTheme.radiusSm
-                }
+                icon.name: "view-refresh"
+                highlighted: true
+                onClicked: root.listActions()
             }
 
-            Button {
+            Controls.Button {
                 text: qsTr("清空结果")
-                implicitHeight: 32
-                flat: true
-                onClicked: {
-                    actionListRepeater.model = []
-                    actionResultText.text = ""
-                }
-                contentItem: AppText {
-                    dt: root.appTheme
-                    text: parent.text
-                    color: root.appTheme.textSecondary
-                    font.pointSize: root.appTheme.fontSmPt
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                background: Rectangle {
-                    color: parent.hovered ? root.appTheme.hoverOverlay : "transparent"
-                    radius: root.appTheme.radiusSm
-                }
+                icon.name: "edit-clear"
+                onClicked: root.clearResults()
             }
+
+            Item { Layout.fillWidth: true }
         }
 
         // Action list
-        Repeater {
-            id: actionListRepeater
-            model: []
+        ListView {
+            id: actionListView
+            Layout.fillWidth: true
+            Layout.preferredHeight: actionListView.contentHeight
+            clip: true
+            interactive: false
+            spacing: 0
+            model: root.actionList
 
-            delegate: Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: 120
-                color: root.appTheme.surfaceContainerLow
-                radius: root.appTheme.radiusMd
-                border.color: root.appTheme.border
-                border.width: 1
+            delegate: Delegates.RoundedItemDelegate {
+                id: actionDelegate
+                required property var modelData
+                width: ListView.view.width
 
-                ColumnLayout {
-                    id: actionCardCol
-                    anchors.fill: parent
-                    anchors.margins: root.appTheme.sp12
-                    spacing: root.appTheme.sp6
+                contentItem: ColumnLayout {
+                    spacing: Kirigami.Units.smallSpacing
 
                     RowLayout {
                         Layout.fillWidth: true
-                        AppText {
-                            dt: root.appTheme
-                            text: modelData.title || modelData.id || ""
-                            font.pointSize: root.appTheme.fontMdPt
-                            font.weight: Font.DemiBold
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Controls.Label {
                             Layout.fillWidth: true
+                            text: actionDelegate.modelData.title || actionDelegate.modelData.id || ""
+                            color: Kirigami.Theme.textColor
+                            font.bold: true
+                            elide: Text.ElideRight
                         }
-                        AppText {
-                            dt: root.appTheme
+
+                        Controls.Label {
                             text: {
-                                var risk = modelData.riskLevel || ""
+                                var risk = actionDelegate.modelData.riskLevel || ""
                                 if (risk === "dangerous") return qsTr("危险")
                                 if (risk === "contentWrite") return qsTr("内容写入")
                                 if (risk === "safeWrite") return qsTr("写入")
                                 return qsTr("只读")
                             }
-                            font.pointSize: root.appTheme.fontXsPt
                             color: {
-                                var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return root.appTheme.danger
-                                if (risk === "contentWrite") return root.appTheme.warning
-                                if (risk === "safeWrite") return root.appTheme.success
-                                return root.appTheme.textSecondary
+                                var risk = actionDelegate.modelData.riskLevel || ""
+                                if (risk === "dangerous") return Kirigami.Theme.negativeTextColor
+                                if (risk === "contentWrite") return Kirigami.Theme.neutralTextColor
+                                if (risk === "safeWrite") return Kirigami.Theme.positiveTextColor
+                                return Kirigami.Theme.disabledTextColor
                             }
                         }
                     }
 
-                    AppText {
-                        dt: root.appTheme
-                        text: modelData.id || ""
-                        font.pointSize: root.appTheme.fontXsPt
-                        variant: "secondary"
+                    Controls.Label {
+                        Layout.fillWidth: true
+                        text: actionDelegate.modelData.id || ""
+                        color: Kirigami.Theme.disabledTextColor
                         font.family: "monospace"
+                        elide: Text.ElideRight
                     }
 
-                    AppText {
-                        dt: root.appTheme
-                        variant: "secondary"
-                        text: modelData.description || ""
-                        font.pointSize: root.appTheme.fontSmPt
-                        wrapMode: Text.Wrap
+                    Controls.Label {
                         Layout.fillWidth: true
+                        text: actionDelegate.modelData.description || ""
+                        color: Kirigami.Theme.disabledTextColor
+                        wrapMode: Text.Wrap
                     }
 
                     RowLayout {
-            spacing: root.appTheme.sp8
-                        Button {
+                        Layout.fillWidth: true
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Controls.Button {
                             text: qsTr("执行")
-                            visible: modelData.kind === "query" || modelData.kind === "preview"
-                            implicitHeight: 28; implicitWidth: 60
-                            onClicked: {
-                                var actionId = modelData.id
-                                var result = root.editorBackendRef.execute_action(actionId, "", "")
-                                try {
-                                    var r = JSON.parse(result)
-                                    if (r.success) {
-                                        actionResultText.text = qsTr("执行成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
-                                    } else {
-                                        actionResultText.text = qsTr("执行失败: ") + (r.message || qsTr("未知错误"))
-                                    }
-                                } catch(e) {
-                                    actionResultText.text = qsTr("解析结果失败: ") + result
-                                }
-                            }
-                            contentItem: AppText {
-                                dt: root.appTheme
-                                text: parent.text
-                                color: root.appTheme.textPrimary
-                                font.pointSize: root.appTheme.fontSmPt
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: parent.hovered
-                                    ? root.appTheme.accentHover
-                                    : root.appTheme.primary
-                                radius: root.appTheme.radiusSm
-                            }
+                            visible: actionDelegate.modelData.kind === "query" || actionDelegate.modelData.kind === "preview"
+                            onClicked: root.runQuery(actionDelegate.modelData.id)
                         }
-                        Button {
+
+                        Controls.Button {
                             text: qsTr("应用 (Mutation)")
-                            visible: modelData.kind === "mutation"
-                            enabled: { var risk = modelData.riskLevel || ""; return risk !== "dangerous" && risk !== "contentWrite" }
-                            implicitHeight: 28; implicitWidth: 110
-                            onClicked: {
-                                var actionId = modelData.id
-                                var args = "{}"
-                                if (actionId === "settings.editor.font_size.set") {
-                                    args = JSON.stringify({fontSize: root.fontSizeSpinValue})
-                                } else if (actionId === "settings.editor.auto_save.set") {
-                                    args = JSON.stringify({enabled: root.autoSaveCheckChecked})
-                                } else if (actionId === "settings.editor.auto_save_delay.set") {
-                                    args = JSON.stringify({delayMs: root.autoSaveDelaySpinValue})
-                                } else if (actionId === "settings.editor.line_spacing.set") {
-                                    args = JSON.stringify({multiplier: root.lineSpacingSpinValue / 100.0})
-                                } else if (actionId === "settings.editor.auto_indent.set") {
-                                    args = JSON.stringify({enabled: root.autoIndentCheckChecked, widthChars: root.autoIndentWidthSpinValue / 100.0})
-                                } else if (actionId === "settings.editor.typing_animation.set") {
-                                    args = JSON.stringify({enabled: root.typingAnimCheckChecked})
-                                } else if (actionId === "settings.editor.smooth_cursor.set") {
-                                    args = JSON.stringify({enabled: root.smoothCursorCheckChecked})
-                                }
-                                var result = root.editorBackendRef.execute_action(actionId, args, "")
-                                try {
-                                    var r = JSON.parse(result)
-                                    if (r.success) {
-                                        actionResultText.text = qsTr("应用成功: ") + (r.message || "") + qsTr("\n数据: ") + JSON.stringify(r.data, null, 2)
-                                    } else {
-                                        actionResultText.text = qsTr("应用失败: ") + (r.message || qsTr("未知错误"))
-                                    }
-                                } catch(e) {
-                                    actionResultText.text = qsTr("解析结果失败: ") + result
-                                }
+                            visible: actionDelegate.modelData.kind === "mutation"
+                            enabled: {
+                                var risk = actionDelegate.modelData.riskLevel || ""
+                                return risk !== "dangerous" && risk !== "contentWrite"
                             }
-                            contentItem: AppText {
-                                dt: root.appTheme
-                                text: parent.text
-                                color: root.appTheme.textPrimary
-                                font.pointSize: root.appTheme.fontSmPt
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            background: Rectangle {
-                                color: parent.enabled
-                                    ? (parent.hovered
-                                        ? root.appTheme.accentHover
-                                        : root.appTheme.primary)
-                                    : root.appTheme.border
-                                radius: root.appTheme.radiusSm
-                            }
+                            onClicked: root.applyMutation(actionDelegate.modelData.id)
                         }
-                        AppText {
-                            dt: root.appTheme
+
+                        Controls.Label {
                             text: qsTr("危险操作已阻断")
-                            visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
-                            color: root.appTheme.danger
-                            font.pointSize: root.appTheme.fontSmPt
+                            visible: actionDelegate.modelData.kind === "mutation"
+                                && (actionDelegate.modelData.riskLevel === "dangerous" || actionDelegate.modelData.riskLevel === "contentWrite")
+                            color: Kirigami.Theme.negativeTextColor
                         }
+
+                        Item { Layout.fillWidth: true }
                     }
                 }
             }
@@ -277,27 +251,26 @@ ScrollView {
         // Result display
         Rectangle {
             Layout.fillWidth: true
-            height: 120
-            color: root.appTheme.surfaceContainerLow
-            radius: root.appTheme.radiusSm
-            border.color: root.appTheme.border
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 8
+            color: Kirigami.Theme.alternateBackgroundColor
+            border.color: Kirigami.Theme.disabledTextColor
             border.width: 1
+            radius: Kirigami.Units.smallSpacing
 
-            TextArea {
+            Controls.TextArea {
                 id: actionResultText
                 anchors.fill: parent
-                anchors.margins: root.appTheme.sp8
+                anchors.margins: Kirigami.Units.smallSpacing
                 readOnly: true
-                wrapMode: Text.Wrap
-                color: root.appTheme.textPrimary
-                font.pointSize: root.appTheme.fontSmPt
+                wrapMode: TextEdit.Wrap
+                color: Kirigami.Theme.textColor
                 font.family: "monospace"
                 placeholderText: qsTr("执行结果将显示在此处...")
-                background: Rectangle { color: "transparent" }
-                        placeholderTextColor: root.appTheme.textSecondary
+                placeholderTextColor: Kirigami.Theme.disabledTextColor
+                background: null
             }
         }
 
-        Item { height: root.appTheme.sp16 }
+        Item { Layout.preferredHeight: Kirigami.Units.largeSpacing }
     }
 }

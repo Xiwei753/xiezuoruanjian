@@ -1,12 +1,16 @@
 // =============================================================================
-// PaneFoldButton.qml — 面板顶部折叠钮（Issue #829 手稿对齐）
+// PaneFoldButton.qml — 面板顶部折叠钮（Issue #829 手稿对齐 / Issue #900 KDE 迁移）
 // =============================================================================
 //
 // 手稿基准：docs/ui/reference/widescreen/宽屏全打开.png + 左右缩回.png
 //   - 展开态：正文区顶部居中一个 `∨`，右侧工具面板顶部一个 `∨`；
 //   - 收起态：正文区顶部居中变成 `^`（左树收起后正文变宽，按钮位置不动）。
-// 折叠钮只改 Qt UI 布局（SplitView 子项可见性），不进入 Core 编辑事务——
+// 折叠钮只改 Qt UI 布局（pane 可见性），不进入 Core 编辑事务——
 // 编辑会话、IME、撤销栈都不受影响。
+//
+// Issue #900：视觉从自绘 AppText + 三角字形迁移到 Breeze 图标。
+//   glyph 属性作为方向语义保留（WritingWorkspace / RightDrawer 仍注入它），
+//   内部据此选择 Breeze 的 arrow-down / arrow-up；dt 属性保留以兼容注入。
 //
 // 和贴边悬浮把手（WritingWorkspace 的 leftPaneHandle / rightPaneHandle）是
 // 两个不同层级的入口：把手负责「收起后重新拉开」，本按钮负责「面板还开着时
@@ -14,43 +18,30 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
+import org.kde.kirigami as Kirigami
 
-Rectangle {
+ToolButton {
     id: root
 
+    // 调用方注入的 DesignTokens（Issue #900 后不再读取，仅保留属性签名）。
     required property var dt
 
     // 手稿里手绘的三角：展开态朝下（可往下收），收起态朝上（可往上拉）。
     property string glyph: "\u2304" // ⌄
 
-    implicitWidth: 28
-    implicitHeight: 28
-    radius: dt.radiusPill
-    color: hovered ? dt.surfaceVariant : "transparent"
-    border.color: hovered ? dt.border : "transparent"
-    border.width: 1
+    // 方向语义 → Breeze 图标名（不改变 glyph 的公有签名）。
+    readonly property string _iconName: root.glyph === "\u2303" ? "arrow-up" : "arrow-down"
 
     signal triggered()
 
-    // 悬停态显式提上来：id 只在声明它的 MouseArea 作用域内可见，
-    // 外层 Rectangle / AppText 不能通过 root.hover 读它。
-    readonly property bool hovered: hoverArea.containsMouse
+    implicitWidth: Kirigami.Units.gridUnit * 1.8
+    implicitHeight: Kirigami.Units.gridUnit * 1.8
+    flat: true
+    display: AbstractButton.IconOnly
+    icon.name: root._iconName
+    icon.width: Kirigami.Units.iconSizes.small
+    icon.height: Kirigami.Units.iconSizes.small
 
-    Behavior on color { ColorAnimation { duration: dt.animFast } }
-
-    AppText {
-        dt: root.dt
-        anchors.centerIn: parent
-        text: root.glyph
-        color: root.hovered ? dt.textPrimary : dt.textSecondary
-        font.pointSize: root.dt.fontSmPt
-    }
-
-    MouseArea {
-        id: hoverArea
-        anchors.fill: parent
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.triggered()
-    }
+    onClicked: root.triggered()
 }

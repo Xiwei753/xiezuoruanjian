@@ -7,16 +7,20 @@
 // 约束：
 //   - 纯布局组件，内容通过 default property 传入
 //   - 自动适配宽屏/窄屏边距
+// Issue #900：边距/间距改用 Kirigami.Units，不再读 DesignTokens 的 M3 间距。
+// 公共 API（dt / pageMargin / maxContentWidth / contentWidth / sideMargin /
+// contentData / headerData）保持不变，供 StarMapPage / StatsPreviewPage 复用。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
     required property var dt
-    readonly property int pageMargin: width >= 980 ? dt.pageMarginWide : dt.pageMarginNarrow
-    property int maxContentWidth: dt.maxContentWidth
+    readonly property int pageMargin: width >= 980 ? Kirigami.Units.largeSpacing * 2 : Kirigami.Units.largeSpacing
+    property int maxContentWidth: Kirigami.Units.gridUnit * 60
     readonly property int contentWidth: Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)
     readonly property int sideMargin: Math.max(pageMargin, Math.floor((width - contentWidth) / 2))
     default property alias contentData: contentColumn.data
@@ -28,22 +32,22 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.topMargin: root.pageMargin
-        anchors.bottomMargin: dt.sp24
+        anchors.bottomMargin: Kirigami.Units.largeSpacing
         anchors.leftMargin: root.sideMargin
         anchors.rightMargin: root.sideMargin
-        spacing: dt.sp16
+        spacing: Kirigami.Units.largeSpacing
 
         Item {
             id: headerContainer
             Layout.fillWidth: true
-            Layout.preferredHeight: dt.pageHeaderHeight
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 4
         }
 
         ColumnLayout {
             id: contentColumn
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: dt.sp16
+            spacing: Kirigami.Units.largeSpacing
         }
     }
 }

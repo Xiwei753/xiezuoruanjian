@@ -13,6 +13,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -25,7 +26,7 @@ Rectangle {
 
     signal openStarmap(string starmapId, string title)
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     // 刷新星图列表：通过 StarMapController 拉取后端数据
     function refreshStarmaps() {
@@ -48,26 +49,23 @@ Rectangle {
         // Issue #796 评论 5886483653: 删除一级星图页自己的"← 返回"按钮。
         // 它已经在 Hub 的一级 Tab 里，当前 root.visible=false 只会把自己藏掉，属于错误路由。
         headerData: RowLayout {
-            spacing: dt.sp12
+            spacing: Kirigami.Units.largeSpacing
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 2
                 text: qsTr("星图")
-                color: dt.onSurface
-                font.pointSize: dt.fontTitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.Bold
+                color: Kirigami.Theme.textColor
                 Layout.alignment: Qt.AlignVCenter
             }
 
             Item { Layout.fillWidth: true }
 
-            AppButton {
-                dt: root.dt
-                variant: "primary"
-                text: qsTr("+ 新建星图")
+            Button {
+                text: qsTr("新建星图")
+                icon.name: "list-add"
+                highlighted: true
                 onClicked: {
                     createDialog.starmapTitle = ""
                     createDialog.open()
@@ -148,25 +146,21 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
+        background: Rectangle { color: Kirigami.Theme.alternateBackgroundColor; border.color: Kirigami.Theme.disabledTextColor; radius: Kirigami.Units.cornerRadius; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp12
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("新建星图")
-                color: dt.onSurface
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
+                color: Kirigami.Theme.textColor
             }
-            AppTextField {
+            TextField {
                 id: createField
                 Layout.fillWidth: true
-                dt: root.dt
                 text: createDialog.starmapTitle
                 placeholderText: qsTr("星图标题")
                 onAccepted: createConfirmButton.clicked()
@@ -174,17 +168,15 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton {
+                Button {
                     text: qsTr("取消")
-                    dt: root.dt
-                    variant: "text"
+                    flat: true
                     onClicked: createDialog.close()
                 }
-                AppButton {
+                Button {
                     id: createConfirmButton
                     text: qsTr("确定")
-                    dt: root.dt
-                    variant: "primary"
+                    highlighted: true
                     onClicked: {
                         var t = createField.text.trim()
                         if (t === "") return
@@ -211,25 +203,21 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
+        background: Rectangle { color: Kirigami.Theme.alternateBackgroundColor; border.color: Kirigami.Theme.disabledTextColor; radius: Kirigami.Units.cornerRadius; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp12
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("重命名星图")
-                color: dt.onSurface
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
+                color: Kirigami.Theme.textColor
             }
-            AppTextField {
+            TextField {
                 id: renameField
                 Layout.fillWidth: true
-                dt: root.dt
                 text: renameDialog.currentTitle
                 placeholderText: qsTr("星图标题")
                 onAccepted: renameConfirmButton.clicked()
@@ -237,17 +225,15 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton {
+                Button {
                     text: qsTr("取消")
-                    dt: root.dt
-                    variant: "text"
+                    flat: true
                     onClicked: renameDialog.close()
                 }
-                AppButton {
+                Button {
                     id: renameConfirmButton
                     text: qsTr("确定")
-                    dt: root.dt
-                    variant: "primary"
+                    highlighted: true
                     onClicked: {
                         var t = renameField.text.trim()
                         if (t === "") return
@@ -274,42 +260,35 @@ Rectangle {
         width: 360
         height: 180
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
+        background: Rectangle { color: Kirigami.Theme.alternateBackgroundColor; border.color: Kirigami.Theme.disabledTextColor; radius: Kirigami.Units.cornerRadius; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp12
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("删除星图")
-                color: dt.onSurface
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
+                color: Kirigami.Theme.textColor
             }
-            AppText {
-                dt: root.dt
+            Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 text: qsTr("确定删除「%1」吗？此操作不可撤销。").arg(deleteDialog.starmapTitle)
-                color: dt.onSurfaceVariant
-                font.pointSize: dt.bodyPt
+                color: Kirigami.Theme.disabledTextColor
             }
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton {
+                Button {
                     text: qsTr("取消")
-                    dt: root.dt
-                    variant: "text"
+                    flat: true
                     onClicked: deleteDialog.close()
                 }
-                AppButton {
+                Button {
                     text: qsTr("删除")
-                    dt: root.dt
-                    variant: "danger"
+                    palette.buttonText: Kirigami.Theme.negativeTextColor
                     onClicked: {
                         if (root.starMapController && root.starMapController.deleteStarmap(deleteDialog.starmapId)) {
                             root.refreshStarmaps()

@@ -174,7 +174,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     // 这里同步换掉 qrc 登记，不留第二个入口。
     "qml/WritingWorkbenchToolbar.qml" as "WritingWorkbenchToolbar.qml",
     "qml/WritingFormatGroup.qml" as "WritingFormatGroup.qml",
-    "qml/ToolbarIconButton.qml" as "ToolbarIconButton.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",
     // Issue #825 复核4 第1项：工作台最右竖向工具栏（Core 的 ToolRail 角色）。
@@ -189,10 +188,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     "qml/SyncConflictPanel.qml" as "SyncConflictPanel.qml",
     "qml/SettingsDialog.qml" as "SettingsDialog.qml",
-    "qml/SettingsSection.qml" as "SettingsSection.qml",
-    "qml/SettingCard.qml" as "SettingCard.qml",
-    "qml/ModernSwitch.qml" as "ModernSwitch.qml",
-    "qml/ModernComboBox.qml" as "ModernComboBox.qml",
+    "qml/KdeSettingsPage.qml" as "KdeSettingsPage.qml",
     "qml/DashboardGrid.qml" as "DashboardGrid.qml",
     "qml/DashboardSection.qml" as "DashboardSection.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
@@ -200,23 +196,11 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/SyncMessageKeys.qml" as "SyncMessageKeys.qml",
     "qml/EmptyWorkspace.qml" as "EmptyWorkspace.qml",
     // Components
-    "qml/AppButton.qml" as "AppButton.qml",
-    "qml/AppCard.qml" as "AppCard.qml",
-    "qml/AppTextField.qml" as "AppTextField.qml",
-    "qml/AppSwitch.qml" as "AppSwitch.qml",
-    "qml/AppSlider.qml" as "AppSlider.qml",
-    "qml/AppComboBox.qml" as "AppComboBox.qml",
-    "qml/AppDialog.qml" as "AppDialog.qml",
-    "qml/AppText.qml" as "AppText.qml",
-    "qml/AppShadow.qml" as "AppShadow.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
-    "qml/SettingsRow.qml" as "SettingsRow.qml",
     "qml/DesktopWheelScrollHandler.qml" as "DesktopWheelScrollHandler.qml",
-    "qml/SidebarItem.qml" as "SidebarItem.qml",
     "qml/WorkspaceTree.qml" as "WorkspaceTree.qml",
     "qml/CreateProjectDialog.qml" as "CreateProjectDialog.qml",
     "qml/StatusPill.qml" as "StatusPill.qml",
-    "qml/ToolbarButton.qml" as "ToolbarButton.qml",
     "resources/icons/sujian.svg" as "icons/sujian.svg",
     // i18n translations
     "i18n/zh_CN.qm" as "i18n/zh_CN.qm",
@@ -623,6 +607,13 @@ fn main() {
 
     QML_LOAD_FAILED.store(false, Ordering::SeqCst);
     remember_qml_load_error("");
+    // Issue #900: UI 全面迁移到 KDE 官方组件体系。QQC2 控件风格选用 KDE 的
+    // 纯 Qt Quick Breeze 样式（org.kde.breeze），它不要求 QtWidgets/QStyle，
+    // 与 qmetaobject::QmlEngine 建立的 QGuiApplication 路线兼容。若用户已显式
+    // 设置 QT_QUICK_CONTROLS_STYLE，则尊重用户选择，不覆盖。
+    if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
+        std::env::set_var("QT_QUICK_CONTROLS_STYLE", "org.kde.breeze");
+    }
     startup_mark("qml_engine_begin", "create QML engine");
     let prev_handler = install_message_handler(Some(qml_load_error_handler));
     let mut engine = QmlEngine::new();

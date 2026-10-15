@@ -6,11 +6,15 @@
 // 职责：Hub 页面的头部区域，包含标题、副标题和操作按钮
 // 约束：
 //   - 纯 UI 组件，操作通过 signal 传递
-//   - 使用 DesignTokens 统一样式
+// Issue #900：迁移到 KDE/Breeze（Kirigami.Heading / Controls.Label /
+// Controls.Button），颜色与间距取自 Kirigami.Theme / Kirigami.Units。
+// 公共 API（dt / resolvedDt / title / subtitle / actionText / actionClicked）保持不变。
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
@@ -29,36 +33,32 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: root.resolvedDt.sp16
+        spacing: Kirigami.Units.largeSpacing
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: root.resolvedDt.sp6
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: root.resolvedDt
+            Kirigami.Heading {
+                Layout.fillWidth: true
+                level: 1
                 text: root.title
-                color: root.resolvedDt.onBackground
-                font.pointSize: root.resolvedDt.fontTitlePt
-                font.family: root.resolvedDt.fontFamily
-                font.weight: Font.Bold
+                elide: Text.ElideRight
             }
 
-            AppText {
-                dt: root.resolvedDt
+            Label {
+                Layout.fillWidth: true
                 text: root.subtitle
-                color: root.resolvedDt.textSecondary
-                font.pointSize: root.resolvedDt.bodyPt
-                font.family: root.resolvedDt.fontFamily
+                color: Kirigami.Theme.disabledTextColor
+                wrapMode: Text.Wrap
                 visible: text.length > 0
             }
         }
 
-        AppButton {
+        Button {
             visible: root.actionText.length > 0
             text: root.actionText
-            dt: root.resolvedDt
-            variant: "primary"
+            highlighted: true
             onClicked: root.actionClicked()
         }
     }

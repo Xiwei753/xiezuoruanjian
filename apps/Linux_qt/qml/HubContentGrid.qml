@@ -6,10 +6,16 @@
 // 职责：Hub 页面的内容网格布局，支持响应式卡片排列
 // 约束：
 //   - 纯布局组件，卡片通过 delegate 传入
-//   - 使用 DesignTokens 统一间距
+// Issue #900：空状态文案/图标改用 Breeze（Kirigami.Heading / Controls.Label /
+// Kirigami.Icon），间距默认取 Kirigami.Units。
+// 公共 API（dt / dataModel / delegate / minCardWidth / cardHeight / gridGap /
+// emptyTitle / emptySubtitle / emptyIcon / 一系列只读几何属性）保持不变。
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
@@ -18,7 +24,7 @@ Item {
     property Component delegate: null
     property int minCardWidth: 280
     property int cardHeight: 220
-    property int gridGap: dt.gridGap
+    property int gridGap: Kirigami.Units.largeSpacing
     property string emptyTitle: qsTr("暂无数据")
     property string emptySubtitle: ""
     property string emptyIcon: ""
@@ -62,32 +68,27 @@ Item {
         // Issue #798: 兼容 JS 数组(.length)和 ListModel(.count)两种 model 类型。
         visible: !root.dataModel || root.dataModel.count === 0 || root.dataModel.length === 0
 
-        Column {
+        ColumnLayout {
             anchors.centerIn: parent
-            spacing: dt.sp8
+            spacing: Kirigami.Units.largeSpacing
 
-            AppText {
-                dt: root.dt
-                text: root.emptyIcon
-                font.pointSize: dt.fontEmojiMdPt
-                visible: text.length > 0
-                anchors.horizontalCenter: parent.horizontalCenter
+            Kirigami.Icon {
+                source: root.emptyIcon
+                visible: root.emptyIcon.length > 0
+                implicitWidth: Kirigami.Units.iconSizes.huge
+                implicitHeight: Kirigami.Units.iconSizes.huge
+                Layout.alignment: Qt.AlignHCenter
             }
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 3
                 text: root.emptyTitle
-                color: dt.textPrimary
-                font.pointSize: dt.fontXlPt
-                font.weight: Font.DemiBold
-                anchors.horizontalCenter: parent.horizontalCenter
+                Layout.alignment: Qt.AlignHCenter
             }
-            AppText {
-                dt: root.dt
+            Label {
                 text: root.emptySubtitle
-                color: dt.textSecondary
-                font.pointSize: dt.fontMdPt
+                color: Kirigami.Theme.disabledTextColor
                 visible: text.length > 0
-                anchors.horizontalCenter: parent.horizontalCenter
+                Layout.alignment: Qt.AlignHCenter
             }
         }
     }

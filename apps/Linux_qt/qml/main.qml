@@ -14,12 +14,16 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
+import org.kde.kirigami as Kirigami
 import Sujian 1.0
 
-ApplicationWindow {
+// Issue #900: 应用壳层迁移到 KDE Kirigami。QQC2 控件风格由 src/main.rs 在
+// QmlEngine 创建前设置为 org.kde.breeze；此处用 Kirigami.ApplicationWindow
+// 提供 pageStack/全局工具栏/主题桥。当前内容仍由既有 Loader 路由承载作品库/
+// 写作/星图页面，避免用 Kirigami 页面切换动效驱动正文与光标。
+Kirigami.ApplicationWindow {
     id: window
     visible: true
     // Issue #692 评论 5692612221: 默认逻辑尺寸 1100×768，窗口真正关联到屏幕后
@@ -35,7 +39,10 @@ ApplicationWindow {
     width: 1100
     height: 768
     title: qsTr("素笺写作")
-    color: designTokens.bg
+    // Issue #900：窗口底色跟随 KDE Breeze/系统主题（Kirigami.Theme），
+    // 不再由 DesignTokens 决定通用界面外观；DesignTokens 只保留编辑器正文/
+    // 星图等专用色彩的桥接职责。
+    color: Kirigami.Theme.backgroundColor
 
     // ── Issue #692 评论 5692612221: 初始窗口尺寸收口（一次性） ──
     // 等窗口真正关联到所属屏幕后，按当前屏幕 availableGeometry 收口默认尺寸。
@@ -79,22 +86,11 @@ ApplicationWindow {
             Qt.callLater(applyInitialWindowSize)
     }
 
-    // ── Material 主题绑定：确保 Qt 原生控件（Dialog/Popup/Menu/TextField 等）跟随深浅色 ──
-    Material.theme: designTokens.isDark ? Material.Dark : Material.Light
-    Material.primary: designTokens.primary
-    Material.accent: designTokens.primary
-    Material.foreground: designTokens.textPrimary
-    Material.background: designTokens.bg
-
-    // ── Palette 绑定：保留作为非 Material 控件的 fallback ──
-    palette.window: designTokens.bg
-    palette.windowText: designTokens.textPrimary
-    palette.base: designTokens.surfaceContainerLow
-    palette.text: designTokens.textPrimary
-    palette.button: designTokens.surfaceContainer
-    palette.buttonText: designTokens.textPrimary
-    palette.highlight: designTokens.primary
-    palette.highlightedText: designTokens.onPrimary
+    // Issue #900: 移除 Material 全局覆写与手工 palette 注入，改用 KDE Breeze
+    // 控件样式的系统调色板。深浅色由 org.kde.breeze 与系统 colorScheme 决定；
+    // 应用自有主题 / 编辑区专用色仍由 designTokens 提供给编辑器与星图。
+    // pageStack 仅作为 Kirigami 壳层存在，不使用其页面切换动画承载正文路由。
+    pageStack.globalToolBar.style: Kirigami.ApplicationHeaderStyle.None
 
     function reportNullBackend(name) {
         var message = "Required QML context property is null: " + name;
@@ -778,6 +774,7 @@ ApplicationWindow {
         }
     }
 
+    // Issue #900: 用 KDE Controls 标准 Dialog 替换手绘背景与按钮，交由 Breeze 样式渲染。
     Dialog {
         id: confirmDialog
         property string actionType: ""
@@ -785,53 +782,31 @@ ApplicationWindow {
 
         title: qsTr("确认删除")
         modal: true
-        width: 400
-        height: 220
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
-        header: null
+        anchors.centerIn: parent
+        width: 420
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: designTokens.sp24
-            spacing: designTokens.sp16
-
-            AppText {
-                dt: designTokens
-                text: {
-                    if (confirmDialog.actionType === "delete_project") return qsTr("您确定要删除作品「%1」及其所有分卷、章节吗？").arg(confirmDialog.contextData.title);
-                    if (confirmDialog.actionType === "delete_volume") return qsTr("您确定要删除分卷「%1」及包含的所有章节吗？").arg(confirmDialog.contextData.title);
-                    if (confirmDialog.actionType === "delete_chapter") return qsTr("您确定要删除章节「%1」吗？").arg(confirmDialog.contextData.title);
-                    return qsTr("确定要删除吗？");
-                }
-                color: designTokens.textPrimary
-                font.pointSize: designTokens.bodyPt
-                font.family: designTokens.fontFamily
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: {
+                if (confirmDialog.actionType === "delete_project") return qsTr("您确定要删除作品「%1」及其所有分卷、章节吗？").arg(confirmDialog.contextData.title);
+                if (confirmDialog.actionType === "delete_volume") return qsTr("您确定要删除分卷「%1」及包含的所有章节吗？").arg(confirmDialog.contextData.title);
+                if (confirmDialog.actionType === "delete_chapter") return qsTr("您确定要删除章节「%1」吗？").arg(confirmDialog.contextData.title);
+                return qsTr("确定要删除吗？");
             }
+        }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignRight
-                spacing: designTokens.sp8
-                Item { Layout.fillWidth: true }
-                AppButton {
-                    text: qsTr("取消")
-                    dt: designTokens
-                    variant: "text"
-                    onClicked: confirmDialog.close()
-                }
-                AppButton {
-                    text: qsTr("删除")
-                    dt: designTokens
-                    variant: "danger"
-                    onClicked: {
-                        if (projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData)) {
-                            confirmDialog.close();
-                        }
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("取消")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+            Button {
+                text: qsTr("删除")
+                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+                onClicked: {
+                    if (projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData)) {
+                        confirmDialog.close();
                     }
                 }
             }
@@ -843,33 +818,14 @@ ApplicationWindow {
         property string message: ""
         title: qsTr("提示")
         modal: true
-        width: 340
-        height: 180
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
-        header: null
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: designTokens.sp24
-            spacing: designTokens.sp16
-            AppText {
-                dt: designTokens
-                text: errorDialog.message
-                color: designTokens.textPrimary
-                font.pointSize: designTokens.bodyPt
-                font.family: designTokens.fontFamily
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-            AppButton {
-                text: qsTr("确定")
-                dt: designTokens
-                variant: "primary"
-                Layout.alignment: Qt.AlignRight
-                onClicked: errorDialog.close()
-            }
+        anchors.centerIn: parent
+        width: 360
+        standardButtons: Dialog.Ok
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: errorDialog.message
         }
     }
 
@@ -923,37 +879,27 @@ ApplicationWindow {
         property string dialogTitle: qsTr("请输入")
 
         modal: true
-        width: 300
-        height: 200
-        parent: Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
+        anchors.centerIn: parent
+        width: 340
         title: inputDialog.dialogTitle
 
-        background: Rectangle { color: designTokens.surface; border.color: designTokens.border; radius: designTokens.radiusXl; border.width: 1 }
-        header: null
-
         ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: designTokens.sp24
-            spacing: designTokens.sp12
+            width: parent.width
+            spacing: Kirigami.Units.smallSpacing
 
-            AppText {
-                dt: designTokens
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
                 text: {
                     if (inputDialog.actionType === "volume") return qsTr("卷名称");
                     if (inputDialog.actionType === "chapter") return qsTr("章节名称");
                     return qsTr("新名称");
                 }
-                color: designTokens.textSecondary
-                font.pointSize: designTokens.labelPt
-                font.family: designTokens.fontFamily
             }
 
-            AppTextField {
+            TextField {
                 id: inputField
                 Layout.fillWidth: true
-                dt: designTokens
                 placeholderText: {
                     if (inputDialog.actionType === "volume") return qsTr("例如：第一卷");
                     if (inputDialog.actionType === "chapter") return qsTr("例如：第一章");
@@ -961,36 +907,39 @@ ApplicationWindow {
                 }
                 onAccepted: confirmInputButton.clicked()
             }
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                AppButton {
-                    id: confirmInputButton
-                    text: qsTr("确定")
-                    dt: designTokens
-                    variant: "primary"
-                    onClicked: {
-                         var title = inputField.text.trim();
-                         // 章节允许空标题，后端会兜底生成默认标题
-                         var allowEmpty = (inputDialog.actionType === "chapter");
-                         if (title !== "" || allowEmpty) {
-                             if (inputDialog.actionType === "volume") {
-                                 projectController.createVolume(inputDialog.projectId, title);
-                             } else if (inputDialog.actionType === "chapter") {
-                                 projectController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
-                             } else if (inputDialog.actionType === "rename_project") {
-                                 projectController.renameProject(inputDialog.projectId, title);
-                             } else if (inputDialog.actionType === "rename_volume") {
-                                 projectController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
-                             } else if (inputDialog.actionType === "rename_chapter") {
-                                 projectController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
-                             }
-                         }
-                         inputDialog.close();
-                     }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("取消")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+            Button {
+                id: confirmInputButton
+                text: qsTr("确定")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                onClicked: {
+                    var title = inputField.text.trim();
+                    // 章节允许空标题，后端会兜底生成默认标题
+                    var allowEmpty = (inputDialog.actionType === "chapter");
+                    if (title !== "" || allowEmpty) {
+                        if (inputDialog.actionType === "volume") {
+                            projectController.createVolume(inputDialog.projectId, title);
+                        } else if (inputDialog.actionType === "chapter") {
+                            projectController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+                        } else if (inputDialog.actionType === "rename_project") {
+                            projectController.renameProject(inputDialog.projectId, title);
+                        } else if (inputDialog.actionType === "rename_volume") {
+                            projectController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
+                        } else if (inputDialog.actionType === "rename_chapter") {
+                            projectController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
+                        }
+                    }
+                    inputDialog.close();
                 }
             }
         }
+
         onOpened: {
             inputField.text = inputDialog.defaultText;
         }

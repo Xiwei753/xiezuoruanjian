@@ -34,6 +34,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Item {
     id: canvasArea
@@ -542,17 +543,15 @@ Item {
         z: 50
         visible: _touchInputActive
 
-        AppButton {
-            dt: canvasArea.dt
-            text: qsTr("+")
+        ToolButton {
+            icon.name: "zoom-in"
             // 缩放锚点是画布中心：按钮自己的 width/height 不是画布尺寸。
             onClicked: zoomAt(canvasArea.width / 2, canvasArea.height / 2,
                               zoomLevel * _zoomFactor)
         }
 
-        AppButton {
-            dt: canvasArea.dt
-            text: qsTr("−")
+        ToolButton {
+            icon.name: "zoom-out"
             onClicked: zoomAt(canvasArea.width / 2, canvasArea.height / 2,
                               zoomLevel / _zoomFactor)
         }
@@ -570,12 +569,10 @@ Item {
         visible: errorMessage.length > 0
         z: 100
 
-        AppText {
-            dt: canvasArea.dt
+        Label {
             anchors.centerIn: parent
             text: canvasArea.errorMessage
             color: _onError
-            font.pointSize: dt.bodyPt
         }
         MouseArea {
             anchors.fill: parent
@@ -612,27 +609,24 @@ Item {
             anchors.margins: 8
             spacing: 4
 
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 Layout.fillWidth: true
                 text: touchContextPreview.previewKind === "embed" ? qsTr("编辑名称") : qsTr("编辑")
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 leftPadding: 4
             }
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 Layout.fillWidth: true
                 text: qsTr("移动")
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 leftPadding: 4
             }
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 Layout.fillWidth: true
                 text: qsTr("删除")
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 leftPadding: 4
             }
@@ -751,10 +745,9 @@ Item {
         MenuItem {
             id: bgMenuItem1
             text: qsTr("新建节点")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: bgMenuItem1.text
-                color: bgMenuItem1.hovered ? _accent : _textPrimary
+                color: bgMenuItem1.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 font.bold: true
                 verticalAlignment: Text.AlignVCenter
@@ -770,10 +763,9 @@ Item {
         MenuItem {
             id: bgMenuItem2
             text: qsTr("新建子星图")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: bgMenuItem2.text
-                color: bgMenuItem2.hovered ? _accent : _textPrimary
+                color: bgMenuItem2.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 font.bold: true
                 verticalAlignment: Text.AlignVCenter
@@ -803,10 +795,9 @@ Item {
         MenuItem {
             id: nodeMenuItemEdit
             text: qsTr("编辑")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: nodeMenuItemEdit.text
-                color: nodeMenuItemEdit.hovered ? _accent : _textPrimary
+                color: nodeMenuItemEdit.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -824,10 +815,9 @@ Item {
         MenuItem {
             id: nodeMenuItemMove
             text: qsTr("移动")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: nodeMenuItemMove.text
-                color: nodeMenuItemMove.hovered ? _accent : _textPrimary
+                color: nodeMenuItemMove.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -854,10 +844,9 @@ Item {
         MenuItem {
             id: nodeMenuItemLink
             text: qsTr("内部链接")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: nodeMenuItemLink.text
-                color: nodeMenuItemLink.hovered ? _accent : _textPrimary
+                color: nodeMenuItemLink.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -878,10 +867,9 @@ Item {
         MenuItem {
             id: nodeMenuItemConnect
             text: qsTr("连线")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: nodeMenuItemConnect.text
-                color: nodeMenuItemConnect.hovered ? _accent : _textPrimary
+                color: nodeMenuItemConnect.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -905,10 +893,9 @@ Item {
         MenuItem {
             id: nodeMenuItemDelete
             text: qsTr("删除")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: nodeMenuItemDelete.text
-                color: nodeMenuItemDelete.hovered ? _danger : _textPrimary
+                color: nodeMenuItemDelete.hovered ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -938,10 +925,9 @@ Item {
         MenuItem {
             id: edgeMenuItem1
             text: qsTr("重命名连线")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: edgeMenuItem1.text
-                color: edgeMenuItem1.hovered ? _accent : _textPrimary
+                color: edgeMenuItem1.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -960,10 +946,9 @@ Item {
         MenuItem {
             id: edgeMenuItem2
             text: qsTr("删除连线")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: edgeMenuItem2.text
-                color: edgeMenuItem2.hovered ? _danger : _textPrimary
+                color: edgeMenuItem2.hovered ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -994,10 +979,9 @@ Item {
         MenuItem {
             id: embedMenuItemRename
             text: qsTr("编辑名称")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: embedMenuItemRename.text
-                color: embedMenuItemRename.hovered ? _accent : _textPrimary
+                color: embedMenuItemRename.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -1016,10 +1000,9 @@ Item {
         MenuItem {
             id: embedMenuItemMove
             text: qsTr("移动")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: embedMenuItemMove.text
-                color: embedMenuItemMove.hovered ? _accent : _textPrimary
+                color: embedMenuItemMove.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -1044,10 +1027,9 @@ Item {
         MenuItem {
             id: embedMenuItemLink
             text: qsTr("内部链接")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: embedMenuItemLink.text
-                color: embedMenuItemLink.hovered ? _accent : _textPrimary
+                color: embedMenuItemLink.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -1068,10 +1050,9 @@ Item {
         MenuItem {
             id: embedMenuItemConnect
             text: qsTr("连线")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: embedMenuItemConnect.text
-                color: embedMenuItemConnect.hovered ? _accent : _textPrimary
+                color: embedMenuItemConnect.hovered ? _accent : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -1095,10 +1076,9 @@ Item {
         MenuItem {
             id: embedMenuItemDelete
             text: qsTr("删除")
-            contentItem: AppText {
-                dt: canvasArea.dt
+            contentItem: Label {
                 text: embedMenuItemDelete.text
-                color: embedMenuItemDelete.hovered ? _danger : _textPrimary
+                color: embedMenuItemDelete.hovered ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                 font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -1140,20 +1120,19 @@ Item {
             anchors.margins: 20
             spacing: 16
 
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 text: renameDialog.targetType === "embed" ? qsTr("修改子星图名称")
                      : qsTr("修改连线标签")
                 font.pointSize: dt.fontLgPt
                 font.bold: true
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
             }
 
             TextField {
                 id: renameInput
                 Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
+                Layout.preferredHeight: 36
+                color: Kirigami.Theme.textColor
                 font.pointSize: dt.bodyPt
                 focus: renameDialog.visible
                 text: renameDialog.initialText
@@ -1177,10 +1156,9 @@ Item {
                     id: cancelBtn
                     text: qsTr("取消")
                     onClicked: renameDialog.close()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: cancelBtn.text
-                        color: _textSecondary
+                        color: Kirigami.Theme.disabledTextColor
                         font.pointSize: dt.labelPt
                     }
                     background: Rectangle {
@@ -1194,10 +1172,9 @@ Item {
                     id: confirmBtn
                     text: qsTr("确定")
                     onClicked: renameDialog.confirm()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: confirmBtn.text
-                        color: _onPrimary
+                        color: Kirigami.Theme.highlightedTextColor
                         font.bold: true
                         font.pointSize: dt.labelPt
                     }
@@ -1260,19 +1237,18 @@ Item {
             anchors.margins: 20
             spacing: 16
 
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 text: createMode === "starmap" ? qsTr("新建子星图") : qsTr("新建节点")
                 font.pointSize: dt.fontLgPt
                 font.bold: true
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
             }
 
             TextField {
                 id: createInput
                 Layout.fillWidth: true
-                height: 36
-                color: _textPrimary
+                Layout.preferredHeight: 36
+                color: Kirigami.Theme.textColor
                 font.pointSize: dt.bodyPt
                 placeholderText: qsTr("名称")
                 focus: createDialog.visible
@@ -1297,10 +1273,9 @@ Item {
                     id: createCancelBtn
                     text: qsTr("取消")
                     onClicked: createDialog.close()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: createCancelBtn.text
-                        color: _textSecondary
+                        color: Kirigami.Theme.disabledTextColor
                         font.pointSize: dt.labelPt
                     }
                     background: Rectangle {
@@ -1314,10 +1289,9 @@ Item {
                     id: createConfirmBtn
                     text: qsTr("确定")
                     onClicked: createDialog.confirm()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: createConfirmBtn.text
-                        color: _onPrimary
+                        color: Kirigami.Theme.highlightedTextColor
                         font.bold: true
                         font.pointSize: dt.labelPt
                     }
@@ -1411,20 +1385,18 @@ Item {
             anchors.margins: 20
             spacing: 12
 
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 text: qsTr("内部链接")
                 font.pointSize: dt.fontLgPt
                 font.bold: true
-                color: _textPrimary
+                color: Kirigami.Theme.textColor
             }
 
-            AppText {
-                dt: canvasArea.dt
+            Label {
                 text: linkDialog.linkItems.length > 0
                       ? qsTr("已链接到：")
                       : qsTr("尚无内部链接，选择目标开始建立。")
-                color: _textSecondary
+                color: Kirigami.Theme.disabledTextColor
                 font.pointSize: dt.labelPt
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
@@ -1442,12 +1414,11 @@ Item {
                     width: linkList.width
                     spacing: 8
 
-                    AppText {
-                        dt: canvasArea.dt
+                    Label {
                         Layout.fillWidth: true
                         text: linkDialog.targetSummary(modelData)
                                 + (modelData.link.label ? "（" + modelData.link.label + "）" : "")
-                        color: _textPrimary
+                        color: Kirigami.Theme.textColor
                         font.pointSize: dt.bodyPt
                         elide: Text.ElideRight
                     }
@@ -1471,10 +1442,9 @@ Item {
                                 linkDialog.close()
                             }
                         }
-                        contentItem: AppText {
-                            dt: canvasArea.dt
+                        contentItem: Label {
                             text: linkReassignBtn.text
-                            color: _textSecondary
+                            color: Kirigami.Theme.disabledTextColor
                             font.pointSize: dt.labelPt
                         }
                         background: Rectangle {
@@ -1495,10 +1465,9 @@ Item {
                                 linkDialog.refreshItems()
                             }
                         }
-                        contentItem: AppText {
-                            dt: canvasArea.dt
+                        contentItem: Label {
                             text: linkDelBtn.text
-                            color: _danger
+                            color: Kirigami.Theme.negativeTextColor
                             font.pointSize: dt.labelPt
                         }
                         background: Rectangle {
@@ -1518,10 +1487,9 @@ Item {
                     id: linkCancelBtn
                     text: qsTr("取消")
                     onClicked: linkDialog.close()
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: linkCancelBtn.text
-                        color: _textSecondary
+                        color: Kirigami.Theme.disabledTextColor
                         font.pointSize: dt.labelPt
                     }
                     background: Rectangle {
@@ -1543,10 +1511,9 @@ Item {
                         }
                         linkDialog.close()
                     }
-                    contentItem: AppText {
-                        dt: canvasArea.dt
+                    contentItem: Label {
                         text: linkPickTargetBtn.text
-                        color: _onPrimary
+                        color: Kirigami.Theme.highlightedTextColor
                         font.bold: true
                         font.pointSize: dt.labelPt
                     }

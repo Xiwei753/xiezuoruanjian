@@ -39,6 +39,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Sujian 1.0
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -446,35 +447,26 @@ Rectangle {
         width: 360
         height: 180
         anchors.centerIn: parent
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp16
-            AppText {
-                dt: root.dt
+            anchors.margins: Kirigami.Units.largeSpacing
+            spacing: Kirigami.Units.largeSpacing
+            Kirigami.Heading {
+                level: 4
                 text: qsTr("保存被阻止")
-                color: dt.textPrimary
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
-            AppText {
-                dt: root.dt
+            Label {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("空内容保存被阻止，请输入内容后重试")
-                color: dt.textSecondary
-                font.pointSize: dt.bodyPt
-                font.family: dt.fontFamily
+                color: Kirigami.Theme.disabledTextColor
                 wrapMode: Text.Wrap
             }
-            AppButton {
-                            text: qsTr("确定")
-                dt: root.dt
-                variant: "primary"
+            Button {
+                text: qsTr("确定")
+                highlighted: true
                 Layout.alignment: Qt.AlignRight
                 onClicked: emptySaveDialog.close()
             }
@@ -584,7 +576,7 @@ Rectangle {
         reloadActiveChapter();
     }
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     // Issue #825 复核第3项：Core 的 plan 明确是「最上面一整条 Toolbar，下面才是
     // ChapterNavigation | Editor | ToolPane | ToolRail」。这里由 WritingWorkbenchToolbar
@@ -703,7 +695,7 @@ Rectangle {
                     id: editorAreaRect
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: dt.bg
+                    color: Kirigami.Theme.backgroundColor
 
                     // Issue #829：正文区顶部的折叠钮（手稿「宽屏全打开」/「左右缩回」
                     // 都在正文区顶部居中画了一个三角）。它是浮层，不占 ColumnLayout 的
@@ -712,7 +704,7 @@ Rectangle {
                     PaneFoldButton {
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
-                        anchors.topMargin: dt.sp4
+                        anchors.topMargin: Kirigami.Units.smallSpacing
                         z: 30
                         dt: root.dt
                         // Issue #833 复核3：任何模式下都给用户入口切换章节导航，
@@ -735,10 +727,10 @@ Rectangle {
                     // Centered paper container
                     Item {
                         anchors.fill: parent
-                        anchors.leftMargin: dt.sp8
-                        anchors.rightMargin: dt.sp8
-                        anchors.topMargin: dt.sp8
-                        anchors.bottomMargin: dt.sp8
+                        anchors.leftMargin: Kirigami.Units.smallSpacing
+                        anchors.rightMargin: Kirigami.Units.smallSpacing
+                        anchors.topMargin: Kirigami.Units.smallSpacing
+                        anchors.bottomMargin: Kirigami.Units.smallSpacing
 
                         // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
                         // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
@@ -762,9 +754,7 @@ Rectangle {
                             height: parent.height
                             anchors.horizontalCenter: parent.horizontalCenter
                             color: dt.editorBackground
-                            radius: dt.radiusMd
-                            border.color: dt.border
-                            border.width: 1
+                            radius: Kirigami.Units.cornerRadius
                         }
 
                         // Issue #833：删除 paperBg 左右两个拖拽改宽 MouseArea。
@@ -786,21 +776,20 @@ Rectangle {
                     // Empty state
                     ColumnLayout {
                         anchors.centerIn: parent
-                        spacing: dt.sp12
+                        spacing: Kirigami.Units.largeSpacing
                         visible: !editorController.chapterId
 
-                        Rectangle {
-                            width: 32; height: 32
-                            radius: 16
-                            color: dt.textSecondary
-                            opacity: 0.1
+                        Kirigami.Icon {
+                            source: "document-open"
+                            color: Kirigami.Theme.disabledTextColor
+                            opacity: 0.4
                             Layout.alignment: Qt.AlignHCenter
+                            implicitWidth: Kirigami.Units.iconSizes.large
+                            implicitHeight: Kirigami.Units.iconSizes.large
                         }
-                        AppText {
-                            dt: root.dt
+                        Label {
                             text: qsTr("请选择或新建章节")
-                            color: dt.textSecondary
-                            font.pointSize: dt.fontLgPt
+                            color: Kirigami.Theme.disabledTextColor
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
@@ -812,34 +801,21 @@ Rectangle {
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        width: 36
+                        width: Kirigami.Units.gridUnit * 2
                         visible: !root.drawerOpen && !root.toolRailVisible && !root.hideContentPanes
                         color: "transparent"
 
                         ColumnLayout {
                             anchors.centerIn: parent
-                            spacing: dt.sp8
+                            spacing: Kirigami.Units.smallSpacing
 
-                            Rectangle {
-                                width: 28; height: 28
-                                radius: dt.radiusPill
-                                color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-                                AppText {
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: "\u25C0" // Left arrow to indicate it opens from the right
-                                    color: dt.textMuted
-                                    font.pointSize: dt.fontXsPt
-                                }
-
-                                MouseArea {
-                                    id: drawerBtnHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.requestToolPaneOpen("stats", true)
-                                }
+                            ToolButton {
+                                Layout.alignment: Qt.AlignHCenter
+                                // Left arrow to indicate it opens from the right
+                                icon.name: "go-previous"
+                                display: AbstractButton.IconOnly
+                                flat: true
+                                onClicked: root.requestToolPaneOpen("stats", true)
                             }
                         }
                     }
@@ -948,7 +924,8 @@ Rectangle {
                 anchors.centerIn: parent
                 width: 1
                 height: parent.height
-                color: root.dt.border
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
             }
 
             DragHandler {
@@ -989,7 +966,8 @@ Rectangle {
                 anchors.centerIn: parent
                 width: 1
                 height: parent.height
-                color: root.dt.border
+                color: Kirigami.Theme.disabledTextColor
+                opacity: 0.3
             }
 
             DragHandler {
@@ -1123,32 +1101,35 @@ Rectangle {
         id: leftPaneHandle
         visible: root.toolRailVisible
         z: 50
-        width: 18
-        height: 64
-        radius: dt.radiusPill
-        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
-        border.color: leftPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: leftPaneHandleHover.containsMouse || leftPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: leftPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                        : Kirigami.Theme.disabledTextColor
         border.width: 1
         x: root.leftPaneCollapsed
-           ? dt.sp4
-           : Math.max(0, Math.min(root.width - width - dt.sp4, sidebarRect.width - width / 2))
+           ? Kirigami.Units.smallSpacing
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, sidebarRect.width - width / 2))
         y: Math.round((root.height - height) / 2)
 
-        Behavior on color { ColorAnimation { duration: dt.animFast } }
-        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
-        AppText {
-            dt: root.dt
+        Kirigami.Icon {
             anchors.centerIn: parent
-            text: root.leftPaneCollapsed ? "›" : "‹"
-            color: dt.textSecondary
-            font.pointSize: dt.fontMdPt
+            source: root.leftPaneCollapsed ? "arrow-right" : "arrow-left"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.small
+            implicitHeight: Kirigami.Units.iconSizes.small
         }
 
         MouseArea {
             id: leftPaneHandleHover
             anchors.fill: parent
-            anchors.margins: -dt.sp6
+            anchors.margins: -Kirigami.Units.smallSpacing
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
@@ -1157,7 +1138,7 @@ Rectangle {
                 } else {
                     root.closeChapterNavigation();
                 }
-                // 收起后把手贴到左边缘，留出 sp4 边距；不需要动编辑会话。
+                // 收起后把手贴到左边缘，留出边距；不需要动编辑会话。
                 if (root.leftPaneCollapsed) root.requestEditorFocus()
             }
         }
@@ -1167,36 +1148,39 @@ Rectangle {
         id: rightPaneHandle
         visible: root.toolRailVisible
         z: 50
-        width: 18
-        height: 64
-        radius: dt.radiusPill
-        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed ? dt.surfaceVariant : dt.surface
-        border.color: rightPaneHandleHover.containsMouse ? dt.borderFocus : dt.border
+        width: Kirigami.Units.gridUnit
+        height: Kirigami.Units.gridUnit * 3.5
+        radius: width / 2
+        color: rightPaneHandleHover.containsMouse || rightPaneHandleHover.pressed
+                   ? Kirigami.Theme.alternateBackgroundColor
+                   : Kirigami.Theme.backgroundColor
+        border.color: rightPaneHandleHover.containsMouse ? Kirigami.Theme.focusColor
+                                                         : Kirigami.Theme.disabledTextColor
         border.width: 1
-        Behavior on color { ColorAnimation { duration: dt.animFast } }
-        Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+        Behavior on color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
+        Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
         // Issue #825 复核第5项：右把手贴在“正文 | 工具区”分隔边缘上（RightDrawer 展开时
         // 用它的左边缘），只有收起时才退回 ToolRail 左边缘。
         // 工具 pane 收起后 rail 仍然常驻（Core 的 ToolRail 恒有宽度），
         // 所以收起态贴的是 rail 左缘，不是窗口最右缘。
         x: root.drawerOpen
-           ? Math.max(0, Math.min(root.width - width - dt.sp4, rightDrawerRect.x - width / 2))
-           : Math.max(0, Math.min(root.width - width - dt.sp4, toolRailRect.x - width / 2))
+           ? Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, rightDrawerRect.x - width / 2))
+           : Math.max(0, Math.min(root.width - width - Kirigami.Units.smallSpacing, toolRailRect.x - width / 2))
         y: Math.round((root.height - height) / 2)
 
-        AppText {
-            dt: root.dt
+        Kirigami.Icon {
             anchors.centerIn: parent
-            text: root.drawerOpen ? "›" : "‹"
-            color: dt.textSecondary
-            font.pointSize: dt.fontMdPt
+            source: root.drawerOpen ? "arrow-right" : "arrow-left"
+            color: Kirigami.Theme.textColor
+            implicitWidth: Kirigami.Units.iconSizes.small
+            implicitHeight: Kirigami.Units.iconSizes.small
         }
 
         MouseArea {
             id: rightPaneHandleHover
             anchors.fill: parent
-            anchors.margins: -dt.sp6
+            anchors.margins: -Kirigami.Units.smallSpacing
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
@@ -1218,11 +1202,10 @@ Rectangle {
         visible: root.singlePaneMode && root.singlePaneNavOpen
         z: 60
 
-        // 半透明遮罩，点击关闭抽屉。
-        // 颜色取 DesignTokens 的 scrim，不再写死 "black"（ui_tokens 门禁）。
+        // 半透明遮罩，点击关闭抽屉。用主题文本色做暗化，避免写死颜色。
         Rectangle {
             anchors.fill: parent
-            color: dt.scrim
+            color: Kirigami.Theme.textColor
             opacity: 0.4
             MouseArea {
                 anchors.fill: parent
