@@ -73,16 +73,22 @@ Rectangle {
 
     // Issue #902 第二十三轮：窄且矮的窗口里三行纵排 Footer（~140px）会吞掉整个
     // 预览区。按可用高度判断是否切换到单按钮 + Menu 的紧凑 Footer，而不是只看宽度。
+    // Issue #902 第二十四轮复核补充：完整布局的 Footer 高度随宽度模式不同——窄模式是
+    // 三行纵排（_threeRowFooterHeight），宽模式是单行横排（_horizontalFooterHeight）。
+    // 因此"是否矮到需要紧凑 Footer"也必须按当前宽度模式各自判断，否则宽但略矮的窗口
+    // 会套用窄模式的三行高度，在横排 Footer 本可完整显示时被无谓收成两段式 Menu。
     readonly property real _threeRowFooterHeight: 36 * 3 + root._sp8 * 4 // 3 按钮 + 2 间距 + 2 边距 ≈ 140
-    readonly property real _oneRowFooterHeight: 44                        // 单按钮 + 上下边距
+    readonly property real _horizontalFooterHeight: 56                   // 宽模式单行横排 Footer
+    readonly property real _oneRowFooterHeight: 44                       // 紧凑 Footer：单按钮 + 上下边距
     readonly property real _headerHeight: 48
     readonly property real _dividerHeight: 1
-    // 三行 Footer 模式下 Content 至少需要的高度：窄模式页签(36)+预览(60)；宽模式标签+预览(80)
-    readonly property real _minContentHeightForThreeRow: root._isNarrow ? 96 : 80
-    // 三行 Footer 模式所需的最小面板高度 = Header + 分隔线 + Content + 分隔线 + 三行Footer
-    readonly property real _threeRowModeMinHeight: root._headerHeight + root._dividerHeight + root._minContentHeightForThreeRow + root._dividerHeight + root._threeRowFooterHeight
-    // 矮窗口：可用高度不足以容纳三行 Footer + 可读预览。
-    readonly property bool _isShort: root.height < root._threeRowModeMinHeight
+    // 完整布局的 Content 至少需要的高度：窄模式页签(36)+预览(60)；宽模式标签+预览(80)
+    readonly property real _minContentHeight: root._isNarrow ? 96 : 80
+    // 当前宽度模式使用完整 Footer 时所需的最小面板高度
+    // = Header + 分隔线 + Content + 分隔线 + Footer
+    readonly property real _fullModeMinHeight: root._headerHeight + root._dividerHeight + root._minContentHeight + root._dividerHeight + (root._isNarrow ? root._threeRowFooterHeight : root._horizontalFooterHeight)
+    // 矮窗口：可用高度不足以容纳当前宽度模式的完整 Footer + 可读预览。
+    readonly property bool _isShort: root.height < root._fullModeMinHeight
 
     // ── 内部状态 ──
     // load_sync_conflict_preview 返回的预览对象（{ path, kind, createdAt, localContent, remoteContent, remoteDeleted }）。
@@ -553,7 +559,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: root._isShort
                 ? root._oneRowFooterHeight
-                : (root._isNarrow ? root._threeRowFooterHeight : 56)
+                : (root._isNarrow ? root._threeRowFooterHeight : root._horizontalFooterHeight)
             color: "transparent"
 
             // 三个动作模型：primary 按钮用实色背景，其余用边框背景。
