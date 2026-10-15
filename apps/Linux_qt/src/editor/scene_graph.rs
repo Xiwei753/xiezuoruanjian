@@ -129,9 +129,9 @@ cpp! {{
         }
 
         // 真正把预备好的本帧动画替换进场景图。只有调用方确认静态层也已提交成功
-        // 时才会调用；此函数不会失败。
-        void commitPrepared() {
-            if (!m_prepared && !m_prepared_empty) return;
+        // 时才会调用。返回 false 表示本次没有任何预备结果可提交（不是成功）。
+        bool commitPrepared() {
+            if (!m_prepared && !m_prepared_empty) return false;
             const int glyph_count = m_prepared_snapshot_ids.size();
             m_prepared = false;
             m_prepared_empty = false;
@@ -215,6 +215,7 @@ cpp! {{
             m_prepared_snapshot_ids.clear();
 
             markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            return true;
         }
 
         // 丢弃预备结果：释放本次新创建的纹理，不动现有子节点 / m_texture_cache。
@@ -529,8 +530,9 @@ pub fn commit_animation_layer(
         animLayer->setMatrix(animMatrix);
         animLayer->markDirty(QSGNode::DirtyMatrix);
 
-        animLayer->commitPrepared();
-        return true;
+        // Issue #904 复核 6：只有真的有预备结果（m_prepared / m_prepared_empty）
+        // 才算提交成功；否则返回 false，避免"调用了但没提交仍报成功"。
+        return animLayer->commitPrepared();
     })
 }
 

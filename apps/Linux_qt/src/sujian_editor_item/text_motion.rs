@@ -14,7 +14,7 @@
 //! - 新旧字形按 `QTextLayout` 的 cluster 边界（Core 的 UTF-8 byte range）
 //!   整体区分，不猜半个字节。
 
-use super::layout_snapshot::{EditorLayoutSnapshot, SourceRect};
+use super::layout_snapshot::{EditorLayoutSnapshot, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::render_plan::TextAnimationGlyphInfo;
 use super::snapshot_id::LineSnapshotId;
@@ -53,6 +53,11 @@ pub(crate) struct VisibleFragment {
     pub mask_width: f64,
     /// 所属段落 id（用于整体段落位移的去重）。
     pub paragraph_id: u64,
+    /// Issue #904 复核 6：该片段的字形 shaping 身份。
+    ///
+    /// 等长度替换时新旧 byte range 相同，只有它能区分"同一字位移"与
+    /// "旧字退出 + 新字进入"；也是下一帧能否继承在途遮罩宽度的依据。
+    pub shaping: Option<ShapingIdentity>,
     pub source_revision: EditorRevision,
     pub glyph_id: u64,
 }
@@ -93,6 +98,7 @@ pub(crate) enum TextPiece {
         source_revision: EditorRevision,
         glyph_id: u64,
         paragraph_id: u64,
+        shaping: Option<ShapingIdentity>,
     },
     /// 旧字逐渐被覆盖（删除），仍有旧局部纹理可画。
     Conceal {
@@ -104,6 +110,7 @@ pub(crate) enum TextPiece {
         source_revision: EditorRevision,
         glyph_id: u64,
         paragraph_id: u64,
+        shaping: Option<ShapingIdentity>,
     },
     /// 同一未删 cluster 从 `from` 移到 `to`（行内位移 / 换行 / 段落回流）。
     Move {
@@ -115,6 +122,7 @@ pub(crate) enum TextPiece {
         source_revision: EditorRevision,
         glyph_id: u64,
         paragraph_id: u64,
+        shaping: Option<ShapingIdentity>,
     },
 }
 
@@ -196,6 +204,15 @@ impl TextPiece {
             TextPiece::Reveal { paragraph_id, .. }
             | TextPiece::Conceal { paragraph_id, .. }
             | TextPiece::Move { paragraph_id, .. } => *paragraph_id,
+        }
+    }
+
+    /// Issue #904 复核 6：该片段的字形 shaping 身份（贯穿到本帧已提交片段记录）。
+    fn shaping(&self) -> Option<&ShapingIdentity> {
+        match self {
+            TextPiece::Reveal { shaping, .. }
+            | TextPiece::Conceal { shaping, .. }
+            | TextPiece::Move { shaping, .. } => shaping.as_ref(),
         }
     }
 }
@@ -330,11 +347,19 @@ impl TextMotion {
             }
             // 把新坐标映回旧坐标以匹配未删 cluster。
             let mapped = map_new_to_old(new_frag.byte_range, new_start, new_end, delta);
+            // Issue #904 复核 6：只有「未被本次替换/删除覆盖的旧片段」且
+            // 「shaping 身份相同」才允许消耗旧片段、决定为 Move。
+            // 仅比 byte range 会把等长度替换（"甲"→"乙"）判成"没有变化"而静默瞬变，
+            // 也会把宽度不同的两个不同字错判成同一个字的 Move。
             let matched = old_frags
                 .iter()
                 .enumerate()
                 .find(|(i, f)| {
-                    !consumed_old[*i] && f.byte_range == mapped && f.source_revision == old_revision
+                    !consumed_old[*i]
+                        && f.byte_range == mapped
+                        && f.source_revision == old_revision
+                        && !replaced_in_old(edit, f.byte_range)
+                        && same_visual(f, new_frag)
                 })
                 .map(|(i, _)| i);
 
@@ -362,6 +387,7 @@ impl TextMotion {
                             source_revision: new_revision,
                             glyph_id: new_frag.glyph_id,
                             paragraph_id: new_frag.paragraph_id,
+                            shaping: new_frag.shaping.clone(),
                         });
                     } else if start_visible + MASK_EPS < new_frag.rect.w {
                         // 位置没变但上一次还没吐完：继续从当前宽度露出，
@@ -378,6 +404,7 @@ impl TextMotion {
                             source_revision: new_revision,
                             glyph_id: new_frag.glyph_id,
                             paragraph_id: new_frag.paragraph_id,
+                            shaping: new_frag.shaping.clone(),
                         });
                     }
                 }
@@ -395,6 +422,7 @@ impl TextMotion {
                         source_revision: new_revision,
                         glyph_id: new_frag.glyph_id,
                         paragraph_id: new_frag.paragraph_id,
+                        shaping: new_frag.shaping.clone(),
                     });
                 }
             }
@@ -403,9 +431,11 @@ impl TextMotion {
         for (idx, old_frag) in old_frags.iter().enumerate() {
             // 只为本次编辑**真正删掉/替换**的旧字产生 Conceal；为配 Move 而多抓
             // 的邻接段落片段不得凭空被吞。
+            // Issue #904 复核 6：只为本次真正被替换/删除覆盖的旧字产生 Conceal
+            // （半开区间严格相交；零长度的插入 patch 不算，它只是把后面的字挤开）。
             if consumed_old[idx]
                 || moved_paragraphs.contains(&old_frag.paragraph_id)
-                || !in_any_old_patch(edit, old_frag.byte_range)
+                || !replaced_in_old(edit, old_frag.byte_range)
             {
                 continue;
             }
@@ -422,6 +452,7 @@ impl TextMotion {
                 source_revision: old_revision,
                 glyph_id: old_frag.glyph_id,
                 paragraph_id: old_frag.paragraph_id,
+                shaping: old_frag.shaping.clone(),
             });
         }
 
@@ -745,6 +776,7 @@ fn layout_fragments(
                 rect,
                 mask_width: rect.w,
                 paragraph_id: line.id.paragraph_id,
+                shaping: Some(cluster.shaping_identity.clone()),
                 source_revision: revision,
                 glyph_id: derive_fragment_id(&line.id, byte_range),
             });
@@ -753,27 +785,51 @@ fn layout_fragments(
     frags
 }
 
-/// 复核 2：同 byte range 上一次真正画出的可见宽度。
+/// 复核 2/6：同一字形上一次真正画出的可见宽度。
 ///
-/// 先找矩形一致的片段（同一字仍在原处），否则退回任意同 byte range 的片段。
+/// 先找矩形一致的片段（同一字仍在原处），否则退回同一 byte range 的片段。
+/// 但必须同时是**同一个视觉对象**（shaping 身份相同）：等长度替换时新旧字
+/// 处在同一字节位置却是不同字形，不能让"上一字露到一半"的遮罩直接充当新字的
+/// 起始遮罩。
 fn drawn_mask_for(drawn: &[VisibleFragment], frag: &VisibleFragment) -> Option<f64> {
     drawn
         .iter()
-        .find(|f| f.byte_range == frag.byte_range && rect_approx_eq(&f.rect, &frag.rect))
-        .or_else(|| drawn.iter().find(|f| f.byte_range == frag.byte_range))
+        .find(|f| {
+            f.byte_range == frag.byte_range
+                && rect_approx_eq(&f.rect, &frag.rect)
+                && same_visual(f, frag)
+        })
+        .or_else(|| {
+            drawn
+                .iter()
+                .find(|f| f.byte_range == frag.byte_range && same_visual(f, frag))
+        })
         .map(|f| f.mask_width)
 }
 
+/// Issue #904 复核 6：两个片段是否**同一个视觉字形**。
+///
+/// 只认 `QTextLayout` cluster 的 shaping 身份（文本内容哈希 / 字体指纹 / 字形索引 /
+/// 方向 / 格式指纹）。任一侧身份未知（例如从 QSG 回执重建的片段）时不敢当同一字，
+/// 宁可走 Reveal + Conceal 两段正确动画。不能用含 revision 的图片 id
+/// （`derive_fragment_id`）来判"是不是同一个字符"。
+fn same_visual(a: &VisibleFragment, b: &VisibleFragment) -> bool {
+    match (&a.shaping, &b.shaping) {
+        (Some(x), Some(y)) => x.is_same_shaping(y),
+        _ => false,
+    }
+}
+
 /// 该字节范围是否落在本次编辑真正替换/删除的旧范围内。
-fn in_any_old_patch(edit: &EditorEditResult, byte_range: (usize, usize)) -> bool {
+/// Issue #904 复核 6：该旧片段是否被本次编辑**真正替换/删除**。
+///
+/// 用半开区间严格相交（`ps < pe && ps < frag.1 && frag.0 < pe`）。零长度的插入
+/// patch 不算"替换"：插入只是把后面的字挤开，后续字仍应配成 Move。
+fn replaced_in_old(edit: &EditorEditResult, byte_range: (usize, usize)) -> bool {
     edit.display_patches.iter().any(|patch| {
-        overlaps(
-            byte_range,
-            (
-                patch.replace_byte_range.start().value(),
-                patch.replace_byte_range.end().value(),
-            ),
-        )
+        let ps = patch.replace_byte_range.start().value();
+        let pe = patch.replace_byte_range.end().value();
+        ps < pe && ps < byte_range.1 && byte_range.0 < pe
     })
 }
 
@@ -852,6 +908,7 @@ fn glyph_info(
         source_revision: piece.source_revision(),
         glyph_id: piece.glyph_id(),
         paragraph_id: piece.paragraph_id(),
+        shaping: piece.shaping().cloned(),
     }
 }
 

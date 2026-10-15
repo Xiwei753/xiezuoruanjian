@@ -681,6 +681,7 @@ fn prepare_text_animation_layer(
             },
             mask_width: iw,
             paragraph_id: glyph.paragraph_id,
+            shaping: glyph.shaping.clone(),
             source_revision: glyph.source_revision,
             glyph_id: glyph.glyph_id,
         });
@@ -688,13 +689,30 @@ fn prepare_text_animation_layer(
 
     let glyph_count = glyph_data.len() / 5;
     if glyph_count == 0 {
-        // 本帧没有可见 glyph（如吐字 progress=0，裁剪后宽度为 0）：预备结果仍然
-        // “成立”——commit 时把动画层清空，但孔洞照旧成立，吐字从 0 宽开始，
-        // 目标字形必须继续被静态层排除，否则新字会在开始帧直接以完整 canonical 显示。
-        return AnimationLayerPrep {
-            prepared: true,
-            committed: Vec::new(),
-            holes: holes.to_vec(),
+        // Issue #904 复核 6：本帧没有可见 glyph（如吐字 progress=0 的 0 宽首帧、
+        // 或动画结束帧 0 glyph + 0 hole）。这里**必须真的调用一次 prepare**：
+        // C++ 只有被调用且 glyph_count<=0 时才置 `m_prepared_empty=true`；
+        // 若在这里直接早退，随后的 commitPrepared 会因为既没有 `m_prepared`
+        // 也没有 `m_prepared_empty` 而什么都不做，上一帧的旧动态图节点残留，
+        // 静态正文恢复完整 canonical 后就叠字/重影。
+        // 预备成功后孔洞照旧带回：吐字 0 宽首帧仍要把目标字形从静态层排除。
+        let accepted = scene_graph::prepare_animation_layer(
+            root_raw,
+            item_ptr,
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        return if accepted == 0 {
+            AnimationLayerPrep {
+                prepared: true,
+                committed: Vec::new(),
+                holes: holes.to_vec(),
+            }
+        } else {
+            AnimationLayerPrep::default()
         };
     }
 

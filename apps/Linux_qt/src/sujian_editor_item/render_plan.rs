@@ -36,6 +36,12 @@ pub(crate) struct TextAnimationGlyphInfo {
     /// 贯穿到"本帧已提交局部片段"记录，供下一次快速输入从当前画面重定向，
     /// 不再把它写死成 0。
     pub paragraph_id: u64,
+    /// Issue #904 复核 6：该片段的字形 shaping 身份（来自 `LineClusterSnapshot`）。
+    ///
+    /// 等长度替换（"甲"→"乙"）时新旧 byte range 相同，只有 shaping 身份能区分
+    /// "同一个字的位移"与"旧字退出 + 新字进入"；下一帧继承遮罩宽度也依赖它。
+    /// 无法判定（例如从 QSG 回执重建的片段）时为 `None`。
+    pub shaping: Option<super::layout_snapshot::ShapingIdentity>,
 }
 
 #[derive(Clone, Debug, Default)]
