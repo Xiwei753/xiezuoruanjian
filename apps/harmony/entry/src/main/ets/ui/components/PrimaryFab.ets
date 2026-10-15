@@ -23,6 +23,15 @@
 //   两者都是**真实可用的普通能力**，但不是沉浸材质那种跟手追光：普通毛玻璃 ≠ IMMERSIVE，
 //   不要写成已补回华为沉浸光感；该项在 #905 仍按未完成保留。
 //
+// 描边不再是写死的灰色 border，而是单独一层的「随背景反色」细圆环：
+//   Stack { Button(毛玻璃主体) + Circle(仅描边).blendMode(BlendMode.DIFFERENCE, FAST) }。
+//   DIFFERENCE 把描边像素与下层已绘制画面做差值混合，所以圆环颜色随按钮底下那圈画面
+//   （毛玻璃透上来的邻近亮暗/色彩）变化，而不是一个固定灰环。它采样的是**描边覆盖处的
+//   本地像素**，不会去屏幕别的坐标找远处光源，与 systemMaterial 的沉浸追光和
+//   hdsEffect.pointLight 是三个不同机制；不要把它称作光感已复刻。
+//   必须只把混色挂在描边 Circle 上：挂到 Button 主体会连正文图标和毛玻璃一起被混掉。
+//   必须用 BlendApplyType.FAST：OFFSCREEN 模式会让同层的 backgroundBlurStyle 取不到正确画面。
+//
 // 按压视效取 PressShadowType.BLEND_WHITE（15% 白叠加），不用官方示例里的 BLEND_GRADIENT：
 //   BLEND_GRADIENT 按定义是「中心 85% 白 → 边缘 100% 白」的整面叠白，本仓库在真机上量到
 //   整颗刷白、深色底上白色 + 号消失。按压高光必须让「+」仍看得清，所以取较轻的一档。
@@ -100,29 +109,42 @@ export struct PrimaryFab {
   }
 
   build() {
-    // 内容流位置：透明底色 + 通用背景模糊（毛玻璃）+ 系统描边 token + HDS 按压视效。
+    // 内容流位置：透明底色 + 通用背景模糊（毛玻璃）+ HDS 按压视效，外层叠一层只做反色混色的描边圆环。
     // stateEffect 置 false：按压反馈交给 pressShadow，避免系统内建按压态与它互相叠加。
-    Button({ type: ButtonType.Circle, stateEffect: false }) {
-      SymbolGlyph($r('sys.symbol.plus'))
-        .fontSize(28)
-        .fontColor([$r('sys.color.icon_primary')])
+    Stack({ alignContent: Alignment.Center }) {
+      Button({ type: ButtonType.Circle, stateEffect: false }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(28)
+          .fontColor([$r('sys.color.icon_primary')])
+      }
+      .width(PRIMARY_FAB_SIZE_VP)
+      .height(PRIMARY_FAB_SIZE_VP)
+      .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
+      // 透明底色是毛玻璃的前提：实心色会盖在模糊层之上，模糊就看不见了。
+      .backgroundColor(Color.Transparent)
+      .backgroundBlurStyle(BlurStyle.Thin)
+      // 阴影档位沿用实机校准结果（OUTER_DEFAULT_XS = 3 级灰度落差，与底栏胶囊一致）。
+      .shadow(ShadowStyle.OUTER_DEFAULT_XS)
+      .visualEffect(
+        new hdsEffect.HdsEffectBuilder()
+          .pressShadow(this.pressShadowType)
+          .buildEffect()
+      )
+      .onTouch((event: TouchEvent) => { this.handleTouch(event) })
+      .onClick(() => { this.handleClick() })
+
+      // 只负责混色的细圆环：半透明白描边与下层画面做差值混合，得到随背景变化的反色边缘。
+      // 直径取 SIZE-1，stroke 居中，外沿与 Button 圆边对齐；不拦触摸，可点击的始终只有 Button。
+      Circle()
+        .width(PRIMARY_FAB_SIZE_VP - 1)
+        .height(PRIMARY_FAB_SIZE_VP - 1)
+        .fill(Color.Transparent)
+        .stroke('#66FFFFFF')
+        .strokeWidth(1)
+        .blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)
+        .hitTestBehavior(HitTestMode.None)
     }
     .width(PRIMARY_FAB_SIZE_VP)
     .height(PRIMARY_FAB_SIZE_VP)
-    .borderRadius(PRIMARY_FAB_SIZE_VP / 2)
-    // 透明底色是毛玻璃的前提：实心色会盖在模糊层之上，模糊就看不见了。
-    .backgroundColor(Color.Transparent)
-    .backgroundBlurStyle(BlurStyle.Thin)
-    // 阴影档位沿用实机校准结果（OUTER_DEFAULT_XS = 3 级灰度落差，与底栏胶囊一致）；
-    // 描边保留最低轮廓，深色纯黑底上不依赖模糊层是否可辨。
-    .shadow(ShadowStyle.OUTER_DEFAULT_XS)
-    .border({ width: 1, color: $r('sys.color.icon_secondary') })
-    .visualEffect(
-      new hdsEffect.HdsEffectBuilder()
-        .pressShadow(this.pressShadowType)
-        .buildEffect()
-    )
-    .onTouch((event: TouchEvent) => { this.handleTouch(event) })
-    .onClick(() => { this.handleClick() })
   }
 }
