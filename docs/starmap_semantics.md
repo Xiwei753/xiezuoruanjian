@@ -1,7 +1,7 @@
 # StarMap 语义地基 v2.0 (独立画布与跨图导航)
 
 Status: active
-Last verified: 2026-10-14
+Last verified: 2026-10-15
 Truth source: product decision / protocol
 Supersedes: v1.1 (2026-06-11)
 
@@ -89,7 +89,7 @@ StarMapEndpointSelection {
 
 ### list_connections_for_target(route, target)
 
-返回 `{ owner_starmap_id, edge_id,Bfrom, to, kind, label }`，既包括本图 Edge，也包括**存于祖先图但一端指向当前图**的 Edge。前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
+返回 `{ owner_starmap_id, edge_id, from, to, kind, label }`，既包括本图 Edge，也包括**存于祖先图但一端指向当前图**的 Edge。前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
 
 ### list_connections_for_canvas(route)
 
@@ -124,7 +124,7 @@ StarMapEndpointSelection {
 5. **跨根星图无共同宿主**
    * 根图 A 的节点 a 与根图 D 的节点 d 之间无法创建 Edge，因为它们没有共同入口链。系统返回 `NoCommonHost`。
 
-##E严格图校验 (validate_graph)
+## 严格图校验 (validate_graph)
 * **重复性**：同图不能有重复的 `instance_id` 或 `link_id`。
 * **目标存活**：Embed 指向的星图必须存在。不允许 Self-Embed。
 * **端点安全**：Edge、Link、Embed 都使用 `StarMapTargetPath`。如果端点是 Node/Anchor 且路径无 segments，则它们必须存在于当前 Host StarMap 中。
@@ -132,7 +132,7 @@ StarMapEndpointSelection {
 * **深层可达性**：Link/Edge 的目标深层路径不能指向虚无，不能发生环路（CycleDetected）或层级太深（TooDeep）。
 * **级联清理**：调用 `delete_starmap_node` 删除节点时，会自动级联清理连接到该节点的本地 Edge、Embed 和 Link。
 * **跨图引用检查**：删除目标节点、Embed 入口或 Portal 之前，使用反查识别**其他 graph 持有的跨层引用**：有跨图关联时**拒绝破坏性删除**并明确返回引用列表。不能只扫描本图导致祖先 Edge 变悬空。更新 Portal 目标等能改变路径解析结果的操作也须做跨图引用检查。
-* **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**?被其他星图引用）时才阻止删除。
+* **删除保护**：调用 `delete_starmap` 时，仅当存在**外部引用**（被其他星图引用）时才阻止删除。
 
 ## 相关显示规范
 
