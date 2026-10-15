@@ -24,6 +24,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -42,7 +43,7 @@ Rectangle {
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     function getProjects() {
         var projects = []
@@ -84,10 +85,10 @@ Rectangle {
                                      : 180
     // 书封面是竖向的：高 / 宽 = 4 / 3，与手绘稿一致。
     readonly property int _cardHeight: Math.round(_cardWidth * 4 / 3)
-    readonly property int _gridGap: dt.sp16
+    readonly property int _gridGap: Kirigami.Units.largeSpacing
     readonly property int _pagePadding: root.layoutPlan && root.layoutPlan.contentPaddingVp > 0
                                        ? Math.round(root.layoutPlan.contentPaddingVp)
-                                       : dt.sp24
+                                       : Kirigami.Units.largeSpacing * 2
 
     // 每行放几张卡：卡宽固定，剩下多少空间就放多少，不把卡拉宽填满整列。
     readonly property int _columns: Math.max(1, Math.floor((width - _pagePadding * 2 + _gridGap) / (_cardWidth + _gridGap)))
@@ -200,25 +201,19 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt.sp24
-            spacing: dt.sp12
+            anchors.margins: Kirigami.Units.largeSpacing * 2
+            spacing: Kirigami.Units.largeSpacing
 
-            AppText {
-                dt: root.dt
+            Kirigami.Heading {
+                level: 2
                 text: qsTr("重命名作品")
-                color: dt.onSurface
-                font.pointSize: dt.subtitlePt
-                font.family: dt.fontFamily
-                font.weight: Font.DemiBold
             }
-            AppTextField {
+            TextField {
                 id: renameField
                 Layout.fillWidth: true
-                dt: root.dt
                 text: renameProjectDialog.currentTitle
                 placeholderText: qsTr("作品名称")
                 onAccepted: renameConfirmButton.clicked()
@@ -226,17 +221,15 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton {
+                Button {
                     text: qsTr("取消")
-                    dt: root.dt
-                    variant: "text"
+                    flat: true
                     onClicked: renameProjectDialog.close()
                 }
-                AppButton {
+                Button {
                     id: renameConfirmButton
                     text: qsTr("确定")
-                    dt: root.dt
-                    variant: "primary"
+                    highlighted: true
                     onClicked: {
                         var t = renameField.text.trim();
                         if (t === "") return;

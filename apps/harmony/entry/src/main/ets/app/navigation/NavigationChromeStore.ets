@@ -33,9 +33,8 @@ export class NavigationChromeStore {
 
   // Issue #768 评论5835958606：切 tab 时调用，设置 activeTab 并发布该 tab 的 role。
   // 替代旧的 syncTabRole 方法。
-  // Issue #906：该入口目前只由 PrimaryTabShell.syncActiveTab（用户切 tab）调用，
-  // 按用户操作 origin='User' 记录；PrimaryTabShell 未区分用户手势与程序改 currentTab，
-  // 若后续出现明确的启动/初始化调用方，再为该方法增加 origin 参数并从调用方传 'App'。
+  // Issue #906：这里记录的是实际状态提交（可能来自用户手势，也可能来自接续恢复等程序改 currentTab），
+  // 因此 origin='App'。明确的用户切换意图由 PrimaryTabShell.recordUserTabRequest 记 nav.tab_requested（User）。
   setActiveTab(tabIndex: number): void {
     const previousTab = this.activeTab
     this.activeTab = tabIndex
@@ -44,7 +43,7 @@ export class NavigationChromeStore {
         { key: 'fromTab', value: String(previousTab) },
         { key: 'toTab', value: String(tabIndex) }
       ]
-      HarmonyDiagnosticEvents.record('Info', 'User', 'nav.tab_changed', 'NavigationChromeStore', fields)
+      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.tab_changed', 'NavigationChromeStore', fields)
     }
     const role = this.tabRoles.get(tabIndex) ?? ScreenRole.ProjectList
     this.publish(role)
@@ -52,18 +51,16 @@ export class NavigationChromeStore {
 
   // 各 Screen 的 NavDestination.onShown 调此方法上报自己的 ScreenRole。
   // Issue #768 评论5835958606：tabIndex 必选；后台 tab 只更新缓存，不发布全局 role。
-  // Issue #906：只在缓存 role 真正变化时记录 nav.destination_shown，publish/subscribe 不重复记。
+  // Issue #906：按实际到达的 onShown 上报 nav.destination_shown。角色缓存相等不代表页面未重新显示
+  // （连续两个同 ScreenRole 页面、或离开后重显同类型页面都是真实显示事件），不能用 previousRole === role 吞掉。
   reportScreenRole(role: ScreenRole, tabIndex: number): void {
-    const previousRole: ScreenRole | undefined = this.tabRoles.get(tabIndex)
     this.tabRoles.set(tabIndex, role)
-    if (previousRole !== role) {
-      const fields: DiagnosticField[] = [
-        { key: 'screenRole', value: String(role) },
-        { key: 'tabIndex', value: String(tabIndex) },
-        { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
-      ]
-      HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
-    }
+    const fields: DiagnosticField[] = [
+      { key: 'screenRole', value: String(role) },
+      { key: 'tabIndex', value: String(tabIndex) },
+      { key: 'isActiveTab', value: String(tabIndex === this.activeTab) }
+    ]
+    HarmonyDiagnosticEvents.record('Info', 'App', 'nav.destination_shown', 'NavigationChromeStore', fields)
     if (tabIndex === this.activeTab) {
       this.publish(role)
     }

@@ -15,6 +15,10 @@
 #       qt6-qttools-devel \
 #       rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel
 #
+# 运行时依赖 (由 spec 的 Requires 拉取，供本地运行/验证时手动安装):
+#   Fedora/RHEL: kf6-kirigami kf6-kirigami-addons qqc2-breeze-style breeze-icon-theme
+#   Debian/Ubuntu: kirigami2 kirigami-addons qqc2-breeze-style breeze-icon-theme
+#
 set -euo pipefail
 
 # 解析脚本所在目录与仓库根目录（脚本位于 packaging/rpm/，向上两级）
@@ -47,6 +51,8 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
     echo "    sudo dnf install qt6-qtbase-devel qt6-qtdeclarative-devel \\" >&2
     echo "        qt6-qttools-devel \\" >&2
     echo "        rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel" >&2
+    echo "  运行时依赖 (运行已打好的包时需要, 由 spec Requires 声明):" >&2
+    echo "    sudo dnf install kf6-kirigami kf6-kirigami-addons qqc2-breeze-style breeze-icon-theme" >&2
     exit 1
 fi
 

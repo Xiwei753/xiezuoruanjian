@@ -56,6 +56,7 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import "StarMapPathPlanner.js" as StarMapPathPlanner
 
 Item {
@@ -1473,8 +1474,7 @@ Item {
     }
 
     // ── 解析状态提示 ──
-    AppText {
-        dt: content.dt
+    Label {
         anchors.centerIn: parent
         visible: content.resolveError.length > 0
         text: content.resolveError
@@ -1484,8 +1484,7 @@ Item {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    AppText {
-        dt: content.dt
+    Label {
         anchors.centerIn: parent
         visible: content.rootStarmapId !== "" && content.finalStarmapId === "" && content.resolveError === ""
         text: qsTr("加载中…")

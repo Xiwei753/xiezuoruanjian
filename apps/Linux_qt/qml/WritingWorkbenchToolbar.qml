@@ -22,7 +22,9 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 ColumnLayout {
     id: root
@@ -63,8 +65,8 @@ ColumnLayout {
     // ── 工具条带 ──
     Rectangle {
         Layout.fillWidth: true
-        Layout.preferredHeight: root.toolbarHeight > 0 ? root.toolbarHeight : 48
-        color: root.dt.surface
+        Layout.preferredHeight: root.toolbarHeight > 0 ? root.toolbarHeight : Kirigami.Units.gridUnit * 2.6
+        color: Kirigami.Theme.backgroundColor
 
         RowLayout {
             anchors.fill: parent
@@ -76,7 +78,7 @@ ColumnLayout {
             Item {
                 id: leadingSlot
                 // Core 没给 bounds（SinglePane）时按内容自适应，不让内部内容被压扁。
-                implicitWidth: leadingInner.implicitWidth + root.dt.sp12 + root.dt.sp8
+                implicitWidth: leadingInner.implicitWidth + Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: root.leadingWidth > 0 ? root.leadingWidth : implicitWidth
@@ -87,31 +89,43 @@ ColumnLayout {
                     id: leadingInner
                     // 视觉内边距放在 wrapper 内部，不改角色几何。
                     anchors.fill: parent
-                    anchors.leftMargin: root.dt.sp12
-                    anchors.rightMargin: root.dt.sp8
-                    spacing: root.dt.sp4
+                    anchors.leftMargin: Kirigami.Units.largeSpacing
+                    anchors.rightMargin: Kirigami.Units.smallSpacing
+                    spacing: Kirigami.Units.smallSpacing
 
                     // Issue #825 复核5第4点：标题不进 ToolbarLeading。
                     // Leading 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
-                    ToolbarIconButton {
-                        dt: root.dt
-                        glyph: "\u2190"
-                        onTriggered: root.backRequested()
+                    ToolButton {
+                        icon.name: "go-previous"
+                        icon.width: Kirigami.Units.iconSizes.small
+                        icon.height: Kirigami.Units.iconSizes.small
+                        display: AbstractButton.IconOnly
+                        flat: true
+                        text: qsTr("返回")
+                        onClicked: root.backRequested()
                     }
 
                     // 撤销 / 重做：走 SujianEditorItem 真实实现的 undo()/redo()，
                     // 没有可撤销的事务时 Rust 侧直接 no-op，所以按钮不必做可用态判断
                     // （端侧不再自己维护一份"能不能撤"的状态）。
-                    ToolbarIconButton {
-                        dt: root.dt
-                        glyph: "\u21B6"
-                        onTriggered: root.undoRequested()
+                    ToolButton {
+                        icon.name: "edit-undo"
+                        icon.width: Kirigami.Units.iconSizes.small
+                        icon.height: Kirigami.Units.iconSizes.small
+                        display: AbstractButton.IconOnly
+                        flat: true
+                        text: qsTr("撤销")
+                        onClicked: root.undoRequested()
                     }
 
-                    ToolbarIconButton {
-                        dt: root.dt
-                        glyph: "\u21B7"
-                        onTriggered: root.redoRequested()
+                    ToolButton {
+                        icon.name: "edit-redo"
+                        icon.width: Kirigami.Units.iconSizes.small
+                        icon.height: Kirigami.Units.iconSizes.small
+                        display: AbstractButton.IconOnly
+                        flat: true
+                        text: qsTr("重做")
+                        onClicked: root.redoRequested()
                     }
                 }
             }
@@ -126,8 +140,8 @@ ColumnLayout {
 
                 WritingFormatGroup {
                     anchors.fill: parent
-                    anchors.leftMargin: root.dt.sp8
-                    anchors.rightMargin: root.dt.sp8
+                    anchors.leftMargin: Kirigami.Units.smallSpacing
+                    anchors.rightMargin: Kirigami.Units.smallSpacing
                     dt: root.dt
                     currentFontSize: root.currentFontSize
                     currentLineSpacing: root.currentLineSpacing
@@ -143,7 +157,7 @@ ColumnLayout {
             // ── ToolbarTrailing 角色 wrapper：宽度严格等于 Core 的 ToolbarTrailing ──
             Item {
                 id: trailingSlot
-                implicitWidth: trailingInner.implicitWidth + root.dt.sp8 + root.dt.sp16
+                implicitWidth: trailingInner.implicitWidth + Kirigami.Units.smallSpacing + Kirigami.Units.largeSpacing
                 Layout.fillWidth: false
                 Layout.fillHeight: true
                 Layout.preferredWidth: root.trailingWidth > 0 ? root.trailingWidth : implicitWidth
@@ -154,7 +168,7 @@ ColumnLayout {
                     id: trailingInner
                     // ToolbarTrailing 内容贴 Core bounds 右缘，内边距只在内部。
                     anchors.right: parent.right
-                    anchors.rightMargin: root.dt.sp16
+                    anchors.rightMargin: Kirigami.Units.largeSpacing
                     anchors.verticalCenter: parent.verticalCenter
                     dt: root.dt
                     appState: root.appState

@@ -7,14 +7,16 @@
 // 约束：
 //   - 纯展示组件，数据通过 property 传入
 //   - 点击和右键菜单通过 signal 传递给 StarMapPage
-//   - 使用 DesignTokens 统一样式
+// Issue #900：卡片改用 Kirigami.ShadowedRectangle + Kirigami.Theme，
+// 不再使用 AppText 等自制 M3 皮肤组件。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
-Rectangle {
+Kirigami.ShadowedRectangle {
     id: root
     required property var dt
     property var starmapData: ({})
@@ -25,67 +27,64 @@ Rectangle {
 
     width: isChild ? 200 : 260
     height: isChild ? 140 : 180
-    radius: isChild ? dt.radiusMd : dt.radiusCard
-    color: dt.card
-    border.color: hoverArea.containsMouse ? dt.accent : dt.border
+    radius: isChild ? Kirigami.Units.smallSpacing : Kirigami.Units.cornerRadius
+    color: Kirigami.Theme.alternateBackgroundColor
+    border.color: hoverArea.containsMouse ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
     border.width: 1
 
-    Behavior on border.color { ColorAnimation { duration: dt.animFast } }
+    Behavior on border.color { ColorAnimation { duration: Kirigami.Units.shortDuration } }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: root.isChild ? dt.sp12 : dt.sp16
-        spacing: dt.sp8
+        anchors.margins: root.isChild ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.smallSpacing
 
         // Top row: icon + title + badge
         RowLayout {
             Layout.fillWidth: true
-            spacing: dt.sp8
+            spacing: Kirigami.Units.smallSpacing
 
-            Rectangle {
-                width: isChild ? 32 : 40
-                height: isChild ? 32 : 40
-                radius: dt.radiusSm
-                color: {
-                    var c = starmapData.accentColor || dt.accent;
-                    return c + "26"; // 15% opacity
-                }
+            Kirigami.ShadowedRectangle {
+                Layout.preferredWidth: isChild ? 32 : 40
+                Layout.preferredHeight: isChild ? 32 : 40
                 Layout.alignment: Qt.AlignTop
+                radius: Kirigami.Units.smallSpacing
+                color: {
+                    var c = starmapData.accentColor || Kirigami.Theme.highlightColor;
+                    return Qt.rgba(c.r, c.g, c.b, 0.15);
+                }
 
-                AppText {
+                Kirigami.Icon {
                     anchors.centerIn: parent
-                    text: "\u2B50"
-                    dt: root.dt
-                    font.pointSize: isChild ? dt.bodyPt : dt.fontXlPt
+                    width: isChild ? 18 : 22
+                    height: isChild ? 18 : 22
+                    source: "starred"
+                    color: Kirigami.Theme.textColor
                 }
             }
 
-            Column {
+            ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: starmapData.title || qsTr("未命名星图")
-                    color: dt.textPrimary
-                    font.pointSize: root.isChild ? dt.fontSmPt : dt.fontMdPt
+                    color: Kirigami.Theme.textColor
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
                     elide: Text.ElideRight
                     maximumLineCount: 1
                 }
 
-                AppText {
-                    dt: root.dt
+                Label {
                     text: {
                         if (starmapData.isMainForProject) return qsTr("主星图");
                         if (starmapData.projectId) return qsTr("已绑定");
                         return qsTr("独立星图");
                     }
                     color: starmapData.isMainForProject ?
-                           dt.accent :
-                           dt.textMuted
-                    font.pointSize: dt.fontXsPt
+                           Kirigami.Theme.highlightColor :
+                           Kirigami.Theme.disabledTextColor
                 }
             }
         }
@@ -93,7 +92,7 @@ Rectangle {
         // Stats row
         Row {
             Layout.fillWidth: true
-            spacing: dt.sp12
+            spacing: Kirigami.Units.largeSpacing
 
             Repeater {
                 model: [
@@ -106,18 +105,14 @@ Rectangle {
                     spacing: 1
                     visible: !root.isChild || index < 2
 
-                    AppText {
-                        dt: root.dt
+                    Label {
                         text: modelData.value
-                        color: dt.textPrimary
-                        font.pointSize: root.isChild ? dt.fontSmPt : dt.fontMdPt
-                        font.weight: Font.Bold
+                        color: Kirigami.Theme.textColor
+                        font.bold: true
                     }
-                    AppText {
-                        dt: root.dt
+                    Label {
                         text: modelData.label
-                        color: dt.textMuted
-                        font.pointSize: dt.fontXsPt
+                        color: Kirigami.Theme.disabledTextColor
                     }
                 }
             }
@@ -128,12 +123,11 @@ Rectangle {
         // Bottom row: time
         Row {
             Layout.fillWidth: true
-            spacing: dt.sp8
+            spacing: Kirigami.Units.smallSpacing
 
             Item { Layout.fillWidth: true }
 
-            AppText {
-                dt: root.dt
+            Label {
                 text: {
                     if (!starmapData.updatedAt) return "";
                     var d = new Date(starmapData.updatedAt);
@@ -144,8 +138,7 @@ Rectangle {
                     if (diff < 86400000) return Math.floor(diff / 3600000) + qsTr("小时前");
                     return Math.floor(diff / 86400000) + qsTr("天前");
                 }
-                color: dt.textMuted
-                font.pointSize: dt.fontXsPt
+                color: Kirigami.Theme.disabledTextColor
                 Layout.alignment: Qt.AlignVCenter
             }
         }

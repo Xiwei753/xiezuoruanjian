@@ -106,6 +106,13 @@ export struct StarMapListScreen {
     }
   }
 
+  /** 打开「新建星图」命名框（原 FAB 的 onTap 行为）。 */
+  private requestCreateStarMap(): void {
+    this.showCreateDialog = true
+    this.newStarMapName = ''
+    this.newStarMapDescription = ''
+  }
+
   // ─── UI 事件处理 ───
 
   private navigateToStarMap(starmapId: string, starmapTitle: string): void {
@@ -249,9 +256,7 @@ export struct StarMapListScreen {
         if (!this.isLoading && !this.errorMessage) {
           PrimaryFab({
             onTap: () => {
-              this.showCreateDialog = true
-              this.newStarMapName = ''
-              this.newStarMapDescription = ''
+              this.requestCreateStarMap()
             }
           })
           .alignRules({

@@ -1,5 +1,5 @@
 // =============================================================================
-// WritingToolRail.qml — 写作区最右竖向工具栏（Core 的 ToolRail 角色）
+// WritingToolRail.qml — 写作区最右竖向工具栏（Core 的 ToolRail 角色 / Issue #900 KDE）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
@@ -9,27 +9,20 @@
 //   - 顶部工具条带的 ToolbarTrailing 同步 / 搜索 / 设置不搬到这里；
 //   - Issue #829：手稿把最右 rail 固定为“星图 / AI”；冲突只在确有冲突时追加；
 //   - 只发信号，由 WritingWorkspace 单向写 selectedTool，避免双向写 binding。
+//
+// Issue #900：自绘 Rectangle 工具项换成 Breeze Controls.ItemDelegate
+//   （自带 hover / 选中态），展开收起按钮用 Breeze go-previous / go-next 图标，
+//   颜色 / 间距走 Kirigami.Theme / Kirigami.Units。tools 模型与所有信号保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
     required property var dt
-
-    readonly property color _sidebar: dt.sidebar
-    readonly property color _border: dt.border
-    readonly property color _accentSoft: dt.accentSoft
-    readonly property color _accentText: dt.accentText
-    readonly property color _textMuted: dt.textMuted
-    readonly property int _sp4: dt.sp4
-    readonly property int _sp8: dt.sp8
-    readonly property int _sp12: dt.sp12
-    readonly property int _radiusSm: dt.radiusSm
-    readonly property int _radiusPill: dt.radiusPill
-    readonly property real _fontSm: dt.fontSmPt
 
     // Core 给 ToolRail 的宽度（由 WritingWorkspace 从 workbench plan 注入）。
     property real railWidth: 56
@@ -49,11 +42,11 @@ Rectangle {
     // 以后真实 AI 面板接进来把 enabled 改 true 即可。
     readonly property var tools: {
         var list = [
-            { key: "starmap", label: qsTr("星图"), enabled: true },
+            { key: "starmap", label: qsTr("星图"), icon: "view-grid", enabled: true },
             { key: "ai", label: qsTr("AI"), enabled: false }
         ]
         if (root.hasConflicts) {
-            list.push({ key: "conflict", label: qsTr("冲突") })
+            list.push({ key: "conflict", label: qsTr("冲突"), icon: "dialog-warning" })
         }
         return list
     }
@@ -61,106 +54,61 @@ Rectangle {
     signal toolRequested(string toolKey)
     signal toolPaneToggled()
 
-    color: _sidebar
-    border.color: _border
-    border.width: 1
+    color: Kirigami.Theme.alternateBackgroundColor
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.topMargin: _sp8
-        anchors.bottomMargin: _sp8
-        spacing: _sp4
+        anchors.topMargin: Kirigami.Units.smallSpacing
+        anchors.bottomMargin: Kirigami.Units.smallSpacing
+        spacing: Kirigami.Units.smallSpacing
 
         // ── 工具入口 ──
         Repeater {
             model: root.tools
 
-            Rectangle {
+            ItemDelegate {
+                id: toolDelegate
                 Layout.alignment: Qt.AlignHCenter
-                Layout.preferredWidth: Math.round(root.railWidth - _sp12)
+                Layout.preferredWidth: Math.round(root.railWidth - Kirigami.Units.smallSpacing)
                 Layout.preferredHeight: 44
-                radius: _radiusSm
-                color: root.selectedTool === modelData.key
-                       ? _accentSoft
-                       : toolHover.containsMouse ? dt.surfaceVariant : "transparent"
-                border.color: root.selectedTool === modelData.key ? dt.border : "transparent"
-                border.width: 1
+                text: modelData.label
+                highlighted: root.selectedTool === modelData.key
+                enabled: modelData.enabled !== false
+                // Issue #835 评论 6020221770: disabled 入口（如 AI）降 opacity，
+                // 保留 rail 位置但不诱导点击。
+                opacity: modelData.enabled !== false ? 1.0 : 0.4
 
-                Behavior on color { ColorAnimation { duration: dt.animFast } }
+                ToolTip.visible: hovered
+                ToolTip.text: modelData.label
 
-                AppText {
-                    dt: root.dt
-                    anchors.centerIn: parent
-                    text: modelData.label
-                    color: root.selectedTool === modelData.key ? dt.accentText : dt.textPrimary
-                    font.pointSize: modelData.key === "ai" ? dt.fontSmPt : dt.captionPt
-                    font.weight: root.selectedTool === modelData.key ? Font.DemiBold : Font.Normal
-                    // Issue #835 评论 6020221770: disabled 入口（如 AI）降 opacity，
-                    // 保留 rail 位置但不诱导点击。
-                    opacity: modelData.enabled !== false ? 1.0 : 0.4
-                }
+                icon.name: modelData.icon || "tools-wizard"
+                icon.width: Kirigami.Units.iconSizes.small
+                icon.height: Kirigami.Units.iconSizes.small
+                display: AbstractButton.TextUnderIcon
 
-                // 选中态左侧竖条：和 CreativeHub 左栏选中态同一套 token。
-                Rectangle {
-                    visible: root.selectedTool === modelData.key
-                    anchors.left: parent.left
-                    anchors.leftMargin: _sp4
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 3
-                    height: 20
-                    radius: _radiusPill
-                    color: dt.primary
-                }
-
-                MouseArea {
-                    id: toolHover
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    // Issue #835 评论 6020221770: disabled 入口不响应点击，
-                    // 不发 toolRequested，RightDrawer 不需要造 AI 占位内容。
-                    enabled: modelData.enabled !== false
-                    onClicked: root.toolRequested(modelData.key)
-                }
-
-                ToolTip {
-                    visible: toolHover.containsMouse
-                    text: modelData.label
-                    delay: 400
-                }
+                onClicked: root.toolRequested(modelData.key)
             }
         }
 
         Item { Layout.fillHeight: true }
 
         // ── 工具 pane 展开 / 收起 ──
-        Rectangle {
+        ToolButton {
+            id: toggleButton
             Layout.alignment: Qt.AlignHCenter
-            Layout.preferredWidth: Math.round(root.railWidth - _sp12)
-            Layout.preferredHeight: 44
-            radius: _radiusPill
-            color: toggleHover.containsMouse ? dt.surfaceVariant : "transparent"
-            border.color: _border
-            border.width: 1
+            Layout.preferredWidth: Math.round(root.railWidth - Kirigami.Units.smallSpacing)
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
+            flat: true
+            // 展开时按钮指向右（收起），收起时指向左（展开）。
+            icon.name: root.toolPaneOpen ? "go-next" : "go-previous"
+            icon.width: Kirigami.Units.iconSizes.small
+            icon.height: Kirigami.Units.iconSizes.small
+            display: AbstractButton.IconOnly
 
-            Behavior on color { ColorAnimation { duration: dt.animFast } }
+            ToolTip.visible: hovered
+            ToolTip.text: root.toolPaneOpen ? qsTr("收起工具面板") : qsTr("展开工具面板")
 
-            AppText {
-                dt: root.dt
-                anchors.centerIn: parent
-                // 展开时按钮指向右（收起），收起时指向左（展开）。
-                text: root.toolPaneOpen ? "›" : "‹"
-                color: _textMuted
-                font.pointSize: dt.fontMdPt
-            }
-
-            MouseArea {
-                id: toggleHover
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.toolPaneToggled()
-            }
+            onClicked: root.toolPaneToggled()
         }
     }
 }

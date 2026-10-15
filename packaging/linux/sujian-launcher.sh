@@ -12,6 +12,13 @@ set -euo pipefail
 
 LAUNCHER_VERSION="1.0"
 
+# Issue #900：界面全面采用 KDE 官方组件体系，控件风格默认用纯 Qt Quick 的
+# Breeze 样式（org.kde.breeze）。仅在用户未显式指定时给默认值，不覆盖用户
+# 选择，也不强制任何其它样式。若目标系统未安装 qqc2-breeze-style，Qt 会
+# 回退到系统默认风格，不影响启动。
+: "${QT_QUICK_CONTROLS_STYLE:=org.kde.breeze}"
+export QT_QUICK_CONTROLS_STYLE
+
 # --- 解析 HOME（不硬编码 /home/<name>）---
 HOME_DIR="${HOME:-}"
 if [ -z "$HOME_DIR" ]; then

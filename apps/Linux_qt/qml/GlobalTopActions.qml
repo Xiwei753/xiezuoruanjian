@@ -8,12 +8,15 @@
 //   - 纯展示层，只发信号，不直接操作 backend
 //   - 顺序固定右侧"同步 / 搜索 / 设置"
 //   - 不插入"切换工作区"、星图操作、统计或排版操作
-//   - 使用 DesignTokens 统一样式
+// Issue #900：视觉迁移到 Breeze Controls（Controls.ToolButton + Breeze 图标），
+// 颜色统一取 Kirigami.Theme，不再读 DesignTokens 的 M3 字段。
+// 公共 API（信号 requestSync/requestSearch/openSettings）保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 RowLayout {
     id: root
@@ -24,34 +27,41 @@ RowLayout {
     signal requestSearch()
     signal openSettings()
 
-    spacing: dt.sp8
+    spacing: Kirigami.Units.smallSpacing
 
-    // 同步状态指示
-    Rectangle {
-        Layout.preferredWidth: syncRow.implicitWidth + dt.sp16
-        Layout.preferredHeight: 40
-        radius: dt.radiusPill
-        color: syncHover.containsMouse ? dt.surfaceVariant : "transparent"
+    // 同步状态入口：Breeze refresh 图标 + 状态圆点 + 状态文案
+    ToolButton {
+        id: syncButton
+        onClicked: root.requestSync()
+        ToolTip.visible: hovered
+        ToolTip.text: qsTr("立即同步")
 
-        Row {
-            id: syncRow
-            anchors.centerIn: parent
-            spacing: dt.sp6
+        contentItem: RowLayout {
+            spacing: Kirigami.Units.smallSpacing
 
-            Rectangle {
-                width: 8; height: 8; radius: 4
-                color: {
-                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                    if (s === "success") return dt.success;
-                    if (s === "syncing") return dt.warning;
-                    if (s === "error" || s === "conflict" || s === "partial_conflict") return dt.error;
-                    return dt.textMuted;
-                }
+            Kirigami.Icon {
                 Layout.alignment: Qt.AlignVCenter
+                source: "view-refresh"
+                implicitWidth: Kirigami.Units.iconSizes.small
+                implicitHeight: Kirigami.Units.iconSizes.small
             }
 
-            AppText {
-                dt: root.dt
+            Rectangle {
+                Layout.alignment: Qt.AlignVCenter
+                implicitWidth: Kirigami.Units.smallSpacing
+                implicitHeight: Kirigami.Units.smallSpacing
+                radius: width / 2
+                color: {
+                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
+                    if (s === "success") return Kirigami.Theme.positiveTextColor;
+                    if (s === "syncing") return Kirigami.Theme.neutralTextColor;
+                    if (s === "error" || s === "conflict" || s === "partial_conflict") return Kirigami.Theme.negativeTextColor;
+                    return Kirigami.Theme.disabledTextColor;
+                }
+            }
+
+            Label {
+                Layout.alignment: Qt.AlignVCenter
                 text: {
                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
                     if (s === "success") return qsTr("已同步");
@@ -62,71 +72,24 @@ RowLayout {
                     // 已配置但无特定状态时显示"同步"
                     return qsTr("同步");
                 }
-                color: dt.onSurfaceVariant
-                font.pointSize: dt.captionPt
-                font.family: dt.fontFamily
-                Layout.alignment: Qt.AlignVCenter
+                color: Kirigami.Theme.textColor
             }
-        }
-
-        MouseArea {
-            id: syncHover
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.requestSync()
         }
     }
 
     // 搜索按钮（固定显示）
-    Rectangle {
-        Layout.preferredWidth: searchText.implicitWidth + 24
-        Layout.preferredHeight: 40
-        radius: dt.radiusPill
-        color: searchHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-        AppText {
-            id: searchText
-            dt: root.dt
-            anchors.centerIn: parent
-            text: qsTr("搜索")
-            color: dt.onSurfaceVariant
-            font.pointSize: dt.captionPt
-            font.family: dt.fontFamily
-        }
-
-        MouseArea {
-            id: searchHover
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.requestSearch()
-        }
+    ToolButton {
+        icon.name: "search"
+        text: qsTr("搜索")
+        display: AbstractButton.TextBesideIcon
+        onClicked: root.requestSearch()
     }
 
     // 设置按钮
-    Rectangle {
-        Layout.preferredWidth: settingsText.implicitWidth + 24
-        Layout.preferredHeight: 40
-        radius: dt.radiusPill
-        color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
-
-        AppText {
-            id: settingsText
-            dt: root.dt
-            anchors.centerIn: parent
-            text: qsTr("设置")
-            color: dt.onSurfaceVariant
-            font.pointSize: dt.captionPt
-            font.family: dt.fontFamily
-        }
-
-        MouseArea {
-            id: settingsHover
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.openSettings()
-        }
+    ToolButton {
+        icon.name: "configure"
+        text: qsTr("设置")
+        display: AbstractButton.TextBesideIcon
+        onClicked: root.openSettings()
     }
 }

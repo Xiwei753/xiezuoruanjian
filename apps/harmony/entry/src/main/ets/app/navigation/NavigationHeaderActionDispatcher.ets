@@ -70,15 +70,17 @@ export class NavigationHeaderActionDispatcher {
         hilog.info(DOMAIN, TAG, 'sync success: %{public}s', outcome.message)
         promptAction.showToast({ message: message })
       } else {
-        hilog.error(DOMAIN, TAG, 'sync failed: errorCode=%{public}s message=%{public}s rawError=%{public}s',
-          outcome.errorCode ?? '', outcome.message, outcome.rawError ?? '')
+        // Issue #906：HiLog 只记稳定状态码，不记 rawError/message（可能含 URL/Token/正文）。
+        hilog.error(DOMAIN, TAG, 'sync failed: phase=%{public}s errorCode=%{public}s',
+          String(outcome.phase), String(outcome.errorCode ?? ''))
         promptAction.showToast({ message: message })
       }
     }).catch((e: Error) => {
       // Issue #906：异常只记非敏感分类（e.name），不记 e.message / String(e)（可能含 URL/Token）。
       const exceptionField: DiagnosticField = { key: 'errorType', value: e.name }
       HarmonyDiagnosticEvents.record('Error', 'App', 'sync.exception', 'NavigationHeaderActionDispatcher', [exceptionField])
-      hilog.error(DOMAIN, TAG, 'sync exception: %{public}s', String(e))
+      // Issue #906：异常只记分类（e.name），不记 String(e)（可能含 URL/Token）。
+      hilog.error(DOMAIN, TAG, 'sync exception: %{public}s', e.name)
       promptAction.showToast({ message: `同步异常: ${e}` })
     })
   }

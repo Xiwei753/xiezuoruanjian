@@ -7,11 +7,14 @@
 // 约束：
 //   - 纯展示层，数据通过 editorBackendRef 从 AppBackend 获取
 //   - 不直接操作文件系统或 Core 层
+// Issue #900：视觉迁移到 KDE 官方组件体系（Kirigami.Theme + Breeze 控件），
+// 不再使用 AppText 等自制 M3 皮肤组件。数据/统计口径保持原样。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -26,7 +29,7 @@ Rectangle {
     property var deviceStats: []
     property var speedCurve: []
     property string statsError: ""
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     function val(obj, key) { var v = obj && obj[key] !== undefined ? Number(obj[key]) : 0; return isNaN(v) ? 0 : v }
     function formatNum(n) { return Number(n || 0).toLocaleString() }
@@ -91,17 +94,15 @@ Rectangle {
             // 错误提示
             Rectangle {
                 Layout.fillWidth: true
-                height: statsError ? 40 : 0
+                Layout.preferredHeight: statsError ? 40 : 0
                 visible: statsError !== ""
-                color: dt.errorContainer
-                radius: dt.radiusSm
+                color: Kirigami.Theme.negativeTextColor
+                radius: Kirigami.Units.cornerRadius
 
-                AppText {
+                Label {
                     anchors.centerIn: parent
-                    dt: root.dt
                     text: statsError
-                    color: dt.onErrorContainer
-                    font.pointSize: dt.captionPt
+                    color: Kirigami.Theme.backgroundColor
                 }
             }
 
@@ -116,10 +117,10 @@ Rectangle {
                     columns: dashboard.wide ? 4 : (dashboard.medium ? 2 : 1)
                     columnSpacing: dashboard.gap
                     rowSpacing: dashboard.gap
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("今日纯输入"); value: formatNum(val(todayStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本周纯输入"); value: formatNum(val(weekStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本月纯输入"); value: formatNum(val(monthStats, "total_human_typed_chars")); caption: qsTr("字") }
-                    StatCard { dt: root.dt; Layout.fillWidth: true; height: 120; title: qsTr("本周活跃时长"); value: formatDuration(val(weekStats, "total_active_seconds")); caption: qsTr("活跃写作") }
+                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("今日纯输入"); value: formatNum(val(todayStats, "total_human_typed_chars")); caption: qsTr("字") }
+                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本周纯输入"); value: formatNum(val(weekStats, "total_human_typed_chars")); caption: qsTr("字") }
+                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本月纯输入"); value: formatNum(val(monthStats, "total_human_typed_chars")); caption: qsTr("字") }
+                    StatCard { dt: root.dt; Layout.fillWidth: true; Layout.preferredHeight: 120; title: qsTr("本周活跃时长"); value: formatDuration(val(weekStats, "total_active_seconds")); caption: qsTr("活跃写作") }
                 }
 
                 GridLayout {
@@ -133,7 +134,7 @@ Rectangle {
                         title: qsTr("速度曲线")
                         Layout.fillWidth: true
                         Layout.columnSpan: dashboard.wide ? 2 : 1
-                        AppText { dt: root.dt; text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt.textPrimary }
+                        Label { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: Kirigami.Theme.textColor }
                     }
 
                     DashboardSection {
@@ -142,7 +143,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
-                            delegate: AppText { required property var modelData; dt: root.dt; text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt.textSecondary }
+                            delegate: Label { required property var modelData; text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: Kirigami.Theme.disabledTextColor }
                         }
                     }
                 }
@@ -159,7 +160,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: AppText { required property int index; required property var modelData; dt: root.dt; text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
+                            delegate: Label { required property int index; required property var modelData; text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: Kirigami.Theme.textColor }
                         }
                     }
 
@@ -169,7 +170,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: AppText { required property int index; required property var modelData; dt: root.dt; text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
+                            delegate: Label { required property int index; required property var modelData; text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: Kirigami.Theme.textColor }
                         }
                     }
                 }

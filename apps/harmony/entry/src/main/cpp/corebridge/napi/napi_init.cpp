@@ -3,6 +3,8 @@
 #include <time.h>
 #include <mutex>
 #include <algorithm>
+#include <deque>
+#include <string>
 #include <unistd.h>
 #include <napi/native_api.h>
 #include <hilog/log.h>
@@ -20,11 +22,11 @@
 // - dup_napi_string 将 NAPI string 复制到调用方提供的缓冲区，
 //   缓冲区生命周期由调用方管理。
 
-// ── HiLog 环形缓冲 + Callback ──
+// ── HiLog 有界记录队列 + Callback ──
 //
-// 通过 OH_LOG_SetCallback 注册回调，将进程内所有 HiLog 日志写入环形缓冲区。
-// NativeGetHilogSnapshot 返回缓冲区内容，供诊断导出使用。
-// 环形缓冲上限 256KB，防止内存无限增长。
+// 通过 OH_LOG_SetCallback 注册回调，将进程内所有 HiLog 日志按「整条记录」写入有界队列。
+// NativeGetHilogSnapshot 返回队列内容，供诊断导出使用。
+// 队列按记录字节总量上限 256KB，满时整条淘汰最旧记录（不切半条/半字符），防止内存无限增长。
 //
 // 每条记录携带采集时刻的墙钟毫秒（captureTimeMs，是回调收到该条日志的时间，
 // 不是内核 HiLog 原始时间戳）、pid/tid、level、type、domain、tag 与 message，
@@ -37,9 +39,8 @@ static constexpr size_t HILOG_LINE_SIZE = 4096;
 // 截断标记（含换行，替换行尾，保证记录仍以换行结束）。
 static constexpr const char* HILOG_TRUNCATION_MARKER = " [truncated]\n";
 
-static char hilog_buffer[HILOG_BUFFER_SIZE];
-static size_t hilog_buffer_pos = 0;
-static size_t hilog_buffer_used = 0;  // 已写入的总字节数（用于区分是否发生过回绕）
+static std::deque<std::string> hilog_records;  // 有界记录队列，按整条记录淘汰
+static size_t hilog_retained_bytes = 0;        // 队列中记录的总字节数
 static bool hilog_callback_registered = false;
 static std::mutex hilog_mutex;
 
@@ -143,31 +144,15 @@ static void HilogCallback(const LogType type, const LogLevel level, const unsign
     if (write_len == 0) {
         return;
     }
-    if (write_len > HILOG_BUFFER_SIZE) {
-        write_len = HILOG_BUFFER_SIZE;  // 单行超长截断
-    }
-
-    // 缓冲已满时，本次追加会覆盖最旧记录
-    if (hilog_buffer_used >= HILOG_BUFFER_SIZE) {
+    std::string record(line, write_len);
+    // 缓冲满时按整条记录淘汰最旧记录，保证快照永远从完整日志行开始。
+    while (hilog_retained_bytes + record.size() > HILOG_BUFFER_SIZE && !hilog_records.empty()) {
+        hilog_retained_bytes -= hilog_records.front().size();
+        hilog_records.pop_front();
         hilog_overwritten_records += 1;
     }
-
-    // 环形写入：可能需要两段拷贝
-    size_t first_copy = std::min(write_len, HILOG_BUFFER_SIZE - hilog_buffer_pos);
-    memcpy(hilog_buffer + hilog_buffer_pos, line, first_copy);
-    hilog_buffer_pos += first_copy;
-    if (hilog_buffer_pos >= HILOG_BUFFER_SIZE) {
-        hilog_buffer_pos = 0;  // 环形回绕
-    }
-    size_t remaining = write_len - first_copy;
-    if (remaining > 0) {
-        memcpy(hilog_buffer, line + first_copy, remaining);
-        hilog_buffer_pos = remaining;
-    }
-    hilog_buffer_used += write_len;
-    if (hilog_buffer_used > HILOG_BUFFER_SIZE) {
-        hilog_buffer_used = HILOG_BUFFER_SIZE;  // 缓冲已满，后续覆盖旧数据
-    }
+    hilog_retained_bytes += record.size();
+    hilog_records.push_back(std::move(record));
 
     // 统计：时间窗以"采集时刻"为准
     if (hilog_capture_start_ms == 0) {
@@ -372,38 +357,62 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
 //   0 = success
 //   -1 = any argument is null
 //   -2 = any argument contains invalid UTF-8
-// Arguments: logDir, deviceId, appVersion, buildKey, locale, timezone (all strings).
-// session_id is generated inside Rust; enabled/verbose default to true.
+//   -3 = local settings could not be read/parsed
+// Arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone (all strings).
+// session_id is generated inside Rust; enabled/verbose are read from the Core LocalSettings
+// under appDataRoot (settings.local.json), not hardcoded.
 static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
-    size_t argc = 6;
-    napi_value args[6];
+    size_t argc = 7;
+    napi_value args[7];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    if (argc < 6) {
-        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 6 arguments, got %{public}zu", argc);
-        napi_throw_error(env, nullptr, "Expected 6 arguments: logDir, deviceId, appVersion, buildKey, locale, timezone");
+    if (argc < 7) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 7 arguments, got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected 7 arguments: logDir, appDataRoot, deviceId, appVersion, buildKey, locale, timezone");
         return nullptr;
     }
 
     char log_dir[2048] = {0};
+    char app_data_root[2048] = {0};
     char device_id[256] = {0};
     char app_version[128] = {0};
     char build_key[256] = {0};
     char locale[64] = {0};
     char timezone[64] = {0};
     size_t len = 0;
+
+    // app_data_root 是设置文件所在的数据根路径，绝不能把半截路径传给 Rust 去
+    // 读 settings.local.json。Node-API 契约：buf 非空时 result 返回“实际复制
+    // 的字节数”（不含终止符），缓冲不足只会截断补 NUL，因此复制长度无法检测
+    // 截断。这里先用 buf=nullptr 只查询原字符串字节长度，确认能完整装入缓冲后
+    // 再复制，并校验复制字节数与查询长度一致。
+    size_t root_len = 0;
+    napi_status root_status = napi_get_value_string_utf8(env, args[1], nullptr, 0, &root_len);
+    if (root_status != napi_ok || root_len == 0 || root_len >= sizeof(app_data_root)) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: invalid appDataRoot length/status");
+        napi_throw_error(env, nullptr, "Invalid appDataRoot");
+        return nullptr;
+    }
+    size_t root_copied = 0;
+    root_status = napi_get_value_string_utf8(env, args[1], app_data_root, sizeof(app_data_root), &root_copied);
+    if (root_status != napi_ok || root_copied != root_len) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: appDataRoot copy failed");
+        napi_throw_error(env, nullptr, "Failed to read appDataRoot");
+        return nullptr;
+    }
+
     napi_get_value_string_utf8(env, args[0], log_dir, sizeof(log_dir), &len);
-    napi_get_value_string_utf8(env, args[1], device_id, sizeof(device_id), &len);
-    napi_get_value_string_utf8(env, args[2], app_version, sizeof(app_version), &len);
-    napi_get_value_string_utf8(env, args[3], build_key, sizeof(build_key), &len);
-    napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
-    napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
+    napi_get_value_string_utf8(env, args[2], device_id, sizeof(device_id), &len);
+    napi_get_value_string_utf8(env, args[3], app_version, sizeof(app_version), &len);
+    napi_get_value_string_utf8(env, args[4], build_key, sizeof(build_key), &len);
+    napi_get_value_string_utf8(env, args[5], locale, sizeof(locale), &len);
+    napi_get_value_string_utf8(env, args[6], timezone, sizeof(timezone), &len);
 
     // Issue #760 评论 5824787641：RegisterHilogCallback() 已移至 NAPI Init() 开头，
     // 在模块加载时（比 EntryAbility.onCreate 更早）完成注册，此处不再重复调用。
 
-    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
-    int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
+    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s' appDataRoot='%{public}s'", log_dir, app_data_root);
+    int32_t result = writer_core_init_diagnostics(log_dir, app_data_root, device_id, app_version, build_key, locale, timezone);
     OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: writer_core_init_diagnostics returned %{public}d", result);
 
     if (result != 0) {
@@ -580,43 +589,33 @@ static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info
     return result;
 }
 
-// NativeGetHilogSnapshot: 返回当前环形缓冲中的 HiLog 内容字符串。
-//   如果 callback 未注册或缓冲为空，返回空字符串。
+// NativeGetHilogSnapshot: 返回当前有界记录队列中的 HiLog 内容字符串。
+//   如果 callback 未注册或队列为空，返回空字符串。
 static napi_value NativeGetHilogSnapshot(napi_env env, napi_callback_info info) {
     std::lock_guard<std::mutex> lock(hilog_mutex);
 
     napi_value result;
-    if (hilog_buffer_used == 0) {
+    if (hilog_records.empty()) {
         napi_create_string_utf8(env, "", 0, &result);
         return result;
     }
 
-    // 如果缓冲区未满（未回绕），直接返回 [0, pos) 范围的内容
-    if (hilog_buffer_used < HILOG_BUFFER_SIZE) {
-        napi_create_string_utf8(env, hilog_buffer, hilog_buffer_pos, &result);
-        return result;
+    std::string snapshot;
+    snapshot.reserve(hilog_retained_bytes);
+    for (const std::string& record : hilog_records) {
+        snapshot += record;
     }
-
-    // 缓冲区已满（发生过回绕），需要拼接 [pos, end) + [0, pos) 两段
-    // 分配临时缓冲区存放完整内容
-    char *snapshot = new char[HILOG_BUFFER_SIZE + 1];
-    size_t tail_len = HILOG_BUFFER_SIZE - hilog_buffer_pos;
-    memcpy(snapshot, hilog_buffer + hilog_buffer_pos, tail_len);
-    memcpy(snapshot + tail_len, hilog_buffer, hilog_buffer_pos);
-    snapshot[HILOG_BUFFER_SIZE] = '\0';
-
-    napi_create_string_utf8(env, snapshot, HILOG_BUFFER_SIZE, &result);
-    delete[] snapshot;
+    napi_create_string_utf8(env, snapshot.c_str(), snapshot.size(), &result);
     return result;
 }
 
-// NativeClearHilogSnapshot: 清空 HiLog 环形缓冲区。返回 int32 状态码：
+// NativeClearHilogSnapshot: 清空 HiLog 有界记录队列。返回 int32 状态码：
 //   0 = 成功
 // 同时重置采集统计与时间窗（registered 保持不变，代表 callback 注册状态而非内容）。
 static napi_value NativeClearHilogSnapshot(napi_env env, napi_callback_info info) {
     std::lock_guard<std::mutex> lock(hilog_mutex);
-    hilog_buffer_pos = 0;
-    hilog_buffer_used = 0;
+    hilog_records.clear();
+    hilog_retained_bytes = 0;
     hilog_captured_records = 0;
     hilog_overwritten_records = 0;
     hilog_truncated_records = 0;

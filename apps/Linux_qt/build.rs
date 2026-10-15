@@ -475,6 +475,7 @@ fn main() {
     // Pages
     println!("cargo:rerun-if-changed=qml/main.qml");
     println!("cargo:rerun-if-changed=qml/SettingsDialog.qml");
+    println!("cargo:rerun-if-changed=qml/KdeSettingsPage.qml");
     println!("cargo:rerun-if-changed=qml/ActionRegistryPage.qml");
     println!("cargo:rerun-if-changed=qml/SyncPage.qml");
     println!("cargo:rerun-if-changed=qml/AppController.qml");
@@ -505,7 +506,6 @@ fn main() {
     // Issue #825：TopWritingToolbar.qml 已拆成工作台工具条带三段组件。
     println!("cargo:rerun-if-changed=qml/WritingWorkbenchToolbar.qml");
     println!("cargo:rerun-if-changed=qml/WritingFormatGroup.qml");
-    println!("cargo:rerun-if-changed=qml/ToolbarIconButton.qml");
     println!("cargo:rerun-if-changed=qml/WritingToolRail.qml");
     println!("cargo:rerun-if-changed=qml/PaneFoldButton.qml");
     // Issue #829：底部状态栏 + 左树分组头
@@ -528,27 +528,12 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/CreateProjectCard.qml");
     println!("cargo:rerun-if-changed=qml/ProjectHomePage.qml");
     println!("cargo:rerun-if-changed=qml/StatCard.qml");
-    println!("cargo:rerun-if-changed=qml/SettingCard.qml");
-    println!("cargo:rerun-if-changed=qml/ModernSwitch.qml");
-    println!("cargo:rerun-if-changed=qml/ModernComboBox.qml");
-    println!("cargo:rerun-if-changed=qml/SettingsSection.qml");
     println!("cargo:rerun-if-changed=qml/DashboardGrid.qml");
     println!("cargo:rerun-if-changed=qml/DashboardSection.qml");
     // Components
-    println!("cargo:rerun-if-changed=qml/AppButton.qml");
-    println!("cargo:rerun-if-changed=qml/AppCard.qml");
-    println!("cargo:rerun-if-changed=qml/AppTextField.qml");
-    println!("cargo:rerun-if-changed=qml/AppSwitch.qml");
-    println!("cargo:rerun-if-changed=qml/AppSlider.qml");
-    println!("cargo:rerun-if-changed=qml/AppComboBox.qml");
-    println!("cargo:rerun-if-changed=qml/AppDialog.qml");
-    println!("cargo:rerun-if-changed=qml/AppText.qml");
     println!("cargo:rerun-if-changed=qml/SectionHeader.qml");
-    println!("cargo:rerun-if-changed=qml/SettingsRow.qml");
     println!("cargo:rerun-if-changed=qml/DesktopWheelScrollHandler.qml");
-    println!("cargo:rerun-if-changed=qml/SidebarItem.qml");
     println!("cargo:rerun-if-changed=qml/StatusPill.qml");
-    println!("cargo:rerun-if-changed=qml/ToolbarButton.qml");
     println!("cargo:rerun-if-changed=qml");
     if let Ok(entries) = fs::read_dir("qml") {
         for entry in entries.flatten() {

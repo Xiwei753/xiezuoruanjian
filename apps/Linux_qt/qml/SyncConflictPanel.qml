@@ -10,15 +10,21 @@
 //   - 关闭只收起侧栏（发 closeRequested），冲突仍保留。
 //   - 窄宽度（width < 500）改用"本地/远端"页签，不缩成看不清的两条窄栏。
 //   - RemoteDeleted 时远端区域显示"远端已删除此文件"，不伪造空字符串。
-//   - 用 DesignTokens 统一样式。
+// Issue #900：视觉迁移到 Breeze/Kirigami —— 自制按钮/胶囊改为 Controls.Button /
+// Controls.ToolButton / Controls.TabBar，文字统一 Controls.Label，颜色/间距走
+// Kirigami.Theme.* / Kirigami.Units.*，不再消费 DesignTokens M3 字段。
+// 公开 API（属性、信号、函数、backend 调用）保持不变。
 // =============================================================================
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
+
+    // 调用方仍注入根 dt（保持公开 API 与构建期约定），内部不再消费其 M3 字段。
     required property var dt
     // SyncBackend 引用，用于调用 load_sync_conflict_preview / resolve_*。
     property var syncBackendRef: null
@@ -36,33 +42,6 @@ Rectangle {
     signal closeRequested()
     // 冲突被解决后发出，通知外部刷新（RightDrawer/WritingWorkspace 可据此重载列表）。
     signal conflictsResolved()
-
-    // ── DesignTokens（参考 RightDrawer.qml） ──
-    readonly property color _sidebar: dt.sidebar
-    readonly property color _border: dt.border
-    readonly property color _accentSoft: dt.accentSoft
-    readonly property color _accentText: dt.accentText
-    readonly property color _card: dt.card
-    readonly property color _surface: dt.surface
-    readonly property color _surfaceVariant: dt.surfaceVariant
-    readonly property color _textPrimary: dt.textPrimary
-    readonly property color _textSecondary: dt.textSecondary
-    readonly property color _textMuted: dt.textMuted
-    readonly property color _primary: dt.primary
-    // 落在 _primary 实色按钮上的文字色，走 DesignTokens.onPrimary（跟随明暗主题），
-    // 不再硬编码 #FFFFFF（scripts/check_ui_tokens.sh 禁止 QML 硬编码 hex）。
-    readonly property color _onPrimary: dt.onPrimary
-    readonly property color _error: dt.error
-    readonly property int _sp4: dt.sp4
-    readonly property int _sp8: dt.sp8
-    readonly property int _sp12: dt.sp12
-    readonly property int _sp16: dt.sp16
-    readonly property int _sp24: dt.sp24
-    readonly property int _radiusSm: dt.radiusSm
-    readonly property int _radiusMd: dt.radiusMd
-    readonly property real _fontSm: dt.fontSmPt
-    readonly property real _fontMd: dt.fontMdPt
-    readonly property real _fontLg: dt.fontLgPt
 
     // 窄宽度阈值：低于此值改用页签而非并排。
     readonly property real _narrowThreshold: 500
@@ -170,61 +149,42 @@ Rectangle {
         spacing: 0
 
         // ── Header：文件名 + 第几个/共几个 + 关闭 ──
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 48
-            color: "transparent"
+            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.smallSpacing
+            spacing: Kirigami.Units.smallSpacing
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: root._sp12
-                anchors.rightMargin: root._sp8
-                spacing: root._sp8
+            Controls.Label {
+                Layout.fillWidth: true
+                text: root.selectedConflictPath ? root.selectedConflictPath : qsTr("无冲突")
+                color: Kirigami.Theme.textColor
+                font.bold: true
+                elide: Text.ElideMiddle
+            }
 
-                AppText {
-                    dt: root.dt
-                    text: root.selectedConflictPath ? root.selectedConflictPath : qsTr("无冲突")
-                    color: root._textPrimary
-                    font.pointSize: root._fontMd
-                    font.weight: Font.DemiBold
-                    Layout.fillWidth: true
-                    elide: Text.ElideMiddle
-                }
+            Controls.Label {
+                Layout.alignment: Qt.AlignVCenter
+                visible: root.conflicts.length > 0
+                text: (root.currentIndex + 1) + " / " + root.conflicts.length
+                color: Kirigami.Theme.disabledTextColor
+            }
 
-                AppText {
-                    dt: root.dt
-                    visible: root.conflicts.length > 0
-                    text: (root.currentIndex + 1) + " / " + root.conflicts.length
-                    color: root._textSecondary
-                    font.pointSize: root._fontSm
-                }
-
-                // 关闭按钮 — 只收起侧栏，冲突仍保留。
-                Rectangle {
-                    width: 24; height: 24
-                    radius: 12
-                    color: closeHover.containsMouse ? root._card : "transparent"
-
-                    AppText {
-                        dt: root.dt
-                        anchors.centerIn: parent
-                        text: "\u2715"
-                        color: root._textMuted
-                        font.pointSize: root._fontSm
-                    }
-
-                    MouseArea {
-                        id: closeHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.closeRequested()
-                    }
-                }
+            // 关闭按钮 — 只收起侧栏，冲突仍保留。
+            Controls.ToolButton {
+                icon.name: "dialog-close"
+                text: qsTr("关闭")
+                display: Controls.AbstractButton.IconOnly
+                onClicked: root.closeRequested()
             }
         }
 
-        Rectangle { Layout.fillWidth: true; height: 1; color: root._border }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: Kirigami.Theme.disabledTextColor
+        }
 
         // ── Content：本地/远端预览 ──
         Item {
@@ -234,34 +194,29 @@ Rectangle {
             // 空状态：无冲突。
             ColumnLayout {
                 anchors.centerIn: parent
-                spacing: root._sp16
+                spacing: Kirigami.Units.largeSpacing
                 visible: root.conflicts.length === 0 && !root.loading
 
-                AppText {
-                    text: "\u2713"
-                    dt: root.dt
-                    font.pointSize: root._fontLg
-                    color: root._textSecondary
+                Kirigami.Icon {
                     Layout.alignment: Qt.AlignHCenter
+                    source: "dialog-ok"
+                    implicitWidth: Kirigami.Units.iconSizes.huge
+                    implicitHeight: Kirigami.Units.iconSizes.huge
                 }
-                AppText {
-                    text: qsTr("没有未解决的冲突")
-                    dt: root.dt
-                    color: root._textPrimary
-                    font.pointSize: root._fontMd
-                    font.weight: Font.DemiBold
+                Controls.Label {
                     Layout.alignment: Qt.AlignHCenter
+                    text: qsTr("没有未解决的冲突")
+                    color: Kirigami.Theme.textColor
+                    font.bold: true
                 }
             }
 
             // 加载中。
-            AppText {
+            Controls.Label {
                 anchors.centerIn: parent
                 visible: root.loading
                 text: qsTr("加载中…")
-                dt: root.dt
-                color: root._textMuted
-                font.pointSize: root._fontSm
+                color: Kirigami.Theme.disabledTextColor
             }
 
             // 有冲突时展示预览。
@@ -270,51 +225,17 @@ Rectangle {
                 visible: root.conflicts.length > 0 && !root.loading
 
                 // 窄宽页签栏。
-                Rectangle {
+                Controls.TabBar {
                     id: narrowTabBar
                     visible: root._isNarrow
                     anchors.top: parent.top
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    height: 36
-                    color: "transparent"
+                    currentIndex: root.narrowTab
+                    onCurrentIndexChanged: root.narrowTab = currentIndex
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: root._sp8
-                        anchors.rightMargin: root._sp8
-                        spacing: root._sp4
-
-                        Repeater {
-                            model: [qsTr("本地"), qsTr("远端")]
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                height: 28
-                                radius: root._radiusSm
-                                color: root.narrowTab === index ?
-                                       root._accentSoft :
-                                       (narrowTabHover.containsMouse ? root._card : "transparent")
-
-                                AppText {
-                                    dt: root.dt
-                                    anchors.centerIn: parent
-                                    text: modelData
-                                    color: root.narrowTab === index ? root._accentText : root._textSecondary
-                                    font.pointSize: root._fontSm
-                                    font.weight: root.narrowTab === index ? Font.DemiBold : Font.Normal
-                                }
-
-                                MouseArea {
-                                    id: narrowTabHover
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.narrowTab = index
-                                }
-                            }
-                        }
-                    }
+                    Controls.TabButton { text: qsTr("本地") }
+                    Controls.TabButton { text: qsTr("远端") }
                 }
 
                 // 并排展示（宽屏）。
@@ -322,24 +243,22 @@ Rectangle {
                     id: sideBySide
                     visible: !root._isNarrow
                     anchors.fill: parent
-                    anchors.margins: root._sp8
-                    spacing: root._sp8
+                    anchors.margins: Kirigami.Units.smallSpacing
+                    spacing: Kirigami.Units.smallSpacing
 
                     // 本地正文
                     ColumnLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        spacing: root._sp4
+                        spacing: Kirigami.Units.smallSpacing
 
-                        AppText {
+                        Controls.Label {
                             text: qsTr("本地")
-                            dt: root.dt
-                            color: root._textSecondary
-                            font.pointSize: root._fontSm
-                            font.weight: Font.DemiBold
+                            color: Kirigami.Theme.disabledTextColor
+                            font.bold: true
                         }
 
-                        ScrollView {
+                        Controls.ScrollView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
@@ -348,17 +267,16 @@ Rectangle {
                                 if (contentItem) contentItem.acceptedButtons = Qt.NoButton
                             }
 
-                            TextArea {
+                            Controls.TextArea {
                                 readOnly: true
                                 text: root.preview ? (root.preview.localContent || "") : ""
-                                color: root._textPrimary
-                                font.pointSize: root._fontSm
-                                wrapMode: TextArea.Wrap
+                                color: Kirigami.Theme.textColor
+                                wrapMode: TextEdit.Wrap
                                 background: Rectangle {
-                                    color: root._surface
-                                    border.color: root._border
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: Kirigami.Theme.disabledTextColor
                                     border.width: 1
-                                    radius: root._radiusSm
+                                    radius: Kirigami.Units.smallSpacing
                                 }
                             }
                         }
@@ -368,14 +286,12 @@ Rectangle {
                     ColumnLayout {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        spacing: root._sp4
+                        spacing: Kirigami.Units.smallSpacing
 
-                        AppText {
+                        Controls.Label {
                             text: qsTr("远端")
-                            dt: root.dt
-                            color: root._textSecondary
-                            font.pointSize: root._fontSm
-                            font.weight: Font.DemiBold
+                            color: Kirigami.Theme.disabledTextColor
+                            font.bold: true
                         }
 
                         // RemoteDeleted：显示"远端已删除此文件"，不伪造空字符串。
@@ -387,17 +303,16 @@ Rectangle {
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                color: root._surface
-                                border.color: root._border
+                                color: Kirigami.Theme.backgroundColor
+                                border.color: Kirigami.Theme.disabledTextColor
                                 border.width: 1
-                                radius: root._radiusSm
+                                radius: Kirigami.Units.smallSpacing
 
-                                AppText {
+                                Controls.Label {
                                     anchors.centerIn: parent
+                                    width: parent.width - Kirigami.Units.largeSpacing
                                     text: qsTr("远端已删除此文件")
-                                    dt: root.dt
-                                    color: root._textMuted
-                                    font.pointSize: root._fontSm
+                                    color: Kirigami.Theme.disabledTextColor
                                     wrapMode: Text.Wrap
                                     horizontalAlignment: Text.AlignHCenter
                                 }
@@ -405,7 +320,7 @@ Rectangle {
                         }
 
                         // BothChanged：显示远端 snapshot 正文。
-                        ScrollView {
+                        Controls.ScrollView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             visible: !(root.preview && root.preview.remoteDeleted === true)
@@ -415,17 +330,16 @@ Rectangle {
                                 if (contentItem) contentItem.acceptedButtons = Qt.NoButton
                             }
 
-                            TextArea {
+                            Controls.TextArea {
                                 readOnly: true
                                 text: root.preview ? (root.preview.remoteContent || "") : ""
-                                color: root._textPrimary
-                                font.pointSize: root._fontSm
-                                wrapMode: TextArea.Wrap
+                                color: Kirigami.Theme.textColor
+                                wrapMode: TextEdit.Wrap
                                 background: Rectangle {
-                                    color: root._surface
-                                    border.color: root._border
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: Kirigami.Theme.disabledTextColor
                                     border.width: 1
-                                    radius: root._radiusSm
+                                    radius: Kirigami.Units.smallSpacing
                                 }
                             }
                         }
@@ -439,10 +353,10 @@ Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
-                    anchors.margins: root._sp8
+                    anchors.margins: Kirigami.Units.smallSpacing
 
                     // 本地页签
-                    ScrollView {
+                    Controls.ScrollView {
                         anchors.fill: parent
                         visible: root.narrowTab === 0
                         clip: true
@@ -451,17 +365,16 @@ Rectangle {
                             if (contentItem) contentItem.acceptedButtons = Qt.NoButton
                         }
 
-                        TextArea {
+                        Controls.TextArea {
                             readOnly: true
                             text: root.preview ? (root.preview.localContent || "") : ""
-                            color: root._textPrimary
-                            font.pointSize: root._fontSm
-                            wrapMode: TextArea.Wrap
+                            color: Kirigami.Theme.textColor
+                            wrapMode: TextEdit.Wrap
                             background: Rectangle {
-                                color: root._surface
-                                border.color: root._border
+                                color: Kirigami.Theme.backgroundColor
+                                border.color: Kirigami.Theme.disabledTextColor
                                 border.width: 1
-                                radius: root._radiusSm
+                                radius: Kirigami.Units.smallSpacing
                             }
                         }
                     }
@@ -470,29 +383,28 @@ Rectangle {
                     ColumnLayout {
                         anchors.fill: parent
                         visible: root.narrowTab === 1
-                        spacing: root._sp4
+                        spacing: Kirigami.Units.smallSpacing
 
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             visible: root.preview && root.preview.remoteDeleted === true
-                            color: root._surface
-                            border.color: root._border
+                            color: Kirigami.Theme.backgroundColor
+                            border.color: Kirigami.Theme.disabledTextColor
                             border.width: 1
-                            radius: root._radiusSm
+                            radius: Kirigami.Units.smallSpacing
 
-                            AppText {
+                            Controls.Label {
                                 anchors.centerIn: parent
+                                width: parent.width - Kirigami.Units.largeSpacing
                                 text: qsTr("远端已删除此文件")
-                                dt: root.dt
-                                color: root._textMuted
-                                font.pointSize: root._fontSm
+                                color: Kirigami.Theme.disabledTextColor
                                 wrapMode: Text.Wrap
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }
 
-                        ScrollView {
+                        Controls.ScrollView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             visible: !(root.preview && root.preview.remoteDeleted === true)
@@ -502,17 +414,16 @@ Rectangle {
                                 if (contentItem) contentItem.acceptedButtons = Qt.NoButton
                             }
 
-                            TextArea {
+                            Controls.TextArea {
                                 readOnly: true
                                 text: root.preview ? (root.preview.remoteContent || "") : ""
-                                color: root._textPrimary
-                                font.pointSize: root._fontSm
-                                wrapMode: TextArea.Wrap
+                                color: Kirigami.Theme.textColor
+                                wrapMode: TextEdit.Wrap
                                 background: Rectangle {
-                                    color: root._surface
-                                    border.color: root._border
+                                    color: Kirigami.Theme.backgroundColor
+                                    border.color: Kirigami.Theme.disabledTextColor
                                     border.width: 1
-                                    radius: root._radiusSm
+                                    radius: Kirigami.Units.smallSpacing
                                 }
                             }
                         }
@@ -521,104 +432,41 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.fillWidth: true; height: 1; color: root._border }
-
-        // ── Footer：三个动作按钮 ──
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 56
-            color: "transparent"
+            Layout.preferredHeight: 1
+            color: Kirigami.Theme.disabledTextColor
+        }
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: root._sp8
-                anchors.rightMargin: root._sp8
-                spacing: root._sp8
+        // ── Footer：三个动作按钮 ──
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.margins: Kirigami.Units.smallSpacing
+            spacing: Kirigami.Units.smallSpacing
 
-                // 保留本地
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: keepLocalHover.containsMouse ? root._surfaceVariant : root._surface
-                    border.color: root._border
-                    border.width: 1
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
+            // 保留本地
+            Controls.Button {
+                Layout.fillWidth: true
+                text: qsTr("保留本地")
+                enabled: root.conflicts.length > 0
+                onClicked: root.resolveAction("keep_local")
+            }
 
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("保留本地")
-                        dt: root.dt
-                        color: root._textPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
+            // 采用远端
+            Controls.Button {
+                Layout.fillWidth: true
+                text: qsTr("采用远端")
+                enabled: root.conflicts.length > 0
+                onClicked: root.resolveAction("take_remote")
+            }
 
-                    MouseArea {
-                        id: keepLocalHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("keep_local")
-                    }
-                }
-
-                // 采用远端
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: takeRemoteHover.containsMouse ? root._surfaceVariant : root._surface
-                    border.color: root._border
-                    border.width: 1
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
-
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("采用远端")
-                        dt: root.dt
-                        color: root._textPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: takeRemoteHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("take_remote")
-                    }
-                }
-
-                // 手动合并后标记已解决
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    radius: root._radiusSm
-                    color: markMergedHover.containsMouse ? root._accentSoft : root._primary
-                    opacity: root.conflicts.length > 0 ? 1.0 : 0.4
-
-                    AppText {
-                        anchors.centerIn: parent
-                        text: qsTr("手动合并后标记已解决")
-                        dt: root.dt
-                        color: markMergedHover.containsMouse ? root._accentText : root._onPrimary
-                        font.pointSize: root._fontSm
-                        font.weight: Font.DemiBold
-                    }
-
-                    MouseArea {
-                        id: markMergedHover
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        enabled: root.conflicts.length > 0
-                        onClicked: root.resolveAction("mark_merged")
-                    }
-                }
+            // 手动合并后标记已解决
+            Controls.Button {
+                Layout.fillWidth: true
+                text: qsTr("手动合并后标记已解决")
+                highlighted: true
+                enabled: root.conflicts.length > 0
+                onClicked: root.resolveAction("mark_merged")
             }
         }
     }

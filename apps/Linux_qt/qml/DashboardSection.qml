@@ -6,44 +6,45 @@
 // 职责：仪表盘页面的分区容器，带标题和圆角背景
 // 约束：
 //   - 纯 UI 组件，内容通过 default property 传入
-//   - 使用 DesignTokens 统一样式
+// Issue #900：改用 Kirigami.ShadowedRectangle + Kirigami.Theme，不再使用
+// AppText 等自制 M3 皮肤组件；公开属性保持兼容。
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
-Rectangle {
+Kirigami.ShadowedRectangle {
     id: root
     required property var dt
     property string title: ""
     default property alias contentData: body.data
 
-    radius: dt.radiusMd
-    color: dt.card
-    border.color: dt.border
+    radius: Kirigami.Units.cornerRadius
+    color: Kirigami.Theme.alternateBackgroundColor
+    border.color: Kirigami.Theme.disabledTextColor
     border.width: 1
-    implicitHeight: (contentCol.implicitHeight + dt.sp16 * 2)
+    implicitHeight: (contentCol.implicitHeight + Kirigami.Units.largeSpacing * 2)
 
     ColumnLayout {
         id: contentCol
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: dt.sp16
-        spacing: dt.sp12
+        anchors.margins: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.smallSpacing
 
-        AppText {
-            dt: root.dt
+        Kirigami.Heading {
+            level: 5
             text: root.title
-            color: dt.textSecondary
-            font.pointSize: dt.fontSmPt
-            font.weight: Font.DemiBold
+            color: Kirigami.Theme.textColor
         }
 
         ColumnLayout {
             id: body
             Layout.fillWidth: true
-            spacing: dt.sp8
+            spacing: Kirigami.Units.smallSpacing
         }
     }
 }

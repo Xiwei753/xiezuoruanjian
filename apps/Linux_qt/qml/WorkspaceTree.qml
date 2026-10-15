@@ -8,11 +8,16 @@
 //   - 纯 UI 组件，业务逻辑通过 signal 传递给 WritingWorkspace
 //   - 不直接操作文件系统或 Core 层
 //   - 使用 ListModel 绑定树数据
+//
+// Issue #900：自绘 AppText / 背景 / 右键菜单外观迁移到 Breeze + Kirigami
+//   主题色与间距；节点标记换成 Breeze 图标。items / selectedId / theme 属性与
+//   全部信号保持不变。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -27,7 +32,7 @@ Rectangle {
     signal showError(string message)
     signal deleteItem(string type, string projectId, string volumeId, string chapterId, string title)
 
-    color: theme.sidebar
+    color: Kirigami.Theme.alternateBackgroundColor
 
     ListModel {
         id: treeModel
@@ -60,12 +65,12 @@ Rectangle {
             // Issue #842: 桌面鼠标左键不能按住空白处拖页面，
             // 保留滚轮/触摸板/滚动条/触屏滚动。
             acceptedButtons: Qt.NoButton
-            
+
             delegate: Rectangle {
                 id: delegateRect
-                width: ListView.view.width
-                height: 32
-                
+                width: ListView.view ? ListView.view.width : 0
+                height: Kirigami.Units.gridUnit * 1.8
+
                 property var itemData: {
                     var out = {
                         "id": model.id || "",
@@ -92,49 +97,45 @@ Rectangle {
 
                 property bool isSelected: root.selectedId !== "" && root.selectedId === model.id
                 property bool isHovered: hoverArea.containsMouse
-                
+
                 color: {
-                    if (isSelected) return theme.primaryContainer;
-                    if (isHovered) return theme.surfaceVariant;
+                    if (isSelected) return Kirigami.Theme.highlightColor;
+                    if (isHovered) return Kirigami.Theme.backgroundColor;
                     return "transparent";
                 }
 
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: {
-                        if (model.type === "project") return 8;
-                        if (model.type === "volume") return 24;
-                        if (model.type === "chapter") return 40;
-                        return 8;
+                        if (model.type === "project") return Kirigami.Units.smallSpacing * 2;
+                        if (model.type === "volume") return Kirigami.Units.smallSpacing * 6;
+                        if (model.type === "chapter") return Kirigami.Units.smallSpacing * 10;
+                        return Kirigami.Units.smallSpacing * 2;
                     }
-                    anchors.rightMargin: 8
-                    spacing: 8
+                    anchors.rightMargin: Kirigami.Units.smallSpacing * 2
+                    spacing: Kirigami.Units.smallSpacing
 
-                    AppText {
-                        dt: root.theme
-                        text: {
-                            if (model.type === "project") return "[P]";
-                            if (model.type === "volume") return "■";
-                            if (model.type === "chapter") return "●";
+                    Kirigami.Icon {
+                        source: {
+                            if (model.type === "project") return "folder";
+                            if (model.type === "volume") return "document-multiple";
+                            if (model.type === "chapter") return "text-x-generic";
                             return "";
                         }
-                        color: {
-                            if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
-                            return root.theme.textSecondary;
-                        }
-                        font.pointSize: root.theme.fontMdPt
+                        implicitWidth: Kirigami.Units.iconSizes.small
+                        implicitHeight: Kirigami.Units.iconSizes.small
+                        color: delegateRect.isSelected ? Kirigami.Theme.highlightedTextColor
+                                                       : Kirigami.Theme.textColor
+                        Layout.alignment: Qt.AlignVCenter
                     }
 
-                    AppText {
-                        dt: root.theme
+                    Label {
                         Layout.fillWidth: true
                         text: model.title || ""
-                        color: {
-                            if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
-                            return root.theme.textPrimary;
-                        }
-                        font.pointSize: root.theme.fontMdPt
+                        color: delegateRect.isSelected ? Kirigami.Theme.highlightedTextColor
+                                                       : Kirigami.Theme.textColor
                         elide: Text.ElideRight
+                        Layout.alignment: Qt.AlignVCenter
                     }
                 }
 
@@ -162,38 +163,22 @@ Rectangle {
         }
     }
 
-    AppText {
-        dt: root.theme
+    Label {
         anchors.centerIn: parent
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
-        color: theme.textMuted
-        font.pointSize: root.theme.fontMdPt
+        color: Kirigami.Theme.disabledTextColor
     }
 
     Menu {
         id: contextMenu
         property var itemData: null
-        background: Rectangle {
-            color: theme.surface
-            border.color: theme.border
-            radius: theme.radiusMd
-            border.width: 1
-        }
 
         MenuItem {
             id: menuCreateVolume
             text: qsTr("新建卷")
+            icon.name: "list-add"
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
-            contentItem: AppText {
-                dt: root.theme
-                text: menuCreateVolume.text
-                color: theme.textPrimary
-                font.pointSize: theme.labelPt
-                font.family: theme.fontFamily
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle { color: menuCreateVolume.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -206,16 +191,8 @@ Rectangle {
         MenuItem {
             id: menuCreateChapter
             text: qsTr("新建章节")
+            icon.name: "list-add"
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
-            contentItem: AppText {
-                dt: root.theme
-                text: menuCreateChapter.text
-                color: theme.textPrimary
-                font.pointSize: theme.labelPt
-                font.family: theme.fontFamily
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle { color: menuCreateChapter.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -231,15 +208,7 @@ Rectangle {
         MenuItem {
             id: menuRename
             text: qsTr("重命名")
-            contentItem: AppText {
-                dt: root.theme
-                text: menuRename.text
-                color: theme.textPrimary
-                font.pointSize: theme.labelPt
-                font.family: theme.fontFamily
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle { color: menuRename.highlighted ? theme.surfaceVariant : "transparent" }
+            icon.name: "edit-rename"
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
@@ -260,15 +229,7 @@ Rectangle {
         MenuItem {
             id: menuDelete
             text: qsTr("删除")
-            contentItem: AppText {
-                dt: root.theme
-                text: menuDelete.text
-                color: theme.error
-                font.pointSize: theme.labelPt
-                font.family: theme.fontFamily
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle { color: menuDelete.highlighted ? theme.surfaceVariant : "transparent" }
+            icon.name: "edit-delete"
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;

@@ -7,11 +7,14 @@
 // 约束：
 //   - 纯展示组件，数据通过 starmapBackendRef 获取
 //   - 点击后跳转到完整的星图编辑页面
+// Issue #900：视觉迁移到 KDE 官方组件体系（Kirigami.Theme + Breeze 图标），
+// 不再使用 AppText 等自制 M3 皮肤组件。
 // =============================================================================
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import org.kde.kirigami as Kirigami
 
 Rectangle {
     id: root
@@ -19,119 +22,113 @@ Rectangle {
     property var starmapBackendRef: null
     property var appState: ({})
 
-    color: dt.bg
+    color: Kirigami.Theme.backgroundColor
 
     ColumnLayout {
         anchors.centerIn: parent
-        spacing: dt.sp24
+        spacing: Kirigami.Units.largeSpacing
         width: Math.min(parent.width - 80, 560)
 
         // Constellation icon
-        Rectangle {
+        Kirigami.ShadowedRectangle {
             Layout.alignment: Qt.AlignHCenter
-            width: 80; height: 80
-            radius: dt.radiusCard
-            color: dt.accentSoft
+            Layout.preferredWidth: 80
+            Layout.preferredHeight: 80
+            radius: width / 2
+            color: Kirigami.Theme.highlightColor
 
-            AppText {
+            Kirigami.Icon {
                 anchors.centerIn: parent
-                text: "\u2B50"
-                dt: root.dt
-                font.pointSize: dt.fontEmojiMdPt
+                width: 44
+                height: 44
+                source: "starred"
+                color: Kirigami.Theme.highlightedTextColor
             }
         }
 
-        AppText {
-            dt: root.dt
+        Kirigami.Heading {
+            level: 2
             text: qsTr("星图")
-            color: dt.textPrimary
-            font.pointSize: dt.fontTitlePt
-            font.weight: Font.Bold
+            color: Kirigami.Theme.textColor
             Layout.alignment: Qt.AlignHCenter
         }
 
-        AppText {
-            dt: root.dt
+        Label {
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
-            color: dt.textSecondary
-            font.pointSize: dt.fontMdPt
+            color: Kirigami.Theme.disabledTextColor
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
 
-        Item { Layout.preferredHeight: dt.sp16 }
-
         // Feature cards
         Repeater {
             model: [
-                { label: qsTr("作品宇宙"), desc: qsTr("整体世界观与核心设定"), icon: "" },
-                { label: qsTr("人物关系"), desc: qsTr("角色之间的关联与冲突"), icon: "" },
-                { label: qsTr("地点"), desc: qsTr("故事发生的场景与空间"), icon: "" },
-                { label: qsTr("事件"), desc: qsTr("推动剧情的关键事件链"), icon: "" },
-                { label: qsTr("伏笔"), desc: qsTr("埋设与回收的叙事线索"), icon: "" }
+                { label: qsTr("作品宇宙"), desc: qsTr("整体世界观与核心设定"), icon: "globe" },
+                { label: qsTr("人物关系"), desc: qsTr("角色之间的关联与冲突"), icon: "system-users" },
+                { label: qsTr("地点"), desc: qsTr("故事发生的场景与空间"), icon: "mark-location" },
+                { label: qsTr("事件"), desc: qsTr("推动剧情的关键事件链"), icon: "view-calendar" },
+                { label: qsTr("伏笔"), desc: qsTr("埋设与回收的叙事线索"), icon: "flag" }
             ]
 
-            Rectangle {
+            Kirigami.ShadowedRectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 64
-                radius: dt.radiusMd
-                color: dt.card
+                radius: Kirigami.Units.cornerRadius
+                color: Kirigami.Theme.alternateBackgroundColor
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.margins: dt.sp16
-                    spacing: dt.sp12
+                    anchors.margins: Kirigami.Units.largeSpacing
+                    spacing: Kirigami.Units.largeSpacing
 
-                    Rectangle {
-                        width: 40; height: 40
-                        radius: dt.radiusSm
-                        color: dt.accentSoft
+                    Kirigami.ShadowedRectangle {
+                        Layout.preferredWidth: 40
+                        Layout.preferredHeight: 40
+                        radius: Kirigami.Units.cornerRadius
+                        color: Kirigami.Theme.highlightColor
 
-                        AppText {
-                            dt: root.dt
+                        Kirigami.Icon {
                             anchors.centerIn: parent
-                            text: modelData.icon
-                            font.pointSize: dt.fontXlPt
+                            width: 22
+                            height: 22
+                            source: modelData.icon
+                            color: Kirigami.Theme.highlightedTextColor
                         }
                     }
 
-                    Column {
+                    ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 2
-                        AppText {
-                            dt: root.dt
+                        Label {
                             text: modelData.label
-                            color: dt.textPrimary
-                            font.pointSize: dt.fontMdPt
+                            color: Kirigami.Theme.textColor
                             font.weight: Font.Medium
+                            Layout.fillWidth: true
                         }
-                        AppText {
-                            dt: root.dt
+                        Label {
                             text: modelData.desc
-                            color: dt.textMuted
-                            font.pointSize: dt.fontXsPt
+                            color: Kirigami.Theme.disabledTextColor
+                            Layout.fillWidth: true
                         }
                     }
 
-                    AppText {
-                        dt: root.dt
-                        text: "\u2192"
-                        color: dt.textMuted
-                        font.pointSize: dt.fontLgPt
+                    Kirigami.Icon {
+                        Layout.preferredWidth: 16
+                        Layout.preferredHeight: 16
+                        source: "arrow-right"
+                        color: Kirigami.Theme.disabledTextColor
                     }
                 }
             }
         }
 
         // Placeholder hint
-        AppText {
-            dt: root.dt
+        Label {
             text: qsTr("完整星图渲染将在后续版本实现")
-            color: dt.textMuted
-            font.pointSize: dt.fontXsPt
+            color: Kirigami.Theme.disabledTextColor
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: dt.sp8
+            Layout.topMargin: Kirigami.Units.smallSpacing
         }
     }
 }

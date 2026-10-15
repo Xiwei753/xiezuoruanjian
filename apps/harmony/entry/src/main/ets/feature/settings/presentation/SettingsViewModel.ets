@@ -177,6 +177,11 @@ export class SettingsViewModel {
 
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
+        // Issue #911：启动时 EntryAbility.initDiagnostics 已按这份 Core 设置启动了诊断后端，
+        // 所以这里把 lastSynced 记为这份真实值，作为后续 saveSettings 的变化基线。
+        // settingsResult 失败时（读取失败）绝不更新 lastSynced，也不把 UI 占位 DTO 下发底层。
+        this.lastSyncedDiagnosticsEnabled = settingsResult.data.diagnosticsEnabled
+        this.lastSyncedDiagnosticsVerbose = settingsResult.data.diagnosticsVerbose
         const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
           appearanceMode,
@@ -202,18 +207,6 @@ export class SettingsViewModel {
 
       // 加载同步密钥，回填 token
       await this.loadSyncSecrets()
-
-      // 加载设置后，把当前诊断配置同步一次到底层 runtime。
-      try {
-        await this.bridge.setDiagnosticsConfig(
-          this.settings.diagnosticsEnabled,
-          this.settings.diagnosticsVerbose
-        )
-        this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
-        this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
-      } catch (_e) {
-        hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on load')
-      }
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to load settings: ${err}`)
     } finally {
@@ -244,6 +237,22 @@ export class SettingsViewModel {
         const persisted = await this.bridge.getLocalSettings()
         if (persisted.success && persisted.data) {
           LocalSettingsStore.getInstance().publish(persisted.data)
+          // Issue #911：诊断开关只在 Core 真正落盘、且重新读回成功后，才比较读回的持久化值
+          // 与上次同步值；this.settings 是 UI 还在原地编辑的对象，不能当"已落盘真相"。
+          const persistedEnabled: boolean = persisted.data.diagnosticsEnabled
+          const persistedVerbose: boolean = persisted.data.diagnosticsVerbose
+          if (persistedEnabled !== this.lastSyncedDiagnosticsEnabled ||
+            persistedVerbose !== this.lastSyncedDiagnosticsVerbose) {
+            // setDiagnosticsConfig 返回 ResultEnvelope；success:false 不等于抛异常，
+            // 不能照旧宣称已同步，只有 success 才更新 lastSynced。
+            const syncResult = await this.bridge.setDiagnosticsConfig(persistedEnabled, persistedVerbose)
+            if (syncResult.success) {
+              this.lastSyncedDiagnosticsEnabled = persistedEnabled
+              this.lastSyncedDiagnosticsVerbose = persistedVerbose
+            } else {
+              hilog.warn(DOMAIN, TAG, `setDiagnosticsConfig failed on save: ${syncResult.errorCode || 'unknown'}`)
+            }
+          }
         }
         const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
         this.themeAdapter.updateFromLocalSettings(
@@ -258,21 +267,6 @@ export class SettingsViewModel {
           fontFamily: 'HarmonyOS Sans',
           lineHeight: this.settings.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
-
-        // 如果诊断配置有变化，同步到 runtime。
-        if (this.settings.diagnosticsEnabled !== this.lastSyncedDiagnosticsEnabled ||
-          this.settings.diagnosticsVerbose !== this.lastSyncedDiagnosticsVerbose) {
-          try {
-            await this.bridge.setDiagnosticsConfig(
-              this.settings.diagnosticsEnabled,
-              this.settings.diagnosticsVerbose
-            )
-            this.lastSyncedDiagnosticsEnabled = this.settings.diagnosticsEnabled
-            this.lastSyncedDiagnosticsVerbose = this.settings.diagnosticsVerbose
-          } catch (_e) {
-            hilog.warn(DOMAIN, TAG, 'setDiagnosticsConfig failed on save')
-          }
-        }
       } else {
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
       }

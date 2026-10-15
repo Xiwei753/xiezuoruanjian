@@ -260,6 +260,11 @@
   - `HdsTabs` 悬浮页签组件
   - `HdsTabsAttribute.barFloatingStyle(style?: HdsTabsFloatingStyle)` — 悬浮页签样式（since 6.1.0(23)）
   - `HdsTabsFloatingStyle.systemMaterialEffect?: SystemMaterialParams` — 系统材质效果
+  - `HdsTabsFloatingStyle.miniBar?: HdsTabsMiniBar` — 页签栏同排的 MiniBar 区域（since 6.1.0(23)），承载页签之外的主操作
+  - `HdsTabsMiniBar.miniBarBuilder: CustomBuilder | ComponentContent`（必填）— MiniBar 内自绘内容；`enableMiniBarBackground?: boolean`（默认 true，跟随页签栏背景）；`miniBarWidth?: HdsBarWidthRangeOptions`；`miniBarStyle?: HdsBarStyle`；`barLayoutMode?: HdsBarLayoutMode`（since 6.1.1(24)：HORIZONTAL 与页签同排 / VERTICAL 分两排）
+  - `HdsTabsMiniBar.onBarStyleChange?: BarStyleChangeCallback(miniBarStyle, tabBarStyle, miniBarWidth, tabBarWidth, mode)` — MiniBar/页签栏折叠态变化回调；`HdsBarStyle { COLLAPSE = 0, EXPAND = 1 }`；`HdsTabsBarChangeMode { NORMAL = 0 旋转/开关屏, USER_CLICK = 1 点击折叠的 MiniBar 或 TabBar, APP_TRIGGER = 2 由 controller 接口触发 }`
+  - `HdsTabsController.applyMiniBarStyle(HdsBarStyle)` — 切换 MiniBar 显示风格（自带默认动画；此路径发出的变化是 `APP_TRIGGER`）
+  - **以上 `miniBar` / `HdsTabsMiniBar` / `onBarStyleChange` / `applyMiniBarStyle` 仅作为 SDK 事实记录，本项目当前不使用**：Issue #905 第二~五轮曾用 MiniBar 承载主操作「+」，已按复核意见整体撤销（MiniBar 与页签栏同排，不是原右下角独立 FAB 的位置，不能为了拿材质改掉用户要的位置）。本项目 `HdsPrimaryTabsApi23.ets` 的 `barFloatingStyle` 只保留页签栏本身的材质、宽度与底栏逻辑。
   - `hdsMaterial.MaterialType.IMMERSIVE = 101` — 沉浸光感材质类型（since 6.1.0(23)）
 - 最低 API：23
 - SystemCapability：`SystemCapability.UIDesign.HDSComponent.Core`
@@ -390,15 +395,34 @@
   走的是 HdsTabs **专属**属性 → `hdsMaterial.SystemMaterialParams`（`@kit.UIDesignKit`，6.1.0(23)），与通用属性那条路不是同一套实现。
 - 标题栏另有一条 HDS 专属入口：`HdsNavigationTitleBarOptions.style.systemMaterialEffect`（`TitleBarStyleOptions`，同一文件 1399 行起）。官方《沉浸光感》明确「可为标题栏按钮设置沉浸光感视效」，实测对 **HDS 原生 `content.menu.value` 按钮**有效（工作区/写作页三个独立圆，按住最近最亮、两侧递减），对 `stackBuilder` 自绘节点**无效** —— 自绘节点要走通用属性 `systemMaterial`。
 - 页面内按钮拿定点光的其它候选也都试过，均不可用：
-  - `hdsEffect.pointLight`（`@kit.UIDesignKit`，20.0.0，`SystemCapability.UIDesign.HDSComponent.Core`）：语义是光源照亮**周围**组件，本就不是单组件按压反馈；且本机 ArkTS 侧构造成功、能力检查通过（`apiLevel=26 hdsCore=true effect=true`），native 层每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，enum 成员/字面量 int/只留两字段/去掉 options 全被拒。
-  - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，`BLEND_GRADIENT` 是**叠白**（中心 85% 白、边缘 100% 白），实测是由内向外递增的整面高光，不是跟随手指的定点光；白底上还会削顶到 255 什么也看不出来。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
+  - `hdsEffect.pointLight`（`@kit.UIDesignKit`，`@since 6.0.0(20)`，`SystemCapability.UIDesign.HDSComponent.Core`）：语义是光源照亮**周围**组件，本就不是单组件按压反馈；且本机 ArkTS 侧构造成功、能力检查通过（`apiLevel=26 hdsCore=true effect=true`），native 层每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，enum 成员/字面量 int/只留两字段/去掉 options 全被拒。
+    - d.ts 形参（本机 `hms/ets/api/@hms.hds.hdsBaseComponent.d.ets`）：`HdsEffectBuilder.pointLight(value: PointLightEffect)`；`PointLightEffect { sourceType?: PointLightSourceType; illuminatedType?: PointLightIlluminatedType; options?: PointLightOptions }`；`PointLightOptions { color?: ResourceColor; intensity?: number; height?: Dimension; bloom?: number }`；`PointLightSourceType { NONE=0, SOFT=1, BRIGHT=2 }`；`PointLightIlluminatedType { NONE=0, BORDER=1, CONTENT=2, BORDER_CONTENT=3, DEFAULT_FEATHERING_BORDER=20 }`。
+    - 根因定位：报错来自 native 侧对这个结构的取参，ArkTS 侧类型与枚举取值都合法却仍被拒（连只传 `sourceType` + `illuminatedType`、完全不传 `options` 也一样），即当前 SDK/设备上 `pointLight` 的 native 实参要求与公开 d.ts 对不上。**按实机证据本轮不接入**：`pressShadow` 与它共用同一个 `.visualEffect`，把已知被 native 拒收的调用塞进同一个 `HdsEffectBuilder` 会连累已经能工作的按压视效，不把报错调用直接重复堆回线上。
+  - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，产生的是**系统渐变按压高光**，不是跟随手指的反射点光。同一枚举两个档位都有实机数据：`BLEND_GRADIENT`（中心 85% 白 → 边缘 100% 白）量到由内向外递增的整面高光，白底上削顶到 255 看不出，深色底上整颗刷白、白色 + 号消失；`BLEND_WHITE`（15% 白叠加）在同一表面上按压可见且 + 号仍清晰。**本轮取 `BLEND_WHITE`**（`PrimaryFab.ets` 里改一行即可切换）。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
   - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
   - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
-- **页面内悬浮按钮不能用沉浸材质（Issue #905 定论）**。真机日志：`Ace: Material inactive: out of scope. Use component in navigation title bar or Tabbar.`；官方《开启沉浸光感》明确生效范围只有 Navigation/NavDestination 标题栏与合规底部 TabBar，内容流里的右下角 FAB **不在范围内**。因此 `ui/components/PrimaryFab.ets` 已删除全部 `systemMaterial` 尝试，改为**单个 `Button`**（系统表面色 token + `stateEffect` 原生按压反馈），不再对外宣称「沉浸光感」。下文「让 FAB 在深色模式有可见边界」一节保留当时的实机数据仅供溯源。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
-  - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边~~（曾与底栏胶囊观感对齐）：**它本身能正常显示**，实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。废弃原因是没有沉浸材质高光 / 跟手按压光，而且已被独立描边层方案替代。
+- **页面内悬浮按钮不能用沉浸材质（Issue #905 定论）**。真机日志：`Ace: Material inactive: out of scope. Use component in navigation title bar or Tabbar.`；官方《开启沉浸光感》明确生效范围只有 Navigation/NavDestination 标题栏与合规底部 TabBar，内容流里的右下角 FAB **不在范围内**。因此 `ui/components/PrimaryFab.ets` 已删除全部 `systemMaterial` 尝试，不再对外宣称「沉浸光感」；现行实现见下方「Issue #905 现行结构」（毛玻璃 + 反色混色描边 + `pressShadow`，均为独立于沉浸材质的公开能力）。离线数据保留在下面两张表里。**范围提醒**：被否掉的是 `systemMaterial`（沉浸材质）这一条路，不等于内容流里没有可用的模糊与光影——通用 `backgroundBlurStyle` 与 `hdsEffect.pressShadow` 都是独立于沉浸材质的公开能力，第七轮复核后已恢复使用（见下一条与「让 FAB 在深色模式有可见边界」一节）。下面两条是当时的中间尝试，其中第一条现已恢复为现行做法，第二条仍是死路：
+  - **现行可用（Issue #905 第七轮恢复）**：通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 透明底色 + 1vp 描边。它与底栏 `barBackgroundBlurStyle` 是同一套通用模糊；实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。它没有沉浸材质那种跟手追光（那是 `systemMaterial` 的能力），但**普通毛玻璃是真实渲染，不是伪造**：透明底色与模糊必须配套，纯实心 `backgroundColor` 会把模糊整个挡住。
+  - **描边再进一步（Issue #905 第八轮）**：原来那条写死的 `border(1vp, sys.color.icon_secondary)` 是**固定灰环**，不会随背景变化，不能叫「反射光」。现改为同尺寸 `Stack` 内叠一层只负责混色的 `Circle().stroke('#66FFFFFF').strokeWidth(1).blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST).hitTestBehavior(HitTestMode.None)`：`DIFFERENCE` 把描边像素与下层已绘制画面做差值混合，圆环颜色随按钮底下那圈画面（毛玻璃透上来的邻近亮暗/色彩）变化。它采样的是**描边覆盖处的本地像素**，不会去屏幕别的坐标找远处光源；与 `systemMaterial` 的沉浸追光、`hdsEffect.pointLight` 是**三个不同机制**，不得互相冒充。必须只挂在描边 Circle 上（挂到 Button 主体会连正文图标和毛玻璃一起被混色），且必须用 `BlendApplyType.FAST`（`OFFSCREEN` 模式下同层 `backgroundBlurStyle` 可能取不到正确画面，也**不要**给整个 FAB 加 `renderGroup` 或离屏）。反馈过弱/过强时只调描边 Alpha。
   - ~~`systemMaterial(floatingMaterial(false))` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)`~~：**这一条才是**「材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见」的原因（材质接管阴影后 `applyShadow` 传 false，改回自定义 shadow 也没有可投实体）。
+- ⛔ **以下第二~五轮（把「+」搬到 HDS MiniBar）是已整体撤销的错误设计分支，仅作溯源。** 复核结论：MiniBar 与页签栏同排，**不是**原右下角独立 FAB 的位置；不能为了让材质生效就改掉用户要的位置，也不能把「搬到 MiniBar」当成光感已复刻。相关内容（`app/navigation/PrimaryActionChannel.ets`、`style.miniBar`、`primaryActionMiniBar()`、`miniBarStyleChange` 折叠/展开逻辑、三页隐藏页面 FAB 的 `isHdsMiniBarHostingPrimaryAction()`）已全部从代码删除；`PrimaryFab.ets` 恢复为内容流右下角**唯一**主操作载体。
+- ~~**Issue #905 第二~五轮的起点：改把主操作搬到合规宿主**~~。窄屏主操作「+」曾不再由内容流 FAB 呈现，而是复用页面上已有的那一个 `HdsTabs`（`app/navigation/impl/api23/HdsPrimaryTabsApi23.ets`），在同一个 `barFloatingStyle` 里加 `miniBar: { miniBarBuilder: this.primaryActionMiniBar }`，把「+」放在页签栏同排的 MiniBar 区域，由 HDS 宿主透出系统沉浸光感；点击只派发 `PrimaryActionChannel` 里登记的**页面原有**创建入口（新建作品 / 新建卷 / 新建星图），不另起业务逻辑。内容流 `PrimaryFab.ets` 因此降级为「普通主操作按钮」，只在 API < 23 或宽屏/无 HDS 底部 TabBar 的版型使用。MiniBar 与页签同排，**不保证落在原来的右下角 FAB 位置**——这是官方公开组件的几何限制，不是漏改。
+- ⛔【已撤销】**Issue #905 第三轮：MiniBar 的折叠/点击语义已按官方 API 处理，但「原右下角位置 + 原生光感 + 加号一次点击新建」三者仍无法同时满足**。官方 d.ts 行为：宽度 < 600vp 时首次创建的 MiniBar 默认 `COLLAPSE`；点击**折叠的** MiniBar 或 TabBar 会以 `USER_CLICK` 模式触发折叠/展开变化；宽度 < 440vp 时 MiniBar 展开与 TabBar 折叠还会重排底部导航。本实现把该 MiniBar 当**主操作宿主**而不是可折叠导航区，因此用 `miniBarStyle: HdsBarStyle.EXPAND` 让它创建即展开，避免「第一次点按被系统吃成展开 MiniBar」。~~`onBarStyleChange` 里凡非 `APP_TRIGGER` 模式把它变成 `COLLAPSE` 就立刻拉回 EXPAND；`miniBarWidth` 三档都钉 48，不随 440/600/840vp 宽度档位改档重排。~~ **这两句已被下一段（第四轮）更正：无条件拉回会和用户展开底部页签栏的动作抢控制权，`barWidth.smallWidth` 也需回到官方 236vp。****未使用** `barLayoutMode`（`HORIZONTAL` 即官方默认同排，`VERTICAL` 分两排且是 since 6.1.1(24)）：VERTICAL 只是把 MiniBar 单独放到另一排，同样不构成右下角独立 FAB 位置，故不引入。**结论：原生光感材质存在于合规宿主上这一点成立，但「位置复刻」和「加号单击即为新建」在公开组件下无法与前者同时保证；真机未连接，上述交互未经目视确认，本条按未完成如实保留。**
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
-  - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)` + `zIndex(1)`）就没有这个冲突，而且不依赖材质是否渲染成功。
+  - **描边不是不能用，而是不能压在 systemMaterial 的 Button 本体上**。挂 `border` 到受光的 Button 会盖掉材质层；放到独立节点（`hitTestBehavior(HitTestMode.None)`）就没有这个冲突（#811 用 `zIndex(1)`，第八轮用同尺寸 `Stack` 叠一层混色 `Circle`，不再需要 `zIndex`）。
+- ⛔【已撤销】**Issue #905 第四轮：窄屏宽度预算 + `onBarStyleChange` 的双状态语义（更正上一段的两处断言）**。
+  - `barWidth.smallWidth` 由自取的 280vp 改回**三页签官方小屏标准宽 236vp**（`76 * 3 + 8`）。宽度预算：360vp 窗口下 `236`(页签栏) + `48`(MiniBar) + 小于 600vp 时 `barSideMargin` 默认左右各 16vp = **316vp**，给 HDS 自己的两栏间隔留出余量；原 280vp 会把整个底部宽度挤满，不能断言两块都能常驻展开。中/大档仍为 400/500，未改。
+  - `miniBarWidth` 三档钉 48 只保证 **MiniBar 自身不换档重排**，不代表窄屏下页签栏与 MiniBar 都能常驻展开——这由官方 HDS 双栏状态管理决定，上一段「48vp 就不会重排」的说法不准确，以本段为准。
+  - `onBarStyleChange` 会同时通知 `miniBarStyle` **和** `tabBarStyle`，必须一起判断，不能再只看 MiniBar 一侧无条件 `applyMiniBarStyle(EXPAND)`。**（本段两处旧断言已被第五轮更正，见下一条）**
+  - `miniBarStyle: HdsBarStyle.EXPAND` 仍作为**首次创建首选**保留；`primaryActionMiniBar()` → `PrimaryActionChannel.dispatch()` 的单击主操作链未变。
+  - **结论不变**：原生光感材质存在于合规宿主上成立，但「原右下角 FAB 位置复刻」做不到，且上述窄屏交互未经真机目视确认（`hdc list targets` 为空）。
+- ⛔【已撤销】**Issue #905 第五轮：折叠态点击的真实状态转换（更正上一段「`miniBarStyle === COLLAPSE` 就拉回即可单击」的错误）**。
+  - 点**折叠态** MiniBar 是把它从 `COLLAPSE` 切成 `EXPAND`，`onBarStyleChange` 回调拿到的是**变化后**的 `miniBarStyle === EXPAND`。所以「只在回调里看到 `COLLAPSE` 才 `applyMiniBarStyle(EXPAND)`」恰好漏掉这次点击本身，不能声称一次点按就新建。
+  - 现在**不再调用** `controller.applyMiniBarStyle()`：页签栏与 MiniBar 的互斥展开交回官方 HDS 状态管理，应用不与用户展开底栏的动作抢控制权。
+  - 加号点击统一收敛到 `PrimaryActionChannel`，不重复实现创建方法：展开态加号点击走 `primaryActionMiniBar().onClick`；折叠态被点开（`mode === USER_CLICK` + 前值 `COLLAPSE` + 现值 `EXPAND` + `tabBarStyle` 仍为 `COLLAPSE`，说明用户点的是 MiniBar 而不是底栏）视为同一次加号点击，在回调里派发一次当前页主操作。`NORMAL`（旋转/开关屏）与 `APP_TRIGGER`（代码主动切换）都不派发。
+  - 因此新增非响应式字段 `previousMiniBarStyle`，在**每次**回调最前面「先取前值、再写当前值」（含提前返回的 `NORMAL`/`APP_TRIGGER` 分支），否则记录的前值会和 HDS 实际状态失步。
+  - **未解除的不确定项**：折叠态点击与自绘 `Row.onClick` 是否会在**同一次指针事件**里都触发，SDK 文档没有承诺；真机若确认双触发，应在唯一主操作入口按同一输入事件去重（不靠延时过滤，也不把新建改成点两下）。真机未连接，本条交互仍未经目视确认。
+- ⛔ **第二~五轮撤销收束（Issue #905 第六轮）**：以上关于 MiniBar 的宽度预算、折叠/点击语义、单击派发等结论**只记录当时把「+」放到 MiniBar 的错误分支**，现行代码已不存在 MiniBar 主操作；原生沉浸光感在**原右下角独立 FAB** 上仍不可用（真机 `Material inactive: out of scope`，官方生效范围只有标题栏与合规底部 TabBar），该点按未完成如实保留。
 - 参数要点（照官方《组件适配沉浸光感》Button 一节）：材质样式取薄档 `ULTRA_THIN` / `THIN`；`materialColor` 必须带透明度，不透明纯色会把材质滤镜完全挡住；开了材质后不要再设 `backgroundColor` / 背景模糊 / `border`，它们会盖在材质层之上；THIN/ULTRA_THIN 时 `fontColor` 要用系统可反色资源（如 `sys.color.icon_primary`）才跟随反色；开了 `lightEffect` 后按钮默认点击态/悬浮态反馈由材质接管。
 - 应用级开关：`entry/src/main/module.json5` 已配 `ohos.arkui.UIMaterial.state = "enable"`；ENABLE 下 Button 不会默认开启，必须显式传 `systemMaterial`。
 - 说明：声明位于本机 SDK `openharmony/ets/api/@ohos.arkui.uiMaterial.d.ts`（`ImmersiveStyle { ULTRA_THIN=0, THIN=1, REGULAR=2 }`）与 `hms/ets/api/@hms.hds.hdsMaterial.d.ets`（`MaterialType { NONE=0, ADAPTIVE=100, IMMERSIVE=101 }`、`MaterialLevel { EXQUISITE=0, GENTLE=1, SMOOTH=2, ADAPTIVE=10 }`）。官方文档 docId：`开发指南/ArkUI_方舟UI框架/UI开发_ArkTS声明式开发范式/沉浸光感/沉浸光感开发指导/组件适配沉浸光感/arkts-immersive-light-sense-component-adaptation`、`…/沉浸光感常见问题/arkts-immersive-light-sense-faq`、`开发指南/UI_Design_Kit_UI设计套件/沉浸光感/ui-design-hds-component-material`、`FAQ/UI框架/UI界面/HarmonyOS下HdsNavigation与HdsTabs实现滚动模糊及沉浸光感材质效果的解决方案/faqs-arkui-1095`
@@ -426,21 +450,32 @@
 
 | 方案 | 实测结果 | 结论 |
 |---|---|---|
-| `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边 | 圆盘 20~22 级，边界清晰，阴影 3 级与底栏胶囊一致 | 稳定可读，但无材质高光、无按压光 |
+| `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边 | 圆盘 20~22 级，边界清晰，阴影 3 级与底栏胶囊一致 | 稳定可读；**Issue #905 第七轮恢复为现行做法**（无沉浸材质跟手追光） |
 | `systemMaterial(floatingMaterial(false))` + 自定义 `shadow(OUTER_DEFAULT_XS)` | 静止 0 级、圆盘不可见；`shadow` 完全没出来 | 材质背景层透明 → 无物可投 |
 | `systemMaterial(floatingMaterial(true))`（材质自带阴影） | 静止 0 级，材质阴影在纯黑底上不显 | 同上 |
 | `systemMaterial(...)` + `stateEffect: false` | 按压无响应（干净对照） | 内容流拿不到按压光 |
 | `materialColor: '#33FFFFFF'` | 页头胶囊糊成发灰起雾的乳白，比底栏差 3 倍以上 | 违反「materialColor 必须透明」 |
 | `hdsEffect.pointLight`（`PointLightSourceType` / `PointLightIlluminatedType` 全枚举） | native 每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，无任何光 | 本机不可用，别再试 |
-| `hdsEffect.pressShadow(BLEND_GRADIENT)` | 整面叠白（中心 85% 白、边缘 100% 白），白底上削顶到 255 看不出；深色底上整颗刷白、白字消失 | 不是跟随手指的光 |
+| `hdsEffect.pressShadow(BLEND_GRADIENT)` | 整面叠白（中心 85% 白、边缘 100% 白），白底上削顶到 255 看不出；深色底上整颗刷白、白字消失 | 不是跟随手指的光，且会吃掉白色 + 号 |
+| `hdsEffect.pressShadow(BLEND_WHITE)` | 15% 白叠加，按压可见且 + 号仍清晰 | **Issue #905 第七轮采用**：系统渐变按压高光，非跟手反射光 |
 | `lightUpEffect(0..1)` | 只有整体亮度，无位置参数 | 死路 |
-| **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 方案，已被 Issue #905 取代）** | 描边像素值 38，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | 当时可用；#905 起不再依赖内容流材质，直接单 Button + 系统表面色 token + 边框 |
+| **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 方案，已被 Issue #905 取代）** | 描边像素值 60，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | 当时可用；#905 后不再拆「Button + 独立描边层」两套结构 |
+| **固定 `border(1vp, sys.color.icon_secondary)`（#905 第一~七轮）** | 圆环可见，但**颜色固定**，不随背景变化 | 当作「深色模式最低轮廓」可用；**不是反射光**，第八轮已替换为下面的反色混色环 |
+| **`Circle().stroke('#66FFFFFF')` + `blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST)` + `hitTestBehavior(None)`（Issue #905 第八轮现行）** | 描边与下层画面做差值混合，圆环颜色随按钮底下那圈画面变化，配合毛玻璃形成环境受光观感 | **本轮采用**：随**本地背景像素**变化，不是固定灰环，也不是跟手追光/点光源；修复 `OFFSCREEN` 会取不到正确画面，故用 `FAST` |
 
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
 
-**Issue #905 现行结构（已落地）**：`PrimaryFab.ets` 改为**单个 `Button`**（`ButtonType.Circle`），背景取系统表面色 token `sys.color.ohos_id_color_card_bg`，1vp 边框 `sys.color.icon_secondary`，配 `stateEffect: true` 的原生按压反馈；**不再挂 `systemMaterial`，也不再拆独立描边层**。深色模式可见性由「表面色 token + 边框」保证，不依赖材质渲染是否成功——该 FAB 位于内容流，材质路径本就拿不到光（见上文真机日志与官方生效范围）。上面 `Stack + 独立描边层 + Button(ImmersiveMaterial)` 是 Issue #811 的旧方案，已被 #905 取代。
+**Issue #905 现行结构（第八轮起，内容流右下角唯一主操作载体）**：`PrimaryFab.ets` 是同一尺寸的 `Stack { Button(毛玻璃主体，唯一可点击) + Circle(只做混色的描边环) }`，位置即原设计位置（`Alignment.BottomEnd` + 原 `PRIMARY_FAB_BOTTOM_INSET_VP`），三个页面共用：
+- 表面：透明 `backgroundColor` + `backgroundBlurStyle(BlurStyle.Thin)`（可透视毛玻璃）+ `shadow(ShadowStyle.OUTER_DEFAULT_XS)`。**不再有写死的固定色 `border`**。
+- 描边：`Circle().width/height(PRIMARY_FAB_SIZE_VP - 1).fill(Color.Transparent).stroke('#66FFFFFF').strokeWidth(1).blendMode(BlendMode.DIFFERENCE, BlendApplyType.FAST).hitTestBehavior(HitTestMode.None)`——半透明白描边与下层画面差值混合，得到随**本地背景**变化的反色边缘；`strokeWidth` 1vp、描边居中，外沿与 Button 圆边对齐，不拦触摸、不遮 + 号。不要把它称作「光感已复刻」，也不要把它挂到 Button 主体或整个 Stack 上。
+- 按压：`stateEffect: false` + `.visualEffect(new hdsEffect.HdsEffectBuilder().pressShadow(...).buildEffect())`，按下 `BLEND_WHITE`、抬起/取消一起解除发光与底栏手势锁。
+- **不挂 `systemMaterial`**（内容流不在官方生效范围，真机 `Material inactive: out of scope`）；**不接 `hdsEffect.pointLight`**（native 拒收，见上文）。
+- 因此唯一仍缺的是原位置上的**沉浸材质跟手追光**，该项按未完成如实保留：普通毛玻璃、反色混色描边与 pressShadow 都是真实可用的普通能力，但都不等于沉浸光感，不得写成已补回；且圆环随背景变化、按压高光、以及整体观感均**未经真机目视确认**（`hdc list targets` 为空）。
+上面 `Stack + 独立描边层 + Button(ImmersiveMaterial)` 是 Issue #811 的旧方案，已被 #905 取代。作品页 / 工作区 / 星图列表三个页面的主操作「+」在 API 23+ 窄屏与宽屏**都**用这个内容流右下角 FAB，不再有任何 MiniBar 分支。
 
-**Issue #811 里建议的边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 未采纳**：本机 native 层拒收该调用（见上表），加上去只会每次刷一条 `Wrong argument type` 而没有光。
+**~~#905 复核更正（第二轮）~~：已撤销并回滚**。曾经把 API 23+ 窄屏的主操作「+」改由底部 `HdsTabs` MiniBar 承载（`isHdsMiniBarHostingPrimaryAction()` 互斥），该改造已被复核推翻——MiniBar 与页签栏同排，不是原右下角 FAB 的位置，为拿材质改位置属于偷换需求；`PrimaryActionChannel` / `miniBar` / `isHdsMiniBarHostingPrimaryAction()` 已从代码删除，三个页面恢复各自的内容流 `PrimaryFab`。`ui.primary_action_requested` 诊断事件（#906 引入）已迁到唯一真实点击入口 `PrimaryFab.handleClick()`（`origin=User`、`source=content_fab`，仅在未拖动且实际调用 `onTap` 时记录）。**未完成项保留**：原右下角独立 FAB 上的原生沉浸光感在公开 SDK 下仍无法实现（真机 `Material inactive: out of scope`；官方生效范围只有标题栏与合规底部 TabBar），不得用「搬到 MiniBar」或普通按钮宣称已补回。
+
+**边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 与第七轮的点光源接入均未采纳**：本机 native 层对 `pointLight` 一律回 `Wrong argument type. int32 expected.`（见上表与对应说明），加上去只会每次刷一条错误而没有光，还会连累同一 `.visualEffect` 里的 `pressShadow`。
 
 ## 菜单 / 气泡菜单（bindMenu）
 

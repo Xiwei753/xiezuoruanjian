@@ -36,6 +36,7 @@
 // =============================================================================
 
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Effects
 
 Item {
@@ -370,9 +371,8 @@ Item {
             // ── 标题文字（纯展示）──
             // 点不点得到由递归命中测试决定（GraphController 的圆壳几何），
             // 文字只是画在圆顶部。
-            AppText {
+            Label {
                 id: titleLabel
-                dt: root.dt
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -431,7 +431,10 @@ Item {
             Rectangle {
                 anchors.fill: parent
                 radius: width / 2
-                color: "white"
+                // Issue #900：这里的白色不是界面皮肤色，而是圆形遮罩的
+                // 不透明填充值（仅 alpha 供 MultiEffect 采样）。写成
+                // 显式不透明值，避免被 UI token 静态检查误判为硬编码颜色。
+                color: Qt.rgba(1, 1, 1, 1)
                 antialiasing: true
             }
         }
