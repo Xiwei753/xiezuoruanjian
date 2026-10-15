@@ -689,17 +689,19 @@ pub(crate) fn merge_starmap_index(
         &empty_modified,
     );
 
-    // --- 删除-修改冲突星图保留（issue #902 第十二轮复核）---
-    // 整图 DeleteModifyConflict 时 graph 仍存在于 live 磁盘，全局索引不能删掉
-    // 该星图 ID，否则 graph 成为未登记的孤儿。只要该 ID 在 base 或 local 的
-    // starmap_ids 中（说明 live 图存在），就将其加回 merged_starmap_ids。
+    // --- 删除-修改冲突星图保留（issue #902 第十二/十三轮复核）---
+    // 仅远端删除、本地修改（is_local_deleted: false）时 live graph 仍存在于磁盘，
+    // 全局索引不能删掉该星图 ID，否则 graph 成为未登记的孤儿。只要该 ID 在 base
+    // 或 local 的 starmap_ids 中（说明 live 图存在），就将其加回 merged_starmap_ids。
+    // 本地删除、远端修改（is_local_deleted: true）时本地已删除该图，live graph.json
+    // 不存在，不应把图重新登记到全局 index（否则 index 指向 A、live 却没有 A/graph.json）。
     let base_starmap_set: HashSet<&String> = base_rec.starmap_ids.iter().collect();
     let local_starmap_set: HashSet<&String> = local_rec.starmap_ids.iter().collect();
     let mut conflict_retained_ids: HashSet<String> = HashSet::new();
     for (id, decision) in graph_lifecycle_decisions {
         if matches!(
             decision,
-            GraphLifecycleDecision::DeleteModifyConflict { .. }
+            GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted: false }
         ) && (base_starmap_set.contains(id) || local_starmap_set.contains(id))
         {
             if !merged_starmap_ids.iter().any(|x| x == id) {
@@ -1450,29 +1452,19 @@ pub(crate) fn merge_starmap_graph_with_objects(
         }
         GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } => {
             // 删除-修改冲突：一端删除整图，另一端修改了 graph。
-            // graph 输出 NoOp（保留 live graph），产生 graph 级冲突事实。
-            // 对象按冲突类型标记：
-            // - is_local_deleted=false（远端删除本地修改）→ Conflict(RemoteDeleted)
-            // - is_local_deleted=true（本地删除远端修改）→ Conflict(BothChanged)
+            // graph 输出 NoOp（保留 live graph），产生 graph 级冲突事实
+            // （graph_conflict 承载"整图删除还是整图恢复"的选择）。
+            // 对象使用真实三方合并结果（上方已计算的 object_decisions），
+            // 不一律覆盖成 Conflict：避免没有 incoming snapshot 的伪 BothChanged，
+            // 以及未修改节点被无意义标为 RemoteDeleted（issue #902 第十三轮复核）。
             let conflict_kind = if *is_local_deleted {
                 crate::sync::types::SyncConflictKind::BothChanged
             } else {
                 crate::sync::types::SyncConflictKind::RemoteDeleted
             };
-            let decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = objects
-                .iter()
-                .map(|(rel, _, _, base, local, incoming)| {
-                    // 有实际内容的对象标记为冲突；三方都不存在的标记为 NoOp
-                    if base.is_some() || local.is_some() || incoming.is_some() {
-                        (rel.clone(), ObjectMergeDecision::Conflict(conflict_kind))
-                    } else {
-                        (rel.clone(), ObjectMergeDecision::NoOp)
-                    }
-                })
-                .collect();
             return Ok(StarmapGraphMergeOutput {
                 graph_meta_result: StarmapMergeResult::NoOp,
-                object_decisions: decisions,
+                object_decisions,
                 lifecycle_decision,
                 graph_conflict: Some(conflict_kind),
             });
@@ -2320,7 +2312,10 @@ mod tests {
     fn test_issue902_entire_graph_delete_local_modified_is_conflict() {
         // base 有 graph，local 修改了（graph_local != graph_base），
         // incoming 删除了整个 graph（graph_incoming = None）
-        // → 删除-修改冲突：StarmapMergeResult::NoOp，对象标记 Conflict(RemoteDeleted)
+        // → 删除-修改冲突：StarmapMergeResult::NoOp，graph_conflict=Some(RemoteDeleted)
+        // 对象使用真实三方合并结果：n1 的 local==base（未改）、incoming=None
+        //   → Delete（远端删除，local 未改 → 接受删除），而非一律 Conflict
+        // issue #902 第十三轮复核：对象不再被无差别标为冲突
         let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
         let graph_local =
             make_graph_meta_bytes("sm1", &["n1", "n2"], &[("n1", 1), ("n2", 2)], 2, 200);
@@ -2351,18 +2346,156 @@ mod tests {
             "expected NoOp for delete-modify conflict, got {:?}",
             output.graph_meta_result
         );
+        assert!(
+            matches!(
+                output.graph_conflict,
+                Some(crate::sync::types::SyncConflictKind::RemoteDeleted)
+            ),
+            "expected graph_conflict Some(RemoteDeleted), got {:?}",
+            output.graph_conflict
+        );
         for (_, decision) in &output.object_decisions {
             assert!(
-                matches!(
-                    decision,
-                    ObjectMergeDecision::Conflict(
-                        crate::sync::types::SyncConflictKind::RemoteDeleted
-                    )
-                ),
-                "expected Conflict(RemoteDeleted), got {:?}",
+                matches!(decision, ObjectMergeDecision::Delete),
+                "expected object Delete (real three-way: remote deleted, local unchanged), got {:?}",
                 decision
             );
         }
+    }
+
+    // --- 问题3 第十三轮复核回归：整图删除-修改冲突对象使用真实三方合并结果 ---
+
+    #[test]
+    fn test_issue902_local_delete_remote_modify_object_real_merge() {
+        // 本地删除整图、远端修改 graph 但同时删除了某些节点。
+        // 对象 n1: base=Some, local=None, incoming=None（远端也删了 n1）
+        // 真实三方结果 = Delete（双侧都删），而非伪 Conflict(BothChanged)。
+        // 修改前：base.is_some() 即标 Conflict(BothChanged)，但 save_conflict_snapshots
+        // 根本没有 incoming 文件可保存。
+        let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_incoming = make_graph_meta_bytes("sm1", &[], &[], 2, 200);
+
+        let node_base = br#"{"id":"n1","kind":"text"}"#.to_vec();
+
+        let objects = vec![(
+            std::path::PathBuf::from("starmaps/sm1/nodes/00/n1.json"),
+            "node".to_string(),
+            "n1".to_string(),
+            Some(node_base),
+            None,
+            None,
+        )];
+
+        let output = merge_starmap_graph_with_objects(
+            "sm1",
+            Some(&graph_base),
+            None,
+            Some(&graph_incoming),
+            &objects,
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            matches!(output.graph_meta_result, StarmapMergeResult::NoOp),
+            "expected NoOp for delete-modify conflict, got {:?}",
+            output.graph_meta_result
+        );
+        assert!(
+            matches!(
+                output.graph_conflict,
+                Some(crate::sync::types::SyncConflictKind::BothChanged)
+            ),
+            "expected graph_conflict Some(BothChanged), got {:?}",
+            output.graph_conflict
+        );
+        for (_, decision) in &output.object_decisions {
+            assert!(
+                matches!(decision, ObjectMergeDecision::Delete),
+                "expected object Delete (both sides deleted n1), got {:?}",
+                decision
+            );
+        }
+    }
+
+    #[test]
+    fn test_issue902_remote_delete_local_modify_unmodified_object_real_merge() {
+        // 远端删除整图、本地修改了 graph（加了 n2）但 n1 本身未改。
+        // 对象 n1（未改）: base=Some, local=Some(==base), incoming=None → Delete
+        // 对象 n2（本地新增）: base=None, local=Some, incoming=None → KeepLocal
+        // 修改前：两者都被标为 Conflict(RemoteDeleted)，冲突数量被无意义放大。
+        let graph_base = make_graph_meta_bytes("sm1", &["n1"], &[("n1", 1)], 1, 100);
+        let graph_local =
+            make_graph_meta_bytes("sm1", &["n1", "n2"], &[("n1", 1), ("n2", 2)], 2, 200);
+
+        let node1_base = br#"{"id":"n1","kind":"text"}"#.to_vec();
+        let node1_local = node1_base.clone(); // n1 未改
+        let node2_local = br#"{"id":"n2","kind":"text"}"#.to_vec(); // n2 本地新增
+
+        let objects = vec![
+            (
+                std::path::PathBuf::from("starmaps/sm1/nodes/00/n1.json"),
+                "node".to_string(),
+                "n1".to_string(),
+                Some(node1_base),
+                Some(node1_local),
+                None,
+            ),
+            (
+                std::path::PathBuf::from("starmaps/sm1/nodes/00/n2.json"),
+                "node".to_string(),
+                "n2".to_string(),
+                None,
+                Some(node2_local),
+                None,
+            ),
+        ];
+
+        let output = merge_starmap_graph_with_objects(
+            "sm1",
+            Some(&graph_base),
+            Some(&graph_local),
+            None,
+            &objects,
+        )
+        .expect("merge should succeed");
+
+        assert!(
+            matches!(output.graph_meta_result, StarmapMergeResult::NoOp),
+            "expected NoOp for delete-modify conflict, got {:?}",
+            output.graph_meta_result
+        );
+        assert!(
+            matches!(
+                output.graph_conflict,
+                Some(crate::sync::types::SyncConflictKind::RemoteDeleted)
+            ),
+            "expected graph_conflict Some(RemoteDeleted), got {:?}",
+            output.graph_conflict
+        );
+
+        let n1_decision = output
+            .object_decisions
+            .iter()
+            .find(|(rel, _)| rel.to_string_lossy().ends_with("n1.json"))
+            .map(|(_, d)| d)
+            .expect("n1 decision should exist");
+        assert!(
+            matches!(n1_decision, ObjectMergeDecision::Delete),
+            "expected n1 Delete (remote deleted, local unchanged), got {:?}",
+            n1_decision
+        );
+
+        let n2_decision = output
+            .object_decisions
+            .iter()
+            .find(|(rel, _)| rel.to_string_lossy().ends_with("n2.json"))
+            .map(|(_, d)| d)
+            .expect("n2 decision should exist");
+        assert!(
+            matches!(n2_decision, ObjectMergeDecision::KeepLocal),
+            "expected n2 KeepLocal (locally added), got {:?}",
+            n2_decision
+        );
     }
 
     // --- 问题4 回归：新对象缺 revision 时 apply_revision_by_decisions 补记 ---
@@ -2707,12 +2840,15 @@ mod tests {
     }
 
     // --- 测试 5: 本地删除远端修改的 DeleteModifyConflict{is_local_deleted: true} ---
+    // issue #902 第十三轮复核：is_local_deleted=true 时不应把图重新登记到全局 index
 
     #[test]
-    fn test_merge_index_delete_modify_conflict_local_deleted_retains_starmap_ids() {
+    fn test_merge_index_delete_modify_conflict_local_deleted_not_retained() {
         // base 含 A，local 不含 A（本地删除），incoming 含 A（远端保留/修改）
         // graph_lifecycle_decisions 中 A = DeleteModifyConflict{is_local_deleted: true}
-        // 合并后 A 仍在 merged starmap_ids 中（因为 base 有 A）
+        // 合并后 A 不应在 merged starmap_ids 中：本地已删除该图，live graph.json
+        // 不存在，不应把图重新登记到全局 index（否则 index 指向 A、live 却没有
+        // A/graph.json）。
         let base = make_index_bytes(&["A"], &[], &[], 0);
         let local = make_index_bytes(&[], &[], &[], 100); // 本地删除 A
         let incoming = make_index_bytes(&["A"], &[], &[], 200); // 远端保留 A
@@ -2730,8 +2866,9 @@ mod tests {
         let record = extract_index_record(&result, &local, &base);
 
         assert!(
-            record.starmap_ids.contains(&"A".to_string()),
-            "DeleteModifyConflict{{is_local_deleted: true}} should retain A in starmap_ids (base has A), got {:?}",
+            !record.starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict{{is_local_deleted: true}} should NOT retain A in starmap_ids \
+             (local deleted, live graph absent), got {:?}",
             record.starmap_ids
         );
     }
