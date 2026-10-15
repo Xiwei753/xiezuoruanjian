@@ -69,24 +69,31 @@ pub(crate) struct VisualSlice {
 /// `byte_range` 仅用于连续编辑重定向时轻量片段关联，不是逐字身份。
 #[derive(Clone, Debug)]
 pub(crate) enum SliceMotion {
-    /// 新字逐渐露出（输入/粘贴）。可见宽度 = `start_visible + (rect.w - start_visible) * p`。
+    /// 新字逐渐露出（输入/粘贴）。
     ///
-    /// `start_visible` 用于连续输入重定向：上一笔吐到一半时，本笔从已露出宽度继续。
+    /// `start_clip` 是动画起点的原始 mask clip（viewport 裁剪前）：progress=0 时
+    /// 可见宽度 = `start_clip.w`，progress=1 时扩到 `new.rect` 满宽。连续输入重定向
+    /// 时 `start_clip` 取自上一帧 `DrawnSlice.mask_clip`，位置/宽度都继承，不从
+    /// `new.rect` 边界重新造遮罩。
     Reveal {
         new: VisualSlice,
         direction: ClipDirection,
-        start_visible: f64,
+        start_clip: LocalRect,
         byte_range: (usize, usize),
         /// 本片段的 shaping 指纹（new 版），用于连续编辑接续时确认同一份字形。
         shaping_identity: ShapingIdentity,
     },
-    /// 旧字逐渐被覆盖（删除）。可见宽度 = `start_visible * (1-p)`。
+    /// 旧字逐渐被覆盖（删除）。
     ///
-    /// `start_visible` 用于连续删除重定向：上一笔吞到一半时，本笔从当前剩余宽度继续。
+    /// `start_clip` 是动画起点的原始 mask clip（viewport 裁剪前）：progress=0 时
+    /// 可见宽度 = `start_clip.w`，progress=1 时缩到 0。连续删除重定向时 `start_clip`
+    /// 取自上一帧 `DrawnSlice.mask_clip`，裁剪起止位置继承，不从 `old.rect` 边界
+    /// 重新造遮罩——已有 clip 被视口/上一动画局部裁过时，下笔不会把可见部分移到
+    /// 旧矩形另一边。
     Conceal {
         old: VisualSlice,
         direction: ClipDirection,
-        start_visible: f64,
+        start_clip: LocalRect,
         byte_range: (usize, usize),
         /// 本片段的 shaping 指纹（old 版），用于连续编辑接续时确认同一份字形。
         shaping_identity: ShapingIdentity,
@@ -198,10 +205,16 @@ impl SliceMotion {
 #[derive(Clone, Debug)]
 pub(crate) struct DrawnSlice {
     pub slice: VisualSlice,
-    /// 当前可见宽度（裁剪后）。
+    /// 当前可见宽度（视口裁剪后，用于判断旧图是否仍在途）。
     pub visible_width: f64,
-    /// 本帧有效裁剪矩形（文档坐标 x/y/w/h）。
+    /// 本帧有效裁剪矩形（视口裁剪后，文档坐标 x/y/w/h）。
     pub clip_rect: LocalRect,
+    /// Issue #919 复核 5：`sample()` 产生的原始 mask clip（视口裁剪前）。
+    ///
+    /// 下一笔接续时用它的左右边界和宽度作为动画起点，而不是仅用 `visible_width`
+    /// 从源矩形边界重新造遮罩。视口/上一动画局部裁过时，`clip_rect` 的位置与
+    /// `mask_clip` 不同；只用 `visible_width` 会让下笔把可见部分移到旧矩形另一边。
+    pub mask_clip: LocalRect,
     /// 运动类别（用于连续编辑重定向时判断如何接续）。
     pub motion_kind: MotionKind,
     /// 所属字节范围（用于连续编辑时轻量片段关联）。
@@ -366,6 +379,11 @@ impl TextMotion {
 
         let mut slices: Vec<SliceMotion> = Vec::new();
         let mut consumed_old: Vec<bool> = vec![false; old_spans.len()];
+        // Issue #919 复核 5：已被本计划 Conceal 接管的旧视觉源（snapshot_id + source_uv）。
+        // 第一遍为替换旧字退场加的 Conceal 和第二遍为本轮被替换旧字加的 Conceal 不能
+        // 对同一旧视觉源各加一份——否则"甲"吐到一半被"乙"替换时，半个"甲"退场一次、
+        // 完整"甲"又退场一次，旧字瞬间补全、两张旧纹理覆盖，产生闪字/重影。
+        let mut claimed_conceal_sources: Vec<SnapshotRef> = Vec::new();
 
         // 第一遍：对每个新片段分类 Reveal / Shift。
         for new_span in &new_spans {
@@ -378,36 +396,40 @@ impl TextMotion {
                 // Issue #919 复核 3：新插入的字从 last_drawn 查找同 byte_range 的
                 // 未完成 Reveal。必须核对 shaping_identity：相同字形才继承已露宽度
                 // （连续输入同一位置继续吐）；不同字形说明是替换/输入法换字，旧图退场
-                // （Conceal 沿用原方向从当前可见宽度继续吞到 0）+ 新图从零露出。
+                // （Conceal 沿用原方向从当前 mask clip 继续吞到 0）+ 新图从零露出。
                 // byte_range 只做候选定位，不单独作为接续判据。
+                // 复核 5：start_clip 取自上一帧 mask_clip（视口裁剪前的原始动画遮罩），
+                // 不只用 visible_width 从源矩形边界重新造遮罩。
                 let last_reveal = last_drawn_map
                     .get(&new_span.byte_range)
                     .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal));
-                let start_visible = match last_reveal {
+                let start_clip = match last_reveal {
                     Some(ds)
                         if ds.shaping_identity
                             .is_same_shaping(&new_span.shaping_identity) =>
                     {
-                        // 同一字形：连续输入同一位置，从已露出宽度继续吐。
-                        ds.visible_width
+                        // 同一字形：连续输入同一位置，从上一帧 mask clip 继续吐。
+                        ds.mask_clip
                     }
                     Some(ds) if ds.visible_width > 0.01 => {
                         // 不同字形但旧图仍在途：旧图退场 + 新图从零露出。
+                        // 登记此旧视觉源已由 Conceal 接管，第二遍不再为同一源加 Conceal。
+                        claimed_conceal_sources.push(ds.slice.source);
                         slices.push(SliceMotion::Conceal {
                             old: ds.slice,
                             direction: ds.direction,
-                            start_visible: ds.visible_width,
+                            start_clip: ds.mask_clip,
                             byte_range: ds.byte_range,
                             shaping_identity: ds.shaping_identity.clone(),
                         });
-                        0.0
+                        mask_rect(&new_span.slice.rect, ClipDirection::LeftToRight, 0.0)
                     }
-                    _ => 0.0,
+                    _ => mask_rect(&new_span.slice.rect, ClipDirection::LeftToRight, 0.0),
                 };
                 slices.push(SliceMotion::Reveal {
                     new: new_span.slice,
                     direction: ClipDirection::LeftToRight,
-                    start_visible,
+                    start_clip,
                     byte_range: new_span.byte_range,
                     shaping_identity: new_span.shaping_identity.clone(),
                 });
@@ -440,7 +462,7 @@ impl TextMotion {
                     slices.push(SliceMotion::Reveal {
                         new: new_span.slice,
                         direction: ClipDirection::LeftToRight,
-                        start_visible: last.visible_width,
+                        start_clip: last.mask_clip,
                         byte_range: new_span.byte_range,
                         shaping_identity: new_span.shaping_identity.clone(),
                     });
@@ -476,17 +498,22 @@ impl TextMotion {
                             });
                         }
                     } else {
+                        claimed_conceal_sources.push(old_span.slice.source);
                         slices.push(SliceMotion::Conceal {
                             old: old_span.slice,
                             direction,
-                            start_visible: old_span.slice.rect.w,
+                            start_clip: old_span.slice.rect,
                             byte_range: old_span.byte_range,
                             shaping_identity: old_span.shaping_identity.clone(),
                         });
                         slices.push(SliceMotion::Reveal {
                             new: new_span.slice,
                             direction: ClipDirection::LeftToRight,
-                            start_visible: 0.0,
+                            start_clip: mask_rect(
+                                &new_span.slice.rect,
+                                ClipDirection::LeftToRight,
+                                0.0,
+                            ),
                             byte_range: new_span.byte_range,
                             shaping_identity: new_span.shaping_identity.clone(),
                         });
@@ -514,17 +541,22 @@ impl TextMotion {
                         .shaping_identity
                         .is_same_shaping(&new_span.shaping_identity)
                     {
+                        claimed_conceal_sources.push(old_span.slice.source);
                         slices.push(SliceMotion::Conceal {
                             old: old_span.slice,
                             direction,
-                            start_visible: old_span.slice.rect.w,
+                            start_clip: old_span.slice.rect,
                             byte_range: old_span.byte_range,
                             shaping_identity: old_span.shaping_identity.clone(),
                         });
                         slices.push(SliceMotion::Reveal {
                             new: new_span.slice,
                             direction: ClipDirection::LeftToRight,
-                            start_visible: 0.0,
+                            start_clip: mask_rect(
+                                &new_span.slice.rect,
+                                ClipDirection::LeftToRight,
+                                0.0,
+                            ),
                             byte_range: new_span.byte_range,
                             shaping_identity: new_span.shaping_identity.clone(),
                         });
@@ -545,7 +577,11 @@ impl TextMotion {
                     slices.push(SliceMotion::Reveal {
                         new: new_span.slice,
                         direction: ClipDirection::LeftToRight,
-                        start_visible: 0.0,
+                        start_clip: mask_rect(
+                            &new_span.slice.rect,
+                            ClipDirection::LeftToRight,
+                            0.0,
+                        ),
                         byte_range: new_span.byte_range,
                         shaping_identity: new_span.shaping_identity.clone(),
                     });
@@ -554,10 +590,14 @@ impl TextMotion {
         }
 
         // 第二遍：未被消费且被真正替换/删除的旧片段 → Conceal。
+        // Issue #919 复核 5：已被第一遍 Conceal 接管的旧视觉源（claimed_conceal_sources）
+        // 不再重复加 Conceal——同一旧图只退场一次，避免"甲"吐到一半被"乙"替换时
+        // 上一帧半个"甲"退场一次、当前旧布局完整"甲"又退场一次的双 Conceal。
         for (idx, old_span) in old_spans.iter().enumerate() {
             if consumed_old[idx]
                 || moved_paragraphs.contains(&old_span.paragraph_id)
                 || !replaced_in_patch(edit, old_span.byte_range)
+                || claimed_conceal_sources.contains(&old_span.slice.source)
             {
                 continue;
             }
@@ -566,6 +606,8 @@ impl TextMotion {
             // 否则从自身完整旧图开始吞。不用 byte_range 单独作为接续判据：
             // 同位置但不同旧图（如上一笔删的字和本轮删的字碰巧同 byte_range）
             // 不能互相继承遮罩宽度。
+            // 复核 5：start_clip 取自上一帧 mask_clip（视口裁剪前的原始动画遮罩），
+            // 继承裁剪起止位置，不只继承 visible_width。
             let inherited = last_drawn
                 .filter(|f| f.session == session)
                 .and_then(|frame| {
@@ -574,14 +616,14 @@ impl TextMotion {
                             && ds.slice.source == old_span.slice.source
                     })
                 });
-            let (start_visible, conceal_direction) = match inherited {
-                Some(ds) => (ds.visible_width, ds.direction),
-                None => (old_span.slice.rect.w, direction),
+            let (start_clip, conceal_direction) = match inherited {
+                Some(ds) => (ds.mask_clip, ds.direction),
+                None => (old_span.slice.rect, direction),
             };
             slices.push(SliceMotion::Conceal {
                 old: old_span.slice,
                 direction: conceal_direction,
-                start_visible,
+                start_clip,
                 byte_range: old_span.byte_range,
                 shaping_identity: old_span.shaping_identity.clone(),
             });
@@ -614,7 +656,7 @@ impl TextMotion {
                 slices.push(SliceMotion::Conceal {
                     old: ds.slice,
                     direction: ds.direction,
-                    start_visible: ds.visible_width,
+                    start_clip: ds.mask_clip,
                     byte_range: ds.byte_range,
                     shaping_identity: ds.shaping_identity.clone(),
                 });
@@ -696,28 +738,36 @@ impl TextMotion {
 
         let mut overlays = Vec::with_capacity(self.slices.len());
         for motion in &self.slices {
-            let (target_rect, source_uv, clip_rect) = match motion {
+            // Issue #919 复核 5：mask_clip 是 sample() 产生的原始动画遮罩（视口裁剪前），
+            // 传给 TextAnimationGlyphInfo → DrawnSlice，供下一笔接续时继承裁剪起止位置，
+            // 不只用视口裁剪后的 visible_width 从源矩形边界重新造遮罩。
+            let (target_rect, source_uv, clip_rect, mask_clip) = match motion {
                 SliceMotion::Reveal {
                     new,
                     direction,
-                    start_visible,
+                    start_clip,
                     ..
                 } => {
-                    // Issue #919 复核 1：从 start_visible 继续吐到满宽。
-                    let visible = start_visible + (new.rect.w - start_visible) * progress;
+                    // Issue #919 复核 5：从 start_clip 继续吐到满宽。
+                    // Reveal 的位置用 new.rect 边界（新字从新位置露出），
+                    // start_clip 只提供起始宽度（连续输入继承上一帧已露宽度）。
+                    let visible = start_clip.w + (new.rect.w - start_clip.w) * progress;
                     let clip = mask_rect(&new.rect, *direction, visible);
-                    (new.rect, new.source.source_uv, clip)
+                    (new.rect, new.source.source_uv, clip, clip)
                 }
                 SliceMotion::Conceal {
                     old,
                     direction,
-                    start_visible,
+                    start_clip,
                     ..
                 } => {
-                    // Issue #919 复核 1：从 start_visible 继续吞到 0。
-                    let visible = start_visible * (1.0 - progress);
-                    let clip = mask_rect(&old.rect, *direction, visible);
-                    (old.rect, old.source.source_uv, clip)
+                    // Issue #919 复核 5：从 start_clip 继续吞到 0。
+                    // Conceal 的位置由 start_clip 决定，不从 old.rect 边界重新造遮罩——
+                    // 已有 clip 被视口/上一动画局部裁过时，下笔不会把可见部分移到
+                    // 旧矩形另一边（右向左删除、换行边界不再跳变）。
+                    let visible = start_clip.w * (1.0 - progress);
+                    let clip = conceal_clip(start_clip, *direction, visible);
+                    (old.rect, old.source.source_uv, clip, clip)
                 }
                 SliceMotion::Shift { new, from, to, .. } => {
                     // Issue #919 复核 3：只插值位置，宽高使用 new 版固定目标尺寸，
@@ -729,13 +779,13 @@ impl TextMotion {
                         h: new.rect.h,
                     };
                     // Shift 不裁剪宽度，只位移：clip = 完整当前 rect。
-                    (rect, new.source.source_uv, rect)
+                    (rect, new.source.source_uv, rect, rect)
                 }
             };
 
             // 与视口求交；完全离开视口的片段本帧不画（已是 0 面积）。
             let clip = intersect_rect(&clip_rect, &self.viewport);
-            overlays.push(glyph_info(motion, target_rect, source_uv, clip));
+            overlays.push(glyph_info(motion, target_rect, source_uv, clip, mask_clip));
         }
 
         TextMotionFrame {
@@ -1044,6 +1094,7 @@ fn glyph_info(
     target_rect: LocalRect,
     source_uv: LocalRect,
     clip_rect: LocalRect,
+    mask_clip: LocalRect,
 ) -> TextAnimationGlyphInfo {
     TextAnimationGlyphInfo {
         x: target_rect.x,
@@ -1054,6 +1105,7 @@ fn glyph_info(
         snapshot_id: motion.source_snapshot_id(),
         source_rect: source_uv,
         clip_rect,
+        mask_clip,
         motion_kind: motion.motion_kind(),
         byte_range: motion.byte_range(),
         shaping_identity: motion.shaping_identity().clone(),
@@ -1075,6 +1127,29 @@ fn mask_rect(at: &LocalRect, direction: ClipDirection, visible: f64) -> LocalRec
             y: at.y,
             w: visible,
             h: at.h,
+        },
+    }
+}
+
+/// Issue #919 复核 5：Conceal 的裁剪矩形从 `start_clip`（上一帧原始 mask clip）
+/// 缩到 0 宽度，位置由 `start_clip` 决定，不从源矩形边界重新造遮罩。
+///
+/// - `LeftToRight`：左边固定在 `start_clip.x`，右边向左缩到 0。
+/// - `RightToLeft`：右边固定在 `start_clip.x + start_clip.w`，左边向右缩到 0。
+fn conceal_clip(start_clip: &LocalRect, direction: ClipDirection, visible: f64) -> LocalRect {
+    let visible = visible.clamp(0.0, start_clip.w);
+    match direction {
+        ClipDirection::LeftToRight => LocalRect {
+            x: start_clip.x,
+            y: start_clip.y,
+            w: visible,
+            h: start_clip.h,
+        },
+        ClipDirection::RightToLeft => LocalRect {
+            x: start_clip.x + (start_clip.w - visible),
+            y: start_clip.y,
+            w: visible,
+            h: start_clip.h,
         },
     }
 }

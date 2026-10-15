@@ -702,6 +702,9 @@ fn prepare_text_animation_layer(
                 w: iw,
                 h: ih,
             },
+            // Issue #919 复核 5：保存 sample() 产生的原始 mask clip（视口裁剪前），
+            // 供下一笔接续时继承裁剪起止位置，不只继承视口裁剪后的 visible_width。
+            mask_clip: glyph.mask_clip,
             motion_kind: glyph.motion_kind,
             byte_range: glyph.byte_range,
             shaping_identity: glyph.shaping_identity.clone(),

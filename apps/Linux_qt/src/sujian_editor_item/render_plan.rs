@@ -25,6 +25,13 @@ pub(crate) struct TextAnimationGlyphInfo {
     /// 按同一个 `progress` 更新（吐字/吞字据此推进），与静态层孔洞是两个概念：
     /// 静态孔洞覆盖目标字形完整范围（与 progress 无关），动态 clip 随 progress 变化。
     pub clip_rect: SourceRect,
+    /// Issue #919 复核 5：`sample()` 产生的原始动画遮罩（视口裁剪前）。
+    ///
+    /// `scene_graph_renderer` 用 `clip_rect`（视口裁剪后）做最终可见裁剪，用
+    /// `mask_clip` 回执给 `DrawnSlice`，供下一笔接续时继承裁剪起止位置。两者分开
+    /// 保存：视口/上一动画局部裁过时 `clip_rect` 的位置与 `mask_clip` 不同，只用
+    /// `clip_rect` 的宽度从源矩形边界重新造遮罩会把可见部分移到旧矩形另一边。
+    pub mask_clip: SourceRect,
     /// Issue #919 复核 1：运动类别，供 `DrawnSlice` 记录本帧实际显示的运动类型。
     pub motion_kind: MotionKind,
     /// Issue #919 复核 1：所属字节范围，供连续编辑重定向时轻量片段关联。
