@@ -522,7 +522,38 @@ impl StagingRun {
                             &meta_base,
                             &meta_local,
                             &meta_incoming,
-                        );
+                            false, // graph_local_exists
+                            false, // graph_incoming_exists
+                            live_root,
+                            &staging_root,
+                            &live_device_id,
+                            &live_tombstones,
+                            &staging_manifest,
+                        )?;
+
+                        // issue #902 第十九轮复核问题1a：
+                        // meta-only 空星图的 DeleteModifyConflict 产生 StagingConflict，
+                        // 否则用户看不到冲突。
+                        if let crate::sync::staging::starmap_merge::GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted } = &lifecycle_decision {
+                            // is_local_deleted=true：本地删除远端修改 → BothChanged
+                            //   （用户选远端 = 恢复远端 meta）
+                            // is_local_deleted=false：远端删除本地修改 → RemoteDeleted
+                            //   （用户选远端 = 接受删除）
+                            let kind = if *is_local_deleted {
+                                crate::sync::types::SyncConflictKind::BothChanged
+                            } else {
+                                crate::sync::types::SyncConflictKind::RemoteDeleted
+                            };
+                            plan.conflict.push(StagingConflict {
+                                rel_path: mr.clone(),
+                                base_hash: md5_hex(&meta_base),
+                                local_hash: md5_hex(&meta_local),
+                                incoming_hash: md5_hex(&meta_incoming),
+                                kind,
+                                remote_snapshot_path: None,
+                                remote_graph_snapshot_dir: None,
+                            });
+                        }
                     }
                     continue;
                 }
@@ -679,7 +710,14 @@ impl StagingRun {
                     &meta_base,
                     &meta_local,
                     &meta_incoming,
-                );
+                    graph_local.is_some(),
+                    graph_incoming.is_some(),
+                    live_root,
+                    &staging_root,
+                    &live_device_id,
+                    &live_tombstones,
+                    &staging_manifest,
+                )?;
             }
         }
 
@@ -782,6 +820,17 @@ impl Drop for StagingRun {
 /// **问题3**：DeleteModifyConflict 时 meta 也必须 NoOp/KeepLocal，
 /// 不提前写入 meta_incoming，和 graph、对象、index 维持同一未决状态。
 /// 用户选择采用远端时再从已保存的 meta 快照连同 graph、成员对象和 index 一起写入。
+///
+/// **issue #902 第十九轮复核**：
+/// - 问题2：Normal 分支不得在 graph 仍存在时单独删除 meta
+///   （index 登记的有效实体必须存在 meta）。
+/// - 问题3：Normal 分支双方都改时复用现有 LWW resolver，
+///   不再无条件 KeepLocal 丢失 LWW 语义。
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::excessive_nesting
+)]
 fn apply_meta_lifecycle_decision(
     plan: &mut CommitPlan,
     lifecycle_decision: &crate::sync::staging::starmap_merge::GraphLifecycleDecision,
@@ -789,8 +838,19 @@ fn apply_meta_lifecycle_decision(
     meta_base: &Option<Vec<u8>>,
     meta_local: &Option<Vec<u8>>,
     meta_incoming: &Option<Vec<u8>>,
-) {
+    graph_local_exists: bool,
+    graph_incoming_exists: bool,
+    live_root: &Path,
+    staging_root: &Path,
+    live_device_id: &str,
+    live_tombstones: &[crate::sync::types::Tombstone],
+    staging_manifest: &std::collections::HashMap<
+        String,
+        crate::sync::staging::resolve::ManifestRecord,
+    >,
+) -> Result<()> {
     use crate::sync::staging::starmap_merge::GraphLifecycleDecision;
+    let graph_still_exists = graph_local_exists || graph_incoming_exists;
     match lifecycle_decision {
         // 整图删除 → meta 也删除
         GraphLifecycleDecision::Delete => {
@@ -816,6 +876,16 @@ fn apply_meta_lifecycle_decision(
                         content,
                     });
                 } else {
+                    // 要发 Delete(meta)，检查 graph 存在性
+                    // （issue #902 第十九轮复核问题2）。
+                    // graph 仍存在但 meta 将被删除会导致 index 指向不存在的 meta。
+                    if graph_still_exists {
+                        return Err(crate::error::Error::Other(format!(
+                            "apply_meta_lifecycle_decision: graph 仍存在但 meta 将被删除 ({})，\
+                             index 登记的有效实体必须存在 meta；远端缺 meta 而 graph 仍存在是不一致数据",
+                            meta_rel.display()
+                        )));
+                    }
                     plan.content_actions.push(CommitAction::Delete {
                         rel_path: meta_rel.to_path_buf(),
                     });
@@ -823,17 +893,84 @@ fn apply_meta_lifecycle_decision(
             } else if m_local_eq_incoming {
                 plan.noop.push(meta_rel.to_path_buf());
             } else {
-                // 双方都改 → 保持 local（meta 不独立走 LWW 删除，
-                // 服从整图存在性）
-                if meta_local.is_some() {
-                    plan.keep_local.push(meta_rel.to_path_buf());
-                } else if let Some(content) = meta_incoming.clone() {
-                    plan.content_actions.push(CommitAction::Apply {
-                        rel_path: meta_rel.to_path_buf(),
-                        content,
-                    });
+                // 双方都改 → 复用现有 LWW resolver
+                // （issue #902 第十九轮复核问题3）。
+                // 不能悄悄将既有同步语义改为 local-wins。
+                use crate::sync::content_class::{resolve_lww, LwwRecord, LwwWinner};
+
+                let local_rec = build_local_lww_record(
+                    live_root,
+                    meta_rel,
+                    meta_local,
+                    live_device_id,
+                    live_tombstones,
+                );
+                let Some(local_rec) = local_rec else {
+                    // 本地 delete 无 tombstone → 保留本地
+                    if meta_local.is_some() {
+                        plan.keep_local.push(meta_rel.to_path_buf());
+                    } else if let Some(content) = meta_incoming.clone() {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: meta_rel.to_path_buf(),
+                            content,
+                        });
+                    } else {
+                        plan.noop.push(meta_rel.to_path_buf());
+                    }
+                    return Ok(());
+                };
+                let meta_rel_str = meta_rel.to_string_lossy().to_string();
+                let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&meta_rel_str) {
+                    build_remote_lww_record_from_manifest(manifest_rec, meta_incoming)
                 } else {
-                    plan.noop.push(meta_rel.to_path_buf());
+                    build_local_lww_record(staging_root, meta_rel, meta_incoming, "remote", &[])
+                        .unwrap_or_else(|| LwwRecord {
+                            content_hash: String::new(),
+                            updated_at_ms: 0,
+                            deleted_at_ms: Some(0),
+                            device_id: "remote".to_string(),
+                            op: "delete".to_string(),
+                        })
+                };
+                match resolve_lww(&local_rec, &remote_rec) {
+                    LwwWinner::Remote => {
+                        if let Some(content) = meta_incoming.clone() {
+                            plan.content_actions.push(CommitAction::Apply {
+                                rel_path: meta_rel.to_path_buf(),
+                                content,
+                            });
+                        } else {
+                            // 远端胜出且远端删除 meta
+                            if graph_still_exists {
+                                return Err(crate::error::Error::Other(format!(
+                                    "apply_meta_lifecycle_decision: LWW 远端胜出且远端删除 meta，但 graph 仍存在 ({})",
+                                    meta_rel.display()
+                                )));
+                            }
+                            plan.content_actions.push(CommitAction::Delete {
+                                rel_path: meta_rel.to_path_buf(),
+                            });
+                        }
+                    }
+                    LwwWinner::Local => {
+                        if meta_local.is_some() {
+                            plan.keep_local.push(meta_rel.to_path_buf());
+                        } else {
+                            // 本地删除 meta
+                            if graph_still_exists {
+                                // 本地删除 meta 但 graph 仍存在 → 不一致，但不阻止本地状态
+                                // 保持 NoOp，不删 meta
+                                plan.noop.push(meta_rel.to_path_buf());
+                            } else {
+                                plan.content_actions.push(CommitAction::Delete {
+                                    rel_path: meta_rel.to_path_buf(),
+                                });
+                            }
+                        }
+                    }
+                    LwwWinner::Tie => {
+                        plan.noop.push(meta_rel.to_path_buf());
+                    }
                 }
             }
         }
@@ -850,6 +987,7 @@ fn apply_meta_lifecycle_decision(
             }
         }
     }
+    Ok(())
 }
 
 /// 递归列出 live root 下所有需要参与同步的文件相对路径。

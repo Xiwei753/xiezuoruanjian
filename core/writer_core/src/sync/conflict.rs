@@ -668,6 +668,12 @@ impl crate::sync::SyncService {
             return Self::decide_take_remote_starmap_graph(sync_root, path, state, &conflict);
         }
 
+        // meta-only 星图冲突：路由到 meta 锚点冲突解决
+        // （issue #902 第十九轮复核问题1c）。
+        if crate::sync::staging::starmap_merge::is_starmap_meta_path(path) {
+            return Self::decide_take_remote_starmap_meta(sync_root, path, state, &conflict);
+        }
+
         match conflict.kind {
             SyncConflictKind::RemoteDeleted => {
                 // 星图对象文件：路由到领域级删除事务
@@ -1302,6 +1308,21 @@ impl crate::sync::SyncService {
         }
     }
 
+    /// 从 meta.json 路径解析 starmap_id（issue #902 第十九轮复核问题1c）。
+    ///
+    /// `path` 格式：`starmaps/<id>.meta.json`。返回 `None` 如果格式不匹配。
+    fn parse_starmap_id_from_meta_path(path: &str) -> Option<String> {
+        let normalized = path.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        if parts.len() == 2 && parts[0] == "starmaps" && parts[1].ends_with(".meta.json") {
+            let id = &parts[1][..parts[1].len() - ".meta.json".len()];
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+        None
+    }
+
     /// 构造星图对象文件的相对路径。
     fn starmap_object_rel(starmap_id: &str, type_dir: &str, object_id: &str) -> String {
         use crate::starmap::package_storage::bucket_for_id;
@@ -1903,6 +1924,115 @@ impl crate::sync::SyncService {
         Ok(())
     }
 
+    /// meta-only 星图远端删除事务（issue #902 第十九轮复核问题1c）。
+    ///
+    /// meta.json 的 RemoteDeleted 冲突（远端删除本地修改，用户选远端 = 接受删除）。
+    /// 删除 meta.json + 更新 index.json（移除该星图 ID）。不删 graph（graph 不存在）。
+    fn apply_starmap_meta_remote_delete(
+        sync_root: &Path,
+        path: &str,
+    ) -> crate::Result<Vec<String>> {
+        let Some(starmap_id) = Self::parse_starmap_id_from_meta_path(path) else {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_meta_remote_delete: 非法 meta.json 路径 '{}'",
+                path
+            )));
+        };
+
+        let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+        let index_bytes = Self::load_index_and_remove_starmap(sync_root, &starmap_id)?;
+
+        let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
+        txn.add_delete(&meta_rel);
+        txn.add_bytes("starmaps/index.json", &index_bytes)
+            .map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_meta_remote_delete: 暂存 index.json 失败: {}",
+                    e
+                ))
+            })?;
+        txn.commit().map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_delete: 提交事务失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        Ok(vec![meta_rel])
+    }
+
+    /// meta-only 星图远端修改恢复事务（issue #902 第十九轮复核问题1c）。
+    ///
+    /// meta.json 的 BothChanged 冲突（本地删除远端修改，用户选远端 = 恢复远端 meta）。
+    /// 1. 从 conflict.remote_snapshot_path 读取远端 meta.json
+    /// 2. 从 conflict.remote_graph_snapshot_dir 读取 index 身份事实
+    /// 3. SaveTransaction 原子提交：写入 meta.json + 更新 index.json
+    ///
+    /// 不恢复 graph（graph 不存在）。
+    fn apply_starmap_meta_remote_modify(
+        sync_root: &Path,
+        path: &str,
+        conflict: &SyncConflict,
+    ) -> crate::Result<()> {
+        let Some(starmap_id) = Self::parse_starmap_id_from_meta_path(path) else {
+            return Err(crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 非法 meta.json 路径 '{}'",
+                path
+            )));
+        };
+
+        let meta_rel = format!("starmaps/{}.meta.json", starmap_id);
+
+        // 从 remote_snapshot_path 读取远端 meta.json
+        let snapshot_rel = conflict.remote_snapshot_path.as_ref().ok_or_else(|| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 缺少 remote_snapshot_path (meta '{}')",
+                starmap_id
+            ))
+        })?;
+        let meta_bytes = std::fs::read(sync_root.join(snapshot_rel)).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 读取远端 meta snapshot 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        // 读取 index 身份事实
+        let snapshot_dir_rel = conflict.remote_graph_snapshot_dir.as_ref().ok_or_else(|| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 缺少 remote_graph_snapshot_dir (meta '{}')",
+                starmap_id
+            ))
+        })?;
+        let identity_facts = Self::load_starmap_identity_facts(sync_root, snapshot_dir_rel);
+        let index_bytes =
+            Self::load_index_and_ensure_starmap(sync_root, &starmap_id, identity_facts.as_ref())?;
+
+        // SaveTransaction 原子提交
+        let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
+        txn.add_bytes(&meta_rel, &meta_bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 暂存 meta.json 失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+        txn.add_bytes("starmaps/index.json", &index_bytes)
+            .map_err(|e| {
+                crate::Error::Other(format!(
+                    "apply_starmap_meta_remote_modify: 暂存 index.json 失败: {}",
+                    e
+                ))
+            })?;
+        txn.commit().map_err(|e| {
+            crate::Error::Other(format!(
+                "apply_starmap_meta_remote_modify: 提交事务失败 ({}): {}",
+                starmap_id, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
     /// 从快照目录读取远端 meta.json（issue #902 第十六轮复核）。
     ///
     /// issue #902 第十七轮复核问题4：快照不存在时返回 `Err` 而非 `Ok(None)`。
@@ -2019,6 +2149,39 @@ impl crate::sync::SyncService {
                 if let Some(starmap_id) = Self::parse_starmap_id_from_graph_path(path) {
                     Self::cleanup_starmap_known_files(state, &starmap_id);
                     // issue #902 第十六轮复核：清理已恢复文件的旧 tombstone。
+                    Self::cleanup_starmap_tombstones(state, &starmap_id);
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// meta-only 星图冲突的路由（issue #902 第十九轮复核问题1c）。
+    ///
+    /// meta-only 星图（无 graph.json）的冲突以 meta.json 为锚点。
+    /// - RemoteDeleted：远端删除整图，用户选远端 = 接受删除 →
+    ///   [`apply_starmap_meta_remote_delete`]
+    /// - BothChanged：本地删除远端修改，用户选远端 = 恢复远端 meta →
+    ///   [`apply_starmap_meta_remote_modify`]
+    fn decide_take_remote_starmap_meta(
+        sync_root: &Path,
+        path: &str,
+        state: &mut crate::sync::types::SyncState,
+        conflict: &SyncConflict,
+    ) -> crate::Result<bool> {
+        match conflict.kind {
+            SyncConflictKind::RemoteDeleted => {
+                let deleted_paths = Self::apply_starmap_meta_remote_delete(sync_root, path)?;
+                Self::cleanup_deleted_paths_and_record_tombstones(state, &deleted_paths);
+                if let Some(starmap_id) = Self::parse_starmap_id_from_meta_path(path) {
+                    Self::cleanup_starmap_known_files(state, &starmap_id);
+                }
+                Ok(false)
+            }
+            SyncConflictKind::BothChanged => {
+                Self::apply_starmap_meta_remote_modify(sync_root, path, conflict)?;
+                if let Some(starmap_id) = Self::parse_starmap_id_from_meta_path(path) {
+                    Self::cleanup_starmap_known_files(state, &starmap_id);
                     Self::cleanup_starmap_tombstones(state, &starmap_id);
                 }
                 Ok(false)

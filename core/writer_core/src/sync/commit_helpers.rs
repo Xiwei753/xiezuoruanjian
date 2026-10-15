@@ -254,6 +254,21 @@ fn save_conflict_snapshots(
                 }
             }
         }
+
+        // meta-only 星图冲突：保存远端 meta + index 身份事实快照
+        // （issue #902 第十九轮复核问题1b）。
+        if crate::sync::staging::starmap_merge::is_starmap_meta_path(&rel_str) {
+            match save_meta_only_conflict_snapshot(live_root, staging_root, &rel_str) {
+                Ok(dir) => sc.remote_graph_snapshot_dir = Some(dir),
+                Err(e) => {
+                    let msg = format!(
+                        "save_meta_only_conflict_snapshot failed for {}: {}",
+                        rel_str, e
+                    );
+                    return Err(crate::error::Error::Other(msg));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -370,6 +385,54 @@ fn save_graph_conflict_snapshot(
     // 供 apply_starmap_graph_remote_modify 恢复 root_starmap_ids 和
     // main_starmap_by_project。staging_root 中没有 index.json 时跳过
     // （保持向后兼容）。
+    save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
+
+    Ok(snapshot_dir_rel)
+}
+
+/// 为 meta-only 星图冲突保存远端 meta + index 身份事实快照
+/// （issue #902 第十九轮复核问题1b）。
+///
+/// meta-only 星图（无 graph.json）的 DeleteModifyConflict 以 meta.json 为锚点。
+/// BothChanged（本地删除远端修改）时保存远端 meta.json 和 index 身份事实，
+/// 供 apply_starmap_meta_remote_modify 恢复。不保存 graph 对象（graph 不存在）。
+fn save_meta_only_conflict_snapshot(
+    live_root: &Path,
+    staging_root: &Path,
+    meta_rel: &str,
+) -> crate::error::Result<String> {
+    // 解析 starmap_id：starmaps/<id>.meta.json
+    let normalized = meta_rel.replace('\\', "/");
+    let parts: Vec<&str> = normalized.split('/').collect();
+    // is_starmap_meta_path 已验证 parts.len() == 2
+    let file_name = parts[1];
+    let starmap_id = &file_name[..file_name.len() - ".meta.json".len()];
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let snapshot_dir_rel = format!(".conflict-snapshot/starmaps/{}/{}", starmap_id, timestamp);
+
+    // 保存远端 meta.json 到快照目录
+    let staging_meta_path = staging_root.join(meta_rel);
+    if !staging_meta_path.exists() {
+        return Err(crate::error::Error::Other(format!(
+            "save_meta_only_conflict_snapshot: incoming meta.json 在 staging_root 中不存在 ({})",
+            meta_rel
+        )));
+    }
+    let meta_bytes = std::fs::read(&staging_meta_path)?;
+    let snap_meta_rel = format!("{}/{}", snapshot_dir_rel, meta_rel);
+    let snap_meta_path = live_root.join(&snap_meta_rel);
+    if let Some(parent) = snap_meta_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::storage::transaction::atomic_write_bytes(&snap_meta_path, &meta_bytes).map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "save_meta_only_conflict_snapshot: 写入快照 meta {} 失败: {}",
+            snap_meta_rel, e
+        )))
+    })?;
+
+    // 保存 index 身份事实（复用现有函数）
     save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
 
     Ok(snapshot_dir_rel)
