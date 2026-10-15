@@ -5,10 +5,7 @@
   "main": "",
   "author": "",
   "license": "Apache-2.0",
-  "dependencies": {},
-  "targetDependencies": {
-    "acl": {
-      "privacy_acl": "file:../privacy_acl"
-    }
+  "dependencies": {
+    "privacy_acl": "@module:privacy_acl"
   }
 }
