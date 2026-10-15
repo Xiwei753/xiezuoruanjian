@@ -155,10 +155,7 @@ impl SujianEditorItem {
         // Issue #904：IME commit 与普通编辑走同一个局部动画入口。
         // old_snapshot / new_snapshot 分别给出编辑前后的局部 cluster 几何，
         // 只对受影响片段建立唯一的局部动画计划。
-        let animations_requested = super::animation::text_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let animations_requested = self.effective_animation().text;
         let suppressed =
             self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
         let now_ms = Self::frame_now_ms(&self.last_frame_now);
@@ -315,12 +312,7 @@ impl SujianEditorItem {
         // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
         // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing
-            && super::animation::any_animation_enabled(
-                self.current_typing_animation_enabled,
-                self.current_smooth_cursor_enabled,
-                self.current_coordinated_animation_enabled,
-            ) {
+        let composition = if commit.was_composing && self.animation_requested() {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,
@@ -445,12 +437,7 @@ impl SujianEditorItem {
         };
 
         // Issue #756: composition commit follows the shared effective animation policy.
-        let composition = if commit.was_composing
-            && super::animation::any_animation_enabled(
-                self.current_typing_animation_enabled,
-                self.current_smooth_cursor_enabled,
-                self.current_coordinated_animation_enabled,
-            ) {
+        let composition = if commit.was_composing && self.animation_requested() {
             Some(CompositionCommitParams {
                 preedit_byte_start: commit.preedit_byte_start,
                 preedit_byte_end: commit.preedit_byte_end,

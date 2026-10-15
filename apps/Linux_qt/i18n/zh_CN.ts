@@ -615,8 +615,8 @@
         <translation>切换到另一个工作区目录</translation>
     </message>
     <message>
-        <source>文字与光标同事务协同（各自独立时长）</source>
-        <translation>文字与光标同事务协同（各自独立时长）</translation>
+        <source>完整模式：文字吐吞/位移与光标共用同一条时间线；关闭后恢复下方各自开关之前的设置</source>
+        <translation>完整模式：文字吐吞/位移与光标共用同一条时间线；关闭后恢复下方各自开关之前的设置</translation>
     </message>
     <message>
         <source>光标动画持续时间</source>

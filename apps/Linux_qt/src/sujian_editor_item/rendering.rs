@@ -136,7 +136,9 @@ impl SujianEditorItem {
         // `text_motion` 进度经 `caret_sample` 驱动（见
         // `qquickitem_impl::build_cursor_render_state_for_frame`），这里不再为它另起
         // 第二条光标 tween。纯点击 / 键盘导航仍按 smooth cursor 独立 Tween。
-        let coordinated_text_cursor = self.current_coordinated_animation_enabled
+        let policy = self.effective_animation();
+        let coordinated_text_cursor = policy.shared_timeline
+            && self.pipeline.text_motion().is_some()
             && self.cursor_ctrl.last_move_source
                 == super::cursor_controller::CursorMoveSource::TextTransaction;
 
@@ -149,10 +151,7 @@ impl SujianEditorItem {
             .map(|snapshot| snapshot.revision);
         // Issue #901: 旧 animation_coordinator.build_cursor_plan + CursorMoveInputs 已删除。
         // 直接构造 CursorAnimationPlan，保留 Snap/Tween 决策的核心逻辑。
-        let cursor_animation_enabled = super::animation::cursor_animation_enabled(
-            self.current_smooth_cursor_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let cursor_animation_enabled = policy.cursor;
         let should_be_visible = self.current_editor_enabled && !has_selection && !is_preediting;
         let hidden_by_selection = has_selection && !should_be_visible;
 

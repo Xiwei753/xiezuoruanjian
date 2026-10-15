@@ -52,10 +52,7 @@ impl SujianEditorItem {
             Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
         };
 
-        let animations_requested = super::animation::text_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let animations_requested = self.effective_animation().text;
         let suppressed =
             self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
 

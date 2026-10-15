@@ -316,19 +316,28 @@ impl SujianEditorItem {
         self.current_smooth_cursor_enabled
     }
 
+    /// Issue #904 复核三：当前设置解析出的动画运行策略。
+    pub(crate) fn effective_animation(&self) -> super::animation::EffectiveAnimation {
+        super::animation::resolve(
+            self.current_typing_animation_enabled,
+            self.current_smooth_cursor_enabled,
+            self.current_coordinated_animation_enabled,
+        )
+    }
+
+    /// Issue #904 复核三：是否请求任一动画（正文或光标）。
+    pub(crate) fn animation_requested(&self) -> bool {
+        let policy = self.effective_animation();
+        policy.text || policy.cursor
+    }
+
     pub(crate) fn set_smooth_cursor_enabled(&mut self, value: bool) {
         if self.current_smooth_cursor_enabled == value {
             return;
         }
-        let was_enabled = super::animation::cursor_animation_enabled(
-            self.current_smooth_cursor_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let was_enabled = self.effective_animation().cursor;
         self.current_smooth_cursor_enabled = value;
-        let is_enabled = super::animation::cursor_animation_enabled(
-            self.current_smooth_cursor_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let is_enabled = self.effective_animation().cursor;
         if was_enabled && !is_enabled {
             // Independent mode: turning off smooth cursor settles only the cursor
             // track; typing animation remains independently controlled.
@@ -366,15 +375,9 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled == value {
             return;
         }
-        let was_enabled = super::animation::text_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let was_enabled = self.effective_animation().text;
         self.current_typing_animation_enabled = value;
-        let is_enabled = super::animation::text_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let is_enabled = self.effective_animation().text;
         if was_enabled && !is_enabled {
             self.clear_active_text_animations();
             self.request_static_repaint();
@@ -409,12 +412,9 @@ impl SujianEditorItem {
     /// - 关闭正文吞吐动画：立即清空局部动画片段与孔洞，静态层完整显示。
     /// - 调整时长：只更新下一帧采样的基准时长，不新建第二条时间线。
     /// - 协调开关只影响协同跟踪，不覆盖两个个人开关
-    ///   （见 `animation::text_animation_enabled` / `cursor_animation_enabled`）。
+    ///   （见 `animation::resolve`）。
     pub(crate) fn sync_animation_settings_to_text_motion(&mut self) {
-        let text_enabled = super::animation::text_animation_enabled(
-            self.current_typing_animation_enabled,
-            self.current_coordinated_animation_enabled,
-        );
+        let text_enabled = self.effective_animation().text;
         if text_enabled {
             if let Some(motion) = self.pipeline.text_motion_mut() {
                 motion.set_duration_ms(self.current_typing_animation_duration_ms);

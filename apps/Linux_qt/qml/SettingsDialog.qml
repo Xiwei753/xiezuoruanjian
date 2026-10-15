@@ -475,7 +475,7 @@ Dialog {
                     SettingsRow {
                         dt: root.dt
                         title: qsTr("协同动画（吞字/吐字）")
-                        description: qsTr("文字与光标同事务协同，速度统一见下方「协同动画时长」")
+                        description: qsTr("完整模式：文字吐吞/位移与光标共用同一条时间线；关闭后恢复下方各自开关之前的设置")
                         clickable: true
                         onClicked: root.setCoordinatedAnimation(!coordinatedAnim.checked)
                         ModernSwitch { id: coordinatedAnim; dt: root.dt; onToggled: function(v) { root.setCoordinatedAnimation(v) } }

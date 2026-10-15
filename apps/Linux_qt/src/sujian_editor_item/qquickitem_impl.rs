@@ -893,12 +893,12 @@ impl SujianEditorItem {
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
 
-        // Issue #904 评论 5: 只有"正文动画 + 平滑光标"都开启且协同模式时，光标才
-        // 共享正文动画的同一进度；且只接管正文事务（TextTransaction）造成的移动。
+        // Issue #904 复核三: 协同模式是完整模式——只要解析出的策略共享时间线、
+        // 本帧确有 text_motion、且是正文事务（TextTransaction），光标就用正文动画
+        // 的同一进度采样；不再额外要求原始 typing && smooth 同时为 true。
         // 纯点击/选区不被正文动画接管，仍走 cursor_ctrl 自己的 Snap/Tween。
-        let coordinated_cursor = self.current_coordinated_animation_enabled
-            && self.current_typing_animation_enabled
-            && self.current_smooth_cursor_enabled
+        let coordinated_cursor = self.effective_animation().shared_timeline
+            && self.pipeline.text_motion().is_some()
             && self.cursor_ctrl.last_move_source
                 == super::cursor_controller::CursorMoveSource::TextTransaction;
         let (caret_x, caret_y) = match motion_frame.caret_sample {
