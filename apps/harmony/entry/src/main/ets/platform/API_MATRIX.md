@@ -394,7 +394,7 @@
   - `hdsEffect.pressShadow(PressShadowType)`：只支持 Button，官方定义为「按压交互时自动计算背景色变化」的视效，`BLEND_GRADIENT` 是**叠白**（中心 85% 白、边缘 100% 白），实测是由内向外递增的整面高光，不是跟随手指的定点光；白底上还会削顶到 255 什么也看不出来。官方示例要求 Button 配 `stateEffect: false`，否则内建压暗与按压阴影互盖。
   - `CommonMethod.lightUpEffect(0..1)`（common.d.ts:21813-21845）：只有整体亮度一个参数，**无位置参数**。
   - `HdsVisualComponent`：只有 `DUAL_EDGE_FLOW_LIGHT_WITH_BACKGROUND_MASK` 一个场景，无悬浮按钮场景。HDS 组件库里没有任何悬浮按钮类组件。
-- 页面内悬浮按钮的**现行做法**见下文「让 FAB 在深色模式有可见边界：试过的全部路径」一节：`Stack { Row(独立 1vp 描边, zIndex 1); Button(ImmersiveMaterial, stateEffect false) }`。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
+- **页面内悬浮按钮不能用沉浸材质（Issue #905 定论）**。真机日志：`Ace: Material inactive: out of scope. Use component in navigation title bar or Tabbar.`；官方《开启沉浸光感》明确生效范围只有 Navigation/NavDestination 标题栏与合规底部 TabBar，内容流里的右下角 FAB **不在范围内**。因此 `ui/components/PrimaryFab.ets` 已删除全部 `systemMaterial` 尝试，改为**单个 `Button`**（系统表面色 token + `stateEffect` 原生按压反馈），不再对外宣称「沉浸光感」。下文「让 FAB 在深色模式有可见边界」一节保留当时的实机数据仅供溯源。下面两条是当时的中间尝试，**已废弃**，留在这里只为避免以后重新踩：
   - ~~用通用属性 `backgroundBlurStyle(BlurStyle.Thin)` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)` + 半透明面 + 发丝描边~~（曾与底栏胶囊观感对齐）：**它本身能正常显示**，实测圆盘 20~22 级、边界清晰、阴影 3 级，稳定可读。废弃原因是没有沉浸材质高光 / 跟手按压光，而且已被独立描边层方案替代。
   - ~~`systemMaterial(floatingMaterial(false))` + `shadow(ShadowStyle.OUTER_DEFAULT_XS)`~~：**这一条才是**「材质背景层在纯黑底上全透明，`shadow` 没有可投的实体，一起消失，深色模式下圆盘不可见」的原因（材质接管阴影后 `applyShadow` 传 false，改回自定义 shadow 也没有可投实体）。
   - 阴影档位实机灰度落差（Pocket 2，量按钮右边缘相对背景）：不设 0 级 / `OUTER_FLOATING_MD` 35 级 / `OUTER_FLOATING_SM` 14 级 / `OUTER_DEFAULT_XS` 3 级。`OUTER_DEFAULT_*` 与 `OUTER_FLOATING_*` 是两套并行档位，**不能按名字里的「SM」推断轻重**。
@@ -434,9 +434,11 @@
 | `hdsEffect.pointLight`（`PointLightSourceType` / `PointLightIlluminatedType` 全枚举） | native 每次报 `HDS_hdsbase: [42]Wrong argument type. int32 expected.`，无任何光 | 本机不可用，别再试 |
 | `hdsEffect.pressShadow(BLEND_GRADIENT)` | 整面叠白（中心 85% 白、边缘 100% 白），白底上削顶到 255 看不出；深色底上整颗刷白、白字消失 | 不是跟随手指的光 |
 | `lightUpEffect(0..1)` | 只有整体亮度，无位置参数 | 死路 |
-| **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 现行方案）** | 描边像素值 38，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | **可用**，唯一在深色模式下给出可见轮廓的手段 |
+| **独立边缘层 1vp `border('#22FFFFFF')` + `hitTestBehavior(None)`（Issue #811 方案，已被 Issue #905 取代）** | 描边像素值 38，与 `#22FFFFFF` 的 13% 白相符；截图可见清晰细圆环 | 当时可用；#905 起不再依赖内容流材质，直接单 Button + 系统表面色 token + 边框 |
 
 现行结构：`Stack { Row(边缘层 1vp 描边, hitTestBehavior(None)); Button(ImmersiveMaterial + lightEffect, 不画边) }`。描边必须放独立节点，压在 `systemMaterial` 的 Button 上会挡掉材质层。
+
+**Issue #905 现行结构（已落地）**：`PrimaryFab.ets` 改为**单个 `Button`**（`ButtonType.Circle`），背景取系统表面色 token `sys.color.ohos_id_color_card_bg`，1vp 边框 `sys.color.icon_secondary`，配 `stateEffect: true` 的原生按压反馈；**不再挂 `systemMaterial`，也不再拆独立描边层**。深色模式可见性由「表面色 token + 边框」保证，不依赖材质渲染是否成功——该 FAB 位于内容流，材质路径本就拿不到光（见上文真机日志与官方生效范围）。上面 `Stack + 独立描边层 + Button(ImmersiveMaterial)` 是 Issue #811 的旧方案，已被 #905 取代。
 
 **Issue #811 里建议的边缘层 `hdsEffect.pointLight(DEFAULT_FEATHERING_BORDER)` 未采纳**：本机 native 层拒收该调用（见上表），加上去只会每次刷一条 `Wrong argument type` 而没有光。
 

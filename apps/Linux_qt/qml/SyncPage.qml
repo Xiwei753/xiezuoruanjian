@@ -415,15 +415,6 @@ Item {
             }
 
             AppTextField {
-                id: branchField
-                Layout.fillWidth: true
-                dt: root.resolvedDt
-                label: qsTr("分支名")
-                text: (root.syncBackendRef ? root.syncBackendRef.sync_branch : "")
-                placeholderText: "main"
-            }
-
-            AppTextField {
                 id: tokenField
                 Layout.fillWidth: true
                 dt: root.resolvedDt
@@ -515,11 +506,10 @@ Item {
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                         var hasNewToken = tokenField.text.trim().length > 0
-                        window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", branch=" + branchField.text + ", hasNewToken=" + hasNewToken)
+                        window.debugLog("sync", "save_config_clicked", "url=" + urlField.text + ", hasNewToken=" + hasNewToken)
                     }
                     if (!root.syncBackendRef) return
                     root.syncBackendRef.sync_remote_url = urlField.text
-                    root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
                     if (tokenField.text.trim().length > 0) {
                         root.syncBackendRef.set_sync_token(tokenField.text.trim())
                         tokenField.text = ""
@@ -554,7 +544,6 @@ Item {
                     // 先保存当前 UI 配置
                     if (root.syncBackendRef) {
                         root.syncBackendRef.sync_remote_url = urlField.text
-                        root.syncBackendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
                         if (tokenField.text.trim().length > 0) {
                             root.syncBackendRef.set_sync_token(tokenField.text.trim())
                             tokenField.text = ""

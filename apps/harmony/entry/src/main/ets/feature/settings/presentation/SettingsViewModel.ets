@@ -124,7 +124,6 @@ export class SettingsViewModel {
   @Trace syncConfig: SyncConfig | null = null
   @Trace syncToken: string = ''
   @Trace syncRemoteUrl: string = ''
-  @Trace syncBranch: string = ''
   @Trace isLoading: boolean = true
   @Trace isSaving: boolean = false
   @Trace isSyncing: boolean = false
@@ -198,7 +197,6 @@ export class SettingsViewModel {
         // 回填 UI 可观察字段
         if (syncConfigResult.data.providerConfig) {
           this.syncRemoteUrl = syncConfigResult.data.providerConfig.remote_url
-          this.syncBranch = syncConfigResult.data.providerConfig.branch
         }
       }
 
@@ -410,42 +408,19 @@ export class SettingsViewModel {
   updateSyncRemoteUrl(value: string): void {
     this.syncRemoteUrl = value
     if (this.syncConfig) {
-      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
+      // providerConfig 缺失时新建，branch 沿用已有值（拿不到时回落 'main'），
+      // 不再由用户在设置页手输；已有 providerConfig 只更新 remote_url。
+      // 注意：必须在创建新对象前先读取旧 branch，避免在 ?? 表达式右侧访问已被收窄的类型。
+      const existingProviderConfig: ProviderConfig | null = this.syncConfig.providerConfig
+      const previousBranch: string = existingProviderConfig ? existingProviderConfig.branch : 'main'
+      const providerConfig: ProviderConfig = existingProviderConfig ?? {
         type: 'github',
         remote_url: value,
-        branch: this.syncBranch,
+        branch: previousBranch,
         username: '',
         transport: 'https_token'
       }
       providerConfig.remote_url = value
-      const newConfig: SyncConfig = {
-        enabled: this.syncConfig.enabled,
-        activeProvider: 'github_api',
-        providerConfig: providerConfig,
-        autoSync: this.syncConfig.autoSync,
-        syncIntervalSeconds: this.syncConfig.syncIntervalSeconds,
-        hasNetworkPermission: this.syncConfig.hasNetworkPermission,
-        hasNetworkStatePermission: this.syncConfig.hasNetworkStatePermission
-      }
-      this.syncConfig = newConfig
-      this.saveSyncConfig()
-    }
-  }
-
-  /**
-   * 更新分支，修改 providerConfig.branch，然后保存。
-   */
-  updateSyncBranch(value: string): void {
-    this.syncBranch = value
-    if (this.syncConfig) {
-      const providerConfig: ProviderConfig = this.syncConfig.providerConfig ?? {
-        type: 'github',
-        remote_url: this.syncRemoteUrl,
-        branch: value,
-        username: '',
-        transport: 'https_token'
-      }
-      providerConfig.branch = value
       const newConfig: SyncConfig = {
         enabled: this.syncConfig.enabled,
         activeProvider: 'github_api',

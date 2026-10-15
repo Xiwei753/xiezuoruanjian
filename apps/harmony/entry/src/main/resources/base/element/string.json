@@ -773,10 +773,6 @@
       "value": "GitHub 远程仓库"
     },
     {
-      "name": "sync_branch",
-      "value": "分支"
-    },
-    {
       "name": "https_token",
       "value": "HTTPS Token"
     },
