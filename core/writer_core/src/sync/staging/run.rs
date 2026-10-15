@@ -509,8 +509,7 @@ impl StagingRun {
 
             // 收集生命周期决策，供 index.json 合并使用（issue #902 第十二轮复核）。
             // DeleteModifyConflict 的星图不会被 merge_starmap_index 从全局索引移除。
-            graph_lifecycle_decisions
-                .insert(starmap_id.clone(), output.lifecycle_decision.clone());
+            graph_lifecycle_decisions.insert(starmap_id.clone(), output.lifecycle_decision.clone());
 
             // graph 级冲突事实：DeleteModifyConflict 时产生 graph.json 的 StagingConflict
             // （issue #902 第十二轮复核）。此前只靠对象级 Conflict 隐式传递整图冲突，

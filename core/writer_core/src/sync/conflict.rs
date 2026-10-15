@@ -671,8 +671,8 @@ impl crate::sync::SyncService {
     /// best-effort：graph.json 读取或更新失败时只 `warn`，不阻断冲突解决
     /// （对象文件已写回，graph 更新是 best-effort）。
     fn restore_starmap_object_membership(sync_root: &Path, path: &str) {
-        use crate::sync::staging::starmap_merge::{is_starmap_object_file_path, parse_object_path};
         use crate::starmap::store::meta::GraphMeta;
+        use crate::sync::staging::starmap_merge::{is_starmap_object_file_path, parse_object_path};
 
         if !is_starmap_object_file_path(path) {
             return;
@@ -806,7 +806,9 @@ impl crate::sync::SyncService {
                 if !graph.hyperlink_ids.iter().any(|x| x == object_id) {
                     graph.hyperlink_ids.push(object_id.to_string());
                 }
-                graph.hyperlink_revisions.insert(object_id.to_string(), new_pr);
+                graph
+                    .hyperlink_revisions
+                    .insert(object_id.to_string(), new_pr);
                 true
             }
             _ => false,
@@ -957,5 +959,244 @@ impl crate::sync::SyncService {
     /// 从 `conflicts.json` 读取，供平台层展示冲突列表。
     pub fn list_conflicts(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
         load_conflicts_json(sync_root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::starmap::store::meta::GraphMeta;
+    use crate::sync::SyncService;
+    use tempfile::TempDir;
+
+    /// 创建一个最小 GraphMeta JSON 用于测试。
+    fn make_graph_json(starmap_id: &str) -> String {
+        let graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: starmap_id.to_string(),
+            ..Default::default()
+        };
+        serde_json::to_string_pretty(&graph).unwrap()
+    }
+
+    /// 读取并解析 graph.json。
+    fn read_graph(sync_root: &Path, starmap_id: &str) -> GraphMeta {
+        let graph_path = sync_root.join(format!("starmaps/{}/graph.json", starmap_id));
+        let content = std::fs::read_to_string(&graph_path).unwrap();
+        serde_json::from_str(&content).unwrap()
+    }
+
+    /// 在 sync_root 下创建 starmaps/<id>/graph.json。
+    fn write_graph(sync_root: &Path, starmap_id: &str, json: &str) {
+        let graph_dir = sync_root.join(format!("starmaps/{}", starmap_id));
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        std::fs::write(graph_dir.join("graph.json"), json).unwrap();
+    }
+
+    // =========================================================================
+    // 正常恢复：graph.json 不含对象 X → 调用后含 X
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_node_membership() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        // 路径：starmaps/sm_1/nodes/00/node_abc.json
+        let path = "starmaps/sm_1/nodes/00/node_abc.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.node_ids.iter().any(|x| x == "node_abc"),
+            "node_abc should be in node_ids after restore"
+        );
+        assert_eq!(
+            graph.node_revisions.get("node_abc"),
+            Some(&graph.package_revision),
+            "node_revisions should match package_revision"
+        );
+    }
+
+    #[test]
+    fn test_restore_starmap_edge_membership() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        let path = "starmaps/sm_1/edges/00/edge_xyz.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.edge_ids.iter().any(|x| x == "edge_xyz"),
+            "edge_xyz should be in edge_ids after restore"
+        );
+    }
+
+    #[test]
+    fn test_restore_starmap_embed_membership() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        let path = "starmaps/sm_1/embeds/00/emb_001.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.embed_instance_ids.iter().any(|x| x == "emb_001"),
+            "emb_001 should be in embed_instance_ids after restore"
+        );
+    }
+
+    #[test]
+    fn test_restore_starmap_link_membership() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        let path = "starmaps/sm_1/links/00/link_001.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.link_ids.iter().any(|x| x == "link_001"),
+            "link_001 should be in link_ids after restore"
+        );
+    }
+
+    #[test]
+    fn test_restore_starmap_hyperlink_membership() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        let path = "starmaps/sm_1/hyperlinks/00/hl_001.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.hyperlink_ids.iter().any(|x| x == "hl_001"),
+            "hl_001 should be in hyperlink_ids after restore"
+        );
+    }
+
+    // =========================================================================
+    // 已存在不重复添加
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_membership_no_duplicate() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // graph.json 已含 node_abc
+        let mut graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            ..Default::default()
+        };
+        graph.node_ids.push("node_abc".to_string());
+        graph.package_revision = 5;
+        let json = serde_json::to_string_pretty(&graph).unwrap();
+        write_graph(root, "sm_1", &json);
+
+        let path = "starmaps/sm_1/nodes/00/node_abc.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let updated = read_graph(root, "sm_1");
+        let count = updated.node_ids.iter().filter(|x| x == &"node_abc").count();
+        assert_eq!(count, 1, "node_abc should not be duplicated in node_ids");
+    }
+
+    // =========================================================================
+    // 非星图路径跳过
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_membership_skip_non_starmap_path() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", &make_graph_json("sm_1"));
+
+        // 普通正文路径，不是星图对象文件
+        let path = "chapters/ch_001/text.txt";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let graph = read_graph(root, "sm_1");
+        assert!(
+            graph.node_ids.is_empty(),
+            "non-starmap path should not modify graph"
+        );
+    }
+
+    // =========================================================================
+    // graph.json 不存在：best-effort，不 panic
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_membership_no_graph_json() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // 不创建 graph.json，函数应 best-effort 不 panic
+        let path = "starmaps/sm_1/nodes/00/node_abc.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        // graph.json 不应被创建
+        assert!(
+            !root.join("starmaps/sm_1/graph.json").exists(),
+            "graph.json should not be created when it didn't exist"
+        );
+    }
+
+    // =========================================================================
+    // graph.json 内容损坏：best-effort，不 panic
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_membership_corrupt_graph_json() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_graph(root, "sm_1", "not valid json {{{");
+
+        let path = "starmaps/sm_1/nodes/00/node_abc.json";
+        // 不应 panic
+        SyncService::restore_starmap_object_membership(root, path);
+    }
+
+    // =========================================================================
+    // package_revision 递增验证
+    // =========================================================================
+
+    #[test]
+    fn test_restore_starmap_membership_increments_revision() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let graph = GraphMeta {
+            schema_version: "4".to_string(),
+            starmap_id: "sm_1".to_string(),
+            package_revision: 10,
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&graph).unwrap();
+        write_graph(root, "sm_1", &json);
+
+        let path = "starmaps/sm_1/nodes/00/node_new.json";
+        SyncService::restore_starmap_object_membership(root, path);
+
+        let updated = read_graph(root, "sm_1");
+        assert_eq!(
+            updated.package_revision, 11,
+            "package_revision should increment by 1"
+        );
+        assert_eq!(
+            updated.node_revisions.get("node_new"),
+            Some(&11u64),
+            "node_revisions should be set to new package_revision"
+        );
     }
 }

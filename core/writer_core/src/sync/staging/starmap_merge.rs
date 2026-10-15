@@ -697,8 +697,10 @@ pub(crate) fn merge_starmap_index(
     let local_starmap_set: HashSet<&String> = local_rec.starmap_ids.iter().collect();
     let mut conflict_retained_ids: HashSet<String> = HashSet::new();
     for (id, decision) in graph_lifecycle_decisions {
-        if matches!(decision, GraphLifecycleDecision::DeleteModifyConflict { .. })
-            && (base_starmap_set.contains(id) || local_starmap_set.contains(id))
+        if matches!(
+            decision,
+            GraphLifecycleDecision::DeleteModifyConflict { .. }
+        ) && (base_starmap_set.contains(id) || local_starmap_set.contains(id))
         {
             if !merged_starmap_ids.iter().any(|x| x == id) {
                 merged_starmap_ids.push(id.clone());
@@ -746,12 +748,16 @@ pub(crate) fn merge_starmap_index(
     for id in &conflict_retained_ids {
         for (proj, sid) in &base_rec.main_starmap_by_project {
             if sid == id {
-                merged_main.entry(proj.clone()).or_insert_with(|| id.clone());
+                merged_main
+                    .entry(proj.clone())
+                    .or_insert_with(|| id.clone());
             }
         }
         for (proj, sid) in &local_rec.main_starmap_by_project {
             if sid == id {
-                merged_main.entry(proj.clone()).or_insert_with(|| id.clone());
+                merged_main
+                    .entry(proj.clone())
+                    .or_insert_with(|| id.clone());
             }
         }
     }
@@ -1300,7 +1306,9 @@ fn resolve_graph_lifecycle(
                 GraphLifecycleDecision::Delete
             } else {
                 // local 修改了 → 远端删除本地修改冲突
-                GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted: false }
+                GraphLifecycleDecision::DeleteModifyConflict {
+                    is_local_deleted: false,
+                }
             }
         }
         // base 有、local 无、incoming 有 → 本地删除
@@ -1310,7 +1318,9 @@ fn resolve_graph_lifecycle(
                 GraphLifecycleDecision::Delete
             } else {
                 // incoming 修改了 → 本地删除远端修改冲突
-                GraphLifecycleDecision::DeleteModifyConflict { is_local_deleted: true }
+                GraphLifecycleDecision::DeleteModifyConflict {
+                    is_local_deleted: true,
+                }
             }
         }
         // base 有、local 无、incoming 无 → 双端删除
@@ -1712,8 +1722,9 @@ mod tests {
         let local = make_index_bytes(&["A", "B"], &[], &[], 100);
         let incoming = make_index_bytes(&["A", "C"], &[], &[], 200);
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let ids = extract_starmap_ids(&result);
         assert_eq!(ids, vec!["A", "B", "C"]);
     }
@@ -1726,8 +1737,9 @@ mod tests {
         let local = make_index_bytes(&["A"], &[], &[], 100);
         let incoming = make_index_bytes(&["A"], &[], &[], 200);
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let ids = extract_starmap_ids(&result);
         assert_eq!(ids, vec!["A"]);
     }
@@ -1740,8 +1752,9 @@ mod tests {
         let local = make_index_bytes(&["A"], &[], &[], 100); // local 删 B
         let incoming = make_index_bytes(&["A", "B"], &[], &[], 200); // incoming 保留 B（无变化）
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let ids = extract_starmap_ids(&result);
         // 一侧删除一侧保留 base 原样 → 接受删除，结果为 [A]，不复活 B
         assert_eq!(ids, vec!["A"]);
@@ -1758,8 +1771,9 @@ mod tests {
         let local = make_index_bytes(&["A", "B"], &[], &[("p", "B")], 100);
         let incoming = make_index_bytes(&["A", "C"], &[], &[("p", "C")], 200);
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
@@ -1782,8 +1796,9 @@ mod tests {
         let local = make_index_bytes(&["A", "B"], &[], &[], 100);
         let incoming = make_index_bytes(&["A"], &[], &[], 0);
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         assert!(matches!(result, StarmapMergeResult::KeepLocal));
     }
 
@@ -1796,8 +1811,9 @@ mod tests {
         let local = make_index_bytes(&["A"], &[], &[], 0);
         let incoming = make_index_bytes(&["A", "B"], &[], &[], 100);
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         match result {
             StarmapMergeResult::ApplyIncoming(b) => assert_eq!(b, incoming),
             other => panic!("expected ApplyIncoming, got {:?}", other),
@@ -1812,8 +1828,9 @@ mod tests {
         let local = base.clone();
         let incoming = base.clone();
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         assert!(matches!(result, StarmapMergeResult::NoOp));
     }
 
@@ -1897,8 +1914,9 @@ mod tests {
         let local = make_index_bytes(&["A"], &["A"], &[], 100); // local 删 B
         let incoming = make_index_bytes(&["A", "B"], &["A", "B"], &[], 200); // incoming 保留
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
@@ -1920,8 +1938,9 @@ mod tests {
         let local = make_index_bytes(&["A"], &[], &[("p", "A")], 100); // local 删 B，main 改指 A
         let incoming = make_index_bytes(&["A", "B"], &[], &[("p", "B")], 200); // incoming 保留
 
-        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
-            .expect("merge should succeed");
+        let result =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
         let bytes = match result {
             StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
             StarmapMergeResult::KeepLocal => local,
@@ -2439,6 +2458,281 @@ mod tests {
             revisions.get("n1"),
             Some(&new_pr),
             "KeepLocal with missing revision should get new_pr"
+        );
+    }
+
+    // --- resolve_graph_lifecycle 单元测试（issue #902 第十二轮复核）---
+
+    #[test]
+    fn test_resolve_graph_lifecycle_base_none_new_graph() {
+        // base 不存在 → Normal（新建图，走常规合并）
+        let d = resolve_graph_lifecycle(None, Some(b"local"), Some(b"incoming"));
+        assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_base_none_local_none() {
+        // base 不存在、local 也不存在 → Normal
+        let d = resolve_graph_lifecycle(None, None, Some(b"incoming"));
+        assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_all_present() {
+        // base、local、incoming 都存在 → Normal
+        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"local"), Some(b"incoming"));
+        assert!(matches!(d, GraphLifecycleDecision::Normal), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_remote_delete_local_unchanged() {
+        // base 存在、local == base（未改）、incoming 不存在（远端删除）→ Delete
+        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"base"), None);
+        assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_remote_delete_local_modified() {
+        // base 存在、local != base（修改了）、incoming 不存在（远端删除）
+        // → DeleteModifyConflict{is_local_deleted: false}
+        let d = resolve_graph_lifecycle(Some(b"base"), Some(b"modified"), None);
+        match d {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            } => {}
+            other => panic!(
+                "expected DeleteModifyConflict{{is_local_deleted: false}}, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_local_delete_incoming_unchanged() {
+        // base 存在、local 不存在（本地删除）、incoming == base（未改）→ Delete
+        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"base"));
+        assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_local_delete_incoming_modified() {
+        // base 存在、local 不存在（本地删除）、incoming != base（远端修改）
+        // → DeleteModifyConflict{is_local_deleted: true}
+        let d = resolve_graph_lifecycle(Some(b"base"), None, Some(b"modified"));
+        match d {
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: true,
+            } => {}
+            other => panic!(
+                "expected DeleteModifyConflict{{is_local_deleted: true}}, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_resolve_graph_lifecycle_both_delete() {
+        // base 存在、local 和 incoming 都不存在（双端删除）→ Delete
+        let d = resolve_graph_lifecycle(Some(b"base"), None, None);
+        assert!(matches!(d, GraphLifecycleDecision::Delete), "got {:?}", d);
+    }
+
+    // =========================================================================
+    // merge_starmap_index with graph_lifecycle_decisions 测试
+    // （issue #902 第十二轮复核）
+    // =========================================================================
+
+    /// 从 StarmapMergeResult 提取完整的 StarMapIndexRecord。
+    fn extract_index_record(
+        result: &StarmapMergeResult,
+        local: &[u8],
+        base: &[u8],
+    ) -> StarMapIndexRecord {
+        let bytes = match result {
+            StarmapMergeResult::ApplyMerged(b) | StarmapMergeResult::ApplyIncoming(b) => b,
+            StarmapMergeResult::KeepLocal => local,
+            StarmapMergeResult::NoOp | StarmapMergeResult::Delete => base,
+        };
+        serde_json::from_slice(bytes).expect("deserialize index")
+    }
+
+    // --- 测试 1: DeleteModifyConflict 时星图 ID 保留在 starmap_ids ---
+
+    #[test]
+    fn test_merge_index_delete_modify_conflict_retains_starmap_ids() {
+        // base 含 A，local 含 A，incoming 不含 A（远端删除）
+        // graph_lifecycle_decisions 中 A = DeleteModifyConflict{is_local_deleted: false}
+        // 合并后 A 仍在 merged starmap_ids 中
+        let base = make_index_bytes(&["A"], &[], &[], 0);
+        let local = make_index_bytes(&["A"], &[], &[], 100);
+        let incoming = make_index_bytes(&[], &[], &[], 200); // 远端删除 A
+
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "A".to_string(),
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            },
+        );
+
+        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &decisions)
+            .expect("merge should succeed");
+        let record = extract_index_record(&result, &local, &base);
+
+        assert!(
+            record.starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict should retain A in starmap_ids, got {:?}",
+            record.starmap_ids
+        );
+    }
+
+    // --- 测试 2: DeleteModifyConflict 时星图 ID 保留在 root_starmap_ids ---
+
+    #[test]
+    fn test_merge_index_delete_modify_conflict_retains_root_starmap_ids() {
+        // base/local 的 root_starmap_ids 含 A，incoming 不含 A
+        // graph_lifecycle_decisions 中 A = DeleteModifyConflict{is_local_deleted: false}
+        // 合并后 A 仍在 merged root_starmap_ids 中
+        let base = make_index_bytes(&["A"], &["A"], &[], 0);
+        let local = make_index_bytes(&["A"], &["A"], &[], 100);
+        let incoming = make_index_bytes(&[], &[], &[], 200); // 远端删除 A
+
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "A".to_string(),
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            },
+        );
+
+        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &decisions)
+            .expect("merge should succeed");
+        let record = extract_index_record(&result, &local, &base);
+
+        assert!(
+            record.starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict should retain A in starmap_ids, got {:?}",
+            record.starmap_ids
+        );
+        assert!(
+            record.root_starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict should retain A in root_starmap_ids, got {:?}",
+            record.root_starmap_ids
+        );
+    }
+
+    // --- 测试 3: DeleteModifyConflict 时星图 ID 保留在 main_starmap_by_project ---
+
+    #[test]
+    fn test_merge_index_delete_modify_conflict_retains_main_starmap_by_project() {
+        // base/local 的 main_starmap_by_project 有 "proj" → "A"，incoming 没有
+        // graph_lifecycle_decisions 中 A = DeleteModifyConflict{is_local_deleted: false}
+        // 合并后 "proj" → "A" 仍在 merged main_starmap_by_project 中
+        let base = make_index_bytes(&["A"], &[], &[("proj", "A")], 0);
+        let local = make_index_bytes(&["A"], &[], &[("proj", "A")], 100);
+        let incoming = make_index_bytes(&[], &[], &[], 200); // 远端删除 A
+
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "A".to_string(),
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: false,
+            },
+        );
+
+        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &decisions)
+            .expect("merge should succeed");
+        let record = extract_index_record(&result, &local, &base);
+
+        assert!(
+            record.starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict should retain A in starmap_ids, got {:?}",
+            record.starmap_ids
+        );
+        assert_eq!(
+            record.main_starmap_by_project.get("proj"),
+            Some(&"A".to_string()),
+            "DeleteModifyConflict should retain proj→A in main_starmap_by_project, got {:?}",
+            record.main_starmap_by_project
+        );
+    }
+
+    // --- 测试 4: Normal/Delete 时不受 graph_lifecycle_decisions 影响 ---
+
+    #[test]
+    fn test_merge_index_normal_delete_decisions_no_effect() {
+        // graph_lifecycle_decisions 中 A = Normal 或 Delete
+        // 合并结果与不传 graph_lifecycle_decisions 时一致
+        let base = make_index_bytes(&["A", "B"], &[], &[], 0);
+        let local = make_index_bytes(&["A"], &[], &[], 100); // local 删 B
+        let incoming = make_index_bytes(&["A", "B"], &[], &[], 200); // incoming 保留 B
+
+        // 不传 decisions 的基准结果
+        let baseline =
+            merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &HashMap::new())
+                .expect("merge should succeed");
+        let baseline_ids = extract_starmap_ids(&baseline);
+
+        // Normal decision → 不影响结果
+        let mut normal_decisions = HashMap::new();
+        normal_decisions.insert("B".to_string(), GraphLifecycleDecision::Normal);
+        let result_normal = merge_starmap_index(
+            Some(&base),
+            Some(&local),
+            Some(&incoming),
+            &normal_decisions,
+        )
+        .expect("merge should succeed");
+        let normal_ids = extract_starmap_ids(&result_normal);
+        assert_eq!(
+            normal_ids, baseline_ids,
+            "Normal decision should not affect merge result"
+        );
+
+        // Delete decision → 不影响结果
+        let mut delete_decisions = HashMap::new();
+        delete_decisions.insert("B".to_string(), GraphLifecycleDecision::Delete);
+        let result_delete = merge_starmap_index(
+            Some(&base),
+            Some(&local),
+            Some(&incoming),
+            &delete_decisions,
+        )
+        .expect("merge should succeed");
+        let delete_ids = extract_starmap_ids(&result_delete);
+        assert_eq!(
+            delete_ids, baseline_ids,
+            "Delete decision should not affect merge result"
+        );
+    }
+
+    // --- 测试 5: 本地删除远端修改的 DeleteModifyConflict{is_local_deleted: true} ---
+
+    #[test]
+    fn test_merge_index_delete_modify_conflict_local_deleted_retains_starmap_ids() {
+        // base 含 A，local 不含 A（本地删除），incoming 含 A（远端保留/修改）
+        // graph_lifecycle_decisions 中 A = DeleteModifyConflict{is_local_deleted: true}
+        // 合并后 A 仍在 merged starmap_ids 中（因为 base 有 A）
+        let base = make_index_bytes(&["A"], &[], &[], 0);
+        let local = make_index_bytes(&[], &[], &[], 100); // 本地删除 A
+        let incoming = make_index_bytes(&["A"], &[], &[], 200); // 远端保留 A
+
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "A".to_string(),
+            GraphLifecycleDecision::DeleteModifyConflict {
+                is_local_deleted: true,
+            },
+        );
+
+        let result = merge_starmap_index(Some(&base), Some(&local), Some(&incoming), &decisions)
+            .expect("merge should succeed");
+        let record = extract_index_record(&result, &local, &base);
+
+        assert!(
+            record.starmap_ids.contains(&"A".to_string()),
+            "DeleteModifyConflict{{is_local_deleted: true}} should retain A in starmap_ids (base has A), got {:?}",
+            record.starmap_ids
         );
     }
 }
