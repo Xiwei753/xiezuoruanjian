@@ -11,6 +11,7 @@
 
 import { ScreenRole, PrimaryNavigationPlacement } from '../../corebridge/dto/PlatformDtos'
 import { AdaptiveState } from '../../ui/adaptive/AdaptiveContext'
+import { HarmonyDiagnosticEvents, DiagnosticField } from '../../platform/diagnostics/HarmonyDiagnosticEvents'
 
 interface PrimaryActionEntry {
   token: number
@@ -73,6 +74,13 @@ export class PrimaryActionChannel {
   dispatch(role: ScreenRole): void {
     const entry: PrimaryActionEntry | undefined = this.entries.get(role)
     if (entry !== undefined && entry.available) {
+      // Issue #906：记录主操作「请求」本身（窄屏 HDS 原生 MiniBar「+」是当前唯一调用方）。
+      // 只记请求，不记完成：业务成功与否由页面自己的入口决定，不在通道里伪造。
+      const fields: DiagnosticField[] = [
+        { key: 'screenRole', value: String(role) },
+        { key: 'source', value: 'hds_mini_bar' }
+      ]
+      HarmonyDiagnosticEvents.record('Info', 'User', 'ui.primary_action_requested', 'PrimaryActionChannel', fields)
       entry.onTap()
     }
   }

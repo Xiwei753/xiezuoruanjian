@@ -70,6 +70,10 @@ export struct HdsPrimaryTabsApi23 {
   // 但不触发 @Watch 导致底栏无意义 hide→show。与视觉显示分开。
   @Prop currentPrimaryNavInteractive: boolean = true
 
+  // Issue #906：用户点击一级页签时通知父组件登记 nav.tab_requested（User）。
+  // 与 onChange（只提交 currentTab，程序化切换也会触发）区分，避免把恢复伪装成点击。
+  onUserTabClick: (index: number) => void = (): void => {}
+
   // Issue #905：当前屏幕 ScreenRole（由 PrimaryTabShell 从 NavigationChromeStore 传入）。
   // 决定原生 MiniBar 这个「+」是不是当前页的主操作，以及点按派发到哪一页的回调。
   @Prop @Watch('onScreenRoleChange') currentScreenRole: ScreenRole = ScreenRole.ProjectList
@@ -124,6 +128,8 @@ export struct HdsPrimaryTabsApi23 {
       // Issue #768 评论5838624438：星图快捷入口改为切换一级 tab，不再 push 进 homeStack。
       HomeScreen({
         onOpenStarMap: (): void => {
+          // Issue #906：作品页「打开星图」是明确的用户入口，先记用户意图再提交 currentTab。
+          this.onUserTabClick(TAB_STARMAP)
           this.currentTab = TAB_STARMAP
         }
       })
@@ -291,6 +297,11 @@ export struct HdsPrimaryTabsApi23 {
         return false
       }
       return true
+    })
+    .onTabBarClick((index: number) => {
+      // Issue #906：onTabBarClick 是确认的用户点击入口；只记用户意图，不改 currentTab，
+      // 真正切换仍由 onChange 完成，避免绕过 onContentWillChange 交互锁。
+      this.onUserTabClick(index)
     })
     .onChange((index: number) => {
       // Issue #768 评论5835171266 第1项：onChange 只写 currentTab（@Link 双向绑定到父组件），
