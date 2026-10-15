@@ -88,11 +88,21 @@ impl SujianEditorItem {
     ///
     /// `affected_range` 是 Core `display_patches` 提供的受影响字节范围。
     /// `None` 表示无明确范围（fallback 到全篇重排）。
+    ///
+    /// Issue #904 评论 5: 返回值额外携带本版布局的 `LocalLayoutSource`
+    ///（generation + 物化视觉行），供局部动画只在**同一版**布局上补图，
+    /// 绝不用当前 live cache 的另一版正文冒充旧快照行。
     pub(crate) fn build_incremental_layout_snapshot(
         &mut self,
         width: f64,
         affected_range: Option<(usize, usize)>,
-    ) -> Result<EditorLayoutSnapshot, String> {
+    ) -> Result<
+        (
+            EditorLayoutSnapshot,
+            Option<super::pipeline::LocalLayoutSource>,
+        ),
+        String,
+    > {
         // 1. 设置受影响范围，让 EditorLayout::snapshot() 增量路径能定位受影响段落。
         if let Some((start, end)) = affected_range {
             self.editor_layout.set_last_edit_affected_range(start, end);
@@ -277,24 +287,33 @@ impl SujianEditorItem {
         let mut affected_line_indices: Vec<usize> = line_indices_set.into_iter().collect();
         affected_line_indices.sort_unstable();
 
-        if !affected_line_indices.is_empty() {
-            // Issue #901 第三十一轮问题3: handle 是同帧内临时使用，
-            // generation 是当前 layout_generation，layout 存活，
-            // 当前帧内不会被 release_retired_layouts 释放，不需要持有 lease。
-            let handle = crate::editor::layout::PreparedLayoutHandle {
-                generation,
-                // Issue #901 第三十六轮问题3: lines 改为 Arc<PersistentChunkedVec>。
-                // resolved_lines 后续仍需使用，此处 to_vec() clone 一次后 from_vec move，
-                // 不额外 clone。此为同帧临时 handle，非核心热路径。
-                lines: Arc::new(
-                    crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
-                        resolved_lines.to_vec(),
-                    ),
+        // Issue #904 评论 5: 本版布局事实源 —— generation + 物化视觉行。
+        //
+        // 冻结缺图行与后续纹理补图都只允许用这一份。**不再**让后续准备阶段
+        // 读当前 live `editor_layout.cache()`：编辑后它已经是另一版正文，
+        // 用 byte range 相等会把新字冒充成旧字（本评论修复的根因）。
+        let source = super::pipeline::LocalLayoutSource {
+            generation,
+            // Issue #901 第三十六轮问题3: lines 用 PersistentChunkedVec。
+            // resolved_lines 后续仍需使用，此处 to_vec() clone 一次后 from_vec move，
+            // 由本版快照的 LocalLayoutSource 持有。
+            lines: Arc::new(
+                crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
+                    resolved_lines.to_vec(),
                 ),
-                leases: Vec::new(),
-            };
+            ),
+        };
+        // 同帧临时 handle：generation 是当前 layout_generation，layout 存活，
+        // 本帧内不会被 release_retired_layouts 释放，不需要持有 lease。
+        let source_handle = crate::editor::layout::PreparedLayoutHandle {
+            generation,
+            lines: Arc::clone(&source.lines),
+            leases: Vec::new(),
+        };
+
+        if !affected_line_indices.is_empty() {
             let anim_visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
-                &handle,
+                &source_handle,
                 &affected_line_indices,
                 dpr,
                 &text_color,
@@ -330,6 +349,11 @@ impl SujianEditorItem {
             }
         }
 
+        // Issue #904 评论 5: 把本版布局的真实行图冻结进不可变快照。
+        // 旧快照在下一代布局产出后无法再从 live cache 复现，因此必须在产出这一版
+        // 布局的此刻就补全；补不出保持 image=None，后续显式 missing，不冒充。
+        freeze_missing_line_images(&mut snapshot, &source_handle, dpr, &text_color);
+
         // 6. 计算 caret（视口坐标 + 文档坐标）。
         let cursor_byte = self.pipeline.cursor();
         let caret =
@@ -339,7 +363,7 @@ impl SujianEditorItem {
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
 
-        Ok(snapshot)
+        Ok((snapshot, Some(source)))
     }
 
     // Issue #658 评论 5622188166 问题 1: 删除 layout_snapshot_for_text。
@@ -386,7 +410,13 @@ impl SujianEditorItem {
         width: f64,
         promote: bool,
         composition_range: Option<(usize, usize)>,
-    ) -> Result<EditorLayoutSnapshot, String> {
+    ) -> Result<
+        (
+            EditorLayoutSnapshot,
+            Option<super::pipeline::LocalLayoutSource>,
+        ),
+        String,
+    > {
         // Issue #810 评论 5934658350: 显式传入 canonical text revision，不再让 helper
         // 自己猜 pipeline.text_revision()。普通"当前正文快照"路径传当前 revision。
         let canonical_text_revision = self.pipeline.text_revision();
@@ -414,7 +444,13 @@ impl SujianEditorItem {
         promote: bool,
         composition_range: Option<(usize, usize)>,
         canonical_text_revision: u64,
-    ) -> Result<EditorLayoutSnapshot, String> {
+    ) -> Result<
+        (
+            EditorLayoutSnapshot,
+            Option<super::pipeline::LocalLayoutSource>,
+        ),
+        String,
+    > {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -496,6 +532,26 @@ impl SujianEditorItem {
         let resolved = doc_snapshot.resolved_visual_lines();
         let resolved_lines = resolved.as_ref();
 
+        // Issue #904 评论 5: 本版布局事实源（generation + 物化视觉行）。
+        //
+        // 冻结缺图行与后续补图都只允许用这一份。**不**再让纹理准备阶段读当前
+        // live `editor_layout.cache()`：IME commit 时缓存还是编辑前的一版正文，
+        // 用 byte range 相等会把另一版字形冒充成本快照行（本评论修复的根因）。
+        //
+        // promote=true 时 generation 在本函数返回后继续存活（由 pending promoted
+        // layout 持有），可作为新一侧的补图源；promote=false 时 generation 在函数
+        // 末尾被 retire，返回 None，只能用冻结 image。
+        let source_lines = Arc::new(
+            crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
+                resolved_lines.to_vec(),
+            ),
+        );
+        let source_handle = crate::editor::layout::PreparedLayoutHandle {
+            generation,
+            lines: Arc::clone(&source_lines),
+            leases: Vec::new(),
+        };
+
         // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
         // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
         // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
@@ -519,22 +575,12 @@ impl SujianEditorItem {
                 // 此处 prepare_animation_visuals_from_layout + inject 仅用于提取可延迟的
                 // QImage/纹理（返回 AnimationRasterVisual，不携带 cluster），
                 // 不再为动画单独补 cluster。inject 只注入 image，不覆盖已有 cluster。
-                // Issue #901 第三十一轮问题3: handle 是同帧内临时使用，
-                // generation 由 allocate_animation_layout_generation 分配，
-                // layout 刚排版完成，当前帧内不会被释放，不需要持有 lease。
-                let handle = crate::editor::layout::PreparedLayoutHandle {
-                    generation,
-                    // Issue #901 第三十六轮问题3: lines 改为 Arc<PersistentChunkedVec>。
-                    // resolved_lines 后续仍需使用，此处 to_vec() clone 一次后 from_vec move。
-                    lines: Arc::new(
-                        crate::editor::layout::chunked_vec::PersistentChunkedVec::from_vec(
-                            resolved_lines.to_vec(),
-                        ),
-                    ),
-                    leases: Vec::new(),
-                };
+                // Issue #904 评论 5: 复用本版布局事实源的 handle，不再另建一份。
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
-                    &handle, &line_ids, dpr, text_color,
+                    &source_handle,
+                    &line_ids,
+                    dpr,
+                    text_color,
                 );
                 // Issue #785 评论 5857873894 修改 2b: inject 返回成功注入行数，此处忽略。
                 let _ = crate::editor::layout::inject_animation_visuals_into_snapshot(
@@ -572,6 +618,10 @@ impl SujianEditorItem {
         snapshot.caret_rect = Some(caret);
         snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
+
+        // Issue #904 评论 5: 在 retire generation 之前把本版布局的真实行图冻结进快照。
+        // 快照一旦作为旧版本被下一代布局覆盖，就无法再从 Qt 布局复现这些字形。
+        freeze_missing_line_images(&mut snapshot, &source_handle, dpr, text_color);
 
         if promote {
             // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
@@ -618,9 +668,21 @@ impl SujianEditorItem {
             crate::editor::layout::retire_temporary_generation(generation);
         }
 
+        // Issue #904 评论 5: 只有 promote=true 时本版 generation 在函数返回后仍存活，
+        // 才能作为新一侧的补图源交给调用方；promote=false 时 generation 已 retire，
+        // 句柄立即失效，返回 None（该侧只能用快照里已冻结 image）。
+        let layout_source = if promote {
+            Some(super::pipeline::LocalLayoutSource {
+                generation,
+                lines: Arc::clone(&source_lines),
+            })
+        } else {
+            None
+        };
+
         // Issue #904 清理: canonical document snapshot 只在本函数内部交给
         // LineSnapshotBuilder，不再作为第二份 canonical 上交 Pipeline。
-        Ok(snapshot)
+        Ok((snapshot, layout_source))
     }
 
     pub(crate) fn ensure_layout_cached(
@@ -735,4 +797,95 @@ impl SujianEditorItem {
             .map(|pf| pf.layout_snapshot.clone())
             .unwrap_or_else(|| self.layout_snapshot(width))
     }
+}
+
+/// Issue #904 评论 5：把**这一版** Qt 布局的真实行图冻结进不可变快照。
+///
+/// 为什么必须在产出快照的此刻冻结：增量排版会在同一 generation 内原地重排、
+/// 覆盖受影响段落的 QTextLayout（`install_layout_slot_gen` 复用同一物理槽），
+/// 旧的 QTextLine 之后不再可得。若等下一次编辑再去取旧字形，就只能拿到新正文，
+/// 用 byte range 相等把新字冒充成旧字 —— 那正是本评论修复的根因。
+///
+/// 因此这里用与快照同版的 `source`（generation + 物化视觉行）为仍缺图、
+/// 但确有可见 cluster 的快照行补出 QImage。定位/校验失败就保持 `image: None`，
+/// 由 `prepare_local_text_textures` 显式记入 missing，绝不用另一版正文冒充。
+fn freeze_missing_line_images(
+    snapshot: &mut EditorLayoutSnapshot,
+    source: &crate::editor::layout::PreparedLayoutHandle,
+    dpr: f64,
+    text_color: &str,
+) {
+    // 收集需要补图的快照行及其在源视觉行里的索引。
+    let mut targets: Vec<(usize, usize)> = Vec::new();
+    for (snapshot_index, line) in snapshot.line_snapshots.iter().enumerate() {
+        if line.image.is_some() || line.clusters.is_empty() {
+            continue;
+        }
+        if let Some(source_index) =
+            source_line_index_for_id(source, line.id, line.byte_start, line.byte_end)
+        {
+            targets.push((snapshot_index, source_index));
+        }
+    }
+    if targets.is_empty() {
+        return;
+    }
+
+    let line_indices: Vec<usize> = targets.iter().map(|(_, index)| *index).collect();
+    let visuals = crate::editor::layout::prepare_animation_visuals_from_layout(
+        source,
+        &line_indices,
+        dpr,
+        text_color,
+    );
+
+    for (snapshot_index, source_index) in targets {
+        let Some(source_line) = source.lines.get(source_index) else {
+            continue;
+        };
+        // 结果按 (段落 logical slot, 段内 QTextLine 序号) 匹配，不依赖返回顺序
+        //（提取失败的行会被上游跳过）。
+        let key = (source_line.logical_slot, source_line.qtextline_idx);
+        let image = visuals
+            .iter()
+            .find(|visual| (visual.paragraph_slot as i32, visual.qtextline_idx) == key)
+            .and_then(|visual| visual.image.clone());
+        if let Some(image) = image {
+            snapshot.line_snapshots[snapshot_index].image = Some(image);
+        }
+    }
+}
+
+/// Issue #904 评论 5：按 `LineSnapshotId`（段落 logical slot + 段内视觉行号）在
+/// 一版物化视觉行里定位对应的行索引。
+///
+/// 视觉行按文档次序排列，同段落的行连续。用 `logical_slot` 匹配段落、按出现次序
+/// 数到 `visual_line_ordinal`，再用非空正文 + byte range 确认确实是该快照行。
+/// 定位不到或 byte range 不一致时返回 `None`（调用方显式记 missing）。
+fn source_line_index_for_id(
+    source: &crate::editor::layout::PreparedLayoutHandle,
+    id: super::snapshot_id::LineSnapshotId,
+    byte_start: usize,
+    byte_end: usize,
+) -> Option<usize> {
+    let mut seen_ordinal: u32 = 0;
+    for index in 0..source.lines.len() {
+        let Some(line) = source.lines.get(index) else {
+            continue;
+        };
+        if line.logical_slot as u64 != id.paragraph_id {
+            continue;
+        }
+        if seen_ordinal == id.visual_line_ordinal {
+            if !line.para_text.is_empty()
+                && line.byte_start == byte_start
+                && line.byte_end == byte_end
+            {
+                return Some(index);
+            }
+            return None;
+        }
+        seen_ordinal += 1;
+    }
+    None
 }

@@ -355,7 +355,11 @@ impl TextMotion {
                                 end: new_frag.rect.w,
                             },
                             byte_range: new_frag.byte_range,
-                            source_revision: old_revision,
+                            // Issue #904 评论 5: `source` 指向**新**快照
+                            //（`new_frag.snapshot`），source_revision 必须标新版本，
+                            // 不能沿用 old_revision，否则下次连续编辑会把新字形
+                            // 当成旧版本做 identity/retarget。
+                            source_revision: new_revision,
                             glyph_id: new_frag.glyph_id,
                             paragraph_id: new_frag.paragraph_id,
                         });

@@ -403,6 +403,34 @@ pub struct LocalTextTexturePrep {
     pub missing: Vec<LineSnapshotId>,
 }
 
+/// Issue #904 评论 5：产出某个 `EditorLayoutSnapshot` 的 Qt 布局事实源。
+///
+/// 只由同一次排版在快照建立处产出，与该版快照一一对应。`lines` 是该 generation
+/// 下已物化为文档绝对坐标的视觉行，可把 `LineSnapshotId`（段落 logical slot +
+/// 段内视觉行号）定位到 QTextLine 并取出真实行图。
+///
+/// 不变量：与 `lines` 配套的 generation 一旦被下一代布局**原地重排覆盖**就不再
+/// 能复现旧字形；那种快照不能携带本句柄，只能用快照里已冻结的 image。
+pub(crate) struct LocalLayoutSource {
+    /// 产出这些行图的 Qt 布局 generation。
+    pub generation: u64,
+    /// 与该 generation 同源的物化视觉行。
+    pub lines: std::sync::Arc<
+        crate::editor::layout::chunked_vec::PersistentChunkedVec<crate::editor::layout::VisualLine>,
+    >,
+}
+
+/// Issue #904 评论 5：一侧局部动画的视觉事实源。
+///
+/// old / new 两侧各自传入自己的快照。行图只能取自 `snapshot` 里在产出该版布局时
+/// 冻结的真实 image；`layout` 只有在与 `snapshot` 是**同一版** Qt 布局时才存在。
+/// 旧版快照恒以 `layout: None` 传入：缺图显式记入 `missing`，绝不用当前 live
+/// `EditorLayout` cache（已是另一版正文）冒充。
+pub(crate) struct LocalTextSource<'a> {
+    pub snapshot: &'a EditorLayoutSnapshot,
+    pub layout: Option<&'a LocalLayoutSource>,
+}
+
 impl LocalTextTexturePrep {
     pub fn ready(&self) -> bool {
         self.missing.is_empty()
@@ -978,19 +1006,23 @@ impl LinuxEditorPipeline {
 }
 
 impl super::SujianEditorItem {
-    /// Issue #904 评论 4：按“本次局部动画真正引用的源 LineSnapshotId”准备纹理。
+    /// Issue #904 评论 5：按“本次局部动画真正引用的源 LineSnapshotId”准备纹理。
     ///
     /// 不再用编辑字节范围猜几行：调用方先把 TextMotion 的 pieces 建完，再把它
-    /// 真正引用的源快照 id 交进来。缺 image 的行用现有 Qt
-    /// `prepare_animation_visuals_from_layout` 路径生成局部行图并交给 TextureCache，
-    /// 不能静默略过、随后让 renderer 以为“这次没有动画”。返回显式准备结果。
+    /// 真正引用的源快照 id 交进来，并显式给出这一侧的视觉事实源 `source`
+    ///（old / new 各自传入）。
     ///
-    /// 注：本方法需要当前 live `EditorLayout` 才能补生成缺图行，故实现挂在
-    /// `SujianEditorItem` 上（`pipeline.rs` 内），而不是只持有纹理缓存的
-    /// `LinuxEditorPipeline`。
+    /// 准备顺序（每一侧都独立成立）：
+    /// 1. 快照里在产出该版布局时冻结的 `image` —— 这是唯一能证明“就是那一版字形”
+    ///    的材料，old 侧靠它拿到真正的删除前字形；
+    /// 2. 快照缺图时，只有 `LocalTextSource::layout` 与快照同版才允许用它补图；
+    ///    old 侧恒为 `None`，缺图显式记入 `missing`，绝不用另一版正文冒充。
+    ///
+    /// 注：补图需要 Qt 布局句柄，故实现挂在 `SujianEditorItem` 上（`pipeline.rs` 内），
+    /// 而不是只持有纹理缓存的 `LinuxEditorPipeline`。
     pub(crate) fn prepare_local_text_textures(
         &mut self,
-        base_snapshot: &EditorLayoutSnapshot,
+        source: &LocalTextSource<'_>,
         required_ids: &[LineSnapshotId],
     ) -> LocalTextTexturePrep {
         let mut prep = LocalTextTexturePrep::default();
@@ -1006,8 +1038,8 @@ impl super::SujianEditorItem {
                 continue;
             }
 
-            // 该快照里没有这个 id：本侧忽略（另一侧可能持有该源行），不伪造、不报错。
-            let Some(line) = base_snapshot.line_snapshots.iter().find(|l| l.id == id) else {
+            // 本源快照里没有这个 id：本侧忽略（另一侧可能持有该源行），不伪造、不报错。
+            let Some(line) = source.snapshot.line_snapshots.iter().find(|l| l.id == id) else {
                 continue;
             };
 
@@ -1017,8 +1049,8 @@ impl super::SujianEditorItem {
                 continue;
             }
 
-            // 快照里 image 为 None：用当前 live layout 的既有 Qt 路径生成局部行图。
-            match self.generate_local_line_image(line) {
+            // 快照缺图：只允许用**与快照同一版**的 Qt 布局补图。
+            match self.generate_local_line_image(source, line) {
                 Some(image) => {
                     self.pipeline.texture_cache.insert_line(id, image);
                     prep.prepared.push(id);
@@ -1029,37 +1061,31 @@ impl super::SujianEditorItem {
         prep
     }
 
-    /// Issue #904 评论 4：用 `crate::editor::layout::prepare_animation_visuals_from_layout`
-    /// 从当前 live layout 生成快照行对应的局部行图。
+    /// Issue #904 评论 5：用**与快照同一版**的 Qt 布局给缺图快照行补行图。
     ///
-    /// 用 `LineSnapshotId`（`paragraph_id` + `visual_line_ordinal`）在当前
-    /// `EditorLayout` 缓存中定位视觉行（段首行索引 + 段内 ordinal），再用 byte range
-    /// 二次校验确实指向同一行。定位不到、越界或缓存不属于本 id 的 live 布局
-    ///（例如此时缓存是另一版正文）时返回 `None`，由调用方记入 missing，不伪造图片。
+    /// 只用 `source.layout`（产出该快照那一版的 generation + 物化视觉行）：
+    /// 按 `LineSnapshotId`（段落 logical slot + 段内视觉行号）在源视觉行里定位，
+    /// 再用 byte range 二次确认是同一行。同一版布局由 `LocalLayoutSource` 唯一标识，
+    /// 因此取出的字形必定属于该快照版本。
+    ///
+    /// `layout: None`（旧版布局已被下一代原地重排覆盖）、定位不到或 byte range
+    /// 不一致时返回 `None`，由调用方记入 missing。**绝不**回退到当前 live
+    /// `editor_layout.cache()`：那时缓存已是另一版正文，用 byte range 相等会把新字
+    /// 冒充成旧字。
     fn generate_local_line_image(
         &self,
+        source: &LocalTextSource<'_>,
         snapshot_line: &PreparedLineSnapshot,
     ) -> Option<qmetaobject::QImage> {
+        let layout = source.layout?;
         let id = snapshot_line.id;
-        let cache = self.editor_layout.cache()?;
-        let paragraph_index = id.paragraph_id as usize;
-        let ordinal = id.visual_line_ordinal as usize;
-        let line_index = cache
-            .paragraph_line_count_index
-            .paragraph_line_start(paragraph_index)
-            .checked_add(ordinal)?;
-        if line_index >= cache.lines.len() {
-            return None;
-        }
 
-        // byte range 二次校验：确认该视觉行就是快照行，否则说明当前缓存不是本 id
-        // 的 live 布局，不能用它冒充。
-        let resolved = cache.resolve_line(line_index);
-        if resolved.byte_start != snapshot_line.byte_start
-            || resolved.byte_end != snapshot_line.byte_end
-        {
-            return None;
-        }
+        let line_index = source_line_index_in_layout(
+            &layout.lines,
+            id,
+            snapshot_line.byte_start,
+            snapshot_line.byte_end,
+        )?;
 
         let item_ptr = self.get_cpp_object();
         let dpr = if item_ptr.is_null() {
@@ -1069,11 +1095,11 @@ impl super::SujianEditorItem {
         };
         let text_color = self.current_text_color.to_string();
 
-        // 同帧临时 handle：generation 是当前 layout_generation，布局在本帧存活，
+        // 同帧临时 handle：generation 是产出该快照的布局代，布局在本帧存活，
         // 不需要持有 lease（与 layout_ops.rs 的动画提取一致）。
         let handle = crate::editor::layout::PreparedLayoutHandle {
-            generation: cache.layout_generation,
-            lines: std::sync::Arc::clone(&cache.lines),
+            generation: layout.generation,
+            lines: std::sync::Arc::clone(&layout.lines),
             leases: Vec::new(),
         };
         crate::editor::layout::prepare_animation_visuals_from_layout(
@@ -1085,6 +1111,42 @@ impl super::SujianEditorItem {
         .into_iter()
         .find_map(|visual| visual.image)
     }
+}
+
+/// Issue #904 评论 5：按 `LineSnapshotId`（段落 logical slot + 段内视觉行号）在
+/// 一版物化视觉行里定位对应的行索引。
+///
+/// 视觉行按文档次序排列，同段落的行连续。用 `logical_slot` 匹配段落、按出现次序
+/// 数到 `visual_line_ordinal`，再用非空正文 + byte range 确认确实是该快照行。
+/// 定位不到或 byte range 不一致时返回 `None`（调用方显式记 missing）。
+fn source_line_index_in_layout(
+    lines: &crate::editor::layout::chunked_vec::PersistentChunkedVec<
+        crate::editor::layout::VisualLine,
+    >,
+    id: LineSnapshotId,
+    byte_start: usize,
+    byte_end: usize,
+) -> Option<usize> {
+    let mut seen_ordinal: u32 = 0;
+    for index in 0..lines.len() {
+        let Some(line) = lines.get(index) else {
+            continue;
+        };
+        if line.logical_slot as u64 != id.paragraph_id {
+            continue;
+        }
+        if seen_ordinal == id.visual_line_ordinal {
+            if !line.para_text.is_empty()
+                && line.byte_start == byte_start
+                && line.byte_end == byte_end
+            {
+                return Some(index);
+            }
+            return None;
+        }
+        seen_ordinal += 1;
+    }
+    None
 }
 
 // Issue #808 评论 5918236360: 内嵌测试模块超过生产文件结构上限，测试拆到

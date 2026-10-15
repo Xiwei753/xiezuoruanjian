@@ -1,4 +1,5 @@
 use super::*;
+use crate::sujian_editor_item::pipeline::LocalTextSource;
 use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 use crate::sujian_editor_item::pipeline::VisualPrepareOutcome;
 use crate::sujian_editor_item::text_motion::TextMotion;
@@ -48,8 +49,10 @@ impl SujianEditorItem {
         let width = self.bounding_width();
 
         // Issue #904：先增量排版得到新布局，再据此建立唯一的局部动画。
-        let new_snapshot = match self.build_incremental_layout_snapshot(width, affected_range) {
-            Ok(snapshot) => Some(snapshot),
+        // Issue #904 评论 5：同时拿到本版布局事实源（generation + 物化视觉行），
+        // 供新一侧只在同一版布局上补图。
+        let new_layout = match self.build_incremental_layout_snapshot(width, affected_range) {
+            Ok(pair) => Some(pair),
             Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
         };
 
@@ -60,7 +63,7 @@ impl SujianEditorItem {
         // Issue #904 评论 4：先建立唯一的局部动画计划，再按计划真正引用的源快照 id
         // 准备纹理；不再用编辑字节范围预判几行，也不在计划之前无差别补图。
         let mut motion: Option<TextMotion> = None;
-        if let Some(new_snap) = new_snapshot.as_ref() {
+        if let Some((new_snap, new_source)) = new_layout.as_ref() {
             let session = self.document_session;
             // Issue #904 评论 3: 有上次真正画出的局部图片（同一 session）才算重定向。
             let retargeting = self
@@ -93,18 +96,29 @@ impl SujianEditorItem {
             }
 
             if let Some(m) = motion.as_ref() {
-                // 计划的源纹理：只用 TextMotion 真正引用的旧/新源行 id，新旧两侧
-                // 都尝试准备（函数会忽略本快照里不存在的 id）。缺任一纹理必须显式
-                // 记入 missing，不能静默降级让 renderer 误以为"这次没有动画"。
+                // 计划的源纹理：只用 TextMotion 真正引用的旧/新源行 id。
+                // Issue #904 评论 5：old / new 各自显式带自己的视觉事实源；old 侧
+                // 没有同版 Qt 布局句柄，只能用快照里冻结的 image，缺图显式 missing。
                 let required = m.required_textures.clone();
-                let new_prep = self.prepare_local_text_textures(new_snap, &required);
-                let old_prep = old_layout
-                    .as_ref()
-                    .map(|old_snap| self.prepare_local_text_textures(old_snap, &required));
-                let prep = match old_prep.as_ref() {
-                    Some(op) => LocalTextTexturePrep::merge_sides(&required, &[&new_prep, op]),
-                    None => LocalTextTexturePrep::merge_sides(&required, &[&new_prep]),
-                };
+                let new_prep = self.prepare_local_text_textures(
+                    &LocalTextSource {
+                        snapshot: new_snap,
+                        layout: new_source.as_ref(),
+                    },
+                    &required,
+                );
+                let old_prep = old_layout.as_ref().map(|old_snap| {
+                    self.prepare_local_text_textures(
+                        &LocalTextSource {
+                            snapshot: old_snap,
+                            layout: None,
+                        },
+                        &required,
+                    )
+                });
+                let sides: Vec<&LocalTextTexturePrep> =
+                    std::iter::once(&new_prep).chain(old_prep.iter()).collect();
+                let prep = LocalTextTexturePrep::merge_sides(&required, &sides);
                 let missing_ids = if prep.missing.is_empty() {
                     String::new()
                 } else {
@@ -131,7 +145,7 @@ impl SujianEditorItem {
         }
 
         let has_motion = motion.is_some();
-        if let Some(new_snap) = new_snapshot {
+        if let Some((new_snap, _new_source)) = new_layout {
             self.pipeline.set_current_layout_snapshot(Some(new_snap));
         }
         *self.pipeline.text_motion_mut() = motion;

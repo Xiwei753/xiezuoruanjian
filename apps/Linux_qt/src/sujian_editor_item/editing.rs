@@ -2,6 +2,7 @@ use super::edit_flow::{CompositionCommitParams, EditOp};
 use super::layout_revision::LayoutRevision;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
+use crate::sujian_editor_item::pipeline::LocalTextSource;
 use crate::sujian_editor_item::pipeline::LocalTextTexturePrep;
 
 impl SujianEditorItem {
@@ -89,7 +90,9 @@ impl SujianEditorItem {
         // Err 时记诊断并结束本次 commit，不伪装成功。
         let old_snapshot = self.pipeline.current_layout_snapshot().clone().or_else(|| {
             match self.build_editor_layout_snapshot(width, false, old_composition_range) {
-                Ok(snap) => Some(snap),
+                // Issue #904 评论 5: promote=false 的 generation 已在函数末尾 retire，
+                // 事实源不可得，旧一侧只能用快照里冻结的 image（build 内已冻结）。
+                Ok((snap, _source)) => Some(snap),
                 Err(err) => {
                     crate::backend::app_backend::debug_error_static(
                         "editing",
@@ -126,13 +129,15 @@ impl SujianEditorItem {
         let core_new_revision = result.new_revision.value();
         self.pipeline.set_text_revision(core_new_revision);
         let canonical_text_revision = core_new_revision;
-        let new_snapshot = match self.build_editor_layout_snapshot_with_canonical(
+        let (new_snapshot, new_source) = match self.build_editor_layout_snapshot_with_canonical(
             width,
             true,
             new_composition_range,
             canonical_text_revision,
         ) {
-            Ok(snapshot) => snapshot,
+            // Issue #904 评论 5: promote=true，本版 generation 在函数返回后仍存活，
+            // 作为新一侧的补图事实源；旧一侧另行传 None。
+            Ok(pair) => pair,
             Err(err) => {
                 crate::backend::app_backend::debug_error_static(
                     "editing",
@@ -196,8 +201,23 @@ impl SujianEditorItem {
         // 误以为"这次没有动画"。
         if let Some(m) = motion.as_ref() {
             let required = m.required_textures.clone();
-            let new_prep = self.prepare_local_text_textures(&new_snapshot, &required);
-            let old_prep = self.prepare_local_text_textures(&old_snapshot, &required);
+            // Issue #904 评论 5：old / new 各自显式带自己的视觉事实源。new 侧可用与
+            // 快照同一版的 Qt 布局补缺图；old 侧没有同版句柄，只能用快照里冻结的
+            // image，缺图显式 missing，绝不用 new 侧布局冒充旧字形。
+            let new_prep = self.prepare_local_text_textures(
+                &LocalTextSource {
+                    snapshot: &new_snapshot,
+                    layout: new_source.as_ref(),
+                },
+                &required,
+            );
+            let old_prep = self.prepare_local_text_textures(
+                &LocalTextSource {
+                    snapshot: &old_snapshot,
+                    layout: None,
+                },
+                &required,
+            );
             let prep = LocalTextTexturePrep::merge_sides(&required, &[&new_prep, &old_prep]);
             let missing_ids = if prep.missing.is_empty() {
                 String::new()

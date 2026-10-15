@@ -541,6 +541,21 @@ impl QQuickItem for SujianEditorItem {
                         ));
                         self.last_missing_log_key = Some((session, revision));
                     }
+                } else if !render_outcome.animation_layer_ok {
+                    // Issue #904 评论 4: 静态层已重建，但 C++ 动画层本帧未能建立
+                    // 并绑定有效纹理。此时静态层未挖孔、画完整 canonical，本帧没有
+                    // 画出任何动画像素，因此不记录 last_drawn_local_frame。日志沿用
+                    // source missing / static rebuild failed 的同一 (session, revision)
+                    // 去重键，保持每生命周期一行，不逐帧刷屏。
+                    if self.last_missing_log_key != Some((session, revision)) {
+                        super::editor_animation_debug_log(&format!(
+                            "text_motion animation layer failed: session={session} revision={revision} \
+                             overlays={} committed={}",
+                            render_plan.local_text.overlays.len(),
+                            render_outcome.committed_local.len(),
+                        ));
+                        self.last_missing_log_key = Some((session, revision));
+                    }
                 } else if !render_outcome.committed_local.is_empty() {
                     if self.last_commit_log_key != Some((session, revision)) {
                         super::editor_animation_debug_log(&format!(
