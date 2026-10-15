@@ -686,6 +686,21 @@ impl ChunkedSlotMap {
         self.id_to_block.contains_key(&id)
     }
 
+    /// 查询 `slot`（逻辑序号）处的稳定 ID。O(1)。
+    ///
+    /// Issue #904 复核 11: 构建整章段落锚点时按 slot 取稳定 `ParagraphId`，
+    /// 不必为拿段落 ID 去物化整章视觉行（那会 clone 每段的文本与图片）。
+    pub fn id_at_slot(&self, slot: usize) -> Option<ParagraphId> {
+        if slot >= self.total_len {
+            return None;
+        }
+        let (chunk_idx, local_idx) = self.find_chunk(slot);
+        self.blocks
+            .get(chunk_idx)
+            .and_then(|block| block.ids.get(local_idx))
+            .copied()
+    }
+
     /// 在 `index` 处插入 `id`。
     ///
     /// O(块数 + B)。

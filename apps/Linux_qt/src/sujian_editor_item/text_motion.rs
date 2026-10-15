@@ -14,6 +14,8 @@
 //! - 新旧字形按 `QTextLayout` 的 cluster 边界（Core 的 UTF-8 byte range）
 //!   整体区分，不猜半个字节。
 
+use std::collections::HashMap;
+
 use super::layout_snapshot::{EditorLayoutSnapshot, ShapingIdentity, SourceRect};
 use super::qt_text_node::AnimationClipRect;
 use super::render_plan::TextAnimationGlyphInfo;
@@ -852,14 +854,15 @@ fn collect_paragraph_moves(
     let Some(old_layout) = old_layout else {
         return Vec::new();
     };
-    let old_tops = paragraph_tops(old_layout);
+    // Issue #904 复核 11: 旧锚点建 HashMap，按 id O(1) 查；不再对整章 Vec 逐段
+    // 线性 `find`（上千段会退化成平方级比较，与"动画只影响少量段落"的目标冲突）。
+    let old_tops: HashMap<u64, (f64, f64)> = paragraph_tops(old_layout)
+        .into_iter()
+        .map(|(id, y, h)| (id, (y, h)))
+        .collect();
     let mut moves = Vec::new();
     for (paragraph_id, to_y, to_h) in paragraph_tops(new_layout) {
-        let Some((from_y, from_h)) = old_tops
-            .iter()
-            .find(|(id, _, _)| *id == paragraph_id)
-            .map(|(_, y, h)| (*y, *h))
-        else {
+        let Some((from_y, from_h)) = old_tops.get(&paragraph_id).copied() else {
             continue;
         };
         if (from_y - to_y).abs() < 0.5 {

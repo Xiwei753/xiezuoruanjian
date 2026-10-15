@@ -43,43 +43,53 @@ fn paragraph_top_and_height(
     )
 }
 
-/// Issue #904 复核 10：本次编辑受影响的**段落 slot** 集合（按真实 byte 范围判定）。
+/// Issue #904 复核 10/11：本次编辑受影响的**连续段落 slot 区间**（含首尾）。
 ///
 /// 编辑发生在可见光标处，但一次粘贴/换行/删除多行会把受影响段落的行推到视口之外。
 /// 这些行的 cluster 几何与该版本图片必须一并保留：否则屏幕外进入/离开的字在
 /// `text_motion` 里拿不到完整 old/new 几何，会被误判成 Reveal/Conceal 或整段缺席。
-fn affected_paragraph_slots(
+///
+/// 返回区间而非集合：`byte_to_paragraph` 对连续 byte 范围必然给出连续 slot，
+/// 调用方用 O(1) 区间判断即可，避免每行可见性分支都扫一遍集合。
+fn affected_paragraph_slot_range(
     doc_snapshot: &CanonicalDocumentVisualSnapshot,
     affected_range: Option<(usize, usize)>,
-) -> Vec<usize> {
-    let Some((start, end)) = affected_range else {
-        return Vec::new();
-    };
+) -> Option<(usize, usize)> {
+    let (start, end) = affected_range?;
     let index = doc_snapshot.paragraph_offset_index.as_ref();
     let paragraph_count = index.len();
     if paragraph_count == 0 {
-        return Vec::new();
+        return None;
     }
     // 零长度的插入（光标处）用 start 自身定位段落。
     let last_byte = end.saturating_sub(1).max(start);
     let first = index.byte_to_paragraph(start).min(paragraph_count - 1);
     let last = index.byte_to_paragraph(last_byte).min(paragraph_count - 1);
-    (first..=last).collect()
+    Some((first, last))
 }
 
-/// Issue #904 复核 10：该版本**全部段落**的几何锚点（不含任何 QImage）。
+/// 段落 slot 是否落在受影响区间内。O(1)。
+fn slot_in_range(range: Option<(usize, usize)>, slot: usize) -> bool {
+    matches!(range, Some((first, last)) if slot >= first && slot <= last)
+}
+
+/// Issue #904 复核 10/11：该版本**全部段落**的几何锚点（不含任何 QImage）。
 ///
-/// `visual_lines` 按段落顺序排列、同段连续，因此只与上一个锚点比较即可去重，O(行数)。
+/// 复核 11 修正性能退化：只遍历高度索引的段落 slot，稳定 `ParagraphId` 从
+/// `paragraph_id_to_slot` 按 slot O(1) 取，`top_y`/`height` 从高度索引取。
+/// 不再调用 `resolved_visual_lines()` —— 那会对整章每条视觉行做 `materialize_line`
+/// 并 clone 段落文本/图片，把普通输入的局部热路径拉回 O(整章视觉行数)。
 fn paragraph_anchors(doc_snapshot: &CanonicalDocumentVisualSnapshot) -> Vec<ParagraphAnchor> {
-    let mut anchors: Vec<ParagraphAnchor> = Vec::new();
-    for line in doc_snapshot.resolved_visual_lines().iter() {
-        let paragraph_id = line.paragraph_id.as_u64();
-        if anchors.last().map(|a| a.paragraph_id) == Some(paragraph_id) {
+    let slot_map = doc_snapshot.paragraph_id_to_slot.as_ref();
+    let paragraph_count = doc_snapshot.height_index.len();
+    let mut anchors: Vec<ParagraphAnchor> = Vec::with_capacity(paragraph_count);
+    for slot in 0..paragraph_count {
+        let Some(paragraph_id) = slot_map.id_at_slot(slot) else {
             continue;
-        }
-        let (top_y, height) = paragraph_top_and_height(line.logical_slot, doc_snapshot);
+        };
+        let (top_y, height) = paragraph_top_and_height(slot as i32, doc_snapshot);
         anchors.push(ParagraphAnchor {
-            paragraph_id,
+            paragraph_id: paragraph_id.as_u64(),
             top_y,
             height,
         });
@@ -108,7 +118,7 @@ impl LineSnapshotBuilder {
 
         // Issue #904 复核 10：本次编辑受影响段落 —— 它们的行即使被推到视口外也必须
         // 保留（屏幕外进入/离开的字要按真实路径生成 Move）。
-        let affected_slots = affected_paragraph_slots(doc_snapshot, affected_range);
+        let affected_slots = affected_paragraph_slot_range(doc_snapshot, affected_range);
 
         // Issue #901: 只物化视口内行（加边距）∪ 本次编辑受影响段落的行，
         // 避免对长篇文档物化整章所有视觉行。返回的行已是物化后的绝对坐标。
@@ -122,9 +132,9 @@ impl LineSnapshotBuilder {
                 .paragraphs_in_y_range(scroll_y - margin, scroll_y + viewport_h + margin);
             let mut first = vp_first;
             let mut last_excl = vp_last_excl;
-            for &slot in &affected_slots {
-                first = first.min(slot);
-                last_excl = last_excl.max(slot + 1);
+            if let Some((slot_first, slot_last)) = affected_slots {
+                first = first.min(slot_first);
+                last_excl = last_excl.max(slot_last + 1);
             }
             let first = first.min(doc_snapshot.paragraphs.len());
             let last_excl = last_excl.min(doc_snapshot.paragraphs.len());
@@ -151,7 +161,7 @@ impl LineSnapshotBuilder {
                 let line_bottom = line_top + line.height;
                 // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
                 if (line_bottom < -line.height || line_top > viewport_h + line.height)
-                    && !affected_slots.contains(&(line.logical_slot as usize))
+                    && !slot_in_range(affected_slots, line.logical_slot as usize)
                 {
                     visual_line_ordinal += 1;
                     continue;
@@ -193,7 +203,7 @@ impl LineSnapshotBuilder {
             let line_bottom = line_top + line.height;
             // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
             if (line_bottom < -line.height || line_top > viewport_h + line.height)
-                && !affected_slots.contains(&(line.logical_slot as usize))
+                && !slot_in_range(affected_slots, line.logical_slot as usize)
             {
                 visual_line_ordinal += 1;
                 continue;
@@ -346,7 +356,7 @@ impl LineSnapshotBuilder {
         // Issue #904 复核 10: 用高度索引 O(log n) 定位视口内段落范围。
         // 视口在文档坐标系中的 y 范围：[scroll_y, scroll_y + viewport_h]。
         // 加边距确保边缘行不被遗漏。
-        let affected_slots = affected_paragraph_slots(doc_snapshot, affected_range);
+        let affected_slots = affected_paragraph_slot_range(doc_snapshot, affected_range);
         let max_line_h = doc_snapshot.font_size * doc_snapshot.line_spacing * 2.0 + 8.0;
         let viewport_top = scroll_y - max_line_h;
         let viewport_bottom = scroll_y + viewport_h + max_line_h;
@@ -371,9 +381,9 @@ impl LineSnapshotBuilder {
                 first
             };
             // Issue #904 复核 10：受影响段落的行一并枚举（可能整段被推到视口之外）。
-            for &slot in &affected_slots {
-                first = first.min(slot);
-                last_excl = last_excl.max(slot + 1);
+            if let Some((slot_first, slot_last)) = affected_slots {
+                first = first.min(slot_first);
+                last_excl = last_excl.max(slot_last + 1);
             }
             if first < last_excl {
                 doc_snapshot.paragraph_visual_line_range(first, last_excl)
@@ -385,10 +395,13 @@ impl LineSnapshotBuilder {
             }
         };
 
-        // Issue #901 第五轮阻塞5: paragraph_id 直接用段落索引（从高度索引推算），
-        // 不遍历前面的行。visual_line_ordinal 在段落内从 0 递增。
-        let mut prev_para_start: Option<usize> = None;
-        let mut paragraph_id: u64 = first_para_idx as u64;
+        // Issue #904 复核 11: 枚举起点现在可能早于视口起点（受影响段落被并入范围），
+        // 段落序号必须直接取该行已物化的 `logical_slot`（当前文档次序），
+        // 不能从 `first_para_idx` 起递增 —— 否则 `LineSnapshotId.paragraph_id`
+        // 与 `source_line_index_for_id` 的 `logical_slot` 匹配整体错位，
+        // 旧/新图片会找错行甚至匹配到别的段落。与 `build_from_canonical_document`
+        // 保持一致。
+        let mut prev_para_slot: Option<i32> = None;
         let mut visual_line_ordinal: u32 = 0;
 
         // Issue #901 第十四轮问题1: 用 resolve_visual_line 物化绝对坐标。
@@ -397,17 +410,17 @@ impl LineSnapshotBuilder {
         for idx in start_idx..end_idx {
             let line = doc_snapshot.resolve_visual_line(idx);
             if line.para_text.is_empty() {
-                if prev_para_start != Some(line.para_start) && prev_para_start.is_some() {
-                    paragraph_id = paragraph_id.wrapping_add(1);
+                let paragraph_id = line.logical_slot as u64;
+                if prev_para_slot != Some(line.logical_slot) {
+                    visual_line_ordinal = 0;
+                    prev_para_slot = Some(line.logical_slot);
                 }
-                visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
 
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
                 // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
                 if (line_bottom < -line.height || line_top > viewport_h + line.height)
-                    && !affected_slots.contains(&(line.logical_slot as usize))
+                    && !slot_in_range(affected_slots, line.logical_slot as usize)
                 {
                     visual_line_ordinal += 1;
                     continue;
@@ -443,19 +456,17 @@ impl LineSnapshotBuilder {
                 continue;
             }
 
-            if prev_para_start != Some(line.para_start) {
-                if prev_para_start.is_some() {
-                    paragraph_id = paragraph_id.wrapping_add(1);
-                }
+            let paragraph_id = line.logical_slot as u64;
+            if prev_para_slot != Some(line.logical_slot) {
                 visual_line_ordinal = 0;
-                prev_para_start = Some(line.para_start);
+                prev_para_slot = Some(line.logical_slot);
             }
 
             let line_top = line.y - scroll_y;
             let line_bottom = line_top + line.height;
             // Issue #904 复核 10：受影响段落的行即使被推出视口也要保留几何。
             if (line_bottom < -line.height || line_top > viewport_h + line.height)
-                && !affected_slots.contains(&(line.logical_slot as usize))
+                && !slot_in_range(affected_slots, line.logical_slot as usize)
             {
                 visual_line_ordinal += 1;
                 continue;
