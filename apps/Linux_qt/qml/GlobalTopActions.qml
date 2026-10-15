@@ -42,8 +42,8 @@ RowLayout {
             Kirigami.Icon {
                 Layout.alignment: Qt.AlignVCenter
                 source: "view-refresh"
-                implicitWidth: Kirigami.Units.iconSizes.small
-                implicitHeight: Kirigami.Units.iconSizes.small
+                implicitWidth: Kirigami.Units.iconSizes.smallMedium
+                implicitHeight: Kirigami.Units.iconSizes.smallMedium
             }
 
             Rectangle {

@@ -70,7 +70,9 @@ Rectangle {
                 id: toolDelegate
                 Layout.alignment: Qt.AlignHCenter
                 Layout.preferredWidth: Math.round(root.railWidth - Kirigami.Units.smallSpacing)
-                Layout.preferredHeight: 44
+                // Issue #912：工具入口高度改为按内容（图标 + 文字）派生，
+                // 不再写死 44，桌面字号下星图/AI 入口不再偏小。
+                Layout.preferredHeight: Math.max(Kirigami.Units.gridUnit * 2.4, implicitHeight)
                 text: modelData.label
                 highlighted: root.selectedTool === modelData.key
                 enabled: modelData.enabled !== false
@@ -82,8 +84,8 @@ Rectangle {
                 ToolTip.text: modelData.label
 
                 icon.name: modelData.icon || "tools-wizard"
-                icon.width: Kirigami.Units.iconSizes.small
-                icon.height: Kirigami.Units.iconSizes.small
+                icon.width: Kirigami.Units.iconSizes.smallMedium
+                icon.height: Kirigami.Units.iconSizes.smallMedium
                 display: AbstractButton.TextUnderIcon
 
                 onClicked: root.toolRequested(modelData.key)
@@ -97,12 +99,12 @@ Rectangle {
             id: toggleButton
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: Math.round(root.railWidth - Kirigami.Units.smallSpacing)
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2.4
+            Layout.preferredHeight: Math.max(Kirigami.Units.gridUnit * 2.4, implicitHeight)
             flat: true
             // 展开时按钮指向右（收起），收起时指向左（展开）。
             icon.name: root.toolPaneOpen ? "go-next" : "go-previous"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.IconOnly
 
             ToolTip.visible: hovered
