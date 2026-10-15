@@ -38,6 +38,15 @@
           strictMode: {
             caseSensitiveCheck: true,
           },
+          // privacy_acl 作为 HSP 依赖被 entry 模块全局声明（oh-package.json5），
+          // hvigor 要求依赖模块的 target 应用于消费模块的所有 product。
+          // 普通 default product 不使用 DLP 防窥能力，通过 removePermissions
+          // 移除 privacy_acl 引入的 ohos.permission.DLP_GET_HIDE_STATUS。
+          removePermissions: [
+            {
+              name: 'ohos.permission.DLP_GET_HIDE_STATUS',
+            },
+          ],
         },
         targetSdkVersion: '26.0.0',
       },
@@ -89,6 +98,7 @@
         {
           name: 'default',
           applyToProducts: [
+            'default',
             'acl',
           ],
         },
