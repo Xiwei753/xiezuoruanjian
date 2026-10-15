@@ -257,6 +257,15 @@ Kirigami.ApplicationWindow {
         return kdePaletteIsDark;
     }
 
+    function syncVisibleSystemTheme() {
+        // Issue #912：仅在「跟随系统」时把实际显示的 KDE/Breeze 调色板深浅回写为
+        // system_is_dark。显式深色/浅色经 KDE ColorScheme 入口切换的是应用配色，
+        // Kirigami.Theme 反映的是应用选择而非桌面系统，回写会污染真实系统深浅。
+        if (themeController && themeController.appearance_mode === "system") {
+            themeController.set_system_is_dark(window.kdePaletteIsDark);
+        }
+    }
+
     function logThemeDiagnostics(event, snapshot) {
         // Issue #709 评论 issue-body-709: 主题诊断只读 ThemeController runtime state
         // 和 designTokens，不再读旧 appState.settings.themeMode、Qt.styleHints.colorScheme、
@@ -380,10 +389,13 @@ Kirigami.ApplicationWindow {
     // 仅「跟随系统」时回写：显式深色/浅色会通过 KDE ColorScheme 入口切换应用
     // 配色方案，此时 Kirigami.Theme 反映的是应用选择而非桌面系统，回写会污染
     // 真实的系统深浅（例如手动深色后切回跟随系统时得到错误的深色）。
+    //
+    // 延迟到本轮属性通知结束后执行：set_appearance_mode() 里的 sync_kde_color_scheme()
+    // 会先 activateScheme 再发 scheme_changed，色板可能在 QML 还持有旧的
+    // appearance_mode 绑定值时先变化。立即回写会把刚切换的应用色板误记成系统色板。
+    // Qt.callLater 在 QML 引擎返回事件循环后调用，多次排队自动合并。
     onKdePaletteIsDarkChanged: {
-        if (themeController && themeController.appearance_mode === "system") {
-            themeController.set_system_is_dark(window.kdePaletteIsDark);
-        }
+        Qt.callLater(window.syncVisibleSystemTheme)
         window.logThemeDiagnostics("kde_palette_changed");
     }
 
