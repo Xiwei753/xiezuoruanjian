@@ -270,6 +270,10 @@ fn save_conflict_snapshots(
 ///
 /// staging_root 中缺失的成员对象返回 `Err`——incoming graph 引用了不存在的对象
 /// 是远端数据不一致，不能静默跳过。
+///
+/// **issue #902 第十五轮复核**：额外从 staging_root 读取 incoming
+/// `starmaps/index.json`，提取该星图的 root/main 身份事实，写入快照目录下的
+/// `index_facts.json`，供 `apply_starmap_graph_remote_modify` 恢复身份。
 fn save_graph_conflict_snapshot(
     live_root: &Path,
     staging_root: &Path,
@@ -335,7 +339,83 @@ fn save_graph_conflict_snapshot(
         })?;
     }
 
+    // issue #902 第十五轮复核：保存远端 index 身份事实（root/main），
+    // 供 apply_starmap_graph_remote_modify 恢复 root_starmap_ids 和
+    // main_starmap_by_project。staging_root 中没有 index.json 时跳过
+    // （保持向后兼容）。
+    save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
+
     Ok(snapshot_dir_rel)
+}
+
+/// 远端星图 index 身份事实（issue #902 第十五轮复核）。
+///
+/// 由 `save_graph_conflict_snapshot` 从 staging_root 的 `starmaps/index.json`
+/// 提取，写入快照目录下的 `index_facts.json`。`apply_starmap_graph_remote_modify`
+/// 读取后恢复 `root_starmap_ids` 和 `main_starmap_by_project`。
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct StarmapIdentityFacts {
+    /// 该星图是否在 `root_starmap_ids` 中。
+    pub is_root: bool,
+    /// 该星图作为哪些 project 的 main starmap（`main_starmap_by_project` 中
+    /// value == starmap_id 的所有 key）。
+    pub main_for_projects: Vec<String>,
+}
+
+/// 从 staging_root 的 `starmaps/index.json` 提取指定星图的 root/main 身份事实，
+/// 写入快照目录下的 `index_facts.json`（issue #902 第十五轮复核）。
+///
+/// staging_root 中没有 `starmaps/index.json` 时静默跳过（保持向后兼容）。
+fn save_starmap_identity_facts(
+    live_root: &Path,
+    staging_root: &Path,
+    starmap_id: &str,
+    snapshot_dir_rel: &str,
+) -> crate::error::Result<()> {
+    let staging_index_path = staging_root.join("starmaps").join("index.json");
+    if !staging_index_path.exists() {
+        return Ok(());
+    }
+    let index_bytes = std::fs::read(&staging_index_path)?;
+    let idx: crate::starmap::StarMapIndexRecord =
+        serde_json::from_slice(&index_bytes).map_err(|e| {
+            crate::error::Error::Other(format!(
+                "save_starmap_identity_facts: 解析 staging index.json 失败: {}",
+                e
+            ))
+        })?;
+
+    let is_root = idx.root_starmap_ids.iter().any(|x| x == starmap_id);
+    let main_for_projects: Vec<String> = idx
+        .main_starmap_by_project
+        .iter()
+        .filter(|(_, v)| *v == starmap_id)
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    let facts = StarmapIdentityFacts {
+        is_root,
+        main_for_projects,
+    };
+    let facts_bytes = serde_json::to_vec_pretty(&facts).map_err(|e| {
+        crate::error::Error::Other(format!(
+            "save_starmap_identity_facts: 序列化 index_facts.json 失败: {}",
+            e
+        ))
+    })?;
+
+    let facts_rel = format!("{}/index_facts.json", snapshot_dir_rel);
+    let facts_path = live_root.join(&facts_rel);
+    if let Some(parent) = facts_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::storage::transaction::atomic_write_bytes(&facts_path, &facts_bytes).map_err(|e| {
+        crate::error::Error::Io(std::io::Error::other(format!(
+            "save_starmap_identity_facts: 写入 index_facts.json 失败: {}",
+            e
+        )))
+    })?;
+    Ok(())
 }
 
 pub(crate) struct StagingCommitOutcome {
