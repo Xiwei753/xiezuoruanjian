@@ -13,7 +13,7 @@
 //!
 //! - 路径识别：判断 rel_path 是否是星图内容文件
 //! - [`StarMapIndexRecord`] 三方合并（[`merge_starmap_index`]）
-//! - [`GraphMeta`] 三方合并（[`merge_graph_meta`]）
+//! - [`GraphMeta`] + 对象文件统一合并（[`merge_starmap_graph_with_objects`]）
 //!
 //! 合并器是纯计算（不读磁盘、不写磁盘），只接受 bytes 输入，返回 bytes 输出。
 //! 错误显式返回，不静默吞错。
@@ -154,8 +154,10 @@ pub(crate) enum ObjectMergeDecision {
 /// | None | Some  | Some     | l==i | NoOp |
 /// | None | Some  | Some     | l!=i | Conflict(BothChanged)（双侧新增不同内容）|
 /// | Some | None  | None     | —    | Delete（双侧都删）|
-/// | Some | Some  | None     | —    | KeepLocal（远端删除，本地保留）|
-/// | Some | None  | Some     | —    | ApplyIncoming（本地删除，远端保留）|
+/// | Some | Some  | None     | l==b | Delete（远端删除，local 未改 → 接受删除）|
+/// | Some | Some  | None     | l!=b | Conflict(RemoteDeleted)（删除-修改冲突）|
+/// | Some | None  | Some     | i==b | Delete（本地删除，incoming 未改 → 接受删除）|
+/// | Some | None  | Some     | i!=b | Conflict(RemoteDeleted)（删除-修改冲突）|
 /// | Some | Some  | Some     | l==i | NoOp |
 /// | Some | Some  | Some     | l==b, i!=b | ApplyIncoming |
 /// | Some | Some  | Some     | l!=b, i==b | KeepLocal |
@@ -179,8 +181,26 @@ pub(crate) fn merge_starmap_object(
         }
         // --- base 存在 ---
         (Some(_), None, None) => ObjectMergeDecision::Delete,
-        (Some(_), Some(_), None) => ObjectMergeDecision::KeepLocal,
-        (Some(_), None, Some(iv)) => ObjectMergeDecision::ApplyIncoming(iv.to_vec()),
+        // base 存在、local 存在、incoming 不存在（远端删除）：
+        // - local == base（local 未改）→ 接受远端删除
+        // - local != base（local 修改了）→ 删除-修改冲突
+        (Some(bv), Some(lv), None) => {
+            if lv == bv {
+                ObjectMergeDecision::Delete
+            } else {
+                ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted)
+            }
+        }
+        // base 存在、local 不存在、incoming 存在（本地删除）：
+        // - incoming == base（incoming 未改）→ 接受本地删除
+        // - incoming != base（incoming 修改了）→ 删除-修改冲突
+        (Some(bv), None, Some(iv)) => {
+            if iv == bv {
+                ObjectMergeDecision::Delete
+            } else {
+                ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted)
+            }
+        }
         (Some(bv), Some(lv), Some(iv)) => {
             if lv == iv {
                 ObjectMergeDecision::NoOp
@@ -911,241 +931,9 @@ fn merge_all_revisions(
     }
 }
 
-/// 比较两个 `Option<&[u8]>` 是否相等。
-fn opt_slice_eq(a: Option<&[u8]>, b: Option<&[u8]>) -> bool {
-    match (a, b) {
-        (Some(a), Some(b)) => a == b,
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-/// 提升新出现/变更对象的 revision 到至少 `new_pr`。
-///
-/// - 不在 `base_member_ids` 中的对象（新增）→ revision = max(当前, new_pr)
-/// - 在 base 中且 revision 有变化（与 `base_revisions` 不同）→ revision = max(当前, new_pr)
-/// - 在 base 中且 revision 无变化 → 保持当前 revision
-///
-/// 跨设备 revision 不能简单 max 当作全局版本语义。合并产生新内容时分配新单调
-/// package revision，并确保新出现/变更对象的 revision >= new_pr，使增量快照
-/// `since_revision = old_pr` 能准确发出这些对象。
-fn bump_object_revisions(
-    merged: &mut HashMap<String, u64>,
-    base_revisions: Option<&HashMap<String, u64>>,
-    base_member_ids: &HashSet<String>,
-    new_pr: u64,
-) {
-    for (id, rev) in merged.iter_mut() {
-        let in_base = base_member_ids.contains(id);
-        let base_rev = base_revisions.and_then(|m| m.get(id)).copied();
-        if !in_base {
-            // 新增对象 → 至少 new_pr
-            *rev = (*rev).max(new_pr);
-        } else if let Some(br) = base_rev {
-            // 在 base 中且 revision 有变化 → 至少 new_pr；无变化则保持
-            if *rev != br {
-                *rev = (*rev).max(new_pr);
-            }
-        } else {
-            // 在 base 成员表但无 revision 记录 → 视为变更
-            *rev = (*rev).max(new_pr);
-        }
-    }
-}
-
-/// 从 `Option<&GraphMeta>` 提取指定成员 ID 列表为 HashSet。
-fn meta_member_set(meta: Option<&GraphMeta>, f: fn(&GraphMeta) -> &Vec<String>) -> HashSet<String> {
-    meta.map(|m| f(m).iter().cloned().collect())
-        .unwrap_or_default()
-}
-
-/// 对五种对象类型统一提升新出现/变更对象的 revision。
-///
-/// `base_meta` 用于提取 base 的成员表和 revisions，判断对象是否新增/变更。
-fn bump_all_revisions(revisions: &mut MergedRevisions, base_meta: Option<&GraphMeta>, new_pr: u64) {
-    let base_node_ids = meta_member_set(base_meta, |m| &m.node_ids);
-    let base_edge_ids = meta_member_set(base_meta, |m| &m.edge_ids);
-    let base_embed_ids = meta_member_set(base_meta, |m| &m.embed_instance_ids);
-    let base_link_ids = meta_member_set(base_meta, |m| &m.link_ids);
-    let base_hyperlink_ids = meta_member_set(base_meta, |m| &m.hyperlink_ids);
-
-    bump_object_revisions(
-        &mut revisions.node,
-        base_meta.map(|m| &m.node_revisions),
-        &base_node_ids,
-        new_pr,
-    );
-    bump_object_revisions(
-        &mut revisions.edge,
-        base_meta.map(|m| &m.edge_revisions),
-        &base_edge_ids,
-        new_pr,
-    );
-    bump_object_revisions(
-        &mut revisions.embed,
-        base_meta.map(|m| &m.embed_revisions),
-        &base_embed_ids,
-        new_pr,
-    );
-    bump_object_revisions(
-        &mut revisions.link,
-        base_meta.map(|m| &m.link_revisions),
-        &base_link_ids,
-        new_pr,
-    );
-    bump_object_revisions(
-        &mut revisions.hyperlink,
-        base_meta.map(|m| &m.hyperlink_revisions),
-        &base_hyperlink_ids,
-        new_pr,
-    );
-}
-
-/// `GraphMeta` 三方语义合并。
-///
-/// `base`/`local`/`incoming` 各为 `Option<&[u8]>`（`None` = 文件不存在）。
-/// 反序列化失败返回 `Err`。
-///
-/// # 合并语义
-///
-/// - `starmap_id`：三者必须一致，不一致返回 `Err`
-/// - `schema_version`：取 max（字符串比较），local/incoming 高于 `CURRENT_SCHEMA_VERSION` 返回 `Err`
-/// - 五个成员 ID 列表：各自三方集合合并
-/// - 五个 revisions HashMap：按对象 ID 三方合并，只保留成员表中存在的对象；
-///   合并有变化时提升新出现/变更对象的 revision 到新 package_revision
-/// - `deleted_since_last_sync`：按 `(object_type, object_id)` 去重取最大 revision，
-///   只保留已删除对象的 tombstone
-/// - 派生缓存（edge_relation_index 等）：置空，由 Store 层从对象文件重建
-/// - `package_revision`：无变化时保持 `max(local, incoming)`；有变化时
-///   `max(local, incoming) + 1`（新单调 revision，使增量快照能准确发出新对象）
-/// - `updated_at`：取 `max(local, incoming)`
-pub(crate) fn merge_graph_meta(
-    base: Option<&[u8]>,
-    local: Option<&[u8]>,
-    incoming: Option<&[u8]>,
-) -> Result<StarmapMergeResult> {
-    let base_meta = parse_graph_meta(base)?;
-    let local_meta = parse_graph_meta(local)?;
-    let incoming_meta = parse_graph_meta(incoming)?;
-
-    let (merged_starmap_id, merged_schema_version) = resolve_graph_meta_header(
-        base_meta.as_ref(),
-        local_meta.as_ref(),
-        incoming_meta.as_ref(),
-    )?;
-
-    let member_ids = merge_member_ids(
-        base_meta.as_ref(),
-        local_meta.as_ref(),
-        incoming_meta.as_ref(),
-    );
-
-    let mut revisions = merge_all_revisions(
-        base_meta.as_ref(),
-        local_meta.as_ref(),
-        incoming_meta.as_ref(),
-        &member_ids.sets,
-    );
-
-    let merged_deletions = merge_deletions(
-        base_meta.as_ref().map(|m| &m.deleted_since_last_sync),
-        local_meta.as_ref().map(|m| &m.deleted_since_last_sync),
-        incoming_meta.as_ref().map(|m| &m.deleted_since_last_sync),
-        &member_ids.sets,
-    );
-
-    // 派生缓存: 取 local 版本（local 不存在取 incoming）
-    let local_pr = local_meta.as_ref().map(|m| m.package_revision).unwrap_or(0);
-    let incoming_pr = incoming_meta
-        .as_ref()
-        .map(|m| m.package_revision)
-        .unwrap_or(0);
-    let local_ua = local_meta.as_ref().map(|m| m.updated_at).unwrap_or(0);
-    let incoming_ua = incoming_meta.as_ref().map(|m| m.updated_at).unwrap_or(0);
-
-    // 文件双方都不存在 → 无操作（文件已删除，无需写入）
-    if local.is_none() && incoming.is_none() {
-        return Ok(StarmapMergeResult::NoOp);
-    }
-
-    // 判断是否完全无变化（三者 bytes 相同）。bytes 相同意味着成员表、revisions、
-    // 派生缓存、package_revision 都相同，无需任何操作。
-    let no_change = opt_slice_eq(local, base) && opt_slice_eq(incoming, base);
-
-    // 合并产生新内容时分配新单调 package revision（max(local_pr, incoming_pr) + 1），
-    // 使增量快照 since_revision = max(local_pr, incoming_pr) 能准确发出新对象。
-    // 跨设备 revision 不能简单 max 当作全局版本语义。无变化时保持原 revision。
-    let package_revision = if no_change {
-        local_pr.max(incoming_pr)
-    } else {
-        local_pr.max(incoming_pr) + 1
-    };
-
-    // 有变化时提升新出现/变更对象的 revision 到新 package_revision
-    if !no_change {
-        bump_all_revisions(&mut revisions, base_meta.as_ref(), package_revision);
-    }
-
-    // 派生缓存：合并器是纯计算（不读磁盘），无法从对象文件重建派生索引。
-    // 合并后的 GraphMeta 将派生缓存字段置空，由 Store 层在下次加载时从对象文件
-    // 重建（meta.rs 注释已说明这些是派生缓存）。run.rs 写入时派生缓存为空可接受。
-    let merged = GraphMeta {
-        schema_version: merged_schema_version,
-        starmap_id: merged_starmap_id,
-        node_ids: member_ids.node_ids,
-        edge_ids: member_ids.edge_ids,
-        embed_instance_ids: member_ids.embed_ids,
-        link_ids: member_ids.link_ids,
-        hyperlink_ids: member_ids.hyperlink_ids,
-        edge_relation_index: vec![],
-        embed_host_index: vec![],
-        link_relation_index: vec![],
-        hyperlink_relation_index: vec![],
-        node_kind_counts: HashMap::new(),
-        node_revisions: revisions.node,
-        edge_revisions: revisions.edge,
-        embed_revisions: revisions.embed,
-        link_revisions: revisions.link,
-        hyperlink_revisions: revisions.hyperlink,
-        package_revision,
-        updated_at: local_ua.max(incoming_ua),
-        deleted_since_last_sync: merged_deletions,
-    };
-
-    let merged_bytes = serde_json::to_vec_pretty(&merged)?;
-    Ok(finalize_merge_result(&merged_bytes, base, local, incoming))
-}
-
 // ===========================================================================
 // 派生索引重建
 // ===========================================================================
-
-/// 从 `GraphMeta` 构造 `MergedMemberIds`。
-///
-/// 用于在 `run.rs` 中从合并后的 `GraphMeta` 重建派生索引时，
-/// 构造 [`rebuild_derived_indexes`] 所需的 `MergedMemberIds` 参数。
-pub(crate) fn make_merged_member_ids_from_graph_meta(meta: &GraphMeta) -> MergedMemberIds {
-    let node_ids = meta.node_ids.clone();
-    let edge_ids = meta.edge_ids.clone();
-    let embed_ids = meta.embed_instance_ids.clone();
-    let link_ids = meta.link_ids.clone();
-    let hyperlink_ids = meta.hyperlink_ids.clone();
-
-    MergedMemberIds {
-        sets: MemberIdSets {
-            node_ids: node_ids.iter().cloned().collect(),
-            edge_ids: edge_ids.iter().cloned().collect(),
-            embed_ids: embed_ids.iter().cloned().collect(),
-            link_ids: link_ids.iter().cloned().collect(),
-            hyperlink_ids: hyperlink_ids.iter().cloned().collect(),
-        },
-        node_ids,
-        edge_ids,
-        embed_ids,
-        link_ids,
-        hyperlink_ids,
-    }
-}
 
 /// 派生索引重建结果：从对象文件内容重建的派生缓存字段。
 #[derive(Debug, Clone, Default)]
@@ -1244,7 +1032,9 @@ pub(crate) fn rebuild_derived_indexes(
         let key = ("node".to_string(), node_id.clone());
         if let Some(bytes) = object_contents.get(&key) {
             let node: crate::starmap::types::StarMapNode = serde_json::from_slice(bytes)?;
-            *node_kind_counts.entry(format!("{:?}", node.kind)).or_insert(0) += 1;
+            *node_kind_counts
+                .entry(format!("{:?}", node.kind))
+                .or_insert(0) += 1;
         }
     }
 
@@ -1261,6 +1051,113 @@ pub(crate) fn rebuild_derived_indexes(
 // 统一对象级合并
 // ===========================================================================
 
+/// 把路径中的对象目录名（复数）转为对象类型（单数）。
+///
+/// `nodes` → `node`，`edges` → `edge`，等。未知目录返回 `None`。
+fn dir_to_object_type(dir: &str) -> Option<&'static str> {
+    match dir {
+        "nodes" => Some("node"),
+        "edges" => Some("edge"),
+        "embeds" => Some("embed"),
+        "links" => Some("link"),
+        "hyperlinks" => Some("hyperlink"),
+        _ => None,
+    }
+}
+
+/// 从对象文件路径提取 `(object_type, object_id)`。
+///
+/// 路径格式：`starmaps/<id>/<type_dir>/<bucket>/<obj_id>.json`。
+/// `object_type` 是单数形式（`node`/`edge`/`embed`/`link`/`hyperlink`），
+/// 与 [`rebuild_derived_indexes`] 和 `DeletionEntry.object_type` 一致。
+/// 返回 `None` 如果路径不符合对象文件格式。
+pub(crate) fn parse_object_path(rel_path: &std::path::Path) -> Option<(String, String)> {
+    let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+    let parts: Vec<&str> = rel_str.split('/').collect();
+    if parts.len() == 5 {
+        if let Some(obj_type) = dir_to_object_type(parts[2]) {
+            let file_name = parts[4];
+            if file_name.ends_with(".json") && file_name.len() > ".json".len() {
+                let obj_id = &file_name[..file_name.len() - ".json".len()];
+                return Some((obj_type.to_string(), obj_id.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// 用最终对象集合修正成员表。
+///
+/// 先按 `initial` 顺序保留在 `final_set` 中的 ID，再追加 `final_set` 中
+/// 不在 `initial` 里的 ID（按字典序排序，保证确定性）。
+fn reconcile_member_list(initial: &[String], final_set: &HashSet<String>) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    // 1. 按 initial 顺序保留在 final_set 中的 ID
+    for id in initial {
+        if final_set.contains(id) && seen.insert(id.clone()) {
+            result.push(id.clone());
+        }
+    }
+    // 2. 追加 final_set 中不在 initial 里的 ID（字典序排序保证确定性）
+    let mut extras: Vec<&String> = final_set.iter().filter(|id| !seen.contains(*id)).collect();
+    extras.sort();
+    for id in extras {
+        result.push(id.clone());
+    }
+    result
+}
+
+/// 检查成员表中的每个 ID 都有对应胜出对象 bytes。
+///
+/// 成员表有 ID 但 `final_objects` 中没有对应 bytes → 数据不一致，返回 `Err`。
+fn check_member_object_consistency(
+    object_type: &str,
+    member_ids: &[String],
+    final_objects: &HashMap<(String, String), Vec<u8>>,
+) -> Result<()> {
+    for id in member_ids {
+        let key = (object_type.to_string(), id.clone());
+        if !final_objects.contains_key(&key) {
+            return Err(Error::Other(format!(
+                "starmap member '{}' (type '{}') has no corresponding object file",
+                id, object_type
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 根据对象决策调整 revisions。
+///
+/// - `ApplyIncoming` → revision 提升到 `new_pr`（实际写入新内容）
+/// - `Delete` → 从 revisions 中移除（对象已删除）
+/// - `KeepLocal`/`NoOp`/`Conflict` → 保留当前 revision
+///
+/// `decisions` 的 key 是 object_id。
+fn apply_revision_by_decisions(
+    revisions: &mut HashMap<String, u64>,
+    decisions: &HashMap<String, &ObjectMergeDecision>,
+    new_pr: u64,
+) {
+    // 收集需要移除的 ID（Delete 决策）
+    let to_remove: Vec<String> = revisions
+        .keys()
+        .filter(|id| matches!(decisions.get(*id), Some(ObjectMergeDecision::Delete)))
+        .cloned()
+        .collect();
+    for id in to_remove {
+        revisions.remove(&id);
+    }
+
+    // ApplyIncoming → 提升到 new_pr
+    for (id, rev) in revisions.iter_mut() {
+        if let Some(ObjectMergeDecision::ApplyIncoming(_)) = decisions.get(id) {
+            *rev = (*rev).max(new_pr);
+        }
+    }
+}
+
 /// 星图 graph.json + 对象文件统一合并输出。
 #[derive(Debug)]
 pub(crate) struct StarmapGraphMergeOutput {
@@ -1268,37 +1165,264 @@ pub(crate) struct StarmapGraphMergeOutput {
     pub object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)>,
 }
 
-/// 统一处理 graph.json 和对象文件的合并。
+/// 统一处理 graph.json 和对象文件的合并，做一致性协调。
 ///
-/// 输入：
-/// - `graph_base`/`graph_local`/`graph_incoming`：graph.json 的 base/local/incoming bytes
-/// - `objects`：每个对象文件的 `(rel_path, base, local, incoming)` 列表
+/// # 一致性协调
 ///
-/// 输出：
-/// - `graph_meta_result`：graph.json 的合并结果
-/// - `object_decisions`：每个对象的合并决策
+/// 1. 先对每个对象做三方决策（[`merge_starmap_object`]）
+/// 2. 根据对象决策确定最终存在的对象集合
+/// 3. 用最终对象集合驱动 graph 成员表（而不是 graph 成员表独立合并）
+/// 4. graph 说删除 Y 但对象决策说 ApplyIncoming Y → 以对象决策为准，保留 Y
+/// 5. graph 说保留 Y 但对象决策说 Delete Y → 以对象决策为准，移除 Y
+/// 6. 重建派生索引（[`rebuild_derived_indexes`]）
+/// 7. revision 只对实际写入/删除的对象提升，冲突保留本地
+///
+/// # 输入
+///
+/// - `starmap_id`：星图 ID（用于派生索引重建）
+/// - `graph_base`/`graph_local`/`graph_incoming`：graph.json 的三方 bytes
+/// - `objects`：每个对象文件的 `(rel_path, object_type, object_id, base, local, incoming)`
 ///
 /// 纯计算，不读磁盘。调用方（`run.rs`）负责读取文件并组装输入。
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_lines)]
 pub(crate) fn merge_starmap_graph_with_objects(
+    starmap_id: &str,
     graph_base: Option<&[u8]>,
     graph_local: Option<&[u8]>,
     graph_incoming: Option<&[u8]>,
-    objects: &[(std::path::PathBuf, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)],
+    objects: &[(
+        std::path::PathBuf,
+        String,
+        String,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+        Option<Vec<u8>>,
+    )],
 ) -> Result<StarmapGraphMergeOutput> {
-    // 合并 graph.json
-    let graph_meta_result = merge_graph_meta(graph_base, graph_local, graph_incoming)?;
-
-    // 对每个对象文件做三方合并决策
+    // --- 1. 对每个对象做三方决策，收集最终胜出 bytes ---
     let mut object_decisions: Vec<(std::path::PathBuf, ObjectMergeDecision)> = Vec::new();
-    for (rel_path, base, local, incoming) in objects {
-        let decision = merge_starmap_object(
-            base.as_deref(),
-            local.as_deref(),
-            incoming.as_deref(),
-        );
+    let mut final_objects: HashMap<(String, String), Vec<u8>> = HashMap::new();
+    let mut node_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
+    let mut edge_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
+    let mut embed_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
+    let mut link_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
+    let mut hyperlink_decisions: HashMap<String, ObjectMergeDecision> = HashMap::new();
+
+    for (rel_path, object_type, object_id, base, local, incoming) in objects {
+        let decision = merge_starmap_object(base.as_deref(), local.as_deref(), incoming.as_deref());
+
+        // 收集胜出 bytes：ApplyIncoming/ApplyMerged 用新内容，KeepLocal/Conflict 用 local，
+        // NoOp 用 local（== incoming），Delete 无 bytes。
+        let winning = match &decision {
+            ObjectMergeDecision::NoOp => local.clone().or(incoming.clone()),
+            ObjectMergeDecision::KeepLocal => local.clone(),
+            ObjectMergeDecision::ApplyIncoming(c) => Some(c.clone()),
+            ObjectMergeDecision::Delete => None,
+            ObjectMergeDecision::Conflict(_) => local.clone(),
+        };
+        if let Some(bytes) = winning {
+            final_objects.insert((object_type.clone(), object_id.clone()), bytes);
+        }
+
+        // 按类型记录决策（用于 revision 绑定）
+        match object_type.as_str() {
+            "node" => {
+                node_decisions.insert(object_id.clone(), decision.clone());
+            }
+            "edge" => {
+                edge_decisions.insert(object_id.clone(), decision.clone());
+            }
+            "embed" => {
+                embed_decisions.insert(object_id.clone(), decision.clone());
+            }
+            "link" => {
+                link_decisions.insert(object_id.clone(), decision.clone());
+            }
+            "hyperlink" => {
+                hyperlink_decisions.insert(object_id.clone(), decision.clone());
+            }
+            _ => {}
+        }
+
         object_decisions.push((rel_path.clone(), decision));
     }
+
+    // --- 2. 解析三方 graph meta ---
+    let base_meta = parse_graph_meta(graph_base)?;
+    let local_meta = parse_graph_meta(graph_local)?;
+    let incoming_meta = parse_graph_meta(graph_incoming)?;
+
+    // 文件双方都不存在 → 无操作
+    if graph_local.is_none() && graph_incoming.is_none() {
+        return Ok(StarmapGraphMergeOutput {
+            graph_meta_result: StarmapMergeResult::NoOp,
+            object_decisions,
+        });
+    }
+
+    let (merged_starmap_id, merged_schema_version) = resolve_graph_meta_header(
+        base_meta.as_ref(),
+        local_meta.as_ref(),
+        incoming_meta.as_ref(),
+    )?;
+
+    // --- 3. 用 graph 成员表三方合并得到初始成员表（保持顺序） ---
+    let initial_members = merge_member_ids(
+        base_meta.as_ref(),
+        local_meta.as_ref(),
+        incoming_meta.as_ref(),
+    );
+
+    // --- 4. 从 final_objects 构建按类型分组的最终对象 ID 集合 ---
+    let mut final_node: HashSet<String> = HashSet::new();
+    let mut final_edge: HashSet<String> = HashSet::new();
+    let mut final_embed: HashSet<String> = HashSet::new();
+    let mut final_link: HashSet<String> = HashSet::new();
+    let mut final_hyperlink: HashSet<String> = HashSet::new();
+    for (obj_type, obj_id) in final_objects.keys() {
+        match obj_type.as_str() {
+            "node" => {
+                final_node.insert(obj_id.clone());
+            }
+            "edge" => {
+                final_edge.insert(obj_id.clone());
+            }
+            "embed" => {
+                final_embed.insert(obj_id.clone());
+            }
+            "link" => {
+                final_link.insert(obj_id.clone());
+            }
+            "hyperlink" => {
+                final_hyperlink.insert(obj_id.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // --- 5. 用对象决策修正成员表 ---
+    let node_ids = reconcile_member_list(&initial_members.node_ids, &final_node);
+    let edge_ids = reconcile_member_list(&initial_members.edge_ids, &final_edge);
+    let embed_ids = reconcile_member_list(&initial_members.embed_ids, &final_embed);
+    let link_ids = reconcile_member_list(&initial_members.link_ids, &final_link);
+    let hyperlink_ids = reconcile_member_list(&initial_members.hyperlink_ids, &final_hyperlink);
+
+    // --- 6. 检查一致性：成员表中的每个 ID 必须有对应胜出对象 bytes ---
+    check_member_object_consistency("node", &node_ids, &final_objects)?;
+    check_member_object_consistency("edge", &edge_ids, &final_objects)?;
+    check_member_object_consistency("embed", &embed_ids, &final_objects)?;
+    check_member_object_consistency("link", &link_ids, &final_objects)?;
+    check_member_object_consistency("hyperlink", &hyperlink_ids, &final_objects)?;
+
+    let sets = MemberIdSets {
+        node_ids: node_ids.iter().cloned().collect(),
+        edge_ids: edge_ids.iter().cloned().collect(),
+        embed_ids: embed_ids.iter().cloned().collect(),
+        link_ids: link_ids.iter().cloned().collect(),
+        hyperlink_ids: hyperlink_ids.iter().cloned().collect(),
+    };
+    let member_ids = MergedMemberIds {
+        node_ids: node_ids.clone(),
+        edge_ids: edge_ids.clone(),
+        embed_ids: embed_ids.clone(),
+        link_ids: link_ids.clone(),
+        hyperlink_ids: hyperlink_ids.clone(),
+        sets,
+    };
+
+    // --- 7. 合并 revisions 和 deletions ---
+    let mut revisions = merge_all_revisions(
+        base_meta.as_ref(),
+        local_meta.as_ref(),
+        incoming_meta.as_ref(),
+        &member_ids.sets,
+    );
+
+    let merged_deletions = merge_deletions(
+        base_meta.as_ref().map(|m| &m.deleted_since_last_sync),
+        local_meta.as_ref().map(|m| &m.deleted_since_last_sync),
+        incoming_meta.as_ref().map(|m| &m.deleted_since_last_sync),
+        &member_ids.sets,
+    );
+
+    // --- 8. 重建派生索引 ---
+    let derived = rebuild_derived_indexes(starmap_id, &member_ids, &final_objects)?;
+
+    // --- 9. revision 绑定对象决策 + package_revision ---
+    let local_pr = local_meta.as_ref().map(|m| m.package_revision).unwrap_or(0);
+    let incoming_pr = incoming_meta
+        .as_ref()
+        .map(|m| m.package_revision)
+        .unwrap_or(0);
+    let local_ua = local_meta.as_ref().map(|m| m.updated_at).unwrap_or(0);
+    let incoming_ua = incoming_meta.as_ref().map(|m| m.updated_at).unwrap_or(0);
+
+    // 基于对象操作清单判断是否有实际变更：
+    // ApplyIncoming（实际写入）或 Delete（实际删除）算变更；
+    // KeepLocal/NoOp/Conflict 不算成功合并的变更。
+    let has_actual_change = object_decisions.iter().any(|(_, d)| {
+        matches!(
+            d,
+            ObjectMergeDecision::ApplyIncoming(_) | ObjectMergeDecision::Delete
+        )
+    });
+
+    let package_revision = if has_actual_change {
+        local_pr.max(incoming_pr) + 1
+    } else {
+        local_pr.max(incoming_pr)
+    };
+
+    // 只对实际变更的对象提升 revision；冲突保留本地 revision
+    if has_actual_change {
+        let node_refs: HashMap<String, &ObjectMergeDecision> =
+            node_decisions.iter().map(|(k, v)| (k.clone(), v)).collect();
+        let edge_refs: HashMap<String, &ObjectMergeDecision> =
+            edge_decisions.iter().map(|(k, v)| (k.clone(), v)).collect();
+        let embed_refs: HashMap<String, &ObjectMergeDecision> = embed_decisions
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
+        let link_refs: HashMap<String, &ObjectMergeDecision> =
+            link_decisions.iter().map(|(k, v)| (k.clone(), v)).collect();
+        let hyperlink_refs: HashMap<String, &ObjectMergeDecision> = hyperlink_decisions
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
+        apply_revision_by_decisions(&mut revisions.node, &node_refs, package_revision);
+        apply_revision_by_decisions(&mut revisions.edge, &edge_refs, package_revision);
+        apply_revision_by_decisions(&mut revisions.embed, &embed_refs, package_revision);
+        apply_revision_by_decisions(&mut revisions.link, &link_refs, package_revision);
+        apply_revision_by_decisions(&mut revisions.hyperlink, &hyperlink_refs, package_revision);
+    }
+
+    // --- 10. 构造最终 GraphMeta ---
+    let merged = GraphMeta {
+        schema_version: merged_schema_version,
+        starmap_id: merged_starmap_id,
+        node_ids,
+        edge_ids,
+        embed_instance_ids: embed_ids,
+        link_ids,
+        hyperlink_ids,
+        edge_relation_index: derived.edge_relation_index,
+        embed_host_index: derived.embed_host_index,
+        link_relation_index: derived.link_relation_index,
+        hyperlink_relation_index: derived.hyperlink_relation_index,
+        node_kind_counts: derived.node_kind_counts,
+        node_revisions: revisions.node,
+        edge_revisions: revisions.edge,
+        embed_revisions: revisions.embed,
+        link_revisions: revisions.link,
+        hyperlink_revisions: revisions.hyperlink,
+        package_revision,
+        updated_at: local_ua.max(incoming_ua),
+        deleted_since_last_sync: merged_deletions,
+    };
+
+    let merged_bytes = serde_json::to_vec_pretty(&merged)?;
+    let graph_meta_result =
+        finalize_merge_result(&merged_bytes, graph_base, graph_local, graph_incoming);
 
     Ok(StarmapGraphMergeOutput {
         graph_meta_result,
@@ -1331,50 +1455,6 @@ mod tests {
         serde_json::to_vec_pretty(&record).expect("serialize index")
     }
 
-    fn make_graph_meta_bytes(
-        starmap_id: &str,
-        node_ids: &[&str],
-        node_revisions: &[(&str, u64)],
-        updated_at: u64,
-    ) -> Vec<u8> {
-        make_graph_meta_bytes_with_pr(starmap_id, node_ids, node_revisions, 0, updated_at)
-    }
-
-    fn make_graph_meta_bytes_with_pr(
-        starmap_id: &str,
-        node_ids: &[&str],
-        node_revisions: &[(&str, u64)],
-        package_revision: u64,
-        updated_at: u64,
-    ) -> Vec<u8> {
-        let meta = GraphMeta {
-            schema_version: CURRENT_SCHEMA_VERSION.to_string(),
-            starmap_id: starmap_id.to_string(),
-            node_ids: node_ids.iter().map(|s| s.to_string()).collect(),
-            edge_ids: vec![],
-            embed_instance_ids: vec![],
-            link_ids: vec![],
-            hyperlink_ids: vec![],
-            edge_relation_index: vec![],
-            embed_host_index: vec![],
-            link_relation_index: vec![],
-            hyperlink_relation_index: vec![],
-            node_kind_counts: HashMap::new(),
-            node_revisions: node_revisions
-                .iter()
-                .map(|(k, v)| (k.to_string(), *v))
-                .collect(),
-            edge_revisions: HashMap::new(),
-            embed_revisions: HashMap::new(),
-            link_revisions: HashMap::new(),
-            hyperlink_revisions: HashMap::new(),
-            package_revision,
-            updated_at,
-            deleted_since_last_sync: DeletedSinceLastSync::default(),
-        };
-        serde_json::to_vec_pretty(&meta).expect("serialize graph meta")
-    }
-
     fn extract_starmap_ids(result: &StarmapMergeResult) -> Vec<String> {
         let bytes = match result {
             StarmapMergeResult::ApplyIncoming(b) | StarmapMergeResult::ApplyMerged(b) => b,
@@ -1382,41 +1462,6 @@ mod tests {
         };
         let record: StarMapIndexRecord = serde_json::from_slice(bytes).expect("deserialize index");
         record.starmap_ids
-    }
-
-    fn extract_node_ids(result: &StarmapMergeResult) -> Vec<String> {
-        let bytes = match result {
-            StarmapMergeResult::ApplyIncoming(b) | StarmapMergeResult::ApplyMerged(b) => b,
-            _ => return vec![],
-        };
-        let meta: GraphMeta = serde_json::from_slice(bytes).expect("deserialize graph meta");
-        meta.node_ids
-    }
-
-    fn extract_node_revisions(result: &StarmapMergeResult) -> HashMap<String, u64> {
-        let bytes = match result {
-            StarmapMergeResult::ApplyIncoming(b) | StarmapMergeResult::ApplyMerged(b) => b,
-            _ => return HashMap::new(),
-        };
-        let meta: GraphMeta = serde_json::from_slice(bytes).expect("deserialize graph meta");
-        meta.node_revisions
-    }
-
-    fn extract_package_revision(result: &StarmapMergeResult) -> u64 {
-        let bytes = match result {
-            StarmapMergeResult::ApplyIncoming(b) | StarmapMergeResult::ApplyMerged(b) => b,
-            _ => return 0,
-        };
-        let meta: GraphMeta = serde_json::from_slice(bytes).expect("deserialize graph meta");
-        meta.package_revision
-    }
-
-    fn extract_graph_meta(result: &StarmapMergeResult) -> Option<GraphMeta> {
-        let bytes = match result {
-            StarmapMergeResult::ApplyIncoming(b) | StarmapMergeResult::ApplyMerged(b) => b,
-            _ => return None,
-        };
-        Some(serde_json::from_slice(bytes).expect("deserialize graph meta"))
     }
 
     // --- 测试 1: 双端新增 starmap ---
@@ -1460,45 +1505,6 @@ mod tests {
         let ids = extract_starmap_ids(&result);
         // 一侧删除一侧保留 base 原样 → 接受删除，结果为 [A]，不复活 B
         assert_eq!(ids, vec!["A"]);
-    }
-
-    // --- 测试 4: 双端新增 node ---
-
-    #[test]
-    fn test_merge_graph_meta_both_add_node() {
-        let base = make_graph_meta_bytes("sm_1", &["x"], &[], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x", "n1"], &[], 100);
-        let incoming = make_graph_meta_bytes("sm_1", &["x", "n2"], &[], 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        assert_eq!(ids, vec!["x", "n1", "n2"]);
-    }
-
-    // --- 测试 5: revisions 三方合并 ---
-
-    #[test]
-    fn test_merge_graph_meta_revisions() {
-        let base = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x"], &[("x", 2)], 100);
-        let incoming = make_graph_meta_bytes("sm_1", &["x"], &[("x", 3)], 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let revs = extract_node_revisions(&result);
-        assert_eq!(revs.get("x"), Some(&3));
-    }
-
-    // --- 测试 6: starmap_id 不一致 → Err ---
-
-    #[test]
-    fn test_merge_graph_meta_starmap_id_mismatch() {
-        let local = make_graph_meta_bytes("A", &["x"], &[], 100);
-        let incoming = make_graph_meta_bytes("B", &["x"], &[], 200);
-
-        let result = merge_graph_meta(None, Some(&local), Some(&incoming));
-        assert!(result.is_err(), "starmap_id mismatch should return Err");
     }
 
     // --- 测试 7: main_starmap_by_project 冲突 → 取 updated_at 较大方的值 ---
@@ -1691,156 +1697,6 @@ mod tests {
         );
     }
 
-    // --- 测试 14: graph meta 成员删除不复活 + tombstone 保留 ---
-
-    #[test]
-    fn test_merge_graph_meta_one_delete_one_keep() {
-        // base 有节点 x、y。local 删 y，incoming 保留 y 无变化。
-        // 接受删除后 y 不在 node_ids。
-        let base = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 100); // local 删 y
-        let incoming = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        // 一侧删除一侧保留 base 原样 → 接受删除，y 不复活
-        assert_eq!(ids, vec!["x".to_string()]);
-    }
-
-    // --- 测试 15: 双端新增节点 → package_revision = max(local_pr, incoming_pr) + 1 ---
-
-    #[test]
-    fn test_merge_graph_meta_bump_package_revision_on_both_add() {
-        // base: pr=7, nodes=[x]. local: pr=8, nodes=[x,n1]. incoming: pr=8, nodes=[x,n2].
-        // 双端从 pr=7 分别新增 n1/n2。合并后 pr 应为 9（max(8,8)+1），
-        // 使增量快照 since_revision=8 能发出 n1、n2。
-        let base = make_graph_meta_bytes_with_pr("sm_1", &["x"], &[("x", 7)], 7, 0);
-        let local =
-            make_graph_meta_bytes_with_pr("sm_1", &["x", "n1"], &[("x", 7), ("n1", 8)], 8, 100);
-        let incoming =
-            make_graph_meta_bytes_with_pr("sm_1", &["x", "n2"], &[("x", 7), ("n2", 8)], 8, 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let pr = extract_package_revision(&result);
-        // max(8, 8) + 1 = 9
-        assert_eq!(
-            pr, 9,
-            "package_revision should be max(local_pr, incoming_pr) + 1"
-        );
-    }
-
-    // --- 测试 16: 新增节点的 revision 应等于新 package_revision ---
-
-    #[test]
-    fn test_merge_graph_meta_new_object_revision_bumped() {
-        let base = make_graph_meta_bytes_with_pr("sm_1", &["x"], &[("x", 7)], 7, 0);
-        let local =
-            make_graph_meta_bytes_with_pr("sm_1", &["x", "n1"], &[("x", 7), ("n1", 8)], 8, 100);
-        let incoming =
-            make_graph_meta_bytes_with_pr("sm_1", &["x", "n2"], &[("x", 7), ("n2", 8)], 8, 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let revs = extract_node_revisions(&result);
-        let pr = extract_package_revision(&result);
-        // n1、n2 是新增对象，revision 应提升到新 package_revision（9）
-        assert_eq!(
-            revs.get("n1"),
-            Some(&pr),
-            "n1 revision should be bumped to new pr"
-        );
-        assert_eq!(
-            revs.get("n2"),
-            Some(&pr),
-            "n2 revision should be bumped to new pr"
-        );
-        // x 在 base 中且 revision 无变化（7→7），保持原 revision
-        assert_eq!(
-            revs.get("x"),
-            Some(&7),
-            "x revision unchanged should stay at 7"
-        );
-    }
-
-    // --- 测试 17: 派生缓存字段应为空 ---
-
-    #[test]
-    fn test_merge_graph_meta_derived_cache_cleared() {
-        let base = make_graph_meta_bytes("sm_1", &["x"], &[], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x", "n1"], &[], 100);
-        let incoming = make_graph_meta_bytes("sm_1", &["x", "n2"], &[], 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let meta = extract_graph_meta(&result).expect("should have merged meta");
-        // 派生缓存字段应为空，由 Store 层重建
-        assert!(
-            meta.edge_relation_index.is_empty(),
-            "edge_relation_index should be empty"
-        );
-        assert!(
-            meta.embed_host_index.is_empty(),
-            "embed_host_index should be empty"
-        );
-        assert!(
-            meta.link_relation_index.is_empty(),
-            "link_relation_index should be empty"
-        );
-        assert!(
-            meta.hyperlink_relation_index.is_empty(),
-            "hyperlink_relation_index should be empty"
-        );
-        assert!(
-            meta.node_kind_counts.is_empty(),
-            "node_kind_counts should be empty"
-        );
-    }
-
-    // --- 测试 18: 无变化时 package_revision 不变 ---
-
-    #[test]
-    fn test_merge_graph_meta_no_change_preserves_revision() {
-        // 三者完全相同 → NoOp，package_revision 不变
-        let base = make_graph_meta_bytes_with_pr("sm_1", &["x"], &[("x", 5)], 5, 100);
-        let local = base.clone();
-        let incoming = base.clone();
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        // 无变化 → NoOp
-        assert!(
-            matches!(result, StarmapMergeResult::NoOp),
-            "no change should return NoOp, got {:?}",
-            result
-        );
-    }
-
-    // --- 测试 19: 单端修改 → package_revision bump ---
-
-    #[test]
-    fn test_merge_graph_meta_single_side_change_bumps_pr() {
-        // local 新增节点，incoming 无变化 → 有变化，pr bump
-        let base = make_graph_meta_bytes_with_pr("sm_1", &["x"], &[("x", 5)], 5, 0);
-        let local =
-            make_graph_meta_bytes_with_pr("sm_1", &["x", "n1"], &[("x", 5), ("n1", 6)], 6, 100);
-        let incoming = make_graph_meta_bytes_with_pr("sm_1", &["x"], &[("x", 5)], 5, 0);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let pr = extract_package_revision(&result);
-        // 有变化 → max(6, 5) + 1 = 7
-        assert_eq!(pr, 7, "single side change should bump pr");
-        let revs = extract_node_revisions(&result);
-        // n1 是新增对象 → revision 提升到 7
-        assert_eq!(
-            revs.get("n1"),
-            Some(&7),
-            "n1 revision should be bumped to new pr"
-        );
-    }
-
     // --- 测试 20-31: merge_starmap_object 对象级三方决策 ---
 
     #[test]
@@ -1887,16 +1743,35 @@ mod tests {
 
     #[test]
     fn test_merge_object_remote_delete_local_keep() {
-        let d = merge_starmap_object(Some(b"base"), Some(b"local"), None);
-        assert!(matches!(d, ObjectMergeDecision::KeepLocal), "got {:?}", d);
+        // base 存在、local == base、incoming 不存在 → 接受远端删除
+        let d = merge_starmap_object(Some(b"base"), Some(b"base"), None);
+        assert!(matches!(d, ObjectMergeDecision::Delete), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_merge_object_remote_delete_local_modify_conflict() {
+        // base 存在、local != base（local 修改了）、incoming 不存在 → 删除-修改冲突
+        let d = merge_starmap_object(Some(b"base"), Some(b"modified"), None);
+        match d {
+            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted) => {}
+            other => panic!("expected Conflict(RemoteDeleted), got {:?}", other),
+        }
     }
 
     #[test]
     fn test_merge_object_local_delete_remote_keep() {
-        let d = merge_starmap_object(Some(b"base"), None, Some(b"incoming"));
+        // base 存在、local 不存在、incoming == base → 接受本地删除
+        let d = merge_starmap_object(Some(b"base"), None, Some(b"base"));
+        assert!(matches!(d, ObjectMergeDecision::Delete), "got {:?}", d);
+    }
+
+    #[test]
+    fn test_merge_object_local_delete_remote_modify_conflict() {
+        // base 存在、local 不存在、incoming != base（incoming 修改了）→ 删除-修改冲突
+        let d = merge_starmap_object(Some(b"base"), None, Some(b"modified"));
         match d {
-            ObjectMergeDecision::ApplyIncoming(c) => assert_eq!(c, b"incoming"),
-            other => panic!("expected ApplyIncoming, got {:?}", other),
+            ObjectMergeDecision::Conflict(crate::sync::types::SyncConflictKind::RemoteDeleted) => {}
+            other => panic!("expected Conflict(RemoteDeleted), got {:?}", other),
         }
     }
 
@@ -1933,86 +1808,6 @@ mod tests {
         }
     }
 
-    // --- 测试 32: 删除-修改冲突：一侧删除、另一侧修改了 → 保留对象 ---
-
-    #[test]
-    fn test_merge_graph_meta_delete_modify_conflict() {
-        // base 有节点 x、y。local 删 y（从成员表移除），incoming 修改了 y（revision 变了）。
-        // 删除-修改冲突 → 保留 y（不因一侧删除而丢失修改侧的对象）。
-        let base = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 100); // local 删 y
-        let incoming =
-            make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 2)], 200); // incoming 修改 y
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        // 删除-修改冲突 → 保留 y
-        assert!(
-            ids.contains(&"y".to_string()),
-            "delete-modify conflict should preserve y, got {:?}",
-            ids
-        );
-    }
-
-    // --- 测试 33: 删除-保留（未修改）：一侧删除、另一侧保留 base 原样 → 接受删除 ---
-
-    #[test]
-    fn test_merge_graph_meta_delete_keep_unmodified() {
-        // base 有节点 x、y。local 删 y，incoming 保留 y 且 revision 未变。
-        // 接受删除 → y 不保留。
-        let base = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 100); // local 删 y
-        let incoming =
-            make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 200); // incoming 保留 y（未修改）
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        // 接受删除 → y 不保留
-        assert!(
-            !ids.contains(&"y".to_string()),
-            "delete-keep-unmodified should accept deletion, got {:?}",
-            ids
-        );
-    }
-
-    // --- 测试 34: 双侧删除 → 不保留 ---
-
-    #[test]
-    fn test_merge_graph_meta_both_delete() {
-        // base 有节点 x、y。local 和 incoming 都删了 y。
-        let base = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 0);
-        let local = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 100);
-        let incoming = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 200);
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        assert_eq!(ids, vec!["x".to_string()]);
-    }
-
-    // --- 测试 35: 删除-修改冲突（incoming 删，local 修改）→ 保留对象 ---
-
-    #[test]
-    fn test_merge_graph_meta_delete_modify_conflict_reversed() {
-        // base 有节点 x、y。local 修改了 y（revision 变了），incoming 删 y。
-        // 删除-修改冲突 → 保留 y。
-        let base = make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 1)], 0);
-        let local =
-            make_graph_meta_bytes("sm_1", &["x", "y"], &[("x", 1), ("y", 2)], 100); // local 修改 y
-        let incoming = make_graph_meta_bytes("sm_1", &["x"], &[("x", 1)], 200); // incoming 删 y
-
-        let result = merge_graph_meta(Some(&base), Some(&local), Some(&incoming))
-            .expect("merge should succeed");
-        let ids = extract_node_ids(&result);
-        assert!(
-            ids.contains(&"y".to_string()),
-            "delete-modify conflict (reversed) should preserve y, got {:?}",
-            ids
-        );
-    }
-
     // --- 测试 36: three_way_merge_id_set 直接测试 ---
 
     #[test]
@@ -2032,7 +1827,10 @@ mod tests {
             &incoming_mod,
         );
         // 删除-修改冲突 → 保留 b
-        assert!(result.contains(&"b".to_string()), "delete-modify conflict should preserve b");
+        assert!(
+            result.contains(&"b".to_string()),
+            "delete-modify conflict should preserve b"
+        );
     }
 
     #[test]
@@ -2051,7 +1849,10 @@ mod tests {
             &incoming_mod,
         );
         // 接受删除 → b 不保留
-        assert!(!result.contains(&"b".to_string()), "delete-keep-unmodified should accept deletion");
+        assert!(
+            !result.contains(&"b".to_string()),
+            "delete-keep-unmodified should accept deletion"
+        );
     }
 
     #[test]
@@ -2070,7 +1871,10 @@ mod tests {
             &incoming_mod,
         );
         // 两侧都删 → b 不保留
-        assert!(!result.contains(&"b".to_string()), "both delete should remove b");
+        assert!(
+            !result.contains(&"b".to_string()),
+            "both delete should remove b"
+        );
     }
 
     #[test]
@@ -2089,6 +1893,9 @@ mod tests {
             &incoming_mod,
         );
         // 两侧都保留 → b 保留
-        assert!(result.contains(&"b".to_string()), "both keep should preserve b");
+        assert!(
+            result.contains(&"b".to_string()),
+            "both keep should preserve b"
+        );
     }
 }

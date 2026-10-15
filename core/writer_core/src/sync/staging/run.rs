@@ -164,7 +164,8 @@ impl StagingRun {
         };
         use crate::sync::staging::starmap_merge::{
             is_starmap_graph_meta_path, is_starmap_index_path, is_starmap_object_file_path,
-            merge_starmap_object, ObjectMergeDecision,
+            merge_starmap_graph_with_objects, parse_object_path, ObjectMergeDecision,
+            StarmapMergeResult,
         };
 
         let staging_root = self.staging_root();
@@ -258,16 +259,6 @@ impl StagingRun {
                     .push(rel.clone());
             }
         }
-        let _starmap_file_set: std::collections::HashSet<PathBuf> = starmap_groups
-            .values()
-            .flat_map(|g| {
-                let mut paths = g.object_paths.clone();
-                if let Some(p) = &g.graph_meta_path {
-                    paths.push(p.clone());
-                }
-                paths
-            })
-            .collect();
 
         for rel in all_paths {
             let rel_str = rel.to_string_lossy().to_string();
@@ -394,63 +385,13 @@ impl StagingRun {
                     }
                 }
             } else if is_starmap_graph_meta_path(&rel_str) {
-                // 星图 graph.json：按对象 ID 三方集合合并，不走整文件 LWW。
-                // 双端并发创建不同节点/边时，合并后保留双方新增的对象 ID
-                // （issue #902 第八轮复核）。
-                use crate::sync::staging::starmap_merge::{merge_graph_meta, StarmapMergeResult};
-                match merge_graph_meta(base.as_deref(), local.as_deref(), incoming.as_deref())? {
-                    StarmapMergeResult::NoOp => {
-                        plan.noop.push(rel);
-                    }
-                    StarmapMergeResult::KeepLocal => {
-                        plan.keep_local.push(rel);
-                    }
-                    StarmapMergeResult::ApplyIncoming(content)
-                    | StarmapMergeResult::ApplyMerged(content) => {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: rel,
-                            content,
-                        });
-                    }
-                }
+                // 星图 graph.json：由循环后的统一合并处理，此处跳过
+                // （issue #902 第十轮复核）。
+                continue;
             } else if is_starmap_object_file_path(&rel_str) {
-                // 星图对象文件（nodes/edges/embeds/links/hyperlinks 下的 .json）：
-                // 按内容三方比较做对象级决策，不走整文件 LWW。
-                // 识别双端同改冲突而非静默覆盖；删除-修改也显式裁决，
-                // 避免与 graph.json 成员表合并脱节（issue #902）。
-                let base_hash = md5_hex(&base);
-                let local_hash = md5_hex(&local);
-                let incoming_hash = md5_hex(&incoming);
-                match merge_starmap_object(base.as_deref(), local.as_deref(), incoming.as_deref()) {
-                    ObjectMergeDecision::NoOp => {
-                        plan.noop.push(rel);
-                    }
-                    ObjectMergeDecision::KeepLocal => {
-                        plan.keep_local.push(rel);
-                    }
-                    ObjectMergeDecision::ApplyIncoming(content) => {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: rel,
-                            content,
-                        });
-                    }
-                    ObjectMergeDecision::Delete => {
-                        // 双侧都删除：文件已不存在，无需操作。
-                        plan.noop.push(rel);
-                    }
-                    ObjectMergeDecision::Conflict(kind) => {
-                        plan.conflict.push(StagingConflict {
-                            rel_path: rel,
-                            base_hash,
-                            local_hash,
-                            incoming_hash,
-                            kind,
-                            // 此处尚未保存快照；由 commit_helpers 在 staging cleanup 前
-                            // 调 save_conflict_snapshots 填入（#757）。
-                            remote_snapshot_path: None,
-                        });
-                    }
-                }
+                // 星图对象文件：由循环后的统一合并处理，此处跳过
+                // （issue #902 第十轮复核）。
+                continue;
             } else {
                 // Metadata/GeneratedCache/StarMap meta 文件 走真正 LWW——
                 // 时间戳较大方获胜；同时间 device_id 字典序决胜。不再固定 remote-wins。
@@ -526,6 +467,110 @@ impl StagingRun {
                 }
             }
         }
+
+        // --- 统一处理星图 graph.json + 对象文件 ---
+        // 对每个 starmap_group 执行统一合并，确保 graph.json 成员表与对象文件
+        // 决策一致（issue #902 第十轮复核）。graph.json 和对象文件不再逐文件独立裁决。
+        for (starmap_id, group) in starmap_groups {
+            let graph_rel = match &group.graph_meta_path {
+                Some(p) => p.clone(),
+                None => continue,
+            };
+            let graph_base = read_opt_bytes(&base_root.join(&graph_rel))?;
+            let graph_local = read_opt_bytes(&live_root.join(&graph_rel))?;
+            let graph_incoming = read_opt_bytes(&staging_root.join(&graph_rel))?;
+
+            // 读取每个对象文件的三方 bytes
+            // (rel_path, object_type, object_id, base, local, incoming)
+            type ObjTriple = (
+                PathBuf,
+                String,
+                String,
+                Option<Vec<u8>>,
+                Option<Vec<u8>>,
+                Option<Vec<u8>>,
+            );
+            let mut objects: Vec<ObjTriple> = Vec::new();
+            for obj_rel in &group.object_paths {
+                let (object_type, object_id) = match parse_object_path(obj_rel) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let obj_base = read_opt_bytes(&base_root.join(obj_rel))?;
+                let obj_local = read_opt_bytes(&live_root.join(obj_rel))?;
+                let obj_incoming = read_opt_bytes(&staging_root.join(obj_rel))?;
+                objects.push((
+                    obj_rel.clone(),
+                    object_type,
+                    object_id,
+                    obj_base,
+                    obj_local,
+                    obj_incoming,
+                ));
+            }
+
+            let output = merge_starmap_graph_with_objects(
+                &starmap_id,
+                graph_base.as_deref(),
+                graph_local.as_deref(),
+                graph_incoming.as_deref(),
+                &objects,
+            )?;
+
+            // graph.json 结果装入 CommitPlan
+            match output.graph_meta_result {
+                StarmapMergeResult::NoOp => {
+                    plan.noop.push(graph_rel);
+                }
+                StarmapMergeResult::KeepLocal => {
+                    plan.keep_local.push(graph_rel);
+                }
+                StarmapMergeResult::ApplyIncoming(content)
+                | StarmapMergeResult::ApplyMerged(content) => {
+                    plan.content_actions.push(CommitAction::Apply {
+                        rel_path: graph_rel,
+                        content,
+                    });
+                }
+            }
+
+            // 对象决策装入 CommitPlan
+            for (idx, (obj_rel, decision)) in output.object_decisions.iter().enumerate() {
+                let (_, _, _, obj_base, obj_local, obj_incoming) = &objects[idx];
+                let base_hash = md5_hex(obj_base);
+                let local_hash = md5_hex(obj_local);
+                let incoming_hash = md5_hex(obj_incoming);
+                match decision {
+                    ObjectMergeDecision::NoOp => {
+                        plan.noop.push(obj_rel.clone());
+                    }
+                    ObjectMergeDecision::KeepLocal => {
+                        plan.keep_local.push(obj_rel.clone());
+                    }
+                    ObjectMergeDecision::ApplyIncoming(content) => {
+                        plan.content_actions.push(CommitAction::Apply {
+                            rel_path: obj_rel.clone(),
+                            content: content.clone(),
+                        });
+                    }
+                    ObjectMergeDecision::Delete => {
+                        // 双侧都删除或一侧删除一侧未改 → 无需操作
+                        plan.noop.push(obj_rel.clone());
+                    }
+                    ObjectMergeDecision::Conflict(kind) => {
+                        plan.conflict.push(StagingConflict {
+                            rel_path: obj_rel.clone(),
+                            base_hash,
+                            local_hash,
+                            incoming_hash,
+                            kind: *kind,
+                            remote_snapshot_path: None,
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(plan)
     }
 
@@ -650,6 +695,15 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// 读取文件内容，文件不存在时返回 `None`。
+fn read_opt_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
+    if path.exists() {
+        Ok(Some(read_bytes(path)?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// 递归列出 live_root 下 starmaps/ 目录中所有 .json 文件的相对路径。

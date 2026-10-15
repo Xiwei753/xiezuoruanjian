@@ -412,6 +412,22 @@ fn make_graph_meta_json(starmap_id: &str, node_ids: &[&str], updated_at: u64) ->
     serde_json::to_vec_pretty(&record).expect("serialize graph meta")
 }
 
+/// 构造 StarMapNode 的 JSON bytes（只填反序列化必填字段）。
+///
+/// `rebuild_derived_indexes` 会把节点对象反序列化为 `StarMapNode`，
+/// 需要 id/title/kind/position/createdAt/updatedAt 字段。
+fn make_node_json(node_id: &str) -> Vec<u8> {
+    let record = serde_json::json!({
+        "id": node_id,
+        "title": node_id,
+        "kind": "note",
+        "position": { "x": 0.0, "y": 0.0 },
+        "createdAt": 0,
+        "updatedAt": 0,
+    });
+    serde_json::to_vec_pretty(&record).expect("serialize node")
+}
+
 /// issue #902 第八轮复核：starmaps/index.json 走语义合并而非整文件 LWW。
 /// 双端并发创建不同星图时，合并后应保留双方新增的星图 ID。
 #[test]
@@ -481,6 +497,11 @@ fn starmap_index_semantic_merge_both_add() {
 
 /// issue #902 第八轮复核：starmaps/<id>/graph.json 走语义合并。
 /// 双端并发创建不同节点时，合并后应保留双方新增的节点 ID。
+///
+/// 第十轮复核：统一合并路径 `merge_starmap_graph_with_objects` 用 `final_objects`
+/// （从对象文件决策得到的最终对象集合）驱动成员表。仅有 graph.json 无对象文件时
+/// `final_objects` 为空，`reconcile_member_list` 返回空成员表。因此测试需要同时
+/// 设置节点对象文件（`starmaps/<id>/nodes/<bucket>/<obj_id>.json`）。
 #[test]
 fn starmap_graph_meta_semantic_merge_both_add_node() {
     let tmp = TempDir::new().unwrap();
@@ -491,18 +512,30 @@ fn starmap_graph_meta_semantic_merge_both_add_node() {
     let graph_rel = "starmaps/sm_x/graph.json";
     let graph_abs = live.join(graph_rel);
 
-    // base: graph { nodeIds: ["x"] }
+    // 节点对象文件路径：starmaps/sm_x/nodes/00/<node_id>.json
+    // bucket 必须是 2 个小写 hex 字符（见 is_valid_bucket）。
+    let node_x_rel = "starmaps/sm_x/nodes/00/x.json";
+    let node_x_abs = live.join(node_x_rel);
+    fs::create_dir_all(node_x_abs.parent().unwrap()).unwrap();
+
+    // base: graph { nodeIds: ["x"] } + 节点对象 x
     fs::write(&graph_abs, make_graph_meta_json("sm_x", &["x"], 0)).unwrap();
+    fs::write(&node_x_abs, make_node_json("x")).unwrap();
 
     let run = StagingRun::create(tmp.path(), live.clone()).unwrap();
-    run.build_base_snapshot_from_live(&live, &[PathBuf::from(graph_rel)])
-        .unwrap();
+    run.build_base_snapshot_from_live(
+        &live,
+        &[PathBuf::from(graph_rel), PathBuf::from(node_x_rel)],
+    )
+    .unwrap();
 
-    // local: graph { nodeIds: ["x", "n1"] }（本地新增 n1）
+    // local: graph { nodeIds: ["x", "n1"] }（本地新增 n1）+ 节点对象 n1
     let local_bytes = make_graph_meta_json("sm_x", &["x", "n1"], 100);
     crate::storage::atomic_write_bytes(&graph_abs, &local_bytes).unwrap();
+    let node_n1_abs = live.join("starmaps/sm_x/nodes/00/n1.json");
+    fs::write(&node_n1_abs, make_node_json("n1")).unwrap();
 
-    // incoming: graph { nodeIds: ["x", "n2"] }（远端新增 n2）
+    // incoming: graph { nodeIds: ["x", "n2"] }（远端新增 n2）+ 节点对象 x, n2
     let staging_graph_dir = run.staging_root().join("starmaps").join("sm_x");
     fs::create_dir_all(&staging_graph_dir).unwrap();
     fs::write(
@@ -510,27 +543,38 @@ fn starmap_graph_meta_semantic_merge_both_add_node() {
         make_graph_meta_json("sm_x", &["x", "n2"], 200),
     )
     .unwrap();
+    let staging_node_dir = run
+        .staging_root()
+        .join("starmaps")
+        .join("sm_x")
+        .join("nodes")
+        .join("00");
+    fs::create_dir_all(&staging_node_dir).unwrap();
+    fs::write(staging_node_dir.join("x.json"), make_node_json("x")).unwrap();
+    fs::write(staging_node_dir.join("n2.json"), make_node_json("n2")).unwrap();
 
     let plan = run.compute_commit_plan(&live).unwrap();
 
     // 合并后: graph { nodeIds: ["x", "n1", "n2"] }
-    assert_eq!(
-        plan.content_actions.len(),
-        1,
-        "semantic merge should produce exactly one content action"
-    );
     assert!(
         plan.conflict.is_empty(),
         "semantic merge should not produce conflicts"
     );
 
-    // 验证合并后的内容包含 x, n1, n2。
-    let merged_bytes = match &plan.content_actions[0] {
-        CommitAction::Apply { content, .. } => content,
-        CommitAction::Delete { .. } => panic!("expected Apply, got Delete"),
-    };
+    // 统一合并会产生 graph.json 的 ApplyMerged + n2.json 的 ApplyIncoming。
+    // 从 content_actions 中找到 graph.json 的合并结果。
+    let merged_bytes = plan
+        .content_actions
+        .iter()
+        .find_map(|action| match action {
+            CommitAction::Apply { rel_path, content } if rel_path == &PathBuf::from(graph_rel) => {
+                Some(content.clone())
+            }
+            _ => None,
+        })
+        .expect("graph.json should be in content_actions with merged content");
     let merged: serde_json::Value =
-        serde_json::from_slice(merged_bytes).expect("deserialize merged graph meta");
+        serde_json::from_slice(&merged_bytes).expect("deserialize merged graph meta");
     let merged_ids: Vec<String> = merged["nodeIds"]
         .as_array()
         .expect("nodeIds should be array")
