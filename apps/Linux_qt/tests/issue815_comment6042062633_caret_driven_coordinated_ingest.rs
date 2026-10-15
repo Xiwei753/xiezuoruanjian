@@ -13,7 +13,11 @@ use source_guard::{function_window, read_src};
 
 #[test]
 fn issue815_modify1_qml_restores_mouse_left_long_press() {
-    let src = read_src("qml/WritingWorkspace.qml");
+    // 左键手势（MouseArea onPressAndHold）、右键 TapHandler 与编辑器上下文菜单
+    // 已从 WritingWorkspace.qml 抽到 EditorViewport.qml：正向断言指向新文件；
+    // 负向断言覆盖整个写作区两份 QML，避免抽取造成守卫盲区。
+    let workspace_src = read_src("qml/WritingWorkspace.qml");
+    let viewport_src = read_src("qml/EditorViewport.qml");
 
     // Issue #819 评论 5956495850 第 6/7 节：旧 touchLongPressHandler 已删除，
     // 改用 TapHandler + Timer 调 activate_pointer_long_press。
@@ -22,7 +26,8 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
 
     // 旧 touchLongPressHandler 必须已删除。
     assert!(
-        !src.contains("id: touchLongPressHandler"),
+        !workspace_src.contains("id: touchLongPressHandler")
+            && !viewport_src.contains("id: touchLongPressHandler"),
         "Issue #819 评论 5956495850 第 6 节: 旧 touchLongPressHandler 必须删除，\
          改用 TapHandler + Timer 调 activate_pointer_long_press。"
     );
@@ -32,22 +37,23 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
     // #901 重写后 QML 用 onPressAndHold 直接调 activate_pointer_long_press，
     // 不再需要 leftButtonLongPressTimer。
     assert!(
-        !src.contains("id: leftButtonLongPressHandler"),
+        !workspace_src.contains("id: leftButtonLongPressHandler")
+            && !viewport_src.contains("id: leftButtonLongPressHandler"),
         "Issue #819 评论 5967250411 问题 4: leftButtonLongPressHandler (TapHandler) \
          必须删除，左键 pointer event 单一 owner 是 qquickitem_impl mouse_event。"
     );
 
     // 新 onPressAndHold 必须存在，直接调 activate_pointer_long_press。
     assert!(
-        src.contains("onPressAndHold"),
-        "Issue #819 评论 5967250411 问题 4: WritingWorkspace.qml 必须有 \
+        viewport_src.contains("onPressAndHold"),
+        "Issue #819 评论 5967250411 问题 4: EditorViewport.qml 必须有 \
          onPressAndHold 处理左键长按。"
     );
 
     // Issue #819 评论 5967250411 问题 4：新链路用 Timer 调
     // activate_pointer_long_press（Rust 状态机 activate_long_press + long_press_at）。
     assert!(
-        src.contains("activate_pointer_long_press"),
+        viewport_src.contains("activate_pointer_long_press"),
         "Issue #819 评论 5967250411 问题 4: QML Timer 必须调 \
          activate_pointer_long_press。"
     );
@@ -55,20 +61,22 @@ fn issue815_modify1_qml_restores_mouse_left_long_press() {
     // Issue #819 评论 5967250411 问题 4：QML 不再调 end_selection_gesture_qml。
     // release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。
     assert!(
-        !src.contains("end_selection_gesture_qml"),
+        !workspace_src.contains("end_selection_gesture_qml")
+            && !viewport_src.contains("end_selection_gesture_qml"),
         "Issue #819 评论 5967250411 问题 4: QML 不再调 end_selection_gesture_qml，\
          release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次。"
     );
 
     // 右键菜单继续由独立的 Qt.RightButton TapHandler 处理。
     assert!(
-        src.contains("acceptedButtons: Qt.RightButton"),
+        viewport_src.contains("acceptedButtons: Qt.RightButton"),
         "Issue #815 评论 6042062633 修改 1: 右键菜单必须继续走独立的 Qt.RightButton handler。"
     );
 
     // 删掉 Issue #714 的错误论断注释。
     assert!(
-        !src.contains("桌面鼠标的长按等同于右键菜单"),
+        !workspace_src.contains("桌面鼠标的长按等同于右键菜单")
+            && !viewport_src.contains("桌面鼠标的长按等同于右键菜单"),
         "Issue #815 评论 6042062633 修改 1: 必须删除「桌面鼠标长按 == 右键菜单」的注释/逻辑，\
          它正是当初把鼠标排除掉的错误理由。"
     );

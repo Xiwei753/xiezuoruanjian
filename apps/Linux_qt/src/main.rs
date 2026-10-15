@@ -167,6 +167,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     // 漏登记时开发目录碰巧能找到，打包后组件不存在。
     "qml/WritingChapterNavigation.qml" as "WritingChapterNavigation.qml",
     "qml/EditorController.qml" as "EditorController.qml",
+    // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，漏登记时开发目录碰巧能找到、打包后组件不存在。
+    "qml/EditorViewport.qml" as "EditorViewport.qml",
     // Issue #825 复核4 第3项：工具条带拆成 ToolbarLeading/Center/Trailing 三组，
     // TopWritingToolbar 被 WritingWorkbenchToolbar + WritingFormatGroup 取代，
     // 这里同步换掉 qrc 登记，不留第二个入口。

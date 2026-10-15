@@ -63,18 +63,23 @@ fn issue819_block3_edit_flow_uses_pipeline_edit_outcome() {
 
 #[test]
 fn issue819_block4_left_button_gesture_single_owner() {
-    let qml_src = read_src("qml/WritingWorkspace.qml");
+    // 左键手势（MouseArea onPressAndHold）与编辑器上下文菜单已从 WritingWorkspace.qml
+    // 抽到 EditorViewport.qml：正向断言指向新文件；负向断言覆盖整个写作区两份 QML。
+    let workspace_src = read_src("qml/WritingWorkspace.qml");
+    let viewport_src = read_src("qml/EditorViewport.qml");
 
-    // 1. 确认 WritingWorkspace.qml 不再有 leftButtonLongPressHandler (TapHandler)。
+    // 1. 确认写作区 QML 不再有 leftButtonLongPressHandler (TapHandler)。
     assert!(
-        !qml_src.contains("id: leftButtonLongPressHandler"),
-        "问题 4 修复：WritingWorkspace.qml 不再有 leftButtonLongPressHandler (TapHandler)，\
+        !workspace_src.contains("id: leftButtonLongPressHandler")
+            && !viewport_src.contains("id: leftButtonLongPressHandler"),
+        "问题 4 修复：写作区 QML 不再有 leftButtonLongPressHandler (TapHandler)，\
          左键 pointer event 单一 owner 是 qquickitem_impl mouse_event"
     );
 
     // 2. 确认 QML 不再调 end_selection_gesture_qml。
     assert!(
-        !qml_src.contains("end_selection_gesture_qml"),
+        !workspace_src.contains("end_selection_gesture_qml")
+            && !viewport_src.contains("end_selection_gesture_qml"),
         "问题 4 修复：QML 不再调 end_selection_gesture_qml，\
          release/cancel 的 selection gesture 结束只由 qquickitem_impl mouse_event 做一次"
     );
@@ -82,14 +87,14 @@ fn issue819_block4_left_button_gesture_single_owner() {
     // 3. #901 重写后 QML 用 onPressAndHold 直接处理左键长按，
     // 不再需要 is_left_button_event 在 qquickitem_impl.rs 中判断。
     assert!(
-        qml_src.contains("onPressAndHold"),
-        "问题 4 修复：QML 必须有 onPressAndHold 处理左键长按"
+        viewport_src.contains("onPressAndHold"),
+        "问题 4 修复：EditorViewport.qml 必须有 onPressAndHold 处理左键长按"
     );
 
     // 4. 确认 QML 调 activate_pointer_long_press。
     assert!(
-        qml_src.contains("activate_pointer_long_press"),
-        "问题 4 修复：QML onPressAndHold 必须调 activate_pointer_long_press"
+        viewport_src.contains("activate_pointer_long_press"),
+        "问题 4 修复：EditorViewport.qml onPressAndHold 必须调 activate_pointer_long_press"
     );
 }
 

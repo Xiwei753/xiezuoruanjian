@@ -514,6 +514,8 @@ fn main() {
     // Issue #790 评论 5875963057: 全局顶栏公共入口组件
     println!("cargo:rerun-if-changed=qml/GlobalTopActions.qml");
     println!("cargo:rerun-if-changed=qml/EditorContextMenu.qml");
+    // Issue #904：编辑区视口层组件，WritingWorkspace 直接实例化，纳入重编译列表。
+    println!("cargo:rerun-if-changed=qml/EditorViewport.qml");
     println!("cargo:rerun-if-changed=qml/RightDrawer.qml");
     // Issue #757 评论 5818193510 第 5 点：同步冲突解决面板。
     println!("cargo:rerun-if-changed=qml/SyncConflictPanel.qml");

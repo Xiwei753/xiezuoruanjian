@@ -161,9 +161,13 @@ fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
 
 #[test]
 fn issue690_qml_uses_low_frequency_blink_timer_not_frame_animation() {
-    let qml = read_src("qml/WritingWorkspace.qml");
+    // 写作区编辑视口（ScrollView / SujianEditorItem / 光标闪烁 Timer / 鼠标手势）
+    // 已从 WritingWorkspace.qml 抽到 EditorViewport.qml，blink Timer 现居后者。
+    // FrameAnimation 负向守卫覆盖整个写作区（两份 QML），不因抽取而出现盲区。
+    let workspace_qml = read_src("qml/WritingWorkspace.qml");
+    let qml = read_src("qml/EditorViewport.qml");
     assert!(
-        !qml.contains("FrameAnimation {"),
+        !workspace_qml.contains("FrameAnimation {") && !qml.contains("FrameAnimation {"),
         "步骤4: 写作区不再有每帧 FrameAnimation 驱动光标动画"
     );
     let timer_id = qml
@@ -172,7 +176,14 @@ fn issue690_qml_uses_low_frequency_blink_timer_not_frame_animation() {
     let block_start = qml[..timer_id]
         .rfind("Timer {")
         .expect("步骤4: blink 更新必须由 Timer 触发");
-    let window = &qml[block_start..timer_id + 400];
+    // 窗口末端回退到最近的 UTF-8 字符边界：EditorViewport.qml 里 Timer 前后有中文注释，
+    // 固定 400 字节偏移可能落在多字节字符中间。
+    let window_end = (timer_id + 400).min(qml.len());
+    let window_end = (block_start..=window_end)
+        .rev()
+        .find(|i| qml.is_char_boundary(*i))
+        .unwrap_or(block_start);
+    let window = &qml[block_start..window_end];
     assert!(
         window.contains("tick_cursor_animation()"),
         "步骤4: blink 由低频 Timer 显式请求帧更新"
