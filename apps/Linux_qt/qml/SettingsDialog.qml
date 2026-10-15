@@ -21,6 +21,10 @@ Dialog {
     modal: true
     anchors.centerIn: parent
     title: qsTr("设置")
+    // Issue #900 复核：Qt Quick Controls 的 Dialog.title 只画标题栏，不会自动给
+    // 关闭按钮。用原生 standardButtons 让 Breeze DialogButtonBox 提供可见的
+    // 「关闭」入口（点击即 reject/close），不再手绘顶部按钮。
+    standardButtons: Dialog.Close
 
     // Issue #825：设置始终是浮层，悬浮在打开设置前的那一页之上，不改成路由页。
     // 宽度分两档：primaryNavigationPlacement === Side 用大号面板；其余用窄对话框。

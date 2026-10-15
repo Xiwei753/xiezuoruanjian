@@ -66,6 +66,15 @@ ScrollView {
     // 防止两个共享同一设置项的控件互相回写时递归。
     property bool _syncingDuration: false
 
+    // Issue #900 复核：六个设置分组保留旧版可点击折叠交互（默认展开）。
+    // 搜索过滤（sectionVisible）与折叠/滚动互不覆盖。
+    property bool appearanceExpanded: true
+    property bool editorAnimationExpanded: true
+    property bool aiExpanded: true
+    property bool saveSyncExpanded: true
+    property bool diagnosticsExpanded: true
+    property bool aboutExpanded: true
+
     // ── 分组过滤（宽屏搜索） ──
     function sectionVisible(title) {
         var q = root.searchText.trim().toLowerCase()
@@ -233,9 +242,26 @@ ScrollView {
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("外观"))
 
-                FormCard.FormHeader { title: qsTr("外观") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("外观")
+                    }
+
+                    ToolButton {
+                        icon.name: root.appearanceExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.appearanceExpanded = !root.appearanceExpanded
+                        Accessible.name: qsTr("展开或收起外观")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.appearanceExpanded
                     FormCard.FormComboBoxDelegate {
                         id: themeCombo
                         text: qsTr("主题模式")
@@ -347,9 +373,26 @@ ScrollView {
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("编辑器和动画"))
 
-                FormCard.FormHeader { title: qsTr("编辑器和动画") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("编辑器和动画")
+                    }
+
+                    ToolButton {
+                        icon.name: root.editorAnimationExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.editorAnimationExpanded = !root.editorAnimationExpanded
+                        Accessible.name: qsTr("展开或收起编辑器和动画")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.editorAnimationExpanded
                     FormCard.FormSwitchDelegate {
                         id: autoIndent
                         text: qsTr("自动首行缩进")
@@ -446,9 +489,26 @@ ScrollView {
                 visible: (root.settingsBackendRef ? root.settingsBackendRef.ai_available : false)
                          && root.sectionVisible(qsTr("AI"))
 
-                FormCard.FormHeader { title: qsTr("AI") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("AI")
+                    }
+
+                    ToolButton {
+                        icon.name: root.aiExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.aiExpanded = !root.aiExpanded
+                        Accessible.name: qsTr("展开或收起AI")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.aiExpanded
                     FormCard.FormSwitchDelegate {
                         id: aiSwitch
                         text: qsTr("启用 AI 功能")
@@ -472,9 +532,26 @@ ScrollView {
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("保存和同步"))
 
-                FormCard.FormHeader { title: qsTr("保存和同步") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("保存和同步")
+                    }
+
+                    ToolButton {
+                        icon.name: root.saveSyncExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.saveSyncExpanded = !root.saveSyncExpanded
+                        Accessible.name: qsTr("展开或收起保存和同步")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.saveSyncExpanded
                     FormCard.FormSwitchDelegate {
                         id: autoSave
                         text: qsTr("自动保存")
@@ -505,6 +582,8 @@ ScrollView {
                 }
 
                 SyncPage {
+                    // Issue #900 复核：与「保存和同步」卡片一起折叠。
+                    visible: root.saveSyncExpanded
                     Layout.fillWidth: true
                     syncBackendRef: root.syncBackendRef
                     workspaceBackendRef: root.workspaceBackendRef
@@ -524,9 +603,26 @@ ScrollView {
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("诊断与日志"))
 
-                FormCard.FormHeader { title: qsTr("诊断与日志") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("诊断与日志")
+                    }
+
+                    ToolButton {
+                        icon.name: root.diagnosticsExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.diagnosticsExpanded = !root.diagnosticsExpanded
+                        Accessible.name: qsTr("展开或收起诊断与日志")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.diagnosticsExpanded
                     FormCard.FormSwitchDelegate {
                         id: diagnosticsEnabled
                         text: qsTr("启用诊断日志")
@@ -650,9 +746,26 @@ ScrollView {
                 spacing: Kirigami.Units.smallSpacing
                 visible: root.sectionVisible(qsTr("关于"))
 
-                FormCard.FormHeader { title: qsTr("关于") }
+                // Issue #900 复核：分组标题旁挂官方 ToolButton 做展开/收起，
+                // 不自建折叠组件。
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    FormCard.FormHeader {
+                        Layout.fillWidth: true
+                        title: qsTr("关于")
+                    }
+
+                    ToolButton {
+                        icon.name: root.aboutExpanded ? "arrow-down" : "arrow-right"
+                        onClicked: root.aboutExpanded = !root.aboutExpanded
+                        Accessible.name: qsTr("展开或收起关于")
+                    }
+                }
 
                 FormCard.FormCard {
+                    visible: root.aboutExpanded
                     FormCard.FormTextDelegate { text: qsTr("应用名"); description: qsTr("素笺写作") }
                     FormCard.FormTextDelegate { text: qsTr("作者"); description: "Xiwei753" }
                     FormCard.FormTextDelegate { text: qsTr("项目地址"); description: "github.com/Xiwei753/xiezuoruanjian" }
