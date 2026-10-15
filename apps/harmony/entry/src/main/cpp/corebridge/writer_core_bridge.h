@@ -44,6 +44,12 @@ int32_t writer_core_set_diagnostics_config(int32_t enabled, int32_t verbose);
 int32_t writer_core_flush_diagnostics(void);
 int32_t writer_core_clear_diagnostics(void);
 char*  writer_core_export_diagnostics(const char* output_dir, const char* attachments_json);
+// writer_core_record_diagnostic_event_json: Record one structured diagnostic event.
+//   payload_json is a NUL-terminated UTF-8 JSON string with fields
+//   { level, origin, event, target, message?, fields:[{key,value}] }.
+//   Returns 0 on success, -1 null pointer, -2 invalid UTF-8, -3 JSON parse failure,
+//   -4 if the core failed to record the event (defensive; not expected today).
+int32_t writer_core_record_diagnostic_event_json(const char* payload_json);
 
 // ── Layout Contract（#610 / #753） ──
 // writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).

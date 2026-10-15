@@ -1,10 +1,14 @@
 // NativeDiagnosticsBridge — 诊断 NAPI 桥接层。
 //
-// 封装 Task #6 创建的 4 个诊断 NAPI handler：
+// 封装诊断 NAPI handler：
 //   nativeSetDiagnosticsConfig(enabled, verbose) → int32
 //   nativeFlushDiagnostics()                    → int32
 //   nativeClearDiagnostics()                    → int32
 //   nativeExportDiagnostics(outputDir, attachJson) → string
+//   nativeRecordDiagnosticEvent(payloadJson)    → int32
+//   nativeGetHilogSnapshot()                    → string
+//   nativeClearHilogSnapshot()                  → int32
+//   nativeGetHilogCaptureStats()                → string
 //
 // 与其他 Native*Bridge 不同，诊断操作不走 JSON envelope 协议：
 //   set/flush/clear 返回 int32 状态码（0=成功，非0=失败）
@@ -48,10 +52,27 @@ export class NativeDiagnosticsBridge {
     return this.core.getNativeModule().nativeExportDiagnostics(outputDir, attachmentsJson) as string
   }
 
+  // 上报一条结构化诊断事件（JSON 字符串）。
+  // payloadJson 形如 {"level":"Info","origin":"App","event":"...","target":"...",
+  //                   "message":"...","fields":[{"key":"...","value":"..."}]}，
+  // message 可缺省；level/origin 使用 Rust enum 变体名。
+  // 返回 0 成功；-1/-2/-3 表示空指针/UTF-8/JSON 解析失败，-4 表示 Core 记录失败。
+  // 脱敏与落盘统一由 writer_diagnostics 处理，ArkTS 层不写第二套日志。
+  recordDiagnosticEvent(payloadJson: string): number {
+    return this.core.getNativeModule().nativeRecordDiagnosticEvent(payloadJson) as number
+  }
+
   // 获取 HiLog 系统日志快照。
   // 返回当前环形缓冲中的 HiLog 内容字符串；如果 callback 未注册或无日志，返回空字符串。
   getHilogSnapshot(): string {
     return this.core.getNativeModule().nativeGetHilogSnapshot() as string
+  }
+
+  // 获取 HiLog 采集统计 JSON（registered/capturedRecords/overwrittenRecords/
+  // truncatedRecords/capturedStartMs/capturedEndMs）。
+  // 用于解释 hilog.txt 为空的原因。
+  getHilogCaptureStats(): string {
+    return this.core.getNativeModule().nativeGetHilogCaptureStats() as string
   }
 
   // 清空 HiLog 环形缓冲区。

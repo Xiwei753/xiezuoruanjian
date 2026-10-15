@@ -82,6 +82,7 @@ const DIAGNOSTICS_DIR = 'diagnostics'
 
 // 附件名常量 — 与 Android 端 DiagnosticsExporterInterop 保持一致。
 const ATTACHMENT_HILOG = 'hilog.txt'
+const ATTACHMENT_HILOG_CAPTURE_STATS = 'hilog_capture_stats.json'
 const ATTACHMENT_APP_SETTINGS = 'app_settings_sanitized.json'
 const ATTACHMENT_SYNC_STATE = 'sync_state_sanitized.json'
 const ATTACHMENT_CURRENT_DEVICE = 'current_device.json'
@@ -273,9 +274,12 @@ export class HarmonyDiagnosticsExporter {
   private async collectAttachments(): Promise<AttachmentItem[]> {
     const attachments: AttachmentItem[] = []
 
-    // hilog — 优先使用真实 HiLog snapshot（C++ 层 OH_LOG_SetCallback 环形缓冲），
-    // fallback 到 writer_diagnostics 已落盘的日志文件。
+    // hilog — 真实 HiLog snapshot（C++ 层 OH_LOG_SetCallback 环形缓冲）。
+    // 快照为空时不伪造内容，原因见 hilog_capture_stats.json。
     this.addHilogAttachment(attachments)
+
+    // hilog_capture_stats.json — HiLog 采集统计，解释 hilog.txt 是否为空。
+    this.addHilogCaptureStatsAttachment(attachments)
 
     // app_settings_sanitized.json
     await this.addAppSettingsAttachment(attachments)
@@ -304,31 +308,34 @@ export class HarmonyDiagnosticsExporter {
     return attachments
   }
 
-  // hilog.txt — 优先使用真实 HiLog snapshot（通过 NAPI 获取 C++ 层环形缓冲内容）。
-  // 如果 snapshot 为空（callback 未注册或无日志），fallback 到 writer_diagnostics 日志文件。
+  // hilog.txt — 仅使用 NAPI 层 HiLog callback 的环形缓冲快照（OH_LOG_SetCallback）。
+  // 快照为空时不写 hilog.txt、也不伪造内容：hilog_capture_stats.json 会说明原因
+  // （registered / capturedRecords）。不再回退到 writer_diagnostics 的 Rust 日志文件。
   private addHilogAttachment(attachments: AttachmentItem[]): void {
     try {
-      // 优先使用真实 HiLog snapshot
       const hilogContent = this.diagnosticsBridge.getHilogSnapshot()
       if (hilogContent && hilogContent.length > 0) {
         attachments.push(this.makeAttachment(ATTACHMENT_HILOG, hilogContent))
-        return
-      }
-      // Fallback: writer_diagnostics 日志文件
-      if (this.abilityContext === null) {
-        attachments.push(this.errorAttachment(ATTACHMENT_HILOG, 'abilityContext is null'))
-        return
-      }
-      const filesDir = this.abilityContext.filesDir
-      const logDir = `${filesDir}/diagnostics/live/log`
-      const logContent = this.readLogFiles(logDir)
-      if (logContent.length > 0) {
-        attachments.push(this.makeAttachment(ATTACHMENT_HILOG, logContent))
-      } else {
-        attachments.push(this.errorAttachment(ATTACHMENT_HILOG, 'no log files found'))
       }
     } catch (e) {
       attachments.push(this.errorAttachment(ATTACHMENT_HILOG, String(e)))
+    }
+  }
+
+  // hilog_capture_stats.json — HiLog 采集统计（registered/capturedRecords/
+  // overwrittenRecords/truncatedRecords/capturedStartMs/capturedEndMs）。
+  // 与 hilog.txt 成对出现：说明快照为空是 callback 未注册、确实没有日志，还是已被 clear。
+  private addHilogCaptureStatsAttachment(attachments: AttachmentItem[]): void {
+    try {
+      const statsJson = this.diagnosticsBridge.getHilogCaptureStats()
+      if (statsJson && statsJson.length > 0) {
+        attachments.push(this.makeAttachment(ATTACHMENT_HILOG_CAPTURE_STATS, statsJson))
+      } else {
+        attachments.push(this.errorAttachment(ATTACHMENT_HILOG_CAPTURE_STATS,
+          'empty hilog capture stats'))
+      }
+    } catch (e) {
+      attachments.push(this.errorAttachment(ATTACHMENT_HILOG_CAPTURE_STATS, String(e)))
     }
   }
 
@@ -505,40 +512,6 @@ export class HarmonyDiagnosticsExporter {
   }
 
   // ── 工具方法 ──────────────────────────────────────────────────
-
-  // 读取 logDir 下所有 .log 文件内容，合并为一个字符串。
-  private readLogFiles(logDir: string): string {
-    try {
-      if (!fs.accessSync(logDir)) {
-        return ''
-      }
-      const entries = fs.listFileSync(logDir)
-      let combined = ''
-      for (const entry of entries) {
-        if (entry.endsWith('.log')) {
-          const filePath = `${logDir}/${entry}`
-          try {
-            const fd = fs.openSync(filePath, fs.OpenMode.READ_ONLY)
-            try {
-              const stat = fs.statSync(filePath)
-              const buf = new ArrayBuffer(stat.size)
-              fs.readSync(fd.fd, buf)
-              const textDecoder = new util.TextDecoder('utf-8')
-              const content = textDecoder.decodeWithStream(new Uint8Array(buf))
-              combined += `=== ${entry} ===\n${content}\n`
-            } finally {
-              fs.closeSync(fd)
-            }
-          } catch (_) {
-            // 单个文件读取失败不影响其他文件
-          }
-        }
-      }
-      return combined
-    } catch (_) {
-      return ''
-    }
-  }
 
   // 读取单个文件内容为字符串 — 用于 crash 附件收集。
   private readFileContent(filePath: string): string {

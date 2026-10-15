@@ -347,6 +347,7 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
         ("NativeSyncBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeStatsBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeStarMapBridge.ets", "entry/src/main/ets/corebridge/native"),
+        ("NativeDiagnosticsBridge.ets", "entry/src/main/ets/corebridge/native"),
         ("NativeEditorSessionBridge.ets", "entry/src/main/ets/feature/editor/interop"),
     ]
     bridge_content = ""

@@ -1,4 +1,5 @@
-//! 诊断导出 C-ABI 层 — 为 HarmonyOS NAPI 桥接提供 set_config / flush / clear / export 四个入口。
+//! 诊断导出 C-ABI 层 — 为 HarmonyOS NAPI 桥接提供 set_config / flush / clear / export
+//! 以及结构化事件上报入口。
 //!
 //! 所有函数均为 `#[no_mangle] pub unsafe extern "C"`，符号由 `lib.rs` re-export
 //! 拉入 cdylib，供 `napi_init.cpp` 链接期解析。
@@ -8,6 +9,7 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 
 use base64::Engine;
+use writer_core::api::types::{DiagnosticFieldDto, DiagnosticLevelDto, DiagnosticOriginDto};
 use writer_diagnostics::PlatformAttachment;
 
 /// JSON 反序列化用的附件 DTO — `content` 是 base64 编码的字符串，
@@ -16,6 +18,21 @@ use writer_diagnostics::PlatformAttachment;
 struct AttachmentDto {
     relative_path: String,
     content: String,
+}
+
+/// 结构化诊断事件的 JSON 输入 DTO — 与端侧 ArkTS 构造的 JSON 字段对齐。
+///
+/// 采用 camelCase（字段本身都是单词，等价于直接透传），与 NAPI 层收到的 payload 一致。
+/// 解析后整体 move 给 `record_diagnostic_event`，不做二次序列化。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HarmonyDiagnosticEventInput {
+    level: DiagnosticLevelDto,
+    origin: DiagnosticOriginDto,
+    event: String,
+    target: String,
+    message: Option<String>,
+    fields: Vec<DiagnosticFieldDto>,
 }
 
 /// C-ABI: 更新诊断配置（运行时切换 enabled / verbose）。
@@ -131,6 +148,59 @@ pub unsafe extern "C" fn writer_core_export_diagnostics(
     }
 }
 
+/// C-ABI: 上报一条结构化诊断事件。
+///
+/// ## 参数
+///
+/// - `payload`: NUL-terminated UTF-8 C 字符串，JSON 对象
+///   `{ level, origin, event, target, message?, fields: [{ key, value }] }`。
+///   `level` / `origin` 使用 Rust enum 的变体名（`Error` / `Info` / `App` 等），
+///   `message` 可缺省。
+///
+/// ## 返回码
+///
+/// - `0` 成功
+/// - `-1` 空指针
+/// - `-2` 无效 UTF-8
+/// - `-3` JSON 反序列化失败
+/// - `-4` Core 记录事件失败（上游返回 `WriterError`；当前实现不会触发，
+///   保留以便端侧不把失败静默当成已上报）
+///
+/// 脱敏与落盘由 `writer_diagnostics` 内部统一处理，本层不做第二套日志后端。
+///
+/// ## Safety
+///
+/// 调用方必须保证非 null 参数指向有效的 NUL-terminated UTF-8 C 字符串；
+/// 空指针在 `c_str_to_rust_coded` 内被检查并返回 `-1`。
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_record_diagnostic_event_json(payload: *const c_char) -> i32 {
+    // SAFETY: 空指针检查在 c_str_to_rust_coded 内完成；调用方保证非 null 指针
+    // 指向有效 NUL-terminated UTF-8 C 字符串。
+    let payload_str = match c_str_to_rust_coded(payload) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+
+    let input: HarmonyDiagnosticEventInput = match serde_json::from_str(&payload_str) {
+        Ok(v) => v,
+        Err(_) => return -3,
+    };
+
+    if writer_core::api::diagnostics_api::record_diagnostic_event(
+        input.level,
+        input.origin,
+        input.event,
+        input.target,
+        input.message,
+        input.fields,
+    )
+    .is_err()
+    {
+        return -4;
+    }
+    0
+}
+
 /// 将 C string 转换为 Rust `String`。
 ///
 /// ## 错误
@@ -145,6 +215,23 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, ()> {
     match unsafe { CStr::from_ptr(s) }.to_str() {
         Ok(s) => Ok(s.to_string()),
         Err(_) => Err(()),
+    }
+}
+
+/// 将 C string 转换为带返回码的 Rust `String`。
+///
+/// 与 `c_str_to_rust` 的区别：用 `i32` 返回码区分失败原因，供 C-ABI 直接透传：
+///
+/// - `-1` 空指针
+/// - `-2` 无效 UTF-8
+fn c_str_to_rust_coded(s: *const c_char) -> Result<String, i32> {
+    if s.is_null() {
+        return Err(-1);
+    }
+    // SAFETY: s is null-checked above; the C ABI caller guarantees a valid NUL-terminated UTF-8 string.
+    match unsafe { CStr::from_ptr(s) }.to_str() {
+        Ok(s) => Ok(s.to_string()),
+        Err(_) => Err(-2),
     }
 }
 
