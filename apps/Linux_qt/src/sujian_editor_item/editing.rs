@@ -155,9 +155,8 @@ impl SujianEditorItem {
         // Issue #904：IME commit 与普通编辑走同一个局部动画入口。
         // old_snapshot / new_snapshot 分别给出编辑前后的局部 cluster 几何，
         // 只对受影响片段建立唯一的局部动画计划。
-        let animations_requested = super::animation::any_animation_enabled(
+        let animations_requested = super::animation::text_animation_enabled(
             self.current_typing_animation_enabled,
-            self.current_smooth_cursor_enabled,
             self.current_coordinated_animation_enabled,
         );
         let suppressed =
@@ -172,6 +171,10 @@ impl SujianEditorItem {
         let motion = if animations_requested && !suppressed {
             self.pipeline
                 .prepare_local_text_textures(&new_snapshot, (new_affected_start, new_affected_end));
+            // 旧字（被删/被移位）的行纹理也要先进 cache，否则 required_textures
+            // 缺一张就会整体不接管、整屏静态重建。
+            self.pipeline
+                .prepare_local_text_textures(&old_snapshot, (old_affected_start, old_affected_end));
             let viewport = super::layout_snapshot::SourceRect {
                 x: 0.0,
                 y: f64::from(self.current_scroll_y),
@@ -182,7 +185,7 @@ impl SujianEditorItem {
                 result,
                 Some(&old_snapshot),
                 &new_snapshot,
-                self.pipeline.text_motion(),
+                self.last_drawn_local_frame.as_ref(),
                 now_ms,
                 self.current_typing_animation_duration_ms,
                 self.document_session,

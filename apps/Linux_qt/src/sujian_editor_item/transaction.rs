@@ -52,13 +52,28 @@ impl SujianEditorItem {
             Err(_err) => self.build_editor_layout_snapshot(width, false, None).ok(),
         };
 
-        let animations_requested = super::animation::any_animation_enabled(
+        let animations_requested = super::animation::text_animation_enabled(
             self.current_typing_animation_enabled,
-            self.current_smooth_cursor_enabled,
             self.current_coordinated_animation_enabled,
         );
         let suppressed =
             self.current_is_scrolling || self.current_is_loading || self.current_is_applying_format;
+
+        // 旧侧局部范围（base 坐标）：被删除/被移位的旧字也要有行纹理，
+        // 否则 required_textures 缺一张就会整体不接管、整屏静态重建。
+        let mut old_start = usize::MAX;
+        let mut old_end = 0usize;
+        for patch in &result.display_patches {
+            old_start = old_start.min(patch.replace_byte_range.start().value());
+            old_end = old_end.max(patch.replace_byte_range.end().value());
+        }
+        let old_range = if old_start < old_end {
+            Some((old_start, old_end))
+        } else if old_start == usize::MAX {
+            None
+        } else {
+            Some((old_start, old_start + 1))
+        };
 
         let mut motion: Option<TextMotion> = None;
         if let Some(new_snap) = new_snapshot.as_ref() {
@@ -66,6 +81,12 @@ impl SujianEditorItem {
             let tex_range = affected_range.unwrap_or((0, 1));
             self.pipeline
                 .prepare_local_text_textures(new_snap, tex_range);
+            if let Some(old_snap) = old_layout.as_ref() {
+                if let Some(old_range) = old_range {
+                    self.pipeline
+                        .prepare_local_text_textures(old_snap, old_range);
+                }
+            }
 
             if animations_requested && !suppressed {
                 let now_ms = Self::frame_now_ms(&self.last_frame_now);
@@ -77,19 +98,19 @@ impl SujianEditorItem {
                     h: f64::from(self.current_viewport_height.max(1.0)),
                 };
                 let duration_ms = self.current_typing_animation_duration_ms;
-                motion = {
-                    let previous = self.pipeline.text_motion();
-                    TextMotion::begin_or_retarget(
-                        result,
-                        old_layout.as_ref(),
-                        new_snap,
-                        previous,
-                        now_ms,
-                        duration_ms,
-                        session,
-                        viewport,
-                    )
-                };
+                // Issue #904 评论 3: 从"上一次真正画出的局部图片"重定向，
+                // 不从计划建立时的静态起点重来。
+                let last_drawn = self.last_drawn_local_frame.as_ref();
+                motion = TextMotion::begin_or_retarget(
+                    result,
+                    old_layout.as_ref(),
+                    new_snap,
+                    last_drawn,
+                    now_ms,
+                    duration_ms,
+                    session,
+                    viewport,
+                );
             }
         }
 

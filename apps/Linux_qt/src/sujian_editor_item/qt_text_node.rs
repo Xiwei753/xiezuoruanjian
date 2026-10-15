@@ -73,6 +73,11 @@ cpp! {{
         // content_revision 变化 → 重建子节点。其他段变化不影响本段判断。
         uint64_t applied_content_revision;
         int applied_cache_idx;
+        // Issue #904 评论 2: per-paragraph layout epoch。
+        // 内容身份必须同时比较 (content_revision, cache_idx, epoch)：
+        // 同槽位可能被新一代 layout 复用，只有 content hash 相同但 epoch 变了
+        // 也必须重建，否则会画到旧 layout 的 text node。
+        uint64_t applied_epoch;
         // Issue #901 第十三轮问题4+第十四轮问题2: 该段实际相交的 clip signature。
         // 只保存与该段 y 范围相交的 clip（按 visual line y 范围过滤），
         // 而非整页 clip。这样无关 clip 变化不会触发该段重建。
@@ -534,13 +539,17 @@ cpp! {{
         return true;
     }
 
-    /// Issue #901 第十轮问题4: 为单个段落构建子节点（textNode 或 clipNode 集合），
-    /// 挂到 container 下。被 update_text_nodes_incremental 的 insert/update 路径复用。
+    /// Issue #904 评论 2: 为单个段落构建子节点（textNode 或 clipNode 集合），
+    /// 成功返回 true。被 update_text_nodes_incremental 的 insert/update 路径复用。
     ///
     /// clip_count == 0：创建一个 QSGTextNode，整段 addTextLayout。
     /// clip_count > 0：按该段落的 visual lines 计算 complement，创建 clipNode + clipTextNode。
     /// vl_indices 是 vl_*_arr 中属于该段落的索引列表。
-    static void build_paragraph_subtree(
+    ///
+    /// 原子性：所有子节点先构建到 **detached staging 容器**，全部成功后才移入
+    /// container。目标 QTextLayout 缺失或 createTextNode 失败时返回 false，
+    /// container 保持原样（调用方保留旧节点树，不写 applied_*）。
+    static bool build_paragraph_subtree(
         QSGNode* container, QQuickWindow* window,
         const char* text_ptr, int text_len,
         int cacheIdx, uint64_t epoch, double para_y,
@@ -561,23 +570,29 @@ cpp! {{
     ) {
         (void)font_size;
         (void)font_family;
-        if (!container || !window) return;
-        if (text_len == 0) return;
+        if (!container || !window) return false;
+        if (text_len == 0) return true; // 空段无需子节点，视为成功
 
-        // Issue #901 第三十轮问题1: 用 get_paragraph_layout_checked 校验 epoch。
-        // Issue #901 第三十一轮问题2: epoch=0 是合法第一版，一律走 checked 校验。
+        // Issue #904 评论 2: 用 get_paragraph_layout_checked 校验 (gen, slot, epoch)。
+        // epoch=0 是合法第一版，一律走 checked 校验。
         QTextLayout* layout = get_paragraph_layout_checked(generation, cacheIdx, epoch);
-        if (!layout) return;
+        if (!layout) return false; // 保留旧树，由调用方决定是否重试
+
+        QSGNode* staging = new QSGNode;
+        bool ok = true;
 
         if (clip_rects_xy.empty()) {
             // 无 clip：创建一个完整 QSGTextNode，整段 addTextLayout
-            // Issue #901 第十三轮问题3: 段内 y=0 构建，由 transform_node 平移到文档坐标。
+            // 段内 y=0 构建，由 transform_node 平移到文档坐标。
             QSGTextNode* textNode = window->createTextNode();
-            if (!textNode) return;
-            textNode->setColor(textColor);
-            textNode->addTextLayout(QPointF(origin_x, 0.0), layout);
-            textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-            container->appendChildNode(textNode);
+            if (!textNode) {
+                ok = false;
+            } else {
+                textNode->setColor(textColor);
+                textNode->addTextLayout(QPointF(origin_x, 0.0), layout);
+                textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                staging->appendChildNode(textNode);
+            }
         } else {
             // Issue #901 第十四轮问题3: 二维矩形差集精确裁剪。
             //
@@ -684,19 +699,34 @@ cpp! {{
                         clipTextNode->setColor(textColor);
                         clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         clipNode->appendChildNode(clipTextNode);
-                        // Issue #901 第十三轮问题3: 段内 y=0 构建。
+                        // 段内 y=0 构建。
                         clipTextNode->addTextLayout(QPointF(origin_x, 0.0), layout, -1, -1, qline, 1);
                         clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-                        container->appendChildNode(clipNode);
+                        staging->appendChildNode(clipNode);
                     } else {
                         delete clipNode;
+                        ok = false;
                     }
                 }
             }
         }
+
+        if (!ok) {
+            // createTextNode 失败：不污染 container，保留旧树。
+            delete staging;
+            return false;
+        }
+        // 原子移动：staging 的子节点全部移入 container，再删除空壳。
+        while (staging->childCount() > 0) {
+            QSGNode* child = staging->childAtIndex(0);
+            staging->removeChildNode(child);
+            container->appendChildNode(child);
+        }
+        delete staging;
+        return true;
     }
 
-    /// Issue #901 第十轮问题4: 增量更新静态正文 QSG 节点。
+    /// Issue #904 评论 2: 增量更新静态正文 QSG 节点。
     ///
     /// 基于 ParagraphId 持久维护 per-item 的 ParagraphId→QSGNode 映射，
     /// 单次调用仅 insert/remove/update 变化的段落节点，不全量重建。
@@ -920,7 +950,8 @@ cpp! {{
                 // Issue #901 第十四轮问题2: 用 per-paragraph content_revision 判断内容变化。
                 // 不再用全局 generation，只比较该段自己的 content_revision。
                 bool content_changed = (it->second.applied_content_revision != content_revision) ||
-                                       (it->second.applied_cache_idx != cacheIdx);
+                                       (it->second.applied_cache_idx != cacheIdx) ||
+                                       (it->second.applied_epoch != para_epoch_arr[i]);
                 // Issue #901 第十四轮问题2: 用 per-paragraph filtered clip signature。
                 bool clip_changed = (it->second.applied_clip_xy != para_clip_xy) ||
                                     (it->second.applied_clip_wh != para_clip_wh) ||
@@ -931,19 +962,19 @@ cpp! {{
                     continue;
                 }
 
-                // 重建子节点（force_full_update 或内容/clip 变化）
-                QSGTransformNode* transform_node = it->second.transform_node;
-                while (transform_node->childCount() > 0) {
-                    QSGNode* child = transform_node->childAtIndex(transform_node->childCount() - 1);
-                    transform_node->removeChildNode(child);
-                    delete child;
-                }
+                // Issue #904 评论 2: 在 detached 新 transform_node 上先构建完整子树，
+                // 成功后才用 insertChildNodeBefore + removeChildNode 原子替换旧节点。
+                // 绝不先删旧子节点再尝试构建（那正是正文消失的根因）。
+                QSGTransformNode* old_tn = it->second.transform_node;
+                QSGTransformNode* new_tn = new QSGTransformNode;
+                QMatrix4x4 new_mat;
+                new_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
+                new_tn->setMatrix(new_mat);
+                bool built = true;
                 if (!is_empty) {
-                    const char* text_ptr = text_ptrs[i];
-                    int text_len = text_lens[i];
-                    build_paragraph_subtree(
-                        transform_node, window,
-                        text_ptr, text_len,
+                    built = build_paragraph_subtree(
+                        new_tn, window,
+                        text_ptrs[i], text_lens[i],
                         cacheIdx, para_epoch_arr[i], para_y,
                         vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
@@ -955,8 +986,19 @@ cpp! {{
                         textColor, origin_x, generation
                     );
                 }
+                if (!built) {
+                    // 目标 layout 缺失/构建失败：保留旧树与旧 applied_*，本帧放弃。
+                    delete new_tn;
+                    return false;
+                }
+                staticLayer->insertChildNodeBefore(new_tn, old_tn);
+                staticLayer->removeChildNode(old_tn);
+                delete old_tn;
+                it->second.transform_node = new_tn;
+                it->second.para_y = para_y;
                 it->second.applied_content_revision = content_revision;
                 it->second.applied_cache_idx = cacheIdx;
+                it->second.applied_epoch = para_epoch_arr[i];
                 it->second.applied_clip_xy = para_clip_xy;
                 it->second.applied_clip_wh = para_clip_wh;
                 it->second.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
@@ -966,12 +1008,11 @@ cpp! {{
                 QMatrix4x4 para_mat;
                 para_mat.translate(0.0f, static_cast<float>(para_y), 0.0f);
                 transform_node->setMatrix(para_mat);
+                bool built = true;
                 if (!is_empty) {
-                    const char* text_ptr = text_ptrs[i];
-                    int text_len = text_lens[i];
-                    build_paragraph_subtree(
+                    built = build_paragraph_subtree(
                         transform_node, window,
-                        text_ptr, text_len,
+                        text_ptrs[i], text_lens[i],
                         cacheIdx, para_epoch_arr[i], para_y,
                         vl_cache_idx_arr, vl_epoch_arr, vl_qtextline_idx_arr,
                         vl_y_arr, vl_height_arr,
@@ -983,12 +1024,30 @@ cpp! {{
                         textColor, origin_x, generation
                     );
                 }
-                staticLayer->appendChildNode(transform_node);
+                if (!built) {
+                    delete transform_node;
+                    return false;
+                }
+                // Issue #904 评论 2: 直接插到文档顺序的正确位置（第一个 para_y 更大的节点前），
+                // 不再事后 remove/append 整表重排。
+                QSGNode* before = nullptr;
+                for (auto& kv : node_map) {
+                    if (kv.second.para_y > para_y) {
+                        before = kv.second.transform_node;
+                        break;
+                    }
+                }
+                if (before) {
+                    staticLayer->insertChildNodeBefore(transform_node, before);
+                } else {
+                    staticLayer->appendChildNode(transform_node);
+                }
                 IncrementalParaNodeInfo info;
                 info.transform_node = transform_node;
                 info.para_y = para_y;
                 info.applied_content_revision = content_revision;
                 info.applied_cache_idx = cacheIdx;
+                info.applied_epoch = para_epoch_arr[i];
                 info.applied_clip_xy = para_clip_xy;
                 info.applied_clip_wh = para_clip_wh;
                 info.applied_vl_qtextline_idxs = para_vl_qtextline_idxs;
@@ -996,22 +1055,9 @@ cpp! {{
             }
         }
 
-        // ── 按 para_y 排序 staticLayer 的子节点（保证绘制顺序正确） ──
-        std::vector<std::pair<QSGTransformNode*, double>> children_with_y;
-        children_with_y.reserve(node_map.size());
-        for (auto& kv : node_map) {
-            children_with_y.push_back({kv.second.transform_node, kv.second.para_y});
-        }
-        std::sort(children_with_y.begin(), children_with_y.end(),
-            [](const std::pair<QSGTransformNode*, double>& a, const std::pair<QSGTransformNode*, double>& b) {
-                return a.second < b.second;
-            });
-        for (auto& entry : children_with_y) {
-            staticLayer->removeChildNode(entry.first);
-        }
-        for (auto& entry : children_with_y) {
-            staticLayer->appendChildNode(entry.first);
-        }
+        // Issue #904 评论 2: 子节点顺序在 insert 时已按 para_y 保持（新节点插到
+        // 第一个 para_y 更大的节点前，已存在节点只改矩阵），不再每帧 remove/append
+        // 整表重排。仅在更新/删除后也不影响既有相对顺序。
 
         // ── 更新滚动位移矩阵 ──
         QMatrix4x4 mat;

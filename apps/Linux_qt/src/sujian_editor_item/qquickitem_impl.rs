@@ -476,10 +476,15 @@ impl QQuickItem for SujianEditorItem {
                     })
                     .unwrap_or_default();
 
+            // Issue #904 评论 1/3: 本帧局部动画的静态挖孔是否活跃（有需要从
+            // canonical 里挖掉的接管目标）。挖孔只在动画 begin/target-change/end
+            // 变化，不随 progress 每帧刷新；状态翻转那一帧必须强制刷新静态裁剪：
+            // 开始帧同一帧挖空、结束帧同一帧恢复 canonical。
             let render_plan = super::render_plan::RenderPlan {
                 local_text: super::render_plan::LocalTextPlan {
                     overlays: motion_frame.overlays.clone(),
                     static_holes: motion_frame.static_holes.clone(),
+                    required_textures: motion_frame.required_textures.clone(),
                 },
                 selection_preedit,
                 cursor: cursor_render_state,
@@ -489,12 +494,21 @@ impl QQuickItem for SujianEditorItem {
                 drawn_caret_rect,
             };
 
-            // Issue #904：局部覆盖层的源纹理是否都已就绪；未就绪时静态层保持完整，
-            // 下一帧纹理准备好后再挖孔，避免出现空洞。
+            // Issue #904：局部覆盖层/孔洞的源纹理是否已就绪。未就绪时静态层画完整
+            // canonical、动画层不画（两层同一标志对称决策）。
             let animation_resources_ready = render_plan
                 .local_text
                 .has_animation_resources(self.pipeline.texture_cache());
+
+            // Issue #904 评论 1: 只有资源就绪、本帧真的会挖孔时才算"孔洞活跃"。
+            // 翻转那一帧强制刷新静态裁剪：开始帧同一帧挖空、结束帧同一帧恢复
+            // canonical、资源就绪帧同一帧补挖。避免"动画画了但静态没挖空"或反之。
+            let holes_active = animation_resources_ready && !motion_frame.static_holes.is_empty();
+            let clip_state_changed = holes_active != self.prev_local_text_holes_active;
+            self.prev_local_text_holes_active = holes_active;
+
             let frame_needs_relayout = base_needs_relayout
+                || clip_state_changed
                 || !animation_resources_ready
                 || !prepared_frame_matches_canonical;
 
@@ -507,20 +521,12 @@ impl QQuickItem for SujianEditorItem {
             // height_index 与 prepared_frame.layout_snapshot 都是不可变借用 self，
             // 可安全共存。
             let has_snapshot = prepared_frame_matches_canonical;
-            // Issue #901 第九轮阻塞4: 传入稳定 ParagraphId 列表，
-            // 供 ParagraphLineInfo 填入稳定身份标识。
-            let paragraph_ids = self.editor_layout.paragraph_store().paragraph_ids();
             // Issue #901 第十四轮问题2: 消费 force_full_relayout_pending。
             // true 表示真正全局排版属性变化（字号/字体/行距/缩进/padding/宽度），
             // render_frame 传 force_full_relayout=true，C++ 侧无条件重建所有段落。
             // 普通正文输入不设此标志，由 per-paragraph content_revision 独立判断。
             let force_full_relayout = self.force_full_relayout_pending;
             self.force_full_relayout_pending = false;
-            // Issue #901 第十四轮问题2: changed_paragraph_ids 来自 layout 层增量排版结果。
-            // 目前传空集：C++ 侧通过 per-paragraph content_revision 独立判断哪些段变化，
-            // 不依赖此集合。此字段供 Rust 侧做日志/调试参考。
-            let changed_paragraph_ids: std::collections::HashSet<ParagraphId> =
-                std::collections::HashSet::new();
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame
                     .filter(|_| prepared_frame_matches_canonical)
@@ -531,11 +537,10 @@ impl QQuickItem for SujianEditorItem {
                 color: &self.current_text_color.to_string(),
                 needs_relayout: frame_needs_relayout,
                 force_full_relayout,
-                changed_paragraph_ids: &changed_paragraph_ids,
+                force_static_clip_refresh: clip_state_changed,
                 session_id: self.document_session,
                 // Issue #901 第九轮阻塞4: per-item loaded_para_range 替代全局 static。
                 loaded_para_range: self.loaded_para_range,
-                paragraph_ids: Some(&paragraph_ids),
             };
 
             // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
@@ -561,6 +566,19 @@ impl QQuickItem for SujianEditorItem {
             if let Some(new_range) = render_outcome.new_loaded_para_range {
                 self.loaded_para_range = Some(new_range);
             }
+
+            // Issue #904 评论 3: 记录本帧**真正画出去**的局部图片（当前矩形、当前
+            // 遮罩宽度、源 id、session/revision），供快速连续输入/删除从这里重定向，
+            // 而不是从静态起点重来。finished 帧清空（动画已结束，下一笔从新的静态
+            // 起点开始）。无历史队列、无第二套引擎。
+            let drawn_local = if motion_frame.finished {
+                None
+            } else {
+                self.pipeline
+                    .text_motion()
+                    .map(|m| m.drawn_local_frame(&motion_frame))
+            };
+            self.last_drawn_local_frame = drawn_local;
 
             // Issue #901 第九轮阻塞3：渲染成功后生成本帧 resource roots 并 retain。
             // 旧实现在渲染前做 retain，会 sweep 掉本帧即将创建的静态贡献的纹理。
@@ -864,11 +882,17 @@ impl SujianEditorItem {
         // 边沿 reset 四处一致。
         let blink_mode = self.current_cursor_blink_mode();
 
-        // Issue #904：只有局部动画确实推进到光标插入边界时才接管光标坐标；
-        // 纯点击/选区仍用 cursor_ctrl 的独立位置，不等正文动画。
+        // Issue #904 评论 5: 只有"正文动画 + 平滑光标"都开启且协同模式时，光标才
+        // 共享正文动画的同一进度；且只接管正文事务（TextTransaction）造成的移动。
+        // 纯点击/选区不被正文动画接管，仍走 cursor_ctrl 自己的 Snap/Tween。
+        let coordinated_cursor = self.current_coordinated_animation_enabled
+            && self.current_typing_animation_enabled
+            && self.current_smooth_cursor_enabled
+            && self.cursor_ctrl.last_move_source
+                == super::cursor_controller::CursorMoveSource::TextTransaction;
         let (caret_x, caret_y) = match motion_frame.caret_sample {
-            Some((x, y)) => (x, y),
-            None => (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
+            Some((x, y)) if coordinated_cursor => (x, y),
+            _ => (self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y),
         };
 
         super::render_plan::CursorRenderState {

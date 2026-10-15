@@ -55,7 +55,10 @@ pub(crate) struct VisibleFragment {
     pub glyph_id: u64,
 }
 
-/// Issue #904：编辑的局部表现契约。
+/// Issue #904：连续编辑重定目标时使用的“上一次真正画出的局部图片”。
+///
+/// 只记录上一次实际绘制出去的局部片段（当前位置、当前遮罩宽度、源 id），
+/// 不含历史帧队列，也不参与静态正文布局。
 #[derive(Clone, Debug)]
 pub(crate) struct LocalTextFrame {
     pub session: u64,
@@ -145,7 +148,7 @@ impl TextPiece {
 /// Issue #904：一次编辑产生的唯一动画对象。
 #[derive(Clone, Debug)]
 pub(crate) struct TextMotion {
-    /// 上一次真正画出的局部片段（新侧图片），用于纹理保留与连续重定向。
+    /// 本次编辑涉及的全部局部片段（旧 + 新），用于源纹理保留。
     pub source: LocalTextFrame,
     pub pieces: Vec<TextPiece>,
     pub started_ms: f64,
@@ -154,15 +157,28 @@ pub(crate) struct TextMotion {
     pub target_revision: u64,
     /// 动画最终裁剪到的视口（文档坐标）。
     pub viewport: LocalRect,
+    /// 静态层需排除的目标字形矩形（Reveal 的新位置 / Move 的目标位置）。
+    ///
+    /// 与 progress 无关：从过渡开始到结束都固定排除新 canonical 的完整 target
+    /// 字形，即使 progress=0 尚无可见动画像素。Conceal 是旧字，不在此列。
+    pub static_exclusions: Vec<AnimationClipRect>,
+    /// 本计划接管所需全部动画源纹理 id；缺任一纹理则不接管（静态层画完整
+    /// canonical），两层用同一标志做对称决策。
+    pub required_textures: Vec<LineSnapshotId>,
+    /// 协同模式下光标在同一 progress 上插值：起点/终点取布局真实 caret 几何。
+    pub caret_from: Option<(f64, f64)>,
+    pub caret_to: Option<(f64, f64)>,
 }
 
 /// Issue #904：`TextMotion::sample()` 的一帧结果。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TextMotionFrame {
-    /// 静态层需要排除的局部矩形（交给动画层的目标字形）。
+    /// 静态层需要排除的局部矩形（固定 target，与 progress 无关）。
     pub static_holes: Vec<AnimationClipRect>,
     /// 本帧要画的局部文字覆盖层（位置/UV/clip 已算好）。
     pub overlays: Vec<TextAnimationGlyphInfo>,
+    /// 本帧接管所需的动画源纹理 id。
+    pub required_textures: Vec<LineSnapshotId>,
     pub finished: bool,
     pub needs_next_frame: bool,
     /// 协同模式下正文动画推进到的光标采样点（文档坐标）。
@@ -174,12 +190,15 @@ impl TextMotion {
     ///
     /// 返回 `None` 表示这次编辑没有可动画的局部片段（纯光标移动等），
     /// 调用方应直接走静态绘制。
+    ///
+    /// `last_drawn` 是上一次真正绘制出去的局部图片；连续快速输入/删除直接
+    /// 从它在途位置重定目标，不叠加历史按键队列。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn begin_or_retarget(
         edit: &EditorEditResult,
         old_layout: Option<&EditorLayoutSnapshot>,
         new_layout: &EditorLayoutSnapshot,
-        previous: Option<&TextMotion>,
+        last_drawn: Option<&LocalTextFrame>,
         now_ms: f64,
         duration_ms: u32,
         session: u64,
@@ -193,13 +212,12 @@ impl TextMotion {
         let new_revision = edit.new_revision;
         let old_revision = edit.base_revision;
 
-        // 旧侧：编辑前实际显示的局部片段。优先复用上一帧真正画出的局部图片，
-        // 使连续快速输入直接在当前显示画面上重定向。
-        // Issue #904：只从同一文档会话的上一次绘制画面重定向；换文档后旧局部图片作废。
-        let mut old_frags: Vec<VisibleFragment> = previous
-            .filter(|m| m.source.session == session)
-            .map(|m| {
-                m.source
+        // 旧侧：优先从“上一次真正画出的局部图片”续接（同一文档会话），
+        // 使快速连输/连删直接在当前显示位置上重定向，而不是回到静态起点。
+        let mut old_frags: Vec<VisibleFragment> = last_drawn
+            .filter(|frame| frame.session == session)
+            .map(|frame| {
+                frame
                     .fragments
                     .iter()
                     .filter(|f| overlaps(f.byte_range, (old_start, old_end)))
@@ -207,8 +225,9 @@ impl TextMotion {
                     .collect()
             })
             .unwrap_or_default();
+        // 再用编辑前布局补上不在已绘制画面里的邻近片段（例如改动点同行后续字）。
         if let Some(layout) = old_layout {
-            for frag in layout_fragments(layout, (old_start, old_end), old_revision, &viewport) {
+            for frag in layout_fragments(layout, (old_start, old_end), old_revision) {
                 if !old_frags
                     .iter()
                     .any(|existing| existing.byte_range == frag.byte_range)
@@ -218,10 +237,12 @@ impl TextMotion {
             }
         }
 
-        // 新侧：编辑后目标布局的局部片段（从变化点到受影响行末尾）。
-        let new_frags = layout_fragments(new_layout, (new_start, new_end), new_revision, &viewport);
+        // 新侧：编辑后目标布局的局部片段。这里**不做**视口预过滤——屏幕外进入/
+        // 离开的字只有拿到完整 old/new 几何后才能判成 Move，否则会被误判成
+        // Reveal/Conceal，丢掉了位置动画。
+        let new_frags = layout_fragments(new_layout, (new_start, new_end), new_revision);
 
-        let direction = conceal_direction(edit, old_start, old_end);
+        let direction = conceal_direction(edit);
         let delta = (new_end as i64 - new_start as i64) - (old_end as i64 - old_start as i64);
 
         let mut pieces: Vec<TextPiece> = Vec::new();
@@ -280,14 +301,39 @@ impl TextMotion {
             });
         }
 
-        // 只保留运动中会与视口相交的片段（含从视口外进入/离开），
-        // 其余交给静态层，不参与逐帧动画。
+        // Move 用“来源与目标矩形的并集”判断是否与视口相交，屏幕外进入/离开的字
+        // 只要路径经过视口就保留；Reveal/Conceal 用自身矩形。
         pieces.retain(|piece| rects_intersect(&piece.motion_rect(), &viewport));
         if pieces.is_empty() {
             return None;
         }
 
-        // 保留旧片段纹理：位移/吞字仍从旧局部图片取样。
+        // 静态层排除矩形与 progress 无关：Reveal 固定排除新 canonical 的完整
+        // target 字形（即使 progress=0 尚无可见像素），Move 固定排除目标位置。
+        // Conceal 是旧字，不按其旧位置挖掉新 canonical。
+        let static_exclusions: Vec<AnimationClipRect> = pieces
+            .iter()
+            .filter_map(|piece| match piece {
+                TextPiece::Reveal { new_source, at, .. } => Some(AnimationClipRect {
+                    x: at.x,
+                    y: at.y,
+                    w: at.w,
+                    h: at.h,
+                    snapshot_id: new_source.snapshot_id,
+                }),
+                TextPiece::Move { source, to, .. } => Some(AnimationClipRect {
+                    x: to.x,
+                    y: to.y,
+                    w: to.w,
+                    h: to.h,
+                    snapshot_id: source.snapshot_id,
+                }),
+                TextPiece::Conceal { .. } => None,
+            })
+            .collect();
+
+        // 源纹理：本次编辑涉及的全部旧/新片段都要能进 TextureCache，
+        // 缺一张就不接管（静态层完整显示 canonical）。
         let mut source_frags = new_frags;
         for frag in &old_frags {
             if !source_frags.iter().any(|f| {
@@ -297,8 +343,8 @@ impl TextMotion {
                 source_frags.push(frag.clone());
             }
         }
-        if let Some(prev) = previous {
-            for frag in &prev.source.fragments {
+        if let Some(drawn) = last_drawn.filter(|frame| frame.session == session) {
+            for frag in &drawn.fragments {
                 if !source_frags.iter().any(|f| {
                     f.snapshot.snapshot_id == frag.snapshot.snapshot_id
                         && f.byte_range == frag.byte_range
@@ -307,6 +353,24 @@ impl TextMotion {
                 }
             }
         }
+
+        let mut required_textures: Vec<LineSnapshotId> = Vec::new();
+        for piece in &pieces {
+            let id = piece.source().snapshot_id;
+            if !required_textures.contains(&id) {
+                required_textures.push(id);
+            }
+        }
+
+        // 协同模式下光标共用同一 progress：起点/终点取布局真实 caret 几何，
+        // 不拿 overlay 并集的右端冒充 caret 目标。
+        let caret_from = old_layout
+            .and_then(|layout| layout.caret_rect_doc.as_ref())
+            .map(|caret| (caret.x, caret.y));
+        let caret_to = new_layout
+            .caret_rect_doc
+            .as_ref()
+            .map(|caret| (caret.x, caret.y));
 
         Some(TextMotion {
             source: LocalTextFrame {
@@ -320,6 +384,10 @@ impl TextMotion {
             session,
             target_revision: new_revision.value(),
             viewport,
+            static_exclusions,
+            required_textures,
+            caret_from,
+            caret_to,
         })
     }
 
@@ -333,10 +401,19 @@ impl TextMotion {
         let progress = ease_out_cubic(raw);
         let finished = raw >= 1.0;
 
-        let mut overlays = Vec::with_capacity(self.pieces.len());
-        let mut static_holes = Vec::with_capacity(self.pieces.len());
-        let mut text_box: Option<LocalRect> = None;
+        // 过渡结束：不再挖孔、不再画覆盖层；同一帧静态层恢复完整 canonical。
+        if finished {
+            return TextMotionFrame {
+                static_holes: Vec::new(),
+                overlays: Vec::new(),
+                required_textures: self.required_textures.clone(),
+                finished: true,
+                needs_next_frame: false,
+                caret_sample: self.caret_to,
+            };
+        }
 
+        let mut overlays = Vec::with_capacity(self.pieces.len());
         for piece in &self.pieces {
             let (target_rect, source_uv, clip_rect) = match piece {
                 TextPiece::Reveal {
@@ -373,42 +450,65 @@ impl TextMotion {
                 }
             };
 
-            if finished {
-                continue;
-            }
-            // 与视口求交；完全离开视口的片段本帧不画。
+            // 与视口求交；完全离开视口的片段本帧不画（已是 0 面积）。
             let clip = intersect_rect(&clip_rect, &self.viewport);
-            if clip.w <= 0.0 || clip.h <= 0.0 {
-                continue;
-            }
-
             overlays.push(glyph_info(piece, target_rect, source_uv, clip));
-            if let Some(bounds) = text_box.as_mut() {
-                *bounds = union_rect(bounds, &target_rect);
-            } else {
-                text_box = Some(target_rect);
-            }
         }
-
-        // 静态孔洞只由本帧确实要画的覆盖层产生，与覆盖层原子提交。
-        for overlay in &overlays {
-            static_holes.push(AnimationClipRect {
-                x: overlay.x,
-                y: overlay.y,
-                w: overlay.w,
-                h: overlay.h,
-                snapshot_id: overlay.snapshot_id,
-            });
-        }
-
-        let caret_sample = text_box.map(|r| (r.x + r.w, r.y));
 
         TextMotionFrame {
-            static_holes,
+            // 静态孔洞固定取自计划的 target 排除集合，不随 progress 移动。
+            static_holes: self.static_exclusions.clone(),
             overlays,
-            finished,
-            needs_next_frame: !finished,
-            caret_sample,
+            required_textures: self.required_textures.clone(),
+            finished: false,
+            needs_next_frame: true,
+            caret_sample: self.caret_sample_at(progress),
+        }
+    }
+
+    /// Issue #904 评论 3: 由本帧**实际画出去**的覆盖层，快照出「上次真正画出的
+    /// 局部图片」——当前矩形、当前遮罩宽度、源 id。
+    ///
+    /// 快速连续输入/删除时下一次直接从这里重定向，而不是回到静态起点；
+    /// 不含历史帧队列，也不是第二套引擎。
+    pub(crate) fn drawn_local_frame(&self, frame: &TextMotionFrame) -> LocalTextFrame {
+        let fragments = frame
+            .overlays
+            .iter()
+            .map(|glyph| VisibleFragment {
+                snapshot: SnapshotRef {
+                    snapshot_id: glyph.snapshot_id,
+                    source_uv: glyph.source_rect,
+                },
+                byte_range: glyph.logical_range,
+                rect: LocalRect {
+                    x: glyph.x,
+                    y: glyph.y,
+                    w: glyph.w,
+                    h: glyph.h,
+                },
+                mask_width: glyph.clip_rect.w,
+                source_revision: glyph.source_revision,
+                glyph_id: glyph.glyph_id,
+            })
+            .collect();
+        LocalTextFrame {
+            session: self.session,
+            revision: self.target_revision,
+            fragments,
+        }
+    }
+
+    /// 协同光标：同一 `progress` 上的 caret 位置（真实布局 caret 之间插值）。
+    fn caret_sample_at(&self, progress: f64) -> Option<(f64, f64)> {
+        match (self.caret_from, self.caret_to) {
+            (Some(from), Some(to)) => Some((
+                from.0 + (to.0 - from.0) * progress,
+                from.1 + (to.1 - from.1) * progress,
+            )),
+            (None, Some(to)) => Some(to),
+            (Some(from), None) => Some(from),
+            (None, None) => None,
         }
     }
 
@@ -455,10 +555,17 @@ fn edit_ranges(edit: &EditorEditResult) -> Option<(usize, usize, usize, usize)> 
     Some((old_start, old_end, new_start, new_end))
 }
 
-/// 判断删除方向：删除范围在光标左侧 → Backspace（从右往左吞）。
-fn conceal_direction(edit: &EditorEditResult, old_start: usize, old_end: usize) -> ClipDirection {
-    let head = edit.new_selection.head.index.value();
-    if old_end <= head && old_start < old_end {
+/// 判断删除方向：由本次操作的旧/新光标关系区分 Backspace / Forward Delete。
+///
+/// - Backspace：光标左移（`new_head < old_head`）→ 遮罩从右向左吞。
+/// - Forward Delete / 其它：光标未左移 → 从左向右吞。
+///
+/// 不再拿“旧删除范围终点 vs 新光标”判断（正常 Backspace 后光标落在删除范围
+/// 左侧，旧写法会把方向判反）。
+fn conceal_direction(edit: &EditorEditResult) -> ClipDirection {
+    let old_head = edit.old_selection.head.index.value();
+    let new_head = edit.new_selection.head.index.value();
+    if new_head < old_head {
         ClipDirection::RightToLeft
     } else {
         ClipDirection::LeftToRight
@@ -488,11 +595,13 @@ fn map_new_to_old(
 /// 从布局快照抓取与 `[start, end]` 相交的局部 cluster 片段。
 ///
 /// 为了覆盖"位移"，范围会扩到受影响行的末尾（这些行的后续字会左右滑动）。
+///
+/// Issue #904：这里**不按视口过滤**——屏幕外进入/离开的字必须保留完整几何，
+/// 才能在 matching 之后按 `union(from, to)` 与视口相交，判成位置动画。
 fn layout_fragments(
     layout: &EditorLayoutSnapshot,
     range: (usize, usize),
     revision: EditorRevision,
-    viewport: &LocalRect,
 ) -> Vec<VisibleFragment> {
     let mut lines_end = range.1;
     for line in layout.line_snapshots.iter() {
@@ -512,9 +621,6 @@ fn layout_fragments(
                 continue;
             }
             let rect = line.source_rect_to_document_rect(&cluster.source_rect);
-            if !rects_intersect(&rect, viewport) {
-                continue;
-            }
             let byte_range = (cluster.byte_start, cluster.byte_end);
             frags.push(VisibleFragment {
                 snapshot: SnapshotRef {

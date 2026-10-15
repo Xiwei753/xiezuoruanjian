@@ -161,14 +161,23 @@ pub(crate) struct LocalTextPlan {
     pub overlays: Vec<TextAnimationGlyphInfo>,
     /// 静态层本帧需要排除的局部矩形，与 `overlays` 原子提交。
     pub static_holes: Vec<AnimationClipRect>,
+    /// 本帧接管所需的全部动画源纹理 id。
+    ///
+    /// 用「本计划全部片段要用到的源纹理」而不是「本帧可见的 overlay 纹理」判断
+    /// 就绪：progress=0 时 Reveal 尚无可见像素，但它的目标字形已被静态孔洞排除，
+    /// 若此时漏检纹理，新字会先消失。
+    pub required_textures: Vec<LineSnapshotId>,
 }
 
 impl LocalTextPlan {
-    /// 检查所有覆盖层的纹理是否已在 `texture_cache` 中就绪。
+    /// 检查本帧接管所需的动画源纹理是否已在 `texture_cache` 中就绪。
+    ///
+    /// 缺任一张就整体不接管：静态层画完整 canonical 正文，动画层不画。
+    /// 静态挖孔与动画覆盖层用同一标志，避免"静态挖了空但动画没画"或反之。
     pub(crate) fn has_animation_resources(&self, texture_cache: &TextureCache) -> bool {
-        self.overlays
+        self.required_textures
             .iter()
-            .all(|glyph| texture_cache.contains_line(&glyph.snapshot_id))
+            .all(|id| texture_cache.contains_line(id))
     }
 }
 

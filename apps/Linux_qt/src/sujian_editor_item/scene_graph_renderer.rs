@@ -1,7 +1,7 @@
 use super::qt_text_node;
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
-use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex, ParagraphId};
+use crate::editor::layout::{LayoutSnapshot, ParagraphHeightIndex};
 use crate::editor::scene_graph;
 
 /// Issue #904：`render_frame` 的渲染结果。
@@ -66,23 +66,16 @@ pub(crate) struct StaticTextParams<'a> {
     /// 但普通正文输入只影响个别段落，不应 `force_full_update=true` 无差别重建所有段落。
     /// `force_full_relayout=true` 时 C++ 侧无条件重建所有已有段落子节点。
     pub force_full_relayout: bool,
-    /// Issue #901 第十四轮问题2: 本帧内容变化的段落身份集合。
+    /// Issue #904 评论 1: 局部动画的静态挖孔状态本帧发生变化（接管开始/结束/目标变化）。
     ///
-    /// 来自 layout 层增量排版结果。C++ 侧通过 per-paragraph `content_revision`
-    /// 独立判断每段是否变化，此集合供 Rust 侧做日志/调试参考。
-    pub changed_paragraph_ids: &'a std::collections::HashSet<ParagraphId>,
-    /// Issue #901 第十四轮问题4: 文档 session 标识。
-    ///
-    /// 切章/清文档时递增。C++ 侧据此检测 session 变化，自动清空旧 map，
-    /// 消除 `void*` 全局映射的地址复用风险。
+    /// 即使 `needs_relayout=false`（正文未变、布局未变），也必须重建静态节点的裁剪，
+    /// 让 canonical 在动画结束的同一帧恢复显示、在动画开始的同一帧被挖空。
+    /// 静态裁剪只在动画 begin/target-change/end 变化，不随 progress 每帧刷新。
+    pub force_static_clip_refresh: bool,
     pub session_id: u64,
     /// Issue #901 第九轮阻塞4: 上次 rebuild 成功后加载的段落索引范围。
     /// `None` 表示尚未加载任何段落（首次渲染或上次 rebuild 失败）。
     pub loaded_para_range: Option<(usize, usize)>,
-    /// Issue #901 第九轮阻塞4: 稳定段落身份列表，按段落索引顺序排列。
-    /// `paragraph_ids[i]` 是第 i 个段落的 `ParagraphId`。
-    /// 用于在 `ParagraphLineInfo` 中填入稳定身份标识。
-    pub paragraph_ids: Option<&'a [ParagraphId]>,
 }
 
 /// Issue #901 第七轮复核问题2: 计算段落真实第一行的文档 y 坐标。
@@ -211,8 +204,10 @@ pub(crate) fn render_frame(
         None => false,
     };
 
-    let should_rebuild_static =
-        static_text.needs_relayout || !animation_resources_ready || viewport_exceeds_loaded;
+    let should_rebuild_static = static_text.needs_relayout
+        || static_text.force_static_clip_refresh
+        || !animation_resources_ready
+        || viewport_exceeds_loaded;
 
     if should_rebuild_static {
         // 正文/layout/颜色变化 或 活动事务集合变化：重建静态节点（含裁剪）
@@ -395,33 +390,13 @@ pub(crate) fn render_frame(
             // - content_revision 变化 → 重建子节点（内容变了）
             // - clip signature 变化 → 重建子节点（裁剪变了）
             // - 都不变 → 真正跳过
-            // 这样即使 force_full_update=false，内容/裁剪变了的段落也会被重建。
-            let force_full_update = static_text.force_full_relayout || !animation_resources_ready;
-
-            static_rebuild_ok = qt_text_node::update_text_nodes_incremental(
-                root_raw,
-                item_ptr,
-                &paragraphs,
-                &visual_line_clips,
-                static_text.scroll_y,
-                static_text.color,
-                clip_rects,
-                f64::from(snapshot.padding),
-                snapshot.layout_generation,
-                force_full_update,
-                static_text.session_id,
-            );
-
-            // Issue #901 第十轮问题4: 增量更新失败时（paragraph_id == 0 或 layout 缺失），
-            // 回退到全量 rebuild。全量 rebuild 不依赖 ParagraphId 映射，能正确处理
-            // paragraph_id == 0 的情况（ParagraphId::INVALID）。
             //
-            // Issue #901 第十一轮问题3（渲染部分）：全量 rebuild 会删掉所有子节点，
-            // g_incremental_para_map 中的 container 指针变成悬空。在全量 rebuild
-            // **之前**清除该 item 的增量映射，避免悬空指针。
-            // clear_incremental_para_map 由 qt_text_node.rs 实现（task 3）。
-            if !static_rebuild_ok {
-                qt_text_node::clear_incremental_para_map(item_ptr);
+            // Issue #904 评论 2: 全量重建只用于真正全局变化（字体/宽度/字号），
+            // 那会生成整棵新树并原子替换。普通正文输入（needs_relayout）走
+            // per-paragraph 增量：以 (content_revision, cache_idx, epoch) 为内容身份，
+            // 在 detached 新节点上构建成功后才用 insertChildNodeBefore 原子替换。
+            // 增量失败时保留旧树，绝不 clear 整棵树再全量重建（那正是正文消失的根因）。
+            if static_text.force_full_relayout {
                 static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                     root_raw,
                     item_ptr,
@@ -432,6 +407,20 @@ pub(crate) fn render_frame(
                     clip_rects,
                     f64::from(snapshot.padding),
                     snapshot.layout_generation,
+                );
+            } else {
+                static_rebuild_ok = qt_text_node::update_text_nodes_incremental(
+                    root_raw,
+                    item_ptr,
+                    &paragraphs,
+                    &visual_line_clips,
+                    static_text.scroll_y,
+                    static_text.color,
+                    clip_rects,
+                    f64::from(snapshot.padding),
+                    snapshot.layout_generation,
+                    false,
+                    static_text.session_id,
                 );
             }
 

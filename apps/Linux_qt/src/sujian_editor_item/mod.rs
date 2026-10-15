@@ -61,7 +61,7 @@ pub(crate) mod transaction;
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
-    ParagraphId, VisualLine,
+    VisualLine,
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
@@ -77,7 +77,7 @@ use text_utils::{
     prev_char_boundary,
 };
 
-use writer_core::editor::{EditorRevision, EditorTransactionCause};
+use writer_core::editor::EditorTransactionCause;
 
 // Issue #735: 重新导出 Linux 私有视觉类型，供 `use super::*` 的子模块使用。
 pub(crate) use edit_motion::CursorRect;
@@ -556,6 +556,17 @@ pub struct SujianEditorItem {
     /// 替代原全局 `static LOADED_PARA_RANGE`。每次 rebuild 成功后由
     /// `FrameRenderOutcome::new_loaded_para_range` 更新。
     loaded_para_range: Option<(usize, usize)>,
+    /// Issue #904 评论 1: 上一帧局部动画是否处于"静态挖孔活跃"状态。
+    ///
+    /// 漏掉状态翻转的那一帧会导致：动画结束帧 canonical 不恢复（残留孔洞），
+    /// 或动画开始帧不挖孔（新字先整字显示）。用它驱动静态裁剪强制刷新。
+    prev_local_text_holes_active: bool,
+    /// Issue #904 评论 3: 上一次**真正画出去**的局部图片（当前矩形、当前遮罩宽度、
+    /// 源 id、session/revision）。
+    ///
+    /// 快速连续输入/删除时直接从这里重定向，而不是从静态起点重来。
+    /// 无历史队列、无第二套引擎；跨 session 直接丢弃。
+    last_drawn_local_frame: Option<text_motion::LocalTextFrame>,
 }
 
 impl Default for SujianEditorItem {
@@ -702,6 +713,8 @@ impl Default for SujianEditorItem {
             prev_cursor_blink_suppressed: false,
             document_session: 1,
             loaded_para_range: None,
+            prev_local_text_holes_active: false,
+            last_drawn_local_frame: None,
         }
     }
 }
@@ -807,6 +820,10 @@ impl SujianEditorItem {
     pub(crate) fn clear_active_text_animations(&mut self) {
         // Issue #904：丢掉唯一的局部动画，静态层立即从 canonical 完整显示。
         *self.pipeline.text_motion_mut() = None;
+        // Issue #904 评论 3: 连"上次画出的局部图片"一起清掉，避免下次编辑
+        // 从一段已经不存在的动画继续重定向。
+        self.last_drawn_local_frame = None;
+        self.prev_local_text_holes_active = false;
         self.request_scene_rebuild();
     }
 
@@ -842,6 +859,8 @@ impl SujianEditorItem {
         self.document_session = self.document_session.wrapping_add(1);
         // Issue #904：丢弃旧章唯一的局部动画与纹理租约。
         *self.pipeline.text_motion_mut() = None;
+        self.last_drawn_local_frame = None;
+        self.prev_local_text_holes_active = false;
         // Issue #901 问题3/问题6：清 frame_submission_mailbox，
         // 丢弃旧章未确认的帧，避免旧帧的 snapshot_ids 阻止纹理回收。
         self.frame_submission_mailbox.discard_all_frames();
