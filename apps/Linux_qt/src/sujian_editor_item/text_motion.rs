@@ -287,27 +287,42 @@ impl TextMotion {
         // 把 last_drawn 的 slices 作为旧当前视觉源：还在吐的沿已露出宽度继续，
         // 正在吞的沿当前有效 clip 继续，Shift 从已经插值显示的 rect 接新目标。
         // 保留上一帧仍在屏幕上的旧版本纹理至本次动画不再引用为止。
-        let last_drawn_map: std::collections::HashMap<(usize, usize), &DrawnSlice> = last_drawn
-            .filter(|frame| frame.session == session)
-            .map(|frame| frame.slices.iter().map(|ds| (ds.byte_range, ds)).collect())
-            .unwrap_or_default();
+        // Issue #919 复核 2：同 byte_range 可能同时有 Reveal+Conceal（同长度替换），
+        // 用 Vec 允许同位置多条 DrawnSlice 并存，使用时按 motion_kind 筛选。
+        let last_drawn_map: std::collections::HashMap<(usize, usize), Vec<&DrawnSlice>> =
+            last_drawn
+                .filter(|frame| frame.session == session)
+                .map(|frame| {
+                    let mut map: std::collections::HashMap<(usize, usize), Vec<&DrawnSlice>> =
+                        std::collections::HashMap::new();
+                    for ds in &frame.slices {
+                        map.entry(ds.byte_range).or_default().push(ds);
+                    }
+                    map
+                })
+                .unwrap_or_default();
 
-        // 受影响段落 id（用于整体段落位移）。
+        // 受影响段落 id（用于整体段落位移候选）。
         let mut affected_ids: Vec<u64> = Vec::new();
         for span in new_spans.iter().chain(old_spans.iter()) {
             if span.paragraph_id != 0 {
                 affected_ids.push(span.paragraph_id);
             }
         }
-        let paragraph_moves =
-            collect_paragraph_moves(old_layout, new_layout, &viewport, &affected_ids);
-        // Issue #919 复核 2：ParagraphMove 只用于编辑 patch 未触及其内容且可整体
-        // 移动的段落。若段落的内容被 patch 触及（在 affected_ids 中），改由局部
-        // Reveal/Conceal/Shift 承担该段变化，不单凭 ParagraphId 跳过所有 slice。
+        // Issue #919 复核 2：从 display_patches 直接确定真正内容变更的稳定 ParagraphId
+        // 集合（旧/新版分别找，不把 layout_spans 扩展取到的未改后续行算成内容已改）。
+        let content_changed_ids =
+            content_changed_paragraph_ids(edit, old_layout, new_layout);
+        // collect_paragraph_moves 只输出未变内容、纯整体移动的段落。
+        let paragraph_moves = collect_paragraph_moves(old_layout, new_layout, &viewport, &affected_ids)
+            .into_iter()
+            .filter(|m| !content_changed_ids.contains(&m.paragraph_id))
+            .collect::<Vec<_>>();
+        // moved_paragraphs 直接取最终的 paragraph_moves，不再过滤一份、渲染另一份。
+        // 同一段落只能由一种位移路径接管。
         let moved_paragraphs: Vec<u64> = paragraph_moves
             .iter()
             .map(|m| m.paragraph_id)
-            .filter(|pid| !affected_ids.contains(pid))
             .collect();
 
         let mut slices: Vec<SliceMotion> = Vec::new();
@@ -325,7 +340,7 @@ impl TextMotion {
                 // byte_range 的未完成 Reveal（连续输入同一位置），默认 0。
                 let start_visible = last_drawn_map
                     .get(&new_span.byte_range)
-                    .filter(|ds| ds.motion_kind == MotionKind::Reveal)
+                    .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal))
                     .map(|ds| ds.visible_width)
                     .unwrap_or(0.0);
                 slices.push(SliceMotion::Reveal {
@@ -344,65 +359,70 @@ impl TextMotion {
 
             // Issue #919 复核 1：连续编辑重定向——先查 last_drawn 中是否有同
             // 旧 byte_range 的未完成动画，从当前可见画面接续。
-            if let Some(last) = last_drawn_map.get(&old_byte_range) {
-                match last.motion_kind {
-                    MotionKind::Reveal if last.visible_width < new_span.slice.rect.w - 0.01 => {
-                        // 上一笔还在吐，本笔继续吐到满宽。
-                        if let Some(idx) =
-                            old_spans.iter().position(|s| s.byte_range == old_byte_range)
-                        {
-                            consumed_old[idx] = true;
+            // 复核 2：同 byte_range 可能并存 Reveal+Conceal，先查 Reveal 再查 Shift。
+            let last_vec = last_drawn_map.get(&old_byte_range);
+            // 先查未完成 Reveal（连续输入同一位置继续吐）
+            let last_reveal = last_vec
+                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Reveal).copied());
+            if let Some(last) = last_reveal {
+                if last.visible_width < new_span.slice.rect.w - 0.01 {
+                    // 上一笔还在吐，本笔继续吐到满宽。
+                    if let Some(idx) =
+                        old_spans.iter().position(|s| s.byte_range == old_byte_range)
+                    {
+                        consumed_old[idx] = true;
+                    }
+                    slices.push(SliceMotion::Reveal {
+                        new: new_span.slice,
+                        direction: ClipDirection::LeftToRight,
+                        start_visible: last.visible_width,
+                        byte_range: new_span.byte_range,
+                    });
+                    continue;
+                }
+            }
+            // 再查 Shift（从当前位移接续）
+            let last_shift = last_vec
+                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Shift).copied());
+            if let Some(last) = last_shift {
+                // 上一笔在位移，本笔从当前已插值显示的 rect 接新目标。
+                if let Some((idx, _)) = old_spans
+                    .iter()
+                    .enumerate()
+                    .find(|(i, s)| !consumed_old[*i] && s.byte_range == old_byte_range)
+                {
+                    consumed_old[idx] = true;
+                    let old_span = &old_spans[idx];
+                    // Issue #919 复核 3：shaping 不同则旧退出+新进入。
+                    if old_span
+                        .shaping_identity
+                        .is_same_shaping(&new_span.shaping_identity)
+                    {
+                        let from = last.clip_rect;
+                        let to = new_span.slice.rect;
+                        if !rect_approx_eq(&from, &to) {
+                            slices.push(SliceMotion::Shift {
+                                new: new_span.slice,
+                                from,
+                                to,
+                                byte_range: new_span.byte_range,
+                            });
                         }
+                    } else {
+                        slices.push(SliceMotion::Conceal {
+                            old: old_span.slice,
+                            direction,
+                            start_visible: old_span.slice.rect.w,
+                            byte_range: old_span.byte_range,
+                        });
                         slices.push(SliceMotion::Reveal {
                             new: new_span.slice,
                             direction: ClipDirection::LeftToRight,
-                            start_visible: last.visible_width,
+                            start_visible: 0.0,
                             byte_range: new_span.byte_range,
                         });
-                        continue;
                     }
-                    MotionKind::Shift => {
-                        // 上一笔在位移，本笔从当前已插值显示的 rect 接新目标。
-                        if let Some((idx, _)) = old_spans
-                            .iter()
-                            .enumerate()
-                            .find(|(i, s)| !consumed_old[*i] && s.byte_range == old_byte_range)
-                        {
-                            consumed_old[idx] = true;
-                            let old_span = &old_spans[idx];
-                            // Issue #919 复核 3：shaping 不同则旧退出+新进入。
-                            if old_span
-                                .shaping_identity
-                                .is_same_shaping(&new_span.shaping_identity)
-                            {
-                                let from = last.clip_rect;
-                                let to = new_span.slice.rect;
-                                if !rect_approx_eq(&from, &to) {
-                                    slices.push(SliceMotion::Shift {
-                                        new: new_span.slice,
-                                        from,
-                                        to,
-                                        byte_range: new_span.byte_range,
-                                    });
-                                }
-                            } else {
-                                slices.push(SliceMotion::Conceal {
-                                    old: old_span.slice,
-                                    direction,
-                                    start_visible: old_span.slice.rect.w,
-                                    byte_range: old_span.byte_range,
-                                });
-                                slices.push(SliceMotion::Reveal {
-                                    new: new_span.slice,
-                                    direction: ClipDirection::LeftToRight,
-                                    start_visible: 0.0,
-                                    byte_range: new_span.byte_range,
-                                });
-                            }
-                            continue;
-                        }
-                    }
-                    _ => {}
+                    continue;
                 }
             }
 
@@ -472,7 +492,7 @@ impl TextMotion {
             // 的未完成 Conceal，从当前剩余宽度继续吞。
             let start_visible = last_drawn_map
                 .get(&old_span.byte_range)
-                .filter(|ds| ds.motion_kind == MotionKind::Conceal)
+                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Conceal))
                 .map(|ds| ds.visible_width)
                 .unwrap_or(old_span.slice.rect.w);
             slices.push(SliceMotion::Conceal {
@@ -481,6 +501,32 @@ impl TextMotion {
                 start_visible,
                 byte_range: old_span.byte_range,
             });
+        }
+
+        // Issue #919 复核 2：上一笔删除但仍在途的旧 Conceal——被删字已不在当前 Core
+        // 正文，不会进入 old_spans；从 last_drawn 直接沿用其画面继续吞到 0。
+        if let Some(frame) = last_drawn.filter(|f| f.session == session) {
+            for ds in &frame.slices {
+                if ds.motion_kind != MotionKind::Conceal || ds.visible_width <= 0.01 {
+                    continue;
+                }
+                // 已在当前 old_spans 中的由第二遍处理，不重复。
+                if old_spans.iter().any(|s| s.byte_range == ds.byte_range) {
+                    continue;
+                }
+                // 同 byte_range 已被本计划 Conceal 接管的跳过。
+                if slices.iter().any(|s| {
+                    s.motion_kind() == MotionKind::Conceal && s.byte_range() == ds.byte_range
+                }) {
+                    continue;
+                }
+                slices.push(SliceMotion::Conceal {
+                    old: ds.slice,
+                    direction,
+                    start_visible: ds.visible_width,
+                    byte_range: ds.byte_range,
+                });
+            }
         }
 
         // 视口过滤：Shift 用 from/to 并集，Reveal/Conceal 用自身矩形。
@@ -786,6 +832,52 @@ fn layout_spans(layout: &EditorLayoutSnapshot, range: (usize, usize)) -> Vec<Lay
         }
     }
     spans
+}
+
+/// Issue #919 复核 2：从 display_patches 直接确定真正内容变更的稳定 ParagraphId 集合。
+///
+/// 不依赖 layout_spans 的扩展范围（会把同段后续折行也算进来），
+/// 只看 patch 的 replace/inserted byte range 在 old/new layout 中实际覆盖的段落。
+/// 零长度 replace 或 inserted 不算内容变更。
+fn content_changed_paragraph_ids(
+    edit: &EditorEditResult,
+    old_layout: Option<&EditorLayoutSnapshot>,
+    new_layout: &EditorLayoutSnapshot,
+) -> Vec<u64> {
+    let mut ids: Vec<u64> = Vec::new();
+    for patch in &edit.display_patches {
+        let rep_start = patch.replace_byte_range.start().value();
+        let rep_end = patch.replace_byte_range.end().value();
+        let ins_start = patch.inserted_byte_range.start().value();
+        let ins_end = patch.inserted_byte_range.end().value();
+        // 旧侧：replace_byte_range 非空时，在 old_layout 找所属段落。
+        if rep_start < rep_end {
+            if let Some(layout) = old_layout {
+                for line in &layout.line_snapshots {
+                    if line.byte_start <= rep_end
+                        && line.byte_end >= rep_start
+                        && line.stable_paragraph_id != 0
+                        && !ids.contains(&line.stable_paragraph_id)
+                    {
+                        ids.push(line.stable_paragraph_id);
+                    }
+                }
+            }
+        }
+        // 新侧：inserted_byte_range 非空时，在 new_layout 找所属段落。
+        if ins_start < ins_end {
+            for line in &new_layout.line_snapshots {
+                if line.byte_start <= ins_end
+                    && line.byte_end >= ins_start
+                    && line.stable_paragraph_id != 0
+                    && !ids.contains(&line.stable_paragraph_id)
+                {
+                    ids.push(line.stable_paragraph_id);
+                }
+            }
+        }
+    }
+    ids
 }
 
 /// 复核 1：受影响段落以外、只发生整体 y 变化且在视口气带内的段落。
