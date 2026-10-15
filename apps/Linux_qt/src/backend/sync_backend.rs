@@ -419,7 +419,10 @@ impl SyncBackend {
     /// 返回 `ResultEnvelope<{ conflicts: SyncConflictDto[] }>` JSON 字符串。
     fn list_sync_conflicts(&mut self, project_id: QString) -> QString {
         let pid = project_id.to_string();
-        let result = self.with_app(|app| app.core_api().map(|api| api.list_sync_conflicts(&pid)));
+        let result = self.with_app(|app| {
+            app.core_api()
+                .map(|api| api.list_sync_conflicts("project", Some(&pid)))
+        });
         match result {
             Ok(Some(Ok(conflicts))) => {
                 let data = serde_json::json!({ "conflicts": conflicts });
@@ -473,8 +476,9 @@ impl SyncBackend {
         let pid = project_id.to_string();
         let conflict_path = path.to_string();
         let result = self.with_app(|app| {
-            app.core_api()
-                .map(|api| api.load_sync_conflict_preview(&pid, &conflict_path))
+            app.core_api().map(|api| {
+                api.load_sync_conflict_preview("project", Some(&pid), &conflict_path)
+            })
         });
         match result {
             Ok(Some(Ok(preview))) => {
@@ -510,9 +514,13 @@ impl SyncBackend {
         let conflict_path = path.to_string();
         let result = self.with_app(|app| {
             app.core_api().map(|api| match action {
-                "keep_local" => api.resolve_conflict_keep_local(&pid, &conflict_path),
-                "take_remote" => api.resolve_conflict_take_remote(&pid, &conflict_path),
-                _ => api.resolve_conflict_mark_merged(&pid, &conflict_path),
+                "keep_local" => {
+                    api.resolve_conflict_keep_local("project", Some(&pid), &conflict_path)
+                }
+                "take_remote" => {
+                    api.resolve_conflict_take_remote("project", Some(&pid), &conflict_path)
+                }
+                _ => api.resolve_conflict_mark_merged("project", Some(&pid), &conflict_path),
             })
         });
         // Issue #757 评论 5820327136 第 1 点：take_remote 的 applied_live bool 透传到

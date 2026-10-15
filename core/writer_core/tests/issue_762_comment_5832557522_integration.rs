@@ -345,7 +345,9 @@ fn sink_and_callback_cooperate_on_same_sync_chain() {
         // 直接读作品目录 conflicts.json，不依赖 list_projects 注册表）。
         let (live_count, live_has) = match &p.project_id {
             Some(pid) => {
-                let conflicts = api_for_cb.list_sync_conflicts(pid).unwrap_or_default();
+                let conflicts = api_for_cb
+                    .list_sync_conflicts("project", Some(pid))
+                    .unwrap_or_default();
                 let count = conflicts.len();
                 (count, count > 0)
             }
@@ -526,11 +528,15 @@ fn sink_and_callback_cooperate_on_same_sync_chain() {
         "整轮聚合状态应为 partial_conflict"
     );
     assert!(
-        !api.list_sync_conflicts("p1").unwrap().is_empty(),
+        !api.list_sync_conflicts("project", Some("p1"))
+            .unwrap()
+            .is_empty(),
         "最终 live 应有 p1 冲突"
     );
     assert!(
-        !api.list_sync_conflicts("p2").unwrap().is_empty(),
+        !api.list_sync_conflicts("project", Some("p2"))
+            .unwrap()
+            .is_empty(),
         "最终 live 应有 p2 冲突"
     );
 }

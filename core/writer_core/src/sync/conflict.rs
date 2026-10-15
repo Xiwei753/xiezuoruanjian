@@ -1444,21 +1444,35 @@ impl crate::sync::SyncService {
 
     /// 从快照目录读取远端星图身份事实（issue #902 第十五轮复核）。
     ///
-    /// 读取 `{snapshot_dir_rel}/index_facts.json`。文件不存在时返回 `None`
-    /// （保持向后兼容——旧快照没有身份事实文件）。解析失败时返回 `None` 并不报错，
-    /// 因为身份恢复是 best-effort：即使无法恢复 root/main 身份，整图本身的
-    /// graph.json + 子对象文件仍能正确恢复。
+    /// 读取 `{snapshot_dir_rel}/index_facts.json`。issue #902 第十九轮复核问题3：
+    /// 文件不存在、读取失败或 JSON 解析失败时返回 `Err`（不再静默返回 `None`）。
+    /// 远端整图恢复要求 index_facts.json 存在；旧冲突快照缺少身份事实，无法完整
+    /// 确定整图恢复，应明确拒绝而非静默跳过 root/main 身份恢复。
     fn load_starmap_identity_facts(
         sync_root: &Path,
         snapshot_dir_rel: &str,
-    ) -> Option<StarmapIdentityFacts> {
+    ) -> crate::Result<StarmapIdentityFacts> {
         let facts_rel = format!("{}/index_facts.json", snapshot_dir_rel);
         let facts_path = sync_root.join(&facts_rel);
         if !facts_path.exists() {
-            return None;
+            return Err(crate::Error::Other(format!(
+                "load_starmap_identity_facts: 远端整图恢复要求 index_facts.json 存在；\
+                 旧冲突快照缺少身份事实，无法完整确定整图恢复 (path='{}')",
+                facts_rel
+            )));
         }
-        let bytes = std::fs::read(&facts_path).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let bytes = std::fs::read(&facts_path).map_err(|e| {
+            crate::Error::Other(format!(
+                "load_starmap_identity_facts: 读取 index_facts.json 失败 (path='{}'): {}",
+                facts_rel, e
+            ))
+        })?;
+        serde_json::from_slice(&bytes).map_err(|e| {
+            crate::Error::Other(format!(
+                "load_starmap_identity_facts: 解析 index_facts.json 失败 (path='{}'): {}",
+                facts_rel, e
+            ))
+        })
     }
 
     /// 星图对象文件的远端删除事务（issue #902 第十四轮复核，问题 3）。
@@ -1877,10 +1891,11 @@ impl crate::sync::SyncService {
         // 准备 index.json（确保包含该星图 ID）
         // issue #902 第十五轮复核：读取快照目录下的 index_facts.json，
         // 恢复 root_starmap_ids 和 main_starmap_by_project 身份事实。
-        // index_facts.json 不存在时传 None（保持向后兼容）。
-        let identity_facts = Self::load_starmap_identity_facts(sync_root, snapshot_dir_rel);
+        // issue #902 第十九轮复核问题3：index_facts.json 必须存在且可解析，
+        // 缺失/损坏时返回错误（不再传 None 静默跳过）。
+        let identity_facts = Self::load_starmap_identity_facts(sync_root, snapshot_dir_rel)?;
         let index_bytes =
-            Self::load_index_and_ensure_starmap(sync_root, &starmap_id, identity_facts.as_ref())?;
+            Self::load_index_and_ensure_starmap(sync_root, &starmap_id, Some(&identity_facts))?;
 
         // SaveTransaction 原子提交：写入 graph.json + 写入所有远端子对象文件 + 更新 index.json
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
@@ -2004,9 +2019,11 @@ impl crate::sync::SyncService {
                 starmap_id
             ))
         })?;
-        let identity_facts = Self::load_starmap_identity_facts(sync_root, snapshot_dir_rel);
+        // issue #902 第十九轮复核问题3：index_facts.json 必须存在且可解析，
+        // 缺失/损坏时返回错误（不再传 None 静默跳过）。
+        let identity_facts = Self::load_starmap_identity_facts(sync_root, snapshot_dir_rel)?;
         let index_bytes =
-            Self::load_index_and_ensure_starmap(sync_root, &starmap_id, identity_facts.as_ref())?;
+            Self::load_index_and_ensure_starmap(sync_root, &starmap_id, Some(&identity_facts))?;
 
         // SaveTransaction 原子提交
         let mut txn = crate::storage::transaction::SaveTransaction::new(sync_root);
@@ -2962,6 +2979,20 @@ mod tests {
 
         // index.json 不含 sm_1（本地已删除）
         write_index(root, &["sm_2"]);
+
+        // issue #902 第十九轮复核问题3：快照必须包含 index_facts.json，
+        // 否则 load_starmap_identity_facts 返回 Err。本测试中 sm_1 不是 root，
+        // 也不是任何 project 的 main starmap。
+        let facts = serde_json::json!({
+            "is_root": false,
+            "main_for_projects": []
+        });
+        let facts_rel = format!("{}/index_facts.json", snapshot_dir);
+        let facts_path = root.join(&facts_rel);
+        if let Some(parent) = facts_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&facts_path, serde_json::to_vec_pretty(&facts).unwrap()).unwrap();
 
         let conflict = SyncConflict {
             local_path: "starmaps/sm_1/graph.json".to_string(),

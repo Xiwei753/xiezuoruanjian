@@ -152,8 +152,18 @@ fn single_project_query_still_works_alongside_global_query() {
     record_conflict(&projects_root.join(&alpha.id), "volumes/v1/chapters/a.md");
     record_conflict(&projects_root.join(&beta.id), "volumes/v1/chapters/b.md");
 
-    assert_eq!(core.list_sync_conflicts(&alpha.id).unwrap().len(), 1);
-    assert_eq!(core.list_sync_conflicts(&beta.id).unwrap().len(), 1);
+    assert_eq!(
+        core.list_sync_conflicts("project", Some(&alpha.id))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        core.list_sync_conflicts("project", Some(&beta.id))
+            .unwrap()
+            .len(),
+        1
+    );
 
     let all = core.list_all_sync_conflicts().unwrap();
     assert_eq!(all.len(), 2);
@@ -204,7 +214,9 @@ fn app_service_exposes_all_sync_conflict_entry_dto() {
     );
 
     // 单项目接口保留，且与全局接口一致。
-    let single = api.list_sync_conflicts(&project_id).unwrap();
+    let single = api
+        .list_sync_conflicts("project", Some(&project_id))
+        .unwrap();
     assert_eq!(single.len(), 1);
     assert_eq!(single[0].local_path, "volumes/v1/chapters/a.md");
 }
@@ -612,7 +624,9 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
         let Some(project_id) = p.project_id.clone() else {
             return;
         };
-        let conflicts = api_for_callback.list_sync_conflicts(&project_id).unwrap();
+        let conflicts = api_for_callback
+            .list_sync_conflicts("project", Some(&project_id))
+            .unwrap();
         observed
             .lock()
             .unwrap()
@@ -620,7 +634,7 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
         if project_id == "p1" {
             assert!(
                 api_for_callback
-                    .resolve_conflict_keep_local("p1", CONFLICT_PATH)
+                    .resolve_conflict_keep_local("project", Some("p1"), CONFLICT_PATH)
                     .unwrap(),
                 "progress 回调时冲突必须已经可处理"
             );
@@ -651,7 +665,9 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
 
     // 2) 整轮结束（target2 跑完 + 聚合收口）后，target1 仍是用户 keep_local 后的状态。
     assert!(
-        api.list_sync_conflicts("p1").unwrap().is_empty(),
+        api.list_sync_conflicts("project", Some("p1"))
+            .unwrap()
+            .is_empty(),
         "同步运行期间已解决的冲突不能被整轮收口重新写回"
     );
     let p1_state = SyncService::load_sync_state(&p1_root).unwrap();
@@ -668,7 +684,9 @@ fn resolved_conflict_during_full_sync_is_not_overwritten_at_round_end() {
     // 3) 对照：同一轮里 target2 的冲突仍然在（证明整轮真的跑到了后面，
     //    且 target2 的结果没有被 target1 的 resolve 影响）。
     assert_eq!(
-        api.list_sync_conflicts("p2").unwrap().len(),
+        api.list_sync_conflicts("project", Some("p2"))
+            .unwrap()
+            .len(),
         1,
         "target2 自己的冲突必须仍然存在"
     );
@@ -899,7 +917,7 @@ fn preexisting_conflict_resolved_before_target_commit_keep_local_is_not_revived(
         .unwrap();
 
     // 断言 1：A 仍已解决（不被 staging 旧状态复活）
-    let p1_conflicts = api.list_sync_conflicts("p1").unwrap();
+    let p1_conflicts = api.list_sync_conflicts("project", Some("p1")).unwrap();
     assert!(
         p1_conflicts.iter().all(|c| c.local_path != CONFLICT_A),
         "已解决的冲突 A 不应被 staging 旧状态复活"
@@ -930,7 +948,7 @@ fn preexisting_conflict_resolved_before_target_commit_keep_local_is_not_revived(
     );
 
     // 断言 5：p2 的冲突仍然在（对照）
-    let p2_conflicts = api.list_sync_conflicts("p2").unwrap();
+    let p2_conflicts = api.list_sync_conflicts("project", Some("p2")).unwrap();
     assert_eq!(p2_conflicts.len(), 1, "p2 自己的冲突必须仍然存在");
     assert_eq!(
         result.overall_status, "partial_conflict",
@@ -1051,7 +1069,7 @@ fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived
         .unwrap();
 
     // 断言 1：A 仍已解决（不被 staging 旧状态复活）
-    let p1_conflicts = api.list_sync_conflicts("p1").unwrap();
+    let p1_conflicts = api.list_sync_conflicts("project", Some("p1")).unwrap();
     assert!(
         p1_conflicts.iter().all(|c| c.local_path != CONFLICT_A),
         "已解决的冲突 A 不应被 staging 旧状态复活（take_remote 路径）"
@@ -1089,7 +1107,7 @@ fn preexisting_conflict_resolved_before_target_commit_take_remote_is_not_revived
     );
 
     // 断言 6：p2 的冲突仍然在（对照）
-    let p2_conflicts = api.list_sync_conflicts("p2").unwrap();
+    let p2_conflicts = api.list_sync_conflicts("project", Some("p2")).unwrap();
     assert_eq!(p2_conflicts.len(), 1, "p2 自己的冲突必须仍然存在");
     assert_eq!(
         result.overall_status, "partial_conflict",

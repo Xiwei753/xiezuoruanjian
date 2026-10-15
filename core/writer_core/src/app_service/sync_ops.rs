@@ -121,43 +121,53 @@ impl super::WriterAppService {
 
     pub fn resolve_conflict_keep_local(
         &self,
-        project_id: String,
+        target_kind: String,
+        project_id: Option<String>,
         path: String,
     ) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_keep_local(&project_id, &path)
+        self.api
+            .resolve_conflict_keep_local(&target_kind, project_id.as_deref(), &path)
     }
 
     pub fn resolve_conflict_take_remote(
         &self,
-        project_id: String,
+        target_kind: String,
+        project_id: Option<String>,
         path: String,
     ) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_take_remote(&project_id, &path)
+        self.api
+            .resolve_conflict_take_remote(&target_kind, project_id.as_deref(), &path)
     }
 
     pub fn resolve_conflict_mark_merged(
         &self,
-        project_id: String,
+        target_kind: String,
+        project_id: Option<String>,
         path: String,
     ) -> Result<bool, WriterError> {
-        self.api.resolve_conflict_mark_merged(&project_id, &path)
+        self.api
+            .resolve_conflict_mark_merged(&target_kind, project_id.as_deref(), &path)
     }
 
     /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
     pub fn load_sync_conflict_preview(
         &self,
-        project_id: String,
+        target_kind: String,
+        project_id: Option<String>,
         path: String,
     ) -> Result<SyncConflictPreviewDto, WriterError> {
-        self.api.load_sync_conflict_preview(&project_id, &path)
+        self.api
+            .load_sync_conflict_preview(&target_kind, project_id.as_deref(), &path)
     }
 
-    /// 列出当前项目的所有冲突记录。
+    /// 列出指定 target 的所有冲突记录。
     pub fn list_sync_conflicts(
         &self,
-        project_id: String,
+        target_kind: String,
+        project_id: Option<String>,
     ) -> Result<Vec<SyncConflictDto>, WriterError> {
-        self.api.list_sync_conflicts(&project_id)
+        self.api
+            .list_sync_conflicts(&target_kind, project_id.as_deref())
     }
 
     /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。

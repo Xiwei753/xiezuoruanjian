@@ -385,12 +385,15 @@ dictionary SyncOperationStateDto {
 };
 
 // 全局冲突摘要条目 — 诊断包用，只保留路径语义和类型，不含正文/快照内容。
+// target_kind 标识冲突所属的同步 target（"app" / "project"），
+// 旧数据缺少此字段时默认 "project"，保持向后兼容。
 dictionary AllSyncConflictEntryDto {
     string project_id;
     string project_title;
     string path;
     string kind;
     i64 created_at;
+    string target_kind;
 };
 
 dictionary SyncPlanDto {
@@ -1201,23 +1204,23 @@ interface WriterAppService {
     FullSyncResultDto perform_full_sync(SyncConfigDto config, boolean force_sync);
 
     [Throws=WriterError]
-    boolean resolve_conflict_keep_local(string project_id, string path);
+    boolean resolve_conflict_keep_local(string target_kind, string? project_id, string path);
 
     [Throws=WriterError]
-    boolean resolve_conflict_take_remote(string project_id, string path);
+    boolean resolve_conflict_take_remote(string target_kind, string? project_id, string path);
 
     [Throws=WriterError]
-    boolean resolve_conflict_mark_merged(string project_id, string path);
+    boolean resolve_conflict_mark_merged(string target_kind, string? project_id, string path);
 
     [Throws=WriterError]
-    sequence<SyncConflictDto> list_sync_conflicts(string project_id);
+    sequence<SyncConflictDto> list_sync_conflicts(string target_kind, string? project_id);
 
-    // 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。诊断包用。
+    // 列出所有 target 的所有冲突（聚合），只返回摘要条目，不含正文/快照。诊断包用。
     [Throws=WriterError]
     sequence<AllSyncConflictEntryDto> list_all_sync_conflicts();
 
     [Throws=WriterError]
-    SyncConflictPreviewDto load_sync_conflict_preview(string project_id, string path);
+    SyncConflictPreviewDto load_sync_conflict_preview(string target_kind, string? project_id, string path);
 
     // 「今天」的写作汇总。今天是哪一天由 Core 的本地日历口径决定，
     // 平台端不传日期字符串——端侧拼的本地日期一旦和 Core 时区口径不一致，

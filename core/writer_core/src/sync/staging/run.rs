@@ -822,8 +822,11 @@ impl Drop for StagingRun {
 /// 用户选择采用远端时再从已保存的 meta 快照连同 graph、成员对象和 index 一起写入。
 ///
 /// **issue #902 第十九轮复核**：
-/// - 问题2：Normal 分支不得在 graph 仍存在时单独删除 meta
-///   （index 登记的有效实体必须存在 meta）。
+/// - 问题2：Normal 分支先求出最终 meta 决策（MetaFinalAction），再统一检查
+///   graph 存在性不变量（graph 仍存在时最终 meta 必须存在），最后才写入
+///   CommitPlan。覆盖 KeepLocal/NoOp/Apply/Delete 全部分支，不再只给
+///   Delete(meta) 加局部检查，避免把"有 graph/index、没有 meta"的半张图
+///   当作 NoOp/KeepLocal。
 /// - 问题3：Normal 分支双方都改时复用现有 LWW resolver，
 ///   不再无条件 KeepLocal 丢失 LWW 语义。
 #[allow(
@@ -850,6 +853,85 @@ fn apply_meta_lifecycle_decision(
     >,
 ) -> Result<()> {
     use crate::sync::staging::starmap_merge::GraphLifecycleDecision;
+
+    // issue #902 第十九轮复核问题2：Normal 分支统一 meta 存在性防护。
+    // 先求出最终 meta 决策（MetaFinalAction），再统一检查 graph 存在性不变量，
+    // 最后才写入 CommitPlan。避免 m_incoming_eq_base(KeepLocal) 和
+    // m_local_eq_incoming(NoOp) 分支在 graph 仍存在时漏检 meta 缺失，
+    // 把"有 graph/index、没有 meta"的半张图当作 NoOp/KeepLocal。
+    enum MetaFinalAction {
+        Apply(Vec<u8>),
+        KeepLocal,
+        NoOp,
+        Delete,
+    }
+
+    // 将最终 meta 决策经 graph 存在性不变量检查后写入 CommitPlan。
+    //
+    // graph 仍存在时，最终 meta 必须存在（index 登记的有效实体必须存在 meta）：
+    // - Apply(content)：content 即将写入，meta 会存在，恒通过。
+    // - KeepLocal：保留本地 meta，要求 meta_local 存在。
+    // - NoOp：不写任何动作，要求 meta_local 与 meta_incoming 至少一个存在
+    //   （NoOp 出现路径上两者存在性一致，等价于 meta_local 存在）。
+    // - Delete：将删除 meta，graph 仍存在时禁止。
+    fn finalize_meta_action(
+        plan: &mut CommitPlan,
+        meta_rel: &Path,
+        action: MetaFinalAction,
+        graph_still_exists: bool,
+        meta_local: &Option<Vec<u8>>,
+        meta_incoming: &Option<Vec<u8>>,
+    ) -> Result<()> {
+        if graph_still_exists {
+            let missing_reason = match &action {
+                MetaFinalAction::Delete => Some("最终决策 Delete 将删除 meta"),
+                MetaFinalAction::KeepLocal => {
+                    if meta_local.is_none() {
+                        Some("最终决策 KeepLocal 但本地 meta 不存在")
+                    } else {
+                        None
+                    }
+                }
+                MetaFinalAction::NoOp => {
+                    if meta_local.is_none() && meta_incoming.is_none() {
+                        Some("最终决策 NoOp 但本地与远端 meta 均不存在")
+                    } else {
+                        None
+                    }
+                }
+                MetaFinalAction::Apply(_) => None,
+            };
+            if let Some(reason) = missing_reason {
+                return Err(crate::error::Error::Other(format!(
+                    "apply_meta_lifecycle_decision: graph 仍存在但 meta 缺失 ({})，{}；\
+                     index 登记的有效实体必须存在 meta",
+                    meta_rel.display(),
+                    reason
+                )));
+            }
+        }
+        match action {
+            MetaFinalAction::Apply(content) => {
+                plan.content_actions.push(CommitAction::Apply {
+                    rel_path: meta_rel.to_path_buf(),
+                    content,
+                });
+            }
+            MetaFinalAction::KeepLocal => {
+                plan.keep_local.push(meta_rel.to_path_buf());
+            }
+            MetaFinalAction::NoOp => {
+                plan.noop.push(meta_rel.to_path_buf());
+            }
+            MetaFinalAction::Delete => {
+                plan.content_actions.push(CommitAction::Delete {
+                    rel_path: meta_rel.to_path_buf(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     let graph_still_exists = graph_local_exists || graph_incoming_exists;
     match lifecycle_decision {
         // 整图删除 → meta 也删除
@@ -867,31 +949,17 @@ fn apply_meta_lifecycle_decision(
             let m_local_eq_base = opt_bytes_eq(meta_local, meta_base);
             let m_incoming_eq_base = opt_bytes_eq(meta_incoming, meta_base);
             let m_local_eq_incoming = opt_bytes_eq(meta_local, meta_incoming);
-            if m_incoming_eq_base {
-                plan.keep_local.push(meta_rel.to_path_buf());
+
+            let final_action = if m_incoming_eq_base {
+                MetaFinalAction::KeepLocal
             } else if m_local_eq_base {
                 if let Some(content) = meta_incoming.clone() {
-                    plan.content_actions.push(CommitAction::Apply {
-                        rel_path: meta_rel.to_path_buf(),
-                        content,
-                    });
+                    MetaFinalAction::Apply(content)
                 } else {
-                    // 要发 Delete(meta)，检查 graph 存在性
-                    // （issue #902 第十九轮复核问题2）。
-                    // graph 仍存在但 meta 将被删除会导致 index 指向不存在的 meta。
-                    if graph_still_exists {
-                        return Err(crate::error::Error::Other(format!(
-                            "apply_meta_lifecycle_decision: graph 仍存在但 meta 将被删除 ({})，\
-                             index 登记的有效实体必须存在 meta；远端缺 meta 而 graph 仍存在是不一致数据",
-                            meta_rel.display()
-                        )));
-                    }
-                    plan.content_actions.push(CommitAction::Delete {
-                        rel_path: meta_rel.to_path_buf(),
-                    });
+                    MetaFinalAction::Delete
                 }
             } else if m_local_eq_incoming {
-                plan.noop.push(meta_rel.to_path_buf());
+                MetaFinalAction::NoOp
             } else {
                 // 双方都改 → 复用现有 LWW resolver
                 // （issue #902 第十九轮复核问题3）。
@@ -907,17 +975,21 @@ fn apply_meta_lifecycle_decision(
                 );
                 let Some(local_rec) = local_rec else {
                     // 本地 delete 无 tombstone → 保留本地
-                    if meta_local.is_some() {
-                        plan.keep_local.push(meta_rel.to_path_buf());
+                    let early_action = if meta_local.is_some() {
+                        MetaFinalAction::KeepLocal
                     } else if let Some(content) = meta_incoming.clone() {
-                        plan.content_actions.push(CommitAction::Apply {
-                            rel_path: meta_rel.to_path_buf(),
-                            content,
-                        });
+                        MetaFinalAction::Apply(content)
                     } else {
-                        plan.noop.push(meta_rel.to_path_buf());
-                    }
-                    return Ok(());
+                        MetaFinalAction::NoOp
+                    };
+                    return finalize_meta_action(
+                        plan,
+                        meta_rel,
+                        early_action,
+                        graph_still_exists,
+                        meta_local,
+                        meta_incoming,
+                    );
                 };
                 let meta_rel_str = meta_rel.to_string_lossy().to_string();
                 let remote_rec = if let Some(manifest_rec) = staging_manifest.get(&meta_rel_str) {
@@ -935,44 +1007,30 @@ fn apply_meta_lifecycle_decision(
                 match resolve_lww(&local_rec, &remote_rec) {
                     LwwWinner::Remote => {
                         if let Some(content) = meta_incoming.clone() {
-                            plan.content_actions.push(CommitAction::Apply {
-                                rel_path: meta_rel.to_path_buf(),
-                                content,
-                            });
+                            MetaFinalAction::Apply(content)
                         } else {
-                            // 远端胜出且远端删除 meta
-                            if graph_still_exists {
-                                return Err(crate::error::Error::Other(format!(
-                                    "apply_meta_lifecycle_decision: LWW 远端胜出且远端删除 meta，但 graph 仍存在 ({})",
-                                    meta_rel.display()
-                                )));
-                            }
-                            plan.content_actions.push(CommitAction::Delete {
-                                rel_path: meta_rel.to_path_buf(),
-                            });
+                            MetaFinalAction::Delete
                         }
                     }
                     LwwWinner::Local => {
                         if meta_local.is_some() {
-                            plan.keep_local.push(meta_rel.to_path_buf());
+                            MetaFinalAction::KeepLocal
                         } else {
-                            // 本地删除 meta
-                            if graph_still_exists {
-                                // 本地删除 meta 但 graph 仍存在 → 不一致，但不阻止本地状态
-                                // 保持 NoOp，不删 meta
-                                plan.noop.push(meta_rel.to_path_buf());
-                            } else {
-                                plan.content_actions.push(CommitAction::Delete {
-                                    rel_path: meta_rel.to_path_buf(),
-                                });
-                            }
+                            MetaFinalAction::Delete
                         }
                     }
-                    LwwWinner::Tie => {
-                        plan.noop.push(meta_rel.to_path_buf());
-                    }
+                    LwwWinner::Tie => MetaFinalAction::NoOp,
                 }
-            }
+            };
+
+            return finalize_meta_action(
+                plan,
+                meta_rel,
+                final_action,
+                graph_still_exists,
+                meta_local,
+                meta_incoming,
+            );
         }
         // 整图冲突未决 → meta 也必须 NoOp/KeepLocal，
         // 和 graph、对象、index 维持同一未决状态。

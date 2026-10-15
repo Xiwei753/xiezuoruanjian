@@ -1006,15 +1006,23 @@ impl WriterCoreApi {
     }
 
     /// 冲突解决：保留本地版本。
-    pub fn resolve_conflict_keep_local(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下传 `None`。
+    pub fn resolve_conflict_keep_local(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+        path: &str,
+    ) -> ApiResult<bool> {
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
         // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
         // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
-        let project_root = self.projects_root.join(project_id);
-        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+        let lock_root = self.conflict_lock_root(target_kind, project_id)?;
+        crate::sync::state_lock::with_sync_state_lock(&lock_root, || {
             self.core_write()
-                .resolve_conflict_keep_local(project_id, path)
+                .resolve_conflict_keep_local(target_kind, project_id, path)
                 .map(|_| true)
                 .map_err(Into::into)
         })
@@ -1024,29 +1032,64 @@ impl WriterCoreApi {
     ///
     /// 返回 `applied_live` bool：`true` 表示已立即修改 live 正文（snapshot 替换/移入 trash），
     /// 平台层据此触发编辑器重载；`false` 表示仅排队 pending_take_remote（老数据兼容）。
-    pub fn resolve_conflict_take_remote(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下传 `None`。
+    ///
+    /// 星图冲突（`path` 以 `starmaps/` 开头）解决后 evict 对应 Store 缓存并失效
+    /// 路径依赖索引，避免内存中持有已过期的 Store / 索引（Issue #902 第十九轮问题1）。
+    pub fn resolve_conflict_take_remote(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+        path: &str,
+    ) -> ApiResult<bool> {
+        // 冲突事务开始前协调 dirty Store，避免脏 Store 覆盖冲突解决结果。
+        self.core_write().flush_all_starmap_stores()?;
+
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
         // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
         // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
-        let project_root = self.projects_root.join(project_id);
-        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+        let lock_root = self.conflict_lock_root(target_kind, project_id)?;
+        let applied = crate::sync::state_lock::with_sync_state_lock(&lock_root, || {
             self.core_write()
-                .resolve_conflict_take_remote(project_id, path)
-                .map_err(Into::into)
-        })
+                .resolve_conflict_take_remote(target_kind, project_id, path)
+                .map_err(crate::api::error::WriterError::from)
+        })?;
+
+        // 星图冲突解决后 evict Store + 失效路径依赖索引，与同步 commit 后
+        // `coordinate_stores_after_commit` 一致：commit 前已 flush dirty（上面已做），
+        // 此处只 evict 变化的星图 Store（移除缓存，下次访问从 live 磁盘重新加载
+        // 合并后的结果）并失效路径依赖索引。
+        if applied && is_starmap_conflict_path(path) {
+            if let Some(starmap_id) = extract_starmap_id_from_conflict_path(path) {
+                let core = self.core_write();
+                core.evict_starmap_store_after_commit(&starmap_id)?;
+                core.invalidate_path_dependency_index();
+            }
+        }
+        Ok(applied)
     }
 
     /// 冲突解决：标记为已合并。
-    pub fn resolve_conflict_mark_merged(&self, project_id: &str, path: &str) -> ApiResult<bool> {
-        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 project root 的
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下传 `None`。
+    pub fn resolve_conflict_mark_merged(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+        path: &str,
+    ) -> ApiResult<bool> {
+        // Issue #762 评论 5834136935：跨 WriterCoreApi 实例串行化同一 target root 的
         // state/conflict mutation。resolve 拿同一把 root lock，与 Commit 互斥：
         // resolve 先拿锁 → Commit 后读 live 时能看到已解决的状态；
         // Commit 先拿锁 → resolve 等 Commit 完成，再基于最终 live 状态解决。
-        let project_root = self.projects_root.join(project_id);
-        crate::sync::state_lock::with_sync_state_lock(&project_root, || {
+        let lock_root = self.conflict_lock_root(target_kind, project_id)?;
+        crate::sync::state_lock::with_sync_state_lock(&lock_root, || {
             self.core_write()
-                .resolve_conflict_mark_merged(project_id, path)
+                .resolve_conflict_mark_merged(target_kind, project_id, path)
                 .map(|_| true)
                 .map_err(Into::into)
         })
@@ -1055,14 +1098,18 @@ impl WriterCoreApi {
     /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
     ///
     /// 平台层只拿此 DTO，不直接读 `conflicts.json`，QML 更不能自己拼磁盘路径。
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下传 `None`。
     pub fn load_sync_conflict_preview(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
         path: &str,
     ) -> ApiResult<SyncConflictPreviewDto> {
         let preview = self
             .core_read()
-            .load_sync_conflict_preview(project_id, path)
+            .load_sync_conflict_preview(target_kind, project_id, path)
             .map_err(crate::api::error::WriterError::from)?;
         Ok(SyncConflictPreviewDto {
             path: preview.path,
@@ -1074,17 +1121,26 @@ impl WriterCoreApi {
         })
     }
 
-    /// 列出当前项目的所有冲突记录。
-    pub fn list_sync_conflicts(&self, project_id: &str) -> ApiResult<Vec<SyncConflictDto>> {
+    /// 列出指定 target 的所有冲突记录。
+    ///
+    /// `target_kind` 标识同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下传 `None`。
+    pub fn list_sync_conflicts(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+    ) -> ApiResult<Vec<SyncConflictDto>> {
         self.core_read()
-            .list_sync_conflicts(project_id)
+            .list_sync_conflicts(target_kind, project_id)
             .map(|conflicts| conflicts.into_iter().map(Into::into).collect())
             .map_err(Into::into)
     }
 
-    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
+    /// 列出所有 target 的所有冲突（聚合），只返回摘要条目，不含正文/快照。
     ///
-    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
+    /// 诊断包用（Issue #763）。覆盖 App target 和所有 Project target，
+    /// 单 target 读取失败不阻断全局聚合，跳过该 target 继续。
+    /// 每个条目带 `target_kind` 标识来源（Issue #902 第十九轮问题1）。
     pub fn list_all_sync_conflicts(&self) -> ApiResult<Vec<AllSyncConflictEntryDto>> {
         self.core_read()
             .list_all_sync_conflicts()
@@ -1149,6 +1205,36 @@ impl WriterCoreApi {
             message_args,
         })
     }
+
+    /// 根据 target kind 解析冲突操作的 state lock root。
+    ///
+    /// 与 facade `WriterCore::conflict_target_root` 一致：
+    /// - `"app"` → `app_data_root`（星图等应用级数据）；
+    /// - `"project"` → `projects_root/project_id`（作品正文，`project_id` 必填）。
+    ///
+    /// 锁根与 sync root 同路径，保证 resolve 与同 target 的 Commit 互斥
+    /// （Issue #762 评论 5834136935）。
+    fn conflict_lock_root(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+    ) -> ApiResult<std::path::PathBuf> {
+        match target_kind {
+            "app" => Ok(self.app_data_root.clone()),
+            "project" => {
+                let pid = project_id.ok_or_else(|| {
+                    crate::api::error::WriterError::Other(
+                        "conflict target 'project' requires project_id".into(),
+                    )
+                })?;
+                Ok(self.projects_root.join(pid))
+            }
+            _ => Err(crate::api::error::WriterError::Other(format!(
+                "unknown conflict target kind: {}",
+                target_kind
+            ))),
+        }
+    }
 }
 
 /// 从 workspace-relative 路径提取星图 ID。
@@ -1176,6 +1262,22 @@ fn extract_starmap_id_from_committed_path(path: &std::path::Path) -> Option<Stri
         return Some(rest[..slash_idx].to_string());
     }
     None
+}
+
+/// 冲突路径是否指向星图数据（`starmaps/` 前缀）。
+///
+/// `resolve_conflict_take_remote` 据此判断解决后是否需要 evict Store +
+/// 失效路径依赖索引（Issue #902 第十九轮问题1）。
+fn is_starmap_conflict_path(path: &str) -> bool {
+    path.starts_with("starmaps/")
+}
+
+/// 从冲突路径（workspace-relative 字符串）提取星图 ID。
+///
+/// 与 `extract_starmap_id_from_committed_path` 同语义，但接受 `&str` 而非 `&Path`，
+/// 供 `resolve_conflict_take_remote` 直接使用冲突 DTO 里的 `path` 字段。
+fn extract_starmap_id_from_conflict_path(path: &str) -> Option<String> {
+    extract_starmap_id_from_committed_path(std::path::Path::new(path))
 }
 
 #[cfg(test)]

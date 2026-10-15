@@ -429,7 +429,21 @@ pub struct SyncOperationStateDto {
     pub raw_error: Option<String>,
 }
 
+/// `AllSyncConflictEntryDto.target_kind` 的 serde 默认值函数。
+///
+/// 旧数据缺少 `targetKind` 字段时默认 `"project"`，保持向后兼容
+/// （历史诊断包/缓存里只有 Project target 冲突条目）。
+fn default_target_kind_project() -> String {
+    "project".to_string()
+}
+
 /// 全局冲突摘要条目 — 诊断包用，只保留路径语义和类型，不含正文/快照内容。
+///
+/// `target_kind` 标识冲突所属的同步 target：
+/// - `"project"`：作品 target，root = `projects_root/project_id`，
+///   `project_id` / `project_title` 为真实作品信息。
+/// - `"app"`：App target（星图等应用级数据），root = `app_data_root`，
+///   `project_id` / `project_title` 为空字符串（App target 不属于任何作品）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AllSyncConflictEntryDto {
@@ -439,6 +453,10 @@ pub struct AllSyncConflictEntryDto {
     /// `"both_changed"` / `"remote_deleted"`。
     pub kind: String,
     pub created_at: i64,
+    /// 同步 target 类型线格式（`"app"` / `"project"`）。
+    /// 旧数据缺少此字段时默认 `"project"`，保持向后兼容。
+    #[serde(default = "default_target_kind_project")]
+    pub target_kind: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

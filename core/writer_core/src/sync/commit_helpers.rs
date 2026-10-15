@@ -383,8 +383,8 @@ fn save_graph_conflict_snapshot(
 
     // issue #902 第十五轮复核：保存远端 index 身份事实（root/main），
     // 供 apply_starmap_graph_remote_modify 恢复 root_starmap_ids 和
-    // main_starmap_by_project。staging_root 中没有 index.json 时跳过
-    // （保持向后兼容）。
+    // main_starmap_by_project。issue #902 第十九轮复核问题3：staging_root
+    // 中没有 index.json 时返回错误（不再静默跳过）。
     save_starmap_identity_facts(live_root, staging_root, starmap_id, &snapshot_dir_rel)?;
 
     Ok(snapshot_dir_rel)
@@ -455,7 +455,11 @@ pub(crate) struct StarmapIdentityFacts {
 /// 从 staging_root 的 `starmaps/index.json` 提取指定星图的 root/main 身份事实，
 /// 写入快照目录下的 `index_facts.json`（issue #902 第十五轮复核）。
 ///
-/// staging_root 中没有 `starmaps/index.json` 时静默跳过（保持向后兼容）。
+/// issue #902 第十九轮复核问题3：staging_root 中没有 `starmaps/index.json` 时
+/// 返回 `Err`（不再静默跳过）。新生成的远端整图/meta-only 冲突快照要求 staging
+/// index.json 存在以提取身份事实，否则后续 `apply_starmap_*_remote_modify` 无法
+/// 恢复 root_starmap_ids 和 main_starmap_by_project，恢复的根星图会从一级入口
+/// 消失。
 fn save_starmap_identity_facts(
     live_root: &Path,
     staging_root: &Path,
@@ -464,7 +468,12 @@ fn save_starmap_identity_facts(
 ) -> crate::error::Result<()> {
     let staging_index_path = staging_root.join("starmaps").join("index.json");
     if !staging_index_path.exists() {
-        return Ok(());
+        return Err(crate::error::Error::Other(format!(
+            "save_starmap_identity_facts: 新生成的远端整图/meta-only 冲突快照要求 \
+             staging index.json 存在以提取身份事实 (starmap_id='{}', staging_root='{}')",
+            starmap_id,
+            staging_root.display()
+        )));
     }
     let index_bytes = std::fs::read(&staging_index_path)?;
     let idx: crate::starmap::StarMapIndexRecord =

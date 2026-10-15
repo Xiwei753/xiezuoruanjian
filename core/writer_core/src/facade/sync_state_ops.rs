@@ -9,7 +9,37 @@
 //!
 //! 这两层不混用：全量同步的总体状态不允许拿某个 target 的 per-target state 冒充。
 
+use std::path::PathBuf;
+
 impl super::WriterCore {
+    /// 根据 target kind 解析冲突操作的 sync root。
+    ///
+    /// 与 `sync/full_sync/plan.rs` 中 `SyncTarget` 的 `target_live_root` 一致：
+    /// - `"app"` → `app_data_root`（星图等应用级数据，`project_id` 不使用）；
+    /// - `"project"` → `projects_root/project_id`（作品正文，`project_id` 必填）。
+    ///
+    /// 统一入口避免冲突 API 把锁根 / sync root 硬编码到 `projects_root/project_id`，
+    /// 让 App target 的星图冲突也能从平台接口正常到达（Issue #902 第十九轮问题1）。
+    fn conflict_target_root(
+        &self,
+        target_kind: &str,
+        project_id: Option<&str>,
+    ) -> crate::error::Result<PathBuf> {
+        match target_kind {
+            "app" => Ok(self.app_data_root.clone()),
+            "project" => {
+                let pid = project_id.ok_or_else(|| {
+                    crate::Error::Other("conflict target 'project' requires project_id".into())
+                })?;
+                Ok(self.project_root(pid))
+            }
+            _ => Err(crate::Error::Other(format!(
+                "unknown conflict target kind: {}",
+                target_kind
+            ))),
+        }
+    }
+
     pub fn scan_sync_files(
         &self,
         project_id: &str,
@@ -56,57 +86,113 @@ impl super::WriterCore {
         )
     }
 
+    /// 冲突解决：保留本地版本。
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下不使用。
     pub fn resolve_conflict_keep_local(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
         path: &str,
     ) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_keep_local(&self.project_root(project_id), path)
+        let root = self.conflict_target_root(target_kind, project_id)?;
+        crate::sync::SyncService::resolve_conflict_keep_local(&root, path)
     }
 
+    /// 冲突解决：采用远端版本。
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下不使用。
     pub fn resolve_conflict_take_remote(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
         path: &str,
     ) -> crate::error::Result<bool> {
-        crate::sync::SyncService::resolve_conflict_take_remote(&self.project_root(project_id), path)
+        let root = self.conflict_target_root(target_kind, project_id)?;
+        crate::sync::SyncService::resolve_conflict_take_remote(&root, path)
     }
 
+    /// 冲突解决：标记为已合并。
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下不使用。
     pub fn resolve_conflict_mark_merged(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
         path: &str,
     ) -> crate::error::Result<()> {
-        crate::sync::SyncService::resolve_conflict_mark_merged(&self.project_root(project_id), path)
+        let root = self.conflict_target_root(target_kind, project_id)?;
+        crate::sync::SyncService::resolve_conflict_mark_merged(&root, path)
     }
 
     /// 加载冲突预览 — 返回本地/远端内容供平台层展示。
+    ///
+    /// `target_kind` 标识冲突所属的同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下不使用。
     pub fn load_sync_conflict_preview(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
         path: &str,
     ) -> crate::error::Result<crate::sync::types::SyncConflictPreview> {
-        crate::sync::SyncService::load_conflict_preview(&self.project_root(project_id), path)
+        let root = self.conflict_target_root(target_kind, project_id)?;
+        crate::sync::SyncService::load_conflict_preview(&root, path)
     }
 
-    /// 列出当前项目的所有冲突记录。
+    /// 列出指定 target 的所有冲突记录。
+    ///
+    /// `target_kind` 标识同步 target（`"app"` / `"project"`），
+    /// `project_id` 在 `"project"` target 下必填，`"app"` target 下不使用。
     pub fn list_sync_conflicts(
         &self,
-        project_id: &str,
+        target_kind: &str,
+        project_id: Option<&str>,
     ) -> crate::error::Result<Vec<crate::sync::SyncConflict>> {
-        crate::sync::SyncService::list_conflicts(&self.project_root(project_id))
+        let root = self.conflict_target_root(target_kind, project_id)?;
+        crate::sync::SyncService::list_conflicts(&root)
     }
 
-    /// 列出所有项目的所有冲突（聚合），只返回摘要条目，不含正文/快照。
+    /// 列出所有 target 的所有冲突（聚合），只返回摘要条目，不含正文/快照。
     ///
-    /// 诊断包用（Issue #763）。单项目读取失败不阻断全局聚合，跳过该项目继续。
+    /// 诊断包用（Issue #763）。覆盖 App target（星图等应用级数据）和所有 Project
+    /// target，单 target 读取失败不阻断全局聚合，跳过该 target 继续。
+    /// 每个条目带 `target_kind` 标识来源（`"app"` / `"project"`），平台层据此
+    /// 路由到对应 target 的冲突解决接口（Issue #902 第十九轮问题1）。
     pub fn list_all_sync_conflicts(
         &self,
     ) -> crate::error::Result<Vec<crate::api::AllSyncConflictEntryDto>> {
-        let projects = self.list_projects()?;
         let mut entries = Vec::new();
+
+        // App target（星图等应用级数据）。读取失败不阻断全局聚合。
+        match crate::sync::SyncService::list_conflicts(&self.app_data_root) {
+            Ok(conflicts) => {
+                for c in conflicts {
+                    let kind = match c.kind {
+                        crate::sync::types::SyncConflictKind::BothChanged => "both_changed",
+                        crate::sync::types::SyncConflictKind::RemoteDeleted => "remote_deleted",
+                    };
+                    entries.push(crate::api::AllSyncConflictEntryDto {
+                        project_id: String::new(),
+                        project_title: String::new(),
+                        path: c.local_path,
+                        kind: kind.to_string(),
+                        created_at: c.created_at,
+                        target_kind: "app".to_string(),
+                    });
+                }
+            }
+            Err(e) => {
+                log::warn!("list_all_sync_conflicts: skip app target — {e}");
+            }
+        }
+
+        // Project targets。
+        let projects = self.list_projects()?;
         for project in &projects {
-            let conflicts = match self.list_sync_conflicts(&project.id) {
+            let conflicts = match self.list_sync_conflicts("project", Some(&project.id)) {
                 Ok(c) => c,
                 Err(e) => {
                     // 单项目失败不阻断全局聚合，记录警告后继续下一项目。
@@ -129,6 +215,7 @@ impl super::WriterCore {
                     path: c.local_path,
                     kind: kind.to_string(),
                     created_at: c.created_at,
+                    target_kind: "project".to_string(),
                 });
             }
         }

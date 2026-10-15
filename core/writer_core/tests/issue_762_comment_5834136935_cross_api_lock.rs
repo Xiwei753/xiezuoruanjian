@@ -352,12 +352,12 @@ fn setup_round() -> RoundSetup {
 
 /// UI 线程循环体：检查冲突 A，有就 resolve。返回 true 表示执行了一次 resolve。
 fn ui_try_resolve(api_ui: &WriterCoreApi, keep_local: bool) -> bool {
-    let conflicts = api_ui.list_sync_conflicts("p1").unwrap();
+    let conflicts = api_ui.list_sync_conflicts("project", Some("p1")).unwrap();
     if conflicts.iter().any(|c| c.local_path == CONFLICT_A) {
         if keep_local {
-            let _ = api_ui.resolve_conflict_keep_local("p1", CONFLICT_A);
+            let _ = api_ui.resolve_conflict_keep_local("project", Some("p1"), CONFLICT_A);
         } else {
-            let _ = api_ui.resolve_conflict_take_remote("p1", CONFLICT_A);
+            let _ = api_ui.resolve_conflict_take_remote("project", Some("p1"), CONFLICT_A);
         }
         return true;
     }
@@ -435,7 +435,7 @@ fn cross_api_lock_commit_vs_resolve_keep_local() {
         let (api_ui, p1_root, _tmp) = run_concurrency_round(true);
 
         // 断言 1：A 已解决（没被 Commit 复活）。
-        let conflicts = api_ui.list_sync_conflicts("p1").unwrap();
+        let conflicts = api_ui.list_sync_conflicts("project", Some("p1")).unwrap();
         assert!(
             conflicts.iter().all(|c| c.local_path != CONFLICT_A),
             "round {round}: keep_local — 已解决的冲突 A 不应被 Commit 复活\
@@ -467,7 +467,7 @@ fn cross_api_lock_commit_vs_resolve_take_remote() {
         let (api_ui, p1_root, _tmp) = run_concurrency_round(false);
 
         // 断言 1：A 已解决（没被 Commit 复活）。
-        let conflicts = api_ui.list_sync_conflicts("p1").unwrap();
+        let conflicts = api_ui.list_sync_conflicts("project", Some("p1")).unwrap();
         assert!(
             conflicts.iter().all(|c| c.local_path != CONFLICT_A),
             "round {round}: take_remote — 已解决的冲突 A 不应被 Commit 复活\
