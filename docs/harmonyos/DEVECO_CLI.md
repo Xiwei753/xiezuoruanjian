@@ -193,14 +193,20 @@ hvigorw --mode module -p module=entry@default -p product=default -p buildMode=de
 `entry/src/main/module.json5` 也不声明 `ohos.permission.DLP_GET_HIDE_STATUS`。
 因此普通包不携带该受限权限，也无需手改任何 `module.json5` 或临时删权限。
 
-需要防窥的受限包改用 `entry@acl`（必须搭配带 `DLP_GET_HIDE_STATUS` ACL 的签名
-Profile，不能共用普通签名）：
+需要防窥的受限包改用 `product=acl`（必须搭配带 `DLP_GET_HIDE_STATUS` ACL 的签名
+Profile，不能共用普通签名）。`product=acl` 的完整 APP 应包含 `entry@acl` HAP 与
+`privacy_acl@default` HSP；仅执行 `entry@acl assembleHap` 只得到 HAP 模块产物，
+不能把它当成完整受限包进行交付：
 
 ```bash
 cd apps/harmony
-hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug \
-        assembleHap --no-daemon
+hvigorw --mode project -p product=acl -p buildMode=debug \
+        assembleApp --no-daemon
 ```
+
+> 若只需单独构建 `entry@acl` HAP（不含独立 HSP 产物），可执行
+> `hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap --no-daemon`，
+> 但这不是完整的受限包交付命令。
 
 ### 装机与验证
 
