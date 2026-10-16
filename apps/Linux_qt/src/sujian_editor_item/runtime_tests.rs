@@ -12,6 +12,24 @@ use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
 use std::time::{Duration, Instant};
 
+// Issue #919 复核：每个 cpp! 块独立编译，本文件自查缓存的 QImage 内容时
+// 需要在本文件内 include 头文件。
+cpp! {{
+    #include <QtGui/QImage>
+}}
+
+/// Issue #919 复核：`LineTextureStore::contains()` 本质是 `HashMap::contains_key`，
+/// 只证明缓存里有这个 id 的条目，并不证明存进去的是含像素的行图。此前
+/// `real_edit_prepares_ready_source_textures_for_animation_layer` 只按缓存键判断
+/// "源纹理已就绪"，等于把"已建立 TextMotion 结构"当成"已经有动画"。本辅助直接读
+/// 缓存里的 `QImage`，检查其非 null 且宽高为正，关闭这条假阳性边界。
+fn line_image_has_pixels(image: &qmetaobject::QImage) -> bool {
+    let ptr = image as *const qmetaobject::QImage;
+    cpp!(unsafe [ptr as "const QImage*"] -> bool as "bool" {
+        return ptr != nullptr && !ptr->isNull() && ptr->width() > 0 && ptr->height() > 0;
+    })
+}
+
 fn default_layout_params() -> LayoutParams {
     LayoutParams {
         width: 400.0,
@@ -905,6 +923,17 @@ fn real_edit_prepares_ready_source_textures_for_animation_layer() {
                 plan.has_animation_resources(cache),
                 "{label}: has_animation_resources 必须为真，否则 QSG 动画层不会提交"
             );
+            // `has_animation_resources` 只按键存在判断；这里进一步确认每个必需源
+            // 纹理确实是含像素的行图，而不是空 QImage 撑起的假"已就绪"。
+            for id in &plan.required_textures {
+                let image = cache
+                    .get_line(id)
+                    .unwrap_or_else(|| panic!("{label}: 源纹理 {id:?} 必须在缓存中"));
+                assert!(
+                    line_image_has_pixels(image),
+                    "{label}: 源纹理 {id:?} 必须是含像素的行图，不能是空 QImage"
+                );
+            }
             assert!(
                 frame
                     .overlays
@@ -924,5 +953,60 @@ fn real_edit_prepares_ready_source_textures_for_animation_layer() {
         assert_committable(&item, "删除");
 
         println!("[BEHAVIOR_VERIFY] #919 真实编辑的动画源纹理就绪、覆盖层可提交 QSG 动画层 ok");
+    });
+}
+
+/// Issue #919 复核：`has_animation_resources` / `missing_textures` 是"静态孔洞与
+/// 动画层同帧原子提交"的 Rust 侧闸门 —— 缺任一源纹理时必须整体不接管，静态层画
+/// 完整 canonical，绝不允许"静态挖了空但动画没画"。上一轮只在真实编辑的正向路径
+/// 断言了闸门为真，这里补上反向路径：空缓存/只补一侧时闸门必须为假且逐一列出缺失的
+/// `LineSnapshotId`，两侧补齐后才为真。
+#[test]
+fn missing_source_texture_keeps_animation_plan_not_ready() {
+    use super::render_plan::LocalTextPlan;
+    use super::snapshot_id::LineSnapshotId;
+    use super::texture_cache::TextureCache;
+
+    let id_old = LineSnapshotId::new(7, 1, 0);
+    let id_new = LineSnapshotId::new(8, 1, 0);
+    let plan = LocalTextPlan {
+        required_textures: vec![id_old, id_new],
+        ..LocalTextPlan::default()
+    };
+
+    let one_pixel = || {
+        qmetaobject::QImage::new(
+            qmetaobject::QSize {
+                width: 1,
+                height: 1,
+            },
+            qmetaobject::ImageFormat::ARGB32_Premultiplied,
+        )
+    };
+
+    run_on_qt_thread(move || {
+        let mut cache = TextureCache::new();
+
+        // 空缓存：缺任一张源纹理时整体不接管，并逐一列出缺失 id。
+        assert!(
+            !plan.has_animation_resources(&cache),
+            "缺源纹理时不得判定为可接管"
+        );
+        assert_eq!(plan.missing_textures(&cache), vec![id_old, id_new]);
+
+        // 只补旧侧：仍缺新侧，闸门保持关闭。
+        cache.insert_line(id_old, one_pixel());
+        assert!(
+            !plan.has_animation_resources(&cache),
+            "只补一侧仍不得判定为可接管"
+        );
+        assert_eq!(plan.missing_textures(&cache), vec![id_new]);
+
+        // 两侧补齐后才允许同帧提交静态孔洞与动画层。
+        cache.insert_line(id_new, one_pixel());
+        assert!(plan.has_animation_resources(&cache));
+        assert!(plan.missing_textures(&cache).is_empty());
+
+        println!("[BEHAVIOR_VERIFY] #919 缺源纹理时动画计划保持不接管并列出缺失 id ok");
     });
 }
