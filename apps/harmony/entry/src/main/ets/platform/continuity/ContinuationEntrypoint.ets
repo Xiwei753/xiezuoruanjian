@@ -20,7 +20,8 @@ export class ContinuationEntrypoint {
 
   // 源设备触发接续时调用。从 AppContinuationService 取 payload 写入 wantParam。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false：禁用自动页面栈迁移，
-  // Navigation 页面栈不能跨设备自动迁移，由 AppNavigation.restoreFromContinuation 手动重建。
+  // Navigation 页面栈不能跨设备自动迁移；由 NavigationTransactionCoordinator
+  // 接收接续 payload，再交给 AppNavigation.applyContinuation 手动重建。
   // 用官方 wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY 常量，不自己写字符串字面量。
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
     hilog.info(0x0000, 'ContinuationEntrypoint', 'onContinue')
