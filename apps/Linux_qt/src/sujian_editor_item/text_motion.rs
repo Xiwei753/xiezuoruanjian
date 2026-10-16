@@ -498,11 +498,21 @@ impl TextMotion {
                             });
                         }
                     } else {
-                        claimed_conceal_sources.push(old_span.slice.source);
+                        // Issue #919 复核 7：Shift 中途被替换（shaping 变化）时，
+                        // 退场位置取上一帧真正显示的 VisualSlice（last.slice，含
+                        // 当时实际位置和源纹理），start_clip = last.mask_clip（上一
+                        // 帧实际遮罩），而不是 old_span.slice.rect（上一笔编辑已
+                        // 排版完成的 canonical 目标位置）。正在 Shift 的字当前画在
+                        // last.slice.rect / last.mask_clip 的中途位置，从该位置以
+                        // 本次编辑遮罩方向生成旧图 Conceal，避免从 canonical 目标
+                        // 位置突然开始退场而向目标方向闪一下。旧图 SnapshotRef 已
+                        // 存在于 last，登记到 claimed_conceal_sources 保证第二遍
+                        // 不重复退场；新字仍从 new_span.slice 做 Reveal。
+                        claimed_conceal_sources.push(last.slice.source);
                         slices.push(SliceMotion::Conceal {
-                            old: old_span.slice,
+                            old: last.slice,
                             direction,
-                            start_clip: old_span.slice.rect,
+                            start_clip: last.mask_clip,
                             byte_range: old_span.byte_range,
                             shaping_identity: old_span.shaping_identity.clone(),
                         });
