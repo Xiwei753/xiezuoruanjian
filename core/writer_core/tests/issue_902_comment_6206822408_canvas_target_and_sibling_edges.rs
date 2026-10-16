@@ -12,9 +12,9 @@
 //!    B。宿主是 A；`to.segments` 记录 `eB`。反查时依赖 `CanvasEndpoint` 事实，从子画布
 //!    的 canvas / Starmap target 都能命中；按 `Node(b1)` 反查则不应命中（终点身份不同）。
 //!    删除这条跨画布边后，反向依赖索引必须同步失效，子画布不再反查到它。
-//! 2. **兄弟画布直连** `b→c`：宿主是最长公共前缀对应的 A，`from/to.segments` 分别是
-//!    各自的 Embed 实例；B、C 画布都只看到与自己这一端相关的那一次连线；根画布 A 因为
-//!    两端都不落在此层而不显示；按对端对象反查不会串用另一条进入路径。
+//! 2. **兄弟画布直连** `b→c`：宿主是最长公共前缀对应的 A，`from/to.segments`
+//!    分别是各自的 Embed 实例；B、C 画布均能反查同一条宿主 A 的边，A 的
+//!    canvas 查询按约定包含本图全部 Edge；按目标对象查询仍按实例路径精确过滤。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
