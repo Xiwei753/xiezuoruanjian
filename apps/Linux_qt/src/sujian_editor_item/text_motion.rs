@@ -2981,4 +2981,141 @@ mod tests {
         motion.caret_to = None;
         assert_eq!(motion.sample(0.0).caret_sample, Some((3.0, 4.0)));
     }
+
+    #[test]
+    fn wrapped_unchanged_text_shifts_per_visual_line_without_merging_textures() {
+        // Issue #919：议题第一条评论要求「patch 外仍存在的连续文本……按行的视觉片段
+        // 分组为 Shift，分组可以跨行拆开，不得跨不连续旧/新行硬拼同一纹理」。本用例
+        // 构造同段「甲乙丙丁」在旧布局折成两行，段首插入「戊己」后折行点改变：「甲」
+        // 留在新首行末尾，而「乙」从旧首行折到新次行行首。
+        //
+        // 断言的正是 `layout_spans` 的跨行分组：未改的每个字各成一条 Shift，「乙」
+        // 的 from 用旧首行几何、to 与新画面纹理用新次行，两条折行的 new 版纹理都被
+        // 分别引用，不会被当成一张跨行的同一纹理。
+        const PARA: u64 = 5;
+        let line = |ordinal: u32, byte_start: usize, clusters, top: f64| {
+            let mut l = test_line(ordinal, byte_start, clusters, top);
+            l.stable_paragraph_id = PARA;
+            l
+        };
+
+        // 旧：一段「甲乙丙丁」折两行——首行「甲乙」、次行「丙丁」。
+        let old_layout = snapshot(vec![
+            line(
+                0,
+                0,
+                vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+                0.0,
+            ),
+            line(
+                1,
+                6,
+                vec![cluster(6, 9, 0.0, 20.0), cluster(9, 12, 20.0, 20.0)],
+                20.0,
+            ),
+        ]);
+        // 新：段首插入「戊己」——首行「戊己甲」、次行「乙丙丁」，折行点改变。
+        let new_layout = snapshot(vec![
+            line(
+                0,
+                0,
+                vec![
+                    cluster(0, 3, 0.0, 20.0),
+                    cluster(3, 6, 20.0, 20.0),
+                    cluster(6, 9, 40.0, 20.0),
+                ],
+                0.0,
+            ),
+            line(
+                1,
+                9,
+                vec![
+                    cluster(9, 12, 0.0, 20.0),
+                    cluster(12, 15, 20.0, 20.0),
+                    cluster(15, 18, 40.0, 20.0),
+                ],
+                20.0,
+            ),
+        ]);
+
+        let old_line0_id = old_layout.line_snapshots[0].id;
+        let old_line1_id = old_layout.line_snapshots[1].id;
+        let new_line0_id = new_layout.line_snapshots[0].id;
+        let new_line1_id = new_layout.line_snapshots[1].id;
+        assert!(!old_line0_id.is_none() && !old_line1_id.is_none());
+        assert!(!new_line0_id.is_none() && !new_line1_id.is_none());
+        assert_ne!(old_line0_id, old_line1_id);
+        assert_ne!(new_line0_id, new_line1_id);
+
+        // 段首插入「戊己」：旧 0..0 → 新 0..6。
+        let edit = make_edit("甲乙丙丁", "戊己甲乙丙丁", 0, 6, (0, 0), (0, 6), "戊己");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 1);
+
+        let shifts: Vec<&SliceMotion> = motion
+            .slices
+            .iter()
+            .filter(|s| s.motion_kind() == MotionKind::Shift)
+            .collect();
+        // 未改的甲/乙/丙/丁各一条，共 4 条，不把跨行连续范围拼成一条。
+        assert_eq!(
+            shifts.len(),
+            4,
+            "未改四字应各成一条按视觉行分组的 Shift: {:?}",
+            motion.slices
+        );
+
+        // 新首行与新次行两张纹理都被移位片段分别引用，证明没有跨行硬拼同一纹理。
+        let mut shift_source_ids: Vec<LineSnapshotId> = Vec::new();
+        for s in &shifts {
+            let id = s.source_snapshot_id();
+            if !shift_source_ids.contains(&id) {
+                shift_source_ids.push(id);
+            }
+        }
+        assert_eq!(
+            shift_source_ids.len(),
+            2,
+            "移位片段必须分别引用两行的 new 版纹理，实际 {shift_source_ids:?}"
+        );
+        assert!(shift_source_ids.contains(&new_line0_id));
+        assert!(shift_source_ids.contains(&new_line1_id));
+        // 旧行纹理绝不能被当作新画面来源（不能拿旧图冒充新字）。
+        assert!(shifts
+            .iter()
+            .all(|s| s.source_snapshot_id() != old_line0_id
+                && s.source_snapshot_id() != old_line1_id));
+
+        // 「甲」留在新首行：旧首行 x=0 → 新首行 x=40，纹理取自新首行。
+        match shifts
+            .iter()
+            .find(|s| s.byte_range() == (6, 9))
+            .copied()
+            .expect("甲 Shift")
+        {
+            SliceMotion::Shift { new, from, to, .. } => {
+                assert_eq!(new.source.snapshot_id, new_line0_id);
+                assert_eq!((from.x, from.y), (0.0, 0.0));
+                assert_eq!((to.x, to.y), (40.0, 0.0));
+            }
+            other => panic!("甲应为 Shift: {other:?}"),
+        }
+
+        // 「乙」跨行：from 用旧首行几何，to 与新画面纹理用新次行。
+        match shifts
+            .iter()
+            .find(|s| s.byte_range() == (9, 12))
+            .copied()
+            .expect("乙 Shift")
+        {
+            SliceMotion::Shift { new, from, to, .. } => {
+                assert_eq!((from.x, from.y), (20.0, 0.0), "乙的旧画面在旧首行");
+                assert_eq!(
+                    new.source.snapshot_id, new_line1_id,
+                    "乙的新画面必须取自新次行纹理"
+                );
+                assert_eq!((to.x, to.y), (0.0, 20.0), "乙移入新次行行首");
+            }
+            other => panic!("乙应为 Shift: {other:?}"),
+        }
+    }
 }
