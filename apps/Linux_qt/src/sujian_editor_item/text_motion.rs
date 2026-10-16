@@ -1248,3 +1248,212 @@ fn rect_approx_eq(a: &LocalRect, b: &LocalRect) -> bool {
         && (a.w - b.w).abs() < EPS
         && (a.h - b.h).abs() < EPS
 }
+
+#[cfg(test)]
+mod tests {
+    //! Issue #919：把局部文字动画的核心不变量固化成回归测试。
+    //!
+    //! 这些测试只验证 `mask_rect` / `conceal_clip` / `SliceMotion::sample` 的
+    //! 几何语义，不构造 Qt 运行时。它们对应历次复核修正的实际显示错误：
+    //! 连续编辑从当前可见画面接续、遮罩按原始 clip 边界收拢、Shift 只位移不缩放。
+
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> LocalRect {
+        LocalRect { x, y, w, h }
+    }
+
+    fn snap_ref(paragraph_id: u64, uv: LocalRect) -> SnapshotRef {
+        SnapshotRef {
+            snapshot_id: LineSnapshotId::new(1, paragraph_id, 0),
+            source_uv: uv,
+        }
+    }
+
+    fn identity() -> ShapingIdentity {
+        ShapingIdentity::default()
+    }
+
+    fn make_motion(slices: Vec<SliceMotion>) -> TextMotion {
+        TextMotion {
+            slices,
+            started_ms: 0.0,
+            duration_ms: 100,
+            session: 1,
+            target_revision: 2,
+            viewport: rect(0.0, 0.0, 1000.0, 1000.0),
+            static_exclusions: Vec::new(),
+            required_textures: Vec::new(),
+            caret_from: None,
+            caret_to: None,
+            paragraph_moves: Vec::new(),
+        }
+    }
+
+    fn visual(paragraph_id: u64, uv: LocalRect, rect: LocalRect) -> VisualSlice {
+        VisualSlice {
+            source: snap_ref(paragraph_id, uv),
+            rect,
+        }
+    }
+
+    #[test]
+    fn mask_rect_uses_direction_edge() {
+        let at = rect(0.0, 5.0, 20.0, 10.0);
+        assert_eq!(
+            mask_rect(&at, ClipDirection::LeftToRight, 8.0),
+            rect(0.0, 5.0, 8.0, 10.0)
+        );
+        assert_eq!(
+            mask_rect(&at, ClipDirection::RightToLeft, 8.0),
+            rect(12.0, 5.0, 8.0, 10.0)
+        );
+        assert_eq!(
+            mask_rect(&at, ClipDirection::LeftToRight, 999.0),
+            rect(0.0, 5.0, 20.0, 10.0)
+        );
+        assert_eq!(
+            mask_rect(&at, ClipDirection::LeftToRight, -3.0),
+            rect(0.0, 5.0, 0.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn conceal_clip_converges_from_start_clip_boundary() {
+        let start = rect(10.0, 2.0, 8.0, 10.0);
+        assert_eq!(conceal_clip(&start, ClipDirection::LeftToRight, 8.0), start);
+        assert_eq!(
+            conceal_clip(&start, ClipDirection::LeftToRight, 3.0),
+            rect(10.0, 2.0, 3.0, 10.0)
+        );
+        assert_eq!(
+            conceal_clip(&start, ClipDirection::LeftToRight, 0.0),
+            rect(10.0, 2.0, 0.0, 10.0)
+        );
+        // RightToLeft 固定右边界 (x+w=18)，向左收拢。
+        assert_eq!(
+            conceal_clip(&start, ClipDirection::RightToLeft, 3.0),
+            rect(15.0, 2.0, 3.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn conceal_sample_continues_from_start_clip_not_old_rect() {
+        let old = visual(3, rect(0.0, 0.0, 10.0, 10.0), rect(100.0, 0.0, 10.0, 10.0));
+        let start_clip = rect(50.0, 0.0, 10.0, 10.0);
+        let motion = make_motion(vec![SliceMotion::Conceal {
+            old,
+            direction: ClipDirection::LeftToRight,
+            start_clip,
+            byte_range: (0, 3),
+            shaping_identity: identity(),
+        }]);
+
+        let first = motion.sample(0.0);
+        let overlay = first.overlays.first().expect("conceal overlay");
+        // 遮罩起点取自 start_clip，而不是 old.rect（否则会从 x=100 重新造遮罩）。
+        assert_eq!(overlay.clip_rect.x, 50.0);
+        assert_eq!(overlay.clip_rect.w, 10.0);
+        assert_eq!(overlay.x, 100.0);
+
+        let mid = motion.sample(50.0);
+        let overlay = mid.overlays.first().expect("conceal overlay");
+        assert!(overlay.clip_rect.w < 10.0);
+        // LeftToRight 左边缘固定，只从右向左吞。
+        assert_eq!(overlay.clip_rect.x, 50.0);
+    }
+
+    #[test]
+    fn reveal_sample_moves_from_start_clip_and_fixes_size() {
+        let new = visual(9, rect(0.0, 0.0, 20.0, 10.0), rect(40.0, 0.0, 20.0, 10.0));
+        let start_clip = rect(0.0, 0.0, 5.0, 10.0);
+        let motion = make_motion(vec![SliceMotion::Reveal {
+            new,
+            direction: ClipDirection::LeftToRight,
+            start_clip,
+            byte_range: (0, 3),
+            shaping_identity: identity(),
+        }]);
+
+        let first = motion.sample(0.0);
+        let overlay = first.overlays.first().expect("reveal overlay");
+        // 从上一帧已提交位置起步，不从 new.rect 直接开始。
+        assert_eq!(overlay.x, 0.0);
+        assert_eq!((overlay.w, overlay.h), (20.0, 10.0));
+        assert_eq!(overlay.clip_rect.w, 5.0);
+
+        let mid = motion.sample(50.0);
+        let overlay = mid.overlays.first().expect("reveal overlay");
+        assert!(overlay.x > 0.0 && overlay.x < 40.0);
+        assert_eq!((overlay.w, overlay.h), (20.0, 10.0));
+        assert!(overlay.clip_rect.w > 5.0 && overlay.clip_rect.w <= 20.0);
+    }
+
+    #[test]
+    fn shift_sample_keeps_new_size_and_only_moves() {
+        let from = rect(100.0, 0.0, 5.0, 12.0);
+        let to = rect(140.0, 3.0, 30.0, 20.0);
+        let new = visual(7, rect(0.0, 0.0, 30.0, 20.0), to);
+        let motion = make_motion(vec![SliceMotion::Shift {
+            new,
+            from,
+            to,
+            byte_range: (0, 3),
+            shaping_identity: identity(),
+        }]);
+
+        let first = motion.sample(0.0);
+        let overlay = first.overlays.first().expect("shift overlay");
+        assert_eq!((overlay.x, overlay.y), (from.x, from.y));
+        // 宽高固定为 new 版目标尺寸，绝不用 from/to 插值缩放字形。
+        assert_eq!((overlay.w, overlay.h), (to.w, to.h));
+
+        let mid = motion.sample(50.0);
+        let overlay = mid.overlays.first().expect("shift overlay");
+        assert_eq!((overlay.w, overlay.h), (to.w, to.h));
+        assert!(overlay.x > from.x && overlay.x < to.x);
+        assert!(overlay.y > from.y && overlay.y < to.y);
+    }
+
+    #[test]
+    fn paragraph_move_offset_is_zero_at_end() {
+        let pm = ParagraphMove {
+            paragraph_id: 3,
+            from_y: 20.0,
+            to_y: 0.0,
+        };
+        assert!((pm.offset_at(0.0) - 20.0).abs() < 1e-9);
+        assert!(pm.offset_at(1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn source_snapshot_ids_are_deduplicated() {
+        let shared = LineSnapshotId::new(1, 1, 0);
+        let slice = |uv: LocalRect| {
+            VisualSlice {
+                source: SnapshotRef {
+                    snapshot_id: shared,
+                    source_uv: uv,
+                },
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+            }
+        };
+        let motion = make_motion(vec![
+            SliceMotion::Reveal {
+                new: slice(rect(0.0, 0.0, 10.0, 10.0)),
+                direction: ClipDirection::LeftToRight,
+                start_clip: rect(0.0, 0.0, 0.0, 10.0),
+                byte_range: (0, 1),
+                shaping_identity: identity(),
+            },
+            SliceMotion::Conceal {
+                old: slice(rect(10.0, 0.0, 10.0, 10.0)),
+                direction: ClipDirection::LeftToRight,
+                start_clip: rect(0.0, 0.0, 10.0, 10.0),
+                byte_range: (1, 2),
+                shaping_identity: identity(),
+            },
+        ]);
+        assert_eq!(motion.source_snapshot_ids(), vec![shared]);
+    }
+}
