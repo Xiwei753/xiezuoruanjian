@@ -855,3 +855,74 @@ fn real_edit_builds_non_empty_motion_and_caret_follows_it() {
         println!("[BEHAVIOR_VERIFY] #919 真实编辑构造非空字形动画且协同光标跟随同一采样 ok");
     });
 }
+
+/// Issue #919 复核：真实编辑必须把本帧接管所需的**源行纹理**准备好放进
+/// `texture_cache` —— 这是 Rust 侧在向 QSG 提交动画层之前的最后一步。
+///
+/// 上一轮 `real_edit_builds_non_empty_motion_and_caret_follows_it` 只断言
+/// `required_textures` 引用的是非哨兵行 id，并未验证这些纹理真的已在缓存中就绪。
+/// `scene_graph_renderer::render_frame` 的提交前提是
+/// `LocalTextPlan::has_animation_resources == true`：缺任一张源纹理时
+/// `prepare_text_animation_layer` 会 `continue` 掉缺纹理的 glyph，静态层画完整
+/// canonical、动画层一帧也提交不出去。本用例走真实 insert/delete 路径，确认编辑
+/// 结束后计划引用的旧/新源行纹理都已就绪，且中间帧确实存在具备可见面积的覆盖层。
+///
+/// 边界说明：仍在 Qt 布局/runtime 层验证"真实编辑 → 资源就绪 → 可提交动画层"，
+/// 不真正把 QSG 场景图提交到渲染线程（那需要活的 QQuickWindow 与渲染线程帧）。
+#[test]
+fn real_edit_prepares_ready_source_textures_for_animation_layer() {
+    run_on_qt_thread(|| {
+        use super::render_plan::LocalTextPlan;
+
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
+        item.click_at(1000.0, 0.0, false);
+
+        // 检查当前计划在其采样帧上，接管所需的源纹理是否全部就绪，
+        // 且中间帧确实存在可提交的可见覆盖层。
+        let assert_committable = |item: &SujianEditorItem, label: &str| {
+            let motion = item
+                .pipeline
+                .text_motion()
+                .cloned()
+                .unwrap_or_else(|| panic!("{label}: 必须存在局部动画计划"));
+            let frame = motion.sample(motion.started_ms + f64::from(motion.duration_ms) / 2.0);
+            let plan = LocalTextPlan {
+                overlays: frame.overlays.clone(),
+                static_holes: frame.static_holes.clone(),
+                required_textures: frame.required_textures.clone(),
+                paragraph_y_offsets: frame.paragraph_y_offsets.clone(),
+            };
+            let cache = item.pipeline.texture_cache();
+            let missing = plan.missing_textures(cache);
+            assert!(
+                missing.is_empty(),
+                "{label}: 真实编辑后动画源纹理必须已就绪，缺失 {missing:?}"
+            );
+            assert!(
+                plan.has_animation_resources(cache),
+                "{label}: has_animation_resources 必须为真，否则 QSG 动画层不会提交"
+            );
+            assert!(
+                frame
+                    .overlays
+                    .iter()
+                    .any(|g| g.clip_rect.w > 0.0 && g.clip_rect.h > 0.0),
+                "{label}: 中间帧必须存在具备可见面积的覆盖层，实际 {:?}",
+                frame.overlays
+            );
+        };
+
+        // 插入：新字 Reveal 的源纹理必须就绪。
+        item.insert_text(QString::from("丙"));
+        assert_committable(&item, "插入");
+
+        // 删除：从前一笔的新布局继续，旧字 Conceal 的源纹理也必须就绪。
+        item.delete_backward();
+        assert_committable(&item, "删除");
+
+        println!("[BEHAVIOR_VERIFY] #919 真实编辑的动画源纹理就绪、覆盖层可提交 QSG 动画层 ok");
+    });
+}
