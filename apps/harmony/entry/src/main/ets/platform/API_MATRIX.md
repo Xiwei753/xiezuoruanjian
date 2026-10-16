@@ -2,7 +2,7 @@
 
 本文件记录素笺 HarmonyOS 客户端实际使用的每个系统能力：Kit、接口、最低 API、SystemCapability、权限、ACL 需求、fallback 策略和实现文件。新增系统能力前先查 HarmonyOS 官方 API 和本机 SDK d.ts（`/opt/devecostudio/sdk/default`），再在此登记。
 
-实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。
+实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。唯一例外是 DLP 防窥：其实现已迁出 entry，放在独立受限模块 `privacy_acl` 中，路径相对模块根目录 `apps/harmony/privacy_acl/`，按 `privacy_acl/src/main/ets/impl/apiXX/...` 读。
 
 ## 应用最低安装基线与版本分流
 
@@ -22,7 +22,7 @@
 | 能力 | Kit | 最低 API | SystemCapability | 权限 | ACL | 实现文件 |
 |------|-----|---------|------------------|------|-----|---------|
 | 握姿感知 | @kit.MultimodalAwarenessKit (motion) | 20 | SystemCapability.MultimodalAwareness.Motion | ohos.permission.DETECT_GESTURE | 否 | awareness/impl/api20/GripPostureApi20.ets |
-| 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是（仅 ACL product 装配 privacy_acl HSP） | privacy_acl/ets/impl/api20/DlpAntiPeepApi20.ets, privacy_acl/ets/impl/api23/DlpAntiPeepApi23.ets |
+| 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是（仅 ACL product 装配 privacy_acl HSP） | privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets, privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets |
 | 窗口隐私 | @kit.ArkUI (window) | 未限定独立 API（随 @kit.ArkUI window 模块） | 未限定独立 SystemCapability（随 @kit.ArkUI window 模块） | 无 | 否 | privacy/WindowPrivacyService.ets |
 | 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/AppContinuationService.ets |
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
@@ -90,7 +90,7 @@
   - `passDlpAntiPeepInfo()`
 - 枚举 `DlpAntiPeepStatus`：`PASS = 0`，`HIDE = 1`
 - 最低 API：20
-- 实现文件：`privacy_acl/ets/impl/api20/DlpAntiPeepApi20.ets`
+- 实现文件：`privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets`
 
 ### API21 扩展
 
@@ -104,7 +104,7 @@
   - `publishAntiPeepInformation()`
 - 枚举 `AntiPeepOptionsResult`：`SUCCESS = 0`，`FAIL = 1`，`ALREADY_ON = 2`
 - 最低 API：23
-- 实现文件：`privacy_acl/ets/impl/api23/DlpAntiPeepApi23.ets`
+- 实现文件：`privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets`
 
 ### fallback
 
@@ -112,7 +112,7 @@
 - 状态语义：`PASS` → safe（无窥视）；`HIDE` → peeping（被窥视）；API 调用失败 / 未解析 / 不支持 → unknown。
 - `requestEnable()` 在 API < 23 时无法打开系统设置页（`requestAntiPeepOptions` 不可用），返回当前真实开关状态，不伪造；`isEnabled()` 永远查询系统真实开关，不读本地缓存假装启用。
 - 官方当前限制：DlpAntiPeep 目前只支持 Phone 设备。官方 2026-09-04 最新最佳实践：https://developer.huawei.com/consumer/en/doc/best-practices/bpta-antipeep-protection
-- 对外 facade：`privacy/ShoulderSurfingService.ets`（entry 模块内稳定 facade，不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型；不认识 API Level 数字，版本判断在 `impl/apiXX` facade）。实际 DLP 系统调用在 `privacy_acl` HSP 模块的 `ets/impl/apiXX` 中，通过 Port/Provider 接口装配，仅 ACL product 编译。
+- 对外 facade：`privacy/ShoulderSurfingService.ets`（entry 模块内稳定 facade，不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型；不认识 API Level 数字，版本判断在 `impl/apiXX` facade）。实际 DLP 系统调用在 `privacy_acl` HSP 模块的 `src/main/ets/impl/apiXX` 中，通过 Port/Provider 接口装配，仅 ACL product 编译。
 
 ## 窗口隐私
 
