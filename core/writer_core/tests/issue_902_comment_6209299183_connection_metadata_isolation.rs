@@ -18,8 +18,9 @@
 
 use tempfile::TempDir;
 use writer_core::api::types::{
-    StarMapEdgeKindDto, StarMapEndpointSelectionDto, StarMapNavigationRouteDto, StarMapNodeDto,
-    StarMapNodeKindDto, StarMapPathSegmentDto, StarMapPointDto, StarMapTargetDetailDto,
+    StarMapConnectionInfoDto, StarMapEdgeKindDto, StarMapEndpointSelectionDto,
+    StarMapNavigationRouteDto, StarMapNodeDto, StarMapNodeKindDto, StarMapPathSegmentDto,
+    StarMapPointDto, StarMapTargetDetailDto,
 };
 use writer_core::api::WriterCoreApi;
 
@@ -148,11 +149,17 @@ fn setup() -> (TempDir, WriterCoreApi, Fixture) {
     (tmp, api, fixture)
 }
 
-/// 宿主图持久化的边元数据（kind/label）与反查返回的连接信息完全一致。
-#[test]
-fn connection_info_preserves_kind_and_label_from_host_graph() {
-    let (_tmp, api, fx) = setup();
+/// 在反查结果里按 `edge_id` 精确定位一条连接，找不到即失败。
+fn find_connection<'a>(
+    conns: &'a [StarMapConnectionInfoDto],
+    edge_id: &str,
+    msg: &str,
+) -> &'a StarMapConnectionInfoDto {
+    conns.iter().find(|c| c.edge_id == edge_id).expect(msg)
+}
 
+/// 宿主图 R 持久化的边元数据，以及“不得向子图复制假边”的约束。
+fn assert_host_graph_metadata(api: &WriterCoreApi, fx: &Fixture) {
     // 两条边都落在根图 R，且 kind/label 原样保存。
     let root_graph = api.get_starmap_graph(&fx.root).unwrap();
     assert_eq!(root_graph.edges.len(), 2, "根图应恰好持有两条跨画布边");
@@ -182,15 +189,19 @@ fn connection_info_preserves_kind_and_label_from_host_graph() {
         api.get_starmap_graph(&fx.child_c).unwrap().edges.is_empty(),
         "子图 C 不应写入伪造的本地边"
     );
+}
 
+/// 经子图 B 的入口与根画布 canvas 查询返回的连接元数据。
+fn assert_canvas_query_metadata(api: &WriterCoreApi, fx: &Fixture) {
     // 经子图 B 的入口反查：只应看到 Foreshadows 边，元数据与宿主图一致。
     let via_b = api
         .list_starmap_connections(route(&fx.root, vec![enter_embed(&fx.e_b)]), None)
         .unwrap();
-    let conn_b = via_b
-        .iter()
-        .find(|c| c.edge_id == fx.foreshadows_edge)
-        .expect("经 e_b 进入子图 B 应反查到 Foreshadows 边");
+    let conn_b = find_connection(
+        &via_b,
+        &fx.foreshadows_edge,
+        "经 e_b 进入子图 B 应反查到 Foreshadows 边",
+    );
     assert_eq!(conn_b.owner_starmap_id, fx.root);
     assert_eq!(conn_b.kind, StarMapEdgeKindDto::Foreshadows);
     assert_eq!(conn_b.label.as_deref(), Some("伏笔"));
@@ -204,31 +215,32 @@ fn connection_info_preserves_kind_and_label_from_host_graph() {
     let root_canvas = api
         .list_starmap_connections(route(&fx.root, vec![]), None)
         .unwrap();
-    let conn_conflicts = root_canvas
-        .iter()
-        .find(|c| c.edge_id == fx.conflicts_edge)
-        .expect("根画布反查应包含 ConflictsWith 边");
+    let conn_conflicts = find_connection(
+        &root_canvas,
+        &fx.conflicts_edge,
+        "根画布反查应包含 ConflictsWith 边",
+    );
     assert_eq!(conn_conflicts.kind, StarMapEdgeKindDto::ConflictsWith);
     assert_eq!(conn_conflicts.label, None);
 
     // 无 label 的边不应被误判成有 label；有 label 的边不应丢失。
-    let root_foreshadows = root_canvas
-        .iter()
-        .find(|c| c.edge_id == fx.foreshadows_edge)
-        .expect("根画布反查应包含 Foreshadows 边");
+    let root_foreshadows = find_connection(
+        &root_canvas,
+        &fx.foreshadows_edge,
+        "根画布反查应包含 Foreshadows 边",
+    );
     assert_eq!(root_foreshadows.label.as_deref(), Some("伏笔"));
+}
 
-    // target 查询同样必须原样保留 kind / label / owner_starmap_id。
+/// `target=Some(...)` 精确查询同样必须原样保留 kind / label / owner_starmap_id。
+fn assert_target_query_metadata(api: &WriterCoreApi, fx: &Fixture) {
     let b_target = api
         .list_starmap_connections(
             route(&fx.root, vec![enter_embed(&fx.e_b)]),
             Some(node_target("b1")),
         )
         .unwrap();
-    let b_conn = b_target
-        .iter()
-        .find(|c| c.edge_id == fx.foreshadows_edge)
-        .expect("按 b1 查询应返回伏笔边");
+    let b_conn = find_connection(&b_target, &fx.foreshadows_edge, "按 b1 查询应返回伏笔边");
     assert_eq!(b_conn.kind, StarMapEdgeKindDto::Foreshadows);
     assert_eq!(b_conn.label.as_deref(), Some("伏笔"));
     assert_eq!(b_conn.owner_starmap_id, fx.root);
@@ -239,13 +251,19 @@ fn connection_info_preserves_kind_and_label_from_host_graph() {
             Some(node_target("c1")),
         )
         .unwrap();
-    let c_conn = c_target
-        .iter()
-        .find(|c| c.edge_id == fx.conflicts_edge)
-        .expect("按 c1 查询应返回冲突边");
+    let c_conn = find_connection(&c_target, &fx.conflicts_edge, "按 c1 查询应返回冲突边");
     assert_eq!(c_conn.kind, StarMapEdgeKindDto::ConflictsWith);
     assert_eq!(c_conn.label, None);
     assert_eq!(c_conn.owner_starmap_id, fx.root);
+}
+
+/// 宿主图持久化的边元数据（kind/label）与反查返回的连接信息完全一致。
+#[test]
+fn connection_info_preserves_kind_and_label_from_host_graph() {
+    let (_tmp, api, fx) = setup();
+    assert_host_graph_metadata(&api, &fx);
+    assert_canvas_query_metadata(&api, &fx);
+    assert_target_query_metadata(&api, &fx);
 }
 
 /// 不同入口的反查只返回与自身实例路径匹配的边，且任一查询中每条边最多出现一次。
