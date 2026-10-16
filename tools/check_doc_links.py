@@ -37,6 +37,7 @@ WHITELIST_FILENAMES = {
     'shareFiles.json',  # SDK: <sdk>/default/openharmony/toolchains/modulecheck/
     'opencode.json',    # devecocli init --mcp 生成的 .opencode 本机配置，不入库
     'SKILL.md',         # devecocli init --skill 写入 .opencode/skills/**，不入库
+    'loader.json',      # Hvigor 构建产物（<module>/build/<product>/intermediates/loader/<target>/），不入库
 }
 
 WHITELIST_PATHS = {

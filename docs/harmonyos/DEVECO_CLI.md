@@ -239,14 +239,34 @@ entry/build/<product>/intermediates/loader/<target>/loader.json
 `privacy_acl`；受限 `entry@acl` 的 `hspNameOhmMap` 含
 `privacy_acl: @bundle:com.xiwei.sujian/privacy_acl/ets/Index`，`hspResourcesMap`
 含 `privacy_acl` 指向该 HSP 的资源表。即普通 product 的
-entry 依赖图没有该受限 HSP，受限 product 才有。
+entry 运行时依赖没有该受限 HSP，受限 product 才有。
+
+> 注意区分 `loader.json` 里的 `modulePathMap` 与 `hspNameOhmMap` / `hspResourcesMap`：
+> `modulePathMap` 是工程内**所有**已登记模块的路径表，普通 `product=default` 的
+> `loader.json` 同样会列出 `privacy_acl`（指向模块目录）。它只说明“工程里存在该模块”，
+> **不代表普通 product 装配了该 HSP**。真正表示是否装配的是 `hspNameOhmMap` /
+> `hspResourcesMap`：普通 product 为空，受限 product 才出现 `privacy_acl`。
 
 本地实跑 `--mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap`
-核对过本轮产物（构建会停在 `CompileArkTS` 的既有 ArkTS 报错，那条报错来自 #879 动画代码、不是 #914 改动）：
-`entry/build/default/intermediates/loader/default/loader.json` 的 `hspNameOhmMap` /
-`hspResourcesMap` 为空；合并进 HAP 的 `entry/build/default/intermediates/res/default/module.json`
-中 `requestPermissions` 只有上面三项非 DLP 权限、`dependencies` 为空。只有 `product=acl`
-的 `loader.json` 出现 `privacy_acl`。所以普通 product 的产物不含该受限 HSP，也不带受限权限。
+核对过本轮产物：`entry/build/default/intermediates/loader/default/loader.json` 的
+`hspNameOhmMap` / `hspResourcesMap` 为空；合并进 HAP 的
+`entry/build/default/intermediates/res/default/module.json` 中 `requestPermissions`
+只有上面三项非 DLP 权限、`dependencies` 为空。所以普通 product 的产物不含该受限 HSP，
+也不带受限权限。
+
+受限 product 同样可在本地实跑后核对（`entry/build/acl/intermediates/loader/acl/loader.json`）：
+`hspNameOhmMap` 为 `{ "privacy_acl": "@bundle:com.xiwei.sujian/privacy_acl/ets/Index" }`，
+`hspResourcesMap.privacy_acl` 指向 `privacy_acl/build/acl/intermediates/res/default/ResourceTable.txt`；
+合并进 ACL HAP 的 `entry/build/acl/intermediates/res/acl/module.json` 的 `dependencies`
+为 `[{ "moduleName": "privacy_acl" }]`，`requestPermissions` 除普通三项外还含
+`ohos.permission.DLP_GET_HIDE_STATUS`；`privacy_acl` HSP 自身的
+`privacy_acl/build/acl/intermediates/res/default/module.json` 也单独声明该权限。这组值与
+default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
+
+以上 `loader.json` 与合并 `module.json` 都在 `CompileArkTS` 之前的装载/合并阶段生成，
+是本地实跑产物（构建产物不入库，无法在仓库内复现）；本地构建会停在 `CompileArkTS` 的
+既有 ArkTS 报错（来自 #879 动画代码，不是 #914 改动），因此这些数值证明的是模块装配与
+权限归属，不是完整签名 HAP/APP 的最终内容声明。
 
 ### 装机与验证
 
