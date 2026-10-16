@@ -19,6 +19,7 @@
 - API Level 差异和 ACL 发行资格是两个独立轴：API Level 差异走 `impl/apiXX` 子目录分流；ACL 资格差异通过多 product + 多 target + sourceRoots 实现构建隔离。
 - `build-profile.json5` 支持多 product（default + acl）和多 target。受限能力（DLP 防窥）属于独立 `privacy_acl` HSP 模块，其 target 仅 `applyToProducts: ['acl']`。普通 `default` product 不依赖该模块、不声明 `ohos.permission.DLP_GET_HIDE_STATUS`，`src/standard` 的 Provider 不 import `privacy_acl`，因此普通包不引用 DLP 实现。ACL product 装配 `privacy_acl` 并由 `src/acl` 的 Provider 引用其真实实现。`compatibleSdkVersion` 是最低运行版本，`targetSdkVersion` 是编译目标版本，二者不必为同一 API。
 - **依赖隔离机制**：`entry/oh-package.json5` 的 `dependencies` 默认为空 `{}`。`entry/hvigorfile.ts` 注册了 `privacyAclDependencyPlugin`，在构建时通过官方 `OhosHapContext.setDependenciesOpt` API 根据 product 动态设置依赖：`acl` product 添加 `privacy_acl: '@module:privacy_acl'`，`default` product 保持空依赖。这样 `entry@default` 的依赖图不包含 `privacy_acl`，而 `entry@acl` 的依赖图包含它。不使用 `targetDependencies` 等非官方字段，不手改构建生成目录。
+- **解耦静态守卫**：`validate.mjs` 在 CI 的 validate 步骤中断言该解耦不被回退——`entry/src/main/ets` 和 `entry/src/standard/ets` 代码不得引用 `@kit.DeviceSecurityKit`/`dlpAntiPeep`/`privacy_acl`，`entry/src/main/module.json5` 不得声明 `DLP_GET_HIDE_STATUS`，`entry/oh-package.json5` 不得静态依赖 `privacy_acl`，且工程 `build-profile.json5` 中 `privacy_acl` 只能 `applyToProducts: ['acl']`。
 - 同一逻辑入口通过 packageName + sourcePath import 引用可覆盖实现（sourceRoots 机制），不使用动态 import 或运行时字符串切换。
 - 平台能力层结构：
   - `Service`（稳定 facade，对外暴露同步语义）→ `impl/apiXX`（实际 `@kit.*` 调用）→ `PlatformApiResolver`（按运行时 API Level 分流到具体 impl）。
