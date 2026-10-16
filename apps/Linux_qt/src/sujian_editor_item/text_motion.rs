@@ -2916,4 +2916,69 @@ mod tests {
         assert_eq!(motion.sample(0.0).paragraph_y_offsets, vec![(7, 20.0)]);
         assert!(motion.sample(100.0).paragraph_y_offsets.is_empty());
     }
+
+    #[test]
+    fn sample_clip_rect_is_viewport_intersected_but_mask_clip_is_original() {
+        // Issue #919 复核 5：`sample()` 产生的原始动画遮罩 `mask_clip` 不被视口收缩，
+        // 只有最终可见的 `clip_rect` 与视口求交。二者若混用，下一笔接续时会把视口
+        // 裁剪边缘当成动画起点；`scene_graph_renderer` 也分别回执这两个矩形。
+        let mut motion = conceal_with_start_clip(ClipDirection::LeftToRight);
+        // start_clip = 50..58；把视口左边界移到 52，切掉左侧 2 像素。
+        motion.viewport = rect(52.0, 0.0, 1000.0, 1000.0);
+
+        let overlay = motion
+            .sample(0.0)
+            .overlays
+            .into_iter()
+            .next()
+            .expect("conceal overlay");
+        // mask_clip 保持整段原始遮罩 50..58。
+        assert_eq!(
+            (overlay.mask_clip.x, overlay.mask_clip.w),
+            (50.0, 8.0),
+            "mask_clip 不应被视口收缩"
+        );
+        // clip_rect 被视口裁到 52..58。
+        assert_eq!((overlay.clip_rect.x, overlay.clip_rect.w), (52.0, 6.0));
+        // 右边界相同但起点不同，clip_rect 不能代替 mask_clip。
+        assert_eq!(
+            overlay.clip_rect.x + overlay.clip_rect.w,
+            overlay.mask_clip.x + overlay.mask_clip.w
+        );
+        assert_ne!(overlay.clip_rect, overlay.mask_clip);
+    }
+
+    #[test]
+    fn caret_sample_uses_same_shared_progress() {
+        // Issue #919：唯一光标控制器与文字动画共用同一 progress。这里以纯几何
+        // `TextMotion` 验证光标按同一条 ease-out 进度在真实布局 caret 之间插值，
+        // 不新建第二条时间线。
+        let mut motion = make_motion(Vec::new());
+        motion.caret_from = Some((0.0, 0.0));
+        motion.caret_to = Some((40.0, 20.0));
+
+        assert_eq!(motion.sample(0.0).caret_sample, Some((0.0, 0.0)));
+
+        // raw=0.5 → progress=ease_out_cubic(0.5)=0.875。
+        let mid = motion.sample(50.0).caret_sample.expect("caret sample");
+        assert!((mid.0 - 35.0).abs() < 1e-9, "x={}", mid.0);
+        assert!((mid.1 - 17.5).abs() < 1e-9, "y={}", mid.1);
+
+        // 结束时停在目标 caret，不残留中途位置。
+        assert_eq!(motion.sample(100.0).caret_sample, Some((40.0, 20.0)));
+    }
+
+    #[test]
+    fn caret_sample_falls_back_to_present_endpoint() {
+        // Issue #919：起点或终点 caret 缺失时（如首次布局、光标在视口外），保留
+        // 可用的另一侧，不因缺一边而整体失去光标运动。
+        let mut motion = make_motion(Vec::new());
+        motion.caret_from = None;
+        motion.caret_to = Some((10.0, 5.0));
+        assert_eq!(motion.sample(0.0).caret_sample, Some((10.0, 5.0)));
+
+        motion.caret_from = Some((3.0, 4.0));
+        motion.caret_to = None;
+        assert_eq!(motion.sample(0.0).caret_sample, Some((3.0, 4.0)));
+    }
 }
