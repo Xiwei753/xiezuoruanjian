@@ -82,17 +82,17 @@
         },
       ],
     },
-      {
-        name: 'privacy_acl',
-        srcPath: './privacy_acl',
-        targets: [
-          {
-            name: 'default',
-            applyToProducts: [
-              'acl',
-            ],
-          },
-        ],
-      },
+    {
+      name: 'privacy_acl',
+      srcPath: './privacy_acl',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'acl',
+          ],
+        },
+      ],
+    },
   ],
 }

@@ -186,6 +186,22 @@ hvigorw --mode module -p module=entry@default -p product=default -p buildMode=de
 > `assembleHap` 才暴露。`tools/check_harmony_native_bridge.py` 是为了补上这个缺口
 > 而存在的静态守卫。
 
+### 普通包与受限包（DLP 防窥 ACL）
+
+普通包（`product=default`）**不含** DLP 防窥受限能力。#914 起 DLP 实现属于独立的
+`privacy_acl` HSP，只有 `product=acl` 装配：普通 product 不编译、不打包该模块，
+`entry/src/main/module.json5` 也不声明 `ohos.permission.DLP_GET_HIDE_STATUS`。
+因此普通包不携带该受限权限，也无需手改任何 `module.json5` 或临时删权限。
+
+需要防窥的受限包改用 `entry@acl`（必须搭配带 `DLP_GET_HIDE_STATUS` ACL 的签名
+Profile，不能共用普通签名）：
+
+```bash
+cd apps/harmony
+hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug \
+        assembleHap --no-daemon
+```
+
 ### 装机与验证
 
 HAP 落在 `apps/harmony` 的 `build` 目录下（不进 git），文件名形如
