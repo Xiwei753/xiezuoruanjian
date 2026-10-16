@@ -1885,6 +1885,69 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_typing_continues_unchanged_cluster_reveal() {
+        // Issue #919：连续输入——上一帧“甲”正吐到一半（遮罩 0..10），本帧在其后输入
+        // “乙”。“甲”在本次编辑里是 patch 外未改区间，必须从上一帧已显示的
+        // `mask_clip` 继续吐到满宽，而不是因为不在本次插入区间就退回零宽/重新露出。
+        // 这覆盖 `begin_or_retarget` 中「未改区间接续上一帧 Reveal」的分支：用偏移
+        // 映射定位旧 byte range，再从 last_drawn 的同一 shaping 画面接续。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        let old_id = old_layout.line_snapshots[0].id;
+        let new_id = new_layout.line_snapshots[0].id;
+        // 上一帧“甲”Reveal 只露出左半 (0..10)，源是上一版排版行图。
+        let last = drawn_reveal(
+            old_id,
+            rect(0.0, 0.0, 10.0, 10.0),
+            ShapingIdentity::default(),
+        );
+
+        // 在“甲”之后输入“乙”：插入 patch 为 3..6，“甲”0..3 属未改区间。
+        let edit = make_edit("甲", "甲乙", 3, 6, (3, 3), (3, 6), "乙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        // “甲”未改但继续 Reveal（从半宽接续），“乙”新插入 Reveal（从零宽）。
+        let reveal_jia = motion
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (0, 3) && s.motion_kind() == MotionKind::Reveal)
+            .expect("“甲”应继续 Reveal");
+        match reveal_jia {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
+                assert_eq!(new.source.snapshot_id, new_id);
+                assert_eq!(
+                    *start_clip,
+                    rect(0.0, 0.0, 10.0, 10.0),
+                    "必须从上一帧半宽继续吐，不退回零宽"
+                );
+            }
+            other => panic!("expected Reveal for 甲, got {other:?}"),
+        }
+        let reveal_yi = motion
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (3, 6) && s.motion_kind() == MotionKind::Reveal)
+            .expect("“乙”应 Reveal");
+        match reveal_yi {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
+                assert_eq!(new.source.snapshot_id, new_id);
+                assert_eq!(*start_clip, rect(20.0, 0.0, 0.0, 10.0));
+            }
+            other => panic!("expected Reveal for 乙, got {other:?}"),
+        }
+        assert_eq!(motion.slices.len(), 2);
+    }
+
+    #[test]
     fn same_byte_range_different_shaping_retires_old_and_reveals_new() {
         // Issue #919 复核 11：独立构造 old/new 排版画面，两份不同的行纹理 ID。
         // 上一帧旧字纹理来源（old_id）与本轮新字（new_id）各自独立，模拟真实
