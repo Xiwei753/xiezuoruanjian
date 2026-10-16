@@ -23,8 +23,9 @@
 
 use tempfile::TempDir;
 use writer_core::api::types::{
-    StarMapEdgeKindDto, StarMapEndpointSelectionDto, StarMapNavigationRouteDto, StarMapNodeDto,
-    StarMapNodeKindDto, StarMapPathSegmentDto, StarMapPointDto, StarMapTargetDetailDto,
+    CreateCrossCanvasEdgeResultDto, StarMapEdgeKindDto, StarMapEndpointSelectionDto,
+    StarMapNavigationRouteDto, StarMapNodeDto, StarMapNodeKindDto, StarMapPathSegmentDto,
+    StarMapPointDto, StarMapTargetDetailDto,
 };
 use writer_core::api::WriterCoreApi;
 
@@ -141,22 +142,8 @@ impl Nested {
     }
 }
 
-/// 宿主是中间画布 `B`：边写在 `B`，`R`/`C` 无假边；`B` 与 `C` 都能反查。
-#[test]
-fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
-    let f = make_nested();
-
-    let created = f
-        .api
-        .create_cross_canvas_edge(
-            selection(f.route_b(), node_target("b1")),
-            selection(f.route_c(), node_target("c1")),
-            StarMapEdgeKindDto::RelatedTo,
-            Some("子树内部".to_string()),
-            None,
-        )
-        .unwrap();
-
+/// 宿主是中间画布 `B`：边写在 `B`，`R`/`C` 无假边。
+fn assert_edge_hosted_by_intermediate_canvas(f: &Nested, created: &CreateCrossCanvasEdgeResultDto) {
     assert_eq!(
         created.owner_starmap_id, f.b,
         "最长公共前缀为 [eB]，宿主应是中间画布 B，而不是根 R"
@@ -187,20 +174,23 @@ fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
         f.api.get_starmap_graph(&f.c).unwrap().edges.is_empty(),
         "落点画布 C 不应写入伪造的本地 Edge"
     );
+}
 
+/// `B` 与 `C` 都能反查这条宿主 `B` 的边，根 `R` 看不到。
+fn assert_canvas_queries_see_intermediate_host_edge(f: &Nested, edge_id: &str) {
     // 经 R/[eB] 进入 B、经 R/[eB,eBC] 进入 C 都能反查这条宿主 B 的边。
     let seen_at_b = f.api.list_starmap_connections(f.route_b(), None).unwrap();
     assert!(
         seen_at_b
             .iter()
-            .any(|c| c.edge_id == created.edge.id && c.owner_starmap_id == f.b),
+            .any(|c| c.edge_id == edge_id && c.owner_starmap_id == f.b),
         "经 R/[eB] 进入 B 应看到宿主 B 的边；实际: {seen_at_b:?}"
     );
     let seen_at_c = f.api.list_starmap_connections(f.route_c(), None).unwrap();
     assert!(
         seen_at_c
             .iter()
-            .any(|c| c.edge_id == created.edge.id && c.owner_starmap_id == f.b),
+            .any(|c| c.edge_id == edge_id && c.owner_starmap_id == f.b),
         "经 R/[eB,eBC] 进入 C 应看到 to 端落在本层的宿主 B 边；实际: {seen_at_c:?}"
     );
 
@@ -210,19 +200,19 @@ fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
         .list_starmap_connections(route(&f.r, vec![]), None)
         .unwrap();
     assert!(
-        seen_at_root.iter().all(|c| c.edge_id != created.edge.id),
+        seen_at_root.iter().all(|c| c.edge_id != edge_id),
         "根画布 R 不应看到存于中间画布 B 的边；实际: {seen_at_root:?}"
     );
+}
 
-    // 按目标精确反查：B 层按 b1 命中，按 c1 不命中；C 层按 c1 命中。
+/// 按目标精确反查：B 层按 b1 命中，按 c1 不命中；C 层按 c1 命中。
+fn assert_target_queries_are_route_aware_for_intermediate_host(f: &Nested, edge_id: &str) {
     let b_looking_for_b1 = f
         .api
         .list_starmap_connections(f.route_b(), Some(node_target("b1")))
         .unwrap();
     assert!(
-        b_looking_for_b1
-            .iter()
-            .any(|c| c.edge_id == created.edge.id),
+        b_looking_for_b1.iter().any(|c| c.edge_id == edge_id),
         "B 层按 b1 反查应命中；实际: {b_looking_for_b1:?}"
     );
     let b_looking_for_c1 = f
@@ -230,9 +220,7 @@ fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
         .list_starmap_connections(f.route_b(), Some(node_target("c1")))
         .unwrap();
     assert!(
-        b_looking_for_c1
-            .iter()
-            .all(|c| c.edge_id != created.edge.id),
+        b_looking_for_c1.iter().all(|c| c.edge_id != edge_id),
         "B 层按 c1 反查不应命中（c1 在更深画布 C）；实际: {b_looking_for_c1:?}"
     );
     let c_looking_for_c1 = f
@@ -240,23 +228,45 @@ fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
         .list_starmap_connections(f.route_c(), Some(node_target("c1")))
         .unwrap();
     assert!(
-        c_looking_for_c1
-            .iter()
-            .any(|c| c.edge_id == created.edge.id),
+        c_looking_for_c1.iter().any(|c| c.edge_id == edge_id),
         "C 层按 c1 反查应命中；实际: {c_looking_for_c1:?}"
     );
+}
 
-    // 删除宿主 B 中的边后，反向依赖索引同步失效：C 的 canvas 查询不再返回它。
+/// 删除宿主 `B` 中的边后，反向依赖索引同步失效：`C` 的 canvas 查询不再返回它。
+fn assert_delete_clears_intermediate_host_query(f: &Nested, edge_id: &str) {
     assert!(
-        f.api.delete_starmap_edge(&f.b, &created.edge.id).unwrap(),
+        f.api.delete_starmap_edge(&f.b, edge_id).unwrap(),
         "删除宿主 B 中的边应返回 true"
     );
     assert!(f.api.get_starmap_graph(&f.b).unwrap().edges.is_empty());
     let after_delete = f.api.list_starmap_connections(f.route_c(), None).unwrap();
     assert!(
-        after_delete.iter().all(|c| c.edge_id != created.edge.id),
+        after_delete.iter().all(|c| c.edge_id != edge_id),
         "删除后 C 不应再反查到已删除的边；实际: {after_delete:?}"
     );
+}
+
+/// 宿主是中间画布 `B`：边写在 `B`，`R`/`C` 无假边；`B` 与 `C` 都能反查。
+#[test]
+fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
+    let f = make_nested();
+
+    let created = f
+        .api
+        .create_cross_canvas_edge(
+            selection(f.route_b(), node_target("b1")),
+            selection(f.route_c(), node_target("c1")),
+            StarMapEdgeKindDto::RelatedTo,
+            Some("子树内部".to_string()),
+            None,
+        )
+        .unwrap();
+
+    assert_edge_hosted_by_intermediate_canvas(&f, &created);
+    assert_canvas_queries_see_intermediate_host_edge(&f, &created.edge.id);
+    assert_target_queries_are_route_aware_for_intermediate_host(&f, &created.edge.id);
+    assert_delete_clears_intermediate_host_query(&f, &created.edge.id);
 }
 
 /// 对比：跨两级的根宿主边 `R/[]/Node(r1) → R/[eB,eBC]/Node(c1)`，
