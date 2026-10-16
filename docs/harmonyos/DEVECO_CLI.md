@@ -241,6 +241,13 @@ entry/build/<product>/intermediates/loader/<target>/loader.json
 含 `privacy_acl` 指向该 HSP 的资源表。即普通 product 的
 entry 依赖图没有该受限 HSP，受限 product 才有。
 
+本地实跑 `--mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap`
+核对过本轮产物（构建会停在 `CompileArkTS` 的既有 ArkTS 报错，那条报错来自 #879 动画代码、不是 #914 改动）：
+`entry/build/default/intermediates/loader/default/loader.json` 的 `hspNameOhmMap` /
+`hspResourcesMap` 为空；合并进 HAP 的 `entry/build/default/intermediates/res/default/module.json`
+中 `requestPermissions` 只有上面三项非 DLP 权限、`dependencies` 为空。只有 `product=acl`
+的 `loader.json` 出现 `privacy_acl`。所以普通 product 的产物不含该受限 HSP，也不带受限权限。
+
 ### 装机与验证
 
 HAP 落在 `apps/harmony` 的 `build` 目录下（不进 git），文件名形如
