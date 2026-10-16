@@ -57,9 +57,10 @@ export class AppContext {
     // 把 UIAbilityContext 注入 ShoulderSurfingService，供其 provider 在 API>=23 时调
     // requestAntiPeepOptions 打开防窥设置页（DLP 实现已迁出 entry，位于 privacy_acl HSP，
     // 普通包不装配该模块）。
+    // 调用路线：AppContext → ShoulderSurfingService → ShoulderSurfingPort → target Provider
+    //（default Provider 不引用 DLP，acl Provider 委托 privacy_acl HSP）。
     // AppContext 只调稳定 facade，不出现 API Level 判断：DLP 的版本与 SystemCapability
-    // 判断在 privacy_acl 模块内，entry 侧只经 ShoulderSurfingPort 委托给对应 Provider
-    // （default Provider 不引用 DLP，acl Provider 委托 privacy_acl HSP）。
+    // 判断在 privacy_acl 模块内，不经过 entry 的 PlatformApiResolver。
     ShoulderSurfingService.getInstance().setAbilityContext(context)
 
     // 把 UIAbilityContext 注入 HarmonyShareService（进而注入 SystemShareService），
