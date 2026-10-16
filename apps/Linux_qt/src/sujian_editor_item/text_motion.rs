@@ -2850,4 +2850,70 @@ mod tests {
         assert_eq!(motion.sample(0.0).paragraph_y_offsets, vec![(7, -20.0)]);
         assert!(motion.sample(100.0).paragraph_y_offsets.is_empty());
     }
+
+    #[test]
+    fn newline_delete_moves_downstream_unchanged_paragraph_up_as_a_whole() {
+        // Issue #919 复核 2：与「插入换行让下游段整体下移」对称——删除一个换行使
+        // 上方的空段消失、下游内容未改的段整体上移时，同样只能由唯一一条
+        // `ParagraphMove` 接管（`from_y` 大于 `to_y`，offset 起点为正），不再为
+        // 段内每个字生成逐字切片，避免同段文字被静态位移和局部覆盖层画两次。
+        //
+        // 构造：旧正文“甲\n\n乙”三段（稳定 ID 6、8、7）——段 6“甲”、空段 8、
+        // 段 7“乙”；删除段 6 末尾换行（旧 3..4）得到新正文“甲\n乙”，空段 8 消失、
+        // 段 7“乙”内容未改但整体从 y=40 上移到 y=20。
+        let mut old_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
+        old_p6.stable_paragraph_id = 6;
+        // 空段 8：位于两个换行之间（byte_start=4），无 cluster。
+        let mut old_p8 = test_line(1, 4, vec![], 20.0);
+        old_p8.stable_paragraph_id = 8;
+        let mut old_p7 = test_line(2, 5, vec![cluster(5, 8, 0.0, 20.0)], 40.0);
+        old_p7.stable_paragraph_id = 7;
+        let old_layout = snapshot_with_paragraph_index(
+            vec![old_p6, old_p8, old_p7],
+            vec![20.0, 20.0, 20.0],
+            vec![6, 8, 7],
+        );
+
+        let mut new_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
+        new_p6.stable_paragraph_id = 6;
+        let mut new_p7 = test_line(1, 4, vec![cluster(4, 7, 0.0, 20.0)], 20.0);
+        new_p7.stable_paragraph_id = 7;
+        let new_layout =
+            snapshot_with_paragraph_index(vec![new_p6, new_p7], vec![20.0, 20.0], vec![6, 7]);
+
+        // 段 7 内容未改，但段首因删除上方换行/空段从 y=40 上移到 y=20。
+        assert_eq!(old_layout.paragraph_anchor(7), Some((40.0, 20.0)));
+        assert_eq!(new_layout.paragraph_anchor(7), Some((20.0, 20.0)));
+        // 空段 8 只存在于旧布局，新布局没有它的锚点。
+        assert!(new_layout.paragraph_anchor(8).is_none());
+
+        // 删除“甲”后的换行：旧 3..4 → 新插入区间 3..3（空）。
+        let edit = make_edit_from_patches("甲\n\n乙", "甲\n乙", 3, 3, vec![((3, 4), (3, 3), "")]);
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        // 未改内容的段 7 只由唯一一条整体位移接管（起点为正偏移，即当前画在旧 y）。
+        assert_eq!(
+            motion.paragraph_moves,
+            vec![ParagraphMove {
+                paragraph_id: 7,
+                from_y: 40.0,
+                to_y: 20.0,
+            }],
+            "段 7 应只走一条整体 ParagraphMove: {:?}",
+            motion.paragraph_moves
+        );
+        // 段 7 的文字不产生逐字覆盖层（同段文字不能既静态位移又局部重画）。
+        assert!(
+            !motion
+                .slices
+                .iter()
+                .any(|s| s.byte_range() == (5, 8) || s.byte_range() == (4, 7)),
+            "整体位移的段 7 不应再产生逐字切片: {:?}",
+            motion.slices
+        );
+
+        // 同一 progress 采样：起点为把目标位置补回旧 y 的完整正偏移，结束回到 0。
+        assert_eq!(motion.sample(0.0).paragraph_y_offsets, vec![(7, 20.0)]);
+        assert!(motion.sample(100.0).paragraph_y_offsets.is_empty());
+    }
 }
