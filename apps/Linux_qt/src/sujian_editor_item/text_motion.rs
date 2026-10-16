@@ -2669,13 +2669,14 @@ mod tests {
     #[test]
     fn paragraph_with_content_change_does_not_also_get_paragraph_move() {
         // Issue #919 复核 2：同一段落只能由一种位移路径接管。段落既有真实内容变更
-        // （display_patches 命中）又因上方段落变高而整体下移时，不能再叠加整体
+        // （display_patches 命中）又因上方插入新段而整体下移时，不能再叠加整体
         // ParagraphMove——否则该段同时采用“整段静态节点 y 位移”和“局部字形旧→新
         // 位移/遮罩”，两套画面坐标不一致，会跳行/重影。
         //
-        // 构造：一次事务两笔 patch。段 6 末尾插入换行使其变高（段 6 内容变更），
-        // 段 7 的“乙”替换成“丙”（段 7 内容变更）；段落高度索引里段 7 段首从
-        // y=20 下移到 y=40。段 7 内容已变，必须只走局部退场/露出。
+        // 构造：一次事务两笔 patch。旧正文“甲\n乙”两段（稳定 ID 6、7）；
+        // 新正文“甲\n\n丙”三段——段 6“甲”不变、新增空段 8、段 7“乙”→“丙”。
+        // 段 7 段首从 y=20 下移到 y=40（因中间插入空段 8），且段 7 内容已变，
+        // 必须只走局部退场/露出。
         let mut old_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
         old_p6.stable_paragraph_id = 6;
         let mut old_p7 = test_line(1, 4, vec![cluster(4, 7, 0.0, 20.0)], 20.0);
@@ -2685,13 +2686,36 @@ mod tests {
 
         let mut new_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
         new_p6.stable_paragraph_id = 6;
-        let mut new_p7 = test_line(1, 5, vec![cluster(5, 8, 0.0, 20.0)], 40.0);
+        // 新增空段 8：位于两个换行之间（byte_start=4），无 cluster。
+        let mut new_p8 = test_line(1, 4, vec![], 20.0);
+        new_p8.stable_paragraph_id = 8;
+        let mut new_p7 = test_line(2, 5, vec![cluster(5, 8, 0.0, 20.0)], 40.0);
         new_p7.stable_paragraph_id = 7;
-        let new_layout =
-            snapshot_with_paragraph_index(vec![new_p6, new_p7], vec![40.0, 20.0], vec![6, 7]);
+        let new_layout = snapshot_with_paragraph_index(
+            vec![new_p6, new_p8, new_p7],
+            vec![20.0, 20.0, 20.0],
+            vec![6, 8, 7],
+        );
+
+        // 直接验证段落锚点：旧段 7 在 y=20；新段 8 在 y=20、段 7 下移到 y=40。
+        assert_eq!(
+            old_layout.paragraph_anchor(7),
+            Some((20.0, 20.0)),
+            "旧段 7 段首 y=20"
+        );
+        assert_eq!(
+            new_layout.paragraph_anchor(7),
+            Some((40.0, 20.0)),
+            "新段 7 段首 y=40"
+        );
+        assert_eq!(
+            new_layout.paragraph_anchor(8),
+            Some((20.0, 20.0)),
+            "新段 8 段首 y=20"
+        );
 
         // 旧正文“甲\n乙”（段 6 = 0..3，段 7 = 4..7）；新正文“甲\n\n丙”
-        // （段 6 = 0..4，段 7 = 5..8）。
+        // （段 6 = 0..3，空段 8 = 4..4，段 7 = 5..8）。
         let edit = make_edit_from_patches(
             "甲\n乙",
             "甲\n\n丙",
@@ -2707,13 +2731,13 @@ mod tests {
             "内容变更段落不应再有 ParagraphMove: {:?}",
             motion.paragraph_moves
         );
-        // 内容变更的段 6/7 不产生逐字 Shift。
+        // 本用例没有需要逐字位移的未改 cluster。
         assert!(
             !motion
                 .slices
                 .iter()
                 .any(|s| s.motion_kind() == MotionKind::Shift),
-            "内容变更段落应只走退场/露出，不产生 Shift: {:?}",
+            "本用例不应产生 Shift: {:?}",
             motion.slices
         );
         // 段 7 的旧“乙”退场、新“丙”露出仍保留。
