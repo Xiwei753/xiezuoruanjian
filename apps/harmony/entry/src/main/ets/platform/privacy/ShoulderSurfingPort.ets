@@ -4,7 +4,13 @@
 //
 // 本接口放在 src/main 下（defaultSourceRoot），所有 target 的 Provider 都能通过
 // packageName import（entry/ets/platform/privacy/ShoulderSurfingPort）访问。
+import { common } from '@kit.AbilityKit'
+
 export interface ShoulderSurfingPort {
+  // 注入 UIAbilityContext（acl Provider 调 requestAntiPeepOptions 需要；standard 忽略）。
+  // 放进 Port 契约，Service 无需向下转成具体 Provider 类。
+  setAbilityContext(context: common.UIAbilityContext): void
+
   // 查询系统是否支持防窥检测。
   isSupported(): boolean
 

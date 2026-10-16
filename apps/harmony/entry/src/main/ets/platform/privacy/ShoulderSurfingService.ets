@@ -35,9 +35,10 @@ export class ShoulderSurfingService {
   }
 
   // 注入 UIAbilityContext（转传给 Provider，供 acl Provider 调 requestAntiPeepOptions 用）。
-  // 由 AppContext.setAbilityContext 调用。
+  // 由 AppContext.setAbilityContext 调用。setAbilityContext 属于 Port 契约，
+  // Service 只依赖接口，不向下转成具体 Provider 类。
   setAbilityContext(context: common.UIAbilityContext): void {
-    (this.provider as ShoulderSurfingProvider).setAbilityContext(context)
+    this.provider.setAbilityContext(context)
   }
 
   // 查询系统是否支持防窥检测。委托 Provider。
