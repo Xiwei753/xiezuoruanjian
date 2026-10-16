@@ -1040,10 +1040,32 @@ fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
 
         // 真实插入仍会更新正文，但不得建立动画计划。
         item.click_at(1000.0, 0.0, false);
+        let snap_before = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .map(|s| s.revision);
         item.insert_text(QString::from("丙"));
         assert!(
             item.pipeline.text_motion().is_none(),
             "关闭文字动画后真实插入不得建立 text_motion 计划"
+        );
+        // Issue #919：关闭正文动画只影响局部动画计划，不影响 canonical 提交。
+        // 原先 `pipeline::tests::layout_revision_commits_even_when_text_animation_is_disabled`
+        // 走已被 #919 取代的 `prepare_edit_motion` 整章路径，本用例用当前唯一入口
+        // `insert_text` → `record_transaction` 验证同一语义：即使动画关闭，编辑仍安装
+        // 一份新的 canonical layout snapshot（其 revision 由 `LayoutRevision::next()`
+        // 推进），供后续帧/光标使用，不依赖 text_animation_enabled。
+        let snap_after = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("关闭文字动画时真实编辑仍必须安装新的 canonical layout snapshot")
+            .revision;
+        assert_ne!(
+            Some(snap_after),
+            snap_before,
+            "关闭文字动画时仍必须把新的 canonical layout revision 提交到 pipeline"
         );
 
         // 与 `qquickitem_impl` 相同的消费路径：无计划 → 默认空帧 → 无孔洞/覆盖层。
@@ -1078,5 +1100,84 @@ fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
         );
 
         println!("[BEHAVIOR_VERIFY] #919 关闭文字动画不生成孔洞/覆盖层且开关可逆 ok");
+    });
+}
+
+/// Issue #919：连续两笔真实编辑必须走同一条 canonical revision 链。
+///
+/// 原先 `pipeline::tests::consecutive_pipeline_edits_reuse_previous_target_revision_as_next_base_revision`
+/// 在 pipeline 内部用 `prepare_edit_motion` + 整章 `current_layout_snapshot` 驱动，
+/// #919 把普通编辑路径收敛到唯一的 `TextMotion` 局部计划后，该 helper 不再经过
+/// `prepare_edit_motion`，用例长期 `#[ignore]`、放开即失败。本用例用当前唯一入口
+/// （`insert_text` → `transaction.rs::record_transaction`）验证同一语义：
+///
+/// - 每一笔真实编辑都安装一份新的 canonical layout snapshot（revision 由
+///   `LayoutRevision::next()` 推进），第二笔起 `text_revision` 继续严格递增；
+/// - 每一笔局部 `TextMotion` 的 `target_revision` 都绑定该笔的 Core new_revision；
+/// - 第二笔以上一笔安装的 canonical snapshot 为 base（`current_layout_snapshot`
+///   在第二笔前已是第一笔的目标），因此第二笔的 revision 与第一笔不同。
+#[test]
+fn consecutive_real_edits_commit_canonical_revision_chain() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.click_at(1000.0, 0.0, false);
+
+        let r0 = item.pipeline.text_revision();
+
+        // 第一笔：甲乙 -> 甲乙丙。
+        item.insert_text(QString::from("丙"));
+        let r1 = item.pipeline.text_revision();
+        assert!(
+            r1 >= r0,
+            "第一笔真实编辑不得回退 text_revision（{r0} -> {r1}）"
+        );
+        let snap1 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第一笔后必须安装新的 canonical layout snapshot")
+            .revision;
+        let motion1 = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("第一笔必须建立局部动画计划");
+        assert_eq!(
+            motion1.target_revision, r1,
+            "第一笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
+        );
+
+        // 第二笔：甲乙丙 -> 甲乙丙丁。base 即第一笔安装的 canonical snapshot。
+        item.insert_text(QString::from("丁"));
+        let r2 = item.pipeline.text_revision();
+        assert!(
+            r2 > r1,
+            "第二笔真实编辑必须继续推进 text_revision（{r1} -> {r2}）"
+        );
+        let snap2 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第二笔后必须安装新的 canonical layout snapshot")
+            .revision;
+        assert_ne!(
+            snap1, snap2,
+            "第二笔必须安装一份新的 canonical layout revision，而不是沿用第一笔目标"
+        );
+        let motion2 = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("第二笔必须建立局部动画计划");
+        assert_eq!(
+            motion2.target_revision, r2,
+            "第二笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
+        );
+
+        println!(
+            "[BEHAVIOR_VERIFY] #919 连续两笔真实编辑提交同一条 canonical revision 链 ok"
+        );
     });
 }
