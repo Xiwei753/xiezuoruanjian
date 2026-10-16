@@ -34,7 +34,6 @@ ROOT = Path(__file__).resolve().parents[1]
 HARMONY_DIR = ROOT / "apps" / "harmony"
 BUILD_PROFILE = HARMONY_DIR / "build-profile.json5"
 APP_SCOPE = HARMONY_DIR / "AppScope" / "app.json5"
-MODULE_PROFILE = HARMONY_DIR / "entry" / "src" / "main" / "module.json5"
 DEFAULT_PACKAGE_NAME = "com.xiwei.sujian"
 DEFAULT_CONNECT_API_CLI_NPM_VERSION = "1.1.3"
 
