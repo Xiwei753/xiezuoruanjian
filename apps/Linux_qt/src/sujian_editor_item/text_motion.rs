@@ -2216,4 +2216,264 @@ mod tests {
             .collect();
         assert_eq!(shifts.len(), 2);
     }
+
+    // ── 复核 14：在途旧图接续与旧/新画面归属的补充回归 ─────────────────────
+
+    fn frame_of(slices: Vec<DrawnSlice>) -> LocalDrawnFrame {
+        LocalDrawnFrame {
+            session: 7,
+            revision: 1,
+            slices,
+        }
+    }
+
+    fn drawn_slice(
+        source: SnapshotRef,
+        displayed: LocalRect,
+        mask_clip: LocalRect,
+        motion_kind: MotionKind,
+        direction: ClipDirection,
+        byte_range: (usize, usize),
+    ) -> DrawnSlice {
+        DrawnSlice {
+            slice: VisualSlice {
+                source,
+                rect: displayed,
+            },
+            visible_width: mask_clip.w,
+            clip_rect: mask_clip,
+            mask_clip,
+            motion_kind,
+            byte_range,
+            shaping_identity: identity(),
+            direction,
+        }
+    }
+
+    #[test]
+    fn previous_deletion_conceal_continues_into_next_edit() {
+        // Issue #919 复核 3：上一笔删除但仍在途的旧 Conceal 已不在当前 Core 正文，
+        // 不会进入本轮 old_spans；必须从 last_drawn 直接沿用其画面继续吞到 0，
+        // 否则连续按 Backspace 时，上一笔还可见的半个旧字会直接从新计划消失。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![]);
+        let jia_id = old_layout.line_snapshots[0].id;
+
+        // 上一帧：更早一笔删除的“乙”（独立旧排版行图，已不在本轮正文）正吞到一半。
+        let yi_source = SnapshotRef {
+            snapshot_id: LineSnapshotId::new(999, 1, 0),
+            source_uv: rect(20.0, 0.0, 20.0, 10.0),
+        };
+        let last = frame_of(vec![drawn_slice(
+            yi_source,
+            rect(20.0, 0.0, 20.0, 10.0),
+            rect(20.0, 0.0, 10.0, 10.0),
+            MotionKind::Conceal,
+            ClipDirection::LeftToRight,
+            (3, 6),
+        )]);
+
+        // 本笔 Backspace 删除“甲”。
+        let edit = make_edit("甲", "", 3, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        let conceals: Vec<_> = motion
+            .slices
+            .iter()
+            .filter(|s| s.motion_kind() == MotionKind::Conceal)
+            .collect();
+        assert_eq!(
+            conceals.len(),
+            2,
+            "应有本轮“甲”和上一笔在途“乙”两条 Conceal: {:?}",
+            motion.slices
+        );
+
+        // 本轮删除的“甲”：无同源在途旧图，从自身完整旧图开始吞。
+        let jia = conceals
+            .iter()
+            .find(|s| s.byte_range() == (0, 3))
+            .expect("应有“甲” Conceal");
+        match jia {
+            SliceMotion::Conceal {
+                old,
+                start_clip,
+                direction,
+                ..
+            } => {
+                assert_eq!(old.source.snapshot_id, jia_id);
+                assert_eq!(*start_clip, rect(0.0, 0.0, 20.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+
+        // 上一笔在途“乙”：沿用原 source / 原遮罩 / 原方向继续吞，不与本轮合并。
+        let yi = conceals
+            .iter()
+            .find(|s| s.byte_range() == (3, 6))
+            .expect("应有在途“乙” Conceal");
+        match yi {
+            SliceMotion::Conceal {
+                old,
+                start_clip,
+                direction,
+                ..
+            } => {
+                assert_eq!(old.source, yi_source);
+                assert_eq!(*start_clip, rect(20.0, 0.0, 10.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+
+        let ids = motion.source_snapshot_ids();
+        assert!(ids.contains(&jia_id));
+        assert!(ids.contains(&yi_source.snapshot_id));
+    }
+
+    #[test]
+    fn in_flight_deleted_glyph_not_swallowed_by_same_byte_range() {
+        // Issue #919 复核 4：正文“甲乙丙”先删“乙”（旧 3..6）→“甲丙”，新“丙”恰好
+        // 占据 3..6。在“乙”只吞一半时再 Forward Delete“甲”，不能因本轮 old_spans 的
+        // 3..6 有“丙”就跳过在途“乙”的残留，也不能把“乙”的遮罩套到“丙”上。
+        // 每张旧图按真实 source（snapshot_id + source_uv）区分，而不是字节位置。
+        let old_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        let new_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let bing_id = old_layout.line_snapshots[0].id;
+        let new_id = new_layout.line_snapshots[0].id;
+
+        // 上一笔删除的“乙”来自更早的“甲乙丙”排版（不同 revision 的行图），正在吞。
+        let yi_source = SnapshotRef {
+            snapshot_id: LineSnapshotId::new(999, 1, 0),
+            source_uv: rect(20.0, 0.0, 20.0, 10.0),
+        };
+        let last = frame_of(vec![drawn_slice(
+            yi_source,
+            rect(20.0, 0.0, 20.0, 10.0),
+            rect(20.0, 0.0, 10.0, 10.0),
+            MotionKind::Conceal,
+            ClipDirection::LeftToRight,
+            (3, 6),
+        )]);
+
+        // Forward Delete“甲”（旧 0..3）：“丙”应 Shift，在途“乙”继续退场。
+        let edit = make_edit("甲丙", "丙", 0, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        // “丙” 3..6 → 0..3 是 Shift（不因字节位置与在途“乙”相同而被判成退场/重影）。
+        let shift = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Shift)
+            .expect("应有“丙” Shift");
+        match shift {
+            SliceMotion::Shift { new, from, to, .. } => {
+                assert_eq!(new.source.snapshot_id, new_id);
+                assert_eq!(*from, rect(20.0, 0.0, 20.0, 10.0));
+                assert_eq!(*to, rect(0.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Shift, got {other:?}"),
+        }
+
+        // 本轮删除的“甲”退场。
+        let jia = motion
+            .slices
+            .iter()
+            .find(|s| {
+                s.motion_kind() == MotionKind::Conceal && s.source_ref().snapshot_id == bing_id
+            })
+            .expect("应有“甲” Conceal");
+        assert_eq!(jia.byte_range(), (0, 3));
+
+        // 在途“乙”独立退场：保留原 source / 遮罩 / 方向，不与“丙”合并。
+        let yi = motion
+            .slices
+            .iter()
+            .find(|s| s.source_ref() == &yi_source)
+            .expect("应有在途“乙” Conceal");
+        match yi {
+            SliceMotion::Conceal {
+                start_clip,
+                direction,
+                ..
+            } => {
+                assert_eq!(*start_clip, rect(20.0, 0.0, 10.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+
+        // “丙”只位移，不应被当成 Conceal（否则 3..6 处会出现两张退场图）。
+        assert!(
+            !motion.slices.iter().any(|s| {
+                s.motion_kind() == MotionKind::Conceal
+                    && s.source_ref().snapshot_id == bing_id
+                    && s.source_ref().source_uv == rect(20.0, 0.0, 20.0, 10.0)
+            }),
+            "未改的“丙”不应退场: {:?}",
+            motion.slices
+        );
+
+        let ids = motion.source_snapshot_ids();
+        assert!(ids.contains(&yi_source.snapshot_id));
+        assert!(ids.contains(&bing_id));
+    }
+
+    #[test]
+    fn new_to_old_byte_end_maps_deletion_boundary_to_left_side() {
+        // Issue #919 复核 13：删除“乙”（旧 3..6 → 新 3..3）时，同一个新偏移 3 既是
+        // “甲”末尾（删除前坐标 3）也是“丙”开头（删除后坐标 3）。区间起点用
+        // new_to_old_byte 取右侧（删除后）坐标，区间终点用 new_to_old_byte_end 取
+        // 左侧（删除前）坐标，消除边界歧义。
+        let edit = make_edit("甲乙丙", "甲丙", 6, 3, (3, 6), (3, 3), "");
+        assert_eq!(new_to_old_byte(&edit, 3), 6);
+        assert_eq!(new_to_old_byte_end(&edit, 3), 3);
+    }
+
+    #[test]
+    fn reveal_and_shift_targets_become_static_holes() {
+        // Issue #919：静态层只挖 Reveal 的新位置 / Shift 的目标位置，Conceal 是旧字
+        // 不挖孔；孔洞固定取自计划 target 排除集合，与 progress 无关。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        // 段首插入“乙”：新字 Reveal(x=0)，“甲”未改但被挤到 x=20 → Shift(to x=20)。
+        let edit = make_edit("甲", "乙甲", 0, 3, (0, 0), (0, 3), "乙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+        let new_id = new_layout.line_snapshots[0].id;
+
+        let holes = motion.sample(0.0).static_holes;
+        assert_eq!(holes.len(), 2, "Reveal + Shift 各挖一个孔: {holes:?}");
+        assert!(holes.iter().any(|h| h.x == 0.0 && h.snapshot_id == new_id));
+        assert!(holes.iter().any(|h| h.x == 20.0 && h.snapshot_id == new_id));
+
+        // 与 progress 无关：中间帧孔洞不变。
+        assert_eq!(motion.sample(50.0).static_holes.len(), 2);
+        // 过渡结束后静态层恢复完整 canonical，不再挖孔。
+        assert!(motion.sample(100.0).static_holes.is_empty());
+    }
+
+    #[test]
+    fn conceal_plan_does_not_create_static_hole() {
+        // Issue #919：纯删除只有旧字 Conceal，静态层不挖孔（旧字形仍由静态/覆盖层
+        // 唯一绘制，不能同时把相同像素画两次）。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![]);
+        let old_id = old_layout.line_snapshots[0].id;
+        let edit = make_edit("甲", "", 3, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        assert!(motion.sample(0.0).static_holes.is_empty());
+        assert_eq!(motion.required_textures, vec![old_id]);
+    }
 }
