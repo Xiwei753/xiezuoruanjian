@@ -51,7 +51,8 @@ function createResolver(deviceInfo, canIUseFn) {
   }
 }
 
-// —— api20 isSupported 规格（与 DlpAntiPeepApi20.ets / GripPostureApi20.ets 同规格）——
+// —— api20 isSupported 规格（与 entry 内经 PlatformApiResolver 分流的 api20 impl 同规格，
+// 如 GripPostureApi20.ets / GesturesShareApi20.ets；DLP 防窥已迁出 entry，不再走本 resolver）——
 // isSupported = isApiAtLeast(20) && hasSystemCapability(syscap)
 function api20IsSupported(resolver, syscap) {
   return resolver.isApiAtLeast(20) && resolver.hasSystemCapability(syscap)
@@ -110,36 +111,36 @@ console.log('3. 读取失败 → getApiLevel()=0 → isApiAtLeast(20)=false')
 console.log('4. api20 isSupported = isApiAtLeast(20) && hasSystemCapability（两者都 true 才 true）')
 {
   const r = createResolver(makeDeviceInfo(20), makeCanIUse({
-    'SystemCapability.Security.DlpAntiPeep': true
+    'SystemCapability.Collaboration.HarmonyShare': true
   }))
-  assert(api20IsSupported(r, 'SystemCapability.Security.DlpAntiPeep') === true,
+  assert(api20IsSupported(r, 'SystemCapability.Collaboration.HarmonyShare') === true,
     'api20+capability 都 true → isSupported=true')
 }
 
 console.log('5. api20 isSupported：API>=20 但 SystemCapability=false → false')
 {
   const r = createResolver(makeDeviceInfo(20), makeCanIUse({
-    'SystemCapability.Security.DlpAntiPeep': false
+    'SystemCapability.Collaboration.HarmonyShare': false
   }))
-  assert(api20IsSupported(r, 'SystemCapability.Security.DlpAntiPeep') === false,
+  assert(api20IsSupported(r, 'SystemCapability.Collaboration.HarmonyShare') === false,
     'api20=true + capability=false → isSupported=false')
 }
 
 console.log('6. api20 isSupported：SystemCapability=true 但 API<20 → false')
 {
   const r = createResolver(makeDeviceInfo(19), makeCanIUse({
-    'SystemCapability.Security.DlpAntiPeep': true
+    'SystemCapability.Collaboration.HarmonyShare': true
   }))
-  assert(api20IsSupported(r, 'SystemCapability.Security.DlpAntiPeep') === false,
+  assert(api20IsSupported(r, 'SystemCapability.Collaboration.HarmonyShare') === false,
     'api19 + capability=true → isSupported=false（API 不够）')
 }
 
 console.log('7. api20 isSupported：读取失败（API=0）+ capability=true → false')
 {
   const r = createResolver(makeFailingDeviceInfo(), makeCanIUse({
-    'SystemCapability.Security.DlpAntiPeep': true
+    'SystemCapability.Collaboration.HarmonyShare': true
   }))
-  assert(api20IsSupported(r, 'SystemCapability.Security.DlpAntiPeep') === false,
+  assert(api20IsSupported(r, 'SystemCapability.Collaboration.HarmonyShare') === false,
     '读取失败 + capability=true → isSupported=false（API=0 不够）')
 }
 
@@ -175,7 +176,7 @@ console.log('9. getApiLevel 结果缓存（不重复读 deviceInfo）')
 console.log('10. canIUse 抛异常 → hasSystemCapability 返回 false（不伪造 true）')
 {
   const r = createResolver(makeDeviceInfo(20), () => { throw new Error('canIUse failed') })
-  assert(r.hasSystemCapability('SystemCapability.Security.DlpAntiPeep') === false,
+  assert(r.hasSystemCapability('SystemCapability.Collaboration.HarmonyShare') === false,
     'canIUse 抛异常 → hasSystemCapability=false')
   assert(r.canIUse('any') === false, 'canIUse 抛异常 → canIUse=false')
 }
