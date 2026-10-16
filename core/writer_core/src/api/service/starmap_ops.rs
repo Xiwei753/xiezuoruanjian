@@ -1506,10 +1506,10 @@ impl WriterCoreApi {
 
     /// 列出与特定画布或目标相关的所有连接。
     ///
-    /// 如果 `target` 是 `Some`，调用 `list_connections_for_target` 查找指向
-    /// 特定目标的连接；如果 `target` 是 `None`，走持久化路径依赖索引
-    ///（`query_starmap_connections_for_canvas`）返回当前画布中的所有 Edge
-    /// 以及存于祖先图但至少一端落在当前画布的 Edge，而非逐 Edge 加载所有祖先图（问题4）。
+    /// `target` 为 `Some` 时走 `query_starmap_connections_for_target`，为 `None`
+    /// 时走 `query_starmap_connections_for_canvas`，两者都从持久化路径依赖索引
+    /// 收集候选祖先图，返回当前画布中的所有 Edge 以及存于祖先图但至少一端
+    /// route-aware 落在当前画布的 Edge，而非逐 Edge 加载所有祖先图（问题4）。
     pub fn list_starmap_connections(
         &self,
         route: crate::api::types::StarMapNavigationRouteDto,

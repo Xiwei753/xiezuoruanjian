@@ -44,7 +44,7 @@ impl TryFrom<StarMapEndpointSelectionDto>
 
 /// 连线信息 DTO：边的宿主图、ID、端点路径、类型和标签。
 ///
-/// 由 `list_connections_for_target` 和 `list_connections_for_canvas` 返回，
+/// 由 `list_starmap_connections` 返回（内部走反向依赖索引查询），
 /// 既包括本图 Edge，也包括存于祖先图但一端指向当前图的 Edge。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

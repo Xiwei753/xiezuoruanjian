@@ -1,7 +1,7 @@
 # StarMap 语义地基 v2.0 (独立画布与跨图导航)
 
 Status: active
-Last verified: 2026-10-15
+Last verified: 2026-10-16
 Truth source: product decision / protocol
 Supersedes: v1.1 (2026-06-11)
 
@@ -92,17 +92,11 @@ StarMapEndpointSelection {
 
 ## 关联反查
 
-### list_connections_for_target(route, target)
-
-返回 `{ owner_starmap_id, edge_id, from, to, kind, label }`，既包括本图 Edge，也包括**存于祖先图但一端指向当前图**的 Edge。前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
-
-### list_connections_for_canvas(route)
-
-返回当前画布可见的所有连线，包括存于祖先图但一端落在当前画布或其子画布的 Edge。
+统一入口是 `list_starmap_connections(route, target)`：`target = Some(t)` 时返回指向 `t` 的连接，`target = None` 时返回当前画布可见的所有连线。两种查询都返回 `{ owner_starmap_id, edge_id, from, to, kind, label }`，既包括本图 Edge，也包括**存于祖先图但至少一端 route-aware 落在当前画布**的 Edge。前端不应为了看当前层连线，自己递归读取所有祖先 graph 再猜路径。
 
 ### 派生反向关系索引
 
-`relation_index.rs` 只索引本地图引用，不能把深层 Node ID 错当作宿主图本地 Node ID。保持这个不变量，另建立按解析后目标 `(starmap_id, object_id)` 查询的**派生反向关系索引**。真相仍是各图 `StarMapEdge`，索引由现有数据构建，关系写入/修改/删除后增量更新。
+`relation_index.rs` 只索引本地图引用，不能把深层 Node ID 错当作宿主图本地 Node ID。保持这个不变量，另建立按解析后目标 `(starmap_id, object_id)` 查询的**派生反向关系索引**。真相仍是各图 `StarMapEdge`，索引由现有数据构建，关系写入/修改/删除后增量更新。`list_starmap_connections` 从该索引收集候选祖先图，再用统一的 route-aware 端点匹配（比较完整实例路径后缀，区分 `e1→B`、`e2→B` 等不同进入实例）做精确过滤；不再保留逐 Edge 加载所有祖先图的第二套扫描实现。
 
 ## 节点与连接语义模型
 

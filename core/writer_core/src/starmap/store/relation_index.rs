@@ -791,7 +791,8 @@ impl PathDependencyIndex {
 
     /// 基于索引查询与特定画布相关的所有连接（问题4）。
     ///
-    /// 与 [`crate::starmap::connections::list_connections_for_canvas`] 语义一致：
+    /// 语义等价于“加载所有相关祖先图后逐边匹配”的旧扫描实现（该旧实现已被
+    /// 本索引查询取代并从 `connections` 模块删除）：
     /// 返回当前画布的所有 Edge，以及存于祖先图但至少一端 route-aware 落在
     /// 当前画布的 Edge。区别在于本方法从反向依赖索引获取候选 Edge 来源，
     /// 只加载索引表明与当前画布相关的祖先图，而非逐 Edge 加载所有祖先图。
@@ -850,7 +851,7 @@ impl PathDependencyIndex {
 
     /// 按终点 target 查询指向该 target 的所有连接（索引版）。
     ///
-    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_target`。
+    /// 替代逐 Edge 加载所有祖先图的旧扫描实现。
     ///
     /// 先解析 route 得到当前画布与祖先链，再从索引收集候选祖先图
     ///（CanvasEndpoint + 按 target 类型的 NodeTarget/AnchorTarget），
@@ -1543,5 +1544,323 @@ mod tests {
             "Starmap target 应合并 CanvasEndpoint，候选含 A 和 M；实际 {:?}",
             owners
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // 索引化连接查询：route-aware 行为回归
+    //
+    // 原 connections.rs 中非索引的 list_connections_for_target /
+    // list_connections_for_canvas 已被 PathDependencyIndex 索引查询取代并删除，
+    // 其健壮性用例迁移到此处，用真实索引入口 query_connections_for_canvas /
+    // query_connections_for_target 覆盖相同语义，不留下无测试的旧扫描路径。
+    // -----------------------------------------------------------------------
+
+    fn index_context(graphs: Vec<StarMapGraph>) -> (GraphResolverContext, PathDependencyIndex) {
+        let ids: Vec<String> = graphs.iter().map(|g| g.starmap_id.clone()).collect();
+        let mut overlays = std::collections::HashMap::new();
+        for g in graphs {
+            overlays.insert(g.starmap_id.clone(), g);
+        }
+        let context = GraphResolverContext {
+            app_data_root: std::path::PathBuf::from("/tmp/test_starmap_relations"),
+            overlays,
+        };
+        let index = PathDependencyIndex::build(&context, &ids).expect("build index should succeed");
+        (context, index)
+    }
+
+    fn test_node(node_id: &str) -> crate::starmap::types::StarMapNode {
+        crate::starmap::types::StarMapNode {
+            id: node_id.to_string(),
+            title: node_id.to_string(),
+            kind: crate::starmap::types::StarMapNodeKind::Note,
+            payload: None,
+            tags: vec![],
+            content: crate::starmap::semantic::StarMapNodeContent::Empty,
+            anchors: vec![],
+            portal: None,
+            position: StarMapPoint::default(),
+            style: Default::default(),
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn test_embed(host: &str, instance_id: &str, target: &str) -> StarMapEmbed {
+        StarMapEmbed {
+            instance_id: instance_id.to_string(),
+            target_starmap_id: target.to_string(),
+            label: None,
+            position: StarMapPoint::default(),
+            host_path: StarMapTargetPath {
+                starmap_id: host.to_string(),
+                segments: vec![],
+                target: StarMapTargetDetail::Starmap,
+            },
+            provenance: StarMapProvenance::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn test_edge(id: &str, from: StarMapTargetPath, to: StarMapTargetPath) -> StarMapEdge {
+        StarMapEdge {
+            id: id.to_string(),
+            from,
+            to,
+            kind: StarMapEdgeKind::RelatedTo,
+            label: None,
+            payload: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn test_path(
+        starmap_id: &str,
+        segments: Vec<StarMapPathSegment>,
+        target: StarMapTargetDetail,
+    ) -> StarMapTargetPath {
+        StarMapTargetPath {
+            starmap_id: starmap_id.to_string(),
+            segments,
+            target,
+        }
+    }
+
+    fn enter_embed(instance_id: &str) -> StarMapPathSegment {
+        StarMapPathSegment::EnterEmbed {
+            instance_id: instance_id.to_string(),
+        }
+    }
+
+    fn node_target(node_id: &str) -> StarMapTargetDetail {
+        StarMapTargetDetail::Node {
+            node_id: node_id.to_string(),
+        }
+    }
+
+    fn route_via(instance_id: &str) -> StarMapNavigationRoute {
+        StarMapNavigationRoute {
+            root_starmap_id: "sm_A".to_string(),
+            segments: vec![enter_embed(instance_id)],
+        }
+    }
+
+    /// 当前画布内的边：target 查询应返回。
+    #[test]
+    fn index_target_query_returns_local_edge() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b1"), test_node("b2")],
+            edges: vec![test_edge(
+                "edge_local",
+                test_path("sm_B", vec![], node_target("b1")),
+                test_path("sm_B", vec![], node_target("b2")),
+            )],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_target(&route_via("e1"), &node_target("b1"), &context)
+            .expect("query should succeed");
+
+        assert_eq!(conns.len(), 1);
+        assert_eq!(conns[0].edge_id, "edge_local");
+        assert_eq!(conns[0].owner_starmap_id, "sm_B");
+    }
+
+    /// 祖先图指向当前画布的边：target 查询应返回。
+    #[test]
+    fn index_target_query_returns_ancestor_edge() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            nodes: vec![test_node("a")],
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            edges: vec![test_edge(
+                "edge_cross",
+                test_path("sm_A", vec![], node_target("a")),
+                test_path("sm_A", vec![enter_embed("e1")], node_target("b")),
+            )],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b")],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_target(&route_via("e1"), &node_target("b"), &context)
+            .expect("query should succeed");
+
+        assert_eq!(conns.len(), 1);
+        assert_eq!(conns[0].edge_id, "edge_cross");
+        assert_eq!(conns[0].owner_starmap_id, "sm_A");
+    }
+
+    /// 没有任何边指向目标时返回空，而不是报错或伪造连接。
+    #[test]
+    fn index_target_query_no_connections() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b")],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_target(&route_via("e1"), &node_target("b"), &context)
+            .expect("query should succeed");
+        assert!(conns.is_empty());
+    }
+
+    /// 当前画布的所有本地边：canvas 查询应全部返回。
+    #[test]
+    fn index_canvas_query_returns_local_edges() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b1"), test_node("b2"), test_node("b3")],
+            edges: vec![
+                test_edge(
+                    "edge1",
+                    test_path("sm_B", vec![], node_target("b1")),
+                    test_path("sm_B", vec![], node_target("b2")),
+                ),
+                test_edge(
+                    "edge2",
+                    test_path("sm_B", vec![], node_target("b2")),
+                    test_path("sm_B", vec![], node_target("b3")),
+                ),
+            ],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_canvas(&route_via("e1"), &context)
+            .expect("query should succeed");
+        let ids: Vec<&str> = conns.iter().map(|c| c.edge_id.as_str()).collect();
+        assert_eq!(conns.len(), 2);
+        assert!(ids.contains(&"edge1"));
+        assert!(ids.contains(&"edge2"));
+    }
+
+    /// canvas 查询同时包含本地边与祖先图落在当前画布的边。
+    #[test]
+    fn index_canvas_query_includes_ancestor_edge() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            nodes: vec![test_node("a")],
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            edges: vec![test_edge(
+                "edge_cross",
+                test_path("sm_A", vec![], node_target("a")),
+                test_path("sm_A", vec![enter_embed("e1")], node_target("b")),
+            )],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b")],
+            edges: vec![test_edge(
+                "edge_local",
+                test_path("sm_B", vec![], node_target("b")),
+                test_path("sm_B", vec![], node_target("b")),
+            )],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_canvas(&route_via("e1"), &context)
+            .expect("query should succeed");
+        let ids: Vec<&str> = conns.iter().map(|c| c.edge_id.as_str()).collect();
+        assert_eq!(conns.len(), 2);
+        assert!(ids.contains(&"edge_cross"));
+        assert!(ids.contains(&"edge_local"));
+    }
+
+    /// canvas 查询排除祖先图内部与当前画布无关的边。
+    #[test]
+    fn index_canvas_query_excludes_unrelated_ancestor_edge() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            nodes: vec![test_node("a"), test_node("a2")],
+            embeds: vec![test_embed("sm_A", "e1", "sm_B")],
+            edges: vec![test_edge(
+                "edge_local_a",
+                test_path("sm_A", vec![], node_target("a")),
+                test_path("sm_A", vec![], node_target("a2")),
+            )],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b")],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        let conns = index
+            .query_connections_for_canvas(&route_via("e1"), &context)
+            .expect("query should succeed");
+        assert!(conns.is_empty());
+    }
+
+    /// 同一星图被多个 Embed 嵌入时，target 查询按进入实例区分访问上下文。
+    #[test]
+    fn index_target_query_distinguishes_embed_instances() {
+        let graph_a = StarMapGraph {
+            starmap_id: "sm_A".to_string(),
+            nodes: vec![test_node("a")],
+            embeds: vec![
+                test_embed("sm_A", "e1", "sm_B"),
+                test_embed("sm_A", "e2", "sm_B"),
+            ],
+            edges: vec![test_edge(
+                "edge_via_e1",
+                test_path("sm_A", vec![], node_target("a")),
+                test_path("sm_A", vec![enter_embed("e1")], node_target("b")),
+            )],
+            ..Default::default()
+        };
+        let graph_b = StarMapGraph {
+            starmap_id: "sm_B".to_string(),
+            nodes: vec![test_node("b")],
+            ..Default::default()
+        };
+        let (context, index) = index_context(vec![graph_a, graph_b]);
+
+        // 经 e2 进入 B：edge_via_e1 只属于 e1 的访问上下文，不应可见。
+        let via_e2 = index
+            .query_connections_for_target(&route_via("e2"), &node_target("b"), &context)
+            .expect("query should succeed");
+        assert!(via_e2.is_empty());
+
+        // 经 e1 进入 B：应找到 edge_via_e1。
+        let via_e1 = index
+            .query_connections_for_target(&route_via("e1"), &node_target("b"), &context)
+            .expect("query should succeed");
+        assert_eq!(via_e1.len(), 1);
+        assert_eq!(via_e1[0].edge_id, "edge_via_e1");
     }
 }

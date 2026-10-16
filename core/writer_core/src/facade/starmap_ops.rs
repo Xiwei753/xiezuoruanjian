@@ -429,7 +429,7 @@ impl super::WriterCore {
     ///
     /// 封装 `get_or_init_path_dependency_index` + `query_connections_for_canvas`，
     /// 供 api/service 层的 `list_starmap_connections`（target=None 分支）调用，
-    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_canvas`。
+    /// 替代逐 Edge 加载所有祖先图的旧扫描实现。
     ///
     /// 先确保 root starmap 完全加载，再构建 resolver context 并获取/初始化索引，
     /// 最后调用 [`PathDependencyIndex::query_connections_for_canvas`] 从索引获取
@@ -461,7 +461,7 @@ impl super::WriterCore {
 
     /// 按终点 target 查询指向该 target 的所有连接（持久化索引版）。
     ///
-    /// 替代逐 Edge 加载所有祖先图的 `list_connections_for_target`。
+    /// 替代逐 Edge 加载所有祖先图的旧扫描实现。
     /// 先确保 root starmap 完全加载，再构建 resolver context 并获取/初始化索引，
     /// 最后调用 [`PathDependencyIndex::query_connections_for_target`] 从索引获取
     /// 候选 Edge 来源，只加载相关祖先图的边文件。
