@@ -649,9 +649,11 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
 }
 
 /// Issue #919：协同模式下**整个光标接线**——正文事务的光标用 `text_motion`
-/// 的 `caret_sample` 推进，纯点击/键盘不被正文动画接管，仍用 `cursor_ctrl`
-/// 自己的视觉位置。此前只验证了 `TextMotion` 的采样几何，未验证
-/// `build_cursor_render_state_for_frame` 真的按来源选择 caret。
+/// 的 `caret_sample` 推进，真实鼠标点击不被正文动画接管，仍用 `cursor_ctrl`
+/// 自己的视觉位置，并且点击不清掉进行中的正文动画计划。
+///
+/// 此前该测试只验证 `TextMotion` 采样几何，并用测试伪造的 `last_move_source`
+/// 断言"状态选择"；这里补上真实 `click_at` 路径对计划生命周期的验证。
 #[test]
 fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
     run_on_qt_thread(|| {
@@ -659,7 +661,33 @@ fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
         use super::layout_snapshot::SourceRect;
         use super::text_motion::{TextMotion, TextMotionFrame};
 
+        // 安装一份进行中的正文动画计划。`text_motion` 内部几何由其自身单元测试
+        // 覆盖，这里只验证光标接线与真实点击后的计划生命周期。
+        let install_motion = |item: &mut SujianEditorItem| {
+            *item.pipeline.text_motion_mut() = Some(TextMotion {
+                slices: Vec::new(),
+                started_ms: 0.0,
+                duration_ms: 100,
+                session: item.document_session,
+                target_revision: 0,
+                viewport: SourceRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 400.0,
+                    h: 600.0,
+                },
+                static_exclusions: Vec::new(),
+                required_textures: Vec::new(),
+                caret_from: Some((10.0, 5.0)),
+                caret_to: Some((40.0, 20.0)),
+                paragraph_moves: Vec::new(),
+            });
+        };
+
         let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello World"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
         item.cursor_ctrl.visible = true;
         item.cursor_ctrl.visual_x = 111.0;
         item.cursor_ctrl.visual_y = 222.0;
@@ -669,31 +697,14 @@ fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
             item.effective_animation().shared_timeline,
             "前置：协同动画默认开启"
         );
-        *item.pipeline.text_motion_mut() = Some(TextMotion {
-            slices: Vec::new(),
-            started_ms: 0.0,
-            duration_ms: 100,
-            session: item.document_session,
-            target_revision: 0,
-            viewport: SourceRect {
-                x: 0.0,
-                y: 0.0,
-                w: 400.0,
-                h: 600.0,
-            },
-            static_exclusions: Vec::new(),
-            required_textures: Vec::new(),
-            caret_from: Some((10.0, 5.0)),
-            caret_to: Some((40.0, 20.0)),
-            paragraph_moves: Vec::new(),
-        });
+        install_motion(&mut item);
 
         let frame = TextMotionFrame {
             caret_sample: Some((35.0, 17.5)),
             ..TextMotionFrame::default()
         };
 
-        // 正文事务（TextTransaction）：光标用正文动画的同一进度采样点。
+        // ① 正文事务（TextTransaction）：光标用正文动画的同一进度采样点。
         item.cursor_ctrl.last_move_source = CursorMoveSource::TextTransaction;
         let state = item.build_cursor_render_state_for_frame(&frame);
         assert!(
@@ -702,21 +713,45 @@ fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
             state.x,
             state.y
         );
-
-        // 纯点击（PointerClick）：不被正文动画接管，仍用独立 visual 位置。
-        item.cursor_ctrl.last_move_source = CursorMoveSource::PointerClick;
-        let state = item.build_cursor_render_state_for_frame(&frame);
         assert!(
-            (state.x - 111.0).abs() < 1e-9 && (state.y - 222.0).abs() < 1e-9,
-            "点击移动光标必须独立于正文动画，实际 ({}, {})",
-            state.x,
-            state.y
+            item.pipeline.text_motion().is_some(),
+            "采样必须基于仍存在的正文动画计划"
         );
+
+        // ② 真实 `click_at` 路径：点击独立于正文动画，且不清掉进行中的计划。
+        // 第一次点击消费初始 force-snap，第二次点击才建立独立视觉 Tween。
+        item.click_at(0.0, 0.0, false);
         assert!(
             item.pipeline.text_motion().is_some(),
             "点击不得清掉进行中的正文动画计划"
         );
+        item.click_at(300.0, 10.0, false);
+        assert_eq!(
+            item.cursor_ctrl.last_move_source,
+            CursorMoveSource::PointerClick,
+            "真实 click_at 必须把来源标为 PointerClick"
+        );
+        assert!(
+            item.pipeline.text_motion().is_some(),
+            "真实点击后正文动画计划仍在（点击不拥有正文动画）"
+        );
+        assert!(
+            item.cursor_ctrl.animation.is_some(),
+            "点击必须建立独立于正文动画的光标 Tween"
+        );
 
-        println!("[BEHAVIOR_VERIFY] #919 协同 caret_sample 与点击独立接线 ok");
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - item.cursor_ctrl.visual_x).abs() < 1e-9
+                && (state.y - item.cursor_ctrl.visual_y).abs() < 1e-9,
+            "点击源必须用 cursor_ctrl 自己的视觉位置，而非正文 caret_sample；\
+             实际 state=({}, {}) visual=({}, {})",
+            state.x,
+            state.y,
+            item.cursor_ctrl.visual_x,
+            item.cursor_ctrl.visual_y
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 协同 caret_sample 与真实点击独立接线 ok");
     });
 }
