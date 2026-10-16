@@ -227,6 +227,18 @@ hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=
 最终产物的权限归属应以对应 product 打包后 HAP/HSP/APP 的实际清单为准，
 不能只由源码声明推断「构建后的 entry 模块增加了 DLP 权限」。
 
+构建后可核对 hvigor 生成的模块依赖装配，文件在 entry 构建目录的
+`intermediates/loader/<target>/` 下（构建产物不入库，名字见下）：
+
+```text
+entry/build/<target>/intermediates/loader/<target>/loader.json
+```
+
+普通 `entry@default` 的 `hspNameOhmMap` / `hspResourcesMap` 为空，不含
+`privacy_acl`；受限 `entry@acl` 的对应字段含
+`privacy_acl: @bundle:com.xiwei.sujian/privacy_acl/ets/Index`。即普通 product 的
+entry 依赖图没有该受限 HSP，受限 product 才有。
+
 ### 装机与验证
 
 HAP 落在 `apps/harmony` 的 `build` 目录下（不进 git），文件名形如
