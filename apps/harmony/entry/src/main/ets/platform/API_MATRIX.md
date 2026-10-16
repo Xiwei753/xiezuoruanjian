@@ -8,14 +8,14 @@
 
 - **最低安装基线**：`compatibleSdkVersion = 12`（HarmonyOS NEXT 5.0.0(12)）。这是应用能安装运行的最低系统版本，由 `apps/harmony/build-profile.json5` 的 `compatibleSdkVersion` 表达，只反映真实需要支持的最低版本，不因开发机/测试机使用 API26 SDK 就一起抬到 API26。
 - **编译目标**：`targetSdkVersion = 26`（HarmonyOS 7）。工程使用 API26 SDK 构建，`targetSdkVersion` 保持 API26，与 `compatibleSdkVersion` 不必为同一 API。
-- **能力分流**：API20 / API23 / API26 等高版本能力不抬高安装下限，而是通过 `PlatformApiResolver`（`version/PlatformApiResolver.ets`）按运行时 API Level 分流到各 `impl/apiXX` facade：
+- **能力分流**：API20 / API23 / API26 等高版本能力不抬高安装下限。entry 内的高版本能力通过 `PlatformApiResolver`（`version/PlatformApiResolver.ets`）按运行时 API Level 分流到各 `impl/apiXX` facade；DLP 防窥是例外——实现已迁入独立自包含的 `privacy_acl` HSP，在模块内用 `deviceInfo.sdkApiVersion` / `canIUse` 自行判断 API Level 与 SystemCapability，不经过 entry 的 `PlatformApiResolver`：
   - `impl/api11`：普通系统分享（systemShare，since 11）
   - `impl/api12`：碰一碰分享（knockShare 基础重载，since 12）
-  - `impl/api20`：握姿感知、防窥基础、隔空传送（gesturesShare，since 20）
-  - `impl/api23`：防窥扩展（requestAntiPeepOptions，since 23）
+  - `impl/api20`：握姿感知、隔空传送（gesturesShare，since 20）
+  - `impl/api23`：HDS 悬浮页签等（HdsTabs 及导航目的页，since 23）
   - API26 新能力继续单独使用
 - **降级语义**：旧系统缺少某个高版本能力时，只降级该能力（`isSupported()` 返回 false、对应入口返回 false，不伪造状态），**不导致整个应用无法安装**。API12～25 的设备可以正常安装运行，只是按运行时版本禁用对应高版本能力。
-- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流。
+- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流（DLP 防窥例外：随实现迁入 `privacy_acl` HSP，见防窥屏一节）。
 
 ## 能力总览
 
@@ -77,7 +77,7 @@
   - 需在签名 Profile 的 ACL 中声明，并在 `privacy_acl` 模块的 `module.json5` 的 `requestPermissions` 登记。
 - SystemCapability：`SystemCapability.Security.DlpAntiPeep`
 - **两个独立轴**：
-  - **API Level 轴（运行环境差异）**：API20 基础 / API23 扩展，走 `impl/apiXX` 子目录分流，由 `PlatformApiResolver` 按运行时 API Level 分流。
+  - **API Level 轴（运行环境差异）**：API20 基础 / API23 扩展，走 `privacy_acl` 模块内 `impl/apiXX` 子目录分流。因 `privacy_acl` 是自包含 HSP、不依赖 entry 的 `PlatformApiResolver`，两个 facade 均在模块内用内联 `isApiAtLeast`（`deviceInfo.sdkApiVersion`）与 `hasSystemCapability`（`canIUse`）判断运行时 API 与 SystemCapability；entry 侧 `ShoulderSurfingService` 只经 Port/Provider 委托，不做版本判断。
   - **ACL 轴（发行签名资格）**：`DLP_GET_HIDE_STATUS` 需要 ACL，仅持有 ACL 的签名 Profile 才能装配。DLP 实现已迁移到独立 `privacy_acl` HSP 模块，仅 ACL product 装配；普通包（default product）不编译 `privacy_acl`、不声明 `DLP_GET_HIDE_STATUS`。
 
 ### API20 基础
