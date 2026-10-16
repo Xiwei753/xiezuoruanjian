@@ -208,13 +208,13 @@ hvigorw --mode project -p product=acl -p buildMode=debug \
 > `hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap --no-daemon`，
 > 但这不是完整的受限包交付命令。
 
-隔离结果是可核对的：对比构建处理后的 `entry` 模块权限清单即可确认——`product=default`
-的权限只有 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
-`ohos.permission.DETECT_GESTURE`；`product=acl` 的 `entry` 在这些之外另含
-`ohos.permission.DLP_GET_HIDE_STATUS`，其 `reason` / `usedScene` 与
-`privacy_acl/src/main/module.json5` 的声明一致，说明受限权限由被装配的 HSP 带入，
-不是 `entry` 自己声明。普通 product 的 entry 依赖图与 `src/standard` 的 Provider
-都不含 `privacy_acl`。
+权限隔离在源码中由模块和 product 共同决定：`entry/src/main/module.json5`
+声明 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
+`ohos.permission.DETECT_GESTURE`；`ohos.permission.DLP_GET_HIDE_STATUS` 则只由
+`privacy_acl/src/main/module.json5` 声明，包含其专属的 `reason` / `usedScene`。
+`product=default` 不装配 `privacy_acl`，`product=acl` 装配该 HSP。
+最终产物的权限归属应以对应 product 打包后 HAP/HSP/APP 的实际清单为准，
+不能只由源码声明推断「构建后的 entry 模块增加了 DLP 权限」。
 
 ### 装机与验证
 
