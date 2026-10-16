@@ -5,8 +5,10 @@
 // refresh() 查询各 service 真实 support 状态汇总，不靠默认 bool 假装能力存在。
 //
 // Issue #742：平台能力层收口。本类不 import 任何 @kit.*，不判断 motion/dlpAntiPeep
-// 枚举或具体 API Level；grip/shoulder 能力经各 service → impl/apiXX facade 探测，
-// CapabilityRegistry 只读各 service.isSupported() 最终布尔结果。
+// 枚举或具体 API Level；CapabilityRegistry 只读各 service.isSupported() 最终布尔结果。
+// Issue #914：grip 仍经 GripPostureService → impl/apiXX facade 探测；shoulder 改经
+// ShoulderSurfingService → ShoulderSurfingPort → target Provider（DLP 实现在独立
+// privacy_acl HSP，普通 default Provider 不引用 DLP）。
 //
 // Issue #629 评论5 第6部分：
 //   - 不再探测 systemShareManager / shareContent（普通分享已改 systemShare.SharedData + ShareController）。
