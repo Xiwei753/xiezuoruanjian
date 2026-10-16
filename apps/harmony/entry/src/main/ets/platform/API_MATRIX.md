@@ -23,7 +23,7 @@
 |------|-----|---------|------------------|------|-----|---------|
 | 握姿感知 | @kit.MultimodalAwarenessKit (motion) | 20 | SystemCapability.MultimodalAwareness.Motion | ohos.permission.DETECT_GESTURE | 否 | awareness/impl/api20/GripPostureApi20.ets |
 | 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是（仅 ACL product 装配 privacy_acl HSP） | privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets, privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets |
-| 窗口隐私 | @kit.ArkUI (window) | 未限定独立 API（随 @kit.ArkUI window 模块） | 未限定独立 SystemCapability（随 @kit.ArkUI window 模块） | 无 | 否 | privacy/WindowPrivacyService.ets |
+| 窗口隐私 | @kit.ArkUI (window) | 9 | SystemCapability.WindowManager.WindowManager.Core | ohos.permission.PRIVACY_WINDOW | 否 | privacy/WindowPrivacyService.ets |
 | 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/ContinuationEntrypoint.ets, continuity/AppContinuationService.ets |
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
@@ -120,9 +120,9 @@
 - 接口：
   - `window.getLastWindow(context)`
   - `win.setWindowPrivacyMode(enabled)`（截图/录屏时隐藏窗口内容，用于隐私保护；旧的 `setSnapshotSkip` 不是公开 SDK API，`@ohos.window.d.ts` 中无此方法）
-- 最低 API：未限定独立 API（`setWindowPrivacyMode` 随 `@kit.ArkUI` `window` 模块整体可用，官方未为该方法单独声明起始 API Level）
-- SystemCapability：未限定独立 SystemCapability（随 `@kit.ArkUI` `window` 模块，无独立 syscap 声明）
-- 权限：无
+- 最低 API：9（`setWindowPrivacyMode` 自 API 9 起可用；当前工程最低 API 为 12，始终满足）
+- SystemCapability：`SystemCapability.WindowManager.WindowManager.Core`
+- 权限：`ohos.permission.PRIVACY_WINDOW`（API 11+ 为 `normal` / `system_grant`，无需 ACL；API 9–10 为 `system_basic`，但工程最低 API 12 已过此限制）
 - ACL：否
 - 实现文件：`privacy/WindowPrivacyService.ets`
 

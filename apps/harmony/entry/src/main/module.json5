@@ -50,6 +50,9 @@
         "name": "ohos.permission.GET_NETWORK_INFO"
       },
       {
+        "name": "ohos.permission.PRIVACY_WINDOW"
+      },
+      {
         "name": "ohos.permission.DETECT_GESTURE",
         "reason": "$string:perm_reason_detect_gesture",
         "usedScene": {

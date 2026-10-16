@@ -221,7 +221,8 @@ hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=
 
 权限隔离在源码中由模块和 product 共同决定：`entry/src/main/module.json5`
 声明 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
-`ohos.permission.DETECT_GESTURE`；`ohos.permission.DLP_GET_HIDE_STATUS` 则只由
+`ohos.permission.PRIVACY_WINDOW`、`ohos.permission.DETECT_GESTURE`；
+`ohos.permission.DLP_GET_HIDE_STATUS` 则只由
 `privacy_acl/src/main/module.json5` 声明，包含其专属的 `reason` / `usedScene`。
 `product=default` 不装配 `privacy_acl`，`product=acl` 装配该 HSP。
 最终产物的权限归属应以对应 product 打包后 HAP/HSP/APP 的实际清单为准，
@@ -263,8 +264,9 @@ entry 运行时依赖没有该受限 HSP，受限 product 才有。
 核对过本轮产物：`entry/build/default/intermediates/loader/default/loader.json` 的
 `hspNameOhmMap` / `hspResourcesMap` 为空；合并进 HAP 的
 `entry/build/default/intermediates/res/default/module.json` 中 `requestPermissions`
-只有上面三项非 DLP 权限、`dependencies` 为空。所以普通 product 的产物不含该受限 HSP，
-也不带受限权限。
+只有上面四项非 DLP 权限（注：此项本地实跑发生在添加 `PRIVACY_WINDOW` 之前，当时观察到的是三项；
+源码现已增加 `PRIVACY_WINDOW`，重新构建后预期 `requestPermissions` 为四项）、`dependencies` 为空。
+所以普通 product 的产物不含该受限 HSP，也不带受限权限。
 
 受限 product 同样可在本地实跑后核对（`entry/build/acl/intermediates/loader/acl/loader.json`）：
 `hspNameOhmMap` 为 `{ "privacy_acl": "@bundle:com.xiwei.sujian/privacy_acl/ets/Index" }`，
@@ -273,7 +275,7 @@ entry 运行时依赖没有该受限 HSP，受限 product 才有。
 为 `[{ "moduleName": "privacy_acl", "versionCode": 1000000 }]`（该 `versionCode` 取自应用级
 `AppScope/app.json5` 的 `app.versionCode`，即 `1000000`；不是 `privacy_acl/oh-package.json5`
 的 ohpm 包版本），`requestPermissions`
-除普通三项外还含 `ohos.permission.DLP_GET_HIDE_STATUS`；`privacy_acl` HSP 自身的
+除普通四项外还含 `ohos.permission.DLP_GET_HIDE_STATUS`；`privacy_acl` HSP 自身的
 `privacy_acl/build/acl/intermediates/res/default/module.json` 也单独声明该权限。这组值与
 default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
 
