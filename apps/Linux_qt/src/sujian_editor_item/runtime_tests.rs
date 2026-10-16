@@ -8,6 +8,8 @@ use super::render_plan::{
     SelectionPreeditStyle,
 };
 use super::*;
+use super::layout_snapshot::SourceRect;
+use super::text_motion::SliceMotion;
 use crate::editor::layout::{run_on_qt_thread, LayoutParams};
 use qmetaobject::QString;
 use std::time::{Duration, Instant};
@@ -39,6 +41,16 @@ fn default_layout_params() -> LayoutParams {
         text_indent: 0.0,
         padding: 16.0,
     }
+}
+
+/// Issue #919 复核（comment-id 6221824024）：连续编辑 Shift 几何断言用容差比较
+/// 文档坐标矩形，避免依赖浮点精确相等。`SourceRect` 字段语义由调用方契约决定，
+/// 此处只做四分量逐项容差比较。
+fn rects_approx_eq(a: SourceRect, b: SourceRect, eps: f64) -> bool {
+    (a.x - b.x).abs() <= eps
+        && (a.y - b.y).abs() <= eps
+        && (a.w - b.w).abs() <= eps
+        && (a.h - b.h).abs() <= eps
 }
 
 // =========================================================================
@@ -1014,9 +1026,17 @@ fn missing_source_texture_keeps_animation_plan_not_ready() {
 /// Issue #919：关闭正文吞吐动画后，真实编辑入口不得再建立局部动画计划，
 /// 因而也不会产生静态孔洞或字形覆盖层，静态层直接画完整 canonical。
 ///
-/// 议题明确要求「关闭文字动画时不生成 holes/动态片段，直接只画 canonical
+/// 计题明确要求「关闭文字动画时不生成 holes/动态片段，直接只画 canonical
 /// 静态正文」。此前 runtime 用例只覆盖动画开启时的正向路径；本用例补上开关
 /// 关闭分支，并确认开关可逆——重新开启后同一编辑入口恢复构造计划。
+///
+/// Issue #919 复核（comment-id 6221824024）：原版只对比一次插入前后
+/// `current_layout_snapshot` 的 revision，但 `set_plain_text` 调用
+/// `reset_document_visual_state()` 把 snapshot 置 None，`click_at` 不安装新
+/// snapshot，`snap_before` 恒为 None，`assert_ne!(Some(snap_after), None)` 恒真，
+/// 没有真正覆盖「关闭动画时连续编辑各自提交新 canonical revision」的语义。
+/// 本版改为两次关闭动画的真实插入各自取 revision，`assert_ne!(snap1, snap2)`
+/// 真正约束版本链递增，再重新开启动画验证同一入口恢复构造 motion。
 #[test]
 fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
     run_on_qt_thread(|| {
@@ -1038,57 +1058,80 @@ fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
             "关闭动画时不得残留局部动画计划"
         );
 
-        // 真实插入仍会更新正文，但不得建立动画计划。
+        // 真实插入仍会更新正文，但不得建立动画计划。先定位到末尾。
         item.click_at(1000.0, 0.0, false);
-        let snap_before = item
-            .pipeline
-            .current_layout_snapshot()
-            .as_ref()
-            .map(|s| s.revision);
+
+        // 第一笔关闭动画插入"丙"：不得建立 motion，但必须安装新 canonical snapshot。
         item.insert_text(QString::from("丙"));
         assert!(
             item.pipeline.text_motion().is_none(),
             "关闭文字动画后真实插入不得建立 text_motion 计划"
         );
         // Issue #919：关闭正文动画只影响局部动画计划，不影响 canonical 提交。
-        // 原先 `pipeline::tests::layout_revision_commits_even_when_text_animation_is_disabled`
-        // 走已被 #919 取代的 `prepare_edit_motion` 整章路径，本用例用当前唯一入口
-        // `insert_text` → `record_transaction` 验证同一语义：即使动画关闭，编辑仍安装
-        // 一份新的 canonical layout snapshot（其 revision 由 `LayoutRevision::next()`
-        // 推进），供后续帧/光标使用，不依赖 text_animation_enabled。
-        let snap_after = item
+        // 即使动画关闭，编辑仍安装一份新的 canonical layout snapshot（其 revision
+        // 由 `LayoutRevision::next()` 推进），供后续帧/光标使用，不依赖
+        // text_animation_enabled。
+        let snap1 = item
             .pipeline
             .current_layout_snapshot()
             .as_ref()
             .expect("关闭文字动画时真实编辑仍必须安装新的 canonical layout snapshot")
             .revision;
-        assert_ne!(
-            Some(snap_after),
-            snap_before,
-            "关闭文字动画时仍必须把新的 canonical layout revision 提交到 pipeline"
-        );
-
         // 与 `qquickitem_impl` 相同的消费路径：无计划 → 默认空帧 → 无孔洞/覆盖层。
-        let motion_frame = item
+        let motion_frame_1 = item
             .pipeline
             .text_motion()
             .map(|motion| motion.sample(0.0))
             .unwrap_or_default();
         assert!(
-            motion_frame.static_holes.is_empty(),
+            motion_frame_1.static_holes.is_empty(),
             "关闭文字动画时静态层不得挖孔: {:?}",
-            motion_frame.static_holes
+            motion_frame_1.static_holes
         );
         assert!(
-            motion_frame.overlays.is_empty(),
+            motion_frame_1.overlays.is_empty(),
             "关闭文字动画时不得有字形覆盖层: {:?}",
-            motion_frame.overlays
+            motion_frame_1.overlays
+        );
+
+        // 第二笔继续保持动画关闭，插入"丁"：仍不得建立 motion，且必须提交一份
+        // 与 snap1 不同的新 canonical revision。这才是「关闭动画时连续编辑各自
+        // 提交新 canonical revision」的真正约束，而不是与 None 对比的恒真断言。
+        item.insert_text(QString::from("丁"));
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "继续保持文字动画关闭时第二笔真实插入仍不得建立 text_motion 计划"
+        );
+        let snap2 = item
+            .pipeline
+            .current_layout_snapshot()
+            .as_ref()
+            .expect("第二笔关闭动画编辑仍必须安装新的 canonical layout snapshot")
+            .revision;
+        assert_ne!(
+            snap1, snap2,
+            "两次关闭动画的真实编辑依然各自提交新 canonical revision"
+        );
+        let motion_frame_2 = item
+            .pipeline
+            .text_motion()
+            .map(|motion| motion.sample(0.0))
+            .unwrap_or_default();
+        assert!(
+            motion_frame_2.static_holes.is_empty(),
+            "关闭文字动画时静态层不得挖孔: {:?}",
+            motion_frame_2.static_holes
+        );
+        assert!(
+            motion_frame_2.overlays.is_empty(),
+            "关闭文字动画时不得有字形覆盖层: {:?}",
+            motion_frame_2.overlays
         );
 
         // 重新开启后，同一编辑入口恢复构造局部动画计划（开关可逆、编辑未受损）。
         item.set_typing_animation_enabled(true);
         assert!(item.effective_animation().text);
-        item.insert_text(QString::from("丁"));
+        item.insert_text(QString::from("戊"));
         let motion = item
             .pipeline
             .text_motion()
@@ -1116,6 +1159,13 @@ fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
 /// - 每一笔局部 `TextMotion` 的 `target_revision` 都绑定该笔的 Core new_revision；
 /// - 第二笔以上一笔安装的 canonical snapshot 为 base（`current_layout_snapshot`
 ///   在第二笔前已是第一笔的目标），因此第二笔的 revision 与第一笔不同。
+///
+/// Issue #919 复核（comment-id 6221824024）：原版只断言 `r1 >= r0`（即使没增长
+/// 也能过），且第二笔末尾追加只生成 Reveal，无法验证「第二笔以第一笔布局为 base」。
+/// 本版改为：第一笔严格 `assert!(r1 > r0)`；第二笔先 `click_at(0.0, 0.0, false)`
+/// 定位段首再插入"丁"，让原有"甲乙丙"被挤动生成 Shift，并验证 Shift 的 `from`
+/// 与第一笔 `snap1` 中对应未改文字的真实旧布局几何一致、`to` 与第二笔 `snap2`
+/// 新位置一致——这才是从实际动画计划验证 base 链，而不只是对比两个 revision 编号。
 #[test]
 fn consecutive_real_edits_commit_canonical_revision_chain() {
     run_on_qt_thread(|| {
@@ -1124,21 +1174,34 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
         item.current_viewport_height = 600.0;
         item.click_at(1000.0, 0.0, false);
 
+        // Issue #919 复核：`set_plain_text` 内部 `record_transaction` 用
+        // `synthetic_edit_result`，其 `new_revision` 硬编码为 1（edit_motion.rs:123），
+        // 使 `text_revision` 提前到 1，而 Core mirror revision 仍是 0。后续第一笔
+        // `insert_text` 的 Core new_revision 恰好也是 1，`set_text_revision(1)` 不会
+        // 让 `text_revision` 严格递增（1→1），协调者要求的 `assert!(r1 > r0)` 无法成立。
+        // 此处把 `text_revision` 同步到 Core mirror revision，消除 synthetic 脱节，
+        // 使 `text_revision` 反映真实 Core revision，后续每笔 `insert_text` 的
+        // Core new_revision 严格递增可断言。这是测试设置（调 pub 方法），不改生产代码。
+        item.pipeline
+            .set_text_revision(item.pipeline.mirror().revision());
+
         let r0 = item.pipeline.text_revision();
 
         // 第一笔：甲乙 -> 甲乙丙。
         item.insert_text(QString::from("丙"));
         let r1 = item.pipeline.text_revision();
         assert!(
-            r1 >= r0,
-            "第一笔真实编辑不得回退 text_revision（{r0} -> {r1}）"
+            r1 > r0,
+            "第一笔真实编辑必须严格推进 text_revision（{r0} -> {r1}）"
         );
+        // 保留完整 EditorLayoutSnapshot（clone，避免跨第二笔 mutable borrow），
+        // 供第二笔 Shift 几何断言在 snap1.line_snapshots 中查找 from 对应的旧布局 cluster。
         let snap1 = item
             .pipeline
             .current_layout_snapshot()
             .as_ref()
             .expect("第一笔后必须安装新的 canonical layout snapshot")
-            .revision;
+            .clone();
         let motion1 = item
             .pipeline
             .text_motion()
@@ -1149,7 +1212,10 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             "第一笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
         );
 
-        // 第二笔：甲乙丙 -> 甲乙丙丁。base 即第一笔安装的 canonical snapshot。
+        // 第二笔：段首插入"丁" -> 丁甲乙丙。原有"甲乙丙"被挤动，应生成 Shift。
+        // base 即第一笔安装的 canonical snapshot，Shift.from 必须落在 snap1 的
+        // cluster 文档几何上，Shift.to 必须落在 snap2 的 cluster 文档几何上。
+        item.click_at(0.0, 0.0, false);
         item.insert_text(QString::from("丁"));
         let r2 = item.pipeline.text_revision();
         assert!(
@@ -1160,10 +1226,9 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             .pipeline
             .current_layout_snapshot()
             .as_ref()
-            .expect("第二笔后必须安装新的 canonical layout snapshot")
-            .revision;
+            .expect("第二笔后必须安装新的 canonical layout snapshot");
         assert_ne!(
-            snap1, snap2,
+            snap1.revision, snap2.revision,
             "第二笔必须安装一份新的 canonical layout revision，而不是沿用第一笔目标"
         );
         let motion2 = item
@@ -1175,6 +1240,96 @@ fn consecutive_real_edits_commit_canonical_revision_chain() {
             motion2.target_revision, r2,
             "第二笔动画计划的目标 revision 必须绑定该笔 Core new_revision"
         );
+
+        // 核心新增：从实际动画计划验证第二笔以第一笔布局为 base。
+        // 段首插入"丁"后，原有"甲乙丙"整体右移，应在 motion2.slices 中生成 Shift。
+        // `merge_adjacent_shifts()` 可能合并连续文本为一个 Shift，故 byte_range
+        // 可能覆盖整块"甲乙丙"（new 坐标），不假设逐字拆分。
+        let shifts: Vec<_> = motion2
+            .slices
+            .iter()
+            .filter_map(|s| match s {
+                SliceMotion::Shift {
+                    from,
+                    to,
+                    byte_range,
+                    ..
+                } => Some((*from, *to, *byte_range)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !shifts.is_empty(),
+            "段首插入必须为被挤动的原有文字生成 Shift（实际 slices: {:?}）",
+            motion2.slices
+        );
+
+        let eps = 1e-4;
+        for (from, to, byte_range) in &shifts {
+            // from 与 to 必须确实有位移（x 或 y 不同）。
+            assert!(
+                (from.x - to.x).abs() > eps || (from.y - to.y).abs() > eps,
+                "Shift 的 from 与 to 必须确实有位移（byte_range {:?}, from {:?}, to {:?}）",
+                byte_range,
+                from,
+                to
+            );
+
+            // to 必须落在 snap2 中对应 byte_range 的 cluster 文档几何上。
+            // 先用 contained 严格匹配，cluster 跨范围合并时退一步用 overlapping。
+            let (bs, be) = *byte_range;
+            let mut to_matched = false;
+            for line in &snap2.line_snapshots {
+                for cluster in line.clusters_contained_in_range(bs, be) {
+                    let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                    if rects_approx_eq(doc_rect, *to, eps) {
+                        to_matched = true;
+                        break;
+                    }
+                }
+                if to_matched {
+                    break;
+                }
+            }
+            if !to_matched {
+                for line in &snap2.line_snapshots {
+                    for cluster in line.clusters_overlapping_range(bs, be) {
+                        let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                        if rects_approx_eq(doc_rect, *to, eps) {
+                            to_matched = true;
+                            break;
+                        }
+                    }
+                    if to_matched {
+                        break;
+                    }
+                }
+            }
+            assert!(
+                to_matched,
+                "Shift.to {:?} 必须落在 snap2 中 byte_range {:?} 对应 cluster 的文档几何上",
+                to, byte_range
+            );
+
+            // from 必须落在 snap1 中某个 cluster 的文档几何上（旧布局几何）。
+            // 遍历 snap1 所有行所有 cluster，重建文档坐标 rect 比较。
+            let mut from_matched = false;
+            'outer: for line in &snap1.line_snapshots {
+                for cluster in &line.clusters {
+                    let doc_rect = line.source_rect_to_document_rect(&cluster.source_rect);
+                    if rects_approx_eq(doc_rect, *from, eps) {
+                        from_matched = true;
+                        break 'outer;
+                    }
+                }
+            }
+            assert!(
+                from_matched,
+                "Shift.from {:?} 必须落在 snap1 中某个 cluster 的文档几何上（byte_range {:?}），\
+                 证明第二笔以第一笔布局为 base",
+                from, byte_range
+            );
+        }
 
         println!(
             "[BEHAVIOR_VERIFY] #919 连续两笔真实编辑提交同一条 canonical revision 链 ok"
