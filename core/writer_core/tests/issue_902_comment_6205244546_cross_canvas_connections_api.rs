@@ -123,7 +123,10 @@ fn cross_canvas_edge_is_written_to_host_and_queryable_from_child() {
     let root_graph = api.get_starmap_graph(&root).unwrap();
     assert_eq!(root_graph.edges.len(), 1, "宿主图必须只写入一条 Edge");
     assert_eq!(root_graph.edges[0].id, created.edge.id);
-    assert_eq!(root_graph.edges[0].to.segments, vec![enter_embed(&instance_id)]);
+    assert_eq!(
+        root_graph.edges[0].to.segments,
+        vec![enter_embed(&instance_id)]
+    );
 
     let child_graph = api.get_starmap_graph(&child_id).unwrap();
     assert!(
