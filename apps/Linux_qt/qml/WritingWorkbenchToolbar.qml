@@ -97,8 +97,8 @@ ColumnLayout {
                     // Leading 只放返回 / 撤销 / 重做，作品名由章节树自己承担。
                     ToolButton {
                         icon.name: "go-previous"
-                        icon.width: Kirigami.Units.iconSizes.small
-                        icon.height: Kirigami.Units.iconSizes.small
+                        icon.width: Kirigami.Units.iconSizes.smallMedium
+                        icon.height: Kirigami.Units.iconSizes.smallMedium
                         display: AbstractButton.IconOnly
                         flat: true
                         text: qsTr("返回")
@@ -110,8 +110,8 @@ ColumnLayout {
                     // （端侧不再自己维护一份"能不能撤"的状态）。
                     ToolButton {
                         icon.name: "edit-undo"
-                        icon.width: Kirigami.Units.iconSizes.small
-                        icon.height: Kirigami.Units.iconSizes.small
+                        icon.width: Kirigami.Units.iconSizes.smallMedium
+                        icon.height: Kirigami.Units.iconSizes.smallMedium
                         display: AbstractButton.IconOnly
                         flat: true
                         text: qsTr("撤销")
@@ -120,8 +120,8 @@ ColumnLayout {
 
                     ToolButton {
                         icon.name: "edit-redo"
-                        icon.width: Kirigami.Units.iconSizes.small
-                        icon.height: Kirigami.Units.iconSizes.small
+                        icon.width: Kirigami.Units.iconSizes.smallMedium
+                        icon.height: Kirigami.Units.iconSizes.smallMedium
                         display: AbstractButton.IconOnly
                         flat: true
                         text: qsTr("重做")

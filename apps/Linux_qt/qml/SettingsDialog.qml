@@ -19,7 +19,14 @@ import org.kde.kirigami as Kirigami
 Dialog {
     id: root
     modal: true
-    anchors.centerIn: parent
+    // Issue #912：Dialog 是 Popup，位置坐标属于 Popup 父级（Overlay）而非普通
+    // Item 父级。原来 anchors.centerIn: parent 会让弹窗相对 Loader 这个零尺寸
+    // 宿主居中，结果被摆到窗口左上角甚至越界，「诊断与日志→导出日志」点不到。
+    // 这里改成相对 Overlay.overlay 居中，并按 overlay 实际尺寸收口，弹窗始终
+    // 落在当前主窗口内，窗口缩放后依然居中可用。
+    // 参考 https://doc.qt.io/qt-6/qml-qtquick-controls-popup.html#popup-positioning
+    anchors.centerIn: Overlay.overlay
+    margins: Kirigami.Units.gridUnit
     title: qsTr("设置")
     // Issue #900 复核：Qt Quick Controls 的 Dialog.title 只画标题栏，不会自动给
     // 关闭按钮。用原生 standardButtons 让 Breeze DialogButtonBox 提供可见的
@@ -33,10 +40,12 @@ Dialog {
     // Workbench 形态保留顶部搜索。
     readonly property bool overlayPanel: layoutPlan === null || layoutPlan.workspaceLayoutMode === "Workbench"
 
-    width: root.widePanel
-           ? Math.max(400, Math.min(1120, (parent ? parent.width : 1120) - Kirigami.Units.gridUnit * 4))
-           : Math.min(640, (parent ? parent.width : 640) - Kirigami.Units.gridUnit * 4)
-    height: Math.max(1, Math.min(root.widePanel ? 880 : 720, (parent ? parent.height : 800) - Kirigami.Units.gridUnit * 2))
+    // Issue #912：可用尺寸只取 Overlay 宿主（即主窗口）大小，去掉旧的最小宽度
+    // 400，避免小窗口下弹窗比窗口还宽被推出屏幕。
+    readonly property real hostWidth: Overlay.overlay ? Overlay.overlay.width : 0
+    readonly property real hostHeight: Overlay.overlay ? Overlay.overlay.height : 0
+    width: Math.max(1, Math.min(root.widePanel ? 1120 : 640, hostWidth - 2 * margins))
+    height: Math.max(1, Math.min(root.widePanel ? 880 : 720, hostHeight - 2 * margins))
 
     property var layoutPlan: null
     // 宽屏顶部搜索关键词。只做分组过滤，不改任何设置读取/保存路径。

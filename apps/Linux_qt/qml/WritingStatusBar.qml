@@ -54,10 +54,18 @@ Rectangle {
 
     // 状态带高度跟手稿的细条比例；不跟 Core 的七角色走——手稿里它只是
     // Editor 列底部的一条信息带，不是任何一个角色，所以不占 Core bounds。
-    readonly property real barHeight: 28
+    // Issue #912：高度改为跟随默认字体实际高度 + KDE 间距，不再写死 28，
+    // 桌面字号下状态栏文字与图标不再偏小。
+    readonly property real barHeight: Math.max(Kirigami.Units.gridUnit * 1.6, statusMetrics.height + Kirigami.Units.smallSpacing * 2)
 
     implicitHeight: barHeight
     color: Kirigami.Theme.backgroundColor
+
+    TextMetrics {
+        id: statusMetrics
+        font: Kirigami.Theme.defaultFont
+        text: "00:00  字/分  0/2,000"
+    }
 
     // 与正文纸面上缘呼应的一条分隔线。
     Rectangle {

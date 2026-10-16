@@ -47,6 +47,17 @@ Rectangle {
 
     color: Kirigami.Theme.alternateBackgroundColor
 
+    // Issue #912：章/卷行高按桌面默认字体实际高度 + KDE 间距派生，替代
+    // gridUnit*1.8 / gridUnit*2 这类在部分 DPI 下偏小的硬值；行内文字、
+    // 操作入口随之回到可读的桌面尺寸。
+    TextMetrics {
+        id: lineMetrics
+        font: Kirigami.Theme.defaultFont
+        text: "章节标题"
+    }
+    readonly property real volumeRowHeight: Math.max(Kirigami.Units.gridUnit * 2, lineMetrics.height + Kirigami.Units.smallSpacing * 2)
+    readonly property real chapterRowHeight: Math.max(Kirigami.Units.gridUnit * 1.8, lineMetrics.height + Kirigami.Units.smallSpacing * 2)
+
     WritingTreeController {
         id: writingTree
         tree: root.tree
@@ -144,7 +155,7 @@ Rectangle {
         // 整行只显示 workspaceProjectTitle，没有折叠箭头、没有点击折叠。
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: root.volumeRowHeight
             color: "transparent"
 
             Label {
@@ -153,6 +164,8 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.workspaceProjectTitle
                 color: Kirigami.Theme.textColor
+                font.family: Kirigami.Theme.defaultFont.family
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize
                 font.bold: true
                 elide: Text.ElideRight
             }
@@ -178,8 +191,8 @@ Rectangle {
                 acceptedButtons: Qt.NoButton
                 delegate: Item {
                     width: treeListView.width
-                    height: model.rowType === "volume" ? Kirigami.Units.gridUnit * 2
-                                                    : Math.round(Kirigami.Units.gridUnit * 1.8)
+                    height: model.rowType === "volume" ? root.volumeRowHeight
+                                                    : root.chapterRowHeight
 
                     // ── 卷分组头 ──
                     WritingTreeGroupHeader {
@@ -249,6 +262,8 @@ Rectangle {
                                 text: model.itemTitle || ""
                                 color: chapterDelegateBg.isSelected ? Kirigami.Theme.highlightedTextColor
                                                                     : Kirigami.Theme.textColor
+                                font.family: Kirigami.Theme.defaultFont.family
+                                font.pointSize: Kirigami.Theme.defaultFont.pointSize
                                 font.bold: chapterDelegateBg.isSelected
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
@@ -258,12 +273,13 @@ Rectangle {
                             ToolButton {
                                 z: 10
                                 icon.name: "overflow-menu"
-                                icon.width: Kirigami.Units.iconSizes.small
-                                icon.height: Kirigami.Units.iconSizes.small
+                                icon.width: Kirigami.Units.iconSizes.smallMedium
+                                icon.height: Kirigami.Units.iconSizes.smallMedium
                                 display: AbstractButton.IconOnly
                                 flat: true
-                                implicitWidth: Kirigami.Units.gridUnit * 1.4
-                                implicitHeight: Kirigami.Units.gridUnit * 1.4
+                                // Issue #912：给「⋯」入口完整的可点区域，不再用偏小的 gridUnit*1.4。
+                                implicitWidth: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
+                                implicitHeight: Math.max(Kirigami.Units.gridUnit * 1.8, Kirigami.Units.iconSizes.smallMedium + Kirigami.Units.smallSpacing * 2)
                                 Layout.alignment: Qt.AlignVCenter
                                 onClicked: {
                                     treeContextMenu.itemType = "chapter"
@@ -282,7 +298,7 @@ Rectangle {
                             anchors.top: parent.top
                             anchors.bottom: parent.bottom
                             anchors.right: parent.right
-                            anchors.rightMargin: Math.round(Kirigami.Units.gridUnit * 1.8)
+                            anchors.rightMargin: Math.round(Kirigami.Units.gridUnit * 2)
                             hoverEnabled: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: Qt.PointingHandCursor
@@ -319,14 +335,14 @@ Rectangle {
         // "+" button for project (create volume)
         ToolButton {
             Layout.fillWidth: true
-            Layout.preferredHeight: Kirigami.Units.gridUnit * 2
+            Layout.preferredHeight: Math.max(root.volumeRowHeight, implicitHeight)
             Layout.leftMargin: Kirigami.Units.smallSpacing
             Layout.rightMargin: Kirigami.Units.smallSpacing
             flat: true
             text: qsTr("新卷")
             icon.name: "list-add"
-            icon.width: Kirigami.Units.iconSizes.small
-            icon.height: Kirigami.Units.iconSizes.small
+            icon.width: Kirigami.Units.iconSizes.smallMedium
+            icon.height: Kirigami.Units.iconSizes.smallMedium
             display: AbstractButton.TextBesideIcon
             onClicked: root.createVolumeRequested(root.workspaceProjectId)
         }

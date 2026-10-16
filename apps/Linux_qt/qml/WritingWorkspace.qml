@@ -1122,8 +1122,8 @@ Rectangle {
             anchors.centerIn: parent
             source: root.leftPaneCollapsed ? "arrow-right" : "arrow-left"
             color: Kirigami.Theme.textColor
-            implicitWidth: Kirigami.Units.iconSizes.small
-            implicitHeight: Kirigami.Units.iconSizes.small
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
         }
 
         MouseArea {
@@ -1173,8 +1173,8 @@ Rectangle {
             anchors.centerIn: parent
             source: root.drawerOpen ? "arrow-right" : "arrow-left"
             color: Kirigami.Theme.textColor
-            implicitWidth: Kirigami.Units.iconSizes.small
-            implicitHeight: Kirigami.Units.iconSizes.small
+            implicitWidth: Kirigami.Units.iconSizes.smallMedium
+            implicitHeight: Kirigami.Units.iconSizes.smallMedium
         }
 
         MouseArea {

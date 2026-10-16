@@ -93,6 +93,10 @@ pub struct LinuxThemeController {
     /// 才重新 resolve 并发 scheme_changed，避免重复 resolve（日志 574 次
     /// theme.resolve 的根因）。
     last_input_key: std::cell::RefCell<Option<String>>,
+    /// Issue #912: 最近一次已应用到 KDE 壳层的配色方案模式
+    /// （"system" / "dark" / "light"）。只在有效模式变化时调用原生
+    /// KColorSchemeManager 桥，避免每次 resolve 都重复切换应用配色。
+    last_kde_scheme_mode: std::cell::RefCell<Option<String>>,
 }
 
 impl LinuxThemeController {
@@ -572,6 +576,30 @@ impl LinuxThemeController {
         );
     }
 
+    /// Issue #912: 把外观模式映射为 KDE 应用配色方案并只在有效模式变化时应用。
+    ///
+    /// KDE 的 Kirigami.Theme / Breeze 控件颜色由 KColorSchemeManager 决定的
+    /// KColorScheme 派生，单纯覆盖窗口 QPalette 不能可靠更新它们，因此壳层
+    /// 深浅必须走这个原生入口：
+    /// - `system` → 回到系统方案；
+    /// - `dark`   → BreezeDark；
+    /// - `light`  → BreezeLight。
+    ///
+    /// 正文配色不走这里，仍由 `theme_state_json → DesignTokens` 发布，两者互不
+    /// 干扰。仅在成功应用后记录模式，失败时保留记录为空以便后续主题变更重试。
+    fn sync_kde_color_scheme(&self, appearance_mode: &str) {
+        let mode = match appearance_mode {
+            "dark" | "light" => appearance_mode,
+            _ => "system",
+        };
+        if self.last_kde_scheme_mode.borrow().as_deref() == Some(mode) {
+            return;
+        }
+        if crate::native::apply_appearance_mode(mode) {
+            *self.last_kde_scheme_mode.borrow_mut() = Some(mode.to_string());
+        }
+    }
+
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
     pub fn reload(&mut self) {
         // 主题解析（应用内部逻辑）→ origin=App。
@@ -587,6 +615,8 @@ impl LinuxThemeController {
             writer_diagnostics::DiagnosticOrigin::App,
             &state,
         );
+        // Issue #912: 壳层深浅跟随外观模式切换 KDE 应用配色方案。
+        self.sync_kde_color_scheme(&state.appearance_mode);
         self.scheme_changed();
     }
 
@@ -642,6 +672,8 @@ impl LinuxThemeController {
             writer_diagnostics::DiagnosticOrigin::App,
             &state,
         );
+        // Issue #912: 输入变化后同步 KDE 应用配色方案。
+        self.sync_kde_color_scheme(&state.appearance_mode);
         self.scheme_changed();
     }
 
@@ -696,6 +728,8 @@ impl LinuxThemeController {
                 writer_diagnostics::DiagnosticOrigin::User,
                 &state,
             );
+            // Issue #912: 用户切换外观模式后同步 KDE 应用配色方案。
+            self.sync_kde_color_scheme(&state.appearance_mode);
             self.scheme_changed();
         }
     }

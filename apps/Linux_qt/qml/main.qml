@@ -44,6 +44,17 @@ Kirigami.ApplicationWindow {
     // 星图等专用色彩的桥接职责。
     color: Kirigami.Theme.backgroundColor
 
+    // Issue #912：深浅色以「实际显示的 KDE/Breeze 调色板」为准，而不是
+    // Qt.styleHints.colorScheme。壳层底色来自 Kirigami.Theme，因此用它的
+    // backgroundColor 与 textColor 亮度对比得到真实深浅；Kirigami.Theme 的
+    // colorsChanged 会让这个绑定重新求值，从而驱动纸张与 system_is_dark 收口。
+    //
+    // 注意：显式深色/浅色由 themeController 通过 KDE ColorScheme 入口切换应用
+    // 配色方案（见 sync_kde_color_scheme）。那时 Kirigami.Theme 反映的是应用
+    // 选择而非桌面系统，因此只在「跟随系统」时才把它回写为 system_is_dark，
+    // 避免从手动深色切回跟随系统时拿到错误的“系统深浅”。
+    readonly property bool kdePaletteIsDark: colorLuminance(Kirigami.Theme.backgroundColor) < colorLuminance(Kirigami.Theme.textColor)
+
     // ── Issue #692 评论 5692612221: 初始窗口尺寸收口（一次性） ──
     // 等窗口真正关联到所属屏幕后，按当前屏幕 availableGeometry 收口默认尺寸。
     // initialWindowSizeApplied 之后不再跟随多屏切换强制改窗口大小；窗口跨屏后的
@@ -240,28 +251,19 @@ Kirigami.ApplicationWindow {
     }
 
     function systemThemeIsDark() {
-        // Try Qt.styleHints (Qt 6.5+)
-        if (typeof Qt !== "undefined" && Qt.styleHints && typeof Qt.styleHints.colorScheme !== "undefined") {
-            var scheme = Qt.styleHints.colorScheme;
-            if (scheme === 2 || (Qt.ColorScheme && scheme === Qt.ColorScheme.Dark)) {
-                return true;
-            }
-            if (scheme === 1 || (Qt.ColorScheme && scheme === Qt.ColorScheme.Light)) {
-                return false;
-            }
+        // Issue #912：以实际显示的 KDE/Breeze 调色板为准。Qt.styleHints.colorScheme
+        // 在部分 KDE 环境拿不到或与 Breeze 实际渲染不一致，会让「跟随系统」与
+        // 壳层/纸张显示脱节。这里直接用 Kirigami.Theme 底色与文字色亮度对比。
+        return kdePaletteIsDark;
+    }
+
+    function syncVisibleSystemTheme() {
+        // Issue #912：仅在「跟随系统」时把实际显示的 KDE/Breeze 调色板深浅回写为
+        // system_is_dark。显式深色/浅色经 KDE ColorScheme 入口切换的是应用配色，
+        // Kirigami.Theme 反映的是应用选择而非桌面系统，回写会污染真实系统深浅。
+        if (themeController && themeController.appearance_mode === "system") {
+            themeController.set_system_is_dark(window.kdePaletteIsDark);
         }
-        // Try Qt.application.styleHints
-        if (typeof Qt !== "undefined" && Qt.application && Qt.application.styleHints && typeof Qt.application.styleHints.colorScheme !== "undefined") {
-            var schemeApp = Qt.application.styleHints.colorScheme;
-            if (schemeApp === 2 || (Qt.ColorScheme && schemeApp === Qt.ColorScheme.Dark)) {
-                return true;
-            }
-            if (schemeApp === 1 || (Qt.ColorScheme && schemeApp === Qt.ColorScheme.Light)) {
-                return false;
-            }
-        }
-        // Fallback to SystemPalette brightness inference
-        return systemPaletteIsDark();
     }
 
     function logThemeDiagnostics(event, snapshot) {
@@ -296,6 +298,12 @@ Kirigami.ApplicationWindow {
                         + " color_source=" + (tc ? tc.color_source : "<null>")
                         + " builtin_theme_id=" + (tc ? tc.selected_builtin_theme_id : "<null>")
                         + " palette_id=" + (tc ? tc.selected_palette_id : "<null>")
+                        // Issue #912：把实际显示来源也写进同一条诊断——snapshot 的
+                        // is_dark/editor_background（theme_applied 时）与当前 Breeze
+                        // 壳层底色，便于核对壳层与纸张是否闭合。仍是每次主题变化一行。
+                        + " snapshot_is_dark=" + (snapshot ? snapshot.is_dark : "<none>")
+                        + " snapshot_editor_background=" + (snapshot ? snapshot.editor_background : "<none>")
+                        + " kde_background=" + Kirigami.Theme.backgroundColor
                         + " primary=" + primaryVal
                         + " surface=" + surfaceVal
                         + " on_surface=" + onSurfaceVal
@@ -372,18 +380,23 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    // Issue #668 评论 5646458592 问题 2: 真实系统 colorScheme 变化时把
-    // window.systemThemeIsDark() 写给 ThemeController。这是 system_is_dark
-    // 的两个唯一写入点之一（另一个是 Component.onCompleted 启动时）。
-    // 不再由 designTokens.onIsDarkChanged 反写 system_is_dark，避免循环依赖。
-    Connections {
-        target: Qt.styleHints
-        function onColorSchemeChanged() {
-            if (themeController) {
-                themeController.set_system_is_dark(window.systemThemeIsDark());
-            }
-            window.logThemeDiagnostics("system_color_scheme_changed");
-        }
+    // Issue #912：只有当实际显示的 KDE/Breeze 调色板深浅变化时才写入
+    // system_is_dark，取代原来监听 Qt.styleHints.colorSchemeChanged 的做法
+    // （该系统信号在本环境可能与 Breeze 实际渲染不一致，导致跟随系统模式
+    // 与壳层/纸张显示脱节）。这是 system_is_dark 的两个写入点之一
+    // （另一个是 Component.onCompleted 启动时）。
+    //
+    // 仅「跟随系统」时回写：显式深色/浅色会通过 KDE ColorScheme 入口切换应用
+    // 配色方案，此时 Kirigami.Theme 反映的是应用选择而非桌面系统，回写会污染
+    // 真实的系统深浅（例如手动深色后切回跟随系统时得到错误的深色）。
+    //
+    // 延迟到本轮属性通知结束后执行：set_appearance_mode() 里的 sync_kde_color_scheme()
+    // 会先 activateScheme 再发 scheme_changed，色板可能在 QML 还持有旧的
+    // appearance_mode 绑定值时先变化。立即回写会把刚切换的应用色板误记成系统色板。
+    // Qt.callLater 在 QML 引擎返回事件循环后调用，多次排队自动合并。
+    onKdePaletteIsDarkChanged: {
+        Qt.callLater(window.syncVisibleSystemTheme)
+        window.logThemeDiagnostics("kde_palette_changed");
     }
 
     AppController {
@@ -831,6 +844,10 @@ Kirigami.ApplicationWindow {
 
     Loader {
         id: settingsDialogLoader
+        // Issue #912：Loader 只是 Dialog 的惰性实例化宿主，本身不渲染。填满父级
+        // 是为了不让它保持零尺寸——Dialog 的位置改由 Overlay.overlay 决定后，
+        // 零尺寸宿主只是历史遗留，这里显式收口避免歧义。
+        anchors.fill: parent
         active: false
         sourceComponent: SettingsDialog {
             theme: designTokens
