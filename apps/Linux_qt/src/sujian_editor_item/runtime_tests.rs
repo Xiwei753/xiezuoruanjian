@@ -358,8 +358,10 @@ fn render_state_uses_sampled_cursor_position_not_stale_visual() {
 }
 
 /// 评论 36 要求③：真实 `click_at` 路径 —— 逻辑 caret 立即变，视觉 caret 随之追上。
+///
+/// Issue #919：`text_motion` 协同进度已接入，`PointerClick` 不再被统一下压成
+/// Snap，重新启用这条 Tween 回归。
 #[test]
-#[ignore = "TODO(issue-904): 协同模式下 PointerClick 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -420,8 +422,10 @@ fn pointer_click_moves_visual_caret_after_logical_cursor_changed() {
 }
 
 /// 评论 36 要求④：方向键走**同一条** cursor timeline（不为鼠标/键盘造两套）。
+///
+/// Issue #919：`text_motion` 协同进度已接入，`KeyboardNavigation` 恢复独立
+/// Tween，不再被统一下压成 Snap。
 #[test]
-#[ignore = "TODO(issue-904): 协同模式下 KeyboardNavigation 暂时 Snap，待 text_motion 协同进度接入后恢复 Tween"]
 fn keyboard_cursor_move_uses_same_timeline() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
@@ -641,5 +645,78 @@ fn cursor_timeline_finish_stops_frame_requests_and_keeps_target_render_state() {
         );
 
         println!("[BEHAVIOR_VERIFY] 评论36 补充：结束后停止 request_frame_update");
+    });
+}
+
+/// Issue #919：协同模式下**整个光标接线**——正文事务的光标用 `text_motion`
+/// 的 `caret_sample` 推进，纯点击/键盘不被正文动画接管，仍用 `cursor_ctrl`
+/// 自己的视觉位置。此前只验证了 `TextMotion` 的采样几何，未验证
+/// `build_cursor_render_state_for_frame` 真的按来源选择 caret。
+#[test]
+fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
+    run_on_qt_thread(|| {
+        use super::cursor_controller::CursorMoveSource;
+        use super::layout_snapshot::SourceRect;
+        use super::text_motion::{TextMotion, TextMotionFrame};
+
+        let mut item = SujianEditorItem::default();
+        item.cursor_ctrl.visible = true;
+        item.cursor_ctrl.visual_x = 111.0;
+        item.cursor_ctrl.visual_y = 222.0;
+
+        // 协同动画默认开启，且本帧确有唯一的正文动画计划。
+        assert!(
+            item.effective_animation().shared_timeline,
+            "前置：协同动画默认开启"
+        );
+        *item.pipeline.text_motion_mut() = Some(TextMotion {
+            slices: Vec::new(),
+            started_ms: 0.0,
+            duration_ms: 100,
+            session: item.document_session,
+            target_revision: 0,
+            viewport: SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 400.0,
+                h: 600.0,
+            },
+            static_exclusions: Vec::new(),
+            required_textures: Vec::new(),
+            caret_from: Some((10.0, 5.0)),
+            caret_to: Some((40.0, 20.0)),
+            paragraph_moves: Vec::new(),
+        });
+
+        let frame = TextMotionFrame {
+            caret_sample: Some((35.0, 17.5)),
+            ..TextMotionFrame::default()
+        };
+
+        // 正文事务（TextTransaction）：光标用正文动画的同一进度采样点。
+        item.cursor_ctrl.last_move_source = CursorMoveSource::TextTransaction;
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - 35.0).abs() < 1e-9 && (state.y - 17.5).abs() < 1e-9,
+            "协同正文事务光标必须读 caret_sample，实际 ({}, {})",
+            state.x,
+            state.y
+        );
+
+        // 纯点击（PointerClick）：不被正文动画接管，仍用独立 visual 位置。
+        item.cursor_ctrl.last_move_source = CursorMoveSource::PointerClick;
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - 111.0).abs() < 1e-9 && (state.y - 222.0).abs() < 1e-9,
+            "点击移动光标必须独立于正文动画，实际 ({}, {})",
+            state.x,
+            state.y
+        );
+        assert!(
+            item.pipeline.text_motion().is_some(),
+            "点击不得清掉进行中的正文动画计划"
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 协同 caret_sample 与点击独立接线 ok");
     });
 }
