@@ -755,3 +755,103 @@ fn coordinated_text_transaction_cursor_follows_motion_caret_sample() {
         println!("[BEHAVIOR_VERIFY] #919 协同 caret_sample 与真实点击独立接线 ok");
     });
 }
+
+/// Issue #919 复核：**真实编辑入口**（而非测试安装的空计划）必须构造出含字形
+/// 切片的非空 `TextMotion`，协同光标再用该计划的同一进度采样。
+///
+/// 上一轮 `coordinated_text_transaction_cursor_follows_motion_caret_sample` 只安装
+/// 了一份 `slices` 为空的计划，复核据此指出它"不模拟从真实编辑构造非空字形动画"。
+/// 本用例走 `insert_text` / `delete_backward` 生产路径，确认 `begin_or_retarget`
+/// 真的由 Core `display_patches` 生成 Reveal/Conceal 覆盖层，计划的 `caret_sample`
+/// 随同一 progress 推进，正文事务光标读取它。
+///
+/// 边界说明：仍在 Qt 布局/runtime 层验证"真实编辑 → 非空计划 → 光标采样"，
+/// 不在此单元测试中真正把 QSG 场景图提交到渲染线程。
+#[test]
+fn real_edit_builds_non_empty_motion_and_caret_follows_it() {
+    run_on_qt_thread(|| {
+        use super::cursor_controller::CursorMoveSource;
+        use super::text_motion::SliceMotion;
+
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        item.set_cursor_animation_duration_ms(120);
+        assert!(item.effective_animation().text, "前置：输入动画默认开启");
+
+        // 光标放到文本末尾（走真实 hit-test/click 入口）。
+        item.click_at(1000.0, 0.0, false);
+        assert_eq!(item.pipeline.cursor(), 6, "前置：光标落在「甲乙」末尾");
+
+        // 第一笔真实插入：必须由编辑本身构造出含字形切片的计划。
+        item.insert_text(QString::from("丙"));
+        assert_eq!(
+            item.cursor_ctrl.last_move_source,
+            CursorMoveSource::TextTransaction,
+            "真实插入必须把光标来源标为 TextTransaction"
+        );
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("真实插入必须建立唯一的局部动画计划");
+        assert!(
+            !motion.slices.is_empty(),
+            "真实编辑的字形动画不得为空（slices={}）",
+            motion.slices.len()
+        );
+        assert!(
+            motion.slices.iter().any(|s| matches!(
+                s,
+                SliceMotion::Reveal { byte_range, .. } if *byte_range == (6, 9)
+            )),
+            "新输入「丙」必须产生覆盖字节区间 (6,9) 的 Reveal，实际 {:?}",
+            motion.slices
+        );
+        assert!(
+            motion.required_textures.iter().all(|id| !id.is_none()),
+            "真实编辑计划必须引用有效（非无纹理哨兵）的源行 id"
+        );
+        assert!(
+            motion.caret_to.is_some(),
+            "真实编辑计划必须带新布局 caret 终点"
+        );
+
+        // 计划的 sample() 在同一 progress 上产出真实覆盖层，中途帧确有像素。
+        let frame = motion.sample(motion.started_ms + f64::from(motion.duration_ms) / 2.0);
+        assert!(
+            !frame.overlays.is_empty(),
+            "真实编辑计划的中间帧必须产出字形覆盖层"
+        );
+        let sampled = frame.caret_sample.expect("真实编辑计划必须带 caret 采样");
+
+        // 正文事务光标读该计划的 caret_sample，而不是 cursor_ctrl 的静态视觉位置。
+        let state = item.build_cursor_render_state_for_frame(&frame);
+        assert!(
+            (state.x - sampled.0).abs() < 1e-9 && (state.y - sampled.1).abs() < 1e-9,
+            "正文事务光标必须读真实编辑计划的 caret_sample {:?}，实际 ({}, {})",
+            sampled,
+            state.x,
+            state.y
+        );
+
+        // 第二笔真实删除：从上一笔的新布局继续，生成旧字 Conceal。
+        item.delete_backward();
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("真实删除必须建立局部动画计划");
+        assert!(!motion.slices.is_empty(), "真实删除的字形动画不得为空");
+        assert!(
+            motion
+                .slices
+                .iter()
+                .any(|s| matches!(s, SliceMotion::Conceal { .. })),
+            "真实删除必须产生旧字 Conceal，实际 {:?}",
+            motion.slices
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 真实编辑构造非空字形动画且协同光标跟随同一采样 ok");
+    });
+}
