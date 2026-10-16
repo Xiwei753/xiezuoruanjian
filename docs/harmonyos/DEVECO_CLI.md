@@ -231,7 +231,7 @@ hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=
 `intermediates/loader/<target>/` 下（构建产物不入库，名字见下）：
 
 ```text
-entry/build/<target>/intermediates/loader/<target>/loader.json
+entry/build/<product>/intermediates/loader/<target>/loader.json
 ```
 
 普通 `entry@default` 的 `hspNameOhmMap` / `hspResourcesMap` 为空，不含
