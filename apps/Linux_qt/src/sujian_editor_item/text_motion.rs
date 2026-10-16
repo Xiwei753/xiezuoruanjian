@@ -608,16 +608,23 @@ impl TextMotion {
             // 不能互相继承遮罩宽度。
             // 复核 5：start_clip 取自上一帧 mask_clip（视口裁剪前的原始动画遮罩），
             // 继承裁剪起止位置，不只继承 visible_width。
+            // Issue #919 复核 6：以 old_span.slice.source 为键从上一帧找对应的
+            // 当前真实显示图片，允许上一状态是 Reveal 或 Conceal。若命中且当前 clip
+            // 有可见区域，则 start_clip=ds.mask_clip——半字正在露出时立即 Backspace，
+            // 从已露遮罩继续吞到 0，不先把半字补成整字再吞（实际打字最常见的闪字）。
+            // 此前是 Conceal 时沿用 ds.direction；此前是 Reveal 而现在发生删除时使用
+            // 本次删除方向。已经从第一遍声明接管的同一源不再重复添加，沿用现有
+            // claimed_conceal_sources（第二遍开头已含 source 跳过检查）。
             let inherited = last_drawn
                 .filter(|f| f.session == session)
                 .and_then(|frame| {
                     frame.slices.iter().find(|ds| {
-                        ds.motion_kind == MotionKind::Conceal
-                            && ds.slice.source == old_span.slice.source
+                        ds.slice.source == old_span.slice.source && ds.visible_width > 0.01
                     })
                 });
             let (start_clip, conceal_direction) = match inherited {
-                Some(ds) => (ds.mask_clip, ds.direction),
+                Some(ds) if ds.motion_kind == MotionKind::Conceal => (ds.mask_clip, ds.direction),
+                Some(ds) => (ds.mask_clip, direction),
                 None => (old_span.slice.rect, direction),
             };
             slices.push(SliceMotion::Conceal {
@@ -748,12 +755,21 @@ impl TextMotion {
                     start_clip,
                     ..
                 } => {
-                    // Issue #919 复核 5：从 start_clip 继续吐到满宽。
-                    // Reveal 的位置用 new.rect 边界（新字从新位置露出），
-                    // start_clip 只提供起始宽度（连续输入继承上一帧已露宽度）。
+                    // Issue #919 复核 6：位置从 start_clip（上一帧已提交位置）插值到
+                    // new.rect，遮罩左边界从 start_clip.x 推进到 new.rect.x，宽度由
+                    // 已露出推进到目标全宽。上一帧正在露出的字若因下一笔在它前面插入
+                    // 文字/换行而发生位置变化，从当前显示画面流畅移动到新目标，不瞬移。
+                    // 普通新输入（start_clip=new.rect 位置、w=0）退化为从 new.rect
+                    // 开始吐。源纹理始终用 new.source_uv，宽高固定 new 版，不缩放字形。
+                    let target_rect = LocalRect {
+                        x: lerp(start_clip.x, new.rect.x, progress),
+                        y: lerp(start_clip.y, new.rect.y, progress),
+                        w: new.rect.w,
+                        h: new.rect.h,
+                    };
                     let visible = start_clip.w + (new.rect.w - start_clip.w) * progress;
-                    let clip = mask_rect(&new.rect, *direction, visible);
-                    (new.rect, new.source.source_uv, clip, clip)
+                    let clip = mask_rect(&target_rect, *direction, visible);
+                    (target_rect, new.source.source_uv, clip, clip)
                 }
                 SliceMotion::Conceal {
                     old,
@@ -858,15 +874,21 @@ fn edit_ranges(edit: &EditorEditResult) -> Option<(usize, usize, usize, usize)> 
 
 /// 判断删除方向：由本次操作的旧/新光标关系区分 Backspace / Forward Delete。
 ///
-/// - Backspace：光标左移（`new_head < old_head`）→ 遮罩从右向左吞。
-/// - Forward Delete / 其它：光标未左移 → 从左向右吞。
+/// `conceal_clip` 的语义：`LeftToRight` 保留左边 `[x, x+visible]`（左边缘固定，
+/// 减少 visible 时从右向左吞）；`RightToLeft` 保留右边 `[x+w-visible, x+w]`
+///（右边缘固定，减少 visible 时从左向右吞）。
+///
+/// - Backspace：光标左移（`new_head < old_head`），光标从右向左吃掉文字 →
+///   左边缘固定、逐步擦去右侧像素 → `LeftToRight`。
+/// - Forward Delete / 其它：光标未左移，从左向右吃掉文字 →
+///   右边缘固定、逐步擦去左侧像素 → `RightToLeft`。
 fn conceal_direction(edit: &EditorEditResult) -> ClipDirection {
     let old_head = edit.old_selection.head.index.value();
     let new_head = edit.new_selection.head.index.value();
     if new_head < old_head {
-        ClipDirection::RightToLeft
-    } else {
         ClipDirection::LeftToRight
+    } else {
+        ClipDirection::RightToLeft
     }
 }
 
