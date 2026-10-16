@@ -478,21 +478,24 @@ impl TextMotion {
             // old_byte_range=(9,12) 精确查 last_drawn_map 找不到合并键 (9,15)。
             // 先精确匹配，再遍历查找包含 old_byte_range 的合并 Shift，从合并 mask_clip
             // 中按 cluster 在合并 UV 中的相对偏移还原当前 cluster 的当前显示位置。
+            // 先找本轮 old_span（patch 外未改区间对应的旧片段），供合并 Shift
+            // 核对来源 snapshot_id / source_uv 是否属于已提交的合并源。
+            let old_span_match = old_spans
+                .iter()
+                .enumerate()
+                .find(|(i, s)| !consumed_old[*i] && s.byte_range == old_byte_range);
             let last_shift_exact = last_vec
                 .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Shift).copied());
-            let last_merged = if last_shift_exact.is_none() {
-                find_merged_shift(&last_drawn_map, old_byte_range)
+            let last_merged = if last_shift_exact.is_none() && old_span_match.is_some() {
+                let idx = old_span_match.unwrap().0;
+                find_merged_shift(&last_drawn_map, old_byte_range, &old_spans[idx].slice.source)
             } else {
                 None
             };
             let last_shift = last_shift_exact.or(last_merged);
             if let Some(last) = last_shift {
                 // 上一笔在位移，本笔从当前已插值显示的 rect 接新目标。
-                if let Some((idx, _)) = old_spans
-                    .iter()
-                    .enumerate()
-                    .find(|(i, s)| !consumed_old[*i] && s.byte_range == old_byte_range)
-                {
+                if let Some((idx, _)) = old_span_match {
                     consumed_old[idx] = true;
                     let old_span = &old_spans[idx];
                     let from_merged_shift = last_merged.is_some();
@@ -541,11 +544,22 @@ impl TextMotion {
                         if from_merged_shift {
                             // 合并匹配：`last.slice` 是合并 VisualSlice（合并 UV/rect），
                             // 不能直接用作单 cluster Conceal。用 `old_span.slice` 的单
-                            // cluster 源纹理和 canonical 位置，`start_clip` 用还原后的
-                            // 当前显示位置，从当前可见画面继续吞到 0。
-                            claimed_conceal_sources.push(old_span.slice.source);
+                            // cluster 源纹理，但 rect 取上一帧已插值显示的 `shift_from`
+                            // （而非 `old_span.slice.rect` canonical 目标位置），
+                            // `start_clip` 同样用 `shift_from`，使 Conceal 的 target
+                            // 与 clip 对齐、有非零交集。否则跨行位移距离较大时，
+                            // `old.rect`（canonical 终点）与 `start_clip`（插值位置）
+                            // 不相交，`scene_graph_renderer` 做交集会跳过整个 glyph，
+                            // 旧字从未开始吞就直接消失。
+                            // 前提：find_merged_shift 已保证 old_span 的 UV 确实属于
+                            // 已提交的合并源（snapshot_id + source_uv 包含核对）。
+                            let old_at_current = VisualSlice {
+                                source: old_span.slice.source,
+                                rect: shift_from,
+                            };
+                            claimed_conceal_sources.push(old_at_current.source);
                             slices.push(SliceMotion::Conceal {
-                                old: old_span.slice,
+                                old: old_at_current,
                                 direction,
                                 start_clip: shift_from,
                                 byte_range: old_span.byte_range,
@@ -1332,9 +1346,16 @@ fn rect_approx_eq(a: &LocalRect, b: &LocalRect) -> bool {
 /// 逐 cluster 枚举 `new_spans`，"乙"的 `old_byte_range=(9,12)` 精确查
 /// `last_drawn_map` 找不到合并键 `(9,15)`。此函数遍历查找**包含** `old_byte_range`
 /// 的合并 Shift `DrawnSlice`，供 `begin_or_retarget` 还原当前 cluster 的接续位置。
+///
+/// Issue #919 复核 17：不能只凭 byte-range 包含就认成同一合并组。同一 session 内
+/// 连续快打时，已提交视觉帧的 snapshot_id 可能与当前 canonical revision 不同，碰巧
+/// 相同的 byte range 会匹配错误来源，`restore_cluster_rect` 会把另一张图的 UV 当作
+/// 本片的 UV。因此额外核对 `snapshot_id` 一致，且 `old_source.source_uv` 落在合并
+/// `source_uv` 内（UV 包含），才允许接续。
 fn find_merged_shift<'a>(
     last_drawn_map: &std::collections::HashMap<(usize, usize), Vec<&'a DrawnSlice>>,
     old_byte_range: (usize, usize),
+    old_source: &SnapshotRef,
 ) -> Option<&'a DrawnSlice> {
     last_drawn_map
         .values()
@@ -1344,8 +1365,22 @@ fn find_merged_shift<'a>(
                 && ds.byte_range.0 <= old_byte_range.0
                 && old_byte_range.1 <= ds.byte_range.1
                 && ds.byte_range != old_byte_range
+                && ds.slice.source.snapshot_id == old_source.snapshot_id
+                && uv_contains(&ds.slice.source.source_uv, &old_source.source_uv)
         })
         .copied()
+}
+
+/// Issue #919 复核 17：判断 `inner` 的 UV 矩形是否被 `outer` 包含（含边界）。
+///
+/// 用于 `find_merged_shift` 确认当前 cluster 的 `source_uv` 确实落在合并 Shift 的
+/// 合并 `source_uv` 内，避免跨 revision / 跨行图碰巧同 byte range 错误匹配。
+fn uv_contains(outer: &LocalRect, inner: &LocalRect) -> bool {
+    const EPS: f64 = 0.01;
+    inner.x >= outer.x - EPS
+        && inner.y >= outer.y - EPS
+        && inner.x + inner.w <= outer.x + outer.w + EPS
+        && inner.y + inner.h <= outer.y + outer.h + EPS
 }
 
 /// Issue #919 复核 16：从合并 Shift 的 `mask_clip` 中还原当前 cluster 的当前显示位置。
@@ -3348,12 +3383,44 @@ mod tests {
     /// 覆盖合并逻辑的完整生命周期。
     #[test]
     fn merged_shift_retargets_from_interpolated_position() {
+        // --- 先构造第二笔 old_layout，取"乙丙"行 id 作为第一笔合并 Shift 的源 ---
+        // Issue #919 复核 17：让第二笔 old_layout 与上一笔目标快照具备相同的源
+        // revision / 源行映射。find_merged_shift 现在核对 snapshot_id + source_uv，
+        // 若第一笔 snap 用与 old_layout 无关的硬编码 id，snapshot_id 核对会失败，
+        // 测试无法证明合并 Shift 的接续真正生效。
+        let old_layout = snapshot(vec![
+            test_line(
+                0,
+                0,
+                vec![
+                    cluster(0, 3, 0.0, 20.0),
+                    cluster(3, 6, 20.0, 20.0),
+                    cluster(6, 9, 40.0, 20.0),
+                ],
+                0.0,
+            ),
+            test_line(
+                1,
+                9,
+                vec![cluster(9, 12, 0.0, 20.0), cluster(12, 15, 20.0, 20.0)],
+                10.0,
+            ),
+        ]);
+        // "乙丙"行是 old_layout.line_snapshots[1]，其 id 即第一笔合并 Shift 的源
+        // snapshot_id。sample() 透传 new.source.snapshot_id 到 DrawnSlice，下一笔
+        // retarget 时 old_spans 中"乙""丙"的 slice.source.snapshot_id 也取自此行 id，
+        // find_merged_shift 的 snapshot_id + source_uv 核对才能通过。
+        let merged_snap_id = old_layout.line_snapshots[1].id;
+
         // --- 第一笔：直接构造合并后的 TextMotion ---
         let merged_uv = rect(0.0, 0.0, 40.0, 10.0);
         let merged_new_rect = rect(0.0, 10.0, 40.0, 10.0);
         let merged_from = rect(20.0, 0.0, 40.0, 10.0);
         let merged_to = rect(0.0, 10.0, 40.0, 10.0);
-        let snap = snap_ref(1, merged_uv);
+        let snap = SnapshotRef {
+            snapshot_id: merged_snap_id,
+            source_uv: merged_uv,
+        };
         let motion = TextMotion {
             slices: vec![SliceMotion::Shift {
                 new: VisualSlice {
@@ -3424,35 +3491,17 @@ mod tests {
             slices: vec![drawn],
         };
 
-        // --- 第二笔编辑：在开头插入"X"使"乙""丙"从 y=10 移到 y=20/y=30 ---
-        // old_layout："甲乙'丙'" 一行(y=0) + "乙丙" 一行(y=10)
+        // --- 第二笔编辑：在开头插入"戊"使"乙""丙"从 y=10 移到 y=20/y=30 ---
+        // old_layout（已在上方构造）："甲乙'丙'" 一行(y=0) + "乙丙" 一行(y=10)
         //   甲(0,0,20,10) byte(0,3), 乙'(20,0,20,10) byte(3,6), 丙'(40,0,20,10) byte(6,9)
         //   乙(0,10,20,10) byte(9,12), 丙(20,10,20,10) byte(12,15)
-        // new_layout："X甲乙'丙'" 一行(y=0) + "乙" 一行(y=20) + "丙" 一行(y=30)
-        //   X(0,0,20,10) byte(0,3), 甲(20,0,20,10) byte(3,6),
+        // new_layout："戊甲乙'丙'" 一行(y=0) + "乙" 一行(y=20) + "丙" 一行(y=30)
+        //   戊(0,0,20,10) byte(0,3), 甲(20,0,20,10) byte(3,6),
         //   乙'(40,0,20,10) byte(6,9), 丙'(60,0,20,10) byte(9,12)
         //   乙(0,20,20,10) byte(12,15), 丙(0,30,20,10) byte(15,18)
         //
         // "乙""丙"在不同新行 → merge_adjacent_shifts 不会合并它们，
         // 可以单独断言各自的 from。
-        let old_layout = snapshot(vec![
-            test_line(
-                0,
-                0,
-                vec![
-                    cluster(0, 3, 0.0, 20.0),
-                    cluster(3, 6, 20.0, 20.0),
-                    cluster(6, 9, 40.0, 20.0),
-                ],
-                0.0,
-            ),
-            test_line(
-                1,
-                9,
-                vec![cluster(9, 12, 0.0, 20.0), cluster(12, 15, 20.0, 20.0)],
-                10.0,
-            ),
-        ]);
         let new_layout = snapshot(vec![
             test_line(
                 0,
@@ -3469,8 +3518,11 @@ mod tests {
             test_line(2, 15, vec![cluster(15, 18, 0.0, 20.0)], 30.0),
         ]);
 
-        // 编辑：在 byte 0 插入"X"（3 字节）。replace=(0,0), inserted=(0,3)
-        let edit = make_edit("甲乙丙乙丙", "X甲乙丙乙丙", 0, 3, (0, 0), (0, 3), "X");
+        // 编辑：在 byte 0 插入"戊"（3 字节 UTF-8 汉字）。replace=(0,0), inserted=(0,3)
+        // "戊"是 3 字节，new_head=3 是合法 UTF-8 边界（戊 后 甲 前），
+        // EditorSelection::collapsed 不会夹偏移。旧测试用 ASCII "X"（1 字节）
+        // 当 3 字节，偏移 3 落在首字内部，selection 被夹到非法边界外。
+        let edit = make_edit("甲乙丙乙丙", "戊甲乙丙乙丙", 0, 3, (0, 0), (0, 3), "戊");
         let motion2 = retarget(&edit, Some(&old_layout), &new_layout, Some(&last_drawn), 7);
 
         // "乙"的 new byte_range=(12,15)，old_byte_range=(9,12)
@@ -3531,5 +3583,178 @@ mod tests {
             }
             other => panic!("expected Shift for 丙, got {other:?}"),
         }
+    }
+
+    /// Issue #919 复核 17：合并 Shift 中途被替换（shaping 变化）且跨行位移距离
+    /// 大于字高时，退场 Conceal 的 target 与 clip 必须有非零交集。旧代码用
+    /// `old_span.slice.rect`（canonical 目标位置）作 Conceal `old.rect`，与
+    /// `start_clip`（插值位置）在 y 方向不相交，`scene_graph_renderer` 做交集
+    /// 会跳过整个 glyph，旧字从未开始吞就直接消失。
+    #[test]
+    fn merged_shift_shaping_change_conceal_has_nonzero_target_clip_overlap() {
+        // --- 先构造第二笔 old_layout，取"乙丙"行 id 作为第一笔合并 Shift 的源 ---
+        let old_layout = snapshot(vec![
+            test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0),
+            test_line(
+                1,
+                3,
+                vec![cluster_shaped(3, 6, 0.0, 20.0, 0), cluster(6, 9, 20.0, 20.0)],
+                100.0,
+            ),
+        ]);
+        let merged_snap_id = old_layout.line_snapshots[1].id;
+
+        // --- 第一笔：合并 Shift 把"乙丙"从 y=0 移到 y=100（跨行位移）---
+        let merged_uv = rect(0.0, 0.0, 40.0, 10.0);
+        let snap = SnapshotRef {
+            snapshot_id: merged_snap_id,
+            source_uv: merged_uv,
+        };
+        let motion = TextMotion {
+            slices: vec![SliceMotion::Shift {
+                new: VisualSlice {
+                    source: snap,
+                    rect: rect(0.0, 100.0, 40.0, 10.0),
+                },
+                from: rect(20.0, 0.0, 40.0, 10.0),
+                to: rect(0.0, 100.0, 40.0, 10.0),
+                byte_range: (3, 9),
+                shaping_identity: identity(),
+            }],
+            started_ms: 0.0,
+            duration_ms: 100,
+            session: 7,
+            target_revision: 2,
+            viewport: viewport(),
+            static_exclusions: vec![],
+            required_textures: vec![snap.snapshot_id],
+            caret_from: None,
+            caret_to: None,
+            paragraph_moves: vec![],
+        };
+
+        // sample(50ms)：progress = ease_out_cubic(0.5) = 0.875
+        // 合并插值 y = 0 + 100*0.875 = 87.5，canonical 目标 y = 100，相距 12.5 > 字高 10。
+        let frame = motion.sample(50.0);
+        let ov = &frame.overlays[0];
+        let drawn = DrawnSlice {
+            slice: VisualSlice {
+                source: SnapshotRef {
+                    snapshot_id: ov.snapshot_id,
+                    source_uv: ov.source_rect,
+                },
+                rect: rect(ov.x, ov.y, ov.w, ov.h),
+            },
+            visible_width: ov.clip_rect.w,
+            clip_rect: ov.clip_rect,
+            mask_clip: ov.mask_clip,
+            motion_kind: ov.motion_kind,
+            byte_range: ov.byte_range,
+            shaping_identity: ov.shaping_identity.clone(),
+            direction: ov.direction.unwrap_or(ClipDirection::LeftToRight),
+        };
+        let last_drawn = LocalDrawnFrame {
+            session: 7,
+            revision: 2,
+            slices: vec![drawn],
+        };
+
+        // --- 第二笔：在"甲"后插入"戊"，"乙"shaping 变化（glyph_hash 0→999）---
+        // old_layout："甲"一行(y=0) + "乙丙"一行(y=100)
+        //   甲(0,0,20,10) byte(0,3)
+        //   乙(0,100,20,10) byte(3,6) shaping hash=0, 丙(20,100,20,10) byte(6,9)
+        // new_layout："甲戊"一行(y=0) + "乙丙"一行(y=110)
+        //   甲(0,0,20,10) byte(0,3), 戊(20,0,20,10) byte(3,6)
+        //   乙(0,110,20,10) byte(6,9) shaping hash=999, 丙(20,110,20,10) byte(9,12)
+        let new_layout = snapshot(vec![
+            test_line(
+                0,
+                0,
+                vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+                0.0,
+            ),
+            test_line(
+                1,
+                6,
+                vec![cluster_shaped(6, 9, 0.0, 20.0, 999), cluster(9, 12, 20.0, 20.0)],
+                110.0,
+            ),
+        ]);
+
+        // 编辑：在 byte 3 插入"戊"（3 字节）。replace=(3,3), inserted=(3,6)
+        let edit = make_edit("甲乙丙", "甲戊乙丙", 3, 6, (3, 3), (3, 6), "戊");
+        let motion2 = retarget(&edit, Some(&old_layout), &new_layout, Some(&last_drawn), 7);
+
+        // "乙"new byte_range=(6,9)，old_byte_range=(3,6)，在合并 Shift (3,9) 内。
+        // shaping 变化 → Conceal + Reveal。Conceal 应用 shift_from（插值位置）。
+        let conceal_yi = motion2
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (3, 6) && s.motion_kind() == MotionKind::Conceal)
+            .expect("应有旧\"乙\" Conceal (byte 3..6)");
+
+        match conceal_yi {
+            SliceMotion::Conceal { old, start_clip, .. } => {
+                // old.rect = shift_from = 上一帧"乙"的插值位置 (2.5, 87.5, 20, 10)
+                // 而非 canonical 目标 (0, 100, 20, 10)
+                assert!(
+                    (old.rect.y - 87.5).abs() < 0.01,
+                    "old.rect.y={} expected=87.5 (上一帧插值位置)",
+                    old.rect.y
+                );
+                assert!(
+                    (old.rect.x - 2.5).abs() < 0.01,
+                    "old.rect.x={} expected=2.5 (上一帧插值位置)",
+                    old.rect.x
+                );
+                assert_eq!(old.rect.w, 20.0);
+                assert_eq!(old.rect.h, 10.0);
+                // start_clip = shift_from，与 old.rect 对齐
+                assert_eq!(*start_clip, old.rect);
+                // canonical old_span.slice.rect.y = 100，相距 12.5 > 字高 10
+                assert!((100.0 - old.rect.y).abs() > 10.0);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+
+        // sample(0)：退场 overlay 的 target 与 clip 应有非零交集。
+        // 旧代码 target=canonical(0,100), clip=shift_from(2.5,87.5) → y 不相交 → 空交集。
+        let frame2 = motion2.sample(0.0);
+        let conceal_overlay = frame2
+            .overlays
+            .iter()
+            .find(|o| o.motion_kind == MotionKind::Conceal && o.byte_range == (3, 6))
+            .expect("应有 Conceal overlay");
+        let target = rect(conceal_overlay.x, conceal_overlay.y, conceal_overlay.w, conceal_overlay.h);
+        let overlap = intersect_rect(&target, &conceal_overlay.clip_rect);
+        assert!(
+            overlap.w > 0.01 && overlap.h > 0.01,
+            "target {:?} 与 clip {:?} 交集为 {:?}，应有非零交集",
+            target,
+            conceal_overlay.clip_rect,
+            overlap
+        );
+
+        // sample(50ms)：中间帧仍应有非零交集（遮罩从 shift_from 收拢，target 固定）
+        let frame2_mid = motion2.sample(50.0);
+        let conceal_overlay_mid = frame2_mid
+            .overlays
+            .iter()
+            .find(|o| o.motion_kind == MotionKind::Conceal && o.byte_range == (3, 6))
+            .expect("应有中间帧 Conceal overlay");
+        let target_mid = rect(
+            conceal_overlay_mid.x,
+            conceal_overlay_mid.y,
+            conceal_overlay_mid.w,
+            conceal_overlay_mid.h,
+        );
+        let overlap_mid = intersect_rect(&target_mid, &conceal_overlay_mid.clip_rect);
+        assert!(
+            overlap_mid.w > 0.01 && overlap_mid.h > 0.01,
+            "中间帧 target {:?} 与 clip {:?} 交集为 {:?}，应有非零交集",
+            target_mid,
+            conceal_overlay_mid.clip_rect,
+            overlap_mid
+        );
     }
 }
