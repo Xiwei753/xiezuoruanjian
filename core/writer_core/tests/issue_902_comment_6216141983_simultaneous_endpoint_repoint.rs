@@ -228,23 +228,35 @@ fn assert_swapped_storage(f: &Fx, edge_id: &str) {
     assert_eq!(updated.to.target, node_target("b1"));
 }
 
-/// 对调后 `b1` 改由 `EdgeTo` 保护、`c1` 改由 `EdgeFrom` 保护。
+/// 对调后 `b1` 改由 `EdgeTo` 保护、`c1` 改由 `EdgeFrom` 保护；同时旧来源索引
+/// 必须被移除，不能残留 `EdgeFrom`（b1）或 `EdgeTo`（c1）。
 fn assert_swapped_delete_guards(f: &Fx) {
     let blocked_b = f
         .api
         .delete_starmap_node(&f.child_b, "b1")
         .expect_err("对调后 b1 成为 to 端，仍应被跨画布引用拦截");
+    let b_message = format!("{blocked_b:?}");
     assert!(
-        format!("{blocked_b:?}").contains("EdgeTo"),
-        "对调后 b1 的引用来源应改为 EdgeTo，实际: {blocked_b:?}"
+        b_message.contains("EdgeTo"),
+        "对调后 b1 应由 EdgeTo 保护：{b_message}"
     );
+    assert!(
+        !b_message.contains("EdgeFrom"),
+        "b1 上旧的 EdgeFrom 索引应被移除：{b_message}"
+    );
+
     let blocked_c = f
         .api
         .delete_starmap_node(&f.child_c, "c1")
         .expect_err("对调后 c1 成为 from 端，仍应被跨画布引用拦截");
+    let c_message = format!("{blocked_c:?}");
     assert!(
-        format!("{blocked_c:?}").contains("EdgeFrom"),
-        "对调后 c1 的引用来源应改为 EdgeFrom，实际: {blocked_c:?}"
+        c_message.contains("EdgeFrom"),
+        "对调后 c1 应由 EdgeFrom 保护：{c_message}"
+    );
+    assert!(
+        !c_message.contains("EdgeTo"),
+        "c1 上旧的 EdgeTo 索引应被移除：{c_message}"
     );
 }
 
