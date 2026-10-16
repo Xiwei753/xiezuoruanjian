@@ -1401,6 +1401,39 @@ mod tests {
     }
 
     #[test]
+    fn conceal_sample_narrows_strictly_within_start_clip() {
+        // Issue #919：Conceal 必须从上一帧可见 clip 持续收缩，且永不越过已显示边界。
+        // 两种方向都保留各自固定的一侧边缘，避免下笔把可见部分瞬移到旧矩形另一边。
+        let start = rect(50.0, 0.0, 8.0, 10.0);
+        for direction in [ClipDirection::LeftToRight, ClipDirection::RightToLeft] {
+            let motion = conceal_with_start_clip(direction);
+            let mut prev_width = start.w;
+            for step in 1..8 {
+                let frame = motion.sample(step as f64 * 10.0);
+                let overlay = frame.overlays.first().expect("conceal overlay");
+                assert!(
+                    overlay.clip_rect.w < prev_width,
+                    "遮罩必须严格收缩: {} < {}",
+                    overlay.clip_rect.w,
+                    prev_width
+                );
+                assert!(overlay.clip_rect.w >= 0.0);
+                prev_width = overlay.clip_rect.w;
+                match direction {
+                    ClipDirection::LeftToRight => {
+                        assert_eq!(overlay.clip_rect.x, start.x);
+                        assert!(overlay.clip_rect.x + overlay.clip_rect.w <= start.x + start.w);
+                    }
+                    ClipDirection::RightToLeft => {
+                        assert_eq!(overlay.clip_rect.x + overlay.clip_rect.w, start.x + start.w);
+                        assert!(overlay.clip_rect.x >= start.x);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn reveal_sample_moves_from_start_clip_and_fixes_size() {
         let new = visual(9, rect(0.0, 0.0, 20.0, 10.0), rect(40.0, 0.0, 20.0, 10.0));
         let start_clip = rect(0.0, 0.0, 5.0, 10.0);
@@ -1492,5 +1525,32 @@ mod tests {
             },
         ]);
         assert_eq!(motion.source_snapshot_ids(), vec![shared]);
+    }
+
+    #[test]
+    fn motion_keeps_old_and_new_sources_distinct() {
+        // Issue #919：同一 byte_range 的旧 Conceal 与新 Reveal 必须各自持有旧/新快照，
+        // 不能被字节位置合并成一个源；这也是移除逐字身份匹配后仍不允许重影的前提。
+        let old = visual(1, rect(0.0, 0.0, 10.0, 10.0), rect(40.0, 0.0, 10.0, 10.0));
+        let new = visual(2, rect(0.0, 0.0, 10.0, 10.0), rect(40.0, 0.0, 10.0, 10.0));
+        let motion = make_motion(vec![
+            SliceMotion::Conceal {
+                old,
+                direction: ClipDirection::LeftToRight,
+                start_clip: rect(40.0, 0.0, 10.0, 10.0),
+                byte_range: (0, 1),
+                shaping_identity: identity(),
+            },
+            SliceMotion::Reveal {
+                new,
+                direction: ClipDirection::LeftToRight,
+                start_clip: rect(40.0, 0.0, 0.0, 10.0),
+                byte_range: (0, 1),
+                shaping_identity: identity(),
+            },
+        ]);
+        let ids = motion.source_snapshot_ids();
+        assert_eq!(ids.len(), 2, "旧/新画面必须各自持有快照");
+        assert_ne!(ids[0], ids[1]);
     }
 }
