@@ -118,9 +118,9 @@
 
 - Kit：`@kit.ArkUI`（`window` 模块）
 - 接口：
-  - `window.getLastWindow()`
-  - `win.setSnapshotSkip(enabled)`（截图/录屏跳过，用于隐私保护）
-- 最低 API：未限定独立 API（`setSnapshotSkip` 随 `@kit.ArkUI` `window` 模块整体可用，官方未为该方法单独声明起始 API Level）
+  - `window.getLastWindow(context)`
+  - `win.setWindowPrivacyMode(enabled)`（截图/录屏时隐藏窗口内容，用于隐私保护；旧的 `setSnapshotSkip` 不是公开 SDK API，`@ohos.window.d.ts` 中无此方法）
+- 最低 API：未限定独立 API（`setWindowPrivacyMode` 随 `@kit.ArkUI` `window` 模块整体可用，官方未为该方法单独声明起始 API Level）
 - SystemCapability：未限定独立 SystemCapability（随 `@kit.ArkUI` `window` 模块，无独立 syscap 声明）
 - 权限：无
 - ACL：否
