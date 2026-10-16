@@ -43,6 +43,9 @@ WHITELIST_FILENAMES = {
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    # DevEco skill 安装的脚本（.opencode/skills/hmos-connect-api-cli-skill/scripts/...），
+    # 不随仓库分发；publish 脚本在运行时从该路径查找，引用它的文档是准确的。
+    'scripts/connect-api-cli.js',
 }
 
 # Legacy files that are only allowed in specific contexts (AGENTS.md or lines with
