@@ -689,6 +689,11 @@ impl TextMotion {
             }
         }
 
+        // Issue #919 复核 16：patch 外未改的连续文本按旧/新视觉行的连续片段
+        // 分组——把同一旧/新视觉行、字节区间连续、源 UV 连续、位移向量相同的
+        // 相邻 Shift 合并成一条连续 VisualSlice，而不是每个 cluster 各一条。
+        slices = merge_adjacent_shifts(slices);
+
         // 视口过滤：Shift 用 from/to 并集，Reveal/Conceal 用自身矩形。
         slices.retain(|s| rects_intersect(&s.motion_rect(), &viewport));
         if slices.is_empty() && paragraph_moves.is_empty() {
@@ -1281,6 +1286,86 @@ fn rect_approx_eq(a: &LocalRect, b: &LocalRect) -> bool {
         && (a.y - b.y).abs() < EPS
         && (a.w - b.w).abs() < EPS
         && (a.h - b.h).abs() < EPS
+}
+
+/// Issue #919 复核 16：把相邻可合并的 Shift 合并成连续视觉片段。
+///
+/// 合并条件：同一新行纹理、旧/新字节区间连续、同一旧/新视觉行、位移向量相同、
+/// 新侧源 UV 在行内连续。遇到换行、源纹理 ID 变化、位移不一致或 UV 不连续就
+/// 结束当前组。合并时 from/to/new.rect/new.source_uv 取整段并集，byte_range
+/// 合并为连续区间；shaping_identity 沿用组内首字——合并段在下一笔编辑接续时
+/// 与任何单 cluster 的 is_same_shaping 必为 false（cluster_glyph_count 等不同），
+/// 会走旧退出+新进入，具体沿用哪一字不影响安全性。
+fn merge_adjacent_shifts(slices: Vec<SliceMotion>) -> Vec<SliceMotion> {
+    let mut result: Vec<SliceMotion> = Vec::with_capacity(slices.len());
+    for s in slices {
+        let prev_is_shift = matches!(result.last(), Some(SliceMotion::Shift { .. }));
+        let cur_is_shift = matches!(s, SliceMotion::Shift { .. });
+        if prev_is_shift && cur_is_shift {
+            let prev = result.pop().unwrap();
+            if let (
+                SliceMotion::Shift {
+                    new: a_new,
+                    from: a_from,
+                    to: a_to,
+                    byte_range: a_br,
+                    shaping_identity: a_shaping,
+                },
+                SliceMotion::Shift {
+                    new: b_new,
+                    from: b_from,
+                    to: b_to,
+                    byte_range: b_br,
+                    ..
+                },
+            ) = (&prev, &s)
+            {
+                const EPS: f64 = 0.05;
+                let same_snapshot = a_new.source.snapshot_id == b_new.source.snapshot_id;
+                let byte_continuous = a_br.1 == b_br.0;
+                let same_old_line = (a_from.y - b_from.y).abs() < EPS;
+                let same_new_line = (a_to.y - b_to.y).abs() < EPS;
+                let same_disp_x = ((b_to.x - b_from.x) - (a_to.x - a_from.x)).abs() < EPS;
+                let same_disp_y = ((b_to.y - b_from.y) - (a_to.y - a_from.y)).abs() < EPS;
+                let uv_continuous = ((a_new.source.source_uv.x + a_new.source.source_uv.w)
+                    - b_new.source.source_uv.x)
+                    .abs()
+                    < EPS
+                    && (a_new.source.source_uv.y - b_new.source.source_uv.y).abs() < EPS;
+                if same_snapshot
+                    && byte_continuous
+                    && same_old_line
+                    && same_new_line
+                    && same_disp_x
+                    && same_disp_y
+                    && uv_continuous
+                {
+                    result.push(SliceMotion::Shift {
+                        new: VisualSlice {
+                            source: SnapshotRef {
+                                snapshot_id: a_new.source.snapshot_id,
+                                source_uv: union_rect(
+                                    &a_new.source.source_uv,
+                                    &b_new.source.source_uv,
+                                ),
+                            },
+                            rect: union_rect(&a_new.rect, &b_new.rect),
+                        },
+                        from: union_rect(a_from, b_from),
+                        to: union_rect(a_to, b_to),
+                        byte_range: (a_br.0, b_br.1),
+                        shaping_identity: a_shaping.clone(),
+                    });
+                    continue;
+                }
+            }
+            result.push(prev);
+            result.push(s);
+        } else {
+            result.push(s);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -2397,13 +2482,23 @@ mod tests {
             .find(|s| s.motion_kind() == MotionKind::Conceal)
             .expect("应有“甲” Conceal");
         assert_eq!(conceal.byte_range(), (0, 3));
-        // “乙” 20→0、“丙” 40→20 都应是 Shift。
+        // 「乙」「丙」未改、同视觉行、位移相同（均左移 20）、字节连续、源 UV 连续，
+        // 按 #919 连续片段分组合并成一条 Shift（byte_range 0..6），不得产生 Reveal。
         let shifts: Vec<_> = motion
             .slices
             .iter()
             .filter(|s| s.motion_kind() == MotionKind::Shift)
             .collect();
-        assert_eq!(shifts.len(), 2);
+        assert_eq!(shifts.len(), 1, "乙丙应合并为一条连续 Shift: {:?}", motion.slices);
+        match shifts[0] {
+            SliceMotion::Shift { new, from, to, byte_range, .. } => {
+                assert_eq!(*byte_range, (0, 6));
+                assert_eq!((from.x, from.y, from.w, from.h), (20.0, 0.0, 40.0, 10.0));
+                assert_eq!((to.x, to.y, to.w, to.h), (0.0, 0.0, 40.0, 10.0));
+                assert_eq!(new.source.snapshot_id, new_layout.line_snapshots[0].id);
+            }
+            other => panic!("expected Shift, got {other:?}"),
+        }
     }
 
     // ── 复核 14：在途旧图接续与旧/新画面归属的补充回归 ─────────────────────
@@ -2984,14 +3079,15 @@ mod tests {
 
     #[test]
     fn wrapped_unchanged_text_shifts_per_visual_line_without_merging_textures() {
-        // Issue #919：议题第一条评论要求「patch 外仍存在的连续文本……按行的视觉片段
-        // 分组为 Shift，分组可以跨行拆开，不得跨不连续旧/新行硬拼同一纹理」。本用例
-        // 构造同段「甲乙丙丁」在旧布局折成两行，段首插入「戊己」后折行点改变：「甲」
-        // 留在新首行末尾，而「乙」从旧首行折到新次行行首。
+        // Issue #919 复核 16：patch 外未改的连续文本按旧/新视觉行的连续片段分组，
+        // 而不是每个 cluster 各一条 Shift。本用例构造同段「甲乙丙丁」在旧布局折成
+        // 首行「甲乙丙」、次行「丁」（每行容纳 3 个等宽字）；段首插入「戊己」后折行
+        // 点改变：新首行「戊己甲」、新次行「乙丙丁」。
         //
-        // 断言的正是 `layout_spans` 的跨行分组：未改的每个字各成一条 Shift，「乙」
-        // 的 from 用旧首行几何、to 与新画面纹理用新次行，两条折行的 new 版纹理都被
-        // 分别引用，不会被当成一张跨行的同一纹理。
+        // 位置映射：甲 (0,0)→(40,0)；乙 (20,0)→(0,20)；丙 (40,0)→(20,20)；
+        // 丁 (0,20)→(40,20)。乙、丙位移同为 (-20,20) 且同属旧首行→新次行，源 UV
+        // 连续，应合并成一条连续 Shift；甲（旧首行→新首行）和丁（旧次行→新次行）
+        // 各为其他组合，不合并。最终 3 条 Shift，每条只用单一新行纹理。
         const PARA: u64 = 5;
         let line = |ordinal: u32, byte_start: usize, clusters, top: f64| {
             let mut l = test_line(ordinal, byte_start, clusters, top);
@@ -2999,20 +3095,19 @@ mod tests {
             l
         };
 
-        // 旧：一段「甲乙丙丁」折两行——首行「甲乙」、次行「丙丁」。
+        // 旧：一段「甲乙丙丁」折两行——首行「甲乙丙」、次行「丁」（每行 3 字容量）。
         let old_layout = snapshot(vec![
             line(
                 0,
                 0,
-                vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+                vec![
+                    cluster(0, 3, 0.0, 20.0),
+                    cluster(3, 6, 20.0, 20.0),
+                    cluster(6, 9, 40.0, 20.0),
+                ],
                 0.0,
             ),
-            line(
-                1,
-                6,
-                vec![cluster(6, 9, 0.0, 20.0), cluster(9, 12, 20.0, 20.0)],
-                20.0,
-            ),
+            line(1, 9, vec![cluster(9, 12, 0.0, 20.0)], 20.0),
         ]);
         // 新：段首插入「戊己」——首行「戊己甲」、次行「乙丙丁」，折行点改变。
         let new_layout = snapshot(vec![
@@ -3056,15 +3151,15 @@ mod tests {
             .iter()
             .filter(|s| s.motion_kind() == MotionKind::Shift)
             .collect();
-        // 未改的甲/乙/丙/丁各一条，共 4 条，不把跨行连续范围拼成一条。
+        // 甲、乙丙（合并）、丁各一条，共 3 条。
         assert_eq!(
             shifts.len(),
-            4,
-            "未改四字应各成一条按视觉行分组的 Shift: {:?}",
+            3,
+            "甲/乙丙合并/丁应共 3 条 Shift: {:?}",
             motion.slices
         );
 
-        // 新首行与新次行两张纹理都被移位片段分别引用，证明没有跨行硬拼同一纹理。
+        // 每条 Shift 只使用单一新行纹理；两行纹理都被分别引用，不跨行硬拼同一纹理。
         let mut shift_source_ids: Vec<LineSnapshotId> = Vec::new();
         for s in &shifts {
             let id = s.source_snapshot_id();
@@ -3100,22 +3195,51 @@ mod tests {
             other => panic!("甲应为 Shift: {other:?}"),
         }
 
-        // 「乙」跨行：from 用旧首行几何，to 与新画面纹理用新次行。
+        // 「乙丙」合并为一条连续 Shift：旧首行 x=20..60 → 新次行 x=0..40，
+        // 纹理取自新次行，byte_range 连续 (9, 15)。
         match shifts
             .iter()
-            .find(|s| s.byte_range() == (9, 12))
+            .find(|s| s.byte_range() == (9, 15))
             .copied()
-            .expect("乙 Shift")
+            .expect("乙丙合并 Shift")
         {
             SliceMotion::Shift { new, from, to, .. } => {
-                assert_eq!((from.x, from.y), (20.0, 0.0), "乙的旧画面在旧首行");
                 assert_eq!(
                     new.source.snapshot_id, new_line1_id,
-                    "乙的新画面必须取自新次行纹理"
+                    "乙丙的新画面必须取自新次行纹理"
                 );
-                assert_eq!((to.x, to.y), (0.0, 20.0), "乙移入新次行行首");
+                assert_eq!(
+                    (from.x, from.y, from.w, from.h),
+                    (20.0, 0.0, 40.0, 10.0),
+                    "乙丙旧画面并集"
+                );
+                assert_eq!(
+                    (to.x, to.y, to.w, to.h),
+                    (0.0, 20.0, 40.0, 10.0),
+                    "乙丙新画面并集"
+                );
+                assert_eq!(
+                    (new.source.source_uv.x, new.source.source_uv.w),
+                    (0.0, 40.0),
+                    "乙丙源 UV 合并为连续区间"
+                );
             }
-            other => panic!("乙应为 Shift: {other:?}"),
+            other => panic!("乙丙应为合并 Shift: {other:?}"),
+        }
+
+        // 「丁」从旧次行移到新次行末尾：旧次行 x=0 → 新次行 x=40。
+        match shifts
+            .iter()
+            .find(|s| s.byte_range() == (15, 18))
+            .copied()
+            .expect("丁 Shift")
+        {
+            SliceMotion::Shift { new, from, to, .. } => {
+                assert_eq!(new.source.snapshot_id, new_line1_id);
+                assert_eq!((from.x, from.y), (0.0, 20.0), "丁的旧画面在旧次行");
+                assert_eq!((to.x, to.y), (40.0, 20.0), "丁移入新次行末尾");
+            }
+            other => panic!("丁应为 Shift: {other:?}"),
         }
     }
 }
