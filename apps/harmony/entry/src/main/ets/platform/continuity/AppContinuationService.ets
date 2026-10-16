@@ -14,7 +14,8 @@
 //    → 调 getCurrentPayload() → 写入 wantParam。
 // 2. 目标设备：EntryAbility.onCreate/onNewWant → 检查 launchReason === CONTINUATION
 //    → ContinuationEntrypoint.restoreFromWant → 从 want.parameters 读取
-//    → restoreFromWant() 还原 payload → 交 AppNavigation 手动重建 NavPathStack。
+//    → AppContinuationService.restoreFromWant() 还原 payload
+//    → NavigationTransactionCoordinator.restoreFromContinuation() → AppNavigation.applyContinuation 手动重建 NavPathStack。
 
 import { ContinuationPayload } from './ContinuationPayload'
 import { EditorViewportState } from '../../feature/editor/render/EditorViewportState'

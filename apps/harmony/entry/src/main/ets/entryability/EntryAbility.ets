@@ -179,8 +179,9 @@ export default class EntryAbility extends UIAbility {
 
   // 接续恢复阶段的目标设备窗口初始化：与 onWindowStageCreate 等价的根页面装载。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移，这里只装载根页 pages/Index，
-  // AppNavigation 首帧 aboutToAppear 时从 NavigationTransactionCoordinator 消费已交付的接续 payload，
-  // 由 NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
+  // AppNavigation 在 aboutToAppear 注册恢复回调，由 NavigationTransactionCoordinator 转交
+  // AppNavigation.applyContinuation 手动重建 NavPathStack；回调或 homeStack 未就绪时先暂存，
+  // 待 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
