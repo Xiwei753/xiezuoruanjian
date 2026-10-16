@@ -260,26 +260,27 @@ entry 运行时依赖没有该受限 HSP，受限 product 才有。
 > **不代表普通 product 装配了该 HSP**。真正表示是否装配的是 `hspNameOhmMap` /
 > `hspResourcesMap`：普通 product 为空，受限 product 才出现 `privacy_acl`。
 
-此前添加 `PRIVACY_WINDOW` 之前，本地实跑
+`entry/src/main/module.json5` 新增 `PRIVACY_WINDOW` 后，重新本地实跑
 `--mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap`
 观察到：`entry/build/default/intermediates/loader/default/loader.json` 中
-`hspNameOhmMap`、`hspResourcesMap` 均为空；
+`hspNameOhmMap`、`hspResourcesMap` 均为空（`modulePathMap` 仍登记 `entry` 与 `privacy_acl`
+两个工程模块路径）；
 `entry/build/default/intermediates/res/default/module.json` 的
-`requestPermissions` 为原有三项非 DLP 权限、`dependencies` 为空。
-本轮 `entry/src/main/module.json5` 已新增 `PRIVACY_WINDOW`，
-重新构建后预期 `requestPermissions` 为四项；此处尚无新构建产物观察记录。
-所以普通 product 的产物不含该受限 HSP，也不带受限权限。
+`requestPermissions` 为 `INTERNET`、`GET_NETWORK_INFO`、`PRIVACY_WINDOW`、`DETECT_GESTURE`
+四项非 DLP 权限、`dependencies` 为空。此前在添加 `PRIVACY_WINDOW` 之前的同一条命令只观察到前
+三项非 DLP 权限。所以普通 product 的产物不含该受限 HSP，也不带受限权限。
 
-受限 product 同样可在本地实跑后核对（`entry/build/acl/intermediates/loader/acl/loader.json`）：
+受限 product 同样在本地实跑
+`--mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap`
+后核对（`entry/build/acl/intermediates/loader/acl/loader.json`）：
 `hspNameOhmMap` 为 `{ "privacy_acl": "@bundle:com.xiwei.sujian/privacy_acl/ets/Index" }`，
 `hspResourcesMap.privacy_acl` 指向 `privacy_acl/build/acl/intermediates/res/default/ResourceTable.txt`；
 合并进 ACL HAP 的 `entry/build/acl/intermediates/res/acl/module.json` 的 `dependencies`
 为 `[{ "moduleName": "privacy_acl", "versionCode": 1000000 }]`（该 `versionCode` 取自应用级
 `AppScope/app.json5` 的 `app.versionCode`，即 `1000000`；不是 `privacy_acl/oh-package.json5`
-的 ohpm 包版本），`requestPermissions`
-除普通权限外还含 `ohos.permission.DLP_GET_HIDE_STATUS`（注：历史 ACL 实跑产物中普通权限为三项，
-本轮新增 `PRIVACY_WINDOW` 后预期 ACL product 的 `requestPermissions` 为四项普通权限 + DLP；
-此处尚无新构建产物观察记录）；`privacy_acl` HSP 自身的
+的 ohpm 包版本），`requestPermissions` 为 `INTERNET`、`GET_NETWORK_INFO`、`PRIVACY_WINDOW`、
+`DETECT_GESTURE` 四项普通权限，外加 `ohos.permission.DLP_GET_HIDE_STATUS`（历史 ACL 实跑产物
+中普通权限为三项，未含 `PRIVACY_WINDOW`）；`privacy_acl` HSP 自身的
 `privacy_acl/build/acl/intermediates/res/default/module.json` 也单独声明该权限。这组值与
 default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
 
