@@ -46,7 +46,8 @@ interface ActiveNavigationTask {
 
 // NavigationTransactionCoordinator — AppNavigation 的可外部访问入口。
 // UIAbility（非 UI 上下文）无法直接持有 @Component struct 实例，
-// 通过此单例间接触发接续恢复：AppNavigation 在 aboutToAppear 注册 navPathStack 与恢复回调，
+// 通过此单例间接触发接续恢复：AppNavigation.aboutToAppear 注册恢复回调，
+// PrimaryTabShell.aboutToAppear 注册各 tab 的 NavPathStack，
 // EntryAbility.onCreate/onNewWant → ContinuationEntrypoint.restoreFromWant → NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
 // 评论明确要求 SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用自动页面栈迁移，
 // 由本协调器在目标设备手动重建。
