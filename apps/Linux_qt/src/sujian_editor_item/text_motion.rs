@@ -484,8 +484,31 @@ impl TextMotion {
                 .iter()
                 .enumerate()
                 .find(|(i, s)| !consumed_old[*i] && s.byte_range == old_byte_range);
-            let last_shift_exact = last_vec
-                .and_then(|v| v.iter().find(|ds| ds.motion_kind == MotionKind::Shift).copied());
+            // Issue #919 复核 18：精确 Shift 也必须核对来源 snapshot_id + UV，不能
+            // 只凭 byte-range 恰好相同就认成同一张画面。与 find_merged_shift 共享
+            // 同一套来源判断：精确匹配要求 snapshot_id 相同且 UV 精确相等；合并匹配
+            // 要求 snapshot_id 相同且 UV 包含。否则上一已提交帧里一条与 old_byte_range
+            // 恰好相等、但来自不同 layout revision/行图的未合并 Shift 会直接命中，把
+            // 不相干的 last.mask_clip 作为本字的 from，或在 shaping 不同分支拿
+            // last.slice 生成 Conceal。old_span_match 为 None 时无来源可核对，精确
+            // 匹配不成立，只走合并匹配。
+            let last_shift_exact = if let Some((_, old_span)) = old_span_match {
+                last_vec.and_then(|v| {
+                    v.iter()
+                        .find(|ds| {
+                            ds.motion_kind == MotionKind::Shift
+                                && ds.slice.source.snapshot_id
+                                    == old_span.slice.source.snapshot_id
+                                && uv_eq(
+                                    &ds.slice.source.source_uv,
+                                    &old_span.slice.source.source_uv,
+                                )
+                        })
+                        .copied()
+                })
+            } else {
+                None
+            };
             let last_merged = if last_shift_exact.is_none() && old_span_match.is_some() {
                 let idx = old_span_match.unwrap().0;
                 find_merged_shift(&last_drawn_map, old_byte_range, &old_spans[idx].slice.source)
@@ -1381,6 +1404,15 @@ fn uv_contains(outer: &LocalRect, inner: &LocalRect) -> bool {
         && inner.y >= outer.y - EPS
         && inner.x + inner.w <= outer.x + outer.w + EPS
         && inner.y + inner.h <= outer.y + outer.h + EPS
+}
+
+/// Issue #919 复核 18：判断两个 UV 矩形是否精确相等（带 EPS 容差）。
+///
+/// 用于 `begin_or_retarget` 精确 Shift 接续时确认上一帧的 `source_uv` 与当前
+/// 旧布局行图的 `source_uv` 是同一 cluster，与 `find_merged_shift` 的 `uv_contains`
+/// （合并匹配用包含关系）共同构成完整的来源核对：精确匹配 UV 相等，合并匹配 UV 包含。
+fn uv_eq(a: &LocalRect, b: &LocalRect) -> bool {
+    uv_contains(a, b) && uv_contains(b, a)
 }
 
 /// Issue #919 复核 16：从合并 Shift 的 `mask_clip` 中还原当前 cluster 的当前显示位置。
@@ -3582,6 +3614,103 @@ mod tests {
                 assert_eq!(new.source.source_uv, rect(0.0, 0.0, 20.0, 10.0));
             }
             other => panic!("expected Shift for 丙, got {other:?}"),
+        }
+    }
+
+    /// Issue #919 复核 18：精确 Shift 接续必须核对来源 snapshot_id + UV，不能只凭
+    /// byte-range 恰好相同就认成同一张画面。构造 `old_span` 与 `last_drawn` 的
+    /// byte-range 完全相同，但 snapshot ID 不同且 `last.mask_clip` 位置很远；断言
+    /// 不会拿这条错误来源的 Shift 作为新计划起点，而是从 canonical 旧位置开始。
+    /// 与 `merged_shift_retargets_from_interpolated_position`（正向：合并来源正确
+    /// 时接续插值位置）组成一正一反两个用例。
+    #[test]
+    fn exact_shift_rejects_same_byte_range_different_snapshot() {
+        // old_layout："甲乙" 一行，甲 byte(0,3) x=0，乙 byte(3,6) x=20
+        let old_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        // old_layout 真实行 id（"乙"的源 snapshot_id）
+        let correct_id = old_layout.line_snapshots[0].id;
+        // 构造一个与 old_layout 不同 revision 的 snapshot_id，模拟上一帧来自不同
+        // layout revision/行图的未合并 Shift。
+        let wrong_id = LineSnapshotId::new(
+            correct_id.layout_revision + 100,
+            correct_id.paragraph_id,
+            correct_id.visual_line_ordinal,
+        );
+
+        // last_drawn：一条 Shift，byte_range=(3,6) 与"乙"的 old_byte_range 完全相同，
+        // 但 snapshot_id 不同，mask_clip 位置很远（500,500）。若精确匹配只按 byte-range
+        // 不核对来源，会把 (500,500) 当作 from；修复后应被拒绝，改走 canonical 旧位置。
+        let last_drawn = LocalDrawnFrame {
+            session: 1,
+            revision: 1,
+            slices: vec![DrawnSlice {
+                slice: VisualSlice {
+                    source: SnapshotRef {
+                        snapshot_id: wrong_id,
+                        source_uv: rect(20.0, 0.0, 20.0, 10.0),
+                    },
+                    rect: rect(500.0, 500.0, 20.0, 10.0),
+                },
+                visible_width: 20.0,
+                clip_rect: rect(500.0, 500.0, 20.0, 10.0),
+                mask_clip: rect(500.0, 500.0, 20.0, 10.0),
+                motion_kind: MotionKind::Shift,
+                byte_range: (3, 6),
+                shaping_identity: identity(),
+                direction: ClipDirection::LeftToRight,
+            }],
+        };
+
+        // new_layout："甲丙乙" 一行，甲 x=0 不变，乙从 x=20 移到 x=40。
+        // 在"甲"后插入"丙"："甲"位置不变不产生 Shift，只有"乙"Shift，避免
+        // merge_adjacent_shifts 把"甲""乙"两条相邻 Shift 合并成一条而无法单独
+        // 断言"乙"的 from。
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![
+                cluster(0, 3, 0.0, 20.0),
+                cluster(3, 6, 20.0, 20.0),
+                cluster(6, 9, 40.0, 20.0),
+            ],
+            0.0,
+        )]);
+
+        // 编辑：在 byte 3（"甲"后"乙"前）插入"丙"（3 字节 UTF-8 汉字）
+        let edit = make_edit("甲乙", "甲丙乙", 3, 6, (3, 3), (3, 6), "丙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last_drawn), 1);
+
+        // "乙"的 new byte_range=(6,9)，old_byte_range=(3,6)
+        let yi_shift = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Shift && s.byte_range() == (6, 9))
+            .expect("应有乙 Shift (byte 6..9)");
+
+        match yi_shift {
+            SliceMotion::Shift { from, to, .. } => {
+                // from 应为 old_span.slice.rect = (20, 0, 20, 10)（canonical 旧位置），
+                // 而非 last.mask_clip = (500, 500, 20, 10)（远处错误来源）。
+                assert!(
+                    (from.x - 20.0).abs() < 0.01,
+                    "乙 from.x={} expected=20.0 (canonical 旧位置)，\
+                     不应沿用错误来源的 500.0",
+                    from.x
+                );
+                assert!(
+                    (from.y - 0.0).abs() < 0.01,
+                    "乙 from.y={} expected=0.0 (canonical 旧位置)，\
+                     不应沿用错误来源的 500.0",
+                    from.y
+                );
+                assert_eq!(*to, rect(40.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Shift for 乙, got {other:?}"),
         }
     }
 
