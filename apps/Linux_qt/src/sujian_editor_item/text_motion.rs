@@ -488,7 +488,14 @@ impl TextMotion {
                         .shaping_identity
                         .is_same_shaping(&new_span.shaping_identity)
                     {
-                        let from = last.clip_rect;
+                        // Issue #919 复核 15：Shift 接续的起点取上一帧未裁剪的
+                        // 当前画面位置 `mask_clip`（`sample()` 对 Shift 产生的
+                        // 完整插值 rect），而不是视口裁剪后的 `clip_rect`。被
+                        // 视口裁掉一部分的位移字形，若用 `clip_rect` 的可见边缘
+                        // 当起点、再按 new 版固定宽度绘制，可见部分会被挪到视口
+                        // 边缘，内容切片错位、在视口边界跳变。`slice.rect` 与
+                        // `mask_clip` 对 Shift 是同一份完整插值位置。
+                        let from = last.mask_clip;
                         let to = new_span.slice.rect;
                         if !rect_approx_eq(&from, &to) {
                             slices.push(SliceMotion::Shift {
@@ -2074,6 +2081,63 @@ mod tests {
                 assert_eq!(*start_clip, rect(40.0, 0.0, 0.0, 10.0));
             }
             other => panic!("expected Reveal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shift_continuation_uses_unclipped_current_rect() {
+        // Issue #919 复核 15：上一帧 Shift 片段被视口裁过一部分时，`DrawnSlice`
+        // 的 `clip_rect`（视口裁剪后）与 `mask_clip`（`sample()` 产生的完整插值
+        // rect）不同。下一笔继续位移必须从 `mask_clip`（真实当前画面位置）接新
+        // 目标，而不是从 `clip_rect` 的视口边缘——否则被裁掉的位移字形会把可见
+        // 部分挪到视口边界，内容切片错位、在视口边缘跳变。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        let old_id = old_layout.line_snapshots[0].id;
+
+        // 上一帧“甲”已从 x=0 插值到 x=10（完整 rect 10..30），但被视口左边缘
+        // 裁到 12..28：clip_rect != mask_clip。
+        let last = frame_of(vec![DrawnSlice {
+            slice: VisualSlice {
+                source: SnapshotRef {
+                    snapshot_id: old_id,
+                    source_uv: rect(0.0, 0.0, 20.0, 10.0),
+                },
+                rect: rect(10.0, 0.0, 20.0, 10.0),
+            },
+            visible_width: 16.0,
+            clip_rect: rect(12.0, 0.0, 16.0, 10.0),
+            mask_clip: rect(10.0, 0.0, 20.0, 10.0),
+            motion_kind: MotionKind::Shift,
+            byte_range: (0, 3),
+            shaping_identity: identity(),
+            direction: ClipDirection::LeftToRight,
+        }]);
+
+        // 段首插入“乙”，未改的“甲”继续位移到 x=20。
+        let edit = make_edit("甲", "乙甲", 0, 3, (0, 0), (0, 3), "乙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        let shift = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Shift)
+            .expect("应有“甲” Shift 接续");
+        match shift {
+            SliceMotion::Shift { from, to, .. } => {
+                assert_eq!(
+                    *from,
+                    rect(10.0, 0.0, 20.0, 10.0),
+                    "必须从上一帧完整插值 rect 接续，而不是视口裁剪后的 clip_rect"
+                );
+                assert_eq!(*to, rect(20.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Shift, got {other:?}"),
         }
     }
 
