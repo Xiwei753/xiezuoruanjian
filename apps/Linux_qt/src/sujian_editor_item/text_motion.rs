@@ -1256,6 +1256,20 @@ mod tests {
     //! 这些测试只验证 `mask_rect` / `conceal_clip` / `SliceMotion::sample` 的
     //! 几何语义，不构造 Qt 运行时。它们对应历次复核修正的实际显示错误：
     //! 连续编辑从当前可见画面接续、遮罩按原始 clip 边界收拢、Shift 只位移不缩放。
+    //!
+    //! 复核 10 追加：直接驱动 `TextMotion::begin_or_retarget`，用构造出来的
+    //! `EditorEditResult` + 旧/新 `EditorLayoutSnapshot` 验证「按 patch 分类
+    //! Reveal / Conceal / Shift」「连续编辑从 last_drawn 接续」「同 byte_range
+    //! 不同 shaping 必须旧退场 + 新露出」，不构造 Qt 运行时。
+
+    use super::super::layout_snapshot::{
+        LayoutRevision, LineClusterSnapshot, PreparedLineSnapshot,
+    };
+    use crate::editor::layout::CaretAffinity;
+    use writer_core::editor::{
+        DisplayPatch, EditorContentDelta, EditorEditResult, EditorOperationKind, EditorRevision,
+        EditorSelection, EditorTransactionCause, Utf8ByteRange,
+    };
 
     use super::*;
 
@@ -1552,5 +1566,323 @@ mod tests {
         let ids = motion.source_snapshot_ids();
         assert_eq!(ids.len(), 2, "旧/新画面必须各自持有快照");
         assert_ne!(ids[0], ids[1]);
+    }
+
+    // ── 复核 10：begin_or_retarget 端到端分类回归 ────────────────────────
+
+    fn byte_range(start: usize, end: usize) -> Utf8ByteRange {
+        match Utf8ByteRange::from_values(start, end) {
+            Some(range) => range,
+            None => panic!("invalid byte range {start}..{end}"),
+        }
+    }
+
+    fn cluster(byte_start: usize, byte_end: usize, x: f64, w: f64) -> LineClusterSnapshot {
+        LineClusterSnapshot {
+            byte_start,
+            byte_end,
+            // 行局部物理像素；dpr=1、visual_x=0 时文档 x 就等于此 x。
+            source_rect: rect(x, 0.0, w, 10.0),
+            shaping_identity: ShapingIdentity::default(),
+        }
+    }
+
+    /// 造一条只含指定 cluster 的测试视觉行：段首文档 y = `top`，`visual_x = 0`。
+    fn test_line(
+        ordinal: u32,
+        byte_start: usize,
+        clusters: Vec<LineClusterSnapshot>,
+        top: f64,
+    ) -> PreparedLineSnapshot {
+        let mut line =
+            PreparedLineSnapshot::stub_for_tests(ordinal as usize, top, byte_start, clusters);
+        line.visual_x = 0.0;
+        line
+    }
+
+    fn snapshot(lines: Vec<PreparedLineSnapshot>) -> EditorLayoutSnapshot {
+        EditorLayoutSnapshot {
+            revision: LayoutRevision::next(),
+            line_snapshots: lines,
+            paragraph_height_index: None,
+            paragraph_slot_map: None,
+            paragraph_padding: 0.0,
+            caret_rect: None,
+            caret_rect_doc: None,
+            caret_affinity: CaretAffinity::Upstream,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn make_edit(
+        old_text: &str,
+        new_text: &str,
+        old_head: usize,
+        new_head: usize,
+        replace: (usize, usize),
+        inserted: (usize, usize),
+        inserted_text: &str,
+    ) -> EditorEditResult {
+        let base = EditorRevision::initial();
+        let new_rev = base.next();
+        EditorEditResult {
+            transaction_id: 1,
+            base_revision: base,
+            new_revision: new_rev,
+            display_patches: vec![DisplayPatch {
+                base_revision: base,
+                new_revision: new_rev,
+                replace_byte_range: byte_range(replace.0, replace.1),
+                inserted_byte_range: byte_range(inserted.0, inserted.1),
+                inserted_text: inserted_text.to_string(),
+                resulting_selection_byte_range: byte_range(inserted.1, inserted.1),
+            }],
+            old_selection: EditorSelection::collapsed(old_text, old_head),
+            new_selection: EditorSelection::collapsed(new_text, new_head),
+            cause: EditorTransactionCause::Typing,
+            operation_kind: EditorOperationKind::Insert,
+            offset_map: None,
+            content_delta: EditorContentDelta::default(),
+        }
+    }
+
+    fn viewport() -> LocalRect {
+        rect(0.0, 0.0, 1000.0, 1000.0)
+    }
+
+    fn retarget(
+        edit: &EditorEditResult,
+        old_layout: Option<&EditorLayoutSnapshot>,
+        new_layout: &EditorLayoutSnapshot,
+        last_drawn: Option<&LocalDrawnFrame>,
+        session: u64,
+    ) -> TextMotion {
+        match TextMotion::begin_or_retarget(
+            edit,
+            old_layout,
+            new_layout,
+            last_drawn,
+            0.0,
+            100,
+            session,
+            viewport(),
+        ) {
+            Some(motion) => motion,
+            None => panic!("expected TextMotion, got None"),
+        }
+    }
+
+    #[test]
+    fn cursor_only_edit_without_content_returns_none() {
+        // 空 patch（无插入/替换）：只有光标移动，不做局部动画。
+        let new_layout = snapshot(vec![]);
+        let edit = make_edit("", "", 0, 0, (0, 0), (0, 0), "");
+        assert!(TextMotion::begin_or_retarget(
+            &edit,
+            None,
+            &new_layout,
+            None,
+            0.0,
+            100,
+            1,
+            viewport(),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn inserted_patch_classifies_as_reveal_from_zero_width() {
+        let new_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
+        let motion = retarget(&edit, None, &new_layout, None, 7);
+
+        assert_eq!(motion.slices.len(), 1);
+        match &motion.slices[0] {
+            SliceMotion::Reveal {
+                new,
+                direction,
+                start_clip,
+                ..
+            } => {
+                assert_eq!(new.rect, rect(0.0, 0.0, 20.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+                // 无上一帧接续：全新字从零宽露出，位置就是自身 target。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 0.0, 10.0));
+            }
+            other => panic!("expected Reveal, got {other:?}"),
+        }
+        assert_eq!(
+            motion.source_snapshot_ids(),
+            vec![new_layout.line_snapshots[0].id]
+        );
+    }
+
+    #[test]
+    fn backspace_conceals_with_left_edge_fixed() {
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![]);
+        // Backspace：光标从 3 左移到 0 → 左边缘固定、从右往左吞。
+        let edit = make_edit("甲", "", 3, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        assert_eq!(motion.slices.len(), 1);
+        match &motion.slices[0] {
+            SliceMotion::Conceal {
+                old,
+                direction,
+                start_clip,
+                ..
+            } => {
+                assert_eq!(old.rect, rect(0.0, 0.0, 20.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+                // 无在途旧图：从旧字完整画面开始吞。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_delete_conceals_with_right_edge_fixed() {
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![]);
+        // Forward Delete：光标停在 0（未左移）→ 右边缘固定、从左往右吞。
+        let edit = make_edit("甲", "", 0, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        match &motion.slices[0] {
+            SliceMotion::Conceal { direction, .. } => {
+                assert_eq!(*direction, ClipDirection::RightToLeft);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insert_before_existing_text_shifts_unchanged_cluster() {
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+        // 在段首插入"乙"：新字 Reveal，"甲"未改但被挤到 x=20 → Shift。
+        let edit = make_edit("甲", "乙甲", 0, 3, (0, 0), (0, 3), "乙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        assert_eq!(motion.slices.len(), 2);
+        assert!(matches!(motion.slices[0], SliceMotion::Reveal { .. }));
+        match &motion.slices[1] {
+            SliceMotion::Shift { from, to, .. } => {
+                assert_eq!(*from, rect(0.0, 0.0, 20.0, 10.0));
+                assert_eq!(*to, rect(20.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Shift for unchanged 甲, got {other:?}"),
+        }
+    }
+
+    fn drawn_reveal(
+        line_id: LineSnapshotId,
+        mask_clip: LocalRect,
+        shaping_identity: ShapingIdentity,
+    ) -> LocalDrawnFrame {
+        LocalDrawnFrame {
+            session: 7,
+            revision: 1,
+            slices: vec![DrawnSlice {
+                slice: VisualSlice {
+                    source: SnapshotRef {
+                        snapshot_id: line_id,
+                        source_uv: rect(0.0, 0.0, 20.0, 10.0),
+                    },
+                    rect: rect(0.0, 0.0, 20.0, 10.0),
+                },
+                visible_width: mask_clip.w,
+                clip_rect: mask_clip,
+                mask_clip,
+                motion_kind: MotionKind::Reveal,
+                byte_range: (0, 3),
+                shaping_identity,
+                direction: ClipDirection::LeftToRight,
+            }],
+        }
+    }
+
+    #[test]
+    fn continuous_reveal_inherits_previous_mask_clip() {
+        let new_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let line_id = new_layout.line_snapshots[0].id;
+        // 上一帧同一字形吐到一半（遮罩 0..10）。
+        let last = drawn_reveal(
+            line_id,
+            rect(0.0, 0.0, 10.0, 10.0),
+            ShapingIdentity::default(),
+        );
+        let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
+        let motion = retarget(&edit, None, &new_layout, Some(&last), 7);
+
+        assert_eq!(motion.slices.len(), 1);
+        match &motion.slices[0] {
+            SliceMotion::Reveal { start_clip, .. } => {
+                // 从上一帧原始 mask clip 继续吐，不退回零宽。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 10.0, 10.0));
+            }
+            other => panic!("expected Reveal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn same_byte_range_different_shaping_retires_old_and_reveals_new() {
+        let new_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let line_id = new_layout.line_snapshots[0].id;
+        // 上一帧露的是别的字形（glyph hash 不同），即使 byte_range 相同也不能当同一个字。
+        let old_shaping = ShapingIdentity {
+            glyph_indexes_hash: 42,
+            ..ShapingIdentity::default()
+        };
+        let last = drawn_reveal(line_id, rect(0.0, 0.0, 10.0, 10.0), old_shaping);
+        let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
+        let motion = retarget(&edit, None, &new_layout, Some(&last), 7);
+
+        assert_eq!(motion.slices.len(), 2);
+        match &motion.slices[0] {
+            SliceMotion::Conceal {
+                start_clip,
+                direction,
+                ..
+            } => {
+                // 旧图从当前可见遮罩继续退场，沿用原方向。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 10.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+            }
+            other => panic!("expected old Conceal first, got {other:?}"),
+        }
+        match &motion.slices[1] {
+            SliceMotion::Reveal { start_clip, .. } => {
+                // 新字形从零宽重新露出，不继承旧字宽度。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 0.0, 10.0));
+            }
+            other => panic!("expected new Reveal second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replacement_patch_is_insert_and_replace_but_pure_insert_is_not_replace() {
+        let insert = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
+        assert!(inserted_in_patch(&insert, (0, 3)));
+        assert!(!replaced_in_patch(&insert, (0, 3)));
+
+        let replace = make_edit("甲", "乙", 3, 3, (0, 3), (0, 3), "乙");
+        assert!(inserted_in_patch(&replace, (0, 3)));
+        assert!(replaced_in_patch(&replace, (0, 3)));
+    }
+
+    #[test]
+    fn new_to_old_byte_removes_insertion_delta_after_patch() {
+        // "甲乙" → 段首插入"丙"：新坐标 3..6 映回旧坐标 0..3。
+        let edit = make_edit("甲乙", "丙甲乙", 0, 3, (0, 0), (0, 3), "丙");
+        assert_eq!(new_to_old_byte(&edit, 3), 0);
+        assert_eq!(new_to_old_byte(&edit, 6), 3);
     }
 }
