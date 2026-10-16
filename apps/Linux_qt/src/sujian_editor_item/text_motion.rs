@@ -436,9 +436,11 @@ impl TextMotion {
                 continue;
             }
             // patch 外未改区间的新侧：用偏移映射映回旧坐标，找旧片段配 Shift。
+            // Issue #919：起点用右偏映射、终点用左偏映射，避免删除边界处未改
+            // 文本被错映到删除后坐标而误判成 Reveal（见 new_to_old_byte_end）。
             let old_byte_range = (
                 new_to_old_byte(edit, new_span.byte_range.0),
-                new_to_old_byte(edit, new_span.byte_range.1),
+                new_to_old_byte_end(edit, new_span.byte_range.1),
             );
 
             // Issue #919 复核 1：连续编辑重定向——先查 last_drawn 中是否有同
@@ -938,6 +940,31 @@ fn new_to_old_byte(edit: &EditorEditResult, new_offset: usize) -> usize {
         let rep_len = rep_end as i64 - rep_start as i64;
         let delta = ins_len - rep_len;
         if new_offset >= ins_end && delta != 0 {
+            offset -= delta;
+        }
+    }
+    offset.max(0) as usize
+}
+
+/// Issue #919：把新坐标偏移映回旧坐标，专用于**区间终点**。
+///
+/// 删除时 `inserted_byte_range` 为空（`ins_start == ins_end`），同一个新偏移在
+/// 编辑边界处既可能是删除点左侧未改文本的末尾，也可能是右侧文本的开头。用
+/// `new_to_old_byte`（`>= ins_end` 取右侧/删除后坐标）映区间起点，
+/// 本函数（`> ins_start` 取左侧/删除前坐标）映区间终点，消除这个歧义：
+/// 否则 Backspace 删除"乙"时，未改的"甲"末端会被错映到删除后的旧坐标，
+/// 匹配不到旧 cluster 而落到 Reveal 兜底——未改的字被重新露出一次。
+fn new_to_old_byte_end(edit: &EditorEditResult, new_offset: usize) -> usize {
+    let mut offset = new_offset as i64;
+    for patch in &edit.display_patches {
+        let ins_start = patch.inserted_byte_range.start().value();
+        let ins_end = patch.inserted_byte_range.end().value();
+        let rep_start = patch.replace_byte_range.start().value();
+        let rep_end = patch.replace_byte_range.end().value();
+        let ins_len = ins_end as i64 - ins_start as i64;
+        let rep_len = rep_end as i64 - rep_start as i64;
+        let delta = ins_len - rep_len;
+        if new_offset > ins_start && delta != 0 {
             offset -= delta;
         }
     }
@@ -2084,5 +2111,109 @@ mod tests {
             }
             other => panic!("expected Conceal, got {other:?}"),
         }
+    }
+
+    // ── 复核 13：删除边界处未改文字不得被当成新字 Reveal ───────────────────
+
+    #[test]
+    fn backspace_does_not_reveal_unchanged_preceding_cluster() {
+        // 正文“甲乙丙”，Backspace 删除“乙”（旧 3..6）。未改的“甲”仍占旧/新
+        // 0..3，必须保持静态，不能被映成删除后坐标而重新露出。
+        let old_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![
+                cluster(0, 3, 0.0, 20.0),
+                cluster(3, 6, 20.0, 20.0),
+                cluster(6, 9, 40.0, 20.0),
+            ],
+            0.0,
+        )]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+
+        // Backspace：旧光标 6 → 新光标 3，删除“乙”3..6。
+        let edit = make_edit("甲乙丙", "甲丙", 6, 3, (3, 6), (3, 3), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        assert!(
+            motion
+                .slices
+                .iter()
+                .all(|s| s.motion_kind() != MotionKind::Reveal),
+            "未改的“甲”不应被 Reveal: {:?}",
+            motion.slices
+        );
+        // 被删的“乙”退场；“丙”从左邻删除后左移到 x=20。
+        let conceal = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Conceal)
+            .expect("应有“乙” Conceal");
+        assert_eq!(conceal.byte_range(), (3, 6));
+        let shift = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Shift)
+            .expect("应有“丙” Shift");
+        match shift {
+            SliceMotion::Shift { from, to, .. } => {
+                assert_eq!(*from, rect(40.0, 0.0, 20.0, 10.0));
+                assert_eq!(*to, rect(20.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Shift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forward_delete_does_not_reveal_unchanged_following_cluster() {
+        // 正文“甲乙丙”，Forward Delete 删除“甲”（旧 0..3）。未改的“乙”“丙”
+        // 左移，不得产生 Reveal。
+        let old_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![
+                cluster(0, 3, 0.0, 20.0),
+                cluster(3, 6, 20.0, 20.0),
+                cluster(6, 9, 40.0, 20.0),
+            ],
+            0.0,
+        )]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 0.0, 20.0), cluster(3, 6, 20.0, 20.0)],
+            0.0,
+        )]);
+
+        // Forward Delete：光标停在 0（未左移），删除“甲”0..3。
+        let edit = make_edit("甲乙丙", "乙丙", 0, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        assert!(
+            motion
+                .slices
+                .iter()
+                .all(|s| s.motion_kind() != MotionKind::Reveal),
+            "删除后未改文字不应 Reveal: {:?}",
+            motion.slices
+        );
+        let conceal = motion
+            .slices
+            .iter()
+            .find(|s| s.motion_kind() == MotionKind::Conceal)
+            .expect("应有“甲” Conceal");
+        assert_eq!(conceal.byte_range(), (0, 3));
+        // “乙” 20→0、“丙” 40→20 都应是 Shift。
+        let shifts: Vec<_> = motion
+            .slices
+            .iter()
+            .filter(|s| s.motion_kind() == MotionKind::Shift)
+            .collect();
+        assert_eq!(shifts.len(), 2);
     }
 }
