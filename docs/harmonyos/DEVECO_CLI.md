@@ -310,7 +310,7 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
 
 ### 仓库提交结构
 
-`apps/harmony/build-profile.json5` 中 `products[name=default]` 包含 `signingConfig: 'default'` 引用，指向 `signingConfigs[name=default]` 的空 material 占位：
+`apps/harmony/build-profile.json5` 中有两个 product，各对应一个空 material `signingConfig` 占位：普通包 `products[name=default]` → `signingConfigs[name=default]`；受限包 `products[name=acl]` → `signingConfigs[name=acl]`。两者都是空 material 占位：
 
 ```json5
 {
@@ -329,6 +329,19 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
           certpath: ''
         }
       },
+      {
+        name: 'acl',
+        type: 'HarmonyOS',
+        material: {
+          storeFile: '',
+          storePassword: '',
+          keyAlias: '',
+          keyPassword: '',
+          signAlg: 'SHA256withECDSA',
+          profile: '',
+          certpath: ''
+        }
+      },
     ],
     products: [
       {
@@ -336,10 +349,17 @@ hdc -t <serial> shell aa start -a EntryAbility -b com.xiwei.sujian
         signingConfig: 'default',
         // ...
       },
+      {
+        name: 'acl',
+        signingConfig: 'acl',
+        // ...
+      },
     ],
   },
 }
 ```
+
+> `product=acl` 必须使用 `signingConfig: 'acl'` 指向的独立 Profile（其 ACL 含 `ohos.permission.DLP_GET_HIDE_STATUS`），不能共用 `default` 的普通签名；`product=default` 继续用 `default`。这与上文「普通包与受限包」一节一致。
 
 ### 开发者本机操作
 
@@ -359,7 +379,7 @@ devecocli auth status
 
 ### 不要删除 product → signingConfig 引用
 
-- `signingConfig: 'default'` 引用必须保留在仓库中。
+- `signingConfig: 'default'` 与 `signingConfig: 'acl'` 引用都必须保留在仓库中（分别供 `product=default` 与 `product=acl` 使用）。
 - 不再通过删除 product 引用来生成 unsigned HAP。
 - 空 material 占位（所有字段为空字符串）是仓库的默认状态，开发者本机填入真实值后即可签名构建。
 
