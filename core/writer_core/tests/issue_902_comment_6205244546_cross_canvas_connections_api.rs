@@ -119,6 +119,18 @@ fn cross_canvas_edge_is_written_to_host_and_queryable_from_child() {
         )
         .unwrap();
 
+    // 读取真实 Store 图数据，检验没有重复写、没有向子图写假边。
+    let root_graph = api.get_starmap_graph(&root).unwrap();
+    assert_eq!(root_graph.edges.len(), 1, "宿主图必须只写入一条 Edge");
+    assert_eq!(root_graph.edges[0].id, created.edge.id);
+    assert_eq!(root_graph.edges[0].to.segments, vec![enter_embed(&instance_id)]);
+
+    let child_graph = api.get_starmap_graph(&child_id).unwrap();
+    assert!(
+        child_graph.edges.is_empty(),
+        "子画布不应写入伪造的本地 Edge"
+    );
+
     // 只写一条真实 Edge，宿主图是父图；from/to 的 starmap_id 都是宿主图。
     assert_eq!(created.owner_starmap_id, root);
     assert_eq!(created.edge.from.starmap_id, root);
@@ -179,9 +191,10 @@ fn cross_canvas_edge_between_independent_roots_is_rejected() {
     let to = selection(route(&root_b, vec![]), node_target("nb"));
 
     let result = api.create_cross_canvas_edge(from, to, StarMapEdgeKindDto::RelatedTo, None, None);
+    let error = result.expect_err("两个独立根图必须因无共同宿主而拒绝连线");
     assert!(
-        result.is_err(),
-        "两个独立根星图无共同宿主，必须报错而不是伪造宿主关系"
+        format!("{error:?}").contains("NoCommonHost"),
+        "必须是 NoCommonHost，而非其他错误；实际: {error:?}"
     );
 }
 
