@@ -177,7 +177,8 @@ export class NavigationTransactionCoordinator {
     this.restoreListener = null
   }
 
-  // EntryAbility 调此方法触发接续恢复。
+  // ContinuationEntrypoint 调此方法触发接续恢复（EntryAbility.onCreate/onNewWant 在
+  // CONTINUATION 时委托 ContinuationEntrypoint.restoreFromWant，再由它调到这里）。
   // Issue #767 评论5830638688 第1项：同时检查 restoreListener 和 homeStack 是否可用。
   // 之前只检查 restoreListener：如果 continuation 正好在"restoreListener 已注册、homeStack 还没注册"
   // 的窗口到达，payload 直接进 applyContinuation()，getTabStack(TAB_HOME) 返回 null，
