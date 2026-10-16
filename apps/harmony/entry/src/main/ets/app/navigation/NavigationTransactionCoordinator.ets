@@ -1,6 +1,6 @@
 // NavigationTransactionCoordinator — 导航事务协调器。
 // 从 AppNavigation.ets 分离出来的导航事务逻辑：导航意图队列、离开守卫、安全 pop/replace/rebuild。
-// AppNavigation struct 通过 getInstance() 注册 navPathStack 和恢复回调，
+// AppNavigation struct 通过 getInstance() 注册恢复回调，PrimaryTabShell 登记各 tab 的 NavPathStack，
 // ContinuationEntrypoint 通过 getInstance() 触发接续恢复；WritingScreen 等 UI 调用方使用协调器进行安全导航。
 //
 // Issue #767：支持多 tab stack。
