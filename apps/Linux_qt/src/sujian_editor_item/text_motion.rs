@@ -1601,9 +1601,27 @@ mod tests {
     }
 
     fn snapshot(lines: Vec<PreparedLineSnapshot>) -> EditorLayoutSnapshot {
+        // Issue #919 复核 11：把 revision 写回每条 line.id，使 LineSnapshotId
+        // 携带真实布局版本而非 stub_for_tests 的固定 (0,0,ordinal)。
+        // ordinal=0 时旧值恰好等于 LineSnapshotId::none()（无纹理哨兵），
+        // old/new 两版会被误认成同一 SnapshotRef；此处用 revision.0 作为
+        // layout_revision、stable_paragraph_id 作为 paragraph_id、原 ordinal
+        // 作为 visual_line_ordinal，保证 id.is_none()==false 且 old/new 不同。
+        let revision = LayoutRevision::next();
+        let line_snapshots = lines
+            .into_iter()
+            .map(|mut line| {
+                line.id = LineSnapshotId::new(
+                    revision.0,
+                    line.stable_paragraph_id,
+                    line.id.visual_line_ordinal,
+                );
+                line
+            })
+            .collect();
         EditorLayoutSnapshot {
-            revision: LayoutRevision::next(),
-            line_snapshots: lines,
+            revision,
+            line_snapshots,
             paragraph_height_index: None,
             paragraph_slot_map: None,
             paragraph_padding: 0.0,
@@ -1834,24 +1852,35 @@ mod tests {
 
     #[test]
     fn same_byte_range_different_shaping_retires_old_and_reveals_new() {
+        // Issue #919 复核 11：独立构造 old/new 排版画面，两份不同的行纹理 ID。
+        // 上一帧旧字纹理来源（old_id）与本轮新字（new_id）各自独立，模拟真实
+        // 旧/新可渲染视觉资源，而非共用同一份新行纹理。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
         let new_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
-        let line_id = new_layout.line_snapshots[0].id;
-        // 上一帧露的是别的字形（glyph hash 不同），即使 byte_range 相同也不能当同一个字。
+        let old_id = old_layout.line_snapshots[0].id;
+        let new_id = new_layout.line_snapshots[0].id;
+        assert_ne!(old_id, new_id);
+        // 上一帧露的是别的字形（glyph hash 不同），用旧排版画面的纹理 ID。
         let old_shaping = ShapingIdentity {
             glyph_indexes_hash: 42,
             ..ShapingIdentity::default()
         };
-        let last = drawn_reveal(line_id, rect(0.0, 0.0, 10.0, 10.0), old_shaping);
+        let last = drawn_reveal(old_id, rect(0.0, 0.0, 10.0, 10.0), old_shaping);
         let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
         let motion = retarget(&edit, None, &new_layout, Some(&last), 7);
 
         assert_eq!(motion.slices.len(), 2);
+        let source_ids = motion.source_snapshot_ids();
+        assert!(source_ids.contains(&old_id));
+        assert!(source_ids.contains(&new_id));
         match &motion.slices[0] {
             SliceMotion::Conceal {
+                old,
                 start_clip,
                 direction,
                 ..
             } => {
+                assert_eq!(old.source.snapshot_id, old_id);
                 // 旧图从当前可见遮罩继续退场，沿用原方向。
                 assert_eq!(*start_clip, rect(0.0, 0.0, 10.0, 10.0));
                 assert_eq!(*direction, ClipDirection::LeftToRight);
@@ -1859,7 +1888,8 @@ mod tests {
             other => panic!("expected old Conceal first, got {other:?}"),
         }
         match &motion.slices[1] {
-            SliceMotion::Reveal { start_clip, .. } => {
+            SliceMotion::Reveal { new, start_clip, .. } => {
+                assert_eq!(new.source.snapshot_id, new_id);
                 // 新字形从零宽重新露出，不继承旧字宽度。
                 assert_eq!(*start_clip, rect(0.0, 0.0, 0.0, 10.0));
             }
