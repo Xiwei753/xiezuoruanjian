@@ -1973,10 +1973,18 @@ mod tests {
             vec![cluster_shaped(0, 3, 0.0, 20.0, 0)],
             0.0,
         )]);
+        // 新布局含两块 cluster：
+        // - “甲” byte 0..3：x=20、shaping 已变（glyph_hash=7）。
+        // - “乙” byte 3..6：x=40、新插入字。
+        // 注意：“甲”从旧 x=0 变成新 x=20 是人为构造的目标几何，用于验证中途
+        // 位置接续；普通 LTR 文本在末尾追加“乙”不会把“甲”平移到 x=20。
         let new_layout = snapshot(vec![test_line(
             0,
             0,
-            vec![cluster_shaped(0, 3, 20.0, 20.0, 7)],
+            vec![
+                cluster_shaped(0, 3, 20.0, 20.0, 7),
+                cluster(3, 6, 40.0, 20.0),
+            ],
             0.0,
         )]);
         let old_id = old_layout.line_snapshots[0].id;
@@ -1990,31 +1998,55 @@ mod tests {
         let edit = make_edit("甲", "甲乙", 3, 6, (3, 3), (3, 6), "乙");
         let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
 
-        assert_eq!(motion.slices.len(), 2);
+        // 三条切片：旧“甲” Conceal + 新 shaping“甲” Reveal + 新插入“乙” Reveal。
+        assert_eq!(motion.slices.len(), 3);
         let ids = motion.source_snapshot_ids();
         assert!(ids.contains(&old_id));
         assert!(ids.contains(&new_id));
-        match &motion.slices[0] {
-            SliceMotion::Conceal {
-                old, start_clip, ..
-            } => {
+
+        // 按 byte_range + motion_kind 定位，不依赖切片顺序。
+        let conceal_jia = motion
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (0, 3) && s.motion_kind() == MotionKind::Conceal)
+            .expect("应有旧“甲” Conceal");
+        let reveal_jia = motion
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (0, 3) && s.motion_kind() == MotionKind::Reveal)
+            .expect("应有新 shaping“甲” Reveal");
+        let reveal_yi = motion
+            .slices
+            .iter()
+            .find(|s| s.byte_range() == (3, 6) && s.motion_kind() == MotionKind::Reveal)
+            .expect("应有新插入“乙” Reveal");
+
+        match conceal_jia {
+            SliceMotion::Conceal { old, start_clip, .. } => {
                 assert_eq!(old.source.snapshot_id, old_id);
                 // 起点是上一帧实际显示位置，不是 old_span.slice.rect (x=0)。
                 assert_eq!(old.rect, rect(10.0, 0.0, 20.0, 10.0));
                 assert_eq!(*start_clip, rect(10.0, 0.0, 20.0, 10.0));
             }
-            other => panic!("expected Conceal first, got {other:?}"),
+            other => panic!("expected Conceal, got {other:?}"),
         }
-        match &motion.slices[1] {
-            SliceMotion::Reveal {
-                new, start_clip, ..
-            } => {
+        match reveal_jia {
+            SliceMotion::Reveal { new, start_clip, .. } => {
                 assert_eq!(new.source.snapshot_id, new_id);
                 assert_eq!(new.rect, rect(20.0, 0.0, 20.0, 10.0));
                 // 新字形从零宽重新露出，不继承上一帧旧图位置。
                 assert_eq!(*start_clip, rect(20.0, 0.0, 0.0, 10.0));
             }
-            other => panic!("expected Reveal second, got {other:?}"),
+            other => panic!("expected Reveal, got {other:?}"),
+        }
+        match reveal_yi {
+            SliceMotion::Reveal { new, start_clip, .. } => {
+                assert_eq!(new.source.snapshot_id, new_id);
+                // 新插入的“乙”位于 x=40，从零宽开始露出。
+                assert_eq!(new.rect, rect(40.0, 0.0, 20.0, 10.0));
+                assert_eq!(*start_clip, rect(40.0, 0.0, 0.0, 10.0));
+            }
+            other => panic!("expected Reveal, got {other:?}"),
         }
     }
 
