@@ -159,7 +159,7 @@ fn intermediate_canvas_hosts_edge_to_deeper_descendant() {
 
     assert_eq!(
         created.owner_starmap_id, f.b,
-        "最长公共前缀为空，宿主应是中间画布 B，而不是根 R"
+        "最长公共前缀为 [eB]，宿主应是中间画布 B，而不是根 R"
     );
     assert_eq!(created.edge.from.starmap_id, f.b);
     assert!(
