@@ -208,6 +208,14 @@ hvigorw --mode project -p product=acl -p buildMode=debug \
 > `hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap --no-daemon`，
 > 但这不是完整的受限包交付命令。
 
+隔离结果是可核对的：对比构建处理后的 `entry` 模块权限清单即可确认——`product=default`
+的权限只有 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
+`ohos.permission.DETECT_GESTURE`；`product=acl` 的 `entry` 在这些之外另含
+`ohos.permission.DLP_GET_HIDE_STATUS`，其 `reason` / `usedScene` 与
+`privacy_acl/src/main/module.json5` 的声明一致，说明受限权限由被装配的 HSP 带入，
+不是 `entry` 自己声明。普通 product 的 entry 依赖图与 `src/standard` 的 Provider
+都不含 `privacy_acl`。
+
 ### 装机与验证
 
 HAP 落在 `apps/harmony` 的 `build` 目录下（不进 git），文件名形如
