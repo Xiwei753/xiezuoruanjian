@@ -2,7 +2,7 @@
 
 本文件记录素笺 HarmonyOS 客户端实际使用的每个系统能力：Kit、接口、最低 API、SystemCapability、权限、ACL 需求、fallback 策略和实现文件。新增系统能力前先查 HarmonyOS 官方 API 和本机 SDK d.ts（`/opt/devecostudio/sdk/default`），再在此登记。
 
-实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。唯一例外是 DLP 防窥：其实现已迁出 entry，放在独立受限模块 `privacy_acl` 中，路径相对模块根目录 `apps/harmony/privacy_acl/`，按 `privacy_acl/src/main/ets/impl/apiXX/...` 读。
+实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。唯一例外是 DLP 防窥：其实现已迁出 entry，放在独立受限模块 `privacy_acl` 中；DLP 路径相对于 `apps/harmony/` 工程目录，写作 `privacy_acl/src/main/ets/impl/apiXX/...`。
 
 ## 应用最低安装基线与版本分流
 
