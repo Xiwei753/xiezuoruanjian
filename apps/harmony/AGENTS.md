@@ -12,7 +12,7 @@
 
 - 新增系统能力前，先查 HarmonyOS 官方 API 文档和本机 HarmonyOS SDK 的 d.ts（路径 `/opt/devecostudio/sdk/default`），确认接口、最低 API Level、SystemCapability 和权限。
 - 在 `entry/src/main/ets/platform/API_MATRIX.md` 登记每个实际使用的系统能力：Kit、接口、最低 API、SystemCapability、权限、ACL 需求、fallback 策略和实现文件。
-- 在 `entry/src/main/module.json5` 的 `requestPermissions` 声明实际使用的权限。需要 ACL 的权限（`provisionEnable=true`）还要在签名 Profile 的 ACL 中声明，并在 API_MATRIX.md 记录。
+- 在 `entry/src/main/module.json5` 的 `requestPermissions` 声明 entry 实际使用的权限。需要 ACL 的权限（`provisionEnable=true`）还要在签名 Profile 的 ACL 中声明，并在 API_MATRIX.md 记录。受限能力若已拆到独立模块（如 DLP 防窥之于 `privacy_acl`），该权限由该模块自己的 `module.json5` 声明、仅对应 product 装配，不写回 entry 的 `module.json5`。
 
 ## API Level 差异
 
