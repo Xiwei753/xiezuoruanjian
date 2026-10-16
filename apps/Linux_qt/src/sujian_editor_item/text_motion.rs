@@ -1337,30 +1337,67 @@ mod tests {
         );
     }
 
-    #[test]
-    fn conceal_sample_continues_from_start_clip_not_old_rect() {
-        let old = visual(3, rect(0.0, 0.0, 10.0, 10.0), rect(100.0, 0.0, 10.0, 10.0));
-        let start_clip = rect(50.0, 0.0, 10.0, 10.0);
-        let motion = make_motion(vec![SliceMotion::Conceal {
+    /// 旧字 target 与动画遮罩必须有实际非零交集，否则 `scene_graph_renderer`
+    /// 在 `iw <= 0` 时 `continue`，屏幕上没有任何退场像素，测试会把空画面
+    /// 误当正确动画。这里构造互相有覆盖、但遮罩左边缘不同于完整旧字左边缘的
+    /// 几何：旧图 target=40..60，上一帧原始 start_clip=50..58，交集宽 8。
+    fn conceal_with_start_clip(direction: ClipDirection) -> TextMotion {
+        let old = visual(3, rect(0.0, 0.0, 20.0, 10.0), rect(40.0, 0.0, 20.0, 10.0));
+        let start_clip = rect(50.0, 0.0, 8.0, 10.0);
+        make_motion(vec![SliceMotion::Conceal {
             old,
-            direction: ClipDirection::LeftToRight,
+            direction,
             start_clip,
             byte_range: (0, 3),
             shaping_identity: identity(),
-        }]);
+        }])
+    }
 
+    /// target 与 mask 的水平交集宽度（>0 表示屏幕上确有退场像素）。
+    fn intersect_width(target_x: f64, target_w: f64, clip: &LocalRect) -> f64 {
+        let x0 = clip.x.max(target_x);
+        let x1 = (clip.x + clip.w).min(target_x + target_w);
+        (x1 - x0).max(0.0)
+    }
+
+    #[test]
+    fn conceal_sample_continues_from_start_clip_not_old_rect() {
+        // Backspace → LeftToRight：左边缘固定，从右向左吞。
+        let motion = conceal_with_start_clip(ClipDirection::LeftToRight);
+
+        // progress=0：遮罩完整继承 start_clip，与 target 有非零交集。
         let first = motion.sample(0.0);
         let overlay = first.overlays.first().expect("conceal overlay");
-        // 遮罩起点取自 start_clip，而不是 old.rect（否则会从 x=100 重新造遮罩）。
-        assert_eq!(overlay.clip_rect.x, 50.0);
-        assert_eq!(overlay.clip_rect.w, 10.0);
-        assert_eq!(overlay.x, 100.0);
+        assert_eq!((overlay.x, overlay.w), (40.0, 20.0)); // target=40..60
+        assert_eq!((overlay.clip_rect.x, overlay.clip_rect.w), (50.0, 8.0)); // mask=50..58
+        assert_eq!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect), 8.0);
 
+        // progress=0.5：左边缘固定 50，宽度缩小，仍与 target 有实际非零交集。
         let mid = motion.sample(50.0);
         let overlay = mid.overlays.first().expect("conceal overlay");
-        assert!(overlay.clip_rect.w < 10.0);
-        // LeftToRight 左边缘固定，只从右向左吞。
         assert_eq!(overlay.clip_rect.x, 50.0);
+        assert!(overlay.clip_rect.w > 0.0 && overlay.clip_rect.w < 8.0);
+        assert!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect) > 0.0);
+    }
+
+    #[test]
+    fn conceal_sample_right_to_left_continues_from_start_clip() {
+        // Forward Delete → RightToLeft：右边缘固定，从左向右吞。
+        let motion = conceal_with_start_clip(ClipDirection::RightToLeft);
+
+        // progress=0：遮罩完整继承 start_clip，与 target 有非零交集。
+        let first = motion.sample(0.0);
+        let overlay = first.overlays.first().expect("conceal overlay");
+        assert_eq!((overlay.x, overlay.w), (40.0, 20.0)); // target=40..60
+        assert_eq!((overlay.clip_rect.x, overlay.clip_rect.w), (50.0, 8.0)); // mask=50..58
+        assert_eq!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect), 8.0);
+
+        // progress=0.5：右边缘固定 58，宽度缩小，仍与 target 有实际非零交集。
+        let mid = motion.sample(50.0);
+        let overlay = mid.overlays.first().expect("conceal overlay");
+        assert_eq!(overlay.clip_rect.x + overlay.clip_rect.w, 58.0);
+        assert!(overlay.clip_rect.w > 0.0 && overlay.clip_rect.w < 8.0);
+        assert!(intersect_width(overlay.x, overlay.w, &overlay.clip_rect) > 0.0);
     }
 
     #[test]
