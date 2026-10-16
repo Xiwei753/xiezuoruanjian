@@ -111,6 +111,8 @@ WINDOWS_NATIVE_DEPS.md
 .commit
 .resultverify/
 
-# HarmonyOS entry module ohpm artifacts
+# HarmonyOS module ohpm artifacts
 apps/harmony/entry/oh_modules/
 apps/harmony/entry/oh-package-lock.json5
+apps/harmony/privacy_acl/oh_modules/
+apps/harmony/privacy_acl/oh-package-lock.json5
