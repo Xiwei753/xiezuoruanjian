@@ -208,6 +208,17 @@ hvigorw --mode project -p product=acl -p buildMode=debug \
 > `hvigorw --mode module -p module=entry@acl -p product=acl -p buildMode=debug assembleHap --no-daemon`，
 > 但这不是完整的受限包交付命令。
 
+`privacy_acl` HSP 与 `entry` 相互独立，可单独编译打包（用于单独验证受限实现）：
+
+```bash
+cd apps/harmony   # 已 source tools/setup_harmony_cli.sh
+hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=debug \
+        assembleHsp --no-daemon
+```
+
+未配置签名 material 时，构建会在 `SignHsp` 阶段停止，但 HSP 已完成打包（未签名），
+位于 `privacy_acl/build/acl/outputs/default/` 下。
+
 权限隔离在源码中由模块和 product 共同决定：`entry/src/main/module.json5`
 声明 `ohos.permission.INTERNET`、`ohos.permission.GET_NETWORK_INFO`、
 `ohos.permission.DETECT_GESTURE`；`ohos.permission.DLP_GET_HIDE_STATUS` 则只由
