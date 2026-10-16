@@ -217,6 +217,35 @@ fn connection_info_preserves_kind_and_label_from_host_graph() {
         .find(|c| c.edge_id == fx.foreshadows_edge)
         .expect("根画布反查应包含 Foreshadows 边");
     assert_eq!(root_foreshadows.label.as_deref(), Some("伏笔"));
+
+    // target 查询同样必须原样保留 kind / label / owner_starmap_id。
+    let b_target = api
+        .list_starmap_connections(
+            route(&fx.root, vec![enter_embed(&fx.e_b)]),
+            Some(node_target("b1")),
+        )
+        .unwrap();
+    let b_conn = b_target
+        .iter()
+        .find(|c| c.edge_id == fx.foreshadows_edge)
+        .expect("按 b1 查询应返回伏笔边");
+    assert_eq!(b_conn.kind, StarMapEdgeKindDto::Foreshadows);
+    assert_eq!(b_conn.label.as_deref(), Some("伏笔"));
+    assert_eq!(b_conn.owner_starmap_id, fx.root);
+
+    let c_target = api
+        .list_starmap_connections(
+            route(&fx.root, vec![enter_embed(&fx.e_c)]),
+            Some(node_target("c1")),
+        )
+        .unwrap();
+    let c_conn = c_target
+        .iter()
+        .find(|c| c.edge_id == fx.conflicts_edge)
+        .expect("按 c1 查询应返回冲突边");
+    assert_eq!(c_conn.kind, StarMapEdgeKindDto::ConflictsWith);
+    assert_eq!(c_conn.label, None);
+    assert_eq!(c_conn.owner_starmap_id, fx.root);
 }
 
 /// 不同入口的反查只返回与自身实例路径匹配的边，且任一查询中每条边最多出现一次。
