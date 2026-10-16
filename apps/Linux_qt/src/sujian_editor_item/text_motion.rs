@@ -1299,7 +1299,8 @@ mod tests {
     use super::super::layout_snapshot::{
         LayoutRevision, LineClusterSnapshot, PreparedLineSnapshot,
     };
-    use crate::editor::layout::CaretAffinity;
+    use crate::editor::layout::chunked_vec::ChunkedSlotMap;
+    use crate::editor::layout::{CaretAffinity, ParagraphHeightIndex, ParagraphId};
     use writer_core::editor::{
         DisplayPatch, EditorContentDelta, EditorEditResult, EditorOperationKind, EditorRevision,
         EditorSelection, EditorTransactionCause, Utf8ByteRange,
@@ -1665,6 +1666,27 @@ mod tests {
         }
     }
 
+    /// 造一个带真实段落几何索引的测试快照。
+    ///
+    /// `snapshot()` 只填 `line_snapshots`，不含 `paragraph_height_index` /
+    /// `paragraph_slot_map`；整体段落位移 `collect_paragraph_moves` 依赖这两项
+    /// 按稳定 ParagraphId 查 `(段首 y, 段高)`。`heights[i]`/`ids[i]` 对应 slot i，
+    /// 段首 y = 前 i 段高度之和（`paragraph_padding = 0`）。
+    fn snapshot_with_paragraph_index(
+        lines: Vec<PreparedLineSnapshot>,
+        heights: Vec<f64>,
+        ids: Vec<u64>,
+    ) -> EditorLayoutSnapshot {
+        let mut snapshot = snapshot(lines);
+        snapshot.paragraph_height_index = Some(std::sync::Arc::new(
+            ParagraphHeightIndex::from_heights(heights),
+        ));
+        snapshot.paragraph_slot_map = Some(std::sync::Arc::new(ChunkedSlotMap::from_ids(
+            ids.into_iter().map(ParagraphId::from_u64).collect(),
+        )));
+        snapshot
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_edit(
         old_text: &str,
@@ -1689,6 +1711,46 @@ mod tests {
                 inserted_text: inserted_text.to_string(),
                 resulting_selection_byte_range: byte_range(inserted.1, inserted.1),
             }],
+            old_selection: EditorSelection::collapsed(old_text, old_head),
+            new_selection: EditorSelection::collapsed(new_text, new_head),
+            cause: EditorTransactionCause::Typing,
+            operation_kind: EditorOperationKind::Insert,
+            offset_map: None,
+            content_delta: EditorContentDelta::default(),
+        }
+    }
+
+    /// 造一个含多笔 `display_patches` 的事务。
+    ///
+    /// 每笔为 `((旧起, 旧止), (新起, 新止), 新文本)`；`replace` 是旧坐标、
+    /// `inserted` 是新（最终）坐标，与 Core `DisplayPatch` 语义一致。
+    fn make_edit_from_patches(
+        old_text: &str,
+        new_text: &str,
+        old_head: usize,
+        new_head: usize,
+        patches: Vec<((usize, usize), (usize, usize), &str)>,
+    ) -> EditorEditResult {
+        let base = EditorRevision::initial();
+        let new_rev = base.next();
+        let display_patches = patches
+            .into_iter()
+            .map(
+                |((rep_start, rep_end), (ins_start, ins_end), text)| DisplayPatch {
+                    base_revision: base,
+                    new_revision: new_rev,
+                    replace_byte_range: byte_range(rep_start, rep_end),
+                    inserted_byte_range: byte_range(ins_start, ins_end),
+                    inserted_text: text.to_string(),
+                    resulting_selection_byte_range: byte_range(ins_end, ins_end),
+                },
+            )
+            .collect();
+        EditorEditResult {
+            transaction_id: 1,
+            base_revision: base,
+            new_revision: new_rev,
+            display_patches,
             old_selection: EditorSelection::collapsed(old_text, old_head),
             new_selection: EditorSelection::collapsed(new_text, new_head),
             cause: EditorTransactionCause::Typing,
@@ -2602,5 +2664,74 @@ mod tests {
 
         assert!(motion.sample(0.0).static_holes.is_empty());
         assert_eq!(motion.required_textures, vec![old_id]);
+    }
+
+    #[test]
+    fn paragraph_with_content_change_does_not_also_get_paragraph_move() {
+        // Issue #919 复核 2：同一段落只能由一种位移路径接管。段落既有真实内容变更
+        // （display_patches 命中）又因上方段落变高而整体下移时，不能再叠加整体
+        // ParagraphMove——否则该段同时采用“整段静态节点 y 位移”和“局部字形旧→新
+        // 位移/遮罩”，两套画面坐标不一致，会跳行/重影。
+        //
+        // 构造：一次事务两笔 patch。段 6 末尾插入换行使其变高（段 6 内容变更），
+        // 段 7 的“乙”替换成“丙”（段 7 内容变更）；段落高度索引里段 7 段首从
+        // y=20 下移到 y=40。段 7 内容已变，必须只走局部退场/露出。
+        let mut old_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
+        old_p6.stable_paragraph_id = 6;
+        let mut old_p7 = test_line(1, 4, vec![cluster(4, 7, 0.0, 20.0)], 20.0);
+        old_p7.stable_paragraph_id = 7;
+        let old_layout =
+            snapshot_with_paragraph_index(vec![old_p6, old_p7], vec![20.0, 20.0], vec![6, 7]);
+
+        let mut new_p6 = test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0);
+        new_p6.stable_paragraph_id = 6;
+        let mut new_p7 = test_line(1, 5, vec![cluster(5, 8, 0.0, 20.0)], 40.0);
+        new_p7.stable_paragraph_id = 7;
+        let new_layout =
+            snapshot_with_paragraph_index(vec![new_p6, new_p7], vec![40.0, 20.0], vec![6, 7]);
+
+        // 旧正文“甲\n乙”（段 6 = 0..3，段 7 = 4..7）；新正文“甲\n\n丙”
+        // （段 6 = 0..4，段 7 = 5..8）。
+        let edit = make_edit_from_patches(
+            "甲\n乙",
+            "甲\n\n丙",
+            7,
+            8,
+            vec![((3, 3), (3, 4), "\n"), ((4, 7), (5, 8), "丙")],
+        );
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, None, 7);
+
+        // 段 7 的段首 y 确实变了，但内容也变了：只走局部路径，无整体位移。
+        assert!(
+            motion.paragraph_moves.is_empty(),
+            "内容变更段落不应再有 ParagraphMove: {:?}",
+            motion.paragraph_moves
+        );
+        // 内容变更的段 6/7 不产生逐字 Shift。
+        assert!(
+            !motion
+                .slices
+                .iter()
+                .any(|s| s.motion_kind() == MotionKind::Shift),
+            "内容变更段落应只走退场/露出，不产生 Shift: {:?}",
+            motion.slices
+        );
+        // 段 7 的旧“乙”退场、新“丙”露出仍保留。
+        assert!(
+            motion.slices.iter().any(|s| matches!(
+                s,
+                SliceMotion::Conceal { .. } if s.byte_range() == (4, 7)
+            )),
+            "旧“乙”应退场: {:?}",
+            motion.slices
+        );
+        assert!(
+            motion.slices.iter().any(|s| matches!(
+                s,
+                SliceMotion::Reveal { byte_range, .. } if *byte_range == (5, 8)
+            )),
+            "新“丙”应露出: {:?}",
+            motion.slices
+        );
     }
 }
