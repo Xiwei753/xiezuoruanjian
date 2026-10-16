@@ -35,6 +35,12 @@
         "sourceRoots": [
           "./src/acl"
         ]
+      },
+      "resource": {
+        "directories": [
+          "./src/main/resources",
+          "./src/acl/resources"
+        ]
       }
     }
   ]

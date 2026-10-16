@@ -227,6 +227,18 @@ hvigorw --mode module -p module=privacy_acl@default -p product=acl -p buildMode=
 最终产物的权限归属应以对应 product 打包后 HAP/HSP/APP 的实际清单为准，
 不能只由源码声明推断「构建后的 entry 模块增加了 DLP 权限」。
 
+`privacy_acl` 是 entry 的 HSP 依赖，构建 `product=acl` 时 hvigor 会把它的
+`requestPermissions`（含 `reason: $string:perm_reason_dlp_anti_peep`）合并进 entry 的
+处理产物 `intermediates/.../module.json`，因此 entry 的 ACL target 必须能解析这个
+`reason` 字符串，否则 `CompileResource` 会报
+`The resource reference '$string:perm_reason_dlp_anti_peep' is not defined`。
+`entry/build-profile.json5` 的 `targets[acl]` 用官方 `resource.directories` 把
+`./src/acl/resources` 与 `./src/main/resources` 一起纳入（配置该字段会替换默认资源目录，
+所以要显式保留 `./src/main/resources`），由
+`entry/src/acl/resources/base/element/string.json` 提供该字符串。这样
+`perm_reason_dlp_anti_peep` 只进入 ACL target 的资源；普通 `default` target 不配置
+`resource.directories`、仍只用 `./src/main/resources`，不携带该 DLP 字符串。
+
 构建后可核对 hvigor 生成的模块依赖装配观察，文件在 entry 构建目录的
 `intermediates/loader/<target>/` 下，完整路径同时带 `<product>` 维度
 （构建产物不入库，名字见下）：
@@ -264,9 +276,10 @@ entry 运行时依赖没有该受限 HSP，受限 product 才有。
 default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
 
 以上 `loader.json` 与合并 `module.json` 都在 `CompileArkTS` 之前的装载/合并阶段生成，
-是本地实跑产物（构建产物不入库，无法在仓库内复现）；本地构建会停在 `CompileArkTS` 的
-既有 ArkTS 报错（来自 #879 动画代码，不是 #914 改动），因此这些数值证明的是模块装配与
-权限归属，不是完整签名 HAP/APP 的最终内容声明。
+是本地实跑产物（构建产物不入库，无法在仓库内复现）；`entry@default` 与 `entry@acl`
+构建都能越过 `CompileResource`，随后停在 `CompileArkTS` 的既有 ArkTS 报错（来自 #879
+动画代码，不是 #914 改动），因此这些数值证明的是模块装配与权限归属，不是完整签名
+HAP/APP 的最终内容声明。
 
 ### 装机与验证
 
