@@ -270,8 +270,9 @@ entry 运行时依赖没有该受限 HSP，受限 product 才有。
 `hspNameOhmMap` 为 `{ "privacy_acl": "@bundle:com.xiwei.sujian/privacy_acl/ets/Index" }`，
 `hspResourcesMap.privacy_acl` 指向 `privacy_acl/build/acl/intermediates/res/default/ResourceTable.txt`；
 合并进 ACL HAP 的 `entry/build/acl/intermediates/res/acl/module.json` 的 `dependencies`
-为 `[{ "moduleName": "privacy_acl", "versionCode": 1000000 }]`（`versionCode` 由
-`privacy_acl/oh-package.json5` 的模块版本 `1.0.0` 换算而来），`requestPermissions`
+为 `[{ "moduleName": "privacy_acl", "versionCode": 1000000 }]`（该 `versionCode` 取自应用级
+`AppScope/app.json5` 的 `app.versionCode`，即 `1000000`；不是 `privacy_acl/oh-package.json5`
+的 ohpm 包版本），`requestPermissions`
 除普通三项外还含 `ohos.permission.DLP_GET_HIDE_STATUS`；`privacy_acl` HSP 自身的
 `privacy_acl/build/acl/intermediates/res/default/module.json` 也单独声明该权限。这组值与
 default product 的对照说明代码里的依赖装配按 product 生效，不是只在源码里分层。
