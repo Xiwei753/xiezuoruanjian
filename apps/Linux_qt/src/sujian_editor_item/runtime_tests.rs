@@ -1010,3 +1010,73 @@ fn missing_source_texture_keeps_animation_plan_not_ready() {
         println!("[BEHAVIOR_VERIFY] #919 缺源纹理时动画计划保持不接管并列出缺失 id ok");
     });
 }
+
+/// Issue #919：关闭正文吞吐动画后，真实编辑入口不得再建立局部动画计划，
+/// 因而也不会产生静态孔洞或字形覆盖层，静态层直接画完整 canonical。
+///
+/// 议题明确要求「关闭文字动画时不生成 holes/动态片段，直接只画 canonical
+/// 静态正文」。此前 runtime 用例只覆盖动画开启时的正向路径；本用例补上开关
+/// 关闭分支，并确认开关可逆——重新开启后同一编辑入口恢复构造计划。
+#[test]
+fn typing_animation_disabled_edit_produces_no_motion_or_static_holes() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("甲乙"));
+        item.current_viewport_height = 600.0;
+        assert!(item.effective_animation().text, "前置：输入动画默认开启");
+
+        // 协同模式是完整模式（`animation::resolve` 恒令 text=true），先退出协同，
+        // 独立开关才能表达"关闭正文动画"。
+        item.set_coordinated_animation_enabled(false);
+        item.set_typing_animation_enabled(false);
+        assert!(
+            !item.effective_animation().text,
+            "退出协同并关闭输入动画后，正文动画策略必须为 false"
+        );
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "关闭动画时不得残留局部动画计划"
+        );
+
+        // 真实插入仍会更新正文，但不得建立动画计划。
+        item.click_at(1000.0, 0.0, false);
+        item.insert_text(QString::from("丙"));
+        assert!(
+            item.pipeline.text_motion().is_none(),
+            "关闭文字动画后真实插入不得建立 text_motion 计划"
+        );
+
+        // 与 `qquickitem_impl` 相同的消费路径：无计划 → 默认空帧 → 无孔洞/覆盖层。
+        let motion_frame = item
+            .pipeline
+            .text_motion()
+            .map(|motion| motion.sample(0.0))
+            .unwrap_or_default();
+        assert!(
+            motion_frame.static_holes.is_empty(),
+            "关闭文字动画时静态层不得挖孔: {:?}",
+            motion_frame.static_holes
+        );
+        assert!(
+            motion_frame.overlays.is_empty(),
+            "关闭文字动画时不得有字形覆盖层: {:?}",
+            motion_frame.overlays
+        );
+
+        // 重新开启后，同一编辑入口恢复构造局部动画计划（开关可逆、编辑未受损）。
+        item.set_typing_animation_enabled(true);
+        assert!(item.effective_animation().text);
+        item.insert_text(QString::from("丁"));
+        let motion = item
+            .pipeline
+            .text_motion()
+            .cloned()
+            .expect("重新开启后真实插入必须恢复建立局部动画计划");
+        assert!(
+            !motion.slices.is_empty(),
+            "重新开启后真实插入的字形动画不得为空"
+        );
+
+        println!("[BEHAVIOR_VERIFY] #919 关闭文字动画不生成孔洞/覆盖层且开关可逆 ok");
+    });
+}
