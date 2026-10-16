@@ -1915,4 +1915,142 @@ mod tests {
         assert_eq!(new_to_old_byte(&edit, 3), 0);
         assert_eq!(new_to_old_byte(&edit, 6), 3);
     }
+
+    // ── 复核 12：旧图接续起点取上一帧“实际显示画面”的端到端回归 ──────────
+
+    /// 带非默认 shaping 指纹的 cluster：模拟同一 byte range 但字形/shaping 已变。
+    fn cluster_shaped(
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        w: f64,
+        glyph_hash: u64,
+    ) -> LineClusterSnapshot {
+        LineClusterSnapshot {
+            byte_start,
+            byte_end,
+            source_rect: rect(x, 0.0, w, 10.0),
+            shaping_identity: ShapingIdentity {
+                glyph_indexes_hash: glyph_hash,
+                ..ShapingIdentity::default()
+            },
+        }
+    }
+
+    /// 上一帧真正提交显示的 `Shift` 片段：`slice.rect` 是中途插值位置，
+    /// `mask_clip` 是该位置的实际动画遮罩（Shift 不裁宽度，等于完整 rect）。
+    fn drawn_shift(line_id: LineSnapshotId, displayed: LocalRect) -> LocalDrawnFrame {
+        LocalDrawnFrame {
+            session: 7,
+            revision: 1,
+            slices: vec![DrawnSlice {
+                slice: VisualSlice {
+                    source: SnapshotRef {
+                        snapshot_id: line_id,
+                        source_uv: rect(0.0, 0.0, 20.0, 10.0),
+                    },
+                    rect: displayed,
+                },
+                visible_width: displayed.w,
+                clip_rect: displayed,
+                mask_clip: displayed,
+                motion_kind: MotionKind::Shift,
+                byte_range: (0, 3),
+                shaping_identity: identity(),
+                direction: ClipDirection::LeftToRight,
+            }],
+        }
+    }
+
+    #[test]
+    fn shift_interrupted_by_shaping_change_conceals_from_last_shown_position() {
+        // Issue #919 复核 7：上一帧“甲”正在 Shift（旧 0→新 20），本笔替换使
+        // shaping 变化。退场必须从上一帧真正显示的中途位置 (x=10) 原地吞，
+        // 而不是从旧 canonical (x=0) 或新目标 (x=20) 突然开始。
+        let old_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster_shaped(0, 3, 0.0, 20.0, 0)],
+            0.0,
+        )]);
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster_shaped(0, 3, 20.0, 20.0, 7)],
+            0.0,
+        )]);
+        let old_id = old_layout.line_snapshots[0].id;
+        let new_id = new_layout.line_snapshots[0].id;
+        assert_ne!(old_id, new_id);
+
+        // 上一帧“甲”已经离开 x=0，插值显示在 x=10，源仍是旧排版行图。
+        let last = drawn_shift(old_id, rect(10.0, 0.0, 20.0, 10.0));
+
+        // 在“甲”之后插入“乙”，新排版把“甲”放到 x=20 且 shaping 已变。
+        let edit = make_edit("甲", "甲乙", 3, 6, (3, 3), (3, 6), "乙");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        assert_eq!(motion.slices.len(), 2);
+        let ids = motion.source_snapshot_ids();
+        assert!(ids.contains(&old_id));
+        assert!(ids.contains(&new_id));
+        match &motion.slices[0] {
+            SliceMotion::Conceal {
+                old, start_clip, ..
+            } => {
+                assert_eq!(old.source.snapshot_id, old_id);
+                // 起点是上一帧实际显示位置，不是 old_span.slice.rect (x=0)。
+                assert_eq!(old.rect, rect(10.0, 0.0, 20.0, 10.0));
+                assert_eq!(*start_clip, rect(10.0, 0.0, 20.0, 10.0));
+            }
+            other => panic!("expected Conceal first, got {other:?}"),
+        }
+        match &motion.slices[1] {
+            SliceMotion::Reveal {
+                new, start_clip, ..
+            } => {
+                assert_eq!(new.source.snapshot_id, new_id);
+                assert_eq!(new.rect, rect(20.0, 0.0, 20.0, 10.0));
+                // 新字形从零宽重新露出，不继承上一帧旧图位置。
+                assert_eq!(*start_clip, rect(20.0, 0.0, 0.0, 10.0));
+            }
+            other => panic!("expected Reveal second, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deleting_half_revealed_glyph_continues_from_visible_clip() {
+        // Issue #919 复核 6：刚吐到一半的字立即 Backspace，退场起点取上一帧
+        // 已显示的 mask_clip（半宽），不先把半字补成整字再吞。
+        let old_layout = snapshot(vec![test_line(0, 0, vec![cluster(0, 3, 0.0, 20.0)], 0.0)]);
+        let new_layout = snapshot(vec![]);
+        let old_id = old_layout.line_snapshots[0].id;
+
+        // 上一帧“甲”是 Reveal，只露出左半 (0..10)。
+        let last = drawn_reveal(
+            old_id,
+            rect(0.0, 0.0, 10.0, 10.0),
+            ShapingIdentity::default(),
+        );
+
+        // Backspace：光标从 3 左移到 0。
+        let edit = make_edit("甲", "", 3, 0, (0, 3), (0, 0), "");
+        let motion = retarget(&edit, Some(&old_layout), &new_layout, Some(&last), 7);
+
+        assert_eq!(motion.slices.len(), 1);
+        match &motion.slices[0] {
+            SliceMotion::Conceal {
+                old,
+                start_clip,
+                direction,
+                ..
+            } => {
+                assert_eq!(old.source.snapshot_id, old_id);
+                // 从已显示的半宽遮罩继续吞，而不是从整字 (w=20) 重新开始。
+                assert_eq!(*start_clip, rect(0.0, 0.0, 10.0, 10.0));
+                assert_eq!(*direction, ClipDirection::LeftToRight);
+            }
+            other => panic!("expected Conceal, got {other:?}"),
+        }
+    }
 }
