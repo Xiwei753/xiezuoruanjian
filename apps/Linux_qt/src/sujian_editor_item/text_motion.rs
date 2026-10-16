@@ -2758,4 +2758,34 @@ mod tests {
             motion.slices
         );
     }
+
+    #[test]
+    fn offscreen_edit_without_visible_slices_returns_none() {
+        // Issue #919：完全落在视口外的编辑不产生局部动画——所有片段经
+        // `slices.retain(|s| rects_intersect(s.motion_rect(), viewport))` 被滤掉后，
+        // 若也没有整体段落位移，`begin_or_retarget` 应返回 None，让静态层直接画
+        // canonical。屏幕外的字在滚动进入视口时由静态绘制呈现，不需要在空中预跑
+        // 一段看不见的吞吐动画。
+        let new_layout = snapshot(vec![test_line(
+            0,
+            0,
+            vec![cluster(0, 3, 2000.0, 20.0)],
+            0.0,
+        )]);
+        let edit = make_edit("", "甲", 0, 3, (0, 0), (0, 3), "甲");
+        assert!(
+            TextMotion::begin_or_retarget(
+                &edit,
+                None,
+                &new_layout,
+                None,
+                0.0,
+                100,
+                1,
+                viewport(),
+            )
+            .is_none(),
+            "视口外编辑不应创建局部动画"
+        );
+    }
 }
