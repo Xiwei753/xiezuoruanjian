@@ -478,7 +478,7 @@
     },
     {
       "name": "auto_sync",
-      "value": "自动同步"
+      "value": "前台自动同步"
     },
     {
       "name": "sync_interval",
@@ -847,6 +847,118 @@
     {
       "name": "error_sync_task_failed",
       "value": "同步任务启动失败，请重试"
+    },
+    {
+      "name": "sync_conflicts_title",
+      "value": "同步冲突"
+    },
+    {
+      "name": "sync_conflicts_view_format",
+      "value": "查看冲突（%s 处）"
+    },
+    {
+      "name": "sync_conflicts_view",
+      "value": "查看冲突"
+    },
+    {
+      "name": "sync_conflicts_count_format",
+      "value": "共 %s 处"
+    },
+    {
+      "name": "sync_conflicts_group_app",
+      "value": "应用数据"
+    },
+    {
+      "name": "sync_conflicts_unknown_project",
+      "value": "未知作品"
+    },
+    {
+      "name": "sync_conflicts_kind_both_changed",
+      "value": "双方均已修改"
+    },
+    {
+      "name": "sync_conflicts_kind_remote_deleted",
+      "value": "远端已删除"
+    },
+    {
+      "name": "sync_conflicts_keep_local",
+      "value": "保留本地"
+    },
+    {
+      "name": "sync_conflicts_take_remote",
+      "value": "采用远端"
+    },
+    {
+      "name": "sync_conflicts_mark_merged",
+      "value": "已合并"
+    },
+    {
+      "name": "sync_conflicts_mark_merged_disabled_remote_deleted",
+      "value": "远端已删除，无法标记为已合并"
+    },
+    {
+      "name": "sync_conflicts_mark_merged_disabled_missing",
+      "value": "缺少本地或远端内容，无法标记为已合并"
+    },
+    {
+      "name": "sync_conflicts_local_content",
+      "value": "本地内容"
+    },
+    {
+      "name": "sync_conflicts_remote_content",
+      "value": "远端内容"
+    },
+    {
+      "name": "sync_conflicts_remote_deleted_note",
+      "value": "远端已删除（无远端内容）"
+    },
+    {
+      "name": "sync_conflicts_no_remote_content",
+      "value": "无远端内容"
+    },
+    {
+      "name": "sync_conflicts_content_empty",
+      "value": "（空内容）"
+    },
+    {
+      "name": "sync_conflicts_truncated_note",
+      "value": "内容过长，仅显示开头部分"
+    },
+    {
+      "name": "sync_conflicts_preview_failed_format",
+      "value": "预览加载失败：%s"
+    },
+    {
+      "name": "sync_conflicts_action_failed_format",
+      "value": "操作失败：%s"
+    },
+    {
+      "name": "sync_conflicts_list_failed_format",
+      "value": "冲突列表加载失败：%s"
+    },
+    {
+      "name": "sync_conflicts_empty",
+      "value": "无冲突"
+    },
+    {
+      "name": "sync_conflicts_empty_hint",
+      "value": "所有冲突已处理，可重新同步以完成同步"
+    },
+    {
+      "name": "sync_conflicts_resolved_hint",
+      "value": "已处理冲突，建议重新同步以刷新打开的章节"
+    },
+    {
+      "name": "sync_conflicts_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "sync_conflicts_resync",
+      "value": "重新同步"
+    },
+    {
+      "name": "sync_conflicts_close",
+      "value": "关闭"
     }
   ]
 }

@@ -135,6 +135,20 @@ char*  writer_core_full_sync_diagnostics(void);
 char*  writer_core_perform_full_sync(void);
 char*  writer_core_load_app_sync_state(void);
 char*  writer_core_save_app_sync_state(const char* state_json);
+// writer_core_load_full_sync_state: 读取 full_state.local.json（最近一次全量同步的总体结果）。
+//   Core 尚未写入任何结果时 data 为 null，表示"从未成功同步"，不是查询失败。
+char*  writer_core_load_full_sync_state(void);
+// writer_core_list_all_sync_conflicts: 聚合 App target + 所有 Project target 的
+//   未解决冲突摘要（AllSyncConflictEntryDto[]，不含正文/快照）。
+char*  writer_core_list_all_sync_conflicts(void);
+// writer_core_load_sync_conflict_preview: 单条冲突的本地/远端内容预览。
+//   target_kind 为 "app" / "project"；project_id 允许 null 或空串（App target）。
+//   remote_deleted 为 true 时 remoteContent 为 null，不伪造空字符串。
+char*  writer_core_load_sync_conflict_preview(const char* target_kind, const char* project_id, const char* path);
+// writer_core_resolve_sync_conflict: 按用户决定解决冲突。
+//   decision 只接受 "keep_local" / "take_remote" / "mark_merged"，映射到现有
+//   Core API，不在 FFI 层实现合并策略；target_kind == "project" 时 project_id 必填。
+char*  writer_core_resolve_sync_conflict(const char* target_kind, const char* project_id, const char* path, const char* decision);
 
 // ── Writing Stats ──
 char*  writer_core_get_writing_stats(void);

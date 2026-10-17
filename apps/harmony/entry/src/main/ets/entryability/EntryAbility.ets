@@ -12,6 +12,7 @@ import { HarmonyColorModeController } from '../ui/theme/HarmonyColorModeControll
 import { HarmonyCrashEventWatcher } from '../platform/diagnostics/HarmonyCrashEventWatcher'
 import { HarmonyDiagnosticsCheckpoint } from '../platform/diagnostics/HarmonyDiagnosticsCheckpoint'
 import { HarmonyDiagnosticEvents, DiagnosticField } from '../platform/diagnostics/HarmonyDiagnosticEvents'
+import { HarmonyAutoSyncScheduler } from '../feature/settings/presentation/HarmonyAutoSyncScheduler'
 import { TabletWindowPolicy } from '../platform/window/TabletWindowPolicy'
 import i18n from '@ohos.i18n'
 import bundleManager from '@ohos.bundle.bundleManager'
@@ -56,6 +57,13 @@ export default class EntryAbility extends UIAbility {
     checkpoint.requestCheckpoint()
 
     this.lifecycle.notifyCreate()
+
+    // Issue #925：Ability 级装配唯一自动同步调度器——注册生命周期与网络恢复监听，
+    // 并从 Core 载入已提交配置，保证不打开设置页也能按配置前台自动同步。
+    // attach 只做装配与到期判断，不在装配时凭空发同步。
+    HarmonyAutoSyncScheduler.getInstance().attach(this.lifecycle).catch((e: Object): void => {
+      hilog.warn(0x0000, 'EntryAbility', 'auto sync scheduler attach failed: %{public}s', String(e))
+    })
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
@@ -145,6 +153,8 @@ export default class EntryAbility extends UIAbility {
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.destroyed', 'EntryAbility', [])
     HarmonyDiagnosticsCheckpoint.getInstance().destroy()
     HarmonyCrashEventWatcher.getInstance().destroy()
+    // Issue #925：Ability 级解绑自动同步调度器（移除生命周期与网络恢复监听）。
+    HarmonyAutoSyncScheduler.getInstance().detach(this.lifecycle)
     this.lifecycle.notifyDestroy()
   }
 
@@ -208,6 +218,9 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy() {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageDestroy')
+    // Issue #927：与 onBackground 可能连续触发，这里仍只派发一次全局事件；
+    // 后台保存事务的重复由 AutoSaveLifecycleObserver 的 in-flight 标志在 observer 层去重，
+    // 不删除任何生命周期事件。保存由平台短时任务托管，这里不 await 保存 Promise。
     this.lifecycle.notifyBackground()
   }
 
@@ -220,6 +233,9 @@ export default class EntryAbility extends UIAbility {
   onBackground() {
     hilog.info(0x0000, 'EntryAbility', 'onBackground')
     HarmonyDiagnosticEvents.record('Info', 'App', 'ability.background', 'EntryAbility', [])
+    // Issue #927：退后台保存由 AutoSaveLifecycleObserver → HarmonyBackgroundSaveTask.runSave()
+    // 申请短时任务托管（申请到 requestId 后才开始异步落盘）。这里只派发一次全局事件，
+    // 不 await 不受系统等待保证的保存 Promise。
     this.lifecycle.notifyBackground()
   }
 

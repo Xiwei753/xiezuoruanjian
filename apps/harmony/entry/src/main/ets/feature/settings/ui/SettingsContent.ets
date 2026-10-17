@@ -9,7 +9,8 @@
 //   只有一级导航在 Side（>=840vp）才两列，Bottom 那档用单列。
 // 设置内容、保存逻辑、主题逻辑仍然全部走现有 SettingsViewModel 和 backend。
 
-import { promptAction } from '@kit.ArkUI'
+import { promptAction, ComponentContent } from '@kit.ArkUI'
+import hilog from '@ohos.hilog'
 import { LocalSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../../../corebridge/dto/SettingsDtos'
 import { SyncConfig, SyncDiagnosticsResult } from '../../../corebridge/dto/SyncDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ColorSource } from '../../../ui/theme/HarmonyThemeAdapter'
@@ -21,7 +22,12 @@ import { SyncOutcomePresenter } from '../presentation/SyncOutcomePresenter'
 import { SyncOutcome } from '../presentation/SyncOperationController'
 import { SyncMessagePayload } from '../presentation/SyncMessagePayload'
 import { SettingsViewModel, SettingsSectionId } from '../presentation/SettingsViewModel'
+import { SyncConflictViewModel } from '../presentation/SyncConflictViewModel'
+import { createSyncConflictsPanelContent, SyncConflictsPanelArgs } from './SyncConflictsPanel'
 import { WidthClass } from '../../../corebridge/dto/PlatformDtos'
+
+const TAG = 'SettingsContent'
+const DOMAIN = 0x0000
 
 // ── 设置分组标识（窄屏折叠布局用） ──
 type SettingsGroupId = 'appearance' | 'writing' | 'data_sync' | 'advanced' | 'about'
@@ -69,10 +75,17 @@ export struct SettingsContent {
   @Local searchText: string = ''
   // 问题5：复制设备信息结果提示
   @Local copyMessage: string = ''
+  // Issue #926：冲突面板回传的剩余冲突数；-1 表示本次会话还没从 Core 拉取过。
+  @Local conflictRemaining: number = -1
 
   private themeAdapter: HarmonyThemeAdapter = HarmonyThemeAdapter.getInstance()
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
+  // Issue #926：冲突面板（窗口层级对话框）句柄。
+  private conflictsPanelContent: ComponentContent<SyncConflictsPanelArgs> | null = null
+  // Issue #926：入口计数探针——同步结果带冲突时从 Core 全局列表取剩余冲突数，
+  // 与面板同一数据源，保证"N 处"和面板列表一致。
+  private conflictProbe: SyncConflictViewModel = new SyncConflictViewModel()
 
   aboutToAppear() {
     // 注册主题观察者
@@ -90,6 +103,10 @@ export struct SettingsContent {
 
     // 加载数据 — ViewModel 内部管理 async 和状态
     this.viewModel.loadData()
+
+    // Issue #926：顶栏同步等不经 SettingsViewModel 的入口不会写 syncMessage，
+    // 打开设置页时直接从 Core 全局冲突列表取一次真实剩余数，冲突入口据此显示。
+    void this.refreshConflictProbe()
   }
 
   aboutToDisappear() {
@@ -99,6 +116,8 @@ export struct SettingsContent {
     if (this.adaptiveObserver) {
       AdaptiveContext.getInstance().removeObserver(this.adaptiveObserver)
     }
+    // Issue #926：页面销毁时收起还开着的冲突面板（释放由 onDidDisappear 统一回收）。
+    this.closeConflictsPanel()
   }
 
   // ── 搜索过滤设置项（窄屏搜索用） ──
@@ -215,6 +234,129 @@ export struct SettingsContent {
       }
     }
     return ''
+  }
+
+  // ════════════════════════════════════════════
+  // Issue #926：同步冲突入口与面板
+  // ════════════════════════════════════════════
+
+  // 当前同步结果指示的冲突数；-1 表示结果里没有冲突指示。
+  // 只从 ViewModel 的同步消息载荷读取，不在这里触发任何 Core 调用。
+  private syncPayloadConflictCount(): number {
+    const msg = this.viewModel.syncMessage
+    if (msg.length === 0) {
+      return -1
+    }
+    try {
+      const payload: SyncMessagePayload = JSON.parse(msg) as SyncMessagePayload
+      if (payload.errorCode === 'SYNC_CONFLICT') {
+        return payload.totalConflicts ?? 0
+      }
+      const total: number = payload.totalConflicts ?? 0
+      return total > 0 ? total : -1
+    } catch (_e) {
+      return -1
+    }
+  }
+
+  // 冲突入口可见性：
+  // - 面板已从 Core 拉取过剩余数时以 Core 为准（0 处即没有冲突，不再显示过期入口）；
+  // - 否则由同步结果决定（errorCode=SYNC_CONFLICT 或 totalConflicts > 0）。
+  private hasConflictEntry(): boolean {
+    if (this.conflictRemaining >= 0) {
+      return this.conflictRemaining > 0
+    }
+    return this.syncPayloadConflictCount() >= 0
+  }
+
+  // 入口计数优先用面板从 Core 拉取的真实剩余数（解决后立即刷新），
+  // 面板没拉取过时退回同步结果的 totalConflicts。
+  private conflictEntryCount(): number {
+    if (this.conflictRemaining >= 0) {
+      return this.conflictRemaining
+    }
+    const payloadCount: number = this.syncPayloadConflictCount()
+    return payloadCount > 0 ? payloadCount : 0
+  }
+
+  private conflictEntryLabel(): string {
+    const count: number = this.conflictEntryCount()
+    if (count > 0) {
+      return getContext(this).resourceManager
+        .getStringSync($r('app.string.sync_conflicts_view_format').id)
+        .replace('%s', count.toString())
+    }
+    return getContext(this).resourceManager.getStringSync($r('app.string.sync_conflicts_view').id)
+  }
+
+  // 设置页内发起同步：清掉面板回传的旧计数，入口完全由新的同步结果决定。
+  private async requestSync(): Promise<void> {
+    this.conflictRemaining = -1
+    await this.viewModel.performSync()
+    // 同步结果指示冲突时，用 Core 全局冲突列表的真实剩余数刷新入口计数。
+    if (this.syncPayloadConflictCount() >= 0) {
+      await this.refreshConflictProbe()
+    }
+  }
+
+  // 从 Core 全局冲突列表取真实剩余数；拉取失败保持旧值（-1 时退回同步结果判断）。
+  private async refreshConflictProbe(): Promise<void> {
+    await this.conflictProbe.loadConflicts()
+    if (this.conflictProbe.listErrorCode.length === 0) {
+      this.conflictRemaining = this.conflictProbe.items.length
+    }
+  }
+
+  private openConflictsPanel(): void {
+    if (this.conflictsPanelContent !== null) {
+      return
+    }
+    const uiContext = this.getUIContext()
+    const args: SyncConflictsPanelArgs = {
+      onRequestClose: () => { this.closeConflictsPanel() },
+      onRemainingChanged: (remaining: number) => { this.conflictRemaining = remaining }
+    }
+    const content = createSyncConflictsPanelContent(uiContext, args)
+    this.conflictsPanelContent = content
+    uiContext.getPromptAction().openCustomDialog(content, {
+      alignment: DialogAlignment.Center,
+      maskColor: '#80000000',
+      autoCancel: true,
+      onDidDisappear: () => { this.releaseConflictsPanel(content) }
+    }).catch((e: Error) => {
+      // open 失败时对话框不会出现，onDidDisappear 不会回调，这里负责回收 content。
+      this.releaseConflictsPanel(content)
+      hilog.error(DOMAIN, TAG, 'openConflictsPanel failed: %{public}s', String(e))
+    })
+  }
+
+  private closeConflictsPanel(): void {
+    if (this.conflictsPanelContent === null) {
+      return
+    }
+    const content = this.conflictsPanelContent
+    this.getUIContext().getPromptAction().closeCustomDialog(content).catch((e: Error) => {
+      // 关闭失败时对话框可能仍在，交给用户下一次交互（点遮罩 / 系统返回）走 autoCancel 路径。
+      hilog.error(DOMAIN, TAG, 'closeConflictsPanel failed: %{public}s', String(e))
+    })
+  }
+
+  private releaseConflictsPanel(content: ComponentContent<SyncConflictsPanelArgs>): void {
+    if (this.conflictsPanelContent !== content) {
+      return
+    }
+    this.conflictsPanelContent = null
+    content.dispose()
+  }
+
+  // 同步结果区域的冲突入口（宽屏 / 窄屏共用）。
+  @Builder
+  SyncConflictEntry() {
+    Column() {
+      this.SettingsNeutralAction(this.conflictEntryLabel(), () => { this.openConflictsPanel() })
+    }
+    .width('100%')
+    .margin({ bottom: 16 })
   }
 
   // Issue #825：设置内容的唯一根 Builder。
@@ -887,6 +1029,13 @@ export struct SettingsContent {
             .onChange((value: string) => {
               this.viewModel.updateSyncToken(value)
             })
+            .onBlur(() => {
+              // Issue #924：输入完成立即有序落盘，不等防抖兜底。
+              void this.viewModel.commitSyncToken()
+            })
+            .onSubmit(() => {
+              void this.viewModel.commitSyncToken()
+            })
         }
         .width('100%')
         .margin({ bottom: 16 })
@@ -930,7 +1079,7 @@ export struct SettingsContent {
         // Sync actions
         Row({ space: 12 }) {
           this.SettingsInlineAction($r('app.string.sync_section'),
-            () => this.viewModel.performSync(),
+            () => this.requestSync(),
             !this.viewModel.isSyncing)
 
           this.SettingsInlineAction($r('app.string.diagnose'),
@@ -939,6 +1088,11 @@ export struct SettingsContent {
         }
         .width('100%')
         .margin({ bottom: 16 })
+
+        // Issue #926：同步结果带冲突时给出查看/解决入口。
+        if (this.hasConflictEntry()) {
+          this.SyncConflictEntry()
+        }
 
         // Diagnostics result card
         if (this.viewModel.syncDiagnostics) {
@@ -1507,6 +1661,13 @@ export struct SettingsContent {
             .onChange((value: string) => {
               this.viewModel.updateSyncToken(value)
             })
+            .onBlur(() => {
+              // Issue #924：输入完成立即有序落盘，不等防抖兜底。
+              void this.viewModel.commitSyncToken()
+            })
+            .onSubmit(() => {
+              void this.viewModel.commitSyncToken()
+            })
         }
         .width('100%')
         .margin({ bottom: 16 })
@@ -1550,7 +1711,7 @@ export struct SettingsContent {
         // Sync actions
         Row({ space: 12 }) {
           this.SettingsInlineAction($r('app.string.sync_section'),
-            () => this.viewModel.performSync(),
+            () => this.requestSync(),
             !this.viewModel.isSyncing)
 
           this.SettingsInlineAction($r('app.string.diagnose'),
@@ -1559,6 +1720,11 @@ export struct SettingsContent {
         }
         .width('100%')
         .margin({ bottom: 16 })
+
+        // Issue #926：同步结果带冲突时给出查看/解决入口。
+        if (this.hasConflictEntry()) {
+          this.SyncConflictEntry()
+        }
 
         // Diagnostics result card
         if (this.viewModel.syncDiagnostics) {

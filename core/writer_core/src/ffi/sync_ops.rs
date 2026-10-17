@@ -273,6 +273,185 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
     }
 }
 
+/// 加载全量同步持久状态（`<app_data_root>/app-meta/sync/full_state.local.json`）。
+///
+/// 与 per-target `state.local.json` 分层：这里只返回"最近一次全量同步事务"的
+/// 总体结果。Core 尚未写入任何结果时 `data` 为 `null` —— 这是"从未成功同步"，
+/// 不是查询失败，平台端不得把两者混为一谈。
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_full_sync_state() -> *mut c_char {
+    match with_app_service(|svc| {
+        let state = svc.load_full_sync_state().map_err(|e| format!("{}", e))?;
+        Ok(state)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_STATE_ERROR", &e),
+    }
+}
+
+/// 列出 App target + 所有 Project target 的未解决冲突摘要。
+///
+/// 只返回 `AllSyncConflictEntryDto` 摘要（不含正文/快照），让平台端展示冲突
+/// 总览；单条内容用 `writer_core_load_sync_conflict_preview` 获取。
+///
+/// # Safety
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_all_sync_conflicts() -> *mut c_char {
+    match with_app_service(|svc| {
+        let entries = svc
+            .list_all_sync_conflicts()
+            .map_err(|e| format!("{}", e))?;
+        Ok(entries)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_CONFLICT", &e),
+    }
+}
+
+/// 读取必填的 UTF-8 C 字符串参数；null 或空串都视为缺失。
+fn required_c_str_arg(value: *const c_char, name: &str) -> Result<String, String> {
+    match c_str_to_rust(value) {
+        Ok(s) if !s.is_empty() => Ok(s),
+        Ok(_) => Err(format!("{name} must not be empty")),
+        Err(code) => Err(format!("Invalid {name}: error {code}")),
+    }
+}
+
+/// 读取可选的 UTF-8 C 字符串参数；null 或空串都映射为 `None`。
+///
+/// App target 的冲突不属于任何作品，平台端传 null / "" 均可。
+fn optional_c_str_arg(value: *const c_char, name: &str) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    match c_str_to_rust(value) {
+        Ok(s) if s.is_empty() => Ok(None),
+        Ok(s) => Ok(Some(s)),
+        Err(code) => Err(format!("Invalid {name}: error {code}")),
+    }
+}
+
+/// 加载一条冲突的本地/远端内容预览。
+///
+/// `target_kind` 为 `"app"` / `"project"`；`project_id` 允许 null 或空串。
+/// `remote_deleted == true` 时 `remote_content` 为 `None`，不伪造空字符串。
+///
+/// # Safety
+/// All string arguments must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_sync_conflict_preview(
+    target_kind: *const c_char,
+    project_id: *const c_char,
+    path: *const c_char,
+) -> *mut c_char {
+    let target_kind_str = match required_c_str_arg(target_kind, "target_kind") {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    let project_id_str = match optional_c_str_arg(project_id, "project_id") {
+        Ok(v) => v,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    let path_str = match required_c_str_arg(path, "path") {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    match with_app_service(|svc| {
+        svc.load_sync_conflict_preview(target_kind_str, project_id_str, path_str)
+            .map_err(|e| format!("{}", e))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_CONFLICT", &e),
+    }
+}
+
+/// 冲突解决动作 — `decision` 字符串到现有 Core API 的映射。
+///
+/// FFI 只做映射，不实现合并策略：三种动作分别转发到
+/// `WriterAppService::resolve_conflict_keep_local / _take_remote / _mark_merged`。
+enum SyncConflictDecision {
+    KeepLocal,
+    TakeRemote,
+    MarkMerged,
+}
+
+/// 按用户决定解决一条同步冲突。
+///
+/// `decision` 只接受 `"keep_local"` / `"take_remote"` / `"mark_merged"`；
+/// `target_kind == "project"` 时 `project_id` 必填。返回值透传 Core：
+/// `take_remote` 的 `false` 表示仅排队 pending（未立即替换 live 正文），
+/// 平台端据此决定是否重载编辑器。
+///
+/// # Safety
+/// All string arguments must be valid null-terminated UTF-8 C strings.
+/// Returns a caller-owned C string. Free with `writer_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_resolve_sync_conflict(
+    target_kind: *const c_char,
+    project_id: *const c_char,
+    path: *const c_char,
+    decision: *const c_char,
+) -> *mut c_char {
+    let target_kind_str = match required_c_str_arg(target_kind, "target_kind") {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    let project_id_str = match optional_c_str_arg(project_id, "project_id") {
+        Ok(v) => v,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    let path_str = match required_c_str_arg(path, "path") {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    let decision_str = match required_c_str_arg(decision, "decision") {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARGUMENT", &e),
+    };
+    if target_kind_str == "project" && project_id_str.is_none() {
+        return err_json(
+            "INVALID_ARGUMENT",
+            "project_id is required for target_kind \"project\"",
+        );
+    }
+    let decision_kind = match decision_str.as_str() {
+        "keep_local" => SyncConflictDecision::KeepLocal,
+        "take_remote" => SyncConflictDecision::TakeRemote,
+        "mark_merged" => SyncConflictDecision::MarkMerged,
+        other => {
+            return err_json(
+                "INVALID_ARGUMENT",
+                &format!(
+                    "Invalid decision '{other}': expected keep_local | take_remote | mark_merged"
+                ),
+            )
+        }
+    };
+    match with_app_service(|svc| {
+        let applied = match decision_kind {
+            SyncConflictDecision::KeepLocal => {
+                svc.resolve_conflict_keep_local(target_kind_str, project_id_str, path_str)
+            }
+            SyncConflictDecision::TakeRemote => {
+                svc.resolve_conflict_take_remote(target_kind_str, project_id_str, path_str)
+            }
+            SyncConflictDecision::MarkMerged => {
+                svc.resolve_conflict_mark_merged(target_kind_str, project_id_str, path_str)
+            }
+        }
+        .map_err(|e| format!("{}", e))?;
+        Ok(applied)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("SYNC_CONFLICT", &e),
+    }
+}
+
 /// # Safety
 /// `platform` and `device_class` must be valid null-terminated UTF-8 C strings.
 #[no_mangle]

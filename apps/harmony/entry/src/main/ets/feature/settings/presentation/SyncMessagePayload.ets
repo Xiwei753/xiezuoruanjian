@@ -14,5 +14,7 @@ export interface SyncMessagePayload {
   errorCategory?: string
   rawError?: string
   totalDownloaded?: number
+  // Issue #926：冲突终态携带的本次同步涉及的冲突总数，设置页入口据此显示"查看冲突（N 处）"。
+  totalConflicts?: number
   overallStatus?: string
 }

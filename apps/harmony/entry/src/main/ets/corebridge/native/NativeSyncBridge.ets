@@ -1,7 +1,7 @@
 import { ResultEnvelope } from '../dto/ResultEnvelope'
-import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState } from '../dto/SyncDtos'
+import { FullSyncDiagnosticsResult, FullSyncDryRunResult, FullSyncResult, SyncConfig, SyncSecrets, SyncState, FullSyncState, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { NativeCoreModule } from './NativeCoreModule'
-import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets } from '../codec/CoreWireDecoders'
+import { decodeSyncConfig, decodeSyncState, decodeFullSyncResult, decodeFullSyncDryRunResult, decodeFullSyncDiagnosticsResult, decodeSyncSecrets, decodeFullSyncState, decodeAllSyncConflictEntry, decodeSyncConflictPreview, decodeArray } from '../codec/CoreWireDecoders'
 
 /**
  * 构造 NATIVE_ERROR 信封，仅用于真正的 JS 异常（如 native 模块不存在）。
@@ -109,6 +109,75 @@ export class NativeSyncBridge {
   async saveAppSyncState(state: SyncState): Promise<ResultEnvelope<boolean>> {
     try {
       const jsonStr: string = this.core.getNativeModule().nativeSaveAppSyncState(JSON.stringify(state))
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  // ── 全量同步持久状态 / 冲突查询与解决（Issue #925 / #926） ──
+
+  /**
+   * 读取 Core 持久化的全量同步状态（full_state.local.json）。
+   *
+   * `data` 为 null 表示 Core 尚未写入任何同步结果（从未成功同步），是合法状态，
+   * 不是错误；成功与否由 success 区分，`last_success_time` 为 Unix 秒。
+   */
+  async loadFullSyncState(): Promise<ResultEnvelope<FullSyncState | null>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadFullSyncState() as Promise<string>)
+      // Core `Option<FullSyncStateDto>` 用 data:null 表达"从未写入状态"；
+      // decodeEnvelope 会把 null 归为 SCHEMA_MISMATCH，所以先按空状态返回。
+      const raw: ResultEnvelope<Object> = this.core.parseRawEnvelope(jsonStr)
+      if (raw.success && (raw.data === undefined || raw.data === null)) {
+        return { success: true, data: null }
+      }
+      const decoded: ResultEnvelope<FullSyncState> = this.core.decodeEnvelope<FullSyncState>(jsonStr, decodeFullSyncState)
+      if (!decoded.success) {
+        return {
+          success: false,
+          errorCode: decoded.errorCode,
+          userMessage: decoded.userMessage,
+          messageKey: decoded.messageKey,
+          messageArgs: decoded.messageArgs,
+          rawError: decoded.rawError,
+          warnings: decoded.warnings,
+          changedPaths: decoded.changedPaths,
+          changedEntities: decoded.changedEntities
+        }
+      }
+      return { success: true, data: decoded.data ?? null }
+    } catch (e) { return nativeError<FullSyncState | null>(e) }
+  }
+
+  /** 列出 App target + 所有 Project target 的未解决冲突摘要（不含正文）。 */
+  async listAllSyncConflicts(): Promise<ResultEnvelope<AllSyncConflictEntry[]>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule().nativeListAllSyncConflicts() as Promise<string>)
+      return this.core.decodeEnvelope<AllSyncConflictEntry[]>(jsonStr,
+        (d: Object) => decodeArray<AllSyncConflictEntry>(d, decodeAllSyncConflictEntry, 'AllSyncConflictEntry'))
+    } catch (e) { return nativeError<AllSyncConflictEntry[]>(e) }
+  }
+
+  /**
+   * 读取单条冲突的本地/远端内容预览。
+   *
+   * `targetKind` 为 "app" / "project"；App target 传 projectId = null。
+   */
+  async loadSyncConflictPreview(targetKind: string, projectId: string | null, path: string): Promise<ResultEnvelope<SyncConflictPreview>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule().nativeLoadSyncConflictPreview(targetKind, projectId, path) as Promise<string>)
+      return this.core.decodeEnvelope<SyncConflictPreview>(jsonStr, decodeSyncConflictPreview)
+    } catch (e) { return nativeError<SyncConflictPreview>(e) }
+  }
+
+  /**
+   * 按用户决定解决一条冲突。
+   *
+   * `decision` 只接受 "keep_local" / "take_remote" / "mark_merged"；
+   * 返回值透传 Core：take_remote 的 false 表示仅排队 pending（未立即替换 live 正文）。
+   */
+  async resolveSyncConflict(targetKind: string, projectId: string | null, path: string, decision: string): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = await (this.core.getNativeModule().nativeResolveSyncConflict(targetKind, projectId, path, decision) as Promise<string>)
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
   }

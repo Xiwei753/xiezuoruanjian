@@ -147,3 +147,41 @@ export interface ProviderSecrets {
 export interface SyncSecrets {
   providerSecrets: ProviderSecrets | null
 }
+
+// ── 全量同步持久状态 / 冲突总览与预览（Issue #925 / #926） ──
+// 字段与 Core api/types/sync.rs 的 DTO 一一对应，FFI 只负责搬运：
+// - FullSyncStateDto 没有 rename_all，线格式保持 Rust snake_case 字段名；
+// - AllSyncConflictEntryDto / SyncConflictPreviewDto 为 camelCase。
+// Rust `Option<T>` 未标 skip_serializing_if 时恒发该键（T | null），不要写成可选属性。
+
+// Core `FullSyncStateDto`：full_state.local.json 中"最近一次全量同步事务"的总体结果。
+// overall_status 线格式与 FullSyncResult.overallStatus 同一映射（idle/success/...）；
+// last* 为 Unix 秒；failed_targets 是失败 target 标识（"app" / "project:<id>" / "global" / "preflight"）。
+export interface FullSyncState {
+  overall_status: string
+  last_attempt_time: number | null
+  last_success_time: number | null
+  failed_targets: string[]
+}
+
+// Core `AllSyncConflictEntryDto`：全局未解决冲突摘要（list_all_sync_conflicts）。
+// targetKind 为 "app" / "project"；App target 的 projectId / projectTitle 为空字符串。
+export interface AllSyncConflictEntry {
+  projectId: string
+  projectTitle: string
+  path: string
+  kind: string
+  createdAt: number
+  targetKind: string
+}
+
+// Core `SyncConflictPreviewDto`：单条冲突的本地/远端内容预览。
+// remoteDeleted 为 true 时 remoteContent 为 null（不伪造空字符串为远端正文）。
+export interface SyncConflictPreview {
+  path: string
+  kind: string
+  createdAt: number
+  localContent: string
+  remoteContent: string | null
+  remoteDeleted: boolean
+}

@@ -11,6 +11,7 @@
 
 import hilog from '@ohos.hilog'
 import { connection } from '@kit.NetworkKit'
+import { BusinessError } from '@kit.BasicServicesKit'
 
 const TAG = 'NetworkStatusService'
 const DOMAIN = 0x0000
@@ -32,6 +33,32 @@ export class NetworkStatusService {
       NetworkStatusService.instance = new NetworkStatusService()
     }
     return NetworkStatusService.instance
+  }
+
+  /**
+   * 订阅「默认网络恢复可用」事件（Issue #925 网络恢复后自动同步的唯一接线点）。
+   * 基于 connection.createNetConnection() + register() 的真实监听，不是轮询；
+   * 返回注销函数，由调用方在解绑时调用。
+   */
+  onNetworkRestored(callback: () => void): () => void {
+    const netConnection: connection.NetConnection = connection.createNetConnection()
+    const handler = (_handle: connection.NetHandle): void => {
+      hilog.info(DOMAIN, TAG, 'netAvailable: network restored')
+      callback()
+    }
+    netConnection.on('netAvailable', handler)
+    netConnection.register((error: BusinessError): void => {
+      if (error) {
+        hilog.warn(DOMAIN, TAG, 'netConnection.register failed: %{public}s', JSON.stringify(error))
+      }
+    })
+    return (): void => {
+      netConnection.unregister((error: BusinessError): void => {
+        if (error) {
+          hilog.warn(DOMAIN, TAG, 'netConnection.unregister failed: %{public}s', JSON.stringify(error))
+        }
+      })
+    }
   }
 
   /** 查询当前网络状态。查询失败时 known=false，绝不返回伪造的在线状态。 */

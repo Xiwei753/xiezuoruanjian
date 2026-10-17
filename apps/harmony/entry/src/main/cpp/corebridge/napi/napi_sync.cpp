@@ -16,7 +16,26 @@ struct SyncAsyncData {
     napi_async_work work;
     napi_deferred deferred;
     char* result_json;  // writer_core_* 返回的 JSON C string，在工作线程中赋值
+    // 带参操作（loadSyncConflictPreview / resolveSyncConflict）在 JS 线程复制出来的
+    // 字符串参数；无参操作恒为 nullptr。所有权：SyncCompleteCb 或提交失败路径
+    // 统一 delete[]（delete[] nullptr 是 no-op）。
+    char* arg_target_kind;
+    char* arg_project_id;
+    char* arg_path;
+    char* arg_decision;
 };
+
+// SyncAsyncArgsFree: 释放带参异步操作持有的字符串参数，避免创建/排队失败路径泄漏。
+static void SyncAsyncArgsFree(SyncAsyncData* asyncData) {
+    delete[] asyncData->arg_target_kind;
+    delete[] asyncData->arg_project_id;
+    delete[] asyncData->arg_path;
+    delete[] asyncData->arg_decision;
+    asyncData->arg_target_kind = nullptr;
+    asyncData->arg_project_id = nullptr;
+    asyncData->arg_path = nullptr;
+    asyncData->arg_decision = nullptr;
+}
 
 // SyncCompleteCb: 通用 complete callback — 把 result_json 包装为 NAPI string，
 //   通过 napi_resolve_deferred 返回；如果 result_json 为 null，resolve 一个标准
@@ -52,6 +71,8 @@ static void SyncCompleteCb(napi_env env, napi_status status, void* data) {
     if (asyncData->result_json != nullptr) {
         writer_core_free_string(asyncData->result_json);
     }
+    // 释放带参操作复制出来的字符串参数（无参操作为 nullptr，delete[] 是 no-op）。
+    SyncAsyncArgsFree(asyncData);
     napi_delete_async_work(env, asyncData->work);
     delete asyncData;
 }
@@ -269,6 +290,147 @@ static napi_value NativeSaveSyncSecrets(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// ── 全量同步状态 / 冲突查询与解决（Issue #925 / #926） ──
+// 这些操作会读写 full_state.local.json / conflicts.json 并可能触发磁盘 I/O，
+// 与 NativeSyncDryRun / NativePerformSync 一样走 async work + deferred，
+// 在工作线程执行，不阻塞 ArkTS 主线程。
+
+// SyncAsyncCopyStringArg: 把第 index 个 JS 字符串参数复制为堆 C 字符串（调用方 delete[]）。
+// 参数缺失、不是字符串或是 null 时返回 nullptr —— 必填参数由 Rust FFI 返回
+// INVALID_ARGUMENT，可选参数（project_id）按 None 处理。
+static char* SyncAsyncCopyStringArg(napi_env env, const napi_value* args, size_t argc, size_t index) {
+    if (index >= argc) {
+        return nullptr;
+    }
+    size_t len = 0;
+    if (napi_get_value_string_utf8(env, args[index], nullptr, 0, &len) != napi_ok) {
+        return nullptr;
+    }
+    char* buf = new char[len + 1];
+    if (napi_get_value_string_utf8(env, args[index], buf, len + 1, &len) != napi_ok) {
+        delete[] buf;
+        return nullptr;
+    }
+    return buf;
+}
+
+// SyncAsyncSubmit: 创建 promise + async work 并排队，完成后走 SyncCompleteCb。
+// asyncData 及其字符串参数的所有权转交给本函数：创建/排队失败时 resolve 标准
+// 错误信封并释放 asyncData（与现有 NativePerformSync 的失败语义一致）。
+static napi_value SyncAsyncSubmit(napi_env env, const char* workName,
+                                  napi_async_execute_callback execute, SyncAsyncData* asyncData) {
+    napi_deferred deferred;
+    napi_value promise;
+    napi_create_promise(env, &deferred, &promise);
+
+    asyncData->deferred = deferred;
+    asyncData->result_json = nullptr;
+
+    napi_value name;
+    napi_create_string_utf8(env, workName, NAPI_AUTO_LENGTH, &name);
+
+    napi_status asyncStatus = napi_create_async_work(env, nullptr, name, execute,
+        SyncCompleteCb, asyncData, &asyncData->work);
+    if (asyncStatus != napi_ok) {
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_CREATE_FAILED\",\"userMessage\":\"Failed to create async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
+        SyncAsyncArgsFree(asyncData);
+        delete asyncData;
+        return promise;
+    }
+
+    napi_status queueStatus = napi_queue_async_work(env, asyncData->work);
+    if (queueStatus != napi_ok) {
+        napi_value result;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"ASYNC_QUEUE_FAILED\",\"userMessage\":\"Failed to queue async work\"}", NAPI_AUTO_LENGTH, &result);
+        napi_resolve_deferred(env, deferred, result);
+        napi_delete_async_work(env, asyncData->work);
+        SyncAsyncArgsFree(asyncData);
+        delete asyncData;
+        return promise;
+    }
+
+    return promise;
+}
+
+// LoadFullSyncStateExecuteCb: 工作线程上执行 writer_core_load_full_sync_state()
+static void LoadFullSyncStateExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_load_full_sync_state();
+}
+
+// ListAllSyncConflictsExecuteCb: 工作线程上执行 writer_core_list_all_sync_conflicts()
+static void ListAllSyncConflictsExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_list_all_sync_conflicts();
+}
+
+// LoadSyncConflictPreviewExecuteCb: 工作线程上执行 writer_core_load_sync_conflict_preview()
+static void LoadSyncConflictPreviewExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_load_sync_conflict_preview(
+        asyncData->arg_target_kind, asyncData->arg_project_id, asyncData->arg_path);
+}
+
+// ResolveSyncConflictExecuteCb: 工作线程上执行 writer_core_resolve_sync_conflict()
+static void ResolveSyncConflictExecuteCb(napi_env env, void* data) {
+    SyncAsyncData* asyncData = static_cast<SyncAsyncData*>(data);
+    asyncData->result_json = writer_core_resolve_sync_conflict(
+        asyncData->arg_target_kind, asyncData->arg_project_id, asyncData->arg_path,
+        asyncData->arg_decision);
+}
+
+static napi_value NativeLoadFullSyncState(napi_env env, napi_callback_info info) {
+    (void)info;
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_target_kind = nullptr;
+    asyncData->arg_project_id = nullptr;
+    asyncData->arg_path = nullptr;
+    asyncData->arg_decision = nullptr;
+    return SyncAsyncSubmit(env, "NativeLoadFullSyncState", LoadFullSyncStateExecuteCb, asyncData);
+}
+
+static napi_value NativeListAllSyncConflicts(napi_env env, napi_callback_info info) {
+    (void)info;
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_target_kind = nullptr;
+    asyncData->arg_project_id = nullptr;
+    asyncData->arg_path = nullptr;
+    asyncData->arg_decision = nullptr;
+    return SyncAsyncSubmit(env, "NativeListAllSyncConflicts", ListAllSyncConflictsExecuteCb, asyncData);
+}
+
+// NativeLoadSyncConflictPreview(targetKind, projectId, path)
+//   projectId 允许传 null / 缺省（App target 的冲突不属于任何作品）。
+static napi_value NativeLoadSyncConflictPreview(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_target_kind = SyncAsyncCopyStringArg(env, args, argc, 0);
+    asyncData->arg_project_id = SyncAsyncCopyStringArg(env, args, argc, 1);
+    asyncData->arg_path = SyncAsyncCopyStringArg(env, args, argc, 2);
+    asyncData->arg_decision = nullptr;
+    return SyncAsyncSubmit(env, "NativeLoadSyncConflictPreview", LoadSyncConflictPreviewExecuteCb, asyncData);
+}
+
+// NativeResolveSyncConflict(targetKind, projectId, path, decision)
+//   decision 为 "keep_local" / "take_remote" / "mark_merged"，由 Rust FFI 校验。
+static napi_value NativeResolveSyncConflict(napi_env env, napi_callback_info info) {
+    size_t argc = 4;
+    napi_value args[4];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    SyncAsyncData* asyncData = new SyncAsyncData();
+    asyncData->arg_target_kind = SyncAsyncCopyStringArg(env, args, argc, 0);
+    asyncData->arg_project_id = SyncAsyncCopyStringArg(env, args, argc, 1);
+    asyncData->arg_path = SyncAsyncCopyStringArg(env, args, argc, 2);
+    asyncData->arg_decision = SyncAsyncCopyStringArg(env, args, argc, 3);
+    return SyncAsyncSubmit(env, "NativeResolveSyncConflict", ResolveSyncConflictExecuteCb, asyncData);
+}
+
 // ── Sync property descriptors ──
 
 napi_property_descriptor* getSyncDescriptors(size_t* count) {
@@ -282,6 +444,10 @@ napi_property_descriptor* getSyncDescriptors(size_t* count) {
         {"nativePerformSync", nullptr, NativePerformSync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeLoadAppSyncState", nullptr, NativeLoadAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeSaveAppSyncState", nullptr, NativeSaveAppSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeLoadFullSyncState", nullptr, NativeLoadFullSyncState, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeListAllSyncConflicts", nullptr, NativeListAllSyncConflicts, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeLoadSyncConflictPreview", nullptr, NativeLoadSyncConflictPreview, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeResolveSyncConflict", nullptr, NativeResolveSyncConflict, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     *count = sizeof(desc) / sizeof(desc[0]);
     return desc;

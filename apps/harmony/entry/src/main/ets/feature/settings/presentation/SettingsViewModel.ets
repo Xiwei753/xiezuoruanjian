@@ -22,10 +22,14 @@ import { NativeDiagnosticsBridge } from '../../../corebridge/native/NativeDiagno
 import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 import { SyncOperationController, SyncOutcome } from './SyncOperationController'
 import { SyncMessagePayload } from './SyncMessagePayload'
+import { HarmonyAutoSyncScheduler } from './HarmonyAutoSyncScheduler'
 import { getDeviceInfoSnapshot } from '../../../platform/device/DeviceInfoSnapshot'
 
 const TAG = 'SettingsViewModel'
 const DOMAIN = 0x0000
+
+// Issue #924：Token 输入的落盘防抖窗口——停笔这么久后合并为一次有序持久化。
+const SYNC_TOKEN_SAVE_DEBOUNCE_MS = 500
 
 // 设置分类标识 — 供折叠状态管理使用。
 export type SettingsSectionId =
@@ -132,6 +136,20 @@ export class SettingsViewModel {
   private lastSyncedDiagnosticsEnabled: boolean = false
   private lastSyncedDiagnosticsVerbose: boolean = false
 
+  // ── 同步配置有序串行保存（Issue #925） ──
+  // updateSyncConfig / updateSyncRemoteUrl 只更新内存并请求保存；请求进单飞队列，
+  // 保存期间的新请求合并为一次后续保存，最终落盘的一定是最后一次提交的配置；
+  // 只有 Core 确认保存成功的配置才交给 HarmonyAutoSyncScheduler。
+  private syncConfigSaveQueued: boolean = false
+  private syncConfigSaveRunning: Promise<void> | null = null
+
+  // ── Token 落盘合并（Issue #924） ──
+  // TextInput.onChange 逐字触发 updateSyncToken：只更新内存并重置防抖计时器；
+  // 输入停顿后由一次串行保存落盘，不再逐字同步 NAPI I/O。
+  private syncTokenSaveTimerId: number = -1
+  private syncSecretsSaveQueued: boolean = false
+  private syncSecretsSaveRunning: Promise<void> | null = null
+
   // ── 折叠展开状态管理（问题4：通过 AppStorageV2 持久化） ──
 
   toggleSection(section: SettingsSectionId): void {
@@ -199,6 +217,10 @@ export class SettingsViewModel {
         if (syncConfigResult.data.providerConfig) {
           this.syncRemoteUrl = syncConfigResult.data.providerConfig.remote_url
         }
+        // Issue #925：把 Core 已提交的配置交给进程唯一自动同步调度器。
+        // reconfigure 只记录配置、启停前台唤醒 timer；是否真正同步由 runIfDue 决定，
+        // 打开设置页本身不会额外产生一笔同步。
+        HarmonyAutoSyncScheduler.getInstance().reconfigure(syncConfigResult.data)
       }
 
       // 加载同步密钥，回填 token
@@ -284,6 +306,10 @@ export class SettingsViewModel {
     this.syncMessage = ''
 
     try {
+      // Issue #924：若 Token 还在防抖等待/队列中，先落盘再同步，避免用旧凭据发起同步。
+      if (this.isSyncSecretsSavePending()) {
+        await this.saveSyncSecrets()
+      }
       const controller = SyncOperationController.getInstance()
       const outcome = await controller.performSync()
       if (outcome.phase === 'success') {
@@ -305,6 +331,8 @@ export class SettingsViewModel {
           errorCode: outcome.errorCode,
           errorCategory: outcome.errorCategory,
           rawError: outcome.rawError,
+          // Issue #926：冲突终态带到设置页，入口显示"查看冲突（N 处）"。
+          totalConflicts: outcome.totalConflicts,
           overallStatus: outcome.overallStatus
         }
         this.syncMessage = JSON.stringify(payload)
@@ -384,8 +412,10 @@ export class SettingsViewModel {
   // ── 同步配置更新与保存 ──
 
   /**
-   * 更新 syncConfig 并立即保存到 Core。
+   * 更新 syncConfig 并排队保存到 Core（Issue #925：有序串行保存，保存期间合并重复变更）。
    * 保证 activeProvider='github_api'，providerConfig.type='github'，transport='https_token'。
+   * 只有真正落盘成功的配置才会 reconfigure 自动同步调度器；不 await（UI 回调不阻塞），
+   * 保存结果由队列内部感知。
    */
   updateSyncConfig(config: SyncConfig): void {
     this.syncConfig = config
@@ -426,28 +456,74 @@ export class SettingsViewModel {
   }
 
   /**
-   * 更新 Token，保存到 SyncSecrets（不放进 SyncConfig）。
+   * 更新 Token（仅更新内存状态）。
+   * Issue #924：不再逐字同步落盘；由防抖合并 + 串行队列保证输入完成后落盘一次、
+   * 最后一次输入必达。需要立即落盘（onSubmit/onBlur）时调用 commitSyncToken()。
    */
   updateSyncToken(value: string): void {
     this.syncToken = value
-    this.saveSyncSecrets()
+    this.scheduleSyncSecretsSave()
   }
 
   /**
-   * 保存同步配置到 Core。
+   * Issue #924：Token 输入完成/提交入口。
+   * 取消尚未触发的防抖等待，立即把当前 Token 并入串行队列落盘；
+   * 供 UI 在 onSubmit/onBlur 时调用（未接线时由防抖路径兜底）。
+   */
+  async commitSyncToken(): Promise<void> {
+    await this.saveSyncSecrets()
+  }
+
+  /**
+   * 保存同步配置到 Core —— 单飞串行队列入口（Issue #925）。
+   * 保存进行中再次调用：合并为"完成后保存最新 this.syncConfig"；
+   * await 本方法的调用方在队列（含本次并入的更新）排空后返回。
+   * 保存成功才 reconfigure 自动同步调度器；失败保持现有语义（saveMessage 带 errorCode）。
    */
   async saveSyncConfig(): Promise<void> {
     if (!this.syncConfig) {
       return
     }
+    this.syncConfigSaveQueued = true
+    if (this.syncConfigSaveRunning === null) {
+      this.syncConfigSaveRunning = this.drainSyncConfigSaves()
+    }
+    await this.syncConfigSaveRunning
+  }
+
+  /** 队列排空循环：每轮取最新 this.syncConfig 保存；期间的新请求只置标记，合并进下一轮。 */
+  private async drainSyncConfigSaves(): Promise<void> {
     try {
-      const result = await this.bridge.saveSyncConfig(this.syncConfig)
+      while (this.syncConfigSaveQueued) {
+        this.syncConfigSaveQueued = false
+        const config: SyncConfig | null = this.syncConfig
+        if (config === null) {
+          continue
+        }
+        const persisted: boolean = await this.persistSyncConfig(config)
+        if (persisted) {
+          // 只有 Core 真正落盘的配置才更新调度器；未提交的 UI 编辑不触发自动同步。
+          HarmonyAutoSyncScheduler.getInstance().reconfigure(config)
+        }
+      }
+    } finally {
+      this.syncConfigSaveRunning = null
+    }
+  }
+
+  /** 实际保存一份配置；返回是否已真正持久化。 */
+  private async persistSyncConfig(config: SyncConfig): Promise<boolean> {
+    try {
+      const result = await this.bridge.saveSyncConfig(config)
       if (!result.success) {
         this.saveMessage = `error:${result.errorCode || 'unknown'}`
+        return false
       }
+      return true
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save sync config: ${err}`)
       this.saveMessage = 'error:save_failed'
+      return false
     }
   }
 
@@ -470,23 +546,75 @@ export class SettingsViewModel {
   }
 
   /**
-   * 构造 SyncSecrets 对象并保存到 Core。
+   * 保存同步密钥（Token）—— 单飞串行队列入口（Issue #924）。
+   * 取消防抖等待，把最新 Token 并入队列：多次变更合并、串行执行、最后一次必达。
+   * 只有 Core 返回 success=true 才报告"已保存"；失败立即写结构化 errorCode
+   * （saveMessage），不会被之后同步失败的 syncMessage 掩盖。
    */
   async saveSyncSecrets(): Promise<void> {
+    this.clearSyncTokenSaveTimer()
+    this.syncSecretsSaveQueued = true
+    if (this.syncSecretsSaveRunning === null) {
+      this.syncSecretsSaveRunning = this.drainSyncSecretsSaves()
+    }
+    await this.syncSecretsSaveRunning
+  }
+
+  /** 防抖：每次输入变更重置计时器，停笔后合并触发一次落盘。 */
+  private scheduleSyncSecretsSave(): void {
+    this.clearSyncTokenSaveTimer()
+    this.syncTokenSaveTimerId = setTimeout(() => {
+      this.syncTokenSaveTimerId = -1
+      this.saveSyncSecrets()
+    }, SYNC_TOKEN_SAVE_DEBOUNCE_MS)
+  }
+
+  private clearSyncTokenSaveTimer(): void {
+    if (this.syncTokenSaveTimerId !== -1) {
+      clearTimeout(this.syncTokenSaveTimerId)
+      this.syncTokenSaveTimerId = -1
+    }
+  }
+
+  /** 是否有尚未交给 Core 保存的 Token 变更（防抖等待中或已排队）。 */
+  private isSyncSecretsSavePending(): boolean {
+    return this.syncTokenSaveTimerId !== -1 || this.syncSecretsSaveQueued
+  }
+
+  /** 队列排空循环：每轮取最新 this.syncToken 保存；期间的新变更合并进下一轮。 */
+  private async drainSyncSecretsSaves(): Promise<void> {
+    try {
+      while (this.syncSecretsSaveQueued) {
+        this.syncSecretsSaveQueued = false
+        await this.persistSyncSecrets(this.syncToken)
+      }
+    } finally {
+      this.syncSecretsSaveRunning = null
+    }
+  }
+
+  /** 实际保存一份 Token；成功才报告"已保存"，失败写结构化 errorCode。 */
+  private async persistSyncSecrets(token: string): Promise<boolean> {
     try {
       const secrets: SyncSecrets = {
-        providerSecrets: this.syncToken.length === 0 ? null : {
+        providerSecrets: token.length === 0 ? null : {
           type: 'github',
-          token: this.syncToken
+          token: token
         }
       }
       const result = await this.bridge.saveSyncSecrets(secrets)
-      if (!result.success) {
-        this.syncMessage = `error:${result.errorCode || 'unknown'}`
+      if (result.success) {
+        // Issue #924：只有 Core 真正落盘成功才报告"已保存"。
+        this.saveMessage = 'saved'
+        return true
       }
+      // 失败：立即显示结构化 errorCode；后续同步失败只写 syncMessage，不会掩盖这里。
+      this.saveMessage = `error:${result.errorCode || 'unknown'}`
+      return false
     } catch (err) {
       hilog.error(DOMAIN, TAG, `Failed to save sync secrets: ${err}`)
-      this.syncMessage = 'error:save_failed'
+      this.saveMessage = 'error:save_failed'
+      return false
     }
   }
 

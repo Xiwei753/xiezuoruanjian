@@ -15,7 +15,7 @@
 import { LocalSettings, SyncableSettings, ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../dto/SettingsDtos'
 import { Project, ProjectSummary, Volume, ChapterMeta, ChapterContent, ChapterSaveReceipt, ProjectTree, VolumeTree, ProjectStats, WritingStats, SpeedCurve, SpeedCurvePoint, CurrentWritingSpeed } from '../dto/ProjectDtos'
 import { StarMapMeta, StarMapGraph, StarMapNode, StarMapEdge, StarMapEmbed, StarMapLink, StarMapHyperlink, StarMapPoint, StarMapNodeStyle, NodeType, EdgeKind, CreateStarmapChildEmbedResult } from '../dto/StarMapDtos'
-import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets } from '../dto/SyncDtos'
+import { SyncConfig, SyncState, SyncConflict, SyncResult, SyncDiagnosticsResult, FullSyncResult, FullSyncTargetResult, FullSyncDryRunResult, FullSyncTargetPlan, SyncPlan, FullSyncDiagnosticsResult, ProviderConfig, ProviderSecrets, SyncSecrets, FullSyncState, AllSyncConflictEntry, SyncConflictPreview } from '../dto/SyncDtos'
 import { RecentEdit, AppSummary } from '../dto/ResultEnvelope'
 
 // ─── Decode Result ───
@@ -1340,6 +1340,82 @@ export function decodeSyncState(data: Object): DecodeResult<SyncState> {
     conflicts: conflicts
   }
   return ok<SyncState>(value)
+}
+
+export function decodeFullSyncState(data: Object): DecodeResult<FullSyncState> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<FullSyncState>('FullSyncState: expected object')
+  }
+  // FullSyncStateDto 无 rename_all，线格式保持 Rust snake_case 字段名。
+  const overallStatus: string | null = reqStr(data, 'overall_status')
+  if (overallStatus === null) { return err<FullSyncState>('FullSyncState.overall_status missing or not string') }
+  const failedTargets: string[] | null = reqStrArray(data, 'failed_targets')
+  if (failedTargets === null) { return err<FullSyncState>('FullSyncState.failed_targets missing or not string[]') }
+  const lastAttemptTimeR: DecodeResult<number | null> = nullNum(data, 'last_attempt_time')
+  if (!lastAttemptTimeR.ok || lastAttemptTimeR.value === undefined) { return err<FullSyncState>(`FullSyncState.${lastAttemptTimeR.error ?? 'decode failed'}`) }
+  const lastSuccessTimeR: DecodeResult<number | null> = nullNum(data, 'last_success_time')
+  if (!lastSuccessTimeR.ok || lastSuccessTimeR.value === undefined) { return err<FullSyncState>(`FullSyncState.${lastSuccessTimeR.error ?? 'decode failed'}`) }
+  const value: FullSyncState = {
+    overall_status: overallStatus,
+    last_attempt_time: lastAttemptTimeR.value,
+    last_success_time: lastSuccessTimeR.value,
+    failed_targets: failedTargets
+  }
+  return ok<FullSyncState>(value)
+}
+
+export function decodeAllSyncConflictEntry(data: Object): DecodeResult<AllSyncConflictEntry> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<AllSyncConflictEntry>('AllSyncConflictEntry: expected object')
+  }
+  const projectId: string | null = reqStr(data, 'projectId')
+  if (projectId === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.projectId missing or not string') }
+  const projectTitle: string | null = reqStr(data, 'projectTitle')
+  if (projectTitle === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.projectTitle missing or not string') }
+  const path: string | null = reqStr(data, 'path')
+  if (path === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.path missing or not string') }
+  const kind: string | null = reqStr(data, 'kind')
+  if (kind === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.kind missing or not string') }
+  const createdAt: number | null = reqNum(data, 'createdAt')
+  if (createdAt === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.createdAt missing or not number') }
+  const targetKind: string | null = reqStr(data, 'targetKind')
+  if (targetKind === null) { return err<AllSyncConflictEntry>('AllSyncConflictEntry.targetKind missing or not string') }
+  const value: AllSyncConflictEntry = {
+    projectId: projectId,
+    projectTitle: projectTitle,
+    path: path,
+    kind: kind,
+    createdAt: createdAt,
+    targetKind: targetKind
+  }
+  return ok<AllSyncConflictEntry>(value)
+}
+
+export function decodeSyncConflictPreview(data: Object): DecodeResult<SyncConflictPreview> {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return err<SyncConflictPreview>('SyncConflictPreview: expected object')
+  }
+  const path: string | null = reqStr(data, 'path')
+  if (path === null) { return err<SyncConflictPreview>('SyncConflictPreview.path missing or not string') }
+  const kind: string | null = reqStr(data, 'kind')
+  if (kind === null) { return err<SyncConflictPreview>('SyncConflictPreview.kind missing or not string') }
+  const createdAt: number | null = reqNum(data, 'createdAt')
+  if (createdAt === null) { return err<SyncConflictPreview>('SyncConflictPreview.createdAt missing or not number') }
+  const localContent: string | null = reqStr(data, 'localContent')
+  if (localContent === null) { return err<SyncConflictPreview>('SyncConflictPreview.localContent missing or not string') }
+  const remoteContentR: DecodeResult<string | null> = nullStr(data, 'remoteContent')
+  if (!remoteContentR.ok || remoteContentR.value === undefined) { return err<SyncConflictPreview>(`SyncConflictPreview.${remoteContentR.error ?? 'decode failed'}`) }
+  const remoteDeleted: boolean | null = reqBool(data, 'remoteDeleted')
+  if (remoteDeleted === null) { return err<SyncConflictPreview>('SyncConflictPreview.remoteDeleted missing or not boolean') }
+  const value: SyncConflictPreview = {
+    path: path,
+    kind: kind,
+    createdAt: createdAt,
+    localContent: localContent,
+    remoteContent: remoteContentR.value,
+    remoteDeleted: remoteDeleted
+  }
+  return ok<SyncConflictPreview>(value)
 }
 
 function decodeSyncResult(data: Object): DecodeResult<SyncResult> {
