@@ -148,12 +148,19 @@ impl super::WriterCore {
                     }
                 }
             }
+            // 旧明文凭据一次性迁移：只有安全存储写入成功、读回一致且旧文件删除成功
+            // 才认为迁移完成；任一步失败保留旧文件并返回错误（Issue #924），
+            // 不再出现「set 失败仍删明文」或「悄悄写回明文」的旁路。
             let file_secrets = self.load_sync_secrets_from_file()?;
             if let Some(token) = file_secrets.github_token() {
                 if !token.is_empty() {
-                    let _ = storage.set_secret(GLOBAL_KEY, token.as_bytes());
-                    let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
-                    let _ = std::fs::remove_file(&secrets_path);
+                    let legacy_path = self.legacy_secrets_file_path(None);
+                    self.migrate_legacy_token_into_secure_storage(
+                        storage.as_ref(),
+                        GLOBAL_KEY,
+                        &legacy_path,
+                        token.as_str(),
+                    )?;
                 }
             }
             return Ok(file_secrets);
@@ -178,11 +185,15 @@ impl super::WriterCore {
                     .delete_secret(&key)
                     .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
             }
+            // 安全存储已是事实来源：清除可能残留的旧明文 generation 文件，
+            // 避免后续读取时把旧 token 复活。
+            let legacy_path = self.legacy_secrets_file_path(Some(generation));
+            if legacy_path.exists() {
+                std::fs::remove_file(&legacy_path)?;
+            }
             return Ok(());
         }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
+        let secrets_path = self.legacy_secrets_file_path(Some(generation));
         write_secrets_atomic(
             &secrets_path,
             secrets,
@@ -203,11 +214,35 @@ impl super::WriterCore {
                 .flatten()
                 .and_then(|bytes| String::from_utf8(bytes).ok())
                 .filter(|t| !t.is_empty());
-            return Ok(token.map(crate::sync::SyncSecrets::from_github_token));
+            if token.is_some() {
+                return Ok(token.map(crate::sync::SyncSecrets::from_github_token));
+            }
+            // generation 旧明文凭据一次性迁移（成功时序，Issue #924）：
+            // 写入成功 → 读回一致 → 删除旧文件；任一步失败保留文件并返回错误。
+            let secrets_path = self.legacy_secrets_file_path(Some(generation));
+            if !secrets_path.exists() {
+                return Ok(None);
+            }
+            let content = std::fs::read_to_string(&secrets_path)?;
+            let secrets: crate::sync::SyncSecrets = serde_json::from_str(&content)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            match secrets.github_token() {
+                Some(token) if !token.is_empty() => {
+                    self.migrate_legacy_token_into_secure_storage(
+                        storage.as_ref(),
+                        &key,
+                        &secrets_path,
+                        token.as_str(),
+                    )?;
+                }
+                _ => {
+                    // 无 token 的旧 generation 文件：直接删除，避免后续重复读取。
+                    std::fs::remove_file(&secrets_path)?;
+                }
+            }
+            return Ok(Some(secrets));
         }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
+        let secrets_path = self.legacy_secrets_file_path(Some(generation));
         if !secrets_path.exists() {
             return Ok(None);
         }
@@ -224,11 +259,14 @@ impl super::WriterCore {
             storage
                 .delete_secret(&key)
                 .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+            // 同时清理旧明文 generation 文件（若存在）。
+            let legacy_path = self.legacy_secrets_file_path(Some(generation));
+            if legacy_path.exists() {
+                std::fs::remove_file(&legacy_path)?;
+            }
             return Ok(());
         }
-        let secrets_path = self
-            .app_data_root
-            .join(format!("app-meta/sync/secrets_g{}.local.json", generation));
+        let secrets_path = self.legacy_secrets_file_path(Some(generation));
         if secrets_path.exists() {
             std::fs::remove_file(&secrets_path)?;
         }
@@ -274,10 +312,55 @@ impl super::WriterCore {
                     .delete_secret(GLOBAL_KEY)
                     .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
             }
+            // 安全存储已是事实来源：清除可能残留的旧明文文件，
+            // 避免后续读取时把旧 token 复活。
+            let legacy_path = self.legacy_secrets_file_path(None);
+            if legacy_path.exists() {
+                std::fs::remove_file(&legacy_path)?;
+            }
             return Ok(());
         }
-        let secrets_path = self.app_data_root.join("app-meta/sync/secrets.local.json");
+        let secrets_path = self.legacy_secrets_file_path(None);
         write_secrets_atomic(&secrets_path, secrets, "sync_secrets")
+    }
+
+    /// 旧明文凭据文件路径：`None` 为全局凭据，`Some(g)` 为 generation 凭据。
+    fn legacy_secrets_file_path(&self, generation: Option<u64>) -> std::path::PathBuf {
+        match generation {
+            Some(generation) => self
+                .app_data_root
+                .join(format!("app-meta/sync/secrets_g{}.local.json", generation)),
+            None => self.app_data_root.join("app-meta/sync/secrets.local.json"),
+        }
+    }
+
+    /// 把旧明文 token 迁入安全存储（成功时序，Issue #924）：
+    /// `set_secret` 成功 → `get_secret` 读回一致 → 删除旧明文文件。
+    /// 任一步失败保留旧文件并返回错误，不把明文当作已迁移。
+    fn migrate_legacy_token_into_secure_storage(
+        &self,
+        storage: &dyn writer_platform_api::SecureStorage,
+        secure_key: &str,
+        legacy_path: &std::path::Path,
+        token: &str,
+    ) -> crate::error::Result<()> {
+        storage
+            .set_secret(secure_key, token.as_bytes())
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+        let readback_matches = storage
+            .get_secret(secure_key)
+            .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?
+            .as_deref()
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .is_some_and(|value| value == token);
+        if !readback_matches {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "secure storage readback mismatch after migrating {}",
+                legacy_path.display()
+            ))));
+        }
+        std::fs::remove_file(legacy_path)?;
+        Ok(())
     }
 }
 

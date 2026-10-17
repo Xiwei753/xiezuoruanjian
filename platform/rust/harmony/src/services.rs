@@ -1,9 +1,11 @@
 //! HarmonyOS 平台服务组装。
 //!
-//! 聚合平台初始化、配置存储、网络状态与同步传输工厂，
+//! 聚合平台初始化、配置存储、安全存储、网络状态与同步传输工厂，
 //! 构造 `PlatformServices` 注入 Core。
 
 use writer_platform_api::{FileConfigStore, NetworkState, PlatformInit, PlatformServices};
+
+use super::secure_storage::HarmonyHuksSecureStorage;
 
 #[cfg(feature = "github-api")]
 use writer_platform_api::{SyncTransport, TransportError};
@@ -16,6 +18,8 @@ use super::transport::ReqwestSyncTransport;
 /// 包含：
 /// - `PlatformInit`：Harmony 平台初始化上下文
 /// - `ConfigStore`：基于 `FileConfigStore` 的配置存储
+/// - `SecureStorage`：基于系统 HUKS 的密文存储（Issue #924）；
+///   初始化失败即返回 `Err`，由调用方以稳定错误码告知 UI，不回落明文文件
 /// - `NetworkState`：网络连接状态；`None` 表示平台查询失败/未知，不注入伪造的在线状态
 /// - `SyncTransportFactory`：基于 `ReqwestSyncTransport` 的同步传输工厂（仅 `github-api` feature）
 ///
@@ -26,11 +30,16 @@ pub fn create_platform_services(
     platform_init: PlatformInit,
     is_connected: Option<bool>,
     is_metered: Option<bool>,
-) -> PlatformServices {
+) -> Result<PlatformServices, String> {
     let config_dir = platform_init.app_data_dir.join("config");
 
     let config_store: Option<Box<dyn writer_platform_api::ConfigStore>> =
         Some(Box::new(FileConfigStore::new(config_dir)));
+
+    // HUKS 安全存储：密文信封放在同一个 app 私有数据根下（不存明文、不存密钥）。
+    let secure_storage: Option<Box<dyn writer_platform_api::SecureStorage>> = Some(Box::new(
+        HarmonyHuksSecureStorage::new(&platform_init.app_data_dir)?,
+    ));
 
     let network_state = is_connected.map(|connected| NetworkState {
         is_connected: connected,
@@ -57,11 +66,11 @@ pub fn create_platform_services(
     #[cfg(not(feature = "github-api"))]
     let sync_transport_factory: Option<writer_platform_api::SyncTransportFactory> = None;
 
-    PlatformServices {
+    Ok(PlatformServices {
         init: platform_init,
         config_store,
-        secure_storage: None,
+        secure_storage,
         network_state,
         sync_transport_factory,
-    }
+    })
 }

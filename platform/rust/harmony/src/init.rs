@@ -209,6 +209,7 @@ fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 /// - `-2` 任一参数含无效 UTF-8
 /// - `-4` bootstrap 失败
 /// - `-5` `app_data_root` 为空串（非法路径）
+/// - `-6` 安全存储（HUKS）初始化失败（不回落明文凭据路径）
 ///
 /// ## Safety
 ///
@@ -265,7 +266,16 @@ pub unsafe extern "C" fn writer_core_init_harmony(
     let connected = tri_state(is_connected);
     let metered = tri_state(is_metered);
 
-    let services = super::services::create_platform_services(platform_init, connected, metered);
+    // 安全存储（HUKS）初始化失败时以稳定错误码 -6 结束，不在 UI 与同步凭据上
+    // 悄悄回退明文文件路径（Issue #924）。
+    let services =
+        match super::services::create_platform_services(platform_init, connected, metered) {
+            Ok(services) => services,
+            Err(error) => {
+                log::error!("writer_core_init_harmony: secure storage init failed: {error}");
+                return -6;
+            }
+        };
 
     // SAFETY: app_data_root_str 是有效的 NUL-terminated UTF-8 C string 的 Rust 拷贝。
     let path_c = std::ffi::CString::new(app_data_root_str).unwrap_or_default();

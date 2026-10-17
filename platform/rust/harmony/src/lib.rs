@@ -28,11 +28,13 @@ pub use writer_core::ffi::{
 
 mod diagnostics;
 mod init;
+mod secure_storage;
 mod services;
 mod transport;
 
 pub use diagnostics::*;
 pub use init::*;
+pub use secure_storage::HarmonyHuksSecureStorage;
 pub use services::*;
 #[cfg(feature = "github-api")]
 pub use transport::*;
