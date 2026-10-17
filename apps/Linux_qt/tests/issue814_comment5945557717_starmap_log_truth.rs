@@ -18,6 +18,15 @@
 //! 都搬到了递归层容器 `StarMapSceneContent.qml`（Canvas 只剩全局相机与
 //! 全局输入）。Canvas 侧的 `findEmbedContentAt` 转发也换成根递归命中入口
 //! `hitTargetAtScreen` → `hitTargetAtScene`。
+//!
+//! #929 更新：独立画布协议删除递归命中与递归层。活动画布
+//! `StarMapActiveScene.qml` 是唯一实时场景与唯一命中入口
+//! （`hitTargetAtWorld`），`findEmbedContentAt` 命中的子图内容区仍按 embed
+//! 入口返回（带 instanceId），不再冒充 empty；Canvas 的 `hitTargetAtScreen`
+//! 只负责屏幕→world 后转发。`move_end.commitSuccess` / `connect_end.success`
+//! 的真话守卫也落在 ActiveScene：move 接 commitNodeMove/commitEmbedMove 返回值；
+//! connect 先让 Core 规划宿主（宿主必须是当前活动画布），再用
+//! commitEdgeWithPaths 的真实返回值，不再"找到目标就写 true"。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -28,6 +37,7 @@ use source_guard::{function_window, read_src};
 
 const CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -53,49 +63,58 @@ fn controller_has_find_embed_content_at() {
 }
 
 #[test]
-fn content_recursive_hit_uses_find_embed_content_at() {
-    let src = read_src(CONTENT);
-    let window = function_window(&src, "function hitTargetAtScene(", 3000);
+fn active_scene_hit_uses_find_embed_content_at() {
+    // #929 取代 #822/#814 的递归命中：不再递归进子场景；活动画布自己的
+    // hitTargetAtWorld 里，圆内 content 区也要按 embed 入口命中（返回
+    // instanceId），不落成 empty。
+    let src = read_src(ACTIVE_SCENE);
+    let window = function_window(&src, "function hitTargetAtWorld(", 2200);
     assert!(
-        window.contains("graphController.findEmbedContentAt("),
-        "Content 的递归命中入口必须调用本层 graphController.findEmbedContentAt，实际窗口:\n{window}"
+        window.contains("findEmbedChromeAt(wx, wy)")
+            && window.contains("findEmbedContentAt(wx, wy)"),
+        "活动画布命中必须区分 embed chrome 与 content 区，实际窗口:\n{window}"
+    );
+    assert!(
+        window.contains("kind: \"embed\", id: inside.instanceId"),
+        "content 区命中必须仍然是 embed 入口（带 instanceId），不能落成 empty，实际窗口:\n{window}"
     );
 }
 
 #[test]
 fn canvas_pointer_press_distinguishes_hit_kinds() {
-    // Issue #817 评论 5949494799: 命中种类统一由递归命中入口产出
+    // Issue #817 评论 5949494799: 命中种类统一由唯一命中入口产出
     // （node / embed / edge / empty），logPointerPress 只透传 hit.kind。
     // Issue #832 后子星图不再产生 childContent：shell/preview 整体按 embed 命中。
+    // #929：唯一命中入口是活动画布 StarMapActiveScene.hitTargetAtWorld；
+    // Canvas.hitTargetAtScreen 只负责屏幕→world 后转发。
     let canvas = read_src(CANVAS);
     let screen_window = function_window(&canvas, "function hitTargetAtScreen(", 400);
     assert!(
-        screen_window
-            .contains("rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))"),
-        "hitTargetAtScreen 必须转发到根 Content 的递归命中入口，实际窗口:\n{screen_window}"
+        screen_window.contains("scene.hitTargetAtWorld(screenToWorldX(sx), screenToWorldY(sy))"),
+        "hitTargetAtScreen 必须转发到活动画布的唯一命中入口，实际窗口:\n{screen_window}"
     );
 
-    let content = read_src(CONTENT);
-    let hit_window = function_window(&content, "function hitTargetAtScene(", 3600);
+    let scene = read_src(ACTIVE_SCENE);
+    let hit_window = function_window(&scene, "function hitTargetAtWorld(", 2200);
     for kind in ["\"node\"", "\"embed\"", "\"edge\"", "\"empty\""] {
         assert!(
             hit_window.contains(&format!("kind: {kind}")),
-            "hitTargetAtScene 必须能返回 kind: {kind}，实际窗口:\n{hit_window}"
+            "hitTargetAtWorld 必须能返回 kind: {kind}，实际窗口:\n{hit_window}"
         );
     }
     assert!(
         !hit_window.contains("kind: \"childContent\""),
-        "不得再返回 childContent：低 LOD 子图整体按父层 embed 命中，实际窗口:\n{hit_window}"
+        "不得再返回 childContent：子图整体按 embed 入口命中，实际窗口:\n{hit_window}"
     );
     assert!(
-        hit_window.contains("owner: content"),
-        "hitTargetAtScene 必须返回真正的命中层 owner，菜单/连线/选中都靠它定位，实际窗口:\n{hit_window}"
+        hit_window.contains("owner: scene"),
+        "hitTargetAtWorld 必须返回真正的命中层 owner，菜单/连线/选中都靠它定位，实际窗口:\n{hit_window}"
     );
 
     let window = function_window(&canvas, "function logPointerPress(", 900);
     assert!(
         window.contains("hitTargetAtScreen(point.position.x, point.position.y)"),
-        "logPointerPress 必须走统一递归命中入口，实际窗口:\n{window}"
+        "logPointerPress 必须走统一命中入口，实际窗口:\n{window}"
     );
     assert!(
         window.contains("logInteraction(\"pointer_press\", kind,"),
@@ -122,17 +141,23 @@ fn canvas_move_end_does_not_hardcode_commit_success_true() {
 }
 
 #[test]
-fn content_move_end_uses_commit_return_values() {
-    let src = read_src(CONTENT);
+fn active_scene_move_end_uses_commit_return_values() {
+    // #929：move_end 的手势收尾落在活动画布 StarMapActiveScene。
+    let src = read_src(ACTIVE_SCENE);
     let window = function_window(&src, "function finishMove(", 1400);
     assert!(
         window.contains("committed = graphController.commitNodeMove(")
             && window.contains("committed = graphController.commitEmbedMove("),
-        "命中层的 finishMove 必须接 commitNodeMove/commitEmbedMove 返回值到 committed，实际窗口:\n{window}"
+        "活动画布的 finishMove 必须接 commitNodeMove/commitEmbedMove 返回值到 committed，实际窗口:\n{window}"
     );
     assert!(
         window.contains("\"commitSuccess\": committed"),
         "move_end 日志必须写 commitNodeMove/commitEmbedMove 的真实返回值，实际窗口:\n{window}"
+    );
+    let content = read_src(CONTENT);
+    assert!(
+        !content.contains("function finishMove("),
+        "只读微缩概览不得持有可交互的 finishMove"
     );
 }
 
@@ -156,22 +181,25 @@ fn controller_create_edge_with_paths_returns_bool() {
 }
 
 #[test]
-fn content_connect_end_uses_core_host_plan_and_real_return_value() {
-    let src = read_src(CONTENT);
-    let window = function_window(&src, "function finishConnect(", 2800);
+fn active_scene_connect_end_uses_core_host_plan_and_real_return_value() {
+    // #929 取代 #822：独立画布下能在 UI 里连线的两端都在当前活动画布，
+    // 不再"按 plan.hostSegments 找宿主 Content"。connect_end 仍然必须先让
+    // Core 规划宿主（_planHostIsCurrent 校验宿主就是本画布），再用
+    // commitEdgeWithPaths 的真实返回值，不"找到目标就写 true"；from/to
+    // 保持完整 StarMapTargetPathDto，不退化成 nodeId-only。
+    let src = read_src(ACTIVE_SCENE);
+    let window = function_window(&src, "function finishConnect(", 2000);
     assert!(
-        window.contains("planCrossLayerConnection(fromPath, toPath)")
-            && window.contains("rootContent.findContentByPathSegments(plan.hostSegments)"),
-        "connect_end 必须先让 Core 规划宿主再找到宿主 Content，实际窗口:\n{window}"
+        window.contains("planCrossLayerConnection(fromPath, toPath)"),
+        "connect_end 必须先让 Core 规划宿主，实际窗口:\n{window}"
     );
     assert!(
-        window.contains("hostStarmapId = plan.hostStarmapId"),
-        "端点 starmapId 必须用 Core 返回的宿主 starmapId，实际窗口:\n{window}"
+        window.contains("_planHostIsCurrent(plan)"),
+        "连接宿主必须校验为当前活动画布，实际窗口:\n{window}"
     );
     assert!(
-        window.contains("success = host.commitEdgeWithPaths(plan.from, plan.to)"),
-        "connect_end.success 必须使用宿主 Content 的 commitEdgeWithPaths 真实返回值，\
-         实际窗口:\n{window}"
+        window.contains("success = commitEdgeWithPaths(plan.from, plan.to)"),
+        "connect_end.success 必须使用 commitEdgeWithPaths 真实返回值，实际窗口:\n{window}"
     );
     assert!(
         window.contains("\"success\": success"),
@@ -181,5 +209,10 @@ fn content_connect_end_uses_core_host_plan_and_real_return_value() {
     assert!(
         window.contains("hit.targetPath") && window.contains("var fromPath = ic.connectFromPath"),
         "connect_end 必须用完整 StarMapTargetPathDto（from 与 hit.targetPath），不退化成 nodeId-only，实际窗口:\n{window}"
+    );
+    let content = read_src(CONTENT);
+    assert!(
+        !content.contains("function finishConnect("),
+        "只读微缩概览不得持有可交互的 finishConnect"
     );
 }

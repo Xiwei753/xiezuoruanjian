@@ -1,1495 +1,315 @@
 // =============================================================================
-// StarMapSceneContent.qml — 星图单层内容容器（递归内容，不是递归视口）
+// StarMapSceneContent.qml — 子星图微缩概览（fit-to-bounds 预览投影）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：加载"一层"星图数据 + 渲染该层节点/连线/子星图，并提供递归命中测试
+// 职责：把「一张星图」的真实节点 / 边 / 子入口按 fit-to-bounds 投影成父图中
+//   圆形入口内的微缩概览。它只回答一个问题："里面大概有什么"。
 //
-// Issue #822：整棵星图只有一个全局 viewport/camera。
-//   panX / panY / zoomLevel 只存在于根 StarMapCanvas；WheelHandler / PinchHandler
-//   也只存在于根 Canvas。本文件是纯内容容器，不含任何相机属性或相机手势。
-//   子星图显示多少细节是 Deep Zoom 档位：ownerEffectiveScale = 全局相机 ×
-//   祖先 local fit，coverage = 投影尺寸 / 根视口短边，档位只决定子内容渲染
-//   完整交互还是轻量 preview；本文件不能反写全局相机，
-//   也不能产生自己可独立修改的 zoomLevel。
-//
-// 坐标约定：
-//   - 本层局部坐标 = 该层星图的 world 坐标，节点/连线都画在 worldLayer 里。
-//     每层内容做一次 local fit（worldLayer 的 x/y/scale），只改显示，不改
-//     authored position。
-//   - scene 坐标 = 根 Content 的局部坐标（整棵递归树的顶层 world 坐标）。
-//     sceneToLocal / localToScene 一律用 Qt 真实 Item 映射
-//     （worldLayer.mapFromItem/mapToItem(rootContent)）换算：contentViewport 的
-//     布局偏移、每层 local fit、祖先位置全部自动进入同一条坐标链，
-//     不再手工维护 sceneOrigin/sceneScale 矩阵。
-//   - Qt scene 坐标（QQuickWindow 坐标）只出现在 delegate 上抛的信号里，
-//     进来立刻用 mapFromItem 换算掉，不往状态机里存。
-//
-// 渲染档位（Deep Zoom，见 docs/starmap_viewport.md）：
-//   interactive — 完整节点/Embed delegate，可命中、可编辑、可继续递归
-//   preview     — 只画一张静态投影 Canvas：有形状和颜色，没有交互组件，
-//                 也不再往里递归；只回答"里面大概有什么"
-//   档位只改渲染细节，不改 authored position / world bounds / Embed 外壳几何。
-//
-// 递归命中测试：
-//   hitTargetAtScene(sceneX, sceneY) 先查本层节点 / Embed chrome；落在 Embed
-//   内容区时递归进子 Content：
-//     - 子层已经是 interactive：继续递归，直接返回子层自己的命中（包括子层空白
-//       的 kind:"empty" 和 owner=子层）；
-//     - 子层还是 shell / preview / 未加载：整个子星图按父层 kind:"embed" 命中，
-//       右键/单击/双击都作用于这个子星图入口，不再有"命中 childContent 然后
-//       什么都不做"的死区。
-//   返回真正命中的那一层（owner / scenePathKey / starmapId / kind / id / targetPath）。
-//
-// 输入仲裁（Issue #832）：
-//   本文件不再负责原始 PointerHandler 仲裁，也不再从 delegate 往上/往下找
-//   "手势主人"。唯一输入主人是根层的 StarMapInputRouter：它按命中结果调用
-//   这里的 Router API（applyMoveDelta / applyConnectDelta / finishMove /
-//   finishConnect / finishContextPending / itemCenterScene / itemSceneRect），
-//   本层只做"这一层的数据 + 递归显示 + 自己的 GraphController 操作"。
+// Issue #929：独立画布协议下，父图不再递归渲染子画布的可交互内容。
+//   - 本组件不是视口、不是画布：没有 pan/zoom/相机属性，也没有任何手势、
+//     没有节点拖拽、没有局部相机、不往里递归 Loader；
+//   - fit 只属于这份「父图的微缩概览投影」：真实子图的 authored 坐标不变，
+//     也没有 localFitScale × ancestor effectiveScale 的递归尺寸链；
+//   - 概览整体留在圆的内接安全区（约直径 66%），天然不会溢出圆外，
+//     不需要 layer.enabled / MultiEffect 圆形 FBO 遮罩 / ShaderEffectSource；
+//   - 只画和目标活动画布同一套节点几何、边与子入口圆；投影足够小时不画文字
+//     （只省文字，形状和颜色一个都不改）；
+//   - 不保存任何固定分辨率快照：父图相机变化时按当前投影重画几何。
+//     超过进入阈值后由 StarMapActiveScene 用真实矢量对象接管，本组件不会
+//     被拉伸成活动画布。
 //
 // 约束：
-//   - 不出现 panX / panY / zoomLevel / WheelHandler / PinchHandler / 背景 pan handler
-//   - 相机与全局手势状态由根 Canvas 唯一持有，通过 interactionController 共享
-//   - 不得静态引用自身或 StarMapEmbed 类型（会形成编译期环），
-//     Embed 侧必须用运行时 Qt.resolvedUrl + Loader.setSource 递归创建本组件
+//   - 纯 UI 渲染，不调 Core 写入接口，不创建子画布
+//   - 不引用 StarMapEmbed / StarMapActiveScene，避免编译期类型环
 // =============================================================================
 
 import QtQuick
-import QtQuick.Controls
-import "StarMapPathPlanner.js" as StarMapPathPlanner
+import QtQuick.Shapes
 
 Item {
-    id: content
+    id: overview
 
     required property var dt
-    required property string rootStarmapId
-    required property var pathSegments
-    // Issue #822：required 且没有默认 "root"。
-    // 根层由 Canvas 显式传 "root"，子层在创建时一次性传完整 "root/embed_xxx/..."，
-    // 绝不允许子层临时冒充根层。
-    required property string scenePathKey
-    required property var starmapBackendRef
-    required property var selectionController
-    required property var interactionController
-    // 全局相机比例：只对根层（depth 0）有意义，由根 Canvas 绑定注入。
-    // 子层不复制这个标量，有效比例沿 ownerSceneContent 链现算。
-    property real globalZoom: 1.0
-    required property int depth
 
-    // 根层由根 Canvas 指向自己，子层由父 Embed 原样传下来。
-    property var rootContent: null
-    // 菜单宿主（根 Canvas）。子层直接回调它，不需要把信号逐层冒泡。
-    property var menuHost: null
-    // 本层内容所属的父 SceneContent（根层为 null）。
-    // 子层有效比例 = 本层 local fit × ownerSceneContent.effectiveScale，
-    // 沿链现读，不复制标量：相机或祖先 fit 变化后不会拿到过期值。
-    property var ownerSceneContent: null
+    // 被概览的子星图 ID（由父 Embed 传入；空串 = 不画）。
+    property string starmapId: ""
+    property var starmapBackendRef: null
 
-    // 渲染档位（由父 Embed 的 Deep Zoom 判定传入）：interactive / preview。
-    // 根层永远是 interactive。
-    property string renderDetail: "interactive"
+    // 概览包围盒最大边 = 短边 × 该比例。内接正方形是 1/√2 ≈ 0.707，
+    // 取 0.66 留出边距，概览不贴到圆边。
+    readonly property real _safeRatio: 0.66
+    // 与 StarMapGraphController.buildModels 一致的显示尺寸（Core 只存 position）。
+    readonly property int _nodeWidth: 150
+    readonly property int _nodeHeight: 60
+    readonly property int _embedDiameter: 200
+    // 概览线宽的屏幕口径：概览是父图投影的一部分，线宽恒定在屏幕像素上。
+    readonly property real _previewStrokeWidth: 1.5
 
-    // 本层是否有节点正在内联编辑（Issue #832：Router 在编辑期间整体让位给
-    // TextInput，不再由节点自己的 Handler enabled 决定）。键由本层 pathKey 与
-    // nodeId 拼成，通过 menuHost 汇总到根 Canvas。
-    property string inlineEditingKey: ""
+    // ── 目标图数据（只读快照，不写 Core）──
+    property var graphData: null
+    property var edgeRenders: []
+    property string loadError: ""
 
-    // 根视口可见区域（scene 坐标）：根层由 Canvas 按全局相机绑定注入；
-    // 子层沿 ownerSceneContent 链读同一份，不复制。
-    property var rootViewportRect: ({ x: 0, y: 0, width: 0, height: 0 })
-    readonly property var viewportRect: ownerSceneContent
-            ? ownerSceneContent.viewportRect
-            : rootViewportRect
+    readonly property var nodes: graphData && graphData.nodes ? graphData.nodes : []
+    readonly property var embeds: graphData && graphData.embeds ? graphData.embeds : []
 
-    // 子内容可用边长（由父 Embed 传入）：父圆的内接正方形扣掉交互壳。
-    // 本层再扣自己的留白得到安全区，local fit 与移动/新建 clamp 共用这一份，
-    // 不再一边按内接正方形、一边按整个圆、一边再手写边框偏移。
-    property real contentUsableSide: 0
-    readonly property real _contentSafeSide:
-        Math.max(0, contentUsableSide - _fitPadding * 2)
-
-    // 根视口短边（屏幕像素）：coverage 的分母。根内容铺满全局视口，
-    // 根 Content 自己的宽高就是视口尺寸。
-    readonly property real viewportShortSide: {
-        var w = rootContent ? rootContent.width : width
-        var h = rootContent ? rootContent.height : height
-        return (w > 0 && h > 0) ? Math.min(w, h) : 0
-    }
-
-    // 本 Scene 的累计有效比例（屏幕口径）：根层是全局相机，
-    // 子层是 local fit × 祖先累计。Deep Zoom 的 coverage 只读这一份，
-    // 命中/渲染仍走真实 Item transform（见 sceneToLocal/localToScene）。
-    readonly property real effectiveScale: {
-        if (depth === 0)
-            return globalZoom
-        var inherited = ownerSceneContent ? ownerSceneContent.effectiveScale : 1
-        if (!(inherited > 0))
-            inherited = 1
-        return localFitScale * inherited
-    }
-
-    readonly property color _accent: dt.accent
-    readonly property color _accentSoft: dt.accentSoft
-    readonly property color _border: dt.border
-    readonly property color _error: dt.error
-    readonly property color _surfaceContainer: dt.surfaceContainer
-    readonly property color _textPrimary: dt.textPrimary
-    readonly property color _textMuted: dt.textMuted
-    readonly property int _radiusSm: dt.radiusSm
-
-    // ── 路径解析 ──
-    // 解析出的本层星图 ID 只属于这块 Content，不能写回上层。
-    property string finalStarmapId: ""
-    property string resolveError: ""
-
-    // ── 坐标换算：只认 Qt 真实 Item 映射 ──
-    // scene 坐标 = 根 Content 局部坐标；本层局部坐标 = worldLayer 里的 authored
-    // 坐标。contentViewport 的布局偏移（子内容区现在是圆的内接正方形）、每层
-    // local fit、祖先 Embed 的实际变换都在 mapFromItem/mapToItem 里自动算完，
-    // 不再手工维护矩阵，也不手抄任何偏移常量。
-    function sceneToLocal(sceneX, sceneY) {
-        return worldLayer.mapFromItem(rootContent, sceneX, sceneY)
-    }
-    function localToScene(localX, localY) {
-        return worldLayer.mapToItem(rootContent, localX, localY)
-    }
-
-    // Qt scene（窗口）坐标增量 → 本层局部坐标增量。
-    // mapFromItem 只能映射点，不能映射增量；映射两个点再相减。
-    // 这是拖动 move 路径上唯一一次 Qt scene → 本层 local 的换算。
-    function qtSceneDeltaToLocal(dx, dy) {
-        var origin = worldLayer.mapFromItem(null, 0, 0)
-        var point = worldLayer.mapFromItem(null, dx, dy)
-        return { x: point.x - origin.x, y: point.y - origin.y }
-    }
-
-    // Qt scene（窗口）坐标增量 → root-world（scene 坐标）增量。
-    // connect / contextPending 的端点存的是 scene 坐标，必须吃这一份换算：
-    // 原始像素直接加到 root-world 上会随全局缩放漂移（zoom=2 时多走一倍）。
-    // 拖动阈值仍吃原始像素，两个口径分开，不混用。
-    function qtSceneDeltaToRootScene(dx, dy) {
-        var origin = rootContent.mapFromItem(null, 0, 0)
-        var point = rootContent.mapFromItem(null, dx, dy)
-        return { x: point.x - origin.x, y: point.y - origin.y }
-    }
-
-    // ── 每层 local fit（只改显示，不改 authored position）──
-    // fit 比例由本层内容包围盒 + 本层容器（根是视口，子是 Embed 内容区）算出；
-    // 根层是相机本体，不做 fit（全局相机就是它的显示变换）。
-    // 留白与 Harmony 的 STARMAP_EMBED_FIT_PADDING_VP 同值，跨平台同一个适配口径。
-    readonly property real _fitPadding: 8
-    readonly property real _minFitScale: 0.02
-    readonly property real _maxFitScale: 4.0
-
-    // 新建节点的显示尺寸（clamp 用；与 GraphController.buildModels 的显示尺寸一致）。
-    readonly property int _newNodeWidth: 150
-    readonly property int _newNodeHeight: 60
-
-    // 边线宽的 world 单位常量：Canvas 绘制与命中阈值共用同一份。
-    readonly property real _edgeLineWorldWidth: 2
-    // 边命中阈值的屏幕口径：10 屏幕像素。
-    // 相机允许 1e-4~1e5 之后，固定 world 阈值在屏幕上会差几个数量级，
-    // 所以每次命中都用 effectiveScale 折算成本层 world 单位。
-    readonly property real _edgeHitScreenPx: 10
-
-    // 命中范围必须同时满足两条：
-    // - 缩小时至少还有 10 屏幕像素（好点中）；
-    // - 放大时至少覆盖真实可见的线宽本身（Canvas 的 lineWidth 是 world 单位，
-    //   会跟着 effectiveScale 一起放大，不能在"肉眼很粗的线里"点不中）。
-    function _edgeHitLocalThreshold() {
-        var scale = Math.max(effectiveScale, 1e-6)
-        return Math.max(_edgeHitScreenPx / scale, _edgeLineWorldWidth / 2)
-    }
-
-    // 源形状朝目标点的边界交点（本层 authored 坐标）。
-    // 与 Rust edge_render 的 line_rect_entry / line_circle_entry 是同一套语义：
-    // 普通节点取矩形边，Embed（含旧 portal 归一）取圆周。
-    // 拉线预览必须和正式边用同一语义，否则松手瞬间端点会从圆心跳到圆周。
-    function boundaryPointLocal(x, y, width, height, isEmbed, tx, ty) {
-        var cx = x + width / 2
-        var cy = y + height / 2
-        var dx = tx - cx
-        var dy = ty - cy
-        var len = Math.sqrt(dx * dx + dy * dy)
-        if (len < 1e-6 || !(width > 0) || !(height > 0))
-            return { x: cx, y: cy }
-        var ux = dx / len
-        var uy = dy / len
-        if (isEmbed) {
-            var radius = Math.min(width, height) / 2
-            return { x: cx + ux * radius, y: cy + uy * radius }
-        }
-        // 线 × 矩形：slab 裁剪取进入点（与 Rust line_rect_entry 同一算法）。
-        var txMin = -Infinity
-        var txMax = Infinity
-        if (Math.abs(ux) > 1e-6) {
-            var ax = (x - cx) / ux
-            var bx = (x + width - cx) / ux
-            txMin = Math.min(ax, bx)
-            txMax = Math.max(ax, bx)
-        }
-        var tyMin = -Infinity
-        var tyMax = Infinity
-        if (Math.abs(uy) > 1e-6) {
-            var ay = (y - cy) / uy
-            var by = (y + height - cy) / uy
-            tyMin = Math.min(ay, by)
-            tyMax = Math.max(ay, by)
-        }
-        var tMin = Math.max(txMin, tyMin)
-        var tMax = Math.min(txMax, tyMax)
-        if (tMax < Math.max(tMin, 0))
-            return { x: cx, y: cy }
-        var t = tMin >= 0 ? tMin : tMax
-        return { x: cx + t * ux, y: cy + t * uy }
-    }
-
-    // 端点路径的宿主规划统一走 Core：两条相对同一根星图的绝对路径交给
-    // starmapBackendRef.plan_cross_layer_connection，返回宿主星图 ID、宿主 Scene
-    // 路径和两条已绑定宿主 starmapId 的端点路径。QML 不再自己算最近公共祖先。
-    // 自环 / 不可解析 / 不同根星图都由 Core 拒绝，这里统一返回 null。
-    function planCrossLayerConnection(fromPath, toPath) {
-        if (!starmapBackendRef || !fromPath || !toPath)
-            return null
-        var res = starmapBackendRef.plan_cross_layer_connection(
-                    JSON.stringify(fromPath), JSON.stringify(toPath))
-        if (!res || res.success !== true || !res.data)
-            return null
-        return res.data
-    }
-
-    // 候选边预览：宿主 Content 把 Core 规划结果交给平台 edge renderer。
-    // Content 只负责把规划路径交给宿主本层的 graphController；边界求交、
-    // 双向偏移、旧 portal 归一、深路径投影全部由 Rust 正式边几何出一份真相。
-    function prospectiveEdgeRenderForPlan(plan) {
-        if (!plan || !graphController)
-            return null
-        return graphController.computeProspectiveEdgeRender(plan.from, plan.to)
-    }
-
-    // connect 预览线与正式边共用同一套几何真相：
-    // - 鼠标悬停在合法 target 上时，先做 prospective LCA 规划，再把规划出的
-    //   两条路径交给宿主的平台 edge renderer（候选边临时追加进宿主边表后只取
-    //   它自己的 render）。Node 矩形 / Embed 圆周、深路径投影、已有反向边时的
-    //   双向 12 world 偏移都与松手后的正式边完全一致；
-    // - 没有合法 target 时退回"源对象边界 → 当前鼠标"。
-    function refreshConnectPreview() {
-        var ic = interactionController
-        if (!ic || ic.pointerMode !== "connect" || ic.connectFromKind === "")
-            return
-        // 默认：预览终点就是原始鼠标位置（松手命中仍用 connectMouseX/Y）。
-        ic.connectPreviewEndX = ic.connectMouseX
-        ic.connectPreviewEndY = ic.connectMouseY
-
-        var hit = rootContent
-                ? rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY)
-                : null
-        if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-            var plan = planCrossLayerConnection(ic.connectFromPath, hit.targetPath)
-            var host = plan && rootContent
-                    ? rootContent.findContentByPathSegments(plan.hostSegments)
-                    : null
-            if (plan && host) {
-                var preview = host.prospectiveEdgeRenderForPlan(plan)
-                if (preview) {
-                    var startScene = host.localToScene(preview.startX, preview.startY)
-                    var endScene = host.localToScene(preview.endX, preview.endY)
-                    ic.connectFromSceneX = startScene.x
-                    ic.connectFromSceneY = startScene.y
-                    ic.connectPreviewEndX = endScene.x
-                    ic.connectPreviewEndY = endScene.y
-                    return
-                }
-            }
-        }
-
-        // 退回：源对象边界朝当前鼠标方向。
-        var item = ic.connectFromKind === "node"
-                ? graphController.getNode(ic.connectFromId)
-                : graphController.getEmbed(ic.connectFromId)
-        if (!item)
-            return
-        var target = sceneToLocal(ic.connectMouseX, ic.connectMouseY)
-        var boundary = boundaryPointLocal(item.x, item.y, item.width, item.height,
-                                          ic.connectFromKind === "embed",
-                                          target.x, target.y)
-        var scenePoint = localToScene(boundary.x, boundary.y)
-        ic.connectFromSceneX = scenePoint.x
-        ic.connectFromSceneY = scenePoint.y
-    }
-
-    readonly property var contentBounds: {
+    // ── fit-to-bounds：真实 authored 坐标 → 概览局部像素 ──
+    readonly property var childBounds: {
         var minX = 0
         var minY = 0
         var maxX = 0
         var maxY = 0
-        var hasContent = false
+        var has = false
         var i
-        var nodes = graphController.nodesModel
         for (i = 0; i < nodes.length; i++) {
             var n = nodes[i]
-            if (!hasContent) {
-                minX = n.x; minY = n.y
-                maxX = n.x + n.width; maxY = n.y + n.height
-                hasContent = true
+            var np = n.position || { x: 0, y: 0 }
+            var isPortal = n.portal && n.portal.destinationStarmapId
+            var nw = isPortal ? _embedDiameter : _nodeWidth
+            var nh = isPortal ? _embedDiameter : _nodeHeight
+            if (!has) {
+                minX = np.x; minY = np.y
+                maxX = np.x + nw; maxY = np.y + nh
+                has = true
             } else {
-                minX = Math.min(minX, n.x); minY = Math.min(minY, n.y)
-                maxX = Math.max(maxX, n.x + n.width); maxY = Math.max(maxY, n.y + n.height)
+                minX = Math.min(minX, np.x); minY = Math.min(minY, np.y)
+                maxX = Math.max(maxX, np.x + nw); maxY = Math.max(maxY, np.y + nh)
             }
         }
-        var embeds = graphController.embedsModel
         for (i = 0; i < embeds.length; i++) {
             var e = embeds[i]
-            if (!hasContent) {
-                minX = e.x; minY = e.y
-                maxX = e.x + e.width; maxY = e.y + e.height
-                hasContent = true
+            var ep = e.position || { x: 0, y: 0 }
+            if (!has) {
+                minX = ep.x; minY = ep.y
+                maxX = ep.x + _embedDiameter; maxY = ep.y + _embedDiameter
+                has = true
             } else {
-                minX = Math.min(minX, e.x); minY = Math.min(minY, e.y)
-                maxX = Math.max(maxX, e.x + e.width); maxY = Math.max(maxY, e.y + e.height)
+                minX = Math.min(minX, ep.x); minY = Math.min(minY, ep.y)
+                maxX = Math.max(maxX, ep.x + _embedDiameter)
+                maxY = Math.max(maxY, ep.y + _embedDiameter)
             }
         }
-        if (!hasContent)
+        if (!has)
             return null
         return { minX: minX, minY: minY, maxX: maxX, maxY: maxY,
                  width: maxX - minX, height: maxY - minY }
     }
 
-    readonly property real localFitScale: {
-        if (depth === 0)
-            return 1.0
-        var b = contentBounds
-        if (!b || b.width <= 0 || b.height <= 0)
-            return 1.0
-        // 可用区 = 内容安全区（圆的内接正方形扣交互壳再扣留白），
-        // 和移动/新建的 clamp 共用同一份，fit 完的内容天然在安全区内。
-        var available = _contentSafeSide
-        if (!(available > 0))
-            return 1.0
-        var raw = Math.min(available / b.width, available / b.height)
-        if (!isFinite(raw) || raw <= 0)
-            return _minFitScale
-        return Math.max(_minFitScale, Math.min(_maxFitScale, raw))
-    }
-    readonly property real localFitOffsetX: {
-        if (depth === 0)
+    readonly property real _centerWorldX: childBounds
+            ? (childBounds.minX + childBounds.maxX) / 2 : 0
+    readonly property real _centerWorldY: childBounds
+            ? (childBounds.minY + childBounds.maxY) / 2 : 0
+
+    // 子图 world 单位 → 概览局部像素（这就是"进入该子图"时的子画布比例）。
+    // 没有内容时返回 0，不画任何投影。
+    readonly property real fitScale: {
+        var b = childBounds
+        var side = Math.min(width, height) * _safeRatio
+        if (!b || !(side > 0) || !(b.width > 0) || !(b.height > 0))
             return 0
-        var b = contentBounds
-        if (!b)
-            return 0
-        return content.width / 2 - (b.minX + b.maxX) / 2 * localFitScale
-    }
-    readonly property real localFitOffsetY: {
-        if (depth === 0)
-            return 0
-        var b = contentBounds
-        if (!b)
-            return 0
-        return content.height / 2 - (b.minY + b.maxY) / 2 * localFitScale
+        return side / Math.max(b.width, b.height)
     }
 
-    // 把本层 authored 坐标的矩形夹回内容安全区（与 local fit 同一份安全区）。
-    // 只对 depth > 0 的圆壳内容生效：根层是无限画布，不做约束。
-    // 返回的就是最终坐标，拖动显示与写 Core 用同一份，不再"显示一份、存另一份"。
-    function clampToContentSafeArea(x, y, width, height) {
-        if (depth === 0 || !(_contentSafeSide > 0))
-            return { x: x, y: y }
-        var fit = localFitScale > 0 ? localFitScale : 1
-        var boxSize = Math.min(content.width, content.height)
-        var center = boxSize / 2
-        var halfSafe = _contentSafeSide / 2
-        var itemWidth = width * fit
-        var itemHeight = height * fit
-        var minLeft = center - halfSafe
-        var maxLeft = center + halfSafe - itemWidth
-        var minTop = center - halfSafe
-        var maxTop = center + halfSafe - itemHeight
-        // item 比整个安全区还大时没有合法区间，退回居中（至少不会贴着一侧溢出）。
-        var left = maxLeft < minLeft
-                ? center - itemWidth / 2
-                : Math.max(minLeft, Math.min(maxLeft, x * fit + localFitOffsetX))
-        var top = maxTop < minTop
-                ? center - itemHeight / 2
-                : Math.max(minTop, Math.min(maxTop, y * fit + localFitOffsetY))
-        return { x: (left - localFitOffsetX) / fit, y: (top - localFitOffsetY) / fit }
-    }
+    function projectX(wx) { return width / 2 + (wx - _centerWorldX) * fitScale }
+    function projectY(wy) { return height / 2 + (wy - _centerWorldY) * fitScale }
 
-    // 当前 move 目标在模型里的显示尺寸（clamp 用）。
-    function movingItemSize() {
-        if (!interactionController)
-            return { width: 0, height: 0 }
-        var ic = interactionController
-        if (ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
-            return { width: 0, height: 0 }
-        var item = itemOf(ic.moveKind, ic.moveId)
-        if (item)
-            return { width: item.width, height: item.height }
-        return { width: 0, height: 0 }
-    }
+    // 概览文字口径：只有投影后仍能看清才画（只省文字，不改形状）。
+    readonly property real _textPointSize: dt.fontSmPt * Math.max(0.5, Math.min(8.0, fitScale))
+    readonly property bool textVisible: fitScale > 0 && _textPointSize >= 6
 
-    // 本层局部适配或尺寸变化：子 Embed 据此重算懒加载裁剪。
-    // offset 也是真实显示变换：内容整体平移时 scale/宽高可能不变，只有 offset 变，
-    // 漏掉它就等于子层投影位置变化不通知，懒加载可见性停在旧位置。
-    signal transformChanged()
-    onLocalFitScaleChanged: transformChanged()
-    onLocalFitOffsetXChanged: transformChanged()
-    onLocalFitOffsetYChanged: transformChanged()
-    onWidthChanged: transformChanged()
-    onHeightChanged: transformChanged()
-    Connections {
-        // 祖先链任何一层的 fit 变化都会平移本层在 scene 坐标里的位置。
-        target: content.ownerSceneContent
-        function onTransformChanged() { content.transformChanged() }
-    }
-
-    function resolvePath() {
-        if (rootStarmapId === "") {
-            resolveError = ""
-            finalStarmapId = ""
-            return
-        }
-        if (!starmapBackendRef) {
-            // 后端未注入时不报错：创建顺序不保证，等后端到了再解析。
-            resolveError = ""
-            finalStarmapId = ""
-            return
-        }
-        var res = starmapBackendRef.resolve_starmap_path(rootStarmapId, JSON.stringify(pathSegments))
-        if (!res || res.success !== true) {
-            resolveError = qsTr("解析星图层级路径失败")
-                    + (res && res.errorCode ? " (" + res.errorCode + ")" : "")
-            finalStarmapId = ""
-            starmapBackendRef.record_interaction(
-                "scene_resolve_failed", scenePathKey, rootStarmapId, "scene", "",
-                JSON.stringify({
-                    "pathKey": scenePathKey,
-                    "errorCode": (res && res.errorCode) ? res.errorCode : "",
-                    "rootStarmapId": rootStarmapId,
-                    "depth": pathSegments.length
-                }))
-            return
-        }
-        var finalId = res.data && res.data.finalStarmapId ? res.data.finalStarmapId : ""
-        if (finalId === "") {
-            resolveError = qsTr("解析星图层级路径失败")
-            finalStarmapId = ""
-            starmapBackendRef.record_interaction(
-                "scene_resolve_failed", scenePathKey, rootStarmapId, "scene", "",
-                JSON.stringify({
-                    "pathKey": scenePathKey,
-                    "errorCode": "empty_final_id",
-                    "rootStarmapId": rootStarmapId,
-                    "depth": pathSegments.length
-                }))
-            return
-        }
-        resolveError = ""
-        finalStarmapId = finalId
-        starmapBackendRef.record_interaction(
-            "scene_resolved", scenePathKey, rootStarmapId, "scene", finalId,
-            JSON.stringify({
-                "pathKey": scenePathKey,
-                "rootStarmapId": rootStarmapId,
-                "finalStarmapId": finalId,
-                "depth": pathSegments.length
-            }))
-    }
-
-    onRootStarmapIdChanged: resolvePath()
-    onPathSegmentsChanged: resolvePath()
-    onStarmapBackendRefChanged: {
-        if (rootStarmapId !== "" && finalStarmapId === "")
-            resolvePath()
-    }
-    onFinalStarmapIdChanged: {
-        if (finalStarmapId !== "")
-            graphController.loadGraph()
-    }
-    Component.onCompleted: resolvePath()
-
-    signal selectionCleared()
-    signal nodeSelected(var node)
-    signal edgeSelected(var edge)
-
-    readonly property string errorMessage: graphController.errorMessage
-
-    function clearError() { graphController.clearError() }
-
-    // ── 本层图控制器 ──
-    // 每层 Content 拥有自己的 GraphController，节点与本层连线都按本层局部坐标渲染。
-    StarMapGraphController {
-        id: graphController
-        starmapId: content.finalStarmapId
-        starmapBackendRef: content.starmapBackendRef
-        // Issue #814 评论 5935285879: 选择身份带本层 pathKey。
-        pathKey: content.scenePathKey
-        selectionController: content.selectionController
-        onGraphChanged: content.refreshEdges()
-        onSelectionCleared: content.selectionCleared()
-        onNodeSelected: function(node) { content.nodeSelected(node) }
-        onEdgeSelected: function(edge) { content.edgeSelected(edge) }
-    }
-
-    // 按 id 取本层模型条目，供菜单（移动/编辑/删除）使用。
-    function hitNode(nodeId) { return graphController.getNode(nodeId) }
-    function hitEmbed(instanceId) { return graphController.getEmbed(instanceId) }
-    function hitEdge(edgeId) {
-        for (var i = 0; i < graphController.edgesModel.length; i++) {
-            if (graphController.edgesModel[i].id === edgeId)
-                return graphController.edgesModel[i]
-        }
-        return null
-    }
-
-    // ── 路径构造（StarMapTargetPathDto JS 对象）──
-    // JSON 字段名遵循 DTO serde rename：starmapId（camelCase）、segments、target.type/nodeId。
-    // starmapId 用 rootStarmapId，segments 用本层 pathSegments，
-    // 这样第 N 层连线端点不会退化成第一层。
-    function nodePath(nodeId) {
-        return {
-            starmapId: rootStarmapId,
-            segments: pathSegments.slice(0),
-            target: { type: "node", nodeId: nodeId }
-        }
-    }
-    // Embed 端点的完整路径由本层 pathSegments.concat 拼出来。
-    function embedPath(instanceId) {
-        return {
-            starmapId: rootStarmapId,
-            segments: pathSegments.concat([graphController.embedPathSegment(instanceId)]),
-            target: { type: "starmap" }
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Issue #832 评论 6013799805 / #373：超链接菜单暴露给 Canvas 的方法。
-    // 连线端点继续用全局 nodePath()/embedPath()（rootStarmapId + 完整 segments），
-    // 但超链接 source path 必须满足 Core validate_target_path() 的不变量
-    // path.starmap_id == host graph.starmap_id：本层 graphController.starmapId
-    // 已经是 finalStarmapId，所以超链接 source 用 finalStarmapId + 空/单段 segments
-    // 从本层 graph 起步，避免嵌套层用 rootStarmapId 被 Core 拒绝。
-    // ---------------------------------------------------------------------------
-    function nodeSourcePath(nodeId) {
-        return {
-            starmapId: finalStarmapId,
-            segments: [],
-            target: { type: "node", nodeId: nodeId }
-        }
-    }
-    function embedSourcePath(instanceId) {
-        return {
-            starmapId: finalStarmapId,
-            segments: [graphController.embedPathSegment(instanceId)],
-            target: { type: "starmap" }
-        }
-    }
-
-    // 进入该 embed 后的 child scene path key（与 StarMapEmbed.childContentPathKey
-    // 构造规则一致：parentPathKey + "/embed_" + instanceId）。供 Canvas focusEmbed
-    // 记录真正的 child scene 身份，避免拿父层 scenePathKey 当 child 身份。
-    function enteredChildSceneKey(instanceId) {
-        return scenePathKey + "/embed_" + instanceId
-    }
-
-    // 两个 StarMapTargetPathDto 是否指向同一目标（语义比较）。
-    // Core 返回的 DTO 会把未使用的 Option 字段序列化成 null（如 nodeId: null,
-    // anchorId: null, projectId: null …），而 QML 构造的比较对象只含本类型
-    // 有意义的字段。用 JSON.stringify 整对象比较会因为 null 字段不匹配而漏判，
-    // 所以按 type 分支只比对该 type 有意义的字段，null/undefined/缺失字段不影响相等。
-    function _sameSegment(a, b) {
-        if (a.type !== b.type) return false
-        if (a.type === "enterEmbed")
-            return (a.instanceId || "") === (b.instanceId || "")
-        if (a.type === "enterPortal")
-            return (a.nodeId || "") === (b.nodeId || "")
-        return false
-    }
-    function _sameTarget(a, b) {
-        if (a.type !== b.type) return false
-        switch (a.type) {
-        case "node":
-            return (a.nodeId || "") === (b.nodeId || "")
-        case "starmap":
-            return true
-        case "anchor":
-            return (a.nodeId || "") === (b.nodeId || "")
-                    && (a.anchorId || "") === (b.anchorId || "")
-        default:
-            // chapterRange / entity / externalUri 等类型：逐字段比非空值
-            return (a.nodeId || "") === (b.nodeId || "")
-                    && (a.anchorId || "") === (b.anchorId || "")
-                    && (a.projectId || "") === (b.projectId || "")
-                    && (a.volumeId || "") === (b.volumeId || "")
-                    && (a.chapterId || "") === (b.chapterId || "")
-                    && (a.entityType || "") === (b.entityType || "")
-                    && (a.entityId || "") === (b.entityId || "")
-                    && (a.uri || "") === (b.uri || "")
-        }
-    }
-    function _sameSourcePath(a, b) {
-        if (!a || !b) return false
-        if (a.starmapId !== b.starmapId) return false
-        var aSeg = a.segments || []
-        var bSeg = b.segments || []
-        if (aSeg.length !== bSeg.length) return false
-        for (var i = 0; i < aSeg.length; i++) {
-            if (!_sameSegment(aSeg[i], bSeg[i])) return false
-        }
-        return _sameTarget(a.target || {}, b.target || {})
-    }
-
-    function listHyperlinksForNode(nodeId) {
-        var items = graphController.listHyperlinks()
-        var want = nodeSourcePath(nodeId)
+    // ── 数据加载：只读入口，不写 Core ──
+    function _layoutNodes() {
         var out = []
-        for (var i = 0; i < items.length; i++) {
-            if (_sameSourcePath(items[i].source, want)) out.push(items[i])
-        }
-        return out
-    }
-    function listHyperlinksForEmbed(instanceId) {
-        var items = graphController.listHyperlinks()
-        var want = embedSourcePath(instanceId)
-        var out = []
-        for (var i = 0; i < items.length; i++) {
-            if (_sameSourcePath(items[i].source, want)) out.push(items[i])
-        }
-        return out
-    }
-
-    function addHyperlinkForNode(nodeId, uri, label) {
-        return graphController.addHyperlink(nodeSourcePath(nodeId), uri, label)
-    }
-    function addHyperlinkForEmbed(instanceId, uri, label) {
-        return graphController.addHyperlink(embedSourcePath(instanceId), uri, label)
-    }
-
-    // 透传给本层 graphController。patch 由 Canvas 弹窗按 StarMapHyperlinkPatchInputDto 构造。
-    function updateHyperlink(hlId, patch) {
-        return graphController.updateHyperlink(hlId, patch)
-    }
-    function deleteHyperlink(hlId) {
-        return graphController.deleteHyperlink(hlId)
-    }
-
-    // Issue #834 复核：宿主感知的 Link 列表。
-    // Link 可能存在本层，也可能存在任意祖先宿主（跨层 Link 的 LCA 宿主
-    // 是两端 Scene 的最近公共祖先，可能在 source 层之上）。
-    // 沿 ownerSceneContent 链从本层走到 root，每个候选 host 查自己的 listLinks()，
-    // 把 host-relative link.source 转回 root-absolute 再和右键的 sourcePath 比。
-    // 返回 [{ link: dto, hostOwner: hostContent }]，删除/重新指定时用 hostOwner
-    // 调对应宿主的方法，不能固定 sourceOwner。
-    function listLinksForSource(sourcePath) {
-        var out = []
-        var host = content
-        while (host) {
-            var items = host.listLinks ? host.listLinks() : []
-            for (var i = 0; i < items.length; i++) {
-                var absSource = {
-                    starmapId: host.rootStarmapId,
-                    segments: host.pathSegments.concat(items[i].source.segments || []),
-                    target: items[i].source.target
-                }
-                if (StarMapPathPlanner.isSameTargetPath(absSource, sourcePath))
-                    out.push({ link: items[i], hostOwner: host })
-            }
-            host = host.ownerSceneContent
-        }
-        return out
-    }
-    function deleteLink(linkId) {
-        return graphController.deleteLink(linkId)
-    }
-    // Issue #834 复核：供 listLinksForSource 沿祖先链遍历时外部调本层 listLinks。
-    function listLinks() {
-        return graphController.listLinks()
-    }
-    // Issue #834 复核：重新指定 target 时 update Link 的 target。
-    function updateLink(linkId, patch) {
-        return graphController.updateLink(linkId, patch)
-    }
-    // Issue #834 复核：migrate 时需要拿到新 Link 的 id 用于回滚，
-    // 返回 DTO 而非 boolean。
-    function addLinkReturningDto(sourcePath, targetPath, label) {
-        return graphController.addLink(sourcePath, targetPath, label)
-    }
-
-    // ---------------------------------------------------------------------------
-    // 递归命中测试：命中哪一层就返回哪一层的身份。
-    // 顺序：本层节点 → 本层 Embed chrome → 子星图内容区（递归）→ 本层连线 → 本层空白。
-    // 子星图内容区不再产生 childContent：子层 interactive 就返回子层自己的命中
-    // （含子层 empty），否则整个子星图按父层 embed 命中。
-    // ---------------------------------------------------------------------------
-    function hitTargetAtScene(sceneX, sceneY) {
-        if (finalStarmapId === "")
-            return null
-        // preview 档只回答"里面有什么"，不参与命中：返回 null，让父层把这个
-        // 区域当作还没进入交互的子内容区（父层 embed），而不是假装命中节点。
-        if (renderDetail !== "interactive")
-            return null
-        var p = sceneToLocal(sceneX, sceneY)
-
-        var node = graphController.findNodeAt(p.x, p.y)
-        if (node) {
-            return {
-                owner: content,
-                scenePathKey: scenePathKey,
-                starmapId: finalStarmapId,
-                kind: "node",
-                id: node.id,
-                targetPath: nodePath(node.id),
-                localX: p.x,
-                localY: p.y
-            }
-        }
-
-        var chrome = graphController.findEmbedChromeAt(p.x, p.y)
-        if (chrome) {
-            return {
-                owner: content,
-                scenePathKey: scenePathKey,
-                starmapId: finalStarmapId,
-                kind: "embed",
-                id: chrome.instanceId,
-                targetPath: embedPath(chrome.instanceId),
-                localX: p.x,
-                localY: p.y
-            }
-        }
-
-        var inside = graphController.findEmbedContentAt(p.x, p.y)
-        if (inside) {
-            var child = childContentOf(inside.instanceId)
-            if (child && child.renderDetail === "interactive") {
-                var deeper = child.hitTargetAtScene(sceneX, sceneY)
-                if (deeper)
-                    return deeper
-            }
-            // 子内容还是 shell / preview / 未加载：整个子星图就是父层自己的
-            // embed 入口，单击/双击/右键都作用于它。不再有"明明点在子星图里，
-            // 却得到 childContent 然后什么都不做"的死区。
-            return {
-                owner: content,
-                scenePathKey: scenePathKey,
-                starmapId: finalStarmapId,
-                kind: "embed",
-                id: inside.instanceId,
-                targetPath: embedPath(inside.instanceId),
-                localX: p.x,
-                localY: p.y
-            }
-        }
-
-        var edge = graphController.hitTestEdge(p.x, p.y, _edgeHitLocalThreshold())
-        if (edge) {
-            return {
-                owner: content,
-                scenePathKey: scenePathKey,
-                starmapId: finalStarmapId,
-                kind: "edge",
-                id: edge.id,
-                targetPath: null,
-                localX: p.x,
-                localY: p.y
-            }
-        }
-
-        return {
-            owner: content,
-            scenePathKey: scenePathKey,
-            starmapId: finalStarmapId,
-            kind: "empty",
-            id: "",
-            targetPath: null,
-            localX: p.x,
-            localY: p.y
-        }
-    }
-
-    function embedItemOf(instanceId) {
-        for (var i = 0; i < embedRepeater.count; i++) {
-            var it = embedRepeater.itemAt(i)
-            if (it && it.instanceId === instanceId)
-                return it
-        }
-        return null
-    }
-    function nodeItemOf(nodeId) {
-        for (var i = 0; i < nodeRepeater.count; i++) {
-            var it = nodeRepeater.itemAt(i)
-            if (it && it.nodeId === nodeId)
-                return it
-        }
-        return null
-    }
-    function childContentOf(instanceId) {
-        var it = embedItemOf(instanceId)
-        return it ? it.childContent() : null
-    }
-
-    // 绝对路径段 → SceneContent：从整棵递归树的根开始逐段下钻。
-    // 跨层连线的宿主就是按这条路找出来的（宿主 = 两端 Scene 的 LCA）。
-    // 段语义（enterEmbed / enterPortal 的 UI 映射）统一在 StarMapPathPlanner。
-    function findContentByPathSegments(segments) {
-        var current = rootContent ? rootContent : content
-        for (var i = 0; i < segments.length; i++) {
-            if (!current)
-                return null
-            var instanceId = StarMapPathPlanner.uiInstanceIdOfSegment(segments[i])
-            if (instanceId === "")
-                return null
-            current = current.childContentOf(instanceId)
-        }
-        return current
-    }
-
-    // 宿主图建边入口：由宿主 Content 把边交给自己的 GraphController。
-    // 跨组件不能直接摸对方的 id，所以宿主必须提供这个声明入口。
-    function commitEdgeWithPaths(fromPath, toPath) {
-        return graphController.createEdgeWithPaths(fromPath, toPath)
-    }
-
-    // Issue #834：宿主图建内部链接入口，与 commitEdgeWithPaths 对称。
-    // Link 是内部跳转（StarMapLink），落库走 createLinkWithPaths → add_starmap_link。
-    function commitLinkWithPaths(fromPath, toPath) {
-        return graphController.createLinkWithPaths(fromPath, toPath)
-    }
-
-    // ---------------------------------------------------------------------------
-    // Router API：唯一输入主人 StarMapInputRouter 按 hit.owner 直接调用这里。
-    // 本层只做坐标换算、本层 GraphController 操作和边界日志；
-    // 手势状态提升与释放出口都在 Router，delegate 不再参与。
-    // ---------------------------------------------------------------------------
-    function itemOf(kind, id) {
-        return kind === "node" ? graphController.getNode(id) : graphController.getEmbed(id)
-    }
-
-    // 命中对象在本层局部坐标里的中心 → scene 坐标（connect 预览起点/触屏菜单锚点）。
-    function itemCenterScene(kind, id) {
-        var item = itemOf(kind, id)
-        if (!item)
-            return null
-        return localToScene(item.x + item.width / 2, item.y + item.height / 2)
-    }
-
-    // 命中对象的可见矩形（scene 坐标）：双击 Embed "进入"时交给根 Canvas
-    // 做相机聚焦，不开新页面。
-    function itemSceneRect(kind, id) {
-        var item = itemOf(kind, id)
-        if (!item)
-            return null
-        var tl = localToScene(item.x, item.y)
-        var br = localToScene(item.x + item.width, item.y + item.height)
-        return { x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y }
-    }
-
-    // move 更新：Router 只交原始 Qt scene 位移，本层换算成局部坐标并夹回安全区。
-    function applyMoveDelta(dxQtScene, dyQtScene) {
-        var ic = interactionController
-        if (!ic || ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
-            return false
-        var localDelta = qtSceneDeltaToLocal(dxQtScene, dyQtScene)
-        var candidateX = ic.moveX + localDelta.x
-        var candidateY = ic.moveY + localDelta.y
-        var movingSize = movingItemSize()
-        var clamped = clampToContentSafeArea(candidateX, candidateY,
-                                             movingSize.width, movingSize.height)
-        ic.updateMove(clamped.x, clamped.y)
-        return true
-    }
-
-    // connect / contextPending 的鼠标端点：端点存 scene 坐标，只能累加
-    // root-world 增量；拖动阈值由 Router 用原始像素单独累计。
-    function applyConnectDelta(dxQtScene, dyQtScene) {
-        var ic = interactionController
-        if (!ic || ic.connectFromScenePathKey !== scenePathKey)
-            return false
-        if (ic.pointerMode !== "connect" && ic.pointerMode !== "contextPending")
-            return false
-        var delta = qtSceneDeltaToRootScene(dxQtScene, dyQtScene)
-        if (ic.pointerMode === "connect") {
-            ic.updateConnect(ic.connectMouseX + delta.x, ic.connectMouseY + delta.y)
-            // 预览起止点与正式边共用同一套可见端点（悬停合法 target 时贴到目标边界）。
-            refreshConnectPreview()
-        } else {
-            // contextPending 还没进入 connect：端点先累计，转 connect 后统一重算预览。
-            ic.connectMouseX += delta.x
-            ic.connectMouseY += delta.y
-        }
-        return true
-    }
-
-    // 内联编辑状态汇总：Node delegate 的 editing 变化 → 根 Canvas 汇总键，
-    // Router 在编辑期间整体让位给 TextInput。
-    function noteInlineEditing(nodeId, editing) {
-        var key = scenePathKey + "/node_" + nodeId
-        if (editing) {
-            inlineEditingKey = key
-            if (menuHost)
-                menuHost.setInlineEditingKey(key)
-        } else if (inlineEditingKey === key) {
-            inlineEditingKey = ""
-            if (menuHost && menuHost.inlineEditingKey === key)
-                menuHost.setInlineEditingKey("")
-        }
-    }
-
-    function finishConnect() {
-        var ic = interactionController
-        var fromKind = ic.connectFromKind
-        var fromId = ic.connectFromId
-        var fromPath = ic.connectFromPath
-        var hit = rootContent ? rootContent.hitTargetAtScene(ic.connectMouseX, ic.connectMouseY) : null
-        var toPath = null
-        var success = false
-        var cancelled = true
-        var hostPathKey = ""
-        var hostStarmapId = ""
-        if (hit && (hit.kind === "node" || hit.kind === "embed")) {
-            var sameTarget = hit.scenePathKey === ic.connectFromScenePathKey && hit.id === fromId
-            if (!sameTarget) {
-                toPath = hit.targetPath
-                // 宿主 = 两端所在 Scene 的最近公共祖先，由 Core 统一规划。
-                // Core 返回的 from/to 已绑定宿主 starmapId，QML 只需按
-                // hostSegments 找到宿主 Content 并落库。
-                var plan = planCrossLayerConnection(fromPath, toPath)
-                var host = plan && rootContent
-                        ? rootContent.findContentByPathSegments(plan.hostSegments)
-                        : null
-                if (plan && host) {
-                    hostPathKey = host.scenePathKey
-                    hostStarmapId = plan.hostStarmapId
-                    success = host.commitEdgeWithPaths(plan.from, plan.to)
-                    cancelled = !success
-                }
-            }
-        }
-        logInteraction("connect_end", fromKind, fromId, {
-            "fromPath": JSON.stringify(fromPath),
-            "toPath": toPath ? JSON.stringify(toPath) : "",
-            "hostPathKey": hostPathKey,
-            "hostStarmapId": hostStarmapId,
-            "success": success,
-            "cancel": cancelled
-        })
-        ic.endConnect()
-        if (menuHost)
-            menuHost.hideTouchPreview()
-    }
-
-    // Issue #834 复核：linkArmed 下一次 tap 命中 node/embed → 建内部链接或重新指定。
-    // linkExistingId 非空时是"重新指定"：
-    //   - 新旧宿主相同：直接 updateLink 改 target
-    //   - 宿主变化：先在新宿主创建新 Link，成功后删除旧宿主旧 Link；
-    //     旧 Link 删除失败时回滚刚创建的新 Link，不留双份关系。
-    // linkExistingId 为空时是新建（原逻辑）。
-    function finishLink(toHit) {
-        var ic = interactionController
-        var fromKind = ic.linkFromKind
-        var fromId = ic.linkFromId
-        var fromPath = ic.linkFromPath
-        var toPath = null
-        var success = false
-        var cancelled = true
-        var hostPathKey = ""
-        var hostStarmapId = ""
-        var action = "create"
-        if (toHit && (toHit.kind === "node" || toHit.kind === "embed")) {
-            var sameTarget = toHit.scenePathKey === ic.linkFromScenePathKey && toHit.id === fromId
-            if (!sameTarget) {
-                toPath = toHit.targetPath
-                var plan = planCrossLayerConnection(fromPath, toPath)
-                var host = plan && rootContent
-                        ? rootContent.findContentByPathSegments(plan.hostSegments)
-                        : null
-                if (plan && host) {
-                    hostPathKey = host.scenePathKey
-                    hostStarmapId = plan.hostStarmapId
-                    if (ic.linkExistingId !== "" && ic.linkExistingHostOwner) {
-                        action = "migrate"
-                        var oldHost = ic.linkExistingHostOwner
-                        if (oldHost === host) {
-                            // 宿主不变：直接 update target
-                            action = "update"
-                            success = host.updateLink(ic.linkExistingId, {
-                                target: plan.to,
-                                clearLabel: false
-                            })
-                            cancelled = !success
-                        } else {
-                            // 宿主变化：先在新宿主创建，成功后删旧的；
-                            // 删旧失败则回滚新的，不留双份。
-                            var newLink = host.addLinkReturningDto(
-                                plan.from, plan.to, ic.linkExistingLabel)
-                            if (newLink) {
-                                var delOk = oldHost.deleteLink(ic.linkExistingId)
-                                if (delOk) {
-                                    success = true
-                                    cancelled = false
-                                } else {
-                                    // 回滚：删掉刚创建的新 Link
-                                    if (newLink.linkId)
-                                        host.deleteLink(newLink.linkId)
-                                    success = false
-                                    cancelled = true
-                                }
-                            } else {
-                                success = false
-                                cancelled = true
-                            }
-                        }
-                    } else {
-                        success = host.commitLinkWithPaths(plan.from, plan.to)
-                        cancelled = !success
-                    }
-                }
-            }
-        }
-        logInteraction("link_end", fromKind, fromId, {
-            "fromPath": JSON.stringify(fromPath),
-            "toPath": toPath ? JSON.stringify(toPath) : "",
-            "hostPathKey": hostPathKey,
-            "hostStarmapId": hostStarmapId,
-            "action": action,
-            "success": success,
-            "cancel": cancelled
-        })
-        ic.cancelArmed()
-        if (menuHost)
-            menuHost.hideTouchPreview()
-    }
-
-    function finishMove() {
-        var ic = interactionController
-        var kind = ic.moveKind
-        var id = ic.moveId
-        var nx = ic.moveX
-        var ny = ic.moveY
-        var committed = false
-        if (kind === "node" && id !== "") {
-            committed = graphController.commitNodeMove(id, nx, ny)
-            logInteraction("move_end", "node", id, {
-                "toX": nx, "toY": ny, "commitSuccess": committed
-            })
-        } else if (kind === "embed" && id !== "") {
-            committed = graphController.commitEmbedMove(id, nx, ny)
-            logInteraction("move_end", "embed", id, {
-                "toX": nx, "toY": ny, "commitSuccess": committed
-            })
-        }
-        ic.endMove()
-        refreshEdges()
-    }
-
-    // 触屏长按后没移动就松手：关闭视觉层，弹出真正可点击的菜单。
-    function finishContextPending() {
-        var ic = interactionController
-        var kind = ic.connectFromKind
-        var id = ic.connectFromId
-        ic.endContextPending()
-        var center = itemCenterScene(kind, id)
-        if (!center)
-            return
-        if (menuHost)
-            menuHost.showLongPressMenu(kind, id, center.x, center.y, content)
-    }
-
-    // ---------------------------------------------------------------------------
-    // 节点内联编辑：双击/右键"编辑"直接进入节点自身的 TextInput，
-    // 提交后回写本层 GraphController，不再经过外部 Inspector Popup。
-    // ---------------------------------------------------------------------------
-    function beginInlineEdit(nodeId) {
-        // Issue #822 评论 5977325046：pinch 接管期间拒绝迟到的双击进入编辑。
-        if (interactionController && interactionController.pointerMode === "pinch")
-            return
-        var it = nodeItemOf(nodeId)
-        if (it)
-            it.beginEdit()
-    }
-    function commitNodeTitle(nodeId, title) {
-        graphController.updateNode(nodeId, { title: title })
-    }
-
-    // ---------------------------------------------------------------------------
-    // 右键空白新建：菜单归属层就是被点中的那一层，坐标在这里换算成局部坐标。
-    // ---------------------------------------------------------------------------
-    function findFreeSpawnPoint(wx, wy) {
-        var step = 24
-        var candidates = [{ x: wx, y: wy }]
-        for (var ring = 1; ring <= 8; ring++) {
-            for (var dx = -ring; dx <= ring; dx++) {
-                candidates.push({ x: wx + dx * step, y: wy - ring * step })
-                candidates.push({ x: wx + dx * step, y: wy + ring * step })
-            }
-            for (var dy = -ring + 1; dy <= ring - 1; dy++) {
-                candidates.push({ x: wx - ring * step, y: wy + dy * step })
-                candidates.push({ x: wx + ring * step, y: wy + dy * step })
-            }
-        }
-        for (var i = 0; i < candidates.length; i++) {
-            if (!overlapsExistingNode(candidates[i].x, candidates[i].y, 150, 60, 12))
-                return candidates[i]
-        }
-        return { x: wx, y: wy }
-    }
-
-    function overlapsExistingNode(x, y, w, h, padding) {
-        var nodes = graphController.nodesModel
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i]
-            var nx = n.x - padding
-            var ny = n.y - padding
-            var nw = n.width + padding * 2
-            var nh = n.height + padding * 2
-            if (x < nx + nw && x + w > nx && y < ny + nh && y + h > ny)
-                return true
+            var pos = n.position || { x: 0, y: 0 }
+            // 旧 portal 归一到 Embed 几何，和活动画布同一口径。
+            var isPortal = n.portal && n.portal.destinationStarmapId
+            out.push({
+                id: n.id,
+                x: pos.x, y: pos.y,
+                width: isPortal ? _embedDiameter : _nodeWidth,
+                height: isPortal ? _embedDiameter : _nodeHeight
+            })
         }
-        return false
+        return out
     }
 
-    // 菜单归属层用：命名 → 换算到本层局部坐标 → 找不压旧节点的落点 →
-    // 夹回内容安全区（同一个 clamp）→ 写 Core。
-    function createNodeWithName(name, sceneX, sceneY) {
-        var p = sceneToLocal(sceneX, sceneY)
-        var spawn = findFreeSpawnPoint(p.x, p.y)
-        var safe = clampToContentSafeArea(spawn.x, spawn.y, _newNodeWidth, _newNodeHeight)
-        graphController.createNode(name, safe.x, safe.y)
-    }
-    function createSubStarmapWithName(name, sceneX, sceneY) {
-        var p = sceneToLocal(sceneX, sceneY)
-        var spawn = findFreeSpawnPoint(p.x, p.y)
-        var diameter = graphController._embedDiameter
-        var safe = clampToContentSafeArea(spawn.x, spawn.y, diameter, diameter)
-        graphController.createSubStarmapAt(name, safe.x, safe.y)
-    }
-
-    function updateNodeTitle(nodeId, title) { graphController.updateNode(nodeId, { title: title }) }
-    function deleteNode(nodeId) { graphController.deleteNode(nodeId) }
-    function updateEdgeLabel(edgeId, label) { graphController.updateEdge(edgeId, { label: label }) }
-    function deleteEdge(edgeId) { graphController.deleteEdge(edgeId) }
-    function updateEmbedLabel(instanceId, label) { graphController.updateEmbed(instanceId, { label: label }) }
-    function deleteEmbed(instanceId) { graphController.deleteEmbed(instanceId) }
-    function selectNode(nodeId) { graphController.selectNode(nodeId) }
-    function selectEdge(edgeId) { graphController.selectEdge(edgeId) }
-    function selectEmbed(instanceId) { graphController.selectEmbed(instanceId) }
-    function clearLayerSelection() { graphController.clearSelection() }
-
-    function isMovingNode(id) {
-        return interactionController
-                ? interactionController.isMovingTarget(scenePathKey, "node", id) : false
-    }
-    function isMovingEmbed(instanceId) {
-        return interactionController
-                ? interactionController.isMovingTarget(scenePathKey, "embed", instanceId) : false
-    }
-
-    // ---------------------------------------------------------------------------
-    // 连线重绘：本层 edgeRenders 只画本层连线；瞬时 move 期间用共享状态机做 override。
-    // ---------------------------------------------------------------------------
-    function currentMoveOverride() {
-        if (!interactionController)
-            return null
-        var ic = interactionController
-        if (ic.pointerMode !== "move" || ic.moveScenePathKey !== scenePathKey)
-            return null
-        if (ic.moveKind !== "" && ic.moveId !== "")
-            return { kind: ic.moveKind, id: ic.moveId, x: ic.moveX, y: ic.moveY }
-        return null
-    }
-
-    function refreshEdges() {
-        graphController.computeEdgeRenders(currentMoveOverride())
-        edgeCanvas.requestPaint()
-        previewCanvas.requestPaint()
-    }
-
-    // 整棵递归树回到 canonical 连线位置（切图/失焦/reset 时用）。
-    function refreshAllEdges() {
-        graphController.computeEdgeRenders(null)
-        edgeCanvas.requestPaint()
-        for (var i = 0; i < embedRepeater.count; i++) {
-            var child = embedRepeater.itemAt(i)
-            var inner = child ? child.childContent() : null
-            if (inner)
-                inner.refreshAllEdges()
+    function _layoutEmbeds() {
+        var out = []
+        for (var i = 0; i < embeds.length; i++) {
+            var e = embeds[i]
+            var pos = e.position || { x: 0, y: 0 }
+            out.push({
+                instanceId: e.instanceId,
+                x: pos.x, y: pos.y,
+                width: _embedDiameter, height: _embedDiameter
+            })
         }
+        return out
     }
 
-    Connections {
-        target: content.interactionController
-        function onMoveXChanged() { if (content.currentMoveOverride()) content.refreshEdges() }
-        function onMoveYChanged() { if (content.currentMoveOverride()) content.refreshEdges() }
-        function onPointerModeChanged() { content.refreshAllEdges() }
-    }
-
-    // Issue #814 评论 5935346839: 单层交互边界日志入口，不进连续移动热路径。
-    function logInteraction(event, itemKind, itemId, fields) {
-        if (!starmapBackendRef)
+    // 边渲染仍走 Core 的唯一几何真相（starmap_view::compute_edge_renders），
+    // 概览不另写一套端点 / 箭头 / 偏移算法。
+    function reload() {
+        if (!starmapBackendRef || starmapId === "") {
+            graphData = null
+            edgeRenders = []
+            loadError = ""
             return
-        var fj = fields ? JSON.stringify(fields) : ""
-        starmapBackendRef.record_interaction(event, scenePathKey, finalStarmapId, itemKind, itemId, fj)
+        }
+        var res = starmapBackendRef.get_starmap_graph(starmapId)
+        if (!res || res.success !== true || !res.data || !res.data.graph) {
+            graphData = null
+            edgeRenders = []
+            loadError = res && res.errorCode ? res.errorCode : "load_failed"
+            return
+        }
+        graphData = res.data.graph
+        loadError = ""
+        var renderRes = starmapBackendRef.compute_edge_renders(
+                    JSON.stringify(graphData),
+                    JSON.stringify(_layoutNodes()),
+                    JSON.stringify(_layoutEmbeds()))
+        edgeRenders = (renderRes && renderRes.success === true && renderRes.data)
+                ? renderRes.data : []
     }
 
-    // 本层局部适配变化时，preview 静态投影也要重画。
-    onRenderDetailChanged: previewCanvas.requestPaint()
+    onStarmapIdChanged: reload()
+    onStarmapBackendRefChanged: reload()
+    Component.onCompleted: reload()
 
-    // ── 本层内容：worldLayer 承载每层 local fit ──
-    // 显示变换（x/y/scale）只在这一层；节点/连线仍然用 authored 坐标摆放。
-    // 根层是相机本体，fit 恒等；子层 fit 由内容包围盒 + 本层容器算出。
-    Item {
-        id: worldLayer
-        width: content.width
-        height: content.height
-        x: content.localFitOffsetX
-        y: content.localFitOffsetY
-        scale: content.localFitScale
-        transformOrigin: Item.TopLeft
+    // ── 单一投影入口画出的矢量几何（QtQuick.Shapes）──
+    // 全是实时的几何路径，没有 layer / FBO / 快照纹理：父图相机一变，
+    // 下面的绑定就按新投影重算路径字符串。
+    function _roundedRectPath(x, y, w, h, radius) {
+        var rr = Math.max(0, Math.min(radius, w / 2, h / 2))
+        if (!(rr > 0.01))
+            return "M " + x + " " + y + " H " + (x + w) + " V " + (y + h)
+                    + " H " + x + " Z "
+        return "M " + (x + rr) + " " + y
+                + " H " + (x + w - rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + w) + " " + (y + rr)
+                + " V " + (y + h - rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + w - rr) + " " + (y + h)
+                + " H " + (x + rr) + " A " + rr + " " + rr + " 0 0 1 " + x + " " + (y + h - rr)
+                + " V " + (y + rr) + " A " + rr + " " + rr + " 0 0 1 " + (x + rr) + " " + y + " Z "
+    }
 
-        // ── 本层连线 ──
-        Canvas {
-            id: edgeCanvas
-            anchors.fill: parent
-            visible: content.renderDetail !== "preview"
-            z: 0
+    function _circlePath(cx, cy, r) {
+        return "M " + (cx - r) + " " + cy
+                + " A " + r + " " + r + " 0 1 0 " + (cx + r) + " " + cy
+                + " A " + r + " " + r + " 0 1 0 " + (cx - r) + " " + cy + " Z "
+    }
 
-            Connections {
-                target: content.selectionController
-                function onScenePathKeyChanged() { edgeCanvas.requestPaint() }
-                function onKindChanged() { edgeCanvas.requestPaint() }
-                function onItemIdChanged() { edgeCanvas.requestPaint() }
-            }
+    readonly property string edgesPath: {
+        var s = ""
+        if (!(fitScale > 0))
+            return s
+        for (var i = 0; i < edgeRenders.length; i++) {
+            var r = edgeRenders[i]
+            s += "M " + projectX(r.startX) + " " + projectY(r.startY)
+                    + " L " + projectX(r.endX) + " " + projectY(r.endY) + " "
+        }
+        return s
+    }
 
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                // 线宽常量与命中阈值同源：命中至少覆盖真实可见的线本体。
-                ctx.lineWidth = content._edgeLineWorldWidth
-                var renders = graphController.edgeRenders
-                for (var i = 0; i < renders.length; i++) {
-                    var r = renders[i]
-                    var edge = null
-                    for (var ei = 0; ei < graphController.edgesModel.length; ei++) {
-                        if (graphController.edgesModel[ei].id === r.edgeId) {
-                            edge = graphController.edgesModel[ei]
-                            break
-                        }
-                    }
-                    if (!edge)
-                        continue
-                    var edgeSelected = selectionController
-                            ? selectionController.matches(scenePathKey, "edge", edge.id)
-                            : false
-                    var color = edgeSelected ? _accent : _border
+    readonly property string nodesPath: {
+        var s = ""
+        if (!(fitScale > 0))
+            return s
+        var radius = dt.radiusSm * fitScale
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i]
+            var pos = n.position || { x: 0, y: 0 }
+            if (n.portal && n.portal.destinationStarmapId)
+                continue
+            s += _roundedRectPath(projectX(pos.x), projectY(pos.y),
+                                  _nodeWidth * fitScale, _nodeHeight * fitScale, radius)
+        }
+        return s
+    }
 
-                    ctx.beginPath()
-                    ctx.moveTo(r.startX, r.startY)
-                    ctx.lineTo(r.endX, r.endY)
-                    ctx.strokeStyle = color
-                    ctx.stroke()
+    readonly property string embedsPath: {
+        var s = ""
+        if (!(fitScale > 0))
+            return s
+        var r = _embedDiameter / 2 * fitScale
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i]
+            var npos = n.position || { x: 0, y: 0 }
+            if (!(n.portal && n.portal.destinationStarmapId))
+                continue
+            s += _circlePath(projectX(npos.x + _embedDiameter / 2),
+                             projectY(npos.y + _embedDiameter / 2), r)
+        }
+        for (var j = 0; j < embeds.length; j++) {
+            var e = embeds[j]
+            var pos = e.position || { x: 0, y: 0 }
+            s += _circlePath(projectX(pos.x + _embedDiameter / 2),
+                             projectY(pos.y + _embedDiameter / 2), r)
+        }
+        return s
+    }
 
-                    ctx.beginPath()
-                    ctx.moveTo(r.arrowTipX, r.arrowTipY)
-                    ctx.lineTo(r.arrowLeftX, r.arrowLeftY)
-                    ctx.lineTo(r.arrowRightX, r.arrowRightY)
-                    ctx.closePath()
-                    ctx.fillStyle = color
-                    ctx.fill()
+    z: 0
 
-                    if (edge.label) {
-                        ctx.fillStyle = _surfaceContainer
-                        var tw = ctx.measureText(edge.label).width
-                        ctx.fillRect(r.labelX - tw / 2 - 4, r.labelY - 10, tw + 8, 20)
-                        ctx.fillStyle = _textPrimary
-                        ctx.font = "12px sans-serif"
-                        ctx.textAlign = "center"
-                        ctx.textBaseline = "middle"
-                        ctx.fillText(edge.label, r.labelX, r.labelY)
-                    }
-                }
-            }
+    Shape {
+        anchors.fill: parent
+        antialiasing: true
+        preferredRendererType: Shape.CurveRenderer
+
+        // 边：和活动画布同一份 Core edge render 几何（直线段）。
+        ShapePath {
+            strokeColor: overview.dt.border
+            strokeWidth: overview._previewStrokeWidth
+            fillColor: "transparent"
+            capStyle: ShapePath.RoundCap
+            PathSvg { path: overview.edgesPath }
         }
 
-        // ── preview 档的静态投影 ──
-        // 和 interactive 档是同一张图：节点/子星图还是本层的矩形和同一套颜色，
-        // 只省掉交互组件和文字。投影太小时不挂任何手势，也不往里递归。
-        Canvas {
-            id: previewCanvas
-            anchors.fill: parent
-            visible: content.renderDetail === "preview"
-            z: 2
-
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-
-                // 和 interactive 档同一种形状：圆角矩形（半径取同一个 token）。
-                function roundedRectPath(x, y, w, h, radius) {
-                    var rr = Math.max(0, Math.min(radius, w / 2, h / 2))
-                    ctx.beginPath()
-                    ctx.moveTo(x + rr, y)
-                    ctx.lineTo(x + w - rr, y)
-                    ctx.arcTo(x + w, y, x + w, y + rr, rr)
-                    ctx.lineTo(x + w, y + h - rr)
-                    ctx.arcTo(x + w, y + h, x + w - rr, y + h, rr)
-                    ctx.lineTo(x + rr, y + h)
-                    ctx.arcTo(x, y + h, x, y + h - rr, rr)
-                    ctx.lineTo(x, y + rr)
-                    ctx.arcTo(x, y, x + rr, y, rr)
-                    ctx.closePath()
-                }
-
-                var renders = graphController.edgeRenders
-                ctx.lineWidth = content._edgeLineWorldWidth
-                ctx.strokeStyle = content._border
-                for (var i = 0; i < renders.length; i++) {
-                    var r = renders[i]
-                    ctx.beginPath()
-                    ctx.moveTo(r.startX, r.startY)
-                    ctx.lineTo(r.endX, r.endY)
-                    ctx.stroke()
-                }
-
-                var embeds = graphController.embedsModel
-                for (var j = 0; j < embeds.length; j++) {
-                    var e = embeds[j]
-                    // 子星图身份是正圆：和 interactive 档同一形状、同一颜色，
-                    // 不因为掉档就从圆变成长方形卡片。
-                    ctx.beginPath()
-                    ctx.arc(e.x + e.width / 2, e.y + e.height / 2,
-                            Math.min(e.width, e.height) / 2, 0, 2 * Math.PI)
-                    ctx.fillStyle = content._accentSoft
-                    ctx.strokeStyle = content._border
-                    ctx.fill()
-                    ctx.stroke()
-                }
-
-                var nodes = graphController.nodesModel
-                for (var k = 0; k < nodes.length; k++) {
-                    var n = nodes[k]
-                    roundedRectPath(n.x, n.y, n.width, n.height, content._radiusSm)
-                    ctx.fillStyle = content._surfaceContainer
-                    ctx.strokeStyle = content._border
-                    ctx.fill()
-                    ctx.stroke()
-                }
-            }
+        // 子入口：和活动画布一样的正圆。
+        ShapePath {
+            strokeColor: overview.dt.border
+            strokeWidth: overview._previewStrokeWidth
+            fillColor: overview.dt.accentSoft
+            PathSvg { path: overview.embedsPath }
         }
 
-        // ── 本层节点与子星图（只属于 interactive 档）──
-        Item {
-            id: nodeLayer
-            anchors.fill: parent
-            z: 1
-
-            Repeater {
-                id: nodeRepeater
-                // preview 档只由 previewCanvas 画静态投影，不实例化交互 delegate。
-                model: content.renderDetail === "interactive" ? graphController.nodesModel : []
-                // 正在编辑的节点被销毁（切图 / 删节点 / 掉到 preview 档）时不会
-                // 再发 editingChanged(false)，在这里主动清掉内联编辑汇总键，
-                // 否则 Router 会永久让位、左键输入全部失灵。
-                onItemRemoved: function(index, item) {
-                    if (item && item.editing)
-                        content.noteInlineEditing(item.nodeId, false)
-                }
-                delegate: StarMapNode {
-                    required property var modelData
-                    required property int index
-                    dt: content.dt
-                    property var nodeData: modelData
-
-                    // Issue #832：节点不再持有任何业务手势，输入由唯一 Router 解释。
-                    // 这里只把身份和共享状态机交给节点，用于视觉动画查询。
-                    nodeId: nodeData.id
-                    scenePathKey: content.scenePathKey
-                    interactionController: content.interactionController
-
-                    // 本层局部坐标，不再经过 worldToScreen：相机在祖先 Content 上。
-                    x: content.isMovingNode(nodeData.id) ? content.interactionController.moveX : nodeData.x
-                    y: content.isMovingNode(nodeData.id) ? content.interactionController.moveY : nodeData.y
-                    width: nodeData.width
-                    height: nodeData.height
-                    title: nodeData.title
-                    isSelected: content.selectionController
-                            ? content.selectionController.matches(content.scenePathKey, "node", nodeData.id)
-                            : false
-                    wobbleIndex: index
-
-                    onTitleCommitted: function(newTitle) {
-                        content.commitNodeTitle(nodeData.id, newTitle)
-                    }
-
-                    // 内联编辑状态汇总给根 Canvas：Router 在编辑期间整体让位给 TextInput。
-                    onEditingChanged: content.noteInlineEditing(nodeData.id, editing)
-                }
-            }
-
-            Repeater {
-                id: embedRepeater
-                // preview 档不实例化 Embed delegate，子星图也不再往里递归。
-                model: content.renderDetail === "interactive" ? graphController.embedsModel : []
-                delegate: StarMapEmbed {
-                    required property var modelData
-                    required property int index
-                    dt: content.dt
-                    property var embedData: modelData
-
-                    x: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveX : embedData.x
-                    y: content.isMovingEmbed(embedData.instanceId) ? content.interactionController.moveY : embedData.y
-                    width: embedData.width
-                    height: embedData.height
-                    instanceId: embedData.instanceId
-                    targetStarmapId: embedData.targetStarmapId
-                    label: embedData.label
-                    isSelected: content.selectionController
-                            ? content.selectionController.matches(content.scenePathKey, "embed", embedData.instanceId)
-                            : false
-                    wobbleIndex: index
-                    // Issue #832：Embed 不再持有任何业务手势；身份与共享状态机
-                    // 只用于 pressed/move 视觉绑定。
-                    scenePathKey: content.scenePathKey
-                    interactionController: content.interactionController
-
-                    // Issue #822：子星图显示档位只由 ownerEffectiveScale（全局相机 ×
-                    // 祖先 local fit）+ 根视口短边算出；Embed 外壳的 world 几何恒定，
-                    // 不再用 scale 改整颗 Embed，档位只决定子内容渲染多少细节。
-                    ownerSceneContent: content
-                    ownerEffectiveScale: content.effectiveScale
-                    viewportShortSide: content.viewportShortSide
-
-                    rootStarmapId: content.rootStarmapId
-                    parentPathSegments: content.pathSegments
-                    starmapBackendRef: content.starmapBackendRef
-                    parentPathKey: content.scenePathKey
-                    contentDepth: content.depth + 1
-                    // 递归加载路径段由 Controller 统一分流：正式 Embed → enterEmbed，
-                    // 旧 portal 归一 → enterPortal{nodeId}。Embed 不再自己猜路径。
-                    pathSegment: graphController.embedPathSegment(embedData.instanceId)
-                    selectionController: content.selectionController
-                    rootContent: content.rootContent
-                    menuHost: content.menuHost
-                }
-            }
+        // 节点：和活动画布一样的圆角矩形 + 同一套颜色。
+        ShapePath {
+            strokeColor: overview.dt.border
+            strokeWidth: overview._previewStrokeWidth
+            fillColor: overview.dt.surfaceContainer
+            PathSvg { path: overview.nodesPath }
         }
     }
 
-    // ── 解析状态提示 ──
-    Label {
-        anchors.centerIn: parent
-        visible: content.resolveError.length > 0
-        text: content.resolveError
-        color: content._error
-        font.pointSize: content.dt.fontSmPt
-        wrapMode: Text.Wrap
-        horizontalAlignment: Text.AlignHCenter
-    }
+    // 标题：投影够大才画（其余情况只省文字，不改形状）。
+    Repeater {
+        id: titleRepeater
+        model: overview.textVisible ? overview.nodes : []
 
-    Label {
-        anchors.centerIn: parent
-        visible: content.rootStarmapId !== "" && content.finalStarmapId === "" && content.resolveError === ""
-        text: qsTr("加载中…")
-        color: content._textMuted
-        font.pointSize: content.dt.fontSmPt
+        delegate: Text {
+            required property var modelData
+
+            readonly property var nodeData: modelData
+            readonly property var nodePos: nodeData.position || ({ x: 0, y: 0 })
+            readonly property bool isPortal:
+                !!(nodeData.portal && nodeData.portal.destinationStarmapId)
+
+            visible: !isPortal || nodeData.title !== null
+            x: overview.projectX(nodePos.x)
+            y: overview.projectY(nodePos.y)
+                    + (overview._nodeHeight / 2 - height / 2) * overview.fitScale
+            width: overview._nodeWidth * overview.fitScale
+            height: Math.max(1, overview._nodeHeight * overview.fitScale)
+            text: nodeData.title || ""
+            color: overview.dt.textPrimary
+            font.pointSize: overview._textPointSize
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+            clip: true
+        }
     }
 }

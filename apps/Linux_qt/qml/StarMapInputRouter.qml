@@ -14,6 +14,9 @@
 //       长按时间先到 → connect
 //     - 左键拖空白：pan
 //     - 右键 node/embed/edge：对应菜单；右键空白：该层的新建菜单
+//     - 右键在 node/embed 上按下并拖过阈值：直接进入 connect 拉线
+//       （connect_begin 在日志里带 button=right）；松手命中另一个 node/embed
+//       即建边，空白/自身取消；右键拖动不移动节点、不平移画布（Issue #930）
 //     - connect 松手：再调一次根递归命中，目标只接受 node/embed，
 //       复用 StarMapPathPlanner.planCrossLayerRelation() 找 LCA 宿主并落边
 //
@@ -62,6 +65,13 @@ Item {
     property real panBeginY: 0
     property real pressScreenX: 0
     property real pressScreenY: 0
+
+    // 右键手势现场（Issue #930）：右键单击开菜单；按下后拖过阈值直接拉线。
+    // rightPressHit 是按下时的完整递归命中，拖动激活时据此进入 connect；
+    // rightWasDrag 标记本次右键已发生拖动，TapHandler.singleTapped 据此跳过菜单。
+    property bool rightPressActive: false
+    property bool rightWasDrag: false
+    property var rightPressHit: null
 
     function hitAt(sx, sy) {
         return canvas ? canvas.hitTargetAtScreen(sx, sy) : null
@@ -128,6 +138,36 @@ Item {
         gestureOwner = null
         emptyPressActive = true
         emptyLongPressArmed = (source === "touch")
+    }
+
+    // ── 右键按下（Issue #930）：复用左键状态机，但不启用长按计时 ──
+    // 右键点击继续走 handleRightClick 开菜单；真拖动越过阈值由
+    // rightConnectDrag 调 beginRightConnectDrag() 提升成 connect。
+    function beginRightPress(point) {
+        // 新一次按下先清掉上一次的拖动标记：TapHandler.singleTapped 只按本次
+        // 手势判断是否开菜单。armed / 菜单 move 等 guard 提前返回时也要清，
+        // 否则旧标记会压掉 #834 的"右键取消 armed 再开菜单"路径。
+        rightWasDrag = false
+        if (!canvas || !ic || ic.pointerMode !== "idle" ||
+            ic.linkArmed || ic.connectArmed || editingBlocks)
+            return
+
+        var hit = hitAt(point.position.x, point.position.y)
+        rightPressHit = hit
+        rightPressActive = true
+        canvas.logPointerPress("right", "mouse", point)
+
+        if (hasGestureTarget(hit)) {
+            gestureOwner = hit.owner
+            if (ic.beginPress(hit.kind, hit.id, hit.targetPath, hit.scenePathKey,
+                              canvas.screenToWorldX(point.position.x),
+                              canvas.screenToWorldY(point.position.y))) {
+                ic.pointerSource = "mouse"
+                // 右拖不需要等"长按"时限：拖动阈值一到就走 connect，
+                // 不拖则松手仍是普通点击（菜单）。
+                ic.pressTimerActive = false
+            }
+        }
     }
 
     // ── 点击类 ──
@@ -357,6 +397,40 @@ Item {
         }
     }
 
+    // ── 右键越阈值（Issue #930）：直接进 connect，不走 move / pan ──
+    // 起点必须是有手势目标的 node/embed（edge/空白什么都不做）；
+    // 端点身份与左键长按连线完全同源：pressPendingToConnect + 归属层预览刷新。
+    function beginRightConnectDrag() {
+        if (!rightPressActive)
+            return
+        rightWasDrag = true
+        if (!hasGestureTarget(rightPressHit) || !gestureOwner)
+            return
+        var h = rightPressHit
+        var center = gestureOwner.itemCenterScene(h.kind, h.id)
+        if (!center)
+            return
+        if (ic.pressPendingToConnect(h.kind, h.id, h.targetPath,
+                                     center.x, center.y)) {
+            gestureOwner.logInteraction("connect_begin", h.kind, h.id, {
+                "kind": h.kind, "fromId": h.id,
+                "fromX": center.x, "fromY": center.y,
+                "button": "right"
+            })
+            gestureOwner.refreshConnectPreview()
+        }
+    }
+
+    // 右键 connect 的位移：端点换算与预览刷新全部交给归属层，
+    // 与左键 applyConnectDelta 同一条路径；只有本次右键拖动才允许改端点，
+    // 不碰左键长按正在进行的 connect。
+    function dragRightConnectDelta(dx, dy) {
+        if (!rightPressActive)
+            return
+        if (ic && ic.pointerMode === "connect" && gestureOwner)
+            gestureOwner.applyConnectDelta(dx, dy)
+    }
+
     // ── 松手统一出口：click / move / connect / pan 都在这里闭环 ──
     function handleRelease() {
         if (!canvas || !ic) {
@@ -392,6 +466,25 @@ Item {
         }
         // pinch 不属于单指业务：缩放结束由 PinchHandler 的 endPinch() 统一复位。
         cancelLocalState()
+    }
+
+    // ── 右键松手统一出口（Issue #930）──
+    // 真拖动：finishConnect() 按既有出口递归命中解析目标并落边，空白目标
+    // 由 finishConnect 自己取消；未拖动：普通点击，pressPending 直接取消，
+    // 菜单交给同一手势的 TapHandler.singleTapped。
+    // rightWasDrag 不在这里清除：singleTapped 可能在本回调之后才到，靠它
+    // 跳过菜单；下一次右键按下在 beginRightPress 里重置。
+    function endRightPress() {
+        if (!rightPressActive)
+            return
+        if (rightWasDrag && ic.pointerMode === "connect" && gestureOwner)
+            gestureOwner.finishConnect()
+        else if (ic.pointerMode === "pressPending")
+            ic.cancelPressPending()
+        rightPressActive = false
+        rightPressHit = null
+        if (rightWasDrag)
+            cancelLocalState()
     }
 
     // ── 长按到点：唯一 Router 调状态提升 ──
@@ -477,12 +570,22 @@ Item {
         onDoubleTapped: router.handleDoubleTap(touchTap.point, "touch")
     }
 
-    // ── 右键：菜单归属由递归命中决定 ──
+    // ── 右键（Issue #930）：单击开菜单；按下后拖过阈值 = 直接拉线 ──
+    // 菜单归属仍由递归命中决定；右键拖动完成后由 rightWasDrag 抑制菜单
+    // （TapHandler 是 DragThreshold 策略，真拖动本身也会取消 tap）。
     TapHandler {
         id: mouseRightTap
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
-        onSingleTapped: router.handleRightClick(mouseRightTap.point)
+        enabled: !router.editingBlocks
+        onPressedChanged: {
+            if (pressed)
+                router.beginRightPress(mouseRightTap.point)
+        }
+        onSingleTapped: {
+            if (!router.rightWasDrag)
+                router.handleRightClick(mouseRightTap.point)
+        }
     }
 
     // ── 拖动：鼠标拖动进入 move/pan，触屏未长按滑动优先 pan ──
@@ -512,6 +615,35 @@ Item {
         }
     }
 
+    // ── 右键拖动（Issue #930）：单独的 Handler，不混进左键 dragHandler ──
+    // 越阈值只进入 connect 预览（beginRightConnectDrag），绝不进入
+    // pressPendingToMove / beginPan，所以右键拖动既不移动节点也不平移画布。
+    DragHandler {
+        id: rightConnectDrag
+        target: null
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.RightButton
+        enabled: !router.editingBlocks
+        property real lastTx: 0
+        property real lastTy: 0
+        onActiveChanged: {
+            if (active) {
+                lastTx = 0
+                lastTy = 0
+                router.beginRightConnectDrag()
+            }
+        }
+        onActiveTranslationChanged: {
+            if (!active)
+                return
+            var dx = activeTranslation.x - lastTx
+            var dy = activeTranslation.y - lastTy
+            lastTx = activeTranslation.x
+            lastTy = activeTranslation.y
+            router.dragRightConnectDelta(dx, dy)
+        }
+    }
+
     // ── 左键 press→release 观察（passive grab）：松手统一出口 ──
     PointHandler {
         id: leftReleaseTracker
@@ -520,6 +652,20 @@ Item {
         onActiveChanged: {
             if (!active)
                 router.handleRelease()
+        }
+    }
+
+    // ── 右键 press→release 观察（passive grab）：拖动收尾 / 点击判定 ──
+    // 拖动时 finishConnect 落边；未拖动时只清 pressPending，菜单由
+    // 同一手势的 TapHandler.singleTapped 处理。
+    PointHandler {
+        id: rightReleaseTracker
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        acceptedButtons: Qt.RightButton
+        enabled: !router.editingBlocks
+        onActiveChanged: {
+            if (!active)
+                router.endRightPress()
         }
     }
 

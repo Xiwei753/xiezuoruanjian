@@ -16,7 +16,13 @@
 //! 评论 5946795049 那轮引入的 press-time 手指归属（`touchOwnerA/B`、
 //! `_pinchBelongsToChild`）已被 #822 的单一全局视口整体删除，对应守卫文件
 //! `issue814_comment5946795049_press_time_gesture_ownership.rs` 也已随之删除。
-//! 本文件只保留 tap 侧的"父层不吞子层"语义，改写为对递归命中入口的断言。
+//! 本文件只保留 tap 侧的"父层不吞子层"语义，改写为对命中入口的断言。
+//!
+//! #929 更新：独立画布协议取代 #822 的"单一全局视口 + 递归内容"。递归命中
+//! 入口 `hitTargetAtScene` 已删除；活动画布 `StarMapActiveScene.hitTargetAtWorld`
+//! 按 节点 → 子图入口（chrome / content 都算入口）→ 连线 → 空白 的顺序判一次，
+//! 不存在 interactive 子层递归，也不存在 childContent。父层/子层划分只剩
+//! "当前活动画布"与它内部的对象；空白菜单归属仍是命中层 owner（兜底当前画布）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -26,6 +32,7 @@ mod source_guard;
 use source_guard::{function_window, read_src};
 
 const CANVAS: &str = "qml/StarMapCanvas.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
@@ -41,36 +48,53 @@ fn strip_line_comments(source: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1. 递归命中入口把子星图内容区单独区分成 childContent，不冒充 empty
+// 1. 活动画布命中顺序一次判清：节点 → 子图入口 → 连线 → 空白，不递归
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Issue #832：落在子星图内容区时不再产生 childContent。
-/// - 子层已经是 interactive：递归进子层，子层空白由子层自己的 empty 回答；
-/// - 子层还是 shell / preview / 未加载：整个子星图按父层 embed 入口命中，
-///   右键/单击/双击都作用于它，不留"什么都不做"的死区。
+/// #929 取代 #822 的递归命中：不再有 interactive 子层递归（也不存在
+/// childContent）。活动画布按 节点 → 子图入口(chrome/content) → 连线 → 空白
+/// 判一次，子图整体按 embed 入口命中，不留"什么都不做"的死区。
 #[test]
-fn recursive_hit_test_recurses_interactive_child_and_falls_back_to_embed() {
-    let src = strip_line_comments(&read_src(CONTENT));
-    let hit = function_window(&src, "function hitTargetAtScene(", 3600);
-    assert!(
-        !hit.contains("kind: \"childContent\""),
-        "不得再返回 childContent：低 LOD 子图整体按父层 embed 命中，实际窗口:\n{hit}"
-    );
-    assert!(
-        hit.contains("if (child && child.renderDetail === \"interactive\")"),
-        "只有 interactive 子层才递归进子层命中，实际窗口:\n{hit}"
-    );
-    assert!(
-        hit.contains("var deeper = child.hitTargetAtScene(sceneX, sceneY)"),
-        "interactive 子层必须递归返回真正命中的那一层，实际窗口:\n{hit}"
-    );
-    // embed 兜底必须排在 empty 之前：empty 只表示任何一层都没命中。
+fn active_scene_hit_order_is_node_embed_edge_blank_without_recursion() {
+    let src = strip_line_comments(&read_src(ACTIVE_SCENE));
+    let hit = function_window(&src, "function hitTargetAtWorld(", 2400);
+    for forbidden in [
+        "kind: \"childContent\"",
+        "renderDetail",
+        "hitTargetAtScene",
+        "childContent",
+    ] {
+        assert!(
+            !hit.contains(forbidden),
+            "不得再出现递归子场景机制 {forbidden}，实际窗口:\n{hit}"
+        );
+    }
+
+    // 命中顺序必须一次走完：node → embed chrome → embed content → edge → blank。
+    let node_at = hit
+        .find("graphController.findNodeAt(wx, wy)")
+        .expect("hitTargetAtWorld 必须先判节点命中");
+    let chrome_at = hit
+        .find("findEmbedChromeAt(wx, wy)")
+        .expect("hitTargetAtWorld 必须判 embed chrome");
+    let content_at = hit
+        .find("findEmbedContentAt(wx, wy)")
+        .expect("hitTargetAtWorld 必须判 embed content");
+    let edge_at = hit
+        .find("graphController.hitTestEdge(")
+        .expect("hitTargetAtWorld 必须判连线命中");
     let empty_at = hit
         .find("kind: \"empty\"")
-        .expect("hitTargetAtScene 必须有 empty 兜底");
+        .expect("hitTargetAtWorld 必须有 empty 兜底");
+    assert!(
+        node_at < chrome_at && chrome_at < content_at && content_at < edge_at && edge_at < empty_at,
+        "命中顺序必须是 node → embed chrome → embed content → edge → empty，实际窗口:\n{hit}"
+    );
+
+    // embed 兜底必须排在 empty 之前：empty 只表示任何对象都没命中。
     let embed_at = hit
         .find("targetPath: embedPath(inside.instanceId)")
-        .expect("hitTargetAtScene 必须有子星图 embed 兜底");
+        .expect("hitTargetAtWorld 必须有子星图 embed 兜底");
     assert!(
         embed_at < empty_at,
         "子星图 embed 兜底必须排在 empty 之前判定，实际窗口:\n{hit}"
@@ -165,18 +189,25 @@ fn right_click_uses_recursive_hit_and_menu_host() {
     );
 }
 
-/// 空白菜单的归属层就是被点中的那一层——空的子星图可以直接新建内容，
-/// 不需要"进入"另一个页面，也不需要第二个 Canvas。
+/// 空白菜单的归属层就是被点中的那一层；无命中（理论上不会发生）时兜底为
+/// 当前活动画布。空的子星图可以直接新建内容，不需要"进入"另一个页面，
+/// 也不需要第二个 Canvas。
 #[test]
 fn blank_menu_owner_is_the_hit_layer() {
     let src = strip_line_comments(&read_src(CANVAS));
     let open_blank = function_window(&src, "function openBlankMenu(", 900);
     assert!(
-        open_blank.contains("menuOwnerContent = hit ? hit.owner : null"),
-        "空白菜单的归属层必须是命中层 owner，实际窗口:\n{open_blank}"
+        open_blank.contains("menuOwnerContent = hit ? hit.owner : activeScene()"),
+        "空白菜单的归属层必须是命中层 owner（兜底当前活动画布），实际窗口:\n{open_blank}"
     );
     assert!(
-        open_blank.contains("hit.scenePathKey"),
-        "空白菜单日志必须带命中层的 scenePathKey，实际窗口:\n{open_blank}"
+        open_blank.contains("hit ? hit.scenePathKey : routeKey"),
+        "空白菜单日志必须带命中层的 scenePathKey，兜底当前 routeKey，实际窗口:\n{open_blank}"
+    );
+    // 只读微缩概览不参与菜单归属（它的空白由父图命中回答）。
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        !content.contains("menuOwner") && !content.contains("openBlankMenu"),
+        "只读微缩概览不得自己开菜单"
     );
 }

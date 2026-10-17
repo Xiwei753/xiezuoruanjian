@@ -26,9 +26,9 @@ use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapEmbedPatchInputDto, StarMapHyperlinkDto, StarMapHyperlinkPatchDto,
     StarMapHyperlinkPatchInputDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapLinkPatchInputDto,
-    StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto, StarMapNodePatchDto,
-    StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto, StarMapTargetDetailDto,
-    StarMapTargetPathDto,
+    StarMapNavigationRouteDto, StarMapNodeContentDto, StarMapNodeDto, StarMapNodeKindDto,
+    StarMapNodePatchDto, StarMapPathSegmentDto, StarMapPointDto, StarMapProvenanceDto,
+    StarMapTargetDetailDto, StarMapTargetPathDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
 
@@ -150,6 +150,66 @@ pub fn resolve_starmap_path(
         Err(e) => return envelope_err_str(&format!("Invalid path segments JSON: {}", e)),
     };
     envelope(api.resolve_starmap_path(root_starmap_id, segments))
+}
+
+// -----------------------------------------------------------------------------
+// 星图导航路由（独立画布）envelope 接口 — Issue #902 / #929
+// -----------------------------------------------------------------------------
+//
+// 每张星图是独立画布，Core 只保存"根星图 + 语义路径段"的导航路由，
+// 不保存任何镜头/相机/视口参数。平台端用这三个接口做画布切换：
+//   - resolve_starmap_navigation：按 root + segments 定位当前活动画布；
+//   - enter_starmap_embed：从当前 route 追加一个 Embed 段进入子画布；
+//   - exit_starmap_canvas：弹出 route 最后一个段回到父画布（纯路径操作）。
+// 路由语义完全在 Core，平台端不得用点击事件传来的裸 targetStarmapId 当路由。
+
+/// 解析导航路由（root + segments），返回 `StarMapNavigationLocationDto`。
+///
+/// `segments_json` 是 `StarMapPathSegmentDto` 数组的 JSON
+/// （`enterEmbed{instanceId}` / `enterPortal{nodeId}`，camelCase）。
+pub fn resolve_starmap_navigation(
+    api: &WriterCoreApi,
+    root_starmap_id: &str,
+    segments_json: &str,
+) -> String {
+    let segments: Vec<StarMapPathSegmentDto> = match serde_json::from_str(segments_json) {
+        Ok(s) => s,
+        Err(e) => return envelope_err_str(&format!("Invalid path segments JSON: {}", e)),
+    };
+    envelope(api.resolve_starmap_navigation(root_starmap_id.to_string(), segments))
+}
+
+/// 通过 Embed 实例进入子画布，返回 `EnterStarmapResultDto`（route + location）。
+///
+/// `segments_json` 是**当前活动画布**的路径段；Core 会校验当前位置有效后
+/// 追加新的 `enterEmbed{instanceId}` 段，并返回更新后的完整 route。
+pub fn enter_starmap_embed(
+    api: &WriterCoreApi,
+    root_starmap_id: &str,
+    segments_json: &str,
+    instance_id: &str,
+) -> String {
+    let segments: Vec<StarMapPathSegmentDto> = match serde_json::from_str(segments_json) {
+        Ok(s) => s,
+        Err(e) => return envelope_err_str(&format!("Invalid path segments JSON: {}", e)),
+    };
+    envelope(api.enter_starmap_embed(
+        root_starmap_id.to_string(),
+        segments,
+        instance_id.to_string(),
+    ))
+}
+
+/// 退出当前画布，返回父 `StarMapNavigationRouteDto`（纯路径操作，不访问磁盘）。
+///
+/// `route_json` 是 `StarMapNavigationRouteDto`（camelCase：rootStarmapId + segments）。
+/// 对同一目标星图的多个 Embed，返回的父路由仍保留**原进入实例**。
+pub fn exit_starmap_canvas(api: &WriterCoreApi, route_json: &str) -> String {
+    let route: StarMapNavigationRouteDto = match serde_json::from_str(route_json) {
+        Ok(r) => r,
+        Err(e) => return envelope_err_str(&format!("Invalid route JSON: {}", e)),
+    };
+    envelope(api.exit_starmap_canvas(route))
 }
 
 pub fn create_starmap_edge(

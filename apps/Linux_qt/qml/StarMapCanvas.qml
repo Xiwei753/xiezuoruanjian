@@ -1,34 +1,35 @@
 // =============================================================================
-// StarMapCanvas.qml — 星图画布（整棵星图唯一的 viewport / camera）
+// StarMapCanvas.qml — 星图工作区（当前活动画布的独立镜头 + 唯一输入路由宿主）
 // =============================================================================
 //
 // 层级：Linux_qt UI 层（QML UI 组件）
-// 职责：全局相机（pan/zoom）数据与纯方法、唯一命中入口、根层内容容器、
-//   菜单宿主与弹窗、connect 预览 overlay
+// 职责：持有星图导航路由（root + segments）、当前活动画布 ID 与活动镜头；
+//   只加载 currentStarmapId 的 StarMapActiveScene；菜单宿主、connect 预览
+//   overlay、背景网格、唯一输入层宿主。
 //
-// Issue #822：整棵星图只有一个全局视口。
-//   panX / panY / zoomLevel 只在这里存在。鼠标停在任意深度的节点、子星图、
-//   孙星图上，滚轮和捏合都调同一个 zoomAt()，只改根 zoomLevel/panX/panY。
-//   子星图"看起来更大/更小"是 Deep Zoom 显示档位：每层内容做 local fit，
-//   ownerEffectiveScale = globalZoom × 祖先 local fit，再用投影覆盖率决定
-//   子内容是完整交互 / 轻量 preview / 只留外壳。档位绝不反写全局相机，
-//   也不改 Embed 的 world 几何（见 StarMapEmbed / docs/starmap_viewport.md）。
-//
-//   递归的是"内容"不是"视口"：根层内容由 StarMapSceneContent 渲染，
-//   子星图内容在 Embed 内部懒加载下一层 StarMapSceneContent。
-//   节点/连线都画在各自层的局部坐标里，相机只作用于根层 Content 这一张 Item。
+// Issue #929：独立画布协议（对齐 #902 Core 导航 + docs/starmap_viewport.md）。
+//   - 任意时刻只有一个"活动画布"：本文件只创建一张 StarMapActiveScene
+//     （currentStarmapId），不再把所有子画布递归嵌进根图。
+//   - 导航身份 = Core 的 StarMapNavigationRoute（rootStarmapId + 完整 segments）。
+//     进入走 enter_starmap_embed，退出走 exit_starmap_canvas，定位活动画布走
+//     resolve_starmap_navigation。QML 不自己拼 targetStarmapId 当路由；
+//     同一目标图的不同 Embed 入口由完整 route 区分。
+//   - 按 routeKey（根 ID + 完整 segments）保存每一层进入前的父相机
+//     {zoom, panX, panY}；不以子图 ID 做 key。
+//   - 连续缩放穿越：入口投影直径占当前视口短边 ≥ 70% 进入子画布；
+//     反向缩小到 ≤ 60% 恢复父镜头。双击 Embed 走同一个 enter 函数。
+//     阈值只比较"指针瞄准（或已锁定）的那个入口"，zoom 数值本身绝不触发层级切换。
+//   - 相机只有数值安全边界（1e-4 ~ 1e5），边界不是层级切换依据。
+//   - Core 不保存任何相机 / 视口 / 缩放信息：本文件只在平台层做投影与渲染。
 //
 // Issue #832：原始输入只有一个主人 StarMapInputRouter。
-//   本文件不再挂背景 TapHandler / DragHandler / PinchHandler / WheelHandler /
-//   MouseArea，也不做手势仲裁；只保留相机数据与纯方法
-//   （screen/world 换算、panBy()、zoomAt()、focusOnSceneRect）、
+//   本文件不挂背景 TapHandler / DragHandler / PinchHandler / WheelHandler /
+//   MouseArea，只保留：相机数据与纯方法（screen/world 换算、panBy()、zoomAt()）、
 //   hitTargetAtScreen() 唯一命中入口、菜单宿主和 connect 预览 overlay。
-//   交互状态机 StarMapInteractionController 仍由本文件创建一次，整棵递归树共享；
-//   长按 Timer 与所有状态提升都在 Router。
 //
 // 约束：
-//   - 纯渲染和输入层，星图业务逻辑委托给各层 StarMapGraphController
-//   - 使用 Canvas 进行自定义绘制
+//   - 纯渲染和输入宿主层，星图业务逻辑在 Core 与各画布的 StarMapGraphController
+//   - 不读写 Core 的相机/视口字段；切换活动画布不改变任何 authored position
 // =============================================================================
 
 import QtQuick
@@ -40,16 +41,8 @@ Item {
     id: canvasArea
     clip: true
 
-    // 根星图 ID。根层内容用它作为整棵递归树的 rootStarmapId。
+    // 根星图 ID：整条导航路由的起点（Core 的 rootStarmapId）。
     property string starmapId: ""
-    // Issue #832 评论 6014361379：切图时单独清焦点栈。不塞进 resetInteraction()，
-    // 因为 pinch 开始也会调 resetInteraction()，不能一捏就清视觉焦点。
-    onStarmapIdChanged: {
-        if (focusStack.length > 0) {
-            focusStack = []
-            visualFocusChanged()
-        }
-    }
     required property var dt
 
     readonly property color _primary: dt.primary
@@ -73,46 +66,239 @@ Item {
     readonly property int _dialogRadius: dt.dialogRadius
 
     property var starmapBackendRef: null
-    readonly property string errorMessage: rootContent ? rootContent.errorMessage : ""
+    // Issue #814 评论 5935285879: 整棵星图共享的唯一选中状态控制器。
+    property var selectionController: null
 
-    // ── 全局相机（唯一）──
-    // Issue #814 评论 5935285879: 无限画布 — pan 两个方向都不设边界。
-    // 改用"根层 Content 一张带 transform 的 Item + delegate 直接局部坐标"承载世界后，
-    // 世界坐标可以是任意正负值，pan 不再需要 clamp。
+    // ── 导航路由（Core 唯一真相）──
+    // currentRoute = { rootStarmapId, segments: StarMapPathSegmentDto[] }。
+    property var currentRoute: ({ rootStarmapId: "", segments: [] })
+    // 由 Core 解析出的当前活动画布 ID。
+    property string currentStarmapId: ""
+    // 路由解析 / 画布穿越的失败信息（error banner 显示）。
+    property string routeError: ""
+    // 路由身份：根 ID + 完整 segments。父相机 / 进入上下文都按它保存。
+    readonly property string routeKey: routeKeyOf(currentRoute)
+    // 是否在根画布。返回按钮据此决定"退出星图工作区"还是"返回父星图"。
+    readonly property bool focusIsRoot:
+        !currentRoute.segments || currentRoute.segments.length === 0
+    readonly property string focusScenePathKey: routeKey
+    signal visualFocusChanged()
+
+    readonly property string errorMessage:
+        routeError.length > 0
+        ? routeError
+        : (activeScene() ? activeScene().errorMessage : "")
+
+    // ── 活动镜头（当前活动画布的唯一相机）──
+    // 屏幕坐标 = pan + world × zoom；pan 是世界原点的屏幕位置。
+    property real zoomLevel: 1.0
     property real panX: 0
     property real panY: 0
-    property real zoomLevel: 1.0
-
-    // Issue #822 评论 5972215936: 相机范围只保留数值安全边界，不设产品硬天花板。
-    // 与 docs/starmap_viewport.md 的 CAMERA_SCALE_MIN/MAX、ZOOM_FACTOR 同一口径：
-    // 乘法步进保证各档手感一致，Deep Zoom 的 coverage 档位由用户能到的真实比例决定
-    // （0.35~2.5 的旧硬上限会让 1080 高窗口里的子星图永远停在 preview）。
+    // Issue #822 评论 5972215936: 只保留数值安全边界，不设产品硬天花板。
+    // 边界只是防止浮点/图形管线爆掉，绝不用来触发层级切换。
     readonly property real _cameraScaleMin: 1e-4
     readonly property real _cameraScaleMax: 1e5
     readonly property real _zoomFactor: 1.2
 
+    // routeKey -> { zoom, panX, panY }：每一层进入前保存的父相机。
+    property var cameraStack: ({})
+    // childRouteKey -> 进入上下文（父/子比例、入口世界几何），退场反推父镜头用。
+    property var entryContexts: ({})
+    // 本次连续缩放瞄准的入口（routeKey/instanceId）。只比较这个入口，
+    // 不会因为鼠标停在别处缩放而进入别的子图。
+    property string _zoomEntryKey: ""
+    // 捏合穿越补偿：Router 的捏合是"捏合开始 zoom × 累计比例"的绝对值，
+    // 画布切换后把这一次绝对值换算成新画布上的连续比例。
+    property real _pinchSwitchBaseZoom: -1
+    property real _pinchSwitchCanvasZoom: 1
+    property bool _initialized: false
+
+    // 画布穿越阈值：入口投影直径占当前视口短边。
+    readonly property real _enterRatio: 0.70
+    readonly property real _exitRatio: 0.60
+
+    // ── 路由工具 ──
+    function routeKeyOf(route) {
+        if (!route)
+            return ""
+        var segs = route.segments || []
+        var parts = []
+        for (var i = 0; i < segs.length; i++) {
+            var s = segs[i]
+            if (s.type === "enterPortal")
+                parts.push("enterPortal:" + (s.nodeId || ""))
+            else
+                parts.push("enterEmbed:" + (s.instanceId || ""))
+        }
+        return (route.rootStarmapId || "") + "|" + parts.join("/")
+    }
+
+    function normalizeRoute(raw) {
+        if (!raw || !raw.rootStarmapId)
+            return null
+        var segs = []
+        var rawSegs = raw.segments || []
+        for (var i = 0; i < rawSegs.length; i++) {
+            var s = rawSegs[i]
+            segs.push({
+                type: s.type,
+                instanceId: s.instanceId ? s.instanceId : null,
+                nodeId: s.nodeId ? s.nodeId : null
+            })
+        }
+        return { rootStarmapId: raw.rootStarmapId, segments: segs }
+    }
+
+    function activeScene() {
+        return activeSceneLoader.item
+    }
+
+    // Core 定位当前活动画布：route 解析失败不回退到裸目标 ID。
+    function applyRoute(route) {
+        var normalized = normalizeRoute(route)
+        if (!normalized) {
+            currentRoute = { rootStarmapId: "", segments: [] }
+            currentStarmapId = ""
+            routeError = ""
+            return
+        }
+        currentRoute = normalized
+        if (!starmapBackendRef) {
+            currentStarmapId = normalized.segments.length === 0 ? normalized.rootStarmapId : ""
+            routeError = ""
+            return
+        }
+        var res = starmapBackendRef.resolve_starmap_navigation(
+                    normalized.rootStarmapId, JSON.stringify(normalized.segments))
+        if (res && res.success === true && res.data && res.data.currentStarmapId) {
+            routeError = ""
+            currentStarmapId = res.data.currentStarmapId
+        } else {
+            routeError = qsTr("解析星图导航路由失败")
+                    + ((res && res.errorCode) ? " (" + res.errorCode + ")" : "")
+            // 根层 route 没有穿越段，退化身份就是根图；子层解析失败则不加载。
+            currentStarmapId = normalized.segments.length === 0 ? normalized.rootStarmapId : ""
+        }
+    }
+
+    function defaultCamera() {
+        return { zoom: 1.0, panX: 0, panY: 0 }
+    }
+
+    function cameraSnapshot() {
+        return { zoom: zoomLevel, panX: panX, panY: panY }
+    }
+
+    function storeCamera(key, cam) {
+        if (!key)
+            return
+        var next = {}
+        for (var k in cameraStack)
+            next[k] = cameraStack[k]
+        next[key] = { zoom: cam.zoom, panX: cam.panX, panY: cam.panY }
+        cameraStack = next
+    }
+
+    function storeEntryContext(key, ctx) {
+        if (!key)
+            return
+        var next = {}
+        for (var k in entryContexts)
+            next[k] = entryContexts[k]
+        next[key] = ctx
+        entryContexts = next
+    }
+
+    function applyCamera(cam) {
+        if (!cam)
+            return
+        zoomLevel = cam.zoom
+        panX = cam.panX
+        panY = cam.panY
+    }
+
+    // 切回根图：清所有层相机，镜头回默认。
+    function resetToRoot() {
+        cameraStack = ({})
+        entryContexts = ({})
+        _zoomEntryKey = ""
+        _pinchSwitchBaseZoom = -1
+        _pinchSwitchCanvasZoom = 1
+        var route = { rootStarmapId: starmapId, segments: [] }
+        applyRoute(route)
+        applyCamera(defaultCamera())
+        storeCamera(routeKeyOf(route), cameraSnapshot())
+        visualFocusChanged()
+    }
+
+    Component.onCompleted: {
+        _initialized = true
+        resetToRoot()
+    }
+    onStarmapIdChanged: {
+        if (_initialized)
+            resetToRoot()
+    }
+    onStarmapBackendRefChanged: {
+        // 后端晚于 starmapId 注入时补一次路由解析。
+        if (_initialized && currentRoute.rootStarmapId !== "")
+            applyRoute(currentRoute)
+    }
+
+    // 相机任何变化都写回当前 route 的相机槽（同一张画布再次进入时可用）。
+    onZoomLevelChanged: storeCamera(routeKey, cameraSnapshot())
+    onPanXChanged: storeCamera(routeKey, cameraSnapshot())
+    onPanYChanged: storeCamera(routeKey, cameraSnapshot())
+
+    // ── 纯方法：平移 / 缩放 / 坐标换算 ──
     function applyPan(nextX, nextY) {
         panX = nextX
         panY = nextY
     }
 
-    // 唯一平移入口：Router 交给 Canvas 的原始位移换算成 canvas-local 增量后
-    // 由这里落到相机上。pan 两个方向都不设边界（无限画布）。
     function panBy(dx, dy) {
         applyPan(panX + dx, panY + dy)
     }
 
-    // scene 坐标（整棵递归树的顶层 world 坐标）↔ 视口坐标。
-    // 相机只有这一个，所以换算是全局唯一入口，不再有"每层各自的 zoomLevel"。
-    function worldToScreenX(wx) { return panX + wx * zoomLevel }
-    function worldToScreenY(wy) { return panY + wy * zoomLevel }
-    function screenToWorldX(sx) { return (sx - panX) / zoomLevel }
-    function screenToWorldY(sy) { return (sy - panY) / zoomLevel }
+    // world ↔ 屏幕换算：优先用活动场景的投影（视口中心相对原点），
+    // 没有活动场景时用同一数学口径的直接式。
+    function worldToScreenX(wx) {
+        var scene = activeScene()
+        if (scene)
+            return scene.worldToScreenX(wx)
+        return panX + wx * zoomLevel
+    }
+    function worldToScreenY(wy) {
+        var scene = activeScene()
+        if (scene)
+            return scene.worldToScreenY(wy)
+        return panY + wy * zoomLevel
+    }
+    function screenToWorldX(sx) {
+        var scene = activeScene()
+        if (scene)
+            return scene.screenToWorldX(sx)
+        return (sx - panX) / (zoomLevel > 0 ? zoomLevel : 1)
+    }
+    function screenToWorldY(sy) {
+        var scene = activeScene()
+        if (scene)
+            return scene.screenToWorldY(sy)
+        return (sy - panY) / (zoomLevel > 0 ? zoomLevel : 1)
+    }
 
-    // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改根 zoomLevel/panX/panY。
-    // 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），不再有产品缩放上限。
+    readonly property real _edgeLineWorldWidth: 2
+    readonly property real _edgeScreenStrokeWidth:
+        Math.max(1.0, Math.min(_edgeLineWorldWidth * zoomLevel, 6.0))
+
+    // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改当前活动画布的镜头。
+    // 随后按"指针瞄准的入口"评估画布穿越（70% 进 / 60% 出），zoom 数值本身
+    // 不参与判断。
     function zoomAt(screenX, screenY, nextZoom) {
-        var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, nextZoom))
+        var requested = nextZoom
+        if (interaction && interaction.pointerMode === "pinch" && _pinchSwitchBaseZoom > 0)
+            requested = _pinchSwitchCanvasZoom * (nextZoom / _pinchSwitchBaseZoom)
+        var target = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))
         var oldZoom = zoomLevel
         if (target === oldZoom)
             return
@@ -121,154 +307,226 @@ Item {
             screenX - (screenX - panX) * (zoomLevel / oldZoom),
             screenY - (screenY - panY) * (zoomLevel / oldZoom)
         )
-        // Issue #832 评论 6013799805 / #373：缩放后重算焦点链覆盖率，
-        // 栈顶 embed 缩出窗口就 demote（只 pop，不 push）。
-        recomputeFocusFromCoverage()
+        var switched = -1
+        if (focusIsRoot) {
+            switched = maybeEnterEmbedAt(screenX, screenY)
+        } else {
+            // 子画布同样可以继续放大穿越到孙画布：先判退场，没退场再判进场。
+            switched = maybeExitCanvas()
+            if (switched <= 0)
+                switched = maybeEnterEmbedAt(screenX, screenY)
+        }
+        if (switched > 0 && interaction && interaction.pointerMode === "pinch") {
+            _pinchSwitchBaseZoom = zoomLevel
+            _pinchSwitchCanvasZoom = switched
+        }
     }
 
-    // 双击 Embed 的"进入"：把相机聚焦/放大到该 Embed 的 scene 矩形。
-    // 仍然是同一张全局画布，不开新页面、不切换星图身份；放大后 Deep Zoom
-    // 档位自然从 shell/preview 跨到 interactive，子内容就地展开。
-    function focusOnSceneRect(sceneX, sceneY, sceneW, sceneH) {
-        var w = Math.max(sceneW, 1)
-        var h = Math.max(sceneH, 1)
-        var next = Math.min(width / w, height / h) * 0.72
-        next = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, next))
-        zoomLevel = next
-        applyPan(width / 2 - (sceneX + sceneW / 2) * next,
-                 height / 2 - (sceneY + sceneH / 2) * next)
+    function viewportShortSide() {
+        return Math.min(width, height)
     }
 
-    // ---------------------------------------------------------------------------
-    // Issue #832 评论 6013799805 / #373：纯视觉焦点链（返回父星图）
-    // ---------------------------------------------------------------------------
-    // 整棵星图仍然只有这一个全局相机；focusStack 只记录"双击进入过哪些 embed"，
-    // 给左上返回按钮和缩放覆盖率滞回用。它不切换 root starmap、不落盘、
-    // 不复制 Core 业务状态，纯粹是显示参考根。
-    //   每个元素 = { scenePathKey, starmapId, embedInstanceId,
-    //                sceneRect:{x,y,width,height}, targetPath }
-    //   focusIsRoot === focusStack.length === 0：左上返回退出星图工作区；
-    //   否则左上返回 pop 一层，相机回到新栈顶的 sceneRect（root 时不动）。
-    // ---------------------------------------------------------------------------
-    property var focusStack: []
-    readonly property bool focusIsRoot: focusStack.length === 0
-    // 栈顶的 scenePathKey（root 时为 "root"），供 Workspace/日志用。
-    readonly property string focusScenePathKey:
-        focusStack.length > 0 ? focusStack[focusStack.length - 1].scenePathKey : "root"
-    signal visualFocusChanged()
+    // 覆盖率口径：入口投影直径 / 当前视口短边。
+    function coverageOfScreenPx(px) {
+        var short = viewportShortSide()
+        return short > 0 ? px / short : 0
+    }
 
-    // 双击 embed 的"进入"= 相机聚焦 + 推进焦点链。
-    // hit 是 hitTargetAtScreen 返回的完整命中（owner/scenePathKey/starmapId/
-    // kind/id/targetPath）。scene 矩形由 hit.owner.itemSceneRect 给出（scene/world 坐标）。
-    // Issue #832 评论 6014908211：
-    // - 父子校验必须在 focusOnSceneRect 之前：失败时不移动相机、不进栈。
-    // - hit.scenePathKey 是 embed 所属的 Scene；只有当它等于当前焦点
-    //   scenePathKey 时，进入的 child 才是当前焦点的直接子层。
-    // - 直接子层：push 一项，保证 stack 相邻两项永远是直接父子。
-    // - 兄弟/祖先/深层：不改变焦点和相机。深层目标（hit.scenePathKey 是
-    //   focusScenePathKey 的真后代）理论上应补齐中间父链，但中间层的
-    //   sceneRect 不可得，贸然 push 会破坏 recomputeFocusFromCoverage 的
-    //   覆盖率滞回；保持不动更安全。
-    // - scenePathKey 记录进入后的 child scene path（hit.owner.enteredChildSceneKey），
-    //   不是 hit.scenePathKey（那是 embed 所属父 Scene，焦点身份会慢一层）。
-    // - 保存进入前的父层相机 parentCamera，pop 时恢复原视角。
+    // 缩放后：只比较指针瞄准的那个入口。没瞄准任何入口就不进入任何子图。
+    function maybeEnterEmbedAt(screenX, screenY) {
+        var scene = activeScene()
+        if (!scene || !scene.ready) {
+            _zoomEntryKey = ""
+            return -1
+        }
+        var emb = scene.embedAtWorld(screenToWorldX(screenX), screenToWorldY(screenY))
+        if (!emb) {
+            _zoomEntryKey = ""
+            return -1
+        }
+        _zoomEntryKey = routeKey + "/" + emb.instanceId
+        var projectedPx = Math.min(emb.width, emb.height) * zoomLevel
+        if (coverageOfScreenPx(projectedPx) < _enterRatio)
+            return -1
+        return enterEmbedViaCore(emb.instanceId, "zoom")
+    }
+
+    // 反向缩小：按进入上下文反推父入口的投影直径，≤ 60% 时恢复父画布。
+    // 双击可能在远低于 70% 的入口上进入：退场阈值取 min(60%, 进入时的覆盖率)，
+    // 保证"至少要从进入状态继续缩小"才会退场，不会一进子图就被弹回父图。
+    function maybeExitCanvas() {
+        if (focusIsRoot)
+            return -1
+        var ctx = entryContexts[routeKey]
+        if (!ctx || !(ctx.ratio > 0))
+            return -1
+        var virtualParentZoom = zoomLevel / ctx.ratio
+        var coverageNow = coverageOfScreenPx(ctx.embedDiameter * virtualParentZoom)
+        var entryCoverage = ctx.entryCoverage > 0 ? ctx.entryCoverage : _exitRatio
+        if (coverageNow >= entryCoverage)
+            return -1
+        if (coverageNow > Math.min(_exitRatio, entryCoverage))
+            return -1
+        return exitCanvasViaCore(true)
+    }
+
+    // 进入子画布（双击、连续缩放都用这一个入口）。返回新画布的 zoom，失败 -1。
+    function enterEmbedViaCore(instanceId, trigger) {
+        var scene = activeScene()
+        if (!scene || !starmapBackendRef || !instanceId)
+            return -1
+        var info = scene.embedEntryInfo(instanceId)
+        if (!info)
+            return -1
+        var parentZoom = zoomLevel
+        var res = starmapBackendRef.enter_starmap_embed(
+                    currentRoute.rootStarmapId,
+                    JSON.stringify(currentRoute.segments),
+                    instanceId)
+        if (!res || res.success !== true || !res.data || !res.data.route
+                || !res.data.location || !res.data.location.currentStarmapId) {
+            routeError = qsTr("进入子星图失败")
+                    + ((res && res.errorCode) ? " (" + res.errorCode + ")" : "")
+            logInteraction("scene_enter_failed", "embed", instanceId, {
+                "trigger": trigger || "",
+                "errorCode": (res && res.errorCode) ? res.errorCode : ""
+            })
+            return -1
+        }
+        var newRoute = normalizeRoute(res.data.route)
+        if (!newRoute)
+            return -1
+        var childKey = routeKeyOf(newRoute)
+        // 连续性：子图 world→屏幕比例 = 概览的 fit 比例（进入后画面与概览同尺寸）；
+        // 子图视口中心由父画布视口中心映射过去，入口切画布前后停在同一屏幕位置。
+        var k = (info.fitScale > 0 && parentZoom > 0) ? info.fitScale / parentZoom : 1.0
+        var boundsCX = info.bounds ? (info.bounds.minX + info.bounds.maxX) / 2 : 0
+        var boundsCY = info.bounds ? (info.bounds.minY + info.bounds.maxY) / 2 : 0
+        var childZoom = info.fitScale > 0 ? info.fitScale : parentZoom
+        childZoom = Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, childZoom))
+        var parentCenterX = screenToWorldX(width / 2)
+        var parentCenterY = screenToWorldY(height / 2)
+        var childCenterX = boundsCX + (parentCenterX - info.centerX) * k
+        var childCenterY = boundsCY + (parentCenterY - info.centerY) * k
+        var childCamera = {
+            zoom: childZoom,
+            panX: width / 2 - childCenterX * childZoom,
+            panY: height / 2 - childCenterY * childZoom
+        }
+        storeEntryContext(childKey, {
+            parentRouteKey: routeKey,
+            instanceId: instanceId,
+            ratio: k,
+            embedDiameter: Math.min(info.width, info.height),
+            embedCenterX: info.centerX,
+            embedCenterY: info.centerY,
+            boundsCenterX: boundsCX,
+            boundsCenterY: boundsCY,
+            // 进入瞬间入口的投影覆盖率：双击在很小的入口上进入时可能低于 60%，
+            // 退场阈值必须再受它约束（见 maybeExitCanvas），否则一进子图、
+            // 甚至继续放大都会立刻被退场判定弹回父图。
+            entryCoverage: coverageOfScreenPx(Math.min(info.width, info.height) * parentZoom)
+        })
+        storeCamera(routeKey, cameraSnapshot())
+        storeCamera(childKey, childCamera)
+        prepareCanvasSwitch()
+        applyRoute(newRoute)
+        applyCamera(childCamera)
+        logInteraction("scene_enter", "embed", instanceId, {
+            "trigger": trigger || "",
+            "zoomEntryKey": _zoomEntryKey,
+            "childRouteKey": childKey,
+            "childStarmapId": res.data.location.currentStarmapId,
+            "parentZoom": parentZoom,
+            "childZoom": childZoom
+        })
+        visualFocusChanged()
+        return childZoom
+    }
+
+    // 退出当前画布，回到 Core 返回的父 route。continuous=true 时按当前镜头
+    // 反推连续父镜头（缩放穿越用）；false 时恢复进入前的父镜头（返回按钮用）。
+    function exitCanvasViaCore(continuous) {
+        if (focusIsRoot || !starmapBackendRef)
+            return -1
+        var childKey = routeKey
+        var childZoom = zoomLevel
+        var res = starmapBackendRef.exit_starmap_canvas(JSON.stringify(currentRoute))
+        if (!res || res.success !== true || !res.data || !res.data.rootStarmapId) {
+            routeError = qsTr("返回父星图失败")
+                    + ((res && res.errorCode) ? " (" + res.errorCode + ")" : "")
+            logInteraction("scene_exit_failed", "scene", "", {
+                "errorCode": (res && res.errorCode) ? res.errorCode : ""
+            })
+            return -1
+        }
+        var parentRoute = normalizeRoute(res.data)
+        if (!parentRoute)
+            return -1
+        var parentKey = routeKeyOf(parentRoute)
+        var ctx = entryContexts[childKey]
+        var cam = cameraStack[parentKey]
+        if (continuous && ctx && ctx.ratio > 0) {
+            var parentZoom = Math.max(_cameraScaleMin,
+                                      Math.min(_cameraScaleMax, childZoom / ctx.ratio))
+            var childCenterX = screenToWorldX(width / 2)
+            var childCenterY = screenToWorldY(height / 2)
+            var parentCenterX = ctx.embedCenterX + (childCenterX - ctx.boundsCenterX) / ctx.ratio
+            var parentCenterY = ctx.embedCenterY + (childCenterY - ctx.boundsCenterY) / ctx.ratio
+            cam = {
+                zoom: parentZoom,
+                panX: width / 2 - parentCenterX * parentZoom,
+                panY: height / 2 - parentCenterY * parentZoom
+            }
+        }
+        if (!cam)
+            cam = defaultCamera()
+        storeCamera(parentKey, cam)
+        prepareCanvasSwitch()
+        applyRoute(parentRoute)
+        applyCamera(cam)
+        logInteraction("scene_exit", "scene", "", {
+            "parentRouteKey": parentKey,
+            "continuous": !!continuous,
+            "childZoom": childZoom,
+            "parentZoom": cam.zoom
+        })
+        visualFocusChanged()
+        return cam.zoom
+    }
+
+    // 双击 Embed：与连续缩放穿越同一个 enter 函数。
     function focusEmbed(hit) {
-        if (!hit || !hit.owner)
+        if (!hit || hit.kind !== "embed" || !hit.owner)
             return
-        var rect = hit.owner.itemSceneRect(hit.kind, hit.id)
-        if (!rect)
+        if (hit.owner !== activeScene() || hit.scenePathKey !== routeKey)
             return
-        // 真正的 child scene path：hit.scenePathKey 是 embed 所属父 Scene，
-        // 进入后的 child scene 要再往下钻一层。
-        var childKey = hit.owner.enteredChildSceneKey(hit.id)
-        // 父子校验在 focusOnSceneRect 之前：只有 embed 所属 Scene 等于当前
-        // 焦点 scenePathKey 时，child 才是直接子层。否则不移动相机、不进栈。
-        if (hit.scenePathKey !== focusScenePathKey)
-            return
-        // 校验通过：保存父层相机，移动相机，推进焦点链。
-        var parentCamera = { zoom: zoomLevel, panX: panX, panY: panY }
-        focusOnSceneRect(rect.x, rect.y, rect.width, rect.height)
-        var entry = {
-            scenePathKey: childKey,
-            starmapId: hit.starmapId,
-            embedInstanceId: hit.id,
-            sceneRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-            targetPath: hit.targetPath,
-            parentCamera: parentCamera
-        }
-        var next = focusStack.slice()
-        next.push(entry)
-        focusStack = next
-        visualFocusChanged()
+        enterEmbedViaCore(hit.id, "double_click")
     }
 
-    // 左上"返回父星图"：pop 最后一层。
-    // - 栈空：已是 root，返回 false（Workspace 据此走 backClicked 退出星图工作区）。
-    // - pop 后：用被 pop 的 entry 里保存的 parentCamera 恢复相机，
-    //   而不是用新栈顶的 sceneRect 重新 focusOnSceneRect。这样每一级返回
-    //   真的回到父层原视角（root 时恢复 root 的 parentCamera）。
+    // 左上"返回父星图"：走 Core 退出路由，恢复进入前的父镜头。
+    // 已是根画布返回 false（Workspace 据此退出星图工作区）。
     function focusParentScene() {
-        if (focusStack.length === 0)
+        if (focusIsRoot)
             return false
-        var next = focusStack.slice()
-        var popped = next.pop()
-        focusStack = next
-        if (popped.parentCamera) {
-            zoomLevel = popped.parentCamera.zoom
-            applyPan(popped.parentCamera.panX, popped.parentCamera.panY)
+        return exitCanvasViaCore(false) > 0
+    }
+
+    // 切画布前清掉旧画布上的瞬时业务手势与编辑汇总键；捏合穿越时保留 pinch
+    // 状态，让同一次捏合继续作用在新画布上。
+    function prepareCanvasSwitch() {
+        setInlineEditingKey("")
+        hideTouchPreview()
+        if (inputRouter)
+            inputRouter.cancelLocalState()
+        if (interaction.pointerMode === "pinch") {
+            interaction.cancelArmed()
+        } else {
+            interaction.reset()
         }
-        visualFocusChanged()
-        return true
     }
 
-    // 缩放覆盖率滞回：zoomAt 末尾调用。只做 demote（pop），不主动 push
-    // （push 只由双击 focusEmbed 触发）。覆盖率口径与 Harmony resolveFocusScenePath
-    // 一致：子星图投影直径 / 视口短边（不是裁剪交集面积 / 视口面积）。
-    // focusOnSceneRect 把子星图放到短边约 72%，旧面积比 0.72*0.72=0.5184 < 0.55
-    // 会在双击进入后下一次 zoomAt 立刻 pop；投影直径比 0.72 > 0.55 才稳定。
-    // 圆心必须落在窗口 20%~80% 区间。退出阈值 0.55，进入阈值 0.70 不在这里 push。
-    // 用 while 循环：一次缩小可能让多层同时掉出窗口。
-    function recomputeFocusFromCoverage() {
-        if (focusStack.length === 0)
-            return
-        var vpW = canvasArea.width
-        var vpH = canvasArea.height
-        if (!(vpW > 0) || !(vpH > 0))
-            return
-        var vpShort = Math.min(vpW, vpH)
-        var changed = false
-        while (focusStack.length > 0) {
-            var top = focusStack[focusStack.length - 1]
-            var r = top.sceneRect
-            var sx0 = worldToScreenX(r.x)
-            var sy0 = worldToScreenY(r.y)
-            var sx1 = worldToScreenX(r.x + r.width)
-            var sy1 = worldToScreenY(r.y + r.height)
-            var projectedDiameter = Math.min(Math.abs(sx1 - sx0), Math.abs(sy1 - sy0))
-            var coverage = projectedDiameter / vpShort
-            var cx = worldToScreenX(r.x + r.width / 2)
-            var cy = worldToScreenY(r.y + r.height / 2)
-            var centerInWindow = cx >= 0.2 * vpW && cx <= 0.8 * vpW
-                    && cy >= 0.2 * vpH && cy <= 0.8 * vpH
-            if (coverage >= 0.55 && centerInWindow)
-                break
-            var next = focusStack.slice()
-            next.pop()
-            focusStack = next
-            changed = true
-        }
-        if (changed)
-            visualFocusChanged()
-    }
-
-    // Issue #834：connectArmed（菜单"连线"发起）时 Router 的 HoverHandler 调这里
-    // 刷新预览。rootContent 是 Canvas 内部 id，Router 跨组件拿不到，由这里转发。
-    function refreshConnectPreview() {
-        if (rootContent)
-            rootContent.refreshConnectPreview()
-    }
-
-    // 当前可见区域（scene 坐标矩形），逐层传给内容做子星图懒加载判定。
+    // 当前可见区域（活动画布的 world 坐标矩形）。
     readonly property var viewportSceneRect: ({
         x: screenToWorldX(0),
         y: screenToWorldY(0),
@@ -277,7 +535,7 @@ Item {
     })
 
     // DragHandler 的 activeTranslation 是 Qt scene 坐标增量。
-    // 映射到本 Canvas local 再用；根层无祖先 scale 时退化成恒等。
+    // 映射到本 Canvas local 再用；无祖先 scale 时退化成恒等。
     function sceneDeltaToCanvas(dx, dy) {
         var o = canvasArea.mapFromItem(null, 0, 0)
         var p = canvasArea.mapFromItem(null, dx, dy)
@@ -285,43 +543,44 @@ Item {
     }
 
     // Issue #801 评论 5894639734: +/- 触屏按钮按需显示，鼠标模式不常驻。
-    // Router 在每次鼠标/触屏事件开头调用 notePointerDevice 切换。
     property bool _touchInputActive: false
     function notePointerDevice(isTouch) {
         _touchInputActive = isTouch
     }
 
-    // Issue #832：内联编辑汇总键（由各层 Content 经 noteInlineEditing 汇总）。
-    // 非空时 Router 的拖动 Handler 让位给编辑中的 TextInput。
+    // Issue #832：内联编辑汇总键（活动画布经 noteInlineEditing 汇总到这里）。
     property string inlineEditingKey: ""
     function setInlineEditingKey(key) {
         inlineEditingKey = key
     }
 
     // Issue #814 评论 5935346839: 星图交互边界日志统一入口。
-    // pathKey 显式传参：现在是全局相机，没有"哪一层是 root"的隐含身份判断。
     function logInteraction(event, itemKind, itemId, fields, scenePathKey) {
-        if (!starmapBackendRef) return
+        if (!starmapBackendRef)
+            return
         var fj = fields ? JSON.stringify(fields) : ""
-        starmapBackendRef.record_interaction(event, scenePathKey === undefined ? "root" : scenePathKey,
-                                              starmapId, itemKind, itemId, fj)
+        starmapBackendRef.record_interaction(
+                    event,
+                    scenePathKey === undefined ? routeKey : scenePathKey,
+                    currentStarmapId !== "" ? currentStarmapId : starmapId,
+                    itemKind, itemId, fj)
     }
 
-    // Issue #822: 统一命中判断入口 —— 递归命中测试，从根层内容开始往下钻。
-    // 空白点击、拖动画布、pointer_press、右键菜单全部共用（现在唯一调用方是 Router）。
+    // ── Issue #832：唯一命中入口 ──
+    // 命中只发生在当前活动画布上；命中身份带该画布的 routeKey。
     function hitTargetAtScreen(sx, sy) {
-        if (!rootContent) return null
-        return rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))
+        var scene = activeScene()
+        if (!scene)
+            return null
+        return scene.hitTargetAtWorld(screenToWorldX(sx), screenToWorldY(sy))
     }
 
     // Issue #814 评论 5935346839: pointer_press 是完整手势的起点边界。
-    // Router 在按下当场调用：命中的对象照常拿到完整交互，
-    // hitKind/hitId 由递归命中当场重算。
     function logPointerPress(button, device, point) {
         var hit = hitTargetAtScreen(point.position.x, point.position.y)
         var kind = hit ? hit.kind : "empty"
         var hitId = hit ? hit.id : ""
-        var hitPathKey = hit ? hit.scenePathKey : "root"
+        var hitPathKey = hit ? hit.scenePathKey : routeKey
         logInteraction("pointer_press", kind, hitId, {
             "button": button,
             "device": device,
@@ -335,15 +594,9 @@ Item {
         }, hitPathKey)
     }
 
-    // ---------------------------------------------------------------------------
-    // Issue #822：整棵递归树唯一的交互状态机，就在这里创建一次。
-    // 各层 StarMapSceneContent 拿到的都是同一个实例（经 Embed 原样下传）。
-    // Issue #832：长按 Timer 与所有状态提升都在 StarMapInputRouter，
-    // 本文件只创建状态机实例。
-    // ---------------------------------------------------------------------------
+    // ── 交互状态机：整张活动画布唯一实例 ──
     StarMapInteractionController {
         id: interaction
-        // 长按阈值用系统的 mousePressAndHoldInterval，和平台其它长按一致。
         longPressInterval: Application.styleHints.mousePressAndHoldInterval > 0
                 ? Application.styleHints.mousePressAndHoldInterval
                 : 800
@@ -351,12 +604,23 @@ Item {
 
     readonly property var sharedInteraction: interaction
 
-    // 菜单辅助状态：菜单归属层就是被点中的那一层。
+    Connections {
+        target: interaction
+        // 捏合结束（pointerMode 离开 pinch）时清掉穿越补偿基准。
+        function onPointerModeChanged() {
+            if (interaction.pointerMode !== "pinch") {
+                canvasArea._pinchSwitchBaseZoom = -1
+                canvasArea._pinchSwitchCanvasZoom = 1
+            }
+        }
+    }
+
+    // 菜单辅助状态：菜单归属就是当前活动画布。
     property var menuOwnerContent: null
     property var selectedNodeForMenu: null
     property var selectedEdgeForMenu: null
     property var selectedEmbedForMenu: null
-    // 右键命中点的 scene 坐标，创建类操作由归属层换算成局部坐标。
+    // 右键命中点的 world 坐标，创建类操作由活动画布直接使用。
     property real contextMenuSceneX: 0
     property real contextMenuSceneY: 0
 
@@ -368,69 +632,65 @@ Item {
     signal edgeSelected(var edge)
     signal selectionCleared()
 
-    // Issue #805 评论 5907045450 第 1 部分：删掉 drillDownRequested / drillUpRequested。
-    // 递归渲染由 StarMapSceneContent 处理，Canvas 不再上抛层级切换请求。
-    // Issue #822: 删掉 editNodeRequested / childEditNodeRequested ——
-    // 节点标题改成节点自身的内联编辑，不再经过外部 Popup。
-
     function clearError() {
-        if (rootContent) rootContent.clearError()
+        routeError = ""
+        var scene = activeScene()
+        if (scene)
+            scene.clearError()
     }
 
     // Issue #798: 公开 reset 入口，供 Workspace 切图 / 不可见时清瞬时交互状态。
-    // Issue #832: 手势现场已经全部集中在 Router + 共享状态机，这里只需复位
-    // 状态机并让整棵树的连线回到 canonical。内联编辑汇总键不在这里清：
-    // 由 Node 的 editing 变化和 delegate 销毁（Repeater.itemRemoved）负责。
     function resetInteraction() {
-        // Issue #798 评论 5892406254: reset 前若正在 move，edgeRenders 已被
-        // transient 坐标更新。reset 后 delegate 回 canonical，edge cache 也要
-        // 一起恢复 canonical，否则节点回去了线还停在拖动位置。
         interaction.reset()
-        if (inputRouter) inputRouter.cancelLocalState()
+        if (inputRouter)
+            inputRouter.cancelLocalState()
         hideTouchPreview()
-        if (rootContent) rootContent.refreshAllEdges()
+        var scene = activeScene()
+        if (scene)
+            scene.refreshAllEdges()
+    }
+
+    // Issue #834：connectArmed（菜单"连线"发起）时 Router 的 HoverHandler 调这里
+    // 刷新预览；活动场景内部就是命中主人。
+    function refreshConnectPreview() {
+        var scene = activeScene()
+        if (scene)
+            scene.refreshConnectPreview()
     }
 
     // ---------------------------------------------------------------------------
-    // 相机层 + 根层内容：整棵递归树的入口。
-    // 相机平移/缩放只存在于 cameraLayer 这一张 Item 上（x/y/scale），
-    // rootContent 只用 anchors.fill 占满相机层，绝不自己再拿 x/y 当平移 ——
-    // 一个 Item 上不能同时有 anchors 和相机两套几何来源。
+    // 活动画布：本文件只加载 currentStarmapId 的一张 StarMapActiveScene。
+    // 相机只是注入给它的两个标量（zoom / pan），内容自己按投影实时绘制。
     // ---------------------------------------------------------------------------
-    Item {
-        id: cameraLayer
-        x: canvasArea.panX
-        y: canvasArea.panY
-        width: canvasArea.width
-        height: canvasArea.height
-        scale: canvasArea.zoomLevel
-        transformOrigin: Item.TopLeft
+    Loader {
+        id: activeSceneLoader
+        anchors.fill: parent
+        z: 1
+        active: canvasArea.currentStarmapId !== ""
+        sourceComponent: activeSceneComponent
+    }
 
-        StarMapSceneContent {
-            id: rootContent
-            anchors.fill: parent
+    Component {
+        id: activeSceneComponent
+        StarMapActiveScene {
             dt: canvasArea.dt
-            rootStarmapId: canvasArea.starmapId
-            pathSegments: []
-            // Issue #822: 根层显式传 "root"，不再由默认值冒名顶替。
-            scenePathKey: "root"
+            starmapId: canvasArea.currentStarmapId
+            rootStarmapId: canvasArea.currentRoute.rootStarmapId
+            pathSegments: canvasArea.currentRoute.segments
+            scenePathKey: canvasArea.routeKey
             starmapBackendRef: canvasArea.starmapBackendRef
             selectionController: canvasArea.selectionController
             interactionController: canvasArea.sharedInteraction
-            globalZoom: canvasArea.zoomLevel
-            depth: 0
-            rootContent: rootContent
-            rootViewportRect: canvasArea.viewportSceneRect
             menuHost: canvasArea
+            zoomLevel: canvasArea.zoomLevel
+            panX: canvasArea.panX
+            panY: canvasArea.panY
 
             onNodeSelected: function(node) { canvasArea.nodeSelected(node) }
             onEdgeSelected: function(edge) { canvasArea.edgeSelected(edge) }
             onSelectionCleared: canvasArea.selectionCleared()
         }
     }
-
-    // Issue #822: 整棵递归树共享的选中状态控制器，由 Workspace 创建并传入。
-    property var selectionController: null
 
     // Background Grid
     Rectangle {
@@ -446,7 +706,7 @@ Item {
                 ctx.clearRect(0, 0, width, height)
                 ctx.fillStyle = _textMuted
 
-                // 网格自身做 LOD：相机放开到 1e-4 后，50 * zoomLevel 会掉到亚像素，
+                // 网格自身做 LOD：相机放开到 1e-4 后，50 × zoomLevel 会掉到亚像素，
                 // 双重循环按 1/zoom² 爆炸。按 5 倍档抬 world 间距，屏幕上实际画出来的
                 // 间距永远 >= 16px，循环次数只跟屏幕尺寸有关。
                 if (!(zoomLevel > 0))
@@ -476,9 +736,7 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // Issue #832：整棵星图唯一的原始输入层，透明铺在整棵可视内容之上。
-    // 所有鼠标/触摸语义（单击/双击/右键/拖动/长按/连线/捏合/滚轮）只从这里进入，
-    // 递归 Node/Embed 不再各自挂业务手势，同一个手势不会再有第二个解释者。
+    // Issue #832：唯一的原始输入层，透明铺在活动画布内容之上。
     // ---------------------------------------------------------------------------
     StarMapInputRouter {
         id: inputRouter
@@ -487,8 +745,7 @@ Item {
         z: 10
     }
 
-    // 连线预览线：整棵星图只有这一条，在根 Canvas 的 overlay 上。
-    // 坐标是 scene 坐标（整棵递归树的顶层 world 坐标），用全局相机换算。
+    // 连线预览线：唯一 overlay，坐标是活动画布 world 坐标，用当前镜头投影。
     Canvas {
         id: connectPreview
         anchors.fill: parent
@@ -518,18 +775,15 @@ Item {
                 return
             if (interaction.connectFromKind === "")
                 return
-            ctx.save()
-            ctx.translate(panX, panY)
-            ctx.scale(zoomLevel, zoomLevel)
             ctx.beginPath()
             // 预览起点/终点都取"与正式边同源"的可见端点（悬停合法目标时贴边界）。
-            ctx.moveTo(interaction.connectFromSceneX, interaction.connectFromSceneY)
-            ctx.lineTo(interaction.connectPreviewEndX, interaction.connectPreviewEndY)
+            ctx.moveTo(canvasArea.worldToScreenX(interaction.connectFromSceneX),
+                       canvasArea.worldToScreenY(interaction.connectFromSceneY))
+            ctx.lineTo(canvasArea.worldToScreenX(interaction.connectPreviewEndX),
+                       canvasArea.worldToScreenY(interaction.connectPreviewEndY))
             ctx.strokeStyle = _accent
-            // 线宽与命中阈值共用同一份 world 线宽常量。
-            ctx.lineWidth = rootContent ? rootContent._edgeLineWorldWidth : 2
+            ctx.lineWidth = canvasArea._edgeScreenStrokeWidth
             ctx.stroke()
-            ctx.restore()
         }
     }
 
@@ -545,7 +799,7 @@ Item {
 
         ToolButton {
             icon.name: "zoom-in"
-            // 缩放锚点是画布中心：按钮自己的 width/height 不是画布尺寸。
+            // 缩放锚点是画布中心：中心若瞄准子星图入口，连续放大同样会穿越。
             onClicked: zoomAt(canvasArea.width / 2, canvasArea.height / 2,
                               zoomLevel * _zoomFactor)
         }
@@ -581,7 +835,6 @@ Item {
     }
 
     // Issue #801 评论 5895310100: 触屏长按菜单视觉层（不抢 pointer grab）。
-    // 此组件纯视觉，无任何 TapHandler/MouseArea/Handler。
     Item {
         id: touchContextPreview
         visible: false
@@ -645,11 +898,10 @@ Item {
     }
 
     // ---------------------------------------------------------------------------
-    // 菜单入口：归属层由递归命中决定，坐标是 scene 坐标。
-    // Issue #832：Router 是唯一调用方；菜单宿主仍在本文件。
+    // 菜单入口：归属就是当前活动画布，坐标是 world 坐标。
     // ---------------------------------------------------------------------------
     function openBlankMenu(sceneX, sceneY, hit, screenX, screenY) {
-        menuOwnerContent = hit ? hit.owner : null
+        menuOwnerContent = hit ? hit.owner : activeScene()
         selectedNodeForMenu = null
         selectedEdgeForMenu = null
         selectedEmbedForMenu = null
@@ -659,12 +911,11 @@ Item {
             "menuKind": "bg",
             "sceneX": sceneX,
             "sceneY": sceneY
-        }, hit ? hit.scenePathKey : "root")
+        }, hit ? hit.scenePathKey : routeKey)
         bgContextMenu.popup(screenX, screenY)
     }
 
-    // 右键命中分发：node / embed / edge 开对应菜单；空白用命中层的 owner 打开
-    // 该层的新建菜单（在子星图空白右键就在子星图里新建）。
+    // 右键命中分发：node / embed / edge 开对应菜单；空白开当前画布的新建菜单。
     function openHitContextMenu(hit, screenX, screenY) {
         var sx = screenToWorldX(screenX)
         var sy = screenToWorldY(screenY)
@@ -703,7 +954,7 @@ Item {
         }
     }
 
-    // 触屏长按视觉层：scene 坐标 → 屏幕坐标后显示。
+    // 触屏长按视觉层：world 坐标 → 屏幕坐标后显示。
     function showTouchPreview(kind, sceneX, sceneY) {
         touchContextPreview.show(kind, worldToScreenX(sceneX), worldToScreenY(sceneY))
     }
@@ -712,7 +963,7 @@ Item {
         touchContextPreview.hide()
     }
 
-    // 触屏长按松手：弹出真正可点击的菜单，归属层就是长按对象的归属层。
+    // 触屏长按松手：弹出真正可点击的菜单，归属就是当前活动画布。
     function showLongPressMenu(kind, id, sceneX, sceneY, owner) {
         menuOwnerContent = owner
         if (kind === "node") {
@@ -857,7 +1108,6 @@ Item {
             }
             onTriggered: {
                 // Issue #834：节点内部链接菜单（StarMapLink，内部跳转）。
-                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 nodePath。
                 if (selectedNodeForMenu && menuOwnerContent)
                     linkDialog.open("node", selectedNodeForMenu.id, menuOwnerContent,
                                     menuOwnerContent.nodePath(selectedNodeForMenu.id))
@@ -1040,7 +1290,6 @@ Item {
             }
             onTriggered: {
                 // Issue #834：子星图入口内部链接菜单（StarMapLink，内部跳转）。
-                // menuOwnerContent 是命中层 SceneContent，source path 用该层完整 embedPath。
                 if (selectedEmbedForMenu && menuOwnerContent)
                     linkDialog.open("embed", selectedEmbedForMenu.instanceId, menuOwnerContent,
                                     menuOwnerContent.embedPath(selectedEmbedForMenu.instanceId))
@@ -1322,8 +1571,8 @@ Item {
                 close()
                 return
             }
-            // Issue #822: 归属层自己把 scene 坐标换算成本层局部坐标，
-            // 空的子星图可以直接新建内容，不用"进入"另一个页面。
+            // Issue #929：归属画布自己按 world 坐标新建；活动画布是无限画布，
+            // 不做圆内安全区 clamp。
             if (createMode === "node")
                 menuOwnerContent.createNodeWithName(name, contextMenuSceneX, contextMenuSceneY)
             else if (createMode === "starmap")
@@ -1336,7 +1585,6 @@ Item {
     // Issue #834：内部链接弹窗（StarMapLink，内部跳转）。
     // 列出该 source 已有的内部链接，可删除；"选择目标"进入 linkArmed，
     // 下一次点 node/embed 是 target（不填 URI，不是外部超链接）。
-    // source path 由菜单传入（命中层 SceneContent 的 nodePath/embedPath）。
     // ---------------------------------------------------------------------------
     Popup {
         id: linkDialog
@@ -1356,7 +1604,7 @@ Item {
 
         property string sourceKind: ""    // "node" / "embed"
         property string sourceId: ""
-        property var sourceOwner: null    // 命中层 SceneContent
+        property var sourceOwner: null    // 命中层 StarMapActiveScene
         property var sourcePath: null     // StarMapTargetPathDto
         property var linkItems: []        // 已有内部链接列表
 
@@ -1368,8 +1616,6 @@ Item {
         }
 
         // target 路径摘要：node 显示 nodeId，starmap(embed) 显示"子星图"。
-        // Issue #834 复核：linkItems 现在是 [{ link: dto, hostOwner: hostContent }]，
-        // 这里收 item，读 item.link。
         function targetSummary(item) {
             var link = item && item.link ? item.link : null
             if (!link || !link.target)
@@ -1429,7 +1675,7 @@ Item {
                         onClicked: {
                             // 重新指定这条 Link 的 target：进入 linkArmed 并记住
                             // existingLinkId + oldHostOwner，选新 target 后 finishLink
-                            // 走 update/migrate。
+                            // 走 update。
                             if (modelData.hostOwner && modelData.link.linkId) {
                                 interaction.beginLinkArmed(
                                         linkDialog.sourceKind,
@@ -1459,7 +1705,7 @@ Item {
                         text: qsTr("删除")
                         onClicked: {
                             // 删除必须调这条 Link 自己的 hostOwner.deleteLink，
-                            // 不能固定 sourceOwner（跨层 Link 宿主可能不是命中层）。
+                            // 不能固定 sourceOwner。
                             if (modelData.hostOwner && modelData.link.linkId) {
                                 modelData.hostOwner.deleteLink(modelData.link.linkId)
                                 linkDialog.refreshItems()

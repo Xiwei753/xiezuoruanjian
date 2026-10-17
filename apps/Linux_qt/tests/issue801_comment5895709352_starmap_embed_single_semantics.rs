@@ -11,8 +11,8 @@
 //! 2. `label` 不再把对象类型（"子星图"）当标题/占位文案，统一用 `qsTr("未命名")`。
 //! 3. `StarMapEmbed.qml` 默认 `label` 为空。
 //! 4. `StarMapNode.qml` / `StarMapCanvas.qml` 不再有 `isPortal` 语义，
-//!    Node 双击统一走 `editNodeRequested`，不再特判 `portal.destinationStarmapId`
-//!    下钻；下钻入口只剩 Embed。
+//!    Node 双击统一走归属层内联编辑（#929 起 Node delegate 位于 StarMapActiveScene），
+//!    不再特判 `portal.destinationStarmapId` 下钻；下钻入口只剩 Embed。
 //! 5. `computeEdgeRenders()` 把归一后的旧 portal 节点几何补进边锚点 layout，
 //!    否则连到旧 portal 节点的边会因 `LocalNodeMissing`/`PortalMissing` 整条消失
 //!    （行为契约由 `starmap_view::edge_render` 的两个单测固定）。
@@ -21,6 +21,10 @@
 //!    `kind` 属性和 `getKindLabel`/`getKindColor` 死代码，`StarMapCanvas` 不再下发
 //!    `kind`；Embed 卡片文本直接绑定 `label`，渲染层不回落类型名，
 //!    空 label 由 Controller 统一兜底为 `qsTr("未命名")`。
+//!
+//! #929 取代 #822 的"递归内容 + 单一全局视口"模型：任意时刻只有一张活动画布
+//! （StarMapActiveScene），子星图入口在父图里只有圆壳 + 只读微缩概览，进入 / 退出
+//! 走 Core 导航路由；本文件的接线断言随之改指活动画布 / Canvas。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -32,6 +36,7 @@ use source_guard::{function_window, read_src};
 const GRAPH_CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 
@@ -131,7 +136,9 @@ fn node_component_has_no_portal_flag() {
     );
 }
 
-/// 4. Canvas 的 Node delegate 没有 isPortal，双击统一编辑。
+/// 4. 活动画布的 Node delegate 没有 isPortal，双击统一编辑。
+///
+/// #929 取代 #822：Node delegate 从递归层 Content 搬进唯一活动画布 StarMapActiveScene。
 #[test]
 fn canvas_node_delegate_has_no_portal_special_case() {
     let src = strip_line_comments(&read_src(CANVAS));
@@ -144,7 +151,8 @@ fn canvas_node_delegate_has_no_portal_special_case() {
         "StarMapCanvas 不得再按 portal.destinationStarmapId 特判下钻"
     );
 
-    // Issue #822/#832：Node delegate 已从根 Canvas 搬到递归层 Content；
+    // Issue #822/#832：Node delegate 已从根 Canvas 搬进活动画布；#929 起唯一活动画布
+    // 是 StarMapActiveScene（SceneContent 退化为只读微缩概览）。
     // 双击语义收进唯一 Router，直接调归属层进入节点自身的 TextInput。
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     let double_click = function_window(&router, "function handleDoubleTap(", 600);
@@ -152,35 +160,70 @@ fn canvas_node_delegate_has_no_portal_special_case() {
         double_click.contains("hit.owner.beginInlineEdit(hit.id)"),
         "Node 双击必须进入命中层节点的内联编辑，实际窗口:\n{double_click}"
     );
-    let content = strip_line_comments(&read_src(CONTENT));
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        content.contains("function beginInlineEdit(nodeId)"),
-        "归属层必须保留内联编辑入口"
+        active.contains("function beginInlineEdit(nodeId)"),
+        "活动画布必须保留内联编辑入口"
     );
     assert!(
-        !content.contains("editNodeRequested"),
+        !active.contains("editNodeRequested"),
         "内联编辑后不得再保留 editNodeRequested 外部 Popup 通道"
+    );
+    // Node delegate 本体（活动画布内）不得再按 portal 特判下钻。
+    let node_delegate = slice_between(&active, "id: nodeItem", "id: embedRepeater");
+    assert!(
+        !node_delegate.contains("isPortal") && !node_delegate.contains("destinationStarmapId"),
+        "活动画布的 Node delegate 不得再按 portal.destinationStarmapId 特判下钻，实际片段:\n{node_delegate}"
     );
 }
 
-/// 4b. Issue #822：子星图不再有"下钻进入另一页"这个入口，也就不需要下钻信号。
-/// 子星图内容就是本层的递归 Content，永远在同一个全局视口里就地展开；
-/// 命中与菜单都走递归命中入口，Embed 只是一种内容容器语义。
+/// 4b. #929 取代 #822/#801：子星图不再是"父图里就地展开的递归内容"，也不是
+/// drillDown 式的另一层页面——进入 / 退出都是 Core 导航路由驱动的活动画布切换
+/// （enter_starmap_embed / exit_starmap_canvas）。旧 drillDown/drillUp 信号仍然
+/// 不允许回归；命中不再递归进子画布内容，子星图整块都是父画布的入口。
 #[test]
 fn no_starmap_drill_down_entry_remains() {
-    for src_name in [CANVAS, CONTENT, EMBED] {
+    for src_name in [CANVAS, CONTENT, EMBED, ACTIVE_SCENE] {
         let src = strip_line_comments(&read_src(src_name));
         assert!(
             !src.contains("drillDown") && !src.contains("drillUp"),
-            "{src_name} 不得再有下钻/回退入口，子星图是就地展开的递归内容"
+            "{src_name} 不得再有 drillDown/drillUp 页面下钻入口"
         );
     }
-    // 递归命中入口能返回子星图命中：interactive 子层递归，低 LOD 整体按 embed。
-    let content = strip_line_comments(&read_src(CONTENT));
-    let hit = function_window(&content, "function hitTargetAtScene(", 3600);
+    // 进入 / 退出只有 Core 导航路由这一条路：双击与连续缩放共用 enterEmbedViaCore。
+    let canvas = strip_line_comments(&read_src(CANVAS));
+    let enter = function_window(&canvas, "function enterEmbedViaCore(", 1200);
     assert!(
-        hit.contains("child.hitTargetAtScene(sceneX, sceneY)") && hit.contains("kind: \"embed\""),
-        "递归命中必须命中子星图内部（interactive 递归 / 低 LOD embed 兜底），实际窗口:\n{hit}"
+        enter.contains("starmapBackendRef.enter_starmap_embed("),
+        "进入子画布必须走 Core enter_starmap_embed，实际窗口:\n{enter}"
+    );
+    let exit = function_window(&canvas, "function exitCanvasViaCore(", 900);
+    assert!(
+        exit.contains("starmapBackendRef.exit_starmap_canvas("),
+        "退出子画布必须走 Core exit_starmap_canvas，实际窗口:\n{exit}"
+    );
+    let zoom_enter = function_window(&canvas, "function maybeEnterEmbedAt(", 1200);
+    assert!(
+        zoom_enter.contains("enterEmbedViaCore(emb.instanceId, \"zoom\")"),
+        "连续缩放穿越必须走同一个 enter 入口，实际窗口:\n{zoom_enter}"
+    );
+    let focus = function_window(&canvas, "function focusEmbed(hit)", 400);
+    assert!(
+        focus.contains("enterEmbedViaCore(hit.id, \"double_click\")"),
+        "双击 Embed 必须走同一个 enter 入口，实际窗口:\n{focus}"
+    );
+    // 命中不再递归到子画布内部：chrome 与圆内内容都返回 embed 命中。
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    assert!(
+        !active.contains("hitTargetAtScene"),
+        "活动画布不得再递归进子画布内容（hitTargetAtScene 已不存在）"
+    );
+    let hit = function_window(&active, "function hitTargetAtWorld(", 2200);
+    assert!(
+        hit.contains("findEmbedChromeAt(wx, wy)")
+            && hit.contains("findEmbedContentAt(wx, wy)")
+            && hit.contains("kind: \"embed\""),
+        "子星图整块（chrome + 内容）必须都按 embed 入口命中，实际窗口:\n{hit}"
     );
 }
 
@@ -286,17 +329,22 @@ fn legacy_portal_operations_route_to_node_api() {
             && !canvas.contains("legacyPortalNodeId"),
         "StarMapCanvas 不得再拼 Embed 目标路径或直接访问 legacyPortalNodeId"
     );
-    // Content 有 embedPath()，只用 Controller 的 embedPathSegment 分流旧 portal 身份
-    let content = strip_line_comments(&read_src(CONTENT));
-    let embed_path = function_window(&content, "function embedPath(instanceId)", 600);
+    // #929：路径 DTO 的拼装跟着唯一活动画布走（StarMapActiveScene）；
+    // SceneContent 是只读微缩概览，不再承载身份/路径语义。embedPath 仍只用
+    // Controller 的 embedPathSegment 分流旧 portal 身份。
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    let embed_path = function_window(&active, "function embedPath(instanceId)", 600);
     assert!(
         embed_path.contains("graphController.embedPathSegment(instanceId)"),
-        "Content 的 embedPath 必须通过 graphController.embedPathSegment 分流，实际窗口:\n{embed_path}"
+        "活动画布的 embedPath 必须通过 graphController.embedPathSegment 分流，实际窗口:\n{embed_path}"
     );
-    assert!(
-        !content.contains("legacyPortalNodeId") && !content.contains("enterPortal{"),
-        "Content 不得自行判断 legacyPortalNodeId 或直接构造 enterPortal 段"
-    );
+    for src_name in [CONTENT, ACTIVE_SCENE] {
+        let src = strip_line_comments(&read_src(src_name));
+        assert!(
+            !src.contains("legacyPortalNodeId") && !src.contains("enterPortal{"),
+            "{src_name} 不得自行判断 legacyPortalNodeId 或直接构造 enterPortal 段"
+        );
+    }
     // Controller 只保留唯一入口 embedPathSegment：旧 portal → enterPortal，新 Embed → enterEmbed
     assert!(
         controller.contains("function embedPathSegment(instanceId)"),

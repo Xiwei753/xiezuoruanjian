@@ -51,6 +51,29 @@ pub struct StarMapBackend {
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
     resolve_starmap_path:
         qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QJsonObject),
+    // Issue #929：独立画布导航（Core 路由）QML 桥。
+    resolve_starmap_navigation_json:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QString),
+    resolve_starmap_navigation:
+        qt_method!(fn(&self, root_starmap_id: QString, segments_json: QString) -> QJsonObject),
+    enter_starmap_embed_json: qt_method!(
+        fn(
+            &self,
+            root_starmap_id: QString,
+            segments_json: QString,
+            instance_id: QString,
+        ) -> QString
+    ),
+    enter_starmap_embed: qt_method!(
+        fn(
+            &self,
+            root_starmap_id: QString,
+            segments_json: QString,
+            instance_id: QString,
+        ) -> QJsonObject
+    ),
+    exit_starmap_canvas_json: qt_method!(fn(&self, route_json: QString) -> QString),
+    exit_starmap_canvas: qt_method!(fn(&self, route_json: QString) -> QJsonObject),
     plan_cross_layer_connection_json:
         qt_method!(fn(&self, from_path_json: QString, to_path_json: QString) -> QString),
     plan_cross_layer_connection:
@@ -553,6 +576,63 @@ impl StarMapBackend {
         segments_json: QString,
     ) -> QJsonObject {
         self.with_app(|app| app.resolve_starmap_path(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    // Issue #929：独立画布导航桥（Core 保存路由，平台只做投影与渲染）。
+    fn resolve_starmap_navigation_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QString {
+        self.with_app(|app| app.resolve_starmap_navigation_json(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn resolve_starmap_navigation(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.resolve_starmap_navigation(root_starmap_id, segments_json))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn enter_starmap_embed_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+        instance_id: QString,
+    ) -> QString {
+        self.with_app(|app| {
+            app.enter_starmap_embed_json(root_starmap_id, segments_json, instance_id)
+        })
+        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn enter_starmap_embed(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+        instance_id: QString,
+    ) -> QJsonObject {
+        self.with_app(|app| app.enter_starmap_embed(root_starmap_id, segments_json, instance_id))
+            .unwrap_or_else(|_| {
+                crate::backend::json_utils::qjson_object_from_json(
+                    &crate::backend::json_utils::borrow_conflict_error_json(),
+                )
+            })
+    }
+    fn exit_starmap_canvas_json(&self, route_json: QString) -> QString {
+        self.with_app(|app| app.exit_starmap_canvas_json(route_json))
+            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+    }
+    fn exit_starmap_canvas(&self, route_json: QString) -> QJsonObject {
+        self.with_app(|app| app.exit_starmap_canvas(route_json))
             .unwrap_or_else(|_| {
                 crate::backend::json_utils::qjson_object_from_json(
                     &crate::backend::json_utils::borrow_conflict_error_json(),

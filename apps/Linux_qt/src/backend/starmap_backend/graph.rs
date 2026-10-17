@@ -97,6 +97,95 @@ impl AppBackend {
         qjson_object_from_json(&raw)
     }
 
+    // -------------------------------------------------------------------------
+    // 星图导航路由（独立画布）— Issue #902 / #929
+    // -------------------------------------------------------------------------
+
+    // AppBackend::resolve_starmap_navigation_json
+    /// 按 root + segments 定位当前活动画布（独立画布协议，Core 是路由唯一真相）。
+    pub(crate) fn resolve_starmap_navigation_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QString {
+        let root = root_starmap_id.to_string();
+        let segs = segments_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::resolve_starmap_navigation(&core, &root, &segs).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::resolve_starmap_navigation
+    pub(crate) fn resolve_starmap_navigation(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .resolve_starmap_navigation_json(root_starmap_id, segments_json)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
+    // AppBackend::enter_starmap_embed_json
+    /// 从当前 route 追加一个 Embed 段进入子画布，返回 EnterStarmapResultDto。
+    pub(crate) fn enter_starmap_embed_json(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+        instance_id: QString,
+    ) -> QString {
+        let root = root_starmap_id.to_string();
+        let segs = segments_json.to_string();
+        let iid = instance_id.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::enter_starmap_embed(&core, &root, &segs, &iid).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::enter_starmap_embed
+    pub(crate) fn enter_starmap_embed(
+        &self,
+        root_starmap_id: QString,
+        segments_json: QString,
+        instance_id: QString,
+    ) -> QJsonObject {
+        let raw = self
+            .enter_starmap_embed_json(root_starmap_id, segments_json, instance_id)
+            .to_string();
+        qjson_object_from_json(&raw)
+    }
+
+    // AppBackend::exit_starmap_canvas_json
+    /// 弹出 route 最后一个段回到父画布（纯路径操作）。
+    pub(crate) fn exit_starmap_canvas_json(&self, route_json: QString) -> QString {
+        let route = route_json.to_string();
+        if let Some(core) = self.core_api() {
+            starmap_bridge::exit_starmap_canvas(&core, &route).into()
+        } else {
+            crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
+                "core api not available".to_string(),
+            ))
+            .into()
+        }
+    }
+
+    // AppBackend::exit_starmap_canvas
+    pub(crate) fn exit_starmap_canvas(&self, route_json: QString) -> QJsonObject {
+        let raw = self.exit_starmap_canvas_json(route_json).to_string();
+        qjson_object_from_json(&raw)
+    }
+
     // AppBackend::plan_cross_layer_connection_json
     /// 跨层连线宿主规划：两条从同一根星图出发的绝对端点路径交给 Core，
     /// 返回宿主星图、宿主 Scene 路径和两条相对宿主的端点路径。

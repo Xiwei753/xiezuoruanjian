@@ -32,6 +32,13 @@
 //! QML 组件依赖 qml_resources qrc 与 Rust 注册的上下文属性，无法在本仓库的
 //! Rust 测试里实例化，因此按仓库既有惯例（issue801/issue814 系列 WHITE_BOX
 //! 测试）读取 QML 源码，确定性断言这次修复的接线不变量，防止回退。
+//!
+//! #929 更新：路由身份从字面量 "root" / 子层 pathKey 拼接改为 Core 导航路由的
+//! `routeKey`（根 ID + 完整 segments）。活动画布由 StarMapCanvas 按 currentRoute
+//! 解析后加载，父相机与进入上下文都按 routeKey 保存；`StarMapSceneContent` 只是
+//! 只读微缩概览，不再参与路由身份。旧守卫
+//! `root_scene_path_key_is_root_and_children_are_not` 随之改写为
+//! `route_key_is_root_id_plus_full_segments`。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -43,6 +50,7 @@ use source_guard::{count_occurrences, function_window, read_src};
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
 
 /// 去掉整行 `//` 注释，只留可执行语句。
@@ -222,37 +230,75 @@ fn router_wheel_is_the_only_wheel_entry() {
     );
 }
 
-/// Issue #822：根层的 `scenePathKey` 由根 Canvas 显式写死 `"root"`，
-/// 子层的 `scenePathKey` 由父 pathKey + `"/embed_" + instanceId` 拼成并在创建时一次给全。
-///
-/// `StarMapSceneContent.scenePathKey` 是 required property 且**没有** `"root"` 默认值，
-/// 因此不存在"子层先冒充根层再修正"的中间态——这正是诊断包里
-/// `depth=1 + pathKey=root` 的根因。若有人给 scenePathKey 加回默认值，这条守卫立刻失败。
+/// #929 取代 #822：不再有字面量 `scenePathKey: "root"`，也不再有子层
+/// `parentPathKey + "/embed_" + instanceId` 拼接。路由身份 = `routeKey`
+/// （根 ID + 完整 segments）：同一目标图的不同 Embed 入口路由不同、各自独立；
+/// 活动画布身份与父相机 / 进入上下文都按 routeKey 保存。
 #[test]
-fn root_scene_path_key_is_root_and_children_are_not() {
+fn route_key_is_root_id_plus_full_segments() {
     let canvas = read_src(CANVAS);
     assert!(
-        canvas.contains("scenePathKey: \"root\""),
-        "根 StarMapSceneContent 必须由 StarMapCanvas 显式传 scenePathKey: \"root\""
+        canvas.contains("readonly property string routeKey: routeKeyOf(currentRoute)"),
+        "StarMapCanvas 必须以 routeKey 作为路由身份"
+    );
+    let key_fn = function_window(&canvas, "function routeKeyOf(route)", 700);
+    assert!(
+        key_fn.contains("route.rootStarmapId")
+            && key_fn.contains("\"enterEmbed:\" + (s.instanceId")
+            && key_fn.contains("\"enterPortal:\" + (s.nodeId"),
+        "routeKey 必须由根 ID + 完整 segments（enterEmbed/enterPortal）拼成，实际窗口:\n{key_fn}"
     );
 
+    // 父相机 / 进入上下文按 routeKey 保存，退出按当前 routeKey 的上下文反推。
+    assert!(
+        canvas.contains("property var cameraStack: ({})")
+            && canvas.contains("storeCamera(routeKey, cameraSnapshot())"),
+        "父相机必须按 routeKey 保存（同一目标图的不同入口各自独立）"
+    );
+    let exit_fn = function_window(&canvas, "function maybeExitCanvas()", 900);
+    assert!(
+        exit_fn.contains("entryContexts[routeKey]") && exit_fn.contains("exitCanvasViaCore(true)"),
+        "退出必须按当前 routeKey 的进入上下文反推父镜头，实际窗口:\n{exit_fn}"
+    );
+    // 进入 / 退出阈值是入口投影直径占视口短边：70% 进，60% 出。
+    assert!(
+        canvas.contains("readonly property real _enterRatio: 0.70")
+            && canvas.contains("readonly property real _exitRatio: 0.60"),
+        "进入/退出阈值必须是 70% / 60%（入口投影直径占视口短边）"
+    );
+
+    // 活动画布身份用完整 routeKey，不是字面量 "root"。
+    assert!(
+        canvas.contains("scenePathKey: canvasArea.routeKey"),
+        "活动画布身份必须传完整 routeKey"
+    );
+    assert!(
+        !canvas.contains("scenePathKey: \"root\""),
+        "不得再写死 scenePathKey: \"root\""
+    );
+
+    let scene = read_src(ACTIVE_SCENE);
+    assert!(
+        scene.contains("required property string scenePathKey"),
+        "StarMapActiveScene 的 scenePathKey 必须是 required property"
+    );
+    assert!(
+        !scene.contains("property string scenePathKey: \"root\""),
+        "StarMapActiveScene 的 scenePathKey 不得带 \"root\" 默认值，否则活动画布会冒充根画布"
+    );
+    assert!(
+        scene.contains("pathKey: scene.scenePathKey"),
+        "活动画布的 GraphController 必须显式接收完整 routeKey 作为 pathKey"
+    );
+    assert!(
+        scene.contains("graphController.pathKey = scene.scenePathKey"),
+        "切换画布时必须显式落 pathKey 再加载图，不能只靠绑定求值顺序读到上一张画布"
+    );
+
+    // 只读微缩概览不参与路由身份。
     let content = read_src(CONTENT);
     assert!(
-        content.contains("required property string scenePathKey"),
-        "StarMapSceneContent 的 scenePathKey 必须是 required property"
-    );
-    assert!(
-        !content.contains("property string scenePathKey: \"root\""),
-        "StarMapSceneContent 的 scenePathKey 不得带 \"root\" 默认值，否则子层会冒充根层"
-    );
-
-    let embed = read_src(EMBED);
-    assert!(
-        embed.contains("parentPathKey + \"/embed_\" + instanceId"),
-        "子 Content 的 scenePathKey 必须由父 pathKey + \"/embed_\" + instanceId 拼成，永远不等于 \"root\""
-    );
-    assert!(
-        embed.contains("\"scenePathKey\": childContentPathKey"),
-        "StarMapEmbed 必须在创建子 Content 时一次给全 scenePathKey，子层不得回退到 root"
+        !content.contains("scenePathKey"),
+        "只读微缩概览不得再持有 scenePathKey"
     );
 }

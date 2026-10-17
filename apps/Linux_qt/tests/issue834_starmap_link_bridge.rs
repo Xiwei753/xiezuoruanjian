@@ -7,18 +7,32 @@
 //! 4. InteractionController 有 linkArmed/connectArmed/beginLinkArmed/beginConnectFromMenu/cancelArmed。
 //! 5. 跨层宿主规划收回 Core：PathPlanner 不再持有 LCA 逻辑，SceneContent 调
 //!    plan_cross_layer_connection。
-//! 6. SceneContent 有 finishLink/commitLinkWithPaths/listLinksForSource。
+//! 6. 活动画布 StarMapActiveScene 有 finishLink/commitLinkWithPaths/listLinksForSource
+//!    （#929 取代 #822/#834：SceneContent 退化为只读微缩概览，链接提交跟活动画布走）。
 //! 7. Canvas：hyperlinkDialog 已删，linkDialog 已建；菜单有"内部链接"和"连线"；
 //!    signal 改名 visualFocusChanged（无 focusChanged 撞名）。
 //! 8. StarMapEmbed：填充用 surface/surfaceContainerLow，边框用 inverseSurface，
-//!    MultiEffect 圆形 mask，selectionRing 选中 ring，antialiasing。
+//!    正圆壳 + 内接安全区概览（#929 删除圆形 FBO mask / 遮罩纹理），主题 accent
+//!    选中 ring，antialiasing。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "common/source_guard.rs"]
 mod source_guard;
 
-use source_guard::read_src;
+use source_guard::{function_window, read_src};
+
+/// 去掉整行 `//` 注释，只留可执行语句；负向断言不受历史注释影响。
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 const BRIDGE: &str = "src/starmap_bridge.rs";
 const LINKS_BACKEND: &str = "src/backend/starmap_backend/links.rs";
@@ -27,6 +41,7 @@ const GRAPH_CTL: &str = "qml/StarMapGraphController.qml";
 const INTERACTION: &str = "qml/StarMapInteractionController.qml";
 const PLANNER: &str = "qml/StarMapPathPlanner.js";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 
@@ -131,19 +146,38 @@ fn planner_no_longer_owns_host_planning() {
 }
 
 #[test]
-fn scene_content_link_commit_present() {
-    let sc = read_src(CONTENT);
+fn active_canvas_link_commit_present() {
+    // #929 取代 #822/#834：可交互画布只剩 StarMapActiveScene，
+    // StarMapSceneContent 退化为只读微缩概览，内部链接的提交 / 查询 API
+    // 全部跟着活动画布走。
+    let sc = strip_line_comments(&read_src(CONTENT));
     for f in [
         "function finishLink(",
         "function commitLinkWithPaths(",
         "function listLinksForSource(",
     ] {
-        assert!(sc.contains(f), "SceneContent 缺 {}", f);
+        assert!(
+            !sc.contains(f),
+            "只读概览 StarMapSceneContent 不得再承载 {f}"
+        );
+    }
+    assert!(
+        !sc.contains("plan_cross_layer_connection"),
+        "只读概览不得承担跨层宿主规划"
+    );
+
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    for f in [
+        "function finishLink(",
+        "function commitLinkWithPaths(",
+        "function listLinksForSource(",
+    ] {
+        assert!(active.contains(f), "活动画布 StarMapActiveScene 缺 {f}");
     }
     // 宿主规划统一走 Core 的 plan_cross_layer_connection。
     assert!(
-        sc.contains("planCrossLayerConnection(fromPath, toPath)"),
-        "SceneContent 未用 Core 的跨层宿主规划"
+        active.contains("planCrossLayerConnection(fromPath, toPath)"),
+        "活动画布必须用 Core 的跨层宿主规划"
     );
 }
 
@@ -183,8 +217,8 @@ fn qstr_connect_line() -> &'static str {
 }
 
 #[test]
-fn embed_visual_uses_surface_and_inverse_and_mask() {
-    let embed = read_src(EMBED);
+fn embed_visual_uses_surface_inverse_and_accent_ring() {
+    let embed = strip_line_comments(&read_src(EMBED));
     // 填充用表面色（不再用 _accentSoft 作主填充）
     assert!(
         embed.contains("_surfaceLow")
@@ -197,13 +231,30 @@ fn embed_visual_uses_surface_and_inverse_and_mask() {
         embed.contains("_inverseSurface") || embed.contains("dt.inverseSurface"),
         "Embed 未改用反色边框"
     );
-    // 圆形 mask
+    // #929 取代 #834：正圆壳 + 内接安全区微缩概览天然不出圆，
+    // 不再有圆形 FBO 遮罩 / 遮罩纹理；旧 selectionRing 字面量 token 也已删除。
     assert!(
-        embed.contains("MultiEffect") || embed.contains("OpacityMask"),
-        "Embed 未用 MultiEffect/OpacityMask 圆形 mask"
+        !embed.contains("MultiEffect")
+            && !embed.contains("OpacityMask")
+            && !embed.contains("ShaderEffectSource")
+            && !embed.contains("maskedContent"),
+        "Embed 不得再保留 MultiEffect/OpacityMask 圆形 mask / 遮罩纹理"
     );
-    // 选中 ring
-    assert!(embed.contains("selectionRing"), "Embed 缺 selectionRing");
+    assert!(
+        !embed.contains("selectionRing"),
+        "Embed 不得再引用已删除的 selectionRing token"
+    );
+    // 外壳必须是正圆：radius = width / 2。
+    assert!(
+        embed.contains("radius: width / 2"),
+        "Embed 圆壳必须是正圆（radius = width / 2）"
+    );
+    // 选中 ring 只叠一圈主题强调色，由 isSelected 驱动。
+    let ring = function_window(&embed, "border.color: root.dt.accent", 200);
+    assert!(
+        ring.contains("visible: root.isSelected"),
+        "选中环必须以 isSelected 驱动，实际窗口:\n{ring}"
+    );
     // antialiasing
     assert!(
         embed.contains("antialiasing: true"),

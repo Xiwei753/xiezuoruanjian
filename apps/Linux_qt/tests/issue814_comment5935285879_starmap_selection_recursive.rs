@@ -6,17 +6,19 @@
 //! 1. `StarMapSelectionController.qml` 存在，有 `select/clear/matches` 三个方法，
 //!    选中身份由三元组 (scenePathKey, kind, itemId) 唯一确定。
 //! 2. `StarMapWorkspace.qml` 实例化 `StarMapSelectionController`，传给根 Canvas。
-//! 3. `StarMapCanvas.qml` 有 `selectionController` property，传给根 Content。
-//! 4. `StarMapSceneContent.qml` 有 `selectionController` required property，传给自己的
-//!    GraphController 和 Embed delegate；Node/Embed/Edge 的 isSelected 从
-//!    `selectionController.matches` 派生，且必须带本层 `scenePathKey`。
+//! 3. `StarMapCanvas.qml` 有 `selectionController` property，传给活动画布。
+//! 4. `StarMapActiveScene.qml` 有 `selectionController` required property，传给
+//!    自己的 GraphController；Node/Embed/Edge 的 isSelected 从
+//!    `selectionController.matches` 派生，且必须带本 route 的 `scenePathKey`。
 //! 5. `StarMapGraphController.qml` 不再用 `applySelection` 数组重建维护 isSelected，
 //!    `selectNode/selectEdge/selectEmbed/clearSelection` 改用共享 selectionController。
-//! 6. `StarMapEmbed.qml` 创建 child Content 时传 `selectionController`，子层沿用
-//!    同一个实例，不每层新建。
+//! 6. `StarMapEmbed.qml` 不再创建 child Content：父图里的只读微缩概览不参与选中，
+//!    入口的选中环仍用主题强调色表达 isSelected。
 //!
-//! #822 更新：`StarMapScene.qml` 已删除，递归层改为 `StarMapSceneContent.qml`，
-//! 根层由 `StarMapCanvas.qml` 直接创建，共享选中链路少一跳。
+//! #929 更新：独立画布协议删除递归子画布与 childContentLoader，共享选中链路
+//! 变成 Workspace → Canvas → 唯一 StarMapActiveScene → GraphController /
+//! Node/Embed/Edge delegate；`StarMapSceneContent.qml` 只是只读微缩概览，
+//! 既不持有 selectionController，也没有 scenePathKey。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -25,9 +27,22 @@ mod source_guard;
 
 use source_guard::{function_window, read_src};
 
+/// 去掉整行 `//` 注释，只留可执行语句。
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 const CONTROLLER_QML: &str = "qml/StarMapSelectionController.qml";
 const WORKSPACE: &str = "qml/StarMapWorkspace.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const GRAPH_CONTROLLER: &str = "qml/StarMapGraphController.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
@@ -105,44 +120,48 @@ fn canvas_has_selection_controller_and_forwards_to_root_content() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. Content 有 selectionController required property，isSelected 从 matches 派生
+// 4. 活动画布有 selectionController required property，isSelected 从 matches 派生
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn content_has_selection_controller_and_derives_is_selected() {
-    let src = read_src(CONTENT);
+fn active_scene_has_selection_controller_and_derives_is_selected() {
+    // #929 取代 #822：递归 Content 不再持有共享选中；唯一实时场景
+    // StarMapActiveScene 接收共享 selectionController，传给本画布
+    // GraphController，并由 Node/Embed/Edge delegate 派生 isSelected。
+    let src = read_src(ACTIVE_SCENE);
     assert!(
         src.contains("required property var selectionController"),
-        "StarMapSceneContent 必须有 selectionController required property"
+        "StarMapActiveScene 必须有 selectionController required property"
     );
-    // 传给本层 GraphController
+    // 传给本画布 GraphController
     assert!(
-        src.contains("selectionController: content.selectionController"),
-        "StarMapSceneContent 必须把 selectionController 传给本层 graphController"
+        src.contains("selectionController: scene.selectionController"),
+        "StarMapActiveScene 必须把 selectionController 传给本画布 graphController"
     );
-    // Node isSelected 从 matches 派生，且带本层 scenePathKey
+    // Node isSelected 从 matches 派生，且带本 route 的 scenePathKey
     assert!(
         src.contains(
-            "content.selectionController.matches(content.scenePathKey, \"node\", nodeData.id)"
+            "scene.selectionController.matches(scene.scenePathKey, \"node\", nodeData.id)"
         ),
-        "Node delegate 的 isSelected 必须从 selectionController.matches(content.scenePathKey, \"node\", id) 派生"
+        "Node delegate 的 isSelected 必须从 selectionController.matches(scene.scenePathKey, \"node\", id) 派生"
     );
     // Embed isSelected 从 matches 派生
     assert!(
         src.contains(
-            "content.selectionController.matches(content.scenePathKey, \"embed\", embedData.instanceId)"
+            "scene.selectionController.matches(scene.scenePathKey, \"embed\", embedData.instanceId)"
         ),
-        "Embed delegate 的 isSelected 必须从 selectionController.matches(content.scenePathKey, \"embed\", instanceId) 派生"
+        "Embed delegate 的 isSelected 必须从 selectionController.matches(scene.scenePathKey, \"embed\", instanceId) 派生"
     );
     // Edge isSelected 从 matches 派生
     assert!(
-        src.contains("selectionController.matches(scenePathKey, \"edge\", edge.id)"),
-        "Edge 的 isSelected 必须从 selectionController.matches(scenePathKey, \"edge\", id) 派生"
+        src.contains("scene.selectionController.matches(scene.scenePathKey, \"edge\", render.edgeId)"),
+        "Edge 的 isSelected 必须从 selectionController.matches(scene.scenePathKey, \"edge\", id) 派生"
     );
-    // Embed delegate 传 selectionController
+    // 只读微缩概览不参与选中，不得再持有 selectionController。
+    let content = read_src(CONTENT);
     assert!(
-        src.contains("selectionController: content.selectionController"),
-        "Embed delegate 必须接收 selectionController（传给 child Content）"
+        !content.contains("selectionController"),
+        "只读微缩概览不得持有 selectionController"
     );
 }
 
@@ -201,25 +220,54 @@ fn graph_controller_select_methods_use_shared_selection_controller() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 6. Embed 创建 child Content 时传 selectionController
+// 6. Embed 只读概览不建子场景；选中环用主题强调色
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn embed_passes_selection_controller_to_child_content() {
-    let src = read_src(EMBED);
-    // Embed 必须有 selectionController property
+fn embed_is_readonly_overview_with_selection_ring() {
+    // #929 取代 #822：Embed 不再创建可交互 child Content，也不再有
+    // childContentLoader / _syncChildContent / childScenePathKey /
+    // selectionController 传递链；父图里只有圆壳 + 只读微缩概览。
+    // 入口选中由活动画布 delegate 按共享 selectionController 算好后传入，
+    // 选中环用主题强调色（accent），不依赖 selectionRing token。
+    let src = strip_line_comments(&read_src(EMBED));
+    for removed in [
+        "childContentLoader",
+        "_syncChildContent",
+        "childScenePathKey",
+        "selectionController",
+        "maskedContent",
+        "contentViewport",
+    ] {
+        assert!(
+            !src.contains(removed),
+            "Embed 不得再保留递归子内容 / 子场景选中链 {removed}"
+        );
+    }
+    // 概览 Loader 只在本入口投影足够大时加载只读数据。
+    let loader = function_window(&src, "id: previewLoader", 400);
     assert!(
-        src.contains("property var selectionController: null"),
-        "StarMapEmbed 必须有 selectionController property"
+        loader.contains("active: root.previewWanted")
+            && loader.contains("sourceComponent: previewComponent"),
+        "概览必须懒加载，实际窗口:\n{loader}"
     );
-    // setSource 时传 selectionController
-    let sync = function_window(&src, "childContentLoader.setSource(", 800);
+    let preview = function_window(&src, "StarMapSceneContent {", 300);
+    for prop in [
+        "dt: root.dt",
+        "starmapId: root.targetStarmapId",
+        "starmapBackendRef: root.starmapBackendRef",
+    ] {
+        assert!(
+            preview.contains(prop),
+            "概览只允许接收只读数据 {prop}，实际窗口:\n{preview}"
+        );
+    }
     assert!(
-        sync.contains("Qt.resolvedUrl(\"StarMapSceneContent.qml\")"),
-        "Embed 必须创建 StarMapSceneContent.qml 而不是嵌套 Scene，实际窗口:\n{sync}"
+        !preview.contains("selectionController"),
+        "概览不得接收选中状态，实际窗口:\n{preview}"
     );
     assert!(
-        sync.contains("\"selectionController\": selectionController"),
-        "Embed 创建 child Content 时必须传 selectionController，子层沿用同一个，实际窗口:\n{sync}"
+        src.contains("border.color: root.dt.accent") && !src.contains("selectionRing"),
+        "选中环必须用主题强调色表达，不依赖 selectionRing token"
     );
 }

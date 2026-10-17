@@ -11,7 +11,8 @@
 //! 2. 最右 tool rail 保留手稿的 AI 入口（`enabled: false`），不靠删除入口规避重叠，
 //!    也不打开一个空的 AI pane。
 //! 3. 内容区四角色（章节栏 / 正文列 / 右工具面板 / 最右 rail）都填满 cross-axis 高度，
-//!    命中区与视觉一致。
+//!    命中区与视觉一致。#922 起前三栏交给 Qt 原生 SplitView，跨轴高度由
+//!    `paneSplitView` 的 `Layout.fillHeight` 统一拉满，rail 仍在 RowLayout 里自己填满。
 //! 4. 章节树：卷展开赋全新对象触发 model 重建；章节行发 `openChapter`；
 //!    作品标题为静态行（没有折叠箭头、没有 projectGroupCollapsed）；
 //!    不再有"章纲" TextArea / outlineGroupExpanded / chapterNoteChanged。
@@ -289,33 +290,55 @@ fn tool_rail_keeps_disabled_ai_slot() {
 // 4. WritingWorkspace.qml — 内容区四角色填满高度
 // ─────────────────────────────────────────────────────────────────────────
 
-/// 四个内容区角色都必须 Layout.fillHeight，命中区与视觉一致。
+/// 四个内容区角色都必须占满内容区高度，命中区与视觉一致。
+/// #922/#929：章节栏 / 正文列 / 右工具面板是 paneSplitView 的子项，跨轴高度由
+/// SplitView 统一拉满（SplitView 自身 Layout.fillHeight）；rail 仍在 RowLayout 里填满。
 #[test]
 fn content_area_roles_fill_cross_axis_height() {
     let src = read_src("qml/WritingWorkspace.qml");
 
+    // 高度容器：SplitView 必须填满内容区 RowLayout 高度——三栏 pane 的高度都来自它。
+    let split = slice_between(&src, "SplitView {", "// Left sidebar: volume/chapter tree");
+    assert!(
+        split.contains("id: paneSplitView"),
+        "内容区必须由 paneSplitView 承载三栏，实际窗口:\n{split}"
+    );
+    assert!(
+        split.contains("Layout.fillHeight: true"),
+        "paneSplitView 必须填满内容区高度，否则三栏命中区不在视觉位置，实际窗口:\n{split}"
+    );
+
+    // 左章节栏：paneSplitView 子项，跨轴高度由 SplitView 填满；宽度仍有显式状态。
     let chapter_nav = slice_between(
         &src,
         "WritingChapterNavigation {",
         "// Middle Area: Toolbar + Editor",
     );
     assert!(
-        chapter_nav.contains("Layout.fillHeight: true"),
-        "左章节栏必须填满内容区高度，否则 MouseArea 命中区不在视觉位置，实际窗口:\n{chapter_nav}"
+        chapter_nav.contains("id: sidebarRect")
+            && chapter_nav.contains("SplitView.preferredWidth: 320"),
+        "左章节栏必须是 paneSplitView 子项并由 SplitView 填满跨轴高度，实际窗口:\n{chapter_nav}"
+    );
+    assert!(
+        !chapter_nav.contains("height:"),
+        "左章节栏不得自己写死高度脱离 SplitView 跨轴填满，实际窗口:\n{chapter_nav}"
     );
 
+    // 正文列：paneSplitView 子项吃满剩余宽度，跨轴高度同由 SplitView 填满。
     let editor_column = slice_between(&src, "// Middle Area: Toolbar + Editor", "RightDrawer {");
     assert!(
-        editor_column.contains("Layout.fillHeight: true"),
-        "正文列必须填满内容区高度，实际窗口:\n{editor_column}"
+        editor_column.contains("SplitView.fillWidth: true"),
+        "正文列必须是 paneSplitView 子项并吃满剩余宽度，实际窗口:\n{editor_column}"
     );
 
+    // 右工具面板：paneSplitView 子项，跨轴高度同由 SplitView 填满。
     let drawer = slice_between(&src, "RightDrawer {", "// Issue #825：最右竖向工具 rail");
     assert!(
-        drawer.contains("Layout.fillHeight: true"),
-        "右工具面板必须填满内容区高度，实际窗口:\n{drawer}"
+        drawer.contains("SplitView.preferredWidth: 240"),
+        "右工具面板必须是 paneSplitView 子项并由 SplitView 填满跨轴高度，实际窗口:\n{drawer}"
     );
 
+    // 最右 rail 不进 SplitView，在外层 RowLayout 里自己填满高度。
     let rail = slice_between(&src, "WritingToolRail {", "Connections {");
     assert!(
         rail.contains("Layout.fillHeight: true"),

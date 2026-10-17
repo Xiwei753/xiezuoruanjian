@@ -10,9 +10,9 @@
 //!
 //! 1. **输入只有一个主人**：`StarMapInputRouter.qml` 是整棵星图唯一的原始输入层
 //!    （铺在根 Canvas 可视内容之上），Node/Embed/Content 不再挂任何业务手势。
-//! 2. **命中只有一个入口**：`canvas.hitTargetAtScreen()` → 根 Content 的
-//!    `hitTargetAtScene()`；子星图不再产生 `childContent`：interactive 子层递归，
-//!    shell/preview/未加载整体按父层 `embed` 命中，右键/单击/双击都作用于入口。
+//! 2. **命中只有一个入口**：`canvas.hitTargetAtScreen()` → 活动画布的
+//!    `hitTargetAtWorld()`；#929 起子星图整块（chrome + 圆内内容）都按父层
+//!    `embed` 命中，不再递归进子画布内容，也不产生 `childContent`。
 //! 3. **状态提升只允许 Router**：pressPending → move / connect / contextPending /
 //!    pan 只由 Router 调用；长按 Timer 在 Router 里；InteractionController 只保存
 //!    状态并提供 isPressedTarget/isMovingTarget 给视觉绑定。
@@ -39,6 +39,7 @@ use source_guard::{count_occurrences, function_window, linux_qt_root, read_src};
 const ROUTER: &str = "qml/StarMapInputRouter.qml";
 const CANVAS: &str = "qml/StarMapCanvas.qml";
 const CONTENT: &str = "qml/StarMapSceneContent.qml";
+const ACTIVE_SCENE: &str = "qml/StarMapActiveScene.qml";
 const NODE: &str = "qml/StarMapNode.qml";
 const EMBED: &str = "qml/StarMapEmbed.qml";
 const INTERACTION: &str = "qml/StarMapInteractionController.qml";
@@ -182,17 +183,28 @@ fn recursive_delegates_carry_no_business_gestures() {
 #[test]
 fn hit_testing_has_one_entry_with_embed_fallback() {
     let canvas = strip_line_comments(&read_src(CANVAS));
+    assert_eq!(
+        count_occurrences(&canvas, "function hitTargetAtScreen("),
+        1,
+        "Canvas 必须只有一个命中入口"
+    );
     let entry = function_window(&canvas, "function hitTargetAtScreen(", 400);
     assert!(
-        entry.contains("rootContent.hitTargetAtScene(screenToWorldX(sx), screenToWorldY(sy))"),
-        "Canvas 必须只有一个命中入口，从根内容开始递归，实际窗口:\n{entry}"
+        entry.contains("scene.hitTargetAtWorld(screenToWorldX(sx), screenToWorldY(sy))"),
+        "Canvas 命中入口必须转发给活动画布的单一命中入口 hitTargetAtWorld，实际窗口:\n{entry}"
     );
 
-    let content = strip_line_comments(&read_src(CONTENT));
-    let hit = function_window(&content, "function hitTargetAtScene(", 3600);
+    // #929 取代 #822：子星图整块（chrome + 圆内内容）都是父画布的 embed 入口，
+    // 命中不再递归进子画布，也没有 childContent 死区。
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        hub(&hit),
-        "子星图内容区必须 interactive 递归 / 低 LOD 整体 embed，实际窗口:\n{hit}"
+        !active.contains("hitTargetAtScene"),
+        "活动画布不得再递归进子画布内容（hitTargetAtScene 已不存在）"
+    );
+    let hit = function_window(&active, "function hitTargetAtWorld(", 2200);
+    assert!(
+        single_entry_hit(&hit),
+        "单画布命中必须覆盖 节点 → 子星图入口（chrome + 内容）→ 连线，实际窗口:\n{hit}"
     );
 
     // 唯一输入主人也只有一个命中转发入口。
@@ -209,11 +221,15 @@ fn hit_testing_has_one_entry_with_embed_fallback() {
     );
 }
 
-/// 子星图命中的两条分支：interactive 递归 + 低 LOD 父层 embed 兜底。
-fn hub(hit: &str) -> bool {
-    hit.contains("if (child && child.renderDetail === \"interactive\")")
-        && hit.contains("var deeper = child.hitTargetAtScene(sceneX, sceneY)")
-        && hit.contains("targetPath: embedPath(inside.instanceId)")
+/// #929 取代 #822：单张活动画布的命中覆盖 节点 → 子星图入口（chrome 与圆内内容
+/// 都算入口）→ 连线；不再递归进子画布，也没有 childContent 死区。
+fn single_entry_hit(hit: &str) -> bool {
+    hit.contains("graphController.findNodeAt(wx, wy)")
+        && hit.contains("findEmbedChromeAt(wx, wy)")
+        && hit.contains("findEmbedContentAt(wx, wy)")
+        && hit.contains("kind: \"embed\"")
+        && hit.contains("graphController.hitTestEdge(")
+        && !hit.contains("hitTargetAtScene")
         && !hit.contains("kind: \"childContent\"")
 }
 
@@ -262,14 +278,33 @@ fn state_promotion_only_happens_in_the_router() {
         "InteractionController 不得再保留 pressTimeout：超时归唯一 Router"
     );
 
-    // 视觉绑定只能查询共享状态机。
+    // 视觉绑定只能查询共享状态机；#929 起活着的 Node/Embed delegate 位于
+    // 唯一活动画布 StarMapActiveScene，按下视觉同样只读共享状态机。
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
+    assert!(
+        active.contains(
+            "scene.interactionController.isPressedTarget(scene.scenePathKey, \"node\", nodeData.id)"
+        ),
+        "活动画布的 Node 按下视觉必须绑定共享 InteractionController.isPressedTarget"
+    );
+    assert!(
+        active.contains(
+            "scene.interactionController.isPressedTarget(scene.scenePathKey, \"embed\", embedData.instanceId)"
+        ),
+        "活动画布的 Embed 按下视觉必须绑定共享 InteractionController.isPressedTarget"
+    );
+
     let node = strip_line_comments(&read_src(NODE));
     let embed = strip_line_comments(&read_src(EMBED));
+    assert!(
+        node.contains("interactionController.isPressedTarget(scenePathKey,"),
+        "StarMapNode 的按下视觉必须绑定共享 InteractionController.isPressedTarget"
+    );
+    assert!(
+        embed.contains("property bool isPressed: false"),
+        "StarMapEmbed 的按下状态必须是活动画布注入的输入属性"
+    );
     for (name, src) in [("StarMapNode", &node), ("StarMapEmbed", &embed)] {
-        assert!(
-            src.contains("interactionController.isPressedTarget(scenePathKey,"),
-            "{name} 的按下视觉必须绑定共享 InteractionController.isPressedTarget"
-        );
         assert!(
             !src.contains(".pressed"),
             "{name} 不得再依赖自己的 Handler.pressed 暂停动画"
@@ -344,8 +379,8 @@ fn context_menus_use_the_hit_layer_owner() {
     );
     let blank = function_window(&canvas, "function openBlankMenu(", 700);
     assert!(
-        blank.contains("menuOwnerContent = hit ? hit.owner : null"),
-        "空白菜单归属层必须是命中层 owner，实际窗口:\n{blank}"
+        blank.contains("menuOwnerContent = hit ? hit.owner : activeScene()"),
+        "空白菜单归属层必须是命中层 owner（无命中时兜底当前活动画布），实际窗口:\n{blank}"
     );
 }
 
@@ -361,14 +396,14 @@ fn inline_editing_gets_the_router_out_of_the_way() {
             && router.contains("canvas.inlineEditingKey !== \"\""),
         "Router 必须根据内联编辑汇总键决定是否让位"
     );
-    // disabled 的 Handler 不参与事件投递，因此编辑期间必须把 4 个单指
-    // Handler（鼠标/触屏 tap、drag、release 观察）整体禁用，
+    // disabled 的 Handler 不参与事件投递，因此编辑期间必须把单指/右键
+    // Handler（鼠标/触屏 tap、drag、release 观察、右键 tap 与拉线）整体禁用，
     // TextInput 才能收到点击/拖动放置光标和选词。
     assert_eq!(
         count_occurrences(&router, "enabled: !router.editingBlocks")
             + count_occurrences(&router, "!router.pinchActive && !router.editingBlocks"),
-        4,
-        "编辑期间 Router 的 4 个单指 Handler 必须整体让位给 TextInput"
+        7,
+        "编辑期间 Router 的单指/右键 Handler 必须整体让位给 TextInput"
     );
 
     let canvas = strip_line_comments(&read_src(CANVAS));
@@ -377,21 +412,32 @@ fn inline_editing_gets_the_router_out_of_the_way() {
             && canvas.contains("function setInlineEditingKey(key)"),
         "Canvas 必须汇总内联编辑键"
     );
-    let content = strip_line_comments(&read_src(CONTENT));
+    // #929：活着的内联编辑在唯一活动画布 StarMapActiveScene 里；SceneContent
+    // 退化为只读微缩概览，不再承载 TextInput / 编辑汇总。
+    let active = strip_line_comments(&read_src(ACTIVE_SCENE));
     assert!(
-        content.contains("function noteInlineEditing(nodeId, editing)")
-            && content.contains("menuHost.setInlineEditingKey(key)"),
-        "Content 必须把本层编辑状态汇总到菜单宿主，实际源码缺少"
+        active.contains("function noteInlineEditing(nodeId, editing)")
+            && active.contains("menuHost.setInlineEditingKey(key)"),
+        "活动画布必须把本层编辑状态汇总到菜单宿主，实际源码缺少"
     );
     assert!(
-        content.contains("onItemRemoved: function(index, item)")
-            && content.contains("content.noteInlineEditing(item.nodeId, false)"),
+        active.contains("onItemRemoved: function(index, item)")
+            && active.contains("scene.noteInlineEditing(item.nodeId, false)"),
         "编辑中的 delegate 被销毁时必须清掉内联编辑汇总键，否则 Router 会永久让位"
+    );
+    let content = strip_line_comments(&read_src(CONTENT));
+    assert!(
+        !content.contains("noteInlineEditing") && !content.contains("TextInput"),
+        "StarMapSceneContent 不得再承载内联编辑"
     );
     let node = strip_line_comments(&read_src(NODE));
     assert!(
         node.contains("TextInput {") && node.contains("readOnly: !root.editing"),
         "节点内联编辑的 TextInput 必须保留"
+    );
+    assert!(
+        active.contains("TextInput {") && active.contains("readOnly: !nodeItem.editing"),
+        "活动画布的节点内联编辑 TextInput 必须保留"
     );
 }
 
