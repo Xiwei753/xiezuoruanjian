@@ -320,7 +320,12 @@ Item {
             switched = maybeExitCanvas()
         }
         if (switched > 0 && interaction && interaction.pointerMode === "pinch") {
-            _pinchSwitchBaseZoom = zoomLevel
+            // 基准配对（#929 新评论）：nextZoom 是 PinchHandler 在旧基准下的累计值，
+            // 尚未转换到新画布；enterEmbedViaCore/exitCanvasViaCore 已把 zoomLevel
+            // 设为新画布 zoom。若这里记 zoomLevel 作基准，下一帧
+            // requested = switched * (nextZoom / switched) = nextZoom，跨画布尺度
+            // 换算失效、刚穿越就跳变。父→子、子→父、子→孙每次新穿越都重设该配对。
+            _pinchSwitchBaseZoom = nextZoom
             _pinchSwitchCanvasZoom = switched
         }
     }

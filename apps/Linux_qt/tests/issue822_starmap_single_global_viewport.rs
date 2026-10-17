@@ -180,7 +180,7 @@ fn only_root_canvas_owns_the_camera_properties() {
 #[test]
 fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
     let src = read_src(CANVAS);
-    let zoom = function_window(&src, "function zoomAt(", 1400);
+    let zoom = function_window(&src, "function zoomAt(", 2600);
     assert!(
         zoom.contains("zoomLevel = target") && zoom.contains("applyPan("),
         "zoomAt 必须是唯一缩放入口，内部改活动画布 zoomLevel 并 applyPan，实际窗口:\n{zoom}"
@@ -204,6 +204,15 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
             && zoom.contains("else if (zoomingOut)")
             && zoom.contains("switched = maybeExitCanvas()"),
         "zoomAt 必须方向过滤：仅放大评估进场、仅缩小评估退场（按入口覆盖率评估，不按 zoom 数值），实际窗口:\n{zoom}"
+    );
+    // #929 第三轮复核：捏合穿越成功后，补偿基准必须记“本帧传入的 nextZoom（旧基准
+    // 累计值）”，不能记已被换算成新画布 zoom 的 zoomLevel，否则下一帧
+    // requested = switched * (next / base) 换算失效、捏合刚穿越就跳变。
+    assert!(
+        zoom.contains("_pinchSwitchBaseZoom = nextZoom")
+            && zoom.contains("_pinchSwitchCanvasZoom = switched")
+            && !zoom.contains("_pinchSwitchBaseZoom = zoomLevel"),
+        "捏合穿越后必须以本帧 nextZoom 重设基准配对，不能用新画布 zoomLevel，实际窗口:\n{zoom}"
     );
 
     // 滚轮/捏合（唯一 Router）与 +/- 按钮（Canvas）都必须走同一个入口。
