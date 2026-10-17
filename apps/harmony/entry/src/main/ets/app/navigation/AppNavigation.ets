@@ -30,7 +30,7 @@ export struct AppNavigation {
 
   aboutToAppear(): void {
     hilog.info(0x0000, 'AppNavigation', 'aboutToAppear: registering with coordinator')
-    // 注册到 coordinator，使 EntryAbility 能触发接续恢复。
+    // 注册到 coordinator，使 ContinuationEntrypoint 触发的接续恢复能落到本组件。
     // Issue #767 评论5830638688 第1项：不再创建 placeholderStack 污染 activeTabStack。
     // 只注册 restoreListener 回调；pending payload 的消费延迟到 PrimaryTabShell 注册 homeStack
     // 后由 tryConsumePendingRestore() 触发。

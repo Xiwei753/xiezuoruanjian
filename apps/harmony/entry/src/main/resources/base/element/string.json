@@ -757,10 +757,6 @@
       "value": "用于感知握姿以优化单手阅读体验"
     },
     {
-      "name": "perm_reason_dlp_anti_peep",
-      "value": "用于防窥屏保护，在他人窥视时隐藏内容"
-    },
-    {
       "name": "search_settings",
       "value": "搜索设置"
     },

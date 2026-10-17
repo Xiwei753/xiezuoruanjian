@@ -1,12 +1,10 @@
-import { AbilityConstant, UIAbility, Want, wantConstant, Configuration, ConfigurationConstant } from '@kit.AbilityKit'
+import { AbilityConstant, UIAbility, Want, Configuration, ConfigurationConstant } from '@kit.AbilityKit'
 import hilog from '@ohos.hilog'
 import window from '@ohos.window'
 import { HarmonyLifecycle } from '../platform/lifecycle/HarmonyLifecycle'
 import { getAppContext, getAppDataRoot } from '../app/AppContext'
 import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
-import { AppContinuationService } from '../platform/continuity/AppContinuationService'
-import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
-import { NavigationTransactionCoordinator } from '../app/navigation/NavigationTransactionCoordinator'
+import { ContinuationEntrypoint } from '../platform/continuity/ContinuationEntrypoint'
 import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
 import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
 import { HarmonyThemeAdapter } from '../ui/theme/HarmonyThemeAdapter'
@@ -26,7 +24,7 @@ interface BuildIdentity {
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
-  private continuationService: AppContinuationService = AppContinuationService.getInstance()
+  private continuationEntrypoint: ContinuationEntrypoint = ContinuationEntrypoint.getInstance()
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
@@ -61,7 +59,7 @@ export default class EntryAbility extends UIAbility {
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
-      this.restoreContinuationFromWant(want)
+      this.continuationEntrypoint.restoreFromWant(want)
     }
   }
 
@@ -181,8 +179,9 @@ export default class EntryAbility extends UIAbility {
 
   // 接续恢复阶段的目标设备窗口初始化：与 onWindowStageCreate 等价的根页面装载。
   // SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移，这里只装载根页 pages/Index，
-  // AppNavigation 首帧 aboutToAppear 时从 NavigationTransactionCoordinator 消费已交付的接续 payload，
-  // 由 NavigationTransactionCoordinator.restoreFromContinuation 手动重建 NavPathStack。
+  // AppNavigation 在 aboutToAppear 注册恢复回调，由 NavigationTransactionCoordinator 转交
+  // AppNavigation.applyContinuation 手动重建 NavPathStack；回调或 homeStack 未就绪时先暂存，
+  // 待 PrimaryTabShell 注册 homeStack 后由 tryConsumePendingRestore() 消费。
   onWindowStageRestore(windowStage: window.WindowStage) {
     hilog.info(0x0000, 'EntryAbility', 'onWindowStageRestore')
 
@@ -241,28 +240,17 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  // 应用接续：源设备触发接续时调用。
-  // 从 AppContinuationService.getCurrentPayload() 取 payload 写入 wantParam。
-  // 返回 AGREE 表示同意接续、REJECT 表示拒绝（无 payload 时）。
-  // SUPPORT_CONTINUE_PAGE_STACK_KEY=false：评论明确要求禁用自动页面栈迁移，
-  // Navigation 页面栈不能跨设备自动迁移，由 AppNavigation.restoreFromContinuation 手动重建。
-  // 用官方 wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY 常量，不自己写字符串字面量。
+  // 应用接续：源设备触发接续时调用。委托给 ContinuationEntrypoint，
+  // EntryAbility 仅保留 Ability 生命周期调用。
   onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
-    hilog.info(0x0000, 'EntryAbility', 'onContinue')
-    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false as Object
-    const payload: ContinuationPayload | null = this.continuationService.getCurrentPayload()
-    if (payload !== null) {
-      wantParam['continuationData'] = this.continuationService.serializeForWant(payload)
-      return AbilityConstant.OnContinueResult.AGREE
-    }
-    return AbilityConstant.OnContinueResult.REJECT
+    return this.continuationEntrypoint.onContinue(wantParam)
   }
 
   // 新 want 到达（接续恢复在目标设备的二次入口）。
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onNewWant')
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
-      this.restoreContinuationFromWant(want)
+      this.continuationEntrypoint.restoreFromWant(want)
     }
   }
 
@@ -278,21 +266,6 @@ export default class EntryAbility extends UIAbility {
       await TabletWindowPolicy.applyTabletWindowPolicy(mainWindow)
     } catch (e) {
       hilog.error(0x0000, 'EntryAbility', 'initWindowPolicy exception: %{public}s', String(e))
-    }
-  }
-
-  // 从 want.parameters 读取接续 payload，交给 AppContinuationService.restoreFromWant() 还原，
-  // 再交 NavigationTransactionCoordinator.restoreFromContinuation() 手动重建 NavPathStack
-  // （SUPPORT_CONTINUE_PAGE_STACK_KEY=false 禁用了自动页面栈迁移）。
-  private restoreContinuationFromWant(want: Want): void {
-    const parameters: Record<string, Object> | undefined = want.parameters
-    if (parameters === undefined || parameters === null) {
-      return
-    }
-    const restored: ContinuationPayload | null = this.continuationService.restoreFromWant(parameters)
-    if (restored !== null) {
-      hilog.info(0x0000, 'EntryAbility', 'Continuation restored: projectId=%{public}s', restored.projectId ?? '')
-      NavigationTransactionCoordinator.getInstance().restoreFromContinuation(restored)
     }
   }
 }

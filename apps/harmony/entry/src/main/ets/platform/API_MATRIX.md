@@ -2,29 +2,29 @@
 
 本文件记录素笺 HarmonyOS 客户端实际使用的每个系统能力：Kit、接口、最低 API、SystemCapability、权限、ACL 需求、fallback 策略和实现文件。新增系统能力前先查 HarmonyOS 官方 API 和本机 SDK d.ts（`/opt/devecostudio/sdk/default`），再在此登记。
 
-实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。
+实现文件路径相对于本文件所在目录 `entry/src/main/ets/platform/`（即下表与正文中的路径不以 `platform/` 开头，直接从子目录名写起）。唯一例外是 DLP 防窥：其实现已迁出 entry，放在独立受限模块 `privacy_acl` 中；DLP 路径相对于 `apps/harmony/` 工程目录，写作 `privacy_acl/src/main/ets/impl/apiXX/...`。
 
 ## 应用最低安装基线与版本分流
 
 - **最低安装基线**：`compatibleSdkVersion = 12`（HarmonyOS NEXT 5.0.0(12)）。这是应用能安装运行的最低系统版本，由 `apps/harmony/build-profile.json5` 的 `compatibleSdkVersion` 表达，只反映真实需要支持的最低版本，不因开发机/测试机使用 API26 SDK 就一起抬到 API26。
 - **编译目标**：`targetSdkVersion = 26`（HarmonyOS 7）。工程使用 API26 SDK 构建，`targetSdkVersion` 保持 API26，与 `compatibleSdkVersion` 不必为同一 API。
-- **能力分流**：API20 / API23 / API26 等高版本能力不抬高安装下限，而是通过 `PlatformApiResolver`（`version/PlatformApiResolver.ets`）按运行时 API Level 分流到各 `impl/apiXX` facade：
+- **能力分流**：API20 / API23 / API26 等高版本能力不抬高安装下限。entry 内的高版本能力通过 `PlatformApiResolver`（`version/PlatformApiResolver.ets`）按运行时 API Level 分流到各 `impl/apiXX` facade；DLP 防窥是例外——实现已迁入独立自包含的 `privacy_acl` HSP，在模块内用 `deviceInfo.sdkApiVersion` / `canIUse` 自行判断 API Level 与 SystemCapability，不经过 entry 的 `PlatformApiResolver`：
   - `impl/api11`：普通系统分享（systemShare，since 11）
   - `impl/api12`：碰一碰分享（knockShare 基础重载，since 12）
-  - `impl/api20`：握姿感知、防窥基础、隔空传送（gesturesShare，since 20）
-  - `impl/api23`：防窥扩展（requestAntiPeepOptions，since 23）
+  - `impl/api20`：握姿感知、隔空传送（gesturesShare，since 20）
+  - `impl/api23`：HDS 悬浮页签等（HdsTabs 及导航目的页，since 23）
   - API26 新能力继续单独使用
 - **降级语义**：旧系统缺少某个高版本能力时，只降级该能力（`isSupported()` 返回 false、对应入口返回 false，不伪造状态），**不导致整个应用无法安装**。API12～25 的设备可以正常安装运行，只是按运行时版本禁用对应高版本能力。
-- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流。
+- 稳定 facade（`*Service.ets`）不直接 import 版本敏感的高版本能力 Kit、不自行判断具体 API Level；Ability Context（`@kit.AbilityKit` 的 `common`）等基础平台类型可以保留。具体高版本系统调用和版本判断收进 `impl/apiXX`，由 `PlatformApiResolver` 按运行时 API Level 分流（DLP 防窥例外：随实现迁入 `privacy_acl` HSP，见防窥屏一节）。
 
 ## 能力总览
 
 | 能力 | Kit | 最低 API | SystemCapability | 权限 | ACL | 实现文件 |
 |------|-----|---------|------------------|------|-----|---------|
 | 握姿感知 | @kit.MultimodalAwarenessKit (motion) | 20 | SystemCapability.MultimodalAwareness.Motion | ohos.permission.DETECT_GESTURE | 否 | awareness/impl/api20/GripPostureApi20.ets |
-| 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是 | privacy/impl/api20/DlpAntiPeepApi20.ets, privacy/impl/api23/DlpAntiPeepApi23.ets |
-| 窗口隐私 | @kit.ArkUI (window) | 未限定独立 API（随 @kit.ArkUI window 模块） | 未限定独立 SystemCapability（随 @kit.ArkUI window 模块） | 无 | 否 | privacy/WindowPrivacyService.ets |
-| 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/AppContinuationService.ets |
+| 防窥屏 | @kit.DeviceSecurityKit (dlpAntiPeep) | 20（基础）/ 23（requestAntiPeepOptions） | SystemCapability.Security.DlpAntiPeep | ohos.permission.DLP_GET_HIDE_STATUS | 是（仅 ACL product 装配 privacy_acl HSP） | privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets, privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets |
+| 窗口隐私 | @kit.ArkUI (window) | 9 | SystemCapability.WindowManager.WindowManager.Core | ohos.permission.PRIVACY_WINDOW | 否 | privacy/WindowPrivacyService.ets |
+| 应用接续 | 无独立 Kit（Ability 生命周期 + module.json5 continuable 配置） | 未限定独立 API（Staged 模型 ability 级配置） | 无独立 SystemCapability（Ability 级配置） | 无 | 否 | continuity/ContinuationEntrypoint.ets, continuity/AppContinuationService.ets |
 | 普通系统分享 | @kit.ShareKit (systemShare) | 11 | SystemCapability.Collaboration.SystemShare | 无 | 否 | share/impl/api11/SystemShareApi11.ets, share/SystemShareService.ets |
 | 碰一碰分享 | @kit.ShareKit (harmonyShare knockShare) | 12 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api12/KnockShareApi12.ets, share/TapShareService.ets |
 | 隔空传送 | @kit.ShareKit (harmonyShare gesturesShare) | 20 | SystemCapability.Collaboration.HarmonyShare | 无 | 否 | share/impl/api20/GesturesShareApi20.ets, share/AirTransferService.ets |
@@ -74,8 +74,11 @@
 
 - Kit：`@kit.DeviceSecurityKit`（`dlpAntiPeep` 模块）
 - 权限：`ohos.permission.DLP_GET_HIDE_STATUS`（system_grant，system_basic，`provisionEnable=true`，since 18，**需要 ACL**）
-  - 需在签名 Profile 的 ACL 中声明，并在 `module.json5` 的 `requestPermissions` 登记。
+  - 需在签名 Profile 的 ACL 中声明，并在 `privacy_acl` 模块的 `module.json5` 的 `requestPermissions` 登记。
 - SystemCapability：`SystemCapability.Security.DlpAntiPeep`
+- **两个独立轴**：
+  - **API Level 轴（运行环境差异）**：API20 基础 / API23 扩展，走 `privacy_acl` 模块内 `impl/apiXX` 子目录分流。因 `privacy_acl` 是自包含 HSP、不依赖 entry 的 `PlatformApiResolver`，两个 facade 均在模块内用内联 `isApiAtLeast`（`deviceInfo.sdkApiVersion`）与 `hasSystemCapability`（`canIUse`）判断运行时 API 与 SystemCapability；entry 侧 `ShoulderSurfingService` 只经 Port/Provider 委托，不做版本判断。
+  - **ACL 轴（发行签名资格）**：`DLP_GET_HIDE_STATUS` 需要 ACL，仅持有 ACL 的签名 Profile 才能装配。DLP 实现已迁移到独立 `privacy_acl` HSP 模块，仅 ACL product 装配；普通包（default product）不编译 `privacy_acl`、不声明 `DLP_GET_HIDE_STATUS`。
 
 ### API20 基础
 
@@ -87,7 +90,7 @@
   - `passDlpAntiPeepInfo()`
 - 枚举 `DlpAntiPeepStatus`：`PASS = 0`，`HIDE = 1`
 - 最低 API：20
-- 实现文件：`privacy/impl/api20/DlpAntiPeepApi20.ets`
+- 实现文件：`privacy_acl/src/main/ets/impl/api20/DlpAntiPeepApi20.ets`
 
 ### API21 扩展
 
@@ -101,7 +104,7 @@
   - `publishAntiPeepInformation()`
 - 枚举 `AntiPeepOptionsResult`：`SUCCESS = 0`，`FAIL = 1`，`ALREADY_ON = 2`
 - 最低 API：23
-- 实现文件：`privacy/impl/api23/DlpAntiPeepApi23.ets`
+- 实现文件：`privacy_acl/src/main/ets/impl/api23/DlpAntiPeepApi23.ets`
 
 ### fallback
 
@@ -109,17 +112,17 @@
 - 状态语义：`PASS` → safe（无窥视）；`HIDE` → peeping（被窥视）；API 调用失败 / 未解析 / 不支持 → unknown。
 - `requestEnable()` 在 API < 23 时无法打开系统设置页（`requestAntiPeepOptions` 不可用），返回当前真实开关状态，不伪造；`isEnabled()` 永远查询系统真实开关，不读本地缓存假装启用。
 - 官方当前限制：DlpAntiPeep 目前只支持 Phone 设备。官方 2026-09-04 最新最佳实践：https://developer.huawei.com/consumer/en/doc/best-practices/bpta-antipeep-protection
-- 对外 facade：`privacy/ShoulderSurfingService.ets`（不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型；不认识 API Level 数字，版本判断在 `impl/apiXX` facade）
+- 对外 facade：`privacy/ShoulderSurfingService.ets`（entry 模块内稳定 facade，不直接 import `@kit.DeviceSecurityKit`；仅 import `@kit.AbilityKit` 的 `common` 用于 context 类型；不认识 API Level 数字，版本判断在 `impl/apiXX` facade）。实际 DLP 系统调用在 `privacy_acl` HSP 模块的 `src/main/ets/impl/apiXX` 中，通过 Port/Provider 接口装配，仅 ACL product 编译。
 
 ## 窗口隐私
 
 - Kit：`@kit.ArkUI`（`window` 模块）
 - 接口：
-  - `window.getLastWindow()`
-  - `win.setSnapshotSkip(enabled)`（截图/录屏跳过，用于隐私保护）
-- 最低 API：未限定独立 API（`setSnapshotSkip` 随 `@kit.ArkUI` `window` 模块整体可用，官方未为该方法单独声明起始 API Level）
-- SystemCapability：未限定独立 SystemCapability（随 `@kit.ArkUI` `window` 模块，无独立 syscap 声明）
-- 权限：无
+  - `window.getLastWindow(context)`
+  - `win.setWindowPrivacyMode(enabled)`（截图/录屏时隐藏窗口内容，用于隐私保护；旧的 `setSnapshotSkip` 不是公开 SDK API，`@ohos.window.d.ts` 中无此方法）
+- 最低 API：9（`setWindowPrivacyMode` 自 API 9 起可用；当前工程最低 API 为 12，始终满足）
+- SystemCapability：`SystemCapability.WindowManager.WindowManager.Core`
+- 权限：`ohos.permission.PRIVACY_WINDOW`（API 11+ 为 `normal` / `system_grant`，无需 ACL；API 9–10 为 `system_basic`，但工程最低 API 12 已过此限制）
 - ACL：否
 - 实现文件：`privacy/WindowPrivacyService.ets`
 
@@ -128,13 +131,14 @@
 - Kit：无独立 Kit。接续主链走 Ability 生命周期（`EntryAbility.onContinue` / `onCreate` / `onNewWant`）+ `module.json5` 中 ability 声明 `"continuable": true`，不创造独立的接续 Kit 名（仓库无此 Kit/import）。
 - 接口：
   - `module.json5` 中 ability 声明 `"continuable": true`（系统接续开关）
-  - 源设备 `EntryAbility.onContinue` 调 `AppContinuationService.getCurrentPayload()` 写出 payload
-  - 目标设备 `EntryAbility.onCreate` / `onNewWant` 在 `launchReason === CONTINUATION` 时调 `restoreFromWant()` 还原 payload
+  - 源设备 `EntryAbility.onContinue` 委托 `ContinuationEntrypoint.onContinue()`，从 `AppContinuationService.getCurrentPayload()` 写出 payload
+  - 目标设备 `EntryAbility.onCreate` / `onNewWant` 在 `launchReason === CONTINUATION` 时委托 `ContinuationEntrypoint.restoreFromWant()` 还原 payload
 - 最低 API：未限定独立 API（Staged 模型 ability 级配置，随 `@kit.AbilityKit` Ability 生命周期，无独立起始 API Level 声明）
 - SystemCapability：无独立 SystemCapability（Ability 级配置）
 - 权限：无
-- ACL：否
-- 实现文件：`continuity/AppContinuationService.ets`
+- ACL：否（接续是 Ability 级配置，无 DLP ACL 依赖）
+- 实现文件：`continuity/ContinuationEntrypoint.ets`（接续序列化/恢复入口，从 EntryAbility 提取）、`continuity/AppContinuationService.ets`
+- 说明：`EntryAbility` 仅保留 Ability 生命周期调用，接续的序列化/恢复细节收在 `ContinuationEntrypoint`。接续与 DLP ACL 完全独立，普通包（default product）同样支持接续。
 
 ## 分享
 

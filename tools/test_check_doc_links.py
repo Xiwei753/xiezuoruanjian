@@ -283,6 +283,19 @@ def test_forbidden_code_pattern_in_qml_fails():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_skill_installed_script_path_whitelisted():
+    """DevEco skill 安装的 scripts/connect-api-cli.js 引用不应判为断链"""
+    _, output = _run_check_in_tmpdir({
+        'docs/harmonyos/DEVECO_CLI.md': (
+            '# CLI\n'
+            '本仓库由 DevEco skill 安装的 '
+            '`hmos-connect-api-cli-skill/scripts/connect-api-cli.js`；\n'
+        ),
+    })
+    found = any('Broken path reference' in line for line in output)
+    assert not found, "skill 安装的脚本路径不应被报告为断链"
+
+
 def main():
     tests = [
         test_is_legacy_context,
@@ -299,6 +312,7 @@ def main():
         test_forbidden_phrase_in_agents_md_passes,
         test_forbidden_phrase_with_legacy_keyword_passes,
         test_forbidden_code_pattern_in_qml_fails,
+        test_skill_installed_script_path_whitelisted,
     ]
 
     passed = 0

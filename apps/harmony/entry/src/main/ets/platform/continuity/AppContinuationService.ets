@@ -1,18 +1,21 @@
 // AppContinuationService — 当前任务接续（HarmonyOS Continuation）。
 // updateCurrentState(payload) 由 Navigation/编辑会话状态变化时调用，更新当前可接续任务状态；
 // save(payload) 保留为别名（兼容旧调用点）。
-// getCurrentPayload() 由 EntryAbility.onContinue 调用取当前 payload——读取不清空，
+// getCurrentPayload() 由 ContinuationEntrypoint.onContinue 调用取当前 payload——读取不清空，
 // pendingPayload 保存当前可接续任务状态，由 updateCurrentState 覆写。
-// restoreFromWant(wantParam) 目标设备从 wantParam 恢复 payload。
+// restoreFromWant(wantParam) 由 ContinuationEntrypoint.restoreFromWant 在目标设备恢复 payload。
 // 不写成第二套同步：正文数据仍由作品数据层和同步体系负责。
 //
 // 不用进程内存"伪持久化"。payload 只带 projectId/volumeId/chapterId/selection/cursor/viewport/contentHash；
 // 正文由作品仓库/同步负责。
 //
 // 真实接续流程（Ability Kit）：
-// 1. 源设备：用户触发接续 → EntryAbility.onContinue → 调 getCurrentPayload() → 写入 wantParam。
-// 2. 目标设备：EntryAbility.onCreate/onNewWant → 检查 launchReason === CONTINUATION →
-//    从 want.parameters 读取 → restoreFromWant() 还原 payload → 交 AppNavigation 手动重建 NavPathStack。
+// 1. 源设备：用户触发接续 → EntryAbility.onContinue → ContinuationEntrypoint.onContinue
+//    → 调 getCurrentPayload() → 写入 wantParam。
+// 2. 目标设备：EntryAbility.onCreate/onNewWant → 检查 launchReason === CONTINUATION
+//    → ContinuationEntrypoint.restoreFromWant → 从 want.parameters 读取
+//    → AppContinuationService.restoreFromWant() 还原 payload
+//    → NavigationTransactionCoordinator.restoreFromContinuation() → AppNavigation.applyContinuation 手动重建 NavPathStack。
 
 import { ContinuationPayload } from './ContinuationPayload'
 import { EditorViewportState } from '../../feature/editor/render/EditorViewportState'
@@ -42,13 +45,13 @@ export class AppContinuationService {
   }
 
   // 序列化 payload 准备给 onContinue 使用（updateCurrentState 的别名，兼容旧调用点）。
-  // payload 暂存于实例字段，供 EntryAbility.onContinue 调 getCurrentPayload() 读取。
+  // payload 暂存于实例字段，供 ContinuationEntrypoint.onContinue 调 getCurrentPayload() 读取。
   // 不写第二套持久化；正文由作品仓库/同步负责。
   async save(payload: ContinuationPayload): Promise<void> {
     this.updateCurrentState(payload)
   }
 
-  // EntryAbility.onContinue 调用此方法取当前 payload。
+  // ContinuationEntrypoint.onContinue 调用此方法取当前 payload。
   // 读取不清空：pendingPayload 保存当前可接续任务状态，由 updateCurrentState 覆写；
   // onContinue 多次调用拿到同一份最近状态快照，避免重复接续时丢状态。
   getCurrentPayload(): ContinuationPayload | null {
@@ -56,7 +59,8 @@ export class AppContinuationService {
   }
 
   // 目标设备从 wantParam 恢复 payload。
-  // wantParam 是 EntryAbility.onCreate/onNewWant 收到的 want.parameters。
+  // wantParam 是 ContinuationEntrypoint.restoreFromWant 收到的 want.parameters
+  // （由 EntryAbility.onCreate/onNewWant 在 CONTINUATION 时传入）。
   // 返回还原后的 payload；若 wantParam 不含接续数据返回 null。
   restoreFromWant(wantParam: Record<string, Object>): ContinuationPayload | null {
     const raw: Object | undefined = wantParam[WANT_PARAM_KEY]
@@ -133,7 +137,7 @@ export class AppContinuationService {
     return result
   }
 
-  // 序列化 payload 成 JSON 字符串，供 EntryAbility.onContinue 写入 wantParam。
+  // 序列化 payload 成 JSON 字符串，供 ContinuationEntrypoint.onContinue 写入 wantParam。
   serializeForWant(payload: ContinuationPayload): string {
     return JSON.stringify(this.sanitizePayload(payload))
   }

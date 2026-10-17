@@ -1,15 +1,35 @@
 // DlpAntiPeepApi20 — 防窥 API20 基础 facade（单例）。
 // 直接 import @kit.DeviceSecurityKit 的 dlpAntiPeep，完成 API20+ 基础能力：
 // 支持状态、窥屏状态、监听启停、错误映射。
-// 版本敏感的 @kit.* 系统调用收进 impl/apiXX；稳定 Service 不直接 import 版本敏感的高版本能力 Kit（@kit.AbilityKit 的 common 等基础平台类型除外）。
+//
+// 本模块（privacy_acl HSP）自包含：不依赖 entry 的 PlatformApiResolver，
+// 直接用 @kit.BasicServicesKit 的 deviceInfo 读 API Level，用全局 canIUse 查 SystemCapability。
 //
 // 真实事件源：dlpAntiPeep.on('dlpAntiPeep')（since 6.0.0(20)）。
 import { dlpAntiPeep } from '@kit.DeviceSecurityKit'
-import { PlatformApiResolver } from '../../../version/PlatformApiResolver'
+import { deviceInfo } from '@kit.BasicServicesKit'
 
 // dlpAntiPeep.DlpAntiPeepStatus 枚举值（since 6.0.0(20)）。
 // PASS=0（安全/无窥视）, HIDE=1（被窥视/信息隐藏）。
 const ANTI_PEEP_HIDE: number = 1
+
+// 内联版本判断：privacy_acl 模块不依赖 entry 的 PlatformApiResolver。
+// canIUse 是 ArkTS 全局函数；deviceInfo.sdkApiVersion 给出运行时 API Level。
+function isApiAtLeast(level: number): boolean {
+  try {
+    return deviceInfo.sdkApiVersion >= level
+  } catch (e) {
+    return false
+  }
+}
+
+function hasSystemCapability(syscap: string): boolean {
+  try {
+    return canIUse(syscap)
+  } catch (e) {
+    return false
+  }
+}
 
 export class DlpAntiPeepApi20 {
   private static instance: DlpAntiPeepApi20
@@ -22,10 +42,9 @@ export class DlpAntiPeepApi20 {
   }
 
   // 查询系统能力是否支持防窥。
-  // 需同时满足 API>=20 和 SystemCapability.Security.DlpAntiPeep，经 PlatformApiResolver 统一。
+  // 需同时满足 API>=20 和 SystemCapability.Security.DlpAntiPeep。
   isSupported(): boolean {
-    const r: PlatformApiResolver = PlatformApiResolver.getInstance()
-    return r.isApiAtLeast(20) && r.hasSystemCapability('SystemCapability.Security.DlpAntiPeep')
+    return isApiAtLeast(20) && hasSystemCapability('SystemCapability.Security.DlpAntiPeep')
   }
 
   // 防窥开关是否启用。

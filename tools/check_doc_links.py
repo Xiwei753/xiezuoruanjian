@@ -37,11 +37,15 @@ WHITELIST_FILENAMES = {
     'shareFiles.json',  # SDK: <sdk>/default/openharmony/toolchains/modulecheck/
     'opencode.json',    # devecocli init --mcp 生成的 .opencode 本机配置，不入库
     'SKILL.md',         # devecocli init --skill 写入 .opencode/skills/**，不入库
+    'loader.json',      # Hvigor 构建产物（<module>/build/<product>/intermediates/loader/<target>/），不入库
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
+    # DevEco skill 安装的脚本（.opencode/skills/hmos-connect-api-cli-skill/scripts/...），
+    # 不随仓库分发；publish 脚本在运行时从该路径查找，引用它的文档是准确的。
+    'scripts/connect-api-cli.js',
 }
 
 # Legacy files that are only allowed in specific contexts (AGENTS.md or lines with
