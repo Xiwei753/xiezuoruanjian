@@ -5,25 +5,28 @@
 //! `desktop_sidebar_width` / `desktop_editor_width` 已删除，改为由本模块
 //! 在 Qt 平台层持久化，与 `writer_platform_linux` 的 XDG 目录约定一致。
 //!
-//! 迁移策略：新文件 `linux_qt_desktop.json` 不存在时，直接读取同一
-//! `xdg_config_dir()` 下旧 Core 的 `settings.local.json` 原始 JSON（不经过已
-//! 删除字段的 Core DTO），把其中的窗口 / 侧栏 / 编辑器宽度迁移过来并立刻写入
-//! 新文件；缺失的字段才使用 [`DesktopSettings::default`]。迁移只发生一次，
-//! 此后始终以本平台文件为准（Core 重写 `settings.local.json` 丢弃未知字段也
-//! 不会影响 Qt UI 状态）。
+//! 迁移策略：新文件 `linux_qt_desktop.json` 不存在时，读取**用户工作区数据根目录**
+//! 下旧 Core 的 `settings.local.json` 原始 JSON（不经过已删除字段的 Core DTO），
+//! 把其中的窗口 / 侧栏 / 编辑器宽度迁移过来并立刻写入新文件；缺失的字段才使用
+//! [`DesktopSettings::default`]。迁移只发生一次，此后始终以本平台文件为准
+//! （Core 重写 `settings.local.json` 丢弃未知字段也不会影响 Qt UI 状态）。
+//!
+//! 注意：旧 Core `settings.local.json` 位于 `app_data_root`（用户选择的数据根目录，
+//! 见 `facade/settings_ops.rs` 与 `workspace_backend.rs::internal_open_data_root`），
+//! 不一定等于 `xdg_config_dir()`。因此迁移入口必须显式传入真实数据根目录，
+//! 否则自定义数据目录的用户无法被迁移。
 //! 其他设置（字号、行距、主题、同步、动画偏好等）仍由 Core 负责，不在此列。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// 平台本地桌面设置文件名，落在 `xdg_config_dir()`（`~/.config/writer`）下。
 const DESKTOP_SETTINGS_FILE: &str = "linux_qt_desktop.json";
 
-/// 旧 Core 本地设置文件名（与 `DESKTOP_SETTINGS_FILE` 同目录）。
-///
-/// 旧版 `LocalSettings` 的窗口 / 栏宽字段写在 `<xdg_config_dir()>/settings.local.json`。
+/// 旧 Core 本地设置文件名。位于用户工作区数据根目录（`app_data_root`）下，
+/// **不是** XDG 配置目录。
 const LEGACY_CORE_SETTINGS_FILE: &str = "settings.local.json";
 
 /// Qt 桌面端本地布局设置。所有长度单位都是 Qt 设备无关逻辑像素（vp）。
@@ -60,8 +63,8 @@ fn settings_path() -> PathBuf {
     writer_platform_linux::xdg_config_dir().join(DESKTOP_SETTINGS_FILE)
 }
 
-fn legacy_settings_path() -> PathBuf {
-    writer_platform_linux::xdg_config_dir().join(LEGACY_CORE_SETTINGS_FILE)
+fn legacy_settings_path(data_root: &Path) -> PathBuf {
+    data_root.join(LEGACY_CORE_SETTINGS_FILE)
 }
 
 /// 从旧 Core `settings.local.json` 的原始 JSON 迁移布局字段。
@@ -104,28 +107,40 @@ fn legacy_number(value: &Value, keys: &[&str]) -> Option<f64> {
         .find_map(|key| value.get(*key).and_then(Value::as_f64))
 }
 
-/// 新文件不存在（或不可解析）时，从旧 Core 设置迁移一次并写盘。
-fn migrate_from_legacy_settings() -> Option<DesktopSettings> {
-    let bytes = std::fs::read(legacy_settings_path()).ok()?;
+/// 新文件不存在（或不可解析）时，从 `data_root` 下旧 Core 设置迁移一次并写盘。
+///
+/// `settings_path` 显式传入，便于测试用隔离的临时目录验证「数据根目录 ≠ 平台配置目录」。
+fn migrate_from_legacy_settings_at(
+    settings_path: &Path,
+    data_root: &Path,
+) -> Option<DesktopSettings> {
+    let bytes = std::fs::read(legacy_settings_path(data_root)).ok()?;
     let legacy: Value = serde_json::from_slice(&bytes).ok()?;
     let migrated = desktop_settings_from_legacy(&legacy);
     // 迁移后立刻落盘：此后即使 Core 重写 settings.local.json 丢弃这些未知字段，
     // Qt 的窗口 / 栏宽也不会丢失。
-    let _ = write_to_disk(&migrated);
+    let _ = write_to_disk_at(settings_path, &migrated);
     Some(migrated)
 }
 
-fn read_from_disk() -> Option<DesktopSettings> {
-    if let Ok(bytes) = std::fs::read(settings_path()) {
+fn read_from_disk_at(settings_path: &Path, data_root: &Path) -> Option<DesktopSettings> {
+    if let Ok(bytes) = std::fs::read(settings_path) {
         if let Ok(settings) = serde_json::from_slice(&bytes) {
             return Some(settings);
         }
     }
-    migrate_from_legacy_settings()
+    migrate_from_legacy_settings_at(settings_path, data_root)
+}
+
+fn read_from_disk(data_root: &Path) -> Option<DesktopSettings> {
+    read_from_disk_at(&settings_path(), data_root)
 }
 
 fn write_to_disk(settings: &DesktopSettings) -> Result<(), String> {
-    let path = settings_path();
+    write_to_disk_at(&settings_path(), settings)
+}
+
+fn write_to_disk_at(path: &Path, settings: &DesktopSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -133,27 +148,41 @@ fn write_to_disk(settings: &DesktopSettings) -> Result<(), String> {
     // 先写临时文件再原子重命名，避免中途失败留下半个 JSON。
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// 读取当前平台本地桌面设置。
 ///
-/// 首次调用从磁盘加载并缓存；此后直接返回缓存。缺省或解析失败时返回默认值。
-pub fn load() -> DesktopSettings {
+/// `data_root` 是用户工作区数据根目录，仅用于首次迁移旧 Core `settings.local.json`
+/// （见模块文档）。首次成功读取后缓存；若既没有新文件也没有可迁移的旧文件，则返回
+/// 默认值但**不缓存**，以便之后拿到真实数据根时仍能完成迁移。
+pub fn load(data_root: &Path) -> DesktopSettings {
     let mut guard = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
-    guard
-        .get_or_insert_with(|| read_from_disk().unwrap_or_default())
-        .clone()
+    if let Some(cached) = guard.as_ref() {
+        return cached.clone();
+    }
+    match read_from_disk(data_root) {
+        Some(settings) => {
+            *guard = Some(settings.clone());
+            settings
+        }
+        None => DesktopSettings::default(),
+    }
 }
 
 /// 就地把当前设置交给 `f` 修改，然后持久化到磁盘。
 ///
 /// 失败只返回错误信息，不影响进程内缓存（下次仍可重试写盘）。
-pub fn update(f: impl FnOnce(&mut DesktopSettings)) -> Result<(), String> {
+pub fn update(data_root: &Path, f: impl FnOnce(&mut DesktopSettings)) -> Result<(), String> {
     let updated = {
         let mut guard = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
-        let settings = guard.get_or_insert_with(|| read_from_disk().unwrap_or_default());
+        if guard.is_none() {
+            if let Some(settings) = read_from_disk(data_root) {
+                *guard = Some(settings);
+            }
+        }
+        let settings = guard.get_or_insert_with(DesktopSettings::default);
         f(settings);
         settings.clone()
     };
@@ -267,5 +296,77 @@ mod tests {
         );
         let invalid = serde_json::json!({ "windowWidth": "wide", "desktopSidebarWidth": null });
         assert_eq!(desktop_settings_from_legacy(&invalid), defaults);
+    }
+
+    fn unique_temp_dir(suffix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "sujian-desktop-settings-{}-{}-{suffix}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    /// 真实文件迁移：旧 `settings.local.json` 只存在于用户数据根目录，
+    /// 与新平台配置目录（`linux_qt_desktop.json`）不同，仍应按值迁移并落盘。
+    #[test]
+    fn migrates_legacy_file_from_data_root_into_platform_config_dir() {
+        let base = unique_temp_dir("migrate");
+        let config_dir = base.join("xdg-config-writer");
+        let data_root = base.join("user-chosen-workspace");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_root).unwrap();
+        let new_path = config_dir.join(DESKTOP_SETTINGS_FILE);
+
+        std::fs::write(
+            legacy_settings_path(&data_root),
+            br#"{"windowWidth":1280.0,"windowHeight":800.0,"desktopSidebarWidth":360.0,"linux_qt_editor_width":520.0}"#,
+        )
+        .unwrap();
+
+        assert!(!new_path.exists());
+        let migrated = read_from_disk_at(&new_path, &data_root).expect("legacy migration");
+        assert_eq!(migrated.window_width, 1280.0);
+        assert_eq!(migrated.window_height, 800.0);
+        assert_eq!(migrated.desktop_sidebar_width, 360.0);
+        assert_eq!(migrated.desktop_editor_width, 520.0);
+        // 迁移后立刻写入平台配置目录。
+        assert!(new_path.exists());
+
+        // 此后以平台文件为准：旧文件被删除也不影响。
+        std::fs::remove_file(legacy_settings_path(&data_root)).unwrap();
+        let reread = read_from_disk_at(&new_path, &data_root).expect("platform file");
+        assert_eq!(reread, migrated);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 平台文件已存在时，数据根目录下的旧文件不再覆盖它。
+    #[test]
+    fn platform_file_wins_over_legacy_data_root_file() {
+        let base = unique_temp_dir("precedence");
+        let config_dir = base.join("xdg-config-writer");
+        let data_root = base.join("workspace");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_root).unwrap();
+        let new_path = config_dir.join(DESKTOP_SETTINGS_FILE);
+
+        let existing = DesktopSettings {
+            desktop_sidebar_width: 300.0,
+            ..DesktopSettings::default()
+        };
+        write_to_disk_at(&new_path, &existing).unwrap();
+        std::fs::write(
+            legacy_settings_path(&data_root),
+            br#"{"desktopSidebarWidth":999.0}"#,
+        )
+        .unwrap();
+
+        let loaded = read_from_disk_at(&new_path, &data_root).unwrap();
+        assert_eq!(loaded.desktop_sidebar_width, 300.0);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

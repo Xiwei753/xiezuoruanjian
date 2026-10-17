@@ -164,6 +164,27 @@ Rectangle {
         root.width - root.toolRailWidth - root.editorMinWidth
             - (root.leftPaneCollapsed ? 0 : root.listPaneMinWidth))
 
+    // Issue #920 复核：恢复用户上次拖拽保存的侧栏宽度。
+    // 只恢复左侧章节导航栏（对应旧 LocalSettings.desktop_sidebar_width）；
+    // 右侧工具 pane 宽度是另一种 UI 状态，不复用旧 desktop_editor_width。
+    function restorePersistedPaneWidths() {
+        if (!settingsBackend)
+            return
+        var stored = settingsBackend.setting_desktop_sidebar_width
+        if (stored !== undefined && stored > 0) {
+            root.chapterNavWidth = Math.min(root._chapterNavMaxWidth,
+                Math.max(root.listPaneMinWidth, stored))
+        }
+    }
+
+    // 拖拽结束后把章节导航栏宽度写回平台本地配置（不回写 Core 业务设置）。
+    function persistChapterNavWidth() {
+        if (!settingsBackend)
+            return
+        settingsBackend.setting_desktop_sidebar_width = root.chapterNavWidth
+        settingsBackend.debounced_save_local_settings()
+    }
+
     // 展开侧 pane 是一个「请求」，不是直接写状态：一个属性都不改就把候选组合
     // 先按本地最小宽度算一遍，放得下才整体提交；放不下就什么都不改，
     // 不留「已展开但看不见」的端侧状态，也没有中间态闪烁。
@@ -418,6 +439,8 @@ Rectangle {
     // Issue #833 复核：onTreeChanged -> populateTreeModel() 已删，
     // treeModel 现在由 WritingChapterNavigation 内部维护。
     Component.onCompleted: {
+        // Issue #920 复核：先恢复平台本地保存的侧栏宽度，再按它布局。
+        root.restorePersistedPaneWidths()
         // Issue #829：启动时先起状态栏的时钟。
         root.updateClockText()
         // Issue #829：状态栏左段（写作速度）也来自 Core 统计，起步就拉一次。
@@ -863,6 +886,9 @@ Rectangle {
                     if (active) {
                         // 每次手势从当前实际宽度起算，避免死区。
                         root._dragStartChapterNavWidth = root.chapterNavWidth
+                    } else {
+                        // Issue #920 复核：拖拽结束写回平台本地配置，下次启动恢复。
+                        root.persistChapterNavWidth()
                     }
                 }
                 onTranslationChanged: {

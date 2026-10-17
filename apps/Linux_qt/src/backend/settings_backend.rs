@@ -1049,12 +1049,24 @@ impl AppBackend {
         self.current_setting_dynamic_color_enabled = false;
     }
 
+    /// 平台桌面设置迁移用的数据根目录：已打开工作区时取 `current_data_root`；
+    /// 否则为空路径（此时只读平台新文件，不做旧设置迁移）。
+    fn desktop_settings_data_root(&self) -> std::path::PathBuf {
+        if self.current_has_data_root && !self.current_data_root.is_empty() {
+            std::path::PathBuf::from(&self.current_data_root)
+        } else {
+            std::path::PathBuf::new()
+        }
+    }
+
     // AppBackend::load_local_settings
     pub(crate) fn load_local_settings(&mut self) {
         self.debug_log("settings", "load_local_settings_start", "");
         // Issue #920：窗口几何 / 侧栏 / 编辑器宽度是 Qt 平台本地状态，
         // 从平台层加载，不再存在于 Core LocalSettings。
-        let desktop = desktop_settings::load();
+        // 旧 Core `settings.local.json` 在用户数据根目录（不一定等于 XDG 配置目录），
+        // 迁移必须传入真实数据根，否则自定义数据目录的用户会掉到默认栏宽。
+        let desktop = desktop_settings::load(&self.desktop_settings_data_root());
         self.current_setting_desktop_sidebar_width = desktop.desktop_sidebar_width;
         self.current_setting_desktop_editor_width = desktop.desktop_editor_width;
         if let Some(core) = self.core_api() {
@@ -1169,7 +1181,7 @@ impl AppBackend {
         // 不再写 Core LocalSettings（Core 已删除这些字段）。
         let sidebar_width = self.current_setting_desktop_sidebar_width;
         let editor_width = self.current_setting_desktop_editor_width;
-        if let Err(e) = desktop_settings::update(|settings| {
+        if let Err(e) = desktop_settings::update(&self.desktop_settings_data_root(), |settings| {
             settings.desktop_sidebar_width = sidebar_width;
             settings.desktop_editor_width = editor_width;
         }) {
