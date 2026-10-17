@@ -136,9 +136,11 @@ export class HarmonyLifecycle {
 // 避免把「定时自动保存开关」和「退后台保护正文」混在一起。
 //
 // Issue #927：退后台保存不再直接调用 saveCallback 丢弃 Promise，而是交给平台
-// HarmonyBackgroundSaveTask.runSave 申请短时任务托管：申请到 requestId 后才开始
-// 异步落盘，完成/失败后释放。单一 in-flight 标志保证 onWindowStageDestroy +
-// onBackground 连续触发只产生一笔后台保存事务。前台 setInterval 定时保存语义不变。
+// HarmonyBackgroundSaveTask.runSave 托管：申请到短时任务就用 try/finally 释放，
+// 申请不到也照常执行保存（短时任务只是延长执行机会，不是保存的许可证）。
+// 保存结果以 saveCallback 的真实返回值为准。单一 in-flight 标志保证
+// onWindowStageDestroy + onBackground 连续触发只产生一笔后台保存事务。
+// 前台 setInterval 定时保存语义不变。
 export class AutoSaveLifecycleObserver implements LifecycleObserver {
   private saveCallback: () => Promise<boolean>
   private intervalId: number = -1
@@ -208,21 +210,16 @@ export class AutoSaveLifecycleObserver implements LifecycleObserver {
     }
   }
 
-  // Issue #927：一次后台保存事务。申请短时任务前不开始异步落盘；in-flight 期间忽略重复事件。
+  // Issue #927：一次后台保存事务。in-flight 期间忽略重复事件。
+  // 短时任务只是延长执行机会：是否申请到都不改变保存语义——始终执行唯一的
+  // saveCallback（performBackgroundSave），申请失败只由 HarmonyBackgroundSaveTask
+  // 记录真实原因，保存结果以 saveCallback 的真实返回值为准（Issue #927 复核）。
   private runBackgroundSave(): void {
     if (this.backgroundSaveInFlight) {
       return
     }
     this.backgroundSaveInFlight = true
     const task: HarmonyBackgroundSaveTask = HarmonyBackgroundSaveTask.getInstance()
-    if (!task.isSupported()) {
-      // 平台不支持短时任务：记录诊断并返回真实失败，不假装保存已完成。
-      this.backgroundSaveInFlight = false
-      const reasonField: DiagnosticField = { key: 'reason', value: 'syscap_missing' }
-      HarmonyDiagnosticEvents.record('Warn', 'System', 'background_save_unavailable', 'AutoSaveLifecycleObserver', [reasonField])
-      this.notifySaveResult(false)
-      return
-    }
     task.runSave(this.saveCallback).then((success: boolean) => {
       this.backgroundSaveInFlight = false
       if (!success) {

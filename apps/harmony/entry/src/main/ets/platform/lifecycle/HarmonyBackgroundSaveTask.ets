@@ -7,9 +7,11 @@
 // - requestSuspendDelay(reason, onTimeout)：申请短时任务（API 9+，无需权限）；
 // - cancelSuspendDelay(requestId)：一次保存事务结束后释放。
 //
-// 边界：
-// - 申请到 requestId 之前不调用保存 action；申请失败/平台不支持时按真实失败返回，
-//   不把未完成的保存假报成功，也不抛出未捕获异常。
+// 边界（Issue #927 复核）：
+// - 短时任务只是延长后台执行机会，不是正文保存的许可证：申请不到短时任务时
+//   只记录真实原因，保存 action 照常执行，结果以 action 的真实返回值为准。
+// - 申请到 requestId 就在 try/finally 中释放；申请失败时不做任何伪装成功/失败，
+//   也不抛出未捕获异常。
 // - UI 页面不直接使用平台后台任务接口，统一从 runSave() 进入。
 // - 短时任务只用于完成正在进行的落盘，不用于常驻同步或持续运行。
 
@@ -39,39 +41,42 @@ export class HarmonyBackgroundSaveTask {
   }
 
   // 平台是否提供短时任务能力（canIUse SystemCapability）。
-  // 上层据此记录「平台不支持」诊断；isSupported() 为 false 时不得把保存假报成功。
+  // 上层据此记录「平台不支持」诊断；短时任务不可用只影响后台执行机会，
+  // 不代表保存可以跳过，也不能因此把保存结果假报成功（真正的结果来自 action）。
   isSupported(): boolean {
     return PlatformApiResolver.getInstance().hasSystemCapability(TRANSIENT_TASK_SYSCAP)
   }
 
   // 在短时任务保护下执行一次保存事务。
-  // 申请到 requestId 之后才调用第一个异步 action()；action 的真实结果原样返回。
-  // 申请失败/平台不支持：不调用 action，记录诊断并返回 false（真实失败，不伪造成功）。
+  // 申请到 requestId 就用 try/finally 在结束时释放；申请失败/平台不支持只记录
+  // 真实原因，保存 action 照常执行——短时任务申请失败与实际正文保存失败是两件事，
+  // 不能因为申请不到就放弃还有执行机会的落盘（Issue #927 复核）。
+  // action 的真实结果原样返回。
   async runSave(action: () => Promise<boolean>): Promise<boolean> {
+    let requestId: number = -1
     if (!this.isSupported()) {
       this.recordUnavailable('syscap_missing', -1)
-      return false
-    }
-
-    let requestId: number = -1
-    try {
-      const info = backgroundTaskManager.requestSuspendDelay(TRANSIENT_TASK_REASON, () => {
-        // 系统约在短时任务超时前 6 秒回调：此时保存还没完成，留下明确诊断。
-        this.recordTimeout(requestId)
-      })
-      requestId = info.requestId
-    } catch (err) {
-      const error = err as BusinessError
-      hilog.error(LOG_DOMAIN, TAG, 'requestSuspendDelay failed: code=%{public}d message=%{public}s',
-        error.code, error.message)
-      this.recordUnavailable('request_failed', error.code)
-      return false
+    } else {
+      try {
+        const info = backgroundTaskManager.requestSuspendDelay(TRANSIENT_TASK_REASON, () => {
+          // 系统约在短时任务超时前 6 秒回调：此时保存还没完成，留下明确诊断。
+          this.recordTimeout(requestId)
+        })
+        requestId = info.requestId
+      } catch (err) {
+        const error = err as BusinessError
+        hilog.error(LOG_DOMAIN, TAG, 'requestSuspendDelay failed: code=%{public}d message=%{public}s',
+          error.code, error.message)
+        this.recordUnavailable('request_failed', error.code)
+      }
     }
 
     try {
       return await action()
     } finally {
-      this.cancelRequest(requestId)
+      if (requestId !== -1) {
+        this.cancelRequest(requestId)
+      }
     }
   }
 
