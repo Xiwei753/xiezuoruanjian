@@ -376,7 +376,52 @@ impl AppBackend {
                                 "conflict_files".to_string(),
                                 format_conflict_files(&files),
                             );
+                            // Issue #928 第 4 点：PartialConflict 表达“非冲突文件已同步、
+                            // N 个冲突待处理”。
+                            summary_args.insert(
+                                "conflict_count".to_string(),
+                                result.total_conflicts.to_string(),
+                            );
                         }
+
+                        // Issue #931 第 4 点：分开表达失败目标、成功目标数量和失败目标的
+                        // 具体错误（含 App target 的 path），不能只显示笼统的“同步失败”。
+                        let mut failed_targets: Vec<String> = Vec::new();
+                        let mut synced_targets: u32 = 0;
+                        for target in &result.targets {
+                            let label = if target.target_kind == "app" {
+                                format!("App（{}）", target.remote_prefix)
+                            } else {
+                                format!(
+                                    "项目 {}（{}）",
+                                    target.project_id.as_deref().unwrap_or(""),
+                                    target.remote_prefix
+                                )
+                            };
+                            match target.result.status.as_str() {
+                                "success" | "no_changes" | "latest_wins_applied" => {
+                                    synced_targets += 1;
+                                }
+                                status => {
+                                    let detail = target
+                                        .result
+                                        .error
+                                        .clone()
+                                        .unwrap_or_else(|| status.to_string());
+                                    failed_targets
+                                        .push(format!("{label} — {}", mask_sync_error(&detail)));
+                                }
+                            }
+                        }
+                        if !failed_targets.is_empty() {
+                            summary_args.insert(
+                                "failed_targets".to_string(),
+                                failed_targets.join("\n  - "),
+                            );
+                        }
+                        summary_args
+                            .insert("synced_targets".to_string(), synced_targets.to_string());
+                        let total_targets = u32::try_from(result.targets.len()).unwrap_or(u32::MAX);
 
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
@@ -386,8 +431,9 @@ impl AppBackend {
                             summary_key,
                             summary_args,
                             current_target: None,
-                            finished_targets: 0,
-                            total_targets: 0,
+                            // Issue #931 第 4 点：终态记录所有 target 全部结束（N/N）。
+                            finished_targets: total_targets,
+                            total_targets,
                             counts,
                             raw_error: result.error.as_ref().map(|e| mask_sync_error(e)),
                         };

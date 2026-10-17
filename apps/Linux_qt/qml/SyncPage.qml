@@ -88,7 +88,7 @@ ColumnLayout {
         case "sync.result.latest_wins_summary": msg = qsTr("同步完成（以最新版本为准）"); break;
         case "sync.result.no_changes_summary": msg = qsTr("无需同步，本地与远端一致"); break;
         case "sync.result.conflict_summary": msg = qsTr("同步完成，存在冲突文件"); break;
-        case "sync.result.partial_conflict_summary": msg = qsTr("部分同步，存在正文冲突"); break;
+        case "sync.result.partial_conflict_summary": msg = qsTr("部分同步：非冲突文件已同步，{conflict_count} 个冲突待处理"); break;
         case "sync.result.dirty_repo_blocked": msg = qsTr("同步被阻止：本地有未提交的更改"); break;
         case "sync.result.branch_recovered_summary": msg = qsTr("分支已恢复并同步完成"); break;
         case "sync.result.generic_error": msg = qsTr("同步出错"); break;
@@ -166,6 +166,12 @@ ColumnLayout {
 
                     if (obj.summary_args && obj.summary_args.conflict_files) {
                         text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
+                    }
+
+                    // Issue #931 第 4 点：失败目标分开显示（含 App target 的具体
+                    // 错误与 path），不能只显示笼统的“同步失败”。
+                    if (obj.summary_args && obj.summary_args.failed_targets) {
+                        text += "\n\n" + qsTr("失败目标:") + "\n  - " + obj.summary_args.failed_targets
                     }
 
                     root.resultText = text;
@@ -351,7 +357,7 @@ ColumnLayout {
         if (s === "latest_wins_applied") return qsTr("已同步（已应用较新版本）")
         if (s === "syncing") return qsTr("同步中")
         if (s === "conflict") return qsTr("同步冲突")
-        if (s === "partial_conflict") return qsTr("部分同步，存在正文冲突")
+        if (s === "partial_conflict") return qsTr("部分同步，存在未处理冲突")
         if (s === "dry_run_success") return qsTr("检查成功")
         if (s === "diagnostics_success") return qsTr("诊断成功")
         if (s === "token_missing") return qsTr("未设置 Token")
