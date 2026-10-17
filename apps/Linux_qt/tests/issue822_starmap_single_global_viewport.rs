@@ -189,12 +189,21 @@ fn camera_zoom_has_one_entry_used_by_wheel_pinch_and_buttons() {
         zoom.contains("Math.max(_cameraScaleMin, Math.min(_cameraScaleMax, requested))"),
         "zoomAt 只夹数值安全范围（CAMERA_SCALE_MIN/MAX），实际窗口:\n{zoom}"
     );
-    // #929：连续缩放穿越也从同一入口评估，但判定只按入口投影覆盖率
-    //（maybeEnterEmbedAt / maybeExitCanvas），zoom 数值本身不是层级依据。
+    // #929 复核：连续缩放穿越也从同一入口评估，判定只按入口投影覆盖率
+    //（maybeEnterEmbedAt / maybeExitCanvas），zoom 数值本身不是层级依据；
+    // 且按缩放方向过滤：只有放大评估进场，只有缩小评估退场（任意层同规则），
+    // 避免"缩小经过高覆盖入口却误进子画布"。
     assert!(
-        zoom.contains("switched = maybeEnterEmbedAt(screenX, screenY)")
+        zoom.contains("var zoomingIn = target > oldZoom")
+            && zoom.contains("var zoomingOut = target < oldZoom"),
+        "zoomAt 必须区分放大/缩小方向，实际窗口:\n{zoom}"
+    );
+    assert!(
+        zoom.contains("if (zoomingIn)")
+            && zoom.contains("switched = maybeEnterEmbedAt(screenX, screenY)")
+            && zoom.contains("else if (zoomingOut)")
             && zoom.contains("switched = maybeExitCanvas()"),
-        "zoomAt 必须同时是画布穿越入口（按入口覆盖率评估，不按 zoom 数值），实际窗口:\n{zoom}"
+        "zoomAt 必须方向过滤：仅放大评估进场、仅缩小评估退场（按入口覆盖率评估，不按 zoom 数值），实际窗口:\n{zoom}"
     );
 
     // 滚轮/捏合（唯一 Router）与 +/- 按钮（Canvas）都必须走同一个入口。
@@ -2065,12 +2074,18 @@ fn connect_preview_reuses_platform_edge_renderer() {
     );
 
     // Router 在进入 connect 与 connect 拖动（左键长按、contextPending 转换、
-    // 右键拖线）都必须刷新预览端点；归属画布的 applyConnectDelta 也刷新一次。
+    // 右键拖线）都必须刷新预览端点；#930 复核后端点刷新收敛到唯一 helper
+    // updateConnectEndpointFromScreen()：终点取指针绝对位置（screen → 活动画布
+    // world），不累计位移，所有进入/每帧路径都经它刷新。
     let router = strip_line_comments(&read_src("qml/StarMapInputRouter.qml"));
     assert_eq!(
         count_occurrences(&router, "gestureOwner.refreshConnectPreview()"),
-        4,
-        "长按进入 connect / contextPending 转 connect / 左键与右键 connect 拖动都必须刷新预览端点"
+        1,
+        "connect 端点刷新必须收敛到唯一 helper（绝对指针端点，不累计位移）"
+    );
+    assert!(
+        count_occurrences(&router, "updateConnectEndpointFromScreen(") >= 8,
+        "长按进入 connect / contextPending 转 connect / 左键与右键每帧拖动都必须走同一端点刷新 helper"
     );
     let scene_delta = function_window(&scene, "function applyConnectDelta(", 800);
     assert!(

@@ -17,6 +17,9 @@
 //     - 右键在 node/embed 上按下并拖过阈值：直接进入 connect 拉线
 //       （connect_begin 在日志里带 button=right）；松手命中另一个 node/embed
 //       即建边，空白/自身取消；右键拖动不移动节点、不平移画布（Issue #930）
+//     - connect 的"源锚点"与"指针终点"分开：锚点在源对象上（预览再贴边界），
+//       终点每帧取当前指针的绝对位置（screen → 活动画布 world），不累计位移；
+//       左键长按、触屏转 connect、右键拉线共用同一份 connect 几何
 //     - connect 松手：再调一次根递归命中，目标只接受 node/embed，
 //       复用 StarMapPathPlanner.planCrossLayerRelation() 找 LCA 宿主并落边
 //
@@ -69,9 +72,13 @@ Item {
     // 右键手势现场（Issue #930）：右键单击开菜单；按下后拖过阈值直接拉线。
     // rightPressHit 是按下时的完整递归命中，拖动激活时据此进入 connect；
     // rightWasDrag 标记本次右键已发生拖动，TapHandler.singleTapped 据此跳过菜单。
+    // rightPressScreenX/Y 是本次右键按下的屏幕坐标（不与左键 pressScreenX/Y 混用）：
+    // connect 起点种子的真实指针位置。
     property bool rightPressActive: false
     property bool rightWasDrag: false
     property var rightPressHit: null
+    property real rightPressScreenX: 0
+    property real rightPressScreenY: 0
 
     function hitAt(sx, sy) {
         return canvas ? canvas.hitTargetAtScreen(sx, sy) : null
@@ -152,7 +159,9 @@ Item {
             ic.linkArmed || ic.connectArmed || editingBlocks)
             return
 
-        var hit = hitAt(point.position.x, point.position.y)
+        rightPressScreenX = point.position.x
+        rightPressScreenY = point.position.y
+        var hit = hitAt(rightPressScreenX, rightPressScreenY)
         rightPressHit = hit
         rightPressActive = true
         canvas.logPointerPress("right", "mouse", point)
@@ -300,7 +309,8 @@ Item {
                         "kind": ic.connectFromKind, "fromId": ic.connectFromId,
                         "fromX": ic.connectFromSceneX, "fromY": ic.connectFromSceneY
                     })
-                    gestureOwner.refreshConnectPreview()
+                    updateConnectEndpointFromScreen(dragHandler.centroid.position.x,
+                                                    dragHandler.centroid.position.y)
                 }
             }
             return
@@ -369,15 +379,14 @@ Item {
             return
         }
         if (mode === "connect") {
-            if (gestureOwner)
-                gestureOwner.applyConnectDelta(dx, dy)
+            // 端点 = 当前指针绝对位置（不累计位移）：任意 zoom 下都不漂移。
+            updateConnectEndpointFromScreen(dragHandler.centroid.position.x,
+                                            dragHandler.centroid.position.y)
             return
         }
         if (mode === "contextPending") {
-            // 端点先按 root-world 增量累计；超阈值后切 connect（拖动手感阈值
-            // 吃原始像素，两个口径分开）。
-            if (gestureOwner)
-                gestureOwner.applyConnectDelta(dx, dy)
+            // 阈值继续吃原始 Qt scene 像素；端点不预存增量，转 connect 时
+            // 直接取当前指针绝对位置（触屏与鼠标同一份 connect 几何）。
             ic.noteDragDelta(dx, dy)
             if (ic.pressDragDistance > ic.moveThreshold) {
                 canvas.hideTouchPreview()
@@ -386,7 +395,8 @@ Item {
                         "kind": ic.connectFromKind, "fromId": ic.connectFromId,
                         "fromX": ic.connectFromSceneX, "fromY": ic.connectFromSceneY
                     })
-                    gestureOwner.refreshConnectPreview()
+                    updateConnectEndpointFromScreen(dragHandler.centroid.position.x,
+                                                    dragHandler.centroid.position.y)
                 }
             }
             return
@@ -417,18 +427,22 @@ Item {
                 "fromX": center.x, "fromY": center.y,
                 "button": "right"
             })
-            gestureOwner.refreshConnectPreview()
+            // 节点中心只作源锚点；终点立刻落回本次右键按下的真实指针位置，
+            // 之后每帧由 updateConnectEndpointFromScreen() 跟随指针。
+            updateConnectEndpointFromScreen(rightPressScreenX, rightPressScreenY)
         }
     }
 
-    // 右键 connect 的位移：端点换算与预览刷新全部交给归属层，
-    // 与左键 applyConnectDelta 同一条路径；只有本次右键拖动才允许改端点，
-    // 不碰左键长按正在进行的 connect。
-    function dragRightConnectDelta(dx, dy) {
-        if (!rightPressActive)
+    // ── connect 端点几何：源锚点与指针终点分开，唯一一份 ──
+    // connectFromSceneX/Y 是源对象上的锚点（refreshConnectPreview 再按指针方向贴到
+    // 可见边界）；终点永远取当前指针的绝对位置：screen → 当前活动画布 world。
+    // 不累计位移，所以任意 zoom 下终点都等于真实指针，松手 finishConnect 的命中
+    // 不会带源节点中心/按下点的偏移；左键长按、触屏转 connect、右键拉线共用它。
+    function updateConnectEndpointFromScreen(sx, sy) {
+        if (!canvas || !ic || !gestureOwner || ic.pointerMode !== "connect")
             return
-        if (ic && ic.pointerMode === "connect" && gestureOwner)
-            gestureOwner.applyConnectDelta(dx, dy)
+        ic.updateConnect(canvas.screenToWorldX(sx), canvas.screenToWorldY(sy))
+        gestureOwner.refreshConnectPreview()
     }
 
     // ── 松手统一出口：click / move / connect / pan 都在这里闭环 ──
@@ -506,13 +520,14 @@ Item {
                 if (ic.pressPendingToContextPending(center.x, center.y))
                     canvas.showTouchPreview(hit.kind, center.x, center.y)
             } else {
-                // 鼠标长按：直接进入 connect。
+                // 鼠标长按：直接进入 connect。源锚点是节点中心，终点立刻落回
+                // 本次按下的真实指针位置，之后每帧跟随指针。
                 if (ic.pressPendingToConnect(hit.kind, hit.id, hit.targetPath, center.x, center.y)) {
                     gestureOwner.logInteraction("connect_begin", hit.kind, hit.id, {
                         "kind": hit.kind, "fromId": hit.id,
                         "fromX": center.x, "fromY": center.y
                     })
-                    gestureOwner.refreshConnectPreview()
+                    updateConnectEndpointFromScreen(pressScreenX, pressScreenY)
                 }
             }
             return
@@ -604,6 +619,10 @@ Item {
                 lastTx = 0
                 lastTy = 0
                 router.handleDragActivated()
+                // 长按已经进 connect 时，激活当帧就把端点对齐指针：单次大位移
+                // 后立刻松手也不留下"只到按下点"的偏移（非 connect 时无操作）。
+                router.updateConnectEndpointFromScreen(dragHandler.centroid.position.x,
+                                                       dragHandler.centroid.position.y)
             }
         }
         onActiveTranslationChanged: {
@@ -618,29 +637,26 @@ Item {
     // ── 右键拖动（Issue #930）：单独的 Handler，不混进左键 dragHandler ──
     // 越阈值只进入 connect 预览（beginRightConnectDrag），绝不进入
     // pressPendingToMove / beginPan，所以右键拖动既不移动节点也不平移画布。
+    // 每帧用 centroid 的绝对指针位置刷新端点（与左键 connect 同一份几何）。
     DragHandler {
         id: rightConnectDrag
         target: null
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
         acceptedButtons: Qt.RightButton
         enabled: !router.editingBlocks
-        property real lastTx: 0
-        property real lastTy: 0
         onActiveChanged: {
             if (active) {
-                lastTx = 0
-                lastTy = 0
                 router.beginRightConnectDrag()
+                // 激活当帧端点立即对齐指针（按下点种子只兜住随后的零位移场景）。
+                router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
+                                                       rightConnectDrag.centroid.position.y)
             }
         }
         onActiveTranslationChanged: {
             if (!active)
                 return
-            var dx = activeTranslation.x - lastTx
-            var dy = activeTranslation.y - lastTy
-            lastTx = activeTranslation.x
-            lastTy = activeTranslation.y
-            router.dragRightConnectDelta(dx, dy)
+            router.updateConnectEndpointFromScreen(rightConnectDrag.centroid.position.x,
+                                                   rightConnectDrag.centroid.position.y)
         }
     }
 

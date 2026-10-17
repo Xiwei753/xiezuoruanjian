@@ -17,7 +17,8 @@
 //   - 按 routeKey（根 ID + 完整 segments）保存每一层进入前的父相机
 //     {zoom, panX, panY}；不以子图 ID 做 key。
 //   - 连续缩放穿越：入口投影直径占当前视口短边 ≥ 70% 进入子画布；
-//     反向缩小到 ≤ 60% 恢复父镜头。双击 Embed 走同一个 enter 函数。
+//     反向缩小到 ≤ 60% 恢复父镜头。进入只在放大方向评估，退出只在缩小
+//     方向评估（任意层同规则）；双击 Embed 走同一个 enter 函数，不受方向过滤。
 //     阈值只比较"指针瞄准（或已锁定）的那个入口"，zoom 数值本身绝不触发层级切换。
 //   - 相机只有数值安全边界（1e-4 ~ 1e5），边界不是层级切换依据。
 //   - Core 不保存任何相机 / 视口 / 缩放信息：本文件只在平台层做投影与渲染。
@@ -293,7 +294,8 @@ Item {
 
     // 唯一缩放入口：滚轮、捏合、+/- 按钮都走这里，只改当前活动画布的镜头。
     // 随后按"指针瞄准的入口"评估画布穿越（70% 进 / 60% 出），zoom 数值本身
-    // 不参与判断。
+    // 不参与判断。穿越按缩放方向过滤：只有放大才评估进场，只有缩小才评估退场；
+    // 缩小经过入口不进入子画布，任意层同样规则（双击不受方向过滤）。
     function zoomAt(screenX, screenY, nextZoom) {
         var requested = nextZoom
         if (interaction && interaction.pointerMode === "pinch" && _pinchSwitchBaseZoom > 0)
@@ -302,19 +304,20 @@ Item {
         var oldZoom = zoomLevel
         if (target === oldZoom)
             return
+        var zoomingIn = target > oldZoom
+        var zoomingOut = target < oldZoom
         zoomLevel = target
         applyPan(
             screenX - (screenX - panX) * (zoomLevel / oldZoom),
             screenY - (screenY - panY) * (zoomLevel / oldZoom)
         )
         var switched = -1
-        if (focusIsRoot) {
+        if (zoomingIn) {
+            // 放大：任意层只评估进场（根→子、子→孙同理）。
             switched = maybeEnterEmbedAt(screenX, screenY)
-        } else {
-            // 子画布同样可以继续放大穿越到孙画布：先判退场，没退场再判进场。
+        } else if (zoomingOut) {
+            // 缩小：任意层只评估退场，不评估进场。
             switched = maybeExitCanvas()
-            if (switched <= 0)
-                switched = maybeEnterEmbedAt(screenX, screenY)
         }
         if (switched > 0 && interaction && interaction.pointerMode === "pinch") {
             _pinchSwitchBaseZoom = zoomLevel
