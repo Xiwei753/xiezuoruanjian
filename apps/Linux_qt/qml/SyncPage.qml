@@ -743,7 +743,6 @@ ColumnLayout {
                 }
             }
         }
-    }
 
     // Issue #902 第二十一轮：App 冲突面板改为窗口级 Popup，挂在 Overlay.overlay 上。
     // 之前用 Loader { anchors.fill: parent } 铺满 SyncPage，但 SyncPage 是很长的

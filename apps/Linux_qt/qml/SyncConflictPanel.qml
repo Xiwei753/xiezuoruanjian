@@ -455,7 +455,7 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.fillWidth: true; height: 1; color: Kirigami.Theme.disabledTextColor }
+        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Kirigami.Theme.disabledTextColor }
 
         // ── Footer：三个动作按钮 ──
         // Issue #902 第二十二轮：窄窗口下三个长文本按钮横排会互相挤压。用 Repeater
